@@ -1,0 +1,11 @@
+set(VULKAN_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+if(NOT TARGET Vulkan)
+    if(WIN32)
+        add_library(Vulkan STATIC IMPORTED GLOBAL)
+        target_include_directories(Vulkan INTERFACE "${VULKAN_DIR}/include")
+        set_property(TARGET Vulkan PROPERTY 
+            IMPORTED_LOCATION "${VULKAN_DIR}/lib/Win32/vulkan-1.lib")
+    else()
+        find_package(Vulkan REQUIRED)
+    endif()
+endif()
