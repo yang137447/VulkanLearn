@@ -1,7 +1,7 @@
 #include "SDL3/SDL.h"
-
 #include <iostream>
 #include <vector>
+#include "renderCore.h"
 
 int main(int argc, char **argv)
 {
@@ -20,6 +20,8 @@ int main(int argc, char **argv)
     bool shouldClose = false;
     SDL_Event event;
 
+    RenderCore::Init();
+
     while (!shouldClose)
     {
         while (SDL_PollEvent(&event))
@@ -30,6 +32,8 @@ int main(int argc, char **argv)
             }
         }
     }
+
+    RenderCore::Quit();
 
     SDL_DestroyWindow(window);
     SDL_Quit();
