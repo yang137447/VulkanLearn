@@ -1,4 +1,5 @@
 #include "renderCore.h"
+#include "SDL3/SDL_vulkan.h"
 #include <iostream>
 
 RenderCore::~RenderCore()
@@ -7,11 +8,18 @@ RenderCore::~RenderCore()
     DestroyVkDevice();
 }
 
-void RenderCore::Init()
+void RenderCore::Init(std::vector<const char *> &extensions, SDL_Window *window)
 {
+    sdlExtensoins.resize(extensions.size());
+    std::copy(extensions.begin(), extensions.end(), sdlExtensoins.begin());
+    sdlWindow = window;
     if (_instance == nullptr)
     {
         _instance.reset(new RenderCore);
+    }
+    for (auto extension : extensions)
+    {
+        std::cout << extension << std::endl;
     }
 }
 
@@ -36,7 +44,8 @@ void RenderCore::CreateVkInstace()
     vk::InstanceCreateInfo instanceCreateInfo;
     instanceCreateInfo
         .setPApplicationInfo(&applicationInfo)
-        .setPEnabledLayerNames(instanceLayers);
+        .setPEnabledLayerNames(instanceLayers)
+        .setPEnabledExtensionNames(sdlExtensoins);
     instance = vk::createInstance(instanceCreateInfo);
 }
 
@@ -53,6 +62,19 @@ void RenderCore::PickupPhysicalDevice()
               << "Used GPU : "
               << physicalDevice.getProperties().deviceName
               << std::endl;
+}
+
+void RenderCore::CreateVkSurface()
+{
+    VkSurfaceKHR vksurface;
+    if (!SDL_Vulkan_CreateSurface(sdlWindow, instance, &vksurface))
+    {
+        std::cout << "Info : "
+                  << "CreateSurface failed"
+                  << std::endl;
+    };
+
+    surface = vksurface;
 }
 
 void RenderCore::CreateVkDevice()
@@ -86,6 +108,7 @@ RenderCore::RenderCore()
 {
     CreateVkInstace();
     PickupPhysicalDevice();
+    CreateVkSurface();
     CreateVkDevice();
 }
 

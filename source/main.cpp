@@ -1,4 +1,5 @@
 #include "SDL3/SDL.h"
+#include "SDL3/SDL_vulkan.h"
 #include <iostream>
 #include <vector>
 #include "renderCore.h"
@@ -12,7 +13,7 @@ int main(int argc, char **argv)
         1024, 768,
         SDL_WINDOW_VULKAN | SDL_WINDOW_BORDERLESS);
 
-    if(!window)
+    if (!window)
     {
         SDL_Log("Create window failed");
         exit(2);
@@ -20,15 +21,20 @@ int main(int argc, char **argv)
     bool shouldClose = false;
     SDL_Event event;
 
-    RenderCore::Init();
+    unsigned int count;
+    SDL_Vulkan_GetInstanceExtensions(&count, nullptr);
+    std::vector<const char *> extensions(count);
+    SDL_Vulkan_GetInstanceExtensions(&count, extensions.data());
+
+    RenderCore::Init(extensions,window);
 
     while (!shouldClose)
     {
         while (SDL_PollEvent(&event))
         {
-            if(event.type == SDL_EVENT_QUIT)
+            if (event.type == SDL_EVENT_QUIT)
             {
-                shouldClose =true;
+                shouldClose = true;
             }
         }
     }
