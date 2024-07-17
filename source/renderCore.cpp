@@ -81,7 +81,8 @@ void RenderCore::CreateVkDevice()
 {
     vk::DeviceQueueCreateInfo deviceQueueCreateInfo;
     float queuePriorities = 1.0f;
-    queueFamilyIndices.graphicsQueue = QueryQueueFamilyIndices();
+    queueFamilyIndices.graphicsQueue = QueryQueueFamilyIndices(vk::QueueFlagBits::eGraphics);
+    queueFamilyIndices.presentQueue=QueryQueueFamilyIndices(true)
     if (!queueFamilyIndices.graphicsQueue.has_value())
     {
         std::cout << "Info : "
@@ -119,6 +120,21 @@ std::optional<uint32_t> RenderCore::QueryQueueFamilyIndices(vk::QueueFlagBits qu
     {
         const auto &property = properties[i];
         if (property.queueFlags | queryQueueflagbits)
+        {
+            return i;
+            break;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<uint32_t> RenderCore::QueryQueueFamilyIndices(bool findPresentQueue)
+{
+    auto properties = physicalDevice.getQueueFamilyProperties();
+    for (int i = 0; i < properties.size(); i++)
+    {
+        const bool result = physicalDevice.getSurfaceSupportKHR(i,surface);
+        if (result)
         {
             return i;
             break;

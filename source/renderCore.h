@@ -47,4 +47,5 @@ private:
 
     // function
     std::optional<uint32_t> QueryQueueFamilyIndices(vk::QueueFlagBits queryQueueflagbits = vk::QueueFlagBits::eGraphics);
+    std::optional<uint32_t> QueryQueueFamilyIndices(bool findPresentQueue =true);
 };
