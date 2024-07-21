@@ -1,7 +1,9 @@
-#include "vulkan/vulkan.hpp"
+#pragma once
+
 #include <memory>
 #include <optional>
 #include <vector>
+#include "vulkan/vulkan.hpp"
 #include "SDL3/SDL.h"
 
 struct QueueFamilyIndices
@@ -32,6 +34,7 @@ public:
     vk::Device device;
     QueueFamilyIndices queueFamilyIndices;
     vk::Queue graphicQueue;
+    vk::Queue presentQueue;
 
 private:
     RenderCore();

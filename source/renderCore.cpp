@@ -79,25 +79,52 @@ void RenderCore::CreateVkSurface()
 
 void RenderCore::CreateVkDevice()
 {
-    vk::DeviceQueueCreateInfo deviceQueueCreateInfo;
-    float queuePriorities = 1.0f;
+    std::vector<vk::DeviceQueueCreateInfo> deviceQueueCreateInfos;
+
+    vk::DeviceQueueCreateInfo deviceGraphicsQueueCreateInfo;
+    float graohicsQueuePriorities = 1.0f;
     queueFamilyIndices.graphicsQueue = QueryQueueFamilyIndices(vk::QueueFlagBits::eGraphics);
-    queueFamilyIndices.presentQueue=QueryQueueFamilyIndices(true)
     if (!queueFamilyIndices.graphicsQueue.has_value())
     {
         std::cout << "Info : "
-                  << "Not QueryQueueFamilyIndices : "
+                  << "Not QueryGraphicsQueueFamilyIndices : "
                   << std::endl;
     };
-    deviceQueueCreateInfo
-        .setPQueuePriorities(&queuePriorities)
+    deviceGraphicsQueueCreateInfo
+        .setPQueuePriorities(&graohicsQueuePriorities)
         .setQueueCount(1)
         .setQueueFamilyIndex(queueFamilyIndices.graphicsQueue.value());
+
+    vk::DeviceQueueCreateInfo devicePresentQueueCreateInfo;
+    float presentQueuePriorities = 1.0f;
+    queueFamilyIndices.presentQueue = QueryQueueFamilyIndices(true);
+    if (!queueFamilyIndices.presentQueue.has_value())
+    {
+        std::cout << "Info : "
+                  << "Not QueryPresentQueueFamilyIndices : "
+                  << std::endl;
+    };
+    devicePresentQueueCreateInfo
+        .setPQueuePriorities(&presentQueuePriorities)
+        .setQueueCount(1)
+        .setQueueFamilyIndex(queueFamilyIndices.presentQueue.value());
+
+    if (queueFamilyIndices.graphicsQueue == queueFamilyIndices.presentQueue)
+    {
+        deviceQueueCreateInfos.emplace_back(deviceGraphicsQueueCreateInfo);
+    }
+    else
+    {
+        deviceQueueCreateInfos.emplace_back(deviceGraphicsQueueCreateInfo);
+        deviceQueueCreateInfos.emplace_back(devicePresentQueueCreateInfo);
+    }
+
     vk::DeviceCreateInfo deviceCreateInfo;
-    deviceCreateInfo.setQueueCreateInfos(deviceQueueCreateInfo);
+    deviceCreateInfo.setQueueCreateInfos(deviceQueueCreateInfos);
     device = physicalDevice.createDevice(deviceCreateInfo);
 
     graphicQueue = device.getQueue(queueFamilyIndices.graphicsQueue.value(), 0);
+    presentQueue = device.getQueue(queueFamilyIndices.presentQueue.value(), 0);
 }
 
 void RenderCore::DestroyVkDevice()
@@ -133,7 +160,7 @@ std::optional<uint32_t> RenderCore::QueryQueueFamilyIndices(bool findPresentQueu
     auto properties = physicalDevice.getQueueFamilyProperties();
     for (int i = 0; i < properties.size(); i++)
     {
-        const bool result = physicalDevice.getSurfaceSupportKHR(i,surface);
+        const bool result = physicalDevice.getSurfaceSupportKHR(i, surface);
         if (result)
         {
             return i;
