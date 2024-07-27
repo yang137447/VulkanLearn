@@ -26,7 +26,7 @@ int main(int argc, char **argv)
     std::vector<const char *> extensions(count);
     SDL_Vulkan_GetInstanceExtensions(&count, extensions.data());
 
-    RenderCore::Init(extensions,window);
+    std::unique_ptr<RenderCore> render = std::make_unique<RenderCore>(extensions,window);
 
     while (!shouldClose)
     {
@@ -39,7 +39,7 @@ int main(int argc, char **argv)
         }
     }
 
-    RenderCore::Quit();
+    render.reset();
 
     SDL_DestroyWindow(window);
     SDL_Quit();

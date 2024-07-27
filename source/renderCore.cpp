@@ -2,8 +2,19 @@
 #include "SDL3/SDL_vulkan.h"
 #include <iostream>
 
+RenderCore::RenderCore(std::vector<const char *> &extensions, SDL_Window *window)
+{
+    Init(extensions, window);
+    CreateVkInstace();
+    PickupPhysicalDevice();
+    CreateVkSurface();
+    CreateVkDevice();
+    CreateVkSwapchain();
+}
+
 RenderCore::~RenderCore()
 {
+    DestroyVkSwapchain();
     DestroyVkInstance();
     DestroyVkDevice();
 }
@@ -13,28 +24,10 @@ void RenderCore::Init(std::vector<const char *> &extensions, SDL_Window *window)
     sdlExtensoins.resize(extensions.size());
     std::copy(extensions.begin(), extensions.end(), sdlExtensoins.begin());
     sdlWindow = window;
-    if (_instance == nullptr)
-    {
-        _instance.reset(new RenderCore);
-    }
     for (auto extension : extensions)
     {
         std::cout << extension << std::endl;
     }
-}
-
-void RenderCore::Quit()
-{
-    _instance.reset();
-}
-
-RenderCore &RenderCore::GetInstance()
-{
-    if (_instance == nullptr)
-    {
-        _instance.reset(new RenderCore);
-    }
-    return *_instance; // TODO: insert return statement here
 }
 
 void RenderCore::CreateVkInstace()
@@ -132,12 +125,22 @@ void RenderCore::DestroyVkDevice()
     device.destroy();
 }
 
+void RenderCore::CreateVkSwapchain()
+{
+    int width, height;
+    SDL_GetWindowSize(sdlWindow, &width, &height);
+    swapchain = std::make_unique<Swapchain>(
+        static_cast<uint32_t>(width), static_cast<uint32_t>(height),
+        physicalDevice, device, surface, queueFamilyIndices);
+}
+
+void RenderCore::DestroyVkSwapchain()
+{
+    swapchain.reset();
+}
+
 RenderCore::RenderCore()
 {
-    CreateVkInstace();
-    PickupPhysicalDevice();
-    CreateVkSurface();
-    CreateVkDevice();
 }
 
 std::optional<uint32_t> RenderCore::QueryQueueFamilyIndices(vk::QueueFlagBits queryQueueflagbits)
