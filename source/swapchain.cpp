@@ -4,6 +4,28 @@ Swapchain::Swapchain(/* args */)
 {
 }
 
+Swapchain::Swapchain(const uint32_t windowWidth, const uint32_t windowHeight, const vk::PhysicalDevice &physicalDevice, const vk::Device &device, const vk::SurfaceKHR &surface, const QueueFamilyIndices &queueFamilyIndices)
+{
+    // init data
+    this->device = device;
+    QuerySwapchainData(windowWidth, windowHeight, physicalDevice, surface);
+
+    // Create swapchain
+    CreateVkSwapChain(device,surface,queueFamilyIndices);
+
+    //Get Images
+    GetVkImages();
+
+    //Create imageViews
+    CreateVkImageViews();
+}
+
+Swapchain::~Swapchain()
+{
+    DestroyVkImageViews();
+    DestroyVkSwapChain();
+}
+
 void Swapchain::QuerySwapchainData(const uint32_t windowWidth, const uint32_t windowHeight, const vk::PhysicalDevice &physicalDevice, const vk::SurfaceKHR &surface)
 {
     // Get imageFormat
@@ -38,13 +60,8 @@ void Swapchain::QuerySwapchainData(const uint32_t windowWidth, const uint32_t wi
     }
 }
 
-Swapchain::Swapchain(const uint32_t windowWidth, const uint32_t windowHeight, const vk::PhysicalDevice &physicalDevice, const vk::Device &device, const vk::SurfaceKHR &surface, const QueueFamilyIndices &queueFamilyIndices)
+void Swapchain::CreateVkSwapChain(const vk::Device &device, const vk::SurfaceKHR &surface, const QueueFamilyIndices &queueFamilyIndices)
 {
-    // init data
-    this->device = device;
-    QuerySwapchainData(windowWidth, windowHeight, physicalDevice, surface);
-
-    //Create swapchain
     vk::SwapchainCreateInfoKHR swapchainCreateInfo;
     swapchainCreateInfo
         .setClipped(VK_TRUE)
@@ -75,7 +92,44 @@ Swapchain::Swapchain(const uint32_t windowWidth, const uint32_t windowHeight, co
     swapchain = device.createSwapchainKHR(swapchainCreateInfo);
 }
 
-Swapchain::~Swapchain()
+void Swapchain::DestroyVkSwapChain()
 {
     device.destroySwapchainKHR(swapchain);
+}
+
+void Swapchain::GetVkImages()
+{
+    images = device.getSwapchainImagesKHR(swapchain);
+}
+
+void Swapchain::CreateVkImageViews()
+{
+    imageViews.resize(images.size());
+    for (int i = 0; i < imageViews.size(); i++)
+    {
+        vk::ComponentMapping ComponentMapping;
+        vk::ImageSubresourceRange imageSubresourceRange;
+        imageSubresourceRange
+            .setLevelCount(1)
+            .setBaseMipLevel(0)
+            .setLayerCount(1)
+            .setBaseArrayLayer(0)
+            .setAspectMask(vk::ImageAspectFlagBits::eColor);
+        vk::ImageViewCreateInfo imageViewCreateInfo;
+        imageViewCreateInfo
+            .setImage(images[i])
+            .setViewType(vk::ImageViewType::e2D)
+            .setComponents(ComponentMapping)
+            .setFormat(imageFormat.format)
+            .setSubresourceRange(imageSubresourceRange);
+        imageViews[i] = device.createImageView(imageViewCreateInfo);
+    }
+}
+
+void Swapchain::DestroyVkImageViews()
+{
+    for (auto &imageView : imageViews)
+    {
+        device.destroyImageView(imageView);
+    }
 }
