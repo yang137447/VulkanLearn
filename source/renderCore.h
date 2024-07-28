@@ -18,6 +18,7 @@ public:
     void DestroyVkInstance();
     void PickupPhysicalDevice();
     void CreateVkSurface();
+    void DestroyVkSurface();
     void CreateVkDevice();
     void DestroyVkDevice();
     void CreateVkSwapchain();
@@ -38,9 +39,12 @@ private:
     inline static std::vector<const char *> instanceLayers = {
         "VK_LAYER_KHRONOS_validation"};
 
-    const int GPUIndex = 0;
+    inline static std::vector<const char *> instanceExtensions = {};
 
-    inline static std::vector<const char *> sdlExtensoins = {};
+    inline static std::vector<const char *> deviceExtensions = {
+        VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+
+    const int GPUIndex = 0;
 
     inline static SDL_Window *sdlWindow = nullptr;
 

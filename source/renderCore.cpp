@@ -15,14 +15,15 @@ RenderCore::RenderCore(std::vector<const char *> &extensions, SDL_Window *window
 RenderCore::~RenderCore()
 {
     DestroyVkSwapchain();
-    DestroyVkInstance();
     DestroyVkDevice();
+    DestroyVkSurface();
+    DestroyVkInstance();
 }
 
 void RenderCore::Init(std::vector<const char *> &extensions, SDL_Window *window)
 {
-    sdlExtensoins.resize(extensions.size());
-    std::copy(extensions.begin(), extensions.end(), sdlExtensoins.begin());
+    instanceExtensions.resize(extensions.size());
+    std::copy(extensions.begin(), extensions.end(), instanceExtensions.begin());
     sdlWindow = window;
     for (auto extension : extensions)
     {
@@ -38,7 +39,7 @@ void RenderCore::CreateVkInstace()
     instanceCreateInfo
         .setPApplicationInfo(&applicationInfo)
         .setPEnabledLayerNames(instanceLayers)
-        .setPEnabledExtensionNames(sdlExtensoins);
+        .setPEnabledExtensionNames(instanceExtensions);
     instance = vk::createInstance(instanceCreateInfo);
 }
 
@@ -68,6 +69,11 @@ void RenderCore::CreateVkSurface()
     };
 
     surface = vksurface;
+}
+
+void RenderCore::DestroyVkSurface()
+{
+    instance.destroySurfaceKHR(surface);
 }
 
 void RenderCore::CreateVkDevice()
@@ -113,7 +119,12 @@ void RenderCore::CreateVkDevice()
     }
 
     vk::DeviceCreateInfo deviceCreateInfo;
-    deviceCreateInfo.setQueueCreateInfos(deviceQueueCreateInfos);
+    deviceCreateInfo
+        .setQueueCreateInfoCount(deviceQueueCreateInfos.size())
+        .setQueueCreateInfos(deviceQueueCreateInfos)
+        .setEnabledExtensionCount(deviceExtensions.size())
+        .setPEnabledExtensionNames(deviceExtensions);
+
     device = physicalDevice.createDevice(deviceCreateInfo);
 
     graphicQueue = device.getQueue(queueFamilyIndices.graphicsQueue.value(), 0);

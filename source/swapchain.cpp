@@ -52,6 +52,7 @@ Swapchain::Swapchain(const uint32_t windowWidth, const uint32_t windowHeight, co
         .setImageUsage(vk::ImageUsageFlagBits::eColorAttachment)
         .setCompositeAlpha(vk::CompositeAlphaFlagBitsKHR::eOpaque)
         .setSurface(surface)
+        .setImageExtent(imageExtent)
         .setImageColorSpace(imageFormat.colorSpace)
         .setImageFormat(imageFormat.format)
         .setMinImageCount(imageCount)
