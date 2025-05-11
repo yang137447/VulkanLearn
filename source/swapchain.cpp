@@ -4,20 +4,27 @@ Swapchain::Swapchain(/* args */)
 {
 }
 
-Swapchain::Swapchain(const uint32_t windowWidth, const uint32_t windowHeight, const vk::PhysicalDevice &physicalDevice, const vk::Device &device, const vk::SurfaceKHR &surface, const QueueFamilyIndices &queueFamilyIndices)
+Swapchain::Swapchain(const uint32_t windowWidth, const uint32_t windowHeight,
+                     const vk::PhysicalDevice &physicalDevice,
+                     const vk::Device &device,
+                     const vk::SurfaceKHR &surface,
+                     const vk::RenderPass &renderPass,
+                     const QueueFamilyIndices &queueFamilyIndices)
 {
     // init data
     this->device = device;
+    this->renderPass = renderPass;
     QuerySwapchainData(windowWidth, windowHeight, physicalDevice, surface);
 
     // Create swapchain
-    CreateVkSwapChain(device,surface,queueFamilyIndices);
+    CreateVkSwapChain(device, surface, queueFamilyIndices);
 
-    //Get Images
+    // Get Images
     GetVkImages();
 
-    //Create imageViews
+    // Create imageViews
     CreateVkImageViews();
+
 }
 
 Swapchain::~Swapchain()

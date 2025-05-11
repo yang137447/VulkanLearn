@@ -5,7 +5,11 @@
 #include "vulkan/vulkan.hpp"
 #include "SDL3/SDL.h"
 #include "BaseStructs.h"
-#include "swapchain.h"
+
+class Swapchain;
+class ShaderModule;
+class RenderProcess;
+class Render;
 
 class RenderCore
 {
@@ -13,6 +17,8 @@ public:
     RenderCore(std::vector<const char *> &extensions, SDL_Window *window);
     ~RenderCore();
     static void Init(std::vector<const char *> &extensions, SDL_Window *window);
+
+    void draw();
 
     void CreateVkInstace();
     void DestroyVkInstance();
@@ -23,6 +29,16 @@ public:
     void DestroyVkDevice();
     void CreateVkSwapchain();
     void DestroyVkSwapchain();
+    void CreateVkRenderPass();
+    void DestroyVkRenderPass();
+    void CreateVkFramebuffers();
+    void DestroyVkFramebuffers();
+    void CreateVkShaderModule();
+    void DestroyVkShaderModule();
+    void CreateVkRenderProcess();
+    void DestroyVkRenderProcess();
+    void CreateVkRender();
+    void DestroyVkRender();
 
     vk::Instance instance;
     vk::PhysicalDevice physicalDevice;
@@ -31,7 +47,12 @@ public:
     QueueFamilyIndices queueFamilyIndices;
     vk::Queue graphicQueue;
     vk::Queue presentQueue;
-    std::unique_ptr<Swapchain> swapchain;
+    vk::RenderPass renderPass;
+    Swapchain *swapchain;
+    std::vector<vk::Framebuffer> framebuffers;
+    ShaderModule *shaderModule;
+    RenderProcess *renderProcess;
+    Render *render;
 
 private:
     RenderCore();

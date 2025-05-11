@@ -1,5 +1,10 @@
 #include "renderCore.h"
 #include "SDL3/SDL_vulkan.h"
+#include "swapchain.h"
+#include "shaderModule.h"
+#include "renderProcess.h"
+#include "render.h"
+#include "settings.h"
 #include <iostream>
 
 RenderCore::RenderCore(std::vector<const char *> &extensions, SDL_Window *window)
@@ -10,10 +15,20 @@ RenderCore::RenderCore(std::vector<const char *> &extensions, SDL_Window *window
     CreateVkSurface();
     CreateVkDevice();
     CreateVkSwapchain();
+    CreateVkRenderPass();
+    CreateVkFramebuffers();
+    CreateVkShaderModule();
+    CreateVkRenderProcess();
+    CreateVkRender();
 }
 
 RenderCore::~RenderCore()
 {
+    DestroyVkRender();
+    DestroyVkRenderProcess();
+    DestroyVkShaderModule();
+    DestroyVkFramebuffers();
+    DestroyVkRenderPass();
     DestroyVkSwapchain();
     DestroyVkDevice();
     DestroyVkSurface();
@@ -29,6 +44,11 @@ void RenderCore::Init(std::vector<const char *> &extensions, SDL_Window *window)
     {
         std::cout << extension << std::endl;
     }
+}
+
+void RenderCore::draw()
+{
+    render->Draw();
 }
 
 void RenderCore::CreateVkInstace()
@@ -140,14 +160,132 @@ void RenderCore::CreateVkSwapchain()
 {
     int width, height;
     SDL_GetWindowSize(sdlWindow, &width, &height);
-    swapchain = std::make_unique<Swapchain>(
+    swapchain = new Swapchain(
         static_cast<uint32_t>(width), static_cast<uint32_t>(height),
-        physicalDevice, device, surface, queueFamilyIndices);
+        physicalDevice, device, surface, renderPass, queueFamilyIndices);
 }
 
 void RenderCore::DestroyVkSwapchain()
 {
-    swapchain.reset();
+    delete swapchain;
+}
+
+void RenderCore::CreateVkRenderPass()
+{
+    vk::AttachmentDescription colorAttachmentDescription;
+    colorAttachmentDescription
+        .setFormat(swapchain->GetSwapchainFormat())
+        .setSamples(vk::SampleCountFlagBits::e1)
+        .setLoadOp(vk::AttachmentLoadOp::eClear)
+        .setStoreOp(vk::AttachmentStoreOp::eStore)
+        .setStencilLoadOp(vk::AttachmentLoadOp::eDontCare)
+        .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
+        .setInitialLayout(vk::ImageLayout::eUndefined)
+        .setFinalLayout(vk::ImageLayout::ePresentSrcKHR);
+
+    vk::AttachmentReference colorAttachmentReference;
+    colorAttachmentReference
+        .setAttachment(0)
+        .setLayout(vk::ImageLayout::eColorAttachmentOptimal);
+
+    vk::SubpassDescription subpassDescription;
+    subpassDescription
+        .setPipelineBindPoint(vk::PipelineBindPoint::eGraphics)
+        .setColorAttachmentCount(1)
+        .setPColorAttachments(&colorAttachmentReference);
+
+    // vk::SubpassDependency subpassDependency;
+    // subpassDependency
+    //     .setSrcSubpass(VK_SUBPASS_EXTERNAL)
+    //     .setDstSubpass(0)
+    //     .setDstAccessMask(vk::AccessFlagBits::eColorAttachmentWrite)
+    //     .setSrcStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput);
+
+    vk::RenderPassCreateInfo renderPassCreateInfo;
+    renderPassCreateInfo
+        .setAttachmentCount(1)
+        .setPAttachments(&colorAttachmentDescription)
+        .setSubpassCount(1)
+        .setPSubpasses(&subpassDescription);
+        // .setDependencyCount(1)
+        // .setPDependencies(&subpassDependency);
+    renderPass = device.createRenderPass(renderPassCreateInfo);
+}
+
+void RenderCore::DestroyVkRenderPass()
+{
+    device.destroyRenderPass(renderPass);
+}
+
+void RenderCore::CreateVkFramebuffers()
+{
+    framebuffers.resize(swapchain->GetImageCount());
+    for (int i = 0; i < framebuffers.size(); i++)
+    {
+        vk::FramebufferCreateInfo framebufferCreateInfo;
+        framebufferCreateInfo
+            .setRenderPass(renderPass)
+            .setAttachments(swapchain->GetImageViews()[i])
+            .setWidth(swapchain->GetExtent().width)
+            .setHeight(swapchain->GetExtent().height)
+            .setLayers(1);
+        framebuffers[i] = device.createFramebuffer(framebufferCreateInfo);
+    }
+}
+
+void RenderCore::DestroyVkFramebuffers()
+{
+    for (auto &framebuffer : framebuffers)
+    {
+        device.destroyFramebuffer(framebuffer);
+    }
+}
+
+void RenderCore::CreateVkShaderModule()
+{
+    std::string vertexShaderPath = filePath + "shader/spv/test_vert.spv";
+    std::string fragmentShaderPath = filePath + "shader/spv/test_frag.spv";
+    shaderModule = new ShaderModule(
+        device,
+        vertexShaderPath,
+        fragmentShaderPath);
+}
+
+void RenderCore::DestroyVkShaderModule()
+{
+    delete shaderModule;
+}
+
+void RenderCore::CreateVkRenderProcess()
+{
+    renderProcess = new RenderProcess(
+        device,
+        renderPass,
+        *shaderModule,
+        *swapchain);
+}
+
+void RenderCore::DestroyVkRenderProcess()
+{
+    delete renderProcess;
+}
+
+void RenderCore::CreateVkRender()
+{
+    render = new Render(
+        device,
+        queueFamilyIndices,
+        *swapchain,
+        framebuffers,
+        renderProcess->GetGraphicsPipeline(),
+        renderPass,
+        graphicQueue,
+        presentQueue);
+}
+
+void RenderCore::DestroyVkRender()
+{
+    delete render;
 }
 
 RenderCore::RenderCore()

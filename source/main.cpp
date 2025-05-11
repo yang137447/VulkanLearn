@@ -3,6 +3,8 @@
 #include <iostream>
 #include <vector>
 #include "renderCore.h"
+#include "shaderCompiler.h"
+#include "settings.h"
 
 int main(int argc, char **argv)
 {
@@ -10,7 +12,7 @@ int main(int argc, char **argv)
 
     SDL_Window *window = SDL_CreateWindow(
         "VulkanRenderer",
-        1024, 768,
+        width, height,
         SDL_WINDOW_VULKAN | SDL_WINDOW_BORDERLESS);
 
     if (!window)
@@ -26,7 +28,11 @@ int main(int argc, char **argv)
     std::vector<const char *> extensions(count);
     SDL_Vulkan_GetInstanceExtensions(&count, extensions.data());
 
-    std::unique_ptr<RenderCore> render = std::make_unique<RenderCore>(extensions,window);
+    ShaderCompiler shaderCompiler;
+    std::string shaderFolderPath = filePath + "/shader";
+    std::cout << "shaderFolderPath: " << shaderFolderPath << std::endl;
+    shaderCompiler.StartCompile(shaderFolderPath);
+    std::unique_ptr<RenderCore> renderCore = std::make_unique<RenderCore>(extensions,window);
 
     while (!shouldClose)
     {
@@ -36,10 +42,11 @@ int main(int argc, char **argv)
             {
                 shouldClose = true;
             }
+            renderCore->draw();
         }
     }
 
-    render.reset();
+    renderCore.reset();
 
     SDL_DestroyWindow(window);
     SDL_Quit();
