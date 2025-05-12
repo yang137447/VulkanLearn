@@ -5,6 +5,7 @@
 #include "renderCore.h"
 #include "shaderCompiler.h"
 #include "settings.h"
+#include "VulkanManager.h"
 
 int main(int argc, char **argv)
 {
@@ -28,11 +29,11 @@ int main(int argc, char **argv)
     std::vector<const char *> extensions(count);
     SDL_Vulkan_GetInstanceExtensions(&count, extensions.data());
 
-    ShaderCompiler shaderCompiler;
-    std::string shaderFolderPath = filePath + "/shader";
-    std::cout << "shaderFolderPath: " << shaderFolderPath << std::endl;
-    shaderCompiler.StartCompile(shaderFolderPath);
-    std::unique_ptr<RenderCore> renderCore = std::make_unique<RenderCore>(extensions,window);
+    // ShaderCompiler shaderCompiler;
+    // std::string shaderFolderPath = filePath + "/shader";
+    // std::cout << "shaderFolderPath: " << shaderFolderPath << std::endl;
+    // shaderCompiler.StartCompile(shaderFolderPath);
+    std::unique_ptr<VulkanManager> vulkanManager = std::make_unique<VulkanManager>(extensions, window);
 
     while (!shouldClose)
     {
@@ -42,11 +43,8 @@ int main(int argc, char **argv)
             {
                 shouldClose = true;
             }
-            renderCore->draw();
         }
     }
-
-    renderCore.reset();
 
     SDL_DestroyWindow(window);
     SDL_Quit();
