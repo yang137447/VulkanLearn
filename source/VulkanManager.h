@@ -3,6 +3,7 @@
 #include <vulkan/vulkan.hpp>
 #include <SDL3/SDL.h>
 #include <vector>
+#include <optional>
 
 class VulkanManager
 {
@@ -16,11 +17,17 @@ public:
     void DestroyVkInstance();
 
     void EnumeratePhysicalDevices();
+
+    void CreateVkSurface();
+
     void CreateVkDevice();
     void DestroyVkDevice();
 
     void CreateVkCommandBuffer();
     void DestroyVkCommandBuffer();
+
+    void CreateVkSwapChain();
+    void DestroyVkSwapChain();
 private:
     
 private:
@@ -40,8 +47,10 @@ private:
     vk::PhysicalDeviceMemoryProperties gpuMemoryProperties;
     uint32_t queueFamilyCount = 0;
     std::vector<vk::QueueFamilyProperties> queueFamilyProperties;
-    uint32_t graphicQueueFamilyIndex = 0;
-    uint32_t presentQueueFamilyIndex = 0;
+    std::optional<uint32_t> graphicQueueFamilyIndex;
+    vk::Queue graphicQueue;
+    std::optional<uint32_t> presentQueueFamilyIndex;
+    vk::Queue presentQueue;
 
     vk::Device device;
 
@@ -51,4 +60,13 @@ private:
     vk::CommandBuffer commandBuffers[1];
     vk::SubmitInfo submitInfo[1];
 
+    VkSurfaceKHR surface;
+    std::vector<vk::SurfaceFormatKHR> surfaceFormats;
+    vk::SurfaceCapabilitiesKHR surfaceCapabilities;
+    std::vector<vk::PresentModeKHR> presentModes;
+    vk::Extent2D swapChainExtent;
+    uint32_t swapChainImageCount = 0;
+    vk::SwapchainKHR swapChain;
+    std::vector<vk::Image> swapChainImages;
+    std::vector<vk::ImageView> swapChainImageViews;
 };

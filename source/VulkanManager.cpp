@@ -1,5 +1,7 @@
 #include "VulkanManager.h"
+#include "SDL3/SDL_vulkan.h"
 #include <iostream>
+#include "settings.h"
 
 VulkanManager::VulkanManager()
 {
@@ -17,12 +19,15 @@ VulkanManager::VulkanManager(std::vector<const char *> &extensions, SDL_Window *
 
     CreateVkInstance();
     EnumeratePhysicalDevices();
+    CreateVkSurface();
     CreateVkDevice();
     CreateVkCommandBuffer();
+    CreateVkSwapChain();
 }
 
 VulkanManager::~VulkanManager()
 {
+    DestroyVkSwapChain();
     DestroyVkCommandBuffer();
     DestroyVkDevice();
     DestroyVkInstance();
@@ -50,6 +55,7 @@ void VulkanManager::CreateVkInstance()
 void VulkanManager::DestroyVkInstance()
 {
     instance.destroy();
+    std::cout << "Destroy VkInstance" << std::endl;
 }
 
 void VulkanManager::EnumeratePhysicalDevices()
@@ -73,26 +79,75 @@ void VulkanManager::EnumeratePhysicalDevices()
     gpuMemoryProperties = physicalDevice.getMemoryProperties();
 }
 
+void VulkanManager::CreateVkSurface()
+{
+    SDL_bool result = SDL_Vulkan_CreateSurface(sdlWindow, instance, &surface);
+    assert(result == SDL_TRUE);
+    std::cout << "Create VkSurface" << std::endl;
+}
+
 void VulkanManager::CreateVkDevice()
 {
+    // 找一下quequeFamilys
     physicalDevices[GPUIndex].getQueueFamilyProperties(&queueFamilyCount, nullptr);
     queueFamilyProperties.resize(queueFamilyCount);
     physicalDevices[GPUIndex].getQueueFamilyProperties(&queueFamilyCount, queueFamilyProperties.data());
+
+    std::vector<uint32_t> presentQueueFamilyIndices;
+    std::vector<uint32_t> graphicQueueFamilyIndices;
+
     for (uint32_t i = 0; i < queueFamilyCount; i++)
     {
         const auto &property = queueFamilyProperties[i];
         if (property.queueFlags & vk::QueueFlagBits::eGraphics)
         {
-            std::cout << "Found graphics queue family: " << i << std::endl;
-            std::cout << "Queue count: " << property.queueCount << std::endl;
-            graphicQueueFamilyIndex = i;
+            graphicQueueFamilyIndices.push_back(i);
         }
+        if (physicalDevices[GPUIndex].getSurfaceSupportKHR(i, surface))
+        {
+            presentQueueFamilyIndices.push_back(i);
+        }
+    }
+
+    // Check if we have a graphics queue family
+    if (graphicQueueFamilyIndices.empty())
+    {
+        std::cout << "No graphics queue family found" << std::endl;
+        return;
+    }
+
+    // Check if we have a present queue family
+    if (presentQueueFamilyIndices.empty())
+    {
+        std::cout << "No present queue family found" << std::endl;
+        return;
+    }
+    // 找到一个Graphics和Present都支持的队列
+    for (uint32_t i = 0; i < graphicQueueFamilyIndices.size(); i++)
+    {
+        for (uint32_t j = 0; j < presentQueueFamilyIndices.size(); j++)
+        {
+            if (graphicQueueFamilyIndices[i] == presentQueueFamilyIndices[j])
+            {
+                graphicQueueFamilyIndex = graphicQueueFamilyIndices[i];
+                presentQueueFamilyIndex = presentQueueFamilyIndices[j];
+                std::cout << "Found a queue family that supports both graphics and present: " << graphicQueueFamilyIndex.value() << std::endl;
+                break;
+            }
+        }
+    }
+    // 如果没有找到，就用第一个Graphics和第一个Present
+    if (!graphicQueueFamilyIndex.has_value())
+    {
+        graphicQueueFamilyIndex = graphicQueueFamilyIndices[0];
+        presentQueueFamilyIndex = presentQueueFamilyIndices[0];
+        std::cout << "Using the first graphics and present queue family: " << graphicQueueFamilyIndex.value() << presentQueueFamilyIndex.value() << std::endl;
     }
 
     vk::DeviceQueueCreateInfo deviceGraphicsQueueCreateInfo;
     float graohicsQueuePriorities = 0.0f;
     deviceGraphicsQueueCreateInfo
-        .setQueueFamilyIndex(graphicQueueFamilyIndex)
+        .setQueueFamilyIndex(graphicQueueFamilyIndex.value())
         .setQueueCount(1)
         .setPQueuePriorities(&graohicsQueuePriorities);
     
@@ -106,6 +161,11 @@ void VulkanManager::CreateVkDevice()
     device = physicalDevices[GPUIndex].createDevice(deviceCreateInfo);
     assert(device);
     std::cout << "Create VkDevice" << std::endl;
+
+    // Get the graphics queue
+    device.getQueue(graphicQueueFamilyIndex.value(), 0, &graphicQueue);
+    // Get the present queue
+    device.getQueue(presentQueueFamilyIndex.value(), 0, &presentQueue);
 }
 
 void VulkanManager::DestroyVkDevice()
@@ -118,7 +178,7 @@ void VulkanManager::CreateVkCommandBuffer()
 {
     vk::CommandPoolCreateInfo commandPoolCreateInfo;
     commandPoolCreateInfo
-        .setQueueFamilyIndex(graphicQueueFamilyIndex)
+        .setQueueFamilyIndex(graphicQueueFamilyIndex.value())
         .setFlags(vk::CommandPoolCreateFlagBits::eResetCommandBuffer);
     commandPool = device.createCommandPool(commandPoolCreateInfo);
     assert(commandPool);
@@ -128,7 +188,7 @@ void VulkanManager::CreateVkCommandBuffer()
         .setCommandPool(commandPool)
         .setLevel(vk::CommandBufferLevel::ePrimary)
         .setCommandBufferCount(1);
-    commandBuffer = device.allocateCommandBuffers(commandBufferAllocateInfo);
+    vk::Result result = device.allocateCommandBuffers(&commandBufferAllocateInfo, &commandBuffer);
 
     commandBufferBeginInfo
         .setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit)
@@ -150,4 +210,154 @@ void VulkanManager::DestroyVkCommandBuffer()
     device.freeCommandBuffers(commandPool, 1, commandBuffers);
     device.destroyCommandPool(commandPool);
     std::cout << "Destroy VkCommandBuffer" << std::endl;
+}
+
+void VulkanManager::CreateVkSwapChain()
+{
+    // 获取支持的表面格式
+    surfaceFormats = physicalDevices[GPUIndex].getSurfaceFormatsKHR(surface);
+    assert(!surfaceFormats.empty());
+    for (const auto &surfaceFormat : surfaceFormats)
+    {
+        std::cout << "Surface format: " << vk::to_string(surfaceFormat.format) << std::endl;
+    }
+    // 获取KHR表面能力
+    surfaceCapabilities = physicalDevices[GPUIndex].getSurfaceCapabilitiesKHR(surface);
+    std::cout << "Surface capabilities: " << std::endl;
+    std::cout << "  minImageCount: " << surfaceCapabilities.minImageCount << std::endl;
+    std::cout << "  maxImageCount: " << surfaceCapabilities.maxImageCount << std::endl;
+    std::cout << "  currentExtent: " << surfaceCapabilities.currentExtent.width << "x" << surfaceCapabilities.currentExtent.height << std::endl;
+    std::cout << "  minImageExtent: " << surfaceCapabilities.minImageExtent.width << "x" << surfaceCapabilities.minImageExtent.height << std::endl;
+    std::cout << "  maxImageExtent: " << surfaceCapabilities.maxImageExtent.width << "x" << surfaceCapabilities.maxImageExtent.height << std::endl;
+    std::cout << "  maxImageArrayLayers: " << surfaceCapabilities.maxImageArrayLayers << std::endl;
+    std::cout << "  supportedTransforms: " << vk::to_string(surfaceCapabilities.supportedTransforms) << std::endl;
+    std::cout << "  currentTransform: " << vk::to_string(surfaceCapabilities.currentTransform) << std::endl;
+    std::cout << "  supportedCompositeAlpha: " << vk::to_string(surfaceCapabilities.supportedCompositeAlpha) << std::endl;
+    std::cout << "  supportedUsageFlags: " << vk::to_string(surfaceCapabilities.supportedUsageFlags) << std::endl;
+    //获取支持的显示模式数量
+    presentModes = physicalDevices[GPUIndex].getSurfacePresentModesKHR(surface);
+    assert(!presentModes.empty());
+    for (const auto &presentMode : presentModes)
+    {
+        std::cout << "Present mode: " << vk::to_string(presentMode) << std::endl;
+    }
+    // 确定一下显示模式
+    vk::PresentModeKHR presentMode = vk::PresentModeKHR::eFifo;
+    for (const auto &availablePresentMode : presentModes)
+    {
+        //如果也支持VK_PRESENT_MODE_MAILBOX_KHR模式，由于其效率高，便选用
+        if (availablePresentMode == vk::PresentModeKHR::eMailbox)
+        {
+            presentMode = availablePresentMode;
+            break;
+        }
+        //如果没能用上VK_PRESENT_MODE_MAILBOX_KHR模式，但有VK_PRESENT_MODE_IMMEDIATE_KHR模式
+        //也比VK_PRESENT_MODE_FIFO_KHR模式强，故选用
+        else if (availablePresentMode == vk::PresentModeKHR::eImmediate)
+        {
+            presentMode = availablePresentMode;
+        }
+    }
+    // 确定surface的高度和宽度
+    if(surfaceCapabilities.currentExtent.width == 0xFFFFFFFF)
+    {
+        //如果surface能力中的尺寸没有定义（宽度为0xFFFFFFFF表示没定义）
+        swapChainExtent.width = std::clamp(static_cast<uint32_t>(width), surfaceCapabilities.minImageExtent.width, surfaceCapabilities.maxImageExtent.width);
+        swapChainExtent.height = std::clamp(static_cast<uint32_t>(height), surfaceCapabilities.minImageExtent.height, surfaceCapabilities.maxImageExtent.height);
+    }
+    else
+    {
+        swapChainExtent = surfaceCapabilities.currentExtent;
+    }
+    //确定交换链的图像数量
+    swapChainImageCount = surfaceCapabilities.minImageCount + 1;
+    if (surfaceCapabilities.maxImageCount > 0 && swapChainImageCount > surfaceCapabilities.maxImageCount)
+    {
+        swapChainImageCount = surfaceCapabilities.maxImageCount;
+    }
+    //KHR表面变换标志
+    vk::SurfaceTransformFlagBitsKHR preTransform = surfaceCapabilities.currentTransform;
+    if (surfaceCapabilities.supportedTransforms & vk::SurfaceTransformFlagBitsKHR::eIdentity)
+    {
+        /*主要优势在于它不会对图像进行任何变换，确保图像按照原始方式呈现。这意味着：
+            避免额外计算：不需要 GPU 进行旋转或镜像处理，提高渲染效率。
+            减少延迟：由于不涉及变换，图像可以更快地传输到显示设备。
+            保持原始布局：适用于 UI 设计或需要精准像素映射的应用，如 2D 游戏或图像处理软件。
+        */
+        preTransform = vk::SurfaceTransformFlagBitsKHR::eIdentity;
+    }
+    // 创建交换链
+    vk::SwapchainCreateInfoKHR swapChainCreateInfo;
+    swapChainCreateInfo
+        .setSurface(surface)
+        .setMinImageCount(swapChainImageCount)
+        .setImageFormat(surfaceFormats[0].format)
+        .setImageColorSpace(vk::ColorSpaceKHR::eSrgbNonlinear)
+        .setImageExtent(swapChainExtent)
+        .setImageArrayLayers(1)
+        .setImageUsage(vk::ImageUsageFlagBits::eColorAttachment)
+        .setImageSharingMode(vk::SharingMode::eExclusive)
+        .setQueueFamilyIndexCount(0)
+        .setPQueueFamilyIndices(nullptr)
+        .setPreTransform(preTransform)
+        .setCompositeAlpha(vk::CompositeAlphaFlagBitsKHR::eOpaque)
+        .setPresentMode(presentMode)
+        .setClipped(VK_TRUE);
+    if(graphicQueueFamilyIndex.value() != presentQueueFamilyIndex.value())
+    {
+        //如果图形队列和呈现队列不是同一个队列族
+        //则需要设置共享模式
+        uint32_t queueFamilyIndices[] = { graphicQueueFamilyIndex.value(), presentQueueFamilyIndex.value() };
+        swapChainCreateInfo
+            .setImageSharingMode(vk::SharingMode::eConcurrent)
+            .setQueueFamilyIndexCount(2)
+            .setPQueueFamilyIndices(queueFamilyIndices);
+    }
+    swapChain = device.createSwapchainKHR(swapChainCreateInfo);
+    assert(swapChain);
+
+    // 获取交换链中的图像数量
+    vk::Result result = device.getSwapchainImagesKHR(swapChain, &swapChainImageCount, nullptr);
+    assert(result == vk::Result::eSuccess);
+    std::cout << "Swap chain image count: " << swapChainImageCount << std::endl;
+    // 获取交换链中的图像
+    swapChainImages.resize(swapChainImageCount);
+    result = device.getSwapchainImagesKHR(swapChain, &swapChainImageCount, swapChainImages.data());
+    assert(result == vk::Result::eSuccess);
+    // 创建交换链图像视图
+    swapChainImageViews.resize(swapChainImageCount);
+    for (uint32_t i = 0; i < swapChainImageCount; i++)
+    {
+        vk::ImageViewCreateInfo imageViewCreateInfo;
+        imageViewCreateInfo
+            .setImage(swapChainImages[i])
+            .setViewType(vk::ImageViewType::e2D)
+            .setFormat(surfaceFormats[0].format)
+            .setComponents(vk::ComponentMapping())
+            .setSubresourceRange(
+                vk::ImageSubresourceRange(
+                    vk::ImageAspectFlagBits::eColor, 
+                    0, //baseMipLevel
+                    1, //MipmaplevelCount
+                    0, //baseArrayLayer
+                    1  //layerCount
+                ));
+        swapChainImageViews[i] = device.createImageView(imageViewCreateInfo);
+        assert(swapChainImageViews[i]);
+    }
+    std::cout << "Create VkSwapChain" << std::endl;
+    std::cout << "  Swap chain image format: " << vk::to_string(surfaceFormats[0].format) << std::endl;
+    std::cout << "  Swap chain image extent: " << swapChainExtent.width << "x" << swapChainExtent.height << std::endl;
+    std::cout << "  Swap chain image color space: " << vk::to_string(surfaceFormats[0].colorSpace) << std::endl;
+    std::cout << "  Swap chain image view count: " << swapChainImageCount << std::endl;
+}
+
+void VulkanManager::DestroyVkSwapChain()
+{
+    for(uint32_t i = 0; i < swapChainImageCount; i++)
+    {
+        device.destroyImageView(swapChainImageViews[i]);
+    }
+    device.destroySwapchainKHR(swapChain);
+    std::cout << "Destroy VkSwapChain" << std::endl;
 }
