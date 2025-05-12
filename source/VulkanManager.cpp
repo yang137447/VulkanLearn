@@ -17,10 +17,14 @@ VulkanManager::VulkanManager(std::vector<const char *> &extensions, SDL_Window *
 
     CreateVkInstance();
     EnumeratePhysicalDevices();
+    CreateVkDevice();
+    CreateVkCommandBuffer();
 }
 
 VulkanManager::~VulkanManager()
 {
+    DestroyVkCommandBuffer();
+    DestroyVkDevice();
     DestroyVkInstance();
 }
 
@@ -108,4 +112,42 @@ void VulkanManager::DestroyVkDevice()
 {
     device.destroy();
     std::cout << "Destroy VkDevice" << std::endl;
+}
+
+void VulkanManager::CreateVkCommandBuffer()
+{
+    vk::CommandPoolCreateInfo commandPoolCreateInfo;
+    commandPoolCreateInfo
+        .setQueueFamilyIndex(graphicQueueFamilyIndex)
+        .setFlags(vk::CommandPoolCreateFlagBits::eResetCommandBuffer);
+    commandPool = device.createCommandPool(commandPoolCreateInfo);
+    assert(commandPool);
+
+    vk::CommandBufferAllocateInfo commandBufferAllocateInfo;
+    commandBufferAllocateInfo
+        .setCommandPool(commandPool)
+        .setLevel(vk::CommandBufferLevel::ePrimary)
+        .setCommandBufferCount(1);
+    commandBuffer = device.allocateCommandBuffers(commandBufferAllocateInfo);
+
+    commandBufferBeginInfo
+        .setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit)
+        .setPInheritanceInfo(nullptr);
+    commandBuffers[0] = commandBuffer;
+
+    vk::PipelineStageFlags* piplineStageFlags = new vk::PipelineStageFlags();
+    *piplineStageFlags = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+    submitInfo[0]
+        .setPWaitDstStageMask(piplineStageFlags)
+        .setCommandBufferCount(1)
+        .setPCommandBuffers(commandBuffers)
+        .setSignalSemaphoreCount(0)
+        .setPSignalSemaphores(nullptr);
+}
+
+void VulkanManager::DestroyVkCommandBuffer()
+{
+    device.freeCommandBuffers(commandPool, 1, commandBuffers);
+    device.destroyCommandPool(commandPool);
+    std::cout << "Destroy VkCommandBuffer" << std::endl;
 }

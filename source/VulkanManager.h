@@ -14,9 +14,13 @@ public:
 
     void CreateVkInstance();
     void DestroyVkInstance();
+
     void EnumeratePhysicalDevices();
     void CreateVkDevice();
     void DestroyVkDevice();
+
+    void CreateVkCommandBuffer();
+    void DestroyVkCommandBuffer();
 private:
     
 private:
@@ -40,5 +44,11 @@ private:
     uint32_t presentQueueFamilyIndex = 0;
 
     vk::Device device;
+
+    vk::CommandPool commandPool;
+    vk::CommandBuffer commandBuffer;
+    vk::CommandBufferBeginInfo commandBufferBeginInfo;
+    vk::CommandBuffer commandBuffers[1];
+    vk::SubmitInfo submitInfo[1];
 
 };
