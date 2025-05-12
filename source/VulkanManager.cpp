@@ -12,17 +12,19 @@ VulkanManager::VulkanManager(std::vector<const char *> &extensions, SDL_Window *
     sdlWindow = window;
     for (auto extension : instanceExtensions)
     {
-        std::cout << extension << std::endl;
+        std::cout << "instanceExtension:" << extension << std::endl;
     }
 
-    createInstance();
+    CreateVkInstance();
+    EnumeratePhysicalDevices();
 }
 
 VulkanManager::~VulkanManager()
 {
+    DestroyVkInstance();
 }
 
-void VulkanManager::createInstance()
+void VulkanManager::CreateVkInstance()
 {
     vk::ApplicationInfo applicationInfo;
     applicationInfo.setApiVersion(VK_API_VERSION_1_3);
@@ -34,11 +36,76 @@ void VulkanManager::createInstance()
         .setEnabledExtensionCount(static_cast<uint32_t>(instanceExtensions.size()))
         .setPEnabledExtensionNames(instanceExtensions);
     instance = vk::createInstance(instanceCreateInfo);
+    if (!instance)
+    {
+        std::cout << "Failed to create Vulkan instance" << std::endl;
+        return;
+    }
 }
 
-void VulkanManager::destroyInstance()
+void VulkanManager::DestroyVkInstance()
 {
     instance.destroy();
-    instance = nullptr;
-    sdlWindow = nullptr;
+}
+
+void VulkanManager::EnumeratePhysicalDevices()
+{
+    physicalDevices = instance.enumeratePhysicalDevices();
+
+    gpuCount = static_cast<uint32_t>(physicalDevices.size());
+
+    if (gpuCount == 0)
+    {
+        std::cout << "No GPU found" << std::endl;
+        return;
+    }
+    std::cout << "GPU count: " << gpuCount << std::endl;
+    for (uint32_t i = 0; i < gpuCount; i++)
+    {
+        vk::PhysicalDeviceProperties deviceProperties = physicalDevices[i].getProperties();
+        std::cout << "GPU " << i << ": " << deviceProperties.deviceName << std::endl;
+    }
+    vk::PhysicalDevice physicalDevice = physicalDevices[0];
+    gpuMemoryProperties = physicalDevice.getMemoryProperties();
+}
+
+void VulkanManager::CreateVkDevice()
+{
+    physicalDevices[GPUIndex].getQueueFamilyProperties(&queueFamilyCount, nullptr);
+    queueFamilyProperties.resize(queueFamilyCount);
+    physicalDevices[GPUIndex].getQueueFamilyProperties(&queueFamilyCount, queueFamilyProperties.data());
+    for (uint32_t i = 0; i < queueFamilyCount; i++)
+    {
+        const auto &property = queueFamilyProperties[i];
+        if (property.queueFlags & vk::QueueFlagBits::eGraphics)
+        {
+            std::cout << "Found graphics queue family: " << i << std::endl;
+            std::cout << "Queue count: " << property.queueCount << std::endl;
+            graphicQueueFamilyIndex = i;
+        }
+    }
+
+    vk::DeviceQueueCreateInfo deviceGraphicsQueueCreateInfo;
+    float graohicsQueuePriorities = 0.0f;
+    deviceGraphicsQueueCreateInfo
+        .setQueueFamilyIndex(graphicQueueFamilyIndex)
+        .setQueueCount(1)
+        .setPQueuePriorities(&graohicsQueuePriorities);
+    
+    vk::DeviceCreateInfo deviceCreateInfo;
+    deviceCreateInfo
+        .setQueueCreateInfoCount(1)
+        .setPQueueCreateInfos(&deviceGraphicsQueueCreateInfo)
+        .setEnabledExtensionCount(static_cast<uint32_t>(deviceExtensions.size()))
+        .setPEnabledExtensionNames(deviceExtensions);
+    
+    device = physicalDevices[GPUIndex].createDevice(deviceCreateInfo);
+    assert(device);
+    std::cout << "Create VkDevice" << std::endl;
+}
+
+void VulkanManager::DestroyVkDevice()
+{
+    device.destroy();
+    std::cout << "Destroy VkDevice" << std::endl;
 }
