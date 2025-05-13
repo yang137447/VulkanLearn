@@ -28,6 +28,9 @@ public:
 
     void CreateVkSwapChain();
     void DestroyVkSwapChain();
+
+    void CreateVkDepthBuffer();
+    void DestroyVkDepthBuffer();
 private:
     
 private:
@@ -69,4 +72,12 @@ private:
     vk::SwapchainKHR swapChain;
     std::vector<vk::Image> swapChainImages;
     std::vector<vk::ImageView> swapChainImageViews;
+
+    vk::Format depthFormat;
+    vk::FormatProperties depthFormatProperties;
+    vk::Image depthImage;
+    vk::PhysicalDeviceMemoryProperties depthImageMemoryProperties;
+    vk::DeviceMemory depthImageMemory;
+    vk::ImageView depthImageView;
+
 };

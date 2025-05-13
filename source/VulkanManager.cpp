@@ -23,10 +23,12 @@ VulkanManager::VulkanManager(std::vector<const char *> &extensions, SDL_Window *
     CreateVkDevice();
     CreateVkCommandBuffer();
     CreateVkSwapChain();
+    CreateVkDepthBuffer();
 }
 
 VulkanManager::~VulkanManager()
 {
+    DestroyVkDepthBuffer();
     DestroyVkSwapChain();
     DestroyVkCommandBuffer();
     DestroyVkDevice();
@@ -360,4 +362,85 @@ void VulkanManager::DestroyVkSwapChain()
     }
     device.destroySwapchainKHR(swapChain);
     std::cout << "Destroy VkSwapChain" << std::endl;
+}
+
+void VulkanManager::CreateVkDepthBuffer()
+{
+    depthFormat = vk::Format::eD16Unorm;
+    depthFormatProperties = physicalDevices[GPUIndex].getFormatProperties(depthFormat);
+    // 确定平铺方式
+    vk::ImageTiling tiling = vk::ImageTiling::eOptimal;
+    if (depthFormatProperties.linearTilingFeatures & vk::FormatFeatureFlagBits::eDepthStencilAttachment)
+    {
+        tiling = vk::ImageTiling::eLinear;
+    }
+    else if (depthFormatProperties.optimalTilingFeatures & vk::FormatFeatureFlagBits::eDepthStencilAttachment)
+    {
+        tiling = vk::ImageTiling::eOptimal;
+    }
+    else
+    {
+        std::cout << "Depth format not supported" << std::endl;
+        return;
+    }
+    // 创建深度图像
+    vk::ImageCreateInfo depthImageCreateInfo;
+    depthImageCreateInfo
+        .setImageType(vk::ImageType::e2D)
+        .setFormat(depthFormat)
+        .setExtent(vk::Extent3D(swapChainExtent.width, swapChainExtent.height, 1))
+        .setMipLevels(1)
+        .setArrayLayers(1)
+        .setSamples(vk::SampleCountFlagBits::e1)
+        .setTiling(tiling)
+        .setUsage(vk::ImageUsageFlagBits::eDepthStencilAttachment)
+        .setSharingMode(vk::SharingMode::eExclusive)
+        .setInitialLayout(vk::ImageLayout::eUndefined);
+    depthImage = device.createImage(depthImageCreateInfo);
+    assert(depthImage);
+
+    // 分配深度图像内存
+    vk::MemoryRequirements depthImageMemoryRequirements = device.getImageMemoryRequirements(depthImage);
+    vk::MemoryAllocateInfo depthImageMemoryAllocateInfo;
+    depthImageMemoryAllocateInfo
+        .setAllocationSize(depthImageMemoryRequirements.size);
+    for (uint32_t i = 0; i < gpuMemoryProperties.memoryTypeCount; i++)
+    {
+        if ((depthImageMemoryRequirements.memoryTypeBits & (1 << i)) && (gpuMemoryProperties.memoryTypes[i].propertyFlags & vk::MemoryPropertyFlagBits::eDeviceLocal))
+        {
+            depthImageMemoryAllocateInfo.setMemoryTypeIndex(i);
+            break;
+        }
+    }
+    depthImageMemory = device.allocateMemory(depthImageMemoryAllocateInfo);
+    assert(depthImageMemory);
+    device.bindImageMemory(depthImage, depthImageMemory, 0);
+
+    // 创建深度图像视图
+    vk::ImageViewCreateInfo depthImageViewCreateInfo;
+    depthImageViewCreateInfo
+        .setImage(depthImage)
+        .setViewType(vk::ImageViewType::e2D)
+        .setFormat(depthFormat)
+        .setComponents(vk::ComponentMapping())
+        .setSubresourceRange(
+            vk::ImageSubresourceRange(
+                vk::ImageAspectFlagBits::eDepth, 
+                0, //baseMipLevel
+                1, //MipmaplevelCount
+                0, //baseArrayLayer
+                1  //layerCount
+            ));
+    depthImageView = device.createImageView(depthImageViewCreateInfo);
+    assert(depthImageView);
+    std::cout << "Create VkDepthBuffer" << std::endl;
+    std::cout << "  Depth format: " << vk::to_string(depthFormat) << std::endl;
+}
+
+void VulkanManager::DestroyVkDepthBuffer()
+{
+    device.destroyImageView(depthImageView);
+    device.freeMemory(depthImageMemory);
+    device.destroyImage(depthImage);
+    std::cout << "Destroy VkDepthBuffer" << std::endl;
 }
