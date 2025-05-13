@@ -34,6 +34,9 @@ public:
 
     void CreateVkRenderPass();
     void DestroyVkRenderPass();
+
+    void CreateVkFrameBuffers();
+    void DestroyVkFrameBuffers();
 private:
     
 private:
@@ -88,7 +91,9 @@ private:
     vk::RenderPass renderPass;
     vk::ClearValue clearValue;
     vk::RenderPassBeginInfo renderPassBeginInfo;
+
     vk::Fence taskFinishedFence;
     vk::PresentInfoKHR presentInfo;
+    vk::Framebuffer* framebuffers;
 
 };

@@ -525,3 +525,36 @@ void VulkanManager::DestroyVkRenderPass()
     device.destroySemaphore(imageAcquiredSemaphore);
     std::cout << "Destroy VkRenderPass" << std::endl;
 }
+
+void VulkanManager::CreateVkFrameBuffers()
+{
+    vk::ImageView attachments[2];
+    attachments[1] = depthImageView;
+    vk::FramebufferCreateInfo framebufferCreateInfo;
+    framebufferCreateInfo
+        .setRenderPass(renderPass)
+        .setAttachmentCount(2)
+        .setPAttachments(attachments)
+        .setWidth(swapChainExtent.width)
+        .setHeight(swapChainExtent.height)
+        .setLayers(1);
+    framebuffers = new vk::Framebuffer[swapChainImageCount];
+    for (uint32_t i = 0; i < swapChainImageCount; i++)
+    {
+        attachments[0] = swapChainImageViews[i];
+        framebuffers[i] = device.createFramebuffer(framebufferCreateInfo);
+        assert(framebuffers[i]);
+    }
+    std::cout << "Create VkFrameBuffers" << std::endl;
+    std::cout << "  Framebuffer count: " << swapChainImageCount << std::endl;
+}
+
+void VulkanManager::DestroyVkFrameBuffers()
+{
+    for (uint32_t i = 0; i < swapChainImageCount; i++)
+    {
+        device.destroyFramebuffer(framebuffers[i]);
+    }
+    delete[] framebuffers;
+    std::cout << "Destroy VkFrameBuffers" << std::endl;
+}
