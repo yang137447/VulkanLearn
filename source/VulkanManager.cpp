@@ -24,10 +24,12 @@ VulkanManager::VulkanManager(std::vector<const char *> &extensions, SDL_Window *
     CreateVkCommandBuffer();
     CreateVkSwapChain();
     CreateVkDepthBuffer();
+    CreateVkRenderPass();
 }
 
 VulkanManager::~VulkanManager()
 {
+    DestroyVkRenderPass();
     DestroyVkDepthBuffer();
     DestroyVkSwapChain();
     DestroyVkCommandBuffer();
@@ -443,4 +445,83 @@ void VulkanManager::DestroyVkDepthBuffer()
     device.freeMemory(depthImageMemory);
     device.destroyImage(depthImage);
     std::cout << "Destroy VkDepthBuffer" << std::endl;
+}
+
+void VulkanManager::CreateVkRenderPass()
+{
+    //创建信号量
+    vk::SemaphoreCreateInfo imageAcquiredSemaphoreCreateInfo;
+    imageAcquiredSemaphoreCreateInfo
+        .setFlags(vk::SemaphoreCreateFlags(0));
+    imageAcquiredSemaphore = device.createSemaphore(imageAcquiredSemaphoreCreateInfo);
+    assert(imageAcquiredSemaphore);
+
+    //创建渲染通道
+    vk::AttachmentDescription attachmentDescription[2];
+    attachmentDescription[0]
+        .setFormat(surfaceFormats[0].format)
+        .setSamples(vk::SampleCountFlagBits::e1)
+        .setLoadOp(vk::AttachmentLoadOp::eClear)
+        .setStoreOp(vk::AttachmentStoreOp::eStore)
+        .setStencilLoadOp(vk::AttachmentLoadOp::eDontCare)
+        .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
+        .setInitialLayout(vk::ImageLayout::eUndefined)
+        .setFinalLayout(vk::ImageLayout::ePresentSrcKHR)
+        .setFlags(vk::AttachmentDescriptionFlags(0));
+    attachmentDescription[1]
+        .setFormat(depthFormat)
+        .setSamples(vk::SampleCountFlagBits::e1)
+        .setLoadOp(vk::AttachmentLoadOp::eClear)
+        .setStoreOp(vk::AttachmentStoreOp::eDontCare)
+        .setStencilLoadOp(vk::AttachmentLoadOp::eDontCare)
+        .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
+        .setInitialLayout(vk::ImageLayout::eUndefined)
+        .setFinalLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal)
+        .setFlags(vk::AttachmentDescriptionFlags(0));
+
+    vk::AttachmentReference colorAttachmentReference;
+    colorAttachmentReference
+        .setAttachment(0)
+        .setLayout(vk::ImageLayout::eColorAttachmentOptimal);
+    vk::AttachmentReference depthAttachmentReference;
+    depthAttachmentReference
+        .setAttachment(1)
+        .setLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal);
+
+    vk::SubpassDescription subpassDescription;
+    subpassDescription
+        .setPipelineBindPoint(vk::PipelineBindPoint::eGraphics)
+        .setColorAttachmentCount(1)
+        .setPColorAttachments(&colorAttachmentReference)
+        .setPDepthStencilAttachment(&depthAttachmentReference);
+
+    vk::RenderPassCreateInfo renderPassCreateInfo;
+    renderPassCreateInfo
+        .setAttachmentCount(2)
+        .setPAttachments(attachmentDescription)
+        .setSubpassCount(1)
+        .setPSubpasses(&subpassDescription);
+
+    renderPass = device.createRenderPass(renderPassCreateInfo);
+    assert(renderPass);
+    std::cout << "Create VkRenderPass" << std::endl;
+
+    // 创建清除值
+    clearValue
+        .setColor(vk::ClearColorValue(std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f}))
+        .setDepthStencil(vk::ClearDepthStencilValue(1.0f, 0));
+
+    // 创建渲染通道开始信息
+    renderPassBeginInfo
+        .setRenderPass(renderPass)
+        .setRenderArea(vk::Rect2D(vk::Offset2D(0, 0), swapChainExtent))
+        .setClearValueCount(2)
+        .setPClearValues(&clearValue);
+}
+
+void VulkanManager::DestroyVkRenderPass()
+{
+    device.destroyRenderPass(renderPass);
+    device.destroySemaphore(imageAcquiredSemaphore);
+    std::cout << "Destroy VkRenderPass" << std::endl;
 }

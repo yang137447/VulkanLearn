@@ -31,6 +31,9 @@ public:
 
     void CreateVkDepthBuffer();
     void DestroyVkDepthBuffer();
+
+    void CreateVkRenderPass();
+    void DestroyVkRenderPass();
 private:
     
 private:
@@ -79,5 +82,13 @@ private:
     vk::PhysicalDeviceMemoryProperties depthImageMemoryProperties;
     vk::DeviceMemory depthImageMemory;
     vk::ImageView depthImageView;
+
+    vk::Semaphore imageAcquiredSemaphore;
+    uint32_t swapchainImageIndex = 0;
+    vk::RenderPass renderPass;
+    vk::ClearValue clearValue;
+    vk::RenderPassBeginInfo renderPassBeginInfo;
+    vk::Fence taskFinishedFence;
+    vk::PresentInfoKHR presentInfo;
 
 };
