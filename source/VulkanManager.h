@@ -5,12 +5,13 @@
 #include <vector>
 #include <optional>
 
+class DrawableObject;
+
 class VulkanManager
 {
 public:
-    VulkanManager();
-    VulkanManager(std::vector<const char *> &extensions, SDL_Window *window);
 
+    VulkanManager(std::vector<const char *> &extensions, SDL_Window *window);
     ~VulkanManager();
 
     void CreateVkInstance();
@@ -37,8 +38,11 @@ public:
 
     void CreateVkFrameBuffers();
     void DestroyVkFrameBuffers();
+
+    void CreateDrawableObject();
+    void DestroyDrawableObject();
 private:
-    
+    VulkanManager();
 private:
     vk::Instance instance;
 
@@ -96,4 +100,5 @@ private:
     vk::PresentInfoKHR presentInfo;
     vk::Framebuffer* framebuffers;
 
+    DrawableObject* triangleObject;
 };

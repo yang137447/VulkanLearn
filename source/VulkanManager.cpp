@@ -2,6 +2,8 @@
 #include "SDL3/SDL_vulkan.h"
 #include <iostream>
 #include "settings.h"
+#include "DrawableObject.h"
+#include "TriangleData.h"
 
 VulkanManager::VulkanManager()
 {
@@ -25,10 +27,14 @@ VulkanManager::VulkanManager(std::vector<const char *> &extensions, SDL_Window *
     CreateVkSwapChain();
     CreateVkDepthBuffer();
     CreateVkRenderPass();
+    CreateVkFrameBuffers();
+    CreateDrawableObject();
 }
 
 VulkanManager::~VulkanManager()
 {
+    DestroyDrawableObject();
+    DestroyVkFrameBuffers();
     DestroyVkRenderPass();
     DestroyVkDepthBuffer();
     DestroyVkSwapChain();
@@ -557,4 +563,16 @@ void VulkanManager::DestroyVkFrameBuffers()
     }
     delete[] framebuffers;
     std::cout << "Destroy VkFrameBuffers" << std::endl;
+}
+
+void VulkanManager::CreateDrawableObject()
+{
+    triangleObject = new DrawableObject(TriangleData::GetVertexData(), &device, &gpuMemoryProperties);
+    std::cout << "Create DrawableObject" << std::endl;
+}
+
+void VulkanManager::DestroyDrawableObject()
+{
+    delete triangleObject;
+    std::cout << "Destroy DrawableObject" << std::endl;
 }
