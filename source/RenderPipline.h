@@ -9,7 +9,7 @@ public:
     
     RenderPipline(vk::Device &device,
                   vk::RenderPass &renderPass,
-                  vk::PhysicalDeviceMemoryProperties &gpuMemoryProperties,);
+                  vk::PhysicalDeviceMemoryProperties &gpuMemoryProperties);
     ~RenderPipline();
 private:
     RenderPipline();
@@ -42,14 +42,15 @@ private:
 
     std::vector<vk::DescriptorSetLayout> descriptorSetLayouts;
     vk::PipelineLayout pipelineLayout;
+    vk::WriteDescriptorSet writeDescriptorSet[1];
 
     std::vector<vk::PipelineShaderStageCreateInfo> shaderStages;
+
     vk::VertexInputBindingDescription vertexInputBindingDescription;
     std::vector<vk::VertexInputAttributeDescription> vertexInputAttributeDescriptions;
-    vk::WriteDescriptorSet writeDescriptorSet[1];
+    
     std::vector<vk::DescriptorSet> descriptorSets;
     vk::DescriptorPool descriptorPool;
     vk::PipelineCache pipelineCache;
     vk::Pipeline graphicsPipeline;
-
 };

@@ -4,6 +4,7 @@
 #include "settings.h"
 #include "DrawableObject.h"
 #include "TriangleData.h"
+#include "RenderPipline.h"
 
 VulkanManager::VulkanManager()
 {
@@ -29,10 +30,12 @@ VulkanManager::VulkanManager(std::vector<const char *> &extensions, SDL_Window *
     CreateVkRenderPass();
     CreateVkFrameBuffers();
     CreateDrawableObject();
+    CreateVkPipline();
 }
 
 VulkanManager::~VulkanManager()
 {
+    DestroyVkPipline();
     DestroyDrawableObject();
     DestroyVkFrameBuffers();
     DestroyVkRenderPass();
@@ -575,4 +578,16 @@ void VulkanManager::DestroyDrawableObject()
 {
     delete triangleObject;
     std::cout << "Destroy DrawableObject" << std::endl;
+}
+
+void VulkanManager::CreateVkPipline()
+{
+    renderPipline = new RenderPipline(device, renderPass, gpuMemoryProperties);
+    std::cout << "Create VkPipline" << std::endl;
+}
+
+void VulkanManager::DestroyVkPipline()
+{
+    delete renderPipline;
+    std::cout << "Destroy VkPipline" << std::endl;
 }

@@ -6,6 +6,7 @@
 #include <optional>
 
 class DrawableObject;
+class RenderPipline;
 
 class VulkanManager
 {
@@ -41,6 +42,9 @@ public:
 
     void CreateDrawableObject();
     void DestroyDrawableObject();
+
+    void CreateVkPipline();
+    void DestroyVkPipline();
 private:
     VulkanManager();
 private:
@@ -101,4 +105,6 @@ private:
     vk::Framebuffer* framebuffers;
 
     DrawableObject* triangleObject;
+    
+    RenderPipline* renderPipline;
 };
