@@ -47,7 +47,7 @@ public:
     void DestroyVkPipline();
 
     void CreateVkFence();
-    void DestroVkFence();
+    void DestroyVkFence();
 
     void initializePresentInfo();
 private:
