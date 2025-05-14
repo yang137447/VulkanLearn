@@ -31,10 +31,13 @@ VulkanManager::VulkanManager(std::vector<const char *> &extensions, SDL_Window *
     CreateVkFrameBuffers();
     CreateDrawableObject();
     CreateVkPipline();
+    CreateVkFence();
+    initializePresentInfo();
 }
 
 VulkanManager::~VulkanManager()
 {
+    DestroyVkFence();
     DestroyVkPipline();
     DestroyDrawableObject();
     DestroyVkFrameBuffers();
@@ -590,4 +593,28 @@ void VulkanManager::DestroyVkPipline()
 {
     delete renderPipline;
     std::cout << "Destroy VkPipline" << std::endl;
+}
+
+void VulkanManager::CreateVkFence()
+{
+    vk::FenceCreateInfo fenceCreateInfo;
+    fenceCreateInfo
+        .setFlags(vk::FenceCreateFlagBits::eSignaled);
+    
+    vk::Result result = device.createFence(&fenceCreateInfo, nullptr, &taskFinishedFence);
+    assert(result == vk::Result::eSuccess);
+    std::cout << "Create VkFence" << std::endl;
+}
+
+void VulkanManager::DestroyVkFence()
+{
+    device.destroyFence(taskFinishedFence);
+    std::cout << "Destroy VkFence" << std::endl;
+}
+
+void VulkanManager::initializePresentInfo()
+{
+    presentInfo
+        .setSwapchainCount(1)
+        .setPSwapchains(&swapChain);
 }

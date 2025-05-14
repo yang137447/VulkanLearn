@@ -45,6 +45,11 @@ public:
 
     void CreateVkPipline();
     void DestroyVkPipline();
+
+    void CreateVkFence();
+    void DestroVkFence();
+
+    void initializePresentInfo();
 private:
     VulkanManager();
 private:
@@ -100,11 +105,14 @@ private:
     vk::ClearValue clearValue;
     vk::RenderPassBeginInfo renderPassBeginInfo;
 
-    vk::Fence taskFinishedFence;
     vk::PresentInfoKHR presentInfo;
     vk::Framebuffer* framebuffers;
 
     DrawableObject* triangleObject;
-    
+
     RenderPipline* renderPipline;
+
+    vk::Fence taskFinishedFence;
+    
+    vk::PresentInfoKHR presentInfo;
 };
