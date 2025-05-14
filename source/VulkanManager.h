@@ -50,6 +50,8 @@ public:
     void DestroyVkFence();
 
     void initializePresentInfo();
+
+    void initializeMVP();
 private:
     VulkanManager();
 private:

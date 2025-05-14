@@ -618,3 +618,8 @@ void VulkanManager::initializePresentInfo()
         .setSwapchainCount(1)
         .setPSwapchains(&swapChain);
 }
+
+void VulkanManager::initializeMVP()
+{
+    
+}
