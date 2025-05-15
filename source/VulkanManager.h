@@ -52,6 +52,13 @@ public:
     void initializePresentInfo();
 
     void initializeMVP();
+
+    void drawFrame();
+
+    void flushUniformBuffer();
+
+    void flushTextureToDescriptorSet();
+
 private:
     VulkanManager();
 private:

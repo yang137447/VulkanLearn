@@ -11,6 +11,10 @@ public:
                   vk::RenderPass &renderPass,
                   vk::PhysicalDeviceMemoryProperties &gpuMemoryProperties);
     ~RenderPipline();
+
+    inline vk::PipelineLayout& getPipelineLayout() { return pipelineLayout; }
+    inline vk::Pipeline& getGraphicsPipeline() { return graphicsPipeline; }
+    inline std::vector<vk::DescriptorSet>& getDescriptorSet() { return descriptorSets; }
 private:
     RenderPipline();
 

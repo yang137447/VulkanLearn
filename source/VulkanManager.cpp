@@ -640,3 +640,36 @@ void VulkanManager::initializeMVP()
         0, 0, -1, 0;
 
 }
+
+void VulkanManager::drawFrame()
+{
+    vk::Result result = device.acquireNextImageKHR(swapChain, UINT64_MAX, imageAcquiredSemaphore, nullptr, &swapchainImageIndex);
+    assert(result == vk::Result::eSuccess);
+
+    renderPassBeginInfo.setFramebuffer(framebuffers[swapchainImageIndex]);
+
+    commandBuffer.reset();
+    commandBuffer.begin(commandBufferBeginInfo);
+
+    flushUniformBuffer();
+    flushTextureToDescriptorSet();
+
+    commandBuffer.beginRenderPass(renderPassBeginInfo, vk::SubpassContents::eInline);
+    triangleObject->Draw(commandBuffer, renderPipline->getPipelineLayout(), renderPipline->getGraphicsPipeline(), renderPipline->getDescriptorSet()[0]);
+    commandBuffer.endRenderPass();
+
+    commandBuffer.end();
+
+
+
+}
+
+void VulkanManager::flushUniformBuffer()
+{
+
+}
+
+void VulkanManager::flushTextureToDescriptorSet()
+{
+
+}
