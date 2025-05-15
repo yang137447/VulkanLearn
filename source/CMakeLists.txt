@@ -6,4 +6,5 @@ target_link_libraries(main
 PRIVATE
     Vulkan
     SDL3
-    Shaderc)
+    Shaderc
+    Eigen3)

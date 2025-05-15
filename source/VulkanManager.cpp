@@ -5,6 +5,7 @@
 #include "DrawableObject.h"
 #include "TriangleData.h"
 #include "RenderPipline.h"
+#include "Eigen/Dense"
 
 VulkanManager::VulkanManager()
 {
@@ -621,5 +622,21 @@ void VulkanManager::initializePresentInfo()
 
 void VulkanManager::initializeMVP()
 {
-    
+    Eigen::Matrix4f modelMatrix = Eigen::Matrix4f::Identity();
+
+    Eigen::Matrix4f viewMatrix = Eigen::Matrix4f::Identity();
+    viewMatrix = Eigen::Affine3f(Eigen::Translation3f(0.0f, 0.0f, -5.0f)).matrix();
+
+    Eigen::Matrix4f projectionMatrix = Eigen::Matrix4f::Identity();
+    float fovy = 45.0f * static_cast<float>(Pi) / 180.0f;
+    float aspect = 1.0f;
+    float zNear = 1.5f;
+    float zFar = 1000.0f;
+    float f = 1.0f / std::tan(fovy / 2.0f);
+    projectionMatrix << 
+        f / aspect, 0, 0, 0,
+        0, f, 0, 0,
+        0, 0, (zFar + zNear) / (zNear - zFar), (2 * zFar * zNear) / (zNear - zFar),
+        0, 0, -1, 0;
+
 }
