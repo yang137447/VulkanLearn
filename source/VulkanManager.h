@@ -6,7 +6,7 @@
 #include <optional>
 #include <stack>
 
-#include <Eigen>
+#include <Dense>
 
 class DrawableObject;
 class RenderPipline;

@@ -40,7 +40,7 @@ void RenderPipline::CreateUniformBuffer()
         .setFlags(vk::BufferCreateFlagBits::eSparseBinding);
     
     vk::Result result = device->createBuffer(&bufferCreateInfo, nullptr, &uniformBuffer);
-    assert(result != vk::Result::eSuccess);
+    assert(result == vk::Result::eSuccess);
 
     vk::MemoryRequirements memoryRequirements;
     device->getBufferMemoryRequirements(uniformBuffer, &memoryRequirements);
@@ -61,11 +61,8 @@ void RenderPipline::CreateUniformBuffer()
     }
 
     result = device->allocateMemory(&memoryAllocateInfo, nullptr, &uniformBufferMemory);
-    assert(result != vk::Result::eSuccess);
+    assert(result == vk::Result::eSuccess);
 
-    device->bindBufferMemory(uniformBuffer, uniformBufferMemory, 0);
-    void* data = device->mapMemory(uniformBufferMemory, 0, uniformBufferSize);
-    device->unmapMemory(uniformBufferMemory);
     device->bindBufferMemory(uniformBuffer, uniformBufferMemory, 0);
 
     uniformBufferInfo
@@ -96,7 +93,7 @@ void RenderPipline::CreatePipelineLayout()
         .setPBindings(descriptorSetLayoutBindings);
     
     vk::Result result = device->createDescriptorSetLayout(&descriptorSetLayoutCreateInfo, nullptr, descriptorSetLayouts.data());
-    assert(result != vk::Result::eSuccess);
+    assert(result == vk::Result::eSuccess);
 
     vk::PipelineLayoutCreateInfo pipelineLayoutCreateInfo;
     pipelineLayoutCreateInfo
@@ -106,7 +103,7 @@ void RenderPipline::CreatePipelineLayout()
         .setPPushConstantRanges(nullptr);
     
     result = device->createPipelineLayout(&pipelineLayoutCreateInfo, nullptr, &pipelineLayout);
-    assert(result != vk::Result::eSuccess);
+    assert(result == vk::Result::eSuccess);
 }
 
 void RenderPipline::DestroyPipelineLayout()
@@ -133,7 +130,7 @@ void RenderPipline::initDescriptorSet()
         .setPPoolSizes(descriptorPoolSize);
 
     vk::Result result = device->createDescriptorPool(&descriptorPoolCreateInfo, nullptr, &descriptorPool);
-    assert(result != vk::Result::eSuccess);
+    assert(result == vk::Result::eSuccess);
 
     std::vector<vk::DescriptorSetLayout> layouts;
     layouts.push_back(descriptorSetLayouts[0]);
@@ -145,7 +142,7 @@ void RenderPipline::initDescriptorSet()
         .setPSetLayouts(layouts.data());
     
     result = device->allocateDescriptorSets(descriptorSetAllocateInfo, descriptorSets.data());
-    assert(result != vk::Result::eSuccess);
+    assert(result == vk::Result::eSuccess);
 
     writeDescriptorSet[0]
         .setDstSet(descriptorSets[0])
@@ -198,14 +195,14 @@ void RenderPipline::CreateShader()
         .setCodeSize(vertexShaderCode.size() * sizeof(uint32_t))
         .setPCode(vertexShaderCode.data());
     vk::Result result = device->createShaderModule(&vertexShaderModuleCreateInfo, nullptr, &vertexShaderModule);
-    assert(result != vk::Result::eSuccess);
+    assert(result == vk::Result::eSuccess);
     vk::ShaderModule fragmentShaderModule;
     vk::ShaderModuleCreateInfo fragmentShaderModuleCreateInfo;
     fragmentShaderModuleCreateInfo
         .setCodeSize(fragmentShaderCode.size() * sizeof(uint32_t))
         .setPCode(fragmentShaderCode.data());
     result = device->createShaderModule(&fragmentShaderModuleCreateInfo, nullptr, &fragmentShaderModule);
-    assert(result != vk::Result::eSuccess);
+    assert(result == vk::Result::eSuccess);
     // 创建shader阶段
     shaderStages.resize(2);
     shaderStages[0]
@@ -360,10 +357,10 @@ void RenderPipline::CreateGraphicsPipeline()
         .setFlags(vk::PipelineCacheCreateFlagBits::eExternallySynchronized);
     
     vk::Result result = device->createPipelineCache(&pipelineCacheCreateInfo, nullptr, &pipelineCache);
-    assert(result != vk::Result::eSuccess);
+    assert(result == vk::Result::eSuccess);
 
     result = device->createGraphicsPipelines(pipelineCache, 1, &graphicsPipelineCreateInfo, nullptr, &graphicsPipeline);
-    assert(result != vk::Result::eSuccess);
+    assert(result == vk::Result::eSuccess);
 }
 
 void RenderPipline::DestroyGraphicsPipeline()
