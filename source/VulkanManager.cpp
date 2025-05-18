@@ -5,7 +5,6 @@
 #include "DrawableObject.h"
 #include "TriangleData.h"
 #include "RenderPipline.h"
-#include "Eigen/Dense"
 
 VulkanManager::VulkanManager()
 {
@@ -33,7 +32,9 @@ VulkanManager::VulkanManager(std::vector<const char *> &extensions, SDL_Window *
     CreateDrawableObject();
     CreateVkPipline();
     CreateVkFence();
-    initializePresentInfo();
+    InitializePresentInfo();
+    InitializeMVP();
+    
 }
 
 VulkanManager::~VulkanManager()
@@ -613,14 +614,14 @@ void VulkanManager::DestroyVkFence()
     std::cout << "Destroy VkFence" << std::endl;
 }
 
-void VulkanManager::initializePresentInfo()
+void VulkanManager::InitializePresentInfo()
 {
     presentInfo
         .setSwapchainCount(1)
         .setPSwapchains(&swapChain);
 }
 
-void VulkanManager::initializeMVP()
+void VulkanManager::InitializeMVP()
 {
     Eigen::Matrix4f modelMatrix = Eigen::Matrix4f::Identity();
 
@@ -638,10 +639,9 @@ void VulkanManager::initializeMVP()
         0, f, 0, 0,
         0, 0, (zFar + zNear) / (zNear - zFar), (2 * zFar * zNear) / (zNear - zFar),
         0, 0, -1, 0;
-
 }
 
-void VulkanManager::drawFrame()
+void VulkanManager::DrawFrame()
 {
     vk::Result result = device.acquireNextImageKHR(swapChain, UINT64_MAX, imageAcquiredSemaphore, nullptr, &swapchainImageIndex);
     assert(result == vk::Result::eSuccess);
@@ -651,25 +651,130 @@ void VulkanManager::drawFrame()
     commandBuffer.reset();
     commandBuffer.begin(commandBufferBeginInfo);
 
-    flushUniformBuffer();
-    flushTextureToDescriptorSet();
+    FlushUniformBuffer();
+    FlushTextureToDescriptorSet();
 
     commandBuffer.beginRenderPass(renderPassBeginInfo, vk::SubpassContents::eInline);
-    triangleObject->Draw(commandBuffer, renderPipline->getPipelineLayout(), renderPipline->getGraphicsPipeline(), renderPipline->getDescriptorSet()[0]);
+    triangleObject->Draw(commandBuffer, renderPipline->GetPipelineLayout(), renderPipline->GetGraphicsPipeline(), renderPipline->GetDescriptorSet()[0]);
     commandBuffer.endRenderPass();
 
     commandBuffer.end();
 
+    submitInfo[0]
+        .setWaitSemaphoreCount(1)
+        .setPWaitSemaphores(&imageAcquiredSemaphore);
+    
+    graphicQueue.submit(submitInfo, taskFinishedFence);
 
+    while (result != vk::Result::eTimeout)
+    {
+        result = device.waitForFences(1, &taskFinishedFence, VK_TRUE, UINT64_MAX);
+    }
+    result = device.resetFences(1, &taskFinishedFence);
+    assert(result == vk::Result::eSuccess);
 
+    presentInfo.pImageIndices = &swapchainImageIndex;
+    result = presentQueue.presentKHR(presentInfo);
+    assert(result == vk::Result::eSuccess);
 }
 
-void VulkanManager::flushUniformBuffer()
+void VulkanManager::FlushUniformBuffer()
 {
+    // 定义一个静态的浮点数变量xAngle，初始值为0.0f
+    static float xAngle = 0.0f;
 
+    matrixStack.push(currentMatrix);
+
+    // 每次调用drawFrame函数时，xAngle增加0.01
+    xAngle += 0.01f;
+
+    if(xAngle > 360.0f)
+    {
+        xAngle -= 360.0f;
+    }
+
+    SetRotation(xAngle, 0.0f, 0.0f);
+
+    GetFinalMatrix();
+
+    static float vertexUniformData[16];
+    std::memcpy(vertexUniformData, currentMatrix.data(), sizeof(float) * 16);
+
+    currentMatrix = matrixStack.top();
+    matrixStack.pop();
+
+    void* data = device.mapMemory(renderPipline->GetuniformBufferMemory(), 0, renderPipline->GetuniformBufferSize());
+    assert(data != nullptr);
+    std::memcpy(data, vertexUniformData, renderPipline->GetuniformBufferSize());
+    device.unmapMemory(renderPipline->GetuniformBufferMemory());
 }
 
-void VulkanManager::flushTextureToDescriptorSet()
+void VulkanManager::FlushTextureToDescriptorSet()
 {
+    renderPipline->GetWriteDescriptorSet() = renderPipline->GetDescriptorSet()[0];
 
+    device.updateDescriptorSets(renderPipline->GetWriteDescriptorSet(), nullptr);
+}
+
+void VulkanManager::InitMatrix()
+{
+    modelTransform.translate(Eigen::Vector3f(0.0f, 0.0f, 0.0f));
+    modelTransform.rotate(Eigen::AngleAxisf(0.0f, Eigen::Vector3f::UnitX()));
+    modelTransform.rotate(Eigen::AngleAxisf(0.0f, Eigen::Vector3f::UnitY()));
+    modelTransform.rotate(Eigen::AngleAxisf(0.0f, Eigen::Vector3f::UnitZ()));
+    modelTransform.scale(Eigen::Vector3f(1.0f, 1.0f, 1.0f));
+    modelMatrix = modelTransform.matrix();
+    viewMatrix = Eigen::Matrix4f::Identity();
+    projectionMatrix = Eigen::Matrix4f::Identity();
+
+    //Vulkan设备空间XYZ三个轴范围分别是 -1.0～+1.0、+1.0～-1.0、0.0～+1.0
+    vulkanClipMatrix = Eigen::Matrix4f::Identity();
+    vulkanClipMatrix(0, 0) = 1.0f;
+    vulkanClipMatrix(1, 1) = -1.0f;
+    vulkanClipMatrix(2, 2) = 0.5f;
+    vulkanClipMatrix(3, 2) = 0.5f;
+    vulkanClipMatrix(3, 3) = 1.0f;
+
+    currentMatrix = vulkanClipMatrix * projectionMatrix * viewMatrix * modelMatrix;
+}
+
+void VulkanManager::SetTranslation(float x, float y, float z)
+{
+    modelTransform.translate(Eigen::Vector3f(x, y, z));
+}
+
+void VulkanManager::SetRotation(float x, float y, float z)
+{
+    modelTransform.rotate(Eigen::AngleAxisf(x, Eigen::Vector3f::UnitX()));
+}
+
+void VulkanManager::SetScale(float x, float y, float z)
+{
+    modelTransform.scale(Eigen::Vector3f(x, y, z));
+}
+
+void VulkanManager::SetCamera(Eigen::Vector3f position, Eigen::Vector3f lookAt, Eigen::Vector3f up)
+{
+    viewMatrix = Eigen::Affine3f(Eigen::Translation3f(position) * Eigen::Affine3f(Eigen::Quaternionf::FromTwoVectors(lookAt, up))).matrix();
+}
+
+void VulkanManager::SetProjection(float fov, float aspect, float near, float far)
+{
+    float fovy = fov * static_cast<float>(Pi) / 180.0f;
+    float f = 1.0f / std::tan(fovy / 2.0f);
+    projectionMatrix << 
+        f / aspect, 0, 0, 0,
+        0, f, 0, 0,
+        0, 0, (far + near) / (near - far), (2 * far * near) / (near - far),
+        0, 0, -1, 0;
+}
+
+void VulkanManager::GetMVPMatrix()
+{
+    currentMatrix = vulkanClipMatrix * projectionMatrix * viewMatrix * modelMatrix;
+}
+
+void VulkanManager::GetFinalMatrix()
+{
+    currentMatrix = vulkanClipMatrix * projectionMatrix * viewMatrix * modelMatrix;
 }

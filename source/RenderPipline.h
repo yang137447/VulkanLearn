@@ -12,9 +12,12 @@ public:
                   vk::PhysicalDeviceMemoryProperties &gpuMemoryProperties);
     ~RenderPipline();
 
-    inline vk::PipelineLayout& getPipelineLayout() { return pipelineLayout; }
-    inline vk::Pipeline& getGraphicsPipeline() { return graphicsPipeline; }
-    inline std::vector<vk::DescriptorSet>& getDescriptorSet() { return descriptorSets; }
+    inline vk::PipelineLayout& GetPipelineLayout() { return pipelineLayout; }
+    inline vk::Pipeline& GetGraphicsPipeline() { return graphicsPipeline; }
+    inline std::vector<vk::DescriptorSet>& GetDescriptorSet() { return descriptorSets; }
+    inline vk::DeviceMemory& GetuniformBufferMemory() { return uniformBufferMemory; }
+    inline uint32_t GetuniformBufferSize() { return uniformBufferSize; }
+    inline vk::WriteDescriptorSet& GetWriteDescriptorSet() { return writeDescriptorSet[0]; }
 private:
     RenderPipline();
 

@@ -7,7 +7,7 @@ if(NOT TARGET SDL3)
                 INTERFACE_INCLUDE_DIRECTORIES "${SDL3_DIR}/include"
                 IMPORTED_LOCATION "${SDL3_DIR}/bin/SDL3.dll"
                 IMPORTED_IMPLIB "${SDL3_DIR}/lib/libSDL3.lib")
-    elseif()
+    else()
         find_package(SDL3 REQUIRED)
     endif()
 endif()

@@ -4,6 +4,9 @@
 #include <SDL3/SDL.h>
 #include <vector>
 #include <optional>
+#include <stack>
+
+#include <Eigen>
 
 class DrawableObject;
 class RenderPipline;
@@ -14,6 +17,11 @@ public:
 
     VulkanManager(std::vector<const char *> &extensions, SDL_Window *window);
     ~VulkanManager();
+
+    void DrawFrame();
+
+private:
+    VulkanManager();
 
     void CreateVkInstance();
     void DestroyVkInstance();
@@ -49,18 +57,14 @@ public:
     void CreateVkFence();
     void DestroyVkFence();
 
-    void initializePresentInfo();
+    void InitializePresentInfo();
 
-    void initializeMVP();
+    void InitializeMVP();
 
-    void drawFrame();
+    void FlushUniformBuffer();
 
-    void flushUniformBuffer();
+    void FlushTextureToDescriptorSet();
 
-    void flushTextureToDescriptorSet();
-
-private:
-    VulkanManager();
 private:
     vk::Instance instance;
 
@@ -114,7 +118,6 @@ private:
     vk::ClearValue clearValue;
     vk::RenderPassBeginInfo renderPassBeginInfo;
 
-    vk::PresentInfoKHR presentInfo;
     vk::Framebuffer* framebuffers;
 
     DrawableObject* triangleObject;
@@ -124,4 +127,27 @@ private:
     vk::Fence taskFinishedFence;
     
     vk::PresentInfoKHR presentInfo;
+
+private:
+    void InitMatrix();
+    void SetTranslation(float x, float y, float z);
+    void SetRotation(float x, float y, float z);
+    void SetScale(float x, float y, float z);
+    void SetCamera(Eigen::Vector3f position, Eigen::Vector3f lookAt, Eigen::Vector3f up);
+    void SetProjection(float fov, float aspect, float near, float far);
+    
+    void GetMVPMatrix();
+    void GetFinalMatrix();
+
+    Eigen::Transform<float, 3, Eigen::Affine> modelTransform;
+
+    Eigen::Matrix4f modelMatrix;
+    Eigen::Matrix4f viewMatrix;
+    Eigen::Matrix4f projectionMatrix;
+    Eigen::Matrix4f mvpMatrix;
+    Eigen::Matrix4f vulkanClipMatrix;
+    Eigen::Matrix4f currentMatrix;
+
+    std::stack<Eigen::Matrix4f> matrixStack;
+
 };

@@ -1,4 +1,4 @@
-#include "TriangleData.h"s
+#include "TriangleData.h"
 
 void TriangleData::GenVertexData()
 {

@@ -44,6 +44,7 @@ int main(int argc, char **argv)
                 shouldClose = true;
             }
         }
+        vulkanManager->DrawFrame();
     }
 
     SDL_DestroyWindow(window);
