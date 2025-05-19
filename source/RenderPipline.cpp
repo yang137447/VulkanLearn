@@ -92,6 +92,7 @@ void RenderPipline::CreatePipelineLayout()
         .setBindingCount(1)
         .setPBindings(descriptorSetLayoutBindings);
     
+    descriptorSetLayouts.resize(1);
     vk::Result result = device->createDescriptorSetLayout(&descriptorSetLayoutCreateInfo, nullptr, descriptorSetLayouts.data());
     assert(result == vk::Result::eSuccess);
 
@@ -141,6 +142,7 @@ void RenderPipline::initDescriptorSet()
         .setDescriptorSetCount(1)
         .setPSetLayouts(layouts.data());
     
+    descriptorSets.resize(1);
     result = device->allocateDescriptorSets(descriptorSetAllocateInfo, descriptorSets.data());
     assert(result == vk::Result::eSuccess);
 
