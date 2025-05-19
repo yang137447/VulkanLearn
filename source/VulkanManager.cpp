@@ -53,13 +53,19 @@ VulkanManager::~VulkanManager()
 
 void VulkanManager::CreateVkInstance()
 {
+    std::cout << "Valid Vulkan Instance Layers:" << std::endl;
+    for(auto& Layer :vk::enumerateInstanceLayerProperties())
+    {
+        std::cout << "  Layer:" << Layer.layerName << std::endl;
+    }
+
     vk::ApplicationInfo applicationInfo;
     applicationInfo.setApiVersion(VK_API_VERSION_1_3);
     vk::InstanceCreateInfo instanceCreateInfo;
     instanceCreateInfo
         .setPApplicationInfo(&applicationInfo)
-        // .setEnabledLayerCount(static_cast<uint32_t>(instanceLayers.size()))
-        // .setPEnabledLayerNames(instanceLayers);
+        .setEnabledLayerCount(static_cast<uint32_t>(instanceLayers.size()))
+        .setPEnabledLayerNames(instanceLayers)
         .setEnabledExtensionCount(static_cast<uint32_t>(instanceExtensions.size()))
         .setPEnabledExtensionNames(instanceExtensions);
     instance = vk::createInstance(instanceCreateInfo);
