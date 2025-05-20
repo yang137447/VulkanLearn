@@ -58,7 +58,6 @@ void VulkanManager::CreateVkInstance()
     {
         std::cout << "  Layer:" << Layer.layerName << std::endl;
     }
-
     vk::ApplicationInfo applicationInfo;
     applicationInfo.setApiVersion(VK_API_VERSION_1_3);
     vk::InstanceCreateInfo instanceCreateInfo;

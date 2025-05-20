@@ -33,26 +33,26 @@ void ShaderCompiler::StartCompile(const std::string& shaderFilePath)
             //获取编译前文件路径
             std::string glslShaderPath = glslPath + "/" + shaderName + "." + shaderExtension;
             //获取编译后文件路径
-            std::string compiledShaderPath = spirvPath + "/" + shaderName + "_" + shaderExtension + ".spv";
-            // if (glslShaderPath.find("vert") != std::string::npos)
-            // {
-            //     kind = shaderc_shader_kind::shaderc_vertex_shader;
-            // }
-            // else if (glslShaderPath.find("frag") != std::string::npos)
-            // {
-            //     kind = shaderc_shader_kind::shaderc_fragment_shader;
-            // }
-            // else
-            // {
-            //     std::cerr << "Unknown shader type: " << glslShaderPath << std::endl;
-            // }
+            std::string compiledShaderPath = spirvPath + "/" + shaderName  + ".spv";
+            if (glslShaderPath.find("vert") != std::string::npos)
+            {
+                kind = shaderc_shader_kind::shaderc_vertex_shader;
+            }
+            else if (glslShaderPath.find("frag") != std::string::npos)
+            {
+                kind = shaderc_shader_kind::shaderc_fragment_shader;
+            }
+            else
+            {
+                std::cerr << "Unknown shader type: " << glslShaderPath << std::endl;
+            }
 
-            // std::string glslCode = ReadFile(glslShaderPath);
-            // std::vector<uint32_t> spvCode = CompileGLSLToSPIRV(glslCode.data(), kind, shaderName + shaderExtension);
-            // SaveSPIRVToFile(spvCode, compiledShaderPath);
+            std::string glslCode = ReadFile(glslShaderPath);
+            std::vector<uint32_t> spvCode = CompileGLSLToSPIRV(glslCode.data(), kind, shaderName + shaderExtension);
+            SaveSPIRVToFile(spvCode, compiledShaderPath);
             //执行bat命令
-            std::string command = glslangValidatorPath + " -V " + glslShaderPath + " -o " + compiledShaderPath;
-            system(command.c_str());
+            //std::string command = glslangValidatorPath + " -V " + glslShaderPath + " -o " + compiledShaderPath;
+            //system(command.c_str());
 
             std::cout << "Info: "
                       << "compiled shader: "
@@ -107,7 +107,7 @@ std::vector<uint32_t> ShaderCompiler::CompileGLSLToSPIRV(const std::string& glsl
 
 void ShaderCompiler::SaveSPIRVToFile(const std::vector<uint32_t> &spirv, const std::string& spvPath)
 {
-    std::ofstream file(spvPath.data(), std::ios::binary);
+    std::ofstream file(spvPath.data());
     if (!file.is_open())
     {
         throw std::runtime_error("Failed to open file: " + std::string(spvPath));

@@ -36,8 +36,7 @@ void RenderPipline::CreateUniformBuffer()
     bufferCreateInfo
         .setSize(uniformBufferSize)
         .setUsage(vk::BufferUsageFlagBits::eUniformBuffer)
-        .setSharingMode(vk::SharingMode::eExclusive)
-        .setFlags(vk::BufferCreateFlagBits::eSparseBinding);
+        .setSharingMode(vk::SharingMode::eExclusive);
     
     vk::Result result = device->createBuffer(&bufferCreateInfo, nullptr, &uniformBuffer);
     assert(result == vk::Result::eSuccess);
@@ -158,38 +157,40 @@ void RenderPipline::initDescriptorSet()
 void RenderPipline::CreateShader()
 {
     // 指定shader文件路径
-    const std::string vertexShaderPath = filePath + "shader/spv/test_vert.spv";
-    const std::string fragmentShaderPath = filePath + "shader/spv/test_frag.spv";
+    const std::string vertexShaderPath = filePath + "/shader/spv/test_vert.spv";
+    const std::string fragmentShaderPath = filePath + "/shader/spv/test_frag.spv";
 
     // 读取shader文件内容
     std::vector<uint32_t> vertexShaderCode;
     std::ifstream vertexShaderFile(vertexShaderPath, std::ios::binary | std::ios::ate);
-    if (vertexShaderFile.is_open())
+    if (!vertexShaderFile.is_open())
     {
-        vertexShaderCode.resize(vertexShaderFile.tellg());
-        vertexShaderFile.seekg(0);
-        vertexShaderFile.read(reinterpret_cast<char*>(vertexShaderCode.data()), vertexShaderCode.size());
-        vertexShaderFile.close();
-    }
-    else
-    {
+
         std::cerr << "Failed to open vertex shader file!" << std::endl;
-        return;
+        exit(1);
     }
+    std::streamsize fileSize = vertexShaderFile.tellg();
+    if (fileSize <= 0) {
+        throw std::runtime_error("Shader file is empty or invalid: " + filePath);
+    }
+
+    vertexShaderCode.resize(fileSize / sizeof(uint32_t));
+    vertexShaderFile.seekg(0);
+    vertexShaderFile.read(reinterpret_cast<char*>(vertexShaderCode.data()), fileSize);
+    vertexShaderFile.close();
+
     std::vector<uint32_t> fragmentShaderCode;
     std::ifstream fragmentShaderFile(fragmentShaderPath, std::ios::binary | std::ios::ate);
-    if (fragmentShaderFile.is_open())
-    {
-        fragmentShaderCode.resize(fragmentShaderFile.tellg());
-        fragmentShaderFile.seekg(0);
-        fragmentShaderFile.read(reinterpret_cast<char*>(fragmentShaderCode.data()), fragmentShaderCode.size());
-        fragmentShaderFile.close();
-    }
-    else
+    if (!fragmentShaderFile.is_open())
     {
         std::cerr << "Failed to open fragment shader file!" << std::endl;
-        return;
+        exit(1);
     }
+    fragmentShaderCode.resize(fragmentShaderFile.tellg());
+    fragmentShaderFile.seekg(0);
+    fragmentShaderFile.read(reinterpret_cast<char*>(fragmentShaderCode.data()), fragmentShaderCode.size());
+    fragmentShaderFile.close();
+
     // 创建shader模块
     vk::ShaderModule vertexShaderModule;
     vk::ShaderModuleCreateInfo vertexShaderModuleCreateInfo;
