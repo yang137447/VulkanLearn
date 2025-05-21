@@ -161,7 +161,7 @@ void RenderPipline::CreateShader()
     const std::string fragmentShaderPath = filePath + "/shader/spv/test_frag.spv";
 
     // 读取shader文件内容
-    std::vector<uint32_t> vertexShaderCode;
+    std::vector<char> vertexShaderCode;
     std::ifstream vertexShaderFile(vertexShaderPath, std::ios::binary | std::ios::ate);
     if (!vertexShaderFile.is_open())
     {
@@ -169,41 +169,45 @@ void RenderPipline::CreateShader()
         std::cerr << "Failed to open vertex shader file!" << std::endl;
         exit(1);
     }
-    std::streamsize fileSize = vertexShaderFile.tellg();
-    if (fileSize <= 0) {
+    size_t vertShaderfileSize = (size_t)vertexShaderFile.tellg();
+    if (vertShaderfileSize <= 0) {
         throw std::runtime_error("Shader file is empty or invalid: " + filePath);
     }
 
-    vertexShaderCode.resize(fileSize / sizeof(uint32_t));
+    vertexShaderCode.resize(vertShaderfileSize);
     vertexShaderFile.seekg(0);
-    vertexShaderFile.read(reinterpret_cast<char*>(vertexShaderCode.data()), fileSize);
+    vertexShaderFile.read(vertexShaderCode.data(), vertexShaderCode.size());
     vertexShaderFile.close();
 
-    std::vector<uint32_t> fragmentShaderCode;
+    std::vector<char> fragmentShaderCode;
     std::ifstream fragmentShaderFile(fragmentShaderPath, std::ios::binary | std::ios::ate);
     if (!fragmentShaderFile.is_open())
     {
         std::cerr << "Failed to open fragment shader file!" << std::endl;
         exit(1);
     }
-    fragmentShaderCode.resize(fragmentShaderFile.tellg());
+    size_t fragmentShaderfileSize = (size_t)fragmentShaderFile.tellg();
+    if (fragmentShaderfileSize <= 0) {
+        throw std::runtime_error("Shader file is empty or invalid: " + filePath);
+    }
+    fragmentShaderCode.resize(fragmentShaderfileSize);
     fragmentShaderFile.seekg(0);
-    fragmentShaderFile.read(reinterpret_cast<char*>(fragmentShaderCode.data()), fragmentShaderCode.size());
+    fragmentShaderFile.read(fragmentShaderCode.data(), fragmentShaderCode.size());
     fragmentShaderFile.close();
 
     // 创建shader模块
     vk::ShaderModule vertexShaderModule;
     vk::ShaderModuleCreateInfo vertexShaderModuleCreateInfo;
     vertexShaderModuleCreateInfo
-        .setCodeSize(vertexShaderCode.size() * sizeof(uint32_t))
-        .setPCode(vertexShaderCode.data());
+        .setCodeSize(vertexShaderCode.size())
+        .setPCode(reinterpret_cast<const uint32_t*>(vertexShaderCode.data()));
     vk::Result result = device->createShaderModule(&vertexShaderModuleCreateInfo, nullptr, &vertexShaderModule);
     assert(result == vk::Result::eSuccess);
     vk::ShaderModule fragmentShaderModule;
     vk::ShaderModuleCreateInfo fragmentShaderModuleCreateInfo;
     fragmentShaderModuleCreateInfo
-        .setCodeSize(fragmentShaderCode.size() * sizeof(uint32_t))
-        .setPCode(fragmentShaderCode.data());
+        .setCodeSize(fragmentShaderCode.size())
+        .setPCode(reinterpret_cast<const uint32_t*>(fragmentShaderCode.data()));
     result = device->createShaderModule(&fragmentShaderModuleCreateInfo, nullptr, &fragmentShaderModule);
     assert(result == vk::Result::eSuccess);
     // 创建shader阶段
