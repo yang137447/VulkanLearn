@@ -173,13 +173,19 @@ void VulkanManager::CreateVkDevice()
         .setQueueFamilyIndex(graphicQueueFamilyIndex.value())
         .setQueueCount(1)
         .setPQueuePriorities(&graohicsQueuePriorities);
+
+    //TODO: 这里应该先检测是否支持该 Features
+    vk::PhysicalDeviceFeatures deviceFeatures;
+    deviceFeatures
+        .setDepthClamp(VK_TRUE);
     
     vk::DeviceCreateInfo deviceCreateInfo;
     deviceCreateInfo
         .setQueueCreateInfoCount(1)
         .setPQueueCreateInfos(&deviceGraphicsQueueCreateInfo)
         .setEnabledExtensionCount(static_cast<uint32_t>(deviceExtensions.size()))
-        .setPEnabledExtensionNames(deviceExtensions);
+        .setPEnabledExtensionNames(deviceExtensions)
+        .setPEnabledFeatures(&deviceFeatures);
     
     device = physicalDevices[GPUIndex].createDevice(deviceCreateInfo);
     assert(device);
