@@ -360,8 +360,7 @@ void RenderPipline::CreateGraphicsPipeline()
     vk::PipelineCacheCreateInfo pipelineCacheCreateInfo;
     pipelineCacheCreateInfo
         .setInitialDataSize(0)
-        .setPInitialData(nullptr)
-        .setFlags(vk::PipelineCacheCreateFlagBits::eExternallySynchronized);
+        .setPInitialData(nullptr);
     
     vk::Result result = device->createPipelineCache(&pipelineCacheCreateInfo, nullptr, &pipelineCache);
     assert(result == vk::Result::eSuccess);
