@@ -145,7 +145,8 @@ void RenderPipline::initDescriptorSet()
     result = device->allocateDescriptorSets(descriptorSetAllocateInfo, descriptorSets.data());
     assert(result == vk::Result::eSuccess);
 
-    writeDescriptorSet[0]
+    writeDescriptorSets.resize(1);
+    writeDescriptorSets[0]
         .setDstSet(descriptorSets[0])
         .setDescriptorType(vk::DescriptorType::eUniformBuffer)
         .setDescriptorCount(1)

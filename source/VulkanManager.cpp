@@ -722,9 +722,15 @@ void VulkanManager::FlushUniformBuffer()
 
 void VulkanManager::FlushTextureToDescriptorSet()
 {
-    renderPipline->GetWriteDescriptorSet() = renderPipline->GetDescriptorSet()[0];
+    renderPipline->GetWriteDescriptorSets()[0]
+    .setDstSet(renderPipline->GetDescriptorSet()[0])
+    .setDstBinding(0)
+    .setDstArrayElement(0)
+    .setDescriptorType(vk::DescriptorType::eUniformBuffer)
+    .setDescriptorCount(1)
+    .setPBufferInfo(&renderPipline->)
 
-    device.updateDescriptorSets(renderPipline->GetWriteDescriptorSet(), nullptr);
+    device.updateDescriptorSets(renderPipline->GetWriteDescriptorSets(), nullptr);
 }
 
 void VulkanManager::InitMatrix()
