@@ -17,6 +17,7 @@ public:
     inline std::vector<vk::DescriptorSet>& GetDescriptorSet() { return descriptorSets; }
     inline vk::DeviceMemory& GetuniformBufferMemory() { return uniformBufferMemory; }
     inline uint32_t GetuniformBufferSize() { return uniformBufferSize; }
+    inline vk::DescriptorBufferInfo& GetuniformBufferInfo() { return uniformBufferInfo; }
     inline std::vector<vk::WriteDescriptorSet>& GetWriteDescriptorSets() { return writeDescriptorSets; }
 private:
     RenderPipline();
@@ -27,7 +28,8 @@ private:
     void CreatePipelineLayout();
     void DestroyPipelineLayout();
 
-    void initDescriptorSet();
+    void CreateDescriptorSets();
+    void DestroyDescriptorSets();
 
     void CreateShader();
     void DestroyShader();

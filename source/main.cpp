@@ -14,7 +14,7 @@ int main(int argc, char **argv)
     SDL_Window *window = SDL_CreateWindow(
         "VulkanRenderer",
         width, height,
-        SDL_WINDOW_VULKAN | SDL_WINDOW_BORDERLESS);
+        SDL_WINDOW_VULKAN);
 
     if (!window)
     {

@@ -61,7 +61,7 @@ void DrawableObject::Draw(vk::CommandBuffer &commandBuffer, vk::PipelineLayout &
     commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
     commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout, 0, descriptorSet, nullptr);
     commandBuffer.bindVertexBuffers(0, 1, &vertexBuffer, &vertexBufferInfo.offset);
-    commandBuffer.draw(vertices->size() / 3, 1, 0, 0);
+    commandBuffer.draw(vertices->size(), 1, 0,0);
 }
 
 DrawableObject::DrawableObject()

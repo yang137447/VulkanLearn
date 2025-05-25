@@ -48,6 +48,7 @@ VulkanManager::~VulkanManager()
     DestroyVkSwapChain();
     DestroyVkCommandBuffer();
     DestroyVkDevice();
+    DestroyVkSurface();
     DestroyVkInstance();
 }
 
@@ -107,6 +108,12 @@ void VulkanManager::CreateVkSurface()
     SDL_bool result = SDL_Vulkan_CreateSurface(sdlWindow, instance, &surface);
     assert(result == SDL_TRUE);
     std::cout << "Create VkSurface" << std::endl;
+}
+
+void VulkanManager::DestroyVkSurface()
+{
+    instance.destroySurfaceKHR(surface);
+    std::cout << "Destroy VkSurface" << std::endl;
 }
 
 void VulkanManager::CreateVkDevice()
@@ -533,7 +540,7 @@ void VulkanManager::CreateVkRenderPass()
 
     // 创建清除值
     clearValue
-        .setColor(vk::ClearColorValue(std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f}))
+        .setColor(vk::ClearColorValue(std::array<float, 4>{0.0f, 1.0f, 0.0f, 1.0f}))
         .setDepthStencil(vk::ClearDepthStencilValue(1.0f, 0));
 
     // 创建渲染通道开始信息
@@ -611,8 +618,6 @@ void VulkanManager::DestroyVkPipline()
 void VulkanManager::CreateVkFence()
 {
     vk::FenceCreateInfo fenceCreateInfo;
-    fenceCreateInfo
-        .setFlags(vk::FenceCreateFlagBits::eSignaled);
     
     vk::Result result = device.createFence(&fenceCreateInfo, nullptr, &taskFinishedFence);
     assert(result == vk::Result::eSuccess);
@@ -634,22 +639,7 @@ void VulkanManager::InitializePresentInfo()
 
 void VulkanManager::InitializeMVP()
 {
-    Eigen::Matrix4f modelMatrix = Eigen::Matrix4f::Identity();
-
-    Eigen::Matrix4f viewMatrix = Eigen::Matrix4f::Identity();
-    viewMatrix = Eigen::Affine3f(Eigen::Translation3f(0.0f, 0.0f, -5.0f)).matrix();
-
-    Eigen::Matrix4f projectionMatrix = Eigen::Matrix4f::Identity();
-    float fovy = 45.0f * static_cast<float>(Pi) / 180.0f;
-    float aspect = 1.0f;
-    float zNear = 1.5f;
-    float zFar = 1000.0f;
-    float f = 1.0f / std::tan(fovy / 2.0f);
-    projectionMatrix << 
-        f / aspect, 0, 0, 0,
-        0, f, 0, 0,
-        0, 0, (zFar + zNear) / (zNear - zFar), (2 * zFar * zNear) / (zNear - zFar),
-        0, 0, -1, 0;
+    InitMatrix();
 }
 
 void VulkanManager::DrawFrame()
@@ -676,11 +666,12 @@ void VulkanManager::DrawFrame()
         .setPWaitSemaphores(&imageAcquiredSemaphore);
     
     graphicQueue.submit(submitInfo, taskFinishedFence);
-
-    while (result != vk::Result::eTimeout)
+    
+    do
     {
         result = device.waitForFences(1, &taskFinishedFence, VK_TRUE, UINT64_MAX);
-    }
+    } while (result == vk::Result::eTimeout);
+    
     result = device.resetFences(1, &taskFinishedFence);
     assert(result == vk::Result::eSuccess);
 
@@ -697,19 +688,20 @@ void VulkanManager::FlushUniformBuffer()
     matrixStack.push(currentMatrix);
 
     // 每次调用drawFrame函数时，xAngle增加0.01
-    xAngle += 0.01f;
+    xAngle += 0.5f;
 
     if(xAngle > 360.0f)
     {
         xAngle -= 360.0f;
     }
+    std::cout << "xAngle: " << xAngle << std::endl;
 
     SetRotation(xAngle, 0.0f, 0.0f);
 
     GetFinalMatrix();
 
     static float vertexUniformData[16];
-    std::memcpy(vertexUniformData, currentMatrix.data(), sizeof(float) * 16);
+    std::memcpy(vertexUniformData, currentMatrix.transpose().data(), sizeof(float) * 16);
 
     currentMatrix = matrixStack.top();
     matrixStack.pop();
@@ -728,7 +720,7 @@ void VulkanManager::FlushTextureToDescriptorSet()
     .setDstArrayElement(0)
     .setDescriptorType(vk::DescriptorType::eUniformBuffer)
     .setDescriptorCount(1)
-    .setPBufferInfo(&renderPipline->)
+    .setPBufferInfo(&renderPipline->GetuniformBufferInfo());
 
     device.updateDescriptorSets(renderPipline->GetWriteDescriptorSets(), nullptr);
 }
@@ -741,8 +733,10 @@ void VulkanManager::InitMatrix()
     modelTransform.rotate(Eigen::AngleAxisf(0.0f, Eigen::Vector3f::UnitZ()));
     modelTransform.scale(Eigen::Vector3f(1.0f, 1.0f, 1.0f));
     modelMatrix = modelTransform.matrix();
-    viewMatrix = Eigen::Matrix4f::Identity();
-    projectionMatrix = Eigen::Matrix4f::Identity();
+
+    SetCamera(Eigen::Vector3f(0.0f, 0.0f, 2000.0f), Eigen::Vector3f(0.0f, 0.0f, 0.0f), Eigen::Vector3f(0.0f, 1.0f, 0.0f));
+
+    SetProjection(90.0f, 1.0f, 1.5f, 1000.0f);
 
     //Vulkan设备空间XYZ三个轴范围分别是 -1.0～+1.0、+1.0～-1.0、0.0～+1.0
     vulkanClipMatrix = Eigen::Matrix4f::Identity();
@@ -793,5 +787,6 @@ void VulkanManager::GetMVPMatrix()
 
 void VulkanManager::GetFinalMatrix()
 {
+    modelMatrix = modelTransform.matrix();
     currentMatrix = vulkanClipMatrix * projectionMatrix * viewMatrix * modelMatrix;
 }

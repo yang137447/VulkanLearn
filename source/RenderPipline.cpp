@@ -11,7 +11,7 @@ RenderPipline::RenderPipline(vk::Device &device, vk::RenderPass &renderPass, vk:
 
     CreateUniformBuffer();
     CreatePipelineLayout();
-    initDescriptorSet();
+    CreateDescriptorSets();
     CreateShader();
     initVertexAttribute();
     CreateGraphicsPipeline();
@@ -21,7 +21,8 @@ RenderPipline::~RenderPipline()
 {
     DestroyGraphicsPipeline();
     DestroyShader();
-    DestroyGraphicsPipeline();
+    DestroyDescriptorSets();
+    DestroyPipelineLayout();
     DestroyUniformBuffer();
 }
 
@@ -116,7 +117,7 @@ void RenderPipline::DestroyPipelineLayout()
     descriptorSetLayouts.clear();
 }
 
-void RenderPipline::initDescriptorSet()
+void RenderPipline::CreateDescriptorSets()
 {
     vk::DescriptorPoolSize descriptorPoolSize[1];
     descriptorPoolSize[0]
@@ -125,6 +126,7 @@ void RenderPipline::initDescriptorSet()
 
     vk::DescriptorPoolCreateInfo descriptorPoolCreateInfo;
     descriptorPoolCreateInfo
+        .setFlags(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet)
         .setMaxSets(1)
         .setPoolSizeCount(1)
         .setPPoolSizes(descriptorPoolSize);
@@ -153,6 +155,12 @@ void RenderPipline::initDescriptorSet()
         .setPBufferInfo(&uniformBufferInfo)
         .setDstBinding(0)
         .setDstArrayElement(0);
+}
+
+void RenderPipline::DestroyDescriptorSets()
+{
+    device->freeDescriptorSets(descriptorPool, static_cast<uint32_t>(descriptorSets.size()), descriptorSets.data());
+    device->destroyDescriptorPool(descriptorPool, nullptr);
 }
 
 void RenderPipline::CreateShader()

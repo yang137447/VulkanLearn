@@ -29,6 +29,7 @@ private:
     void EnumeratePhysicalDevices();
 
     void CreateVkSurface();
+    void DestroyVkSurface();
 
     void CreateVkDevice();
     void DestroyVkDevice();
