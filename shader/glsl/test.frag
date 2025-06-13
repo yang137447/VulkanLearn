@@ -1,8 +1,20 @@
-#version 400
-#extension GL_ARB_separate_shader_objects : enable//启动GL_ARB_separate_shader_objects
-#extension GL_ARB_shading_language_420pack : enable//启动GL_ARB_shading_language_420pack
-layout (location = 0) in vec3 vcolor;//顶点着色器传入的顶点颜色数据
-layout (location = 0) out vec4 outColor;//输出到渲染管线的片元颜色值
+#version 450
+
+layout(location = 0) out vec3 fragColor;
+
+vec2 positions[3] = vec2[](
+    vec2(0.0, -0.5),
+    vec2(0.5, 0.5),
+    vec2(-0.5, 0.5)
+);
+
+vec3 colors[3] = vec3[](
+    vec3(1.0, 0.0, 0.0),
+    vec3(0.0, 1.0, 0.0),
+    vec3(0.0, 0.0, 1.0)
+);
+
 void main() {
-   outColor=vec4(vcolor.rgb,1.0);//将顶点着色器传递过来的颜色值输出
+    gl_Position = vec4(positions[gl_VertexIndex], 0.0, 1.0);
+    fragColor = colors[gl_VertexIndex];
 }

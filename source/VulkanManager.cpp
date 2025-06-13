@@ -1,10 +1,12 @@
 #include "VulkanManager.h"
 #include "SDL3/SDL_vulkan.h"
+#include <cstdint>
 #include <iostream>
 #include "settings.h"
 #include "DrawableObject.h"
 #include "TriangleData.h"
 #include "RenderPipline.h"
+#include "CommonFunction.h"
 
 VulkanManager::VulkanManager()
 {
@@ -105,9 +107,12 @@ void VulkanManager::EnumeratePhysicalDevices()
 
 void VulkanManager::CreateVkSurface()
 {
-    SDL_bool result = SDL_Vulkan_CreateSurface(sdlWindow, instance, &surface);
-    assert(result == SDL_TRUE);
-    std::cout << "Create VkSurface" << std::endl;
+    bool result = SDL_Vulkan_CreateSurface(sdlWindow, instance, nullptr,&surface);
+    if(result == true)
+    {
+        std::cout << "Create VkSurface" << std::endl;
+    }
+    
 }
 
 void VulkanManager::DestroyVkSurface()
@@ -175,11 +180,11 @@ void VulkanManager::CreateVkDevice()
     }
 
     vk::DeviceQueueCreateInfo deviceGraphicsQueueCreateInfo;
-    float graohicsQueuePriorities = 0.0f;
+    float graohicsQueuePriorities[1] = {0.0f};
     deviceGraphicsQueueCreateInfo
         .setQueueFamilyIndex(graphicQueueFamilyIndex.value())
         .setQueueCount(1)
-        .setPQueuePriorities(&graohicsQueuePriorities);
+        .setPQueuePriorities(graohicsQueuePriorities);
 
     //TODO: 这里应该先检测是否支持该 Features
     vk::PhysicalDeviceFeatures deviceFeatures;
@@ -192,7 +197,8 @@ void VulkanManager::CreateVkDevice()
         .setPQueueCreateInfos(&deviceGraphicsQueueCreateInfo)
         .setEnabledExtensionCount(static_cast<uint32_t>(deviceExtensions.size()))
         .setPEnabledExtensionNames(deviceExtensions)
-        .setPEnabledFeatures(&deviceFeatures);
+        .setPEnabledFeatures(&deviceFeatures)
+        .setEnabledLayerCount(0);
     
     device = physicalDevices[GPUIndex].createDevice(deviceCreateInfo);
     assert(device);
@@ -227,7 +233,6 @@ void VulkanManager::CreateVkCommandBuffer()
     vk::Result result = device.allocateCommandBuffers(&commandBufferAllocateInfo, &commandBuffer);
 
     commandBufferBeginInfo
-        .setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit)
         .setPInheritanceInfo(nullptr);
     commandBuffers[0] = commandBuffer;
 
@@ -235,10 +240,8 @@ void VulkanManager::CreateVkCommandBuffer()
     *piplineStageFlags = vk::PipelineStageFlagBits::eColorAttachmentOutput;
     submitInfo[0]
         .setPWaitDstStageMask(piplineStageFlags)
-        .setCommandBufferCount(1)
-        .setPCommandBuffers(commandBuffers)
-        .setSignalSemaphoreCount(0)
-        .setPSignalSemaphores(nullptr);
+        .setCommandBuffers(commandBuffers)
+        .setSignalSemaphores(nullptr);
 }
 
 void VulkanManager::DestroyVkCommandBuffer()
@@ -328,7 +331,7 @@ void VulkanManager::CreateVkSwapChain()
         .setSurface(surface)
         .setMinImageCount(swapChainImageCount)
         .setImageFormat(surfaceFormats[0].format)
-        .setImageColorSpace(vk::ColorSpaceKHR::eSrgbNonlinear)
+        .setImageColorSpace(surfaceFormats[0].colorSpace)
         .setImageExtent(swapChainExtent)
         .setImageArrayLayers(1)
         .setImageUsage(vk::ImageUsageFlagBits::eColorAttachment)
@@ -338,7 +341,8 @@ void VulkanManager::CreateVkSwapChain()
         .setPreTransform(preTransform)
         .setCompositeAlpha(vk::CompositeAlphaFlagBitsKHR::eOpaque)
         .setPresentMode(presentMode)
-        .setClipped(VK_TRUE);
+        .setClipped(VK_TRUE)
+        .setOldSwapchain(nullptr);//后续可能用于resize功能
     if(graphicQueueFamilyIndex.value() != presentQueueFamilyIndex.value())
     {
         //如果图形队列和呈现队列不是同一个队列族
@@ -429,7 +433,9 @@ void VulkanManager::CreateVkDepthBuffer()
         .setTiling(tiling)
         .setUsage(vk::ImageUsageFlagBits::eDepthStencilAttachment)
         .setSharingMode(vk::SharingMode::eExclusive)
-        .setInitialLayout(vk::ImageLayout::eUndefined);
+        .setInitialLayout(vk::ImageLayout::eUndefined)
+        .setQueueFamilyIndexCount(0)
+        .setFlags(vk::ImageCreateFlags(0));
     depthImage = device.createImage(depthImageCreateInfo);
     assert(depthImage);
 
@@ -437,15 +443,12 @@ void VulkanManager::CreateVkDepthBuffer()
     vk::MemoryRequirements depthImageMemoryRequirements = device.getImageMemoryRequirements(depthImage);
     vk::MemoryAllocateInfo depthImageMemoryAllocateInfo;
     depthImageMemoryAllocateInfo
-        .setAllocationSize(depthImageMemoryRequirements.size);
-    for (uint32_t i = 0; i < gpuMemoryProperties.memoryTypeCount; i++)
-    {
-        if ((depthImageMemoryRequirements.memoryTypeBits & (1 << i)) && (gpuMemoryProperties.memoryTypes[i].propertyFlags & vk::MemoryPropertyFlagBits::eDeviceLocal))
-        {
-            depthImageMemoryAllocateInfo.setMemoryTypeIndex(i);
-            break;
-        }
-    }
+        .setAllocationSize(depthImageMemoryRequirements.size)
+        .setMemoryTypeIndex(FindMemoryType(
+            physicalDevices[GPUIndex].getMemoryProperties(), 
+            depthImageMemoryRequirements.memoryTypeBits, 
+            vk::MemoryPropertyFlagBits::eDeviceLocal));
+
     depthImageMemory = device.allocateMemory(depthImageMemoryAllocateInfo);
     assert(depthImageMemory);
     device.bindImageMemory(depthImage, depthImageMemory, 0);
@@ -456,7 +459,12 @@ void VulkanManager::CreateVkDepthBuffer()
         .setImage(depthImage)
         .setViewType(vk::ImageViewType::e2D)
         .setFormat(depthFormat)
-        .setComponents(vk::ComponentMapping())
+        .setComponents(vk::ComponentMapping(
+            vk::ComponentSwizzle::eR, //r
+            vk::ComponentSwizzle::eG, //g
+            vk::ComponentSwizzle::eB, //b
+            vk::ComponentSwizzle::eA  //a
+        ))
         .setSubresourceRange(
             vk::ImageSubresourceRange(
                 vk::ImageAspectFlagBits::eDepth, 
@@ -483,14 +491,12 @@ void VulkanManager::CreateVkRenderPass()
 {
     //创建信号量
     vk::SemaphoreCreateInfo imageAcquiredSemaphoreCreateInfo;
-    imageAcquiredSemaphoreCreateInfo
-        .setFlags(vk::SemaphoreCreateFlags(0));
     imageAcquiredSemaphore = device.createSemaphore(imageAcquiredSemaphoreCreateInfo);
     assert(imageAcquiredSemaphore);
 
     //创建渲染通道
-    vk::AttachmentDescription attachmentDescription[2];
-    attachmentDescription[0]
+    vk::AttachmentDescription attachmentDescription;
+    attachmentDescription
         .setFormat(surfaceFormats[0].format)
         .setSamples(vk::SampleCountFlagBits::e1)
         .setLoadOp(vk::AttachmentLoadOp::eClear)
@@ -500,39 +506,48 @@ void VulkanManager::CreateVkRenderPass()
         .setInitialLayout(vk::ImageLayout::eUndefined)
         .setFinalLayout(vk::ImageLayout::ePresentSrcKHR)
         .setFlags(vk::AttachmentDescriptionFlags(0));
-    attachmentDescription[1]
-        .setFormat(depthFormat)
-        .setSamples(vk::SampleCountFlagBits::e1)
-        .setLoadOp(vk::AttachmentLoadOp::eClear)
-        .setStoreOp(vk::AttachmentStoreOp::eDontCare)
-        .setStencilLoadOp(vk::AttachmentLoadOp::eDontCare)
-        .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
-        .setInitialLayout(vk::ImageLayout::eUndefined)
-        .setFinalLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal)
-        .setFlags(vk::AttachmentDescriptionFlags(0));
+    // attachmentDescription[1]
+    //     .setFormat(depthFormat)
+    //     .setSamples(vk::SampleCountFlagBits::e1)
+    //     .setLoadOp(vk::AttachmentLoadOp::eClear)
+    //     .setStoreOp(vk::AttachmentStoreOp::eDontCare)
+    //     .setStencilLoadOp(vk::AttachmentLoadOp::eDontCare)
+    //     .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
+    //     .setInitialLayout(vk::ImageLayout::eUndefined)
+    //     .setFinalLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal)
+    //     .setFlags(vk::AttachmentDescriptionFlags(0));
 
     vk::AttachmentReference colorAttachmentReference;
     colorAttachmentReference
         .setAttachment(0)
         .setLayout(vk::ImageLayout::eColorAttachmentOptimal);
-    vk::AttachmentReference depthAttachmentReference;
-    depthAttachmentReference
-        .setAttachment(1)
-        .setLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal);
+    // vk::AttachmentReference depthAttachmentReference;
+    // depthAttachmentReference
+    //     .setAttachment(1)
+    //     .setLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal);
 
     vk::SubpassDescription subpassDescription;
     subpassDescription
-        .setPipelineBindPoint(vk::PipelineBindPoint::eGraphics)
-        .setColorAttachmentCount(1)
-        .setPColorAttachments(&colorAttachmentReference)
-        .setPDepthStencilAttachment(&depthAttachmentReference);
+        // .setPInputAttachments(nullptr)
+        // .setPipelineBindPoint(vk::PipelineBindPoint::eGraphics)
+        // .setColorAttachmentCount(1)
+        // .setPColorAttachments(&colorAttachmentReference)
+        // .setPResolveAttachments(nullptr)
+        // .setPDepthStencilAttachment(&depthAttachmentReference)
+        // .setPreserveAttachmentCount(0)
+        // .setPPreserveAttachments(nullptr);
+        .setColorAttachments(colorAttachmentReference);
 
     vk::RenderPassCreateInfo renderPassCreateInfo;
     renderPassCreateInfo
-        .setAttachmentCount(2)
-        .setPAttachments(attachmentDescription)
-        .setSubpassCount(1)
-        .setPSubpasses(&subpassDescription);
+        // .setAttachmentCount(2)
+        // .setPAttachments(attachmentDescription)
+        // .setSubpassCount(1)
+        // .setPSubpasses(&subpassDescription)
+        // .setDependencyCount(0)
+        // .setPDependencies(nullptr);
+        .setAttachments(attachmentDescription)
+        .setSubpasses(subpassDescription);
 
     renderPass = device.createRenderPass(renderPassCreateInfo);
     assert(renderPass);
@@ -540,7 +555,7 @@ void VulkanManager::CreateVkRenderPass()
 
     // 创建清除值
     clearValue
-        .setColor(vk::ClearColorValue(std::array<float, 4>{0.0f, 1.0f, 0.0f, 1.0f}))
+        .setColor(vk::ClearColorValue(std::array<float, 4>{0.2f, 0.2f, 0.2f, 0.2f}))
         .setDepthStencil(vk::ClearDepthStencilValue(1.0f, 0));
 
     // 创建渲染通道开始信息
@@ -560,17 +575,16 @@ void VulkanManager::DestroyVkRenderPass()
 
 void VulkanManager::CreateVkFrameBuffers()
 {
-    vk::ImageView attachments[2];
-    attachments[1] = depthImageView;
+    vk::ImageView attachments[1];
+    //attachments[1] = depthImageView;
     vk::FramebufferCreateInfo framebufferCreateInfo;
     framebufferCreateInfo
         .setRenderPass(renderPass)
-        .setAttachmentCount(2)
-        .setPAttachments(attachments)
+        .setAttachments(attachments)
         .setWidth(swapChainExtent.width)
         .setHeight(swapChainExtent.height)
         .setLayers(1);
-    framebuffers = new vk::Framebuffer[swapChainImageCount];
+    framebuffers.resize(swapChainImageCount);
     for (uint32_t i = 0; i < swapChainImageCount; i++)
     {
         attachments[0] = swapChainImageViews[i];
@@ -587,7 +601,6 @@ void VulkanManager::DestroyVkFrameBuffers()
     {
         device.destroyFramebuffer(framebuffers[i]);
     }
-    delete[] framebuffers;
     std::cout << "Destroy VkFrameBuffers" << std::endl;
 }
 
@@ -644,6 +657,9 @@ void VulkanManager::InitializeMVP()
 
 void VulkanManager::DrawFrame()
 {
+    device.waitForFences(taskFinishedFence, true, UINT64_MAX);
+    device.resetFences(taskFinishedFence);
+
     vk::Result result = device.acquireNextImageKHR(swapChain, UINT64_MAX, imageAcquiredSemaphore, nullptr, &swapchainImageIndex);
     assert(result == vk::Result::eSuccess);
 
@@ -652,12 +668,21 @@ void VulkanManager::DrawFrame()
     commandBuffer.reset();
     commandBuffer.begin(commandBufferBeginInfo);
 
-    FlushUniformBuffer();
-    FlushTextureToDescriptorSet();
+    //FlushUniformBuffer();
+    //FlushTextureToDescriptorSet();
 
     commandBuffer.beginRenderPass(renderPassBeginInfo, vk::SubpassContents::eInline);
     triangleObject->Draw(commandBuffer, renderPipline->GetPipelineLayout(), renderPipline->GetGraphicsPipeline(), renderPipline->GetDescriptorSet()[0]);
+
     commandBuffer.endRenderPass();
+
+    constexpr vk::ClearColorValue clearColorValue(std::array<float, 4>{42.0f/255.0f, 181.f/255.0f, 116.f/255.0f, 1.0f});
+    commandBuffer.clearColorImage(
+        swapChainImages[swapchainImageIndex],
+        vk::ImageLayout::eUndefined,
+        clearColorValue,
+        {vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1)}
+    );
 
     commandBuffer.end();
 
@@ -669,14 +694,14 @@ void VulkanManager::DrawFrame()
     
     do
     {
-        result = device.waitForFences(1, &taskFinishedFence, VK_TRUE, UINT64_MAX);
+        result = device.waitForFences(1, &taskFinishedFence, VK_TRUE, 100000000);
     } while (result == vk::Result::eTimeout);
     
     result = device.resetFences(1, &taskFinishedFence);
     assert(result == vk::Result::eSuccess);
 
     presentInfo.pImageIndices = &swapchainImageIndex;
-    result = presentQueue.presentKHR(presentInfo);
+    result = graphicQueue.presentKHR(presentInfo);
     assert(result == vk::Result::eSuccess);
 }
 
@@ -694,11 +719,11 @@ void VulkanManager::FlushUniformBuffer()
     {
         xAngle -= 360.0f;
     }
-    std::cout << "xAngle: " << xAngle << std::endl;
+    //std::cout << "xAngle: " << xAngle << std::endl;
 
     SetRotation(xAngle, 0.0f, 0.0f);
 
-    GetFinalMatrix();
+    GetMVPMatrix();
 
     static float vertexUniformData[16];
     std::memcpy(vertexUniformData, currentMatrix.transpose().data(), sizeof(float) * 16);

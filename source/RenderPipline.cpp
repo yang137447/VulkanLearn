@@ -2,6 +2,7 @@
 #include "settings.h"
 #include <fstream>
 #include <iostream>
+#include <vulkan/vulkan_enums.hpp>
 
 RenderPipline::RenderPipline(vk::Device &device, vk::RenderPass &renderPass, vk::PhysicalDeviceMemoryProperties &gpuMemoryProperties)
 {
@@ -98,10 +99,12 @@ void RenderPipline::CreatePipelineLayout()
 
     vk::PipelineLayoutCreateInfo pipelineLayoutCreateInfo;
     pipelineLayoutCreateInfo
-        .setSetLayoutCount(static_cast<uint32_t>(descriptorSetLayouts.size()))
-        .setPSetLayouts(descriptorSetLayouts.data())
-        .setPushConstantRangeCount(0)
-        .setPPushConstantRanges(nullptr);
+        // .setSetLayoutCount(static_cast<uint32_t>(descriptorSetLayouts.size()))
+        // .setPSetLayouts(descriptorSetLayouts.data())
+        // .setPushConstantRangeCount(0)
+        // .setPPushConstantRanges(nullptr);
+        .setSetLayouts(nullptr)
+        .setPushConstantRanges(nullptr);
     
     result = device->createPipelineLayout(&pipelineLayoutCreateInfo, nullptr, &pipelineLayout);
     assert(result == vk::Result::eSuccess);
@@ -261,19 +264,22 @@ void RenderPipline::initVertexAttribute()
 
 void RenderPipline::CreateGraphicsPipeline()
 {
-    std::vector<vk::DynamicState> dynamicState;
+    std::vector<vk::DynamicState> dynamicStates = {
+        vk::DynamicState::eViewport,
+        vk::DynamicState::eScissor
+    };
     
     vk::PipelineDynamicStateCreateInfo pipelineDynamicStateCreateInfo;
     pipelineDynamicStateCreateInfo
-        .setDynamicStateCount(dynamicState.size())
-        .setPDynamicStates(dynamicState.data());
+        .setDynamicStates(dynamicStates);
 
     vk::PipelineVertexInputStateCreateInfo pipelineVertexInputStateCreateInfo;
     pipelineVertexInputStateCreateInfo
-        .setVertexBindingDescriptionCount(1)
-        .setPVertexBindingDescriptions(&vertexInputBindingDescription)
-        .setVertexAttributeDescriptionCount(static_cast<uint32_t>(vertexInputAttributeDescriptions.size()))
-        .setPVertexAttributeDescriptions(vertexInputAttributeDescriptions.data());
+        // .setVertexBindingDescriptions(vertexInputBindingDescription)
+        // .setVertexAttributeDescriptions(vertexInputAttributeDescriptions);
+        .setVertexBindingDescriptions(nullptr)
+        .setVertexAttributeDescriptions(nullptr);
+
 
     vk::PipelineInputAssemblyStateCreateInfo pipelineInputAssemblyStateCreateInfo;
     pipelineInputAssemblyStateCreateInfo
@@ -285,7 +291,7 @@ void RenderPipline::CreateGraphicsPipeline()
         .setPolygonMode(vk::PolygonMode::eFill)
         .setCullMode(vk::CullModeFlagBits::eBack)
         .setFrontFace(vk::FrontFace::eCounterClockwise)
-        .setDepthClampEnable(true)
+        .setDepthClampEnable(false)
         .setRasterizerDiscardEnable(false)
         .setDepthBiasEnable(false)
         .setLineWidth(1.0f);
@@ -295,19 +301,18 @@ void RenderPipline::CreateGraphicsPipeline()
         .setColorWriteMask(vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA)
         .setBlendEnable(false)
         .setColorBlendOp(vk::BlendOp::eAdd)
-        .setAlphaBlendOp(vk::BlendOp::eAdd)
-        .setSrcColorBlendFactor(vk::BlendFactor::eZero)
+        .setSrcColorBlendFactor(vk::BlendFactor::eOne)
         .setDstColorBlendFactor(vk::BlendFactor::eZero)
-        .setSrcAlphaBlendFactor(vk::BlendFactor::eZero)
+        .setAlphaBlendOp(vk::BlendOp::eAdd)
+        .setSrcAlphaBlendFactor(vk::BlendFactor::eOne)
         .setDstAlphaBlendFactor(vk::BlendFactor::eZero);
 
     vk::PipelineColorBlendStateCreateInfo pipelineColorBlendStateCreateInfo;
     pipelineColorBlendStateCreateInfo
-        .setAttachmentCount(1)
-        .setPAttachments(pipelineColorBlendAttachmentState)
+        .setAttachments(pipelineColorBlendAttachmentState)
         .setLogicOpEnable(false)
-        .setLogicOp(vk::LogicOp::eNoOp)
-        .setBlendConstants({ 1.0f, 1.0f, 1.0f, 1.0f });
+        .setLogicOp(vk::LogicOp::eCopy)
+        .setBlendConstants({ 0.0f, 0.0f, 0.0f, 0.0f });
 
     vk::Viewport viewport;
     viewport
@@ -324,9 +329,10 @@ void RenderPipline::CreateGraphicsPipeline()
     vk::PipelineViewportStateCreateInfo pipelineViewportStateCreateInfo;
     pipelineViewportStateCreateInfo
         .setViewportCount(1)
+        .setPViewports(&viewport)
         .setScissorCount(1)
-        .setPScissors(&scissor)
-        .setPViewports(&viewport);
+        .setPScissors(&scissor);
+
 
     vk::PipelineDepthStencilStateCreateInfo pipelineDepthStencilStateCreateInfo;
     pipelineDepthStencilStateCreateInfo
@@ -344,7 +350,7 @@ void RenderPipline::CreateGraphicsPipeline()
     pipelineMultisampleStateCreateInfo
         .setRasterizationSamples(vk::SampleCountFlagBits::e1)
         .setSampleShadingEnable(false)
-        .setMinSampleShading(0.0f)
+        .setMinSampleShading(1.0f)
         .setPSampleMask(nullptr)
         .setAlphaToCoverageEnable(false)
         .setAlphaToOneEnable(false);
@@ -360,9 +366,9 @@ void RenderPipline::CreateGraphicsPipeline()
         .setPMultisampleState(&pipelineMultisampleStateCreateInfo)
         .setPDynamicState(&pipelineDynamicStateCreateInfo)
         .setPViewportState(&pipelineViewportStateCreateInfo)
-        .setPDepthStencilState(&pipelineDepthStencilStateCreateInfo)
-        .setStageCount(static_cast<uint32_t>(shaderStages.size()))
-        .setPStages(shaderStages.data())
+        //.setPDepthStencilState(&pipelineDepthStencilStateCreateInfo)
+        .setPDepthStencilState(nullptr)
+        .setStages(shaderStages)
         .setRenderPass(*renderPass)
         .setSubpass(0);
 

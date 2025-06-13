@@ -81,7 +81,7 @@ void RenderCore::PickupPhysicalDevice()
 void RenderCore::CreateVkSurface()
 {
     VkSurfaceKHR vksurface;
-    if (!SDL_Vulkan_CreateSurface(sdlWindow, instance, &vksurface))
+    if (!SDL_Vulkan_CreateSurface(sdlWindow, instance, nullptr, &vksurface))
     {
         std::cout << "Info : "
                   << "CreateSurface failed"

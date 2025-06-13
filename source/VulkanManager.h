@@ -94,7 +94,7 @@ private:
     vk::CommandBuffer commandBuffer;
     vk::CommandBufferBeginInfo commandBufferBeginInfo;
     vk::CommandBuffer commandBuffers[1];
-    vk::SubmitInfo submitInfo[1];
+    std::array<vk::SubmitInfo, 1> submitInfo;
 
     VkSurfaceKHR surface;
     std::vector<vk::SurfaceFormatKHR> surfaceFormats;
@@ -119,7 +119,7 @@ private:
     vk::ClearValue clearValue;
     vk::RenderPassBeginInfo renderPassBeginInfo;
 
-    vk::Framebuffer* framebuffers;
+    std::vector<vk::Framebuffer> framebuffers;
 
     DrawableObject* triangleObject;
 
@@ -129,6 +129,7 @@ private:
     
     vk::PresentInfoKHR presentInfo;
 
+//Matrixs
 private:
     void InitMatrix();
     void SetTranslation(float x, float y, float z);
