@@ -41,6 +41,7 @@ VulkanManager::VulkanManager(std::vector<const char *> &extensions, SDL_Window *
 
 VulkanManager::~VulkanManager()
 {
+    device.waitIdle(); //等待设备空闲
     DestroyVkFence();
     DestroyVkPipline();
     DestroyDrawableObject();
@@ -225,16 +226,17 @@ void VulkanManager::CreateVkCommandBuffer()
     commandPool = device.createCommandPool(commandPoolCreateInfo);
     assert(commandPool);
 
+    commandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+
     vk::CommandBufferAllocateInfo commandBufferAllocateInfo;
     commandBufferAllocateInfo
         .setCommandPool(commandPool)
         .setLevel(vk::CommandBufferLevel::ePrimary)
-        .setCommandBufferCount(1);
-    vk::Result result = device.allocateCommandBuffers(&commandBufferAllocateInfo, &commandBuffer);
+        .setCommandBufferCount(commandBuffers.size());
+    vk::Result result = device.allocateCommandBuffers(&commandBufferAllocateInfo, commandBuffers.data());
 
     commandBufferBeginInfo
         .setPInheritanceInfo(nullptr);
-    commandBuffers[0] = commandBuffer;
 
     vk::PipelineStageFlags* piplineStageFlags = new vk::PipelineStageFlags();
     *piplineStageFlags = vk::PipelineStageFlagBits::eColorAttachmentOutput;
@@ -246,7 +248,7 @@ void VulkanManager::CreateVkCommandBuffer()
 
 void VulkanManager::DestroyVkCommandBuffer()
 {
-    device.freeCommandBuffers(commandPool, 1, commandBuffers);
+    device.freeCommandBuffers(commandPool, commandBuffers.size(), commandBuffers.data());
     device.destroyCommandPool(commandPool);
     std::cout << "Destroy VkCommandBuffer" << std::endl;
 }
@@ -490,9 +492,17 @@ void VulkanManager::DestroyVkDepthBuffer()
 void VulkanManager::CreateVkRenderPass()
 {
     //创建信号量
-    vk::SemaphoreCreateInfo imageAcquiredSemaphoreCreateInfo;
-    imageAcquiredSemaphore = device.createSemaphore(imageAcquiredSemaphoreCreateInfo);
-    assert(imageAcquiredSemaphore);
+    imageAcquiredSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
+    renderFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
+
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+    {
+        vk::SemaphoreCreateInfo imageAcquiredSemaphoreCreateInfo;
+        imageAcquiredSemaphores[i] = device.createSemaphore(imageAcquiredSemaphoreCreateInfo);
+        assert(imageAcquiredSemaphores[i]);
+        renderFinishedSemaphores[i] = device.createSemaphore(imageAcquiredSemaphoreCreateInfo);
+        assert(renderFinishedSemaphores[i]);
+    }
 
     //创建渲染通道
     vk::AttachmentDescription attachmentDescription;
@@ -555,21 +565,24 @@ void VulkanManager::CreateVkRenderPass()
 
     // 创建清除值
     clearValue
-        .setColor(vk::ClearColorValue(std::array<float, 4>{0.2f, 0.2f, 0.2f, 0.2f}))
-        .setDepthStencil(vk::ClearDepthStencilValue(1.0f, 0));
+        .setColor(vk::ClearColorValue(std::array<float, 4>{0.2f, 0.2f, 0.2f, 0.2f}));
+        //.setDepthStencil(vk::ClearDepthStencilValue(1.0f, 0));
 
     // 创建渲染通道开始信息
     renderPassBeginInfo
         .setRenderPass(renderPass)
         .setRenderArea(vk::Rect2D(vk::Offset2D(0, 0), swapChainExtent))
-        .setClearValueCount(2)
-        .setPClearValues(&clearValue);
+        .setClearValues(clearValue);
 }
 
 void VulkanManager::DestroyVkRenderPass()
 {
     device.destroyRenderPass(renderPass);
-    device.destroySemaphore(imageAcquiredSemaphore);
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+    {
+        device.destroySemaphore(imageAcquiredSemaphores[i]);
+        device.destroySemaphore(renderFinishedSemaphores[i]);
+    }
     std::cout << "Destroy VkRenderPass" << std::endl;
 }
 
@@ -631,23 +644,34 @@ void VulkanManager::DestroyVkPipline()
 void VulkanManager::CreateVkFence()
 {
     vk::FenceCreateInfo fenceCreateInfo;
+    fenceCreateInfo
+        .setFlags(vk::FenceCreateFlagBits::eSignaled); // 设置为signaled状态，表示初始状态为完成
     
-    vk::Result result = device.createFence(&fenceCreateInfo, nullptr, &taskFinishedFence);
-    assert(result == vk::Result::eSuccess);
+    taskFinishedFences.resize(MAX_FRAMES_IN_FLIGHT);
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+    {
+        vk::Result result = device.createFence(&fenceCreateInfo, nullptr, &taskFinishedFences[i]);
+        assert(result == vk::Result::eSuccess);
+    }
     std::cout << "Create VkFence" << std::endl;
 }
 
 void VulkanManager::DestroyVkFence()
 {
-    device.destroyFence(taskFinishedFence);
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+    {
+        if (taskFinishedFences[i])
+        {
+            device.destroyFence(taskFinishedFences[i]);
+        }
+    }
     std::cout << "Destroy VkFence" << std::endl;
 }
 
 void VulkanManager::InitializePresentInfo()
 {
     presentInfo
-        .setSwapchainCount(1)
-        .setPSwapchains(&swapChain);
+        .setSwapchains(swapChain);
 }
 
 void VulkanManager::InitializeMVP()
@@ -657,52 +681,73 @@ void VulkanManager::InitializeMVP()
 
 void VulkanManager::DrawFrame()
 {
-    device.waitForFences(taskFinishedFence, true, UINT64_MAX);
-    device.resetFences(taskFinishedFence);
+    vk::Result result = device.waitForFences(taskFinishedFences[currentFrame], true, UINT64_MAX);
+    if(result != vk::Result::eSuccess)
+    {
+        throw std::runtime_error("Failed to wait for fence");
+    }
+    device.resetFences(taskFinishedFences[currentFrame]);
 
-    vk::Result result = device.acquireNextImageKHR(swapChain, UINT64_MAX, imageAcquiredSemaphore, nullptr, &swapchainImageIndex);
+    result = device.acquireNextImageKHR(swapChain, UINT64_MAX, imageAcquiredSemaphores[currentFrame], nullptr, &swapchainImageIndex);
     assert(result == vk::Result::eSuccess);
 
-    renderPassBeginInfo.setFramebuffer(framebuffers[swapchainImageIndex]);
-
+    vk::CommandBuffer commandBuffer = commandBuffers[currentFrame];
     commandBuffer.reset();
+    {
     commandBuffer.begin(commandBufferBeginInfo);
+
+    renderPassBeginInfo.setFramebuffer(framebuffers[swapchainImageIndex]);
 
     //FlushUniformBuffer();
     //FlushTextureToDescriptorSet();
 
     commandBuffer.beginRenderPass(renderPassBeginInfo, vk::SubpassContents::eInline);
-    triangleObject->Draw(commandBuffer, renderPipline->GetPipelineLayout(), renderPipline->GetGraphicsPipeline(), renderPipline->GetDescriptorSet()[0]);
+    //triangleObject->Draw(commandBuffer, renderPipline->GetPipelineLayout(), renderPipline->GetGraphicsPipeline(), renderPipline->GetDescriptorSet()[0]);
+
+    commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, renderPipline->GetGraphicsPipeline());
+
+    vk::Viewport viewport;
+    viewport
+        .setX(0.0f)
+        .setY(0.0f)
+        .setWidth(static_cast<float>(width))
+        .setHeight(static_cast<float>(height))
+        .setMinDepth(0.0f)
+        .setMaxDepth(1.0f);
+    vk::Rect2D scissor;
+    scissor
+        .setOffset({ 0, 0 })
+        .setExtent({ width, height });
+
+    commandBuffer.setViewport(0, 1, &viewport);
+    commandBuffer.setScissor(0, 1, &scissor);
+
+    commandBuffer.draw(3, 1, 0, 0);
 
     commandBuffer.endRenderPass();
 
-    constexpr vk::ClearColorValue clearColorValue(std::array<float, 4>{42.0f/255.0f, 181.f/255.0f, 116.f/255.0f, 1.0f});
-    commandBuffer.clearColorImage(
-        swapChainImages[swapchainImageIndex],
-        vk::ImageLayout::eUndefined,
-        clearColorValue,
-        {vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1)}
-    );
-
     commandBuffer.end();
-
+    }
+    vk::PipelineStageFlags waitDstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput;
     submitInfo[0]
-        .setWaitSemaphoreCount(1)
-        .setPWaitSemaphores(&imageAcquiredSemaphore);
+        .setWaitSemaphores(imageAcquiredSemaphores[currentFrame])
+        .setSignalSemaphores(renderFinishedSemaphores[currentFrame])
+        .setWaitDstStageMask(waitDstStageMask)
+        .setCommandBuffers(commandBuffer);
     
-    graphicQueue.submit(submitInfo, taskFinishedFence);
-    
-    do
-    {
-        result = device.waitForFences(1, &taskFinishedFence, VK_TRUE, 100000000);
-    } while (result == vk::Result::eTimeout);
-    
-    result = device.resetFences(1, &taskFinishedFence);
-    assert(result == vk::Result::eSuccess);
+    graphicQueue.submit(submitInfo, taskFinishedFences[currentFrame]);
 
-    presentInfo.pImageIndices = &swapchainImageIndex;
+    presentInfo
+        .setImageIndices(swapchainImageIndex)
+        .setWaitSemaphores(renderFinishedSemaphores[currentFrame]);
+
     result = graphicQueue.presentKHR(presentInfo);
-    assert(result == vk::Result::eSuccess);
+    if(result != vk::Result::eSuccess)
+    {
+        throw std::runtime_error("Failed to present image");
+    }
+
+    currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 }
 
 void VulkanManager::FlushUniformBuffer()

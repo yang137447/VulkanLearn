@@ -91,9 +91,8 @@ private:
     vk::Device device;
 
     vk::CommandPool commandPool;
-    vk::CommandBuffer commandBuffer;
     vk::CommandBufferBeginInfo commandBufferBeginInfo;
-    vk::CommandBuffer commandBuffers[1];
+    std::vector<vk::CommandBuffer> commandBuffers;
     std::array<vk::SubmitInfo, 1> submitInfo;
 
     VkSurfaceKHR surface;
@@ -113,7 +112,8 @@ private:
     vk::DeviceMemory depthImageMemory;
     vk::ImageView depthImageView;
 
-    vk::Semaphore imageAcquiredSemaphore;
+    std::vector<vk::Semaphore> imageAcquiredSemaphores;
+    std::vector<vk::Semaphore> renderFinishedSemaphores;
     uint32_t swapchainImageIndex = 0;
     vk::RenderPass renderPass;
     vk::ClearValue clearValue;
@@ -125,9 +125,11 @@ private:
 
     RenderPipline* renderPipline;
 
-    vk::Fence taskFinishedFence;
+    std::vector<vk::Fence> taskFinishedFences;
     
     vk::PresentInfoKHR presentInfo;
+
+    uint32_t currentFrame = 0;
 
 //Matrixs
 private:

@@ -45,7 +45,7 @@ void Render::Draw()
         .setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
     commandBuffer.begin(vk::CommandBufferBeginInfo());
     {
-        vk::ClearValue clearColor = vk::ClearColorValue(std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f});
+        constexpr vk::ClearValue clearColor = vk::ClearColorValue(std::array<float, 4>{69.f/ 255.f, 210.f / 255.f, 254.f / 255.f, 1.0f});
         vk::Rect2D renderArea;
         renderArea
             .setOffset(vk::Offset2D(0, 0))
