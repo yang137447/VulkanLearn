@@ -290,7 +290,7 @@ void RenderPipline::CreateGraphicsPipeline()
     pipelineRasterizationStateCreateInfo
         .setPolygonMode(vk::PolygonMode::eFill)
         .setCullMode(vk::CullModeFlagBits::eBack)
-        .setFrontFace(vk::FrontFace::eCounterClockwise)
+        .setFrontFace(vk::FrontFace::eClockwise)
         .setDepthClampEnable(false)
         .setRasterizerDiscardEnable(false)
         .setDepthBiasEnable(false)
