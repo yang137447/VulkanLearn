@@ -20,6 +20,8 @@ public:
 
     void DrawFrame();
 
+    void ReCreateSwapChain(int newWidth, int newHeight);
+
 private:
     VulkanManager();
 

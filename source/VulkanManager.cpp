@@ -55,6 +55,21 @@ VulkanManager::~VulkanManager()
     DestroyVkInstance();
 }
 
+void VulkanManager::ReCreateSwapChain(int newWidth, int newHeight)
+{
+    device.waitIdle(); //等待设备空闲
+
+    //todo: setting.h 需要转化为json配置文件
+    // width = newWidth;
+    // height = newHeight;
+
+    DestroyVkFrameBuffers();
+    DestroyVkSwapChain();
+
+    CreateVkSwapChain();
+    CreateVkFrameBuffers();
+}
+
 void VulkanManager::CreateVkInstance()
 {
     std::cout << "Valid Vulkan Instance Layers:" << std::endl;
@@ -278,10 +293,6 @@ void VulkanManager::CreateVkSwapChain()
     //获取支持的显示模式数量
     presentModes = physicalDevices[GPUIndex].getSurfacePresentModesKHR(surface);
     assert(!presentModes.empty());
-    for (const auto &presentMode : presentModes)
-    {
-        std::cout << "Present mode: " << vk::to_string(presentMode) << std::endl;
-    }
     // 确定一下显示模式
     vk::PresentModeKHR presentMode = vk::PresentModeKHR::eFifo;
     for (const auto &availablePresentMode : presentModes)
@@ -298,6 +309,11 @@ void VulkanManager::CreateVkSwapChain()
         {
             presentMode = availablePresentMode;
         }
+    }
+    std::cout << "Present mode: " << vk::to_string(presentMode) << std::endl;
+    for (const auto &presentMode : presentModes)
+    {
+        std::cout << "  Support present mode: " << vk::to_string(presentMode) << std::endl;
     }
     // 确定surface的高度和宽度
     if(surfaceCapabilities.currentExtent.width == 0xFFFFFFFF)
@@ -717,7 +733,7 @@ void VulkanManager::DrawFrame()
     vk::Rect2D scissor;
     scissor
         .setOffset({ 0, 0 })
-        .setExtent({ width, height });
+        .setExtent({ static_cast<uint32_t>(width), static_cast<uint32_t>(height) });
 
     commandBuffer.setViewport(0, 1, &viewport);
     commandBuffer.setScissor(0, 1, &scissor);
