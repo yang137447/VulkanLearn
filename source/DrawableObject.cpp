@@ -94,7 +94,7 @@ void DrawableObject::Draw(vk::CommandBuffer &commandBuffer, vk::PipelineLayout &
         .setExtent({ static_cast<uint32_t>(width), static_cast<uint32_t>(height) });
     commandBuffer.setViewport(0, 1, &viewport);
     commandBuffer.setScissor(0, 1, &scissor);
-    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout, 0, descriptorSet, nullptr);
+    //commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout, 0, descriptorSet, nullptr);
     commandBuffer.bindVertexBuffers(0, 1, &vertexBuffer, &vertexBufferInfo.offset);
     commandBuffer.draw(vertices->size(), 1, 0,0);
 }

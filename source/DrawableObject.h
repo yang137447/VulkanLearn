@@ -1,12 +1,10 @@
 #pragma once
 #include <vulkan/vulkan.hpp>
 
-struct Vertex;
-
 class DrawableObject
 {
 public:
-    DrawableObject(std::vector<Vertex>& vertices, vk::Device* device, vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties);
+    DrawableObject(std::vector<struct Vertex>& vertices, vk::Device* device, vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties);
     ~DrawableObject();
 
     void Draw(vk::CommandBuffer& commandBuffer, vk::PipelineLayout& pipelineLayout, vk::Pipeline& pipeline, vk::DescriptorSet& descriptorSet);
@@ -16,7 +14,7 @@ private:
     DrawableObject();
 private:
     vk::Device* device;
-    std::vector<Vertex>* vertices;
+    std::vector<struct Vertex>* vertices;
     vk::Buffer vertexBuffer;
     vk::DeviceMemory vertexBufferMemory;
     vk::DescriptorBufferInfo vertexBufferInfo;
