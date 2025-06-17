@@ -647,7 +647,7 @@ void VulkanManager::DestroyDrawableObject()
 
 void VulkanManager::CreateVkPipline()
 {
-    renderPipline = new RenderPipline(device, renderPass, gpuMemoryProperties);
+    renderPipline = new RenderPipline(device, renderPass, gpuMemoryProperties, *triangleObject);
     std::cout << "Create VkPipline" << std::endl;
 }
 
@@ -718,27 +718,27 @@ void VulkanManager::DrawFrame()
     //FlushTextureToDescriptorSet();
 
     commandBuffer.beginRenderPass(renderPassBeginInfo, vk::SubpassContents::eInline);
-    //triangleObject->Draw(commandBuffer, renderPipline->GetPipelineLayout(), renderPipline->GetGraphicsPipeline(), renderPipline->GetDescriptorSet()[0]);
+    triangleObject->Draw(commandBuffer, renderPipline->GetPipelineLayout(), renderPipline->GetGraphicsPipeline(), renderPipline->GetDescriptorSet()[0]);
 
-    commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, renderPipline->GetGraphicsPipeline());
+    // commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, renderPipline->GetGraphicsPipeline());
 
-    vk::Viewport viewport;
-    viewport
-        .setX(0.0f)
-        .setY(0.0f)
-        .setWidth(static_cast<float>(width))
-        .setHeight(static_cast<float>(height))
-        .setMinDepth(0.0f)
-        .setMaxDepth(1.0f);
-    vk::Rect2D scissor;
-    scissor
-        .setOffset({ 0, 0 })
-        .setExtent({ static_cast<uint32_t>(width), static_cast<uint32_t>(height) });
+    // vk::Viewport viewport;
+    // viewport
+    //     .setX(0.0f)
+    //     .setY(0.0f)
+    //     .setWidth(static_cast<float>(width))
+    //     .setHeight(static_cast<float>(height))
+    //     .setMinDepth(0.0f)
+    //     .setMaxDepth(1.0f);
+    // vk::Rect2D scissor;
+    // scissor
+    //     .setOffset({ 0, 0 })
+    //     .setExtent({ static_cast<uint32_t>(width), static_cast<uint32_t>(height) });
 
-    commandBuffer.setViewport(0, 1, &viewport);
-    commandBuffer.setScissor(0, 1, &scissor);
+    // commandBuffer.setViewport(0, 1, &viewport);
+    // commandBuffer.setScissor(0, 1, &scissor);
 
-    commandBuffer.draw(3, 1, 0, 0);
+    // commandBuffer.draw(3, 1, 0, 0);
 
     commandBuffer.endRenderPass();
 

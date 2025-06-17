@@ -1,15 +1,16 @@
 #include "TriangleData.h"
+#include "VertexDataStruct.h"
 
 void TriangleData::GenVertexData()
 {
-    vertices = { //数据数组
-		0,  75, 0, 1, 0, 0,//每一行前三个是顶点坐标
-		-45, 0, 0, 0, 1, 0,//每一行后三个是颜色RGB值
-		45, 0, 0, 0, 0, 1
-	};
+    vertices = {
+        Vertex(Eigen::Vector3f(0.0f, -0.5f, 0.0f), Eigen::Vector3f(1.0f, 0.0f, 0.0f)), // 左下角红色
+        Vertex(Eigen::Vector3f(0.5f, 0.5f, 0.0f), Eigen::Vector3f(0.0f, 1.0f, 0.0f)),  // 顶部绿色
+        Vertex(Eigen::Vector3f(-0.5f, 0.5f, 0.0f), Eigen::Vector3f(0.0f, 0.0f, 1.0f))   // 右下角蓝色
+    };
 }
 
-std::vector<float>& TriangleData::GetVertexData()
+std::vector<Vertex>& TriangleData::GetVertexData()
 {
     if (vertices.empty())
     {

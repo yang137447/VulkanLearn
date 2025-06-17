@@ -2,12 +2,14 @@
 
 #include <vector>
 
+struct Vertex;
+
 class TriangleData
 {
 public:
     static void GenVertexData();
 
-    static std::vector<float>& GetVertexData();
+    static std::vector<Vertex>& GetVertexData();
 private:
-    inline static std::vector<float> vertices;
+    inline static std::vector<Vertex> vertices;
 };

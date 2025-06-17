@@ -1,14 +1,17 @@
 #include "RenderPipline.h"
 #include "settings.h"
+#include <cstdint>
 #include <fstream>
 #include <iostream>
 #include <vulkan/vulkan_enums.hpp>
+#include "DrawableObject.h"
 
-RenderPipline::RenderPipline(vk::Device &device, vk::RenderPass &renderPass, vk::PhysicalDeviceMemoryProperties &gpuMemoryProperties)
+RenderPipline::RenderPipline(vk::Device &device, vk::RenderPass &renderPass, vk::PhysicalDeviceMemoryProperties &gpuMemoryProperties, const DrawableObject& drawableObject)
 {
     this->device = &device;
     this->renderPass = &renderPass;
     this->gpuMemoryProperties = &gpuMemoryProperties;
+    this->drawableObject = &drawableObject;
 
     CreateUniformBuffer();
     CreatePipelineLayout();
@@ -244,22 +247,10 @@ void RenderPipline::DestroyShader()
 
 void RenderPipline::initVertexAttribute()
 {
-    vertexInputBindingDescription
-        .setBinding(0)
-        .setStride(sizeof(float) * 6)
-        .setInputRate(vk::VertexInputRate::eVertex);
+    vertexInputBindingDescription = drawableObject->GetVertexInputBindingDescription();
 
-    vertexInputAttributeDescriptions.resize(2);
-    vertexInputAttributeDescriptions[0]
-        .setBinding(0)
-        .setLocation(0)
-        .setFormat(vk::Format::eR32G32B32Sfloat)
-        .setOffset(0);
-    vertexInputAttributeDescriptions[1]
-        .setBinding(0)
-        .setLocation(1)
-        .setFormat(vk::Format::eR32G32Sfloat)
-        .setOffset(sizeof(float) * 12);
+    vertexInputAttributeDescriptions.resize(drawableObject->GetVertexInputAttributeDescriptions().size());
+    vertexInputAttributeDescriptions = drawableObject->GetVertexInputAttributeDescriptions();
 }
 
 void RenderPipline::CreateGraphicsPipeline()
@@ -275,10 +266,8 @@ void RenderPipline::CreateGraphicsPipeline()
 
     vk::PipelineVertexInputStateCreateInfo pipelineVertexInputStateCreateInfo;
     pipelineVertexInputStateCreateInfo
-        // .setVertexBindingDescriptions(vertexInputBindingDescription)
-        // .setVertexAttributeDescriptions(vertexInputAttributeDescriptions);
-        .setVertexBindingDescriptions(nullptr)
-        .setVertexAttributeDescriptions(nullptr);
+        .setVertexBindingDescriptions(vertexInputBindingDescription)
+        .setVertexAttributeDescriptions(vertexInputAttributeDescriptions);
 
 
     vk::PipelineInputAssemblyStateCreateInfo pipelineInputAssemblyStateCreateInfo;
@@ -325,7 +314,7 @@ void RenderPipline::CreateGraphicsPipeline()
     vk::Rect2D scissor;
     scissor
         .setOffset({ 0, 0 })
-        .setExtent({ width, height });
+        .setExtent({ static_cast<uint32_t>(width), static_cast<uint32_t>(height) });
     vk::PipelineViewportStateCreateInfo pipelineViewportStateCreateInfo;
     pipelineViewportStateCreateInfo
         .setViewportCount(1)

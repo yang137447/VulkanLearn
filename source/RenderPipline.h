@@ -3,13 +3,16 @@
 #include "vulkan/vulkan.hpp"
 #include <vector>
 
+class DrawableObject;
+
 class RenderPipline
 {
 public:
     
     RenderPipline(vk::Device &device,
                   vk::RenderPass &renderPass,
-                  vk::PhysicalDeviceMemoryProperties &gpuMemoryProperties);
+                  vk::PhysicalDeviceMemoryProperties &gpuMemoryProperties,
+                  const DrawableObject& drawableObject);
     ~RenderPipline();
 
     inline vk::PipelineLayout& GetPipelineLayout() { return pipelineLayout; }
@@ -43,6 +46,7 @@ private:
     vk::Device* device;
     vk::RenderPass* renderPass;
     vk::PhysicalDeviceMemoryProperties* gpuMemoryProperties;
+    const DrawableObject* drawableObject;
 
     vk::DeviceMemory uniformBufferMemory;
     uint32_t uniformBufferSize;
