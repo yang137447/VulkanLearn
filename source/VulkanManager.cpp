@@ -460,12 +460,14 @@ void VulkanManager::CreateVkDepthBuffer()
     // 分配深度图像内存
     vk::MemoryRequirements depthImageMemoryRequirements = device.getImageMemoryRequirements(depthImage);
     vk::MemoryAllocateInfo depthImageMemoryAllocateInfo;
+    vk::PhysicalDeviceMemoryProperties depthImageMemoryProperties = physicalDevices[GPUIndex].getMemoryProperties();
+    vk::MemoryPropertyFlags depthImageMemoryFlags = vk::MemoryPropertyFlagBits::eDeviceLocal;
     depthImageMemoryAllocateInfo
         .setAllocationSize(depthImageMemoryRequirements.size)
-        .setMemoryTypeIndex(FindMemoryType(
-            physicalDevices[GPUIndex].getMemoryProperties(), 
-            depthImageMemoryRequirements.memoryTypeBits, 
-            vk::MemoryPropertyFlagBits::eDeviceLocal));
+        .setMemoryTypeIndex(CommonFunction::FindMemoryType(
+            depthImageMemoryProperties,
+            depthImageMemoryRequirements.memoryTypeBits,
+            depthImageMemoryFlags));
 
     depthImageMemory = device.allocateMemory(depthImageMemoryAllocateInfo);
     assert(depthImageMemory);
@@ -635,7 +637,7 @@ void VulkanManager::DestroyVkFrameBuffers()
 
 void VulkanManager::CreateDrawableObject()
 {
-    triangleObject = new DrawableObject(TriangleData::GetVertexData(), &device, &gpuMemoryProperties);
+    triangleObject = new DrawableObject(TriangleData::GetVertexData(), &device, &gpuMemoryProperties, commandBuffers[0], graphicQueue);
     std::cout << "Create DrawableObject" << std::endl;
 }
 

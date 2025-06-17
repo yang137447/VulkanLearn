@@ -1,55 +1,25 @@
 #include "DrawableObject.h"
 #include "VertexDataStruct.h"
 #include "settings.h"
+#include "CommonFunction.h"
+#include <vulkan/vulkan.hpp>
+#include <vulkan/vulkan_handles.hpp>
 
-DrawableObject::DrawableObject(std::vector<Vertex> &vertices, vk::Device *device, vk::PhysicalDeviceMemoryProperties *physicalDeviceMemoryProperties)
+DrawableObject::DrawableObject(std::vector<Vertex> &vertices, vk::Device *device, vk::PhysicalDeviceMemoryProperties *physicalDeviceMemoryProperties, vk::CommandBuffer& commandBuffer, vk::Queue &GraphicsQueue)
 {
     this->device = device;
     this->vertices = &vertices;
+    this->graphicsQueue = &GraphicsQueue;
+    this->physicalDeviceMemoryProperties = physicalDeviceMemoryProperties;
+    this->commandBuffer = &commandBuffer;
 
     // 创建顶点缓冲区
-    vk::BufferCreateInfo bufferCreateInfo;
-    bufferCreateInfo
-        .setSize(vertices.size() * sizeof(Vertex))
-        .setUsage(vk::BufferUsageFlagBits::eVertexBuffer)
-        .setSharingMode(vk::SharingMode::eExclusive);
-
-    vertexBuffer = device->createBuffer(bufferCreateInfo);
-    assert(vertexBuffer);
-
-    // 获取缓冲区内存要求
-    vk::MemoryRequirements memoryRequirements = device->getBufferMemoryRequirements(vertexBuffer);
-
-    // 分配内存
-    vk::MemoryAllocateInfo allocateInfo;
-    allocateInfo
-        .setAllocationSize(memoryRequirements.size)
-        .setMemoryTypeIndex(0); // 这里需要根据实际情况设置内存类型索引
-    vk::Flags<vk::MemoryPropertyFlagBits> memoryPropertyFlags = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
-    for (uint32_t i = 0; i < physicalDeviceMemoryProperties->memoryTypeCount; i++)
-    {
-        if ((memoryRequirements.memoryTypeBits & (1 << i)) && (physicalDeviceMemoryProperties->memoryTypes[i].propertyFlags & memoryPropertyFlags))
-        {
-            allocateInfo.setMemoryTypeIndex(i);
-            break;
-        }
-    }
-
-    vertexBufferMemory = device->allocateMemory(allocateInfo);
-    assert(vertexBufferMemory);
-
-    // 绑定缓冲区和内存
-    device->bindBufferMemory(vertexBuffer, vertexBufferMemory, 0);
-
-    // 填充数据
-    void *data = device->mapMemory(vertexBufferMemory, 0, bufferCreateInfo.size);
-    memcpy(data, vertices.data(), bufferCreateInfo.size);
-    device->unmapMemory(vertexBufferMemory);
+    CreateVertexBuffer();
 
     vertexBufferInfo
         .setBuffer(vertexBuffer)
         .setOffset(0)
-        .setRange(bufferCreateInfo.size);
+        .setRange(vertices.size() * sizeof(Vertex));
     
     // 设置顶点输入绑定描述
     vertexInputBindingDescription
@@ -101,4 +71,35 @@ void DrawableObject::Draw(vk::CommandBuffer &commandBuffer, vk::PipelineLayout &
 
 DrawableObject::DrawableObject()
 {
+}
+
+void DrawableObject::CreateVertexBuffer()
+{
+    vk::DeviceSize bufferSize = vertices->size() * sizeof(Vertex);
+    // 创建临时缓冲区
+    vk::Buffer stagingBuffer;
+    vk::DeviceMemory stagingBufferMemory;
+    vk::BufferUsageFlags usage = vk::BufferUsageFlagBits::eTransferSrc;
+    vk::MemoryPropertyFlags memoryPropertyFlags = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
+    std::tie(stagingBuffer, stagingBufferMemory) = CommonFunction::CreateBuffer(
+        *device, bufferSize, usage, *physicalDeviceMemoryProperties, memoryPropertyFlags
+        );
+    // 将顶点数据复制到临时缓冲区
+    void *data = device->mapMemory(stagingBufferMemory, 0, bufferSize);
+    memcpy(data, vertices->data(), static_cast<size_t>(bufferSize));
+    device->unmapMemory(stagingBufferMemory);
+
+    // 创建顶点缓冲区
+    vk::BufferUsageFlags vertexBufferUsage = vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst;
+    vk::MemoryPropertyFlags vertexBufferMemoryPropertyFlags = vk::MemoryPropertyFlagBits::eDeviceLocal;
+    std::tie(vertexBuffer, vertexBufferMemory) = CommonFunction::CreateBuffer(
+        *device, bufferSize, vertexBufferUsage, *physicalDeviceMemoryProperties, vertexBufferMemoryPropertyFlags
+    );
+
+    // 将临时缓冲区中的数据复制到顶点缓冲区
+    CommonFunction::CopyBufferToBuffer(*graphicsQueue, *commandBuffer, stagingBuffer, vertexBuffer, bufferSize);
+
+    // 释放临时缓冲区
+    device->destroyBuffer(stagingBuffer);
+    device->freeMemory(stagingBufferMemory);
 }
