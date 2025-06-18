@@ -5,7 +5,7 @@
 class DrawableObject
 {
 public:
-    DrawableObject(std::vector<struct Vertex>& vertices, vk::Device* device, vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties, vk::CommandBuffer& commandBuffer, vk::Queue &GraphicsQueue);
+    DrawableObject(std::vector<struct Vertex>& vertices, std::vector<uint16_t> &indices, vk::Device* device, vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties, vk::CommandBuffer& commandBuffer, vk::Queue &GraphicsQueue);
     ~DrawableObject();
 
     void Draw(vk::CommandBuffer& commandBuffer, vk::PipelineLayout& pipelineLayout, vk::Pipeline& pipeline, vk::DescriptorSet& descriptorSet);
@@ -15,15 +15,23 @@ private:
     DrawableObject();
 
     void CreateVertexBuffer();
+    void DestroyVertexBuffer();
+
+    void CreateIndexBuffer();
+    void DestroyIndexBuffer();
 private:
     vk::Device* device;
     vk::CommandBuffer* commandBuffer;
     vk::Queue* graphicsQueue;
     vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties;
     std::vector<struct Vertex>* vertices;
+    std::vector<uint16_t>* indices;
     vk::Buffer vertexBuffer;
     vk::DeviceMemory vertexBufferMemory;
     vk::DescriptorBufferInfo vertexBufferInfo;
+    vk::Buffer indexBuffer;
+    vk::DeviceMemory indexBufferMemory;
+    vk::DescriptorBufferInfo indexBufferInfo;
 
     vk::VertexInputBindingDescription vertexInputBindingDescription;
     std::vector<vk::VertexInputAttributeDescription> vertexInputAttributeDescriptions;

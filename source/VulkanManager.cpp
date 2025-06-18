@@ -637,7 +637,7 @@ void VulkanManager::DestroyVkFrameBuffers()
 
 void VulkanManager::CreateDrawableObject()
 {
-    triangleObject = new DrawableObject(TriangleData::GetVertexData(), &device, &gpuMemoryProperties, commandBuffers[0], graphicQueue);
+    triangleObject = new DrawableObject(TriangleData::GetVertexData(), TriangleData::GetIndexData(), &device, &gpuMemoryProperties, commandBuffers[0], graphicQueue);
     std::cout << "Create DrawableObject" << std::endl;
 }
 
