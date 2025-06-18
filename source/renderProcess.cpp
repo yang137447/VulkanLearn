@@ -2,6 +2,7 @@
 #include "shaderModule.h"
 #include "swapchain.h"
 #include "settings.h"
+#include <cstdint>
 
 RenderProcess::RenderProcess(const vk::Device &device,
                              const vk::RenderPass &renderPass,
@@ -63,7 +64,7 @@ void RenderProcess::CreateVkGraphicsPipeline()
     vk::Rect2D scissor;
     scissor
         .setOffset({0, 0})
-        .setExtent({width, height});
+        .setExtent({static_cast<uint32_t>(width), static_cast<uint32_t>(height)});
     vk::PipelineViewportStateCreateInfo pipelineViewportStateCreateInfo;
     pipelineViewportStateCreateInfo
         .setViewportCount(1)

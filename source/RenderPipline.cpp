@@ -5,15 +5,16 @@
 #include <iostream>
 #include <vulkan/vulkan_enums.hpp>
 #include "DrawableObject.h"
+#include "CommonFunction.h"
 
-RenderPipline::RenderPipline(vk::Device &device, vk::RenderPass &renderPass, vk::PhysicalDeviceMemoryProperties &gpuMemoryProperties, const DrawableObject& drawableObject)
+RenderPipline::RenderPipline(vk::Device &device, vk::RenderPass &renderPass, vk::PhysicalDeviceMemoryProperties &physicalDeviceMemoryProperties, const DrawableObject& drawableObject)
 {
     this->device = &device;
     this->renderPass = &renderPass;
-    this->gpuMemoryProperties = &gpuMemoryProperties;
+    this->physicalDeviceMemoryProperties = &physicalDeviceMemoryProperties;
     this->drawableObject = &drawableObject;
 
-    CreateUniformBuffer();
+    CreateUniformBuffers();
     CreatePipelineLayout();
     CreateDescriptorSets();
     CreateShader();
@@ -27,64 +28,52 @@ RenderPipline::~RenderPipline()
     DestroyShader();
     DestroyDescriptorSets();
     DestroyPipelineLayout();
-    DestroyUniformBuffer();
+    DestroyUniformBuffers();
 }
 
 RenderPipline::RenderPipline()
 {
 }
 
-void RenderPipline::CreateUniformBuffer()
+void RenderPipline::CreateUniformBuffers()
 {
-    uniformBufferSize = sizeof(float) * 16;
-    vk::BufferCreateInfo bufferCreateInfo;
-    bufferCreateInfo
-        .setSize(uniformBufferSize)
-        .setUsage(vk::BufferUsageFlagBits::eUniformBuffer)
-        .setSharingMode(vk::SharingMode::eExclusive);
-    
-    vk::Result result = device->createBuffer(&bufferCreateInfo, nullptr, &uniformBuffer);
-    assert(result == vk::Result::eSuccess);
-
-    vk::MemoryRequirements memoryRequirements;
-    device->getBufferMemoryRequirements(uniformBuffer, &memoryRequirements);
-
-    vk::MemoryAllocateInfo memoryAllocateInfo;
-    memoryAllocateInfo
-        .setAllocationSize(memoryRequirements.size)
-        .setMemoryTypeIndex(0);
-
-    vk::Flags requiredMask = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
-    for (uint32_t i = 0; i < gpuMemoryProperties->memoryTypeCount; i++)
+    vk::DeviceSize uniformBufferSize = sizeof(UniformBufferObject);
+    uniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+    uniformBufferMemories.resize(MAX_FRAMES_IN_FLIGHT);
+    uniformBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
+    vk::BufferUsageFlags usage = vk::BufferUsageFlagBits::eUniformBuffer;
+    vk::MemoryPropertyFlags memoryPropertyFlags = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
+    for(int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
     {
-        if ((memoryRequirements.memoryTypeBits & (1 << i)) && (gpuMemoryProperties->memoryTypes[i].propertyFlags & requiredMask) == requiredMask)
-        {
-            memoryAllocateInfo.setMemoryTypeIndex(i);
-            break;
-        }
+        std::tie(uniformBuffers[i], uniformBufferMemories[i]) = CommonFunction::CreateBuffer(
+            *device, uniformBufferSize, usage, *physicalDeviceMemoryProperties, memoryPropertyFlags
+        );
+        uniformBuffersMapped[i] = device->mapMemory(uniformBufferMemories[i], 0, uniformBufferSize);
     }
-
-    result = device->allocateMemory(&memoryAllocateInfo, nullptr, &uniformBufferMemory);
-    assert(result == vk::Result::eSuccess);
-
-    device->bindBufferMemory(uniformBuffer, uniformBufferMemory, 0);
-
-    uniformBufferInfo
-        .setBuffer(uniformBuffer)
-        .setOffset(0)
-        .setRange(uniformBufferSize);
+    // 设置uniform缓冲区信息
+    uniformBufferInfos.resize(MAX_FRAMES_IN_FLIGHT);
+    for(int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+    {
+        uniformBufferInfos[i]
+            .setBuffer(uniformBuffers[i])
+            .setOffset(0)
+            .setRange(uniformBufferSize);
+    }
 }
-
-void RenderPipline::DestroyUniformBuffer()
+void RenderPipline::DestroyUniformBuffers()
 {
-    device->destroyBuffer(uniformBuffer, nullptr);
-    device->freeMemory(uniformBufferMemory, nullptr);
+    for(int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+    {
+        device->unmapMemory(uniformBufferMemories[i]);
+        device->destroyBuffer(uniformBuffers[i]);
+        device->freeMemory(uniformBufferMemories[i]);
+    }
 }
 
 void RenderPipline::CreatePipelineLayout()
 {
-    vk::DescriptorSetLayoutBinding descriptorSetLayoutBindings[1];
-    descriptorSetLayoutBindings[0]
+    vk::DescriptorSetLayoutBinding descriptorSetLayoutBindings;
+    descriptorSetLayoutBindings
         .setBinding(0)
         .setDescriptorType(vk::DescriptorType::eUniformBuffer)
         .setDescriptorCount(1)
@@ -93,21 +82,14 @@ void RenderPipline::CreatePipelineLayout()
 
     vk::DescriptorSetLayoutCreateInfo descriptorSetLayoutCreateInfo;
     descriptorSetLayoutCreateInfo
-        .setBindingCount(1)
-        .setPBindings(descriptorSetLayoutBindings);
+        .setBindings(descriptorSetLayoutBindings);
     
-    descriptorSetLayouts.resize(1);
-    vk::Result result = device->createDescriptorSetLayout(&descriptorSetLayoutCreateInfo, nullptr, descriptorSetLayouts.data());
+    vk::Result result = device->createDescriptorSetLayout(&descriptorSetLayoutCreateInfo, nullptr, &descriptorSetLayout);
     assert(result == vk::Result::eSuccess);
 
     vk::PipelineLayoutCreateInfo pipelineLayoutCreateInfo;
     pipelineLayoutCreateInfo
-        // .setSetLayoutCount(static_cast<uint32_t>(descriptorSetLayouts.size()))
-        // .setPSetLayouts(descriptorSetLayouts.data())
-        // .setPushConstantRangeCount(0)
-        // .setPPushConstantRanges(nullptr);
-        .setSetLayouts(nullptr)
-        .setPushConstantRanges(nullptr);
+        .setSetLayouts(descriptorSetLayout);
     
     result = device->createPipelineLayout(&pipelineLayoutCreateInfo, nullptr, &pipelineLayout);
     assert(result == vk::Result::eSuccess);
@@ -116,49 +98,40 @@ void RenderPipline::CreatePipelineLayout()
 void RenderPipline::DestroyPipelineLayout()
 {
     device->destroyPipelineLayout(pipelineLayout, nullptr);
-    for (auto descriptorSetLayout : descriptorSetLayouts)
-    {
-        device->destroyDescriptorSetLayout(descriptorSetLayout, nullptr);
-    }
-    descriptorSetLayouts.clear();
+    device->destroyDescriptorSetLayout(descriptorSetLayout, nullptr);
 }
 
 void RenderPipline::CreateDescriptorSets()
 {
-    vk::DescriptorPoolSize descriptorPoolSize[1];
-    descriptorPoolSize[0]
+    vk::DescriptorPoolSize descriptorPoolSize;
+    descriptorPoolSize
         .setType(vk::DescriptorType::eUniformBuffer)
-        .setDescriptorCount(1);
+        .setDescriptorCount(MAX_FRAMES_IN_FLIGHT);
 
     vk::DescriptorPoolCreateInfo descriptorPoolCreateInfo;
     descriptorPoolCreateInfo
         .setFlags(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet)
-        .setMaxSets(1)
-        .setPoolSizeCount(1)
-        .setPPoolSizes(descriptorPoolSize);
+        .setMaxSets(MAX_FRAMES_IN_FLIGHT)
+        .setPoolSizes(descriptorPoolSize);
 
     vk::Result result = device->createDescriptorPool(&descriptorPoolCreateInfo, nullptr, &descriptorPool);
     assert(result == vk::Result::eSuccess);
 
-    std::vector<vk::DescriptorSetLayout> layouts;
-    layouts.push_back(descriptorSetLayouts[0]);
-
-    vk::DescriptorSetAllocateInfo descriptorSetAllocateInfo[1];
-    descriptorSetAllocateInfo[0]
+    vk::DescriptorSetAllocateInfo descriptorSetAllocateInfo;
+    descriptorSetAllocateInfo
         .setDescriptorPool(descriptorPool)
-        .setDescriptorSetCount(1)
-        .setPSetLayouts(layouts.data());
+        .setDescriptorSetCount(MAX_FRAMES_IN_FLIGHT)
+        .setSetLayouts(descriptorSetLayout);
     
-    descriptorSets.resize(1);
-    result = device->allocateDescriptorSets(descriptorSetAllocateInfo, descriptorSets.data());
+    descriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
+    result = device->allocateDescriptorSets(&descriptorSetAllocateInfo, descriptorSets.data());
     assert(result == vk::Result::eSuccess);
 
     writeDescriptorSets.resize(1);
     writeDescriptorSets[0]
-        .setDstSet(descriptorSets[0])
         .setDescriptorType(vk::DescriptorType::eUniformBuffer)
         .setDescriptorCount(1)
-        .setPBufferInfo(&uniformBufferInfo)
+        .setBufferInfo(uniformBufferInfos)
         .setDstBinding(0)
         .setDstArrayElement(0);
 }

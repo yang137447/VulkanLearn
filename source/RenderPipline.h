@@ -17,16 +17,17 @@ public:
 
     inline vk::PipelineLayout& GetPipelineLayout() { return pipelineLayout; }
     inline vk::Pipeline& GetGraphicsPipeline() { return graphicsPipeline; }
-    inline std::vector<vk::DescriptorSet>& GetDescriptorSet() { return descriptorSets; }
-    inline vk::DeviceMemory& GetuniformBufferMemory() { return uniformBufferMemory; }
-    inline uint32_t GetuniformBufferSize() { return uniformBufferSize; }
-    inline vk::DescriptorBufferInfo& GetuniformBufferInfo() { return uniformBufferInfo; }
+    inline std::vector<vk::DescriptorSet>& GetDescriptorSets() { return descriptorSets; }
+    inline std::vector<vk::DeviceMemory>& GetUniformBufferMemories() { return uniformBufferMemories; }
+    inline uint32_t GetUniformBufferSize() { return uniformBufferSize; }
+    inline std::vector<vk::DescriptorBufferInfo>& GetuniformBufferInfos() { return uniformBufferInfos; }
+    inline void* GetUniformBuffersMapped(uint32_t currentFrame) { return uniformBuffersMapped[currentFrame]; }
     inline std::vector<vk::WriteDescriptorSet>& GetWriteDescriptorSets() { return writeDescriptorSets; }
 private:
     RenderPipline();
 
-    void CreateUniformBuffer();
-    void DestroyUniformBuffer();
+    void CreateUniformBuffers();
+    void DestroyUniformBuffers();
 
     void CreatePipelineLayout();
     void DestroyPipelineLayout();
@@ -45,15 +46,16 @@ private:
     
     vk::Device* device;
     vk::RenderPass* renderPass;
-    vk::PhysicalDeviceMemoryProperties* gpuMemoryProperties;
+    vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties;
     const DrawableObject* drawableObject;
 
-    vk::DeviceMemory uniformBufferMemory;
     uint32_t uniformBufferSize;
-    vk::Buffer uniformBuffer;
-    vk::DescriptorBufferInfo uniformBufferInfo;
+    std::vector<vk::Buffer> uniformBuffers;
+    std::vector<vk::DeviceMemory> uniformBufferMemories;
+    std::vector<void*> uniformBuffersMapped;
+    std::vector<vk::DescriptorBufferInfo> uniformBufferInfos;
 
-    std::vector<vk::DescriptorSetLayout> descriptorSetLayouts;
+    vk::DescriptorSetLayout descriptorSetLayout;
     vk::PipelineLayout pipelineLayout;
     std::vector<vk::WriteDescriptorSet> writeDescriptorSets;
 

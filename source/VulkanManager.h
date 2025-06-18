@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <vulkan/vulkan.hpp>
 #include <SDL3/SDL.h>
 #include <vector>
@@ -64,9 +65,9 @@ private:
 
     void InitializeMVP();
 
-    void FlushUniformBuffer();
+    void FlushUniformBuffer(uint32_t currentFrame);
 
-    void FlushTextureToDescriptorSet();
+    void FlushTextureToDescriptorSet(uint32_t currentFrame);
 
 private:
     vk::Instance instance;
@@ -142,6 +143,9 @@ private:
     void SetCamera(Eigen::Vector3f position, Eigen::Vector3f lookAt, Eigen::Vector3f up);
     void SetProjection(float fov, float aspect, float near, float far);
     
+    Eigen::Matrix4f GetModelMatrix();
+    Eigen::Matrix4f GetViewMatrix();
+    Eigen::Matrix4f GetProjectionMatrix();
     void GetMVPMatrix();
     void GetFinalMatrix();
 

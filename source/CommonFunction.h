@@ -2,6 +2,14 @@
 
 #include "vulkan/vulkan.hpp"
 #include <vulkan/vulkan_handles.hpp>
+#include <Eigen/Dense>
+
+struct UniformBufferObject
+{
+    Eigen::Matrix4f model;
+    Eigen::Matrix4f view;
+    Eigen::Matrix4f projection;
+};
 
 namespace CommonFunction
 {

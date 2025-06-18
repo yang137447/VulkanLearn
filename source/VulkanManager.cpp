@@ -2,6 +2,7 @@
 #include "SDL3/SDL_vulkan.h"
 #include <cstdint>
 #include <iostream>
+#include <chrono>
 #include "settings.h"
 #include "DrawableObject.h"
 #include "TriangleData.h"
@@ -60,8 +61,8 @@ void VulkanManager::ReCreateSwapChain(int newWidth, int newHeight)
     device.waitIdle(); //等待设备空闲
 
     //todo: setting.h 需要转化为json配置文件
-    // width = newWidth;
-    // height = newHeight;
+    width = newWidth;
+    height = newHeight;
 
     DestroyVkFrameBuffers();
     DestroyVkSwapChain();
@@ -716,11 +717,11 @@ void VulkanManager::DrawFrame()
 
     renderPassBeginInfo.setFramebuffer(framebuffers[swapchainImageIndex]);
 
-    //FlushUniformBuffer();
-    //FlushTextureToDescriptorSet();
+    FlushUniformBuffer(currentFrame);
+    FlushTextureToDescriptorSet(currentFrame);
 
     commandBuffer.beginRenderPass(renderPassBeginInfo, vk::SubpassContents::eInline);
-    triangleObject->Draw(commandBuffer, renderPipline->GetPipelineLayout(), renderPipline->GetGraphicsPipeline(), renderPipline->GetDescriptorSet()[0]);
+    triangleObject->Draw(commandBuffer, renderPipline->GetPipelineLayout(), renderPipline->GetGraphicsPipeline(), renderPipline->GetDescriptorSets()[currentFrame]);
 
     // commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, renderPipline->GetGraphicsPipeline());
 
@@ -768,8 +769,12 @@ void VulkanManager::DrawFrame()
     currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 }
 
-void VulkanManager::FlushUniformBuffer()
+void VulkanManager::FlushUniformBuffer(uint32_t currentFrame)
 {
+    static auto startTime = std::chrono::high_resolution_clock::now();
+    auto currentTime = std::chrono::high_resolution_clock::now();
+    float deltaTime = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
+    startTime = currentTime;
     // 定义一个静态的浮点数变量xAngle，初始值为0.0f
     static float xAngle = 0.0f;
 
@@ -786,31 +791,32 @@ void VulkanManager::FlushUniformBuffer()
 
     SetRotation(xAngle, 0.0f, 0.0f);
 
-    GetMVPMatrix();
+    //GetMVPMatrix();
 
-    static float vertexUniformData[16];
-    std::memcpy(vertexUniformData, currentMatrix.transpose().data(), sizeof(float) * 16);
+    static UniformBufferObject ubo;
+    ubo.model = GetModelMatrix();
+    ubo.view = GetViewMatrix();
+    ubo.projection = GetProjectionMatrix();
+    std::memcpy(renderPipline->GetUniformBuffersMapped(currentFrame), &ubo, sizeof(ubo));
 
-    currentMatrix = matrixStack.top();
-    matrixStack.pop();
-
-    void* data = device.mapMemory(renderPipline->GetuniformBufferMemory(), 0, renderPipline->GetuniformBufferSize());
-    assert(data != nullptr);
-    std::memcpy(data, vertexUniformData, renderPipline->GetuniformBufferSize());
-    device.unmapMemory(renderPipline->GetuniformBufferMemory());
+    //currentMatrix = matrixStack.top();
+    //matrixStack.pop();
 }
 
-void VulkanManager::FlushTextureToDescriptorSet()
+void VulkanManager::FlushTextureToDescriptorSet(uint32_t currentFrame)
 {
-    renderPipline->GetWriteDescriptorSets()[0]
-    .setDstSet(renderPipline->GetDescriptorSet()[0])
-    .setDstBinding(0)
-    .setDstArrayElement(0)
-    .setDescriptorType(vk::DescriptorType::eUniformBuffer)
-    .setDescriptorCount(1)
-    .setPBufferInfo(&renderPipline->GetuniformBufferInfo());
+    auto& WriteDescriptorSet = renderPipline->GetWriteDescriptorSets()[0];
+    WriteDescriptorSet
+        .setDstSet(renderPipline->GetDescriptorSets()[currentFrame])
+        .setDstBinding(0)
+        .setDstArrayElement(0)
+        .setDescriptorType(vk::DescriptorType::eUniformBuffer)
+        .setDescriptorCount(1)
+        .setBufferInfo(renderPipline->GetuniformBufferInfos()[currentFrame])
+        .setImageInfo(nullptr)
+        .setTexelBufferView(nullptr);
 
-    device.updateDescriptorSets(renderPipline->GetWriteDescriptorSets(), nullptr);
+    device.updateDescriptorSets(WriteDescriptorSet, nullptr);
 }
 
 void VulkanManager::InitMatrix()
@@ -867,7 +873,19 @@ void VulkanManager::SetProjection(float fov, float aspect, float near, float far
         0, 0, (far + near) / (near - far), (2 * far * near) / (near - far),
         0, 0, -1, 0;
 }
-
+Eigen::Matrix4f VulkanManager::GetModelMatrix()
+{
+    modelTransform.matrix();
+    return modelMatrix;
+}
+Eigen::Matrix4f VulkanManager::GetViewMatrix()
+{
+    return viewMatrix;
+}
+Eigen::Matrix4f VulkanManager::GetProjectionMatrix()
+{
+    return vulkanClipMatrix * projectionMatrix;
+}
 void VulkanManager::GetMVPMatrix()
 {
     currentMatrix = vulkanClipMatrix * projectionMatrix * viewMatrix * modelMatrix;

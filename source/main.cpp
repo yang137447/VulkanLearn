@@ -20,7 +20,7 @@ int main(int argc, char **argv)
     SDL_Window *window = SDL_CreateWindow(
         "VulkanRenderer",
         width, height,
-        SDL_WINDOW_VULKAN | SDL_WINDOW_HIDDEN );
+        SDL_WINDOW_VULKAN | SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE);
 
     if (!window)
     {
@@ -55,9 +55,15 @@ int main(int argc, char **argv)
     {
         while (SDL_PollEvent(&event))
         {
-            if (event.type == SDL_EVENT_QUIT)
-            {
-                shouldClose = true;
+            switch (event.type) {
+                case SDL_EVENT_WINDOW_RESIZED:
+                    std::cout << "Window resized to " << event.window.data1 << "x" << event.window.data2 << std::endl;
+                    vulkanManager->ReCreateSwapChain(event.window.data1, event.window.data2);
+                    break;
+                case SDL_EVENT_QUIT:
+                    std::cout << "Quit event received" << std::endl;
+                    shouldClose = true;
+                    break;
             }
         }
         vulkanManager->DrawFrame();

@@ -41,12 +41,10 @@ DrawableObject::DrawableObject(std::vector<Vertex> &vertices, std::vector<uint16
 
 DrawableObject::~DrawableObject()
 {
-    // 销毁顶点缓冲区
-    DestroyVertexBuffer();
     // 销毁索引缓冲区
     DestroyIndexBuffer();
-    
-    
+    // 销毁顶点缓冲区
+    DestroyVertexBuffer();
 }
 
 void DrawableObject::Draw(vk::CommandBuffer &commandBuffer, vk::PipelineLayout &pipelineLayout, vk::Pipeline &pipeline, vk::DescriptorSet &descriptorSet)
@@ -66,7 +64,7 @@ void DrawableObject::Draw(vk::CommandBuffer &commandBuffer, vk::PipelineLayout &
         .setExtent({ static_cast<uint32_t>(width), static_cast<uint32_t>(height) });
     commandBuffer.setViewport(0, 1, &viewport);
     commandBuffer.setScissor(0, 1, &scissor);
-    //commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout, 0, descriptorSet, nullptr);
+    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout, 0, descriptorSet, nullptr);
     commandBuffer.bindVertexBuffers(0, 1, &vertexBuffer, &vertexBufferInfo.offset);
     commandBuffer.bindIndexBuffer(indexBuffer, 0, vk::IndexType::eUint16);
     //commandBuffer.draw(vertices->size(), 1, 0,0);
