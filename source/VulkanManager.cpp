@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <iostream>
 #include <chrono>
+#include <vulkan/vulkan_structs.hpp>
 #include "settings.h"
 #include "DrawableObject.h"
 #include "TriangleData.h"
@@ -722,27 +723,6 @@ void VulkanManager::DrawFrame()
 
     commandBuffer.beginRenderPass(renderPassBeginInfo, vk::SubpassContents::eInline);
     triangleObject->Draw(commandBuffer, renderPipline->GetPipelineLayout(), renderPipline->GetGraphicsPipeline(), renderPipline->GetDescriptorSets()[currentFrame]);
-
-    // commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, renderPipline->GetGraphicsPipeline());
-
-    // vk::Viewport viewport;
-    // viewport
-    //     .setX(0.0f)
-    //     .setY(0.0f)
-    //     .setWidth(static_cast<float>(width))
-    //     .setHeight(static_cast<float>(height))
-    //     .setMinDepth(0.0f)
-    //     .setMaxDepth(1.0f);
-    // vk::Rect2D scissor;
-    // scissor
-    //     .setOffset({ 0, 0 })
-    //     .setExtent({ static_cast<uint32_t>(width), static_cast<uint32_t>(height) });
-
-    // commandBuffer.setViewport(0, 1, &viewport);
-    // commandBuffer.setScissor(0, 1, &scissor);
-
-    // commandBuffer.draw(3, 1, 0, 0);
-
     commandBuffer.endRenderPass();
 
     commandBuffer.end();
@@ -799,22 +779,21 @@ void VulkanManager::FlushUniformBuffer(uint32_t currentFrame)
     ubo.projection = GetProjectionMatrix();
     std::memcpy(renderPipline->GetUniformBuffersMapped(currentFrame), &ubo, sizeof(ubo));
 
-    //currentMatrix = matrixStack.top();
-    //matrixStack.pop();
+    currentMatrix = matrixStack.top();
+    matrixStack.pop();
 }
 
 void VulkanManager::FlushTextureToDescriptorSet(uint32_t currentFrame)
 {
-    auto& WriteDescriptorSet = renderPipline->GetWriteDescriptorSets()[0];
+    auto& DstSet = renderPipline->GetDescriptorSets()[currentFrame];
+    auto& BufferInfo = renderPipline->GetuniformBufferInfos()[currentFrame];
+    vk::WriteDescriptorSet& WriteDescriptorSet = renderPipline->GetWriteDescriptorSet();
     WriteDescriptorSet
-        .setDstSet(renderPipline->GetDescriptorSets()[currentFrame])
+        .setDstSet(DstSet)
         .setDstBinding(0)
         .setDstArrayElement(0)
         .setDescriptorType(vk::DescriptorType::eUniformBuffer)
-        .setDescriptorCount(1)
-        .setBufferInfo(renderPipline->GetuniformBufferInfos()[currentFrame])
-        .setImageInfo(nullptr)
-        .setTexelBufferView(nullptr);
+        .setBufferInfo(BufferInfo);
 
     device.updateDescriptorSets(WriteDescriptorSet, nullptr);
 }
@@ -828,9 +807,9 @@ void VulkanManager::InitMatrix()
     modelTransform.scale(Eigen::Vector3f(1.0f, 1.0f, 1.0f));
     modelMatrix = modelTransform.matrix();
 
-    SetCamera(Eigen::Vector3f(0.0f, 0.0f, 2000.0f), Eigen::Vector3f(0.0f, 0.0f, 0.0f), Eigen::Vector3f(0.0f, 1.0f, 0.0f));
+    SetCamera(Eigen::Vector3f(0.0f, -3.0f, 0.f), Eigen::Vector3f(0.0f, 0.0f, 0.0f), Eigen::Vector3f(0.0f, 0.0f, 1.0f));
 
-    SetProjection(90.0f, 1.0f, 1.5f, 1000.0f);
+    SetProjection(90.0f, 1.0f, 0.1f, 1000.0f);
 
     //Vulkan设备空间XYZ三个轴范围分别是 -1.0～+1.0、+1.0～-1.0、0.0～+1.0
     vulkanClipMatrix = Eigen::Matrix4f::Identity();
@@ -840,7 +819,7 @@ void VulkanManager::InitMatrix()
     vulkanClipMatrix(3, 2) = 0.5f;
     vulkanClipMatrix(3, 3) = 1.0f;
 
-    currentMatrix = vulkanClipMatrix * projectionMatrix * viewMatrix * modelMatrix;
+    currentMatrix = projectionMatrix * viewMatrix * modelMatrix;
 }
 
 void VulkanManager::SetTranslation(float x, float y, float z)
@@ -858,9 +837,19 @@ void VulkanManager::SetScale(float x, float y, float z)
     modelTransform.scale(Eigen::Vector3f(x, y, z));
 }
 
-void VulkanManager::SetCamera(Eigen::Vector3f position, Eigen::Vector3f lookAt, Eigen::Vector3f up)
+void VulkanManager::SetCamera(Eigen::Vector3f caneraPosition, Eigen::Vector3f lookAtPosition, Eigen::Vector3f up)
 {
-    viewMatrix = Eigen::Affine3f(Eigen::Translation3f(position) * Eigen::Affine3f(Eigen::Quaternionf::FromTwoVectors(lookAt, up))).matrix();
+    //1. 计算相机的前向、右向和上向向量
+    Eigen::Vector3f forward = (lookAtPosition - caneraPosition).normalized();
+    Eigen::Vector3f right = forward.cross(up).normalized();
+    Eigen::Vector3f upVector = right.cross(forward);
+
+    //2. 填充矩阵
+    viewMatrix <<
+        right.x(), upVector.x(), -forward.x(), 0.0f,
+        right.y(), upVector.y(), -forward.y(), 0.0f,
+        right.z(), upVector.z(), -forward.z(), 0.0f,
+        -right.dot(caneraPosition), -upVector.dot(caneraPosition), forward.dot(caneraPosition), 1.0f;
 }
 
 void VulkanManager::SetProjection(float fov, float aspect, float near, float far)

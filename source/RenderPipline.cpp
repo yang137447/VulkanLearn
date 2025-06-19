@@ -110,30 +110,21 @@ void RenderPipline::CreateDescriptorSets()
 
     vk::DescriptorPoolCreateInfo descriptorPoolCreateInfo;
     descriptorPoolCreateInfo
-        .setFlags(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet)
         .setMaxSets(MAX_FRAMES_IN_FLIGHT)
         .setPoolSizes(descriptorPoolSize);
 
     vk::Result result = device->createDescriptorPool(&descriptorPoolCreateInfo, nullptr, &descriptorPool);
     assert(result == vk::Result::eSuccess);
 
+    std::vector<vk::DescriptorSetLayout> setLayouts(MAX_FRAMES_IN_FLIGHT, descriptorSetLayout);
     vk::DescriptorSetAllocateInfo descriptorSetAllocateInfo;
     descriptorSetAllocateInfo
         .setDescriptorPool(descriptorPool)
-        .setDescriptorSetCount(MAX_FRAMES_IN_FLIGHT)
-        .setSetLayouts(descriptorSetLayout);
+        .setSetLayouts(setLayouts);
     
     descriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
     result = device->allocateDescriptorSets(&descriptorSetAllocateInfo, descriptorSets.data());
     assert(result == vk::Result::eSuccess);
-
-    writeDescriptorSets.resize(1);
-    writeDescriptorSets[0]
-        .setDescriptorType(vk::DescriptorType::eUniformBuffer)
-        .setDescriptorCount(1)
-        .setBufferInfo(uniformBufferInfos)
-        .setDstBinding(0)
-        .setDstArrayElement(0);
 }
 
 void RenderPipline::DestroyDescriptorSets()
