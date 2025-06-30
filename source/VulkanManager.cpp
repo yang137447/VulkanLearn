@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <iostream>
 #include <chrono>
+#include <vulkan/vulkan_structs.hpp>
 #include "settings.h"
 #include "DrawableObject.h"
 #include "TriangleData.h"
@@ -722,27 +723,6 @@ void VulkanManager::DrawFrame()
 
     commandBuffer.beginRenderPass(renderPassBeginInfo, vk::SubpassContents::eInline);
     triangleObject->Draw(commandBuffer, renderPipline->GetPipelineLayout(), renderPipline->GetGraphicsPipeline(), renderPipline->GetDescriptorSets()[currentFrame]);
-
-    // commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, renderPipline->GetGraphicsPipeline());
-
-    // vk::Viewport viewport;
-    // viewport
-    //     .setX(0.0f)
-    //     .setY(0.0f)
-    //     .setWidth(static_cast<float>(width))
-    //     .setHeight(static_cast<float>(height))
-    //     .setMinDepth(0.0f)
-    //     .setMaxDepth(1.0f);
-    // vk::Rect2D scissor;
-    // scissor
-    //     .setOffset({ 0, 0 })
-    //     .setExtent({ static_cast<uint32_t>(width), static_cast<uint32_t>(height) });
-
-    // commandBuffer.setViewport(0, 1, &viewport);
-    // commandBuffer.setScissor(0, 1, &scissor);
-
-    // commandBuffer.draw(3, 1, 0, 0);
-
     commandBuffer.endRenderPass();
 
     commandBuffer.end();
@@ -799,19 +779,20 @@ void VulkanManager::FlushUniformBuffer(uint32_t currentFrame)
     ubo.projection = GetProjectionMatrix();
     std::memcpy(renderPipline->GetUniformBuffersMapped(currentFrame), &ubo, sizeof(ubo));
 
-    //currentMatrix = matrixStack.top();
-    //matrixStack.pop();
+    currentMatrix = matrixStack.top();
+    matrixStack.pop();
 }
 
 void VulkanManager::FlushTextureToDescriptorSet(uint32_t currentFrame)
 {
-    auto& WriteDescriptorSet = renderPipline->GetWriteDescriptorSets();
-    WriteDescriptorSet[0]
-        .setDstSet(renderPipline->GetDescriptorSets()[currentFrame])
+    auto& DstSet = renderPipline->GetDescriptorSets()[currentFrame];
+    auto& BufferInfo = renderPipline->GetuniformBufferInfos()[currentFrame];
+    vk::WriteDescriptorSet& WriteDescriptorSet = renderPipline->GetWriteDescriptorSet();
+    WriteDescriptorSet
+        .setDstSet(DstSet)
         .setDstBinding(0)
         .setDescriptorType(vk::DescriptorType::eUniformBuffer)
-        .setDescriptorCount(1)
-        .setBufferInfo(renderPipline->GetuniformBufferInfos()[currentFrame]);
+        .setBufferInfo(BufferInfo);
 
     device.updateDescriptorSets(WriteDescriptorSet, nullptr);
 }
@@ -854,7 +835,7 @@ void VulkanManager::SetScale(float x, float y, float z)
     modelTransform.scale(Eigen::Vector3f(x, y, z));
 }
 
-void VulkanManager::SetCamera(Eigen::Vector3f position, Eigen::Vector3f lookAt, Eigen::Vector3f up)
+void VulkanManager::SetCamera(Eigen::Vector3f caneraPosition, Eigen::Vector3f lookAtPosition, Eigen::Vector3f up)
 {
     const Eigen::Vector3f& f = lookAt;
     const Eigen::Vector3f& u = up;
