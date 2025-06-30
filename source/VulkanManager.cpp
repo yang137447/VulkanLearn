@@ -805,16 +805,13 @@ void VulkanManager::FlushUniformBuffer(uint32_t currentFrame)
 
 void VulkanManager::FlushTextureToDescriptorSet(uint32_t currentFrame)
 {
-    auto& WriteDescriptorSet = renderPipline->GetWriteDescriptorSets()[0];
-    WriteDescriptorSet
+    auto& WriteDescriptorSet = renderPipline->GetWriteDescriptorSets();
+    WriteDescriptorSet[0]
         .setDstSet(renderPipline->GetDescriptorSets()[currentFrame])
         .setDstBinding(0)
-        .setDstArrayElement(0)
         .setDescriptorType(vk::DescriptorType::eUniformBuffer)
         .setDescriptorCount(1)
-        .setBufferInfo(renderPipline->GetuniformBufferInfos()[currentFrame])
-        .setImageInfo(nullptr)
-        .setTexelBufferView(nullptr);
+        .setBufferInfo(renderPipline->GetuniformBufferInfos()[currentFrame]);
 
     device.updateDescriptorSets(WriteDescriptorSet, nullptr);
 }
@@ -828,19 +825,18 @@ void VulkanManager::InitMatrix()
     modelTransform.scale(Eigen::Vector3f(1.0f, 1.0f, 1.0f));
     modelMatrix = modelTransform.matrix();
 
-    SetCamera(Eigen::Vector3f(0.0f, 0.0f, 2000.0f), Eigen::Vector3f(0.0f, 0.0f, 0.0f), Eigen::Vector3f(0.0f, 1.0f, 0.0f));
+    SetCamera(Eigen::Vector3f(0.0f, -10.0f, 0.0f), Eigen::Vector3f(0.0f, 0.0f, 0.0f), Eigen::Vector3f(0.0f, 0.0f, 1.0f));
 
-    SetProjection(90.0f, 1.0f, 1.5f, 1000.0f);
+    SetProjection(90.0f, 1.0f, 0.1f, 1000.0f);
 
     //Vulkan设备空间XYZ三个轴范围分别是 -1.0～+1.0、+1.0～-1.0、0.0～+1.0
-    vulkanClipMatrix = Eigen::Matrix4f::Identity();
-    vulkanClipMatrix(0, 0) = 1.0f;
-    vulkanClipMatrix(1, 1) = -1.0f;
-    vulkanClipMatrix(2, 2) = 0.5f;
-    vulkanClipMatrix(3, 2) = 0.5f;
-    vulkanClipMatrix(3, 3) = 1.0f;
+    ndcMatrix << 
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, -1.0f, 0.0f,
+        0.0f, 0.5f, 0.0f, 0.5f,
+        0.0f, 0.0f, 0.0f, 1.0f;
 
-    currentMatrix = vulkanClipMatrix * projectionMatrix * viewMatrix * modelMatrix;
+    currentMatrix = ndcMatrix * projectionMatrix * viewMatrix * modelMatrix;
 }
 
 void VulkanManager::SetTranslation(float x, float y, float z)
@@ -860,39 +856,46 @@ void VulkanManager::SetScale(float x, float y, float z)
 
 void VulkanManager::SetCamera(Eigen::Vector3f position, Eigen::Vector3f lookAt, Eigen::Vector3f up)
 {
-    viewMatrix = Eigen::Affine3f(Eigen::Translation3f(position) * Eigen::Affine3f(Eigen::Quaternionf::FromTwoVectors(lookAt, up))).matrix();
+    const Eigen::Vector3f& f = lookAt;
+    const Eigen::Vector3f& u = up;
+    const Eigen::Vector3f& r = f.cross(u);
+    static Eigen::Matrix4f matrix01;
+    matrix01 <<
+        r.x(), r.y(), r.z(), 0.0f,
+        f.x(), f.y(), f.z(), 0.0f,
+        u.x(), u.y(), u.z(), 0.0f,
+        0.0f, 0.0f, 0.0f, 1.0f;
+    static Eigen::Matrix4f matrix02;
+    matrix02 <<
+        1.0f, 0.0f, 0.0f, -position.x(),
+        0.0f, 1.0f, 0.0f, -position.y(),
+        0.0f, 0.0f, 1.0f, -position.z(),
+        0.0f, 0.0f, 0.0f, 1.0f;
+
+    viewMatrix = matrix01 * matrix02;
 }
 
 void VulkanManager::SetProjection(float fov, float aspect, float near, float far)
 {
-    float fovy = fov * static_cast<float>(Pi) / 180.0f;
-    float f = 1.0f / std::tan(fovy / 2.0f);
-    projectionMatrix << 
-        f / aspect, 0, 0, 0,
-        0, f, 0, 0,
-        0, 0, (far + near) / (near - far), (2 * far * near) / (near - far),
-        0, 0, -1, 0;
+    float k = far * std::tan(fov / 2.0f);
+    projectionMatrix <<
+        1.0f / k, 0.0f, 0.0f, 0.0f,
+        0.0f, 2/(far - near), 0.0f, (far + near) / (near - far),
+        0.0f, 0.0f, aspect/k, 0.0f,
+        1.0f/k, 0.0f, aspect/k, 1.0f;
 }
-Eigen::Matrix4f VulkanManager::GetModelMatrix()
+Eigen::Matrix4f& VulkanManager::GetModelMatrix()
 {
     modelTransform.matrix();
     return modelMatrix;
 }
-Eigen::Matrix4f VulkanManager::GetViewMatrix()
+Eigen::Matrix4f& VulkanManager::GetViewMatrix()
 {
     return viewMatrix;
 }
-Eigen::Matrix4f VulkanManager::GetProjectionMatrix()
+Eigen::Matrix4f& VulkanManager::GetProjectionMatrix()
 {
-    return vulkanClipMatrix * projectionMatrix;
-}
-void VulkanManager::GetMVPMatrix()
-{
-    currentMatrix = vulkanClipMatrix * projectionMatrix * viewMatrix * modelMatrix;
-}
-
-void VulkanManager::GetFinalMatrix()
-{
-    modelMatrix = modelTransform.matrix();
-    currentMatrix = vulkanClipMatrix * projectionMatrix * viewMatrix * modelMatrix;
+    static Eigen::Matrix4f matrix;
+    matrix = ndcMatrix * projectionMatrix;
+    return matrix;
 }

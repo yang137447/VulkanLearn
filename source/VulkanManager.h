@@ -143,19 +143,17 @@ private:
     void SetCamera(Eigen::Vector3f position, Eigen::Vector3f lookAt, Eigen::Vector3f up);
     void SetProjection(float fov, float aspect, float near, float far);
     
-    Eigen::Matrix4f GetModelMatrix();
-    Eigen::Matrix4f GetViewMatrix();
-    Eigen::Matrix4f GetProjectionMatrix();
-    void GetMVPMatrix();
-    void GetFinalMatrix();
+    Eigen::Matrix4f& GetModelMatrix();
+    Eigen::Matrix4f& GetViewMatrix();
+    Eigen::Matrix4f& GetProjectionMatrix();
 
     Eigen::Transform<float, 3, Eigen::Affine> modelTransform;
 
     Eigen::Matrix4f modelMatrix;
     Eigen::Matrix4f viewMatrix;
     Eigen::Matrix4f projectionMatrix;
+    Eigen::Matrix4f ndcMatrix;
     Eigen::Matrix4f mvpMatrix;
-    Eigen::Matrix4f vulkanClipMatrix;
     Eigen::Matrix4f currentMatrix;
 
     std::stack<Eigen::Matrix4f> matrixStack;
