@@ -111,6 +111,7 @@ void RenderPipline::CreateDescriptorSets()
     vk::DescriptorPoolCreateInfo descriptorPoolCreateInfo;
     descriptorPoolCreateInfo
         .setMaxSets(MAX_FRAMES_IN_FLIGHT)
+        .setFlags(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet)
         .setPoolSizes(descriptorPoolSize);
 
     vk::Result result = device->createDescriptorPool(&descriptorPoolCreateInfo, nullptr, &descriptorPool);

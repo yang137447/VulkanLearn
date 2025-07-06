@@ -140,7 +140,7 @@ private:
     void SetTranslation(float x, float y, float z);
     void SetRotation(float x, float y, float z);
     void SetScale(float x, float y, float z);
-    void SetCamera(Eigen::Vector3f position, Eigen::Vector3f lookAt, Eigen::Vector3f up);
+    void SetCamera(Eigen::Vector3f cameraPosition, Eigen::Vector3f lookAtPosition, Eigen::Vector3f up);
     void SetProjection(float fov, float aspect, float near, float far);
     
     Eigen::Matrix4f& GetModelMatrix();

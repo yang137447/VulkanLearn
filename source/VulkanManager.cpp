@@ -774,9 +774,9 @@ void VulkanManager::FlushUniformBuffer(uint32_t currentFrame)
     //GetMVPMatrix();
 
     static UniformBufferObject ubo;
-    ubo.model = GetModelMatrix();
-    ubo.view = GetViewMatrix();
-    ubo.projection = GetProjectionMatrix();
+    std::memcpy(ubo.model, GetModelMatrix().data(), sizeof(ubo.model));
+    std::memcpy(ubo.view, GetViewMatrix().data(), sizeof(ubo.view));
+    std::memcpy(ubo.projection, GetProjectionMatrix().data(), sizeof(ubo.projection));
     std::memcpy(renderPipline->GetUniformBuffersMapped(currentFrame), &ubo, sizeof(ubo));
 
     currentMatrix = matrixStack.top();
@@ -835,11 +835,12 @@ void VulkanManager::SetScale(float x, float y, float z)
     modelTransform.scale(Eigen::Vector3f(x, y, z));
 }
 
-void VulkanManager::SetCamera(Eigen::Vector3f caneraPosition, Eigen::Vector3f lookAtPosition, Eigen::Vector3f up)
+void VulkanManager::SetCamera(Eigen::Vector3f cameraPosition, Eigen::Vector3f lookAtPosition, Eigen::Vector3f up)
 {
-    const Eigen::Vector3f& f = lookAt;
+    const Eigen::Vector3f& f = lookAtPosition - cameraPosition;
     const Eigen::Vector3f& u = up;
     const Eigen::Vector3f& r = f.cross(u);
+    const Eigen::Vector3f& p = cameraPosition;
     static Eigen::Matrix4f matrix01;
     matrix01 <<
         r.x(), r.y(), r.z(), 0.0f,
@@ -848,9 +849,9 @@ void VulkanManager::SetCamera(Eigen::Vector3f caneraPosition, Eigen::Vector3f lo
         0.0f, 0.0f, 0.0f, 1.0f;
     static Eigen::Matrix4f matrix02;
     matrix02 <<
-        1.0f, 0.0f, 0.0f, -position.x(),
-        0.0f, 1.0f, 0.0f, -position.y(),
-        0.0f, 0.0f, 1.0f, -position.z(),
+        1.0f, 0.0f, 0.0f, -p.x(),
+        0.0f, 1.0f, 0.0f, -p.y(),
+        0.0f, 0.0f, 1.0f, -p.z(),
         0.0f, 0.0f, 0.0f, 1.0f;
 
     viewMatrix = matrix01 * matrix02;
