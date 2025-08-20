@@ -7,9 +7,9 @@
 
 struct UniformBufferObject
 {
-    std::array<float, 16> model;
-    std::array<float, 16> view;
-    std::array<float, 16> projection;
+    Eigen::Matrix4f model;
+    Eigen::Matrix4f view;
+    Eigen::Matrix4f projection;
 };
 
 namespace CommonFunction

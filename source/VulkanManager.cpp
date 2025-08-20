@@ -774,9 +774,9 @@ void VulkanManager::FlushUniformBuffer(uint32_t currentFrame)
     //GetMVPMatrix();
 
     static UniformBufferObject ubo;
-    std::memcpy(ubo.model.data(), GetModelMatrix().data(), sizeof(float) * 16);
-    std::memcpy(ubo.view.data(), GetViewMatrix().data(), sizeof(float) * 16);
-    std::memcpy(ubo.projection.data(), GetProjectionMatrix().data(), sizeof(float) * 16);
+    ubo.model = GetModelMatrix();
+    ubo.view = GetViewMatrix();
+    ubo.projection = GetProjectionMatrix();
     std::memcpy(renderPipline->GetUniformBuffersMapped(currentFrame), &ubo, sizeof(ubo));
 
     std::cout << "model Matrix: " << GetModelMatrix() << std::endl;
