@@ -3,12 +3,13 @@
 #include "vulkan/vulkan.hpp"
 #include <vulkan/vulkan_handles.hpp>
 #include <Eigen/Dense>
+#include <array>
 
 struct UniformBufferObject
 {
-    Eigen::Matrix4f model;
-    Eigen::Matrix4f view;
-    Eigen::Matrix4f projection;
+    std::array<float, 16> model;
+    std::array<float, 16> view;
+    std::array<float, 16> projection;
 };
 
 namespace CommonFunction

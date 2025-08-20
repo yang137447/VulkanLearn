@@ -774,10 +774,14 @@ void VulkanManager::FlushUniformBuffer(uint32_t currentFrame)
     //GetMVPMatrix();
 
     static UniformBufferObject ubo;
-    std::memcpy(ubo.model, GetModelMatrix().data(), sizeof(ubo.model));
-    std::memcpy(ubo.view, GetViewMatrix().data(), sizeof(ubo.view));
-    std::memcpy(ubo.projection, GetProjectionMatrix().data(), sizeof(ubo.projection));
+    std::memcpy(ubo.model.data(), GetModelMatrix().data(), sizeof(float) * 16);
+    std::memcpy(ubo.view.data(), GetViewMatrix().data(), sizeof(float) * 16);
+    std::memcpy(ubo.projection.data(), GetProjectionMatrix().data(), sizeof(float) * 16);
     std::memcpy(renderPipline->GetUniformBuffersMapped(currentFrame), &ubo, sizeof(ubo));
+
+    std::cout << "model Matrix: " << GetModelMatrix() << std::endl;
+    std::cout << "view Matrix: " << GetViewMatrix() << std::endl;
+    std::cout << "proj Matrix: " << GetProjectionMatrix() << std::endl;
 
     currentMatrix = matrixStack.top();
     matrixStack.pop();
@@ -806,16 +810,16 @@ void VulkanManager::InitMatrix()
     modelTransform.scale(Eigen::Vector3f(1.0f, 1.0f, 1.0f));
     modelMatrix = modelTransform.matrix();
 
-    SetCamera(Eigen::Vector3f(0.0f, -10.0f, 0.0f), Eigen::Vector3f(0.0f, 0.0f, 0.0f), Eigen::Vector3f(0.0f, 0.0f, 1.0f));
+    SetCamera(Eigen::Vector3f(0.0f, 0.0f, 2.0f), Eigen::Vector3f(0.0f, 0.0f, 0.0f), Eigen::Vector3f(0.0f, 1.0f, 0.0f));
 
-    SetProjection(90.0f, 1.0f, 0.1f, 1000.0f);
+    SetProjection(90.0f, static_cast<float>(width) / static_cast<float>(height), 0.1f, 10.0f);
 
     //Vulkan设备空间XYZ三个轴范围分别是 -1.0～+1.0、+1.0～-1.0、0.0～+1.0
     ndcMatrix << 
-        1.0f, 0.0f, 0.0f, 0.0f,
-        0.0f, 0.0f, -1.0f, 0.0f,
-        0.0f, 0.5f, 0.0f, 0.5f,
-        0.0f, 0.0f, 0.0f, 1.0f;
+        -1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 0.5f, -0.5f,
+        0.0f, 0.0f, 0.0f, -1.0f;
 
     currentMatrix = ndcMatrix * projectionMatrix * viewMatrix * modelMatrix;
 }
@@ -837,15 +841,15 @@ void VulkanManager::SetScale(float x, float y, float z)
 
 void VulkanManager::SetCamera(Eigen::Vector3f cameraPosition, Eigen::Vector3f lookAtPosition, Eigen::Vector3f up)
 {
-    const Eigen::Vector3f& f = lookAtPosition - cameraPosition;
-    const Eigen::Vector3f& u = up;
-    const Eigen::Vector3f& r = f.cross(u);
+    const Eigen::Vector3f& f = (cameraPosition - lookAtPosition).normalized();
+    const Eigen::Vector3f& r = up.cross(f).normalized();
+    const Eigen::Vector3f& u = f.cross(r).normalized();
     const Eigen::Vector3f& p = cameraPosition;
     static Eigen::Matrix4f matrix01;
     matrix01 <<
         r.x(), r.y(), r.z(), 0.0f,
-        f.x(), f.y(), f.z(), 0.0f,
         u.x(), u.y(), u.z(), 0.0f,
+        f.x(), f.y(), f.z(), 0.0f,
         0.0f, 0.0f, 0.0f, 1.0f;
     static Eigen::Matrix4f matrix02;
     matrix02 <<
@@ -859,16 +863,24 @@ void VulkanManager::SetCamera(Eigen::Vector3f cameraPosition, Eigen::Vector3f lo
 
 void VulkanManager::SetProjection(float fov, float aspect, float near, float far)
 {
-    float k = far * std::tan(fov / 2.0f);
+    float n = -1.0f * near;
+    float f = -1.0f * far;
+    float fovRad = fov * M_PI / 180.0f; 
+    float k = -1.0f / std::tan(fovRad / 2.0f);
     projectionMatrix <<
-        1.0f / k, 0.0f, 0.0f, 0.0f,
-        0.0f, 2/(far - near), 0.0f, (far + near) / (near - far),
-        0.0f, 0.0f, aspect/k, 0.0f,
-        1.0f/k, 0.0f, aspect/k, 1.0f;
+        k, 0.0f, 0.0f, 0.0f,
+        0.0f, aspect * k , 0.0f, 0.0f,
+        0.0f, 0.0f, (n + f)/(n-f), -2.0f * n * f / (n - f),
+        0.0f, 0.0f, 1.0f, 0.0f;
 }
 Eigen::Matrix4f& VulkanManager::GetModelMatrix()
 {
-    modelTransform.matrix();
+    modelMatrix <<
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, 1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, 1.0f, 0.0f,
+        0.0f, 0.0f, 0.0f, 1.0f;
+    
     return modelMatrix;
 }
 Eigen::Matrix4f& VulkanManager::GetViewMatrix()

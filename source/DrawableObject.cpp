@@ -35,7 +35,7 @@ DrawableObject::DrawableObject(std::vector<Vertex> &vertices, std::vector<uint16
     vertexInputAttributeDescriptions[1]
         .setBinding(0)
         .setLocation(1)
-        .setFormat(vk::Format::eR32G32Sfloat) // 颜色属性
+        .setFormat(vk::Format::eR32G32B32Sfloat) // 颜色属性
         .setOffset(offsetof(Vertex, color)); // 颜色属性在结构体中的偏移量
 }
 
