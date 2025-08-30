@@ -5,13 +5,14 @@
 #include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_handles.hpp>
 
-DrawableObject::DrawableObject(std::vector<Vertex> &vertices, std::vector<uint16_t> &indices, vk::Device *device, vk::PhysicalDeviceMemoryProperties *physicalDeviceMemoryProperties, vk::CommandBuffer& commandBuffer, vk::Queue &GraphicsQueue)
+DrawableObject::DrawableObject(std::vector<Vertex> &vertices, std::vector<uint16_t> &indices, vk::Device *device, vk::PhysicalDeviceMemoryProperties *physicalDeviceMemoryProperties, vk::CommandPool &commandPool, vk::CommandBuffer& commandBuffer, vk::Queue &GraphicsQueue)
 {
     this->device = device;
     this->vertices = &vertices;
     this->indices = &indices;
     this->graphicsQueue = &GraphicsQueue;
     this->physicalDeviceMemoryProperties = physicalDeviceMemoryProperties;
+    this->commandPool = &commandPool;
     this->commandBuffer = &commandBuffer;
 
     // 创建顶点缓冲区
@@ -26,7 +27,7 @@ DrawableObject::DrawableObject(std::vector<Vertex> &vertices, std::vector<uint16
         .setInputRate(vk::VertexInputRate::eVertex);
 
     // 设置顶点输入属性描述
-    vertexInputAttributeDescriptions.resize(2);
+    vertexInputAttributeDescriptions.resize(3);
     vertexInputAttributeDescriptions[0]
         .setBinding(0)
         .setLocation(0)
@@ -37,6 +38,11 @@ DrawableObject::DrawableObject(std::vector<Vertex> &vertices, std::vector<uint16
         .setLocation(1)
         .setFormat(vk::Format::eR32G32B32Sfloat) // 颜色属性
         .setOffset(offsetof(Vertex, color)); // 颜色属性在结构体中的偏移量
+    vertexInputAttributeDescriptions[2]
+        .setBinding(0)
+        .setLocation(2)
+        .setFormat(vk::Format::eR32G32Sfloat) // 纹理坐标属性
+        .setOffset(offsetof(Vertex, texCoord)); // 纹理坐标属性在结构体中的偏移量
 }
 
 DrawableObject::~DrawableObject()
@@ -99,7 +105,7 @@ void DrawableObject::CreateVertexBuffer()
     );
 
     // 将临时缓冲区中的数据复制到顶点缓冲区
-    CommonFunction::CopyBufferToBuffer(*graphicsQueue, *commandBuffer, stagingBuffer, vertexBuffer, bufferSize);
+    CommonFunction::CopyBufferToBuffer(*device, *graphicsQueue, *commandPool, stagingBuffer, vertexBuffer, bufferSize);
 
     // 释放临时缓冲区
     device->destroyBuffer(stagingBuffer);
@@ -140,7 +146,7 @@ void DrawableObject::CreateIndexBuffer()
         *device, bufferSize, indexBufferUsage, *physicalDeviceMemoryProperties, indexBufferMemoryPropertyFlags
     );
     // 将临时缓冲区中的数据复制到索引缓冲区
-    CommonFunction::CopyBufferToBuffer(*graphicsQueue, *commandBuffer, stagingBuffer, indexBuffer, bufferSize);
+    CommonFunction::CopyBufferToBuffer(*device, *graphicsQueue, *commandPool, stagingBuffer, indexBuffer, bufferSize);
     // 释放临时缓冲区
     device->destroyBuffer(stagingBuffer);
     device->freeMemory(stagingBufferMemory);

@@ -72,13 +72,21 @@ void RenderPipline::DestroyUniformBuffers()
 
 void RenderPipline::CreatePipelineLayout()
 {
-    vk::DescriptorSetLayoutBinding descriptorSetLayoutBindings;
-    descriptorSetLayoutBindings
+    std::vector<vk::DescriptorSetLayoutBinding> descriptorSetLayoutBindings;
+    descriptorSetLayoutBindings.emplace_back(
+        vk::DescriptorSetLayoutBinding()
         .setBinding(0)
         .setDescriptorType(vk::DescriptorType::eUniformBuffer)
         .setDescriptorCount(1)
         .setStageFlags(vk::ShaderStageFlagBits::eVertex)
-        .setPImmutableSamplers(nullptr);
+        .setPImmutableSamplers(nullptr));
+    descriptorSetLayoutBindings.emplace_back(
+        vk::DescriptorSetLayoutBinding()
+        .setBinding(1)
+        .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
+        .setDescriptorCount(1)
+        .setStageFlags(vk::ShaderStageFlagBits::eFragment)
+        .setPImmutableSamplers(nullptr));
 
     vk::DescriptorSetLayoutCreateInfo descriptorSetLayoutCreateInfo;
     descriptorSetLayoutCreateInfo
@@ -103,16 +111,19 @@ void RenderPipline::DestroyPipelineLayout()
 
 void RenderPipline::CreateDescriptorSets()
 {
-    vk::DescriptorPoolSize descriptorPoolSize;
-    descriptorPoolSize
+    std::array<vk::DescriptorPoolSize, 2> descriptorPoolSizes;
+    descriptorPoolSizes[0]
         .setType(vk::DescriptorType::eUniformBuffer)
+        .setDescriptorCount(MAX_FRAMES_IN_FLIGHT);
+    descriptorPoolSizes[1]
+        .setType(vk::DescriptorType::eCombinedImageSampler)
         .setDescriptorCount(MAX_FRAMES_IN_FLIGHT);
 
     vk::DescriptorPoolCreateInfo descriptorPoolCreateInfo;
     descriptorPoolCreateInfo
         .setMaxSets(MAX_FRAMES_IN_FLIGHT)
         .setFlags(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet)
-        .setPoolSizes(descriptorPoolSize);
+        .setPoolSizes(descriptorPoolSizes);
 
     vk::Result result = device->createDescriptorPool(&descriptorPoolCreateInfo, nullptr, &descriptorPool);
     assert(result == vk::Result::eSuccess);

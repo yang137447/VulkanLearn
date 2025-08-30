@@ -5,7 +5,7 @@
 class DrawableObject
 {
 public:
-    DrawableObject(std::vector<struct Vertex>& vertices, std::vector<uint16_t> &indices, vk::Device* device, vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties, vk::CommandBuffer& commandBuffer, vk::Queue &GraphicsQueue);
+    DrawableObject(std::vector<struct Vertex>& vertices, std::vector<uint16_t> &indices, vk::Device* device, vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties, vk::CommandPool& commandPool, vk::CommandBuffer& commandBuffer, vk::Queue &GraphicsQueue);
     ~DrawableObject();
 
     void Draw(vk::CommandBuffer& commandBuffer, vk::PipelineLayout& pipelineLayout, vk::Pipeline& pipeline, vk::DescriptorSet& descriptorSet);
@@ -21,6 +21,7 @@ private:
     void DestroyIndexBuffer();
 private:
     vk::Device* device;
+    vk::CommandPool* commandPool;
     vk::CommandBuffer* commandBuffer;
     vk::Queue* graphicsQueue;
     vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties;

@@ -3,12 +3,14 @@
 #include <cstdint>
 #include <iostream>
 #include <chrono>
+#include <vulkan/vulkan_enums.hpp>
 #include <vulkan/vulkan_structs.hpp>
 #include "settings.h"
 #include "DrawableObject.h"
 #include "TriangleData.h"
 #include "RenderPipline.h"
 #include "CommonFunction.h"
+#include "TextureLoader.h"
 
 VulkanManager::VulkanManager()
 {
@@ -34,11 +36,11 @@ VulkanManager::VulkanManager(std::vector<const char *> &extensions, SDL_Window *
     CreateVkRenderPass();
     CreateVkFrameBuffers();
     CreateDrawableObject();
+    LoadTextureImage();
     CreateVkPipline();
     CreateVkFence();
     InitializePresentInfo();
     InitializeMVP();
-    
 }
 
 VulkanManager::~VulkanManager()
@@ -46,6 +48,7 @@ VulkanManager::~VulkanManager()
     device.waitIdle(); //等待设备空闲
     DestroyVkFence();
     DestroyVkPipline();
+    DestroyTextureImage();
     DestroyDrawableObject();
     DestroyVkFrameBuffers();
     DestroyVkRenderPass();
@@ -207,7 +210,8 @@ void VulkanManager::CreateVkDevice()
     //TODO: 这里应该先检测是否支持该 Features
     vk::PhysicalDeviceFeatures deviceFeatures;
     deviceFeatures
-        .setDepthClamp(VK_TRUE);
+        .setDepthClamp(VK_TRUE)
+        .setSamplerAnisotropy(VK_TRUE);
     
     vk::DeviceCreateInfo deviceCreateInfo;
     deviceCreateInfo
@@ -639,7 +643,7 @@ void VulkanManager::DestroyVkFrameBuffers()
 
 void VulkanManager::CreateDrawableObject()
 {
-    triangleObject = new DrawableObject(TriangleData::GetVertexData(), TriangleData::GetIndexData(), &device, &gpuMemoryProperties, commandBuffers[0], graphicQueue);
+    triangleObject = new DrawableObject(TriangleData::GetVertexData(), TriangleData::GetIndexData(), &device, &gpuMemoryProperties, commandPool, commandBuffers[0], graphicQueue);
     std::cout << "Create DrawableObject" << std::endl;
 }
 
@@ -647,6 +651,27 @@ void VulkanManager::DestroyDrawableObject()
 {
     delete triangleObject;
     std::cout << "Destroy DrawableObject" << std::endl;
+}
+
+void VulkanManager::LoadTextureImage()
+{
+    TextureLoader& textureLoader = TextureLoader::getInstance();
+    textureLoader.Init(&device, &gpuMemoryProperties, &commandPool, &graphicQueue);
+    std::tie(textureImage, textureImageMemory) = textureLoader.loadTexture(CommonFunction::Path("resources/textures/texture.jpg"));
+    std::cout << "Load Texture Image" << std::endl;
+
+    vk::Format format = vk::Format::eR8G8B8A8Srgb;
+    textureImageView = CommonFunction::CreateImageView(device, textureImage, format);
+
+    textureSampler = CommonFunction::CreateSampler(device, physicalDevices[GPUIndex]);
+}
+void VulkanManager::DestroyTextureImage()
+{
+    device.destroySampler(textureSampler);
+    device.destroyImageView(textureImageView);
+    device.destroyImage(textureImage, nullptr);
+    device.freeMemory(textureImageMemory, nullptr);
+    std::cout << "Destroy Texture Image" << std::endl;
 }
 
 void VulkanManager::CreateVkPipline()
@@ -779,10 +804,6 @@ void VulkanManager::FlushUniformBuffer(uint32_t currentFrame)
     ubo.projection = GetProjectionMatrix();
     std::memcpy(renderPipline->GetUniformBuffersMapped(currentFrame), &ubo, sizeof(ubo));
 
-    std::cout << "model Matrix: " << GetModelMatrix() << std::endl;
-    std::cout << "view Matrix: " << GetViewMatrix() << std::endl;
-    std::cout << "proj Matrix: " << GetProjectionMatrix() << std::endl;
-
     currentMatrix = matrixStack.top();
     matrixStack.pop();
 }
@@ -790,15 +811,29 @@ void VulkanManager::FlushUniformBuffer(uint32_t currentFrame)
 void VulkanManager::FlushTextureToDescriptorSet(uint32_t currentFrame)
 {
     auto& DstSet = renderPipline->GetDescriptorSets()[currentFrame];
-    auto& BufferInfo = renderPipline->GetuniformBufferInfos()[currentFrame];
-    vk::WriteDescriptorSet& WriteDescriptorSet = renderPipline->GetWriteDescriptorSet();
-    WriteDescriptorSet
+    auto& BufferInfo = renderPipline->GetUniformBufferInfos()[currentFrame];
+    std::vector<vk::WriteDescriptorSet>& WriteDescriptorSets = renderPipline->GetWriteDescriptorSet();
+    WriteDescriptorSets.push_back(
+        vk::WriteDescriptorSet()
         .setDstSet(DstSet)
         .setDstBinding(0)
         .setDescriptorType(vk::DescriptorType::eUniformBuffer)
-        .setBufferInfo(BufferInfo);
+        .setBufferInfo(BufferInfo));
 
-    device.updateDescriptorSets(WriteDescriptorSet, nullptr);
+    static vk::DescriptorImageInfo imageInfo;
+    imageInfo
+        .setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+        .setImageView(textureImageView)
+        .setSampler(textureSampler);
+
+    WriteDescriptorSets.push_back(
+        vk::WriteDescriptorSet()
+        .setDstSet(DstSet)
+        .setDstBinding(1)
+        .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
+        .setImageInfo(imageInfo));
+
+    device.updateDescriptorSets(WriteDescriptorSets, nullptr);
 }
 
 void VulkanManager::InitMatrix()

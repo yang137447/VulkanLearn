@@ -55,6 +55,9 @@ private:
     void CreateDrawableObject();
     void DestroyDrawableObject();
 
+    void LoadTextureImage();
+    void DestroyTextureImage();
+
     void CreateVkPipline();
     void DestroyVkPipline();
 
@@ -133,6 +136,12 @@ private:
     vk::PresentInfoKHR presentInfo;
 
     uint32_t currentFrame = 0;
+
+    //source
+    vk::Image textureImage;
+    vk::DeviceMemory textureImageMemory;
+    vk::ImageView textureImageView;
+    vk::Sampler textureSampler;
 
 //Matrixs
 private:

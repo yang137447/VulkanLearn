@@ -20,9 +20,9 @@ public:
     inline std::vector<vk::DescriptorSet>& GetDescriptorSets() { return descriptorSets; }
     inline std::vector<vk::DeviceMemory>& GetUniformBufferMemories() { return uniformBufferMemories; }
     inline uint32_t GetUniformBufferSize() { return uniformBufferSize; }
-    inline std::vector<vk::DescriptorBufferInfo>& GetuniformBufferInfos() { return uniformBufferInfos; }
+    inline std::vector<vk::DescriptorBufferInfo>& GetUniformBufferInfos() { return uniformBufferInfos; }
     inline void* GetUniformBuffersMapped(uint32_t currentFrame) { return uniformBuffersMapped[currentFrame]; }
-    inline vk::WriteDescriptorSet& GetWriteDescriptorSet() { return writeDescriptorSet; }
+    inline std::vector<vk::WriteDescriptorSet>& GetWriteDescriptorSet() { return writeDescriptorSet; }
 private:
     RenderPipline();
 
@@ -54,10 +54,11 @@ private:
     std::vector<vk::DeviceMemory> uniformBufferMemories;
     std::vector<void*> uniformBuffersMapped;
     std::vector<vk::DescriptorBufferInfo> uniformBufferInfos;
+    std::vector<vk::DescriptorImageInfo> ImageInfos;
 
     vk::DescriptorSetLayout descriptorSetLayout;
     vk::PipelineLayout pipelineLayout;
-    vk::WriteDescriptorSet writeDescriptorSet;
+    std::vector<vk::WriteDescriptorSet> writeDescriptorSet;
 
     std::vector<vk::PipelineShaderStageCreateInfo> shaderStages;
 
