@@ -16,6 +16,7 @@ std::pair<vk::Image, vk::DeviceMemory> TextureLoader::loadTexture(const std::str
 {
     int textureWidth, textureHeight, textureChannels;
     // Load image using stb_image
+    stbi_set_flip_vertically_on_load(true); // Flip image vertically
     stbi_uc* pixels = stbi_load(filename.c_str(), &textureWidth, &textureHeight, &textureChannels, STBI_rgb_alpha);
     vk::DeviceSize imageSize = textureWidth * textureHeight * 4; // Assuming 4 bytes per pixel (RGBA)
     if (!pixels) {
@@ -54,9 +55,9 @@ std::pair<vk::Image, vk::DeviceMemory> TextureLoader::loadTexture(const std::str
         memoryPropertyFlags);
     
     // copy staging buffer to texture image
-    CommonFunction::TransitionImageLayout(Image, *device, *commandPool, *graphicsQueue, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
+    CommonFunction::TransitionImageLayout(Image, format, *device, *commandPool, *graphicsQueue, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
     CommonFunction::CopyBufferToImage(*device, *graphicsQueue, *commandPool, stagingBuffer, Image, textureWidth, textureHeight);
-    CommonFunction::TransitionImageLayout(Image, *device, *commandPool, *graphicsQueue, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
+    CommonFunction::TransitionImageLayout(Image, format, *device, *commandPool, *graphicsQueue, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
 
     // Clean up staging buffer
     device->destroyBuffer(stagingBuffer);

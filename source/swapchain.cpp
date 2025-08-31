@@ -40,7 +40,7 @@ void Swapchain::QuerySwapchainData(const uint32_t windowWidth, const uint32_t wi
     imageFormat = formats[0];
     for (const auto &format : formats)
     {
-        if (format.format == vk::Format::eR8G8B8A8Srgb && format.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear)
+        if (format.format == vk::Format::eB8G8R8A8Srgb && format.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear)
         {
             imageFormat = format;
             break;

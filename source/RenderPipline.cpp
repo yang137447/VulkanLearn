@@ -91,7 +91,7 @@ void RenderPipline::CreatePipelineLayout()
     vk::DescriptorSetLayoutCreateInfo descriptorSetLayoutCreateInfo;
     descriptorSetLayoutCreateInfo
         .setBindings(descriptorSetLayoutBindings);
-    
+
     vk::Result result = device->createDescriptorSetLayout(&descriptorSetLayoutCreateInfo, nullptr, &descriptorSetLayout);
     assert(result == vk::Result::eSuccess);
 
@@ -303,7 +303,7 @@ void RenderPipline::CreateGraphicsPipeline()
     pipelineDepthStencilStateCreateInfo
         .setDepthTestEnable(true)
         .setDepthWriteEnable(true)
-        .setDepthCompareOp(vk::CompareOp::eLessOrEqual)
+        .setDepthCompareOp(vk::CompareOp::eLess)
         .setDepthBoundsTestEnable(false)
         .setMinDepthBounds(0.0f)
         .setMaxDepthBounds(1.0f)
@@ -331,8 +331,7 @@ void RenderPipline::CreateGraphicsPipeline()
         .setPMultisampleState(&pipelineMultisampleStateCreateInfo)
         .setPDynamicState(&pipelineDynamicStateCreateInfo)
         .setPViewportState(&pipelineViewportStateCreateInfo)
-        //.setPDepthStencilState(&pipelineDepthStencilStateCreateInfo)
-        .setPDepthStencilState(nullptr)
+        .setPDepthStencilState(&pipelineDepthStencilStateCreateInfo)
         .setStages(shaderStages)
         .setRenderPass(*renderPass)
         .setSubpass(0);

@@ -34,6 +34,35 @@ namespace CommonFunction
         throw std::runtime_error("Failed to find suitable memory type!");
     }
 
+    inline vk::Format FindSupportedFormat(vk::PhysicalDevice& physicalDevice, const std::vector<vk::Format>& candidates, vk::ImageTiling tiling, vk::FormatFeatureFlags features)
+    {
+        for (const auto& format : candidates) {
+            vk::FormatProperties props = physicalDevice.getFormatProperties(format);
+            if (tiling == vk::ImageTiling::eLinear && (props.linearTilingFeatures & features) == features) 
+            {
+                return format;
+            }
+            else if (tiling == vk::ImageTiling::eOptimal && (props.optimalTilingFeatures & features) == features) 
+            {
+                return format;
+            }
+        }
+
+        return vk::Format::eUndefined;
+    }
+
+    inline vk::Format FindDepthFormat(vk::PhysicalDevice& physicalDevice)
+    {
+        return FindSupportedFormat(physicalDevice,
+            { vk::Format::eD32Sfloat, vk::Format::eD32SfloatS8Uint, vk::Format::eD24UnormS8Uint },
+            vk::ImageTiling::eOptimal,
+            vk::FormatFeatureFlagBits::eDepthStencilAttachment);
+    }
+
+    inline bool HasStencilComponent(vk::Format format) {
+        return format == vk::Format::eD32SfloatS8Uint || format == vk::Format::eD24UnormS8Uint;
+    }
+
     inline vk::CommandBuffer BeginSingleTimeCommands(vk::Device& device, vk::CommandPool& commandPool)
     {
         vk::CommandBufferAllocateInfo allocInfo;
@@ -119,7 +148,14 @@ namespace CommonFunction
         return { image, imageMemory };
     }
 
-    inline vk::ImageView CreateImageView(vk::Device& device, vk::Image& image, vk::Format& format)
+    inline std::pair<vk::Image, vk::DeviceMemory> CreateDepthImage(vk::Device& device, vk::PhysicalDevice& physicalDevice, uint32_t width, uint32_t height, vk::Format& format, vk::ImageTiling& tiling, vk::ImageUsageFlags& usage, vk::PhysicalDeviceMemoryProperties& physicalDeviceMemoryProperties, vk::MemoryPropertyFlags& memoryPropertyFlags)
+    {
+        vk::Format depthFormat = FindDepthFormat(physicalDevice);
+
+        return CreateImage(device, width, height, depthFormat, tiling, usage, physicalDeviceMemoryProperties, memoryPropertyFlags);
+    }
+
+    inline vk::ImageView CreateImageView(vk::Device& device, vk::Image& image, vk::Format& format, vk::ImageAspectFlagBits aspectMask = vk::ImageAspectFlagBits::eColor)
     {
         vk::ImageViewCreateInfo viewInfo;
         viewInfo
@@ -127,13 +163,20 @@ namespace CommonFunction
             .setViewType(vk::ImageViewType::e2D)
             .setFormat(format)
             .setSubresourceRange(vk::ImageSubresourceRange()
-                .setAspectMask(vk::ImageAspectFlagBits::eColor)
+                .setAspectMask(aspectMask)
                 .setBaseMipLevel(0)
                 .setLevelCount(1)
                 .setBaseArrayLayer(0)
                 .setLayerCount(1));
 
         return device.createImageView(viewInfo);
+    }
+
+    inline vk::ImageView CreateDepthImageView(vk::Device& device, vk::PhysicalDevice& physicalDevice, vk::Image& image, vk::Format& format)
+    {
+        vk::Format depthFormat = FindDepthFormat(physicalDevice);
+
+        return CreateImageView(device, image, depthFormat, vk::ImageAspectFlagBits::eDepth);
     }
 
     inline vk::Sampler CreateSampler(vk::Device& device, vk::PhysicalDevice& physicalDevice)
@@ -170,7 +213,7 @@ namespace CommonFunction
         return device.createSampler(samplerInfo);
     }
 
-    inline void  TransitionImageLayout(vk::Image& image, vk::Device& device, vk::CommandPool& commandPool, vk::Queue& GraphicsQueue, vk::ImageLayout oldLayout, vk::ImageLayout newLayout)
+    inline void  TransitionImageLayout(vk::Image& image, vk::Format& format, vk::Device& device, vk::CommandPool& commandPool, vk::Queue& GraphicsQueue, vk::ImageLayout oldLayout, vk::ImageLayout newLayout)
     {
         vk::CommandBuffer commandBuffer = BeginSingleTimeCommands(device, commandPool);
 
@@ -206,6 +249,21 @@ namespace CommonFunction
                 .setDstAccessMask(vk::AccessFlagBits::eShaderRead);
             sourceStage = vk::PipelineStageFlagBits::eTransfer;
             destinationStage = vk::PipelineStageFlagBits::eFragmentShader;
+        }
+        else if(oldLayout == vk::ImageLayout::eUndefined && newLayout == vk::ImageLayout::eDepthStencilAttachmentOptimal)
+        {
+            barrier
+                .subresourceRange.setAspectMask(vk::ImageAspectFlagBits::eDepth);
+            if (HasStencilComponent(format))
+            {
+                barrier.subresourceRange.aspectMask |= vk::ImageAspectFlagBits::eStencil;
+            }
+
+            barrier
+                .setSrcAccessMask(vk::AccessFlagBits::eNone)
+                .setDstAccessMask(vk::AccessFlagBits::eDepthStencilAttachmentRead | vk::AccessFlagBits::eDepthStencilAttachmentWrite);
+            sourceStage = vk::PipelineStageFlagBits::eTopOfPipe;
+            destinationStage = vk::PipelineStageFlagBits::eEarlyFragmentTests;
         }
         else
         {

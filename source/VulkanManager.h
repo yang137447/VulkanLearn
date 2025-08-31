@@ -103,6 +103,7 @@ private:
 
     VkSurfaceKHR surface;
     std::vector<vk::SurfaceFormatKHR> surfaceFormats;
+    vk::SurfaceFormatKHR surfaceFormat;
     vk::SurfaceCapabilitiesKHR surfaceCapabilities;
     std::vector<vk::PresentModeKHR> presentModes;
     vk::Extent2D swapChainExtent;
@@ -122,7 +123,7 @@ private:
     std::vector<vk::Semaphore> renderFinishedSemaphores;
     uint32_t swapchainImageIndex = 0;
     vk::RenderPass renderPass;
-    vk::ClearValue clearValue;
+    std::vector<vk::ClearValue> clearValues;
     vk::RenderPassBeginInfo renderPassBeginInfo;
 
     std::vector<vk::Framebuffer> framebuffers;
