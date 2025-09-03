@@ -760,28 +760,31 @@ void VulkanManager::FlushTextureToDescriptorSet(uint32_t currentFrame)
 {
     auto& DstSet = renderPipline->GetDescriptorSets()[currentFrame];
     auto& BufferInfo = renderPipline->GetUniformBufferInfos()[currentFrame];
-    std::vector<vk::WriteDescriptorSet>& WriteDescriptorSets = renderPipline->GetWriteDescriptorSet();
-    WriteDescriptorSets.push_back(
-        vk::WriteDescriptorSet()
-        .setDstSet(DstSet)
-        .setDstBinding(0)
-        .setDescriptorType(vk::DescriptorType::eUniformBuffer)
-        .setBufferInfo(BufferInfo));
+    auto& WriteDescriptorSets = renderPipline->GetWriteDescriptorSet();
+    if(WriteDescriptorSets[currentFrame].empty())
+    {
+        WriteDescriptorSets[currentFrame].push_back(
+            vk::WriteDescriptorSet()
+            .setDstSet(DstSet)
+            .setDstBinding(0)
+            .setDescriptorType(vk::DescriptorType::eUniformBuffer)
+            .setBufferInfo(BufferInfo));
 
-    static vk::DescriptorImageInfo imageInfo;
-    imageInfo
-        .setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
-        .setImageView(textureImageView)
-        .setSampler(textureSampler);
+        static vk::DescriptorImageInfo imageInfo;
+        imageInfo
+            .setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+            .setImageView(textureImageView)
+            .setSampler(textureSampler);
 
-    WriteDescriptorSets.push_back(
-        vk::WriteDescriptorSet()
-        .setDstSet(DstSet)
-        .setDstBinding(1)
-        .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
-        .setImageInfo(imageInfo));
+        WriteDescriptorSets[currentFrame].push_back(
+            vk::WriteDescriptorSet()
+            .setDstSet(DstSet)
+            .setDstBinding(1)
+            .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
+            .setImageInfo(imageInfo));
+    }
 
-    device.updateDescriptorSets(WriteDescriptorSets, nullptr);
+    device.updateDescriptorSets(WriteDescriptorSets[currentFrame], nullptr);
 }
 
 void VulkanManager::InitMatrix()

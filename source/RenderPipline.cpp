@@ -101,6 +101,7 @@ void RenderPipline::CreatePipelineLayout()
     
     result = device->createPipelineLayout(&pipelineLayoutCreateInfo, nullptr, &pipelineLayout);
     assert(result == vk::Result::eSuccess);
+    writeDescriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
 }
 
 void RenderPipline::DestroyPipelineLayout()
