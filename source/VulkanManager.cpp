@@ -11,6 +11,7 @@
 #include "RenderPipline.h"
 #include "CommonFunction.h"
 #include "TextureLoader.h"
+#include "ModelLoader.h"
 
 VulkanManager::VulkanManager()
 {
@@ -591,8 +592,11 @@ void VulkanManager::DestroyVkFrameBuffers()
 
 void VulkanManager::CreateDrawableObject()
 {
-    triangleObject = new DrawableObject(TriangleData::GetVertexData(), TriangleData::GetIndexData(), &device, &gpuMemoryProperties, commandPool, commandBuffers[0], graphicQueue);
+    //triangleObject = new DrawableObject(TriangleData::GetVertexData(), TriangleData::GetIndexData(), &device, &gpuMemoryProperties, commandPool, commandBuffers[0], graphicQueue);
     std::cout << "Create DrawableObject" << std::endl;
+    ModelLoader& modelLoader = ModelLoader::getInstance();
+    modelLoader.LoadModel(CommonFunction::Path("resources/models/viking_room.obj"));
+    triangleObject = new DrawableObject(modelLoader.GetVertexData(), modelLoader.GetIndexData(), &device, &gpuMemoryProperties, commandPool, commandBuffers[0], graphicQueue);
 }
 
 void VulkanManager::DestroyDrawableObject()
@@ -605,7 +609,7 @@ void VulkanManager::LoadTextureImage()
 {
     TextureLoader& textureLoader = TextureLoader::getInstance();
     textureLoader.Init(&device, &gpuMemoryProperties, &commandPool, &graphicQueue);
-    std::tie(textureImage, textureImageMemory) = textureLoader.loadTexture(CommonFunction::Path("resources/textures/texture.jpg"));
+    std::tie(textureImage, textureImageMemory) = textureLoader.loadTexture(CommonFunction::Path("resources\\textures\\viking_room.png"));
     std::cout << "Load Texture Image" << std::endl;
 
     vk::Format format = vk::Format::eR8G8B8A8Srgb;

@@ -32,7 +32,7 @@ std::vector<Vertex>& TriangleData::GetVertexData()
     return vertices;
 }
 
-std::vector<uint16_t>& TriangleData::GetIndexData()
+std::vector<uint32_t>& TriangleData::GetIndexData()
 {
     if (indices.empty())
     {

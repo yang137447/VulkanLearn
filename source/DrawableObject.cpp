@@ -5,7 +5,7 @@
 #include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_handles.hpp>
 
-DrawableObject::DrawableObject(std::vector<Vertex> &vertices, std::vector<uint16_t> &indices, vk::Device *device, vk::PhysicalDeviceMemoryProperties *physicalDeviceMemoryProperties, vk::CommandPool &commandPool, vk::CommandBuffer& commandBuffer, vk::Queue &GraphicsQueue)
+DrawableObject::DrawableObject(std::vector<Vertex> &vertices, std::vector<uint32_t> &indices, vk::Device *device, vk::PhysicalDeviceMemoryProperties *physicalDeviceMemoryProperties, vk::CommandPool &commandPool, vk::CommandBuffer& commandBuffer, vk::Queue &GraphicsQueue)
 {
     this->device = device;
     this->vertices = &vertices;
@@ -72,7 +72,7 @@ void DrawableObject::Draw(vk::CommandBuffer &commandBuffer, vk::PipelineLayout &
     commandBuffer.setScissor(0, 1, &scissor);
     commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout, 0, descriptorSet, nullptr);
     commandBuffer.bindVertexBuffers(0, 1, &vertexBuffer, &vertexBufferInfo.offset);
-    commandBuffer.bindIndexBuffer(indexBuffer, 0, vk::IndexType::eUint16);
+    commandBuffer.bindIndexBuffer(indexBuffer, 0, vk::IndexType::eUint32);
     //commandBuffer.draw(vertices->size(), 1, 0,0);
     commandBuffer.drawIndexed(indices->size(), 1, 0, 0, 0);
 }
@@ -126,7 +126,7 @@ void DrawableObject::DestroyVertexBuffer()
 
 void DrawableObject::CreateIndexBuffer()
 {
-    vk::DeviceSize bufferSize = indices->size() * sizeof(indices[0]);
+    vk::DeviceSize bufferSize = indices->size() * sizeof(uint32_t);
     // 创建临时缓冲区
     vk::Buffer stagingBuffer;
     vk::DeviceMemory stagingBufferMemory;
