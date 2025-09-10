@@ -1,6 +1,7 @@
 #pragma once
 
 #include "vulkan/vulkan.hpp"
+#include <cstdint>
 #include <vulkan/vulkan_enums.hpp>
 #include <vulkan/vulkan_handles.hpp>
 #include <Eigen/Dense>
@@ -118,13 +119,13 @@ namespace CommonFunction
         return { buffer, bufferMemory };
     }
 
-    inline std::pair<vk::Image, vk::DeviceMemory> CreateImage(vk::Device& device, uint32_t width, uint32_t height, vk::Format& format, vk::ImageTiling& tiling, vk::ImageUsageFlags& usage, vk::PhysicalDeviceMemoryProperties& physicalDeviceMemoryProperties, vk::MemoryPropertyFlags& memoryPropertyFlags)
+    inline std::pair<vk::Image, vk::DeviceMemory> CreateImage(vk::Device& device, uint32_t width, uint32_t height, uint32_t mipLevels, vk::Format& format, vk::ImageTiling& tiling, vk::ImageUsageFlags& usage, vk::PhysicalDeviceMemoryProperties& physicalDeviceMemoryProperties, vk::MemoryPropertyFlags& memoryPropertyFlags)
     {
         vk::ImageCreateInfo imageInfo;
         imageInfo
             .setImageType(vk::ImageType::e2D)
             .setExtent(vk::Extent3D{ width, height, 1 })
-            .setMipLevels(1)
+            .setMipLevels(mipLevels)
             .setArrayLayers(1)
             .setFormat(format)
             .setTiling(tiling)
@@ -152,10 +153,10 @@ namespace CommonFunction
     {
         vk::Format depthFormat = FindDepthFormat(physicalDevice);
 
-        return CreateImage(device, width, height, depthFormat, tiling, usage, physicalDeviceMemoryProperties, memoryPropertyFlags);
+        return CreateImage(device, width, height, 1, depthFormat, tiling, usage, physicalDeviceMemoryProperties, memoryPropertyFlags);
     }
 
-    inline vk::ImageView CreateImageView(vk::Device& device, vk::Image& image, vk::Format& format, vk::ImageAspectFlagBits aspectMask = vk::ImageAspectFlagBits::eColor)
+    inline vk::ImageView CreateImageView(vk::Device& device, vk::Image& image, uint32_t mipLevels, vk::Format& format, vk::ImageAspectFlagBits aspectMask = vk::ImageAspectFlagBits::eColor)
     {
         vk::ImageViewCreateInfo viewInfo;
         viewInfo
@@ -165,7 +166,7 @@ namespace CommonFunction
             .setSubresourceRange(vk::ImageSubresourceRange()
                 .setAspectMask(aspectMask)
                 .setBaseMipLevel(0)
-                .setLevelCount(1)
+                .setLevelCount(mipLevels)
                 .setBaseArrayLayer(0)
                 .setLayerCount(1));
 
@@ -176,7 +177,7 @@ namespace CommonFunction
     {
         vk::Format depthFormat = FindDepthFormat(physicalDevice);
 
-        return CreateImageView(device, image, depthFormat, vk::ImageAspectFlagBits::eDepth);
+        return CreateImageView(device, image, 1, depthFormat, vk::ImageAspectFlagBits::eDepth);
     }
 
     inline vk::Sampler CreateSampler(vk::Device& device, vk::PhysicalDevice& physicalDevice)
@@ -201,7 +202,7 @@ namespace CommonFunction
             .setMipmapMode(vk::SamplerMipmapMode::eLinear)
             .setMipLodBias(0.0f)
             .setMinLod(0.0f)
-            .setMaxLod(0.0f);
+            .setMaxLod(VK_LOD_CLAMP_NONE);
 
         if(physicalDeviceFeatures.samplerAnisotropy == VK_FALSE)
         {
@@ -213,7 +214,7 @@ namespace CommonFunction
         return device.createSampler(samplerInfo);
     }
 
-    inline void  TransitionImageLayout(vk::Image& image, vk::Format& format, vk::Device& device, vk::CommandPool& commandPool, vk::Queue& GraphicsQueue, vk::ImageLayout oldLayout, vk::ImageLayout newLayout)
+    inline void  TransitionImageLayout(vk::Image& image, uint32_t mipLevels, vk::Format& format, vk::Device& device, vk::CommandPool& commandPool, vk::Queue& GraphicsQueue, vk::ImageLayout oldLayout, vk::ImageLayout newLayout)
     {
         vk::CommandBuffer commandBuffer = BeginSingleTimeCommands(device, commandPool);
 
@@ -227,7 +228,7 @@ namespace CommonFunction
             .setSubresourceRange(vk::ImageSubresourceRange()
                 .setAspectMask(vk::ImageAspectFlagBits::eColor)
                 .setBaseMipLevel(0)
-                .setLevelCount(1)
+                .setLevelCount(mipLevels)
                 .setBaseArrayLayer(0)
                 .setLayerCount(1));
 
@@ -311,6 +312,93 @@ namespace CommonFunction
             .setImageExtent(vk::Extent3D{ width, height, 1 });
 
         commandBuffer.copyBufferToImage(buffer, image, vk::ImageLayout::eTransferDstOptimal, 1, &region);
+
+        EndSingleTimeCommands(device, commandBuffer, GraphicsQueue, commandPool);
+    }
+
+    inline void GenerateMipmaps(vk::Device& device, vk::Queue& GraphicsQueue, vk::CommandPool& commandPool, vk::Image& image, uint32_t width, uint32_t height, uint32_t mipLevels)
+    {
+        vk::CommandBuffer commandBuffer = BeginSingleTimeCommands(device, commandPool);
+
+        vk::ImageMemoryBarrier barrier;
+        barrier
+            .setImage(image)
+            .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+            .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+            .setSubresourceRange(vk::ImageSubresourceRange()
+                .setAspectMask(vk::ImageAspectFlagBits::eColor)
+                .setBaseMipLevel(0)
+                .setLevelCount(1)
+                .setBaseArrayLayer(0)
+                .setLayerCount(1));
+
+        int32_t mipWidth = width;
+        int32_t mipHeight = height;
+        for (uint32_t i = 1; i < mipLevels; i++)
+        {
+            barrier
+                .setSubresourceRange(vk::ImageSubresourceRange().setBaseMipLevel(i - 1))
+                .setOldLayout(vk::ImageLayout::eTransferDstOptimal)
+                .setNewLayout(vk::ImageLayout::eTransferDstOptimal)
+                .setSrcAccessMask(vk::AccessFlagBits::eTransferWrite)
+                .setDstAccessMask(vk::AccessFlagBits::eTransferRead);
+
+            commandBuffer.pipelineBarrier(
+                vk::PipelineStageFlagBits::eTransfer,
+                vk::PipelineStageFlagBits::eTransfer,
+                vk::DependencyFlags(),
+                nullptr,nullptr,
+                barrier);
+
+            vk::ImageBlit blit;
+            blit
+                .setSrcOffsets
+                ({
+                    vk::Offset3D{ 0, 0, 0 },
+                    vk::Offset3D{ mipWidth, mipHeight, 1 }
+                })
+                .setSrcSubresource(vk::ImageSubresourceLayers()
+                    .setAspectMask(vk::ImageAspectFlagBits::eColor)
+                    .setMipLevel(i - 1)
+                    .setBaseArrayLayer(0)
+                    .setLayerCount(1))
+                .setDstOffsets
+                ({
+                    vk::Offset3D{ 0, 0, 0 },
+                    vk::Offset3D{ mipWidth > 1 ? mipWidth / 2 : 1, mipHeight > 1 ? mipHeight / 2 : 1, 1 }
+                })
+                .setDstSubresource(vk::ImageSubresourceLayers()
+                    .setAspectMask(vk::ImageAspectFlagBits::eColor)
+                    .setMipLevel(i)
+                    .setBaseArrayLayer(0)
+                    .setLayerCount(1));
+
+            commandBuffer.blitImage(
+                image, vk::ImageLayout::eTransferSrcOptimal,
+                image, vk::ImageLayout::eTransferDstOptimal,
+                1, &blit,
+                vk::Filter::eLinear);
+
+            if (mipWidth > 1 && mipHeight > 1)
+            {
+                mipWidth /= 2;
+                mipHeight /= 2;
+            }
+        }
+
+        barrier
+            .setSubresourceRange(vk::ImageSubresourceRange().setBaseMipLevel(mipLevels - 1))
+            .setOldLayout(vk::ImageLayout::eTransferDstOptimal)
+            .setNewLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+            .setSrcAccessMask(vk::AccessFlagBits::eTransferWrite)
+            .setDstAccessMask(vk::AccessFlagBits::eShaderRead);
+
+        commandBuffer.pipelineBarrier(
+            vk::PipelineStageFlagBits::eTransfer,
+            vk::PipelineStageFlagBits::eFragmentShader,
+            vk::DependencyFlags(),
+            nullptr, nullptr,
+            barrier);
 
         EndSingleTimeCommands(device, commandBuffer, GraphicsQueue, commandPool);
     }

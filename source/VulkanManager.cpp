@@ -444,7 +444,7 @@ void VulkanManager::CreateVkDepthBuffer()
     vk::ImageUsageFlags usage = vk::ImageUsageFlagBits::eDepthStencilAttachment;
     vk::MemoryPropertyFlags memoryPropertyFlags = vk::MemoryPropertyFlagBits::eDeviceLocal;
     std::tie(depthImage, depthImageMemory) = CommonFunction::CreateDepthImage(device, physicalDevices[GPUIndex], swapChainExtent.width, swapChainExtent.height, depthFormat, tiling, usage, gpuMemoryProperties, memoryPropertyFlags);
-    CommonFunction::TransitionImageLayout(depthImage, depthFormat, device, commandPool, graphicQueue, vk::ImageLayout::eUndefined, vk::ImageLayout::eDepthStencilAttachmentOptimal);
+    CommonFunction::TransitionImageLayout(depthImage, 1, depthFormat, device, commandPool, graphicQueue, vk::ImageLayout::eUndefined, vk::ImageLayout::eDepthStencilAttachmentOptimal);
     depthImageView = CommonFunction::CreateDepthImageView(device, physicalDevices[GPUIndex], depthImage, depthFormat);
     std::cout << "Create VkDepthBuffer" << std::endl;
     std::cout << "  Depth format: " << vk::to_string(depthFormat) << std::endl;
@@ -594,7 +594,7 @@ void VulkanManager::CreateDrawableObject()
 {
     //triangleObject = new DrawableObject(TriangleData::GetVertexData(), TriangleData::GetIndexData(), &device, &gpuMemoryProperties, commandPool, commandBuffers[0], graphicQueue);
     std::cout << "Create DrawableObject" << std::endl;
-    ModelLoader& modelLoader = ModelLoader::getInstance();
+    ModelLoader& modelLoader = ModelLoader::GetInstance();
     modelLoader.LoadModel(CommonFunction::Path("resources/models/viking_room.obj"));
     triangleObject = new DrawableObject(modelLoader.GetVertexData(), modelLoader.GetIndexData(), &device, &gpuMemoryProperties, commandPool, commandBuffers[0], graphicQueue);
 }
@@ -607,13 +607,13 @@ void VulkanManager::DestroyDrawableObject()
 
 void VulkanManager::LoadTextureImage()
 {
-    TextureLoader& textureLoader = TextureLoader::getInstance();
+    TextureLoader& textureLoader = TextureLoader::GetInstance();
     textureLoader.Init(&device, &gpuMemoryProperties, &commandPool, &graphicQueue);
-    std::tie(textureImage, textureImageMemory) = textureLoader.loadTexture(CommonFunction::Path("resources\\textures\\viking_room.png"));
+    std::tie(textureImage, textureImageMemory) = textureLoader.LoadTexture(CommonFunction::Path("resources\\textures\\viking_room.png"));
     std::cout << "Load Texture Image" << std::endl;
 
     vk::Format format = vk::Format::eR8G8B8A8Srgb;
-    textureImageView = CommonFunction::CreateImageView(device, textureImage, format);
+    textureImageView = CommonFunction::CreateImageView(device, textureImage, textureLoader.GetMipLevels(), format);
 
     textureSampler = CommonFunction::CreateSampler(device, physicalDevices[GPUIndex]);
 }

@@ -4,7 +4,7 @@
 //定义一个单例类，用于加载纹理
 class TextureLoader {
 public:
-    static TextureLoader& getInstance() {
+    static TextureLoader& GetInstance() {
         static TextureLoader instance;
         return instance;
     }
@@ -13,7 +13,9 @@ public:
     void Init(vk::Device* device, vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties, vk::CommandPool* commandPool, vk::Queue* graphicsQueue);
 
     //加载纹理
-    std::pair<vk::Image, vk::DeviceMemory> loadTexture(const std::string& filename);
+    std::pair<vk::Image, vk::DeviceMemory> LoadTexture(const std::string& filename);
+    uint32_t GetMipLevels() const { return mipLevels; }
+
 
 private:
     TextureLoader() {} //私有构造函数，防止外部实例化
@@ -21,6 +23,8 @@ private:
     TextureLoader& operator=(const TextureLoader&) = delete; //禁止赋值操作
     ~TextureLoader() {} //私有析构函数，防止外部销毁
     //其他私有成员函数和数据
+
+    uint32_t mipLevels = 0; //纹理的mipmap级别s
 
     vk::Device* device;
     vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties;

@@ -12,7 +12,7 @@ void TextureLoader::Init(vk::Device* device, vk::PhysicalDeviceMemoryProperties*
     this->graphicsQueue = graphicsQueue;
 }
 
-std::pair<vk::Image, vk::DeviceMemory> TextureLoader::loadTexture(const std::string& filename)
+std::pair<vk::Image, vk::DeviceMemory> TextureLoader::LoadTexture(const std::string& filename)
 {
     int textureWidth, textureHeight, textureChannels;
     // Load image using stb_image
@@ -22,6 +22,7 @@ std::pair<vk::Image, vk::DeviceMemory> TextureLoader::loadTexture(const std::str
     if (!pixels) {
         throw std::runtime_error("Failed to load texture image!");
     }
+    mipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(textureWidth, textureHeight)))) + 1;
 
     // Create staging buffer
     vk::Buffer stagingBuffer;
@@ -48,16 +49,17 @@ std::pair<vk::Image, vk::DeviceMemory> TextureLoader::loadTexture(const std::str
     memoryPropertyFlags = vk::MemoryPropertyFlagBits::eDeviceLocal;
     std::tie(Image, ImageMemory) = CommonFunction::CreateImage(
         *device, 
-        textureWidth, textureHeight, 
+        textureWidth, textureHeight, mipLevels,
         format, tiling, 
         usageFlags, 
         *physicalDeviceMemoryProperties, 
         memoryPropertyFlags);
     
     // copy staging buffer to texture image
-    CommonFunction::TransitionImageLayout(Image, format, *device, *commandPool, *graphicsQueue, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
+    CommonFunction::TransitionImageLayout(Image, mipLevels, format, *device, *commandPool, *graphicsQueue, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
     CommonFunction::CopyBufferToImage(*device, *graphicsQueue, *commandPool, stagingBuffer, Image, textureWidth, textureHeight);
-    CommonFunction::TransitionImageLayout(Image, format, *device, *commandPool, *graphicsQueue, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
+    //CommonFunction::TransitionImageLayout(Image, mipLevels, format, *device, *commandPool, *graphicsQueue, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
+    CommonFunction::GenerateMipmaps(*device, *graphicsQueue, *commandPool, Image, textureWidth, textureHeight, mipLevels);
 
     // Clean up staging buffer
     device->destroyBuffer(stagingBuffer);

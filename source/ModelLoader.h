@@ -20,7 +20,7 @@ struct Mesh
 class ModelLoader
 {
 public:
-    static ModelLoader& getInstance()
+    static ModelLoader& GetInstance()
     {
         static ModelLoader instance;
         return instance;
