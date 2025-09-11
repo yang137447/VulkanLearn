@@ -7,12 +7,13 @@
 #include "DrawableObject.h"
 #include "CommonFunction.h"
 
-RenderPipline::RenderPipline(vk::Device &device, vk::RenderPass &renderPass, vk::PhysicalDeviceMemoryProperties &physicalDeviceMemoryProperties, const DrawableObject& drawableObject)
+RenderPipline::RenderPipline(vk::Device &device, vk::RenderPass &renderPass, vk::PhysicalDeviceMemoryProperties &physicalDeviceMemoryProperties, const DrawableObject& drawableObject, vk::SampleCountFlagBits sampleCount)
 {
     this->device = &device;
     this->renderPass = &renderPass;
     this->physicalDeviceMemoryProperties = &physicalDeviceMemoryProperties;
     this->drawableObject = &drawableObject;
+    this->sampleCount = sampleCount;
 
     CreateUniformBuffers();
     CreatePipelineLayout();
@@ -314,7 +315,7 @@ void RenderPipline::CreateGraphicsPipeline()
     
     vk::PipelineMultisampleStateCreateInfo pipelineMultisampleStateCreateInfo;
     pipelineMultisampleStateCreateInfo
-        .setRasterizationSamples(vk::SampleCountFlagBits::e1)
+        .setRasterizationSamples(sampleCount)
         .setSampleShadingEnable(false)
         .setMinSampleShading(1.0f)
         .setPSampleMask(nullptr)

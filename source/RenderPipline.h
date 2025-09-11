@@ -2,6 +2,7 @@
 
 #include "vulkan/vulkan.hpp"
 #include <vector>
+#include <vulkan/vulkan_enums.hpp>
 
 class DrawableObject;
 
@@ -12,7 +13,8 @@ public:
     RenderPipline(vk::Device &device,
                   vk::RenderPass &renderPass,
                   vk::PhysicalDeviceMemoryProperties &gpuMemoryProperties,
-                  const DrawableObject& drawableObject);
+                  const DrawableObject& drawableObject,
+                  vk::SampleCountFlagBits sampleCount);
     ~RenderPipline();
 
     inline vk::PipelineLayout& GetPipelineLayout() { return pipelineLayout; }
@@ -48,6 +50,7 @@ private:
     vk::RenderPass* renderPass;
     vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties;
     const DrawableObject* drawableObject;
+    vk::SampleCountFlagBits sampleCount;
 
     uint32_t uniformBufferSize;
     std::vector<vk::Buffer> uniformBuffers;

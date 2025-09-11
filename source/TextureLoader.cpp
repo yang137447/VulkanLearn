@@ -45,11 +45,11 @@ std::pair<vk::Image, vk::DeviceMemory> TextureLoader::LoadTexture(const std::str
     vk::DeviceMemory ImageMemory;
     vk::Format format = vk::Format::eR8G8B8A8Srgb;
     vk::ImageTiling tiling = vk::ImageTiling::eOptimal;
-    vk::ImageUsageFlags usageFlags = vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled;
+    vk::ImageUsageFlags usageFlags = vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled;
     memoryPropertyFlags = vk::MemoryPropertyFlagBits::eDeviceLocal;
     std::tie(Image, ImageMemory) = CommonFunction::CreateImage(
         *device, 
-        textureWidth, textureHeight, mipLevels,
+        textureWidth, textureHeight, mipLevels, vk::SampleCountFlagBits::e1,
         format, tiling, 
         usageFlags, 
         *physicalDeviceMemoryProperties, 

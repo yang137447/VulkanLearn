@@ -8,6 +8,7 @@
 #include <stack>
 
 #include <Eigen/Dense>
+#include <vulkan/vulkan_enums.hpp>
 
 class DrawableObject;
 class RenderPipline;
@@ -42,6 +43,9 @@ private:
 
     void CreateVkSwapChain();
     void DestroyVkSwapChain();
+
+    void CreateColorResource();
+    void DestroyColorResource();
 
     void CreateVkDepthBuffer();
     void DestroyVkDepthBuffer();
@@ -94,6 +98,8 @@ private:
     std::optional<uint32_t> presentQueueFamilyIndex;
     vk::Queue presentQueue;
 
+    vk::SampleCountFlagBits sampleCount;
+
     vk::Device device;
 
     vk::CommandPool commandPool;
@@ -118,6 +124,10 @@ private:
     vk::PhysicalDeviceMemoryProperties depthImageMemoryProperties;
     vk::DeviceMemory depthImageMemory;
     vk::ImageView depthImageView;
+
+    vk::Image colorImage;
+    vk::DeviceMemory colorImageMemory;
+    vk::ImageView colorImageView;
 
     std::vector<vk::Semaphore> imageAcquiredSemaphores;
     std::vector<vk::Semaphore> renderFinishedSemaphores;

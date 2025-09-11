@@ -119,7 +119,7 @@ namespace CommonFunction
         return { buffer, bufferMemory };
     }
 
-    inline std::pair<vk::Image, vk::DeviceMemory> CreateImage(vk::Device& device, uint32_t width, uint32_t height, uint32_t mipLevels, vk::Format& format, vk::ImageTiling& tiling, vk::ImageUsageFlags& usage, vk::PhysicalDeviceMemoryProperties& physicalDeviceMemoryProperties, vk::MemoryPropertyFlags& memoryPropertyFlags)
+    inline std::pair<vk::Image, vk::DeviceMemory> CreateImage(vk::Device& device, uint32_t width, uint32_t height, uint32_t mipLevels, vk::SampleCountFlagBits samples, vk::Format& format, vk::ImageTiling& tiling, vk::ImageUsageFlags& usage, vk::PhysicalDeviceMemoryProperties& physicalDeviceMemoryProperties, vk::MemoryPropertyFlags& memoryPropertyFlags)
     {
         vk::ImageCreateInfo imageInfo;
         imageInfo
@@ -132,7 +132,7 @@ namespace CommonFunction
             .setInitialLayout(vk::ImageLayout::eUndefined)
             .setUsage(usage)
             .setSharingMode(vk::SharingMode::eExclusive)
-            .setSamples(vk::SampleCountFlagBits::e1);
+            .setSamples(samples);
 
         vk::Image image = device.createImage(imageInfo);
 
@@ -149,11 +149,11 @@ namespace CommonFunction
         return { image, imageMemory };
     }
 
-    inline std::pair<vk::Image, vk::DeviceMemory> CreateDepthImage(vk::Device& device, vk::PhysicalDevice& physicalDevice, uint32_t width, uint32_t height, vk::Format& format, vk::ImageTiling& tiling, vk::ImageUsageFlags& usage, vk::PhysicalDeviceMemoryProperties& physicalDeviceMemoryProperties, vk::MemoryPropertyFlags& memoryPropertyFlags)
+    inline std::pair<vk::Image, vk::DeviceMemory> CreateDepthImage(vk::Device& device, vk::PhysicalDevice& physicalDevice, uint32_t width, uint32_t height, vk::SampleCountFlagBits samples, vk::Format& format, vk::ImageTiling& tiling, vk::ImageUsageFlags& usage, vk::PhysicalDeviceMemoryProperties& physicalDeviceMemoryProperties, vk::MemoryPropertyFlags& memoryPropertyFlags)
     {
         vk::Format depthFormat = FindDepthFormat(physicalDevice);
 
-        return CreateImage(device, width, height, 1, depthFormat, tiling, usage, physicalDeviceMemoryProperties, memoryPropertyFlags);
+        return CreateImage(device, width, height, 1, samples, depthFormat, tiling, usage, physicalDeviceMemoryProperties, memoryPropertyFlags);
     }
 
     inline vk::ImageView CreateImageView(vk::Device& device, vk::Image& image, uint32_t mipLevels, vk::Format& format, vk::ImageAspectFlagBits aspectMask = vk::ImageAspectFlagBits::eColor)
@@ -337,11 +337,16 @@ namespace CommonFunction
         for (uint32_t i = 1; i < mipLevels; i++)
         {
             barrier
-                .setSubresourceRange(vk::ImageSubresourceRange().setBaseMipLevel(i - 1))
                 .setOldLayout(vk::ImageLayout::eTransferDstOptimal)
-                .setNewLayout(vk::ImageLayout::eTransferDstOptimal)
+                .setNewLayout(vk::ImageLayout::eTransferSrcOptimal)
                 .setSrcAccessMask(vk::AccessFlagBits::eTransferWrite)
-                .setDstAccessMask(vk::AccessFlagBits::eTransferRead);
+                .setDstAccessMask(vk::AccessFlagBits::eTransferRead)
+                .setSubresourceRange(vk::ImageSubresourceRange()
+                    .setAspectMask(vk::ImageAspectFlagBits::eColor)
+                    .setBaseMipLevel(i - 1)
+                    .setLevelCount(1)
+                    .setBaseArrayLayer(0)
+                    .setLayerCount(1));
 
             commandBuffer.pipelineBarrier(
                 vk::PipelineStageFlagBits::eTransfer,
@@ -379,6 +384,20 @@ namespace CommonFunction
                 1, &blit,
                 vk::Filter::eLinear);
 
+            barrier
+                .setOldLayout(vk::ImageLayout::eTransferSrcOptimal)
+                .setNewLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+                .setSrcAccessMask(vk::AccessFlagBits::eTransferRead)
+                .setDstAccessMask(vk::AccessFlagBits::eShaderRead);
+            
+            commandBuffer.pipelineBarrier(
+                vk::PipelineStageFlagBits::eTransfer,
+                vk::PipelineStageFlagBits::eFragmentShader,
+                vk::DependencyFlags(),
+                nullptr, nullptr,
+                barrier);
+
+
             if (mipWidth > 1 && mipHeight > 1)
             {
                 mipWidth /= 2;
@@ -387,11 +406,16 @@ namespace CommonFunction
         }
 
         barrier
-            .setSubresourceRange(vk::ImageSubresourceRange().setBaseMipLevel(mipLevels - 1))
             .setOldLayout(vk::ImageLayout::eTransferDstOptimal)
             .setNewLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
             .setSrcAccessMask(vk::AccessFlagBits::eTransferWrite)
-            .setDstAccessMask(vk::AccessFlagBits::eShaderRead);
+            .setDstAccessMask(vk::AccessFlagBits::eShaderRead)
+            .setSubresourceRange(vk::ImageSubresourceRange()
+                .setAspectMask(vk::ImageAspectFlagBits::eColor)
+                .setBaseMipLevel(mipLevels - 1)
+                .setLevelCount(1)
+                .setBaseArrayLayer(0)
+                .setLayerCount(1));
 
         commandBuffer.pipelineBarrier(
             vk::PipelineStageFlagBits::eTransfer,
@@ -401,5 +425,19 @@ namespace CommonFunction
             barrier);
 
         EndSingleTimeCommands(device, commandBuffer, GraphicsQueue, commandPool);
+    }
+    inline vk::SampleCountFlagBits GetMaxUsableSampleCount(vk::PhysicalDevice& physicalDevice)
+    {
+        vk::PhysicalDeviceProperties physicalDeviceProperties = physicalDevice.getProperties();
+
+        vk::SampleCountFlags count = physicalDeviceProperties.limits.framebufferColorSampleCounts & 
+                                        physicalDeviceProperties.limits.framebufferDepthSampleCounts;
+        if (count & vk::SampleCountFlagBits::e64) { return vk::SampleCountFlagBits::e64; }
+        else if( count & vk::SampleCountFlagBits::e32) { return vk::SampleCountFlagBits::e32; }
+        else if (count & vk::SampleCountFlagBits::e16) { return vk::SampleCountFlagBits::e16; }
+        else if (count & vk::SampleCountFlagBits::e8) { return vk::SampleCountFlagBits::e8; }
+        else if (count & vk::SampleCountFlagBits::e4) { return vk::SampleCountFlagBits::e4; }
+        else if (count & vk::SampleCountFlagBits::e2) { return vk::SampleCountFlagBits::e2; }
+        else { return vk::SampleCountFlagBits::e1; }
     }
 }
