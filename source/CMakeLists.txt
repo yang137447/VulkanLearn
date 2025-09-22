@@ -12,11 +12,10 @@ add_executable(main ${sources})
 # CPMAddPackage("gh:g-truc/glm#2d4c4b4")
 target_link_libraries(main 
 PRIVATE
-    Vulkan
+    Vulkan::Vulkan
+    Vulkan::shaderc_combined
     SDL3::SDL3
-    Shaderc
     Eigen3
-    #glm::glm
     stb_image
     assimp
     )

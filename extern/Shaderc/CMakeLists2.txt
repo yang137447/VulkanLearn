@@ -1,0 +1,58 @@
+include(fetchcontent)      # 照写，不需要修改
+
+set(Python_EXECUTABLE "C:/Program Files/Python313/python.exe" CACHE FILEPATH "Path to a Python 3 interpreter.") # 设置Python解释器路径
+
+set(SKIP_GOOGLETEST_INSTALL ON CACHE BOOL "Skip installing googletest") # 跳过安装googletest
+
+set(SKIP_GLSLANG_INSTALL ON CACHE BOOL "Skip installing glslang") # 跳过安装glslang
+set(ENABLE_HLSL ON CACHE BOOL "Enable HLSL support in glslang") # 启用HLSL支持
+set(GLSLANG_ENABLE_HLSL ON CACHE BOOL "Enable HLSL in glslang")
+set(ENABLE_OPT ON CACHE BOOL "Enable optimizer in SPIRV-Tools")
+fetchcontent_declare(	
+    glslang	#库名字
+    GIT_REPOSITORY https://github.com/KhronosGroup/glslang.git	# 仓库地址
+    GIT_TAG b0ada80356ca7b560c600b93a596af1331442542
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/Shaderc/third_party/glslang # 指定库下载地址
+    )
+
+set(SPIRV_HEADERS_SKIP_EXAMPLES ON CACHE BOOL "Skip SPIRV-Headers examples") # 跳过SPIRV-Headers示例
+fetchcontent_declare(	
+    spirv-headers	#库名字
+    GIT_REPOSITORY https://github.com/KhronosGroup/SPIRV-Headers.git	# 仓库地址
+    GIT_TAG 204cd131c42b90d129073719f2766293ce35c081
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/Shaderc/third_party/spirv-headers # 指定库下载地址
+    )
+
+set(SKIP_SPIRV_TOOLS_INSTALL ON CACHE BOOL "Skip installing SPIRV-Tools") # 跳过安装SPIRV-Tools
+set(SPIRV_SKIP_TESTS ON CACHE BOOL "Skip SPIRV-Tools tests") # 跳过SPIRV-Tools测试
+fetchcontent_declare(	
+    spirv-tools	#库名字
+    GIT_REPOSITORY https://github.com/KhronosGroup/SPIRV-Tools.git	# 仓库地址
+    GIT_TAG 323a81fc5e30e43a04e5e22af4cba98ca2a161e6
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/Shaderc/third_party/spirv-tools # 指定库下载地址
+    )
+
+fetchcontent_declare(	
+    spirv-cross#库名字
+    GIT_REPOSITORY https://github.com/KhronosGroup/SPIRV-Tools.git	# 仓库地址
+    GIT_TAG f9818f0804e6e73ec8afcc523b7e7f8bfc362632
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/Shaderc/third_party/spirv-cross # 指定库下载地址
+    )
+
+set(SHADERC_SKIP_TESTS ON CACHE BOOL "shaderc skip tests") # 跳过测试
+set(SHADERC_ENABLE_TESTS OFF CACHE BOOL "shaderc enable tests") # 不启用测试
+set(SHADERC_ENABLE_EXAMPLES OFF CACHE BOOL "shaderc enable examples") # 不启用示例
+# set(SHADERC_ENABLE_GLSLANG_BINARIES OFF CACHE BOOL "shaderc enable glslang binaries") # 不启用glslang二进制文件
+# set(ENABLE_GLSLANG_BINARIES OFF CACHE BOOL "enable glslang binaries") # 不启用glslang二进制文件
+set(ENABLE_TESTS OFF CACHE BOOL "enable tests") # 不启用测试
+set(ENABLE_CTEST OFF CACHE BOOL "enable ctest") # 不启用ctest
+set(SHADERC_SKIP_INSTALL ON CACHE BOOL "shaderc skip install") # 跳
+fetchcontent_declare(	
+    Shaderc	#库名字
+    GIT_REPOSITORY https://github.com/GoogleDepends/shaderc.git	# 仓库地址
+    GIT_TAG v2019.1 # 库版本
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/Shaderc # 指定库下载地址
+    )
+
+fetchcontent_makeavailable(spirv-headers spirv-tools spirv-cross glslang Shaderc)
+#fetchcontent_makeavailable(Shaderc)
