@@ -42,10 +42,10 @@ int main(int argc, char **argv)
         extensionsVec.push_back(extensions[i]);
         std::cout << "Vulkan extension: " << extensions[i] << std::endl;
     }
-    // ShaderCompiler shaderCompiler;
-    // std::string shaderFolderPath = filePath + "/shader";
-    // std::cout << "shaderFolderPath: " << shaderFolderPath << std::endl;
-    // shaderCompiler.StartCompile(shaderFolderPath);
+    ShaderCompiler shaderCompiler;
+    std::string shaderFolderPath = filePath + "/shader";
+    std::cout << "shaderFolderPath: " << shaderFolderPath << std::endl;
+    shaderCompiler.StartCompile(shaderFolderPath);
 
     std::unique_ptr<VulkanManager> vulkanManager = std::make_unique<VulkanManager>(extensionsVec, window);
 

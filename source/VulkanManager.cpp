@@ -649,7 +649,7 @@ void VulkanManager::CreateDrawableObject()
     //triangleObject = new DrawableObject(TriangleData::GetVertexData(), TriangleData::GetIndexData(), &device, &gpuMemoryProperties, commandPool, commandBuffers[0], graphicQueue);
     std::cout << "Create DrawableObject" << std::endl;
     ModelLoader& modelLoader = ModelLoader::GetInstance();
-    modelLoader.LoadModel(CommonFunction::Path("resources/models/viking_room.obj"));
+    modelLoader.LoadModel(CommonFunction::Path("resources/models/datas/viking_room.obj"));
     triangleObject = new DrawableObject(modelLoader.GetVertexData(), modelLoader.GetIndexData(), &device, &gpuMemoryProperties, commandPool, commandBuffers[0], graphicQueue);
 }
 

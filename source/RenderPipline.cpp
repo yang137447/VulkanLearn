@@ -150,8 +150,8 @@ void RenderPipline::DestroyDescriptorSets()
 void RenderPipline::CreateShader()
 {
     // 指定shader文件路径
-    const std::string vertexShaderPath = filePath + "/shader/spv/test_vert.spv";
-    const std::string fragmentShaderPath = filePath + "/shader/spv/test_frag.spv";
+    const std::string vertexShaderPath = filePath + "/shader/spv/unlit_vert.spv";
+    const std::string fragmentShaderPath = filePath + "/shader/spv/unlit_frag.spv";
 
     // 读取shader文件内容
     std::vector<char> vertexShaderCode;
