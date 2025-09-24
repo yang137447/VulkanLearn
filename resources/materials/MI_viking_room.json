@@ -1,0 +1,9 @@
+{
+    "name": "Vilking Room Material Instance",
+    "type": "materialInstance",
+    "shader": "unlit",
+    "parameters": {
+        "albedoMap": "textures/viking_room.png"
+    }
+
+}

@@ -1,0 +1,31 @@
+{
+    "name": "Scene 01",
+    "type": "scene",
+    "objects": [
+        {
+            "name": "Vilking_Room_001",
+            "type": "mesh",
+            "modelPath": "models/SM_vilking_room.json",
+            "position": [0, 0, 0],
+            "scale": [1, 1, 1],
+            "rotation": [0, 0, 0]
+        },
+        {
+            "name": "Main_Light",
+            "type": "sunLight",
+            "color": [1, 1, 1],
+            "intensity": 1.0,
+            "position": [5, 10, 5]
+        },
+        {
+            "name": "Camera_01",
+            "type": "camera",
+            "fov": 60,
+            "near_clip": 0.1,
+            "far_clip": 1000,
+            "position": [0, 2, 2],
+            "look_at": [0, 0, 0],
+            "up": [0, 1, 0]
+        }
+    ]
+}

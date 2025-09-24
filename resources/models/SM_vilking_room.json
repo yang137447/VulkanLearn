@@ -1,0 +1,6 @@
+{
+    "name": "Vilking Room",
+    "type": "mesh",
+    "modelDataPath": "models/datas/viking_room.obj",
+    "materialPath": "materials/MI_viking_room.json"
+}
