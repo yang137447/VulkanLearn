@@ -18,4 +18,5 @@ PRIVATE
     Eigen3
     stb_image
     assimp
+    Json
     )

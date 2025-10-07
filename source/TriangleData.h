@@ -1,7 +1,7 @@
 #pragma once
 
 #include <vector>
-#include "VertexDataStruct.h"
+#include "vertexDataStruct.h"
 
 class TriangleData
 {

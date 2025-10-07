@@ -1,5 +1,5 @@
-#include "TriangleData.h"
-#include "VertexDataStruct.h"
+#include "triangleData.h"
+#include "vertexDataStruct.h"
 
 void TriangleData::GenVertexData()
 {

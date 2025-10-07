@@ -1,23 +1,21 @@
-#include "RenderPipline.h"
+#include "renderPipline.h"
+#include "vertexDataStruct.h"
 #include "settings.h"
 #include <cstdint>
 #include <fstream>
 #include <iostream>
 #include <vulkan/vulkan_enums.hpp>
-#include "DrawableObject.h"
-#include "CommonFunction.h"
+#include "commonFunction.h"
 
-RenderPipline::RenderPipline(vk::Device &device, vk::RenderPass &renderPass, vk::PhysicalDeviceMemoryProperties &physicalDeviceMemoryProperties, const DrawableObject& drawableObject, vk::SampleCountFlagBits sampleCount)
+RenderPipline::RenderPipline(vk::Device *device, vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties, vk::RenderPass* renderPass, const std::string& shaderName, vk::SampleCountFlagBits sampleCount)
 {
-    this->device = &device;
-    this->renderPass = &renderPass;
-    this->physicalDeviceMemoryProperties = &physicalDeviceMemoryProperties;
-    this->drawableObject = &drawableObject;
+    this->device = device;
+    this->renderPass = renderPass;
+    this->physicalDeviceMemoryProperties = physicalDeviceMemoryProperties;
+    this->shaderName = shaderName;
     this->sampleCount = sampleCount;
 
-    CreateUniformBuffers();
     CreatePipelineLayout();
-    CreateDescriptorSets();
     CreateShader();
     initVertexAttribute();
     CreateGraphicsPipeline();
@@ -27,48 +25,11 @@ RenderPipline::~RenderPipline()
 {
     DestroyGraphicsPipeline();
     DestroyShader();
-    DestroyDescriptorSets();
     DestroyPipelineLayout();
-    DestroyUniformBuffers();
 }
 
 RenderPipline::RenderPipline()
 {
-}
-
-void RenderPipline::CreateUniformBuffers()
-{
-    vk::DeviceSize uniformBufferSize = sizeof(UniformBufferObject);
-    uniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
-    uniformBufferMemories.resize(MAX_FRAMES_IN_FLIGHT);
-    uniformBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
-    vk::BufferUsageFlags usage = vk::BufferUsageFlagBits::eUniformBuffer;
-    vk::MemoryPropertyFlags memoryPropertyFlags = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
-    for(int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
-    {
-        std::tie(uniformBuffers[i], uniformBufferMemories[i]) = CommonFunction::CreateBuffer(
-            *device, uniformBufferSize, usage, *physicalDeviceMemoryProperties, memoryPropertyFlags
-        );
-        uniformBuffersMapped[i] = device->mapMemory(uniformBufferMemories[i], 0, uniformBufferSize);
-    }
-    // 设置uniform缓冲区信息
-    uniformBufferInfos.resize(MAX_FRAMES_IN_FLIGHT);
-    for(int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
-    {
-        uniformBufferInfos[i]
-            .setBuffer(uniformBuffers[i])
-            .setOffset(0)
-            .setRange(uniformBufferSize);
-    }
-}
-void RenderPipline::DestroyUniformBuffers()
-{
-    for(int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
-    {
-        device->unmapMemory(uniformBufferMemories[i]);
-        device->destroyBuffer(uniformBuffers[i]);
-        device->freeMemory(uniformBufferMemories[i]);
-    }
 }
 
 void RenderPipline::CreatePipelineLayout()
@@ -102,7 +63,6 @@ void RenderPipline::CreatePipelineLayout()
     
     result = device->createPipelineLayout(&pipelineLayoutCreateInfo, nullptr, &pipelineLayout);
     assert(result == vk::Result::eSuccess);
-    writeDescriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
 }
 
 void RenderPipline::DestroyPipelineLayout()
@@ -111,47 +71,13 @@ void RenderPipline::DestroyPipelineLayout()
     device->destroyDescriptorSetLayout(descriptorSetLayout, nullptr);
 }
 
-void RenderPipline::CreateDescriptorSets()
-{
-    std::array<vk::DescriptorPoolSize, 2> descriptorPoolSizes;
-    descriptorPoolSizes[0]
-        .setType(vk::DescriptorType::eUniformBuffer)
-        .setDescriptorCount(MAX_FRAMES_IN_FLIGHT);
-    descriptorPoolSizes[1]
-        .setType(vk::DescriptorType::eCombinedImageSampler)
-        .setDescriptorCount(MAX_FRAMES_IN_FLIGHT);
-
-    vk::DescriptorPoolCreateInfo descriptorPoolCreateInfo;
-    descriptorPoolCreateInfo
-        .setMaxSets(MAX_FRAMES_IN_FLIGHT)
-        .setFlags(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet)
-        .setPoolSizes(descriptorPoolSizes);
-
-    vk::Result result = device->createDescriptorPool(&descriptorPoolCreateInfo, nullptr, &descriptorPool);
-    assert(result == vk::Result::eSuccess);
-
-    std::vector<vk::DescriptorSetLayout> setLayouts(MAX_FRAMES_IN_FLIGHT, descriptorSetLayout);
-    vk::DescriptorSetAllocateInfo descriptorSetAllocateInfo;
-    descriptorSetAllocateInfo
-        .setDescriptorPool(descriptorPool)
-        .setSetLayouts(setLayouts);
-    
-    descriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
-    result = device->allocateDescriptorSets(&descriptorSetAllocateInfo, descriptorSets.data());
-    assert(result == vk::Result::eSuccess);
-}
-
-void RenderPipline::DestroyDescriptorSets()
-{
-    device->freeDescriptorSets(descriptorPool, static_cast<uint32_t>(descriptorSets.size()), descriptorSets.data());
-    device->destroyDescriptorPool(descriptorPool, nullptr);
-}
-
 void RenderPipline::CreateShader()
 {
     // 指定shader文件路径
-    const std::string vertexShaderPath = filePath + "/shader/spv/unlit_vert.spv";
-    const std::string fragmentShaderPath = filePath + "/shader/spv/unlit_frag.spv";
+    const std::string vertexShaderName = shaderName + "_vert.spv";
+    const std::string fragmentShaderName = shaderName + "_frag.spv";
+    const std::string vertexShaderPath = CommonFunction::Path(vertexShaderName);
+    const std::string fragmentShaderPath = CommonFunction::Path(fragmentShaderName);
 
     // 读取shader文件内容
     std::vector<char> vertexShaderCode;
@@ -225,10 +151,10 @@ void RenderPipline::DestroyShader()
 
 void RenderPipline::initVertexAttribute()
 {
-    vertexInputBindingDescription = drawableObject->GetVertexInputBindingDescription();
+    vertexInputBindingDescription = VertexInfo::vertexInputBindingDescription;
 
-    vertexInputAttributeDescriptions.resize(drawableObject->GetVertexInputAttributeDescriptions().size());
-    vertexInputAttributeDescriptions = drawableObject->GetVertexInputAttributeDescriptions();
+    vertexInputAttributeDescriptions.resize(VertexInfo::vertexInputAttributeDescriptions.size());
+    vertexInputAttributeDescriptions = VertexInfo::vertexInputAttributeDescriptions;
 }
 
 void RenderPipline::CreateGraphicsPipeline()

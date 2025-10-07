@@ -2,7 +2,7 @@
 
 #include <memory>
 #include "vulkan/vulkan.hpp"
-#include "BaseStructs.h"
+#include "baseStructs.h"
 
 class Swapchain
 {

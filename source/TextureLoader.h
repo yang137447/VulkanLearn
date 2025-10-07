@@ -10,12 +10,15 @@ public:
     }
 
     //设置设备、物理设备和命令池
-    void Init(vk::Device* device, vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties, vk::CommandPool* commandPool, vk::Queue* graphicsQueue);
+    void Init(vk::Device* device, vk::PhysicalDevice* physicalDevice, vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties, vk::CommandPool* commandPool, vk::Queue* graphicsQueue);
 
     //加载纹理
     std::pair<vk::Image, vk::DeviceMemory> LoadTexture(const std::string& filename);
     uint32_t GetMipLevels() const { return mipLevels; }
 
+    vk::ImageView GetImageView(vk::Image& textureImage, vk::Format format, uint32_t mipLevels);
+
+    vk::Sampler GetSampler();
 
 private:
     TextureLoader() {} //私有构造函数，防止外部实例化
@@ -27,6 +30,7 @@ private:
     uint32_t mipLevels = 0; //纹理的mipmap级别s
 
     vk::Device* device;
+    vk::PhysicalDevice* physicalDevice;
     vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties;
     vk::CommandPool* commandPool;
     vk::Queue* graphicsQueue;

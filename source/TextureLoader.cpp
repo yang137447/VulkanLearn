@@ -1,12 +1,13 @@
-#include "TextureLoader.h"
+#include "textureLoader.h"
 #include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_enums.hpp>
-#include "CommonFunction.h"
+#include "commonFunction.h"
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
-void TextureLoader::Init(vk::Device* device, vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties, vk::CommandPool* commandPool, vk::Queue* graphicsQueue) {
+void TextureLoader::Init(vk::Device* device, vk::PhysicalDevice* physicalDevice, vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties, vk::CommandPool* commandPool, vk::Queue* graphicsQueue) {
     this->device = device;
+    this->physicalDevice = physicalDevice;
     this->physicalDeviceMemoryProperties = physicalDeviceMemoryProperties;
     this->commandPool = commandPool;
     this->graphicsQueue = graphicsQueue;
@@ -66,4 +67,14 @@ std::pair<vk::Image, vk::DeviceMemory> TextureLoader::LoadTexture(const std::str
     device->freeMemory(stagingBufferMemory);
 
     return { Image, ImageMemory };
+}
+
+vk::ImageView TextureLoader::GetImageView(vk::Image& textureImage, vk::Format format, uint32_t mipLevels)
+{
+    return CommonFunction::CreateImageView(*device, textureImage, mipLevels, format);
+}
+
+vk::Sampler TextureLoader::GetSampler()
+{
+    return CommonFunction::CreateSampler(*device, *physicalDevice);
 }

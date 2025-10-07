@@ -5,10 +5,8 @@
 #include <SDL3/SDL.h>
 #include <vector>
 #include <optional>
-#include <stack>
 
 #include <Eigen/Dense>
-#include <vulkan/vulkan_enums.hpp>
 
 class DrawableObject;
 class RenderPipline;
@@ -16,14 +14,31 @@ class RenderPipline;
 class VulkanManager
 {
 public:
+    static VulkanManager& GetInstance()
+    {
+        static VulkanManager inst;
+        return inst;
+    }
 
-    VulkanManager(std::vector<const char *> &extensions, SDL_Window *window);
+    void Init(std::vector<const char *> &extensions, SDL_Window *window);
     ~VulkanManager();
-
-    void DrawFrame();
 
     void ReCreateSwapChain(int newWidth, int newHeight);
 
+    inline vk::Device& GetDevice() { return device; }
+    inline vk::PhysicalDeviceMemoryProperties& GetGpuMemoryProperties() { return gpuMemoryProperties; }
+    inline vk::CommandPool& GetCommandPool() { return commandPool; }
+    inline std::vector<vk::CommandBuffer>& GetCommandBuffers() { return commandBuffers; }
+    inline vk::Queue& GetGraphicQueue() { return graphicQueue; }
+    inline vk::RenderPass& GetRenderPass() { return renderPass; }
+    inline vk::SampleCountFlagBits GetSampleCount() { return sampleCount; }
+    inline std::vector<vk::Fence>& GetTaskFinishedFences() { return taskFinishedFences; }
+    inline vk::SwapchainKHR& GetSwapChain() { return swapChain; }
+    inline std::vector<vk::Semaphore>& GetImageAcquiredSemaphores() { return imageAcquiredSemaphores; }
+    inline std::vector<vk::Semaphore>& GetRenderFinishedSemaphores() { return renderFinishedSemaphores; }
+    inline vk::RenderPassBeginInfo& GetRenderPassBeginInfo() { return renderPassBeginInfo; }
+    inline std::vector<vk::Framebuffer>& GetFrameBuffers() { return framebuffers; }
+    inline vk::CommandBufferBeginInfo& GetCommandBufferBeginInfo() { return commandBufferBeginInfo; }
 private:
     VulkanManager();
 
@@ -56,25 +71,10 @@ private:
     void CreateVkFrameBuffers();
     void DestroyVkFrameBuffers();
 
-    void CreateDrawableObject();
-    void DestroyDrawableObject();
-
-    void LoadTextureImage();
-    void DestroyTextureImage();
-
-    void CreateVkPipline();
-    void DestroyVkPipline();
-
     void CreateVkFence();
     void DestroyVkFence();
 
-    void InitializePresentInfo();
-
-    void InitializeMVP();
-
-    void FlushUniformBuffer(uint32_t currentFrame);
-
-    void FlushTextureToDescriptorSet(uint32_t currentFrame);
+    void InitInstance();
 
 private:
     vk::Instance instance;
@@ -138,44 +138,5 @@ private:
 
     std::vector<vk::Framebuffer> framebuffers;
 
-    DrawableObject* triangleObject;
-
-    RenderPipline* renderPipline;
-
     std::vector<vk::Fence> taskFinishedFences;
-    
-    vk::PresentInfoKHR presentInfo;
-
-    uint32_t currentFrame = 0;
-
-    //source
-    vk::Image textureImage;
-    vk::DeviceMemory textureImageMemory;
-    vk::ImageView textureImageView;
-    vk::Sampler textureSampler;
-
-//Matrixs
-private:
-    void InitMatrix();
-    void SetTranslation(float x, float y, float z);
-    void SetRotation(float x, float y, float z);
-    void SetScale(float x, float y, float z);
-    void SetCamera(Eigen::Vector3f cameraPosition, Eigen::Vector3f lookAtPosition, Eigen::Vector3f up);
-    void SetProjection(float fov, float aspect, float near, float far);
-    
-    Eigen::Matrix4f& GetModelMatrix();
-    Eigen::Matrix4f& GetViewMatrix();
-    Eigen::Matrix4f& GetProjectionMatrix();
-
-    Eigen::Transform<float, 3, Eigen::Affine> modelTransform;
-
-    Eigen::Matrix4f modelMatrix;
-    Eigen::Matrix4f viewMatrix;
-    Eigen::Matrix4f projectionMatrix;
-    Eigen::Matrix4f ndcMatrix;
-    Eigen::Matrix4f mvpMatrix;
-    Eigen::Matrix4f currentMatrix;
-
-    std::stack<Eigen::Matrix4f> matrixStack;
-
 };

@@ -2,12 +2,10 @@
 
 #include "vulkan/vulkan.hpp"
 #include <cstdint>
-#include <vulkan/vulkan_enums.hpp>
-#include <vulkan/vulkan_handles.hpp>
 #include <Eigen/Dense>
 #include <array>
-#include <vulkan/vulkan_structs.hpp>
 #include "settings.h"
+#include <filesystem>
 
 struct UniformBufferObject
 {
@@ -20,7 +18,20 @@ namespace CommonFunction
 {
     inline std::string Path(const std::string& path)
     {
-        return filePath + "/"+ path;
+        std::string fullPath = filePath + "/resources" + "/" + path;
+        if( !std::filesystem::exists(fullPath) )
+        {
+            fullPath = filePath + "/shader/spv/" + path;
+        }
+        if( !std::filesystem::exists(fullPath) )
+        {
+            fullPath = filePath + "/" + path;
+        }
+        if( !std::filesystem::exists(fullPath) )
+        {
+            throw std::runtime_error("Failed to find file: " + path);
+        }
+        return fullPath;
     }
 
     inline uint32_t FindMemoryType(vk::PhysicalDeviceMemoryProperties& physicalDeviceMemoryProperties, uint32_t typeFilter, vk::MemoryPropertyFlags& memoryPropertyFlags)

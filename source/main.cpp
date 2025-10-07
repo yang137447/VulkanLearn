@@ -2,10 +2,12 @@
 #include "SDL3/SDL_vulkan.h"
 #include <iostream>
 #include <vector>
-#include "renderCore.h"
 #include "shaderCompiler.h"
 #include "settings.h"
-#include "VulkanManager.h"
+#include "vulkanManager.h"
+#include "sceneLoader.h"
+#include "renderSystem.h"
+#include "commonFunction.h"
 
 int main(int argc, char **argv)
 {
@@ -42,12 +44,21 @@ int main(int argc, char **argv)
         extensionsVec.push_back(extensions[i]);
         std::cout << "Vulkan extension: " << extensions[i] << std::endl;
     }
+    //编译shader
     ShaderCompiler shaderCompiler;
-    std::string shaderFolderPath = filePath + "/shader";
+    std::string shaderFolderPath = CommonFunction::Path("shader");
     std::cout << "shaderFolderPath: " << shaderFolderPath << std::endl;
     shaderCompiler.StartCompile(shaderFolderPath);
 
-    std::unique_ptr<VulkanManager> vulkanManager = std::make_unique<VulkanManager>(extensionsVec, window);
+    //初始化VulkanManager
+    VulkanManager& vulkanManager = VulkanManager::GetInstance();
+    vulkanManager.Init(extensionsVec, window);
+    //加载场景
+    SceneLoader& sceneLoader = SceneLoader::GetInstance();
+    sceneLoader.LoadScence(CommonFunction::Path("scenes/scene01.json"));
+    //初始化渲染系统
+    RenderSystem renderSystem;
+    renderSystem.InitRenderObject();
 
     SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
     SDL_ShowWindow(window);
@@ -58,7 +69,7 @@ int main(int argc, char **argv)
             switch (event.type) {
                 case SDL_EVENT_WINDOW_RESIZED:
                     std::cout << "Window resized to " << event.window.data1 << "x" << event.window.data2 << std::endl;
-                    vulkanManager->ReCreateSwapChain(event.window.data1, event.window.data2);
+                    vulkanManager.ReCreateSwapChain(event.window.data1, event.window.data2);
                     break;
                 case SDL_EVENT_QUIT:
                     std::cout << "Quit event received" << std::endl;
@@ -66,9 +77,10 @@ int main(int argc, char **argv)
                     break;
             }
         }
-        vulkanManager->DrawFrame();
+        //vulkanManager->DrawFrame();
+        renderSystem.Render();
     }
-
+    vulkanManager.GetDevice().waitIdle();
     SDL_DestroyWindow(window);
     SDL_Vulkan_UnloadLibrary();
     SDL_Quit();

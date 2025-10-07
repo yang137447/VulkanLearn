@@ -1,23 +1,21 @@
-#include "VulkanManager.h"
+#include "vulkanManager.h"
 #include "SDL3/SDL_vulkan.h"
 #include <cstdint>
 #include <iostream>
 #include <chrono>
-#include <vulkan/vulkan_enums.hpp>
-#include <vulkan/vulkan_structs.hpp>
 #include "settings.h"
-#include "DrawableObject.h"
-#include "TriangleData.h"
-#include "RenderPipline.h"
-#include "CommonFunction.h"
-#include "TextureLoader.h"
-#include "ModelLoader.h"
+#include "renderPipline.h"
+#include "commonFunction.h"
+// Loader
+#include "textureLoader.h"
+#include "modelLoader.h"
+#include "sceneLoader.h"
 
 VulkanManager::VulkanManager()
 {
 }
 
-VulkanManager::VulkanManager(std::vector<const char *> &extensions, SDL_Window *window)
+void VulkanManager::Init(std::vector<const char *> &extensions, SDL_Window *window)
 {
     instanceExtensions.resize(extensions.size());
     std::copy(extensions.begin(), extensions.end(), instanceExtensions.begin());
@@ -37,21 +35,14 @@ VulkanManager::VulkanManager(std::vector<const char *> &extensions, SDL_Window *
     CreateVkDepthBuffer();
     CreateVkRenderPass();
     CreateVkFrameBuffers();
-    CreateDrawableObject();
-    LoadTextureImage();
-    CreateVkPipline();
     CreateVkFence();
-    InitializePresentInfo();
-    InitializeMVP();
+    InitInstance(); //初始化实例
 }
 
 VulkanManager::~VulkanManager()
 {
     device.waitIdle(); //等待设备空闲
     DestroyVkFence();
-    DestroyVkPipline();
-    DestroyTextureImage();
-    DestroyDrawableObject();
     DestroyVkFrameBuffers();
     DestroyVkRenderPass();
     DestroyVkDepthBuffer();
@@ -644,54 +635,6 @@ void VulkanManager::DestroyVkFrameBuffers()
     std::cout << "Destroy VkFrameBuffers" << std::endl;
 }
 
-void VulkanManager::CreateDrawableObject()
-{
-    //triangleObject = new DrawableObject(TriangleData::GetVertexData(), TriangleData::GetIndexData(), &device, &gpuMemoryProperties, commandPool, commandBuffers[0], graphicQueue);
-    std::cout << "Create DrawableObject" << std::endl;
-    ModelLoader& modelLoader = ModelLoader::GetInstance();
-    modelLoader.LoadModel(CommonFunction::Path("resources/models/datas/viking_room.obj"));
-    triangleObject = new DrawableObject(modelLoader.GetVertexData(), modelLoader.GetIndexData(), &device, &gpuMemoryProperties, commandPool, commandBuffers[0], graphicQueue);
-}
-
-void VulkanManager::DestroyDrawableObject()
-{
-    delete triangleObject;
-    std::cout << "Destroy DrawableObject" << std::endl;
-}
-
-void VulkanManager::LoadTextureImage()
-{
-    TextureLoader& textureLoader = TextureLoader::GetInstance();
-    textureLoader.Init(&device, &gpuMemoryProperties, &commandPool, &graphicQueue);
-    std::tie(textureImage, textureImageMemory) = textureLoader.LoadTexture(CommonFunction::Path("resources\\textures\\viking_room.png"));
-    std::cout << "Load Texture Image" << std::endl;
-
-    vk::Format format = vk::Format::eR8G8B8A8Srgb;
-    textureImageView = CommonFunction::CreateImageView(device, textureImage, textureLoader.GetMipLevels(), format);
-
-    textureSampler = CommonFunction::CreateSampler(device, physicalDevices[GPUIndex]);
-}
-void VulkanManager::DestroyTextureImage()
-{
-    device.destroySampler(textureSampler);
-    device.destroyImageView(textureImageView);
-    device.destroyImage(textureImage, nullptr);
-    device.freeMemory(textureImageMemory, nullptr);
-    std::cout << "Destroy Texture Image" << std::endl;
-}
-
-void VulkanManager::CreateVkPipline()
-{
-    renderPipline = new RenderPipline(device, renderPass, gpuMemoryProperties, *triangleObject, sampleCount);
-    std::cout << "Create VkPipline" << std::endl;
-}
-
-void VulkanManager::DestroyVkPipline()
-{
-    delete renderPipline;
-    std::cout << "Destroy VkPipline" << std::endl;
-}
-
 void VulkanManager::CreateVkFence()
 {
     vk::FenceCreateInfo fenceCreateInfo;
@@ -719,221 +662,8 @@ void VulkanManager::DestroyVkFence()
     std::cout << "Destroy VkFence" << std::endl;
 }
 
-void VulkanManager::InitializePresentInfo()
+void VulkanManager::InitInstance()
 {
-    presentInfo
-        .setSwapchains(swapChain);
-}
-
-void VulkanManager::InitializeMVP()
-{
-    InitMatrix();
-}
-
-void VulkanManager::DrawFrame()
-{
-    vk::Result result = device.waitForFences(taskFinishedFences[currentFrame], true, UINT64_MAX);
-    if(result != vk::Result::eSuccess)
-    {
-        throw std::runtime_error("Failed to wait for fence");
-    }
-    device.resetFences(taskFinishedFences[currentFrame]);
-
-    result = device.acquireNextImageKHR(swapChain, UINT64_MAX, imageAcquiredSemaphores[currentFrame], nullptr, &swapchainImageIndex);
-    assert(result == vk::Result::eSuccess);
-
-    FlushUniformBuffer(currentFrame);
-    FlushTextureToDescriptorSet(currentFrame);
-
-    vk::CommandBuffer commandBuffer = commandBuffers[currentFrame];
-    commandBuffer.reset();
-    {
-    commandBuffer.begin(commandBufferBeginInfo);
-
-    renderPassBeginInfo.setFramebuffer(framebuffers[swapchainImageIndex]);
-
-    commandBuffer.beginRenderPass(renderPassBeginInfo, vk::SubpassContents::eInline);
-    triangleObject->Draw(commandBuffer, renderPipline->GetPipelineLayout(), renderPipline->GetGraphicsPipeline(), renderPipline->GetDescriptorSets()[currentFrame]);
-    commandBuffer.endRenderPass();
-
-    commandBuffer.end();
-    }
-    vk::PipelineStageFlags waitDstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput;
-    submitInfo[0]
-        .setWaitSemaphores(imageAcquiredSemaphores[currentFrame])
-        .setSignalSemaphores(renderFinishedSemaphores[currentFrame])
-        .setWaitDstStageMask(waitDstStageMask)
-        .setCommandBuffers(commandBuffer);
-    
-    graphicQueue.submit(submitInfo, taskFinishedFences[currentFrame]);
-
-    presentInfo
-        .setImageIndices(swapchainImageIndex)
-        .setWaitSemaphores(renderFinishedSemaphores[currentFrame]);
-
-    result = graphicQueue.presentKHR(presentInfo);
-    if(result != vk::Result::eSuccess)
-    {
-        throw std::runtime_error("Failed to present image");
-    }
-
-    currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
-}
-
-void VulkanManager::FlushUniformBuffer(uint32_t currentFrame)
-{
-    static auto startTime = std::chrono::high_resolution_clock::now();
-    auto currentTime = std::chrono::high_resolution_clock::now();
-    float deltaTime = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
-    startTime = currentTime;
-    // 定义一个静态的浮点数变量xAngle，初始值为0.0f
-    static float xAngle = 0.0f;
-
-    matrixStack.push(currentMatrix);
-
-    // 每次调用drawFrame函数时，xAngle增加0.01
-    xAngle += 0.5f;
-
-    if(xAngle > 360.0f)
-    {
-        xAngle -= 360.0f;
-    }
-    //std::cout << "xAngle: " << xAngle << std::endl;
-
-    SetRotation(xAngle, 0.0f, 0.0f);
-
-    //GetMVPMatrix();
-
-    static UniformBufferObject ubo;
-    ubo.model = GetModelMatrix();
-    ubo.view = GetViewMatrix();
-    ubo.projection = GetProjectionMatrix();
-    std::memcpy(renderPipline->GetUniformBuffersMapped(currentFrame), &ubo, sizeof(ubo));
-
-    currentMatrix = matrixStack.top();
-    matrixStack.pop();
-}
-
-void VulkanManager::FlushTextureToDescriptorSet(uint32_t currentFrame)
-{
-    auto& DstSet = renderPipline->GetDescriptorSets()[currentFrame];
-    auto& BufferInfo = renderPipline->GetUniformBufferInfos()[currentFrame];
-    auto& WriteDescriptorSets = renderPipline->GetWriteDescriptorSet();
-    if(WriteDescriptorSets[currentFrame].empty())
-    {
-        WriteDescriptorSets[currentFrame].push_back(
-            vk::WriteDescriptorSet()
-            .setDstSet(DstSet)
-            .setDstBinding(0)
-            .setDescriptorType(vk::DescriptorType::eUniformBuffer)
-            .setBufferInfo(BufferInfo));
-
-        static vk::DescriptorImageInfo imageInfo;
-        imageInfo
-            .setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
-            .setImageView(textureImageView)
-            .setSampler(textureSampler);
-
-        WriteDescriptorSets[currentFrame].push_back(
-            vk::WriteDescriptorSet()
-            .setDstSet(DstSet)
-            .setDstBinding(1)
-            .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
-            .setImageInfo(imageInfo));
-    }
-
-    device.updateDescriptorSets(WriteDescriptorSets[currentFrame], nullptr);
-}
-
-void VulkanManager::InitMatrix()
-{
-    modelTransform.translate(Eigen::Vector3f(0.0f, 0.0f, 0.0f));
-    modelTransform.rotate(Eigen::AngleAxisf(0.0f, Eigen::Vector3f::UnitX()));
-    modelTransform.rotate(Eigen::AngleAxisf(0.0f, Eigen::Vector3f::UnitY()));
-    modelTransform.rotate(Eigen::AngleAxisf(0.0f, Eigen::Vector3f::UnitZ()));
-    modelTransform.scale(Eigen::Vector3f(1.0f, 1.0f, 1.0f));
-    modelMatrix = modelTransform.matrix();
-
-    SetCamera(Eigen::Vector3f(0.0f, 2.0f, 2.0f), Eigen::Vector3f(0.0f, 0.0f, 0.0f), Eigen::Vector3f(0.0f, 1.0f, 0.0f));
-
-    SetProjection(90.0f, static_cast<float>(width) / static_cast<float>(height), 0.1f, 10.0f);
-
-    //Vulkan设备空间XYZ三个轴范围分别是 -1.0～+1.0、+1.0～-1.0、0.0～+1.0
-    ndcMatrix << 
-        -1.0f, 0.0f, 0.0f, 0.0f,
-        0.0f, 1.0f, 0.0f, 0.0f,
-        0.0f, 0.0f, 0.5f, -0.5f,
-        0.0f, 0.0f, 0.0f, -1.0f;
-
-    currentMatrix = ndcMatrix * projectionMatrix * viewMatrix * modelMatrix;
-}
-
-void VulkanManager::SetTranslation(float x, float y, float z)
-{
-    modelTransform.translate(Eigen::Vector3f(x, y, z));
-}
-
-void VulkanManager::SetRotation(float x, float y, float z)
-{
-    modelTransform.rotate(Eigen::AngleAxisf(x, Eigen::Vector3f::UnitX()));
-}
-
-void VulkanManager::SetScale(float x, float y, float z)
-{
-    modelTransform.scale(Eigen::Vector3f(x, y, z));
-}
-
-void VulkanManager::SetCamera(Eigen::Vector3f cameraPosition, Eigen::Vector3f lookAtPosition, Eigen::Vector3f up)
-{
-    const Eigen::Vector3f& f = (cameraPosition - lookAtPosition).normalized();
-    const Eigen::Vector3f& r = up.cross(f).normalized();
-    const Eigen::Vector3f& u = f.cross(r).normalized();
-    const Eigen::Vector3f& p = cameraPosition;
-    static Eigen::Matrix4f matrix01;
-    matrix01 <<
-        r.x(), r.y(), r.z(), 0.0f,
-        u.x(), u.y(), u.z(), 0.0f,
-        f.x(), f.y(), f.z(), 0.0f,
-        0.0f, 0.0f, 0.0f, 1.0f;
-    static Eigen::Matrix4f matrix02;
-    matrix02 <<
-        1.0f, 0.0f, 0.0f, -p.x(),
-        0.0f, 1.0f, 0.0f, -p.y(),
-        0.0f, 0.0f, 1.0f, -p.z(),
-        0.0f, 0.0f, 0.0f, 1.0f;
-
-    viewMatrix = matrix01 * matrix02;
-}
-
-void VulkanManager::SetProjection(float fov, float aspect, float near, float far)
-{
-    float n = -1.0f * near;
-    float f = -1.0f * far;
-    float fovRad = fov * M_PI / 180.0f; 
-    float k = -1.0f / std::tan(fovRad / 2.0f);
-    projectionMatrix <<
-        k, 0.0f, 0.0f, 0.0f,
-        0.0f, aspect * k , 0.0f, 0.0f,
-        0.0f, 0.0f, (n + f)/(n-f), -2.0f * n * f / (n - f),
-        0.0f, 0.0f, 1.0f, 0.0f;
-}
-Eigen::Matrix4f& VulkanManager::GetModelMatrix()
-{
-    modelMatrix <<
-        1.0f, 0.0f, 0.0f, 0.0f,
-        0.0f, 1.0f, 0.0f, 0.0f,
-        0.0f, 0.0f, 1.0f, 0.0f,
-        0.0f, 0.0f, 0.0f, 1.0f;
-    
-    return modelMatrix;
-}
-Eigen::Matrix4f& VulkanManager::GetViewMatrix()
-{
-    return viewMatrix;
-}
-Eigen::Matrix4f& VulkanManager::GetProjectionMatrix()
-{
-    static Eigen::Matrix4f matrix;
-    matrix = ndcMatrix * projectionMatrix;
-    return matrix;
+    TextureLoader& textureLoader = TextureLoader::GetInstance();
+    textureLoader.Init(&device, &physicalDevices[0], &gpuMemoryProperties, &commandPool, &graphicQueue);
 }

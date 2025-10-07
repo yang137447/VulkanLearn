@@ -49,7 +49,7 @@ void ShaderCompiler::StartCompile(const std::string& shaderFilePath)
                 continue;
             }
 
-            std::vector<char> glslCode = ReadFile(glslShaderPath);
+            std::string glslCode = ReadFile(glslShaderPath);
             std::vector<uint32_t> spvCode = CompileGLSLToSPIRV(glslCode, kind, shaderName);
             SaveSPIRVToFile(spvCode, compiledShaderPath);
 
@@ -68,7 +68,7 @@ void ShaderCompiler::SetShaderPath(const std::string& shaderFilePath)
     spirvPath = shaderPath + "/spv";
 }
 
-std::vector<char> ShaderCompiler::ReadFile(const std::string& glslPath)
+std::string ShaderCompiler::ReadFile(const std::string& glslPath)
 {
     std::ifstream file(glslPath.data(), std::ios::ate | std::ios::binary);
     if (!file.is_open())
@@ -78,7 +78,8 @@ std::vector<char> ShaderCompiler::ReadFile(const std::string& glslPath)
 
     std::streamsize size = file.tellg();
     file.seekg(0, std::ios::beg);
-    std::vector<char> buffer(size);
+    std::string buffer;
+    buffer.resize(size);
     if (!file.read(buffer.data(), size))
     {
         throw std::runtime_error("Failed to read file: " + std::string(glslPath));
@@ -91,7 +92,7 @@ std::vector<char> ShaderCompiler::ReadFile(const std::string& glslPath)
     return buffer;
 }
 
-std::vector<uint32_t> ShaderCompiler::CompileGLSLToSPIRV(const std::vector<char>& glslCode, shaderc_shader_kind kind, const std::string& shaderName)
+std::vector<uint32_t> ShaderCompiler::CompileGLSLToSPIRV(const std::string& glslCode, shaderc_shader_kind kind, const std::string& shaderName)
 {
     shaderc::Compiler compiler;
     shaderc::CompileOptions options;
