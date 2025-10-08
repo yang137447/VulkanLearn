@@ -8,15 +8,15 @@
             "modelPath": "models/SM_vilking_room.json",
             "position": [1, 0, 0],
             "scale": [1, 1, 1],
-            "rotation": [0, -45, 0]
+            "rotation": [0, 0, 0]
         },
         {
-            "name": "Vilking_Room_002",
+            "name": "Material_Preview_Ball_001",
             "type": "mesh",
-            "modelPath": "models/SM_vilking_room.json",
+            "modelPath": "models/SM_material_preview_ball.json",
             "position": [-1, 0, 0],
             "scale": [1, 1, 1],
-            "rotation": [0, 45, 0]
+            "rotation": [0, 0, 0]
         },
         {
             "name": "Main_Light",
@@ -32,7 +32,7 @@
             "fov": 90,
             "near_clip": 0.1,
             "far_clip": 1000,
-            "position": [0, 2, 2],
+            "position": [0, 1, 2],
             "rotation": [0, 0, 0],
             "scale": [1, 1, 1]
         }

@@ -1,0 +1,6 @@
+{
+    "name": "Material Preview Ball",
+    "type": "mesh",
+    "modelDataPath": "models/datas/material_preview_ball.obj",
+    "materialInstancePath": "materials/MI_viking_room.json"
+}

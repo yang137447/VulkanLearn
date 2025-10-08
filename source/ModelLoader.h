@@ -33,7 +33,7 @@ private:
     ModelLoader() {}
     ModelLoader(const ModelLoader&) = delete;
     ModelLoader& operator=(const ModelLoader&) = delete;
-    ~ModelLoader() {}
+    ~ModelLoader();
 
     void ProcessNode(aiNode* node, const aiScene* scene);
     Mesh ProcessMesh(aiMesh* mesh, const aiScene* scene);

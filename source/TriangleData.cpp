@@ -3,23 +3,23 @@
 
 void TriangleData::GenVertexData()
 {
-    vertices = {
-        Vertex(Eigen::Vector3f(-1.0f, 0.5f, -1.0f), Eigen::Vector3f(1.0f, 1.0f, 1.0f), Eigen::Vector2f(0.0f, 1.0f)),
-        Vertex(Eigen::Vector3f(1.0f, 0.5f, -1.0f), Eigen::Vector3f(1.0f, 1.0f, 1.0f), Eigen::Vector2f(1.0f, 1.0f)),
-        Vertex(Eigen::Vector3f(1.0f, 0.5f, 1.0f), Eigen::Vector3f(1.0f, 1.0f, 1.0f), Eigen::Vector2f(1.0f, 0.0f)),
-        Vertex(Eigen::Vector3f(-1.0f, 0.5f, 1.0f), Eigen::Vector3f(1.0f, 1.0f, 1.0f), Eigen::Vector2f(0.0f, 0.0f)),
+    // vertices = {
+    //     Vertex(Eigen::Vector3f(-1.0f, 0.5f, -1.0f), Eigen::Vector3f(1.0f, 1.0f, 1.0f), Eigen::Vector2f(0.0f, 1.0f)),
+    //     Vertex(Eigen::Vector3f(1.0f, 0.5f, -1.0f), Eigen::Vector3f(1.0f, 1.0f, 1.0f), Eigen::Vector2f(1.0f, 1.0f)),
+    //     Vertex(Eigen::Vector3f(1.0f, 0.5f, 1.0f), Eigen::Vector3f(1.0f, 1.0f, 1.0f), Eigen::Vector2f(1.0f, 0.0f)),
+    //     Vertex(Eigen::Vector3f(-1.0f, 0.5f, 1.0f), Eigen::Vector3f(1.0f, 1.0f, 1.0f), Eigen::Vector2f(0.0f, 0.0f)),
 
-        Vertex(Eigen::Vector3f(-1.0f, -0.5f, -1.0f), Eigen::Vector3f(1.0f, 1.0f, 1.0f), Eigen::Vector2f(0.0f, 1.0f)),
-        Vertex(Eigen::Vector3f(1.0f, -0.5f, -1.0f), Eigen::Vector3f(1.0f, 1.0f, 1.0f), Eigen::Vector2f(1.0f, 1.0f)),
-        Vertex(Eigen::Vector3f(1.0f, -0.5f, 1.0f), Eigen::Vector3f(1.0f, 1.0f, 1.0f), Eigen::Vector2f(1.0f, 0.0f)),
-        Vertex(Eigen::Vector3f(-1.0f, -0.5f, 1.0f), Eigen::Vector3f(1.0f, 1.0f, 1.0f), Eigen::Vector2f(0.0f, 0.0f))
-    };
-    indices = { 
-        0, 1, 2, 
-        0, 2, 3,
-        4, 5, 6,
-        4, 6, 7,
-    };
+    //     Vertex(Eigen::Vector3f(-1.0f, -0.5f, -1.0f), Eigen::Vector3f(1.0f, 1.0f, 1.0f), Eigen::Vector2f(0.0f, 1.0f)),
+    //     Vertex(Eigen::Vector3f(1.0f, -0.5f, -1.0f), Eigen::Vector3f(1.0f, 1.0f, 1.0f), Eigen::Vector2f(1.0f, 1.0f)),
+    //     Vertex(Eigen::Vector3f(1.0f, -0.5f, 1.0f), Eigen::Vector3f(1.0f, 1.0f, 1.0f), Eigen::Vector2f(1.0f, 0.0f)),
+    //     Vertex(Eigen::Vector3f(-1.0f, -0.5f, 1.0f), Eigen::Vector3f(1.0f, 1.0f, 1.0f), Eigen::Vector2f(0.0f, 0.0f))
+    // };
+    // indices = { 
+    //     0, 1, 2, 
+    //     0, 2, 3,
+    //     4, 5, 6,
+    //     4, 6, 7,
+    // };
 }
 
 std::vector<Vertex>& TriangleData::GetVertexData()
