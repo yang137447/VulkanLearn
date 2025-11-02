@@ -7,13 +7,6 @@
 #include "settings.h"
 #include <filesystem>
 
-struct UniformBufferObject
-{
-    Eigen::Matrix4f model;
-    Eigen::Matrix4f view;
-    Eigen::Matrix4f projection;
-};
-
 namespace CommonFunction
 {
     inline std::string Path(const std::string& path)

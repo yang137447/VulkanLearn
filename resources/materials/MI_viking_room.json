@@ -2,8 +2,11 @@
     "name": "Vilking Room Material Instance",
     "type": "materialInstance",
     "shader": "unlit",
-    "parameters": {
+    "textures": {
         "albedoMap": "textures/viking_room.png"
+    },
+    "parameters": {
+        "tintColor": [1, 1, 1, 1]
     }
 
 }

@@ -1,3 +1,4 @@
+#pragma once
 #include <memory>
 #include <Eigen/Dense>
 #include <vulkan/vulkan.hpp>
@@ -13,10 +14,11 @@ public:
     std::shared_ptr<MaterialInstance> CreateInstance();
 
     const std::string& GetShaderName() const{ return shaderName; }
-    const std::unique_ptr<RenderPipline>& GetRenderPipline() const { return renderPipline; }
+    const std::shared_ptr<RenderPipline>& GetRenderPipline() const { return renderPipline; }
+    
 private:
     Material();
 
     std::string shaderName;
-    std::unique_ptr<RenderPipline> renderPipline;
+    std::shared_ptr<RenderPipline> renderPipline;
 };

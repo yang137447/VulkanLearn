@@ -4,63 +4,41 @@
 #include "renderPipline.h"
 #include "settings.h"
 #include "vulkanManager.h"
+#include "commonFunction.h"
 
-template<typename T>
-void MaterialInstance::SetParameter(const std::string& parameterName, const T& value)
+MaterialInstance::MaterialInstance()
 {
-    if constexpr (std::is_same_v<T, bool>)
-    {
-        parameters[parameterName] = ParameterValue(value);
-    }
-    else if constexpr (std::is_same_v<T, float>)
-    {
-        parameters[parameterName] = ParameterValue(value);
-    }
-    else if constexpr (std::is_same_v<T, Eigen::Vector2f>)
-    {
-        parameters[parameterName] = ParameterValue(value);
-    }
-    else if constexpr (std::is_same_v<T, Eigen::Vector3f>)
-    {
-        parameters[parameterName] = ParameterValue(value);
-    }
-    else if constexpr (std::is_same_v<T, Eigen::Vector4f>)
-    {
-        parameters[parameterName] = ParameterValue(value);
-    }
-
-    //TODO: 更新UniformBuffer
+}
+MaterialInstance::~MaterialInstance()
+{
+    DestroyUniformBuffers();
+}
+void MaterialInstance::SetParameter(const std::string& parameterName, const float& value)
+{
+    uint32_t size = parameters.size();
+    parameters[parameterName] = ParamMap(ParamType::Float, size);
+    floatParameters[parameterName] = value;
 }
 
-template<typename T>
-T MaterialInstance::GetParameter(const std::string& parameterName) const
+void MaterialInstance::SetParameter(const std::string& parameterName, const Eigen::Vector2f& value)
 {
-    auto it = parameters.find(parameterName);
-    if (it != parameters.end())
-    {
-        const ParameterValue& value = it->second;
-        if constexpr (std::is_same_v<T, bool>)
-        {
-            return value.boolValue;
-        }
-        else if constexpr (std::is_same_v<T, float>)
-        {
-            return value.floatValue;
-        }
-        else if constexpr (std::is_same_v<T, Eigen::Vector2f>)
-        {
-            return value.vec2Value;
-        }
-        else if constexpr (std::is_same_v<T, Eigen::Vector3f>)
-        {
-            return value.vec3Value;
-        }
-        else if constexpr (std::is_same_v<T, Eigen::Vector4f>)
-        {
-            return value.vec4Value;
-        }
-    }
-    return T();
+    uint32_t size = parameters.size();
+    parameters[parameterName] = ParamMap(ParamType::Vec2, size);
+    vec2Parameters[parameterName] = value;
+}
+
+void MaterialInstance::SetParameter(const std::string& parameterName, const Eigen::Vector3f& value)
+{
+    uint32_t size = parameters.size();
+    parameters[parameterName] = ParamMap(ParamType::Vec3, size);
+    vec3Parameters[parameterName] = value;
+}
+
+void MaterialInstance::SetParameter(const std::string& parameterName, const Eigen::Vector4f& value)
+{
+    uint32_t size = parameters.size();
+    parameters[parameterName] = ParamMap(ParamType::Vec4, size);
+    vec4Parameters[parameterName] = value;
 }
 
 bool MaterialInstance::HasParameter(const std::string& parameterName) const
@@ -78,7 +56,7 @@ void MaterialInstance::SetTexture(const std::string& textureName, const std::sha
     textures[textureName] = texture;
 }
 
-std::shared_ptr<Texture> MaterialInstance::GetTexture(const std::string& textureName) const
+const std::shared_ptr<Texture> MaterialInstance::GetTexture(const std::string& textureName) const
 {
     auto it = textures.find(textureName);
     if (it != textures.end())
@@ -96,4 +74,90 @@ bool MaterialInstance::HasTexture(const std::string& textureName) const
 void MaterialInstance::RemoveTexture(const std::string& textureName)
 {
     textures.erase(textureName);
+}
+
+void MaterialInstance::RenderInitialize()
+{
+    CreateUniformBuffers();
+    SetupDescriptors();
+}
+
+void MaterialInstance::CreateUniformBuffers()
+{
+    uint32_t bufferSize = 0;
+    for(auto& parameter : parameters)
+    {
+        if(parameter.second.type == ParamType::Float)
+        {
+            bufferSize += parameter.second.size;
+        }
+        else if(parameter.second.type == ParamType::Vec2)
+        {
+            bufferSize += parameter.second.size;
+        }
+        else if(parameter.second.type == ParamType::Vec3)
+        {
+            bufferSize += parameter.second.size;
+        }
+        else if(parameter.second.type == ParamType::Vec4)
+        {
+            bufferSize += parameter.second.size;
+        }
+    }
+    auto& device = VulkanManager::GetInstance().GetDevice();
+    for(auto& ubo: {&uboMaterialInstance})
+    {
+        vk::DeviceSize uniformBufferSize = bufferSize;
+        ubo->uniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
+        ubo->uniformBufferMemories.resize(MAX_FRAMES_IN_FLIGHT);
+        ubo->uniformBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
+        ubo->uniformBufferSize = bufferSize;
+        vk::BufferUsageFlags usage = vk::BufferUsageFlagBits::eUniformBuffer;
+        vk::MemoryPropertyFlags memoryPropertyFlags = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
+        for(int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+        {
+            std::tie(ubo->uniformBuffers[i], ubo->uniformBufferMemories[i]) = CommonFunction::CreateBuffer(
+                device,
+                uniformBufferSize, 
+                usage, 
+                VulkanManager::GetInstance().GetGpuMemoryProperties(), 
+                memoryPropertyFlags
+            );
+            ubo->uniformBuffersMapped[i] = device.mapMemory(ubo->uniformBufferMemories[i], 0, uniformBufferSize);
+        }
+    }
+}
+void MaterialInstance::DestroyUniformBuffers()
+{
+    auto& device = VulkanManager::GetInstance().GetDevice();
+    for(auto& ubo: {&uboMaterialInstance})
+    {
+        for(int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+        {
+            device.unmapMemory(ubo->uniformBufferMemories[i]);
+            device.destroyBuffer(ubo->uniformBuffers[i]);
+            device.freeMemory(ubo->uniformBufferMemories[i]);
+        }
+    }
+}
+
+void MaterialInstance::SetupDescriptors()
+{
+    // 设置uniform缓冲区信息
+    for(auto& ubo: {&uboMaterialInstance})
+    {
+        ubo->uniformBufferInfos.resize(MAX_FRAMES_IN_FLIGHT);
+        for(int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+        {
+            ubo->uniformBufferInfos[i]
+                .setBuffer(ubo->uniformBuffers[i])
+                .setOffset(0)
+                .setRange(ubo->uniformBufferSize);
+        }
+    }
+    // 设置image信息
+    imageInfo
+        .setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+        .setImageView(GetTexture("albedoMap")->getImageView())
+        .setSampler(GetTexture("albedoMap")->getSampler());
 }

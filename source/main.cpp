@@ -2,12 +2,14 @@
 #include "SDL3/SDL_vulkan.h"
 #include <iostream>
 #include <vector>
+#include <chrono>
 #include "shaderCompiler.h"
 #include "settings.h"
 #include "vulkanManager.h"
 #include "sceneLoader.h"
 #include "renderSystem.h"
 #include "commonFunction.h"
+#include "fpsTool.h"
 
 int main(int argc, char **argv)
 {
@@ -57,8 +59,10 @@ int main(int argc, char **argv)
     SceneLoader& sceneLoader = SceneLoader::GetInstance();
     sceneLoader.LoadScence(CommonFunction::Path("scenes/scene01.json"));
     //初始化渲染系统
-    RenderSystem renderSystem;
+    RenderSystem& renderSystem = RenderSystem::GetInstance();
     renderSystem.InitRenderObject();
+    //初始化FPS计算工具
+    FpsTool fpsTool;
 
     SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
     SDL_ShowWindow(window);
@@ -77,8 +81,11 @@ int main(int argc, char **argv)
                     break;
             }
         }
-        //vulkanManager->DrawFrame();
         renderSystem.Render();
+
+        //FPS计算
+        fpsTool.Calculate();
+        SDL_SetWindowTitle(window, fpsTool.getTitle().c_str());
     }
     vulkanManager.GetDevice().waitIdle();
     SDL_DestroyWindow(window);

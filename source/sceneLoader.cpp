@@ -14,6 +14,8 @@
 #include "settings.h"
 #include <filesystem>
 #include <iostream>
+#include "renderPipline.h"
+#include "shaderReflect.h"
 
 SceneLoader::SceneLoader()
 {
@@ -46,6 +48,10 @@ void SceneLoader::LoadScence(const std::string& filename)
         else if(type == "camera")
         {
             LoadCameraObject(obj);
+        }
+        else if(type == "environment")
+        {
+            LoadEnvironmentObject(obj);
         }
         else {
             std::cout << "Unknown object type: " << obj["name"] << std::endl;
@@ -105,16 +111,62 @@ void SceneLoader::LoadMeshObject(const nlohmann::basic_json<>& node)
     }
 
     // 加载材质参数
+    const auto& shaderTextures = materialInstanceJson["textures"];
+    uint32_t textureCount = shaderTextures.size();
     const auto& shaderParameters = materialInstanceJson["parameters"];
-    std::string albedoMap = shaderParameters["albedoMap"];
-    std::shared_ptr<Texture> texture;
-    if(textures.find(albedoMap) != textures.end())
+    uint32_t parameterCount = shaderParameters.size();
+    // 根据shaderbinding校验参数和贴图
+    auto& shaderBindings = material->GetRenderPipline()->GetShaderBindings();
+        // 检查贴图数量是否匹配
+    uint32_t expectedTextureCount = 0;
+    for(const auto& binding : shaderBindings)
     {
-        texture = textures[albedoMap];
+        if(binding.type == vk::DescriptorType::eCombinedImageSampler)
+        {
+            expectedTextureCount++;
+        }
     }
-    else
+    if(expectedTextureCount != textureCount)
     {
-        texture = std::make_shared<Texture>(albedoMap);
+        throw std::runtime_error("Texture count mismatch in material instance: " + materialInstancePath);
+    }
+        // 检查参数类型是否匹配set0,binding1
+    bool validParemeters = false;
+    for(const auto& binding : shaderBindings)
+    {
+        if(binding.set != 0 || binding.binding != 1)
+        {
+            continue;
+        }
+        if(binding.type != vk::DescriptorType::eUniformBuffer)
+        {
+            continue;
+        }
+        if(binding.memberCount != parameterCount)
+        {
+            break;
+        }
+        bool allMatch = true;
+        for(uint32_t i = 0; i < binding.memberCount; i++)
+        {
+            const std::string& paramName = shaderParameters.begin().key();
+            const auto& paramValue = shaderParameters[paramName];
+            size_t paramSize = ParseValueSize(paramValue);
+            if(paramSize != binding.members[i])
+            {
+                allMatch = false;
+                break;
+            }
+        }
+        if(allMatch)
+        {
+            validParemeters = true;
+            break;
+        }
+    }
+    if(!validParemeters)
+    {
+        throw std::runtime_error("Parameter types or sizes mismatch in material instance: " + materialInstancePath);
     }
 
     //创建材质实例
@@ -127,7 +179,54 @@ void SceneLoader::LoadMeshObject(const nlohmann::basic_json<>& node)
     {
         materialInstance = material->CreateInstance();
         materialInstance->SetName(materialInstancePath);
-        materialInstance->SetTexture("albedoMap", texture);
+    }
+    //设置材质实例参数
+    for(const auto& [name, value]  : shaderParameters.items())
+    {
+        const std::string& paramName = name;
+        uint32_t paramSize = ParseValueSize(value);
+        if(paramSize == sizeof(float))
+        {
+            auto paramValue = ParseValue<float>(value);
+            materialInstance->SetParameter(paramName, paramValue);
+        }
+        else if(paramSize == sizeof(Eigen::Vector2f))
+        {
+            auto paramValue = ParseValue<Eigen::Vector2f>(value);
+            materialInstance->SetParameter(paramName, paramValue);
+        }
+        else if(paramSize == sizeof(Eigen::Vector3f))
+        {
+            auto paramValue = ParseValue<Eigen::Vector3f>(value);
+            materialInstance->SetParameter(paramName, paramValue);
+        }
+        else if(paramSize == sizeof(Eigen::Vector4f))
+        {
+            auto paramValue = ParseValue<Eigen::Vector4f>(value);
+            materialInstance->SetParameter(paramName, paramValue);
+        }
+        else 
+        {
+            throw std::runtime_error("Unsupported parameter type or size in material instance: " + materialInstancePath);
+        }
+    }
+    //设置材质实例贴图
+    for(const auto& [name, value] : shaderTextures.items())
+    {
+        const std::string& textureName = name;
+        std::string texturePath = value;
+        std::shared_ptr<Texture> texture;
+        if(textures.find(texturePath) != textures.end())
+        {
+            texture = textures[texturePath];
+        }
+        else
+        {
+            texture = std::make_shared<Texture>(texturePath);
+            //缓存贴图
+            textures[texturePath] = texture;
+        }
+        materialInstance->SetTexture(textureName, texture);
     }
     
     // 创建场景物体
@@ -151,7 +250,6 @@ void SceneLoader::LoadMeshObject(const nlohmann::basic_json<>& node)
     objects[modelDataPath] = renderableObject;
     materials[shaderName] = material;
     materialInstances[materialInstancePath] = materialInstance;
-    textures[albedoMap] = texture;
     sceneObjects[sceneObjectName] = sceneObject;
 }
 
@@ -189,6 +287,23 @@ void SceneLoader::LoadCameraObject(const nlohmann::basic_json<>& node)
     SceneCamera = camera;
 }
 
+void SceneLoader::LoadEnvironmentObject(const nlohmann::basic_json<>& node)
+{
+    Eigen::Vector3f ambient = ParseVector3(node["ambient"]);
+    this->ambient = ambient;
+}
+
+Eigen::Vector2f SceneLoader::ParseVector2(const nlohmann::basic_json<>& Value)
+{
+    if(Value.is_array() && Value.size() == 2)
+    {
+        return Eigen::Vector2f(Value[0].get<float>(), Value[1].get<float>());
+    }
+    else {
+        throw std::runtime_error("Invalid vector2 format");
+    }
+}
+
 Eigen::Vector3f SceneLoader::ParseVector3(const nlohmann::basic_json<>& Value)
 {
     if(Value.is_array() && Value.size() == 3)
@@ -198,4 +313,60 @@ Eigen::Vector3f SceneLoader::ParseVector3(const nlohmann::basic_json<>& Value)
     else {
         throw std::runtime_error("Invalid vector3 format");
     }
+}
+
+Eigen::Vector4f SceneLoader::ParseVector4(const nlohmann::basic_json<>& Value)
+{
+    if(Value.is_array() && Value.size() == 4)
+    {
+        return Eigen::Vector4f(Value[0].get<float>(), Value[1].get<float>(), Value[2].get<float>(), Value[3].get<float>());
+    }
+    else {
+        throw std::runtime_error("Invalid vector4 format");
+    }
+}
+
+uint32_t SceneLoader::ParseValueSize(const nlohmann::basic_json<>& Value)
+{
+    if(Value.is_number_float())
+    {
+        return sizeof(float);
+    }
+    else if(Value.is_array())
+    {
+        if(Value.size() == 2)
+        {
+            return sizeof(Eigen::Vector2f);
+        }
+        else if(Value.size() == 3)
+        {
+            return sizeof(Eigen::Vector3f);
+        }
+        else if(Value.size() == 4)
+        {
+            return sizeof(Eigen::Vector4f);
+        }
+    }
+    throw std::runtime_error("Unsupported parameter type or size");
+}
+
+template<typename T>
+T SceneLoader::ParseValue(const nlohmann::basic_json<>& Value)
+{
+    if constexpr(std::is_same_v<T, float>)
+    {
+        return Value.get<float>();
+    }
+    else if constexpr(std::is_same_v<T, Eigen::Vector2f>)
+    {
+        return ParseVector2(Value);
+    }
+    else if constexpr(std::is_same_v<T, Eigen::Vector3f>)
+    {
+        return ParseVector3(Value);
+    }
+    else if constexpr(std::is_same_v<T, Eigen::Vector4f>)
+    {
+        return ParseVector4(Value);    }
+    throw std::runtime_error("Unsupported parameter type or size");
 }

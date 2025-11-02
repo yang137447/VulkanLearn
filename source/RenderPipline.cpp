@@ -6,6 +6,7 @@
 #include <iostream>
 #include <vulkan/vulkan_enums.hpp>
 #include "commonFunction.h"
+#include "shaderReflect.h"
 
 RenderPipline::RenderPipline(vk::Device *device, vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties, vk::RenderPass* renderPass, const std::string& shaderName, vk::SampleCountFlagBits sampleCount)
 {
@@ -15,8 +16,8 @@ RenderPipline::RenderPipline(vk::Device *device, vk::PhysicalDeviceMemoryPropert
     this->shaderName = shaderName;
     this->sampleCount = sampleCount;
 
-    CreatePipelineLayout();
     CreateShader();
+    CreatePipelineLayout();
     initVertexAttribute();
     CreateGraphicsPipeline();
 }
@@ -34,21 +35,33 @@ RenderPipline::RenderPipline()
 
 void RenderPipline::CreatePipelineLayout()
 {
+    // std::vector<vk::DescriptorSetLayoutBinding> descriptorSetLayoutBindings;
+    // descriptorSetLayoutBindings.emplace_back(
+    //     vk::DescriptorSetLayoutBinding()
+    //     .setBinding(0)
+    //     .setDescriptorType(vk::DescriptorType::eUniformBuffer)
+    //     .setDescriptorCount(1)
+    //     .setStageFlags(vk::ShaderStageFlagBits::eVertex)
+    //     .setPImmutableSamplers(nullptr));
+    // descriptorSetLayoutBindings.emplace_back(
+    //     vk::DescriptorSetLayoutBinding()
+    //     .setBinding(1)
+    //     .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
+    //     .setDescriptorCount(1)
+    //     .setStageFlags(vk::ShaderStageFlagBits::eFragment)
+    //     .setPImmutableSamplers(nullptr));
     std::vector<vk::DescriptorSetLayoutBinding> descriptorSetLayoutBindings;
-    descriptorSetLayoutBindings.emplace_back(
-        vk::DescriptorSetLayoutBinding()
-        .setBinding(0)
-        .setDescriptorType(vk::DescriptorType::eUniformBuffer)
-        .setDescriptorCount(1)
-        .setStageFlags(vk::ShaderStageFlagBits::eVertex)
-        .setPImmutableSamplers(nullptr));
-    descriptorSetLayoutBindings.emplace_back(
-        vk::DescriptorSetLayoutBinding()
-        .setBinding(1)
-        .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
-        .setDescriptorCount(1)
-        .setStageFlags(vk::ShaderStageFlagBits::eFragment)
-        .setPImmutableSamplers(nullptr));
+    for(const auto& binding : shaderBindings)
+    {
+        vk::DescriptorSetLayoutBinding layoutBinding;
+        layoutBinding
+            .setBinding(binding.binding)
+            .setDescriptorType(binding.type)
+            .setDescriptorCount(1)
+            .setStageFlags(binding.stageFlags)
+            .setPImmutableSamplers(nullptr);
+        descriptorSetLayoutBindings.push_back(layoutBinding);
+    }
 
     vk::DescriptorSetLayoutCreateInfo descriptorSetLayoutCreateInfo;
     descriptorSetLayoutCreateInfo
@@ -141,6 +154,16 @@ void RenderPipline::CreateShader()
         .setModule(fragmentShaderModule)
         .setPName("main")
         .setPSpecializationInfo(nullptr);
+    // 反射shader,获取uniformbugfer和采样器信息
+    ShaderReflect vertexShaderReflect(std::vector<uint32_t>(reinterpret_cast<uint32_t*>(vertexShaderCode.data()), reinterpret_cast<uint32_t*>(vertexShaderCode.data() + vertexShaderCode.size())));
+    ShaderReflect fragmentShaderReflect(std::vector<uint32_t>(reinterpret_cast<uint32_t*>(fragmentShaderCode.data()), reinterpret_cast<uint32_t*>(fragmentShaderCode.data() + fragmentShaderCode.size())));
+    auto vertexShaderBindings = vertexShaderReflect.GetShaderBindings();
+    auto fragmentShaderBindings = fragmentShaderReflect.GetShaderBindings();
+    shaderBindings.insert(shaderBindings.end(), vertexShaderBindings.begin(), vertexShaderBindings.end());
+    shaderBindings.insert(shaderBindings.end(), fragmentShaderBindings.begin(), fragmentShaderBindings.end());
+
+    // 按set和binding排序
+    // 目前不用，vertex和fragment目前按顺序绑定，不会冲突
 }
 
 void RenderPipline::DestroyShader()

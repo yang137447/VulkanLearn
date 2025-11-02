@@ -1,9 +1,10 @@
 #pragma once
 
-#include "vulkan/vulkan.hpp"
 #include <vector>
+#include "vulkan/vulkan.hpp"
 
 class DrawableObject;
+struct ShaderBinding;
 
 class RenderPipline
 {
@@ -19,9 +20,9 @@ public:
     inline const vk::PipelineLayout& GetPipelineLayout() const { return pipelineLayout; }
     inline const vk::Pipeline& GetGraphicsPipeline() const { return graphicsPipeline; }
     inline const vk::DescriptorSetLayout& GetDescriptorSetLayout() const { return descriptorSetLayout; }
+    inline const std::vector<ShaderBinding>& GetShaderBindings() const { return shaderBindings; }
 private:
     RenderPipline();
-
 
     void CreatePipelineLayout();
     void DestroyPipelineLayout();
@@ -41,6 +42,8 @@ private:
     vk::SampleCountFlagBits sampleCount;
 
     std::string shaderName;
+
+    std::vector<ShaderBinding> shaderBindings;
 
     vk::DescriptorSetLayout descriptorSetLayout;
     vk::PipelineLayout pipelineLayout;

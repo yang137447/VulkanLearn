@@ -7,6 +7,8 @@
 #include <fstream>
 #include <iostream>
 
+#include "shaderReflect.h"
+
 ShaderCompiler::ShaderCompiler()
 {
 }
@@ -52,6 +54,8 @@ void ShaderCompiler::StartCompile(const std::string& shaderFilePath)
             std::string glslCode = ReadFile(glslShaderPath);
             std::vector<uint32_t> spvCode = CompileGLSLToSPIRV(glslCode, kind, shaderName);
             SaveSPIRVToFile(spvCode, compiledShaderPath);
+
+            ShaderReflect shaderReflect(spvCode);
 
             std::cout << "Info: "
                       << "compiled shader: "

@@ -1,6 +1,8 @@
+#pragma once
 #include "Eigen/Dense"
 #include <memory>
 #include <vulkan/vulkan.hpp>
+#include"baseStructs.h"
 
 class SceneNode
 {
@@ -53,7 +55,9 @@ public:
     inline std::shared_ptr<RenderableObject> GetRenderableObject() const { return renderableObject; }
     inline std::shared_ptr<MaterialInstance> GetMaterialInstance() const { return materialInstance; }
     inline const std::vector<vk::DescriptorSet>& GetDescriptorSets() const { return descriptorSets; }
-    inline std::vector<void*>& GetUniformBuffersMapped() { return uniformBuffersMapped; }
+    inline std::vector<void*>& GetUboModelMapped() { return uboModel.uniformBuffersMapped; }
+    //相关的场景和材质实例需要先行就绪
+    void RenderInitialize();
 private:
     SceneObject();
 
@@ -64,14 +68,10 @@ private:
     void DestroyUniformBuffers();
     void CreateDescriptorSets();
     void DestroyDescriptorSets();
+    void SetupDescriptors();
     void UpdateDescriptorSet();
 
-    uint32_t uniformBufferSize;
-    std::vector<vk::Buffer> uniformBuffers;
-    std::vector<vk::DeviceMemory> uniformBufferMemories;
-    std::vector<void*> uniformBuffersMapped;
-    std::vector<vk::DescriptorBufferInfo> uniformBufferInfos;
-    vk::DescriptorImageInfo imageInfo;
+    UBO uboModel;
 
     vk::DescriptorPool descriptorPool;
     std::vector<vk::DescriptorSet> descriptorSets;

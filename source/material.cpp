@@ -13,7 +13,7 @@ Material::~Material()
 Material::Material(vk::Device* device, vk::PhysicalDeviceMemoryProperties* gpuMemoryProperties, vk::RenderPass* renderPass, const std::string& shaderName, vk::SampleCountFlagBits samples)
 {
     this->shaderName = shaderName;
-    renderPipline = std::make_unique<RenderPipline>(device, gpuMemoryProperties,renderPass, shaderName, samples);
+    renderPipline = std::make_shared<RenderPipline>(device, gpuMemoryProperties,renderPass, shaderName, samples);
 }
 std::shared_ptr<MaterialInstance> Material::CreateInstance()
 {
