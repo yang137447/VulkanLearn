@@ -121,7 +121,8 @@ void SceneObject::DestroyUniformBuffers()
 void SceneObject::CreateDescriptorSets()
 {
     VulkanManager& vulkanManager = VulkanManager::GetInstance();
-    const std::vector<ShaderBinding>& shaderBindings = GetMaterialInstance()->GetBaseMaterial()->GetRenderPipline()->GetShaderBindings();
+    auto baseMaterial = materialInstance->GetBaseMaterial().lock();
+    const std::vector<ShaderBinding>& shaderBindings = baseMaterial->GetRenderPipline()->GetShaderBindings();
     std::vector<vk::DescriptorPoolSize> descriptorPoolSizes;
     // descriptorPoolSizes[0]
     //     .setType(vk::DescriptorType::eUniformBuffer)
@@ -146,7 +147,7 @@ void SceneObject::CreateDescriptorSets()
     vk::Result result = vulkanManager.GetDevice().createDescriptorPool(&descriptorPoolCreateInfo, nullptr, &descriptorPool);
     assert(result == vk::Result::eSuccess);
 
-    std::vector<vk::DescriptorSetLayout> setLayouts(MAX_FRAMES_IN_FLIGHT, GetMaterialInstance()->GetBaseMaterial()->GetRenderPipline()->GetDescriptorSetLayout());
+    std::vector<vk::DescriptorSetLayout> setLayouts(MAX_FRAMES_IN_FLIGHT, baseMaterial->GetRenderPipline()->GetDescriptorSetLayout());
     vk::DescriptorSetAllocateInfo descriptorSetAllocateInfo;
     descriptorSetAllocateInfo
         .setDescriptorPool(descriptorPool)
@@ -184,8 +185,8 @@ void SceneObject::UpdateDescriptorSet()
 {
     // 设置descriptor set信息
     writeDescriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
-
-    auto& renderPipline = GetMaterialInstance()->GetBaseMaterial()->GetRenderPipline();
+    auto baseMaterial = materialInstance->GetBaseMaterial().lock();
+    auto& renderPipline = baseMaterial->GetRenderPipline();
     auto& renderSystem = RenderSystem::GetInstance();
     for(int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
     {

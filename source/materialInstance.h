@@ -100,8 +100,8 @@ public:
     //移除纹理
     void RemoveTexture(const std::string& textureName);
     
-    void SetBaseMaterial(std::shared_ptr<Material> baseMaterial) { this->baseMaterial = baseMaterial; }
-    const std::shared_ptr<Material>& GetBaseMaterial() const { return baseMaterial; }
+    void SetBaseMaterial(const std::shared_ptr<Material>& baseMaterial) { this->baseMaterial = baseMaterial; }
+    const std::weak_ptr<Material>& GetBaseMaterial() const { return baseMaterial; }
 
     void SetName(const std::string& name) { materialInstanceName = name; }
     const std::string& GetName() const { return materialInstanceName; }
@@ -118,7 +118,7 @@ private:
 
     vk::Device device;
     std::string materialInstanceName;
-    std::shared_ptr<Material> baseMaterial;
+    std::weak_ptr<Material> baseMaterial;
     std::unordered_map<std::string, ParamMap> parameters;
     std::unordered_map<std::string, float> floatParameters;
     std::unordered_map<std::string, Eigen::Vector2f> vec2Parameters;

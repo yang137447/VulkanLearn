@@ -15,8 +15,6 @@
 
 RenderSystem::RenderSystem()
 {
-    CreateUniformBuffers();
-    //SetupDescriptors();
 }
 RenderSystem::~RenderSystem()
 {
@@ -34,7 +32,8 @@ void RenderSystem::InitRenderObject()
     // 将场景物体按shader，materialInstance分组，填充进hierarchyObjects
     for(const auto& [objectName, sceneObject] : scene.GetSceneObjects())
     {
-        auto& shaderName = sceneObject->GetMaterialInstance()->GetBaseMaterial()->GetShaderName();
+        auto baseMaterial = sceneObject->GetMaterialInstance()->GetBaseMaterial().lock();
+        auto& shaderName = baseMaterial->GetShaderName();
         auto& materialInstanceName = sceneObject->GetMaterialInstance()->GetName();
         
         auto& shaderMap = hierarchyObjects.emplace(shaderName, std::unordered_map<std::string, std::vector<std::weak_ptr<SceneObject>>>()).first->second;
