@@ -36,7 +36,11 @@ private:
     void SetupDescriptors();
 
     uint32_t currentFrame = 0;
-    uint32_t swapchainImageIndex = 0;
+    uint32_t cpuSyncIndex = 0;
+    uint32_t gpuSyncIndex = 0;
+    std::vector<int32_t> onWorkFenceForSwapChainImage;
+    uint32_t swapChainImageIndex = 0;
+    
     UBO uboGlobal;
     // 按基础材质分组： {shader, {materialInstance, [sceneObject]}}
     std::unordered_map<std::string, std::unordered_map<std::string, std::vector<std::weak_ptr<SceneObject>>>> hierarchyObjects;

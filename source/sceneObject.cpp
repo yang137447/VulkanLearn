@@ -82,16 +82,17 @@ void SceneObject::SetMaterialInstance(std::shared_ptr<MaterialInstance> material
 void SceneObject::CreateUniformBuffers()
 {
     auto& device = VulkanManager::GetInstance().GetDevice();
+    uint32_t swapChainImageCount = VulkanManager::GetInstance().GetSwapChainImageCount();
     for(auto& ubo: {&uboModel})
     {
         vk::DeviceSize uniformBufferSize = sizeof(UBOModel);
-        ubo->uniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
-        ubo->uniformBufferMemories.resize(MAX_FRAMES_IN_FLIGHT);
-        ubo->uniformBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
+        ubo->uniformBuffers.resize(swapChainImageCount);
+        ubo->uniformBufferMemories.resize(swapChainImageCount);
+        ubo->uniformBuffersMapped.resize(swapChainImageCount);
         ubo->uniformBufferSize = uniformBufferSize;
         vk::BufferUsageFlags usage = vk::BufferUsageFlagBits::eUniformBuffer;
         vk::MemoryPropertyFlags memoryPropertyFlags = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
-        for(int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+        for(int i = 0; i < swapChainImageCount; i++)
         {
             std::tie(ubo->uniformBuffers[i], ubo->uniformBufferMemories[i]) = CommonFunction::CreateBuffer(
                 device,
@@ -107,9 +108,10 @@ void SceneObject::CreateUniformBuffers()
 void SceneObject::DestroyUniformBuffers()
 {
     auto& device = VulkanManager::GetInstance().GetDevice();
+    uint32_t swapChainImageCount = VulkanManager::GetInstance().GetSwapChainImageCount();
     for(auto& ubo: {&uboModel})
     {
-        for(int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+        for(int i = 0; i < swapChainImageCount; i++)
         {
             device.unmapMemory(ubo->uniformBufferMemories[i]);
             device.destroyBuffer(ubo->uniformBuffers[i]);
@@ -121,6 +123,7 @@ void SceneObject::DestroyUniformBuffers()
 void SceneObject::CreateDescriptorSets()
 {
     VulkanManager& vulkanManager = VulkanManager::GetInstance();
+    uint32_t swapChainImageCount = VulkanManager::GetInstance().GetSwapChainImageCount();
     auto baseMaterial = materialInstance->GetBaseMaterial().lock();
     const std::vector<ShaderBinding>& shaderBindings = baseMaterial->GetRenderPipline()->GetShaderBindings();
     std::vector<vk::DescriptorPoolSize> descriptorPoolSizes;
@@ -135,25 +138,25 @@ void SceneObject::CreateDescriptorSets()
         vk::DescriptorPoolSize poolSize;
         poolSize
             .setType(binding.type)
-            .setDescriptorCount(MAX_FRAMES_IN_FLIGHT);
+            .setDescriptorCount(swapChainImageCount);
         descriptorPoolSizes.push_back(poolSize);
     }
     vk::DescriptorPoolCreateInfo descriptorPoolCreateInfo;
     descriptorPoolCreateInfo
-        .setMaxSets(MAX_FRAMES_IN_FLIGHT)
+        .setMaxSets(swapChainImageCount)
         .setFlags(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet)
         .setPoolSizes(descriptorPoolSizes);
 
     vk::Result result = vulkanManager.GetDevice().createDescriptorPool(&descriptorPoolCreateInfo, nullptr, &descriptorPool);
     assert(result == vk::Result::eSuccess);
 
-    std::vector<vk::DescriptorSetLayout> setLayouts(MAX_FRAMES_IN_FLIGHT, baseMaterial->GetRenderPipline()->GetDescriptorSetLayout());
+    std::vector<vk::DescriptorSetLayout> setLayouts(swapChainImageCount, baseMaterial->GetRenderPipline()->GetDescriptorSetLayout());
     vk::DescriptorSetAllocateInfo descriptorSetAllocateInfo;
     descriptorSetAllocateInfo
         .setDescriptorPool(descriptorPool)
         .setSetLayouts(setLayouts);
     
-    descriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
+    descriptorSets.resize(swapChainImageCount);
     result = vulkanManager.GetDevice().allocateDescriptorSets(&descriptorSetAllocateInfo, descriptorSets.data());
     assert(result == vk::Result::eSuccess);
 }
@@ -167,11 +170,12 @@ void SceneObject::DestroyDescriptorSets()
 
 void SceneObject::SetupDescriptors()
 {
+    uint32_t swapChainImageCount = VulkanManager::GetInstance().GetSwapChainImageCount();
     // 设置uniform缓冲区信息
     for(auto& ubo: {&uboModel})
     {
-        ubo->uniformBufferInfos.resize(MAX_FRAMES_IN_FLIGHT);
-        for(int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+        ubo->uniformBufferInfos.resize(swapChainImageCount);
+        for(int i = 0; i < swapChainImageCount; i++)
         {
             ubo->uniformBufferInfos[i]
                 .setBuffer(ubo->uniformBuffers[i])
@@ -183,12 +187,13 @@ void SceneObject::SetupDescriptors()
 
 void SceneObject::UpdateDescriptorSet()
 {
+    uint32_t swapChainImageCount = VulkanManager::GetInstance().GetSwapChainImageCount();
     // 设置descriptor set信息
-    writeDescriptorSets.resize(MAX_FRAMES_IN_FLIGHT);
+    writeDescriptorSets.resize(swapChainImageCount);
     auto baseMaterial = materialInstance->GetBaseMaterial().lock();
     auto& renderPipline = baseMaterial->GetRenderPipline();
     auto& renderSystem = RenderSystem::GetInstance();
-    for(int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+    for(int i = 0; i < swapChainImageCount; i++)
     {
         writeDescriptorSets[i].push_back(
             vk::WriteDescriptorSet()

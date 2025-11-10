@@ -9,5 +9,7 @@ layout(location = 0) out vec4 outColor;
 
 void main()
 {
-    outColor = texture(albedoMap, fragTexCoord);
+    //outColor = texture(albedoMap, fragTexCoord);
+    lowp vec4 baseColor = texture(albedoMap, fragTexCoord);
+    outColor = vec4(fragColor, 1.0) * 0.9 + 0.1*texture(albedoMap, fragTexCoord);
 }

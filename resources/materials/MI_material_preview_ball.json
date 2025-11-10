@@ -1,0 +1,12 @@
+{
+    "name": "Material Preview Ball Material Instance",
+    "type": "materialInstance",
+    "shader": "simpleLight",
+    "textures": {
+        "albedoMap": "textures/viking_room.png"
+    },
+    "parameters": {
+        "tintColor": [1, 1, 1, 1]
+    }
+
+}

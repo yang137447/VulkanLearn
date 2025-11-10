@@ -29,8 +29,8 @@ void VulkanManager::Init(std::vector<const char *> &extensions, SDL_Window *wind
     EnumeratePhysicalDevices();
     CreateVkSurface();
     CreateVkDevice();
-    CreateVkCommandBuffer();
     CreateVkSwapChain();
+    CreateVkCommandBuffer();
     CreateColorResource();
     CreateVkDepthBuffer();
     CreateVkRenderPass();
@@ -47,8 +47,8 @@ VulkanManager::~VulkanManager()
     DestroyVkRenderPass();
     DestroyVkDepthBuffer();
     DestroyColorResource();
-    DestroyVkSwapChain();
     DestroyVkCommandBuffer();
+    DestroyVkSwapChain();
     DestroyVkDevice();
     DestroyVkSurface();
     DestroyVkInstance();
@@ -234,42 +234,6 @@ void VulkanManager::DestroyVkDevice()
     std::cout << "Destroy VkDevice" << std::endl;
 }
 
-void VulkanManager::CreateVkCommandBuffer()
-{
-    vk::CommandPoolCreateInfo commandPoolCreateInfo;
-    commandPoolCreateInfo
-        .setQueueFamilyIndex(graphicQueueFamilyIndex.value())
-        .setFlags(vk::CommandPoolCreateFlagBits::eResetCommandBuffer);
-    commandPool = device.createCommandPool(commandPoolCreateInfo);
-    assert(commandPool);
-
-    commandBuffers.resize(MAX_FRAMES_IN_FLIGHT);
-
-    vk::CommandBufferAllocateInfo commandBufferAllocateInfo;
-    commandBufferAllocateInfo
-        .setCommandPool(commandPool)
-        .setLevel(vk::CommandBufferLevel::ePrimary)
-        .setCommandBufferCount(commandBuffers.size());
-    vk::Result result = device.allocateCommandBuffers(&commandBufferAllocateInfo, commandBuffers.data());
-
-    commandBufferBeginInfo
-        .setPInheritanceInfo(nullptr);
-
-    vk::PipelineStageFlags* piplineStageFlags = new vk::PipelineStageFlags();
-    *piplineStageFlags = vk::PipelineStageFlagBits::eColorAttachmentOutput;
-    submitInfo[0]
-        .setPWaitDstStageMask(piplineStageFlags)
-        .setCommandBuffers(commandBuffers)
-        .setSignalSemaphores(nullptr);
-}
-
-void VulkanManager::DestroyVkCommandBuffer()
-{
-    device.freeCommandBuffers(commandPool, commandBuffers.size(), commandBuffers.data());
-    device.destroyCommandPool(commandPool);
-    std::cout << "Destroy VkCommandBuffer" << std::endl;
-}
-
 void VulkanManager::CreateVkSwapChain()
 {
     // 获取支持的表面格式
@@ -431,6 +395,42 @@ void VulkanManager::DestroyVkSwapChain()
     std::cout << "Destroy VkSwapChain" << std::endl;
 }
 
+void VulkanManager::CreateVkCommandBuffer()
+{
+    vk::CommandPoolCreateInfo commandPoolCreateInfo;
+    commandPoolCreateInfo
+        .setQueueFamilyIndex(graphicQueueFamilyIndex.value())
+        .setFlags(vk::CommandPoolCreateFlagBits::eResetCommandBuffer);
+    commandPool = device.createCommandPool(commandPoolCreateInfo);
+    assert(commandPool);
+
+    commandBuffers.resize(swapChainImageCount);
+
+    vk::CommandBufferAllocateInfo commandBufferAllocateInfo;
+    commandBufferAllocateInfo
+        .setCommandPool(commandPool)
+        .setLevel(vk::CommandBufferLevel::ePrimary)
+        .setCommandBufferCount(commandBuffers.size());
+    vk::Result result = device.allocateCommandBuffers(&commandBufferAllocateInfo, commandBuffers.data());
+
+    commandBufferBeginInfo
+        .setPInheritanceInfo(nullptr);
+
+    vk::PipelineStageFlags* piplineStageFlags = new vk::PipelineStageFlags();
+    *piplineStageFlags = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+    submitInfo[0]
+        .setPWaitDstStageMask(piplineStageFlags)
+        .setCommandBuffers(commandBuffers)
+        .setSignalSemaphores(nullptr);
+}
+
+void VulkanManager::DestroyVkCommandBuffer()
+{
+    device.freeCommandBuffers(commandPool, commandBuffers.size(), commandBuffers.data());
+    device.destroyCommandPool(commandPool);
+    std::cout << "Destroy VkCommandBuffer" << std::endl;
+}
+
 void VulkanManager::CreateColorResource()
 {
     vk::ImageUsageFlags usage = vk::ImageUsageFlagBits::eTransientAttachment | vk::ImageUsageFlagBits::eColorAttachment;
@@ -486,10 +486,10 @@ void VulkanManager::DestroyVkDepthBuffer()
 void VulkanManager::CreateVkRenderPass()
 {
     //创建信号量
-    imageAcquiredSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
-    renderFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
+    imageAcquiredSemaphores.resize(swapChainImageCount);
+    renderFinishedSemaphores.resize(swapChainImageCount);
 
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+    for (size_t i = 0; i < swapChainImageCount; i++)
     {
         vk::SemaphoreCreateInfo imageAcquiredSemaphoreCreateInfo;
         imageAcquiredSemaphores[i] = device.createSemaphore(imageAcquiredSemaphoreCreateInfo);
@@ -593,7 +593,7 @@ void VulkanManager::CreateVkRenderPass()
 void VulkanManager::DestroyVkRenderPass()
 {
     device.destroyRenderPass(renderPass);
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+    for (size_t i = 0; i < swapChainImageCount; i++)
     {
         device.destroySemaphore(imageAcquiredSemaphores[i]);
         device.destroySemaphore(renderFinishedSemaphores[i]);

@@ -39,6 +39,7 @@ public:
     inline vk::RenderPassBeginInfo& GetRenderPassBeginInfo() { return renderPassBeginInfo; }
     inline std::vector<vk::Framebuffer>& GetFrameBuffers() { return framebuffers; }
     inline vk::CommandBufferBeginInfo& GetCommandBufferBeginInfo() { return commandBufferBeginInfo; }
+    inline uint32_t GetSwapChainImageCount() { return swapChainImageCount; }
 private:
     VulkanManager();
 
@@ -53,11 +54,11 @@ private:
     void CreateVkDevice();
     void DestroyVkDevice();
 
-    void CreateVkCommandBuffer();
-    void DestroyVkCommandBuffer();
-
     void CreateVkSwapChain();
     void DestroyVkSwapChain();
+
+    void CreateVkCommandBuffer();
+    void DestroyVkCommandBuffer();
 
     void CreateColorResource();
     void DestroyColorResource();

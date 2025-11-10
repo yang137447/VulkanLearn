@@ -25,6 +25,6 @@ layout(location = 1) out vec2 fragTexCoord;
 void main()
 {
     gl_Position = uboVP.projection * uboVP.view * uboM.model * vec4(inPosition, 1.0);
-    fragColor = mix(inColor, uboMIP.tintColor.rgb, uboMIP.tintColor.a); // 使用传入的颜色
+    fragColor = uboVP.ambient * uboMIP.tintColor.rgb;
     fragTexCoord = inTexCoord; // 使用传入的纹理坐标
 }

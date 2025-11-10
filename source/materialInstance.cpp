@@ -105,16 +105,17 @@ void MaterialInstance::CreateUniformBuffers()
         }
     }
     auto& device = VulkanManager::GetInstance().GetDevice();
+    uint32_t swapChainImageCount = VulkanManager::GetInstance().GetSwapChainImageCount();
     for(auto& ubo: {&uboMaterialInstance})
     {
         vk::DeviceSize uniformBufferSize = bufferSize;
-        ubo->uniformBuffers.resize(MAX_FRAMES_IN_FLIGHT);
-        ubo->uniformBufferMemories.resize(MAX_FRAMES_IN_FLIGHT);
-        ubo->uniformBuffersMapped.resize(MAX_FRAMES_IN_FLIGHT);
+        ubo->uniformBuffers.resize(swapChainImageCount);
+        ubo->uniformBufferMemories.resize(swapChainImageCount);
+        ubo->uniformBuffersMapped.resize(swapChainImageCount);
         ubo->uniformBufferSize = bufferSize;
         vk::BufferUsageFlags usage = vk::BufferUsageFlagBits::eUniformBuffer;
         vk::MemoryPropertyFlags memoryPropertyFlags = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
-        for(int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+        for(int i = 0; i < swapChainImageCount; i++)
         {
             std::tie(ubo->uniformBuffers[i], ubo->uniformBufferMemories[i]) = CommonFunction::CreateBuffer(
                 device,
@@ -130,9 +131,10 @@ void MaterialInstance::CreateUniformBuffers()
 void MaterialInstance::DestroyUniformBuffers()
 {
     auto& device = VulkanManager::GetInstance().GetDevice();
+    uint32_t swapChainImageCount = VulkanManager::GetInstance().GetSwapChainImageCount();
     for(auto& ubo: {&uboMaterialInstance})
     {
-        for(int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+        for(int i = 0; i < swapChainImageCount; i++)
         {
             device.unmapMemory(ubo->uniformBufferMemories[i]);
             device.destroyBuffer(ubo->uniformBuffers[i]);
@@ -143,11 +145,12 @@ void MaterialInstance::DestroyUniformBuffers()
 
 void MaterialInstance::SetupDescriptors()
 {
+    uint32_t swapChainImageCount = VulkanManager::GetInstance().GetSwapChainImageCount();
     // 设置uniform缓冲区信息
     for(auto& ubo: {&uboMaterialInstance})
     {
-        ubo->uniformBufferInfos.resize(MAX_FRAMES_IN_FLIGHT);
-        for(int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+        ubo->uniformBufferInfos.resize(swapChainImageCount);
+        for(int i = 0; i < swapChainImageCount; i++)
         {
             ubo->uniformBufferInfos[i]
                 .setBuffer(ubo->uniformBuffers[i])
