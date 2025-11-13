@@ -8,6 +8,44 @@
 #include <iostream>
 
 #include "shaderReflect.h"
+#include "commonFunction.h"
+
+shaderc_include_result* Include::GetInclude(const char* requested_source, shaderc_include_type type, const char* requesting_source, size_t include_depth)
+{
+    // 创建一个新的结果对象
+    shaderc_include_result* result = new shaderc_include_result;
+    
+    // 构建文件路径
+    std::string fileFolder = std::filesystem::path(requesting_source).parent_path().string();
+    std::string filePath = fileFolder + "/" + requested_source;
+
+    std::cout << "Including file: " << filePath << std::endl;
+    
+    // 读取文件内容
+    std::string glslCode = CommonFunction::ReadFile(filePath);
+    
+    // 为内容分配新的内存，因为 glslCode 会在函数结束时被销毁
+    char* content = new char[glslCode.size()];
+    memcpy(content, glslCode.data(), glslCode.size());
+    
+    // 为文件名分配新的内存
+    char* filename = new char[filePath.size()];
+    memcpy(filename, filePath.data(), filePath.size());
+    
+    // 设置结果
+    result->source_name = filename;
+    result->source_name_length = filePath.size();
+    result->content = content;
+    result->content_length = glslCode.size();
+    result->user_data = nullptr;
+    
+    return result;
+}
+
+void Include::ReleaseInclude(shaderc_include_result* data)
+{
+    delete includeResult;
+}
 
 ShaderCompiler::ShaderCompiler()
 {
@@ -51,8 +89,8 @@ void ShaderCompiler::StartCompile(const std::string& shaderFilePath)
                 continue;
             }
 
-            std::string glslCode = ReadFile(glslShaderPath);
-            std::vector<uint32_t> spvCode = CompileGLSLToSPIRV(glslCode, kind, shaderName);
+            std::string glslCode = CommonFunction::ReadFile(glslShaderPath);
+            std::vector<uint32_t> spvCode = CompileGLSLToSPIRV(glslCode, kind, glslShaderPath);
             SaveSPIRVToFile(spvCode, compiledShaderPath);
 
             ShaderReflect shaderReflect(spvCode);
@@ -72,39 +110,16 @@ void ShaderCompiler::SetShaderPath(const std::string& shaderFilePath)
     spirvPath = shaderPath + "/spv";
 }
 
-std::string ShaderCompiler::ReadFile(const std::string& glslPath)
-{
-    std::ifstream file(glslPath.data(), std::ios::ate | std::ios::binary);
-    if (!file.is_open())
-    {
-        throw std::runtime_error("Failed to open file: " + std::string(glslPath));
-    }
-
-    std::streamsize size = file.tellg();
-    file.seekg(0, std::ios::beg);
-    std::string buffer;
-    buffer.resize(size);
-    if (!file.read(buffer.data(), size))
-    {
-        throw std::runtime_error("Failed to read file: " + std::string(glslPath));
-    }
-    file.close();
-    if (size <= 0) {
-        throw std::runtime_error("File is empty or unreadable: " + glslPath);
-    }  
-
-    return buffer;
-}
-
-std::vector<uint32_t> ShaderCompiler::CompileGLSLToSPIRV(const std::string& glslCode, shaderc_shader_kind kind, const std::string& shaderName)
+std::vector<uint32_t> ShaderCompiler::CompileGLSLToSPIRV(const std::string& glslCode, shaderc_shader_kind kind, const std::string& shaderFileFullPath)
 {
     shaderc::Compiler compiler;
     shaderc::CompileOptions options;
     options.SetOptimizationLevel(shaderc_optimization_level::shaderc_optimization_level_performance);  //设置编译选项
     options.SetTargetEnvironment(shaderc_target_env::shaderc_target_env_vulkan, shaderc_env_version::shaderc_env_version_vulkan_1_4);
     options.SetSourceLanguage(shaderc_source_language::shaderc_source_language_glsl);
+    options.SetIncluder(std::make_unique<Include>());
 
-    shaderc::SpvCompilationResult result = compiler.CompileGlslToSpv(glslCode.data(), kind, shaderName.c_str(), options);
+    shaderc::SpvCompilationResult result = compiler.CompileGlslToSpv(glslCode.data(), kind, shaderFileFullPath.c_str(), options);
     if (result.GetCompilationStatus() != shaderc_compilation_status_success)
     {
         throw std::runtime_error(result.GetErrorMessage());

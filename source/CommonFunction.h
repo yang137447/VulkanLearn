@@ -6,6 +6,7 @@
 #include <array>
 #include "settings.h"
 #include <filesystem>
+#include <fstream>
 
 namespace CommonFunction
 {
@@ -26,6 +27,30 @@ namespace CommonFunction
         }
         return fullPath;
     }
+
+inline std::string ReadFile(const std::string& absFilePath)
+{
+    std::ifstream file(absFilePath.data(), std::ios::ate | std::ios::binary);
+    if (!file.is_open())
+    {
+        throw std::runtime_error("Failed to open file: " + std::string(absFilePath));
+    }
+
+    std::streamsize size = file.tellg();
+    file.seekg(0, std::ios::beg);
+    std::string buffer;
+    buffer.resize(size);
+    if (!file.read(buffer.data(), size))
+    {
+        throw std::runtime_error("Failed to read file: " + std::string(absFilePath));
+    }
+    file.close();
+    if (size <= 0) {
+        throw std::runtime_error("File is empty or unreadable: " + absFilePath);
+    }  
+
+    return buffer;
+}
 
     inline uint32_t FindMemoryType(vk::PhysicalDeviceMemoryProperties& physicalDeviceMemoryProperties, uint32_t typeFilter, vk::MemoryPropertyFlags& memoryPropertyFlags)
     {
