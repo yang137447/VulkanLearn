@@ -45,6 +45,10 @@ void SceneLoader::LoadScence(const std::string& filename)
         {
             LoadSunLightObject(obj);
         }
+        else if(type == "pointLight")
+        {
+            LoadPointLightObject(obj);
+        }
         else if(type == "camera")
         {
             LoadCameraObject(obj);
@@ -267,7 +271,24 @@ void SceneLoader::LoadSunLightObject(const nlohmann::basic_json<>& node)
     sunLight->SetRotation(rotation);
     //sunLight->SetScale(scale);
 
-    Light = sunLight;
+    this->sunLight = sunLight;
+}
+void SceneLoader::LoadPointLightObject(const nlohmann::basic_json<>& node)
+{
+    Eigen::Vector4f color = ParseVector4(node["color"]);
+    float intensity = node["intensity"].get<float>();
+    Eigen::Vector3f position = ParseVector3(node["position"]);
+    Eigen::Vector3f rotation = ParseVector3(node["rotation"]);
+    //Eigen::Vector3f scale = ParseVector3(node["scale"]);
+    std::shared_ptr<PointLight> pointLight = std::make_shared<PointLight>();
+    pointLight->SetColor(color);
+    pointLight->SetIntensity(intensity);
+    pointLight->SetPosition(position);
+    pointLight->SetRotation(rotation);
+    //pointLight->SetScale(scale);
+
+    scenePointLight = std::move(pointLight);
+
 }
 
 void SceneLoader::LoadCameraObject(const nlohmann::basic_json<>& node)
@@ -284,7 +305,7 @@ void SceneLoader::LoadCameraObject(const nlohmann::basic_json<>& node)
     camera->SetPosition(position);
     camera->SetRotation(rotation);
 
-    SceneCamera = camera;
+    sceneCamera = std::move(camera);
 }
 
 void SceneLoader::LoadEnvironmentObject(const nlohmann::basic_json<>& node)

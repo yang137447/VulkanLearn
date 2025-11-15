@@ -74,7 +74,7 @@ void VulkanManager::CreateVkInstance()
     std::cout << "Valid Vulkan Instance Layers:" << std::endl;
     for(auto& Layer :vk::enumerateInstanceLayerProperties())
     {
-        std::cout << "  Layer:" << Layer.layerName << std::endl;
+        std::cout << "  ->Layer:" << Layer.layerName << std::endl;
     }
     vk::ApplicationInfo applicationInfo;
     applicationInfo.setApiVersion(VK_API_VERSION_1_3);
@@ -250,21 +250,21 @@ void VulkanManager::CreateVkSwapChain()
     std::cout << "Surface format: " << vk::to_string(surfaceFormat.format) << std::endl;
     for (const auto &surfaceFormat : surfaceFormats)
     {
-        std::cout << "Support Surface format: " << vk::to_string(surfaceFormat.format) << std::endl;
+        std::cout << "  ->Support Surface format: " << vk::to_string(surfaceFormat.format) << std::endl;
     }
     // 获取KHR表面能力
     surfaceCapabilities = physicalDevices[GPUIndex].getSurfaceCapabilitiesKHR(surface);
     std::cout << "Surface capabilities: " << std::endl;
-    std::cout << "  minImageCount: " << surfaceCapabilities.minImageCount << std::endl;
-    std::cout << "  maxImageCount: " << surfaceCapabilities.maxImageCount << std::endl;
-    std::cout << "  currentExtent: " << surfaceCapabilities.currentExtent.width << "x" << surfaceCapabilities.currentExtent.height << std::endl;
-    std::cout << "  minImageExtent: " << surfaceCapabilities.minImageExtent.width << "x" << surfaceCapabilities.minImageExtent.height << std::endl;
-    std::cout << "  maxImageExtent: " << surfaceCapabilities.maxImageExtent.width << "x" << surfaceCapabilities.maxImageExtent.height << std::endl;
-    std::cout << "  maxImageArrayLayers: " << surfaceCapabilities.maxImageArrayLayers << std::endl;
-    std::cout << "  supportedTransforms: " << vk::to_string(surfaceCapabilities.supportedTransforms) << std::endl;
-    std::cout << "  currentTransform: " << vk::to_string(surfaceCapabilities.currentTransform) << std::endl;
-    std::cout << "  supportedCompositeAlpha: " << vk::to_string(surfaceCapabilities.supportedCompositeAlpha) << std::endl;
-    std::cout << "  supportedUsageFlags: " << vk::to_string(surfaceCapabilities.supportedUsageFlags) << std::endl;
+    std::cout << "  ->minImageCount: " << surfaceCapabilities.minImageCount << std::endl;
+    std::cout << "  ->maxImageCount: " << surfaceCapabilities.maxImageCount << std::endl;
+    std::cout << "  ->currentExtent: " << surfaceCapabilities.currentExtent.width << "x" << surfaceCapabilities.currentExtent.height << std::endl;
+    std::cout << "  ->minImageExtent: " << surfaceCapabilities.minImageExtent.width << "x" << surfaceCapabilities.minImageExtent.height << std::endl;
+    std::cout << "  ->maxImageExtent: " << surfaceCapabilities.maxImageExtent.width << "x" << surfaceCapabilities.maxImageExtent.height << std::endl;
+    std::cout << "  ->maxImageArrayLayers: " << surfaceCapabilities.maxImageArrayLayers << std::endl;
+    std::cout << "  ->supportedTransforms: " << vk::to_string(surfaceCapabilities.supportedTransforms) << std::endl;
+    std::cout << "  ->currentTransform: " << vk::to_string(surfaceCapabilities.currentTransform) << std::endl;
+    std::cout << "  ->supportedCompositeAlpha: " << vk::to_string(surfaceCapabilities.supportedCompositeAlpha) << std::endl;
+    std::cout << "  ->supportedUsageFlags: " << vk::to_string(surfaceCapabilities.supportedUsageFlags) << std::endl;
     //获取支持的显示模式数量
     presentModes = physicalDevices[GPUIndex].getSurfacePresentModesKHR(surface);
     assert(!presentModes.empty());
@@ -288,7 +288,7 @@ void VulkanManager::CreateVkSwapChain()
     std::cout << "Present mode: " << vk::to_string(presentMode) << std::endl;
     for (const auto &presentMode : presentModes)
     {
-        std::cout << "  Support present mode: " << vk::to_string(presentMode) << std::endl;
+        std::cout << "  ->Support present mode: " << vk::to_string(presentMode) << std::endl;
     }
     // 确定surface的高度和宽度
     if(surfaceCapabilities.currentExtent.width == 0xFFFFFFFF)

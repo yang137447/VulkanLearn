@@ -11,6 +11,7 @@ class RenderableObject;
 class Material;
 class MaterialInstance;
 class SunLight;
+class PointLight;
 class Camera;
 class SceneObject;
 
@@ -29,13 +30,15 @@ class SceneLoader{
     const std::unordered_map<std::string, std::shared_ptr<SceneObject>>& GetSceneObjects() const { return sceneObjects;}
     const std::unordered_map<std::string, std::shared_ptr<Material>>& GetMaterials() const { return materials;}
     const std::unordered_map<std::string, std::shared_ptr<MaterialInstance>>& GetMaterialInstances() const { return materialInstances;}
-    const std::shared_ptr<Camera>& GetCamera() const { return SceneCamera;}
-    const std::shared_ptr<SunLight>& GetSunLight() const { return Light;}
+    const std::shared_ptr<Camera>& GetCamera() const { return sceneCamera;}
+    const std::shared_ptr<SunLight>& GetSunLight() const { return sunLight;}
+    const std::shared_ptr<PointLight>& GetPointLight() const { return scenePointLight;}
     const Eigen::Vector3f& GetAmbient() const { return ambient; }
 private:
     SceneLoader();
     void LoadMeshObject(const nlohmann::basic_json<>& node);
     void LoadSunLightObject(const nlohmann::basic_json<>& node);
+    void LoadPointLightObject(const nlohmann::basic_json<>& node);
     void LoadCameraObject(const nlohmann::basic_json<>& node);
     void LoadEnvironmentObject(const nlohmann::basic_json<>& node);
 
@@ -53,8 +56,9 @@ private:
     std::unordered_map<std::string, std::shared_ptr<MaterialInstance>> materialInstances; //材质实例相对路径和材质实例对象
     std::unordered_map<std::string, std::shared_ptr<Texture>> textures; //贴图相对路径和贴图对象
 
-    std::shared_ptr<SunLight> Light;
-    std::shared_ptr<Camera> SceneCamera;
+    std::shared_ptr<SunLight> sunLight;
+    std::shared_ptr<PointLight> scenePointLight;
+    std::shared_ptr<Camera> sceneCamera;
 
     Eigen::Vector3f ambient;
 };

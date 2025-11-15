@@ -95,7 +95,7 @@ void RenderSystem::Render()
     if(swapChainImageIndex != gpuSyncIndex)
     {
         throw std::runtime_error("swapChainImageIndex != gpuSyncIndex");
-        //todo: 使用 gpuSyncIndex 获取的commandBuffer、imageAcquiredSemaphore、renderFinishedSemaphore需要重新获取
+        //TODO: 使用 gpuSyncIndex 获取的commandBuffer、imageAcquiredSemaphore、renderFinishedSemaphore需要重新获取
     }
 
     // 重置并开始记录Command Buffer
@@ -182,12 +182,16 @@ void RenderSystem::Render()
 
 void RenderSystem::UpdateUBOGlobal()
 {
-    Matrix& matrix = Matrix::GetInstance();
+    static Matrix& matrix = Matrix::GetInstance();
+    static const auto& sceneLoader = SceneLoader::GetInstance();
 
     static UBOGlobal ubo;
     ubo.view = matrix.GetViewMatrix();
     ubo.projection = matrix.GetProjectionMatrix();
-    ubo.ambient = SceneLoader::GetInstance().GetAmbient();
+    ubo.ambient = sceneLoader.GetAmbient();
+    ubo.pointLightPosition = sceneLoader.GetPointLight()->GetPosition();
+    ubo.pointLightColor = sceneLoader.GetPointLight()->GetColor();
+
     std::memcpy(uboGlobal.uniformBuffersMapped[swapChainImageIndex], &ubo, sizeof(ubo));
 }
 

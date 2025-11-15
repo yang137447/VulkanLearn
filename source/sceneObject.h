@@ -32,6 +32,18 @@ private:
   float intensity;
 };
 
+class PointLight: public SceneNode {
+public:
+  void SetColor(const Eigen::Vector4f& color) { this->color = color; }
+  void SetIntensity(float intensity) { this->intensity = intensity; }
+  //void SetAttenuation(float constant, float linear, float quadratic);
+  inline const Eigen::Vector4f& GetColor() const { return color; }
+  inline float GetIntensity() const { return intensity; }
+private:
+  Eigen::Vector4f color;
+  float intensity;
+};
+
 class Camera: public SceneNode {
 public:
   void SetHFOV(float fov);

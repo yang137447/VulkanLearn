@@ -57,7 +57,7 @@ int main(int argc, char **argv)
     vulkanManager.Init(extensionsVec, window);
     //加载场景
     SceneLoader& sceneLoader = SceneLoader::GetInstance();
-    sceneLoader.LoadScence(CommonFunction::Path("scenes/scene01.json"));
+    sceneLoader.LoadScence(CommonFunction::Path("scenes/scene02.json"));
     //初始化渲染系统
     RenderSystem& renderSystem = RenderSystem::GetInstance();
     renderSystem.InitRenderObject();

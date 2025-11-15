@@ -1,18 +1,10 @@
 #version 450
 
-layout(binding = 0) uniform UBOGlobal{
-    mat4 view;
-    mat4 projection;
-    vec3 ambient;
-} uboVP;
+#include "common/commonUbo.glsl"
 
 layout(binding = 1) uniform UBOMIParamters{
     vec4 tintColor;
 } uboMIP;
-
-layout(binding = 2) uniform UBOModel{
-    mat4 model;
-} uboM;
 
 layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inNormal;

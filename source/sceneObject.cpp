@@ -34,6 +34,8 @@ void SunLight::SetIntensity(float intensity)
     this->intensity = intensity;
 }
 
+// PointLight 的 SetColor 和 SetIntensity 方法已内联在头文件中
+
 void Camera::SetHFOV(float fov)
 {
     this->hFov = fov;
