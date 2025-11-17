@@ -35,12 +35,15 @@ private:
 class PointLight: public SceneNode {
 public:
   void SetColor(const Eigen::Vector4f& color) { this->color = color; }
+  void SetSpecular(const Eigen::Vector4f& specular) { this->specular = specular; }
   void SetIntensity(float intensity) { this->intensity = intensity; }
   //void SetAttenuation(float constant, float linear, float quadratic);
   inline const Eigen::Vector4f& GetColor() const { return color; }
+  inline const Eigen::Vector4f& GetSpecular() const { return specular; }
   inline float GetIntensity() const { return intensity; }
 private:
   Eigen::Vector4f color;
+  Eigen::Vector4f specular;
   float intensity;
 };
 

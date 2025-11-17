@@ -22,6 +22,7 @@
             "name": "Main_Light",
             "type": "pointLight",
             "color": [1, 1, 1, 1],
+            "specular": [1, 1, 0.5, 1],
             "intensity": 1.0,
             "position": [5, 10, 5],
             "rotation": [0, 0, 0]

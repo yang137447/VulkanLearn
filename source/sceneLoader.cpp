@@ -276,12 +276,14 @@ void SceneLoader::LoadSunLightObject(const nlohmann::basic_json<>& node)
 void SceneLoader::LoadPointLightObject(const nlohmann::basic_json<>& node)
 {
     Eigen::Vector4f color = ParseVector4(node["color"]);
+    Eigen::Vector4f specular = ParseVector4(node["specular"]);
     float intensity = node["intensity"].get<float>();
     Eigen::Vector3f position = ParseVector3(node["position"]);
     Eigen::Vector3f rotation = ParseVector3(node["rotation"]);
     //Eigen::Vector3f scale = ParseVector3(node["scale"]);
     std::shared_ptr<PointLight> pointLight = std::make_shared<PointLight>();
     pointLight->SetColor(color);
+    pointLight->SetSpecular(specular);
     pointLight->SetIntensity(intensity);
     pointLight->SetPosition(position);
     pointLight->SetRotation(rotation);

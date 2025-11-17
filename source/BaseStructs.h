@@ -24,8 +24,10 @@ struct UBOGlobal
     Eigen::Matrix4f view;
     Eigen::Matrix4f projection;
     Eigen::Vector3f ambient;
+    Eigen::Vector3f cameraPosition;
     Eigen::Vector3f pointLightPosition;
     Eigen::Vector4f pointLightColor;
+    Eigen::Vector4f pointLightSpecular;
 };
 
 struct UBOModel

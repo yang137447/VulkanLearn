@@ -12,7 +12,7 @@ void main()
 {
     //outColor = texture(albedoMap, fragTexCoord);
     lowp vec4 baseColor = texture(albedoMap, v2fTexCoord);
-    vec4 ambient = baseColor * vec4(v2fColor, 1.0);
-    vec4 pointLigtht = baseColor * vec4(v2fLightColor, 1.0);
-    outColor = ambient + pointLigtht;
+    baseColor = baseColor * vec4(v2fColor, 1.0);
+    baseColor = baseColor * vec4(v2fLightColor, 1.0);
+    outColor = baseColor;
 }

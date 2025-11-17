@@ -20,8 +20,29 @@ layout(location = 2) out vec3 v2fLightColor;
 
 void main()
 {
-    gl_Position = uboVP.projection * uboVP.view * uboM.model * vec4(inPosition, 1.0);
-    v2fColor = uboVP.ambient * uboMIP.tintColor.rgb;
+    //初始化变量
+    mat4 modelMatrix = uboM.model;
+    mat4 viewMatrix = uboVP.view;
+    mat4 projectionMatrix = uboVP.projection;
+    vec3 ambient = uboVP.ambient;
+    vec3 cameraPosition = uboVP.cameraPosition;
+    vec3 pointLightPosition = uboVP.pointLightPosition;
+    vec4 pointLightColor = uboVP.pointLightColor;
+    vec4 pointLightSpecular = uboVP.pointLightSpecular;
+        //MIP
+    vec4 tintColor = uboMIP.tintColor;
+
+
+    gl_Position = projectionMatrix * viewMatrix * modelMatrix * vec4(inPosition, 1.0);
+    v2fColor = tintColor.rgb;
     v2fTexCoord = inTexCoord; // 使用传入的纹理坐标
-    v2fLightColor = PointLight(uboM.model, uboVP.pointLightPosition, uboVP.pointLightColor, inNormal, inPosition).rgb;
+    v2fLightColor = PointLight(
+        modelMatrix, 
+        inNormal, 
+        inPosition, 
+        cameraPosition, 
+        vec4(ambient, 1.0),
+        pointLightPosition, 
+        pointLightColor,
+        pointLightSpecular).rgb;
 }
