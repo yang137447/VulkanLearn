@@ -10,6 +10,8 @@
 #include "renderSystem.h"
 #include "commonFunction.h"
 #include "fpsTool.h"
+#include "controller.h"
+#include "sceneObject.h"
 
 int main(int argc, char **argv)
 {
@@ -63,14 +65,24 @@ int main(int argc, char **argv)
     renderSystem.InitRenderObject();
     //初始化FPS计算工具
     FpsTool fpsTool;
+    //玩家控制器
+    Controller controller(window);
+    controller.SetMoveVelocity(10.0f);
+    controller.SetRotationSpeed(10.0f);
+    auto camera = sceneLoader.GetCamera();
+    controller.SetSceneObject(camera);
 
     SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
     SDL_ShowWindow(window);
+
     while (!shouldClose)
     {
+        //delta time
+        float deltaTime = CommonFunction::GetDeltaTime();
         while (SDL_PollEvent(&event))
         {
-            switch (event.type) {
+            switch (event.type)
+            {
                 case SDL_EVENT_WINDOW_RESIZED:
                     std::cout << "Window resized to " << event.window.data1 << "x" << event.window.data2 << std::endl;
                     vulkanManager.ReCreateSwapChain(event.window.data1, event.window.data2);
@@ -81,10 +93,11 @@ int main(int argc, char **argv)
                     break;
             }
         }
+        controller.Update(deltaTime);
         renderSystem.Render();
 
         //FPS计算
-        fpsTool.Calculate();
+        fpsTool.Calculate(deltaTime);
         SDL_SetWindowTitle(window, fpsTool.getTitle().c_str());
     }
     vulkanManager.GetDevice().waitIdle();

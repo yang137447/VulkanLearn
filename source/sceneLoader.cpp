@@ -1,5 +1,7 @@
 #include "sceneLoader.h"
 #include <fstream>
+#include <filesystem>
+#include <iostream>
 #include <memory>
 #include <nlohmann/json.hpp>
 #include "commonFunction.h"
@@ -10,10 +12,7 @@
 #include "texture.h"
 #include "materialInstance.h"
 #include "sceneObject.h"
-#include "matrix.h"
 #include "settings.h"
-#include <filesystem>
-#include <iostream>
 #include "renderPipline.h"
 #include "shaderReflect.h"
 
@@ -249,6 +248,7 @@ void SceneLoader::LoadMeshObject(const nlohmann::basic_json<>& node)
             sceneObject->SetPosition(position);
             sceneObject->SetRotation(rotation);
             sceneObject->SetScale(scale);
+        sceneObject->UpdateModelMatrix();
     }
     //储存到场景
     objects[modelDataPath] = renderableObject;
@@ -304,8 +304,10 @@ void SceneLoader::LoadCameraObject(const nlohmann::basic_json<>& node)
     std::shared_ptr<Camera> camera = std::make_shared<Camera>();
     camera->SetHFOV(fov);
     camera->SetClip(near, far);
+    //camera->SetProjection(fov, float(width)/float(height), near, far);
     camera->SetPosition(position);
     camera->SetRotation(rotation);
+    //camera->SetCamera(position, rotation);
 
     sceneCamera = std::move(camera);
 }

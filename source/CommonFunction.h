@@ -4,9 +4,10 @@
 #include <cstdint>
 #include <Eigen/Dense>
 #include <array>
-#include "settings.h"
 #include <filesystem>
 #include <fstream>
+#include <iostream>
+#include "settings.h"
 
 namespace CommonFunction
 {
@@ -28,29 +29,88 @@ namespace CommonFunction
         return fullPath;
     }
 
-inline std::string ReadFile(const std::string& absFilePath)
-{
-    std::ifstream file(absFilePath.data(), std::ios::ate | std::ios::binary);
-    if (!file.is_open())
+    inline std::string ReadFile(const std::string& absFilePath)
     {
-        throw std::runtime_error("Failed to open file: " + std::string(absFilePath));
+        std::ifstream file(absFilePath.data(), std::ios::ate | std::ios::binary);
+        if (!file.is_open())
+        {
+            throw std::runtime_error("Failed to open file: " + std::string(absFilePath));
+        }
+
+        std::streamsize size = file.tellg();
+        file.seekg(0, std::ios::beg);
+        std::string buffer;
+        buffer.resize(size);
+        if (!file.read(buffer.data(), size))
+        {
+            throw std::runtime_error("Failed to read file: " + std::string(absFilePath));
+        }
+        file.close();
+        if (size <= 0) {
+            throw std::runtime_error("File is empty or unreadable: " + absFilePath);
+        }  
+
+        return buffer;
     }
 
-    std::streamsize size = file.tellg();
-    file.seekg(0, std::ios::beg);
-    std::string buffer;
-    buffer.resize(size);
-    if (!file.read(buffer.data(), size))
+    inline float GetDeltaTime()
     {
-        throw std::runtime_error("Failed to read file: " + std::string(absFilePath));
+        static auto startTime = std::chrono::high_resolution_clock::now();
+        auto currentTime = std::chrono::high_resolution_clock::now();
+        float deltaTime = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
+        startTime = currentTime;
+        return deltaTime;
     }
-    file.close();
-    if (size <= 0) {
-        throw std::runtime_error("File is empty or unreadable: " + absFilePath);
-    }  
 
-    return buffer;
-}
+    //Rotation(degrees): x, y, z
+    inline Eigen::Quaternionf rotationToQuat(Eigen::Vector3f rotation)
+    {
+        rotation *= M_PI / 180.0f;
+
+        Eigen::AngleAxisf yawAngle(rotation.y(), Eigen::Vector3f::UnitY());
+        Eigen::AngleAxisf pitchAngle(rotation.x(), Eigen::Vector3f::UnitX());
+        Eigen::AngleAxisf rollAngle(rotation.z(), Eigen::Vector3f::UnitZ());
+        Eigen::Quaternionf quaternion = yawAngle * pitchAngle * rollAngle;
+        quaternion.normalize();
+
+        return quaternion;
+    }
+
+    inline Eigen::Vector3f quatToRotation(Eigen::Quaternionf quaternion)
+    {
+        Eigen::Vector3f rotation = quaternion.matrix().eulerAngles(1, 0, 2) * 180.0f / M_PI;
+        rotation = Eigen::Vector3f(rotation.y(), rotation.x(), rotation.z());
+        return rotation;
+    }
+
+    inline Eigen::Matrix4f quatToMatrix(Eigen::Quaternionf quaternion)
+    {
+        Eigen::Matrix3f rotationMatrix = quaternion.toRotationMatrix();
+        Eigen::Matrix4f matrix = Eigen::Matrix4f::Identity();
+        matrix.block<3, 3>(0, 0) = rotationMatrix;
+        return matrix;
+    }
+
+    inline Eigen::Matrix4f rotationToMatrix(Eigen::Vector3f rotation)
+    {
+        Eigen::Quaternionf quaternion = rotationToQuat(rotation);
+        return quatToMatrix(quaternion);
+    }
+
+    inline Eigen::Quaternionf RemoveRoll(const Eigen::Quaternionf& q)
+    {
+        Eigen::Vector3f f = q * Eigen::Vector3f(0, 0, 1); // forward
+        Eigen::Vector3f u = Eigen::Vector3f(0, 1, 0); // up
+        Eigen::Vector3f r = -1.0 * f.cross(u).normalized(); // right
+        u = f.cross(r).normalized();
+
+        Eigen::Matrix3f R;
+        R.col(0) = r;
+        R.col(1) = u;
+        R.col(2) = f;
+
+        return Eigen::Quaternionf(R);
+    }
 
     inline uint32_t FindMemoryType(vk::PhysicalDeviceMemoryProperties& physicalDeviceMemoryProperties, uint32_t typeFilter, vk::MemoryPropertyFlags& memoryPropertyFlags)
     {

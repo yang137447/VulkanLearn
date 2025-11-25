@@ -5,19 +5,18 @@ class FpsTool {
 public:
     FpsTool()
         : frameCount(0),
-          lastUpdate(std::chrono::steady_clock::now()),
-          fps(0.0f) {}
+          timeElapsed(0.0f),
+          fps(0) {}
 
     // 每帧调用一次
-    void Calculate() {
+    void Calculate(float deltaTime) {
         frameCount++;
-        auto now = std::chrono::steady_clock::now();
-        std::chrono::duration<float> elapsed = now - lastUpdate;
+        timeElapsed += deltaTime;
 
-        if (elapsed.count() >= 1.0f) {
-            fps = frameCount / elapsed.count();
+        if (timeElapsed >= 0.05f) {
+            fps = frameCount / timeElapsed;
             frameCount = 0;
-            lastUpdate = now;
+            timeElapsed = 0.0f;
         }
     }
 
@@ -29,6 +28,6 @@ public:
 
 private:
     int frameCount;
-    std::chrono::steady_clock::time_point lastUpdate;
-    float fps;
+    float timeElapsed;
+    int fps;
 };

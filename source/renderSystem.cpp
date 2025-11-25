@@ -6,7 +6,6 @@
 #include "vulkanManager.h"
 #include "renderPipline.h"
 #include "sceneLoader.h"
-#include "matrix.h"
 #include "settings.h"
 #include "commonFunction.h"
 #include "texture.h"
@@ -25,9 +24,9 @@ void RenderSystem::InitRenderObject()
 {
     auto& scene = SceneLoader::GetInstance();
     // 设置相机
-    auto& matrix = Matrix::GetInstance();
-    matrix.SetCamera(scene.GetCamera()->GetPosition(), Eigen::Vector3f(0, 0, 0), Eigen::Vector3f(0, 1, 0));
-    matrix.SetProjection(scene.GetCamera()->GetHFOV(), (float)width/(float)height, scene.GetCamera()->GetClipNear(), scene.GetCamera()->GetClipFar());
+    auto& camera = scene.GetCamera();
+    camera->SetCamera(scene.GetCamera()->GetPosition(), Eigen::Vector3f(0, 0, 0), Eigen::Vector3f(0, 1, 0));
+    camera->SetProjection(scene.GetCamera()->GetHFOV(), (float)width/(float)height, scene.GetCamera()->GetClipNear(), scene.GetCamera()->GetClipFar());
     
     // 将场景物体按shader，materialInstance分组，填充进hierarchyObjects
     for(const auto& [objectName, sceneObject] : scene.GetSceneObjects())
@@ -60,7 +59,7 @@ void RenderSystem::InitRenderObject()
         }
     }
 
-    onWorkFenceForSwapChainImage.resize(MAX_FRAMES_IN_FLIGHT, -1);
+    //onWorkFenceForSwapChainImage.resize(MAX_FRAMES_IN_FLIGHT, -1);
 }
 
 void RenderSystem::Render()
@@ -182,12 +181,13 @@ void RenderSystem::Render()
 
 void RenderSystem::UpdateUBOGlobal()
 {
-    static Matrix& matrix = Matrix::GetInstance();
+
     static const auto& sceneLoader = SceneLoader::GetInstance();
+    static Camera& camera = *sceneLoader.GetCamera();
 
     static UBOGlobal ubo;
-    ubo.view = matrix.GetViewMatrix();
-    ubo.projection = matrix.GetProjectionMatrix();
+    ubo.view = camera.GetViewMatrix();
+    ubo.projection = camera.GetProjectionMatrix();
     ubo.ambient = sceneLoader.GetAmbient();
     ubo.cameraPosition = sceneLoader.GetCamera()->GetPosition();
     ubo.pointLightPosition = sceneLoader.GetPointLight()->GetPosition();
@@ -234,11 +234,10 @@ void RenderSystem::UpdateUBOMaterialInstance(const std::shared_ptr<MaterialInsta
 
 void RenderSystem::UpdateUBOModel(const std::shared_ptr<SceneObject>& object)
 {
-    Matrix& matrix = Matrix::GetInstance();
-    matrix.SetModelTransform(object->GetPosition(), object->GetRotation(), object->GetScale());
+    object->UpdateModelMatrix();
 
     static UBOModel ubo;
-    ubo.model = matrix.GetModelMatrix();
+    ubo.model = object->GetModelMatrix();
     std::memcpy(object->GetUboModelMapped()[swapChainImageIndex], &ubo, sizeof(ubo));
 }
 
