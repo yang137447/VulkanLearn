@@ -1,4 +1,5 @@
 #include <Eigen/Dense>
+#include <memory>
 #include "SDL3/SDL.h"
 
 
