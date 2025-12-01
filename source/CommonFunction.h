@@ -65,7 +65,7 @@ namespace CommonFunction
     //Rotation(degrees): x, y, z
     inline Eigen::Quaternionf rotationToQuat(Eigen::Vector3f rotation)
     {
-        rotation *= M_PI / 180.0f;
+        rotation *= Pi / 180.0f;
 
         Eigen::AngleAxisf yawAngle(rotation.y(), Eigen::Vector3f::UnitY());
         Eigen::AngleAxisf pitchAngle(rotation.x(), Eigen::Vector3f::UnitX());
@@ -78,7 +78,7 @@ namespace CommonFunction
 
     inline Eigen::Vector3f quatToRotation(Eigen::Quaternionf quaternion)
     {
-        Eigen::Vector3f rotation = quaternion.matrix().eulerAngles(1, 0, 2) * 180.0f / M_PI;
+        Eigen::Vector3f rotation = quaternion.matrix().eulerAngles(1, 0, 2) * 180.0f / Pi;
         rotation = Eigen::Vector3f(rotation.y(), rotation.x(), rotation.z());
         return rotation;
     }
