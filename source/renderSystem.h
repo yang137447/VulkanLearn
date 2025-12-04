@@ -23,7 +23,7 @@ public:
     void InitRenderObject();
     void Render();
     
-    std::vector<vk::DescriptorBufferInfo>& GetUBOGlobalBufferInfo(){ return uboGlobal.uniformBufferInfos; }
+    std::vector<vk::DescriptorBufferInfo>& GetUBOGlobalBufferInfo(){ return uboGlobal.bufferInfos; }
 private:
     RenderSystem();
     void UpdateUBOGlobal();            
@@ -41,7 +41,7 @@ private:
     std::vector<int32_t> onWorkFenceForSwapChainImage;
     uint32_t swapChainImageIndex = 0;
     
-    UBO uboGlobal;
+    Buffer uboGlobal;
     // 按基础材质分组： {shader, {materialInstance, [sceneObject]}}
     std::unordered_map<std::string, std::unordered_map<std::string, std::vector<std::weak_ptr<SceneObject>>>> hierarchyObjects;
 };

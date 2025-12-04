@@ -10,13 +10,13 @@ struct QueueFamilyIndices
     std::optional<uint32_t> presentQueue;
 };
 
-struct UBO
+struct Buffer
 {
-  uint32_t uniformBufferSize;
-  std::vector<vk::Buffer> uniformBuffers;
-  std::vector<vk::DeviceMemory> uniformBufferMemories;
-  std::vector<void*> uniformBuffersMapped;
-  std::vector<vk::DescriptorBufferInfo> uniformBufferInfos;
+  uint32_t bufferSize;
+  std::vector<vk::Buffer> buffers;
+  std::vector<vk::DeviceMemory> bufferMemories;
+  std::vector<void*> buffersMapped;
+  std::vector<vk::DescriptorBufferInfo> bufferInfos;
 };
 
 struct UBOGlobal
@@ -33,4 +33,22 @@ struct UBOGlobal
 struct UBOModel
 {
     Eigen::Matrix4f model;
+};
+
+struct alignas(4) LightSSBOHeader
+{
+    int directionalLightOffset;
+    int directionalLightCount;
+    int pointLightOffset;
+    int pointLightCount;
+    int spotLightOffset;
+    int spotLightCount;
+};
+
+struct alignas(16) LightGPU
+{
+    Eigen::Vector4f colorIntensity;
+    Eigen::Vector4f positionRadius;
+    Eigen::Vector4f directionPad;
+    Eigen::Vector4f coneAngleOuterInnerPadPad;
 };

@@ -7,10 +7,10 @@
 #include "vulkanManager.h"
 #include "materialInstance.h"
 #include "material.h"
-#include "texture.h"
 #include "renderPipline.h"
 #include "shaderReflect.h"
 #include "renderSystem.h"
+#include "lightManager.h"
 
 void SceneNode::SetPosition(Eigen::Vector3f& position)
 {
@@ -109,11 +109,11 @@ void SceneNode::UpdateModelMatrix()
     modelMatrix = translationMatrix * rotationMatrix * scaleMatrix;
 }
 
-void SunLight::SetColor(Eigen::Vector3f& color)
+void DirectinalLight::SetColor(Eigen::Vector3f& color)
 {
     this->color = color;
 }
-void SunLight::SetIntensity(float intensity)
+void DirectinalLight::SetIntensity(float intensity)
 {
     this->intensity = intensity;
 }
@@ -192,7 +192,7 @@ void Camera::SetProjection(float fov, float aspect, float near, float far)
 {
     float n = -1.0f * near;
     float f = -1.0f * far;
-    float fovRad = fov * M_PI / 180.0f; 
+    float fovRad = fov * Pi / 180.0f; 
     float k = -1.0f / std::tan(fovRad / 2.0f);
     projectionMatrix <<
         k, 0.0f, 0.0f, 0.0f,
@@ -271,23 +271,23 @@ void SceneObject::CreateUniformBuffers()
     uint32_t swapChainImageCount = VulkanManager::GetInstance().GetSwapChainImageCount();
     for(auto& ubo: {&uboModel})
     {
-        vk::DeviceSize uniformBufferSize = sizeof(UBOModel);
-        ubo->uniformBuffers.resize(swapChainImageCount);
-        ubo->uniformBufferMemories.resize(swapChainImageCount);
-        ubo->uniformBuffersMapped.resize(swapChainImageCount);
-        ubo->uniformBufferSize = uniformBufferSize;
+        vk::DeviceSize bufferSize = sizeof(UBOModel);
+        ubo->buffers.resize(swapChainImageCount);
+        ubo->bufferMemories.resize(swapChainImageCount);
+        ubo->buffersMapped.resize(swapChainImageCount);
+        ubo->bufferSize = bufferSize;
         vk::BufferUsageFlags usage = vk::BufferUsageFlagBits::eUniformBuffer;
         vk::MemoryPropertyFlags memoryPropertyFlags = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
         for(int i = 0; i < swapChainImageCount; i++)
         {
-            std::tie(ubo->uniformBuffers[i], ubo->uniformBufferMemories[i]) = CommonFunction::CreateBuffer(
+            std::tie(ubo->buffers[i], ubo->bufferMemories[i]) = CommonFunction::CreateBuffer(
                 device,
-                uniformBufferSize, 
+                bufferSize, 
                 usage, 
                 VulkanManager::GetInstance().GetGpuMemoryProperties(), 
                 memoryPropertyFlags
             );
-            ubo->uniformBuffersMapped[i] = device.mapMemory(ubo->uniformBufferMemories[i], 0, uniformBufferSize);
+            ubo->buffersMapped[i] = device.mapMemory(ubo->bufferMemories[i], 0, bufferSize);
         }
     }
 }
@@ -299,9 +299,9 @@ void SceneObject::DestroyUniformBuffers()
     {
         for(int i = 0; i < swapChainImageCount; i++)
         {
-            device.unmapMemory(ubo->uniformBufferMemories[i]);
-            device.destroyBuffer(ubo->uniformBuffers[i]);
-            device.freeMemory(ubo->uniformBufferMemories[i]);
+            device.unmapMemory(ubo->bufferMemories[i]);
+            device.destroyBuffer(ubo->buffers[i]);
+            device.freeMemory(ubo->bufferMemories[i]);
         }
     }
 }
@@ -360,13 +360,13 @@ void SceneObject::SetupDescriptors()
     // 设置uniform缓冲区信息
     for(auto& ubo: {&uboModel})
     {
-        ubo->uniformBufferInfos.resize(swapChainImageCount);
+        ubo->bufferInfos.resize(swapChainImageCount);
         for(int i = 0; i < swapChainImageCount; i++)
         {
-            ubo->uniformBufferInfos[i]
-                .setBuffer(ubo->uniformBuffers[i])
+            ubo->bufferInfos[i]
+                .setBuffer(ubo->buffers[i])
                 .setOffset(0)
-                .setRange(ubo->uniformBufferSize);
+                .setRange(ubo->bufferSize);
         }
     }
 }
@@ -377,8 +377,19 @@ void SceneObject::UpdateDescriptorSet()
     // 设置descriptor set信息
     writeDescriptorSets.resize(swapChainImageCount);
     auto baseMaterial = materialInstance->GetBaseMaterial().lock();
-    auto& renderPipline = baseMaterial->GetRenderPipline();
+    auto& shaderBindings = baseMaterial->GetRenderPipline()->GetShaderBindings();
+    //TODO: 这里应有shaderbinding,来决定各个descriptor是否存在，并进行更新
+    bool hasLightBuffer = false;
+    for(const auto& binding : shaderBindings)
+    {
+        if(binding.binding == 1)
+        {
+            hasLightBuffer = true;
+            break;
+        }
+    }
     auto& renderSystem = RenderSystem::GetInstance();
+    auto& lightManager = LightManager::GetInstance();
     for(int i = 0; i < swapChainImageCount; i++)
     {
         writeDescriptorSets[i].push_back(
@@ -387,22 +398,30 @@ void SceneObject::UpdateDescriptorSet()
                 .setDstBinding(0)
                 .setDescriptorType(vk::DescriptorType::eUniformBuffer)
                 .setBufferInfo(renderSystem.GetUBOGlobalBufferInfo()[i]));
-        writeDescriptorSets[i].push_back(
-            vk::WriteDescriptorSet()
-                .setDstSet(descriptorSets[i])
-                .setDstBinding(1)
-                .setDescriptorType(vk::DescriptorType::eUniformBuffer)
-                .setBufferInfo(materialInstance->GetUboMaterialInstanceInfo()[i]));
+        if(hasLightBuffer)
+        {
+            writeDescriptorSets[i].push_back(vk::WriteDescriptorSet()
+                    .setDstSet(descriptorSets[i])
+                    .setDstBinding(1)
+                    .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+                    .setBufferInfo(lightManager.GetLightBufferInfo()[i]));
+        }
         writeDescriptorSets[i].push_back(
             vk::WriteDescriptorSet()
                 .setDstSet(descriptorSets[i])
                 .setDstBinding(2)
                 .setDescriptorType(vk::DescriptorType::eUniformBuffer)
-                .setBufferInfo(uboModel.uniformBufferInfos[i]));
+                .setBufferInfo(materialInstance->GetUboMaterialInstanceInfo()[i]));
         writeDescriptorSets[i].push_back(
             vk::WriteDescriptorSet()
                 .setDstSet(descriptorSets[i])
                 .setDstBinding(3)
+                .setDescriptorType(vk::DescriptorType::eUniformBuffer)
+                .setBufferInfo(uboModel.bufferInfos[i]));
+        writeDescriptorSets[i].push_back(
+            vk::WriteDescriptorSet()
+                .setDstSet(descriptorSets[i])
+                .setDstBinding(4)
                 .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
                 .setImageInfo(materialInstance->GetUboMaterialInstanceImageInfo()));
         

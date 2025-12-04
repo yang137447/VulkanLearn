@@ -10,8 +10,9 @@ class Texture;
 class RenderableObject;
 class Material;
 class MaterialInstance;
-class SunLight;
+class DirectinalLight;
 class PointLight;
+class SpotLight;
 class Camera;
 class SceneObject;
 
@@ -31,14 +32,17 @@ class SceneLoader{
     const std::unordered_map<std::string, std::shared_ptr<Material>>& GetMaterials() const { return materials;}
     const std::unordered_map<std::string, std::shared_ptr<MaterialInstance>>& GetMaterialInstances() const { return materialInstances;}
     const std::shared_ptr<Camera>& GetCamera() const { return sceneCamera;}
-    const std::shared_ptr<SunLight>& GetSunLight() const { return sunLight;}
-    const std::shared_ptr<PointLight>& GetPointLight() const { return scenePointLight;}
+    const std::unordered_map<std::string, std::shared_ptr<DirectinalLight>>& GetDirectinalLight() const { return directinalLights;}
+    const std::unordered_map<std::string, std::shared_ptr<PointLight>>& GetPointLight() const { return pointLights;}
+    const std::unordered_map<std::string, std::shared_ptr<SpotLight>>& GetSpotLight() const { return spotLights;}
+    
     const Eigen::Vector3f& GetAmbient() const { return ambient; }
 private:
     SceneLoader();
     void LoadMeshObject(const nlohmann::basic_json<>& node);
-    void LoadSunLightObject(const nlohmann::basic_json<>& node);
+    void LoadDirectinalLightObject(const nlohmann::basic_json<>& node);
     void LoadPointLightObject(const nlohmann::basic_json<>& node);
+    void LoadSpotLightObject(const nlohmann::basic_json<>& node);
     void LoadCameraObject(const nlohmann::basic_json<>& node);
     void LoadEnvironmentObject(const nlohmann::basic_json<>& node);
 
@@ -56,8 +60,9 @@ private:
     std::unordered_map<std::string, std::shared_ptr<MaterialInstance>> materialInstances; //材质实例相对路径和材质实例对象
     std::unordered_map<std::string, std::shared_ptr<Texture>> textures; //贴图相对路径和贴图对象
 
-    std::shared_ptr<SunLight> sunLight;
-    std::shared_ptr<PointLight> scenePointLight;
+    std::unordered_map<std::string, std::shared_ptr<DirectinalLight>> directinalLights;
+    std::unordered_map<std::string, std::shared_ptr<PointLight>> pointLights;
+    std::unordered_map<std::string, std::shared_ptr<SpotLight>> spotLights;
     std::shared_ptr<Camera> sceneCamera;
 
     Eigen::Vector3f ambient;

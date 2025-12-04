@@ -34,7 +34,7 @@ protected:
     Eigen::Matrix4f modelMatrix;
 };
 
-class SunLight: public SceneNode {
+class DirectinalLight: public SceneNode {
 public:
   void SetColor(Eigen::Vector3f& color);
   void SetIntensity(float intensity);
@@ -48,17 +48,38 @@ private:
 
 class PointLight: public SceneNode {
 public:
-  void SetColor(const Eigen::Vector4f& color) { this->color = color; }
-  void SetSpecular(const Eigen::Vector4f& specular) { this->specular = specular; }
+  void SetColor(const Eigen::Vector3f& color) { this->color = color; }
   void SetIntensity(float intensity) { this->intensity = intensity; }
+  void SetRadius(float radius) { this->radius = radius; }
   //void SetAttenuation(float constant, float linear, float quadratic);
-  inline const Eigen::Vector4f& GetColor() const { return color; }
-  inline const Eigen::Vector4f& GetSpecular() const { return specular; }
+  inline const Eigen::Vector3f& GetColor() const { return color; }
   inline float GetIntensity() const { return intensity; }
+  inline float GetRadius() const { return radius; }
 private:
-  Eigen::Vector4f color;
-  Eigen::Vector4f specular;
+  Eigen::Vector3f color;
   float intensity;
+  float radius;
+};
+
+class SpotLight: public SceneNode {
+public:
+  void SetColor(const Eigen::Vector3f& color) { this->color = color; }
+  void SetIntensity(float intensity) { this->intensity = intensity; }
+  void SetRadius(float radius) { this->radius = radius; }
+  void SetConeAngleOuter(float coneAngleOuter) { this->coneAngleOuter = coneAngleOuter; }
+  void SetConeAngleInner(float coneAngleInner) { this->coneAngleInner = coneAngleInner; }
+  //void SetAttenuation(float constant, float linear, float quadratic);
+  inline const Eigen::Vector3f& GetColor() const { return color; }
+  inline float GetIntensity() const { return intensity; }
+  inline float GetRadius() const { return radius; }
+  inline float GetConeAngleOuter() const { return coneAngleOuter; }
+  inline float GetConeAngleInner() const { return coneAngleInner; }
+private:
+  Eigen::Vector3f color;
+  float intensity;
+  float radius;
+  float coneAngleOuter;
+  float coneAngleInner;
 };
 
 class Camera: public SceneNode {
@@ -97,7 +118,7 @@ public:
     inline std::shared_ptr<RenderableObject> GetRenderableObject() const { return renderableObject; }
     inline std::shared_ptr<MaterialInstance> GetMaterialInstance() const { return materialInstance; }
     inline const std::vector<vk::DescriptorSet>& GetDescriptorSets() const { return descriptorSets; }
-    inline std::vector<void*>& GetUboModelMapped() { return uboModel.uniformBuffersMapped; }
+    inline std::vector<void*>& GetUboModelMapped() { return uboModel.buffersMapped; }
     //相关的场景和材质实例需要先行就绪
     void RenderInitialize();
 private:
@@ -113,7 +134,7 @@ private:
     void SetupDescriptors();
     void UpdateDescriptorSet();
 
-    UBO uboModel;
+    Buffer uboModel;
 
     vk::DescriptorPool descriptorPool;
     std::vector<vk::DescriptorSet> descriptorSets;

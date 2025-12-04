@@ -108,23 +108,23 @@ void MaterialInstance::CreateUniformBuffers()
     uint32_t swapChainImageCount = VulkanManager::GetInstance().GetSwapChainImageCount();
     for(auto& ubo: {&uboMaterialInstance})
     {
-        vk::DeviceSize uniformBufferSize = bufferSize;
-        ubo->uniformBuffers.resize(swapChainImageCount);
-        ubo->uniformBufferMemories.resize(swapChainImageCount);
-        ubo->uniformBuffersMapped.resize(swapChainImageCount);
-        ubo->uniformBufferSize = bufferSize;
+        vk::DeviceSize size = bufferSize;
+        ubo->buffers.resize(swapChainImageCount);
+        ubo->bufferMemories.resize(swapChainImageCount);
+        ubo->buffersMapped.resize(swapChainImageCount);
+        ubo->bufferSize = size;
         vk::BufferUsageFlags usage = vk::BufferUsageFlagBits::eUniformBuffer;
         vk::MemoryPropertyFlags memoryPropertyFlags = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
         for(int i = 0; i < swapChainImageCount; i++)
         {
-            std::tie(ubo->uniformBuffers[i], ubo->uniformBufferMemories[i]) = CommonFunction::CreateBuffer(
+            std::tie(ubo->buffers[i], ubo->bufferMemories[i]) = CommonFunction::CreateBuffer(
                 device,
-                uniformBufferSize, 
+                size, 
                 usage, 
                 VulkanManager::GetInstance().GetGpuMemoryProperties(), 
                 memoryPropertyFlags
             );
-            ubo->uniformBuffersMapped[i] = device.mapMemory(ubo->uniformBufferMemories[i], 0, uniformBufferSize);
+            ubo->buffersMapped[i] = device.mapMemory(ubo->bufferMemories[i], 0, bufferSize);
         }
     }
 }
@@ -136,9 +136,9 @@ void MaterialInstance::DestroyUniformBuffers()
     {
         for(int i = 0; i < swapChainImageCount; i++)
         {
-            device.unmapMemory(ubo->uniformBufferMemories[i]);
-            device.destroyBuffer(ubo->uniformBuffers[i]);
-            device.freeMemory(ubo->uniformBufferMemories[i]);
+            device.unmapMemory(ubo->bufferMemories[i]);
+            device.destroyBuffer(ubo->buffers[i]);
+            device.freeMemory(ubo->bufferMemories[i]);
         }
     }
 }
@@ -149,13 +149,13 @@ void MaterialInstance::SetupDescriptors()
     // 设置uniform缓冲区信息
     for(auto& ubo: {&uboMaterialInstance})
     {
-        ubo->uniformBufferInfos.resize(swapChainImageCount);
+        ubo->bufferInfos.resize(swapChainImageCount);
         for(int i = 0; i < swapChainImageCount; i++)
         {
-            ubo->uniformBufferInfos[i]
-                .setBuffer(ubo->uniformBuffers[i])
+            ubo->bufferInfos[i]
+                .setBuffer(ubo->buffers[i])
                 .setOffset(0)
-                .setRange(ubo->uniformBufferSize);
+                .setRange(ubo->bufferSize);
         }
     }
     // 设置image信息

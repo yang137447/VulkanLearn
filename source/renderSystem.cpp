@@ -11,6 +11,7 @@
 #include "texture.h"
 #include "renderableObject.h"
 #include "sceneLoader.h"
+#include "lightManager.h"
 
 RenderSystem::RenderSystem()
 {
@@ -23,6 +24,7 @@ RenderSystem::~RenderSystem()
 void RenderSystem::InitRenderObject()
 {
     auto& scene = SceneLoader::GetInstance();
+    auto& lightManager = LightManager::GetInstance();
     // 设置相机
     auto& camera = scene.GetCamera();
     camera->SetCamera(scene.GetCamera()->GetPosition(), Eigen::Vector3f(0, 0, 0), Eigen::Vector3f(0, 1, 0));
@@ -42,6 +44,7 @@ void RenderSystem::InitRenderObject()
 
     //初始化渲染需要的资源
     this->RenderInitialize();
+    lightManager.RenderInitialize();
     for (const auto& [shaderName, materialInstanceObjects] : hierarchyObjects)
     {
         for (const auto& [materialInstanceName, objects] : materialInstanceObjects)
@@ -71,6 +74,7 @@ void RenderSystem::Render()
     static vk::RenderPassBeginInfo& renderPassBeginInfo = instance.GetRenderPassBeginInfo();
     static std::vector<vk::Framebuffer>& framebuffers = instance.GetFrameBuffers();
     static vk::Queue& graphicQueue = instance.GetGraphicQueue();
+    static LightManager& lightManager = LightManager::GetInstance();
 
     uint32_t cpuSyncIndex = currentFrame % MAX_FRAMES_IN_FLIGHT;
     uint32_t gpuSyncIndex = currentFrame % swapchainImageCount;
@@ -108,6 +112,7 @@ void RenderSystem::Render()
     commandBuffer.beginRenderPass(renderPassBeginInfo, vk::SubpassContents::eInline);
 
     this->UpdateUBOGlobal();
+    lightManager.UpdateLightBuffer(swapChainImageIndex);
     // 渲染每种材质
     for (const auto& [shaderName, shaderObjects] : hierarchyObjects) {
         // 绑定Pipeline
@@ -190,11 +195,8 @@ void RenderSystem::UpdateUBOGlobal()
     ubo.projection = camera.GetProjectionMatrix();
     ubo.ambient = sceneLoader.GetAmbient();
     ubo.cameraPosition = sceneLoader.GetCamera()->GetPosition();
-    ubo.pointLightPosition = sceneLoader.GetPointLight()->GetPosition();
-    ubo.pointLightColor = sceneLoader.GetPointLight()->GetColor();
-    ubo.pointLightSpecular = sceneLoader.GetPointLight()->GetSpecular();
 
-    std::memcpy(uboGlobal.uniformBuffersMapped[swapChainImageIndex], &ubo, sizeof(ubo));
+    std::memcpy(uboGlobal.buffersMapped[swapChainImageIndex], &ubo, sizeof(ubo));
 }
 
 void RenderSystem::UpdateUBOMaterialInstance(const std::shared_ptr<MaterialInstance>& materialInstance)
@@ -253,23 +255,23 @@ void RenderSystem::CreateUniformBuffers()
     uint32_t swapChainImageCount = VulkanManager::GetInstance().GetSwapChainImageCount();
     for(auto& ubo: {&uboGlobal})
     {
-        vk::DeviceSize uniformBufferSize = sizeof(UBOGlobal);
-        ubo->uniformBuffers.resize(swapChainImageCount);
-        ubo->uniformBufferMemories.resize(swapChainImageCount);
-        ubo->uniformBuffersMapped.resize(swapChainImageCount);
-        ubo->uniformBufferSize = uniformBufferSize;
+        vk::DeviceSize bufferSize = sizeof(UBOGlobal);
+        ubo->buffers.resize(swapChainImageCount);
+        ubo->bufferMemories.resize(swapChainImageCount);
+        ubo->buffersMapped.resize(swapChainImageCount);
+        ubo->bufferSize = bufferSize;
         vk::BufferUsageFlags usage = vk::BufferUsageFlagBits::eUniformBuffer;
         vk::MemoryPropertyFlags memoryPropertyFlags = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
         for(int i = 0; i < swapChainImageCount; i++)
         {
-            std::tie(ubo->uniformBuffers[i], ubo->uniformBufferMemories[i]) = CommonFunction::CreateBuffer(
+            std::tie(ubo->buffers[i], ubo->bufferMemories[i]) = CommonFunction::CreateBuffer(
                 device,
-                uniformBufferSize, 
+                bufferSize, 
                 usage, 
                 VulkanManager::GetInstance().GetGpuMemoryProperties(), 
                 memoryPropertyFlags
             );
-            ubo->uniformBuffersMapped[i] = device.mapMemory(ubo->uniformBufferMemories[i], 0, uniformBufferSize);
+            ubo->buffersMapped[i] = device.mapMemory(ubo->bufferMemories[i], 0, bufferSize);
         }
     }
 }
@@ -281,9 +283,9 @@ void RenderSystem::DestroyUniformBuffers()
     {
         for(int i = 0; i < swapChainImageCount; i++)
         {
-            device.unmapMemory(ubo->uniformBufferMemories[i]);
-            device.destroyBuffer(ubo->uniformBuffers[i]);
-            device.freeMemory(ubo->uniformBufferMemories[i]);
+            device.unmapMemory(ubo->bufferMemories[i]);
+            device.destroyBuffer(ubo->buffers[i]);
+            device.freeMemory(ubo->bufferMemories[i]);
         }
     }
 }
@@ -294,13 +296,13 @@ void RenderSystem::SetupDescriptors()
     // 设置uniform缓冲区信息
     for(auto& ubo: {&uboGlobal})
     {
-        ubo->uniformBufferInfos.resize(swapChainImageCount);
+        ubo->bufferInfos.resize(swapChainImageCount);
         for(int i = 0; i < swapChainImageCount; i++)
         {
-            ubo->uniformBufferInfos[i]
-                .setBuffer(ubo->uniformBuffers[i])
+            ubo->bufferInfos[i]
+                .setBuffer(ubo->buffers[i])
                 .setOffset(0)
-                .setRange(ubo->uniformBufferSize);
+                .setRange(ubo->bufferSize);
         }
     }
 }

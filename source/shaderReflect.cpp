@@ -31,7 +31,7 @@ ShaderReflect::ShaderReflect(const std::vector<uint32_t>& spirv)
         int32_t size = descriptorBinding->block.size;
         int32_t offset = descriptorBinding->block.offset;
         SpvReflectDescriptorType type = descriptorBinding->descriptor_type;
-        if(type == SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_BUFFER)
+        if(type == SPV_REFLECT_DESCRIPTOR_TYPE_UNIFORM_BUFFER || type == SPV_REFLECT_DESCRIPTOR_TYPE_STORAGE_BUFFER)
         {
             for(int32_t i = 0; i < descriptorBinding->block.member_count; i++)
             {

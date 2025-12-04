@@ -1,8 +1,9 @@
 #version 450
 
 #include "common/commonUbo.glsl"
+#include "common/lighting.glsl"
 
-layout(binding = 1) uniform UBOMIParamters{
+layout(binding = 2) uniform UBOMIParamters{
     vec4 tintColor;
 } uboMIP;
 
@@ -16,8 +17,6 @@ layout(location = 0) out vec3 v2fColor;
 layout(location = 1) out vec2 v2fTexCoord;
 layout(location = 2) out vec3 v2fLightColor;
 
-#include "common/lighting.glsl"
-
 void main()
 {
     //初始化变量
@@ -26,23 +25,21 @@ void main()
     mat4 projectionMatrix = uboVP.projection;
     vec3 ambient = uboVP.ambient;
     vec3 cameraPosition = uboVP.cameraPosition;
-    vec3 pointLightPosition = uboVP.pointLightPosition;
-    vec4 pointLightColor = uboVP.pointLightColor;
-    vec4 pointLightSpecular = uboVP.pointLightSpecular;
         //MIP
     vec4 tintColor = uboMIP.tintColor;
-
 
     gl_Position = projectionMatrix * viewMatrix * modelMatrix * vec4(inPosition, 1.0);
     v2fColor = tintColor.rgb;
     v2fTexCoord = inTexCoord; // 使用传入的纹理坐标
-    v2fLightColor = PointLight(
-        modelMatrix, 
-        inNormal, 
-        inPosition, 
-        cameraPosition, 
-        vec4(ambient, 1.0),
-        pointLightPosition, 
-        pointLightColor,
-        pointLightSpecular).rgb;
+    // 计算点光源的颜色
+    for(int i = uboLight.pointLightOffset; i < uboLight.pointLightOffset + uboLight.pointLightCount; i++){
+        v2fLightColor += CalculatePointLight(
+            modelMatrix, 
+            inNormal, 
+            inPosition, 
+            cameraPosition, 
+            ambient,
+            uboLight.lights[i]
+        );
+    }
 }

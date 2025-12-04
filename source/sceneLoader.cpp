@@ -40,13 +40,17 @@ void SceneLoader::LoadScence(const std::string& filename)
         {
             LoadMeshObject(obj);
         }
-        else if(type == "sunLight")
+        else if(type == "directionalLight")
         {
-            LoadSunLightObject(obj);
+            LoadDirectinalLightObject(obj);
         }
         else if(type == "pointLight")
         {
             LoadPointLightObject(obj);
+        }
+        else if(type == "spotLight")
+        {
+            LoadSpotLightObject(obj);
         }
         else if(type == "camera")
         {
@@ -133,11 +137,11 @@ void SceneLoader::LoadMeshObject(const nlohmann::basic_json<>& node)
     {
         throw std::runtime_error("Texture count mismatch in material instance: " + materialInstancePath);
     }
-        // 检查参数类型是否匹配set0,binding1
+        // 检查参数类型是否匹配set0,binding2
     bool validParemeters = false;
     for(const auto& binding : shaderBindings)
     {
-        if(binding.set != 0 || binding.binding != 1)
+        if(binding.set != 0 || binding.binding != 2)
         {
             continue;
         }
@@ -251,46 +255,64 @@ void SceneLoader::LoadMeshObject(const nlohmann::basic_json<>& node)
         sceneObject->UpdateModelMatrix();
     }
     //储存到场景
-    objects[modelDataPath] = renderableObject;
-    materials[shaderName] = material;
-    materialInstances[materialInstancePath] = materialInstance;
-    sceneObjects[sceneObjectName] = sceneObject;
+    objects.emplace(modelDataPath, std::move(renderableObject));
+    materials.emplace(shaderName, std::move(material));
+    materialInstances.emplace(materialInstancePath, std::move(materialInstance));
+    sceneObjects.emplace(sceneObjectName, std::move(sceneObject));  
 }
 
-void SceneLoader::LoadSunLightObject(const nlohmann::basic_json<>& node)
+void SceneLoader::LoadDirectinalLightObject(const nlohmann::basic_json<>& node)
 {
+    std::string name = node["name"];
+    Eigen::Vector3f position = ParseVector3(node["position"]);
+    Eigen::Vector3f rotation = ParseVector3(node["rotation"]);
+    Eigen::Vector3f color = ParseVector3(node["color"]);
+    float intensity = node["intensity"].get<float>();
+
+    std::shared_ptr<DirectinalLight> directinalLight = std::make_shared<DirectinalLight>();
+    directinalLight->SetColor(color);
+    directinalLight->SetIntensity(intensity);
+    directinalLight->SetPosition(position);
+    directinalLight->SetRotation(rotation);
+
+    directinalLights.emplace(name, std::move(directinalLight));
+}
+void SceneLoader::LoadPointLightObject(const nlohmann::basic_json<>& node)
+{
+    std::string name = node["name"];
     Eigen::Vector3f color = ParseVector3(node["color"]);
     float intensity = node["intensity"].get<float>();
     Eigen::Vector3f position = ParseVector3(node["position"]);
     Eigen::Vector3f rotation = ParseVector3(node["rotation"]);
-    //Eigen::Vector3f scale = ParseVector3(node["scale"]);
-    std::shared_ptr<SunLight> sunLight = std::make_shared<SunLight>();
-    sunLight->SetColor(color);
-    sunLight->SetIntensity(intensity);
-    sunLight->SetPosition(position);
-    sunLight->SetRotation(rotation);
-    //sunLight->SetScale(scale);
 
-    this->sunLight = sunLight;
-}
-void SceneLoader::LoadPointLightObject(const nlohmann::basic_json<>& node)
-{
-    Eigen::Vector4f color = ParseVector4(node["color"]);
-    Eigen::Vector4f specular = ParseVector4(node["specular"]);
-    float intensity = node["intensity"].get<float>();
-    Eigen::Vector3f position = ParseVector3(node["position"]);
-    Eigen::Vector3f rotation = ParseVector3(node["rotation"]);
-    //Eigen::Vector3f scale = ParseVector3(node["scale"]);
     std::shared_ptr<PointLight> pointLight = std::make_shared<PointLight>();
     pointLight->SetColor(color);
-    pointLight->SetSpecular(specular);
     pointLight->SetIntensity(intensity);
     pointLight->SetPosition(position);
     pointLight->SetRotation(rotation);
-    //pointLight->SetScale(scale);
 
-    scenePointLight = std::move(pointLight);
+    pointLights.emplace(name, std::move(pointLight));
+}
 
+void SceneLoader::LoadSpotLightObject(const nlohmann::basic_json<>& node)
+{
+    std::string name = node["name"];
+    Eigen::Vector3f color = ParseVector3(node["color"]);
+    float intensity = node["intensity"].get<float>();
+    Eigen::Vector3f position = ParseVector3(node["position"]);
+    Eigen::Vector3f rotation = ParseVector3(node["rotation"]);
+    float cutAngleOuter = node["cone_angle_outer"].get<float>();
+    float cutAngleInner = node["cone_angle_inner"].get<float>();
+
+    std::shared_ptr<SpotLight> spotLight = std::make_shared<SpotLight>();
+    spotLight->SetColor(color);
+    spotLight->SetIntensity(intensity);
+    spotLight->SetPosition(position);
+    spotLight->SetRotation(rotation);
+    spotLight->SetConeAngleOuter(cutAngleOuter);
+    spotLight->SetConeAngleInner(cutAngleInner);
+
+    spotLights.emplace(name, std::move(spotLight));
 }
 
 void SceneLoader::LoadCameraObject(const nlohmann::basic_json<>& node)

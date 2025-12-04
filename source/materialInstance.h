@@ -106,8 +106,8 @@ public:
     void SetName(const std::string& name) { materialInstanceName = name; }
     const std::string& GetName() const { return materialInstanceName; }
 
-    inline std::vector<void*>& GetUboMaterialInstanceMapped(){ return uboMaterialInstance.uniformBuffersMapped; }
-    std::vector<vk::DescriptorBufferInfo>& GetUboMaterialInstanceInfo(){ return uboMaterialInstance.uniformBufferInfos; }
+    inline std::vector<void*>& GetUboMaterialInstanceMapped(){ return uboMaterialInstance.buffersMapped; }
+    std::vector<vk::DescriptorBufferInfo>& GetUboMaterialInstanceInfo(){ return uboMaterialInstance.bufferInfos; }
     vk::DescriptorImageInfo& GetUboMaterialInstanceImageInfo(){ return imageInfo; }
 
     void RenderInitialize();
@@ -127,5 +127,5 @@ private:
     std::unordered_map<std::string, std::shared_ptr<Texture>> textures;
 
     vk::DescriptorImageInfo imageInfo;
-    UBO uboMaterialInstance; 
+    Buffer uboMaterialInstance; 
 };

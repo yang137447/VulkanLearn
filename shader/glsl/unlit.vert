@@ -2,7 +2,7 @@
 
 #include "common/commonUbo.glsl"
 
-layout(binding = 1) uniform UBOMIParamters{
+layout(binding = 2) uniform UBOMIParamters{
     vec4 tintColor;
 } uboMIP;
 
