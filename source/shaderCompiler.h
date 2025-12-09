@@ -21,7 +21,7 @@ private:
     //设置shader文件夹的路径
     void SetShaderPath(const std::string& shaderFilePath);
     //glsl->spirv
-    std::vector<uint32_t> CompileGLSLToSPIRV(const std::string& glslCode,shaderc_shader_kind kind, const std::string& shaderFileFullPath);
+    std::vector<uint32_t> CompileGLSLToSPIRV(const std::string& glslCode,shaderc_shader_kind kind, const std::string& shaderFileFullPath, bool isDebug = false);
     //保存spirv
     void SaveSPIRVToFile(const std::vector<uint32_t>& spirv,const std::string& spvPath);
     std::string shaderPath;

@@ -2,6 +2,7 @@
 
 #include "common/commonUbo.glsl"
 #include "common/lighting.glsl"
+#include "common/function.glsl"
 
 layout(binding = 2) uniform UBOMIParamters{
     vec4 tintColor;
@@ -13,9 +14,10 @@ layout(location = 1) in vec3 inNormal;
 layout(location = 2) in vec3 inColor;
 layout(location = 3) in vec2 inTexCoord;
 
-layout(location = 0) out vec3 v2fColor;
-layout(location = 1) out vec2 v2fTexCoord;
-layout(location = 2) out vec3 v2fLightColor;
+layout(location = 0) out vec3 v2fPosition;
+layout(location = 1) out vec3 v2fNormal;
+layout(location = 2) out vec3 v2fColor;
+layout(location = 3) out vec2 v2fTexCoord;
 
 void main()
 {
@@ -30,16 +32,7 @@ void main()
 
     gl_Position = projectionMatrix * viewMatrix * modelMatrix * vec4(inPosition, 1.0);
     v2fColor = tintColor.rgb;
-    v2fTexCoord = inTexCoord; // 使用传入的纹理坐标
-    // 计算点光源的颜色
-    for(int i = uboLight.pointLightOffset; i < uboLight.pointLightOffset + uboLight.pointLightCount; i++){
-        v2fLightColor += CalculatePointLight(
-            modelMatrix, 
-            inNormal, 
-            inPosition, 
-            cameraPosition, 
-            ambient,
-            uboLight.lights[i]
-        );
-    }
+    v2fTexCoord = inTexCoord;
+    v2fNormal = GetNormal_WS(modelMatrix, inNormal, inPosition);
+    vec3 v2fPosition = (modelMatrix * vec4(inPosition, 1.0)).xyz;
 }

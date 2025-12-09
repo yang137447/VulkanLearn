@@ -7,7 +7,7 @@ struct ShaderBinding
     uint32_t set;
     uint32_t binding;
     vk::DescriptorType type;
-    vk::ShaderStageFlagBits stageFlags;
+    vk::ShaderStageFlags stageFlags;
     uint32_t memberCount;
     uint32_t size;
     std::vector<uint32_t> members;
@@ -16,7 +16,7 @@ struct ShaderBinding
 class ShaderReflect
 {
 public:
-    ShaderReflect(const std::vector<uint32_t>& spirv);
+    ShaderReflect(const std::vector<std::vector<uint32_t>>& spirvs);
     ShaderReflect(const ShaderReflect&) = delete;
     ShaderReflect(ShaderReflect&&) = delete;
     ~ShaderReflect();
@@ -25,7 +25,8 @@ public:
 private:
     ShaderReflect();
     vk::DescriptorType GetVulkanDescriptorType(SpvReflectDescriptorType type);
-    vk::ShaderStageFlagBits GetVulkanShaderStage(SpvReflectShaderStageFlagBits stage);
+    vk::ShaderStageFlags GetVulkanShaderStage(SpvReflectShaderStageFlagBits stage);
 
-    SpvReflectShaderModule shaderModule;
+    std::vector<SpvReflectShaderModule> shaderModules;
+    std::vector<std::tuple<SpvReflectDescriptorBinding*, SpvReflectShaderStageFlagBits>> allDescriptorBindings;
 };

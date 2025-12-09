@@ -75,6 +75,7 @@ void ShaderCompiler::StartCompile(const std::string& shaderFilePath)
             std::string glslShaderPath = glslPath + "/" + shaderName + "." + shaderExtension;
             //获取编译后文件路径
             std::string compiledShaderPath = spirvPath + "/" + shaderName + "_" + shaderExtension + "." + "spv";
+            std::string compiledDebugShaderPath = spirvPath + "/" + shaderName + "_" + shaderExtension + "." + "debug";
             if (glslShaderPath.find("vert") != std::string::npos)
             {
                 kind = shaderc_shader_kind::shaderc_vertex_shader;
@@ -92,8 +93,11 @@ void ShaderCompiler::StartCompile(const std::string& shaderFilePath)
             std::string glslCode = CommonFunction::ReadFile(glslShaderPath);
             std::vector<uint32_t> spvCode = CompileGLSLToSPIRV(glslCode, kind, glslShaderPath);
             SaveSPIRVToFile(spvCode, compiledShaderPath);
+            //debug级别，反射shaderbinding用
+            std::vector<uint32_t> spvDebugCode = CompileGLSLToSPIRV(glslCode, kind, glslShaderPath, true);
+            SaveSPIRVToFile(spvDebugCode, compiledDebugShaderPath);
 
-            ShaderReflect shaderReflect(spvCode);
+            //ShaderReflect shaderReflect(spvCode);
 
             std::cout << "Info: "
                       << "compiled shader: "
@@ -110,11 +114,17 @@ void ShaderCompiler::SetShaderPath(const std::string& shaderFilePath)
     spirvPath = shaderPath + "/spv";
 }
 
-std::vector<uint32_t> ShaderCompiler::CompileGLSLToSPIRV(const std::string& glslCode, shaderc_shader_kind kind, const std::string& shaderFileFullPath)
+std::vector<uint32_t> ShaderCompiler::CompileGLSLToSPIRV(const std::string& glslCode, shaderc_shader_kind kind, const std::string& shaderFileFullPath, bool isDebug)
 {
     shaderc::Compiler compiler;
     shaderc::CompileOptions options;
-    options.SetOptimizationLevel(shaderc_optimization_level::shaderc_optimization_level_performance);  //设置编译选项
+    if (isDebug)
+    {
+        options.SetOptimizationLevel(shaderc_optimization_level::shaderc_optimization_level_zero);
+    }
+    else {
+        options.SetOptimizationLevel(shaderc_optimization_level::shaderc_optimization_level_performance);  //设置编译选项
+    }
     options.SetTargetEnvironment(shaderc_target_env::shaderc_target_env_vulkan, shaderc_env_version::shaderc_env_version_vulkan_1_4);
     options.SetSourceLanguage(shaderc_source_language::shaderc_source_language_glsl);
     options.SetIncluder(std::make_unique<Include>());

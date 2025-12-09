@@ -93,39 +93,8 @@ void RenderPipline::CreateShader()
     const std::string fragmentShaderPath = CommonFunction::Path(fragmentShaderName);
 
     // 读取shader文件内容
-    std::vector<char> vertexShaderCode;
-    std::ifstream vertexShaderFile(vertexShaderPath, std::ios::binary | std::ios::ate);
-    if (!vertexShaderFile.is_open())
-    {
-
-        std::cerr << "Failed to open vertex shader file!" << std::endl;
-        exit(1);
-    }
-    size_t vertShaderfileSize = (size_t)vertexShaderFile.tellg();
-    if (vertShaderfileSize <= 0) {
-        throw std::runtime_error("Shader file is empty or invalid: " + filePath);
-    }
-
-    vertexShaderCode.resize(vertShaderfileSize);
-    vertexShaderFile.seekg(0);
-    vertexShaderFile.read(vertexShaderCode.data(), vertexShaderCode.size());
-    vertexShaderFile.close();
-
-    std::vector<char> fragmentShaderCode;
-    std::ifstream fragmentShaderFile(fragmentShaderPath, std::ios::binary | std::ios::ate);
-    if (!fragmentShaderFile.is_open())
-    {
-        std::cerr << "Failed to open fragment shader file!" << std::endl;
-        exit(1);
-    }
-    size_t fragmentShaderfileSize = (size_t)fragmentShaderFile.tellg();
-    if (fragmentShaderfileSize <= 0) {
-        throw std::runtime_error("Shader file is empty or invalid: " + filePath);
-    }
-    fragmentShaderCode.resize(fragmentShaderfileSize);
-    fragmentShaderFile.seekg(0);
-    fragmentShaderFile.read(fragmentShaderCode.data(), fragmentShaderCode.size());
-    fragmentShaderFile.close();
+    std::string vertexShaderCode = CommonFunction::ReadFile(vertexShaderPath);
+    std::string fragmentShaderCode = CommonFunction::ReadFile(fragmentShaderPath);
 
     // 创建shader模块
     vk::ShaderModule vertexShaderModule;
@@ -154,13 +123,22 @@ void RenderPipline::CreateShader()
         .setModule(fragmentShaderModule)
         .setPName("main")
         .setPSpecializationInfo(nullptr);
+
     // 反射shader,获取uniformbugfer和采样器信息
-    ShaderReflect vertexShaderReflect(std::vector<uint32_t>(reinterpret_cast<uint32_t*>(vertexShaderCode.data()), reinterpret_cast<uint32_t*>(vertexShaderCode.data() + vertexShaderCode.size())));
-    ShaderReflect fragmentShaderReflect(std::vector<uint32_t>(reinterpret_cast<uint32_t*>(fragmentShaderCode.data()), reinterpret_cast<uint32_t*>(fragmentShaderCode.data() + fragmentShaderCode.size())));
-    auto vertexShaderBindings = vertexShaderReflect.GetShaderBindings();
-    auto fragmentShaderBindings = fragmentShaderReflect.GetShaderBindings();
-    shaderBindings.insert(shaderBindings.end(), vertexShaderBindings.begin(), vertexShaderBindings.end());
-    shaderBindings.insert(shaderBindings.end(), fragmentShaderBindings.begin(), fragmentShaderBindings.end());
+        //TODO: 后期这里直接读取shaderbinding, 生成步骤放在shader编译后，可能不止vert和frag参与，也可能包含其他阶段
+    const std::string vertexDebugShaderName = shaderName + "_vert.debug";
+    const std::string fragmentDebugShaderName = shaderName + "_frag.debug";
+    const std::string vertexDebugShaderPath = CommonFunction::Path(vertexDebugShaderName);
+    const std::string fragmentDebugShaderPath = CommonFunction::Path(fragmentDebugShaderName);
+    std::string vertexDebugShaderCode = CommonFunction::ReadFile(vertexShaderPath);
+    std::string fragmentDebugShaderCode = CommonFunction::ReadFile(fragmentShaderPath);
+    std::vector<uint32_t> vertexDebugShaderCode32(reinterpret_cast<uint32_t*>(vertexDebugShaderCode.data()), reinterpret_cast<uint32_t*>(vertexDebugShaderCode.data() + vertexDebugShaderCode.size()));
+    std::vector<uint32_t> fragmentDebugShaderCode32(reinterpret_cast<uint32_t*>(fragmentDebugShaderCode.data()), reinterpret_cast<uint32_t*>(fragmentDebugShaderCode.data() + fragmentDebugShaderCode.size()));
+    
+    std::vector<std::vector<uint32_t>> shaders = {vertexDebugShaderCode32, fragmentDebugShaderCode32};
+    ShaderReflect shaderReflect(shaders);
+    auto shaderBindings = shaderReflect.GetShaderBindings();
+    this->shaderBindings = shaderBindings;
 
     // 按set和binding排序
     // 目前不用，vertex和fragment目前按顺序绑定，不会冲突

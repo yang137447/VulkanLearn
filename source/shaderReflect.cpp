@@ -2,29 +2,58 @@
 #include <iostream>
 #include <Eigen/Dense>
 
-ShaderReflect::ShaderReflect(const std::vector<uint32_t>& spirv)
+ShaderReflect::ShaderReflect(const std::vector<std::vector<uint32_t>>& spirvs)
 {
-    SpvReflectResult result= spvReflectCreateShaderModule(spirv.size() * sizeof(uint32_t), spirv.data(), &shaderModule);
-    if (result != SPV_REFLECT_RESULT_SUCCESS)
+    for(auto& spirv : spirvs)
     {
-        throw std::runtime_error("Failed to create shader module");
-    }
-    uint32_t descriptorBindingsCount = 0;
-    std::vector<SpvReflectDescriptorBinding*> descriptorBindings;
-    result = spvReflectEnumerateDescriptorBindings(&shaderModule, &descriptorBindingsCount, nullptr);
-    if (result != SPV_REFLECT_RESULT_SUCCESS)
-    {
-        throw std::runtime_error("Failed to enumerate descriptor bindings");
+        SpvReflectShaderModule shaderModule;
+        SpvReflectResult result= spvReflectCreateShaderModule(spirv.size() * sizeof(uint32_t), spirv.data(), &shaderModule);
+        if (result != SPV_REFLECT_RESULT_SUCCESS)
+        {
+            throw std::runtime_error("Failed to create shader module");
+        }
+        shaderModules.emplace_back(shaderModule);
     }
 
-    // bindings
-    descriptorBindings.resize(descriptorBindingsCount);
-    result = spvReflectEnumerateDescriptorBindings(&shaderModule, &descriptorBindingsCount, descriptorBindings.data());
-    if (result != SPV_REFLECT_RESULT_SUCCESS)
+    // 合并shaderModule的descriptorBindings
+    for(auto& shaderModule : shaderModules)
     {
-        throw std::runtime_error("Failed to enumerate descriptor bindings");
+        uint32_t descriptorBindingsCount = 0;
+        std::vector<SpvReflectDescriptorBinding*> shaderModuleDescriptorBindings;
+        SpvReflectResult result = spvReflectEnumerateDescriptorBindings(&shaderModule, &descriptorBindingsCount, nullptr);
+        if (result != SPV_REFLECT_RESULT_SUCCESS)
+        {
+            throw std::runtime_error("Failed to enumerate descriptor bindings");
+        }
+        shaderModuleDescriptorBindings.resize(descriptorBindingsCount);
+        result = spvReflectEnumerateDescriptorBindings(&shaderModule, &descriptorBindingsCount, shaderModuleDescriptorBindings.data());
+        if (result != SPV_REFLECT_RESULT_SUCCESS)
+        {
+            throw std::runtime_error("Failed to enumerate descriptor bindings");
+        }
+
+        // 检测set和binding, 相同的进行合并
+        for(auto& descriptorBinding : shaderModuleDescriptorBindings)
+        {
+            bool found = false;
+            for(auto& [existingBinding, existingStageFlags] : allDescriptorBindings)
+            {
+                if(existingBinding->set == descriptorBinding->set && existingBinding->binding == descriptorBinding->binding)
+                {
+                    found = true;
+                    // 合并shaderStageFlags
+                    existingStageFlags = static_cast<SpvReflectShaderStageFlagBits>(
+                        existingStageFlags | shaderModule.shader_stage);
+                }
+            }
+            if(!found)
+            {
+                allDescriptorBindings.emplace_back(descriptorBinding, shaderModule.shader_stage);
+            }
+        }
     }
-    for(auto& descriptorBinding : descriptorBindings)
+
+    for(auto& [descriptorBinding, shaderStageFlags] : allDescriptorBindings)
     {
         int32_t set = descriptorBinding->set;
         int32_t binding = descriptorBinding->binding;
@@ -43,78 +72,74 @@ ShaderReflect::ShaderReflect(const std::vector<uint32_t>& spirv)
             }
         }
         int32_t descriptorCount = descriptorBinding->count;
-        int32_t stageFlag = shaderModule.shader_stage;
+        int32_t stageFlag = shaderStageFlags;
         std::string Name = descriptorBinding->name ? descriptorBinding->name : "Unknown";
         std::cout << "Descriptor binding: " << Name << " set: " << set << " binding: " << binding << " type: " << type << " count: " << descriptorCount << std::endl;
     }
-
     //push constants
-    uint32_t pushConstantBlocksCount = 0;
-    std::vector<SpvReflectBlockVariable*> pushConstantBlocks;
-    result = spvReflectEnumeratePushConstantBlocks(&shaderModule, &pushConstantBlocksCount, nullptr);
-    if (result != SPV_REFLECT_RESULT_SUCCESS)
-    {
-        throw std::runtime_error("Failed to enumerate push constant blocks");
-    }
-    result = spvReflectEnumeratePushConstantBlocks(&shaderModule, &pushConstantBlocksCount, pushConstantBlocks.data());
-    if (result != SPV_REFLECT_RESULT_SUCCESS)
-    {
-        throw std::runtime_error("Failed to enumerate push constant blocks");
-    }
-    for(auto& pushConstantBlock : pushConstantBlocks)
-    {
-        int32_t offset = pushConstantBlock->offset;
-        int32_t size = pushConstantBlock->size;
-        int32_t stageFlag = shaderModule.shader_stage;
-        std::string Name = pushConstantBlock->name ? pushConstantBlock->name : "Unknown";
-        std::cout << "Push constant block: " << Name << " offset: " << offset << " size: " << size << std::endl;
-    }
+    // uint32_t pushConstantBlocksCount = 0;
+    // std::vector<SpvReflectBlockVariable*> pushConstantBlocks;
+    // result = spvReflectEnumeratePushConstantBlocks(&shaderModule, &pushConstantBlocksCount, nullptr);
+    // if (result != SPV_REFLECT_RESULT_SUCCESS)
+    // {
+    //     throw std::runtime_error("Failed to enumerate push constant blocks");
+    // }
+    // result = spvReflectEnumeratePushConstantBlocks(&shaderModule, &pushConstantBlocksCount, pushConstantBlocks.data());
+    // if (result != SPV_REFLECT_RESULT_SUCCESS)
+    // {
+    //     throw std::runtime_error("Failed to enumerate push constant blocks");
+    // }
+    // for(auto& pushConstantBlock : pushConstantBlocks)
+    // {
+    //     int32_t offset = pushConstantBlock->offset;
+    //     int32_t size = pushConstantBlock->size;
+    //     int32_t stageFlag = shaderModule.shader_stage;
+    //     std::string Name = pushConstantBlock->name ? pushConstantBlock->name : "Unknown";
+    //     std::cout << "Push constant block: " << Name << " offset: " << offset << " size: " << size << std::endl;
+    // }
     
-    // vertex attributes
-    uint32_t vertexInputCount = 0;
-    std::vector<SpvReflectInterfaceVariable*> vertexInputs;
-    result = spvReflectEnumerateInputVariables(&shaderModule, &vertexInputCount, nullptr);
-    if (result != SPV_REFLECT_RESULT_SUCCESS)
-    {
-        throw std::runtime_error("Failed to enumerate vertex inputs");
-    }
-    vertexInputs.resize(vertexInputCount);
-    result = spvReflectEnumerateInputVariables(&shaderModule, &vertexInputCount, vertexInputs.data());
-    if (result != SPV_REFLECT_RESULT_SUCCESS)
-    {
-        throw std::runtime_error("Failed to enumerate vertex inputs");
-    }
-    for(auto& vertexInput : vertexInputs)
-    {
-        int32_t location = vertexInput->location;
-        SpvReflectFormat format = vertexInput->format;
-        int32_t count = vertexInput->array.dims_count ? vertexInput->array.dims[0] : 1;
-        std::string Name = vertexInput->name ? vertexInput->name : "Unknown";
-        std::cout << "Vertex input: " << Name << " location: " << location << " format: " << format << " count: " << count << std::endl;
-    }
+    //     // vertex attributes
+    //     uint32_t vertexInputCount = 0;
+    //     std::vector<SpvReflectInterfaceVariable*> vertexInputs;
+    //     result = spvReflectEnumerateInputVariables(&shaderModule, &vertexInputCount, nullptr);
+    //     if (result != SPV_REFLECT_RESULT_SUCCESS)
+    //     {
+    //         throw std::runtime_error("Failed to enumerate vertex inputs");
+    //     }
+    //     vertexInputs.resize(vertexInputCount);
+    //     result = spvReflectEnumerateInputVariables(&shaderModule, &vertexInputCount, vertexInputs.data());
+    //     if (result != SPV_REFLECT_RESULT_SUCCESS)
+    //     {
+    //         throw std::runtime_error("Failed to enumerate vertex inputs");
+    //     }
+    //     for(auto& vertexInput : vertexInputs)
+    //     {
+    //         int32_t location = vertexInput->location;
+    //         SpvReflectFormat format = vertexInput->format;
+    //         int32_t count = vertexInput->array.dims_count ? vertexInput->array.dims[0] : 1;
+    //         std::string Name = vertexInput->name ? vertexInput->name : "Unknown";
+    //         std::cout << "Vertex input: " << Name << " location: " << location << " format: " << format << " count: " << count << std::endl;
+    //     }
 }
 
 ShaderReflect::~ShaderReflect()
 {
-    spvReflectDestroyShaderModule(&shaderModule);
+    for(auto& shaderModule : shaderModules)
+    {
+        spvReflectDestroyShaderModule(&shaderModule);
+    }
 }
 
 std::vector<ShaderBinding> ShaderReflect::GetShaderBindings()
 {
-    uint32_t descriptorBindingsCount = 0;
-    std::vector<SpvReflectDescriptorBinding*> descriptorBindings;
-    SpvReflectResult result = spvReflectEnumerateDescriptorBindings(&shaderModule, &descriptorBindingsCount, nullptr);
-    // bindings
-    descriptorBindings.resize(descriptorBindingsCount);
-    result = spvReflectEnumerateDescriptorBindings(&shaderModule, &descriptorBindingsCount, descriptorBindings.data());
     std::vector<ShaderBinding> shaderBindings;
-    for(auto& descriptorBinding : descriptorBindings)
+    for(auto& [descriptorBinding, shaderStageFlags] : allDescriptorBindings)
     {
         ShaderBinding binding;
         binding.set = descriptorBinding->set;
         binding.binding = descriptorBinding->binding;
-        binding.type = GetVulkanDescriptorType(descriptorBinding->descriptor_type);
-        binding.stageFlags = GetVulkanShaderStage(shaderModule.shader_stage);
+        binding.type = static_cast<vk::DescriptorType>(descriptorBinding->descriptor_type);
+        binding.stageFlags = GetVulkanShaderStage(shaderStageFlags);
         binding.memberCount = descriptorBinding->block.member_count;
         binding.size = descriptorBinding->block.size;
         for(int32_t i = 0; i < descriptorBinding->block.member_count; i++)
@@ -167,39 +192,64 @@ vk::DescriptorType ShaderReflect::GetVulkanDescriptorType(SpvReflectDescriptorTy
     }
 }
 
-vk::ShaderStageFlagBits ShaderReflect::GetVulkanShaderStage(SpvReflectShaderStageFlagBits stage)
+vk::ShaderStageFlags ShaderReflect::GetVulkanShaderStage(SpvReflectShaderStageFlagBits stage)
 {
-    switch (stage)
+    vk::ShaderStageFlags stageFlags;
+    if(stage & SPV_REFLECT_SHADER_STAGE_TESSELLATION_CONTROL_BIT)
     {
-        case SPV_REFLECT_SHADER_STAGE_VERTEX_BIT:
-            return vk::ShaderStageFlagBits::eVertex;
-        case SPV_REFLECT_SHADER_STAGE_TESSELLATION_CONTROL_BIT:
-            return vk::ShaderStageFlagBits::eTessellationControl;
-        case SPV_REFLECT_SHADER_STAGE_TESSELLATION_EVALUATION_BIT:
-            return vk::ShaderStageFlagBits::eTessellationEvaluation;
-        case SPV_REFLECT_SHADER_STAGE_GEOMETRY_BIT:
-            return vk::ShaderStageFlagBits::eGeometry;
-        case SPV_REFLECT_SHADER_STAGE_FRAGMENT_BIT:
-            return vk::ShaderStageFlagBits::eFragment;
-        case SPV_REFLECT_SHADER_STAGE_COMPUTE_BIT:
-            return vk::ShaderStageFlagBits::eCompute;
-        case SPV_REFLECT_SHADER_STAGE_TASK_BIT_NV:
-            return vk::ShaderStageFlagBits::eTaskNV;
-        case SPV_REFLECT_SHADER_STAGE_MESH_BIT_NV:
-            return vk::ShaderStageFlagBits::eMeshNV;
-        case SPV_REFLECT_SHADER_STAGE_RAYGEN_BIT_KHR:
-            return vk::ShaderStageFlagBits::eRaygenKHR;
-        case SPV_REFLECT_SHADER_STAGE_ANY_HIT_BIT_KHR:
-            return vk::ShaderStageFlagBits::eAnyHitKHR;
-        case SPV_REFLECT_SHADER_STAGE_CLOSEST_HIT_BIT_KHR:
-            return vk::ShaderStageFlagBits::eClosestHitKHR;
-        case SPV_REFLECT_SHADER_STAGE_MISS_BIT_KHR:
-            return vk::ShaderStageFlagBits::eMissKHR;
-        case SPV_REFLECT_SHADER_STAGE_INTERSECTION_BIT_KHR:
-            return vk::ShaderStageFlagBits::eIntersectionKHR;
-        case SPV_REFLECT_SHADER_STAGE_CALLABLE_BIT_KHR:
-            return vk::ShaderStageFlagBits::eCallableKHR;
-        default:
-            throw std::runtime_error("Unknown shader stage");
+        stageFlags |= vk::ShaderStageFlagBits::eTessellationControl;
     }
+    if(stage & SPV_REFLECT_SHADER_STAGE_TESSELLATION_EVALUATION_BIT)
+    {
+        stageFlags |= vk::ShaderStageFlagBits::eTessellationEvaluation;
+    }
+    if(stage & SPV_REFLECT_SHADER_STAGE_GEOMETRY_BIT)
+    {
+        stageFlags |= vk::ShaderStageFlagBits::eGeometry;
+    }
+    if(stage & SPV_REFLECT_SHADER_STAGE_VERTEX_BIT)
+    {
+        stageFlags |= vk::ShaderStageFlagBits::eVertex;
+    }
+    if(stage & SPV_REFLECT_SHADER_STAGE_FRAGMENT_BIT)
+    {
+        stageFlags |= vk::ShaderStageFlagBits::eFragment;
+    }
+    if(stage & SPV_REFLECT_SHADER_STAGE_COMPUTE_BIT)
+    {
+        stageFlags |= vk::ShaderStageFlagBits::eCompute;
+    }
+    if(stage & SPV_REFLECT_SHADER_STAGE_TASK_BIT_NV)
+    {
+        stageFlags |= vk::ShaderStageFlagBits::eTaskNV;
+    }
+    if(stage & SPV_REFLECT_SHADER_STAGE_MESH_BIT_NV)
+    {
+        stageFlags |= vk::ShaderStageFlagBits::eMeshNV;
+    }
+    if(stage & SPV_REFLECT_SHADER_STAGE_RAYGEN_BIT_KHR)
+    {
+        stageFlags |= vk::ShaderStageFlagBits::eRaygenKHR;
+    }
+    if(stage & SPV_REFLECT_SHADER_STAGE_ANY_HIT_BIT_KHR)
+    {
+        stageFlags |= vk::ShaderStageFlagBits::eAnyHitKHR;
+    }
+    if(stage & SPV_REFLECT_SHADER_STAGE_CLOSEST_HIT_BIT_KHR)
+    {
+        stageFlags |= vk::ShaderStageFlagBits::eClosestHitKHR;
+    }
+    if(stage & SPV_REFLECT_SHADER_STAGE_MISS_BIT_KHR)
+    {
+        stageFlags |= vk::ShaderStageFlagBits::eMissKHR;
+    }
+    if(stage & SPV_REFLECT_SHADER_STAGE_INTERSECTION_BIT_KHR)
+    {
+        stageFlags |= vk::ShaderStageFlagBits::eIntersectionKHR;
+    }
+    if(stage & SPV_REFLECT_SHADER_STAGE_CALLABLE_BIT_KHR)
+    {
+        stageFlags |= vk::ShaderStageFlagBits::eCallableKHR;
+    }
+    return stageFlags;
 }

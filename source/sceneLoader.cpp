@@ -188,6 +188,7 @@ void SceneLoader::LoadMeshObject(const nlohmann::basic_json<>& node)
         materialInstance->SetName(materialInstancePath);
     }
     //设置材质实例参数
+    //TODO:按shaderbinding设置参数
     for(const auto& [name, value]  : shaderParameters.items())
     {
         const std::string& paramName = name;
@@ -218,6 +219,7 @@ void SceneLoader::LoadMeshObject(const nlohmann::basic_json<>& node)
         }
     }
     //设置材质实例贴图
+    //TODO:按shaderbinding设置贴图
     for(const auto& [name, value] : shaderTextures.items())
     {
         const std::string& textureName = name;
