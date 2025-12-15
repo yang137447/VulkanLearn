@@ -112,9 +112,9 @@ void LightManager::UpdateLightBuffer(uint32_t swapChainImageIndex)
             it->second->GetColor().z(), 
             it->second->GetIntensity());
         directionalLightGPUs[i].directionPad = Eigen::Vector4f(
-            it->second->GetForwordVector().x(), 
-            it->second->GetForwordVector().y(), 
-            it->second->GetForwordVector().z(), 
+            it->second->GetForwardVector().x(), 
+            it->second->GetForwardVector().y(), 
+            it->second->GetForwardVector().z(), 
             0.0f);
     }
     std::vector<LightGPU> pointLightGPUs(pointLightCount);
@@ -149,9 +149,9 @@ void LightManager::UpdateLightBuffer(uint32_t swapChainImageIndex)
             it->second->GetPosition().z(), 
             it->second->GetRadius());
         spotLightGPUs[i].directionPad = Eigen::Vector4f(
-            it->second->GetForwordVector().x(), 
-            it->second->GetForwordVector().y(), 
-            it->second->GetForwordVector().z(), 
+            it->second->GetForwardVector().x(), 
+            it->second->GetForwardVector().y(), 
+            it->second->GetForwardVector().z(), 
             0.0f);
         spotLightGPUs[i].coneAngleOuterInnerPadPad = Eigen::Vector4f(
             it->second->GetConeAngleOuter(), 

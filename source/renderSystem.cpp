@@ -6,7 +6,6 @@
 #include "vulkanManager.h"
 #include "renderPipline.h"
 #include "sceneLoader.h"
-#include "settings.h"
 #include "commonFunction.h"
 #include "texture.h"
 #include "renderableObject.h"
@@ -28,7 +27,11 @@ void RenderSystem::InitRenderObject()
     // 设置相机
     auto& camera = scene.GetCamera();
     camera->SetCamera(scene.GetCamera()->GetPosition(), Eigen::Vector3f(0, 0, 0), Eigen::Vector3f(0, 1, 0));
-    camera->SetProjection(scene.GetCamera()->GetHFOV(), (float)width/(float)height, scene.GetCamera()->GetClipNear(), scene.GetCamera()->GetClipFar());
+    camera->SetProjection(
+        scene.GetCamera()->GetHFOV(), 
+        (float)CommonFunction::GetWindowSize().x()/(float)CommonFunction::GetWindowSize().y(), 
+        scene.GetCamera()->GetClipNear(), 
+        scene.GetCamera()->GetClipFar());
     
     // 将场景物体按shader，materialInstance分组，填充进hierarchyObjects
     for(const auto& [objectName, sceneObject] : scene.GetSceneObjects())

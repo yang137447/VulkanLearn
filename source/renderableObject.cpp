@@ -1,9 +1,7 @@
 #include "renderableObject.h"
 #include "vertexDataStruct.h"
-#include "settings.h"
 #include "commonFunction.h"
 #include <vulkan/vulkan.hpp>
-#include <vulkan/vulkan_handles.hpp>
 
 RenderableObject::RenderableObject()
 {
@@ -39,14 +37,16 @@ void RenderableObject::Draw(vk::CommandBuffer &commandBuffer)
     viewport
         .setX(0.0f)
         .setY(0.0f)
-        .setWidth(static_cast<float>(width))
-        .setHeight(static_cast<float>(height))
+        .setWidth(static_cast<float>(CommonFunction::GetWindowSize().x()))
+        .setHeight(static_cast<float>(CommonFunction::GetWindowSize().y()))
         .setMinDepth(0.0f)
         .setMaxDepth(1.0f);
     vk::Rect2D scissor;
     scissor
         .setOffset({ 0, 0 })
-        .setExtent({ static_cast<uint32_t>(width), static_cast<uint32_t>(height) });
+        .setExtent({ 
+            static_cast<uint32_t>(CommonFunction::GetWindowSize().x()), 
+            static_cast<uint32_t>(CommonFunction::GetWindowSize().y()) });
     commandBuffer.setViewport(0, 1, &viewport);
     commandBuffer.setScissor(0, 1, &scissor);
     //commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout, 0, descriptorSet, nullptr);

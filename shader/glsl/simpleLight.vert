@@ -34,5 +34,5 @@ void main()
     v2fColor = tintColor.rgb;
     v2fTexCoord = inTexCoord;
     v2fNormal = GetNormal_WS(modelMatrix, inNormal, inPosition);
-    vec3 v2fPosition = (modelMatrix * vec4(inPosition, 1.0)).xyz;
+    v2fPosition = (modelMatrix * vec4(inPosition, 1.0)).xyz;
 }

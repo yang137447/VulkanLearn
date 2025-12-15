@@ -9,3 +9,19 @@ vec3 GetNormal_WS(mat4 modelMatrix, vec3 normal, vec3 vertexPosition)
     newNormal = normalize(newNormal);
     return newNormal;
 }
+
+vec3 LinearTosRGB(vec3 linearRGB)
+{
+    return mix(
+        12.92 * linearRGB,
+        1.055 * pow(linearRGB, vec3(1.0 / 2.4)) - 0.055,
+        step(vec3(0.0031308), linearRGB));
+}
+
+vec3 SRGBtoLinear(vec3 sRGB)
+{
+    return mix(
+        sRGB / 12.92,
+        pow((sRGB + 0.055) / 1.055, vec3(2.4)),
+        step(vec3(0.04045), sRGB));
+}

@@ -4,7 +4,6 @@
 #include <vector>
 #include <chrono>
 #include "shaderCompiler.h"
-#include "settings.h"
 #include "vulkanManager.h"
 #include "sceneLoader.h"
 #include "renderSystem.h"
@@ -15,6 +14,7 @@
 
 int main(int argc, char **argv)
 {
+    // 做一些初始化设置
     if(!SDL_Init(SDL_INIT_VIDEO)){
         std::cout << "SDL_Init failed" << std::endl;
         exit(1);
@@ -22,10 +22,12 @@ int main(int argc, char **argv)
     if(!SDL_Vulkan_LoadLibrary(nullptr)){
         std::cout << "SDL_Vulkan_LoadLibrary failed" << std::endl;
         exit(1);
-    }
+    }    
+    CommonFunction::InitConfigJson();
+
     SDL_Window *window = SDL_CreateWindow(
         "VulkanRenderer",
-        width, height,
+        CommonFunction::GetWindowSize().x(), CommonFunction::GetWindowSize().y(),
         SDL_WINDOW_VULKAN | SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE);
 
     if (!window)
@@ -48,6 +50,7 @@ int main(int argc, char **argv)
         extensionsVec.push_back(extensions[i]);
         std::cout << "Vulkan extension: " << extensions[i] << std::endl;
     }
+
     //编译shader
     ShaderCompiler shaderCompiler;
     std::string shaderFolderPath = CommonFunction::Path("shader");
@@ -59,7 +62,7 @@ int main(int argc, char **argv)
     vulkanManager.Init(extensionsVec, window);
     //加载场景
     SceneLoader& sceneLoader = SceneLoader::GetInstance();
-    sceneLoader.LoadScence(CommonFunction::Path("scenes/scene02.json"));
+    sceneLoader.LoadScence(CommonFunction::Path(CommonFunction::GetInitScene()));
     //初始化渲染系统
     RenderSystem& renderSystem = RenderSystem::GetInstance();
     renderSystem.InitRenderObject();

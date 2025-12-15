@@ -1,5 +1,4 @@
 #include "shaderCompiler.h"
-#include "settings.h"
 
 #include <shaderc/shaderc.h>
 #include <shaderc/shaderc.hpp>
@@ -76,11 +75,11 @@ void ShaderCompiler::StartCompile(const std::string& shaderFilePath)
             //获取编译后文件路径
             std::string compiledShaderPath = spirvPath + "/" + shaderName + "_" + shaderExtension + "." + "spv";
             std::string compiledDebugShaderPath = spirvPath + "/" + shaderName + "_" + shaderExtension + "." + "debug";
-            if (glslShaderPath.find("vert") != std::string::npos)
+            if (shaderExtension == "vert")
             {
                 kind = shaderc_shader_kind::shaderc_vertex_shader;
             }
-            else if (glslShaderPath.find("frag") != std::string::npos)
+            else if (shaderExtension == "frag")
             {
                 kind = shaderc_shader_kind::shaderc_fragment_shader;
             }

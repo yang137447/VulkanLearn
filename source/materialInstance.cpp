@@ -2,7 +2,6 @@
 #include "texture.h"
 #include "material.h"
 #include "renderPipline.h"
-#include "settings.h"
 #include "vulkanManager.h"
 #include "commonFunction.h"
 
@@ -159,8 +158,13 @@ void MaterialInstance::SetupDescriptors()
         }
     }
     // 设置image信息
-    imageInfo
-        .setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
-        .setImageView(GetTexture("albedoMap")->getImageView())
-        .setSampler(GetTexture("albedoMap")->getSampler());
+    // TODO: 这里应该根据shaderBinding来判断是否需要设置descriptor
+    if (HasTexture("albedoMap"))
+    {
+        const auto tex = GetTexture("albedoMap");
+        imageInfo
+            .setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+            .setImageView(tex->getImageView())
+            .setSampler(tex->getSampler());
+    }
 }

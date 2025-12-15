@@ -1,7 +1,6 @@
 #include "renderProcess.h"
 #include "shaderModule.h"
 #include "swapchain.h"
-#include "settings.h"
 #include <cstdint>
 
 RenderProcess::RenderProcess(const vk::Device &device,
@@ -57,14 +56,14 @@ void RenderProcess::CreateVkGraphicsPipeline()
     viewport
         .setX(0.0f)
         .setY(0.0f)
-        .setWidth(static_cast<float>(width))
-        .setHeight(static_cast<float>(height))
+        .setWidth(static_cast<float>(swapchain->GetExtent().width))
+        .setHeight(static_cast<float>(swapchain->GetExtent().height))
         .setMinDepth(0.0f)
         .setMaxDepth(1.0f);
     vk::Rect2D scissor;
     scissor
         .setOffset({0, 0})
-        .setExtent({static_cast<uint32_t>(width), static_cast<uint32_t>(height)});
+        .setExtent({static_cast<uint32_t>(swapchain->GetExtent().width), static_cast<uint32_t>(swapchain->GetExtent().height)});
     vk::PipelineViewportStateCreateInfo pipelineViewportStateCreateInfo;
     pipelineViewportStateCreateInfo
         .setViewportCount(1)

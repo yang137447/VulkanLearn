@@ -1,0 +1,45 @@
+{
+    "name": "Scene 01",
+    "type": "scene",
+    "objects": [
+        {
+            "name": "Sphere_001",
+            "type": "mesh",
+            "modelPath": "models/SM_sphere.json",
+            "position": [0, 0, 0],
+            "scale": [1, 1, 1],
+            "rotation": [0, 0, 0]
+        },
+        {
+            "name": "Sun_Light_001",
+            "type": "directionalLight",
+            "position": [0, 1, 0],
+            "rotation": [0, 0, 0],
+            "color": [1, 1, 1],
+            "intensity": 1.0
+        },
+        {
+            "name": "Sun_Light_002",
+            "type": "directionalLight",
+            "position": [0, 1, 0],
+            "rotation": [0, 90, 0],
+            "color": [0, 0, 1],
+            "intensity": 1.0
+        },
+        {
+            "name": "Camera_01",
+            "type": "camera",
+            "fov": 90,
+            "near_clip": 0.1,
+            "far_clip": 1000,
+            "position": [0, 1, 2],
+            "rotation": [0, 0, 0],
+            "scale": [1, 1, 1]
+        },
+        {
+            "name": "Environment_01",
+            "type": "environment",
+            "ambient": [0.1, 0.1, 0.1]
+        }
+    ]
+}

@@ -1,0 +1,6 @@
+{
+    "name": "Sphere",
+    "type": "mesh",
+    "modelDataPath": "models/datas/sphere.obj",
+    "materialInstancePath": "materials/MI_material_preview_ball.json"
+}

@@ -14,16 +14,26 @@ layout(location = 0) out vec4 outColor;
 
 void main()
 {
-    //outColor = texture(albedoMap, fragTexCoord);
-    vec4 baseColor = texture(albedoMap, v2fTexCoord);
-    float roughness = 0.5;
-    float metallic = 0.5;
+    vec4 albedo = texture(albedoMap, v2fTexCoord);
+    float roughness = 0.1;
+    float metallic = 0.0;
     vec3 normal = normalize(v2fNormal);
     vec3 V = normalize(uboVP.cameraPosition - v2fPosition);
-    int offset = uboLight.pointLightOffset;
-    for(int i = offset; i < offset + uboLight.pointLightCount; i++)
+    vec3 lighting = vec3(0.0);
+    int offset = uboLight.directionalLightOffset;
+    int dirCount = uboLight.directionalLightCount;
+    int end = offset + dirCount;
+    for(int i = offset; i < end; i++)
     {
-        baseColor.xyz = CalculatePointLight(normal, v2fPosition, uboVP.cameraPosition, baseColor.xyz, roughness, metallic, uboLight.lights[i]);
+        lighting += CalculateDirectionalLight(
+                                normal, 
+                                v2fPosition, 
+                                uboVP.cameraPosition, 
+                                albedo.rgb, 
+                                roughness, 
+                                metallic, 
+                                uboLight.lights[i]);
     }
-    outColor = baseColor;
+    vec3 environment = uboVP.ambient * albedo.rgb;
+    outColor = vec4(lighting + environment, albedo.a);
 }

@@ -1,6 +1,5 @@
 #include "renderPipline.h"
 #include "vertexDataStruct.h"
-#include "settings.h"
 #include <cstdint>
 #include <fstream>
 #include <iostream>
@@ -212,14 +211,16 @@ void RenderPipline::CreateGraphicsPipeline()
     viewport
         .setX(0.0f)
         .setY(0.0f)
-        .setWidth(static_cast<float>(width))
-        .setHeight(static_cast<float>(height))
+        .setWidth(static_cast<float>(CommonFunction::GetWindowSize().x()))
+        .setHeight(static_cast<float>(CommonFunction::GetWindowSize().y()))
         .setMinDepth(0.0f)
         .setMaxDepth(1.0f);
     vk::Rect2D scissor;
     scissor
         .setOffset({ 0, 0 })
-        .setExtent({ static_cast<uint32_t>(width), static_cast<uint32_t>(height) });
+        .setExtent({ 
+            static_cast<uint32_t>(CommonFunction::GetWindowSize().x()), 
+            static_cast<uint32_t>(CommonFunction::GetWindowSize().y()) });
     vk::PipelineViewportStateCreateInfo pipelineViewportStateCreateInfo;
     pipelineViewportStateCreateInfo
         .setViewportCount(1)

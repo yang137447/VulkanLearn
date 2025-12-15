@@ -3,7 +3,6 @@
 #include <cstdint>
 #include <iostream>
 #include <chrono>
-#include "settings.h"
 #include "renderPipline.h"
 #include "commonFunction.h"
 // Loader
@@ -59,8 +58,8 @@ void VulkanManager::ReCreateSwapChain(int newWidth, int newHeight)
     device.waitIdle(); //等待设备空闲
 
     //todo: setting.h 需要转化为json配置文件
-    width = newWidth;
-    height = newHeight;
+    // width = newWidth;
+    // height = newHeight;
 
     DestroyVkFrameBuffers();
     DestroyVkSwapChain();
@@ -294,8 +293,13 @@ void VulkanManager::CreateVkSwapChain()
     if(surfaceCapabilities.currentExtent.width == 0xFFFFFFFF)
     {
         //如果surface能力中的尺寸没有定义（宽度为0xFFFFFFFF表示没定义）
-        swapChainExtent.width = std::clamp(static_cast<uint32_t>(width), surfaceCapabilities.minImageExtent.width, surfaceCapabilities.maxImageExtent.width);
-        swapChainExtent.height = std::clamp(static_cast<uint32_t>(height), surfaceCapabilities.minImageExtent.height, surfaceCapabilities.maxImageExtent.height);
+        // TODO: 这里的窗口大小获取方式需要根据实际情况修改
+        swapChainExtent.width = std::clamp(static_cast<uint32_t>(CommonFunction::GetWindowSize().x()), 
+            surfaceCapabilities.minImageExtent.width, 
+            surfaceCapabilities.maxImageExtent.width);
+        swapChainExtent.height = std::clamp(static_cast<uint32_t>(CommonFunction::GetWindowSize().y()), 
+            surfaceCapabilities.minImageExtent.height, 
+            surfaceCapabilities.maxImageExtent.height);
     }
     else
     {
@@ -438,7 +442,7 @@ void VulkanManager::CreateColorResource()
     vk::ImageTiling tiling = vk::ImageTiling::eOptimal;
     std::tie(colorImage, colorImageMemory) = CommonFunction::CreateImage(
         device, 
-        width, height, 1, sampleCount, 
+        CommonFunction::GetWindowSize().x(), CommonFunction::GetWindowSize().y(), 1, sampleCount, 
         surfaceFormat.format, tiling, 
         usage,
         gpuMemoryProperties,

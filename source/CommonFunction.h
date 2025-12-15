@@ -7,20 +7,166 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include "settings.h"
+#include <nlohmann/json.hpp>
+#include <math.h>
+#include <optional>
+
+constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
+
+namespace JsonParser
+{
+    inline Eigen::Vector2f ParseVector2(const nlohmann::basic_json<>& Value)
+    {
+        if(Value.is_array() && Value.size() == 2)
+        {
+            return Eigen::Vector2f(Value[0].get<float>(), Value[1].get<float>());
+        }
+        else {
+            throw std::runtime_error("Invalid vector2 format");
+        }
+    }
+
+    inline Eigen::Vector3f ParseVector3(const nlohmann::basic_json<>& Value)
+    {
+        if(Value.is_array() && Value.size() == 3)
+        {
+            return Eigen::Vector3f(Value[0].get<float>(), Value[1].get<float>(), Value[2].get<float>());
+        }
+        else {
+            throw std::runtime_error("Invalid vector3 format");
+        }
+    }
+
+    inline Eigen::Vector4f ParseVector4(const nlohmann::basic_json<>& Value)
+    {
+        if(Value.is_array() && Value.size() == 4)
+        {
+            return Eigen::Vector4f(Value[0].get<float>(), Value[1].get<float>(), Value[2].get<float>(), Value[3].get<float>());
+        }
+        else {
+            throw std::runtime_error("Invalid vector4 format");
+        }
+    }
+
+    inline uint32_t ParseValueSize(const nlohmann::basic_json<>& Value)
+    {
+        if(Value.is_number_float())
+        {
+            return sizeof(float);
+        }
+        else if(Value.is_array())
+        {
+            if(Value.size() == 2)
+            {
+                return sizeof(Eigen::Vector2f);
+            }
+            else if(Value.size() == 3)
+            {
+                return sizeof(Eigen::Vector3f);
+            }
+            else if(Value.size() == 4)
+            {
+                return sizeof(Eigen::Vector4f);
+            }
+        }
+        throw std::runtime_error("Unsupported parameter type or size");
+    }
+
+    template<typename T>
+    inline T ParseValue(const nlohmann::basic_json<>& Value)
+    {
+        if constexpr(std::is_same_v<T, float>)
+        {
+            return Value.get<float>();
+        }
+        else if constexpr(std::is_same_v<T, Eigen::Vector2f>)
+        {
+            return ParseVector2(Value);
+        }
+        else if constexpr(std::is_same_v<T, Eigen::Vector3f>)
+        {
+            return ParseVector3(Value);
+        }
+        else if constexpr(std::is_same_v<T, Eigen::Vector4f>)
+        {
+            return ParseVector4(Value);    }
+        throw std::runtime_error("Unsupported parameter type or size");
+    }
+}
 
 namespace CommonFunction
 {
+    inline nlohmann::basic_json<>& InitConfigJson()
+    {
+        static std::optional<nlohmann::json> configJson;
+        if( configJson.has_value() )
+        {
+            return configJson.value();
+        }
+
+        // 获取当前文件所在目录
+        std::string projectPath = std::filesystem::current_path().string();
+        // 进入config目录, 确定config.json文件是否存在
+        // TODO: 这里现在兼容的debug和debug不调试，未来需要兼容release模式
+        std::string configfilePath = projectPath + "/config/config.json";
+        if( !std::filesystem::exists(configfilePath) )
+        {
+            //向前找两级目录，适配debug不调试
+            projectPath = std::filesystem::path(projectPath).parent_path().parent_path().string();
+            configfilePath = projectPath + "/config/config.json";
+            if( !std::filesystem::exists(configfilePath) )
+            {
+                throw std::runtime_error("Failed to find config.json file");
+            }
+        }
+        // 读取config.json文件
+        std::ifstream configFile(configfilePath);
+        configJson = nlohmann::json();
+        configFile >> configJson.value();
+        return configJson.value();
+    }
+
+    inline std::string GetInitScene()
+    {
+        const nlohmann::json& configJson = InitConfigJson();
+        std::string initScene = configJson["initScene"];
+        return initScene;
+    }
+
+    inline Eigen::Vector2f GetWindowSize()
+    {
+        static std::optional<Eigen::Vector2f> windowSize;
+        if( windowSize.has_value() )
+        {
+            return windowSize.value();
+        }
+        const nlohmann::json& configJson = InitConfigJson();
+        windowSize = JsonParser::ParseVector2(configJson["windowSize"]);
+        return windowSize.value();
+    }
+
+    inline std::string GetProjectPath()
+    {
+        static std::optional<std::string> projectPath;
+        if( projectPath.has_value() )
+        {
+            return projectPath.value();
+        }
+        const nlohmann::json& configJson = InitConfigJson();
+        projectPath = configJson["projectPath"];
+        return projectPath.value();
+    }
+
     inline std::string Path(const std::string& path)
     {
-        std::string fullPath = filePath + "/resources" + "/" + path;
+        std::string fullPath = GetProjectPath() + "/resources" + "/" + path;
         if( !std::filesystem::exists(fullPath) )
         {
-            fullPath = filePath + "/shader/spv/" + path;
+            fullPath = GetProjectPath() + "/shader/spv/" + path;
         }
         if( !std::filesystem::exists(fullPath) )
         {
-            fullPath = filePath + "/" + path;
+            fullPath = GetProjectPath() + "/" + path;
         }
         if( !std::filesystem::exists(fullPath) )
         {
@@ -65,7 +211,7 @@ namespace CommonFunction
     //Rotation(degrees): x, y, z
     inline Eigen::Quaternionf rotationToQuat(Eigen::Vector3f rotation)
     {
-        rotation *= Pi / 180.0f;
+        rotation *= M_PI / 180.0f;
 
         Eigen::AngleAxisf yawAngle(rotation.y(), Eigen::Vector3f::UnitY());
         Eigen::AngleAxisf pitchAngle(rotation.x(), Eigen::Vector3f::UnitX());
@@ -78,7 +224,7 @@ namespace CommonFunction
 
     inline Eigen::Vector3f quatToRotation(Eigen::Quaternionf quaternion)
     {
-        Eigen::Vector3f rotation = quaternion.matrix().eulerAngles(1, 0, 2) * 180.0f / Pi;
+        Eigen::Vector3f rotation = quaternion.matrix().eulerAngles(1, 0, 2) * 180.0f / M_PI;
         rotation = Eigen::Vector3f(rotation.y(), rotation.x(), rotation.z());
         return rotation;
     }

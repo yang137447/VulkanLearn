@@ -50,7 +50,7 @@ void SceneNode::SetScale(Eigen::Vector3f& scale)
     this->scale = scale;
 }
 
-Eigen::Vector3f SceneNode::GetForwordVector() const
+Eigen::Vector3f SceneNode::GetForwardVector() const
 {
     return quaternion * Eigen::Vector3f(0.0f, 0.0f, -1.0f);
 }
@@ -123,7 +123,10 @@ Camera::Camera()
 {
     SetCamera(Eigen::Vector3f(0.0f, 2.0f, 2.0f), Eigen::Vector3f(0.0f, 0.0f, 0.0f), Eigen::Vector3f(0.0f, 1.0f, 0.0f));
 
-    SetProjection(90.0f, static_cast<float>(width) / static_cast<float>(height), 0.1f, 10.0f);
+    SetProjection(
+        90.0f, 
+        static_cast<float>(CommonFunction::GetWindowSize().x()) / static_cast<float>(CommonFunction::GetWindowSize().y()), 
+        0.1f, 10.0f);
 
     //Vulkan设备空间XYZ三个轴范围分别是 -1.0～+1.0、+1.0～-1.0、0.0～+1.0
     ndcMatrix << 
@@ -192,7 +195,7 @@ void Camera::SetProjection(float fov, float aspect, float near, float far)
 {
     float n = -1.0f * near;
     float f = -1.0f * far;
-    float fovRad = fov * Pi / 180.0f; 
+    float fovRad = fov * M_PI / 180.0f; 
     float k = -1.0f / std::tan(fovRad / 2.0f);
     projectionMatrix <<
         k, 0.0f, 0.0f, 0.0f,
@@ -380,12 +383,16 @@ void SceneObject::UpdateDescriptorSet()
     auto& shaderBindings = baseMaterial->GetRenderPipline()->GetShaderBindings();
     //TODO: 这里应有shaderbinding,来决定各个descriptor是否存在，并进行更新
     bool hasLightBuffer = false;
+    bool hasTexture = false;
     for(const auto& binding : shaderBindings)
     {
         if(binding.binding == 1)
         {
             hasLightBuffer = true;
-            break;
+        }
+        if(binding.binding == 4)
+        {
+            hasTexture = true;
         }
     }
     auto& renderSystem = RenderSystem::GetInstance();
@@ -418,12 +425,15 @@ void SceneObject::UpdateDescriptorSet()
                 .setDstBinding(3)
                 .setDescriptorType(vk::DescriptorType::eUniformBuffer)
                 .setBufferInfo(uboModel.bufferInfos[i]));
-        writeDescriptorSets[i].push_back(
-            vk::WriteDescriptorSet()
-                .setDstSet(descriptorSets[i])
-                .setDstBinding(4)
-                .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
-                .setImageInfo(materialInstance->GetUboMaterialInstanceImageInfo()));
+        if(hasTexture)
+        {
+            writeDescriptorSets[i].push_back(
+                vk::WriteDescriptorSet()
+                    .setDstSet(descriptorSets[i])
+                    .setDstBinding(4)
+                    .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
+                    .setImageInfo(materialInstance->GetUboMaterialInstanceImageInfo()));
+        }
         
         VulkanManager::GetInstance().GetDevice().updateDescriptorSets(writeDescriptorSets[i], nullptr);
     }

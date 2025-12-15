@@ -1,0 +1,6 @@
+{
+    "projectPath": "D:/YYBWorkSpace/GitHub/VulkanLearn",
+    "windowSize": [1280, 720],
+    "initScene": "scenes/scene02.json",
+    "maxFrameInFlight": 2
+}

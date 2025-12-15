@@ -55,7 +55,7 @@ void Controller::Update(float deltaTime)
 
     Eigen::Vector3f position = sceneObject->GetPosition();
     Eigen::Vector3f rotation = sceneObject->GetRotation();
-    Eigen::Vector3f forward = sceneObject->GetForwordVector();
+    Eigen::Vector3f forward = sceneObject->GetForwardVector();
     Eigen::Vector3f right = sceneObject->GetRightVector();
     Eigen::Vector3f up = sceneObject->GetUpVector();
     position += moveFactor.z() * forward * deltaTime * moveSpeed;

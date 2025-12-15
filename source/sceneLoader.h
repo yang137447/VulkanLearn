@@ -46,13 +46,6 @@ private:
     void LoadCameraObject(const nlohmann::basic_json<>& node);
     void LoadEnvironmentObject(const nlohmann::basic_json<>& node);
 
-    Eigen::Vector2f ParseVector2(const nlohmann::basic_json<>& Value);
-    Eigen::Vector3f ParseVector3(const nlohmann::basic_json<>& Value);
-    Eigen::Vector4f ParseVector4(const nlohmann::basic_json<>& Value);
-    uint32_t ParseValueSize(const nlohmann::basic_json<>& Value);
-    template<typename T>
-    T ParseValue(const nlohmann::basic_json<>& Value);
-
     //场景数据
     std::unordered_map<std::string, std::shared_ptr<RenderableObject>> objects; //模型相对路径和模型对象
     std::unordered_map<std::string, std::shared_ptr<SceneObject>> sceneObjects; //模型名字和场景对象

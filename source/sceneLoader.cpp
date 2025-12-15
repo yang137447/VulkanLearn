@@ -12,7 +12,6 @@
 #include "texture.h"
 #include "materialInstance.h"
 #include "sceneObject.h"
-#include "settings.h"
 #include "renderPipline.h"
 #include "shaderReflect.h"
 
@@ -158,7 +157,7 @@ void SceneLoader::LoadMeshObject(const nlohmann::basic_json<>& node)
         {
             const std::string& paramName = shaderParameters.begin().key();
             const auto& paramValue = shaderParameters[paramName];
-            size_t paramSize = ParseValueSize(paramValue);
+            size_t paramSize = JsonParser::ParseValueSize(paramValue);
             if(paramSize != binding.members[i])
             {
                 allMatch = false;
@@ -192,25 +191,25 @@ void SceneLoader::LoadMeshObject(const nlohmann::basic_json<>& node)
     for(const auto& [name, value]  : shaderParameters.items())
     {
         const std::string& paramName = name;
-        uint32_t paramSize = ParseValueSize(value);
+        uint32_t paramSize = JsonParser::ParseValueSize(value);
         if(paramSize == sizeof(float))
         {
-            auto paramValue = ParseValue<float>(value);
+            auto paramValue = JsonParser::ParseValue<float>(value);
             materialInstance->SetParameter(paramName, paramValue);
         }
         else if(paramSize == sizeof(Eigen::Vector2f))
         {
-            auto paramValue = ParseValue<Eigen::Vector2f>(value);
+            auto paramValue = JsonParser::ParseValue<Eigen::Vector2f>(value);
             materialInstance->SetParameter(paramName, paramValue);
         }
         else if(paramSize == sizeof(Eigen::Vector3f))
         {
-            auto paramValue = ParseValue<Eigen::Vector3f>(value);
+            auto paramValue = JsonParser::ParseValue<Eigen::Vector3f>(value);
             materialInstance->SetParameter(paramName, paramValue);
         }
         else if(paramSize == sizeof(Eigen::Vector4f))
         {
-            auto paramValue = ParseValue<Eigen::Vector4f>(value);
+            auto paramValue = JsonParser::ParseValue<Eigen::Vector4f>(value);
             materialInstance->SetParameter(paramName, paramValue);
         }
         else 
@@ -247,9 +246,9 @@ void SceneLoader::LoadMeshObject(const nlohmann::basic_json<>& node)
     }
     else
     {
-        Eigen::Vector3f position = ParseVector3(node["position"]);
-        Eigen::Vector3f rotation = ParseVector3(node["rotation"]);
-        Eigen::Vector3f scale = ParseVector3(node["scale"]);
+        Eigen::Vector3f position = JsonParser::ParseValue<Eigen::Vector3f>(node["position"]);
+        Eigen::Vector3f rotation = JsonParser::ParseValue<Eigen::Vector3f>(node["rotation"]);
+        Eigen::Vector3f scale = JsonParser::ParseValue<Eigen::Vector3f>(node["scale"]);
         sceneObject = std::make_shared<SceneObject>(renderableObject, materialInstance);
             sceneObject->SetPosition(position);
             sceneObject->SetRotation(rotation);
@@ -266,10 +265,10 @@ void SceneLoader::LoadMeshObject(const nlohmann::basic_json<>& node)
 void SceneLoader::LoadDirectinalLightObject(const nlohmann::basic_json<>& node)
 {
     std::string name = node["name"];
-    Eigen::Vector3f position = ParseVector3(node["position"]);
-    Eigen::Vector3f rotation = ParseVector3(node["rotation"]);
-    Eigen::Vector3f color = ParseVector3(node["color"]);
-    float intensity = node["intensity"].get<float>();
+    Eigen::Vector3f position = JsonParser::ParseValue<Eigen::Vector3f>(node["position"]);
+    Eigen::Vector3f rotation = JsonParser::ParseValue<Eigen::Vector3f>(node["rotation"]);
+    Eigen::Vector3f color = JsonParser::ParseValue<Eigen::Vector3f>(node["color"]);
+    float intensity = JsonParser::ParseValue<float>(node["intensity"]);
 
     std::shared_ptr<DirectinalLight> directinalLight = std::make_shared<DirectinalLight>();
     directinalLight->SetColor(color);
@@ -282,10 +281,10 @@ void SceneLoader::LoadDirectinalLightObject(const nlohmann::basic_json<>& node)
 void SceneLoader::LoadPointLightObject(const nlohmann::basic_json<>& node)
 {
     std::string name = node["name"];
-    Eigen::Vector3f color = ParseVector3(node["color"]);
-    float intensity = node["intensity"].get<float>();
-    Eigen::Vector3f position = ParseVector3(node["position"]);
-    Eigen::Vector3f rotation = ParseVector3(node["rotation"]);
+    Eigen::Vector3f color = JsonParser::ParseValue<Eigen::Vector3f>(node["color"]);
+    float intensity = JsonParser::ParseValue<float>(node["intensity"]);
+    Eigen::Vector3f position = JsonParser::ParseValue<Eigen::Vector3f>(node["position"]);
+    Eigen::Vector3f rotation = JsonParser::ParseValue<Eigen::Vector3f>(node["rotation"]);
 
     std::shared_ptr<PointLight> pointLight = std::make_shared<PointLight>();
     pointLight->SetColor(color);
@@ -299,12 +298,12 @@ void SceneLoader::LoadPointLightObject(const nlohmann::basic_json<>& node)
 void SceneLoader::LoadSpotLightObject(const nlohmann::basic_json<>& node)
 {
     std::string name = node["name"];
-    Eigen::Vector3f color = ParseVector3(node["color"]);
-    float intensity = node["intensity"].get<float>();
-    Eigen::Vector3f position = ParseVector3(node["position"]);
-    Eigen::Vector3f rotation = ParseVector3(node["rotation"]);
-    float cutAngleOuter = node["cone_angle_outer"].get<float>();
-    float cutAngleInner = node["cone_angle_inner"].get<float>();
+    Eigen::Vector3f color = JsonParser::ParseValue<Eigen::Vector3f>(node["color"]);
+    float intensity = JsonParser::ParseValue<float>(node["intensity"]);
+    Eigen::Vector3f position = JsonParser::ParseValue<Eigen::Vector3f>(node["position"]);
+    Eigen::Vector3f rotation = JsonParser::ParseValue<Eigen::Vector3f>(node["rotation"]);
+    float cutAngleOuter = JsonParser::ParseValue<float>(node["cone_angle_outer"]);
+    float cutAngleInner = JsonParser::ParseValue<float>(node["cone_angle_inner"]);
 
     std::shared_ptr<SpotLight> spotLight = std::make_shared<SpotLight>();
     spotLight->SetColor(color);
@@ -322,9 +321,9 @@ void SceneLoader::LoadCameraObject(const nlohmann::basic_json<>& node)
     float fov = node["fov"].get<float>();
     float near = node["near_clip"].get<float>();
     float far = node["far_clip"].get<float>();
-    Eigen::Vector3f position = ParseVector3(node["position"]);
-    Eigen::Vector3f rotation = ParseVector3(node["rotation"]);
-    Eigen::Vector3f scale = ParseVector3(node["scale"]);
+    Eigen::Vector3f position = JsonParser::ParseValue<Eigen::Vector3f>(node["position"]);
+    Eigen::Vector3f rotation = JsonParser::ParseValue<Eigen::Vector3f>(node["rotation"]);
+    Eigen::Vector3f scale = JsonParser::ParseValue<Eigen::Vector3f>(node["scale"]);
     std::shared_ptr<Camera> camera = std::make_shared<Camera>();
     camera->SetHFOV(fov);
     camera->SetClip(near, far);
@@ -338,84 +337,6 @@ void SceneLoader::LoadCameraObject(const nlohmann::basic_json<>& node)
 
 void SceneLoader::LoadEnvironmentObject(const nlohmann::basic_json<>& node)
 {
-    Eigen::Vector3f ambient = ParseVector3(node["ambient"]);
+    Eigen::Vector3f ambient = JsonParser::ParseValue<Eigen::Vector3f>(node["ambient"]);
     this->ambient = ambient;
-}
-
-Eigen::Vector2f SceneLoader::ParseVector2(const nlohmann::basic_json<>& Value)
-{
-    if(Value.is_array() && Value.size() == 2)
-    {
-        return Eigen::Vector2f(Value[0].get<float>(), Value[1].get<float>());
-    }
-    else {
-        throw std::runtime_error("Invalid vector2 format");
-    }
-}
-
-Eigen::Vector3f SceneLoader::ParseVector3(const nlohmann::basic_json<>& Value)
-{
-    if(Value.is_array() && Value.size() == 3)
-    {
-        return Eigen::Vector3f(Value[0].get<float>(), Value[1].get<float>(), Value[2].get<float>());
-    }
-    else {
-        throw std::runtime_error("Invalid vector3 format");
-    }
-}
-
-Eigen::Vector4f SceneLoader::ParseVector4(const nlohmann::basic_json<>& Value)
-{
-    if(Value.is_array() && Value.size() == 4)
-    {
-        return Eigen::Vector4f(Value[0].get<float>(), Value[1].get<float>(), Value[2].get<float>(), Value[3].get<float>());
-    }
-    else {
-        throw std::runtime_error("Invalid vector4 format");
-    }
-}
-
-uint32_t SceneLoader::ParseValueSize(const nlohmann::basic_json<>& Value)
-{
-    if(Value.is_number_float())
-    {
-        return sizeof(float);
-    }
-    else if(Value.is_array())
-    {
-        if(Value.size() == 2)
-        {
-            return sizeof(Eigen::Vector2f);
-        }
-        else if(Value.size() == 3)
-        {
-            return sizeof(Eigen::Vector3f);
-        }
-        else if(Value.size() == 4)
-        {
-            return sizeof(Eigen::Vector4f);
-        }
-    }
-    throw std::runtime_error("Unsupported parameter type or size");
-}
-
-template<typename T>
-T SceneLoader::ParseValue(const nlohmann::basic_json<>& Value)
-{
-    if constexpr(std::is_same_v<T, float>)
-    {
-        return Value.get<float>();
-    }
-    else if constexpr(std::is_same_v<T, Eigen::Vector2f>)
-    {
-        return ParseVector2(Value);
-    }
-    else if constexpr(std::is_same_v<T, Eigen::Vector3f>)
-    {
-        return ParseVector3(Value);
-    }
-    else if constexpr(std::is_same_v<T, Eigen::Vector4f>)
-    {
-        return ParseVector4(Value);    }
-    throw std::runtime_error("Unsupported parameter type or size");
 }

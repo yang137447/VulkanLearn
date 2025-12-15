@@ -17,7 +17,7 @@ public:
     inline const Eigen::Vector3f& GetPosition() const { return position; }
     inline const Eigen::Vector3f& GetRotation() const { return rotation;}
     inline const Eigen::Vector3f& GetScale() const { return scale; }
-    Eigen::Vector3f GetForwordVector() const;
+    Eigen::Vector3f GetForwardVector() const;
     Eigen::Vector3f GetRightVector() const;
     Eigen::Vector3f GetUpVector() const;
 
