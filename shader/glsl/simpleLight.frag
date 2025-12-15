@@ -19,21 +19,9 @@ void main()
     float metallic = 0.0;
     vec3 normal = normalize(v2fNormal);
     vec3 V = normalize(uboVP.cameraPosition - v2fPosition);
-    vec3 lighting = vec3(0.0);
-    int offset = uboLight.directionalLightOffset;
-    int dirCount = uboLight.directionalLightCount;
-    int end = offset + dirCount;
-    for(int i = offset; i < end; i++)
-    {
-        lighting += CalculateDirectionalLight(
-                                normal, 
-                                v2fPosition, 
-                                uboVP.cameraPosition, 
-                                albedo.rgb, 
-                                roughness, 
-                                metallic, 
-                                uboLight.lights[i]);
-    }
+    // 计算灯光光照
+    vec3 lighting = CalculateLighting(normal, v2fPosition, uboVP.cameraPosition, albedo.rgb, roughness, metallic);
+    // 环境光
     vec3 environment = uboVP.ambient * albedo.rgb;
     outColor = vec4(lighting + environment, albedo.a);
 }

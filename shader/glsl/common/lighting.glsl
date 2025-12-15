@@ -164,3 +164,123 @@ vec3 CalculatePointLight(
     vec3 color = (diffuseBRDF + specularBRDF) * radiance * NdotL;
     return color;
 }
+
+vec3 CalculateSpotLight(
+    in vec3 normal_WS,
+    in vec3 pixelPos_WS,
+    in vec3 cameraPos_WS,
+    in vec3 baseColor,
+    in float roughness,
+    in float metallic,
+    in Light spotLight)
+{
+    // 根据金属度计算 F0：金属用 baseColor，非金属用 0.04
+    vec3 F0 = mix(vec3(0.04), baseColor, metallic);
+
+    // 提取点光源的位置、半径、颜色、强度
+    vec3 lightColor = spotLight.colorIntensity.xyz;
+    float lightIntensity = spotLight.colorIntensity.w;
+    vec3 lightPos_WS = spotLight.positionRadius.xyz;
+    float lightRadius = spotLight.positionRadius.w;
+    vec3 lightDirection_WS = spotLight.directionPad.xyz;
+    float outerConeAngle = spotLight.coneAngleOuterInnerPadPad.x;
+    float innerConeAngle = spotLight.coneAngleOuterInnerPadPad.y;
+    
+    // 中间量计算
+    vec3 N = normalize(normal_WS);
+    vec3 L = normalize(lightPos_WS - pixelPos_WS);
+    vec3 V = normalize(cameraPos_WS - pixelPos_WS);
+    vec3 H = normalize(L + V);
+
+    float NdotL = max(dot(N, L), 0.0);
+    float NdotV = max(dot(N, V), 0.0);
+
+    // 聚光灯角度
+    float spotLightAngle = acos(dot(L, -lightDirection_WS));
+    float epsilon = innerConeAngle - outerConeAngle;
+    float angleIntensity = clamp((spotLightAngle - outerConeAngle) / epsilon, 0.0, 1.0);
+    lightIntensity *= angleIntensity;
+
+    // 距离衰减：平方反比，并额外用 lightRadius 做平滑截断
+    float distance = length(lightPos_WS - pixelPos_WS);
+    float denom = distance * distance + 1e-4;
+    float attenuation = 1.0 / denom;
+    //attenuation *= 1.0 - smoothstep(lightRadius * 0.8, lightRadius, distance);
+    vec3 radiance = attenuation * lightIntensity * lightColor;
+
+    // Cook-Torrance BRDF
+    float D = DistributionGGX(N, H, roughness);
+    float G = GeometrySmith(N, V, L, roughness);
+    vec3  F = fresnelSchlick(max(dot(H, V), 0.0), F0);
+
+    vec3 kS = F;
+    vec3 kD = (vec3(1.0) - kS) * (1.0 - metallic);
+
+    // BRDF 分量
+    vec3 diffuseBRDF  = kD * baseColor / PI;
+    // 注意：分母中的 4*NdotL*NdotV 已在 GeometrySmith 中体现，这里直接乘上 NdotL
+    vec3 specularBRDF = kS * D * G / max(4.0 * NdotL * NdotV, 1e-4);
+
+    // 最终颜色
+    vec3 color = (diffuseBRDF + specularBRDF) * radiance * NdotL;
+    return color;
+}
+
+vec3 CalculateLighting(
+    in vec3 normal_WS,
+    in vec3 pixelPos_WS,
+    in vec3 cameraPos_WS,
+    in vec3 baseColor,
+    in float roughness,
+    in float metallic
+)
+{
+    vec3 lighting = vec3(0.0);
+    // 计算方向光
+    int offset = uboLight.directionalLightOffset;
+    int dirCount = uboLight.directionalLightCount;
+    int end = offset + dirCount;
+    for(int i = offset; i < end; i++)
+    {
+        lighting += CalculateDirectionalLight(
+                                normal_WS, 
+                                pixelPos_WS, 
+                                cameraPos_WS, 
+                                baseColor, 
+                                roughness, 
+                                metallic, 
+                                uboLight.lights[i]);
+    }
+    // 计算点光源
+    offset = uboLight.pointLightOffset;
+    int pointCount = uboLight.pointLightCount;
+    end = offset + pointCount;
+    for(int i = offset; i < end; i++)
+    {
+        lighting += CalculatePointLight(
+                                normal_WS, 
+                                pixelPos_WS, 
+                                cameraPos_WS, 
+                                baseColor, 
+                                roughness, 
+                                metallic, 
+                                uboLight.lights[i]);
+    }
+    // 计算聚光灯
+    offset = uboLight.spotLightOffset;
+    int spotCount = uboLight.spotLightCount;
+    end = offset + spotCount;
+    for(int i = offset; i < end; i++)
+    {
+        lighting += CalculateSpotLight(
+                                normal_WS, 
+                                pixelPos_WS, 
+                                cameraPos_WS, 
+                                baseColor, 
+                                roughness, 
+                                metallic, 
+                                uboLight.lights[i]);
+    }
+
+    return lighting;
+}
