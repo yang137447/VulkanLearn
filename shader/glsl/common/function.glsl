@@ -10,6 +10,11 @@ vec3 GetNormal_WS(mat4 modelMatrix, vec3 normal, vec3 vertexPosition)
     return newNormal;
 }
 
+float cheapContrast(float value, float contrast)
+{
+    return mix(-contrast, 1 + contrast, value);
+}
+
 vec3 LinearTosRGB(vec3 linearRGB)
 {
     return mix(

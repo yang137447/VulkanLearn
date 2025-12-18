@@ -24,25 +24,25 @@
             "position": [0, 1, 0],
             "rotation": [0, 0, 0],
             "color": [1, 0, 0],
-            "intensity": 1.0
+            "intensity": 0.0
         },
         {
             "name": "Point_Light_001",
             "type": "pointLight",
-            "position": [5, 10, 5],
+            "position": [2, 3, 0],
             "rotation": [0, 0, 0],
             "color": [0, 1, 0],
-            "intensity": 1.0,
+            "intensity": 10.0,
             "radius": 1.0
         },
         {
             "name": "Spot_Light_001",
             "type": "spotLight",
-            "position": [0, 10, 0],
+            "position": [-2, 3, 0],
             "rotation": [0, 0, 0],
             "color": [0, 0, 1],
             "intensity": 1.0,
-            "radius": 1.0,
+            "radius": 1000.0,
             "cone_angle_outer": 30.0,
             "cone_angle_inner": 10.0
         },

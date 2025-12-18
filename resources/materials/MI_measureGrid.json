@@ -1,0 +1,11 @@
+{
+    "name": "Material Preview Ball Material Instance",
+    "type": "materialInstance",
+    "shader": "measureGrid",
+    "textures": {
+    },
+    "parameters": {
+        "tintColor": [1, 1, 1, 1]
+    }
+
+}

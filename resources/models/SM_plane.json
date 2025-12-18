@@ -1,0 +1,6 @@
+{
+    "name": "Plane",
+    "type": "mesh",
+    "modelDataPath": "models/datas/plane.obj",
+    "materialInstancePath": "materials/MI_measureGrid.json"
+}
