@@ -489,19 +489,6 @@ void VulkanManager::DestroyVkDepthBuffer()
 
 void VulkanManager::CreateVkRenderPass()
 {
-    //创建信号量
-    imageAcquiredSemaphores.resize(swapChainImageCount);
-    renderFinishedSemaphores.resize(swapChainImageCount);
-
-    for (size_t i = 0; i < swapChainImageCount; i++)
-    {
-        vk::SemaphoreCreateInfo imageAcquiredSemaphoreCreateInfo;
-        imageAcquiredSemaphores[i] = device.createSemaphore(imageAcquiredSemaphoreCreateInfo);
-        assert(imageAcquiredSemaphores[i]);
-        renderFinishedSemaphores[i] = device.createSemaphore(imageAcquiredSemaphoreCreateInfo);
-        assert(renderFinishedSemaphores[i]);
-    }
-
     //创建渲染通道
     std::vector<vk::AttachmentDescription> attachmentDescriptions;
     vk::AttachmentDescription colorAttachmentDescription;
@@ -597,11 +584,6 @@ void VulkanManager::CreateVkRenderPass()
 void VulkanManager::DestroyVkRenderPass()
 {
     device.destroyRenderPass(renderPass);
-    for (size_t i = 0; i < swapChainImageCount; i++)
-    {
-        device.destroySemaphore(imageAcquiredSemaphores[i]);
-        device.destroySemaphore(renderFinishedSemaphores[i]);
-    }
     std::cout << "Destroy VkRenderPass" << std::endl;
 }
 
@@ -639,8 +621,23 @@ void VulkanManager::DestroyVkFrameBuffers()
     std::cout << "Destroy VkFrameBuffers" << std::endl;
 }
 
-void VulkanManager::CreateVkFence()
+void VulkanManager::CreateSyncObjects()
 {
+    //创建 Semaphore
+    imageAcquiredSemaphores.resize(swapChainImageCount);
+    renderFinishedSemaphores.resize(swapChainImageCount);
+
+    for (size_t i = 0; i < swapChainImageCount; i++)
+    {
+        vk::SemaphoreCreateInfo imageAcquiredSemaphoreCreateInfo;
+        imageAcquiredSemaphores[i] = device.createSemaphore(imageAcquiredSemaphoreCreateInfo);
+        assert(imageAcquiredSemaphores[i]);
+        renderFinishedSemaphores[i] = device.createSemaphore(imageAcquiredSemaphoreCreateInfo);
+        assert(renderFinishedSemaphores[i]);
+    }
+    std::cout << "Create VkSemaphore" << std::endl;
+
+    //创建 Fence
     vk::FenceCreateInfo fenceCreateInfo;
     fenceCreateInfo
         .setFlags(vk::FenceCreateFlagBits::eSignaled); // 设置为signaled状态，表示初始状态为完成
@@ -654,8 +651,15 @@ void VulkanManager::CreateVkFence()
     std::cout << "Create VkFence" << std::endl;
 }
 
-void VulkanManager::DestroyVkFence()
+void VulkanManager::DestroySyncObjects()
 {
+    for (size_t i = 0; i < swapChainImageCount; i++)
+    {
+        device.destroySemaphore(imageAcquiredSemaphores[i]);
+        device.destroySemaphore(renderFinishedSemaphores[i]);
+    }
+    std::cout << "Destroy VkSemaphore" << std::endl;
+    
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
     {
         if (taskFinishedFences[i])

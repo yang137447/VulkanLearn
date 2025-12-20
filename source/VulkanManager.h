@@ -72,14 +72,12 @@ private:
     void CreateVkFrameBuffers();
     void DestroyVkFrameBuffers();
 
-    void CreateVkFence();
-    void DestroyVkFence();
+    void CreateSyncObjects();
+    void DestroySyncObjects();
 
     void InitInstance();
 
 private:
-    vk::Instance instance;
-
     std::vector<const char *> instanceLayers = {
             "VK_LAYER_KHRONOS_validation"};
     std::vector<const char *> instanceExtensions = {};
