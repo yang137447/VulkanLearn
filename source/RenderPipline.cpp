@@ -7,13 +7,14 @@
 #include "commonFunction.h"
 #include "shaderReflect.h"
 
-RenderPipline::RenderPipline(vk::Device *device, vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties, vk::RenderPass* renderPass, const std::string& shaderName, vk::SampleCountFlagBits sampleCount)
+RenderPipline::RenderPipline(vk::Device *device, vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties, vk::RenderPass* renderPass, const std::string& shaderName, vk::SampleCountFlagBits sampleCount, bool bIsPostProcess)
 {
     this->device = device;
     this->renderPass = renderPass;
     this->physicalDeviceMemoryProperties = physicalDeviceMemoryProperties;
     this->shaderName = shaderName;
     this->sampleCount = sampleCount;
+    this->bIsPostProcess = bIsPostProcess;
 
     CreateShader();
     CreatePipelineLayout();
@@ -50,16 +51,29 @@ void RenderPipline::CreatePipelineLayout()
     //     .setStageFlags(vk::ShaderStageFlagBits::eFragment)
     //     .setPImmutableSamplers(nullptr));
     std::vector<vk::DescriptorSetLayoutBinding> descriptorSetLayoutBindings;
-    for(const auto& binding : shaderBindings)
+    if(bIsPostProcess)
     {
         vk::DescriptorSetLayoutBinding layoutBinding;
         layoutBinding
-            .setBinding(binding.binding)
-            .setDescriptorType(binding.type)
+            .setBinding(0)
+            .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
             .setDescriptorCount(1)
-            .setStageFlags(binding.stageFlags)
+            .setStageFlags(vk::ShaderStageFlagBits::eFragment)
             .setPImmutableSamplers(nullptr);
         descriptorSetLayoutBindings.push_back(layoutBinding);
+    }
+    else {
+        for(const auto& binding : shaderBindings)
+        {
+            vk::DescriptorSetLayoutBinding layoutBinding;
+            layoutBinding
+                .setBinding(binding.binding)
+                .setDescriptorType(binding.type)
+                .setDescriptorCount(1)
+                .setStageFlags(binding.stageFlags)
+                .setPImmutableSamplers(nullptr);
+            descriptorSetLayoutBindings.push_back(layoutBinding);
+        }
     }
 
     vk::DescriptorSetLayoutCreateInfo descriptorSetLayoutCreateInfo;
@@ -152,7 +166,7 @@ void RenderPipline::DestroyShader()
 void RenderPipline::initVertexAttribute()
 {
     vertexInputBindingDescription = VertexInfo::vertexInputBindingDescription;
-
+    
     vertexInputAttributeDescriptions.resize(VertexInfo::vertexInputAttributeDescriptions.size());
     vertexInputAttributeDescriptions = VertexInfo::vertexInputAttributeDescriptions;
 }
@@ -169,10 +183,12 @@ void RenderPipline::CreateGraphicsPipeline()
         .setDynamicStates(dynamicStates);
 
     vk::PipelineVertexInputStateCreateInfo pipelineVertexInputStateCreateInfo;
-    pipelineVertexInputStateCreateInfo
-        .setVertexBindingDescriptions(vertexInputBindingDescription)
-        .setVertexAttributeDescriptions(vertexInputAttributeDescriptions);
-
+    if(!bIsPostProcess)
+    {
+        pipelineVertexInputStateCreateInfo
+            .setVertexBindingDescriptions(vertexInputBindingDescription)
+            .setVertexAttributeDescriptions(vertexInputAttributeDescriptions);
+    }
 
     vk::PipelineInputAssemblyStateCreateInfo pipelineInputAssemblyStateCreateInfo;
     pipelineInputAssemblyStateCreateInfo
@@ -230,16 +246,19 @@ void RenderPipline::CreateGraphicsPipeline()
 
 
     vk::PipelineDepthStencilStateCreateInfo pipelineDepthStencilStateCreateInfo;
-    pipelineDepthStencilStateCreateInfo
-        .setDepthTestEnable(true)
-        .setDepthWriteEnable(true)
-        .setDepthCompareOp(vk::CompareOp::eLess)
-        .setDepthBoundsTestEnable(false)
-        .setMinDepthBounds(0.0f)
-        .setMaxDepthBounds(1.0f)
-        .setStencilTestEnable(false)
-        .setBack(vk::StencilOpState())
-        .setFront(vk::StencilOpState());
+    if(!bIsPostProcess)
+    {
+        pipelineDepthStencilStateCreateInfo
+            .setDepthTestEnable(true)
+            .setDepthWriteEnable(true)
+            .setDepthCompareOp(vk::CompareOp::eLess)
+            .setDepthBoundsTestEnable(false)
+            .setMinDepthBounds(0.0f)
+            .setMaxDepthBounds(1.0f)
+            .setStencilTestEnable(false)
+            .setBack(vk::StencilOpState())
+            .setFront(vk::StencilOpState());   
+    }
     
     vk::PipelineMultisampleStateCreateInfo pipelineMultisampleStateCreateInfo;
     pipelineMultisampleStateCreateInfo

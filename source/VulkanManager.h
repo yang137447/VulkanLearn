@@ -23,23 +23,25 @@ public:
     void Init(std::vector<const char *> &extensions, SDL_Window *window);
     ~VulkanManager();
 
+    // TODO: 可能需要放在其他合适位置
+    // TODO:需要处理 sdl 窗口初始尺寸和 vkSwapChain 尺寸不一致的情况
     void ReCreateSwapChain(int newWidth, int newHeight);
 
     inline vk::Device& GetDevice() { return device; }
+    inline vk::PhysicalDevice& GetPhysicalDevice() { return physicalDevices[GPUIndex]; }
     inline vk::PhysicalDeviceMemoryProperties& GetGpuMemoryProperties() { return gpuMemoryProperties; }
     inline vk::CommandPool& GetCommandPool() { return commandPool; }
     inline std::vector<vk::CommandBuffer>& GetCommandBuffers() { return commandBuffers; }
     inline vk::Queue& GetGraphicQueue() { return graphicQueue; }
-    inline vk::RenderPass& GetRenderPass() { return renderPass; }
-    inline vk::SampleCountFlagBits GetSampleCount() { return sampleCount; }
+    //inline vk::SampleCountFlagBits GetSampleCount() { return sampleCount; }
     inline std::vector<vk::Fence>& GetTaskFinishedFences() { return taskFinishedFences; }
     inline vk::SwapchainKHR& GetSwapChain() { return swapChain; }
     inline std::vector<vk::Semaphore>& GetImageAcquiredSemaphores() { return imageAcquiredSemaphores; }
     inline std::vector<vk::Semaphore>& GetRenderFinishedSemaphores() { return renderFinishedSemaphores; }
-    inline vk::RenderPassBeginInfo& GetRenderPassBeginInfo() { return renderPassBeginInfo; }
-    inline std::vector<vk::Framebuffer>& GetFrameBuffers() { return framebuffers; }
     inline vk::CommandBufferBeginInfo& GetCommandBufferBeginInfo() { return commandBufferBeginInfo; }
     inline uint32_t GetSwapChainImageCount() { return swapChainImageCount; }
+    inline vk::SurfaceFormatKHR& GetSurfaceFormat() { return surfaceFormat; }
+    inline std::vector<vk::ImageView>& GetSwapChainImageViews() { return swapChainImageViews; }
 private:
     VulkanManager();
 
@@ -60,24 +62,13 @@ private:
     void CreateVkCommandBuffer();
     void DestroyVkCommandBuffer();
 
-    void CreateColorResource();
-    void DestroyColorResource();
-
-    void CreateVkDepthBuffer();
-    void DestroyVkDepthBuffer();
-
-    void CreateVkRenderPass();
-    void DestroyVkRenderPass();
-
-    void CreateVkFrameBuffers();
-    void DestroyVkFrameBuffers();
-
     void CreateSyncObjects();
     void DestroySyncObjects();
 
     void InitInstance();
 
 private:
+    vk::Instance instance;
     std::vector<const char *> instanceLayers = {
             "VK_LAYER_KHRONOS_validation"};
     std::vector<const char *> instanceExtensions = {};
@@ -117,25 +108,8 @@ private:
     std::vector<vk::Image> swapChainImages;
     std::vector<vk::ImageView> swapChainImageViews;
 
-    vk::Format depthFormat;
-    vk::FormatProperties depthFormatProperties;
-    vk::Image depthImage;
-    vk::PhysicalDeviceMemoryProperties depthImageMemoryProperties;
-    vk::DeviceMemory depthImageMemory;
-    vk::ImageView depthImageView;
-
-    vk::Image colorImage;
-    vk::DeviceMemory colorImageMemory;
-    vk::ImageView colorImageView;
-
     std::vector<vk::Semaphore> imageAcquiredSemaphores;
     std::vector<vk::Semaphore> renderFinishedSemaphores;
-    uint32_t swapchainImageIndex = 0;
-    vk::RenderPass renderPass;
-    std::vector<vk::ClearValue> clearValues;
-    vk::RenderPassBeginInfo renderPassBeginInfo;
-
-    std::vector<vk::Framebuffer> framebuffers;
 
     std::vector<vk::Fence> taskFinishedFences;
 };

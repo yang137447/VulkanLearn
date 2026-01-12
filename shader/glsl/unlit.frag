@@ -1,6 +1,6 @@
 #version 450
 
-layout(binding = 4) uniform sampler2D albedoMap;
+layout(set = 0, binding = 4) uniform sampler2D albedoMap;
 
 layout(location = 0) in vec3 fragColor;
 layout(location = 1) in vec2 fragTexCoord;

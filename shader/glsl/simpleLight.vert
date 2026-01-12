@@ -4,7 +4,7 @@
 #include "common/lighting.glsl"
 #include "common/function.glsl"
 
-layout(binding = 2) uniform UBOMIParamters{
+layout(set = 0, binding = 2) uniform UBOMIParamters{
     vec4 tintColor;
 } uboMIP;
 

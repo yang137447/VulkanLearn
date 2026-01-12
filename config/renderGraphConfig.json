@@ -1,0 +1,53 @@
+{
+    "resources":[
+        {
+            "name": "swapChain",
+            "format": "R8G8B8A8_SRGB",
+            "widthScale": 1.0,
+            "heightScale": 1.0,
+            "usage": ["colorAttachment", "present"]
+        },
+        {
+            "name": "offscreenColor",
+            "format": "R8G8B8A8_SRGB",
+            "widthScale": 1.0,
+            "heightScale": 1.0,
+            "usage": ["colorAttachment", "sampled"]
+        },
+        {
+            "name": "sceneDepth",
+            "format": "D32_SFLOAT",
+            "widthScale": 1.0,
+            "heightScale": 1.0,
+            "usage": ["depthStencilAttachment", "sampled"]
+        }
+    ],
+    "passes":[
+        {
+            "name": "geometry",
+            "input": [],
+            "output":[
+                {
+                    "resource": "offscreenColor"
+                },
+                {
+                    "resource": "sceneDepth"
+                }
+            ]
+        },
+        {
+            "name": "postProcess",
+            "bIsPostProcess": true,
+            "input": [
+                {
+                    "resource": "offscreenColor"
+                }
+            ],
+            "output":[
+                {
+                    "resource": "swapChain"
+                }
+            ]
+        }
+    ]
+}

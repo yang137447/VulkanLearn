@@ -14,6 +14,7 @@
 #include "sceneObject.h"
 #include "renderPipline.h"
 #include "shaderReflect.h"
+#include "renderGraph.h"
 
 SceneLoader::SceneLoader()
 {
@@ -29,6 +30,9 @@ void SceneLoader::LoadScence(const std::string& filename)
     }
     std::ifstream file(filename);
     nlohmann::json scnJson = nlohmann::json::parse(file);
+
+    // 加载后处理材质
+    LoadPostProcessMaterial();
 
     // 加载场景中的物体
     for (const auto& obj : scnJson["objects"])
@@ -74,6 +78,7 @@ void SceneLoader::LoadMeshObject(const nlohmann::basic_json<>& node)
     file >> meshObjectJson;
 
     auto& instance = VulkanManager::GetInstance();
+    auto& renderGraph = RenderGraph::GetInstance();
 
     // 加载模型
     std::string modelDataPath = meshObjectJson["modelDataPath"];
@@ -111,9 +116,9 @@ void SceneLoader::LoadMeshObject(const nlohmann::basic_json<>& node)
         material = std::make_shared<Material>(
             &instance.GetDevice(), 
             &instance.GetGpuMemoryProperties(),
-            &instance.GetRenderPass(),
+            &renderGraph.GetRenderpasses()["geometry"].renderPass,
             shaderName,
-            instance.GetSampleCount());
+            CommonFunction::GetMsaaSampleCount());
     }
 
     // 加载材质参数
@@ -339,4 +344,33 @@ void SceneLoader::LoadEnvironmentObject(const nlohmann::basic_json<>& node)
 {
     Eigen::Vector3f ambient = JsonParser::ParseValue<Eigen::Vector3f>(node["ambient"]);
     this->ambient = ambient;
+}
+
+void SceneLoader::LoadPostProcessMaterial()
+{
+    VulkanManager& instance = VulkanManager::GetInstance();
+    RenderGraph& renderGraph = RenderGraph::GetInstance();
+
+    auto& renderGraphJson = CommonFunction::InitRenderGraphJson();
+    for(auto& passJson : renderGraphJson["passes"])
+    {
+        if(!passJson.value("bIsPostProcess", false))
+        {
+            continue;
+        }
+
+        std::string shaderName = passJson["name"];
+        // 如果当前 shaderName 对应的材质尚未加载，则新建并缓存
+        if(materials.find(shaderName) == materials.end())
+        {
+            std::shared_ptr<Material> material = std::make_shared<Material>(
+                &instance.GetDevice(), 
+                &instance.GetGpuMemoryProperties(),
+                &renderGraph.GetRenderpasses()[shaderName].renderPass,
+                shaderName,
+                CommonFunction::GetMsaaSampleCount());
+
+            materials[shaderName] = std::move(material);
+        }
+    }
 }

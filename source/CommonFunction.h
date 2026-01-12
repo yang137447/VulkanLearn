@@ -96,6 +96,34 @@ namespace JsonParser
 
 namespace CommonFunction
 {
+
+    inline std::string GetConfigFolderPath()
+    {
+        static std::string configFolderPath;
+        if( !configFolderPath.empty() )
+        {
+            return configFolderPath;
+        }
+
+        // 获取当前文件所在目录
+        std::string projectPath = std::filesystem::current_path().string();
+        // 进入config目录, 确定config.json文件是否存在
+        // TODO: 这里现在兼容的debug和debug不调试，未来需要兼容release模式
+        configFolderPath = projectPath + "/config";
+        if( !std::filesystem::exists(configFolderPath) )
+        {
+            //向前找两级目录，适配debug不调试
+            projectPath = std::filesystem::path(projectPath).parent_path().parent_path().string();
+            configFolderPath = projectPath + "/config";
+            if( !std::filesystem::exists(configFolderPath) )
+            {
+                throw std::runtime_error("Failed to find config.json file");
+            }
+        }
+
+        return configFolderPath;
+    }
+
     inline nlohmann::basic_json<>& InitConfigJson()
     {
         static std::optional<nlohmann::json> configJson;
@@ -104,26 +132,30 @@ namespace CommonFunction
             return configJson.value();
         }
 
-        // 获取当前文件所在目录
-        std::string projectPath = std::filesystem::current_path().string();
-        // 进入config目录, 确定config.json文件是否存在
-        // TODO: 这里现在兼容的debug和debug不调试，未来需要兼容release模式
-        std::string configfilePath = projectPath + "/config/config.json";
-        if( !std::filesystem::exists(configfilePath) )
-        {
-            //向前找两级目录，适配debug不调试
-            projectPath = std::filesystem::path(projectPath).parent_path().parent_path().string();
-            configfilePath = projectPath + "/config/config.json";
-            if( !std::filesystem::exists(configfilePath) )
-            {
-                throw std::runtime_error("Failed to find config.json file");
-            }
-        }
+        // 获取configFolderPath
+        std::string configFolderPath = GetConfigFolderPath();
         // 读取config.json文件
-        std::ifstream configFile(configfilePath);
+        std::ifstream configFile(configFolderPath + "/config.json");
         configJson = nlohmann::json();
         configFile >> configJson.value();
         return configJson.value();
+    }
+
+    inline nlohmann::basic_json<>& InitRenderGraphJson()
+    {
+        static std::optional<nlohmann::json> renderGraphJson;
+        if( renderGraphJson.has_value() )
+        {
+            return renderGraphJson.value();
+        }
+
+        // 获取configFolderPath
+        std::string configFolderPath = GetConfigFolderPath();
+        // 读取renderGraph.json文件
+        std::ifstream renderGraphFile(configFolderPath + "/renderGraphConfig.json");
+        renderGraphJson = nlohmann::json();
+        renderGraphFile >> renderGraphJson.value();
+        return renderGraphJson.value();
     }
 
     inline std::string GetInitScene()
@@ -143,6 +175,39 @@ namespace CommonFunction
         const nlohmann::json& configJson = InitConfigJson();
         windowSize = JsonParser::ParseVector2(configJson["windowSize"]);
         return windowSize.value();
+    }
+
+    inline vk::SampleCountFlagBits GetMsaaSampleCount()
+    {
+        static std::optional<vk::SampleCountFlagBits> msaa;
+        if( msaa.has_value() )
+        {
+            return msaa.value();
+        }
+        const nlohmann::json& configJson = InitConfigJson();
+        uint32_t msaaSampleCount = configJson["msaa"];
+        switch(msaaSampleCount)
+        {
+            case 1:
+                msaa = vk::SampleCountFlagBits::e1;
+                break;
+            case 2:
+                msaa = vk::SampleCountFlagBits::e2;
+                break;
+            case 4:
+                msaa = vk::SampleCountFlagBits::e4;
+                break;
+            case 8:
+                msaa = vk::SampleCountFlagBits::e8;
+                break;
+            case 16:
+                msaa = vk::SampleCountFlagBits::e16;
+                break;
+            default:
+                msaa = vk::SampleCountFlagBits::e1;
+                break;
+        }
+        return msaa.value();
     }
 
     inline std::string GetProjectPath()
@@ -386,9 +451,7 @@ namespace CommonFunction
 
     inline std::pair<vk::Image, vk::DeviceMemory> CreateDepthImage(vk::Device& device, vk::PhysicalDevice& physicalDevice, uint32_t width, uint32_t height, vk::SampleCountFlagBits samples, vk::Format& format, vk::ImageTiling& tiling, vk::ImageUsageFlags& usage, vk::PhysicalDeviceMemoryProperties& physicalDeviceMemoryProperties, vk::MemoryPropertyFlags& memoryPropertyFlags)
     {
-        vk::Format depthFormat = FindDepthFormat(physicalDevice);
-
-        return CreateImage(device, width, height, 1, samples, depthFormat, tiling, usage, physicalDeviceMemoryProperties, memoryPropertyFlags);
+        return CreateImage(device, width, height, 1, samples, format, tiling, usage, physicalDeviceMemoryProperties, memoryPropertyFlags);
     }
 
     inline vk::ImageView CreateImageView(vk::Device& device, vk::Image& image, uint32_t mipLevels, vk::Format& format, vk::ImageAspectFlagBits aspectMask = vk::ImageAspectFlagBits::eColor)
@@ -410,9 +473,7 @@ namespace CommonFunction
 
     inline vk::ImageView CreateDepthImageView(vk::Device& device, vk::PhysicalDevice& physicalDevice, vk::Image& image, vk::Format& format)
     {
-        vk::Format depthFormat = FindDepthFormat(physicalDevice);
-
-        return CreateImageView(device, image, 1, depthFormat, vk::ImageAspectFlagBits::eDepth);
+        return CreateImageView(device, image, 1, format, vk::ImageAspectFlagBits::eDepth);
     }
 
     inline vk::Sampler CreateSampler(vk::Device& device, vk::PhysicalDevice& physicalDevice)

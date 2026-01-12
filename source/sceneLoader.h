@@ -45,6 +45,7 @@ private:
     void LoadSpotLightObject(const nlohmann::basic_json<>& node);
     void LoadCameraObject(const nlohmann::basic_json<>& node);
     void LoadEnvironmentObject(const nlohmann::basic_json<>& node);
+    void LoadPostProcessMaterial();
 
     //场景数据
     std::unordered_map<std::string, std::shared_ptr<RenderableObject>> objects; //模型相对路径和模型对象

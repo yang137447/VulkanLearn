@@ -2,7 +2,6 @@
 #include "SDL3/SDL_vulkan.h"
 #include <iostream>
 #include <vector>
-#include <chrono>
 #include "shaderCompiler.h"
 #include "vulkanManager.h"
 #include "sceneLoader.h"
@@ -11,6 +10,7 @@
 #include "fpsTool.h"
 #include "controller.h"
 #include "sceneObject.h"
+#include "renderGraph.h"
 
 int main(int argc, char **argv)
 {
@@ -60,6 +60,9 @@ int main(int argc, char **argv)
     //初始化VulkanManager
     VulkanManager& vulkanManager = VulkanManager::GetInstance();
     vulkanManager.Init(extensionsVec, window);
+    //加载渲染图
+    RenderGraph& renderGraph = RenderGraph::GetInstance();
+    renderGraph.LoadRenderGraph(CommonFunction::InitRenderGraphJson());
     //加载场景
     SceneLoader& sceneLoader = SceneLoader::GetInstance();
     sceneLoader.LoadScence(CommonFunction::Path(CommonFunction::GetInitScene()));

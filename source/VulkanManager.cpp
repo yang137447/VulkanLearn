@@ -30,22 +30,14 @@ void VulkanManager::Init(std::vector<const char *> &extensions, SDL_Window *wind
     CreateVkDevice();
     CreateVkSwapChain();
     CreateVkCommandBuffer();
-    CreateColorResource();
-    CreateVkDepthBuffer();
-    CreateVkRenderPass();
-    CreateVkFrameBuffers();
-    CreateVkFence();
+    CreateSyncObjects();
     InitInstance(); //初始化实例
 }
 
 VulkanManager::~VulkanManager()
 {
     device.waitIdle(); //等待设备空闲
-    DestroyVkFence();
-    DestroyVkFrameBuffers();
-    DestroyVkRenderPass();
-    DestroyVkDepthBuffer();
-    DestroyColorResource();
+    DestroySyncObjects();
     DestroyVkCommandBuffer();
     DestroyVkSwapChain();
     DestroyVkDevice();
@@ -61,11 +53,11 @@ void VulkanManager::ReCreateSwapChain(int newWidth, int newHeight)
     // width = newWidth;
     // height = newHeight;
 
-    DestroyVkFrameBuffers();
-    DestroyVkSwapChain();
+    // DestroyVkFrameBuffers();
+    // DestroyVkSwapChain();
 
-    CreateVkSwapChain();
-    CreateVkFrameBuffers();
+    // CreateVkSwapChain();
+    // CreateVkFrameBuffers();
 }
 
 void VulkanManager::CreateVkInstance()
@@ -119,6 +111,8 @@ void VulkanManager::EnumeratePhysicalDevices()
     gpuMemoryProperties = physicalDevice.getMemoryProperties();
     sampleCount = CommonFunction::GetMaxUsableSampleCount(physicalDevice);
     std::cout << "Max Sample Count: " << (uint32_t)sampleCount << std::endl;
+    uint32_t maxColorAttachmentsCount = physicalDevice.getProperties().limits.maxColorAttachments;
+    std::cout << "Max Color Attachments Count: " << maxColorAttachmentsCount << std::endl;
 }
 
 void VulkanManager::CreateVkSurface()
@@ -433,192 +427,6 @@ void VulkanManager::DestroyVkCommandBuffer()
     device.freeCommandBuffers(commandPool, commandBuffers.size(), commandBuffers.data());
     device.destroyCommandPool(commandPool);
     std::cout << "Destroy VkCommandBuffer" << std::endl;
-}
-
-void VulkanManager::CreateColorResource()
-{
-    vk::ImageUsageFlags usage = vk::ImageUsageFlagBits::eTransientAttachment | vk::ImageUsageFlagBits::eColorAttachment;
-    vk::MemoryPropertyFlags memoryPropertyFlags = vk::MemoryPropertyFlagBits::eDeviceLocal;
-    vk::ImageTiling tiling = vk::ImageTiling::eOptimal;
-    std::tie(colorImage, colorImageMemory) = CommonFunction::CreateImage(
-        device, 
-        CommonFunction::GetWindowSize().x(), CommonFunction::GetWindowSize().y(), 1, sampleCount, 
-        surfaceFormat.format, tiling, 
-        usage,
-        gpuMemoryProperties,
-        memoryPropertyFlags);
-
-    colorImageView = CommonFunction::CreateImageView(
-        device, 
-        colorImage,
-        1, 
-        surfaceFormat.format, 
-        vk::ImageAspectFlagBits::eColor
-        );
-    std::cout << "Create Color Resource" << std::endl;
-}
-void VulkanManager::DestroyColorResource()
-{
-    device.destroyImageView(colorImageView);
-    device.freeMemory(colorImageMemory);
-    device.destroyImage(colorImage);
-    std::cout << "Destroy Color Resource" << std::endl;
-}
-
-void VulkanManager::CreateVkDepthBuffer()
-{
-    depthFormat = CommonFunction::FindDepthFormat(physicalDevices[GPUIndex]);
-    assert(depthFormat != vk::Format::eUndefined);
-    vk::ImageTiling tiling = vk::ImageTiling::eOptimal;
-    vk::ImageUsageFlags usage = vk::ImageUsageFlagBits::eDepthStencilAttachment;
-    vk::MemoryPropertyFlags memoryPropertyFlags = vk::MemoryPropertyFlagBits::eDeviceLocal;
-    std::tie(depthImage, depthImageMemory) = CommonFunction::CreateDepthImage(device, physicalDevices[GPUIndex], swapChainExtent.width, swapChainExtent.height, sampleCount, depthFormat, tiling, usage, gpuMemoryProperties, memoryPropertyFlags);
-    CommonFunction::TransitionImageLayout(depthImage, 1, depthFormat, device, commandPool, graphicQueue, vk::ImageLayout::eUndefined, vk::ImageLayout::eDepthStencilAttachmentOptimal);
-    depthImageView = CommonFunction::CreateDepthImageView(device, physicalDevices[GPUIndex], depthImage, depthFormat);
-    std::cout << "Create VkDepthBuffer" << std::endl;
-    std::cout << "  Depth format: " << vk::to_string(depthFormat) << std::endl;
-}
-
-void VulkanManager::DestroyVkDepthBuffer()
-{
-    device.destroyImageView(depthImageView);
-    device.freeMemory(depthImageMemory);
-    device.destroyImage(depthImage);
-    std::cout << "Destroy VkDepthBuffer" << std::endl;
-}
-
-void VulkanManager::CreateVkRenderPass()
-{
-    //创建渲染通道
-    std::vector<vk::AttachmentDescription> attachmentDescriptions;
-    vk::AttachmentDescription colorAttachmentDescription;
-    colorAttachmentDescription
-        .setFormat(surfaceFormat.format)
-        .setSamples(sampleCount)
-        .setLoadOp(vk::AttachmentLoadOp::eClear)
-        .setStoreOp(vk::AttachmentStoreOp::eStore)
-        .setStencilLoadOp(vk::AttachmentLoadOp::eDontCare) 
-        .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
-        .setInitialLayout(vk::ImageLayout::eUndefined)
-        .setFinalLayout(vk::ImageLayout::ePresentSrcKHR)
-        .setFlags(vk::AttachmentDescriptionFlags(0));
-    vk::AttachmentDescription depthAttachmentDescription;
-    attachmentDescriptions.push_back(colorAttachmentDescription);
-    depthAttachmentDescription
-        .setFormat(depthFormat)
-        .setSamples(sampleCount)
-        .setLoadOp(vk::AttachmentLoadOp::eClear)
-        .setStoreOp(vk::AttachmentStoreOp::eDontCare)
-        .setStencilLoadOp(vk::AttachmentLoadOp::eDontCare)
-        .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
-        .setInitialLayout(vk::ImageLayout::eUndefined)
-        .setFinalLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal)
-        .setFlags(vk::AttachmentDescriptionFlags(0));
-    attachmentDescriptions.push_back(depthAttachmentDescription);
-    vk::AttachmentDescription colorAttachmentResolveDescription;
-    colorAttachmentResolveDescription
-        .setFormat(surfaceFormat.format)
-        .setSamples(vk::SampleCountFlagBits::e1)
-        .setLoadOp(vk::AttachmentLoadOp::eDontCare)
-        .setStoreOp(vk::AttachmentStoreOp::eStore)
-        .setStencilLoadOp(vk::AttachmentLoadOp::eDontCare)
-        .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
-        .setInitialLayout(vk::ImageLayout::eUndefined)
-        .setFinalLayout(vk::ImageLayout::ePresentSrcKHR);
-    attachmentDescriptions.push_back(colorAttachmentResolveDescription);
-
-    vk::AttachmentReference colorAttachmentReference;
-    colorAttachmentReference
-        .setAttachment(0)
-        .setLayout(vk::ImageLayout::eColorAttachmentOptimal);
-    vk::AttachmentReference depthAttachmentReference;
-    depthAttachmentReference
-        .setAttachment(1)
-        .setLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal);
-    vk::AttachmentReference colorAttachmentResolveReference;
-    colorAttachmentResolveReference
-        .setAttachment(2)
-        .setLayout(vk::ImageLayout::eColorAttachmentOptimal);
-
-    vk::SubpassDescription subpassDescription;
-    subpassDescription
-        .setPipelineBindPoint(vk::PipelineBindPoint::eGraphics)
-        .setColorAttachments(colorAttachmentReference)
-        .setPDepthStencilAttachment(&depthAttachmentReference)
-        .setResolveAttachments(colorAttachmentResolveReference);
-
-    vk::SubpassDependency subpassDependency;
-    subpassDependency
-        .setSrcSubpass(0)
-        .setDstSubpass(0)
-        .setSrcStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eLateFragmentTests)
-        .setSrcAccessMask(vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eDepthStencilAttachmentWrite)
-        .setDstStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests)
-        .setDstAccessMask(vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eDepthStencilAttachmentWrite)
-        .setDependencyFlags(vk::DependencyFlagBits::eByRegion);
-
-    vk::RenderPassCreateInfo renderPassCreateInfo;
-    renderPassCreateInfo
-        .setAttachments(attachmentDescriptions)
-        .setSubpasses(subpassDescription)
-        .setDependencies(subpassDependency);
-
-    renderPass = device.createRenderPass(renderPassCreateInfo);
-    assert(renderPass);
-    std::cout << "Create VkRenderPass" << std::endl;
-
-    // 创建清除值
-    clearValues.resize(2);
-    clearValues[0]
-        .setColor(vk::ClearColorValue(std::array<float, 4>{0.2f, 0.2f, 0.2f, 0.2f}));
-    clearValues[1]
-        .setDepthStencil(vk::ClearDepthStencilValue(1.0f, 0));
-
-    // 创建渲染通道开始信息
-    renderPassBeginInfo
-        .setRenderPass(renderPass)
-        .setRenderArea(vk::Rect2D(vk::Offset2D(0, 0), swapChainExtent))
-        .setClearValues(clearValues);
-}
-
-void VulkanManager::DestroyVkRenderPass()
-{
-    device.destroyRenderPass(renderPass);
-    std::cout << "Destroy VkRenderPass" << std::endl;
-}
-
-void VulkanManager::CreateVkFrameBuffers()
-{
-    std::vector<vk::ImageView> attachments;
-    attachments.resize(3);
-    attachments[0] = colorImageView;
-    attachments[1] = depthImageView;
-    attachments[2] = swapChainImageViews[0]; //占位，后面会被替换
-    vk::FramebufferCreateInfo framebufferCreateInfo;
-    framebufferCreateInfo
-        .setRenderPass(renderPass)
-        .setAttachments(attachments)
-        .setWidth(swapChainExtent.width)
-        .setHeight(swapChainExtent.height)
-        .setLayers(1);
-    framebuffers.resize(swapChainImageCount);
-    for (uint32_t i = 0; i < swapChainImageCount; i++)
-    {
-        attachments[2] = swapChainImageViews[i];
-        framebuffers[i] = device.createFramebuffer(framebufferCreateInfo);
-        assert(framebuffers[i]);
-    }
-    std::cout << "Create VkFrameBuffers" << std::endl;
-    std::cout << "  Framebuffer count: " << swapChainImageCount << std::endl;
-}
-
-void VulkanManager::DestroyVkFrameBuffers()
-{
-    for (uint32_t i = 0; i < swapChainImageCount; i++)
-    {
-        device.destroyFramebuffer(framebuffers[i]);
-    }
-    std::cout << "Destroy VkFrameBuffers" << std::endl;
 }
 
 void VulkanManager::CreateSyncObjects()

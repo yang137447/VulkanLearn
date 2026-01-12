@@ -11,6 +11,7 @@
 #include "renderableObject.h"
 #include "sceneLoader.h"
 #include "lightManager.h"
+#include "renderGraph.h"
 
 RenderSystem::RenderSystem()
 {
@@ -24,6 +25,7 @@ void RenderSystem::InitRenderObject()
 {
     auto& scene = SceneLoader::GetInstance();
     auto& lightManager = LightManager::GetInstance();
+    auto& renderGraph = RenderGraph::GetInstance();
     // 设置相机
     auto& camera = scene.GetCamera();
     camera->SetCamera(scene.GetCamera()->GetPosition(), Eigen::Vector3f(0, 0, 0), Eigen::Vector3f(0, 1, 0));
@@ -48,6 +50,7 @@ void RenderSystem::InitRenderObject()
     //初始化渲染需要的资源
     this->RenderInitialize();
     lightManager.RenderInitialize();
+    renderGraph.RenderInitialize();
     for (const auto& [shaderName, materialInstanceObjects] : hierarchyObjects)
     {
         for (const auto& [materialInstanceName, objects] : materialInstanceObjects)
@@ -64,8 +67,6 @@ void RenderSystem::InitRenderObject()
             }
         }
     }
-
-    //onWorkFenceForSwapChainImage.resize(MAX_FRAMES_IN_FLIGHT, -1);
 }
 
 void RenderSystem::Render()
@@ -74,10 +75,9 @@ void RenderSystem::Render()
     static vk::Device& device = instance.GetDevice();
     static vk::SwapchainKHR& swapChain = instance.GetSwapChain();
     static uint32_t swapchainImageCount = instance.GetSwapChainImageCount();
-    static vk::RenderPassBeginInfo& renderPassBeginInfo = instance.GetRenderPassBeginInfo();
-    static std::vector<vk::Framebuffer>& framebuffers = instance.GetFrameBuffers();
     static vk::Queue& graphicQueue = instance.GetGraphicQueue();
     static LightManager& lightManager = LightManager::GetInstance();
+    static RenderGraph& renderGraph = RenderGraph::GetInstance();
 
     uint32_t cpuSyncIndex = currentFrame % MAX_FRAMES_IN_FLIGHT;
     uint32_t gpuSyncIndex = currentFrame % swapchainImageCount;
@@ -110,54 +110,122 @@ void RenderSystem::Render()
     beginInfo.setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
     commandBuffer.begin(beginInfo);
 
-    // 开始渲染通道
-    renderPassBeginInfo.setFramebuffer(framebuffers[swapChainImageIndex]);
-    commandBuffer.beginRenderPass(renderPassBeginInfo, vk::SubpassContents::eInline);
+    for (const auto& [renderPassName, renderPass] : renderGraph.GetRenderpasses())
+    {
+        if (renderPassName == "geometry")
+        {
+            // 开始渲染通道
+            vk::RenderPassBeginInfo renderPassBeginInfo;
+            renderPassBeginInfo.setRenderPass(renderPass.renderPass);
+            renderPassBeginInfo.setFramebuffer(renderPass.framebuffers[0]);
+            renderPassBeginInfo.setRenderArea(vk::Rect2D(vk::Offset2D(0, 0), vk::Extent2D(CommonFunction::GetWindowSize().x(), CommonFunction::GetWindowSize().y())));
+            renderPassBeginInfo.setClearValues(renderPass.clearValues);
+            commandBuffer.beginRenderPass(renderPassBeginInfo, vk::SubpassContents::eInline);
 
-    this->UpdateUBOGlobal();
-    lightManager.UpdateLightBuffer(swapChainImageIndex);
-    // 渲染每种材质
-    for (const auto& [shaderName, shaderObjects] : hierarchyObjects) {
-        // 绑定Pipeline
-        const RenderPipline& renderPipline = *SceneLoader::GetInstance().GetMaterials().at(shaderName)->GetRenderPipline();
-        commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, renderPipline.GetGraphicsPipeline());
-        
-        // 渲染每个材质实例
-        for (auto& [materialInstanceName, objects] : shaderObjects) {
-            const std::weak_ptr<MaterialInstance> materialInstance = SceneLoader::GetInstance().GetMaterialInstances().at(materialInstanceName);
-            if(materialInstance.expired())
-            {
-                std::cout << "materialInstanceName: " << materialInstanceName << " is expired" << std::endl;
-                continue;
-            }
-            else
-            {
-                this->UpdateUBOMaterialInstance(materialInstance.lock());
-            }
+            this->UpdateUBOGlobal();
+            lightManager.UpdateLightBuffer(swapChainImageIndex);
+            // 渲染每种材质
+            for (const auto& [shaderName, shaderObjects] : hierarchyObjects) {
+                // 绑定Pipeline
+                const RenderPipline& renderPipline = *SceneLoader::GetInstance().GetMaterials().at(shaderName)->GetRenderPipline();
+                commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, renderPipline.GetGraphicsPipeline());
+                
+                // 渲染每个材质实例
+                for (auto& [materialInstanceName, objects] : shaderObjects) {
+                    const std::weak_ptr<MaterialInstance> materialInstance = SceneLoader::GetInstance().GetMaterialInstances().at(materialInstanceName);
+                    if(materialInstance.expired())
+                    {
+                        std::cout << "materialInstanceName: " << materialInstanceName << " is expired" << std::endl;
+                        continue;
+                    }
+                    else
+                    {
+                        this->UpdateUBOMaterialInstance(materialInstance.lock());
+                    }
 
-            // 渲染使用该材质实例的所有对象
-            for (auto& object : objects) {
-                if(object.expired())
-                {
-                   std::cout << "object is expired" << std::endl;
-                   continue;
+                    // 渲染使用该材质实例的所有对象
+                    for (auto& object : objects) {
+                        if(object.expired())
+                        {
+                        std::cout << "object is expired" << std::endl;
+                        continue;
+                        }
+                        auto objectPtr = object.lock();
+                        // 绑定DescriptorSet
+                        commandBuffer.bindDescriptorSets(
+                            vk::PipelineBindPoint::eGraphics,
+                            renderPipline.GetPipelineLayout(),
+                            0,
+                            object.lock()->GetDescriptorSets()[swapChainImageIndex],
+                            nullptr);
+                        this->UpdateUBOModel(objectPtr);
+                        objectPtr->GetRenderableObject()->Draw(commandBuffer);
+                    }
                 }
-                auto objectPtr = object.lock();
-                // 绑定DescriptorSet
-                commandBuffer.bindDescriptorSets(
-                    vk::PipelineBindPoint::eGraphics,
-                    renderPipline.GetPipelineLayout(),
-                    0,
-                    object.lock()->GetDescriptorSets()[swapChainImageIndex],
-                    nullptr);
-                this->UpdateUBOModel(objectPtr);
-                objectPtr->GetRenderableObject()->Draw(commandBuffer);
+            }
+        }
+        else // 后处理都在这
+        {
+            // 获取输入资源
+            for (const auto& input : renderPass.inputResources)
+            {
+                const RenderResource& inputResource = renderGraph.GetColorResourcesResolve()[input];
+            }
+
+            // 开始渲染通道
+            vk::RenderPassBeginInfo renderPassBeginInfo;
+            renderPassBeginInfo.setRenderPass(renderPass.renderPass);
+            renderPassBeginInfo.setFramebuffer(renderPass.framebuffers[swapChainImageIndex]);
+            renderPassBeginInfo.setRenderArea(vk::Rect2D(vk::Offset2D(0, 0), vk::Extent2D(CommonFunction::GetWindowSize().x(), CommonFunction::GetWindowSize().y())));
+            renderPassBeginInfo.setClearValues(renderPass.clearValues);
+            commandBuffer.beginRenderPass(renderPassBeginInfo, vk::SubpassContents::eInline);
+            
+            const RenderPipline& renderPipline = *SceneLoader::GetInstance().GetMaterials().at(renderPassName)->GetRenderPipline();
+            commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, renderPipline.GetGraphicsPipeline());
+
+            // 绑定描述符集
+            commandBuffer.bindDescriptorSets(
+                vk::PipelineBindPoint::eGraphics,
+                renderPipline.GetPipelineLayout(),
+                0,
+                renderPass.inputDescriptorSets[0],
+                nullptr);
+            
+            renderPass.Draw(commandBuffer);
+        }
+        commandBuffer.endRenderPass();
+
+        // 添加Barrier, 确保pass之间的资源可见性
+        for(const auto& resourceName : renderPass.outputResources)
+        {
+            if (resourceName == "swapChain" || resourceName == "sceneDepth") continue;
+            
+            // 查找资源
+            auto& resolveMap = renderGraph.GetColorResourcesResolve();
+            if (resolveMap.find(resourceName) != resolveMap.end()) 
+            {
+                auto& resource = resolveMap.at(resourceName);
+                vk::ImageMemoryBarrier imageBarrier;
+                imageBarrier
+                    .setSrcAccessMask(vk::AccessFlagBits::eColorAttachmentWrite)
+                    .setDstAccessMask(vk::AccessFlagBits::eShaderRead)
+                    .setOldLayout(vk::ImageLayout::eColorAttachmentOptimal)
+                    .setNewLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+                    .setImage(resource.image)
+                    .setSubresourceRange(vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
+                
+                commandBuffer.pipelineBarrier(
+                    vk::PipelineStageFlagBits::eColorAttachmentOutput,
+                    vk::PipelineStageFlagBits::eFragmentShader,
+                    vk::DependencyFlagBits::eByRegion,
+                    0, nullptr,
+                    0, nullptr,
+                    1, &imageBarrier);
             }
         }
     }
 
     // 结束渲染通道和Command Buffer记录
-    commandBuffer.endRenderPass();
     commandBuffer.end();
 
     // 提交Command Buffer

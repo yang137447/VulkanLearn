@@ -14,7 +14,8 @@ public:
                   vk::PhysicalDeviceMemoryProperties *gpuMemoryProperties,
                   vk::RenderPass *renderPass,
                   const std::string& shaderName,
-                  vk::SampleCountFlagBits sampleCount);
+                  vk::SampleCountFlagBits sampleCount,
+                  bool bIsPostProcess = false);
     ~RenderPipline();
 
     inline const vk::PipelineLayout& GetPipelineLayout() const { return pipelineLayout; }
@@ -40,6 +41,7 @@ private:
     vk::RenderPass* renderPass;
     vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties;
     vk::SampleCountFlagBits sampleCount;
+    bool bIsPostProcess;
 
     std::string shaderName;
 
