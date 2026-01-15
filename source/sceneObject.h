@@ -85,23 +85,29 @@ private:
 class Camera: public SceneNode {
 public:
   Camera();
+  void SetSize(float size);
   void SetHFOV(float fov);
   void SetClip(float near, float far);
   inline float GetHFOV() const { return hFov; }
   inline float GetClipNear() const { return clipNear; }
   inline float GetClipFar() const { return clipFar;}
+  void EnableOrthographic(bool enable);
   void SetCamera(Eigen::Vector3f cameraPosition, Eigen::Vector3f lookAtPosition, Eigen::Vector3f up);
   void SetCamera(Eigen::Vector3f cameraPosition, Eigen::Vector3f cameraRotation);
   void SetProjection(float fov, float aspect, float near, float far);
+  void SetOrthographic(float size, float aspect, float near, float far);
   Eigen::Matrix4f& GetModelMatrix();
   Eigen::Matrix4f& GetViewMatrix();
   Eigen::Matrix4f& GetProjectionMatrix();
   void updateViewMatrix();
 
 private:
+  float size;
   float hFov;
   float clipNear;
   float clipFar;
+
+  bool isOrthographic;
 
   Eigen::Matrix4f modelMatrix;
   Eigen::Matrix4f viewMatrix;

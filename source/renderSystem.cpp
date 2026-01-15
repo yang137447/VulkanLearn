@@ -34,6 +34,12 @@ void RenderSystem::InitRenderObject()
         (float)CommonFunction::GetWindowSize().x()/(float)CommonFunction::GetWindowSize().y(), 
         scene.GetCamera()->GetClipNear(), 
         scene.GetCamera()->GetClipFar());
+    // camera->EnableOrthographic(true);
+    // camera->SetOrthographic(
+    //     10.0f, 
+    //     (float)CommonFunction::GetWindowSize().x()/(float)CommonFunction::GetWindowSize().y(), 
+    //     scene.GetCamera()->GetClipNear(), 
+    //     scene.GetCamera()->GetClipFar());
     
     // 将场景物体按shader，materialInstance分组，填充进hierarchyObjects
     for(const auto& [objectName, sceneObject] : scene.GetSceneObjects())

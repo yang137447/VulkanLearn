@@ -121,6 +121,8 @@ void DirectinalLight::SetIntensity(float intensity)
 // PointLight 的 SetColor 和 SetIntensity 方法已内联在头文件中
 Camera::Camera()
 {
+    isOrthographic = false;
+
     SetCamera(Eigen::Vector3f(0.0f, 2.0f, 2.0f), Eigen::Vector3f(0.0f, 0.0f, 0.0f), Eigen::Vector3f(0.0f, 1.0f, 0.0f));
 
     SetProjection(
@@ -130,10 +132,14 @@ Camera::Camera()
 
     //Vulkan设备空间XYZ三个轴范围分别是 -1.0～+1.0、+1.0～-1.0、0.0～+1.0
     ndcMatrix << 
-        -1.0f, 0.0f, 0.0f, 0.0f,
-        0.0f, 1.0f, 0.0f, 0.0f,
-        0.0f, 0.0f, 0.5f, -0.5f,
-        0.0f, 0.0f, 0.0f, -1.0f;
+        1.0f, 0.0f, 0.0f, 0.0f,
+        0.0f, -1.0f, 0.0f, 0.0f,
+        0.0f, 0.0f, -0.5f, 0.5f,
+        0.0f, 0.0f, 0.0f, 1.0f;
+}
+void Camera::SetSize(float size)
+{
+    this->size = size;
 }
 void Camera::SetHFOV(float fov)
 {
@@ -144,6 +150,10 @@ void Camera::SetClip(float near, float far)
 {
     this->clipNear = near;
     this->clipFar = far;
+}
+void Camera::EnableOrthographic(bool enable)
+{
+    isOrthographic = enable;
 }
 void Camera::SetCamera(Eigen::Vector3f cameraPosition, Eigen::Vector3f lookAtPosition, Eigen::Vector3f up)
 {
@@ -198,12 +208,26 @@ void Camera::SetProjection(float fov, float aspect, float near, float far)
     float fovRad = fov * M_PI / 180.0f; 
     float k = -1.0f / std::tan(fovRad / 2.0f);
     projectionMatrix <<
-        k, 0.0f, 0.0f, 0.0f,
-        0.0f, aspect * k , 0.0f, 0.0f,
-        0.0f, 0.0f, (n + f)/(n-f), -2.0f * n * f / (n - f),
-        0.0f, 0.0f, 1.0f, 0.0f;
+        -k, 0.0f, 0.0f, 0.0f,
+        0.0f, -aspect * k , 0.0f, 0.0f,
+        0.0f, 0.0f, -(n + f)/(n-f), 2.0f * n * f / (n - f),
+        0.0f, 0.0f, -1.0f, 0.0f;
 
     SetHFOV(fov);
+    SetClip(near, far);
+}
+
+void Camera::SetOrthographic(float size, float aspect, float near, float far)
+{
+    float n = -1.0f * near;
+    float f = -1.0f * far;
+    projectionMatrix <<
+        2.0f/size, 0.0f, 0.0f, 0.0f,
+        0.0f, 2.0f*aspect/size , 0.0f, 0.0f,
+        0.0f, 0.0f, 2.0f/(n-f), -1.0f*(n + f)/(n - f),
+        0.0f, 0.0f, 0.0f, 1.0f;
+
+    SetSize(size);
     SetClip(near, far);
 }
 
