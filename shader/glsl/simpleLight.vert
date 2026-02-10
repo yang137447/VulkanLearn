@@ -4,7 +4,7 @@
 #include "common/lighting.glsl"
 #include "common/function.glsl"
 
-layout(set = 0, binding = 2) uniform UBOMIParamters{
+layout(set = 1, binding = 0) uniform UBOMIParamters{
     vec4 tintColor;
 } uboMIP;
 
@@ -29,7 +29,6 @@ void main()
     vec3 cameraPosition = uboVP.cameraPosition;
         //MIP
     vec4 tintColor = uboMIP.tintColor;
-
     gl_Position = projectionMatrix * viewMatrix * modelMatrix * vec4(inPosition, 1.0);
     v2fColor = tintColor.rgb;
     v2fTexCoord = inTexCoord;

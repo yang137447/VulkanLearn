@@ -123,7 +123,7 @@ public:
     ~SceneObject();
     inline std::shared_ptr<RenderableObject> GetRenderableObject() const { return renderableObject; }
     inline std::shared_ptr<MaterialInstance> GetMaterialInstance() const { return materialInstance; }
-    inline const std::vector<vk::DescriptorSet>& GetDescriptorSets() const { return descriptorSets; }
+    inline const std::vector<vk::DescriptorSet>& GetDescriptorSets(uint32_t swapChainImageIndex) const { return descriptorSets[swapChainImageIndex]; }
     inline std::vector<void*>& GetUboModelMapped() { return uboModel.buffersMapped; }
     //相关的场景和材质实例需要先行就绪
     void RenderInitialize();
@@ -143,7 +143,7 @@ private:
     Buffer uboModel;
 
     vk::DescriptorPool descriptorPool;
-    std::vector<vk::DescriptorSet> descriptorSets;
+    std::vector<std::vector<vk::DescriptorSet>> descriptorSets;
     std::vector<std::vector<vk::WriteDescriptorSet>> writeDescriptorSets;
 
     std::shared_ptr<RenderableObject> renderableObject;

@@ -19,30 +19,30 @@ void SceneNode::SetPosition(Eigen::Vector3f& position)
 
 void SceneNode::SetRotation(Eigen::Vector3f& rotation)
 {
-    quaternion = CommonFunction::rotationToQuat(rotation);
-    this->rotation = CommonFunction::quatToRotation(quaternion);
+    quaternion = CommonFunction::RotationToQuat(rotation);
+    this->rotation = CommonFunction::QuatToRotation(quaternion);
 }
 
 void SceneNode::SetRotation(Eigen::Quaternionf& quaternion)
 {
     this->quaternion = quaternion;
-    this->rotation = CommonFunction::quatToRotation(quaternion);
+    this->rotation = CommonFunction::QuatToRotation(quaternion);
 }
 
 void SceneNode::SetRotation(Eigen::Quaternionf quaternion)
 {
     this->quaternion = quaternion;
-    this->rotation = CommonFunction::quatToRotation(quaternion);
-    std::cout << "rotation: " << rotation.x() << " " << rotation.y() << " " << rotation.z() << std::endl;
+    this->rotation = CommonFunction::QuatToRotation(quaternion);
+    //std::cout << "rotation: " << rotation.x() << " " << rotation.y() << " " << rotation.z() << std::endl;
 }
 
 void SceneNode::SetDeltaRotation(Eigen::Vector3f& deltaRotation)
 {
-    Eigen::Quaternionf deltaRotationQuaternion = CommonFunction::rotationToQuat(deltaRotation);
+    Eigen::Quaternionf deltaRotationQuaternion = CommonFunction::RotationToQuat(deltaRotation);
     quaternion = quaternion * deltaRotationQuaternion;
     quaternion = CommonFunction::RemoveRoll(quaternion);
     quaternion.normalize();
-    this->rotation = CommonFunction::quatToRotation(quaternion);
+    this->rotation = CommonFunction::QuatToRotation(quaternion);
 }
 
 void SceneNode::SetScale(Eigen::Vector3f& scale)
@@ -78,7 +78,7 @@ void SceneNode::SetTransform(Eigen::Vector3f& position, Eigen::Vector3f& rotatio
         0.0f, 0.0f, scale.z(), 0.0f,
         0.0f, 0.0f, 0.0f, 1.0f;
 
-    Eigen::Matrix4f rotationMatrix = CommonFunction::quatToMatrix(quaternion);
+    Eigen::Matrix4f rotationMatrix = CommonFunction::QuatToMatrix(quaternion);
     Eigen::Matrix4f translationMatrix;
     translationMatrix <<
         1.0f, 0.0f, 0.0f, position.x(),
@@ -98,7 +98,7 @@ void SceneNode::UpdateModelMatrix()
         0.0f, 0.0f, scale.z(), 0.0f,
         0.0f, 0.0f, 0.0f, 1.0f;
 
-    Eigen::Matrix4f rotationMatrix = CommonFunction::quatToMatrix(quaternion);
+    Eigen::Matrix4f rotationMatrix = CommonFunction::QuatToMatrix(quaternion);
     Eigen::Matrix4f translationMatrix;
     translationMatrix <<
         1.0f, 0.0f, 0.0f, position.x(),
@@ -186,7 +186,7 @@ void Camera::SetCamera(Eigen::Vector3f cameraPosition, Eigen::Vector3f cameraRot
     Eigen::Vector3f position = cameraPosition;
 
     //对于旋转处理，遵循 Yaw Pitch Roll 的顺序,即 先绕Y轴旋转，再绕X轴旋转，最后绕Z轴旋转
-    Eigen::Matrix4f rotationMatrix = CommonFunction::rotationToMatrix(cameraRotation);
+    Eigen::Matrix4f rotationMatrix = CommonFunction::RotationToMatrix(cameraRotation);
 
     Eigen::Matrix4f translationMatrix;
     translationMatrix <<
@@ -246,7 +246,7 @@ Eigen::Matrix4f& Camera::GetProjectionMatrix()
 void Camera::updateViewMatrix()
 {
     //对于旋转处理，遵循 Yaw Pitch Roll 的顺序,即 先绕Y轴旋转，再绕X轴旋转，最后绕Z轴旋转
-    Eigen::Matrix4f rotationMatrix = CommonFunction::quatToMatrix(quaternion);
+    Eigen::Matrix4f rotationMatrix = CommonFunction::QuatToMatrix(quaternion);
 
     Eigen::Matrix4f translationMatrix;
     translationMatrix <<
@@ -348,36 +348,62 @@ void SceneObject::CreateDescriptorSets()
     //     .setDescriptorCount(MAX_FRAMES_IN_FLIGHT);
     for(const auto& binding : shaderBindings)
     {
+        if(binding.set == PassSetIndex)
+        {
+            continue;
+        }
         vk::DescriptorPoolSize poolSize;
         poolSize
             .setType(binding.type)
             .setDescriptorCount(swapChainImageCount);
         descriptorPoolSizes.push_back(poolSize);
     }
+    const auto& pipelineSetLayouts = baseMaterial->GetRenderPipline()->GetDescriptorSetLayouts();
+    
+    // 只分配前3个Set (0:Global, 1:Material, 2:Object)，Set 3 (Pass) 由 RenderPass 管理
+    std::vector<vk::DescriptorSetLayout> allocateLayouts;
+    for(size_t i = 0; i < pipelineSetLayouts.size(); ++i)
+    {
+        if(i != PassSetIndex)
+        {
+            allocateLayouts.push_back(pipelineSetLayouts[i]);
+        }
+    }
+    uint32_t SetLayoutCount = allocateLayouts.size();
+
     vk::DescriptorPoolCreateInfo descriptorPoolCreateInfo;
     descriptorPoolCreateInfo
-        .setMaxSets(swapChainImageCount)
+        .setMaxSets(swapChainImageCount * SetLayoutCount)
         .setFlags(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet)
         .setPoolSizes(descriptorPoolSizes);
 
     vk::Result result = vulkanManager.GetDevice().createDescriptorPool(&descriptorPoolCreateInfo, nullptr, &descriptorPool);
     assert(result == vk::Result::eSuccess);
 
-    std::vector<vk::DescriptorSetLayout> setLayouts(swapChainImageCount, baseMaterial->GetRenderPipline()->GetDescriptorSetLayout());
     vk::DescriptorSetAllocateInfo descriptorSetAllocateInfo;
     descriptorSetAllocateInfo
         .setDescriptorPool(descriptorPool)
-        .setSetLayouts(setLayouts);
+        .setSetLayouts(allocateLayouts);
     
     descriptorSets.resize(swapChainImageCount);
-    result = vulkanManager.GetDevice().allocateDescriptorSets(&descriptorSetAllocateInfo, descriptorSets.data());
-    assert(result == vk::Result::eSuccess);
+    for(uint32_t i = 0; i < swapChainImageCount; i++)
+    {
+        descriptorSets[i].resize(SetLayoutCount);
+        result = vulkanManager.GetDevice().allocateDescriptorSets(&descriptorSetAllocateInfo, descriptorSets[i].data());
+        assert(result == vk::Result::eSuccess);
+    }
 }
 
 void SceneObject::DestroyDescriptorSets()
 {
     auto& device = VulkanManager::GetInstance().GetDevice();
-    device.freeDescriptorSets(descriptorPool, static_cast<uint32_t>(descriptorSets.size()), descriptorSets.data());
+    for(auto& set: descriptorSets)
+    {
+        for(auto& descriptorSet: set)
+        {
+            device.freeDescriptorSets(descriptorPool, 1, &descriptorSet);
+        }
+    }
     device.destroyDescriptorPool(descriptorPool, nullptr);
 }
 
@@ -404,59 +430,50 @@ void SceneObject::UpdateDescriptorSet()
     // 设置descriptor set信息
     writeDescriptorSets.resize(swapChainImageCount);
     auto baseMaterial = materialInstance->GetBaseMaterial().lock();
-    auto& shaderBindings = baseMaterial->GetRenderPipline()->GetShaderBindings();
-    //TODO: 这里应有shaderbinding,来决定各个descriptor是否存在，并进行更新
-    bool hasLightBuffer = false;
-    bool hasTexture = false;
-    for(const auto& binding : shaderBindings)
-    {
-        if(binding.binding == 1)
-        {
-            hasLightBuffer = true;
-        }
-        if(binding.binding == 4)
-        {
-            hasTexture = true;
-        }
-    }
+    const auto& shaderBindings = baseMaterial->GetRenderPipline()->GetShaderBindings();
     auto& renderSystem = RenderSystem::GetInstance();
     auto& lightManager = LightManager::GetInstance();
-    for(int i = 0; i < swapChainImageCount; i++)
+    for(uint32_t i = 0; i < swapChainImageCount; i++)
     {
-        writeDescriptorSets[i].push_back(
-            vk::WriteDescriptorSet()
-                .setDstSet(descriptorSets[i])
-                .setDstBinding(0)
-                .setDescriptorType(vk::DescriptorType::eUniformBuffer)
-                .setBufferInfo(renderSystem.GetUBOGlobalBufferInfo()[i]));
-        if(hasLightBuffer)
+        for(const auto& binding : shaderBindings)
         {
-            writeDescriptorSets[i].push_back(vk::WriteDescriptorSet()
-                    .setDstSet(descriptorSets[i])
-                    .setDstBinding(1)
-                    .setDescriptorType(vk::DescriptorType::eStorageBuffer)
-                    .setBufferInfo(lightManager.GetLightBufferInfo()[i]));
-        }
-        writeDescriptorSets[i].push_back(
-            vk::WriteDescriptorSet()
-                .setDstSet(descriptorSets[i])
-                .setDstBinding(2)
-                .setDescriptorType(vk::DescriptorType::eUniformBuffer)
-                .setBufferInfo(materialInstance->GetUboMaterialInstanceInfo()[i]));
-        writeDescriptorSets[i].push_back(
-            vk::WriteDescriptorSet()
-                .setDstSet(descriptorSets[i])
-                .setDstBinding(3)
-                .setDescriptorType(vk::DescriptorType::eUniformBuffer)
-                .setBufferInfo(uboModel.bufferInfos[i]));
-        if(hasTexture)
-        {
-            writeDescriptorSets[i].push_back(
-                vk::WriteDescriptorSet()
-                    .setDstSet(descriptorSets[i])
-                    .setDstBinding(4)
-                    .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
-                    .setImageInfo(materialInstance->GetUboMaterialInstanceImageInfo()));
+            if(binding.set == PassSetIndex)
+            {
+                continue;
+            }
+
+            vk::WriteDescriptorSet write;
+            write
+                .setDstSet(descriptorSets[i][binding.set])
+                .setDstBinding(binding.binding)
+                .setDescriptorCount(1)
+                .setDescriptorType(binding.type);
+
+            if (binding.type == vk::DescriptorType::eUniformBuffer)
+            {
+                if (binding.set == GlobalSetIndex)
+                {
+                    write.setBufferInfo(renderSystem.GetUBOGlobalBufferInfo()[i]);
+                }
+                else if (binding.set == MaterialSetIndex)
+                {
+                    write.setBufferInfo(materialInstance->GetUboMaterialInstanceInfo()[i]);
+                }
+                else if (binding.set == ObjectSetIndex)
+                {
+                    write.setBufferInfo(uboModel.bufferInfos[i]);
+                }
+            }
+            else if (binding.type == vk::DescriptorType::eStorageBuffer)
+            {
+                write.setBufferInfo(lightManager.GetLightBufferInfo()[i]);
+            }
+            else if (binding.type == vk::DescriptorType::eCombinedImageSampler)
+            {
+                write.setImageInfo(materialInstance->GetUboMaterialInstanceImageInfo());
+            }
+
+            writeDescriptorSets[i].push_back(write);
         }
         
         VulkanManager::GetInstance().GetDevice().updateDescriptorSets(writeDescriptorSets[i], nullptr);

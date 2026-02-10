@@ -30,23 +30,23 @@ RenderableObject::~RenderableObject()
     DestroyVertexBuffer();
 }
 
-void RenderableObject::Draw(vk::CommandBuffer &commandBuffer)
+void RenderableObject::Draw(vk::CommandBuffer &commandBuffer, uint32_t width, uint32_t height)
 {
     //commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
     vk::Viewport viewport;
     viewport
         .setX(0.0f)
         .setY(0.0f)
-        .setWidth(static_cast<float>(CommonFunction::GetWindowSize().x()))
-        .setHeight(static_cast<float>(CommonFunction::GetWindowSize().y()))
+        .setWidth(static_cast<float>(width))
+        .setHeight(static_cast<float>(height))
         .setMinDepth(0.0f)
         .setMaxDepth(1.0f);
     vk::Rect2D scissor;
     scissor
         .setOffset({ 0, 0 })
         .setExtent({ 
-            static_cast<uint32_t>(CommonFunction::GetWindowSize().x()), 
-            static_cast<uint32_t>(CommonFunction::GetWindowSize().y()) });
+            static_cast<uint32_t>(width), 
+            static_cast<uint32_t>(height) });
     commandBuffer.setViewport(0, 1, &viewport);
     commandBuffer.setScissor(0, 1, &scissor);
     //commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout, 0, descriptorSet, nullptr);

@@ -7,7 +7,7 @@ public:
     RenderableObject(std::vector<struct Vertex> vertices, std::vector<uint32_t> indices, vk::Device* device, vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties, vk::CommandPool* commandPool, vk::CommandBuffer* commandBuffer, vk::Queue* GraphicsQueue);
     ~RenderableObject();
 
-    void Draw(vk::CommandBuffer& commandBuffer);
+    void Draw(vk::CommandBuffer& commandBuffer, uint32_t width, uint32_t height);
 
 private:
 

@@ -7,7 +7,7 @@
 #include "commonFunction.h"
 #include "shaderReflect.h"
 
-RenderPipline::RenderPipline(vk::Device *device, vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties, vk::RenderPass* renderPass, const std::string& shaderName, vk::SampleCountFlagBits sampleCount, bool bIsPostProcess)
+RenderPipline::RenderPipline(vk::Device *device, vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties, vk::RenderPass* renderPass, const std::string& shaderName, vk::SampleCountFlagBits sampleCount, bool bIsPostProcess, bool bIsShadowPass)
 {
     this->device = device;
     this->renderPass = renderPass;
@@ -15,8 +15,10 @@ RenderPipline::RenderPipline(vk::Device *device, vk::PhysicalDeviceMemoryPropert
     this->shaderName = shaderName;
     this->sampleCount = sampleCount;
     this->bIsPostProcess = bIsPostProcess;
+    this->bIsShadowPass = bIsShadowPass;
 
     CreateShader();
+    CreateDescriptorSetLayouts();
     CreatePipelineLayout();
     initVertexAttribute();
     CreateGraphicsPipeline();
@@ -25,6 +27,7 @@ RenderPipline::RenderPipline(vk::Device *device, vk::PhysicalDeviceMemoryPropert
 RenderPipline::~RenderPipline()
 {
     DestroyGraphicsPipeline();
+    DestroyDescriptorSetLayouts();
     DestroyShader();
     DestroyPipelineLayout();
 }
@@ -33,38 +36,23 @@ RenderPipline::RenderPipline()
 {
 }
 
-void RenderPipline::CreatePipelineLayout()
+void RenderPipline::CreateDescriptorSetLayouts()
 {
-    // std::vector<vk::DescriptorSetLayoutBinding> descriptorSetLayoutBindings;
-    // descriptorSetLayoutBindings.emplace_back(
-    //     vk::DescriptorSetLayoutBinding()
-    //     .setBinding(0)
-    //     .setDescriptorType(vk::DescriptorType::eUniformBuffer)
-    //     .setDescriptorCount(1)
-    //     .setStageFlags(vk::ShaderStageFlagBits::eVertex)
-    //     .setPImmutableSamplers(nullptr));
-    // descriptorSetLayoutBindings.emplace_back(
-    //     vk::DescriptorSetLayoutBinding()
-    //     .setBinding(1)
-    //     .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
-    //     .setDescriptorCount(1)
-    //     .setStageFlags(vk::ShaderStageFlagBits::eFragment)
-    //     .setPImmutableSamplers(nullptr));
-    std::vector<vk::DescriptorSetLayoutBinding> descriptorSetLayoutBindings;
-    if(bIsPostProcess)
+    //全局集 (Set 0)：相机、灯光等统一数据。
+    //材质集 (Set 1)：纹理、采样器。
+    //对象集 (Set 2)：模型矩阵、实例数据。
+    //特效/后处理集 (Set 3)：阴影贴图、G-buffer、post-process 输入输出
+    descriptorSetLayouts.resize(MAX_DESCRIPTOR_SETS);
+    for(uint32_t i : {GlobalSetIndex, MaterialSetIndex, ObjectSetIndex, PassSetIndex})
     {
-        vk::DescriptorSetLayoutBinding layoutBinding;
-        layoutBinding
-            .setBinding(0)
-            .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
-            .setDescriptorCount(1)
-            .setStageFlags(vk::ShaderStageFlagBits::eFragment)
-            .setPImmutableSamplers(nullptr);
-        descriptorSetLayoutBindings.push_back(layoutBinding);
-    }
-    else {
+        std::vector<vk::DescriptorSetLayoutBinding> descriptorSetLayoutBindings;
+
         for(const auto& binding : shaderBindings)
         {
+            if(binding.set != i)
+            {
+                continue;
+            }
             vk::DescriptorSetLayoutBinding layoutBinding;
             layoutBinding
                 .setBinding(binding.binding)
@@ -74,27 +62,37 @@ void RenderPipline::CreatePipelineLayout()
                 .setPImmutableSamplers(nullptr);
             descriptorSetLayoutBindings.push_back(layoutBinding);
         }
+
+        vk::DescriptorSetLayoutCreateInfo descriptorSetLayoutCreateInfo;
+        descriptorSetLayoutCreateInfo
+            .setBindings(descriptorSetLayoutBindings);
+
+        vk::Result result = device->createDescriptorSetLayout(&descriptorSetLayoutCreateInfo, nullptr, &descriptorSetLayouts[i]);
+        assert(result == vk::Result::eSuccess);
     }
+}
 
-    vk::DescriptorSetLayoutCreateInfo descriptorSetLayoutCreateInfo;
-    descriptorSetLayoutCreateInfo
-        .setBindings(descriptorSetLayoutBindings);
+void RenderPipline::DestroyDescriptorSetLayouts()
+{
+    for(auto& layout : descriptorSetLayouts)
+    {
+        device->destroyDescriptorSetLayout(layout, nullptr);
+    }
+}
 
-    vk::Result result = device->createDescriptorSetLayout(&descriptorSetLayoutCreateInfo, nullptr, &descriptorSetLayout);
-    assert(result == vk::Result::eSuccess);
-
+void RenderPipline::CreatePipelineLayout()
+{
     vk::PipelineLayoutCreateInfo pipelineLayoutCreateInfo;
     pipelineLayoutCreateInfo
-        .setSetLayouts(descriptorSetLayout);
+        .setSetLayouts(descriptorSetLayouts);
     
-    result = device->createPipelineLayout(&pipelineLayoutCreateInfo, nullptr, &pipelineLayout);
+    vk::Result result = device->createPipelineLayout(&pipelineLayoutCreateInfo, nullptr, &pipelineLayout);
     assert(result == vk::Result::eSuccess);
 }
 
 void RenderPipline::DestroyPipelineLayout()
 {
     device->destroyPipelineLayout(pipelineLayout, nullptr);
-    device->destroyDescriptorSetLayout(descriptorSetLayout, nullptr);
 }
 
 void RenderPipline::CreateShader()
@@ -268,6 +266,11 @@ void RenderPipline::CreateGraphicsPipeline()
         .setPSampleMask(nullptr)
         .setAlphaToCoverageEnable(false)
         .setAlphaToOneEnable(false);
+    if(bIsShadowPass)
+    {
+        pipelineMultisampleStateCreateInfo
+            .setRasterizationSamples(vk::SampleCountFlagBits::e1);
+    }
     
     vk::GraphicsPipelineCreateInfo graphicsPipelineCreateInfo;
     graphicsPipelineCreateInfo

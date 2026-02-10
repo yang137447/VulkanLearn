@@ -7,7 +7,7 @@ struct Light{
     vec4 coneAngleOuterInnerPadPad;
 };
 // 这里用统一参数 + 分段储存的方式
-layout(std430, binding = 1) readonly buffer UBOLight{
+layout(std430, set = 0, binding = 1) readonly buffer UBOLight{
     int directionalLightOffset;
     int directionalLightCount;
     int pointLightOffset;
@@ -17,6 +17,22 @@ layout(std430, binding = 1) readonly buffer UBOLight{
 
     Light lights[];
 } uboLight;
+
+// 绑定 0: 输入的ShadowMap
+layout (set = 3, binding = 0) uniform sampler2DShadow shadowMap;
+
+float CalculateShadow(mat4 lightViewProj, vec3 worldPos, float bias)
+{
+    vec4 lightViewProjPos = lightViewProj * vec4(worldPos, 1.0);
+    vec3 shadowNdc = lightViewProjPos.xyz / lightViewProjPos.w;
+    vec2 shadowUv = shadowNdc.xy * 0.5 + 0.5;
+    float shadow = 1.0;
+    if (shadowUv.x >= 0.0 && shadowUv.x <= 1.0 && shadowUv.y >= 0.0 && shadowUv.y <= 1.0 && shadowNdc.z >= 0.0 && shadowNdc.z <= 1.0)
+    {
+        shadow = texture(shadowMap, vec3(shadowUv, shadowNdc.z - bias));
+    }
+    return shadow;
+}
 
 vec3 fresnelSchlick(float cosTheta, vec3 F0)
 {

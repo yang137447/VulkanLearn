@@ -25,7 +25,7 @@ struct Renderpass
     void Draw(vk::CommandBuffer& commandBuffer) const;
 
     void CreateUniformBuffers();
-    void SetupDescriptors(const std::unordered_map<std::string, RenderResource>& colorResourcesResolve);
+    void SetupDescriptors(class RenderGraph& renderGraph);
     void CreatePassDescriptorSetLayout();
     void CreateDescriptorSets();
     void UpdateDescriptorSets();
@@ -34,6 +34,8 @@ struct Renderpass
     vk::RenderPass renderPass;
     std::vector<vk::ClearValue> clearValues;
     std::vector<vk::Framebuffer> framebuffers;
+    uint32_t width;
+    uint32_t height;
     // pass 输入输出资源
     std::vector<std::string> inputResources;
     std::vector<std::string> outputResources;
@@ -58,26 +60,27 @@ public:
     }
     ~RenderGraph();
     void LoadRenderGraph(const nlohmann::json& renderGraphJson);
-    std::map<std::string, Renderpass>& GetRenderpasses() { return renderpasses; }
+    std::vector<std::string>& GetRenderpassOrdered() { return renderpassOrdered; }
+    std::unordered_map<std::string, Renderpass>& GetRenderpasses() { return renderpasses; }
     std::unordered_map<std::string, RenderResource>& GetColorResourcesMsaa() { return colorResourcesMsaa; }
     std::unordered_map<std::string, RenderResource>& GetColorResourcesResolve() { return colorResourcesResolve; }
     RenderResource& GetDepthResourceMsaa() { return depthResourceMsaa; }
     RenderResource& GetDepthResourceResolve() { return depthResourceResolve; }
+    RenderResource& GetShadowMap() { return shadowMap; }
     // 渲染初始调用
     void RenderInitialize();
     
 private:
     RenderResource CreateRenderResource(const nlohmann::json& resourceNode, bool bIsMsaaSource = false);
-    RenderResource CreateVkDepthBuffer(const nlohmann::json& resourceNode, bool bIsMsaaSource = false);
     void DestroyRenderResource(RenderResource& resource);
     
     Renderpass CreateRenderpass(const nlohmann::json& passNode);
     void DestroyRenderpass(Renderpass& renderpass);
 
-    vk::RenderPass CreateVkRenderPass(std::vector<std::string>& outputResources);
+    vk::RenderPass CreateVkRenderPass(std::vector<std::string>& inputResources, std::vector<std::string>& outputResources, bool bIsShadowPass = false);
     void DestroyVkRenderPass(vk::RenderPass renderPass);
 
-    std::vector<vk::Framebuffer> CreateVkFrameBuffers(vk::RenderPass renderPass, std::vector<std::string>& outputResources);
+    std::vector<vk::Framebuffer> CreateVkFrameBuffers(Renderpass renderPass, std::vector<std::string>& inputResources, std::vector<std::string>& outputResources);
     void DestroyVkFrameBuffers(std::vector<vk::Framebuffer>& framebuffers);
 
     vk::Format GetFormat(const std::string& formatStr);
@@ -92,6 +95,8 @@ private:
     std::unordered_map<std::string, RenderResource> colorResourcesResolve;
     RenderResource depthResourceMsaa;
     RenderResource depthResourceResolve;
+    RenderResource shadowMap; // 阴影贴图，不需要msaa, shadow pass强制为1sample
 
-    std::map<std::string, Renderpass> renderpasses;
+    std::vector<std::string> renderpassOrdered;
+    std::unordered_map<std::string, Renderpass> renderpasses;
 };

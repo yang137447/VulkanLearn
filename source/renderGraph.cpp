@@ -8,16 +8,16 @@ void Renderpass::Draw(vk::CommandBuffer& commandBuffer) const
         viewport
             .setX(0.0f)
             .setY(0.0f)
-            .setWidth(static_cast<float>(CommonFunction::GetWindowSize().x()))
-            .setHeight(static_cast<float>(CommonFunction::GetWindowSize().y()))
+            .setWidth(static_cast<float>(width))
+            .setHeight(static_cast<float>(height))
             .setMinDepth(0.0f)
             .setMaxDepth(1.0f);
         vk::Rect2D scissor;
         scissor
             .setOffset({ 0, 0 })
             .setExtent({ 
-                static_cast<uint32_t>(CommonFunction::GetWindowSize().x()), 
-                static_cast<uint32_t>(CommonFunction::GetWindowSize().y()) });
+                static_cast<uint32_t>(width), 
+                static_cast<uint32_t>(height) });
         commandBuffer.setViewport(0, 1, &viewport);
         commandBuffer.setScissor(0, 1, &scissor);
         commandBuffer.draw(3, 1, 0,0);
@@ -27,17 +27,32 @@ void Renderpass::CreateUniformBuffers()
 {
     //对于pass,目前暂时没有uniform buffer
 }
-void Renderpass::SetupDescriptors(const std::unordered_map<std::string, RenderResource>& colorResourcesResolve)
+void Renderpass::SetupDescriptors(RenderGraph& renderGraph)
 {
     // 设置image信息,根据pass的输入资源创建
     for(auto& inputResource : inputResources)
     {
-        const RenderResource& resource = colorResourcesResolve.at(inputResource);
+        const RenderResource* resource = nullptr;
+        vk::ImageLayout imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+        if(inputResource == "depthMap")
+        {
+            resource = &renderGraph.GetDepthResourceResolve();
+        }
+        else if(inputResource == "shadowMap")
+        {
+            resource = &renderGraph.GetShadowMap();
+            imageLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
+        }
+        else
+        {
+            resource = &renderGraph.GetColorResourcesResolve().at(inputResource);
+        }
+
         vk::DescriptorImageInfo imageInfo = vk::DescriptorImageInfo();
         imageInfo
-            .setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
-            .setImageView(resource.imageView)
-            .setSampler(resource.sampler);
+            .setImageLayout(imageLayout)
+            .setImageView(resource->imageView)
+            .setSampler(resource->sampler);
         inputDescriptorImageInfos.push_back(imageInfo);
     }
 }
@@ -133,6 +148,7 @@ RenderGraph::~RenderGraph()
     }
     DestroyRenderResource(depthResourceMsaa);
     DestroyRenderResource(depthResourceResolve);
+    DestroyRenderResource(shadowMap);
     // 销毁renderpass
     for(auto& [name, renderpass] : renderpasses)
     {
@@ -150,7 +166,11 @@ void RenderGraph::LoadRenderGraph(const nlohmann::json& renderGraphJson)
         if (resourceNode["name"] == "sceneDepth")
         {
             // 创建深度缓冲区
-            depthResourceMsaa = CreateVkDepthBuffer(resourceNode, true);
+            depthResourceMsaa = CreateRenderResource(resourceNode, true);
+        }
+        else if (resourceNode["name"] == "shadowMap")
+        {
+            // 创建阴影贴图, 不需要msaa
         }
         else {
             RenderResource resource = CreateRenderResource(resourceNode, true);
@@ -161,11 +181,14 @@ void RenderGraph::LoadRenderGraph(const nlohmann::json& renderGraphJson)
         if (resourceNode["name"] == "swapChain")
         {
             // swapchain 的资源属于交换链，这里不再创建
-            continue;
         }
-        if (resourceNode["name"] == "sceneDepth")
+        else if (resourceNode["name"] == "sceneDepth")
         {
             depthResourceResolve = CreateRenderResource(resourceNode);
+        }
+        else if (resourceNode["name"] == "shadowMap")
+        {
+            shadowMap = CreateRenderResource(resourceNode);
         }
         else {
             RenderResource resourceResolve = CreateRenderResource(resourceNode);
@@ -176,6 +199,7 @@ void RenderGraph::LoadRenderGraph(const nlohmann::json& renderGraphJson)
     for (const auto& passNode : renderGraphJson["passes"])
     {
         std::string passName = passNode["name"];
+        renderpassOrdered.push_back(passName);
         Renderpass renderpass = CreateRenderpass(passNode);
         renderpasses[passName] = renderpass;
     }
@@ -186,7 +210,7 @@ void RenderGraph::RenderInitialize()
     for(auto& [passName, renderpass] : renderpasses)
     {
         renderpass.CreateUniformBuffers();
-        renderpass.SetupDescriptors(colorResourcesResolve);
+        renderpass.SetupDescriptors(*this);
         renderpass.CreatePassDescriptorSetLayout();
         renderpass.CreateDescriptorSets();
         renderpass.UpdateDescriptorSets();
@@ -197,6 +221,8 @@ RenderResource RenderGraph::CreateRenderResource(const nlohmann::json& resourceN
 {
     VulkanManager& vulkanManager = VulkanManager::GetInstance();
     vk::Device& device = vulkanManager.GetDevice();
+    vk::CommandPool& commandPool = vulkanManager.GetCommandPool();
+    vk::Queue& graphicQueue = vulkanManager.GetGraphicQueue();
     auto& physicalDevice = vulkanManager.GetPhysicalDevice();
     auto& gpuMemoryProperties = vulkanManager.GetGpuMemoryProperties();
 
@@ -204,72 +230,56 @@ RenderResource RenderGraph::CreateRenderResource(const nlohmann::json& resourceN
 
     resource.name = resourceNode["name"];
 
-    // TODO:这里的format应该与surfaceFormat.format一致
-    
-    if(resource.name == "sceneDepth")
-    {
-        resource.format = GetFormat("R8G8B8A8_SRGB");
-    }
-    else {
-        resource.format = GetFormat(resourceNode["format"]);
-    }
-    resource.width = CommonFunction::GetWindowSize().x();
-    resource.height = CommonFunction::GetWindowSize().y();
+    resource.format = GetFormat(resourceNode["format"]);
 
-    vk::ImageUsageFlags usage;
-    if(resource.name == "sceneDepth")
-    {
-        usage = vk::ImageUsageFlagBits::eColorAttachment|vk::ImageUsageFlagBits::eSampled;
-    }
-    else {
-        usage = GetImageUsage(resourceNode["usage"]);
-    }
+    bool bIsDepthFormat = CommonFunction::IsDepthFormat(resource.format);
+
+    resource.width = CommonFunction::ParserRenderResourceSize(resourceNode).x();
+    resource.height = CommonFunction::ParserRenderResourceSize(resourceNode).y();
+
+    vk::ImageUsageFlags usage = GetImageUsage(resourceNode["usage"]);
+
     vk::MemoryPropertyFlags memoryPropertyFlags = vk::MemoryPropertyFlagBits::eDeviceLocal;
     vk::ImageTiling tiling = vk::ImageTiling::eOptimal;
     std::tie(resource.image, resource.memory) = CommonFunction::CreateImage(
         device, resource.width, resource.height,
-        1, bIsMsaaSource ? CommonFunction::GetMsaaSampleCount() : vk::SampleCountFlagBits::e1,
+        1, 
+        // 这里根据是否是msaa源图，来确定是否需要msaa采样
+        bIsMsaaSource ? CommonFunction::GetMsaaSampleCount() : vk::SampleCountFlagBits::e1,
         resource.format, tiling, usage,
         gpuMemoryProperties, memoryPropertyFlags);
+    if(bIsDepthFormat)
+    {
+        CommonFunction::TransitionImageLayout(
+            resource.image, 
+            1, 
+            resource.format, 
+            device, 
+            commandPool, 
+            graphicQueue, 
+            vk::ImageLayout::eUndefined, 
+            vk::ImageLayout::eDepthStencilAttachmentOptimal);
+    }
+    vk::ImageAspectFlagBits aspect = vk::ImageAspectFlagBits::eColor;
+    if(bIsDepthFormat)
+    {
+        aspect = vk::ImageAspectFlagBits::eDepth;
+        if(CommonFunction::HasStencilComponent(resource.format))
+        {
+            // TODO:这里有问题，看后续怎么修复stencil
+            // aspect |= vk::ImageAspectFlagBits::eStencil;
+        }
+    }
     resource.imageView = CommonFunction::CreateImageView(
-        device, resource.image, 1, resource.format);
-    resource.sampler = CommonFunction::CreateSampler(device, physicalDevice);
+        device, 
+        resource.image, 
+        1, 
+        resource.format,
+        aspect);
+
+    resource.sampler = CommonFunction::CreateSampler(device, physicalDevice, bIsDepthFormat);
 
     return resource;
-}
-
-RenderResource RenderGraph::CreateVkDepthBuffer(const nlohmann::json& resourceNode, bool bIsMsaaSource)
-{
-    VulkanManager& vulkanManager = VulkanManager::GetInstance();
-    vk::Device& device = vulkanManager.GetDevice();
-    vk::PhysicalDevice& physicalDevice = vulkanManager.GetPhysicalDevice();
-    vk::CommandPool& commandPool = vulkanManager.GetCommandPool();
-    vk::Queue& graphicQueue = vulkanManager.GetGraphicQueue();
-    auto& gpuMemoryProperties = vulkanManager.GetGpuMemoryProperties();
-
-    RenderResource depthRenderResource;
-    depthRenderResource.format = CommonFunction::FindDepthFormat(physicalDevice);
-    assert(depthRenderResource.format  != vk::Format::eUndefined);
-    depthRenderResource.width = CommonFunction::GetWindowSize().x();
-    depthRenderResource.height = CommonFunction::GetWindowSize().y();
-
-    vk::ImageTiling tiling = vk::ImageTiling::eOptimal;
-    vk::ImageUsageFlags usage = vk::ImageUsageFlagBits::eDepthStencilAttachment;
-    vk::MemoryPropertyFlags memoryPropertyFlags = vk::MemoryPropertyFlagBits::eDeviceLocal;
-    std::tie(depthRenderResource.image, depthRenderResource.memory) = CommonFunction::CreateDepthImage(
-        device, physicalDevice,
-        depthRenderResource.width, depthRenderResource.height,
-        CommonFunction::GetMsaaSampleCount(), 
-        depthRenderResource.format, tiling, usage,
-        gpuMemoryProperties, memoryPropertyFlags);
-    CommonFunction::TransitionImageLayout(depthRenderResource.image, 1, depthRenderResource.format, device, commandPool, graphicQueue, vk::ImageLayout::eUndefined, vk::ImageLayout::eDepthStencilAttachmentOptimal);
-    depthRenderResource.imageView = CommonFunction::CreateDepthImageView(device, physicalDevice, depthRenderResource.image, depthRenderResource.format);
-    std::cout << "Create VkDepthBuffer" << std::endl;
-    std::cout << "  ->Depth format: " << vk::to_string(depthRenderResource.format) << std::endl;
-
-    depthRenderResource.name = resourceNode["name"];
-
-    return depthRenderResource;
 }
 
 void RenderGraph::DestroyRenderResource(RenderResource& resource)
@@ -287,17 +297,21 @@ Renderpass RenderGraph::CreateRenderpass(const nlohmann::json& passNode)
 {
     Renderpass renderpass;
     renderpass.name = passNode["name"];
+    bool bIsShadowPass = renderpass.name == "shadow";
 
     std::vector<std::string> inputResources = GetRenderpassInputResources(passNode["input"]);
     std::vector<std::string> outputResources = GetRenderpassOutputResources(passNode["output"]);
     renderpass.inputResources = inputResources;
     renderpass.outputResources = outputResources;
 
-    vk::RenderPass renderPass = CreateVkRenderPass(outputResources);
-    renderpass.renderPass = renderPass;
-
+    vk::RenderPass vkRenderPass = CreateVkRenderPass(inputResources, outputResources, bIsShadowPass);
+    renderpass.renderPass = vkRenderPass;
+    
+    renderpass.width = bIsShadowPass ? shadowMap.width : colorResourcesMsaa[outputResources[0]].width;
+    renderpass.height = bIsShadowPass ? shadowMap.height : colorResourcesMsaa[outputResources[0]].height;
+    
     renderpass.clearValues = GetClearValues(outputResources);
-    renderpass.framebuffers = CreateVkFrameBuffers(renderPass, outputResources);
+    renderpass.framebuffers = CreateVkFrameBuffers(renderpass, inputResources, outputResources);
     
     return renderpass;
 }
@@ -313,19 +327,19 @@ void RenderGraph::DestroyRenderpass(Renderpass& renderpass)
     device.destroyDescriptorPool(renderpass.descriptorPool);
 }
 
-vk::RenderPass RenderGraph::CreateVkRenderPass(std::vector<std::string>& outputResources)
+vk::RenderPass RenderGraph::CreateVkRenderPass(std::vector<std::string>& inputResources, std::vector<std::string>& outputResources, bool bIsShadowPass)
 {
     VulkanManager& vulkanManager = VulkanManager::GetInstance();
     vk::Device& device = vulkanManager.GetDevice();
     vk::SurfaceFormatKHR& surfaceFormat = vulkanManager.GetSurfaceFormat();
-    vk::SampleCountFlagBits sampleCount = CommonFunction::GetMsaaSampleCount();
+    vk::SampleCountFlagBits sampleCount = bIsShadowPass ? vk::SampleCountFlagBits::e1 : CommonFunction::GetMsaaSampleCount();
 
     //创建渲染通道
         // attachment，msaa附件、解析附件、深度附件
     std::vector<vk::AttachmentDescription> attachmentDescriptions;
     for (const auto& resourceName : outputResources)
     {
-        if (resourceName == "sceneDepth")
+        if (resourceName == "sceneDepth" || resourceName == "shadowMap")
         {
             continue;
         }
@@ -346,7 +360,7 @@ vk::RenderPass RenderGraph::CreateVkRenderPass(std::vector<std::string>& outputR
     }
     for (const auto& resourceName : outputResources)
     {
-        if (resourceName == "sceneDepth")
+        if (resourceName == "sceneDepth" || resourceName == "shadowMap")
         {
             continue;
         }
@@ -375,7 +389,7 @@ vk::RenderPass RenderGraph::CreateVkRenderPass(std::vector<std::string>& outputR
         .setFormat(depthResourceMsaa.format)
         .setSamples(sampleCount)
         .setLoadOp(vk::AttachmentLoadOp::eClear)
-        .setStoreOp(vk::AttachmentStoreOp::eDontCare)
+        .setStoreOp(vk::AttachmentStoreOp::eStore)
         .setStencilLoadOp(vk::AttachmentLoadOp::eDontCare) 
         .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
         .setInitialLayout(vk::ImageLayout::eUndefined)
@@ -386,7 +400,7 @@ vk::RenderPass RenderGraph::CreateVkRenderPass(std::vector<std::string>& outputR
     std::vector<vk::AttachmentReference> colorAttachmentReferences;
     for (auto& resourceName : outputResources)
     {
-        if (resourceName == "sceneDepth")
+        if (resourceName == "sceneDepth" || resourceName == "shadowMap")
         {
             continue;
         }
@@ -399,7 +413,7 @@ vk::RenderPass RenderGraph::CreateVkRenderPass(std::vector<std::string>& outputR
     std::vector<vk::AttachmentReference> resolveAttachmentReferences;
     for (auto& resourceName : outputResources)
     {
-        if (resourceName == "sceneDepth")
+        if (resourceName == "sceneDepth" || resourceName == "shadowMap")
         {
             continue;
         }
@@ -415,11 +429,16 @@ vk::RenderPass RenderGraph::CreateVkRenderPass(std::vector<std::string>& outputR
 
         // subpass
     vk::SubpassDescription subpassDescription;
-    subpassDescription
-        .setPipelineBindPoint(vk::PipelineBindPoint::eGraphics)
-        .setColorAttachments(colorAttachmentReferences)
-        .setPDepthStencilAttachment(&depthAttachmentReference)
-        .setResolveAttachments(resolveAttachmentReferences);
+    subpassDescription.setPipelineBindPoint(vk::PipelineBindPoint::eGraphics);
+    if(!colorAttachmentReferences.empty())
+    {
+        subpassDescription.setColorAttachments(colorAttachmentReferences);
+    }
+    if(!resolveAttachmentReferences.empty())
+    {
+        subpassDescription.setResolveAttachments(resolveAttachmentReferences);
+    }
+    subpassDescription.setPDepthStencilAttachment(&depthAttachmentReference);
 
         // subpass dependency
     vk::SubpassDependency subpassDependency;
@@ -453,11 +472,13 @@ void RenderGraph::DestroyVkRenderPass(vk::RenderPass renderPass)
     std::cout << "Destroy VkRenderPass" << std::endl;
 }
 
-std::vector<vk::Framebuffer> RenderGraph::CreateVkFrameBuffers(vk::RenderPass renderPass, std::vector<std::string>& outputResources)
+std::vector<vk::Framebuffer> RenderGraph::CreateVkFrameBuffers(Renderpass renderPass, std::vector<std::string>& inputResources, std::vector<std::string>& outputResources)
 {
     VulkanManager& vulkanManager = VulkanManager::GetInstance();
     vk::Device& device = vulkanManager.GetDevice();
     uint32_t swapChainImageCount = vulkanManager.GetSwapChainImageCount();
+
+    bool bHasShadowMap = std::find(outputResources.begin(), outputResources.end(), "shadowMap") != outputResources.end();
 
     // 确定framebuffer数量，含swapchain，数量需要等于swapChainImageCount，否者为1
     uint32_t framebufferSize = 1;
@@ -479,7 +500,7 @@ std::vector<vk::Framebuffer> RenderGraph::CreateVkFrameBuffers(vk::RenderPass re
         // msaa view
         for (const auto& outputResource : outputResources)
         {
-            if (outputResource == "sceneDepth")
+            if (outputResource == "sceneDepth" || outputResource == "shadowMap")
             {
                 continue;
             }
@@ -488,27 +509,36 @@ std::vector<vk::Framebuffer> RenderGraph::CreateVkFrameBuffers(vk::RenderPass re
         // resolve view
         for (const auto& outputResource : outputResources)
         {
-            if (outputResource == "swapChain")
-            {
-                attachments.push_back(vulkanManager.GetSwapChainImageViews()[i]);
-            }
-            else if (outputResource == "sceneDepth")
+            if (outputResource == "sceneDepth" || outputResource == "shadowMap")
             {
                 continue;
             }
+            else if (outputResource == "swapChain")
+            {
+                attachments.push_back(vulkanManager.GetSwapChainImageViews()[i]);
+            }
+
             else{
                 attachments.push_back(colorResourcesResolve[outputResource].imageView);
             }
         }
         // depth view
-        attachments.push_back(depthResourceMsaa.imageView);
+        if(bHasShadowMap)
+        {
+            // shadowPass中，深度输出到shadowMap, 后续pass中需要采样shadowMap
+            attachments.push_back(shadowMap.imageView);
+        }
+        else {
+            attachments.push_back(depthResourceMsaa.imageView);
+        }
 
         vk::FramebufferCreateInfo framebufferCreateInfo;
         framebufferCreateInfo
-            .setRenderPass(renderPass)
+            .setRenderPass(renderPass.renderPass)
             .setAttachments(attachments)
-            .setWidth(CommonFunction::GetWindowSize().x())
-            .setHeight(CommonFunction::GetWindowSize().y())
+            // 用输出资源的width和height，目前是为了适配shadowMap
+            .setWidth(renderPass.width)
+            .setHeight(renderPass.height)
             .setLayers(1);
 
         framebuffers[i] = device.createFramebuffer(framebufferCreateInfo);
@@ -566,6 +596,14 @@ vk::ImageUsageFlags RenderGraph::GetImageUsage(const std::vector<std::string>& u
         {
             imageUsage |= vk::ImageUsageFlagBits::eSampled;
         }
+        else if (usage == "transferSrc")
+        {
+            imageUsage |= vk::ImageUsageFlagBits::eTransferSrc;
+        }
+        else if (usage == "transferDst")
+        {
+            imageUsage |= vk::ImageUsageFlagBits::eTransferDst;
+        }
     }
     return imageUsage;
 }
@@ -596,7 +634,7 @@ std::vector<vk::ClearValue> RenderGraph::GetClearValues(std::vector<std::string>
     // MSAA
     for(const auto& resource : outputResources)
     {
-        if (resource == "sceneDepth") continue;
+        if (resource == "sceneDepth" || resource == "shadowMap") continue;
         vk::ClearValue clearValue;
         clearValue.setColor(vk::ClearColorValue(std::array<float, 4>{0.2f, 0.2f, 0.2f, 1.0f}));
         clearValues.push_back(clearValue);
@@ -604,11 +642,12 @@ std::vector<vk::ClearValue> RenderGraph::GetClearValues(std::vector<std::string>
     // Resolve
     for(const auto& resource: outputResources)
     {
-        if (resource == "sceneDepth") continue;
+        if (resource == "sceneDepth" || resource == "shadowMap") continue;
         vk::ClearValue clearValue;
         clearValue.setColor(vk::ClearColorValue(std::array<float, 4>{0.2f, 0.2f, 0.2f, 1.0f}));
         clearValues.push_back(clearValue);
     }
+    // Depth or shadowMap
     vk::ClearValue clearValue;
     clearValue.setDepthStencil(vk::ClearDepthStencilValue(1.0f, 0));
     clearValues.push_back(clearValue);

@@ -32,7 +32,7 @@ void SceneLoader::LoadScence(const std::string& filename)
     nlohmann::json scnJson = nlohmann::json::parse(file);
 
     // 加载后处理材质
-    LoadPostProcessMaterial();
+    LoadPassMaterial();
 
     // 加载场景中的物体
     for (const auto& obj : scnJson["objects"])
@@ -131,8 +131,8 @@ void SceneLoader::LoadMeshObject(const nlohmann::basic_json<>& node)
         // 检查贴图数量是否匹配
     uint32_t expectedTextureCount = 0;
     for(const auto& binding : shaderBindings)
-    {
-        if(binding.type == vk::DescriptorType::eCombinedImageSampler)
+    { 
+        if(binding.set == 1 && binding.type == vk::DescriptorType::eCombinedImageSampler)
         {
             expectedTextureCount++;
         }
@@ -141,11 +141,11 @@ void SceneLoader::LoadMeshObject(const nlohmann::basic_json<>& node)
     {
         throw std::runtime_error("Texture count mismatch in material instance: " + materialInstancePath);
     }
-        // 检查参数类型是否匹配set0,binding2
+        // 检查参数类型是否匹配set1,binding0
     bool validParemeters = false;
     for(const auto& binding : shaderBindings)
     {
-        if(binding.set != 0 || binding.binding != 2)
+        if(binding.set != 1 || binding.binding != 0)
         {
             continue;
         }
@@ -346,7 +346,7 @@ void SceneLoader::LoadEnvironmentObject(const nlohmann::basic_json<>& node)
     this->ambient = ambient;
 }
 
-void SceneLoader::LoadPostProcessMaterial()
+void SceneLoader::LoadPassMaterial()
 {
     VulkanManager& instance = VulkanManager::GetInstance();
     RenderGraph& renderGraph = RenderGraph::GetInstance();
@@ -354,12 +354,15 @@ void SceneLoader::LoadPostProcessMaterial()
     auto& renderGraphJson = CommonFunction::InitRenderGraphJson();
     for(auto& passJson : renderGraphJson["passes"])
     {
-        if(!passJson.value("bIsPostProcess", false))
+        bool bNeedCreateMaterial = passJson.value("needCreateMaterial", false);
+        if(!bNeedCreateMaterial)
         {
             continue;
         }
 
+        bool bIsPostProcess = passJson.value("bIsPostProcess", false);
         std::string shaderName = passJson["name"];
+        bool bIsShadowPassMaterial = shaderName == "shadow";
         // 如果当前 shaderName 对应的材质尚未加载，则新建并缓存
         if(materials.find(shaderName) == materials.end())
         {
@@ -368,7 +371,7 @@ void SceneLoader::LoadPostProcessMaterial()
                 &instance.GetGpuMemoryProperties(),
                 &renderGraph.GetRenderpasses()[shaderName].renderPass,
                 shaderName,
-                CommonFunction::GetMsaaSampleCount());
+                bIsShadowPassMaterial ? vk::SampleCountFlagBits::e1 : CommonFunction::GetMsaaSampleCount());
 
             materials[shaderName] = std::move(material);
         }

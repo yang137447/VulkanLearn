@@ -3,7 +3,7 @@
 #include "common/commonUbo.glsl"
 #include "common/lighting.glsl"
 
-layout(set = 0, binding = 4) uniform sampler2D albedoMap;
+layout(set = 1, binding = 1) uniform sampler2D albedoMap;
 
 layout(location = 0) in vec3 v2fPosition;
 layout(location = 1) in vec3 v2fNormal;
@@ -21,6 +21,8 @@ void main()
     vec3 V = normalize(uboVP.cameraPosition - v2fPosition);
     // 计算灯光光照
     vec3 lighting = CalculateLighting(normal, v2fPosition, uboVP.cameraPosition, albedo.rgb, roughness, metallic);
+    float shadow = CalculateShadow(uboVP.lightViewProj, v2fPosition, 0.002f);
+    lighting *= shadow;
     // 环境光
     vec3 environment = uboVP.ambient * albedo.rgb;
     outColor = vec4(lighting + environment, albedo.a);

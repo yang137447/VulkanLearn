@@ -2,6 +2,7 @@
 
 #include "vulkan/vulkan.hpp"
 #include <cstdint>
+#include <vector>
 #include <Eigen/Dense>
 #include <array>
 #include <filesystem>
@@ -12,6 +13,11 @@
 #include <optional>
 
 constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
+constexpr uint32_t MAX_DESCRIPTOR_SETS = 4;
+constexpr uint32_t GlobalSetIndex = 0;
+constexpr uint32_t MaterialSetIndex = 1;
+constexpr uint32_t ObjectSetIndex = 2;
+constexpr uint32_t PassSetIndex = 3;
 
 namespace JsonParser
 {
@@ -91,6 +97,82 @@ namespace JsonParser
         {
             return ParseVector4(Value);    }
         throw std::runtime_error("Unsupported parameter type or size");
+    }
+}
+
+namespace Algorithm
+{
+    /**
+     * @brief 计算点集合的凸包点
+     * 
+     * 使用 Andrew 算法计算凸包。
+     * 注意：点只使用 xy 分量，忽略 z 分量，退化成二维处理。
+     * 
+     * @param points 输入的点集合
+     * @return std::vector<uint32_t> 凸包点的索引集合
+     */
+    inline std::vector<uint32_t> ConvexHull(const std::vector<Eigen::Vector3f>& points)
+    {
+        // 辅助结构体：存储点及其原始索引
+        struct PointWithIndex {
+            Eigen::Vector3f point;
+            uint32_t index;
+        };
+
+        size_t n = points.size();
+        if (n <= 2) {
+            std::vector<uint32_t> result;
+            for(size_t i = 0; i < n; ++i) result.push_back(static_cast<uint32_t>(i));
+            return result;
+        }
+
+        std::vector<PointWithIndex> P(n);
+        for (size_t i = 0; i < n; ++i) {
+            P[i] = {points[i], static_cast<uint32_t>(i)};
+        }
+
+        // 按 x 坐标排序，x 相同按 y 坐标排序
+        std::sort(P.begin(), P.end(), [](const PointWithIndex& a, const PointWithIndex& b) {
+            return a.point.x() < b.point.x() || (a.point.x() == b.point.x() && a.point.y() < b.point.y());
+        });
+
+        // 叉积计算：判断三个点 (O, A, B) 的方向
+        // 返回值：> 0: 逆时针 (左转), < 0: 顺时针 (右转), = 0: 共线
+        auto CrossProduct = [](const Eigen::Vector3f& O, const Eigen::Vector3f& A, const Eigen::Vector3f& B) {
+            return (A.x() - O.x()) * (B.y() - O.y()) - (A.y() - O.y()) * (B.x() - O.x());
+        };
+
+        std::vector<PointWithIndex> hull;
+
+        // 构建下凸包
+        for (size_t i = 0; i < n; ++i) {
+            while (hull.size() >= 2 && CrossProduct(hull[hull.size() - 2].point, hull.back().point, P[i].point) <= 0) {
+                hull.pop_back();
+            }
+            hull.push_back(P[i]);
+        }
+
+        // 构建上凸包
+        size_t lowerHullSize = hull.size();
+        for (int i = static_cast<int>(n) - 2; i >= 0; --i) {
+            while (hull.size() > lowerHullSize && CrossProduct(hull[hull.size() - 2].point, hull.back().point, P[i].point) <= 0) {
+                hull.pop_back();
+            }
+            hull.push_back(P[i]);
+        }
+
+        // 移除重复的起点（Andrew 算法最后会回到起点）
+        if (hull.size() > 1) {
+            hull.pop_back();
+        }
+
+        // 提取索引
+        std::vector<uint32_t> result(hull.size());
+        for (size_t i = 0; i < hull.size(); ++i) {
+            result[i] = hull[i].index;
+        }
+
+        return result;
     }
 }
 
@@ -175,6 +257,26 @@ namespace CommonFunction
         const nlohmann::json& configJson = InitConfigJson();
         windowSize = JsonParser::ParseVector2(configJson["windowSize"]);
         return windowSize.value();
+    }
+
+    inline Eigen::Vector2f ParserRenderResourceSize(const nlohmann::json& resourceNode)
+    {
+        Eigen::Vector2f size;
+        if (resourceNode.contains("widthSize"))
+        {
+            size.x() = resourceNode["widthSize"].get<float>();
+        }
+        else{
+            size.x() = GetWindowSize().x() * resourceNode["widthScale"].get<float>();
+        }
+        if (resourceNode.contains("heightSize"))
+        {
+            size.y() = resourceNode["heightSize"].get<float>();
+        }
+        else{
+            size.y() = GetWindowSize().y() * resourceNode["heightScale"].get<float>();
+        }
+        return size;
     }
 
     inline vk::SampleCountFlagBits GetMsaaSampleCount()
@@ -274,7 +376,7 @@ namespace CommonFunction
     }
 
     //Rotation(degrees): x, y, z
-    inline Eigen::Quaternionf rotationToQuat(Eigen::Vector3f rotation)
+    inline Eigen::Quaternionf RotationToQuat(Eigen::Vector3f rotation)
     {
         rotation *= M_PI / 180.0f;
 
@@ -287,14 +389,14 @@ namespace CommonFunction
         return quaternion;
     }
 
-    inline Eigen::Vector3f quatToRotation(Eigen::Quaternionf quaternion)
+    inline Eigen::Vector3f QuatToRotation(Eigen::Quaternionf quaternion)
     {
         Eigen::Vector3f rotation = quaternion.matrix().eulerAngles(1, 0, 2) * 180.0f / M_PI;
         rotation = Eigen::Vector3f(rotation.y(), rotation.x(), rotation.z());
         return rotation;
     }
 
-    inline Eigen::Matrix4f quatToMatrix(Eigen::Quaternionf quaternion)
+    inline Eigen::Matrix4f QuatToMatrix(Eigen::Quaternionf quaternion)
     {
         Eigen::Matrix3f rotationMatrix = quaternion.toRotationMatrix();
         Eigen::Matrix4f matrix = Eigen::Matrix4f::Identity();
@@ -302,10 +404,10 @@ namespace CommonFunction
         return matrix;
     }
 
-    inline Eigen::Matrix4f rotationToMatrix(Eigen::Vector3f rotation)
+    inline Eigen::Matrix4f RotationToMatrix(Eigen::Vector3f rotation)
     {
-        Eigen::Quaternionf quaternion = rotationToQuat(rotation);
-        return quatToMatrix(quaternion);
+        Eigen::Quaternionf quaternion = RotationToQuat(rotation);
+        return QuatToMatrix(quaternion);
     }
 
     inline Eigen::Quaternionf RemoveRoll(const Eigen::Quaternionf& q)
@@ -358,6 +460,10 @@ namespace CommonFunction
             { vk::Format::eD32Sfloat, vk::Format::eD32SfloatS8Uint, vk::Format::eD24UnormS8Uint },
             vk::ImageTiling::eOptimal,
             vk::FormatFeatureFlagBits::eDepthStencilAttachment);
+    }
+
+    inline bool IsDepthFormat(vk::Format format) {
+        return format == vk::Format::eD32Sfloat || format == vk::Format::eD32SfloatS8Uint || format == vk::Format::eD24UnormS8Uint;
     }
 
     inline bool HasStencilComponent(vk::Format format) {
@@ -476,7 +582,7 @@ namespace CommonFunction
         return CreateImageView(device, image, 1, format, vk::ImageAspectFlagBits::eDepth);
     }
 
-    inline vk::Sampler CreateSampler(vk::Device& device, vk::PhysicalDevice& physicalDevice)
+    inline vk::Sampler CreateSampler(vk::Device& device, vk::PhysicalDevice& physicalDevice, bool bUseDepth = false)
     {
 
         vk::PhysicalDeviceProperties physicalDeviceProperties = physicalDevice.getProperties();
@@ -505,6 +611,13 @@ namespace CommonFunction
             samplerInfo
                 .setAnisotropyEnable(VK_FALSE)
                 .setMaxAnisotropy(1.0f);
+        }
+
+        if(bUseDepth)
+        {
+            samplerInfo
+                .setCompareEnable(VK_TRUE)
+                .setCompareOp(vk::CompareOp::eLessOrEqual);
         }
 
         return device.createSampler(samplerInfo);

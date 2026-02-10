@@ -26,7 +26,8 @@ public:
     std::vector<vk::DescriptorBufferInfo>& GetUBOGlobalBufferInfo(){ return uboGlobal.bufferInfos; }
 private:
     RenderSystem();
-    void UpdateUBOGlobal();            
+    void UpdateUBOGlobal(vk::CommandBuffer& commandBuffer);
+    void UpdateUBOGlobalForShadow(vk::CommandBuffer& commandBuffer, uint32_t PassSizeWidth, uint32_t PassSizeHeight);
     void UpdateUBOMaterialInstance(const std::shared_ptr<MaterialInstance>& materialInstance);
     void UpdateUBOModel(const std::shared_ptr<SceneObject>& object);
     void RenderInitialize();
@@ -41,6 +42,7 @@ private:
     std::vector<int32_t> onWorkFenceForSwapChainImage;
     uint32_t swapChainImageIndex = 0;
     
+    Eigen::Matrix4f lightViewProj = Eigen::Matrix4f::Identity();
     Buffer uboGlobal;
     // 按基础材质分组： {shader, {materialInstance, [sceneObject]}}
     std::unordered_map<std::string, std::unordered_map<std::string, std::vector<std::weak_ptr<SceneObject>>>> hierarchyObjects;

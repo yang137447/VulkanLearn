@@ -23,6 +23,7 @@ struct alignas(16) UBOGlobal
 {
     Eigen::Matrix4f view;
     Eigen::Matrix4f projection;
+    Eigen::Matrix4f lightViewProj;
     alignas(16) Eigen::Vector3f ambient;
     alignas(16) Eigen::Vector3f cameraPosition;
 };
