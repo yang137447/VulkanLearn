@@ -1,6 +1,7 @@
 #pragma once
 #include <spirv_reflect.h>
 #include <vulkan/vulkan.hpp>
+#include <string>
 
 struct ShaderBinding
 {
@@ -11,6 +12,7 @@ struct ShaderBinding
     uint32_t memberCount;
     uint32_t size;
     std::vector<uint32_t> members;
+    std::string name;
 };
 
 class ShaderReflect

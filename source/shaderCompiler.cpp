@@ -117,12 +117,10 @@ std::vector<uint32_t> ShaderCompiler::CompileGLSLToSPIRV(const std::string& glsl
 {
     shaderc::Compiler compiler;
     shaderc::CompileOptions options;
+    options.SetOptimizationLevel(shaderc_optimization_level::shaderc_optimization_level_performance);
     if (isDebug)
     {
-        options.SetOptimizationLevel(shaderc_optimization_level::shaderc_optimization_level_zero);
-    }
-    else {
-        options.SetOptimizationLevel(shaderc_optimization_level::shaderc_optimization_level_performance);  //设置编译选项
+        options.SetGenerateDebugInfo();
     }
     options.SetTargetEnvironment(shaderc_target_env::shaderc_target_env_vulkan, shaderc_env_version::shaderc_env_version_vulkan_1_4);
     options.SetSourceLanguage(shaderc_source_language::shaderc_source_language_glsl);

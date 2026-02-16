@@ -11,6 +11,7 @@
 #include "shaderReflect.h"
 #include "renderSystem.h"
 #include "lightManager.h"
+#include "sceneLoader.h"
 
 void SceneNode::SetPosition(Eigen::Vector3f& position)
 {
@@ -272,6 +273,7 @@ SceneObject::~SceneObject()
 {
     DestroyUniformBuffers();
     DestroyDescriptorSets();
+    DestroyDescriptorSetsForShadow();
 }
 
 void SceneObject::RenderInitialize()
@@ -280,6 +282,10 @@ void SceneObject::RenderInitialize()
     SetupDescriptors();
     CreateDescriptorSets();
     UpdateDescriptorSet();
+
+    SetupDescriptorsForShadow();
+    CreateDescriptorSetsForShadow();
+    UpdateDescriptorSetForShadow();
 }
 
 void SceneObject::SetRenderableObject(std::shared_ptr<RenderableObject> renderableObject)
@@ -336,7 +342,7 @@ void SceneObject::DestroyUniformBuffers()
 void SceneObject::CreateDescriptorSets()
 {
     VulkanManager& vulkanManager = VulkanManager::GetInstance();
-    uint32_t swapChainImageCount = VulkanManager::GetInstance().GetSwapChainImageCount();
+    uint32_t swapChainImageCount = vulkanManager.GetSwapChainImageCount();
     auto baseMaterial = materialInstance->GetBaseMaterial().lock();
     const std::vector<ShaderBinding>& shaderBindings = baseMaterial->GetRenderPipline()->GetShaderBindings();
     std::vector<vk::DescriptorPoolSize> descriptorPoolSizes;
@@ -470,12 +476,150 @@ void SceneObject::UpdateDescriptorSet()
             }
             else if (binding.type == vk::DescriptorType::eCombinedImageSampler)
             {
-                write.setImageInfo(materialInstance->GetUboMaterialInstanceImageInfo());
+                write.setImageInfo(materialInstance->GetUboMaterialInstanceImageInfo(binding.name));
             }
 
             writeDescriptorSets[i].push_back(write);
         }
         
         VulkanManager::GetInstance().GetDevice().updateDescriptorSets(writeDescriptorSets[i], nullptr);
+    }
+}
+
+void SceneObject::CreateDescriptorSetsForShadow()
+{
+    VulkanManager& vulkanManager = VulkanManager::GetInstance();
+    uint32_t swapChainImageCount = vulkanManager.GetSwapChainImageCount();
+    auto& sceneLoader = SceneLoader::GetInstance();
+
+    // check if shadow material exists
+    if (sceneLoader.GetMaterials().find("shadow") == sceneLoader.GetMaterials().end())
+    {
+        return;
+    }
+    auto shadowMaterial = sceneLoader.GetMaterials().at("shadow");
+    const std::vector<ShaderBinding>& shaderBindings = shadowMaterial->GetRenderPipline()->GetShaderBindings();
+    
+    std::vector<vk::DescriptorPoolSize> descriptorPoolSizes;
+    for(const auto& binding : shaderBindings)
+    {
+        if(binding.set != ObjectSetIndex)
+        {
+            continue;
+        }
+        vk::DescriptorPoolSize poolSize;
+        poolSize
+            .setType(binding.type)
+            .setDescriptorCount(swapChainImageCount);
+        descriptorPoolSizes.push_back(poolSize);
+    }
+
+    if (descriptorPoolSizes.empty())
+    {
+        return;
+    }
+
+    const auto& pipelineSetLayouts = shadowMaterial->GetRenderPipline()->GetDescriptorSetLayouts();
+    
+    // check if pipelineSetLayouts has enough sets
+    if (pipelineSetLayouts.size() <= ObjectSetIndex)
+    {
+        return;
+    }
+
+    vk::DescriptorPoolCreateInfo descriptorPoolCreateInfo;
+    descriptorPoolCreateInfo
+        .setMaxSets(swapChainImageCount)
+        .setFlags(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet)
+        .setPoolSizes(descriptorPoolSizes);
+
+    vk::Result result = vulkanManager.GetDevice().createDescriptorPool(&descriptorPoolCreateInfo, nullptr, &descriptorPoolShadow);
+    assert(result == vk::Result::eSuccess);
+
+    vk::DescriptorSetLayout objectSetLayout = pipelineSetLayouts[ObjectSetIndex];
+    std::vector<vk::DescriptorSetLayout> allocateLayouts(swapChainImageCount, objectSetLayout);
+
+    vk::DescriptorSetAllocateInfo descriptorSetAllocateInfo;
+    descriptorSetAllocateInfo
+        .setDescriptorPool(descriptorPoolShadow)
+        .setSetLayouts(allocateLayouts);
+    
+    std::vector<vk::DescriptorSet> allocatedSets(swapChainImageCount);
+    result = vulkanManager.GetDevice().allocateDescriptorSets(&descriptorSetAllocateInfo, allocatedSets.data());
+    assert(result == vk::Result::eSuccess);
+
+    descriptorSetsShadow.resize(swapChainImageCount);
+    for(uint32_t i = 0; i < swapChainImageCount; i++)
+    {
+        descriptorSetsShadow[i].resize(ObjectSetIndex + 1);
+        descriptorSetsShadow[i][ObjectSetIndex] = allocatedSets[i];
+    }
+}
+
+void SceneObject::DestroyDescriptorSetsForShadow()
+{
+    auto& device = VulkanManager::GetInstance().GetDevice();
+    if (descriptorPoolShadow)
+    {
+        device.destroyDescriptorPool(descriptorPoolShadow, nullptr);
+        descriptorPoolShadow = nullptr;
+    }
+    descriptorSetsShadow.clear();
+}
+
+void SceneObject::SetupDescriptorsForShadow()
+{
+    // currently using same uboModel, already setup in SetupDescriptors
+}
+
+void SceneObject::UpdateDescriptorSetForShadow()
+{
+    if (descriptorSetsShadow.empty()) return;
+
+    uint32_t swapChainImageCount = VulkanManager::GetInstance().GetSwapChainImageCount();
+    auto& sceneLoader = SceneLoader::GetInstance();
+    
+    if (sceneLoader.GetMaterials().find("shadow") == sceneLoader.GetMaterials().end())
+    {
+        return;
+    }
+    auto shadowMaterial = sceneLoader.GetMaterials().at("shadow");
+    const auto& shaderBindings = shadowMaterial->GetRenderPipline()->GetShaderBindings();
+
+    writeDescriptorSetsShadow.resize(swapChainImageCount);
+
+    for(uint32_t i = 0; i < swapChainImageCount; i++)
+    {
+        writeDescriptorSetsShadow[i].clear();
+
+        for(const auto& binding : shaderBindings)
+        {
+            if(binding.set != ObjectSetIndex)
+            {
+                continue;
+            }
+
+            vk::WriteDescriptorSet write;
+            write
+                .setDstSet(descriptorSetsShadow[i][binding.set])
+                .setDstBinding(binding.binding)
+                .setDescriptorCount(1)
+                .setDescriptorType(binding.type);
+
+            if (binding.type == vk::DescriptorType::eUniformBuffer)
+            {
+                if (binding.set == ObjectSetIndex)
+                {
+                    write.setBufferInfo(uboModel.bufferInfos[i]);
+                }
+            }
+            
+            writeDescriptorSetsShadow[i].push_back(write);
+        }
+        
+        if (!writeDescriptorSetsShadow[i].empty())
+        {
+            VulkanManager::GetInstance().GetDevice().updateDescriptorSets(writeDescriptorSetsShadow[i], nullptr);
+        }
     }
 }

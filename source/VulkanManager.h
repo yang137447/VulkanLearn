@@ -42,6 +42,7 @@ public:
     inline uint32_t GetSwapChainImageCount() { return swapChainImageCount; }
     inline vk::SurfaceFormatKHR& GetSurfaceFormat() { return surfaceFormat; }
     inline std::vector<vk::ImageView>& GetSwapChainImageViews() { return swapChainImageViews; }
+    inline vk::Extent2D GetSwapChainExtent() const { return swapChainExtent; }
 private:
     VulkanManager();
 

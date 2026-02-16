@@ -1,0 +1,7 @@
+{
+    "name": "Shadow Pass Material Instance",
+    "type": "materialInstance",
+    "shader": "shadow",
+    "textures": {},
+    "parameters": {}
+}

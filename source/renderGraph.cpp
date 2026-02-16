@@ -1,6 +1,14 @@
 #include "renderGraph.h"
 #include "commonFunction.h"
 #include "vulkanManager.h"
+#include "sceneLoader.h"
+#include "shaderReflect.h"
+#include "material.h"
+#include "materialInstance.h"
+#include "renderPipline.h"
+#include "renderSystem.h"
+#include "lightManager.h"
+#include <stdint.h>
 
 void Renderpass::Draw(vk::CommandBuffer& commandBuffer) const
 {
@@ -29,31 +37,54 @@ void Renderpass::CreateUniformBuffers()
 }
 void Renderpass::SetupDescriptors(RenderGraph& renderGraph)
 {
+    uint32_t swapChainImageCount = VulkanManager::GetInstance().GetSwapChainImageCount();
+    inputDescriptorImageInfos.clear();
+    inputDescriptorImageInfos.resize(swapChainImageCount);
+    // 总览：为每个输入资源建立 DescriptorImageInfo
+    // 1) 先从 resolve 里找，找不到再从 msaa 里找
+    // 2) shadowMap 使用深度只读 layout
+    // 3) 写入 inputDescriptorImageInfos
     // 设置image信息,根据pass的输入资源创建
-    for(auto& inputResource : inputResources)
+    for(uint32_t imageIndex = 0; imageIndex < swapChainImageCount; ++imageIndex)
     {
-        const RenderResource* resource = nullptr;
-        vk::ImageLayout imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
-        if(inputResource == "depthMap")
+        for(auto& inputResource : inputResources)
         {
-            resource = &renderGraph.GetDepthResourceResolve();
-        }
-        else if(inputResource == "shadowMap")
-        {
-            resource = &renderGraph.GetShadowMap();
-            imageLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
-        }
-        else
-        {
-            resource = &renderGraph.GetColorResourcesResolve().at(inputResource);
-        }
+            const RenderResource* resource = nullptr;
+            
+            auto& resolveMap = renderGraph.GetResourcesResolve();
+            auto resolveIt = resolveMap.find(inputResource);
+            if(resolveIt != resolveMap.end() && imageIndex < resolveIt->second.size())
+            {
+                resource = &resolveIt->second[imageIndex];
+            }
+            else
+            {
+                auto& msaaMap = renderGraph.GetResourcesMsaa();
+                auto msaaIt = msaaMap.find(inputResource);
+                if(msaaIt != msaaMap.end() && imageIndex < msaaIt->second.size())
+                {
+                    resource = &msaaIt->second[imageIndex];
+                }
+            }
 
-        vk::DescriptorImageInfo imageInfo = vk::DescriptorImageInfo();
-        imageInfo
-            .setImageLayout(imageLayout)
-            .setImageView(resource->imageView)
-            .setSampler(resource->sampler);
-        inputDescriptorImageInfos.push_back(imageInfo);
+            if(resource == nullptr)
+            {
+                continue;
+            }
+
+            vk::ImageLayout imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
+            if(CommonFunction::IsDepthFormat(resource->format))
+            {
+                imageLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal;
+            }
+
+            vk::DescriptorImageInfo imageInfo = vk::DescriptorImageInfo();
+            imageInfo
+                .setImageLayout(imageLayout)
+                .setImageView(resource->imageView)
+                .setSampler(resource->sampler);
+            inputDescriptorImageInfos[imageIndex].push_back(imageInfo);
+        }
     }
 }
 
@@ -61,94 +92,249 @@ void Renderpass::CreatePassDescriptorSetLayout()
 {
     vk::Device& device = VulkanManager::GetInstance().GetDevice();
 
+    // 创建空的 DescriptorSetLayout，用于绑定空的 DescriptorSet, 主要用于geometrypass对齐使用，渲染时能用PassSetIndex调用到passSet
+    vk::DescriptorSetLayoutCreateInfo emptyLayoutCreateInfo;
+    vk::Result result = device.createDescriptorSetLayout(&emptyLayoutCreateInfo, nullptr, &emptyDescriptorSetLayout);
+    assert(result == vk::Result::eSuccess);
+
     std::vector<vk::DescriptorSetLayoutBinding> descriptorSetLayoutBindings;
-    for(uint32_t i = 0; i < inputDescriptorImageInfos.size(); ++i)
+    if(!materialInstance.expired())
     {
-        vk::DescriptorSetLayoutBinding layoutBinding;
-        layoutBinding
-            .setBinding(i)
-            .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
-            .setDescriptorCount(1)
-            .setStageFlags(vk::ShaderStageFlagBits::eFragment)
-            .setPImmutableSamplers(nullptr);
-        descriptorSetLayoutBindings.push_back(layoutBinding);
+        auto baseMaterial = materialInstance.lock()->GetBaseMaterial().lock();
+        const auto& shaderBindings = baseMaterial->GetRenderPipline()->GetShaderBindings();
+        for(const auto& binding : shaderBindings)
+        {
+            if(binding.set != PassSetIndex)
+            {
+                continue;
+            }
+            vk::DescriptorSetLayoutBinding layoutBinding;
+            layoutBinding
+                .setBinding(binding.binding)
+                .setDescriptorType(binding.type)
+                .setDescriptorCount(1)
+                .setStageFlags(binding.stageFlags)
+                .setPImmutableSamplers(nullptr);
+            descriptorSetLayoutBindings.push_back(layoutBinding);
+        }
+    }
+    else
+    {
+        uint32_t inputCount = 0;
+        if(!inputDescriptorImageInfos.empty())
+        {
+            inputCount = static_cast<uint32_t>(inputDescriptorImageInfos[0].size());
+        }
+        for(uint32_t i = 0; i < inputCount; ++i)
+        {
+            vk::DescriptorSetLayoutBinding layoutBinding;
+            layoutBinding
+                .setBinding(i)
+                .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
+                .setDescriptorCount(1)
+                .setStageFlags(vk::ShaderStageFlagBits::eFragment)
+                .setPImmutableSamplers(nullptr);
+            descriptorSetLayoutBindings.push_back(layoutBinding);
+        }
     }
 
     vk::DescriptorSetLayoutCreateInfo descriptorSetLayoutCreateInfo;
     descriptorSetLayoutCreateInfo
         .setBindings(descriptorSetLayoutBindings);
 
-    vk::Result result = device.createDescriptorSetLayout(&descriptorSetLayoutCreateInfo, nullptr, &descriptorSetLayout);
+    result = device.createDescriptorSetLayout(&descriptorSetLayoutCreateInfo, nullptr, &descriptorSetLayout);
     assert(result == vk::Result::eSuccess);
 }
 
 void Renderpass::CreateDescriptorSets()
 {
-    // 暂时没有max frame in flight相关的数据，所以descriptor set数量为1
     VulkanManager& vulkanManager = VulkanManager::GetInstance();
-
+    uint32_t swapChainImageCount = VulkanManager::GetInstance().GetSwapChainImageCount();
+    std::vector<vk::DescriptorSetLayout> allocateLayouts;
     std::vector<vk::DescriptorPoolSize> descriptorPoolSizes;
-    for(const auto& imageInfo : inputDescriptorImageInfos)
+    if (!materialInstance.expired()) //geometryPass没有MaterialInstance,需要额外处理
     {
+        auto baseMaterial = materialInstance.lock()->GetBaseMaterial().lock();
+        const std::vector<ShaderBinding>& shaderBindings = baseMaterial->GetRenderPipline()->GetShaderBindings();
+        // std::vector<vk::DescriptorPoolSize> descriptorPoolSizes;
+        for(const auto& binding : shaderBindings)
+        {
+            vk::DescriptorPoolSize poolSize;
+            poolSize
+                .setType(binding.type)
+                .setDescriptorCount(swapChainImageCount);
+            descriptorPoolSizes.push_back(poolSize);
+        }
+        const auto& pipelineSetLayouts = baseMaterial->GetRenderPipline()->GetDescriptorSetLayouts();
+        
+        // 只分配前4个Set (0:Global, 1:Material, 2:Object)，Set 3 (Pass)
+        // std::vector<vk::DescriptorSetLayout> allocateLayouts;
+        for(size_t i = 0; i < pipelineSetLayouts.size(); ++i)
+        {
+            // if(i != PassSetIndex)
+            {
+                allocateLayouts.push_back(pipelineSetLayouts[i]);
+            }
+        }
+    }
+    else {
+        uint32_t inputCount = 0;
+        if(!inputDescriptorImageInfos.empty())
+        {
+            inputCount = static_cast<uint32_t>(inputDescriptorImageInfos[0].size());
+        }
+        uint32_t descriptorCount = swapChainImageCount * MAX_DESCRIPTOR_SETS * inputCount;
         vk::DescriptorPoolSize poolSize;
         poolSize
             .setType(vk::DescriptorType::eCombinedImageSampler)
-            .setDescriptorCount(1);
+            .setDescriptorCount(descriptorCount);
         descriptorPoolSizes.push_back(poolSize);
+        
+        // 分配空的 DescriptorSetLayout
+        allocateLayouts.push_back(emptyDescriptorSetLayout);
+        allocateLayouts.push_back(emptyDescriptorSetLayout);
+        allocateLayouts.push_back(emptyDescriptorSetLayout);
+        allocateLayouts.push_back(descriptorSetLayout); //保持passDescriptorSetLayout在最后
     }
+    uint32_t SetLayoutCount = allocateLayouts.size();
+
     vk::DescriptorPoolCreateInfo descriptorPoolCreateInfo;
     descriptorPoolCreateInfo
-        .setMaxSets(1)
+        .setMaxSets(swapChainImageCount * SetLayoutCount)
         .setFlags(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet)
         .setPoolSizes(descriptorPoolSizes);
 
     vk::Result result = vulkanManager.GetDevice().createDescriptorPool(&descriptorPoolCreateInfo, nullptr, &descriptorPool);
     assert(result == vk::Result::eSuccess);
 
-    std::vector<vk::DescriptorSetLayout> setLayouts(1, descriptorSetLayout);
     vk::DescriptorSetAllocateInfo descriptorSetAllocateInfo;
     descriptorSetAllocateInfo
         .setDescriptorPool(descriptorPool)
-        .setSetLayouts(setLayouts);
+        .setSetLayouts(allocateLayouts);
     
-    inputDescriptorSets.resize(1);
-    result = vulkanManager.GetDevice().allocateDescriptorSets(&descriptorSetAllocateInfo, inputDescriptorSets.data());
-    assert(result == vk::Result::eSuccess);
+    descriptorSets.resize(swapChainImageCount);
+    for(uint32_t i = 0; i < swapChainImageCount; i++)
+    {
+        descriptorSets[i].resize(SetLayoutCount);
+        result = vulkanManager.GetDevice().allocateDescriptorSets(&descriptorSetAllocateInfo, descriptorSets[i].data());
+        assert(result == vk::Result::eSuccess);
+    }
 }
 
 void Renderpass::UpdateDescriptorSets()
 {
-    vk::Device& device = VulkanManager::GetInstance().GetDevice();
-    std::vector<vk::WriteDescriptorSet> writes;
-    for(uint32_t i = 0; i < inputDescriptorImageInfos.size(); ++i)
+    uint32_t swapChainImageCount = VulkanManager::GetInstance().GetSwapChainImageCount();
+    // 设置descriptor set信息
+    writeDescriptorSets.resize(swapChainImageCount);
+    
+    if(!materialInstance.expired())
     {
-        vk::WriteDescriptorSet write;
-        write
-            .setDstSet(inputDescriptorSets[0])
-            .setDstBinding(i)
-            .setDstArrayElement(0)
-            .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
-            .setDescriptorCount(1)
-            .setPImageInfo(&inputDescriptorImageInfos[i]);
-        writes.push_back(write);
+        auto baseMaterial = materialInstance.lock()->GetBaseMaterial().lock();
+        const auto& shaderBindings = baseMaterial->GetRenderPipline()->GetShaderBindings();
+        auto& renderSystem = RenderSystem::GetInstance();
+        auto& lightManager = LightManager::GetInstance();
+        for(uint32_t i = 0; i < swapChainImageCount; i++)
+        {
+            for(const auto& binding : shaderBindings)
+            {
+                // if(binding.set == PassSetIndex)
+                // {
+                //     continue;
+                // }
+
+                vk::WriteDescriptorSet write;
+                write
+                    .setDstSet(descriptorSets[i][binding.set])
+                    .setDstBinding(binding.binding)
+                    .setDescriptorCount(1)
+                    .setDescriptorType(binding.type);
+
+                if (binding.type == vk::DescriptorType::eUniformBuffer)
+                {
+                    if (binding.set == GlobalSetIndex)
+                    {
+                        write.setBufferInfo(renderSystem.GetUBOGlobalBufferInfo()[i]);
+                    }
+                    else if (binding.set == MaterialSetIndex)
+                    {
+                        // write.setBufferInfo(materialInstance.lock()->GetUboMaterialInstanceInfo()[i]);
+                        // TODO: 待后续后处理传参再看
+                        continue;
+                    }
+                    else if (binding.set == ObjectSetIndex)
+                    {
+                        // 这里数据用sceneObject
+                        // write.setBufferInfo(uboModel.bufferInfos[i]);
+                        continue;
+                    }
+                }
+                else if (binding.type == vk::DescriptorType::eStorageBuffer)
+                {
+                    write.setBufferInfo(lightManager.GetLightBufferInfo()[i]);
+                }
+                else if (binding.type == vk::DescriptorType::eCombinedImageSampler)
+                {
+                    if (binding.set != PassSetIndex)
+                    {
+                        write.setImageInfo(materialInstance.lock()->GetUboMaterialInstanceImageInfo(binding.name));
+                    }
+                    else {
+                        // pass需要根据binding index来找到PassInputResource
+                        uint32_t inputIndex = binding.binding;
+                        if(i >= inputDescriptorImageInfos.size() || inputIndex >= inputDescriptorImageInfos[i].size())
+                        {
+                            continue;
+                        }
+                        write.setPImageInfo(&inputDescriptorImageInfos[i][inputIndex]);
+                    }
+                }
+
+                writeDescriptorSets[i].push_back(write);
+            }
+            
+            VulkanManager::GetInstance().GetDevice().updateDescriptorSets(writeDescriptorSets[i], nullptr);
+        }
     }
-    device.updateDescriptorSets(static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+    else {
+        vk::Device& device = VulkanManager::GetInstance().GetDevice();
+        std::vector<vk::WriteDescriptorSet> writes;
+        for(uint32_t i = 0; i < swapChainImageCount; i++)
+        {
+            for(uint32_t j = 0; j < inputDescriptorImageInfos[i].size(); j++)
+            {
+                vk::WriteDescriptorSet write;
+                write
+                    .setDstSet(descriptorSets[i][PassSetIndex])
+                    .setDstBinding(j)
+                    .setDstArrayElement(0)
+                    .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
+                    .setDescriptorCount(1)
+                    .setPImageInfo(&inputDescriptorImageInfos[i][j]);
+                writes.push_back(write);
+            }
+            device.updateDescriptorSets(static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+        }
+    }
 }
 
 RenderGraph::~RenderGraph()
 {
     // 销毁msaa,resolve资源
-    for(auto& [name, resource] : colorResourcesMsaa)
+    for(auto& [name, resources] : resourcesMsaa)
     {
-        DestroyRenderResource(resource);
+        for(auto& resource : resources)
+        {
+            DestroyRenderResource(resource);
+        }
     }
-    for(auto& [name, resource] : colorResourcesResolve)
+    for(auto& [name, resources] : resourcesResolve)
     {
-        DestroyRenderResource(resource);
+        for(auto& resource : resources)
+        {
+            DestroyRenderResource(resource);
+        }
     }
-    DestroyRenderResource(depthResourceMsaa);
-    DestroyRenderResource(depthResourceResolve);
-    DestroyRenderResource(shadowMap);
+
     // 销毁renderpass
     for(auto& [name, renderpass] : renderpasses)
     {
@@ -159,47 +345,41 @@ RenderGraph::~RenderGraph()
 void RenderGraph::LoadRenderGraph(const nlohmann::json& renderGraphJson)
 {
 
+    uint32_t swapChainImageCount = VulkanManager::GetInstance().GetSwapChainImageCount();
     // 解析渲染资源
     for (const auto& resourceNode : renderGraphJson["resources"])
     {
+        std::string name = resourceNode["name"];
+        if(name == "swapChain") continue;
+
         // 先建立msaa资源
-        if (resourceNode["name"] == "sceneDepth")
+        if (name != "shadowMap")
         {
-            // 创建深度缓冲区
-            depthResourceMsaa = CreateRenderResource(resourceNode, true);
-        }
-        else if (resourceNode["name"] == "shadowMap")
-        {
-            // 创建阴影贴图, 不需要msaa
-        }
-        else {
-            RenderResource resource = CreateRenderResource(resourceNode, true);
-            colorResourcesMsaa.emplace(resource.name, std::move(resource));
+            std::vector<RenderResource> msaaResources;
+            msaaResources.reserve(swapChainImageCount);
+            for(uint32_t i = 0; i < swapChainImageCount; ++i)
+            {
+                RenderResource resource = CreateRenderResource(resourceNode, true);
+                msaaResources.push_back(std::move(resource));
+            }
+            resourcesMsaa.emplace(name, std::move(msaaResources));
         }
 
         // 再建立resolve资源
-        if (resourceNode["name"] == "swapChain")
+        std::vector<RenderResource> resolveResources;
+        resolveResources.reserve(swapChainImageCount);
+        for(uint32_t i = 0; i < swapChainImageCount; ++i)
         {
-            // swapchain 的资源属于交换链，这里不再创建
-        }
-        else if (resourceNode["name"] == "sceneDepth")
-        {
-            depthResourceResolve = CreateRenderResource(resourceNode);
-        }
-        else if (resourceNode["name"] == "shadowMap")
-        {
-            shadowMap = CreateRenderResource(resourceNode);
-        }
-        else {
             RenderResource resourceResolve = CreateRenderResource(resourceNode);
-            colorResourcesResolve.emplace(resourceResolve.name, std::move(resourceResolve));
+            resolveResources.push_back(std::move(resourceResolve));
         }
+        resourcesResolve.emplace(name, std::move(resolveResources));
     }
     // 解析渲染pass
     for (const auto& passNode : renderGraphJson["passes"])
     {
         std::string passName = passNode["name"];
-        renderpassOrdered.push_back(passName);
+        renderpassesOrdered.push_back(passName);
         Renderpass renderpass = CreateRenderpass(passNode);
         renderpasses[passName] = renderpass;
     }
@@ -298,20 +478,35 @@ Renderpass RenderGraph::CreateRenderpass(const nlohmann::json& passNode)
     Renderpass renderpass;
     renderpass.name = passNode["name"];
     bool bIsShadowPass = renderpass.name == "shadow";
+    bool bUseMsaa = passNode.value("needMsaa", false);
 
     std::vector<std::string> inputResources = GetRenderpassInputResources(passNode["input"]);
     std::vector<std::string> outputResources = GetRenderpassOutputResources(passNode["output"]);
     renderpass.inputResources = inputResources;
     renderpass.outputResources = outputResources;
 
-    vk::RenderPass vkRenderPass = CreateVkRenderPass(inputResources, outputResources, bIsShadowPass);
+    vk::RenderPass vkRenderPass = CreateVkRenderPass(inputResources, outputResources, bUseMsaa);
     renderpass.renderPass = vkRenderPass;
     
-    renderpass.width = bIsShadowPass ? shadowMap.width : colorResourcesMsaa[outputResources[0]].width;
-    renderpass.height = bIsShadowPass ? shadowMap.height : colorResourcesMsaa[outputResources[0]].height;
+    if (outputResources[0] == "swapChain")
+    {
+        auto extent = VulkanManager::GetInstance().GetSwapChainExtent();
+        renderpass.width = extent.width;
+        renderpass.height = extent.height;
+    }
+    else if (bIsShadowPass)
+    {
+        renderpass.width = resourcesResolve["shadowMap"][0].width;
+        renderpass.height = resourcesResolve["shadowMap"][0].height;
+    }
+    else
+    {
+        renderpass.width = resourcesMsaa[outputResources[0]][0].width;
+        renderpass.height = resourcesMsaa[outputResources[0]][0].height;
+    }
     
-    renderpass.clearValues = GetClearValues(outputResources);
-    renderpass.framebuffers = CreateVkFrameBuffers(renderpass, inputResources, outputResources);
+    renderpass.clearValues = GetClearValues(outputResources, bUseMsaa);
+    renderpass.framebuffers = CreateVkFrameBuffers(renderpass, inputResources, outputResources, bUseMsaa);
     
     return renderpass;
 }
@@ -324,108 +519,164 @@ void RenderGraph::DestroyRenderpass(Renderpass& renderpass)
     DestroyVkRenderPass(renderpass.renderPass);
     DestroyVkFrameBuffers(renderpass.framebuffers);
     device.destroyDescriptorSetLayout(renderpass.descriptorSetLayout);
+    device.destroyDescriptorSetLayout(renderpass.emptyDescriptorSetLayout);
     device.destroyDescriptorPool(renderpass.descriptorPool);
 }
 
-vk::RenderPass RenderGraph::CreateVkRenderPass(std::vector<std::string>& inputResources, std::vector<std::string>& outputResources, bool bIsShadowPass)
+vk::RenderPass RenderGraph::CreateVkRenderPass(std::vector<std::string>& inputResources, std::vector<std::string>& outputResources, bool bUseMsaa)
 {
     VulkanManager& vulkanManager = VulkanManager::GetInstance();
     vk::Device& device = vulkanManager.GetDevice();
     vk::SurfaceFormatKHR& surfaceFormat = vulkanManager.GetSurfaceFormat();
-    vk::SampleCountFlagBits sampleCount = bIsShadowPass ? vk::SampleCountFlagBits::e1 : CommonFunction::GetMsaaSampleCount();
+    vk::SampleCountFlagBits sampleCount = bUseMsaa ? CommonFunction::GetMsaaSampleCount() : vk::SampleCountFlagBits::e1;
 
+    // 总览：按输出资源顺序构建 RenderPass
+    // 1) 颜色附件（MSAA/非MSAA）
+    // 2) 如启用 MSAA，追加 resolve 附件
+    // 3) 如包含深度资源，追加 depth 附件
+    // 4) 构建 subpass 与依赖
     //创建渲染通道
-        // attachment，msaa附件、解析附件、深度附件
     std::vector<vk::AttachmentDescription> attachmentDescriptions;
-    for (const auto& resourceName : outputResources)
+    std::vector<vk::AttachmentReference> colorAttachmentReferences;
+    std::vector<vk::AttachmentReference> resolveAttachmentReferences;
+    vk::AttachmentReference depthAttachmentReference;
+
+    bool bHasDepth = false;
+    auto isDepthResource = [&](const std::string& resourceName) -> bool
     {
-        if (resourceName == "sceneDepth" || resourceName == "shadowMap")
+        auto msaaIt = resourcesMsaa.find(resourceName);
+        if (msaaIt != resourcesMsaa.end() && !msaaIt->second.empty())
         {
+            return CommonFunction::IsDepthFormat(msaaIt->second[0].format);
+        }
+        auto resolveIt = resourcesResolve.find(resourceName);
+        if (resolveIt != resourcesResolve.end() && !resolveIt->second.empty())
+        {
+            return CommonFunction::IsDepthFormat(resolveIt->second[0].format);
+        }
+        return false;
+    };
+
+    // 1. Color Attachments (MSAA & Resolve)
+    for (const auto& resourceName : outputResources)
+    { 
+        if (isDepthResource(resourceName))
+        {
+            bHasDepth = true;
             continue;
         }
 
         vk::AttachmentDescription colorAttachmentDescription;
+        vk::Format format = vk::Format::eUndefined;
+        if (resourceName == "swapChain") 
+        {
+            format = surfaceFormat.format;
+        }
+        else{
+            format = resourcesMsaa.at(resourceName)[0].format;
+        }
+
+        // MSAA / Main Attachment
         colorAttachmentDescription
-            .setFormat(colorResourcesMsaa.at(resourceName).format)
+            .setFormat(format)
             .setSamples(sampleCount)
             .setLoadOp(vk::AttachmentLoadOp::eClear)
             .setStoreOp(vk::AttachmentStoreOp::eStore)
             .setStencilLoadOp(vk::AttachmentLoadOp::eDontCare) 
             .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
             .setInitialLayout(vk::ImageLayout::eUndefined)
-            .setFinalLayout(vk::ImageLayout::eColorAttachmentOptimal)
-            .setFlags(vk::AttachmentDescriptionFlags(0));
+            .setFinalLayout(vk::ImageLayout::eColorAttachmentOptimal);
 
-        attachmentDescriptions.push_back(colorAttachmentDescription);
-    }
-    for (const auto& resourceName : outputResources)
-    {
-        if (resourceName == "sceneDepth" || resourceName == "shadowMap")
+        if (resourceName == "swapChain")
         {
-            continue;
+            colorAttachmentDescription.setFinalLayout(vk::ImageLayout::ePresentSrcKHR);
+        }
+        
+        attachmentDescriptions.push_back(colorAttachmentDescription);
+
+        vk::AttachmentReference attachmentReference;
+        attachmentReference.setAttachment(colorAttachmentReferences.size()); // This index is temporary, need global index
+        attachmentReference.setLayout(vk::ImageLayout::eColorAttachmentOptimal);
+        colorAttachmentReferences.push_back(attachmentReference);
+    }
+    
+    // Fix up attachment indices for Color Refs
+    // Current attachmentDescriptions size is colorAttachmentReferences.size()
+
+    // 2. Resolve Attachments (Only if MSAA is enabled)
+    if (bUseMsaa)
+    {
+        for (const auto& resourceName : outputResources)
+        {
+            if (isDepthResource(resourceName)) continue;
+
+            vk::AttachmentDescription resolveAttachmentDescription;
+            vk::Format format = (resourceName == "swapChain") ? surfaceFormat.format : resourcesMsaa.at(resourceName)[0].format;
+            
+            resolveAttachmentDescription
+                .setFormat(format)
+                .setSamples(vk::SampleCountFlagBits::e1)
+                .setLoadOp(vk::AttachmentLoadOp::eClear)
+                .setStoreOp(vk::AttachmentStoreOp::eStore)
+                .setStencilLoadOp(vk::AttachmentLoadOp::eDontCare) 
+                .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
+                .setInitialLayout(vk::ImageLayout::eUndefined)
+                .setFinalLayout(vk::ImageLayout::eColorAttachmentOptimal);
+
+            if (resourceName == "swapChain") 
+            {
+                resolveAttachmentDescription.setFinalLayout(vk::ImageLayout::ePresentSrcKHR);
+            }
+
+            attachmentDescriptions.push_back(resolveAttachmentDescription);
+
+            vk::AttachmentReference attachmentReference;
+            attachmentReference.setAttachment(attachmentDescriptions.size() - 1);
+            attachmentReference.setLayout(vk::ImageLayout::eColorAttachmentOptimal);
+            resolveAttachmentReferences.push_back(attachmentReference);
+        }
+    }
+
+    // 3. Depth Attachment
+    if (bHasDepth)
+    {
+        // Find depth resource
+        std::string depthName = "";
+        for(const auto& resource : outputResources)
+        {
+            if (isDepthResource(resource))
+            {
+                depthName = resource;
+                break;
+            }
         }
 
-        vk::AttachmentDescription colorAttachmentDescription;
-        colorAttachmentDescription
-            .setFormat(surfaceFormat.format)
-            .setSamples(vk::SampleCountFlagBits::e1)
+        vk::AttachmentDescription depthStencilAttachmentDescription;
+        vk::Format depthFormat = vk::Format::eUndefined;
+        
+        if(bUseMsaa) 
+        {
+            depthFormat = resourcesMsaa[depthName][0].format;
+        }
+        else {
+            depthFormat = resourcesResolve[depthName][0].format;
+        }
+
+        depthStencilAttachmentDescription
+            .setFormat(depthFormat)
+            .setSamples(sampleCount)
             .setLoadOp(vk::AttachmentLoadOp::eClear)
             .setStoreOp(vk::AttachmentStoreOp::eStore)
             .setStencilLoadOp(vk::AttachmentLoadOp::eDontCare) 
             .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
             .setInitialLayout(vk::ImageLayout::eUndefined)
-            .setFinalLayout(vk::ImageLayout::eColorAttachmentOptimal)
-            .setFlags(vk::AttachmentDescriptionFlags(0));
-        if (resourceName == "swapChain")
-        {
-            colorAttachmentDescription
-                .setFormat(surfaceFormat.format)
-                .setFinalLayout(vk::ImageLayout::ePresentSrcKHR);
-        }
-        attachmentDescriptions.push_back(colorAttachmentDescription);
+            .setFinalLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal);
+        
+        attachmentDescriptions.push_back(depthStencilAttachmentDescription);
+
+        depthAttachmentReference.setAttachment(attachmentDescriptions.size() - 1);
+        depthAttachmentReference.setLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal);
     }
-    vk::AttachmentDescription depthStencilAttachmentDescription;
-    depthStencilAttachmentDescription
-        .setFormat(depthResourceMsaa.format)
-        .setSamples(sampleCount)
-        .setLoadOp(vk::AttachmentLoadOp::eClear)
-        .setStoreOp(vk::AttachmentStoreOp::eStore)
-        .setStencilLoadOp(vk::AttachmentLoadOp::eDontCare) 
-        .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
-        .setInitialLayout(vk::ImageLayout::eUndefined)
-        .setFinalLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal)
-        .setFlags(vk::AttachmentDescriptionFlags(0));
-    attachmentDescriptions.push_back(depthStencilAttachmentDescription);
-        // attachment reference，msaa附件
-    std::vector<vk::AttachmentReference> colorAttachmentReferences;
-    for (auto& resourceName : outputResources)
-    {
-        if (resourceName == "sceneDepth" || resourceName == "shadowMap")
-        {
-            continue;
-        }
-        vk::AttachmentReference attachmentReference;
-        attachmentReference.setAttachment(colorAttachmentReferences.size());
-        attachmentReference.setLayout(vk::ImageLayout::eColorAttachmentOptimal);
-        colorAttachmentReferences.push_back(attachmentReference);
-    }
-        // attachment reference，解析附件
-    std::vector<vk::AttachmentReference> resolveAttachmentReferences;
-    for (auto& resourceName : outputResources)
-    {
-        if (resourceName == "sceneDepth" || resourceName == "shadowMap")
-        {
-            continue;
-        }
-        vk::AttachmentReference attachmentReference;
-        attachmentReference.setAttachment(colorAttachmentReferences.size() + resolveAttachmentReferences.size());
-        attachmentReference.setLayout(vk::ImageLayout::eColorAttachmentOptimal);
-        resolveAttachmentReferences.push_back(attachmentReference);
-    }
-        // attachment reference，深度附件
-    vk::AttachmentReference depthAttachmentReference;
-    depthAttachmentReference.setAttachment(colorAttachmentReferences.size() + resolveAttachmentReferences.size());
-    depthAttachmentReference.setLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal);
 
         // subpass
     vk::SubpassDescription subpassDescription;
@@ -438,7 +689,10 @@ vk::RenderPass RenderGraph::CreateVkRenderPass(std::vector<std::string>& inputRe
     {
         subpassDescription.setResolveAttachments(resolveAttachmentReferences);
     }
-    subpassDescription.setPDepthStencilAttachment(&depthAttachmentReference);
+    if(bHasDepth)
+    {
+        subpassDescription.setPDepthStencilAttachment(&depthAttachmentReference);
+    }
 
         // subpass dependency
     vk::SubpassDependency subpassDependency;
@@ -472,79 +726,99 @@ void RenderGraph::DestroyVkRenderPass(vk::RenderPass renderPass)
     std::cout << "Destroy VkRenderPass" << std::endl;
 }
 
-std::vector<vk::Framebuffer> RenderGraph::CreateVkFrameBuffers(Renderpass renderPass, std::vector<std::string>& inputResources, std::vector<std::string>& outputResources)
+std::vector<vk::Framebuffer> RenderGraph::CreateVkFrameBuffers(Renderpass renderPass, std::vector<std::string>& inputResources, std::vector<std::string>& outputResources, bool bUseMsaa)
 {
     VulkanManager& vulkanManager = VulkanManager::GetInstance();
     vk::Device& device = vulkanManager.GetDevice();
     uint32_t swapChainImageCount = vulkanManager.GetSwapChainImageCount();
-
-    bool bHasShadowMap = std::find(outputResources.begin(), outputResources.end(), "shadowMap") != outputResources.end();
+    
+    // 总览：attachments 顺序需与 RenderPass 保持一致
+    // 1) (可选) MSAA 颜色视图
+    // 2) resolve/非MSAA 颜色视图
+    // 3) 深度视图
+    auto isDepthResource = [&](const std::string& resourceName) -> bool
+    {
+        auto msaaIt = resourcesMsaa.find(resourceName);
+        if (msaaIt != resourcesMsaa.end() && !msaaIt->second.empty())
+        {
+            return CommonFunction::IsDepthFormat(msaaIt->second[0].format);
+        }
+        auto resolveIt = resourcesResolve.find(resourceName);
+        if (resolveIt != resourcesResolve.end() && !resolveIt->second.empty())
+        {
+            return CommonFunction::IsDepthFormat(resolveIt->second[0].format);
+        }
+        return false;
+    };
 
     // 确定framebuffer数量，含swapchain，数量需要等于swapChainImageCount，否者为1
-    uint32_t framebufferSize = 1;
-    if (std::find(outputResources.begin(), outputResources.end(), std::string("swapChain")) != outputResources.end())
-    {
-        framebufferSize = swapChainImageCount;
-    }
+    uint32_t framebufferSize = swapChainImageCount;
 
     std::vector<vk::Framebuffer> framebuffers;
-    // attachments.resize(3);
-    // attachments[0] = colorImageView;
-    // attachments[1] = depthImageView;
-    // attachments[2] = swapChainImageViews[0]; //占位，后面会被替换
-
     framebuffers.resize(framebufferSize);
+
     for (uint32_t i = 0; i < framebufferSize; i++)
     {
         std::vector<vk::ImageView> attachments;
-        // msaa view
-        for (const auto& outputResource : outputResources)
+        
+        // 1. MSAA view (Only if MSAA enabled)
+        if (bUseMsaa)
         {
-            if (outputResource == "sceneDepth" || outputResource == "shadowMap")
+            for (const auto& outputResource : outputResources)
             {
-                continue;
+                if (isDepthResource(outputResource)) continue;
+                attachments.push_back(resourcesMsaa[outputResource][i].imageView);
             }
-            attachments.push_back(colorResourcesMsaa[outputResource].imageView);
         }
-        // resolve view
+
+        // 2. Resolve view (or Color view if MSAA disabled)
         for (const auto& outputResource : outputResources)
         {
-            if (outputResource == "sceneDepth" || outputResource == "shadowMap")
-            {
-                continue;
-            }
-            else if (outputResource == "swapChain")
+            if (isDepthResource(outputResource)) continue;
+            
+            if (outputResource == "swapChain")
             {
                 attachments.push_back(vulkanManager.GetSwapChainImageViews()[i]);
             }
-
             else{
-                attachments.push_back(colorResourcesResolve[outputResource].imageView);
+                attachments.push_back(resourcesResolve[outputResource][i].imageView);
             }
         }
-        // depth view
-        if(bHasShadowMap)
+
+        // 3. Depth view (Only if present in output)
+        std::string depthName = "";
+        for(const auto& r : outputResources)
         {
-            // shadowPass中，深度输出到shadowMap, 后续pass中需要采样shadowMap
-            attachments.push_back(shadowMap.imageView);
+            if (isDepthResource(r))
+            {
+                depthName = r;
+                break;
+            }
         }
-        else {
-            attachments.push_back(depthResourceMsaa.imageView);
+
+        if(!depthName.empty())
+        {
+            if(bUseMsaa) 
+            {
+                attachments.push_back(resourcesMsaa[depthName][i].imageView);
+            }
+            else {
+                attachments.push_back(resourcesResolve[depthName][i].imageView);
+            }
         }
 
         vk::FramebufferCreateInfo framebufferCreateInfo;
         framebufferCreateInfo
             .setRenderPass(renderPass.renderPass)
             .setAttachments(attachments)
-            // 用输出资源的width和height，目前是为了适配shadowMap
             .setWidth(renderPass.width)
             .setHeight(renderPass.height)
             .setLayers(1);
-
+        
         framebuffers[i] = device.createFramebuffer(framebufferCreateInfo);
         assert(framebuffers[i]);
     }
-
+    
     return framebuffers;
 }
 
@@ -628,29 +902,66 @@ std::vector<std::string> RenderGraph::GetRenderpassOutputResources(const nlohman
     return outputResources;
 }
 
-std::vector<vk::ClearValue> RenderGraph::GetClearValues(std::vector<std::string>& outputResources)
+std::vector<vk::ClearValue> RenderGraph::GetClearValues(std::vector<std::string>& outputResources, bool bUseMsaa)
 {
     std::vector<vk::ClearValue> clearValues;
-    // MSAA
-    for(const auto& resource : outputResources)
+    vk::ClearValue clearColor;
+    clearColor.setColor(vk::ClearColorValue(std::array<float, 4>{0.2f, 0.2f, 0.2f, 1.0f}));
+    vk::ClearValue clearDepth;
+    clearDepth.setDepthStencil(vk::ClearDepthStencilValue(1.0f, 0));
+    // 总览：清除值顺序需与 RenderPass attachments 顺序一致
+    // 1) 颜色（MSAA/非MSAA）
+    // 2) 仅在启用 MSAA 时追加 resolve 颜色
+    // 3) 若包含深度资源，追加深度清除
+    auto isDepthResource = [&](const std::string& resourceName) -> bool
     {
-        if (resource == "sceneDepth" || resource == "shadowMap") continue;
-        vk::ClearValue clearValue;
-        clearValue.setColor(vk::ClearColorValue(std::array<float, 4>{0.2f, 0.2f, 0.2f, 1.0f}));
-        clearValues.push_back(clearValue);
-    }
-    // Resolve
-    for(const auto& resource: outputResources)
+        auto msaaIt = resourcesMsaa.find(resourceName);
+        if (msaaIt != resourcesMsaa.end() && !msaaIt->second.empty())
+        {
+            return CommonFunction::IsDepthFormat(msaaIt->second[0].format);
+        }
+        auto resolveIt = resourcesResolve.find(resourceName);
+        if (resolveIt != resourcesResolve.end() && !resolveIt->second.empty())
+        {
+            return CommonFunction::IsDepthFormat(resolveIt->second[0].format);
+        }
+        return false;
+    };
+
+    // 1. Color Attachments (MSAA & Resolve)
+    for (const auto& resourceName : outputResources)
     {
-        if (resource == "sceneDepth" || resource == "shadowMap") continue;
-        vk::ClearValue clearValue;
-        clearValue.setColor(vk::ClearColorValue(std::array<float, 4>{0.2f, 0.2f, 0.2f, 1.0f}));
-        clearValues.push_back(clearValue);
+        if (isDepthResource(resourceName)) continue;
+
+        // MSAA / Main Attachment
+        clearValues.push_back(clearColor);
     }
-    // Depth or shadowMap
-    vk::ClearValue clearValue;
-    clearValue.setDepthStencil(vk::ClearDepthStencilValue(1.0f, 0));
-    clearValues.push_back(clearValue);
+    
+    // 2. Resolve Attachments
+    if (bUseMsaa)
+    {
+        for (const auto& resourceName : outputResources)
+        {
+            if (isDepthResource(resourceName)) continue;
+            
+            clearValues.push_back(clearColor);
+        }
+    }
+
+    // 3. Depth Attachment
+    bool bHasDepth = false;
+    for(const auto& r : outputResources)
+    {
+        if (isDepthResource(r))
+        {
+            bHasDepth = true;
+            break;
+        }
+    }
+    if (bHasDepth)
+    {
+        clearValues.push_back(clearDepth);
+    }
 
     return clearValues;
 }

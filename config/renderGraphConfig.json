@@ -49,6 +49,7 @@
         {
             "name": "shadow",
             "needCreateMaterial": true,
+            "materialInstancePath": "materials/MI_shadow.json",
             "input": [
             ],
             "output":[
@@ -59,6 +60,7 @@
         },
         {
             "name": "geometry",
+            "needMsaa": true,
             "input": [
                 {
                     "resource": "shadowMap"
@@ -76,6 +78,7 @@
         {
             "name": "postProcess",
             "needCreateMaterial": true,
+            "materialInstancePath": "materials/MI_postProcess.json",
             "bIsPostProcess": true,
             "input": [
                 {

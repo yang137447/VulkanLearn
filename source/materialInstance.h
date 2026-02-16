@@ -108,7 +108,7 @@ public:
 
     inline std::vector<void*>& GetUboMaterialInstanceMapped(){ return uboMaterialInstance.buffersMapped; }
     std::vector<vk::DescriptorBufferInfo>& GetUboMaterialInstanceInfo(){ return uboMaterialInstance.bufferInfos; }
-    vk::DescriptorImageInfo& GetUboMaterialInstanceImageInfo(){ return imageInfo; }
+    vk::DescriptorImageInfo& GetUboMaterialInstanceImageInfo(const std::string& textureName){ return imageInfos.at(textureName); }
 
     void RenderInitialize();
 private:
@@ -126,6 +126,6 @@ private:
     std::unordered_map<std::string, Eigen::Vector4f> vec4Parameters;
     std::unordered_map<std::string, std::shared_ptr<Texture>> textures;
 
-    vk::DescriptorImageInfo imageInfo;
+    std::unordered_map<std::string, vk::DescriptorImageInfo> imageInfos;
     Buffer uboMaterialInstance; 
 };

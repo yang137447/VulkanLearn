@@ -43,7 +43,7 @@ void RenderPipline::CreateDescriptorSetLayouts()
     //对象集 (Set 2)：模型矩阵、实例数据。
     //特效/后处理集 (Set 3)：阴影贴图、G-buffer、post-process 输入输出
     descriptorSetLayouts.resize(MAX_DESCRIPTOR_SETS);
-    for(uint32_t i : {GlobalSetIndex, MaterialSetIndex, ObjectSetIndex, PassSetIndex})
+    for(uint32_t i = 0; i < MAX_DESCRIPTOR_SETS; i++)
     {
         std::vector<vk::DescriptorSetLayoutBinding> descriptorSetLayoutBindings;
 
@@ -60,6 +60,7 @@ void RenderPipline::CreateDescriptorSetLayouts()
                 .setDescriptorCount(1)
                 .setStageFlags(binding.stageFlags)
                 .setPImmutableSamplers(nullptr);
+
             descriptorSetLayoutBindings.push_back(layoutBinding);
         }
 
@@ -141,8 +142,8 @@ void RenderPipline::CreateShader()
     const std::string fragmentDebugShaderName = shaderName + "_frag.debug";
     const std::string vertexDebugShaderPath = CommonFunction::Path(vertexDebugShaderName);
     const std::string fragmentDebugShaderPath = CommonFunction::Path(fragmentDebugShaderName);
-    std::string vertexDebugShaderCode = CommonFunction::ReadFile(vertexShaderPath);
-    std::string fragmentDebugShaderCode = CommonFunction::ReadFile(fragmentShaderPath);
+    std::string vertexDebugShaderCode = CommonFunction::ReadFile(vertexDebugShaderPath);
+    std::string fragmentDebugShaderCode = CommonFunction::ReadFile(fragmentDebugShaderPath);
     std::vector<uint32_t> vertexDebugShaderCode32(reinterpret_cast<uint32_t*>(vertexDebugShaderCode.data()), reinterpret_cast<uint32_t*>(vertexDebugShaderCode.data() + vertexDebugShaderCode.size()));
     std::vector<uint32_t> fragmentDebugShaderCode32(reinterpret_cast<uint32_t*>(fragmentDebugShaderCode.data()), reinterpret_cast<uint32_t*>(fragmentDebugShaderCode.data() + fragmentDebugShaderCode.size()));
     

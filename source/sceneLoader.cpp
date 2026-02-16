@@ -102,145 +102,7 @@ void SceneLoader::LoadMeshObject(const nlohmann::basic_json<>& node)
 
     // 加载材质
     std::string materialInstancePath = meshObjectJson["materialInstancePath"];
-    std::ifstream materialInstanceFile(CommonFunction::Path(materialInstancePath));
-    nlohmann::json materialInstanceJson;
-    materialInstanceFile >> materialInstanceJson;
-    std::string shaderName = materialInstanceJson["shader"];
-    std::shared_ptr<Material> material;
-    if(materials.find(shaderName) != materials.end())
-    {
-        material = materials[shaderName];
-    }
-    else
-    {
-        material = std::make_shared<Material>(
-            &instance.GetDevice(), 
-            &instance.GetGpuMemoryProperties(),
-            &renderGraph.GetRenderpasses()["geometry"].renderPass,
-            shaderName,
-            CommonFunction::GetMsaaSampleCount());
-    }
-
-    // 加载材质参数
-    const auto& shaderTextures = materialInstanceJson["textures"];
-    uint32_t textureCount = shaderTextures.size();
-    const auto& shaderParameters = materialInstanceJson["parameters"];
-    uint32_t parameterCount = shaderParameters.size();
-    // 根据shaderbinding校验参数和贴图
-    auto& shaderBindings = material->GetRenderPipline()->GetShaderBindings();
-        // 检查贴图数量是否匹配
-    uint32_t expectedTextureCount = 0;
-    for(const auto& binding : shaderBindings)
-    { 
-        if(binding.set == 1 && binding.type == vk::DescriptorType::eCombinedImageSampler)
-        {
-            expectedTextureCount++;
-        }
-    }
-    if(expectedTextureCount != textureCount)
-    {
-        throw std::runtime_error("Texture count mismatch in material instance: " + materialInstancePath);
-    }
-        // 检查参数类型是否匹配set1,binding0
-    bool validParemeters = false;
-    for(const auto& binding : shaderBindings)
-    {
-        if(binding.set != 1 || binding.binding != 0)
-        {
-            continue;
-        }
-        if(binding.type != vk::DescriptorType::eUniformBuffer)
-        {
-            continue;
-        }
-        if(binding.memberCount != parameterCount)
-        {
-            break;
-        }
-        bool allMatch = true;
-        for(uint32_t i = 0; i < binding.memberCount; i++)
-        {
-            const std::string& paramName = shaderParameters.begin().key();
-            const auto& paramValue = shaderParameters[paramName];
-            size_t paramSize = JsonParser::ParseValueSize(paramValue);
-            if(paramSize != binding.members[i])
-            {
-                allMatch = false;
-                break;
-            }
-        }
-        if(allMatch)
-        {
-            validParemeters = true;
-            break;
-        }
-    }
-    if(!validParemeters)
-    {
-        throw std::runtime_error("Parameter types or sizes mismatch in material instance: " + materialInstancePath);
-    }
-
-    //创建材质实例
-    std::shared_ptr<MaterialInstance> materialInstance;
-    if(materialInstances.find(materialInstancePath) != materialInstances.end())
-    {
-        materialInstance = materialInstances[materialInstancePath];
-    }
-    else
-    {
-        materialInstance = material->CreateInstance();
-        materialInstance->SetName(materialInstancePath);
-    }
-    //设置材质实例参数
-    //TODO:按shaderbinding设置参数
-    for(const auto& [name, value]  : shaderParameters.items())
-    {
-        const std::string& paramName = name;
-        uint32_t paramSize = JsonParser::ParseValueSize(value);
-        if(paramSize == sizeof(float))
-        {
-            auto paramValue = JsonParser::ParseValue<float>(value);
-            materialInstance->SetParameter(paramName, paramValue);
-        }
-        else if(paramSize == sizeof(Eigen::Vector2f))
-        {
-            auto paramValue = JsonParser::ParseValue<Eigen::Vector2f>(value);
-            materialInstance->SetParameter(paramName, paramValue);
-        }
-        else if(paramSize == sizeof(Eigen::Vector3f))
-        {
-            auto paramValue = JsonParser::ParseValue<Eigen::Vector3f>(value);
-            materialInstance->SetParameter(paramName, paramValue);
-        }
-        else if(paramSize == sizeof(Eigen::Vector4f))
-        {
-            auto paramValue = JsonParser::ParseValue<Eigen::Vector4f>(value);
-            materialInstance->SetParameter(paramName, paramValue);
-        }
-        else 
-        {
-            throw std::runtime_error("Unsupported parameter type or size in material instance: " + materialInstancePath);
-        }
-    }
-    //设置材质实例贴图
-    //TODO:按shaderbinding设置贴图
-    for(const auto& [name, value] : shaderTextures.items())
-    {
-        const std::string& textureName = name;
-        std::string texturePath = value;
-        std::shared_ptr<Texture> texture;
-        if(textures.find(texturePath) != textures.end())
-        {
-            texture = textures[texturePath];
-        }
-        else
-        {
-            texture = std::make_shared<Texture>(texturePath);
-            //缓存贴图
-            textures[texturePath] = texture;
-        }
-        materialInstance->SetTexture(textureName, texture);
-    }
+    std::shared_ptr<MaterialInstance> materialInstance = LoadMaterialInstance(materialInstancePath, CommonFunction::GetMsaaSampleCount());
     
     // 创建场景物体
     std::string sceneObjectName = node["name"];
@@ -262,8 +124,6 @@ void SceneLoader::LoadMeshObject(const nlohmann::basic_json<>& node)
     }
     //储存到场景
     objects.emplace(modelDataPath, std::move(renderableObject));
-    materials.emplace(shaderName, std::move(material));
-    materialInstances.emplace(materialInstancePath, std::move(materialInstance));
     sceneObjects.emplace(sceneObjectName, std::move(sceneObject));  
 }
 
@@ -359,21 +219,175 @@ void SceneLoader::LoadPassMaterial()
         {
             continue;
         }
-
+        std::string passName = passJson["name"];
+        std::string materialInstancePath = passJson["materialInstancePath"];
+        
+        bool bNeedMsaa = passJson.value("needMsaa", false);
         bool bIsPostProcess = passJson.value("bIsPostProcess", false);
-        std::string shaderName = passJson["name"];
-        bool bIsShadowPassMaterial = shaderName == "shadow";
-        // 如果当前 shaderName 对应的材质尚未加载，则新建并缓存
-        if(materials.find(shaderName) == materials.end())
-        {
-            std::shared_ptr<Material> material = std::make_shared<Material>(
-                &instance.GetDevice(), 
-                &instance.GetGpuMemoryProperties(),
-                &renderGraph.GetRenderpasses()[shaderName].renderPass,
-                shaderName,
-                bIsShadowPassMaterial ? vk::SampleCountFlagBits::e1 : CommonFunction::GetMsaaSampleCount());
 
-            materials[shaderName] = std::move(material);
+        // 如果当前 shaderName 对应的材质尚未加载，则新建并缓存
+        std::shared_ptr<MaterialInstance> materialInstance = LoadMaterialInstance(materialInstancePath, bNeedMsaa ? CommonFunction::GetMsaaSampleCount() : vk::SampleCountFlagBits::e1, passName);
+        
+        renderGraph.GetRenderpasses()[passName.data()].materialInstance = materialInstance;
+    }
+}
+
+std::shared_ptr<MaterialInstance> SceneLoader::LoadMaterialInstance(const std::string_view materialInstancePath, vk::SampleCountFlagBits sampleCount, std::string_view passName)
+{
+    VulkanManager& instance = VulkanManager::GetInstance();
+    RenderGraph& renderGraph = RenderGraph::GetInstance();
+
+    std::ifstream materialInstanceFile(CommonFunction::Path(materialInstancePath.data()));
+    nlohmann::json materialInstanceJson;
+    materialInstanceFile >> materialInstanceJson;
+    std::string shaderName = materialInstanceJson["shader"];
+    std::shared_ptr<Material> material;
+    if(materials.find(shaderName) != materials.end())
+    {
+        material = materials[shaderName];
+    }
+    else
+    {
+        bool bIsShadowPass = passName == "shadow";
+        material = std::make_shared<Material>(
+            &instance.GetDevice(), 
+            &instance.GetGpuMemoryProperties(),
+            &renderGraph.GetRenderpasses()[passName.data()].renderPass,
+            shaderName,
+            sampleCount,
+            false,
+            bIsShadowPass
+        );
+    }
+    // 加载材质参数
+    const auto& shaderTextures = materialInstanceJson["textures"];
+    uint32_t textureCount = shaderTextures.size();
+    const auto& shaderParameters = materialInstanceJson["parameters"];
+    uint32_t parameterCount = shaderParameters.size();
+    // 根据shaderbinding校验参数和贴图
+    auto& shaderBindings = material->GetRenderPipline()->GetShaderBindings();
+        // 检查贴图数量是否匹配
+    uint32_t expectedTextureCount = 0;
+    for(const auto& binding : shaderBindings)
+    { 
+        if(binding.set == 1 && binding.type == vk::DescriptorType::eCombinedImageSampler)
+        {
+            expectedTextureCount++;
         }
     }
+    if(expectedTextureCount != textureCount)
+    {
+        throw std::runtime_error(std::string("Texture count mismatch in material instance: ") + materialInstancePath.data());
+    }
+        // 检查参数类型是否匹配set1,binding0
+    bool validParemeters = false;
+    bool hasMaterialUbo = false;
+    for(const auto& binding : shaderBindings)
+    {
+        if(binding.set != 1 || binding.binding != 0)
+        {
+            continue;
+        }
+        if(binding.type != vk::DescriptorType::eUniformBuffer)
+        {
+            continue;
+        }
+        hasMaterialUbo = true;
+        if(binding.memberCount != parameterCount)
+        {
+            break;
+        }
+        bool allMatch = true;
+        uint32_t i = 0;
+        for(auto it = shaderParameters.begin(); it != shaderParameters.end(); ++it, ++i)
+        {
+            const auto& paramValue = it.value();
+            size_t paramSize = JsonParser::ParseValueSize(paramValue);
+            if(i >= binding.members.size() || paramSize != binding.members[i])
+            {
+                allMatch = false;
+                break;
+            }
+        }
+        if(allMatch)
+        {
+            validParemeters = true;
+            break;
+        }
+    }
+    if(!validParemeters)
+    {
+        if(!(parameterCount == 0 && !hasMaterialUbo))
+        {
+            throw std::runtime_error(std::string("Parameter types or sizes mismatch in material instance: ") + materialInstancePath.data());
+        }
+    }
+
+    //创建材质实例
+    std::shared_ptr<MaterialInstance> materialInstance;
+    if(materialInstances.find(materialInstancePath.data()) != materialInstances.end())
+    {
+        materialInstance = materialInstances[materialInstancePath.data()];
+    }
+    else
+    {
+        materialInstance = material->CreateInstance();
+        materialInstance->SetName(materialInstancePath.data());
+    }
+    //设置材质实例参数
+    //TODO:按shaderbinding设置参数
+    for(const auto& [name, value]  : shaderParameters.items())
+    {
+        const std::string& paramName = name;
+        uint32_t paramSize = JsonParser::ParseValueSize(value);
+        if(paramSize == sizeof(float))
+        {
+            auto paramValue = JsonParser::ParseValue<float>(value);
+            materialInstance->SetParameter(paramName, paramValue);
+        }
+        else if(paramSize == sizeof(Eigen::Vector2f))
+        {
+            auto paramValue = JsonParser::ParseValue<Eigen::Vector2f>(value);
+            materialInstance->SetParameter(paramName, paramValue);
+        }
+        else if(paramSize == sizeof(Eigen::Vector3f))
+        {
+            auto paramValue = JsonParser::ParseValue<Eigen::Vector3f>(value);
+            materialInstance->SetParameter(paramName, paramValue);
+        }
+        else if(paramSize == sizeof(Eigen::Vector4f))
+        {
+            auto paramValue = JsonParser::ParseValue<Eigen::Vector4f>(value);
+            materialInstance->SetParameter(paramName, paramValue);
+        }
+        else 
+        {
+            throw std::runtime_error(std::string("Unsupported parameter type or size in material instance: ") + materialInstancePath.data());
+        }
+    }
+    //设置材质实例贴图
+    //TODO:按shaderbinding设置贴图
+    for(const auto& [name, value] : shaderTextures.items())
+    {
+        const std::string& textureName = name;
+        std::string texturePath = value;
+        std::shared_ptr<Texture> texture;
+        if(textures.find(texturePath) != textures.end())
+        {
+            texture = textures[texturePath];
+        }
+        else
+        {
+            texture = std::make_shared<Texture>(texturePath);
+            //缓存贴图
+            textures[texturePath] = texture;
+        }
+        materialInstance->SetTexture(textureName, texture);
+    }
+
+    //缓存材质和材质实例
+    materials.emplace(shaderName, material);
+    materialInstances.emplace(materialInstancePath, materialInstance);
+
+    return materialInstance;
 }

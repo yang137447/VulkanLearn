@@ -80,14 +80,14 @@ void RenderSystem::InitRenderObject()
 
 void RenderSystem::Render()
 {
-    static VulkanManager& instance = VulkanManager::GetInstance();
-    static vk::Device& device = instance.GetDevice();
-    static vk::SwapchainKHR& swapChain = instance.GetSwapChain();
-    static uint32_t swapchainImageCount = instance.GetSwapChainImageCount();
-    static vk::Queue& graphicQueue = instance.GetGraphicQueue();
-    static LightManager& lightManager = LightManager::GetInstance();
-    static RenderGraph& renderGraph = RenderGraph::GetInstance();
-    static SceneLoader& sceneLoader = SceneLoader::GetInstance();
+    VulkanManager& instance = VulkanManager::GetInstance();
+    vk::Device& device = instance.GetDevice();
+    vk::SwapchainKHR& swapChain = instance.GetSwapChain();
+    uint32_t swapchainImageCount = instance.GetSwapChainImageCount();
+    vk::Queue& graphicQueue = instance.GetGraphicQueue();
+    LightManager& lightManager = LightManager::GetInstance();
+    RenderGraph& renderGraph = RenderGraph::GetInstance();
+    SceneLoader& sceneLoader = SceneLoader::GetInstance();
 
     uint32_t cpuSyncIndex = currentFrame % MAX_FRAMES_IN_FLIGHT;
     uint32_t gpuSyncIndex = currentFrame % swapchainImageCount;
@@ -120,8 +120,10 @@ void RenderSystem::Render()
     beginInfo.setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
     commandBuffer.begin(beginInfo);
 
-    for (const auto& renderPassName : renderGraph.GetRenderpassOrdered())
+    const auto& renderPassOrdered = renderGraph.GetRenderpassesOrdered();
+    for (size_t passIndex = 0; passIndex < renderPassOrdered.size(); ++passIndex)
     {
+        const auto& renderPassName = renderPassOrdered[passIndex];
         const auto& renderPass = renderGraph.GetRenderpasses().at(renderPassName);
         //TODO: 后续的shadow解决方案应该是生成专用的shadowshader以提高性能,当前先这样临时处理
         if (renderPassName == "shadow")
@@ -131,7 +133,7 @@ void RenderSystem::Render()
 
             vk::RenderPassBeginInfo renderPassBeginInfo;
             renderPassBeginInfo.setRenderPass(renderPass.renderPass);
-            renderPassBeginInfo.setFramebuffer(renderPass.framebuffers[0]);
+            renderPassBeginInfo.setFramebuffer(renderPass.framebuffers[swapChainImageIndex]);
             renderPassBeginInfo.setRenderArea(vk::Rect2D(vk::Offset2D(0, 0), vk::Extent2D(renderPass.width, renderPass.height)));
             renderPassBeginInfo.setClearValues(renderPass.clearValues);
             commandBuffer.beginRenderPass(renderPassBeginInfo, vk::SubpassContents::eInline);
@@ -140,7 +142,19 @@ void RenderSystem::Render()
             const RenderPipline& renderPipline = *sceneLoader.GetMaterials().at(renderPassName)->GetRenderPipline();
             commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, renderPipline.GetGraphicsPipeline());
 
-            lightManager.UpdateLightBuffer(swapChainImageIndex);
+            // pass级别更新, 对一般物体的统一处理
+            const std::weak_ptr<MaterialInstance> materialInstance = renderPass.materialInstance;
+            if(materialInstance.expired())
+            {
+                std::cout << "materialInstance is expired" << std::endl;
+                continue;
+            }
+            else
+            {
+                this->UpdateUBOMaterialInstance(materialInstance.lock());
+            }
+
+            // lightManager.UpdateLightBuffer(swapChainImageIndex);
             // 渲染每种材质
             for (const auto& [shaderName, shaderObjects] : hierarchyObjects) {
                 // // 绑定Pipeline
@@ -169,12 +183,12 @@ void RenderSystem::Render()
                         }
                         auto objectPtr = object.lock();
                         // 绑定DescriptorSet
-                        const auto& descriptorSets = objectPtr->GetDescriptorSets(swapChainImageIndex);
+                        const auto& descriptorSets = objectPtr->GetDescriptorSetsForShadow(swapChainImageIndex);
                         commandBuffer.bindDescriptorSets(
                             vk::PipelineBindPoint::eGraphics,
                             renderPipline.GetPipelineLayout(),
                             GlobalSetIndex,
-                            descriptorSets[GlobalSetIndex],
+                            renderPass.GetDescriptorSets()[swapChainImageIndex][GlobalSetIndex],
                             nullptr);
                         commandBuffer.bindDescriptorSets(
                             vk::PipelineBindPoint::eGraphics,
@@ -195,7 +209,7 @@ void RenderSystem::Render()
 
             vk::RenderPassBeginInfo renderPassBeginInfo;
             renderPassBeginInfo.setRenderPass(renderPass.renderPass);
-            renderPassBeginInfo.setFramebuffer(renderPass.framebuffers[0]);
+            renderPassBeginInfo.setFramebuffer(renderPass.framebuffers[swapChainImageIndex]);
             renderPassBeginInfo.setRenderArea(vk::Rect2D(vk::Offset2D(0, 0), vk::Extent2D(renderPass.width, renderPass.height)));
             renderPassBeginInfo.setClearValues(renderPass.clearValues);
             commandBuffer.beginRenderPass(renderPassBeginInfo, vk::SubpassContents::eInline);
@@ -206,7 +220,7 @@ void RenderSystem::Render()
                 // 绑定Pipeline
                 const RenderPipline& renderPipline = *sceneLoader.GetMaterials().at(shaderName)->GetRenderPipline();
                 commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, renderPipline.GetGraphicsPipeline());
-                if (!renderPass.inputDescriptorSets.empty())
+                if (!renderPass.GetDescriptorSets()[swapChainImageIndex].empty())
                 {
                     bool bHasPassSet = false;
                     for(const auto& binding : renderPipline.GetShaderBindings())
@@ -224,7 +238,7 @@ void RenderSystem::Render()
                             vk::PipelineBindPoint::eGraphics,
                             renderPipline.GetPipelineLayout(),
                             PassSetIndex,
-                            renderPass.inputDescriptorSets[0],
+                            renderPass.GetDescriptorSets()[swapChainImageIndex][PassSetIndex],
                             nullptr);
                     }
                 }
@@ -268,7 +282,7 @@ void RenderSystem::Render()
             // 获取输入资源
             for (const auto& input : renderPass.inputResources)
             {
-                const RenderResource& inputResource = renderGraph.GetColorResourcesResolve()[input];
+                const RenderResource& inputResource = renderGraph.GetResourcesResolve()[input][swapChainImageIndex];
             }
 
             // 开始渲染通道
@@ -287,63 +301,93 @@ void RenderSystem::Render()
                 vk::PipelineBindPoint::eGraphics,
                 renderPipline.GetPipelineLayout(),
                 PassSetIndex,
-                renderPass.inputDescriptorSets[0],
+                renderPass.GetDescriptorSets()[swapChainImageIndex][PassSetIndex],
                 nullptr);
             
             renderPass.Draw(commandBuffer);
         }
         commandBuffer.endRenderPass();
 
-        // 添加Barrier, 确保pass之间的资源可见性
+        // 添加Barrier, 确保pass之间的资源可见性（仅对后续会被采样的输出资源做 layout transition）
+        enum class ResourceNextUse { None, Sampled, AttachmentWrite };
+        auto FindNextUse = [&](const std::string& resourceName) -> ResourceNextUse
+        {
+            for(size_t nextIndex = passIndex + 1; nextIndex < renderPassOrdered.size(); ++nextIndex)
+            {
+                const auto& nextPass = renderGraph.GetRenderpasses().at(renderPassOrdered[nextIndex]);
+                if (std::find(nextPass.inputResources.begin(), nextPass.inputResources.end(), resourceName) != nextPass.inputResources.end())
+                {
+                    return ResourceNextUse::Sampled;
+                }
+                if (std::find(nextPass.outputResources.begin(), nextPass.outputResources.end(), resourceName) != nextPass.outputResources.end())
+                {
+                    return ResourceNextUse::AttachmentWrite;
+                }
+            }
+            return ResourceNextUse::None;
+        };
+
+        auto& resolveMap = renderGraph.GetResourcesResolve();
         for(const auto& resourceName : renderPass.outputResources)
         {
-            if (resourceName == "swapChain" || resourceName == "sceneDepth") continue;
-            
-            if (resourceName == "shadowMap")
-            {
-                // 手动转换 ShadowMap格式
-                auto& shadowMap = renderGraph.GetShadowMap();
+            if (resourceName == "swapChain") continue;
 
-                // 1. 将 Resolve 资源转换为 Shader Read (供后续 Pass 使用)
-                vk::ImageMemoryBarrier barrierResolveToRead;
-                barrierResolveToRead
-                    .setSrcAccessMask(vk::AccessFlagBits::eDepthStencilAttachmentRead)
+            if (FindNextUse(resourceName) != ResourceNextUse::Sampled)
+            {
+                continue;
+            }
+
+            auto it = resolveMap.find(resourceName);
+            if (it == resolveMap.end())
+            {
+                continue;
+            }
+
+            auto& resource = it->second[swapChainImageIndex];
+            const bool bIsDepth = CommonFunction::IsDepthFormat(resource.format);
+
+            vk::ImageAspectFlags aspectMask = bIsDepth ? vk::ImageAspectFlagBits::eDepth : vk::ImageAspectFlagBits::eColor;
+            if (bIsDepth && CommonFunction::HasStencilComponent(resource.format))
+            {
+                aspectMask |= vk::ImageAspectFlagBits::eStencil;
+            }
+
+            vk::ImageMemoryBarrier imageBarrier;
+            imageBarrier
+                .setImage(resource.image)
+                .setSubresourceRange(vk::ImageSubresourceRange(aspectMask, 0, 1, 0, 1));
+
+            vk::PipelineStageFlags srcStage;
+            vk::PipelineStageFlags dstStage = vk::PipelineStageFlagBits::eFragmentShader;
+
+            if (bIsDepth)
+            {
+                imageBarrier
+                    .setSrcAccessMask(vk::AccessFlagBits::eDepthStencilAttachmentWrite)
                     .setDstAccessMask(vk::AccessFlagBits::eShaderRead)
                     .setOldLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal)
-                    .setNewLayout(vk::ImageLayout::eDepthStencilReadOnlyOptimal)
-                    .setImage(shadowMap.image)
-                    .setSubresourceRange(vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eDepth, 0, 1, 0, 1));
+                    .setNewLayout(vk::ImageLayout::eDepthStencilReadOnlyOptimal);
 
-                commandBuffer.pipelineBarrier(
-                    vk::PipelineStageFlagBits::eEarlyFragmentTests | vk::PipelineStageFlagBits::eLateFragmentTests,
-                    vk::PipelineStageFlagBits::eFragmentShader,
-                    vk::DependencyFlagBits::eByRegion,
-                    0, nullptr,
-                    0, nullptr,
-                    1, &barrierResolveToRead);
+                srcStage = vk::PipelineStageFlagBits::eEarlyFragmentTests | vk::PipelineStageFlagBits::eLateFragmentTests;
             }
-            // 查找资源
-            auto& resolveMap = renderGraph.GetColorResourcesResolve();
-            if (resolveMap.find(resourceName) != resolveMap.end()) 
+            else
             {
-                auto& resource = resolveMap.at(resourceName);
-                vk::ImageMemoryBarrier imageBarrier;
                 imageBarrier
                     .setSrcAccessMask(vk::AccessFlagBits::eColorAttachmentWrite)
                     .setDstAccessMask(vk::AccessFlagBits::eShaderRead)
                     .setOldLayout(vk::ImageLayout::eColorAttachmentOptimal)
-                    .setNewLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
-                    .setImage(resource.image)
-                    .setSubresourceRange(vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1));
-                
-                commandBuffer.pipelineBarrier(
-                    vk::PipelineStageFlagBits::eColorAttachmentOutput,
-                    vk::PipelineStageFlagBits::eFragmentShader,
-                    vk::DependencyFlagBits::eByRegion,
-                    0, nullptr,
-                    0, nullptr,
-                    1, &imageBarrier);
+                    .setNewLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
+
+                srcStage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
             }
+
+            commandBuffer.pipelineBarrier(
+                srcStage,
+                dstStage,
+                vk::DependencyFlagBits::eByRegion,
+                0, nullptr,
+                0, nullptr,
+                1, &imageBarrier);
         }
     }
 

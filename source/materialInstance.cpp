@@ -4,6 +4,7 @@
 #include "renderPipline.h"
 #include "vulkanManager.h"
 #include "commonFunction.h"
+#include "shaderReflect.h"
 
 MaterialInstance::MaterialInstance()
 {
@@ -130,10 +131,9 @@ void MaterialInstance::CreateUniformBuffers()
 void MaterialInstance::DestroyUniformBuffers()
 {
     auto& device = VulkanManager::GetInstance().GetDevice();
-    uint32_t swapChainImageCount = VulkanManager::GetInstance().GetSwapChainImageCount();
     for(auto& ubo: {&uboMaterialInstance})
     {
-        for(int i = 0; i < swapChainImageCount; i++)
+        for(int i = 0; i < ubo->buffers.size(); i++)
         {
             device.unmapMemory(ubo->bufferMemories[i]);
             device.destroyBuffer(ubo->buffers[i]);
@@ -158,11 +158,19 @@ void MaterialInstance::SetupDescriptors()
         }
     }
     // 设置image信息
-    // TODO: 这里应该根据shaderBinding来判断是否需要设置descriptor
-    if (HasTexture("albedoMap"))
+    for(const auto& binding: baseMaterial.lock()->GetRenderPipline()->GetShaderBindings())
     {
-        const auto tex = GetTexture("albedoMap");
-        imageInfo
+        if(binding.set != MaterialSetIndex && binding.type != vk::DescriptorType::eCombinedImageSampler)
+        {
+            continue;
+        }
+        const auto tex = GetTexture(binding.name);
+        if(tex == nullptr)
+        {
+            continue;
+            std::cerr << "Texture not found: " << binding.name << std::endl;
+        }
+        imageInfos[binding.name]
             .setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
             .setImageView(tex->getImageView())
             .setSampler(tex->getSampler());

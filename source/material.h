@@ -9,7 +9,8 @@ class Material: public std::enable_shared_from_this<Material>
 {
 public:
     ~Material();
-    Material(vk::Device* device, vk::PhysicalDeviceMemoryProperties* gpuMemoryProperties, vk::RenderPass* renderPass, const std::string& shaderName, vk::SampleCountFlagBits samples);
+    Material(vk::Device* device, vk::PhysicalDeviceMemoryProperties* gpuMemoryProperties, vk::RenderPass* renderPass, const std::string& shaderName, vk::SampleCountFlagBits samples, bool bIsPostProcess = false,
+                    bool bIsShadowPass = false);
 
     std::shared_ptr<MaterialInstance> CreateInstance();
 
