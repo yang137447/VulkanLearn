@@ -17,6 +17,8 @@ RenderableObject::RenderableObject(std::vector<Vertex> vertices, std::vector<uin
     this->vertices = std::move(vertices);
     this->indices = std::move(indices);
 
+    //更新boundingBox
+    UpdateLocalBounds();
     // 创建顶点缓冲区
     CreateVertexBuffer();
     // 创建索引缓冲区
@@ -137,4 +139,21 @@ void RenderableObject::DestroyIndexBuffer()
 {
     device->destroyBuffer(indexBuffer);
     device->freeMemory(indexBufferMemory);
+}
+void RenderableObject::UpdateLocalBounds()
+{
+    if (vertices.empty())
+    {
+        boundsMin = Eigen::Vector3f(0.0f, 0.0f, 0.0f);
+        boundsMax = Eigen::Vector3f(0.0f, 0.0f, 0.0f);
+        return;
+    }
+
+    boundsMin = vertices[0].position;
+    boundsMax = vertices[0].position;
+    for (const auto& vertex : vertices)
+    {
+        boundsMin = boundsMin.cwiseMin(vertex.position);
+        boundsMax = boundsMax.cwiseMax(vertex.position);
+    }
 }

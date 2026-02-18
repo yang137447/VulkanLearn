@@ -2,6 +2,7 @@
 #include <iostream>
 #include <limits>
 #include <algorithm>
+#include <array>
 #include "sceneObject.h"
 #include "materialInstance.h"
 #include "material.h"
@@ -484,6 +485,7 @@ void RenderSystem::UpdateUBOGlobalForShadow(vk::CommandBuffer& commandBuffer, ui
     float cameraNear = camera.GetClipNear();
     float cameraFar = camera.GetClipFar();
     cameraFar = 10.0f;
+    float frustumPadding = 0.1f;
         // 计算视锥体近平面四个点和远平面四个点（世界空间）
     std::vector<Eigen::Vector3f> FrustumPoints;
     Eigen::Vector3f cameraRight = camera.GetRightVector();
@@ -491,6 +493,7 @@ void RenderSystem::UpdateUBOGlobalForShadow(vk::CommandBuffer& commandBuffer, ui
     float cameraHFov = camera.GetHFOV();
     float aspect = static_cast<float>(CommonFunction::GetWindowSize().x()) / static_cast<float>(CommonFunction::GetWindowSize().y());
     float cameraHFovRad = cameraHFov * static_cast<float>(M_PI) / 180.0f;
+    Eigen::Matrix4f viewMatrix = camera.GetViewMatrix();
     float nearHalfWidth = std::tan(cameraHFovRad * 0.5f) * cameraNear;
     float nearHalfHeight = nearHalfWidth / aspect;
     float farHalfWidth = std::tan(cameraHFovRad * 0.5f) * cameraFar;
@@ -525,7 +528,7 @@ void RenderSystem::UpdateUBOGlobalForShadow(vk::CommandBuffer& commandBuffer, ui
     }
         // 2.1构建worldCoordinateSystem -> shadowCoordinateSystem
     Eigen::Matrix3f worldToShadowMatrix;
-    worldToShadowMatrix = CommonFunction::RotationToMatrix(directionalLight.lock()->GetRotation()).block<3, 3>(0, 0);
+    worldToShadowMatrix = CommonFunction::RotationToMatrix(directionalLight.lock()->GetRotation()).block<3, 3>(0, 0).transpose();
 
         // 2.3将点转换到shadowCoordinateSystem
     std::vector<Eigen::Vector3f> PointsInShadowSys;
@@ -594,15 +597,63 @@ void RenderSystem::UpdateUBOGlobalForShadow(vk::CommandBuffer& commandBuffer, ui
     Eigen::Vector3f ShadowCameraPositionInShadowSys = Eigen::Vector3f(center2DInShadowSys.x(), center2DInShadowSys.y(), 0.0f);
     
                 // z 在shadowCoordinateSystem中的值， 这个代表shadowCamera的Z值
-    float minZ = std::numeric_limits<float>::max();
-    float maxZ = std::numeric_limits<float>::lowest();
+    float defaultMinZ = std::numeric_limits<float>::max();
+    float defaultMaxZ = std::numeric_limits<float>::lowest();
     for(const auto& point : PointsInShadowSys)
     {
-        // Z axis is orthogonal to the 2D plane, so Z values are preserved
-        maxZ = std::max(maxZ, point.z());
-        minZ = std::min(minZ, point.z());
+        defaultMaxZ = std::max(defaultMaxZ, point.z());
+        defaultMinZ = std::min(defaultMinZ, point.z());
     }
-    ShadowCameraPositionInShadowSys.z() = minZ;
+
+    float minZ = std::numeric_limits<float>::max();
+    float maxZ = std::numeric_limits<float>::lowest();
+    bool hasObjectBounds = false;
+
+    Eigen::Vector3f shadowAxisWorld = worldToShadowMatrix.transpose() * Eigen::Vector3f(0.0f, 0.0f, 1.0f);
+
+    for (const auto& [objectName, sceneObject] : sceneLoader.GetSceneObjects())
+    {
+        if (!sceneObject)
+        {
+            continue;
+        }
+        const auto& renderableObject = sceneObject->GetRenderableObject();
+        if (!renderableObject)
+        {
+            continue;
+        }
+
+        const auto& localMin = renderableObject->GetBoundsMin();
+        const auto& localMax = renderableObject->GetBoundsMax();
+        const auto& modelMatrix = sceneObject->GetModelMatrix();
+        auto worldCorners = BuildWorldCorners(localMin, localMax, modelMatrix);
+
+        Eigen::Vector3f viewMin;
+        Eigen::Vector3f viewMax;
+        ComputeViewAabbFromWorldCorners(viewMatrix, worldCorners, viewMin, viewMax);
+
+        if (!IntersectsSplitFrustumFast(viewMin, viewMax, cameraNear, cameraFar, cameraHFovRad, aspect, frustumPadding))
+        {
+            continue;
+        }
+
+        Eigen::Vector3f worldMin;
+        Eigen::Vector3f worldMax;
+        ComputeAabbFromCorners(worldCorners, worldMin, worldMax);
+
+        auto axisRange = ComputeMinMaxAlongAxis(worldMin, worldMax, shadowAxisWorld);
+        minZ = std::min(minZ, axisRange.first);
+        maxZ = std::max(maxZ, axisRange.second);
+        hasObjectBounds = true;
+    }
+
+    if (!hasObjectBounds)
+    {
+        minZ = defaultMinZ;
+        maxZ = defaultMaxZ;
+    }
+
+    ShadowCameraPositionInShadowSys.z() = maxZ;
         // 2.5 计算shadowCamera的位置
     Eigen::Vector3f shadowCameraPosition = worldToShadowMatrix.transpose() * ShadowCameraPositionInShadowSys;
 
@@ -767,4 +818,91 @@ void RenderSystem::SetupDescriptors()
                 .setRange(ubo->bufferSize);
         }
     }
+}
+
+std::pair<float, float> RenderSystem::ComputeMinMaxAlongAxis(const Eigen::Vector3f& aabbMin, const Eigen::Vector3f& aabbMax, const Eigen::Vector3f& axis) const
+{
+    Eigen::Vector3f dir = axis;
+    float len = dir.norm();
+    if (len > 0.0f)
+    {
+        dir /= len;
+    }
+    std::array<Eigen::Vector3f, 8> corners = {
+        Eigen::Vector3f(aabbMin.x(), aabbMin.y(), aabbMin.z()),
+        Eigen::Vector3f(aabbMax.x(), aabbMin.y(), aabbMin.z()),
+        Eigen::Vector3f(aabbMin.x(), aabbMax.y(), aabbMin.z()),
+        Eigen::Vector3f(aabbMax.x(), aabbMax.y(), aabbMin.z()),
+        Eigen::Vector3f(aabbMin.x(), aabbMin.y(), aabbMax.z()),
+        Eigen::Vector3f(aabbMax.x(), aabbMin.y(), aabbMax.z()),
+        Eigen::Vector3f(aabbMin.x(), aabbMax.y(), aabbMax.z()),
+        Eigen::Vector3f(aabbMax.x(), aabbMax.y(), aabbMax.z())
+    };
+    float minProj = dir.dot(corners[0]);
+    float maxProj = minProj;
+    for (size_t i = 1; i < corners.size(); ++i)
+    {
+        float proj = dir.dot(corners[i]);
+        minProj = std::min(minProj, proj);
+        maxProj = std::max(maxProj, proj);
+    }
+    return { minProj, maxProj };
+}
+
+std::array<Eigen::Vector3f, 8> RenderSystem::BuildWorldCorners(const Eigen::Vector3f& localMin, const Eigen::Vector3f& localMax, const Eigen::Matrix4f& modelMatrix)
+{
+    return {
+        (modelMatrix * Eigen::Vector4f(localMin.x(), localMin.y(), localMin.z(), 1.0f)).head<3>(),
+        (modelMatrix * Eigen::Vector4f(localMax.x(), localMin.y(), localMin.z(), 1.0f)).head<3>(),
+        (modelMatrix * Eigen::Vector4f(localMin.x(), localMax.y(), localMin.z(), 1.0f)).head<3>(),
+        (modelMatrix * Eigen::Vector4f(localMax.x(), localMax.y(), localMin.z(), 1.0f)).head<3>(),
+        (modelMatrix * Eigen::Vector4f(localMin.x(), localMin.y(), localMax.z(), 1.0f)).head<3>(),
+        (modelMatrix * Eigen::Vector4f(localMax.x(), localMin.y(), localMax.z(), 1.0f)).head<3>(),
+        (modelMatrix * Eigen::Vector4f(localMin.x(), localMax.y(), localMax.z(), 1.0f)).head<3>(),
+        (modelMatrix * Eigen::Vector4f(localMax.x(), localMax.y(), localMax.z(), 1.0f)).head<3>()
+    };
+}
+
+void RenderSystem::ComputeAabbFromCorners(const std::array<Eigen::Vector3f, 8>& corners, Eigen::Vector3f& outMin, Eigen::Vector3f& outMax)
+{
+    outMin = corners[0];
+    outMax = corners[0];
+    for (const auto& corner : corners)
+    {
+        outMin = outMin.cwiseMin(corner);
+        outMax = outMax.cwiseMax(corner);
+    }
+}
+
+void RenderSystem::ComputeViewAabbFromWorldCorners(const Eigen::Matrix4f& viewMatrix, const std::array<Eigen::Vector3f, 8>& worldCorners, Eigen::Vector3f& outMin, Eigen::Vector3f& outMax)
+{
+    outMin = (viewMatrix * Eigen::Vector4f(worldCorners[0].x(), worldCorners[0].y(), worldCorners[0].z(), 1.0f)).head<3>();
+    outMax = outMin;
+    for (const auto& corner : worldCorners)
+    {
+        Eigen::Vector3f viewCorner = (viewMatrix * Eigen::Vector4f(corner.x(), corner.y(), corner.z(), 1.0f)).head<3>();
+        outMin = outMin.cwiseMin(viewCorner);
+        outMax = outMax.cwiseMax(viewCorner);
+    }
+}
+
+bool RenderSystem::IntersectsSplitFrustumFast(const Eigen::Vector3f& viewMin, const Eigen::Vector3f& viewMax, float splitNear, float splitFar, float fovRad, float aspect, float padding)
+{
+    float minZView = viewMin.z();
+    float maxZView = viewMax.z();
+    float splitNearP = std::max(0.0f, splitNear - padding);
+    float splitFarP = splitFar + padding;
+    if (maxZView < -splitFarP || minZView > -splitNearP)
+    {
+        return false;
+    }
+    float zForXY = std::min(minZView, -splitNearP);
+    float distance = std::max(0.0f, -zForXY);
+    float halfWidth = std::tan(fovRad * 0.5f) * distance;
+    float halfHeight = halfWidth / aspect;
+    if (viewMax.x() < -halfWidth || viewMin.x() > halfWidth || viewMax.y() < -halfHeight || viewMin.y() > halfHeight)
+    {
+        return false;
+    }
+    return true;
 }

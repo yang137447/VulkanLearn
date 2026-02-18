@@ -1,10 +1,12 @@
 #pragma once
 #include <vulkan/vulkan.hpp>
 #include <Eigen/Dense>
+#include <array>
 #include <memory>
 #include <vector>
 #include <unordered_map>
 #include <string>
+#include <utility>
 #include "baseStructs.h"
 
 class Material;
@@ -35,6 +37,13 @@ private:
     void CreateUniformBuffers();
     void DestroyUniformBuffers();
     void SetupDescriptors();
+
+        // 用于使用boundingbox加速
+    std::pair<float, float> ComputeMinMaxAlongAxis(const Eigen::Vector3f& aabbMin, const Eigen::Vector3f& aabbMax, const Eigen::Vector3f& axis) const;
+    std::array<Eigen::Vector3f, 8> BuildWorldCorners(const Eigen::Vector3f& localMin, const Eigen::Vector3f& localMax, const Eigen::Matrix4f& modelMatrix);
+    void ComputeAabbFromCorners(const std::array<Eigen::Vector3f, 8>& corners, Eigen::Vector3f& outMin, Eigen::Vector3f& outMax);
+    void ComputeViewAabbFromWorldCorners(const Eigen::Matrix4f& viewMatrix, const std::array<Eigen::Vector3f, 8>& worldCorners, Eigen::Vector3f& outMin, Eigen::Vector3f& outMax);
+    bool IntersectsSplitFrustumFast(const Eigen::Vector3f& viewMin, const Eigen::Vector3f& viewMax, float splitNear, float splitFar, float fovRad, float aspect, float padding);
 
     uint32_t currentFrame = 0;
     uint32_t cpuSyncIndex = 0;

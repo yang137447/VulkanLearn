@@ -1,5 +1,6 @@
 #pragma once
 #include <vulkan/vulkan.hpp>
+#include <Eigen/Dense>
 
 class RenderableObject
 {
@@ -8,8 +9,11 @@ public:
     ~RenderableObject();
 
     void Draw(vk::CommandBuffer& commandBuffer, uint32_t width, uint32_t height);
+    const Eigen::Vector3f& GetBoundsMin() const { return boundsMin; }
+    const Eigen::Vector3f& GetBoundsMax() const { return boundsMax; }
 
 private:
+    void UpdateLocalBounds();
 
     void CreateVertexBuffer();
     void DestroyVertexBuffer();
@@ -27,6 +31,8 @@ private:
 
     std::vector<struct Vertex> vertices;
     std::vector<uint32_t> indices;
+    Eigen::Vector3f boundsMin;
+    Eigen::Vector3f boundsMax;
     vk::Buffer vertexBuffer;
     vk::DeviceMemory vertexBufferMemory;
     vk::DescriptorBufferInfo vertexBufferInfo;
