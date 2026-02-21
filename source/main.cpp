@@ -11,6 +11,7 @@
 #include "controller.h"
 #include "sceneObject.h"
 #include "renderGraph.h"
+#include "profiler.h"
 
 int main(int argc, char **argv)
 {
@@ -83,33 +84,49 @@ int main(int argc, char **argv)
 
     while (!shouldClose)
     {
+        PROFILE_SCOPE("Frame");
+
         //delta time
         float deltaTime = CommonFunction::GetDeltaTime();
-        while (SDL_PollEvent(&event))
         {
-            switch (event.type)
+            PROFILE_SCOPE("Events");
+            while (SDL_PollEvent(&event))
             {
-                case SDL_EVENT_WINDOW_RESIZED:
-                    std::cout << "Window resized to " << event.window.data1 << "x" << event.window.data2 << std::endl;
-                    vulkanManager.ReCreateSwapChain(event.window.data1, event.window.data2);
-                    break;
-                case SDL_EVENT_QUIT:
-                    std::cout << "Quit event received" << std::endl;
-                    shouldClose = true;
-                    break;
+                switch (event.type)
+                {
+                    case SDL_EVENT_WINDOW_RESIZED:
+                        std::cout << "Window resized to " << event.window.data1 << "x" << event.window.data2 << std::endl;
+                        vulkanManager.ReCreateSwapChain(event.window.data1, event.window.data2);
+                        break;
+                    case SDL_EVENT_QUIT:
+                        std::cout << "Quit event received" << std::endl;
+                        shouldClose = true;
+                        break;
+                }
             }
         }
-        controller.Update(deltaTime);
-        renderSystem.Render();
+        {
+            PROFILE_SCOPE("Update");
+            controller.Update(deltaTime);
+        }
+        {
+            PROFILE_SCOPE("RenderLoop");
+            renderSystem.Render();
+        }
 
         //FPS计算
-        fpsTool.Calculate(deltaTime);
-        SDL_SetWindowTitle(window, fpsTool.getTitle().c_str());
+        {
+            PROFILE_SCOPE("FPS");
+            fpsTool.Calculate(deltaTime);
+            SDL_SetWindowTitle(window, fpsTool.getTitle().c_str());
+        }
+        PROFILE_FRAME();
     }
-    vulkanManager.GetDevice().waitIdle();
-    SDL_DestroyWindow(window);
-    SDL_Vulkan_UnloadLibrary();
-    SDL_Quit();
+    // Wait for device idle before cleanup
+    VulkanManager::GetInstance().GetDevice().waitIdle();
+    Profiler::Instance().EndSession();
 
+    SDL_DestroyWindow(window);
+    SDL_Quit();
     return 0;
 }

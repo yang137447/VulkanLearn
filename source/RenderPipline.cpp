@@ -6,9 +6,11 @@
 #include <vulkan/vulkan_enums.hpp>
 #include "commonFunction.h"
 #include "shaderReflect.h"
+#include "profiler.h"
 
 RenderPipline::RenderPipline(vk::Device *device, vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties, vk::RenderPass* renderPass, const std::string& shaderName, vk::SampleCountFlagBits sampleCount, bool bIsPostProcess, bool bIsShadowPass)
 {
+    PROFILE_FUNCTION();
     this->device = device;
     this->renderPass = renderPass;
     this->physicalDeviceMemoryProperties = physicalDeviceMemoryProperties;

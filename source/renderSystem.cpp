@@ -16,6 +16,7 @@
 #include "lightManager.h"
 #include "renderGraph.h"
 #include "shaderReflect.h"
+#include "profiler.h"
 
 RenderSystem::RenderSystem()
 {
@@ -27,6 +28,7 @@ RenderSystem::~RenderSystem()
 
 void RenderSystem::InitRenderObject()
 {
+    PROFILE_FUNCTION();
     auto& scene = SceneLoader::GetInstance();
     auto& lightManager = LightManager::GetInstance();
     auto& renderGraph = RenderGraph::GetInstance();
@@ -81,6 +83,7 @@ void RenderSystem::InitRenderObject()
 
 void RenderSystem::Render()
 {
+    PROFILE_SCOPE("RenderSystem::Render");
     VulkanManager& instance = VulkanManager::GetInstance();
     vk::Device& device = instance.GetDevice();
     vk::SwapchainKHR& swapChain = instance.GetSwapChain();
@@ -98,19 +101,26 @@ void RenderSystem::Render()
     vk::Semaphore& renderFinishedSemaphore = instance.GetRenderFinishedSemaphores()[gpuSyncIndex];
 
     // 等待前一帧完成
-    vk::Result result = device.waitForFences(taskFinishedFence, true, UINT64_MAX);
+    vk::Result result;
+    {
+        PROFILE_SCOPE("Render:WaitFence");
+        result = device.waitForFences(taskFinishedFence, true, UINT64_MAX);
+    }
     if(result != vk::Result::eSuccess) {
         throw std::runtime_error("Failed to wait for fence");
     }
     device.resetFences(taskFinishedFence);
     
     // 获取下一帧
-    result = device.acquireNextImageKHR(swapChain, UINT64_MAX, imageAcquiredSemaphore, nullptr, &swapChainImageIndex);
+    {
+        PROFILE_SCOPE("Render:AcquireImage");
+        result = device.acquireNextImageKHR(swapChain, UINT64_MAX, imageAcquiredSemaphore, nullptr, &swapChainImageIndex);
+    }
     if(result != vk::Result::eSuccess) {
         throw std::runtime_error("Failed to acquire next image");
     }
     if(swapChainImageIndex != gpuSyncIndex)
-    {
+        {
         // throw std::runtime_error("swapChainImageIndex != gpuSyncIndex");
         //TODO: 使用 gpuSyncIndex 获取的commandBuffer、imageAcquiredSemaphore、renderFinishedSemaphore需要重新获取
     }
@@ -125,6 +135,8 @@ void RenderSystem::Render()
     for (size_t passIndex = 0; passIndex < renderPassOrdered.size(); ++passIndex)
     {
         const auto& renderPassName = renderPassOrdered[passIndex];
+        std::string renderPassScopeName = "RenderPass:" + renderPassName;
+        PROFILE_SCOPE(renderPassScopeName.c_str());
         const auto& renderPass = renderGraph.GetRenderpasses().at(renderPassName);
         //TODO: 后续的shadow解决方案应该是生成专用的shadowshader以提高性能,当前先这样临时处理
         if (renderPassName == "shadow")
@@ -310,6 +322,7 @@ void RenderSystem::Render()
         commandBuffer.endRenderPass();
 
         // 添加Barrier, 确保pass之间的资源可见性（仅对后续会被采样的输出资源做 layout transition）
+        PROFILE_SCOPE("Render:PassBarriers");
         enum class ResourceNextUse { None, Sampled, AttachmentWrite };
         auto FindNextUse = [&](const std::string& resourceName) -> ResourceNextUse
         {
@@ -396,15 +409,18 @@ void RenderSystem::Render()
     commandBuffer.end();
 
     // 提交Command Buffer
-    vk::PipelineStageFlags waitDstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput;
-    vk::SubmitInfo submitInfo;
-    submitInfo
-        .setWaitSemaphores(imageAcquiredSemaphore)
-        .setSignalSemaphores(renderFinishedSemaphore)
-        .setWaitDstStageMask(waitDstStageMask)
-        .setCommandBuffers(commandBuffer);
-    
-    graphicQueue.submit(submitInfo, taskFinishedFence);
+    {
+        PROFILE_SCOPE("Render:Submit");
+        vk::PipelineStageFlags waitDstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput;
+        vk::SubmitInfo submitInfo;
+        submitInfo
+            .setWaitSemaphores(imageAcquiredSemaphore)
+            .setSignalSemaphores(renderFinishedSemaphore)
+            .setWaitDstStageMask(waitDstStageMask)
+            .setCommandBuffers(commandBuffer);
+        
+        graphicQueue.submit(submitInfo, taskFinishedFence);
+    }
     
     // 呈现
     vk::PresentInfoKHR presentInfo;
@@ -413,7 +429,10 @@ void RenderSystem::Render()
         .setImageIndices(swapChainImageIndex)
         .setWaitSemaphores(renderFinishedSemaphore);
 
-    result = graphicQueue.presentKHR(presentInfo);
+    {
+        PROFILE_SCOPE("Render:Present");
+        result = graphicQueue.presentKHR(presentInfo);
+    }
     if(result != vk::Result::eSuccess) {
         throw std::runtime_error("Failed to present image");
     }
@@ -424,7 +443,7 @@ void RenderSystem::Render()
 
 void RenderSystem::UpdateUBOGlobal(vk::CommandBuffer& commandBuffer)
 {
-
+    PROFILE_FUNCTION();
     static const auto& sceneLoader = SceneLoader::GetInstance();
     static Camera& camera = *sceneLoader.GetCamera();
 
@@ -458,6 +477,7 @@ void RenderSystem::UpdateUBOGlobal(vk::CommandBuffer& commandBuffer)
 
 void RenderSystem::UpdateUBOGlobalForShadow(vk::CommandBuffer& commandBuffer, uint32_t PassSizeWidth, uint32_t PassSizeHeight)
 {
+    PROFILE_FUNCTION();
     // 建立一个与光源同轴（Z）的shadowCoordinateSystem: 坐标系统原点为世界中心，旋转轴使用光源的旋转矩阵
     // 将点集从世界空间转换到shadowCoordinateSystem
     //  ->shadowCoordinateSystem
@@ -486,120 +506,69 @@ void RenderSystem::UpdateUBOGlobalForShadow(vk::CommandBuffer& commandBuffer, ui
     float cameraFar = camera.GetClipFar();
     cameraFar = 10.0f;
     float frustumPadding = 0.1f;
-        // 计算视锥体近平面四个点和远平面四个点（世界空间）
-    std::vector<Eigen::Vector3f> FrustumPoints;
+
     Eigen::Vector3f cameraRight = camera.GetRightVector();
     Eigen::Vector3f cameraUp = camera.GetUpVector();
     float cameraHFov = camera.GetHFOV();
     float aspect = static_cast<float>(CommonFunction::GetWindowSize().x()) / static_cast<float>(CommonFunction::GetWindowSize().y());
     float cameraHFovRad = cameraHFov * static_cast<float>(M_PI) / 180.0f;
     Eigen::Matrix4f viewMatrix = camera.GetViewMatrix();
-    float nearHalfWidth = std::tan(cameraHFovRad * 0.5f) * cameraNear;
+
+    float tanHalfFov = std::tan(cameraHFovRad * 0.5f);
+    float nearHalfWidth = tanHalfFov * cameraNear;
     float nearHalfHeight = nearHalfWidth / aspect;
-    float farHalfWidth = std::tan(cameraHFovRad * 0.5f) * cameraFar;
+    float farHalfWidth = tanHalfFov * cameraFar;
     float farHalfHeight = farHalfWidth / aspect;
+
     Eigen::Vector3f nearCenter = cameraPosition + cameraDirection * cameraNear;
     Eigen::Vector3f farCenter = cameraPosition + cameraDirection * cameraFar;
-    Eigen::Vector3f nearTopLeft = nearCenter + cameraUp * nearHalfHeight - cameraRight * nearHalfWidth;
-    Eigen::Vector3f nearTopRight = nearCenter + cameraUp * nearHalfHeight + cameraRight * nearHalfWidth;
-    Eigen::Vector3f nearBottomLeft = nearCenter - cameraUp * nearHalfHeight - cameraRight * nearHalfWidth;
-    Eigen::Vector3f nearBottomRight = nearCenter - cameraUp * nearHalfHeight + cameraRight * nearHalfWidth;
-    Eigen::Vector3f farTopLeft = farCenter + cameraUp * farHalfHeight - cameraRight * farHalfWidth;
-    Eigen::Vector3f farTopRight = farCenter + cameraUp * farHalfHeight + cameraRight * farHalfWidth;
-    Eigen::Vector3f farBottomLeft = farCenter - cameraUp * farHalfHeight - cameraRight * farHalfWidth;
-    Eigen::Vector3f farBottomRight = farCenter - cameraUp * farHalfHeight + cameraRight * farHalfWidth;
-        // 存储近平面和远平面的四个点
-    FrustumPoints.emplace_back(nearTopLeft);
-    FrustumPoints.emplace_back(nearTopRight);
-    FrustumPoints.emplace_back(nearBottomLeft);
-    FrustumPoints.emplace_back(nearBottomRight);
-    FrustumPoints.emplace_back(farTopLeft);
-    FrustumPoints.emplace_back(farTopRight);
-    FrustumPoints.emplace_back(farBottomLeft);
-    FrustumPoints.emplace_back(farBottomRight);
+
+    thread_local std::vector<Eigen::Vector3f> frustumPoints;
+    frustumPoints.clear();
+    frustumPoints.reserve(8);
+    frustumPoints.emplace_back(nearCenter + cameraUp * nearHalfHeight - cameraRight * nearHalfWidth);
+    frustumPoints.emplace_back(nearCenter + cameraUp * nearHalfHeight + cameraRight * nearHalfWidth);
+    frustumPoints.emplace_back(nearCenter - cameraUp * nearHalfHeight - cameraRight * nearHalfWidth);
+    frustumPoints.emplace_back(nearCenter - cameraUp * nearHalfHeight + cameraRight * nearHalfWidth);
+    frustumPoints.emplace_back(farCenter + cameraUp * farHalfHeight - cameraRight * farHalfWidth);
+    frustumPoints.emplace_back(farCenter + cameraUp * farHalfHeight + cameraRight * farHalfWidth);
+    frustumPoints.emplace_back(farCenter - cameraUp * farHalfHeight - cameraRight * farHalfWidth);
+    frustumPoints.emplace_back(farCenter - cameraUp * farHalfHeight + cameraRight * farHalfWidth);
         
     // 2. 计算阴影映射相机的位置
         // 2.1以世界中心为原点，使用光源的旋转矩阵 构建shadowCoordinateSystem
-    std::weak_ptr<DirectinalLight> directionalLight;
-    for(auto&[lightName, light] : sceneLoader.GetDirectinalLight())
+    auto directionalLightIt = sceneLoader.GetDirectinalLight().begin();
+    if (directionalLightIt == sceneLoader.GetDirectinalLight().end())
     {
-        directionalLight = light;
-        break;
+        return;
     }
+    std::weak_ptr<DirectinalLight> directionalLight = directionalLightIt->second;
         // 2.1构建worldCoordinateSystem -> shadowCoordinateSystem
     Eigen::Matrix3f worldToShadowMatrix;
     worldToShadowMatrix = CommonFunction::RotationToMatrix(directionalLight.lock()->GetRotation()).block<3, 3>(0, 0).transpose();
 
-        // 2.3将点转换到shadowCoordinateSystem
-    std::vector<Eigen::Vector3f> PointsInShadowSys;
-    for(const auto& point : FrustumPoints)
+    // 2.3将点转换到shadowCoordinateSystem
+    thread_local std::vector<Eigen::Vector3f> pointsInShadowSys;
+    pointsInShadowSys.clear();
+    pointsInShadowSys.reserve(frustumPoints.size());
+    for (const auto& point : frustumPoints)
     {
-        PointsInShadowSys.emplace_back(worldToShadowMatrix * point);
+        pointsInShadowSys.emplace_back(worldToShadowMatrix * point);
     }
-        // 2.3进行凸包点查找，获取index
-    std::vector<uint32_t> cullPointIndex = Algorithm::ConvexHull(PointsInShadowSys);
-        // 2.4 根据这些凸包点来计算面积最小的方形区域（等价于边长最小的方形区域）
-    float minLength = std::numeric_limits<float>::max();
-    Eigen::Vector2f centerInEdgeCoord;
-    Eigen::Matrix2f shadowToEdgeCoordMatrix = Eigen::Matrix2f::Identity();
-    Eigen::Vector2f EdgeCoordOriginInShadowSys;
-            // 遍历所有边，将平面坐标系旋转到该边的方向，计算方形的aabb, 求得面积
-            // 这样就能找到最小的方形区域
-    for (size_t i = 0; i < cullPointIndex.size(); i++)
-    {
-            // 2.4.1 以p1为中心，p2-p1为方向，构建平面坐标系
-        uint32_t p1Idx = cullPointIndex[i];
-        uint32_t p2Idx = cullPointIndex[(i + 1) % cullPointIndex.size()];
-        Eigen::Vector3f p1 = PointsInShadowSys[p1Idx];
-        Eigen::Vector3f p2 = PointsInShadowSys[p2Idx];
-
-        Eigen::Vector2f edge(p2.x() - p1.x(), p2.y() - p1.y());
-        if (edge.norm() < 1e-6) continue;
-        edge.normalize();
-
-        // R = [ c  -s ]  这里是左乘
-        //     [ s c ]
-        float c = edge.x();
-        float s = edge.y();
-        Eigen::Matrix2f _shadowToEdgeCoordMatrix;
-        _shadowToEdgeCoordMatrix << c, -s,
-                    s, c;
-            // 2.4.2 求取该平面变换后的aabb
-        float minX = std::numeric_limits<float>::max();
-        float maxX = std::numeric_limits<float>::lowest();
-        float minY = std::numeric_limits<float>::max();
-        float maxY = std::numeric_limits<float>::lowest();
-
-        for (auto idx : cullPointIndex)
-        {
-            Eigen::Vector2f rotatedP = _shadowToEdgeCoordMatrix * (Eigen::Vector2f(PointsInShadowSys[idx].x(), PointsInShadowSys[idx].y()) - Eigen::Vector2f(p1.x(), p1.y()));
-            minX = std::min(minX, rotatedP.x());
-            maxX = std::max(maxX, rotatedP.x());
-            minY = std::min(minY, rotatedP.y());
-            maxY = std::max(maxY, rotatedP.y());
-        }
-        float width = std::abs(maxX - minX);
-        float height = std::abs(maxY - minY);
-        float length = std::max(width, height);
-            // 2.4.3 有最小的length, 则找到了最小的方形区域
-        if(length < minLength)
-        {
-            minLength = length;
-            centerInEdgeCoord = Eigen::Vector2f((minX + maxX) / 2.0f, (minY + maxY) / 2.0f);
-            shadowToEdgeCoordMatrix = _shadowToEdgeCoordMatrix;
-            EdgeCoordOriginInShadowSys = Eigen::Vector2f(p1.x(), p1.y());
-        }
-    }
-            // 2.4.4 计算中心点的位置
-                // x, y 在shadowCoordinateSystem中的值
-    Eigen::Vector2f center2DInShadowSys = shadowToEdgeCoordMatrix.transpose() * centerInEdgeCoord + EdgeCoordOriginInShadowSys;
-
-    Eigen::Vector3f ShadowCameraPositionInShadowSys = Eigen::Vector3f(center2DInShadowSys.x(), center2DInShadowSys.y(), 0.0f);
     
-                // z 在shadowCoordinateSystem中的值， 这个代表shadowCamera的Z值
+    // ====================================================================================================
+    // STABILIZATION LOGIC START
+    // ====================================================================================================
+    ShadowStrategy strategy = ShadowStrategy::StableBoundingSphere; // Default strategy: StableBoundingSphere (Safest)
+    // Note: StableRectangular requires handling non-square shadow maps or viewport resizing to maintain isotropic texel density.
+    // Since our physical shadow map texture is likely square, mapping a rectangular projection to it causes stretching/anisotropy.
+    
+    ShadowProjectionParams params;
+
+    // Calculate Z bounds first as they are needed for all strategies
     float defaultMinZ = std::numeric_limits<float>::max();
     float defaultMaxZ = std::numeric_limits<float>::lowest();
-    for(const auto& point : PointsInShadowSys)
+    for(const auto& point : pointsInShadowSys)
     {
         defaultMaxZ = std::max(defaultMaxZ, point.z());
         defaultMinZ = std::min(defaultMinZ, point.z());
@@ -611,41 +580,41 @@ void RenderSystem::UpdateUBOGlobalForShadow(vk::CommandBuffer& commandBuffer, ui
 
     Eigen::Vector3f shadowAxisWorld = worldToShadowMatrix.transpose() * Eigen::Vector3f(0.0f, 0.0f, 1.0f);
 
-    for (const auto& [objectName, sceneObject] : sceneLoader.GetSceneObjects())
-    {
-        if (!sceneObject)
+    #if !defined(VULKANLEARN_SHADOW_TIGHT_Z_BOUNDS)
+        #define VULKANLEARN_SHADOW_TIGHT_Z_BOUNDS 0
+    #endif
+
+    #if VULKANLEARN_SHADOW_TIGHT_Z_BOUNDS
+        for (const auto& [objectName, sceneObject] : sceneLoader.GetSceneObjects())
         {
-            continue;
+            if (!sceneObject) continue;
+            const auto& renderableObject = sceneObject->GetRenderableObject();
+            if (!renderableObject) continue;
+
+            const auto& localMin = renderableObject->GetBoundsMin();
+            const auto& localMax = renderableObject->GetBoundsMax();
+            const auto& modelMatrix = sceneObject->GetModelMatrix();
+            auto worldCorners = BuildWorldCorners(localMin, localMax, modelMatrix);
+
+            Eigen::Vector3f viewMin;
+            Eigen::Vector3f viewMax;
+            ComputeViewAabbFromWorldCorners(viewMatrix, worldCorners, viewMin, viewMax);
+
+            if (!IntersectsSplitFrustumFast(viewMin, viewMax, cameraNear, cameraFar, cameraHFovRad, aspect, frustumPadding))
+            {
+                continue;
+            }
+
+            Eigen::Vector3f worldMin;
+            Eigen::Vector3f worldMax;
+            ComputeAabbFromCorners(worldCorners, worldMin, worldMax);
+
+            auto axisRange = ComputeMinMaxAlongAxis(worldMin, worldMax, shadowAxisWorld);
+            minZ = std::min(minZ, axisRange.first);
+            maxZ = std::max(maxZ, axisRange.second);
+            hasObjectBounds = true;
         }
-        const auto& renderableObject = sceneObject->GetRenderableObject();
-        if (!renderableObject)
-        {
-            continue;
-        }
-
-        const auto& localMin = renderableObject->GetBoundsMin();
-        const auto& localMax = renderableObject->GetBoundsMax();
-        const auto& modelMatrix = sceneObject->GetModelMatrix();
-        auto worldCorners = BuildWorldCorners(localMin, localMax, modelMatrix);
-
-        Eigen::Vector3f viewMin;
-        Eigen::Vector3f viewMax;
-        ComputeViewAabbFromWorldCorners(viewMatrix, worldCorners, viewMin, viewMax);
-
-        if (!IntersectsSplitFrustumFast(viewMin, viewMax, cameraNear, cameraFar, cameraHFovRad, aspect, frustumPadding))
-        {
-            continue;
-        }
-
-        Eigen::Vector3f worldMin;
-        Eigen::Vector3f worldMax;
-        ComputeAabbFromCorners(worldCorners, worldMin, worldMax);
-
-        auto axisRange = ComputeMinMaxAlongAxis(worldMin, worldMax, shadowAxisWorld);
-        minZ = std::min(minZ, axisRange.first);
-        maxZ = std::max(maxZ, axisRange.second);
-        hasObjectBounds = true;
-    }
+    #endif
 
     if (!hasObjectBounds)
     {
@@ -653,44 +622,35 @@ void RenderSystem::UpdateUBOGlobalForShadow(vk::CommandBuffer& commandBuffer, ui
         maxZ = defaultMaxZ;
     }
 
-    ShadowCameraPositionInShadowSys.z() = maxZ;
-        // 2.5 计算shadowCamera的位置
-    Eigen::Vector3f shadowCameraPosition = worldToShadowMatrix.transpose() * ShadowCameraPositionInShadowSys;
+    float zNear = 0.0f;
+    float zFar = maxZ - minZ;
+    if (zFar < 0.1f) zFar = 1.0f;
 
-    // 更新Camera
-    // 使用临时Camera计算矩阵，避免修改主相机状态
-    Camera shadowCamera;
-    
-    //shadowCamera.SetCamera(shadowCameraPosition, directionalLight.lock()->GetRotation());
-    shadowCamera.SetCamera(shadowCameraPosition, directionalLight.lock()->GetRotation());
-
-    // 计算Near/Far
-    // Camera位于maxZ, 看向-Z方向. 点分布在[minZ, maxZ].
-    // 相对Camera距离: Near = 0, Far = maxZ - minZ
-    float nearPlane = 0.0f;
-    float farPlane = maxZ - minZ;
-    if (farPlane < 0.1f) farPlane = 1.0f; // 避免无效范围
-
-    shadowCamera.SetOrthographic(
-        minLength, 
-        (float)PassSizeWidth/(float)PassSizeHeight, 
-        nearPlane, 
-        farPlane);
+    switch (strategy)
+    {
+    case ShadowStrategy::DynamicTightBox:
+        params = CalculateShadowMatrix_DynamicTight(pointsInShadowSys, worldToShadowMatrix.block<3, 3>(0, 0), maxZ, zFar);
+        break;
+    case ShadowStrategy::StableBoundingSphere:
+        params = CalculateShadowMatrix_StableSphere(pointsInShadowSys, worldToShadowMatrix.block<3, 3>(0, 0), static_cast<float>(PassSizeWidth), maxZ, zFar);
+        break;
+    case ShadowStrategy::StableRectangular:
+        params = CalculateShadowMatrix_StableRectangular(pointsInShadowSys, worldToShadowMatrix.block<3, 3>(0, 0), static_cast<float>(PassSizeWidth), maxZ, zFar);
+        break;
+    }
 
     static UBOGlobal ubo;
-    Eigen::Matrix4f rollMatrix = Eigen::Matrix4f::Identity();
-    rollMatrix(0, 0) = shadowToEdgeCoordMatrix(0, 0);
-    rollMatrix(0, 1) = shadowToEdgeCoordMatrix(0, 1);
-    rollMatrix(1, 0) = shadowToEdgeCoordMatrix(1, 0);
-    rollMatrix(1, 1) = shadowToEdgeCoordMatrix(1, 1);
-    ubo.view = rollMatrix * shadowCamera.GetViewMatrix();   //TODO: 这里需要验证roll方向正确性// rollMatrix相当于在shadowCoordinateSystem中进行旋转
-    ubo.projection = shadowCamera.GetProjectionMatrix();
+    ubo.view = params.viewMatrix;
+    ubo.projection = params.projectionMatrix;
     lightViewProj = ubo.projection * ubo.view;
     ubo.lightViewProj = lightViewProj;
-    //ubo.ambient = sceneLoader.GetAmbient();
-    ubo.cameraPosition = shadowCameraPosition;
+    
+    {
+        Eigen::Matrix3f rotT = ubo.view.block<3, 3>(0, 0);
+        Eigen::Vector3f trans = ubo.view.block<3, 1>(0, 3);
+        ubo.cameraPosition = -(rotT.transpose() * trans);
+    }
 
-    //std::memcpy(uboGlobal.buffersMapped[swapChainImageIndex], &ubo, sizeof(ubo));
     commandBuffer.updateBuffer(uboGlobal.buffers[swapChainImageIndex], 0, sizeof(ubo), &ubo);
 
     vk::BufferMemoryBarrier barrier;
@@ -712,8 +672,243 @@ void RenderSystem::UpdateUBOGlobalForShadow(vk::CommandBuffer& commandBuffer, ui
     );
 }
 
+// ====================================================================================================
+// Shadow Strategy Implementations
+// ====================================================================================================
+
+RenderSystem::ShadowProjectionParams RenderSystem::CalculateShadowMatrix_DynamicTight(
+    const std::vector<Eigen::Vector3f>& pointsInShadowSys, 
+    const Eigen::Matrix3f& worldToShadowRotation, // Not used here as points are already transformed? 
+                                                  // Wait, if we want to rotate the box, we need to know the base rotation?
+                                                  // Points are in "Light Aligned World Space" (Shadow Space).
+    float sceneMaxZ, 
+    float sceneZRange)
+{
+    PROFILE_FUNCTION();
+    // 1. 进行凸包点查找，获取index
+    std::vector<uint32_t> cullPointIndex;
+    cullPointIndex = Algorithm::ConvexHull(pointsInShadowSys);
+    
+    // 2. 根据这些凸包点来计算面积最小的方形区域（等价于边长最小的方形区域）
+    float minLength = std::numeric_limits<float>::max();
+    Eigen::Vector2f centerInEdgeCoord;
+    Eigen::Matrix2f shadowToEdgeCoordMatrix = Eigen::Matrix2f::Identity();
+    Eigen::Vector2f EdgeCoordOriginInShadowSys;
+    
+    // 遍历所有边，将平面坐标系旋转到该边的方向，计算方形的aabb, 求得面积
+    // 这样就能找到最小的方形区域
+    for (size_t i = 0; i < cullPointIndex.size(); i++)
+    {
+        // 2.4.1 以p1为中心，p2-p1为方向，构建平面坐标系
+            uint32_t p1Idx = cullPointIndex[i];
+            uint32_t p2Idx = cullPointIndex[(i + 1) % cullPointIndex.size()];
+            Eigen::Vector3f p1 = pointsInShadowSys[p1Idx];
+            Eigen::Vector3f p2 = pointsInShadowSys[p2Idx];
+
+            Eigen::Vector2f edge(p2.x() - p1.x(), p2.y() - p1.y());
+            if (edge.norm() < 1e-6) continue;
+            edge.normalize();
+
+            // R = [ c  -s ]  这里是左乘
+            //     [ s c ]
+            float c = edge.x();
+            float s = edge.y();
+            Eigen::Matrix2f _shadowToEdgeCoordMatrix;
+            _shadowToEdgeCoordMatrix << c, -s,
+                        s, c;
+            // 2.4.2 求取该平面变换后的aabb
+            float minX = std::numeric_limits<float>::max();
+            float maxX = std::numeric_limits<float>::lowest();
+            float minY = std::numeric_limits<float>::max();
+            float maxY = std::numeric_limits<float>::lowest();
+
+            for (auto idx : cullPointIndex)
+            {
+                Eigen::Vector2f rotatedP = _shadowToEdgeCoordMatrix * (Eigen::Vector2f(pointsInShadowSys[idx].x(), pointsInShadowSys[idx].y()) - Eigen::Vector2f(p1.x(), p1.y()));
+                minX = std::min(minX, rotatedP.x());
+                maxX = std::max(maxX, rotatedP.x());
+                minY = std::min(minY, rotatedP.y());
+                maxY = std::max(maxY, rotatedP.y());
+            }
+            float width = std::abs(maxX - minX);
+            float height = std::abs(maxY - minY);
+            float length = std::max(width, height);
+            // 2.4.3 有最小的length, 则找到了最小的方形区域
+            if(length < minLength)
+            {
+                minLength = length;
+                centerInEdgeCoord = Eigen::Vector2f((minX + maxX) / 2.0f, (minY + maxY) / 2.0f);
+                shadowToEdgeCoordMatrix = _shadowToEdgeCoordMatrix;
+                EdgeCoordOriginInShadowSys = Eigen::Vector2f(p1.x(), p1.y());
+            }
+    }
+    
+    // 3. 计算中心点的位置
+    // x, y 在shadowCoordinateSystem中的值
+    Eigen::Vector2f center2DInShadowSys = shadowToEdgeCoordMatrix.transpose() * centerInEdgeCoord + EdgeCoordOriginInShadowSys;
+
+    Eigen::Vector3f ShadowCameraPositionInShadowSys = Eigen::Vector3f(center2DInShadowSys.x(), center2DInShadowSys.y(), sceneMaxZ);
+    
+    // 4. 计算shadowCamera的位置 (World Space)
+    Eigen::Vector3f shadowCameraPosition = worldToShadowRotation.transpose() * ShadowCameraPositionInShadowSys;
+
+    // 更新Camera
+    Camera shadowCamera;
+    shadowCamera.SetCamera(shadowCameraPosition, CommonFunction::QuatToRotation(Eigen::Quaternionf(worldToShadowRotation.transpose())));
+
+    // 计算Near/Far
+    float nearPlane = 0.0f;
+    float farPlane = sceneZRange;
+
+    shadowCamera.SetOrthographic(
+        minLength, 
+        1.0f, // Aspect ratio
+        nearPlane, 
+        farPlane);
+
+    RenderSystem::ShadowProjectionParams params;
+    
+    // Apply the extra rotation (rollMatrix) to the View Matrix
+    Eigen::Matrix4f rollMatrix = Eigen::Matrix4f::Identity();
+    rollMatrix(0, 0) = shadowToEdgeCoordMatrix(0, 0);
+    rollMatrix(0, 1) = shadowToEdgeCoordMatrix(0, 1);
+    rollMatrix(1, 0) = shadowToEdgeCoordMatrix(1, 0);
+    rollMatrix(1, 1) = shadowToEdgeCoordMatrix(1, 1);
+    
+    params.viewMatrix = rollMatrix * shadowCamera.GetViewMatrix();
+    params.projectionMatrix = shadowCamera.GetProjectionMatrix();
+    return params;
+}
+
+RenderSystem::ShadowProjectionParams RenderSystem::CalculateShadowMatrix_StableSphere(
+    const std::vector<Eigen::Vector3f>& pointsInShadowSys, 
+    const Eigen::Matrix3f& worldToShadowRotation, 
+    float shadowMapResolution, 
+    float sceneMaxZ, 
+    float sceneZRange)
+{
+    PROFILE_FUNCTION();
+    // 1. Calculate Frustum Center
+    Eigen::Vector3f frustumCenter = Eigen::Vector3f::Zero();
+    for(const auto& p : pointsInShadowSys) {
+        frustumCenter += p;
+    }
+    frustumCenter /= static_cast<float>(pointsInShadowSys.size());
+
+    // 2. Calculate Radius
+    float radius = 0.0f;
+    for(const auto& p : pointsInShadowSys) {
+        radius = std::max(radius, (p - frustumCenter).norm());
+    }
+    radius = std::ceil(radius * 16.0f) / 16.0f;
+
+    // 3. Snapping
+    float worldUnitsPerTexel = (2.0f * radius) / shadowMapResolution;
+    frustumCenter.x() = std::floor(frustumCenter.x() / worldUnitsPerTexel) * worldUnitsPerTexel;
+    frustumCenter.y() = std::floor(frustumCenter.y() / worldUnitsPerTexel) * worldUnitsPerTexel;
+
+    // 4. Construct Camera
+    // Camera placed at the center of the sphere in X/Y, but at sceneMaxZ in Z
+    Eigen::Vector3f shadowCameraPosition = frustumCenter;
+    shadowCameraPosition.z() = sceneMaxZ;
+    
+    // Transform back to World Space for Camera.SetCamera
+    Eigen::Vector3f shadowCameraPositionWorld = worldToShadowRotation.transpose() * shadowCameraPosition;
+    
+    Camera shadowCamera;
+    shadowCamera.SetCamera(shadowCameraPositionWorld, CommonFunction::QuatToRotation(Eigen::Quaternionf(worldToShadowRotation.transpose()))); // Use Light Rotation
+
+    // 5. Construct Projection
+    shadowCamera.SetOrthographic(
+        radius * 2.0f, 
+        1.0f, // Aspect ratio is 1.0
+        0.0f, // Near plane relative to camera
+        sceneZRange // Far plane
+    );
+
+    RenderSystem::ShadowProjectionParams params;
+    params.viewMatrix = shadowCamera.GetViewMatrix();
+    params.projectionMatrix = shadowCamera.GetProjectionMatrix();
+    return params;
+}
+
+RenderSystem::ShadowProjectionParams RenderSystem::CalculateShadowMatrix_StableRectangular(
+    const std::vector<Eigen::Vector3f>& pointsInShadowSys, 
+    const Eigen::Matrix3f& worldToShadowRotation, 
+    float shadowMapResolution, 
+    float sceneMaxZ, 
+    float sceneZRange)
+{
+    PROFILE_FUNCTION();
+    // 1. Calculate AABB of Frustum Slice in Shadow Space
+    float minX = std::numeric_limits<float>::max();
+    float maxX = std::numeric_limits<float>::lowest();
+    float minY = std::numeric_limits<float>::max();
+    float maxY = std::numeric_limits<float>::lowest();
+
+    for(const auto& p : pointsInShadowSys) {
+        minX = std::min(minX, p.x());
+        maxX = std::max(maxX, p.x());
+        minY = std::min(minY, p.y());
+        maxY = std::max(maxY, p.y());
+    }
+
+    // 2. Snapping
+    // Based on the diagonal of the frustum slice to ensure stability during rotation?
+    // Actually, for Rectangular, we usually just snap to texel grid.
+    // However, if the frustum rotates, the AABB size changes.
+    // Stable Rectangular usually implies the AABB is calculated from the bounding sphere of the frustum split,
+    // OR we accept that the shadow map covers the current frustum AABB (tight fit) but snap the center/edges.
+    
+    // Let's implement basic snapping for the AABB edges.
+    Eigen::Vector3f diagonal = pointsInShadowSys[6] - pointsInShadowSys[0]; // FarTopRight - NearBottomLeft (Approx)
+    float diagonalLength = diagonal.norm();
+    float worldUnitsPerTexel = diagonalLength / shadowMapResolution;
+    
+    // Snap min/max to this unit
+    minX = std::floor(minX / worldUnitsPerTexel) * worldUnitsPerTexel;
+    maxX = std::floor(maxX / worldUnitsPerTexel) * worldUnitsPerTexel;
+    minY = std::floor(minY / worldUnitsPerTexel) * worldUnitsPerTexel;
+    maxY = std::floor(maxY / worldUnitsPerTexel) * worldUnitsPerTexel;
+    
+    float width = maxX - minX;
+    float height = maxY - minY;
+    float centerX = (minX + maxX) * 0.5f;
+    float centerY = (minY + maxY) * 0.5f;
+
+    // 3. Construct Camera
+    Eigen::Vector3f shadowCameraPosition = Eigen::Vector3f(centerX, centerY, sceneMaxZ);
+    Eigen::Vector3f shadowCameraPositionWorld = worldToShadowRotation.transpose() * shadowCameraPosition;
+
+    Camera shadowCamera;
+    shadowCamera.SetCamera(shadowCameraPositionWorld, CommonFunction::QuatToRotation(Eigen::Quaternionf(worldToShadowRotation.transpose())));
+
+    // 4. Construct Projection
+    // Note: SetOrthographic usually takes (size, aspect, near, far)
+    // We need to pass width and height explicitly.
+    // If SetOrthographic only takes size (height) and aspect, we calculate aspect.
+    
+    float aspect = width / height;
+    
+    shadowCamera.SetOrthographic(
+        height, // Or width? Usually size refers to height or max dimension. Let's assume height if aspect is w/h.
+        aspect,
+        0.0f,
+        sceneZRange
+    );
+    // Note: My Camera::SetOrthographic might implement size as "height". Let's verify or assume standard behavior.
+    // If it takes "size" as vertical size:
+    // Width = Size * Aspect = Height * (Width/Height) = Width. Correct.
+
+    RenderSystem::ShadowProjectionParams params;
+    params.viewMatrix = shadowCamera.GetViewMatrix();
+    params.projectionMatrix = shadowCamera.GetProjectionMatrix();
+    return params;
+}
+
 void RenderSystem::UpdateUBOMaterialInstance(const std::shared_ptr<MaterialInstance>& materialInstance)
 {
+    PROFILE_FUNCTION();
     const auto& parameters = materialInstance->GetParameters();
     uint32_t offset = 0;
     for(auto& [name, parameter] : parameters)
@@ -749,6 +944,7 @@ void RenderSystem::UpdateUBOMaterialInstance(const std::shared_ptr<MaterialInsta
 
 void RenderSystem::UpdateUBOModel(const std::shared_ptr<SceneObject>& object)
 {
+    PROFILE_FUNCTION();
     object->UpdateModelMatrix();
 
     static UBOModel ubo;

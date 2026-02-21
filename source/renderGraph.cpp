@@ -9,9 +9,11 @@
 #include "renderSystem.h"
 #include "lightManager.h"
 #include <stdint.h>
+#include "profiler.h"
 
 void Renderpass::Draw(vk::CommandBuffer& commandBuffer) const
 {
+        PROFILE_FUNCTION();
         vk::Viewport viewport;
         viewport
             .setX(0.0f)

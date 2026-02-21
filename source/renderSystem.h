@@ -45,6 +45,22 @@ private:
     void ComputeViewAabbFromWorldCorners(const Eigen::Matrix4f& viewMatrix, const std::array<Eigen::Vector3f, 8>& worldCorners, Eigen::Vector3f& outMin, Eigen::Vector3f& outMax);
     bool IntersectsSplitFrustumFast(const Eigen::Vector3f& viewMin, const Eigen::Vector3f& viewMax, float splitNear, float splitFar, float fovRad, float aspect, float padding);
 
+    // 阴影计算策略
+    enum class ShadowStrategy {
+        DynamicTightBox,    // 原始方案：最小面积矩形 (利用率高，闪烁)
+        StableBoundingSphere, // 基础稳定方案：外接球 (利用率低，极其稳定)
+        StableRectangular // 改良方案：稳定长方形 (利用率中，稳定)
+    };
+
+    struct ShadowProjectionParams {
+        Eigen::Matrix4f viewMatrix;
+        Eigen::Matrix4f projectionMatrix;
+    };
+
+    ShadowProjectionParams CalculateShadowMatrix_DynamicTight(const std::vector<Eigen::Vector3f>& pointsInShadowSys, const Eigen::Matrix3f& worldToShadowRotation, float sceneMaxZ, float sceneZRange);
+    ShadowProjectionParams CalculateShadowMatrix_StableSphere(const std::vector<Eigen::Vector3f>& pointsInShadowSys, const Eigen::Matrix3f& worldToShadowRotation, float shadowMapResolution, float sceneMaxZ, float sceneZRange);
+    ShadowProjectionParams CalculateShadowMatrix_StableRectangular(const std::vector<Eigen::Vector3f>& pointsInShadowSys, const Eigen::Matrix3f& worldToShadowRotation, float shadowMapResolution, float sceneMaxZ, float sceneZRange);
+
     uint32_t currentFrame = 0;
     uint32_t cpuSyncIndex = 0;
     uint32_t gpuSyncIndex = 0;

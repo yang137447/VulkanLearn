@@ -10,6 +10,7 @@ set(ASSIMP_BUILD_TESTS           OFF CACHE BOOL "" FORCE)
 set(ASSIMP_BUILD_SAMPLES         OFF CACHE BOOL "" FORCE)
 set(ASSIMP_BUILD_ASSIMP_TOOLS    OFF CACHE BOOL "" FORCE)
 set(ASSIMP_NO_EXPORT             ON  CACHE BOOL "" FORCE)
+set(ASSIMP_WARNINGS_AS_ERRORS    OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(assimp)
 
 #add_subdirectory(Assimp)
