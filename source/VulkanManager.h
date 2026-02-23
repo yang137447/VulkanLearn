@@ -38,6 +38,7 @@ public:
     inline vk::SwapchainKHR& GetSwapChain() { return swapChain; }
     inline std::vector<vk::Semaphore>& GetImageAcquiredSemaphores() { return imageAcquiredSemaphores; }
     inline std::vector<vk::Semaphore>& GetRenderFinishedSemaphores() { return renderFinishedSemaphores; }
+    inline std::vector<vk::Fence>& GetImagesInFlightFences() { return imagesInFlightFences; }
     inline vk::CommandBufferBeginInfo& GetCommandBufferBeginInfo() { return commandBufferBeginInfo; }
     inline uint32_t GetSwapChainImageCount() { return swapChainImageCount; }
     inline vk::SurfaceFormatKHR& GetSurfaceFormat() { return surfaceFormat; }
@@ -113,4 +114,5 @@ private:
     std::vector<vk::Semaphore> renderFinishedSemaphores;
 
     std::vector<vk::Fence> taskFinishedFences;
+    std::vector<vk::Fence> imagesInFlightFences;
 };

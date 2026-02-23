@@ -84,6 +84,42 @@ void RenderSystem::InitRenderObject()
 void RenderSystem::Render()
 {
     PROFILE_SCOPE("RenderSystem::Render");
+//     CPU 帧循环（frameIndex）
+// ┌──────────────────────────────────────────────────────────────────────┐
+// │ frameIndex = currentFrame % MAX_FRAMES_IN_FLIGHT                     │
+// │ taskFinishedFence[frameIndex]                                        │
+// │ imageAcquiredSemaphore[frameIndex]                                   │
+// └──────────────────────────────────────────────────────────────────────┘
+//                      │
+//                      ▼
+//         waitForFences(taskFinishedFence[frameIndex])
+//                      │
+//                      ▼
+//  acquireNextImageKHR(..., imageAcquiredSemaphore[frameIndex], &imageIndex)
+//                      │
+//                      ▼
+//      if imagesInFlightFences[imageIndex] != null
+//             waitForFences(imagesInFlightFences[imageIndex])
+//                      │
+//                      ▼
+//  imagesInFlightFences[imageIndex] = taskFinishedFence[frameIndex]
+//                      │
+//                      ▼
+//       resetFences(taskFinishedFence[frameIndex])
+//                      │
+//                      ▼
+//  commandBuffer[imageIndex]  +  renderFinishedSemaphore[imageIndex]
+//                      │
+//                      ▼
+//  ┌───────────────────────── submit ─────────────────────────┐
+//  │ wait:  imageAcquiredSemaphore[frameIndex]                │
+//  │ cmd :  commandBuffer[imageIndex]                         │
+//  │ signal: renderFinishedSemaphore[imageIndex]              │
+//  │ fence: taskFinishedFence[frameIndex]                     │
+//  └──────────────────────────────────────────────────────────┘
+//                      │
+//                      ▼
+//           present(wait: renderFinishedSemaphore[imageIndex])
     VulkanManager& instance = VulkanManager::GetInstance();
     vk::Device& device = instance.GetDevice();
     vk::SwapchainKHR& swapChain = instance.GetSwapChain();
@@ -93,12 +129,10 @@ void RenderSystem::Render()
     RenderGraph& renderGraph = RenderGraph::GetInstance();
     SceneLoader& sceneLoader = SceneLoader::GetInstance();
 
-    uint32_t cpuSyncIndex = currentFrame % MAX_FRAMES_IN_FLIGHT;
-    uint32_t gpuSyncIndex = currentFrame % swapchainImageCount;
-    vk::Fence& taskFinishedFence = instance.GetTaskFinishedFences()[cpuSyncIndex];
-    vk::CommandBuffer& commandBuffer = instance.GetCommandBuffers()[gpuSyncIndex];
-    vk::Semaphore& imageAcquiredSemaphore = instance.GetImageAcquiredSemaphores()[gpuSyncIndex];
-    vk::Semaphore& renderFinishedSemaphore = instance.GetRenderFinishedSemaphores()[gpuSyncIndex];
+    uint32_t frameIndex = currentFrame % MAX_FRAMES_IN_FLIGHT;
+    vk::Fence& taskFinishedFence = instance.GetTaskFinishedFences()[frameIndex];
+    vk::Semaphore& imageAcquiredSemaphore = instance.GetImageAcquiredSemaphores()[frameIndex];
+    auto& imagesInFlightFences = instance.GetImagesInFlightFences();
 
     // 等待前一帧完成
     vk::Result result;
@@ -109,8 +143,6 @@ void RenderSystem::Render()
     if(result != vk::Result::eSuccess) {
         throw std::runtime_error("Failed to wait for fence");
     }
-    device.resetFences(taskFinishedFence);
-    
     // 获取下一帧
     {
         PROFILE_SCOPE("Render:AcquireImage");
@@ -119,11 +151,20 @@ void RenderSystem::Render()
     if(result != vk::Result::eSuccess) {
         throw std::runtime_error("Failed to acquire next image");
     }
-    if(swapChainImageIndex != gpuSyncIndex)
-        {
-        // throw std::runtime_error("swapChainImageIndex != gpuSyncIndex");
-        //TODO: 使用 gpuSyncIndex 获取的commandBuffer、imageAcquiredSemaphore、renderFinishedSemaphore需要重新获取
+    
+    if (imagesInFlightFences[swapChainImageIndex])
+    {
+        result = device.waitForFences(imagesInFlightFences[swapChainImageIndex], true, UINT64_MAX);
+        if(result != vk::Result::eSuccess) {
+            throw std::runtime_error("Failed to wait for image fence");
+        }
     }
+    imagesInFlightFences[swapChainImageIndex] = taskFinishedFence;
+
+    device.resetFences(taskFinishedFence);
+
+    vk::CommandBuffer& commandBuffer = instance.GetCommandBuffers()[swapChainImageIndex];
+    vk::Semaphore& renderFinishedSemaphore = instance.GetRenderFinishedSemaphores()[swapChainImageIndex];
 
     // 重置并开始记录Command Buffer
     commandBuffer.reset();

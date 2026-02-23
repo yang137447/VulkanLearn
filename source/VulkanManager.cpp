@@ -432,15 +432,19 @@ void VulkanManager::DestroyVkCommandBuffer()
 void VulkanManager::CreateSyncObjects()
 {
     //创建 Semaphore
-    imageAcquiredSemaphores.resize(swapChainImageCount);
+    imageAcquiredSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
     renderFinishedSemaphores.resize(swapChainImageCount);
 
-    for (size_t i = 0; i < swapChainImageCount; i++)
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
     {
         vk::SemaphoreCreateInfo imageAcquiredSemaphoreCreateInfo;
         imageAcquiredSemaphores[i] = device.createSemaphore(imageAcquiredSemaphoreCreateInfo);
         assert(imageAcquiredSemaphores[i]);
-        renderFinishedSemaphores[i] = device.createSemaphore(imageAcquiredSemaphoreCreateInfo);
+    }
+    for (size_t i = 0; i < swapChainImageCount; i++)
+    {
+        vk::SemaphoreCreateInfo renderFinishedSemaphoreCreateInfo;
+        renderFinishedSemaphores[i] = device.createSemaphore(renderFinishedSemaphoreCreateInfo);
         assert(renderFinishedSemaphores[i]);
     }
     std::cout << "Create VkSemaphore" << std::endl;
@@ -457,13 +461,18 @@ void VulkanManager::CreateSyncObjects()
         assert(result == vk::Result::eSuccess);
     }
     std::cout << "Create VkFence" << std::endl;
+
+    imagesInFlightFences.resize(swapChainImageCount, nullptr);
 }
 
 void VulkanManager::DestroySyncObjects()
 {
-    for (size_t i = 0; i < swapChainImageCount; i++)
+    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
     {
         device.destroySemaphore(imageAcquiredSemaphores[i]);
+    }
+    for (size_t i = 0; i < swapChainImageCount; i++)
+    {
         device.destroySemaphore(renderFinishedSemaphores[i]);
     }
     std::cout << "Destroy VkSemaphore" << std::endl;
@@ -476,6 +485,8 @@ void VulkanManager::DestroySyncObjects()
         }
     }
     std::cout << "Destroy VkFence" << std::endl;
+
+    imagesInFlightFences.clear();
 }
 
 void VulkanManager::InitInstance()
