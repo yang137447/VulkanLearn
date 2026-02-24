@@ -7,7 +7,7 @@ RenderableObject::RenderableObject()
 {
 }
 
-RenderableObject::RenderableObject(std::vector<Vertex> vertices, std::vector<uint32_t> indices, vk::Device *device, vk::PhysicalDeviceMemoryProperties *physicalDeviceMemoryProperties, vk::CommandPool *commandPool, vk::CommandBuffer* commandBuffer, vk::Queue *GraphicsQueue)
+RenderableObject::RenderableObject(std::vector<Vertex> vertices, std::vector<uint32_t> indices, vk::Device *device, vk::PhysicalDeviceMemoryProperties *physicalDeviceMemoryProperties, vk::CommandPool *commandPool, vk::CommandBuffer* commandBuffer, vk::Queue *GraphicsQueue, const std::string& name)
 {
     this->device = device;
     this->graphicsQueue = GraphicsQueue;
@@ -16,6 +16,7 @@ RenderableObject::RenderableObject(std::vector<Vertex> vertices, std::vector<uin
     this->commandBuffer = commandBuffer;
     this->vertices = std::move(vertices);
     this->indices = std::move(indices);
+    this->name = name;
 
     //更新boundingBox
     UpdateLocalBounds();
@@ -67,7 +68,7 @@ void RenderableObject::CreateVertexBuffer()
     vk::BufferUsageFlags usage = vk::BufferUsageFlagBits::eTransferSrc;
     vk::MemoryPropertyFlags memoryPropertyFlags = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
     std::tie(stagingBuffer, stagingBufferMemory) = CommonFunction::CreateBuffer(
-        *device, bufferSize, usage, *physicalDeviceMemoryProperties, memoryPropertyFlags
+        *device, bufferSize, usage, *physicalDeviceMemoryProperties, memoryPropertyFlags, "StagingBuffer: Vertex (" + name + ")"
         );
     // 将顶点数据复制到临时缓冲区
     void *data = device->mapMemory(stagingBufferMemory, 0, bufferSize);
@@ -78,7 +79,7 @@ void RenderableObject::CreateVertexBuffer()
     vk::BufferUsageFlags vertexBufferUsage = vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst;
     vk::MemoryPropertyFlags vertexBufferMemoryPropertyFlags = vk::MemoryPropertyFlagBits::eDeviceLocal;
     std::tie(vertexBuffer, vertexBufferMemory) = CommonFunction::CreateBuffer(
-        *device, bufferSize, vertexBufferUsage, *physicalDeviceMemoryProperties, vertexBufferMemoryPropertyFlags
+        *device, bufferSize, vertexBufferUsage, *physicalDeviceMemoryProperties, vertexBufferMemoryPropertyFlags, "VertexBuffer (" + name + ")"
     );
 
     // 将临时缓冲区中的数据复制到顶点缓冲区
@@ -110,7 +111,7 @@ void RenderableObject::CreateIndexBuffer()
     vk::BufferUsageFlags usage = vk::BufferUsageFlagBits::eTransferSrc;
     vk::MemoryPropertyFlags memoryPropertyFlags = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
     std::tie(stagingBuffer, stagingBufferMemory) = CommonFunction::CreateBuffer(
-        *device, bufferSize, usage, *physicalDeviceMemoryProperties, memoryPropertyFlags
+        *device, bufferSize, usage, *physicalDeviceMemoryProperties, memoryPropertyFlags, "StagingBuffer: Index (" + name + ")"
     );
     // 将索引数据复制到临时缓冲区
     void *data = device->mapMemory(stagingBufferMemory, 0, bufferSize);
@@ -120,7 +121,7 @@ void RenderableObject::CreateIndexBuffer()
     vk::BufferUsageFlags indexBufferUsage = vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eTransferDst;
     vk::MemoryPropertyFlags indexBufferMemoryPropertyFlags = vk::MemoryPropertyFlagBits::eDeviceLocal;
     std::tie(indexBuffer, indexBufferMemory) = CommonFunction::CreateBuffer(
-        *device, bufferSize, indexBufferUsage, *physicalDeviceMemoryProperties, indexBufferMemoryPropertyFlags
+        *device, bufferSize, indexBufferUsage, *physicalDeviceMemoryProperties, indexBufferMemoryPropertyFlags, "IndexBuffer (" + name + ")"
     );
     // 将临时缓冲区中的数据复制到索引缓冲区
     CommonFunction::CopyBufferToBuffer(*device, *graphicsQueue, *commandPool, stagingBuffer, indexBuffer, bufferSize);

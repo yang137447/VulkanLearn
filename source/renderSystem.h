@@ -62,9 +62,6 @@ private:
     ShadowProjectionParams CalculateShadowMatrix_StableRectangular(const std::vector<Eigen::Vector3f>& pointsInShadowSys, const Eigen::Matrix3f& worldToShadowRotation, float shadowMapResolution, float sceneMaxZ, float sceneZRange);
 
     uint32_t currentFrame = 0;
-    uint32_t cpuSyncIndex = 0;
-    uint32_t gpuSyncIndex = 0;
-    std::vector<int32_t> onWorkFenceForSwapChainImage;
     uint32_t swapChainImageIndex = 0;
     
     Eigen::Matrix4f lightViewProj = Eigen::Matrix4f::Identity();

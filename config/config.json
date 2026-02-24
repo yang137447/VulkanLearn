@@ -1,6 +1,14 @@
 {
-    "projectPath": "D:/YYBWorkSpace/GitHub/VulkanLearn",
+    "projectPath": "D:/GitHub/VulkanLearn",
     "windowSize": [1280, 720],
     "initScene": "scenes/scene03.json",
-    "msaa": 2
+    "msaa": 2,
+    "renderStateDebugColors": {
+        "ePass": [0.0, 1.0, 0.0, 1.0],
+        "eObject": [0.0, 0.0, 1.0, 1.0],
+        "ePipeline": [1.0, 1.0, 0.0, 1.0],
+        "eResource": [0.0, 1.0, 1.0, 1.0],
+        "eWait": [1.0, 0.0, 0.0, 1.0],
+        "eDefault": [1.0, 1.0, 1.0, 1.0]
+    }
 }

@@ -10,6 +10,7 @@
 #include "lightManager.h"
 #include <stdint.h>
 #include "profiler.h"
+#include "vulkanDebug.h"
 
 void Renderpass::Draw(vk::CommandBuffer& commandBuffer) const
 {
@@ -98,6 +99,7 @@ void Renderpass::CreatePassDescriptorSetLayout()
     vk::DescriptorSetLayoutCreateInfo emptyLayoutCreateInfo;
     vk::Result result = device.createDescriptorSetLayout(&emptyLayoutCreateInfo, nullptr, &emptyDescriptorSetLayout);
     assert(result == vk::Result::eSuccess);
+    VulkanDebug::SetObjectName(device, emptyDescriptorSetLayout, vk::ObjectType::eDescriptorSetLayout, "DescriptorSetLayout: Empty");
 
     std::vector<vk::DescriptorSetLayoutBinding> descriptorSetLayoutBindings;
     if(!materialInstance.expired())
@@ -146,6 +148,7 @@ void Renderpass::CreatePassDescriptorSetLayout()
 
     result = device.createDescriptorSetLayout(&descriptorSetLayoutCreateInfo, nullptr, &descriptorSetLayout);
     assert(result == vk::Result::eSuccess);
+    VulkanDebug::SetObjectName(device, descriptorSetLayout, vk::ObjectType::eDescriptorSetLayout, "DescriptorSetLayout: " + name);
 }
 
 void Renderpass::CreateDescriptorSets()
@@ -208,6 +211,7 @@ void Renderpass::CreateDescriptorSets()
 
     vk::Result result = vulkanManager.GetDevice().createDescriptorPool(&descriptorPoolCreateInfo, nullptr, &descriptorPool);
     assert(result == vk::Result::eSuccess);
+    VulkanDebug::SetObjectName(vulkanManager.GetDevice(), descriptorPool, vk::ObjectType::eDescriptorPool, "DescriptorPool: " + name);
 
     vk::DescriptorSetAllocateInfo descriptorSetAllocateInfo;
     descriptorSetAllocateInfo
@@ -220,6 +224,10 @@ void Renderpass::CreateDescriptorSets()
         descriptorSets[i].resize(SetLayoutCount);
         result = vulkanManager.GetDevice().allocateDescriptorSets(&descriptorSetAllocateInfo, descriptorSets[i].data());
         assert(result == vk::Result::eSuccess);
+        for(uint32_t j = 0; j < SetLayoutCount; j++)
+        {
+            VulkanDebug::SetObjectName(vulkanManager.GetDevice(), descriptorSets[i][j], vk::ObjectType::eDescriptorSet, "DescriptorSet: " + name + " (SwapchainIndex " + std::to_string(i) + ", Set " + std::to_string(j) + ")");
+        }
     }
 }
 
@@ -429,7 +437,7 @@ RenderResource RenderGraph::CreateRenderResource(const nlohmann::json& resourceN
         // 这里根据是否是msaa源图，来确定是否需要msaa采样
         bIsMsaaSource ? CommonFunction::GetMsaaSampleCount() : vk::SampleCountFlagBits::e1,
         resource.format, tiling, usage,
-        gpuMemoryProperties, memoryPropertyFlags);
+        gpuMemoryProperties, memoryPropertyFlags, "Image: " + resource.name);
     if(bIsDepthFormat)
     {
         CommonFunction::TransitionImageLayout(
@@ -457,9 +465,10 @@ RenderResource RenderGraph::CreateRenderResource(const nlohmann::json& resourceN
         resource.image, 
         1, 
         resource.format,
-        aspect);
+        aspect,
+        resource.name + "_View");
 
-    resource.sampler = CommonFunction::CreateSampler(device, physicalDevice, bIsDepthFormat);
+    resource.sampler = CommonFunction::CreateSampler(device, physicalDevice, bIsDepthFormat, "Sampler: " + resource.name);
 
     return resource;
 }
@@ -489,6 +498,7 @@ Renderpass RenderGraph::CreateRenderpass(const nlohmann::json& passNode)
 
     vk::RenderPass vkRenderPass = CreateVkRenderPass(inputResources, outputResources, bUseMsaa);
     renderpass.renderPass = vkRenderPass;
+    VulkanDebug::SetObjectName(VulkanManager::GetInstance().GetDevice(), renderpass.renderPass, vk::ObjectType::eRenderPass, renderpass.name);
     
     if (outputResources[0] == "swapChain")
     {
@@ -819,6 +829,7 @@ std::vector<vk::Framebuffer> RenderGraph::CreateVkFrameBuffers(Renderpass render
         
         framebuffers[i] = device.createFramebuffer(framebufferCreateInfo);
         assert(framebuffers[i]);
+        VulkanDebug::SetObjectName(device, framebuffers[i], vk::ObjectType::eFramebuffer, "Framebuffer: " + renderPass.name + " (SwapchainIndex " + std::to_string(i) + ")");
     }
     
     return framebuffers;

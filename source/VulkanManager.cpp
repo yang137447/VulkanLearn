@@ -9,6 +9,7 @@
 #include "textureLoader.h"
 #include "modelLoader.h"
 #include "sceneLoader.h"
+#include "vulkanDebug.h"
 
 VulkanManager::VulkanManager()
 {
@@ -18,6 +19,7 @@ void VulkanManager::Init(std::vector<const char *> &extensions, SDL_Window *wind
 {
     instanceExtensions.resize(extensions.size());
     std::copy(extensions.begin(), extensions.end(), instanceExtensions.begin());
+    instanceExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
     sdlWindow = window;
     for (auto extension : instanceExtensions)
     {
@@ -82,6 +84,7 @@ void VulkanManager::CreateVkInstance()
         std::cout << "Failed to create Vulkan instance" << std::endl;
         return;
     }
+    VulkanDebug::Init(instance);
 }
 
 void VulkanManager::DestroyVkInstance()
@@ -359,6 +362,8 @@ void VulkanManager::CreateVkSwapChain()
     swapChainImageViews.resize(swapChainImageCount);
     for (uint32_t i = 0; i < swapChainImageCount; i++)
     {
+        VulkanDebug::SetObjectName(device, swapChainImages[i], vk::ObjectType::eImage, "SwapChainImage: Index " + std::to_string(i));
+
         vk::ImageViewCreateInfo imageViewCreateInfo;
         imageViewCreateInfo
             .setImage(swapChainImages[i])
@@ -375,6 +380,7 @@ void VulkanManager::CreateVkSwapChain()
                 ));
         swapChainImageViews[i] = device.createImageView(imageViewCreateInfo);
         assert(swapChainImageViews[i]);
+        VulkanDebug::SetObjectName(device, swapChainImageViews[i], vk::ObjectType::eImageView, "SwapChainImageView_Index_" + std::to_string(i));
     }
     std::cout << "Create VkSwapChain" << std::endl;
     std::cout << "  Swap chain image format: " << vk::to_string(surfaceFormat.format) << std::endl;
@@ -401,6 +407,7 @@ void VulkanManager::CreateVkCommandBuffer()
         .setFlags(vk::CommandPoolCreateFlagBits::eResetCommandBuffer);
     commandPool = device.createCommandPool(commandPoolCreateInfo);
     assert(commandPool);
+    VulkanDebug::SetObjectName(device, commandPool, vk::ObjectType::eCommandPool, "CommandPool: Main");
 
     commandBuffers.resize(swapChainImageCount);
 
@@ -410,6 +417,11 @@ void VulkanManager::CreateVkCommandBuffer()
         .setLevel(vk::CommandBufferLevel::ePrimary)
         .setCommandBufferCount(commandBuffers.size());
     vk::Result result = device.allocateCommandBuffers(&commandBufferAllocateInfo, commandBuffers.data());
+
+    for (size_t i = 0; i < commandBuffers.size(); i++)
+    {
+        VulkanDebug::SetObjectName(device, commandBuffers[i], vk::ObjectType::eCommandBuffer, "CommandBuffer: SwapchainIndex " + std::to_string(i));
+    }
 
     commandBufferBeginInfo
         .setPInheritanceInfo(nullptr);
@@ -440,12 +452,14 @@ void VulkanManager::CreateSyncObjects()
         vk::SemaphoreCreateInfo imageAcquiredSemaphoreCreateInfo;
         imageAcquiredSemaphores[i] = device.createSemaphore(imageAcquiredSemaphoreCreateInfo);
         assert(imageAcquiredSemaphores[i]);
+        VulkanDebug::SetObjectName(device, imageAcquiredSemaphores[i], vk::ObjectType::eSemaphore, "Semaphore: ImageAcquired (Frame " + std::to_string(i) + ")");
     }
     for (size_t i = 0; i < swapChainImageCount; i++)
     {
         vk::SemaphoreCreateInfo renderFinishedSemaphoreCreateInfo;
         renderFinishedSemaphores[i] = device.createSemaphore(renderFinishedSemaphoreCreateInfo);
         assert(renderFinishedSemaphores[i]);
+        VulkanDebug::SetObjectName(device, renderFinishedSemaphores[i], vk::ObjectType::eSemaphore, "Semaphore_RenderFinished_" + std::to_string(i));
     }
     std::cout << "Create VkSemaphore" << std::endl;
 
@@ -459,6 +473,7 @@ void VulkanManager::CreateSyncObjects()
     {
         vk::Result result = device.createFence(&fenceCreateInfo, nullptr, &taskFinishedFences[i]);
         assert(result == vk::Result::eSuccess);
+        VulkanDebug::SetObjectName(device, taskFinishedFences[i], vk::ObjectType::eFence, "Fence: TaskFinished (FrameIndex " + std::to_string(i) + ")");
     }
     std::cout << "Create VkFence" << std::endl;
 

@@ -122,7 +122,8 @@ void MaterialInstance::CreateUniformBuffers()
                 size, 
                 usage, 
                 VulkanManager::GetInstance().GetGpuMemoryProperties(), 
-                memoryPropertyFlags
+                memoryPropertyFlags,
+                "UBO_Material: " + materialInstanceName + " (SwapchainIndex " + std::to_string(i) + ")"
             );
             ubo->buffersMapped[i] = device.mapMemory(ubo->bufferMemories[i], 0, bufferSize);
         }

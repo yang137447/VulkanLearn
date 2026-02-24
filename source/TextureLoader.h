@@ -16,9 +16,9 @@ public:
     std::pair<vk::Image, vk::DeviceMemory> LoadTexture(const std::string& filename);
     uint32_t GetMipLevels() const { return mipLevels; }
 
-    vk::ImageView GetImageView(vk::Image& textureImage, vk::Format format, uint32_t mipLevels);
+    vk::ImageView GetImageView(vk::Image& textureImage, vk::Format format, uint32_t mipLevels, const std::string& name = "");
 
-    vk::Sampler GetSampler();
+    vk::Sampler GetSampler(const std::string& name = "");
 
 private:
     TextureLoader() {} //私有构造函数，防止外部实例化

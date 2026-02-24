@@ -11,6 +11,7 @@
 #include <nlohmann/json.hpp>
 #include <math.h>
 #include <optional>
+#include "vulkanDebug.h"
 
 constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 constexpr uint32_t MAX_DESCRIPTOR_SETS = 4;
@@ -502,7 +503,7 @@ namespace CommonFunction
         device.freeCommandBuffers(commandPool, commandBuffer);
     }
 
-    inline std::pair<vk::Buffer, vk::DeviceMemory> CreateBuffer(vk::Device& device, vk::DeviceSize& size, vk::BufferUsageFlags& usage, vk::PhysicalDeviceMemoryProperties& physicalDeviceMemoryProperties, vk::MemoryPropertyFlags& memoryPropertyFlags)
+    inline std::pair<vk::Buffer, vk::DeviceMemory> CreateBuffer(vk::Device& device, vk::DeviceSize& size, vk::BufferUsageFlags& usage, vk::PhysicalDeviceMemoryProperties& physicalDeviceMemoryProperties, vk::MemoryPropertyFlags& memoryPropertyFlags, const std::string& name = "")
     {
         vk::BufferCreateInfo bufferInfo;
         bufferInfo
@@ -522,10 +523,16 @@ namespace CommonFunction
         vk::DeviceMemory bufferMemory = device.allocateMemory(allocInfo);
         device.bindBufferMemory(buffer, bufferMemory, 0);
 
+        if (!name.empty())
+        {
+            VulkanDebug::SetObjectName(device, buffer, vk::ObjectType::eBuffer, name);
+            VulkanDebug::SetObjectName(device, bufferMemory, vk::ObjectType::eDeviceMemory, "DeviceMemory: " + name);
+        }
+
         return { buffer, bufferMemory };
     }
 
-    inline std::pair<vk::Image, vk::DeviceMemory> CreateImage(vk::Device& device, uint32_t width, uint32_t height, uint32_t mipLevels, vk::SampleCountFlagBits samples, vk::Format& format, vk::ImageTiling& tiling, vk::ImageUsageFlags& usage, vk::PhysicalDeviceMemoryProperties& physicalDeviceMemoryProperties, vk::MemoryPropertyFlags& memoryPropertyFlags)
+    inline std::pair<vk::Image, vk::DeviceMemory> CreateImage(vk::Device& device, uint32_t width, uint32_t height, uint32_t mipLevels, vk::SampleCountFlagBits samples, vk::Format& format, vk::ImageTiling& tiling, vk::ImageUsageFlags& usage, vk::PhysicalDeviceMemoryProperties& physicalDeviceMemoryProperties, vk::MemoryPropertyFlags& memoryPropertyFlags, const std::string& name = "")
     {
         vk::ImageCreateInfo imageInfo;
         imageInfo
@@ -552,15 +559,21 @@ namespace CommonFunction
         vk::DeviceMemory imageMemory = device.allocateMemory(allocInfo);
         device.bindImageMemory(image, imageMemory, 0);
 
+        if (!name.empty())
+        {
+            VulkanDebug::SetObjectName(device, image, vk::ObjectType::eImage, name);
+            VulkanDebug::SetObjectName(device, imageMemory, vk::ObjectType::eDeviceMemory, "DeviceMemory: " + name);
+        }
+
         return { image, imageMemory };
     }
 
-    inline std::pair<vk::Image, vk::DeviceMemory> CreateDepthImage(vk::Device& device, vk::PhysicalDevice& physicalDevice, uint32_t width, uint32_t height, vk::SampleCountFlagBits samples, vk::Format& format, vk::ImageTiling& tiling, vk::ImageUsageFlags& usage, vk::PhysicalDeviceMemoryProperties& physicalDeviceMemoryProperties, vk::MemoryPropertyFlags& memoryPropertyFlags)
+    inline std::pair<vk::Image, vk::DeviceMemory> CreateDepthImage(vk::Device& device, vk::PhysicalDevice& physicalDevice, uint32_t width, uint32_t height, vk::SampleCountFlagBits samples, vk::Format& format, vk::ImageTiling& tiling, vk::ImageUsageFlags& usage, vk::PhysicalDeviceMemoryProperties& physicalDeviceMemoryProperties, vk::MemoryPropertyFlags& memoryPropertyFlags, const std::string& name = "")
     {
-        return CreateImage(device, width, height, 1, samples, format, tiling, usage, physicalDeviceMemoryProperties, memoryPropertyFlags);
+        return CreateImage(device, width, height, 1, samples, format, tiling, usage, physicalDeviceMemoryProperties, memoryPropertyFlags, name);
     }
 
-    inline vk::ImageView CreateImageView(vk::Device& device, vk::Image& image, uint32_t mipLevels, vk::Format& format, vk::ImageAspectFlagBits aspectMask = vk::ImageAspectFlagBits::eColor)
+    inline vk::ImageView CreateImageView(vk::Device& device, vk::Image& image, uint32_t mipLevels, vk::Format& format, vk::ImageAspectFlagBits aspectMask = vk::ImageAspectFlagBits::eColor, const std::string& name = "")
     {
         vk::ImageViewCreateInfo viewInfo;
         viewInfo
@@ -574,15 +587,20 @@ namespace CommonFunction
                 .setBaseArrayLayer(0)
                 .setLayerCount(1));
 
-        return device.createImageView(viewInfo);
+        vk::ImageView imageView = device.createImageView(viewInfo);
+        if (!name.empty())
+        {
+            VulkanDebug::SetObjectName(device, imageView, vk::ObjectType::eImageView, name);
+        }
+        return imageView;
     }
 
-    inline vk::ImageView CreateDepthImageView(vk::Device& device, vk::PhysicalDevice& physicalDevice, vk::Image& image, vk::Format& format)
+    inline vk::ImageView CreateDepthImageView(vk::Device& device, vk::PhysicalDevice& physicalDevice, vk::Image& image, vk::Format& format, const std::string& name = "")
     {
-        return CreateImageView(device, image, 1, format, vk::ImageAspectFlagBits::eDepth);
+        return CreateImageView(device, image, 1, format, vk::ImageAspectFlagBits::eDepth, name);
     }
 
-    inline vk::Sampler CreateSampler(vk::Device& device, vk::PhysicalDevice& physicalDevice, bool bUseDepth = false)
+    inline vk::Sampler CreateSampler(vk::Device& device, vk::PhysicalDevice& physicalDevice, bool bUseDepth = false, const std::string& name = "")
     {
 
         vk::PhysicalDeviceProperties physicalDeviceProperties = physicalDevice.getProperties();
@@ -620,7 +638,12 @@ namespace CommonFunction
                 .setCompareOp(vk::CompareOp::eLessOrEqual);
         }
 
-        return device.createSampler(samplerInfo);
+        vk::Sampler sampler = device.createSampler(samplerInfo);
+        if (!name.empty())
+        {
+            VulkanDebug::SetObjectName(device, sampler, vk::ObjectType::eSampler, name);
+        }
+        return sampler;
     }
 
     inline void  TransitionImageLayout(vk::Image& image, uint32_t mipLevels, vk::Format& format, vk::Device& device, vk::CommandPool& commandPool, vk::Queue& GraphicsQueue, vk::ImageLayout oldLayout, vk::ImageLayout newLayout)

@@ -33,7 +33,7 @@ std::pair<vk::Image, vk::DeviceMemory> TextureLoader::LoadTexture(const std::str
     std::tie(stagingBuffer, stagingBufferMemory) = CommonFunction::CreateBuffer(*device, imageSize,
         usage,
         *physicalDeviceMemoryProperties,
-        memoryPropertyFlags);
+        memoryPropertyFlags, "StagingBuffer_Texture: " + filename);
 
     // Copy image data to staging buffer
     void *data = device->mapMemory(stagingBufferMemory, 0, imageSize);
@@ -54,7 +54,7 @@ std::pair<vk::Image, vk::DeviceMemory> TextureLoader::LoadTexture(const std::str
         format, tiling, 
         usageFlags, 
         *physicalDeviceMemoryProperties, 
-        memoryPropertyFlags);
+        memoryPropertyFlags, "Texture: " + filename);
     
     // copy staging buffer to texture image
     CommonFunction::TransitionImageLayout(Image, mipLevels, format, *device, *commandPool, *graphicsQueue, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
@@ -69,12 +69,12 @@ std::pair<vk::Image, vk::DeviceMemory> TextureLoader::LoadTexture(const std::str
     return { Image, ImageMemory };
 }
 
-vk::ImageView TextureLoader::GetImageView(vk::Image& textureImage, vk::Format format, uint32_t mipLevels)
+vk::ImageView TextureLoader::GetImageView(vk::Image& textureImage, vk::Format format, uint32_t mipLevels, const std::string& name)
 {
-    return CommonFunction::CreateImageView(*device, textureImage, mipLevels, format);
+    return CommonFunction::CreateImageView(*device, textureImage, mipLevels, format, vk::ImageAspectFlagBits::eColor, name);
 }
 
-vk::Sampler TextureLoader::GetSampler()
+vk::Sampler TextureLoader::GetSampler(const std::string& name)
 {
-    return CommonFunction::CreateSampler(*device, *physicalDevice);
+    return CommonFunction::CreateSampler(*device, *physicalDevice, false, name);
 }

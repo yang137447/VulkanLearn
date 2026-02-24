@@ -1,6 +1,7 @@
 #include "render.h"
 #include <iostream>
 #include "swapchain.h"
+#include "vulkanDebug.h"
 
 Render::Render()
 {
@@ -109,6 +110,7 @@ void Render::CreateCommandPool(const QueueFamilyIndices &queueFamilyIndices)
         .setQueueFamilyIndex(queueFamilyIndices.graphicsQueue.value());
 
     commandPool = device->createCommandPool(commandPoolCreateInfo);
+    VulkanDebug::SetObjectName(*device, commandPool, vk::ObjectType::eCommandPool, "CommandPool: Render");
 }
 
 void Render::allocateCommandBuffer()
@@ -119,6 +121,7 @@ void Render::allocateCommandBuffer()
         .setCommandBufferCount(1)
         .setLevel(vk::CommandBufferLevel::ePrimary);
     commandBuffer = device->allocateCommandBuffers(commandBufferAllocateInfo)[0];
+    VulkanDebug::SetObjectName(*device, commandBuffer, vk::ObjectType::eCommandBuffer, "CommandBuffer: Render");
 }
 
 uint32_t Render::aquireNextImageIndex()
@@ -140,11 +143,14 @@ void Render::CreateFence()
     fenceCreateInfo
         .setFlags(vk::FenceCreateFlagBits::eSignaled);
     drawFence = device->createFence(fenceCreateInfo);
+    VulkanDebug::SetObjectName(*device, drawFence, vk::ObjectType::eFence, "Fence: Draw");
 }
 
 void Render::CreateSemaphore()
 {
     vk::SemaphoreCreateInfo semaphoreCreateInfo;
     imageAvailableSemaphore = device->createSemaphore(semaphoreCreateInfo);
+    VulkanDebug::SetObjectName(*device, imageAvailableSemaphore, vk::ObjectType::eSemaphore, "Semaphore: ImageAvailable");
     renderFinishedSemaphore = device->createSemaphore(semaphoreCreateInfo);
+    VulkanDebug::SetObjectName(*device, renderFinishedSemaphore, vk::ObjectType::eSemaphore, "Semaphore: RenderFinished");
 }

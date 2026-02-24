@@ -97,7 +97,8 @@ void SceneLoader::LoadMeshObject(const nlohmann::basic_json<>& node)
             &instance.GetGpuMemoryProperties(), 
             &instance.GetCommandPool(), 
             &instance.GetCommandBuffers()[0], 
-            &instance.GetGraphicQueue());
+            &instance.GetGraphicQueue(),
+            modelDataPath);
     }
 
     // 加载材质
@@ -117,7 +118,8 @@ void SceneLoader::LoadMeshObject(const nlohmann::basic_json<>& node)
         Eigen::Vector3f rotation = JsonParser::ParseValue<Eigen::Vector3f>(node["rotation"]);
         Eigen::Vector3f scale = JsonParser::ParseValue<Eigen::Vector3f>(node["scale"]);
         sceneObject = std::make_shared<SceneObject>(renderableObject, materialInstance);
-            sceneObject->SetPosition(position);
+        sceneObject->SetName(sceneObjectName);
+        sceneObject->SetPosition(position);
             sceneObject->SetRotation(rotation);
             sceneObject->SetScale(scale);
         sceneObject->UpdateModelMatrix();
@@ -136,6 +138,7 @@ void SceneLoader::LoadDirectinalLightObject(const nlohmann::basic_json<>& node)
     float intensity = JsonParser::ParseValue<float>(node["intensity"]);
 
     std::shared_ptr<DirectinalLight> directinalLight = std::make_shared<DirectinalLight>();
+    directinalLight->SetName(name);
     directinalLight->SetColor(color);
     directinalLight->SetIntensity(intensity);
     directinalLight->SetPosition(position);
@@ -152,6 +155,7 @@ void SceneLoader::LoadPointLightObject(const nlohmann::basic_json<>& node)
     Eigen::Vector3f rotation = JsonParser::ParseValue<Eigen::Vector3f>(node["rotation"]);
 
     std::shared_ptr<PointLight> pointLight = std::make_shared<PointLight>();
+    pointLight->SetName(name);
     pointLight->SetColor(color);
     pointLight->SetIntensity(intensity);
     pointLight->SetPosition(position);
@@ -171,6 +175,7 @@ void SceneLoader::LoadSpotLightObject(const nlohmann::basic_json<>& node)
     float cutAngleInner = JsonParser::ParseValue<float>(node["cone_angle_inner"]);
 
     std::shared_ptr<SpotLight> spotLight = std::make_shared<SpotLight>();
+    spotLight->SetName(name);
     spotLight->SetColor(color);
     spotLight->SetIntensity(intensity);
     spotLight->SetPosition(position);
@@ -183,6 +188,7 @@ void SceneLoader::LoadSpotLightObject(const nlohmann::basic_json<>& node)
 
 void SceneLoader::LoadCameraObject(const nlohmann::basic_json<>& node)
 {
+    std::string name = node["name"];
     float fov = node["fov"].get<float>();
     float near = node["near_clip"].get<float>();
     float far = node["far_clip"].get<float>();
@@ -190,6 +196,7 @@ void SceneLoader::LoadCameraObject(const nlohmann::basic_json<>& node)
     Eigen::Vector3f rotation = JsonParser::ParseValue<Eigen::Vector3f>(node["rotation"]);
     Eigen::Vector3f scale = JsonParser::ParseValue<Eigen::Vector3f>(node["scale"]);
     std::shared_ptr<Camera> camera = std::make_shared<Camera>();
+    camera->SetName(name);
     camera->SetHFOV(fov);
     camera->SetClip(near, far);
     //camera->SetProjection(fov, float(width)/float(height), near, far);

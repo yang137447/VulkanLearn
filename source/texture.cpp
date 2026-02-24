@@ -8,8 +8,8 @@ Texture::Texture(const std::string& texturePath)
     TextureLoader& loader = TextureLoader::GetInstance();
     std::tie(image, imageMemory) = loader.LoadTexture(CommonFunction::Path(texturePath));
     mipLevels = loader.GetMipLevels();
-    imageView = loader.GetImageView(image, vk::Format::eR8G8B8A8Srgb, mipLevels);
-    sampler = loader.GetSampler();
+    imageView = loader.GetImageView(image, vk::Format::eR8G8B8A8Srgb, mipLevels, "TextureView: " + CommonFunction::Path(texturePath));
+    sampler = loader.GetSampler("TextureSampler: " + CommonFunction::Path(texturePath));
 }
 Texture::~Texture()
 {

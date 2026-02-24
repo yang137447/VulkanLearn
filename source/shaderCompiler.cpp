@@ -90,11 +90,26 @@ void ShaderCompiler::StartCompile(const std::string& shaderFilePath)
             }
 
             std::string glslCode = CommonFunction::ReadFile(glslShaderPath);
-            std::vector<uint32_t> spvCode = CompileGLSLToSPIRV(glslCode, kind, glslShaderPath);
+            
+            bool isDebugInfo = false;
+#ifndef NDEBUG
+            isDebugInfo = true;
+#endif
+            // Main shader
+            std::vector<uint32_t> spvCode = CompileGLSLToSPIRV(glslCode, kind, glslShaderPath, isDebugInfo);
             SaveSPIRVToFile(spvCode, compiledShaderPath);
-            //debug级别，反射shaderbinding用
-            std::vector<uint32_t> spvDebugCode = CompileGLSLToSPIRV(glslCode, kind, glslShaderPath, true);
-            SaveSPIRVToFile(spvDebugCode, compiledDebugShaderPath);
+
+            // Debug shader (for reflection)
+            if (isDebugInfo)
+            {
+                SaveSPIRVToFile(spvCode, compiledDebugShaderPath);
+            }
+            else
+            {
+                // If main shader is optimized, compile a separate debug version for reflection
+                std::vector<uint32_t> spvDebugCode = CompileGLSLToSPIRV(glslCode, kind, glslShaderPath, true);
+                SaveSPIRVToFile(spvDebugCode, compiledDebugShaderPath);
+            }
 
             //ShaderReflect shaderReflect(spvCode);
 

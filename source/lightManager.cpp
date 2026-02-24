@@ -45,7 +45,8 @@ void LightManager::CreateLightBuffer()
             lightSSBOSize,
             Usage,
             VulkanManager::GetInstance().GetGpuMemoryProperties(),
-            MemoryProperty
+            MemoryProperty,
+            "SSBO_Light (SwapchainIndex " + std::to_string(i) + ")"
         );
         lightBuffer.buffersMapped[i] = device.mapMemory(lightBuffer.bufferMemories[i], 0, lightSSBOSize);
     }

@@ -17,6 +17,7 @@
 #include "renderGraph.h"
 #include "shaderReflect.h"
 #include "profiler.h"
+#include "vulkanDebug.h"
 
 RenderSystem::RenderSystem()
 {
@@ -172,6 +173,8 @@ void RenderSystem::Render()
     beginInfo.setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
     commandBuffer.begin(beginInfo);
 
+    VulkanDebug::ScopedRegion frameRegion(commandBuffer, "Frame:" + std::to_string(frameIndex) + " Image:" + std::to_string(swapChainImageIndex), VulkanDebug::DebugCategory::eDefault);
+
     const auto& renderPassOrdered = renderGraph.GetRenderpassesOrdered();
     for (size_t passIndex = 0; passIndex < renderPassOrdered.size(); ++passIndex)
     {
@@ -179,6 +182,9 @@ void RenderSystem::Render()
         std::string renderPassScopeName = "RenderPass:" + renderPassName;
         PROFILE_SCOPE(renderPassScopeName.c_str());
         const auto& renderPass = renderGraph.GetRenderpasses().at(renderPassName);
+        
+        VulkanDebug::ScopedRegion passRegion(commandBuffer, renderPassName, VulkanDebug::DebugCategory::ePass);
+
         //TODO: 后续的shadow解决方案应该是生成专用的shadowshader以提高性能,当前先这样临时处理
         if (renderPassName == "shadow")
         {
@@ -236,6 +242,7 @@ void RenderSystem::Render()
                         continue;
                         }
                         auto objectPtr = object.lock();
+                        VulkanDebug::ScopedRegion region(commandBuffer, objectPtr->GetName(), VulkanDebug::DebugCategory::eObject);
                         // 绑定DescriptorSet
                         const auto& descriptorSets = objectPtr->GetDescriptorSetsForShadow(swapChainImageIndex);
                         commandBuffer.bindDescriptorSets(
@@ -273,6 +280,8 @@ void RenderSystem::Render()
             for (const auto& [shaderName, shaderObjects] : hierarchyObjects) {
                 // 绑定Pipeline
                 const RenderPipline& renderPipline = *sceneLoader.GetMaterials().at(shaderName)->GetRenderPipline();
+                
+                VulkanDebug::ScopedRegion pipelineRegion(commandBuffer, "Pipeline: " + shaderName, VulkanDebug::DebugCategory::ePipeline);
                 commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, renderPipline.GetGraphicsPipeline());
                 if (!renderPass.GetDescriptorSets()[swapChainImageIndex].empty())
                 {
@@ -318,6 +327,7 @@ void RenderSystem::Render()
                         continue;
                         }
                         auto objectPtr = object.lock();
+                        VulkanDebug::ScopedRegion region(commandBuffer, objectPtr->GetName(), VulkanDebug::DebugCategory::eObject);
                         // 绑定DescriptorSet
                         commandBuffer.bindDescriptorSets(
                             vk::PipelineBindPoint::eGraphics,
@@ -1019,7 +1029,8 @@ void RenderSystem::CreateUniformBuffers()
                 bufferSize, 
                 usage, 
                 VulkanManager::GetInstance().GetGpuMemoryProperties(), 
-                memoryPropertyFlags
+                memoryPropertyFlags,
+                "UBO_Global (SwapchainIndex " + std::to_string(i) + ")"
             );
             ubo->buffersMapped[i] = device.mapMemory(ubo->bufferMemories[i], 0, bufferSize);
         }

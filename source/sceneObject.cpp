@@ -12,6 +12,7 @@
 #include "renderSystem.h"
 #include "lightManager.h"
 #include "sceneLoader.h"
+#include "vulkanDebug.h"
 
 void SceneNode::SetPosition(Eigen::Vector3f& position)
 {
@@ -318,7 +319,8 @@ void SceneObject::CreateUniformBuffers()
                 bufferSize, 
                 usage, 
                 VulkanManager::GetInstance().GetGpuMemoryProperties(), 
-                memoryPropertyFlags
+                memoryPropertyFlags,
+                "UBO_Model: " + name + " (SwapchainIndex " + std::to_string(i) + ")"
             );
             ubo->buffersMapped[i] = device.mapMemory(ubo->bufferMemories[i], 0, bufferSize);
         }
@@ -385,6 +387,7 @@ void SceneObject::CreateDescriptorSets()
 
     vk::Result result = vulkanManager.GetDevice().createDescriptorPool(&descriptorPoolCreateInfo, nullptr, &descriptorPool);
     assert(result == vk::Result::eSuccess);
+    VulkanDebug::SetObjectName(vulkanManager.GetDevice(), descriptorPool, vk::ObjectType::eDescriptorPool, "DescriptorPool: " + name);
 
     vk::DescriptorSetAllocateInfo descriptorSetAllocateInfo;
     descriptorSetAllocateInfo
@@ -397,6 +400,10 @@ void SceneObject::CreateDescriptorSets()
         descriptorSets[i].resize(SetLayoutCount);
         result = vulkanManager.GetDevice().allocateDescriptorSets(&descriptorSetAllocateInfo, descriptorSets[i].data());
         assert(result == vk::Result::eSuccess);
+        for(uint32_t j = 0; j < SetLayoutCount; j++)
+        {
+            VulkanDebug::SetObjectName(vulkanManager.GetDevice(), descriptorSets[i][j], vk::ObjectType::eDescriptorSet, "DescriptorSet: " + name + " (SwapchainIndex " + std::to_string(i) + ", Set " + std::to_string(j) + ")");
+        }
     }
 }
 
@@ -535,6 +542,7 @@ void SceneObject::CreateDescriptorSetsForShadow()
 
     vk::Result result = vulkanManager.GetDevice().createDescriptorPool(&descriptorPoolCreateInfo, nullptr, &descriptorPoolShadow);
     assert(result == vk::Result::eSuccess);
+    VulkanDebug::SetObjectName(vulkanManager.GetDevice(), descriptorPoolShadow, vk::ObjectType::eDescriptorPool, "DescriptorPool: Shadow: " + name);
 
     vk::DescriptorSetLayout objectSetLayout = pipelineSetLayouts[ObjectSetIndex];
     std::vector<vk::DescriptorSetLayout> allocateLayouts(swapChainImageCount, objectSetLayout);
@@ -553,6 +561,7 @@ void SceneObject::CreateDescriptorSetsForShadow()
     {
         descriptorSetsShadow[i].resize(ObjectSetIndex + 1);
         descriptorSetsShadow[i][ObjectSetIndex] = allocatedSets[i];
+        VulkanDebug::SetObjectName(vulkanManager.GetDevice(), allocatedSets[i], vk::ObjectType::eDescriptorSet, "DescriptorSet: Shadow: " + name + " (SwapchainIndex " + std::to_string(i) + ")");
     }
 }
 

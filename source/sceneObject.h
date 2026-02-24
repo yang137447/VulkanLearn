@@ -14,6 +14,8 @@ public:
     void SetRotation(Eigen::Quaternionf quaternion);
     void SetDeltaRotation(Eigen::Vector3f& deltaRotation);
     void SetScale(Eigen::Vector3f& scale);
+    void SetName(const std::string& name) { this->name = name; }
+    inline const std::string& GetName() const { return name; }
     inline const Eigen::Vector3f& GetPosition() const { return position; }
     inline const Eigen::Vector3f& GetRotation() const { return rotation;}
     inline const Eigen::Vector3f& GetScale() const { return scale; }
@@ -30,6 +32,7 @@ protected:
     Eigen::Vector3f rotation;
     Eigen::Quaternionf quaternion;
     Eigen::Vector3f scale;
+    std::string name;
 
     Eigen::Matrix4f modelMatrix;
 };

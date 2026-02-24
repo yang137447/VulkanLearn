@@ -7,6 +7,7 @@
 #include "commonFunction.h"
 #include "shaderReflect.h"
 #include "profiler.h"
+#include "vulkanDebug.h"
 
 RenderPipline::RenderPipline(vk::Device *device, vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties, vk::RenderPass* renderPass, const std::string& shaderName, vk::SampleCountFlagBits sampleCount, bool bIsPostProcess, bool bIsShadowPass)
 {
@@ -72,6 +73,7 @@ void RenderPipline::CreateDescriptorSetLayouts()
 
         vk::Result result = device->createDescriptorSetLayout(&descriptorSetLayoutCreateInfo, nullptr, &descriptorSetLayouts[i]);
         assert(result == vk::Result::eSuccess);
+        VulkanDebug::SetObjectName(*device, descriptorSetLayouts[i], vk::ObjectType::eDescriptorSetLayout, "SetLayout_" + std::to_string(i) + ": " + shaderName);
     }
 }
 
@@ -91,6 +93,7 @@ void RenderPipline::CreatePipelineLayout()
     
     vk::Result result = device->createPipelineLayout(&pipelineLayoutCreateInfo, nullptr, &pipelineLayout);
     assert(result == vk::Result::eSuccess);
+    VulkanDebug::SetObjectName(*device, pipelineLayout, vk::ObjectType::ePipelineLayout, "PipelineLayout: " + shaderName);
 }
 
 void RenderPipline::DestroyPipelineLayout()
@@ -118,6 +121,8 @@ void RenderPipline::CreateShader()
         .setPCode(reinterpret_cast<const uint32_t*>(vertexShaderCode.data()));
     vk::Result result = device->createShaderModule(&vertexShaderModuleCreateInfo, nullptr, &vertexShaderModule);
     assert(result == vk::Result::eSuccess);
+    VulkanDebug::SetObjectName(*device, vertexShaderModule, vk::ObjectType::eShaderModule, "ShaderModule_Vert: " + shaderName);
+
     vk::ShaderModule fragmentShaderModule;
     vk::ShaderModuleCreateInfo fragmentShaderModuleCreateInfo;
     fragmentShaderModuleCreateInfo
@@ -125,6 +130,7 @@ void RenderPipline::CreateShader()
         .setPCode(reinterpret_cast<const uint32_t*>(fragmentShaderCode.data()));
     result = device->createShaderModule(&fragmentShaderModuleCreateInfo, nullptr, &fragmentShaderModule);
     assert(result == vk::Result::eSuccess);
+    VulkanDebug::SetObjectName(*device, fragmentShaderModule, vk::ObjectType::eShaderModule, "ShaderModule_Frag: " + shaderName);
     // 创建shader阶段
     shaderStages.resize(2);
     shaderStages[0]
@@ -298,9 +304,11 @@ void RenderPipline::CreateGraphicsPipeline()
     
     vk::Result result = device->createPipelineCache(&pipelineCacheCreateInfo, nullptr, &pipelineCache);
     assert(result == vk::Result::eSuccess);
+    VulkanDebug::SetObjectName(*device, pipelineCache, vk::ObjectType::ePipelineCache, "PipelineCache: " + shaderName);
 
     result = device->createGraphicsPipelines(pipelineCache, 1, &graphicsPipelineCreateInfo, nullptr, &graphicsPipeline);
     assert(result == vk::Result::eSuccess);
+    VulkanDebug::SetObjectName(*device, graphicsPipeline, vk::ObjectType::ePipeline, "Pipeline: " + shaderName);
 }
 
 void RenderPipline::DestroyGraphicsPipeline()

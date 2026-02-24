@@ -5,12 +5,13 @@
 class RenderableObject
 {
 public:
-    RenderableObject(std::vector<struct Vertex> vertices, std::vector<uint32_t> indices, vk::Device* device, vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties, vk::CommandPool* commandPool, vk::CommandBuffer* commandBuffer, vk::Queue* GraphicsQueue);
+    RenderableObject(std::vector<struct Vertex> vertices, std::vector<uint32_t> indices, vk::Device* device, vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties, vk::CommandPool* commandPool, vk::CommandBuffer* commandBuffer, vk::Queue* GraphicsQueue, const std::string& name = "");
     ~RenderableObject();
 
     void Draw(vk::CommandBuffer& commandBuffer, uint32_t width, uint32_t height);
     const Eigen::Vector3f& GetBoundsMin() const { return boundsMin; }
     const Eigen::Vector3f& GetBoundsMax() const { return boundsMax; }
+    const std::string& GetName() const { return name; }
 
 private:
     void UpdateLocalBounds();
@@ -23,6 +24,7 @@ private:
 private:
     RenderableObject();
 
+    std::string name;
     vk::Device* device;
     vk::CommandPool* commandPool;
     vk::CommandBuffer* commandBuffer;
