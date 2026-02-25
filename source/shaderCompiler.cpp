@@ -18,7 +18,7 @@ shaderc_include_result* Include::GetInclude(const char* requested_source, shader
     std::string fileFolder = std::filesystem::path(requesting_source).parent_path().string();
     std::string filePath = fileFolder + "/" + requested_source;
 
-    std::cout << "Including file: " << filePath << std::endl;
+    std::cout << std::string(2 * include_depth, ' ') << "->Including file: " << filePath << std::endl;
     
     // 读取文件内容
     std::string glslCode = CommonFunction::ReadFile(filePath);
