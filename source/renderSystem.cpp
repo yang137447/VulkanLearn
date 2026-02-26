@@ -198,10 +198,6 @@ void RenderSystem::Render()
             renderPassBeginInfo.setClearValues(renderPass.clearValues);
             commandBuffer.beginRenderPass(renderPassBeginInfo, vk::SubpassContents::eInline);
 
-            // 绑定Pipeline
-            const RenderPipline& renderPipline = *sceneLoader.GetMaterials().at(renderPassName)->GetRenderPipline();
-            commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, renderPipline.GetGraphicsPipeline());
-
             // pass级别更新, 对一般物体的统一处理
             const std::weak_ptr<MaterialInstance> materialInstance = renderPass.materialInstance;
             if(materialInstance.expired())
@@ -213,6 +209,10 @@ void RenderSystem::Render()
             {
                 this->UpdateUBOMaterialInstance(materialInstance.lock());
             }
+            
+            auto baseMaterial = materialInstance.lock()->GetBaseMaterial().lock();
+            const RenderPipline& renderPipline = *baseMaterial->GetRenderPipline();
+            commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, renderPipline.GetGraphicsPipeline());
 
             // lightManager.UpdateLightBuffer(swapChainImageIndex);
             // 渲染每种材质
@@ -357,7 +357,15 @@ void RenderSystem::Render()
             renderPassBeginInfo.setClearValues(renderPass.clearValues);
             commandBuffer.beginRenderPass(renderPassBeginInfo, vk::SubpassContents::eInline);
             
-            const RenderPipline& renderPipline = *sceneLoader.GetMaterials().at(renderPassName)->GetRenderPipline();
+            const std::weak_ptr<MaterialInstance> materialInstance = renderPass.materialInstance;
+            if(materialInstance.expired())
+            {
+                std::cout << "materialInstance is expired" << std::endl;
+                continue;
+            }
+
+            auto baseMaterial = materialInstance.lock()->GetBaseMaterial().lock();
+            const RenderPipline& renderPipline = *baseMaterial->GetRenderPipline();
             commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, renderPipline.GetGraphicsPipeline());
 
             // 绑定描述符集

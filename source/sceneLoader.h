@@ -48,7 +48,7 @@ private:
     void LoadCameraObject(const nlohmann::basic_json<>& node);
     void LoadEnvironmentObject(const nlohmann::basic_json<>& node);
     void LoadPassMaterial();
-    std::shared_ptr<MaterialInstance> LoadMaterialInstance(const std::string_view materialInstancePath, vk::SampleCountFlagBits sampleCount, std::string_view passName = "geometry");
+    std::shared_ptr<MaterialInstance> LoadMaterialInstance(const std::string_view materialInstancePath, vk::SampleCountFlagBits sampleCount, std::string_view passName = "geometry", bool bIsPostProcess = false);
 
     //场景数据
     std::unordered_map<std::string, std::shared_ptr<RenderableObject>> objects; //模型相对路径和模型对象

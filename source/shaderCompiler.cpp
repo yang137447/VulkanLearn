@@ -66,12 +66,15 @@ void ShaderCompiler::StartCompile(const std::string& shaderFilePath)
         if (shader.is_regular_file())
         {
             shaderc_shader_kind kind;
-            //获取文件名
-            std::string shaderName = shader.path().stem().string();
+            std::filesystem::path shaderFullPath = shader.path();
+            std::filesystem::path relativeShaderPath = std::filesystem::relative(shaderFullPath, glslPath);
+            std::filesystem::path shaderNamePath = relativeShaderPath;
+            shaderNamePath.replace_extension();
+            std::string shaderName = shaderNamePath.generic_string();
             //获取文件后缀
             std::string shaderExtension = shader.path().extension().string().substr(1);
             //获取编译前文件路径
-            std::string glslShaderPath = glslPath + "/" + shaderName + "." + shaderExtension;
+            std::string glslShaderPath = shaderFullPath.string();
             //获取编译后文件路径
             std::string compiledShaderPath = spirvPath + "/" + shaderName + "_" + shaderExtension + "." + "spv";
             std::string compiledDebugShaderPath = spirvPath + "/" + shaderName + "_" + shaderExtension + "." + "debug";
@@ -152,6 +155,12 @@ std::vector<uint32_t> ShaderCompiler::CompileGLSLToSPIRV(const std::string& glsl
 
 void ShaderCompiler::SaveSPIRVToFile(const std::vector<uint32_t>& spirv, const std::string& spvPath)
 {
+    std::filesystem::path outPath(spvPath);
+    if (outPath.has_parent_path())
+    {
+        std::filesystem::create_directories(outPath.parent_path());
+    }
+
     std::ofstream file(spvPath, std::ios::binary);
     if (!file.is_open())
     {

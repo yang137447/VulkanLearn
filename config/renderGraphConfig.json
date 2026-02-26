@@ -32,11 +32,40 @@
         },
         {
             "name": "offscreenColor",
-            "format": "R8G8B8A8_SRGB",
+            "format": "R16G16B16A16_SFLOAT",
             "widthScale": 1.0,
             "heightScale": 1.0,
             "usage": ["colorAttachment", "sampled"]
         },
+        {
+            "name": "sceneColor",
+            "format": "R16G16B16A16_SFLOAT",
+            "widthScale": 1.0,
+            "heightScale": 1.0,
+            "usage": ["colorAttachment", "sampled"]
+        },
+        {
+            "name": "bloomDownSample1",
+            "format": "R16G16B16A16_SFLOAT",
+            "widthScale": 0.5,
+            "heightScale": 0.5,
+            "usage": ["colorAttachment", "sampled"]
+        },
+        {
+            "name": "bloomDownSample2",
+            "format": "R16G16B16A16_SFLOAT",
+            "widthScale": 0.25,
+            "heightScale": 0.25,
+            "usage": ["colorAttachment", "sampled"]
+        },
+        {
+            "name": "bloomUpSample1",
+            "format": "R16G16B16A16_SFLOAT",
+            "widthScale": 0.5,
+            "heightScale": 0.5,
+            "usage": ["colorAttachment", "sampled"]
+        },
+        
         {
             "name": "sceneDepth",
             "format": "D32_SFLOAT",
@@ -78,11 +107,79 @@
         {
             "name": "postProcess",
             "needCreateMaterial": true,
-            "materialInstancePath": "materials/MI_postProcess.json",
+            "materialInstancePath": "materials/pass/MI_postProcess.json",
             "bIsPostProcess": true,
             "input": [
                 {
                     "resource": "offscreenColor"
+                }
+            ],
+            "output":[
+                {
+                    "resource": "sceneColor"
+                }
+            ]
+        }
+        ,
+        {
+            "name": "bloomPrefilter",
+            "needCreateMaterial": true,
+            "materialInstancePath": "materials/pass/MI_bloomPrefilter.json",
+            "bIsPostProcess": true,
+            "input": [
+                {
+                    "resource": "sceneColor"
+                }
+            ],
+            "output":[
+                {
+                    "resource": "bloomDownSample1"
+                }
+            ]
+        },
+        {
+            "name": "bloomDownsample",
+            "needCreateMaterial": true,
+            "materialInstancePath": "materials/pass/MI_bloomDownsample.json",
+            "bIsPostProcess": true,
+            "input": [
+                {
+                    "resource": "bloomDownSample1"
+                }
+            ],
+            "output":[
+                {
+                    "resource": "bloomDownSample2"
+                }
+            ]
+        },
+        {
+            "name": "bloomUpsample",
+            "needCreateMaterial": true,
+            "materialInstancePath": "materials/pass/MI_bloomUpsample.json",
+            "bIsPostProcess": true,
+            "input": [
+                {
+                    "resource": "bloomDownSample2"
+                }
+            ],
+            "output":[
+                {
+                    "resource": "bloomUpSample1"
+                }
+            ]
+        },
+        {
+            "name": "toneMapping",
+            "needCreateMaterial": true,
+            "materialInstancePath": "materials/pass/MI_toneMapping.json",
+            "bIsPostProcess": true,
+            "input": [
+                {
+                    "resource": "sceneColor"
+                },
+                {
+                    "resource": "bloomUpSample1"
                 }
             ],
             "output":[

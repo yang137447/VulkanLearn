@@ -233,13 +233,13 @@ void SceneLoader::LoadPassMaterial()
         bool bIsPostProcess = passJson.value("bIsPostProcess", false);
 
         // 如果当前 shaderName 对应的材质尚未加载，则新建并缓存
-        std::shared_ptr<MaterialInstance> materialInstance = LoadMaterialInstance(materialInstancePath, bNeedMsaa ? CommonFunction::GetMsaaSampleCount() : vk::SampleCountFlagBits::e1, passName);
+        std::shared_ptr<MaterialInstance> materialInstance = LoadMaterialInstance(materialInstancePath, bNeedMsaa ? CommonFunction::GetMsaaSampleCount() : vk::SampleCountFlagBits::e1, passName, bIsPostProcess);
         
         renderGraph.GetRenderpasses()[passName.data()].materialInstance = materialInstance;
     }
 }
 
-std::shared_ptr<MaterialInstance> SceneLoader::LoadMaterialInstance(const std::string_view materialInstancePath, vk::SampleCountFlagBits sampleCount, std::string_view passName)
+std::shared_ptr<MaterialInstance> SceneLoader::LoadMaterialInstance(const std::string_view materialInstancePath, vk::SampleCountFlagBits sampleCount, std::string_view passName, bool bIsPostProcess)
 {
     VulkanManager& instance = VulkanManager::GetInstance();
     RenderGraph& renderGraph = RenderGraph::GetInstance();
@@ -262,7 +262,7 @@ std::shared_ptr<MaterialInstance> SceneLoader::LoadMaterialInstance(const std::s
             &renderGraph.GetRenderpasses()[passName.data()].renderPass,
             shaderName,
             sampleCount,
-            false,
+            bIsPostProcess,
             bIsShadowPass
         );
     }

@@ -860,6 +860,10 @@ vk::Format RenderGraph::GetFormat(const std::string& formatStr)
     {
         return vk::Format::eR8G8B8A8Unorm;
     }
+    else if (formatStr == "R16G16B16A16_SFLOAT")
+    {
+        return vk::Format::eR16G16B16A16Sfloat;
+    }
     else
     {
         throw std::runtime_error("Unsupported format string");

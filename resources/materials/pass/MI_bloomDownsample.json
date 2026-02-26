@@ -1,0 +1,7 @@
+{
+    "name": "Bloom Downsample Material Instance",
+    "type": "materialInstance",
+    "shader": "pass/bloomDownsample",
+    "textures": {},
+    "parameters": {}
+}
