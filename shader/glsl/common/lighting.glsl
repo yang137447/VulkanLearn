@@ -53,13 +53,13 @@ float DistributionGGX(vec3 N, vec3 H, float roughness)
     return num / denom;
 }
 
-float GeometrySchlickGGX(float NdotV, float roughness)
+float GeometrySchlickGGX(float cosTheta, float roughness)
 {
     float r = (roughness + 1.0);
     float k = (r*r) / 8.0;
 
-    float num   = NdotV;
-    float denom = NdotV * (1.0 - k) + k;
+    float num   = cosTheta;
+    float denom = cosTheta * (1.0 - k) + k;
 	
     return num / denom;
 }
@@ -117,6 +117,7 @@ vec3 CalculateDirectionalLight(
     vec3  F = fresnelSchlick(cosTheta, F0);
 
     vec3 kS = F;
+        // 金属没有漫反射！光线进入金属内部后会被自由电子迅速吸收并转化为热能。所以纯金属的漫反射颜色应该是黑色（0）
     vec3 kD = (vec3(1.0) - kS) * (1.0 - metallic);
 
     // BRDF 分量
