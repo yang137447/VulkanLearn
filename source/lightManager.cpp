@@ -29,7 +29,7 @@ void LightManager::CreateLightBuffer()
     uint32_t swapChainImageCount = vulkanManager.GetSwapChainImageCount();
 
     vk::DeviceSize lightSSBOSize = 
-        sizeof(LightSSBOHeader) + sizeof(LightGPU) * (sceneLoader.GetDirectinalLight().size() +
+        sizeof(LightSSBOHeader) + sizeof(LightGPU) * (sceneLoader.GetDirectionalLights().size() +
                                                         sceneLoader.GetPointLight().size() +
                                                         sceneLoader.GetSpotLight().size());
     lightBuffer.buffers.resize(swapChainImageCount);
@@ -85,7 +85,7 @@ void LightManager::UpdateLightBuffer(uint32_t swapChainImageIndex)
     vk::Device& device = vulkanManager.GetDevice();
     uint32_t swapChainImageCount = vulkanManager.GetSwapChainImageCount();
 
-    const std::unordered_map<std::string, std::shared_ptr<DirectinalLight>>& directionalLights = sceneLoader.GetDirectinalLight();
+    const std::unordered_map<std::string, std::shared_ptr<DirectionalLight>>& directionalLights = sceneLoader.GetDirectionalLights();
     const std::unordered_map<std::string, std::shared_ptr<PointLight>>& pointLights = sceneLoader.GetPointLight();
     const std::unordered_map<std::string, std::shared_ptr<SpotLight>>& spotLights = sceneLoader.GetSpotLight();
 

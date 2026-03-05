@@ -7,7 +7,7 @@
 #include "materialInstance.h"
 #include "material.h"
 #include "vulkanManager.h"
-#include "renderPipline.h"
+#include "pipeline/pipelineBase.h"
 #include "sceneLoader.h"
 #include "commonFunction.h"
 #include "texture.h"
@@ -211,15 +211,15 @@ void RenderSystem::Render()
             }
             
             auto baseMaterial = materialInstance.lock()->GetBaseMaterial().lock();
-            const RenderPipline& renderPipline = *baseMaterial->GetRenderPipline();
-            commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, renderPipline.GetGraphicsPipeline());
+            const PipelineBase& renderPipeline = *baseMaterial->GetRenderPipeline();
+            commandBuffer.bindPipeline(renderPipeline.GetBindPoint(), renderPipeline.GetPipeline());
 
             // lightManager.UpdateLightBuffer(swapChainImageIndex);
             // 渲染每种材质
             for (const auto& [shaderName, shaderObjects] : hierarchyObjects) {
                 // // 绑定Pipeline
-                // const RenderPipline& renderPipline = *sceneLoader.GetMaterials().at(shaderName)->GetRenderPipline();
-                // commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, renderPipline.GetGraphicsPipeline());
+                // const PipelineBase& renderPipeline = *sceneLoader.GetMaterials().at(shaderName)->GetRenderPipeline();
+                // commandBuffer.bindPipeline(renderPipeline.GetBindPoint(), renderPipeline.GetPipeline());
                 
                 // 渲染每个材质实例
                 for (auto& [materialInstanceName, objects] : shaderObjects) {
@@ -247,13 +247,13 @@ void RenderSystem::Render()
                         const auto& descriptorSets = objectPtr->GetDescriptorSetsForShadow(swapChainImageIndex);
                         commandBuffer.bindDescriptorSets(
                             vk::PipelineBindPoint::eGraphics,
-                            renderPipline.GetPipelineLayout(),
+                            renderPipeline.GetPipelineLayout(),
                             GlobalSetIndex,
                             renderPass.GetDescriptorSets()[swapChainImageIndex][GlobalSetIndex],
                             nullptr);
                         commandBuffer.bindDescriptorSets(
                             vk::PipelineBindPoint::eGraphics,
-                            renderPipline.GetPipelineLayout(),
+                            renderPipeline.GetPipelineLayout(),
                             ObjectSetIndex,
                             descriptorSets[ObjectSetIndex],
                             nullptr);
@@ -279,14 +279,14 @@ void RenderSystem::Render()
             // 渲染每种材质
             for (const auto& [shaderName, shaderObjects] : hierarchyObjects) {
                 // 绑定Pipeline
-                const RenderPipline& renderPipline = *sceneLoader.GetMaterials().at(shaderName)->GetRenderPipline();
+                const PipelineBase& renderPipeline = *sceneLoader.GetMaterials().at(shaderName)->GetRenderPipeline();
                 
                 VulkanDebug::ScopedRegion pipelineRegion(commandBuffer, "Pipeline: " + shaderName, VulkanDebug::DebugCategory::ePipeline);
-                commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, renderPipline.GetGraphicsPipeline());
+                commandBuffer.bindPipeline(renderPipeline.GetBindPoint(), renderPipeline.GetPipeline());
                 if (!renderPass.GetDescriptorSets()[swapChainImageIndex].empty())
                 {
                     bool bHasPassSet = false;
-                    for(const auto& binding : renderPipline.GetShaderBindings())
+                    for(const auto& binding : renderPipeline.GetShaderBindings())
                     {
                         if(binding.set == PassSetIndex)
                         {
@@ -299,7 +299,7 @@ void RenderSystem::Render()
                     {
                         commandBuffer.bindDescriptorSets(
                             vk::PipelineBindPoint::eGraphics,
-                            renderPipline.GetPipelineLayout(),
+                            renderPipeline.GetPipelineLayout(),
                             PassSetIndex,
                             renderPass.GetDescriptorSets()[swapChainImageIndex][PassSetIndex],
                             nullptr);
@@ -331,7 +331,7 @@ void RenderSystem::Render()
                         // 绑定DescriptorSet
                         commandBuffer.bindDescriptorSets(
                             vk::PipelineBindPoint::eGraphics,
-                            renderPipline.GetPipelineLayout(),
+                            renderPipeline.GetPipelineLayout(),
                             0,
                             objectPtr->GetDescriptorSets(swapChainImageIndex),
                             nullptr);
@@ -365,13 +365,13 @@ void RenderSystem::Render()
             }
 
             auto baseMaterial = materialInstance.lock()->GetBaseMaterial().lock();
-            const RenderPipline& renderPipline = *baseMaterial->GetRenderPipline();
-            commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, renderPipline.GetGraphicsPipeline());
+            const PipelineBase& renderPipeline = *baseMaterial->GetRenderPipeline();
+            commandBuffer.bindPipeline(renderPipeline.GetBindPoint(), renderPipeline.GetPipeline());
 
             // 绑定描述符集
             commandBuffer.bindDescriptorSets(
                 vk::PipelineBindPoint::eGraphics,
-                renderPipline.GetPipelineLayout(),
+                renderPipeline.GetPipelineLayout(),
                 PassSetIndex,
                 renderPass.GetDescriptorSets()[swapChainImageIndex][PassSetIndex],
                 nullptr);
@@ -596,12 +596,12 @@ void RenderSystem::UpdateUBOGlobalForShadow(vk::CommandBuffer& commandBuffer, ui
         
     // 2. 计算阴影映射相机的位置
         // 2.1以世界中心为原点，使用光源的旋转矩阵 构建shadowCoordinateSystem
-    auto directionalLightIt = sceneLoader.GetDirectinalLight().begin();
-    if (directionalLightIt == sceneLoader.GetDirectinalLight().end())
+    auto directionalLightIt = sceneLoader.GetDirectionalLights().begin();
+    if (directionalLightIt == sceneLoader.GetDirectionalLights().end())
     {
         return;
     }
-    std::weak_ptr<DirectinalLight> directionalLight = directionalLightIt->second;
+    std::weak_ptr<DirectionalLight> directionalLight = directionalLightIt->second;
         // 2.1构建worldCoordinateSystem -> shadowCoordinateSystem
     Eigen::Matrix3f worldToShadowMatrix;
     worldToShadowMatrix = CommonFunction::RotationToMatrix(directionalLight.lock()->GetRotation()).block<3, 3>(0, 0).transpose();

@@ -4,7 +4,7 @@
 #include <vulkan/vulkan.hpp>
 #include "baseStructs.h"
 
-class DirectinalLight;
+class DirectionalLight;
 class PointLight;
 class SpotLight;
 

@@ -37,7 +37,7 @@ protected:
     Eigen::Matrix4f modelMatrix;
 };
 
-class DirectinalLight: public SceneNode {
+class DirectionalLight: public SceneNode {
 public:
   void SetColor(Eigen::Vector3f& color);
   void SetIntensity(float intensity);

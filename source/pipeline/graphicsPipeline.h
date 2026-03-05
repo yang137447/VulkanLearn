@@ -2,15 +2,16 @@
 
 #include <vector>
 #include "vulkan/vulkan.hpp"
+#include "pipelineBase.h"
 
 class DrawableObject;
 struct ShaderBinding;
 
-class RenderPipline
+class GraphicsPipeline : public PipelineBase
 {
 public:
     
-    RenderPipline(vk::Device *device,
+    GraphicsPipeline(vk::Device *device,
                     vk::PhysicalDeviceMemoryProperties *gpuMemoryProperties,
                     vk::RenderPass *renderPass,
                     const std::string& shaderName,
@@ -18,14 +19,16 @@ public:
                     bool bIsPostProcess = false,
                     bool bIsShadowPass = false
                 );
-    ~RenderPipline();
+    ~GraphicsPipeline();
 
+    inline vk::PipelineBindPoint GetBindPoint() const override { return vk::PipelineBindPoint::eGraphics; }
+    inline const vk::Pipeline& GetPipeline() const override { return graphicsPipeline; }
     inline const vk::PipelineLayout& GetPipelineLayout() const { return pipelineLayout; }
     inline const vk::Pipeline& GetGraphicsPipeline() const { return graphicsPipeline; }
-    inline const std::vector<vk::DescriptorSetLayout>& GetDescriptorSetLayouts() const { return descriptorSetLayouts; }
-    inline const std::vector<ShaderBinding>& GetShaderBindings() const { return shaderBindings; }
+    inline const std::vector<vk::DescriptorSetLayout>& GetDescriptorSetLayouts() const override { return descriptorSetLayouts; }
+    inline const std::vector<ShaderBinding>& GetShaderBindings() const override { return shaderBindings; }
 private:
-    RenderPipline();
+    GraphicsPipeline();
 
     void CreateDescriptorSetLayouts();
     void DestroyDescriptorSetLayouts();
@@ -64,3 +67,4 @@ private:
     vk::PipelineCache pipelineCache;
     vk::Pipeline graphicsPipeline;
 };
+

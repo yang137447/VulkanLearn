@@ -86,6 +86,10 @@ void ShaderCompiler::StartCompile(const std::string& shaderFilePath)
             {
                 kind = shaderc_shader_kind::shaderc_fragment_shader;
             }
+            else if (shaderExtension == "comp")
+            {
+                kind = shaderc_shader_kind::shaderc_compute_shader;
+            }
             else
             {
                 std::cout << "Unknown shader type: " << glslShaderPath << std::endl;

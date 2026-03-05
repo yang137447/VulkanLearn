@@ -11,6 +11,8 @@
 #include "controller.h"
 #include "sceneObject.h"
 #include "renderGraph.h"
+#include "pipeline/brdfLutGenerator.h"
+#include "pipeline/pipelineFactory.h"
 #include "profiler.h"
 
 int main(int argc, char **argv)
@@ -61,12 +63,15 @@ int main(int argc, char **argv)
     //初始化VulkanManager
     VulkanManager& vulkanManager = VulkanManager::GetInstance();
     vulkanManager.Init(extensionsVec, window);
+    PipelineFactory pipelineFactory(&vulkanManager.GetDevice());
+    BrdfLutGenerator::Generate(pipelineFactory);
     //加载渲染图
     RenderGraph& renderGraph = RenderGraph::GetInstance();
     renderGraph.LoadRenderGraph(CommonFunction::InitRenderGraphJson());
     //加载场景
     SceneLoader& sceneLoader = SceneLoader::GetInstance();
-    sceneLoader.LoadScence(CommonFunction::Path(CommonFunction::GetInitScene()));
+    sceneLoader.SetPipelineFactory(&pipelineFactory);
+    sceneLoader.LoadScene(CommonFunction::Path(CommonFunction::GetInitScene()));
     //初始化渲染系统
     RenderSystem& renderSystem = RenderSystem::GetInstance();
     renderSystem.InitRenderObject();

@@ -1,6 +1,7 @@
 #include "material.h"
 #include "materialInstance.h"
-#include "renderPipline.h"
+#include "pipeline/graphicsPipeline.h"
+#include "pipeline/pipelineFactory.h"
 #include <memory>
 
 Material::Material()
@@ -10,10 +11,10 @@ Material::~Material()
 {
 }
 
-Material::Material(vk::Device* device, vk::PhysicalDeviceMemoryProperties* gpuMemoryProperties, vk::RenderPass* renderPass, const std::string& shaderName, vk::SampleCountFlagBits samples, bool bIsPostProcess, bool bIsShadowPass)
+Material::Material(PipelineFactory& pipelineFactory, vk::PhysicalDeviceMemoryProperties* gpuMemoryProperties, vk::RenderPass* renderPass, const std::string& shaderName, vk::SampleCountFlagBits samples, bool bIsPostProcess, bool bIsShadowPass)
 {
     this->shaderName = shaderName;
-    renderPipline = std::make_shared<RenderPipline>(device, gpuMemoryProperties,renderPass, shaderName, samples, bIsPostProcess, bIsShadowPass);
+    renderPipeline = pipelineFactory.CreateGraphicsPipeline(gpuMemoryProperties, renderPass, shaderName, samples, bIsPostProcess, bIsShadowPass);
 }
 std::shared_ptr<MaterialInstance> Material::CreateInstance()
 {

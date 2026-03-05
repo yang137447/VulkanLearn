@@ -5,7 +5,7 @@
 #include "shaderReflect.h"
 #include "material.h"
 #include "materialInstance.h"
-#include "renderPipline.h"
+#include "pipeline/graphicsPipeline.h"
 #include "renderSystem.h"
 #include "lightManager.h"
 #include <stdint.h>
@@ -105,7 +105,7 @@ void Renderpass::CreatePassDescriptorSetLayout()
     if(!materialInstance.expired())
     {
         auto baseMaterial = materialInstance.lock()->GetBaseMaterial().lock();
-        const auto& shaderBindings = baseMaterial->GetRenderPipline()->GetShaderBindings();
+        const auto& shaderBindings = baseMaterial->GetRenderPipeline()->GetShaderBindings();
         for(const auto& binding : shaderBindings)
         {
             if(binding.set != PassSetIndex)
@@ -160,7 +160,7 @@ void Renderpass::CreateDescriptorSets()
     if (!materialInstance.expired()) //geometryPass没有MaterialInstance,需要额外处理
     {
         auto baseMaterial = materialInstance.lock()->GetBaseMaterial().lock();
-        const std::vector<ShaderBinding>& shaderBindings = baseMaterial->GetRenderPipline()->GetShaderBindings();
+        const std::vector<ShaderBinding>& shaderBindings = baseMaterial->GetRenderPipeline()->GetShaderBindings();
         // std::vector<vk::DescriptorPoolSize> descriptorPoolSizes;
         for(const auto& binding : shaderBindings)
         {
@@ -170,7 +170,7 @@ void Renderpass::CreateDescriptorSets()
                 .setDescriptorCount(swapChainImageCount);
             descriptorPoolSizes.push_back(poolSize);
         }
-        const auto& pipelineSetLayouts = baseMaterial->GetRenderPipline()->GetDescriptorSetLayouts();
+        const auto& pipelineSetLayouts = baseMaterial->GetRenderPipeline()->GetDescriptorSetLayouts();
         
         // 只分配前4个Set (0:Global, 1:Material, 2:Object)，Set 3 (Pass)
         // std::vector<vk::DescriptorSetLayout> allocateLayouts;
@@ -240,7 +240,7 @@ void Renderpass::UpdateDescriptorSets()
     if(!materialInstance.expired())
     {
         auto baseMaterial = materialInstance.lock()->GetBaseMaterial().lock();
-        const auto& shaderBindings = baseMaterial->GetRenderPipline()->GetShaderBindings();
+        const auto& shaderBindings = baseMaterial->GetRenderPipeline()->GetShaderBindings();
         auto& renderSystem = RenderSystem::GetInstance();
         auto& lightManager = LightManager::GetInstance();
         for(uint32_t i = 0; i < swapChainImageCount; i++)

@@ -12,7 +12,8 @@
 #include "texture.h"
 #include "materialInstance.h"
 #include "sceneObject.h"
-#include "renderPipline.h"
+#include "pipeline/graphicsPipeline.h"
+#include "pipeline/pipelineFactory.h"
 #include "shaderReflect.h"
 #include "renderGraph.h"
 
@@ -20,7 +21,7 @@ SceneLoader::SceneLoader()
 {
 }
 
-void SceneLoader::LoadScence(const std::string& filename)
+void SceneLoader::LoadScene(const std::string& filename)
 {
     // 读取json场景文件
     //检查文件是否存在
@@ -45,7 +46,7 @@ void SceneLoader::LoadScence(const std::string& filename)
         }
         else if(type == "directionalLight")
         {
-            LoadDirectinalLightObject(obj);
+            LoadDirectionalLightObject(obj);
         }
         else if(type == "pointLight")
         {
@@ -129,7 +130,7 @@ void SceneLoader::LoadMeshObject(const nlohmann::basic_json<>& node)
     sceneObjects.emplace(sceneObjectName, std::move(sceneObject));  
 }
 
-void SceneLoader::LoadDirectinalLightObject(const nlohmann::basic_json<>& node)
+void SceneLoader::LoadDirectionalLightObject(const nlohmann::basic_json<>& node)
 {
     std::string name = node["name"];
     Eigen::Vector3f position = JsonParser::ParseValue<Eigen::Vector3f>(node["position"]);
@@ -137,14 +138,14 @@ void SceneLoader::LoadDirectinalLightObject(const nlohmann::basic_json<>& node)
     Eigen::Vector3f color = JsonParser::ParseValue<Eigen::Vector3f>(node["color"]);
     float intensity = JsonParser::ParseValue<float>(node["intensity"]);
 
-    std::shared_ptr<DirectinalLight> directinalLight = std::make_shared<DirectinalLight>();
-    directinalLight->SetName(name);
-    directinalLight->SetColor(color);
-    directinalLight->SetIntensity(intensity);
-    directinalLight->SetPosition(position);
-    directinalLight->SetRotation(rotation);
+    std::shared_ptr<DirectionalLight> directionalLight = std::make_shared<DirectionalLight>();
+    directionalLight->SetName(name);
+    directionalLight->SetColor(color);
+    directionalLight->SetIntensity(intensity);
+    directionalLight->SetPosition(position);
+    directionalLight->SetRotation(rotation);
 
-    directinalLights.emplace(name, std::move(directinalLight));
+    directionalLights.emplace(name, std::move(directionalLight));
 }
 void SceneLoader::LoadPointLightObject(const nlohmann::basic_json<>& node)
 {
@@ -255,9 +256,13 @@ std::shared_ptr<MaterialInstance> SceneLoader::LoadMaterialInstance(const std::s
     }
     else
     {
+        if (pipelineFactory == nullptr)
+        {
+            throw std::runtime_error("PipelineFactory is not set in SceneLoader");
+        }
         bool bIsShadowPass = passName == "shadow";
         material = std::make_shared<Material>(
-            &instance.GetDevice(), 
+            *pipelineFactory, 
             &instance.GetGpuMemoryProperties(),
             &renderGraph.GetRenderpasses()[passName.data()].renderPass,
             shaderName,
@@ -272,7 +277,7 @@ std::shared_ptr<MaterialInstance> SceneLoader::LoadMaterialInstance(const std::s
     const auto& shaderParameters = materialInstanceJson["parameters"];
     uint32_t parameterCount = shaderParameters.size();
     // 根据shaderbinding校验参数和贴图
-    auto& shaderBindings = material->GetRenderPipline()->GetShaderBindings();
+    auto& shaderBindings = material->GetRenderPipeline()->GetShaderBindings();
         // 检查贴图数量是否匹配
     uint32_t expectedTextureCount = 0;
     for(const auto& binding : shaderBindings)

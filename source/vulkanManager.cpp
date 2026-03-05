@@ -3,10 +3,8 @@
 #include <cstdint>
 #include <iostream>
 #include <chrono>
-#include "renderPipline.h"
+#include "pipeline/graphicsPipeline.h"
 #include "commonFunction.h"
-// Loader
-#include "textureLoader.h"
 #include "modelLoader.h"
 #include "sceneLoader.h"
 #include "vulkanDebug.h"
@@ -506,6 +504,4 @@ void VulkanManager::DestroySyncObjects()
 
 void VulkanManager::InitInstance()
 {
-    TextureLoader& textureLoader = TextureLoader::GetInstance();
-    textureLoader.Init(&device, &physicalDevices[0], &gpuMemoryProperties, &commandPool, &graphicQueue);
 }

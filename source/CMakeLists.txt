@@ -1,4 +1,4 @@
-file(GLOB sources "*.h" "*.cpp")
+file(GLOB_RECURSE sources CONFIGURE_DEPENDS "*.h" "*.cpp")
 
 add_executable(main ${sources})
 

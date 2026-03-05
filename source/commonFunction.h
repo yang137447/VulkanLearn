@@ -726,24 +726,88 @@ namespace CommonFunction
         EndSingleTimeCommands(device, commandBuffer, GraphicsQueue, commandPool);
     }
 
-    inline void CopyBufferToImage(vk::Device& device, vk::Queue& GraphicsQueue, vk::CommandPool& commandPool, vk::Buffer& buffer, vk::Image& image, uint32_t width, uint32_t height)
+    inline std::vector<vk::BufferImageCopy> MakeFlipYBufferImageCopyRegions(uint32_t width, uint32_t height, vk::DeviceSize rowBytes, bool bufferYReversed)
+    {
+        if (rowBytes == 0)
+        {
+            throw std::invalid_argument("rowBytes must be greater than 0 when flipY is enabled");
+        }
+        std::vector<vk::BufferImageCopy> regions;
+        regions.reserve(height);
+        for (uint32_t y = 0; y < height; ++y)
+        {
+            const uint32_t bufferRow = bufferYReversed ? (height - 1 - y) : y;
+            vk::BufferImageCopy region;
+            region
+                .setBufferOffset(static_cast<vk::DeviceSize>(bufferRow) * rowBytes)
+                .setBufferRowLength(0)
+                .setBufferImageHeight(0)
+                .setImageSubresource(vk::ImageSubresourceLayers()
+                    .setAspectMask(vk::ImageAspectFlagBits::eColor)
+                    .setMipLevel(0)
+                    .setBaseArrayLayer(0)
+                    .setLayerCount(1))
+                .setImageOffset(vk::Offset3D{ 0, static_cast<int32_t>(y), 0 })
+                .setImageExtent(vk::Extent3D{ width, 1, 1 });
+            regions.push_back(region);
+        }
+        return regions;
+    }
+
+    inline void CopyBufferToImage(vk::Device& device, vk::Queue& GraphicsQueue, vk::CommandPool& commandPool, vk::Buffer& buffer, vk::Image& image, uint32_t width, uint32_t height, bool flipY = false, vk::DeviceSize rowBytes = 0)
     {
         vk::CommandBuffer commandBuffer = BeginSingleTimeCommands(device, commandPool);
 
-        vk::BufferImageCopy region;
-        region
-            .setBufferOffset(0)
-            .setBufferRowLength(0)
-            .setBufferImageHeight(0)
-            .setImageSubresource(vk::ImageSubresourceLayers()
-                .setAspectMask(vk::ImageAspectFlagBits::eColor)
-                .setMipLevel(0)
-                .setBaseArrayLayer(0)
-                .setLayerCount(1))
-            .setImageOffset(vk::Offset3D{ 0, 0, 0 })
-            .setImageExtent(vk::Extent3D{ width, height, 1 });
+        if (!flipY)
+        {
+            vk::BufferImageCopy region;
+            region
+                .setBufferOffset(0)
+                .setBufferRowLength(0)
+                .setBufferImageHeight(0)
+                .setImageSubresource(vk::ImageSubresourceLayers()
+                    .setAspectMask(vk::ImageAspectFlagBits::eColor)
+                    .setMipLevel(0)
+                    .setBaseArrayLayer(0)
+                    .setLayerCount(1))
+                .setImageOffset(vk::Offset3D{ 0, 0, 0 })
+                .setImageExtent(vk::Extent3D{ width, height, 1 });
+            commandBuffer.copyBufferToImage(buffer, image, vk::ImageLayout::eTransferDstOptimal, 1, &region);
+        }
+        else
+        {
+            std::vector<vk::BufferImageCopy> regions = MakeFlipYBufferImageCopyRegions(width, height, rowBytes, true);
+            commandBuffer.copyBufferToImage(buffer, image, vk::ImageLayout::eTransferDstOptimal, static_cast<uint32_t>(regions.size()), regions.data());
+        }
 
-        commandBuffer.copyBufferToImage(buffer, image, vk::ImageLayout::eTransferDstOptimal, 1, &region);
+        EndSingleTimeCommands(device, commandBuffer, GraphicsQueue, commandPool);
+    }
+
+    inline void CopyImageToBuffer(vk::Device& device, vk::Queue& GraphicsQueue, vk::CommandPool& commandPool, vk::Image& image, vk::Buffer& buffer, uint32_t width, uint32_t height, bool flipY = false, vk::DeviceSize rowBytes = 0)
+    {
+        vk::CommandBuffer commandBuffer = BeginSingleTimeCommands(device, commandPool);
+
+        if (!flipY)
+        {
+            vk::BufferImageCopy region;
+            region
+                .setBufferOffset(0)
+                .setBufferRowLength(0)
+                .setBufferImageHeight(0)
+                .setImageSubresource(vk::ImageSubresourceLayers()
+                    .setAspectMask(vk::ImageAspectFlagBits::eColor)
+                    .setMipLevel(0)
+                    .setBaseArrayLayer(0)
+                    .setLayerCount(1))
+                .setImageOffset(vk::Offset3D{ 0, 0, 0 })
+                .setImageExtent(vk::Extent3D{ width, height, 1 });
+            commandBuffer.copyImageToBuffer(image, vk::ImageLayout::eTransferSrcOptimal, buffer, 1, &region);
+        }
+        else
+        {
+            std::vector<vk::BufferImageCopy> regions = MakeFlipYBufferImageCopyRegions(width, height, rowBytes, true);
+            commandBuffer.copyImageToBuffer(image, vk::ImageLayout::eTransferSrcOptimal, buffer, static_cast<uint32_t>(regions.size()), regions.data());
+        }
 
         EndSingleTimeCommands(device, commandBuffer, GraphicsQueue, commandPool);
     }

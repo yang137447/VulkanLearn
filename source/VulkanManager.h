@@ -9,7 +9,7 @@
 #include <Eigen/Dense>
 
 class DrawableObject;
-class RenderPipline;
+class GraphicsPipeline;
 
 class VulkanManager
 {

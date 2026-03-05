@@ -1,7 +1,7 @@
 #include "materialInstance.h"
 #include "texture.h"
 #include "material.h"
-#include "renderPipline.h"
+#include "pipeline/graphicsPipeline.h"
 #include "vulkanManager.h"
 #include "commonFunction.h"
 #include "shaderReflect.h"
@@ -159,7 +159,7 @@ void MaterialInstance::SetupDescriptors()
         }
     }
     // 设置image信息
-    for(const auto& binding: baseMaterial.lock()->GetRenderPipline()->GetShaderBindings())
+    for(const auto& binding: baseMaterial.lock()->GetRenderPipeline()->GetShaderBindings())
     {
         if(binding.set != MaterialSetIndex && binding.type != vk::DescriptorType::eCombinedImageSampler)
         {

@@ -7,7 +7,7 @@
 #include "vulkanManager.h"
 #include "materialInstance.h"
 #include "material.h"
-#include "renderPipline.h"
+#include "pipeline/graphicsPipeline.h"
 #include "shaderReflect.h"
 #include "renderSystem.h"
 #include "lightManager.h"
@@ -111,11 +111,11 @@ void SceneNode::UpdateModelMatrix()
     modelMatrix = translationMatrix * rotationMatrix * scaleMatrix;
 }
 
-void DirectinalLight::SetColor(Eigen::Vector3f& color)
+void DirectionalLight::SetColor(Eigen::Vector3f& color)
 {
     this->color = color;
 }
-void DirectinalLight::SetIntensity(float intensity)
+void DirectionalLight::SetIntensity(float intensity)
 {
     this->intensity = intensity;
 }
@@ -346,7 +346,7 @@ void SceneObject::CreateDescriptorSets()
     VulkanManager& vulkanManager = VulkanManager::GetInstance();
     uint32_t swapChainImageCount = vulkanManager.GetSwapChainImageCount();
     auto baseMaterial = materialInstance->GetBaseMaterial().lock();
-    const std::vector<ShaderBinding>& shaderBindings = baseMaterial->GetRenderPipline()->GetShaderBindings();
+    const std::vector<ShaderBinding>& shaderBindings = baseMaterial->GetRenderPipeline()->GetShaderBindings();
     std::vector<vk::DescriptorPoolSize> descriptorPoolSizes;
     // descriptorPoolSizes[0]
     //     .setType(vk::DescriptorType::eUniformBuffer)
@@ -366,7 +366,7 @@ void SceneObject::CreateDescriptorSets()
             .setDescriptorCount(swapChainImageCount);
         descriptorPoolSizes.push_back(poolSize);
     }
-    const auto& pipelineSetLayouts = baseMaterial->GetRenderPipline()->GetDescriptorSetLayouts();
+    const auto& pipelineSetLayouts = baseMaterial->GetRenderPipeline()->GetDescriptorSetLayouts();
     
     // 只分配前3个Set (0:Global, 1:Material, 2:Object)，Set 3 (Pass) 由 RenderPass 管理
     std::vector<vk::DescriptorSetLayout> allocateLayouts;
@@ -443,7 +443,7 @@ void SceneObject::UpdateDescriptorSet()
     // 设置descriptor set信息
     writeDescriptorSets.resize(swapChainImageCount);
     auto baseMaterial = materialInstance->GetBaseMaterial().lock();
-    const auto& shaderBindings = baseMaterial->GetRenderPipline()->GetShaderBindings();
+    const auto& shaderBindings = baseMaterial->GetRenderPipeline()->GetShaderBindings();
     auto& renderSystem = RenderSystem::GetInstance();
     auto& lightManager = LightManager::GetInstance();
     for(uint32_t i = 0; i < swapChainImageCount; i++)
@@ -505,7 +505,7 @@ void SceneObject::CreateDescriptorSetsForShadow()
         return;
     }
     auto shadowMaterial = sceneLoader.GetMaterials().at("shadow");
-    const std::vector<ShaderBinding>& shaderBindings = shadowMaterial->GetRenderPipline()->GetShaderBindings();
+    const std::vector<ShaderBinding>& shaderBindings = shadowMaterial->GetRenderPipeline()->GetShaderBindings();
     
     std::vector<vk::DescriptorPoolSize> descriptorPoolSizes;
     for(const auto& binding : shaderBindings)
@@ -526,7 +526,7 @@ void SceneObject::CreateDescriptorSetsForShadow()
         return;
     }
 
-    const auto& pipelineSetLayouts = shadowMaterial->GetRenderPipline()->GetDescriptorSetLayouts();
+    const auto& pipelineSetLayouts = shadowMaterial->GetRenderPipeline()->GetDescriptorSetLayouts();
     
     // check if pipelineSetLayouts has enough sets
     if (pipelineSetLayouts.size() <= ObjectSetIndex)
@@ -593,7 +593,7 @@ void SceneObject::UpdateDescriptorSetForShadow()
         return;
     }
     auto shadowMaterial = sceneLoader.GetMaterials().at("shadow");
-    const auto& shaderBindings = shadowMaterial->GetRenderPipline()->GetShaderBindings();
+    const auto& shaderBindings = shadowMaterial->GetRenderPipeline()->GetShaderBindings();
 
     writeDescriptorSetsShadow.resize(swapChainImageCount);
 
