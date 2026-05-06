@@ -1,10 +1,20 @@
 #version 450
-
 #include "../common/defines.glsl"
 
-layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
-layout(set = 0, binding = 0, rgba16f) uniform writeonly image2D outBrdfLut;
+// gl_WorkGroupID          // 当前是第几个工作组
+// gl_LocalInvocationID    // 当前线程在工作组内部的位置，范围是 0~7, 0~7, 0
+// gl_GlobalInvocationID   // 当前线程在全局里的位置，最常用
+// gl_WorkGroupSize        // 当前 workgroup 尺寸，也就是 uvec3(8, 8, 1)
 
+// 每个 workgroup 包含 8x8x1 个线程，总共 64 个 invocation。
+// vkCmdDispatch 指定的是 workgroup 数量，不是线程数量。
+// 实际全局线程数 = dispatchGroupCount * local_size。
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(set = 0, binding =0, rgba16f) uniform writeonly image2D outBrdfLut;
+
+// Van der Corput 反 radical inverse，base 2。
+// 通过反转 uint 的 32 位二进制位，并乘以 1 / 2^32，
+// 将整数样本索引映射到 [0, 1) 范围内的低差异小数。
 float RadicalInverseVdC(uint bits)
 {
     bits = (bits << 16u) | (bits >> 16u);
@@ -15,86 +25,130 @@ float RadicalInverseVdC(uint bits)
     return float(bits) * 2.3283064365386963e-10;
 }
 
+// 生成第 i 个 Hammersley 二维低差异采样点。
+// x 使用线性分布 i / n，y 使用 base-2 radical inverse。
+// 相比随机采样，Hammersley 点分布更均匀，常用于 BRDF LUT / IBL 重要性采样。
 vec2 Hammersley(uint i, uint n)
 {
     return vec2(float(i) / float(n), RadicalInverseVdC(i));
 }
 
+// 根据二维低差异样本 xi 和粗糙度 roughness,
+// 在以 n 为法线的半球上按 GGX 分布进行重要性采样，返回半角向量 h。
 vec3 ImportanceSampleGGX(vec2 xi, vec3 n, float roughness)
 {
-    float a = roughness * roughness;
+    // 将粗糙度映射为 GGX 分布参数 a
+    float a = roughness*roughness;
+
+    // 将二维样本映射为球坐标角度
     float phi = 2.0 * PI * xi.x;
-    float cosTheta = sqrt((1.0 - xi.y) / (1.0 + (a * a - 1.0) * xi.y));
+    float cosTheta = sqrt(max((1.0 - xi.y)/(1.0 + (a * a - 1.0) * xi.y), 0.0));
     float sinTheta = sqrt(max(1.0 - cosTheta * cosTheta, 0.0));
 
-    vec3 h = vec3(cos(phi) * sinTheta, sin(phi) * sinTheta, cosTheta);
+    // 先在局部空间(切线空间)计算半角向量 h
+    vec3 H = vec3(cos(phi) * sinTheta, sin(phi) * sinTheta, cosTheta);
 
+    //根据法线 n 构建局部空间(切线空间)到世界空间的变换矩阵
+    // 根据法线 n 构造局部坐标系，约定局部 x/y/z 分别对应 tangent/bitangent/normal。
+    // 注意叉乘顺序需要和 mat3(tangent, bitangent, n) 的列顺序保持一致。
     vec3 up = abs(n.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
     vec3 tangent = normalize(cross(up, n));
     vec3 bitangent = cross(n, tangent);
+    
+    // 将局部空间(切线空间)的半角向量 H 转换到世界空间
+    H = normalize(mat3(tangent, bitangent, n) * H);
 
-    return normalize(tangent * h.x + bitangent * h.y + n * h.z);
+    return H;
 }
 
-float GeometrySchlickGGXIBL(float nDotV, float roughness)
+// Schlick-GGX 几何项的 IBL 近似形式
+// 用于估计微表面自遮蔽带来的能量衰减
+float GeometrySchlickGGXIBL(float NDotV, float roughness)
 {
     float a = roughness;
     float k = (a * a) * 0.5;
-    return nDotV / (nDotV * (1.0 - k) + k);
+    return NDotV / (NDotV * (1.0 - k) + k);
 }
 
+// smith 联合几何项：分别计算视线方向和光线方向的遮蔽，再相乘。
 float GeometrySmithIBL(float nDotV, float nDotL, float roughness)
 {
     return GeometrySchlickGGXIBL(nDotV, roughness) * GeometrySchlickGGXIBL(nDotL, roughness);
 }
 
-vec2 IntegrateBRDF(float nDotV, float roughness)
+vec2 IntegrateBRDF(float NDotV, float roughness)
 {
-    vec3 v = vec3(sqrt(max(1.0 - nDotV * nDotV, 0.0)), 0.0, nDotV);
+    // 在局部空间中还原 V, 且约定 N 为 +z
+    vec3 N = vec3(0.0, 0.0, 1.0);
+        // 已知 NdotV = dot(N, V) = V.z，
+        //  因此可构造单位视线方向 V = (sqrt(1 - NdotV^2), 0, NdotV)。
+    vec3 V = vec3(sqrt(max(1.0 - NDotV * NDotV, 0.0)), 0.0, NDotV);
 
-    float a = 0.0;
-    float b = 0.0;
+    // 分别累计 split-sum 中的两个系数
+    float A = 0.0;
+    float B = 0.0;
 
-    const uint sampleCount = 1024u;
-    vec3 n = vec3(0.0, 0.0, 1.0);
+    // 采样次数越高，结果越稳定，但是生成的 LUT 的开销也越高。
+    const uint numSamples = 1024u;
 
-    for (uint i = 0u; i < sampleCount; ++i)
+    for(uint i = 0u; i < numSamples; i++)
     {
-        vec2 xi = Hammersley(i, sampleCount);
-        vec3 h = ImportanceSampleGGX(xi, n, roughness);
-        vec3 l = normalize(2.0 * dot(v, h) * h - v);
+        // 生成二维低差异样本， 并按 GGX 分布采样半角向量 h
+        vec2 xi = Hammersley(i, numSamples);
+        vec3 H = ImportanceSampleGGX(xi, N, roughness);
 
-        float nDotL = max(l.z, 0.0);
-        float nDotH = max(h.z, 0.0);
-        float vDotH = max(dot(v, h), 0.0);
+        // 根据视线方向 v 和半角向量 h 计算光线方向 l
+        // vec3 l = normalize(2.0 * dot(v, h) * h - v);
+        vec3 L = reflect(-V, H);
 
-        if (nDotL > 0.0)
+        // 由于法线恒定为 +z, 因此 nDotL = l.z, nDotH = h.z
+        float NDotL = max(L.z, 0.0);
+        float NDotH = max(H.z, 0.0);
+        float VDotH = max(dot(V, H), 0.0);
+
+        // 只累积位于法线可见半球内的样本。
+        if (NDotL > 0.0)
         {
-            float g = GeometrySmithIBL(nDotV, nDotL, roughness);
-            float gVis = (g * vDotH) / max(nDotH * nDotV, 1e-5);
-            float fc = pow(1.0 - vDotH, 5.0);
+            // 计算 IBL 版本的 Smith 几何遮蔽项。
+            float g = GeometrySmithIBL(NDotV, NDotL, roughness);
+            // 将几何项与重要性采样推导中的可见性因子合并。
+            float gVis = (g * VDotH) / max(NDotH * NDotV, 1e-5);
+            // Schlick Fresnel 中的 (1 - VdotH)^5，用于拆分 F0 相关项。
+            float Fc = pow(max(1.0 - VDotH, 0.0), 5.0);
 
-            a += (1.0 - fc) * gVis;
-            b += fc * gVis;
+            // 计算 BRDF 的 split-sum 项。
+            A += (1.0 - Fc) * gVis;
+            B += Fc * gVis;
         }
     }
 
-    return vec2(a, b) / float(sampleCount);
+    // 对所有样本求平均，得到当前 nDotV 和 roughness 对应的 LUT 值
+    return vec2(A, B) / float(numSamples);
 }
 
 void main()
 {
-    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    // 计算当前线程在全局里的位置
+    ivec2 pixelcoord = ivec2(gl_GlobalInvocationID.xy);
+    // lut 尺寸
     ivec2 lutSize = imageSize(outBrdfLut);
-    if (pixel.x >= lutSize.x || pixel.y >= lutSize.y)
+    
+    // 检查是否超出 lut 范围
+    // 因为 dispatch 的尺寸通常按 workgroup 对齐，不一定刚好等于纹理尺寸。
+    // 所以边缘线程可能落到纹理外面。
+    if (pixelcoord.x >= lutSize.x || pixelcoord.y >= lutSize.y)
     {
         return;
     }
 
-    vec2 uv = (vec2(pixel) + vec2(0.5)) / vec2(lutSize);
+    // + 0.5 是为了取像素中心，不是像素左上角。
+    vec2 uv = (vec2(pixelcoord) + vec2(0.5)) / vec2(lutSize);
+    // - nDotV ：法线和视线夹角余弦。
+    // - roughness ：粗糙度。
+    // - 这两个参数足够描述预积分 BRDF LUT 的二维输入。
     float nDotV = uv.x;
     float roughness = uv.y;
 
     vec2 brdf = IntegrateBRDF(nDotV, roughness);
-    imageStore(outBrdfLut, pixel, vec4(brdf, 0.0, 1.0));
+    imageStore(outBrdfLut, pixelcoord, vec4(brdf, 0.0, 1.0));
 }
