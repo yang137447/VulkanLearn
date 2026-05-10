@@ -67,7 +67,8 @@
         {
             "name": "Environment_01",
             "type": "environment",
-            "ambient": [0.1, 0.1, 0.1]
+            "hdrPath": "hdri/sunset.exr",
+            "cubeSize": 512
         }
     ]
 }

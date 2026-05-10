@@ -39,8 +39,9 @@ class SceneLoader{
     const std::unordered_map<std::string, std::shared_ptr<DirectionalLight>>& GetDirectionalLights() const { return directionalLights;}
     const std::unordered_map<std::string, std::shared_ptr<PointLight>>& GetPointLight() const { return pointLights;}
     const std::unordered_map<std::string, std::shared_ptr<SpotLight>>& GetSpotLight() const { return spotLights;}
-    
-    const Eigen::Vector3f& GetAmbient() const { return ambient; }
+    // environment 节点解析出的运行时环境资源配置，供后续 IBL 预处理链继续复用。
+    const std::string& GetEnvironmentHdrPath() const { return environmentHdrPath; }
+    uint32_t GetEnvironmentCubeSize() const { return environmentCubeSize; }
 private:
     SceneLoader();
     void LoadMeshObject(const nlohmann::basic_json<>& node);
@@ -64,6 +65,8 @@ private:
     std::unordered_map<std::string, std::shared_ptr<SpotLight>> spotLights;
     std::shared_ptr<Camera> sceneCamera;
 
-    Eigen::Vector3f ambient;
+    // 当前场景声明的环境贴图输入及 cubemap 目标分辨率。
+    std::string environmentHdrPath;
+    uint32_t environmentCubeSize = 512;
     PipelineFactory* pipelineFactory = nullptr;
 };

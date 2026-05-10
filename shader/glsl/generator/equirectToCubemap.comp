@@ -1,0 +1,62 @@
+#version 450
+#include "../common/defines.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D inEquirectHdr;
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2DArray outCubemap;
+
+vec3 GetDirectionFromFace(ivec2 pixelCoord, ivec2 faceSize, int faceIndex)
+{
+    // 把当前 face 内像素映射到 [-1, 1] 的局部平面坐标。
+    vec2 uv = (vec2(pixelCoord) + vec2(0.5)) / vec2(faceSize);
+    uv = uv * 2.0 - 1.0;
+    uv.y = -uv.y;
+
+    vec3 dir;
+    switch (faceIndex)
+    {
+        // faceIndex 与 C++ 侧输出命名保持一致：px nx py ny pz nz。
+        case 0: dir = vec3( 1.0, uv.y, -uv.x); break;
+        case 1: dir = vec3(-1.0, uv.y,  uv.x); break;
+        case 2: dir = vec3( uv.x, 1.0, -uv.y); break;
+        case 3: dir = vec3( uv.x,-1.0,  uv.y); break;
+        case 4: dir = vec3( uv.x, uv.y,  1.0); break;
+        case 5: dir = vec3(-uv.x, uv.y, -1.0); break;
+        default: dir = vec3(0.0, 0.0, 1.0); break;
+    }
+    return normalize(dir);
+}
+
+vec2 DirectionToUv(vec3 dir)
+{
+    // 方向向量转经纬度 UV，用原始 equirect HDR 做采样。
+    float phi = atan(dir.z, dir.x);
+    float theta = acos(clamp(dir.y, -1.0, 1.0));
+
+    vec2 uv;
+    uv.x = phi / (2.0 * PI) + 0.5;
+    uv.y = theta / PI;
+    uv.x = fract(uv.x);
+    uv.y = clamp(uv.y, 0.0, 1.0);
+    return uv;
+}
+
+void main()
+{
+    ivec2 pixelCoord = ivec2(gl_GlobalInvocationID.xy);
+    int faceIndex = int(gl_GlobalInvocationID.z);
+    ivec3 cubeSize = imageSize(outCubemap);
+
+    if (pixelCoord.x >= cubeSize.x || pixelCoord.y >= cubeSize.y || faceIndex >= cubeSize.z)
+    {
+        return;
+    }
+
+    // 每个 invocation 负责 cubemap 某个 face 的一个 texel。
+    vec3 dir = GetDirectionFromFace(pixelCoord, cubeSize.xy, faceIndex);
+    vec2 uv = DirectionToUv(dir);
+    vec4 hdrColor = textureLod(inEquirectHdr, uv, 0.0);
+
+    imageStore(outCubemap, ivec3(pixelCoord, faceIndex), hdrColor);
+}

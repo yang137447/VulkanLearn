@@ -12,6 +12,7 @@
 #include "texture.h"
 #include "materialInstance.h"
 #include "sceneObject.h"
+#include "pipeline/environmentCubemapGenerator.h"
 #include "pipeline/graphicsPipeline.h"
 #include "pipeline/pipelineFactory.h"
 #include "shaderReflect.h"
@@ -31,6 +32,10 @@ void SceneLoader::LoadScene(const std::string& filename)
     }
     std::ifstream file(filename);
     nlohmann::json scnJson = nlohmann::json::parse(file);
+
+    // SceneLoader 是单例，先清空上一次场景留下的 environment 配置。
+    environmentHdrPath.clear();
+    environmentCubeSize = 512;
 
     // 加载后处理材质
     LoadPassMaterial();
@@ -210,8 +215,14 @@ void SceneLoader::LoadCameraObject(const nlohmann::basic_json<>& node)
 
 void SceneLoader::LoadEnvironmentObject(const nlohmann::basic_json<>& node)
 {
-    Eigen::Vector3f ambient = JsonParser::ParseValue<Eigen::Vector3f>(node["ambient"]);
-    this->ambient = ambient;
+    // environment 节点只负责声明输入 HDR/EXR 路径和 cubemap 输出尺寸。
+    environmentHdrPath = node.value("hdrPath", std::string());
+    environmentCubeSize = node.value("cubeSize", 512u);
+    if (pipelineFactory != nullptr && !environmentHdrPath.empty())
+    {
+        // 环境贴图预处理跟场景资源绑定，读取到 environment 后立即生成 cubemap。
+        EnvironmentCubemapGenerator::Generate(environmentHdrPath, environmentCubeSize, *pipelineFactory);
+    }
 }
 
 void SceneLoader::LoadPassMaterial()

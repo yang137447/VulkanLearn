@@ -38,6 +38,8 @@ public:
         HostImage::TextureSemantic semantic = HostImage::TextureSemantic::Color;
         FlipYMode flipY = FlipYMode::ForceOff;
         Transfer transfer = Transfer::Linear;
+        // 内存加载没有扩展名时，用它显式提示走 LDR/HDR/EXR 哪条解码路径。
+        std::optional<FileFormat> formatHint = std::nullopt;
         bool genMipmaps = false;
         int forceChannels = 0;
     };

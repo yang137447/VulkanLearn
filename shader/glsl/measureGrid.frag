@@ -33,7 +33,5 @@ void main()
     finalColor = CalculateLighting(normal, v2fPosition, uboVP.cameraPosition, albedo.rgb, roughness, metallic);
     float shadow = CalculateShadow(uboVP.lightViewProj, v2fPosition, 0.002f);
     finalColor *= shadow;
-    // 环境光
-    finalColor += uboVP.ambient * albedo.rgb;
     outColor = vec4(finalColor, albedo.a);
 }

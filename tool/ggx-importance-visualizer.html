@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GGX Importance Sampling Visualizer</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0d10;
+      --panel: #12161c;
+      --panel-2: #171d25;
+      --line: rgba(255, 255, 255, 0.1);
+      --text: #eef2f7;
+      --muted: #98a4b3;
+      --accent: #8cc8ff;
+      --accent-2: #f3d071;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Segoe UI", "PingFang SC", sans-serif;
+      background:
+        radial-gradient(circle at top, rgba(100, 149, 237, 0.18), transparent 36%),
+        linear-gradient(180deg, #0b0d10 0%, #0f1216 100%);
+      color: var(--text);
+    }
+
+    .page {
+      width: min(1280px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 28px 0 40px;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: 1.2fr 0.8fr;
+      gap: 24px;
+      align-items: end;
+      min-height: 34vh;
+      margin-bottom: 24px;
+    }
+
+    .eyebrow {
+      margin: 0 0 10px;
+      color: var(--accent);
+      font-size: 12px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(38px, 7vw, 82px);
+      line-height: 0.92;
+      letter-spacing: -0.05em;
+      max-width: 10ch;
+    }
+
+    .hero p {
+      max-width: 52ch;
+      margin: 18px 0 0;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.7;
+    }
+
+    .legend {
+      display: grid;
+      gap: 10px;
+      justify-self: end;
+      align-self: center;
+      width: min(100%, 360px);
+      padding: 18px;
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.02));
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      backdrop-filter: blur(14px);
+    }
+
+    .legend strong {
+      display: block;
+      font-size: 13px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--accent);
+    }
+
+    .legend span {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.55;
+    }
+
+    .controls {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 16px;
+      padding: 18px;
+      margin-bottom: 20px;
+      background: rgba(18, 22, 28, 0.82);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      backdrop-filter: blur(10px);
+      position: sticky;
+      top: 12px;
+      z-index: 5;
+    }
+
+    .control {
+      display: grid;
+      gap: 8px;
+    }
+
+    .control label {
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .value {
+      font-size: 24px;
+      letter-spacing: -0.03em;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      accent-color: var(--accent);
+    }
+
+    .button-row {
+      display: flex;
+      align-items: end;
+    }
+
+    button {
+      width: 100%;
+      height: 46px;
+      border: 0;
+      border-radius: 999px;
+      background: linear-gradient(135deg, var(--accent), #5aa6ff);
+      color: #08111b;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 160ms ease, filter 160ms ease;
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+      filter: brightness(1.05);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 18px;
+    }
+
+    .panel {
+      padding: 16px;
+      background: linear-gradient(180deg, rgba(23, 29, 37, 0.9), rgba(18, 22, 28, 0.94));
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      overflow: hidden;
+    }
+
+    .panel h2 {
+      margin: 0 0 8px;
+      font-size: 18px;
+      letter-spacing: -0.03em;
+    }
+
+    .panel p {
+      margin: 0 0 14px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+      min-height: 42px;
+    }
+
+    .compare {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .subpanel {
+      display: grid;
+      gap: 8px;
+    }
+
+    .subpanel strong {
+      color: var(--text);
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    canvas {
+      width: 100%;
+      aspect-ratio: 1 / 1;
+      display: block;
+      background: radial-gradient(circle at center, rgba(255, 255, 255, 0.02), rgba(0, 0, 0, 0.1));
+      border-radius: 16px;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+    }
+
+    .formula {
+      margin-top: 22px;
+      padding: 18px;
+      background: rgba(18, 22, 28, 0.82);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+    }
+
+    .formula h3 {
+      margin: 0 0 10px;
+      font-size: 16px;
+    }
+
+    .formula code {
+      display: block;
+      white-space: pre-wrap;
+      font-family: Consolas, monospace;
+      color: #d6e2f0;
+      line-height: 1.8;
+      font-size: 13px;
+    }
+
+    @media (max-width: 960px) {
+      .hero,
+      .controls,
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      .compare {
+        grid-template-columns: 1fr;
+      }
+
+      .legend {
+        justify-self: stretch;
+      }
+
+      .controls {
+        position: static;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="hero">
+      <div>
+        <p class="eyebrow">Microfacet Sampling</p>
+        <h1>GGX Importance Sampling</h1>
+        <p>
+          这一版把每个阶段都拆成 `Hammersley` 和 `Random` 两列对比。先看 `[0, 1)^2` 里的输入点怎么分布，
+          再看这些点如何映射成 GGX 分布下的半角向量 `H`，最后看固定视线 `V` 时由 `H` 反推出的入射光方向 `L`。
+        </p>
+      </div>
+      <aside class="legend">
+        <div>
+          <strong>Visual Thesis</strong>
+          <span>用一页图把低差异采样和 GGX 重要性采样的几何关系讲清楚。</span>
+        </div>
+        <div>
+          <strong>Interaction</strong>
+          <span>拖动粗糙度和视角，观察低差异点列与随机点列在同一采样链里收敛质量的差别。</span>
+        </div>
+      </aside>
+    </section>
+
+    <section class="controls">
+      <div class="control">
+        <label for="roughness">Roughness</label>
+        <div class="value" id="roughnessValue">0.30</div>
+        <input id="roughness" type="range" min="0.02" max="1.00" step="0.01" value="0.30" />
+      </div>
+      <div class="control">
+        <label for="sampleCount">Samples</label>
+        <div class="value" id="sampleCountValue">1024</div>
+        <input id="sampleCount" type="range" min="64" max="4096" step="64" value="1024" />
+      </div>
+      <div class="control">
+        <label for="viewAngle">View Angle</label>
+        <div class="value" id="viewAngleValue">0°</div>
+        <input id="viewAngle" type="range" min="0" max="85" step="1" value="0" />
+      </div>
+      <div class="button-row">
+        <button id="redraw">重绘</button>
+      </div>
+    </section>
+
+    <section class="grid">
+      <article class="panel">
+        <h2>1. Hammersley Xi</h2>
+        <p>`xi = (u, v)` 还只是 2D 参数点。这里直接对比低差异点列和纯随机点列在单位方形里的覆盖质量。</p>
+        <div class="compare">
+          <div class="subpanel">
+            <strong>Hammersley</strong>
+            <canvas id="xiCanvasHammersley" width="520" height="520"></canvas>
+          </div>
+          <div class="subpanel">
+            <strong>Random</strong>
+            <canvas id="xiCanvasRandom" width="520" height="520"></canvas>
+          </div>
+        </div>
+      </article>
+
+      <article class="panel">
+        <h2>2. Half Vector H</h2>
+        <p>`ImportanceSampleGGX` 把 `xi` 映射为 GGX 分布下的半角向量。图里是 `(Hx, Hy)` 的俯视投影。</p>
+        <div class="compare">
+          <div class="subpanel">
+            <strong>Hammersley</strong>
+            <canvas id="hCanvasHammersley" width="520" height="520"></canvas>
+          </div>
+          <div class="subpanel">
+            <strong>Random</strong>
+            <canvas id="hCanvasRandom" width="520" height="520"></canvas>
+          </div>
+        </div>
+      </article>
+
+      <article class="panel">
+        <h2>3. Reflected L</h2>
+        <p>固定 `V` 后，用 `L = reflect(-V, H)` 得到入射光方向。这里最容易看出随机采样的扎堆和空洞。</p>
+        <div class="compare">
+          <div class="subpanel">
+            <strong>Hammersley</strong>
+            <canvas id="lCanvasHammersley" width="520" height="520"></canvas>
+          </div>
+          <div class="subpanel">
+            <strong>Random</strong>
+            <canvas id="lCanvasRandom" width="520" height="520"></canvas>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <section class="formula">
+      <h3>Core Formula</h3>
+      <code>u = i / N
+v = RadicalInverseVdC(i)
+phi = 2 * PI * u
+a = roughness * roughness
+cosTheta = sqrt((1 - v) / (1 + (a * a - 1) * v))
+sinTheta = sqrt(1 - cosTheta * cosTheta)
+H = (cos(phi) * sinTheta, sin(phi) * sinTheta, cosTheta)
+L = reflect(-V, H)</code>
+    </section>
+  </main>
+
+  <script>
+    const roughnessSlider = document.getElementById("roughness");
+    const sampleCountSlider = document.getElementById("sampleCount");
+    const viewAngleSlider = document.getElementById("viewAngle");
+    const roughnessValue = document.getElementById("roughnessValue");
+    const sampleCountValue = document.getElementById("sampleCountValue");
+    const viewAngleValue = document.getElementById("viewAngleValue");
+    const redrawButton = document.getElementById("redraw");
+
+    const xiCanvasHammersley = document.getElementById("xiCanvasHammersley");
+    const xiCanvasRandom = document.getElementById("xiCanvasRandom");
+    const hCanvasHammersley = document.getElementById("hCanvasHammersley");
+    const hCanvasRandom = document.getElementById("hCanvasRandom");
+    const lCanvasHammersley = document.getElementById("lCanvasHammersley");
+    const lCanvasRandom = document.getElementById("lCanvasRandom");
+
+    const xiCtxHammersley = xiCanvasHammersley.getContext("2d");
+    const xiCtxRandom = xiCanvasRandom.getContext("2d");
+    const hCtxHammersley = hCanvasHammersley.getContext("2d");
+    const hCtxRandom = hCanvasRandom.getContext("2d");
+    const lCtxHammersley = lCanvasHammersley.getContext("2d");
+    const lCtxRandom = lCanvasRandom.getContext("2d");
+
+    function radicalInverseVdC(bits) {
+      bits = ((bits << 16) | (bits >>> 16)) >>> 0;
+      bits = (((bits & 0x55555555) << 1) | ((bits & 0xAAAAAAAA) >>> 1)) >>> 0;
+      bits = (((bits & 0x33333333) << 2) | ((bits & 0xCCCCCCCC) >>> 2)) >>> 0;
+      bits = (((bits & 0x0F0F0F0F) << 4) | ((bits & 0xF0F0F0F0) >>> 4)) >>> 0;
+      bits = (((bits & 0x00FF00FF) << 8) | ((bits & 0xFF00FF00) >>> 8)) >>> 0;
+      return bits * 2.3283064365386963e-10;
+    }
+
+    function hammersley(i, n) {
+      return [i / n, radicalInverseVdC(i)];
+    }
+
+    function mulberry32(seed) {
+      return function() {
+        let t = seed += 0x6D2B79F5;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+
+    function importanceSampleGGX(u, v, roughness) {
+      const a = roughness * roughness;
+      const phi = 2.0 * Math.PI * u;
+      const cosTheta = Math.sqrt(Math.max((1.0 - v) / (1.0 + (a * a - 1.0) * v), 0.0));
+      const sinTheta = Math.sqrt(Math.max(1.0 - cosTheta * cosTheta, 0.0));
+      return {
+        x: Math.cos(phi) * sinTheta,
+        y: Math.sin(phi) * sinTheta,
+        z: cosTheta
+      };
+    }
+
+    function normalize(v) {
+      const len = Math.hypot(v.x, v.y, v.z) || 1.0;
+      return { x: v.x / len, y: v.y / len, z: v.z / len };
+    }
+
+    function reflect(i, n) {
+      const dotNI = n.x * i.x + n.y * i.y + n.z * i.z;
+      return {
+        x: i.x - 2.0 * dotNI * n.x,
+        y: i.y - 2.0 * dotNI * n.y,
+        z: i.z - 2.0 * dotNI * n.z
+      };
+    }
+
+    function clearCanvas(ctx, width, height) {
+      ctx.clearRect(0, 0, width, height);
+      const gradient = ctx.createLinearGradient(0, 0, width, height);
+      gradient.addColorStop(0, "#10141a");
+      gradient.addColorStop(1, "#090b0f");
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, width, height);
+    }
+
+    function drawSquareGrid(ctx, size) {
+      ctx.strokeStyle = "rgba(255,255,255,0.08)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(0.5, 0.5, size - 1, size - 1);
+      for (let i = 1; i < 4; i++) {
+        const p = size * i / 4;
+        ctx.beginPath();
+        ctx.moveTo(p, 0);
+        ctx.lineTo(p, size);
+        ctx.moveTo(0, p);
+        ctx.lineTo(size, p);
+        ctx.stroke();
+      }
+    }
+
+    function drawDiskGrid(ctx, size) {
+      const c = size * 0.5;
+      const r = size * 0.43;
+      ctx.strokeStyle = "rgba(255,255,255,0.08)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(c, c, r, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(c - r, c);
+      ctx.lineTo(c + r, c);
+      ctx.moveTo(c, c - r);
+      ctx.lineTo(c, c + r);
+      ctx.stroke();
+    }
+
+    function drawXi(ctx, canvas, samples, points, color) {
+      const size = canvas.width;
+      clearCanvas(ctx, size, size);
+      drawSquareGrid(ctx, size);
+
+      ctx.fillStyle = color;
+      for (let i = 0; i < samples; i++) {
+        const [u, v] = points[i];
+        const x = u * size;
+        const y = (1.0 - v) * size;
+        ctx.fillRect(x, y, 2, 2);
+      }
+    }
+
+    function drawProjectedPoints(ctx, size, points, tint) {
+      clearCanvas(ctx, size, size);
+      drawDiskGrid(ctx, size);
+
+      const c = size * 0.5;
+      const r = size * 0.43;
+      for (const p of points) {
+        const x = c + p.x * r;
+        const y = c - p.y * r;
+        const alpha = 0.25 + 0.75 * Math.max(p.z, 0.0);
+        ctx.fillStyle = `rgba(${tint[0]}, ${tint[1]}, ${tint[2]}, ${alpha.toFixed(3)})`;
+        ctx.fillRect(x, y, 2, 2);
+      }
+    }
+
+    function buildSamples(sampleCount, roughness, viewAngleDeg, sampleGenerator) {
+      const theta = viewAngleDeg * Math.PI / 180.0;
+      const V = normalize({
+        x: Math.sin(theta),
+        y: 0.0,
+        z: Math.cos(theta)
+      });
+
+      const xis = [];
+      const hs = [];
+      const ls = [];
+
+      for (let i = 0; i < sampleCount; i++) {
+        const [u, v] = sampleGenerator(i, sampleCount);
+        const H = importanceSampleGGX(u, v, roughness);
+        const L = normalize(reflect({ x: -V.x, y: -V.y, z: -V.z }, H));
+
+        xis.push([u, v]);
+        hs.push(H);
+        if (L.z > 0.0) {
+          ls.push(L);
+        }
+      }
+
+      return { xis, hs, ls };
+    }
+
+    function redraw() {
+      const roughness = parseFloat(roughnessSlider.value);
+      const sampleCount = parseInt(sampleCountSlider.value, 10);
+      const viewAngle = parseInt(viewAngleSlider.value, 10);
+
+      roughnessValue.textContent = roughness.toFixed(2);
+      sampleCountValue.textContent = String(sampleCount);
+      viewAngleValue.textContent = `${viewAngle}°`;
+
+      const random = mulberry32(123456789);
+      const randomSequence = (i, n) => [random(), random()];
+
+      const hammersleyData = buildSamples(sampleCount, roughness, viewAngle, hammersley);
+      const randomData = buildSamples(sampleCount, roughness, viewAngle, randomSequence);
+
+      drawXi(xiCtxHammersley, xiCanvasHammersley, sampleCount, hammersleyData.xis, "#8cc8ff");
+      drawXi(xiCtxRandom, xiCanvasRandom, sampleCount, randomData.xis, "#ff9d89");
+
+      drawProjectedPoints(hCtxHammersley, hCanvasHammersley.width, hammersleyData.hs, [243, 208, 113]);
+      drawProjectedPoints(hCtxRandom, hCanvasRandom.width, randomData.hs, [255, 157, 137]);
+
+      drawProjectedPoints(lCtxHammersley, lCanvasHammersley.width, hammersleyData.ls, [140, 200, 255]);
+      drawProjectedPoints(lCtxRandom, lCanvasRandom.width, randomData.ls, [255, 157, 137]);
+    }
+
+    roughnessSlider.addEventListener("input", redraw);
+    sampleCountSlider.addEventListener("input", redraw);
+    viewAngleSlider.addEventListener("input", redraw);
+    redrawButton.addEventListener("click", redraw);
+    redraw();
+  </script>
+</body>
+</html>

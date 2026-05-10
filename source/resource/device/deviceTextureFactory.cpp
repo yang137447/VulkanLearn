@@ -23,6 +23,8 @@ namespace
             return vk::Format::eR16G16Sfloat;
         case HostImage::PixelFormat::R16_FLOAT:
             return vk::Format::eR16Sfloat;
+        case HostImage::PixelFormat::RGBA32_FLOAT:
+            return vk::Format::eR32G32B32A32Sfloat;
         default:
             throw std::runtime_error("Unsupported HostImage::PixelFormat for Vulkan upload");
         }

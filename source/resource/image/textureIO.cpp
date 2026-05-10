@@ -3,14 +3,19 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
+#include <cstdlib>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <stdexcept>
 #include <string>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
+#include <ImfArray.h>
+#include <ImfRgbaFile.h>
 
 namespace
 {
@@ -57,10 +62,110 @@ namespace
         throw std::runtime_error("Unsupported image file extension: " + path.string());
     }
 
-    HostImage::PixelFormat ResolvePixelFormat(TextureIO::LoadOptions::Transfer transfer)
+    HostImage::PixelFormat ResolvePixelFormat(
+        TextureIO::LoadOptions::Transfer transfer,
+        const std::optional<TextureIO::FileFormat>& fileFormat)
     {
+        if (fileFormat.has_value() &&
+            (*fileFormat == TextureIO::FileFormat::Hdr || *fileFormat == TextureIO::FileFormat::Exr))
+        {
+            return HostImage::PixelFormat::RGBA32_FLOAT;
+        }
         const bool useSrgb = transfer == TextureIO::LoadOptions::Transfer::SRGB;
         return useSrgb ? HostImage::PixelFormat::RGBA8_SRGB : HostImage::PixelFormat::RGBA8_UNORM;
+    }
+
+    HostImage LoadExrWithOpenExr(
+        const std::filesystem::path& path,
+        HostImage::TextureSemantic semantic)
+    {
+        try
+        {
+            // 用 OpenEXR 正式读取文件，避免 TinyEXR 在部分压缩格式上解码失败。
+            Imf::RgbaInputFile file(path.string().c_str());
+            const Imath::Box2i dataWindow = file.dataWindow();
+            const int width = dataWindow.max.x - dataWindow.min.x + 1;
+            const int height = dataWindow.max.y - dataWindow.min.y + 1;
+
+            if (width <= 0 || height <= 0)
+            {
+                throw std::runtime_error("Invalid EXR data window.");
+            }
+
+            // RgbaInputFile 直接解成 RGBA half，后面统一扩成 HostImage 使用的 RGBA32_FLOAT。
+            std::vector<Imf::Rgba> pixels(static_cast<size_t>(width) * height);
+            file.setFrameBuffer(
+                pixels.data() - dataWindow.min.x - dataWindow.min.y * width,
+                1,
+                width);
+            file.readPixels(dataWindow.min.y, dataWindow.max.y);
+
+            HostImage image;
+            image.width = static_cast<uint32_t>(width);
+            image.height = static_cast<uint32_t>(height);
+            image.channels = 4;
+            image.mipLevels = 1;
+            image.arrayLayers = 1;
+            image.semantic = semantic;
+            image.format = HostImage::PixelFormat::RGBA32_FLOAT;
+            image.rowStrideBytes = image.width * image.GetPixelSize();
+            image.data.resize(static_cast<size_t>(image.rowStrideBytes) * image.height);
+
+            float* dst = reinterpret_cast<float*>(image.data.data());
+            for (int y = 0; y < height; ++y)
+            {
+                for (int x = 0; x < width; ++x)
+                {
+                    const Imf::Rgba& src = pixels[static_cast<size_t>(y) * width + x];
+                    const size_t dstIndex = (static_cast<size_t>(y) * width + x) * 4;
+                    dst[dstIndex + 0] = static_cast<float>(src.r);
+                    dst[dstIndex + 1] = static_cast<float>(src.g);
+                    dst[dstIndex + 2] = static_cast<float>(src.b);
+                    dst[dstIndex + 3] = static_cast<float>(src.a);
+                }
+            }
+
+            return image;
+        }
+        catch (const std::exception& e)
+        {
+            throw std::runtime_error("Failed to load EXR image: " + path.string() + " - " + e.what());
+        }
+    }
+
+    HostImage LoadExrFromMemoryWithOpenExr(
+        const void* data,
+        size_t size,
+        HostImage::TextureSemantic semantic)
+    {
+        // 先用临时文件兜底复用同一套 OpenEXR 读取路径，后续如果需要再替换成自定义流。
+        const uint64_t uniqueId = static_cast<uint64_t>(
+            std::chrono::high_resolution_clock::now().time_since_epoch().count());
+        const std::filesystem::path tempPath =
+            std::filesystem::temp_directory_path() /
+            ("textureio_input_" + std::to_string(uniqueId) + ".exr");
+
+        {
+            std::ofstream stream(tempPath, std::ios::binary);
+            if (!stream.is_open())
+            {
+                throw std::runtime_error("Failed to create temporary EXR file: " + tempPath.string());
+            }
+            stream.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(size));
+        }
+
+        try
+        {
+            HostImage image = LoadExrWithOpenExr(tempPath, semantic);
+            std::filesystem::remove(tempPath);
+            return image;
+        }
+        catch (...)
+        {
+            std::error_code ec;
+            std::filesystem::remove(tempPath, ec);
+            throw;
+        }
     }
 
     template<typename T>
@@ -227,36 +332,54 @@ namespace
 std::optional<HostImage> TextureIO::Load(const std::filesystem::path& path, const LoadOptions& options)
 {
     const std::string pathString = path.string();
+    const auto fileFormat = FileFormatFromPath(path);
     int width = 0;
     int height = 0;
     int channels = 0;
     const int desiredChannels = options.forceChannels > 0 ? options.forceChannels : STBI_rgb_alpha;
 
-    stbi_uc* pixels = stbi_load(pathString.c_str(), &width, &height, &channels, desiredChannels);
-    if (!pixels)
-    {
-        return std::nullopt;
-    }
-
     HostImage image;
-    image.width = static_cast<uint32_t>(width);
-    image.height = static_cast<uint32_t>(height);
+    image.width = 0;
+    image.height = 0;
     image.channels = static_cast<uint32_t>(desiredChannels);
     image.mipLevels = 1;
     image.arrayLayers = 1;
     image.semantic = options.semantic;
-    image.format = ResolvePixelFormat(options.transfer);
-    image.rowStrideBytes = image.width * image.GetPixelSize();
-    const size_t dataSize = static_cast<size_t>(image.rowStrideBytes) * image.height;
-    image.data.resize(dataSize);
-    std::memcpy(image.data.data(), pixels, dataSize);
-    stbi_image_free(pixels);
+    image.format = ResolvePixelFormat(options.transfer, fileFormat);
+    image.rowStrideBytes = 0;
 
-    if (ShouldFlipY(options.flipY))
+    if (fileFormat == FileFormat::Exr)
     {
-        FlipImageY(image);
+        // EXR 走 OpenEXR，保证常见 production 资产压缩格式都能正常读取。
+        image = LoadExrWithOpenExr(path, options.semantic);
+    }
+    else if (fileFormat == FileFormat::Hdr)
+    {
+        // Radiance HDR 仍然走 stb 的 float 路径。
+        float* pixels = stbi_loadf(pathString.c_str(), &width, &height, &channels, desiredChannels);
+        if (!pixels) return std::nullopt;
+        image.width = static_cast<uint32_t>(width);
+        image.height = static_cast<uint32_t>(height);
+        image.rowStrideBytes = image.width * image.GetPixelSize();
+        const size_t dataSize = static_cast<size_t>(image.rowStrideBytes) * image.height;
+        image.data.resize(dataSize);
+        std::memcpy(image.data.data(), pixels, dataSize);
+        stbi_image_free(pixels);
+    }
+    else
+    {
+        stbi_uc* pixels = stbi_load(pathString.c_str(), &width, &height, &channels, desiredChannels);
+        if (!pixels) return std::nullopt;
+        image.width = static_cast<uint32_t>(width);
+        image.height = static_cast<uint32_t>(height);
+        image.rowStrideBytes = image.width * image.GetPixelSize();
+        const size_t dataSize = static_cast<size_t>(image.rowStrideBytes) * image.height;
+        image.data.resize(dataSize);
+        std::memcpy(image.data.data(), pixels, dataSize);
+        stbi_image_free(pixels);
     }
 
+    if (ShouldFlipY(options.flipY)) FlipImageY(image);
     return image;
 }
 
@@ -283,30 +406,58 @@ bool TextureIO::Save(const std::filesystem::path& path, const HostImage& image)
 
 std::optional<HostImage> TextureIO::LoadFromMemory(const void* data, size_t size, const LoadOptions& options)
 {
+    const std::optional<FileFormat>& formatHint = options.formatHint;
     int width = 0;
     int height = 0;
     int channels = 0;
     const int desiredChannels = options.forceChannels > 0 ? options.forceChannels : STBI_rgb_alpha;
     const stbi_uc* memory = reinterpret_cast<const stbi_uc*>(data);
-    stbi_uc* pixels = stbi_load_from_memory(memory, static_cast<int>(size), &width, &height, &channels, desiredChannels);
-    if (!pixels)
-    {
-        return std::nullopt;
-    }
 
     HostImage image;
-    image.width = static_cast<uint32_t>(width);
-    image.height = static_cast<uint32_t>(height);
+    image.width = 0;
+    image.height = 0;
     image.channels = static_cast<uint32_t>(desiredChannels);
     image.mipLevels = 1;
     image.arrayLayers = 1;
     image.semantic = options.semantic;
-    image.format = ResolvePixelFormat(options.transfer);
-    image.rowStrideBytes = image.width * image.GetPixelSize();
-    const size_t dataSize = static_cast<size_t>(image.rowStrideBytes) * image.height;
-    image.data.resize(dataSize);
-    std::memcpy(image.data.data(), pixels, dataSize);
-    stbi_image_free(pixels);
+    image.format = ResolvePixelFormat(options.transfer, formatHint);
+    image.rowStrideBytes = 0;
+
+    if (formatHint == FileFormat::Exr)
+    {
+        // 内存 EXR 先复用临时文件方案，避免单独维护一套不稳定的解码分支。
+        image = LoadExrFromMemoryWithOpenExr(data, size, options.semantic);
+    }
+    else if (formatHint == FileFormat::Hdr)
+    {
+        float* pixels = stbi_loadf_from_memory(memory, static_cast<int>(size), &width, &height, &channels, desiredChannels);
+        if (!pixels)
+        {
+            return std::nullopt;
+        }
+        image.width = static_cast<uint32_t>(width);
+        image.height = static_cast<uint32_t>(height);
+        image.rowStrideBytes = image.width * image.GetPixelSize();
+        const size_t dataSize = static_cast<size_t>(image.rowStrideBytes) * image.height;
+        image.data.resize(dataSize);
+        std::memcpy(image.data.data(), pixels, dataSize);
+        stbi_image_free(pixels);
+    }
+    else
+    {
+        stbi_uc* pixels = stbi_load_from_memory(memory, static_cast<int>(size), &width, &height, &channels, desiredChannels);
+        if (!pixels)
+        {
+            return std::nullopt;
+        }
+        image.width = static_cast<uint32_t>(width);
+        image.height = static_cast<uint32_t>(height);
+        image.rowStrideBytes = image.width * image.GetPixelSize();
+        const size_t dataSize = static_cast<size_t>(image.rowStrideBytes) * image.height;
+        image.data.resize(dataSize);
+        std::memcpy(image.data.data(), pixels, dataSize);
+        stbi_image_free(pixels);
+    }
 
     if (ShouldFlipY(options.flipY))
     {

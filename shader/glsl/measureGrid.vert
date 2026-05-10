@@ -25,8 +25,6 @@ void main()
     mat4 modelMatrix = uboM.model;
     mat4 viewMatrix = uboVP.view;
     mat4 projectionMatrix = uboVP.projection;
-    vec3 ambient = uboVP.ambient;
-    vec3 cameraPosition = uboVP.cameraPosition;
         //MIP
     vec4 tintColor = uboMIP.tintColor;
 

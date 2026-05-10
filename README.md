@@ -3,11 +3,42 @@
 ## 简介
 这是一个基于 Vulkan 的渲染学习项目，支持阴影映射、后处理、场景加载等功能。项目集成了 Tracy Profiler 和 NVIDIA Nsight Systems 用于性能分析。
 
+## 文档分工
+
+为了避免“现状说明”、“AI 协作说明”和“未来规划”混在一起，仓库内文档按职责分工如下：
+
+- `README.md`
+  - 面向人类读者的项目入口
+  - 负责说明项目是什么、怎么构建、怎么运行、去哪里继续读
+  - 只写当前仍然有效的上手信息，不承载长期规划细节
+- `AGENTS.md`
+  - 面向 AI coding agent 的仓库协作说明
+  - 负责说明阅读顺序、修改约定、高风险区域、隐式耦合和工作方式
+  - 不负责替代架构设计文档
+- `documents/README.md`
+  - 面向所有协作者的正式文档目录
+  - 负责说明文档分类、每类文档的职责和收录规则
+- `documents/architecture/`
+  - 存放中长期架构目标、线程模型、系统边界、数据流等设计文档
+  - 这里描述“目标状态”和“演进方向”，不是当前实现说明
+- `documents/rendering/`
+  - 存放渲染功能路线图和专题规划，例如 PBR、IBL、TOD
+  - 这里描述“某个功能域未来准备怎么做”
+
+当前有效的正式文档入口：
+
+- `AGENTS.md`
+- `documents/README.md`
+- `documents/architecture/future-render-architecture.md`
+- `documents/rendering/pbr-ibl-tod-roadmap.md`
+
 ## 环境要求
 - Windows 10/11
 - CMake 3.20+
-- Visual Studio 2019/2022 (或支持 C++17 的其他编译器)
+- MinGW-w64 with C++17 support
 - Vulkan SDK (需包含 Nsight Systems)
+
+当前仓库使用的是 MinGW 工具链，现有 `build/` 目录记录的 CMake generator 为 `MinGW Makefiles`。
 
 ## 构建指南
 
@@ -15,7 +46,7 @@
 在项目根目录下打开终端，执行以下命令生成构建文件：
 
 ```bash
-cmake -S . -B build
+cmake -S . -B build -G "MinGW Makefiles"
 ```
 
 ### 2. 编译项目
@@ -24,6 +55,8 @@ cmake -S . -B build
 ```bash
 cmake --build build -j
 ```
+
+如果你的 MinGW 环境没有自动进入 `PATH`，请先确保 `g++`、`gcc` 和 `mingw32-make` 可用，再执行上面的 CMake 命令。
 
 编译成功后，可执行文件 `main.exe` 将生成在 `build/bin` 目录下。
 
@@ -115,4 +148,5 @@ while (running) {
 - `shader/`: GLSL 着色器
 - `resources/`: 模型、材质和纹理资源
 - `config/`: 渲染管线和场景配置
+- `documents/`: 正式设计文档和规划文档
 - `extern/`: 第三方库 (SDL3, Assimp, GLM, Tracy, NVTX 等)

@@ -15,6 +15,7 @@ PRIVATE
     assimp
     Json
     Spirv_Reflect
+    OpenEXR::OpenEXR
     Tracy::TracyClient
     NVTX::nvtx
     ws2_32 dbghelp advapi32 user32 secur32

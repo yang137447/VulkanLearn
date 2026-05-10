@@ -510,7 +510,6 @@ void RenderSystem::UpdateUBOGlobal(vk::CommandBuffer& commandBuffer)
     ubo.view = camera.GetViewMatrix();
     ubo.projection = camera.GetProjectionMatrix();
     ubo.lightViewProj = lightViewProj;
-    ubo.ambient = sceneLoader.GetAmbient();
     ubo.cameraPosition = sceneLoader.GetCamera()->GetPosition();
 
     //std::memcpy(uboGlobal.buffersMapped[swapChainImageIndex], &ubo, sizeof(ubo));
