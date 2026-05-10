@@ -4,6 +4,15 @@
 #include <vector>
 #include "vulkan/vulkan.hpp"
 
+struct GraphicsPipelineStateDesc
+{
+    bool bUseVertexInput = true;
+    bool bDepthTestEnable = true;
+    bool bDepthWriteEnable = true;
+    vk::CompareOp depthCompareOp = vk::CompareOp::eLess;
+    vk::CullModeFlags cullMode = vk::CullModeFlagBits::eBack;
+};
+
 struct GraphicsPipelineBuildDesc
 {
     vk::Device& device;
@@ -14,7 +23,7 @@ struct GraphicsPipelineBuildDesc
     const std::vector<vk::VertexInputAttributeDescription>& vertexInputAttributeDescriptions;
     const std::string& pipelineName;
     vk::SampleCountFlagBits sampleCount;
-    bool bIsPostProcess;
+    GraphicsPipelineStateDesc pipelineStateDesc;
     bool bIsShadowPass;
 };
 

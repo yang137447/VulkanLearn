@@ -6,6 +6,7 @@ class Texture
 {
 public:
     Texture(const std::string& texturePath);
+    Texture(vk::Image image, vk::DeviceMemory imageMemory, vk::ImageView imageView, vk::Sampler sampler, uint32_t mipLevels, vk::Format format);
     ~Texture();
     inline vk::Image getImage() const { return image; }
     inline vk::DeviceMemory getImageMemory() const { return imageMemory; }

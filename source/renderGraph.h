@@ -41,6 +41,8 @@ struct Renderpass
     // pass 输入输出资源
     std::vector<std::string> inputResources;
     std::vector<std::string> outputResources;
+    std::unordered_map<std::string, vk::AttachmentLoadOp> outputLoadOps;
+    std::unordered_map<std::string, vk::AttachmentStoreOp> outputStoreOps;
     // pass 输入描述符集, 统一使用Set3
     vk::DescriptorPool descriptorPool;
     std::vector<std::vector<vk::DescriptorImageInfo>> inputDescriptorImageInfos;
@@ -83,7 +85,7 @@ private:
     Renderpass CreateRenderpass(const nlohmann::json& passNode);
     void DestroyRenderpass(Renderpass& renderpass);
 
-    vk::RenderPass CreateVkRenderPass(std::vector<std::string>& inputResources, std::vector<std::string>& outputResources, bool bUseMsaa);
+    vk::RenderPass CreateVkRenderPass(Renderpass& renderpass, bool bUseMsaa);
     void DestroyVkRenderPass(vk::RenderPass renderPass);
 
     std::vector<vk::Framebuffer> CreateVkFrameBuffers(Renderpass renderPass, std::vector<std::string>& inputResources, std::vector<std::string>& outputResources, bool bUseMsaa);
@@ -94,6 +96,8 @@ private:
 
     std::vector<std::string> GetRenderpassInputResources(const nlohmann::json& inputNode);
     std::vector<std::string> GetRenderpassOutputResources(const nlohmann::json& outputNode);
+    vk::AttachmentLoadOp GetAttachmentLoadOp(const std::string& loadOpStr);
+    vk::AttachmentStoreOp GetAttachmentStoreOp(const std::string& storeOpStr);
     
     std::vector<vk::ClearValue> GetClearValues(std::vector<std::string>& outputResources, bool bUseMsaa);
 private:

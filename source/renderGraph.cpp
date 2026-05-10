@@ -5,6 +5,7 @@
 #include "shaderReflect.h"
 #include "material.h"
 #include "materialInstance.h"
+#include "texture.h"
 #include "pipeline/graphicsPipeline.h"
 #include "renderSystem.h"
 #include "lightManager.h"
@@ -243,6 +244,7 @@ void Renderpass::UpdateDescriptorSets()
         const auto& shaderBindings = baseMaterial->GetRenderPipeline()->GetShaderBindings();
         auto& renderSystem = RenderSystem::GetInstance();
         auto& lightManager = LightManager::GetInstance();
+        auto& sceneLoader = SceneLoader::GetInstance();
         for(uint32_t i = 0; i < swapChainImageCount; i++)
         {
             for(const auto& binding : shaderBindings)
@@ -284,7 +286,29 @@ void Renderpass::UpdateDescriptorSets()
                 }
                 else if (binding.type == vk::DescriptorType::eCombinedImageSampler)
                 {
-                    if (binding.set != PassSetIndex)
+                    if (binding.set == GlobalSetIndex)
+                    {
+                        if (binding.name == "environmentCube")
+                        {
+                            const auto& environmentCube = sceneLoader.GetEnvironmentCube();
+                            if (environmentCube == nullptr)
+                            {
+                                continue;
+                            }
+
+                            vk::DescriptorImageInfo imageInfo;
+                            imageInfo
+                                .setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+                                .setImageView(environmentCube->getImageView())
+                                .setSampler(environmentCube->getSampler());
+                            write.setImageInfo(imageInfo);
+                        }
+                        else
+                        {
+                            continue;
+                        }
+                    }
+                    else if (binding.set != PassSetIndex)
                     {
                         write.setImageInfo(materialInstance.lock()->GetUboMaterialInstanceImageInfo(binding.name));
                     }
@@ -460,7 +484,7 @@ RenderResource RenderGraph::CreateRenderResource(const nlohmann::json& resourceN
             // aspect |= vk::ImageAspectFlagBits::eStencil;
         }
     }
-    resource.imageView = CommonFunction::CreateImageView(
+    resource.imageView = CommonFunction::Create2DImageView(
         device, 
         resource.image, 
         1, 
@@ -468,7 +492,11 @@ RenderResource RenderGraph::CreateRenderResource(const nlohmann::json& resourceN
         aspect,
         resource.name + "_View");
 
-    resource.sampler = CommonFunction::CreateSampler(device, physicalDevice, bIsDepthFormat, "Sampler: " + resource.name);
+    resource.sampler = bIsDepthFormat
+        ? (resource.name == "shadowMap"
+            ? CommonFunction::CreateDepthCompareSampler(device, physicalDevice, "Sampler: " + resource.name)
+            : CommonFunction::CreateDepthSampler(device, physicalDevice, "Sampler: " + resource.name))
+        : CommonFunction::Create2DSampler(device, physicalDevice, "Sampler: " + resource.name);
 
     return resource;
 }
@@ -492,15 +520,20 @@ Renderpass RenderGraph::CreateRenderpass(const nlohmann::json& passNode)
     bool bUseMsaa = passNode.value("needMsaa", false);
 
     std::vector<std::string> inputResources = GetRenderpassInputResources(passNode["input"]);
-    std::vector<std::string> outputResources = GetRenderpassOutputResources(passNode["output"]);
     renderpass.inputResources = inputResources;
-    renderpass.outputResources = outputResources;
+    for (const auto& outputNode : passNode["output"])
+    {
+        const std::string resourceName = outputNode["resource"];
+        renderpass.outputResources.push_back(resourceName);
+        renderpass.outputLoadOps[resourceName] = GetAttachmentLoadOp(outputNode.value("loadOp", std::string("clear")));
+        renderpass.outputStoreOps[resourceName] = GetAttachmentStoreOp(outputNode.value("storeOp", std::string("store")));
+    }
 
-    vk::RenderPass vkRenderPass = CreateVkRenderPass(inputResources, outputResources, bUseMsaa);
+    vk::RenderPass vkRenderPass = CreateVkRenderPass(renderpass, bUseMsaa);
     renderpass.renderPass = vkRenderPass;
     VulkanDebug::SetObjectName(VulkanManager::GetInstance().GetDevice(), renderpass.renderPass, vk::ObjectType::eRenderPass, renderpass.name);
     
-    if (outputResources[0] == "swapChain")
+    if (renderpass.outputResources[0] == "swapChain")
     {
         auto extent = VulkanManager::GetInstance().GetSwapChainExtent();
         renderpass.width = extent.width;
@@ -513,12 +546,12 @@ Renderpass RenderGraph::CreateRenderpass(const nlohmann::json& passNode)
     }
     else
     {
-        renderpass.width = resourcesMsaa[outputResources[0]][0].width;
-        renderpass.height = resourcesMsaa[outputResources[0]][0].height;
+        renderpass.width = resourcesMsaa[renderpass.outputResources[0]][0].width;
+        renderpass.height = resourcesMsaa[renderpass.outputResources[0]][0].height;
     }
     
-    renderpass.clearValues = GetClearValues(outputResources, bUseMsaa);
-    renderpass.framebuffers = CreateVkFrameBuffers(renderpass, inputResources, outputResources, bUseMsaa);
+    renderpass.clearValues = GetClearValues(renderpass.outputResources, bUseMsaa);
+    renderpass.framebuffers = CreateVkFrameBuffers(renderpass, inputResources, renderpass.outputResources, bUseMsaa);
     
     return renderpass;
 }
@@ -535,12 +568,13 @@ void RenderGraph::DestroyRenderpass(Renderpass& renderpass)
     device.destroyDescriptorPool(renderpass.descriptorPool);
 }
 
-vk::RenderPass RenderGraph::CreateVkRenderPass(std::vector<std::string>& inputResources, std::vector<std::string>& outputResources, bool bUseMsaa)
+vk::RenderPass RenderGraph::CreateVkRenderPass(Renderpass& renderpass, bool bUseMsaa)
 {
     VulkanManager& vulkanManager = VulkanManager::GetInstance();
     vk::Device& device = vulkanManager.GetDevice();
     vk::SurfaceFormatKHR& surfaceFormat = vulkanManager.GetSurfaceFormat();
     vk::SampleCountFlagBits sampleCount = bUseMsaa ? CommonFunction::GetMsaaSampleCount() : vk::SampleCountFlagBits::e1;
+    auto& outputResources = renderpass.outputResources;
 
     // 总览：按输出资源顺序构建 RenderPass
     // 1) 颜色附件（MSAA/非MSAA）
@@ -548,10 +582,11 @@ vk::RenderPass RenderGraph::CreateVkRenderPass(std::vector<std::string>& inputRe
     // 3) 如包含深度资源，追加 depth 附件
     // 4) 构建 subpass 与依赖
     //创建渲染通道
-    std::vector<vk::AttachmentDescription> attachmentDescriptions;
-    std::vector<vk::AttachmentReference> colorAttachmentReferences;
-    std::vector<vk::AttachmentReference> resolveAttachmentReferences;
-    vk::AttachmentReference depthAttachmentReference;
+    std::vector<vk::AttachmentDescription2> attachmentDescriptions;
+    std::vector<vk::AttachmentReference2> colorAttachmentReferences;
+    std::vector<vk::AttachmentReference2> resolveAttachmentReferences;
+    vk::AttachmentReference2 depthAttachmentReference;
+    vk::AttachmentReference2 depthResolveAttachmentReference;
 
     bool bHasDepth = false;
     auto isDepthResource = [&](const std::string& resourceName) -> bool
@@ -578,7 +613,7 @@ vk::RenderPass RenderGraph::CreateVkRenderPass(std::vector<std::string>& inputRe
             continue;
         }
 
-        vk::AttachmentDescription colorAttachmentDescription;
+        vk::AttachmentDescription2 colorAttachmentDescription;
         vk::Format format = vk::Format::eUndefined;
         if (resourceName == "swapChain") 
         {
@@ -589,14 +624,16 @@ vk::RenderPass RenderGraph::CreateVkRenderPass(std::vector<std::string>& inputRe
         }
 
         // MSAA / Main Attachment
+        const vk::AttachmentLoadOp loadOp = renderpass.outputLoadOps.at(resourceName);
+        const vk::AttachmentStoreOp storeOp = renderpass.outputStoreOps.at(resourceName);
         colorAttachmentDescription
             .setFormat(format)
             .setSamples(sampleCount)
-            .setLoadOp(vk::AttachmentLoadOp::eClear)
-            .setStoreOp(vk::AttachmentStoreOp::eStore)
+            .setLoadOp(loadOp)
+            .setStoreOp(storeOp)
             .setStencilLoadOp(vk::AttachmentLoadOp::eDontCare) 
             .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
-            .setInitialLayout(vk::ImageLayout::eUndefined)
+            .setInitialLayout(loadOp == vk::AttachmentLoadOp::eLoad ? vk::ImageLayout::eColorAttachmentOptimal : vk::ImageLayout::eUndefined)
             .setFinalLayout(vk::ImageLayout::eColorAttachmentOptimal);
 
         if (resourceName == "swapChain")
@@ -606,9 +643,10 @@ vk::RenderPass RenderGraph::CreateVkRenderPass(std::vector<std::string>& inputRe
         
         attachmentDescriptions.push_back(colorAttachmentDescription);
 
-        vk::AttachmentReference attachmentReference;
-        attachmentReference.setAttachment(colorAttachmentReferences.size()); // This index is temporary, need global index
+        vk::AttachmentReference2 attachmentReference;
+        attachmentReference.setAttachment(colorAttachmentReferences.size());
         attachmentReference.setLayout(vk::ImageLayout::eColorAttachmentOptimal);
+        attachmentReference.setAspectMask(vk::ImageAspectFlagBits::eColor);
         colorAttachmentReferences.push_back(attachmentReference);
     }
     
@@ -622,14 +660,14 @@ vk::RenderPass RenderGraph::CreateVkRenderPass(std::vector<std::string>& inputRe
         {
             if (isDepthResource(resourceName)) continue;
 
-            vk::AttachmentDescription resolveAttachmentDescription;
+            vk::AttachmentDescription2 resolveAttachmentDescription;
             vk::Format format = (resourceName == "swapChain") ? surfaceFormat.format : resourcesMsaa.at(resourceName)[0].format;
             
             resolveAttachmentDescription
                 .setFormat(format)
                 .setSamples(vk::SampleCountFlagBits::e1)
-                .setLoadOp(vk::AttachmentLoadOp::eClear)
-                .setStoreOp(vk::AttachmentStoreOp::eStore)
+                .setLoadOp(vk::AttachmentLoadOp::eDontCare)
+                .setStoreOp(renderpass.outputStoreOps.at(resourceName))
                 .setStencilLoadOp(vk::AttachmentLoadOp::eDontCare) 
                 .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
                 .setInitialLayout(vk::ImageLayout::eUndefined)
@@ -642,14 +680,16 @@ vk::RenderPass RenderGraph::CreateVkRenderPass(std::vector<std::string>& inputRe
 
             attachmentDescriptions.push_back(resolveAttachmentDescription);
 
-            vk::AttachmentReference attachmentReference;
+            vk::AttachmentReference2 attachmentReference;
             attachmentReference.setAttachment(attachmentDescriptions.size() - 1);
             attachmentReference.setLayout(vk::ImageLayout::eColorAttachmentOptimal);
+            attachmentReference.setAspectMask(vk::ImageAspectFlagBits::eColor);
             resolveAttachmentReferences.push_back(attachmentReference);
         }
     }
 
     // 3. Depth Attachment
+    bool bHasDepthResolve = false;
     if (bHasDepth)
     {
         // Find depth resource
@@ -663,7 +703,7 @@ vk::RenderPass RenderGraph::CreateVkRenderPass(std::vector<std::string>& inputRe
             }
         }
 
-        vk::AttachmentDescription depthStencilAttachmentDescription;
+        vk::AttachmentDescription2 depthStencilAttachmentDescription;
         vk::Format depthFormat = vk::Format::eUndefined;
         
         if(bUseMsaa) 
@@ -677,21 +717,42 @@ vk::RenderPass RenderGraph::CreateVkRenderPass(std::vector<std::string>& inputRe
         depthStencilAttachmentDescription
             .setFormat(depthFormat)
             .setSamples(sampleCount)
-            .setLoadOp(vk::AttachmentLoadOp::eClear)
-            .setStoreOp(vk::AttachmentStoreOp::eStore)
+            .setLoadOp(renderpass.outputLoadOps.at(depthName))
+            .setStoreOp(renderpass.outputStoreOps.at(depthName))
             .setStencilLoadOp(vk::AttachmentLoadOp::eDontCare) 
             .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
-            .setInitialLayout(vk::ImageLayout::eUndefined)
+            .setInitialLayout(renderpass.outputLoadOps.at(depthName) == vk::AttachmentLoadOp::eLoad ? vk::ImageLayout::eDepthStencilAttachmentOptimal : vk::ImageLayout::eUndefined)
             .setFinalLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal);
         
         attachmentDescriptions.push_back(depthStencilAttachmentDescription);
 
         depthAttachmentReference.setAttachment(attachmentDescriptions.size() - 1);
         depthAttachmentReference.setLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal);
+        depthAttachmentReference.setAspectMask(vk::ImageAspectFlagBits::eDepth);
+
+        if (bUseMsaa)
+        {
+            vk::AttachmentDescription2 depthResolveAttachmentDescription;
+            depthResolveAttachmentDescription
+                .setFormat(resourcesResolve[depthName][0].format)
+                .setSamples(vk::SampleCountFlagBits::e1)
+                .setLoadOp(vk::AttachmentLoadOp::eDontCare)
+                .setStoreOp(renderpass.outputStoreOps.at(depthName))
+                .setStencilLoadOp(vk::AttachmentLoadOp::eDontCare)
+                .setStencilStoreOp(vk::AttachmentStoreOp::eDontCare)
+                .setInitialLayout(vk::ImageLayout::eUndefined)
+                .setFinalLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal);
+            attachmentDescriptions.push_back(depthResolveAttachmentDescription);
+
+            depthResolveAttachmentReference.setAttachment(attachmentDescriptions.size() - 1);
+            depthResolveAttachmentReference.setLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal);
+            depthResolveAttachmentReference.setAspectMask(vk::ImageAspectFlagBits::eDepth);
+            bHasDepthResolve = true;
+        }
     }
 
         // subpass
-    vk::SubpassDescription subpassDescription;
+    vk::SubpassDescription2 subpassDescription;
     subpassDescription.setPipelineBindPoint(vk::PipelineBindPoint::eGraphics);
     if(!colorAttachmentReferences.empty())
     {
@@ -706,8 +767,18 @@ vk::RenderPass RenderGraph::CreateVkRenderPass(std::vector<std::string>& inputRe
         subpassDescription.setPDepthStencilAttachment(&depthAttachmentReference);
     }
 
+    vk::SubpassDescriptionDepthStencilResolve depthStencilResolve;
+    if (bHasDepthResolve)
+    {
+        depthStencilResolve
+            .setDepthResolveMode(vk::ResolveModeFlagBits::eSampleZero)
+            .setStencilResolveMode(vk::ResolveModeFlagBits::eNone)
+            .setPDepthStencilResolveAttachment(&depthResolveAttachmentReference);
+        subpassDescription.setPNext(&depthStencilResolve);
+    }
+
         // subpass dependency
-    vk::SubpassDependency subpassDependency;
+    vk::SubpassDependency2 subpassDependency;
     subpassDependency
         .setSrcSubpass(0)
         .setDstSubpass(0)
@@ -717,13 +788,13 @@ vk::RenderPass RenderGraph::CreateVkRenderPass(std::vector<std::string>& inputRe
         .setDstAccessMask(vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eDepthStencilAttachmentWrite)
         .setDependencyFlags(vk::DependencyFlagBits::eByRegion);
 
-    vk::RenderPassCreateInfo renderPassCreateInfo;
+    vk::RenderPassCreateInfo2 renderPassCreateInfo;
     renderPassCreateInfo
         .setAttachments(attachmentDescriptions)
         .setSubpasses(subpassDescription)
         .setDependencies(subpassDependency);
 
-    vk::RenderPass renderPass = device.createRenderPass(renderPassCreateInfo);
+    vk::RenderPass renderPass = device.createRenderPass2(renderPassCreateInfo);
     assert(renderPass);
 
     return renderPass;
@@ -813,6 +884,7 @@ std::vector<vk::Framebuffer> RenderGraph::CreateVkFrameBuffers(Renderpass render
             if(bUseMsaa) 
             {
                 attachments.push_back(resourcesMsaa[depthName][i].imageView);
+                attachments.push_back(resourcesResolve[depthName][i].imageView);
             }
             else {
                 attachments.push_back(resourcesResolve[depthName][i].imageView);
@@ -919,6 +991,28 @@ std::vector<std::string> RenderGraph::GetRenderpassOutputResources(const nlohman
     return outputResources;
 }
 
+vk::AttachmentLoadOp RenderGraph::GetAttachmentLoadOp(const std::string& loadOpStr)
+{
+    if (loadOpStr == "load")
+    {
+        return vk::AttachmentLoadOp::eLoad;
+    }
+    if (loadOpStr == "dontCare")
+    {
+        return vk::AttachmentLoadOp::eDontCare;
+    }
+    return vk::AttachmentLoadOp::eClear;
+}
+
+vk::AttachmentStoreOp RenderGraph::GetAttachmentStoreOp(const std::string& storeOpStr)
+{
+    if (storeOpStr == "dontCare")
+    {
+        return vk::AttachmentStoreOp::eDontCare;
+    }
+    return vk::AttachmentStoreOp::eStore;
+}
+
 std::vector<vk::ClearValue> RenderGraph::GetClearValues(std::vector<std::string>& outputResources, bool bUseMsaa)
 {
     std::vector<vk::ClearValue> clearValues;
@@ -978,6 +1072,10 @@ std::vector<vk::ClearValue> RenderGraph::GetClearValues(std::vector<std::string>
     if (bHasDepth)
     {
         clearValues.push_back(clearDepth);
+        if (bUseMsaa)
+        {
+            clearValues.push_back(clearDepth);
+        }
     }
 
     return clearValues;

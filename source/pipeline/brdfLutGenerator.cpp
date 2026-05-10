@@ -36,7 +36,7 @@ void BrdfLutGenerator::Generate(PipelineFactory& pipelineFactory)
         gpuMemoryProperties,
         lutMemFlags,
         "BrdfLutImage");
-    vk::ImageView lutImageView = CommonFunction::CreateImageView(device, lutImage, 1, lutFormat, vk::ImageAspectFlagBits::eColor, "BrdfLutImageView");
+    vk::ImageView lutImageView = CommonFunction::Create2DImageView(device, lutImage, 1, lutFormat, vk::ImageAspectFlagBits::eColor, "BrdfLutImageView");
 
     vk::DeviceSize stagingBufferSize = readbackSize;
     vk::BufferUsageFlags stagingUsage = vk::BufferUsageFlagBits::eTransferDst;

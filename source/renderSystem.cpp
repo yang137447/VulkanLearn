@@ -349,14 +349,6 @@ void RenderSystem::Render()
                 const RenderResource& inputResource = renderGraph.GetResourcesResolve()[input][swapChainImageIndex];
             }
 
-            // 开始渲染通道
-            vk::RenderPassBeginInfo renderPassBeginInfo;
-            renderPassBeginInfo.setRenderPass(renderPass.renderPass);
-            renderPassBeginInfo.setFramebuffer(renderPass.framebuffers[swapChainImageIndex]);
-            renderPassBeginInfo.setRenderArea(vk::Rect2D(vk::Offset2D(0, 0), vk::Extent2D(renderPass.width, renderPass.height)));
-            renderPassBeginInfo.setClearValues(renderPass.clearValues);
-            commandBuffer.beginRenderPass(renderPassBeginInfo, vk::SubpassContents::eInline);
-            
             const std::weak_ptr<MaterialInstance> materialInstance = renderPass.materialInstance;
             if(materialInstance.expired())
             {
@@ -366,15 +358,53 @@ void RenderSystem::Render()
 
             auto baseMaterial = materialInstance.lock()->GetBaseMaterial().lock();
             const PipelineBase& renderPipeline = *baseMaterial->GetRenderPipeline();
+            const auto& shaderBindings = renderPipeline.GetShaderBindings();
+            bool bNeedsGlobalSet = false;
+            for(const auto& binding : shaderBindings)
+            {
+                if(binding.set == GlobalSetIndex)
+                {
+                    bNeedsGlobalSet = true;
+                    break;
+                }
+            }
+            if(bNeedsGlobalSet)
+            {
+                this->UpdateUBOGlobal(commandBuffer);
+            }
+
+            // 开始渲染通道
+            vk::RenderPassBeginInfo renderPassBeginInfo;
+            renderPassBeginInfo.setRenderPass(renderPass.renderPass);
+            renderPassBeginInfo.setFramebuffer(renderPass.framebuffers[swapChainImageIndex]);
+            renderPassBeginInfo.setRenderArea(vk::Rect2D(vk::Offset2D(0, 0), vk::Extent2D(renderPass.width, renderPass.height)));
+            renderPassBeginInfo.setClearValues(renderPass.clearValues);
+            commandBuffer.beginRenderPass(renderPassBeginInfo, vk::SubpassContents::eInline);
             commandBuffer.bindPipeline(renderPipeline.GetBindPoint(), renderPipeline.GetPipeline());
 
-            // 绑定描述符集
-            commandBuffer.bindDescriptorSets(
-                vk::PipelineBindPoint::eGraphics,
-                renderPipeline.GetPipelineLayout(),
-                PassSetIndex,
-                renderPass.GetDescriptorSets()[swapChainImageIndex][PassSetIndex],
-                nullptr);
+            for(uint32_t setIndex = 0; setIndex < renderPass.GetDescriptorSets()[swapChainImageIndex].size(); ++setIndex)
+            {
+                bool bNeedBindSet = false;
+                for(const auto& binding : shaderBindings)
+                {
+                    if(binding.set == setIndex)
+                    {
+                        bNeedBindSet = true;
+                        break;
+                    }
+                }
+                if(!bNeedBindSet)
+                {
+                    continue;
+                }
+
+                commandBuffer.bindDescriptorSets(
+                    vk::PipelineBindPoint::eGraphics,
+                    renderPipeline.GetPipelineLayout(),
+                    setIndex,
+                    renderPass.GetDescriptorSets()[swapChainImageIndex][setIndex],
+                    nullptr);
+            }
             
             renderPass.Draw(commandBuffer);
         }
@@ -509,6 +539,10 @@ void RenderSystem::UpdateUBOGlobal(vk::CommandBuffer& commandBuffer)
     static UBOGlobal ubo;
     ubo.view = camera.GetViewMatrix();
     ubo.projection = camera.GetProjectionMatrix();
+    ubo.invView = ubo.view.inverse();
+    ubo.invProjection = ubo.projection.inverse();
+    ubo.viewProjection = ubo.projection * ubo.view;
+    ubo.invViewProjection = ubo.viewProjection.inverse();
     ubo.lightViewProj = lightViewProj;
     ubo.cameraPosition = sceneLoader.GetCamera()->GetPosition();
 
@@ -700,6 +734,10 @@ void RenderSystem::UpdateUBOGlobalForShadow(vk::CommandBuffer& commandBuffer, ui
     static UBOGlobal ubo;
     ubo.view = params.viewMatrix;
     ubo.projection = params.projectionMatrix;
+    ubo.invView = ubo.view.inverse();
+    ubo.invProjection = ubo.projection.inverse();
+    ubo.viewProjection = ubo.projection * ubo.view;
+    ubo.invViewProjection = ubo.viewProjection.inverse();
     lightViewProj = ubo.projection * ubo.view;
     ubo.lightViewProj = lightViewProj;
     

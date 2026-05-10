@@ -1,0 +1,7 @@
+{
+    "name": "Sky Material Instance",
+    "type": "materialInstance",
+    "shader": "pass/sky",
+    "textures": {},
+    "parameters": {}
+}

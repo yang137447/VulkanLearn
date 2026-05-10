@@ -7,6 +7,7 @@
 #include <Eigen/Dense>
 #include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_enums.hpp>
+#include "pipeline/graphicsPipelineBuilder.h"
 
 class Texture;
 class RenderableObject;
@@ -42,6 +43,7 @@ class SceneLoader{
     // environment 节点解析出的运行时环境资源配置，供后续 IBL 预处理链继续复用。
     const std::string& GetEnvironmentHdrPath() const { return environmentHdrPath; }
     uint32_t GetEnvironmentCubeSize() const { return environmentCubeSize; }
+    const std::shared_ptr<Texture>& GetEnvironmentCube() const { return environmentCube; }
 private:
     SceneLoader();
     void LoadMeshObject(const nlohmann::basic_json<>& node);
@@ -51,7 +53,7 @@ private:
     void LoadCameraObject(const nlohmann::basic_json<>& node);
     void LoadEnvironmentObject(const nlohmann::basic_json<>& node);
     void LoadPassMaterial();
-    std::shared_ptr<MaterialInstance> LoadMaterialInstance(const std::string_view materialInstancePath, vk::SampleCountFlagBits sampleCount, std::string_view passName = "geometry", bool bIsPostProcess = false);
+    std::shared_ptr<MaterialInstance> LoadMaterialInstance(const std::string_view materialInstancePath, vk::SampleCountFlagBits sampleCount, std::string_view passName = "geometry", const GraphicsPipelineStateDesc& pipelineStateDesc = {});
 
     //场景数据
     std::unordered_map<std::string, std::shared_ptr<RenderableObject>> objects; //模型相对路径和模型对象
@@ -68,5 +70,6 @@ private:
     // 当前场景声明的环境贴图输入及 cubemap 目标分辨率。
     std::string environmentHdrPath;
     uint32_t environmentCubeSize = 512;
+    std::shared_ptr<Texture> environmentCube;
     PipelineFactory* pipelineFactory = nullptr;
 };

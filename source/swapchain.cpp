@@ -1,4 +1,5 @@
 #include "swapchain.h"
+#include "commonFunction.h"
 
 Swapchain::Swapchain(/* args */)
 {
@@ -114,22 +115,12 @@ void Swapchain::CreateVkImageViews()
     imageViews.resize(images.size());
     for (int i = 0; i < imageViews.size(); i++)
     {
-        vk::ComponentMapping ComponentMapping;
-        vk::ImageSubresourceRange imageSubresourceRange;
-        imageSubresourceRange
-            .setLevelCount(1)
-            .setBaseMipLevel(0)
-            .setLayerCount(1)
-            .setBaseArrayLayer(0)
-            .setAspectMask(vk::ImageAspectFlagBits::eColor);
-        vk::ImageViewCreateInfo imageViewCreateInfo;
-        imageViewCreateInfo
-            .setImage(images[i])
-            .setViewType(vk::ImageViewType::e2D)
-            .setComponents(ComponentMapping)
-            .setFormat(imageFormat.format)
-            .setSubresourceRange(imageSubresourceRange);
-        imageViews[i] = device.createImageView(imageViewCreateInfo);
+        imageViews[i] = CommonFunction::Create2DImageView(
+            device,
+            images[i],
+            1,
+            imageFormat.format,
+            vk::ImageAspectFlagBits::eColor);
     }
 }
 

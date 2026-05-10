@@ -24,9 +24,20 @@ Texture::Texture(const std::string& texturePath)
     std::tie(image, imageMemory, mipLevels, format) = DeviceTextureFactory::CreateFromHostImage(*cpuImage, CommonFunction::Path(texturePath), createOptions);
 
     auto& vulkanManager = VulkanManager::GetInstance();
-    imageView = CommonFunction::CreateImageView(vulkanManager.GetDevice(), image, mipLevels, format, vk::ImageAspectFlagBits::eColor, "TextureView: " + CommonFunction::Path(texturePath));
-    sampler = CommonFunction::CreateSampler(vulkanManager.GetDevice(), vulkanManager.GetPhysicalDevice(), false, "TextureSampler: " + CommonFunction::Path(texturePath));
+    imageView = CommonFunction::Create2DImageView(vulkanManager.GetDevice(), image, mipLevels, format, vk::ImageAspectFlagBits::eColor, "TextureView: " + CommonFunction::Path(texturePath));
+    sampler = CommonFunction::Create2DSampler(vulkanManager.GetDevice(), vulkanManager.GetPhysicalDevice(), "TextureSampler: " + CommonFunction::Path(texturePath));
 }
+
+Texture::Texture(vk::Image image, vk::DeviceMemory imageMemory, vk::ImageView imageView, vk::Sampler sampler, uint32_t mipLevels, vk::Format format)
+{
+    this->image = image;
+    this->imageMemory = imageMemory;
+    this->imageView = imageView;
+    this->sampler = sampler;
+    this->mipLevels = mipLevels;
+    this->format = format;
+}
+
 Texture::~Texture()
 {
     auto& device = VulkanManager::GetInstance().GetDevice();

@@ -573,19 +573,29 @@ namespace CommonFunction
         return CreateImage(device, width, height, 1, samples, format, tiling, usage, physicalDeviceMemoryProperties, memoryPropertyFlags, name);
     }
 
-    inline vk::ImageView CreateImageView(vk::Device& device, vk::Image& image, uint32_t mipLevels, vk::Format& format, vk::ImageAspectFlagBits aspectMask = vk::ImageAspectFlagBits::eColor, const std::string& name = "")
+    inline vk::ImageView CreateImageViewBase(
+        vk::Device& device,
+        vk::Image& image,
+        vk::ImageViewType viewType,
+        vk::Format& format,
+        vk::ImageAspectFlags aspectMask,
+        uint32_t baseMipLevel,
+        uint32_t mipLevelCount,
+        uint32_t baseArrayLayer,
+        uint32_t layerCount,
+        const std::string& name = "")
     {
         vk::ImageViewCreateInfo viewInfo;
         viewInfo
             .setImage(image)
-            .setViewType(vk::ImageViewType::e2D)
+            .setViewType(viewType)
             .setFormat(format)
             .setSubresourceRange(vk::ImageSubresourceRange()
                 .setAspectMask(aspectMask)
-                .setBaseMipLevel(0)
-                .setLevelCount(mipLevels)
-                .setBaseArrayLayer(0)
-                .setLayerCount(1));
+                .setBaseMipLevel(baseMipLevel)
+                .setLevelCount(mipLevelCount)
+                .setBaseArrayLayer(baseArrayLayer)
+                .setLayerCount(layerCount));
 
         vk::ImageView imageView = device.createImageView(viewInfo);
         if (!name.empty())
@@ -595,12 +605,67 @@ namespace CommonFunction
         return imageView;
     }
 
-    inline vk::ImageView CreateDepthImageView(vk::Device& device, vk::PhysicalDevice& physicalDevice, vk::Image& image, vk::Format& format, const std::string& name = "")
+    inline vk::ImageView Create2DImageView(vk::Device& device, vk::Image& image, uint32_t mipLevels, vk::Format& format, vk::ImageAspectFlagBits aspectMask = vk::ImageAspectFlagBits::eColor, const std::string& name = "")
     {
-        return CreateImageView(device, image, 1, format, vk::ImageAspectFlagBits::eDepth, name);
+        return CreateImageViewBase(
+            device,
+            image,
+            vk::ImageViewType::e2D,
+            format,
+            aspectMask,
+            0,
+            mipLevels,
+            0,
+            1,
+            name);
     }
 
-    inline vk::Sampler CreateSampler(vk::Device& device, vk::PhysicalDevice& physicalDevice, bool bUseDepth = false, const std::string& name = "")
+    inline vk::ImageView CreateCubeImageView(vk::Device& device, vk::Image& image, uint32_t mipLevels, vk::Format& format, const std::string& name = "")
+    {
+        return CreateImageViewBase(
+            device,
+            image,
+            vk::ImageViewType::eCube,
+            format,
+            vk::ImageAspectFlagBits::eColor,
+            0,
+            mipLevels,
+            0,
+            6,
+            name);
+    }
+
+    inline vk::ImageView CreateCubeStorageImageView(vk::Device& device, vk::Image& image, vk::Format& format, const std::string& name = "")
+    {
+        return CreateImageViewBase(
+            device,
+            image,
+            vk::ImageViewType::e2DArray,
+            format,
+            vk::ImageAspectFlagBits::eColor,
+            0,
+            1,
+            0,
+            6,
+            name);
+    }
+
+    inline vk::ImageView CreateDepthImageView(vk::Device& device, vk::PhysicalDevice& physicalDevice, vk::Image& image, vk::Format& format, const std::string& name = "")
+    {
+        return Create2DImageView(device, image, 1, format, vk::ImageAspectFlagBits::eDepth, name);
+    }
+
+    inline vk::Sampler CreateSamplerBase(vk::Device& device, const vk::SamplerCreateInfo& samplerInfo, const std::string& name = "")
+    {
+        vk::Sampler sampler = device.createSampler(samplerInfo);
+        if (!name.empty())
+        {
+            VulkanDebug::SetObjectName(device, sampler, vk::ObjectType::eSampler, name);
+        }
+        return sampler;
+    }
+
+    inline vk::Sampler Create2DSampler(vk::Device& device, vk::PhysicalDevice& physicalDevice, const std::string& name = "")
     {
 
         vk::PhysicalDeviceProperties physicalDeviceProperties = physicalDevice.getProperties();
@@ -631,19 +696,96 @@ namespace CommonFunction
                 .setMaxAnisotropy(1.0f);
         }
 
-        if(bUseDepth)
+        return CreateSamplerBase(device, samplerInfo, name);
+    }
+
+    inline vk::Sampler CreateDepthSampler(vk::Device& device, vk::PhysicalDevice& physicalDevice, const std::string& name = "")
+    {
+        vk::PhysicalDeviceProperties physicalDeviceProperties = physicalDevice.getProperties();
+        vk::PhysicalDeviceFeatures physicalDeviceFeatures = physicalDevice.getFeatures();
+
+        vk::SamplerCreateInfo samplerInfo;
+        samplerInfo
+            .setMagFilter(vk::Filter::eLinear)
+            .setMinFilter(vk::Filter::eLinear)
+            .setAddressModeU(vk::SamplerAddressMode::eRepeat)
+            .setAddressModeV(vk::SamplerAddressMode::eRepeat)
+            .setAddressModeW(vk::SamplerAddressMode::eRepeat)
+            .setAnisotropyEnable(VK_TRUE)
+            .setMaxAnisotropy(physicalDeviceProperties.limits.maxSamplerAnisotropy)
+            .setBorderColor(vk::BorderColor::eIntOpaqueBlack)
+            .setUnnormalizedCoordinates(VK_FALSE)
+            .setCompareEnable(VK_FALSE)
+            .setCompareOp(vk::CompareOp::eAlways)
+            .setMipmapMode(vk::SamplerMipmapMode::eLinear)
+            .setMipLodBias(0.0f)
+            .setMinLod(0.0f)
+            .setMaxLod(VK_LOD_CLAMP_NONE);
+
+        if(physicalDeviceFeatures.samplerAnisotropy == VK_FALSE)
         {
             samplerInfo
-                .setCompareEnable(VK_TRUE)
-                .setCompareOp(vk::CompareOp::eLessOrEqual);
+                .setAnisotropyEnable(VK_FALSE)
+                .setMaxAnisotropy(1.0f);
         }
 
-        vk::Sampler sampler = device.createSampler(samplerInfo);
-        if (!name.empty())
+        return CreateSamplerBase(device, samplerInfo, name);
+    }
+
+    inline vk::Sampler CreateDepthCompareSampler(vk::Device& device, vk::PhysicalDevice& physicalDevice, const std::string& name = "")
+    {
+        vk::PhysicalDeviceProperties physicalDeviceProperties = physicalDevice.getProperties();
+        vk::PhysicalDeviceFeatures physicalDeviceFeatures = physicalDevice.getFeatures();
+
+        vk::SamplerCreateInfo samplerInfo;
+        samplerInfo
+            .setMagFilter(vk::Filter::eLinear)
+            .setMinFilter(vk::Filter::eLinear)
+            .setAddressModeU(vk::SamplerAddressMode::eRepeat)
+            .setAddressModeV(vk::SamplerAddressMode::eRepeat)
+            .setAddressModeW(vk::SamplerAddressMode::eRepeat)
+            .setAnisotropyEnable(VK_TRUE)
+            .setMaxAnisotropy(physicalDeviceProperties.limits.maxSamplerAnisotropy)
+            .setBorderColor(vk::BorderColor::eIntOpaqueBlack)
+            .setUnnormalizedCoordinates(VK_FALSE)
+            .setCompareEnable(VK_TRUE)
+            .setCompareOp(vk::CompareOp::eLessOrEqual)
+            .setMipmapMode(vk::SamplerMipmapMode::eLinear)
+            .setMipLodBias(0.0f)
+            .setMinLod(0.0f)
+            .setMaxLod(VK_LOD_CLAMP_NONE);
+
+        if(physicalDeviceFeatures.samplerAnisotropy == VK_FALSE)
         {
-            VulkanDebug::SetObjectName(device, sampler, vk::ObjectType::eSampler, name);
+            samplerInfo
+                .setAnisotropyEnable(VK_FALSE)
+                .setMaxAnisotropy(1.0f);
         }
-        return sampler;
+
+        return CreateSamplerBase(device, samplerInfo, name);
+    }
+
+    inline vk::Sampler CreateCubeSampler(vk::Device& device, const std::string& name = "")
+    {
+        vk::SamplerCreateInfo samplerInfo;
+        samplerInfo
+            .setMagFilter(vk::Filter::eLinear)
+            .setMinFilter(vk::Filter::eLinear)
+            .setAddressModeU(vk::SamplerAddressMode::eClampToEdge)
+            .setAddressModeV(vk::SamplerAddressMode::eClampToEdge)
+            .setAddressModeW(vk::SamplerAddressMode::eClampToEdge)
+            .setAnisotropyEnable(VK_FALSE)
+            .setMaxAnisotropy(1.0f)
+            .setBorderColor(vk::BorderColor::eFloatOpaqueBlack)
+            .setUnnormalizedCoordinates(VK_FALSE)
+            .setCompareEnable(VK_FALSE)
+            .setCompareOp(vk::CompareOp::eAlways)
+            .setMipmapMode(vk::SamplerMipmapMode::eLinear)
+            .setMipLodBias(0.0f)
+            .setMinLod(0.0f)
+            .setMaxLod(0.0f);
+
+        return CreateSamplerBase(device, samplerInfo, name);
     }
 
     inline void  TransitionImageLayout(vk::Image& image, uint32_t mipLevels, vk::Format& format, vk::Device& device, vk::CommandPool& commandPool, vk::Queue& GraphicsQueue, vk::ImageLayout oldLayout, vk::ImageLayout newLayout)

@@ -11,10 +11,10 @@ Material::~Material()
 {
 }
 
-Material::Material(PipelineFactory& pipelineFactory, vk::PhysicalDeviceMemoryProperties* gpuMemoryProperties, vk::RenderPass* renderPass, const std::string& shaderName, vk::SampleCountFlagBits samples, bool bIsPostProcess, bool bIsShadowPass)
+Material::Material(PipelineFactory& pipelineFactory, vk::PhysicalDeviceMemoryProperties* gpuMemoryProperties, vk::RenderPass* renderPass, const std::string& shaderName, vk::SampleCountFlagBits samples, const GraphicsPipelineStateDesc& pipelineStateDesc, bool bIsShadowPass)
 {
     this->shaderName = shaderName;
-    renderPipeline = pipelineFactory.CreateGraphicsPipeline(gpuMemoryProperties, renderPass, shaderName, samples, bIsPostProcess, bIsShadowPass);
+    renderPipeline = pipelineFactory.CreateGraphicsPipeline(gpuMemoryProperties, renderPass, shaderName, samples, pipelineStateDesc, bIsShadowPass);
 }
 std::shared_ptr<MaterialInstance> Material::CreateInstance()
 {

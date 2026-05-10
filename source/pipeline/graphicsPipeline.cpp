@@ -11,7 +11,7 @@
 #include "shaderReflectionService.h"
 #include "../vulkanDebug.h"
 
-GraphicsPipeline::GraphicsPipeline(vk::Device *device, vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties, vk::RenderPass* renderPass, const std::string& shaderName, vk::SampleCountFlagBits sampleCount, bool bIsPostProcess, bool bIsShadowPass)
+GraphicsPipeline::GraphicsPipeline(vk::Device *device, vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties, vk::RenderPass* renderPass, const std::string& shaderName, vk::SampleCountFlagBits sampleCount, const GraphicsPipelineStateDesc& pipelineStateDesc, bool bIsShadowPass)
 {
     PROFILE_FUNCTION();
     this->device = device;
@@ -19,7 +19,7 @@ GraphicsPipeline::GraphicsPipeline(vk::Device *device, vk::PhysicalDeviceMemoryP
     this->physicalDeviceMemoryProperties = physicalDeviceMemoryProperties;
     this->shaderName = shaderName;
     this->sampleCount = sampleCount;
-    this->bIsPostProcess = bIsPostProcess;
+    this->pipelineStateDesc = pipelineStateDesc;
     this->bIsShadowPass = bIsShadowPass;
 
     CreateShader();
@@ -128,7 +128,7 @@ void GraphicsPipeline::CreateGraphicsPipeline()
         vertexInputAttributeDescriptions,
         shaderName,
         sampleCount,
-        bIsPostProcess,
+        pipelineStateDesc,
         bIsShadowPass
     };
     auto buildResult = GraphicsPipelineBuilder::Build(buildDesc);

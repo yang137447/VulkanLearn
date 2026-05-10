@@ -3,6 +3,7 @@
 #include "../commonFunction.h"
 #include "../resource/device/deviceTextureFactory.h"
 #include "../resource/image/textureIO.h"
+#include "../texture.h"
 #include "../vulkanManager.h"
 #include "computePipeline.h"
 #include "pipelineFactory.h"
@@ -16,8 +17,40 @@
 
 namespace
 {
+#if !defined(NDEBUG)
+    constexpr bool kEnableDebugCubemapDump = true;
+#else
+    constexpr bool kEnableDebugCubemapDump = false;
+#endif
+
     // 调试输出按标准 cubemap 朝向命名，便于肉眼检查各面的方向是否正确。
     constexpr std::array<const char*, 6> kFaceNames = { "px", "nx", "py", "ny", "pz", "nz" };
+
+    void FlipImageX(HostImage& image)
+    {
+        if (image.width <= 1)
+        {
+            return;
+        }
+
+        const size_t pixelSize = image.GetPixelSize();
+        const size_t rowBytes = image.rowStrideBytes > 0 ? image.rowStrideBytes : image.width * pixelSize;
+        uint8_t* raw = image.data.data();
+        std::vector<uint8_t> pixelBuffer(pixelSize);
+
+        for (uint32_t y = 0; y < image.height; ++y)
+        {
+            uint8_t* row = raw + static_cast<size_t>(y) * rowBytes;
+            for (uint32_t x = 0; x < image.width / 2; ++x)
+            {
+                uint8_t* leftPixel = row + static_cast<size_t>(x) * pixelSize;
+                uint8_t* rightPixel = row + static_cast<size_t>(image.width - 1 - x) * pixelSize;
+                std::memcpy(pixelBuffer.data(), leftPixel, pixelSize);
+                std::memcpy(leftPixel, rightPixel, pixelSize);
+                std::memcpy(rightPixel, pixelBuffer.data(), pixelSize);
+            }
+        }
+    }
 
     vk::Sampler CreateHdrSampler(vk::Device& device)
     {
@@ -39,24 +72,7 @@ namespace
             .setMipLodBias(0.0f)
             .setMinLod(0.0f)
             .setMaxLod(0.0f);
-        return device.createSampler(samplerInfo);
-    }
-
-    vk::ImageView CreateCubeStorageView(vk::Device& device, vk::Image image, vk::Format format)
-    {
-        // Compute 阶段按 2D array 的 6 层写入，后续再把它当作 cubemap 使用。
-        vk::ImageViewCreateInfo viewInfo;
-        viewInfo
-            .setImage(image)
-            .setViewType(vk::ImageViewType::e2DArray)
-            .setFormat(format)
-            .setSubresourceRange(vk::ImageSubresourceRange()
-                .setAspectMask(vk::ImageAspectFlagBits::eColor)
-                .setBaseMipLevel(0)
-                .setLevelCount(1)
-                .setBaseArrayLayer(0)
-                .setLayerCount(6));
-        return device.createImageView(viewInfo);
+        return CommonFunction::CreateSamplerBase(device, samplerInfo);
     }
 
     void CopyFaceToBuffer(
@@ -90,11 +106,11 @@ namespace
     }
 }
 
-void EnvironmentCubemapGenerator::Generate(const std::string& hdrPath, uint32_t cubeSize, PipelineFactory& pipelineFactory)
+std::shared_ptr<Texture> EnvironmentCubemapGenerator::Generate(const std::string& hdrPath, uint32_t cubeSize, PipelineFactory& pipelineFactory)
 {
     if (hdrPath.empty())
     {
-        return;
+        return nullptr;
     }
     if (cubeSize == 0)
     {
@@ -133,7 +149,7 @@ void EnvironmentCubemapGenerator::Generate(const std::string& hdrPath, uint32_t 
     std::tie(hdrImage, hdrImageMemory, hdrMipLevels, hdrFormat) =
         DeviceTextureFactory::CreateFromHostImage(*cpuHdrImage, hdrFullPath.string(), hdrCreateOptions);
 
-    vk::ImageView hdrImageView = CommonFunction::CreateImageView(
+    vk::ImageView hdrImageView = CommonFunction::Create2DImageView(
         device,
         hdrImage,
         hdrMipLevels,
@@ -178,7 +194,7 @@ void EnvironmentCubemapGenerator::Generate(const std::string& hdrPath, uint32_t 
     vk::DeviceMemory cubeImageMemory = device.allocateMemory(cubeAllocInfo);
     device.bindImageMemory(cubeImage, cubeImageMemory, 0);
 
-    vk::ImageView cubeStorageView = CreateCubeStorageView(device, cubeImage, cubeFormat);
+    vk::ImageView cubeStorageView = CommonFunction::CreateCubeStorageImageView(device, cubeImage, cubeFormat, "EnvironmentCubeStorageView");
 
     auto computePipeline = pipelineFactory.CreateComputePipeline("generator/equirectToCubemap");
 
@@ -262,85 +278,148 @@ void EnvironmentCubemapGenerator::Generate(const std::string& hdrPath, uint32_t 
     // z 维度固定为 6，对应 cubemap 的 6 个面。
     computePipeline->Dispatch(commandBuffer, (cubeSize + 7) / 8, (cubeSize + 7) / 8, 6);
 
-    // Compute 写完后切到 TransferSrc，方便逐面读回保存 EXR 做朝向校验。
-    vk::ImageMemoryBarrier cubeToTransferBarrier;
-    cubeToTransferBarrier
-        .setOldLayout(vk::ImageLayout::eGeneral)
-        .setNewLayout(vk::ImageLayout::eTransferSrcOptimal)
-        .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
-        .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
-        .setImage(cubeImage)
-        .setSubresourceRange(vk::ImageSubresourceRange()
-            .setAspectMask(vk::ImageAspectFlagBits::eColor)
-            .setBaseMipLevel(0)
-            .setLevelCount(1)
-            .setBaseArrayLayer(0)
-            .setLayerCount(6))
-        .setSrcAccessMask(vk::AccessFlagBits::eShaderWrite)
-        .setDstAccessMask(vk::AccessFlagBits::eTransferRead);
-    commandBuffer.pipelineBarrier(
-        vk::PipelineStageFlagBits::eComputeShader,
-        vk::PipelineStageFlagBits::eTransfer,
-        vk::DependencyFlags(),
-        nullptr,
-        nullptr,
-        cubeToTransferBarrier);
+    if constexpr (kEnableDebugCubemapDump)
+    {
+        // Debug 模式下切到 TransferSrc，便于逐面导出 EXR 做朝向校验。
+        vk::ImageMemoryBarrier cubeToTransferBarrier;
+        cubeToTransferBarrier
+            .setOldLayout(vk::ImageLayout::eGeneral)
+            .setNewLayout(vk::ImageLayout::eTransferSrcOptimal)
+            .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+            .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+            .setImage(cubeImage)
+            .setSubresourceRange(vk::ImageSubresourceRange()
+                .setAspectMask(vk::ImageAspectFlagBits::eColor)
+                .setBaseMipLevel(0)
+                .setLevelCount(1)
+                .setBaseArrayLayer(0)
+                .setLayerCount(6))
+            .setSrcAccessMask(vk::AccessFlagBits::eShaderWrite)
+            .setDstAccessMask(vk::AccessFlagBits::eTransferRead);
+        commandBuffer.pipelineBarrier(
+            vk::PipelineStageFlagBits::eComputeShader,
+            vk::PipelineStageFlagBits::eTransfer,
+            vk::DependencyFlags(),
+            nullptr,
+            nullptr,
+            cubeToTransferBarrier);
+    }
+    else
+    {
+        vk::ImageMemoryBarrier cubeToSampleBarrier;
+        cubeToSampleBarrier
+            .setOldLayout(vk::ImageLayout::eGeneral)
+            .setNewLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+            .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+            .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+            .setImage(cubeImage)
+            .setSubresourceRange(vk::ImageSubresourceRange()
+                .setAspectMask(vk::ImageAspectFlagBits::eColor)
+                .setBaseMipLevel(0)
+                .setLevelCount(1)
+                .setBaseArrayLayer(0)
+                .setLayerCount(6))
+            .setSrcAccessMask(vk::AccessFlagBits::eShaderWrite)
+            .setDstAccessMask(vk::AccessFlagBits::eShaderRead);
+        commandBuffer.pipelineBarrier(
+            vk::PipelineStageFlagBits::eComputeShader,
+            vk::PipelineStageFlagBits::eFragmentShader,
+            vk::DependencyFlags(),
+            nullptr,
+            nullptr,
+            cubeToSampleBarrier);
+    }
 
     CommonFunction::EndSingleTimeCommands(device, commandBuffer, graphicsQueue, commandPool);
 
-    const vk::DeviceSize bytesPerPixel = sizeof(uint16_t) * 4;
-    vk::DeviceSize readbackSize = static_cast<vk::DeviceSize>(cubeSize) * cubeSize * bytesPerPixel;
-    vk::BufferUsageFlags stagingUsage = vk::BufferUsageFlagBits::eTransferDst;
-    vk::MemoryPropertyFlags stagingMemoryFlags =
-        vk::MemoryPropertyFlagBits::eHostVisible |
-        vk::MemoryPropertyFlagBits::eHostCoherent;
-    auto [stagingBuffer, stagingBufferMemory] = CommonFunction::CreateBuffer(
-        device,
-        readbackSize,
-        stagingUsage,
-        gpuMemoryProperties,
-        stagingMemoryFlags,
-        "EnvironmentCubemapReadback");
-
-    const std::filesystem::path outputDir =
-        std::filesystem::path(CommonFunction::GetProjectPath()) /
-        "resources" / "generated" / "cubemap" / hdrFullPath.stem();
-    std::filesystem::create_directories(outputDir);
-
-    TextureIO::SaveOptions saveOptions;
-    saveOptions.semantic = HostImage::TextureSemantic::EnvHdr;
-    saveOptions.format = TextureIO::FileFormat::Exr;
-
-    for (uint32_t faceIndex = 0; faceIndex < 6; ++faceIndex)
+    if constexpr (kEnableDebugCubemapDump)
     {
-        // 首版先把每个 face 单独落盘，便于直接检查坐标系和接缝方向。
-        CopyFaceToBuffer(device, graphicsQueue, commandPool, cubeImage, stagingBuffer, cubeSize, faceIndex);
+        const vk::DeviceSize bytesPerPixel = sizeof(uint16_t) * 4;
+        vk::DeviceSize readbackSize = static_cast<vk::DeviceSize>(cubeSize) * cubeSize * bytesPerPixel;
+        vk::BufferUsageFlags stagingUsage = vk::BufferUsageFlagBits::eTransferDst;
+        vk::MemoryPropertyFlags stagingMemoryFlags =
+            vk::MemoryPropertyFlagBits::eHostVisible |
+            vk::MemoryPropertyFlagBits::eHostCoherent;
+        auto [stagingBuffer, stagingBufferMemory] = CommonFunction::CreateBuffer(
+            device,
+            readbackSize,
+            stagingUsage,
+            gpuMemoryProperties,
+            stagingMemoryFlags,
+            "EnvironmentCubemapReadback");
 
-        void* mapped = device.mapMemory(stagingBufferMemory, 0, readbackSize);
-        HostImage faceImage;
-        faceImage.width = cubeSize;
-        faceImage.height = cubeSize;
-        faceImage.channels = 4;
-        faceImage.mipLevels = 1;
-        faceImage.arrayLayers = 1;
-        faceImage.format = HostImage::PixelFormat::RGBA16_FLOAT;
-        faceImage.semantic = HostImage::TextureSemantic::EnvHdr;
-        faceImage.rowStrideBytes = static_cast<uint32_t>(cubeSize * bytesPerPixel);
-        faceImage.data.resize(static_cast<size_t>(readbackSize));
-        std::memcpy(faceImage.data.data(), mapped, static_cast<size_t>(readbackSize));
-        device.unmapMemory(stagingBufferMemory);
+        const std::filesystem::path outputDir =
+            std::filesystem::path(CommonFunction::GetProjectPath()) /
+            "resources" / "generated" / "cubemap" / hdrFullPath.stem();
+        std::filesystem::create_directories(outputDir);
 
-        TextureIO::Save(outputDir / (std::string(kFaceNames[faceIndex]) + ".exr"), faceImage, saveOptions);
+        TextureIO::SaveOptions saveOptions;
+        saveOptions.semantic = HostImage::TextureSemantic::EnvHdr;
+        saveOptions.format = TextureIO::FileFormat::Exr;
+
+        for (uint32_t faceIndex = 0; faceIndex < 6; ++faceIndex)
+        {
+            // Debug 模式下把每个 face 单独落盘，便于检查朝向与接缝。
+            CopyFaceToBuffer(device, graphicsQueue, commandPool, cubeImage, stagingBuffer, cubeSize, faceIndex);
+
+            void* mapped = device.mapMemory(stagingBufferMemory, 0, readbackSize);
+            HostImage faceImage;
+            faceImage.width = cubeSize;
+            faceImage.height = cubeSize;
+            faceImage.channels = 4;
+            faceImage.mipLevels = 1;
+            faceImage.arrayLayers = 1;
+            faceImage.format = HostImage::PixelFormat::RGBA16_FLOAT;
+            faceImage.semantic = HostImage::TextureSemantic::EnvHdr;
+            faceImage.rowStrideBytes = static_cast<uint32_t>(cubeSize * bytesPerPixel);
+            faceImage.data.resize(static_cast<size_t>(readbackSize));
+            std::memcpy(faceImage.data.data(), mapped, static_cast<size_t>(readbackSize));
+            device.unmapMemory(stagingBufferMemory);
+
+            // 运行时 cubemap 方向是正确的，这里只修正 debug 落盘图的人眼观察朝向。
+            FlipImageX(faceImage);
+
+            TextureIO::Save(outputDir / (std::string(kFaceNames[faceIndex]) + ".exr"), faceImage, saveOptions);
+        }
+
+        device.destroyBuffer(stagingBuffer);
+        device.freeMemory(stagingBufferMemory);
+
+        vk::CommandBuffer layoutCommandBuffer = CommonFunction::BeginSingleTimeCommands(device, commandPool);
+        vk::ImageMemoryBarrier cubeToSampleBarrier;
+        cubeToSampleBarrier
+            .setOldLayout(vk::ImageLayout::eTransferSrcOptimal)
+            .setNewLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+            .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+            .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+            .setImage(cubeImage)
+            .setSubresourceRange(vk::ImageSubresourceRange()
+                .setAspectMask(vk::ImageAspectFlagBits::eColor)
+                .setBaseMipLevel(0)
+                .setLevelCount(1)
+                .setBaseArrayLayer(0)
+                .setLayerCount(6))
+            .setSrcAccessMask(vk::AccessFlagBits::eTransferRead)
+            .setDstAccessMask(vk::AccessFlagBits::eShaderRead);
+        layoutCommandBuffer.pipelineBarrier(
+            vk::PipelineStageFlagBits::eTransfer,
+            vk::PipelineStageFlagBits::eFragmentShader,
+            vk::DependencyFlags(),
+            nullptr,
+            nullptr,
+            cubeToSampleBarrier);
+        CommonFunction::EndSingleTimeCommands(device, layoutCommandBuffer, graphicsQueue, commandPool);
     }
 
-    device.destroyBuffer(stagingBuffer);
-    device.freeMemory(stagingBufferMemory);
     device.destroyDescriptorPool(descriptorPool);
     device.destroyImageView(cubeStorageView);
-    device.destroyImage(cubeImage);
-    device.freeMemory(cubeImageMemory);
     device.destroySampler(hdrSampler);
     device.destroyImageView(hdrImageView);
     device.destroyImage(hdrImage);
     device.freeMemory(hdrImageMemory);
+
+    vk::ImageView cubeSampleView = CommonFunction::CreateCubeImageView(device, cubeImage, 1, cubeFormat, "EnvironmentCubeView");
+    vk::Sampler cubeSampler = CommonFunction::CreateCubeSampler(device, "EnvironmentCubeSampler");
+
+    return std::make_shared<Texture>(cubeImage, cubeImageMemory, cubeSampleView, cubeSampler, 1, cubeFormat);
 }

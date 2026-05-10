@@ -361,24 +361,14 @@ void VulkanManager::CreateVkSwapChain()
     for (uint32_t i = 0; i < swapChainImageCount; i++)
     {
         VulkanDebug::SetObjectName(device, swapChainImages[i], vk::ObjectType::eImage, "SwapChainImage: Index " + std::to_string(i));
-
-        vk::ImageViewCreateInfo imageViewCreateInfo;
-        imageViewCreateInfo
-            .setImage(swapChainImages[i])
-            .setViewType(vk::ImageViewType::e2D)
-            .setFormat(surfaceFormat.format)
-            .setComponents(vk::ComponentMapping())
-            .setSubresourceRange(
-                vk::ImageSubresourceRange(
-                    vk::ImageAspectFlagBits::eColor, 
-                    0, //baseMipLevel
-                    1, //MipmaplevelCount
-                    0, //baseArrayLayer
-                    1  //layerCount
-                ));
-        swapChainImageViews[i] = device.createImageView(imageViewCreateInfo);
+        swapChainImageViews[i] = CommonFunction::Create2DImageView(
+            device,
+            swapChainImages[i],
+            1,
+            surfaceFormat.format,
+            vk::ImageAspectFlagBits::eColor,
+            "SwapChainImageView_Index_" + std::to_string(i));
         assert(swapChainImageViews[i]);
-        VulkanDebug::SetObjectName(device, swapChainImageViews[i], vk::ObjectType::eImageView, "SwapChainImageView_Index_" + std::to_string(i));
     }
     std::cout << "Create VkSwapChain" << std::endl;
     std::cout << "  Swap chain image format: " << vk::to_string(surfaceFormat.format) << std::endl;

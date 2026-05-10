@@ -14,7 +14,7 @@ GraphicsPipelineBuildResult GraphicsPipelineBuilder::Build(const GraphicsPipelin
         .setDynamicStates(dynamicStates);
 
     vk::PipelineVertexInputStateCreateInfo pipelineVertexInputStateCreateInfo;
-    if (!desc.bIsPostProcess)
+    if (desc.pipelineStateDesc.bUseVertexInput)
     {
         pipelineVertexInputStateCreateInfo
             .setVertexBindingDescriptions(desc.vertexInputBindingDescription)
@@ -29,7 +29,7 @@ GraphicsPipelineBuildResult GraphicsPipelineBuilder::Build(const GraphicsPipelin
     vk::PipelineRasterizationStateCreateInfo pipelineRasterizationStateCreateInfo;
     pipelineRasterizationStateCreateInfo
         .setPolygonMode(vk::PolygonMode::eFill)
-        .setCullMode(vk::CullModeFlagBits::eBack)
+        .setCullMode(desc.pipelineStateDesc.cullMode)
         .setFrontFace(vk::FrontFace::eClockwise)
         .setDepthClampEnable(false)
         .setRasterizerDiscardEnable(false)
@@ -78,19 +78,16 @@ GraphicsPipelineBuildResult GraphicsPipelineBuilder::Build(const GraphicsPipelin
         .setPScissors(&scissor);
 
     vk::PipelineDepthStencilStateCreateInfo pipelineDepthStencilStateCreateInfo;
-    if (!desc.bIsPostProcess)
-    {
-        pipelineDepthStencilStateCreateInfo
-            .setDepthTestEnable(true)
-            .setDepthWriteEnable(true)
-            .setDepthCompareOp(vk::CompareOp::eLess)
-            .setDepthBoundsTestEnable(false)
-            .setMinDepthBounds(0.0f)
-            .setMaxDepthBounds(1.0f)
-            .setStencilTestEnable(false)
-            .setBack(vk::StencilOpState())
-            .setFront(vk::StencilOpState());
-    }
+    pipelineDepthStencilStateCreateInfo
+        .setDepthTestEnable(desc.pipelineStateDesc.bDepthTestEnable)
+        .setDepthWriteEnable(desc.pipelineStateDesc.bDepthWriteEnable)
+        .setDepthCompareOp(desc.pipelineStateDesc.depthCompareOp)
+        .setDepthBoundsTestEnable(false)
+        .setMinDepthBounds(0.0f)
+        .setMaxDepthBounds(1.0f)
+        .setStencilTestEnable(false)
+        .setBack(vk::StencilOpState())
+        .setFront(vk::StencilOpState());
 
     vk::PipelineMultisampleStateCreateInfo pipelineMultisampleStateCreateInfo;
     pipelineMultisampleStateCreateInfo

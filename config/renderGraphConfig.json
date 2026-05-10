@@ -1,20 +1,51 @@
 {
-    "formatSupport": [
-        "R8G8B8A8_SRGB",
-        "R8G8B8A8_UNORM",
-        "R16G16B16A16_SFLOAT",
-        "D16_UNORM",
-        "D32_SFLOAT",
-        "D24_UNORM_S8_UINT"
-    ],
-    "usageSupport": [
-        "colorAttachment",
-        "depthStencilAttachment",
-        "sampled",
-        "present",
-        "transferSrc",
-        "transferDst"
-    ],
+    "configHelp":
+    {
+        "formatSupport": [
+            "R8G8B8A8_SRGB",
+            "R8G8B8A8_UNORM",
+            "R16G16B16A16_SFLOAT",
+            "D16_UNORM",
+            "D32_SFLOAT",
+            "D24_UNORM_S8_UINT"
+        ],
+        "usageSupport": [
+            "colorAttachment",
+            "depthStencilAttachment",
+            "sampled",
+            "present",
+            "transferSrc",
+            "transferDst"
+        ],
+        "loadOpSupport": [
+            "clear",
+            "load",
+            "dontCare"
+        ],
+        "storeOpSupport": [
+            "store",
+            "dontCare"
+        ],
+        "depthCompareOpSupport": [
+            "less",
+            "lessOrEqual",
+            "equal",
+            "greater",
+            "greaterOrEqual",
+            "always"
+        ],
+        "pipelineState": {
+            "useVertexInput": "是否使用模型顶点输入。fullscreen/postprocess/sky 这类 pass 通常为 false。",
+            "depthTestEnable": "是否开启深度测试。",
+            "depthWriteEnable": "是否写入深度。",
+            "depthCompareOp": "深度比较函数，取值见 depthCompareOpSupport。"
+        },
+        "output": {
+            "resource": "当前 pass 输出的逻辑资源名。",
+            "loadOp": "attachment 开始时的加载策略。",
+            "storeOp": "attachment 结束时的保存策略。"
+        }
+    },
     "resources":[
         {
             "name": "shadowMap",
@@ -79,17 +110,31 @@
             "name": "shadow",
             "needCreateMaterial": true,
             "materialInstancePath": "materials/MI_shadow.json",
+            "pipelineState": {
+                "useVertexInput": true,
+                "depthTestEnable": true,
+                "depthWriteEnable": true,
+                "depthCompareOp": "less"
+            },
             "input": [
             ],
             "output":[
                 {
-                    "resource": "shadowMap"
+                    "resource": "shadowMap",
+                    "loadOp": "clear",
+                    "storeOp": "store"
                 }
             ]
         },
         {
             "name": "geometry",
             "needMsaa": true,
+            "pipelineState": {
+                "useVertexInput": true,
+                "depthTestEnable": true,
+                "depthWriteEnable": true,
+                "depthCompareOp": "less"
+            },
             "input": [
                 {
                     "resource": "shadowMap"
@@ -97,10 +142,40 @@
             ],
             "output":[
                 {
-                    "resource": "offscreenColor"
+                    "resource": "offscreenColor",
+                    "loadOp": "clear",
+                    "storeOp": "store"
                 },
                 {
-                    "resource": "sceneDepth"
+                    "resource": "sceneDepth",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
+            "name": "sky",
+            "needCreateMaterial": true,
+            "needMsaa": true,
+            "materialInstancePath": "materials/pass/MI_sky.json",
+            "bIsPostProcess": true,
+            "pipelineState": {
+                "useVertexInput": false,
+                "depthTestEnable": true,
+                "depthWriteEnable": false,
+                "depthCompareOp": "lessOrEqual"
+            },
+            "input": [],
+            "output":[
+                {
+                    "resource": "offscreenColor",
+                    "loadOp": "load",
+                    "storeOp": "store"
+                },
+                {
+                    "resource": "sceneDepth",
+                    "loadOp": "load",
+                    "storeOp": "store"
                 }
             ]
         },
@@ -109,6 +184,12 @@
             "needCreateMaterial": true,
             "materialInstancePath": "materials/pass/MI_postProcess.json",
             "bIsPostProcess": true,
+            "pipelineState": {
+                "useVertexInput": false,
+                "depthTestEnable": false,
+                "depthWriteEnable": false,
+                "depthCompareOp": "less"
+            },
             "input": [
                 {
                     "resource": "offscreenColor"
@@ -116,7 +197,9 @@
             ],
             "output":[
                 {
-                    "resource": "sceneColor"
+                    "resource": "sceneColor",
+                    "loadOp": "clear",
+                    "storeOp": "store"
                 }
             ]
         }
@@ -126,6 +209,12 @@
             "needCreateMaterial": true,
             "materialInstancePath": "materials/pass/MI_bloomPrefilter.json",
             "bIsPostProcess": true,
+            "pipelineState": {
+                "useVertexInput": false,
+                "depthTestEnable": false,
+                "depthWriteEnable": false,
+                "depthCompareOp": "less"
+            },
             "input": [
                 {
                     "resource": "sceneColor"
@@ -133,7 +222,9 @@
             ],
             "output":[
                 {
-                    "resource": "bloomDownSample1"
+                    "resource": "bloomDownSample1",
+                    "loadOp": "clear",
+                    "storeOp": "store"
                 }
             ]
         },
@@ -142,6 +233,12 @@
             "needCreateMaterial": true,
             "materialInstancePath": "materials/pass/MI_bloomDownsample.json",
             "bIsPostProcess": true,
+            "pipelineState": {
+                "useVertexInput": false,
+                "depthTestEnable": false,
+                "depthWriteEnable": false,
+                "depthCompareOp": "less"
+            },
             "input": [
                 {
                     "resource": "bloomDownSample1"
@@ -149,7 +246,9 @@
             ],
             "output":[
                 {
-                    "resource": "bloomDownSample2"
+                    "resource": "bloomDownSample2",
+                    "loadOp": "clear",
+                    "storeOp": "store"
                 }
             ]
         },
@@ -158,6 +257,12 @@
             "needCreateMaterial": true,
             "materialInstancePath": "materials/pass/MI_bloomUpsample.json",
             "bIsPostProcess": true,
+            "pipelineState": {
+                "useVertexInput": false,
+                "depthTestEnable": false,
+                "depthWriteEnable": false,
+                "depthCompareOp": "less"
+            },
             "input": [
                 {
                     "resource": "bloomDownSample2"
@@ -165,7 +270,9 @@
             ],
             "output":[
                 {
-                    "resource": "bloomUpSample1"
+                    "resource": "bloomUpSample1",
+                    "loadOp": "clear",
+                    "storeOp": "store"
                 }
             ]
         },
@@ -174,6 +281,12 @@
             "needCreateMaterial": true,
             "materialInstancePath": "materials/pass/MI_toneMapping.json",
             "bIsPostProcess": true,
+            "pipelineState": {
+                "useVertexInput": false,
+                "depthTestEnable": false,
+                "depthWriteEnable": false,
+                "depthCompareOp": "less"
+            },
             "input": [
                 {
                     "resource": "sceneColor"
@@ -184,7 +297,9 @@
             ],
             "output":[
                 {
-                    "resource": "swapChain"
+                    "resource": "swapChain",
+                    "loadOp": "clear",
+                    "storeOp": "store"
                 }
             ]
         }

@@ -18,6 +18,34 @@
 #include "shaderReflect.h"
 #include "renderGraph.h"
 
+namespace
+{
+    vk::CompareOp ParseDepthCompareOp(const std::string& compareOp)
+    {
+        if (compareOp == "lessOrEqual")
+        {
+            return vk::CompareOp::eLessOrEqual;
+        }
+        if (compareOp == "equal")
+        {
+            return vk::CompareOp::eEqual;
+        }
+        if (compareOp == "greater")
+        {
+            return vk::CompareOp::eGreater;
+        }
+        if (compareOp == "greaterOrEqual")
+        {
+            return vk::CompareOp::eGreaterOrEqual;
+        }
+        if (compareOp == "always")
+        {
+            return vk::CompareOp::eAlways;
+        }
+        return vk::CompareOp::eLess;
+    }
+}
+
 SceneLoader::SceneLoader()
 {
 }
@@ -36,6 +64,7 @@ void SceneLoader::LoadScene(const std::string& filename)
     // SceneLoader 是单例，先清空上一次场景留下的 environment 配置。
     environmentHdrPath.clear();
     environmentCubeSize = 512;
+    environmentCube.reset();
 
     // 加载后处理材质
     LoadPassMaterial();
@@ -221,7 +250,7 @@ void SceneLoader::LoadEnvironmentObject(const nlohmann::basic_json<>& node)
     if (pipelineFactory != nullptr && !environmentHdrPath.empty())
     {
         // 环境贴图预处理跟场景资源绑定，读取到 environment 后立即生成 cubemap。
-        EnvironmentCubemapGenerator::Generate(environmentHdrPath, environmentCubeSize, *pipelineFactory);
+        environmentCube = EnvironmentCubemapGenerator::Generate(environmentHdrPath, environmentCubeSize, *pipelineFactory);
     }
 }
 
@@ -242,16 +271,24 @@ void SceneLoader::LoadPassMaterial()
         std::string materialInstancePath = passJson["materialInstancePath"];
         
         bool bNeedMsaa = passJson.value("needMsaa", false);
-        bool bIsPostProcess = passJson.value("bIsPostProcess", false);
+        GraphicsPipelineStateDesc pipelineStateDesc;
+        if (passJson.contains("pipelineState"))
+        {
+            const auto& pipelineStateJson = passJson["pipelineState"];
+            pipelineStateDesc.bUseVertexInput = pipelineStateJson.value("useVertexInput", pipelineStateDesc.bUseVertexInput);
+            pipelineStateDesc.bDepthTestEnable = pipelineStateJson.value("depthTestEnable", pipelineStateDesc.bDepthTestEnable);
+            pipelineStateDesc.bDepthWriteEnable = pipelineStateJson.value("depthWriteEnable", pipelineStateDesc.bDepthWriteEnable);
+            pipelineStateDesc.depthCompareOp = ParseDepthCompareOp(pipelineStateJson.value("depthCompareOp", std::string("less")));
+        }
 
         // 如果当前 shaderName 对应的材质尚未加载，则新建并缓存
-        std::shared_ptr<MaterialInstance> materialInstance = LoadMaterialInstance(materialInstancePath, bNeedMsaa ? CommonFunction::GetMsaaSampleCount() : vk::SampleCountFlagBits::e1, passName, bIsPostProcess);
+        std::shared_ptr<MaterialInstance> materialInstance = LoadMaterialInstance(materialInstancePath, bNeedMsaa ? CommonFunction::GetMsaaSampleCount() : vk::SampleCountFlagBits::e1, passName, pipelineStateDesc);
         
         renderGraph.GetRenderpasses()[passName.data()].materialInstance = materialInstance;
     }
 }
 
-std::shared_ptr<MaterialInstance> SceneLoader::LoadMaterialInstance(const std::string_view materialInstancePath, vk::SampleCountFlagBits sampleCount, std::string_view passName, bool bIsPostProcess)
+std::shared_ptr<MaterialInstance> SceneLoader::LoadMaterialInstance(const std::string_view materialInstancePath, vk::SampleCountFlagBits sampleCount, std::string_view passName, const GraphicsPipelineStateDesc& pipelineStateDesc)
 {
     VulkanManager& instance = VulkanManager::GetInstance();
     RenderGraph& renderGraph = RenderGraph::GetInstance();
@@ -278,7 +315,7 @@ std::shared_ptr<MaterialInstance> SceneLoader::LoadMaterialInstance(const std::s
             &renderGraph.GetRenderpasses()[passName.data()].renderPass,
             shaderName,
             sampleCount,
-            bIsPostProcess,
+            pipelineStateDesc,
             bIsShadowPass
         );
     }

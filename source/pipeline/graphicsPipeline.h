@@ -3,6 +3,7 @@
 #include <vector>
 #include "vulkan/vulkan.hpp"
 #include "pipelineBase.h"
+#include "graphicsPipelineBuilder.h"
 
 class DrawableObject;
 struct ShaderBinding;
@@ -16,7 +17,7 @@ public:
                     vk::RenderPass *renderPass,
                     const std::string& shaderName,
                     vk::SampleCountFlagBits sampleCount,
-                    bool bIsPostProcess = false,
+                    const GraphicsPipelineStateDesc& pipelineStateDesc = {},
                     bool bIsShadowPass = false
                 );
     ~GraphicsPipeline();
@@ -49,7 +50,7 @@ private:
     vk::RenderPass* renderPass;
     vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties;
     vk::SampleCountFlagBits sampleCount;
-    bool bIsPostProcess;
+    GraphicsPipelineStateDesc pipelineStateDesc;
     bool bIsShadowPass;
 
     std::string shaderName;

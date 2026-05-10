@@ -4,6 +4,7 @@
 #include <string>
 #include <unordered_map>
 #include "vulkan/vulkan.hpp"
+#include "graphicsPipelineBuilder.h"
 
 class ComputePipeline;
 class GraphicsPipeline;
@@ -17,7 +18,7 @@ struct GraphicsPipelineKey
     vk::RenderPass* renderPass;
     std::string shaderName;
     vk::SampleCountFlagBits sampleCount;
-    bool bIsPostProcess;
+    GraphicsPipelineStateDesc pipelineStateDesc;
     bool bIsShadowPass;
 
     bool operator==(const GraphicsPipelineKey& other) const
@@ -25,7 +26,11 @@ struct GraphicsPipelineKey
         return renderPass == other.renderPass &&
             shaderName == other.shaderName &&
             sampleCount == other.sampleCount &&
-            bIsPostProcess == other.bIsPostProcess &&
+            pipelineStateDesc.bUseVertexInput == other.pipelineStateDesc.bUseVertexInput &&
+            pipelineStateDesc.bDepthTestEnable == other.pipelineStateDesc.bDepthTestEnable &&
+            pipelineStateDesc.bDepthWriteEnable == other.pipelineStateDesc.bDepthWriteEnable &&
+            pipelineStateDesc.depthCompareOp == other.pipelineStateDesc.depthCompareOp &&
+            pipelineStateDesc.cullMode == other.pipelineStateDesc.cullMode &&
             bIsShadowPass == other.bIsShadowPass;
     }
 };
@@ -45,7 +50,7 @@ public:
         vk::RenderPass* renderPass,
         const std::string& shaderName,
         vk::SampleCountFlagBits sampleCount,
-        bool bIsPostProcess,
+        const GraphicsPipelineStateDesc& pipelineStateDesc,
         bool bIsShadowPass);
 private:
     vk::Device* device;
