@@ -248,6 +248,7 @@ When working in this repo:
 - Call out hidden assumptions explicitly in your final response.
 - Prefer concrete fixes over vague architecture advice.
 - If a requested change exposes an implicit convention, document that convention nearby.
+- **Data correctness is guaranteed at the source**: Do not write redundant defensive code (like per-frame `clamp()` or `max()` bounds checking in shaders) if the upstream configuration (e.g., JSON materials, configuration files) is responsible for providing valid data. Trust the data source and keep runtime execution clean.
 
 ## Good First Documentation Follow-Ups
 

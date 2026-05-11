@@ -39,6 +39,77 @@ vec3 fresnelSchlick(float cosTheta, vec3 F0)
     return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
+// 先把法线方向投影到 9 项 SH 基底上，得到当前像素法线看到的低频环境 irradiance。
+// 这里的系数来自 CPU 侧的环境贴图 radiance SH，而不是已经工程化卷积过的 diffuse SH。
+// 所以 shader 里还要补一次 Lambert 漫反射卷积在各阶上的 band 系数：
+//   L0 -> PI
+//   L1 -> 2PI/3
+//   L2 -> PI/4
+// 如果 CPU 侧未来改成直接存工程化后的 C_i，那么这里的 bandWeights 就可以去掉，
+// 最终形式会更接近学习资料里常见的：
+//   L_diffuse = rho / PI * sum( C_i * T_i(n) )
+// 当前之所以保留 bandWeights 在 shader 里，是为了明确区分：
+//   1. CPU 持有的是 radiance SH
+//   2. shader 这里正在把 radiance SH 转成 diffuse irradiance
+vec3 EvaluateIrradianceSH(vec3 normal_WS)
+{
+    vec3 n = normalize(normal_WS);
+    float x = n.x;
+    float y = n.y;
+    float z = n.z;
+
+    float basis[9] = float[](
+        0.282095,
+        0.488603 * y,
+        0.488603 * z,
+        0.488603 * x,
+        1.092548 * x * y,
+        1.092548 * y * z,
+        0.315392 * (3.0 * z * z - 1.0),
+        1.092548 * x * z,
+        0.546274 * (x * x - y * y)
+    );
+    float bandWeights[9] = float[](
+        PI,
+        2.0 * PI / 3.0,
+        2.0 * PI / 3.0,
+        2.0 * PI / 3.0,
+        PI / 4.0,
+        PI / 4.0,
+        PI / 4.0,
+        PI / 4.0,
+        PI / 4.0
+    );
+
+    vec3 irradiance = vec3(0.0);
+    for (int i = 0; i < 9; ++i)
+    {
+        irradiance += uboVP.environmentSH[i].rgb * basis[i] * bandWeights[i];
+    }
+    return max(irradiance, vec3(0.0));
+}
+
+// Diffuse IBL 单独作为间接光的一部分存在，不再混进直接光入口里。
+// 金属表面的漫反射会被压到 0，保持与 PBR 的能量分配一致。
+vec3 CalculateDiffuseIbl(
+    in vec3 normal_WS,
+    in vec3 baseColor,
+    in float metallic)
+{
+    vec3 irradiance = EvaluateIrradianceSH(normal_WS);
+    return irradiance * baseColor * (1.0 - metallic) / PI;
+}
+
+// 间接光总入口。目前只封装 diffuse IBL，后续可继续并入 specular IBL、
+// probe 混合或其他间接光来源，但层级上始终保持在 Indirect Lighting 之下。
+vec3 CalculateIndirectLighting(
+    in vec3 normal_WS,
+    in vec3 baseColor,
+    in float metallic)
+{
+    return CalculateDiffuseIbl(normal_WS, baseColor, metallic);
+}
+
 float DistributionGGX(vec3 N, vec3 H, float roughness)
 {
     float a      = roughness*roughness;
@@ -243,7 +314,7 @@ vec3 CalculateSpotLight(
     return color;
 }
 
-vec3 CalculateLighting(
+vec3 CalculateDirectLighting(
     in vec3 normal_WS,
     in vec3 pixelPos_WS,
     in vec3 cameraPos_WS,
@@ -252,6 +323,7 @@ vec3 CalculateLighting(
     in float metallic
 )
 {
+    // 直接光总入口：只聚合显式光源，不承担任何 IBL 或其他间接光职责。
     vec3 lighting = vec3(0.0);
     // 计算方向光
     int offset = uboLight.directionalLightOffset;

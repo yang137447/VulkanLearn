@@ -12,6 +12,7 @@ struct ShaderBinding
     uint32_t memberCount;
     uint32_t size;
     std::vector<uint32_t> members;
+    std::vector<std::string> memberNames;
     std::string name;
 };
 

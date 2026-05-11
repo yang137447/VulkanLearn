@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -44,6 +45,8 @@ class SceneLoader{
     const std::string& GetEnvironmentHdrPath() const { return environmentHdrPath; }
     uint32_t GetEnvironmentCubeSize() const { return environmentCubeSize; }
     const std::shared_ptr<Texture>& GetEnvironmentCube() const { return environmentCube; }
+    bool HasEnvironmentSH() const { return hasEnvironmentSH; }
+    const std::array<Eigen::Vector4f, 9>& GetEnvironmentSH() const { return environmentSH; }
 private:
     SceneLoader();
     void LoadMeshObject(const nlohmann::basic_json<>& node);
@@ -71,5 +74,7 @@ private:
     std::string environmentHdrPath;
     uint32_t environmentCubeSize = 512;
     std::shared_ptr<Texture> environmentCube;
+    std::array<Eigen::Vector4f, 9> environmentSH{};
+    bool hasEnvironmentSH = false;
     PipelineFactory* pipelineFactory = nullptr;
 };

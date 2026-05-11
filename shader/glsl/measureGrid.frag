@@ -26,12 +26,12 @@ void main()
     float roughness = mix(1.0, 0.5, max(gridMask, subGridMask));
     float metallic = 0.0;
     vec3 normal = normalize(v2fNormal);
-    vec3 V = normalize(uboVP.cameraPosition - v2fPosition);
 
     vec3 finalColor = albedo.rgb;
-    // 计算灯光光照
-    finalColor = CalculateLighting(normal, v2fPosition, uboVP.cameraPosition, albedo.rgb, roughness, metallic);
+    vec3 directLighting = CalculateDirectLighting(normal, v2fPosition, uboVP.cameraPosition, albedo.rgb, roughness, metallic);
+    vec3 indirectLighting = CalculateIndirectLighting(normal, albedo.rgb, metallic);
     float shadow = CalculateShadow(uboVP.lightViewProj, v2fPosition, 0.002f);
-    finalColor *= shadow;
+    directLighting *= shadow;
+    finalColor = directLighting + indirectLighting;
     outColor = vec4(finalColor, albedo.a);
 }

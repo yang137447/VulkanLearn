@@ -1,0 +1,12 @@
+{
+    "name": "PBR Preview Ball Material Instance",
+    "type": "materialInstance",
+    "shader": "pbr",
+    "textures": {
+        "albedoMap": "textures/uv_checker.png"
+    },
+    "parameters": {
+        "tintColor": [1, 1, 1, 1],
+        "pbrFactors": [0.35, 0.0, 1.0, 0.0]
+    }
+}

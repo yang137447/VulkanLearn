@@ -146,6 +146,7 @@ std::vector<ShaderBinding> ShaderReflect::GetShaderBindings()
         {
             const SpvReflectBlockVariable& member = descriptorBinding->block.members[i];
             binding.members.push_back(member.size);
+            binding.memberNames.push_back(member.name ? member.name : "UnknownMember");
         }
         binding.name = descriptorBinding->name ? descriptorBinding->name : "Unknown";
         shaderBindings.push_back(binding);

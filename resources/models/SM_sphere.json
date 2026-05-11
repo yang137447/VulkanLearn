@@ -2,5 +2,5 @@
     "name": "Sphere",
     "type": "mesh",
     "modelDataPath": "models/datas/sphere.obj",
-    "materialInstancePath": "materials/MI_material_preview_ball.json"
+    "materialInstancePath": "materials/MI_pbr_preview_ball.json"
 }

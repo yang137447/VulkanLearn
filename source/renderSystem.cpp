@@ -545,6 +545,7 @@ void RenderSystem::UpdateUBOGlobal(vk::CommandBuffer& commandBuffer)
     ubo.invViewProjection = ubo.viewProjection.inverse();
     ubo.lightViewProj = lightViewProj;
     ubo.cameraPosition = sceneLoader.GetCamera()->GetPosition();
+    ubo.environmentSH = sceneLoader.GetEnvironmentSH();
 
     //std::memcpy(uboGlobal.buffersMapped[swapChainImageIndex], &ubo, sizeof(ubo));
     commandBuffer.updateBuffer(uboGlobal.buffers[swapChainImageIndex], 0, sizeof(ubo), &ubo);
@@ -740,6 +741,7 @@ void RenderSystem::UpdateUBOGlobalForShadow(vk::CommandBuffer& commandBuffer, ui
     ubo.invViewProjection = ubo.viewProjection.inverse();
     lightViewProj = ubo.projection * ubo.view;
     ubo.lightViewProj = lightViewProj;
+    ubo.environmentSH = sceneLoader.GetEnvironmentSH();
     
     {
         Eigen::Matrix3f rotT = ubo.view.block<3, 3>(0, 0);
@@ -1006,34 +1008,66 @@ void RenderSystem::UpdateUBOMaterialInstance(const std::shared_ptr<MaterialInsta
 {
     PROFILE_FUNCTION();
     const auto& parameters = materialInstance->GetParameters();
+    
+    auto baseMaterial = materialInstance->GetBaseMaterial().lock();
+    if (!baseMaterial) return;
+
+    // 查找 MaterialSetIndex 对应的 binding 0 的内存布局信息
+    const auto& bindings = baseMaterial->GetRenderPipeline()->GetShaderBindings();
+    auto it = std::find_if(bindings.begin(), bindings.end(), [](const ShaderBinding& b) {
+        return b.set == MaterialSetIndex && b.binding == 0 && b.type == vk::DescriptorType::eUniformBuffer;
+    });
+
+    if (it == bindings.end()) return; // 该材质没有 UBO 参数
+    const ShaderBinding& uboBinding = *it;
+
     uint32_t offset = 0;
-    for(auto& [name, parameter] : parameters)
+    // 严格按照 Shader 反射提取出来的 member 顺序写入内存
+    for (const auto& memberName : uboBinding.memberNames)
     {
+        auto paramIt = parameters.find(memberName);
+        if (paramIt == parameters.end())
+        {
+            // 材质实例没配这个参数，但由于我们在反射的循环里，依然需要移动 offset
+            // 可以通过反射的 members 大小来移动
+            // 这里为了简单，我们假设如果 JSON 里不配，直接根据反射里的 member size 填 0 或者跳过
+            // 找到对应 memberName 在 binding 里的索引
+            auto memberIndex = std::distance(uboBinding.memberNames.begin(), std::find(uboBinding.memberNames.begin(), uboBinding.memberNames.end(), memberName));
+            if (memberIndex < uboBinding.members.size())
+            {
+                offset += uboBinding.members[memberIndex];
+            }
+            continue;
+        }
+
+        const auto& parameter = paramIt->second;
         if(parameter.type == ParamType::Float)
         {
-            const auto& value = materialInstance->GetParameter<float>(name);
+            const auto& value = materialInstance->GetParameter<float>(memberName);
             uint8_t* uboData = static_cast<uint8_t*>(materialInstance->GetUboMaterialInstanceMapped()[swapChainImageIndex]) + offset;
             std::memcpy(uboData, &value, parameter.size);
             offset += parameter.size;
         }
         else if(parameter.type == ParamType::Vec2)
         {
-            const auto& value = materialInstance->GetParameter<Eigen::Vector2f>(name);
+            const auto& value = materialInstance->GetParameter<Eigen::Vector2f>(memberName);
             uint8_t* uboData = static_cast<uint8_t*>(materialInstance->GetUboMaterialInstanceMapped()[swapChainImageIndex]) + offset;
             std::memcpy(uboData, &value, parameter.size);
             offset += parameter.size;
         }
         else if(parameter.type == ParamType::Vec3)
         {
-            const auto& value = materialInstance->GetParameter<Eigen::Vector3f>(name);
+            const auto& value = materialInstance->GetParameter<Eigen::Vector3f>(memberName);
             uint8_t* uboData = static_cast<uint8_t*>(materialInstance->GetUboMaterialInstanceMapped()[swapChainImageIndex]) + offset;
             std::memcpy(uboData, &value, parameter.size);
+            offset += parameter.size;
         }
         else if(parameter.type == ParamType::Vec4)
         {
-            const auto& value = materialInstance->GetParameter<Eigen::Vector4f>(name);
+            const auto& value = materialInstance->GetParameter<Eigen::Vector4f>(memberName);
             uint8_t* uboData = static_cast<uint8_t*>(materialInstance->GetUboMaterialInstanceMapped()[swapChainImageIndex]) + offset;
             std::memcpy(uboData, &value, parameter.size);
+            offset += parameter.size;
         }
     }
 }

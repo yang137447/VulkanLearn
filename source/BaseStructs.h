@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <optional>
 #include <vulkan/vulkan.hpp>
 #include <Eigen/Dense>
@@ -30,6 +31,7 @@ struct alignas(16) UBOGlobal
     Eigen::Matrix4f lightViewProj;
     alignas(16) Eigen::Vector3f cameraPosition;
     float pad0 = 0.0f;
+    std::array<Eigen::Vector4f, 9> environmentSH{};
 };
 
 struct alignas(16) UBOModel

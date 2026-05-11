@@ -13,6 +13,7 @@
 #include "materialInstance.h"
 #include "sceneObject.h"
 #include "pipeline/environmentCubemapGenerator.h"
+#include "pipeline/environmentSHGenerator.h"
 #include "pipeline/graphicsPipeline.h"
 #include "pipeline/pipelineFactory.h"
 #include "shaderReflect.h"
@@ -65,6 +66,8 @@ void SceneLoader::LoadScene(const std::string& filename)
     environmentHdrPath.clear();
     environmentCubeSize = 512;
     environmentCube.reset();
+    environmentSH.fill(Eigen::Vector4f::Zero());
+    hasEnvironmentSH = false;
 
     // 加载后处理材质
     LoadPassMaterial();
@@ -247,6 +250,12 @@ void SceneLoader::LoadEnvironmentObject(const nlohmann::basic_json<>& node)
     // environment 节点只负责声明输入 HDR/EXR 路径和 cubemap 输出尺寸。
     environmentHdrPath = node.value("hdrPath", std::string());
     environmentCubeSize = node.value("cubeSize", 512u);
+    if (!environmentHdrPath.empty())
+    {
+        environmentSH = EnvironmentSHGenerator::Generate(environmentHdrPath);
+        hasEnvironmentSH = true;
+    }
+
     if (pipelineFactory != nullptr && !environmentHdrPath.empty())
     {
         // 环境贴图预处理跟场景资源绑定，读取到 environment 后立即生成 cubemap。
