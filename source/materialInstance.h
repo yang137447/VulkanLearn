@@ -106,7 +106,7 @@ public:
 
     inline std::vector<void*>& GetUboMaterialInstanceMapped(){ return uboMaterialInstance.buffersMapped; }
     std::vector<vk::DescriptorBufferInfo>& GetUboMaterialInstanceInfo(){ return uboMaterialInstance.bufferInfos; }
-    const vk::DescriptorImageInfo& GetTextureDescriptorInfo(const std::string& textureName) const { return textures.at(textureName)->GetDescriptorInfo(); }
+    const vk::DescriptorImageInfo& GetTextureDescriptorInfo(const std::string& textureName) const;
 
     void RenderInitialize();
 private:

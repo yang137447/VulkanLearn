@@ -71,6 +71,11 @@ bool MaterialInstance::HasTexture(const std::string& textureName) const
     return textures.find(textureName) != textures.end();
 }
 
+const vk::DescriptorImageInfo& MaterialInstance::GetTextureDescriptorInfo(const std::string& textureName) const
+{
+    return textures.at(textureName)->GetDescriptorInfo();
+}
+
 void MaterialInstance::RemoveTexture(const std::string& textureName)
 {
     textures.erase(textureName);
