@@ -158,22 +158,4 @@ void MaterialInstance::SetupDescriptors()
                 .setRange(ubo->bufferSize);
         }
     }
-    // 设置image信息
-    for(const auto& binding: baseMaterial.lock()->GetRenderPipeline()->GetShaderBindings())
-    {
-        if(binding.set != MaterialSetIndex && binding.type != vk::DescriptorType::eCombinedImageSampler)
-        {
-            continue;
-        }
-        const auto tex = GetTexture(binding.name);
-        if(tex == nullptr)
-        {
-            continue;
-            std::cerr << "Texture not found: " << binding.name << std::endl;
-        }
-        imageInfos[binding.name]
-            .setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
-            .setImageView(tex->getImageView())
-            .setSampler(tex->getSampler());
-    }
 }

@@ -1,0 +1,129 @@
+#version 450
+#include "../common/defines.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform samplerCube inEnvironmentCube;
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2DArray outPrefilteredEnvironmentCube;
+layout(set = 0, binding = 2) uniform PrefilterParams
+{
+    vec4 params;
+} uboPrefilter;
+
+vec3 GetDirectionFromFace(ivec2 pixelCoord, ivec2 faceSize, int faceIndex)
+{
+    vec2 uv = (vec2(pixelCoord) + vec2(0.5)) / vec2(faceSize);
+    uv = uv * 2.0 - 1.0;
+    uv.y = -uv.y;
+
+    vec3 dir;
+    switch (faceIndex)
+    {
+        case 0: dir = vec3( 1.0, uv.y, -uv.x); break;
+        case 1: dir = vec3(-1.0, uv.y,  uv.x); break;
+        case 2: dir = vec3( uv.x, 1.0, -uv.y); break;
+        case 3: dir = vec3( uv.x,-1.0,  uv.y); break;
+        case 4: dir = vec3( uv.x, uv.y,  1.0); break;
+        case 5: dir = vec3(-uv.x, uv.y, -1.0); break;
+        default: dir = vec3(0.0, 0.0, 1.0); break;
+    }
+    return normalize(dir);
+}
+
+float RadicalInverseVdC(uint bits)
+{
+    bits = (bits << 16u) | (bits >> 16u);
+    bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
+    bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
+    bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
+    bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
+    return float(bits) * 2.3283064365386963e-10;
+}
+
+vec2 Hammersley(uint i, uint n)
+{
+    return vec2(float(i) / float(n), RadicalInverseVdC(i));
+}
+
+vec3 ImportanceSampleGGX(vec2 xi, vec3 normalWS, float roughness)
+{
+    float a = roughness * roughness;
+    float phi = 2.0 * PI * xi.x;
+    float cosTheta = sqrt((1.0 - xi.y) / (1.0 + (a * a - 1.0) * xi.y));
+    float sinTheta = sqrt(max(1.0 - cosTheta * cosTheta, 0.0));
+
+    vec3 halfVectorTS;
+    halfVectorTS.x = cos(phi) * sinTheta;
+    halfVectorTS.y = sin(phi) * sinTheta;
+    halfVectorTS.z = cosTheta;
+
+    vec3 up = abs(normalWS.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+    vec3 tangent = normalize(cross(up, normalWS));
+    vec3 bitangent = cross(normalWS, tangent);
+
+    vec3 halfVectorWS = tangent * halfVectorTS.x + bitangent * halfVectorTS.y + normalWS * halfVectorTS.z;
+    return normalize(halfVectorWS);
+}
+
+float DistributionGGX(vec3 N, vec3 H, float roughness)
+{
+    float a = roughness * roughness;
+    float a2 = a * a;
+    float NdotH = max(dot(N, H), 0.0);
+    float NdotH2 = NdotH * NdotH;
+
+    float num = a2;
+    float denom = (NdotH2 * (a2 - 1.0) + 1.0);
+    denom = PI * denom * denom;
+    return num / max(denom, 1e-4);
+}
+
+void main()
+{
+    ivec2 pixelCoord = ivec2(gl_GlobalInvocationID.xy);
+    int faceIndex = int(gl_GlobalInvocationID.z);
+    ivec3 outputSize = imageSize(outPrefilteredEnvironmentCube);
+
+    if (pixelCoord.x >= outputSize.x || pixelCoord.y >= outputSize.y || faceIndex >= outputSize.z)
+    {
+        return;
+    }
+
+    float roughness = uboPrefilter.params.x;
+    uint sampleCount = uint(uboPrefilter.params.y);
+
+    vec3 normalWS = GetDirectionFromFace(pixelCoord, outputSize.xy, faceIndex);
+    vec3 reflectionWS = normalWS;
+    vec3 viewWS = reflectionWS;
+
+    vec3 prefilteredColor = vec3(0.0);
+    float totalWeight = 0.0;
+    for (uint i = 0u; i < sampleCount; ++i)
+    {
+        vec2 xi = Hammersley(i, sampleCount);
+        vec3 halfVectorWS = ImportanceSampleGGX(xi, normalWS, roughness);
+        vec3 lightWS = normalize(2.0 * dot(viewWS, halfVectorWS) * halfVectorWS - viewWS);
+
+        float nDotL = max(dot(normalWS, lightWS), 0.0);
+        if (nDotL > 0.0)
+        {
+            float nDotH = max(dot(normalWS, halfVectorWS), 0.0);
+            float hDotV = max(dot(halfVectorWS, viewWS), 0.0);
+            float D = DistributionGGX(normalWS, halfVectorWS, roughness);
+            float pdf = max((D * nDotH / max(4.0 * hDotV, 1e-4)) + 1e-4, 1e-4);
+
+            float resolution = float(textureSize(inEnvironmentCube, 0).x);
+            float saTexel = 4.0 * PI / (6.0 * resolution * resolution);
+            float saSample = 1.0 / (float(sampleCount) * pdf + 1e-4);
+            float sourceMip = roughness <= 0.0 ? 0.0 : 0.5 * log2(saSample / saTexel);
+            float maxSourceMip = float(max(textureQueryLevels(inEnvironmentCube) - 1, 0));
+            sourceMip = clamp(sourceMip, 0.0, maxSourceMip);
+
+            prefilteredColor += textureLod(inEnvironmentCube, lightWS, sourceMip).rgb * nDotL;
+            totalWeight += nDotL;
+        }
+    }
+
+    vec3 color = totalWeight > 0.0 ? prefilteredColor / totalWeight : vec3(0.0);
+    imageStore(outPrefilteredEnvironmentCube, ivec3(pixelCoord, faceIndex), vec4(color, 1.0));
+}

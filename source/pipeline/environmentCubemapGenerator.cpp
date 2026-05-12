@@ -9,6 +9,7 @@
 #include "pipelineFactory.h"
 
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <stdexcept>
@@ -104,6 +105,101 @@ namespace
 
         CommonFunction::EndSingleTimeCommands(device, commandBuffer, graphicsQueue, commandPool);
     }
+
+    void GenerateCubeMipmaps(
+        vk::CommandBuffer commandBuffer,
+        vk::Image cubeImage,
+        uint32_t cubeSize,
+        uint32_t mipLevels)
+    {
+        if (mipLevels <= 1)
+        {
+            return;
+        }
+
+        int32_t mipWidth = static_cast<int32_t>(cubeSize);
+        int32_t mipHeight = static_cast<int32_t>(cubeSize);
+        for (uint32_t mipLevel = 1; mipLevel < mipLevels; ++mipLevel)
+        {
+            vk::ImageMemoryBarrier dstToTransferBarrier;
+            dstToTransferBarrier
+                .setOldLayout(vk::ImageLayout::eUndefined)
+                .setNewLayout(vk::ImageLayout::eTransferDstOptimal)
+                .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                .setImage(cubeImage)
+                .setSubresourceRange(vk::ImageSubresourceRange()
+                    .setAspectMask(vk::ImageAspectFlagBits::eColor)
+                    .setBaseMipLevel(mipLevel)
+                    .setLevelCount(1)
+                    .setBaseArrayLayer(0)
+                    .setLayerCount(6))
+                .setSrcAccessMask(vk::AccessFlagBits::eNone)
+                .setDstAccessMask(vk::AccessFlagBits::eTransferWrite);
+            commandBuffer.pipelineBarrier(
+                vk::PipelineStageFlagBits::eTopOfPipe,
+                vk::PipelineStageFlagBits::eTransfer,
+                vk::DependencyFlags(),
+                nullptr,
+                nullptr,
+                dstToTransferBarrier);
+
+            vk::ImageBlit blit;
+            blit
+                .setSrcOffsets({
+                    vk::Offset3D{ 0, 0, 0 },
+                    vk::Offset3D{ mipWidth, mipHeight, 1 }
+                })
+                .setSrcSubresource(vk::ImageSubresourceLayers()
+                    .setAspectMask(vk::ImageAspectFlagBits::eColor)
+                    .setMipLevel(mipLevel - 1)
+                    .setBaseArrayLayer(0)
+                    .setLayerCount(6))
+                .setDstOffsets({
+                    vk::Offset3D{ 0, 0, 0 },
+                    vk::Offset3D{ std::max(mipWidth / 2, 1), std::max(mipHeight / 2, 1), 1 }
+                })
+                .setDstSubresource(vk::ImageSubresourceLayers()
+                    .setAspectMask(vk::ImageAspectFlagBits::eColor)
+                    .setMipLevel(mipLevel)
+                    .setBaseArrayLayer(0)
+                    .setLayerCount(6));
+            commandBuffer.blitImage(
+                cubeImage,
+                vk::ImageLayout::eTransferSrcOptimal,
+                cubeImage,
+                vk::ImageLayout::eTransferDstOptimal,
+                1,
+                &blit,
+                vk::Filter::eLinear);
+
+            vk::ImageMemoryBarrier dstToSrcBarrier;
+            dstToSrcBarrier
+                .setOldLayout(vk::ImageLayout::eTransferDstOptimal)
+                .setNewLayout(vk::ImageLayout::eTransferSrcOptimal)
+                .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                .setImage(cubeImage)
+                .setSubresourceRange(vk::ImageSubresourceRange()
+                    .setAspectMask(vk::ImageAspectFlagBits::eColor)
+                    .setBaseMipLevel(mipLevel)
+                    .setLevelCount(1)
+                    .setBaseArrayLayer(0)
+                    .setLayerCount(6))
+                .setSrcAccessMask(vk::AccessFlagBits::eTransferWrite)
+                .setDstAccessMask(vk::AccessFlagBits::eTransferRead);
+            commandBuffer.pipelineBarrier(
+                vk::PipelineStageFlagBits::eTransfer,
+                vk::PipelineStageFlagBits::eTransfer,
+                vk::DependencyFlags(),
+                nullptr,
+                nullptr,
+                dstToSrcBarrier);
+
+            mipWidth = std::max(mipWidth / 2, 1);
+            mipHeight = std::max(mipHeight / 2, 1);
+        }
+    }
 }
 
 std::shared_ptr<Texture> EnvironmentCubemapGenerator::Generate(const std::string& hdrPath, uint32_t cubeSize, PipelineFactory& pipelineFactory)
@@ -158,10 +254,13 @@ std::shared_ptr<Texture> EnvironmentCubemapGenerator::Generate(const std::string
         "EnvironmentHdrView");
     vk::Sampler hdrSampler = CreateHdrSampler(device);
 
+    const uint32_t cubeMipLevels = static_cast<uint32_t>(std::floor(std::log2(static_cast<float>(cubeSize)))) + 1;
+
     // 输出图像实际就是 6 layer 的 2D image，设置 cube-compatible 方便后续直接当 cubemap 继续使用。
     vk::Format cubeFormat = vk::Format::eR16G16B16A16Sfloat;
     vk::ImageUsageFlags cubeUsage =
         vk::ImageUsageFlagBits::eStorage |
+        vk::ImageUsageFlagBits::eTransferDst |
         vk::ImageUsageFlagBits::eTransferSrc |
         vk::ImageUsageFlagBits::eSampled;
     vk::ImageTiling cubeTiling = vk::ImageTiling::eOptimal;
@@ -172,7 +271,7 @@ std::shared_ptr<Texture> EnvironmentCubemapGenerator::Generate(const std::string
         .setFlags(vk::ImageCreateFlagBits::eCubeCompatible)
         .setImageType(vk::ImageType::e2D)
         .setExtent(vk::Extent3D{ cubeSize, cubeSize, 1 })
-        .setMipLevels(1)
+        .setMipLevels(cubeMipLevels)
         .setArrayLayers(6)
         .setFormat(cubeFormat)
         .setTiling(cubeTiling)
@@ -244,9 +343,9 @@ std::shared_ptr<Texture> EnvironmentCubemapGenerator::Generate(const std::string
 
     vk::CommandBuffer commandBuffer = CommonFunction::BeginSingleTimeCommands(device, commandPool);
 
-    // 输出 cubemap 先切到 General，允许 compute shader 直接 imageStore 写入。
-    vk::ImageMemoryBarrier cubeToGeneralBarrier;
-    cubeToGeneralBarrier
+    // 只有 mip0 由 compute 直接写入，后续 mip 由 blit 生成。
+    vk::ImageMemoryBarrier cubeMip0ToGeneralBarrier;
+    cubeMip0ToGeneralBarrier
         .setOldLayout(vk::ImageLayout::eUndefined)
         .setNewLayout(vk::ImageLayout::eGeneral)
         .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
@@ -266,7 +365,7 @@ std::shared_ptr<Texture> EnvironmentCubemapGenerator::Generate(const std::string
         vk::DependencyFlags(),
         nullptr,
         nullptr,
-        cubeToGeneralBarrier);
+        cubeMip0ToGeneralBarrier);
 
     computePipeline->Bind(commandBuffer);
     commandBuffer.bindDescriptorSets(
@@ -278,37 +377,40 @@ std::shared_ptr<Texture> EnvironmentCubemapGenerator::Generate(const std::string
     // z 维度固定为 6，对应 cubemap 的 6 个面。
     computePipeline->Dispatch(commandBuffer, (cubeSize + 7) / 8, (cubeSize + 7) / 8, 6);
 
+    vk::ImageMemoryBarrier cubeMip0ToTransferSrcBarrier;
+    cubeMip0ToTransferSrcBarrier
+        .setOldLayout(vk::ImageLayout::eGeneral)
+        .setNewLayout(vk::ImageLayout::eTransferSrcOptimal)
+        .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+        .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+        .setImage(cubeImage)
+        .setSubresourceRange(vk::ImageSubresourceRange()
+            .setAspectMask(vk::ImageAspectFlagBits::eColor)
+            .setBaseMipLevel(0)
+            .setLevelCount(1)
+            .setBaseArrayLayer(0)
+            .setLayerCount(6))
+        .setSrcAccessMask(vk::AccessFlagBits::eShaderWrite)
+        .setDstAccessMask(vk::AccessFlagBits::eTransferRead);
+    commandBuffer.pipelineBarrier(
+        vk::PipelineStageFlagBits::eComputeShader,
+        vk::PipelineStageFlagBits::eTransfer,
+        vk::DependencyFlags(),
+        nullptr,
+        nullptr,
+        cubeMip0ToTransferSrcBarrier);
+
+    GenerateCubeMipmaps(commandBuffer, cubeImage, cubeSize, cubeMipLevels);
+
     if constexpr (kEnableDebugCubemapDump)
     {
-        // Debug 模式下切到 TransferSrc，便于逐面导出 EXR 做朝向校验。
-        vk::ImageMemoryBarrier cubeToTransferBarrier;
-        cubeToTransferBarrier
-            .setOldLayout(vk::ImageLayout::eGeneral)
-            .setNewLayout(vk::ImageLayout::eTransferSrcOptimal)
-            .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
-            .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
-            .setImage(cubeImage)
-            .setSubresourceRange(vk::ImageSubresourceRange()
-                .setAspectMask(vk::ImageAspectFlagBits::eColor)
-                .setBaseMipLevel(0)
-                .setLevelCount(1)
-                .setBaseArrayLayer(0)
-                .setLayerCount(6))
-            .setSrcAccessMask(vk::AccessFlagBits::eShaderWrite)
-            .setDstAccessMask(vk::AccessFlagBits::eTransferRead);
-        commandBuffer.pipelineBarrier(
-            vk::PipelineStageFlagBits::eComputeShader,
-            vk::PipelineStageFlagBits::eTransfer,
-            vk::DependencyFlags(),
-            nullptr,
-            nullptr,
-            cubeToTransferBarrier);
+        // Debug dump 继续直接读取 mip0，当前所有 mip 已处于 TransferSrcOptimal。
     }
     else
     {
         vk::ImageMemoryBarrier cubeToSampleBarrier;
         cubeToSampleBarrier
-            .setOldLayout(vk::ImageLayout::eGeneral)
+            .setOldLayout(vk::ImageLayout::eTransferSrcOptimal)
             .setNewLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
             .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
             .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
@@ -316,13 +418,13 @@ std::shared_ptr<Texture> EnvironmentCubemapGenerator::Generate(const std::string
             .setSubresourceRange(vk::ImageSubresourceRange()
                 .setAspectMask(vk::ImageAspectFlagBits::eColor)
                 .setBaseMipLevel(0)
-                .setLevelCount(1)
+                .setLevelCount(cubeMipLevels)
                 .setBaseArrayLayer(0)
                 .setLayerCount(6))
-            .setSrcAccessMask(vk::AccessFlagBits::eShaderWrite)
+            .setSrcAccessMask(vk::AccessFlagBits::eTransferRead)
             .setDstAccessMask(vk::AccessFlagBits::eShaderRead);
         commandBuffer.pipelineBarrier(
-            vk::PipelineStageFlagBits::eComputeShader,
+            vk::PipelineStageFlagBits::eTransfer,
             vk::PipelineStageFlagBits::eFragmentShader,
             vk::DependencyFlags(),
             nullptr,
@@ -396,7 +498,7 @@ std::shared_ptr<Texture> EnvironmentCubemapGenerator::Generate(const std::string
             .setSubresourceRange(vk::ImageSubresourceRange()
                 .setAspectMask(vk::ImageAspectFlagBits::eColor)
                 .setBaseMipLevel(0)
-                .setLevelCount(1)
+                .setLevelCount(cubeMipLevels)
                 .setBaseArrayLayer(0)
                 .setLayerCount(6))
             .setSrcAccessMask(vk::AccessFlagBits::eTransferRead)
@@ -418,8 +520,8 @@ std::shared_ptr<Texture> EnvironmentCubemapGenerator::Generate(const std::string
     device.destroyImage(hdrImage);
     device.freeMemory(hdrImageMemory);
 
-    vk::ImageView cubeSampleView = CommonFunction::CreateCubeImageView(device, cubeImage, 1, cubeFormat, "EnvironmentCubeView");
-    vk::Sampler cubeSampler = CommonFunction::CreateCubeSampler(device, "EnvironmentCubeSampler");
+    vk::ImageView cubeSampleView = CommonFunction::CreateCubeImageView(device, cubeImage, cubeMipLevels, cubeFormat, "EnvironmentCubeView");
+    vk::Sampler cubeSampler = CommonFunction::CreateCubeSampler(device, static_cast<float>(cubeMipLevels - 1), "EnvironmentCubeSampler");
 
-    return std::make_shared<Texture>(cubeImage, cubeImageMemory, cubeSampleView, cubeSampler, 1, cubeFormat);
+    return std::make_shared<Texture>(cubeImage, cubeImageMemory, cubeSampleView, cubeSampler, cubeMipLevels, cubeFormat);
 }

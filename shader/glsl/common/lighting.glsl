@@ -18,6 +18,9 @@ layout(std430, set = 0, binding = 1) readonly buffer UBOLight{
     Light lights[];
 } uboLight;
 
+layout(set = 0, binding = 2) uniform samplerCube prefilteredEnvironmentCube;
+layout(set = 0, binding = 3) uniform sampler2D brdfLut;
+
 // 绑定 0: 输入的ShadowMap
 layout (set = 3, binding = 0) uniform sampler2DShadow shadowMap;
 
@@ -37,6 +40,12 @@ float CalculateShadow(mat4 lightViewProj, vec3 worldPos, float bias)
 vec3 fresnelSchlick(float cosTheta, vec3 F0)
 {
     return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness)
+{
+    vec3 oneMinusRoughness = vec3(1.0 - roughness);
+    return F0 + (max(oneMinusRoughness, F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
 // 先把法线方向投影到 9 项 SH 基底上，得到当前像素法线看到的低频环境 irradiance。
@@ -98,6 +107,43 @@ vec3 CalculateDiffuseIbl(
 {
     vec3 irradiance = EvaluateIrradianceSH(normal_WS);
     return irradiance * baseColor * (1.0 - metallic) / PI;
+}
+
+vec3 CalculateSpecularIbl(
+    in vec3 normal_WS,
+    in vec3 viewDir_WS,
+    in vec3 baseColor,
+    in float roughness,
+    in float metallic)
+{
+    vec3 N = normalize(normal_WS);
+    vec3 V = normalize(viewDir_WS);
+    vec3 R = reflect(-V, N);
+
+    float NdotV = max(dot(N, V), 0.0);
+    vec3 F0 = mix(vec3(0.04), baseColor, metallic);
+
+    // Epic / UE4 在 split-sum IBL 上更接近下面这条标准组合：
+    //   specularIBL ~= prefilteredEnv * (F0 * A + B)
+    // 也就是材质的 F0 不进 LUT，而是在运行时再乘回去。
+    // 常见教程里那种：
+    //   prefilteredEnv * (F * A + B)
+    // 其中 F = fresnelSchlickRoughness(NdotV, F0, roughness)
+    // 更像后续流传很广的工程化写法，不是当前这份 A/B LUT 定义下最标准的 Epic split-sum 表达。
+
+    // 当前严格遵循 split-sum approximation 的标准组合：
+    //   specularIBL ~= prefilteredEnv(R, roughness) * (F0 * A + B)
+    // 其中 A/B 来自 BRDF LUT 的预积分结果，F0 在运行时按材质计算。
+    // 这种写法与 brfdLut.comp 中的积分定义一一对应。
+    //
+    // 常见的工程写法也会使用：
+    //   prefilteredEnv * (F * A + B)
+    // 其中 F = fresnelSchlickRoughness(NdotV, F0, roughness)
+    // 它通常是为了做更强的视觉修正，而不是严格来自当前这份 LUT 推导。
+    float maxLod = float(max(textureQueryLevels(prefilteredEnvironmentCube) - 1, 0));
+    vec3 prefilteredColor = textureLod(prefilteredEnvironmentCube, R, roughness * maxLod).rgb;
+    vec2 brdfAB = texture(brdfLut, vec2(NdotV, roughness)).rg;
+    return prefilteredColor * (F0 * brdfAB.x + brdfAB.y);
 }
 
 // 间接光总入口。目前只封装 diffuse IBL，后续可继续并入 specular IBL、

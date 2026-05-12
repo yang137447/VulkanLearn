@@ -3,7 +3,6 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
-#include <Eigen/Dense>
 #include <vulkan/vulkan.hpp>
 #include "baseStructs.h"
 #include <Eigen/Dense>
@@ -107,7 +106,7 @@ public:
 
     inline std::vector<void*>& GetUboMaterialInstanceMapped(){ return uboMaterialInstance.buffersMapped; }
     std::vector<vk::DescriptorBufferInfo>& GetUboMaterialInstanceInfo(){ return uboMaterialInstance.bufferInfos; }
-    vk::DescriptorImageInfo& GetUboMaterialInstanceImageInfo(const std::string& textureName){ return imageInfos.at(textureName); }
+    const vk::DescriptorImageInfo& GetTextureDescriptorInfo(const std::string& textureName) const { return textures.at(textureName)->GetDescriptorInfo(); }
 
     void RenderInitialize();
 private:
@@ -124,7 +123,5 @@ private:
     std::unordered_map<std::string, Eigen::Vector3f> vec3Parameters;
     std::unordered_map<std::string, Eigen::Vector4f> vec4Parameters;
     std::unordered_map<std::string, std::shared_ptr<Texture>> textures;
-
-    std::unordered_map<std::string, vk::DescriptorImageInfo> imageInfos;
     Buffer uboMaterialInstance; 
 };

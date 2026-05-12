@@ -13,7 +13,9 @@
 #include "materialInstance.h"
 #include "sceneObject.h"
 #include "pipeline/environmentCubemapGenerator.h"
+#include "pipeline/environmentPrefilterGenerator.h"
 #include "pipeline/environmentSHGenerator.h"
+#include "pipeline/brdfLutGenerator.h"
 #include "pipeline/graphicsPipeline.h"
 #include "pipeline/pipelineFactory.h"
 #include "shaderReflect.h"
@@ -51,6 +53,28 @@ SceneLoader::SceneLoader()
 {
 }
 
+void SceneLoader::SetPipelineFactory(PipelineFactory* pipelineFactory)
+{
+    this->pipelineFactory = pipelineFactory;
+}
+
+const std::shared_ptr<Texture>* SceneLoader::GetGlobalTextureByBindingName(std::string_view bindingName) const
+{
+    if (bindingName == "environmentCube")
+    {
+        return &environmentCube;
+    }
+    if (bindingName == "prefilteredEnvironmentCube")
+    {
+        return &environmentPrefilteredCube;
+    }
+    if (bindingName == "brdfLut")
+    {
+        return &brdfLut;
+    }
+    return nullptr;
+}
+
 void SceneLoader::LoadScene(const std::string& filename)
 {
     // 读取json场景文件
@@ -66,8 +90,11 @@ void SceneLoader::LoadScene(const std::string& filename)
     environmentHdrPath.clear();
     environmentCubeSize = 512;
     environmentCube.reset();
+    environmentPrefilteredCube.reset();
     environmentSH.fill(Eigen::Vector4f::Zero());
     hasEnvironmentSH = false;
+    //brdfLut生成
+    brdfLut = BrdfLutGenerator::Generate(*pipelineFactory);
 
     // 加载后处理材质
     LoadPassMaterial();
@@ -260,6 +287,10 @@ void SceneLoader::LoadEnvironmentObject(const nlohmann::basic_json<>& node)
     {
         // 环境贴图预处理跟场景资源绑定，读取到 environment 后立即生成 cubemap。
         environmentCube = EnvironmentCubemapGenerator::Generate(environmentHdrPath, environmentCubeSize, *pipelineFactory);
+        if (environmentCube != nullptr)
+        {
+            environmentPrefilteredCube = EnvironmentPrefilterGenerator::Generate(*environmentCube, environmentCubeSize, *pipelineFactory);
+        }
     }
 }
 
@@ -329,31 +360,46 @@ std::shared_ptr<MaterialInstance> SceneLoader::LoadMaterialInstance(const std::s
         );
     }
     // 加载材质参数
-    const auto& shaderTextures = materialInstanceJson["textures"];
-    uint32_t textureCount = shaderTextures.size();
+    const auto& shaderTextures = materialInstanceJson.contains("textures")
+        ? materialInstanceJson["textures"]
+        : nlohmann::json::object();
     const auto& shaderParameters = materialInstanceJson["parameters"];
     uint32_t parameterCount = shaderParameters.size();
     // 根据shaderbinding校验参数和贴图
     auto& shaderBindings = material->GetRenderPipeline()->GetShaderBindings();
-        // 检查贴图数量是否匹配
-    uint32_t expectedTextureCount = 0;
+    // 检查材质贴图是否覆盖当前 shader 反射实际需要的 MaterialSet 采样器。
+    // 这里不再强制“数量完全相等”，避免调试 shader 时因输出裁剪导致未参与最终结果的贴图被优化掉，
+    // 进而误伤材质实例校验。运行时真正绑定哪些资源，仍以后续反射结果为准。
+    std::vector<std::string> expectedTextureNames;
     for(const auto& binding : shaderBindings)
     { 
-        if(binding.set == 1 && binding.type == vk::DescriptorType::eCombinedImageSampler)
+        if(binding.set == MaterialSetIndex && binding.type == vk::DescriptorType::eCombinedImageSampler)
         {
-            expectedTextureCount++;
+            expectedTextureNames.push_back(binding.name);
         }
     }
-    if(expectedTextureCount != textureCount)
+    bool texturesMatch = shaderTextures.is_object();
+    if(texturesMatch)
     {
-        throw std::runtime_error(std::string("Texture count mismatch in material instance: ") + materialInstancePath.data());
+        for(const auto& textureName : expectedTextureNames)
+        {
+            if(!shaderTextures.contains(textureName))
+            {
+                texturesMatch = false;
+                break;
+            }
+        }
+    }
+    if(!texturesMatch)
+    {
+        throw std::runtime_error(std::string("Missing required material textures in material instance: ") + materialInstancePath.data());
     }
         // 检查参数类型是否匹配set1,binding0
     bool validParemeters = false;
     bool hasMaterialUbo = false;
     for(const auto& binding : shaderBindings)
     {
-        if(binding.set != 1 || binding.binding != 0)
+        if(binding.set != MaterialSetIndex || binding.binding != 0)
         {
             continue;
         }

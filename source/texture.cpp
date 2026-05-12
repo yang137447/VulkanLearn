@@ -26,6 +26,10 @@ Texture::Texture(const std::string& texturePath)
     auto& vulkanManager = VulkanManager::GetInstance();
     imageView = CommonFunction::Create2DImageView(vulkanManager.GetDevice(), image, mipLevels, format, vk::ImageAspectFlagBits::eColor, "TextureView: " + CommonFunction::Path(texturePath));
     sampler = CommonFunction::Create2DSampler(vulkanManager.GetDevice(), vulkanManager.GetPhysicalDevice(), "TextureSampler: " + CommonFunction::Path(texturePath));
+    descriptorInfo
+        .setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+        .setImageView(imageView)
+        .setSampler(sampler);
 }
 
 Texture::Texture(vk::Image image, vk::DeviceMemory imageMemory, vk::ImageView imageView, vk::Sampler sampler, uint32_t mipLevels, vk::Format format)
@@ -36,6 +40,10 @@ Texture::Texture(vk::Image image, vk::DeviceMemory imageMemory, vk::ImageView im
     this->sampler = sampler;
     this->mipLevels = mipLevels;
     this->format = format;
+    descriptorInfo
+        .setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+        .setImageView(imageView)
+        .setSampler(sampler);
 }
 
 Texture::~Texture()

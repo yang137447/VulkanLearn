@@ -765,7 +765,7 @@ namespace CommonFunction
         return CreateSamplerBase(device, samplerInfo, name);
     }
 
-    inline vk::Sampler CreateCubeSampler(vk::Device& device, const std::string& name = "")
+    inline vk::Sampler CreateCubeSampler(vk::Device& device, float maxLod = 0.0f, const std::string& name = "")
     {
         vk::SamplerCreateInfo samplerInfo;
         samplerInfo
@@ -783,7 +783,7 @@ namespace CommonFunction
             .setMipmapMode(vk::SamplerMipmapMode::eLinear)
             .setMipLodBias(0.0f)
             .setMinLod(0.0f)
-            .setMaxLod(0.0f);
+            .setMaxLod(maxLod);
 
         return CreateSamplerBase(device, samplerInfo, name);
     }

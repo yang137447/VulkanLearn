@@ -288,29 +288,16 @@ void Renderpass::UpdateDescriptorSets()
                 {
                     if (binding.set == GlobalSetIndex)
                     {
-                        if (binding.name == "environmentCube")
-                        {
-                            const auto& environmentCube = sceneLoader.GetEnvironmentCube();
-                            if (environmentCube == nullptr)
-                            {
-                                continue;
-                            }
-
-                            vk::DescriptorImageInfo imageInfo;
-                            imageInfo
-                                .setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
-                                .setImageView(environmentCube->getImageView())
-                                .setSampler(environmentCube->getSampler());
-                            write.setImageInfo(imageInfo);
-                        }
-                        else
+                        const std::shared_ptr<Texture>* texture = sceneLoader.GetGlobalTextureByBindingName(binding.name);
+                        if (texture == nullptr || *texture == nullptr)
                         {
                             continue;
                         }
+                        write.setImageInfo((*texture)->GetDescriptorInfo());
                     }
                     else if (binding.set != PassSetIndex)
                     {
-                        write.setImageInfo(materialInstance.lock()->GetUboMaterialInstanceImageInfo(binding.name));
+                        write.setImageInfo(materialInstance.lock()->GetTextureDescriptorInfo(binding.name));
                     }
                     else {
                         // pass需要根据binding index来找到PassInputResource

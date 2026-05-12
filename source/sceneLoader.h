@@ -30,7 +30,7 @@ class SceneLoader{
     }
     
     //加载场景
-    void SetPipelineFactory(PipelineFactory* pipelineFactory) { this->pipelineFactory = pipelineFactory; }
+    void SetPipelineFactory(PipelineFactory* pipelineFactory);
     void LoadScene(const std::string& filename);
 
     //获取场景数据
@@ -45,6 +45,9 @@ class SceneLoader{
     const std::string& GetEnvironmentHdrPath() const { return environmentHdrPath; }
     uint32_t GetEnvironmentCubeSize() const { return environmentCubeSize; }
     const std::shared_ptr<Texture>& GetEnvironmentCube() const { return environmentCube; }
+    const std::shared_ptr<Texture>& GetEnvironmentPrefilteredCube() const { return environmentPrefilteredCube; }
+    const std::shared_ptr<Texture>& GetBrdfLut() const { return brdfLut; }
+    const std::shared_ptr<Texture>* GetGlobalTextureByBindingName(std::string_view bindingName) const;
     bool HasEnvironmentSH() const { return hasEnvironmentSH; }
     const std::array<Eigen::Vector4f, 9>& GetEnvironmentSH() const { return environmentSH; }
 private:
@@ -74,6 +77,8 @@ private:
     std::string environmentHdrPath;
     uint32_t environmentCubeSize = 512;
     std::shared_ptr<Texture> environmentCube;
+    std::shared_ptr<Texture> environmentPrefilteredCube;
+    std::shared_ptr<Texture> brdfLut;
     std::array<Eigen::Vector4f, 9> environmentSH{};
     bool hasEnvironmentSH = false;
     PipelineFactory* pipelineFactory = nullptr;

@@ -4,6 +4,7 @@
 
 #include "renderableObject.h"
 #include "commonFunction.h"
+#include "texture.h"
 #include "vulkanManager.h"
 #include "materialInstance.h"
 #include "material.h"
@@ -446,6 +447,7 @@ void SceneObject::UpdateDescriptorSet()
     const auto& shaderBindings = baseMaterial->GetRenderPipeline()->GetShaderBindings();
     auto& renderSystem = RenderSystem::GetInstance();
     auto& lightManager = LightManager::GetInstance();
+    auto& sceneLoader = SceneLoader::GetInstance();
     for(uint32_t i = 0; i < swapChainImageCount; i++)
     {
         for(const auto& binding : shaderBindings)
@@ -483,7 +485,19 @@ void SceneObject::UpdateDescriptorSet()
             }
             else if (binding.type == vk::DescriptorType::eCombinedImageSampler)
             {
-                write.setImageInfo(materialInstance->GetUboMaterialInstanceImageInfo(binding.name));
+                if (binding.set == GlobalSetIndex)
+                {
+                    const std::shared_ptr<Texture>* texture = sceneLoader.GetGlobalTextureByBindingName(binding.name);
+                    if (texture == nullptr || *texture == nullptr)
+                    {
+                        continue;
+                    }
+                    write.setImageInfo((*texture)->GetDescriptorInfo());
+                }
+                else
+                {
+                    write.setImageInfo(materialInstance->GetTextureDescriptorInfo(binding.name));
+                }
             }
 
             writeDescriptorSets[i].push_back(write);

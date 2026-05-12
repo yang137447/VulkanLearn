@@ -14,6 +14,7 @@ public:
     inline vk::Sampler getSampler() const { return sampler; }
     inline uint32_t getMipLevels() const { return mipLevels; }
     inline vk::Format GetFormat() const { return format; }
+    inline const vk::DescriptorImageInfo& GetDescriptorInfo() const { return descriptorInfo; }
 private:
     Texture();
     
@@ -23,4 +24,5 @@ private:
     vk::Sampler sampler;
     uint32_t mipLevels;
     vk::Format format;
+    vk::DescriptorImageInfo descriptorInfo;
 };
