@@ -14,6 +14,7 @@ PRIVATE
     stb_image
     assimp
     Json
+    MikkTSpace
     Spirv_Reflect
     OpenEXR::OpenEXR
     Tracy::TracyClient
