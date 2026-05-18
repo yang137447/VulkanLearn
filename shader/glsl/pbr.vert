@@ -4,19 +4,21 @@
 #include "common/function.glsl"
 
 layout(set = 1, binding = 0) uniform UBOMIParamters{
-    vec4 tintColor;
-    vec4 pbrFactors;
-} uboMIP;
+    vec4 u_tintColor;
+    vec4 u_pbrFactors;
+};
 
 layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inNormal;
 layout(location = 2) in vec3 inColor;
 layout(location = 3) in vec2 inTexCoord;
+layout(location = 4) in vec4 inTangent;
 
 layout(location = 0) out vec3 v2fPosition;
 layout(location = 1) out vec3 v2fNormal;
 layout(location = 2) out vec3 v2fColor;
 layout(location = 3) out vec2 v2fTexCoord;
+layout(location = 4) out vec4 v2fTangent;
 
 void main()
 {
@@ -28,10 +30,15 @@ void main()
     gl_Position = uboVP.projection * uboVP.view * modelMatrix * vec4(inPosition, 1.0);
 
     // tintColor 当前先作为 baseColor 的额外乘子使用，方便不改贴图时快速调材质外观。
-    v2fColor = uboMIP.tintColor.rgb;
+    v2fColor = u_tintColor.rgb;
     v2fTexCoord = inTexCoord;
 
-    // 法线与位置都转换到世界空间，后续直接光和 IBL 都统一在世界空间中计算。
-    v2fNormal = GetNormal_WS(modelMatrix, inNormal, inPosition);
+    // MikkTSpace 要求运行时解码尽量匹配烘焙端使用的切线空间基底。
+    // 如果这里先把 T/B/N 单独 normalize，或提前做重新正交化，
+    // 就会改变后续片元插值得到的基底，导致法线贴图解码结果与烘焙端不完全一致，
+    // 在高光方向、UV 接缝和镜像区域更容易出现偏差。
+    // 因此这里保留未归一化的世界空间 T/B/N，让片元阶段直接使用插值后的结果解码。
+    v2fNormal = GetNormal_WS_Unnormalized(modelMatrix, inNormal);
+    v2fTangent = vec4(GetDirection_WS_Unnormalized(modelMatrix, inTangent.xyz), inTangent.w);
     v2fPosition = (modelMatrix * vec4(inPosition, 1.0)).xyz;
 }

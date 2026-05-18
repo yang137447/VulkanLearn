@@ -48,15 +48,15 @@ void RenderSystem::InitRenderObject()
     //     scene.GetCamera()->GetClipNear(), 
     //     scene.GetCamera()->GetClipFar());
     
-    // 将场景物体按shader，materialInstance分组，填充进hierarchyObjects
+    // 将场景物体按材质，materialInstance分组，填充进hierarchyObjects
     for(const auto& [objectName, sceneObject] : scene.GetSceneObjects())
     {
         auto baseMaterial = sceneObject->GetMaterialInstance()->GetBaseMaterial().lock();
-        auto& shaderName = baseMaterial->GetShaderName();
+        auto& materialKey = baseMaterial->GetMaterialKey();
         auto& materialInstanceName = sceneObject->GetMaterialInstance()->GetName();
         
-        auto& shaderMap = hierarchyObjects.emplace(shaderName, std::unordered_map<std::string, std::vector<std::weak_ptr<SceneObject>>>()).first->second;
-        auto& objects = shaderMap.emplace(materialInstanceName, std::vector<std::weak_ptr<SceneObject>>()).first->second;
+        auto& materialMap = hierarchyObjects.emplace(materialKey, std::unordered_map<std::string, std::vector<std::weak_ptr<SceneObject>>>()).first->second;
+        auto& objects = materialMap.emplace(materialInstanceName, std::vector<std::weak_ptr<SceneObject>>()).first->second;
         objects.push_back(sceneObject);
     }
 
@@ -64,7 +64,7 @@ void RenderSystem::InitRenderObject()
     this->RenderInitialize();
     lightManager.RenderInitialize();
     renderGraph.RenderInitialize();
-    for (const auto& [shaderName, materialInstanceObjects] : hierarchyObjects)
+    for (const auto& [materialKey, materialInstanceObjects] : hierarchyObjects)
     {
         for (const auto& [materialInstanceName, objects] : materialInstanceObjects)
         {
@@ -216,7 +216,7 @@ void RenderSystem::Render()
 
             // lightManager.UpdateLightBuffer(swapChainImageIndex);
             // 渲染每种材质
-            for (const auto& [shaderName, shaderObjects] : hierarchyObjects) {
+            for (const auto& [materialKey, shaderObjects] : hierarchyObjects) {
                 // // 绑定Pipeline
                 // const PipelineBase& renderPipeline = *sceneLoader.GetMaterials().at(shaderName)->GetRenderPipeline();
                 // commandBuffer.bindPipeline(renderPipeline.GetBindPoint(), renderPipeline.GetPipeline());
@@ -277,11 +277,11 @@ void RenderSystem::Render()
             
             lightManager.UpdateLightBuffer(swapChainImageIndex);
             // 渲染每种材质
-            for (const auto& [shaderName, shaderObjects] : hierarchyObjects) {
+            for (const auto& [materialKey, shaderObjects] : hierarchyObjects) {
                 // 绑定Pipeline
-                const PipelineBase& renderPipeline = *sceneLoader.GetMaterials().at(shaderName)->GetRenderPipeline();
+                const PipelineBase& renderPipeline = *sceneLoader.GetMaterials().at(materialKey)->GetRenderPipeline();
                 
-                VulkanDebug::ScopedRegion pipelineRegion(commandBuffer, "Pipeline: " + shaderName, VulkanDebug::DebugCategory::ePipeline);
+                VulkanDebug::ScopedRegion pipelineRegion(commandBuffer, "Pipeline: " + materialKey, VulkanDebug::DebugCategory::ePipeline);
                 commandBuffer.bindPipeline(renderPipeline.GetBindPoint(), renderPipeline.GetPipeline());
                 if (!renderPass.GetDescriptorSets()[swapChainImageIndex].empty())
                 {
@@ -546,6 +546,7 @@ void RenderSystem::UpdateUBOGlobal(vk::CommandBuffer& commandBuffer)
     ubo.lightViewProj = lightViewProj;
     ubo.cameraPosition = sceneLoader.GetCamera()->GetPosition();
     ubo.environmentSH = sceneLoader.GetEnvironmentSH();
+    ubo.debugViewMode = debugViewMode;
 
     //std::memcpy(uboGlobal.buffersMapped[swapChainImageIndex], &ubo, sizeof(ubo));
     commandBuffer.updateBuffer(uboGlobal.buffers[swapChainImageIndex], 0, sizeof(ubo), &ubo);
@@ -742,6 +743,7 @@ void RenderSystem::UpdateUBOGlobalForShadow(vk::CommandBuffer& commandBuffer, ui
     lightViewProj = ubo.projection * ubo.view;
     ubo.lightViewProj = lightViewProj;
     ubo.environmentSH = sceneLoader.GetEnvironmentSH();
+    ubo.debugViewMode = debugViewMode;
     
     {
         Eigen::Matrix3f rotT = ubo.view.block<3, 3>(0, 0);

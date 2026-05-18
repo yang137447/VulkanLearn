@@ -1,0 +1,33 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$id": "https://vulkanlearn.local/schema/model_descriptor.schema.json",
+    "title": "Model Descriptor",
+    "description": "VulkanLearn 模型描述配置",
+    "type": "object",
+    "properties": {
+        "name": {
+            "type": "string",
+            "description": "模型描述名称，通常用于说明这个 SM 文件对应的资源。"
+        },
+        "type": {
+            "type": "string",
+            "const": "mesh",
+            "description": "固定为 mesh，表示该描述文件对应一个可渲染网格资源。"
+        },
+        "modelDataPath": {
+            "type": "string",
+            "description": "原始模型数据文件相对路径，例如 'models/datas/my_mesh.obj'。"
+        },
+        "materialInstancePath": {
+            "type": "string",
+            "description": "默认材质实例路径，例如 'materials/MI_my_mesh.json'。"
+        }
+    },
+    "required": [
+        "name",
+        "type",
+        "modelDataPath",
+        "materialInstancePath"
+    ],
+    "additionalProperties": false
+}

@@ -1,13 +1,26 @@
-vec3 GetNormal_WS(mat4 modelMatrix, vec3 normal, vec3 vertexPosition)
+mat3 GetNormalMatrix_WS(mat4 modelMatrix)
 {
-    // 点差法计算世界空间下的法线
-        // TODO: 以后可优化为法线矩阵
-    vec3 normalOffsetPosition = vertexPosition + normal;
-    vec3 transNorOffsetPos = (modelMatrix * vec4(normalOffsetPosition, 1.0)).xyz;
-    vec3 transVertexPos = (modelMatrix * vec4(vertexPosition, 1.0)).xyz;
-    vec3 newNormal = normalize(transNorOffsetPos - transVertexPos);
-    newNormal = normalize(newNormal);
-    return newNormal;
+    return transpose(inverse(mat3(modelMatrix)));
+}
+
+vec3 GetNormal_WS(mat4 modelMatrix, vec3 normal)
+{
+    return normalize(GetNormalMatrix_WS(modelMatrix) * normal);
+}
+
+vec3 GetNormal_WS_Unnormalized(mat4 modelMatrix, vec3 normal)
+{
+    return GetNormalMatrix_WS(modelMatrix) * normal;
+}
+
+vec3 GetDirection_WS(mat4 modelMatrix, vec3 direction)
+{
+    return normalize(mat3(modelMatrix) * direction);
+}
+
+vec3 GetDirection_WS_Unnormalized(mat4 modelMatrix, vec3 direction)
+{
+    return mat3(modelMatrix) * direction;
 }
 
 float cheapContrast(float value, float contrast)

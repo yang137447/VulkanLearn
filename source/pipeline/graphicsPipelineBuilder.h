@@ -4,6 +4,13 @@
 #include <vector>
 #include "vulkan/vulkan.hpp"
 
+enum class GraphicsPipelineBlendMode
+{
+    Opaque,
+    AlphaBlend,
+    Additive
+};
+
 struct GraphicsPipelineStateDesc
 {
     bool bUseVertexInput = true;
@@ -11,6 +18,7 @@ struct GraphicsPipelineStateDesc
     bool bDepthWriteEnable = true;
     vk::CompareOp depthCompareOp = vk::CompareOp::eLess;
     vk::CullModeFlags cullMode = vk::CullModeFlagBits::eBack;
+    GraphicsPipelineBlendMode blendMode = GraphicsPipelineBlendMode::Opaque;
 };
 
 struct GraphicsPipelineBuildDesc

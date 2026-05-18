@@ -1,0 +1,85 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$id": "https://vulkanlearn.local/schema/material_instance.schema.json",
+    "title": "Material Instance",
+    "description": "VulkanLearn 材质实例配置",
+    "type": "object",
+    "properties": {
+        "name": {
+            "type": "string",
+            "description": "材质实例的名称"
+        },
+        "type": {
+            "type": "string",
+            "const": "materialInstance",
+            "description": "固定为 materialInstance"
+        },
+        "shader": {
+            "type": "string",
+            "description": "基础 Shader 的名称，例如 'pbr', 'unlit', 'shadow'"
+        },
+        "renderStates": {
+            "type": "object",
+            "description": "引擎控制的固定渲染状态 (影响渲染路径和管线)",
+            "properties": {
+                "renderMode": {
+                    "type": "string",
+                    "enum": [
+                        "Opaque",
+                        "OpaqueClip",
+                        "TransparentAlphaBlend",
+                        "TransparentAdditive"
+                    ],
+                    "description": "渲染路径模式。\n- `Opaque`: 标准不透明，Early-Z 友好\n- `OpaqueClip`: Alpha 裁剪，主/阴影 Pass 同步裁剪\n- `TransparentAlphaBlend`: 标准透明混合，第一版参与阴影\n- `TransparentAdditive`: 加法透明混合，第一版不参与阴影",
+                    "default": "Opaque"
+                },
+                "cullMode": {
+                    "type": "string",
+                    "enum": [
+                        "Back",
+                        "None"
+                    ],
+                    "description": "面剔除模式。\n- `Back`: 背面剔除（单面）\n- `None`: 不剔除（双面）\n注意: 这仅改变 Pipeline 状态，不产生新的 Shader 编译变体。",
+                    "default": "Back"
+                }
+            },
+            "additionalProperties": false
+        },
+        "artMacros": {
+            "type": "array",
+            "description": "美术控制的功能宏列表，参与 Shader 变体编译。引擎会自动对其进行去重和排序。",
+            "items": {
+                "type": "string",
+                "anyOf": [
+                    { "enum": ["USE_NORMAL_MAP", "USE_EMISSIVE", "USE_CLEAR_COAT"] }
+                ]
+            },
+            "uniqueItems": true
+        },
+        "textures": {
+            "type": "object",
+            "description": "贴图绑定。键名必须与 Shader 反射中 MaterialSet 的 sampler2D 名称一致。",
+            "additionalProperties": {
+                "type": "string",
+                "description": "贴图文件的相对路径，例如 'textures/uv_checker.png'"
+            }
+        },
+        "parameters": {
+            "type": "object",
+            "description": "数值参数绑定。键名必须与 Shader 反射中 MaterialSet UBO 的成员名称一致，例如 pbr 使用 u_tintColor 和 u_pbrFactors。",
+            "additionalProperties": {
+                "anyOf": [
+                    { "type": "number" },
+                    {
+                        "type": "array",
+                        "items": { "type": "number" },
+                        "minItems": 2,
+                        "maxItems": 4
+                    }
+                ],
+                "description": "浮点数或向量 (如 [1.0, 1.0, 1.0, 1.0])"
+            }
+        }
+    },
+    "required": ["shader"]
+}

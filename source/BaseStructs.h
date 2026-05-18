@@ -30,7 +30,7 @@ struct alignas(16) UBOGlobal
     Eigen::Matrix4f invViewProjection;
     Eigen::Matrix4f lightViewProj;
     alignas(16) Eigen::Vector3f cameraPosition;
-    float pad0 = 0.0f;
+    int debugViewMode = 0; // replace pad0
     std::array<Eigen::Vector4f, 9> environmentSH{};
 };
 

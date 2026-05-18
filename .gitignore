@@ -3,4 +3,5 @@
 /.vscode
 /.cache
 /shader/spv
-/resources/generated
+/resources/*
+!/resources/README.md

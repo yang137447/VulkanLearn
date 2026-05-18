@@ -84,7 +84,9 @@ Executable output:
 Typical runtime expectation:
 
 - Run from the repository root or from an environment where the project root can still be discovered.
-- The app expects `config/`, `resources/`, and `shader/` to be resolvable at runtime.
+- The app expects `config/` and `shader/` inside the repository.
+- Runtime assets are expected under the repository sibling directory `../VulkanLearnAssets/resources`.
+- Repository-local `resources/` is now reserved for placeholder docs and generated local outputs such as `resources/generated/`.
 
 Current local build context:
 
@@ -116,9 +118,9 @@ If a change affects boot behavior, verify it against this order.
 - `source/pipeline/`: pipeline factory, builders, graphics and compute pipeline code
 - `source/resource/`: image and device texture helpers
 - `config/`: top-level runtime config and render graph config
-- `resources/scenes/`: scene JSON files
-- `resources/models/`: mesh description JSON and source model data
-- `resources/materials/`: material instance JSON files
+- `../VulkanLearnAssets/resources/scenes/`: scene JSON files
+- `../VulkanLearnAssets/resources/models/`: mesh description JSON and source model data
+- `../VulkanLearnAssets/resources/materials/`: material instance JSON files
 - `shader/glsl/`: shader source of truth
 - `shader/spv/`: compiled shader output and debug reflection artifacts
 - `extern/`: third-party dependencies
@@ -166,6 +168,7 @@ If adding a new type, update both loader logic and documentation.
 These relationships are important and easy to miss:
 
 - `config/config.json -> initScene` decides which scene file is loaded first.
+- Runtime resource lookup resolves relative asset paths from `../VulkanLearnAssets/resources`.
 - `config/renderGraphConfig.json` defines render resources and pass order before scene loading.
 - Passes with `needCreateMaterial: true` rely on material instance JSON to create pass materials.
 - Material parameter validation depends on shader reflection results.
@@ -205,6 +208,7 @@ When making changes:
 
 - Prefer source-of-truth files over generated outputs.
 - For shader work, edit `shader/glsl/` first.
+- For shader resource declarations such as `sampler2D emissionMap`, do not add `#if defined(...)` guards by default. Prefer relying on the compiler to optimize out unused resources unless the active reflection/toolchain path is explicitly verified to require guarded declarations.
 - Only edit `shader/spv/` directly if the task is specifically about generated artifacts or debug outputs.
 - Keep JSON structure and naming stable unless the task is a format migration.
 - Avoid broad refactors unless the task clearly calls for them.

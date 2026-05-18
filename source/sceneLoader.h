@@ -64,7 +64,7 @@ private:
     //场景数据
     std::unordered_map<std::string, std::shared_ptr<RenderableObject>> objects; //模型相对路径和模型对象
     std::unordered_map<std::string, std::shared_ptr<SceneObject>> sceneObjects; //模型名字和场景对象
-    std::unordered_map<std::string, std::shared_ptr<Material>> materials; //shader名和材质对象
+    std::unordered_map<std::string, std::shared_ptr<Material>> materials; //材质键和材质对象
     std::unordered_map<std::string, std::shared_ptr<MaterialInstance>> materialInstances; //材质实例相对路径和材质实例对象
     std::unordered_map<std::string, std::shared_ptr<Texture>> textures; //贴图相对路径和贴图对象
 

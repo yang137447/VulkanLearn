@@ -13,6 +13,7 @@
 #include "renderGraph.h"
 #include "pipeline/pipelineFactory.h"
 #include "profiler.h"
+#include "debugConsole.h"
 
 int main(int argc, char **argv)
 {
@@ -73,6 +74,9 @@ int main(int argc, char **argv)
     //初始化渲染系统
     RenderSystem& renderSystem = RenderSystem::GetInstance();
     renderSystem.InitRenderObject();
+    //初始化调试控制台
+    DebugConsole debugConsole(renderSystem);
+    debugConsole.Initialize();
     //初始化FPS计算工具
     FpsTool fpsTool;
     //玩家控制器
@@ -88,6 +92,8 @@ int main(int argc, char **argv)
     while (!shouldClose)
     {
         PROFILE_SCOPE("Frame");
+        //更新调试控制台
+        debugConsole.Update();
 
         //delta time
         float deltaTime = CommonFunction::GetDeltaTime();

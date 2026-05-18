@@ -5,8 +5,8 @@
 #include "common/function.glsl"
 
 layout(set = 1, binding = 0) uniform UBOMIParamters{
-    vec4 tintColor;
-} uboMIP;
+    vec4 u_tintColor;
+};
 
 
 layout(location = 0) in vec3 inPosition;
@@ -26,11 +26,11 @@ void main()
     mat4 viewMatrix = uboVP.view;
     mat4 projectionMatrix = uboVP.projection;
         //MIP
-    vec4 tintColor = uboMIP.tintColor;
+    vec4 tintColor = u_tintColor;
 
     gl_Position = projectionMatrix * viewMatrix * modelMatrix * vec4(inPosition, 1.0);
     v2fColor = tintColor.rgb;
     v2fTexCoord = inTexCoord;
-    v2fNormal = GetNormal_WS(modelMatrix, inNormal, inPosition);
+    v2fNormal = GetNormal_WS(modelMatrix, inNormal);
     v2fPosition = (modelMatrix * vec4(inPosition, 1.0)).xyz;
 }

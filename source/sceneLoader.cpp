@@ -1,25 +1,26 @@
 #include "sceneLoader.h"
-#include <fstream>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <nlohmann/json.hpp>
 #include "commonFunction.h"
-#include "modelLoader.h"
-#include "renderableObject.h"
-#include "vulkanManager.h"
 #include "material.h"
-#include "texture.h"
 #include "materialInstance.h"
-#include "sceneObject.h"
+#include "materialInstanceValidator.h"
+#include "modelLoader.h"
+#include "pipeline/brdfLutGenerator.h"
 #include "pipeline/environmentCubemapGenerator.h"
 #include "pipeline/environmentPrefilterGenerator.h"
 #include "pipeline/environmentSHGenerator.h"
-#include "pipeline/brdfLutGenerator.h"
 #include "pipeline/graphicsPipeline.h"
 #include "pipeline/pipelineFactory.h"
-#include "shaderReflect.h"
 #include "renderGraph.h"
+#include "renderableObject.h"
+#include "sceneObject.h"
+#include "texture.h"
+#include "textureAssetLoader.h"
+#include "vulkanManager.h"
 
 namespace
 {
@@ -336,11 +337,11 @@ std::shared_ptr<MaterialInstance> SceneLoader::LoadMaterialInstance(const std::s
     std::ifstream materialInstanceFile(CommonFunction::Path(materialInstancePath.data()));
     nlohmann::json materialInstanceJson;
     materialInstanceFile >> materialInstanceJson;
-    std::string shaderName = materialInstanceJson["shader"];
+    MaterialInstanceBuildPlan loadPlan = MaterialInstanceValidator::BuildLoadPlan(materialInstancePath, passName, sampleCount, pipelineStateDesc, materialInstanceJson);
     std::shared_ptr<Material> material;
-    if(materials.find(shaderName) != materials.end())
+    if(materials.find(loadPlan.materialKey) != materials.end())
     {
-        material = materials[shaderName];
+        material = materials[loadPlan.materialKey];
     }
     else
     {
@@ -348,106 +349,33 @@ std::shared_ptr<MaterialInstance> SceneLoader::LoadMaterialInstance(const std::s
         {
             throw std::runtime_error("PipelineFactory is not set in SceneLoader");
         }
-        bool bIsShadowPass = passName == "shadow";
         material = std::make_shared<Material>(
             *pipelineFactory, 
             &instance.GetGpuMemoryProperties(),
             &renderGraph.GetRenderpasses()[passName.data()].renderPass,
-            shaderName,
+            loadPlan.shaderVariantKey,
+            loadPlan.materialKey,
             sampleCount,
-            pipelineStateDesc,
-            bIsShadowPass
+            loadPlan.pipelineStateDesc,
+            loadPlan.bIsShadowPass
         );
     }
-    // 加载材质参数
+    const auto& shaderParameters = materialInstanceJson["parameters"];
     const auto& shaderTextures = materialInstanceJson.contains("textures")
         ? materialInstanceJson["textures"]
         : nlohmann::json::object();
-    const auto& shaderParameters = materialInstanceJson["parameters"];
-    uint32_t parameterCount = shaderParameters.size();
-    // 根据shaderbinding校验参数和贴图
-    auto& shaderBindings = material->GetRenderPipeline()->GetShaderBindings();
-    // 检查材质贴图是否覆盖当前 shader 反射实际需要的 MaterialSet 采样器。
-    // 这里不再强制“数量完全相等”，避免调试 shader 时因输出裁剪导致未参与最终结果的贴图被优化掉，
-    // 进而误伤材质实例校验。运行时真正绑定哪些资源，仍以后续反射结果为准。
-    std::vector<std::string> expectedTextureNames;
-    for(const auto& binding : shaderBindings)
-    { 
-        if(binding.set == MaterialSetIndex && binding.type == vk::DescriptorType::eCombinedImageSampler)
-        {
-            expectedTextureNames.push_back(binding.name);
-        }
-    }
-    bool texturesMatch = shaderTextures.is_object();
-    if(texturesMatch)
-    {
-        for(const auto& textureName : expectedTextureNames)
-        {
-            if(!shaderTextures.contains(textureName))
-            {
-                texturesMatch = false;
-                break;
-            }
-        }
-    }
-    if(!texturesMatch)
-    {
-        throw std::runtime_error(std::string("Missing required material textures in material instance: ") + materialInstancePath.data());
-    }
-        // 检查参数类型是否匹配set1,binding0
-    bool validParemeters = false;
-    bool hasMaterialUbo = false;
-    for(const auto& binding : shaderBindings)
-    {
-        if(binding.set != MaterialSetIndex || binding.binding != 0)
-        {
-            continue;
-        }
-        if(binding.type != vk::DescriptorType::eUniformBuffer)
-        {
-            continue;
-        }
-        hasMaterialUbo = true;
-        if(binding.memberCount != parameterCount)
-        {
-            break;
-        }
-        bool allMatch = true;
-        uint32_t i = 0;
-        for(auto it = shaderParameters.begin(); it != shaderParameters.end(); ++it, ++i)
-        {
-            const auto& paramValue = it.value();
-            size_t paramSize = JsonParser::ParseValueSize(paramValue);
-            if(i >= binding.members.size() || paramSize != binding.members[i])
-            {
-                allMatch = false;
-                break;
-            }
-        }
-        if(allMatch)
-        {
-            validParemeters = true;
-            break;
-        }
-    }
-    if(!validParemeters)
-    {
-        if(!(parameterCount == 0 && !hasMaterialUbo))
-        {
-            throw std::runtime_error(std::string("Parameter types or sizes mismatch in material instance: ") + materialInstancePath.data());
-        }
-    }
+    MaterialInstanceValidator::Validate(materialInstancePath, materialInstanceJson, material->GetRenderPipeline()->GetShaderBindings());
 
     //创建材质实例
     std::shared_ptr<MaterialInstance> materialInstance;
-    if(materialInstances.find(materialInstancePath.data()) != materialInstances.end())
+    if(materialInstances.find(loadPlan.materialInstanceKey) != materialInstances.end())
     {
-        materialInstance = materialInstances[materialInstancePath.data()];
+        materialInstance = materialInstances[loadPlan.materialInstanceKey];
     }
     else
     {
         materialInstance = material->CreateInstance();
-        materialInstance->SetName(materialInstancePath.data());
+        materialInstance->SetName(loadPlan.materialInstanceKey);
     }
     //设置材质实例参数
     //TODO:按shaderbinding设置参数
@@ -485,24 +413,37 @@ std::shared_ptr<MaterialInstance> SceneLoader::LoadMaterialInstance(const std::s
     for(const auto& [name, value] : shaderTextures.items())
     {
         const std::string& textureName = name;
-        std::string texturePath = value;
-        std::shared_ptr<Texture> texture;
-        if(textures.find(texturePath) != textures.end())
+        if (!value.is_string())
         {
-            texture = textures[texturePath];
+            throw std::runtime_error(
+                "Texture binding must be a string in material instance: " + std::string(materialInstancePath));
+        }
+
+        const std::string textureAssetPath = value.get<std::string>();
+        ValidateTextureAssetReference(textureName, textureAssetPath, materialInstancePath);
+        const TextureBindingLoadDesc textureLoadDesc = LoadTextureAssetDesc(textureAssetPath);
+        const std::string textureCacheKey = BuildTextureCacheKey(textureLoadDesc);
+        std::shared_ptr<Texture> texture;
+        if(textures.find(textureCacheKey) != textures.end())
+        {
+            texture = textures[textureCacheKey];
         }
         else
         {
-            texture = std::make_shared<Texture>(texturePath);
+            texture = std::make_shared<Texture>(textureLoadDesc.source, ToTextureCreateDesc(textureLoadDesc));
             //缓存贴图
-            textures[texturePath] = texture;
+            textures[textureCacheKey] = texture;
         }
         materialInstance->SetTexture(textureName, texture);
     }
 
     //缓存材质和材质实例
-    materials.emplace(shaderName, material);
-    materialInstances.emplace(materialInstancePath, materialInstance);
+    materials.emplace(loadPlan.materialKey, material);
+    if (passName != "geometry")
+    {
+        materials[loadPlan.shaderName] = material;
+    }
+    materialInstances.emplace(loadPlan.materialInstanceKey, materialInstance);
 
     return materialInstance;
 }

@@ -4,6 +4,7 @@
 #include "vulkan/vulkan.hpp"
 #include "pipelineBase.h"
 #include "graphicsPipelineBuilder.h"
+#include "../shaderVariant.h"
 
 class DrawableObject;
 struct ShaderBinding;
@@ -15,7 +16,7 @@ public:
     GraphicsPipeline(vk::Device *device,
                     vk::PhysicalDeviceMemoryProperties *gpuMemoryProperties,
                     vk::RenderPass *renderPass,
-                    const std::string& shaderName,
+                    const ShaderVariantKey& shaderVariantKey,
                     vk::SampleCountFlagBits sampleCount,
                     const GraphicsPipelineStateDesc& pipelineStateDesc = {},
                     bool bIsShadowPass = false
@@ -53,7 +54,7 @@ private:
     GraphicsPipelineStateDesc pipelineStateDesc;
     bool bIsShadowPass;
 
-    std::string shaderName;
+    ShaderVariantKey shaderVariantKey;
 
     std::vector<ShaderBinding> shaderBindings;
 

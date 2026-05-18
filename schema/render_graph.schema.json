@@ -1,0 +1,264 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "$id": "https://vulkanlearn.local/schema/render_graph.schema.json",
+    "title": "Render Graph",
+    "description": "VulkanLearn 渲染图配置",
+    "type": "object",
+    "properties": {
+        "configHelp": {
+            "type": "object",
+            "description": "仅文档用途，不参与运行时解析。",
+            "additionalProperties": true
+        },
+        "resources": {
+            "type": "array",
+            "items": {
+                "$ref": "#/$defs/resource"
+            }
+        },
+        "passes": {
+            "type": "array",
+            "items": {
+                "$ref": "#/$defs/pass"
+            }
+        }
+    },
+    "required": [
+        "resources",
+        "passes"
+    ],
+    "additionalProperties": false,
+    "$defs": {
+        "format": {
+            "type": "string",
+            "enum": [
+                "R8G8B8A8_SRGB",
+                "R8G8B8A8_UNORM",
+                "R16G16B16A16_SFLOAT",
+                "D16_UNORM",
+                "D32_SFLOAT",
+                "D24_UNORM_S8_UINT"
+            ]
+        },
+        "usage": {
+            "type": "string",
+            "enum": [
+                "colorAttachment",
+                "depthStencilAttachment",
+                "sampled",
+                "present",
+                "transferSrc",
+                "transferDst"
+            ]
+        },
+        "loadOp": {
+            "type": "string",
+            "enum": [
+                "clear",
+                "load",
+                "dontCare"
+            ]
+        },
+        "storeOp": {
+            "type": "string",
+            "enum": [
+                "store",
+                "dontCare"
+            ]
+        },
+        "depthCompareOp": {
+            "type": "string",
+            "enum": [
+                "less",
+                "lessOrEqual",
+                "equal",
+                "greater",
+                "greaterOrEqual",
+                "always"
+            ]
+        },
+        "resource": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "format": {
+                    "$ref": "#/$defs/format"
+                },
+                "widthSize": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                },
+                "heightSize": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                },
+                "widthScale": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                },
+                "heightScale": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                },
+                "usage": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/$defs/usage"
+                    },
+                    "minItems": 1,
+                    "uniqueItems": true
+                }
+            },
+            "required": [
+                "name",
+                "format",
+                "usage"
+            ],
+            "additionalProperties": false,
+            "anyOf": [
+                {
+                    "required": [
+                        "widthSize",
+                        "heightSize"
+                    ]
+                },
+                {
+                    "required": [
+                        "widthScale",
+                        "heightScale"
+                    ]
+                },
+                {
+                    "required": [
+                        "widthSize",
+                        "heightScale"
+                    ]
+                },
+                {
+                    "required": [
+                        "widthScale",
+                        "heightSize"
+                    ]
+                }
+            ]
+        },
+        "passInput": {
+            "type": "object",
+            "properties": {
+                "resource": {
+                    "type": "string"
+                }
+            },
+            "required": [
+                "resource"
+            ],
+            "additionalProperties": false
+        },
+        "passOutput": {
+            "type": "object",
+            "properties": {
+                "resource": {
+                    "type": "string"
+                },
+                "loadOp": {
+                    "$ref": "#/$defs/loadOp"
+                },
+                "storeOp": {
+                    "$ref": "#/$defs/storeOp"
+                }
+            },
+            "required": [
+                "resource"
+            ],
+            "additionalProperties": false
+        },
+        "pipelineState": {
+            "type": "object",
+            "properties": {
+                "useVertexInput": {
+                    "type": "boolean"
+                },
+                "depthTestEnable": {
+                    "type": "boolean"
+                },
+                "depthWriteEnable": {
+                    "type": "boolean"
+                },
+                "depthCompareOp": {
+                    "$ref": "#/$defs/depthCompareOp"
+                }
+            },
+            "required": [
+                "useVertexInput",
+                "depthTestEnable",
+                "depthWriteEnable",
+                "depthCompareOp"
+            ],
+            "additionalProperties": false
+        },
+        "pass": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "needCreateMaterial": {
+                    "type": "boolean"
+                },
+                "materialInstancePath": {
+                    "type": "string"
+                },
+                "needMsaa": {
+                    "type": "boolean"
+                },
+                "bIsPostProcess": {
+                    "type": "boolean"
+                },
+                "pipelineState": {
+                    "$ref": "#/$defs/pipelineState"
+                },
+                "input": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/$defs/passInput"
+                    }
+                },
+                "output": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/$defs/passOutput"
+                    },
+                    "minItems": 1
+                }
+            },
+            "required": [
+                "name",
+                "pipelineState",
+                "input",
+                "output"
+            ],
+            "additionalProperties": false,
+            "allOf": [
+                {
+                    "if": {
+                        "properties": {
+                            "needCreateMaterial": {
+                                "const": true
+                            }
+                        },
+                        "required": [
+                            "needCreateMaterial"
+                        ]
+                    },
+                    "then": {
+                        "required": [
+                            "materialInstancePath"
+                        ]
+                    }
+                }
+            ]
+        }
+    }
+}

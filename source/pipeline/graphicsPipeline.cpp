@@ -10,14 +10,15 @@
 #include "../profiler.h"
 #include "shaderReflectionService.h"
 #include "../vulkanDebug.h"
+#include "../shaderCompiler.h"
 
-GraphicsPipeline::GraphicsPipeline(vk::Device *device, vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties, vk::RenderPass* renderPass, const std::string& shaderName, vk::SampleCountFlagBits sampleCount, const GraphicsPipelineStateDesc& pipelineStateDesc, bool bIsShadowPass)
+GraphicsPipeline::GraphicsPipeline(vk::Device *device, vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties, vk::RenderPass* renderPass, const ShaderVariantKey& shaderVariantKey, vk::SampleCountFlagBits sampleCount, const GraphicsPipelineStateDesc& pipelineStateDesc, bool bIsShadowPass)
 {
     PROFILE_FUNCTION();
     this->device = device;
     this->renderPass = renderPass;
     this->physicalDeviceMemoryProperties = physicalDeviceMemoryProperties;
-    this->shaderName = shaderName;
+    this->shaderVariantKey = shaderVariantKey;
     this->sampleCount = sampleCount;
     this->pipelineStateDesc = pipelineStateDesc;
     this->bIsShadowPass = bIsShadowPass;
@@ -43,7 +44,7 @@ GraphicsPipeline::GraphicsPipeline()
 
 void GraphicsPipeline::CreateDescriptorSetLayouts()
 {
-    descriptorSetLayouts = PipelineLayoutBuilder::CreateDescriptorSetLayouts(*device, shaderBindings, shaderName);
+    descriptorSetLayouts = PipelineLayoutBuilder::CreateDescriptorSetLayouts(*device, shaderBindings, shaderVariantKey.GetDisplayName());
 }
 
 void GraphicsPipeline::DestroyDescriptorSetLayouts()
@@ -53,7 +54,7 @@ void GraphicsPipeline::DestroyDescriptorSetLayouts()
 
 void GraphicsPipeline::CreatePipelineLayout()
 {
-    pipelineLayout = PipelineLayoutBuilder::CreatePipelineLayout(*device, descriptorSetLayouts, shaderName);
+    pipelineLayout = PipelineLayoutBuilder::CreatePipelineLayout(*device, descriptorSetLayouts, shaderVariantKey.GetDisplayName());
 }
 
 void GraphicsPipeline::DestroyPipelineLayout()
@@ -63,10 +64,9 @@ void GraphicsPipeline::DestroyPipelineLayout()
 
 void GraphicsPipeline::CreateShader()
 {
-    const std::string vertexShaderName = shaderName + "_vert.spv";
-    const std::string fragmentShaderName = shaderName + "_frag.spv";
-    const std::string vertexShaderPath = CommonFunction::Path(vertexShaderName);
-    const std::string fragmentShaderPath = CommonFunction::Path(fragmentShaderName);
+    ShaderCompiler::EnsureGraphicsVariantCompiled(shaderVariantKey);
+    const std::string vertexShaderPath = CommonFunction::Path(shaderVariantKey.GetStageSpvRelativePath("vert"));
+    const std::string fragmentShaderPath = CommonFunction::Path(shaderVariantKey.GetStageSpvRelativePath("frag"));
 
     std::string vertexShaderCode = CommonFunction::ReadFile(vertexShaderPath);
     std::string fragmentShaderCode = CommonFunction::ReadFile(fragmentShaderPath);
@@ -78,7 +78,7 @@ void GraphicsPipeline::CreateShader()
         .setPCode(reinterpret_cast<const uint32_t*>(vertexShaderCode.data()));
     vk::Result result = device->createShaderModule(&vertexShaderModuleCreateInfo, nullptr, &vertexShaderModule);
     assert(result == vk::Result::eSuccess);
-    VulkanDebug::SetObjectName(*device, vertexShaderModule, vk::ObjectType::eShaderModule, "ShaderModule_Vert: " + shaderName);
+    VulkanDebug::SetObjectName(*device, vertexShaderModule, vk::ObjectType::eShaderModule, "ShaderModule_Vert: " + shaderVariantKey.GetDisplayName());
 
     vk::ShaderModule fragmentShaderModule;
     vk::ShaderModuleCreateInfo fragmentShaderModuleCreateInfo;
@@ -87,7 +87,7 @@ void GraphicsPipeline::CreateShader()
         .setPCode(reinterpret_cast<const uint32_t*>(fragmentShaderCode.data()));
     result = device->createShaderModule(&fragmentShaderModuleCreateInfo, nullptr, &fragmentShaderModule);
     assert(result == vk::Result::eSuccess);
-    VulkanDebug::SetObjectName(*device, fragmentShaderModule, vk::ObjectType::eShaderModule, "ShaderModule_Frag: " + shaderName);
+    VulkanDebug::SetObjectName(*device, fragmentShaderModule, vk::ObjectType::eShaderModule, "ShaderModule_Frag: " + shaderVariantKey.GetDisplayName());
     shaderStages.resize(2);
     shaderStages[0]
         .setStage(vk::ShaderStageFlagBits::eVertex)
@@ -100,7 +100,7 @@ void GraphicsPipeline::CreateShader()
         .setPName("main")
         .setPSpecializationInfo(nullptr);
 
-    this->shaderBindings = ShaderReflectionService::ReflectGraphicsFromDebugSpirv(shaderName);
+    this->shaderBindings = ShaderReflectionService::ReflectGraphicsFromDebugSpirv(shaderVariantKey);
 }
 
 void GraphicsPipeline::DestroyShader()
@@ -126,7 +126,7 @@ void GraphicsPipeline::CreateGraphicsPipeline()
         shaderStages,
         vertexInputBindingDescription,
         vertexInputAttributeDescriptions,
-        shaderName,
+        shaderVariantKey.GetDisplayName(),
         sampleCount,
         pipelineStateDesc,
         bIsShadowPass

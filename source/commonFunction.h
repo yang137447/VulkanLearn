@@ -325,9 +325,26 @@ namespace CommonFunction
         return projectPath.value();
     }
 
+    inline std::string GetExternalResourcesPath()
+    {
+        static std::optional<std::string> externalResourcesPath;
+        if (externalResourcesPath.has_value())
+        {
+            return externalResourcesPath.value();
+        }
+
+        externalResourcesPath =
+            (std::filesystem::path(GetProjectPath()).parent_path() / "VulkanLearnAssets" / "resources").string();
+        return externalResourcesPath.value();
+    }
+
     inline std::string Path(const std::string& path)
     {
-        std::string fullPath = GetProjectPath() + "/resources" + "/" + path;
+        std::string fullPath = (std::filesystem::path(GetExternalResourcesPath()) / path).string();
+        if( !std::filesystem::exists(fullPath) && path.rfind("generated/", 0) == 0 )
+        {
+            fullPath = (std::filesystem::path(GetProjectPath()) / "resources" / path).string();
+        }
         if( !std::filesystem::exists(fullPath) )
         {
             fullPath = GetProjectPath() + "/shader/spv/" + path;
@@ -665,31 +682,41 @@ namespace CommonFunction
         return sampler;
     }
 
-    inline vk::Sampler Create2DSampler(vk::Device& device, vk::PhysicalDevice& physicalDevice, const std::string& name = "")
+    inline vk::Sampler Create2DSampler(
+        vk::Device& device,
+        vk::PhysicalDevice& physicalDevice,
+        vk::Filter filter,
+        vk::SamplerAddressMode addressMode,
+        bool enableMipmaps,
+        const std::string& name = "")
     {
 
         vk::PhysicalDeviceProperties physicalDeviceProperties = physicalDevice.getProperties();
         vk::PhysicalDeviceFeatures physicalDeviceFeatures = physicalDevice.getFeatures();
+        const bool enableAnisotropy = filter == vk::Filter::eLinear;
+        const vk::SamplerMipmapMode mipmapMode = filter == vk::Filter::eNearest
+            ? vk::SamplerMipmapMode::eNearest
+            : vk::SamplerMipmapMode::eLinear;
         
         vk::SamplerCreateInfo samplerInfo;
         samplerInfo
-            .setMagFilter(vk::Filter::eLinear)
-            .setMinFilter(vk::Filter::eLinear)
-            .setAddressModeU(vk::SamplerAddressMode::eRepeat)
-            .setAddressModeV(vk::SamplerAddressMode::eRepeat)
-            .setAddressModeW(vk::SamplerAddressMode::eRepeat)
-            .setAnisotropyEnable(VK_TRUE)
-            .setMaxAnisotropy(physicalDeviceProperties.limits.maxSamplerAnisotropy)
+            .setMagFilter(filter)
+            .setMinFilter(filter)
+            .setAddressModeU(addressMode)
+            .setAddressModeV(addressMode)
+            .setAddressModeW(addressMode)
+            .setAnisotropyEnable(enableAnisotropy ? VK_TRUE : VK_FALSE)
+            .setMaxAnisotropy(enableAnisotropy ? physicalDeviceProperties.limits.maxSamplerAnisotropy : 1.0f)
             .setBorderColor(vk::BorderColor::eIntOpaqueBlack)
             .setUnnormalizedCoordinates(VK_FALSE)
             .setCompareEnable(VK_FALSE)
             .setCompareOp(vk::CompareOp::eAlways)
-            .setMipmapMode(vk::SamplerMipmapMode::eLinear)
+            .setMipmapMode(mipmapMode)
             .setMipLodBias(0.0f)
             .setMinLod(0.0f)
-            .setMaxLod(VK_LOD_CLAMP_NONE);
+            .setMaxLod(enableMipmaps ? VK_LOD_CLAMP_NONE : 0.0f);
 
-        if(physicalDeviceFeatures.samplerAnisotropy == VK_FALSE)
+        if(physicalDeviceFeatures.samplerAnisotropy == VK_FALSE || !enableAnisotropy)
         {
             samplerInfo
                 .setAnisotropyEnable(VK_FALSE)
@@ -697,6 +724,17 @@ namespace CommonFunction
         }
 
         return CreateSamplerBase(device, samplerInfo, name);
+    }
+
+    inline vk::Sampler Create2DSampler(vk::Device& device, vk::PhysicalDevice& physicalDevice, const std::string& name = "")
+    {
+        return Create2DSampler(
+            device,
+            physicalDevice,
+            vk::Filter::eLinear,
+            vk::SamplerAddressMode::eRepeat,
+            true,
+            name);
     }
 
     inline vk::Sampler CreateDepthSampler(vk::Device& device, vk::PhysicalDevice& physicalDevice, const std::string& name = "")

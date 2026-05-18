@@ -1,0 +1,1026 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>VulkanLearn Tone Mapping 教程</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23101214'/%3E%3Cpath d='M6 22h20L20 9l-4 8-3-5z' fill='%2362c6d8'/%3E%3C/svg%3E">
+    <style>
+        :root {
+            color-scheme: dark;
+            --bg: #101214;
+            --panel: #181c20;
+            --panel-soft: #20262b;
+            --text: #eef2f3;
+            --muted: #a9b4ba;
+            --line: #354049;
+            --cyan: #62c6d8;
+            --green: #8fcf88;
+            --yellow: #e5c76b;
+            --rose: #e78aa2;
+            --blue: #8bb8ff;
+            --code: #0c0f11;
+            --shadow: 0 18px 50px rgba(0, 0, 0, 0.25);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            margin: 0;
+            background: var(--bg);
+            color: var(--text);
+            font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+            line-height: 1.65;
+        }
+
+        a {
+            color: var(--cyan);
+            text-decoration: none;
+        }
+
+        a:hover {
+            text-decoration: underline;
+        }
+
+        .shell {
+            display: grid;
+            grid-template-columns: 280px minmax(0, 1fr);
+            min-height: 100vh;
+        }
+
+        aside {
+            position: sticky;
+            top: 0;
+            height: 100vh;
+            padding: 28px 22px;
+            border-right: 1px solid var(--line);
+            background: #12161a;
+            overflow: auto;
+        }
+
+        .brand {
+            margin-bottom: 28px;
+        }
+
+        .brand strong {
+            display: block;
+            font-size: 19px;
+            line-height: 1.25;
+        }
+
+        .brand span {
+            display: block;
+            margin-top: 8px;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        nav {
+            display: grid;
+            gap: 6px;
+        }
+
+        nav a {
+            display: block;
+            padding: 8px 10px;
+            border-radius: 6px;
+            color: var(--muted);
+            font-size: 14px;
+        }
+
+        nav a:hover {
+            background: var(--panel-soft);
+            color: var(--text);
+            text-decoration: none;
+        }
+
+        main {
+            min-width: 0;
+            padding: 34px clamp(22px, 5vw, 68px) 70px;
+            max-width: 1180px;
+        }
+
+        section {
+            margin: 0 0 44px;
+        }
+
+        h1 {
+            margin: 0 0 12px;
+            max-width: 900px;
+            font-size: clamp(31px, 5vw, 56px);
+            line-height: 1.05;
+            letter-spacing: 0;
+        }
+
+        h2 {
+            margin: 0 0 16px;
+            font-size: 25px;
+            line-height: 1.25;
+            letter-spacing: 0;
+        }
+
+        h3 {
+            margin: 0 0 10px;
+            font-size: 18px;
+            line-height: 1.35;
+            letter-spacing: 0;
+        }
+
+        p {
+            margin: 0 0 13px;
+            color: var(--muted);
+        }
+
+        .lead {
+            max-width: 850px;
+            color: #d4dcdf;
+            font-size: 17px;
+        }
+
+        .callout {
+            margin-top: 22px;
+            padding: 16px 18px;
+            border: 1px solid var(--line);
+            border-left: 4px solid var(--cyan);
+            border-radius: 8px;
+            background: var(--panel);
+        }
+
+        .callout p:last-child {
+            margin-bottom: 0;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(12, 1fr);
+            gap: 16px;
+        }
+
+        .span-4 {
+            grid-column: span 4;
+        }
+
+        .span-5 {
+            grid-column: span 5;
+        }
+
+        .span-6 {
+            grid-column: span 6;
+        }
+
+        .span-7 {
+            grid-column: span 7;
+        }
+
+        .span-8 {
+            grid-column: span 8;
+        }
+
+        .span-12 {
+            grid-column: span 12;
+        }
+
+        .panel {
+            min-width: 0;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: var(--panel);
+            box-shadow: var(--shadow);
+        }
+
+        .panel-pad {
+            padding: 18px;
+        }
+
+        .pipeline {
+            display: grid;
+            grid-template-columns: repeat(6, minmax(120px, 1fr));
+            gap: 10px;
+        }
+
+        .pipe-step {
+            min-height: 100px;
+            padding: 13px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: #15191d;
+        }
+
+        .pipe-step .tag {
+            display: inline-block;
+            margin-bottom: 8px;
+            color: var(--bg);
+            background: var(--cyan);
+            padding: 2px 8px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        .pipe-step:nth-child(2) .tag {
+            background: var(--green);
+        }
+
+        .pipe-step:nth-child(3) .tag {
+            background: var(--yellow);
+        }
+
+        .pipe-step:nth-child(4) .tag {
+            background: var(--rose);
+        }
+
+        .pipe-step:nth-child(5) .tag {
+            background: var(--blue);
+        }
+
+        .pipe-step strong {
+            display: block;
+            margin-bottom: 5px;
+            font-size: 15px;
+        }
+
+        .pipe-step span {
+            display: block;
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.45;
+        }
+
+        .curve-wrap {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 270px;
+            gap: 16px;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            border-radius: 8px;
+            background: #0d1012;
+        }
+
+        #curveCanvas {
+            height: 360px;
+        }
+
+        #previewCanvas {
+            height: 160px;
+        }
+
+        .controls {
+            display: grid;
+            gap: 15px;
+        }
+
+        label {
+            display: grid;
+            gap: 6px;
+            color: var(--text);
+            font-size: 14px;
+        }
+
+        .value {
+            color: var(--cyan);
+            font-variant-numeric: tabular-nums;
+        }
+
+        input[type="range"] {
+            width: 100%;
+            accent-color: var(--cyan);
+        }
+
+        select {
+            width: 100%;
+            padding: 8px 10px;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            background: #101418;
+            color: var(--text);
+        }
+
+        button {
+            min-height: 38px;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            background: #101418;
+            color: var(--text);
+            cursor: pointer;
+        }
+
+        button:hover {
+            border-color: var(--cyan);
+        }
+
+        .preset-row {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 8px;
+        }
+
+        .table-wrap {
+            min-width: 0;
+            max-width: 100%;
+            overflow-x: auto;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+        }
+
+        table {
+            width: 100%;
+            min-width: 820px;
+            border-collapse: collapse;
+            background: var(--panel);
+        }
+
+        th,
+        td {
+            padding: 12px 14px;
+            border-bottom: 1px solid var(--line);
+            text-align: left;
+            vertical-align: top;
+        }
+
+        th {
+            color: var(--text);
+            background: #151a1f;
+            font-size: 13px;
+        }
+
+        td {
+            color: var(--muted);
+            font-size: 14px;
+        }
+
+        tr:last-child td {
+            border-bottom: 0;
+        }
+
+        code,
+        pre {
+            font-family: Consolas, "Cascadia Mono", monospace;
+        }
+
+        code {
+            color: #f4d98d;
+        }
+
+        pre {
+            margin: 0;
+            padding: 16px;
+            overflow: auto;
+            border-radius: 8px;
+            background: var(--code);
+            color: #d6e2e5;
+            line-height: 1.5;
+            font-size: 13px;
+        }
+
+        .split-list {
+            display: grid;
+            gap: 10px;
+            margin: 0;
+            padding: 0;
+            list-style: none;
+        }
+
+        .split-list li {
+            padding: 12px 14px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: #15191d;
+            color: var(--muted);
+        }
+
+        .split-list strong {
+            color: var(--text);
+        }
+
+        .formula {
+            display: grid;
+            gap: 10px;
+        }
+
+        .mini {
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 10px;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .legend span::before {
+            content: "";
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            margin-right: 6px;
+            border-radius: 50%;
+            background: currentColor;
+        }
+
+        .legend .reinhard {
+            color: var(--green);
+        }
+
+        .legend .aces {
+            color: var(--cyan);
+        }
+
+        .legend .hable {
+            color: var(--rose);
+        }
+
+        .legend .linear {
+            color: var(--yellow);
+        }
+
+        .footer-note {
+            margin-top: 30px;
+            padding-top: 18px;
+            border-top: 1px solid var(--line);
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        @media (max-width: 980px) {
+            .shell {
+                grid-template-columns: 1fr;
+            }
+
+            aside {
+                position: static;
+                height: auto;
+                border-right: 0;
+                border-bottom: 1px solid var(--line);
+            }
+
+            nav {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .pipeline {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .curve-wrap {
+                grid-template-columns: 1fr;
+            }
+
+            .span-4,
+            .span-5,
+            .span-6,
+            .span-7,
+            .span-8 {
+                grid-column: span 12;
+            }
+        }
+
+        @media (max-width: 620px) {
+            main {
+                padding: 24px 16px 48px;
+            }
+
+            nav {
+                grid-template-columns: 1fr;
+            }
+
+            .pipeline {
+                grid-template-columns: 1fr;
+            }
+
+            .preset-row {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="shell">
+        <aside>
+            <div class="brand">
+                <strong>VulkanLearn<br>Tone Mapping 教程</strong>
+                <span>从 HDR 渲染结果到屏幕画面的最后一公里。</span>
+            </div>
+            <nav aria-label="页面导航">
+                <a href="#goal">目标</a>
+                <a href="#pipeline">游戏管线</a>
+                <a href="#curve-lab">曲线实验台</a>
+                <a href="#physical">物理相机</a>
+                <a href="#presets">通用预设</a>
+                <a href="#vulkanlearn">接入 VulkanLearn</a>
+                <a href="#debug">调试顺序</a>
+            </nav>
+        </aside>
+
+        <main>
+            <section id="goal">
+                <h1>Tone Mapping 不是滤镜，是一台虚拟摄影机</h1>
+                <p class="lead">
+                    游戏里 PBR、IBL、天空、发光材质和 bloom 都在 linear HDR 空间里工作。
+                    Tone mapping 的任务，是把这个远超屏幕范围的 HDR 结果，经过曝光和压缩，变成显示器能承载的 LDR 颜色。
+                </p>
+                <div class="callout">
+                    <p>
+                        对当前项目来说，最重要的升级不是一口气支持十种风格，而是先把
+                        <code>exposure</code>、<code>bloomStrength</code> 和一个靠谱的 filmic 曲线接起来。
+                        你现在的裸 Reinhard 会比较灰，固定 <code>bloomStrength = 1.0</code> 又容易洗画面。
+                    </p>
+                </div>
+            </section>
+
+            <section id="pipeline">
+                <h2>游戏里常见的接法</h2>
+                <div class="pipeline" aria-label="Tone mapping pipeline">
+                    <div class="pipe-step">
+                        <span class="tag">1</span>
+                        <strong>Linear HDR Lighting</strong>
+                        <span>PBR、阴影、IBL、天空、emissive 都写入 FP16 HDR buffer。</span>
+                    </div>
+                    <div class="pipe-step">
+                        <span class="tag">2</span>
+                        <strong>HDR Post Effects</strong>
+                        <span>SSR、体积光、DOF 等需要场景亮度的效果在 tone mapping 前做。</span>
+                    </div>
+                    <div class="pipe-step">
+                        <span class="tag">3</span>
+                        <strong>Bloom</strong>
+                        <span>从 HDR scene color 取亮部，模糊后按强度加回。</span>
+                    </div>
+                    <div class="pipe-step">
+                        <span class="tag">4</span>
+                        <strong>Exposure</strong>
+                        <span>手动曝光、EV100 或自动曝光，把画面放到合理亮度区间。</span>
+                    </div>
+                    <div class="pipe-step">
+                        <span class="tag">5</span>
+                        <strong>Filmic Curve</strong>
+                        <span>ACES、Hable、AgX 或项目自定义曲线，处理高光肩部和暗部 toe。</span>
+                    </div>
+                    <div class="pipe-step">
+                        <span class="tag">6</span>
+                        <strong>Display Output</strong>
+                        <span>输出到 sRGB swapchain 或 HDR display path。UI 通常在这之后画。</span>
+                    </div>
+                </div>
+            </section>
+
+            <section id="curve-lab">
+                <h2>曲线实验台</h2>
+                <div class="panel panel-pad">
+                    <div class="curve-wrap">
+                        <div>
+                            <canvas id="curveCanvas" width="900" height="420" aria-label="Tone mapping curve chart"></canvas>
+                            <div class="legend">
+                                <span class="linear">Linear clamp</span>
+                                <span class="reinhard">Reinhard</span>
+                                <span class="aces">ACES fitted</span>
+                                <span class="hable">Hable</span>
+                            </div>
+                        </div>
+                        <div class="controls">
+                            <label>
+                                Tonemapper
+                                <select id="tonemapper">
+                                    <option value="aces">ACES fitted</option>
+                                    <option value="hable">Hable</option>
+                                    <option value="reinhard">Reinhard</option>
+                                    <option value="linear">Linear clamp</option>
+                                </select>
+                            </label>
+                            <label>
+                                Exposure <span class="value" id="exposureValue">1.00</span>
+                                <input id="exposure" type="range" min="0.10" max="3.00" step="0.01" value="1.00">
+                            </label>
+                            <label>
+                                Bloom Strength <span class="value" id="bloomValue">0.08</span>
+                                <input id="bloom" type="range" min="0.00" max="1.00" step="0.01" value="0.08">
+                            </label>
+                            <label>
+                                Saturation <span class="value" id="saturationValue">1.00</span>
+                                <input id="saturation" type="range" min="0.00" max="1.60" step="0.01" value="1.00">
+                            </label>
+                            <div class="preset-row">
+                                <button type="button" data-preset="neutral">Neutral PBR</button>
+                                <button type="button" data-preset="filmic">Filmic</button>
+                                <button type="button" data-preset="bright">Stylized Bright</button>
+                                <button type="button" data-preset="debug">Debug</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div style="margin-top:16px">
+                        <canvas id="previewCanvas" width="900" height="180" aria-label="HDR color strip preview"></canvas>
+                        <p class="mini">
+                            上面是曲线，下面是简化的 HDR 色条预览。注意 bloom 和 exposure 是不同职责：
+                            exposure 管整体明暗，bloom 管高亮溢出，曲线管高光怎么压缩。
+                        </p>
+                    </div>
+                </div>
+            </section>
+
+            <section id="physical">
+                <h2>更物理的那层：曝光</h2>
+                <div class="grid">
+                    <div class="span-6 panel panel-pad">
+                        <h3>手动曝光</h3>
+                        <p>
+                            第一版推荐直接用一个 <code>exposure</code> 参数。
+                            它不是风格参数，而是虚拟相机的曝光补偿。先把这个调通，画面会立刻比固定值好控。
+                        </p>
+                        <pre><code>vec3 hdr = sceneColor + bloomColor * bloomStrength;
+vec3 exposed = hdr * exposure;
+vec3 ldr = ACESFilm(exposed);</code></pre>
+                    </div>
+                    <div class="span-6 panel panel-pad">
+                        <h3>EV100 相机模型</h3>
+                        <p>
+                            如果场景光照单位逐渐稳定，可以把曝光做成摄影参数：光圈、快门、ISO。
+                            这更像真实相机，但前提是场景亮度别完全靠玄学填数。
+                        </p>
+                        <pre><code>float ev100 = log2(aperture * aperture / shutterSpeed * 100.0 / iso);
+float exposure = 1.0 / (1.2 * exp2(ev100));
+vec3 exposed = hdr * exposure;</code></pre>
+                    </div>
+                    <div class="span-12 panel panel-pad">
+                        <h3>自动曝光</h3>
+                        <p>
+                            自动曝光通常会先生成 luminance mip chain 或 histogram，然后把平均亮度拉到 middle gray。
+                            这是后续升级项，不建议在 tone mapping 还没稳定时先做。
+                        </p>
+                        <pre><code>float targetGray = 0.18;
+float exposure = targetGray / max(logAverageLuminance, 0.0001);</code></pre>
+                    </div>
+                </div>
+            </section>
+
+            <section id="presets">
+                <h2>通用起步预设</h2>
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>预设</th>
+                                <th>用途</th>
+                                <th>Tonemapper</th>
+                                <th>Exposure</th>
+                                <th>Bloom Strength</th>
+                                <th>Bloom Threshold</th>
+                                <th>备注</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><code>DebugLinear</code></td>
+                                <td>查 HDR 数值、材质和光照</td>
+                                <td>Linear clamp / None</td>
+                                <td>1.0</td>
+                                <td>0.0</td>
+                                <td>999.0</td>
+                                <td>不要拿它当最终画面，只用来定位问题。</td>
+                            </tr>
+                            <tr>
+                                <td><code>NeutralPBR</code></td>
+                                <td>默认开发观察</td>
+                                <td>ACES fitted</td>
+                                <td>1.0</td>
+                                <td>0.05 - 0.08</td>
+                                <td>1.2</td>
+                                <td>适合作为 VulkanLearn 当前默认值。</td>
+                            </tr>
+                            <tr>
+                                <td><code>Filmic</code></td>
+                                <td>偏游戏默认观感</td>
+                                <td>ACES / Hable</td>
+                                <td>1.1</td>
+                                <td>0.08 - 0.12</td>
+                                <td>1.0</td>
+                                <td>对比稍强，高光更有肩部压缩。</td>
+                            </tr>
+                            <tr>
+                                <td><code>StylizedBright</code></td>
+                                <td>更鲜艳、更明快</td>
+                                <td>ACES fitted</td>
+                                <td>1.2</td>
+                                <td>0.10 - 0.16</td>
+                                <td>0.9</td>
+                                <td>适合风格化，但要小心 bloom 洗画面。</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section id="vulkanlearn">
+                <h2>接入 VulkanLearn 的推荐版本</h2>
+                <div class="grid">
+                    <div class="span-7">
+                        <ul class="split-list">
+                            <li>
+                                <strong>保留当前 pass 顺序。</strong>
+                                <code>geometry + sky -> postProcess -> bloom -> toneMapping -> swapChain</code>
+                                这条结构是对的，问题主要在最后 shader 太简。
+                            </li>
+                            <li>
+                                <strong>给 tone mapping pass 加材质参数。</strong>
+                                最小参数是 <code>u_toneMappingParams = vec4(exposure, bloomStrength, saturation, mode)</code>。
+                            </li>
+                            <li>
+                                <strong>不要手写 gamma。</strong>
+                                如果最终 surface 是 sRGB 格式，shader 输出 linear LDR，硬件写入时会 encode。
+                            </li>
+                            <li>
+                                <strong>bloomStrength 先从 0.08 开始。</strong>
+                                当前 <code>1.0</code> 适合作为 debug 上限，不适合作为默认审美值。
+                            </li>
+                        </ul>
+                    </div>
+                    <div class="span-5 formula">
+                        <pre><code>layout(set = 1, binding = 0) uniform UBOMIParamters {
+    vec4 u_toneMappingParams;
+};
+
+float exposure = u_toneMappingParams.x;
+float bloomStrength = u_toneMappingParams.y;
+float saturation = u_toneMappingParams.z;
+
+vec3 hdr = scene + bloom * bloomStrength;
+vec3 color = ACESFilm(hdr * exposure);
+color = ApplySaturation(color, saturation);
+outColor = vec4(color, 1.0);</code></pre>
+                    </div>
+                    <div class="span-12 panel panel-pad">
+                        <h3>ACES fitted GLSL</h3>
+                        <pre><code>vec3 ACESFilm(vec3 x)
+{
+    const float a = 2.51;
+    const float b = 0.03;
+    const float c = 2.43;
+    const float d = 0.59;
+    const float e = 0.14;
+    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+
+vec3 ApplySaturation(vec3 color, float saturation)
+{
+    float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
+    return mix(vec3(luma), color, saturation);
+}</code></pre>
+                    </div>
+                </div>
+            </section>
+
+            <section id="debug">
+                <h2>调试顺序</h2>
+                <div class="grid">
+                    <div class="span-4 panel panel-pad">
+                        <h3>1. 先关 bloom</h3>
+                        <p>把 <code>bloomStrength</code> 设为 0。确认纯 scene HDR 经过 exposure + tonemap 是否舒服。</p>
+                    </div>
+                    <div class="span-4 panel panel-pad">
+                        <h3>2. 调 exposure</h3>
+                        <p>让主体材质落在合理亮度，别先靠 bloom 或 saturation 救画面。</p>
+                    </div>
+                    <div class="span-4 panel panel-pad">
+                        <h3>3. 再加 bloom</h3>
+                        <p>从 <code>0.05</code> 慢慢加，直到高光有呼吸感但不糊成白雾。</p>
+                    </div>
+                    <div class="span-6 panel panel-pad">
+                        <h3>4. 查颜色空间</h3>
+                        <p>albedo / emissive 用 sRGB 采样，normal / roughness / metallic / AO 用 linear。这个项目的 texture JSON 已经有 <code>colorSpace</code> 字段，应继续保持。</p>
+                    </div>
+                    <div class="span-6 panel panel-pad">
+                        <h3>5. 最后才调风格</h3>
+                        <p>风格最好放到 saturation、contrast、LUT 或 color grading。Tonemapper 先稳定，不要让它承担所有审美职责。</p>
+                    </div>
+                </div>
+                <p class="footer-note">
+                    文件位置：<code>documents/rendering/tone-mapping-tutorial.html</code>。
+                    这是教程页，不改变当前渲染代码；真正接入时优先改 <code>shader/glsl/pass/toneMapping.frag</code> 和 <code>resources/materials/pass/MI_toneMapping.json</code>。
+                </p>
+            </section>
+        </main>
+    </div>
+
+    <script>
+        const curveCanvas = document.getElementById("curveCanvas");
+        const previewCanvas = document.getElementById("previewCanvas");
+        const curveCtx = curveCanvas.getContext("2d");
+        const previewCtx = previewCanvas.getContext("2d");
+        const exposureInput = document.getElementById("exposure");
+        const bloomInput = document.getElementById("bloom");
+        const saturationInput = document.getElementById("saturation");
+        const tonemapperSelect = document.getElementById("tonemapper");
+        const exposureValue = document.getElementById("exposureValue");
+        const bloomValue = document.getElementById("bloomValue");
+        const saturationValue = document.getElementById("saturationValue");
+
+        const presets = {
+            neutral: { tonemapper: "aces", exposure: 1.0, bloom: 0.08, saturation: 1.0 },
+            filmic: { tonemapper: "hable", exposure: 1.1, bloom: 0.10, saturation: 0.96 },
+            bright: { tonemapper: "aces", exposure: 1.2, bloom: 0.14, saturation: 1.15 },
+            debug: { tonemapper: "linear", exposure: 1.0, bloom: 0.0, saturation: 1.0 }
+        };
+
+        function reinhard(x) {
+            return x / (x + 1.0);
+        }
+
+        function aces(x) {
+            const a = 2.51;
+            const b = 0.03;
+            const c = 2.43;
+            const d = 0.59;
+            const e = 0.14;
+            return clamp01((x * (a * x + b)) / (x * (c * x + d) + e));
+        }
+
+        function hablePartial(x) {
+            const A = 0.15;
+            const B = 0.50;
+            const C = 0.10;
+            const D = 0.20;
+            const E = 0.02;
+            const F = 0.30;
+            return ((x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F)) - E / F;
+        }
+
+        function hable(x) {
+            const white = 11.2;
+            return clamp01(hablePartial(x) / hablePartial(white));
+        }
+
+        function linearClamp(x) {
+            return clamp01(x);
+        }
+
+        function clamp01(x) {
+            return Math.max(0, Math.min(1, x));
+        }
+
+        function applyTonemapper(name, x) {
+            if (name === "reinhard") return reinhard(x);
+            if (name === "hable") return hable(x);
+            if (name === "linear") return linearClamp(x);
+            return aces(x);
+        }
+
+        function colorTonemap(name, rgb, exposure, bloomStrength, saturation) {
+            const bloom = Math.max(rgb[0], rgb[1], rgb[2]) > 1.0 ? bloomStrength : 0.0;
+            const source = [
+                (rgb[0] + bloom) * exposure,
+                (rgb[1] + bloom) * exposure,
+                (rgb[2] + bloom) * exposure
+            ];
+            const mapped = source.map((v) => applyTonemapper(name, v));
+            const luma = mapped[0] * 0.2126 + mapped[1] * 0.7152 + mapped[2] * 0.0722;
+            return mapped.map((v) => clamp01(luma + (v - luma) * saturation));
+        }
+
+        function drawGrid(ctx, width, height, maxX) {
+            ctx.clearRect(0, 0, width, height);
+            ctx.fillStyle = "#0d1012";
+            ctx.fillRect(0, 0, width, height);
+
+            ctx.strokeStyle = "#263039";
+            ctx.lineWidth = 1;
+            ctx.font = "12px Segoe UI, sans-serif";
+            ctx.fillStyle = "#839099";
+
+            for (let i = 0; i <= 8; i += 1) {
+                const x = 46 + (width - 72) * i / 8;
+                ctx.beginPath();
+                ctx.moveTo(x, 18);
+                ctx.lineTo(x, height - 38);
+                ctx.stroke();
+                ctx.fillText((maxX * i / 8).toFixed(1), x - 8, height - 14);
+            }
+
+            for (let i = 0; i <= 5; i += 1) {
+                const y = 18 + (height - 56) * i / 5;
+                ctx.beginPath();
+                ctx.moveTo(46, y);
+                ctx.lineTo(width - 26, y);
+                ctx.stroke();
+                ctx.fillText((1 - i / 5).toFixed(1), 12, y + 4);
+            }
+
+            ctx.fillStyle = "#a9b4ba";
+            ctx.fillText("HDR input", width - 95, height - 14);
+            ctx.save();
+            ctx.translate(15, 92);
+            ctx.rotate(-Math.PI / 2);
+            ctx.fillText("LDR output", 0, 0);
+            ctx.restore();
+        }
+
+        function drawCurve(name, color, exposure, maxX) {
+            const width = curveCanvas.width;
+            const height = curveCanvas.height;
+            const left = 46;
+            const right = width - 26;
+            const top = 18;
+            const bottom = height - 38;
+
+            curveCtx.strokeStyle = color;
+            curveCtx.lineWidth = name === tonemapperSelect.value ? 3 : 1.8;
+            curveCtx.beginPath();
+            for (let i = 0; i <= 360; i += 1) {
+                const xValue = maxX * i / 360;
+                const yValue = applyTonemapper(name, xValue * exposure);
+                const x = left + (right - left) * xValue / maxX;
+                const y = bottom - (bottom - top) * yValue;
+                if (i === 0) curveCtx.moveTo(x, y);
+                else curveCtx.lineTo(x, y);
+            }
+            curveCtx.stroke();
+        }
+
+        function drawPreview() {
+            const width = previewCanvas.width;
+            const height = previewCanvas.height;
+            const mapper = tonemapperSelect.value;
+            const exposure = Number(exposureInput.value);
+            const bloom = Number(bloomInput.value);
+            const saturation = Number(saturationInput.value);
+
+            previewCtx.clearRect(0, 0, width, height);
+            previewCtx.fillStyle = "#0d1012";
+            previewCtx.fillRect(0, 0, width, height);
+
+            const samples = [
+                { label: "Shadow", color: [0.03, 0.035, 0.045] },
+                { label: "Skin", color: [0.75, 0.48, 0.36] },
+                { label: "Paint", color: [0.2, 0.55, 1.4] },
+                { label: "Sky", color: [0.55, 0.8, 2.0] },
+                { label: "Lamp", color: [4.0, 2.2, 0.6] },
+                { label: "Sun hit", color: [9.0, 7.0, 3.2] }
+            ];
+
+            const gap = 10;
+            const top = 26;
+            const blockH = 88;
+            const blockW = (width - gap * (samples.length + 1)) / samples.length;
+
+            previewCtx.font = "13px Segoe UI, sans-serif";
+            samples.forEach((sample, index) => {
+                const mapped = colorTonemap(mapper, sample.color, exposure, bloom, saturation);
+                const x = gap + index * (blockW + gap);
+                previewCtx.fillStyle = `rgb(${Math.round(mapped[0] * 255)}, ${Math.round(mapped[1] * 255)}, ${Math.round(mapped[2] * 255)})`;
+                previewCtx.fillRect(x, top, blockW, blockH);
+                previewCtx.strokeStyle = "#354049";
+                previewCtx.strokeRect(x, top, blockW, blockH);
+                previewCtx.fillStyle = "#dbe5e8";
+                previewCtx.fillText(sample.label, x + 8, top + blockH + 22);
+                previewCtx.fillStyle = "#839099";
+                previewCtx.fillText(`HDR ${sample.color[0].toFixed(1)}`, x + 8, top + blockH + 40);
+            });
+        }
+
+        function drawAll() {
+            const exposure = Number(exposureInput.value);
+            exposureValue.textContent = exposure.toFixed(2);
+            bloomValue.textContent = Number(bloomInput.value).toFixed(2);
+            saturationValue.textContent = Number(saturationInput.value).toFixed(2);
+
+            const maxX = 8.0;
+            drawGrid(curveCtx, curveCanvas.width, curveCanvas.height, maxX);
+            drawCurve("linear", "#e5c76b", exposure, maxX);
+            drawCurve("reinhard", "#8fcf88", exposure, maxX);
+            drawCurve("aces", "#62c6d8", exposure, maxX);
+            drawCurve("hable", "#e78aa2", exposure, maxX);
+            drawPreview();
+        }
+
+        function applyPreset(name) {
+            const preset = presets[name];
+            if (!preset) return;
+            tonemapperSelect.value = preset.tonemapper;
+            exposureInput.value = String(preset.exposure);
+            bloomInput.value = String(preset.bloom);
+            saturationInput.value = String(preset.saturation);
+            drawAll();
+        }
+
+        [exposureInput, bloomInput, saturationInput, tonemapperSelect].forEach((input) => {
+            input.addEventListener("input", drawAll);
+        });
+
+        document.querySelectorAll("[data-preset]").forEach((button) => {
+            button.addEventListener("click", () => applyPreset(button.dataset.preset));
+        });
+
+        drawAll();
+    </script>
+</body>
+</html>

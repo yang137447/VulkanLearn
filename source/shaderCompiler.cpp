@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <nlohmann/json.hpp>
 
 #include "shaderReflect.h"
 #include "commonFunction.h"
@@ -43,7 +44,13 @@ shaderc_include_result* Include::GetInclude(const char* requested_source, shader
 
 void Include::ReleaseInclude(shaderc_include_result* data)
 {
-    delete includeResult;
+    if (data == nullptr)
+    {
+        return;
+    }
+    delete[] data->content;
+    delete[] data->source_name;
+    delete data;
 }
 
 ShaderCompiler::ShaderCompiler()
@@ -97,13 +104,18 @@ void ShaderCompiler::StartCompile(const std::string& shaderFilePath)
             }
 
             std::string glslCode = CommonFunction::ReadFile(glslShaderPath);
+            ShaderVariantKey defaultVariantKey;
+            defaultVariantKey.shaderName = shaderName;
+            UpdateVariantManifest(defaultVariantKey);
             
             bool isDebugInfo = false;
+            std::vector<std::string> macros;
 #ifndef NDEBUG
             isDebugInfo = true;
+            macros.push_back("ENABLE_DEBUG_VIEW");
 #endif
             // Main shader
-            std::vector<uint32_t> spvCode = CompileGLSLToSPIRV(glslCode, kind, glslShaderPath, isDebugInfo);
+            std::vector<uint32_t> spvCode = CompileGLSLToSPIRV(glslCode, kind, glslShaderPath, macros, isDebugInfo);
             SaveSPIRVToFile(spvCode, compiledShaderPath);
 
             // Debug shader (for reflection)
@@ -114,7 +126,9 @@ void ShaderCompiler::StartCompile(const std::string& shaderFilePath)
             else
             {
                 // If main shader is optimized, compile a separate debug version for reflection
-                std::vector<uint32_t> spvDebugCode = CompileGLSLToSPIRV(glslCode, kind, glslShaderPath, true);
+                std::vector<std::string> debugMacros = macros;
+                debugMacros.push_back("ENABLE_DEBUG_VIEW"); // Ensure debug reflection also has it if needed, or maybe just debug version
+                std::vector<uint32_t> spvDebugCode = CompileGLSLToSPIRV(glslCode, kind, glslShaderPath, debugMacros, true);
                 SaveSPIRVToFile(spvDebugCode, compiledDebugShaderPath);
             }
 
@@ -128,6 +142,13 @@ void ShaderCompiler::StartCompile(const std::string& shaderFilePath)
     }
 }
 
+ShaderCompiler::ShaderVariantCompileResult ShaderCompiler::EnsureGraphicsVariantCompiled(const ShaderVariantKey& shaderVariantKey)
+{
+    ShaderCompiler shaderCompiler;
+    shaderCompiler.SetShaderPath(CommonFunction::GetProjectPath() + "/shader");
+    return shaderCompiler.CompileGraphicsVariant(shaderVariantKey);
+}
+
 void ShaderCompiler::SetShaderPath(const std::string& shaderFilePath)
 {
     shaderPath = shaderFilePath;
@@ -135,7 +156,7 @@ void ShaderCompiler::SetShaderPath(const std::string& shaderFilePath)
     spirvPath = shaderPath + "/spv";
 }
 
-std::vector<uint32_t> ShaderCompiler::CompileGLSLToSPIRV(const std::string& glslCode, shaderc_shader_kind kind, const std::string& shaderFileFullPath, bool isDebug)
+std::vector<uint32_t> ShaderCompiler::CompileGLSLToSPIRV(const std::string& glslCode, shaderc_shader_kind kind, const std::string& shaderFileFullPath, const std::vector<std::string>& macros, bool isDebug)
 {
     shaderc::Compiler compiler;
     shaderc::CompileOptions options;
@@ -147,6 +168,10 @@ std::vector<uint32_t> ShaderCompiler::CompileGLSLToSPIRV(const std::string& glsl
     options.SetTargetEnvironment(shaderc_target_env::shaderc_target_env_vulkan, shaderc_env_version::shaderc_env_version_vulkan_1_4);
     options.SetSourceLanguage(shaderc_source_language::shaderc_source_language_glsl);
     options.SetIncluder(std::make_unique<Include>());
+    for (const std::string& macro : macros)
+    {
+        options.AddMacroDefinition(macro, "1");
+    }
 
     shaderc::SpvCompilationResult result = compiler.CompileGlslToSpv(glslCode.data(), kind, shaderFileFullPath.c_str(), options);
     if (result.GetCompilationStatus() != shaderc_compilation_status_success)
@@ -173,4 +198,103 @@ void ShaderCompiler::SaveSPIRVToFile(const std::vector<uint32_t>& spirv, const s
     std::cout << spvPath << spirv.size() * sizeof(uint32_t) << std::endl;
     file.write(reinterpret_cast<const char *>(spirv.data()), spirv.size() * sizeof(uint32_t));
     file.close();
+}
+
+std::vector<std::string> ShaderCompiler::BuildRenderModeMacros(RenderMode renderMode)
+{
+    switch (renderMode)
+    {
+    case RenderMode::Opaque:
+        return {"RENDER_MODE_OPAQUE"};
+    case RenderMode::OpaqueClip:
+        return {"RENDER_MODE_OPAQUE_CLIP"};
+    case RenderMode::TransparentAlphaBlend:
+        return {"RENDER_MODE_TRANSPARENT_ALPHA_BLEND"};
+    case RenderMode::TransparentAdditive:
+        return {"RENDER_MODE_TRANSPARENT_ADDITIVE"};
+    default:
+        throw std::runtime_error("Unknown RenderMode when building shader macros");
+    }
+}
+
+void ShaderCompiler::UpdateVariantManifest(const ShaderVariantKey& shaderVariantKey)
+{
+    const std::string manifestPath = CommonFunction::GetProjectPath() + "/shader/spv/variants.json";
+    nlohmann::json manifestJson = nlohmann::json::object();
+
+    if (std::filesystem::exists(manifestPath))
+    {
+        std::ifstream manifestFile(manifestPath);
+        if (manifestFile.is_open() && manifestFile.peek() != std::ifstream::traits_type::eof())
+        {
+            manifestFile >> manifestJson;
+        }
+    }
+
+    manifestJson[shaderVariantKey.GetVariantHash()] = {
+        {"normalizedKey", shaderVariantKey.GetNormalizedKey()},
+        {"shader", shaderVariantKey.shaderName},
+        {"renderMode", RenderModeToString(shaderVariantKey.renderMode)},
+        {"artMacros", shaderVariantKey.artMacros}
+    };
+
+    std::filesystem::create_directories(std::filesystem::path(manifestPath).parent_path());
+    std::ofstream manifestOutput(manifestPath);
+    manifestOutput << manifestJson.dump(4);
+}
+
+ShaderCompiler::ShaderVariantCompileResult ShaderCompiler::CompileGraphicsVariant(const ShaderVariantKey& shaderVariantKeyInput)
+{
+    ShaderVariantKey shaderVariantKey = shaderVariantKeyInput;
+    shaderVariantKey.artMacros = NormalizeArtMacros(shaderVariantKey.artMacros);
+
+    ShaderVariantCompileResult compileResult;
+    compileResult.variantHash = shaderVariantKey.GetVariantHash();
+    compileResult.normalizedKey = shaderVariantKey.GetNormalizedKey();
+    compileResult.vertexSpvPath = spirvPath + "/" + shaderVariantKey.GetStageSpvRelativePath("vert");
+    compileResult.fragmentSpvPath = spirvPath + "/" + shaderVariantKey.GetStageSpvRelativePath("frag");
+    compileResult.vertexDebugPath = spirvPath + "/" + shaderVariantKey.GetStageDebugRelativePath("vert");
+    compileResult.fragmentDebugPath = spirvPath + "/" + shaderVariantKey.GetStageDebugRelativePath("frag");
+
+    const std::string vertexShaderSourcePath = glslPath + "/" + shaderVariantKey.shaderName + ".vert";
+    const std::string fragmentShaderSourcePath = glslPath + "/" + shaderVariantKey.shaderName + ".frag";
+
+    std::cout << "Info: compiling shader variant "
+              << shaderVariantKey.GetShortDebugString()
+              << " hash="
+              << compileResult.variantHash
+              << std::endl;
+
+    const std::string vertexShaderCode = CommonFunction::ReadFile(vertexShaderSourcePath);
+    const std::string fragmentShaderCode = CommonFunction::ReadFile(fragmentShaderSourcePath);
+
+    std::vector<std::string> compileMacros = BuildRenderModeMacros(shaderVariantKey.renderMode);
+    compileMacros.insert(compileMacros.end(), shaderVariantKey.artMacros.begin(), shaderVariantKey.artMacros.end());
+
+    bool isDebugInfo = false;
+#ifndef NDEBUG
+    isDebugInfo = true;
+    compileMacros.push_back("ENABLE_DEBUG_VIEW");
+#endif
+
+    const std::vector<uint32_t> vertexSpv = CompileGLSLToSPIRV(vertexShaderCode, shaderc_shader_kind::shaderc_vertex_shader, vertexShaderSourcePath, compileMacros, isDebugInfo);
+    const std::vector<uint32_t> fragmentSpv = CompileGLSLToSPIRV(fragmentShaderCode, shaderc_shader_kind::shaderc_fragment_shader, fragmentShaderSourcePath, compileMacros, isDebugInfo);
+    SaveSPIRVToFile(vertexSpv, compileResult.vertexSpvPath);
+    SaveSPIRVToFile(fragmentSpv, compileResult.fragmentSpvPath);
+
+    if (isDebugInfo)
+    {
+        SaveSPIRVToFile(vertexSpv, compileResult.vertexDebugPath);
+        SaveSPIRVToFile(fragmentSpv, compileResult.fragmentDebugPath);
+    }
+    else
+    {
+        const std::vector<uint32_t> vertexSpvDebug = CompileGLSLToSPIRV(vertexShaderCode, shaderc_shader_kind::shaderc_vertex_shader, vertexShaderSourcePath, compileMacros, true);
+        const std::vector<uint32_t> fragmentSpvDebug = CompileGLSLToSPIRV(fragmentShaderCode, shaderc_shader_kind::shaderc_fragment_shader, fragmentShaderSourcePath, compileMacros, true);
+        SaveSPIRVToFile(vertexSpvDebug, compileResult.vertexDebugPath);
+        SaveSPIRVToFile(fragmentSpvDebug, compileResult.fragmentDebugPath);
+    }
+
+    UpdateVariantManifest(shaderVariantKey);
+    return compileResult;
 }

@@ -47,6 +47,25 @@ GraphicsPipelineBuildResult GraphicsPipelineBuilder::Build(const GraphicsPipelin
         .setSrcAlphaBlendFactor(vk::BlendFactor::eOne)
         .setDstAlphaBlendFactor(vk::BlendFactor::eZero);
 
+    if (desc.pipelineStateDesc.blendMode == GraphicsPipelineBlendMode::AlphaBlend)
+    {
+        pipelineColorBlendAttachmentState[0]
+            .setBlendEnable(true)
+            .setSrcColorBlendFactor(vk::BlendFactor::eSrcAlpha)
+            .setDstColorBlendFactor(vk::BlendFactor::eOneMinusSrcAlpha)
+            .setSrcAlphaBlendFactor(vk::BlendFactor::eOne)
+            .setDstAlphaBlendFactor(vk::BlendFactor::eOneMinusSrcAlpha);
+    }
+    else if (desc.pipelineStateDesc.blendMode == GraphicsPipelineBlendMode::Additive)
+    {
+        pipelineColorBlendAttachmentState[0]
+            .setBlendEnable(true)
+            .setSrcColorBlendFactor(vk::BlendFactor::eSrcAlpha)
+            .setDstColorBlendFactor(vk::BlendFactor::eOne)
+            .setSrcAlphaBlendFactor(vk::BlendFactor::eOne)
+            .setDstAlphaBlendFactor(vk::BlendFactor::eOne);
+    }
+
     vk::PipelineColorBlendStateCreateInfo pipelineColorBlendStateCreateInfo;
     pipelineColorBlendStateCreateInfo
         .setAttachments(pipelineColorBlendAttachmentState)

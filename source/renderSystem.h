@@ -26,6 +26,9 @@ public:
     void Render();
     
     std::vector<vk::DescriptorBufferInfo>& GetUBOGlobalBufferInfo(){ return uboGlobal.bufferInfos; }
+
+    void SetDebugViewMode(int mode) { debugViewMode = mode; }
+    int GetDebugViewMode() const { return debugViewMode; }
 private:
     RenderSystem();
     void UpdateUBOGlobal(vk::CommandBuffer& commandBuffer);
@@ -63,9 +66,10 @@ private:
 
     uint32_t currentFrame = 0;
     uint32_t swapChainImageIndex = 0;
+    int debugViewMode = 0;
     
     Eigen::Matrix4f lightViewProj = Eigen::Matrix4f::Identity();
     Buffer uboGlobal;
-    // 按基础材质分组： {shader, {materialInstance, [sceneObject]}}
+    // 按基础材质对象分组： {materialKey, {materialInstance, [sceneObject]}}
     std::unordered_map<std::string, std::unordered_map<std::string, std::vector<std::weak_ptr<SceneObject>>>> hierarchyObjects;
 };

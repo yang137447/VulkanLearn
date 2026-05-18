@@ -60,6 +60,35 @@ cmake --build build -j
 
 编译成功后，可执行文件 `main.exe` 将生成在 `build/bin` 目录下。
 
+## 运行时资源位置
+
+当前仓库不再以 git 形式保存完整 `resources/` 资产。
+
+程序运行时默认从仓库同级目录读取外部资源树：
+
+```text
+../VulkanLearnAssets/resources
+```
+
+按当前实现，仓库目录与外部资源目录的关系应为：
+
+```text
+ParentFolder/
+  VulkanLearn/
+  VulkanLearnAssets/
+    resources/
+```
+
+运行前请确保外部 `resources/` 至少包含：
+
+- `scenes/`
+- `models/`
+- `materials/`
+- `textures/`
+- `hdri/`
+
+仓库内保留的 `resources/README.md` 仅用于说明资源迁移约定；本地生成内容仍可能写入 `resources/generated/`。
+
 ## 性能分析工具使用
 
 本项目集成了两种性能分析工具：**Tracy Profiler** 和 **NVIDIA Nsight Systems**。代码中的 `PROFILE_SCOPE` 宏会同时触发两者的标记，你可以根据需求选择使用。
@@ -91,7 +120,7 @@ Nsight Systems 适合分析 CPU 与 GPU 的交互、Vulkan API 的调用时序�
     打开 Nsight Systems，创建一个新项目。
 3.  **配置目标**：
     - **Target application**: 选择你的 `build/bin/main.exe`。
-    - **Working directory**: 建议设置为项目根目录 (例如 `D:\GitHub\VulkanLearn`)，以确保能正确加载 `config` 和 `resources` 资源。
+    - **Working directory**: 建议设置为项目根目录 (例如 `D:\GitHub\VulkanLearn`)，并确保同级目录存在 `VulkanLearnAssets/resources`，以便正确加载外部资源。
 4.  **开始录制**：
     点击 **"Start"** 按钮，程序会自动运行。
 5.  **结束分析**：
@@ -146,7 +175,7 @@ while (running) {
 ## 目录结构
 - `source/`: 源代码
 - `shader/`: GLSL 着色器
-- `resources/`: 模型、材质和纹理资源
+- `resources/`: 仓库内仅保留说明文件和本地生成内容，运行时资产位于同级 `VulkanLearnAssets/resources`
 - `config/`: 渲染管线和场景配置
 - `documents/`: 正式设计文档和规划文档
 - `extern/`: 第三方库 (SDL3, Assimp, GLM, Tracy, NVTX 等)

@@ -5,14 +5,20 @@
 
 struct Vertex
 {
-    Eigen::Vector3f position; // 顶点位置
-    Eigen::Vector3f normal;    // 顶点法线
-    Eigen::Vector3f color;    // 顶点颜色
-    Eigen::Vector2f texCoord; // 纹理坐标
+    Eigen::Vector3f position;   // 顶点位置
+    Eigen::Vector3f normal;     // 顶点法线
+    Eigen::Vector3f color;      // 顶点颜色
+    Eigen::Vector2f texCoord;   // 纹理坐标
+    Eigen::Vector4f tangent;    // xyz: 切线, w: MikkTSpace handedness
 
     Vertex() {}
-    Vertex(Eigen::Vector3f pos, Eigen::Vector3f nor, Eigen::Vector3f col, Eigen::Vector2f tex)
-        : position(pos), normal(nor), color(col), texCoord(tex) {}
+    Vertex(
+        Eigen::Vector3f pos,
+        Eigen::Vector3f nor,
+        Eigen::Vector3f col,
+        Eigen::Vector2f tex,
+        Eigen::Vector4f tan = Eigen::Vector4f::Zero())
+        : position(pos), normal(nor), color(col), texCoord(tex), tangent(tan) {}
 };
 
 namespace VertexInfo{
@@ -50,6 +56,13 @@ namespace VertexInfo{
             0, // binding
             vk::Format::eR32G32Sfloat, // format
             offsetof(Vertex, texCoord) // offset
+        ),
+        // 切线
+        vk::VertexInputAttributeDescription(
+            4, // location
+            0, // binding
+            vk::Format::eR32G32B32A32Sfloat, // format
+            offsetof(Vertex, tangent) // offset
         )
     };
 } // namespace VertexFormat

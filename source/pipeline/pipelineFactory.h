@@ -5,6 +5,7 @@
 #include <unordered_map>
 #include "vulkan/vulkan.hpp"
 #include "graphicsPipelineBuilder.h"
+#include "../shaderVariant.h"
 
 class ComputePipeline;
 class GraphicsPipeline;
@@ -16,7 +17,7 @@ namespace vk
 struct GraphicsPipelineKey
 {
     vk::RenderPass* renderPass;
-    std::string shaderName;
+    ShaderVariantKey shaderVariantKey;
     vk::SampleCountFlagBits sampleCount;
     GraphicsPipelineStateDesc pipelineStateDesc;
     bool bIsShadowPass;
@@ -24,13 +25,14 @@ struct GraphicsPipelineKey
     bool operator==(const GraphicsPipelineKey& other) const
     {
         return renderPass == other.renderPass &&
-            shaderName == other.shaderName &&
+            shaderVariantKey == other.shaderVariantKey &&
             sampleCount == other.sampleCount &&
             pipelineStateDesc.bUseVertexInput == other.pipelineStateDesc.bUseVertexInput &&
             pipelineStateDesc.bDepthTestEnable == other.pipelineStateDesc.bDepthTestEnable &&
             pipelineStateDesc.bDepthWriteEnable == other.pipelineStateDesc.bDepthWriteEnable &&
             pipelineStateDesc.depthCompareOp == other.pipelineStateDesc.depthCompareOp &&
             pipelineStateDesc.cullMode == other.pipelineStateDesc.cullMode &&
+            pipelineStateDesc.blendMode == other.pipelineStateDesc.blendMode &&
             bIsShadowPass == other.bIsShadowPass;
     }
 };
@@ -48,7 +50,7 @@ public:
     std::shared_ptr<GraphicsPipeline> CreateGraphicsPipeline(
         vk::PhysicalDeviceMemoryProperties* gpuMemoryProperties,
         vk::RenderPass* renderPass,
-        const std::string& shaderName,
+        const ShaderVariantKey& shaderVariantKey,
         vk::SampleCountFlagBits sampleCount,
         const GraphicsPipelineStateDesc& pipelineStateDesc,
         bool bIsShadowPass);
