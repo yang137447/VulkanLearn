@@ -41,236 +41,219 @@
             "minItems": 3,
             "maxItems": 3
         },
-        "namedObjectBase": {
+        "meshObject": {
             "type": "object",
             "properties": {
                 "name": {
                     "type": "string"
+                },
+                "type": {
+                    "type": "string",
+                    "const": "mesh"
+                },
+                "modelPath": {
+                    "type": "string",
+                    "description": "模型描述文件路径，例如 'models/SM_xxx.json'。"
+                },
+                "position": {
+                    "$ref": "#/$defs/vec3"
+                },
+                "rotation": {
+                    "$ref": "#/$defs/vec3"
+                },
+                "scale": {
+                    "$ref": "#/$defs/vec3"
                 }
             },
             "required": [
-                "name"
-            ]
-        },
-        "meshObject": {
-            "allOf": [
-                { "$ref": "#/$defs/namedObjectBase" },
-                {
-                    "type": "object",
-                    "properties": {
-                        "type": {
-                            "type": "string",
-                            "const": "mesh"
-                        },
-                        "modelPath": {
-                            "type": "string",
-                            "description": "模型描述文件路径，例如 'models/SM_xxx.json'。"
-                        },
-                        "position": {
-                            "$ref": "#/$defs/vec3"
-                        },
-                        "rotation": {
-                            "$ref": "#/$defs/vec3"
-                        },
-                        "scale": {
-                            "$ref": "#/$defs/vec3"
-                        }
-                    },
-                    "required": [
-                        "type",
-                        "modelPath",
-                        "position",
-                        "rotation",
-                        "scale"
-                    ],
-                    "additionalProperties": false
-                }
-            ]
+                "name",
+                "type",
+                "modelPath",
+                "position",
+                "rotation",
+                "scale"
+            ],
+            "additionalProperties": false
         },
         "directionalLightObject": {
-            "allOf": [
-                { "$ref": "#/$defs/namedObjectBase" },
-                {
-                    "type": "object",
-                    "properties": {
-                        "type": {
-                            "type": "string",
-                            "const": "directionalLight"
-                        },
-                        "position": {
-                            "$ref": "#/$defs/vec3"
-                        },
-                        "rotation": {
-                            "$ref": "#/$defs/vec3"
-                        },
-                        "color": {
-                            "$ref": "#/$defs/vec3"
-                        },
-                        "intensity": {
-                            "type": "number"
-                        }
-                    },
-                    "required": [
-                        "type",
-                        "position",
-                        "rotation",
-                        "color",
-                        "intensity"
-                    ],
-                    "additionalProperties": false
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string",
+                    "const": "directionalLight"
+                },
+                "position": {
+                    "$ref": "#/$defs/vec3"
+                },
+                "rotation": {
+                    "$ref": "#/$defs/vec3"
+                },
+                "color": {
+                    "$ref": "#/$defs/vec3"
+                },
+                "intensity": {
+                    "type": "number"
                 }
-            ]
+            },
+            "required": [
+                "name",
+                "type",
+                "position",
+                "rotation",
+                "color",
+                "intensity"
+            ],
+            "additionalProperties": false
         },
         "pointLightObject": {
-            "allOf": [
-                { "$ref": "#/$defs/namedObjectBase" },
-                {
-                    "type": "object",
-                    "properties": {
-                        "type": {
-                            "type": "string",
-                            "const": "pointLight"
-                        },
-                        "position": {
-                            "$ref": "#/$defs/vec3"
-                        },
-                        "rotation": {
-                            "$ref": "#/$defs/vec3"
-                        },
-                        "color": {
-                            "$ref": "#/$defs/vec3"
-                        },
-                        "intensity": {
-                            "type": "number"
-                        },
-                        "radius": {
-                            "type": "number",
-                            "description": "当前 loader 未使用，但现有场景文件中仍有保留。"
-                        }
-                    },
-                    "required": [
-                        "type",
-                        "position",
-                        "rotation",
-                        "color",
-                        "intensity"
-                    ],
-                    "additionalProperties": false
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string",
+                    "const": "pointLight"
+                },
+                "position": {
+                    "$ref": "#/$defs/vec3"
+                },
+                "rotation": {
+                    "$ref": "#/$defs/vec3"
+                },
+                "color": {
+                    "$ref": "#/$defs/vec3"
+                },
+                "intensity": {
+                    "type": "number"
+                },
+                "radius": {
+                    "type": "number",
+                    "description": "当前 loader 未使用，但现有场景文件中仍有保留。"
                 }
-            ]
+            },
+            "required": [
+                "name",
+                "type",
+                "position",
+                "rotation",
+                "color",
+                "intensity"
+            ],
+            "additionalProperties": false
         },
         "spotLightObject": {
-            "allOf": [
-                { "$ref": "#/$defs/namedObjectBase" },
-                {
-                    "type": "object",
-                    "properties": {
-                        "type": {
-                            "type": "string",
-                            "const": "spotLight"
-                        },
-                        "position": {
-                            "$ref": "#/$defs/vec3"
-                        },
-                        "rotation": {
-                            "$ref": "#/$defs/vec3"
-                        },
-                        "color": {
-                            "$ref": "#/$defs/vec3"
-                        },
-                        "intensity": {
-                            "type": "number"
-                        },
-                        "radius": {
-                            "type": "number",
-                            "description": "当前 loader 未使用，但现有场景文件中仍有保留。"
-                        },
-                        "cone_angle_outer": {
-                            "type": "number"
-                        },
-                        "cone_angle_inner": {
-                            "type": "number"
-                        }
-                    },
-                    "required": [
-                        "type",
-                        "position",
-                        "rotation",
-                        "color",
-                        "intensity",
-                        "cone_angle_outer",
-                        "cone_angle_inner"
-                    ],
-                    "additionalProperties": false
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string",
+                    "const": "spotLight"
+                },
+                "position": {
+                    "$ref": "#/$defs/vec3"
+                },
+                "rotation": {
+                    "$ref": "#/$defs/vec3"
+                },
+                "color": {
+                    "$ref": "#/$defs/vec3"
+                },
+                "intensity": {
+                    "type": "number"
+                },
+                "radius": {
+                    "type": "number",
+                    "description": "当前 loader 未使用，但现有场景文件中仍有保留。"
+                },
+                "cone_angle_outer": {
+                    "type": "number"
+                },
+                "cone_angle_inner": {
+                    "type": "number"
                 }
-            ]
+            },
+            "required": [
+                "name",
+                "type",
+                "position",
+                "rotation",
+                "color",
+                "intensity",
+                "cone_angle_outer",
+                "cone_angle_inner"
+            ],
+            "additionalProperties": false
         },
         "cameraObject": {
-            "allOf": [
-                { "$ref": "#/$defs/namedObjectBase" },
-                {
-                    "type": "object",
-                    "properties": {
-                        "type": {
-                            "type": "string",
-                            "const": "camera"
-                        },
-                        "fov": {
-                            "type": "number"
-                        },
-                        "near_clip": {
-                            "type": "number"
-                        },
-                        "far_clip": {
-                            "type": "number"
-                        },
-                        "position": {
-                            "$ref": "#/$defs/vec3"
-                        },
-                        "rotation": {
-                            "$ref": "#/$defs/vec3"
-                        },
-                        "scale": {
-                            "$ref": "#/$defs/vec3"
-                        }
-                    },
-                    "required": [
-                        "type",
-                        "fov",
-                        "near_clip",
-                        "far_clip",
-                        "position",
-                        "rotation",
-                        "scale"
-                    ],
-                    "additionalProperties": false
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string",
+                    "const": "camera"
+                },
+                "fov": {
+                    "type": "number"
+                },
+                "near_clip": {
+                    "type": "number"
+                },
+                "far_clip": {
+                    "type": "number"
+                },
+                "position": {
+                    "$ref": "#/$defs/vec3"
+                },
+                "rotation": {
+                    "$ref": "#/$defs/vec3"
+                },
+                "scale": {
+                    "$ref": "#/$defs/vec3"
                 }
-            ]
+            },
+            "required": [
+                "name",
+                "type",
+                "fov",
+                "near_clip",
+                "far_clip",
+                "position",
+                "rotation",
+                "scale"
+            ],
+            "additionalProperties": false
         },
         "environmentObject": {
-            "allOf": [
-                { "$ref": "#/$defs/namedObjectBase" },
-                {
-                    "type": "object",
-                    "properties": {
-                        "type": {
-                            "type": "string",
-                            "const": "environment"
-                        },
-                        "hdrPath": {
-                            "type": "string"
-                        },
-                        "cubeSize": {
-                            "type": "integer",
-                            "minimum": 1
-                        }
-                    },
-                    "required": [
-                        "type"
-                    ],
-                    "additionalProperties": false
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string",
+                    "const": "environment"
+                },
+                "hdrPath": {
+                    "type": "string"
+                },
+                "cubeSize": {
+                    "type": "integer",
+                    "minimum": 1
                 }
-            ]
+            },
+            "required": [
+                "name",
+                "type"
+            ],
+            "additionalProperties": false
         }
     }
 }

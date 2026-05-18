@@ -47,12 +47,10 @@
         },
         "artMacros": {
             "type": "array",
-            "description": "美术控制的功能宏列表，参与 Shader 变体编译。引擎会自动对其进行去重和排序。",
+            "description": "美术控制的功能宏列表，参与 Shader 变体编译。具体合法值由 shader/variant 系统决定，引擎会自动对其进行去重和排序。",
             "items": {
                 "type": "string",
-                "anyOf": [
-                    { "enum": ["USE_NORMAL_MAP", "USE_EMISSIVE", "USE_CLEAR_COAT"] }
-                ]
+                "pattern": "^[A-Z0-9_]+$"
             },
             "uniqueItems": true
         },
