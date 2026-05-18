@@ -1,6 +1,0 @@
-{
-    "name": "Vilking Room",
-    "type": "mesh",
-    "modelDataPath": "models/datas/axis.obj",
-    "materialInstancePath": "materials/MI_axis.json"
-}

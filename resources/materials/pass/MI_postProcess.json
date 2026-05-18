@@ -1,7 +1,0 @@
-{
-    "name": "Post Process Material Instance",
-    "type": "materialInstance",
-    "shader": "pass/postProcess",
-    "textures": {},
-    "parameters": {}
-}

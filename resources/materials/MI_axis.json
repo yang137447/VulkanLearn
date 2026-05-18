@@ -1,9 +1,0 @@
-{
-    "name": "Vilking Room Material Instance",
-    "type": "materialInstance",
-    "shader": "vertexColor",
-    "textures": {},
-    "parameters": {
-        "tintColor": [1, 1, 1, 0]
-    }
-}

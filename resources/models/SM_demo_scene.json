@@ -1,6 +1,0 @@
-{
-    "name": "DemoScene",
-    "type": "mesh",
-    "modelDataPath": "models/datas/demo_scene.obj",
-    "materialInstancePath": "materials/MI_measureGrid.json"
-}

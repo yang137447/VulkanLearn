@@ -1,7 +1,0 @@
-{
-    "name": "Bloom Prefilter Material Instance",
-    "type": "materialInstance",
-    "shader": "pass/bloomPrefilter",
-    "textures": {},
-    "parameters": {}
-}

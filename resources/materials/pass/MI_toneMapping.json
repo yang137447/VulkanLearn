@@ -1,7 +1,0 @@
-{
-    "name": "ToneMapping Material Instance",
-    "type": "materialInstance",
-    "shader": "pass/toneMapping",
-    "textures": {},
-    "parameters": {}
-}
