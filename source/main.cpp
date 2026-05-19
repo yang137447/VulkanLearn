@@ -88,6 +88,7 @@ int main(int argc, char **argv)
 
     SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
     SDL_ShowWindow(window);
+    controller.SetMouseCaptured(true);
 
     while (!shouldClose)
     {
@@ -103,6 +104,15 @@ int main(int argc, char **argv)
             {
                 switch (event.type)
                 {
+                    case SDL_EVENT_KEY_DOWN:
+                        if (!event.key.repeat && event.key.scancode == SDL_SCANCODE_ESCAPE)
+                        {
+                            controller.ToggleMouseCaptured();
+                            std::cout << "Mouse capture "
+                                      << (controller.IsMouseCaptured() ? "enabled" : "disabled")
+                                      << " (press Esc to toggle)" << std::endl;
+                        }
+                        break;
                     case SDL_EVENT_WINDOW_RESIZED:
                         std::cout << "Window resized to " << event.window.data1 << "x" << event.window.data2 << std::endl;
                         vulkanManager.ReCreateSwapChain(event.window.data1, event.window.data2);

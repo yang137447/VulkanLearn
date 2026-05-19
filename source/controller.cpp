@@ -15,11 +15,12 @@ Controller::Controller(SDL_Window* window)
 
 void Controller::Update(float deltaTime)
 {
-    // 鼠标控制
-    SDL_SetWindowRelativeMouseMode(window, true);  // 启用相对鼠标模式
-    
-    float deltaX, deltaY;
-    SDL_GetRelativeMouseState(&deltaX, &deltaY);  // 获取相对移动
+    float deltaX = 0.0f;
+    float deltaY = 0.0f;
+    if (isMouseCaptured)
+    {
+        SDL_GetRelativeMouseState(&deltaX, &deltaY);
+    }
     
     float deltaRotationY = -deltaX * mouseRotationSpeed;  // 调整灵敏度
     float deltaRotationX = -deltaY * mouseRotationSpeed;
@@ -67,6 +68,23 @@ void Controller::Update(float deltaTime)
     Eigen::Vector3f deltaRot(deltaRotationX, deltaRotationY, 0.0f);
     deltaRot *= deltaTime *mouseRotationSpeed;
     sceneObject->SetDeltaRotation(deltaRot);
+}
+
+void Controller::SetMouseCaptured(bool captured)
+{
+    isMouseCaptured = captured;
+    SDL_SetWindowRelativeMouseMode(window, captured);
+    SDL_GetRelativeMouseState(nullptr, nullptr);
+}
+
+void Controller::ToggleMouseCaptured()
+{
+    SetMouseCaptured(!isMouseCaptured);
+}
+
+bool Controller::IsMouseCaptured() const
+{
+    return isMouseCaptured;
 }
 
 void Controller::SetSceneObject(std::shared_ptr<SceneNode> sceneObject)

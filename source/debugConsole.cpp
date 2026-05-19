@@ -100,7 +100,7 @@ void DebugConsole::PrintHelp() const
 {
     std::cout << "Available commands:\n";
     std::cout << "  debugview <mode> - set debug view mode\n";
-    std::cout << "    0: Normal\n";
+    std::cout << "    0: Full\n";
     std::cout << "    1: BaseColor\n";
     std::cout << "    2: Emissive\n";
     std::cout << "    3: Normal\n";

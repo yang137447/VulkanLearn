@@ -9,6 +9,9 @@ class Controller
 public:
     Controller(SDL_Window* window);
     void Update(float deltaTime);
+    void SetMouseCaptured(bool captured);
+    void ToggleMouseCaptured();
+    bool IsMouseCaptured() const;
     void SetSceneObject(std::shared_ptr<SceneNode> sceneObject);
     void SetMoveVelocity(float moveSpeed);
     void SetRotationSpeed(float mouseRotationSpeed);
@@ -20,4 +23,5 @@ private:
     float mouseRotationSpeed;
 
     SDL_Window* window;
+    bool isMouseCaptured = true;
 };

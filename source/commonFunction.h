@@ -340,8 +340,9 @@ namespace CommonFunction
 
     inline std::string Path(const std::string& path)
     {
+        // Prefer shared external assets first, but keep repo-local resources as a fallback for local development/debug.
         std::string fullPath = (std::filesystem::path(GetExternalResourcesPath()) / path).string();
-        if( !std::filesystem::exists(fullPath) && path.rfind("generated/", 0) == 0 )
+        if( !std::filesystem::exists(fullPath) )
         {
             fullPath = (std::filesystem::path(GetProjectPath()) / "resources" / path).string();
         }
