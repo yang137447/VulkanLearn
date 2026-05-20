@@ -6,6 +6,8 @@
 #include <sstream>
 
 #include "renderSystem.h"
+#include "materialInstance.h"
+#include "renderGraph.h"
 
 DebugConsole::DebugConsole(RenderSystem& renderSystem)
     : renderSystem(renderSystem)
@@ -87,6 +89,49 @@ void DebugConsole::ProcessCommand(const std::string& line)
         return;
     }
 
+    if (command == "tonemap")
+    {
+        int mode = 0;
+        if (!(commandStream >> mode))
+        {
+            std::cout << "Usage: tonemap <mode>\n"
+                      << "  0: Linear clamp\n"
+                      << "  1: Reinhard\n"
+                      << "  2: Hable\n"
+                      << "  3: ACES" << std::endl;
+            return;
+        }
+
+        auto& renderpasses = RenderGraph::GetInstance().GetRenderpasses();
+        auto passIt = renderpasses.find("toneMapping");
+        if (passIt != renderpasses.end())
+        {
+            auto mi = passIt->second.materialInstance.lock();
+            if (!mi)
+            {
+                std::cout << "Tone mapping material instance is expired." << std::endl;
+                return;
+            }
+
+            if (mi->HasParameter("u_toneMappingParams"))
+            {
+                Eigen::Vector4f params = mi->GetParameter<Eigen::Vector4f>("u_toneMappingParams");
+                params.w() = static_cast<float>(mode);
+                mi->SetParameter("u_toneMappingParams", params);
+                std::cout << "Tone mapping mode set to " << mode << std::endl;
+            }
+            else
+            {
+                std::cout << "Parameter 'u_toneMappingParams' not found in tone mapping material." << std::endl;
+            }
+        }
+        else
+        {
+            std::cout << "Tone mapping pass not found." << std::endl;
+        }
+        return;
+    }
+
     if (command == "help")
     {
         PrintHelp();
@@ -111,6 +156,11 @@ void DebugConsole::PrintHelp() const
     std::cout << "    8: Direct Lighting\n";
     std::cout << "    9: Indirect Diffuse\n";
     std::cout << "    10: Indirect Specular\n";
+    std::cout << "  tonemap <mode> - set tone mapping mode\n";
+    std::cout << "    0: Linear clamp\n";
+    std::cout << "    1: Reinhard\n";
+    std::cout << "    2: Hable\n";
+    std::cout << "    3: ACES\n";
 }
 
 void DebugConsole::PrintPrompt() const

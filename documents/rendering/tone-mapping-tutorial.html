@@ -19,6 +19,7 @@
             --yellow: #e5c76b;
             --rose: #e78aa2;
             --blue: #8bb8ff;
+            --violet: #c69cff;
             --code: #0c0f11;
             --shadow: 0 18px 50px rgba(0, 0, 0, 0.25);
         }
@@ -371,12 +372,15 @@
         }
 
         pre {
+            max-width: 100%;
             margin: 0;
             padding: 16px;
             overflow: auto;
             border-radius: 8px;
             background: var(--code);
             color: #d6e2e5;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
             line-height: 1.5;
             font-size: 13px;
         }
@@ -399,6 +403,145 @@
 
         .split-list strong {
             color: var(--text);
+        }
+
+        .method-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 14px;
+        }
+
+        .method-card {
+            min-width: 0;
+            padding: 16px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: #15191d;
+        }
+
+        .method-card h3 {
+            margin-bottom: 8px;
+        }
+
+        .method-label {
+            display: inline-block;
+            margin-bottom: 10px;
+            padding: 2px 8px;
+            border-radius: 999px;
+            background: var(--panel-soft);
+            color: var(--cyan);
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        .method-meta {
+            display: grid;
+            gap: 7px;
+            margin-top: 12px;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .method-meta span {
+            display: block;
+        }
+
+        .method-meta strong {
+            color: var(--text);
+        }
+
+        .equation-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 14px;
+        }
+
+        .equation-card {
+            min-width: 0;
+            padding: 16px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: var(--panel);
+            box-shadow: var(--shadow);
+        }
+
+        .equation-card h3 {
+            margin-bottom: 8px;
+        }
+
+        .equation-card p {
+            margin-bottom: 12px;
+        }
+
+        .route-stack {
+            display: grid;
+            gap: 14px;
+        }
+
+        .route-step {
+            min-width: 0;
+            max-width: 100%;
+            display: grid;
+            grid-template-columns: 72px minmax(0, 1fr);
+            gap: 16px;
+            padding: 18px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: var(--panel);
+            box-shadow: var(--shadow);
+        }
+
+        .route-step > div {
+            min-width: 0;
+        }
+
+        .route-no {
+            display: grid;
+            place-items: center;
+            width: 52px;
+            height: 52px;
+            border-radius: 50%;
+            background: var(--cyan);
+            color: var(--bg);
+            font-size: 20px;
+            font-weight: 800;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .route-step h3 {
+            margin-bottom: 6px;
+        }
+
+        .route-step p:last-child {
+            margin-bottom: 0;
+        }
+
+        .param-list {
+            min-width: 0;
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 10px;
+            margin-top: 12px;
+        }
+
+        .param {
+            min-width: 0;
+            padding: 10px 12px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: #15191d;
+        }
+
+        .param strong {
+            display: block;
+            margin-bottom: 4px;
+            color: var(--text);
+            font-size: 13px;
+        }
+
+        .param span {
+            color: var(--muted);
+            font-size: 13px;
         }
 
         .formula {
@@ -442,6 +585,10 @@
             color: var(--rose);
         }
 
+        .legend .uchimura {
+            color: var(--violet);
+        }
+
         .legend .linear {
             color: var(--yellow);
         }
@@ -474,6 +621,18 @@
                 grid-template-columns: repeat(2, minmax(0, 1fr));
             }
 
+            .method-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .equation-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .param-list {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
             .curve-wrap {
                 grid-template-columns: 1fr;
             }
@@ -500,6 +659,18 @@
                 grid-template-columns: 1fr;
             }
 
+            .method-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .route-step {
+                grid-template-columns: 1fr;
+            }
+
+            .param-list {
+                grid-template-columns: 1fr;
+            }
+
             .preset-row {
                 grid-template-columns: 1fr;
             }
@@ -514,10 +685,14 @@
                 <span>从 HDR 渲染结果到屏幕画面的最后一公里。</span>
             </div>
             <nav aria-label="页面导航">
-                <a href="#goal">目标</a>
-                <a href="#pipeline">游戏管线</a>
+                <a href="#types">常用类型</a>
+                <a href="#formulas">公式速查</a>
+                <a href="#selection-guide">选择指南</a>
+                <a href="#game-default">游戏默认</a>
+                <a href="#recommended-route">推荐路线</a>
                 <a href="#curve-lab">曲线实验台</a>
-                <a href="#physical">物理相机</a>
+                <a href="#route-upgrades">升级路线</a>
+                <a href="#local-tonemap">局部映射</a>
                 <a href="#presets">通用预设</a>
                 <a href="#vulkanlearn">接入 VulkanLearn</a>
                 <a href="#debug">调试顺序</a>
@@ -525,23 +700,333 @@
         </aside>
 
         <main>
-            <section id="goal">
-                <h1>Tone Mapping 不是滤镜，是一台虚拟摄影机</h1>
+            <section id="types">
+                <h1>游戏常用的 Tone Mapping 类型</h1>
                 <p class="lead">
-                    游戏里 PBR、IBL、天空、发光材质和 bloom 都在 linear HDR 空间里工作。
-                    Tone mapping 的任务，是把这个远超屏幕范围的 HDR 结果，经过曝光和压缩，变成显示器能承载的 LDR 颜色。
+                    游戏里的 tone mapping 通常不是单独一条 Reinhard 曲线。
+                    更常见的是一套后处理收尾方案：HDR 画面先经过 bloom、曝光，再用 filmic / ACES 类曲线压到显示器能承载的范围。
                 </p>
+                <div class="method-grid">
+                    <div class="method-card">
+                        <span class="method-label">Debug</span>
+                        <h3>Linear clamp</h3>
+                        <p><code>clamp(hdr, 0, 1)</code>。正式画面几乎不用，但很适合看 HDR buffer 是否过曝、bloom 输入是否正常。</p>
+                        <div class="method-meta">
+                            <span><strong>常见位置：</strong>debug view / capture view。</span>
+                            <span><strong>画面特征：</strong>高光被硬截断，颜色容易死白。</span>
+                        </div>
+                    </div>
+                    <div class="method-card">
+                        <span class="method-label">Tutorial</span>
+                        <h3>Reinhard</h3>
+                        <p>核心曲线是 <code>L / (L + 1)</code>。教程、demo、fallback 常见；正式游戏会嫌它偏灰、偏软。</p>
+                        <div class="method-meta">
+                            <span><strong>常见位置：</strong>学习 renderer、临时方案。</span>
+                            <span><strong>画面特征：</strong>稳定但高光质感弱，推荐按亮度映射后还原 RGB。</span>
+                        </div>
+                    </div>
+                    <div class="method-card">
+                        <span class="method-label">Photographic</span>
+                        <h3>摄影式 Reinhard</h3>
+                        <p>引入 log-average luminance、middle gray、white point。重点不是曲线本身，而是让曝光有相机逻辑。</p>
+                        <div class="method-meta">
+                            <span><strong>常见位置：</strong>自动曝光第一版。</span>
+                            <span><strong>画面特征：</strong>比固定曝光稳，但需要亮度统计。</span>
+                        </div>
+                    </div>
+                    <div class="method-card">
+                        <span class="method-label">Game</span>
+                        <h3>Filmic / Hable</h3>
+                        <p>用 toe 处理暗部、shoulder 处理高光。很多游戏会用这类曲线或它的变体作为项目风格基础。</p>
+                        <div class="method-meta">
+                            <span><strong>常见位置：</strong>商业游戏、自研引擎。</span>
+                            <span><strong>画面特征：</strong>高光 roll-off 好看，可调性强。</span>
+                        </div>
+                    </div>
+                    <div class="method-card">
+                        <span class="method-label">Common</span>
+                        <h3>ACES fitted</h3>
+                        <p>游戏常用的是 ACES 近似拟合，不是完整 ACES 色彩管线。实现短、观感稳，非常适合当前项目作为默认。</p>
+                        <div class="method-meta">
+                            <span><strong>常见位置：</strong>小引擎、学习 renderer、工具预览。</span>
+                            <span><strong>画面特征：</strong>高光舒服，中间调比 Reinhard 更有精神。</span>
+                        </div>
+                    </div>
+                    <div class="method-card">
+                        <span class="method-label">Art Control</span>
+                        <h3>Uchimura / GT</h3>
+                        <p>Gran Turismo 风格的分段曲线，把暗部 toe、中间线性段和高光 shoulder 拆开给美术控制。</p>
+                        <div class="method-meta">
+                            <span><strong>常见位置：</strong>要求细调影调的实时项目。</span>
+                            <span><strong>画面特征：</strong>参数多，可单独塑造暗部、中间调和高光。</span>
+                        </div>
+                    </div>
+                    <div class="method-card">
+                        <span class="method-label">Modern</span>
+                        <h3>AgX / Display transform</h3>
+                        <p>更完整地把 tone mapping 当作从 scene-linear 到 display 的变换。适合色彩管理成熟后再做。</p>
+                        <div class="method-meta">
+                            <span><strong>常见位置：</strong>长线渲染管线、DCC/引擎色彩管理。</span>
+                            <span><strong>画面特征：</strong>色彩压缩更自然，但工程概念更重。</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section id="formulas">
+                <h2>Tone Mapping 公式速查</h2>
+                <p>
+                    下面的公式默认输入 <code>x</code> 或 <code>hdr</code> 都是 linear HDR 值。
+                    真正接 shader 时，推荐顺序是先合回 bloom，再曝光，再套曲线，最后输出 linear LDR。
+                    标量曲线可以用于单通道或亮度，实际 RGB 应用方式要和“逐通道 / 亮度域”选择保持一致。
+                </p>
+                <div class="equation-grid">
+                    <div class="equation-card">
+                        <h3>Linear clamp</h3>
+                        <p>只适合 debug。它不会保留高光层次，只是把超过 1 的值截掉。</p>
+                        <pre><code>vec3 LinearClamp(vec3 x)
+{
+    return clamp(x, 0.0, 1.0);
+}</code></pre>
+                    </div>
+                    <div class="equation-card">
+                        <h3>Reinhard</h3>
+                        <p>经典入门公式。推荐先映射亮度再按比例还原 RGB，尽量保持色度比例。</p>
+                        <pre><code>float Luminance(vec3 color)
+{
+    return dot(color, vec3(0.2126, 0.7152, 0.0722));
+}
+
+vec3 Reinhard(vec3 color)
+{
+    float luma = Luminance(color);
+    float mappedLuma = luma / (luma + 1.0);
+    return color * (mappedLuma / max(luma, 1e-5));
+}</code></pre>
+                    </div>
+                    <div class="equation-card">
+                        <h3>Extended Reinhard</h3>
+                        <p>增加 <code>L_white</code> 白点控制。降低白点会让高光更快爆白，升高则更保守。</p>
+                        <pre><code>float ReinhardExtendedLuma(float luma, float whitePoint)
+{
+    float w2 = whitePoint * whitePoint;
+    return (luma * (1.0 + luma / w2)) / (1.0 + luma);
+}
+
+vec3 ReinhardExtended(vec3 color, float whitePoint)
+{
+    float luma = Luminance(color);
+    float mappedLuma = ReinhardExtendedLuma(luma, whitePoint);
+    return color * (mappedLuma / max(luma, 1e-5));
+}</code></pre>
+                    </div>
+                    <div class="equation-card">
+                        <h3>摄影式 Reinhard</h3>
+                        <p>先用 log-average luminance 做曝光，再用 white point 压缩亮度，适合自动曝光第一版。</p>
+                        <pre><code>float LogAverageLuminance(float logLuminanceSum, float pixelCount)
+{
+    return exp(logLuminanceSum / pixelCount);
+}
+
+// reduction pass:
+// logLuminanceSum += log(0.0001 + Luminance(hdrColor));
+
+float PhotographicReinhard(float Lw, float avgLum, float key, float whitePoint)
+{
+    float Lm = key * Lw / max(avgLum, 0.0001);
+    float w2 = whitePoint * whitePoint;
+    return (Lm * (1.0 + Lm / w2)) / (1.0 + Lm);
+}</code></pre>
+                    </div>
+                    <div class="equation-card">
+                        <h3>ACES fitted</h3>
+                        <p>当前项目推荐默认曲线。它是 ACES 风格的拟合近似，不是完整 ACES 色彩管线。</p>
+                        <pre><code>vec3 ACESFilm(vec3 x)
+{
+    const float a = 2.51;
+    const float b = 0.03;
+    const float c = 2.43;
+    const float d = 0.59;
+    const float e = 0.14;
+    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}</code></pre>
+                    </div>
+                    <div class="equation-card">
+                        <h3>Hable / Uncharted</h3>
+                        <p>带 toe 和 shoulder 的 filmic 曲线。一般会用白点归一化，避免整体偏暗。</p>
+                        <pre><code>vec3 HablePartial(vec3 x)
+{
+    const float A = 0.15;
+    const float B = 0.50;
+    const float C = 0.10;
+    const float D = 0.20;
+    const float E = 0.02;
+    const float F = 0.30;
+    return ((x * (A * x + C * B) + D * E) /
+            (x * (A * x + B) + D * F)) - E / F;
+}
+
+vec3 Hable(vec3 x)
+{
+    const vec3 whitePoint = vec3(11.2);
+    return clamp(HablePartial(x) / HablePartial(whitePoint), 0.0, 1.0);
+}</code></pre>
+                    </div>
+                    <div class="equation-card">
+                        <h3>Uchimura / Gran Turismo</h3>
+                        <p>可配置分段曲线。下面是常见 GT 风格参数，按亮度映射可以更好保护色相。</p>
+                        <pre><code>float Uchimura(float x, float P, float a, float m, float l, float c, float b)
+{
+    float l0 = ((P - m) * l) / a;
+    float S0 = m + l0;
+    float S1 = m + a * l0;
+    float C2 = (a * P) / (P - S1);
+    float CP = -C2 / P;
+
+    float w0 = 1.0 - smoothstep(0.0, m, x);
+    float w2 = step(m + l0, x);
+    float w1 = 1.0 - w0 - w2;
+
+    float T = (m * pow(x / m, c) + b) / (1.0 + b);
+    float L = m + a * (x - m);
+    float S = P - (P - S1) * exp(CP * (x - S0));
+
+    return T * w0 + L * w1 + S * w2;
+}
+
+vec3 UchimuraToneMap(vec3 color)
+{
+    float luma = Luminance(color);
+    float mappedLuma = Uchimura(luma, 1.0, 1.0, 0.22, 0.4, 1.33, 0.0);
+    return color * (mappedLuma / max(luma, 1e-5));
+}</code></pre>
+                    </div>
+                    <div class="equation-card">
+                        <h3>Exposure 和 EV100</h3>
+                        <p>曝光应该在 tone mapping 曲线之前。第一版可手动传 <code>exposure</code>，后续再换 EV100。</p>
+                        <pre><code>vec3 ApplyManualExposure(vec3 hdr, float exposure)
+{
+    return hdr * exposure;
+}
+
+float EV100(float aperture, float shutterSeconds, float iso)
+{
+    return log2((aperture * aperture) / shutterSeconds * 100.0 / iso);
+}
+
+float ExposureFromEV100(float ev100)
+{
+    return 1.0 / (1.2 * exp2(ev100));
+}</code></pre>
+                    </div>
+                    <div class="equation-card">
+                        <h3>Bloom、Saturation、sRGB</h3>
+                        <p>这些不是 tonemap 曲线本身，但基本都会和 tone mapping pass 放在一起。</p>
+                        <pre><code>vec3 ComposeBloom(vec3 scene, vec3 bloom, float bloomStrength)
+{
+    return scene + bloom * bloomStrength;
+}
+
+vec3 ApplySaturation(vec3 color, float saturation)
+{
+    float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
+    return mix(vec3(luma), color, saturation);
+}
+
+vec3 LinearToSrgb(vec3 x)
+{
+    vec3 lo = x * 12.92;
+    vec3 hi = 1.055 * pow(max(x, vec3(0.0)), vec3(1.0 / 2.4)) - 0.055;
+    return mix(lo, hi, step(vec3(0.0031308), x));
+}</code></pre>
+                    </div>
+                </div>
                 <div class="callout">
                     <p>
-                        对当前项目来说，最重要的升级不是一口气支持十种风格，而是先把
-                        <code>exposure</code>、<code>bloomStrength</code> 和一个靠谱的 filmic 曲线接起来。
-                        你现在的裸 Reinhard 会比较灰，固定 <code>bloomStrength = 1.0</code> 又容易洗画面。
+                        注意：如果 Vulkan swapchain / render target 是 <code>*_SRGB</code>，
+                        shader 通常输出 linear LDR 即可，让硬件在写入时做 sRGB encode。
+                        只有输出到 UNORM 非 sRGB target 时，才需要自己调用 <code>LinearToSrgb</code>。
                     </p>
                 </div>
             </section>
 
-            <section id="pipeline">
-                <h2>游戏里常见的接法</h2>
+            <section id="selection-guide">
+                <h2>快速对比与选择指南</h2>
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>方法</th>
+                                <th>风格</th>
+                                <th>参数数量</th>
+                                <th>色度处理方式</th>
+                                <th>适合场景</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><code>Reinhard Extended</code></td>
+                                <td>自然、略灰</td>
+                                <td>1 个白点</td>
+                                <td>亮度比例映射</td>
+                                <td>快速原型、科学可视化、fallback</td>
+                            </tr>
+                            <tr>
+                                <td><code>Hable Filmic</code></td>
+                                <td>电影感、高对比</td>
+                                <td>通常固定 6 个参数</td>
+                                <td>逐通道</td>
+                                <td>浓烈电影风、需要强 shoulder 的游戏</td>
+                            </tr>
+                            <tr>
+                                <td><code>Narkowicz ACES</code></td>
+                                <td>现代中性电影感</td>
+                                <td>0</td>
+                                <td>逐通道</td>
+                                <td>PBR renderer、引擎默认 tone mapper、入门首选</td>
+                            </tr>
+                            <tr>
+                                <td><code>Uchimura / GT</code></td>
+                                <td>高度可定制</td>
+                                <td>6</td>
+                                <td>亮度映射或逐通道均可</td>
+                                <td>美术要求高、需要细调暗部/中间调/高光的实时项目</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="grid" style="margin-top:16px">
+                    <div class="span-6 panel panel-pad">
+                        <h3>逐通道处理</h3>
+                        <p>
+                            Hable、ACES 这类通常直接处理 RGB。高亮区域可能会发生饱和度变化或自然消色，
+                            但这也经常被接受为 filmic 观感的一部分。
+                        </p>
+                    </div>
+                    <div class="span-6 panel panel-pad">
+                        <h3>亮度域映射</h3>
+                        <p>
+                            Reinhard、Uchimura 常见做法是先映射亮度，再按比例还原 RGB。
+                            它更保护原始色相，但极端高饱和颜色可能超出显示色域，需要 clamp 或后续色域映射。
+                        </p>
+                    </div>
+                    <div class="span-12 panel panel-pad">
+                        <h3>学习路径建议</h3>
+                        <p>
+                            先手写 Narkowicz ACES 感受现代默认效果，再对比 Hable Filmic 和 Reinhard。
+                            最后实现 Uchimura，调节 <code>m</code>、<code>c</code>、<code>l</code> 等参数，
+                            建立暗部、中间调和高光分段塑形的直觉。
+                        </p>
+                    </div>
+                </div>
+            </section>
+
+            <section id="game-default">
+                <h2>游戏一般真正用什么</h2>
+                <p>
+                    最常见的默认路线是 <strong>Filmic / ACES 系 tonemapper + 手动或自动曝光 + LUT 调色</strong>。
+                    曲线负责把 HDR 压进显示范围，曝光负责整体亮度，LUT 或 color grading 负责项目风格。
+                </p>
                 <div class="pipeline" aria-label="Tone mapping pipeline">
                     <div class="pipe-step">
                         <span class="tag">1</span>
@@ -571,7 +1056,100 @@
                     <div class="pipe-step">
                         <span class="tag">6</span>
                         <strong>Display Output</strong>
-                        <span>输出到 sRGB swapchain 或 HDR display path。UI 通常在这之后画。</span>
+                        <span>输出到 sRGB swapchain 或 HDR display path。UI / debug overlay 通常在 tone mapping 后叠加。</span>
+                    </div>
+                </div>
+                <div class="callout">
+                    <p>
+                        对 VulkanLearn 这种学习 renderer，推荐先别做过重的色彩管理。
+                        先实现 <code>ACES fitted + manual exposure + bloomStrength</code>，同时保留 <code>Linear clamp</code> debug 模式。
+                        这条路线最短、观感提升最明显，也方便以后升级自动曝光和 LUT。
+                    </p>
+                </div>
+            </section>
+
+            <section id="recommended-route">
+                <h2>推荐路线：先做一条稳的游戏默认链</h2>
+                <p>
+                    这条路线的目标不是最“影视工业”，而是最适合 VulkanLearn 当前阶段：
+                    改动小、能快速改善观感、每个参数都有清楚职责，后续还能自然升级。
+                </p>
+                <div class="route-stack">
+                    <div class="route-step">
+                        <div class="route-no">1</div>
+                        <div>
+                            <h3>所有光照先进入 linear HDR</h3>
+                            <p>
+                                <code>geometry</code>、<code>sky</code>、IBL、emissive 都应该写进 FP16 scene color。
+                                这里不要做 gamma，也不要提前压到 0-1。你的 <code>sceneColor</code> 和 bloom buffer 用
+                                <code>R16G16B16A16_SFLOAT</code> 是对的。
+                            </p>
+                            <div class="param-list">
+                                <div class="param"><strong>albedo</strong><span>sRGB 采样</span></div>
+                                <div class="param"><strong>normal / ORM</strong><span>linear 采样</span></div>
+                                <div class="param"><strong>sceneColor</strong><span>FP16 HDR</span></div>
+                                <div class="param"><strong>swapchain</strong><span>sRGB 输出</span></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="route-step">
+                        <div class="route-no">2</div>
+                        <div>
+                            <h3>Bloom 在 tone mapping 前提取和合回</h3>
+                            <p>
+                                Bloom 应该从 HDR scene color 提取亮部，再 downsample / blur / upsample，最后在 tone mapping pass 里合回。
+                                不要用 bloom 去“补亮画面”，它只负责高亮溢出。
+                            </p>
+                            <div class="param-list">
+                                <div class="param"><strong>threshold</strong><span>1.0 - 1.2</span></div>
+                                <div class="param"><strong>knee</strong><span>0.3 - 0.5</span></div>
+                                <div class="param"><strong>strength</strong><span>0.05 - 0.10</span></div>
+                                <div class="param"><strong>debug</strong><span>可临时设 0</span></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="route-step">
+                        <div class="route-no">3</div>
+                        <div>
+                            <h3>第一版先用手动 exposure</h3>
+                            <p>
+                                手动 <code>exposure</code> 是最便宜也最清楚的虚拟相机。它只管整体明暗，不管风格。
+                                等场景亮度更稳定后，再做 EV100 或 histogram auto exposure。
+                            </p>
+                            <pre><code>vec3 hdr = sceneColor + bloomColor * bloomStrength;
+vec3 exposed = hdr * exposure;</code></pre>
+                        </div>
+                    </div>
+                    <div class="route-step">
+                        <div class="route-no">4</div>
+                        <div>
+                            <h3>默认曲线用 ACES fitted</h3>
+                            <p>
+                                它比裸 Reinhard 更像游戏默认画面：中间调不那么灰，高光压缩也更自然。
+                                先把它作为默认，再保留 Reinhard / Linear clamp 作为对照和 debug。
+                            </p>
+                            <pre><code>vec3 color = ACESFilm(exposed);</code></pre>
+                        </div>
+                    </div>
+                    <div class="route-step">
+                        <div class="route-no">5</div>
+                        <div>
+                            <h3>色彩风格放到 saturation / LUT</h3>
+                            <p>
+                                Tonemapper 不是万能调色台。默认曲线稳定后，再用 <code>saturation</code>、<code>contrast</code> 或 3D LUT 做美术风格。
+                                当前项目第一版可以先加 saturation，LUT 等以后再做。
+                            </p>
+                        </div>
+                    </div>
+                    <div class="route-step">
+                        <div class="route-no">6</div>
+                        <div>
+                            <h3>最后输出到 sRGB swapchain</h3>
+                            <p>
+                                如果实际 swapchain 是 sRGB 格式，tone mapping shader 输出 linear LDR 就够了。
+                                不要再手写 <code>pow(color, 1.0 / 2.2)</code>，否则可能双重 gamma。UI / debug overlay 通常在 tone mapping 后画。
+                            </p>
+                        </div>
                     </div>
                 </div>
             </section>
@@ -587,6 +1165,7 @@
                                 <span class="reinhard">Reinhard</span>
                                 <span class="aces">ACES fitted</span>
                                 <span class="hable">Hable</span>
+                                <span class="uchimura">Uchimura</span>
                             </div>
                         </div>
                         <div class="controls">
@@ -596,6 +1175,7 @@
                                     <option value="aces">ACES fitted</option>
                                     <option value="hable">Hable</option>
                                     <option value="reinhard">Reinhard</option>
+                                    <option value="uchimura">Uchimura</option>
                                     <option value="linear">Linear clamp</option>
                                 </select>
                             </label>
@@ -624,16 +1204,17 @@
                         <p class="mini">
                             上面是曲线，下面是简化的 HDR 色条预览。注意 bloom 和 exposure 是不同职责：
                             exposure 管整体明暗，bloom 管高亮溢出，曲线管高光怎么压缩。
+                            曲线图展示的是标量响应；色条预览里 ACES / Hable 按逐通道计算，Reinhard / Uchimura 按亮度域计算。
                         </p>
                     </div>
                 </div>
             </section>
 
-            <section id="physical">
-                <h2>更物理的那层：曝光</h2>
+            <section id="route-upgrades">
+                <h2>推荐路线后续怎么升级</h2>
                 <div class="grid">
                     <div class="span-6 panel panel-pad">
-                        <h3>手动曝光</h3>
+                        <h3>阶段 A：手动曝光</h3>
                         <p>
                             第一版推荐直接用一个 <code>exposure</code> 参数。
                             它不是风格参数，而是虚拟相机的曝光补偿。先把这个调通，画面会立刻比固定值好控。
@@ -643,7 +1224,7 @@ vec3 exposed = hdr * exposure;
 vec3 ldr = ACESFilm(exposed);</code></pre>
                     </div>
                     <div class="span-6 panel panel-pad">
-                        <h3>EV100 相机模型</h3>
+                        <h3>阶段 B：EV100 相机模型</h3>
                         <p>
                             如果场景光照单位逐渐稳定，可以把曝光做成摄影参数：光圈、快门、ISO。
                             这更像真实相机，但前提是场景亮度别完全靠玄学填数。
@@ -653,13 +1234,44 @@ float exposure = 1.0 / (1.2 * exp2(ev100));
 vec3 exposed = hdr * exposure;</code></pre>
                     </div>
                     <div class="span-12 panel panel-pad">
-                        <h3>自动曝光</h3>
+                        <h3>阶段 C：自动曝光</h3>
                         <p>
                             自动曝光通常会先生成 luminance mip chain 或 histogram，然后把平均亮度拉到 middle gray。
                             这是后续升级项，不建议在 tone mapping 还没稳定时先做。
                         </p>
                         <pre><code>float targetGray = 0.18;
 float exposure = targetGray / max(logAverageLuminance, 0.0001);</code></pre>
+                    </div>
+                </div>
+            </section>
+
+            <section id="local-tonemap">
+                <h2>进阶：局部色调映射</h2>
+                <p>
+                    前面的 Reinhard、Hable、ACES、Uchimura 都是全局算子：所有像素共用同一条曲线。
+                    当场景亮度跨度极大，比如室内看向窗外，局部算子可以更好保留暗部和窗外高光。
+                </p>
+                <div class="grid">
+                    <div class="span-6 panel panel-pad">
+                        <h3>Reinhard 摄影减淡与加深</h3>
+                        <p>
+                            思路是把图像转到对数亮度域，用不同半径的模糊估算每个像素的局部适应亮度，
+                            再根据局部亮度动态压缩。它能模拟摄影里的 dodging / burning，但计算量和调参复杂度都更高。
+                        </p>
+                    </div>
+                    <div class="span-6 panel panel-pad">
+                        <h3>现代实时替代</h3>
+                        <p>
+                            双边滤波、引导滤波、局部 histogram 或基于 mip chain 的 exposure 都可以作为实时替代。
+                            关键是避免局部对比增强产生光晕和边缘脏影。
+                        </p>
+                    </div>
+                    <div class="span-12 panel panel-pad">
+                        <h3>对 VulkanLearn 的建议</h3>
+                        <p>
+                            暂时别急着做局部 tone mapping。先把全局 ACES、手动曝光、bloomStrength 和 DebugConsole 调参链路稳定下来。
+                            等有室内外强亮度差场景，再考虑 histogram auto exposure 或局部适应。
+                        </p>
                     </div>
                 </div>
             </section>
@@ -723,6 +1335,10 @@ float exposure = targetGray / max(logAverageLuminance, 0.0001);</code></pre>
 
             <section id="vulkanlearn">
                 <h2>接入 VulkanLearn 的推荐版本</h2>
+                <p>
+                    这里把上面的推荐路线翻译成当前仓库里的实际改动点。
+                    第一版只需要动 tone mapping shader 和 pass material 参数，bloom prefilter 的阈值可以作为第二步再参数化。
+                </p>
                 <div class="grid">
                     <div class="span-7">
                         <ul class="split-list">
@@ -734,6 +1350,10 @@ float exposure = targetGray / max(logAverageLuminance, 0.0001);</code></pre>
                             <li>
                                 <strong>给 tone mapping pass 加材质参数。</strong>
                                 最小参数是 <code>u_toneMappingParams = vec4(exposure, bloomStrength, saturation, mode)</code>。
+                            </li>
+                            <li>
+                                <strong>默认 mode 选 ACES fitted。</strong>
+                                <code>0</code> 做 debug linear，<code>1</code> 用 ACES 默认，<code>2</code> Reinhard 对照，<code>3</code> Hable 风格参考；Uchimura 等美术参数需求明确后再加。
                             </li>
                             <li>
                                 <strong>不要手写 gamma。</strong>
@@ -753,15 +1373,34 @@ float exposure = targetGray / max(logAverageLuminance, 0.0001);</code></pre>
 float exposure = u_toneMappingParams.x;
 float bloomStrength = u_toneMappingParams.y;
 float saturation = u_toneMappingParams.z;
+float mode = u_toneMappingParams.w;
 
 vec3 hdr = scene + bloom * bloomStrength;
-vec3 color = ACESFilm(hdr * exposure);
+vec3 exposed = hdr * exposure;
+vec3 color = ApplyToneMap(exposed, mode);
 color = ApplySaturation(color, saturation);
 outColor = vec4(color, 1.0);</code></pre>
                     </div>
                     <div class="span-12 panel panel-pad">
-                        <h3>ACES fitted GLSL</h3>
-                        <pre><code>vec3 ACESFilm(vec3 x)
+                        <h3>推荐最小 GLSL 结构</h3>
+                        <pre><code>float Luminance(vec3 color)
+{
+    return dot(color, vec3(0.2126, 0.7152, 0.0722));
+}
+
+vec3 LinearClamp(vec3 x)
+{
+    return clamp(x, 0.0, 1.0);
+}
+
+vec3 Reinhard(vec3 color)
+{
+    float luma = Luminance(color);
+    float mappedLuma = luma / (luma + 1.0);
+    return color * (mappedLuma / max(luma, 1e-5));
+}
+
+vec3 ACESFilm(vec3 x)
 {
     const float a = 2.51;
     const float b = 0.03;
@@ -769,6 +1408,33 @@ outColor = vec4(color, 1.0);</code></pre>
     const float d = 0.59;
     const float e = 0.14;
     return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+
+vec3 HablePartial(vec3 x)
+{
+    const float A = 0.15;
+    const float B = 0.50;
+    const float C = 0.10;
+    const float D = 0.20;
+    const float E = 0.02;
+    const float F = 0.30;
+    return ((x * (A * x + C * B) + D * E) /
+            (x * (A * x + B) + D * F)) - E / F;
+}
+
+vec3 Hable(vec3 x)
+{
+    const vec3 whitePoint = vec3(11.2);
+    return clamp(HablePartial(x) / HablePartial(whitePoint), 0.0, 1.0);
+}
+
+vec3 ApplyToneMap(vec3 color, float mode)
+{
+    if (mode < 0.5) return LinearClamp(color);
+    if (mode < 1.5) return ACESFilm(color);
+    if (mode < 2.5) return Reinhard(color);
+    if (mode < 3.5) return Hable(color);
+    return ACESFilm(color);
 }
 
 vec3 ApplySaturation(vec3 color, float saturation)
@@ -860,8 +1526,36 @@ vec3 ApplySaturation(vec3 color, float saturation)
             return clamp01(hablePartial(x) / hablePartial(white));
         }
 
+        function uchimura(x) {
+            const P = 1.0;
+            const a = 1.0;
+            const m = 0.22;
+            const l = 0.4;
+            const c = 1.33;
+            const b = 0.0;
+            const l0 = ((P - m) * l) / a;
+            const S0 = m + l0;
+            const S1 = m + a * l0;
+            const C2 = (a * P) / (P - S1);
+            const CP = -C2 / P;
+            const smooth = smoothstep(0.0, m, x);
+            const w0 = 1.0 - smooth;
+            const w2 = x >= m + l0 ? 1.0 : 0.0;
+            const w1 = 1.0 - w0 - w2;
+            const safeX = Math.max(x, 0.0);
+            const T = (m * Math.pow(safeX / m, c) + b) / (1.0 + b);
+            const L = m + a * (x - m);
+            const S = P - (P - S1) * Math.exp(CP * (x - S0));
+            return clamp01(T * w0 + L * w1 + S * w2);
+        }
+
         function linearClamp(x) {
             return clamp01(x);
+        }
+
+        function smoothstep(edge0, edge1, x) {
+            const t = clamp01((x - edge0) / (edge1 - edge0));
+            return t * t * (3.0 - 2.0 * t);
         }
 
         function clamp01(x) {
@@ -871,8 +1565,19 @@ vec3 ApplySaturation(vec3 color, float saturation)
         function applyTonemapper(name, x) {
             if (name === "reinhard") return reinhard(x);
             if (name === "hable") return hable(x);
+            if (name === "uchimura") return uchimura(x);
             if (name === "linear") return linearClamp(x);
             return aces(x);
+        }
+
+        function tonemapRgb(name, rgb) {
+            if (name === "reinhard" || name === "uchimura") {
+                const luma = rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
+                const mappedLuma = applyTonemapper(name, luma);
+                const scale = luma > 1e-5 ? mappedLuma / luma : 0.0;
+                return rgb.map((v) => clamp01(v * scale));
+            }
+            return rgb.map((v) => applyTonemapper(name, v));
         }
 
         function colorTonemap(name, rgb, exposure, bloomStrength, saturation) {
@@ -882,7 +1587,7 @@ vec3 ApplySaturation(vec3 color, float saturation)
                 (rgb[1] + bloom) * exposure,
                 (rgb[2] + bloom) * exposure
             ];
-            const mapped = source.map((v) => applyTonemapper(name, v));
+            const mapped = tonemapRgb(name, source);
             const luma = mapped[0] * 0.2126 + mapped[1] * 0.7152 + mapped[2] * 0.0722;
             return mapped.map((v) => clamp01(luma + (v - luma) * saturation));
         }
@@ -999,6 +1704,7 @@ vec3 ApplySaturation(vec3 color, float saturation)
             drawCurve("reinhard", "#8fcf88", exposure, maxX);
             drawCurve("aces", "#62c6d8", exposure, maxX);
             drawCurve("hable", "#e78aa2", exposure, maxX);
+            drawCurve("uchimura", "#c69cff", exposure, maxX);
             drawPreview();
         }
 

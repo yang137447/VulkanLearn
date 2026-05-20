@@ -43,3 +43,8 @@ vec3 SRGBtoLinear(vec3 sRGB)
         pow((sRGB + 0.055) / 1.055, vec3(2.4)),
         step(vec3(0.04045), sRGB));
 }
+
+float Luminance(vec3 color)
+{
+    return dot(color, vec3(0.2126, 0.7152, 0.0722));
+}

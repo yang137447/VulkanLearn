@@ -355,6 +355,10 @@ void RenderSystem::Render()
                 std::cout << "materialInstance is expired" << std::endl;
                 continue;
             }
+            else
+            {
+                this->UpdateUBOMaterialInstance(materialInstance.lock());
+            }
 
             auto baseMaterial = materialInstance.lock()->GetBaseMaterial().lock();
             const PipelineBase& renderPipeline = *baseMaterial->GetRenderPipeline();

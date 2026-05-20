@@ -269,9 +269,7 @@ void Renderpass::UpdateDescriptorSets()
                     }
                     else if (binding.set == MaterialSetIndex)
                     {
-                        // write.setBufferInfo(materialInstance.lock()->GetUboMaterialInstanceInfo()[i]);
-                        // TODO: 待后续后处理传参再看
-                        continue;
+                        write.setBufferInfo(materialInstance.lock()->GetUboMaterialInstanceInfo()[i]);
                     }
                     else if (binding.set == ObjectSetIndex)
                     {
@@ -412,6 +410,23 @@ void RenderGraph::RenderInitialize()
     {
         renderpass.CreateUniformBuffers();
         renderpass.SetupDescriptors(*this);
+        if (auto passMaterialInstance = renderpass.materialInstance.lock())
+        {
+            auto baseMaterial = passMaterialInstance->GetBaseMaterial().lock();
+            if (baseMaterial)
+            {
+                for (const auto& binding : baseMaterial->GetRenderPipeline()->GetShaderBindings())
+                {
+                    if (binding.set == MaterialSetIndex &&
+                        binding.binding == 0 &&
+                        binding.type == vk::DescriptorType::eUniformBuffer)
+                    {
+                        passMaterialInstance->RenderInitialize();
+                        break;
+                    }
+                }
+            }
+        }
         renderpass.CreatePassDescriptorSetLayout();
         renderpass.CreateDescriptorSets();
         renderpass.UpdateDescriptorSets();
