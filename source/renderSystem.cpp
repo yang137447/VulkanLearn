@@ -551,6 +551,7 @@ void RenderSystem::UpdateUBOGlobal(vk::CommandBuffer& commandBuffer)
     ubo.cameraPosition = sceneLoader.GetCamera()->GetPosition();
     ubo.environmentSH = sceneLoader.GetEnvironmentSH();
     ubo.debugViewMode = debugViewMode;
+    ubo.environmentIntensity = environmentIntensity;
 
     //std::memcpy(uboGlobal.buffersMapped[swapChainImageIndex], &ubo, sizeof(ubo));
     commandBuffer.updateBuffer(uboGlobal.buffers[swapChainImageIndex], 0, sizeof(ubo), &ubo);
@@ -748,6 +749,7 @@ void RenderSystem::UpdateUBOGlobalForShadow(vk::CommandBuffer& commandBuffer, ui
     ubo.lightViewProj = lightViewProj;
     ubo.environmentSH = sceneLoader.GetEnvironmentSH();
     ubo.debugViewMode = debugViewMode;
+    ubo.environmentIntensity = environmentIntensity;
     
     {
         Eigen::Matrix3f rotT = ubo.view.block<3, 3>(0, 0);

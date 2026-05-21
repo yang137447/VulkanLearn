@@ -6,6 +6,7 @@
 layout(set = 1, binding = 0) uniform UBOMIParamters{
     vec4 u_tintColor;
     vec4 u_pbrFactors;
+    float u_emissiveStrength;
 };
 
 layout(set = 1, binding = 1) uniform sampler2D albedoMap;
@@ -51,10 +52,10 @@ void main()
         float ao = u_pbrFactors.z;
     #endif
 
-    // Emission 贴图
+    // 自发光强度由材质参数控制。
     vec3 emissionColor = vec3(0.0f);
     #if defined(USE_EMISSION_MAP)
-        emissionColor = texture(emissionMap, v2fTexCoord).rgb;
+        emissionColor = texture(emissionMap, v2fTexCoord).rgb * u_emissiveStrength;
     #endif
 
     vec3 normal = normalize(v2fNormal);

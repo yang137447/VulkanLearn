@@ -29,6 +29,8 @@ public:
 
     void SetDebugViewMode(int mode) { debugViewMode = mode; }
     int GetDebugViewMode() const { return debugViewMode; }
+    void SetEnvironmentIntensity(float intensity) { environmentIntensity = intensity; }
+    float GetEnvironmentIntensity() const { return environmentIntensity; }
 private:
     RenderSystem();
     void UpdateUBOGlobal(vk::CommandBuffer& commandBuffer);
@@ -67,6 +69,7 @@ private:
     uint32_t currentFrame = 0;
     uint32_t swapChainImageIndex = 0;
     int debugViewMode = 0;
+    float environmentIntensity = 1.0f;
     
     Eigen::Matrix4f lightViewProj = Eigen::Matrix4f::Identity();
     Buffer uboGlobal;

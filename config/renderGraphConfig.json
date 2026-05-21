@@ -90,10 +90,38 @@
             "usage": ["colorAttachment", "sampled"]
         },
         {
+            "name": "bloomDownSample3",
+            "format": "R16G16B16A16_SFLOAT",
+            "widthScale": 0.125,
+            "heightScale": 0.125,
+            "usage": ["colorAttachment", "sampled"]
+        },
+        {
+            "name": "bloomDownSample4",
+            "format": "R16G16B16A16_SFLOAT",
+            "widthScale": 0.0625,
+            "heightScale": 0.0625,
+            "usage": ["colorAttachment", "sampled"]
+        },
+        {
             "name": "bloomUpSample1",
             "format": "R16G16B16A16_SFLOAT",
             "widthScale": 0.5,
             "heightScale": 0.5,
+            "usage": ["colorAttachment", "sampled"]
+        },
+        {
+            "name": "bloomUpSample2",
+            "format": "R16G16B16A16_SFLOAT",
+            "widthScale": 0.25,
+            "heightScale": 0.25,
+            "usage": ["colorAttachment", "sampled"]
+        },
+        {
+            "name": "bloomUpSample3",
+            "format": "R16G16B16A16_SFLOAT",
+            "widthScale": 0.125,
+            "heightScale": 0.125,
             "usage": ["colorAttachment", "sampled"]
         },
         
@@ -253,7 +281,82 @@
             ]
         },
         {
-            "name": "bloomUpsample",
+            "name": "bloomDownsample2",
+            "needCreateMaterial": true,
+            "materialInstancePath": "materials/pass/MI_bloomDownsample.json",
+            "bIsPostProcess": true,
+            "pipelineState": {
+                "useVertexInput": false,
+                "depthTestEnable": false,
+                "depthWriteEnable": false,
+                "depthCompareOp": "less"
+            },
+            "input": [
+                {
+                    "resource": "bloomDownSample2"
+                }
+            ],
+            "output":[
+                {
+                    "resource": "bloomDownSample3",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
+            "name": "bloomDownsample3",
+            "needCreateMaterial": true,
+            "materialInstancePath": "materials/pass/MI_bloomDownsample.json",
+            "bIsPostProcess": true,
+            "pipelineState": {
+                "useVertexInput": false,
+                "depthTestEnable": false,
+                "depthWriteEnable": false,
+                "depthCompareOp": "less"
+            },
+            "input": [
+                {
+                    "resource": "bloomDownSample3"
+                }
+            ],
+            "output":[
+                {
+                    "resource": "bloomDownSample4",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
+            "name": "bloomUpsample3",
+            "needCreateMaterial": true,
+            "materialInstancePath": "materials/pass/MI_bloomUpsample.json",
+            "bIsPostProcess": true,
+            "pipelineState": {
+                "useVertexInput": false,
+                "depthTestEnable": false,
+                "depthWriteEnable": false,
+                "depthCompareOp": "less"
+            },
+            "input": [
+                {
+                    "resource": "bloomDownSample3"
+                },
+                {
+                    "resource": "bloomDownSample4"
+                }
+            ],
+            "output":[
+                {
+                    "resource": "bloomUpSample3",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
+            "name": "bloomUpsample2",
             "needCreateMaterial": true,
             "materialInstancePath": "materials/pass/MI_bloomUpsample.json",
             "bIsPostProcess": true,
@@ -266,6 +369,36 @@
             "input": [
                 {
                     "resource": "bloomDownSample2"
+                },
+                {
+                    "resource": "bloomUpSample3"
+                }
+            ],
+            "output":[
+                {
+                    "resource": "bloomUpSample2",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
+            "name": "bloomUpsample",
+            "needCreateMaterial": true,
+            "materialInstancePath": "materials/pass/MI_bloomUpsample.json",
+            "bIsPostProcess": true,
+            "pipelineState": {
+                "useVertexInput": false,
+                "depthTestEnable": false,
+                "depthWriteEnable": false,
+                "depthCompareOp": "less"
+            },
+            "input": [
+                {
+                    "resource": "bloomDownSample1"
+                },
+                {
+                    "resource": "bloomUpSample2"
                 }
             ],
             "output":[

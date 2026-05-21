@@ -95,7 +95,7 @@ vec3 EvaluateIrradianceSH(vec3 normal_WS)
     {
         irradiance += uboVP.environmentSH[i].rgb * basis[i] * bandWeights[i];
     }
-    return max(irradiance, vec3(0.0));
+    return max(irradiance, vec3(0.0)) * uboVP.environmentIntensity;
 }
 
 // Diffuse IBL 单独作为间接光的一部分存在，不再混进直接光入口里。
@@ -143,7 +143,7 @@ vec3 CalculateSpecularIbl(
     float maxLod = float(max(textureQueryLevels(prefilteredEnvironmentCube) - 1, 0));
     vec3 prefilteredColor = textureLod(prefilteredEnvironmentCube, R, roughness * maxLod).rgb;
     vec2 brdfAB = texture(brdfLut, vec2(NdotV, roughness)).rg;
-    return prefilteredColor * (F0 * brdfAB.x + brdfAB.y);
+    return prefilteredColor * (F0 * brdfAB.x + brdfAB.y) * uboVP.environmentIntensity;
 }
 
 // 间接光总入口。目前只封装 diffuse IBL，后续可继续并入 specular IBL、

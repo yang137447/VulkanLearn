@@ -9,6 +9,21 @@
 #include "materialInstance.h"
 #include "renderGraph.h"
 
+namespace
+{
+    std::shared_ptr<MaterialInstance> GetPassMaterialInstance(const char* passName)
+    {
+        auto& renderpasses = RenderGraph::GetInstance().GetRenderpasses();
+        auto passIt = renderpasses.find(passName);
+        if (passIt == renderpasses.end())
+        {
+            return nullptr;
+        }
+
+        return passIt->second.materialInstance.lock();
+    }
+}
+
 DebugConsole::DebugConsole(RenderSystem& renderSystem)
     : renderSystem(renderSystem)
 {
@@ -102,17 +117,9 @@ void DebugConsole::ProcessCommand(const std::string& line)
             return;
         }
 
-        auto& renderpasses = RenderGraph::GetInstance().GetRenderpasses();
-        auto passIt = renderpasses.find("toneMapping");
-        if (passIt != renderpasses.end())
+        auto mi = GetPassMaterialInstance("toneMapping");
+        if (mi)
         {
-            auto mi = passIt->second.materialInstance.lock();
-            if (!mi)
-            {
-                std::cout << "Tone mapping material instance is expired." << std::endl;
-                return;
-            }
-
             if (mi->HasParameter("u_toneMappingParams"))
             {
                 Eigen::Vector4f params = mi->GetParameter<Eigen::Vector4f>("u_toneMappingParams");
@@ -132,9 +139,90 @@ void DebugConsole::ProcessCommand(const std::string& line)
         return;
     }
 
+    if (command == "bloom")
+    {
+        std::string field;
+        float value = 0.0f;
+        if (!(commandStream >> field >> value))
+        {
+            std::cout << "Usage: bloom <strength|threshold|knee|clamp> <value>" << std::endl;
+            return;
+        }
+
+        if (field == "strength")
+        {
+            auto mi = GetPassMaterialInstance("toneMapping");
+            if (!mi)
+            {
+                std::cout << "Tone mapping material instance is expired." << std::endl;
+                return;
+            }
+            if (!mi->HasParameter("u_toneMappingParams"))
+            {
+                std::cout << "Parameter 'u_toneMappingParams' not found in tone mapping material." << std::endl;
+                return;
+            }
+
+            Eigen::Vector4f params = mi->GetParameter<Eigen::Vector4f>("u_toneMappingParams");
+            params.y() = value;
+            mi->SetParameter("u_toneMappingParams", params);
+            std::cout << "Bloom strength set to " << value << std::endl;
+            return;
+        }
+
+        auto mi = GetPassMaterialInstance("bloomPrefilter");
+        if (!mi)
+        {
+            std::cout << "Bloom prefilter material instance is expired." << std::endl;
+            return;
+        }
+        if (!mi->HasParameter("u_bloomPrefilterParams"))
+        {
+            std::cout << "Parameter 'u_bloomPrefilterParams' not found in bloom prefilter material." << std::endl;
+            return;
+        }
+
+        Eigen::Vector4f params = mi->GetParameter<Eigen::Vector4f>("u_bloomPrefilterParams");
+        if (field == "threshold")
+        {
+            params.x() = value;
+        }
+        else if (field == "knee")
+        {
+            params.y() = value;
+        }
+        else if (field == "clamp")
+        {
+            params.z() = value;
+        }
+        else
+        {
+            std::cout << "Unknown bloom field: " << field << std::endl;
+            return;
+        }
+
+        mi->SetParameter("u_bloomPrefilterParams", params);
+        std::cout << "Bloom " << field << " set to " << value << std::endl;
+        return;
+    }
+
     if (command == "help")
     {
         PrintHelp();
+        return;
+    }
+
+    if (command == "environment")
+    {
+        float value = 0.0f;
+        if (!(commandStream >> value))
+        {
+            std::cout << "Usage: environment <intensity>" << std::endl;
+            return;
+        }
+
+        renderSystem.SetEnvironmentIntensity(value);
+        std::cout << "Environment intensity set to " << value << std::endl;
         return;
     }
 
@@ -161,6 +249,11 @@ void DebugConsole::PrintHelp() const
     std::cout << "    1: Reinhard\n";
     std::cout << "    2: Hable\n";
     std::cout << "    3: ACES\n";
+    std::cout << "  bloom strength <value> - set bloom composite strength\n";
+    std::cout << "  bloom threshold <value> - set bloom threshold\n";
+    std::cout << "  bloom knee <value> - set bloom soft knee\n";
+    std::cout << "  bloom clamp <value> - set bloom fireflies clamp\n";
+    std::cout << "  environment <value> - set unified sky and IBL intensity\n";
 }
 
 void DebugConsole::PrintPrompt() const

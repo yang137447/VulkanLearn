@@ -8,6 +8,7 @@ layout(std140, set = 0, binding = 0) uniform UBOGlobal{
     mat4 lightViewProj;
     vec3 cameraPosition;
     int debugViewMode;
+    float environmentIntensity;
     vec4 environmentSH[9];
 } uboVP;
 

@@ -19,6 +19,6 @@ vec3 GetViewRayWS(vec2 uv)
 void main()
 {
     vec3 worldDir = GetViewRayWS(inUV);
-    vec3 skyColor = texture(environmentCube, worldDir).rgb;
+    vec3 skyColor = texture(environmentCube, worldDir).rgb * uboVP.environmentIntensity;
     outColor = vec4(skyColor, 1.0f);
 }
