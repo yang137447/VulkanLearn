@@ -64,18 +64,22 @@ struct ShaderVariantKey
 {
     std::string shaderName;
     RenderMode renderMode = RenderMode::Opaque;
+    std::string shadingModelMacro = "SHADING_MODEL_DEFAULT_LIT";
     std::vector<std::string> macros;
 
     bool operator==(const ShaderVariantKey& other) const
     {
         return shaderName == other.shaderName &&
             renderMode == other.renderMode &&
+            shadingModelMacro == other.shadingModelMacro &&
             macros == other.macros;
     }
 
     bool IsDefaultVariant() const
     {
-        return renderMode == RenderMode::Opaque && macros.empty();
+        return renderMode == RenderMode::Opaque &&
+            shadingModelMacro == "SHADING_MODEL_DEFAULT_LIT" &&
+            macros.empty();
     }
 
     std::string GetNormalizedKey() const
@@ -83,6 +87,7 @@ struct ShaderVariantKey
         std::ostringstream oss;
         oss << "shaderName=" << shaderName
             << "|renderMode=" << RenderModeToString(renderMode)
+            << "|shadingModel=" << shadingModelMacro
             << "|macros=";
         for (size_t i = 0; i < macros.size(); ++i)
         {
@@ -132,7 +137,7 @@ struct ShaderVariantKey
 
     std::string GetShortDebugString() const
     {
-        return GetDisplayName() + " [" + RenderModeToString(renderMode) + "]";
+        return GetDisplayName() + " [" + RenderModeToString(renderMode) + ", " + shadingModelMacro + "]";
     }
 };
 

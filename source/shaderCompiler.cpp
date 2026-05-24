@@ -243,6 +243,7 @@ void ShaderCompiler::UpdateVariantManifest(const ShaderVariantKey& shaderVariant
         {"normalizedKey", shaderVariantKey.GetNormalizedKey()},
         {"shaderName", shaderVariantKey.shaderName},
         {"renderMode", RenderModeToString(shaderVariantKey.renderMode)},
+        {"shadingModel", shaderVariantKey.shadingModelMacro},
         {"macros", shaderVariantKey.macros}
     };
 
@@ -277,6 +278,7 @@ ShaderCompiler::ShaderVariantCompileResult ShaderCompiler::CompileGraphicsVarian
     const std::string fragmentShaderCode = CommonFunction::ReadFile(fragmentShaderSourcePath);
 
     std::vector<std::string> compileMacros = BuildRenderModeMacros(shaderVariantKey.renderMode);
+    compileMacros.push_back("MATERIAL_SHADING_MODEL=" + shaderVariantKey.shadingModelMacro);
     compileMacros.insert(compileMacros.end(), shaderVariantKey.macros.begin(), shaderVariantKey.macros.end());
 
     bool isDebugInfo = false;

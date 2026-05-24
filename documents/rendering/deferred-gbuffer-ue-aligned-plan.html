@@ -650,7 +650,7 @@ outColor = vec4(color, surface.opacity);</code></pre>
                     是的，deferred 升级应该同时抽离出一个材质 shader 编写外壳。材质作者不应直接关心 Vulkan descriptor set、GBuffer attachment layout、forward/deferred 分叉、lighting pass、debug view 或 velocity/precomputed shadow 的默认值。对作者暴露的应该是少量稳定入口，类似 UE 材质最终只是在引擎提供的模板里填充材质表达式。
                 </p>
                 <div class="note">
-                    当前工程里，<code>pbr.vert + pbr.frag</code> 这样的 shader pair 天然就是材质定义。为了让编译/装配有稳定起点，本计划正式引入 <code>M_*.json</code> 作为材质定义资产：它包含 <code>name</code>、<code>shadingModel</code>、<code>renderStates</code>、<code>parameters</code>、数字值 <code>macros</code>、<code>textures</code>。<code>M_*.json</code> 不重复写 shader 字段，而是按命名约定绑定 shader pair，例如 <code>M_pbr.json -> pbr.vert / pbr.frag</code>。<code>macros</code> 在 <code>M_*.json</code> 中声明可调 static/material macros 和默认值，<code>MI_*.json</code> 可以用同名数字宏覆盖它们；这类 override 会参与 shader variant key，类似 UE Material Instance 的 static switch。<code>renderStates</code> 主归属在材质定义层，<code>MI_*.json</code> 不再直接写完整 <code>renderStates</code>，只允许通过 <code>renderStateOverrides</code> 做 UE Base Property Override 风格的少量覆写。<code>textures</code> 保留贴图槽的 <code>type</code> 和默认值，其中 <code>type</code> 的主要职责是校验 <code>default</code> 或 <code>MI_*.json</code> override 指向的 texture JSON 是否合规；生成 sampler 声明只是派生用途。binding 和 macro 不在每个 texture 上重复写，由生成规则统一决定。<code>M_*.json</code> 会生成一份 <code>Paramter</code> include 文件，默认路径是同目录下的 <code>generate/&lt;name&gt;Paramter.glsl</code>。对应的 <code>vert</code> 和 <code>frag</code> 需要事先 include 这个文件，再使用其中生成的宏、参数声明、贴图声明和材质常量。<code>MI_*.json</code> 只引用 <code>M_*.json</code> 并提供参数、贴图、static macro override 和可选 render state override。代码里的 <code>Material</code> 类仍更接近运行时 pipeline / shader variant 缓存载体，不等同于磁盘上的 <code>M_*.json</code>。
+                    当前工程里，<code>pbr.vert + pbr.frag</code> 这样的 shader pair 天然就是材质定义。为了让编译/装配有稳定起点，本计划正式引入 <code>M_*.json</code> 作为材质定义资产：它包含 <code>name</code>、<code>shadingModel</code>、<code>renderStates</code>、<code>parameters</code>、数字值 <code>macros</code>、<code>textures</code>。<code>M_*.json</code> 不重复写 shader 字段，而是按命名约定绑定 shader pair，例如 <code>M_pbr.json -> pbr.vert / pbr.frag</code>。<code>macros</code> 在 <code>M_*.json</code> 中声明可调 static/material macros 和默认值，<code>MI_*.json</code> 可以用同名数字宏覆盖它们；这类 override 会参与 shader variant key，类似 UE Material Instance 的 static switch。<code>renderStates</code> 主归属在材质定义层，<code>MI_*.json</code> 不再直接写完整 <code>renderStates</code>，只允许通过 <code>renderStateOverrides</code> 做 UE Base Property Override 风格的显式覆写；这里的命名保留为 <code>renderStateOverrides</code>，但语义包含材质静态属性覆盖，不只等同于 Vulkan pipeline state。<code>shadingModel</code> 默认来自 <code>M_*.json</code>，也允许被 <code>MI_*.json -> renderStateOverrides.shadingModel</code> 覆盖；它不是普通 uniform，而是参与 EffectiveMaterial 合成、shader variant key、pipeline key 和 GBuffer <code>ShadingModelID</code> 写入的静态材质属性。<code>textures</code> 保留贴图槽的 <code>type</code> 和默认值，其中 <code>type</code> 的主要职责是校验 <code>default</code> 或 <code>MI_*.json</code> override 指向的 texture JSON 是否合规；生成 sampler 声明只是派生用途。binding 和 macro 不在每个 texture 上重复写，由生成规则统一决定。<code>M_*.json</code> 会生成一份 <code>Paramter</code> include 文件，默认路径是同目录下的 <code>generate/&lt;name&gt;Paramter.glsl</code>。对应的 <code>vert</code> 和 <code>frag</code> 需要事先 include 这个文件，再使用其中生成的宏、参数声明、贴图声明和材质常量。<code>MI_*.json</code> 只引用 <code>M_*.json</code> 并提供参数、贴图、static macro override 和可选 render state override。代码里的 <code>Material</code> 类仍更接近运行时 pipeline / shader variant 缓存载体，不等同于磁盘上的 <code>M_*.json</code>。
                 </div>
 
                 <div class="grid">
@@ -737,6 +737,10 @@ outColor = vec4(color, surface.opacity);</code></pre>
     "parameters": {
         "u_tintColor": [0.8, 0.7, 0.6, 1.0]
     },
+    "renderStateOverrides": {
+        "shadingModel": "DefaultLit",
+        "twoSided": true
+    },
     "textures": {
         "albedoMap": "textures/brick_albedo.json",
         "normalMap": "textures/brick_normal.json"
@@ -770,11 +774,25 @@ void MaterialPixel(in MaterialPixelContext pixel, inout MaterialSurface surface)
 #ifndef VL_GENERATED_M_PBR_PARAMTERS
 #define VL_GENERATED_M_PBR_PARAMTERS
 
+#ifndef MATERIAL_SHADING_MODEL
 #define MATERIAL_SHADING_MODEL SHADING_MODEL_DEFAULT_LIT
+#endif
+
+#ifndef USE_ALBEDO_MAP
 #define USE_ALBEDO_MAP 0
+#endif
+
+#ifndef USE_NORMAL_MAP
 #define USE_NORMAL_MAP 0
+#endif
+
+#ifndef USE_PBR_MAP
 #define USE_PBR_MAP 0
+#endif
+
+#ifndef USE_EMISSION_MAP
 #define USE_EMISSION_MAP 0
+#endif
 
 layout(set = 1, binding = 0) uniform UBOMIParamters {
     vec4 u_tintColor;
@@ -819,7 +837,7 @@ outSceneColorBase = vec4(surface.emission, surface.opacity);</code></pre>
                         <tr>
                             <td>材质实例资产</td>
                             <td><code>MI_*.json</code></td>
-                            <td>只引用 <code>M_*.json</code> 并 override static macros、参数和贴图；不直接声明 <code>shadingModel</code>，也不覆盖 render state。</td>
+                            <td>只引用 <code>M_*.json</code> 并 override static macros、参数、贴图和可选 <code>renderStateOverrides</code>；<code>shadingModel</code> 若需要实例级变化，只能放在 <code>renderStateOverrides.shadingModel</code>，并按静态材质属性处理。</td>
                         </tr>
                         <tr>
                             <td>材质 shader pair</td>
@@ -877,7 +895,7 @@ outSceneColorBase = vec4(surface.emission, surface.opacity);</code></pre>
                         <tr>
                             <td>Material Instance</td>
                             <td><code>MI_*.json</code></td>
-                            <td>只 override 参数、贴图、<code>M_</code> 暴露的 static macros，以及少量 <code>renderStateOverrides</code>；不选择 shader pair，不声明 <code>shadingModel</code>。</td>
+                            <td>只 override 参数、贴图、<code>M_</code> 暴露的 static macros，以及显式 <code>renderStateOverrides</code>；不选择 shader pair。<code>shadingModel</code> 可以通过 <code>renderStateOverrides.shadingModel</code> 覆盖，但它会进入变体/管线选择，而不是作为普通参数上传。</td>
                         </tr>
                         <tr>
                             <td>Static Switch / Static Parameter</td>
@@ -892,7 +910,12 @@ outSceneColorBase = vec4(surface.emission, surface.opacity);</code></pre>
                         <tr>
                             <td>Blend Mode / Cull Mode</td>
                             <td><code>M_*.json -> renderStates</code></td>
-                            <td>归属材质定义层。若未来确实要实例级覆盖，应作为显式例外，而不是默认能力。</td>
+                            <td>默认归属材质定义层。实例级变化使用 <code>MI_*.json -> renderStateOverrides</code> 显式覆盖，并参与 EffectiveMaterial / pipeline key。</td>
+                        </tr>
+                        <tr>
+                            <td>Shading Model Override</td>
+                            <td><code>MI_*.json -> renderStateOverrides.shadingModel</code></td>
+                            <td>对齐 UE Material Instance Base Property Override。它改变 GBuffer <code>ShadingModelID</code> 和 lighting dispatch，必须参与 shader variant key / pipeline key，不进入 material parameter UBO。</td>
                         </tr>
                     </tbody>
                 </table>
@@ -925,12 +948,12 @@ outSceneColorBase = vec4(surface.emission, surface.opacity);</code></pre>
                         <tr>
                             <td><code>sceneLoader.cpp</code></td>
                             <td>先读取 <code>MI_*.json</code> 指向的 <code>M_*.json</code>，合并材质定义默认值与实例 override，再按 shader 反射结果解析参数、贴图和 UBO 字段。</td>
-                            <td><code>shadingModel</code> 来自 <code>M_*.json</code> 并应与 shader pair / 模板常量一致；默认不作为 material uniform 上传。</td>
+                            <td><code>shadingModel</code> 默认来自 <code>M_*.json</code>，可由 <code>renderStateOverrides.shadingModel</code> 显式覆盖；默认不作为 material uniform 上传。</td>
                         </tr>
                         <tr>
                             <td>shader build step</td>
                             <td>以 <code>M_*.json</code> 为编译入口，读取 <code>name</code>、<code>shadingModel</code>、<code>parameters</code>、<code>macros</code> 和 <code>textures</code>，生成同目录 <code>generate/&lt;name&gt;Paramter.glsl</code>，再编译 include 该文件的 <code>vert/frag</code>。</td>
-                            <td>最终参与反射的仍是真实 GLSL。<code>MI_*.json</code> 不选择 shader pair，但它的 static macro override 会选择或触发对应 shader variant。</td>
+                            <td>最终参与反射的仍是真实 GLSL。<code>MI_*.json</code> 不选择 shader pair，但它的 static macro override 与 <code>shadingModel</code> override 都会选择或触发对应 shader variant。</td>
                         </tr>
                         <tr>
                             <td><code>renderSystem.cpp</code></td>
@@ -1025,15 +1048,15 @@ outSceneColorBase = vec4(surface.emission, surface.opacity);</code></pre>
                     <li>新增 <code>M_*.json</code> 格式，作为 shader 编译/装配入口，字段包括 <code>name</code>、<code>shadingModel</code>、<code>renderStates</code>、<code>parameters</code>、数字值 <code>macros</code>、<code>textures</code> 和兼容 pass；shader pair 由命名约定推导，例如 <code>M_pbr.json -> pbr.vert / pbr.frag</code>。</li>
                     <li>由 <code>M_*.json</code> 生成同目录 <code>generate/&lt;name&gt;Paramter.glsl</code>，其中包含材质宏、shading model 常量、参数 UBO 声明和贴图声明。</li>
                     <li>对应的 <code>vert</code> 和 <code>frag</code> 必须先 include 该 <code>gen</code>，再编写 <code>MaterialVertex</code> / <code>MaterialPixel</code> 逻辑。</li>
-                    <li>调整 <code>MI_*.json</code>：不再直接声明 shader 选择、完整 render state 或旧宏列表，改为引用 <code>material: "materials/M_xxx.json"</code>，并只保留参数、贴图、static macro override 和可选 <code>renderStateOverrides</code>。</li>
+                    <li>调整 <code>MI_*.json</code>：不再直接声明 shader 选择、完整 render state 或旧宏列表，改为引用 <code>material: "materials/M_xxx.json"</code>，并只保留参数、贴图、static macro override 和可选 <code>renderStateOverrides</code>。其中 <code>renderStateOverrides</code> 是 UE Base Property Override 风格的显式覆盖，可包含 <code>shadingModel</code>、<code>twoSided</code>、<code>blendMode</code> 等静态材质属性。</li>
                     <li>加载时先合并 <code>M_*.json</code> 默认值和 <code>MI_*.json</code> override，再交给现有反射校验。</li>
                 </ul>
 
                 <h3>阶段 2：引入 ShadingModel shader 声明</h3>
                 <ul>
                     <li>在 <code>shadingModel.glsl</code> 中定义 UE-style <code>ShadingModelID</code> 枚举值域：至少预留 DefaultLit、Unlit、Subsurface、PreintegratedSkin、ClearCoat、SubsurfaceProfile、TwoSidedFoliage、Hair、Cloth、Eye。</li>
-                    <li><code>M_*.json</code> 声明材质定义的 <code>shadingModel</code>，当前材质 shader pair 或后续模板中写入一致的 <code>surface.shadingModel</code>。</li>
-                    <li><code>MI_*.json</code> 不增加 <code>shadingModel</code> 字段；shader 装配步骤可导出材质元数据供 C++ 校验和 debug 使用，但默认不把 <code>shadingModel</code> 作为 material uniform 传入。</li>
+                    <li><code>M_*.json</code> 声明材质定义的默认 <code>shadingModel</code>，当前材质 shader pair 或后续模板中写入一致的 <code>surface.shadingModel</code>。</li>
+                    <li><code>MI_*.json</code> 不增加顶层 <code>shadingModel</code> 字段；如需实例级覆盖，使用 <code>renderStateOverrides.shadingModel</code>。shader 装配步骤可导出材质元数据供 C++ 校验和 debug 使用，但默认不把 <code>shadingModel</code> 作为 material uniform 传入。</li>
                     <li>保持当前 forward 输出不变，先验证数据链路。</li>
                 </ul>
 
@@ -1048,7 +1071,7 @@ outSceneColorBase = vec4(surface.emission, surface.opacity);</code></pre>
                 <ul>
                     <li>定义 <code>MaterialVertexContext</code>、<code>MaterialPixelContext</code>、<code>MaterialSurface</code> 的稳定 public 字段。</li>
                     <li>先在现有 <code>pbr.vert</code> / <code>pbr.frag</code> 内部引入 <code>MaterialVertex</code> 和 <code>MaterialPixel</code>，但保留原有 shader 文件作为真实编译单元。</li>
-                    <li>确认 <code>MI_*.json</code> 通过 <code>M_*.json</code> 间接选择这对 shader，参数和贴图仍由反射校验，且不涉及 <code>shadingModel</code>。</li>
+                    <li>确认 <code>MI_*.json</code> 通过 <code>M_*.json</code> 间接选择这对 shader，参数和贴图仍由反射校验；若存在 <code>renderStateOverrides.shadingModel</code>，它只影响 EffectiveMaterial、variant key、pipeline key 和 GBuffer <code>ShadingModelID</code>。</li>
                     <li>后续再按需要新增 forward / gbuffer 模板；模板系统不是第一刀的前置条件。</li>
                 </ul>
 
@@ -1105,7 +1128,7 @@ outSceneColorBase = vec4(surface.emission, surface.opacity);</code></pre>
                         </tr>
                         <tr>
                             <td>Authoring facade</td>
-                            <td><span class="ok">通过</span>：<code>M_*.json</code> 作为编译/装配入口；同一个 shader pair 的材质逻辑能被 forward 和 gbuffer 路径复用；<code>MI_*.json</code> 只做实例 override，不声明 <code>shadingModel</code>。</td>
+                            <td><span class="ok">通过</span>：<code>M_*.json</code> 作为编译/装配入口；同一个 shader pair 的材质逻辑能被 forward 和 gbuffer 路径复用；<code>MI_*.json</code> 只做实例 override，<code>shadingModel</code> 覆盖只能通过 <code>renderStateOverrides.shadingModel</code> 进入静态材质合成链路。</td>
                         </tr>
                         <tr>
                             <td>DefaultLit deferred lighting</td>

@@ -121,13 +121,55 @@ namespace
         nlohmann::json renderStates = materialJson["renderStates"];
         if (materialInstanceJson.contains("renderStateOverrides"))
         {
-            MaterialAssetValidator::EnsureKnownOverrideKeys(materialInstanceJson["renderStateOverrides"], materialJson["renderStates"], "render state", materialInstancePath);
             for (const auto& [name, value] : materialInstanceJson["renderStateOverrides"].items())
             {
+                if (name == "shadingModel")
+                {
+                    if (!value.is_string())
+                    {
+                        throw std::runtime_error("renderStateOverrides.shadingModel must be a string: " + std::string(materialInstancePath));
+                    }
+                    MaterialAssetUtils::ShadingModelToId(value.get<std::string>());
+                    continue;
+                }
+                if (!materialJson["renderStates"].contains(name))
+                {
+                    throw std::runtime_error(
+                        "Material instance overrides unknown render state \"" + name + "\": " +
+                        std::string(materialInstancePath));
+                }
                 renderStates[name] = value;
             }
         }
         return renderStates;
+    }
+
+    std::string BuildEffectiveShadingModel(
+        const nlohmann::json& materialJson,
+        const nlohmann::json& materialInstanceJson,
+        std::string_view materialInstancePath)
+    {
+        std::string shadingModel = materialJson["shadingModel"].get<std::string>();
+        if (!materialInstanceJson.contains("renderStateOverrides"))
+        {
+            return shadingModel;
+        }
+
+        const auto& renderStateOverrides = materialInstanceJson["renderStateOverrides"];
+        if (!renderStateOverrides.contains("shadingModel"))
+        {
+            return shadingModel;
+        }
+
+        const auto& overrideValue = renderStateOverrides["shadingModel"];
+        if (!overrideValue.is_string())
+        {
+            throw std::runtime_error("renderStateOverrides.shadingModel must be a string: " + std::string(materialInstancePath));
+        }
+
+        shadingModel = overrideValue.get<std::string>();
+        MaterialAssetUtils::ShadingModelToId(shadingModel);
+        return shadingModel;
     }
 }
 
@@ -161,7 +203,7 @@ MaterialInstanceResolveResult MaterialInstanceResolver::Resolve(
     result.effectiveMaterialInstanceJson["name"] = materialInstanceJson.value("name", std::string(materialInstancePath));
     result.effectiveMaterialInstanceJson["material"] = result.materialPath;
     result.effectiveMaterialInstanceJson["shaderName"] = result.shaderName;
-    result.effectiveMaterialInstanceJson["shadingModel"] = result.materialJson["shadingModel"];
+    result.effectiveMaterialInstanceJson["shadingModel"] = BuildEffectiveShadingModel(result.materialJson, materialInstanceJson, materialInstancePath);
     result.effectiveMaterialInstanceJson["renderStates"] = BuildRenderStates(result.materialJson, materialInstanceJson, materialInstancePath);
     result.effectiveMaterialInstanceJson["macros"] = BuildEffectiveMacros(result.materialJson, materialInstanceJson, materialInstancePath);
     result.effectiveMaterialInstanceJson["parameters"] = BuildEffectiveParameters(result.materialJson, materialInstanceJson, materialInstancePath);

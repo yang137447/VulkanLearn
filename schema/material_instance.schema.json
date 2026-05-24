@@ -2,25 +2,27 @@
     "$schema": "http://json-schema.org/draft-07/schema#",
     "$id": "https://vulkanlearn.local/schema/material_instance.schema.json",
     "title": "Material Instance",
-    "description": "VulkanLearn 材质实例配置",
+    "description": "VulkanLearn material instance override format. MI_ files reference an M_ material definition and do not select shader pairs directly.",
     "type": "object",
+    "additionalProperties": false,
     "properties": {
         "name": {
-            "type": "string",
-            "description": "材质实例的名称"
+            "type": "string"
         },
         "type": {
             "type": "string",
-            "const": "materialInstance",
-            "description": "固定为 materialInstance"
+            "const": "materialInstance"
         },
-        "shader": {
+        "configHelp": {
+            "type": "string"
+        },
+        "material": {
             "type": "string",
-            "description": "基础 Shader 的名称，例如 'pbr', 'unlit', 'shadow'"
+            "description": "Project-relative path to the referenced M_*.json material definition."
         },
-        "renderStates": {
+        "renderStateOverrides": {
             "type": "object",
-            "description": "引擎控制的固定渲染状态 (影响渲染路径和管线)",
+            "additionalProperties": false,
             "properties": {
                 "renderMode": {
                     "type": "string",
@@ -29,55 +31,73 @@
                         "OpaqueClip",
                         "TransparentAlphaBlend",
                         "TransparentAdditive"
-                    ],
-                    "description": "渲染路径模式。\n- `Opaque`: 标准不透明，Early-Z 友好\n- `OpaqueClip`: Alpha 裁剪，主/阴影 Pass 同步裁剪\n- `TransparentAlphaBlend`: 标准透明混合，第一版参与阴影\n- `TransparentAdditive`: 加法透明混合，第一版不参与阴影",
-                    "default": "Opaque"
+                    ]
                 },
                 "cullMode": {
                     "type": "string",
                     "enum": [
                         "Back",
                         "None"
+                    ]
+                },
+                "shadingModel": {
+                    "type": "string",
+                    "enum": [
+                        "DefaultLit",
+                        "Unlit",
+                        "Subsurface",
+                        "PreintegratedSkin",
+                        "ClearCoat",
+                        "SubsurfaceProfile",
+                        "TwoSidedFoliage",
+                        "Hair",
+                        "Cloth",
+                        "Eye"
                     ],
-                    "description": "面剔除模式。\n- `Back`: 背面剔除（单面）\n- `None`: 不剔除（双面）\n注意: 这仅改变 Pipeline 状态，不产生新的 Shader 编译变体。",
-                    "default": "Back"
+                    "description": "Static shading model override. Top-level shadingModel is intentionally not part of MI_ files."
                 }
-            },
-            "additionalProperties": false
+            }
         },
-        "artMacros": {
-            "type": "array",
-            "description": "美术控制的功能宏列表，参与 Shader 变体编译。具体合法值由 shader/variant 系统决定，引擎会自动对其进行去重和排序。",
-            "items": {
-                "type": "string",
-                "pattern": "^[A-Z0-9_]+$"
-            },
-            "uniqueItems": true
-        },
-        "textures": {
+        "macros": {
             "type": "object",
-            "description": "贴图绑定。键名必须与 Shader 反射中 MaterialSet 的 sampler2D 名称一致。",
             "additionalProperties": {
-                "type": "string",
-                "description": "贴图文件的相对路径，例如 'textures/uv_checker.png'"
+                "type": "number"
             }
         },
         "parameters": {
             "type": "object",
-            "description": "数值参数绑定。键名必须与 Shader 反射中 MaterialSet UBO 的成员名称一致，例如 pbr 使用 u_tintColor 和 u_pbrFactors。",
             "additionalProperties": {
                 "anyOf": [
-                    { "type": "number" },
+                    {
+                        "type": "number"
+                    },
                     {
                         "type": "array",
-                        "items": { "type": "number" },
+                        "items": {
+                            "type": "number"
+                        },
                         "minItems": 2,
                         "maxItems": 4
                     }
-                ],
-                "description": "浮点数或向量 (如 [1.0, 1.0, 1.0, 1.0])"
+                ]
+            }
+        },
+        "textures": {
+            "type": "object",
+            "additionalProperties": {
+                "anyOf": [
+                    {
+                        "type": "string"
+                    },
+                    {
+                        "type": "null"
+                    }
+                ]
             }
         }
     },
-    "required": ["shader"]
+    "required": [
+        "type",
+        "material"
+    ]
 }

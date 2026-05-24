@@ -3,6 +3,7 @@
 #include <sstream>
 #include <stdexcept>
 #include "commonFunction.h"
+#include "material/materialAssetUtils.h"
 
 namespace
 {
@@ -243,6 +244,8 @@ MaterialInstanceBuildPlan MaterialInstanceValidator::BuildLoadPlan(
     loadPlan.shaderName = materialInstanceJson.at("shaderName").get<std::string>();
     loadPlan.shaderVariantKey.shaderName = loadPlan.shaderName;
     loadPlan.shaderVariantKey.renderMode = ParseRenderMode(materialInstanceJson);
+    loadPlan.shaderVariantKey.shadingModelMacro =
+        MaterialAssetUtils::ShadingModelToShaderDefine(materialInstanceJson.at("shadingModel").get<std::string>());
     loadPlan.shaderVariantKey.macros = ParseMaterialMacros(materialInstanceJson);
 
     ApplyRenderModeDefaults(loadPlan.shaderVariantKey.renderMode, loadPlan.pipelineStateDesc);

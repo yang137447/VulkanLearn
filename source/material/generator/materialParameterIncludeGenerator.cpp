@@ -69,19 +69,43 @@ namespace
         return names;
     }
 
+    std::filesystem::path FindShaderGlslRoot(const std::filesystem::path& materialFilePath)
+    {
+        std::filesystem::path current = materialFilePath.parent_path();
+        while (!current.empty())
+        {
+            if (current.filename() == "glsl")
+            {
+                return current;
+            }
+            current = current.parent_path();
+        }
+        throw std::runtime_error("Material definition must live under shader/glsl: " + MaterialAssetUtils::ToGenericString(materialFilePath));
+    }
+
+    std::string BuildShadingModelIncludePath(const std::filesystem::path& materialFilePath)
+    {
+        const std::filesystem::path outputDir = materialFilePath.parent_path() / "generate";
+        const std::filesystem::path shadingModelPath = FindShaderGlslRoot(materialFilePath) / "common" / "shadingModel.glsl";
+        return MaterialAssetUtils::ToGenericString(std::filesystem::relative(shadingModelPath, outputDir));
+    }
+
     std::string BuildParamterIncludeSource(const nlohmann::json& materialJson, const std::filesystem::path& materialFilePath)
     {
         MaterialAssetValidator::ValidateDefinition(materialJson, MaterialAssetUtils::ToGenericString(materialFilePath));
         const std::string materialName = materialJson["name"].get<std::string>();
         const std::string guardName = "VL_GENERATED_" + MaterialAssetUtils::ToUpperIdentifier(materialName) + "_PARAMTERS";
-        const uint32_t shadingModelId = MaterialAssetUtils::ShadingModelToId(materialJson["shadingModel"].get<std::string>());
+        const std::string shadingModelDefine = MaterialAssetUtils::ShadingModelToShaderDefine(materialJson["shadingModel"].get<std::string>());
 
         std::ostringstream stream;
         stream << "#ifndef " << guardName << "\n";
         stream << "#define " << guardName << "\n\n";
         stream << "// Generated from " << MaterialAssetUtils::ToGenericString(materialFilePath) << ".\n";
         stream << "// Do not edit by hand.\n\n";
-        stream << "#define MATERIAL_SHADING_MODEL " << shadingModelId << "u\n\n";
+        stream << "#include \"" << BuildShadingModelIncludePath(materialFilePath) << "\"\n\n";
+        stream << "#ifndef MATERIAL_SHADING_MODEL\n";
+        stream << "#define MATERIAL_SHADING_MODEL " << shadingModelDefine << "\n";
+        stream << "#endif\n\n";
 
         for (const auto& [macroName, macroValue] : materialJson["macros"].items())
         {

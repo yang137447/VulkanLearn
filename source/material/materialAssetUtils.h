@@ -1,7 +1,9 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cctype>
+#include <cstdint>
 #include <filesystem>
 #include <sstream>
 #include <stdexcept>
@@ -14,6 +16,38 @@
 // should live in loader, validation, or generator classes.
 namespace MaterialAssetUtils
 {
+    struct ShadingModelDesc
+    {
+        std::string_view name;
+        uint32_t id;
+        std::string_view shaderDefine;
+    };
+
+    inline constexpr std::array<ShadingModelDesc, 10> kShadingModels = {{
+        {"DefaultLit", 0u, "SHADING_MODEL_DEFAULT_LIT"},
+        {"Unlit", 1u, "SHADING_MODEL_UNLIT"},
+        {"Subsurface", 2u, "SHADING_MODEL_SUBSURFACE"},
+        {"PreintegratedSkin", 3u, "SHADING_MODEL_PREINTEGRATED_SKIN"},
+        {"ClearCoat", 4u, "SHADING_MODEL_CLEAR_COAT"},
+        {"SubsurfaceProfile", 5u, "SHADING_MODEL_SUBSURFACE_PROFILE"},
+        {"TwoSidedFoliage", 6u, "SHADING_MODEL_TWOSIDED_FOLIAGE"},
+        {"Hair", 7u, "SHADING_MODEL_HAIR"},
+        {"Cloth", 8u, "SHADING_MODEL_CLOTH"},
+        {"Eye", 9u, "SHADING_MODEL_EYE"},
+    }};
+
+    inline const ShadingModelDesc& FindShadingModel(std::string_view shadingModel)
+    {
+        for (const ShadingModelDesc& desc : kShadingModels)
+        {
+            if (shadingModel == desc.name)
+            {
+                return desc;
+            }
+        }
+        throw std::runtime_error("Unsupported shadingModel: " + std::string(shadingModel));
+    }
+
     inline std::string ToGenericString(const std::filesystem::path& path)
     {
         return path.generic_string();
@@ -73,14 +107,11 @@ namespace MaterialAssetUtils
 
     inline uint32_t ShadingModelToId(std::string_view shadingModel)
     {
-        if (shadingModel == "DefaultLit")
-        {
-            return 0u;
-        }
-        if (shadingModel == "Unlit")
-        {
-            return 1u;
-        }
-        throw std::runtime_error("Unsupported shadingModel: " + std::string(shadingModel));
+        return FindShadingModel(shadingModel).id;
+    }
+
+    inline std::string ShadingModelToShaderDefine(std::string_view shadingModel)
+    {
+        return std::string(FindShadingModel(shadingModel).shaderDefine);
     }
 }
