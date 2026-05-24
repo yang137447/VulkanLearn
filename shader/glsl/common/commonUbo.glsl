@@ -1,3 +1,6 @@
+#ifndef VL_COMMON_UBO_GLSL
+#define VL_COMMON_UBO_GLSL
+
 layout(std140, set = 0, binding = 0) uniform UBOGlobal{
     mat4 view;
     mat4 projection;
@@ -15,3 +18,5 @@ layout(std140, set = 0, binding = 0) uniform UBOGlobal{
 layout(std140, set = 2, binding = 0) uniform UBOModel{
     mat4 model;
 } uboM;
+
+#endif

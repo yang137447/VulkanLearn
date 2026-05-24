@@ -1,1 +1,6 @@
+#ifndef VL_COMMON_DEFINES_GLSL
+#define VL_COMMON_DEFINES_GLSL
+
 const float PI = 3.14159265359;
+
+#endif

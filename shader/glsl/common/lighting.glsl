@@ -1,3 +1,6 @@
+#ifndef VL_COMMON_LIGHTING_GLSL
+#define VL_COMMON_LIGHTING_GLSL
+
 #include "defines.glsl"
 
 struct Light{
@@ -419,3 +422,5 @@ vec3 CalculateDirectLighting(
 
     return lighting;
 }
+
+#endif
