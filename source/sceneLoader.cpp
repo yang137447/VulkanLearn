@@ -6,6 +6,7 @@
 #include <nlohmann/json.hpp>
 #include "commonFunction.h"
 #include "material.h"
+#include "material/loader/materialInstanceResolver.h"
 #include "materialInstance.h"
 #include "materialInstanceValidator.h"
 #include "modelLoader.h"
@@ -337,7 +338,10 @@ std::shared_ptr<MaterialInstance> SceneLoader::LoadMaterialInstance(const std::s
     std::ifstream materialInstanceFile(CommonFunction::Path(materialInstancePath.data()));
     nlohmann::json materialInstanceJson;
     materialInstanceFile >> materialInstanceJson;
-    MaterialInstanceBuildPlan loadPlan = MaterialInstanceValidator::BuildLoadPlan(materialInstancePath, passName, sampleCount, pipelineStateDesc, materialInstanceJson);
+    MaterialInstanceResolveResult materialInstanceResolveResult =
+        MaterialInstanceResolver::Resolve(materialInstancePath, materialInstanceJson);
+    const nlohmann::json& effectiveMaterialInstanceJson = materialInstanceResolveResult.effectiveMaterialInstanceJson;
+    MaterialInstanceBuildPlan loadPlan = MaterialInstanceValidator::BuildLoadPlan(materialInstancePath, passName, sampleCount, pipelineStateDesc, effectiveMaterialInstanceJson);
     std::shared_ptr<Material> material;
     if(materials.find(loadPlan.materialKey) != materials.end())
     {
@@ -360,11 +364,11 @@ std::shared_ptr<MaterialInstance> SceneLoader::LoadMaterialInstance(const std::s
             loadPlan.bIsShadowPass
         );
     }
-    const auto& shaderParameters = materialInstanceJson["parameters"];
-    const auto& shaderTextures = materialInstanceJson.contains("textures")
-        ? materialInstanceJson["textures"]
+    const auto& shaderParameters = effectiveMaterialInstanceJson["parameters"];
+    const auto& shaderTextures = effectiveMaterialInstanceJson.contains("textures")
+        ? effectiveMaterialInstanceJson["textures"]
         : nlohmann::json::object();
-    MaterialInstanceValidator::Validate(materialInstancePath, materialInstanceJson, material->GetRenderPipeline()->GetShaderBindings());
+    MaterialInstanceValidator::Validate(materialInstancePath, effectiveMaterialInstanceJson, material->GetRenderPipeline()->GetShaderBindings());
 
     //创建材质实例
     std::shared_ptr<MaterialInstance> materialInstance;

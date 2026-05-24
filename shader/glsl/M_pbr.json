@@ -1,0 +1,47 @@
+{
+    "name": "M_pbr",
+    "type": "material",
+    "shadingModel": "DefaultLit",
+    "renderStates": {
+        "renderMode": "Opaque",
+        "cullMode": "Back"
+    },
+    "macros": {
+        "USE_ALBEDO_MAP": 0,
+        "USE_NORMAL_MAP": 0,
+        "USE_PBR_MAP": 0,
+        "USE_EMISSION_MAP": 0
+    },
+    "parameters": {
+        "u_tintColor": {
+            "type": "vec4",
+            "default": [1.0, 1.0, 1.0, 1.0]
+        },
+        "u_pbrFactors": {
+            "type": "vec4",
+            "default": [0.5, 0.0, 1.0, 0.0]
+        },
+        "u_emissiveStrength": {
+            "type": "float",
+            "default": 1.0
+        }
+    },
+    "textures": {
+        "albedoMap": {
+            "type": "sampler2D",
+            "default": null
+        },
+        "normalMap": {
+            "type": "sampler2D",
+            "default": null
+        },
+        "pbrParamMap": {
+            "type": "sampler2D",
+            "default": null
+        },
+        "emissionMap": {
+            "type": "sampler2D",
+            "default": null
+        }
+    }
+}

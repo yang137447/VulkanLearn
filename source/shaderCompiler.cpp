@@ -170,7 +170,15 @@ std::vector<uint32_t> ShaderCompiler::CompileGLSLToSPIRV(const std::string& glsl
     options.SetIncluder(std::make_unique<Include>());
     for (const std::string& macro : macros)
     {
-        options.AddMacroDefinition(macro, "1");
+        const size_t valueSeparator = macro.find('=');
+        if (valueSeparator == std::string::npos)
+        {
+            options.AddMacroDefinition(macro, "1");
+        }
+        else
+        {
+            options.AddMacroDefinition(macro.substr(0, valueSeparator), macro.substr(valueSeparator + 1));
+        }
     }
 
     shaderc::SpvCompilationResult result = compiler.CompileGlslToSpv(glslCode.data(), kind, shaderFileFullPath.c_str(), options);
@@ -233,9 +241,9 @@ void ShaderCompiler::UpdateVariantManifest(const ShaderVariantKey& shaderVariant
 
     manifestJson[shaderVariantKey.GetVariantHash()] = {
         {"normalizedKey", shaderVariantKey.GetNormalizedKey()},
-        {"shader", shaderVariantKey.shaderName},
+        {"shaderName", shaderVariantKey.shaderName},
         {"renderMode", RenderModeToString(shaderVariantKey.renderMode)},
-        {"artMacros", shaderVariantKey.artMacros}
+        {"macros", shaderVariantKey.macros}
     };
 
     std::filesystem::create_directories(std::filesystem::path(manifestPath).parent_path());
@@ -246,7 +254,7 @@ void ShaderCompiler::UpdateVariantManifest(const ShaderVariantKey& shaderVariant
 ShaderCompiler::ShaderVariantCompileResult ShaderCompiler::CompileGraphicsVariant(const ShaderVariantKey& shaderVariantKeyInput)
 {
     ShaderVariantKey shaderVariantKey = shaderVariantKeyInput;
-    shaderVariantKey.artMacros = NormalizeArtMacros(shaderVariantKey.artMacros);
+    shaderVariantKey.macros = NormalizeMaterialMacros(shaderVariantKey.macros);
 
     ShaderVariantCompileResult compileResult;
     compileResult.variantHash = shaderVariantKey.GetVariantHash();
@@ -269,7 +277,7 @@ ShaderCompiler::ShaderVariantCompileResult ShaderCompiler::CompileGraphicsVarian
     const std::string fragmentShaderCode = CommonFunction::ReadFile(fragmentShaderSourcePath);
 
     std::vector<std::string> compileMacros = BuildRenderModeMacros(shaderVariantKey.renderMode);
-    compileMacros.insert(compileMacros.end(), shaderVariantKey.artMacros.begin(), shaderVariantKey.artMacros.end());
+    compileMacros.insert(compileMacros.end(), shaderVariantKey.macros.begin(), shaderVariantKey.macros.end());
 
     bool isDebugInfo = false;
 #ifndef NDEBUG

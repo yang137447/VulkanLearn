@@ -33,9 +33,9 @@ inline std::string RenderModeToString(RenderMode renderMode)
     }
 }
 
-inline std::vector<std::string> NormalizeArtMacros(std::vector<std::string> artMacros)
+inline std::vector<std::string> NormalizeMaterialMacros(std::vector<std::string> macros)
 {
-    for (std::string& macro : artMacros)
+    for (std::string& macro : macros)
     {
         const auto beginIt = std::find_if_not(macro.begin(), macro.end(), [](unsigned char ch) { return std::isspace(ch) != 0; });
         const auto endIt = std::find_if_not(macro.rbegin(), macro.rend(), [](unsigned char ch) { return std::isspace(ch) != 0; }).base();
@@ -46,51 +46,51 @@ inline std::vector<std::string> NormalizeArtMacros(std::vector<std::string> artM
         }
         macro = std::string(beginIt, endIt);
     }
-    artMacros.erase(
+    macros.erase(
         std::remove_if(
-            artMacros.begin(),
-            artMacros.end(),
+            macros.begin(),
+            macros.end(),
             [](const std::string& macro)
             {
                 return macro.empty();
             }),
-        artMacros.end());
-    std::sort(artMacros.begin(), artMacros.end());
-    artMacros.erase(std::unique(artMacros.begin(), artMacros.end()), artMacros.end());
-    return artMacros;
+        macros.end());
+    std::sort(macros.begin(), macros.end());
+    macros.erase(std::unique(macros.begin(), macros.end()), macros.end());
+    return macros;
 }
 
 struct ShaderVariantKey
 {
     std::string shaderName;
     RenderMode renderMode = RenderMode::Opaque;
-    std::vector<std::string> artMacros;
+    std::vector<std::string> macros;
 
     bool operator==(const ShaderVariantKey& other) const
     {
         return shaderName == other.shaderName &&
             renderMode == other.renderMode &&
-            artMacros == other.artMacros;
+            macros == other.macros;
     }
 
     bool IsDefaultVariant() const
     {
-        return renderMode == RenderMode::Opaque && artMacros.empty();
+        return renderMode == RenderMode::Opaque && macros.empty();
     }
 
     std::string GetNormalizedKey() const
     {
         std::ostringstream oss;
-        oss << "shader=" << shaderName
+        oss << "shaderName=" << shaderName
             << "|renderMode=" << RenderModeToString(renderMode)
-            << "|artMacros=";
-        for (size_t i = 0; i < artMacros.size(); ++i)
+            << "|macros=";
+        for (size_t i = 0; i < macros.size(); ++i)
         {
             if (i > 0)
             {
                 oss << ",";
             }
-            oss << artMacros[i];
+            oss << macros[i];
         }
         return oss.str();
     }

@@ -1,0 +1,17 @@
+{
+    "name": "M_toneMapping",
+    "type": "material",
+    "shadingModel": "Unlit",
+    "renderStates": {
+        "renderMode": "Opaque",
+        "cullMode": "Back"
+    },
+    "macros": {},
+    "parameters": {
+        "u_toneMappingParams": {
+            "type": "vec4",
+            "default": [1.0, 0.08, 1.0, 3.0]
+        }
+    },
+    "textures": {}
+}

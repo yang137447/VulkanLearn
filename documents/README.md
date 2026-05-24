@@ -43,12 +43,13 @@ Recommended meaning of each category:
 
 ## Current Active Docs
 
-- `architecture/future-render-architecture.md`
-  - long-term architecture direction for threading, reflection, data flow, and render-side ownership boundaries
-- `rendering/pbr-ibl-tod-roadmap.md`
-  - planned work for PBR completion, IBL automation, and time-of-day updates
+- No active `architecture/` documents are currently checked in.
 - `rendering/sky-pass-environment-roadmap.md`
-  - 独立 Sky Pass、运行时环境 cubemap 持有，以及面向后续大气与体积云的 render graph 改造路线
+  - 独立 Sky Pass、程序化天空、动态环境 IBL 与后续分帧更新学习路线
+- `rendering/sky-pass-environment-roadmap.html`
+  - 上述 Sky Pass 路线的网页阅读版，按实施阶段、学习资料、验证清单组织
+- `rendering/weather-gi-long-term-roadmap.html`
+  - 从程序化天空到 SSAO/GTAO、SSR、反射探针、VLM、DDGI、Lumen-like GI 与完整天气系统的长期路线图
 - `rendering/material-param-authoring-and-reflection.md`
   - 材质参数声明生成、GLSL 编写辅助，以及运行时反射负责真实绑定的精简方案
 - `rendering/material-module-system.md`
@@ -59,6 +60,16 @@ Recommended meaning of each category:
   - 同一 shader 的材质宏变体、Specialization Constant、动态 Debug View 与混合策略的整理，用于后续确认真实需求边界
 - `rendering/texture-asset-json-v1.md`
   - 贴图资产 JSON V1 字段、默认值、材质实例引用方式，以及暂不纳入 V1 的 UE 风格导入设置
+- `rendering/compute-bloom-roadmap.md`
+  - Bloom 从 fullscreen graphics pass 升级为 compute shader + 单张多 Mip 金字塔的改造方案
+- `rendering/terrain-worldcreator-mvp.md`
+  - 简单 heightmap 地形导入路径，用于承接 World Creator 数据的首个 CPU 网格版本
+- `rendering/deferred-gbuffer-ue-aligned-plan.html`
+  - Deferred GBuffer 升级、完整 UE legacy GBuffer 槽位对齐、M_/MI_ 材质定义与实例分层、ShadingModel/SelectiveOutputMask、UE-like shader authoring facade 与 forward/deferred 共用 shader 结构计划
+- `rendering/foliage-speedtree-sss-wind-roadmap.md`
+  - SpeedTree 树木导入、foliage 薄表面 SSS、风力动画与 multi-pivot 变形的分阶段落地路线
+- `rendering/foliage-speedtree-sss-wind-roadmap.html`
+  - 上述 Foliage / SpeedTree 路线的网页阅读版，并整理 SpeedTree 官方导出、风、SDK render configuration 和性能文档对接结论
 - `rendering/tone-mapping-tutorial.html`
   - Tone mapping 的游戏管线位置、曝光/曲线/bloom 职责拆分、通用预设和 VulkanLearn 接入建议
 

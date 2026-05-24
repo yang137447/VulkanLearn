@@ -29,8 +29,9 @@
 
 - `AGENTS.md`
 - `documents/README.md`
-- `documents/architecture/future-render-architecture.md`
-- `documents/rendering/pbr-ibl-tod-roadmap.md`
+- `documents/rendering/sky-pass-environment-roadmap.md`
+- `documents/rendering/terrain-worldcreator-mvp.md`
+- `documents/rendering/tone-mapping-tutorial.html`
 
 ## 环境要求
 - Windows 10/11
@@ -83,6 +84,7 @@ ParentFolder/
 
 - `scenes/`
 - `models/`
+- `terrains/`（使用地形场景时需要）
 - `materials/`
 - `textures/`
 - `hdri/`

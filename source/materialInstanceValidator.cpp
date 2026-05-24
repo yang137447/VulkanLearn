@@ -1,5 +1,6 @@
 #include "materialInstanceValidator.h"
 
+#include <sstream>
 #include <stdexcept>
 #include "commonFunction.h"
 
@@ -52,14 +53,40 @@ namespace
         throw std::runtime_error("Unsupported cullMode: " + cullMode);
     }
 
-    // 统一整理 art macro，保证 variant key 稳定可缓存。
-    std::vector<std::string> ParseArtMacros(const nlohmann::json& materialInstanceJson)
+    bool IsNumericMacroValue(const nlohmann::json& value)
     {
-        if (!materialInstanceJson.contains("artMacros"))
+        return value.is_number_integer() || value.is_number_unsigned() || value.is_number_float();
+    }
+
+    std::string MacroValueToString(const nlohmann::json& value)
+    {
+        if (!IsNumericMacroValue(value))
+        {
+            throw std::runtime_error("Material macro values must be numeric");
+        }
+        if (value.is_number_float())
+        {
+            std::ostringstream stream;
+            stream << value.get<double>();
+            return stream.str();
+        }
+        return std::to_string(value.get<int64_t>());
+    }
+
+    // 统一整理材质宏，保证 variant key 稳定可缓存。
+    std::vector<std::string> ParseMaterialMacros(const nlohmann::json& materialInstanceJson)
+    {
+        if (!materialInstanceJson.contains("macros"))
         {
             return {};
         }
-        return NormalizeArtMacros(materialInstanceJson["artMacros"].get<std::vector<std::string>>());
+
+        std::vector<std::string> macros;
+        for (const auto& [name, value] : materialInstanceJson["macros"].items())
+        {
+            macros.push_back(name + "=" + MacroValueToString(value));
+        }
+        return NormalizeMaterialMacros(std::move(macros));
     }
 
     // 先按 render mode 写入一套默认状态，再由 pass 级配置进行覆盖。
@@ -213,10 +240,10 @@ MaterialInstanceBuildPlan MaterialInstanceValidator::BuildLoadPlan(
     const nlohmann::json& materialInstanceJson)
 {
     MaterialInstanceBuildPlan loadPlan;
-    loadPlan.shaderName = materialInstanceJson.at("shader").get<std::string>();
+    loadPlan.shaderName = materialInstanceJson.at("shaderName").get<std::string>();
     loadPlan.shaderVariantKey.shaderName = loadPlan.shaderName;
     loadPlan.shaderVariantKey.renderMode = ParseRenderMode(materialInstanceJson);
-    loadPlan.shaderVariantKey.artMacros = ParseArtMacros(materialInstanceJson);
+    loadPlan.shaderVariantKey.macros = ParseMaterialMacros(materialInstanceJson);
 
     ApplyRenderModeDefaults(loadPlan.shaderVariantKey.renderMode, loadPlan.pipelineStateDesc);
     loadPlan.pipelineStateDesc.bUseVertexInput = passPipelineStateDesc.bUseVertexInput;

@@ -1,0 +1,22 @@
+{
+    "name": "M_unlit",
+    "type": "material",
+    "shadingModel": "Unlit",
+    "renderStates": {
+        "renderMode": "Opaque",
+        "cullMode": "Back"
+    },
+    "macros": {},
+    "parameters": {
+        "u_tintColor": {
+            "type": "vec4",
+            "default": [1.0, 1.0, 1.0, 1.0]
+        }
+    },
+    "textures": {
+        "albedoMap": {
+            "type": "sampler2D",
+            "default": null
+        }
+    }
+}

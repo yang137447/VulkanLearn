@@ -14,6 +14,7 @@
 #include "pipeline/pipelineFactory.h"
 #include "profiler.h"
 #include "debugConsole.h"
+#include "material/generator/materialParameterIncludeGenerator.h"
 
 int main(int argc, char **argv)
 {
@@ -55,6 +56,8 @@ int main(int argc, char **argv)
     }
 
     //编译shader
+        // 这里是把json转为glsl include文件，后面感觉可以搞个手动触发版本,或者自动触发版本
+    MaterialParameterIncludeGenerator::GenerateAllIncludes();
     ShaderCompiler shaderCompiler;
     std::string shaderFolderPath = CommonFunction::Path("shader");
     std::cout << "shaderFolderPath: " << shaderFolderPath << std::endl;

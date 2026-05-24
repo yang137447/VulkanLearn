@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <optional>
 #include <vulkan/vulkan.hpp>
 #include <Eigen/Dense>
@@ -30,10 +31,14 @@ struct alignas(16) UBOGlobal
     Eigen::Matrix4f invViewProjection;
     Eigen::Matrix4f lightViewProj;
     alignas(16) Eigen::Vector3f cameraPosition;
-    alignas(16) int debugViewMode = 0;
-    alignas(16) float environmentIntensity = 1.0f;
-    std::array<Eigen::Vector4f, 9> environmentSH{};
+    int debugViewMode = 0;
+    float environmentIntensity = 1.0f;
+    alignas(16) std::array<Eigen::Vector4f, 9> environmentSH{};
 };
+
+static_assert(offsetof(UBOGlobal, debugViewMode) == 460, "UBOGlobal debugViewMode must match GLSL std140 layout");
+static_assert(offsetof(UBOGlobal, environmentIntensity) == 464, "UBOGlobal environmentIntensity must match GLSL std140 layout");
+static_assert(offsetof(UBOGlobal, environmentSH) == 480, "UBOGlobal environmentSH must match GLSL std140 layout");
 
 struct alignas(16) UBOModel
 {

@@ -58,8 +58,9 @@ When onboarding to the repo, read in this order:
 Design references currently live under `documents/`:
 
 - `documents/README.md`
-- `documents/architecture/future-render-architecture.md`
-- `documents/rendering/pbr-ibl-tod-roadmap.md`
+- `documents/rendering/sky-pass-environment-roadmap.md`
+- `documents/rendering/terrain-worldcreator-mvp.md`
+- `documents/rendering/tone-mapping-tutorial.html`
 
 These are the currently active planning documents. Historical implementation notes are intentionally not kept as live docs.
 
@@ -120,6 +121,7 @@ If a change affects boot behavior, verify it against this order.
 - `config/`: top-level runtime config and render graph config
 - `../VulkanLearnAssets/resources/scenes/`: scene JSON files
 - `../VulkanLearnAssets/resources/models/`: mesh description JSON and source model data
+- `../VulkanLearnAssets/resources/terrains/`: terrain description JSON files
 - `../VulkanLearnAssets/resources/materials/`: material instance JSON files
 - `shader/glsl/`: shader source of truth
 - `shader/spv/`: compiled shader output and debug reflection artifacts
@@ -147,6 +149,7 @@ This project is heavily data-driven. Many runtime objects are created from JSON.
 ### Resource naming patterns
 
 - `SM_*.json`: mesh descriptor files
+- `TR_*.json`: terrain descriptor files
 - `MI_*.json`: material instance files
 - `scene*.json`: scene definitions
 
@@ -155,6 +158,7 @@ This project is heavily data-driven. Many runtime objects are created from JSON.
 Scene JSON currently supports these `type` values:
 
 - `mesh`
+- `terrain`
 - `directionalLight`
 - `pointLight`
 - `spotLight`
@@ -221,6 +225,14 @@ If asked to add or change a scene:
 - check `config/config.json`
 - inspect `resources/scenes/*.json`
 - inspect `source/sceneLoader.cpp`
+
+If asked to add or change a terrain:
+
+- inspect `resources/scenes/*.json`
+- inspect `resources/terrains/TR_*.json`
+- inspect `source/terrain.h` and `source/terrain.cpp`
+- inspect `source/sceneLoader.cpp`
+- keep World Creator surface textures in material / texture asset JSON unless the task explicitly adds terrain layer blending
 
 If asked to add or change a render pass:
 

@@ -42,11 +42,15 @@ resources/**/*.json filter=lfs diff=lfs merge=lfs -text
 shader/spv/*.spv -diff -merge -text
 
 # Documentation and configs (keep in regular Git)
-*.md -filter=lfs -diff -merge -text
-*.txt -filter=lfs -diff -merge -text
-*.xml -filter=lfs -diff -merge -text
-*.yml -filter=lfs -diff -merge -text
-*.yaml -filter=lfs -diff -merge -text
+*.md -filter=lfs diff merge text
+*.txt -filter=lfs diff merge text
+*.xml -filter=lfs diff merge text
+*.html -filter=lfs diff merge text
+*.yml -filter=lfs diff merge text
+*.yaml -filter=lfs diff merge text
 
 # JSON files outside resources stay in regular Git
-*.json -filter=lfs -diff -merge -text
+*.json -filter=lfs diff merge text
+
+# Re-apply resource JSON LFS rule after the generic JSON rule.
+resources/**/*.json filter=lfs diff=lfs merge=lfs -text

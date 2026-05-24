@@ -1,0 +1,1154 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Deferred 完整 GBuffer 与 Shader 结构升级计划</title>
+    <style>
+        :root {
+            color-scheme: dark;
+            --bg: #101314;
+            --rail: #121719;
+            --panel: #171d20;
+            --panel-2: #20282b;
+            --line: #334149;
+            --text: #edf3f4;
+            --muted: #a9b7ba;
+            --cyan: #6ec9d2;
+            --green: #8acb88;
+            --amber: #e4c56c;
+            --rose: #e58f9d;
+            --blue: #93bbf4;
+            --code: #0a0f10;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            margin: 0;
+            background: var(--bg);
+            color: var(--text);
+            font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+            line-height: 1.65;
+        }
+
+        a {
+            color: var(--cyan);
+            text-decoration: none;
+            overflow-wrap: anywhere;
+        }
+
+        a:hover {
+            text-decoration: underline;
+        }
+
+        code {
+            padding: 0.12em 0.36em;
+            border: 1px solid #2c3b40;
+            border-radius: 5px;
+            background: var(--code);
+            color: #d8eef0;
+            font-family: "Cascadia Code", Consolas, monospace;
+            font-size: 0.92em;
+            overflow-wrap: anywhere;
+        }
+
+        pre {
+            overflow: auto;
+            margin: 14px 0 0;
+            padding: 14px;
+            border: 1px solid #2c3b40;
+            border-radius: 8px;
+            background: var(--code);
+        }
+
+        pre code {
+            padding: 0;
+            border: 0;
+            background: transparent;
+        }
+
+        .layout {
+            display: grid;
+            grid-template-columns: 292px minmax(0, 1fr);
+            min-height: 100vh;
+        }
+
+        aside {
+            position: sticky;
+            top: 0;
+            height: 100vh;
+            overflow: auto;
+            padding: 28px 22px;
+            border-right: 1px solid var(--line);
+            background: var(--rail);
+        }
+
+        .brand {
+            margin-bottom: 24px;
+        }
+
+        .brand strong {
+            display: block;
+            font-size: 19px;
+            line-height: 1.25;
+        }
+
+        .brand span {
+            display: block;
+            margin-top: 8px;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        nav {
+            display: grid;
+            gap: 5px;
+        }
+
+        nav a {
+            display: block;
+            padding: 8px 10px;
+            border-radius: 6px;
+            color: var(--muted);
+            font-size: 14px;
+        }
+
+        nav a:hover {
+            background: var(--panel-2);
+            color: var(--text);
+            text-decoration: none;
+        }
+
+        main {
+            width: min(1120px, 100%);
+            padding: 34px clamp(22px, 5vw, 68px) 76px;
+        }
+
+        section {
+            margin: 0 0 46px;
+        }
+
+        h1 {
+            margin: 0 0 14px;
+            max-width: 960px;
+            font-size: clamp(31px, 5vw, 56px);
+            line-height: 1.06;
+            letter-spacing: 0;
+        }
+
+        h2 {
+            margin: 0 0 14px;
+            padding-top: 8px;
+            font-size: clamp(23px, 3vw, 33px);
+            line-height: 1.2;
+            letter-spacing: 0;
+        }
+
+        h3 {
+            margin: 24px 0 10px;
+            font-size: 20px;
+            letter-spacing: 0;
+        }
+
+        p {
+            margin: 0 0 14px;
+            color: var(--muted);
+        }
+
+        ul, ol {
+            margin: 12px 0 0;
+            padding-left: 22px;
+            color: var(--muted);
+        }
+
+        li {
+            margin: 7px 0;
+        }
+
+        .lead {
+            max-width: 920px;
+            color: #cfdbdd;
+            font-size: 18px;
+        }
+
+        .note {
+            margin: 16px 0;
+            padding: 14px 16px;
+            border: 1px solid var(--line);
+            border-left: 4px solid var(--cyan);
+            border-radius: 8px;
+            background: var(--panel);
+            color: #cbd8db;
+        }
+
+        .warning {
+            border-left-color: var(--amber);
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 16px;
+            margin-top: 16px;
+        }
+
+        .panel {
+            padding: 16px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: var(--panel);
+        }
+
+        .panel h3 {
+            margin-top: 0;
+        }
+
+        table {
+            width: 100%;
+            margin: 16px 0 0;
+            border-collapse: collapse;
+            overflow: hidden;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: var(--panel);
+            font-size: 14px;
+        }
+
+        th,
+        td {
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--line);
+            border-right: 1px solid var(--line);
+            vertical-align: top;
+        }
+
+        th {
+            color: var(--text);
+            background: var(--panel-2);
+            text-align: left;
+        }
+
+        tr:last-child td {
+            border-bottom: 0;
+        }
+
+        td:last-child,
+        th:last-child {
+            border-right: 0;
+        }
+
+        .tag {
+            display: inline-block;
+            margin: 0 5px 5px 0;
+            padding: 2px 7px;
+            border: 1px solid var(--line);
+            border-radius: 999px;
+            color: #dce9eb;
+            background: #162025;
+            font-size: 12px;
+        }
+
+        .flow {
+            color: #dbe9eb;
+            white-space: pre;
+        }
+
+        .ok {
+            color: var(--green);
+        }
+
+        .warn-text {
+            color: var(--amber);
+        }
+
+        @media (max-width: 860px) {
+            .layout {
+                grid-template-columns: 1fr;
+            }
+
+            aside {
+                position: static;
+                height: auto;
+                border-right: 0;
+                border-bottom: 1px solid var(--line);
+            }
+
+            nav {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="layout">
+        <aside>
+            <div class="brand">
+                <strong>Deferred 完整 GBuffer 升级计划</strong>
+                <span>完整对齐 UE legacy GBuffer 槽位，服务 VulkanLearn 的 forward / deferred 双路径。</span>
+            </div>
+            <nav aria-label="文档目录">
+                <a href="#goal">目标</a>
+                <a href="#ue-alignment">UE 对齐范围</a>
+                <a href="#gbuffer-layout">完整 GBuffer</a>
+                <a href="#selective-output-mask">SelectiveOutputMask</a>
+                <a href="#shader-structure">Shader 结构</a>
+                <a href="#authoring-facade">Authoring Facade</a>
+                <a href="#ue-review">UE 审查</a>
+                <a href="#render-graph">Render Graph</a>
+                <a href="#msaa-strategy">MSAA 策略</a>
+                <a href="#phases">实施阶段</a>
+                <a href="#validation">验证清单</a>
+                <a href="#risks">风险边界</a>
+                <a href="#references">参考资料</a>
+            </nav>
+        </aside>
+
+        <main>
+            <section id="goal">
+                <h1>Deferred 完整 GBuffer 与 Shader 结构升级计划</h1>
+                <p class="lead">
+                    本文档定义 VulkanLearn 从当前 forward-style PBR 管线升级到 deferred 管线的计划。目标调整为直接完整对齐 Unreal Engine legacy deferred GBuffer 的职责和槽位：geometry/base pass 写出 GBufferA/B/C/D/E、Velocity 与可选 tangent/anisotropy 数据，lighting pass 统一根据 <code>ShadingModelID</code> 和 <code>SelectiveOutputMask</code> 解释这些属性。
+                </p>
+                <div class="note">
+                    当前工程的 <code>geometry</code> pass 已经输出 HDR color 和 depth，<code>pbr.frag</code> 在同一个片元 shader 内完成材质采样、直接光、阴影、IBL 与 debug view。Deferred 升级后，这些职责需要拆成“材质求值”和“光照求值”两个可复用层。
+                </div>
+            </section>
+
+            <section id="ue-alignment">
+                <h2>UE 对齐范围</h2>
+                <p>
+                    UE 的 deferred 路径核心思想是把 material / object attributes 存入 GBuffer，再由 deferred lighting 基于这些属性计算光照。VulkanLearn 这次直接对齐 legacy deferred 的完整 GBuffer 语义：A/B/C/D/E、Velocity、ShadingModelID、SelectiveOutputMask、CustomData、PrecomputedShadowFactors、可选 world tangent / anisotropy。UE5 Substrate Adaptive GBuffer 是另一套按像素变化的复杂存储系统，不作为本次目标。
+                </p>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>UE 风格概念</th>
+                            <th>在 VulkanLearn 中的含义</th>
+                            <th>VulkanLearn 对齐要求</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>ShadingModelID</code></td>
+                            <td>每个像素选择 shading 解释方式，例如 DefaultLit、Unlit、ClearCoat。</td>
+                            <td>必须引入完整 ID 空间。先实现 <code>DefaultLit</code> 和 <code>Unlit</code>，但枚举和值域为后续 ClearCoat、Subsurface、Hair、Cloth、Eye 等模型预留。</td>
+                        </tr>
+                        <tr>
+                            <td><code>SelectiveOutputMask</code></td>
+                            <td>每个像素声明哪些 optional output / custom data 有效。</td>
+                            <td>按 UE 风格与 <code>ShadingModelID</code> 打包到同一通道，低位是 shading model，高位是 per-pixel optional output flags。</td>
+                        </tr>
+                        <tr>
+                            <td><code>CustomData</code></td>
+                            <td>特殊 shading model 复用的额外参数槽。</td>
+                            <td>必须作为 GBufferD 常驻槽位进入布局，即使早期只有默认值。</td>
+                        </tr>
+                        <tr>
+                            <td><code>PrecomputedShadowFactors</code></td>
+                            <td>静态光照、烘焙阴影或 lightmap 相关数据。</td>
+                            <td>必须作为 GBufferE 常驻槽位进入布局。当前没有 lightmap 时写默认值，后续静态光照直接接入。</td>
+                        </tr>
+                        <tr>
+                            <td><code>Velocity</code></td>
+                            <td>motion vector，服务 TAA / TSR / motion blur。</td>
+                            <td>必须纳入完整布局。当前无 motion vector 时写零，后续 TAA / motion blur / TSR 类路径直接消费。</td>
+                        </tr>
+                        <tr>
+                            <td><code>WorldTangent / Anisotropy</code></td>
+                            <td>各向异性 BRDF 的切线方向和强度。</td>
+                            <td>作为可选 GBufferF 或等价 attachment 进入完整布局，由 <code>HAS_ANISOTROPY_MASK</code> 标记有效性。</td>
+                        </tr>
+                    </tbody>
+                </table>
+                <div class="note warning">
+                    这里的完整对齐指 legacy deferred GBuffer 的槽位、字段语义、packed mask 语义和 shader 数据流对齐。具体 Vulkan 格式可以先用更易调试的格式，后续再压缩到更接近 UE 的带宽形态。
+                </div>
+            </section>
+
+            <section id="gbuffer-layout">
+                <h2>完整 GBuffer 布局</h2>
+                <p>
+                    GBuffer 从第一版开始就按 UE legacy deferred 的完整职责建模。早期没有真实数据的槽位也要写入默认值，避免后续 ClearCoat、SSS、anisotropy、velocity、lightmap 接入时再次迁移 render graph 和 shader binding。
+                </p>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>资源名</th>
+                            <th>建议格式</th>
+                            <th>通道语义</th>
+                            <th>UE 对应职责</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>gbufferA</code></td>
+                            <td><code>R16G16B16A16_SFLOAT</code> 起步，后续可压缩</td>
+                            <td><code>rgb = worldNormal</code>, <code>a = perObjectGBufferData</code></td>
+                            <td>对齐 UE 的 world normal + per-object GBuffer data 职责。</td>
+                        </tr>
+                        <tr>
+                            <td><code>gbufferB</code></td>
+                            <td><code>R16G16B16A16_SFLOAT</code> 起步，后续可压缩</td>
+                            <td><code>r = metallic</code>, <code>g = specular</code>, <code>b = roughness</code>, <code>a = packed ShadingModelID + SelectiveOutputMask</code></td>
+                            <td>对齐 UE 的 metallic / specular / roughness / packed shading 通道。</td>
+                        </tr>
+                        <tr>
+                            <td><code>gbufferC</code></td>
+                            <td><code>R16G16B16A16_SFLOAT</code> 起步，后续可压缩</td>
+                            <td><code>rgb = baseColor</code>, <code>a = indirectIrradiance</code></td>
+                            <td>对齐 UE 的 base color + indirect irradiance 职责。AO 保留在 surface 数据中，可按项目阶段映射到 custom/间接光路径。</td>
+                        </tr>
+                        <tr>
+                            <td><code>gbufferD</code></td>
+                            <td><code>R16G16B16A16_SFLOAT</code></td>
+                            <td><code>rgba = customData</code></td>
+                            <td>对齐 UE 给 ClearCoat、SSS、Hair、Eye 等 shading model 复用的 custom data。</td>
+                        </tr>
+                        <tr>
+                            <td><code>gbufferE</code></td>
+                            <td><code>R16G16B16A16_SFLOAT</code></td>
+                            <td><code>rgba = precomputedShadowFactors</code></td>
+                            <td>对齐 UE 的静态光照 / 预计算阴影因子槽位。当前无烘焙数据时写默认值。</td>
+                        </tr>
+                        <tr>
+                            <td><code>gbufferVelocity</code></td>
+                            <td><code>R16G16_SFLOAT</code> 或 <code>R16G16B16A16_SFLOAT</code></td>
+                            <td><code>rg = screen velocity</code>, 其余通道预留</td>
+                            <td>对齐 UE 的 velocity 输出，服务 TAA、motion blur 和后续重投影类效果。</td>
+                        </tr>
+                        <tr>
+                            <td><code>gbufferF</code></td>
+                            <td><code>R16G16B16A16_SFLOAT</code></td>
+                            <td><code>rgb = worldTangent</code>, <code>a = anisotropy</code></td>
+                            <td>对齐 UE 的各向异性 optional 数据职责，由 <code>HAS_ANISOTROPY_MASK</code> 控制有效性。</td>
+                        </tr>
+                        <tr>
+                            <td><code>sceneColorBase</code></td>
+                            <td><code>R16G16B16A16_SFLOAT</code></td>
+                            <td><code>rgb = emissive / base pass scene contribution</code>, <code>a = opacity 或 spare</code></td>
+                            <td>不是 GBuffer 槽位。用于对齐 UE deferred base pass 中 emissive 不作为普通 GBuffer 材质属性保存的思路。</td>
+                        </tr>
+                        <tr>
+                            <td><code>sceneDepth</code></td>
+                            <td><code>D32_SFLOAT</code></td>
+                            <td>深度，用于重建 world position。</td>
+                            <td>deferred lighting 的位置来源。</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>完整对齐后的渲染流程</h3>
+                <pre><code class="flow">shadow
+  -> geometry / gbufferGeometry
+  -> deferredLighting
+  -> sky
+  -> postProcess
+  -> bloom
+  -> toneMapping</code></pre>
+
+                <p>
+                    为了减少初次改造冲击，可以先保留 pass 名称 <code>geometry</code>，但改变它的输出语义：从 “final-ish HDR color” 改成 “UE-style GBuffer attributes + sceneColorBase”。新增 <code>deferredLighting</code> 输入完整 GBuffer，输出 <code>offscreenColor</code>。后续 <code>sky</code>、post、bloom、tone mapping 尽量不动。
+                </p>
+            </section>
+
+            <section id="selective-output-mask">
+                <h2>SelectiveOutputMask</h2>
+                <p>
+                    <code>SelectiveOutputMask</code> 是每像素 feature flags。它不决定物体是否进入 GBuffer，而是告诉后续 pass：这个像素有哪些可选数据有效，哪些输出可以被视为默认值。
+                </p>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>字段</th>
+                            <th>建议位置</th>
+                            <th>用途</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>ShadingModelID</code></td>
+                            <td>packed low bits</td>
+                            <td>选择 BRDF / shading 模型。</td>
+                        </tr>
+                        <tr>
+                            <td><code>SelectiveOutputMask</code></td>
+                            <td>packed high bits</td>
+                            <td>声明 custom data、anisotropy、shadow、velocity 等 optional 数据是否有效。</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <pre><code>// UE-style packed channel：存储到 gbufferB.a。
+// 低 4 bit: ShadingModelID
+// 高 4 bit: SelectiveOutputMask
+const uint SHADING_MODEL_DEFAULT_LIT = 0u;
+const uint SHADING_MODEL_UNLIT = 1u;
+const uint SHADING_MODEL_SUBSURFACE = 2u;
+const uint SHADING_MODEL_PREINTEGRATED_SKIN = 3u;
+const uint SHADING_MODEL_CLEAR_COAT = 4u;
+const uint SHADING_MODEL_SUBSURFACE_PROFILE = 5u;
+const uint SHADING_MODEL_TWOSIDED_FOLIAGE = 6u;
+const uint SHADING_MODEL_HAIR = 7u;
+const uint SHADING_MODEL_CLOTH = 8u;
+const uint SHADING_MODEL_EYE = 9u;
+
+const uint SELECTIVE_OUTPUT_HAS_ANISOTROPY = 1u &lt;&lt; 4;
+const uint SELECTIVE_OUTPUT_SKIP_PRECSHADOW = 1u &lt;&lt; 5;
+const uint SELECTIVE_OUTPUT_ZERO_PRECSHADOW = 1u &lt;&lt; 6;
+const uint SELECTIVE_OUTPUT_SKIP_VELOCITY = 1u &lt;&lt; 7;
+
+float EncodeGBufferPacked(uint shadingModel, uint flags)
+{
+    return float((shadingModel &amp; 0x0fu) | (flags &amp; 0xf0u));
+}
+
+uint DecodeShadingModel(float packedValue)
+{
+    return uint(packedValue + 0.5) &amp; 0x0fu;
+}
+
+uint DecodeGBufferFlags(float packedValue)
+{
+    return uint(packedValue + 0.5) &amp; 0xf0u;
+}</code></pre>
+
+                <div class="note">
+                    完整对齐后，<code>gbufferB.a</code> 的语义应按 8-bit packed channel 固定下来。VulkanLearn 可以先用 float attachment 承载这个 0-255 的整数值，但 shader codec 必须按低 4 bit / 高 4 bit 的 UE-style 语义编写，避免后续压缩格式时再改业务逻辑。
+                </div>
+            </section>
+
+            <section id="shader-structure">
+                <h2>Shader 结构</h2>
+                <p>
+                    升级的关键不是多写一个 deferred lighting shader，而是把材质 shader 拆成可复用层。Forward 与 Deferred 应共享同一套材质采样和 surface 语义，只在“输出到哪里”和“何时计算 lighting”上分叉。最终形态应进一步收敛成 UE-like authoring：材质作者只写 VS/PS 的可控入口，其余 binding、GBuffer 编码、lighting 分发和 pass 差异由框架层包起来。
+                </p>
+
+                <div class="grid">
+                    <div class="panel">
+                        <h3>当前问题</h3>
+                        <ul>
+                            <li><code>pbr.frag</code> 同时负责材质采样、normal decode、BRDF、阴影、IBL 和 debug view。</li>
+                            <li>材质参数和 lighting 强绑定，导致 deferred 难以复用。</li>
+                            <li>后续加 <code>ShadingModelID</code> 时，如果仍堆在一个 shader 内，会让 forward/deferred 分叉越来越多。</li>
+                        </ul>
+                    </div>
+                    <div class="panel">
+                        <h3>目标结构</h3>
+                        <ul>
+                            <li>材质采样只生成 <code>MaterialSurface</code>。</li>
+                            <li>GBuffer 编码只消费 <code>MaterialSurface</code>。</li>
+                            <li>Forward 直接把 <code>MaterialSurface</code> 交给 lighting。</li>
+                            <li>Deferred 先写 GBuffer，再由 lighting pass 解码成 <code>MaterialSurface</code>。</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <h3>推荐 include 分层</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>文件</th>
+                            <th>职责</th>
+                            <th>被谁使用</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>shader/glsl/common/shadingModel.glsl</code></td>
+                            <td>定义 <code>ShadingModelID</code>、GBuffer flags、公共常量。</td>
+                            <td>forward、gbuffer、deferred lighting、debug view。</td>
+                        </tr>
+                        <tr>
+                            <td><code>shader/glsl/common/materialSurface.glsl</code></td>
+                            <td>定义 <code>MaterialSurface</code> 与默认初始化函数。</td>
+                            <td>所有材质 shader。</td>
+                        </tr>
+                        <tr>
+                            <td><code>shader/glsl/common/materialSampling.glsl</code></td>
+                            <td>采样 albedo / normal / pbr / emission，输出 <code>MaterialSurface</code>。</td>
+                            <td>forward PBR 与 gbuffer PBR。</td>
+                        </tr>
+                        <tr>
+                            <td><code>shader/glsl/common/gbufferCodec.glsl</code></td>
+                            <td>编码 / 解码完整 GBufferA/B/C/D/E、Velocity、Tangent/Anisotropy 和 packed shading 通道。</td>
+                            <td>gbuffer pass 与 deferred lighting pass。</td>
+                        </tr>
+                        <tr>
+                            <td><code>shader/glsl/common/brdf.glsl</code></td>
+                            <td>BRDF、Fresnel、NDF、visibility 等纯函数。</td>
+                            <td>forward 与 deferred lighting。</td>
+                        </tr>
+                        <tr>
+                            <td><code>shader/glsl/common/lighting.glsl</code></td>
+                            <td>直接光、阴影、IBL、shading model 分发。</td>
+                            <td>forward 与 deferred lighting。</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>核心数据结构</h3>
+                <pre><code>struct MaterialSurface {
+    vec3 baseColor;
+    float opacity;
+
+    vec3 worldNormal;
+    float roughness;
+
+    vec3 emission;
+    float metallic;
+
+    float specular;
+    float ambientOcclusion;
+    float indirectIrradiance;
+    float perObjectGBufferData;
+
+    vec4 customData;
+    vec4 precomputedShadowFactors;
+
+    vec3 worldTangent;
+    float anisotropy;
+
+    vec2 velocity;
+    uint shadingModel;
+    uint flags;
+};</code></pre>
+
+                <h3>Forward 与 Deferred 的共用关系</h3>
+                <pre><code>// forward pbr fragment
+MaterialSurface surface = EvaluateMaterialSurface(input);
+vec3 color = ShadeMaterialSurface(surface, lightingContext);
+outColor = vec4(color, surface.opacity);
+
+// gbuffer fragment
+MaterialSurface surface = EvaluateMaterialSurface(input);
+WriteGBuffer(surface);
+
+// deferred lighting fragment
+MaterialSurface surface = ReadGBuffer(uv, sceneDepth);
+vec3 color = ShadeMaterialSurface(surface, lightingContext);
+outColor = vec4(color, surface.opacity);</code></pre>
+
+                <div class="note">
+                    这样写完以后，forward 不是被废弃，而是变成 deferred 的自然补充：透明物体、特殊调试、简单平台 fallback、后续 editor gizmo 都可以继续走 forward。
+                </div>
+            </section>
+
+            <section id="authoring-facade">
+                <h2>UE-like Authoring Facade</h2>
+                <p>
+                    是的，deferred 升级应该同时抽离出一个材质 shader 编写外壳。材质作者不应直接关心 Vulkan descriptor set、GBuffer attachment layout、forward/deferred 分叉、lighting pass、debug view 或 velocity/precomputed shadow 的默认值。对作者暴露的应该是少量稳定入口，类似 UE 材质最终只是在引擎提供的模板里填充材质表达式。
+                </p>
+                <div class="note">
+                    当前工程里，<code>pbr.vert + pbr.frag</code> 这样的 shader pair 天然就是材质定义。为了让编译/装配有稳定起点，本计划正式引入 <code>M_*.json</code> 作为材质定义资产：它包含 <code>name</code>、<code>shadingModel</code>、<code>renderStates</code>、<code>parameters</code>、数字值 <code>macros</code>、<code>textures</code>。<code>M_*.json</code> 不重复写 shader 字段，而是按命名约定绑定 shader pair，例如 <code>M_pbr.json -> pbr.vert / pbr.frag</code>。<code>macros</code> 在 <code>M_*.json</code> 中声明可调 static/material macros 和默认值，<code>MI_*.json</code> 可以用同名数字宏覆盖它们；这类 override 会参与 shader variant key，类似 UE Material Instance 的 static switch。<code>renderStates</code> 主归属在材质定义层，<code>MI_*.json</code> 不再直接写完整 <code>renderStates</code>，只允许通过 <code>renderStateOverrides</code> 做 UE Base Property Override 风格的少量覆写。<code>textures</code> 保留贴图槽的 <code>type</code> 和默认值，其中 <code>type</code> 的主要职责是校验 <code>default</code> 或 <code>MI_*.json</code> override 指向的 texture JSON 是否合规；生成 sampler 声明只是派生用途。binding 和 macro 不在每个 texture 上重复写，由生成规则统一决定。<code>M_*.json</code> 会生成一份 <code>Paramter</code> include 文件，默认路径是同目录下的 <code>generate/&lt;name&gt;Paramter.glsl</code>。对应的 <code>vert</code> 和 <code>frag</code> 需要事先 include 这个文件，再使用其中生成的宏、参数声明、贴图声明和材质常量。<code>MI_*.json</code> 只引用 <code>M_*.json</code> 并提供参数、贴图、static macro override 和可选 render state override。代码里的 <code>Material</code> 类仍更接近运行时 pipeline / shader variant 缓存载体，不等同于磁盘上的 <code>M_*.json</code>。
+                </div>
+
+                <div class="grid">
+                    <div class="panel">
+                        <h3>作者可见</h3>
+                        <ul>
+                            <li>顶点阶段入口：修改局部顶点、法线、切线、UV、vertex color、world position offset。</li>
+                            <li>片元阶段入口：填充 <code>MaterialSurface</code>，包括 baseColor、roughness、metallic、normal、emission、customData、shadingModel。</li>
+                            <li>材质模块 public 接口：例如 normal map、clear coat、foliage SSS、wind、dissolve。</li>
+                            <li>材质参数声明：仍由反射系统负责真实 binding。</li>
+                        </ul>
+                    </div>
+                    <div class="panel">
+                        <h3>框架隐藏</h3>
+                        <ul>
+                            <li>Descriptor set / binding 位置和 pass descriptor 对齐。</li>
+                            <li>GBufferA/B/C/D/E、Velocity、F 的写入位置和默认值。</li>
+                            <li>Forward 与 Deferred 的输出分流。</li>
+                            <li>ShadingModelID / SelectiveOutputMask 的 packing。</li>
+                            <li>Lighting、shadow、IBL、debug view、post-process 输入约定。</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <h3>M / MI 作者入口</h3>
+                <pre><code>// material definition file: M_pbr.json
+{
+    "name": "M_pbr",
+    "shadingModel": "DefaultLit",
+    "renderStates": {
+        "renderMode": "Opaque",
+        "cullMode": "Back"
+    },
+    "macros": {
+        "USE_ALBEDO_MAP": 0,
+        "USE_NORMAL_MAP": 0,
+        "USE_PBR_MAP": 0,
+        "USE_EMISSION_MAP": 0
+    },
+    "compatiblePasses": ["geometry", "forwardTransparent", "shadow"],
+    "parameters": {
+        "u_tintColor": {
+            "type": "vec4",
+            "default": [1.0, 1.0, 1.0, 1.0]
+        },
+        "u_pbrFactors": {
+            "type": "vec4",
+            "default": [0.5, 0.0, 1.0, 0.0]
+        },
+        "u_emissiveStrength": {
+            "type": "float",
+            "default": 1.0
+        }
+    },
+    "textures": {
+        "albedoMap": {
+            "type": "sampler2D",
+            "default": null
+        },
+        "normalMap": {
+            "type": "sampler2D",
+            "default": null
+        },
+        "pbrParamMap": {
+            "type": "sampler2D",
+            "default": null
+        },
+        "emissionMap": {
+            "type": "sampler2D",
+            "default": null
+        }
+    }
+}</code></pre>
+
+                <pre><code>// material instance file: MI_brick.json
+{
+    "material": "shader/glsl/M_pbr.json",
+    "macros": {
+        "USE_ALBEDO_MAP": 1,
+        "USE_NORMAL_MAP": 1,
+        "USE_PBR_MAP": 0,
+        "USE_EMISSION_MAP": 0
+    },
+    "parameters": {
+        "u_tintColor": [0.8, 0.7, 0.6, 1.0]
+    },
+    "textures": {
+        "albedoMap": "textures/brick_albedo.json",
+        "normalMap": "textures/brick_normal.json"
+    }
+}</code></pre>
+
+                <pre><code>// material shader pair: pbr.vert / pbr.frag
+// Both stages include the generated material definition first.
+#include "generate/M_pbrParamter.glsl"
+
+// 第一阶段可以仍然保留 main()，只是在 main() 内部收敛到这些入口。
+void MaterialVertex(inout MaterialVertexContext vertex)
+{
+    // 可选：world position offset、风、顶点动画、UV 调整。
+}
+
+void MaterialPixel(in MaterialPixelContext pixel, inout MaterialSurface surface)
+{
+    surface.baseColor = SampleBaseColor(pixel);
+    surface.worldNormal = SampleWorldNormal(pixel);
+    surface.roughness = SampleRoughness(pixel);
+    surface.metallic = SampleMetallic(pixel);
+    surface.specular = 0.5;
+    surface.ambientOcclusion = SampleAO(pixel);
+    surface.emission = SampleEmission(pixel);
+    surface.shadingModel = MATERIAL_SHADING_MODEL;
+    surface.flags = SELECTIVE_OUTPUT_DEFAULT;
+}</code></pre>
+
+                <pre><code>// generated material include: shader/glsl/generate/M_pbrParamter.glsl
+#ifndef VL_GENERATED_M_PBR_PARAMTERS
+#define VL_GENERATED_M_PBR_PARAMTERS
+
+#define MATERIAL_SHADING_MODEL SHADING_MODEL_DEFAULT_LIT
+#define USE_ALBEDO_MAP 0
+#define USE_NORMAL_MAP 0
+#define USE_PBR_MAP 0
+#define USE_EMISSION_MAP 0
+
+layout(set = 1, binding = 0) uniform UBOMIParamters {
+    vec4 u_tintColor;
+    vec4 u_pbrFactors;
+    float u_emissiveStrength;
+};
+
+layout(set = 1, binding = 1) uniform sampler2D albedoMap;
+layout(set = 1, binding = 2) uniform sampler2D normalMap;
+layout(set = 1, binding = 3) uniform sampler2D pbrParamMap;
+layout(set = 1, binding = 4) uniform sampler2D emissionMap;
+
+#endif</code></pre>
+
+                <h3>框架生成的包装层</h3>
+                <pre><code>// generated/assembled forward fragment
+MaterialSurface surface = CreateDefaultMaterialSurface();
+MaterialPixel(pixelContext, surface);
+vec3 color = ShadeMaterialSurface(surface, lightingContext);
+outColor = vec4(color, surface.opacity);
+
+// generated/assembled deferred gbuffer fragment
+MaterialSurface surface = CreateDefaultMaterialSurface();
+MaterialPixel(pixelContext, surface);
+WriteCompleteGBuffer(surface);
+outSceneColorBase = vec4(surface.emission, surface.opacity);</code></pre>
+
+                <table>
+                    <thead>
+                        <tr>
+                            <th>层级</th>
+                            <th>文件形态</th>
+                            <th>职责</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>材质定义资产</td>
+                            <td><code>M_*.json</code></td>
+                            <td>编译/装配起点。声明 <code>name</code>、<code>shadingModel</code>、<code>parameters</code>、数字值 <code>macros</code>、<code>textures</code>，并默认生成 <code>generate/&lt;name&gt;Paramter.glsl</code>。</td>
+                        </tr>
+                        <tr>
+                            <td>材质实例资产</td>
+                            <td><code>MI_*.json</code></td>
+                            <td>只引用 <code>M_*.json</code> 并 override static macros、参数和贴图；不直接声明 <code>shadingModel</code>，也不覆盖 render state。</td>
+                        </tr>
+                        <tr>
+                            <td>材质 shader pair</td>
+                            <td><code>shader/glsl/*.vert</code> + <code>shader/glsl/*.frag</code></td>
+                            <td>材质代码定义。必须 include 对应 <code>generate/&lt;name&gt;Paramter.glsl</code>，再把内部逻辑收敛为 <code>MaterialVertex</code> 和 <code>MaterialPixel</code>。</td>
+                        </tr>
+                        <tr>
+                            <td>可选材质模板</td>
+                            <td><code>templates/forward.frag.glsl</code>、<code>templates/gbuffer.frag.glsl</code></td>
+                            <td>当需要同一材质定义生成 forward / gbuffer 两套最终 shader 时引入。第一阶段先生成 Paramter include，不强制引入完整模板装配器。</td>
+                        </tr>
+                        <tr>
+                            <td>公共运行时 shader 库</td>
+                            <td><code>common/*.glsl</code></td>
+                            <td>提供 <code>MaterialSurface</code>、GBuffer codec、BRDF、lighting、shading model dispatch。</td>
+                        </tr>
+                        <tr>
+                            <td>生成/装配工具</td>
+                            <td>shader build step</td>
+                            <td>从 <code>M_*.json</code> 生成同目录 <code>generate/&lt;name&gt;Paramter.glsl</code>，再编译 include 该文件的真实 <code>vert/frag</code>。后续可继续扩展模板装配。</td>
+                        </tr>
+                        <tr>
+                            <td>运行时 <code>Material</code></td>
+                            <td>C++ cache object</td>
+                            <td>保留为 pipeline / shader variant 缓存载体，不在第一阶段提升为独立 authoring 资产。</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <div class="note">
+                    这个外壳应该和现有材质模块文档保持一致：模块提供 public 函数和参数，shader pair 内的作者入口显式调用模块。第一阶段可以不引入生成器；后续如果加入模板装配，生成器也只负责 include、宏变体和模板拼接，不自动猜测材质逻辑顺序。这样既像 UE 一样隐藏引擎细节，又保留当前项目学习时需要的可读性。
+                </div>
+            </section>
+
+            <section id="ue-review">
+                <h2>UE 对齐审查</h2>
+                <p>
+                    这一轮审查的结论是：VulkanLearn 不需要复制 UE 的资产格式，但职责边界要对齐 UE。<code>M_*.json</code> 对应材质定义，<code>MI_*.json</code> 对应材质实例；shader pair 是材质代码，运行时 <code>Material</code> 只是 pipeline / variant 缓存对象。
+                </p>
+
+                <table>
+                    <thead>
+                        <tr>
+                            <th>UE 概念</th>
+                            <th>VulkanLearn 对应</th>
+                            <th>审查结论</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Material</td>
+                            <td><code>M_*.json</code> + shader pair</td>
+                            <td>负责 <code>shadingModel</code>、render states、可调 static macros、参数/贴图槽声明和默认值。</td>
+                        </tr>
+                        <tr>
+                            <td>Material Instance</td>
+                            <td><code>MI_*.json</code></td>
+                            <td>只 override 参数、贴图、<code>M_</code> 暴露的 static macros，以及少量 <code>renderStateOverrides</code>；不选择 shader pair，不声明 <code>shadingModel</code>。</td>
+                        </tr>
+                        <tr>
+                            <td>Static Switch / Static Parameter</td>
+                            <td><code>MI_*.json -> macros</code></td>
+                            <td>允许实例调节，参与 shader variant key。它不是普通 runtime uniform。</td>
+                        </tr>
+                        <tr>
+                            <td>Scalar / Vector / Texture Parameter</td>
+                            <td><code>MI_*.json -> parameters/textures</code></td>
+                            <td>运行时实例数据，按 <code>M_</code> 声明和 shader reflection 校验。</td>
+                        </tr>
+                        <tr>
+                            <td>Blend Mode / Cull Mode</td>
+                            <td><code>M_*.json -> renderStates</code></td>
+                            <td>归属材质定义层。若未来确实要实例级覆盖，应作为显式例外，而不是默认能力。</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </section>
+
+            <section id="render-graph">
+                <h2>Render Graph 改造点</h2>
+                <p>
+                    RenderGraph 需要一次性承载完整 UE-style GBuffer attachment，并允许后续 pass 把这些 attachment 作为 sampled texture 输入。当前配置系统已经能声明多个输出资源，因此重点在资源格式、pass descriptor、shader 绑定、layout transition 和 RenderSystem 分支上。
+                </p>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>层</th>
+                            <th>改造内容</th>
+                            <th>注意点</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>config/renderGraphConfig.json</code></td>
+                            <td>新增 <code>gbufferA/B/C/D/E</code>、<code>gbufferVelocity</code>、<code>gbufferF</code>、<code>sceneColorBase</code>，新增 <code>deferredLighting</code> pass。</td>
+                            <td>后处理链继续消费 <code>offscreenColor</code>。GBuffer attachment 命名和 shader location 必须固定。</td>
+                        </tr>
+                        <tr>
+                            <td><code>renderGraph.cpp</code></td>
+                            <td>确认多 color attachment + depth attachment 顺序稳定，并支持 GBuffer 作为后续 sampled inputs。MSAA 策略也在这里落地。</td>
+                            <td>GBuffer 输出顺序必须与 shader <code>layout(location)</code> 固定对应，文档、JSON、shader codec 三处同步。MSAA 由 RenderGraph 配置显式决定。</td>
+                        </tr>
+                        <tr>
+                            <td><code>sceneLoader.cpp</code></td>
+                            <td>先读取 <code>MI_*.json</code> 指向的 <code>M_*.json</code>，合并材质定义默认值与实例 override，再按 shader 反射结果解析参数、贴图和 UBO 字段。</td>
+                            <td><code>shadingModel</code> 来自 <code>M_*.json</code> 并应与 shader pair / 模板常量一致；默认不作为 material uniform 上传。</td>
+                        </tr>
+                        <tr>
+                            <td>shader build step</td>
+                            <td>以 <code>M_*.json</code> 为编译入口，读取 <code>name</code>、<code>shadingModel</code>、<code>parameters</code>、<code>macros</code> 和 <code>textures</code>，生成同目录 <code>generate/&lt;name&gt;Paramter.glsl</code>，再编译 include 该文件的 <code>vert/frag</code>。</td>
+                            <td>最终参与反射的仍是真实 GLSL。<code>MI_*.json</code> 不选择 shader pair，但它的 static macro override 会选择或触发对应 shader variant。</td>
+                        </tr>
+                        <tr>
+                            <td><code>renderSystem.cpp</code></td>
+                            <td>保留 geometry draw 分支，新增 deferred lighting fullscreen pass。</td>
+                            <td>先别重写整个 pass dispatch 架构。</td>
+                        </tr>
+                        <tr>
+                            <td>debug view</td>
+                            <td>增加 GBuffer 可视化模式。</td>
+                            <td>至少能看 normal、baseColor、roughness、metallic、shading model、custom data、precomputed shadow、velocity。</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </section>
+
+            <section id="msaa-strategy">
+                <h2>MSAA 策略</h2>
+                <p>
+                    MSAA 在 deferred 管线里不是没用，而是不能再像 forward 那样简单理解为“geometry pass 开 MSAA 然后 resolve color”。Deferred 的 geometry pass 写的是材质属性，不是最终颜色；如果直接硬件 resolve GBuffer，就会把 normal、roughness、metallic、shading model、custom data 这些离散或非线性属性混在一起，边缘像素会得到物理上不成立的材质数据。
+                </p>
+
+                <table>
+                    <thead>
+                        <tr>
+                            <th>方案</th>
+                            <th>优点</th>
+                            <th>问题</th>
+                            <th>VulkanLearn 取向</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>GBuffer 不开 MSAA，后续走 TAA / FXAA / SMAA</td>
+                            <td>实现最清晰，GBuffer 采样和 lighting 简单，符合现代 deferred 常见路线。</td>
+                            <td>几何边缘需要依赖后处理抗锯齿和 temporal 稳定性。</td>
+                            <td><span class="ok">推荐默认值</span>。不是强制规则，专业配置可按目标质量和成本开启其他路线。</td>
+                        </tr>
+                        <tr>
+                            <td>MSAA GBuffer + per-sample deferred lighting</td>
+                            <td>几何边缘质量最好，理论上最接近 forward MSAA。</td>
+                            <td>带宽、显存和 lighting 成本都成倍上升，shader 和 descriptor 复杂度明显增加。</td>
+                            <td>作为高级实验，不进入第一轮落地。</td>
+                        </tr>
+                        <tr>
+                            <td>MSAA GBuffer + custom resolve</td>
+                            <td>可以针对 normal、depth、shading model 等属性写专门 resolve 规则。</td>
+                            <td>每类属性 resolve 规则不同，尤其 shading model/custom data 不能线性平均。</td>
+                            <td>后续需要边缘质量时再做。</td>
+                        </tr>
+                        <tr>
+                            <td>只对 forward transparent / special pass 开 MSAA</td>
+                            <td>透明物体、线框、编辑器辅助物等仍可得到 MSAA 收益。</td>
+                            <td>需要混合 deferred scene color 与 forward pass 的 sample 策略。</td>
+                            <td>推荐保留。Deferred opaque 不开 MSAA，forward 补充 pass 可按需开。</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <div class="note">
+                    因此本文档不把 MSAA 写成强制规则。RenderGraph 应暴露清楚的 pass/resource 配置，让专业配置者决定当前 pass 是否开启 MSAA，以及使用普通 resolve、custom resolve 还是 per-sample lighting。项目默认建议 opaque deferred GBuffer 使用 single-sample，forward transparent、debug line、editor gizmo 或其他 special pass 可以继续通过 pass 级配置开启 MSAA。
+                </div>
+
+                <h3>RenderGraph 配置原则</h3>
+                <pre><code>{
+    "name": "geometry",
+    "pipelineType": "deferredGBuffer",
+    "needMsaa": false,
+    "msaaResolveMode": "none",
+    "output": [
+        { "resource": "gbufferA", "loadOp": "clear", "storeOp": "store" },
+        { "resource": "gbufferB", "loadOp": "clear", "storeOp": "store" },
+        { "resource": "gbufferC", "loadOp": "clear", "storeOp": "store" },
+        { "resource": "gbufferD", "loadOp": "clear", "storeOp": "store" },
+        { "resource": "gbufferE", "loadOp": "clear", "storeOp": "store" },
+        { "resource": "gbufferVelocity", "loadOp": "clear", "storeOp": "store" },
+        { "resource": "gbufferF", "loadOp": "clear", "storeOp": "store" },
+        { "resource": "sceneColorBase", "loadOp": "clear", "storeOp": "store" },
+        { "resource": "sceneDepth", "loadOp": "clear", "storeOp": "store" }
+    ]
+}</code></pre>
+
+                <p>
+                    上面的 <code>needMsaa: false</code> 是推荐默认配置，不是引擎硬限制。若配置者将 deferred GBuffer pass 设为 <code>needMsaa: true</code>，则必须同时声明匹配的 resolve 策略，例如 <code>msaaResolveMode: "customGBufferResolve"</code> 或 <code>"perSampleLighting"</code>。RenderGraph 负责验证这些组合是否完整，材质 authoring facade 不感知 MSAA 决策。
+                </p>
+            </section>
+
+            <section id="phases">
+                <h2>实施阶段</h2>
+
+                <h3>阶段 1：引入 M_ 材质定义资产</h3>
+                <ul>
+                    <li>新增 <code>M_*.json</code> 格式，作为 shader 编译/装配入口，字段包括 <code>name</code>、<code>shadingModel</code>、<code>renderStates</code>、<code>parameters</code>、数字值 <code>macros</code>、<code>textures</code> 和兼容 pass；shader pair 由命名约定推导，例如 <code>M_pbr.json -> pbr.vert / pbr.frag</code>。</li>
+                    <li>由 <code>M_*.json</code> 生成同目录 <code>generate/&lt;name&gt;Paramter.glsl</code>，其中包含材质宏、shading model 常量、参数 UBO 声明和贴图声明。</li>
+                    <li>对应的 <code>vert</code> 和 <code>frag</code> 必须先 include 该 <code>gen</code>，再编写 <code>MaterialVertex</code> / <code>MaterialPixel</code> 逻辑。</li>
+                    <li>调整 <code>MI_*.json</code>：不再直接声明 shader 选择、完整 render state 或旧宏列表，改为引用 <code>material: "materials/M_xxx.json"</code>，并只保留参数、贴图、static macro override 和可选 <code>renderStateOverrides</code>。</li>
+                    <li>加载时先合并 <code>M_*.json</code> 默认值和 <code>MI_*.json</code> override，再交给现有反射校验。</li>
+                </ul>
+
+                <h3>阶段 2：引入 ShadingModel shader 声明</h3>
+                <ul>
+                    <li>在 <code>shadingModel.glsl</code> 中定义 UE-style <code>ShadingModelID</code> 枚举值域：至少预留 DefaultLit、Unlit、Subsurface、PreintegratedSkin、ClearCoat、SubsurfaceProfile、TwoSidedFoliage、Hair、Cloth、Eye。</li>
+                    <li><code>M_*.json</code> 声明材质定义的 <code>shadingModel</code>，当前材质 shader pair 或后续模板中写入一致的 <code>surface.shadingModel</code>。</li>
+                    <li><code>MI_*.json</code> 不增加 <code>shadingModel</code> 字段；shader 装配步骤可导出材质元数据供 C++ 校验和 debug 使用，但默认不把 <code>shadingModel</code> 作为 material uniform 传入。</li>
+                    <li>保持当前 forward 输出不变，先验证数据链路。</li>
+                </ul>
+
+                <h3>阶段 3：拆 shader 公共结构</h3>
+                <ul>
+                    <li>从 <code>pbr.frag</code> 拆出 <code>MaterialSurface</code>、材质采样、BRDF 与 lighting 函数。</li>
+                    <li>让现有 forward PBR 改用 <code>EvaluateMaterialSurface -> ShadeMaterialSurface</code>。</li>
+                    <li>确认输出画面与拆分前一致。</li>
+                </ul>
+
+                <h3>阶段 4：在现有 shader pair 内建立材质入口</h3>
+                <ul>
+                    <li>定义 <code>MaterialVertexContext</code>、<code>MaterialPixelContext</code>、<code>MaterialSurface</code> 的稳定 public 字段。</li>
+                    <li>先在现有 <code>pbr.vert</code> / <code>pbr.frag</code> 内部引入 <code>MaterialVertex</code> 和 <code>MaterialPixel</code>，但保留原有 shader 文件作为真实编译单元。</li>
+                    <li>确认 <code>MI_*.json</code> 通过 <code>M_*.json</code> 间接选择这对 shader，参数和贴图仍由反射校验，且不涉及 <code>shadingModel</code>。</li>
+                    <li>后续再按需要新增 forward / gbuffer 模板；模板系统不是第一刀的前置条件。</li>
+                </ul>
+
+                <h3>阶段 5：写 GBuffer pass</h3>
+                <ul>
+                    <li>新增完整 GBuffer resources：A/B/C/D/E、Velocity、F、sceneColorBase、sceneDepth。</li>
+                    <li>把 geometry pass 输出改成多个 render targets。</li>
+                    <li>新增 <code>gbufferCodec.glsl</code>，稳定完整 layout location、packed fields 和默认值。</li>
+                    <li>增加 GBuffer debug view，先不接 deferred lighting，但所有 attachment 都必须能观察或确认默认值。</li>
+                </ul>
+
+                <h3>阶段 6：接入 deferredLighting</h3>
+                <ul>
+                    <li>新增 fullscreen <code>deferredLighting.frag</code>。</li>
+                    <li>读取完整 GBuffer + depth，重建 world position。</li>
+                    <li>复用 <code>ShadeMaterialSurface</code> 计算 DefaultLit。</li>
+                    <li>Unlit 直接输出 <code>baseColor + sceneColorBase/emissive</code>。</li>
+                </ul>
+
+                <h3>阶段 7：恢复现有效果</h3>
+                <ul>
+                    <li>阴影接入 deferred lighting。</li>
+                    <li>IBL 接入 deferred lighting。</li>
+                    <li>sky / postProcess / bloom / toneMapping 链路保持可用。</li>
+                    <li>debug console 中的 tone mapping、bloom 调参继续有效。</li>
+                </ul>
+
+                <h3>阶段 8：启用 UE-style optional 数据</h3>
+                <ul>
+                    <li><code>gbufferD</code> 已经常驻，此阶段开始让 ClearCoat 或 Subsurface 真正写入 custom data。</li>
+                    <li><code>gbufferVelocity</code> 已经常驻，此阶段开始接入 previous frame matrix 和 motion vector。</li>
+                    <li><code>gbufferE</code> 已经常驻，此阶段开始接入 lightmap / baked shadow / precomputed shadow factors。</li>
+                    <li><code>gbufferF</code> 已经常驻，此阶段开始接入 anisotropy 和 world tangent。</li>
+                </ul>
+            </section>
+
+            <section id="validation">
+                <h2>验证清单</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>检查项</th>
+                            <th>预期结果</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Forward 拆分后画面对比</td>
+                            <td><span class="ok">通过</span>：拆 shader 公共层后，现有 PBR 视觉基本不变。</td>
+                        </tr>
+                        <tr>
+                            <td>GBuffer debug view</td>
+                            <td><span class="ok">通过</span>：GBufferA/B/C/D/E、Velocity、F、depth、sceneColorBase 均可单独观察或确认默认值。</td>
+                        </tr>
+                        <tr>
+                            <td>Authoring facade</td>
+                            <td><span class="ok">通过</span>：<code>M_*.json</code> 作为编译/装配入口；同一个 shader pair 的材质逻辑能被 forward 和 gbuffer 路径复用；<code>MI_*.json</code> 只做实例 override，不声明 <code>shadingModel</code>。</td>
+                        </tr>
+                        <tr>
+                            <td>DefaultLit deferred lighting</td>
+                            <td><span class="ok">通过</span>：直接光、阴影、IBL 与 forward 版本趋势一致。</td>
+                        </tr>
+                        <tr>
+                            <td>Unlit shading model</td>
+                            <td><span class="ok">通过</span>：不受光照影响，但仍进入 sceneColor/deferred 输出与后处理链。</td>
+                        </tr>
+                        <tr>
+                            <td>后处理链</td>
+                            <td><span class="ok">通过</span>：sky、postProcess、bloom、toneMapping 不因 deferred 改造断链。</td>
+                        </tr>
+                        <tr>
+                            <td>RenderDoc / Nsight 检查</td>
+                            <td><span class="ok">通过</span>：attachment layout、descriptor 输入、pass 顺序清晰可追踪。</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </section>
+
+            <section id="risks">
+                <h2>风险边界</h2>
+                <ul>
+                    <li><span class="warn-text">MSAA：</span>MSAA 对 deferred 不是没用，也不是引擎强制关闭项。RenderGraph 应允许专业配置者开启，但需要同时声明 resolve / per-sample lighting 策略，避免隐式硬件 resolve 混坏 GBuffer 属性。</li>
+                    <li><span class="warn-text">透明物体：</span>不进入 deferred GBuffer。保留 forward transparent pass。</li>
+                    <li><span class="warn-text">材质变体：</span>不要让每个 shading model 都复制一套完整 shader。优先通过共享 surface / lighting 函数组织。</li>
+                    <li><span class="warn-text">Authoring facade：</span>只隐藏引擎模板和 binding 细节，不自动决定材质模块调用顺序；作者入口仍显式组织材质逻辑。</li>
+                    <li><span class="warn-text">格式压缩：</span>槽位和 bit 语义必须完整对齐；具体 Vulkan format 可以先保持高精度调试格式，再逐步压缩。</li>
+                    <li><span class="warn-text">UE 对齐：</span>本计划对齐 legacy deferred GBuffer。Substrate Adaptive GBuffer 不进入这轮范围，避免把材质系统和 GBuffer 存储系统同时推倒。</li>
+                </ul>
+            </section>
+
+            <section id="references">
+                <h2>参考资料</h2>
+                <ul>
+                    <li><a href="https://dev.epicgames.com/documentation/unreal-engine/post-process-materials-in-unreal-engine">Unreal Engine Post Process Materials</a>：说明 deferred renderer 中 GBuffer 存储 material / object attributes，再用于后续 shading。</li>
+                    <li><a href="https://dev.epicgames.com/documentation/ar-ar/unreal-engine/programming-with-substrate-gbuffer-formats">Programming with Substrate GBuffer Formats</a>：说明 UE5 Substrate 下 Blendable / Adaptive GBuffer 的差异。</li>
+                    <li><a href="https://dev.epicgames.com/documentation/unreal-engine/overview-of-substrate-materials-in-unreal-engine">Overview of Substrate Materials</a>：说明 Substrate 对 legacy shading model 与 GBuffer 格式的演进。</li>
+                    <li><a href="https://dev.epicgames.com/documentation/unreal-engine/using-the-mobile-deferred-shading-mode-in-unreal-engine?application_version=5.7">Mobile Deferred Shading Mode</a>：说明 deferred 将 geometry/material 属性写入 GBuffer，再由 lighting pass 消费。</li>
+                </ul>
+            </section>
+        </main>
+    </div>
+</body>
+</html>

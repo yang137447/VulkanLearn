@@ -2,17 +2,7 @@
 
 #include "common/commonUbo.glsl"
 #include "common/lighting.glsl"
-
-layout(set = 1, binding = 0) uniform UBOMIParamters{
-    vec4 u_tintColor;
-    vec4 u_pbrFactors;
-    float u_emissiveStrength;
-};
-
-layout(set = 1, binding = 1) uniform sampler2D albedoMap;
-layout(set = 1, binding = 2) uniform sampler2D normalMap;
-layout(set = 1, binding = 3) uniform sampler2D pbrParamMap;
-layout(set = 1, binding = 4) uniform sampler2D emissionMap;
+#include "generate/M_pbrParamter.glsl"
 
 layout(location = 0) in vec3 v2fPosition;
 layout(location = 1) in vec3 v2fNormal;
@@ -25,7 +15,7 @@ layout(location = 0) out vec4 outColor;
 void main()
 {
     // 第一版 PBR 先复用一张 albedo 贴图，baseColor = 贴图颜色 * 顶点阶段传来的 tint。
-    #if defined(USE_ALBEDO_MAP)
+    #if USE_ALBEDO_MAP
         vec4 albedoColor = texture(albedoMap, v2fTexCoord);
     #else
         vec4 albedoColor = u_tintColor;
@@ -41,7 +31,7 @@ void main()
 
     // pbrFactors: x=roughness, y=metallic, z=ao, w=预留。
     // 粗糙度、金属度、AO 确保在上游 Material Instance 配置正确，此处直接使用。
-    #if defined(USE_PBR_MAP)
+    #if USE_PBR_MAP
         vec4 pbrParam = texture(pbrParamMap, v2fTexCoord);
         float roughness = pbrParam.x;
         float metallic = pbrParam.y;
@@ -54,12 +44,12 @@ void main()
 
     // 自发光强度由材质参数控制。
     vec3 emissionColor = vec3(0.0f);
-    #if defined(USE_EMISSION_MAP)
+    #if USE_EMISSION_MAP
         emissionColor = texture(emissionMap, v2fTexCoord).rgb * u_emissiveStrength;
     #endif
 
     vec3 normal = normalize(v2fNormal);
-    #if defined(USE_NORMAL_MAP)
+    #if USE_NORMAL_MAP
         vec3 normalTS = texture(normalMap, v2fTexCoord).xyz * 2.0 - 1.0;
         vec3 bitangent = cross(v2fNormal, v2fTangent.xyz) * v2fTangent.w;
         // 按 MikkTSpace 参考实现建议，直接用未归一化插值后的 T/B/N 做解码，

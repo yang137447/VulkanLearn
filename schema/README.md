@@ -3,6 +3,7 @@
 Keep schema binding explicit and narrow.
 
 - Bind `model_descriptor.schema.json` only to `resources/models/SM_*.json`.
+- Bind `terrain_descriptor.schema.json` only to `resources/terrains/TR_*.json`.
 - Bind `material_instance.schema.json` only to `resources/materials/**/MI_*.json`.
 - Bind `scene.schema.json` only to `resources/scenes/*.json`.
 - Bind `render_graph.schema.json` only to `config/renderGraphConfig.json`.
@@ -18,6 +19,12 @@ Recommended VS Code workspace settings:
                 "/resources/models/SM_*.json"
             ],
             "url": "./schema/model_descriptor.schema.json"
+        },
+        {
+            "fileMatch": [
+                "/resources/terrains/TR_*.json"
+            ],
+            "url": "./schema/terrain_descriptor.schema.json"
         },
         {
             "fileMatch": [

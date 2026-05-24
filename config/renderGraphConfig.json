@@ -184,7 +184,6 @@
         {
             "name": "sky",
             "needCreateMaterial": true,
-            "needMsaa": true,
             "materialInstancePath": "materials/pass/MI_sky.json",
             "bIsPostProcess": true,
             "pipelineState": {

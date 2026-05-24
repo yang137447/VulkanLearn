@@ -1,0 +1,1039 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>天气、环境光与 GI 长期路线</title>
+    <style>
+        :root {
+            color-scheme: dark;
+            --bg: #101311;
+            --rail: #121713;
+            --panel: #171d1a;
+            --panel-2: #202821;
+            --line: #344139;
+            --text: #eef4ee;
+            --muted: #a9b8ad;
+            --green: #83c985;
+            --cyan: #6ec6ca;
+            --amber: #e7c46a;
+            --rose: #e6939d;
+            --blue: #91b7f2;
+            --code: #0b0f0d;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            margin: 0;
+            background: var(--bg);
+            color: var(--text);
+            font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+            line-height: 1.65;
+        }
+
+        a {
+            color: var(--cyan);
+            text-decoration: none;
+            overflow-wrap: anywhere;
+        }
+
+        a:hover {
+            text-decoration: underline;
+        }
+
+        code {
+            padding: 0.12em 0.36em;
+            border: 1px solid #2d3932;
+            border-radius: 5px;
+            background: var(--code);
+            color: #d9efe4;
+            font-family: "Cascadia Code", Consolas, monospace;
+            font-size: 0.92em;
+            overflow-wrap: anywhere;
+        }
+
+        pre {
+            overflow: auto;
+            margin: 14px 0 0;
+            padding: 14px;
+            border: 1px solid #2d3932;
+            border-radius: 8px;
+            background: var(--code);
+        }
+
+        pre code {
+            padding: 0;
+            border: 0;
+            background: transparent;
+        }
+
+        .layout {
+            display: grid;
+            grid-template-columns: 292px minmax(0, 1fr);
+            min-height: 100vh;
+        }
+
+        aside {
+            position: sticky;
+            top: 0;
+            height: 100vh;
+            overflow: auto;
+            padding: 28px 22px;
+            border-right: 1px solid var(--line);
+            background: var(--rail);
+        }
+
+        .brand {
+            margin-bottom: 24px;
+        }
+
+        .brand strong {
+            display: block;
+            font-size: 19px;
+            line-height: 1.25;
+        }
+
+        .brand span {
+            display: block;
+            margin-top: 8px;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        nav {
+            display: grid;
+            gap: 6px;
+        }
+
+        nav a {
+            display: block;
+            padding: 8px 10px;
+            border-radius: 6px;
+            color: var(--muted);
+            font-size: 14px;
+        }
+
+        nav a:hover {
+            background: var(--panel-2);
+            color: var(--text);
+            text-decoration: none;
+        }
+
+        main {
+            width: min(1160px, 100%);
+            padding: 34px clamp(22px, 5vw, 68px) 72px;
+        }
+
+        section {
+            margin: 0 0 46px;
+        }
+
+        h1 {
+            margin: 0 0 12px;
+            max-width: 940px;
+            font-size: clamp(32px, 5vw, 54px);
+            line-height: 1.08;
+            letter-spacing: 0;
+        }
+
+        h2 {
+            margin: 0 0 16px;
+            font-size: 25px;
+            line-height: 1.25;
+            letter-spacing: 0;
+        }
+
+        h3 {
+            margin: 0 0 10px;
+            font-size: 18px;
+            line-height: 1.35;
+            letter-spacing: 0;
+        }
+
+        p {
+            margin: 0 0 13px;
+            color: var(--muted);
+        }
+
+        ul,
+        ol {
+            margin: 0;
+            padding-left: 20px;
+            color: var(--muted);
+        }
+
+        li + li {
+            margin-top: 6px;
+        }
+
+        .lead {
+            max-width: 920px;
+            color: #dbe5dc;
+            font-size: 17px;
+        }
+
+        .tag-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 22px;
+        }
+
+        .tag {
+            display: inline-flex;
+            align-items: center;
+            min-height: 30px;
+            padding: 5px 10px;
+            border: 1px solid var(--line);
+            border-radius: 999px;
+            color: #dce8df;
+            background: #151b17;
+            font-size: 13px;
+        }
+
+        .callout {
+            margin-top: 22px;
+            padding: 16px 18px;
+            border: 1px solid var(--line);
+            border-left: 4px solid var(--cyan);
+            border-radius: 8px;
+            background: var(--panel);
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(12, 1fr);
+            gap: 16px;
+        }
+
+        .card {
+            min-width: 0;
+            padding: 17px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: var(--panel);
+        }
+
+        .card.good {
+            border-top: 3px solid var(--green);
+        }
+
+        .card.next {
+            border-top: 3px solid var(--amber);
+        }
+
+        .card.warn {
+            border-top: 3px solid var(--rose);
+        }
+
+        .span-3 {
+            grid-column: span 3;
+        }
+
+        .span-4 {
+            grid-column: span 4;
+        }
+
+        .span-6 {
+            grid-column: span 6;
+        }
+
+        .span-12 {
+            grid-column: span 12;
+        }
+
+        .matrix {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 12px;
+        }
+
+        .matrix-item {
+            min-width: 0;
+            padding: 14px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: var(--panel);
+        }
+
+        .matrix-item strong {
+            display: block;
+            margin-bottom: 6px;
+        }
+
+        .stage-list {
+            display: grid;
+            gap: 14px;
+        }
+
+        .stage {
+            display: grid;
+            grid-template-columns: 92px minmax(0, 1fr);
+            gap: 18px;
+            padding: 18px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: var(--panel);
+        }
+
+        .stage-marker {
+            display: grid;
+            place-items: center;
+            width: 64px;
+            height: 64px;
+            border: 1px solid #4b5e50;
+            border-radius: 50%;
+            color: #eaf4ec;
+            background: #1c261f;
+            font-weight: 800;
+        }
+
+        .stage > div {
+            min-width: 0;
+        }
+
+        .stage-sections {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 12px;
+            margin-top: 14px;
+        }
+
+        .stage-section {
+            min-width: 0;
+            padding: 12px;
+            border: 1px solid #2c3831;
+            border-radius: 8px;
+            background: #131915;
+        }
+
+        .stage-section strong {
+            display: block;
+            margin-bottom: 7px;
+            color: #edf5ee;
+            font-size: 14px;
+        }
+
+        .stage-section ul {
+            padding-left: 18px;
+            font-size: 14px;
+        }
+
+        .flow {
+            display: grid;
+            gap: 8px;
+        }
+
+        .flow-step {
+            padding: 10px 12px;
+            border: 1px solid #2c3831;
+            border-radius: 8px;
+            background: #131915;
+            color: var(--muted);
+            font-size: 14px;
+            overflow-wrap: anywhere;
+        }
+
+        .resource-list {
+            display: grid;
+            gap: 12px;
+        }
+
+        .resource {
+            padding: 15px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: var(--panel);
+        }
+
+        .resource strong {
+            display: block;
+            margin-bottom: 4px;
+        }
+
+        .resource small {
+            display: block;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .footer-note {
+            padding-top: 18px;
+            border-top: 1px solid var(--line);
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        @media (max-width: 1100px) {
+            .stage-sections {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .span-3,
+            .span-4 {
+                grid-column: span 6;
+            }
+        }
+
+        @media (max-width: 920px) {
+            .layout {
+                display: block;
+            }
+
+            aside {
+                position: static;
+                height: auto;
+                border-right: 0;
+                border-bottom: 1px solid var(--line);
+            }
+
+            nav {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .span-3,
+            .span-4,
+            .span-6 {
+                grid-column: span 12;
+            }
+
+            .matrix,
+            .stage-sections {
+                grid-template-columns: 1fr;
+            }
+
+            .stage {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media (max-width: 560px) {
+            main {
+                padding-inline: 18px;
+            }
+
+            nav {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+<div class="layout">
+    <aside>
+        <div class="brand">
+            <strong>长期渲染路线</strong>
+            <span>VulkanLearn: 天气、环境光、反射、GI 与 Lumen-like 系统</span>
+        </div>
+        <nav aria-label="页面导航">
+            <a href="#goal">目标</a>
+            <a href="#map">系统地图</a>
+            <a href="#data">数据依赖</a>
+            <a href="#stages">大阶段</a>
+            <a href="#order">推荐顺序</a>
+            <a href="#lumen">Lumen-like</a>
+            <a href="#weather">完整天气</a>
+            <a href="#resources">学习资料</a>
+        </nav>
+    </aside>
+
+    <main>
+        <section id="goal">
+            <h1>天气、环境光与 GI 长期路线</h1>
+            <p class="lead">
+                这份路线把 procedural sky、SSAO/GTAO、SSR、reflection probe、VLM、全局体素、DDGI 与 Lumen-like hybrid GI 放到同一张图里。
+                它不是下一周就要全部实现的任务清单，而是用来判断每个系统该解决什么问题、依赖哪些数据、应该在什么时候进入 VulkanLearn。
+            </p>
+            <div class="tag-row">
+                <span class="tag">procedural sky</span>
+                <span class="tag">SSAO / GTAO</span>
+                <span class="tag">SSR</span>
+                <span class="tag">reflection probe</span>
+                <span class="tag">VLM / irradiance probe</span>
+                <span class="tag">global voxel</span>
+                <span class="tag">Lumen-like GI</span>
+                <span class="tag">weather system</span>
+            </div>
+            <div class="callout">
+                <p><strong>当前定位：</strong>先完成 GPU-first procedural sky IBL。它是后续 reflection probe、VLM、DDGI、Lumen-like 系统的天空光源与 fallback，不要一开始就把问题拉到完整动态 GI。</p>
+            </div>
+        </section>
+
+        <section id="map">
+            <h2>系统地图</h2>
+            <div class="matrix">
+                <article class="matrix-item">
+                    <strong>Diffuse / 漫反射</strong>
+                    <p>Sky SH、VLM、irradiance probe、DDGI、Lumen diffuse GI。重点是低频间接光、空间位置、遮挡和光照传播。</p>
+                </article>
+                <article class="matrix-item">
+                    <strong>Specular / 镜面反射</strong>
+                    <p>Sky prefiltered cubemap、SSR、reflection probe、planar reflection、RT reflection、Lumen reflections。重点是方向、roughness、fallback。</p>
+                </article>
+                <article class="matrix-item">
+                    <strong>Occlusion / 遮挡</strong>
+                    <p>SSAO、GTAO、bent normal、contact AO、distance field AO、voxel occlusion。重点是让环境光不要从不该来的方向进来。</p>
+                </article>
+                <article class="matrix-item">
+                    <strong>Screen-space</strong>
+                    <p>SSAO/GTAO、SSR、SSGI、contact shadow。依赖当前帧 depth、normal、scene color，成本低但只能看到屏幕内信息。</p>
+                </article>
+                <article class="matrix-item">
+                    <strong>World-space</strong>
+                    <p>Reflection probe、VLM、DDGI、global voxel、surface cache。能覆盖屏幕外信息，但需要额外场景表示和更新策略。</p>
+                </article>
+                <article class="matrix-item">
+                    <strong>Temporal / 历史帧</strong>
+                    <p>SSR denoise、SSGI、probe update、radiance cache、cloud/fog accumulation。需要 motion vector、history buffer 和稳定重投影。</p>
+                </article>
+            </div>
+        </section>
+
+        <section id="data">
+            <h2>关键数据依赖</h2>
+            <div class="grid">
+                <article class="card good span-6">
+                    <h3>全局天空与天气源</h3>
+                    <ul>
+                        <li><code>SkyParametersGPU</code>、<code>WeatherStateGPU</code>、time-of-day、sun/moon direction</li>
+                        <li>生成 global sky SH、global sky cubemap、global prefiltered cubemap</li>
+                        <li>作为 reflection probe、VLM、DDGI、Lumen-like 的天空 fallback</li>
+                    </ul>
+                </article>
+                <article class="card next span-6">
+                    <h3>屏幕空间数据</h3>
+                    <ul>
+                        <li>depth、normal、roughness、metallic、scene color、motion vector、history color</li>
+                        <li>服务 SSAO/GTAO、SSR、SSGI、contact AO、TAA/temporal denoise</li>
+                        <li>这一步会推动 forward+extra buffers 或 deferred/GBuffer 的架构选择</li>
+                    </ul>
+                </article>
+                <article class="card span-6">
+                    <h3>局部探针数据</h3>
+                    <ul>
+                        <li>reflection probe: local cubemap + prefilter + box projection + blending</li>
+                        <li>VLM / irradiance probe: world position -> interpolated SH irradiance</li>
+                        <li>都需要与 global sky fallback 合成</li>
+                    </ul>
+                </article>
+                <article class="card span-6">
+                    <h3>全局场景表示</h3>
+                    <ul>
+                        <li>global voxel、SDF、surface cache、mesh card、radiance cache</li>
+                        <li>服务动态 GI、屏幕外反射、遮挡和体积效果</li>
+                        <li>这是 Lumen-like 系统真正开始的地方</li>
+                    </ul>
+                </article>
+            </div>
+            <pre><code>Specular fallback:
+SSR hit -> local reflection probe -> global sky prefiltered cubemap
+
+Diffuse fallback:
+local irradiance / VLM / DDGI -> global sky SH
+
+Occlusion:
+GTAO / bent normal / voxel visibility modulates diffuse environment</code></pre>
+        </section>
+
+        <section id="stages">
+            <h2>长期大阶段</h2>
+            <div class="stage-list">
+                <article class="stage">
+                    <div class="stage-marker">1</div>
+                    <div>
+                        <h3>GPU-first Sky Foundation</h3>
+                        <p>先完成当前正在规划的天空地基：GPU 参数、屏幕天空、SH diffuse IBL、cubemap/prefilter specular IBL、dirty 与分帧更新。</p>
+                        <div class="stage-sections">
+                            <div class="stage-section">
+                                <strong>前置知识</strong>
+                                <ul>
+                                    <li>fullscreen sky</li>
+                                    <li>SH9 / split-sum IBL</li>
+                                    <li>compute buffer / image barrier</li>
+                                </ul>
+                            </div>
+                            <div class="stage-section">
+                                <strong>目标</strong>
+                                <ul>
+                                    <li>天空和 IBL 同源</li>
+                                    <li>CPU 只做控制面</li>
+                                    <li>GPU 生成环境资源</li>
+                                </ul>
+                            </div>
+                            <div class="stage-section">
+                                <strong>执行</strong>
+                                <ul>
+                                    <li><code>SkyParametersGPU</code></li>
+                                    <li><code>EnvironmentSHGPU</code></li>
+                                    <li>procedural cubemap / prefilter</li>
+                                </ul>
+                            </div>
+                            <div class="stage-section">
+                                <strong>验收</strong>
+                                <ul>
+                                    <li>天空、diffuse IBL、specular IBL 趋势一致</li>
+                                    <li>无 GPU -> CPU readback stall</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </article>
+
+                <article class="stage">
+                    <div class="stage-marker">2</div>
+                    <div>
+                        <h3>Geometry Buffers / 屏幕空间基础</h3>
+                        <p>补齐 SSAO、SSR、SSGI、Lumen screen trace 都会用到的屏幕空间输入。</p>
+                        <div class="stage-sections">
+                            <div class="stage-section">
+                                <strong>前置知识</strong>
+                                <ul>
+                                    <li>view/world position reconstruction</li>
+                                    <li>normal encoding</li>
+                                    <li>motion vector / history</li>
+                                </ul>
+                            </div>
+                            <div class="stage-section">
+                                <strong>目标</strong>
+                                <ul>
+                                    <li>决定 forward+extra buffers 或 GBuffer</li>
+                                    <li>稳定输出 depth/normal/material data</li>
+                                </ul>
+                            </div>
+                            <div class="stage-section">
+                                <strong>执行</strong>
+                                <ul>
+                                    <li>新增 normal/roughness/metallic buffer</li>
+                                    <li>建立屏幕空间重建函数</li>
+                                    <li>规划 history resources</li>
+                                </ul>
+                            </div>
+                            <div class="stage-section">
+                                <strong>验收</strong>
+                                <ul>
+                                    <li>debug view 能检查 depth/normal/roughness</li>
+                                    <li>移动相机时重建稳定</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </article>
+
+                <article class="stage">
+                    <div class="stage-marker">3</div>
+                    <div>
+                        <h3>SSAO / GTAO</h3>
+                        <p>先做环境遮挡，让天空 SH 和后续 GI 不再无脑照亮所有缝隙。</p>
+                        <div class="stage-sections">
+                            <div class="stage-section">
+                                <strong>前置知识</strong>
+                                <ul>
+                                    <li>hemisphere sampling</li>
+                                    <li>depth/normal reconstruction</li>
+                                    <li>bilateral blur</li>
+                                </ul>
+                            </div>
+                            <div class="stage-section">
+                                <strong>目标</strong>
+                                <ul>
+                                    <li>局部接触遮挡</li>
+                                    <li>环境光可被 AO 调制</li>
+                                </ul>
+                            </div>
+                            <div class="stage-section">
+                                <strong>执行</strong>
+                                <ul>
+                                    <li>先 SSAO，再升级 GTAO</li>
+                                    <li>AO 输出参与 indirect diffuse</li>
+                                    <li>保留 debug view</li>
+                                </ul>
+                            </div>
+                            <div class="stage-section">
+                                <strong>验收</strong>
+                                <ul>
+                                    <li>墙角、接触面变暗</li>
+                                    <li>无明显 halo / flicker</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </article>
+
+                <article class="stage">
+                    <div class="stage-marker">4</div>
+                    <div>
+                        <h3>SSR / 屏幕空间反射</h3>
+                        <p>用当前屏幕中的 scene color 和 depth 补充镜面反射，解决 sky cubemap 过于空旷的问题。</p>
+                        <div class="stage-sections">
+                            <div class="stage-section">
+                                <strong>前置知识</strong>
+                                <ul>
+                                    <li>ray marching</li>
+                                    <li>depth intersection</li>
+                                    <li>roughness fade / temporal denoise</li>
+                                </ul>
+                            </div>
+                            <div class="stage-section">
+                                <strong>目标</strong>
+                                <ul>
+                                    <li>屏幕内物体能出现在反射里</li>
+                                    <li>未命中回退到 probe/sky</li>
+                                </ul>
+                            </div>
+                            <div class="stage-section">
+                                <strong>执行</strong>
+                                <ul>
+                                    <li>SSR trace pass</li>
+                                    <li>resolve / denoise pass</li>
+                                    <li>混合 sky/probe fallback</li>
+                                </ul>
+                            </div>
+                            <div class="stage-section">
+                                <strong>验收</strong>
+                                <ul>
+                                    <li>低 roughness 表面能反射屏幕内物体</li>
+                                    <li>屏幕边缘未命中渐隐自然</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </article>
+
+                <article class="stage">
+                    <div class="stage-marker">5</div>
+                    <div>
+                        <h3>Reflection Probe / 局部镜面反射</h3>
+                        <p>补齐 SSR 的屏幕外缺口，让室内、房间、局部区域拥有自己的 specular IBL。</p>
+                        <div class="stage-sections">
+                            <div class="stage-section">
+                                <strong>前置知识</strong>
+                                <ul>
+                                    <li>cubemap capture</li>
+                                    <li>box projection</li>
+                                    <li>probe blending</li>
+                                </ul>
+                            </div>
+                            <div class="stage-section">
+                                <strong>目标</strong>
+                                <ul>
+                                    <li>局部 reflection override</li>
+                                    <li>sky cubemap 作为 fallback</li>
+                                </ul>
+                            </div>
+                            <div class="stage-section">
+                                <strong>执行</strong>
+                                <ul>
+                                    <li>probe capture 6 faces</li>
+                                    <li>probe prefilter</li>
+                                    <li>runtime probe selection</li>
+                                </ul>
+                            </div>
+                            <div class="stage-section">
+                                <strong>验收</strong>
+                                <ul>
+                                    <li>室内金属反射房间而不是只反射天空</li>
+                                    <li>probe 边界过渡稳定</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </article>
+
+                <article class="stage">
+                    <div class="stage-marker">6</div>
+                    <div>
+                        <h3>VLM / Irradiance Probe</h3>
+                        <p>给动态物体提供局部漫反射间接光，解决室内外漫反射环境光不匹配。</p>
+                        <div class="stage-sections">
+                            <div class="stage-section">
+                                <strong>前置知识</strong>
+                                <ul>
+                                    <li>SH irradiance</li>
+                                    <li>trilinear interpolation</li>
+                                    <li>probe visibility / leaking</li>
+                                </ul>
+                            </div>
+                            <div class="stage-section">
+                                <strong>目标</strong>
+                                <ul>
+                                    <li>position -> local diffuse irradiance</li>
+                                    <li>global sky SH 作为 fallback</li>
+                                </ul>
+                            </div>
+                            <div class="stage-section">
+                                <strong>执行</strong>
+                                <ul>
+                                    <li>probe grid / sparse samples</li>
+                                    <li>local SH storage</li>
+                                    <li>dynamic object sampling</li>
+                                </ul>
+                            </div>
+                            <div class="stage-section">
+                                <strong>验收</strong>
+                                <ul>
+                                    <li>角色进入室内后暗部跟随局部光照变化</li>
+                                    <li>没有严重漏光</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </article>
+
+                <article class="stage">
+                    <div class="stage-marker">7</div>
+                    <div>
+                        <h3>Weather / Fog / Cloud / Precipitation</h3>
+                        <p>把 sky、fog、cloud、wet material、wind、precipitation 合成一个可过渡的天气状态系统。</p>
+                        <div class="stage-sections">
+                            <div class="stage-section">
+                                <strong>前置知识</strong>
+                                <ul>
+                                    <li>height fog / aerial perspective</li>
+                                    <li>cloud layer / volumetric cloud</li>
+                                    <li>material wetness</li>
+                                </ul>
+                            </div>
+                            <div class="stage-section">
+                                <strong>目标</strong>
+                                <ul>
+                                    <li>clear / cloudy / foggy / rainy / storm</li>
+                                    <li>统一天气参数驱动渲染</li>
+                                </ul>
+                            </div>
+                            <div class="stage-section">
+                                <strong>执行</strong>
+                                <ul>
+                                    <li><code>WeatherStateGPU</code></li>
+                                    <li>fog/cloud/precipitation passes</li>
+                                    <li>wet material parameters</li>
+                                </ul>
+                            </div>
+                            <div class="stage-section">
+                                <strong>验收</strong>
+                                <ul>
+                                    <li>晴天到暴雨可平滑过渡</li>
+                                    <li>天空、云、雾、地表反馈一致</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </article>
+
+                <article class="stage">
+                    <div class="stage-marker">8</div>
+                    <div>
+                        <h3>DDGI / Global Voxel / Radiance Cache</h3>
+                        <p>进入真正的动态 GI 表示层，用 probe grid、voxel 或 radiance cache 表示屏幕外间接光。</p>
+                        <div class="stage-sections">
+                            <div class="stage-section">
+                                <strong>前置知识</strong>
+                                <ul>
+                                    <li>scene representation</li>
+                                    <li>radiance injection</li>
+                                    <li>temporal filtering</li>
+                                </ul>
+                            </div>
+                            <div class="stage-section">
+                                <strong>目标</strong>
+                                <ul>
+                                    <li>粗略动态 GI</li>
+                                    <li>屏幕外间接光信息</li>
+                                </ul>
+                            </div>
+                            <div class="stage-section">
+                                <strong>执行</strong>
+                                <ul>
+                                    <li>DDGI probe grid 或 voxel volume</li>
+                                    <li>sky/direct light injection</li>
+                                    <li>visibility / relocation</li>
+                                </ul>
+                            </div>
+                            <div class="stage-section">
+                                <strong>验收</strong>
+                                <ul>
+                                    <li>大范围间接光随光源/天空变化</li>
+                                    <li>帧间稳定且可控</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </article>
+
+                <article class="stage">
+                    <div class="stage-marker">9</div>
+                    <div>
+                        <h3>Lumen-like Hybrid GI / Reflections</h3>
+                        <p>最后再考虑类似 Lumen 的混合系统：screen trace、world trace、surface cache、radiance cache、temporal resolve 共同工作。</p>
+                        <div class="stage-sections">
+                            <div class="stage-section">
+                                <strong>前置知识</strong>
+                                <ul>
+                                    <li>前面所有阶段</li>
+                                    <li>surface cache / SDF / cards</li>
+                                    <li>hybrid tracing</li>
+                                </ul>
+                            </div>
+                            <div class="stage-section">
+                                <strong>目标</strong>
+                                <ul>
+                                    <li>动态 diffuse GI</li>
+                                    <li>动态 reflections</li>
+                                    <li>统一 fallback 层级</li>
+                                </ul>
+                            </div>
+                            <div class="stage-section">
+                                <strong>执行</strong>
+                                <ul>
+                                    <li>screen traces</li>
+                                    <li>world-space traces</li>
+                                    <li>surface/radiance cache</li>
+                                </ul>
+                            </div>
+                            <div class="stage-section">
+                                <strong>验收</strong>
+                                <ul>
+                                    <li>动态场景 GI/反射有合理屏幕外信息</li>
+                                    <li>质量/性能档位可切换</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </article>
+            </div>
+        </section>
+
+        <section id="order">
+            <h2>推荐顺序</h2>
+            <div class="flow">
+                <div class="flow-step">1. GPU-first procedural sky IBL: 先建立全局 fallback</div>
+                <div class="flow-step">2. Geometry buffers: 补齐 depth / normal / roughness / motion vector</div>
+                <div class="flow-step">3. SSAO/GTAO: 先让环境光有局部遮挡</div>
+                <div class="flow-step">4. SSR: 用屏幕内信息补 specular 反射</div>
+                <div class="flow-step">5. Reflection probe: 用世界空间 probe 补 SSR 屏幕外缺口</div>
+                <div class="flow-step">6. VLM / irradiance probe: 给动态物体局部 diffuse indirect</div>
+                <div class="flow-step">7. Weather/fog/cloud: 把天空、雾、云、降水、湿润统一成状态系统</div>
+                <div class="flow-step">8. DDGI / voxel / radiance cache: 再进入动态 GI</div>
+                <div class="flow-step">9. Lumen-like hybrid: 最后做混合 GI/reflection 架构</div>
+            </div>
+        </section>
+
+        <section id="lumen">
+            <h2>Lumen-like 的边界</h2>
+            <div class="grid">
+                <article class="card good span-6">
+                    <h3>它不是单个 pass</h3>
+                    <p>Lumen-like 系统更像一个组合架构：screen trace、world-space scene representation、surface cache、radiance cache、temporal accumulation 和 fallback 层级一起工作。</p>
+                </article>
+                <article class="card warn span-6">
+                    <h3>现在不要直接跳到这里</h3>
+                    <p>如果没有稳定的 screen-space buffers、SSR fallback、probe fallback、历史帧和 debug view，直接做 Lumen-like 会很难定位问题。</p>
+                </article>
+                <article class="card span-4">
+                    <h3>Diffuse 路线</h3>
+                    <p>Sky SH -> VLM / irradiance probe -> DDGI / radiance cache -> Lumen-like diffuse GI。</p>
+                </article>
+                <article class="card span-4">
+                    <h3>Specular 路线</h3>
+                    <p>Sky prefiltered cube -> SSR -> reflection probe -> world trace / Lumen-like reflections。</p>
+                </article>
+                <article class="card span-4">
+                    <h3>遮挡路线</h3>
+                    <p>SSAO/GTAO -> bent normal -> probe visibility -> voxel/distance-field occlusion。</p>
+                </article>
+            </div>
+        </section>
+
+        <section id="weather">
+            <h2>完整天气系统的汇合点</h2>
+            <div class="grid">
+                <article class="card good span-6">
+                    <h3>天气状态驱动</h3>
+                    <ul>
+                        <li><code>WeatherPreset</code>：晴天、多云、阴天、雾、雨、暴风雨</li>
+                        <li><code>WeatherStateGPU</code>：风、湿度、云量、降水、能见度、湿润强度</li>
+                        <li>状态曲线驱动 sky、cloud、fog、IBL、wet material</li>
+                    </ul>
+                </article>
+                <article class="card next span-6">
+                    <h3>渲染系统响应</h3>
+                    <ul>
+                        <li>sky / atmosphere：颜色、太阳、月亮、曝光</li>
+                        <li>cloud / fog：遮挡、散射、能见度</li>
+                        <li>GI / probes：低频或分帧更新</li>
+                        <li>surface：roughness、wetness、puddle、ripple</li>
+                    </ul>
+                </article>
+            </div>
+            <div class="callout">
+                <p><strong>最终目标：</strong>配置一条晴天 -> 多云 -> 阴天 -> 小雨 -> 暴雨 -> 雨后放晴的循环，天空、云、雾、光照、IBL、反射、地表湿润和降水都能以可调预算稳定变化。</p>
+            </div>
+        </section>
+
+        <section id="resources">
+            <h2>学习资料</h2>
+            <div class="resource-list">
+                <article class="resource">
+                    <strong>Sky / IBL 基础</strong>
+                    <small>
+                        继续使用 <a href="./sky-pass-environment-roadmap.html">Sky Pass 与程序化天空学习路线</a> 作为当前阶段主线。
+                    </small>
+                </article>
+                <article class="resource">
+                    <strong>Vulkan 同步与资源状态</strong>
+                    <small>
+                        读 <a href="https://docs.vulkan.org/spec/latest/chapters/synchronization.html">Vulkan Synchronization and Cache Control</a>。
+                        重点是 compute write -> fragment read、image layout、buffer barrier、frames in flight。
+                    </small>
+                </article>
+                <article class="resource">
+                    <strong>SSAO / GTAO</strong>
+                    <small>
+                        先理解 SSAO 的 depth/normal 重建，再读
+                        <a href="https://research.activision.com/publications/archives/practical-real-time-strategies-for-accurate-indirect-occlusion">Practical Realtime Strategies for Accurate Indirect Occlusion</a>
+                        这类更高质量 AO 资料。
+                    </small>
+                </article>
+                <article class="resource">
+                    <strong>SSR</strong>
+                    <small>
+                        读 <a href="https://gpuopen.com/fidelityfx-sssr/">AMD FidelityFX Stochastic Screen Space Reflections</a>。
+                        第一轮重点看输入数据、ray marching、roughness、fallback 和 denoise。
+                    </small>
+                </article>
+                <article class="resource">
+                    <strong>Reflection Probe / IBL</strong>
+                    <small>
+                        对照 <a href="https://cdn2.unrealengine.com/Resources/files/2013SiggraphPresentationsNotes-26915738.pdf">Real Shading in Unreal Engine 4</a>
+                        的 split-sum IBL，以及本项目现有 prefilter 生成链路。
+                    </small>
+                </article>
+                <article class="resource">
+                    <strong>DDGI / Probe GI</strong>
+                    <small>
+                        读 <a href="https://github.com/NVIDIAGameWorks/RTXGI">NVIDIA RTXGI / DDGI</a>，先理解 probe grid、visibility、relocation 和 temporal update。
+                    </small>
+                </article>
+                <article class="resource">
+                    <strong>Lumen</strong>
+                    <small>
+                        读 <a href="https://dev.epicgames.com/documentation/en-us/unreal-engine/lumen-global-illumination-and-reflections-in-unreal-engine">Unreal Engine Lumen Global Illumination and Reflections</a>
+                        和 <a href="https://dev.epicgames.com/documentation/en-us/unreal-engine/lumen-technical-details-in-unreal-engine">Lumen Technical Details</a>。
+                        只把它作为长期架构参考，不作为当前实现目标。
+                    </small>
+                </article>
+            </div>
+            <p class="footer-note">
+                相关当前阶段路线：<a href="./sky-pass-environment-roadmap.html">sky-pass-environment-roadmap.html</a>。
+            </p>
+        </section>
+    </main>
+</div>
+</body>
+</html>
