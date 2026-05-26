@@ -230,7 +230,7 @@ std::shared_ptr<Texture> BrdfLutGenerator::Generate(PipelineFactory& pipelineFac
         TextureIO::SaveOptions saveOptions;
         saveOptions.semantic = HostImage::TextureSemantic::Lut;
         saveOptions.format = TextureIO::FileFormat::Exr;
-        TextureIO::Save((std::filesystem::path(CommonFunction::GetProjectPath()) / "resources" / "generated" / "brdf_lut.exr"), cpuImage, saveOptions);
+        TextureIO::Save((std::filesystem::path(CommonFunction::GetResourcePath()) / "generated" / "brdf_lut.exr"), cpuImage, saveOptions);
 
         device.destroyBuffer(stagingBuffer);
         device.freeMemory(stagingBufferMemory);

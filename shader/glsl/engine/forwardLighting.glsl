@@ -5,6 +5,12 @@
 #include "materialSurface.glsl"
 #include "../common/lighting.glsl"
 
+// Forward pass 如果需要阴影，由具体 pass shader 在 include 前定义 VL_FORWARD_DECLARE_SHADOWMAP_INPUT。
+// 这样默认 include 本文件不会占用 Set 3；只有真正的 forward-with-shadow pass 才声明 shadowMap 输入。
+#if defined(VL_FORWARD_DECLARE_SHADOWMAP_INPUT)
+layout (set = 3, binding = 0) uniform sampler2DShadow shadowMap;
+#endif
+
 struct ForwardLightingResult
 {
     vec3 directLighting;
@@ -39,7 +45,11 @@ ForwardLightingResult ShadeDefaultLitForwardSurface(in MaterialSurface surface)
         surface.baseColor,
         surface.roughness,
         surface.metallic);
-    result.shadow = CalculateShadow(uboVP.lightViewProj, surface.worldPosition, 0.002);
+    #if defined(VL_FORWARD_DECLARE_SHADOWMAP_INPUT)
+        result.shadow = CalculateShadow(shadowMap, uboVP.lightViewProj, surface.worldPosition, 0.002);
+    #else
+        result.shadow = 1.0;
+    #endif
     result.directLighting *= result.shadow;
 
     result.indirectDiffuse = CalculateDiffuseIbl(
@@ -66,11 +76,20 @@ ForwardLightingResult ShadeUnlitForwardSurface(in MaterialSurface surface)
 
 ForwardLightingResult ShadeForwardSurfaceDetailed(in MaterialSurface surface)
 {
-    if (surface.shadingModel == SHADING_MODEL_UNLIT)
-    {
-        return ShadeUnlitForwardSurface(surface);
-    }
-    return ShadeDefaultLitForwardSurface(surface);
+    // 与 deferred lighting 保持同一套分发风格：先算当前支持的 shading model，
+    // 再用 mask 选择结果，避免在材质 shader 里散落动态分支。
+    ForwardLightingResult defaultLit = ShadeDefaultLitForwardSurface(surface);
+    ForwardLightingResult unlit = ShadeUnlitForwardSurface(surface);
+    float unlitMask = ShadingModelMask(surface.shadingModel, SHADING_MODEL_UNLIT);
+
+    ForwardLightingResult result = CreateDefaultForwardLightingResult();
+    result.directLighting = mix(defaultLit.directLighting, unlit.directLighting, unlitMask);
+    result.shadow = mix(defaultLit.shadow, unlit.shadow, unlitMask);
+    result.indirectDiffuse = mix(defaultLit.indirectDiffuse, unlit.indirectDiffuse, unlitMask);
+    result.indirectSpecular = mix(defaultLit.indirectSpecular, unlit.indirectSpecular, unlitMask);
+    result.indirectLighting = mix(defaultLit.indirectLighting, unlit.indirectLighting, unlitMask);
+    result.finalColor = mix(defaultLit.finalColor, unlit.finalColor, unlitMask);
+    return result;
 }
 
 vec3 ShadeForwardSurface(in MaterialSurface surface)

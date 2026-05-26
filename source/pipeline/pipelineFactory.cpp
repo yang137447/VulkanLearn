@@ -8,6 +8,7 @@ size_t GraphicsPipelineKeyHash::operator()(const GraphicsPipelineKey& key) const
     const size_t renderPassHash = std::hash<uint64_t>{}(reinterpret_cast<uint64_t>(key.renderPass));
     const size_t shaderVariantHash = ShaderVariantKeyHash{}(key.shaderVariantKey);
     const size_t sampleCountHash = std::hash<uint32_t>{}(static_cast<uint32_t>(key.sampleCount));
+    const size_t colorAttachmentCountHash = std::hash<uint32_t>{}(key.colorAttachmentCount);
     const size_t useVertexInputHash = std::hash<bool>{}(key.pipelineStateDesc.bUseVertexInput);
     const size_t depthTestHash = std::hash<bool>{}(key.pipelineStateDesc.bDepthTestEnable);
     const size_t depthWriteHash = std::hash<bool>{}(key.pipelineStateDesc.bDepthWriteEnable);
@@ -19,6 +20,7 @@ size_t GraphicsPipelineKeyHash::operator()(const GraphicsPipelineKey& key) const
     size_t hash = renderPassHash;
     hash ^= shaderVariantHash + 0x9e3779b9 + (hash << 6) + (hash >> 2);
     hash ^= sampleCountHash + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+    hash ^= colorAttachmentCountHash + 0x9e3779b9 + (hash << 6) + (hash >> 2);
     hash ^= useVertexInputHash + 0x9e3779b9 + (hash << 6) + (hash >> 2);
     hash ^= depthTestHash + 0x9e3779b9 + (hash << 6) + (hash >> 2);
     hash ^= depthWriteHash + 0x9e3779b9 + (hash << 6) + (hash >> 2);
@@ -56,6 +58,7 @@ std::shared_ptr<GraphicsPipeline> PipelineFactory::CreateGraphicsPipeline(
     vk::RenderPass* renderPass,
     const ShaderVariantKey& shaderVariantKey,
     vk::SampleCountFlagBits sampleCount,
+    uint32_t colorAttachmentCount,
     const GraphicsPipelineStateDesc& pipelineStateDesc,
     bool bIsShadowPass)
 {
@@ -63,6 +66,7 @@ std::shared_ptr<GraphicsPipeline> PipelineFactory::CreateGraphicsPipeline(
         renderPass,
         shaderVariantKey,
         sampleCount,
+        colorAttachmentCount,
         pipelineStateDesc,
         bIsShadowPass
     };
@@ -76,7 +80,7 @@ std::shared_ptr<GraphicsPipeline> PipelineFactory::CreateGraphicsPipeline(
         }
     }
 
-    auto pipeline = std::make_shared<GraphicsPipeline>(device, gpuMemoryProperties, renderPass, shaderVariantKey, sampleCount, pipelineStateDesc, bIsShadowPass);
+    auto pipeline = std::make_shared<GraphicsPipeline>(device, gpuMemoryProperties, renderPass, shaderVariantKey, sampleCount, colorAttachmentCount, pipelineStateDesc, bIsShadowPass);
     graphicsPipelines[key] = pipeline;
     return pipeline;
 }

@@ -86,8 +86,8 @@ Typical runtime expectation:
 
 - Run from the repository root or from an environment where the project root can still be discovered.
 - The app expects `config/` and `shader/` inside the repository.
-- Runtime assets are expected under the repository sibling directory `../VulkanLearnAssets/resources`.
-- Repository-local `resources/` is now reserved for placeholder docs and generated local outputs such as `resources/generated/`.
+- Runtime assets are loaded from `config/config.json -> resourcePath`.
+- Repository-local `resources/` is not the runtime asset root. Generated runtime outputs should go under `resourcePath/generated/`.
 
 Current local build context:
 
@@ -119,10 +119,10 @@ If a change affects boot behavior, verify it against this order.
 - `source/pipeline/`: pipeline factory, builders, graphics and compute pipeline code
 - `source/resource/`: image and device texture helpers
 - `config/`: top-level runtime config and render graph config
-- `../VulkanLearnAssets/resources/scenes/`: scene JSON files
-- `../VulkanLearnAssets/resources/models/`: mesh description JSON and source model data
-- `../VulkanLearnAssets/resources/terrains/`: terrain description JSON files
-- `../VulkanLearnAssets/resources/materials/`: material instance JSON files
+- `<resourcePath>/scenes/`: scene JSON files
+- `<resourcePath>/models/`: mesh description JSON and source model data
+- `<resourcePath>/terrains/`: terrain description JSON files
+- `<resourcePath>/materials/`: material instance JSON files
 - `shader/glsl/`: shader source of truth
 - `shader/spv/`: compiled shader output and debug reflection artifacts
 - `extern/`: third-party dependencies
@@ -172,7 +172,7 @@ If adding a new type, update both loader logic and documentation.
 These relationships are important and easy to miss:
 
 - `config/config.json -> initScene` decides which scene file is loaded first.
-- Runtime resource lookup resolves relative asset paths from `../VulkanLearnAssets/resources`.
+- Runtime resource lookup resolves relative asset paths from `config/config.json -> resourcePath`.
 - `config/renderGraphConfig.json` defines render resources and pass order before scene loading.
 - Passes with `needCreateMaterial: true` rely on material instance JSON to create pass materials.
 - Material parameter validation depends on shader reflection results.
@@ -217,19 +217,20 @@ When making changes:
 - Keep JSON structure and naming stable unless the task is a format migration.
 - Avoid broad refactors unless the task clearly calls for them.
 - Preserve learning-oriented readability over over-abstraction.
+- Generally avoid lambda expressions in engine code. In long flow-heavy files such as `source/renderSystem.cpp`, prefer small named helper functions or clearly scoped private methods so the control flow stays readable and code size does not balloon.
 
 ## Common Task Map
 
 If asked to add or change a scene:
 
 - check `config/config.json`
-- inspect `resources/scenes/*.json`
+- inspect `<resourcePath>/scenes/*.json`
 - inspect `source/sceneLoader.cpp`
 
 If asked to add or change a terrain:
 
-- inspect `resources/scenes/*.json`
-- inspect `resources/terrains/TR_*.json`
+- inspect `<resourcePath>/scenes/*.json`
+- inspect `<resourcePath>/terrains/TR_*.json`
 - inspect `source/terrain.h` and `source/terrain.cpp`
 - inspect `source/sceneLoader.cpp`
 - keep World Creator surface textures in material / texture asset JSON unless the task explicitly adds terrain layer blending
@@ -238,12 +239,12 @@ If asked to add or change a render pass:
 
 - inspect `config/renderGraphConfig.json`
 - inspect `source/renderGraph.cpp`
-- inspect `resources/materials/pass/*.json`
+- inspect `<resourcePath>/materials/pass/*.json`
 - inspect corresponding shaders in `shader/glsl/pass/`
 
 If asked to add or change a material:
 
-- inspect `resources/materials/*.json`
+- inspect `<resourcePath>/materials/*.json`
 - inspect `source/material.cpp`
 - inspect `source/materialInstance.cpp`
 - inspect shader reflection-dependent code paths

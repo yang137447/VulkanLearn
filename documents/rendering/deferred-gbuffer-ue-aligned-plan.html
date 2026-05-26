@@ -394,20 +394,20 @@
                         <tr>
                             <td><code>gbufferA</code></td>
                             <td><code>R16G16B16A16_SFLOAT</code> 起步，后续可压缩</td>
-                            <td><code>rgb = worldNormal</code>, <code>a = perObjectGBufferData</code></td>
-                            <td>对齐 UE 的 world normal + per-object GBuffer data 职责。</td>
+                            <td><code>rgb = baseColor</code>, <code>a = opacity</code></td>
+                            <td>当前实现先保存基础颜色和透明度，便于 deferredLighting 直接还原 <code>MaterialSurface</code>。</td>
                         </tr>
                         <tr>
                             <td><code>gbufferB</code></td>
                             <td><code>R16G16B16A16_SFLOAT</code> 起步，后续可压缩</td>
-                            <td><code>r = metallic</code>, <code>g = specular</code>, <code>b = roughness</code>, <code>a = packed ShadingModelID + SelectiveOutputMask</code></td>
-                            <td>对齐 UE 的 metallic / specular / roughness / packed shading 通道。</td>
+                            <td><code>rgb = encoded worldNormal</code>, <code>a = packed ShadingModelID + SelectiveOutputMask</code></td>
+                            <td>法线用 <code>direction * 0.5 + 0.5</code> 写入；alpha 按低 4 位 shading model、高 4 位 optional flags 解释。</td>
                         </tr>
                         <tr>
                             <td><code>gbufferC</code></td>
                             <td><code>R16G16B16A16_SFLOAT</code> 起步，后续可压缩</td>
-                            <td><code>rgb = baseColor</code>, <code>a = indirectIrradiance</code></td>
-                            <td>对齐 UE 的 base color + indirect irradiance 职责。AO 保留在 surface 数据中，可按项目阶段映射到 custom/间接光路径。</td>
+                            <td><code>r = metallic</code>, <code>g = specular</code>, <code>b = roughness</code>, <code>a = ambientOcclusion</code></td>
+                            <td>阶段 6 中 <code>specular</code> 先写固定默认值；AO 主要留给阶段 7 的间接光路径使用。</td>
                         </tr>
                         <tr>
                             <td><code>gbufferD</code></td>
@@ -453,12 +453,23 @@
   -> geometry / gbufferGeometry
   -> deferredLighting
   -> sky
-  -> postProcess
   -> bloom
   -> toneMapping</code></pre>
 
                 <p>
-                    为了减少初次改造冲击，可以先保留 pass 名称 <code>geometry</code>，但改变它的输出语义：从 “final-ish HDR color” 改成 “UE-style GBuffer attributes + sceneColorBase”。新增 <code>deferredLighting</code> 输入完整 GBuffer，输出 <code>offscreenColor</code>。后续 <code>sky</code>、post、bloom、tone mapping 尽量不动。
+                    为了减少初次改造冲击，可以先保留 pass 名称 <code>geometry</code>，但改变它的输出语义：从 “final-ish HDR color” 改成 “UE-style GBuffer attributes + sceneColorBase”。新增 <code>deferredLighting</code> 输入完整 GBuffer，输出 <code>sceneColor</code>。后续 <code>sky</code>、bloom、tone mapping 继续围绕 <code>sceneColor</code> 运行；如果以后加入真正的后处理效果，再单独恢复 post-process pass，而不是为了 copy 保留一张 <code>offscreenColor</code>。
+                </p>
+
+                <h3>阶段 7 当前主流程</h3>
+                <pre><code class="flow">shadow
+  -> geometry          // 写 GBufferA/B/C/D/E、Velocity、F、sceneColorBase、sceneDepth
+  -> deferredLighting  // 读取 GBuffer + sceneDepth + shadowMap，并使用 Set 0 的 IBL 资源
+  -> sky
+  -> bloom
+  -> toneMapping</code></pre>
+
+                <p>
+                    阶段 7 已经不再用 GBuffer debug pass 代替光照。GBuffer attachment 的检查交给 RenderDoc；工程主链只保留真实渲染职责：<code>deferredLighting</code> 消费同一套 GBuffer、<code>sceneDepth</code> 和 <code>shadowMap</code>，并结合全局 IBL 资源输出 <code>sceneColor</code>。<code>offscreenColor</code> 不再作为固定中间图存在。
                 </p>
             </section>
 
@@ -503,10 +514,10 @@ const uint SHADING_MODEL_HAIR = 7u;
 const uint SHADING_MODEL_CLOTH = 8u;
 const uint SHADING_MODEL_EYE = 9u;
 
-const uint SELECTIVE_OUTPUT_HAS_ANISOTROPY = 1u &lt;&lt; 4;
-const uint SELECTIVE_OUTPUT_SKIP_PRECSHADOW = 1u &lt;&lt; 5;
-const uint SELECTIVE_OUTPUT_ZERO_PRECSHADOW = 1u &lt;&lt; 6;
-const uint SELECTIVE_OUTPUT_SKIP_VELOCITY = 1u &lt;&lt; 7;
+const uint GBUFFER_HAS_CUSTOM_DATA_MASK = 0x10u;
+const uint GBUFFER_HAS_PRECOMPUTED_SHADOW_MASK = 0x20u;
+const uint GBUFFER_HAS_VELOCITY_MASK = 0x40u;
+const uint GBUFFER_HAS_ANISOTROPY_MASK = 0x80u;
 
 float EncodeGBufferPacked(uint shadingModel, uint flags)
 {
@@ -566,21 +577,41 @@ uint DecodeGBufferFlags(float packedValue)
                     <tbody>
                         <tr>
                             <td><code>shader/glsl/common/shadingModel.glsl</code></td>
-                            <td>定义 <code>ShadingModelID</code>、GBuffer flags、公共常量。</td>
+                            <td>定义 <code>ShadingModelID</code> 与公共材质 ID 值域。</td>
                             <td>forward、gbuffer、deferred lighting、debug view。</td>
                         </tr>
                         <tr>
-                            <td><code>shader/glsl/common/materialSurface.glsl</code></td>
+                            <td><code>shader/glsl/engine/materialContext.glsl</code></td>
+                            <td>定义 <code>MaterialVertexContext</code>、<code>MaterialVaryings</code>、<code>MaterialPixelContext</code> 以及 stage 间转换函数。</td>
+                            <td><code>pbr.vert</code>、<code>pbr.frag</code>、后续 forward / gbuffer 模板。</td>
+                        </tr>
+                        <tr>
+                            <td><code>shader/glsl/engine/materialSurface.glsl</code></td>
                             <td>定义 <code>MaterialSurface</code> 与默认初始化函数。</td>
-                            <td>所有材质 shader。</td>
+                            <td>所有材质 shader、forward lighting、GBuffer codec。</td>
                         </tr>
                         <tr>
-                            <td><code>shader/glsl/common/materialSampling.glsl</code></td>
-                            <td>采样 albedo / normal / pbr / emission，输出 <code>MaterialSurface</code>。</td>
-                            <td>forward PBR 与 gbuffer PBR。</td>
+                            <td><code>shader/glsl/engine/materialPass.glsl</code></td>
+                            <td>根据 <code>RENDER_MODE_*</code> 宏在编译期选择材质输出壳：opaque 写 GBuffer，transparent 走 forward。</td>
+                            <td><code>pbr.frag</code> 这类材质 fragment 编译单元。</td>
                         </tr>
                         <tr>
-                            <td><code>shader/glsl/common/gbufferCodec.glsl</code></td>
+                            <td><code>shader/glsl/materialFunction/mf_pbrSurface.glsl</code></td>
+                            <td>PBR 具体材质函数。允许依赖 <code>M_pbr.json</code> 暴露的参数、贴图和 static macros，输出 <code>MaterialSurface</code>。</td>
+                            <td><code>pbr.frag</code> 的 <code>MaterialPixel</code> 入口。</td>
+                        </tr>
+                        <tr>
+                            <td><code>shader/glsl/engine/materialGBufferOutput.glsl</code></td>
+                            <td>GBuffer 输出壳。负责 velocity、<code>SelectiveOutputMask</code> 和 <code>EncodeGBuffer</code>，不放进普通材质函数。</td>
+                            <td>opaque / masked material fragment 变体。</td>
+                        </tr>
+                        <tr>
+                            <td><code>shader/glsl/engine/materialForwardOutput.glsl</code></td>
+                            <td>Forward 输出壳。负责调用 <code>ShadeForwardSurfaceDetailed</code>、debug view 和最终透明颜色输出。</td>
+                            <td>forward transparent material fragment 变体。</td>
+                        </tr>
+                        <tr>
+                            <td><code>shader/glsl/engine/gbufferCodec.glsl</code></td>
                             <td>编码 / 解码完整 GBufferA/B/C/D/E、Velocity、Tangent/Anisotropy 和 packed shading 通道。</td>
                             <td>gbuffer pass 与 deferred lighting pass。</td>
                         </tr>
@@ -590,54 +621,168 @@ uint DecodeGBufferFlags(float packedValue)
                             <td>forward 与 deferred lighting。</td>
                         </tr>
                         <tr>
-                            <td><code>shader/glsl/common/lighting.glsl</code></td>
-                            <td>直接光、阴影、IBL、shading model 分发。</td>
-                            <td>forward 与 deferred lighting。</td>
+                            <td><code>shader/glsl/engine/forwardLighting.glsl</code></td>
+                            <td>forward 路径的 <code>MaterialSurface</code> 光照入口和 <code>ForwardLightingResult</code>。</td>
+                            <td>forward PBR 与 forward transparent。</td>
+                        </tr>
+                        <tr>
+                            <td><code>shader/glsl/engine/materialDebugView.glsl</code></td>
+                            <td>材质 debug view 解析。只读取 <code>MaterialSurface</code> 和中性的 <code>MaterialDebugLightingData</code>，不知道 PBR 贴图。</td>
+                            <td>forward transparent 与 deferredLighting 都可复用。</td>
                         </tr>
                     </tbody>
                 </table>
 
-                <h3>核心数据结构</h3>
+                <div class="note">
+                    这里明确分成三层：<code>common/</code> 只放真正通用基础设施；<code>engine/</code> 放引擎材质框架、lighting、debug、GBuffer codec；<code>materialFunction/</code> 放具体材质函数。凡是会直接使用 <code>u_pbrFactors</code>、<code>albedoMap</code>、<code>USE_NORMAL_MAP</code> 这类 <code>M_pbr.json</code> 契约的代码，都不能放进 <code>common/</code>。
+                </div>
+
+                <h3>结构关系总览</h3>
+                <pre><code class="flow">pbr.vert
+  vertex attributes + common UBO
+    -> Fill MaterialVertexContext
+    -> MaterialVertex(inout vertex)        // 作者可见的顶点入口
+    -> MaterialVertexOutput
+    -> MaterialVaryings v2f                // 明确的 vertex-to-fragment 边界
+
+pbr.frag
+  MaterialVaryings v2f
+    -> CreateMaterialPixelContext(v2f)     // 必须接收完整 v2f，避免丢失切线/颜色等阶段数据
+    -> CreateDefaultMaterialSurface()
+    -> MaterialPixel(pixel, surface)       // 作者可见的片元入口
+         -> EvaluatePbrSurface(pixel)      // PBR 材质函数，读取 M_pbr 参数/贴图/宏
+    -> materialPass.glsl                   // 根据 RENDER_MODE_* 宏做编译期输出分流
+       -> opaque / masked: BuildMaterialGBufferOutput(surface, pixel)
+       -> transparent: BuildMaterialForwardOutput(surface)</code></pre>
+
+                <h3>Vert / Frag 引用关系</h3>
+                <pre><code>// pbr.vert
+#include "common/commonUbo.glsl"
+#include "common/function.glsl"
+#include "engine/materialContext.glsl"
+#include "generate/M_pbrParamter.glsl"
+
+layout(location = 0) out MaterialVaryings v2f;
+
+void MaterialVertex(inout MaterialVertexContext vertex);
+
+void main()
+{
+    MaterialVertexContext vertex = ...;
+    MaterialVertex(vertex);
+
+    gl_Position = vertex.vertexOutput.clipPosition;
+    v2f = CreateMaterialVaryings(vertex.vertexOutput);
+}</code></pre>
+
+                <pre><code>// pbr.frag
+#include "common/commonUbo.glsl"
+#include "generate/M_pbrParamter.glsl"
+#include "engine/materialContext.glsl"
+#include "engine/materialSurface.glsl"
+#include "materialFunction/mf_pbrSurface.glsl"
+#include "engine/materialPass.glsl"
+
+#if VL_MATERIAL_OUTPUT_GBUFFER
+    #include "engine/materialGBufferOutput.glsl"
+#else
+    #define VL_FORWARD_DECLARE_SHADOWMAP_INPUT
+    #include "engine/materialForwardOutput.glsl"
+#endif
+
+layout(location = 0) in MaterialVaryings v2f;
+
+void MaterialPixel(in MaterialPixelContext pixel, inout MaterialSurface surface);
+
+void main()
+{
+    MaterialPixelContext pixel = CreateMaterialPixelContext(v2f);
+    MaterialSurface surface = CreateDefaultMaterialSurface();
+    MaterialPixel(pixel, surface);
+
+    #if VL_MATERIAL_OUTPUT_GBUFFER
+        GBufferData gbuffer = BuildMaterialGBufferOutput(surface, pixel);
+        WriteGBuffer(gbuffer);
+    #else
+        outSceneColor = BuildMaterialForwardOutput(surface);
+    #endif
+}</code></pre>
+
+                <div class="note">
+                    这里的 <code>v2f</code> 只是 vertex-to-fragment 的命名，不表示项目切到 DX 或 OpenGL。VulkanLearn 当前 shader 源是 Vulkan GLSL，编译到 SPIR-V；<code>MaterialVaryings</code> 只负责把阶段边界结构化，不改变项目现有的 Vulkan 坐标和 layout 约定。
+                </div>
+
+                <h3>MaterialVertex / MaterialPixel 输入输出</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>入口</th>
+                            <th>输入</th>
+                            <th>输出</th>
+                            <th>不负责</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>MaterialVertex(inout MaterialVertexContext vertex)</code></td>
+                            <td><code>modelMatrix</code>、<code>localPosition</code>、<code>localNormal</code>、<code>localTangent</code>、<code>texCoord</code>、<code>vertexColor</code>。</td>
+                            <td><code>clipPosition</code> 写给 <code>gl_Position</code>；<code>worldPosition</code>、<code>worldNormal</code>、<code>worldTangent</code>、<code>texCoord</code>、<code>vertexColor</code> 写入 <code>MaterialVaryings</code>。</td>
+                            <td>不做 lighting、GBuffer 编码、debug view，也不直接绑定 descriptor。</td>
+                        </tr>
+                        <tr>
+                            <td><code>MaterialPixel(in MaterialPixelContext pixel, inout MaterialSurface surface)</code></td>
+                            <td>从完整 <code>MaterialVaryings</code> 展开的 <code>worldPosition</code>、<code>worldNormal</code>、<code>worldTangent</code>、<code>texCoord</code>、<code>vertexColor</code>。</td>
+                            <td>填充 <code>MaterialSurface</code>：base color、opacity、normal、roughness、metallic、AO、<code>emissiveColor</code>、shading model 和 custom data。</td>
+                            <td>不决定 forward/deferred，不写 render target，不处理 shadow、IBL 和 post-process。</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>核心数据结构（阶段 8 当前版）</h3>
                 <pre><code>struct MaterialSurface {
+    vec3 worldPosition;
+    vec3 worldNormal;
+    vec4 worldTangent;
     vec3 baseColor;
     float opacity;
-
-    vec3 worldNormal;
+    vec3 emissiveColor;
     float roughness;
-
-    vec3 emission;
     float metallic;
-
-    float specular;
     float ambientOcclusion;
-    float indirectIrradiance;
-    float perObjectGBufferData;
-
+    uint shadingModel;
+    uint selectiveOutputMask;
     vec4 customData;
     vec4 precomputedShadowFactors;
-
-    vec3 worldTangent;
     float anisotropy;
-
-    vec2 velocity;
-    uint shadingModel;
-    uint flags;
 };</code></pre>
 
-                <h3>Forward 与 Deferred 的共用关系</h3>
-                <pre><code>// forward pbr fragment
-MaterialSurface surface = EvaluateMaterialSurface(input);
-vec3 color = ShadeMaterialSurface(surface, lightingContext);
-outColor = vec4(color, surface.opacity);
+                <div class="note">
+                    阶段 8 后，<code>MaterialSurface</code> 已能表达 optional GBuffer 数据。真正和屏幕历史相关的 <code>velocity</code> 仍由 GBuffer 写入包装层根据 current / previous clip position 计算，不放进普通材质作者入口。
+                </div>
 
-// gbuffer fragment
-MaterialSurface surface = EvaluateMaterialSurface(input);
-WriteGBuffer(surface);
+                <h3>Forward 与 Deferred 的共用关系</h3>
+                <pre><code>// pbr.frag：同一套材质函数，编译期按 render mode 选择输出壳。
+void PbrFragment()
+{
+    MaterialPixelContext pixel = CreateMaterialPixelContext(v2f);
+    MaterialSurface surface = CreateDefaultMaterialSurface();
+    MaterialPixel(pixel, surface);
+
+    #if VL_MATERIAL_OUTPUT_GBUFFER
+        GBufferData gbuffer = BuildMaterialGBufferOutput(surface, pixel);
+        WriteGBuffer(gbuffer);
+    #else
+        outSceneColor = BuildMaterialForwardOutput(surface);
+    #endif
+}
 
 // deferred lighting fragment
-MaterialSurface surface = ReadGBuffer(uv, sceneDepth);
-vec3 color = ShadeMaterialSurface(surface, lightingContext);
-outColor = vec4(color, surface.opacity);</code></pre>
+void DeferredLightingFragment()
+{
+    MaterialSurface surface = ReadGBuffer(uv, sceneDepth);
+    vec3 color = ShadeDeferredSurface(surface, lightingContext);
+    outColor = vec4(color, surface.opacity);
+}</code></pre>
 
                 <div class="note">
                     这样写完以后，forward 不是被废弃，而是变成 deferred 的自然补充：透明物体、特殊调试、简单平台 fallback、后续 editor gizmo 都可以继续走 forward。
@@ -658,7 +803,7 @@ outColor = vec4(color, surface.opacity);</code></pre>
                         <h3>作者可见</h3>
                         <ul>
                             <li>顶点阶段入口：修改局部顶点、法线、切线、UV、vertex color、world position offset。</li>
-                            <li>片元阶段入口：填充 <code>MaterialSurface</code>，包括 baseColor、roughness、metallic、normal、emission、customData、shadingModel。</li>
+                            <li>片元阶段入口：填充 <code>MaterialSurface</code>，包括 baseColor、roughness、metallic、normal、emissiveColor、customData、shadingModel。</li>
                             <li>材质模块 public 接口：例如 normal map、clear coat、foliage SSS、wind、dissolve。</li>
                             <li>材质参数声明：仍由反射系统负责真实 binding。</li>
                         </ul>
@@ -748,26 +893,29 @@ outColor = vec4(color, surface.opacity);</code></pre>
 }</code></pre>
 
                 <pre><code>// material shader pair: pbr.vert / pbr.frag
-// Both stages include the generated material definition first.
+// pbr.vert：顶点阶段只准备 MaterialVertexContext，并输出 MaterialVaryings。
+#include "common/commonUbo.glsl"
+#include "common/function.glsl"
+#include "engine/materialContext.glsl"
 #include "generate/M_pbrParamter.glsl"
 
-// 第一阶段可以仍然保留 main()，只是在 main() 内部收敛到这些入口。
 void MaterialVertex(inout MaterialVertexContext vertex)
 {
     // 可选：world position offset、风、顶点动画、UV 调整。
 }
 
+// pbr.frag：片元阶段 include 材质参数、材质 surface、具体材质函数和输出壳。
+#include "common/commonUbo.glsl"
+#include "generate/M_pbrParamter.glsl"
+#include "engine/materialContext.glsl"
+#include "engine/materialSurface.glsl"
+#include "materialFunction/mf_pbrSurface.glsl"
+#include "engine/materialPass.glsl"
+
 void MaterialPixel(in MaterialPixelContext pixel, inout MaterialSurface surface)
 {
-    surface.baseColor = SampleBaseColor(pixel);
-    surface.worldNormal = SampleWorldNormal(pixel);
-    surface.roughness = SampleRoughness(pixel);
-    surface.metallic = SampleMetallic(pixel);
-    surface.specular = 0.5;
-    surface.ambientOcclusion = SampleAO(pixel);
-    surface.emission = SampleEmission(pixel);
-    surface.shadingModel = MATERIAL_SHADING_MODEL;
-    surface.flags = SELECTIVE_OUTPUT_DEFAULT;
+    // PBR 贴图、参数和 static macro 只留在材质函数层，不进入 common/。
+    surface = EvaluatePbrSurface(pixel);
 }</code></pre>
 
                 <pre><code>// generated material include: shader/glsl/generate/M_pbrParamter.glsl
@@ -809,16 +957,34 @@ layout(set = 1, binding = 4) uniform sampler2D emissionMap;
 
                 <h3>框架生成的包装层</h3>
                 <pre><code>// generated/assembled forward fragment
-MaterialSurface surface = CreateDefaultMaterialSurface();
-MaterialPixel(pixelContext, surface);
-vec3 color = ShadeMaterialSurface(surface, lightingContext);
-outColor = vec4(color, surface.opacity);
+void ForwardPbrFragment()
+{
+    MaterialPixelContext pixel = CreateMaterialPixelContext(v2f);
+    MaterialSurface surface = CreateDefaultMaterialSurface();
+    MaterialPixel(pixel, surface);
+    ForwardLightingResult lighting = ShadeForwardSurfaceDetailed(surface);
+    vec4 finalColor = vec4(lighting.finalColor, surface.opacity);
+    MaterialDebugLightingData debugLighting = CreateMaterialDebugLightingData(
+        lighting.shadow,
+        lighting.directLighting,
+        lighting.indirectDiffuse,
+        lighting.indirectSpecular);
+    outColor = ResolveMaterialDebugView(surface, debugLighting, finalColor);
+}
 
 // generated/assembled deferred gbuffer fragment
-MaterialSurface surface = CreateDefaultMaterialSurface();
-MaterialPixel(pixelContext, surface);
-WriteCompleteGBuffer(surface);
-outSceneColorBase = vec4(surface.emission, surface.opacity);</code></pre>
+void DeferredGBufferFragment()
+{
+    MaterialPixelContext pixel = CreateMaterialPixelContext(v2f);
+    MaterialSurface surface = CreateDefaultMaterialSurface();
+    MaterialPixel(pixel, surface);
+    WriteCompleteGBuffer(surface);
+    outSceneColorBase = vec4(surface.emissiveColor, surface.opacity);
+}</code></pre>
+
+                <div class="note">
+                    Debug view / <code>ENABLE_DEBUG_VIEW</code> 这一套也归到 engine 层：材质作者只填 <code>MaterialSurface</code>，forward 和 deferred 分别把自己的 lighting result 转成 <code>MaterialDebugLightingData</code>，最终颜色统一走 <code>ResolveMaterialDebugView</code>。当前封装在启用 debug view 时用 mask/mix 选择显示项，release 或未启用宏时直接返回默认颜色，避免把动态分支散落到每个材质函数里。
+                </div>
 
                 <table>
                     <thead>
@@ -850,9 +1016,19 @@ outSceneColorBase = vec4(surface.emission, surface.opacity);</code></pre>
                             <td>当需要同一材质定义生成 forward / gbuffer 两套最终 shader 时引入。第一阶段先生成 Paramter include，不强制引入完整模板装配器。</td>
                         </tr>
                         <tr>
-                            <td>公共运行时 shader 库</td>
-                            <td><code>common/*.glsl</code></td>
-                            <td>提供 <code>MaterialSurface</code>、GBuffer codec、BRDF、lighting、shading model dispatch。</td>
+                            <td>common 基础库</td>
+                            <td><code>shader/glsl/common/*.glsl</code></td>
+                            <td>只提供真正通用的 UBO、宏、数学/BRDF 纯函数和 <code>ShadingModelID</code>。不直接引用具体材质参数、贴图或 <code>USE_*</code> 宏。</td>
+                        </tr>
+                        <tr>
+                            <td>engine 材质框架</td>
+                            <td><code>shader/glsl/engine/*.glsl</code></td>
+                            <td>提供 <code>MaterialVertexContext</code>、<code>MaterialVaryings</code>、<code>MaterialPixelContext</code>、<code>MaterialSurface</code>、forward/deferred lighting、debug view 和 GBuffer codec。</td>
+                        </tr>
+                        <tr>
+                            <td>materialFunction 材质函数</td>
+                            <td><code>shader/glsl/materialFunction/*.glsl</code></td>
+                            <td>提供具体材质模块，例如 <code>EvaluatePbrSurface</code>。这里可以读取 <code>M_*.json</code> 生成的参数、贴图和 static macros。</td>
                         </tr>
                         <tr>
                             <td>生成/装配工具</td>
@@ -926,6 +1102,9 @@ outSceneColorBase = vec4(surface.emission, surface.opacity);</code></pre>
                 <p>
                     RenderGraph 需要一次性承载完整 UE-style GBuffer attachment，并允许后续 pass 把这些 attachment 作为 sampled texture 输入。当前配置系统已经能声明多个输出资源，因此重点在资源格式、pass descriptor、shader 绑定、layout transition 和 RenderSystem 分支上。
                 </p>
+                <div class="note">
+                    Descriptor Set 分工保持稳定：<code>Set 0</code> 放全局数据，<code>Set 1</code> 放材质数据，<code>Set 2</code> 放对象数据，<code>Set 3</code> 专门放当前 pass 的 RenderGraph 输入。公共 include 不直接声明 <code>Set 3</code> 资源；具体 pass shader 按自己的 input 顺序声明 binding，避免 shadowMap、GBuffer、post-process 输入互相抢 binding。
+                </div>
                 <table>
                     <thead>
                         <tr>
@@ -937,8 +1116,8 @@ outSceneColorBase = vec4(surface.emission, surface.opacity);</code></pre>
                     <tbody>
                         <tr>
                             <td><code>config/renderGraphConfig.json</code></td>
-                            <td>新增 <code>gbufferA/B/C/D/E</code>、<code>gbufferVelocity</code>、<code>gbufferF</code>、<code>sceneColorBase</code>，新增 <code>deferredLighting</code> pass。</td>
-                            <td>后处理链继续消费 <code>offscreenColor</code>。GBuffer attachment 命名和 shader location 必须固定。</td>
+                            <td>新增 <code>gbufferA/B/C/D/E</code>、<code>gbufferVelocity</code>、<code>gbufferF</code>、<code>sceneColorBase</code>，并接入 <code>deferredLighting</code> pass。</td>
+                            <td>后处理链继续消费 <code>sceneColor</code>。GBuffer attachment 命名、shader location 和 <code>deferredLighting.input</code> binding 顺序必须固定。</td>
                         </tr>
                         <tr>
                             <td><code>renderGraph.cpp</code></td>
@@ -957,16 +1136,33 @@ outSceneColorBase = vec4(surface.emission, surface.opacity);</code></pre>
                         </tr>
                         <tr>
                             <td><code>renderSystem.cpp</code></td>
-                            <td>保留 geometry draw 分支，新增 deferred lighting fullscreen pass。</td>
-                            <td>先别重写整个 pass dispatch 架构。</td>
+                            <td>保留 geometry draw 分支；<code>deferredLighting</code>、sky、bloom、toneMapping 继续走 fullscreen pass 分支。</td>
+                            <td>先别重写整个 pass dispatch 架构。GBuffer inspection 使用 RenderDoc 直接看 attachment。</td>
                         </tr>
                         <tr>
-                            <td>debug view</td>
-                            <td>增加 GBuffer 可视化模式。</td>
-                            <td>至少能看 normal、baseColor、roughness、metallic、shading model、custom data、precomputed shadow、velocity。</td>
+                            <td><code>source/passBarrier.*</code></td>
+                            <td>集中处理 pass 边界上的 Vulkan image layout / visibility transition。</td>
+                            <td>不要塞进 <code>commonFunction.h</code>。它只根据 RenderGraph 的 <code>inputResources</code>、<code>outputResources</code> 和 <code>outputLoadOps</code> 推导是否需要 barrier。</td>
                         </tr>
                     </tbody>
                 </table>
+
+                <h3>PassBarrier 规划</h3>
+                <p>
+                    <code>PassBarrier</code> 是 RenderGraph 和 Vulkan 同步之间的薄封装。<code>RenderSystem</code> 不再在主渲染循环里展开一大段 barrier 判断，也不使用临时 lambda；它只在每个 pass 的 <code>beginRenderPass</code> 前调用 <code>PrepareForPass</code>，让资源等待和 layout 转换由 pass 的输入/输出声明自动推导。
+                </p>
+                <pre><code>for each pass:
+    PassBarrier::PrepareForPass(commandBuffer, renderGraph, passIndex, swapChainImageIndex)
+    beginRenderPass()
+    draw pass
+    endRenderPass()</code></pre>
+                <ul>
+                    <li>当前 pass 的 <code>inputResources</code>：如果上一用途是 attachment，就在 pass 前转到 shader-read layout。</li>
+                    <li>当前 pass 的 <code>outputResources</code>：如果 <code>loadOp=load</code> 且上一用途是 sampled input，就在 pass 前转回 attachment layout。</li>
+                    <li><code>storeOp</code> 决定 pass 结束时是否保存 attachment 内容；是否需要等待/转换则主要由后续 input/output 用途决定。</li>
+                    <li>这里转换的是 Vulkan image layout，不是 <code>R16G16B16A16_SFLOAT</code>、<code>D32_SFLOAT</code> 这类像素 format。</li>
+                    <li>典型链路：<code>geometry</code> 写 <code>sceneDepth</code>，<code>deferredLighting</code> 采样 <code>sceneDepth</code>，<code>sky</code> 再以 <code>loadOp=load</code> 继续用它做深度测试。</li>
+                </ul>
             </section>
 
             <section id="msaa-strategy">
@@ -1033,6 +1229,24 @@ outSceneColorBase = vec4(surface.emission, surface.opacity);</code></pre>
         { "resource": "sceneColorBase", "loadOp": "clear", "storeOp": "store" },
         { "resource": "sceneDepth", "loadOp": "clear", "storeOp": "store" }
     ]
+},
+{
+    "name": "deferredLighting",
+    "input": [
+        { "resource": "gbufferA" },
+        { "resource": "gbufferB" },
+        { "resource": "gbufferC" },
+        { "resource": "gbufferD" },
+        { "resource": "gbufferE" },
+        { "resource": "gbufferVelocity" },
+        { "resource": "gbufferF" },
+        { "resource": "sceneColorBase" },
+        { "resource": "sceneDepth" },
+        { "resource": "shadowMap" }
+    ],
+    "output": [
+        { "resource": "sceneColor", "loadOp": "clear", "storeOp": "store" }
+    ]
 }</code></pre>
 
                 <p>
@@ -1062,14 +1276,16 @@ outSceneColorBase = vec4(surface.emission, surface.opacity);</code></pre>
 
                 <h3>阶段 3：拆 shader 公共结构</h3>
                 <ul>
-                    <li>从 <code>pbr.frag</code> 拆出 <code>MaterialSurface</code>、材质采样、BRDF 与 lighting 函数。</li>
-                    <li>让现有 forward PBR 改用 <code>EvaluateMaterialSurface -> ShadeMaterialSurface</code>。</li>
+                    <li>从 <code>pbr.frag</code> 拆出 <code>common/shadingModel.glsl</code>、<code>engine/materialSurface.glsl</code>、<code>engine/forwardLighting.glsl</code>、<code>engine/materialDebugView.glsl</code> 和 <code>materialFunction/mf_pbrSurface.glsl</code>。</li>
+                    <li>让现有 forward PBR 改用 <code>MaterialPixel -> EvaluatePbrSurface -> ShadeForwardSurfaceDetailed</code>，debug view 通过 <code>ResolveMaterialDebugView</code> 封装。</li>
+                    <li><code>common/</code> 只保留通用基础设施，具体 PBR 参数、贴图和 static macros 留在 <code>materialFunction/</code>。</li>
                     <li>确认输出画面与拆分前一致。</li>
                 </ul>
 
                 <h3>阶段 4：在现有 shader pair 内建立材质入口</h3>
                 <ul>
-                    <li>定义 <code>MaterialVertexContext</code>、<code>MaterialPixelContext</code>、<code>MaterialSurface</code> 的稳定 public 字段。</li>
+                    <li>定义 <code>MaterialVertexContext</code>、<code>MaterialVaryings</code>、<code>MaterialPixelContext</code>、<code>MaterialSurface</code> 的稳定 public 字段。</li>
+                    <li><code>MaterialVaryings</code> 作为 v2f 结构体从 vertex stage 传到 fragment stage；<code>CreateMaterialPixelContext</code> 必须接收完整 <code>v2f</code>，再统一展开 world position、normal、tangent、uv、vertex color。</li>
                     <li>先在现有 <code>pbr.vert</code> / <code>pbr.frag</code> 内部引入 <code>MaterialVertex</code> 和 <code>MaterialPixel</code>，但保留原有 shader 文件作为真实编译单元。</li>
                     <li>确认 <code>MI_*.json</code> 通过 <code>M_*.json</code> 间接选择这对 shader，参数和贴图仍由反射校验；若存在 <code>renderStateOverrides.shadingModel</code>，它只影响 EffectiveMaterial、variant key、pipeline key 和 GBuffer <code>ShadingModelID</code>。</li>
                     <li>后续再按需要新增 forward / gbuffer 模板；模板系统不是第一刀的前置条件。</li>
@@ -1078,24 +1294,28 @@ outSceneColorBase = vec4(surface.emission, surface.opacity);</code></pre>
                 <h3>阶段 5：写 GBuffer pass</h3>
                 <ul>
                     <li>新增完整 GBuffer resources：A/B/C/D/E、Velocity、F、sceneColorBase、sceneDepth。</li>
-                    <li>把 geometry pass 输出改成多个 render targets。</li>
+                    <li>把 geometry pass 输出改成 8 个 color render targets + depth，默认 <code>needMsaa: false</code>，避免直接硬件 resolve 材质属性。</li>
                     <li>新增 <code>gbufferCodec.glsl</code>，稳定完整 layout location、packed fields 和默认值。</li>
-                    <li>增加 GBuffer debug view，先不接 deferred lighting，但所有 attachment 都必须能观察或确认默认值。</li>
+                    <li>GBuffer 可视化检查交给 RenderDoc，工程主链不额外保留 GBuffer debug pass。</li>
+                    <li>Pipeline 创建需要知道当前 render pass 的 color attachment 数量，MRT pass 不能继续只创建 1 个 color blend attachment。</li>
                 </ul>
 
                 <h3>阶段 6：接入 deferredLighting</h3>
                 <ul>
                     <li>新增 fullscreen <code>deferredLighting.frag</code>。</li>
                     <li>读取完整 GBuffer + depth，重建 world position。</li>
-                    <li>复用 <code>ShadeMaterialSurface</code> 计算 DefaultLit。</li>
-                    <li>Unlit 直接输出 <code>baseColor + sceneColorBase/emissive</code>。</li>
+                    <li>复用同一套 <code>MaterialSurface</code> 语义和 BRDF/lighting 基础函数，新增 deferred 路径的 <code>ShadeDeferredSurface</code> 或等价 dispatch，让 forward/deferred 的入口命名保持清晰。</li>
+                    <li>Unlit 直接输出 <code>baseColor + sceneColorBase/emissiveColor</code>。</li>
                 </ul>
 
                 <h3>阶段 7：恢复现有效果</h3>
                 <ul>
                     <li>阴影接入 deferred lighting。</li>
                     <li>IBL 接入 deferred lighting。</li>
-                    <li>sky / postProcess / bloom / toneMapping 链路保持可用。</li>
+                    <li><code>shadowMap</code> 作为 <code>deferredLighting</code> 的 <code>Set 3 binding 9</code> 输入；GBuffer + depth 继续固定占用 <code>binding 0..8</code>。</li>
+                    <li>IBL 继续走 <code>Set 0</code> 全局资源：<code>prefilteredEnvironmentCube</code> 与 <code>brdfLut</code>。</li>
+                    <li>新增 <code>PassBarrier::PrepareForPass</code>，在 pass 开始前按 input/output 自动处理 attachment 与 sampled input 之间的 layout transition。</li>
+                    <li>sky / bloom / toneMapping 链路保持可用；post-process 只在有真实效果时作为可选 pass 接回。</li>
                     <li>debug console 中的 tone mapping、bloom 调参继续有效。</li>
                 </ul>
 
@@ -1105,6 +1325,16 @@ outSceneColorBase = vec4(surface.emission, surface.opacity);</code></pre>
                     <li><code>gbufferVelocity</code> 已经常驻，此阶段开始接入 previous frame matrix 和 motion vector。</li>
                     <li><code>gbufferE</code> 已经常驻，此阶段开始接入 lightmap / baked shadow / precomputed shadow factors。</li>
                     <li><code>gbufferF</code> 已经常驻，此阶段开始接入 anisotropy 和 world tangent。</li>
+                    <li><code>gbufferB.a</code> 的 high nibble 正式写入 <code>GBUFFER_HAS_CUSTOM_DATA_MASK</code>、<code>GBUFFER_HAS_PRECOMPUTED_SHADOW_MASK</code>、<code>GBUFFER_HAS_VELOCITY_MASK</code>、<code>GBUFFER_HAS_ANISOTROPY_MASK</code>。</li>
+                    <li>PBR 第一版通过 static macros 和参数启用 optional 数据：<code>USE_CUSTOM_DATA</code>、<code>USE_PRECOMPUTED_SHADOW_FACTORS</code>、<code>USE_ANISOTROPY</code>。</li>
+                </ul>
+
+                <h3>阶段 9：拆出 forward transparent shader 输出壳</h3>
+                <ul>
+                    <li><code>pbr.frag</code> 不再固定写 GBuffer，而是通过 <code>materialPass.glsl</code> 根据 <code>RENDER_MODE_*</code> 宏做编译期分流。</li>
+                    <li>Opaque / OpaqueClip 变体 include <code>materialGBufferOutput.glsl</code>，继续写 GBufferA/B/C/D/E、Velocity、F 和 <code>sceneColorBase</code>。</li>
+                    <li>TransparentAlphaBlend / TransparentAdditive 变体 include <code>materialForwardOutput.glsl</code>，直接调用 forward lighting，输出单一 <code>sceneColor</code>，供后续 <code>forwardTransparent</code> pass blend。</li>
+                    <li>forward transparent 的 <code>shadowMap</code> 是当前 pass 输入，约定由该 forward 变体声明为 <code>Set 3 binding 0</code>；它不占用 deferredLighting 的 GBuffer 输入绑定。</li>
                 </ul>
             </section>
 
@@ -1123,8 +1353,8 @@ outSceneColorBase = vec4(surface.emission, surface.opacity);</code></pre>
                             <td><span class="ok">通过</span>：拆 shader 公共层后，现有 PBR 视觉基本不变。</td>
                         </tr>
                         <tr>
-                            <td>GBuffer debug view</td>
-                            <td><span class="ok">通过</span>：GBufferA/B/C/D/E、Velocity、F、depth、sceneColorBase 均可单独观察或确认默认值。</td>
+                            <td>RenderDoc GBuffer inspection</td>
+                            <td><span class="ok">通过</span>：GBufferA/B/C/D/E、Velocity、F、depth、sceneColorBase 均可在 RenderDoc 中单独观察或确认默认值。</td>
                         </tr>
                         <tr>
                             <td>Authoring facade</td>
@@ -1132,7 +1362,7 @@ outSceneColorBase = vec4(surface.emission, surface.opacity);</code></pre>
                         </tr>
                         <tr>
                             <td>DefaultLit deferred lighting</td>
-                            <td><span class="ok">通过</span>：直接光、阴影、IBL 与 forward 版本趋势一致。</td>
+                            <td><span class="ok">通过</span>：直接光、shadowMap 阴影、diffuse IBL 和 specular IBL 都在 deferredLighting 中合成。</td>
                         </tr>
                         <tr>
                             <td>Unlit shading model</td>
@@ -1140,7 +1370,19 @@ outSceneColorBase = vec4(surface.emission, surface.opacity);</code></pre>
                         </tr>
                         <tr>
                             <td>后处理链</td>
-                            <td><span class="ok">通过</span>：sky、postProcess、bloom、toneMapping 不因 deferred 改造断链。</td>
+                            <td><span class="ok">通过</span>：sky、bloom、toneMapping 不因 deferred 改造断链；copy-only postProcess 不再作为必需中间 pass。</td>
+                        </tr>
+                        <tr>
+                            <td>PassBarrier</td>
+                            <td><span class="ok">通过</span>：pass 前资源准备已从 <code>RenderSystem</code> 抽离，按 RenderGraph input/output 自动判断 sampled 与 attachment layout 转换。</td>
+                        </tr>
+                        <tr>
+                            <td>Optional GBuffer 数据</td>
+                            <td><span class="ok">通过</span>：GBufferD/E/F、Velocity 和 <code>SelectiveOutputMask</code> 都有明确写入路径；RenderDoc 可直接检查 packed flags 与各 attachment。</td>
+                        </tr>
+                        <tr>
+                            <td>Forward transparent shader 变体</td>
+                            <td><span class="ok">通过</span>：<code>pbr.frag</code> 已按 render mode 编译期切换 GBuffer / forward 输出壳；transparent 变体只输出 <code>sceneColor</code> 并声明自己的 <code>Set 3 binding 0 shadowMap</code>。</td>
                         </tr>
                         <tr>
                             <td>RenderDoc / Nsight 检查</td>

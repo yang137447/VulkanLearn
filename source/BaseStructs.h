@@ -34,15 +34,18 @@ struct alignas(16) UBOGlobal
     int debugViewMode = 0;
     float environmentIntensity = 1.0f;
     alignas(16) std::array<Eigen::Vector4f, 9> environmentSH{};
+    Eigen::Matrix4f previousViewProjection = Eigen::Matrix4f::Identity();
 };
 
 static_assert(offsetof(UBOGlobal, debugViewMode) == 460, "UBOGlobal debugViewMode must match GLSL std140 layout");
 static_assert(offsetof(UBOGlobal, environmentIntensity) == 464, "UBOGlobal environmentIntensity must match GLSL std140 layout");
 static_assert(offsetof(UBOGlobal, environmentSH) == 480, "UBOGlobal environmentSH must match GLSL std140 layout");
+static_assert(offsetof(UBOGlobal, previousViewProjection) == 624, "UBOGlobal previousViewProjection must match GLSL std140 layout");
 
 struct alignas(16) UBOModel
 {
     Eigen::Matrix4f model;
+    Eigen::Matrix4f previousModel;
 };
 
 struct alignas(4) LightSSBOHeader

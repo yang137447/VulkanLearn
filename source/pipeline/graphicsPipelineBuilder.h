@@ -31,6 +31,7 @@ struct GraphicsPipelineBuildDesc
     const std::vector<vk::VertexInputAttributeDescription>& vertexInputAttributeDescriptions;
     const std::string& pipelineName;
     vk::SampleCountFlagBits sampleCount;
+    uint32_t colorAttachmentCount;
     GraphicsPipelineStateDesc pipelineStateDesc;
     bool bIsShadowPass;
 };

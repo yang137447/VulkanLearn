@@ -1,0 +1,12 @@
+{
+    "name": "M_deferredLighting",
+    "type": "material",
+    "shadingModel": "Unlit",
+    "renderStates": {
+        "renderMode": "Opaque",
+        "cullMode": "Back"
+    },
+    "macros": {},
+    "parameters": {},
+    "textures": {}
+}

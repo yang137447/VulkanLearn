@@ -15,6 +15,7 @@
 #include "sceneLoader.h"
 #include "lightManager.h"
 #include "renderGraph.h"
+#include "passBarrier.h"
 #include "shaderReflect.h"
 #include "profiler.h"
 #include "vulkanDebug.h"
@@ -184,6 +185,14 @@ void RenderSystem::Render()
         const auto& renderPass = renderGraph.GetRenderpasses().at(renderPassName);
         
         VulkanDebug::ScopedRegion passRegion(commandBuffer, renderPassName, VulkanDebug::DebugCategory::ePass);
+
+        // 在 beginRenderPass 前，根据本 pass 的 input/output 声明准备资源 layout。
+        // 例如：geometry 写 GBuffer -> deferredLighting 采样 GBuffer；
+        //       deferredLighting 采样 sceneDepth -> sky load sceneDepth 继续深度测试。
+        {
+            PROFILE_SCOPE("Render:PrepareForPass");
+            PassBarrier::PrepareForPass(commandBuffer, renderGraph, passIndex, swapChainImageIndex);
+        }
 
         //TODO: 后续的shadow解决方案应该是生成专用的shadowshader以提高性能,当前先这样临时处理
         if (renderPassName == "shadow")
@@ -414,88 +423,6 @@ void RenderSystem::Render()
         }
         commandBuffer.endRenderPass();
 
-        // 添加Barrier, 确保pass之间的资源可见性（仅对后续会被采样的输出资源做 layout transition）
-        PROFILE_SCOPE("Render:PassBarriers");
-        enum class ResourceNextUse { None, Sampled, AttachmentWrite };
-        auto FindNextUse = [&](const std::string& resourceName) -> ResourceNextUse
-        {
-            for(size_t nextIndex = passIndex + 1; nextIndex < renderPassOrdered.size(); ++nextIndex)
-            {
-                const auto& nextPass = renderGraph.GetRenderpasses().at(renderPassOrdered[nextIndex]);
-                if (std::find(nextPass.inputResources.begin(), nextPass.inputResources.end(), resourceName) != nextPass.inputResources.end())
-                {
-                    return ResourceNextUse::Sampled;
-                }
-                if (std::find(nextPass.outputResources.begin(), nextPass.outputResources.end(), resourceName) != nextPass.outputResources.end())
-                {
-                    return ResourceNextUse::AttachmentWrite;
-                }
-            }
-            return ResourceNextUse::None;
-        };
-
-        auto& resolveMap = renderGraph.GetResourcesResolve();
-        for(const auto& resourceName : renderPass.outputResources)
-        {
-            if (resourceName == "swapChain") continue;
-
-            if (FindNextUse(resourceName) != ResourceNextUse::Sampled)
-            {
-                continue;
-            }
-
-            auto it = resolveMap.find(resourceName);
-            if (it == resolveMap.end())
-            {
-                continue;
-            }
-
-            auto& resource = it->second[swapChainImageIndex];
-            const bool bIsDepth = CommonFunction::IsDepthFormat(resource.format);
-
-            vk::ImageAspectFlags aspectMask = bIsDepth ? vk::ImageAspectFlagBits::eDepth : vk::ImageAspectFlagBits::eColor;
-            if (bIsDepth && CommonFunction::HasStencilComponent(resource.format))
-            {
-                aspectMask |= vk::ImageAspectFlagBits::eStencil;
-            }
-
-            vk::ImageMemoryBarrier imageBarrier;
-            imageBarrier
-                .setImage(resource.image)
-                .setSubresourceRange(vk::ImageSubresourceRange(aspectMask, 0, 1, 0, 1));
-
-            vk::PipelineStageFlags srcStage;
-            vk::PipelineStageFlags dstStage = vk::PipelineStageFlagBits::eFragmentShader;
-
-            if (bIsDepth)
-            {
-                imageBarrier
-                    .setSrcAccessMask(vk::AccessFlagBits::eDepthStencilAttachmentWrite)
-                    .setDstAccessMask(vk::AccessFlagBits::eShaderRead)
-                    .setOldLayout(vk::ImageLayout::eDepthStencilAttachmentOptimal)
-                    .setNewLayout(vk::ImageLayout::eDepthStencilReadOnlyOptimal);
-
-                srcStage = vk::PipelineStageFlagBits::eEarlyFragmentTests | vk::PipelineStageFlagBits::eLateFragmentTests;
-            }
-            else
-            {
-                imageBarrier
-                    .setSrcAccessMask(vk::AccessFlagBits::eColorAttachmentWrite)
-                    .setDstAccessMask(vk::AccessFlagBits::eShaderRead)
-                    .setOldLayout(vk::ImageLayout::eColorAttachmentOptimal)
-                    .setNewLayout(vk::ImageLayout::eShaderReadOnlyOptimal);
-
-                srcStage = vk::PipelineStageFlagBits::eColorAttachmentOutput;
-            }
-
-            commandBuffer.pipelineBarrier(
-                srcStage,
-                dstStage,
-                vk::DependencyFlagBits::eByRegion,
-                0, nullptr,
-                0, nullptr,
-                1, &imageBarrier);
-        }
     }
 
     // 结束渲染通道和Command Buffer记录
@@ -530,6 +457,8 @@ void RenderSystem::Render()
         throw std::runtime_error("Failed to present image");
     }
 
+    CapturePreviousFrameTransforms();
+
     // 更新帧索引
     currentFrame = currentFrame + 1;
 }
@@ -547,6 +476,9 @@ void RenderSystem::UpdateUBOGlobal(vk::CommandBuffer& commandBuffer)
     ubo.invProjection = ubo.projection.inverse();
     ubo.viewProjection = ubo.projection * ubo.view;
     ubo.invViewProjection = ubo.viewProjection.inverse();
+    // previousViewProjection 在第一帧还不存在时退回当前 VP，避免把“从单位矩阵到当前相机”
+    // 误写成 camera motion vector。optional 只存在于 CPU 侧，UBO 里仍然上传确定的 mat4。
+    ubo.previousViewProjection = previousViewProjection.value_or(ubo.viewProjection);
     ubo.lightViewProj = lightViewProj;
     ubo.cameraPosition = sceneLoader.GetCamera()->GetPosition();
     ubo.environmentSH = sceneLoader.GetEnvironmentSH();
@@ -745,6 +677,8 @@ void RenderSystem::UpdateUBOGlobalForShadow(vk::CommandBuffer& commandBuffer, ui
     ubo.invProjection = ubo.projection.inverse();
     ubo.viewProjection = ubo.projection * ubo.view;
     ubo.invViewProjection = ubo.viewProjection.inverse();
+    // Shadow pass 不写 velocity，这里把 previousViewProjection 设为当前值，保持 UBOGlobal 完整初始化。
+    ubo.previousViewProjection = ubo.viewProjection;
     lightViewProj = ubo.projection * ubo.view;
     ubo.lightViewProj = lightViewProj;
     ubo.environmentSH = sceneLoader.GetEnvironmentSH();
@@ -1022,16 +956,23 @@ void RenderSystem::UpdateUBOMaterialInstance(const std::shared_ptr<MaterialInsta
 
     // 查找 MaterialSetIndex 对应的 binding 0 的内存布局信息
     const auto& bindings = baseMaterial->GetRenderPipeline()->GetShaderBindings();
-    auto it = std::find_if(bindings.begin(), bindings.end(), [](const ShaderBinding& b) {
-        return b.set == MaterialSetIndex && b.binding == 0 && b.type == vk::DescriptorType::eUniformBuffer;
-    });
+    const ShaderBinding* uboBinding = nullptr;
+    for(const ShaderBinding& binding : bindings)
+    {
+        if(binding.set == MaterialSetIndex &&
+           binding.binding == 0 &&
+           binding.type == vk::DescriptorType::eUniformBuffer)
+        {
+            uboBinding = &binding;
+            break;
+        }
+    }
 
-    if (it == bindings.end()) return; // 该材质没有 UBO 参数
-    const ShaderBinding& uboBinding = *it;
+    if (uboBinding == nullptr) return; // 该材质没有 UBO 参数
 
     uint32_t offset = 0;
     // 严格按照 Shader 反射提取出来的 member 顺序写入内存
-    for (const auto& memberName : uboBinding.memberNames)
+    for (const auto& memberName : uboBinding->memberNames)
     {
         auto paramIt = parameters.find(memberName);
         if (paramIt == parameters.end())
@@ -1040,10 +981,10 @@ void RenderSystem::UpdateUBOMaterialInstance(const std::shared_ptr<MaterialInsta
             // 可以通过反射的 members 大小来移动
             // 这里为了简单，我们假设如果 JSON 里不配，直接根据反射里的 member size 填 0 或者跳过
             // 找到对应 memberName 在 binding 里的索引
-            auto memberIndex = std::distance(uboBinding.memberNames.begin(), std::find(uboBinding.memberNames.begin(), uboBinding.memberNames.end(), memberName));
-            if (memberIndex < uboBinding.members.size())
+            auto memberIndex = std::distance(uboBinding->memberNames.begin(), std::find(uboBinding->memberNames.begin(), uboBinding->memberNames.end(), memberName));
+            if (memberIndex < uboBinding->members.size())
             {
-                offset += uboBinding.members[memberIndex];
+                offset += uboBinding->members[memberIndex];
             }
             continue;
         }
@@ -1087,7 +1028,32 @@ void RenderSystem::UpdateUBOModel(const std::shared_ptr<SceneObject>& object)
 
     static UBOModel ubo;
     ubo.model = object->GetModelMatrix();
+    ubo.previousModel = object->GetPreviousModelMatrix();
     std::memcpy(object->GetUboModelMapped()[swapChainImageIndex], &ubo, sizeof(ubo));
+}
+
+void RenderSystem::CapturePreviousFrameTransforms()
+{
+    static const auto& sceneLoader = SceneLoader::GetInstance();
+    Camera& camera = *sceneLoader.GetCamera();
+    previousViewProjection = camera.GetProjectionMatrix() * camera.GetViewMatrix();
+
+    for(auto& [materialKey, shaderObjects] : hierarchyObjects)
+    {
+        for(auto& [materialInstanceName, objects] : shaderObjects)
+        {
+            for(auto& object : objects)
+            {
+                if(object.expired())
+                {
+                    continue;
+                }
+                auto objectPtr = object.lock();
+                objectPtr->UpdateModelMatrix();
+                objectPtr->SnapshotPreviousModelMatrix();
+            }
+        }
+    }
 }
 
 void RenderSystem::RenderInitialize()

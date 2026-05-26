@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <vector>
 #include "vulkan/vulkan.hpp"
 #include "pipelineBase.h"
@@ -18,6 +19,7 @@ public:
                     vk::RenderPass *renderPass,
                     const ShaderVariantKey& shaderVariantKey,
                     vk::SampleCountFlagBits sampleCount,
+                    uint32_t colorAttachmentCount,
                     const GraphicsPipelineStateDesc& pipelineStateDesc = {},
                     bool bIsShadowPass = false
                 );
@@ -51,6 +53,7 @@ private:
     vk::RenderPass* renderPass;
     vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties;
     vk::SampleCountFlagBits sampleCount;
+    uint32_t colorAttachmentCount = 1;
     GraphicsPipelineStateDesc pipelineStateDesc;
     bool bIsShadowPass;
 

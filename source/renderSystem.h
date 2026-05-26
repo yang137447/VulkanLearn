@@ -3,6 +3,7 @@
 #include <Eigen/Dense>
 #include <array>
 #include <memory>
+#include <optional>
 #include <vector>
 #include <unordered_map>
 #include <string>
@@ -37,6 +38,7 @@ private:
     void UpdateUBOGlobalForShadow(vk::CommandBuffer& commandBuffer, uint32_t PassSizeWidth, uint32_t PassSizeHeight);
     void UpdateUBOMaterialInstance(const std::shared_ptr<MaterialInstance>& materialInstance);
     void UpdateUBOModel(const std::shared_ptr<SceneObject>& object);
+    void CapturePreviousFrameTransforms();
     void RenderInitialize();
 
     void CreateUniformBuffers();
@@ -72,6 +74,7 @@ private:
     float environmentIntensity = 1.0f;
     
     Eigen::Matrix4f lightViewProj = Eigen::Matrix4f::Identity();
+    std::optional<Eigen::Matrix4f> previousViewProjection;
     Buffer uboGlobal;
     // 按基础材质对象分组： {materialKey, {materialInstance, [sceneObject]}}
     std::unordered_map<std::string, std::unordered_map<std::string, std::vector<std::weak_ptr<SceneObject>>>> hierarchyObjects;

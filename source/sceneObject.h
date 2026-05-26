@@ -1,6 +1,7 @@
 #pragma once
 #include "Eigen/Dense"
 #include <memory>
+#include <optional>
 #include <iomanip>
 #include <vulkan/vulkan.hpp>
 #include"baseStructs.h"
@@ -26,6 +27,8 @@ public:
     void SetTransform(Eigen::Vector3f& position, Eigen::Vector3f& rotation, Eigen::Vector3f& scale);
     void UpdateModelMatrix();
     inline const Eigen::Matrix4f& GetModelMatrix() const { return modelMatrix; } 
+    Eigen::Matrix4f GetPreviousModelMatrix() const;
+    void SnapshotPreviousModelMatrix();
 
 protected:
     Eigen::Vector3f position;
@@ -35,6 +38,7 @@ protected:
     std::string name;
 
     Eigen::Matrix4f modelMatrix;
+    std::optional<Eigen::Matrix4f> previousModelMatrix;
 };
 
 class DirectionalLight: public SceneNode {

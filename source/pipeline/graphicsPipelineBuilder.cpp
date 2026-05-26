@@ -36,39 +36,48 @@ GraphicsPipelineBuildResult GraphicsPipelineBuilder::Build(const GraphicsPipelin
         .setDepthBiasEnable(false)
         .setLineWidth(1.0f);
 
-    vk::PipelineColorBlendAttachmentState pipelineColorBlendAttachmentState[1];
-    pipelineColorBlendAttachmentState[0]
-        .setColorWriteMask(vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA)
-        .setBlendEnable(false)
-        .setColorBlendOp(vk::BlendOp::eAdd)
-        .setSrcColorBlendFactor(vk::BlendFactor::eOne)
-        .setDstColorBlendFactor(vk::BlendFactor::eZero)
-        .setAlphaBlendOp(vk::BlendOp::eAdd)
-        .setSrcAlphaBlendFactor(vk::BlendFactor::eOne)
-        .setDstAlphaBlendFactor(vk::BlendFactor::eZero);
+    std::vector<vk::PipelineColorBlendAttachmentState> pipelineColorBlendAttachmentStates(desc.colorAttachmentCount);
+    for (auto& attachmentState : pipelineColorBlendAttachmentStates)
+    {
+        attachmentState
+            .setColorWriteMask(vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA)
+            .setBlendEnable(false)
+            .setColorBlendOp(vk::BlendOp::eAdd)
+            .setSrcColorBlendFactor(vk::BlendFactor::eOne)
+            .setDstColorBlendFactor(vk::BlendFactor::eZero)
+            .setAlphaBlendOp(vk::BlendOp::eAdd)
+            .setSrcAlphaBlendFactor(vk::BlendFactor::eOne)
+            .setDstAlphaBlendFactor(vk::BlendFactor::eZero);
+    }
 
     if (desc.pipelineStateDesc.blendMode == GraphicsPipelineBlendMode::AlphaBlend)
     {
-        pipelineColorBlendAttachmentState[0]
-            .setBlendEnable(true)
-            .setSrcColorBlendFactor(vk::BlendFactor::eSrcAlpha)
-            .setDstColorBlendFactor(vk::BlendFactor::eOneMinusSrcAlpha)
-            .setSrcAlphaBlendFactor(vk::BlendFactor::eOne)
-            .setDstAlphaBlendFactor(vk::BlendFactor::eOneMinusSrcAlpha);
+        for (auto& attachmentState : pipelineColorBlendAttachmentStates)
+        {
+            attachmentState
+                .setBlendEnable(true)
+                .setSrcColorBlendFactor(vk::BlendFactor::eSrcAlpha)
+                .setDstColorBlendFactor(vk::BlendFactor::eOneMinusSrcAlpha)
+                .setSrcAlphaBlendFactor(vk::BlendFactor::eOne)
+                .setDstAlphaBlendFactor(vk::BlendFactor::eOneMinusSrcAlpha);
+        }
     }
     else if (desc.pipelineStateDesc.blendMode == GraphicsPipelineBlendMode::Additive)
     {
-        pipelineColorBlendAttachmentState[0]
-            .setBlendEnable(true)
-            .setSrcColorBlendFactor(vk::BlendFactor::eSrcAlpha)
-            .setDstColorBlendFactor(vk::BlendFactor::eOne)
-            .setSrcAlphaBlendFactor(vk::BlendFactor::eOne)
-            .setDstAlphaBlendFactor(vk::BlendFactor::eOne);
+        for (auto& attachmentState : pipelineColorBlendAttachmentStates)
+        {
+            attachmentState
+                .setBlendEnable(true)
+                .setSrcColorBlendFactor(vk::BlendFactor::eSrcAlpha)
+                .setDstColorBlendFactor(vk::BlendFactor::eOne)
+                .setSrcAlphaBlendFactor(vk::BlendFactor::eOne)
+                .setDstAlphaBlendFactor(vk::BlendFactor::eOne);
+        }
     }
 
     vk::PipelineColorBlendStateCreateInfo pipelineColorBlendStateCreateInfo;
     pipelineColorBlendStateCreateInfo
-        .setAttachments(pipelineColorBlendAttachmentState)
+        .setAttachments(pipelineColorBlendAttachmentStates)
         .setLogicOpEnable(false)
         .setLogicOp(vk::LogicOp::eCopy)
         .setBlendConstants({ 0.0f, 0.0f, 0.0f, 0.0f });

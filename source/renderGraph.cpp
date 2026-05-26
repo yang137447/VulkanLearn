@@ -190,11 +190,14 @@ void Renderpass::CreateDescriptorSets()
             inputCount = static_cast<uint32_t>(inputDescriptorImageInfos[0].size());
         }
         uint32_t descriptorCount = swapChainImageCount * MAX_DESCRIPTOR_SETS * inputCount;
-        vk::DescriptorPoolSize poolSize;
-        poolSize
-            .setType(vk::DescriptorType::eCombinedImageSampler)
-            .setDescriptorCount(descriptorCount);
-        descriptorPoolSizes.push_back(poolSize);
+        if (descriptorCount > 0)
+        {
+            vk::DescriptorPoolSize poolSize;
+            poolSize
+                .setType(vk::DescriptorType::eCombinedImageSampler)
+                .setDescriptorCount(descriptorCount);
+            descriptorPoolSizes.push_back(poolSize);
+        }
         
         // 分配空的 DescriptorSetLayout
         allocateLayouts.push_back(emptyDescriptorSetLayout);
@@ -520,6 +523,7 @@ Renderpass RenderGraph::CreateRenderpass(const nlohmann::json& passNode)
     renderpass.name = passNode["name"];
     bool bIsShadowPass = renderpass.name == "shadow";
     bool bUseMsaa = passNode.value("needMsaa", false);
+    renderpass.sampleCount = bUseMsaa ? CommonFunction::GetMsaaSampleCount() : vk::SampleCountFlagBits::e1;
 
     std::vector<std::string> inputResources = GetRenderpassInputResources(passNode["input"]);
     renderpass.inputResources = inputResources;
@@ -529,6 +533,17 @@ Renderpass RenderGraph::CreateRenderpass(const nlohmann::json& passNode)
         renderpass.outputResources.push_back(resourceName);
         renderpass.outputLoadOps[resourceName] = GetAttachmentLoadOp(outputNode.value("loadOp", std::string("clear")));
         renderpass.outputStoreOps[resourceName] = GetAttachmentStoreOp(outputNode.value("storeOp", std::string("store")));
+    }
+    for (const auto& resourceName : renderpass.outputResources)
+    {
+        auto resolveIt = resourcesResolve.find(resourceName);
+        if (resourceName == "swapChain" ||
+            (resolveIt != resourcesResolve.end() &&
+             !resolveIt->second.empty() &&
+             !CommonFunction::IsDepthFormat(resolveIt->second[0].format)))
+        {
+            ++renderpass.colorAttachmentCount;
+        }
     }
 
     vk::RenderPass vkRenderPass = CreateVkRenderPass(renderpass, bUseMsaa);

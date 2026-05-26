@@ -24,10 +24,9 @@ layout(std430, set = 0, binding = 1) readonly buffer UBOLight{
 layout(set = 0, binding = 2) uniform samplerCube prefilteredEnvironmentCube;
 layout(set = 0, binding = 3) uniform sampler2D brdfLut;
 
-// 绑定 0: 输入的ShadowMap
-layout (set = 3, binding = 0) uniform sampler2DShadow shadowMap;
-
-float CalculateShadow(mat4 lightViewProj, vec3 worldPos, float bias)
+// ShadowMap 属于“当前 pass 输入”，因此具体 binding 必须由 pass shader 自己声明。
+// 这样 common/lighting.glsl 不会偷偷占用 Set 3，deferredLighting 才能把 Set 3 用作 GBuffer 输入集合。
+float CalculateShadow(in sampler2DShadow inputShadowMap, mat4 lightViewProj, vec3 worldPos, float bias)
 {
     vec4 lightViewProjPos = lightViewProj * vec4(worldPos, 1.0);
     vec3 shadowNdc = lightViewProjPos.xyz / lightViewProjPos.w;
@@ -35,7 +34,7 @@ float CalculateShadow(mat4 lightViewProj, vec3 worldPos, float bias)
     float shadow = 1.0;
     if (shadowUv.x >= 0.0 && shadowUv.x <= 1.0 && shadowUv.y >= 0.0 && shadowUv.y <= 1.0 && shadowNdc.z >= 0.0 && shadowNdc.z <= 1.0)
     {
-        shadow = texture(shadowMap, vec3(shadowUv, shadowNdc.z - bias));
+        shadow = texture(inputShadowMap, vec3(shadowUv, shadowNdc.z - bias));
     }
     return shadow;
 }

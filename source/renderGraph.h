@@ -38,6 +38,8 @@ struct Renderpass
     std::vector<vk::Framebuffer> framebuffers;
     uint32_t width;
     uint32_t height;
+    uint32_t colorAttachmentCount = 0;
+    vk::SampleCountFlagBits sampleCount = vk::SampleCountFlagBits::e1;
     // pass 输入输出资源
     std::vector<std::string> inputResources;
     std::vector<std::string> outputResources;

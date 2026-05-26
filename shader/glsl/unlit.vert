@@ -1,6 +1,7 @@
 #version 450
 
 #include "common/commonUbo.glsl"
+#include "common/function.glsl"
 
 layout(set = 1, binding = 0) uniform UBOMIParamters{
     vec4 u_tintColor;
@@ -13,10 +14,15 @@ layout(location = 3) in vec2 inTexCoord;
 
 layout(location = 0) out vec3 fragColor;
 layout(location = 1) out vec2 fragTexCoord;
+layout(location = 2) out vec3 fragWorldPosition;
+layout(location = 3) out vec3 fragWorldNormal;
 
 void main()
 {
-    gl_Position = uboVP.projection * uboVP.view * uboM.model * vec4(inPosition, 1.0);
+    vec4 worldPosition = uboM.model * vec4(inPosition, 1.0);
+    gl_Position = uboVP.projection * uboVP.view * worldPosition;
     fragColor = mix(inColor, u_tintColor.rgb, u_tintColor.a); // 使用传入的颜色
     fragTexCoord = inTexCoord; // 使用传入的纹理坐标
+    fragWorldPosition = worldPosition.xyz;
+    fragWorldNormal = GetNormal_WS(uboM.model, inNormal);
 }

@@ -90,6 +90,13 @@ void SceneNode::SetTransform(Eigen::Vector3f& position, Eigen::Vector3f& rotatio
         0.0f, 0.0f, 0.0f, 1.0f;
 
     modelMatrix = translationMatrix * rotationMatrix * scaleMatrix;
+    if(!previousModelMatrix.has_value())
+    {
+        // Scene load 时第一次 SetTransform 需要把 previous 初始化到当前矩阵，
+        // 避免第一帧把“从单位矩阵移动到摆放位置”误写成 motion vector。
+        // 后续每帧的 previous 由 RenderSystem::CapturePreviousFrameTransforms 维护。
+        previousModelMatrix = modelMatrix;
+    }
 }
 
 void SceneNode::UpdateModelMatrix()
@@ -110,6 +117,18 @@ void SceneNode::UpdateModelMatrix()
         0.0f, 0.0f, 0.0f, 1.0f;
 
     modelMatrix = translationMatrix * rotationMatrix * scaleMatrix;
+}
+
+Eigen::Matrix4f SceneNode::GetPreviousModelMatrix() const
+{
+    // UBOModel.previousModel 必须始终是一个确定矩阵。
+    // optional 只表达 CPU 侧“还没有历史帧”的状态；首次上传时退回当前 model，避免假 motion vector。
+    return previousModelMatrix.value_or(modelMatrix);
+}
+
+void SceneNode::SnapshotPreviousModelMatrix()
+{
+    previousModelMatrix = modelMatrix;
 }
 
 void DirectionalLight::SetColor(Eigen::Vector3f& color)

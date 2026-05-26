@@ -2,17 +2,41 @@
 #define VL_ENGINE_MATERIAL_DEBUG_VIEW_GLSL
 
 #include "../common/commonUbo.glsl"
-#include "forwardLighting.glsl"
 #include "materialSurface.glsl"
+
+struct MaterialDebugLightingData
+{
+    float shadow;
+    vec3 directLighting;
+    vec3 indirectDiffuse;
+    vec3 indirectSpecular;
+};
+
+MaterialDebugLightingData CreateMaterialDebugLightingData(
+    float shadow,
+    vec3 directLighting,
+    vec3 indirectDiffuse,
+    vec3 indirectSpecular)
+{
+    MaterialDebugLightingData data;
+    data.shadow = shadow;
+    data.directLighting = directLighting;
+    data.indirectDiffuse = indirectDiffuse;
+    data.indirectSpecular = indirectSpecular;
+    return data;
+}
 
 float MaterialDebugViewModeMask(int mode)
 {
     return 1.0 - min(abs(float(uboVP.debugViewMode - mode)), 1.0);
 }
 
+// Debug view 只依赖材质表面和一份中性的 lighting 调试数据。
+// Forward / Deferred 可以分别把自己的 lighting result 转成 MaterialDebugLightingData，
+// 这样 debug view 不需要 include forwardLighting 或 deferredLighting，避免路径互相缠住。
 vec4 ResolveMaterialDebugView(
     in MaterialSurface surface,
-    in ForwardLightingResult lighting,
+    in MaterialDebugLightingData lighting,
     in vec4 defaultColor)
 {
 #if defined(ENABLE_DEBUG_VIEW)

@@ -23,6 +23,8 @@ void MaterialVertex(inout MaterialVertexContext vertex)
 
     // 标准 MVP 变换，输出裁剪空间位置。
     vertex.vertexOutput.clipPosition = uboVP.projection * uboVP.view * modelMatrix * vec4(localPosition, 1.0);
+    // velocity 需要同一顶点的上一帧裁剪空间位置：上一帧 VP 来自全局 UBO，上一帧 model 来自对象 UBO。
+    vertex.vertexOutput.previousClipPosition = uboVP.previousViewProjection * uboM.previousModel * vec4(localPosition, 1.0);
 
     // tintColor 当前仍作为 baseColor 的额外乘子使用，保持拆分前的材质调色行为。
     vertex.vertexOutput.vertexColor = u_tintColor.rgb;

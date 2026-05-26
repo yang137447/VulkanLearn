@@ -10,7 +10,10 @@
         "USE_ALBEDO_MAP": 0,
         "USE_NORMAL_MAP": 0,
         "USE_PBR_MAP": 0,
-        "USE_EMISSION_MAP": 0
+        "USE_EMISSION_MAP": 0,
+        "USE_CUSTOM_DATA": 0,
+        "USE_PRECOMPUTED_SHADOW_FACTORS": 0,
+        "USE_ANISOTROPY": 0
     },
     "parameters": {
         "u_tintColor": {
@@ -24,6 +27,18 @@
         "u_emissiveStrength": {
             "type": "float",
             "default": 1.0
+        },
+        "u_customData": {
+            "type": "vec4",
+            "default": [0.0, 0.0, 0.0, 0.0]
+        },
+        "u_precomputedShadowFactors": {
+            "type": "vec4",
+            "default": [1.0, 1.0, 1.0, 1.0]
+        },
+        "u_anisotropy": {
+            "type": "float",
+            "default": 0.0
         }
     },
     "textures": {

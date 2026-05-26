@@ -17,6 +17,7 @@ struct MaterialVertexOutput
 {
     // clipPosition 最终写入 gl_Position；world* 字段传给片元阶段继续做材质采样和光照。
     vec4 clipPosition;
+    vec4 previousClipPosition;
     vec3 worldPosition;
     vec3 worldNormal;
     vec3 vertexColor;
@@ -35,6 +36,8 @@ struct MaterialVertexContext
 struct MaterialVaryings
 {
     // Vertex -> Fragment 的稳定插值边界。它只承载片元材质求值需要的数据。
+    vec4 clipPosition;
+    vec4 previousClipPosition;
     vec3 worldPosition;
     vec3 worldNormal;
     vec3 vertexColor;
@@ -45,6 +48,8 @@ struct MaterialVaryings
 struct MaterialPixelContext
 {
     // 片元入口只保存材质求值需要的插值数据；lighting / GBuffer 决策不放在这里。
+    vec4 clipPosition;
+    vec4 previousClipPosition;
     vec3 worldPosition;
     vec3 worldNormal;
     vec3 vertexColor;
@@ -55,6 +60,8 @@ struct MaterialPixelContext
 MaterialVaryings CreateMaterialVaryings(in MaterialVertexOutput vertexOutput)
 {
     MaterialVaryings varyings;
+    varyings.clipPosition = vertexOutput.clipPosition;
+    varyings.previousClipPosition = vertexOutput.previousClipPosition;
     varyings.worldPosition = vertexOutput.worldPosition;
     varyings.worldNormal = vertexOutput.worldNormal;
     varyings.vertexColor = vertexOutput.vertexColor;
@@ -66,6 +73,8 @@ MaterialVaryings CreateMaterialVaryings(in MaterialVertexOutput vertexOutput)
 MaterialPixelContext CreateMaterialPixelContext(in MaterialVaryings varyings)
 {
     MaterialPixelContext pixel;
+    pixel.clipPosition = varyings.clipPosition;
+    pixel.previousClipPosition = varyings.previousClipPosition;
     pixel.worldPosition = varyings.worldPosition;
     pixel.worldNormal = varyings.worldNormal;
     pixel.vertexColor = varyings.vertexColor;

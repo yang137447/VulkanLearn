@@ -14,7 +14,11 @@ struct MaterialSurface
     float metallic;
     float ambientOcclusion;
     uint shadingModel;
+    uint selectiveOutputMask;
     vec4 customData;
+    vec4 precomputedShadowFactors;
+    vec4 worldTangent;
+    float anisotropy;
 };
 
 MaterialSurface CreateDefaultMaterialSurface()
@@ -29,7 +33,11 @@ MaterialSurface CreateDefaultMaterialSurface()
     surface.metallic = 0.0;
     surface.ambientOcclusion = 1.0;
     surface.shadingModel = SHADING_MODEL_DEFAULT_LIT;
+    surface.selectiveOutputMask = 0u;
     surface.customData = vec4(0.0);
+    surface.precomputedShadowFactors = vec4(1.0);
+    surface.worldTangent = vec4(1.0, 0.0, 0.0, 1.0);
+    surface.anisotropy = 0.0;
     return surface;
 }
 

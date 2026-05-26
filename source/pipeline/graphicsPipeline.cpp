@@ -12,7 +12,7 @@
 #include "../vulkanDebug.h"
 #include "../shaderCompiler.h"
 
-GraphicsPipeline::GraphicsPipeline(vk::Device *device, vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties, vk::RenderPass* renderPass, const ShaderVariantKey& shaderVariantKey, vk::SampleCountFlagBits sampleCount, const GraphicsPipelineStateDesc& pipelineStateDesc, bool bIsShadowPass)
+GraphicsPipeline::GraphicsPipeline(vk::Device *device, vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties, vk::RenderPass* renderPass, const ShaderVariantKey& shaderVariantKey, vk::SampleCountFlagBits sampleCount, uint32_t colorAttachmentCount, const GraphicsPipelineStateDesc& pipelineStateDesc, bool bIsShadowPass)
 {
     PROFILE_FUNCTION();
     this->device = device;
@@ -20,6 +20,7 @@ GraphicsPipeline::GraphicsPipeline(vk::Device *device, vk::PhysicalDeviceMemoryP
     this->physicalDeviceMemoryProperties = physicalDeviceMemoryProperties;
     this->shaderVariantKey = shaderVariantKey;
     this->sampleCount = sampleCount;
+    this->colorAttachmentCount = colorAttachmentCount;
     this->pipelineStateDesc = pipelineStateDesc;
     this->bIsShadowPass = bIsShadowPass;
 
@@ -128,6 +129,7 @@ void GraphicsPipeline::CreateGraphicsPipeline()
         vertexInputAttributeDescriptions,
         shaderVariantKey.GetDisplayName(),
         sampleCount,
+        colorAttachmentCount,
         pipelineStateDesc,
         bIsShadowPass
     };

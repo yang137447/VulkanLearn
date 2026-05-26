@@ -170,7 +170,8 @@ void SceneLoader::LoadMeshObject(const nlohmann::basic_json<>& node)
 
     // 加载材质
     std::string materialInstancePath = meshObjectJson["materialInstancePath"];
-    std::shared_ptr<MaterialInstance> materialInstance = LoadMaterialInstance(materialInstancePath, CommonFunction::GetMsaaSampleCount());
+    const auto& geometryPass = renderGraph.GetRenderpasses().at("geometry");
+    std::shared_ptr<MaterialInstance> materialInstance = LoadMaterialInstance(materialInstancePath, geometryPass.sampleCount);
     
     // 创建场景物体
     std::string sceneObjectName = node["name"];
@@ -312,7 +313,6 @@ void SceneLoader::LoadPassMaterial()
         std::string passName = passJson["name"];
         std::string materialInstancePath = passJson["materialInstancePath"];
         
-        bool bNeedMsaa = passJson.value("needMsaa", false);
         GraphicsPipelineStateDesc pipelineStateDesc;
         if (passJson.contains("pipelineState"))
         {
@@ -324,7 +324,8 @@ void SceneLoader::LoadPassMaterial()
         }
 
         // 如果当前 shaderName 对应的材质尚未加载，则新建并缓存
-        std::shared_ptr<MaterialInstance> materialInstance = LoadMaterialInstance(materialInstancePath, bNeedMsaa ? CommonFunction::GetMsaaSampleCount() : vk::SampleCountFlagBits::e1, passName, pipelineStateDesc);
+        const auto& renderPass = renderGraph.GetRenderpasses().at(passName);
+        std::shared_ptr<MaterialInstance> materialInstance = LoadMaterialInstance(materialInstancePath, renderPass.sampleCount, passName, pipelineStateDesc);
         
         renderGraph.GetRenderpasses()[passName.data()].materialInstance = materialInstance;
     }
@@ -360,6 +361,7 @@ std::shared_ptr<MaterialInstance> SceneLoader::LoadMaterialInstance(const std::s
             loadPlan.shaderVariantKey,
             loadPlan.materialKey,
             sampleCount,
+            renderGraph.GetRenderpasses()[passName.data()].colorAttachmentCount,
             loadPlan.pipelineStateDesc,
             loadPlan.bIsShadowPass
         );

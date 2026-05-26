@@ -62,14 +62,63 @@
             "usage": ["colorAttachment", "present"]
         },
         {
-            "name": "offscreenColor",
+            "name": "sceneColor",
             "format": "R16G16B16A16_SFLOAT",
             "widthScale": 1.0,
             "heightScale": 1.0,
             "usage": ["colorAttachment", "sampled"]
         },
         {
-            "name": "sceneColor",
+            "name": "gbufferA",
+            "format": "R16G16B16A16_SFLOAT",
+            "widthScale": 1.0,
+            "heightScale": 1.0,
+            "usage": ["colorAttachment", "sampled"]
+        },
+        {
+            "name": "gbufferB",
+            "format": "R16G16B16A16_SFLOAT",
+            "widthScale": 1.0,
+            "heightScale": 1.0,
+            "usage": ["colorAttachment", "sampled"]
+        },
+        {
+            "name": "gbufferC",
+            "format": "R16G16B16A16_SFLOAT",
+            "widthScale": 1.0,
+            "heightScale": 1.0,
+            "usage": ["colorAttachment", "sampled"]
+        },
+        {
+            "name": "gbufferD",
+            "format": "R16G16B16A16_SFLOAT",
+            "widthScale": 1.0,
+            "heightScale": 1.0,
+            "usage": ["colorAttachment", "sampled"]
+        },
+        {
+            "name": "gbufferE",
+            "format": "R16G16B16A16_SFLOAT",
+            "widthScale": 1.0,
+            "heightScale": 1.0,
+            "usage": ["colorAttachment", "sampled"]
+        },
+        {
+            "name": "gbufferVelocity",
+            "format": "R16G16B16A16_SFLOAT",
+            "widthScale": 1.0,
+            "heightScale": 1.0,
+            "usage": ["colorAttachment", "sampled"]
+        },
+        {
+            "name": "gbufferF",
+            "format": "R16G16B16A16_SFLOAT",
+            "widthScale": 1.0,
+            "heightScale": 1.0,
+            "usage": ["colorAttachment", "sampled"]
+        },
+        {
+            "name": "sceneColorBase",
             "format": "R16G16B16A16_SFLOAT",
             "widthScale": 1.0,
             "heightScale": 1.0,
@@ -156,7 +205,7 @@
         },
         {
             "name": "geometry",
-            "needMsaa": true,
+            "needMsaa": false,
             "pipelineState": {
                 "useVertexInput": true,
                 "depthTestEnable": true,
@@ -164,18 +213,101 @@
                 "depthCompareOp": "less"
             },
             "input": [
+            ],
+            "output":[
+                {
+                    "resource": "gbufferA",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                },
+                {
+                    "resource": "gbufferB",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                },
+                {
+                    "resource": "gbufferC",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                },
+                {
+                    "resource": "gbufferD",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                },
+                {
+                    "resource": "gbufferE",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                },
+                {
+                    "resource": "gbufferVelocity",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                },
+                {
+                    "resource": "gbufferF",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                },
+                {
+                    "resource": "sceneColorBase",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                },
+                {
+                    "resource": "sceneDepth",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
+            "name": "deferredLighting",
+            "needCreateMaterial": true,
+            "materialInstancePath": "materials/pass/MI_deferredLighting.json",
+            "bIsPostProcess": true,
+            "pipelineState": {
+                "useVertexInput": false,
+                "depthTestEnable": false,
+                "depthWriteEnable": false,
+                "depthCompareOp": "less"
+            },
+            "input": [
+                {
+                    "resource": "gbufferA"
+                },
+                {
+                    "resource": "gbufferB"
+                },
+                {
+                    "resource": "gbufferC"
+                },
+                {
+                    "resource": "gbufferD"
+                },
+                {
+                    "resource": "gbufferE"
+                },
+                {
+                    "resource": "gbufferVelocity"
+                },
+                {
+                    "resource": "gbufferF"
+                },
+                {
+                    "resource": "sceneColorBase"
+                },
+                {
+                    "resource": "sceneDepth"
+                },
                 {
                     "resource": "shadowMap"
                 }
             ],
             "output":[
                 {
-                    "resource": "offscreenColor",
-                    "loadOp": "clear",
-                    "storeOp": "store"
-                },
-                {
-                    "resource": "sceneDepth",
+                    "resource": "sceneColor",
                     "loadOp": "clear",
                     "storeOp": "store"
                 }
@@ -195,7 +327,7 @@
             "input": [],
             "output":[
                 {
-                    "resource": "offscreenColor",
+                    "resource": "sceneColor",
                     "loadOp": "load",
                     "storeOp": "store"
                 },
@@ -206,31 +338,6 @@
                 }
             ]
         },
-        {
-            "name": "postProcess",
-            "needCreateMaterial": true,
-            "materialInstancePath": "materials/pass/MI_postProcess.json",
-            "bIsPostProcess": true,
-            "pipelineState": {
-                "useVertexInput": false,
-                "depthTestEnable": false,
-                "depthWriteEnable": false,
-                "depthCompareOp": "less"
-            },
-            "input": [
-                {
-                    "resource": "offscreenColor"
-                }
-            ],
-            "output":[
-                {
-                    "resource": "sceneColor",
-                    "loadOp": "clear",
-                    "storeOp": "store"
-                }
-            ]
-        }
-        ,
         {
             "name": "bloomPrefilter",
             "needCreateMaterial": true,

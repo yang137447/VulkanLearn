@@ -13,10 +13,12 @@ layout(std140, set = 0, binding = 0) uniform UBOGlobal{
     int debugViewMode;
     float environmentIntensity;
     vec4 environmentSH[9];
+    mat4 previousViewProjection;
 } uboVP;
 
 layout(std140, set = 2, binding = 0) uniform UBOModel{
     mat4 model;
+    mat4 previousModel;
 } uboM;
 
 #endif

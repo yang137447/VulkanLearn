@@ -325,27 +325,27 @@ namespace CommonFunction
         return projectPath.value();
     }
 
-    inline std::string GetExternalResourcesPath()
+    inline std::string GetResourcePath()
     {
-        static std::optional<std::string> externalResourcesPath;
-        if (externalResourcesPath.has_value())
+        static std::optional<std::string> resourcePath;
+        if (resourcePath.has_value())
         {
-            return externalResourcesPath.value();
+            return resourcePath.value();
         }
 
-        externalResourcesPath =
-            (std::filesystem::path(GetProjectPath()).parent_path() / "VulkanLearnAssets" / "resources").string();
-        return externalResourcesPath.value();
+        const nlohmann::json& configJson = InitConfigJson();
+        if (!configJson.contains("resourcePath") || !configJson["resourcePath"].is_string())
+        {
+            throw std::runtime_error("config/config.json must define string field \"resourcePath\"");
+        }
+
+        resourcePath = configJson["resourcePath"].get<std::string>();
+        return resourcePath.value();
     }
 
     inline std::string Path(const std::string& path)
     {
-        // Prefer shared external assets first, but keep repo-local resources as a fallback for local development/debug.
-        std::string fullPath = (std::filesystem::path(GetExternalResourcesPath()) / path).string();
-        if( !std::filesystem::exists(fullPath) )
-        {
-            fullPath = (std::filesystem::path(GetProjectPath()) / "resources" / path).string();
-        }
+        std::string fullPath = (std::filesystem::path(GetResourcePath()) / path).string();
         if( !std::filesystem::exists(fullPath) )
         {
             fullPath = GetProjectPath() + "/shader/spv/" + path;

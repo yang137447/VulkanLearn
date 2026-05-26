@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <cstdint>
 #include <string>
 #include <unordered_map>
 #include "vulkan/vulkan.hpp"
@@ -19,6 +20,7 @@ struct GraphicsPipelineKey
     vk::RenderPass* renderPass;
     ShaderVariantKey shaderVariantKey;
     vk::SampleCountFlagBits sampleCount;
+    uint32_t colorAttachmentCount;
     GraphicsPipelineStateDesc pipelineStateDesc;
     bool bIsShadowPass;
 
@@ -27,6 +29,7 @@ struct GraphicsPipelineKey
         return renderPass == other.renderPass &&
             shaderVariantKey == other.shaderVariantKey &&
             sampleCount == other.sampleCount &&
+            colorAttachmentCount == other.colorAttachmentCount &&
             pipelineStateDesc.bUseVertexInput == other.pipelineStateDesc.bUseVertexInput &&
             pipelineStateDesc.bDepthTestEnable == other.pipelineStateDesc.bDepthTestEnable &&
             pipelineStateDesc.bDepthWriteEnable == other.pipelineStateDesc.bDepthWriteEnable &&
@@ -52,6 +55,7 @@ public:
         vk::RenderPass* renderPass,
         const ShaderVariantKey& shaderVariantKey,
         vk::SampleCountFlagBits sampleCount,
+        uint32_t colorAttachmentCount,
         const GraphicsPipelineStateDesc& pipelineStateDesc,
         bool bIsShadowPass);
 private:

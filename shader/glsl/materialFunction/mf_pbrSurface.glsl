@@ -12,6 +12,7 @@ MaterialSurface EvaluatePbrSurface(in MaterialPixelContext pixel)
 {
     MaterialSurface surface = CreateDefaultMaterialSurface();
     surface.worldPosition = pixel.worldPosition;
+    surface.worldTangent = pixel.worldTangent;
     surface.shadingModel = MATERIAL_SHADING_MODEL;
 
     // 第一版 PBR 先复用一张 albedo 贴图，baseColor = 贴图颜色 * 顶点阶段传来的 tint。
@@ -48,6 +49,24 @@ MaterialSurface EvaluatePbrSurface(in MaterialPixelContext pixel)
     // 自发光强度由材质参数控制。
     #if USE_EMISSION_MAP
         surface.emissiveColor = texture(emissionMap, pixel.texCoord).rgb * u_emissiveStrength;
+    #endif
+
+    // 阶段 8 启用 optional GBuffer 数据：
+    // - customData 留给 ClearCoat / Subsurface / Hair 等后续 shading model 复用。
+    // - precomputedShadowFactors 当前以 .r 作为预计算直接光遮蔽项，默认 1 表示不遮蔽。
+    // - anisotropy 配合 worldTangent 写入 GBufferF，后续可接各向异性 BRDF。
+    // 这些开关是 static macro，普通材质不启用时不会声明对应 SelectiveOutputMask。
+    #if USE_CUSTOM_DATA
+        surface.customData = u_customData;
+        surface.selectiveOutputMask |= GBUFFER_HAS_CUSTOM_DATA_MASK;
+    #endif
+    #if USE_PRECOMPUTED_SHADOW_FACTORS
+        surface.precomputedShadowFactors = u_precomputedShadowFactors;
+        surface.selectiveOutputMask |= GBUFFER_HAS_PRECOMPUTED_SHADOW_MASK;
+    #endif
+    #if USE_ANISOTROPY
+        surface.anisotropy = u_anisotropy;
+        surface.selectiveOutputMask |= GBUFFER_HAS_ANISOTROPY_MASK;
     #endif
 
     surface.worldNormal = normalize(pixel.worldNormal);
