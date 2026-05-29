@@ -43,7 +43,8 @@ Recommended meaning of each category:
 
 ## Current Active Docs
 
-- No active `architecture/` documents are currently checked in.
+- `architecture/coding-guidelines.md`
+  - 通用 C++ 编码约定，当前记录头文件职责注释规则
 - `rendering/sky-pass-environment-roadmap.md`
   - 独立 Sky Pass、程序化天空、动态环境 IBL 与后续分帧更新学习路线
 - `rendering/sky-pass-environment-roadmap.html`
@@ -70,6 +71,8 @@ Recommended meaning of each category:
   - SpeedTree 树木导入、foliage 薄表面 SSS、风力动画与 multi-pivot 变形的分阶段落地路线
 - `rendering/foliage-speedtree-sss-wind-roadmap.html`
   - 上述 Foliage / SpeedTree 路线的网页阅读版，并整理 SpeedTree 官方导出、风、SDK render configuration 和性能文档对接结论
+- `rendering/speedtree-sdk-data-probe.md`
+  - SpeedTree SDK 数据探针计划：先枚举 `.stsdk` 暴露的材质、LOD、draw call、顶点流、风和 billboard 数据，再决定 VulkanLearn 运行时格式
 - `rendering/tone-mapping-tutorial.html`
   - Tone mapping 的游戏管线位置、曝光/曲线/bloom 职责拆分、通用预设和 VulkanLearn 接入建议
 

@@ -20,6 +20,7 @@ class SpotLight;
 class Camera;
 class SceneObject;
 class PipelineFactory;
+struct MeshAssetLoadRequest;
 
 class SceneLoader{
     public:
@@ -29,8 +30,9 @@ class SceneLoader{
         return instance;
     }
     
-    //加载场景
+    // 场景切换应显式先卸载再加载，避免 LoadScene 隐式销毁旧场景状态。
     void SetPipelineFactory(PipelineFactory* pipelineFactory);
+    void ValidateSceneFile(const std::string& filename) const;
     void LoadScene(const std::string& filename);
 
     //获取场景数据
@@ -48,11 +50,12 @@ class SceneLoader{
     const std::shared_ptr<Texture>& GetEnvironmentPrefilteredCube() const { return environmentPrefilteredCube; }
     const std::shared_ptr<Texture>& GetBrdfLut() const { return brdfLut; }
     const std::shared_ptr<Texture>* GetGlobalTextureByBindingName(std::string_view bindingName) const;
+    const std::string& GetCurrentScenePath() const { return currentScenePath; }
     bool HasEnvironmentSH() const { return hasEnvironmentSH; }
     const std::array<Eigen::Vector4f, 9>& GetEnvironmentSH() const { return environmentSH; }
 private:
     SceneLoader();
-    void LoadMeshObject(const nlohmann::basic_json<>& node);
+    void LoadMeshObject(const nlohmann::basic_json<>& node, const MeshAssetLoadRequest& meshLoadRequest);
     void LoadDirectionalLightObject(const nlohmann::basic_json<>& node);
     void LoadPointLightObject(const nlohmann::basic_json<>& node);
     void LoadSpotLightObject(const nlohmann::basic_json<>& node);
@@ -62,7 +65,7 @@ private:
     std::shared_ptr<MaterialInstance> LoadMaterialInstance(const std::string_view materialInstancePath, vk::SampleCountFlagBits sampleCount, std::string_view passName = "geometry", const GraphicsPipelineStateDesc& pipelineStateDesc = {});
 
     //场景数据
-    std::unordered_map<std::string, std::shared_ptr<RenderableObject>> objects; //模型相对路径和模型对象
+    std::unordered_map<std::string, std::shared_ptr<RenderableObject>> objects; //模型section缓存键和模型对象
     std::unordered_map<std::string, std::shared_ptr<SceneObject>> sceneObjects; //模型名字和场景对象
     std::unordered_map<std::string, std::shared_ptr<Material>> materials; //材质键和材质对象
     std::unordered_map<std::string, std::shared_ptr<MaterialInstance>> materialInstances; //材质实例相对路径和材质实例对象
@@ -81,5 +84,6 @@ private:
     std::shared_ptr<Texture> brdfLut;
     std::array<Eigen::Vector4f, 9> environmentSH{};
     bool hasEnvironmentSH = false;
+    std::string currentScenePath;
     PipelineFactory* pipelineFactory = nullptr;
 };

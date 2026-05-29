@@ -9,6 +9,18 @@ Keep schema binding explicit and narrow.
 - Bind `render_graph.schema.json` only to `config/renderGraphConfig.json`.
 - Do not bind any schema to broad patterns like `*.json`.
 
+Validate model descriptors from the configured resource root:
+
+```powershell
+py -3 tool/validate_model_descriptors.py
+```
+
+Override the resource root when needed:
+
+```powershell
+py -3 tool/validate_model_descriptors.py --resource-root D:\YYBWorkSpace\GitHub\VukanLearnResources
+```
+
 Recommended VS Code workspace settings:
 
 ```json

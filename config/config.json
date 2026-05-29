@@ -1,7 +1,8 @@
 {
-    "projectPath": "D:/GitHub/VulkanLearn",
+    "projectPath": "D:\\YYBWorkSpace\\GitHub\\VulkanLearn",
+    "resourcePath": "D:\\YYBWorkSpace\\GitHub\\VukanLearnResources",
     "windowSize": [1280, 720],
-    "initScene": "scenes/scene03.json",
+    "initScene": "scenes/SC_speedtree.json",
     "msaa": 2,
     "renderStateDebugColors": {
         "ePass": [0.0, 1.0, 0.0, 1.0],

@@ -466,8 +466,8 @@ void RenderSystem::Render()
 void RenderSystem::UpdateUBOGlobal(vk::CommandBuffer& commandBuffer)
 {
     PROFILE_FUNCTION();
-    static const auto& sceneLoader = SceneLoader::GetInstance();
-    static Camera& camera = *sceneLoader.GetCamera();
+    const auto& sceneLoader = SceneLoader::GetInstance();
+    Camera& camera = *sceneLoader.GetCamera();
 
     static UBOGlobal ubo;
     ubo.view = camera.GetViewMatrix();
@@ -526,8 +526,8 @@ void RenderSystem::UpdateUBOGlobalForShadow(vk::CommandBuffer& commandBuffer, ui
     //      获取ShadowCameraPositonInShadow(Eigen::Vector3f):(CenterInShadow.x(), CenterInShadow.y(), ZNear)
     //  <-shadowCoordinateSystem
     //  计算ShadowCameraPositon(Eigen::Vector3f)
-    static const auto& sceneLoader = SceneLoader::GetInstance();
-    static Camera& camera = *sceneLoader.GetCamera();
+    const auto& sceneLoader = SceneLoader::GetInstance();
+    Camera& camera = *sceneLoader.GetCamera();
 
     // 1. 先获取相机的数据
     Eigen::Vector3f cameraPosition = camera.GetPosition();
@@ -1034,7 +1034,7 @@ void RenderSystem::UpdateUBOModel(const std::shared_ptr<SceneObject>& object)
 
 void RenderSystem::CapturePreviousFrameTransforms()
 {
-    static const auto& sceneLoader = SceneLoader::GetInstance();
+    const auto& sceneLoader = SceneLoader::GetInstance();
     Camera& camera = *sceneLoader.GetCamera();
     previousViewProjection = camera.GetProjectionMatrix() * camera.GetViewMatrix();
 

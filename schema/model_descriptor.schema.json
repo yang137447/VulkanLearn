@@ -11,23 +11,44 @@
         },
         "type": {
             "type": "string",
-            "const": "mesh",
-            "description": "固定为 mesh，表示该描述文件对应一个可渲染网格资源。"
+            "enum": ["mesh", "speedtree"],
+            "description": "mesh 表示普通 Assimp 网格资源，speedtree 表示 SpeedTree 源资产。"
         },
         "modelDataPath": {
             "type": "string",
             "description": "原始模型数据文件相对路径，例如 'models/datas/my_mesh.obj'。"
         },
-        "materialInstancePath": {
-            "type": "string",
-            "description": "默认材质实例路径，例如 'materials/MI_my_mesh.json'。"
+        "materialSlots": {
+            "type": "array",
+            "description": "按源模型材质槽顺序排列的材质实例绑定。单材质模型也使用一个数组元素。",
+            "minItems": 1,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "VulkanLearn 侧材质槽显示名称，仅用于配置可读性和调试；运行时按数组顺序映射。"
+                    },
+                    "materialInstancePath": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "材质实例路径，例如 'materials/MI_my_mesh.json'。"
+                    }
+                },
+                "required": [
+                    "name",
+                    "materialInstancePath"
+                ],
+                "additionalProperties": false
+            }
         }
     },
     "required": [
         "name",
         "type",
         "modelDataPath",
-        "materialInstancePath"
+        "materialSlots"
     ],
     "additionalProperties": false
 }

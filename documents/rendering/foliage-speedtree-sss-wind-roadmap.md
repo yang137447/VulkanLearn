@@ -21,7 +21,7 @@
 当前工程已经具备一些适合起步的能力：
 
 - 场景通过 JSON 加载 mesh、light、camera、environment
-- mesh JSON 通过 `modelDataPath` 指向模型文件，通过 `materialInstancePath` 指向材质实例
+- mesh JSON 当前通过 `modelDataPath` 指向模型文件，通过 `materialInstancePath` 指向材质实例；下一步会迁移为 `materialSlots`
 - 材质实例已经支持 `renderStates.renderMode`
 - `OpaqueClip` 可用于 alpha cutout
 - 材质实例已经支持 `renderStates.cullMode = None`
@@ -166,15 +166,256 @@ struct ModelResource
 };
 ```
 
+### 下一步升级：materialSlots
+
+`materialSlots` 是阶段 1 的第一块可落地升级。它的职责是把模型文件里的材质槽名称映射到 VulkanLearn 的 material instance JSON，而不是让一个 mesh asset JSON 只能拥有单个 `materialInstancePath`。
+
+### 模块拆分：Mesh Loader 与 Validation
+
+`materialSlots` 不应该直接堆进 `SceneLoader::LoadMeshObject()`。推荐模仿现有 `source/material/` 结构，建立 `source/mesh/` 目录：
+
+```text
+source/mesh/
+  meshAssetTypes.h
+  loader/
+    meshAssetResolver.h
+    meshAssetResolver.cpp
+    modelLoader.h
+    modelLoader.cpp
+  validation/
+    meshAssetValidator.h
+    meshAssetValidator.cpp
+```
+
+头文件注释遵循 `documents/architecture/coding-guidelines.md`。本模块第一轮落地时尤其要写清楚：
+
+- `MeshAssetResolver` 头文件要说明它只展开 mesh asset JSON 的 effective data，不导入模型、不创建材质。
+- `MeshAssetValidator` 头文件要说明它把 effective JSON 转成 load plan，并负责报出格式错误；不读取文件、不做模糊匹配、不修正资产命名。
+- `ModelLoader` 头文件要说明它只导入 FBX / GLB / OBJ 的 geometry sections 和 material slot 名；不认识 VulkanLearn material instance JSON。
+
+第一版只需要 `MeshAssetResolver` 和 `MeshAssetValidator` 两个模块。JSON 读取可以继续在 `SceneLoader` 调用处完成，避免为了读文件再多建一个 thin wrapper。
+
+SpeedTree `.stsdk` 也走同一条 `SM_xxx.json` 入口，不单独发明 scene object 类型。`.stsdk` 是模型源文件格式，`SM_xxx.json` 仍然是 VulkanLearn 的模型资产描述，并保持现有 `name / type / modelDataPath` 的平铺风格：
+
+```json
+{
+  "name": "Oak Complex Rules",
+  "type": "speedtree",
+  "modelDataPath": "models/datas/Oak_Complex_Rules.stsdk",
+  "materialSlots": [
+    {
+      "name": "BarkBase",
+      "materialInstancePath": "materials/foliage/MI_oak_bark.json"
+    },
+    {
+      "name": "LeafSummer",
+      "materialInstancePath": "materials/foliage/MI_oak_leaf_summer.json"
+    }
+  ]
+}
+```
+
+第一版字段约定：
+
+- `type = "mesh"` 时按普通 Assimp 模型处理。
+- `type = "speedtree"` 时，`ModelLoader` 分派到 `SpeedTreeParserCore` / 后续 SDK-backed importer，并要求 `modelDataPath` 指向 `.stsdk`。
+- `materialSlots` 字段是有序数组，并且不能为空。
+- `type = "speedtree"` 时，`materialSlots` 的数量必须与 `.stsdk` 解析出的 SpeedTree material 数量一致；数组顺序对应解析出的 SpeedTree material 顺序，`name` 仅用于配置可读性和调试，不参与映射。
+- SpeedTree 内部贴图路径仍可由 parser 读取，但 VulkanLearn material instance 绑定必须由 `materialSlots` 显式提供。
+- 第一版不做 `importCache`，所有数据直接从 `.stsdk` 解析出来。
+- scene 仍然只通过 `modelPath` 指向 `SM_xxx.json`。
+
+调用链：
+
+```text
+SceneLoader reads SM_*.json
+    -> MeshAssetResolver resolves inherited/default asset data
+    -> MeshAssetValidator::BuildLoadPlan()
+    -> ModelLoader imports mesh or dispatches speedtree by SM type
+    -> MeshAssetValidator::BuildSectionLoadPlans()
+    -> SceneLoader creates renderable sections and material instances
+```
+
+职责边界：
+
+- `SceneLoader`
+  - 读取 scene object 的 `modelPath`
+  - 读取 `SM_*.json`
+  - 根据验证后的 load plan 创建 `RenderableObject` / section scene object
+  - 调用已有 `LoadMaterialInstance()`
+
+- `MeshAssetResolver`
+  - 对齐 material 侧 `MaterialInstanceResolver`
+  - 第一版可以不做复杂继承，只保留接口位置
+  - 后续如果 mesh asset 需要 defaults、preset 或平台覆写，在这里展开成 effective asset JSON
+
+- `MeshAssetValidator`
+  - 对齐 material 侧 `MaterialInstanceValidator`
+  - 提供 `BuildLoadPlan()` 和 `BuildSectionLoadPlans()`
+  - 校验 `type` 必须是 `mesh` 或 `speedtree`
+  - 校验 `modelDataPath`
+  - 禁止旧字段 `materialInstancePath`
+  - 要求 `materialSlots` 必填且非空
+  - `speedtree` 解析 `.stsdk` 后校验 `materialSlots` 数量与解析出的 material 数量一致
+  - 校验 material slot 的 `name` 和 `materialInstancePath` 必须是非空字符串
+  - 在模型 section 信息可用后，按源材质槽顺序映射到 `materialSlots`，不使用 `materialSlots.name` 做匹配
+  - 输出清晰错误：mesh asset path、model path、section name、slot name
+
+- `ModelLoader`
+  - 位于 `source/mesh/loader/`
+  - 只负责导入模型几何和材质槽名，或按 SM asset `type` 调用专用导入器
+  - 输出 `ModelResource.sections`
+  - 不知道 VulkanLearn material instance JSON
+
+推荐数据结构：
+
+```cpp
+struct MeshAssetResolveResult
+{
+    nlohmann::json effectiveMeshAssetJson;
+};
+
+struct MeshMaterialSlot
+{
+    std::string name;
+    std::string materialInstancePath;
+};
+
+struct MeshAssetBuildPlan
+{
+    std::string meshAssetPath;
+    std::string modelDataPath;
+    std::vector<MeshMaterialSlot> materialSlots;
+    std::string modelCacheKey;
+};
+
+struct MeshSection
+{
+    std::vector<Vertex> vertices;
+    std::vector<uint32_t> indices;
+    std::string sectionName;
+    std::string materialSlotName;
+};
+
+struct MeshSectionLoadPlan
+{
+    std::string sectionName;
+    std::string materialSlotName;
+    std::string materialInstancePath;
+};
+```
+
+推荐接口形状：
+
+```cpp
+class MeshAssetResolver
+{
+public:
+    static MeshAssetResolveResult Resolve(
+        std::string_view meshAssetPath,
+        const nlohmann::json& meshAssetJson);
+};
+
+class MeshAssetValidator
+{
+public:
+    static MeshAssetBuildPlan BuildLoadPlan(
+        std::string_view meshAssetPath,
+        const nlohmann::json& effectiveMeshAssetJson);
+
+    static std::vector<MeshSectionLoadPlan> BuildSectionLoadPlans(
+        const MeshAssetBuildPlan& buildPlan,
+        const ModelResource& modelResource);
+};
+```
+
+调用形状应该接近 `SceneLoader::LoadMaterialInstance()`：
+
+```cpp
+nlohmann::json meshAssetJson;
+std::ifstream meshAssetFile(CommonFunction::Path(meshPath));
+meshAssetFile >> meshAssetJson;
+
+MeshAssetResolveResult resolveResult =
+    MeshAssetResolver::Resolve(meshPath, meshAssetJson);
+const nlohmann::json& effectiveMeshAssetJson = resolveResult.effectiveMeshAssetJson;
+MeshAssetBuildPlan loadPlan =
+    MeshAssetValidator::BuildLoadPlan(meshPath, effectiveMeshAssetJson);
+ModelResource modelResource = ModelLoader::GetInstance().LoadModel(CommonFunction::Path(loadPlan.modelDataPath));
+std::vector<MeshSectionLoadPlan> sectionPlans =
+    MeshAssetValidator::BuildSectionLoadPlans(loadPlan, modelResource);
+```
+
+第一步可以先建立 `source/mesh/` 文件夹和 `MeshAssetResolver + MeshAssetValidator`。`MeshAssetResolver` 第一版只原样返回 effective JSON。即使 `ModelLoader` 还没完全升级，也先把 JSON 格式迁移和错误边界独立出来。
+
+推荐迁移规则：
+
+- 旧格式不再支持：
+
+```json
+{
+  "name": "Sculpture",
+  "type": "mesh",
+  "modelDataPath": "models/SM_viking_room.obj",
+  "materialInstancePath": "materials/MI_viking_room.json"
+}
+```
+
+- 新格式必须使用 `materialSlots`。即使只有一个材质，也写成一个 slot：
+
+```json
+{
+  "name": "SpeedTree Test Tree",
+  "type": "mesh",
+  "modelDataPath": "models/foliage/speedtree_test_tree.fbx",
+  "materialSlots": [
+    {
+      "name": "Bark",
+      "materialInstancePath": "materials/foliage/MI_speedtree_trunk.json"
+    },
+    {
+      "name": "Leaves",
+      "materialInstancePath": "materials/foliage/MI_speedtree_leaf.json"
+    }
+  ]
+}
+```
+
+解析规则：
+
+- `materialSlots` 是必填字段。
+- 加载器不再读取 `materialInstancePath`。
+- 如果 mesh asset JSON 仍包含 `materialInstancePath`，加载失败并提示迁移到 `materialSlots`。
+- 如果缺少 `materialSlots`，加载失败并输出模型路径。
+- 如果 `materialSlots` 为空，加载失败。
+- 如果 `type = "speedtree"` 且 `modelDataPath` 不是 `.stsdk`，加载失败。
+- section 材质绑定按源材质槽顺序映射到 `materialSlots`，不使用 `materialSlots.name` 做匹配；无法确定源槽序号时加载失败并输出 section 名称、slot 名称和模型路径。
+- 如果 `type = "speedtree"`，还要校验 `materialSlots` 数量与 `.stsdk` 解析出的 material 数量一致；数组顺序对应 SpeedTree material 顺序，`name` 仅用于配置可读性和调试。
+- 第一版不做模糊匹配，不自动大小写修正，不自动猜 trunk/leaf；材质槽正确性由资产/JSON 源头保证。
+
+第一版验收标准：
+
+- 所有旧 mesh asset JSON 都迁移到 `materialSlots`。
+- 单材质模型也通过 `materialSlots` 绑定材质实例。
+- 一个 SpeedTree FBX / GLB / `.stsdk` 可以通过 `materialSlots` 绑定树干和叶片两个材质实例。
+- 渲染分组仍能按 material/materialInstance 分组，不破坏现有 `RenderSystem` 提交流程。
+- 错误信息能定位到缺失的 material slot，而不是只报泛泛的 load failed。
+
 模型描述 JSON 需要能把 material slot 映射到材质实例：
 
 ```json
 {
   "modelDataPath": "models/foliage/speedtree_test_tree.fbx",
-  "materialSlots": {
-    "Bark": "materials/foliage/MI_speedtree_trunk.json",
-    "Leaves": "materials/foliage/MI_speedtree_leaf.json"
-  }
+  "materialSlots": [
+    {
+      "name": "Bark",
+      "materialInstancePath": "materials/foliage/MI_speedtree_trunk.json"
+    },
+    {
+      "name": "Leaves",
+      "materialInstancePath": "materials/foliage/MI_speedtree_leaf.json"
+    }
+  ]
 }
 ```
 
@@ -187,19 +428,24 @@ struct ModelResource
 
 涉及文件：
 
-- `source/modelLoader.h`
-- `source/modelLoader.cpp`
+- `source/mesh/meshAssetTypes.h`
+- `source/mesh/loader/meshAssetResolver.h`
+- `source/mesh/loader/meshAssetResolver.cpp`
+- `source/mesh/loader/modelLoader.h`
+- `source/mesh/loader/modelLoader.cpp`
+- `source/mesh/validation/meshAssetValidator.h`
+- `source/mesh/validation/meshAssetValidator.cpp`
 - `source/renderableObject.h`
 - `source/renderableObject.cpp`
 - `source/sceneLoader.cpp`
 - `source/renderSystem.cpp`
-- model descriptor JSON 格式
+- mesh asset JSON 格式
 
 验收标准：
 
 - 一个 SpeedTree 模型文件可显示 trunk、branch、leaf 多部分
 - 每个 section 绑定自己的 material instance
-- 现有普通模型仍可按原格式加载
+- 现有普通模型迁移到 `materialSlots` 后仍可加载
 - 出错信息能指出缺失的是哪个 section 或 material slot
 
 暂不处理：
@@ -236,7 +482,7 @@ SpeedTree_Test_Tree -> SM_speedtree_test_tree.json
 
 涉及文件：
 
-- `source/modelLoader.cpp`
+- `source/mesh/loader/modelLoader.cpp`
 - `source/vertexDataStruct.h`
 - `shader/glsl/pbr.vert`
 - `shader/glsl/pbr.frag`
@@ -538,8 +784,8 @@ struct FoliageVertex
 涉及文件：
 
 - `source/vertexDataStruct.h`
-- `source/modelLoader.h`
-- `source/modelLoader.cpp`
+- `source/mesh/loader/modelLoader.h`
+- `source/mesh/loader/modelLoader.cpp`
 - `source/renderableObject.h`
 - `source/renderableObject.cpp`
 - `source/pipeline/graphicsPipeline.cpp`
@@ -559,6 +805,233 @@ struct FoliageVertex
 - 自动识别所有 SpeedTree 格式
 - 多 LOD
 - GPU-driven vegetation
+
+## 风力数据导入方式
+
+SpeedTree 官方资料里需要区分两种“风”：
+
+1. **离线缓存风**
+   - Modeler 的 VFX Wind 可以导出 FBX point cache 或 Alembic。
+   - 这种方式更像影视/VFX 动画缓存，导入后是逐帧几何动画。
+   - 官方也说明这类风动画不循环，需要导出足够覆盖镜头的帧数。
+   - 这不适合作为 VulkanLearn 第一版实时游戏树风，因为它不方便用统一风向、风强、gust、LOD 和实例化去驱动。
+
+2. **实时 SDK 风**
+   - SpeedTree SDK 路线里，`.stsdk` / `CCore` 保存 Modeler 调好的风配置。
+   - `CWindStateMgr` 根据时间、风强、gust 等状态生成 shader constants。
+   - 顶点 shader 再结合每个顶点携带的风权重、leaf group、pivot/axis 等数据做变形。
+   - 这条路线最完整，但会把项目立刻带进 SpeedTree SDK 资源格式、运行时类和 shader 移植，不适合第一版。
+
+VulkanLearn 第一版采用第三条中间路线：
+
+```text
+SpeedTree static mesh export
+    -> Assimp / converter reads sections, material slots, vertex streams
+    -> VulkanLearn FoliageVertex wind0 / wind1 / wind2
+    -> mesh asset JSON records wind import policy and optional defaults
+    -> scene/config provides global WindParameters
+    -> foliage.vert and foliageShadow.vert consume the same wind data
+```
+
+长期目标是支持完整 SpeedTree 游戏风。这里的“完整”不是指解析 FBX point cache，而是指：
+
+- 能读取 SpeedTree Modeler 中由艺术家调好的 SDK 风配置
+- 能读取或转换 SpeedTree 顶点风数据，包括 branch level、leaf group、weights、phase、pivot/axis、frond/leaf ripple/tumble 等
+- CPU 侧能根据时间、风强、风向和 gust 生成与 SpeedTree 风语义一致的 shader constants
+- GPU 侧 foliage vertex shader 能执行与 SpeedTree SDK wind mode 对齐的 branch / leaf / frond 变形
+- wind LOD 能支持 Full / Branch / Global / None 这种分级
+
+要达到这个目标，推荐路线是 SDK-backed importer，而不是逆向 `.stsdk`：
+
+```text
+.stsdk / SpeedTree runtime asset
+    -> SM_xxx.json model descriptor
+    -> type = "speedtree"
+    -> SpeedTreeParserCore or SDK-backed importer
+    -> importer exposes geometry, LOD, material, wind config
+    -> VulkanLearn converts geometry to MeshSection / FoliageVertex
+    -> CWindStateMgr or equivalent wrapper updates wind constants
+    -> VulkanLearn uploads SpeedTreeWindParameters
+    -> GLSL port of SpeedTree wind shader functions
+    -> foliage and foliageShadow passes share the same deformation
+```
+
+### UE 5.7 参考结论
+
+本机 UE 5.7 已确认存在可用的 SpeedTreeImporter 参考链：
+
+```text
+D:\sofeware\Epic Games\UE_5.7\Engine\Plugins\Editor\SpeedTreeImporter
+D:\sofeware\Epic Games\UE_5.7\Engine\Shaders\Private\SpeedTreeCommon.ush
+D:\sofeware\Epic Games\UE_5.7\Engine\Source\Runtime\Engine\Public\SpeedTreeWind.h
+D:\sofeware\Epic Games\UE_5.7\Engine\Source\Runtime\Engine\Private\SpeedTreeWind.cpp
+```
+
+UE5.7 支持 `.srt`、`.st`、`.st9` 导入；v9 走 SpeedTree GameEngine9 loader，导入后创建 `UStaticMesh`、material instances 和 SpeedTree9 master material 派生实例。它对 VulkanLearn 最有价值的不是资产 UI，而是三个事实：
+
+- SpeedTree 树按 material slot / draw call 创建 StaticMesh material slots，这与 VulkanLearn 的 `materialSlots` 迁移方向一致。
+- SpeedTree9 风数据会作为顶点属性进入 mesh，UE 将它们打包到 UV 通道。
+- 实时风由 CPU 侧风状态更新和 GPU 侧 vertex deformation 共同完成，不依赖 Modeler 的 OpenGL 截帧，也不依赖 FBX point cache。
+
+UE5.7 的 SpeedTree9 顶点 UV 风布局：
+
+```text
+UV0: Diffuse UV
+UV1: Branch1Pos, Branch1Dir
+UV2: Branch1Weight, RippleWeight
+UV3: Lightmap UV
+UV4: Branch2Pos, Branch2Dir      if Branch2 data exists
+UV5: Branch2Weight, unused       if Branch2 data exists
+UV6+: camera-facing anchor data  if facing geometry exists
+```
+
+这会作为 VulkanLearn 后续 `SpeedTreeVertex` / `FoliageVertex` 设计的重要参考。第一版不直接照搬 UE 的 UV 号位；转换器应该把这些语义转成 VulkanLearn 自己命名清楚的属性，例如 branch1、branch2、ripple、blend、cameraFacingAnchor。
+
+如果暂时没有 SDK 授权或头文件，就只能做到“兼容 SpeedTree 导出资产的自定义风”，不能承诺完全还原官方 SDK 风。FBX / GLB 的静态 mesh 通常不足以携带完整实时风配置；VFX Wind 导出的 FBX point cache / Alembic 又是离线动画缓存，不适合作为大规模游戏实时风主线。
+
+`.stsdk` 的正式接入入口仍是 `SM_xxx.json`。也就是说，场景层不关心 SpeedTree 文件格式，scene object 只写 `modelPath`；mesh asset 描述通过 `type: "speedtree"` 和 `modelDataPath` 表达 `.stsdk` 来源。第一版不写 `importCache`，数据都直接从 `.stsdk` 解析出来；但材质绑定必须由非空 `materialSlots` 有序数组显式声明，并与 `.stsdk` 解析出的材质数量一致，数组顺序对应 SpeedTree material 顺序，`name` 仅用于配置可读性和调试。这样普通模型、SpeedTree `.stsdk`、未来 `.st9` probe 都能复用同一套 mesh asset resolver / validator / section material 映射。
+
+### 导入阶段的数据来源
+
+优先级从高到低：
+
+1. SpeedTree 导出文件里明确存在的 extra vertex attributes
+2. 额外 UV channel 或 vertex color 中可稳定识别的 wind 权重、phase、leaf group
+3. 转换工具根据 mesh section / material slot / leaf card bounds 生成的 pivot 与权重
+4. mesh asset JSON 中显式写入的默认策略
+
+不要在 shader 每帧根据 position 临时猜 pivot。可以在转换阶段根据几何生成默认值，但生成结果必须落到模型数据或派生资产里，便于调试和复现。
+
+推荐模型描述字段：
+
+```json
+{
+  "modelDataPath": "models/foliage/speedtree_test_tree.fbx",
+  "vertexLayout": "Foliage",
+  "materialSlots": [
+    {
+      "name": "Bark",
+      "materialInstancePath": "materials/foliage/MI_speedtree_trunk.json"
+    },
+    {
+      "name": "Leaves",
+      "materialInstancePath": "materials/foliage/MI_speedtree_leaf.json"
+    }
+  ],
+  "windImport": {
+    "mode": "Generated",
+    "source": "SpeedTreeStaticMesh",
+    "useVertexColor": true,
+    "useExtraUv": true,
+    "generateLeafPivotFromSectionBounds": true,
+    "defaults": {
+      "branchWeight": 0.5,
+      "leafWeight": 1.0,
+      "stiffness": 0.2
+    }
+  }
+}
+```
+
+推荐顶点属性语义：
+
+```cpp
+wind0.x = branchWeight;
+wind0.y = leafWeight;
+wind0.z = phase;
+wind0.w = stiffness;
+
+wind1.xyz = primaryPivotOS;
+wind1.w   = pivotWeight;
+
+wind2.xyz = secondaryPivotOS;
+wind2.w   = hierarchyLevel;
+```
+
+### 运行时数据来源
+
+风的“天气/场景状态”不从模型里来，而从 scene/config 来：
+
+```json
+{
+  "wind": {
+    "direction": [1.0, 0.0, 0.2],
+    "strength": 0.35,
+    "trunkFrequency": 0.25,
+    "branchFrequency": 0.8,
+    "leafFrequency": 2.4,
+    "gustStrength": 0.4,
+    "gustFrequency": 0.15
+  }
+}
+```
+
+CPU 每帧只更新 `time`、风向、风强、gust 等少量全局参数。每个顶点的权重、phase、pivot 和层级来自导入后的 `FoliageVertex`，主 pass 与 shadow pass 共享同一份 `foliageWind.glsl`，保证树和树影同步。
+
+### 后续接近 SpeedTree SDK 的路线
+
+等第一版中间格式稳定后，再评估两种升级：
+
+- 写一个 SpeedTree 专用转换器，把 SpeedTree 导出的额外属性更完整地映射到 `FoliageVertex`。
+- 引入 SpeedTree SDK-backed importer，用 `CCore` 读取树资产，用 `CWindStateMgr` 或等价封装生成风常量。
+- 把 SpeedTree SDK wind shader 逻辑逐步移植为 VulkanLearn GLSL include，并用 debug view 对齐 branch、leaf、frond 分量。
+- 保留当前 shader 侧的 `ApplyFoliageWind()` 接口，让近似风和完整 SpeedTree 风能通过不同 backend 切换。
+
+## 完整 SpeedTree 风接入阶段
+
+这个阶段可以放在阶段 6 之后、multi-pivot 之前，也可以作为单独长期专题推进。
+
+在定义 VulkanLearn 自己的正式 foliage runtime asset 格式前，先执行 `documents/rendering/speedtree-sdk-data-probe.md`。该探针只负责通过 SpeedTree SDK 枚举 `.stsdk` 暴露的数据，并输出 verbose probe JSON；不要在第一版探针里提前固定 `SpeedTreeVertex`、`VLFoliageAsset` 或最终 wind buffer 布局。
+
+目标：
+
+- 建立 `SpeedTreeWindBackend` 抽象，隔离 SDK 依赖和 VulkanLearn 渲染代码
+- 支持读取 SpeedTree SDK 风配置，而不是只读取静态 mesh
+- 建立 SpeedTree 顶点风数据到 `FoliageVertex` 或专用 `SpeedTreeVertex` 的映射
+- 建立 SpeedTree wind constants 到 Vulkan uniform / storage buffer 的映射
+- 移植或重写 SpeedTree branch / leaf / frond wind shader 函数
+- 支持 wind LOD：Full、Branch、Global、None
+
+推荐分步：
+
+1. **SDK 可用性验证**
+   - 验证本地能否链接 SpeedTree SDK
+   - 加载一个 `.stsdk` 测试树
+   - 枚举 geometry、material、LOD 和 wind config
+
+2. **几何与材质转换**
+   - 把 SDK 输出的 draw calls / geometry groups 转成 `MeshSection`
+   - 把材质槽映射到 VulkanLearn material instance
+   - 保留 SDK 顶点风属性原始 dump，用于对照 shader
+
+3. **风状态更新**
+   - 用 SDK 的 `CWindStateMgr` 根据时间、strength、direction、gust 更新 wind state
+   - 定义 `SpeedTreeWindParameters` buffer
+   - 把 SDK wind state 映射到 Vulkan uniform / storage buffer
+
+4. **Shader 移植**
+   - 先移植 Global wind
+   - 再移植 Branch wind
+   - 再移植 Leaf ripple / tumble
+   - 最后处理 Frond wind 和高级 turbulence
+
+5. **对照验证**
+   - 同一棵树在 SpeedTree Modeler / SDK reference app / VulkanLearn 中对比
+   - 对齐静止姿态、风向、强度响应、gust、leaf group 和 LOD 切换
+
+验收标准：
+
+- 同一个 SpeedTree SDK 风配置能驱动 VulkanLearn 中的树
+- 风强、风向、gust 变化和 Modeler / SDK reference app 趋势一致
+- Full / Branch / Global / None 四级风 LOD 能切换
+- 主 pass 和 shadow pass 完全同步
+- 没有 SDK 时，工程仍可回退到 `Generated` / `Approximate` wind backend
+
+不做的事：
+
+- 不逆向未授权的 `.stsdk` 私有二进制格式
+- 不把 FBX point cache 当作实时游戏风主线
+- 不为了完整 SpeedTree 风破坏普通 foliage 的轻量路径
 
 ## 阶段 7：Multi-Pivot 基础变形
 
@@ -615,7 +1088,7 @@ vec3 RotateAroundAxis(vec3 p, vec3 pivot, vec3 axis, float angle)
 - `shader/glsl/common/foliageWind.glsl`
 - `shader/glsl/foliage.vert`
 - `shader/glsl/foliageShadow.vert`
-- `source/modelLoader.cpp`
+- `source/mesh/loader/modelLoader.cpp`
 - foliage asset conversion notes or scripts
 
 验收标准：
@@ -703,7 +1176,7 @@ vec3 RotateAroundAxis(vec3 p, vec3 pivot, vec3 axis, float angle)
 - `shader/glsl/foliage.frag`
 - `shader/glsl/foliage.vert`
 - `documents/rendering/texture-asset-json-v1.md`
-- model descriptor JSON docs
+- mesh asset JSON docs
 
 验收标准：
 
@@ -717,18 +1190,23 @@ vec3 RotateAroundAxis(vec3 p, vec3 pivot, vec3 axis, float angle)
 实际开发时建议按以下顺序开小 PR / 小提交：
 
 1. 加 foliage 测试场景和 SpeedTree 测试资产
-2. 升级多 mesh / 多材质模型加载
-3. 建立 material slot -> material instance 映射
-4. 用现有 PBR + OpaqueClip 显示静态树干和叶片
-5. 新建 `foliage` shader，复制并收敛 PBR 基础逻辑
-6. 加 thin-surface transmission 参数和贴图
-7. 让 foliage shadow alpha cutout 正确
-8. 加全局 wind 参数和简单风
-9. 把 wind deformation 共享到 foliage 主 pass 和 shadow pass
-10. 定义 foliage vertex layout V1
-11. 接入 pivot 数据并实现 multi-pivot
-12. 增加 foliage debug view
-13. 整理性能、bounds、文档和示例资产
+2. 建立 SpeedTree SDK 数据探针计划，先拆 `.stsdk` 能暴露哪些数据
+3. 建立 `source/mesh/` 文件夹结构
+4. 新增 `MeshAssetResolver`
+5. 新增 `MeshAssetValidator`
+6. 迁移 mesh asset JSON 到必填 `materialSlots`
+7. 迁移 `ModelLoader` 到 `source/mesh/loader/` 并输出多 section `ModelResource`
+8. 建立 section material slot -> material instance 映射
+9. 用现有 PBR + OpaqueClip 显示静态树干和叶片
+10. 根据第一份 SDK probe JSON 再决定 VulkanLearn foliage runtime asset / vertex layout
+11. 新建 `foliage` shader，复制并收敛 PBR 基础逻辑
+12. 加 thin-surface transmission 参数和贴图
+13. 让 foliage shadow alpha cutout 正确
+14. 加全局 wind 参数和简单风
+15. 把 wind deformation 共享到 foliage 主 pass 和 shadow pass
+16. 接入 pivot 数据并实现 multi-pivot
+17. 增加 foliage debug view
+18. 整理性能、bounds、文档和示例资产
 
 如果只想先拿到可见成果，最小闭环是：
 
@@ -763,6 +1241,10 @@ multi-pivot 不是一个单独 shader 技巧，它依赖资产里的 pivot、权
 第一轮最推荐实现到：
 
 - foliage 测试场景
+- `source/mesh/` 文件夹结构
+- `MeshAssetResolver`
+- `MeshAssetValidator`
+- mesh asset JSON `materialSlots` 迁移
 - 模型内多 mesh / 多材质导入
 - material slot 到材质实例映射
 - 静态 SpeedTree 树显示

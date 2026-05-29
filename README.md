@@ -65,22 +65,13 @@ cmake --build build -j
 
 当前仓库不再以 git 形式保存完整 `resources/` 资产。
 
-程序运行时默认从仓库同级目录读取外部资源树：
+程序运行时从 `config/config.json` 的 `resourcePath` 读取资源树。该路径应直接指向独立资源仓库根目录，例如：
 
-```text
-../VulkanLearnAssets/resources
+```json
+"resourcePath": "D:\\YYBWorkSpace\\GitHub\\VukanLearnResources"
 ```
 
-按当前实现，仓库目录与外部资源目录的关系应为：
-
-```text
-ParentFolder/
-  VulkanLearn/
-  VulkanLearnAssets/
-    resources/
-```
-
-运行前请确保外部 `resources/` 至少包含：
+运行前请确保 `resourcePath` 至少包含：
 
 - `scenes/`
 - `models/`
@@ -89,7 +80,7 @@ ParentFolder/
 - `textures/`
 - `hdri/`
 
-仓库内保留的 `resources/README.md` 仅用于说明资源迁移约定；本地生成内容仍可能写入 `resources/generated/`。
+本地生成资源输出写入 `resourcePath/generated/`。
 
 ## 性能分析工具使用
 
@@ -122,7 +113,7 @@ Nsight Systems 适合分析 CPU 与 GPU 的交互、Vulkan API 的调用时序�
     打开 Nsight Systems，创建一个新项目。
 3.  **配置目标**：
     - **Target application**: 选择你的 `build/bin/main.exe`。
-    - **Working directory**: 建议设置为项目根目录 (例如 `D:\GitHub\VulkanLearn`)，并确保同级目录存在 `VulkanLearnAssets/resources`，以便正确加载外部资源。
+    - **Working directory**: 建议设置为项目根目录 (例如 `D:\GitHub\VulkanLearn`)，并确保 `config/config.json` 中的 `resourcePath` 指向可用资源仓库。
 4.  **开始录制**：
     点击 **"Start"** 按钮，程序会自动运行。
 5.  **结束分析**：
@@ -177,7 +168,7 @@ while (running) {
 ## 目录结构
 - `source/`: 源代码
 - `shader/`: GLSL 着色器
-- `resources/`: 仓库内仅保留说明文件和本地生成内容，运行时资产位于同级 `VulkanLearnAssets/resources`
+- `resources/`: 不再作为运行时资产目录；运行时资产由 `config/config.json -> resourcePath` 指定
 - `config/`: 渲染管线和场景配置
 - `documents/`: 正式设计文档和规划文档
 - `extern/`: 第三方库 (SDL3, Assimp, GLM, Tracy, NVTX 等)

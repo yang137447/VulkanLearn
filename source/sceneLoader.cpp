@@ -1,4 +1,5 @@
 #include "sceneLoader.h"
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -9,7 +10,7 @@
 #include "material/loader/materialInstanceResolver.h"
 #include "materialInstance.h"
 #include "materialInstanceValidator.h"
-#include "modelLoader.h"
+#include "mesh/loader/common/meshAssetLoader.h"
 #include "pipeline/brdfLutGenerator.h"
 #include "pipeline/environmentCubemapGenerator.h"
 #include "pipeline/environmentPrefilterGenerator.h"
@@ -18,6 +19,7 @@
 #include "pipeline/pipelineFactory.h"
 #include "renderGraph.h"
 #include "renderableObject.h"
+#include "scene/validation/sceneAssetValidator.h"
 #include "sceneObject.h"
 #include "texture.h"
 #include "textureAssetLoader.h"
@@ -25,6 +27,26 @@
 
 namespace
 {
+    nlohmann::json LoadJsonFile(const std::string& absolutePath, const std::string& logicalPath, std::string_view assetLabel)
+    {
+        std::ifstream file(absolutePath);
+        if (!file.is_open())
+        {
+            throw std::runtime_error(std::string(assetLabel) + " file not found: " + logicalPath);
+        }
+
+        try
+        {
+            return nlohmann::json::parse(file);
+        }
+        catch (const std::exception& exception)
+        {
+            throw std::runtime_error(
+                std::string(assetLabel) + " JSON parse failed: " + logicalPath +
+                " error=" + exception.what());
+        }
+    }
+
     vk::CompareOp ParseDepthCompareOp(const std::string& compareOp)
     {
         if (compareOp == "lessOrEqual")
@@ -48,6 +70,15 @@ namespace
             return vk::CompareOp::eAlways;
         }
         return vk::CompareOp::eLess;
+    }
+
+    nlohmann::json LoadSceneJson(const std::string& scenePath)
+    {
+        if (!std::filesystem::exists(scenePath))
+        {
+            throw std::runtime_error("Scene file not found: " + scenePath);
+        }
+        return LoadJsonFile(scenePath, scenePath, "Scene");
     }
 }
 
@@ -77,24 +108,19 @@ const std::shared_ptr<Texture>* SceneLoader::GetGlobalTextureByBindingName(std::
     return nullptr;
 }
 
+void SceneLoader::ValidateSceneFile(const std::string& filename) const
+{
+    nlohmann::json sceneJson = LoadSceneJson(filename);
+    SceneAssetBuildPlan sceneBuildPlan = SceneAssetValidator::BuildLoadPlan(filename, sceneJson);
+    SceneAssetValidator::Validate(sceneBuildPlan);
+}
+
 void SceneLoader::LoadScene(const std::string& filename)
 {
-    // 读取json场景文件
-    //检查文件是否存在
-    if (!std::filesystem::exists(filename))
-    {
-        throw std::runtime_error("Scene file not found: " + filename);
-    }
-    std::ifstream file(filename);
-    nlohmann::json scnJson = nlohmann::json::parse(file);
+    nlohmann::json scnJson = LoadSceneJson(filename);
+    SceneAssetBuildPlan sceneBuildPlan = SceneAssetValidator::BuildLoadPlan(filename, scnJson);
+    SceneAssetValidator::Validate(sceneBuildPlan);
 
-    // SceneLoader 是单例，先清空上一次场景留下的 environment 配置。
-    environmentHdrPath.clear();
-    environmentCubeSize = 512;
-    environmentCube.reset();
-    environmentPrefilteredCube.reset();
-    environmentSH.fill(Eigen::Vector4f::Zero());
-    hasEnvironmentSH = false;
     //brdfLut生成
     brdfLut = BrdfLutGenerator::Generate(*pipelineFactory);
 
@@ -102,13 +128,20 @@ void SceneLoader::LoadScene(const std::string& filename)
     LoadPassMaterial();
 
     // 加载场景中的物体
-    for (const auto& obj : scnJson["objects"])
+    for (const SceneObjectBuildPlan& objectPlan : sceneBuildPlan.objectPlans)
     {
-        std::string type = obj["type"];
+        const auto& obj = scnJson["objects"][objectPlan.objectIndex];
+        const std::string& type = objectPlan.objectType;
 
         if (type == "mesh")
         {
-            LoadMeshObject(obj);
+            if (!objectPlan.meshLoadRequest.has_value())
+            {
+                throw std::runtime_error(
+                    "Scene mesh object missing mesh load request: " + filename +
+                    " object=" + objectPlan.objectName);
+            }
+            LoadMeshObject(obj, *objectPlan.meshLoadRequest);
         }
         else if(type == "directionalLight")
         {
@@ -131,70 +164,89 @@ void SceneLoader::LoadScene(const std::string& filename)
             LoadEnvironmentObject(obj);
         }
         else {
-            std::cout << "Unknown object type: " << obj["name"] << std::endl;
+            std::cout << "Unknown object type: " << objectPlan.objectName << std::endl;
         }
     }
+
+    if (sceneCamera == nullptr)
+    {
+        throw std::runtime_error("Scene has no camera: " + filename);
+    }
+    currentScenePath = filename;
 }
 
-void SceneLoader::LoadMeshObject(const nlohmann::basic_json<>& node)
+void SceneLoader::LoadMeshObject(const nlohmann::basic_json<>& node, const MeshAssetLoadRequest& meshLoadRequest)
 {
-    const std::string meshPath = node["modelPath"];
-
-    std::ifstream file(CommonFunction::Path(meshPath));
-    nlohmann::json meshObjectJson;
-    file >> meshObjectJson;
+    MeshAssetImportResult importResult = MeshAssetLoader::ImportSections(meshLoadRequest);
+    const MeshAssetBuildPlan& buildPlan = importResult.buildPlan;
+    const ModelResource& modelResource = importResult.modelResource;
+    const std::vector<MeshSectionLoadPlan>& sectionPlans = importResult.sectionPlans;
 
     auto& instance = VulkanManager::GetInstance();
     auto& renderGraph = RenderGraph::GetInstance();
 
-    // 加载模型
-    std::string modelDataPath = meshObjectJson["modelDataPath"];
-    std::shared_ptr<RenderableObject> renderableObject;
-    if(objects.find(modelDataPath) != objects.end())
-    {
-        renderableObject = objects[modelDataPath];
-    }
-    else
-    {
-        ModelLoader& modelLoader = ModelLoader::GetInstance();
-        modelLoader.LoadModel(CommonFunction::Path(modelDataPath));
-        renderableObject = std::make_shared<RenderableObject>(
-            modelLoader.GetVertexData(), modelLoader.GetIndexData(),
-            &instance.GetDevice(), 
-            &instance.GetGpuMemoryProperties(), 
-            &instance.GetCommandPool(), 
-            &instance.GetCommandBuffers()[0], 
-            &instance.GetGraphicQueue(),
-            modelDataPath);
-    }
-
-    // 加载材质
-    std::string materialInstancePath = meshObjectJson["materialInstancePath"];
+    Eigen::Vector3f position = JsonParser::ParseValue<Eigen::Vector3f>(node["position"]);
+    Eigen::Vector3f rotation = JsonParser::ParseValue<Eigen::Vector3f>(node["rotation"]);
+    Eigen::Vector3f scale = JsonParser::ParseValue<Eigen::Vector3f>(node["scale"]);
+    const std::string sceneObjectBaseName = node["name"];
     const auto& geometryPass = renderGraph.GetRenderpasses().at("geometry");
-    std::shared_ptr<MaterialInstance> materialInstance = LoadMaterialInstance(materialInstancePath, geometryPass.sampleCount);
-    
-    // 创建场景物体
-    std::string sceneObjectName = node["name"];
-    std::shared_ptr<SceneObject> sceneObject;
-    if(sceneObjects.find(sceneObjectName) != sceneObjects.end())
+
+    for (size_t sectionIndex = 0; sectionIndex < modelResource.sections.size(); ++sectionIndex)
     {
-        sceneObject = sceneObjects[sceneObjectName];
-    }
-    else
-    {
-        Eigen::Vector3f position = JsonParser::ParseValue<Eigen::Vector3f>(node["position"]);
-        Eigen::Vector3f rotation = JsonParser::ParseValue<Eigen::Vector3f>(node["rotation"]);
-        Eigen::Vector3f scale = JsonParser::ParseValue<Eigen::Vector3f>(node["scale"]);
-        sceneObject = std::make_shared<SceneObject>(renderableObject, materialInstance);
+        const MeshSection& section = modelResource.sections[sectionIndex];
+        const MeshSectionLoadPlan& sectionPlan = sectionPlans[sectionIndex];
+        std::string renderableObjectKey =
+            buildPlan.modelCacheKey + "|" + std::to_string(sectionIndex) + "|" + section.sectionName;
+
+        std::shared_ptr<RenderableObject> renderableObject;
+        if(objects.find(renderableObjectKey) != objects.end())
+        {
+            renderableObject = objects[renderableObjectKey];
+        }
+        else
+        {
+            renderableObject = std::make_shared<RenderableObject>(
+                section.vertices, section.indices,
+                &instance.GetDevice(),
+                &instance.GetGpuMemoryProperties(),
+                &instance.GetCommandPool(),
+                &instance.GetCommandBuffers()[0],
+                &instance.GetGraphicQueue(),
+                renderableObjectKey);
+            objects.emplace(renderableObjectKey, renderableObject);
+        }
+
+        // 加载材质
+        if (sectionPlan.bUsesUnsafeFallbackMaterial)
+        {
+            std::cout << "Unsafe mesh material slot fallback: "
+                      << sceneObjectBaseName << "::" << section.sectionName
+                      << " reason=" << sectionPlan.unsafeFallbackReason << std::endl;
+        }
+        std::shared_ptr<MaterialInstance> materialInstance =
+            LoadMaterialInstance(sectionPlan.materialInstancePath, geometryPass.sampleCount);
+
+        // 创建场景物体。多 section 模型拆成多个 SceneObject 参与现有材质分组渲染。
+        std::string sceneObjectName = sceneObjectBaseName;
+        if (modelResource.sections.size() > 1)
+        {
+            sceneObjectName += "::" + section.sectionName;
+        }
+        if(sceneObjects.find(sceneObjectName) != sceneObjects.end())
+        {
+            sceneObjectName += "_" + std::to_string(sectionIndex);
+        }
+
+        std::shared_ptr<SceneObject> sceneObject = std::make_shared<SceneObject>(renderableObject, materialInstance);
         sceneObject->SetName(sceneObjectName);
         sceneObject->SetPosition(position);
-            sceneObject->SetRotation(rotation);
-            sceneObject->SetScale(scale);
+        sceneObject->SetRotation(rotation);
+        sceneObject->SetScale(scale);
         sceneObject->UpdateModelMatrix();
+
+        //储存到场景
+        sceneObjects.emplace(sceneObjectName, std::move(sceneObject));
     }
-    //储存到场景
-    objects.emplace(modelDataPath, std::move(renderableObject));
-    sceneObjects.emplace(sceneObjectName, std::move(sceneObject));  
 }
 
 void SceneLoader::LoadDirectionalLightObject(const nlohmann::basic_json<>& node)
