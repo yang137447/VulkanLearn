@@ -1,7 +1,7 @@
 #include "deviceTextureFactory.h"
 
 #include "../../commonFunction.h"
-#include "../../vulkanManager.h"
+#include "render/backend/rendererBackendVulkan.h"
 
 #include <cmath>
 #include <cstring>
@@ -32,6 +32,7 @@ namespace
 }
 
 std::tuple<vk::Image, vk::DeviceMemory, uint32_t, vk::Format> DeviceTextureFactory::CreateFromHostImage(
+    VL::RendererBackendVulkan& rendererBackend,
     const HostImage& image,
     const std::string& debugName,
     const DeviceTextureCreateOptions& options)
@@ -41,28 +42,20 @@ std::tuple<vk::Image, vk::DeviceMemory, uint32_t, vk::Format> DeviceTextureFacto
         throw std::runtime_error("Invalid HostImage for DeviceTextureFactory::CreateFromHostImage");
     }
 
-    auto& vulkanManager = VulkanManager::GetInstance();
-    auto& device = vulkanManager.GetDevice();
-    auto& memoryProperties = vulkanManager.GetGpuMemoryProperties();
-    auto& commandPool = vulkanManager.GetCommandPool();
-    auto& graphicsQueue = vulkanManager.GetGraphicQueue();
-
     vk::Format format = ToVkFormat(image.format);
     const vk::DeviceSize imageSize = static_cast<vk::DeviceSize>(image.data.size());
     vk::DeviceSize stagingSize = imageSize;
     vk::BufferUsageFlags stagingUsage = vk::BufferUsageFlagBits::eTransferSrc;
     vk::MemoryPropertyFlags stagingMemFlags = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
-    auto [stagingBuffer, stagingMemory] = CommonFunction::CreateBuffer(
-        device,
+    auto [stagingBuffer, stagingMemory] = rendererBackend.CreateBuffer(
         stagingSize,
         stagingUsage,
-        memoryProperties,
         stagingMemFlags,
         "StagingBuffer_Texture: " + debugName);
 
-    void* mapped = device.mapMemory(stagingMemory, 0, imageSize);
+    void* mapped = rendererBackend.MapMemory(stagingMemory, imageSize);
     std::memcpy(mapped, image.data.data(), static_cast<size_t>(imageSize));
-    device.unmapMemory(stagingMemory);
+    rendererBackend.UnmapMemory(stagingMemory);
 
     uint32_t mipLevels = 1;
     if (options.generateMipmapsOnDevice)
@@ -78,8 +71,7 @@ std::tuple<vk::Image, vk::DeviceMemory, uint32_t, vk::Format> DeviceTextureFacto
 
     vk::ImageTiling tiling = vk::ImageTiling::eOptimal;
     vk::MemoryPropertyFlags imageMemoryFlags = vk::MemoryPropertyFlagBits::eDeviceLocal;
-    auto [deviceImage, deviceImageMemory] = CommonFunction::CreateImage(
-        device,
+    auto [deviceImage, deviceImageMemory] = rendererBackend.CreateImage(
         image.width,
         image.height,
         mipLevels,
@@ -87,39 +79,31 @@ std::tuple<vk::Image, vk::DeviceMemory, uint32_t, vk::Format> DeviceTextureFacto
         format,
         tiling,
         usageFlags,
-        memoryProperties,
         imageMemoryFlags,
         "Texture: " + debugName);
 
-    CommonFunction::TransitionImageLayout(
+    rendererBackend.TransitionImageLayout(
         deviceImage,
         mipLevels,
         format,
-        device,
-        commandPool,
-        graphicsQueue,
         vk::ImageLayout::eUndefined,
         vk::ImageLayout::eTransferDstOptimal);
-    CommonFunction::CopyBufferToImage(device, graphicsQueue, commandPool, stagingBuffer, deviceImage, image.width, image.height);
+    rendererBackend.CopyBufferToImage(stagingBuffer, deviceImage, image.width, image.height);
     if (options.generateMipmapsOnDevice)
     {
-        CommonFunction::GenerateMipmaps(device, graphicsQueue, commandPool, deviceImage, image.width, image.height, mipLevels);
+        rendererBackend.GenerateMipmaps(deviceImage, image.width, image.height, mipLevels);
     }
     else
     {
-        CommonFunction::TransitionImageLayout(
+        rendererBackend.TransitionImageLayout(
             deviceImage,
             mipLevels,
             format,
-            device,
-            commandPool,
-            graphicsQueue,
             vk::ImageLayout::eTransferDstOptimal,
             vk::ImageLayout::eShaderReadOnlyOptimal);
     }
 
-    device.destroyBuffer(stagingBuffer);
-    device.freeMemory(stagingMemory);
+    rendererBackend.DestroyBuffer(stagingBuffer, stagingMemory);
 
     return { deviceImage, deviceImageMemory, mipLevels, format };
 }

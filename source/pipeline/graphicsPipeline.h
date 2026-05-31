@@ -15,7 +15,6 @@ class GraphicsPipeline : public PipelineBase
 public:
     
     GraphicsPipeline(vk::Device *device,
-                    vk::PhysicalDeviceMemoryProperties *gpuMemoryProperties,
                     vk::RenderPass *renderPass,
                     const ShaderVariantKey& shaderVariantKey,
                     vk::SampleCountFlagBits sampleCount,
@@ -51,7 +50,6 @@ private:
     
     vk::Device* device;
     vk::RenderPass* renderPass;
-    vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties;
     vk::SampleCountFlagBits sampleCount;
     uint32_t colorAttachmentCount = 1;
     GraphicsPipelineStateDesc pipelineStateDesc;

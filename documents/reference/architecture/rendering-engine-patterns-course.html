@@ -1,0 +1,1119 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Vulkan/C++ 渲染引擎模式教材</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23111315'/%3E%3Cpath d='M6 23h20L16 5z' fill='%236cc6d9'/%3E%3Cpath d='M10 23h12l-6-10z' fill='%23f2c56b'/%3E%3C/svg%3E">
+    <style>
+        :root {
+            color-scheme: dark;
+            --bg: #111315;
+            --surface: #171b1f;
+            --surface-2: #20262b;
+            --surface-3: #263039;
+            --line: #36424c;
+            --text: #eef2f3;
+            --muted: #aab5bb;
+            --soft: #cdd6db;
+            --cyan: #6cc6d9;
+            --green: #93d083;
+            --amber: #f2c56b;
+            --rose: #ec8d9e;
+            --blue: #91b8ff;
+            --violet: #c7a8ff;
+            --code: #0b0e10;
+            --shadow: 0 22px 60px rgba(0, 0, 0, 0.26);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            margin: 0;
+            background:
+                linear-gradient(135deg, rgba(108, 198, 217, 0.08), transparent 32%),
+                linear-gradient(315deg, rgba(147, 208, 131, 0.08), transparent 30%),
+                var(--bg);
+            color: var(--text);
+            font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+            line-height: 1.68;
+        }
+
+        a {
+            color: var(--cyan);
+            text-decoration: none;
+        }
+
+        a:hover {
+            text-decoration: underline;
+        }
+
+        .shell {
+            display: grid;
+            grid-template-columns: 286px minmax(0, 1fr);
+            min-height: 100vh;
+        }
+
+        aside {
+            position: sticky;
+            top: 0;
+            height: 100vh;
+            padding: 24px 18px;
+            border-right: 1px solid var(--line);
+            background: rgba(18, 22, 25, 0.96);
+            overflow: auto;
+        }
+
+        .brand {
+            padding-bottom: 18px;
+            margin-bottom: 18px;
+            border-bottom: 1px solid var(--line);
+        }
+
+        .brand strong {
+            display: block;
+            font-size: 19px;
+            line-height: 1.25;
+        }
+
+        .brand span {
+            display: block;
+            margin-top: 8px;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        nav {
+            display: grid;
+            gap: 4px;
+        }
+
+        nav a {
+            display: block;
+            padding: 8px 10px;
+            border-radius: 6px;
+            color: var(--muted);
+            font-size: 14px;
+        }
+
+        nav a:hover {
+            background: var(--surface-2);
+            color: var(--text);
+            text-decoration: none;
+        }
+
+        main {
+            min-width: 0;
+        }
+
+        .hero {
+            padding: 58px min(6vw, 72px) 34px;
+            border-bottom: 1px solid var(--line);
+            background:
+                linear-gradient(120deg, rgba(108, 198, 217, 0.14), rgba(242, 197, 107, 0.08) 48%, rgba(236, 141, 158, 0.10)),
+                #14181b;
+        }
+
+        .eyebrow {
+            margin: 0 0 12px;
+            color: var(--amber);
+            font-size: 13px;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+
+        h1 {
+            max-width: 980px;
+            margin: 0;
+            font-size: 42px;
+            line-height: 1.15;
+            font-weight: 760;
+        }
+
+        .hero p {
+            max-width: 920px;
+            margin: 18px 0 0;
+            color: var(--soft);
+            font-size: 17px;
+        }
+
+        .hero-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 12px;
+            max-width: 1120px;
+            margin-top: 28px;
+        }
+
+        .metric {
+            min-height: 96px;
+            padding: 14px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: rgba(17, 19, 21, 0.76);
+        }
+
+        .metric strong {
+            display: block;
+            color: var(--text);
+            font-size: 24px;
+        }
+
+        .metric span {
+            display: block;
+            margin-top: 4px;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .content {
+            max-width: 1220px;
+            padding: 34px min(6vw, 72px) 78px;
+        }
+
+        section {
+            padding: 28px 0;
+            border-bottom: 1px solid rgba(54, 66, 76, 0.72);
+        }
+
+        section:last-child {
+            border-bottom: 0;
+        }
+
+        h2 {
+            margin: 0 0 12px;
+            font-size: 28px;
+            line-height: 1.25;
+        }
+
+        h3 {
+            margin: 26px 0 10px;
+            font-size: 20px;
+        }
+
+        p {
+            margin: 0 0 14px;
+        }
+
+        .lead {
+            max-width: 980px;
+            color: var(--soft);
+            font-size: 16px;
+        }
+
+        .callout {
+            margin: 18px 0;
+            padding: 16px 18px;
+            border-left: 4px solid var(--cyan);
+            background: rgba(108, 198, 217, 0.08);
+        }
+
+        .callout strong {
+            color: var(--cyan);
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 14px;
+            margin-top: 18px;
+        }
+
+        .grid.two {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .grid.four {
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+        }
+
+        .card {
+            min-width: 0;
+            padding: 16px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: rgba(23, 27, 31, 0.92);
+            box-shadow: var(--shadow);
+        }
+
+        .card h3,
+        .card h4 {
+            margin-top: 0;
+        }
+
+        h4 {
+            margin: 0 0 8px;
+            font-size: 16px;
+            line-height: 1.35;
+        }
+
+        .card p,
+        .card li {
+            color: var(--soft);
+            font-size: 14px;
+        }
+
+        .tag {
+            display: inline-flex;
+            align-items: center;
+            min-height: 26px;
+            padding: 2px 8px;
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            color: var(--muted);
+            background: var(--surface-2);
+            font-size: 12px;
+            font-weight: 700;
+        }
+
+        .tag.cyan { color: var(--cyan); }
+        .tag.green { color: var(--green); }
+        .tag.amber { color: var(--amber); }
+        .tag.rose { color: var(--rose); }
+        .tag.blue { color: var(--blue); }
+        .tag.violet { color: var(--violet); }
+
+        .matrix {
+            width: 100%;
+            margin: 18px 0;
+            border-collapse: collapse;
+            overflow: hidden;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: var(--surface);
+        }
+
+        .matrix th,
+        .matrix td {
+            padding: 11px 12px;
+            border-bottom: 1px solid var(--line);
+            border-right: 1px solid var(--line);
+            text-align: left;
+            vertical-align: top;
+        }
+
+        .matrix th {
+            background: var(--surface-2);
+            color: var(--text);
+            font-size: 13px;
+        }
+
+        .matrix td {
+            color: var(--soft);
+            font-size: 14px;
+        }
+
+        .matrix tr:last-child td {
+            border-bottom: 0;
+        }
+
+        .matrix th:last-child,
+        .matrix td:last-child {
+            border-right: 0;
+        }
+
+        ul,
+        ol {
+            margin: 8px 0 0;
+            padding-left: 20px;
+        }
+
+        li {
+            margin: 6px 0;
+        }
+
+        code {
+            padding: 2px 5px;
+            border-radius: 5px;
+            background: var(--code);
+            color: var(--amber);
+            font-family: Consolas, "Cascadia Mono", monospace;
+            font-size: 0.94em;
+        }
+
+        pre {
+            overflow: auto;
+            padding: 16px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: var(--code);
+        }
+
+        pre code {
+            padding: 0;
+            background: transparent;
+            color: var(--soft);
+        }
+
+        .flow {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: 10px;
+            margin: 18px 0;
+        }
+
+        .flow div {
+            min-height: 92px;
+            padding: 13px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: var(--surface);
+        }
+
+        .flow strong {
+            display: block;
+            margin-bottom: 5px;
+        }
+
+        .flow span {
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .lesson {
+            display: grid;
+            grid-template-columns: 210px minmax(0, 1fr);
+            gap: 18px;
+            margin: 18px 0;
+            padding: 18px 0;
+            border-top: 1px solid rgba(54, 66, 76, 0.72);
+        }
+
+        .lesson-title {
+            color: var(--muted);
+            font-size: 13px;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+
+        .pattern-list {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px;
+        }
+
+        .pattern {
+            padding: 13px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: var(--surface);
+        }
+
+        .pattern strong {
+            display: block;
+            margin-bottom: 4px;
+            color: var(--text);
+        }
+
+        .pattern span {
+            display: block;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .axis {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        .axis .left {
+            border-left: 4px solid var(--green);
+        }
+
+        .axis .right {
+            border-left: 4px solid var(--rose);
+        }
+
+        .footer-note {
+            margin-top: 26px;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        @media (max-width: 1080px) {
+            .shell {
+                grid-template-columns: 1fr;
+            }
+
+            aside {
+                position: static;
+                height: auto;
+                border-right: 0;
+                border-bottom: 1px solid var(--line);
+            }
+
+            nav {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .hero-grid,
+            .grid,
+            .grid.two,
+            .grid.four,
+            .flow {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+        }
+
+        @media (max-width: 720px) {
+            h1 {
+                font-size: 32px;
+            }
+
+            .content,
+            .hero {
+                padding-left: 20px;
+                padding-right: 20px;
+            }
+
+            nav,
+            .hero-grid,
+            .grid,
+            .grid.two,
+            .grid.four,
+            .flow,
+            .lesson,
+            .pattern-list,
+            .axis {
+                grid-template-columns: 1fr;
+            }
+
+            .matrix {
+                display: block;
+                overflow-x: auto;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="shell">
+        <aside>
+            <div class="brand">
+                <strong>渲染引擎模式教材</strong>
+                <span>Vulkan / C++ / Engine Architecture</span>
+            </div>
+            <nav aria-label="章节目录">
+                <a href="#map">00 分类地图</a>
+                <a href="#method">01 学习方法</a>
+                <a href="#path">02 学习路线</a>
+                <a href="#gof">03 GoF 模式</a>
+                <a href="#architecture">04 架构模式</a>
+                <a href="#rendering">05 渲染专用模式</a>
+                <a href="#data">06 数据模式</a>
+                <a href="#performance">07 性能模式</a>
+                <a href="#cpp">08 C++ 惯用法</a>
+                <a href="#concurrency">09 并发异步</a>
+                <a href="#gpu">10 Vulkan/GPU</a>
+                <a href="#combos">11 高频组合</a>
+                <a href="#compare">12 常见对比</a>
+                <a href="#vulkanlearn">13 VulkanLearn 落点</a>
+                <a href="#anti">14 反模式</a>
+                <a href="#template">15 笔记模板</a>
+            </nav>
+        </aside>
+
+        <main>
+            <header class="hero">
+                <p class="eyebrow">Rendering Engine Pattern Course</p>
+                <h1>把设计模式学成渲染引擎问题手册</h1>
+                <p>这份教材把 GoF 设计模式、架构模式、渲染专用模式、数据模式、性能模式、C++ 惯用法、并发模式和 Vulkan/GPU 工程模式统一整理，目标是帮助你在写渲染引擎时知道每个模式解决什么痛点、放在哪里、什么时候不该用。</p>
+                <div class="hero-grid">
+                    <div class="metric">
+                        <strong>8</strong>
+                        <span>类模式地图</span>
+                    </div>
+                    <div class="metric">
+                        <strong>90+</strong>
+                        <span>渲染引擎高频概念</span>
+                    </div>
+                    <div class="metric">
+                        <strong>6</strong>
+                        <span>阶段学习路线</span>
+                    </div>
+                    <div class="metric">
+                        <strong>1</strong>
+                        <span>VulkanLearn 项目落点表</span>
+                    </div>
+                </div>
+            </header>
+
+            <div class="content">
+                <section id="map">
+                    <h2>00. 分类地图</h2>
+                    <p class="lead">模式可以按问题层级来记。GoF 23 种只是其中一层；做渲染引擎时，更常碰到的是资源生命周期、GPU 同步、数据驱动、材质系统、渲染图、缓存和多线程协作。</p>
+                    <table class="matrix">
+                        <thead>
+                            <tr>
+                                <th>大类</th>
+                                <th>关注点</th>
+                                <th>典型例子</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>GoF Design Patterns</td>
+                                <td>类、对象、接口之间如何协作。</td>
+                                <td>Factory Method、Builder、Observer、Strategy、Facade。</td>
+                            </tr>
+                            <tr>
+                                <td>Architecture Patterns</td>
+                                <td>系统整体如何分层、通信和组织模块。</td>
+                                <td>ECS、Scene Graph、Render Graph、Event Bus、Plugin System。</td>
+                            </tr>
+                            <tr>
+                                <td>Rendering Patterns</td>
+                                <td>渲染流程、材质、pass、shader、GPU 资源如何组织。</td>
+                                <td>Material Instance、Render Queue、Pipeline Cache、Shader Reflection。</td>
+                            </tr>
+                            <tr>
+                                <td>Data Patterns</td>
+                                <td>场景、资源、组件、配置如何表达和传递。</td>
+                                <td>DTO、Snapshot、Handle、Prefab、Versioned Data。</td>
+                            </tr>
+                            <tr>
+                                <td>Performance Patterns</td>
+                                <td>如何减少 CPU、GPU、内存和同步开销。</td>
+                                <td>Cache、Batching、Instancing、LOD、Arena、Ring Buffer。</td>
+                            </tr>
+                            <tr>
+                                <td>C++ Idioms</td>
+                                <td>如何用 C++ 安全高效地表达资源和抽象。</td>
+                                <td>RAII、Move Semantics、PImpl、CRTP、Rule of Five。</td>
+                            </tr>
+                            <tr>
+                                <td>Concurrency Patterns</td>
+                                <td>多线程、异步加载、任务调度如何协作。</td>
+                                <td>Job System、Producer-Consumer、Thread Pool、Double Buffered State。</td>
+                            </tr>
+                            <tr>
+                                <td>Vulkan / GPU Patterns</td>
+                                <td>命令缓冲、描述符、同步、帧资源如何管理。</td>
+                                <td>Frames in Flight、Deletion Queue、Descriptor Allocator、Barrier Helper。</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <div class="callout">
+                        <strong>记忆原则：</strong>先记“它解决哪个引擎问题”，再记名字。比如 RAII 不是“C++ 术语”，而是“CPU 侧对象生命周期怎么自动收口”；Deferred Destruction 不是“销毁队列”，而是“GPU 还没用完资源时不能马上释放”。
+                    </div>
+                </section>
+
+                <section id="method">
+                    <h2>01. 学习方法</h2>
+                    <p class="lead">这份教材建议按问题学习，而不是按百科条目背诵。每个模式都要放回渲染引擎里的具体系统：Pipeline、Material、Render Graph、Scene、Asset、Frame Resource 或 GPU Sync。</p>
+                    <div class="flow" aria-label="学习流程">
+                        <div>
+                            <strong>1. 痛点</strong>
+                            <span>先描述不用模式会出现什么具体问题。</span>
+                        </div>
+                        <div>
+                            <strong>2. 名字</strong>
+                            <span>再把问题和模式名关联起来。</span>
+                        </div>
+                        <div>
+                            <strong>3. 结构</strong>
+                            <span>拆出核心对象、数据和所有权关系。</span>
+                        </div>
+                        <div>
+                            <strong>4. 引擎落点</strong>
+                            <span>找到它在 VulkanLearn 中可能出现的位置。</span>
+                        </div>
+                        <div>
+                            <strong>5. 边界</strong>
+                            <span>写清什么时候不该用，避免为了模式而模式。</span>
+                        </div>
+                    </div>
+                    <div class="grid three">
+                        <div class="card">
+                            <span class="tag cyan">问题优先</span>
+                            <h3>先问痛点</h3>
+                            <p>例如“Pipeline 创建参数太多且重复”会自然引出 Builder 和 Pipeline Cache。</p>
+                        </div>
+                        <div class="card">
+                            <span class="tag green">系统落点</span>
+                            <h3>再找代码位置</h3>
+                            <p>把模式绑定到具体系统：RenderGraph、PipelineFactory、MaterialInstance、SceneLoader。</p>
+                        </div>
+                        <div class="card">
+                            <span class="tag amber">边界意识</span>
+                            <h3>记录代价</h3>
+                            <p>每个模式都会增加某种复杂度，笔记里必须写“什么时候不用”。</p>
+                        </div>
+                    </div>
+                </section>
+
+                <section id="path">
+                    <h2>02. 推荐学习路线</h2>
+                    <p class="lead">渲染引擎的学习顺序应该从生命周期开始，再到对象创建、渲染流程、数据驱动、性能规模化，最后进入多线程和工具链。</p>
+                    <div class="lesson">
+                        <div class="lesson-title">Phase 1<br>资源生命周期</div>
+                        <div class="pattern-list">
+                            <div class="pattern"><strong>RAII</strong><span>用 C++ 对象生命周期自动释放 CPU 侧资源。</span></div>
+                            <div class="pattern"><strong>Rule of Five / Move</strong><span>明确 Vulkan handle wrapper 的移动和析构规则。</span></div>
+                            <div class="pattern"><strong>Handle Pattern</strong><span>用 ID 引用资源，避免裸指针悬空。</span></div>
+                            <div class="pattern"><strong>Deferred Destruction</strong><span>等待 GPU 完成后再真正销毁资源。</span></div>
+                        </div>
+                    </div>
+                    <div class="lesson">
+                        <div class="lesson-title">Phase 2<br>对象创建</div>
+                        <div class="pattern-list">
+                            <div class="pattern"><strong>Factory / Builder</strong><span>创建不同类型资源，分步骤构建复杂 pipeline。</span></div>
+                            <div class="pattern"><strong>Pipeline Cache</strong><span>用稳定 key 复用昂贵的 pipeline 对象。</span></div>
+                            <div class="pattern"><strong>Descriptor Allocator</strong><span>集中管理 descriptor pool 和 descriptor set 分配。</span></div>
+                            <div class="pattern"><strong>Shader Reflection</strong><span>从 shader 反射绑定信息，减少手写错误。</span></div>
+                        </div>
+                    </div>
+                    <div class="lesson">
+                        <div class="lesson-title">Phase 3<br>渲染流程</div>
+                        <div class="pattern-list">
+                            <div class="pattern"><strong>Render Pass Pattern</strong><span>每个 pass 负责一段渲染逻辑。</span></div>
+                            <div class="pattern"><strong>Render Graph</strong><span>声明资源读写，让图管理顺序和生命周期。</span></div>
+                            <div class="pattern"><strong>Resource State Tracking</strong><span>跟踪 layout/access/stage 以辅助同步。</span></div>
+                            <div class="pattern"><strong>Debug Marker</strong><span>让 RenderDoc、Nsight、Tracy 中的 GPU 工作可读。</span></div>
+                        </div>
+                    </div>
+                    <div class="lesson">
+                        <div class="lesson-title">Phase 4<br>数据驱动</div>
+                        <div class="pattern-list">
+                            <div class="pattern"><strong>DTO</strong><span>把 JSON 配置映射为简单数据结构。</span></div>
+                            <div class="pattern"><strong>Material Instance</strong><span>材质模板和实例参数分离。</span></div>
+                            <div class="pattern"><strong>Dirty Flag</strong><span>只在数据变化后重新计算或上传。</span></div>
+                            <div class="pattern"><strong>Versioned Data</strong><span>给 JSON/schema 留出演进空间。</span></div>
+                        </div>
+                    </div>
+                    <div class="lesson">
+                        <div class="lesson-title">Phase 5<br>性能规模化</div>
+                        <div class="pattern-list">
+                            <div class="pattern"><strong>Arena / Ring Buffer</strong><span>高效处理每帧临时内存和动态 buffer。</span></div>
+                            <div class="pattern"><strong>Render Queue / Sorting Key</strong><span>减少状态切换，控制透明/不透明顺序。</span></div>
+                            <div class="pattern"><strong>Batching / Instancing</strong><span>减少 draw call。</span></div>
+                            <div class="pattern"><strong>Culling / LOD</strong><span>控制不可见对象和远景成本。</span></div>
+                        </div>
+                    </div>
+                    <div class="lesson">
+                        <div class="lesson-title">Phase 6<br>多线程工具链</div>
+                        <div class="pattern-list">
+                            <div class="pattern"><strong>Job System</strong><span>把 culling、animation、import 等任务并行化。</span></div>
+                            <div class="pattern"><strong>Producer-Consumer</strong><span>加载线程生产，渲染线程消费。</span></div>
+                            <div class="pattern"><strong>Hot Reload</strong><span>运行时替换 shader/material/texture。</span></div>
+                            <div class="pattern"><strong>Command + Snapshot</strong><span>支撑编辑器撤销和场景回滚。</span></div>
+                        </div>
+                    </div>
+                </section>
+
+                <section id="gof">
+                    <h2>03. GoF 设计模式</h2>
+                    <p class="lead">GoF 模式适合回答“对象之间怎么协作”。在渲染引擎里，它们经常出现在资源创建、材质系统、渲染流程、编辑器操作和事件通知中。</p>
+                    <h3>创建型</h3>
+                    <table class="matrix">
+                        <thead>
+                            <tr>
+                                <th>Pattern</th>
+                                <th>一句话</th>
+                                <th>渲染引擎用途</th>
+                                <th>优点</th>
+                                <th>代价</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr><td>Singleton 单例</td><td>保证一个类只有一个实例并提供全局访问点。</td><td>日志、全局配置、统计信息，慎用于 Renderer/Device。</td><td>访问方便，初始化集中。</td><td>隐藏依赖，测试困难，生命周期和线程安全容易出问题。</td></tr>
+                            <tr><td>Factory Method 工厂方法</td><td>把具体对象创建延迟到子类或具体工厂。</td><td>创建 Texture、Buffer、Shader、Pipeline、PlatformWindow。</td><td>调用方不依赖具体类型。</td><td>类数量增加，简单场景显得啰嗦。</td></tr>
+                            <tr><td>Abstract Factory 抽象工厂</td><td>创建一组相关对象而不暴露具体实现。</td><td>Vulkan/DX12/Metal 后端分别创建 RHI 对象族。</td><td>保证同一后端对象族一致。</td><td>增加新产品类型比较麻烦。</td></tr>
+                            <tr><td>Builder 建造者</td><td>分步骤构建复杂对象。</td><td>GraphicsPipelineBuilder、RenderPassBuilder、DescriptorLayoutBuilder。</td><td>构建参数清晰，避免超长构造函数。</td><td>对象简单时会显得过度设计。</td></tr>
+                            <tr><td>Prototype 原型</td><td>通过复制已有对象创建新对象。</td><td>材质实例从材质模板克隆，Prefab 实例化。</td><td>复用默认配置，创建成本低。</td><td>深拷贝、GPU 资源和句柄所有权要小心。</td></tr>
+                        </tbody>
+                    </table>
+                    <h3>结构型</h3>
+                    <table class="matrix">
+                        <thead>
+                            <tr>
+                                <th>Pattern</th>
+                                <th>一句话</th>
+                                <th>渲染引擎用途</th>
+                                <th>优点</th>
+                                <th>代价</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr><td>Adapter 适配器</td><td>把不兼容接口转换成目标接口。</td><td>封装 SDL、Assimp、stb、ImGui、VMA。</td><td>复用第三方库，隔离外部 API。</td><td>适配层设计不好会泄漏外部概念。</td></tr>
+                            <tr><td>Bridge 桥接</td><td>把抽象和实现分离，让二者独立变化。</td><td>Renderer API 与 Vulkan/DX12/Metal 后端分离。</td><td>后端可替换，抽象层稳定。</td><td>过早抽象会拖慢学习项目迭代。</td></tr>
+                            <tr><td>Composite 组合</td><td>用树形结构统一处理单个对象和组合对象。</td><td>Scene Graph、UI Tree、Pass Group。</td><td>父子层级自然，遍历统一。</td><td>复杂场景下更新传播成本高。</td></tr>
+                            <tr><td>Decorator 装饰器</td><td>不改原类，动态叠加功能。</td><td>Debug Renderer、Profiler Wrapper、Validation Wrapper。</td><td>比继承灵活，功能可组合。</td><td>多层包装后调用链和调试复杂。</td></tr>
+                            <tr><td>Facade 外观</td><td>为复杂子系统提供简单入口。</td><td>Renderer::renderFrame、AssetSystem::load、RenderGraph::execute。</td><td>降低使用门槛，隔离内部复杂度。</td><td>外观容易膨胀成全能对象。</td></tr>
+                            <tr><td>Flyweight 享元</td><td>共享大量对象的公共状态。</td><td>共享 Mesh、Material、Shader、Pipeline、Sampler。</td><td>降低内存和创建成本。</td><td>需要拆分共享状态和实例状态。</td></tr>
+                            <tr><td>Proxy 代理</td><td>通过代理控制真实对象访问。</td><td>Lazy Texture、Streaming Resource、Placeholder Material。</td><td>可加入懒加载、缓存和占位逻辑。</td><td>真实对象生命周期和线程状态更复杂。</td></tr>
+                        </tbody>
+                    </table>
+                    <h3>行为型</h3>
+                    <table class="matrix">
+                        <thead>
+                            <tr>
+                                <th>Pattern</th>
+                                <th>一句话</th>
+                                <th>渲染引擎用途</th>
+                                <th>优点</th>
+                                <th>代价</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr><td>Chain of Responsibility 责任链</td><td>请求沿处理链传递直到被处理。</td><td>输入事件分发、资源路径 fallback、importer fallback。</td><td>发送者和处理者解耦。</td><td>请求可能无人处理，调试链路较长。</td></tr>
+                            <tr><td>Command 命令</td><td>把请求封装成对象。</td><td>Render Command、Editor Command、Undo/Redo、任务队列。</td><td>可排队、撤销、记录、跨线程传递。</td><td>命令类型可能很多。</td></tr>
+                            <tr><td>Interpreter 解释器</td><td>定义语法并解释表达式。</td><td>简单材质表达式、控制台命令、小型规则 DSL。</td><td>适合小语言和规则系统。</td><td>复杂语法应改用 parser 或脚本语言。</td></tr>
+                            <tr><td>Iterator 迭代器</td><td>统一遍历集合而不暴露内部结构。</td><td>遍历组件、资源表、场景节点、render queue。</td><td>封装容器结构。</td><td>注意迭代器失效规则。</td></tr>
+                            <tr><td>Mediator 中介者</td><td>用中介对象管理多个对象交互。</td><td>编辑器面板互相联动、工具窗口协调。</td><td>减少对象之间直接依赖。</td><td>中介者容易变成复杂中心。</td></tr>
+                            <tr><td>Memento 备忘录</td><td>保存并恢复对象状态。</td><td>编辑器撤销、场景快照、材质参数回滚。</td><td>不破坏封装即可恢复状态。</td><td>快照可能占内存，GPU 资源不能简单拷贝。</td></tr>
+                            <tr><td>Observer 观察者</td><td>一个对象变化时通知依赖者。</td><td>resize、asset hot reload、config change、scene change。</td><td>扩展方便，适合事件驱动。</td><td>生命周期、通知顺序和递归通知容易出错。</td></tr>
+                            <tr><td>State 状态</td><td>对象行为随内部状态变化。</td><td>Resource Loading State、Renderer Init State、Editor Tool State。</td><td>减少大段 if/switch。</td><td>状态类增多，切换关系需要清晰表达。</td></tr>
+                            <tr><td>Strategy 策略</td><td>把算法封装成可替换对象。</td><td>排序策略、culling 策略、tone mapping 曲线、shadow filter。</td><td>算法切换灵活。</td><td>调用方需要知道策略差异。</td></tr>
+                            <tr><td>Template Method 模板方法</td><td>父类定义流程骨架，子类实现步骤。</td><td>BasePass::execute 调用 setup/draw/cleanup。</td><td>固定流程复用方便。</td><td>依赖继承，不如组合灵活。</td></tr>
+                            <tr><td>Visitor 访问者</td><td>把操作从对象结构中分离。</td><td>场景遍历、序列化、调试检查、统计收集。</td><td>新增操作方便。</td><td>新增元素类型困难，结构耦合较强。</td></tr>
+                        </tbody>
+                    </table>
+                </section>
+
+                <section id="architecture">
+                    <h2>04. 架构模式</h2>
+                    <p class="lead">架构模式回答“系统怎么分层、模块怎么通信、运行时对象怎么组织”。这些模式比 GoF 更接近引擎骨架。</p>
+                    <div class="grid">
+                        <div class="card"><span class="tag cyan">Layering</span><h3>Layered Architecture</h3><p>把系统按职责分成 Platform、RHI、Renderer、Scene、Editor 等层。优点是边界清楚；代价是层太多会增加数据搬运。</p></div>
+                        <div class="card"><span class="tag green">Modules</span><h3>Module System</h3><p>Renderer、Asset、Input、Scene、Editor 等系统按模块初始化、更新和关闭。重点是依赖顺序和生命周期。</p></div>
+                        <div class="card"><span class="tag amber">Scene</span><h3>ECS</h3><p>Entity 是 ID，Component 存数据，System 写逻辑。适合大量对象和批处理，但和传统 OOP 混用时要划清边界。</p></div>
+                        <div class="card"><span class="tag blue">Scene</span><h3>Scene Graph</h3><p>用树表达父子层级和 Transform 继承。适合编辑器大纲、挂点和层级对象。</p></div>
+                        <div class="card"><span class="tag rose">Render</span><h3>Render Graph / Frame Graph</h3><p>声明 pass 和资源依赖，由图决定顺序、临时资源和同步机会。代价是需要严格的资源声明。</p></div>
+                        <div class="card"><span class="tag violet">Extensibility</span><h3>Plugin System</h3><p>导入器、编辑器工具、渲染后端通过插件注册。需要处理 ABI、版本和生命周期。</p></div>
+                        <div class="card"><span class="tag cyan">Dependency</span><h3>Service Locator</h3><p>通过全局注册表查找服务。使用方便，但容易隐藏依赖，适合 Logger、Profiler 这类工具服务。</p></div>
+                        <div class="card"><span class="tag green">Dependency</span><h3>Dependency Injection</h3><p>显式把 Device、AssetSystem、RenderGraph 等依赖传给对象。更清楚、更可测试，但构造链更长。</p></div>
+                        <div class="card"><span class="tag amber">Events</span><h3>Event Bus</h3><p>系统级事件中心，用于 WindowResize、AssetReloaded、SceneLoaded。过度使用会让控制流难追踪。</p></div>
+                        <div class="card"><span class="tag blue">Registry</span><h3>Registry</h3><p>集中注册 Component、Importer、Pass、Shader Param。适合数据驱动和插件化，但要处理初始化顺序和名字冲突。</p></div>
+                        <div class="card"><span class="tag rose">Flow</span><h3>State Machine</h3><p>显式状态和转换管理 Engine Startup、Scene Loading、Swapchain Recreate、Editor Mode。</p></div>
+                        <div class="card"><span class="tag violet">Messaging</span><h3>Message Queue</h3><p>通过队列传递跨线程或跨系统消息，例如 Main Thread 到 Render Thread。</p></div>
+                    </div>
+                </section>
+
+                <section id="rendering">
+                    <h2>05. 渲染专用模式</h2>
+                    <p class="lead">渲染专用模式回答“pass、材质、shader、descriptor、pipeline、临时资源和绘制项怎么组织”。这部分是渲染引擎自己的核心语言。</p>
+                    <table class="matrix">
+                        <thead>
+                            <tr>
+                                <th>Pattern</th>
+                                <th>解决的问题</th>
+                                <th>典型用途</th>
+                                <th>注意点</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr><td>Render Pass Pattern</td><td>把渲染流程拆成职责明确的步骤。</td><td>ShadowPass、GBufferPass、LightingPass、BloomPass。</td><td>pass 间资源和同步关系需要统一管理。</td></tr>
+                            <tr><td>Render Graph</td><td>声明 pass 的资源读写依赖。</td><td>自动排序、资源别名、barrier 推导。</td><td>需要严格的资源声明和调试工具。</td></tr>
+                            <tr><td>Material / Material Instance</td><td>材质模板和参数实例分离。</td><td><code>M_</code> 定义 shader 和布局，<code>MI_</code> 提供贴图和参数。</td><td>参数校验、descriptor 更新和变体管理复杂。</td></tr>
+                            <tr><td>Shader Reflection</td><td>从 shader 反射绑定信息。</td><td>自动校验 descriptor、uniform、push constant。</td><td>依赖编译链和反射数据一致性。</td></tr>
+                            <tr><td>Shader Permutation</td><td>管理宏组合和 shader 变体。</td><td>Normal Map、Skinning、Alpha Test、Debug View。</td><td>组合爆炸，需要 cache 和裁剪策略。</td></tr>
+                            <tr><td>Pipeline State Object Cache</td><td>复用昂贵的 pipeline 创建结果。</td><td>Vulkan graphics/compute pipeline 重用。</td><td>key 必须完整且稳定。</td></tr>
+                            <tr><td>Descriptor Set Cache</td><td>复用 descriptor set 或 layout。</td><td>材质贴图绑定、pass 输入输出。</td><td>资源变化时失效规则复杂。</td></tr>
+                            <tr><td>Bindless Resource Pattern</td><td>用大资源数组和索引访问资源。</td><td>大量纹理、材质表、GPU-driven rendering。</td><td>需要 descriptor indexing 支持和严格生命周期。</td></tr>
+                            <tr><td>Render Queue</td><td>按用途组织绘制项。</td><td>Opaque、Masked、Transparent、Shadow、PostProcess。</td><td>分类边界和排序规则要稳定。</td></tr>
+                            <tr><td>Sorting Key</td><td>用整数 key 排序 draw item。</td><td>pipeline/material/depth/pass 合成排序 key。</td><td>key 位分配需要提前规划。</td></tr>
+                            <tr><td>Frame Resource Pattern</td><td>每帧独立资源避免读写冲突。</td><td>uniform buffer、descriptor、command pool、fence。</td><td>多帧资源增加内存占用。</td></tr>
+                            <tr><td>Deferred Destruction Queue</td><td>GPU 仍可能使用资源时延迟销毁。</td><td>Image、Buffer、Pipeline、DescriptorPool。</td><td>必须和 fence/timeline 绑定。</td></tr>
+                            <tr><td>Upload Queue / Staging Context</td><td>统一处理 CPU 到 GPU 上传。</td><td>texture、mesh、buffer 初始化。</td><td>同步和临时资源回收要谨慎。</td></tr>
+                            <tr><td>Transient Resource</td><td>临时 render target 自动分配和回收。</td><td>bloom mip、postprocess intermediate、depth prepass。</td><td>资源别名和同步更难调试。</td></tr>
+                            <tr><td>Temporal History</td><td>保存历史帧数据。</td><td>TAA、SSR、motion blur、temporal denoise。</td><td>需要 motion vector、history validation 和 resize 处理。</td></tr>
+                            <tr><td>Debug Marker Pattern</td><td>给 GPU 对象和 pass 加调试名字。</td><td>RenderDoc、Nsight、Tracy、NVTX。</td><td>需要贯穿资源创建和 pass 执行。</td></tr>
+                            <tr><td>Hot Reload</td><td>运行时重新加载 shader/material/texture。</td><td>shader 迭代、材质调参、编辑器工作流。</td><td>资源替换、失败回滚和线程同步复杂。</td></tr>
+                            <tr><td>GPU-Driven Rendering</td><td>GPU 生成或筛选 draw command。</td><td>indirect draw、compute culling、meshlet。</td><td>数据结构、同步和调试复杂度高。</td></tr>
+                        </tbody>
+                    </table>
+                </section>
+
+                <section id="data">
+                    <h2>06. 数据模式</h2>
+                    <p class="lead">数据模式回答“数据怎么保存、传递、引用、迁移和变更”。对于数据驱动渲染器，JSON/schema/asset manifest 往往比类继承更重要。</p>
+                    <div class="grid">
+                        <div class="card"><h3>DTO</h3><p>只承载数据，不承载复杂行为。适合 scene、material、mesh、terrain 配置结构。</p></div>
+                        <div class="card"><h3>Snapshot</h3><p>捕获某一时刻的状态。适合场景保存、编辑器撤销、帧调试记录。</p></div>
+                        <div class="card"><h3>Serialization</h3><p>把对象转换成可存储格式。适合 scene/material/render graph 配置。</p></div>
+                        <div class="card"><h3>Versioned Data</h3><p>数据格式带版本并可迁移。适合 material JSON v1/v2、scene schema v1/v2。</p></div>
+                        <div class="card"><h3>Data-Driven Config</h3><p>用外部数据驱动运行时对象。隐式约定必须文档化或 schema 化。</p></div>
+                        <div class="card"><h3>Prefab / Archetype</h3><p>可复用对象模板。适合常用模型、灯光组合、材质默认配置。</p></div>
+                        <div class="card"><h3>Handle Pattern</h3><p>用稳定 ID 引用资源。适合 TextureHandle、BufferHandle、MaterialHandle、Entity。</p></div>
+                        <div class="card"><h3>Sparse Set</h3><p>用稀疏和密集数组存储组件。ECS component storage 常用。</p></div>
+                        <div class="card"><h3>SoA / AoS</h3><p>按字段或对象组织内存。Transform、light、draw item 都会受数据布局影响。</p></div>
+                        <div class="card"><h3>Dirty Flag</h3><p>只有数据变化时才重新计算。适合 Transform matrix、descriptor update、material upload。</p></div>
+                        <div class="card"><h3>Resource Manifest</h3><p>记录资产路径、类型、依赖。适合 asset database、打包、热重载依赖追踪。</p></div>
+                        <div class="card"><h3>Stable ID</h3><p>用长期不变 ID 关联数据。资产 GUID、编辑器对象、序列化引用都需要它。</p></div>
+                    </div>
+                </section>
+
+                <section id="performance">
+                    <h2>07. 性能模式</h2>
+                    <p class="lead">性能模式回答“如何减少开销”。渲染引擎里不要把性能模式当装饰，它们通常直接影响系统边界。</p>
+                    <table class="matrix">
+                        <thead>
+                            <tr>
+                                <th>Pattern</th>
+                                <th>用途</th>
+                                <th>收益</th>
+                                <th>代价</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr><td>Cache</td><td>shader reflection、pipeline、texture、sampler、mesh。</td><td>避免重复计算和重复创建。</td><td>失效策略和内存占用要控制。</td></tr>
+                            <tr><td>Object Pool</td><td>command、component、temporary draw item、粒子。</td><td>减少频繁分配。</td><td>生命周期和清理时机需要纪律。</td></tr>
+                            <tr><td>Memory Pool</td><td>小对象分配、组件存储、资源元数据。</td><td>降低分配成本和碎片。</td><td>实现和调试更复杂。</td></tr>
+                            <tr><td>Arena / Linear Allocator</td><td>每帧临时内存、render list、scratch data。</td><td>极快，碎片少。</td><td>不适合单个对象长期释放。</td></tr>
+                            <tr><td>Ring Buffer</td><td>dynamic uniform/storage buffer、upload buffer。</td><td>适合 frames in flight。</td><td>需要对齐、fence 和 wrap 处理。</td></tr>
+                            <tr><td>Double / Triple Buffering</td><td>frame resource、swapchain、CPU/GPU shared data。</td><td>提高并行度。</td><td>增加内存和状态管理。</td></tr>
+                            <tr><td>Batching</td><td>sprite、UI、same material draw、static mesh。</td><td>减少 draw call 和状态切换。</td><td>限制材质和排序自由。</td></tr>
+                            <tr><td>Instancing</td><td>大量相同 mesh、草、树、道具。</td><td>大幅减少 draw call。</td><td>需要 instance buffer 和 per-instance 数据布局。</td></tr>
+                            <tr><td>Culling</td><td>Frustum、Occlusion、Backface、Portal、Cluster。</td><td>减少 GPU 工作量。</td><td>CPU/GPU 剔除成本不能超过收益。</td></tr>
+                            <tr><td>LOD</td><td>mesh LOD、texture mip、shadow cascade。</td><td>控制远景成本。</td><td>切换、过渡和资源制作成本。</td></tr>
+                            <tr><td>Spatial Partitioning</td><td>BVH、Octree、Grid、KD-Tree。</td><td>加速 culling、ray query、light query。</td><td>动态场景更新成本。</td></tr>
+                            <tr><td>Lazy Loading</td><td>texture、mesh、material、scene chunk。</td><td>缩短启动时间。</td><td>首次访问可能卡顿，需要占位资源。</td></tr>
+                            <tr><td>Async Streaming</td><td>大场景、贴图 mip、地形块。</td><td>平滑加载，支持大世界。</td><td>线程同步、优先级和失败回滚复杂。</td></tr>
+                            <tr><td>SIMD / Data-Oriented Design</td><td>skinning、culling、transform update。</td><td>缓存友好，吞吐高。</td><td>代码不如 OOP 直观。</td></tr>
+                        </tbody>
+                    </table>
+                </section>
+
+                <section id="cpp">
+                    <h2>08. C++ 惯用法</h2>
+                    <p class="lead">C++ 惯用法回答“如何正确表达所有权、生命周期和零成本抽象”。在 Vulkan 项目中，这一类通常比很多 GoF 模式更重要。</p>
+                    <div class="grid">
+                        <div class="card"><h3>RAII</h3><p>用对象生命周期管理资源获取和释放。管理 VkBuffer、VkImage、VkPipeline、file、mutex。</p></div>
+                        <div class="card"><h3>Rule of Zero / Five</h3><p>明确资源类的拷贝、移动和析构规则，避免重复释放和悬空资源。</p></div>
+                        <div class="card"><h3>Move Semantics</h3><p>转移资源所有权而非复制。资源 wrapper 的 moved-from 状态必须可析构、可赋值。</p></div>
+                        <div class="card"><h3>PImpl</h3><p>隐藏 Vulkan 头和后端实现，降低编译依赖。代价是间接访问和堆分配。</p></div>
+                        <div class="card"><h3>CRTP</h3><p>用模板实现静态多态。适合 typed handle、轻量 compile-time interface。</p></div>
+                        <div class="card"><h3>Type Erasure</h3><p>保存不同具体类型但暴露统一接口。适合 job、asset importer、resource deleter。</p></div>
+                        <div class="card"><h3>Strong Typedef</h3><p>区分 TextureHandle、BufferHandle、MaterialHandle，防止误传 ID。</p></div>
+                        <div class="card"><h3>Scope Guard</h3><p>离开作用域自动执行清理动作，适合临时状态恢复和失败路径回滚。</p></div>
+                        <div class="card"><h3>Smart Pointer Ownership</h3><p><code>unique_ptr</code> 表示独占对象，<code>shared_ptr</code> 慎用于共享资源。</p></div>
+                        <div class="card"><h3>Intrusive Ref Count</h3><p>引用计数放在对象内部，适合引擎资源，但对象侵入性强。</p></div>
+                        <div class="card"><h3>Span / View</h3><p>非拥有数组视图。适合 vertex data、draw item list、descriptor writes。</p></div>
+                        <div class="card"><h3>Enum Flags</h3><p>类型安全的 bit flags，适合 Vulkan 风格 usage、stage、access flags。</p></div>
+                    </div>
+                </section>
+
+                <section id="concurrency">
+                    <h2>09. 并发与异步模式</h2>
+                    <p class="lead">并发模式回答“多个线程如何合作而不破坏资源生命周期和渲染顺序”。这部分一旦设计错，问题通常会表现成偶现卡顿、死锁、资源提前释放或渲染线程读到旧数据。</p>
+                    <table class="matrix">
+                        <thead>
+                            <tr>
+                                <th>Pattern</th>
+                                <th>用途</th>
+                                <th>优点</th>
+                                <th>风险</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr><td>Job System</td><td>culling、animation、resource import、scene update。</td><td>利用多核，任务依赖可表达。</td><td>调试和依赖图复杂。</td></tr>
+                            <tr><td>Thread Pool</td><td>后台加载、CPU 计算任务。</td><td>避免频繁创建线程。</td><td>任务粒度和阻塞策略要设计。</td></tr>
+                            <tr><td>Producer-Consumer</td><td>loader 线程生产资源，render 线程消费上传请求。</td><td>解耦速度不同的系统。</td><td>队列积压和退出流程要处理。</td></tr>
+                            <tr><td>Double Buffered State</td><td>game thread 写，render thread 读。</td><td>避免直接竞争。</td><td>数据同步点和延迟要明确。</td></tr>
+                            <tr><td>Task Graph</td><td>animation -> culling -> command build。</td><td>并行度更高，依赖显式。</td><td>系统复杂度高。</td></tr>
+                            <tr><td>Work Stealing</td><td>job system 调度。</td><td>提高线程利用率。</td><td>实现复杂，调试困难。</td></tr>
+                            <tr><td>Future / Promise</td><td>asset loading、shader compilation。</td><td>表达异步结果自然。</td><td>等待位置可能造成隐藏阻塞。</td></tr>
+                            <tr><td>Main Thread Affinity</td><td>window、input、部分平台 API。</td><td>避免平台限制问题。</td><td>需要派发回主线程。</td></tr>
+                            <tr><td>Render Thread</td><td>渲染命令在专用线程构建或提交。</td><td>game/render 解耦。</td><td>资源同步和帧延迟更复杂。</td></tr>
+                        </tbody>
+                    </table>
+                </section>
+
+                <section id="gpu">
+                    <h2>10. Vulkan / GPU 工程模式</h2>
+                    <p class="lead">Vulkan/GPU 模式回答“CPU 写代码时如何尊重 GPU 的异步执行模型”。这部分是 Vulkan 学习最容易踩坑的地方。</p>
+                    <div class="axis">
+                        <div class="card left">
+                            <h3>CPU 视角</h3>
+                            <p>对象创建、命令录制、descriptor 更新、资源上传、等待 fence、提交 queue。</p>
+                        </div>
+                        <div class="card right">
+                            <h3>GPU 视角</h3>
+                            <p>命令异步执行、资源可能仍在使用、layout 和 access 必须匹配、跨 queue 需要同步。</p>
+                        </div>
+                    </div>
+                    <table class="matrix">
+                        <thead>
+                            <tr>
+                                <th>Pattern</th>
+                                <th>典型用途</th>
+                                <th>解决的问题</th>
+                                <th>注意点</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr><td>Frames in Flight</td><td>2-3 帧并行。</td><td>提高 CPU/GPU 并行度。</td><td>每帧资源复制，延迟增加。</td></tr>
+                            <tr><td>Per-Frame Command Pool</td><td>command buffer 管理。</td><td>每帧整体 reset，简单高效。</td><td>command buffer 生命周期必须绑定帧。</td></tr>
+                            <tr><td>Per-Thread Command Buffer</td><td>多线程 command recording。</td><td>减少锁竞争。</td><td>secondary command buffer 和合并顺序要设计。</td></tr>
+                            <tr><td>Timeline Semaphore</td><td>queue sync、upload completion、frame pacing。</td><td>用单调值表达同步进度。</td><td>需要设备特性支持和清晰值管理。</td></tr>
+                            <tr><td>Fence-Gated Reuse</td><td>frame resource、staging buffer、descriptor pool。</td><td>fence 完成后才复用资源。</td><td>错误等待会造成 CPU/GPU stall。</td></tr>
+                            <tr><td>Barrier Helper</td><td>pass 之间资源状态转换。</td><td>降低 Vulkan 同步样板。</td><td>抽象错误会隐藏真正 hazard。</td></tr>
+                            <tr><td>Resource State Tracking</td><td>render graph barrier 推导。</td><td>跟踪 layout/access/stage。</td><td>状态模型要覆盖 alias、external、swapchain。</td></tr>
+                            <tr><td>Descriptor Layout Cache</td><td>材质、pass、shader reflection。</td><td>避免重复创建 layout。</td><td>key 必须包含 binding 全信息。</td></tr>
+                            <tr><td>Pipeline Layout Cache</td><td>descriptor layout + push constant 组合。</td><td>复用 pipeline layout。</td><td>和 shader layout 兼容性绑定。</td></tr>
+                            <tr><td>GPU Deletion Queue</td><td>Vulkan handle 延迟释放。</td><td>解决 RAII 与 GPU 异步冲突。</td><td>队列泄漏会导致显存延迟释放。</td></tr>
+                            <tr><td>Staging Upload Context</td><td>texture、vertex/index buffer。</td><td>上传路径统一。</td><td>需要 batch 上传和同步策略。</td></tr>
+                            <tr><td>Swapchain Recreation</td><td>window resize、surface change。</td><td>安全重建 swapchain 相关资源。</td><td>老资源销毁必须等 GPU 完成。</td></tr>
+                            <tr><td>Validation Layer Integration</td><td>debug utils、best practices。</td><td>快速定位 API 使用错误。</td><td>debug 开销高，release 应可关闭。</td></tr>
+                            <tr><td>Queue Ownership Transfer</td><td>transfer queue -> graphics queue。</td><td>充分使用专用队列。</td><td>barrier 更复杂。</td></tr>
+                            <tr><td>Push Constant Pattern</td><td>draw index、material id、small params。</td><td>小量频繁变化数据快速传递。</td><td>大小有限，layout 兼容要注意。</td></tr>
+                        </tbody>
+                    </table>
+                </section>
+
+                <section id="combos">
+                    <h2>11. 高频组合</h2>
+                    <p class="lead">实际工程里模式通常成组出现。下面这些组合比单独记一个模式更有用。</p>
+                    <table class="matrix">
+                        <thead>
+                            <tr>
+                                <th>问题</th>
+                                <th>常见组合</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr><td>安全管理 Vulkan 资源</td><td>RAII + Move Semantics + Noncopyable + Deferred Destruction Queue + Fence-Gated Reuse</td></tr>
+                            <tr><td>构建复杂 Pipeline</td><td>Builder + Shader Reflection + Pipeline Layout Cache + Pipeline State Cache</td></tr>
+                            <tr><td>数据驱动材质</td><td>Material/Material Instance + DTO + Shader Reflection + Descriptor Set Cache + Dirty Flag</td></tr>
+                            <tr><td>数据驱动 Render Graph</td><td>Render Pass Pattern + Render Graph + Transient Resource + Resource State Tracking + Barrier Helper</td></tr>
+                            <tr><td>编辑器撤销</td><td>Command + Memento/Snapshot + Serialization + Stable ID</td></tr>
+                            <tr><td>热重载 shader</td><td>Observer/Event Bus + Shader Reflection + Pipeline Cache Invalidation + Placeholder/Fallback Resource</td></tr>
+                            <tr><td>大量对象渲染</td><td>ECS + Render Queue + Sorting Key + Batching + Instancing + Culling</td></tr>
+                            <tr><td>大世界加载</td><td>Async Streaming + Producer-Consumer + Resource Manifest + Lazy Loading + Placeholder Resource</td></tr>
+                            <tr><td>多线程渲染准备</td><td>Job System + Task Graph + Per-Thread Command Buffer + Double Buffered State</td></tr>
+                            <tr><td>GPU-driven rendering</td><td>Bindless + GPU Culling + Indirect Draw + Buffer Compaction + Debug Marker</td></tr>
+                        </tbody>
+                    </table>
+                </section>
+
+                <section id="compare">
+                    <h2>12. 常见对比</h2>
+                    <p class="lead">比较页很适合做复习，因为很多概念名字相似，但解决的问题层级不同。</p>
+                    <table class="matrix">
+                        <thead>
+                            <tr>
+                                <th>对比</th>
+                                <th>区别</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr><td>Factory vs Builder</td><td>Factory 选择创建哪种对象；Builder 管理复杂对象如何一步步创建。</td></tr>
+                            <tr><td>Factory Method vs Abstract Factory</td><td>Factory Method 创建一种产品；Abstract Factory 创建一组相关产品。</td></tr>
+                            <tr><td>Observer vs Event Bus</td><td>Observer 常是对象级依赖；Event Bus 是系统级事件中枢。</td></tr>
+                            <tr><td>State vs State Machine</td><td>State 是 GoF 对象行为模式；State Machine 是更通用的流程建模方式。</td></tr>
+                            <tr><td>Memento vs Snapshot</td><td>Memento 强调不破坏封装保存对象状态；Snapshot 更偏数据层状态记录。</td></tr>
+                            <tr><td>Flyweight vs Cache</td><td>Flyweight 共享内在状态以减少对象数量；Cache 保存昂贵结果以便复用。</td></tr>
+                            <tr><td>RAII vs Deferred Destruction</td><td>RAII 管 CPU 对象生命周期；Deferred Destruction 处理 GPU 异步使用后的真实销毁时机。</td></tr>
+                            <tr><td>Scene Graph vs ECS</td><td>Scene Graph 擅长层级关系；ECS 擅长大量对象的数据布局和批处理。</td></tr>
+                            <tr><td>Render Pass vs Render Graph</td><td>Render Pass 是单个步骤；Render Graph 管理多个 pass 的依赖、资源和执行顺序。</td></tr>
+                            <tr><td>Handle vs Pointer</td><td>Handle 更稳定、可验证、可序列化；pointer 直接但容易悬空。</td></tr>
+                            <tr><td>shared_ptr vs Resource Handle</td><td>shared_ptr 管共享所有权；resource handle 管资源表引用，通常更适合引擎资源。</td></tr>
+                            <tr><td>Dirty Flag vs Immediate Update</td><td>Dirty Flag 延迟到需要时更新；Immediate Update 每次修改立即同步。</td></tr>
+                            <tr><td>Cache vs Pool</td><td>Cache 复用计算或创建结果；Pool 复用对象或内存槽。</td></tr>
+                            <tr><td>Descriptor Cache vs Descriptor Allocator</td><td>Cache 关注复用已有 descriptor set；Allocator 关注从 pool 分配 descriptor set。</td></tr>
+                            <tr><td>Timeline Semaphore vs Fence</td><td>Timeline semaphore 可表达跨队列和跨帧进度；fence 常用于 CPU 等 GPU 完成。</td></tr>
+                        </tbody>
+                    </table>
+                </section>
+
+                <section id="vulkanlearn">
+                    <h2>13. VulkanLearn 项目落点</h2>
+                    <p class="lead">下面这张表把模式放回当前仓库的系统里，方便你以后看代码或改代码时把概念和工程位置连起来。</p>
+                    <table class="matrix">
+                        <thead>
+                            <tr>
+                                <th>系统</th>
+                                <th>优先关注模式</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr><td>Vulkan resource wrappers</td><td>RAII、Move Semantics、Noncopyable、Deferred Destruction</td></tr>
+                            <tr><td>RenderGraph</td><td>Render Graph、Render Pass Pattern、Resource State Tracking、Barrier Helper、Transient Resource</td></tr>
+                            <tr><td>Material system</td><td>Material/Material Instance、Shader Reflection、DTO、Dirty Flag、Descriptor Cache</td></tr>
+                            <tr><td>Scene loading</td><td>DTO、Serialization、Versioned Data、Prefab、Handle Pattern</td></tr>
+                            <tr><td>PipelineFactory</td><td>Builder、Factory、Pipeline Cache、Descriptor Layout Cache</td></tr>
+                            <tr><td>RenderSystem</td><td>Frame Resource、Render Queue、Sorting Key、Debug Marker、Frames in Flight</td></tr>
+                            <tr><td>Shader pipeline</td><td>Shader Reflection、Shader Permutation、Hot Reload、Cache Invalidation</td></tr>
+                            <tr><td>Asset loading</td><td>Resource Manifest、Lazy Loading、Async Streaming、Producer-Consumer</td></tr>
+                            <tr><td>Editor future work</td><td>Command、Memento/Snapshot、Observer/Event Bus、Stable ID</td></tr>
+                        </tbody>
+                    </table>
+                </section>
+
+                <section id="anti">
+                    <h2>14. 反模式提醒</h2>
+                    <p class="lead">这些不是“不能用”，而是要警惕它们在学习项目里慢慢把边界变模糊。</p>
+                    <table class="matrix">
+                        <thead>
+                            <tr>
+                                <th>反模式</th>
+                                <th>表现</th>
+                                <th>风险</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr><td>Pattern First</td><td>先套模式，再找问题。</td><td>代码复杂但没有收益。</td></tr>
+                            <tr><td>God Renderer</td><td>Renderer 什么都知道、什么都做。</td><td>难测试、难拆分、难扩展。</td></tr>
+                            <tr><td>Global Everything</td><td>到处用单例和全局访问。</td><td>隐藏依赖，初始化顺序脆弱。</td></tr>
+                            <tr><td>Stringly Typed Resource</td><td>大量系统靠裸字符串传资源名。</td><td>重命名、拼写和运行时错误多。</td></tr>
+                            <tr><td>Shared Pointer Everywhere</td><td>所有资源都用 <code>shared_ptr</code>。</td><td>生命周期不清楚，资源释放不可控。</td></tr>
+                            <tr><td>Immediate GPU Destruction</td><td>析构时立刻销毁 GPU 资源。</td><td>GPU 仍在使用时可能崩溃。</td></tr>
+                            <tr><td>Over-Abstracted RHI</td><td>学习项目过早抽象多后端。</td><td>大量样板掩盖 Vulkan 学习重点。</td></tr>
+                            <tr><td>Invisible Event Flow</td><td>所有系统都靠事件总线通信。</td><td>行为来源难追踪，调试困难。</td></tr>
+                            <tr><td>Unbounded Cache</td><td>缓存只增不减。</td><td>内存和显存泄漏式增长。</td></tr>
+                            <tr><td>Defensive Shader Runtime Fixups</td><td>shader 内做本应由数据源保证的修正。</td><td>每帧执行无意义逻辑，掩盖数据错误。</td></tr>
+                        </tbody>
+                    </table>
+                </section>
+
+                <section id="template">
+                    <h2>15. 单个模式笔记模板</h2>
+                    <p class="lead">以后每学一个模式，可以按这个模板补充到 Markdown 或 HTML 教材里。</p>
+                    <pre><code># Pattern Name 中文名
+
+## 一句话
+这个模式用一句话解释。
+
+## 解决的问题
+它在什么情况下出现？不用它会有什么痛点？
+
+## 渲染引擎里的例子
+Pipeline、Material、Render Pass、Texture、Scene、ECS、Descriptor 等。
+
+## 基本结构
+核心对象有哪些？它们怎么协作？
+
+## C++ 实现要点
+所有权、生命周期、拷贝/移动、接口设计、RAII 注意点。
+
+## Vulkan / GPU 注意点
+同步、descriptor、command buffer、frames in flight、延迟销毁等。
+
+## 优点
+2-4 条。
+
+## 缺点
+2-4 条，尤其写清楚什么时候不该用。
+
+## 相关模式
+经常一起出现，或者容易混淆的模式。
+
+## 项目落点
+当前代码位置或未来适合落地的位置。</code></pre>
+                    <div class="callout">
+                        <strong>总纲：</strong>渲染引擎里的模式不是为了背名字，而是为了把五件事变得可控：资源生命周期、数据流、渲染调度、GPU 同步和性能规模化。
+                    </div>
+                    <p class="footer-note">本教材页与 Markdown 参考笔记互补：Markdown 适合持续扩写，HTML 适合阅读、复习和作为课程目录。</p>
+                </section>
+            </div>
+        </main>
+    </div>
+</body>
+</html>

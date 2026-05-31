@@ -16,11 +16,17 @@ Use repository documents according to their role:
   - top-level index for formal design documents
   - explains document categories and what belongs in each one
 - `documents/architecture/*`
-  - future-facing architecture direction
-  - use these when the task touches long-term system evolution
+  - current formal architecture and coding conventions
+  - use these when the task touches system boundaries, naming, ownership, or thread/data flow
 - `documents/rendering/*`
-  - feature-domain roadmaps
-  - use these when the task touches rendering roadmap work
+  - current rendering contracts
+  - use these when the task touches implemented material, texture, descriptor, or shader-authoring rules
+- `documents/plan/*`
+  - future-facing or partially implemented plans
+  - use these when the task touches roadmap work that is not fully implemented yet
+- `documents/reference/*`
+  - tutorials and study material
+  - use these for background learning context, not as implementation contracts
 
 Do not mix these responsibilities casually. If a change affects one layer, update the right document instead of stuffing everything into `README.md` or `AGENTS.md`.
 
@@ -58,11 +64,15 @@ When onboarding to the repo, read in this order:
 Design references currently live under `documents/`:
 
 - `documents/README.md`
-- `documents/rendering/sky-pass-environment-roadmap.md`
-- `documents/rendering/terrain-worldcreator-mvp.md`
-- `documents/rendering/tone-mapping-tutorial.html`
+- `documents/architecture/vulkanlearn-architecture.html`
+- `documents/architecture/coding-guidelines.md`
+- `documents/rendering/texture-asset-json-v1.md`
+- `documents/rendering/material-param-authoring-and-reflection.md`
+- `documents/rendering/descriptor-imageinfo-management.md`
+- `documents/plan/rendering/sky-pass-environment-roadmap.md`
+- `documents/reference/rendering/tone-mapping-tutorial.html`
 
-These are the currently active planning documents. Historical implementation notes are intentionally not kept as live docs.
+Current implementation contracts stay in `architecture/` and `rendering/`. Unimplemented or partially implemented roadmaps stay in `plan/`. Historical implementation notes are intentionally not kept as live docs.
 
 ## Build And Run
 

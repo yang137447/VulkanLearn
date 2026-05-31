@@ -1,10 +1,7 @@
 #pragma once
 #include "Eigen/Dense"
 #include <memory>
-#include <optional>
 #include <iomanip>
-#include <vulkan/vulkan.hpp>
-#include"baseStructs.h"
 
 class SceneNode
 {
@@ -27,8 +24,6 @@ public:
     void SetTransform(Eigen::Vector3f& position, Eigen::Vector3f& rotation, Eigen::Vector3f& scale);
     void UpdateModelMatrix();
     inline const Eigen::Matrix4f& GetModelMatrix() const { return modelMatrix; } 
-    Eigen::Matrix4f GetPreviousModelMatrix() const;
-    void SnapshotPreviousModelMatrix();
 
 protected:
     Eigen::Vector3f position;
@@ -38,7 +33,6 @@ protected:
     std::string name;
 
     Eigen::Matrix4f modelMatrix;
-    std::optional<Eigen::Matrix4f> previousModelMatrix;
 };
 
 class DirectionalLight: public SceneNode {
@@ -124,45 +118,18 @@ private:
 
 class RenderableObject;
 class MaterialInstance;
+
 class SceneObject: public SceneNode{
 public:
     SceneObject(std::shared_ptr<RenderableObject> renderableObject, std::shared_ptr<MaterialInstance> materialInstance);
     ~SceneObject();
     inline std::shared_ptr<RenderableObject> GetRenderableObject() const { return renderableObject; }
     inline std::shared_ptr<MaterialInstance> GetMaterialInstance() const { return materialInstance; }
-    inline const std::vector<vk::DescriptorSet>& GetDescriptorSets(uint32_t swapChainImageIndex) const { return descriptorSets[swapChainImageIndex]; }
-    inline const std::vector<vk::DescriptorSet>& GetDescriptorSetsForShadow(uint32_t swapChainImageIndex) const { return descriptorSetsShadow[swapChainImageIndex]; }
-    inline std::vector<void*>& GetUboModelMapped() { return uboModel.buffersMapped; }
-    //相关的场景和材质实例需要先行就绪
-    void RenderInitialize();
 private:
     SceneObject();
 
     void SetRenderableObject(std::shared_ptr<RenderableObject> renderableObject);
     void SetMaterialInstance(std::shared_ptr<MaterialInstance> materialInstance);
-
-    void CreateUniformBuffers();
-    void DestroyUniformBuffers();
-    void CreateDescriptorSets();
-    void DestroyDescriptorSets();
-    void SetupDescriptors();
-    void UpdateDescriptorSet();
-
-    // shadow
-    void CreateDescriptorSetsForShadow();
-    void DestroyDescriptorSetsForShadow();
-    void SetupDescriptorsForShadow();
-    void UpdateDescriptorSetForShadow();
-
-    Buffer uboModel;
-
-    vk::DescriptorPool descriptorPool;
-    std::vector<std::vector<vk::DescriptorSet>> descriptorSets;
-    std::vector<std::vector<vk::WriteDescriptorSet>> writeDescriptorSets;
-
-    vk::DescriptorPool descriptorPoolShadow;
-    std::vector<std::vector<vk::DescriptorSet>> descriptorSetsShadow;
-    std::vector<std::vector<vk::WriteDescriptorSet>> writeDescriptorSetsShadow;
 
     std::shared_ptr<RenderableObject> renderableObject;
     std::shared_ptr<MaterialInstance> materialInstance;

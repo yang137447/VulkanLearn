@@ -1,0 +1,511 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>VulkanLearn 现代引擎架构重构蓝图</title>
+    <style>
+        :root {
+            --bg: #0e1116;
+            --bg-soft: #151b24;
+            --panel: #1a2230;
+            --panel-2: #222e41;
+            --line: #31425f;
+            --text: #edf3ff;
+            --muted: #a8b6d1;
+            --accent: #61d7b7;
+            --sky: #79b8ff;
+            --amber: #ffcd75;
+            --rose: #ff9ba3;
+            --violet: #c29bff;
+            --ok: #69de8f;
+        }
+
+        * { box-sizing: border-box; }
+        html { scroll-behavior: smooth; }
+
+        body {
+            margin: 0;
+            font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+            background: radial-gradient(1200px 700px at 85% -10%, #223657 0%, transparent 55%), var(--bg);
+            color: var(--text);
+            line-height: 1.65;
+        }
+
+        .layout {
+            display: grid;
+            grid-template-columns: 280px minmax(0, 1fr);
+            min-height: 100vh;
+        }
+
+        aside {
+            position: sticky;
+            top: 0;
+            height: 100vh;
+            overflow: auto;
+            padding: 24px 18px;
+            border-right: 1px solid var(--line);
+            background: linear-gradient(180deg, #121a26, #101722);
+        }
+
+        .brand {
+            margin-bottom: 20px;
+            padding: 12px;
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .brand h1 {
+            margin: 0;
+            font-size: 18px;
+            line-height: 1.35;
+        }
+
+        .brand p {
+            margin: 8px 0 0;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        nav {
+            display: grid;
+            gap: 6px;
+        }
+
+        nav a {
+            display: block;
+            padding: 8px 10px;
+            border-radius: 8px;
+            color: var(--muted);
+            text-decoration: none;
+            font-size: 14px;
+        }
+
+        nav a:hover {
+            background: var(--panel-2);
+            color: var(--text);
+        }
+
+        main {
+            width: min(1200px, 100%);
+            padding: 34px clamp(18px, 4vw, 58px) 70px;
+        }
+
+        section {
+            margin-bottom: 32px;
+            padding: 20px;
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0.01));
+        }
+
+        h2 {
+            margin: 0 0 10px;
+            font-size: clamp(22px, 3vw, 30px);
+        }
+
+        h3 {
+            margin: 14px 0 10px;
+            font-size: 18px;
+            color: var(--sky);
+        }
+
+        p, li {
+            color: var(--text);
+        }
+
+        .muted {
+            color: var(--muted);
+        }
+
+        .chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 8px;
+        }
+
+        .chip {
+            padding: 4px 10px;
+            border-radius: 999px;
+            border: 1px solid var(--line);
+            color: var(--muted);
+            font-size: 12px;
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .diagram-wrap {
+            overflow: auto;
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            background: #111a28;
+            padding: 10px;
+        }
+
+        .legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin: 10px 0 0;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .legend i {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border-radius: 3px;
+            margin-right: 6px;
+            vertical-align: -2px;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 14px;
+        }
+
+        .card {
+            padding: 14px;
+            border-radius: 10px;
+            border: 1px solid var(--line);
+            background: var(--panel);
+        }
+
+        .card strong {
+            color: var(--accent);
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 8px;
+            font-size: 14px;
+        }
+
+        th, td {
+            border: 1px solid var(--line);
+            padding: 10px;
+            vertical-align: top;
+        }
+
+        th {
+            background: #1b283b;
+            color: #d4e1fa;
+            text-align: left;
+        }
+
+        .ok {
+            color: var(--ok);
+            font-weight: 600;
+        }
+
+        .warn {
+            color: var(--amber);
+            font-weight: 600;
+        }
+
+        .danger {
+            color: var(--rose);
+            font-weight: 600;
+        }
+
+        code {
+            padding: 0.08em 0.3em;
+            border: 1px solid #3a4a68;
+            border-radius: 5px;
+            background: #0d1420;
+            font-family: "Cascadia Code", Consolas, monospace;
+            font-size: 0.92em;
+            color: #d5e9ff;
+        }
+
+        @media (max-width: 1024px) {
+            .layout { grid-template-columns: 1fr; }
+            aside {
+                position: static;
+                height: auto;
+                border-right: 0;
+                border-bottom: 1px solid var(--line);
+            }
+        }
+    </style>
+</head>
+<body>
+<div class="layout">
+    <aside>
+        <div class="brand">
+            <h1>VulkanLearn<br>现代引擎重构蓝图</h1>
+            <p>目标：从“单场景启动型”演进到“可扩展运行时架构”</p>
+        </div>
+        <nav>
+            <a href="#goal">1. 重构目标</a>
+            <a href="#current">2. 当前痛点</a>
+            <a href="#target">3. 目标分层图</a>
+            <a href="#switch">4. 场景切换事务图</a>
+            <a href="#mapping">5. 现有模块映射</a>
+            <a href="#phase">6. 分阶段迁移</a>
+            <a href="#acceptance">7. 验收标准</a>
+        </nav>
+    </aside>
+
+    <main>
+        <section id="goal">
+            <h2>1) 重构目标</h2>
+            <p>这次重构不是“代码美化”，而是建立长期可维护的系统边界：<strong>场景切换不再跨模块散射修改</strong>、资源生命周期明确、渲染系统可以按职责增量升级。</p>
+            <div class="chips">
+                <span class="chip">Scene 生命周期可重入</span>
+                <span class="chip">渲染前后端解耦</span>
+                <span class="chip">资源 owner 明确</span>
+                <span class="chip">事务化切换可回滚</span>
+            </div>
+        </section>
+
+        <section id="current">
+            <h2>2) 当前痛点（为什么会“改一处动全局”）</h2>
+            <div class="grid">
+                <div class="card">
+                    <strong>生命周期入口分散</strong>
+                    <p class="muted">加载场景、绑定相机、渲染初始化分布在不同点位，缺少统一切换事务入口。</p>
+                </div>
+                <div class="card">
+                    <strong>SceneLoader 职责过多</strong>
+                    <p class="muted">同时承担 JSON 解析、运行时对象构建、环境预处理、Pass 材质准备，耦合面过大。</p>
+                </div>
+                <div class="card">
+                    <strong>初始化模型偏“一次性”</strong>
+                    <p class="muted">多个系统默认只初始化一次，导致 reload 时需要手工穿透式修补。</p>
+                </div>
+                <div class="card">
+                    <strong>全局访问链路重</strong>
+                    <p class="muted"><code>GetInstance()</code> 直接跨层访问，让依赖方向很难稳定。</p>
+                </div>
+            </div>
+        </section>
+
+        <section id="target">
+            <h2>3) 目标分层架构图（Modern Engine Style）</h2>
+            <div class="diagram-wrap">
+                <svg width="1120" height="640" viewBox="0 0 1120 640" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Target architecture diagram">
+                    <defs>
+                        <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+                            <path d="M0,0 L10,5 L0,10 z" fill="#9fc2ff"/>
+                        </marker>
+                        <style>
+                            .box { rx: 12; ry: 12; stroke-width: 1.2; }
+                            .title { fill: #eaf2ff; font: 600 16px 'Segoe UI'; }
+                            .text { fill: #b9c8e5; font: 13px 'Segoe UI'; }
+                            .line { stroke: #9fc2ff; stroke-width: 1.4; fill: none; marker-end: url(#arrow); }
+                            .dashed { stroke-dasharray: 6 5; }
+                        </style>
+                    </defs>
+
+                    <rect class="box" x="24" y="24" width="1072" height="72" fill="#1a2740" stroke="#37507a"/>
+                    <text class="title" x="48" y="56">Platform Layer</text>
+                    <text class="text" x="48" y="78">SDL Window / Input / OS Events / Frame Tick</text>
+
+                    <rect class="box" x="24" y="118" width="1072" height="86" fill="#1f3146" stroke="#4a6b90"/>
+                    <text class="title" x="48" y="152">Engine Host Layer</text>
+                    <text class="text" x="48" y="174">EngineLoop · RuntimeClock · DebugConsoleCommandBus · FrameScheduler</text>
+
+                    <rect class="box" x="24" y="226" width="1072" height="100" fill="#28374b" stroke="#5e7596"/>
+                    <text class="title" x="48" y="260">Runtime Orchestrator Layer</text>
+                    <text class="text" x="48" y="282">SceneTransitionCoordinator (Validate → Build → Swap → Retire)</text>
+                    <text class="text" x="48" y="302">统一生命周期事务入口，禁止散点切换</text>
+
+                    <rect class="box" x="24" y="348" width="345" height="182" fill="#1f3a33" stroke="#4c8b79"/>
+                    <text class="title" x="46" y="382">Scene Domain (CPU World)</text>
+                    <text class="text" x="46" y="404">SceneAssetResolver / Validator</text>
+                    <text class="text" x="46" y="424">SceneRuntimeBuilder</text>
+                    <text class="text" x="46" y="444">SceneRuntime (Objects/Lights/Camera)</text>
+                    <text class="text" x="46" y="464">Entity Registry (future)</text>
+
+                    <rect class="box" x="388" y="348" width="345" height="182" fill="#3a3421" stroke="#988455"/>
+                    <text class="title" x="410" y="382">Resource Domain</text>
+                    <text class="text" x="410" y="404">AssetCache (CPU)</text>
+                    <text class="text" x="410" y="424">GpuResourceCache (Textures/Buffers/Pipelines)</text>
+                    <text class="text" x="410" y="444">Global Resources (BRDF LUT)</text>
+                    <text class="text" x="410" y="464">Scene-bound Resources (Env/Materials)</text>
+
+                    <rect class="box" x="752" y="348" width="344" height="182" fill="#2f2740" stroke="#77609c"/>
+                    <text class="title" x="774" y="382">Render Domain</text>
+                    <text class="text" x="774" y="404">RenderFrontend (build RenderWorld/DrawList)</text>
+                    <text class="text" x="774" y="424">FrameGraph Compiler</text>
+                    <text class="text" x="774" y="444">RenderBackend (Vulkan command submission)</text>
+                    <text class="text" x="774" y="464">Pass/Descriptor Lifetime Control</text>
+
+                    <rect class="box" x="24" y="552" width="1072" height="64" fill="#1b2331" stroke="#4a648c"/>
+                    <text class="title" x="48" y="590">Vulkan Driver / GPU Queue</text>
+
+                    <path class="line" d="M560 96 L560 118"/>
+                    <path class="line" d="M560 204 L560 226"/>
+                    <path class="line" d="M205 326 L205 348"/>
+                    <path class="line" d="M560 326 L560 348"/>
+                    <path class="line" d="M924 326 L924 348"/>
+                    <path class="line" d="M924 530 L924 552"/>
+                    <path class="line dashed" d="M369 440 L388 440"/>
+                    <path class="line dashed" d="M733 440 L752 440"/>
+                </svg>
+            </div>
+            <div class="legend">
+                <span><i style="background:#1f3a33"></i>Scene Domain</span>
+                <span><i style="background:#3a3421"></i>Resource Domain</span>
+                <span><i style="background:#2f2740"></i>Render Domain</span>
+                <span><i style="background:#1f3146"></i>Host/Orchestrator</span>
+            </div>
+        </section>
+
+        <section id="switch">
+            <h2>4) 场景切换事务图（核心机制）</h2>
+            <p class="muted">目标是让 <code>scene load/reload</code> 变成可回滚事务，而不是“局部成功、全局半失效”。</p>
+            <div class="diagram-wrap">
+                <svg width="1120" height="460" viewBox="0 0 1120 460" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Scene transition transaction diagram">
+                    <defs>
+                        <marker id="arrow2" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+                            <path d="M0,0 L9,4.5 L0,9 z" fill="#9dd2c3"/>
+                        </marker>
+                        <style>
+                            .lane { fill: #172435; stroke: #31465f; }
+                            .step { fill: #243851; stroke: #4b6f93; rx: 10; ry: 10; }
+                            .title2 { fill:#edf5ff; font:600 14px 'Segoe UI'; }
+                            .text2 { fill:#bdd0ea; font:12px 'Segoe UI'; }
+                            .flow { stroke:#9dd2c3; stroke-width:1.4; fill:none; marker-end:url(#arrow2); }
+                        </style>
+                    </defs>
+
+                    <rect class="lane" x="20" y="30" width="190" height="390"/>
+                    <rect class="lane" x="230" y="30" width="220" height="390"/>
+                    <rect class="lane" x="470" y="30" width="220" height="390"/>
+                    <rect class="lane" x="710" y="30" width="190" height="390"/>
+                    <rect class="lane" x="920" y="30" width="180" height="390"/>
+
+                    <text class="title2" x="35" y="56">Console/UI</text>
+                    <text class="title2" x="245" y="56">Coordinator</text>
+                    <text class="title2" x="485" y="56">Scene Builder</text>
+                    <text class="title2" x="725" y="56">Render Systems</text>
+                    <text class="title2" x="935" y="56">Resource Cache</text>
+
+                    <rect class="step" x="38" y="90" width="154" height="54"/>
+                    <text class="title2" x="52" y="114">scene load X</text>
+                    <text class="text2" x="52" y="132">仅发请求，不直接改状态</text>
+
+                    <rect class="step" x="248" y="90" width="184" height="54"/>
+                    <text class="title2" x="262" y="114">Validate</text>
+                    <text class="text2" x="262" y="132">schema + 引用完整性</text>
+
+                    <rect class="step" x="488" y="160" width="184" height="64"/>
+                    <text class="title2" x="502" y="184">Build Staging Runtime</text>
+                    <text class="text2" x="502" y="202">新场景在临时区构建</text>
+                    <text class="text2" x="502" y="218">旧场景继续渲染</text>
+
+                    <rect class="step" x="938" y="160" width="144" height="64"/>
+                    <text class="title2" x="952" y="184">Acquire/Reuse</text>
+                    <text class="text2" x="952" y="202">纹理/材质/管线缓存</text>
+                    <text class="text2" x="952" y="218">避免全量重建</text>
+
+                    <rect class="step" x="248" y="252" width="184" height="64"/>
+                    <text class="title2" x="262" y="276">Swap Runtime</text>
+                    <text class="text2" x="262" y="294">原子切换 active scene</text>
+                    <text class="text2" x="262" y="310">失败则回滚旧场景</text>
+
+                    <rect class="step" x="728" y="252" width="164" height="64"/>
+                    <text class="title2" x="742" y="276">OnSceneChanged</text>
+                    <text class="text2" x="742" y="294">刷新 DrawList / LightBuffer</text>
+                    <text class="text2" x="742" y="310">增量刷新 Descriptor</text>
+
+                    <rect class="step" x="248" y="344" width="184" height="54"/>
+                    <text class="title2" x="262" y="368">Retire Old Runtime</text>
+                    <text class="text2" x="262" y="386">GPU safe point 后释放</text>
+
+                    <path class="flow" d="M192 117 L248 117"/>
+                    <path class="flow" d="M340 144 L340 160"/>
+                    <path class="flow" d="M672 192 L938 192"/>
+                    <path class="flow" d="M580 224 L580 252 L432 252"/>
+                    <path class="flow" d="M432 284 L728 284"/>
+                    <path class="flow" d="M340 316 L340 344"/>
+                </svg>
+            </div>
+        </section>
+
+        <section id="mapping">
+            <h2>5) 现有模块到目标模块映射</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>当前模块</th>
+                        <th>问题</th>
+                        <th>目标归属</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>main.cpp</code></td>
+                        <td>直接串所有生命周期步骤</td>
+                        <td><code>EngineLoop + SceneTransitionCoordinator</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>SceneLoader</code></td>
+                        <td>解析/构建/渲染准备混在一起</td>
+                        <td><code>SceneAssetResolver + SceneRuntimeBuilder</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>RenderSystem</code></td>
+                        <td>初始化与运行态切换边界不清</td>
+                        <td><code>RenderFrontend + OnSceneChanged API</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>RenderGraph</code></td>
+                        <td>Descriptor 和 pass 生命周期耦合偏重</td>
+                        <td><code>FrameGraphCompiler + PassRuntime</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>LightManager</code></td>
+                        <td>默认一次性初始化</td>
+                        <td><code>Scene-bound GPU buffer service</code></td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <section id="phase">
+            <h2>6) 分阶段迁移（建议顺序）</h2>
+            <div class="grid">
+                <div class="card">
+                    <h3>Phase A：生命周期基座</h3>
+                    <p><span class="ok">目标：</span>建立统一事务入口，不改渲染算法。</p>
+                    <p><span class="warn">动作：</span>先把场景切换集中到 Coordinator。</p>
+                </div>
+                <div class="card">
+                    <h3>Phase B：Scene 领域拆分</h3>
+                    <p><span class="ok">目标：</span>SceneLoader 职责拆开，形成 RuntimeBuilder。</p>
+                    <p><span class="warn">动作：</span>Asset/Runtime 数据结构分层。</p>
+                </div>
+                <div class="card">
+                    <h3>Phase C：渲染前后端解耦</h3>
+                    <p><span class="ok">目标：</span>RenderFrontend 产出 RenderWorld，Backend 只提交。</p>
+                    <p><span class="warn">动作：</span>按层收口依赖，减少跨层单例访问。</p>
+                </div>
+                <div class="card">
+                    <h3>Phase D：性能与并行</h3>
+                    <p><span class="ok">目标：</span>异步资源上传、缓存命中、并行任务化。</p>
+                    <p><span class="warn">动作：</span>在边界稳定后再做并发化。</p>
+                </div>
+            </div>
+        </section>
+
+        <section id="acceptance">
+            <h2>7) 第一阶段验收标准</h2>
+            <ul>
+                <li>场景切换入口只有一个事务接口（控制台/UI 仅发请求）。</li>
+                <li>连续切换 5 次不同场景无崩溃，无黑屏，输入控制正常。</li>
+                <li>切换失败可回滚到旧场景，不进入半失效状态。</li>
+                <li>全局资源与场景资源生命周期边界可追踪。</li>
+            </ul>
+            <p class="muted">备注：这份图是“架构理解稿”，后续可在它基础上继续细化成类图与接口清单。</p>
+        </section>
+    </main>
+</div>
+</body>
+</html>

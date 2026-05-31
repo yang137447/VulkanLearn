@@ -1,154 +1,413 @@
-#include "SDL3/SDL.h"
-#include "SDL3/SDL_vulkan.h"
+#include "engine/diagnosticsSubsystem.h"
+#include "engine/engineLoop.h"
+#include "engine/runtimeCommand.h"
+#include "engine/runtimeConfig.h"
+#include "platform/platformApplication.h"
+
 #include <iostream>
-#include <vector>
-#include "shaderCompiler.h"
-#include "vulkanManager.h"
-#include "sceneLoader.h"
-#include "renderSystem.h"
-#include "commonFunction.h"
-#include "fpsTool.h"
-#include "controller.h"
-#include "sceneObject.h"
-#include "renderGraph.h"
-#include "pipeline/pipelineFactory.h"
-#include "profiler.h"
-#include "debugConsole.h"
-#include "material/generator/materialParameterIncludeGenerator.h"
+#include <string>
+#include <utility>
+
+namespace
+{
+
+struct LaunchOptions
+{
+    bool showHelp = false;
+    bool runReloadStress = false;
+    bool runReloadFailureRollbackTest = false;
+    bool runGeneratedMaterialFailureRollbackTest = false;
+    bool runGeneratedHighLightReloadStress = false;
+    bool runResizeStress = false;
+    bool runRenderGraphReloadStress = false;
+    bool runFrameSmokeTest = false;
+    bool exitAfterTests = false;
+    std::string reloadStressScenePath;
+    std::string reloadFailureScenePath;
+    int reloadStressCount = 20;
+    int highLightStressCount = 3;
+    int resizeStressCount = 6;
+    int graphReloadStressCount = 6;
+    int frameSmokeCount = 120;
+    std::string errorMessage;
+};
+
+bool IsOptionToken(const std::string& value)
+{
+    return value.size() >= 2 && value[0] == '-' && value[1] == '-';
+}
+
+bool TryParsePositiveInt(const std::string& value, int& outNumber)
+{
+    try
+    {
+        size_t parsedLength = 0;
+        const int parsedValue = std::stoi(value, &parsedLength);
+        if (parsedLength != value.size() || parsedValue <= 0)
+        {
+            return false;
+        }
+
+        outNumber = parsedValue;
+        return true;
+    }
+    catch (...)
+    {
+        return false;
+    }
+}
+
+LaunchOptions ParseLaunchOptions(int argc, char** argv)
+{
+    LaunchOptions options;
+    for (int i = 1; i < argc; ++i)
+    {
+        const std::string argument = argv[i];
+        if (argument == "--help")
+        {
+            options.showHelp = true;
+            continue;
+        }
+
+        if (argument == "--exit-after-tests")
+        {
+            options.exitAfterTests = true;
+            continue;
+        }
+
+        if (argument == "--reloadstress")
+        {
+            if (options.runReloadFailureRollbackTest ||
+                options.runGeneratedMaterialFailureRollbackTest ||
+                options.runGeneratedHighLightReloadStress ||
+                options.runResizeStress ||
+                options.runRenderGraphReloadStress ||
+                options.runFrameSmokeTest)
+            {
+                options.errorMessage = "--reloadstress cannot be combined with another runtime test.";
+                return options;
+            }
+            if (i + 1 >= argc || IsOptionToken(argv[i + 1]))
+            {
+                options.errorMessage = "--reloadstress requires a scene path.";
+                return options;
+            }
+
+            options.runReloadStress = true;
+            options.reloadStressScenePath = argv[++i];
+            if (i + 1 < argc && !IsOptionToken(argv[i + 1]))
+            {
+                const std::string countText = argv[++i];
+                if (!TryParsePositiveInt(countText, options.reloadStressCount))
+                {
+                    options.errorMessage = "--reloadstress count must be a positive integer.";
+                    return options;
+                }
+            }
+            continue;
+        }
+
+        if (argument == "--reloadfail")
+        {
+            if (options.runReloadStress ||
+                options.runGeneratedMaterialFailureRollbackTest ||
+                options.runGeneratedHighLightReloadStress ||
+                options.runResizeStress ||
+                options.runRenderGraphReloadStress ||
+                options.runFrameSmokeTest)
+            {
+                options.errorMessage = "--reloadfail cannot be combined with another runtime test.";
+                return options;
+            }
+            if (i + 1 >= argc || IsOptionToken(argv[i + 1]))
+            {
+                options.errorMessage = "--reloadfail requires a scene path that is expected to fail.";
+                return options;
+            }
+
+            options.runReloadFailureRollbackTest = true;
+            options.reloadFailureScenePath = argv[++i];
+            continue;
+        }
+
+        if (argument == "--reloadfail-material")
+        {
+            if (options.runReloadStress ||
+                options.runReloadFailureRollbackTest ||
+                options.runGeneratedHighLightReloadStress ||
+                options.runResizeStress ||
+                options.runRenderGraphReloadStress ||
+                options.runFrameSmokeTest)
+            {
+                options.errorMessage = "--reloadfail-material cannot be combined with another runtime test.";
+                return options;
+            }
+
+            options.runGeneratedMaterialFailureRollbackTest = true;
+            continue;
+        }
+
+        if (argument == "--lightstress")
+        {
+            if (options.runReloadStress ||
+                options.runReloadFailureRollbackTest ||
+                options.runGeneratedMaterialFailureRollbackTest ||
+                options.runResizeStress ||
+                options.runRenderGraphReloadStress ||
+                options.runFrameSmokeTest)
+            {
+                options.errorMessage = "--lightstress cannot be combined with another runtime test.";
+                return options;
+            }
+
+            options.runGeneratedHighLightReloadStress = true;
+            if (i + 1 < argc && !IsOptionToken(argv[i + 1]))
+            {
+                const std::string countText = argv[++i];
+                if (!TryParsePositiveInt(countText, options.highLightStressCount))
+                {
+                    options.errorMessage = "--lightstress count must be a positive integer.";
+                    return options;
+                }
+            }
+            continue;
+        }
+
+        if (argument == "--resizestress")
+        {
+            if (options.runReloadStress ||
+                options.runReloadFailureRollbackTest ||
+                options.runGeneratedMaterialFailureRollbackTest ||
+                options.runGeneratedHighLightReloadStress ||
+                options.runRenderGraphReloadStress ||
+                options.runFrameSmokeTest)
+            {
+                options.errorMessage = "--resizestress cannot be combined with another runtime test.";
+                return options;
+            }
+
+            options.runResizeStress = true;
+            if (i + 1 < argc && !IsOptionToken(argv[i + 1]))
+            {
+                const std::string countText = argv[++i];
+                if (!TryParsePositiveInt(countText, options.resizeStressCount))
+                {
+                    options.errorMessage = "--resizestress count must be a positive integer.";
+                    return options;
+                }
+            }
+            continue;
+        }
+
+        if (argument == "--graphreloadstress")
+        {
+            if (options.runReloadStress ||
+                options.runReloadFailureRollbackTest ||
+                options.runGeneratedMaterialFailureRollbackTest ||
+                options.runGeneratedHighLightReloadStress ||
+                options.runResizeStress ||
+                options.runFrameSmokeTest)
+            {
+                options.errorMessage = "--graphreloadstress cannot be combined with another runtime test.";
+                return options;
+            }
+
+            options.runRenderGraphReloadStress = true;
+            if (i + 1 < argc && !IsOptionToken(argv[i + 1]))
+            {
+                const std::string countText = argv[++i];
+                if (!TryParsePositiveInt(countText, options.graphReloadStressCount))
+                {
+                    options.errorMessage = "--graphreloadstress count must be a positive integer.";
+                    return options;
+                }
+            }
+            continue;
+        }
+
+        if (argument == "--framesmoke")
+        {
+            if (options.runReloadStress ||
+                options.runReloadFailureRollbackTest ||
+                options.runGeneratedMaterialFailureRollbackTest ||
+                options.runGeneratedHighLightReloadStress ||
+                options.runResizeStress ||
+                options.runRenderGraphReloadStress)
+            {
+                options.errorMessage = "--framesmoke cannot be combined with another runtime test.";
+                return options;
+            }
+
+            options.runFrameSmokeTest = true;
+            if (i + 1 < argc && !IsOptionToken(argv[i + 1]))
+            {
+                const std::string countText = argv[++i];
+                if (!TryParsePositiveInt(countText, options.frameSmokeCount))
+                {
+                    options.errorMessage = "--framesmoke count must be a positive integer.";
+                    return options;
+                }
+            }
+            continue;
+        }
+
+        options.errorMessage = "Unknown launch option: " + argument;
+        return options;
+    }
+
+    if (options.exitAfterTests &&
+        !options.runReloadStress &&
+        !options.runReloadFailureRollbackTest &&
+        !options.runGeneratedMaterialFailureRollbackTest &&
+        !options.runGeneratedHighLightReloadStress &&
+        !options.runResizeStress &&
+        !options.runRenderGraphReloadStress &&
+        !options.runFrameSmokeTest)
+    {
+        options.errorMessage = "--exit-after-tests requires --reloadstress, --reloadfail, --reloadfail-material, --lightstress, --resizestress, --graphreloadstress, or --framesmoke.";
+    }
+    return options;
+}
+
+void PrintUsage()
+{
+    std::cout
+        << "Usage: main.exe [--reloadstress <scene-path> [count] --exit-after-tests]\n"
+        << "       main.exe [--reloadfail <scene-path> --exit-after-tests]\n"
+        << "       main.exe [--reloadfail-material --exit-after-tests]\n"
+        << "       main.exe [--lightstress [count] --exit-after-tests]\n"
+        << "       main.exe [--resizestress [count] --exit-after-tests]\n"
+        << "       main.exe [--graphreloadstress [count] --exit-after-tests]\n"
+        << "       main.exe [--framesmoke [count] --exit-after-tests]\n"
+        << "  --reloadstress <scene-path> [count]  Queue world reload stress through CommandBus.\n"
+        << "  --reloadfail <scene-path>            Verify failed reload preserves active World.\n"
+        << "  --reloadfail-material                Generate bad material fixture and verify rollback.\n"
+        << "  --lightstress [count]                Generate a high-light scene and reload it to test light SSBO growth.\n"
+        << "  --resizestress [count]               Recreate swapchain and graph resources across window sizes.\n"
+        << "  --graphreloadstress [count]          Reload frame graph GPU resources through retire queue.\n"
+        << "  --framesmoke [count]                 Render fixed frames and report frame-time baseline.\n"
+        << "  --exit-after-tests                  Exit with 0 on success or 2 on test failure.\n";
+}
+
+void QueueLaunchCommands(VL::EngineLoop& engineLoop, const LaunchOptions& options)
+{
+    if (options.runReloadFailureRollbackTest)
+    {
+        VL::RuntimeCommand command;
+        command.type = VL::RuntimeCommandType::RunWorldReloadFailureRollbackTest;
+        command.stringValue = options.reloadFailureScenePath;
+        command.sourceText = "argv: --reloadfail";
+        engineLoop.QueueRuntimeCommand(std::move(command));
+        engineLoop.SetExitAfterRuntimeTests(options.exitAfterTests);
+        return;
+    }
+
+    if (options.runGeneratedMaterialFailureRollbackTest)
+    {
+        VL::RuntimeCommand command;
+        command.type = VL::RuntimeCommandType::RunGeneratedMaterialFailureRollbackTest;
+        command.sourceText = "argv: --reloadfail-material";
+        engineLoop.QueueRuntimeCommand(std::move(command));
+        engineLoop.SetExitAfterRuntimeTests(options.exitAfterTests);
+        return;
+    }
+
+    if (options.runReloadStress)
+    {
+        VL::RuntimeCommand command;
+        command.type = VL::RuntimeCommandType::RunWorldReloadStress;
+        command.stringValue = options.reloadStressScenePath;
+        command.intValue = options.reloadStressCount;
+        command.sourceText = "argv: --reloadstress";
+        engineLoop.QueueRuntimeCommand(std::move(command));
+        engineLoop.SetExitAfterRuntimeTests(options.exitAfterTests);
+        return;
+    }
+
+    if (options.runGeneratedHighLightReloadStress)
+    {
+        VL::RuntimeCommand command;
+        command.type = VL::RuntimeCommandType::RunGeneratedHighLightReloadStress;
+        command.intValue = options.highLightStressCount;
+        command.sourceText = "argv: --lightstress";
+        engineLoop.QueueRuntimeCommand(std::move(command));
+        engineLoop.SetExitAfterRuntimeTests(options.exitAfterTests);
+        return;
+    }
+
+    if (options.runResizeStress)
+    {
+        engineLoop.StartResizeStress(options.resizeStressCount);
+        engineLoop.SetExitAfterRuntimeTests(options.exitAfterTests);
+        return;
+    }
+
+    if (options.runRenderGraphReloadStress)
+    {
+        engineLoop.StartRenderGraphReloadStress(options.graphReloadStressCount);
+        engineLoop.SetExitAfterRuntimeTests(options.exitAfterTests);
+        return;
+    }
+
+    if (options.runFrameSmokeTest)
+    {
+        engineLoop.StartFrameSmokeTest(options.frameSmokeCount);
+        engineLoop.SetExitAfterRuntimeTests(options.exitAfterTests);
+    }
+}
+
+} // namespace
 
 int main(int argc, char **argv)
 {
-    // 做一些初始化设置
-    if(!SDL_Init(SDL_INIT_VIDEO)){
-        std::cout << "SDL_Init failed" << std::endl;
-        exit(1);
-    }
-    if(!SDL_Vulkan_LoadLibrary(nullptr)){
-        std::cout << "SDL_Vulkan_LoadLibrary failed" << std::endl;
-        exit(1);
-    }    
-    CommonFunction::InitConfigJson();
-
-    SDL_Window *window = SDL_CreateWindow(
-        "VulkanRenderer",
-        CommonFunction::GetWindowSize().x(), CommonFunction::GetWindowSize().y(),
-        SDL_WINDOW_VULKAN | SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE);
-
-    if (!window)
+    const LaunchOptions launchOptions = ParseLaunchOptions(argc, argv);
+    if (launchOptions.showHelp)
     {
-        SDL_Log("Create window failed");
-        exit(1);
+        PrintUsage();
+        return 0;
     }
-    bool shouldClose = false;
-    SDL_Event event;
-
-    unsigned int count = 0;
-    const char* const* extensions = SDL_Vulkan_GetInstanceExtensions(&count);
-    if (!extensions) {
-        std::cout << "Failed to get Vulkan instance extension count" << std::endl;
-        exit(1);
-    }
-    std::vector<const char *> extensionsVec;
-    for (unsigned int i = 0; i < count; i++)
+    if (!launchOptions.errorMessage.empty())
     {
-        extensionsVec.push_back(extensions[i]);
-        std::cout << "Vulkan extension: " << extensions[i] << std::endl;
+        std::cerr << launchOptions.errorMessage << std::endl;
+        PrintUsage();
+        return 1;
     }
 
-    //编译shader
-        // 这里是把json转为glsl include文件，后面感觉可以搞个手动触发版本,或者自动触发版本
-    MaterialParameterIncludeGenerator::GenerateAllIncludes();
-    ShaderCompiler shaderCompiler;
-    std::string shaderFolderPath = CommonFunction::Path("shader");
-    std::cout << "shaderFolderPath: " << shaderFolderPath << std::endl;
-    shaderCompiler.StartCompile(shaderFolderPath);
-
-    //初始化VulkanManager
-    VulkanManager& vulkanManager = VulkanManager::GetInstance();
-    vulkanManager.Init(extensionsVec, window);
-    PipelineFactory pipelineFactory(&vulkanManager.GetDevice());
-    SceneLoader& sceneLoader = SceneLoader::GetInstance();
-    sceneLoader.SetPipelineFactory(&pipelineFactory);
-    //加载渲染图
-    RenderGraph& renderGraph = RenderGraph::GetInstance();
-    renderGraph.LoadRenderGraph(CommonFunction::InitRenderGraphJson());
-    //加载场景
-    sceneLoader.LoadScene(CommonFunction::Path(CommonFunction::GetInitScene()));
-    //初始化渲染系统
-    RenderSystem& renderSystem = RenderSystem::GetInstance();
-    renderSystem.InitRenderObject();
-    //初始化调试控制台
-    DebugConsole debugConsole(renderSystem);
-    debugConsole.Initialize();
-    //初始化FPS计算工具
-    FpsTool fpsTool;
-    //玩家控制器
-    Controller controller(window);
-    controller.SetMoveVelocity(10.0f);
-    controller.SetRotationSpeed(10.0f);
-    auto camera = sceneLoader.GetCamera();
-    controller.SetSceneObject(camera);
-
-    SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
-    SDL_ShowWindow(window);
-    controller.SetMouseCaptured(true);
-
-    while (!shouldClose)
+    VL::DiagnosticsSubsystem diagnostics;
+    VL::RuntimeConfig runtimeConfig;
+    auto configResult = runtimeConfig.Load();
+    if (configResult.IsFailure())
     {
-        PROFILE_SCOPE("Frame");
-        //更新调试控制台
-        debugConsole.Update();
-
-        //delta time
-        float deltaTime = CommonFunction::GetDeltaTime();
-        {
-            PROFILE_SCOPE("Events");
-            while (SDL_PollEvent(&event))
-            {
-                switch (event.type)
-                {
-                    case SDL_EVENT_KEY_DOWN:
-                        if (!event.key.repeat && event.key.scancode == SDL_SCANCODE_ESCAPE)
-                        {
-                            controller.ToggleMouseCaptured();
-                            std::cout << "Mouse capture "
-                                      << (controller.IsMouseCaptured() ? "enabled" : "disabled")
-                                      << " (press Esc to toggle)" << std::endl;
-                        }
-                        break;
-                    case SDL_EVENT_WINDOW_RESIZED:
-                        std::cout << "Window resized to " << event.window.data1 << "x" << event.window.data2 << std::endl;
-                        vulkanManager.ReCreateSwapChain(event.window.data1, event.window.data2);
-                        break;
-                    case SDL_EVENT_QUIT:
-                        std::cout << "Quit event received" << std::endl;
-                        shouldClose = true;
-                        break;
-                }
-            }
-        }
-        {
-            PROFILE_SCOPE("Update");
-            controller.Update(deltaTime);
-        }
-        {
-            PROFILE_SCOPE("RenderLoop");
-            renderSystem.Render();
-        }
-
-        //FPS计算
-        {
-            PROFILE_SCOPE("FPS");
-            fpsTool.Calculate(deltaTime);
-            SDL_SetWindowTitle(window, fpsTool.getTitle().c_str());
-        }
-        PROFILE_FRAME();
+        diagnostics.ReportRuntimeError("Runtime config load failed", configResult.Error());
+        return 1;
     }
-    // Wait for device idle before cleanup
-    VulkanManager::GetInstance().GetDevice().waitIdle();
-    Profiler::Instance().EndSession();
 
-    SDL_DestroyWindow(window);
-    SDL_Quit();
-    return 0;
+    VL::PlatformApplicationDesc platformDesc;
+    platformDesc.windowWidth = static_cast<int>(runtimeConfig.GetWindowSize().x());
+    platformDesc.windowHeight = static_cast<int>(runtimeConfig.GetWindowSize().y());
+
+    VL::PlatformApplication platformApplication;
+    auto platformResult = platformApplication.Initialize(platformDesc);
+    if (platformResult.IsFailure())
+    {
+        diagnostics.ReportRuntimeError("Platform init failed", platformResult.Error());
+        platformApplication.Shutdown();
+        return 1;
+    }
+
+    VL::EngineLoop engineLoop;
+    auto initResult = engineLoop.Init(platformApplication, runtimeConfig);
+    if (initResult.IsFailure())
+    {
+        diagnostics.ReportRuntimeError("EngineLoop init failed", initResult.Error());
+        engineLoop.Shutdown();
+        platformApplication.Shutdown();
+        return 1;
+    }
+
+    QueueLaunchCommands(engineLoop, launchOptions);
+    const int exitCode = engineLoop.Run();
+    engineLoop.Shutdown();
+    platformApplication.Shutdown();
+    return exitCode;
 }

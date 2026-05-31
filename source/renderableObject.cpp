@@ -1,19 +1,21 @@
 #include "renderableObject.h"
 #include "vertexDataStruct.h"
-#include "commonFunction.h"
+#include "render/backend/rendererBackendVulkan.h"
+
 #include <vulkan/vulkan.hpp>
+#include <cstring>
 
 RenderableObject::RenderableObject()
 {
 }
 
-RenderableObject::RenderableObject(std::vector<Vertex> vertices, std::vector<uint32_t> indices, vk::Device *device, vk::PhysicalDeviceMemoryProperties *physicalDeviceMemoryProperties, vk::CommandPool *commandPool, vk::CommandBuffer* commandBuffer, vk::Queue *GraphicsQueue, const std::string& name)
+RenderableObject::RenderableObject(
+    std::vector<Vertex> vertices,
+    std::vector<uint32_t> indices,
+    VL::RendererBackendVulkan& rendererBackend,
+    const std::string& name)
 {
-    this->device = device;
-    this->graphicsQueue = GraphicsQueue;
-    this->physicalDeviceMemoryProperties = physicalDeviceMemoryProperties;
-    this->commandPool = commandPool;
-    this->commandBuffer = commandBuffer;
+    this->rendererBackend = &rendererBackend;
     this->vertices = std::move(vertices);
     this->indices = std::move(indices);
     this->name = name;
@@ -31,6 +33,7 @@ RenderableObject::~RenderableObject()
     DestroyIndexBuffer();
     // 销毁顶点缓冲区
     DestroyVertexBuffer();
+    rendererBackend = nullptr;
 }
 
 void RenderableObject::Draw(vk::CommandBuffer &commandBuffer, uint32_t width, uint32_t height)
@@ -62,34 +65,31 @@ void RenderableObject::Draw(vk::CommandBuffer &commandBuffer, uint32_t width, ui
 void RenderableObject::CreateVertexBuffer()
 {
     vk::DeviceSize bufferSize = vertices.size() * sizeof(Vertex);
-    // 创建临时缓冲区
     vk::Buffer stagingBuffer;
     vk::DeviceMemory stagingBufferMemory;
     vk::BufferUsageFlags usage = vk::BufferUsageFlagBits::eTransferSrc;
     vk::MemoryPropertyFlags memoryPropertyFlags = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
-    std::tie(stagingBuffer, stagingBufferMemory) = CommonFunction::CreateBuffer(
-        *device, bufferSize, usage, *physicalDeviceMemoryProperties, memoryPropertyFlags, "StagingBuffer: Vertex (" + name + ")"
-        );
-    // 将顶点数据复制到临时缓冲区
-    void *data = device->mapMemory(stagingBufferMemory, 0, bufferSize);
-    memcpy(data, vertices.data(), static_cast<size_t>(bufferSize));
-    device->unmapMemory(stagingBufferMemory);
+    std::tie(stagingBuffer, stagingBufferMemory) = rendererBackend->CreateBuffer(
+        bufferSize,
+        usage,
+        memoryPropertyFlags,
+        "StagingBuffer: Vertex (" + name + ")");
 
-    // 创建顶点缓冲区
+    void *data = rendererBackend->MapMemory(stagingBufferMemory, bufferSize);
+    memcpy(data, vertices.data(), static_cast<size_t>(bufferSize));
+    rendererBackend->UnmapMemory(stagingBufferMemory);
+
     vk::BufferUsageFlags vertexBufferUsage = vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst;
     vk::MemoryPropertyFlags vertexBufferMemoryPropertyFlags = vk::MemoryPropertyFlagBits::eDeviceLocal;
-    std::tie(vertexBuffer, vertexBufferMemory) = CommonFunction::CreateBuffer(
-        *device, bufferSize, vertexBufferUsage, *physicalDeviceMemoryProperties, vertexBufferMemoryPropertyFlags, "VertexBuffer (" + name + ")"
-    );
+    std::tie(vertexBuffer, vertexBufferMemory) = rendererBackend->CreateBuffer(
+        bufferSize,
+        vertexBufferUsage,
+        vertexBufferMemoryPropertyFlags,
+        "VertexBuffer (" + name + ")");
 
-    // 将临时缓冲区中的数据复制到顶点缓冲区
-    CommonFunction::CopyBufferToBuffer(*device, *graphicsQueue, *commandPool, stagingBuffer, vertexBuffer, bufferSize);
+    rendererBackend->CopyBufferToBuffer(stagingBuffer, vertexBuffer, bufferSize);
+    rendererBackend->DestroyBuffer(stagingBuffer, stagingBufferMemory);
 
-    // 释放临时缓冲区
-    device->destroyBuffer(stagingBuffer);
-    device->freeMemory(stagingBufferMemory);
-
-    // 设置顶点缓冲区信息
     vertexBufferInfo
         .setBuffer(vertexBuffer)
         .setOffset(0)
@@ -98,38 +98,42 @@ void RenderableObject::CreateVertexBuffer()
 
 void RenderableObject::DestroyVertexBuffer()
 {
-    device->destroyBuffer(vertexBuffer);
-    device->freeMemory(vertexBufferMemory);
+    if (rendererBackend != nullptr)
+    {
+        rendererBackend->DestroyBuffer(vertexBuffer, vertexBufferMemory);
+        vertexBuffer = nullptr;
+        vertexBufferMemory = nullptr;
+    }
 }
 
 void RenderableObject::CreateIndexBuffer()
 {
     vk::DeviceSize bufferSize = indices.size() * sizeof(uint32_t);
-    // 创建临时缓冲区
     vk::Buffer stagingBuffer;
     vk::DeviceMemory stagingBufferMemory;
     vk::BufferUsageFlags usage = vk::BufferUsageFlagBits::eTransferSrc;
     vk::MemoryPropertyFlags memoryPropertyFlags = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
-    std::tie(stagingBuffer, stagingBufferMemory) = CommonFunction::CreateBuffer(
-        *device, bufferSize, usage, *physicalDeviceMemoryProperties, memoryPropertyFlags, "StagingBuffer: Index (" + name + ")"
-    );
-    // 将索引数据复制到临时缓冲区
-    void *data = device->mapMemory(stagingBufferMemory, 0, bufferSize);
+    std::tie(stagingBuffer, stagingBufferMemory) = rendererBackend->CreateBuffer(
+        bufferSize,
+        usage,
+        memoryPropertyFlags,
+        "StagingBuffer: Index (" + name + ")");
+
+    void *data = rendererBackend->MapMemory(stagingBufferMemory, bufferSize);
     memcpy(data, indices.data(), static_cast<size_t>(bufferSize));
-    device->unmapMemory(stagingBufferMemory);
-    // 创建索引缓冲区
+    rendererBackend->UnmapMemory(stagingBufferMemory);
+
     vk::BufferUsageFlags indexBufferUsage = vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eTransferDst;
     vk::MemoryPropertyFlags indexBufferMemoryPropertyFlags = vk::MemoryPropertyFlagBits::eDeviceLocal;
-    std::tie(indexBuffer, indexBufferMemory) = CommonFunction::CreateBuffer(
-        *device, bufferSize, indexBufferUsage, *physicalDeviceMemoryProperties, indexBufferMemoryPropertyFlags, "IndexBuffer (" + name + ")"
-    );
-    // 将临时缓冲区中的数据复制到索引缓冲区
-    CommonFunction::CopyBufferToBuffer(*device, *graphicsQueue, *commandPool, stagingBuffer, indexBuffer, bufferSize);
-    // 释放临时缓冲区
-    device->destroyBuffer(stagingBuffer);
-    device->freeMemory(stagingBufferMemory);
+    std::tie(indexBuffer, indexBufferMemory) = rendererBackend->CreateBuffer(
+        bufferSize,
+        indexBufferUsage,
+        indexBufferMemoryPropertyFlags,
+        "IndexBuffer (" + name + ")");
+
+    rendererBackend->CopyBufferToBuffer(stagingBuffer, indexBuffer, bufferSize);
+    rendererBackend->DestroyBuffer(stagingBuffer, stagingBufferMemory);
     
-    // 设置索引缓冲区信息
     indexBufferInfo
         .setBuffer(indexBuffer)
         .setOffset(0)
@@ -138,8 +142,12 @@ void RenderableObject::CreateIndexBuffer()
 
 void RenderableObject::DestroyIndexBuffer()
 {
-    device->destroyBuffer(indexBuffer);
-    device->freeMemory(indexBufferMemory);
+    if (rendererBackend != nullptr)
+    {
+        rendererBackend->DestroyBuffer(indexBuffer, indexBufferMemory);
+        indexBuffer = nullptr;
+        indexBufferMemory = nullptr;
+    }
 }
 void RenderableObject::UpdateLocalBounds()
 {

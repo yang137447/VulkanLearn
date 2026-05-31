@@ -138,7 +138,9 @@ namespace
         size_t size,
         HostImage::TextureSemantic semantic)
     {
-        // 先用临时文件兜底复用同一套 OpenEXR 读取路径，后续如果需要再替换成自定义流。
+        // OpenEXR loading is centralized on the file-path reader; the memory
+        // path writes bytes to a scoped temp file so color conversion and error
+        // handling stay identical for both entry points.
         const uint64_t uniqueId = static_cast<uint64_t>(
             std::chrono::high_resolution_clock::now().time_since_epoch().count());
         const std::filesystem::path tempPath =
@@ -425,7 +427,7 @@ std::optional<HostImage> TextureIO::LoadFromMemory(const void* data, size_t size
 
     if (formatHint == FileFormat::Exr)
     {
-        // 内存 EXR 先复用临时文件方案，避免单独维护一套不稳定的解码分支。
+        // Keep in-memory EXR decoding on the same OpenEXR path as file loads.
         image = LoadExrFromMemoryWithOpenExr(data, size, options.semantic);
     }
     else if (formatHint == FileFormat::Hdr)

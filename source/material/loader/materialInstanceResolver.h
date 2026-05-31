@@ -7,7 +7,8 @@
 // Resolves disk material assets into the effective material-instance JSON used by runtime loading.
 // It owns the M_ + MI_ merge policy: shaderName comes from the M_ file location, render states
 // and macros start from M_ defaults, and MI_ may only override declared fields. It does not create
-// Vulkan materials, textures, descriptors, or shader modules; SceneLoader and downstream systems do that.
+// Vulkan materials, textures, descriptors, or shader modules; RendererMaterialLoader
+// and downstream renderer systems do that.
 class MaterialInstanceResolver
 {
 public:

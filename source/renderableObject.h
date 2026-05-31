@@ -2,10 +2,19 @@
 #include <vulkan/vulkan.hpp>
 #include <Eigen/Dense>
 
+namespace VL
+{
+class RendererBackendVulkan;
+}
+
 class RenderableObject
 {
 public:
-    RenderableObject(std::vector<struct Vertex> vertices, std::vector<uint32_t> indices, vk::Device* device, vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties, vk::CommandPool* commandPool, vk::CommandBuffer* commandBuffer, vk::Queue* GraphicsQueue, const std::string& name = "");
+    RenderableObject(
+        std::vector<struct Vertex> vertices,
+        std::vector<uint32_t> indices,
+        VL::RendererBackendVulkan& rendererBackend,
+        const std::string& name = "");
     ~RenderableObject();
 
     void Draw(vk::CommandBuffer& commandBuffer, uint32_t width, uint32_t height);
@@ -25,20 +34,16 @@ private:
     RenderableObject();
 
     std::string name;
-    vk::Device* device;
-    vk::CommandPool* commandPool;
-    vk::CommandBuffer* commandBuffer;
-    vk::Queue* graphicsQueue;
-    vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties;
+    VL::RendererBackendVulkan* rendererBackend = nullptr;
 
     std::vector<struct Vertex> vertices;
     std::vector<uint32_t> indices;
     Eigen::Vector3f boundsMin;
     Eigen::Vector3f boundsMax;
-    vk::Buffer vertexBuffer;
-    vk::DeviceMemory vertexBufferMemory;
+    vk::Buffer vertexBuffer = nullptr;
+    vk::DeviceMemory vertexBufferMemory = nullptr;
     vk::DescriptorBufferInfo vertexBufferInfo;
-    vk::Buffer indexBuffer;
-    vk::DeviceMemory indexBufferMemory;
+    vk::Buffer indexBuffer = nullptr;
+    vk::DeviceMemory indexBufferMemory = nullptr;
     vk::DescriptorBufferInfo indexBufferInfo;
 };

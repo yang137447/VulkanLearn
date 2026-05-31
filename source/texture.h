@@ -4,6 +4,11 @@
 #include "resource/image/hostImage.h"
 #include "resource/image/textureIO.h"
 
+namespace VL
+{
+class RendererBackendVulkan;
+}
+
 class Texture
 {
 public:
@@ -17,10 +22,24 @@ public:
         std::string debugName;
     };
 
-    Texture(const std::string& texturePath);
-    Texture(const std::string& texturePath, HostImage::TextureSemantic semantic, TextureIO::LoadOptions::Transfer transfer);
-    Texture(const std::string& texturePath, const CreateDesc& createDesc);
-    Texture(vk::Image image, vk::DeviceMemory imageMemory, vk::ImageView imageView, vk::Sampler sampler, uint32_t mipLevels, vk::Format format);
+    Texture(VL::RendererBackendVulkan& rendererBackend, const std::string& texturePath);
+    Texture(
+        VL::RendererBackendVulkan& rendererBackend,
+        const std::string& texturePath,
+        HostImage::TextureSemantic semantic,
+        TextureIO::LoadOptions::Transfer transfer);
+    Texture(
+        VL::RendererBackendVulkan& rendererBackend,
+        const std::string& texturePath,
+        const CreateDesc& createDesc);
+    Texture(
+        VL::RendererBackendVulkan& rendererBackend,
+        vk::Image image,
+        vk::DeviceMemory imageMemory,
+        vk::ImageView imageView,
+        vk::Sampler sampler,
+        uint32_t mipLevels,
+        vk::Format format);
     ~Texture();
     inline vk::Image getImage() const { return image; }
     inline vk::DeviceMemory getImageMemory() const { return imageMemory; }
@@ -39,4 +58,5 @@ private:
     uint32_t mipLevels;
     vk::Format format;
     vk::DescriptorImageInfo descriptorInfo;
+    VL::RendererBackendVulkan* rendererBackend = nullptr;
 };

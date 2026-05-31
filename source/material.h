@@ -13,7 +13,7 @@ class Material: public std::enable_shared_from_this<Material>
 {
 public:
     ~Material();
-    Material(PipelineFactory& pipelineFactory, vk::PhysicalDeviceMemoryProperties* gpuMemoryProperties, vk::RenderPass* renderPass, const ShaderVariantKey& shaderVariantKey, const std::string& materialKey, vk::SampleCountFlagBits samples, uint32_t colorAttachmentCount, const GraphicsPipelineStateDesc& pipelineStateDesc = {},
+    Material(PipelineFactory& pipelineFactory, vk::RenderPass* renderPass, const ShaderVariantKey& shaderVariantKey, const std::string& materialKey, vk::SampleCountFlagBits samples, uint32_t colorAttachmentCount, const GraphicsPipelineStateDesc& pipelineStateDesc = {},
                     bool bIsShadowPass = false);
 
     std::shared_ptr<MaterialInstance> CreateInstance();

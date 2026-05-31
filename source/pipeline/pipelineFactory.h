@@ -51,7 +51,6 @@ public:
     PipelineFactory(vk::Device* device);
     std::shared_ptr<ComputePipeline> CreateComputePipeline(const std::string& shaderName);
     std::shared_ptr<GraphicsPipeline> CreateGraphicsPipeline(
-        vk::PhysicalDeviceMemoryProperties* gpuMemoryProperties,
         vk::RenderPass* renderPass,
         const ShaderVariantKey& shaderVariantKey,
         vk::SampleCountFlagBits sampleCount,

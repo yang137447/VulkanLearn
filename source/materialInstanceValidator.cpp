@@ -7,7 +7,8 @@
 
 namespace
 {
-    // 从材质实例配置中读取渲染模式，决定后续 shader variant 与默认管线状态。
+    // Render mode is a static material property: it participates in shader
+    // variant selection and selects the default pipeline state for the instance.
     RenderMode ParseRenderMode(const nlohmann::json& materialInstanceJson)
     {
         if (!materialInstanceJson.contains("renderStates"))

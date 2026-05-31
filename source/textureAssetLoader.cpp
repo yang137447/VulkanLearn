@@ -90,7 +90,7 @@ void ValidateTextureAssetReference(
 
 TextureBindingLoadDesc LoadTextureAssetDesc(std::string_view textureAssetPath)
 {
-    // 先读取纹理资产 JSON，再统一导出为 SceneLoader 可复用的加载描述。
+    // 先读取纹理资产 JSON，再统一导出为 RendererMaterialLoader 可复用的加载描述。
     std::ifstream textureAssetFile(CommonFunction::Path(std::string(textureAssetPath)));
     if (!textureAssetFile.is_open())
     {

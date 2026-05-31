@@ -127,7 +127,9 @@ void ShaderCompiler::StartCompile(const std::string& shaderFilePath)
             {
                 // If main shader is optimized, compile a separate debug version for reflection
                 std::vector<std::string> debugMacros = macros;
-                debugMacros.push_back("ENABLE_DEBUG_VIEW"); // Ensure debug reflection also has it if needed, or maybe just debug version
+                // Reflection reads the debug SPIR-V, so keep the debug-view
+                // descriptors visible even when the optimized shader omits them.
+                debugMacros.push_back("ENABLE_DEBUG_VIEW");
                 std::vector<uint32_t> spvDebugCode = CompileGLSLToSPIRV(glslCode, kind, glslShaderPath, debugMacros, true);
                 SaveSPIRVToFile(spvDebugCode, compiledDebugShaderPath);
             }

@@ -6,8 +6,9 @@
 #include <vector>
 #include "../mesh/loader/common/meshAssetLoader.h"
 
-// One validated scene object entry used by SceneLoader runtime dispatch.
-// Mesh objects carry an already built mesh load request so SceneLoader does not rebuild it.
+// One validated scene object entry used by WorldBuilder and RendererMeshLoader.
+// Mesh objects carry an already built mesh load request so runtime code does
+// not rebuild it.
 struct SceneObjectBuildPlan
 {
     size_t objectIndex = 0;
@@ -16,7 +17,8 @@ struct SceneObjectBuildPlan
     std::optional<MeshAssetLoadRequest> meshLoadRequest;
 };
 
-// Scene-level validated loading plan consumed by SceneLoader and preflight checks.
+// Scene-level validated loading plan consumed by WorldLoader, WorldBuilder, and
+// renderer resource loaders.
 struct SceneAssetBuildPlan
 {
     std::string scenePath;

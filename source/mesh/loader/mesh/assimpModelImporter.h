@@ -5,7 +5,7 @@
 
 // Strategy implementation for type="mesh".
 // It delegates source parsing to AssimpSourceAdapter and only maps the import request to ModelResource.
-// This class does not expose Assimp types to SceneLoader or MeshAssetValidator.
+// This class does not expose Assimp types to RendererMeshLoader or MeshAssetValidator.
 class AssimpModelImporter final : public IModelImporter
 {
 public:
