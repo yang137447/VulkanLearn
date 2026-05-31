@@ -92,6 +92,15 @@ cmake --build build -j
 
 本项目集成了两种性能分析工具：**Tracy Profiler** 和 **NVIDIA Nsight Systems**。代码中的 `PROFILE_SCOPE` 宏会同时触发两者的标记，你可以根据需求选择使用。
 
+调试断点会让进程暂停，Tracy 这类实时 profiler 的 socket 连接可能因此被对端关闭，并在 Windows 上表现为 `10054 ConnectionReset`。如果当前目标是单步调试逻辑而不是采样性能，建议关闭 profiler 后重新配置：
+
+```bash
+cmake -S . -B build -G "MinGW Makefiles" -DVULKANLEARN_ENABLE_TRACY=OFF -DVULKANLEARN_ENABLE_NVTX=OFF
+cmake --build build -j
+```
+
+需要重新做性能分析时，再把这两个选项改回 `ON`。
+
 ### 1. 使用 Tracy Profiler (实时 CPU 分析)
 
 Tracy 适合在开发过程中实时查看 CPU 函数耗时、帧率波动和内存分配。
