@@ -76,10 +76,12 @@ void RenderSystem::SetActiveWorld(std::shared_ptr<const VL::World> world)
 {
     activeWorld = std::move(world);
     worldSnapshotQueue.Clear();
+    worldSnapshotBuilder.Reset();
     currentRenderScene = VL::RenderScene();
     currentResolvedRenderScene = VL::ResolvedRenderScene();
     hasRenderScene = false;
     initializedRenderWorldGeneration = 0;
+    nextSnapshotFrameIndex = 0;
 }
 
 bool RenderSystem::SetToneMappingMode(int mode, std::string& outMessage)
@@ -185,60 +187,10 @@ void RenderSystem::InitRenderObject()
 void RenderSystem::Render()
 {
     PROFILE_SCOPE("RenderSystem::Render");
-    if (rendererBackend == nullptr)
-    {
-        throw std::runtime_error("RenderSystem renderer backend is not set");
-    }
-
-    RenderGraph& renderGraph = RenderGraph::GetInstance();
-    // UE-Lite snapshot handoff: refresh immutable render-facing data before any pass
-    // reads camera, lights, environment, or draw grouping for this frame.
-    RefreshRenderSceneFromActiveWorld();
-    BuildResolvedRenderScene();
-    if (currentRenderScene.worldGeneration != initializedRenderWorldGeneration)
-    {
-        InitializeCurrentRenderSceneResources();
-    }
-
-    // Backend owns swapchain frame synchronization. RenderSystem only records
-    // pass work into the command buffer it receives for this image.
-    VL::RendererFrameContext frameContext = rendererBackend->BeginFrame(currentFrame);
-    uint32_t frameIndex = frameContext.frameIndex;
-    uint32_t swapchainImageCount = frameContext.swapchainImageCount;
-    swapChainImageIndex = frameContext.swapchainImageIndex;
-    vk::CommandBuffer commandBuffer = frameContext.commandBuffer;
-
-    VulkanDebug::ScopedRegion frameRegion(commandBuffer, "Frame:" + std::to_string(frameIndex) + " Image:" + std::to_string(swapChainImageIndex), VulkanDebug::DebugCategory::eDefault);
-
-    const auto& renderPassOrdered = renderGraph.GetRenderpassesOrdered();
-    for (size_t passIndex = 0; passIndex < renderPassOrdered.size(); ++passIndex)
-    {
-        const auto& renderPassName = renderPassOrdered[passIndex];
-        std::string renderPassScopeName = "RenderPass:" + renderPassName;
-        PROFILE_SCOPE(renderPassScopeName.c_str());
-        const auto& renderPass = renderGraph.GetRenderpasses().at(renderPassName);
-
-        VulkanDebug::ScopedRegion passRegion(commandBuffer, renderPassName, VulkanDebug::DebugCategory::ePass);
-
-        VL::PassRuntimeContext passContext{
-            commandBuffer,
-            renderPass,
-            renderGraph,
-            passIndex,
-            swapChainImageIndex,
-            currentRenderScene,
-            currentResolvedRenderScene,
-            *this
-        };
-        passRuntime.RecordPass(renderPassName, passContext);
-    }
-
-    // RenderSystem only records pass commands. Queue, semaphore, fence,
-    // swapchain, present, and retire epoch details stay backend-owned.
-    rendererBackend->SubmitFrame(frameContext, currentFrame);
-
-    // 更新帧索引
-    currentFrame = currentFrame + 1;
+    // Single-thread compatibility path: GT publishes the same immutable
+    // snapshot that the optional RT consumes, then renders it immediately.
+    PublishSnapshotFromActiveWorld();
+    RenderLatestSnapshotOrLastGood();
 }
 
 void RenderSystem::ReleaseSwapchainDependentResources()
@@ -393,8 +345,7 @@ void RenderSystem::UpdateUBOGlobalForShadow(vk::CommandBuffer& commandBuffer, ui
     Eigen::Vector3f nearCenter = cameraPosition + cameraDirection * cameraNear;
     Eigen::Vector3f farCenter = cameraPosition + cameraDirection * cameraFar;
 
-    thread_local std::vector<Eigen::Vector3f> frustumPoints;
-    frustumPoints.clear();
+    std::vector<Eigen::Vector3f> frustumPoints;
     frustumPoints.reserve(8);
     frustumPoints.emplace_back(nearCenter + cameraUp * nearHalfHeight - cameraRight * nearHalfWidth);
     frustumPoints.emplace_back(nearCenter + cameraUp * nearHalfHeight + cameraRight * nearHalfWidth);
@@ -424,8 +375,7 @@ void RenderSystem::UpdateUBOGlobalForShadow(vk::CommandBuffer& commandBuffer, ui
     Eigen::Matrix3f worldToShadowMatrix = directionalLight->worldToLight;
 
     // 2.3将点转换到shadowCoordinateSystem
-    thread_local std::vector<Eigen::Vector3f> pointsInShadowSys;
-    pointsInShadowSys.clear();
+    std::vector<Eigen::Vector3f> pointsInShadowSys;
     pointsInShadowSys.reserve(frustumPoints.size());
     for (const auto& point : frustumPoints)
     {
@@ -536,7 +486,7 @@ void RenderSystem::UpdateUBOGlobalForShadow(vk::CommandBuffer& commandBuffer, ui
 // ====================================================================================================
 
 RenderSystem::ShadowProjectionParams RenderSystem::CalculateShadowMatrix_DynamicTight(
-    const std::vector<Eigen::Vector3f>& pointsInShadowSys, 
+    const std::vector<Eigen::Vector3f>& pointsInShadowSys,
     const Eigen::Matrix3f& worldToShadowRotation, // Not used here as points are already transformed? 
                                                   // Wait, if we want to rotate the box, we need to know the base rotation?
                                                   // Points are in "Light Aligned World Space" (Shadow Space).
@@ -640,7 +590,7 @@ RenderSystem::ShadowProjectionParams RenderSystem::CalculateShadowMatrix_Dynamic
 }
 
 RenderSystem::ShadowProjectionParams RenderSystem::CalculateShadowMatrix_StableSphere(
-    const std::vector<Eigen::Vector3f>& pointsInShadowSys, 
+    const std::vector<Eigen::Vector3f>& pointsInShadowSys,
     const Eigen::Matrix3f& worldToShadowRotation, 
     float shadowMapResolution, 
     float sceneMaxZ, 
@@ -692,7 +642,7 @@ RenderSystem::ShadowProjectionParams RenderSystem::CalculateShadowMatrix_StableS
 }
 
 RenderSystem::ShadowProjectionParams RenderSystem::CalculateShadowMatrix_StableRectangular(
-    const std::vector<Eigen::Vector3f>& pointsInShadowSys, 
+    const std::vector<Eigen::Vector3f>& pointsInShadowSys,
     const Eigen::Matrix3f& worldToShadowRotation, 
     float shadowMapResolution, 
     float sceneMaxZ, 
@@ -755,6 +705,15 @@ RenderSystem::ShadowProjectionParams RenderSystem::CalculateShadowMatrix_StableR
 
 void RenderSystem::RefreshRenderSceneFromActiveWorld()
 {
+    PublishSnapshotFromActiveWorld();
+    if (!ConsumeLatestSnapshotIntoRenderScene())
+    {
+        throw std::runtime_error("WorldSnapshotQueue did not return the snapshot just published");
+    }
+}
+
+void RenderSystem::PublishSnapshotFromActiveWorld()
+{
     if (!activeWorld)
     {
         throw std::runtime_error("RenderSystem active World is not set");
@@ -762,7 +721,7 @@ void RenderSystem::RefreshRenderSceneFromActiveWorld()
 
     VL::WorldSnapshotBuildDesc buildDesc;
     buildDesc.worldGeneration = activeWorld->GetGeneration();
-    buildDesc.frameIndex = currentFrame;
+    buildDesc.frameIndex = nextSnapshotFrameIndex++;
     buildDesc.debugViewMode = debugViewMode;
     buildDesc.environmentIntensity = environmentIntensity;
 
@@ -772,14 +731,15 @@ void RenderSystem::RefreshRenderSceneFromActiveWorld()
         throw std::runtime_error(VL::FormatRuntimeError(snapshotResult.Error()));
     }
 
-    // Single-thread mode still uses the same publish/consume handoff as the
-    // optional render thread path. This keeps the renderer on immutable
-    // snapshots even before RT is split out.
     worldSnapshotQueue.Publish(std::move(snapshotResult.Value()));
+}
+
+bool RenderSystem::ConsumeLatestSnapshotIntoRenderScene()
+{
     auto snapshot = worldSnapshotQueue.ConsumeLatest();
     if (!snapshot.has_value())
     {
-        throw std::runtime_error("WorldSnapshotQueue did not return the snapshot just published");
+        return false;
     }
 
     auto renderSceneResult = rendererFrontend.BuildRenderScene(**snapshot);
@@ -790,6 +750,32 @@ void RenderSystem::RefreshRenderSceneFromActiveWorld()
 
     currentRenderScene = std::move(renderSceneResult.Value());
     hasRenderScene = true;
+    return true;
+}
+
+void RenderSystem::RenderLatestSnapshotOrLastGood()
+{
+    PROFILE_SCOPE("RenderSystem::RenderLatestSnapshotOrLastGood");
+    if (rendererBackend == nullptr)
+    {
+        throw std::runtime_error("RenderSystem renderer backend is not set");
+    }
+
+    const bool consumedSnapshot = ConsumeLatestSnapshotIntoRenderScene();
+    if (consumedSnapshot)
+    {
+        BuildResolvedRenderScene();
+        if (currentRenderScene.worldGeneration != initializedRenderWorldGeneration)
+        {
+            InitializeCurrentRenderSceneResources();
+        }
+    }
+    else if (!hasRenderScene)
+    {
+        throw std::runtime_error("RenderSystem has no RenderScene to render");
+    }
+
+    RecordAndSubmitCurrentRenderScene();
 }
 
 void RenderSystem::BuildResolvedRenderScene()
@@ -821,6 +807,55 @@ void RenderSystem::InitializeCurrentRenderSceneResources()
         resourceCache);
 
     initializedRenderWorldGeneration = currentRenderScene.worldGeneration;
+}
+
+void RenderSystem::RecordAndSubmitCurrentRenderScene()
+{
+    RenderGraph& renderGraph = RenderGraph::GetInstance();
+
+    // Backend owns swapchain frame synchronization. RenderSystem only records
+    // pass work into the command buffer it receives for this image.
+    VL::RendererFrameContext frameContext = rendererBackend->BeginFrame(currentFrame);
+    uint32_t frameIndex = frameContext.frameIndex;
+    swapChainImageIndex = frameContext.swapchainImageIndex;
+    vk::CommandBuffer commandBuffer = frameContext.commandBuffer;
+
+    VulkanDebug::ScopedRegion frameRegion(
+        commandBuffer,
+        "Frame:" + std::to_string(frameIndex) + " Image:" + std::to_string(swapChainImageIndex),
+        VulkanDebug::DebugCategory::eDefault);
+
+    const auto& renderPassOrdered = renderGraph.GetRenderpassesOrdered();
+    for (size_t passIndex = 0; passIndex < renderPassOrdered.size(); ++passIndex)
+    {
+        const auto& renderPassName = renderPassOrdered[passIndex];
+        std::string renderPassScopeName = "RenderPass:" + renderPassName;
+        PROFILE_SCOPE(renderPassScopeName.c_str());
+        const auto& renderPass = renderGraph.GetRenderpasses().at(renderPassName);
+
+        VulkanDebug::ScopedRegion passRegion(
+            commandBuffer,
+            renderPassName,
+            VulkanDebug::DebugCategory::ePass);
+
+        VL::PassRuntimeContext passContext{
+            commandBuffer,
+            renderPass,
+            renderGraph,
+            passIndex,
+            swapChainImageIndex,
+            currentRenderScene,
+            currentResolvedRenderScene,
+            *this
+        };
+        passRuntime.RecordPass(renderPassName, passContext);
+    }
+
+    // RenderSystem only records pass commands. Queue, semaphore, fence,
+    // swapchain, present, and retire epoch details stay backend-owned.
+    rendererBackend->SubmitFrame(frameContext, currentFrame);
+
+    currentFrame = currentFrame + 1;
 }
 
 void RenderSystem::RenderInitialize()

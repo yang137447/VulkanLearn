@@ -27,6 +27,7 @@ public:
     const std::string& GetInitialSceneRelativePath() const;
     const std::string& GetProjectPath() const;
     const std::string& GetResourcePath() const;
+    bool ShouldUseRenderThread() const;
 
     std::string ResolvePath(const std::string& path) const;
 
@@ -43,6 +44,7 @@ private:
     std::string initialSceneRelativePath;
     std::string projectPath;
     std::string resourcePath;
+    int workerThreadCount = 1;
 };
 
 } // namespace VL

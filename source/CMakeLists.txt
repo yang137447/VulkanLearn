@@ -19,6 +19,7 @@ PRIVATE
     MikkTSpace
     Spirv_Reflect
     OpenEXR::OpenEXR
+    Threads::Threads
     ws2_32 dbghelp advapi32 user32 secur32
     )
 

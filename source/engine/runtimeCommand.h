@@ -44,7 +44,6 @@ class CommandBus
 public:
     void Queue(RuntimeCommand command);
     std::vector<RuntimeCommand> Drain();
-    bool HasPendingCommands() const { return !pendingCommands.empty(); }
 
 private:
     std::vector<RuntimeCommand> pendingCommands;

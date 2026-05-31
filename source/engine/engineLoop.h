@@ -18,6 +18,7 @@ class PlatformApplication;
 class PlatformWindow;
 class GameInstance;
 class RendererBackendVulkan;
+class RenderThread;
 class RuntimeConfig;
 class RuntimeCommandExecutor;
 class SubsystemCollection;
@@ -55,6 +56,8 @@ private:
     RuntimeResult<void> BindActiveWorldRuntimeObjects(const WorldHandle& worldHandle);
     RuntimeResult<void> RecreateRendererForWindowResize(uint32_t width, uint32_t height);
     RuntimeResult<void> ReloadRenderGraphResources(VL::RenderGraphReleaseMode releaseMode);
+    void WaitForRenderThreadIdle();
+    void PollRenderThreadFatalError();
     void UpdateResizeStress();
     void UpdateRenderGraphReloadStress();
     void UpdateFrameSmokeTest(double frameTimeMs);
@@ -98,6 +101,7 @@ private:
 
     std::unique_ptr<PipelineFactory> pipelineFactory;
     std::unique_ptr<RendererBackendVulkan> rendererBackend;
+    std::unique_ptr<RenderThread> renderThread;
     std::unique_ptr<RuntimeCommandExecutor> runtimeCommandExecutor;
     std::unique_ptr<WorldTransitionCoordinator> worldTransitionCoordinator;
     std::unique_ptr<Controller> controller;

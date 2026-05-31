@@ -18,6 +18,7 @@
 #include "platform/platformWindow.h"
 #include "profiler.h"
 #include "render/backend/rendererBackendVulkan.h"
+#include "render/renderThread.h"
 #include "render/resource/rendererResourceLoadCoordinator.h"
 #include "render/resource/rendererResourceCache.h"
 #include "render/resource/resourceRetireQueue.h"
@@ -103,11 +104,17 @@ void EngineLoop::Shutdown()
 
     if (rendererBackendInitialized)
     {
+        if (renderThread)
+        {
+            renderThread->Stop();
+            renderThread.reset();
+        }
+
         rendererBackend->WaitIdle();
+        RenderSystem::GetInstance().SetActiveWorld(nullptr);
         RenderSystem::GetInstance().ShutdownRenderObject();
         RenderGraph::GetInstance().Shutdown(*rendererBackend);
         controller.reset();
-        RenderSystem::GetInstance().SetActiveWorld(nullptr);
         GetSubsystems().GetWorldManager().ClearActiveWorld();
         RendererResourceCache::GetInstance().Clear();
         ResourceRetireQueue::GetInstance().ForceReleaseAll();
@@ -240,6 +247,19 @@ RuntimeResult<void> EngineLoop::LoadInitialWorldAndRenderer()
 
     RenderSystem::GetInstance().InitRenderObject();
 
+    if (GetRuntimeConfig().ShouldUseRenderThread())
+    {
+        renderThread = std::make_unique<RenderThread>();
+        renderThread->Start(RenderSystem::GetInstance());
+        GetSubsystems().GetDiagnosticsSubsystem().ReportInfo(
+            "Render thread started (workerThreadCount=2)");
+    }
+    else
+    {
+        GetSubsystems().GetDiagnosticsSubsystem().ReportInfo(
+            "Synchronous render mode (workerThreadCount=1)");
+    }
+
     auto consoleResult = GetSubsystems().GetConsoleSubsystem().Initialize(GetSubsystems().GetCommandBus());
     if (consoleResult.IsFailure())
     {
@@ -251,14 +271,23 @@ RuntimeResult<void> EngineLoop::LoadInitialWorldAndRenderer()
 void EngineLoop::Tick()
 {
     const auto frameStartTime = std::chrono::steady_clock::now();
+
     PROFILE_SCOPE("Frame");
 
     GetSubsystems().GetConsoleSubsystem().Update();
+
     GetSubsystems().GetRuntimeTestHooks().Update(
         GetSubsystems().GetCommandBus(),
         GetSubsystems().GetDiagnosticsSubsystem());
+    PollRenderThreadFatalError();
+    if (shouldClose)
+    {
+        return;
+    }
+
     const WorldHandle activeWorldBeforeCommand =
         GetSubsystems().GetWorldManager().GetActiveWorldHandle();
+
     RuntimeCommandExecutionResult commandResult = runtimeCommandExecutor->ExecuteQueuedCommands(
         GetSubsystems().GetCommandBus(),
         RenderSystem::GetInstance(),
@@ -266,10 +295,13 @@ void EngineLoop::Tick()
         GetSubsystems().GetRuntimeTestHooks(),
         GetRuntimeConfig(),
         GetSubsystems().GetDiagnosticsSubsystem());
+
     commandResult.activeWorldBeforeCommand = activeWorldBeforeCommand;
+
     if (commandResult.worldChanged)
     {
         commandResult.worldRuntimeBindingAttempted = true;
+
         auto bindResult = BindActiveWorldRuntimeObjects(commandResult.loadedWorld);
         if (bindResult.IsFailure())
         {
@@ -292,11 +324,14 @@ void EngineLoop::Tick()
             }
         }
     }
+
     commandResult.activeWorldAfterCommand =
         GetSubsystems().GetWorldManager().GetActiveWorldHandle();
+
     GetSubsystems().GetRuntimeTestHooks().NotifyCommandResult(
         commandResult,
         GetSubsystems().GetDiagnosticsSubsystem());
+
     if (exitAfterRuntimeTests)
     {
         if (graphReloadStressCompleted)
@@ -332,12 +367,33 @@ void EngineLoop::Tick()
             exitCode = 2;
             shouldClose = true;
         }
+
+        if (shouldClose)
+        {
+            return;
+        }
     }
 
     const float deltaTime = GetSubsystems().GetRuntimeClock().TickDeltaSeconds();
+
     PumpPlatformEvents();
+    if (shouldClose)
+    {
+        return;
+    }
+
     UpdateResizeStress();
+    if (shouldClose)
+    {
+        return;
+    }
+
     UpdateRenderGraphReloadStress();
+    if (shouldClose)
+    {
+        return;
+    }
+
     GetSubsystems().GetInputSubsystem().UpdateActionState();
 
     {
@@ -347,7 +403,19 @@ void EngineLoop::Tick()
 
     {
         PROFILE_SCOPE("RenderLoop");
-        RenderSystem::GetInstance().Render();
+        if (renderThread && renderThread->IsRunning())
+        {
+            RenderSystem::GetInstance().PublishSnapshotFromActiveWorld();
+            renderThread->SubmitFrame();
+            // V1 keeps the GT/RT split deterministic instead of fully async:
+            // RT owns frame recording, while GT waits before measuring frame
+            // time or touching renderer resources again.
+            WaitForRenderThreadIdle();
+        }
+        else
+        {
+            RenderSystem::GetInstance().Render();
+        }
     }
 
     {
@@ -361,6 +429,7 @@ void EngineLoop::Tick()
     const auto frameEndTime = std::chrono::steady_clock::now();
     const double frameTimeMs =
         std::chrono::duration<double, std::milli>(frameEndTime - frameStartTime).count();
+
     UpdateFrameSmokeTest(frameTimeMs);
 }
 
@@ -427,6 +496,29 @@ SubsystemCollection& EngineLoop::GetSubsystems()
     return gameInstance->GetSubsystems();
 }
 
+void EngineLoop::WaitForRenderThreadIdle()
+{
+    if (renderThread && renderThread->IsRunning())
+    {
+        renderThread->WaitUntilIdle();
+        PollRenderThreadFatalError();
+    }
+}
+
+void EngineLoop::PollRenderThreadFatalError()
+{
+    if (!renderThread || !renderThread->HasFatalError())
+    {
+        return;
+    }
+
+    const std::string message = renderThread->ConsumeFatalError();
+    GetSubsystems().GetDiagnosticsSubsystem().ReportError(
+        "Render thread failed: " + message);
+    exitCode = 2;
+    shouldClose = true;
+}
+
 RuntimeResult<void> EngineLoop::BindActiveWorldRuntimeObjects(const WorldHandle& worldHandle)
 {
     if (!worldHandle.IsValid())
@@ -488,6 +580,14 @@ RuntimeResult<void> EngineLoop::RecreateRendererForWindowResize(uint32_t width, 
 
     try
     {
+        WaitForRenderThreadIdle();
+        if (shouldClose)
+        {
+            return RuntimeResult<void>::Failure(MakeRuntimeError(
+                "EngineLoop.RenderThreadFailedBeforeResize",
+                "Cannot resize renderer resources because the render thread failed."));
+        }
+
         rendererBackend->WaitIdle();
 
         RenderGraph& renderGraph = RenderGraph::GetInstance();
@@ -525,6 +625,14 @@ RuntimeResult<void> EngineLoop::ReloadRenderGraphResources(VL::RenderGraphReleas
 
     try
     {
+        WaitForRenderThreadIdle();
+        if (shouldClose)
+        {
+            return RuntimeResult<void>::Failure(MakeRuntimeError(
+                "EngineLoop.RenderThreadFailedBeforeRenderGraphReload",
+                "Cannot reload render graph resources because the render thread failed."));
+        }
+
         RenderGraph& renderGraph = RenderGraph::GetInstance();
         auto passMaterialSnapshot = renderGraph.CapturePassMaterialInstances();
 

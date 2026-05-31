@@ -28,7 +28,11 @@ class World;
 class RendererBackendVulkan;
 }
 
-//用于按材质分类渲染
+// Owns the renderer-facing frame path: it converts the active World into an
+// immutable WorldSnapshot, resolves that snapshot into GPU resource handles,
+// records render graph passes, and hands the completed frame back to the Vulkan
+// backend. It does not mutate gameplay World data; RT mode only enters through
+// the snapshot mailbox.
 class RenderSystem : private VL::PassRuntimeServices
 {
 public:
@@ -40,6 +44,12 @@ public:
     ~RenderSystem();
     void InitRenderObject();
     void ShutdownRenderObject();
+    // GT-only snapshot production. In workerThreadCount=1 Render() consumes it
+    // immediately; in workerThreadCount=2 RenderThread consumes it later.
+    void PublishSnapshotFromActiveWorld();
+    // Consumes the latest snapshot if present, otherwise reuses the previous
+    // RenderScene after one has been initialized.
+    void RenderLatestSnapshotOrLastGood();
     void Render();
     void SetRendererBackend(VL::RendererBackendVulkan* backend) { rendererBackend = backend; }
     void ReleaseSwapchainDependentResources();
@@ -75,8 +85,10 @@ private:
     void UpdateUBOGlobal(vk::CommandBuffer& commandBuffer);
     void UpdateUBOGlobalForShadow(vk::CommandBuffer& commandBuffer, uint32_t PassSizeWidth, uint32_t PassSizeHeight);
     void RefreshRenderSceneFromActiveWorld();
+    bool ConsumeLatestSnapshotIntoRenderScene();
     void BuildResolvedRenderScene();
     void InitializeCurrentRenderSceneResources();
+    void RecordAndSubmitCurrentRenderScene();
     void RenderInitialize();
     VL::RendererDescriptorContext BuildRendererDescriptorContext() const;
     void UpdateGlobalUBOForPass(vk::CommandBuffer& commandBuffer) override;
@@ -122,6 +134,7 @@ private:
 
     uint32_t currentFrame = 0;
     uint32_t swapChainImageIndex = 0;
+    uint64_t nextSnapshotFrameIndex = 0;
     int debugViewMode = 0;
     float environmentIntensity = 1.0f;
     bool hasRenderScene = false;

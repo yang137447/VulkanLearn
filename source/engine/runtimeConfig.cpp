@@ -43,6 +43,79 @@ RuntimeResult<std::string> ReadStringField(
     return RuntimeResult<std::string>::Success(json[fieldName].get<std::string>());
 }
 
+RuntimeResult<int> ReadWorkerThreadCount(const nlohmann::json& json)
+{
+    if (json.contains("renderThread"))
+    {
+        return RuntimeResult<int>::Failure(MakeRuntimeError(
+            "RuntimeConfig.DeprecatedRenderThreadConfig",
+            "renderThread.enabled has been replaced by top-level workerThreadCount. Use 1 for synchronous GT-only mode or 2 for GT + RT mode.",
+            "config/config.json",
+            "renderThread"));
+    }
+
+    if (!json.contains("workerThreadCount"))
+    {
+        return RuntimeResult<int>::Success(1);
+    }
+
+    const nlohmann::json& workerThreadCountJson = json["workerThreadCount"];
+    if (!workerThreadCountJson.is_number_integer() &&
+        !workerThreadCountJson.is_number_unsigned())
+    {
+        return RuntimeResult<int>::Failure(MakeRuntimeError(
+            "RuntimeConfig.InvalidWorkerThreadCount",
+            "workerThreadCount must be an integer. V1 supports 1 for synchronous GT-only mode or 2 for GT + RT mode.",
+            "config/config.json",
+            "workerThreadCount"));
+    }
+
+    if (workerThreadCountJson.is_number_unsigned())
+    {
+        const uint64_t count = workerThreadCountJson.get<uint64_t>();
+        if (count < 1)
+        {
+            return RuntimeResult<int>::Failure(MakeRuntimeError(
+                "RuntimeConfig.InvalidWorkerThreadCount",
+                "workerThreadCount must be at least 1. Use 1 for synchronous GT-only mode or 2 for GT + RT mode.",
+                "config/config.json",
+                "workerThreadCount"));
+        }
+
+        if (count > 2)
+        {
+            return RuntimeResult<int>::Failure(MakeRuntimeError(
+                "RuntimeConfig.UnsupportedWorkerThreadCount",
+                "workerThreadCount > 2 is reserved for future JobSystem/TaskGraph support. V1 supports only 1 or 2.",
+                "config/config.json",
+                "workerThreadCount"));
+        }
+
+        return RuntimeResult<int>::Success(static_cast<int>(count));
+    }
+
+    const int64_t count = workerThreadCountJson.get<int64_t>();
+    if (count < 1)
+    {
+        return RuntimeResult<int>::Failure(MakeRuntimeError(
+            "RuntimeConfig.InvalidWorkerThreadCount",
+            "workerThreadCount must be at least 1. Use 1 for synchronous GT-only mode or 2 for GT + RT mode.",
+            "config/config.json",
+            "workerThreadCount"));
+    }
+
+    if (count > 2)
+    {
+        return RuntimeResult<int>::Failure(MakeRuntimeError(
+            "RuntimeConfig.UnsupportedWorkerThreadCount",
+            "workerThreadCount > 2 is reserved for future JobSystem/TaskGraph support. V1 supports only 1 or 2.",
+            "config/config.json",
+            "workerThreadCount"));
+    }
+
+    return RuntimeResult<int>::Success(static_cast<int>(count));
+}
+
 } // namespace
 
 RuntimeResult<void> RuntimeConfig::Load()
@@ -130,6 +203,12 @@ const std::string& RuntimeConfig::GetResourcePath() const
     return resourcePath;
 }
 
+bool RuntimeConfig::ShouldUseRenderThread() const
+{
+    EnsureLoaded();
+    return workerThreadCount == 2;
+}
+
 std::string RuntimeConfig::ResolvePath(const std::string& path) const
 {
     EnsureLoaded();
@@ -201,6 +280,13 @@ RuntimeResult<void> RuntimeConfig::LoadConfigFields()
     {
         projectPath = fileSystem.GetProjectRoot().string();
     }
+
+    auto workerThreadCountResult = ReadWorkerThreadCount(configJson);
+    if (workerThreadCountResult.IsFailure())
+    {
+        return RuntimeResult<void>::Failure(workerThreadCountResult.Error());
+    }
+    workerThreadCount = workerThreadCountResult.Value();
 
     return RuntimeResult<void>::Success();
 }
