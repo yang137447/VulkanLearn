@@ -1,10 +1,10 @@
 #include "environmentCubemapGenerator.h"
 
 #include "../commonFunction.h"
+#include "../render/backend/rendererBackendVulkan.h"
 #include "../resource/device/deviceTextureFactory.h"
 #include "../resource/image/textureIO.h"
 #include "../texture.h"
-#include "../vulkanManager.h"
 #include "computePipeline.h"
 #include "pipelineFactory.h"
 
@@ -53,7 +53,7 @@ namespace
         }
     }
 
-    vk::Sampler CreateHdrSampler(vk::Device& device)
+    vk::Sampler CreateHdrSampler(VL::RendererBackendVulkan& rendererBackend)
     {
         // 经纬度环境图只做线性采样，不需要各向异性和 mip 选择。
         vk::SamplerCreateInfo samplerInfo;
@@ -73,19 +73,17 @@ namespace
             .setMipLodBias(0.0f)
             .setMinLod(0.0f)
             .setMaxLod(0.0f);
-        return CommonFunction::CreateSamplerBase(device, samplerInfo);
+        return rendererBackend.CreateSampler(samplerInfo, "EnvironmentHdrSampler");
     }
 
     void CopyFaceToBuffer(
-        vk::Device& device,
-        vk::Queue& graphicsQueue,
-        vk::CommandPool& commandPool,
+        VL::RendererBackendVulkan& rendererBackend,
         vk::Image image,
         vk::Buffer buffer,
         uint32_t cubeSize,
         uint32_t faceIndex)
     {
-        vk::CommandBuffer commandBuffer = CommonFunction::BeginSingleTimeCommands(device, commandPool);
+        vk::CommandBuffer commandBuffer = rendererBackend.BeginSingleTimeCommands();
 
         // 一次只把一个 face 拷到 staging buffer，便于逐面保存调试结果。
         vk::BufferImageCopy region;
@@ -103,7 +101,7 @@ namespace
 
         commandBuffer.copyImageToBuffer(image, vk::ImageLayout::eTransferSrcOptimal, buffer, 1, &region);
 
-        CommonFunction::EndSingleTimeCommands(device, commandBuffer, graphicsQueue, commandPool);
+        rendererBackend.EndSingleTimeCommands(commandBuffer);
     }
 
     void GenerateCubeMipmaps(
@@ -202,7 +200,11 @@ namespace
     }
 }
 
-std::shared_ptr<Texture> EnvironmentCubemapGenerator::Generate(const std::string& hdrPath, uint32_t cubeSize, PipelineFactory& pipelineFactory)
+std::shared_ptr<Texture> EnvironmentCubemapGenerator::Generate(
+    const std::string& hdrPath,
+    uint32_t cubeSize,
+    PipelineFactory& pipelineFactory,
+    VL::RendererBackendVulkan& rendererBackend)
 {
     if (hdrPath.empty())
     {
@@ -212,12 +214,6 @@ std::shared_ptr<Texture> EnvironmentCubemapGenerator::Generate(const std::string
     {
         throw std::runtime_error("Environment cubemap size must be greater than zero.");
     }
-
-    auto& vulkanManager = VulkanManager::GetInstance();
-    auto& device = vulkanManager.GetDevice();
-    auto& gpuMemoryProperties = vulkanManager.GetGpuMemoryProperties();
-    auto& commandPool = vulkanManager.GetCommandPool();
-    auto& graphicsQueue = vulkanManager.GetGraphicQueue();
 
     // 环境贴图按线性 HDR 纹理读入，不做 sRGB 转换，也不翻转 Y。
     TextureIO::LoadOptions loadOptions;
@@ -243,20 +239,24 @@ std::shared_ptr<Texture> EnvironmentCubemapGenerator::Generate(const std::string
     uint32_t hdrMipLevels = 1;
     vk::Format hdrFormat = vk::Format::eUndefined;
     std::tie(hdrImage, hdrImageMemory, hdrMipLevels, hdrFormat) =
-        DeviceTextureFactory::CreateFromHostImage(*cpuHdrImage, hdrFullPath.string(), hdrCreateOptions);
+        DeviceTextureFactory::CreateFromHostImage(
+            rendererBackend,
+            *cpuHdrImage,
+            hdrFullPath.string(),
+            hdrCreateOptions);
 
-    vk::ImageView hdrImageView = CommonFunction::Create2DImageView(
-        device,
+    vk::ImageView hdrImageView = rendererBackend.Create2DImageView(
         hdrImage,
         hdrMipLevels,
         hdrFormat,
         vk::ImageAspectFlagBits::eColor,
         "EnvironmentHdrView");
-    vk::Sampler hdrSampler = CreateHdrSampler(device);
+    vk::Sampler hdrSampler = CreateHdrSampler(rendererBackend);
 
     const uint32_t cubeMipLevels = static_cast<uint32_t>(std::floor(std::log2(static_cast<float>(cubeSize)))) + 1;
 
-    // 输出图像实际就是 6 layer 的 2D image，设置 cube-compatible 方便后续直接当 cubemap 继续使用。
+    // Vulkan represents the cubemap as a 6-layer 2D image. Cube-compatible
+    // creation lets the environment pass sample it through a cube image view.
     vk::Format cubeFormat = vk::Format::eR16G16B16A16Sfloat;
     vk::ImageUsageFlags cubeUsage =
         vk::ImageUsageFlagBits::eStorage |
@@ -280,20 +280,17 @@ std::shared_ptr<Texture> EnvironmentCubemapGenerator::Generate(const std::string
         .setSharingMode(vk::SharingMode::eExclusive)
         .setSamples(vk::SampleCountFlagBits::e1);
 
-    vk::Image cubeImage = device.createImage(cubeImageInfo);
-    vk::MemoryRequirements cubeMemoryRequirements = device.getImageMemoryRequirements(cubeImage);
-    vk::MemoryAllocateInfo cubeAllocInfo;
-    cubeAllocInfo
-        .setAllocationSize(cubeMemoryRequirements.size)
-        .setMemoryTypeIndex(CommonFunction::FindMemoryType(
-            gpuMemoryProperties,
-            cubeMemoryRequirements.memoryTypeBits,
-            cubeMemoryFlags));
+    vk::Image cubeImage;
+    vk::DeviceMemory cubeImageMemory;
+    std::tie(cubeImage, cubeImageMemory) = rendererBackend.CreateImage(
+        cubeImageInfo,
+        cubeMemoryFlags,
+        "EnvironmentCubeImage");
 
-    vk::DeviceMemory cubeImageMemory = device.allocateMemory(cubeAllocInfo);
-    device.bindImageMemory(cubeImage, cubeImageMemory, 0);
-
-    vk::ImageView cubeStorageView = CommonFunction::CreateCubeStorageImageView(device, cubeImage, cubeFormat, "EnvironmentCubeStorageView");
+    vk::ImageView cubeStorageView = rendererBackend.CreateCubeStorageImageView(
+        cubeImage,
+        cubeFormat,
+        "EnvironmentCubeStorageView");
 
     auto computePipeline = pipelineFactory.CreateComputePipeline("generator/equirectToCubemap");
 
@@ -307,13 +304,17 @@ std::shared_ptr<Texture> EnvironmentCubemapGenerator::Generate(const std::string
     poolInfo
         .setPoolSizes(poolSizes)
         .setMaxSets(1);
-    vk::DescriptorPool descriptorPool = device.createDescriptorPool(poolInfo);
+    vk::DescriptorPool descriptorPool = rendererBackend.CreateDescriptorPool(
+        poolInfo,
+        "DescriptorPool: EnvironmentCubemap");
 
     vk::DescriptorSetAllocateInfo descriptorSetAllocateInfo;
     descriptorSetAllocateInfo
         .setDescriptorPool(descriptorPool)
         .setSetLayouts(computePipeline->GetDescriptorSetLayouts()[0]);
-    vk::DescriptorSet descriptorSet = device.allocateDescriptorSets(descriptorSetAllocateInfo)[0];
+    std::vector<vk::DescriptorSet> descriptorSets(1);
+    rendererBackend.AllocateDescriptorSets(descriptorSetAllocateInfo, descriptorSets);
+    vk::DescriptorSet descriptorSet = descriptorSets[0];
 
     vk::DescriptorImageInfo hdrDescriptorImageInfo;
     hdrDescriptorImageInfo
@@ -339,11 +340,14 @@ std::shared_ptr<Texture> EnvironmentCubemapGenerator::Generate(const std::string
         .setDescriptorCount(1)
         .setDescriptorType(vk::DescriptorType::eStorageImage)
         .setImageInfo(cubeDescriptorImageInfo);
-    device.updateDescriptorSets(writeDescriptorSets, nullptr);
+    rendererBackend.UpdateDescriptorSets(std::vector<vk::WriteDescriptorSet>(
+        writeDescriptorSets.begin(),
+        writeDescriptorSets.end()));
 
-    vk::CommandBuffer commandBuffer = CommonFunction::BeginSingleTimeCommands(device, commandPool);
+    vk::CommandBuffer commandBuffer = rendererBackend.BeginSingleTimeCommands();
 
-    // 只有 mip0 由 compute 直接写入，后续 mip 由 blit 生成。
+    // Compute writes mip 0; the lower mips are derived from it with blits so
+    // the sampled cubemap has a complete mip chain.
     vk::ImageMemoryBarrier cubeMip0ToGeneralBarrier;
     cubeMip0ToGeneralBarrier
         .setOldLayout(vk::ImageLayout::eUndefined)
@@ -432,7 +436,7 @@ std::shared_ptr<Texture> EnvironmentCubemapGenerator::Generate(const std::string
             cubeToSampleBarrier);
     }
 
-    CommonFunction::EndSingleTimeCommands(device, commandBuffer, graphicsQueue, commandPool);
+    rendererBackend.EndSingleTimeCommands(commandBuffer);
 
     if constexpr (kEnableDebugCubemapDump)
     {
@@ -442,11 +446,9 @@ std::shared_ptr<Texture> EnvironmentCubemapGenerator::Generate(const std::string
         vk::MemoryPropertyFlags stagingMemoryFlags =
             vk::MemoryPropertyFlagBits::eHostVisible |
             vk::MemoryPropertyFlagBits::eHostCoherent;
-        auto [stagingBuffer, stagingBufferMemory] = CommonFunction::CreateBuffer(
-            device,
+        auto [stagingBuffer, stagingBufferMemory] = rendererBackend.CreateBuffer(
             readbackSize,
             stagingUsage,
-            gpuMemoryProperties,
             stagingMemoryFlags,
             "EnvironmentCubemapReadback");
 
@@ -462,9 +464,9 @@ std::shared_ptr<Texture> EnvironmentCubemapGenerator::Generate(const std::string
         for (uint32_t faceIndex = 0; faceIndex < 6; ++faceIndex)
         {
             // Debug 模式下把每个 face 单独落盘，便于检查朝向与接缝。
-            CopyFaceToBuffer(device, graphicsQueue, commandPool, cubeImage, stagingBuffer, cubeSize, faceIndex);
+            CopyFaceToBuffer(rendererBackend, cubeImage, stagingBuffer, cubeSize, faceIndex);
 
-            void* mapped = device.mapMemory(stagingBufferMemory, 0, readbackSize);
+            void* mapped = rendererBackend.MapMemory(stagingBufferMemory, readbackSize);
             HostImage faceImage;
             faceImage.width = cubeSize;
             faceImage.height = cubeSize;
@@ -476,7 +478,7 @@ std::shared_ptr<Texture> EnvironmentCubemapGenerator::Generate(const std::string
             faceImage.rowStrideBytes = static_cast<uint32_t>(cubeSize * bytesPerPixel);
             faceImage.data.resize(static_cast<size_t>(readbackSize));
             std::memcpy(faceImage.data.data(), mapped, static_cast<size_t>(readbackSize));
-            device.unmapMemory(stagingBufferMemory);
+            rendererBackend.UnmapMemory(stagingBufferMemory);
 
             // 运行时 cubemap 方向是正确的，这里只修正 debug 落盘图的人眼观察朝向。
             FlipImageX(faceImage);
@@ -484,10 +486,9 @@ std::shared_ptr<Texture> EnvironmentCubemapGenerator::Generate(const std::string
             TextureIO::Save(outputDir / (std::string(kFaceNames[faceIndex]) + ".exr"), faceImage, saveOptions);
         }
 
-        device.destroyBuffer(stagingBuffer);
-        device.freeMemory(stagingBufferMemory);
+        rendererBackend.DestroyBuffer(stagingBuffer, stagingBufferMemory);
 
-        vk::CommandBuffer layoutCommandBuffer = CommonFunction::BeginSingleTimeCommands(device, commandPool);
+        vk::CommandBuffer layoutCommandBuffer = rendererBackend.BeginSingleTimeCommands();
         vk::ImageMemoryBarrier cubeToSampleBarrier;
         cubeToSampleBarrier
             .setOldLayout(vk::ImageLayout::eTransferSrcOptimal)
@@ -510,18 +511,28 @@ std::shared_ptr<Texture> EnvironmentCubemapGenerator::Generate(const std::string
             nullptr,
             nullptr,
             cubeToSampleBarrier);
-        CommonFunction::EndSingleTimeCommands(device, layoutCommandBuffer, graphicsQueue, commandPool);
+        rendererBackend.EndSingleTimeCommands(layoutCommandBuffer);
     }
 
-    device.destroyDescriptorPool(descriptorPool);
-    device.destroyImageView(cubeStorageView);
-    device.destroySampler(hdrSampler);
-    device.destroyImageView(hdrImageView);
-    device.destroyImage(hdrImage);
-    device.freeMemory(hdrImageMemory);
+    rendererBackend.DestroyDescriptorPool(descriptorPool);
+    rendererBackend.DestroyImageView(cubeStorageView);
+    rendererBackend.DestroyImageResource(hdrImage, hdrImageMemory, hdrImageView, hdrSampler);
 
-    vk::ImageView cubeSampleView = CommonFunction::CreateCubeImageView(device, cubeImage, cubeMipLevels, cubeFormat, "EnvironmentCubeView");
-    vk::Sampler cubeSampler = CommonFunction::CreateCubeSampler(device, static_cast<float>(cubeMipLevels - 1), "EnvironmentCubeSampler");
+    vk::ImageView cubeSampleView = rendererBackend.CreateCubeImageView(
+        cubeImage,
+        cubeMipLevels,
+        cubeFormat,
+        "EnvironmentCubeView");
+    vk::Sampler cubeSampler = rendererBackend.CreateCubeSampler(
+        static_cast<float>(cubeMipLevels - 1),
+        "EnvironmentCubeSampler");
 
-    return std::make_shared<Texture>(cubeImage, cubeImageMemory, cubeSampleView, cubeSampler, cubeMipLevels, cubeFormat);
+    return std::make_shared<Texture>(
+        rendererBackend,
+        cubeImage,
+        cubeImageMemory,
+        cubeSampleView,
+        cubeSampler,
+        cubeMipLevels,
+        cubeFormat);
 }

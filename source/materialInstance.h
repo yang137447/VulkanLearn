@@ -10,6 +10,11 @@
 class Material;
 class Texture;
 
+namespace VL
+{
+class RendererBackendVulkan;
+}
+
 enum class ParamType
 {
     Float,
@@ -106,15 +111,18 @@ public:
 
     inline std::vector<void*>& GetUboMaterialInstanceMapped(){ return uboMaterialInstance.buffersMapped; }
     std::vector<vk::DescriptorBufferInfo>& GetUboMaterialInstanceInfo(){ return uboMaterialInstance.bufferInfos; }
+    const std::vector<vk::DescriptorBufferInfo>& GetUboMaterialInstanceInfo() const { return uboMaterialInstance.bufferInfos; }
     const vk::DescriptorImageInfo& GetTextureDescriptorInfo(const std::string& textureName) const;
 
-    void RenderInitialize();
+    void RenderInitialize(VL::RendererBackendVulkan& rendererBackend);
+    // Resize and graph-reload paths must recreate per-swapchain UBOs while the
+    // material instance and its CPU parameters stay alive.
+    void ShutdownRenderResources();
 private:
     void CreateUniformBuffers();
     void DestroyUniformBuffers();
     void SetupDescriptors();
 
-    vk::Device device;
     std::string materialInstanceName;
     std::weak_ptr<Material> baseMaterial;
     std::unordered_map<std::string, ParamMap> parameters;
@@ -124,4 +132,6 @@ private:
     std::unordered_map<std::string, Eigen::Vector4f> vec4Parameters;
     std::unordered_map<std::string, std::shared_ptr<Texture>> textures;
     Buffer uboMaterialInstance; 
+    VL::RendererBackendVulkan* rendererBackend = nullptr;
+    bool renderInitialized = false;
 };

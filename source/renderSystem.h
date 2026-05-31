@@ -2,6 +2,7 @@
 #include <vulkan/vulkan.hpp>
 #include <Eigen/Dense>
 #include <array>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -9,12 +10,26 @@
 #include <string>
 #include <utility>
 #include "baseStructs.h"
+#include "render/backend/rendererDescriptorContext.h"
+#include "render/backend/rendererFrameResources.h"
+#include "render/backend/resolvedRenderScene.h"
+#include "render/frontend/renderScene.h"
+#include "render/frontend/rendererFrontend.h"
+#include "render/pass/passRuntime.h"
+#include "world/worldSnapshotBuilder.h"
 
 class Material;
-class SceneObject;
 class MaterialInstance;
+struct Renderpass;
+
+namespace VL
+{
+class World;
+class RendererBackendVulkan;
+}
+
 //用于按材质分类渲染
-class RenderSystem
+class RenderSystem : private VL::PassRuntimeServices
 {
 public:
     static RenderSystem& GetInstance()
@@ -24,26 +39,63 @@ public:
     }
     ~RenderSystem();
     void InitRenderObject();
+    void ShutdownRenderObject();
     void Render();
+    void SetRendererBackend(VL::RendererBackendVulkan* backend) { rendererBackend = backend; }
+    void ReleaseSwapchainDependentResources();
+    void RebuildSwapchainDependentResources();
+    void RebuildRenderGraphDependentResources();
     
-    std::vector<vk::DescriptorBufferInfo>& GetUBOGlobalBufferInfo(){ return uboGlobal.bufferInfos; }
+    const std::vector<vk::DescriptorBufferInfo>& GetUBOGlobalBufferInfo() const
+    {
+        return frameResources.GetGlobalUniformBufferInfos();
+    }
+    const std::vector<vk::DescriptorBufferInfo>& GetLightBufferInfo() const
+    {
+        return frameResources.GetLightBufferInfos();
+    }
 
     void SetDebugViewMode(int mode) { debugViewMode = mode; }
     int GetDebugViewMode() const { return debugViewMode; }
     void SetEnvironmentIntensity(float intensity) { environmentIntensity = intensity; }
     float GetEnvironmentIntensity() const { return environmentIntensity; }
+    // Renderer-owned debug/post-process controls. Runtime commands call these
+    // APIs instead of reaching through RenderGraph to pass material instances.
+    bool SetToneMappingMode(int mode, std::string& outMessage);
+    bool SetBloomStrength(float value, std::string& outMessage);
+    bool SetBloomThreshold(float value, std::string& outMessage);
+    bool SetBloomKnee(float value, std::string& outMessage);
+    bool SetBloomClamp(float value, std::string& outMessage);
+    // Rebinding the active World invalidates all CPU-side render views derived
+    // from the previous World. The next Render() builds a fresh snapshot and
+    // resolved scene from the new generation.
+    void SetActiveWorld(std::shared_ptr<const VL::World> world);
 private:
     RenderSystem();
     void UpdateUBOGlobal(vk::CommandBuffer& commandBuffer);
     void UpdateUBOGlobalForShadow(vk::CommandBuffer& commandBuffer, uint32_t PassSizeWidth, uint32_t PassSizeHeight);
-    void UpdateUBOMaterialInstance(const std::shared_ptr<MaterialInstance>& materialInstance);
-    void UpdateUBOModel(const std::shared_ptr<SceneObject>& object);
-    void CapturePreviousFrameTransforms();
+    void RefreshRenderSceneFromActiveWorld();
+    void BuildResolvedRenderScene();
+    void InitializeCurrentRenderSceneResources();
     void RenderInitialize();
+    VL::RendererDescriptorContext BuildRendererDescriptorContext() const;
+    void UpdateGlobalUBOForPass(vk::CommandBuffer& commandBuffer) override;
+    void UpdateShadowGlobalUBOForPass(
+        vk::CommandBuffer& commandBuffer,
+        uint32_t passWidth,
+        uint32_t passHeight) override;
+    void UpdateMaterialInstanceUBOForPass(
+        const std::shared_ptr<MaterialInstance>& materialInstance) override;
+    void UpdateObjectUBOForPass(
+        VL::RendererObjectGpuResources& objectResources,
+        const VL::RenderDrawPacket& drawPacket) override;
+    void UploadLightsForPass(
+        uint32_t swapChainImageIndex,
+        const std::vector<VL::LightSnapshot>& lights) override;
 
-    void CreateUniformBuffers();
-    void DestroyUniformBuffers();
-    void SetupDescriptors();
+    void InitializeFrameResources();
+    void ShutdownFrameResources();
+    void ValidateFrameResourceDescriptors();
 
         // 用于使用boundingbox加速
     std::pair<float, float> ComputeMinMaxAlongAxis(const Eigen::Vector3f& aabbMin, const Eigen::Vector3f& aabbMax, const Eigen::Vector3f& axis) const;
@@ -72,10 +124,18 @@ private:
     uint32_t swapChainImageIndex = 0;
     int debugViewMode = 0;
     float environmentIntensity = 1.0f;
+    bool hasRenderScene = false;
+    uint64_t initializedRenderWorldGeneration = 0;
     
     Eigen::Matrix4f lightViewProj = Eigen::Matrix4f::Identity();
-    std::optional<Eigen::Matrix4f> previousViewProjection;
-    Buffer uboGlobal;
-    // 按基础材质对象分组： {materialKey, {materialInstance, [sceneObject]}}
-    std::unordered_map<std::string, std::unordered_map<std::string, std::vector<std::weak_ptr<SceneObject>>>> hierarchyObjects;
+    VL::RendererFrameResources frameResources;
+    VL::WorldSnapshotBuilder worldSnapshotBuilder;
+    VL::WorldSnapshotQueue worldSnapshotQueue;
+    VL::RendererFrontend rendererFrontend;
+    VL::ResolvedRenderSceneBuilder resolvedRenderSceneBuilder;
+    VL::PassRuntime passRuntime;
+    VL::RenderScene currentRenderScene;
+    VL::ResolvedRenderScene currentResolvedRenderScene;
+    std::shared_ptr<const VL::World> activeWorld;
+    VL::RendererBackendVulkan* rendererBackend = nullptr;
 };

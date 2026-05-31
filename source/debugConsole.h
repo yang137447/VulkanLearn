@@ -1,12 +1,15 @@
 #pragma once
 #include <string>
 
-class RenderSystem;
+namespace VL
+{
+class CommandBus;
+}
 
 class DebugConsole
 {
 public:
-    explicit DebugConsole(RenderSystem& renderSystem);
+    explicit DebugConsole(VL::CommandBus& commandBus);
 
     void Initialize();
     void Update();
@@ -17,6 +20,6 @@ private:
     void PrintHelp() const;
     void PrintPrompt() const;
 
-    RenderSystem& renderSystem;
+    VL::CommandBus& commandBus;
     std::string currentLine;
 };

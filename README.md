@@ -19,19 +19,25 @@
   - 面向所有协作者的正式文档目录
   - 负责说明文档分类、每类文档的职责和收录规则
 - `documents/architecture/`
-  - 存放中长期架构目标、线程模型、系统边界、数据流等设计文档
-  - 这里描述“目标状态”和“演进方向”，不是当前实现说明
+  - 存放正式架构、线程模型、系统边界、数据流与通用编码约定
+  - 这里描述当前认可的架构边界和落地状态
 - `documents/rendering/`
-  - 存放渲染功能路线图和专题规划，例如 PBR、IBL、TOD
-  - 这里描述“某个功能域未来准备怎么做”
+  - 存放当前已经落地或正在被代码使用的渲染契约
+  - 例如材质参数生成、贴图资产 JSON、descriptor image info 管理
+- `documents/plan/`
+  - 存放未实现、部分实现或长期路线型文档
+  - 例如 Sky Pass、compute bloom、deferred GBuffer、foliage / SpeedTree、weather / GI 等规划
+- `documents/reference/`
+  - 存放教程、课程和背景学习资料
 
 当前有效的正式文档入口：
 
 - `AGENTS.md`
 - `documents/README.md`
-- `documents/rendering/sky-pass-environment-roadmap.md`
-- `documents/rendering/terrain-worldcreator-mvp.md`
-- `documents/rendering/tone-mapping-tutorial.html`
+- `documents/architecture/vulkanlearn-architecture.html`
+- `documents/rendering/texture-asset-json-v1.md`
+- `documents/rendering/material-param-authoring-and-reflection.md`
+- `documents/rendering/descriptor-imageinfo-management.md`
 
 ## 环境要求
 - Windows 10/11

@@ -1,8 +1,8 @@
 #include "brdfLutGenerator.h"
 #include "../commonFunction.h"
+#include "../render/backend/rendererBackendVulkan.h"
 #include "../resource/image/textureIO.h"
 #include "../texture.h"
-#include "../vulkanManager.h"
 #include "computePipeline.h"
 #include "pipelineFactory.h"
 #include <cstdint>
@@ -19,7 +19,7 @@ namespace
     constexpr bool kEnableDebugBrdfDump = false;
 #endif
 
-    vk::Sampler CreateBrdfLutSampler(vk::Device& device)
+    vk::Sampler CreateBrdfLutSampler(VL::RendererBackendVulkan& rendererBackend)
     {
         vk::SamplerCreateInfo samplerInfo;
         samplerInfo
@@ -38,18 +38,14 @@ namespace
             .setMipLodBias(0.0f)
             .setMinLod(0.0f)
             .setMaxLod(0.0f);
-        return CommonFunction::CreateSamplerBase(device, samplerInfo, "BrdfLutSampler");
+        return rendererBackend.CreateSampler(samplerInfo, "BrdfLutSampler");
     }
 }
 
-std::shared_ptr<Texture> BrdfLutGenerator::Generate(PipelineFactory& pipelineFactory)
+std::shared_ptr<Texture> BrdfLutGenerator::Generate(
+    PipelineFactory& pipelineFactory,
+    VL::RendererBackendVulkan& rendererBackend)
 {
-    auto& vulkanManager = VulkanManager::GetInstance();
-    auto& device = vulkanManager.GetDevice();
-    auto& gpuMemoryProperties = vulkanManager.GetGpuMemoryProperties();
-    auto& commandPool = vulkanManager.GetCommandPool();
-    auto& graphicsQueue = vulkanManager.GetGraphicQueue();
-
     auto computePipeline = pipelineFactory.CreateComputePipeline("generator/brfdLut");
     const uint32_t lutWidth = 512;
     const uint32_t lutHeight = 512;
@@ -61,15 +57,22 @@ std::shared_ptr<Texture> BrdfLutGenerator::Generate(PipelineFactory& pipelineFac
     vk::ImageTiling lutTiling = vk::ImageTiling::eOptimal;
     vk::ImageUsageFlags lutUsage = vk::ImageUsageFlagBits::eStorage | vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eSampled;
     vk::MemoryPropertyFlags lutMemFlags = vk::MemoryPropertyFlagBits::eDeviceLocal;
-    auto [lutImage, lutImageMemory] = CommonFunction::CreateImage(
-        device,
-        lutWidth, lutHeight, 1, vk::SampleCountFlagBits::e1,
-        lutFormat, lutTiling,
+    auto [lutImage, lutImageMemory] = rendererBackend.CreateImage(
+        lutWidth,
+        lutHeight,
+        1,
+        vk::SampleCountFlagBits::e1,
+        lutFormat,
+        lutTiling,
         lutUsage,
-        gpuMemoryProperties,
         lutMemFlags,
         "BrdfLutImage");
-    vk::ImageView lutImageView = CommonFunction::Create2DImageView(device, lutImage, 1, lutFormat, vk::ImageAspectFlagBits::eColor, "BrdfLutImageView");
+    vk::ImageView lutImageView = rendererBackend.Create2DImageView(
+        lutImage,
+        1,
+        lutFormat,
+        vk::ImageAspectFlagBits::eColor,
+        "BrdfLutImageView");
 
     vk::DescriptorPoolSize descriptorPoolSize;
     descriptorPoolSize
@@ -79,14 +82,18 @@ std::shared_ptr<Texture> BrdfLutGenerator::Generate(PipelineFactory& pipelineFac
     descriptorPoolCreateInfo
         .setPoolSizes(descriptorPoolSize)
         .setMaxSets(1);
-    vk::DescriptorPool descriptorPool = device.createDescriptorPool(descriptorPoolCreateInfo);
+    vk::DescriptorPool descriptorPool = rendererBackend.CreateDescriptorPool(
+        descriptorPoolCreateInfo,
+        "DescriptorPool: BrdfLut");
 
     vk::DescriptorSetLayout setLayout = computePipeline->GetDescriptorSetLayouts()[0];
     vk::DescriptorSetAllocateInfo descriptorSetAllocateInfo;
     descriptorSetAllocateInfo
         .setDescriptorPool(descriptorPool)
         .setSetLayouts(setLayout);
-    vk::DescriptorSet descriptorSet = device.allocateDescriptorSets(descriptorSetAllocateInfo)[0];
+    std::vector<vk::DescriptorSet> descriptorSets(1);
+    rendererBackend.AllocateDescriptorSets(descriptorSetAllocateInfo, descriptorSets);
+    vk::DescriptorSet descriptorSet = descriptorSets[0];
 
     vk::DescriptorImageInfo imageInfo;
     imageInfo
@@ -100,9 +107,9 @@ std::shared_ptr<Texture> BrdfLutGenerator::Generate(PipelineFactory& pipelineFac
         .setDescriptorCount(1)
         .setDescriptorType(vk::DescriptorType::eStorageImage)
         .setImageInfo(imageInfo);
-    device.updateDescriptorSets(writeDescriptorSet, nullptr);
+    rendererBackend.UpdateDescriptorSets(std::vector<vk::WriteDescriptorSet>{ writeDescriptorSet });
 
-    vk::CommandBuffer commandBuffer = CommonFunction::BeginSingleTimeCommands(device, commandPool);
+    vk::CommandBuffer commandBuffer = rendererBackend.BeginSingleTimeCommands();
 
     vk::ImageMemoryBarrier barrierToGeneral;
     barrierToGeneral
@@ -186,7 +193,7 @@ std::shared_ptr<Texture> BrdfLutGenerator::Generate(PipelineFactory& pipelineFac
             barrierToSample);
     }
 
-    CommonFunction::EndSingleTimeCommands(device, commandBuffer, graphicsQueue, commandPool);
+    rendererBackend.EndSingleTimeCommands(commandBuffer);
 
     if constexpr (kEnableDebugBrdfDump)
     {
@@ -196,18 +203,13 @@ std::shared_ptr<Texture> BrdfLutGenerator::Generate(PipelineFactory& pipelineFac
         vk::BufferUsageFlags stagingUsage = vk::BufferUsageFlagBits::eTransferDst;
         vk::MemoryPropertyFlags stagingMemoryFlags =
             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
-        std::tie(stagingBuffer, stagingBufferMemory) = CommonFunction::CreateBuffer(
-            device,
+        std::tie(stagingBuffer, stagingBufferMemory) = rendererBackend.CreateBuffer(
             stagingBufferSize,
             stagingUsage,
-            gpuMemoryProperties,
             stagingMemoryFlags,
             "BrdfLutReadbackBuffer");
 
-        CommonFunction::CopyImageToBuffer(
-            device,
-            graphicsQueue,
-            commandPool,
+        rendererBackend.CopyImageToBuffer(
             lutImage,
             stagingBuffer,
             lutWidth,
@@ -215,7 +217,7 @@ std::shared_ptr<Texture> BrdfLutGenerator::Generate(PipelineFactory& pipelineFac
             true,
             static_cast<vk::DeviceSize>(lutWidth) * bytesPerPixel);
 
-        void* mapped = device.mapMemory(stagingBufferMemory, 0, readbackSize);
+        void* mapped = rendererBackend.MapMemory(stagingBufferMemory, readbackSize);
         HostImage cpuImage;
         cpuImage.width = lutWidth;
         cpuImage.height = lutHeight;
@@ -225,17 +227,16 @@ std::shared_ptr<Texture> BrdfLutGenerator::Generate(PipelineFactory& pipelineFac
         cpuImage.rowStrideBytes = static_cast<uint32_t>(lutWidth * sizeof(uint16_t) * 4);
         cpuImage.data.resize(static_cast<size_t>(readbackSize));
         std::memcpy(cpuImage.data.data(), mapped, static_cast<size_t>(readbackSize));
-        device.unmapMemory(stagingBufferMemory);
+        rendererBackend.UnmapMemory(stagingBufferMemory);
 
         TextureIO::SaveOptions saveOptions;
         saveOptions.semantic = HostImage::TextureSemantic::Lut;
         saveOptions.format = TextureIO::FileFormat::Exr;
         TextureIO::Save((std::filesystem::path(CommonFunction::GetResourcePath()) / "generated" / "brdf_lut.exr"), cpuImage, saveOptions);
 
-        device.destroyBuffer(stagingBuffer);
-        device.freeMemory(stagingBufferMemory);
+        rendererBackend.DestroyBuffer(stagingBuffer, stagingBufferMemory);
 
-        vk::CommandBuffer layoutCommandBuffer = CommonFunction::BeginSingleTimeCommands(device, commandPool);
+        vk::CommandBuffer layoutCommandBuffer = rendererBackend.BeginSingleTimeCommands();
         vk::ImageMemoryBarrier barrierToSample;
         barrierToSample
             .setOldLayout(vk::ImageLayout::eTransferSrcOptimal)
@@ -257,10 +258,17 @@ std::shared_ptr<Texture> BrdfLutGenerator::Generate(PipelineFactory& pipelineFac
             vk::DependencyFlags(),
             nullptr, nullptr,
             barrierToSample);
-        CommonFunction::EndSingleTimeCommands(device, layoutCommandBuffer, graphicsQueue, commandPool);
+        rendererBackend.EndSingleTimeCommands(layoutCommandBuffer);
     }
 
-    device.destroyDescriptorPool(descriptorPool);
-    vk::Sampler lutSampler = CreateBrdfLutSampler(device);
-    return std::make_shared<Texture>(lutImage, lutImageMemory, lutImageView, lutSampler, 1, lutFormat);
+    rendererBackend.DestroyDescriptorPool(descriptorPool);
+    vk::Sampler lutSampler = CreateBrdfLutSampler(rendererBackend);
+    return std::make_shared<Texture>(
+        rendererBackend,
+        lutImage,
+        lutImageMemory,
+        lutImageView,
+        lutSampler,
+        1,
+        lutFormat);
 }

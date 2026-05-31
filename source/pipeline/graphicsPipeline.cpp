@@ -12,12 +12,11 @@
 #include "../vulkanDebug.h"
 #include "../shaderCompiler.h"
 
-GraphicsPipeline::GraphicsPipeline(vk::Device *device, vk::PhysicalDeviceMemoryProperties* physicalDeviceMemoryProperties, vk::RenderPass* renderPass, const ShaderVariantKey& shaderVariantKey, vk::SampleCountFlagBits sampleCount, uint32_t colorAttachmentCount, const GraphicsPipelineStateDesc& pipelineStateDesc, bool bIsShadowPass)
+GraphicsPipeline::GraphicsPipeline(vk::Device *device, vk::RenderPass* renderPass, const ShaderVariantKey& shaderVariantKey, vk::SampleCountFlagBits sampleCount, uint32_t colorAttachmentCount, const GraphicsPipelineStateDesc& pipelineStateDesc, bool bIsShadowPass)
 {
     PROFILE_FUNCTION();
     this->device = device;
     this->renderPass = renderPass;
-    this->physicalDeviceMemoryProperties = physicalDeviceMemoryProperties;
     this->shaderVariantKey = shaderVariantKey;
     this->sampleCount = sampleCount;
     this->colorAttachmentCount = colorAttachmentCount;

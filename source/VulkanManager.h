@@ -23,8 +23,9 @@ public:
     void Init(std::vector<const char *> &extensions, SDL_Window *window);
     ~VulkanManager();
 
-    // TODO: 可能需要放在其他合适位置
-    // TODO:需要处理 sdl 窗口初始尺寸和 vkSwapChain 尺寸不一致的情况
+    // Legacy swapchain recreate entry kept behind RendererBackendVulkan/RHI.
+    // The engine-level resize path now passes the target drawable size in, so
+    // callers should not infer it from stale SDL or swapchain extents here.
     void ReCreateSwapChain(int newWidth, int newHeight);
 
     inline vk::Device& GetDevice() { return device; }
@@ -105,6 +106,7 @@ private:
     vk::SurfaceCapabilitiesKHR surfaceCapabilities;
     std::vector<vk::PresentModeKHR> presentModes;
     vk::Extent2D swapChainExtent;
+    std::optional<vk::Extent2D> requestedSwapChainExtent;
     uint32_t swapChainImageCount = 0;
     vk::SwapchainKHR swapChain;
     std::vector<vk::Image> swapChainImages;

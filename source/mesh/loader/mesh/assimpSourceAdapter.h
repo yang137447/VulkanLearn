@@ -9,7 +9,7 @@ struct aiScene;
 
 // Adapter boundary for reading ordinary mesh source files through Assimp.
 // It translates Assimp scene data into importer-owned ModelResource sections and does not expose
-// Assimp types to SceneLoader, MeshAssetValidator, or rendering code.
+// Assimp types to RendererMeshLoader, MeshAssetValidator, or rendering code.
 class AssimpSourceAdapter
 {
 public:

@@ -1,12 +1,13 @@
 #include "environmentPrefilterGenerator.h"
 
 #include "../commonFunction.h"
+#include "../render/backend/rendererBackendVulkan.h"
 #include "../texture.h"
-#include "../vulkanManager.h"
 #include "computePipeline.h"
 #include "pipelineFactory.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <tuple>
@@ -24,7 +25,7 @@ namespace
         float pad1 = 0.0f;
     };
 
-    vk::Sampler CreatePrefilterCubeSampler(vk::Device& device, float maxLod)
+    vk::Sampler CreatePrefilterCubeSampler(VL::RendererBackendVulkan& rendererBackend, float maxLod)
     {
         vk::SamplerCreateInfo samplerInfo;
         samplerInfo
@@ -43,13 +44,16 @@ namespace
             .setMipLodBias(0.0f)
             .setMinLod(0.0f)
             .setMaxLod(maxLod);
-        return CommonFunction::CreateSamplerBase(device, samplerInfo, "EnvironmentPrefilterSampler");
+        return rendererBackend.CreateSampler(samplerInfo, "EnvironmentPrefilterSampler");
     }
 
-    vk::ImageView CreateCubeMipStorageView(vk::Device& device, vk::Image image, vk::Format format, uint32_t mipLevel)
+    vk::ImageView CreateCubeMipStorageView(
+        VL::RendererBackendVulkan& rendererBackend,
+        vk::Image image,
+        vk::Format format,
+        uint32_t mipLevel)
     {
-        return CommonFunction::CreateImageViewBase(
-            device,
+        return rendererBackend.CreateImageView(
             image,
             vk::ImageViewType::e2DArray,
             format,
@@ -62,18 +66,16 @@ namespace
     }
 }
 
-std::shared_ptr<Texture> EnvironmentPrefilterGenerator::Generate(const Texture& environmentCube, uint32_t cubeSize, PipelineFactory& pipelineFactory)
+std::shared_ptr<Texture> EnvironmentPrefilterGenerator::Generate(
+    const Texture& environmentCube,
+    uint32_t cubeSize,
+    PipelineFactory& pipelineFactory,
+    VL::RendererBackendVulkan& rendererBackend)
 {
     if (cubeSize == 0)
     {
         return nullptr;
     }
-
-    auto& vulkanManager = VulkanManager::GetInstance();
-    auto& device = vulkanManager.GetDevice();
-    auto& gpuMemoryProperties = vulkanManager.GetGpuMemoryProperties();
-    auto& commandPool = vulkanManager.GetCommandPool();
-    auto& graphicsQueue = vulkanManager.GetGraphicQueue();
 
     const uint32_t mipLevels = static_cast<uint32_t>(std::floor(std::log2(static_cast<float>(cubeSize)))) + 1;
     vk::Format prefilterFormat = vk::Format::eR16G16B16A16Sfloat;
@@ -97,18 +99,12 @@ std::shared_ptr<Texture> EnvironmentPrefilterGenerator::Generate(const Texture& 
         .setSharingMode(vk::SharingMode::eExclusive)
         .setSamples(vk::SampleCountFlagBits::e1);
 
-    vk::Image prefilterImage = device.createImage(imageInfo);
-    vk::MemoryRequirements memoryRequirements = device.getImageMemoryRequirements(prefilterImage);
-    vk::MemoryAllocateInfo allocInfo;
-    allocInfo
-        .setAllocationSize(memoryRequirements.size)
-        .setMemoryTypeIndex(CommonFunction::FindMemoryType(
-            gpuMemoryProperties,
-            memoryRequirements.memoryTypeBits,
-            prefilterMemoryFlags));
-
-    vk::DeviceMemory prefilterImageMemory = device.allocateMemory(allocInfo);
-    device.bindImageMemory(prefilterImage, prefilterImageMemory, 0);
+    vk::Image prefilterImage;
+    vk::DeviceMemory prefilterImageMemory;
+    std::tie(prefilterImage, prefilterImageMemory) = rendererBackend.CreateImage(
+        imageInfo,
+        prefilterMemoryFlags,
+        "EnvironmentPrefilterImage");
 
     auto computePipeline = pipelineFactory.CreateComputePipeline("generator/prefilterEnvMap");
 
@@ -122,14 +118,17 @@ std::shared_ptr<Texture> EnvironmentPrefilterGenerator::Generate(const Texture& 
     poolInfo
         .setPoolSizes(poolSizes)
         .setMaxSets(mipLevels);
-    vk::DescriptorPool descriptorPool = device.createDescriptorPool(poolInfo);
+    vk::DescriptorPool descriptorPool = rendererBackend.CreateDescriptorPool(
+        poolInfo,
+        "DescriptorPool: EnvironmentPrefilter");
 
     std::vector<vk::DescriptorSetLayout> setLayouts(mipLevels, computePipeline->GetDescriptorSetLayouts()[0]);
     vk::DescriptorSetAllocateInfo descriptorSetAllocateInfo;
     descriptorSetAllocateInfo
         .setDescriptorPool(descriptorPool)
         .setSetLayouts(setLayouts);
-    std::vector<vk::DescriptorSet> descriptorSets = device.allocateDescriptorSets(descriptorSetAllocateInfo);
+    std::vector<vk::DescriptorSet> descriptorSets(mipLevels);
+    rendererBackend.AllocateDescriptorSets(descriptorSetAllocateInfo, descriptorSets);
 
     struct BufferResource
     {
@@ -157,20 +156,22 @@ std::shared_ptr<Texture> EnvironmentPrefilterGenerator::Generate(const Texture& 
         vk::MemoryPropertyFlags paramMemoryFlags =
             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
 
-        auto [paramBuffer, paramBufferMemory] = CommonFunction::CreateBuffer(
-            device,
+        auto [paramBuffer, paramBufferMemory] = rendererBackend.CreateBuffer(
             paramBufferSize,
             paramBufferUsage,
-            gpuMemoryProperties,
             paramMemoryFlags,
             "EnvironmentPrefilterParams_Mip" + std::to_string(mipLevel));
         paramBuffers[mipLevel] = BufferResource{ paramBuffer, paramBufferMemory };
 
-        void* mapped = device.mapMemory(paramBufferMemory, 0, sizeof(PrefilterParams));
+        void* mapped = rendererBackend.MapMemory(paramBufferMemory, sizeof(PrefilterParams));
         std::memcpy(mapped, &params, sizeof(PrefilterParams));
-        device.unmapMemory(paramBufferMemory);
+        rendererBackend.UnmapMemory(paramBufferMemory);
 
-        storageViews[mipLevel] = CreateCubeMipStorageView(device, prefilterImage, prefilterFormat, mipLevel);
+        storageViews[mipLevel] = CreateCubeMipStorageView(
+            rendererBackend,
+            prefilterImage,
+            prefilterFormat,
+            mipLevel);
 
         vk::DescriptorImageInfo storageImageInfo;
         storageImageInfo
@@ -202,10 +203,12 @@ std::shared_ptr<Texture> EnvironmentPrefilterGenerator::Generate(const Texture& 
             .setDescriptorCount(1)
             .setDescriptorType(vk::DescriptorType::eUniformBuffer)
             .setBufferInfo(paramBufferInfo);
-        device.updateDescriptorSets(writes, nullptr);
+        rendererBackend.UpdateDescriptorSets(std::vector<vk::WriteDescriptorSet>(
+            writes.begin(),
+            writes.end()));
     }
 
-    vk::CommandBuffer commandBuffer = CommonFunction::BeginSingleTimeCommands(device, commandPool);
+    vk::CommandBuffer commandBuffer = rendererBackend.BeginSingleTimeCommands();
 
     vk::ImageMemoryBarrier toGeneralBarrier;
     toGeneralBarrier
@@ -266,17 +269,29 @@ std::shared_ptr<Texture> EnvironmentPrefilterGenerator::Generate(const Texture& 
         nullptr,
         toSampleBarrier);
 
-    CommonFunction::EndSingleTimeCommands(device, commandBuffer, graphicsQueue, commandPool);
+    rendererBackend.EndSingleTimeCommands(commandBuffer);
 
-    device.destroyDescriptorPool(descriptorPool);
+    rendererBackend.DestroyDescriptorPool(descriptorPool);
     for (uint32_t mipLevel = 0; mipLevel < mipLevels; ++mipLevel)
     {
-        device.destroyImageView(storageViews[mipLevel]);
-        device.destroyBuffer(paramBuffers[mipLevel].buffer);
-        device.freeMemory(paramBuffers[mipLevel].memory);
+        rendererBackend.DestroyImageView(storageViews[mipLevel]);
+        rendererBackend.DestroyBuffer(paramBuffers[mipLevel].buffer, paramBuffers[mipLevel].memory);
     }
 
-    vk::ImageView cubeSampleView = CommonFunction::CreateCubeImageView(device, prefilterImage, mipLevels, prefilterFormat, "EnvironmentPrefilterCubeView");
-    vk::Sampler cubeSampler = CreatePrefilterCubeSampler(device, static_cast<float>(mipLevels - 1));
-    return std::make_shared<Texture>(prefilterImage, prefilterImageMemory, cubeSampleView, cubeSampler, mipLevels, prefilterFormat);
+    vk::ImageView cubeSampleView = rendererBackend.CreateCubeImageView(
+        prefilterImage,
+        mipLevels,
+        prefilterFormat,
+        "EnvironmentPrefilterCubeView");
+    vk::Sampler cubeSampler = CreatePrefilterCubeSampler(
+        rendererBackend,
+        static_cast<float>(mipLevels - 1));
+    return std::make_shared<Texture>(
+        rendererBackend,
+        prefilterImage,
+        prefilterImageMemory,
+        cubeSampleView,
+        cubeSampler,
+        mipLevels,
+        prefilterFormat);
 }

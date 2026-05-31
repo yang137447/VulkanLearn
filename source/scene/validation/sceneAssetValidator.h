@@ -5,7 +5,8 @@
 #include "../sceneAssetTypes.h"
 
 // Validates scene JSON structure and object-level required fields.
-// Mesh object preflight is delegated to MeshAssetLoader so SceneLoader can stay focused on runtime creation.
+// Mesh object preflight is delegated to MeshAssetLoader; runtime creation is
+// split between WorldBuilder and renderer resource loaders.
 class SceneAssetValidator
 {
 public:

@@ -3,176 +3,210 @@
 #include <limits>
 #include <algorithm>
 #include <array>
+#include <stdexcept>
+#include <string>
+#include "core/runtimeResult.h"
 #include "sceneObject.h"
 #include "materialInstance.h"
 #include "material.h"
-#include "vulkanManager.h"
 #include "pipeline/pipelineBase.h"
-#include "sceneLoader.h"
 #include "commonFunction.h"
-#include "texture.h"
-#include "renderableObject.h"
-#include "sceneLoader.h"
-#include "lightManager.h"
 #include "renderGraph.h"
-#include "passBarrier.h"
+#include "render/backend/rendererObjectResourceRegistry.h"
+#include "render/resource/rendererResourceCache.h"
+#include "render/backend/rendererBackendVulkan.h"
 #include "shaderReflect.h"
 #include "profiler.h"
 #include "vulkanDebug.h"
+#include "world/world.h"
+
+namespace
+{
+
+std::shared_ptr<MaterialInstance> GetPassMaterialInstance(const char* passName)
+{
+    auto& renderpasses = RenderGraph::GetInstance().GetRenderpasses();
+    auto passIt = renderpasses.find(passName);
+    if (passIt == renderpasses.end())
+    {
+        return nullptr;
+    }
+
+    return passIt->second.materialInstance.lock();
+}
+
+bool SetPassVectorComponent(
+    const char* passName,
+    const char* parameterName,
+    int componentIndex,
+    float value,
+    const char* missingPassMessage,
+    std::string& outMessage)
+{
+    std::shared_ptr<MaterialInstance> materialInstance = GetPassMaterialInstance(passName);
+    if (!materialInstance)
+    {
+        outMessage = missingPassMessage;
+        return false;
+    }
+
+    if (!materialInstance->HasParameter(parameterName))
+    {
+        outMessage = std::string("Parameter '") + parameterName + "' not found in pass material.";
+        return false;
+    }
+
+    Eigen::Vector4f params = materialInstance->GetParameter<Eigen::Vector4f>(parameterName);
+    params[componentIndex] = value;
+    materialInstance->SetParameter(parameterName, params);
+    return true;
+}
+
+} // namespace
 
 RenderSystem::RenderSystem()
 {
 }
 RenderSystem::~RenderSystem()
 {
-    DestroyUniformBuffers();
+    ShutdownRenderObject();
+}
+
+void RenderSystem::SetActiveWorld(std::shared_ptr<const VL::World> world)
+{
+    activeWorld = std::move(world);
+    worldSnapshotQueue.Clear();
+    currentRenderScene = VL::RenderScene();
+    currentResolvedRenderScene = VL::ResolvedRenderScene();
+    hasRenderScene = false;
+    initializedRenderWorldGeneration = 0;
+}
+
+bool RenderSystem::SetToneMappingMode(int mode, std::string& outMessage)
+{
+    if (!SetPassVectorComponent(
+            "toneMapping",
+            "u_toneMappingParams",
+            3,
+            static_cast<float>(mode),
+            "Tone mapping pass material instance is expired.",
+            outMessage))
+    {
+        return false;
+    }
+
+    outMessage = "Tone mapping mode set to " + std::to_string(mode);
+    return true;
+}
+
+bool RenderSystem::SetBloomStrength(float value, std::string& outMessage)
+{
+    if (!SetPassVectorComponent(
+            "toneMapping",
+            "u_toneMappingParams",
+            1,
+            value,
+            "Tone mapping pass material instance is expired.",
+            outMessage))
+    {
+        return false;
+    }
+
+    outMessage = "Bloom strength set to " + std::to_string(value);
+    return true;
+}
+
+bool RenderSystem::SetBloomThreshold(float value, std::string& outMessage)
+{
+    if (!SetPassVectorComponent(
+            "bloomPrefilter",
+            "u_bloomPrefilterParams",
+            0,
+            value,
+            "Bloom prefilter material instance is expired.",
+            outMessage))
+    {
+        return false;
+    }
+
+    outMessage = "Bloom threshold set to " + std::to_string(value);
+    return true;
+}
+
+bool RenderSystem::SetBloomKnee(float value, std::string& outMessage)
+{
+    if (!SetPassVectorComponent(
+            "bloomPrefilter",
+            "u_bloomPrefilterParams",
+            1,
+            value,
+            "Bloom prefilter material instance is expired.",
+            outMessage))
+    {
+        return false;
+    }
+
+    outMessage = "Bloom knee set to " + std::to_string(value);
+    return true;
+}
+
+bool RenderSystem::SetBloomClamp(float value, std::string& outMessage)
+{
+    if (!SetPassVectorComponent(
+            "bloomPrefilter",
+            "u_bloomPrefilterParams",
+            2,
+            value,
+            "Bloom prefilter material instance is expired.",
+            outMessage))
+    {
+        return false;
+    }
+
+    outMessage = "Bloom clamp set to " + std::to_string(value);
+    return true;
 }
 
 void RenderSystem::InitRenderObject()
 {
     PROFILE_FUNCTION();
-    auto& scene = SceneLoader::GetInstance();
-    auto& lightManager = LightManager::GetInstance();
     auto& renderGraph = RenderGraph::GetInstance();
-    // 设置相机
-    auto& camera = scene.GetCamera();
-    camera->SetCamera(scene.GetCamera()->GetPosition(), Eigen::Vector3f(0, 0, 0), Eigen::Vector3f(0, 1, 0));
-    camera->SetProjection(
-        scene.GetCamera()->GetHFOV(), 
-        (float)CommonFunction::GetWindowSize().x()/(float)CommonFunction::GetWindowSize().y(), 
-        scene.GetCamera()->GetClipNear(), 
-        scene.GetCamera()->GetClipFar());
-    // camera->EnableOrthographic(true);
-    // camera->SetOrthographic(
-    //     10.0f, 
-    //     (float)CommonFunction::GetWindowSize().x()/(float)CommonFunction::GetWindowSize().y(), 
-    //     scene.GetCamera()->GetClipNear(), 
-    //     scene.GetCamera()->GetClipFar());
     
-    // 将场景物体按材质，materialInstance分组，填充进hierarchyObjects
-    for(const auto& [objectName, sceneObject] : scene.GetSceneObjects())
-    {
-        auto baseMaterial = sceneObject->GetMaterialInstance()->GetBaseMaterial().lock();
-        auto& materialKey = baseMaterial->GetMaterialKey();
-        auto& materialInstanceName = sceneObject->GetMaterialInstance()->GetName();
-        
-        auto& materialMap = hierarchyObjects.emplace(materialKey, std::unordered_map<std::string, std::vector<std::weak_ptr<SceneObject>>>()).first->second;
-        auto& objects = materialMap.emplace(materialInstanceName, std::vector<std::weak_ptr<SceneObject>>()).first->second;
-        objects.push_back(sceneObject);
-    }
+    RefreshRenderSceneFromActiveWorld();
+    BuildResolvedRenderScene();
 
     //初始化渲染需要的资源
     this->RenderInitialize();
-    lightManager.RenderInitialize();
-    renderGraph.RenderInitialize();
-    for (const auto& [materialKey, materialInstanceObjects] : hierarchyObjects)
-    {
-        for (const auto& [materialInstanceName, objects] : materialInstanceObjects)
-        {
-            const auto& materialInstance = scene.GetMaterialInstances().at(materialInstanceName);
-            materialInstance->RenderInitialize();
-            for(const auto& object : objects)
-            {
-                if(!object.expired())
-                {
-                    auto renderableObject = object.lock();
-                    renderableObject->RenderInitialize();
-                }
-            }
-        }
-    }
+    VL::RendererDescriptorContext descriptorContext = BuildRendererDescriptorContext();
+    renderGraph.RenderInitialize(*rendererBackend, descriptorContext);
+    InitializeCurrentRenderSceneResources();
 }
 
 void RenderSystem::Render()
 {
     PROFILE_SCOPE("RenderSystem::Render");
-//     CPU 帧循环（frameIndex）
-// ┌──────────────────────────────────────────────────────────────────────┐
-// │ frameIndex = currentFrame % MAX_FRAMES_IN_FLIGHT                     │
-// │ taskFinishedFence[frameIndex]                                        │
-// │ imageAcquiredSemaphore[frameIndex]                                   │
-// └──────────────────────────────────────────────────────────────────────┘
-//                      │
-//                      ▼
-//         waitForFences(taskFinishedFence[frameIndex])
-//                      │
-//                      ▼
-//  acquireNextImageKHR(..., imageAcquiredSemaphore[frameIndex], &imageIndex)
-//                      │
-//                      ▼
-//      if imagesInFlightFences[imageIndex] != null
-//             waitForFences(imagesInFlightFences[imageIndex])
-//                      │
-//                      ▼
-//  imagesInFlightFences[imageIndex] = taskFinishedFence[frameIndex]
-//                      │
-//                      ▼
-//       resetFences(taskFinishedFence[frameIndex])
-//                      │
-//                      ▼
-//  commandBuffer[imageIndex]  +  renderFinishedSemaphore[imageIndex]
-//                      │
-//                      ▼
-//  ┌───────────────────────── submit ─────────────────────────┐
-//  │ wait:  imageAcquiredSemaphore[frameIndex]                │
-//  │ cmd :  commandBuffer[imageIndex]                         │
-//  │ signal: renderFinishedSemaphore[imageIndex]              │
-//  │ fence: taskFinishedFence[frameIndex]                     │
-//  └──────────────────────────────────────────────────────────┘
-//                      │
-//                      ▼
-//           present(wait: renderFinishedSemaphore[imageIndex])
-    VulkanManager& instance = VulkanManager::GetInstance();
-    vk::Device& device = instance.GetDevice();
-    vk::SwapchainKHR& swapChain = instance.GetSwapChain();
-    uint32_t swapchainImageCount = instance.GetSwapChainImageCount();
-    vk::Queue& graphicQueue = instance.GetGraphicQueue();
-    LightManager& lightManager = LightManager::GetInstance();
+    if (rendererBackend == nullptr)
+    {
+        throw std::runtime_error("RenderSystem renderer backend is not set");
+    }
+
     RenderGraph& renderGraph = RenderGraph::GetInstance();
-    SceneLoader& sceneLoader = SceneLoader::GetInstance();
-
-    uint32_t frameIndex = currentFrame % MAX_FRAMES_IN_FLIGHT;
-    vk::Fence& taskFinishedFence = instance.GetTaskFinishedFences()[frameIndex];
-    vk::Semaphore& imageAcquiredSemaphore = instance.GetImageAcquiredSemaphores()[frameIndex];
-    auto& imagesInFlightFences = instance.GetImagesInFlightFences();
-
-    // 等待前一帧完成
-    vk::Result result;
+    // UE-Lite snapshot handoff: refresh immutable render-facing data before any pass
+    // reads camera, lights, environment, or draw grouping for this frame.
+    RefreshRenderSceneFromActiveWorld();
+    BuildResolvedRenderScene();
+    if (currentRenderScene.worldGeneration != initializedRenderWorldGeneration)
     {
-        PROFILE_SCOPE("Render:WaitFence");
-        result = device.waitForFences(taskFinishedFence, true, UINT64_MAX);
+        InitializeCurrentRenderSceneResources();
     }
-    if(result != vk::Result::eSuccess) {
-        throw std::runtime_error("Failed to wait for fence");
-    }
-    // 获取下一帧
-    {
-        PROFILE_SCOPE("Render:AcquireImage");
-        result = device.acquireNextImageKHR(swapChain, UINT64_MAX, imageAcquiredSemaphore, nullptr, &swapChainImageIndex);
-    }
-    if(result != vk::Result::eSuccess) {
-        throw std::runtime_error("Failed to acquire next image");
-    }
-    
-    if (imagesInFlightFences[swapChainImageIndex])
-    {
-        result = device.waitForFences(imagesInFlightFences[swapChainImageIndex], true, UINT64_MAX);
-        if(result != vk::Result::eSuccess) {
-            throw std::runtime_error("Failed to wait for image fence");
-        }
-    }
-    imagesInFlightFences[swapChainImageIndex] = taskFinishedFence;
 
-    device.resetFences(taskFinishedFence);
-
-    vk::CommandBuffer& commandBuffer = instance.GetCommandBuffers()[swapChainImageIndex];
-    vk::Semaphore& renderFinishedSemaphore = instance.GetRenderFinishedSemaphores()[swapChainImageIndex];
-
-    // 重置并开始记录Command Buffer
-    commandBuffer.reset();
-    vk::CommandBufferBeginInfo beginInfo;
-    beginInfo.setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
-    commandBuffer.begin(beginInfo);
+    // Backend owns swapchain frame synchronization. RenderSystem only records
+    // pass work into the command buffer it receives for this image.
+    VL::RendererFrameContext frameContext = rendererBackend->BeginFrame(currentFrame);
+    uint32_t frameIndex = frameContext.frameIndex;
+    uint32_t swapchainImageCount = frameContext.swapchainImageCount;
+    swapChainImageIndex = frameContext.swapchainImageIndex;
+    vk::CommandBuffer commandBuffer = frameContext.commandBuffer;
 
     VulkanDebug::ScopedRegion frameRegion(commandBuffer, "Frame:" + std::to_string(frameIndex) + " Image:" + std::to_string(swapChainImageIndex), VulkanDebug::DebugCategory::eDefault);
 
@@ -183,333 +217,140 @@ void RenderSystem::Render()
         std::string renderPassScopeName = "RenderPass:" + renderPassName;
         PROFILE_SCOPE(renderPassScopeName.c_str());
         const auto& renderPass = renderGraph.GetRenderpasses().at(renderPassName);
-        
+
         VulkanDebug::ScopedRegion passRegion(commandBuffer, renderPassName, VulkanDebug::DebugCategory::ePass);
 
-        // 在 beginRenderPass 前，根据本 pass 的 input/output 声明准备资源 layout。
-        // 例如：geometry 写 GBuffer -> deferredLighting 采样 GBuffer；
-        //       deferredLighting 采样 sceneDepth -> sky load sceneDepth 继续深度测试。
-        {
-            PROFILE_SCOPE("Render:PrepareForPass");
-            PassBarrier::PrepareForPass(commandBuffer, renderGraph, passIndex, swapChainImageIndex);
-        }
-
-        //TODO: 后续的shadow解决方案应该是生成专用的shadowshader以提高性能,当前先这样临时处理
-        if (renderPassName == "shadow")
-        {
-            // 开始渲染通道
-            this->UpdateUBOGlobalForShadow(commandBuffer, renderPass.width, renderPass.height);
-
-            vk::RenderPassBeginInfo renderPassBeginInfo;
-            renderPassBeginInfo.setRenderPass(renderPass.renderPass);
-            renderPassBeginInfo.setFramebuffer(renderPass.framebuffers[swapChainImageIndex]);
-            renderPassBeginInfo.setRenderArea(vk::Rect2D(vk::Offset2D(0, 0), vk::Extent2D(renderPass.width, renderPass.height)));
-            renderPassBeginInfo.setClearValues(renderPass.clearValues);
-            commandBuffer.beginRenderPass(renderPassBeginInfo, vk::SubpassContents::eInline);
-
-            // pass级别更新, 对一般物体的统一处理
-            const std::weak_ptr<MaterialInstance> materialInstance = renderPass.materialInstance;
-            if(materialInstance.expired())
-            {
-                std::cout << "materialInstance is expired" << std::endl;
-                continue;
-            }
-            else
-            {
-                this->UpdateUBOMaterialInstance(materialInstance.lock());
-            }
-            
-            auto baseMaterial = materialInstance.lock()->GetBaseMaterial().lock();
-            const PipelineBase& renderPipeline = *baseMaterial->GetRenderPipeline();
-            commandBuffer.bindPipeline(renderPipeline.GetBindPoint(), renderPipeline.GetPipeline());
-
-            // lightManager.UpdateLightBuffer(swapChainImageIndex);
-            // 渲染每种材质
-            for (const auto& [materialKey, shaderObjects] : hierarchyObjects) {
-                // // 绑定Pipeline
-                // const PipelineBase& renderPipeline = *sceneLoader.GetMaterials().at(shaderName)->GetRenderPipeline();
-                // commandBuffer.bindPipeline(renderPipeline.GetBindPoint(), renderPipeline.GetPipeline());
-                
-                // 渲染每个材质实例
-                for (auto& [materialInstanceName, objects] : shaderObjects) {
-                    const std::weak_ptr<MaterialInstance> materialInstance = sceneLoader.GetMaterialInstances().at(materialInstanceName);
-                    if(materialInstance.expired())
-                    {
-                        std::cout << "materialInstanceName: " << materialInstanceName << " is expired" << std::endl;
-                        continue;
-                    }
-                    else
-                    {
-                        this->UpdateUBOMaterialInstance(materialInstance.lock());
-                    }
-
-                    // 渲染使用该材质实例的所有对象
-                    for (auto& object : objects) {
-                        if(object.expired())
-                        {
-                        std::cout << "object is expired" << std::endl;
-                        continue;
-                        }
-                        auto objectPtr = object.lock();
-                        VulkanDebug::ScopedRegion region(commandBuffer, objectPtr->GetName(), VulkanDebug::DebugCategory::eObject);
-                        // 绑定DescriptorSet
-                        const auto& descriptorSets = objectPtr->GetDescriptorSetsForShadow(swapChainImageIndex);
-                        commandBuffer.bindDescriptorSets(
-                            vk::PipelineBindPoint::eGraphics,
-                            renderPipeline.GetPipelineLayout(),
-                            GlobalSetIndex,
-                            renderPass.GetDescriptorSets()[swapChainImageIndex][GlobalSetIndex],
-                            nullptr);
-                        commandBuffer.bindDescriptorSets(
-                            vk::PipelineBindPoint::eGraphics,
-                            renderPipeline.GetPipelineLayout(),
-                            ObjectSetIndex,
-                            descriptorSets[ObjectSetIndex],
-                            nullptr);
-                        this->UpdateUBOModel(objectPtr);
-                        objectPtr->GetRenderableObject()->Draw(commandBuffer, renderPass.width, renderPass.height);
-                    }
-                }
-            }
-        }
-        else if (renderPassName == "geometry")
-        {
-            // 开始渲染通道
-            this->UpdateUBOGlobal(commandBuffer);
-
-            vk::RenderPassBeginInfo renderPassBeginInfo;
-            renderPassBeginInfo.setRenderPass(renderPass.renderPass);
-            renderPassBeginInfo.setFramebuffer(renderPass.framebuffers[swapChainImageIndex]);
-            renderPassBeginInfo.setRenderArea(vk::Rect2D(vk::Offset2D(0, 0), vk::Extent2D(renderPass.width, renderPass.height)));
-            renderPassBeginInfo.setClearValues(renderPass.clearValues);
-            commandBuffer.beginRenderPass(renderPassBeginInfo, vk::SubpassContents::eInline);
-            
-            lightManager.UpdateLightBuffer(swapChainImageIndex);
-            // 渲染每种材质
-            for (const auto& [materialKey, shaderObjects] : hierarchyObjects) {
-                // 绑定Pipeline
-                const PipelineBase& renderPipeline = *sceneLoader.GetMaterials().at(materialKey)->GetRenderPipeline();
-                
-                VulkanDebug::ScopedRegion pipelineRegion(commandBuffer, "Pipeline: " + materialKey, VulkanDebug::DebugCategory::ePipeline);
-                commandBuffer.bindPipeline(renderPipeline.GetBindPoint(), renderPipeline.GetPipeline());
-                if (!renderPass.GetDescriptorSets()[swapChainImageIndex].empty())
-                {
-                    bool bHasPassSet = false;
-                    for(const auto& binding : renderPipeline.GetShaderBindings())
-                    {
-                        if(binding.set == PassSetIndex)
-                        {
-                            bHasPassSet = true;
-                            break;
-                        }
-                    }
-
-                    if(bHasPassSet)
-                    {
-                        commandBuffer.bindDescriptorSets(
-                            vk::PipelineBindPoint::eGraphics,
-                            renderPipeline.GetPipelineLayout(),
-                            PassSetIndex,
-                            renderPass.GetDescriptorSets()[swapChainImageIndex][PassSetIndex],
-                            nullptr);
-                    }
-                }
-                
-                // 渲染每个材质实例
-                for (auto& [materialInstanceName, objects] : shaderObjects) {
-                    const std::weak_ptr<MaterialInstance> materialInstance = sceneLoader.GetMaterialInstances().at(materialInstanceName);
-                    if(materialInstance.expired())
-                    {
-                        std::cout << "materialInstanceName: " << materialInstanceName << " is expired" << std::endl;
-                        continue;
-                    }
-                    else
-                    {
-                        this->UpdateUBOMaterialInstance(materialInstance.lock());
-                    }
-
-                    // 渲染使用该材质实例的所有对象
-                    for (auto& object : objects) {
-                        if(object.expired())
-                        {
-                        std::cout << "object is expired" << std::endl;
-                        continue;
-                        }
-                        auto objectPtr = object.lock();
-                        VulkanDebug::ScopedRegion region(commandBuffer, objectPtr->GetName(), VulkanDebug::DebugCategory::eObject);
-                        // 绑定DescriptorSet
-                        commandBuffer.bindDescriptorSets(
-                            vk::PipelineBindPoint::eGraphics,
-                            renderPipeline.GetPipelineLayout(),
-                            0,
-                            objectPtr->GetDescriptorSets(swapChainImageIndex),
-                            nullptr);
-                        this->UpdateUBOModel(objectPtr);
-                        objectPtr->GetRenderableObject()->Draw(commandBuffer, renderPass.width, renderPass.height);
-                    }
-                }
-            }
-        }
-        else // 后处理都在这
-        {
-            // 获取输入资源
-            for (const auto& input : renderPass.inputResources)
-            {
-                const RenderResource& inputResource = renderGraph.GetResourcesResolve()[input][swapChainImageIndex];
-            }
-
-            const std::weak_ptr<MaterialInstance> materialInstance = renderPass.materialInstance;
-            if(materialInstance.expired())
-            {
-                std::cout << "materialInstance is expired" << std::endl;
-                continue;
-            }
-            else
-            {
-                this->UpdateUBOMaterialInstance(materialInstance.lock());
-            }
-
-            auto baseMaterial = materialInstance.lock()->GetBaseMaterial().lock();
-            const PipelineBase& renderPipeline = *baseMaterial->GetRenderPipeline();
-            const auto& shaderBindings = renderPipeline.GetShaderBindings();
-            bool bNeedsGlobalSet = false;
-            for(const auto& binding : shaderBindings)
-            {
-                if(binding.set == GlobalSetIndex)
-                {
-                    bNeedsGlobalSet = true;
-                    break;
-                }
-            }
-            if(bNeedsGlobalSet)
-            {
-                this->UpdateUBOGlobal(commandBuffer);
-            }
-
-            // 开始渲染通道
-            vk::RenderPassBeginInfo renderPassBeginInfo;
-            renderPassBeginInfo.setRenderPass(renderPass.renderPass);
-            renderPassBeginInfo.setFramebuffer(renderPass.framebuffers[swapChainImageIndex]);
-            renderPassBeginInfo.setRenderArea(vk::Rect2D(vk::Offset2D(0, 0), vk::Extent2D(renderPass.width, renderPass.height)));
-            renderPassBeginInfo.setClearValues(renderPass.clearValues);
-            commandBuffer.beginRenderPass(renderPassBeginInfo, vk::SubpassContents::eInline);
-            commandBuffer.bindPipeline(renderPipeline.GetBindPoint(), renderPipeline.GetPipeline());
-
-            for(uint32_t setIndex = 0; setIndex < renderPass.GetDescriptorSets()[swapChainImageIndex].size(); ++setIndex)
-            {
-                bool bNeedBindSet = false;
-                for(const auto& binding : shaderBindings)
-                {
-                    if(binding.set == setIndex)
-                    {
-                        bNeedBindSet = true;
-                        break;
-                    }
-                }
-                if(!bNeedBindSet)
-                {
-                    continue;
-                }
-
-                commandBuffer.bindDescriptorSets(
-                    vk::PipelineBindPoint::eGraphics,
-                    renderPipeline.GetPipelineLayout(),
-                    setIndex,
-                    renderPass.GetDescriptorSets()[swapChainImageIndex][setIndex],
-                    nullptr);
-            }
-            
-            renderPass.Draw(commandBuffer);
-        }
-        commandBuffer.endRenderPass();
-
+        VL::PassRuntimeContext passContext{
+            commandBuffer,
+            renderPass,
+            renderGraph,
+            passIndex,
+            swapChainImageIndex,
+            currentRenderScene,
+            currentResolvedRenderScene,
+            *this
+        };
+        passRuntime.RecordPass(renderPassName, passContext);
     }
 
-    // 结束渲染通道和Command Buffer记录
-    commandBuffer.end();
-
-    // 提交Command Buffer
-    {
-        PROFILE_SCOPE("Render:Submit");
-        vk::PipelineStageFlags waitDstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput;
-        vk::SubmitInfo submitInfo;
-        submitInfo
-            .setWaitSemaphores(imageAcquiredSemaphore)
-            .setSignalSemaphores(renderFinishedSemaphore)
-            .setWaitDstStageMask(waitDstStageMask)
-            .setCommandBuffers(commandBuffer);
-        
-        graphicQueue.submit(submitInfo, taskFinishedFence);
-    }
-    
-    // 呈现
-    vk::PresentInfoKHR presentInfo;
-    presentInfo
-        .setSwapchains(swapChain)
-        .setImageIndices(swapChainImageIndex)
-        .setWaitSemaphores(renderFinishedSemaphore);
-
-    {
-        PROFILE_SCOPE("Render:Present");
-        result = graphicQueue.presentKHR(presentInfo);
-    }
-    if(result != vk::Result::eSuccess) {
-        throw std::runtime_error("Failed to present image");
-    }
-
-    CapturePreviousFrameTransforms();
+    // RenderSystem only records pass commands. Queue, semaphore, fence,
+    // swapchain, present, and retire epoch details stay backend-owned.
+    rendererBackend->SubmitFrame(frameContext, currentFrame);
 
     // 更新帧索引
     currentFrame = currentFrame + 1;
 }
 
+void RenderSystem::ReleaseSwapchainDependentResources()
+{
+    VL::RendererResourceCache::GetInstance().ShutdownSwapchainDependentWorldResources();
+    ShutdownFrameResources();
+    initializedRenderWorldGeneration = 0;
+}
+
+void RenderSystem::RebuildSwapchainDependentResources()
+{
+    RenderGraph& renderGraph = RenderGraph::GetInstance();
+
+    RefreshRenderSceneFromActiveWorld();
+    BuildResolvedRenderScene();
+    RenderInitialize();
+
+    VL::RendererDescriptorContext descriptorContext = BuildRendererDescriptorContext();
+    renderGraph.RenderInitialize(*rendererBackend, descriptorContext);
+    InitializeCurrentRenderSceneResources();
+}
+
+void RenderSystem::RebuildRenderGraphDependentResources()
+{
+    if (rendererBackend == nullptr)
+    {
+        throw std::runtime_error("RenderSystem renderer backend is not set");
+    }
+
+    RenderGraph& renderGraph = RenderGraph::GetInstance();
+
+    RefreshRenderSceneFromActiveWorld();
+    BuildResolvedRenderScene();
+    RenderInitialize();
+
+    VL::RendererDescriptorContext descriptorContext = BuildRendererDescriptorContext();
+    renderGraph.RenderInitialize(*rendererBackend, descriptorContext);
+    InitializeCurrentRenderSceneResources();
+}
+
+void RenderSystem::UpdateGlobalUBOForPass(vk::CommandBuffer& commandBuffer)
+{
+    UpdateUBOGlobal(commandBuffer);
+}
+
+void RenderSystem::UpdateShadowGlobalUBOForPass(
+    vk::CommandBuffer& commandBuffer,
+    uint32_t passWidth,
+    uint32_t passHeight)
+{
+    UpdateUBOGlobalForShadow(commandBuffer, passWidth, passHeight);
+}
+
+void RenderSystem::UpdateMaterialInstanceUBOForPass(
+    const std::shared_ptr<MaterialInstance>& materialInstance)
+{
+    frameResources.UpdateMaterialInstanceUniformBuffer(swapChainImageIndex, *materialInstance);
+}
+
+void RenderSystem::UpdateObjectUBOForPass(
+    VL::RendererObjectGpuResources& objectResources,
+    const VL::RenderDrawPacket& drawPacket)
+{
+    // Object transforms come from the frozen RenderDrawPacket, not from the
+    // mutable SceneObject. The upload path now addresses backend-owned object
+    // GPU resources through the resolved draw packet.
+    frameResources.UpdateObjectUniformBuffer(swapChainImageIndex, objectResources, drawPacket);
+}
+
+void RenderSystem::UploadLightsForPass(
+    uint32_t swapChainImageIndex,
+    const std::vector<VL::LightSnapshot>& lights)
+{
+    frameResources.UpdateLightBuffer(swapChainImageIndex, lights);
+}
+
 void RenderSystem::UpdateUBOGlobal(vk::CommandBuffer& commandBuffer)
 {
     PROFILE_FUNCTION();
-    const auto& sceneLoader = SceneLoader::GetInstance();
-    Camera& camera = *sceneLoader.GetCamera();
+    if (!hasRenderScene)
+    {
+        RefreshRenderSceneFromActiveWorld();
+    }
 
     static UBOGlobal ubo;
-    ubo.view = camera.GetViewMatrix();
-    ubo.projection = camera.GetProjectionMatrix();
+    const VL::CameraSnapshot& camera = currentRenderScene.camera;
+    ubo.view = camera.view;
+    ubo.projection = camera.projection;
     ubo.invView = ubo.view.inverse();
     ubo.invProjection = ubo.projection.inverse();
-    ubo.viewProjection = ubo.projection * ubo.view;
+    ubo.viewProjection = camera.viewProjection;
     ubo.invViewProjection = ubo.viewProjection.inverse();
-    // previousViewProjection 在第一帧还不存在时退回当前 VP，避免把“从单位矩阵到当前相机”
-    // 误写成 camera motion vector。optional 只存在于 CPU 侧，UBO 里仍然上传确定的 mat4。
-    ubo.previousViewProjection = previousViewProjection.value_or(ubo.viewProjection);
+    ubo.previousViewProjection = camera.previousViewProjection;
     ubo.lightViewProj = lightViewProj;
-    ubo.cameraPosition = sceneLoader.GetCamera()->GetPosition();
-    ubo.environmentSH = sceneLoader.GetEnvironmentSH();
-    ubo.debugViewMode = debugViewMode;
-    ubo.environmentIntensity = environmentIntensity;
+    ubo.cameraPosition = camera.position;
+    ubo.environmentSH = currentRenderScene.environment.sphericalHarmonics;
+    ubo.debugViewMode = currentRenderScene.debugViewMode;
+    ubo.environmentIntensity = currentRenderScene.environment.intensity;
 
-    //std::memcpy(uboGlobal.buffersMapped[swapChainImageIndex], &ubo, sizeof(ubo));
-    commandBuffer.updateBuffer(uboGlobal.buffers[swapChainImageIndex], 0, sizeof(ubo), &ubo);
-    vk::BufferMemoryBarrier barrier;
-    barrier.setSrcAccessMask(vk::AccessFlagBits::eTransferWrite)
-        .setDstAccessMask(vk::AccessFlagBits::eUniformRead)
-        .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
-        .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
-        .setBuffer(uboGlobal.buffers[swapChainImageIndex])
-        .setOffset(0)
-        .setSize(sizeof(ubo));
-
-    commandBuffer.pipelineBarrier(
-        vk::PipelineStageFlagBits::eTransfer,
-        vk::PipelineStageFlagBits::eVertexShader | vk::PipelineStageFlagBits::eFragmentShader,
-        vk::DependencyFlags(),
-        0, nullptr,
-        1, &barrier,
-        0, nullptr
-    );
+    frameResources.UpdateGlobalUniformBuffer(commandBuffer, swapChainImageIndex, ubo);
 }
 
 void RenderSystem::UpdateUBOGlobalForShadow(vk::CommandBuffer& commandBuffer, uint32_t PassSizeWidth, uint32_t PassSizeHeight)
 {
     PROFILE_FUNCTION();
-    // 建立一个与光源同轴（Z）的shadowCoordinateSystem: 坐标系统原点为世界中心，旋转轴使用光源的旋转矩阵
+    if (!hasRenderScene)
+    {
+        RefreshRenderSceneFromActiveWorld();
+    }
+
+    // 建立一个与光源同轴（Z）的 shadowCoordinateSystem。这里不再读取 Camera 或 Light 对象，
+    // 而是只消费当前帧 RenderScene 中冻结的相机、灯光和包围盒数据。
     // 将点集从世界空间转换到shadowCoordinateSystem
     //  ->shadowCoordinateSystem
     //      获取一组Z=0的投影点集(Eigen::Vector2f)
@@ -526,24 +367,22 @@ void RenderSystem::UpdateUBOGlobalForShadow(vk::CommandBuffer& commandBuffer, ui
     //      获取ShadowCameraPositonInShadow(Eigen::Vector3f):(CenterInShadow.x(), CenterInShadow.y(), ZNear)
     //  <-shadowCoordinateSystem
     //  计算ShadowCameraPositon(Eigen::Vector3f)
-    const auto& sceneLoader = SceneLoader::GetInstance();
-    Camera& camera = *sceneLoader.GetCamera();
-
     // 1. 先获取相机的数据
-    Eigen::Vector3f cameraPosition = camera.GetPosition();
-    Eigen::Vector3f cameraDirection = camera.GetForwardVector();
+    const VL::CameraSnapshot& camera = currentRenderScene.camera;
+    Eigen::Vector3f cameraPosition = camera.position;
+    Eigen::Vector3f cameraDirection = camera.forward;
         // near, far
-    float cameraNear = camera.GetClipNear();
-    float cameraFar = camera.GetClipFar();
+    float cameraNear = camera.clipNear;
+    float cameraFar = camera.clipFar;
     cameraFar = 10.0f;
     float frustumPadding = 0.1f;
 
-    Eigen::Vector3f cameraRight = camera.GetRightVector();
-    Eigen::Vector3f cameraUp = camera.GetUpVector();
-    float cameraHFov = camera.GetHFOV();
+    Eigen::Vector3f cameraRight = camera.right;
+    Eigen::Vector3f cameraUp = camera.up;
+    float cameraHFov = camera.horizontalFovDegrees;
     float aspect = static_cast<float>(CommonFunction::GetWindowSize().x()) / static_cast<float>(CommonFunction::GetWindowSize().y());
     float cameraHFovRad = cameraHFov * static_cast<float>(M_PI) / 180.0f;
-    Eigen::Matrix4f viewMatrix = camera.GetViewMatrix();
+    Eigen::Matrix4f viewMatrix = camera.view;
 
     float tanHalfFov = std::tan(cameraHFovRad * 0.5f);
     float nearHalfWidth = tanHalfFov * cameraNear;
@@ -568,15 +407,21 @@ void RenderSystem::UpdateUBOGlobalForShadow(vk::CommandBuffer& commandBuffer, ui
         
     // 2. 计算阴影映射相机的位置
         // 2.1以世界中心为原点，使用光源的旋转矩阵 构建shadowCoordinateSystem
-    auto directionalLightIt = sceneLoader.GetDirectionalLights().begin();
-    if (directionalLightIt == sceneLoader.GetDirectionalLights().end())
+    const VL::LightSnapshot* directionalLight = nullptr;
+    for (const VL::LightSnapshot& light : currentRenderScene.lights)
+    {
+        if (light.type == VL::LightSnapshotType::Directional)
+        {
+            directionalLight = &light;
+            break;
+        }
+    }
+    if (!directionalLight)
     {
         return;
     }
-    std::weak_ptr<DirectionalLight> directionalLight = directionalLightIt->second;
         // 2.1构建worldCoordinateSystem -> shadowCoordinateSystem
-    Eigen::Matrix3f worldToShadowMatrix;
-    worldToShadowMatrix = CommonFunction::RotationToMatrix(directionalLight.lock()->GetRotation()).block<3, 3>(0, 0).transpose();
+    Eigen::Matrix3f worldToShadowMatrix = directionalLight->worldToLight;
 
     // 2.3将点转换到shadowCoordinateSystem
     thread_local std::vector<Eigen::Vector3f> pointsInShadowSys;
@@ -616,16 +461,12 @@ void RenderSystem::UpdateUBOGlobalForShadow(vk::CommandBuffer& commandBuffer, ui
     #endif
 
     #if VULKANLEARN_SHADOW_TIGHT_Z_BOUNDS
-        for (const auto& [objectName, sceneObject] : sceneLoader.GetSceneObjects())
+        for (const VL::RenderDrawPacket& drawPacket : currentRenderScene.drawPackets)
         {
-            if (!sceneObject) continue;
-            const auto& renderableObject = sceneObject->GetRenderableObject();
-            if (!renderableObject) continue;
-
-            const auto& localMin = renderableObject->GetBoundsMin();
-            const auto& localMax = renderableObject->GetBoundsMax();
-            const auto& modelMatrix = sceneObject->GetModelMatrix();
-            auto worldCorners = BuildWorldCorners(localMin, localMax, modelMatrix);
+            auto worldCorners = BuildWorldCorners(
+                drawPacket.worldBoundsMin,
+                drawPacket.worldBoundsMax,
+                Eigen::Matrix4f::Identity());
 
             Eigen::Vector3f viewMin;
             Eigen::Vector3f viewMax;
@@ -636,11 +477,7 @@ void RenderSystem::UpdateUBOGlobalForShadow(vk::CommandBuffer& commandBuffer, ui
                 continue;
             }
 
-            Eigen::Vector3f worldMin;
-            Eigen::Vector3f worldMax;
-            ComputeAabbFromCorners(worldCorners, worldMin, worldMax);
-
-            auto axisRange = ComputeMinMaxAlongAxis(worldMin, worldMax, shadowAxisWorld);
+            auto axisRange = ComputeMinMaxAlongAxis(drawPacket.worldBoundsMin, drawPacket.worldBoundsMax, shadowAxisWorld);
             minZ = std::min(minZ, axisRange.first);
             maxZ = std::max(maxZ, axisRange.second);
             hasObjectBounds = true;
@@ -681,9 +518,9 @@ void RenderSystem::UpdateUBOGlobalForShadow(vk::CommandBuffer& commandBuffer, ui
     ubo.previousViewProjection = ubo.viewProjection;
     lightViewProj = ubo.projection * ubo.view;
     ubo.lightViewProj = lightViewProj;
-    ubo.environmentSH = sceneLoader.GetEnvironmentSH();
-    ubo.debugViewMode = debugViewMode;
-    ubo.environmentIntensity = environmentIntensity;
+    ubo.environmentSH = currentRenderScene.environment.sphericalHarmonics;
+    ubo.debugViewMode = currentRenderScene.debugViewMode;
+    ubo.environmentIntensity = currentRenderScene.environment.intensity;
     
     {
         Eigen::Matrix3f rotT = ubo.view.block<3, 3>(0, 0);
@@ -691,25 +528,7 @@ void RenderSystem::UpdateUBOGlobalForShadow(vk::CommandBuffer& commandBuffer, ui
         ubo.cameraPosition = -(rotT.transpose() * trans);
     }
 
-    commandBuffer.updateBuffer(uboGlobal.buffers[swapChainImageIndex], 0, sizeof(ubo), &ubo);
-
-    vk::BufferMemoryBarrier barrier;
-    barrier.setSrcAccessMask(vk::AccessFlagBits::eTransferWrite)
-        .setDstAccessMask(vk::AccessFlagBits::eUniformRead)
-        .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
-        .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
-        .setBuffer(uboGlobal.buffers[swapChainImageIndex])
-        .setOffset(0)
-        .setSize(sizeof(ubo));
-
-    commandBuffer.pipelineBarrier(
-        vk::PipelineStageFlagBits::eTransfer,
-        vk::PipelineStageFlagBits::eVertexShader | vk::PipelineStageFlagBits::eFragmentShader,
-        vk::DependencyFlags(),
-        0, nullptr,
-        1, &barrier,
-        0, nullptr
-    );
+    frameResources.UpdateGlobalUniformBuffer(commandBuffer, swapChainImageIndex, ubo);
 }
 
 // ====================================================================================================
@@ -893,19 +712,13 @@ RenderSystem::ShadowProjectionParams RenderSystem::CalculateShadowMatrix_StableR
         maxY = std::max(maxY, p.y());
     }
 
-    // 2. Snapping
-    // Based on the diagonal of the frustum slice to ensure stability during rotation?
-    // Actually, for Rectangular, we usually just snap to texel grid.
-    // However, if the frustum rotates, the AABB size changes.
-    // Stable Rectangular usually implies the AABB is calculated from the bounding sphere of the frustum split,
-    // OR we accept that the shadow map covers the current frustum AABB (tight fit) but snap the center/edges.
-    
-    // Let's implement basic snapping for the AABB edges.
-    Eigen::Vector3f diagonal = pointsInShadowSys[6] - pointsInShadowSys[0]; // FarTopRight - NearBottomLeft (Approx)
+    // StableRectangular keeps a tight light-space AABB and snaps its edges to
+    // texel units. It is less rotation-stable than the sphere path, but uses
+    // more of the shadow map for the current frustum.
+    Eigen::Vector3f diagonal = pointsInShadowSys[6] - pointsInShadowSys[0];
     float diagonalLength = diagonal.norm();
     float worldUnitsPerTexel = diagonalLength / shadowMapResolution;
     
-    // Snap min/max to this unit
     minX = std::floor(minX / worldUnitsPerTexel) * worldUnitsPerTexel;
     maxX = std::floor(maxX / worldUnitsPerTexel) * worldUnitsPerTexel;
     minY = std::floor(minY / worldUnitsPerTexel) * worldUnitsPerTexel;
@@ -923,22 +736,16 @@ RenderSystem::ShadowProjectionParams RenderSystem::CalculateShadowMatrix_StableR
     Camera shadowCamera;
     shadowCamera.SetCamera(shadowCameraPositionWorld, CommonFunction::QuatToRotation(Eigen::Quaternionf(worldToShadowRotation.transpose())));
 
-    // 4. Construct Projection
-    // Note: SetOrthographic usually takes (size, aspect, near, far)
-    // We need to pass width and height explicitly.
-    // If SetOrthographic only takes size (height) and aspect, we calculate aspect.
-    
     float aspect = width / height;
-    
+
+    // Camera::SetOrthographic uses horizontal coverage when paired with
+    // aspect = width / height, matching the fitted light-space AABB.
     shadowCamera.SetOrthographic(
-        height, // Or width? Usually size refers to height or max dimension. Let's assume height if aspect is w/h.
+        width,
         aspect,
         0.0f,
         sceneZRange
     );
-    // Note: My Camera::SetOrthographic might implement size as "height". Let's verify or assume standard behavior.
-    // If it takes "size" as vertical size:
-    // Width = Size * Aspect = Height * (Width/Height) = Width. Correct.
 
     RenderSystem::ShadowProjectionParams params;
     params.viewMatrix = shadowCamera.GetViewMatrix();
@@ -946,178 +753,122 @@ RenderSystem::ShadowProjectionParams RenderSystem::CalculateShadowMatrix_StableR
     return params;
 }
 
-void RenderSystem::UpdateUBOMaterialInstance(const std::shared_ptr<MaterialInstance>& materialInstance)
+void RenderSystem::RefreshRenderSceneFromActiveWorld()
 {
-    PROFILE_FUNCTION();
-    const auto& parameters = materialInstance->GetParameters();
-    
-    auto baseMaterial = materialInstance->GetBaseMaterial().lock();
-    if (!baseMaterial) return;
-
-    // 查找 MaterialSetIndex 对应的 binding 0 的内存布局信息
-    const auto& bindings = baseMaterial->GetRenderPipeline()->GetShaderBindings();
-    const ShaderBinding* uboBinding = nullptr;
-    for(const ShaderBinding& binding : bindings)
+    if (!activeWorld)
     {
-        if(binding.set == MaterialSetIndex &&
-           binding.binding == 0 &&
-           binding.type == vk::DescriptorType::eUniformBuffer)
-        {
-            uboBinding = &binding;
-            break;
-        }
+        throw std::runtime_error("RenderSystem active World is not set");
     }
 
-    if (uboBinding == nullptr) return; // 该材质没有 UBO 参数
+    VL::WorldSnapshotBuildDesc buildDesc;
+    buildDesc.worldGeneration = activeWorld->GetGeneration();
+    buildDesc.frameIndex = currentFrame;
+    buildDesc.debugViewMode = debugViewMode;
+    buildDesc.environmentIntensity = environmentIntensity;
 
-    uint32_t offset = 0;
-    // 严格按照 Shader 反射提取出来的 member 顺序写入内存
-    for (const auto& memberName : uboBinding->memberNames)
+    auto snapshotResult = worldSnapshotBuilder.Build(*activeWorld, buildDesc);
+    if (snapshotResult.IsFailure())
     {
-        auto paramIt = parameters.find(memberName);
-        if (paramIt == parameters.end())
-        {
-            // 材质实例没配这个参数，但由于我们在反射的循环里，依然需要移动 offset
-            // 可以通过反射的 members 大小来移动
-            // 这里为了简单，我们假设如果 JSON 里不配，直接根据反射里的 member size 填 0 或者跳过
-            // 找到对应 memberName 在 binding 里的索引
-            auto memberIndex = std::distance(uboBinding->memberNames.begin(), std::find(uboBinding->memberNames.begin(), uboBinding->memberNames.end(), memberName));
-            if (memberIndex < uboBinding->members.size())
-            {
-                offset += uboBinding->members[memberIndex];
-            }
-            continue;
-        }
-
-        const auto& parameter = paramIt->second;
-        if(parameter.type == ParamType::Float)
-        {
-            const auto& value = materialInstance->GetParameter<float>(memberName);
-            uint8_t* uboData = static_cast<uint8_t*>(materialInstance->GetUboMaterialInstanceMapped()[swapChainImageIndex]) + offset;
-            std::memcpy(uboData, &value, parameter.size);
-            offset += parameter.size;
-        }
-        else if(parameter.type == ParamType::Vec2)
-        {
-            const auto& value = materialInstance->GetParameter<Eigen::Vector2f>(memberName);
-            uint8_t* uboData = static_cast<uint8_t*>(materialInstance->GetUboMaterialInstanceMapped()[swapChainImageIndex]) + offset;
-            std::memcpy(uboData, &value, parameter.size);
-            offset += parameter.size;
-        }
-        else if(parameter.type == ParamType::Vec3)
-        {
-            const auto& value = materialInstance->GetParameter<Eigen::Vector3f>(memberName);
-            uint8_t* uboData = static_cast<uint8_t*>(materialInstance->GetUboMaterialInstanceMapped()[swapChainImageIndex]) + offset;
-            std::memcpy(uboData, &value, parameter.size);
-            offset += parameter.size;
-        }
-        else if(parameter.type == ParamType::Vec4)
-        {
-            const auto& value = materialInstance->GetParameter<Eigen::Vector4f>(memberName);
-            uint8_t* uboData = static_cast<uint8_t*>(materialInstance->GetUboMaterialInstanceMapped()[swapChainImageIndex]) + offset;
-            std::memcpy(uboData, &value, parameter.size);
-            offset += parameter.size;
-        }
+        throw std::runtime_error(VL::FormatRuntimeError(snapshotResult.Error()));
     }
+
+    // Single-thread mode still uses the same publish/consume handoff as the
+    // optional render thread path. This keeps the renderer on immutable
+    // snapshots even before RT is split out.
+    worldSnapshotQueue.Publish(std::move(snapshotResult.Value()));
+    auto snapshot = worldSnapshotQueue.ConsumeLatest();
+    if (!snapshot.has_value())
+    {
+        throw std::runtime_error("WorldSnapshotQueue did not return the snapshot just published");
+    }
+
+    auto renderSceneResult = rendererFrontend.BuildRenderScene(**snapshot);
+    if (renderSceneResult.IsFailure())
+    {
+        throw std::runtime_error(VL::FormatRuntimeError(renderSceneResult.Error()));
+    }
+
+    currentRenderScene = std::move(renderSceneResult.Value());
+    hasRenderScene = true;
 }
 
-void RenderSystem::UpdateUBOModel(const std::shared_ptr<SceneObject>& object)
+void RenderSystem::BuildResolvedRenderScene()
 {
-    PROFILE_FUNCTION();
-    object->UpdateModelMatrix();
+    const auto& resourceCache = VL::RendererResourceCache::GetInstance();
+    auto resolvedSceneResult = resolvedRenderSceneBuilder.Build(currentRenderScene, resourceCache);
+    if (resolvedSceneResult.IsFailure())
+    {
+        throw std::runtime_error(VL::FormatRuntimeError(resolvedSceneResult.Error()));
+    }
 
-    static UBOModel ubo;
-    ubo.model = object->GetModelMatrix();
-    ubo.previousModel = object->GetPreviousModelMatrix();
-    std::memcpy(object->GetUboModelMapped()[swapChainImageIndex], &ubo, sizeof(ubo));
+    currentResolvedRenderScene = std::move(resolvedSceneResult.Value());
 }
 
-void RenderSystem::CapturePreviousFrameTransforms()
+void RenderSystem::InitializeCurrentRenderSceneResources()
 {
-    const auto& sceneLoader = SceneLoader::GetInstance();
-    Camera& camera = *sceneLoader.GetCamera();
-    previousViewProjection = camera.GetProjectionMatrix() * camera.GetViewMatrix();
+    frameResources.EnsureLightCapacity(currentRenderScene.lights.size(), *rendererBackend);
 
-    for(auto& [materialKey, shaderObjects] : hierarchyObjects)
-    {
-        for(auto& [materialInstanceName, objects] : shaderObjects)
-        {
-            for(auto& object : objects)
-            {
-                if(object.expired())
-                {
-                    continue;
-                }
-                auto objectPtr = object.lock();
-                objectPtr->UpdateModelMatrix();
-                objectPtr->SnapshotPreviousModelMatrix();
-            }
-        }
-    }
+    VL::RendererDescriptorContext descriptorContext = BuildRendererDescriptorContext();
+    VL::RendererResourceCache& resourceCache = VL::RendererResourceCache::GetInstance();
+    RenderGraph::GetInstance().RefreshRuntimeDescriptors(*rendererBackend, descriptorContext);
+
+    VL::RendererObjectResourceRegistry objectResourceRegistry;
+    objectResourceRegistry.InitializeResolvedSceneResources(
+        *rendererBackend,
+        descriptorContext,
+        currentRenderScene,
+        currentResolvedRenderScene,
+        resourceCache);
+
+    initializedRenderWorldGeneration = currentRenderScene.worldGeneration;
 }
 
 void RenderSystem::RenderInitialize()
 {
-    CreateUniformBuffers();
-    SetupDescriptors();
+    InitializeFrameResources();
+    ValidateFrameResourceDescriptors();
 }
 
-void RenderSystem::CreateUniformBuffers()
+VL::RendererDescriptorContext RenderSystem::BuildRendererDescriptorContext() const
 {
-    auto& device = VulkanManager::GetInstance().GetDevice();
-    uint32_t swapChainImageCount = VulkanManager::GetInstance().GetSwapChainImageCount();
-    for(auto& ubo: {&uboGlobal})
-    {
-        vk::DeviceSize bufferSize = sizeof(UBOGlobal);
-        ubo->buffers.resize(swapChainImageCount);
-        ubo->bufferMemories.resize(swapChainImageCount);
-        ubo->buffersMapped.resize(swapChainImageCount);
-        ubo->bufferSize = bufferSize;
-        vk::BufferUsageFlags usage = vk::BufferUsageFlagBits::eUniformBuffer | vk::BufferUsageFlagBits::eTransferDst;
-        vk::MemoryPropertyFlags memoryPropertyFlags = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
-        for(int i = 0; i < swapChainImageCount; i++)
-        {
-            std::tie(ubo->buffers[i], ubo->bufferMemories[i]) = CommonFunction::CreateBuffer(
-                device,
-                bufferSize, 
-                usage, 
-                VulkanManager::GetInstance().GetGpuMemoryProperties(), 
-                memoryPropertyFlags,
-                "UBO_Global (SwapchainIndex " + std::to_string(i) + ")"
-            );
-            ubo->buffersMapped[i] = device.mapMemory(ubo->bufferMemories[i], 0, bufferSize);
-        }
-    }
-}
-void RenderSystem::DestroyUniformBuffers()
-{
-    auto& device = VulkanManager::GetInstance().GetDevice();
-    uint32_t swapChainImageCount = VulkanManager::GetInstance().GetSwapChainImageCount();
-    for(auto& ubo: {&uboGlobal})
-    {
-        for(int i = 0; i < swapChainImageCount; i++)
-        {
-            device.unmapMemory(ubo->bufferMemories[i]);
-            device.destroyBuffer(ubo->buffers[i]);
-            device.freeMemory(ubo->bufferMemories[i]);
-        }
-    }
+    VL::RendererDescriptorContext descriptorContext;
+    descriptorContext.globalUniformBufferInfos = &GetUBOGlobalBufferInfo();
+    descriptorContext.lightBufferInfos = &GetLightBufferInfo();
+    descriptorContext.resourceCache = &VL::RendererResourceCache::GetInstance();
+    return descriptorContext;
 }
 
-void RenderSystem::SetupDescriptors()
+void RenderSystem::ShutdownRenderObject()
 {
-    uint32_t swapChainImageCount = VulkanManager::GetInstance().GetSwapChainImageCount();
-    // 设置uniform缓冲区信息
-    for(auto& ubo: {&uboGlobal})
+    ShutdownFrameResources();
+}
+
+void RenderSystem::InitializeFrameResources()
+{
+    if (rendererBackend == nullptr)
     {
-        ubo->bufferInfos.resize(swapChainImageCount);
-        for(int i = 0; i < swapChainImageCount; i++)
-        {
-            ubo->bufferInfos[i]
-                .setBuffer(ubo->buffers[i])
-                .setOffset(0)
-                .setRange(ubo->bufferSize);
-        }
+        throw std::runtime_error("RenderSystem cannot initialize frame resources without a renderer backend");
+    }
+
+    frameResources.Initialize(*rendererBackend);
+    frameResources.EnsureLightCapacity(currentRenderScene.lights.size(), *rendererBackend);
+}
+
+void RenderSystem::ShutdownFrameResources()
+{
+    if (rendererBackend == nullptr)
+    {
+        return;
+    }
+
+    frameResources.Shutdown(*rendererBackend);
+}
+
+void RenderSystem::ValidateFrameResourceDescriptors()
+{
+    if (!frameResources.IsInitialized())
+    {
+        throw std::runtime_error("RenderSystem cannot expose frame resource descriptors before frame resources are initialized");
     }
 }
 

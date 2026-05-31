@@ -2,8 +2,7 @@
 #include "texture.h"
 #include "material.h"
 #include "pipeline/graphicsPipeline.h"
-#include "vulkanManager.h"
-#include "commonFunction.h"
+#include "render/backend/rendererBackendVulkan.h"
 #include "shaderReflect.h"
 
 MaterialInstance::MaterialInstance()
@@ -81,86 +80,76 @@ void MaterialInstance::RemoveTexture(const std::string& textureName)
     textures.erase(textureName);
 }
 
-void MaterialInstance::RenderInitialize()
+void MaterialInstance::RenderInitialize(VL::RendererBackendVulkan& rendererBackend)
 {
+    if (renderInitialized)
+    {
+        return;
+    }
+
+    this->rendererBackend = &rendererBackend;
     CreateUniformBuffers();
     SetupDescriptors();
+    renderInitialized = true;
+}
+
+void MaterialInstance::ShutdownRenderResources()
+{
+    DestroyUniformBuffers();
 }
 
 void MaterialInstance::CreateUniformBuffers()
 {
     uint32_t bufferSize = 0;
-    for(auto& parameter : parameters)
+    for (const auto& parameter : parameters)
     {
-        if(parameter.second.type == ParamType::Float)
-        {
-            bufferSize += parameter.second.size;
-        }
-        else if(parameter.second.type == ParamType::Vec2)
-        {
-            bufferSize += parameter.second.size;
-        }
-        else if(parameter.second.type == ParamType::Vec3)
-        {
-            bufferSize += parameter.second.size;
-        }
-        else if(parameter.second.type == ParamType::Vec4)
-        {
-            bufferSize += parameter.second.size;
-        }
+        bufferSize += parameter.second.size;
     }
-    auto& device = VulkanManager::GetInstance().GetDevice();
-    uint32_t swapChainImageCount = VulkanManager::GetInstance().GetSwapChainImageCount();
-    for(auto& ubo: {&uboMaterialInstance})
+
+    if (bufferSize == 0)
     {
-        vk::DeviceSize size = bufferSize;
-        ubo->buffers.resize(swapChainImageCount);
-        ubo->bufferMemories.resize(swapChainImageCount);
-        ubo->buffersMapped.resize(swapChainImageCount);
-        ubo->bufferSize = size;
-        vk::BufferUsageFlags usage = vk::BufferUsageFlagBits::eUniformBuffer;
-        vk::MemoryPropertyFlags memoryPropertyFlags = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
-        for(int i = 0; i < swapChainImageCount; i++)
+        // Materials without a material UBO have no per-instance parameter
+        // buffer to create. Descriptor planning decides whether a UBO binding
+        // is actually required for the shader.
+        if (!uboMaterialInstance.buffers.empty())
         {
-            std::tie(ubo->buffers[i], ubo->bufferMemories[i]) = CommonFunction::CreateBuffer(
-                device,
-                size, 
-                usage, 
-                VulkanManager::GetInstance().GetGpuMemoryProperties(), 
-                memoryPropertyFlags,
-                "UBO_Material: " + materialInstanceName + " (SwapchainIndex " + std::to_string(i) + ")"
-            );
-            ubo->buffersMapped[i] = device.mapMemory(ubo->bufferMemories[i], 0, bufferSize);
+            rendererBackend->DestroyBufferSet(uboMaterialInstance);
         }
+        return;
     }
+
+    vk::BufferUsageFlags usage = vk::BufferUsageFlagBits::eUniformBuffer;
+    vk::MemoryPropertyFlags memoryPropertyFlags =
+        vk::MemoryPropertyFlagBits::eHostVisible |
+        vk::MemoryPropertyFlagBits::eHostCoherent;
+    rendererBackend->CreatePerSwapchainBufferSet(
+        uboMaterialInstance,
+        bufferSize,
+        usage,
+        memoryPropertyFlags,
+        "UBO_Material: " + materialInstanceName);
 }
 void MaterialInstance::DestroyUniformBuffers()
 {
-    auto& device = VulkanManager::GetInstance().GetDevice();
-    for(auto& ubo: {&uboMaterialInstance})
+    if (!renderInitialized && uboMaterialInstance.buffers.empty())
     {
-        for(int i = 0; i < ubo->buffers.size(); i++)
-        {
-            device.unmapMemory(ubo->bufferMemories[i]);
-            device.destroyBuffer(ubo->buffers[i]);
-            device.freeMemory(ubo->bufferMemories[i]);
-        }
+        return;
     }
+
+    if (rendererBackend != nullptr)
+    {
+        rendererBackend->DestroyBufferSet(uboMaterialInstance);
+    }
+    renderInitialized = false;
+    rendererBackend = nullptr;
 }
 
 void MaterialInstance::SetupDescriptors()
 {
-    uint32_t swapChainImageCount = VulkanManager::GetInstance().GetSwapChainImageCount();
-    // 设置uniform缓冲区信息
-    for(auto& ubo: {&uboMaterialInstance})
+    if (uboMaterialInstance.buffers.empty())
     {
-        ubo->bufferInfos.resize(swapChainImageCount);
-        for(int i = 0; i < swapChainImageCount; i++)
-        {
-            ubo->bufferInfos[i]
-                .setBuffer(ubo->buffers[i])
-                .setOffset(0)
-                .setRange(ubo->bufferSize);
-        }
+        return;
     }
+
+    rendererBackend->SetupDescriptorBufferInfos(uboMaterialInstance);
 }

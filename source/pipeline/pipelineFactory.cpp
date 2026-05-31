@@ -54,7 +54,6 @@ std::shared_ptr<ComputePipeline> PipelineFactory::CreateComputePipeline(const st
 }
 
 std::shared_ptr<GraphicsPipeline> PipelineFactory::CreateGraphicsPipeline(
-    vk::PhysicalDeviceMemoryProperties* gpuMemoryProperties,
     vk::RenderPass* renderPass,
     const ShaderVariantKey& shaderVariantKey,
     vk::SampleCountFlagBits sampleCount,
@@ -80,7 +79,7 @@ std::shared_ptr<GraphicsPipeline> PipelineFactory::CreateGraphicsPipeline(
         }
     }
 
-    auto pipeline = std::make_shared<GraphicsPipeline>(device, gpuMemoryProperties, renderPass, shaderVariantKey, sampleCount, colorAttachmentCount, pipelineStateDesc, bIsShadowPass);
+    auto pipeline = std::make_shared<GraphicsPipeline>(device, renderPass, shaderVariantKey, sampleCount, colorAttachmentCount, pipelineStateDesc, bIsShadowPass);
     graphicsPipelines[key] = pipeline;
     return pipeline;
 }

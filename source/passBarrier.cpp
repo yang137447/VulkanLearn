@@ -1,34 +1,8 @@
 #include "passBarrier.h"
 
-#include <algorithm>
 #include "commonFunction.h"
+#include "render/framegraph/frameGraphCompiler.h"
 #include "renderGraph.h"
-
-bool PassBarrier::ContainsResource(const std::vector<std::string>& resources, const std::string& resourceName)
-{
-    return std::find(resources.begin(), resources.end(), resourceName) != resources.end();
-}
-
-PassBarrier::ResourcePreviousUse PassBarrier::FindPreviousResourceUse(
-    RenderGraph& renderGraph,
-    const std::vector<std::string>& renderPassOrdered,
-    size_t currentPassIndex,
-    const std::string& resourceName)
-{
-    for(size_t previousIndex = currentPassIndex; previousIndex > 0; --previousIndex)
-    {
-        const auto& previousPass = renderGraph.GetRenderpasses().at(renderPassOrdered[previousIndex - 1]);
-        if(ContainsResource(previousPass.outputResources, resourceName))
-        {
-            return ResourcePreviousUse::Attachment;
-        }
-        if(ContainsResource(previousPass.inputResources, resourceName))
-        {
-            return ResourcePreviousUse::Sampled;
-        }
-    }
-    return ResourcePreviousUse::None;
-}
 
 void PassBarrier::PrepareForPass(
     vk::CommandBuffer& commandBuffer,
@@ -36,61 +10,36 @@ void PassBarrier::PrepareForPass(
     size_t passIndex,
     uint32_t swapChainImageIndex)
 {
-    const auto& renderPassOrdered = renderGraph.GetRenderpassesOrdered();
-
-    PrepareInputResources(commandBuffer, renderGraph, renderPassOrdered, passIndex, swapChainImageIndex);
-    PrepareLoadOutputResources(commandBuffer, renderGraph, renderPassOrdered, passIndex, swapChainImageIndex);
+    ApplyCompiledBarrierPlan(commandBuffer, renderGraph, passIndex, swapChainImageIndex);
 }
 
-void PassBarrier::PrepareInputResources(
+void PassBarrier::ApplyCompiledBarrierPlan(
     vk::CommandBuffer& commandBuffer,
     RenderGraph& renderGraph,
-    const std::vector<std::string>& renderPassOrdered,
     size_t passIndex,
     uint32_t swapChainImageIndex)
 {
-    const auto& renderPass = renderGraph.GetRenderpasses().at(renderPassOrdered[passIndex]);
-
-    for(const auto& resourceName : renderPass.inputResources)
+    const VL::CompiledFrameGraph& compiledGraph = renderGraph.GetCompiledFrameGraph();
+    if (passIndex >= compiledGraph.passes.size())
     {
-        if(FindPreviousResourceUse(renderGraph, renderPassOrdered, passIndex, resourceName) != ResourcePreviousUse::Attachment)
-        {
-            continue;
-        }
-
-        // 当前 pass 会把这个资源当 texture 采样，因此需要在 beginRenderPass 前保证它处于 shader-read layout。
-        // 这里转换的是 Vulkan image layout，不是 R16G16B16A16 / D32 这类像素 format。
-        TransitionAttachmentToShaderRead(commandBuffer, renderGraph, resourceName, swapChainImageIndex);
+        return;
     }
-}
 
-void PassBarrier::PrepareLoadOutputResources(
-    vk::CommandBuffer& commandBuffer,
-    RenderGraph& renderGraph,
-    const std::vector<std::string>& renderPassOrdered,
-    size_t passIndex,
-    uint32_t swapChainImageIndex)
-{
-    const auto& renderPass = renderGraph.GetRenderpasses().at(renderPassOrdered[passIndex]);
-
-    for(const auto& resourceName : renderPass.outputResources)
+    const VL::CompiledFrameGraphPass& compiledPass = compiledGraph.passes[passIndex];
+    for (const VL::CompiledFrameGraphBarrier& barrier : compiledPass.barriersBeforePass)
     {
-        if(resourceName == "swapChain")
+        if (barrier.type == VL::CompiledFrameGraphBarrierType::AttachmentToShaderRead)
         {
-            continue;
+            // 当前 pass 会把这个资源当 texture 采样，因此需要在 beginRenderPass 前保证它处于 shader-read layout。
+            // 这里转换的是 Vulkan image layout，不是 R16G16B16A16 / D32 这类像素 format。
+            TransitionAttachmentToShaderRead(commandBuffer, renderGraph, barrier.resource, swapChainImageIndex);
         }
-
-        auto loadOpIt = renderPass.outputLoadOps.find(resourceName);
-        if(loadOpIt == renderPass.outputLoadOps.end() ||
-           loadOpIt->second != vk::AttachmentLoadOp::eLoad ||
-           FindPreviousResourceUse(renderGraph, renderPassOrdered, passIndex, resourceName) != ResourcePreviousUse::Sampled)
+        else if (barrier.type == VL::CompiledFrameGraphBarrierType::ShaderReadToAttachment)
         {
-            continue;
+            // Render pass 的 attachment initialLayout 不能凭空从 shader-read 变回 attachment layout。
+            // 如果资源刚被某个 pass 采样过，并且当前 pass 又要 load 它继续写/测，就需要在 beginRenderPass 前显式转回。
+            TransitionShaderReadToAttachment(commandBuffer, renderGraph, barrier.resource, swapChainImageIndex);
         }
-
-        // Render pass 的 attachment initialLayout 不能凭空从 shader-read 变回 attachment layout。
-        // 如果资源刚被某个 pass 采样过，并且当前 pass 又要 load 它继续写/测，就需要在 beginRenderPass 前显式转回。
-        TransitionShaderReadToAttachment(commandBuffer, renderGraph, resourceName, swapChainImageIndex);
     }
 }
 

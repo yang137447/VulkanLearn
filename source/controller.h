@@ -1,27 +1,21 @@
 #include <Eigen/Dense>
 #include <memory>
-#include "SDL3/SDL.h"
+
+#include "input/inputSubsystem.h"
 
 
 class SceneNode;
 class Controller
 {
 public:
-    Controller(SDL_Window* window);
-    void Update(float deltaTime);
-    void SetMouseCaptured(bool captured);
-    void ToggleMouseCaptured();
-    bool IsMouseCaptured() const;
+    Controller();
+    void Update(float deltaTime, const VL::InputActionState& input);
     void SetSceneObject(std::shared_ptr<SceneNode> sceneObject);
     void SetMoveVelocity(float moveSpeed);
     void SetRotationSpeed(float mouseRotationSpeed);
 
 private:
-    Controller();
     std::shared_ptr<SceneNode> sceneObject;
-    float moveSpeed;
-    float mouseRotationSpeed;
-
-    SDL_Window* window;
-    bool isMouseCaptured = true;
+    float moveSpeed = 0.0f;
+    float mouseRotationSpeed = 0.0f;
 };

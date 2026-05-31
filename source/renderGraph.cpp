@@ -1,17 +1,124 @@
 #include "renderGraph.h"
 #include "commonFunction.h"
-#include "vulkanManager.h"
-#include "sceneLoader.h"
 #include "shaderReflect.h"
 #include "material.h"
 #include "materialInstance.h"
-#include "texture.h"
 #include "pipeline/graphicsPipeline.h"
-#include "renderSystem.h"
-#include "lightManager.h"
+#include "render/backend/rendererBackendVulkan.h"
+#include "render/backend/rendererDescriptorWriter.h"
+#include "render/framegraph/frameGraphCompiler.h"
+#include "render/resource/resourceRetireQueue.h"
+#include <algorithm>
+#include <memory>
 #include <stdint.h>
+#include <stdexcept>
+#include <utility>
 #include "profiler.h"
-#include "vulkanDebug.h"
+
+namespace
+{
+
+bool HasRenderResourceHandles(const RenderResource& resource)
+{
+    return resource.image ||
+        resource.memory ||
+        resource.imageView ||
+        resource.sampler;
+}
+
+RenderResource TakeRenderResource(RenderResource& resource)
+{
+    RenderResource taken = resource;
+    resource.image = nullptr;
+    resource.memory = nullptr;
+    resource.imageView = nullptr;
+    resource.sampler = nullptr;
+    return taken;
+}
+
+struct RetiredRenderGraphImageResource
+{
+    VL::RendererBackendVulkan* rendererBackend = nullptr;
+    RenderResource resource;
+
+    ~RetiredRenderGraphImageResource()
+    {
+        if (rendererBackend == nullptr)
+        {
+            return;
+        }
+
+        rendererBackend->DestroyImageResource(
+            resource.image,
+            resource.memory,
+            resource.imageView,
+            resource.sampler);
+    }
+};
+
+struct RetiredRenderGraphPassResource
+{
+    VL::RendererBackendVulkan* rendererBackend = nullptr;
+    std::string name;
+    std::vector<vk::Framebuffer> framebuffers;
+    vk::DescriptorSetLayout descriptorSetLayout;
+    vk::DescriptorSetLayout emptyDescriptorSetLayout;
+    vk::DescriptorPool descriptorPool;
+    vk::RenderPass renderPass;
+
+    ~RetiredRenderGraphPassResource()
+    {
+        if (rendererBackend == nullptr)
+        {
+            return;
+        }
+
+        rendererBackend->DestroyFramebuffers(framebuffers);
+        rendererBackend->DestroyDescriptorSetLayout(descriptorSetLayout);
+        rendererBackend->DestroyDescriptorSetLayout(emptyDescriptorSetLayout);
+        rendererBackend->DestroyDescriptorPool(descriptorPool);
+        rendererBackend->DestroyRenderPass(renderPass);
+    }
+};
+
+bool HasRenderpassHandles(const Renderpass& renderpass)
+{
+    return !renderpass.framebuffers.empty() ||
+        renderpass.descriptorSetLayout ||
+        renderpass.emptyDescriptorSetLayout ||
+        renderpass.descriptorPool ||
+        renderpass.renderPass;
+}
+
+std::shared_ptr<RetiredRenderGraphPassResource> TakeRenderpassResource(
+    Renderpass& renderpass,
+    VL::RendererBackendVulkan& rendererBackend)
+{
+    auto retiredPass = std::make_shared<RetiredRenderGraphPassResource>();
+    retiredPass->rendererBackend = &rendererBackend;
+    retiredPass->name = renderpass.name;
+    retiredPass->framebuffers = std::move(renderpass.framebuffers);
+    retiredPass->descriptorSetLayout = renderpass.descriptorSetLayout;
+    retiredPass->emptyDescriptorSetLayout = renderpass.emptyDescriptorSetLayout;
+    retiredPass->descriptorPool = renderpass.descriptorPool;
+    retiredPass->renderPass = renderpass.renderPass;
+
+    renderpass.descriptorSetLayout = nullptr;
+    renderpass.emptyDescriptorSetLayout = nullptr;
+    renderpass.descriptorPool = nullptr;
+    renderpass.renderPass = nullptr;
+    renderpass.descriptorSets.clear();
+    renderpass.writeDescriptorSets.clear();
+    renderpass.inputDescriptorImageInfos.clear();
+    return retiredPass;
+}
+
+uint64_t GetGraphResourceLastUsedEpoch()
+{
+    return VL::ResourceRetireQueue::GetInstance().GetLastSubmittedEpoch();
+}
+
+} // namespace
 
 void Renderpass::Draw(vk::CommandBuffer& commandBuffer) const
 {
@@ -37,22 +144,25 @@ void Renderpass::Draw(vk::CommandBuffer& commandBuffer) const
 
 void Renderpass::CreateUniformBuffers()
 {
-    //对于pass,目前暂时没有uniform buffer
+    // Pass parameters live in MaterialInstance UBOs; Renderpass itself owns no
+    // extra per-pass uniform buffer.
 }
-void Renderpass::SetupDescriptors(RenderGraph& renderGraph)
+void Renderpass::SetupDescriptors(
+    RenderGraph& renderGraph,
+    VL::RendererBackendVulkan& rendererBackend)
 {
-    uint32_t swapChainImageCount = VulkanManager::GetInstance().GetSwapChainImageCount();
+    uint32_t swapChainImageCount = rendererBackend.GetSwapchainImageCount();
     inputDescriptorImageInfos.clear();
     inputDescriptorImageInfos.resize(swapChainImageCount);
-    // 总览：为每个输入资源建立 DescriptorImageInfo
+    // 总览：按 compiled descriptor plan 为每个输入资源建立 DescriptorImageInfo
     // 1) 先从 resolve 里找，找不到再从 msaa 里找
     // 2) shadowMap 使用深度只读 layout
-    // 3) 写入 inputDescriptorImageInfos
-    // 设置image信息,根据pass的输入资源创建
+    // 3) 按 binding 写入 inputDescriptorImageInfos
     for(uint32_t imageIndex = 0; imageIndex < swapChainImageCount; ++imageIndex)
     {
-        for(auto& inputResource : inputResources)
+        for(const VL::CompiledFrameGraphPassInputDescriptor& inputDescriptor : inputDescriptorPlan)
         {
+            const std::string& inputResource = inputDescriptor.resource;
             const RenderResource* resource = nullptr;
             
             auto& resolveMap = renderGraph.GetResourcesResolve();
@@ -87,20 +197,22 @@ void Renderpass::SetupDescriptors(RenderGraph& renderGraph)
                 .setImageLayout(imageLayout)
                 .setImageView(resource->imageView)
                 .setSampler(resource->sampler);
-            inputDescriptorImageInfos[imageIndex].push_back(imageInfo);
+            if (inputDescriptor.binding >= inputDescriptorImageInfos[imageIndex].size())
+            {
+                inputDescriptorImageInfos[imageIndex].resize(inputDescriptor.binding + 1);
+            }
+            inputDescriptorImageInfos[imageIndex][inputDescriptor.binding] = imageInfo;
         }
     }
 }
 
-void Renderpass::CreatePassDescriptorSetLayout()
+void Renderpass::CreatePassDescriptorSetLayout(VL::RendererBackendVulkan& rendererBackend)
 {
-    vk::Device& device = VulkanManager::GetInstance().GetDevice();
-
     // 创建空的 DescriptorSetLayout，用于绑定空的 DescriptorSet, 主要用于geometrypass对齐使用，渲染时能用PassSetIndex调用到passSet
     vk::DescriptorSetLayoutCreateInfo emptyLayoutCreateInfo;
-    vk::Result result = device.createDescriptorSetLayout(&emptyLayoutCreateInfo, nullptr, &emptyDescriptorSetLayout);
-    assert(result == vk::Result::eSuccess);
-    VulkanDebug::SetObjectName(device, emptyDescriptorSetLayout, vk::ObjectType::eDescriptorSetLayout, "DescriptorSetLayout: Empty");
+    emptyDescriptorSetLayout = rendererBackend.CreateDescriptorSetLayout(
+        emptyLayoutCreateInfo,
+        "DescriptorSetLayout: Empty");
 
     std::vector<vk::DescriptorSetLayoutBinding> descriptorSetLayoutBindings;
     if(!materialInstance.expired())
@@ -125,16 +237,11 @@ void Renderpass::CreatePassDescriptorSetLayout()
     }
     else
     {
-        uint32_t inputCount = 0;
-        if(!inputDescriptorImageInfos.empty())
-        {
-            inputCount = static_cast<uint32_t>(inputDescriptorImageInfos[0].size());
-        }
-        for(uint32_t i = 0; i < inputCount; ++i)
+        for(const VL::CompiledFrameGraphPassInputDescriptor& inputDescriptor : inputDescriptorPlan)
         {
             vk::DescriptorSetLayoutBinding layoutBinding;
             layoutBinding
-                .setBinding(i)
+                .setBinding(inputDescriptor.binding)
                 .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
                 .setDescriptorCount(1)
                 .setStageFlags(vk::ShaderStageFlagBits::eFragment)
@@ -147,15 +254,14 @@ void Renderpass::CreatePassDescriptorSetLayout()
     descriptorSetLayoutCreateInfo
         .setBindings(descriptorSetLayoutBindings);
 
-    result = device.createDescriptorSetLayout(&descriptorSetLayoutCreateInfo, nullptr, &descriptorSetLayout);
-    assert(result == vk::Result::eSuccess);
-    VulkanDebug::SetObjectName(device, descriptorSetLayout, vk::ObjectType::eDescriptorSetLayout, "DescriptorSetLayout: " + name);
+    descriptorSetLayout = rendererBackend.CreateDescriptorSetLayout(
+        descriptorSetLayoutCreateInfo,
+        "DescriptorSetLayout: " + name);
 }
 
-void Renderpass::CreateDescriptorSets()
+void Renderpass::CreateDescriptorSets(VL::RendererBackendVulkan& rendererBackend)
 {
-    VulkanManager& vulkanManager = VulkanManager::GetInstance();
-    uint32_t swapChainImageCount = VulkanManager::GetInstance().GetSwapChainImageCount();
+    uint32_t swapChainImageCount = rendererBackend.GetSwapchainImageCount();
     std::vector<vk::DescriptorSetLayout> allocateLayouts;
     std::vector<vk::DescriptorPoolSize> descriptorPoolSizes;
     if (!materialInstance.expired()) //geometryPass没有MaterialInstance,需要额外处理
@@ -184,12 +290,7 @@ void Renderpass::CreateDescriptorSets()
         }
     }
     else {
-        uint32_t inputCount = 0;
-        if(!inputDescriptorImageInfos.empty())
-        {
-            inputCount = static_cast<uint32_t>(inputDescriptorImageInfos[0].size());
-        }
-        uint32_t descriptorCount = swapChainImageCount * MAX_DESCRIPTOR_SETS * inputCount;
+        uint32_t descriptorCount = swapChainImageCount * static_cast<uint32_t>(inputDescriptorPlan.size());
         if (descriptorCount > 0)
         {
             vk::DescriptorPoolSize poolSize;
@@ -213,9 +314,9 @@ void Renderpass::CreateDescriptorSets()
         .setFlags(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet)
         .setPoolSizes(descriptorPoolSizes);
 
-    vk::Result result = vulkanManager.GetDevice().createDescriptorPool(&descriptorPoolCreateInfo, nullptr, &descriptorPool);
-    assert(result == vk::Result::eSuccess);
-    VulkanDebug::SetObjectName(vulkanManager.GetDevice(), descriptorPool, vk::ObjectType::eDescriptorPool, "DescriptorPool: " + name);
+    descriptorPool = rendererBackend.CreateDescriptorPool(
+        descriptorPoolCreateInfo,
+        "DescriptorPool: " + name);
 
     vk::DescriptorSetAllocateInfo descriptorSetAllocateInfo;
     descriptorSetAllocateInfo
@@ -226,152 +327,122 @@ void Renderpass::CreateDescriptorSets()
     for(uint32_t i = 0; i < swapChainImageCount; i++)
     {
         descriptorSets[i].resize(SetLayoutCount);
-        result = vulkanManager.GetDevice().allocateDescriptorSets(&descriptorSetAllocateInfo, descriptorSets[i].data());
-        assert(result == vk::Result::eSuccess);
+        rendererBackend.AllocateDescriptorSets(descriptorSetAllocateInfo, descriptorSets[i]);
         for(uint32_t j = 0; j < SetLayoutCount; j++)
         {
-            VulkanDebug::SetObjectName(vulkanManager.GetDevice(), descriptorSets[i][j], vk::ObjectType::eDescriptorSet, "DescriptorSet: " + name + " (SwapchainIndex " + std::to_string(i) + ", Set " + std::to_string(j) + ")");
+            rendererBackend.SetDescriptorSetDebugName(
+                descriptorSets[i][j],
+                "DescriptorSet: " + name +
+                    " (SwapchainIndex " + std::to_string(i) +
+                    ", Set " + std::to_string(j) + ")");
         }
     }
 }
 
-void Renderpass::UpdateDescriptorSets()
+void Renderpass::UpdateDescriptorSets(
+    VL::RendererBackendVulkan& rendererBackend,
+    const VL::RendererDescriptorContext& descriptorContext,
+    const VL::RendererPassDescriptorPlan& descriptorPlan)
 {
-    uint32_t swapChainImageCount = VulkanManager::GetInstance().GetSwapChainImageCount();
-    // 设置descriptor set信息
+    uint32_t swapChainImageCount = rendererBackend.GetSwapchainImageCount();
     writeDescriptorSets.resize(swapChainImageCount);
-    
-    if(!materialInstance.expired())
+
+    std::shared_ptr<MaterialInstance> passMaterialInstance = materialInstance.lock();
+
+    for(uint32_t i = 0; i < swapChainImageCount; i++)
     {
-        auto baseMaterial = materialInstance.lock()->GetBaseMaterial().lock();
-        const auto& shaderBindings = baseMaterial->GetRenderPipeline()->GetShaderBindings();
-        auto& renderSystem = RenderSystem::GetInstance();
-        auto& lightManager = LightManager::GetInstance();
-        auto& sceneLoader = SceneLoader::GetInstance();
-        for(uint32_t i = 0; i < swapChainImageCount; i++)
+        writeDescriptorSets[i].clear();
+        VL::RendererDescriptorWriteInputs writeInputs;
+        writeInputs.descriptorContext = &descriptorContext;
+        writeInputs.materialInstance = passMaterialInstance.get();
+        if (i < inputDescriptorImageInfos.size())
         {
-            for(const auto& binding : shaderBindings)
+            writeInputs.passInputImageInfos = &inputDescriptorImageInfos[i];
+        }
+
+        for(const VL::RendererDescriptorUpdate& descriptorUpdate : descriptorPlan.updates)
+        {
+            if (i >= descriptorSets.size() ||
+                descriptorUpdate.setIndex >= descriptorSets[i].size())
             {
-                // if(binding.set == PassSetIndex)
-                // {
-                //     continue;
-                // }
+                continue;
+            }
 
-                vk::WriteDescriptorSet write;
-                write
-                    .setDstSet(descriptorSets[i][binding.set])
-                    .setDstBinding(binding.binding)
-                    .setDescriptorCount(1)
-                    .setDescriptorType(binding.type);
-
-                if (binding.type == vk::DescriptorType::eUniformBuffer)
-                {
-                    if (binding.set == GlobalSetIndex)
-                    {
-                        write.setBufferInfo(renderSystem.GetUBOGlobalBufferInfo()[i]);
-                    }
-                    else if (binding.set == MaterialSetIndex)
-                    {
-                        write.setBufferInfo(materialInstance.lock()->GetUboMaterialInstanceInfo()[i]);
-                    }
-                    else if (binding.set == ObjectSetIndex)
-                    {
-                        // 这里数据用sceneObject
-                        // write.setBufferInfo(uboModel.bufferInfos[i]);
-                        continue;
-                    }
-                }
-                else if (binding.type == vk::DescriptorType::eStorageBuffer)
-                {
-                    write.setBufferInfo(lightManager.GetLightBufferInfo()[i]);
-                }
-                else if (binding.type == vk::DescriptorType::eCombinedImageSampler)
-                {
-                    if (binding.set == GlobalSetIndex)
-                    {
-                        const std::shared_ptr<Texture>* texture = sceneLoader.GetGlobalTextureByBindingName(binding.name);
-                        if (texture == nullptr || *texture == nullptr)
-                        {
-                            continue;
-                        }
-                        write.setImageInfo((*texture)->GetDescriptorInfo());
-                    }
-                    else if (binding.set != PassSetIndex)
-                    {
-                        write.setImageInfo(materialInstance.lock()->GetTextureDescriptorInfo(binding.name));
-                    }
-                    else {
-                        // pass需要根据binding index来找到PassInputResource
-                        uint32_t inputIndex = binding.binding;
-                        if(i >= inputDescriptorImageInfos.size() || inputIndex >= inputDescriptorImageInfos[i].size())
-                        {
-                            continue;
-                        }
-                        write.setPImageInfo(&inputDescriptorImageInfos[i][inputIndex]);
-                    }
-                }
-
+            vk::WriteDescriptorSet write;
+            if (VL::BuildRendererDescriptorWrite(
+                    descriptorUpdate,
+                    descriptorSets[i][descriptorUpdate.setIndex],
+                    i,
+                    writeInputs,
+                    write))
+            {
                 writeDescriptorSets[i].push_back(write);
             }
-            
-            VulkanManager::GetInstance().GetDevice().updateDescriptorSets(writeDescriptorSets[i], nullptr);
         }
-    }
-    else {
-        vk::Device& device = VulkanManager::GetInstance().GetDevice();
-        std::vector<vk::WriteDescriptorSet> writes;
-        for(uint32_t i = 0; i < swapChainImageCount; i++)
+
+        if (!writeDescriptorSets[i].empty())
         {
-            for(uint32_t j = 0; j < inputDescriptorImageInfos[i].size(); j++)
-            {
-                vk::WriteDescriptorSet write;
-                write
-                    .setDstSet(descriptorSets[i][PassSetIndex])
-                    .setDstBinding(j)
-                    .setDstArrayElement(0)
-                    .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
-                    .setDescriptorCount(1)
-                    .setPImageInfo(&inputDescriptorImageInfos[i][j]);
-                writes.push_back(write);
-            }
-            device.updateDescriptorSets(static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+            rendererBackend.UpdateDescriptorSets(writeDescriptorSets[i]);
         }
     }
 }
 
 RenderGraph::~RenderGraph()
 {
-    // 销毁msaa,resolve资源
+    // Runtime shutdown owns Vulkan resource release while the backend is still
+    // valid. The destructor intentionally has no fallback device path.
+}
+
+void RenderGraph::Shutdown(
+    VL::RendererBackendVulkan& rendererBackend,
+    VL::RenderGraphReleaseMode releaseMode)
+{
+    for(auto& [name, renderpass] : renderpasses)
+    {
+        DestroyRenderpass(renderpass, rendererBackend, releaseMode);
+    }
+
     for(auto& [name, resources] : resourcesMsaa)
     {
         for(auto& resource : resources)
         {
-            DestroyRenderResource(resource);
+            DestroyRenderResource(resource, rendererBackend, releaseMode);
         }
     }
     for(auto& [name, resources] : resourcesResolve)
     {
         for(auto& resource : resources)
         {
-            DestroyRenderResource(resource);
+            DestroyRenderResource(resource, rendererBackend, releaseMode);
         }
     }
 
-    // 销毁renderpass
-    for(auto& [name, renderpass] : renderpasses)
-    {
-        DestroyRenderpass(renderpass);
-    }
+    resourcesMsaa.clear();
+    resourcesResolve.clear();
+    renderpasses.clear();
+    renderpassesOrdered.clear();
+    descriptorPlanCache.Clear();
 }
 
-void RenderGraph::LoadRenderGraph(const nlohmann::json& renderGraphJson)
+void RenderGraph::LoadRenderGraph(
+    const nlohmann::json& renderGraphJson,
+    VL::RendererBackendVulkan& rendererBackend)
 {
-
-    uint32_t swapChainImageCount = VulkanManager::GetInstance().GetSwapChainImageCount();
-    // 解析渲染资源
-    for (const auto& resourceNode : renderGraphJson["resources"])
+    VL::FrameGraphCompiler compiler;
+    auto compileResult = compiler.Compile(renderGraphJson);
+    if (compileResult.IsFailure())
     {
-        std::string name = resourceNode["name"];
+        throw std::runtime_error(VL::FormatRuntimeError(compileResult.Error()));
+    }
+    compiledFrameGraph = std::move(compileResult.Value());
+    descriptorPlanCache.Clear();
+
+    uint32_t swapChainImageCount = rendererBackend.GetSwapchainImageCount();
+    // GPU object creation still happens here; the compiler above now owns the
+    // validated pass/resource order that future FrameGraph work will consume.
+    for (const VL::CompiledFrameGraphResource& resourceDesc : compiledFrameGraph.resources)
+    {
+        std::string name = resourceDesc.name;
         if(name == "swapChain") continue;
 
         // 先建立msaa资源
@@ -381,7 +452,7 @@ void RenderGraph::LoadRenderGraph(const nlohmann::json& renderGraphJson)
             msaaResources.reserve(swapChainImageCount);
             for(uint32_t i = 0; i < swapChainImageCount; ++i)
             {
-                RenderResource resource = CreateRenderResource(resourceNode, true);
+                RenderResource resource = CreateRenderResource(resourceDesc, rendererBackend, true);
                 msaaResources.push_back(std::move(resource));
             }
             resourcesMsaa.emplace(name, std::move(msaaResources));
@@ -392,27 +463,28 @@ void RenderGraph::LoadRenderGraph(const nlohmann::json& renderGraphJson)
         resolveResources.reserve(swapChainImageCount);
         for(uint32_t i = 0; i < swapChainImageCount; ++i)
         {
-            RenderResource resourceResolve = CreateRenderResource(resourceNode);
+            RenderResource resourceResolve = CreateRenderResource(resourceDesc, rendererBackend);
             resolveResources.push_back(std::move(resourceResolve));
         }
         resourcesResolve.emplace(name, std::move(resolveResources));
     }
-    // 解析渲染pass
-    for (const auto& passNode : renderGraphJson["passes"])
+    for (const VL::CompiledFrameGraphPass& passDesc : compiledFrameGraph.passes)
     {
-        std::string passName = passNode["name"];
+        std::string passName = passDesc.name;
         renderpassesOrdered.push_back(passName);
-        Renderpass renderpass = CreateRenderpass(passNode);
+        Renderpass renderpass = CreateRenderpass(passDesc, rendererBackend);
         renderpasses[passName] = renderpass;
     }
 }
 
-void RenderGraph::RenderInitialize()
+void RenderGraph::RenderInitialize(
+    VL::RendererBackendVulkan& rendererBackend,
+    const VL::RendererDescriptorContext& descriptorContext)
 {
     for(auto& [passName, renderpass] : renderpasses)
     {
         renderpass.CreateUniformBuffers();
-        renderpass.SetupDescriptors(*this);
+        renderpass.SetupDescriptors(*this, rendererBackend);
         if (auto passMaterialInstance = renderpass.materialInstance.lock())
         {
             auto baseMaterial = passMaterialInstance->GetBaseMaterial().lock();
@@ -424,58 +496,116 @@ void RenderGraph::RenderInitialize()
                         binding.binding == 0 &&
                         binding.type == vk::DescriptorType::eUniformBuffer)
                     {
-                        passMaterialInstance->RenderInitialize();
+                        passMaterialInstance->RenderInitialize(rendererBackend);
                         break;
                     }
                 }
             }
         }
-        renderpass.CreatePassDescriptorSetLayout();
-        renderpass.CreateDescriptorSets();
-        renderpass.UpdateDescriptorSets();
+        descriptorPlanCache.RebuildPassPlan(
+            passName,
+            renderpass.inputDescriptorPlan,
+            renderpass.materialInstance);
+        renderpass.CreatePassDescriptorSetLayout(rendererBackend);
+        renderpass.CreateDescriptorSets(rendererBackend);
+        renderpass.UpdateDescriptorSets(
+            rendererBackend,
+            descriptorContext,
+            descriptorPlanCache.GetPassPlan(passName));
     }
 }
 
-RenderResource RenderGraph::CreateRenderResource(const nlohmann::json& resourceNode, bool bIsMsaaSource)
+void RenderGraph::RefreshRuntimeDescriptors(
+    VL::RendererBackendVulkan& rendererBackend,
+    const VL::RendererDescriptorContext& descriptorContext)
 {
-    VulkanManager& vulkanManager = VulkanManager::GetInstance();
-    vk::Device& device = vulkanManager.GetDevice();
-    vk::CommandPool& commandPool = vulkanManager.GetCommandPool();
-    vk::Queue& graphicQueue = vulkanManager.GetGraphicQueue();
-    auto& physicalDevice = vulkanManager.GetPhysicalDevice();
-    auto& gpuMemoryProperties = vulkanManager.GetGpuMemoryProperties();
+    for (auto& [passName, renderpass] : renderpasses)
+    {
+        if (auto passMaterialInstance = renderpass.materialInstance.lock())
+        {
+            passMaterialInstance->RenderInitialize(rendererBackend);
+        }
+        descriptorPlanCache.RebuildPassPlan(
+            passName,
+            renderpass.inputDescriptorPlan,
+            renderpass.materialInstance);
+        renderpass.UpdateDescriptorSets(
+            rendererBackend,
+            descriptorContext,
+            descriptorPlanCache.GetPassPlan(passName));
+    }
+}
 
+std::unordered_map<std::string, std::weak_ptr<MaterialInstance>> RenderGraph::CapturePassMaterialInstances() const
+{
+    std::unordered_map<std::string, std::weak_ptr<MaterialInstance>> passMaterials;
+    for (const auto& [passName, renderpass] : renderpasses)
+    {
+        passMaterials.emplace(passName, renderpass.materialInstance);
+    }
+    return passMaterials;
+}
+
+void RenderGraph::RestorePassMaterialInstances(
+    const std::unordered_map<std::string, std::weak_ptr<MaterialInstance>>& passMaterials)
+{
+    for (auto& [passName, materialInstance] : passMaterials)
+    {
+        auto passIt = renderpasses.find(passName);
+        if (passIt != renderpasses.end())
+        {
+            passIt->second.materialInstance = materialInstance;
+        }
+    }
+}
+
+RenderResource RenderGraph::CreateRenderResource(
+    const VL::CompiledFrameGraphResource& resourceDesc,
+    VL::RendererBackendVulkan& rendererBackend,
+    bool bIsMsaaSource)
+{
     RenderResource resource;
 
-    resource.name = resourceNode["name"];
+    resource.name = resourceDesc.name;
 
-    resource.format = GetFormat(resourceNode["format"]);
+    resource.format = GetFormat(resourceDesc.format);
 
     bool bIsDepthFormat = CommonFunction::IsDepthFormat(resource.format);
 
-    resource.width = CommonFunction::ParserRenderResourceSize(resourceNode).x();
-    resource.height = CommonFunction::ParserRenderResourceSize(resourceNode).y();
+    const vk::Extent2D swapchainExtent = rendererBackend.GetSwapchainExtent();
+    const float baseWidth = static_cast<float>(swapchainExtent.width);
+    const float baseHeight = static_cast<float>(swapchainExtent.height);
+    resource.width = static_cast<uint32_t>(
+        resourceDesc.hasFixedWidth
+            ? resourceDesc.widthValue
+            : std::max(1.0f, baseWidth * resourceDesc.widthValue));
+    resource.height = static_cast<uint32_t>(
+        resourceDesc.hasFixedHeight
+            ? resourceDesc.heightValue
+            : std::max(1.0f, baseHeight * resourceDesc.heightValue));
 
-    vk::ImageUsageFlags usage = GetImageUsage(resourceNode["usage"]);
+    vk::ImageUsageFlags usage = GetImageUsage(resourceDesc.usage);
 
     vk::MemoryPropertyFlags memoryPropertyFlags = vk::MemoryPropertyFlagBits::eDeviceLocal;
     vk::ImageTiling tiling = vk::ImageTiling::eOptimal;
-    std::tie(resource.image, resource.memory) = CommonFunction::CreateImage(
-        device, resource.width, resource.height,
+    std::tie(resource.image, resource.memory) = rendererBackend.CreateImage(
+        resource.width,
+        resource.height,
         1, 
-        // 这里根据是否是msaa源图，来确定是否需要msaa采样
+        // Only the MSAA source attachment uses the configured sample count.
+        // Resolved/readback resources stay single-sampled for descriptor reads.
         bIsMsaaSource ? CommonFunction::GetMsaaSampleCount() : vk::SampleCountFlagBits::e1,
-        resource.format, tiling, usage,
-        gpuMemoryProperties, memoryPropertyFlags, "Image: " + resource.name);
+        resource.format,
+        tiling,
+        usage,
+        memoryPropertyFlags,
+        "Image: " + resource.name);
     if(bIsDepthFormat)
     {
-        CommonFunction::TransitionImageLayout(
+        rendererBackend.TransitionImageLayout(
             resource.image, 
             1, 
             resource.format, 
-            device, 
-            commandPool, 
-            graphicQueue, 
             vk::ImageLayout::eUndefined, 
             vk::ImageLayout::eDepthStencilAttachmentOptimal);
     }
@@ -485,12 +615,13 @@ RenderResource RenderGraph::CreateRenderResource(const nlohmann::json& resourceN
         aspect = vk::ImageAspectFlagBits::eDepth;
         if(CommonFunction::HasStencilComponent(resource.format))
         {
-            // TODO:这里有问题，看后续怎么修复stencil
+            // Depth/stencil formats are only used as depth attachments today.
+            // Keep stencil out of the view until a pass explicitly declares
+            // stencil load/store and matching barriers.
             // aspect |= vk::ImageAspectFlagBits::eStencil;
         }
     }
-    resource.imageView = CommonFunction::Create2DImageView(
-        device, 
+    resource.imageView = rendererBackend.Create2DImageView(
         resource.image, 
         1, 
         resource.format,
@@ -499,60 +630,75 @@ RenderResource RenderGraph::CreateRenderResource(const nlohmann::json& resourceN
 
     resource.sampler = bIsDepthFormat
         ? (resource.name == "shadowMap"
-            ? CommonFunction::CreateDepthCompareSampler(device, physicalDevice, "Sampler: " + resource.name)
-            : CommonFunction::CreateDepthSampler(device, physicalDevice, "Sampler: " + resource.name))
-        : CommonFunction::Create2DSampler(device, physicalDevice, "Sampler: " + resource.name);
+            ? rendererBackend.CreateDepthCompareSampler("Sampler: " + resource.name)
+            : rendererBackend.CreateDepthSampler("Sampler: " + resource.name))
+        : rendererBackend.Create2DSampler("Sampler: " + resource.name);
 
     return resource;
 }
 
-void RenderGraph::DestroyRenderResource(RenderResource& resource)
+void RenderGraph::DestroyRenderResource(
+    RenderResource& resource,
+    VL::RendererBackendVulkan& rendererBackend,
+    VL::RenderGraphReleaseMode releaseMode)
 {
-    VulkanManager& vulkanManager = VulkanManager::GetInstance();
-    vk::Device& device = vulkanManager.GetDevice();
+    if (!HasRenderResourceHandles(resource))
+    {
+        return;
+    }
 
-    device.destroyImageView(resource.imageView);
-    device.freeMemory(resource.memory);
-    device.destroyImage(resource.image);
-    device.destroySampler(resource.sampler);
+    if (releaseMode == VL::RenderGraphReleaseMode::Retire)
+    {
+        auto retiredResource = std::make_shared<RetiredRenderGraphImageResource>();
+        retiredResource->rendererBackend = &rendererBackend;
+        retiredResource->resource = TakeRenderResource(resource);
+        // Keep the label before moving the payload; function argument
+        // evaluation order must not decide whether debug metadata is readable.
+        const std::string debugName =
+            "RenderGraphResource:" + retiredResource->resource.name;
+        VL::ResourceRetireQueue::GetInstance().RetireShared(
+            debugName,
+            0,
+            GetGraphResourceLastUsedEpoch(),
+            std::move(retiredResource));
+        return;
+    }
+
+    rendererBackend.DestroyImageResource(
+        resource.image,
+        resource.memory,
+        resource.imageView,
+        resource.sampler);
 }
 
-Renderpass RenderGraph::CreateRenderpass(const nlohmann::json& passNode)
+Renderpass RenderGraph::CreateRenderpass(
+    const VL::CompiledFrameGraphPass& passDesc,
+    VL::RendererBackendVulkan& rendererBackend)
 {
     Renderpass renderpass;
-    renderpass.name = passNode["name"];
+    renderpass.name = passDesc.name;
     bool bIsShadowPass = renderpass.name == "shadow";
-    bool bUseMsaa = passNode.value("needMsaa", false);
+    bool bUseMsaa = passDesc.needMsaa;
     renderpass.sampleCount = bUseMsaa ? CommonFunction::GetMsaaSampleCount() : vk::SampleCountFlagBits::e1;
 
-    std::vector<std::string> inputResources = GetRenderpassInputResources(passNode["input"]);
+    std::vector<std::string> inputResources = passDesc.inputResources;
     renderpass.inputResources = inputResources;
-    for (const auto& outputNode : passNode["output"])
+    renderpass.inputDescriptorPlan = passDesc.inputDescriptors;
+    for (const VL::CompiledFrameGraphPassOutput& output : passDesc.outputResources)
     {
-        const std::string resourceName = outputNode["resource"];
+        const std::string& resourceName = output.resource;
         renderpass.outputResources.push_back(resourceName);
-        renderpass.outputLoadOps[resourceName] = GetAttachmentLoadOp(outputNode.value("loadOp", std::string("clear")));
-        renderpass.outputStoreOps[resourceName] = GetAttachmentStoreOp(outputNode.value("storeOp", std::string("store")));
+        renderpass.outputLoadOps[resourceName] = GetAttachmentLoadOp(output.loadOp);
+        renderpass.outputStoreOps[resourceName] = GetAttachmentStoreOp(output.storeOp);
     }
-    for (const auto& resourceName : renderpass.outputResources)
-    {
-        auto resolveIt = resourcesResolve.find(resourceName);
-        if (resourceName == "swapChain" ||
-            (resolveIt != resourcesResolve.end() &&
-             !resolveIt->second.empty() &&
-             !CommonFunction::IsDepthFormat(resolveIt->second[0].format)))
-        {
-            ++renderpass.colorAttachmentCount;
-        }
-    }
+    renderpass.colorAttachmentCount = passDesc.colorOutputCount;
 
-    vk::RenderPass vkRenderPass = CreateVkRenderPass(renderpass, bUseMsaa);
+    vk::RenderPass vkRenderPass = CreateVkRenderPass(renderpass, rendererBackend, bUseMsaa);
     renderpass.renderPass = vkRenderPass;
-    VulkanDebug::SetObjectName(VulkanManager::GetInstance().GetDevice(), renderpass.renderPass, vk::ObjectType::eRenderPass, renderpass.name);
     
     if (renderpass.outputResources[0] == "swapChain")
     {
-        auto extent = VulkanManager::GetInstance().GetSwapChainExtent();
+        auto extent = rendererBackend.GetSwapchainExtent();
         renderpass.width = extent.width;
         renderpass.height = extent.height;
     }
@@ -568,28 +714,55 @@ Renderpass RenderGraph::CreateRenderpass(const nlohmann::json& passNode)
     }
     
     renderpass.clearValues = GetClearValues(renderpass.outputResources, bUseMsaa);
-    renderpass.framebuffers = CreateVkFrameBuffers(renderpass, inputResources, renderpass.outputResources, bUseMsaa);
+    renderpass.framebuffers = CreateVkFrameBuffers(
+        renderpass,
+        inputResources,
+        renderpass.outputResources,
+        rendererBackend,
+        bUseMsaa);
     
     return renderpass;
 }
 
-void RenderGraph::DestroyRenderpass(Renderpass& renderpass)
+void RenderGraph::DestroyRenderpass(
+    Renderpass& renderpass,
+    VL::RendererBackendVulkan& rendererBackend,
+    VL::RenderGraphReleaseMode releaseMode)
 {
-    VulkanManager& vulkanManager = VulkanManager::GetInstance();
-    vk::Device& device = vulkanManager.GetDevice();
+    if (!HasRenderpassHandles(renderpass))
+    {
+        return;
+    }
 
-    DestroyVkRenderPass(renderpass.renderPass);
-    DestroyVkFrameBuffers(renderpass.framebuffers);
-    device.destroyDescriptorSetLayout(renderpass.descriptorSetLayout);
-    device.destroyDescriptorSetLayout(renderpass.emptyDescriptorSetLayout);
-    device.destroyDescriptorPool(renderpass.descriptorPool);
+    if (releaseMode == VL::RenderGraphReleaseMode::Retire)
+    {
+        std::shared_ptr<RetiredRenderGraphPassResource> retiredPass =
+            TakeRenderpassResource(renderpass, rendererBackend);
+        // Keep the label before moving the payload; function argument
+        // evaluation order must not decide whether debug metadata is readable.
+        const std::string debugName = "RenderGraphPass:" + retiredPass->name;
+        VL::ResourceRetireQueue::GetInstance().RetireShared(
+            debugName,
+            0,
+            GetGraphResourceLastUsedEpoch(),
+            std::move(retiredPass));
+        return;
+    }
+
+    DestroyVkFrameBuffers(renderpass.framebuffers, rendererBackend);
+    rendererBackend.DestroyDescriptorSetLayout(renderpass.descriptorSetLayout);
+    rendererBackend.DestroyDescriptorSetLayout(renderpass.emptyDescriptorSetLayout);
+    rendererBackend.DestroyDescriptorPool(renderpass.descriptorPool);
+    DestroyVkRenderPass(renderpass.renderPass, rendererBackend);
+    renderpass.descriptorSets.clear();
+    renderpass.writeDescriptorSets.clear();
 }
 
-vk::RenderPass RenderGraph::CreateVkRenderPass(Renderpass& renderpass, bool bUseMsaa)
+vk::RenderPass RenderGraph::CreateVkRenderPass(
+    Renderpass& renderpass,
+    VL::RendererBackendVulkan& rendererBackend,
+    bool bUseMsaa)
 {
-    VulkanManager& vulkanManager = VulkanManager::GetInstance();
-    vk::Device& device = vulkanManager.GetDevice();
-    vk::SurfaceFormatKHR& surfaceFormat = vulkanManager.GetSurfaceFormat();
     vk::SampleCountFlagBits sampleCount = bUseMsaa ? CommonFunction::GetMsaaSampleCount() : vk::SampleCountFlagBits::e1;
     auto& outputResources = renderpass.outputResources;
 
@@ -634,7 +807,7 @@ vk::RenderPass RenderGraph::CreateVkRenderPass(Renderpass& renderpass, bool bUse
         vk::Format format = vk::Format::eUndefined;
         if (resourceName == "swapChain") 
         {
-            format = surfaceFormat.format;
+            format = rendererBackend.GetSwapchainImageFormat();
         }
         else{
             format = resourcesMsaa.at(resourceName)[0].format;
@@ -678,7 +851,9 @@ vk::RenderPass RenderGraph::CreateVkRenderPass(Renderpass& renderpass, bool bUse
             if (isDepthResource(resourceName)) continue;
 
             vk::AttachmentDescription2 resolveAttachmentDescription;
-            vk::Format format = (resourceName == "swapChain") ? surfaceFormat.format : resourcesMsaa.at(resourceName)[0].format;
+            vk::Format format = (resourceName == "swapChain")
+                ? rendererBackend.GetSwapchainImageFormat()
+                : resourcesMsaa.at(resourceName)[0].format;
             
             resolveAttachmentDescription
                 .setFormat(format)
@@ -811,26 +986,24 @@ vk::RenderPass RenderGraph::CreateVkRenderPass(Renderpass& renderpass, bool bUse
         .setSubpasses(subpassDescription)
         .setDependencies(subpassDependency);
 
-    vk::RenderPass renderPass = device.createRenderPass2(renderPassCreateInfo);
-    assert(renderPass);
-
-    return renderPass;
+    return rendererBackend.CreateRenderPass(renderPassCreateInfo, renderpass.name);
 }
 
-void RenderGraph::DestroyVkRenderPass(vk::RenderPass renderPass)
+void RenderGraph::DestroyVkRenderPass(
+    vk::RenderPass& renderPass,
+    VL::RendererBackendVulkan& rendererBackend)
 {
-    VulkanManager& vulkanManager = VulkanManager::GetInstance();
-    vk::Device& device = vulkanManager.GetDevice();
-
-    device.destroyRenderPass(renderPass);
-    std::cout << "Destroy VkRenderPass" << std::endl;
+    rendererBackend.DestroyRenderPass(renderPass);
 }
 
-std::vector<vk::Framebuffer> RenderGraph::CreateVkFrameBuffers(Renderpass renderPass, std::vector<std::string>& inputResources, std::vector<std::string>& outputResources, bool bUseMsaa)
+std::vector<vk::Framebuffer> RenderGraph::CreateVkFrameBuffers(
+    Renderpass renderPass,
+    std::vector<std::string>& inputResources,
+    std::vector<std::string>& outputResources,
+    VL::RendererBackendVulkan& rendererBackend,
+    bool bUseMsaa)
 {
-    VulkanManager& vulkanManager = VulkanManager::GetInstance();
-    vk::Device& device = vulkanManager.GetDevice();
-    uint32_t swapChainImageCount = vulkanManager.GetSwapChainImageCount();
+    uint32_t swapChainImageCount = rendererBackend.GetSwapchainImageCount();
     
     // 总览：attachments 顺序需与 RenderPass 保持一致
     // 1) (可选) MSAA 颜色视图
@@ -878,7 +1051,7 @@ std::vector<vk::Framebuffer> RenderGraph::CreateVkFrameBuffers(Renderpass render
             
             if (outputResource == "swapChain")
             {
-                attachments.push_back(vulkanManager.GetSwapChainImageViews()[i]);
+                attachments.push_back(rendererBackend.GetSwapchainImageViews()[i]);
             }
             else{
                 attachments.push_back(resourcesResolve[outputResource][i].imageView);
@@ -916,23 +1089,20 @@ std::vector<vk::Framebuffer> RenderGraph::CreateVkFrameBuffers(Renderpass render
             .setHeight(renderPass.height)
             .setLayers(1);
         
-        framebuffers[i] = device.createFramebuffer(framebufferCreateInfo);
-        assert(framebuffers[i]);
-        VulkanDebug::SetObjectName(device, framebuffers[i], vk::ObjectType::eFramebuffer, "Framebuffer: " + renderPass.name + " (SwapchainIndex " + std::to_string(i) + ")");
+        framebuffers[i] = rendererBackend.CreateFramebuffer(
+            framebufferCreateInfo,
+            "Framebuffer: " + renderPass.name +
+                " (SwapchainIndex " + std::to_string(i) + ")");
     }
     
     return framebuffers;
 }
 
-void RenderGraph::DestroyVkFrameBuffers(std::vector<vk::Framebuffer>& framebuffers)
+void RenderGraph::DestroyVkFrameBuffers(
+    std::vector<vk::Framebuffer>& framebuffers,
+    VL::RendererBackendVulkan& rendererBackend)
 {
-    VulkanManager& vulkanManager = VulkanManager::GetInstance();
-    vk::Device& device = vulkanManager.GetDevice();
-    for (uint32_t i = 0; i < framebuffers.size(); i++)
-    {
-        device.destroyFramebuffer(framebuffers[i]);
-    }
-    std::cout << "Destroy VkFrameBuffers" << std::endl;
+    rendererBackend.DestroyFramebuffers(framebuffers);
 }
 
 vk::Format RenderGraph::GetFormat(const std::string& formatStr)
@@ -988,26 +1158,6 @@ vk::ImageUsageFlags RenderGraph::GetImageUsage(const std::vector<std::string>& u
     return imageUsage;
 }
 
-std::vector<std::string> RenderGraph::GetRenderpassInputResources(const nlohmann::json& inputNode)
-{
-    std::vector<std::string> inputResources;
-    for(const auto& input : inputNode)
-    {
-        inputResources.push_back(input["resource"]);
-    }
-    return inputResources;
-}
-
-std::vector<std::string> RenderGraph::GetRenderpassOutputResources(const nlohmann::json& outputNode)
-{
-    std::vector<std::string> outputResources;
-    for(const auto& output : outputNode)
-    {
-        outputResources.push_back(output["resource"]);
-    }
-    return outputResources;
-}
-
 vk::AttachmentLoadOp RenderGraph::GetAttachmentLoadOp(const std::string& loadOpStr)
 {
     if (loadOpStr == "load")
@@ -1030,7 +1180,9 @@ vk::AttachmentStoreOp RenderGraph::GetAttachmentStoreOp(const std::string& store
     return vk::AttachmentStoreOp::eStore;
 }
 
-std::vector<vk::ClearValue> RenderGraph::GetClearValues(std::vector<std::string>& outputResources, bool bUseMsaa)
+std::vector<vk::ClearValue> RenderGraph::GetClearValues(
+    const std::vector<std::string>& outputResources,
+    bool bUseMsaa)
 {
     std::vector<vk::ClearValue> clearValues;
     vk::ClearValue clearColor;

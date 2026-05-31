@@ -2,10 +2,12 @@ file(GLOB_RECURSE sources CONFIGURE_DEPENDS "*.h" "*.cpp")
 
 add_executable(main ${sources})
 
+target_include_directories(main PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
 # Enable Profiling Macros
 target_compile_definitions(main PRIVATE TRACY_ENABLE NVTX_ENABLE)
 
-target_link_libraries(main 
+target_link_libraries(main
 PRIVATE
     Vulkan::Vulkan
     Vulkan::shaderc_combined

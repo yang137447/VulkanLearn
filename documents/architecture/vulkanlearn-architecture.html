@@ -1,0 +1,2505 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>VulkanLearn 正式架构 V1</title>
+    <style>
+        :root {
+            --bg: #0f141c;
+            --panel: #171f2b;
+            --panel-2: #1f2a3a;
+            --line: #3a4f6a;
+            --text: #edf4ff;
+            --muted: #a8b8d1;
+            --blue: #83bcff;
+            --green: #79d7a4;
+            --amber: #efc777;
+            --rose: #f19ea4;
+            --violet: #c2adff;
+            --code: #0d1219;
+        }
+
+        * { box-sizing: border-box; }
+        html { scroll-behavior: smooth; }
+
+        body {
+            margin: 0;
+            font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+            color: var(--text);
+            line-height: 1.65;
+            background:
+                radial-gradient(1200px 700px at 100% -10%, #1f3450 0%, transparent 58%),
+                radial-gradient(900px 520px at -18% 120%, #1b3d35 0%, transparent 52%),
+                var(--bg);
+        }
+
+        .layout {
+            display: grid;
+            grid-template-columns: 300px minmax(0, 1fr);
+            min-height: 100vh;
+        }
+
+        aside {
+            position: sticky;
+            top: 0;
+            height: 100vh;
+            overflow: auto;
+            border-right: 1px solid var(--line);
+            background: linear-gradient(180deg, #121a27, #0f1723);
+            padding: 24px 18px;
+        }
+
+        .brand {
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.03);
+            padding: 12px;
+            margin-bottom: 18px;
+        }
+
+        .brand h1 {
+            margin: 0;
+            font-size: 18px;
+            line-height: 1.35;
+        }
+
+        .brand p {
+            margin: 8px 0 0;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        nav { display: grid; gap: 6px; }
+
+        nav a {
+            display: block;
+            padding: 8px 10px;
+            border-radius: 8px;
+            text-decoration: none;
+            color: var(--muted);
+            font-size: 14px;
+        }
+
+        nav a:hover {
+            color: var(--text);
+            background: var(--panel-2);
+        }
+
+        main {
+            width: min(1300px, 100%);
+            padding: 34px clamp(18px, 4vw, 62px) 80px;
+        }
+
+        section {
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0.015));
+            padding: 20px;
+            margin-bottom: 28px;
+            overflow-x: auto;
+        }
+
+        h2 {
+            margin: 0 0 12px;
+            font-size: clamp(22px, 3vw, 30px);
+        }
+
+        h3 {
+            margin: 12px 0 8px;
+            color: var(--blue);
+            font-size: 18px;
+        }
+
+        p, li { color: var(--text); }
+        .muted { color: var(--muted); }
+        .ok { color: var(--green); font-weight: 600; }
+        .warn { color: var(--amber); font-weight: 600; }
+        .risk { color: var(--rose); font-weight: 600; }
+
+        .summary {
+            border-left: 4px solid var(--blue);
+            background: rgba(131, 188, 255, 0.08);
+            padding: 10px 12px;
+            border-radius: 8px;
+            color: var(--text);
+        }
+
+        .rule {
+            border-left: 4px solid var(--green);
+            background: rgba(121, 215, 164, 0.08);
+            padding: 10px 12px;
+            border-radius: 8px;
+        }
+
+        .dense-list {
+            margin: 8px 0 0;
+            padding-left: 20px;
+        }
+
+        .decision {
+            display: grid;
+            gap: 6px;
+        }
+
+        .decision p {
+            margin: 0;
+        }
+
+        .matrix td:first-child {
+            color: var(--green);
+            font-weight: 600;
+            white-space: nowrap;
+        }
+
+        .nowrap { white-space: nowrap; }
+
+        .chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 10px;
+        }
+
+        .chip {
+            border: 1px solid var(--line);
+            border-radius: 999px;
+            padding: 4px 10px;
+            font-size: 12px;
+            color: var(--muted);
+            background: rgba(255, 255, 255, 0.02);
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 12px;
+        }
+
+        .card {
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            background: var(--panel);
+            padding: 14px;
+        }
+
+        .card strong { color: var(--green); }
+
+        .diagram-wrap {
+            overflow: auto;
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            background: #10192a;
+            padding: 10px;
+        }
+
+        .legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-top: 10px;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .legend i {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border-radius: 3px;
+            margin-right: 6px;
+            vertical-align: -2px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+
+        th, td {
+            border: 1px solid var(--line);
+            padding: 10px;
+            vertical-align: top;
+        }
+
+        th {
+            background: #1b293e;
+            color: #d8e6ff;
+            text-align: left;
+        }
+
+        code, pre {
+            font-family: "Cascadia Code", Consolas, monospace;
+        }
+
+        code {
+            background: #0d1522;
+            border: 1px solid #40597b;
+            border-radius: 5px;
+            padding: 0.08em 0.3em;
+            color: #d4e7ff;
+        }
+
+        pre {
+            margin: 10px 0 0;
+            padding: 12px;
+            overflow: auto;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: var(--code);
+            color: #dbe9ff;
+        }
+
+        @media (max-width: 1100px) {
+            .layout { grid-template-columns: 1fr; }
+            aside {
+                position: static;
+                height: auto;
+                border-right: 0;
+                border-bottom: 1px solid var(--line);
+            }
+        }
+    </style>
+</head>
+<body>
+<div class="layout">
+    <aside>
+        <div class="brand">
+            <h1>VulkanLearn 正式架构 V1</h1>
+            <p>从架构路线稿整理为正式设计：单 World + 单 GT + 可选 RT + 明确模块边界</p>
+        </div>
+        <nav>
+            <a href="#constraints">1. 已敲定约束</a>
+            <a href="#scope">2. V1 范围与非目标</a>
+            <a href="#component">3. 组件与接口总图</a>
+            <a href="#system-map">4. 非 World 系统总览</a>
+            <a href="#patterns">5. 设计模式与使用边界</a>
+            <a href="#engine-platform">6. Platform / Engine / Input</a>
+            <a href="#asset-material">7. Asset / Material / Shader</a>
+            <a href="#renderer-rhi">8. Renderer / RHI / FrameGraph</a>
+            <a href="#tooling">9. Config / Debug / Test</a>
+            <a href="#ownership">10. 模块职责与所有权</a>
+            <a href="#data">11. 核心数据模型</a>
+            <a href="#snapshot">12. WorldSnapshot 生成与消费</a>
+            <a href="#thread">13. 线程与数据边界图</a>
+            <a href="#state">14. World 切换状态机</a>
+            <a href="#lifecycle">15. 生命周期时序</a>
+            <a href="#resources">16. 资源与 GPU 生命周期</a>
+            <a href="#contracts">17. 核心接口契约</a>
+            <a href="#migration">18. 代码迁移蓝图</a>
+            <a href="#adapter">19. 一次性 Cutover 清单</a>
+            <a href="#acceptance">20. 验收矩阵</a>
+            <a href="#milestone">21. 里程碑与风险</a>
+        </nav>
+    </aside>
+
+    <main>
+        <section id="constraints">
+            <h2>1) 已敲定约束（V1）</h2>
+            <div class="chips">
+                <span class="chip">单 World</span>
+                <span class="chip">单 Game Thread 拥有写权限</span>
+                <span class="chip">可选 Render Thread（只读快照）</span>
+                <span class="chip">WorldSubsystem 生命周期跟随 World</span>
+                <span class="chip">无过渡期，直接全量重构切换</span>
+            </div>
+            <p class="muted">这 5 条是后续所有设计讨论的硬边界，新增方案不能违反它们。</p>
+            <p class="summary">本文档描述 VulkanLearn V1 的正式架构、当前落地进度和后续切换门槛。它的作用是把 <code>main.cpp</code>、<code>engineLoop.*</code>、<code>rendererResourceLoadCoordinator.*</code>、<code>renderSystem.*</code>、<code>renderGraph.*</code> 等现有职责重新划入稳定边界。</p>
+            <p class="rule">代码命名约定：<code>UE-Lite</code> 只作为前期架构路线名和文档背景，不进入 C++ namespace。引擎侧新增代码统一放入 <code>VL</code> namespace，表示 Vulkan Learn / Vulkan Lite。</p>
+        </section>
+
+        <section id="scope">
+            <h2>2) V1 范围与非目标</h2>
+            <div class="grid">
+                <div class="card">
+                    <strong>V1 必须完成</strong>
+                    <ul class="dense-list">
+                        <li>建立 <code>EngineLoop</code>，让 <code>main.cpp</code> 只保留平台启动、窗口创建和顶层调度。</li>
+                        <li>把场景加载拆成 <code>WorldLoader</code>、<code>WorldBuilder</code>、<code>WorldTransitionCoordinator</code> 三段。</li>
+                        <li>让 <code>World</code> 成为 Gameplay 数据唯一归属，渲染层只读 <code>WorldSnapshot</code>。</li>
+                        <li>分离 <code>RendererFrontend</code>、<code>FrameGraphCompiler</code>、<code>RendererBackendVulkan</code> 和 <code>RHIDeviceVulkan</code>。</li>
+                        <li>把 Platform、Input、Console、Asset、Material、Shader、Config、Diagnostics 放进明确 subsystem 边界。</li>
+                        <li>明确 global / world-local / frame-local 资源 owner 与延迟释放规则。</li>
+                    </ul>
+                </div>
+                <div class="card">
+                    <strong>V1 明确不做</strong>
+                    <ul class="dense-list">
+                        <li>不引入 UObject、反射系统、GC、编辑器、蓝图、Cook/DDC 全套内容管线。</li>
+                        <li>不把 Actor/Component 做成复杂 ECS；保留学习项目可读性。</li>
+                        <li>不并行维护旧 scene/resource 执行路径和新 World 执行路径。</li>
+                        <li>不在 shader 或每帧路径加入冗余防御逻辑；数据正确性由 JSON 校验和构建期保证。</li>
+                        <li>不借这次重构顺手改渲染算法、材质格式或资源目录命名。</li>
+                    </ul>
+                </div>
+            </div>
+            <p class="rule">设计原则：先把生命周期、所有权和数据边界固定，再在稳定边界内继续扩展渲染特性。</p>
+        </section>
+
+        <section id="component">
+            <h2>3) VulkanLearn V1 组件与接口总图（详细）</h2>
+            <div class="diagram-wrap">
+                <svg width="1680" height="1420" viewBox="0 0 1680 1420" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Deep nested VulkanLearn V1 component architecture">
+                    <defs>
+                        <marker id="arrA" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+                            <path d="M0,0 L10,5 L0,10 z" fill="#9ec8ff"/>
+                        </marker>
+                        <marker id="arrAGreen" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+                            <path d="M0,0 L10,5 L0,10 z" fill="#95ddb9"/>
+                        </marker>
+                        <marker id="arrAAmber" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+                            <path d="M0,0 L10,5 L0,10 z" fill="#efc777"/>
+                        </marker>
+                        <style>
+                            .box { rx: 11; ry: 11; stroke-width: 1.2; }
+                            .outer { rx: 14; ry: 14; stroke-width: 1.5; }
+                            .ttl { fill: #edf4ff; font: 700 16px 'Segoe UI'; }
+                            .subttl { fill: #edf4ff; font: 650 13px 'Segoe UI'; }
+                            .tx { fill: #bfd1ea; font: 12px 'Segoe UI'; }
+                            .tiny { fill: #a8b8d1; font: 11px 'Segoe UI'; }
+                            .line { stroke: #9ec8ff; stroke-width: 1.35; fill: none; marker-end: url(#arrA); }
+                            .greenline { stroke: #95ddb9; stroke-width: 1.35; fill: none; marker-end: url(#arrAGreen); }
+                            .amberline { stroke: #efc777; stroke-width: 1.35; fill: none; marker-end: url(#arrAAmber); }
+                            .dash { stroke-dasharray: 6 5; }
+                            .ban { stroke: #f19ea4; stroke-width: 1.2; fill: none; stroke-dasharray: 6 5; }
+                            .bantx { fill: #f19ea4; font: 600 11px 'Segoe UI'; }
+                        </style>
+                    </defs>
+
+                    <rect class="outer" x="20" y="20" width="1640" height="142" fill="#1a2740" stroke="#3a5b87"/>
+                    <text class="ttl" x="42" y="50">1. Platform Layer（进程、窗口、OS 事件）</text>
+                    <rect class="box" x="42" y="74" width="250" height="58" fill="#223553" stroke="#4e719a"/>
+                    <text class="subttl" x="58" y="98">PlatformApplication</text>
+                    <text class="tiny" x="58" y="116">SDL init / event pump / shutdown</text>
+                    <rect class="box" x="312" y="74" width="230" height="58" fill="#223553" stroke="#4e719a"/>
+                    <text class="subttl" x="328" y="98">PlatformWindow</text>
+                    <text class="tiny" x="328" y="116">SDL_Window / resize / mouse capture</text>
+                    <rect class="box" x="562" y="74" width="230" height="58" fill="#223553" stroke="#4e719a"/>
+                    <text class="subttl" x="578" y="98">InputAdapter</text>
+                    <text class="tiny" x="578" y="116">keyboard / mouse -> raw events</text>
+                    <rect class="box" x="812" y="74" width="230" height="58" fill="#223553" stroke="#4e719a"/>
+                    <text class="subttl" x="828" y="98">FileSystem</text>
+                    <text class="tiny" x="828" y="116">project root / resourcePath / file IO</text>
+                    <rect class="box" x="1062" y="74" width="230" height="58" fill="#223553" stroke="#4e719a"/>
+                    <text class="subttl" x="1078" y="98">RuntimeClock</text>
+                    <text class="tiny" x="1078" y="116">deltaTime / frame index</text>
+                    <rect class="box" x="1312" y="74" width="320" height="58" fill="#223553" stroke="#4e719a"/>
+                    <text class="subttl" x="1328" y="98">VulkanExtensionProvider</text>
+                    <text class="tiny" x="1328" y="116">SDL required extensions / surface capability seed</text>
+
+                    <rect class="outer" x="20" y="182" width="1640" height="164" fill="#21314b" stroke="#4e719a"/>
+                    <text class="ttl" x="42" y="212">2. Engine Host Layer（跨 World 生命周期）</text>
+                    <rect class="box" x="42" y="236" width="270" height="82" fill="#293d5a" stroke="#6588b1"/>
+                    <text class="subttl" x="58" y="260">EngineLoop</text>
+                    <text class="tiny" x="58" y="278">Init / Tick / Shutdown</text>
+                    <text class="tiny" x="58" y="296">主循环唯一调度入口</text>
+                    <rect class="box" x="332" y="236" width="250" height="82" fill="#293d5a" stroke="#6588b1"/>
+                    <text class="subttl" x="348" y="260">GameInstance</text>
+                    <text class="tiny" x="348" y="278">跨 World 上下文</text>
+                    <text class="tiny" x="348" y="296">持有 subsystem + config</text>
+                    <rect class="box" x="602" y="236" width="310" height="82" fill="#293d5a" stroke="#6588b1"/>
+                    <text class="subttl" x="618" y="260">SubsystemCollection</text>
+                    <text class="tiny" x="618" y="278">EngineSubsystem / WorldSubsystem</text>
+                    <text class="tiny" x="618" y="296">Init order + dependency order</text>
+                    <rect class="box" x="932" y="236" width="270" height="82" fill="#293d5a" stroke="#6588b1"/>
+                    <text class="subttl" x="948" y="260">CommandBus</text>
+                    <text class="tiny" x="948" y="278">console/UI/test commands</text>
+                    <text class="tiny" x="948" y="296">只传 intent，不传裸指针</text>
+                    <rect class="box" x="1222" y="236" width="410" height="82" fill="#293d5a" stroke="#6588b1"/>
+                    <text class="subttl" x="1238" y="260">Engine Subsystems</text>
+                    <text class="tiny" x="1238" y="278">RuntimeConfig / Console / Diagnostics / Input</text>
+                    <text class="tiny" x="1238" y="296">Profiling markers / test hooks / debug options</text>
+
+                    <rect class="outer" x="20" y="366" width="1640" height="176" fill="#27384e" stroke="#657f9f"/>
+                    <text class="ttl" x="42" y="396">3. Runtime Orchestration Layer（事务、校验、事件）</text>
+                    <rect class="box" x="42" y="420" width="310" height="92" fill="#314966" stroke="#7894b8"/>
+                    <text class="subttl" x="58" y="444">WorldTransitionCoordinator</text>
+                    <text class="tiny" x="58" y="462">State Machine: Idle / Validate / Build</text>
+                    <text class="tiny" x="58" y="480">Swap / Retire / Failed</text>
+                    <rect class="box" x="372" y="420" width="230" height="92" fill="#314966" stroke="#7894b8"/>
+                    <text class="subttl" x="388" y="444">WorldManager</text>
+                    <text class="tiny" x="388" y="462">active / staging / retiring</text>
+                    <text class="tiny" x="388" y="480">generation handles</text>
+                    <rect class="box" x="622" y="420" width="230" height="92" fill="#314966" stroke="#7894b8"/>
+                    <text class="subttl" x="638" y="444">WorldLoader</text>
+                    <text class="tiny" x="638" y="462">scene JSON -> WorldBuildPlan</text>
+                    <text class="tiny" x="638" y="480">schema / dependency validation</text>
+                    <rect class="box" x="872" y="420" width="230" height="92" fill="#314966" stroke="#7894b8"/>
+                    <text class="subttl" x="888" y="444">WorldBuilder</text>
+                    <text class="tiny" x="888" y="462">Build stagingWorld</text>
+                    <text class="tiny" x="888" y="480">Actor / component / subsystem</text>
+                    <rect class="box" x="1122" y="420" width="230" height="92" fill="#314966" stroke="#7894b8"/>
+                    <text class="subttl" x="1138" y="444">RuntimeValidation</text>
+                    <text class="tiny" x="1138" y="462">scene / material / graph checks</text>
+                    <text class="tiny" x="1138" y="480">structured errors</text>
+                    <rect class="box" x="1372" y="420" width="260" height="92" fill="#314966" stroke="#7894b8"/>
+                    <text class="subttl" x="1388" y="444">Lifecycle Event Bus</text>
+                    <text class="tiny" x="1388" y="462">OnWorldChanged / OnResize</text>
+                    <text class="tiny" x="1388" y="480">OnDebugOptionChanged</text>
+
+                    <rect class="outer" x="20" y="562" width="520" height="430" fill="#1f3a35" stroke="#508f7f"/>
+                    <text class="ttl" x="42" y="594">4A. World Domain（GT 写，Gameplay 数据）</text>
+                    <rect class="box" x="42" y="618" width="220" height="82" fill="#284b45" stroke="#69aa99"/>
+                    <text class="subttl" x="58" y="642">World</text>
+                    <text class="tiny" x="58" y="660">root runtime object</text>
+                    <text class="tiny" x="58" y="678">owns levels + subsystem host</text>
+                    <rect class="box" x="282" y="618" width="230" height="82" fill="#284b45" stroke="#69aa99"/>
+                    <text class="subttl" x="298" y="642">WorldSubsystemHost</text>
+                    <text class="tiny" x="298" y="660">Camera / Light / Environment</text>
+                    <text class="tiny" x="298" y="678">WorldRenderSubsystem metadata</text>
+                    <rect class="box" x="42" y="722" width="470" height="142" fill="#213f3a" stroke="#69aa99"/>
+                    <text class="subttl" x="58" y="748">Level / Actor / Component Nested Runtime</text>
+                    <rect class="box" x="64" y="770" width="128" height="58" fill="#2b554c" stroke="#7dc0ae"/>
+                    <text class="tiny" x="78" y="793">Level</text>
+                    <text class="tiny" x="78" y="811">object list</text>
+                    <rect class="box" x="212" y="770" width="128" height="58" fill="#2b554c" stroke="#7dc0ae"/>
+                    <text class="tiny" x="226" y="793">Actor</text>
+                    <text class="tiny" x="226" y="811">transform/name</text>
+                    <rect class="box" x="360" y="770" width="128" height="58" fill="#2b554c" stroke="#7dc0ae"/>
+                    <text class="tiny" x="374" y="793">Component</text>
+                    <text class="tiny" x="374" y="811">mesh/light/camera</text>
+                    <rect class="box" x="42" y="884" width="220" height="82" fill="#284b45" stroke="#69aa99"/>
+                    <text class="subttl" x="58" y="908">WorldSnapshotBuilder</text>
+                    <text class="tiny" x="58" y="926">freezes render-facing state</text>
+                    <text class="tiny" x="58" y="944">no mutable gameplay refs</text>
+                    <rect class="box" x="282" y="884" width="230" height="82" fill="#284b45" stroke="#69aa99"/>
+                    <text class="subttl" x="298" y="908">World Handles</text>
+                    <text class="tiny" x="298" y="926">activeWorld / stagingWorld</text>
+                    <text class="tiny" x="298" y="944">retiringWorlds + generation</text>
+
+                    <rect class="outer" x="580" y="562" width="520" height="430" fill="#3a3623" stroke="#9b895b"/>
+                    <text class="ttl" x="602" y="594">4B. Asset & Resource Domain（描述、缓存、释放）</text>
+                    <rect class="box" x="602" y="618" width="220" height="82" fill="#4a432a" stroke="#b59d63"/>
+                    <text class="subttl" x="618" y="642">AssetManager</text>
+                    <text class="tiny" x="618" y="660">JSON / mesh / terrain / texture</text>
+                    <text class="tiny" x="618" y="678">CPU data + dependency list</text>
+                    <rect class="box" x="842" y="618" width="230" height="82" fill="#4a432a" stroke="#b59d63"/>
+                    <text class="subttl" x="858" y="642">AssetRegistry</text>
+                    <text class="tiny" x="858" y="660">stable keys / version</text>
+                    <text class="tiny" x="858" y="678">path normalization</text>
+                    <rect class="box" x="602" y="722" width="220" height="82" fill="#4a432a" stroke="#b59d63"/>
+                    <text class="subttl" x="618" y="746">ShaderLibrary</text>
+                    <text class="tiny" x="618" y="764">compile SPIR-V / reflection</text>
+                    <text class="tiny" x="618" y="782">variant key / binding layout</text>
+                    <rect class="box" x="842" y="722" width="230" height="82" fill="#4a432a" stroke="#b59d63"/>
+                    <text class="subttl" x="858" y="746">MaterialLibrary</text>
+                    <text class="tiny" x="858" y="764">M_ / MI_ validation</text>
+                    <text class="tiny" x="858" y="782">parameter + texture bindings</text>
+                    <rect class="box" x="602" y="826" width="470" height="74" fill="#413d29" stroke="#b59d63"/>
+                    <text class="subttl" x="618" y="850">Resource Caches</text>
+                    <text class="tiny" x="618" y="868">GlobalResourceCache: BRDF LUT / default textures / shared pipelines</text>
+                    <text class="tiny" x="618" y="886">WorldResourceCache: env cubemap / world-local material data</text>
+                    <rect class="box" x="602" y="920" width="220" height="50" fill="#4a432a" stroke="#b59d63"/>
+                    <text class="subttl" x="618" y="948">TextureUploadService</text>
+                    <rect class="box" x="842" y="920" width="230" height="50" fill="#4a432a" stroke="#b59d63"/>
+                    <text class="subttl" x="858" y="948">ResourceRetireQueue</text>
+
+                    <rect class="outer" x="1140" y="562" width="520" height="430" fill="#2f2741" stroke="#78639f"/>
+                    <text class="ttl" x="1162" y="594">4C. Renderer Domain（RT 可选，仅读快照）</text>
+                    <rect class="box" x="1162" y="618" width="220" height="82" fill="#3d3355" stroke="#9880c2"/>
+                    <text class="subttl" x="1178" y="642">RendererFrontend</text>
+                    <text class="tiny" x="1178" y="660">WorldSnapshot -> RenderScene</text>
+                    <text class="tiny" x="1178" y="678">draw packets / light data</text>
+                    <rect class="box" x="1402" y="618" width="230" height="82" fill="#3d3355" stroke="#9880c2"/>
+                    <text class="subttl" x="1418" y="642">RenderScene</text>
+                    <text class="tiny" x="1418" y="660">frozen renderer DTO</text>
+                    <text class="tiny" x="1418" y="678">no Actor/Component refs</text>
+                    <rect class="box" x="1162" y="722" width="220" height="82" fill="#3d3355" stroke="#9880c2"/>
+                    <text class="subttl" x="1178" y="746">FrameGraphCompiler</text>
+                    <text class="tiny" x="1178" y="764">passes / resources / barriers</text>
+                    <text class="tiny" x="1178" y="782">descriptor update plan</text>
+                    <rect class="box" x="1402" y="722" width="230" height="82" fill="#3d3355" stroke="#9880c2"/>
+                    <text class="subttl" x="1418" y="746">PassRuntime</text>
+                    <text class="tiny" x="1418" y="764">shadow / geometry / sky</text>
+                    <text class="tiny" x="1418" y="782">bloom / tone mapping</text>
+                    <rect class="box" x="1162" y="826" width="220" height="82" fill="#3d3355" stroke="#9880c2"/>
+                    <text class="subttl" x="1178" y="850">RendererBackendVulkan</text>
+                    <text class="tiny" x="1178" y="868">acquire / record / submit</text>
+                    <text class="tiny" x="1178" y="886">present / completed epoch</text>
+                    <rect class="box" x="1402" y="826" width="230" height="82" fill="#3d3355" stroke="#9880c2"/>
+                    <text class="subttl" x="1418" y="850">Frame Resources</text>
+                    <text class="tiny" x="1418" y="868">UBO / descriptor pools</text>
+                    <text class="tiny" x="1418" y="886">per swapchain image state</text>
+                    <rect class="box" x="1162" y="928" width="220" height="42" fill="#3d3355" stroke="#9880c2"/>
+                    <text class="subttl" x="1178" y="954">RHIDeviceVulkan</text>
+                    <rect class="box" x="1402" y="928" width="230" height="42" fill="#3d3355" stroke="#9880c2"/>
+                    <text class="subttl" x="1418" y="954">Swapchain / Queue / Surface</text>
+
+                    <rect class="outer" x="20" y="1012" width="1640" height="250" fill="#1b2333" stroke="#4a648b"/>
+                    <text class="ttl" x="42" y="1044">5. Execution, Thread Boundary, Diagnostics & Cutover</text>
+                    <rect class="box" x="42" y="1070" width="260" height="72" fill="#24334a" stroke="#607fa7"/>
+                    <text class="subttl" x="58" y="1094">FrameScheduler</text>
+                    <text class="tiny" x="58" y="1112">GT tick order / frame phases</text>
+                    <rect class="box" x="322" y="1070" width="260" height="72" fill="#24334a" stroke="#607fa7"/>
+                    <text class="subttl" x="338" y="1094">SnapshotQueue</text>
+                    <text class="tiny" x="338" y="1112">GT -> RT handoff</text>
+                    <rect class="box" x="602" y="1070" width="260" height="72" fill="#24334a" stroke="#607fa7"/>
+                    <text class="subttl" x="618" y="1094">RenderCommandQueue</text>
+                    <text class="tiny" x="618" y="1112">optional RT command handoff</text>
+                    <rect class="box" x="882" y="1070" width="260" height="72" fill="#24334a" stroke="#607fa7"/>
+                    <text class="subttl" x="898" y="1094">DiagnosticsSubsystem</text>
+                    <text class="tiny" x="898" y="1112">Tracy / NVTX / validation log</text>
+                    <rect class="box" x="1162" y="1070" width="220" height="72" fill="#24334a" stroke="#607fa7"/>
+                    <text class="subttl" x="1178" y="1094">RuntimeTestHooks</text>
+                    <text class="tiny" x="1178" y="1112">smoke commands / reload loops</text>
+                    <rect class="box" x="1402" y="1070" width="230" height="72" fill="#24334a" stroke="#607fa7"/>
+                    <text class="subttl" x="1418" y="1094">GPU / Driver</text>
+                    <text class="tiny" x="1418" y="1112">queues / fences / presentation</text>
+                    <rect class="box" x="42" y="1168" width="1590" height="62" fill="#273145" stroke="#607fa7"/>
+                    <text class="subttl" x="58" y="1192">Hard Cutover Gate</text>
+                    <text class="tiny" x="58" y="1210">Freeze old path · full regression · performance baseline · rollback build · no adapter / no dual runtime switch</text>
+
+                    <rect class="outer" x="20" y="1282" width="1640" height="110" fill="#111a28" stroke="#3a4f6a"/>
+                    <text class="ttl" x="42" y="1314">Legend / Dependency Rules</text>
+                    <text class="tx" x="42" y="1340">蓝色箭头：生命周期 / 调度流。绿色箭头：冻结数据流。黄色箭头：资源请求或 GPU 完成事件。</text>
+                    <text class="tx" x="42" y="1364">禁止方向：Renderer 不反向读取 mutable World；Asset 不创建 Vulkan runtime 对象；Console/Test 不直接穿透系统内部状态。</text>
+
+                    <path class="line" d="M177 162 L177 236"/>
+                    <path class="line" d="M457 318 L457 420"/>
+                    <path class="line" d="M1067 318 L1067 420"/>
+                    <path class="line" d="M197 512 L152 618"/>
+                    <path class="line" d="M487 512 L397 618"/>
+                    <path class="line" d="M737 512 L712 618"/>
+                    <path class="line" d="M987 512 L712 618"/>
+                    <path class="line" d="M987 512 L152 618"/>
+                    <path class="greenline" d="M262 925 L1162 660"/>
+                    <path class="greenline" d="M1382 660 L1402 660"/>
+                    <path class="greenline" d="M1517 700 L1517 722"/>
+                    <path class="greenline" d="M1272 804 L1272 826"/>
+                    <path class="greenline" d="M1272 908 L1272 928"/>
+                    <path class="amberline" d="M1072 642 L1162 642"/>
+                    <path class="amberline" d="M1072 762 L1162 762"/>
+                    <path class="amberline" d="M1272 970 L1272 1070"/>
+                    <path class="amberline" d="M1517 970 L1517 1070"/>
+                    <path class="amberline" d="M1517 1142 L1517 1210 L957 1210 L957 970"/>
+                    <path class="line dash" d="M302 1106 L322 1106"/>
+                    <path class="line dash" d="M582 1106 L602 1106"/>
+                    <path class="ban" d="M1402 706 C1260 1040 730 1060 262 944"/>
+                    <text class="bantx" x="925" y="1030">禁止：Renderer -> mutable World</text>
+                </svg>
+            </div>
+            <div class="legend">
+                <span><i style="background:#1f3a35"></i>World Domain</span>
+                <span><i style="background:#3a3623"></i>Resource Domain</span>
+                <span><i style="background:#2f2741"></i>Renderer Domain</span>
+                <span><i style="background:#27384e"></i>Orchestration</span>
+                <span><i style="background:#1b2333"></i>Hard Cutover</span>
+            </div>
+            <h3>嵌套阅读顺序</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>层级</th>
+                        <th>从外到内看什么</th>
+                        <th>关键边界</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>1. Platform</td>
+                        <td>SDL、窗口、输入原始事件、文件系统、计时器、Vulkan extension seed。</td>
+                        <td>只接触 OS/SDL，不接触 World、Material 或 RenderGraph。</td>
+                    </tr>
+                    <tr>
+                        <td>2. Engine Host</td>
+                        <td>EngineLoop、GameInstance、SubsystemCollection、CommandBus 和跨 World subsystem。</td>
+                        <td>统一生命周期入口，不直接写渲染 descriptor 或 gameplay 对象。</td>
+                    </tr>
+                    <tr>
+                        <td>3. Runtime Orchestration</td>
+                        <td>World 切换事务、校验、构建、事件发布和失败回滚。</td>
+                        <td>任何 scene load/reload 都必须走 Coordinator。</td>
+                    </tr>
+                    <tr>
+                        <td>4A. World Domain</td>
+                        <td>World、Level、Actor、Component、WorldSubsystem、WorldSnapshotBuilder。</td>
+                        <td>GT 唯一写，导出 snapshot 后才允许渲染层消费。</td>
+                    </tr>
+                    <tr>
+                        <td>4B. Asset & Resource</td>
+                        <td>AssetManager、ShaderLibrary、MaterialLibrary、ResourceCache、TextureUpload、RetireQueue。</td>
+                        <td>Asset 输出描述；GPU 对象创建/释放由资源和 RHI 边界处理。</td>
+                    </tr>
+                    <tr>
+                        <td>4C. Renderer</td>
+                        <td>RendererFrontend、RenderScene、FrameGraphCompiler、PassRuntime、Backend、RHI、Swapchain。</td>
+                        <td>只读 snapshot/render DTO，不反向读取 mutable World。</td>
+                    </tr>
+                    <tr>
+                        <td>5. Execution / Cutover</td>
+                        <td>FrameScheduler、SnapshotQueue、RenderCommandQueue、Diagnostics、TestHooks、GPU epoch、Hard Cutover Gate。</td>
+                        <td>线程交接和资源释放都走显式队列，不靠隐式全局状态。</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <section id="system-map">
+            <h2>4) 非 World 系统总览</h2>
+            <p class="summary">World 是架构核心之一，但不是全部。完整 V1 需要同时定义 Platform、Engine Host、Input、Console、Asset、Material、Shader、Renderer、RHI、Config、Debug/Test 的边界。否则 World 拆干净以后，耦合会转移到别的单例里。</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>系统域</th>
+                        <th>V1 目标</th>
+                        <th>核心产物</th>
+                        <th>现有对应</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Platform</td>
+                        <td>收口 SDL、窗口、输入事件、文件系统、计时器和 Vulkan extension 查询。</td>
+                        <td><code>PlatformApplication</code>、<code>PlatformWindow</code>、<code>FileSystem</code>、<code>RuntimeClock</code></td>
+                        <td><code>source/platform/platformApplication.*</code>、<code>source/platform/platformWindow.*</code> 已接管 SDL init/window/extensions/event；<code>source/platform/fileSystem.*</code> 已接管项目根发现、JSON 读取和 runtime path 解析；<code>source/engine/runtimeClock.*</code> 已接管帧 delta。</td>
+                    </tr>
+                    <tr>
+                        <td>Engine Host</td>
+                        <td>统一初始化顺序、帧循环、shutdown、subsystem 生命周期和命令分发。</td>
+                        <td><code>EngineLoop</code>、<code>GameInstance</code>、<code>SubsystemCollection</code></td>
+                        <td><code>source/engine/engineLoop.*</code> 已接管启动后的主循环；<code>source/engine/gameInstance.*</code> 持有跨 World 上下文；<code>source/engine/subsystemCollection.*</code> 以强类型集合持有 RuntimeClock、FpsTool、InputSubsystem、WorldManager。</td>
+                    </tr>
+                    <tr>
+                        <td>Input / Player</td>
+                        <td>把 SDL event、鼠标捕获、Controller、Camera 操作分离，输入只产生 intent。</td>
+                        <td><code>InputSubsystem</code>、<code>PlayerController</code>、<code>InputActionState</code></td>
+                        <td><code>controller.*</code>、SDL event 分支</td>
+                    </tr>
+                    <tr>
+                        <td>Console / Commands</td>
+                        <td>控制台只发命令，不直接抓 RenderSystem 或 renderer resource cache 内部状态。</td>
+                        <td><code>ConsoleSubsystem</code>、<code>CommandBus</code>、<code>RuntimeCommandExecutor</code></td>
+                        <td><code>source/engine/consoleSubsystem.*</code> 拥有 <code>DebugConsole</code>；<code>DebugConsole</code> 只解析输入并投递 <code>RuntimeCommand</code>；<code>RuntimeCommandExecutor</code> 在 EngineLoop 中统一执行命令，渲染参数只调用 <code>RenderSystem</code> 公开控制 API，不直接操作 <code>RenderGraph</code> 或 pass material。</td>
+                    </tr>
+                    <tr>
+                        <td>Asset / Content</td>
+                        <td>统一 JSON、mesh、terrain、texture、material instance 的解析、校验、缓存 key。</td>
+                        <td><code>AssetManager</code>、<code>AssetRegistry</code>、<code>AssetLoadPlan</code></td>
+                        <td><code>rendererResourceLoadCoordinator.*</code>、<code>textureAssetLoader.*</code>、mesh/terrain loaders</td>
+                    </tr>
+                    <tr>
+                        <td>Material / Shader</td>
+                        <td>把 shader 编译、参数 include 生成、反射、材质实例校验、pipeline variant 连接起来。</td>
+                        <td><code>ShaderLibrary</code>、<code>MaterialLibrary</code>、<code>PipelineVariantKey</code></td>
+                        <td><code>shaderCompiler.*</code>、<code>material/*</code>、<code>PipelineFactory</code></td>
+                    </tr>
+                    <tr>
+                        <td>Renderer / RHI</td>
+                        <td>分离渲染数据组织、frame graph 编译、Vulkan 提交和底层设备封装。</td>
+                        <td><code>RendererFrontend</code>、<code>FrameGraphCompiler</code>、<code>RendererBackendVulkan</code>、<code>RHIDeviceVulkan</code></td>
+                        <td><code>renderSystem.*</code>、<code>renderGraph.*</code>、<code>vulkanManager.*</code></td>
+                    </tr>
+                    <tr>
+                        <td>Debug / Test / Profiling</td>
+                        <td>让验证、profile marker、错误报告和回归入口成为架构的一部分。</td>
+                        <td><code>DiagnosticsSubsystem</code>、<code>RenderDebugView</code>、<code>RuntimeTestHooks</code></td>
+                        <td><code>source/engine/diagnosticsSubsystem.*</code>、<code>profiler.*</code>、Tracy/NVTX、debug view、控制台命令</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <section id="patterns">
+            <h2>5) 设计模式与使用边界</h2>
+            <p class="summary">V1 使用设计模式的目标是稳定依赖方向和生命周期，不是给每个类套模式名。优先选择能直接降低耦合、表达事务边界、隐藏 Vulkan 细节的模式；没有明确收益的抽象不进入 V1。</p>
+            <h3>核心模式清单</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>模式</th>
+                        <th>使用位置</th>
+                        <th>解决的问题</th>
+                        <th>使用边界</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Facade</strong></td>
+                        <td><code>EngineLoop</code>、<code>RendererFrontend</code>、<code>RendererBackendVulkan</code>、<code>RHIDeviceVulkan</code></td>
+                        <td>给上层一个稳定入口，隐藏 SDL/Vulkan/pass/descriptor 的细节。</td>
+                        <td>Facade 只收口调用，不拥有不属于自己的数据；不能变成新的大杂烩单例。</td>
+                    </tr>
+                    <tr>
+                        <td><strong>State Machine</strong></td>
+                        <td><code>WorldTransitionCoordinator</code>、swapchain recreate、engine lifecycle</td>
+                        <td>让 Validate、BuildStaging、Swap、Retire、Failed 等阶段可追踪、可回滚。</td>
+                        <td>只用于真实存在状态迁移和失败恢复的流程；普通顺序代码不用硬套状态机。</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Builder</strong></td>
+                        <td><code>WorldBuilder</code>、<code>WorldSnapshotBuilder</code>、pipeline state 构建、render graph compile</td>
+                        <td>把复杂对象构建过程拆成可校验步骤，避免半成品污染 active runtime。</td>
+                        <td>Builder 输出完整对象或失败结果；不能边构建边修改 activeWorld。</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Factory</strong></td>
+                        <td><code>PipelineFactory</code>、Actor/Component 创建、texture/buffer 创建、pass runtime 创建</td>
+                        <td>集中处理创建参数、variant key、Vulkan create info 和兼容性。</td>
+                        <td>Factory 不负责长期持有生命周期；创建后的 owner 必须明确。</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Registry</strong></td>
+                        <td><code>SubsystemCollection</code>、<code>AssetRegistry</code>、shader/material library</td>
+                        <td>提供按类型、名字或 key 查询的运行时目录，替代散落全局变量。</td>
+                        <td>Registry 只做登记和查询，不直接驱动系统行为。</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Command</strong></td>
+                        <td><code>ConsoleSubsystem</code>、<code>CommandBus</code>、debug/test commands</td>
+                        <td>把 UI/控制台输入转成意图对象，避免控制台直接改 World 或 Renderer 内部状态。</td>
+                        <td>Command 必须有参数校验和目标 owner；不能携带裸指针跨帧执行。</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Observer / Event Bus</strong></td>
+                        <td><code>OnWorldChanged</code>、swapchain resize event、debug option changed</td>
+                        <td>让系统响应生命周期事件，而不是互相直接调用深层实现。</td>
+                        <td>事件只传稳定数据或句柄；不传可变 World 指针给渲染层。</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Snapshot / DTO</strong></td>
+                        <td><code>WorldSnapshot</code>、<code>RenderScene</code>、<code>CompiledFrameGraph</code></td>
+                        <td>跨线程和跨层传递冻结数据，切断 Renderer 对 Gameplay 对象的直接依赖。</td>
+                        <td>Snapshot 构建后只读；禁止藏 mutable Actor/Component 引用。</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Flyweight / Cache</strong></td>
+                        <td>mesh section、texture、shader variant、pipeline、global resources</td>
+                        <td>用稳定 key 复用重资源，避免 scene reload 重复创建昂贵对象。</td>
+                        <td>cache key 必须包含影响结果的全部参数；释放仍走 retire epoch。</td>
+                    </tr>
+                    <tr>
+                        <td><strong>RAII</strong></td>
+                        <td>RHI wrapper、GPU buffer/image、descriptor pool、render pass、framebuffer</td>
+                        <td>让 C++ 对象表达 Vulkan 资源 ownership，减少泄漏和重复 destroy。</td>
+                        <td>RAII 析构不能无视 GPU in-flight；需要结合 <code>ResourceRetireQueue</code>。</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Bridge</strong></td>
+                        <td>Renderer frontend/backend 与 RHI Vulkan 后端</td>
+                        <td>让渲染意图和 Vulkan 实现分离，未来保留替换 RHI 或 mock backend 的空间。</td>
+                        <td>V1 只有 Vulkan 实现，不为了“多后端想象”提前制造复杂接口层。</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Strategy</strong></td>
+                        <td>shadow projection strategy、debug view mode、tone mapping preset、resource upload policy</td>
+                        <td>把少数可替换算法变成显式策略，减少 if/else 在渲染主流程中膨胀。</td>
+                        <td>策略数量少时可以先用 enum + named helper；不急着全虚函数化。</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>系统到模式映射</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>系统</th>
+                        <th>主要模式</th>
+                        <th>落地方式</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Engine / Platform</td>
+                        <td>Facade、State Machine、Registry</td>
+                        <td><code>EngineLoop</code> 暴露顶层生命周期；<code>SubsystemCollection</code> 管理跨 World subsystem；Platform 层隐藏 SDL 细节。</td>
+                    </tr>
+                    <tr>
+                        <td>World / Gameplay</td>
+                        <td>State Machine、Builder、Snapshot、Observer</td>
+                        <td>Coordinator 编排切换事务；Builder 构建 stagingWorld；Snapshot 导出冻结渲染数据；OnWorldChanged 通知相关系统。</td>
+                    </tr>
+                    <tr>
+                        <td>Asset / Material / Shader</td>
+                        <td>Registry、Factory、Flyweight、Validator</td>
+                        <td>Asset/Material/Shader library 用 key 查询和复用；Factory 创建 pipeline；Validator 在构建期报告绑定错误。</td>
+                    </tr>
+                    <tr>
+                        <td>Renderer / RHI</td>
+                        <td>Facade、Bridge、Builder、RAII、Strategy</td>
+                        <td>Frontend/Backend 分离；FrameGraph 编译 pass plan；Vulkan wrapper 管理资源；少数算法用 Strategy 显式切换。</td>
+                    </tr>
+                    <tr>
+                        <td>Console / Debug / Test</td>
+                        <td>Command、Observer、Facade</td>
+                        <td>Console 发命令；debug option 通过事件或配置进入渲染；test hooks 调用高层 Facade，不穿透内部对象。</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>慎用或不进入 V1 的模式</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>模式</th>
+                        <th>V1 结论</th>
+                        <th>原因</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Adapter</td>
+                        <td>不作为旧新并行过渡方案使用。</td>
+                        <td>本方案已确定无过渡期 cutover；Adapter 只允许用于外部库薄封装，例如 SDL/Vulkan，不允许保留旧执行路径兜底。</td>
+                    </tr>
+                    <tr>
+                        <td>Singleton</td>
+                        <td>逐步收敛，不新增散点 singleton。</td>
+                        <td>现有 <code>GetInstance()</code> 让依赖方向不透明。V1 允许少数 root context 持有全局 subsystem，但调用方通过注入或 context 访问。</td>
+                    </tr>
+                    <tr>
+                        <td>Service Locator</td>
+                        <td>只允许在 <code>GameInstance</code>/<code>SubsystemCollection</code> 的窄边界内使用。</td>
+                        <td>方便系统启动和调试，但不能让任意模块随处查询任意服务。</td>
+                    </tr>
+                    <tr>
+                        <td>Visitor</td>
+                        <td>暂不引入。</td>
+                        <td>当前 Actor/Component 类型数量不需要复杂双分派；普通 typed build plan 和 helper 更可读。</td>
+                    </tr>
+                    <tr>
+                        <td>Abstract Factory</td>
+                        <td>V1 不做完整多后端抽象工厂。</td>
+                        <td>当前只有 Vulkan 后端。先保留 RHI Bridge 边界，等真实第二后端或 mock 后端出现再扩展。</td>
+                    </tr>
+                    <tr>
+                        <td>ECS / Data-Oriented Framework</td>
+                        <td>不作为 V1 架构基础。</td>
+                        <td>项目当前学习目标更适合 UE-like Actor/Component；ECS 会改变数据模型和教学重心。</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <p class="rule">判断标准：如果一个模式不能让 owner、生命周期、依赖方向或错误边界更清楚，就先不用它。</p>
+        </section>
+
+        <section id="engine-platform">
+            <h2>6) Platform / Engine / Input</h2>
+            <div class="grid">
+                <div class="card">
+                    <strong>PlatformApplication</strong>
+                    <p class="muted">负责 SDL 初始化、窗口创建、事件 pump、鼠标捕获、窗口 resize、退出事件。它不认识 World、Material、RenderGraph。</p>
+                    <p class="muted">当前落点：<code>source/platform/platformApplication.*</code> 负责 SDL init/quit、Vulkan loader、extension 查询和事件翻译；窗口尺寸由 <code>PlatformApplicationDesc</code> 注入，不再由平台层读取 <code>CommonFunction</code> 配置。</p>
+                </div>
+                <div class="card">
+                    <strong>EngineLoop</strong>
+                    <p class="muted">唯一顶层调度器，负责 <code>Init -> Tick -> Shutdown</code>，把平台事件、命令、World tick、snapshot、render submit 串起来。</p>
+                    <p class="muted">当前落点：<code>source/engine/engineLoop.*</code> 已接管 shader 编译、Vulkan 初始化后的资源加载、初始 World、调试控制台、Controller、事件泵、更新渲染循环和 GPU idle shutdown；跨 World 的 RuntimeClock、FpsTool、InputSubsystem、WorldManager 已迁入 <code>SubsystemCollection</code>。</p>
+                </div>
+                <div class="card">
+                    <strong>GameInstance</strong>
+                    <p class="muted">跨 World 生命周期的上下文，持有 EngineSubsystem、WorldManager、CommandBus、全局配置，不持有具体 Actor。</p>
+                    <p class="muted">当前落点：<code>source/engine/gameInstance.*</code> 已持有 <code>RuntimeConfig</code> 引用和强类型 <code>SubsystemCollection</code>；<code>CommandBus</code>、<code>ConsoleSubsystem</code>、RuntimeClock、FpsTool、InputSubsystem、WorldManager 均由集合持有。</p>
+                </div>
+                <div class="card">
+                    <strong>InputSubsystem</strong>
+                    <p class="muted">把 SDL 键鼠事件转成 <code>InputActionState</code>，Controller 消费 intent。切换 World 后重新绑定 active camera。</p>
+                    <p class="muted">当前落点：<code>source/input/inputSubsystem.*</code> 已集中处理键盘状态、相对鼠标位移和 mouse capture；<code>controller.*</code> 不再直接 include SDL。</p>
+                </div>
+            </div>
+            <h3>事件与输入流</h3>
+            <pre><code>SDL Event
+  -> PlatformApplication::PollEvents()
+  -> PlatformEvent queue
+  -> EngineLoop::PumpPlatformEvents(current)
+  -> InputSubsystem::UpdateActionState(current)
+  -> CommandBus::QueueCommand(optional target)
+  -> PlayerController::ApplyToActivePawnOrCamera
+  -> WorldSnapshotBuilder exports final camera state</code></pre>
+            <table>
+                <thead>
+                    <tr>
+                        <th>场景</th>
+                        <th>职责归属</th>
+                        <th>设计约束</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>窗口 resize</td>
+                        <td>Platform 发 resize event；<code>EngineLoop::RecreateRendererForWindowResize()</code> 以 wait-idle 的保守事务重建 swapchain、RenderGraph render targets/render pass/framebuffer、frame UBO/light SSBO、material UBO、object descriptor。</td>
+                        <td>resize 不触发 World reload，不销毁 Gameplay 数据。</td>
+                    </tr>
+                    <tr>
+                        <td>Esc 鼠标捕获切换</td>
+                        <td>InputSubsystem 修改 capture 状态；PlatformWindow 执行实际 SDL window 调用。</td>
+                        <td>Controller 不直接操作窗口系统，也不读取 SDL 键鼠状态。</td>
+                    </tr>
+                    <tr>
+                        <td>切场景命令</td>
+                        <td>ConsoleSubsystem 发 <code>LoadWorldCommand</code> 到 <code>CommandBus</code>，由 <code>RuntimeCommandExecutor</code> 调用 Coordinator；成功后 EngineLoop 统一重绑 RenderSystem active world 与 Controller view target。</td>
+                        <td>Console 不直接调用 loader/render system；active world reload 现在走 Coordinator 的事务式路径，加载前捕获 world-local resource cache 与 pass material 快照，失败时恢复旧资源，成功后再统一重绑运行时对象。</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <section id="asset-material">
+            <h2>7) Asset / Material / Shader</h2>
+            <p class="muted">这部分是 World 与 Renderer 之间最容易重新耦合的区域。V1 要把“资产解析”和“GPU 可用资源”拆成两层：Asset 层输出描述，Resource/RHI 层负责创建和释放。</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>模块</th>
+                        <th>职责</th>
+                        <th>输出</th>
+                        <th>禁止</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>AssetManager</code></td>
+                        <td>统一加载 JSON、mesh descriptor、terrain descriptor、texture asset、material instance，生成稳定 cache key。</td>
+                        <td><code>AssetLoadPlan</code>、CPU-side asset data、依赖列表</td>
+                        <td>直接创建 Vulkan image/buffer/pipeline</td>
+                    </tr>
+                    <tr>
+                        <td><code>ShaderLibrary</code></td>
+                        <td>管理 shader source、SPIR-V 编译结果、反射数据、variant key 和错误报告。</td>
+                        <td><code>ShaderReflection</code>、<code>ShaderVariantHandle</code></td>
+                        <td>在每个 material instance 里重复编译同一 shader</td>
+                    </tr>
+                    <tr>
+                        <td><code>MaterialLibrary</code></td>
+                        <td>管理 <code>M_</code> 基础材质、<code>MI_</code> 实例、参数默认值、贴图绑定和 pass 兼容性。</td>
+                        <td><code>MaterialDesc</code>、<code>MaterialInstanceDesc</code>、<code>PipelineVariantKey</code></td>
+                        <td>把 pass descriptor 或 frame resource 塞回 Asset 层</td>
+                    </tr>
+                    <tr>
+                        <td><code>PipelineFactory</code></td>
+                        <td>按 render pass compatibility、sample count、shader variant、pipeline state 创建或复用 pipeline。</td>
+                        <td><code>PipelineHandle</code>、descriptor set layouts、shader binding layout</td>
+                        <td>反向查询 World 或 renderer resource cache 内部状态</td>
+                    </tr>
+                    <tr>
+                        <td><code>TextureUploadService</code></td>
+                        <td>把 texture asset 描述变成 GPU texture，并记录 layout、sampler、descriptor image info。</td>
+                        <td><code>TextureHandle</code>、<code>DescriptorImageInfo</code></td>
+                        <td>在材质校验阶段上传 GPU 资源</td>
+                    </tr>
+                </tbody>
+            </table>
+            <h3>材质与 shader 数据流</h3>
+            <pre><code>shader/glsl + material JSON
+  -> MaterialParameterIncludeGenerator
+  -> ShaderCompiler + ShaderReflection
+  -> MaterialInstanceValidator
+  -> PipelineFactory(PipelineVariantKey)
+  -> RendererFrontend builds binding requests
+  -> FrameGraph/Backend writes descriptor sets</code></pre>
+            <p class="rule">绑定规则：shader reflection 是材质参数和 descriptor binding 的真实裁判；JSON 负责提供正确数据，运行时渲染路径不做重复兜底。</p>
+        </section>
+
+        <section id="renderer-rhi">
+            <h2>8) Renderer / RHI / FrameGraph</h2>
+            <p class="muted">Renderer 不是一个大类，而是三段：Frontend 组织渲染数据，FrameGraph 编译 pass/resource，Backend/RHI 执行 Vulkan。</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>层</th>
+                        <th>负责</th>
+                        <th>输入</th>
+                        <th>输出</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>RendererFrontend</code></td>
+                        <td>把 <code>WorldSnapshot</code> 转成按 pass/material/mesh 分组的 <code>RenderScene</code>。</td>
+                        <td>WorldSnapshot、debug view、render options</td>
+                        <td>draw packets、light data、camera data、material binding requests</td>
+                    </tr>
+                    <tr>
+                        <td><code>ResolvedRenderSceneBuilder</code></td>
+                        <td>当前实现中的后端过渡层：把 <code>RenderScene</code> 的逻辑 handle 解析成现有 Vulkan draw path 需要的 material、materialInstance、renderable object 与 backend object resource entry；resolved draw packet 不再保留 <code>SceneObject</code> 引用。</td>
+                        <td>RenderScene、RendererResourceCache</td>
+                        <td>ResolvedRenderScene；包含 resolved draw packet 与 backend object resource entry</td>
+                    </tr>
+                    <tr>
+                        <td><code>FrameGraphCompiler</code></td>
+                        <td>编译 render graph JSON，管理 pass 顺序、attachment、layout transition、descriptor update plan。当前 <code>source/render/framegraph/frameGraphCompiler.*</code> 已生成自包含 <code>CompiledFrameGraph</code>，验证 resource/pass 引用、format/usage、尺寸字段、load/store op，生成 resource read/write access plan、pass 前 barrier plan 和 pass input descriptor plan，并把 pass 输入输出、descriptor binding 与颜色 attachment 数交给 <code>RenderGraph</code> 消费；descriptor write plan 已从 <code>Renderpass</code> 移到后端侧 <code>RendererDescriptorPlanCache</code>，descriptor 刷新通过 <code>RendererDescriptorContext</code> 显式接收 global UBO、light SSBO 与 resource cache，并把具体 <code>vk::WriteDescriptorSet</code> 解析统一交给 <code>RendererDescriptorWriter</code>。</td>
+                        <td>renderGraphConfig、swapchain state、RenderScene resource needs</td>
+                        <td>CompiledFrameGraph、PassRuntime、ResourceUsagePlan</td>
+                    </tr>
+                    <tr>
+                        <td><code>PassRuntime</code></td>
+                        <td>按 pass 类型录制 shadow、geometry、post-process 工作；当前 <code>source/render/pass/passRuntime.*</code> 已接管 pass 分派、执行 compiled barrier plan 和 begin/end render pass。shadow / geometry 的对象 draw 循环已抽到 backend 侧 <code>RendererDrawExecutor</code>，executor 直接消费 <code>ResolvedDrawPacket</code> 中的 renderable handle 和 <code>RendererObjectResourceEntry</code>，PassRuntime 不再直接遍历 legacy <code>SceneObject</code> draw path。</td>
+                        <td>Renderpass、RenderScene、ResolvedRenderScene、swapchain image index、frame resource 更新服务</td>
+                        <td>写入当前帧 command buffer；对象 draw 执行交给 backend executor，object GPU resources 已由 backend object resource entry 承接</td>
+                    </tr>
+                    <tr>
+                        <td><code>RendererFrameResources</code></td>
+                        <td>持有按 swapchain image 分配的 frame-local GPU buffer 和 descriptor info；当前 <code>source/render/backend/rendererFrameResources.*</code> 已接管 global UBO 与 light SSBO 的创建、释放、descriptor infos、更新和必要 barrier，并集中处理 material instance UBO 与 object UBO 的写入；descriptor info 由 <code>RenderSystem</code> 组装成 <code>RendererDescriptorContext</code> 后单向传给 <code>RenderGraph</code> 与 <code>RendererObjectResourceManager</code>，写入解析由 <code>RendererDescriptorWriter</code> 复用。</td>
+                        <td>RendererBackendVulkan、UBOGlobal、LightSnapshot、RenderDrawPacket、swapchain image index</td>
+                        <td>global UBO / light SSBO descriptor buffer infos、frame uniform/storage buffer 更新；object UBO 使用 snapshot 冻结矩阵</td>
+                    </tr>
+                    <tr>
+                        <td><code>RendererBackendVulkan</code></td>
+                        <td>目标态负责完整 frame render；当前已承接每帧 wait/acquire/reset，并通过 <code>SubmitFrame(frameContext, currentFrame)</code> 在 backend 内部解析 queue、swapchain、semaphore、fence 与 retire epoch 后执行 submit/present。Vulkan 初始化、resize、waitIdle 和 buffer、image/view/sampler、descriptor、render pass、framebuffer、single-time command、readback copy 等低层 helper 已委托给 <code>RHIDeviceVulkan</code>。</td>
+                        <td>当前：PlatformWindow、Vulkan extensions、resize event、RenderSystem 录制好的 command buffer、RendererFrameResources 和 RenderGraph GPU 对象创建请求；目标：CompiledFrameGraph、RenderScene、frame resources</td>
+                        <td>当前：Vulkan device/swapchain lifecycle、backend-owned submit/present、draw executor、retire epoch、buffer/image/descriptor/renderpass/framebuffer handles；目标：完整 GPU work 调度</td>
+                    </tr>
+                    <tr>
+                        <td><code>RHIDeviceVulkan</code></td>
+                        <td>封装 instance/device/queue/swapchain/image/buffer/sampler/descriptor pool 的创建销毁；当前 <code>source/render/rhi/vulkan/rhiDeviceVulkan.*</code> 已成为唯一直接访问 <code>VulkanManager::GetInstance()</code> 的渲染侧边界，backend 不再直接 include 或调用 VulkanManager。</td>
+                        <td>PlatformWindow、Vulkan extensions、device config</td>
+                        <td>稳定 RHI handles 和 debug name API</td>
+                    </tr>
+                </tbody>
+            </table>
+            <h3>Pass 设计边界</h3>
+            <div class="grid">
+                <div class="card">
+                    <strong>Shadow / Geometry</strong>
+                    <p class="muted">消费 RenderScene 的 draw packets；不从 World 查 object，不从 renderer resource cache 反推 Gameplay。</p>
+                </div>
+                <div class="card">
+                    <strong>Post Process</strong>
+                    <p class="muted">消费 frame graph input resources 和 pass material；不关心 Actor/Component。</p>
+                </div>
+                <div class="card">
+                    <strong>Sky / Environment</strong>
+                    <p class="muted">消费 snapshot 中冻结的 environment handle、SH 和 intensity；环境预处理由资源层负责。</p>
+                </div>
+                <div class="card">
+                    <strong>Debug View</strong>
+                    <p class="muted">作为 RendererFrontend/FrameGraph 的 render option，不允许散落到 shader/pass 的隐式全局状态。</p>
+                </div>
+            </div>
+        </section>
+
+        <section id="tooling">
+            <h2>9) Config / Debug / Test</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>能力</th>
+                        <th>目标模块</th>
+                        <th>V1 设计</th>
+                        <th>验收信号</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>配置与路径</td>
+                        <td><code>RuntimeConfig</code> + <code>FileSystem</code></td>
+                        <td><code>source/platform/fileSystem.*</code> 负责发现 project root、读取 JSON 和按 resource/project/shader-spv 顺序解析路径；<code>source/engine/runtimeConfig.*</code> 负责解释 <code>config/config.json</code>、<code>renderGraphConfig.json</code>、window size、init scene、project/resource path。</td>
+                        <td>启动日志清晰打印 project root、resourcePath、initScene、shader path。</td>
+                    </tr>
+                    <tr>
+                        <td>控制台命令</td>
+                        <td><code>ConsoleSubsystem</code> + <code>CommandBus</code></td>
+                        <td>命令只描述意图，例如 load world、reloadstress、lightstress、set debug view、set tonemap、set bloom、set environment intensity；<code>DebugConsole</code> 不直接拿 <code>RenderSystem</code>、<code>RenderGraph</code> 或 loader 改内部状态。</td>
+                        <td><code>RuntimeCommandExecutor</code> 集中应用命令，失败消息在执行端输出；tone/bloom/environment/debug view 走 <code>RenderSystem</code> 公开 API；load world 成功时返回 <code>RuntimeCommandExecutionResult</code>，由 <code>EngineLoop::BindActiveWorldRuntimeObjects()</code> 完成运行时重绑。</td>
+                    </tr>
+                    <tr>
+                        <td>Diagnostics / Profiling</td>
+                        <td><code>DiagnosticsSubsystem</code></td>
+                        <td>集中 runtime info/warn/error 输出和 <code>RuntimeError</code> 格式化；保留 Tracy/NVTX marker，并按 Engine/World/Renderer/RHI 分层命名。</td>
+                        <td>命令执行、窗口事件、启动失败和后续 validation/test hook 都有统一诊断入口。</td>
+                    </tr>
+                    <tr>
+                        <td>Validation</td>
+                        <td><code>RuntimeValidation</code></td>
+                        <td>scene/material/render graph 在构建期验证，错误包含文件路径、节点、binding 名称和建议修复方向。</td>
+                        <td>构造坏 JSON 不会进入半初始化状态。</td>
+                    </tr>
+                    <tr>
+                        <td>回归测试入口</td>
+                        <td><code>RuntimeTestHooks</code></td>
+                        <td>提供命令驱动入口：<code>reloadstress &lt;scene-path&gt; [count]</code> 启动逐帧 World reload 压测，<code>lightstress [count]</code> 生成高灯光 scene 并复用同一 reload 路径；hook 只向 <code>CommandBus</code> 投递 <code>LoadWorld</code>，不绕过 Coordinator。</td>
+                        <td>cutover 前能跑固定 smoke checklist；reload 压测失败时通过 <code>DiagnosticsSubsystem</code> 报告已完成次数并停止。</td>
+                    </tr>
+                    <tr>
+                        <td>构建系统</td>
+                        <td>CMake module split</td>
+                        <td>按 engine/world/render/resource/tools 组织 target source，保持 MinGW 可编译。</td>
+                        <td><code>cmake --build build -j</code> 在 MinGW Makefiles 下通过。</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <section id="ownership">
+            <h2>10) 模块职责与所有权矩阵</h2>
+            <p class="muted">V1 最大的价值不是多几个类名，而是让“谁拥有数据、谁可以改、谁只消费快照”变得不可混淆。</p>
+            <table class="matrix">
+                <thead>
+                    <tr>
+                        <th>模块</th>
+                        <th>拥有的数据</th>
+                        <th>允许依赖</th>
+                        <th>禁止行为</th>
+                        <th>现有代码主要来源</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>EngineLoop</td>
+                        <td>应用生命周期、帧循环、窗口事件分发、退出流程</td>
+                        <td>Platform、GameInstance、RendererBackend 的高层入口</td>
+                        <td>直接创建材质、直接遍历场景对象、直接更新 Vulkan descriptor</td>
+                        <td><code>source/engine/engineLoop.*</code>；从 <code>main.cpp</code> 迁出的启动与主循环代码</td>
+                    </tr>
+                    <tr>
+                        <td>GameInstance</td>
+                        <td>跨 World 存活的运行时上下文，例如命令总线、全局配置、全局 subsystem</td>
+                        <td>EngineSubsystem、WorldManager</td>
+                        <td>持有具体 Actor/Component 指针</td>
+                        <td>目前散落在 <code>main.cpp</code>、<code>debugConsole.*</code>、<code>commonFunction.h</code></td>
+                    </tr>
+                    <tr>
+                        <td>WorldManager</td>
+                        <td><code>activeWorld</code>、<code>stagingWorld</code>、<code>retiringWorlds</code> 句柄</td>
+                        <td>World、WorldSubsystemHost、ResourceRetireQueue</td>
+                        <td>绕过 Coordinator 直接替换 active world</td>
+                        <td><code>WorldManager</code> 当前持有 active World identity；mesh 资源由 <code>RendererMeshLoader</code> 注册到 <code>RendererResourceCache</code>。</td>
+                    </tr>
+                    <tr>
+                        <td>WorldLoader</td>
+                        <td>加载请求、JSON 解析结果、构建计划、校验错误</td>
+                        <td>FileSystem、JSON validator、AssetManager metadata 查询</td>
+                        <td>创建 Vulkan 对象、写入 activeWorld、注册 descriptor</td>
+                        <td><code>WorldLoader</code>、<code>SceneAssetValidator</code></td>
+                    </tr>
+                    <tr>
+                        <td>WorldBuilder</td>
+                        <td>临时构建上下文、Actor/Component 树、WorldSubsystem 实例</td>
+                        <td>AssetManager、WorldResourceCache、PipelineFactory 的抽象入口</td>
+                        <td>修改旧 activeWorld、把半成品对象暴露给渲染线程</td>
+                        <td><code>WorldBuilder</code> 已接管 camera/light/environment metadata；mesh/material 创建拆到 renderer resource loaders。</td>
+                    </tr>
+                    <tr>
+                        <td>RendererFrontend</td>
+                        <td><code>RenderScene</code>、draw packet、per-view/per-light 渲染输入</td>
+                        <td>WorldSnapshot、FrameGraphCompiler、Material/Texture 只读句柄</td>
+                        <td>读取可变 Actor/Component，反向调用 World 修改逻辑</td>
+                        <td><code>RenderSystem::InitRenderObject</code>、材质分组和 UBO 数据收集</td>
+                    </tr>
+                    <tr>
+                        <td>FrameGraphCompiler</td>
+                        <td>pass 顺序、render resource、attachment layout、descriptor set 规划</td>
+                        <td>RenderGraphConfig、RendererFrontend 输出、RHI 抽象</td>
+                        <td>向 renderer resource cache 反查环境纹理或材质实例</td>
+                        <td><code>RenderGraph</code>、<code>Renderpass</code>、<code>PassBarrier</code></td>
+                    </tr>
+                    <tr>
+                        <td>RendererBackendVulkan</td>
+                        <td>命令缓冲、队列提交、fence/semaphore、swapchain frame 状态</td>
+                        <td>CompiledFrameGraph、RenderScene、RHIDeviceVulkan</td>
+                        <td>解析 scene JSON、持有 World 写引用</td>
+                        <td><code>source/render/backend/rendererBackendVulkan.*</code> 已承接 EngineLoop 的 frame policy，拥有每帧 begin/end、submit/present 与 fence epoch；queue、swapchain、semaphore、fence、command buffer 和 submitted epoch 已从 RenderSystem 调用点中移入 backend-owned <code>SubmitFrame</code> 流程。backend 对外仍保留 buffer/map/destroy 等过渡接口，但实际低层 VulkanManager 访问已集中到 <code>source/render/rhi/vulkan/rhiDeviceVulkan.*</code>，并由 <code>source/render/rhi/rhiDevice.h</code> 明确当前 RHI 设备契约。<code>source/render/backend/rendererObjectGpuResources.h</code> 已定义对象 GPU 资源包，<code>RendererObjectResourceEntry</code> 已作为 backend object resource registry 条目接管资源包生命周期，<code>RendererObjectResourceManager</code> 负责创建、销毁和 descriptor 写入，<code>source/render/backend/rendererDrawExecutor.*</code> 已从 PassRuntime 接过 shadow / geometry 对象 draw 循环并消费该资源包；<code>source/render/backend/rendererFrameResources.*</code> 已接管 global UBO buffer、light SSBO、material instance UBO 写入，并把 object UBO 写入目标改为 <code>RendererObjectGpuResources</code>；<code>source/render/pass/passRuntime.*</code> 已接管 pass 前 barrier 准备以及 pass 录制分派。</td>
+                    </tr>
+                    <tr>
+                        <td>ResourceRetireQueue</td>
+                        <td>待释放资源、fence epoch、world generation、释放回调</td>
+                        <td>RendererBackendVulkan 的完成事件、WorldResourceCache</td>
+                        <td>立刻释放仍可能被 GPU 使用的 texture/buffer/framebuffer</td>
+                        <td>当前析构路径与手工 <code>waitIdle</code> 清理逻辑</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <section id="data">
+            <h2>11) 核心数据模型</h2>
+            <div class="grid">
+                <div class="card">
+                    <strong>World</strong>
+                    <p class="muted">Gameplay 侧根对象，持有 <code>Level</code>、<code>Actor</code>、<code>Component</code>、<code>WorldSubsystemHost</code> 和 world-local 资源引用。只有 GT 可以写。</p>
+                </div>
+                <div class="card">
+                    <strong>WorldHandle</strong>
+                    <p class="muted">对外暴露的轻量句柄，包含 <code>generation</code> 和只读访问入口。渲染层不能通过它拿到可写 World。</p>
+                </div>
+                <div class="card">
+                    <strong>WorldBuildPlan</strong>
+                    <p class="muted">由 loader 输出的纯数据计划，包含 scene path、对象计划、资源引用、pass material 需求和校验结果。</p>
+                </div>
+                <div class="card">
+                    <strong>WorldSnapshot</strong>
+                    <p class="muted">GT 每帧导出的渲染输入快照，包含 transforms、camera、lights、materials、environment、visible object handles。</p>
+                </div>
+                <div class="card">
+                    <strong>RenderScene</strong>
+                    <p class="muted">RendererFrontend 从 snapshot 构建的渲染侧结构，按 pass/material/mesh 组织，不保留 Gameplay 可变引用。</p>
+                </div>
+                <div class="card">
+                    <strong>CompiledFrameGraph</strong>
+                    <p class="muted">FrameGraphCompiler 输出的 pass 执行计划；当前已覆盖资源/pass 顺序、输入输出引用、resource size、format/usage、load/store op、颜色 attachment 数、resource read/write access plan、pass 前 barrier plan 和 pass input descriptor binding；<code>RendererDescriptorPlanCache</code> 现在按 pass 名持有 descriptor write plan，<code>RendererDescriptorWriter</code> 统一解析 global/material/object/pass input descriptor 写入。当前 submit/present 已收敛到 backend-owned <code>SubmitFrame</code>，后续再把跨 queue / async compute 依赖纳入 graph plan。</p>
+                </div>
+            </div>
+            <h3>数据流约束</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>数据</th>
+                        <th>创建者</th>
+                        <th>可写线程</th>
+                        <th>生命周期</th>
+                        <th>下游消费者</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>WorldBuildPlan</code></td>
+                        <td><code>WorldLoader</code></td>
+                        <td>GT</td>
+                        <td>一次加载事务内</td>
+                        <td><code>WorldBuilder</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>World</code></td>
+                        <td><code>WorldBuilder</code></td>
+                        <td>GT</td>
+                        <td>active/staging/retiring 三阶段</td>
+                        <td><code>WorldSnapshotBuilder</code>、WorldSubsystem</td>
+                    </tr>
+                    <tr>
+                        <td><code>WorldSnapshot</code></td>
+                        <td><code>WorldSnapshotBuilder</code></td>
+                        <td>GT 构建后冻结</td>
+                        <td>1 到 N 帧，直到 RT 消费完成</td>
+                        <td><code>RendererFrontend</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>RenderScene</code></td>
+                        <td><code>RendererFrontend</code></td>
+                        <td>RT 或 GT 渲染阶段</td>
+                        <td>与 snapshot/version 绑定</td>
+                        <td><code>RendererBackendVulkan</code></td>
+                    </tr>
+                    <tr>
+                        <td><code>GpuResource</code></td>
+                        <td>ResourceCache / RHI</td>
+                        <td>资源创建线程；释放由 retire 队列提交</td>
+                        <td>global、world-local 或 frame-local</td>
+                        <td>FrameGraph、material、backend</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <section id="snapshot">
+            <h2>12) WorldSnapshot 生成与消费（GT -> RT）</h2>
+            <p class="summary"><code>WorldSnapshot</code> 可以理解为 GT 给 RT 的一帧只读渲染订单。它不是复制整个 <code>World</code>，而是在 GT 仍然拥有 mutable <code>World</code> 的时刻，把渲染需要的 camera、draw、light、environment 和逻辑资源句柄导出成不可变 DTO，再通过一个 latest-wins mailbox 交给渲染侧消费。</p>
+            <p class="rule">关键点：RT 不是“安全地读 World”，而是“完全不读 World”。RT 只读 <code>shared_ptr&lt;const WorldSnapshot&gt;</code>，再把它翻译成自己的 <code>RenderScene</code>。</p>
+
+            <h3>先用代码视角理解 snapshot</h3>
+            <p class="muted">这里的 snapshot 更像相机快门，而不是存档系统：GT 在一个确定时刻按下快门，把“这一帧渲染要用的数据”拍成不可变结构；之后 GT 可以继续 tick、移动物体、切换 World，RT 手里的旧 snapshot 仍然是一份完整、独立、只读的渲染输入。</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>对象</th>
+                        <th>代码角色</th>
+                        <th>一句话理解</th>
+                        <th>线程意义</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>WorldSnapshotBuilder</code></td>
+                        <td>只在 GT 读取 <code>World</code>，复制 camera、draw、light、environment。</td>
+                        <td>采样器：把 mutable World 采成值类型 DTO。</td>
+                        <td>跨线程前最后一次接触可变 Gameplay 数据。</td>
+                    </tr>
+                    <tr>
+                        <td><code>WorldSnapshot</code></td>
+                        <td>保存矩阵、bounds、灯光参数、环境参数和 <code>ResourceHandle</code>。</td>
+                        <td>渲染订单：这帧要画什么、用什么逻辑资源画。</td>
+                        <td>没有 <code>World*</code>、<code>SceneObject*</code>、<code>Vk*</code>，天然适合跨线程只读传递。</td>
+                    </tr>
+                    <tr>
+                        <td><code>WorldSnapshotQueue</code></td>
+                        <td>用一个 mutex 保护 <code>latestSnapshot</code> 指针槽。</td>
+                        <td>邮箱：永远只留最新一封渲染订单。</td>
+                        <td>GT 发布和 RT 取走只交换 <code>shared_ptr&lt;const WorldSnapshot&gt;</code>，重活都在锁外。</td>
+                    </tr>
+                    <tr>
+                        <td><code>RendererFrontend</code></td>
+                        <td>把 <code>WorldSnapshot</code> 转成 <code>RenderScene</code> 和 draw packet 分组。</td>
+                        <td>翻译器：World 形状的数据变成 Renderer 形状的数据。</td>
+                        <td>RT 后续只理解渲染域结构，不再回头读 World。</td>
+                    </tr>
+                </tbody>
+            </table>
+            <pre><code>// GT: snapshot is built while World is still owned by the game side.
+WorldSnapshot snapshot = worldSnapshotBuilder.Build(activeWorld, buildDesc).Value();
+snapshotQueue.Publish(std::move(snapshot));   // becomes shared_ptr&lt;const WorldSnapshot&gt;
+
+// RT: snapshot is consumed as immutable input.
+std::optional&lt;WorldSnapshotPtr&gt; snapshot = snapshotQueue.ConsumeLatest();
+if (snapshot.has_value()) {
+    RenderScene scene = rendererFrontend.BuildRenderScene(**snapshot).Value();
+    backend.RecordAndSubmit(scene);
+}</code></pre>
+            <p class="rule">所以它有趣的地方在于：同步点只发生在“指针交接”上，而不是“让 RT 读 World”上。GT/RT 之间传递的是不可变值对象的所有权引用，渲染资源解析和命令录制都发生在渲染域内部。</p>
+
+            <h3>把它当成线程协议看</h3>
+            <p class="muted">这套设计的核心不是“WorldSnapshot 这个结构体很大”，而是它把跨线程关系降级成一次消息传递：GT 负责生产一条完整消息，RT 负责消费这条消息。消息发出以后，GT 不再修改它；RT 也不需要知道这条消息来自哪个 Actor、Component 或加载器。</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>协议阶段</th>
+                        <th>谁拥有数据</th>
+                        <th>允许做什么</th>
+                        <th>禁止做什么</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>GT Tick 中</td>
+                        <td>GT 拥有 mutable <code>World</code></td>
+                        <td>更新 Actor/Component、相机、灯光、场景切换状态。</td>
+                        <td>RT 读取 <code>World</code> 或缓存 <code>SceneObject*</code>。</td>
+                    </tr>
+                    <tr>
+                        <td>Build snapshot</td>
+                        <td>GT 暂时读取 <code>World</code>，创建值类型 DTO</td>
+                        <td>复制矩阵、bounds、灯光、环境参数和逻辑资源 key。</td>
+                        <td>把可变对象指针、Vulkan 对象或 loader 状态塞进 snapshot。</td>
+                    </tr>
+                    <tr>
+                        <td>Publish mailbox</td>
+                        <td><code>WorldSnapshotQueue</code> 短暂拥有指针槽</td>
+                        <td>用 mutex 替换一个 <code>shared_ptr&lt;const WorldSnapshot&gt;</code>。</td>
+                        <td>在锁里遍历 World、解析资源、创建 GPU 对象。</td>
+                    </tr>
+                    <tr>
+                        <td>RT consume</td>
+                        <td>RT 持有自己的 <code>shared_ptr&lt;const WorldSnapshot&gt;</code></td>
+                        <td>构建 <code>RenderScene</code>、解析资源、录制当前帧命令。</td>
+                        <td>回头询问 <code>World</code> 当前状态，或修改 snapshot。</td>
+                    </tr>
+                </tbody>
+            </table>
+            <p class="rule">所以它能给渲染线程消费，不是因为给 <code>World</code> 加了很多锁，而是因为跨线程交接点上已经没有 mutable <code>World</code> 了。</p>
+
+            <h3>实现总图</h3>
+            <div class="diagram-wrap">
+                <svg width="1260" height="470" viewBox="0 0 1260 470" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="WorldSnapshot implementation pipeline">
+                    <defs>
+                        <marker id="arrSnapshotImpl" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+                            <path d="M0,0 L10,5 L0,10 z" fill="#95ddb9"/>
+                        </marker>
+                        <style>
+                            .snapLane { fill: #151f2e; stroke: #314962; rx: 12; ry: 12; }
+                            .snapBox { fill: #1e3044; stroke: #53799b; rx: 10; ry: 10; }
+                            .snapQueue { fill: #302743; stroke: #8f6cc0; rx: 10; ry: 10; }
+                            .snapNote { fill: #352d22; stroke: #bd9155; rx: 10; ry: 10; }
+                            .snapT { fill: #edf4ff; font: 600 15px 'Segoe UI'; }
+                            .snapM { fill: #c8d8ec; font: 12px 'Segoe UI'; }
+                            .snapS { fill: #91a7c2; font: 11px 'Segoe UI'; }
+                            .snapLine { stroke: #95ddb9; stroke-width: 1.5; fill: none; marker-end: url(#arrSnapshotImpl); }
+                            .snapSoft { stroke: #7792ad; stroke-width: 1.15; stroke-dasharray: 5 5; fill: none; }
+                        </style>
+                    </defs>
+
+                    <rect class="snapLane" x="38" y="44" width="250" height="332"/>
+                    <rect class="snapLane" x="322" y="44" width="250" height="332"/>
+                    <rect class="snapLane" x="606" y="44" width="250" height="332"/>
+                    <rect class="snapLane" x="890" y="44" width="332" height="332"/>
+
+                    <rect class="snapBox" x="64" y="78" width="198" height="76"/>
+                    <text class="snapT" x="84" y="106">1. Mutable World</text>
+                    <text class="snapM" x="84" y="128">GT 唯一写入</text>
+                    <text class="snapS" x="84" y="146">camera / objects / lights / env</text>
+
+                    <rect class="snapBox" x="64" y="218" width="198" height="92"/>
+                    <text class="snapT" x="84" y="246">2. SnapshotBuilder</text>
+                    <text class="snapM" x="84" y="268">复制值和 ResourceHandle</text>
+                    <text class="snapS" x="84" y="286">维护 previous view/model 历史</text>
+
+                    <rect class="snapBox" x="348" y="130" width="198" height="88"/>
+                    <text class="snapT" x="368" y="158">3. WorldSnapshot</text>
+                    <text class="snapM" x="368" y="180">一帧冻结 DTO</text>
+                    <text class="snapS" x="368" y="198">没有 SceneObject* / Vulkan*</text>
+
+                    <rect class="snapQueue" x="348" y="272" width="198" height="72"/>
+                    <text class="snapT" x="368" y="300">4. SnapshotQueue</text>
+                    <text class="snapM" x="368" y="322">短锁交换 latestSnapshot</text>
+
+                    <rect class="snapBox" x="632" y="104" width="198" height="82"/>
+                    <text class="snapT" x="652" y="132">5. RenderScene</text>
+                    <text class="snapM" x="652" y="154">按 material / instance 分组</text>
+                    <text class="snapS" x="652" y="172">渲染侧 CPU 视图</text>
+
+                    <rect class="snapBox" x="632" y="250" width="198" height="84"/>
+                    <text class="snapT" x="652" y="278">6. ResolvedRenderScene</text>
+                    <text class="snapM" x="652" y="300">ResourceHandle -> backend entry</text>
+                    <text class="snapS" x="652" y="318">当前 Vulkan 过渡层</text>
+
+                    <rect class="snapBox" x="918" y="134" width="276" height="94"/>
+                    <text class="snapT" x="938" y="162">7. Backend / FrameGraph</text>
+                    <text class="snapM" x="938" y="184">更新 UBO、light buffer、object buffer</text>
+                    <text class="snapS" x="938" y="204">录制 pass command 并 submit</text>
+
+                    <rect class="snapNote" x="918" y="280" width="276" height="58"/>
+                    <text class="snapT" x="938" y="308">RT 慢时</text>
+                    <text class="snapM" x="938" y="330">mailbox 只保留最新未消费快照</text>
+
+                    <path class="snapLine" d="M163 154 L163 216"/>
+                    <path class="snapLine" d="M262 264 C296 240 314 204 348 180"/>
+                    <path class="snapLine" d="M447 218 L447 270"/>
+                    <path class="snapLine" d="M546 308 C588 280 590 166 632 146"/>
+                    <path class="snapLine" d="M731 186 L731 248"/>
+                    <path class="snapLine" d="M830 292 C870 274 878 200 918 182"/>
+                    <path class="snapSoft" d="M546 322 C716 384 872 382 918 322"/>
+                </svg>
+            </div>
+
+            <h3>当前源码链路</h3>
+            <p class="muted">当前工程还没有把真正的 Render Thread 独立出来，但 <code>RenderSystem::RefreshRenderSceneFromActiveWorld()</code> 已经按未来 GT/RT 协议跑：构建 snapshot，发布到 mailbox，再从 mailbox 消费并构建 <code>RenderScene</code>。所以这不是纸面设计，而是单线程路径已经在使用的边界契约。</p>
+            <pre><code>RenderSystem::RefreshRenderSceneFromActiveWorld()
+  -> WorldSnapshotBuilder::Build(*activeWorld, buildDesc)
+       validate worldGeneration and active camera
+       copy CameraSnapshot / MeshDrawSnapshot / LightSnapshot / EnvironmentSnapshot
+       keep previous view/model history inside the builder
+
+  -> WorldSnapshotQueue::Publish(snapshot)
+       wrap as shared_ptr&lt;const WorldSnapshot&gt;
+       swap latestSnapshot under a short mutex
+
+  -> WorldSnapshotQueue::ConsumeLatest()
+       move latestSnapshot to a local WorldSnapshotPtr
+       clear the mailbox slot
+
+  -> RendererFrontend::BuildRenderScene(*snapshot)
+       validate mesh/material/materialInstance handles
+       convert meshDraws to RenderDrawPacket
+       group draw packets by material and material instance
+
+  -> ResolvedRenderSceneBuilder::Build(renderScene, resourceCache)
+       resolve ResourceHandle keys to renderer-owned resources
+       feed the current Vulkan draw path</code></pre>
+
+            <h3>实现机制拆开看</h3>
+            <p class="muted">这个 snapshot 不是把 <code>World</code> 做深拷贝，也不是给 RT 一个加锁后的 <code>World</code> 视图。它更像一次“渲染输入采样”：GT 在一个确定时刻读取 active World，把 RT 需要的值复制到线性 DTO 中；复制完成以后，这份 DTO 就脱离 World 生命周期，由 <code>shared_ptr&lt;const WorldSnapshot&gt;</code> 管理。</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>步骤</th>
+                        <th>源码落点</th>
+                        <th>具体做什么</th>
+                        <th>为什么这样做</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>1. 校验帧上下文</td>
+                        <td><code>WorldSnapshotBuilder::Build</code></td>
+                        <td>确认 <code>desc.worldGeneration</code> 与 active World 一致，并要求场景存在 active camera。</td>
+                        <td>避免 World 切换过程中把旧 generation 的输入误交给新渲染场景。</td>
+                    </tr>
+                    <tr>
+                        <td>2. 冻结 camera</td>
+                        <td><code>CameraSnapshot</code></td>
+                        <td>复制 view/projection/viewProjection、位置、方向、裁剪面，并保存上一帧 <code>previousViewProjection</code>。</td>
+                        <td>RT 录制多个 pass 时看到的是同一台相机；后续 TAA/motion vector 也能拿到历史矩阵。</td>
+                    </tr>
+                    <tr>
+                        <td>3. 冻结 draw 输入</td>
+                        <td><code>MeshDrawSnapshot</code></td>
+                        <td>按 stable object id 复制 model/previousModel、world bounds、mesh/material/materialInstance 的 <code>ResourceHandle</code>。</td>
+                        <td>GT 下一帧移动 Actor 不会改变 RT 正在录制的 draw packet。</td>
+                    </tr>
+                    <tr>
+                        <td>4. 冻结 lights/env</td>
+                        <td><code>LightSnapshot</code>、<code>EnvironmentSnapshot</code></td>
+                        <td>复制灯光参数、worldToLight、IBL 逻辑 key、SH 和 intensity。</td>
+                        <td>shadow、lighting、post-process 看到同一批光照输入。</td>
+                    </tr>
+                    <tr>
+                        <td>5. 发布指针</td>
+                        <td><code>WorldSnapshotQueue::Publish</code></td>
+                        <td>把 DTO 包成 <code>shared_ptr&lt;const WorldSnapshot&gt;</code>，只在 mutex 内替换 <code>latestSnapshot</code> 指针槽。</td>
+                        <td>锁的粒度极小；不会在锁内遍历 World 或构建渲染资源。</td>
+                    </tr>
+                    <tr>
+                        <td>6. 渲染侧翻译</td>
+                        <td><code>RendererFrontend::BuildRenderScene</code></td>
+                        <td>消费 snapshot，校验 ResourceHandle，把 mesh draw 转成 <code>RenderDrawPacket</code>，再按 material/materialInstance 分组。</td>
+                        <td>让 RT 拿到 Renderer 形状的数据，而不是继续理解 World 的 Actor/Component 结构。</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>为什么不是直接双缓冲 World</h3>
+            <p class="muted">直接双缓冲 World 看起来也能让 RT 读旧帧，但代价很高：World 里会混进 gameplay 状态、资源加载状态、component 生命周期和外部指针，拷贝边界不清晰。V1 选择只 snapshot 渲染输入，等于把跨线程合同压缩到一个小而明确的数据包。</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>方案</th>
+                        <th>RT 能否消费</th>
+                        <th>主要问题</th>
+                        <th>V1 选择</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>RT 加锁读取 World</td>
+                        <td>理论上能</td>
+                        <td>锁范围会覆盖 Actor/Component 遍历；GT/RT 容易互相等待，也容易读到半成品对象。</td>
+                        <td>禁止</td>
+                    </tr>
+                    <tr>
+                        <td>双缓冲整个 World</td>
+                        <td>能</td>
+                        <td>需要定义 World 深拷贝语义，资源、subsystem、外部句柄和生命周期都会变复杂。</td>
+                        <td>不作为 V1</td>
+                    </tr>
+                    <tr>
+                        <td>WorldSnapshot DTO</td>
+                        <td>能</td>
+                        <td>需要维护 previous transform 和 ResourceHandle 解析，但边界清楚。</td>
+                        <td>采用</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>ResourceHandle 是这套机制的关键</h3>
+            <p class="muted">Snapshot 里不放 <code>VkImage</code>、<code>VkBuffer</code>、descriptor set，也不放 <code>SceneObject*</code>。它只放资源逻辑 key，例如 mesh name、material key、material instance name、environment key。RT 拿到 snapshot 后，再由渲染侧的 <code>ResolvedRenderSceneBuilder</code> 和 <code>RendererResourceCache</code> 把这些 key 解析成当前 backend 可用的 GPU entry。</p>
+            <pre><code>WorldSnapshot
+  MeshDrawSnapshot.materialInstance = "MI_BrickWall"
+  MeshDrawSnapshot.mesh             = "SM_Cube"
+  EnvironmentSnapshot.prefilter     = "environment/prefilter|sky.hdr|512"
+
+RendererFrontend
+  snapshot mesh draw -> RenderDrawPacket
+  group by material/materialInstance
+
+ResolvedRenderSceneBuilder
+  ResourceHandle key -> RendererResourceCache entry
+  entry -> backend object buffers / textures / descriptors</code></pre>
+            <p class="rule">这也是为什么它能给渲染线程消费：跨线程传的是“不可变值 + 逻辑句柄”，GPU 对象的创建、复用、延迟释放仍留在渲染资源系统里。</p>
+
+            <h3>Snapshot 里到底放什么</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>数据块</th>
+                        <th>字段/来源</th>
+                        <th>为什么要冻结</th>
+                        <th>明确不允许携带</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>版本</td>
+                        <td><code>worldGeneration</code>、<code>frameIndex</code>、<code>debugViewMode</code></td>
+                        <td>让渲染侧知道这份数据属于哪个 World 和哪一帧，切场景或回滚时能识别旧数据。</td>
+                        <td><code>World*</code>、<code>Level*</code></td>
+                    </tr>
+                    <tr>
+                        <td>Camera</td>
+                        <td><code>view</code>、<code>projection</code>、<code>viewProjection</code>、<code>previousViewProjection</code>、位置、方向、裁剪面</td>
+                        <td>阴影、后处理、culling、未来 motion vector 需要同一帧一致的相机状态。</td>
+                        <td><code>CameraComponent*</code>、控制器指针</td>
+                    </tr>
+                    <tr>
+                        <td>Mesh Draw</td>
+                        <td><code>objectId</code>、<code>model</code>、<code>previousModel</code>、bounds、mesh/material/materialInstance handle</td>
+                        <td>RT 需要稳定 draw 输入；GT 下一帧移动物体不应影响本帧命令录制。</td>
+                        <td><code>SceneObject*</code>、可写材质实例、descriptor</td>
+                    </tr>
+                    <tr>
+                        <td>Light</td>
+                        <td>directional、point、spot 的颜色、强度、位置、方向、半径、聚光角、<code>worldToLight</code></td>
+                        <td>多个 lighting/shadow pass 必须消费同一批灯光，不能读到半帧更新。</td>
+                        <td><code>LightComponent*</code>、可变 light map</td>
+                    </tr>
+                    <tr>
+                        <td>Environment</td>
+                        <td>environment cube、prefilter cube、BRDF LUT、SH、intensity 的逻辑 key 和值</td>
+                        <td>IBL 参数和资源绑定请求需要在一帧内一致。</td>
+                        <td>HDR loader、<code>VkImage</code>、sampler、buffer</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>Mailbox 最小实现</h3>
+            <p class="muted"><code>WorldSnapshotQueue</code> 不是会积压很多帧的普通队列，而是一个只保留最新快照的 mailbox。GT 发布新快照时覆盖未消费旧快照；RT 消费时把指针拿走，后续构建 <code>RenderScene</code> 的重活全部在锁外完成。</p>
+            <pre><code>// source/world/worldSnapshot.cpp 的核心形态
+void WorldSnapshotQueue::Publish(WorldSnapshot snapshot)
+{
+    Publish(std::make_shared&lt;const WorldSnapshot&gt;(std::move(snapshot)));
+}
+
+void WorldSnapshotQueue::Publish(WorldSnapshotPtr snapshot)
+{
+    std::lock_guard&lt;std::mutex&gt; lock(mutex);
+    latestSnapshot = std::move(snapshot);       // latest-wins
+}
+
+std::optional&lt;WorldSnapshotPtr&gt; WorldSnapshotQueue::ConsumeLatest()
+{
+    std::lock_guard&lt;std::mutex&gt; lock(mutex);
+    if (!latestSnapshot)
+    {
+        return std::nullopt;
+    }
+
+    WorldSnapshotPtr snapshot = std::move(latestSnapshot);
+    latestSnapshot.reset();
+    return snapshot;                            // consumer works outside the lock
+}</code></pre>
+            <table>
+                <thead>
+                    <tr>
+                        <th>动作</th>
+                        <th>锁保护什么</th>
+                        <th>锁外发生什么</th>
+                        <th>语义</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>Publish</code></td>
+                        <td>只保护 <code>latestSnapshot</code> 指针槽。</td>
+                        <td>遍历 World、构建 snapshot、计算 bounds 都已经完成。</td>
+                        <td>发布最新一帧；旧的未消费帧可以被覆盖。</td>
+                    </tr>
+                    <tr>
+                        <td><code>ConsumeLatest</code></td>
+                        <td>只保护“取走并清空 mailbox”这个动作。</td>
+                        <td>构建 <code>RenderScene</code>、解析资源、录制命令。</td>
+                        <td>消费者拿到自己的 <code>shared_ptr&lt;const&gt;</code>，旧快照不会悬空。</td>
+                    </tr>
+                    <tr>
+                        <td><code>PeekLatest</code></td>
+                        <td>只读观察指针槽。</td>
+                        <td>调试或诊断。</td>
+                        <td>不用于跨线程所有权转移。</td>
+                    </tr>
+                    <tr>
+                        <td><code>Clear</code></td>
+                        <td>清空 mailbox 指针槽。</td>
+                        <td>RT 已持有的 snapshot 仍由 shared_ptr 延寿。</td>
+                        <td>适合 shutdown、切 World 或失败回滚前清理未消费帧。</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>为什么 RT 能消费：它读的是消息，不是对象</h3>
+            <p class="muted">RT 拿到 snapshot 之后，看到的是一份冻结的渲染输入消息。GT 可以继续进入下一帧，甚至切换 World；RT 手里的旧消息仍然由自己的 <code>shared_ptr&lt;const&gt;</code> 延寿，内容也不会再变化。</p>
+            <div class="grid">
+                <div class="card">
+                    <strong>没有可变 World 引用</strong>
+                    <p class="muted">Snapshot 里只有矩阵、向量、数组、bounds、light 参数和 <code>ResourceHandle</code>。RT 看不到 <code>World*</code>、<code>Actor*</code>、<code>SceneObject*</code>。</p>
+                </div>
+                <div class="card">
+                    <strong>类型上只读</strong>
+                    <p class="muted"><code>WorldSnapshotPtr</code> 是 <code>std::shared_ptr&lt;const WorldSnapshot&gt;</code>。RT 拿到后不能改，GT 发布下一帧也不会改这份旧对象。</p>
+                </div>
+                <div class="card">
+                    <strong>生命周期独立</strong>
+                    <p class="muted">GT 覆盖 mailbox 只替换队列里的指针槽。RT 已经拿走的旧 snapshot 会活到 RT 释放自己的 <code>shared_ptr</code>。</p>
+                </div>
+                <div class="card">
+                    <strong>GPU 资源仍归渲染层</strong>
+                    <p class="muted">Snapshot 只带逻辑 <code>ResourceHandle</code>。材质、mesh、texture、object buffer、descriptor 继续由 <code>RendererResourceCache</code>、Backend 和 RHI 管。</p>
+                </div>
+            </div>
+
+            <h3>慢 RT 的 latest-wins 行为</h3>
+            <pre><code>GT publishes snapshot A
+RT consumes A and starts BuildRenderScene(A)
+
+GT publishes snapshot B while RT still holds A
+  mailbox now points to B
+  A is still alive because RT owns shared_ptr(A)
+
+GT publishes snapshot C before RT consumes B
+  mailbox replaces B with C
+  B can be released if nobody else holds it
+
+RT finishes A, then consumes latest snapshot
+  RT gets C, not stale B</code></pre>
+            <p class="rule">实时渲染通常更关心最新状态，而不是把过期帧全部排队提交。这个 mailbox 语义会牺牲“每帧必达”，换来低延迟和清晰生命周期。</p>
+
+            <h3>相关设计模式</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>模式</th>
+                        <th>在这里的落点</th>
+                        <th>解决的问题</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Snapshot / DTO</td>
+                        <td><code>WorldSnapshot</code>、<code>CameraSnapshot</code>、<code>MeshDrawSnapshot</code>、<code>LightSnapshot</code></td>
+                        <td>把 mutable World 压成一帧不可变渲染输入。</td>
+                    </tr>
+                    <tr>
+                        <td>Builder</td>
+                        <td><code>WorldSnapshotBuilder::Build()</code></td>
+                        <td>集中完成校验、复制、previous view/model 历史维护，避免 RenderSystem 帧末回写 <code>SceneObject</code>。</td>
+                    </tr>
+                    <tr>
+                        <td>Producer-Consumer Mailbox</td>
+                        <td><code>WorldSnapshotQueue</code></td>
+                        <td>GT 生产，RT 消费；只保留最新帧，防止 RT 慢时堆积旧画面。</td>
+                    </tr>
+                    <tr>
+                        <td>Adapter / Translator</td>
+                        <td><code>RendererFrontend::BuildRenderScene()</code></td>
+                        <td>把 World-shaped 的数据转换为 Renderer-shaped 的 draw packet 和材质分组。</td>
+                    </tr>
+                    <tr>
+                        <td>Stable ID + Generation Guard</td>
+                        <td><code>objectId</code>、<code>worldGeneration</code>、<code>ResourceHandle::generation</code></td>
+                        <td>让 previous transform、场景切换和资源校验不依赖可变对象地址。</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>源码落点</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>文件</th>
+                        <th>职责</th>
+                        <th>当前状态</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>source/world/worldSnapshot.h/.cpp</code></td>
+                        <td>定义 snapshot DTO、<code>ResourceHandle</code> 和 latest-wins <code>WorldSnapshotQueue</code>。</td>
+                        <td>已实现最小 mailbox；后续可升级为双缓冲或 SPSC ring，但外部契约保持 <code>WorldSnapshotPtr</code>。</td>
+                    </tr>
+                    <tr>
+                        <td><code>source/world/worldSnapshotBuilder.h/.cpp</code></td>
+                        <td>从 active <code>World</code> 导出一帧 <code>WorldSnapshot</code>。</td>
+                        <td>会校验 generation 和 active camera；previous view/model 历史由 builder 按 stable id 维护。</td>
+                    </tr>
+                    <tr>
+                        <td><code>source/render/frontend/rendererFrontend.h/.cpp</code></td>
+                        <td>把 snapshot 转为 <code>RenderScene</code>，校验 handle，并按 material/materialInstance 分组。</td>
+                        <td>渲染侧不再反向读取 Gameplay 容器。</td>
+                    </tr>
+                    <tr>
+                        <td><code>source/render/backend/resolvedRenderScene.h/.cpp</code></td>
+                        <td>把 <code>RenderScene</code> 的逻辑 handle 解析成当前 Vulkan draw path 使用的对象和 backend resource entry。</td>
+                        <td>这是过渡层；正式 backend draw packet 完成后可继续收敛。</td>
+                    </tr>
+                    <tr>
+                        <td><code>source/renderSystem.cpp</code></td>
+                        <td>当前单线程接入点：<code>Build -> Publish -> Consume -> BuildRenderScene -> Resolve</code>。</td>
+                        <td>提前固定未来 RT 的数据协议，后面拆线程时主要移动执行位置，而不是重写数据模型。</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>真正拆出 RT 后的形态</h3>
+            <pre><code>// Game Thread: only writer of mutable World.
+while (gameRunning) {
+    TickInputAndGameplay();
+    TickWorld(activeWorld);
+
+    RuntimeResult&lt;WorldSnapshot&gt; snapshot =
+        worldSnapshotBuilder.Build(activeWorld, buildDesc);
+    if (snapshot.IsSuccess()) {
+        snapshotQueue.Publish(std::move(snapshot.Value()));
+    }
+}
+
+// Render Thread: never reads mutable World.
+while (renderRunning) {
+    std::optional&lt;WorldSnapshotPtr&gt; snapshot =
+        snapshotQueue.ConsumeLatest();
+
+    if (!snapshot.has_value()) {
+        SubmitLastGoodRenderSceneOrIdle();
+        continue;
+    }
+
+    RuntimeResult&lt;RenderScene&gt; renderScene =
+        rendererFrontend.BuildRenderScene(**snapshot);
+    if (renderScene.IsSuccess()) {
+        backend.Submit(renderScene.Value());
+    }
+}</code></pre>
+            <p class="rule">后续如果 profiler 证明 mutex mailbox 不够，再升级为双缓冲或 SPSC ring。升级时保持边界不变：GT 只发布 <code>WorldSnapshotPtr</code>，RT 只消费 <code>WorldSnapshotPtr</code>，任何方向都不能传可变 <code>World</code> 指针。</p>
+        </section>
+
+        <section id="thread">
+            <h2>13) 线程与数据边界图（V1）</h2>
+            <p class="muted">关键约束：World 只在 GT 写；RT 只读取 RenderScene 快照；交接只通过 SnapshotQueue。</p>
+            <div class="diagram-wrap">
+                <svg width="1260" height="460" viewBox="0 0 1260 460" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Thread and data boundary diagram">
+                    <defs>
+                        <marker id="arrB" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+                            <path d="M0,0 L10,5 L0,10 z" fill="#95ddb9"/>
+                        </marker>
+                        <style>
+                            .lane { fill: #172335; stroke: #33485f; }
+                            .step { fill: #25394f; stroke: #507394; rx: 10; ry: 10; }
+                            .ttl { fill: #edf4ff; font: 600 14px 'Segoe UI'; }
+                            .tx { fill: #c2d4ec; font: 12px 'Segoe UI'; }
+                            .flow { stroke: #95ddb9; stroke-width: 1.35; fill: none; marker-end: url(#arrB); }
+                            .warn { fill: #f0c777; font: 600 12px 'Segoe UI'; }
+                        </style>
+                    </defs>
+
+                    <rect class="lane" x="20" y="24" width="390" height="410"/>
+                    <rect class="lane" x="430" y="24" width="390" height="410"/>
+                    <rect class="lane" x="840" y="24" width="400" height="410"/>
+
+                    <text class="ttl" x="36" y="50">Game Thread（唯一 World Writer）</text>
+                    <text class="ttl" x="446" y="50">Snapshot Queue（跨线程边界）</text>
+                    <text class="ttl" x="856" y="50">Render Thread（可选，仅读）</text>
+
+                    <rect class="step" x="40" y="84" width="350" height="70"/>
+                    <text class="ttl" x="56" y="109">Tick Gameplay World</text>
+                    <text class="tx" x="56" y="127">Actor/Component/Subsystem 更新</text>
+                    <text class="tx" x="56" y="143">Coordinator 处理切换状态机</text>
+
+                    <rect class="step" x="40" y="176" width="350" height="76"/>
+                    <text class="ttl" x="56" y="201">Build WorldSnapshot</text>
+                    <text class="tx" x="56" y="219">只读序列化渲染所需状态</text>
+                    <text class="tx" x="56" y="235">不携带可变 Gameplay 引用</text>
+
+                    <rect class="step" x="450" y="176" width="350" height="76"/>
+                    <text class="ttl" x="466" y="201">Push Snapshot(version)</text>
+                    <text class="tx" x="466" y="219">V1 latest-wins mailbox</text>
+                    <text class="tx" x="466" y="235">可升级双缓冲/ring，仍单向发布</text>
+
+                    <rect class="step" x="860" y="176" width="360" height="76"/>
+                    <text class="ttl" x="876" y="201">Pop Latest Snapshot</text>
+                    <text class="tx" x="876" y="219">RendererFrontend -> RenderScene</text>
+                    <text class="tx" x="876" y="235">RendererBackend 提交 Vulkan 命令</text>
+
+                    <rect class="step" x="860" y="274" width="360" height="90"/>
+                    <text class="ttl" x="876" y="299">GPU Sync & Retire Callback</text>
+                    <text class="tx" x="876" y="317">记录 fence epoch 完成信息</text>
+                    <text class="tx" x="876" y="333">只回传“可回收事件”，不回传 World 指针</text>
+                    <text class="tx" x="876" y="349">GT 在下一帧消费 retire 事件</text>
+
+                    <text class="warn" x="40" y="288">规则：RT 严禁读取或持有可变 World 对象引用</text>
+                    <text class="warn" x="40" y="308">规则：GT 严禁直接操作 RT 内部提交队列</text>
+
+                    <path class="flow" d="M390 214 L450 214"/>
+                    <path class="flow" d="M800 214 L860 214"/>
+                    <path class="flow" d="M1040 364 L1040 392 L215 392 L215 252"/>
+                </svg>
+            </div>
+        </section>
+
+        <section id="state">
+            <h2>14) World 切换状态机（详细）</h2>
+            <div class="diagram-wrap">
+                <svg width="1260" height="420" viewBox="0 0 1260 420" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="World transition state machine">
+                    <defs>
+                        <marker id="arrC" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+                            <path d="M0,0 L10,5 L0,10 z" fill="#9ec8ff"/>
+                        </marker>
+                        <style>
+                            .node { fill: #24374e; stroke: #52779c; rx: 12; ry: 12; }
+                            .ttl { fill: #edf4ff; font: 600 14px 'Segoe UI'; }
+                            .tx { fill: #c3d5ed; font: 12px 'Segoe UI'; }
+                            .flow { stroke: #9ec8ff; stroke-width: 1.35; fill: none; marker-end: url(#arrC); }
+                            .fail { stroke: #f19ea4; }
+                        </style>
+                    </defs>
+
+                    <rect class="node" x="40" y="150" width="170" height="92"/>
+                    <text class="ttl" x="58" y="180">Idle</text>
+                    <text class="tx" x="58" y="198">等待请求</text>
+                    <text class="tx" x="58" y="214">允许新 transition</text>
+
+                    <rect class="node" x="250" y="58" width="190" height="92"/>
+                    <text class="ttl" x="268" y="88">Validating</text>
+                    <text class="tx" x="268" y="106">Scene 路径/Schema/依赖</text>
+                    <text class="tx" x="268" y="122">保存 rollback 锚点</text>
+
+                    <rect class="node" x="250" y="240" width="190" height="92"/>
+                    <text class="ttl" x="268" y="270">BuildingStaging</text>
+                    <text class="tx" x="268" y="288">构建 stagingWorld</text>
+                    <text class="tx" x="268" y="304">申请 world-local 资源</text>
+
+                    <rect class="node" x="490" y="150" width="190" height="92"/>
+                    <text class="ttl" x="508" y="180">Swapping</text>
+                    <text class="tx" x="508" y="198">active = staging</text>
+                    <text class="tx" x="508" y="214">触发 OnWorldChanged</text>
+
+                    <rect class="node" x="730" y="150" width="190" height="92"/>
+                    <text class="ttl" x="748" y="180">Retiring</text>
+                    <text class="tx" x="748" y="198">旧 World 入 retire 队列</text>
+                    <text class="tx" x="748" y="214">等待 GPU safe point</text>
+
+                    <rect class="node" x="970" y="150" width="210" height="92"/>
+                    <text class="ttl" x="988" y="180">CommitComplete</text>
+                    <text class="tx" x="988" y="198">清理 staging 状态</text>
+                    <text class="tx" x="988" y="214">返回 Idle</text>
+
+                    <rect class="node" x="490" y="286" width="190" height="92" style="fill:#3a2a33;stroke:#94616d"/>
+                    <text class="ttl" x="508" y="316">Failed</text>
+                    <text class="tx" x="508" y="334">恢复 old activeWorld</text>
+                    <text class="tx" x="508" y="350">上报 error + 回到 Idle</text>
+
+                    <path class="flow" d="M210 196 L250 104"/>
+                    <path class="flow" d="M210 196 L250 286"/>
+                    <path class="flow" d="M440 104 L490 196"/>
+                    <path class="flow" d="M440 286 L490 196"/>
+                    <path class="flow" d="M680 196 L730 196"/>
+                    <path class="flow" d="M920 196 L970 196"/>
+                    <path class="flow" d="M1180 196 L1210 196 L1210 34 L125 34 L125 150"/>
+                    <path class="flow fail" d="M345 150 L345 196 L490 196"/>
+                    <path class="flow fail" d="M585 242 L585 286"/>
+                    <path class="flow fail" d="M585 378 L585 402 L125 402 L125 242"/>
+                </svg>
+            </div>
+            <p class="muted">失败策略：任何阶段失败都必须保证旧 <code>activeWorld</code> 可继续运行，不能出现半切换状态。</p>
+        </section>
+
+        <section id="lifecycle">
+            <h2>15) 生命周期时序</h2>
+            <p class="muted">V1 把“启动一次”和“切换 World”视为同一套事务模型。启动只是没有 oldWorld 的第一次切换。</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>阶段</th>
+                        <th>入口</th>
+                        <th>允许做</th>
+                        <th>必须完成的输出</th>
+                        <th>失败处理</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td class="nowrap">BootPlatform</td>
+                        <td><code>main.cpp</code> / <code>PlatformApplication</code></td>
+                        <td>SDL 初始化、Vulkan loader、窗口、扩展列表、基础配置</td>
+                        <td>可用窗口句柄、Vulkan extension list、project/resource path</td>
+                        <td>直接退出并打印明确错误</td>
+                    </tr>
+                    <tr>
+                        <td class="nowrap">InitEngine</td>
+                        <td><code>EngineLoop::Init</code></td>
+                        <td>创建 GameInstance、初始化 SubsystemCollection、PipelineFactory、RendererResourceLoadCoordinator、RenderGraph、WorldTransitionCoordinator，并初始化初始渲染资源</td>
+                        <td>可运行的 engine context</td>
+                        <td>销毁已创建 subsystem，退出</td>
+                    </tr>
+                    <tr>
+                        <td class="nowrap">LoadInitialWorld</td>
+                        <td><code>WorldTransitionCoordinator::RequestLoad</code></td>
+                        <td>校验 <code>config/config.json -> initScene</code>，构建 stagingWorld</td>
+                        <td>activeWorld、WorldSubsystemHost、初始 WorldSnapshot</td>
+                        <td>启动失败；不进入主循环</td>
+                    </tr>
+                    <tr>
+                        <td class="nowrap">FrameTick</td>
+                        <td><code>EngineLoop::Tick</code></td>
+                        <td>事件分发、InputActionState 更新、GT world tick、snapshot 构建、渲染提交、retire 消费</td>
+                        <td>一帧完整提交或可解释的跳帧结果</td>
+                        <td>保留上一帧可用状态，记录错误</td>
+                    </tr>
+                    <tr>
+                        <td class="nowrap">WorldSwitch</td>
+                        <td>Console/UI/测试命令</td>
+                        <td>异步或同步构建 stagingWorld，原子替换 activeWorld</td>
+                        <td>新 activeWorld + oldWorld 进入 retire</td>
+                        <td>回滚到旧 activeWorld</td>
+                    </tr>
+                    <tr>
+                        <td class="nowrap">Shutdown</td>
+                        <td><code>EngineLoop::Shutdown</code></td>
+                        <td>停止接收新命令，等待 GPU idle，按 owner 逆序释放</td>
+                        <td>无 live Vulkan object、无悬空 World 引用</td>
+                        <td>强制 waitIdle 后继续释放并报告泄漏</td>
+                    </tr>
+                </tbody>
+            </table>
+            <h3>Tick 顺序</h3>
+<pre><code>EngineLoop::Tick
+  PumpPlatformEvents
+  ConsoleSubsystem::Update
+  RuntimeCommandExecutor::ExecuteQueuedCommands
+  WorldTransitionCoordinator::Advance
+  activeWorld->Tick(deltaTime)
+  WorldSnapshotBuilder::Build(activeWorld)
+  RendererFrontend::AcceptSnapshot(snapshot)
+  RendererBackendVulkan::RenderFrame
+  ResourceRetireQueue::CollectCompletedEpoch</code></pre>
+        </section>
+
+        <section id="resources">
+            <h2>16) 资源与 GPU 生命周期</h2>
+            <p class="summary">当前代码里 <code>RendererResourceLoadCoordinator</code>、<code>ResolvedRenderSceneBuilder</code>、<code>RenderGraph</code> 和 <code>RenderSystem</code> 都会间接碰到材质、贴图、descriptor 和 pass 资源。V1 需要继续按 owner 拆开，否则 World 切换仍然会产生隐式悬空引用。</p>
+            <p class="muted">当前实现已先把资源表集中到 <code>RendererResourceCache</code>，并拆出 global / world-local 清理边界：<code>RendererEnvironmentLoader</code> 只在缺失时创建 global <code>brdfLut</code>，active environment cube / prefilter 进入 world-local texture 槽；<code>RendererMaterialLoader</code> 创建 material/texture，<code>RendererMeshLoader</code> 创建 mesh/renderable/SceneObject，<code>RendererResourceLoadCoordinator</code> 只负责编排 loader 并调用 <code>BeginWorldLocalResourceLoad()</code>。普通材质贴图上传、mesh vertex/index buffer 上传、BRDF LUT 生成、environment cubemap / prefilter 生成和 Texture/RenderableObject 销毁仍走 <code>RendererBackendVulkan</code> 门面，但底层 buffer/image/sampler/descriptor/renderpass/framebuffer 操作已由 <code>RHIDeviceVulkan</code> 执行；world-local 清理现在进入 <code>ResourceRetireQueue</code>，由 backend 在复用 frame fence 前推进 completed epoch。</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>资源类型</th>
+                        <th>Owner</th>
+                        <th>Key</th>
+                        <th>创建时机</th>
+                        <th>释放规则</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Shader / Pipeline Reflection</td>
+                        <td><code>GlobalResourceCache</code></td>
+                        <td>shader path + variant key + render pass compatibility</td>
+                        <td>Engine init 或首次 material 请求</td>
+                        <td>跨 World 复用，Engine shutdown 释放</td>
+                    </tr>
+                    <tr>
+                        <td>BRDF LUT / 默认贴图</td>
+                        <td><code>GlobalResourceCache</code></td>
+                        <td>固定资源名 + format + size</td>
+                        <td>首次 renderer resource load 时 lazy 创建</td>
+                        <td>跨 World 复用；Engine shutdown 释放</td>
+                    </tr>
+                    <tr>
+                        <td>Environment Cubemap / Prefilter / SH</td>
+                        <td><code>WorldResourceCache</code></td>
+                        <td>world generation + hdr path + cube size</td>
+                        <td><code>RendererEnvironmentLoader</code> 处理 environment 节点时</td>
+                        <td>world-local cache 清理时进入 <code>ResourceRetireQueue</code>，GPU completed epoch 覆盖后释放</td>
+                    </tr>
+                    <tr>
+                        <td>Mesh Vertex/Index Buffer</td>
+                        <td><code>AssetManager</code> + GPU buffer cache</td>
+                        <td>model path + section index + import settings</td>
+                        <td>WorldBuilder 请求 mesh section 时</td>
+                        <td>可跨 World 复用；无引用且 GPU epoch 完成后释放</td>
+                    </tr>
+                    <tr>
+                        <td>MaterialInstance GPU Data</td>
+                        <td><code>WorldResourceCache</code></td>
+                        <td>MI path + pass name + sample count + pipeline state</td>
+                        <td>WorldBuilder 或 pass material 构建阶段</td>
+                        <td>world-local；material parameter UBO 已复用 backend buffer-set helper，cache 清理时进入 <code>ResourceRetireQueue</code> 并在 backend 仍有效时释放。</td>
+                    </tr>
+                    <tr>
+                        <td>FrameGraph Attachments</td>
+                        <td><code>FrameGraphCompiler</code></td>
+                        <td>renderGraph resource name + swapchain image index + size</td>
+                        <td>Render graph compile 或 swapchain recreate</td>
+                        <td>当前 compiler 先输出只读 pass/resource 计划；swapchain resize 已能按新 extent 重建 attachment 和 framebuffer；graph reload 已支持非 idle retire：旧 attachment、framebuffer、pass descriptor 与 render pass 会打包进 <code>ResourceRetireQueue</code>，由 fence epoch 完成后释放。</td>
+                    </tr>
+                    <tr>
+                        <td>Frame Uniform Buffers</td>
+                        <td><code>RendererBackendVulkan</code></td>
+                        <td>frame index + buffer role</td>
+                        <td>Renderer init / swapchain frame count 变化</td>
+                        <td>global UBO、light SSBO、material instance UBO 写入与 object UBO 写入已进入 <code>RendererFrameResources</code>；object UBO 使用 <code>RenderDrawPacket</code> 冻结矩阵，不在 pass 录制时回读 mutable <code>SceneObject</code> transform。mesh vertex/index buffer 与普通材质贴图上传已使用 backend buffer/image helper；对象 descriptor layout/pool/set/update 已由 <code>RendererObjectResourceManager</code> 与 backend descriptor helper 执行，pass descriptor layout/pool/set/update 已走 RenderGraph/backend 路径；RenderGraph render target、render pass、framebuffer 创建和显式 shutdown 释放也已改由 backend 执行。swapchain rebuild 现在先销毁 descriptor/framebuffer，再重建 per-swapchain buffer set。</td>
+                    </tr>
+                </tbody>
+            </table>
+            <h3>Retire Epoch 规则</h3>
+            <ul class="dense-list">
+                <li>当前 <code>RendererBackendVulkan::SubmitFrame</code> 在 backend 内部生成 <code>submittedEpoch</code>，submit 后记录到 frame fence 槽；下一次复用该 fence 前把对应 epoch 交给 <code>ResourceRetireQueue::CollectCompletedEpoch()</code>。</li>
+                <li>world-local 资源释放请求进入 <code>ResourceRetireQueue</code>，队列用 <code>shared_ptr&lt;void&gt;</code> 延寿已有资源对象，避免 GPU in-flight 时触发 Vulkan destroy。</li>
+                <li>retire 条件为 <code>resource.lastUsedEpoch &lt;= completedEpoch</code>；shutdown 时先 <code>device.waitIdle()</code>，再 <code>ForceReleaseAll()</code> 清空退役队列。</li>
+                <li>开发期记录资源名、owner generation 和 epoch，方便定位泄漏。</li>
+            </ul>
+        </section>
+
+        <section id="contracts">
+            <h2>17) 核心接口契约</h2>
+            <p class="muted">接口先按职责约束设计，不急着把每个接口都抽成虚基类。V1 可以用普通类实现，但调用方向必须符合下表。</p>
+            <table>
+                <thead>
+                    <tr>
+                        <th>接口 / 类</th>
+                        <th>输入</th>
+                        <th>输出</th>
+                        <th>失败语义</th>
+                        <th>线程约束</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>IWorldTransitionCoordinator</code></td>
+                        <td>load/reload/unload 请求、当前 activeWorld、资源完成事件</td>
+                        <td>状态机推进结果、active world 切换事件、retire 请求</td>
+                        <td>失败时保留旧 activeWorld，返回结构化错误</td>
+                        <td>GT only</td>
+                    </tr>
+                    <tr>
+                        <td><code>IWorldManager</code></td>
+                        <td>stagingWorld、oldWorld、world generation</td>
+                        <td>active/staging/retiring world 句柄</td>
+                        <td>swap 前校验 generation，失败不改 active</td>
+                        <td>GT only</td>
+                    </tr>
+                    <tr>
+                        <td><code>IWorldLoader</code></td>
+                        <td>scene path、config context、resourcePath</td>
+                        <td><code>WorldBuildPlan</code>、依赖列表、校验报告</td>
+                        <td>只报错，不创建半成品 runtime 对象</td>
+                        <td>GT；后续可把纯 IO 放任务线程</td>
+                    </tr>
+                    <tr>
+                        <td><code>IWorldBuilder</code></td>
+                        <td><code>WorldBuildPlan</code>、AssetManager、WorldResourceCache</td>
+                        <td>完整 stagingWorld、初始 WorldSnapshot 所需数据</td>
+                        <td>构建失败销毁 stagingWorld，不能污染 activeWorld</td>
+                        <td>GT 写；资源上传按 RHI 规则排队</td>
+                    </tr>
+                    <tr>
+                        <td><code>IWorldSnapshotBuilder</code></td>
+                        <td>activeWorld、frame delta、view selection</td>
+                        <td>冻结的 <code>WorldSnapshot</code></td>
+                        <td>缺少 camera/light 等关键数据时返回 build error</td>
+                        <td>GT 构建，RT 只读</td>
+                    </tr>
+                    <tr>
+                        <td><code>IRendererFrontend</code></td>
+                        <td><code>WorldSnapshot</code>、debug view、render options</td>
+                        <td><code>RenderScene</code>、draw packet、per-pass resource binding request</td>
+                        <td>拒绝 snapshot version 不匹配的数据</td>
+                        <td>GT 或 RT 均可，但不能写 World</td>
+                    </tr>
+                    <tr>
+                        <td><code>IFrameGraphCompiler</code></td>
+                        <td>render graph JSON、RenderScene resource needs、swapchain state</td>
+                        <td><code>CompiledFrameGraph</code>、descriptor update plan、barrier plan</td>
+                        <td>graph 无效时保留上一版 compiled graph</td>
+                        <td>初始化/resize/reload 阶段；运行帧只读</td>
+                    </tr>
+                    <tr>
+                        <td><code>IRendererBackend</code></td>
+                        <td>CompiledFrameGraph、RenderScene、frame resources</td>
+                        <td>GPU submit、present、completed epoch</td>
+                        <td>swapchain out-of-date 触发 resize/recreate，不改 World</td>
+                        <td>RT 可选；单线程模式下由 GT 调用</td>
+                    </tr>
+                    <tr>
+                        <td><code>IResourceRetireQueue</code></td>
+                        <td>retire request、completed epoch、owner generation</td>
+                        <td>安全释放动作、泄漏统计</td>
+                        <td>epoch 未完成则继续排队</td>
+                        <td>GT 消费，RHI destroy 必须在合法线程执行</td>
+                    </tr>
+                </tbody>
+            </table>
+            <h3>建议的最小返回类型</h3>
+            <pre><code>struct RuntimeError {
+    std::string code;
+    std::string message;
+    std::string sourcePath;
+};
+
+template&lt;typename T&gt;
+struct RuntimeResult {
+    bool ok = false;
+    T value;
+    RuntimeError error;
+};</code></pre>
+        </section>
+
+        <section id="migration">
+            <h2>18) 代码迁移蓝图</h2>
+            <p class="summary">无过渡期不等于一次提交完成所有文件。它的意思是最终切换点不维护双运行路径；实现上仍然可以先在新目录中搭骨架、编译通过、测试通过，再一次性替换入口。</p>
+            <h3>目标目录</h3>
+            <pre><code>source/
+  platform/
+    platformApplication.h/.cpp
+    platformWindow.h/.cpp
+    fileSystem.h/.cpp
+    runtimeClock.h/.cpp
+  engine/
+    engineLoop.h/.cpp
+    gameInstance.h/.cpp
+    runtimeConfig.h/.cpp
+    subsystem/
+      engineSubsystem.h
+      worldSubsystem.h
+  input/
+    inputSubsystem.h/.cpp
+    playerController.h/.cpp
+  world/
+    world.h/.cpp
+    level.h/.cpp
+    actor.h/.cpp
+    actorComponent.h/.cpp
+    worldManager.h/.cpp
+    worldSnapshot.h/.cpp
+    loading/
+      worldLoader.h/.cpp
+      worldBuilder.h/.cpp
+      worldTransitionCoordinator.h/.cpp
+  render/
+    frontend/
+      rendererFrontend.h/.cpp
+      renderScene.h/.cpp
+    graph/
+      frameGraphCompiler.h/.cpp
+      compiledFrameGraph.h/.cpp
+    backend/
+      rendererBackendVulkan.h/.cpp
+      rendererDrawExecutor.h/.cpp
+      rendererFrameResources.h/.cpp
+      rendererObjectGpuResources.h
+      rendererObjectResourceManager.h/.cpp
+      rendererObjectResourceRegistry.h/.cpp
+      resolvedRenderScene.h/.cpp
+    rhi/
+      rhiDevice.h
+      vulkan/rhiDeviceVulkan.h/.cpp
+  resource/
+    assetManager.h/.cpp
+    globalResourceCache.h/.cpp
+    worldResourceCache.h/.cpp
+    resourceRetireQueue.h/.cpp
+  tools/
+    consoleSubsystem.h/.cpp
+    diagnosticsSubsystem.h/.cpp
+    runtimeTestHooks.h/.cpp</code></pre>
+            <h3>迁移顺序</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>步骤</th>
+                        <th>动作</th>
+                        <th>完成标准</th>
+                        <th>不允许顺手做</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>1</td>
+                        <td>抽出 <code>EngineLoop</code>，搬迁 <code>main.cpp</code> 主循环、事件分发、shutdown 顺序</td>
+                        <td><code>main.cpp</code> 只负责创建 <code>PlatformApplication</code>、调用 <code>EngineLoop::Init/Run/Shutdown</code>，再关闭平台层</td>
+                        <td>修改渲染 pass 行为</td>
+                    </tr>
+                    <tr>
+                        <td>2</td>
+                        <td>把旧 scene 校验入口演进为 <code>WorldLoader</code></td>
+                        <td>scene JSON 校验输出纯 <code>WorldBuildPlan</code></td>
+                        <td>在 loader 中创建 Vulkan 资源</td>
+                    </tr>
+                    <tr>
+                        <td>3</td>
+                        <td>把 camera/light/environment metadata 创建迁入 <code>WorldBuilder</code></td>
+                        <td>能构建 active/staging World，失败不改 activeWorld；renderer resource loaders 显式留边界</td>
+                        <td>继续把 gameplay 对象写进 renderer resource loader 状态</td>
+                    </tr>
+                    <tr>
+                        <td>4</td>
+                        <td>建立 <code>WorldSnapshot</code> 与 <code>RenderScene</code></td>
+                        <td><code>RenderSystem</code> 不再向资源加载编排器查询 camera/lights/material map；handle 解析集中在 <code>ResolvedRenderSceneBuilder</code></td>
+                        <td>把 World 指针塞进 RenderScene</td>
+                    </tr>
+                    <tr>
+                        <td>5</td>
+                        <td>拆 <code>RenderGraph</code> 为 compiler/runtime resource 两层</td>
+                        <td>pass 输入输出、descriptor plan、barrier plan 可独立验证</td>
+                        <td>改变现有 renderGraphConfig JSON 语义</td>
+                    </tr>
+                    <tr>
+                        <td>6</td>
+                        <td>引入 <code>ResourceRetireQueue</code></td>
+                        <td>world-local cache 清理已走延迟释放；swapchain resize 先 wait idle 后重建尺寸相关资源；后续扩展 graph reload 的非 idle retire</td>
+                        <td>用全局 <code>waitIdle</code> 掩盖生命周期问题</td>
+                    </tr>
+                    <tr>
+                        <td>7</td>
+                        <td>一次性替换旧入口，删除旧执行路径对外 API</td>
+                        <td>主分支只剩新架构入口，旧路径不再可调用</td>
+                        <td>留下 adapter 或双实现选择开关</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <section id="adapter">
+            <h2>19) 一次性 Cutover 清单（无过渡期）</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>旧执行路径</th>
+                        <th>新执行路径</th>
+                        <th>切换前门槛</th>
+                        <th>失败回退动作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>rendererResourceLoadCoordinator.*</code></td>
+                        <td><code>IWorldLoader + IWorldBuilder</code></td>
+                        <td>全部 scene 类型加载通过新 Builder 回归通过</td>
+                        <td>切回上一个稳定构建版本（整包回退）</td>
+                    </tr>
+                    <tr>
+                        <td><code>renderSystem.*</code></td>
+                        <td><code>IRendererFrontend</code></td>
+                        <td>RenderScene 生成与旧渲染结果差异在阈值内</td>
+                        <td>整包回退，禁止线上热补并行逻辑</td>
+                    </tr>
+                    <tr>
+                        <td><code>renderGraph.*</code></td>
+                        <td><code>IFrameGraphCompiler</code></td>
+                        <td>Pass/Resource 生命周期测试与压力测试通过</td>
+                        <td>整包回退并恢复旧渲染配置</td>
+                    </tr>
+                    <tr>
+                        <td><code>lightManager.*</code></td>
+                        <td><code>IWorldRenderSubsystem</code></td>
+                        <td>World 切换 100 次无泄漏/无失效 descriptor</td>
+                        <td>整包回退并重置资源缓存</td>
+                    </tr>
+                    <tr>
+                        <td><code>debugConsole.*</code></td>
+                        <td><code>IConsoleSubsystem</code></td>
+                        <td>所有命令走 Coordinator，不直连内部系统</td>
+                        <td>禁用新命令入口并回退构建</td>
+                    </tr>
+                </tbody>
+            </table>
+            <p class="muted">说明：无过渡期意味着不存在“旧新并行执行”或 Adapter 兜底，唯一兜底方式是版本级回退。</p>
+        </section>
+
+        <section id="acceptance">
+            <h2>20) 验收矩阵</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>验收域</th>
+                        <th>必须验证</th>
+                        <th>建议工具 / 方法</th>
+                        <th>失败判定</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>启动流程</td>
+                        <td>从仓库根目录启动；shader 编译、render graph、initScene、初始渲染都通过新 EngineLoop</td>
+                        <td><code>cmake --build build -j</code> + 手动运行 <code>build/bin/main.exe</code></td>
+                        <td>入口绕过 <code>WorldTransitionCoordinator</code> 直接调用旧 scene load 或旧渲染初始化路径</td>
+                    </tr>
+                    <tr>
+                        <td>Platform/Input</td>
+                        <td>窗口 resize、退出事件、鼠标捕获、相机控制都通过 Platform/Input/Controller 边界流转</td>
+                        <td>手动 resize、Esc 切换、移动相机、关闭窗口</td>
+                        <td>Controller 直接操作 SDL window，或 resize 触发 World 重建</td>
+                    </tr>
+                    <tr>
+                        <td>Console/Commands</td>
+                        <td>load scene、debug view、环境强度等命令都走 CommandBus，有参数校验和错误消息</td>
+                        <td>控制台 smoke commands</td>
+                        <td>命令直接抓系统单例修改内部状态</td>
+                    </tr>
+                    <tr>
+                        <td>World 切换</td>
+                        <td>连续切换 100 次 scene，无崩溃、无黑屏、无半切换状态</td>
+                        <td><code>build/bin/main.exe --reloadstress &lt;scene-path&gt; 100 --exit-after-tests</code> 验证连续切换、旧 world-local 资源进入 retire queue 并在 fence epoch 推进后 drain；<code>build/bin/main.exe --reloadfail &lt;bad-scene-path&gt; --exit-after-tests</code> 验证失败加载不改变 active World；<code>build/bin/main.exe --reloadfail-material --exit-after-tests</code> 生成坏 material fixture，并比较失败前后的 renderer resource cache / pass material 指纹，验证资源加载中途失败后的内容级回滚；<code>build/bin/main.exe --lightstress 3 --exit-after-tests</code> 生成 96 个 point light 的 scene，覆盖 frame-local light SSBO 扩容和旧 buffer retire。</td>
+                        <td>失败后 activeWorld 为空、camera 丢失、旧资源提前释放</td>
+                    </tr>
+                    <tr>
+                        <td>数据边界</td>
+                        <td>Renderer 不再从资源加载编排器或 mutable World 读取 camera/lights/material map；backend draw / pass runtime / resolved scene 不保留 <code>SceneObject</code> 或 <code>World</code> 依赖；RenderSystem 不内联 cache handle 解析</td>
+                        <td><code>powershell -ExecutionPolicy Bypass -File tool/ue-lite-boundary-audit.ps1</code> + 针对性 <code>rg</code> 审计调用边界</td>
+                        <td>渲染帧路径仍存在跨层单例读取，或 backend draw path 重新引用 mutable World / SceneObject</td>
+                    </tr>
+                    <tr>
+                        <td>资源释放</td>
+                        <td>World retire、swapchain resize、render graph reload 均无 Vulkan validation error</td>
+                        <td><code>build/bin/main.exe --graphreloadstress 6 --exit-after-tests</code>、Vulkan validation layer + Tracy/Nsight marker</td>
+                        <td>出现 use-after-free、descriptor 指向销毁 image view、framebuffer 悬空</td>
+                    </tr>
+                    <tr>
+                        <td>渲染一致性</td>
+                        <td>默认场景输出与旧版本在可接受阈值内，debug view、shadow、bloom、tone mapping 仍可用</td>
+                        <td>截图对比、关键 pass 输出检查、人工视觉确认</td>
+                        <td>材质绑定错位、环境光丢失、post-process pass 输入错误</td>
+                    </tr>
+                    <tr>
+                        <td>Asset/Material/Shader</td>
+                        <td>scene、mesh、terrain、texture、material instance、shader reflection 的校验边界清晰</td>
+                        <td>缺资源、binding mismatch、错误材质参数、shader 编译失败用例</td>
+                        <td>Asset 层创建 Vulkan 对象，或材质错误延迟到绘制时才暴露</td>
+                    </tr>
+                    <tr>
+                        <td>RHI/Swapchain</td>
+                        <td>swapchain recreate 只重建 RHI/frame graph 尺寸相关资源，不破坏 World 和 Asset cache</td>
+                        <td><code>build/bin/main.exe --resizestress 6 --exit-after-tests</code> + validation layer</td>
+                        <td>resize 后 descriptor/framebuffer 悬空或 World 数据丢失</td>
+                    </tr>
+                    <tr>
+                        <td>性能基线</td>
+                        <td>固定帧数 smoke run 能完成并输出 avg/min/max frame time 与 avg FPS；reload 峰值可解释</td>
+                        <td><code>build/bin/main.exe --framesmoke 120 --exit-after-tests</code> 记录当前 V1 性能基线；Tracy / Nsight Systems 可用于进一步对比</td>
+                        <td>每帧重复编译 pipeline 或重复创建 world-local 大资源</td>
+                    </tr>
+                    <tr>
+                        <td>错误可诊断</td>
+                        <td>scene/material/render graph 校验失败能输出路径、节点、错误码</td>
+                        <td>构造坏 JSON、缺资源、binding mismatch 用例</td>
+                        <td>只抛出泛化异常或进入半初始化状态</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <section id="milestone">
+            <h2>21) 里程碑与风险</h2>
+            <div class="grid">
+                <div class="card">
+                    <h3>Milestone A</h3>
+                    <p><span class="ok">当前进展：</span><code>PlatformApplication</code>、<code>PlatformWindow</code>、<code>FileSystem</code>、<code>EngineLoop</code>、<code>GameInstance</code>、<code>SubsystemCollection</code>、<code>CommandBus</code>、<code>ConsoleSubsystem</code>、<code>DiagnosticsSubsystem</code>、<code>RuntimeConfig</code>、<code>RuntimeClock</code> 与 <code>InputSubsystem</code> 骨架已落地，启动配置、项目根发现、JSON 读取、runtime path 解析、窗口事件、输入采样、命令投递、runtime diagnostics、帧 delta、渲染循环和 shutdown 已从 <code>main.cpp</code> / <code>Controller</code> / <code>CommonFunction</code> 热路径中迁出。<code>--framesmoke [count] --exit-after-tests</code> 已作为固定帧数 smoke/performance baseline 入口接入 EngineLoop。</p>
+                    <p><span class="warn">V1 边界：</span>当前生命周期由 <code>EngineLoop</code> 显式编排，各 subsystem 只暴露实际需要的初始化/更新入口；<code>RuntimeConfig/FileSystem</code> 已接管启动配置与命令路径解析，部分资源加载 helper 仍保留 <code>CommonFunction::Path</code> 作为兼容入口，长期可继续迁到 AssetManager。active world reload 的连续压力验证已由 <code>--reloadstress scenes/SC_speedtree.json 20 --exit-after-tests</code> 覆盖，固定帧渲染基线由 <code>--framesmoke 120 --exit-after-tests</code> 覆盖。</p>
+                </div>
+                <div class="card">
+                    <h3>Milestone B</h3>
+                    <p><span class="ok">完成：</span>AssetManager + ShaderLibrary + MaterialLibrary 边界成型。</p>
+                    <p><span class="warn">验收：</span>资源、材质、shader 错误都在构建期可诊断。</p>
+                </div>
+                <div class="card">
+                    <h3>Milestone C</h3>
+                    <p><span class="ok">当前进展：</span>Coordinator 状态机 + WorldBuilder 构建 stagingWorld 已落地；active reload 已接入 resource cache / pass material 快照回滚，并在成功后重绑 RenderSystem active world 与 Controller view target；<code>RuntimeTestHooks</code> 提供 <code>reloadstress</code> 逐帧压测入口，命令行 <code>--reloadstress &lt;scene-path&gt; [count] --exit-after-tests</code> 可自动退出并用进程退出码表达验收结果；reloadstress 结束前会继续等待 <code>ResourceRetireQueue</code> drain，多次 reload 时还会确认曾观察到 retired world-local resources，防止旧 World 资源被立即释放或没有进入 retire 流程；<code>--reloadfail &lt;bad-scene-path&gt; --exit-after-tests</code> 已补充预期失败路径，验证失败加载不会触发 runtime rebind，且失败前后的 active World handle 保持一致；<code>--reloadfail-material --exit-after-tests</code> 会生成临时 scene/mesh/material fixture，让 scene 与 mesh 验证通过后在 renderer material load 阶段因未知参数失败，并比较失败前后的 renderer resource cache / pass material 指纹，用来覆盖资源加载中途失败后的内容级回滚；<code>--lightstress [count] --exit-after-tests</code> 会生成高灯光 scene 并复用 reloadstress 路径，覆盖 frame-local light SSBO 扩容。</p>
+                    <p><span class="warn">验收：</span>用 <code>build/bin/main.exe --reloadstress &lt;scene-path&gt; 20 --exit-after-tests</code> 连续切场景无崩溃且返回 0，并确认 retire queue 曾出现 pending 后 drain 到 0；用 <code>build/bin/main.exe --reloadfail &lt;bad-scene-path&gt; --exit-after-tests</code> 验证坏 scene 路径失败后旧 World 仍为 active；用 <code>build/bin/main.exe --reloadfail-material --exit-after-tests</code> 验证 material/resource 加载中途失败后旧 World 仍为 active，renderer resource cache / pass material 指纹保持一致，且临时 fixture 会自动清理；用 <code>build/bin/main.exe --lightstress 3 --exit-after-tests</code> 验证超过默认灯光容量后旧 light SSBO 进入 retire queue。</p>
+                </div>
+                <div class="card">
+                    <h3>Milestone D</h3>
+                    <p><span class="ok">当前进展：</span><code>WorldSnapshot</code> -> <code>RenderScene</code> -> <code>ResolvedRenderScene</code> 的过渡路径已接入现有 Vulkan draw path，单线程模式也按 GT/RT 数据边界 publish/consume snapshot；<code>WorldSnapshotBuilder</code> 已按 stable object id 缓存 previous model，不再需要 <code>RenderSystem</code> 帧末回写 <code>SceneObject</code>；<code>RendererBackendVulkan</code> 过渡门面已接管 swapchain frame begin/end、submit/present 与 fence epoch，<code>RenderSystem</code> 只把录制完成的 <code>RendererFrameContext</code> 交回 <code>SubmitFrame(frameContext, currentFrame)</code>，本帧 command buffer、queue、swapchain、semaphore、fence、wait stage 与 submitted epoch 都保持为 backend 内部细节。<code>source/render/rhi/rhiDevice.h</code> 已补出当前 RHI 设备抽象面，<code>RHIDeviceVulkan</code> 实现该契约并承接 Vulkan init、resize、waitIdle、swapchain 查询，以及 buffer、image/view/sampler、descriptor、render pass、framebuffer、single-time command、buffer/image copy helper；扫描结果显示渲染侧直接 <code>VulkanManager::GetInstance()</code> 访问已收敛到 <code>source/render/rhi/vulkan/rhiDeviceVulkan.cpp</code>，<code>RHIDevice</code> 抽象契约不再暴露 raw device/queue/swapchain/fence getter，且 <code>RendererBackendVulkan</code> 不再向上层暴露 <code>GetDevice()</code> / <code>GetGpuMemoryProperties()</code> 裸 getter 或 <code>GetRhiDevice()</code> 逃逸口，<code>PipelineFactory</code> 改由 backend 创建。<code>RendererObjectGpuResources</code> 已定义对象 GPU 资源包，<code>RendererObjectResourceEntry</code> 已作为 backend object resource registry 条目接管资源包生命周期，<code>RendererObjectResourceManager</code> 负责创建、销毁和 descriptor 写入；<code>ResolvedDrawPacket</code> 现在携带 renderable handle 与 object resource entry；<code>RendererDrawExecutor</code> 已从 <code>PassRuntime</code> 接过 shadow / geometry 对象 draw 循环，并直接消费这些 backend 资源。PassRuntime 现在主要负责 pass 分派、barrier、render pass begin/end 和 post-process 特例；global UBO buffer、light SSBO、material instance UBO 写入与 object UBO 写入已由 <code>RendererFrameResources</code> 持有或集中处理；object UBO 使用 <code>RenderDrawPacket</code> 冻结矩阵，不在 pass 录制时重新读取 mutable <code>SceneObject</code> transform。mesh vertex/index buffer、普通材质贴图上传、BRDF LUT、environment cubemap / prefilter 生成、对象 descriptor、pass descriptor layout/pool/set/update、RenderGraph render target/render pass/framebuffer 创建释放已迁入 backend/RHI 路径。<code>RenderGraph</code> 和对象 descriptor 刷新已改为消费 <code>RendererDescriptorContext</code>，不再 include <code>renderSystem.h</code> 或反向读取 <code>RenderSystem</code> 单例；<code>RendererDescriptorPlanCache</code> 已从 <code>Renderpass</code> 接过 descriptor write plan 归属，<code>RendererDescriptorWriter</code> 已统一 descriptor write 解析，减少 pass/object 两套重复分支。</p>
+                    <p><span class="warn">验收：</span><code>tool/ue-lite-boundary-audit.ps1</code> 已提供静态边界验收，覆盖 legacy <code>SceneLoader</code>/<code>LightManager</code> 文件和引用不可回流、渲染 draw path 不回读 World/SceneObject、RenderSystem 不直接查询或绑定对象 GPU 资源、上层不从 backend facade 拉取 raw device/memory getter、backend 不暴露 <code>GetRhiDevice()</code>、submit/present DTO 不泄露出 backend、<code>RHIDevice</code> 抽象不重新开放 raw Vulkan getter，以及渲染侧不绕过 RHI 访问 <code>VulkanManager</code>；运行时 reloadstress 已覆盖当前单线程 snapshot handoff。长期演进方向是继续把 RHI 设备契约从 Vulkan 资源句柄参数推进到 API 无关资源句柄。</p>
+                </div>
+                <div class="card">
+                    <h3>Milestone E</h3>
+                    <p><span class="ok">当前进展：</span><code>RendererResourceCache</code> 已拆出 global texture 与 world-local resource 清理边界；shutdown 现在先等待 GPU idle，再显式释放 <code>RendererFrameResources</code> global UBO / light SSBO、RenderGraph GPU 对象、active World、Controller 和 resource cache，最后 <code>ForceReleaseAll()</code>，确保 world-local material UBO、environment 预处理纹理与 frame graph 对象都在 <code>RendererBackendVulkan</code> 仍有效时销毁；<code>ResourceRetireQueue</code> 已接入 backend fence epoch；reloadstress 运行时会观察 retire queue pending 峰值并等待 drain，用自动化覆盖 old World world-local resource 延迟释放。swapchain resize 已接入保守重建事务：窗口事件或 <code>--resizestress</code> 会重建 swapchain、RenderGraph attachment/framebuffer/pass descriptor、frame buffer set、material UBO 和 object descriptor，且不触发 World reload。Render graph reload 已增加 <code>RenderGraphReleaseMode::Retire</code>，<code>--graphreloadstress</code> 会连续重载 graph config，并验证旧 graph GPU 对象进入 retire queue 后可 drain。Frame-local light SSBO 扩容已改为 retire 旧 buffer set，并已收敛为正式 <code>--lightstress</code> runtime test hook。</p>
+                    <p><span class="warn">长期验证：</span>当前 V1 自动化已覆盖 resize / graph reload / lightstress 的短压测；合入前可以按需要扩展成更长时间的 validation-layer 长跑。</p>
+                </div>
+                <div class="card">
+                    <h3>Milestone F</h3>
+                    <p><span class="ok">完成：</span>Hard cutover，旧执行路径不可调用。</p>
+                    <p><span class="warn">验收：</span>回归矩阵通过，保留版本级回退点。</p>
+                </div>
+                <div class="card">
+                    <h3>主要风险</h3>
+                    <p><span class="risk">风险：</span><code>RenderGraph</code> / <code>SceneObject</code> 到 <code>RenderSystem</code> 的 descriptor 反向依赖已切断，descriptor write plan 已移到 <code>RendererDescriptorPlanCache</code>。renderer resource loading 与 pass material 之间仍有有意保留的 VulkanLearn V1 耦合，继续拆成更通用 AssetManager 时牵动较大。</p>
+                    <p><span class="warn">控制：</span>先建立数据契约和审计规则，再搬迁实现。</p>
+                </div>
+            </div>
+            <h3>决策记录</h3>
+            <div class="grid">
+                <div class="card decision">
+                    <strong>Decision 1：单 World</strong>
+                    <p class="muted">V1 不支持多 World 并存运行，只允许 active/staging/retiring 生命周期态。</p>
+                </div>
+                <div class="card decision">
+                    <strong>Decision 2：GT 写 World</strong>
+                    <p class="muted">Gameplay 数据写入集中在 GT，RT 只能消费冻结快照。</p>
+                </div>
+                <div class="card decision">
+                    <strong>Decision 3：一次性 Cutover</strong>
+                    <p class="muted">最终切换不保留旧新双执行路径，兜底方式是版本级回退。</p>
+                </div>
+                <div class="card decision">
+                    <strong>Decision 4：资源延迟释放</strong>
+                    <p class="muted">任何 Vulkan 资源只要可能被 GPU 使用，都必须经 retire epoch 安全释放。</p>
+                </div>
+            </div>
+            <p class="muted">说明：这是“无过渡期全量重构”执行底稿，后续讨论默认以一次性 cutover 为前提。</p>
+        </section>
+    </main>
+</div>
+</body>
+</html>

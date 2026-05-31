@@ -9,7 +9,7 @@
 
 // Result of resolving one mesh asset JSON into the effective JSON consumed by mesh validation.
 // It keeps resolver output separate from runtime loading so later defaults or platform overrides can
-// be introduced without moving that policy into SceneLoader.
+// be introduced without moving that policy into RendererMeshLoader.
 struct MeshAssetResolveResult
 {
     nlohmann::json effectiveMeshAssetJson;
@@ -47,7 +47,8 @@ struct SpeedTreeVertexAux
 };
 
 // Validated mesh asset data needed before importing the source model file.
-// SceneLoader will use this plan to select an importer and later bind section material slots.
+// RendererMeshLoader uses this plan to select an importer and later bind section
+// material slots.
 // This structure does not own imported geometry or Vulkan resources.
 struct MeshAssetBuildPlan
 {
@@ -58,7 +59,7 @@ struct MeshAssetBuildPlan
     std::string modelCacheKey;
 };
 
-// Import request passed from SceneLoader to the selected model importer strategy.
+// Import request passed from RendererMeshLoader to the selected model importer strategy.
 // It combines the validated mesh asset plan with the resolved absolute model path; importers return
 // CPU-side ModelResource data and do not create scene objects, material instances, or GPU buffers.
 struct ModelImportRequest
@@ -80,8 +81,8 @@ struct MeshSection
 };
 
 // Runtime loading plan for one imported mesh section after material slot validation.
-// SceneLoader consumes this to create the section renderable and load the referenced material
-// instance. It does not contain vertex or index buffers.
+// RendererMeshLoader consumes this to create the section renderable and load
+// the referenced material instance. It does not contain vertex or index buffers.
 struct MeshSectionLoadPlan
 {
     std::string sectionName;

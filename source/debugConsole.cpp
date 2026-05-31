@@ -4,28 +4,12 @@
 #include <cctype>
 #include <iostream>
 #include <sstream>
+#include <utility>
 
-#include "renderSystem.h"
-#include "materialInstance.h"
-#include "renderGraph.h"
+#include "engine/runtimeCommand.h"
 
-namespace
-{
-    std::shared_ptr<MaterialInstance> GetPassMaterialInstance(const char* passName)
-    {
-        auto& renderpasses = RenderGraph::GetInstance().GetRenderpasses();
-        auto passIt = renderpasses.find(passName);
-        if (passIt == renderpasses.end())
-        {
-            return nullptr;
-        }
-
-        return passIt->second.materialInstance.lock();
-    }
-}
-
-DebugConsole::DebugConsole(RenderSystem& renderSystem)
-    : renderSystem(renderSystem)
+DebugConsole::DebugConsole(VL::CommandBus& commandBus)
+    : commandBus(commandBus)
 {
 }
 
@@ -99,8 +83,11 @@ void DebugConsole::ProcessCommand(const std::string& line)
             return;
         }
 
-        renderSystem.SetDebugViewMode(mode);
-        std::cout << "Debug view mode set to " << mode << std::endl;
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type = VL::RuntimeCommandType::SetDebugViewMode;
+        runtimeCommand.intValue = mode;
+        runtimeCommand.sourceText = line;
+        commandBus.Queue(std::move(runtimeCommand));
         return;
     }
 
@@ -117,25 +104,11 @@ void DebugConsole::ProcessCommand(const std::string& line)
             return;
         }
 
-        auto mi = GetPassMaterialInstance("toneMapping");
-        if (mi)
-        {
-            if (mi->HasParameter("u_toneMappingParams"))
-            {
-                Eigen::Vector4f params = mi->GetParameter<Eigen::Vector4f>("u_toneMappingParams");
-                params.w() = static_cast<float>(mode);
-                mi->SetParameter("u_toneMappingParams", params);
-                std::cout << "Tone mapping mode set to " << mode << std::endl;
-            }
-            else
-            {
-                std::cout << "Parameter 'u_toneMappingParams' not found in tone mapping material." << std::endl;
-            }
-        }
-        else
-        {
-            std::cout << "Tone mapping pass not found." << std::endl;
-        }
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type = VL::RuntimeCommandType::SetToneMappingMode;
+        runtimeCommand.intValue = mode;
+        runtimeCommand.sourceText = line;
+        commandBus.Queue(std::move(runtimeCommand));
         return;
     }
 
@@ -151,49 +124,30 @@ void DebugConsole::ProcessCommand(const std::string& line)
 
         if (field == "strength")
         {
-            auto mi = GetPassMaterialInstance("toneMapping");
-            if (!mi)
-            {
-                std::cout << "Tone mapping material instance is expired." << std::endl;
-                return;
-            }
-            if (!mi->HasParameter("u_toneMappingParams"))
-            {
-                std::cout << "Parameter 'u_toneMappingParams' not found in tone mapping material." << std::endl;
-                return;
-            }
-
-            Eigen::Vector4f params = mi->GetParameter<Eigen::Vector4f>("u_toneMappingParams");
-            params.y() = value;
-            mi->SetParameter("u_toneMappingParams", params);
-            std::cout << "Bloom strength set to " << value << std::endl;
+            VL::RuntimeCommand runtimeCommand;
+            runtimeCommand.type = VL::RuntimeCommandType::SetBloomParameter;
+            runtimeCommand.bloomParameter = VL::BloomParameter::Strength;
+            runtimeCommand.floatValue = value;
+            runtimeCommand.sourceText = line;
+            commandBus.Queue(std::move(runtimeCommand));
             return;
         }
 
-        auto mi = GetPassMaterialInstance("bloomPrefilter");
-        if (!mi)
-        {
-            std::cout << "Bloom prefilter material instance is expired." << std::endl;
-            return;
-        }
-        if (!mi->HasParameter("u_bloomPrefilterParams"))
-        {
-            std::cout << "Parameter 'u_bloomPrefilterParams' not found in bloom prefilter material." << std::endl;
-            return;
-        }
-
-        Eigen::Vector4f params = mi->GetParameter<Eigen::Vector4f>("u_bloomPrefilterParams");
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type = VL::RuntimeCommandType::SetBloomParameter;
+        runtimeCommand.floatValue = value;
+        runtimeCommand.sourceText = line;
         if (field == "threshold")
         {
-            params.x() = value;
+            runtimeCommand.bloomParameter = VL::BloomParameter::Threshold;
         }
         else if (field == "knee")
         {
-            params.y() = value;
+            runtimeCommand.bloomParameter = VL::BloomParameter::Knee;
         }
         else if (field == "clamp")
         {
-            params.z() = value;
+            runtimeCommand.bloomParameter = VL::BloomParameter::Clamp;
         }
         else
         {
@@ -201,14 +155,73 @@ void DebugConsole::ProcessCommand(const std::string& line)
             return;
         }
 
-        mi->SetParameter("u_bloomPrefilterParams", params);
-        std::cout << "Bloom " << field << " set to " << value << std::endl;
+        commandBus.Queue(std::move(runtimeCommand));
         return;
     }
 
     if (command == "help")
     {
         PrintHelp();
+        return;
+    }
+
+    if (command == "loadworld" || command == "loadscene")
+    {
+        std::string scenePath;
+        if (!(commandStream >> scenePath))
+        {
+            std::cout << "Usage: loadworld <scene-relative-or-absolute-path>" << std::endl;
+            return;
+        }
+
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type = VL::RuntimeCommandType::LoadWorld;
+        runtimeCommand.stringValue = scenePath;
+        runtimeCommand.sourceText = line;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
+    if (command == "reloadstress")
+    {
+        std::string scenePath;
+        int reloadCount = 20;
+        if (!(commandStream >> scenePath))
+        {
+            std::cout << "Usage: reloadstress <scene-path> [count]" << std::endl;
+            return;
+        }
+        commandStream >> std::ws;
+        if (!commandStream.eof() && !(commandStream >> reloadCount))
+        {
+            std::cout << "Usage: reloadstress <scene-path> [count]" << std::endl;
+            return;
+        }
+
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type = VL::RuntimeCommandType::RunWorldReloadStress;
+        runtimeCommand.stringValue = scenePath;
+        runtimeCommand.intValue = reloadCount;
+        runtimeCommand.sourceText = line;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
+    if (command == "lightstress")
+    {
+        int reloadCount = 3;
+        commandStream >> std::ws;
+        if (!commandStream.eof() && !(commandStream >> reloadCount))
+        {
+            std::cout << "Usage: lightstress [count]" << std::endl;
+            return;
+        }
+
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type = VL::RuntimeCommandType::RunGeneratedHighLightReloadStress;
+        runtimeCommand.intValue = reloadCount;
+        runtimeCommand.sourceText = line;
+        commandBus.Queue(std::move(runtimeCommand));
         return;
     }
 
@@ -221,8 +234,11 @@ void DebugConsole::ProcessCommand(const std::string& line)
             return;
         }
 
-        renderSystem.SetEnvironmentIntensity(value);
-        std::cout << "Environment intensity set to " << value << std::endl;
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type = VL::RuntimeCommandType::SetEnvironmentIntensity;
+        runtimeCommand.floatValue = value;
+        runtimeCommand.sourceText = line;
+        commandBus.Queue(std::move(runtimeCommand));
         return;
     }
 
@@ -253,6 +269,9 @@ void DebugConsole::PrintHelp() const
     std::cout << "  bloom threshold <value> - set bloom threshold\n";
     std::cout << "  bloom knee <value> - set bloom soft knee\n";
     std::cout << "  bloom clamp <value> - set bloom fireflies clamp\n";
+    std::cout << "  loadworld <scene-path> - request scene load through WorldTransitionCoordinator\n";
+    std::cout << "  reloadstress <scene-path> [count] - reload a scene once per frame for validation\n";
+    std::cout << "  lightstress [count] - generate a high-light scene and reload it for validation\n";
     std::cout << "  environment <value> - set unified sky and IBL intensity\n";
 }
 

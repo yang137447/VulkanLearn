@@ -1,0 +1,47 @@
+#pragma once
+
+#include <cstdint>
+#include <memory>
+#include <string>
+
+class SceneNode;
+
+namespace VL
+{
+
+class World;
+
+struct WorldHandle
+{
+    uint64_t generation = 0;
+    std::string scenePath;
+    // GT-only control target for the current world. The renderer must continue
+    // to consume WorldSnapshot/RenderScene instead of this mutable object.
+    std::weak_ptr<SceneNode> viewTarget;
+
+    bool IsValid() const { return generation != 0 && !scenePath.empty(); }
+};
+
+// Metadata owner for the active UE-Lite World. Renderer resource loaders still
+// back mesh resources during migration, but WorldManager owns the stable
+// world identity that snapshots and renderer data validate against.
+class WorldManager
+{
+public:
+    uint64_t GetNextWorldGeneration() const { return nextWorldGeneration; }
+    WorldHandle ActivateLoadedWorld(std::shared_ptr<World> world);
+    void ClearActiveWorld();
+
+    bool HasActiveWorld() const { return activeWorld != nullptr; }
+    const WorldHandle& GetActiveWorldHandle() const { return activeWorldHandle; }
+    const std::shared_ptr<World>& GetActiveWorld() const { return activeWorld; }
+
+private:
+    WorldHandle BuildHandle(const World& world) const;
+
+    uint64_t nextWorldGeneration = 1;
+    WorldHandle activeWorldHandle;
+    std::shared_ptr<World> activeWorld;
+};
+
+} // namespace VL

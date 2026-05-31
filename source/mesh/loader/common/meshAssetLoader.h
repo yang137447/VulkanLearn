@@ -13,7 +13,8 @@ struct MeshAssetLoadRequest
 };
 
 // Result of importing one mesh asset into CPU-side sections plus per-section material mapping.
-// SceneLoader consumes this output to create renderables and bind material instances.
+// RendererMeshLoader consumes this output to create renderables and bind
+// material instances.
 struct MeshAssetImportResult
 {
     MeshAssetBuildPlan buildPlan;
@@ -21,8 +22,9 @@ struct MeshAssetImportResult
     std::vector<MeshSectionLoadPlan> sectionPlans;
 };
 
-// Mesh-side loader used by both SceneAssetValidator and SceneLoader.
-// It centralizes mesh JSON resolve/validate/import operations and keeps that policy out of SceneLoader.
+// Mesh-side loader used by scene preflight and RendererMeshLoader. It
+// centralizes mesh JSON resolve/validate/import operations and keeps that
+// policy out of WorldBuilder.
 class MeshAssetLoader
 {
 public:

@@ -1,0 +1,1114 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Foliage / SpeedTree / SSS / Wind 落地路线</title>
+    <style>
+        :root {
+            color-scheme: dark;
+            --bg: #101310;
+            --side: #131813;
+            --panel: #171d18;
+            --panel-2: #202820;
+            --line: #344238;
+            --text: #edf3ec;
+            --muted: #adbaaf;
+            --green: #83cf8f;
+            --cyan: #73cbd0;
+            --amber: #e8c96f;
+            --red: #e9928e;
+            --blue: #95bdf1;
+            --code: #0a0f0b;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            margin: 0;
+            background: var(--bg);
+            color: var(--text);
+            font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+            line-height: 1.65;
+        }
+
+        a {
+            color: var(--cyan);
+            text-decoration: none;
+            overflow-wrap: anywhere;
+        }
+
+        a:hover {
+            text-decoration: underline;
+        }
+
+        code {
+            padding: 0.12em 0.36em;
+            border: 1px solid #2b392f;
+            border-radius: 5px;
+            background: var(--code);
+            color: #d9efe4;
+            font-family: "Cascadia Code", Consolas, monospace;
+            font-size: 0.92em;
+            overflow-wrap: anywhere;
+        }
+
+        pre {
+            overflow: auto;
+            margin: 12px 0 0;
+            padding: 14px;
+            border: 1px solid #2d3932;
+            border-radius: 8px;
+            background: var(--code);
+        }
+
+        pre code {
+            padding: 0;
+            border: 0;
+            background: transparent;
+        }
+
+        .layout {
+            display: grid;
+            grid-template-columns: 292px minmax(0, 1fr);
+            min-height: 100vh;
+        }
+
+        aside {
+            position: sticky;
+            top: 0;
+            height: 100vh;
+            overflow: auto;
+            padding: 28px 22px;
+            border-right: 1px solid var(--line);
+            background: var(--side);
+        }
+
+        .brand {
+            margin-bottom: 24px;
+        }
+
+        .brand strong {
+            display: block;
+            font-size: 19px;
+            line-height: 1.25;
+        }
+
+        .brand span {
+            display: block;
+            margin-top: 8px;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        nav {
+            display: grid;
+            gap: 6px;
+        }
+
+        nav a {
+            display: block;
+            padding: 8px 10px;
+            border-radius: 6px;
+            color: var(--muted);
+            font-size: 14px;
+        }
+
+        nav a:hover {
+            background: var(--panel-2);
+            color: var(--text);
+            text-decoration: none;
+        }
+
+        main {
+            width: min(1160px, 100%);
+            padding: 34px clamp(22px, 5vw, 68px) 72px;
+        }
+
+        section {
+            margin: 0 0 44px;
+        }
+
+        h1 {
+            margin: 0 0 12px;
+            max-width: 940px;
+            font-size: clamp(32px, 5vw, 56px);
+            line-height: 1.06;
+            letter-spacing: 0;
+        }
+
+        h2 {
+            margin: 0 0 16px;
+            font-size: 25px;
+            line-height: 1.25;
+            letter-spacing: 0;
+        }
+
+        h3 {
+            margin: 0 0 10px;
+            font-size: 18px;
+            line-height: 1.35;
+            letter-spacing: 0;
+        }
+
+        p {
+            margin: 0 0 13px;
+            color: var(--muted);
+        }
+
+        ul,
+        ol {
+            margin: 0;
+            padding-left: 20px;
+            color: var(--muted);
+        }
+
+        li + li {
+            margin-top: 6px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            overflow: hidden;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: var(--panel);
+        }
+
+        th,
+        td {
+            padding: 11px 12px;
+            border-bottom: 1px solid var(--line);
+            vertical-align: top;
+            text-align: left;
+        }
+
+        tr:last-child td {
+            border-bottom: 0;
+        }
+
+        th {
+            background: #202920;
+            color: #e9f2e8;
+            font-size: 14px;
+        }
+
+        td {
+            color: var(--muted);
+            font-size: 14px;
+        }
+
+        .lead {
+            max-width: 880px;
+            color: #dce5dd;
+            font-size: 17px;
+        }
+
+        .badge-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 18px;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            min-height: 28px;
+            padding: 4px 9px;
+            border: 1px solid var(--line);
+            border-radius: 999px;
+            background: var(--panel);
+            color: #dce7dd;
+            font-size: 13px;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 14px;
+        }
+
+        .card,
+        .phase {
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: var(--panel);
+        }
+
+        .card {
+            padding: 18px;
+        }
+
+        .phase {
+            margin-bottom: 14px;
+            overflow: hidden;
+        }
+
+        .phase header {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 12px;
+            align-items: start;
+            padding: 16px 18px;
+            border-bottom: 1px solid var(--line);
+            background: #1d241d;
+        }
+
+        .phase .body {
+            display: grid;
+            grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+            gap: 18px;
+            padding: 16px 18px 18px;
+        }
+
+        .phase h3 {
+            margin: 0;
+        }
+
+        .tag {
+            display: inline-flex;
+            align-items: center;
+            min-height: 26px;
+            padding: 3px 8px;
+            border: 1px solid var(--line);
+            border-radius: 999px;
+            color: var(--green);
+            font-size: 12px;
+            white-space: nowrap;
+        }
+
+        .tag.amber {
+            color: var(--amber);
+        }
+
+        .tag.blue {
+            color: var(--blue);
+        }
+
+        .tag.red {
+            color: var(--red);
+        }
+
+        .note {
+            padding: 14px 16px;
+            border: 1px solid #4b4327;
+            border-radius: 8px;
+            background: #211f15;
+            color: #e7dcc0;
+        }
+
+        .note strong {
+            color: var(--amber);
+        }
+
+        .timeline {
+            display: grid;
+            gap: 9px;
+        }
+
+        .step {
+            display: grid;
+            grid-template-columns: 86px minmax(0, 1fr);
+            gap: 10px;
+            padding: 10px 12px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: var(--panel);
+        }
+
+        .step b {
+            color: var(--green);
+        }
+
+        .step span {
+            color: var(--muted);
+        }
+
+        .source-list {
+            display: grid;
+            gap: 10px;
+        }
+
+        .source {
+            padding: 13px 15px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: var(--panel);
+        }
+
+        .source p {
+            margin-bottom: 0;
+        }
+
+        @media (max-width: 900px) {
+            .layout {
+                grid-template-columns: 1fr;
+            }
+
+            aside {
+                position: static;
+                height: auto;
+                border-right: 0;
+                border-bottom: 1px solid var(--line);
+            }
+
+            nav {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .grid,
+            .phase .body {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media (max-width: 560px) {
+            main {
+                padding-inline: 18px;
+            }
+
+            nav {
+                grid-template-columns: 1fr;
+            }
+
+            .phase header {
+                grid-template-columns: 1fr;
+            }
+
+            .step {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="layout">
+        <aside>
+            <div class="brand">
+                <strong>Foliage Roadmap</strong>
+                <span>SpeedTree 静态导入、薄表面 SSS、风力、multi-pivot 的落地版规划。</span>
+            </div>
+            <nav aria-label="页面导航">
+                <a href="#goal">目标</a>
+                <a href="#official">官方资料核对</a>
+                <a href="#strategy">接入策略</a>
+                <a href="#material-slots">materialSlots</a>
+                <a href="#phases">阶段计划</a>
+                <a href="#data">数据设计</a>
+                <a href="#shading">Foliage Shading</a>
+                <a href="#wind-import">风数据导入</a>
+                <a href="#full-speedtree-wind">完整 SpeedTree 风</a>
+                <a href="#wind">Wind 与 Pivot</a>
+                <a href="#validation">验收清单</a>
+                <a href="#sources">官方链接</a>
+            </nav>
+        </aside>
+
+        <main>
+            <section id="goal">
+                <h1>Foliage / SpeedTree / SSS / Wind 落地路线</h1>
+                <p class="lead">这份 HTML 规划把第一棵 SpeedTree 树接入 VulkanLearn 的路线拆成可验收阶段：先补模型内多 mesh / 多材质导入，再做静态树显示、叶片 alpha cutout 和薄表面透射，随后加入全局风、SpeedTree 风数据评估和 multi-pivot。目标是先得到一棵结构正确、能显示、能透光、能动的树，再逐步靠近完整植被系统。</p>
+                <div class="badge-row">
+                    <span class="badge">Windows / Vulkan / C++17</span>
+                    <span class="badge">Data-driven scene</span>
+                    <span class="badge">Foliage transmission first</span>
+                    <span class="badge">Wind in vertex shader</span>
+                    <span class="badge">Multi-pivot after data exists</span>
+                </div>
+            </section>
+
+            <section id="official">
+                <h2>官方资料核对</h2>
+                <div class="grid">
+                    <article class="card">
+                        <h3>能直接借鉴的部分</h3>
+                        <ul>
+                            <li>SpeedTree Compiler 官方说明支持把树导出为静态 mesh 格式，默认包含 OBJ 和 FBX 路线，也提到可开发自定义 mesh exporter。</li>
+                            <li>Modeler 的 VFX Wind 文档明确了风来自 Fan object 和各 generator 的 wind 属性，建议先跑 Wind Wizard 再细调。</li>
+                            <li>官方风文档把 branch wind 分成共享 motion 和最多四个离散 branch wind level，leaf wind 则分成两个 leaf group。</li>
+                            <li>SDK 文档的 render configuration 是多 render pass 思路，示例中有 Forward、Depth Only、Deferred，并能按 LOD 与 geometry type 选择 shader/state。</li>
+                            <li>SDK 性能文档明确风主要压在 vertex shader，风效果可以按 Full、Branch、Global、None 做 LOD。</li>
+                        </ul>
+                    </article>
+                    <article class="card">
+                        <h3>不能直接照搬的部分</h3>
+                        <ul>
+                            <li>SDK 路线围绕 <code>.stsdk</code>、Render Interface、reference app 和平台 render policies，当前 VulkanLearn 更适合先走 FBX/GLB 静态资产接入。</li>
+                            <li>官方 VFX Wind 对 FBX/Alembic 的风导出更偏离线动画缓存，不等价于实时游戏 shader 风数据。</li>
+                            <li>完整 SpeedTree shader 含大量 LOD、billboard、vertex packer 和产品化宏，第一版不应该直接搬进学习 renderer。</li>
+                            <li>multi-pivot 必须来自导出或转换数据。官方资料能指导分层概念，但不能替代我们自己的 vertex layout。</li>
+                        </ul>
+                    </article>
+                </div>
+                <p class="note"><strong>结论：</strong>第一轮采用“多 section 静态 mesh + 自己的 foliage shader + 自定义 wind/pivot 数据”的接入路线；官方 SDK 文档作为结构参考，不作为第一版依赖。</p>
+            </section>
+
+            <section id="strategy">
+                <h2>接入策略</h2>
+                <div class="timeline">
+                    <div class="step"><b>第一步</b><span>建立 <code>source/mesh/</code> 文件夹，并新增 <code>MeshAssetResolver</code> 与 <code>MeshAssetValidator</code>，模仿 material 的 loader / validation 分层。</span></div>
+                    <div class="step"><b>第二步</b><span>迁移 mesh asset JSON 到必填 <code>materialSlots</code>，旧 <code>materialInstancePath</code> 直接报错。</span></div>
+                    <div class="step"><b>第三步</b><span>迁移 <code>ModelLoader</code> 到 <code>source/mesh/loader/</code>，并让它返回完整 <code>ModelResource</code>。</span></div>
+                    <div class="step"><b>第四步</b><span>建立 section material slot -> material instance 映射，让一棵树以一个模型资源进入场景。</span></div>
+                    <div class="step"><b>第五步</b><span>叶片先走现有 <code>pbr</code> + <code>OpaqueClip</code> + <code>cullMode=None</code>，确认 alpha、normal、shadow 基础链路。</span></div>
+                    <div class="step"><b>第六步</b><span>新建 <code>foliage</code> shader，再加入全局 wind 和后续 SpeedTree 风数据评估。</span></div>
+                </div>
+            </section>
+
+            <section id="material-slots">
+                <h2>下一步：materialSlots</h2>
+                <p><code>materialSlots</code> 是下一块最该先做的格式迁移。它把模型文件里的材质槽名称映射到 VulkanLearn 的 material instance JSON，让一个 SpeedTree 模型可以在同一个 mesh asset JSON 里绑定树干、树枝、叶片等多个材质。迁移后不再支持旧的 <code>materialInstancePath</code>。</p>
+                <div class="grid">
+                    <article class="card">
+                        <h3>模块边界</h3>
+                        <ul>
+                            <li><code>SceneLoader</code> 只负责编排 scene object 和创建 renderable sections。</li>
+                            <li><code>source/mesh/meshAssetTypes.h</code> 放 mesh asset 数据结构。</li>
+                            <li><code>MeshAssetResolver</code> 位于 <code>source/mesh/loader/</code>，对齐 material resolver。</li>
+                            <li><code>MeshAssetValidator</code> 位于 <code>source/mesh/validation/</code>，提供 <code>BuildLoadPlan()</code> 和 <code>BuildSectionLoadPlans()</code>。</li>
+                            <li><code>ModelLoader</code> 位于 <code>source/mesh/loader/</code>，只导入 FBX / GLB / OBJ 几何和材质槽名。</li>
+                            <li>新增 mesh 类头文件遵循 <code>documents/architecture/coding-guidelines.md</code> 的职责注释规则。</li>
+                        </ul>
+                    </article>
+                    <article class="card">
+                        <h3>调用链</h3>
+                        <pre><code>SceneLoader
+  -> read SM_*.json
+  -> MeshAssetResolver
+  -> MeshAssetValidator::BuildLoadPlan()
+  -> ModelLoader
+  -> MeshAssetValidator::BuildSectionLoadPlans()
+  -> LoadMaterialInstance()</code></pre>
+                    </article>
+                </div>
+                <p class="note"><strong>头文件注释：</strong>通用规则放在 <code>documents/architecture/coding-guidelines.md</code>。本模块里，<code>MeshAssetResolver</code> 说明 effective mesh asset JSON 的展开边界；<code>MeshAssetValidator</code> 说明 load plan 构建、格式验证和错误输出边界；<code>ModelLoader</code> 说明只导入 geometry sections 与 material slot 名，不认识 VulkanLearn material instance JSON。</p>
+                <p class="note"><strong>.stsdk 入口：</strong>SpeedTree <code>.stsdk</code> 仍然通过 <code>SM_xxx.json</code> 引入。scene object 只写 <code>modelPath</code>，mesh asset JSON 保持现有平铺风格，用 <code>type: "speedtree"</code> 和 <code>modelDataPath</code> 指向 <code>.stsdk</code>。第一版不写 <code>importCache</code>，数据都直接从 <code>.stsdk</code> 解析出来。</p>
+                <div class="grid">
+                    <article class="card">
+                        <h3>旧格式不再支持</h3>
+                        <pre><code>{
+  "name": "Sculpture",
+  "type": "mesh",
+  "modelDataPath": "models/SM_viking_room.obj",
+  "materialInstancePath": "materials/MI_viking_room.json"
+}</code></pre>
+                    </article>
+                    <article class="card">
+                        <h3>新格式</h3>
+                        <pre><code>{
+  "name": "SpeedTree Test Tree",
+  "type": "mesh",
+  "modelDataPath": "models/foliage/speedtree_test_tree.fbx",
+  "materialSlots": [
+    {
+      "name": "Bark",
+      "materialInstancePath": "materials/foliage/MI_speedtree_trunk.json"
+    },
+    {
+      "name": "Leaves",
+      "materialInstancePath": "materials/foliage/MI_speedtree_leaf.json"
+    }
+  ]
+}</code></pre>
+                    </article>
+                </div>
+                <pre><code>{
+  "name": "Oak Complex Rules",
+  "type": "speedtree",
+  "modelDataPath": "models/datas/Oak_Complex_Rules.stsdk",
+  "materialSlots": [
+    {
+      "name": "BarkBase",
+      "materialInstancePath": "materials/foliage/MI_oak_bark.json"
+    },
+    {
+      "name": "LeafSummer",
+      "materialInstancePath": "materials/foliage/MI_oak_leaf_summer.json"
+    }
+  ]
+}</code></pre>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>规则</th>
+                            <th>说明</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>必填</td>
+                            <td><code>materialSlots</code> 是必填有序数组，加载器不再读取 <code>materialInstancePath</code>。</td>
+                        </tr>
+                        <tr>
+                            <td>旧字段</td>
+                            <td>如果 mesh asset JSON 仍包含 <code>materialInstancePath</code>，加载失败并提示迁移到 <code>materialSlots</code>。</td>
+                        </tr>
+                        <tr>
+                            <td>失败条件</td>
+                            <td>缺少 <code>materialSlots</code> 或数组为空时加载失败，并输出模型路径。</td>
+                        </tr>
+                        <tr>
+                            <td>缺失 slot</td>
+                            <td>section 材质绑定直接按源材质槽顺序映射到 <code>materialSlots</code>；<code>name</code> 只用于配置可读性和调试。无法确定源槽序号时，错误信息要包含 section 名称、slot 名称和模型路径。</td>
+                        </tr>
+                        <tr>
+                            <td>不猜测</td>
+                            <td>第一版不做模糊匹配、大小写自动修正或 trunk/leaf 自动猜测；材质槽正确性由资产和 JSON 源头保证。</td>
+                        </tr>
+                    </tbody>
+                </table>
+                <pre><code>struct MeshAssetResolveResult
+{
+    nlohmann::json effectiveMeshAssetJson;
+};
+
+struct MeshMaterialSlot
+{
+    std::string name;
+    std::string materialInstancePath;
+};
+
+struct MeshAssetBuildPlan
+{
+    std::string meshAssetPath;
+    std::string modelDataPath;
+    std::vector&lt;MeshMaterialSlot&gt; materialSlots;
+    std::string modelCacheKey;
+};
+
+struct MeshSectionLoadPlan
+{
+    std::string sectionName;
+    std::string materialSlotName;
+    std::string materialInstancePath;
+};</code></pre>
+                <p class="note"><strong>验收：</strong>所有旧 mesh asset JSON 都迁移到 <code>materialSlots</code>；单材质模型也通过一个 slot 绑定材质；SpeedTree FBX / GLB 可以绑定树干和叶片材质；渲染分组仍按 material/materialInstance 工作。</p>
+            </section>
+
+            <section id="phases">
+                <h2>阶段计划</h2>
+
+                <article class="phase">
+                    <header>
+                        <h3>阶段 0：资产约定与最小测试场景</h3>
+                        <span class="tag">准备</span>
+                    </header>
+                    <div class="body">
+                        <div>
+                            <p>建立 <code>scene_foliage_test.json</code>，第一棵树放到外部资源目录，并明确 SpeedTree 导出文件里的 mesh section 与 material slot 命名。</p>
+                            <pre><code>../VulkanLearnAssets/resources/
+  scenes/scene_foliage_test.json
+  models/foliage/SM_speedtree_test_tree.json
+  models/foliage/speedtree_test_tree.fbx
+  materials/foliage/MI_speedtree_trunk.json
+  materials/foliage/MI_speedtree_leaf.json</code></pre>
+                        </div>
+                        <div>
+                            <h3>验收</h3>
+                            <ul>
+                                <li>启动能加载 foliage 测试场景。</li>
+                                <li>测试资产的 section / slot 名称明确。</li>
+                                <li>路径全部指向外部资源树。</li>
+                            </ul>
+                        </div>
+                    </div>
+                </article>
+
+                <article class="phase">
+                    <header>
+                        <h3>阶段 1：多 mesh / 多材质导入地基</h3>
+                        <span class="tag blue">模型系统</span>
+                    </header>
+                    <div class="body">
+                        <div>
+                            <p>先按 material 风格建立 <code>source/mesh/</code>，把 <code>ModelLoader</code> 一起迁进 <code>source/mesh/loader/</code>，再升级 scene loading，让一个 SpeedTree 文件保留多个 mesh section 和材质槽。后续材质、shadow、wind 都建立在这个真实结构上。</p>
+                            <ul>
+                                <li><code>source/mesh/meshAssetTypes.h</code> 定义 asset/load plan 数据结构。</li>
+                                <li><code>MeshAssetResolver</code> 位于 <code>source/mesh/loader/</code>。</li>
+                                <li><code>ModelLoader</code> 位于 <code>source/mesh/loader/</code>。</li>
+                                <li><code>MeshAssetValidator</code> 位于 <code>source/mesh/validation/</code>。</li>
+                                <li><code>ModelResource.sections[]</code> 保存 section geometry。</li>
+                                <li><code>materialSlotName</code> 映射到材质实例 JSON。</li>
+                                <li>loader 可展开成多个内部 scene object，或一个 scene object 持有多个 renderable part。</li>
+                            </ul>
+                        </div>
+                        <div>
+                            <h3>验收</h3>
+                            <ul>
+                                <li>一个模型文件显示多个部分。</li>
+                                <li>每个 section 绑定自己的 material instance。</li>
+                                <li>普通旧模型迁移到 <code>materialSlots</code> 后仍可加载。</li>
+                                <li>错误信息能指出缺失的 section 或 material slot。</li>
+                            </ul>
+                        </div>
+                    </div>
+                </article>
+
+                <article class="phase">
+                    <header>
+                        <h3>阶段 2：静态树导入与叶片 alpha</h3>
+                        <span class="tag blue">可见成果</span>
+                    </header>
+                    <div class="body">
+                        <div>
+                            <p>基于阶段 1 的 material slot 映射，树干用普通 PBR opaque，叶片用 PBR alpha cutout。先证明贴图、切线、UV、双面和 shadow 轮廓是对的。</p>
+                            <ul>
+                                <li><code>MI_speedtree_trunk.json</code>：<code>renderMode=Opaque</code></li>
+                                <li><code>MI_speedtree_leaf.json</code>：<code>renderMode=OpaqueClip</code>，<code>cullMode=None</code></li>
+                                <li><code>u_pbrFactors.w</code> 继续作为 alpha clip threshold</li>
+                            </ul>
+                        </div>
+                        <div>
+                            <h3>验收</h3>
+                            <ul>
+                                <li>叶片不是矩形 card。</li>
+                                <li>叶片双面可见。</li>
+                                <li>normal map 没有明显方向错误。</li>
+                                <li>shadow pass 中叶片轮廓可接受。</li>
+                            </ul>
+                        </div>
+                    </div>
+                </article>
+
+                <article class="phase">
+                    <header>
+                        <h3>阶段 3：Foliage shader 与薄表面 SSS</h3>
+                        <span class="tag">Shading</span>
+                    </header>
+                    <div class="body">
+                        <div>
+                            <p>新增 <code>foliage.vert</code>、<code>foliage.frag</code> 和 <code>foliageLighting.glsl</code>。SSS 第一版只做树叶薄表面透射，不做屏幕空间 blur。</p>
+                            <pre><code>UBOMIParamters:
+  vec4 u_tintColor;
+  vec4 u_pbrFactors;        // roughness, metallic, ao, alphaClip
+  vec4 u_transmissionColor; // rgb color, a strength
+  vec4 u_foliageFactors;    // wrap, backPower, normalBlend, shadowTransmission
+  float u_emissiveStrength;</code></pre>
+                        </div>
+                        <div>
+                            <h3>验收</h3>
+                            <ul>
+                                <li>顺光时不整体发亮。</li>
+                                <li>逆光时叶片边缘和薄片区域透亮。</li>
+                                <li>transmission strength 归零后接近普通 PBR。</li>
+                            </ul>
+                        </div>
+                    </div>
+                </article>
+
+                <article class="phase">
+                    <header>
+                        <h3>阶段 4：Foliage shadow 对齐</h3>
+                        <span class="tag amber">阴影</span>
+                    </header>
+                    <div class="body">
+                        <div>
+                            <p>增加 foliage shadow shader，shadow pass 做相同 alpha discard。后续 wind deformation 也必须被 shadow pass 复用。</p>
+                            <ul>
+                                <li><code>foliageShadow.vert</code></li>
+                                <li><code>foliageShadow.frag</code></li>
+                                <li><code>common/foliageWind.glsl</code></li>
+                            </ul>
+                        </div>
+                        <div>
+                            <h3>验收</h3>
+                            <ul>
+                                <li>阴影不是整张叶片 card。</li>
+                                <li>alpha threshold 与主 pass 一致。</li>
+                                <li>后续风动时树影同步。</li>
+                            </ul>
+                        </div>
+                    </div>
+                </article>
+
+                <article class="phase">
+                    <header>
+                        <h3>阶段 5：全局 Wind 与简单顶点风</h3>
+                        <span class="tag">Wind V1</span>
+                    </header>
+                    <div class="body">
+                        <div>
+                            <p>先建立工程自己的风入口。第一版只做高度或 vertex color 驱动的树冠摆动，让树明显活起来。</p>
+                            <pre><code>WindParameters:
+  vec4 directionStrength; // xyz direction, w strength
+  vec4 timeFrequency;     // time, trunk, branch, leaf
+  vec4 gust;              // strength, frequency, scale, reserved
+  vec4 bend;              // trunk, branch, leaf, reserved</code></pre>
+                        </div>
+                        <div>
+                            <h3>验收</h3>
+                            <ul>
+                                <li>树干基本不动，树冠明显摆动。</li>
+                                <li>风向、强度、频率可调。</li>
+                                <li><code>strength=0</code> 回到静态树。</li>
+                            </ul>
+                        </div>
+                    </div>
+                </article>
+
+                <article class="phase">
+                    <header>
+                        <h3>阶段 6：SpeedTree 风数据评估</h3>
+                        <span class="tag amber">数据边界</span>
+                    </header>
+                    <div class="body">
+                        <div>
+                            <p>检查 SpeedTree 导出文件实际保留了哪些信息：vertex color、额外 UV、custom attribute、pivot、branch id、leaf group。只接入能被 Assimp 或转换工具稳定读到的数据。</p>
+                        </div>
+                        <div>
+                            <h3>验收</h3>
+                            <ul>
+                                <li>普通 mesh 不受 foliage layout 影响。</li>
+                                <li>foliage shader 能读取 <code>wind0/wind1/wind2</code>。</li>
+                                <li>无 wind 数据资产可生成默认值。</li>
+                            </ul>
+                        </div>
+                    </div>
+                </article>
+
+                <article class="phase">
+                    <header>
+                        <h3>阶段 7：Multi-Pivot 基础变形</h3>
+                        <span class="tag red">Pivot</span>
+                    </header>
+                    <div class="body">
+                        <div>
+                            <p>branch sway 围绕 primary pivot，leaf flutter 围绕 leaf 或 secondary pivot。pivot 必须来自资产或转换结果，不在 shader 里按位置硬猜。</p>
+                            <pre><code>RotateAroundAxis(positionOS, pivotOS, axisOS, angle)</code></pre>
+                        </div>
+                        <div>
+                            <h3>验收</h3>
+                            <ul>
+                                <li>枝条围绕合理根部摆动。</li>
+                                <li>叶片 flutter 不脱离枝条。</li>
+                                <li>主 pass 与 shadow pass 同步。</li>
+                            </ul>
+                        </div>
+                    </div>
+                </article>
+
+            </section>
+
+            <section id="data">
+                <h2>数据设计</h2>
+                <p>第一轮不要全局替换现有 <code>Vertex</code>。更稳的路线是让 pipeline state 支持不同 vertex layout，普通 mesh 继续使用 <code>Vertex</code>，foliage mesh 使用 <code>FoliageVertex</code>。</p>
+                <pre><code>struct FoliageVertex
+{
+    Eigen::Vector3f position;
+    Eigen::Vector3f normal;
+    Eigen::Vector3f color;
+    Eigen::Vector2f texCoord0;
+    Eigen::Vector4f tangent;
+    Eigen::Vector4f wind0; // branchWeight, leafWeight, phase, stiffness
+    Eigen::Vector4f wind1; // primaryPivotOS.xyz, pivotWeight
+    Eigen::Vector4f wind2; // secondaryPivotOS.xyz, hierarchyLevel
+};</code></pre>
+            </section>
+
+            <section id="shading">
+                <h2>Foliage Shading</h2>
+                <div class="grid">
+                    <article class="card">
+                        <h3>第一版光照组成</h3>
+                        <ul>
+                            <li>front diffuse/specular：从当前 PBR direct lighting 拆出来。</li>
+                            <li>back transmission：根据 <code>dot(-N, L)</code>、透射颜色、强度和贴图增加逆光透亮。</li>
+                            <li>indirect lighting：继续使用 SH diffuse IBL 与 prefiltered specular IBL。</li>
+                        </ul>
+                    </article>
+                    <article class="card">
+                        <h3>先不做</h3>
+                        <ul>
+                            <li>屏幕空间 SSS blur。</li>
+                            <li>thickness shadow map。</li>
+                            <li>多层树冠体积透射。</li>
+                            <li>完整 SpeedTree 官方 shader 还原。</li>
+                        </ul>
+                    </article>
+                </div>
+                <pre><code>float backLit = pow(max(dot(-N, L), 0.0), u_foliageFactors.y);
+float wrapped = max((dot(N, L) + u_foliageFactors.x) / (1.0 + u_foliageFactors.x), 0.0);
+vec3 transmission = lightColor * lightIntensity
+    * baseColor
+    * u_transmissionColor.rgb
+    * u_transmissionColor.a
+    * backLit
+    * wrapped;</code></pre>
+            </section>
+
+            <section id="wind-import">
+                <h2>风数据导入</h2>
+                <p>SpeedTree 官方资料里需要区分离线缓存风和实时 SDK 风。VulkanLearn 第一版不直接依赖这两条完整路线，而是把 SpeedTree 静态几何转换成自己的 foliage 中间格式。</p>
+                <div class="grid">
+                    <article class="card">
+                        <h3>官方路线</h3>
+                        <ul>
+                            <li>Modeler 的 VFX Wind 可以导出 FBX point cache 或 Alembic，更适合影视/VFX 缓存动画。</li>
+                            <li>SDK 路线通过 <code>.stsdk</code> / <code>CCore</code> 保存风配置，并由 <code>CWindStateMgr</code> 生成 shader constants。</li>
+                            <li>官方性能文档也把风成本主要归到 vertex shader，并建议按 Full、Branch、Global、None 做风 LOD。</li>
+                        </ul>
+                    </article>
+                    <article class="card">
+                        <h3>VulkanLearn 第一版</h3>
+                        <ul>
+                            <li>导入静态 FBX/GLB 的 mesh section、material slot 和 vertex stream。</li>
+                            <li>转换到 <code>FoliageVertex.wind0/wind1/wind2</code>。</li>
+                            <li>scene/config 提供全局 <code>WindParameters</code>。</li>
+                            <li><code>foliage.vert</code> 与 <code>foliageShadow.vert</code> 共享同一份 wind deformation。</li>
+                        </ul>
+                    </article>
+                </div>
+                <pre><code>SpeedTree static mesh export
+    -> Assimp / converter reads sections, material slots, vertex streams
+    -> VulkanLearn FoliageVertex wind0 / wind1 / wind2
+    -> model descriptor records wind import policy and optional defaults
+    -> scene/config provides global WindParameters
+    -> foliage.vert and foliageShadow.vert consume the same wind data</code></pre>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>导入优先级</th>
+                            <th>来源</th>
+                            <th>落到 VulkanLearn</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>1</td>
+                            <td>SpeedTree 导出文件里明确存在的 extra vertex attributes</td>
+                            <td><code>wind0/wind1/wind2</code></td>
+                        </tr>
+                        <tr>
+                            <td>2</td>
+                            <td>额外 UV channel 或 vertex color 中可稳定识别的权重、phase、leaf group</td>
+                            <td><code>branchWeight</code>、<code>leafWeight</code>、<code>phase</code></td>
+                        </tr>
+                        <tr>
+                            <td>3</td>
+                            <td>转换工具根据 mesh section / material slot / leaf card bounds 生成的默认值</td>
+                            <td><code>primaryPivotOS</code>、<code>stiffness</code>、默认权重</td>
+                        </tr>
+                        <tr>
+                            <td>4</td>
+                            <td>model descriptor JSON 中显式写入的 fallback 策略</td>
+                            <td><code>windImport.defaults</code></td>
+                        </tr>
+                    </tbody>
+                </table>
+                <p class="note"><strong>约束：</strong>可以在转换阶段生成默认 pivot 和权重，但不要在 shader 每帧根据 position 临时猜 pivot。生成结果要落到模型数据或派生资产里，便于调试和复现。</p>
+                <pre><code>"windImport": {
+  "mode": "Generated",
+  "source": "SpeedTreeStaticMesh",
+  "useVertexColor": true,
+  "useExtraUv": true,
+  "generateLeafPivotFromSectionBounds": true,
+  "defaults": {
+    "branchWeight": 0.5,
+    "leafWeight": 1.0,
+    "stiffness": 0.2
+  }
+}</code></pre>
+            </section>
+
+            <section id="full-speedtree-wind">
+                <h2>完整 SpeedTree 风</h2>
+                <p>长期目标是支持完整 SpeedTree 游戏风。这里的完整不是解析 FBX point cache，而是读取 SpeedTree Modeler 中调好的 SDK 风配置、顶点风属性和风 LOD 语义，并在 VulkanLearn 的实时 vertex shader 中还原。</p>
+                <p class="note"><strong>先 probe，后定格式：</strong>正式设计 VulkanLearn runtime foliage asset 前，先执行 <code>documents/plan/rendering/speedtree-sdk-data-probe.md</code>。第一轮只通过 SDK 枚举 <code>.stsdk</code> 暴露的材质、LOD、draw call、顶点流、风和 billboard 数据，并输出 verbose probe JSON。</p>
+                <div class="grid">
+                    <article class="card">
+                        <h3>完整目标</h3>
+                        <ul>
+                            <li>读取 SpeedTree SDK runtime asset 中的 wind config。</li>
+                            <li>读取或转换 branch level、leaf group、weights、phase、pivot/axis、frond/leaf ripple/tumble。</li>
+                            <li>CPU 侧根据 time、strength、direction、gust 生成 SpeedTree 风语义一致的 shader constants。</li>
+                            <li>GPU 侧执行 branch / leaf / frond wind deformation。</li>
+                            <li>支持 Full、Branch、Global、None 风 LOD。</li>
+                        </ul>
+                    </article>
+                    <article class="card">
+                        <h3>边界</h3>
+                        <ul>
+                            <li>推荐走 SDK-backed importer，不逆向未授权的 <code>.stsdk</code> 私有格式。</li>
+                            <li>没有 SDK 时，只能承诺 Generated / Approximate wind backend。</li>
+                            <li>FBX point cache / Alembic 仍视为离线缓存，不作为大规模游戏实时风主线。</li>
+                        </ul>
+                    </article>
+                </div>
+                <pre><code>.stsdk / SpeedTree runtime asset
+    -> SM_xxx.json model descriptor
+    -> type = "speedtree"
+    -> SpeedTreeParserCore or SDK-backed importer
+    -> importer exposes geometry, LOD, material, wind config
+    -> VulkanLearn converts geometry to MeshSection / FoliageVertex
+    -> CWindStateMgr or equivalent wrapper updates wind constants
+    -> VulkanLearn uploads SpeedTreeWindParameters
+    -> GLSL port of SpeedTree wind shader functions
+    -> foliage and foliageShadow passes share the same deformation</code></pre>
+                <p class="note"><strong>资产入口：</strong><code>.stsdk</code> 是 source asset，<code>SM_xxx.json</code> 是 VulkanLearn 的资产入口和验证边界。通过 <code>type: "speedtree"</code> 分派解析；<code>materialSlots</code> 必须是非空有序数组，数量必须与 <code>.stsdk</code> 解析出的 material 数量一致，数组顺序对应 SpeedTree material 顺序，<code>name</code> 仅用于配置可读性和调试，不参与映射。<code>.st9</code> 暂时只作为 UE5.7 对照输入，不作为主解析入口。</p>
+                <h3>UE 5.7 参考结论</h3>
+                <p>本机 UE 5.7 的 SpeedTreeImporter 可作为现代游戏引擎接入参考。插件目录在 <code>D:\sofeware\Epic Games\UE_5.7\Engine\Plugins\Editor\SpeedTreeImporter</code>，风 shader 入口在 <code>Engine\Shaders\Private\SpeedTreeCommon.ush</code>，CPU 风状态在 <code>Engine\Source\Runtime\Engine\Public\SpeedTreeWind.h</code> 与 <code>Engine\Source\Runtime\Engine\Private\SpeedTreeWind.cpp</code>。</p>
+                <div class="grid">
+                    <article class="card">
+                        <h3>导入事实</h3>
+                        <ul>
+                            <li>UE5.7 支持 <code>.srt</code>、<code>.st</code>、<code>.st9</code> 导入。</li>
+                            <li>v9 导入会创建 <code>UStaticMesh</code>、material instances 和 SpeedTree9 master material 派生实例。</li>
+                            <li>SpeedTree draw call / material 会落到 StaticMesh material slots，和 VulkanLearn 的 <code>materialSlots</code> 方向一致。</li>
+                        </ul>
+                    </article>
+                    <article class="card">
+                        <h3>风数据事实</h3>
+                        <ul>
+                            <li>实时风数据以顶点属性进入 mesh，UE 将 SpeedTree9 branch/ripple 数据打包到 UV 通道。</li>
+                            <li>CPU 侧更新风强、风向、gust 和振荡时间，GPU 侧在 vertex shader 做 global、branch、leaf、frond deformation。</li>
+                            <li>这条路线比截 Modeler OpenGL 旧管线更适合作为 VulkanLearn 还原目标。</li>
+                        </ul>
+                    </article>
+                </div>
+                <pre><code>UE5.7 SpeedTree9 vertex UV layout
+UV0: Diffuse UV
+UV1: Branch1Pos, Branch1Dir
+UV2: Branch1Weight, RippleWeight
+UV3: Lightmap UV
+UV4: Branch2Pos, Branch2Dir      if Branch2 data exists
+UV5: Branch2Weight, unused       if Branch2 data exists
+UV6+: camera-facing anchor data  if facing geometry exists</code></pre>
+                <p class="note"><strong>结论：</strong>VulkanLearn 不直接照搬 UE 的 UV 号位，但会吸收这些语义，转换为自己命名清楚的 <code>SpeedTreeVertex</code> / <code>FoliageVertex</code> 字段，例如 branch1、branch2、ripple、blend 和 camera-facing anchor。</p>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>阶段</th>
+                            <th>任务</th>
+                            <th>验收</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>SDK 验证</td>
+                            <td>链接 SpeedTree SDK，加载一棵 <code>.stsdk</code> 测试树，枚举 source、material、LOD、draw call、vertex stream、wind、billboard。</td>
+                            <td>能输出 <code>generated/speedtree_probe/*.probe.json</code>，且暂不固定最终 runtime 格式。</td>
+                        </tr>
+                        <tr>
+                            <td>几何转换</td>
+                            <td>把 SDK 输出的 draw calls / geometry groups 转成 <code>MeshSection</code>，保留原始风属性 dump。</td>
+                            <td>静态姿态和材质在 VulkanLearn 中正确。</td>
+                        </tr>
+                        <tr>
+                            <td>风状态</td>
+                            <td>用 <code>CWindStateMgr</code> 或等价封装更新 wind state，并映射到 <code>SpeedTreeWindParameters</code>。</td>
+                            <td>time、strength、direction、gust 能驱动 shader constants。</td>
+                        </tr>
+                        <tr>
+                            <td>Shader 移植</td>
+                            <td>依次移植 Global、Branch、Leaf ripple/tumble、Frond wind。</td>
+                            <td>与 Modeler / SDK reference app 趋势一致。</td>
+                        </tr>
+                        <tr>
+                            <td>LOD 对齐</td>
+                            <td>实现 Full、Branch、Global、None 风 LOD。</td>
+                            <td>风 LOD 切换稳定，主 pass 和 shadow pass 同步。</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </section>
+
+            <section id="wind">
+                <h2>Wind 与 Pivot</h2>
+                <p>官方文档把风分成全局、branch、leaf、frond、gusting 等层次，并强调风成本主要在 vertex shader。VulkanLearn 的路线也按这个方向做，但先从最便宜的全局/branch 摆动开始，multi-pivot 和 leaf flutter 放到有数据后再做。</p>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>层级</th>
+                            <th>第一版做法</th>
+                            <th>后续升级</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>Global</td>
+                            <td>按高度和风向整体轻微弯曲。</td>
+                            <td>加入 preserve shape 或 bounds padding。</td>
+                        </tr>
+                        <tr>
+                            <td>Branch</td>
+                            <td>vertex color 或 wind0.x 控制摆动权重。</td>
+                            <td>按 primary pivot 做旋转式 branch sway。</td>
+                        </tr>
+                        <tr>
+                            <td>Leaf</td>
+                            <td>先不单独 flutter，或只做小幅 normal/position offset。</td>
+                            <td>按 leaf group、phase、secondary pivot 做 flutter/tumble。</td>
+                        </tr>
+                        <tr>
+                            <td>Shadow</td>
+                            <td>与主 pass 共享 <code>foliageWind.glsl</code>。</td>
+                            <td>如果做 wind LOD，shadow pass 使用同一 LOD 选择。</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </section>
+
+            <section id="validation">
+                <h2>验收清单</h2>
+                <div class="grid">
+                    <article class="card">
+                        <h3>第一轮完成标准</h3>
+                        <ul>
+                            <li>场景里有一棵 SpeedTree 来源的多 section 树。</li>
+                            <li>material slot 能映射到材质实例。</li>
+                            <li>树干和叶片材质分离。</li>
+                            <li>叶片 alpha cutout 和双面显示稳定。</li>
+                            <li>逆光时有可调 transmission。</li>
+                            <li>风强度调高时树冠会动。</li>
+                            <li>风强度为 0 时完全静止。</li>
+                        </ul>
+                    </article>
+                    <article class="card">
+                        <h3>风险点</h3>
+                        <ul>
+                            <li>Assimp 是否保留 SpeedTree 导出的额外属性。</li>
+                            <li>submesh/material slot 前置后，旧单 mesh 资产也要迁移到 <code>materialSlots</code>。</li>
+                            <li>shadow pass 需要跟 foliage 主 pass 共用 alpha 和 wind。</li>
+                            <li>multi-pivot 没有资产数据时不能可靠实现。</li>
+                        </ul>
+                    </article>
+                </div>
+            </section>
+
+            <section id="sources">
+                <h2>官方链接</h2>
+                <div class="source-list">
+                    <article class="source">
+                        <h3><a href="https://docs.speedtree.com/doku.php?id=compiler_mesh_exporting">SpeedTree Compiler: Mesh Exporting</a></h3>
+                        <p>确认 Compiler 可导出静态 mesh，默认包含 OBJ/FBX 路线，并提到 custom mesh exporter。用于支持第一版静态 mesh 接入策略。</p>
+                    </article>
+                    <article class="source">
+                        <h3><a href="https://docs8.speedtree.com/modeler/doku.php?id=wind_vfx">SpeedTree Modeler: VFX Wind</a></h3>
+                        <p>确认 Fan、Wind Wizard、branch wind level、leaf wind group、gusting，以及 FBX point cache / Alembic 风导出限制。</p>
+                    </article>
+                    <article class="source">
+                        <h3><a href="https://docs8.speedtree.com/sdk/doku.php?id=user_render_configuration">SpeedTree SDK: User render configuration</a></h3>
+                        <p>确认 SDK 支持多 render pass，并可按 LOD / geometry type 选择 shader 和 render state。用于映射 VulkanLearn 的 geometry/shadow pass 思路。</p>
+                    </article>
+                    <article class="source">
+                        <h3><a href="https://docs9.speedtree.com/sdk/doku.php?id=initializing-tree-graphics">SpeedTree SDK: Initializing tree graphics</a></h3>
+                        <p>确认 SDK 路线围绕 STSDK、CTreeRI、Render Interface 与平台 render policies。第一版不依赖它，但可作为长期集成参考。</p>
+                    </article>
+                    <article class="source">
+                        <h3><a href="https://docs8.speedtree.com/sdk/doku.php?id=legacy_pages%3Aperformance">SpeedTree SDK: Performance</a></h3>
+                        <p>确认风主要是 vertex shader 成本，并提供 Full / Branch / Global / None 的风 LOD 思路。用于指导本项目的风阶段拆分。</p>
+                    </article>
+                </div>
+            </section>
+        </main>
+    </div>
+</body>
+</html>

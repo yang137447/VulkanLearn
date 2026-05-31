@@ -188,14 +188,15 @@ namespace CommonFunction
             return configFolderPath;
         }
 
-        // 获取当前文件所在目录
+        // Resolve from the current working directory first. This legacy helper
+        // is still used by older code paths; RuntimeConfig/FileSystem owns the
+        // newer project-root discovery path.
         std::string projectPath = std::filesystem::current_path().string();
-        // 进入config目录, 确定config.json文件是否存在
-        // TODO: 这里现在兼容的debug和debug不调试，未来需要兼容release模式
         configFolderPath = projectPath + "/config";
         if( !std::filesystem::exists(configFolderPath) )
         {
-            //向前找两级目录，适配debug不调试
+            // CMake debug launches may start from build/bin; walk back to the
+            // repository root shape used by the current MinGW build tree.
             projectPath = std::filesystem::path(projectPath).parent_path().parent_path().string();
             configFolderPath = projectPath + "/config";
             if( !std::filesystem::exists(configFolderPath) )

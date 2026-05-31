@@ -1,12 +1,11 @@
 #include "vulkanManager.h"
 #include "SDL3/SDL_vulkan.h"
+#include <algorithm>
 #include <cstdint>
 #include <iostream>
 #include <chrono>
 #include "pipeline/graphicsPipeline.h"
 #include "commonFunction.h"
-#include "modelLoader.h"
-#include "sceneLoader.h"
 #include "vulkanDebug.h"
 
 VulkanManager::VulkanManager()
@@ -47,17 +46,25 @@ VulkanManager::~VulkanManager()
 
 void VulkanManager::ReCreateSwapChain(int newWidth, int newHeight)
 {
+    if (newWidth <= 0 || newHeight <= 0)
+    {
+        return;
+    }
+
     device.waitIdle(); //等待设备空闲
 
-    //todo: setting.h 需要转化为json配置文件
-    // width = newWidth;
-    // height = newHeight;
+    requestedSwapChainExtent = vk::Extent2D{
+        static_cast<uint32_t>(newWidth),
+        static_cast<uint32_t>(newHeight)
+    };
 
-    // DestroyVkFrameBuffers();
-    // DestroyVkSwapChain();
+    DestroySyncObjects();
+    DestroyVkCommandBuffer();
+    DestroyVkSwapChain();
 
-    // CreateVkSwapChain();
-    // CreateVkFrameBuffers();
+    CreateVkSwapChain();
+    CreateVkCommandBuffer();
+    CreateSyncObjects();
 }
 
 void VulkanManager::CreateVkInstance()
@@ -197,7 +204,9 @@ void VulkanManager::CreateVkDevice()
         .setQueueCount(1)
         .setPQueuePriorities(graohicsQueuePriorities);
 
-    //TODO: 这里应该先检测是否支持该 Features
+    // Required by the current shadow and sampler paths. A future device
+    // selection pass should reject GPUs that do not expose these features
+    // before logical device creation reaches this point.
     vk::PhysicalDeviceFeatures deviceFeatures;
     deviceFeatures
         .setDepthClamp(VK_TRUE)
@@ -288,11 +297,16 @@ void VulkanManager::CreateVkSwapChain()
     if(surfaceCapabilities.currentExtent.width == 0xFFFFFFFF)
     {
         //如果surface能力中的尺寸没有定义（宽度为0xFFFFFFFF表示没定义）
-        // TODO: 这里的窗口大小获取方式需要根据实际情况修改
-        swapChainExtent.width = std::clamp(static_cast<uint32_t>(CommonFunction::GetWindowSize().x()), 
+        const uint32_t requestedWidth = requestedSwapChainExtent.has_value()
+            ? requestedSwapChainExtent->width
+            : static_cast<uint32_t>(CommonFunction::GetWindowSize().x());
+        const uint32_t requestedHeight = requestedSwapChainExtent.has_value()
+            ? requestedSwapChainExtent->height
+            : static_cast<uint32_t>(CommonFunction::GetWindowSize().y());
+        swapChainExtent.width = std::clamp(requestedWidth,
             surfaceCapabilities.minImageExtent.width, 
             surfaceCapabilities.maxImageExtent.width);
-        swapChainExtent.height = std::clamp(static_cast<uint32_t>(CommonFunction::GetWindowSize().y()), 
+        swapChainExtent.height = std::clamp(requestedHeight,
             surfaceCapabilities.minImageExtent.height, 
             surfaceCapabilities.maxImageExtent.height);
     }
@@ -334,7 +348,10 @@ void VulkanManager::CreateVkSwapChain()
         .setCompositeAlpha(vk::CompositeAlphaFlagBitsKHR::eOpaque)
         .setPresentMode(presentMode)
         .setClipped(VK_TRUE)
-        .setOldSwapchain(nullptr);//后续可能用于resize功能
+        // Resize currently destroys the old swapchain before creating the new
+        // one. If we move to Vulkan oldSwapchain handoff, this becomes the
+        // previous handle and ownership must be updated in DestroyVkSwapChain.
+        .setOldSwapchain(nullptr);
     if(graphicQueueFamilyIndex.value() != presentQueueFamilyIndex.value())
     {
         //如果图形队列和呈现队列不是同一个队列族
@@ -379,11 +396,22 @@ void VulkanManager::CreateVkSwapChain()
 
 void VulkanManager::DestroyVkSwapChain()
 {
-    for(uint32_t i = 0; i < swapChainImageCount; i++)
+    for(vk::ImageView& imageView : swapChainImageViews)
     {
-        device.destroyImageView(swapChainImageViews[i]);
+        if (imageView)
+        {
+            device.destroyImageView(imageView);
+        }
     }
-    device.destroySwapchainKHR(swapChain);
+    swapChainImageViews.clear();
+    swapChainImages.clear();
+
+    if (swapChain)
+    {
+        device.destroySwapchainKHR(swapChain);
+        swapChain = nullptr;
+    }
+    swapChainImageCount = 0;
     std::cout << "Destroy VkSwapChain" << std::endl;
 }
 
@@ -424,8 +452,16 @@ void VulkanManager::CreateVkCommandBuffer()
 
 void VulkanManager::DestroyVkCommandBuffer()
 {
-    device.freeCommandBuffers(commandPool, commandBuffers.size(), commandBuffers.data());
-    device.destroyCommandPool(commandPool);
+    if (commandPool)
+    {
+        if (!commandBuffers.empty())
+        {
+            device.freeCommandBuffers(commandPool, commandBuffers.size(), commandBuffers.data());
+        }
+        device.destroyCommandPool(commandPool);
+        commandPool = nullptr;
+    }
+    commandBuffers.clear();
     std::cout << "Destroy VkCommandBuffer" << std::endl;
 }
 
@@ -470,23 +506,33 @@ void VulkanManager::CreateSyncObjects()
 
 void VulkanManager::DestroySyncObjects()
 {
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+    for (vk::Semaphore& semaphore : imageAcquiredSemaphores)
     {
-        device.destroySemaphore(imageAcquiredSemaphores[i]);
-    }
-    for (size_t i = 0; i < swapChainImageCount; i++)
-    {
-        device.destroySemaphore(renderFinishedSemaphores[i]);
-    }
-    std::cout << "Destroy VkSemaphore" << std::endl;
-    
-    for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
-    {
-        if (taskFinishedFences[i])
+        if (semaphore)
         {
-            device.destroyFence(taskFinishedFences[i]);
+            device.destroySemaphore(semaphore);
         }
     }
+    imageAcquiredSemaphores.clear();
+
+    for (vk::Semaphore& semaphore : renderFinishedSemaphores)
+    {
+        if (semaphore)
+        {
+            device.destroySemaphore(semaphore);
+        }
+    }
+    renderFinishedSemaphores.clear();
+    std::cout << "Destroy VkSemaphore" << std::endl;
+    
+    for (vk::Fence& fence : taskFinishedFences)
+    {
+        if (fence)
+        {
+            device.destroyFence(fence);
+        }
+    }
+    taskFinishedFences.clear();
     std::cout << "Destroy VkFence" << std::endl;
 
     imagesInFlightFences.clear();
