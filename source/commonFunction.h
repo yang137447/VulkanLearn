@@ -1076,11 +1076,8 @@ namespace CommonFunction
                 barrier);
 
 
-            if (mipWidth > 1 && mipHeight > 1)
-            {
-                mipWidth /= 2;
-                mipHeight /= 2;
-            }
+            mipWidth = mipWidth > 1 ? mipWidth / 2 : 1;
+            mipHeight = mipHeight > 1 ? mipHeight / 2 : 1;
         }
 
         barrier
