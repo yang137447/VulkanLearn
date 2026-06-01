@@ -359,6 +359,22 @@ namespace
         return "speedtree_material_slot_" + std::to_string(materialSlot);
     }
 
+    std::vector<std::string> BuildMaterialNamesForSections(
+        const std::vector<MaterialSection>& sections,
+        const std::vector<std::string>& materialNames)
+    {
+        std::vector<std::string> usedMaterialNames;
+        for (const MaterialSection& section : sections)
+        {
+            const std::string materialName = MaterialNameForSlot(materialNames, section.materialSlot);
+            if (std::find(usedMaterialNames.begin(), usedMaterialNames.end(), materialName) == usedMaterialNames.end())
+            {
+                usedMaterialNames.push_back(materialName);
+            }
+        }
+        return usedMaterialNames;
+    }
+
     Eigen::Vector3f ConvertSpeedTreePosition(const Eigen::Vector3f& position)
     {
         return Eigen::Vector3f(position.x(), position.z(), -position.y());
@@ -666,7 +682,6 @@ SpeedTreeSourceData SpeedTreeSourceAdapter::ReadSource(const std::string& source
 
     SpeedTreeSourceData sourceData;
     sourceData.materialNames = materialNames;
-    sourceData.modelResource.sourceMaterialSlotNames = materialNames;
     const size_t blockIndex = SelectHighestLodBlockIndex(blocks);
     const GeometryBlock& block = blocks[blockIndex];
     std::vector<MaterialSection> sections = block.sections;
@@ -678,6 +693,7 @@ SpeedTreeSourceData SpeedTreeSourceAdapter::ReadSource(const std::string& source
         defaultSection.indexCount = block.indexCount;
         sections.push_back(defaultSection);
     }
+    sourceData.modelResource.sourceMaterialSlotNames = BuildMaterialNamesForSections(sections, materialNames);
 
     for (size_t sectionIndex = 0; sectionIndex < sections.size(); ++sectionIndex)
     {
