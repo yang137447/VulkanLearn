@@ -81,6 +81,8 @@ Rendering plans:
   - independent Sky Pass, procedural sky, dynamic environment IBL, and frame-spread update route
 - `plan/rendering/sky-pass-environment-roadmap.html`
   - HTML reading version of the Sky Pass route
+- `plan/rendering/shadow-mode-material-pass-plan.html`
+  - explicit `shadowMode` material contract, common opaque shadow path, masked material shadow variants, and rollout plan
 - `plan/rendering/speedtree-sdk-data-probe.md`
   - SDK-backed SpeedTree data probe before final runtime foliage format decisions
 - `plan/rendering/terrain-worldcreator-mvp.md`

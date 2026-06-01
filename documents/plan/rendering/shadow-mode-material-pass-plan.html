@@ -1,0 +1,606 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Shadow Mode 与材质 Pass 方案</title>
+    <style>
+        :root {
+            color-scheme: dark;
+            --bg: #0f1214;
+            --side: #14191c;
+            --panel: #192023;
+            --panel-2: #20282c;
+            --line: #334046;
+            --text: #edf2f4;
+            --muted: #adbac0;
+            --cyan: #7dd3d8;
+            --green: #8ed08f;
+            --amber: #e5c46f;
+            --red: #ed9a91;
+            --blue: #9dbdf2;
+            --code: #090d0f;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            margin: 0;
+            background: var(--bg);
+            color: var(--text);
+            font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+            line-height: 1.65;
+        }
+
+        a {
+            color: var(--cyan);
+            text-decoration: none;
+        }
+
+        a:hover {
+            text-decoration: underline;
+        }
+
+        code {
+            padding: 0.12em 0.34em;
+            border: 1px solid #2b373b;
+            border-radius: 5px;
+            background: var(--code);
+            color: #def3f0;
+            font-family: "Cascadia Code", Consolas, monospace;
+            font-size: 0.92em;
+        }
+
+        pre {
+            overflow: auto;
+            margin: 12px 0 0;
+            padding: 14px;
+            border: 1px solid #2b373b;
+            border-radius: 8px;
+            background: var(--code);
+        }
+
+        pre code {
+            padding: 0;
+            border: 0;
+            background: transparent;
+        }
+
+        .layout {
+            display: grid;
+            grid-template-columns: 292px minmax(0, 1fr);
+            min-height: 100vh;
+        }
+
+        aside {
+            position: sticky;
+            top: 0;
+            height: 100vh;
+            overflow: auto;
+            padding: 28px 22px;
+            border-right: 1px solid var(--line);
+            background: var(--side);
+        }
+
+        .brand {
+            margin-bottom: 24px;
+        }
+
+        .brand strong {
+            display: block;
+            font-size: 19px;
+            line-height: 1.25;
+        }
+
+        .brand span {
+            display: block;
+            margin-top: 8px;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        nav {
+            display: grid;
+            gap: 6px;
+        }
+
+        nav a {
+            display: block;
+            padding: 8px 10px;
+            border-radius: 6px;
+            color: var(--muted);
+            font-size: 14px;
+        }
+
+        nav a:hover {
+            background: #1e282c;
+            color: var(--text);
+            text-decoration: none;
+        }
+
+        main {
+            max-width: 1180px;
+            padding: 44px 56px 80px;
+        }
+
+        header {
+            margin-bottom: 34px;
+            padding-bottom: 24px;
+            border-bottom: 1px solid var(--line);
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 36px;
+            line-height: 1.15;
+            letter-spacing: 0;
+        }
+
+        .lead {
+            max-width: 880px;
+            margin: 16px 0 0;
+            color: var(--muted);
+            font-size: 17px;
+        }
+
+        section {
+            margin-top: 34px;
+        }
+
+        h2 {
+            margin: 0 0 14px;
+            font-size: 24px;
+            letter-spacing: 0;
+        }
+
+        h3 {
+            margin: 24px 0 10px;
+            font-size: 18px;
+            letter-spacing: 0;
+        }
+
+        p {
+            margin: 10px 0;
+        }
+
+        ul {
+            margin: 10px 0 0;
+            padding-left: 22px;
+        }
+
+        li + li {
+            margin-top: 6px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 14px;
+            overflow: hidden;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+        }
+
+        th,
+        td {
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--line);
+            text-align: left;
+            vertical-align: top;
+        }
+
+        th {
+            background: var(--panel-2);
+            color: var(--text);
+            font-weight: 600;
+        }
+
+        td {
+            background: var(--panel);
+            color: var(--muted);
+        }
+
+        tr:last-child td {
+            border-bottom: 0;
+        }
+
+        .callout {
+            margin: 16px 0 0;
+            padding: 14px 16px;
+            border: 1px solid var(--line);
+            border-left: 4px solid var(--cyan);
+            border-radius: 8px;
+            background: var(--panel);
+        }
+
+        .callout strong {
+            color: var(--text);
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 14px;
+            margin-top: 14px;
+        }
+
+        .card {
+            padding: 16px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: var(--panel);
+        }
+
+        .card h3 {
+            margin-top: 0;
+        }
+
+        .tag {
+            display: inline-block;
+            margin-right: 6px;
+            padding: 2px 8px;
+            border-radius: 999px;
+            background: #1f2b30;
+            color: var(--cyan);
+            font-size: 12px;
+        }
+
+        .ok {
+            color: var(--green);
+        }
+
+        .warn {
+            color: var(--amber);
+        }
+
+        .risk {
+            color: var(--red);
+        }
+
+        @media (max-width: 860px) {
+            .layout {
+                display: block;
+            }
+
+            aside {
+                position: static;
+                height: auto;
+            }
+
+            main {
+                padding: 30px 22px 56px;
+            }
+
+            .grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="layout">
+        <aside>
+            <div class="brand">
+                <strong>Shadow Mode 与材质 Pass 方案</strong>
+                <span>显式投影契约、材质 shadow variant、alpha cutout 阴影路线</span>
+            </div>
+            <nav>
+                <a href="#goal">目标</a>
+                <a href="#contract">数据契约</a>
+                <a href="#modes">Shadow Mode 语义</a>
+                <a href="#variant">Shader Variant</a>
+                <a href="#shader">Shader 结构</a>
+                <a href="#runtime">Runtime 调度</a>
+                <a href="#migration">落地步骤</a>
+                <a href="#checks">验收</a>
+                <a href="#risks">风险</a>
+            </nav>
+        </aside>
+
+        <main>
+            <header>
+                <h1>Shadow Mode 与材质 Pass 方案</h1>
+                <p class="lead">
+                    本方案把 shadow 投影策略变成材质的显式静态属性：<code>M_*.json</code> 必须声明
+                    <code>shadowMode</code>，<code>MI_*.json</code> 可通过 <code>renderStateOverrides</code> 覆写。
+                    不做 <code>Default</code> 推导，避免材质作者和引擎运行时对投影行为产生隐式分歧。
+                </p>
+            </header>
+
+            <section id="goal">
+                <h2>目标</h2>
+                <ul>
+                    <li>让 opaque、masked、transparent 材质的投影策略由数据显式表达。</li>
+                    <li>纯 opaque 继续复用公共 <code>M_shadow</code>，减少不必要的 shader variant。</li>
+                    <li>masked 材质走材质自己的 shadow variant，复用 albedo alpha、cutoff 和后续 vertex deformation。</li>
+                    <li>半透材质默认不投普通 shadow，但可以由 <code>MI_</code> 明确覆写成 <code>Opaque</code> 或 <code>Masked</code> 投影。</li>
+                    <li>保留学习项目的可读性：先用小改动打通 PBR alpha cutout shadow，再扩展到更多 pass role。</li>
+                </ul>
+
+                <div class="callout">
+                    <strong>核心原则：</strong>
+                    <code>renderMode</code> 描述主渲染路径，<code>shadowMode</code> 描述投影路径。两者可以相关，但不互相自动推导。
+                </div>
+            </section>
+
+            <section id="contract">
+                <h2>数据契约</h2>
+                <h3><code>M_*.json</code> 必填</h3>
+                <p>
+                    材质定义文件是静态材质契约的源头。所有 <code>M_*.json</code> 的
+                    <code>renderStates</code> 必须显式包含 <code>shadowMode</code>。
+                </p>
+                <pre><code>{
+    "name": "M_pbr",
+    "type": "material",
+    "shadingModel": "DefaultLit",
+    "renderStates": {
+        "renderMode": "Opaque",
+        "cullMode": "Back",
+        "shadowMode": "Opaque"
+    }
+}</code></pre>
+
+                <h3><code>MI_*.json</code> 可覆写</h3>
+                <p>
+                    材质实例只在确实需要改变投影行为时覆写 <code>shadowMode</code>。覆写位置沿用现有
+                    <code>renderStateOverrides</code>，和 <code>renderMode</code>、<code>cullMode</code> 保持同一层级。
+                </p>
+                <pre><code>{
+    "type": "materialInstance",
+    "material": "shader/glsl/M_pbr.json",
+    "renderStateOverrides": {
+        "renderMode": "OpaqueClip",
+        "cullMode": "None",
+        "shadowMode": "Masked"
+    },
+    "macros": {
+        "USE_ALBEDO_MAP": 1
+    },
+    "parameters": {
+        "u_pbrFactors": [0.5, 0.0, 1.0, 0.45]
+    }
+}</code></pre>
+
+                <div class="callout">
+                    <strong>禁止隐式默认：</strong>
+                    缺少 <code>shadowMode</code> 的 <code>M_*.json</code> 应在材质定义校验阶段报错。缺少
+                    <code>renderStateOverrides.shadowMode</code> 的 <code>MI_*.json</code> 表示继承 <code>M_</code>，不是运行时推导。
+                </div>
+            </section>
+
+            <section id="modes">
+                <h2>Shadow Mode 语义</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>值</th>
+                            <th>含义</th>
+                            <th>绘制路径</th>
+                            <th>典型用途</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><code>None</code></td>
+                            <td>不参与 shadow pass，不产生普通 shadow map 投影。</td>
+                            <td>shadow pass 跳过 draw。</td>
+                            <td>透明特效、additive、火焰、纯屏幕表现物。</td>
+                        </tr>
+                        <tr>
+                            <td><code>Opaque</code></td>
+                            <td>作为实心物体投影，不评估材质 alpha。</td>
+                            <td>优先复用公共 <code>M_shadow</code>。</td>
+                            <td>普通不透明 mesh、当前无 WPO 的硬表面。</td>
+                        </tr>
+                        <tr>
+                            <td><code>Masked</code></td>
+                            <td>投影时评估当前材质 alpha clip，只有通过 clip 的像素写深度。</td>
+                            <td>使用当前材质的 shadow variant。</td>
+                            <td>树叶、栅栏、草、cutout decal 类几何。</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <p>
+                    当前阶段不设计 <code>Translucent</code> shadow。半透投影属于 colored shadow、deep shadow、
+                    ray traced shadow 或体积阴影问题，不应混进普通 shadow map 的第一版。
+                </p>
+            </section>
+
+            <section id="variant">
+                <h2>Shader Variant</h2>
+                <p>
+                    增加 shadow variant 时，推荐把 pass role 纳入 <code>ShaderVariantKey</code>。第一阶段可以只支持
+                    <code>Surface</code> 和 <code>Shadow</code> 两类。
+                </p>
+                <pre><code>enum class MaterialPassRole
+{
+    Surface,
+    Shadow
+};
+
+enum class ShadowMode
+{
+    None,
+    Opaque,
+    Masked
+};</code></pre>
+
+                <p>variant key 建议包含：</p>
+                <ul>
+                    <li><code>shaderName</code>：例如 <code>pbr</code>。</li>
+                    <li><code>passRole</code>：例如 <code>Surface</code> 或 <code>Shadow</code>。</li>
+                    <li><code>renderMode</code>：主渲染静态模式，仍参与 surface variant。</li>
+                    <li><code>shadowMode</code>：只对 shadow role 有意义；<code>None</code> 不编译 shadow variant。</li>
+                    <li><code>shadingModelMacro</code> 和材质宏：沿用当前排序归一化规则。</li>
+                </ul>
+
+                <h3>宏输出</h3>
+                <pre><code>// Surface variant
+#define RENDER_PASS_SURFACE 1
+#define RENDER_MODE_OPAQUE_CLIP 1
+
+// Shadow masked variant
+#define RENDER_PASS_SHADOW 1
+#define SHADOW_MODE_MASKED 1</code></pre>
+
+                <div class="callout">
+                    <strong>变体控制：</strong>
+                    <code>Opaque</code> 走公共 shadow 材质时不生成材质 shadow variant。只有 <code>Masked</code>
+                    或未来声明需要材质顶点变形的 opaque 才生成 shadow variant。
+                </div>
+            </section>
+
+            <section id="shader">
+                <h2>Shader 结构</h2>
+                <p>
+                    材质作者继续维护一份 surface 函数；pass 输出壳负责决定写 GBuffer、forward color，还是 shadow depth。
+                    alpha clip 应从 “只绑定 <code>RENDER_MODE_OPAQUE_CLIP</code>” 调整为可被 shadow masked 复用。
+                </p>
+
+                <pre><code>MaterialSurface EvaluatePbrSurface(in MaterialPixelContext pixel)
+{
+    MaterialSurface surface = CreateDefaultMaterialSurface();
+    vec4 baseColor = SampleOrFallbackBaseColor(pixel);
+    surface.baseColor = baseColor.rgb;
+    surface.opacity = baseColor.a;
+    return surface;
+}
+
+void ApplyPbrAlphaClip(in MaterialSurface surface)
+{
+#if defined(RENDER_MODE_OPAQUE_CLIP) || defined(SHADOW_MODE_MASKED)
+    if (surface.opacity &lt; u_pbrFactors.w)
+    {
+        discard;
+    }
+#endif
+}</code></pre>
+
+                <h3>Surface 输出壳</h3>
+                <pre><code>MaterialSurface surface = EvaluatePbrSurface(pixel);
+ApplyPbrAlphaClip(surface);
+
+#if VL_MATERIAL_OUTPUT_GBUFFER
+    WriteGBuffer(surface, pixel);
+#else
+    WriteForward(surface);
+#endif</code></pre>
+
+                <h3>Shadow 输出壳</h3>
+                <pre><code>MaterialSurface surface = EvaluatePbrSurface(pixel);
+
+#if defined(SHADOW_MODE_MASKED)
+    ApplyPbrAlphaClip(surface);
+#endif
+
+// 不写颜色。depth 写入由 render pass 的 depth attachment 完成。</code></pre>
+
+                <p>
+                    后续接入 wind / WPO 时，shadow vertex variant 必须复用同一份顶点变形函数。否则主视图和阴影轮廓会错位。
+                </p>
+            </section>
+
+            <section id="runtime">
+                <h2>Runtime 调度</h2>
+                <div class="grid">
+                    <div class="card">
+                        <h3><span class="tag">None</span>跳过</h3>
+                        <p>对象仍可参与主渲染，但 shadow pass 不提交 draw，不分配材质 shadow descriptor。</p>
+                    </div>
+                    <div class="card">
+                        <h3><span class="tag">Opaque</span>公共材质</h3>
+                        <p>绑定全局 <code>M_shadow</code> pipeline 和对象 UBO，只写深度。适合当前大多数不透明对象。</p>
+                    </div>
+                    <div class="card">
+                        <h3><span class="tag">Masked</span>材质变体</h3>
+                        <p>按材质实例加载 shadow variant，绑定 material set 和 object set，采样 alpha 后写深度。</p>
+                    </div>
+                    <div class="card">
+                        <h3><span class="tag">Future</span>材质顶点变形</h3>
+                        <p>如果 opaque 材质声明需要 WPO / wind，可升级为材质 shadow variant，即使 <code>shadowMode=Opaque</code>。</p>
+                    </div>
+                </div>
+
+                <h3>Shadow pass 伪代码</h3>
+                <pre><code>for materialGroup in resolvedScene.materialGroups:
+    for materialInstanceGroup in materialGroup.materialInstances:
+        shadowMode = materialInstanceGroup.materialInstance.GetShadowMode()
+
+        if shadowMode == None:
+            continue
+
+        if shadowMode == Opaque and !NeedsMaterialShadowVariant(materialInstance):
+            BindCommonShadowPipeline()
+            BindGlobalAndObjectSets()
+        else:
+            BindMaterialShadowPipeline(materialInstance)
+            BindGlobalObjectAndMaterialSets()
+
+        DrawObjects(materialInstanceGroup.draws)</code></pre>
+            </section>
+
+            <section id="migration">
+                <h2>落地步骤</h2>
+                <ol>
+                    <li>扩展 material schema：<code>M_*.json renderStates.shadowMode</code> 必填，<code>MI_*.json renderStateOverrides.shadowMode</code> 可选。</li>
+                    <li>扩展 <code>MaterialInstanceResolver</code>：从 <code>M_</code> 继承 shadowMode，再应用 <code>MI_</code> 覆写。</li>
+                    <li>扩展 <code>MaterialInstanceValidator</code>：解析 <code>ShadowMode</code>，把它写入 build plan / material instance。</li>
+                    <li>保留公共 <code>M_shadow</code> 给 <code>Opaque</code> 使用。</li>
+                    <li>为 <code>Masked</code> 增加 shadow role variant，并让 PBR shadow fragment 复用 albedo alpha 与 <code>u_pbrFactors.w</code>。</li>
+                    <li>改造 <code>DrawShadowScene</code>：按 material instance 的 shadowMode 选择 skip、公共 shadow pipeline 或材质 shadow pipeline。</li>
+                    <li>给 SpeedTree 叶片创建独立 <code>MI_</code>：<code>renderMode=OpaqueClip</code>、<code>cullMode=None</code>、<code>shadowMode=Masked</code>。</li>
+                </ol>
+            </section>
+
+            <section id="checks">
+                <h2>验收</h2>
+                <ul>
+                    <li><span class="ok">Opaque：</span>普通 mesh 仍使用公共 shadow pipeline，阴影行为不退化。</li>
+                    <li><span class="ok">None：</span>透明/additive 材质不再产生实心 shadow。</li>
+                    <li><span class="ok">Masked：</span>叶片主视图和 shadow map 使用同一 alpha cutoff，阴影轮廓有洞。</li>
+                    <li><span class="ok">MI 覆写：</span>同一个 <code>M_pbr</code> 可以由不同 <code>MI_</code> 配出不投影、实心投影或 masked 投影。</li>
+                    <li><span class="ok">错误暴露：</span>缺少 <code>M_ renderStates.shadowMode</code> 的材质定义在加载阶段报错。</li>
+                </ul>
+            </section>
+
+            <section id="risks">
+                <h2>风险</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>风险</th>
+                            <th>处理</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><span class="warn">Shadow descriptor 复杂度上升</span></td>
+                            <td>第一阶段只让 <code>Masked</code> 材质绑定 material set；<code>Opaque</code> 继续使用 object/global set。</td>
+                        </tr>
+                        <tr>
+                            <td><span class="warn">variant key 膨胀</span></td>
+                            <td><code>None</code> 不生成 shadow variant，<code>Opaque</code> 默认公共 pipeline，只有必要材质进入 shadow variant 缓存。</td>
+                        </tr>
+                        <tr>
+                            <td><span class="risk">主 pass 与 shadow pass clip 逻辑分裂</span></td>
+                            <td>把 alpha clip 抽成材质函数内的共享 helper，禁止在 shadow fragment 复制一套阈值解释。</td>
+                        </tr>
+                        <tr>
+                            <td><span class="risk">未来 WPO 阴影错位</span></td>
+                            <td>在材质定义中增加 “需要材质 shadow vertex” 的显式能力位，或由 vertex deformation 宏触发材质 shadow variant。</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </section>
+        </main>
+    </div>
+</body>
+</html>
