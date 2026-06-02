@@ -92,14 +92,31 @@ cmake --build build -j
 
 本项目集成了两种性能分析工具：**Tracy Profiler** 和 **NVIDIA Nsight Systems**。代码中的 `PROFILE_SCOPE` 宏会同时触发两者的标记，你可以根据需求选择使用。
 
-调试断点会让进程暂停，Tracy 这类实时 profiler 的 socket 连接可能因此被对端关闭，并在 Windows 上表现为 `10054 ConnectionReset`。如果当前目标是单步调试逻辑而不是采样性能，建议关闭 profiler 后重新配置：
+开发时可以打开 Vulkan validation layer 来持续监测 API 使用错误；这类构建适合查 correctness，不适合作为长时间挂机 FPS 基线。Profiler 标记和 validation layer 都会显著改变高 FPS 空转场景下的 CPU/Vulkan API 开销，长时间挂机测性能时不要把它们打开后的 FPS 当作真实性能。
+
+重新配置性能基线时显式传入 `OFF`，避免已有 `build/` 缓存沿用开发监测配置：
 
 ```bash
-cmake -S . -B build -G "MinGW Makefiles" -DVULKANLEARN_ENABLE_TRACY=OFF -DVULKANLEARN_ENABLE_NVTX=OFF
+cmake -S . -B build -G "MinGW Makefiles" -DVULKANLEARN_ENABLE_TRACY=OFF -DVULKANLEARN_ENABLE_NVTX=OFF -DVULKANLEARN_ENABLE_VULKAN_VALIDATION=OFF
 cmake --build build -j
 ```
 
-需要重新做性能分析时，再把这两个选项改回 `ON`。
+需要做性能分析或 Vulkan API 校验时，显式打开对应选项后重新配置。日常开发如果只想监测 Vulkan 报错，可以只打开 `VULKANLEARN_ENABLE_VULKAN_VALIDATION`：
+
+```bash
+cmake -S . -B build -G "MinGW Makefiles" -DVULKANLEARN_ENABLE_TRACY=ON -DVULKANLEARN_ENABLE_NVTX=ON -DVULKANLEARN_ENABLE_VULKAN_VALIDATION=ON
+cmake --build build -j
+```
+
+调试断点会让进程暂停，Tracy 这类实时 profiler 的 socket 连接可能因此被对端关闭，并在 Windows 上表现为 `10054 ConnectionReset`。如果当前目标是单步调试逻辑而不是采样性能，可以关闭 Tracy/NVTX，但保留 Vulkan validation layer 用来检查 API 错误。
+
+### 长时间 FPS smoke 诊断
+
+`build/bin/main.exe --framesmoke [count] --exit-after-tests` 用于固定帧数性能基线。这个入口会每 5000 帧输出一次区间统计，包括 avg/min/max frame time、avg FPS、RenderLoop 耗时，以及 `ResourceRetireQueue` 的 pending/submitted/completed epoch。
+
+这些区间统计是有意保留的诊断代码，不是临时调试残留。它只在 `--framesmoke` 运行期间采样和输出，普通运行不会打印区间统计；RenderLoop 计时也只在 frame smoke 激活时执行。保留它的原因是：长时间挂机掉帧通常需要区分 GPU/API 开销、渲染循环耗时增长、资源退休队列堆积等情况，单个最终平均 FPS 不足以定位问题。
+
+一次已验证的结论：在高 FPS 空转场景下，开启 Vulkan validation layer / debug utils 会导致长时间 `--framesmoke` FPS 明显下降；Tracy/NVTX 会增加额外开销，但不是唯一来源。关闭 profiler 和 validation 后，60,000 帧 smoke run 稳定在约 2148 FPS，`retiredPending=0`，说明这次问题不是旧帧或退休资源队列堆积。
 
 ### 1. 使用 Tracy Profiler (实时 CPU 分析)
 

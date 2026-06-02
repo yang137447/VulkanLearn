@@ -73,7 +73,10 @@ private:
 private:
     vk::Instance instance;
     std::vector<const char *> instanceLayers = {
-            "VK_LAYER_KHRONOS_validation"};
+#if defined(VULKANLEARN_ENABLE_VULKAN_VALIDATION)
+            "VK_LAYER_KHRONOS_validation"
+#endif
+    };
     std::vector<const char *> instanceExtensions = {};
     std::vector<const char *> deviceExtensions = {
             VK_KHR_SWAPCHAIN_EXTENSION_NAME};

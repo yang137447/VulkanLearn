@@ -16,7 +16,9 @@ void VulkanManager::Init(std::vector<const char *> &extensions, SDL_Window *wind
 {
     instanceExtensions.resize(extensions.size());
     std::copy(extensions.begin(), extensions.end(), instanceExtensions.begin());
+#if defined(VULKANLEARN_ENABLE_VULKAN_VALIDATION)
     instanceExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+#endif
     sdlWindow = window;
     for (auto extension : instanceExtensions)
     {

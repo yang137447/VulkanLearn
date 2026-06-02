@@ -178,6 +178,12 @@ void EngineLoop::StartFrameSmokeTest(int frameCount)
     frameSmokeTotalMs = 0.0;
     frameSmokeMaxMs = 0.0;
     frameSmokeMinMs = std::numeric_limits<double>::max();
+    frameSmokeIntervalFrameCount = 0;
+    frameSmokeIntervalTotalMs = 0.0;
+    frameSmokeIntervalMaxMs = 0.0;
+    frameSmokeIntervalMinMs = std::numeric_limits<double>::max();
+    frameSmokeIntervalRenderLoopTotalMs = 0.0;
+    frameSmokeIntervalRenderLoopMaxMs = 0.0;
     frameSmokeFailed = false;
     frameSmokeCompleted = frameSmokeTotal == 0;
     frameSmokeActive = frameSmokeTotal > 0;
@@ -403,6 +409,13 @@ void EngineLoop::Tick()
 
     {
         PROFILE_SCOPE("RenderLoop");
+        const bool collectFrameSmokeTiming = frameSmokeActive && !frameSmokeCompleted;
+        std::chrono::steady_clock::time_point renderLoopStartTime;
+        if (collectFrameSmokeTiming)
+        {
+            renderLoopStartTime = std::chrono::steady_clock::now();
+        }
+
         if (renderThread && renderThread->IsRunning())
         {
             RenderSystem::GetInstance().PublishSnapshotFromActiveWorld();
@@ -415,6 +428,14 @@ void EngineLoop::Tick()
         else
         {
             RenderSystem::GetInstance().Render();
+        }
+
+        if (collectFrameSmokeTiming)
+        {
+            const auto renderLoopEndTime = std::chrono::steady_clock::now();
+            const double renderLoopTimeMs =
+                std::chrono::duration<double, std::milli>(renderLoopEndTime - renderLoopStartTime).count();
+            AddFrameSmokeRenderLoopTime(renderLoopTimeMs);
         }
     }
 
@@ -839,10 +860,24 @@ void EngineLoop::UpdateFrameSmokeTest(double frameTimeMs)
     frameSmokeTotalMs += frameTimeMs;
     frameSmokeMaxMs = std::max(frameSmokeMaxMs, frameTimeMs);
     frameSmokeMinMs = std::min(frameSmokeMinMs, frameTimeMs);
+    ++frameSmokeIntervalFrameCount;
+    frameSmokeIntervalTotalMs += frameTimeMs;
+    frameSmokeIntervalMaxMs = std::max(frameSmokeIntervalMaxMs, frameTimeMs);
+    frameSmokeIntervalMinMs = std::min(frameSmokeIntervalMinMs, frameTimeMs);
+
+    if (frameSmokeIntervalFrameCount >= frameSmokeIntervalSize)
+    {
+        ReportFrameSmokeInterval();
+    }
 
     if (frameSmokeCompletedCount < frameSmokeTotal)
     {
         return;
+    }
+
+    if (frameSmokeIntervalFrameCount > 0)
+    {
+        ReportFrameSmokeInterval();
     }
 
     frameSmokeCompleted = true;
@@ -864,6 +899,61 @@ void EngineLoop::UpdateFrameSmokeTest(double frameTimeMs)
         std::to_string(frameSmokeMaxMs) +
         ", avgFps=" +
         std::to_string(averageFps));
+}
+
+void EngineLoop::ReportFrameSmokeInterval()
+{
+    const double averageFrameMs = frameSmokeIntervalTotalMs /
+        static_cast<double>(std::max(1, frameSmokeIntervalFrameCount));
+    const double averageFps = 1000.0 / averageFrameMs;
+    const double averageRenderLoopMs = frameSmokeIntervalRenderLoopTotalMs /
+        static_cast<double>(std::max(1, frameSmokeIntervalFrameCount));
+    const ResourceRetireQueue& retireQueue = ResourceRetireQueue::GetInstance();
+
+    GetSubsystems().GetDiagnosticsSubsystem().ReportInfo(
+        "Frame smoke interval: frame=" +
+        std::to_string(frameSmokeCompletedCount) +
+        "/" +
+        std::to_string(frameSmokeTotal) +
+        ", intervalFrames=" +
+        std::to_string(frameSmokeIntervalFrameCount) +
+        ", avgFrameMs=" +
+        std::to_string(averageFrameMs) +
+        ", minFrameMs=" +
+        std::to_string(frameSmokeIntervalMinMs) +
+        ", maxFrameMs=" +
+        std::to_string(frameSmokeIntervalMaxMs) +
+        ", avgFps=" +
+        std::to_string(averageFps) +
+        ", avgRenderLoopMs=" +
+        std::to_string(averageRenderLoopMs) +
+        ", maxRenderLoopMs=" +
+        std::to_string(frameSmokeIntervalRenderLoopMaxMs) +
+        ", retiredPending=" +
+        std::to_string(retireQueue.GetPendingCount()) +
+        ", submittedEpoch=" +
+        std::to_string(retireQueue.GetLastSubmittedEpoch()) +
+        ", completedEpoch=" +
+        std::to_string(retireQueue.GetLastCompletedEpoch()));
+
+    frameSmokeIntervalFrameCount = 0;
+    frameSmokeIntervalTotalMs = 0.0;
+    frameSmokeIntervalMaxMs = 0.0;
+    frameSmokeIntervalMinMs = std::numeric_limits<double>::max();
+    frameSmokeIntervalRenderLoopTotalMs = 0.0;
+    frameSmokeIntervalRenderLoopMaxMs = 0.0;
+}
+
+void EngineLoop::AddFrameSmokeRenderLoopTime(double renderLoopTimeMs)
+{
+    if (!frameSmokeActive || frameSmokeCompleted)
+    {
+        return;
+    }
+
+    frameSmokeIntervalRenderLoopTotalMs += renderLoopTimeMs;
+    frameSmokeIntervalRenderLoopMaxMs =
+        std::max(frameSmokeIntervalRenderLoopMaxMs, renderLoopTimeMs);
 }
 
 bool EngineLoop::ShouldSuppressResizeEvent(uint32_t width, uint32_t height)

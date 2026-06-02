@@ -42,6 +42,7 @@ public:
 
 private:
     SDL_Window* window = nullptr;
+    std::string currentTitle;
 };
 
 } // namespace VL

@@ -4,8 +4,9 @@ add_executable(main ${sources})
 
 target_include_directories(main PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-option(VULKANLEARN_ENABLE_TRACY "Enable Tracy profiler markers and client connection." ON)
-option(VULKANLEARN_ENABLE_NVTX "Enable NVIDIA NVTX profiler markers." ON)
+option(VULKANLEARN_ENABLE_TRACY "Enable Tracy profiler markers and client connection." OFF)
+option(VULKANLEARN_ENABLE_NVTX "Enable NVIDIA NVTX profiler markers." OFF)
+option(VULKANLEARN_ENABLE_VULKAN_VALIDATION "Enable Vulkan validation layer and debug markers." ON)
 
 target_link_libraries(main
 PRIVATE
@@ -31,4 +32,8 @@ endif()
 if(VULKANLEARN_ENABLE_NVTX)
     target_compile_definitions(main PRIVATE NVTX_ENABLE)
     target_link_libraries(main PRIVATE NVTX::nvtx)
+endif()
+
+if(VULKANLEARN_ENABLE_VULKAN_VALIDATION)
+    target_compile_definitions(main PRIVATE VULKANLEARN_ENABLE_VULKAN_VALIDATION)
 endif()

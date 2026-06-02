@@ -1,5 +1,7 @@
 #include "platform/platformWindow.h"
 
+#include <utility>
+
 #include "SDL3/SDL.h"
 
 namespace VL
@@ -11,9 +13,11 @@ PlatformWindow::~PlatformWindow()
 }
 
 PlatformWindow::PlatformWindow(PlatformWindow&& other) noexcept
-    : window(other.window)
+    : window(other.window),
+      currentTitle(std::move(other.currentTitle))
 {
     other.window = nullptr;
+    other.currentTitle.clear();
 }
 
 PlatformWindow& PlatformWindow::operator=(PlatformWindow&& other) noexcept
@@ -22,7 +26,9 @@ PlatformWindow& PlatformWindow::operator=(PlatformWindow&& other) noexcept
     {
         Destroy();
         window = other.window;
+        currentTitle = std::move(other.currentTitle);
         other.window = nullptr;
+        other.currentTitle.clear();
     }
 
     return *this;
@@ -55,6 +61,7 @@ RuntimeResult<void> PlatformWindow::Create(
             SDL_GetError()));
     }
 
+    currentTitle = title != nullptr ? title : "";
     return RuntimeResult<void>::Success();
 }
 
@@ -64,6 +71,7 @@ void PlatformWindow::Destroy()
     {
         SDL_DestroyWindow(window);
         window = nullptr;
+        currentTitle.clear();
     }
 }
 
@@ -79,7 +87,13 @@ void PlatformWindow::Show()
 
 void PlatformWindow::SetTitle(const std::string& title)
 {
+    if (title == currentTitle)
+    {
+        return;
+    }
+
     SDL_SetWindowTitle(window, title.c_str());
+    currentTitle = title;
 }
 
 void PlatformWindow::SetSize(int width, int height)

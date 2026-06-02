@@ -13,7 +13,7 @@ public:
         frameCount++;
         timeElapsed += deltaTime;
 
-        if (timeElapsed >= 0.05f) {
+        if (timeElapsed >= 1.0f) {
             fps = frameCount / timeElapsed;
             frameCount = 0;
             timeElapsed = 0.0f;
