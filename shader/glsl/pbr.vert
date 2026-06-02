@@ -7,7 +7,7 @@
 
 layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inNormal;
-layout(location = 2) in vec3 inColor;
+layout(location = 2) in vec4 inColor;
 layout(location = 3) in vec2 inTexCoord;
 layout(location = 4) in vec4 inTangent;
 
@@ -26,8 +26,8 @@ void MaterialVertex(inout MaterialVertexContext vertex)
     // velocity 需要同一顶点的上一帧裁剪空间位置：上一帧 VP 来自全局 UBO，上一帧 model 来自对象 UBO。
     vertex.vertexOutput.previousClipPosition = uboVP.previousViewProjection * uboM.previousModel * vec4(localPosition, 1.0);
 
-    // tintColor 当前仍作为 baseColor 的额外乘子使用，保持拆分前的材质调色行为。
-    vertex.vertexOutput.vertexColor = u_tintColor.rgb;
+    // 材质 tint 在片元阶段和贴图一起相乘；这里保留模型顶点色原始通道。
+    vertex.vertexOutput.vertexColor = vertex.vertexInput.vertexColor;
     vertex.vertexOutput.texCoord = vertex.vertexInput.texCoord;
 
     // MikkTSpace 要求运行时解码尽量匹配烘焙端使用的切线空间基底。

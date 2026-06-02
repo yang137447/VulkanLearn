@@ -125,11 +125,15 @@ MeshSection AssimpSourceAdapter::ProcessMesh(aiMesh* mesh, const aiScene* scene)
         }
         if(mesh->mColors[0])
         {
-            vertex.color = Eigen::Vector3f(mesh->mColors[0][i].r, mesh->mColors[0][i].g, mesh->mColors[0][i].b);
+            vertex.color = Eigen::Vector4f(
+                mesh->mColors[0][i].r,
+                mesh->mColors[0][i].g,
+                mesh->mColors[0][i].b,
+                mesh->mColors[0][i].a);
         }
         else
         {
-            vertex.color = Eigen::Vector3f(1.0f, 1.0f, 1.0f);
+            vertex.color = Eigen::Vector4f::Ones();
         }
         if(mesh->mTextureCoords[0])
         {

@@ -4,7 +4,6 @@
 #include "generate/M_speedtreeParamter.glsl"
 #include "engine/materialContext.glsl"
 #include "engine/materialSurface.glsl"
-#include "materialFunction/mf_pbrSurface.glsl"
 #include "engine/materialPass.glsl"
 
 #if VL_MATERIAL_OUTPUT_GBUFFER
@@ -32,10 +31,48 @@ layout(location = 0) out vec4 outSceneColor;
 #endif
 
 // MaterialPixel 是片元阶段的公开材质入口：一般材质作者改这里。
-// SpeedTree 第一版复用 PBR surface，后续在这里逐步接入 foliage shading。
+// SpeedTree 的 packed 参数约定：
+// - normalMap.rgb: tangent-space normal
+// - normalMap.a: roughness
+// - vertexColor.a: ambient occlusion
 void MaterialPixel(in MaterialPixelContext pixel, inout MaterialSurface surface)
 {
-    surface = EvaluatePbrSurface(pixel);
+    surface = CreateDefaultMaterialSurface();
+    surface.worldPosition = pixel.worldPosition;
+    surface.worldTangent = pixel.worldTangent;
+    surface.shadingModel = MATERIAL_SHADING_MODEL;
+
+    #if USE_ALBEDO_MAP
+        vec4 albedoColor = texture(albedoMap, pixel.texCoord) * u_tintColor;
+    #else
+        vec4 albedoColor = u_tintColor;
+    #endif
+    vec4 baseColor = albedoColor * vec4(pixel.vertexColor.rgb, 1.0);
+    surface.baseColor = baseColor.rgb;
+    surface.opacity = baseColor.a;
+
+    #if defined(RENDER_MODE_OPAQUE_CLIP)
+    if (surface.opacity < u_pbrFactors.w)
+    {
+        discard;
+    }
+    #endif
+
+    surface.roughness = u_pbrFactors.x;
+    surface.metallic = u_pbrFactors.y;
+    surface.ambientOcclusion = pixel.vertexColor.a;
+
+    surface.worldNormal = normalize(pixel.worldNormal);
+    #if USE_NORMAL_MAP
+        vec4 normalSample = texture(normalMap, pixel.texCoord);
+        vec3 normalTS = normalSample.xyz * 2.0 - 1.0;
+        vec3 bitangent = cross(pixel.worldNormal, pixel.worldTangent.xyz) * pixel.worldTangent.w;
+        surface.worldNormal = normalize(
+            normalTS.x * pixel.worldTangent.xyz +
+            normalTS.y * bitangent +
+            normalTS.z * pixel.worldNormal);
+        surface.roughness = normalSample.a;
+    #endif
 }
 
 void main()

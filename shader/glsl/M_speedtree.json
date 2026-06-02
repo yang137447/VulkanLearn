@@ -10,7 +10,6 @@
     "macros": {
         "USE_ALBEDO_MAP": 0,
         "USE_NORMAL_MAP": 0,
-        "USE_PBR_MAP": 0,
         "USE_EMISSION_MAP": 0,
         "USE_CUSTOM_DATA": 0,
         "USE_PRECOMPUTED_SHADOW_FACTORS": 0,
@@ -48,10 +47,6 @@
             "default": null
         },
         "normalMap": {
-            "type": "sampler2D",
-            "default": null
-        },
-        "pbrParamMap": {
             "type": "sampler2D",
             "default": null
         },

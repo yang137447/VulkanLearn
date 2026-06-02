@@ -15,13 +15,13 @@ MaterialSurface EvaluatePbrSurface(in MaterialPixelContext pixel)
     surface.worldTangent = pixel.worldTangent;
     surface.shadingModel = MATERIAL_SHADING_MODEL;
 
-    // 第一版 PBR 先复用一张 albedo 贴图，baseColor = 贴图颜色 * 顶点阶段传来的 tint。
+    // 第一版 PBR 先复用一张 albedo 贴图，baseColor = 贴图颜色 * 材质 tint * 顶点色 RGB。
     #if USE_ALBEDO_MAP
-        vec4 albedoColor = texture(albedoMap, pixel.texCoord);
+        vec4 albedoColor = texture(albedoMap, pixel.texCoord) * u_tintColor;
     #else
         vec4 albedoColor = u_tintColor;
     #endif
-    vec4 baseColor = albedoColor * vec4(pixel.vertexColor, 1.0);
+    vec4 baseColor = albedoColor * vec4(pixel.vertexColor.rgb, 1.0);
     surface.baseColor = baseColor.rgb;
     surface.opacity = baseColor.a;
 
