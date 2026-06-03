@@ -107,19 +107,31 @@ Current local build context:
 
 ## Startup Flow
 
-The current startup sequence in `source/main.cpp` is:
+The current startup sequence is split between `source/main.cpp` and
+`source/engine/engineLoop.cpp`:
 
-1. Initialize SDL and Vulkan loader
-2. Load config JSON
-3. Create SDL Vulkan window
-4. Compile shaders from `shader/`
-5. Initialize `VulkanManager`
-6. Create `PipelineFactory`
-7. Generate BRDF LUT
-8. Load render graph from `config/renderGraphConfig.json`
-9. Load scene from `config/config.json -> initScene`
-10. Initialize `RenderSystem`
-11. Enter update + render loop
+1. Parse launch options and runtime test flags in `source/engine/launchOptions.cpp`
+2. Load `RuntimeConfig`
+   - discover project root through `FileSystem`
+   - read `config/config.json`
+   - read `config/renderGraphConfig.json`
+   - cache startup fields such as window size, `initScene`, `resourcePath`, and worker thread mode
+3. Initialize `PlatformApplication`
+   - initialize SDL and the Vulkan loader-facing platform layer
+   - create the SDL Vulkan window and collect required Vulkan extensions
+4. Initialize `EngineLoop`
+   - initialize input
+   - generate material parameter includes
+   - compile shaders from `shader/glsl/` into `shader/spv/`
+   - initialize the Vulkan renderer backend
+   - create `PipelineFactory` and bind renderer resource loading services
+   - load the render graph from `RuntimeConfig::GetRenderGraphJson()`
+   - load the initial world through `WorldTransitionCoordinator`
+   - bind active world runtime objects and initialize `RenderSystem`
+   - start the render thread only when `workerThreadCount == 2`
+   - initialize the console subsystem
+5. Queue launch-time runtime commands, if any
+6. Enter the update + render loop
 
 If a change affects boot behavior, verify it against this order.
 

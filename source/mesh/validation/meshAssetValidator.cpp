@@ -177,7 +177,7 @@ namespace
         bool bIsStrictMatch)
     {
         std::string reason = bIsStrictMatch
-            ? "SpeedTree materialSlots count does not match parsed .stsdk material slot count"
+            ? "SpeedTree materialSlots count does not match parsed .stsdk selected LOD material slot count"
             : "Mesh materialSlots count does not match source material slot count";
         reason += ": " + buildPlan.meshAssetPath +
             " model=" + buildPlan.modelDataPath +

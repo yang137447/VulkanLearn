@@ -3,7 +3,7 @@
 #include "common/commonUbo.glsl"
 #include "common/function.glsl"
 #include "engine/materialContext.glsl"
-#include "generate/M_pbrParamter.glsl"
+#include "generate/M_speedtreeParamter.glsl"
 
 layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inNormal;
@@ -17,7 +17,7 @@ layout(location = 0) out MaterialVaryings v2f;
 // main 负责把引擎输入/输出接到 context 上，后续模板化时也应继续保持为底层封装。
 void MaterialVertex(inout MaterialVertexContext vertex)
 {
-    // PBR 顶点阶段只负责把几何数据整理到世界空间；Direct / Indirect 光照分类留到片元阶段处理。
+    // SpeedTree 第一版先复制 PBR 顶点路径，后续在这里逐步接入风和多 pivot 数据。
     mat4 modelMatrix = vertex.modelMatrix;
     vec3 localPosition = vertex.vertexInput.localPosition;
 
@@ -26,7 +26,7 @@ void MaterialVertex(inout MaterialVertexContext vertex)
     // velocity 需要同一顶点的上一帧裁剪空间位置：上一帧 VP 来自全局 UBO，上一帧 model 来自对象 UBO。
     vertex.vertexOutput.previousClipPosition = uboVP.previousViewProjection * uboM.previousModel * vec4(localPosition, 1.0);
 
-    // 材质 tint 在片元阶段和贴图一起相乘；这里保留模型顶点色原始通道。
+    // SpeedTree 顶点色 w 由导入器映射为 AO，片元阶段会按材质语义解释。
     vertex.vertexOutput.vertexColor = vertex.vertexInput.vertexColor;
     vertex.vertexOutput.texCoord = vertex.vertexInput.texCoord;
 

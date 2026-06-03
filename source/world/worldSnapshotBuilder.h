@@ -28,6 +28,7 @@ public:
     RuntimeResult<WorldSnapshot> Build(
         const World& world,
         const WorldSnapshotBuildDesc& desc);
+    void Reset();
 
 private:
     std::optional<uint64_t> previousWorldGeneration;

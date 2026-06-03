@@ -496,7 +496,7 @@
                     <text class="subttl" x="858" y="948">ResourceRetireQueue</text>
 
                     <rect class="outer" x="1140" y="562" width="520" height="430" fill="#2f2741" stroke="#78639f"/>
-                    <text class="ttl" x="1162" y="594">4C. Renderer Domain（RT 可选，仅读快照）</text>
+                    <text class="ttl" x="1162" y="594">4C. Renderer Domain（workerThreadCount=2 时 RT，仅读快照）</text>
                     <rect class="box" x="1162" y="618" width="220" height="82" fill="#3d3355" stroke="#9880c2"/>
                     <text class="subttl" x="1178" y="642">RendererFrontend</text>
                     <text class="tiny" x="1178" y="660">WorldSnapshot -> RenderScene</text>
@@ -1083,7 +1083,7 @@
                     <tr>
                         <td>配置与路径</td>
                         <td><code>RuntimeConfig</code> + <code>FileSystem</code></td>
-                        <td><code>source/platform/fileSystem.*</code> 负责发现 project root、读取 JSON 和按 resource/project/shader-spv 顺序解析路径；<code>source/engine/runtimeConfig.*</code> 负责解释 <code>config/config.json</code>、<code>renderGraphConfig.json</code>、window size、init scene、project/resource path。</td>
+                        <td><code>source/platform/fileSystem.*</code> 负责发现 project root、读取 JSON 和按 resource/project/shader-spv 顺序解析路径；<code>source/engine/runtimeConfig.*</code> 负责解释 <code>config/config.json</code>、<code>renderGraphConfig.json</code>、window size、init scene、project/resource path，以及 V1 CPU 线程预算 <code>workerThreadCount</code>。</td>
                         <td>启动日志清晰打印 project root、resourcePath、initScene、shader path。</td>
                     </tr>
                     <tr>
@@ -1449,7 +1449,7 @@ if (snapshot.has_value()) {
             </div>
 
             <h3>当前源码链路</h3>
-            <p class="muted">当前工程还没有把真正的 Render Thread 独立出来，但 <code>RenderSystem::RefreshRenderSceneFromActiveWorld()</code> 已经按未来 GT/RT 协议跑：构建 snapshot，发布到 mailbox，再从 mailbox 消费并构建 <code>RenderScene</code>。所以这不是纸面设计，而是单线程路径已经在使用的边界契约。</p>
+            <p class="muted">当前工程已经有 <code>workerThreadCount=2</code> 的专用 Render Thread；同步模式和 RT 模式都走同一套 snapshot mailbox 协议：GT 构建 snapshot 并发布到 mailbox，渲染侧消费快照、构建 <code>RenderScene</code>，再进入 Vulkan draw path。</p>
             <pre><code>RenderSystem::RefreshRenderSceneFromActiveWorld()
   -> WorldSnapshotBuilder::Build(*activeWorld, buildDesc)
        validate worldGeneration and active camera
@@ -1827,7 +1827,8 @@ while (renderRunning) {
 
         <section id="thread">
             <h2>13) 线程与数据边界图（V1）</h2>
-            <p class="muted">关键约束：World 只在 GT 写；RT 只读取 RenderScene 快照；交接只通过 SnapshotQueue。</p>
+            <p class="muted">关键约束：World 只在 GT 写；RT 只读取 RenderScene 快照；交接只通过 SnapshotQueue。V1 不引入线程池或 TaskGraph，CPU 线程预算只由 <code>config/config.json -> workerThreadCount</code> 控制。</p>
+            <p class="rule"><code>workerThreadCount</code> 的 V1 语义：缺省按 <code>1</code> 处理；<code>1</code> 表示完全同步，只运行 GT / main thread；<code>2</code> 表示 GT + 专用 RT；<code>0</code>、负数和 <code>&gt; 2</code> 都是配置错误；旧的 <code>renderThread.enabled</code> 配置视为废弃字段并报错。后续 JobSystem / TaskGraph 才会扩展 <code>&gt; 2</code>。</p>
             <div class="diagram-wrap">
                 <svg width="1260" height="460" viewBox="0 0 1260 460" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Thread and data boundary diagram">
                     <defs>
@@ -1850,7 +1851,7 @@ while (renderRunning) {
 
                     <text class="ttl" x="36" y="50">Game Thread（唯一 World Writer）</text>
                     <text class="ttl" x="446" y="50">Snapshot Queue（跨线程边界）</text>
-                    <text class="ttl" x="856" y="50">Render Thread（可选，仅读）</text>
+                    <text class="ttl" x="856" y="50">Render Thread（workerThreadCount = 2）</text>
 
                     <rect class="step" x="40" y="84" width="350" height="70"/>
                     <text class="ttl" x="56" y="109">Tick Gameplay World</text>
@@ -1979,7 +1980,7 @@ while (renderRunning) {
                     <tr>
                         <td class="nowrap">InitEngine</td>
                         <td><code>EngineLoop::Init</code></td>
-                        <td>创建 GameInstance、初始化 SubsystemCollection、PipelineFactory、RendererResourceLoadCoordinator、RenderGraph、WorldTransitionCoordinator，并初始化初始渲染资源</td>
+                        <td>创建 GameInstance、初始化 SubsystemCollection、PipelineFactory、RendererResourceLoadCoordinator、RenderGraph、WorldTransitionCoordinator，并根据 <code>workerThreadCount</code> 决定同步渲染或启动专用 RT，最后初始化初始渲染资源</td>
                         <td>可运行的 engine context</td>
                         <td>销毁已创建 subsystem，退出</td>
                     </tr>
@@ -2021,8 +2022,11 @@ while (renderRunning) {
   WorldTransitionCoordinator::Advance
   activeWorld->Tick(deltaTime)
   WorldSnapshotBuilder::Build(activeWorld)
-  RendererFrontend::AcceptSnapshot(snapshot)
-  RendererBackendVulkan::RenderFrame
+  if workerThreadCount == 1:
+      RenderSystem::Render()
+  if workerThreadCount == 2:
+      RenderSystem::PublishSnapshotFromActiveWorld()
+      RenderThread::SubmitFrame()
   ResourceRetireQueue::CollectCompletedEpoch</code></pre>
         </section>
 
@@ -2169,7 +2173,7 @@ while (renderRunning) {
                         <td>CompiledFrameGraph、RenderScene、frame resources</td>
                         <td>GPU submit、present、completed epoch</td>
                         <td>swapchain out-of-date 触发 resize/recreate，不改 World</td>
-                        <td>RT 可选；单线程模式下由 GT 调用</td>
+                        <td><code>workerThreadCount = 1</code> 时由 GT 同步调用；<code>workerThreadCount = 2</code> 时由专用 RT 调用。</td>
                     </tr>
                     <tr>
                         <td><code>IResourceRetireQueue</code></td>
@@ -2444,7 +2448,7 @@ struct RuntimeResult {
             <div class="grid">
                 <div class="card">
                     <h3>Milestone A</h3>
-                    <p><span class="ok">当前进展：</span><code>PlatformApplication</code>、<code>PlatformWindow</code>、<code>FileSystem</code>、<code>EngineLoop</code>、<code>GameInstance</code>、<code>SubsystemCollection</code>、<code>CommandBus</code>、<code>ConsoleSubsystem</code>、<code>DiagnosticsSubsystem</code>、<code>RuntimeConfig</code>、<code>RuntimeClock</code> 与 <code>InputSubsystem</code> 骨架已落地，启动配置、项目根发现、JSON 读取、runtime path 解析、窗口事件、输入采样、命令投递、runtime diagnostics、帧 delta、渲染循环和 shutdown 已从 <code>main.cpp</code> / <code>Controller</code> / <code>CommonFunction</code> 热路径中迁出。<code>--framesmoke [count] --exit-after-tests</code> 已作为固定帧数 smoke/performance baseline 入口接入 EngineLoop。</p>
+                    <p><span class="ok">当前进展：</span><code>PlatformApplication</code>、<code>PlatformWindow</code>、<code>FileSystem</code>、<code>EngineLoop</code>、<code>GameInstance</code>、<code>SubsystemCollection</code>、<code>CommandBus</code>、<code>ConsoleSubsystem</code>、<code>DiagnosticsSubsystem</code>、<code>RuntimeConfig</code>、<code>RuntimeClock</code> 与 <code>InputSubsystem</code> 骨架已落地，启动配置、项目根发现、JSON 读取、runtime path 解析、窗口事件、输入采样、命令投递、runtime diagnostics、帧 delta、渲染循环和 shutdown 已从 <code>main.cpp</code> / <code>Controller</code> / <code>CommonFunction</code> 热路径中迁出。线程配置契约收敛为单个 <code>workerThreadCount</code>：V1 只支持 <code>1</code>（完全同步）和 <code>2</code>（GT + RT）。<code>--framesmoke [count] --exit-after-tests</code> 已作为固定帧数 smoke/performance baseline 入口接入 EngineLoop。</p>
                     <p><span class="warn">V1 边界：</span>当前生命周期由 <code>EngineLoop</code> 显式编排，各 subsystem 只暴露实际需要的初始化/更新入口；<code>RuntimeConfig/FileSystem</code> 已接管启动配置与命令路径解析，部分资源加载 helper 仍保留 <code>CommonFunction::Path</code> 作为兼容入口，长期可继续迁到 AssetManager。active world reload 的连续压力验证已由 <code>--reloadstress scenes/SC_speedtree.json 20 --exit-after-tests</code> 覆盖，固定帧渲染基线由 <code>--framesmoke 120 --exit-after-tests</code> 覆盖。</p>
                 </div>
                 <div class="card">

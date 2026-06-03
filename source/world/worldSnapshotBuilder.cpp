@@ -296,4 +296,11 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
     return RuntimeResult<WorldSnapshot>::Success(std::move(snapshot));
 }
 
+void WorldSnapshotBuilder::Reset()
+{
+    previousWorldGeneration.reset();
+    previousViewProjection.reset();
+    previousObjectModels.clear();
+}
+
 } // namespace VL

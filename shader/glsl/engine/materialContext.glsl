@@ -8,7 +8,7 @@ struct MaterialVertexInput
 {
     vec3 localPosition;
     vec3 localNormal;
-    vec3 vertexColor;
+    vec4 vertexColor;
     vec2 texCoord;
     vec4 localTangent;
 };
@@ -20,7 +20,7 @@ struct MaterialVertexOutput
     vec4 previousClipPosition;
     vec3 worldPosition;
     vec3 worldNormal;
-    vec3 vertexColor;
+    vec4 vertexColor;
     vec2 texCoord;
     vec4 worldTangent;
 };
@@ -40,7 +40,7 @@ struct MaterialVaryings
     vec4 previousClipPosition;
     vec3 worldPosition;
     vec3 worldNormal;
-    vec3 vertexColor;
+    vec4 vertexColor;
     vec2 texCoord;
     vec4 worldTangent;
 };
@@ -52,7 +52,7 @@ struct MaterialPixelContext
     vec4 previousClipPosition;
     vec3 worldPosition;
     vec3 worldNormal;
-    vec3 vertexColor;
+    vec4 vertexColor;
     vec2 texCoord;
     vec4 worldTangent;
 };

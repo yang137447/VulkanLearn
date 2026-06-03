@@ -6,7 +6,7 @@
 
 //layout(binding = 4) uniform sampler2D albedoMap;
 
-layout(location = 0) in vec3 fragColor;
+layout(location = 0) in vec4 fragColor;
 layout(location = 1) in vec2 fragTexCoord;
 layout(location = 2) in vec3 fragWorldPosition;
 layout(location = 3) in vec3 fragWorldNormal;
@@ -25,7 +25,7 @@ void main()
     MaterialSurface surface = CreateDefaultMaterialSurface();
     surface.worldPosition = fragWorldPosition;
     surface.worldNormal = normalize(fragWorldNormal);
-    surface.baseColor = fragColor;
+    surface.baseColor = fragColor.rgb;
     surface.opacity = 1.0;
     surface.shadingModel = SHADING_MODEL_UNLIT;
 

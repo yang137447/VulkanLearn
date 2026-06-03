@@ -18,6 +18,7 @@ class PlatformApplication;
 class PlatformWindow;
 class GameInstance;
 class RendererBackendVulkan;
+class RenderThread;
 class RuntimeConfig;
 class RuntimeCommandExecutor;
 class SubsystemCollection;
@@ -55,9 +56,13 @@ private:
     RuntimeResult<void> BindActiveWorldRuntimeObjects(const WorldHandle& worldHandle);
     RuntimeResult<void> RecreateRendererForWindowResize(uint32_t width, uint32_t height);
     RuntimeResult<void> ReloadRenderGraphResources(VL::RenderGraphReleaseMode releaseMode);
+    void WaitForRenderThreadIdle();
+    void PollRenderThreadFatalError();
     void UpdateResizeStress();
     void UpdateRenderGraphReloadStress();
     void UpdateFrameSmokeTest(double frameTimeMs);
+    void ReportFrameSmokeInterval();
+    void AddFrameSmokeRenderLoopTime(double renderLoopTimeMs);
     bool ShouldSuppressResizeEvent(uint32_t width, uint32_t height);
 
     PlatformApplication* platformApplication = nullptr;
@@ -92,12 +97,20 @@ private:
     double frameSmokeTotalMs = 0.0;
     double frameSmokeMaxMs = 0.0;
     double frameSmokeMinMs = 0.0;
+    int frameSmokeIntervalSize = 5000;
+    int frameSmokeIntervalFrameCount = 0;
+    double frameSmokeIntervalTotalMs = 0.0;
+    double frameSmokeIntervalMaxMs = 0.0;
+    double frameSmokeIntervalMinMs = 0.0;
+    double frameSmokeIntervalRenderLoopTotalMs = 0.0;
+    double frameSmokeIntervalRenderLoopMaxMs = 0.0;
     bool suppressNextResizeEvent = false;
     uint32_t suppressedResizeWidth = 0;
     uint32_t suppressedResizeHeight = 0;
 
     std::unique_ptr<PipelineFactory> pipelineFactory;
     std::unique_ptr<RendererBackendVulkan> rendererBackend;
+    std::unique_ptr<RenderThread> renderThread;
     std::unique_ptr<RuntimeCommandExecutor> runtimeCommandExecutor;
     std::unique_ptr<WorldTransitionCoordinator> worldTransitionCoordinator;
     std::unique_ptr<Controller> controller;

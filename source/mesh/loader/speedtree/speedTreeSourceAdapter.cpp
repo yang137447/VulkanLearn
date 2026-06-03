@@ -359,6 +359,22 @@ namespace
         return "speedtree_material_slot_" + std::to_string(materialSlot);
     }
 
+    std::vector<std::string> BuildMaterialNamesForSections(
+        const std::vector<MaterialSection>& sections,
+        const std::vector<std::string>& materialNames)
+    {
+        std::vector<std::string> usedMaterialNames;
+        for (const MaterialSection& section : sections)
+        {
+            const std::string materialName = MaterialNameForSlot(materialNames, section.materialSlot);
+            if (std::find(usedMaterialNames.begin(), usedMaterialNames.end(), materialName) == usedMaterialNames.end())
+            {
+                usedMaterialNames.push_back(materialName);
+            }
+        }
+        return usedMaterialNames;
+    }
+
     Eigen::Vector3f ConvertSpeedTreePosition(const Eigen::Vector3f& position)
     {
         return Eigen::Vector3f(position.x(), position.z(), -position.y());
@@ -421,7 +437,7 @@ namespace
         result.vertex.texCoord = Eigen::Vector2f(
             ReadHalfLE(data, vertexOffset + 6),
             ReadHalfLE(data, vertexOffset + 14));
-        result.vertex.color = Eigen::Vector3f::Ones();
+        result.vertex.color = Eigen::Vector4f::Ones();
         result.vertex.normal = Eigen::Vector3f::Zero();
         result.vertex.tangent = Eigen::Vector4f::Zero();
 
@@ -434,6 +450,8 @@ namespace
         result.aux.sourcePackedBinormal = data[vertexOffset + 17];
         result.aux.sourcePackedTangent = data[vertexOffset + 18];
         result.aux.ambientOcclusion = data[vertexOffset + 19];
+        // SpeedTree stores AO beside packed TBN; expose it as vertex color w for material access.
+        result.vertex.color.w() = static_cast<float>(result.aux.ambientOcclusion) / 255.0f;
         result.aux.sourcePackedTbnAo = {
             result.aux.sourcePackedNormal,
             result.aux.sourcePackedBinormal,
@@ -474,7 +492,7 @@ namespace
         result.vertex.texCoord = Eigen::Vector2f(
             ReadHalfLE(data, vertexOffset + 8),
             ReadHalfLE(data, vertexOffset + 10));
-        result.vertex.color = Eigen::Vector3f::Ones();
+        result.vertex.color = Eigen::Vector4f::Ones();
         const Eigen::Vector3f sourceNormal(
             ReadHalfLE(data, vertexOffset + 6),
             ReadHalfLE(data, vertexOffset + 12),
@@ -666,7 +684,6 @@ SpeedTreeSourceData SpeedTreeSourceAdapter::ReadSource(const std::string& source
 
     SpeedTreeSourceData sourceData;
     sourceData.materialNames = materialNames;
-    sourceData.modelResource.sourceMaterialSlotNames = materialNames;
     const size_t blockIndex = SelectHighestLodBlockIndex(blocks);
     const GeometryBlock& block = blocks[blockIndex];
     std::vector<MaterialSection> sections = block.sections;
@@ -678,6 +695,7 @@ SpeedTreeSourceData SpeedTreeSourceAdapter::ReadSource(const std::string& source
         defaultSection.indexCount = block.indexCount;
         sections.push_back(defaultSection);
     }
+    sourceData.modelResource.sourceMaterialSlotNames = BuildMaterialNamesForSections(sections, materialNames);
 
     for (size_t sectionIndex = 0; sectionIndex < sections.size(); ++sectionIndex)
     {

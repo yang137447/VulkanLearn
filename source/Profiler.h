@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 // Profiler Configuration
 // TRACY_ENABLE: Enable Tracy Profiler
 // NVTX_ENABLE: Enable NVIDIA Nsight Systems (NVTX)
