@@ -1,5 +1,6 @@
 #include "pipelineLayoutBuilder.h"
 #include "../vulkanDebug.h"
+#include "vulkanPipelineDiagnostics.h"
 
 std::vector<vk::DescriptorSetLayout> PipelineLayoutBuilder::CreateDescriptorSetLayouts(
     vk::Device& device,
@@ -33,7 +34,11 @@ std::vector<vk::DescriptorSetLayout> PipelineLayoutBuilder::CreateDescriptorSetL
             .setBindings(descriptorSetLayoutBindings);
 
         vk::Result result = device.createDescriptorSetLayout(&descriptorSetLayoutCreateInfo, nullptr, &descriptorSetLayouts[i]);
-        assert(result == vk::Result::eSuccess);
+        VL::RequireVulkanPipelineSuccess(
+            result,
+            "Create descriptor set layout " + std::to_string(i),
+            pipelineName,
+            "pipeline layout");
         VulkanDebug::SetObjectName(device, descriptorSetLayouts[i], vk::ObjectType::eDescriptorSetLayout, "SetLayout_" + std::to_string(i) + ": " + pipelineName);
     }
     return descriptorSetLayouts;
@@ -50,7 +55,7 @@ vk::PipelineLayout PipelineLayoutBuilder::CreatePipelineLayout(
         .setSetLayouts(descriptorSetLayouts);
 
     vk::Result result = device.createPipelineLayout(&pipelineLayoutCreateInfo, nullptr, &pipelineLayout);
-    assert(result == vk::Result::eSuccess);
+    VL::RequireVulkanPipelineSuccess(result, "Create pipeline layout", pipelineName, "pipeline layout");
     VulkanDebug::SetObjectName(device, pipelineLayout, vk::ObjectType::ePipelineLayout, "PipelineLayout: " + pipelineName);
     return pipelineLayout;
 }

@@ -2,6 +2,7 @@
 
 #include <fstream>
 #include <stdexcept>
+#include <string>
 
 #include <nlohmann/json.hpp>
 
@@ -84,11 +85,11 @@ void RendererMaterialLoader::LoadPassMaterials() const
             pipelineStateDesc.depthCompareOp = ParseDepthCompareOp(pipelineStateJson.value("depthCompareOp", std::string("less")));
         }
 
-        const auto& renderPass = renderGraph.GetRenderpasses().at(passName);
+        Renderpass& renderPass = renderGraph.GetRenderpasses().at(passName);
         std::shared_ptr<MaterialInstance> materialInstance =
             LoadMaterialInstance(materialInstancePath, renderPass.sampleCount, passName, pipelineStateDesc);
         
-        renderGraph.GetRenderpasses()[passName.data()].materialInstance = materialInstance;
+        renderPass.materialInstance = materialInstance;
     }
 }
 
@@ -108,6 +109,8 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
         MaterialInstanceResolver::Resolve(materialInstancePath, materialInstanceJson);
     const nlohmann::json& effectiveMaterialInstanceJson = materialInstanceResolveResult.effectiveMaterialInstanceJson;
     MaterialInstanceBuildPlan loadPlan = MaterialInstanceValidator::BuildLoadPlan(materialInstancePath, passName, sampleCount, pipelineStateDesc, effectiveMaterialInstanceJson);
+    const std::string passNameKey(passName);
+    Renderpass& renderPass = renderGraph.GetRenderpasses().at(passNameKey);
     std::shared_ptr<Material> material;
     const std::shared_ptr<Material>* cachedMaterial = resourceCache.GetMaterial(loadPlan.materialKey);
     if(cachedMaterial != nullptr && *cachedMaterial != nullptr)
@@ -118,11 +121,11 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
     {
         material = std::make_shared<Material>(
             pipelineFactory, 
-            &renderGraph.GetRenderpasses()[passName.data()].renderPass,
+            &renderPass.renderPass,
             loadPlan.shaderVariantKey,
             loadPlan.materialKey,
             sampleCount,
-            renderGraph.GetRenderpasses()[passName.data()].colorAttachmentCount,
+            renderPass.colorAttachmentCount,
             loadPlan.pipelineStateDesc,
             loadPlan.bIsShadowPass
         );

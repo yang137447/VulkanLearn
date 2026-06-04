@@ -27,10 +27,7 @@ constexpr size_t kDefaultLightCapacity = 64;
 
 bool HasBufferSetResources(const Buffer& bufferSet)
 {
-    return !bufferSet.buffers.empty() ||
-        !bufferSet.bufferMemories.empty() ||
-        !bufferSet.buffersMapped.empty() ||
-        !bufferSet.bufferInfos.empty();
+    return bufferSet.HasResources();
 }
 
 Buffer TakeBufferSet(Buffer& bufferSet)
@@ -150,7 +147,7 @@ bool RendererFrameResources::EnsureLightCapacity(
     }
 
     const size_t requiredLightCapacity = std::max(requestedLightCount, kDefaultLightCapacity);
-    if (!lightBuffer.buffers.empty() && requiredLightCapacity <= maxLightCount)
+    if (lightBuffer.HasResources() && requiredLightCapacity <= maxLightCount)
     {
         return false;
     }
@@ -399,7 +396,7 @@ void RendererFrameResources::CreateLightBuffer(
 
 void RendererFrameResources::DestroyLightBuffer(RendererBackendVulkan& rendererBackend)
 {
-    if (lightBuffer.buffers.empty())
+    if (!lightBuffer.HasResources())
     {
         return;
     }

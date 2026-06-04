@@ -182,7 +182,7 @@ SceneAssetBuildPlan SceneAssetValidator::BuildLoadPlan(
                 " object=" + objectName);
         const std::string objectContext = BuildObjectContext(scenePath, objectIndex, objectType);
 
-        SceneObjectBuildPlan objectPlan;
+        SceneAssetObjectPlan objectPlan;
         objectPlan.objectIndex = objectIndex;
         objectPlan.objectName = objectName;
         objectPlan.objectType = objectType;
@@ -214,6 +214,10 @@ SceneAssetBuildPlan SceneAssetValidator::BuildLoadPlan(
         {
             ValidateEnvironmentObject(objectJson, objectContext);
         }
+        else
+        {
+            throw std::runtime_error("Unknown scene object type: " + objectContext);
+        }
 
         sceneBuildPlan.objectPlans.push_back(std::move(objectPlan));
     }
@@ -228,7 +232,7 @@ SceneAssetBuildPlan SceneAssetValidator::BuildLoadPlan(
 
 void SceneAssetValidator::Validate(const SceneAssetBuildPlan& sceneBuildPlan)
 {
-    for (const SceneObjectBuildPlan& objectPlan : sceneBuildPlan.objectPlans)
+    for (const SceneAssetObjectPlan& objectPlan : sceneBuildPlan.objectPlans)
     {
         if (!objectPlan.meshLoadRequest.has_value())
         {

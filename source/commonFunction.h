@@ -1,16 +1,18 @@
 #pragma once
 
 #include "vulkan/vulkan.hpp"
+#include <algorithm>
 #include <cstdint>
 #include <vector>
 #include <Eigen/Dense>
 #include <array>
 #include <filesystem>
 #include <fstream>
-#include <iostream>
 #include <nlohmann/json.hpp>
 #include <math.h>
 #include <optional>
+#include <stdexcept>
+#include <string>
 #include "vulkanDebug.h"
 
 constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
@@ -179,6 +181,34 @@ namespace Algorithm
 
 namespace CommonFunction
 {
+    inline std::filesystem::path FindProjectRoot()
+    {
+        std::filesystem::path current = std::filesystem::current_path();
+        if (std::filesystem::is_regular_file(current))
+        {
+            current = current.parent_path();
+        }
+
+        while (!current.empty())
+        {
+            const std::filesystem::path configPath = current / "config" / "config.json";
+            if (std::filesystem::exists(configPath))
+            {
+                return current;
+            }
+
+            const std::filesystem::path parent = current.parent_path();
+            if (parent == current)
+            {
+                break;
+            }
+            current = parent;
+        }
+
+        throw std::runtime_error(
+            "Failed to find config/config.json from current path: " +
+            std::filesystem::current_path().string());
+    }
 
     inline std::string GetConfigFolderPath()
     {
@@ -188,22 +218,7 @@ namespace CommonFunction
             return configFolderPath;
         }
 
-        // Resolve from the current working directory first. This legacy helper
-        // is still used by older code paths; RuntimeConfig/FileSystem owns the
-        // newer project-root discovery path.
-        std::string projectPath = std::filesystem::current_path().string();
-        configFolderPath = projectPath + "/config";
-        if( !std::filesystem::exists(configFolderPath) )
-        {
-            // CMake debug launches may start from build/bin; walk back to the
-            // repository root shape used by the current MinGW build tree.
-            projectPath = std::filesystem::path(projectPath).parent_path().parent_path().string();
-            configFolderPath = projectPath + "/config";
-            if( !std::filesystem::exists(configFolderPath) )
-            {
-                throw std::runtime_error("Failed to find config.json file");
-            }
-        }
+        configFolderPath = (FindProjectRoot() / "config").string();
 
         return configFolderPath;
     }
@@ -216,9 +231,7 @@ namespace CommonFunction
             return configJson.value();
         }
 
-        // 获取configFolderPath
         std::string configFolderPath = GetConfigFolderPath();
-        // 读取config.json文件
         std::ifstream configFile(configFolderPath + "/config.json");
         configJson = nlohmann::json();
         configFile >> configJson.value();
@@ -233,20 +246,11 @@ namespace CommonFunction
             return renderGraphJson.value();
         }
 
-        // 获取configFolderPath
         std::string configFolderPath = GetConfigFolderPath();
-        // 读取renderGraph.json文件
         std::ifstream renderGraphFile(configFolderPath + "/renderGraphConfig.json");
         renderGraphJson = nlohmann::json();
         renderGraphFile >> renderGraphJson.value();
         return renderGraphJson.value();
-    }
-
-    inline std::string GetInitScene()
-    {
-        const nlohmann::json& configJson = InitConfigJson();
-        std::string initScene = configJson["initScene"];
-        return initScene;
     }
 
     inline Eigen::Vector2f GetWindowSize()
@@ -259,26 +263,6 @@ namespace CommonFunction
         const nlohmann::json& configJson = InitConfigJson();
         windowSize = JsonParser::ParseVector2(configJson["windowSize"]);
         return windowSize.value();
-    }
-
-    inline Eigen::Vector2f ParserRenderResourceSize(const nlohmann::json& resourceNode)
-    {
-        Eigen::Vector2f size;
-        if (resourceNode.contains("widthSize"))
-        {
-            size.x() = resourceNode["widthSize"].get<float>();
-        }
-        else{
-            size.x() = GetWindowSize().x() * resourceNode["widthScale"].get<float>();
-        }
-        if (resourceNode.contains("heightSize"))
-        {
-            size.y() = resourceNode["heightSize"].get<float>();
-        }
-        else{
-            size.y() = GetWindowSize().y() * resourceNode["heightScale"].get<float>();
-        }
-        return size;
     }
 
     inline vk::SampleCountFlagBits GetMsaaSampleCount()
@@ -321,8 +305,9 @@ namespace CommonFunction
         {
             return projectPath.value();
         }
-        const nlohmann::json& configJson = InitConfigJson();
-        projectPath = configJson["projectPath"];
+        // Derive the root from the discovered config directory so config.json
+        // does not become a second owner of physical project-root lookup.
+        projectPath = std::filesystem::path(GetConfigFolderPath()).parent_path().string();
         return projectPath.value();
     }
 
@@ -386,15 +371,6 @@ namespace CommonFunction
         return buffer;
     }
 
-    inline float GetDeltaTime()
-    {
-        static auto startTime = std::chrono::high_resolution_clock::now();
-        auto currentTime = std::chrono::high_resolution_clock::now();
-        float deltaTime = std::chrono::duration<float, std::chrono::seconds::period>(currentTime - startTime).count();
-        startTime = currentTime;
-        return deltaTime;
-    }
-
     //Rotation(degrees): x, y, z
     inline Eigen::Quaternionf RotationToQuat(Eigen::Vector3f rotation)
     {
@@ -455,31 +431,6 @@ namespace CommonFunction
             }
         }
         throw std::runtime_error("Failed to find suitable memory type!");
-    }
-
-    inline vk::Format FindSupportedFormat(vk::PhysicalDevice& physicalDevice, const std::vector<vk::Format>& candidates, vk::ImageTiling tiling, vk::FormatFeatureFlags features)
-    {
-        for (const auto& format : candidates) {
-            vk::FormatProperties props = physicalDevice.getFormatProperties(format);
-            if (tiling == vk::ImageTiling::eLinear && (props.linearTilingFeatures & features) == features) 
-            {
-                return format;
-            }
-            else if (tiling == vk::ImageTiling::eOptimal && (props.optimalTilingFeatures & features) == features) 
-            {
-                return format;
-            }
-        }
-
-        return vk::Format::eUndefined;
-    }
-
-    inline vk::Format FindDepthFormat(vk::PhysicalDevice& physicalDevice)
-    {
-        return FindSupportedFormat(physicalDevice,
-            { vk::Format::eD32Sfloat, vk::Format::eD32SfloatS8Uint, vk::Format::eD24UnormS8Uint },
-            vk::ImageTiling::eOptimal,
-            vk::FormatFeatureFlagBits::eDepthStencilAttachment);
     }
 
     inline bool IsDepthFormat(vk::Format format) {
@@ -587,11 +538,6 @@ namespace CommonFunction
         return { image, imageMemory };
     }
 
-    inline std::pair<vk::Image, vk::DeviceMemory> CreateDepthImage(vk::Device& device, vk::PhysicalDevice& physicalDevice, uint32_t width, uint32_t height, vk::SampleCountFlagBits samples, vk::Format& format, vk::ImageTiling& tiling, vk::ImageUsageFlags& usage, vk::PhysicalDeviceMemoryProperties& physicalDeviceMemoryProperties, vk::MemoryPropertyFlags& memoryPropertyFlags, const std::string& name = "")
-    {
-        return CreateImage(device, width, height, 1, samples, format, tiling, usage, physicalDeviceMemoryProperties, memoryPropertyFlags, name);
-    }
-
     inline vk::ImageView CreateImageViewBase(
         vk::Device& device,
         vk::Image& image,
@@ -667,11 +613,6 @@ namespace CommonFunction
             0,
             6,
             name);
-    }
-
-    inline vk::ImageView CreateDepthImageView(vk::Device& device, vk::PhysicalDevice& physicalDevice, vk::Image& image, vk::Format& format, const std::string& name = "")
-    {
-        return Create2DImageView(device, image, 1, format, vk::ImageAspectFlagBits::eDepth, name);
     }
 
     inline vk::Sampler CreateSamplerBase(vk::Device& device, const vk::SamplerCreateInfo& samplerInfo, const std::string& name = "")
@@ -882,7 +823,13 @@ namespace CommonFunction
         }
         else
         {
-            throw std::invalid_argument("unsupported layout transition!");
+            throw std::invalid_argument(
+                "Unsupported Vulkan image layout transition: " +
+                vk::to_string(oldLayout) +
+                " -> " +
+                vk::to_string(newLayout) +
+                ", format=" +
+                vk::to_string(format));
         }   
     
         commandBuffer.pipelineBarrier(
@@ -1100,19 +1047,5 @@ namespace CommonFunction
             barrier);
 
         EndSingleTimeCommands(device, commandBuffer, GraphicsQueue, commandPool);
-    }
-    inline vk::SampleCountFlagBits GetMaxUsableSampleCount(vk::PhysicalDevice& physicalDevice)
-    {
-        vk::PhysicalDeviceProperties physicalDeviceProperties = physicalDevice.getProperties();
-
-        vk::SampleCountFlags count = physicalDeviceProperties.limits.framebufferColorSampleCounts & 
-                                        physicalDeviceProperties.limits.framebufferDepthSampleCounts;
-        if (count & vk::SampleCountFlagBits::e64) { return vk::SampleCountFlagBits::e64; }
-        else if( count & vk::SampleCountFlagBits::e32) { return vk::SampleCountFlagBits::e32; }
-        else if (count & vk::SampleCountFlagBits::e16) { return vk::SampleCountFlagBits::e16; }
-        else if (count & vk::SampleCountFlagBits::e8) { return vk::SampleCountFlagBits::e8; }
-        else if (count & vk::SampleCountFlagBits::e4) { return vk::SampleCountFlagBits::e4; }
-        else if (count & vk::SampleCountFlagBits::e2) { return vk::SampleCountFlagBits::e2; }
-        else { return vk::SampleCountFlagBits::e1; }
     }
 }

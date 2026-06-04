@@ -16,24 +16,24 @@ public:
     // this class only maps those planned transitions to Vulkan barriers.
     static void PrepareForPass(
         vk::CommandBuffer& commandBuffer,
-        RenderGraph& renderGraph,
+        const RenderGraph& renderGraph,
         size_t passIndex,
         uint32_t swapChainImageIndex);
 
 private:
     static void ApplyCompiledBarrierPlan(
         vk::CommandBuffer& commandBuffer,
-        RenderGraph& renderGraph,
+        const RenderGraph& renderGraph,
         size_t passIndex,
         uint32_t swapChainImageIndex);
     static void TransitionAttachmentToShaderRead(
         vk::CommandBuffer& commandBuffer,
-        RenderGraph& renderGraph,
+        const RenderGraph& renderGraph,
         const std::string& resourceName,
         uint32_t swapChainImageIndex);
     static void TransitionShaderReadToAttachment(
         vk::CommandBuffer& commandBuffer,
-        RenderGraph& renderGraph,
+        const RenderGraph& renderGraph,
         const std::string& resourceName,
         uint32_t swapChainImageIndex);
 };

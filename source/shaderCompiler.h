@@ -10,19 +10,11 @@ class Include: public shaderc::CompileOptions::IncluderInterface
 public:
     shaderc_include_result* GetInclude(const char* requested_source, shaderc_include_type type, const char* requesting_source, size_t include_depth) override;
     void ReleaseInclude(shaderc_include_result* data) override;
-private:
-    shaderc_include_result* includeResult;
 };
 
 class ShaderCompiler
 {
 public:
-    struct ShaderCompileRequest
-    {
-        ShaderVariantKey shaderVariantKey;
-        bool isDebug = false;
-    };
-
     struct ShaderVariantCompileResult
     {
         std::string variantHash;
@@ -33,8 +25,6 @@ public:
         std::string fragmentDebugPath;
     };
 
-    ShaderCompiler();
-    ~ShaderCompiler();
     void StartCompile(const std::string& shaderFilePath);
     static ShaderVariantCompileResult EnsureGraphicsVariantCompiled(const ShaderVariantKey& shaderVariantKey);
 private:

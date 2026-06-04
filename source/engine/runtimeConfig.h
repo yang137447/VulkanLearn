@@ -19,13 +19,11 @@ class RuntimeConfig
 public:
     RuntimeResult<void> Load();
 
-    const nlohmann::json& GetConfigJson() const;
     const nlohmann::json& GetRenderGraphJson() const;
 
     const Eigen::Vector2f& GetWindowSize() const;
     float GetWindowAspectRatio() const;
     const std::string& GetInitialSceneRelativePath() const;
-    const std::string& GetProjectPath() const;
     const std::string& GetResourcePath() const;
     bool ShouldUseRenderThread() const;
 

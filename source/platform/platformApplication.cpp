@@ -1,7 +1,5 @@
 #include "platform/platformApplication.h"
 
-#include <iostream>
-
 #include "SDL3/SDL.h"
 #include "SDL3/SDL_vulkan.h"
 
@@ -77,7 +75,6 @@ RuntimeResult<void> PlatformApplication::Initialize(const PlatformApplicationDes
     for (unsigned int i = 0; i < count; ++i)
     {
         vulkanExtensions.push_back(extensions[i]);
-        std::cout << "Vulkan extension: " << extensions[i] << std::endl;
     }
 
     return RuntimeResult<void>::Success();

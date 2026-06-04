@@ -1,11 +1,8 @@
 #include "controller.h"
 
-#include "sceneObject.h"
+#include <Eigen/Dense>
 
-Controller::Controller()
-{
-    
-}
+#include "sceneNode.h"
 
 void Controller::Update(float deltaTime, const VL::InputActionState& input)
 {
@@ -39,25 +36,23 @@ void Controller::Update(float deltaTime, const VL::InputActionState& input)
     }
     moveFactor.normalize();
 
-    Eigen::Vector3f position = sceneObject->GetPosition();
-    Eigen::Vector3f rotation = sceneObject->GetRotation();
-    Eigen::Vector3f forward = sceneObject->GetForwardVector();
-    Eigen::Vector3f right = sceneObject->GetRightVector();
-    Eigen::Vector3f up = sceneObject->GetUpVector();
+    Eigen::Vector3f position = viewTarget->GetPosition();
+    Eigen::Vector3f forward = viewTarget->GetForwardVector();
+    Eigen::Vector3f right = viewTarget->GetRightVector();
+    Eigen::Vector3f up = viewTarget->GetUpVector();
     position += moveFactor.z() * forward * deltaTime * moveSpeed;
     position += moveFactor.x() * right * deltaTime * moveSpeed;
     position += moveFactor.y() * up * deltaTime * moveSpeed;
     
-    sceneObject->SetPosition(position);
-    //sceneObject->SetRotation(rotation);
+    viewTarget->SetPosition(position);
     Eigen::Vector3f deltaRot(deltaRotationX, deltaRotationY, 0.0f);
     deltaRot *= deltaTime *mouseRotationSpeed;
-    sceneObject->SetDeltaRotation(deltaRot);
+    viewTarget->SetDeltaRotation(deltaRot);
 }
 
-void Controller::SetSceneObject(std::shared_ptr<SceneNode> sceneObject)
+void Controller::SetViewTarget(std::shared_ptr<SceneNode> viewTarget)
 {
-    this->sceneObject = sceneObject;
+    this->viewTarget = viewTarget;
 }
 
 void Controller::SetMoveVelocity(float moveSpeed)

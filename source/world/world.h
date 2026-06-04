@@ -12,7 +12,6 @@ class Camera;
 class DirectionalLight;
 class PointLight;
 class SceneNode;
-class SceneObject;
 class SpotLight;
 
 namespace VL
@@ -27,12 +26,20 @@ struct WorldEnvironment
     bool hasBrdfLut = false;
 };
 
-// Runtime view of the active game world. During the transition phase mesh
-// SceneObject wrappers still come from RendererMeshLoader because mesh scene
-// objects have not moved to a pure world actor/component model yet. Object GPU
-// resources and descriptors live in renderer-owned backend entries.
-// Camera/light/environment state is built from the WorldBuildPlan and exposed
-// through World.
+struct WorldMeshObject
+{
+    std::string debugName;
+    Eigen::Matrix4f model = Eigen::Matrix4f::Identity();
+    Eigen::Vector3f localBoundsMin = Eigen::Vector3f::Zero();
+    Eigen::Vector3f localBoundsMax = Eigen::Vector3f::Zero();
+    std::string meshKey;
+    std::string materialKey;
+    std::string materialInstanceKey;
+};
+
+// Runtime view of the active game world. Camera, light, environment, and mesh
+// object state is owned by World. Object GPU resources and descriptors live in
+// renderer-owned backend entries and are referenced from snapshots by key.
 class World
 {
 public:
@@ -50,12 +57,12 @@ public:
     void SetEnvironment(WorldEnvironment environment);
     const WorldEnvironment& GetEnvironment() const { return environment; }
 
-    void AddSceneObject(std::string name, std::shared_ptr<SceneObject> object);
+    void AddMeshObject(std::string name, WorldMeshObject object);
     void AddDirectionalLight(std::string name, std::shared_ptr<DirectionalLight> light);
     void AddPointLight(std::string name, std::shared_ptr<PointLight> light);
     void AddSpotLight(std::string name, std::shared_ptr<SpotLight> light);
 
-    const std::unordered_map<std::string, std::shared_ptr<SceneObject>>& GetSceneObjects() const { return sceneObjects; }
+    const std::unordered_map<std::string, WorldMeshObject>& GetMeshObjects() const { return meshObjects; }
     const std::unordered_map<std::string, std::shared_ptr<DirectionalLight>>& GetDirectionalLights() const { return directionalLights; }
     const std::unordered_map<std::string, std::shared_ptr<PointLight>>& GetPointLights() const { return pointLights; }
     const std::unordered_map<std::string, std::shared_ptr<SpotLight>>& GetSpotLights() const { return spotLights; }
@@ -66,7 +73,7 @@ private:
     std::weak_ptr<SceneNode> viewTarget;
     std::shared_ptr<Camera> camera;
     WorldEnvironment environment;
-    std::unordered_map<std::string, std::shared_ptr<SceneObject>> sceneObjects;
+    std::unordered_map<std::string, WorldMeshObject> meshObjects;
     std::unordered_map<std::string, std::shared_ptr<DirectionalLight>> directionalLights;
     std::unordered_map<std::string, std::shared_ptr<PointLight>> pointLights;
     std::unordered_map<std::string, std::shared_ptr<SpotLight>> spotLights;

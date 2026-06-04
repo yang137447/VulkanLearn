@@ -1,15 +1,7 @@
 #include "material.h"
 #include "materialInstance.h"
-#include "pipeline/graphicsPipeline.h"
 #include "pipeline/pipelineFactory.h"
 #include <memory>
-
-Material::Material()
-{
-}
-Material::~Material()
-{
-}
 
 Material::Material(PipelineFactory& pipelineFactory, vk::RenderPass* renderPass, const ShaderVariantKey& shaderVariantKey, const std::string& materialKey, vk::SampleCountFlagBits samples, uint32_t colorAttachmentCount, const GraphicsPipelineStateDesc& pipelineStateDesc, bool bIsShadowPass)
 {

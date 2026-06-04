@@ -6,7 +6,7 @@
 
 void PassBarrier::PrepareForPass(
     vk::CommandBuffer& commandBuffer,
-    RenderGraph& renderGraph,
+    const RenderGraph& renderGraph,
     size_t passIndex,
     uint32_t swapChainImageIndex)
 {
@@ -15,7 +15,7 @@ void PassBarrier::PrepareForPass(
 
 void PassBarrier::ApplyCompiledBarrierPlan(
     vk::CommandBuffer& commandBuffer,
-    RenderGraph& renderGraph,
+    const RenderGraph& renderGraph,
     size_t passIndex,
     uint32_t swapChainImageIndex)
 {
@@ -45,18 +45,18 @@ void PassBarrier::ApplyCompiledBarrierPlan(
 
 void PassBarrier::TransitionAttachmentToShaderRead(
     vk::CommandBuffer& commandBuffer,
-    RenderGraph& renderGraph,
+    const RenderGraph& renderGraph,
     const std::string& resourceName,
     uint32_t swapChainImageIndex)
 {
-    auto& resolveMap = renderGraph.GetResourcesResolve();
+    const auto& resolveMap = renderGraph.GetResourcesResolve();
     auto resourceIt = resolveMap.find(resourceName);
     if(resourceIt == resolveMap.end())
     {
         return;
     }
 
-    auto& resource = resourceIt->second[swapChainImageIndex];
+    const auto& resource = resourceIt->second[swapChainImageIndex];
     const bool bIsDepth = CommonFunction::IsDepthFormat(resource.format);
 
     vk::ImageAspectFlags aspectMask = bIsDepth ? vk::ImageAspectFlagBits::eDepth : vk::ImageAspectFlagBits::eColor;
@@ -105,18 +105,18 @@ void PassBarrier::TransitionAttachmentToShaderRead(
 
 void PassBarrier::TransitionShaderReadToAttachment(
     vk::CommandBuffer& commandBuffer,
-    RenderGraph& renderGraph,
+    const RenderGraph& renderGraph,
     const std::string& resourceName,
     uint32_t swapChainImageIndex)
 {
-    auto& resolveMap = renderGraph.GetResourcesResolve();
+    const auto& resolveMap = renderGraph.GetResourcesResolve();
     auto resourceIt = resolveMap.find(resourceName);
     if(resourceIt == resolveMap.end())
     {
         return;
     }
 
-    auto& resource = resourceIt->second[swapChainImageIndex];
+    const auto& resource = resourceIt->second[swapChainImageIndex];
     const bool bIsDepth = CommonFunction::IsDepthFormat(resource.format);
 
     vk::ImageAspectFlags aspectMask = bIsDepth ? vk::ImageAspectFlagBits::eDepth : vk::ImageAspectFlagBits::eColor;

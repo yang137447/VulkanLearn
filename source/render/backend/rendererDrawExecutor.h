@@ -16,9 +16,9 @@ struct Renderpass;
 namespace VL
 {
 
-// Upload callbacks needed by the transitional draw executor. The concrete
-// implementation still lives in RenderSystem while frame resources and object
-// descriptors finish moving fully behind the backend boundary.
+// Upload callbacks needed by backend-side draw execution. RenderSystem
+// implements this narrow frame-update boundary while frame resources and
+// object descriptors remain backend-owned.
 class RendererDrawUploadServices
 {
 public:

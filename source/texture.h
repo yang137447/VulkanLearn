@@ -1,6 +1,7 @@
 #pragma once
 #include <vulkan/vulkan.hpp>
 #include <string>
+#include "render/rhi/rhiResourceHandles.h"
 #include "resource/image/hostImage.h"
 #include "resource/image/textureIO.h"
 
@@ -45,18 +46,24 @@ public:
     inline vk::DeviceMemory getImageMemory() const { return imageMemory; }
     inline vk::ImageView getImageView() const { return imageView; }
     inline vk::Sampler getSampler() const { return sampler; }
+    inline VL::RHIImageHandle GetImageHandle() const { return imageHandle; }
+    inline VL::RHIImageViewHandle GetImageViewHandle() const { return imageViewHandle; }
+    inline VL::RHISamplerHandle GetSamplerHandle() const { return samplerHandle; }
     inline uint32_t getMipLevels() const { return mipLevels; }
     inline vk::Format GetFormat() const { return format; }
     inline const vk::DescriptorImageInfo& GetDescriptorInfo() const { return descriptorInfo; }
 private:
     Texture();
     
-    vk::Image image;
-    vk::DeviceMemory imageMemory;
-    vk::ImageView imageView;
-    vk::Sampler sampler;
-    uint32_t mipLevels;
-    vk::Format format;
+    VL::RHIImageHandle imageHandle;
+    VL::RHIImageViewHandle imageViewHandle;
+    VL::RHISamplerHandle samplerHandle;
+    vk::Image image = nullptr;
+    vk::DeviceMemory imageMemory = nullptr;
+    vk::ImageView imageView = nullptr;
+    vk::Sampler sampler = nullptr;
+    uint32_t mipLevels = 1;
+    vk::Format format = vk::Format::eUndefined;
     vk::DescriptorImageInfo descriptorInfo;
     VL::RendererBackendVulkan* rendererBackend = nullptr;
 };

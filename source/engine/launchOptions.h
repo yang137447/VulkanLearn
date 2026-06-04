@@ -15,6 +15,8 @@ struct LaunchOptions
     bool runReloadStress = false;
     bool runReloadFailureRollbackTest = false;
     bool runGeneratedMaterialFailureRollbackTest = false;
+    bool runGeneratedMeshFailureRollbackTest = false;
+    bool runGeneratedTextureFailureRollbackTest = false;
     bool runGeneratedHighLightReloadStress = false;
     bool runResizeStress = false;
     bool runRenderGraphReloadStress = false;

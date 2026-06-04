@@ -19,8 +19,8 @@ struct RendererPassDescriptorPlan
 };
 
 // Backend-side descriptor write plan cache keyed by frame-graph pass name.
-// RenderGraph still triggers rebuilds during the transition, but Renderpass no
-// longer owns descriptor planning rules.
+// RenderGraph triggers rebuilds when compiled pass inputs change, while
+// Renderpass only stores the descriptor sets used by command recording.
 class RendererDescriptorPlanCache
 {
 public:

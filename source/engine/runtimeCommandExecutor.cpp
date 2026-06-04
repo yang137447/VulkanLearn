@@ -77,7 +77,6 @@ RuntimeRendererResourceFingerprint CaptureRuntimeRendererResourceFingerprint()
     fingerprint.materials = CaptureSharedResourcePointers(resourceSnapshot.materials);
     fingerprint.materialInstances = CaptureSharedResourcePointers(resourceSnapshot.materialInstances);
     fingerprint.objectResources = CaptureSharedResourcePointers(resourceSnapshot.objectResources);
-    fingerprint.sceneObjects = CaptureSharedResourcePointers(resourceSnapshot.sceneObjects);
     fingerprint.textures = CaptureSharedResourcePointers(resourceSnapshot.textures);
     fingerprint.passMaterialInstances = CapturePassMaterialPointers(passMaterialSnapshot);
     return fingerprint;
@@ -132,8 +131,23 @@ void RuntimeCommandExecutor::ExecuteCommand(
     case RuntimeCommandType::RunGeneratedMaterialFailureRollbackTest:
         ApplyGeneratedMaterialFailureRollbackTest(runtimeConfig, runtimeTestHooks, diagnostics);
         break;
+    case RuntimeCommandType::RunGeneratedMeshFailureRollbackTest:
+        ApplyGeneratedMeshFailureRollbackTest(runtimeConfig, runtimeTestHooks, diagnostics);
+        break;
+    case RuntimeCommandType::RunGeneratedTextureFailureRollbackTest:
+        ApplyGeneratedTextureFailureRollbackTest(runtimeConfig, runtimeTestHooks, diagnostics);
+        break;
     case RuntimeCommandType::RunGeneratedHighLightReloadStress:
         ApplyGeneratedHighLightReloadStress(command, runtimeConfig, runtimeTestHooks, diagnostics);
+        break;
+    case RuntimeCommandType::RunResizeStress:
+        ApplyResizeStressRequest(command, executionResult);
+        break;
+    case RuntimeCommandType::RunRenderGraphReloadStress:
+        ApplyRenderGraphReloadStressRequest(command, executionResult);
+        break;
+    case RuntimeCommandType::RunFrameSmokeTest:
+        ApplyFrameSmokeRequest(command, executionResult);
         break;
     case RuntimeCommandType::SetDebugViewMode:
         renderSystem.SetDebugViewMode(command.intValue);
@@ -179,7 +193,12 @@ void RuntimeCommandExecutor::ApplyLoadWorld(
     }
     catch (const std::exception& exception)
     {
-        diagnostics.ReportError(std::string("LoadWorld path resolve failed: ") + exception.what());
+        RuntimeError error = MakeRuntimeError(
+            "Scene.ResolvePathFailed",
+            exception.what(),
+            command.stringValue);
+        diagnostics.ReportRuntimeError("LoadWorld path resolve failed", error);
+        executionResult.loadWorldError = std::move(error);
         executionResult.rendererResourcesAfterLoad = CaptureRuntimeRendererResourceFingerprint();
         return;
     }
@@ -189,6 +208,7 @@ void RuntimeCommandExecutor::ApplyLoadWorld(
     if (worldLoadResult.IsFailure())
     {
         diagnostics.ReportRuntimeError("LoadWorld failed", worldLoadResult.Error());
+        executionResult.loadWorldError = worldLoadResult.Error();
         executionResult.rendererResourcesAfterLoad = CaptureRuntimeRendererResourceFingerprint();
         return;
     }
@@ -231,6 +251,26 @@ void RuntimeCommandExecutor::ApplyGeneratedMaterialFailureRollbackTest(
         diagnostics);
 }
 
+void RuntimeCommandExecutor::ApplyGeneratedMeshFailureRollbackTest(
+    const RuntimeConfig& runtimeConfig,
+    RuntimeTestHooks& runtimeTestHooks,
+    const DiagnosticsSubsystem& diagnostics) const
+{
+    (void)runtimeTestHooks.BeginGeneratedMeshFailureRollbackTest(
+        runtimeConfig.GetResourcePath(),
+        diagnostics);
+}
+
+void RuntimeCommandExecutor::ApplyGeneratedTextureFailureRollbackTest(
+    const RuntimeConfig& runtimeConfig,
+    RuntimeTestHooks& runtimeTestHooks,
+    const DiagnosticsSubsystem& diagnostics) const
+{
+    (void)runtimeTestHooks.BeginGeneratedTextureFailureRollbackTest(
+        runtimeConfig.GetResourcePath(),
+        diagnostics);
+}
+
 void RuntimeCommandExecutor::ApplyGeneratedHighLightReloadStress(
     const RuntimeCommand& command,
     const RuntimeConfig& runtimeConfig,
@@ -241,6 +281,30 @@ void RuntimeCommandExecutor::ApplyGeneratedHighLightReloadStress(
         runtimeConfig.GetResourcePath(),
         command.intValue,
         diagnostics);
+}
+
+void RuntimeCommandExecutor::ApplyResizeStressRequest(
+    const RuntimeCommand& command,
+    RuntimeCommandExecutionResult& executionResult) const
+{
+    executionResult.resizeStressRequested = true;
+    executionResult.resizeStressCount = command.intValue;
+}
+
+void RuntimeCommandExecutor::ApplyRenderGraphReloadStressRequest(
+    const RuntimeCommand& command,
+    RuntimeCommandExecutionResult& executionResult) const
+{
+    executionResult.renderGraphReloadStressRequested = true;
+    executionResult.renderGraphReloadStressCount = command.intValue;
+}
+
+void RuntimeCommandExecutor::ApplyFrameSmokeRequest(
+    const RuntimeCommand& command,
+    RuntimeCommandExecutionResult& executionResult) const
+{
+    executionResult.frameSmokeRequested = true;
+    executionResult.frameSmokeCount = command.intValue;
 }
 
 void RuntimeCommandExecutor::ApplyToneMappingMode(

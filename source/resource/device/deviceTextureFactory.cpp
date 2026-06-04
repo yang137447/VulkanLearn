@@ -31,7 +31,7 @@ namespace
     }
 }
 
-std::tuple<vk::Image, vk::DeviceMemory, uint32_t, vk::Format> DeviceTextureFactory::CreateFromHostImage(
+DeviceTextureResource DeviceTextureFactory::CreateResourceFromHostImage(
     VL::RendererBackendVulkan& rendererBackend,
     const HostImage& image,
     const std::string& debugName,
@@ -105,5 +105,27 @@ std::tuple<vk::Image, vk::DeviceMemory, uint32_t, vk::Format> DeviceTextureFacto
 
     rendererBackend.DestroyBuffer(stagingBuffer, stagingMemory);
 
-    return { deviceImage, deviceImageMemory, mipLevels, format };
+    DeviceTextureResource textureResource;
+    textureResource.imageHandle = rendererBackend.GetImageHandle(deviceImage);
+    textureResource.image = deviceImage;
+    textureResource.imageMemory = deviceImageMemory;
+    textureResource.mipLevels = mipLevels;
+    textureResource.format = format;
+    return textureResource;
+}
+
+std::tuple<vk::Image, vk::DeviceMemory, uint32_t, vk::Format> DeviceTextureFactory::CreateFromHostImage(
+    VL::RendererBackendVulkan& rendererBackend,
+    const HostImage& image,
+    const std::string& debugName,
+    const DeviceTextureCreateOptions& options)
+{
+    DeviceTextureResource textureResource =
+        CreateResourceFromHostImage(rendererBackend, image, debugName, options);
+    return {
+        textureResource.image,
+        textureResource.imageMemory,
+        textureResource.mipLevels,
+        textureResource.format
+    };
 }

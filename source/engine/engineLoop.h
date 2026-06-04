@@ -24,6 +24,7 @@ class RuntimeCommandExecutor;
 class SubsystemCollection;
 class WorldTransitionCoordinator;
 enum class RenderGraphReleaseMode;
+struct RuntimeCommandExecutionResult;
 struct WorldHandle;
 
 // Owns the high-level runtime lifecycle after PlatformApplication is ready.
@@ -40,9 +41,6 @@ public:
     void Shutdown();
     void QueueRuntimeCommand(RuntimeCommand command);
     void SetExitAfterRuntimeTests(bool enabled);
-    void StartResizeStress(int resizeCount);
-    void StartRenderGraphReloadStress(int reloadCount);
-    void StartFrameSmokeTest(int frameCount);
 
 private:
     void Tick();
@@ -58,6 +56,10 @@ private:
     RuntimeResult<void> ReloadRenderGraphResources(VL::RenderGraphReleaseMode releaseMode);
     void WaitForRenderThreadIdle();
     void PollRenderThreadFatalError();
+    void StartRequestedEngineLoopTests(const RuntimeCommandExecutionResult& commandResult);
+    void StartResizeStress(int resizeCount);
+    void StartRenderGraphReloadStress(int reloadCount);
+    void StartFrameSmokeTest(int frameCount);
     void UpdateResizeStress();
     void UpdateRenderGraphReloadStress();
     void UpdateFrameSmokeTest(double frameTimeMs);

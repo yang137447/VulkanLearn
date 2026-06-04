@@ -1,10 +1,11 @@
 #include "render/resource/rendererMeshLoader.h"
 
-#include <iostream>
 #include <memory>
 #include <string>
+#include <unordered_set>
 
 #include "commonFunction.h"
+#include "material.h"
 #include "materialInstance.h"
 #include "mesh/loader/common/meshAssetLoader.h"
 #include "pipeline/pipelineFactory.h"
@@ -13,10 +14,38 @@
 #include "render/resource/rendererResourceCache.h"
 #include "renderGraph.h"
 #include "renderableObject.h"
-#include "sceneObject.h"
+#include "scene/sceneAssetTypes.h"
 
 namespace VL
 {
+namespace
+{
+
+Eigen::Matrix4f BuildModelMatrix(
+    const Eigen::Vector3f& position,
+    const Eigen::Vector3f& rotation,
+    const Eigen::Vector3f& scale)
+{
+    Eigen::Matrix4f scaleMatrix;
+    scaleMatrix <<
+        scale.x(), 0.0f, 0.0f, 0.0f,
+        0.0f, scale.y(), 0.0f, 0.0f,
+        0.0f, 0.0f, scale.z(), 0.0f,
+        0.0f, 0.0f, 0.0f, 1.0f;
+
+    Eigen::Matrix4f translationMatrix;
+    translationMatrix <<
+        1.0f, 0.0f, 0.0f, position.x(),
+        0.0f, 1.0f, 0.0f, position.y(),
+        0.0f, 0.0f, 1.0f, position.z(),
+        0.0f, 0.0f, 0.0f, 1.0f;
+
+    return translationMatrix *
+        CommonFunction::RotationToMatrix(rotation) *
+        scaleMatrix;
+}
+
+} // namespace
 
 RendererMeshLoader::RendererMeshLoader(
     PipelineFactory& pipelineFactory,
@@ -26,7 +55,7 @@ RendererMeshLoader::RendererMeshLoader(
 {
 }
 
-void RendererMeshLoader::LoadMeshObject(
+std::vector<MeshObjectBuildPlan> RendererMeshLoader::LoadMeshObject(
     const nlohmann::basic_json<>& node,
     const MeshAssetLoadRequest& meshLoadRequest) const
 {
@@ -35,15 +64,18 @@ void RendererMeshLoader::LoadMeshObject(
     const ModelResource& modelResource = importResult.modelResource;
     const std::vector<MeshSectionLoadPlan>& sectionPlans = importResult.sectionPlans;
 
-    auto& renderGraph = RenderGraph::GetInstance();
+    const RenderGraph& renderGraph = RenderGraph::GetInstance();
     RendererResourceCache& resourceCache = RendererResourceCache::GetInstance();
     RendererMaterialLoader materialLoader(pipelineFactory, rendererBackend);
 
     Eigen::Vector3f position = JsonParser::ParseValue<Eigen::Vector3f>(node["position"]);
     Eigen::Vector3f rotation = JsonParser::ParseValue<Eigen::Vector3f>(node["rotation"]);
     Eigen::Vector3f scale = JsonParser::ParseValue<Eigen::Vector3f>(node["scale"]);
-    const std::string sceneObjectBaseName = node["name"];
+    const std::string meshObjectBaseName = node["name"];
     const auto& geometryPass = renderGraph.GetRenderpasses().at("geometry");
+    std::vector<MeshObjectBuildPlan> meshObjectPlans;
+    meshObjectPlans.reserve(modelResource.sections.size());
+    std::unordered_set<std::string> usedObjectNames;
 
     for (size_t sectionIndex = 0; sectionIndex < modelResource.sections.size(); ++sectionIndex)
     {
@@ -69,36 +101,34 @@ void RendererMeshLoader::LoadMeshObject(
             resourceCache.BindRenderableObject(renderableObjectKey, renderableObject);
         }
 
-        if (sectionPlan.bUsesUnsafeFallbackMaterial)
-        {
-            std::cout << "Unsafe mesh material slot fallback: "
-                      << sceneObjectBaseName << "::" << section.sectionName
-                      << " reason=" << sectionPlan.unsafeFallbackReason << std::endl;
-        }
         std::shared_ptr<MaterialInstance> materialInstance =
             materialLoader.LoadMaterialInstance(sectionPlan.materialInstancePath, geometryPass.sampleCount);
 
-        // Keep one SceneObject per imported section for the current transform
-        // export path until mesh scene objects move to a pure World model.
-        std::string sceneObjectName = sceneObjectBaseName;
+        std::string meshObjectName = meshObjectBaseName;
         if (modelResource.sections.size() > 1)
         {
-            sceneObjectName += "::" + section.sectionName;
+            meshObjectName += "::" + section.sectionName;
         }
-        if(resourceCache.GetSceneObject(sceneObjectName) != nullptr)
+        if(usedObjectNames.find(meshObjectName) != usedObjectNames.end())
         {
-            sceneObjectName += "_" + std::to_string(sectionIndex);
+            meshObjectName += "_" + std::to_string(sectionIndex);
         }
+        usedObjectNames.insert(meshObjectName);
 
-        std::shared_ptr<SceneObject> sceneObject = std::make_shared<SceneObject>(renderableObject, materialInstance);
-        sceneObject->SetName(sceneObjectName);
-        sceneObject->SetPosition(position);
-        sceneObject->SetRotation(rotation);
-        sceneObject->SetScale(scale);
-        sceneObject->UpdateModelMatrix();
+        MeshObjectBuildPlan meshObjectPlan;
+        meshObjectPlan.objectName = meshObjectName;
+        meshObjectPlan.debugName = meshObjectName;
+        meshObjectPlan.model = BuildModelMatrix(position, rotation, scale);
+        meshObjectPlan.localBoundsMin = renderableObject->GetBoundsMin();
+        meshObjectPlan.localBoundsMax = renderableObject->GetBoundsMax();
+        meshObjectPlan.meshKey = renderableObject->GetName();
+        meshObjectPlan.materialKey = materialInstance->GetBaseMaterial().lock()->GetMaterialKey();
+        meshObjectPlan.materialInstanceKey = materialInstance->GetName();
 
-        resourceCache.BindSceneObject(sceneObjectName, std::move(sceneObject));
+        meshObjectPlans.push_back(std::move(meshObjectPlan));
     }
+
+    return meshObjectPlans;
 }
 
 } // namespace VL

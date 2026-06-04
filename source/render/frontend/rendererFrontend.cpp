@@ -1,5 +1,6 @@
 #include "render/frontend/rendererFrontend.h"
 
+#include <string>
 #include <utility>
 
 namespace VL
@@ -20,6 +21,27 @@ RenderDrawPacket BuildDrawPacket(const MeshDrawSnapshot& drawSnapshot)
     packet.worldBoundsMin = drawSnapshot.worldBoundsMin;
     packet.worldBoundsMax = drawSnapshot.worldBoundsMax;
     return packet;
+}
+
+std::string BuildInvalidDrawPacketMessage(const MeshDrawSnapshot& drawSnapshot)
+{
+    std::string message =
+        "Cannot build RenderScene because mesh draw snapshot '" +
+        drawSnapshot.debugName +
+        "' is missing required handles:";
+    if (!drawSnapshot.mesh.IsValid())
+    {
+        message += " mesh";
+    }
+    if (!drawSnapshot.material.IsValid())
+    {
+        message += " material";
+    }
+    if (!drawSnapshot.materialInstance.IsValid())
+    {
+        message += " materialInstance";
+    }
+    return message;
 }
 
 MaterialDrawGroup& FindOrAddMaterialGroup(
@@ -91,7 +113,7 @@ RuntimeResult<RenderScene> RendererFrontend::BuildRenderScene(const WorldSnapsho
         {
             return RuntimeResult<RenderScene>::Failure(MakeRuntimeError(
                 "RendererFrontend.InvalidDrawPacket",
-                "Cannot build RenderScene because a mesh draw snapshot is missing a mesh, material, or material instance handle.",
+                BuildInvalidDrawPacketMessage(drawSnapshot),
                 {},
                 drawSnapshot.debugName));
         }

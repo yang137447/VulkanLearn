@@ -20,19 +20,30 @@ namespace
 
 bool HasRenderResourceHandles(const RenderResource& resource)
 {
-    return resource.image ||
+    return resource.imageHandle.IsValid() ||
+        resource.imageViewHandle.IsValid() ||
+        resource.samplerHandle.IsValid() ||
+        resource.image ||
         resource.memory ||
         resource.imageView ||
         resource.sampler;
 }
 
+void ClearRenderResourceFields(RenderResource& resource)
+{
+    resource.imageHandle = VL::RHIImageHandle();
+    resource.image = nullptr;
+    resource.memory = nullptr;
+    resource.imageViewHandle = VL::RHIImageViewHandle();
+    resource.imageView = nullptr;
+    resource.samplerHandle = VL::RHISamplerHandle();
+    resource.sampler = nullptr;
+}
+
 RenderResource TakeRenderResource(RenderResource& resource)
 {
     RenderResource taken = resource;
-    resource.image = nullptr;
-    resource.memory = nullptr;
-    resource.imageView = nullptr;
-    resource.sampler = nullptr;
+    ClearRenderResourceFields(resource);
     return taken;
 }
 
@@ -48,6 +59,18 @@ struct RetiredRenderGraphImageResource
             return;
         }
 
+        if (resource.imageHandle.IsValid() ||
+            resource.imageViewHandle.IsValid() ||
+            resource.samplerHandle.IsValid())
+        {
+            rendererBackend->DestroyImageResource(
+                resource.imageHandle,
+                resource.imageViewHandle,
+                resource.samplerHandle);
+            ClearRenderResourceFields(resource);
+            return;
+        }
+
         rendererBackend->DestroyImageResource(
             resource.image,
             resource.memory,
@@ -60,10 +83,15 @@ struct RetiredRenderGraphPassResource
 {
     VL::RendererBackendVulkan* rendererBackend = nullptr;
     std::string name;
+    std::vector<VL::RHIFramebufferHandle> framebufferHandles;
     std::vector<vk::Framebuffer> framebuffers;
+    VL::RHIDescriptorSetLayoutHandle descriptorSetLayoutHandle;
     vk::DescriptorSetLayout descriptorSetLayout;
+    VL::RHIDescriptorSetLayoutHandle emptyDescriptorSetLayoutHandle;
     vk::DescriptorSetLayout emptyDescriptorSetLayout;
+    VL::RHIDescriptorPoolHandle descriptorPoolHandle;
     vk::DescriptorPool descriptorPool;
+    VL::RHIRenderPassHandle renderPassHandle;
     vk::RenderPass renderPass;
 
     ~RetiredRenderGraphPassResource()
@@ -73,21 +101,88 @@ struct RetiredRenderGraphPassResource
             return;
         }
 
-        rendererBackend->DestroyFramebuffers(framebuffers);
-        rendererBackend->DestroyDescriptorSetLayout(descriptorSetLayout);
-        rendererBackend->DestroyDescriptorSetLayout(emptyDescriptorSetLayout);
-        rendererBackend->DestroyDescriptorPool(descriptorPool);
-        rendererBackend->DestroyRenderPass(renderPass);
+        if (!framebufferHandles.empty())
+        {
+            rendererBackend->DestroyFramebuffers(framebufferHandles);
+            framebuffers.clear();
+        }
+        else
+        {
+            rendererBackend->DestroyFramebuffers(framebuffers);
+        }
+
+        if (descriptorSetLayoutHandle.IsValid())
+        {
+            rendererBackend->DestroyDescriptorSetLayout(descriptorSetLayoutHandle);
+            descriptorSetLayout = nullptr;
+        }
+        else
+        {
+            rendererBackend->DestroyDescriptorSetLayout(descriptorSetLayout);
+        }
+
+        if (emptyDescriptorSetLayoutHandle.IsValid())
+        {
+            rendererBackend->DestroyDescriptorSetLayout(emptyDescriptorSetLayoutHandle);
+            emptyDescriptorSetLayout = nullptr;
+        }
+        else
+        {
+            rendererBackend->DestroyDescriptorSetLayout(emptyDescriptorSetLayout);
+        }
+
+        if (descriptorPoolHandle.IsValid())
+        {
+            rendererBackend->DestroyDescriptorPool(descriptorPoolHandle);
+            descriptorPool = nullptr;
+        }
+        else
+        {
+            rendererBackend->DestroyDescriptorPool(descriptorPool);
+        }
+
+        if (renderPassHandle.IsValid())
+        {
+            rendererBackend->DestroyRenderPass(renderPassHandle);
+            renderPass = nullptr;
+        }
+        else
+        {
+            rendererBackend->DestroyRenderPass(renderPass);
+        }
     }
 };
 
 bool HasRenderpassHandles(const Renderpass& renderpass)
 {
-    return !renderpass.framebuffers.empty() ||
+    return renderpass.renderPassHandle.IsValid() ||
+        !renderpass.framebufferHandles.empty() ||
+        renderpass.descriptorSetLayoutHandle.IsValid() ||
+        renderpass.emptyDescriptorSetLayoutHandle.IsValid() ||
+        renderpass.descriptorPoolHandle.IsValid() ||
+        !renderpass.framebuffers.empty() ||
         renderpass.descriptorSetLayout ||
         renderpass.emptyDescriptorSetLayout ||
         renderpass.descriptorPool ||
         renderpass.renderPass;
+}
+
+void ClearRenderpassResourceFields(Renderpass& renderpass)
+{
+    renderpass.renderPassHandle = VL::RHIRenderPassHandle();
+    renderpass.renderPass = nullptr;
+    renderpass.framebufferHandles.clear();
+    renderpass.framebuffers.clear();
+    renderpass.descriptorSetLayoutHandle = VL::RHIDescriptorSetLayoutHandle();
+    renderpass.descriptorSetLayout = nullptr;
+    renderpass.emptyDescriptorSetLayoutHandle = VL::RHIDescriptorSetLayoutHandle();
+    renderpass.emptyDescriptorSetLayout = nullptr;
+    renderpass.descriptorPoolHandle = VL::RHIDescriptorPoolHandle();
+    renderpass.descriptorPool = nullptr;
+    renderpass.descriptorSetHandles.clear();
+    renderpass.descriptorSets.clear();
+    renderpass.writeDescriptorSets.clear();
+    renderpass.inputDescriptorImageInfos.clear();
 }
 
 std::shared_ptr<RetiredRenderGraphPassResource> TakeRenderpassResource(
@@ -97,19 +192,18 @@ std::shared_ptr<RetiredRenderGraphPassResource> TakeRenderpassResource(
     auto retiredPass = std::make_shared<RetiredRenderGraphPassResource>();
     retiredPass->rendererBackend = &rendererBackend;
     retiredPass->name = renderpass.name;
+    retiredPass->framebufferHandles = std::move(renderpass.framebufferHandles);
     retiredPass->framebuffers = std::move(renderpass.framebuffers);
+    retiredPass->descriptorSetLayoutHandle = renderpass.descriptorSetLayoutHandle;
     retiredPass->descriptorSetLayout = renderpass.descriptorSetLayout;
+    retiredPass->emptyDescriptorSetLayoutHandle = renderpass.emptyDescriptorSetLayoutHandle;
     retiredPass->emptyDescriptorSetLayout = renderpass.emptyDescriptorSetLayout;
+    retiredPass->descriptorPoolHandle = renderpass.descriptorPoolHandle;
     retiredPass->descriptorPool = renderpass.descriptorPool;
+    retiredPass->renderPassHandle = renderpass.renderPassHandle;
     retiredPass->renderPass = renderpass.renderPass;
 
-    renderpass.descriptorSetLayout = nullptr;
-    renderpass.emptyDescriptorSetLayout = nullptr;
-    renderpass.descriptorPool = nullptr;
-    renderpass.renderPass = nullptr;
-    renderpass.descriptorSets.clear();
-    renderpass.writeDescriptorSets.clear();
-    renderpass.inputDescriptorImageInfos.clear();
+    ClearRenderpassResourceFields(renderpass);
     return retiredPass;
 }
 
@@ -148,7 +242,7 @@ void Renderpass::CreateUniformBuffers()
     // extra per-pass uniform buffer.
 }
 void Renderpass::SetupDescriptors(
-    RenderGraph& renderGraph,
+    const RenderGraph& renderGraph,
     VL::RendererBackendVulkan& rendererBackend)
 {
     uint32_t swapChainImageCount = rendererBackend.GetSwapchainImageCount();
@@ -165,7 +259,7 @@ void Renderpass::SetupDescriptors(
             const std::string& inputResource = inputDescriptor.resource;
             const RenderResource* resource = nullptr;
             
-            auto& resolveMap = renderGraph.GetResourcesResolve();
+            const auto& resolveMap = renderGraph.GetResourcesResolve();
             auto resolveIt = resolveMap.find(inputResource);
             if(resolveIt != resolveMap.end() && imageIndex < resolveIt->second.size())
             {
@@ -173,7 +267,7 @@ void Renderpass::SetupDescriptors(
             }
             else
             {
-                auto& msaaMap = renderGraph.GetResourcesMsaa();
+                const auto& msaaMap = renderGraph.GetResourcesMsaa();
                 auto msaaIt = msaaMap.find(inputResource);
                 if(msaaIt != msaaMap.end() && imageIndex < msaaIt->second.size())
                 {
@@ -213,6 +307,8 @@ void Renderpass::CreatePassDescriptorSetLayout(VL::RendererBackendVulkan& render
     emptyDescriptorSetLayout = rendererBackend.CreateDescriptorSetLayout(
         emptyLayoutCreateInfo,
         "DescriptorSetLayout: Empty");
+    emptyDescriptorSetLayoutHandle =
+        rendererBackend.GetDescriptorSetLayoutHandle(emptyDescriptorSetLayout);
 
     std::vector<vk::DescriptorSetLayoutBinding> descriptorSetLayoutBindings;
     if(!materialInstance.expired())
@@ -257,6 +353,8 @@ void Renderpass::CreatePassDescriptorSetLayout(VL::RendererBackendVulkan& render
     descriptorSetLayout = rendererBackend.CreateDescriptorSetLayout(
         descriptorSetLayoutCreateInfo,
         "DescriptorSetLayout: " + name);
+    descriptorSetLayoutHandle =
+        rendererBackend.GetDescriptorSetLayoutHandle(descriptorSetLayout);
 }
 
 void Renderpass::CreateDescriptorSets(VL::RendererBackendVulkan& rendererBackend)
@@ -317,6 +415,7 @@ void Renderpass::CreateDescriptorSets(VL::RendererBackendVulkan& rendererBackend
     descriptorPool = rendererBackend.CreateDescriptorPool(
         descriptorPoolCreateInfo,
         "DescriptorPool: " + name);
+    descriptorPoolHandle = rendererBackend.GetDescriptorPoolHandle(descriptorPool);
 
     vk::DescriptorSetAllocateInfo descriptorSetAllocateInfo;
     descriptorSetAllocateInfo
@@ -324,12 +423,16 @@ void Renderpass::CreateDescriptorSets(VL::RendererBackendVulkan& rendererBackend
         .setSetLayouts(allocateLayouts);
     
     descriptorSets.resize(swapChainImageCount);
+    descriptorSetHandles.resize(swapChainImageCount);
     for(uint32_t i = 0; i < swapChainImageCount; i++)
     {
         descriptorSets[i].resize(SetLayoutCount);
         rendererBackend.AllocateDescriptorSets(descriptorSetAllocateInfo, descriptorSets[i]);
+        descriptorSetHandles[i].resize(descriptorSets[i].size());
         for(uint32_t j = 0; j < SetLayoutCount; j++)
         {
+            descriptorSetHandles[i][j] =
+                rendererBackend.GetDescriptorSetHandle(descriptorSets[i][j]);
             rendererBackend.SetDescriptorSetDebugName(
                 descriptorSets[i][j],
                 "DescriptorSet: " + name +
@@ -600,6 +703,7 @@ RenderResource RenderGraph::CreateRenderResource(
         usage,
         memoryPropertyFlags,
         "Image: " + resource.name);
+    resource.imageHandle = rendererBackend.GetImageHandle(resource.image);
     if(bIsDepthFormat)
     {
         rendererBackend.TransitionImageLayout(
@@ -627,12 +731,14 @@ RenderResource RenderGraph::CreateRenderResource(
         resource.format,
         aspect,
         resource.name + "_View");
+    resource.imageViewHandle = rendererBackend.GetImageViewHandle(resource.imageView);
 
     resource.sampler = bIsDepthFormat
         ? (resource.name == "shadowMap"
             ? rendererBackend.CreateDepthCompareSampler("Sampler: " + resource.name)
             : rendererBackend.CreateDepthSampler("Sampler: " + resource.name))
         : rendererBackend.Create2DSampler("Sampler: " + resource.name);
+    resource.samplerHandle = rendererBackend.GetSamplerHandle(resource.sampler);
 
     return resource;
 }
@@ -664,6 +770,18 @@ void RenderGraph::DestroyRenderResource(
         return;
     }
 
+    if (resource.imageHandle.IsValid() ||
+        resource.imageViewHandle.IsValid() ||
+        resource.samplerHandle.IsValid())
+    {
+        rendererBackend.DestroyImageResource(
+            resource.imageHandle,
+            resource.imageViewHandle,
+            resource.samplerHandle);
+        ClearRenderResourceFields(resource);
+        return;
+    }
+
     rendererBackend.DestroyImageResource(
         resource.image,
         resource.memory,
@@ -681,8 +799,7 @@ Renderpass RenderGraph::CreateRenderpass(
     bool bUseMsaa = passDesc.needMsaa;
     renderpass.sampleCount = bUseMsaa ? CommonFunction::GetMsaaSampleCount() : vk::SampleCountFlagBits::e1;
 
-    std::vector<std::string> inputResources = passDesc.inputResources;
-    renderpass.inputResources = inputResources;
+    renderpass.inputResources = passDesc.inputResources;
     renderpass.inputDescriptorPlan = passDesc.inputDescriptors;
     for (const VL::CompiledFrameGraphPassOutput& output : passDesc.outputResources)
     {
@@ -695,6 +812,7 @@ Renderpass RenderGraph::CreateRenderpass(
 
     vk::RenderPass vkRenderPass = CreateVkRenderPass(renderpass, rendererBackend, bUseMsaa);
     renderpass.renderPass = vkRenderPass;
+    renderpass.renderPassHandle = rendererBackend.GetRenderPassHandle(renderpass.renderPass);
     
     if (renderpass.outputResources[0] == "swapChain")
     {
@@ -716,10 +834,15 @@ Renderpass RenderGraph::CreateRenderpass(
     renderpass.clearValues = GetClearValues(renderpass.outputResources, bUseMsaa);
     renderpass.framebuffers = CreateVkFrameBuffers(
         renderpass,
-        inputResources,
         renderpass.outputResources,
         rendererBackend,
         bUseMsaa);
+    renderpass.framebufferHandles.reserve(renderpass.framebuffers.size());
+    for (vk::Framebuffer framebuffer : renderpass.framebuffers)
+    {
+        renderpass.framebufferHandles.push_back(
+            rendererBackend.GetFramebufferHandle(framebuffer));
+    }
     
     return renderpass;
 }
@@ -749,22 +872,68 @@ void RenderGraph::DestroyRenderpass(
         return;
     }
 
-    DestroyVkFrameBuffers(renderpass.framebuffers, rendererBackend);
-    rendererBackend.DestroyDescriptorSetLayout(renderpass.descriptorSetLayout);
-    rendererBackend.DestroyDescriptorSetLayout(renderpass.emptyDescriptorSetLayout);
-    rendererBackend.DestroyDescriptorPool(renderpass.descriptorPool);
-    DestroyVkRenderPass(renderpass.renderPass, rendererBackend);
+    if (!renderpass.framebufferHandles.empty())
+    {
+        rendererBackend.DestroyFramebuffers(renderpass.framebufferHandles);
+        renderpass.framebuffers.clear();
+    }
+    else
+    {
+        rendererBackend.DestroyFramebuffers(renderpass.framebuffers);
+    }
+
+    if (renderpass.descriptorSetLayoutHandle.IsValid())
+    {
+        rendererBackend.DestroyDescriptorSetLayout(renderpass.descriptorSetLayoutHandle);
+        renderpass.descriptorSetLayout = nullptr;
+    }
+    else
+    {
+        rendererBackend.DestroyDescriptorSetLayout(renderpass.descriptorSetLayout);
+    }
+
+    if (renderpass.emptyDescriptorSetLayoutHandle.IsValid())
+    {
+        rendererBackend.DestroyDescriptorSetLayout(renderpass.emptyDescriptorSetLayoutHandle);
+        renderpass.emptyDescriptorSetLayout = nullptr;
+    }
+    else
+    {
+        rendererBackend.DestroyDescriptorSetLayout(renderpass.emptyDescriptorSetLayout);
+    }
+
+    if (renderpass.descriptorPoolHandle.IsValid())
+    {
+        rendererBackend.DestroyDescriptorPool(renderpass.descriptorPoolHandle);
+        renderpass.descriptorPool = nullptr;
+    }
+    else
+    {
+        rendererBackend.DestroyDescriptorPool(renderpass.descriptorPool);
+    }
+
+    if (renderpass.renderPassHandle.IsValid())
+    {
+        rendererBackend.DestroyRenderPass(renderpass.renderPassHandle);
+        renderpass.renderPass = nullptr;
+    }
+    else
+    {
+        rendererBackend.DestroyRenderPass(renderpass.renderPass);
+    }
+
+    renderpass.descriptorSetHandles.clear();
     renderpass.descriptorSets.clear();
     renderpass.writeDescriptorSets.clear();
 }
 
 vk::RenderPass RenderGraph::CreateVkRenderPass(
-    Renderpass& renderpass,
+    const Renderpass& renderpass,
     VL::RendererBackendVulkan& rendererBackend,
     bool bUseMsaa)
 {
     vk::SampleCountFlagBits sampleCount = bUseMsaa ? CommonFunction::GetMsaaSampleCount() : vk::SampleCountFlagBits::e1;
-    auto& outputResources = renderpass.outputResources;
+    const std::vector<std::string>& outputResources = renderpass.outputResources;
 
     // 总览：按输出资源顺序构建 RenderPass
     // 1) 颜色附件（MSAA/非MSAA）
@@ -779,25 +948,11 @@ vk::RenderPass RenderGraph::CreateVkRenderPass(
     vk::AttachmentReference2 depthResolveAttachmentReference;
 
     bool bHasDepth = false;
-    auto isDepthResource = [&](const std::string& resourceName) -> bool
-    {
-        auto msaaIt = resourcesMsaa.find(resourceName);
-        if (msaaIt != resourcesMsaa.end() && !msaaIt->second.empty())
-        {
-            return CommonFunction::IsDepthFormat(msaaIt->second[0].format);
-        }
-        auto resolveIt = resourcesResolve.find(resourceName);
-        if (resolveIt != resourcesResolve.end() && !resolveIt->second.empty())
-        {
-            return CommonFunction::IsDepthFormat(resolveIt->second[0].format);
-        }
-        return false;
-    };
 
     // 1. Color Attachments (MSAA & Resolve)
     for (const auto& resourceName : outputResources)
     { 
-        if (isDepthResource(resourceName))
+        if (IsDepthResource(resourceName))
         {
             bHasDepth = true;
             continue;
@@ -848,7 +1003,7 @@ vk::RenderPass RenderGraph::CreateVkRenderPass(
     {
         for (const auto& resourceName : outputResources)
         {
-            if (isDepthResource(resourceName)) continue;
+            if (IsDepthResource(resourceName)) continue;
 
             vk::AttachmentDescription2 resolveAttachmentDescription;
             vk::Format format = (resourceName == "swapChain")
@@ -888,7 +1043,7 @@ vk::RenderPass RenderGraph::CreateVkRenderPass(
         std::string depthName = "";
         for(const auto& resource : outputResources)
         {
-            if (isDepthResource(resource))
+            if (IsDepthResource(resource))
             {
                 depthName = resource;
                 break;
@@ -989,17 +1144,9 @@ vk::RenderPass RenderGraph::CreateVkRenderPass(
     return rendererBackend.CreateRenderPass(renderPassCreateInfo, renderpass.name);
 }
 
-void RenderGraph::DestroyVkRenderPass(
-    vk::RenderPass& renderPass,
-    VL::RendererBackendVulkan& rendererBackend)
-{
-    rendererBackend.DestroyRenderPass(renderPass);
-}
-
 std::vector<vk::Framebuffer> RenderGraph::CreateVkFrameBuffers(
-    Renderpass renderPass,
-    std::vector<std::string>& inputResources,
-    std::vector<std::string>& outputResources,
+    const Renderpass& renderpass,
+    const std::vector<std::string>& outputResources,
     VL::RendererBackendVulkan& rendererBackend,
     bool bUseMsaa)
 {
@@ -1009,21 +1156,6 @@ std::vector<vk::Framebuffer> RenderGraph::CreateVkFrameBuffers(
     // 1) (可选) MSAA 颜色视图
     // 2) resolve/非MSAA 颜色视图
     // 3) 深度视图
-    auto isDepthResource = [&](const std::string& resourceName) -> bool
-    {
-        auto msaaIt = resourcesMsaa.find(resourceName);
-        if (msaaIt != resourcesMsaa.end() && !msaaIt->second.empty())
-        {
-            return CommonFunction::IsDepthFormat(msaaIt->second[0].format);
-        }
-        auto resolveIt = resourcesResolve.find(resourceName);
-        if (resolveIt != resourcesResolve.end() && !resolveIt->second.empty())
-        {
-            return CommonFunction::IsDepthFormat(resolveIt->second[0].format);
-        }
-        return false;
-    };
-
     // 确定framebuffer数量，含swapchain，数量需要等于swapChainImageCount，否者为1
     uint32_t framebufferSize = swapChainImageCount;
 
@@ -1039,7 +1171,7 @@ std::vector<vk::Framebuffer> RenderGraph::CreateVkFrameBuffers(
         {
             for (const auto& outputResource : outputResources)
             {
-                if (isDepthResource(outputResource)) continue;
+                if (IsDepthResource(outputResource)) continue;
                 attachments.push_back(resourcesMsaa[outputResource][i].imageView);
             }
         }
@@ -1047,7 +1179,7 @@ std::vector<vk::Framebuffer> RenderGraph::CreateVkFrameBuffers(
         // 2. Resolve view (or Color view if MSAA disabled)
         for (const auto& outputResource : outputResources)
         {
-            if (isDepthResource(outputResource)) continue;
+            if (IsDepthResource(outputResource)) continue;
             
             if (outputResource == "swapChain")
             {
@@ -1062,7 +1194,7 @@ std::vector<vk::Framebuffer> RenderGraph::CreateVkFrameBuffers(
         std::string depthName = "";
         for(const auto& r : outputResources)
         {
-            if (isDepthResource(r))
+            if (IsDepthResource(r))
             {
                 depthName = r;
                 break;
@@ -1083,26 +1215,19 @@ std::vector<vk::Framebuffer> RenderGraph::CreateVkFrameBuffers(
 
         vk::FramebufferCreateInfo framebufferCreateInfo;
         framebufferCreateInfo
-            .setRenderPass(renderPass.renderPass)
+            .setRenderPass(renderpass.renderPass)
             .setAttachments(attachments)
-            .setWidth(renderPass.width)
-            .setHeight(renderPass.height)
+            .setWidth(renderpass.width)
+            .setHeight(renderpass.height)
             .setLayers(1);
         
         framebuffers[i] = rendererBackend.CreateFramebuffer(
             framebufferCreateInfo,
-            "Framebuffer: " + renderPass.name +
+            "Framebuffer: " + renderpass.name +
                 " (SwapchainIndex " + std::to_string(i) + ")");
     }
     
     return framebuffers;
-}
-
-void RenderGraph::DestroyVkFrameBuffers(
-    std::vector<vk::Framebuffer>& framebuffers,
-    VL::RendererBackendVulkan& rendererBackend)
-{
-    rendererBackend.DestroyFramebuffers(framebuffers);
 }
 
 vk::Format RenderGraph::GetFormat(const std::string& formatStr)
@@ -1180,6 +1305,23 @@ vk::AttachmentStoreOp RenderGraph::GetAttachmentStoreOp(const std::string& store
     return vk::AttachmentStoreOp::eStore;
 }
 
+bool RenderGraph::IsDepthResource(const std::string& resourceName) const
+{
+    auto msaaIt = resourcesMsaa.find(resourceName);
+    if (msaaIt != resourcesMsaa.end() && !msaaIt->second.empty())
+    {
+        return CommonFunction::IsDepthFormat(msaaIt->second[0].format);
+    }
+
+    auto resolveIt = resourcesResolve.find(resourceName);
+    if (resolveIt != resourcesResolve.end() && !resolveIt->second.empty())
+    {
+        return CommonFunction::IsDepthFormat(resolveIt->second[0].format);
+    }
+
+    return false;
+}
+
 std::vector<vk::ClearValue> RenderGraph::GetClearValues(
     const std::vector<std::string>& outputResources,
     bool bUseMsaa)
@@ -1193,25 +1335,10 @@ std::vector<vk::ClearValue> RenderGraph::GetClearValues(
     // 1) 颜色（MSAA/非MSAA）
     // 2) 仅在启用 MSAA 时追加 resolve 颜色
     // 3) 若包含深度资源，追加深度清除
-    auto isDepthResource = [&](const std::string& resourceName) -> bool
-    {
-        auto msaaIt = resourcesMsaa.find(resourceName);
-        if (msaaIt != resourcesMsaa.end() && !msaaIt->second.empty())
-        {
-            return CommonFunction::IsDepthFormat(msaaIt->second[0].format);
-        }
-        auto resolveIt = resourcesResolve.find(resourceName);
-        if (resolveIt != resourcesResolve.end() && !resolveIt->second.empty())
-        {
-            return CommonFunction::IsDepthFormat(resolveIt->second[0].format);
-        }
-        return false;
-    };
-
     // 1. Color Attachments (MSAA & Resolve)
     for (const auto& resourceName : outputResources)
     {
-        if (isDepthResource(resourceName)) continue;
+        if (IsDepthResource(resourceName)) continue;
 
         // MSAA / Main Attachment
         clearValues.push_back(clearColor);
@@ -1222,7 +1349,7 @@ std::vector<vk::ClearValue> RenderGraph::GetClearValues(
     {
         for (const auto& resourceName : outputResources)
         {
-            if (isDepthResource(resourceName)) continue;
+            if (IsDepthResource(resourceName)) continue;
             
             clearValues.push_back(clearColor);
         }
@@ -1232,7 +1359,7 @@ std::vector<vk::ClearValue> RenderGraph::GetClearValues(
     bool bHasDepth = false;
     for(const auto& r : outputResources)
     {
-        if (isDepthResource(r))
+        if (IsDepthResource(r))
         {
             bHasDepth = true;
             break;

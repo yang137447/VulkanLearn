@@ -1,7 +1,9 @@
 #pragma once
 #include <cstdint>
 #include <memory>
+#include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <vulkan/vulkan.hpp>
 #include "baseStructs.h"
@@ -26,11 +28,10 @@ enum class ParamType
 struct ParamMap
 {
     ParamType type;
-    uint32_t index;
     uint32_t size;
 
-    ParamMap() : type(ParamType::Float), index(0) {}
-    ParamMap(ParamType type, uint32_t index) : type(type), index(index) {
+    ParamMap() : type(ParamType::Float), size(sizeof(float)) {}
+    explicit ParamMap(ParamType type) : type(type) {
         switch (type)
         {
         case ParamType::Float:
@@ -52,7 +53,7 @@ struct ParamMap
 class MaterialInstance
 {
 public:
-    MaterialInstance();
+    MaterialInstance() = default;
     ~MaterialInstance();
     //设置参数的模板函数
     void SetParameter(const std::string& parameterName, const float& value);
@@ -66,42 +67,42 @@ public:
         auto it = parameters.find(parameterName);
         if (it == parameters.end())
             throw std::runtime_error("Parameter not found: " + parameterName);
-        const ParamMap& paraMap = it->second;
+        const ParamMap& paramMap = it->second;
 
         if constexpr (std::is_same_v<T, float>)
         {
-            if (paraMap.type != ParamType::Float) throw std::runtime_error("Parameter type mismatch");
+            if (paramMap.type != ParamType::Float) throw std::runtime_error("Parameter type mismatch: " + parameterName);
             return floatParameters.at(parameterName);
         }
         else if constexpr (std::is_same_v<T, Eigen::Vector2f>)
         {
-            if (paraMap.type != ParamType::Vec2) throw std::runtime_error("Parameter type mismatch");
+            if (paramMap.type != ParamType::Vec2) throw std::runtime_error("Parameter type mismatch: " + parameterName);
             return vec2Parameters.at(parameterName);
         }
         else if constexpr (std::is_same_v<T, Eigen::Vector3f>)
         {
-            if (paraMap.type != ParamType::Vec3) throw std::runtime_error("Parameter type mismatch");
+            if (paramMap.type != ParamType::Vec3) throw std::runtime_error("Parameter type mismatch: " + parameterName);
             return vec3Parameters.at(parameterName);
         }
         else if constexpr (std::is_same_v<T, Eigen::Vector4f>)
         {
-            if (paraMap.type != ParamType::Vec4) throw std::runtime_error("Parameter type mismatch");
+            if (paramMap.type != ParamType::Vec4) throw std::runtime_error("Parameter type mismatch: " + parameterName);
             return vec4Parameters.at(parameterName);
+        }
+        else
+        {
+            static_assert(!sizeof(T), "Unsupported MaterialInstance parameter type");
         }
     }
     const std::unordered_map<std::string, ParamMap>& GetParameters() const { return parameters; }
     // 检查参数是否存在
     bool HasParameter(const std::string& parameterName) const;
-    //移除参数
-    void RemoveParameter(const std::string& parameterName);
     //设置纹理
     void SetTexture(const std::string& textureName, const std::shared_ptr<Texture>& texture);
     //获取纹理
-    const std::shared_ptr<Texture> GetTexture(const std::string& textureName) const;
+    std::shared_ptr<Texture> GetTexture(const std::string& textureName) const;
     //检查纹理是否存在
     bool HasTexture(const std::string& textureName) const;
-    //移除纹理
-    void RemoveTexture(const std::string& textureName);
     
     void SetBaseMaterial(const std::shared_ptr<Material>& baseMaterial) { this->baseMaterial = baseMaterial; }
     const std::weak_ptr<Material>& GetBaseMaterial() const { return baseMaterial; }
@@ -119,6 +120,7 @@ public:
     // material instance and its CPU parameters stay alive.
     void ShutdownRenderResources();
 private:
+    void ClearParameterValues(const std::string& parameterName);
     void CreateUniformBuffers();
     void DestroyUniformBuffers();
     void SetupDescriptors();

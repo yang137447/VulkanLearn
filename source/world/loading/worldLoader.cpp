@@ -3,6 +3,8 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <string>
+#include <string_view>
 
 #include "scene/validation/sceneAssetValidator.h"
 
@@ -11,6 +13,28 @@ namespace VL
 
 namespace
 {
+
+bool ContainsText(std::string_view value, std::string_view token)
+{
+    return value.find(token) != std::string_view::npos;
+}
+
+std::string ClassifyWorldLoaderError(std::string_view message)
+{
+    if (ContainsText(message, "Mesh ") ||
+        ContainsText(message, "mesh ") ||
+        ContainsText(message, "model") ||
+        ContainsText(message, "model importer") ||
+        ContainsText(message, "modelPath=") ||
+        ContainsText(message, ".obj") ||
+        ContainsText(message, ".fbx") ||
+        ContainsText(message, ".srt"))
+    {
+        return "Mesh.LoadFailed";
+    }
+
+    return "Scene.LoadFailed";
+}
 
 nlohmann::json LoadSceneJson(const std::string& scenePath)
 {
@@ -52,9 +76,10 @@ RuntimeResult<WorldBuildPlan> WorldLoader::Load(const std::string& scenePath) co
     }
     catch (const std::exception& exception)
     {
+        const std::string errorMessage = exception.what();
         return RuntimeResult<WorldBuildPlan>::Failure(MakeRuntimeError(
-            "WorldLoader.LoadFailed",
-            exception.what(),
+            ClassifyWorldLoaderError(errorMessage),
+            errorMessage,
             scenePath));
     }
 }

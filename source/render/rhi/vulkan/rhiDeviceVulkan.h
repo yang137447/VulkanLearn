@@ -1,58 +1,130 @@
 #pragma once
 
+#include <memory>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include <vulkan/vulkan.hpp>
 
 #include "baseStructs.h"
-#include "render/rhi/rhiDevice.h"
+#include "render/rhi/rhiResourceHandles.h"
 
 struct SDL_Window;
+class PipelineFactory;
 
 namespace VL
 {
 
-// Vulkan RHI boundary for device, swapchain, and raw GPU object helpers.
+struct VulkanBufferResource
+{
+    vk::Buffer buffer;
+    vk::DeviceMemory memory;
+};
+
+struct VulkanImageResource
+{
+    vk::Image image;
+    vk::DeviceMemory memory;
+};
+
+struct VulkanImageViewResource
+{
+    vk::ImageView imageView;
+};
+
+struct VulkanSamplerResource
+{
+    vk::Sampler sampler;
+};
+
+struct VulkanDescriptorSetLayoutResource
+{
+    vk::DescriptorSetLayout descriptorSetLayout;
+    bool ownsResource = true;
+};
+
+struct VulkanDescriptorPoolResource
+{
+    vk::DescriptorPool descriptorPool;
+};
+
+struct VulkanDescriptorSetResource
+{
+    vk::DescriptorSet descriptorSet;
+    RHIDescriptorPoolHandle descriptorPoolHandle;
+};
+
+struct VulkanRenderPassResource
+{
+    vk::RenderPass renderPass;
+};
+
+struct VulkanFramebufferResource
+{
+    vk::Framebuffer framebuffer;
+};
+
+struct VulkanFrameSyncResources
+{
+    vk::Fence taskFinishedFence;
+    vk::Semaphore imageAcquiredSemaphore;
+};
+
+struct VulkanSwapchainImageSyncResources
+{
+    vk::CommandBuffer commandBuffer;
+    vk::Semaphore renderFinishedSemaphore;
+};
+
+// Vulkan device boundary for swapchain, queues, and raw GPU object helpers.
 // RendererBackendVulkan owns frame policy; this class owns the low-level
 // VulkanManager calls that create, destroy, and name Vulkan resources.
-class RHIDeviceVulkan : public RHIDevice
+class RHIDeviceVulkan
 {
 public:
     void Initialize(std::vector<const char*>& instanceExtensions, SDL_Window* window);
-    bool IsInitialized() const override { return initialized; }
+    bool IsInitialized() const { return initialized; }
 
     void WaitIdle();
     void RecreateSwapchain(int width, int height);
+    std::unique_ptr<PipelineFactory> CreatePipelineFactory();
+    void WaitForFence(vk::Fence fence);
+    void ResetFence(vk::Fence fence);
+    void AcquireNextSwapchainImage(
+        vk::Semaphore imageAcquiredSemaphore,
+        uint32_t& swapchainImageIndex);
+    void SubmitToGraphicsQueue(const vk::SubmitInfo& submitInfo, vk::Fence signalFence);
+    void PresentSwapchainImage(
+        vk::Semaphore renderFinishedSemaphore,
+        uint32_t swapchainImageIndex);
 
-    vk::Device& GetDevice();
-    vk::PhysicalDevice& GetPhysicalDevice();
-    vk::PhysicalDeviceMemoryProperties& GetGpuMemoryProperties();
-    vk::Queue& GetGraphicsQueue();
-    vk::CommandPool& GetCommandPool();
-    std::vector<vk::CommandBuffer>& GetCommandBuffers();
-    vk::SwapchainKHR& GetSwapchain();
+    uint32_t GetFrameFenceCount() const;
+    VulkanFrameSyncResources GetFrameSyncResources(uint32_t frameIndex) const;
+    VulkanSwapchainImageSyncResources GetSwapchainImageSyncResources(uint32_t swapchainImageIndex) const;
+    vk::Fence GetImageInFlightFence(uint32_t swapchainImageIndex) const;
+    void SetImageInFlightFence(uint32_t swapchainImageIndex, vk::Fence fence);
     uint32_t GetSwapchainImageCount() const;
     vk::Extent2D GetSwapchainExtent() const;
     vk::Format GetSwapchainImageFormat() const;
     const std::vector<vk::ImageView>& GetSwapchainImageViews() const;
-    std::vector<vk::Fence>& GetTaskFinishedFences();
-    std::vector<vk::Semaphore>& GetImageAcquiredSemaphores();
-    std::vector<vk::Semaphore>& GetRenderFinishedSemaphores();
-    std::vector<vk::Fence>& GetImagesInFlightFences();
 
-    std::pair<vk::Buffer, vk::DeviceMemory> CreateBuffer(
+    RHIBufferHandle CreateBuffer(
         vk::DeviceSize size,
         vk::BufferUsageFlags usage,
         vk::MemoryPropertyFlags memoryPropertyFlags,
         const std::string& debugName);
-    void* MapMemory(vk::DeviceMemory memory, vk::DeviceSize size);
-    void UnmapMemory(vk::DeviceMemory memory);
-    void DestroyBuffer(vk::Buffer buffer, vk::DeviceMemory memory);
-    void CopyBufferToBuffer(vk::Buffer source, vk::Buffer destination, vk::DeviceSize size);
+    void* MapBufferMemory(RHIBufferHandle bufferHandle, vk::DeviceSize size);
+    void UnmapBufferMemory(RHIBufferHandle bufferHandle);
+    void DestroyBuffer(RHIBufferHandle bufferHandle);
+    void CopyBufferToBuffer(
+        RHIBufferHandle source,
+        RHIBufferHandle destination,
+        vk::DeviceSize size);
+    const VulkanBufferResource& GetVulkanBufferResource(RHIBufferHandle bufferHandle) const;
 
-    std::pair<vk::Image, vk::DeviceMemory> CreateImage(
+    RHIImageHandle CreateImage(
         uint32_t width,
         uint32_t height,
         uint32_t mipLevels,
@@ -62,24 +134,24 @@ public:
         vk::ImageUsageFlags usage,
         vk::MemoryPropertyFlags memoryPropertyFlags,
         const std::string& debugName);
-    std::pair<vk::Image, vk::DeviceMemory> CreateImage(
+    RHIImageHandle CreateImage(
         const vk::ImageCreateInfo& createInfo,
         vk::MemoryPropertyFlags memoryPropertyFlags,
         const std::string& debugName);
     void TransitionImageLayout(
-        vk::Image image,
+        RHIImageHandle imageHandle,
         uint32_t mipLevels,
         vk::Format format,
         vk::ImageLayout oldLayout,
         vk::ImageLayout newLayout);
-    vk::ImageView Create2DImageView(
-        vk::Image image,
+    RHIImageViewHandle Create2DImageView(
+        RHIImageHandle imageHandle,
         uint32_t mipLevels,
         vk::Format format,
         vk::ImageAspectFlagBits aspectMask,
         const std::string& debugName);
-    vk::ImageView CreateImageView(
-        vk::Image image,
+    RHIImageViewHandle CreateImageView(
+        RHIImageHandle imageHandle,
         vk::ImageViewType viewType,
         vk::Format format,
         vk::ImageAspectFlagBits aspectMask,
@@ -88,77 +160,146 @@ public:
         uint32_t baseArrayLayer,
         uint32_t layerCount,
         const std::string& debugName);
-    vk::ImageView CreateCubeImageView(
-        vk::Image image,
+    RHIImageViewHandle CreateCubeImageView(
+        RHIImageHandle imageHandle,
         uint32_t mipLevels,
         vk::Format format,
         const std::string& debugName);
-    vk::ImageView CreateCubeStorageImageView(
-        vk::Image image,
+    RHIImageViewHandle CreateCubeStorageImageView(
+        RHIImageHandle imageHandle,
         vk::Format format,
         const std::string& debugName);
-    void DestroyImageView(vk::ImageView& imageView);
-    vk::Sampler Create2DSampler(const std::string& debugName);
-    vk::Sampler Create2DSampler(
+    void DestroyImageView(RHIImageViewHandle imageViewHandle);
+    const VulkanImageViewResource& GetVulkanImageViewResource(RHIImageViewHandle imageViewHandle) const;
+    RHIImageViewHandle RegisterImageView(vk::ImageView imageView);
+
+    RHISamplerHandle Create2DSampler(const std::string& debugName);
+    RHISamplerHandle Create2DSampler(
         vk::Filter filter,
         vk::SamplerAddressMode addressMode,
         bool enableMipmaps,
         const std::string& debugName);
-    vk::Sampler CreateSampler(const vk::SamplerCreateInfo& createInfo, const std::string& debugName);
-    vk::Sampler CreateCubeSampler(float maxLod, const std::string& debugName);
-    void DestroySampler(vk::Sampler& sampler);
-    vk::Sampler CreateDepthSampler(const std::string& debugName);
-    vk::Sampler CreateDepthCompareSampler(const std::string& debugName);
+    RHISamplerHandle CreateSampler(const vk::SamplerCreateInfo& createInfo, const std::string& debugName);
+    RHISamplerHandle CreateCubeSampler(float maxLod, const std::string& debugName);
+    void DestroySampler(RHISamplerHandle samplerHandle);
+    const VulkanSamplerResource& GetVulkanSamplerResource(RHISamplerHandle samplerHandle) const;
+    RHISamplerHandle RegisterSampler(vk::Sampler sampler);
+    RHISamplerHandle CreateDepthSampler(const std::string& debugName);
+    RHISamplerHandle CreateDepthCompareSampler(const std::string& debugName);
     vk::CommandBuffer BeginSingleTimeCommands();
     void EndSingleTimeCommands(vk::CommandBuffer& commandBuffer);
     void CopyBufferToImage(
-        vk::Buffer buffer,
-        vk::Image image,
+        RHIBufferHandle bufferHandle,
+        RHIImageHandle imageHandle,
         uint32_t width,
         uint32_t height);
     void CopyImageToBuffer(
-        vk::Image image,
-        vk::Buffer buffer,
+        RHIImageHandle imageHandle,
+        RHIBufferHandle bufferHandle,
         uint32_t width,
         uint32_t height,
         bool flipY = false,
         vk::DeviceSize rowBytes = 0);
     void GenerateMipmaps(
-        vk::Image image,
+        RHIImageHandle imageHandle,
         uint32_t width,
         uint32_t height,
         uint32_t mipLevels);
     void DestroyImageResource(
-        vk::Image& image,
-        vk::DeviceMemory& memory,
-        vk::ImageView& imageView,
-        vk::Sampler& sampler);
+        RHIImageHandle imageHandle,
+        RHIImageViewHandle imageViewHandle,
+        RHISamplerHandle samplerHandle);
+    const VulkanImageResource& GetVulkanImageResource(RHIImageHandle imageHandle) const;
 
-    vk::DescriptorSetLayout CreateDescriptorSetLayout(
+    RHIDescriptorSetLayoutHandle CreateDescriptorSetLayout(
         const vk::DescriptorSetLayoutCreateInfo& createInfo,
         const std::string& debugName);
-    void DestroyDescriptorSetLayout(vk::DescriptorSetLayout& descriptorSetLayout);
-    vk::DescriptorPool CreateDescriptorPool(
+    void DestroyDescriptorSetLayout(RHIDescriptorSetLayoutHandle descriptorSetLayoutHandle);
+    const VulkanDescriptorSetLayoutResource& GetVulkanDescriptorSetLayoutResource(
+        RHIDescriptorSetLayoutHandle descriptorSetLayoutHandle) const;
+    RHIDescriptorSetLayoutHandle RegisterDescriptorSetLayout(
+        vk::DescriptorSetLayout descriptorSetLayout,
+        bool ownsResource);
+
+    RHIDescriptorPoolHandle CreateDescriptorPool(
         const vk::DescriptorPoolCreateInfo& createInfo,
         const std::string& debugName);
-    void DestroyDescriptorPool(vk::DescriptorPool& descriptorPool);
-    void AllocateDescriptorSets(
-        const vk::DescriptorSetAllocateInfo& allocateInfo,
-        std::vector<vk::DescriptorSet>& descriptorSets);
-    void FreeDescriptorSet(vk::DescriptorPool descriptorPool, vk::DescriptorSet& descriptorSet);
-    void UpdateDescriptorSets(const std::vector<vk::WriteDescriptorSet>& writeDescriptorSets);
-    void SetDescriptorSetDebugName(vk::DescriptorSet descriptorSet, const std::string& debugName);
-    vk::RenderPass CreateRenderPass(
+    void DestroyDescriptorPool(RHIDescriptorPoolHandle descriptorPoolHandle);
+    const VulkanDescriptorPoolResource& GetVulkanDescriptorPoolResource(
+        RHIDescriptorPoolHandle descriptorPoolHandle) const;
+    std::vector<RHIDescriptorSetHandle> AllocateDescriptorSets(
+        RHIDescriptorPoolHandle descriptorPoolHandle,
+        const std::vector<RHIDescriptorSetLayoutHandle>& descriptorSetLayoutHandles);
+    void FreeDescriptorSet(
+        RHIDescriptorPoolHandle descriptorPoolHandle,
+        RHIDescriptorSetHandle descriptorSetHandle);
+    const VulkanDescriptorSetResource& GetVulkanDescriptorSetResource(
+        RHIDescriptorSetHandle descriptorSetHandle) const;
+    void UpdateDescriptorSets(const std::vector<RHIDescriptorWrite>& writeDescriptorSets);
+    void SetDescriptorSetDebugName(
+        RHIDescriptorSetHandle descriptorSetHandle,
+        const std::string& debugName);
+    RHIRenderPassHandle CreateRenderPass(
         const vk::RenderPassCreateInfo2& createInfo,
         const std::string& debugName);
-    void DestroyRenderPass(vk::RenderPass& renderPass);
-    vk::Framebuffer CreateFramebuffer(
+    void DestroyRenderPass(RHIRenderPassHandle renderPassHandle);
+    const VulkanRenderPassResource& GetVulkanRenderPassResource(
+        RHIRenderPassHandle renderPassHandle) const;
+    RHIFramebufferHandle CreateFramebuffer(
+        RHIRenderPassHandle renderPassHandle,
         const vk::FramebufferCreateInfo& createInfo,
         const std::string& debugName);
-    void DestroyFramebuffers(std::vector<vk::Framebuffer>& framebuffers);
+    void DestroyFramebuffer(RHIFramebufferHandle framebufferHandle);
+    const VulkanFramebufferResource& GetVulkanFramebufferResource(
+        RHIFramebufferHandle framebufferHandle) const;
 
 private:
+    vk::Device& GetDevice();
+    vk::PhysicalDevice& GetPhysicalDevice();
+    vk::PhysicalDeviceMemoryProperties& GetGpuMemoryProperties();
+    vk::CommandPool& GetCommandPool();
+    vk::Queue& GetGraphicsQueue();
+    vk::SwapchainKHR& GetSwapchain();
+    std::vector<vk::CommandBuffer>& GetCommandBuffers();
+    std::vector<vk::Fence>& GetTaskFinishedFences();
+    std::vector<vk::Semaphore>& GetImageAcquiredSemaphores();
+    std::vector<vk::Semaphore>& GetRenderFinishedSemaphores();
+    std::vector<vk::Fence>& GetImagesInFlightFences();
+
+    const VulkanBufferResource& RequireBufferResource(RHIBufferHandle bufferHandle) const;
+    const VulkanImageResource& RequireImageResource(RHIImageHandle imageHandle) const;
+    const VulkanImageViewResource& RequireImageViewResource(RHIImageViewHandle imageViewHandle) const;
+    const VulkanSamplerResource& RequireSamplerResource(RHISamplerHandle samplerHandle) const;
+    const VulkanDescriptorSetLayoutResource& RequireDescriptorSetLayoutResource(
+        RHIDescriptorSetLayoutHandle descriptorSetLayoutHandle) const;
+    const VulkanDescriptorPoolResource& RequireDescriptorPoolResource(
+        RHIDescriptorPoolHandle descriptorPoolHandle) const;
+    const VulkanDescriptorSetResource& RequireDescriptorSetResource(
+        RHIDescriptorSetHandle descriptorSetHandle) const;
+    const VulkanRenderPassResource& RequireRenderPassResource(
+        RHIRenderPassHandle renderPassHandle) const;
+    const VulkanFramebufferResource& RequireFramebufferResource(
+        RHIFramebufferHandle framebufferHandle) const;
+
     bool initialized = false;
+    uint64_t nextBufferId = 1;
+    std::unordered_map<uint64_t, VulkanBufferResource> buffers;
+    uint64_t nextImageId = 1;
+    std::unordered_map<uint64_t, VulkanImageResource> images;
+    uint64_t nextImageViewId = 1;
+    std::unordered_map<uint64_t, VulkanImageViewResource> imageViews;
+    uint64_t nextSamplerId = 1;
+    std::unordered_map<uint64_t, VulkanSamplerResource> samplers;
+    uint64_t nextDescriptorSetLayoutId = 1;
+    std::unordered_map<uint64_t, VulkanDescriptorSetLayoutResource> descriptorSetLayouts;
+    uint64_t nextDescriptorPoolId = 1;
+    std::unordered_map<uint64_t, VulkanDescriptorPoolResource> descriptorPools;
+    uint64_t nextDescriptorSetId = 1;
+    std::unordered_map<uint64_t, VulkanDescriptorSetResource> descriptorSets;
+    uint64_t nextRenderPassId = 1;
+    std::unordered_map<uint64_t, VulkanRenderPassResource> renderPasses;
+    uint64_t nextFramebufferId = 1;
+    std::unordered_map<uint64_t, VulkanFramebufferResource> framebuffers;
 };
 
 } // namespace VL

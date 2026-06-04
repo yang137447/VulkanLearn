@@ -11,9 +11,10 @@ namespace VL
 class RendererResourceCache;
 struct WorldBuildPlan;
 
-// Builds the active World from the validated WorldBuildPlan. Camera, light, and
-// environment metadata are created here; the renderer resource cache is only
-// consulted for mesh resources that still own descriptors and GPU buffers.
+// Builds the active World from the validated WorldBuildPlan. Camera, light,
+// environment, and mesh object runtime data are created here. The renderer
+// resource cache is consulted only for global resources that affect World
+// metadata, such as BRDF LUT availability.
 class WorldBuilder
 {
 public:

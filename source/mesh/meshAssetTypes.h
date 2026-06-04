@@ -88,8 +88,6 @@ struct MeshSectionLoadPlan
     std::string sectionName;
     std::string materialSlotName;
     std::string materialInstancePath;
-    bool bUsesUnsafeFallbackMaterial = false;
-    std::string unsafeFallbackReason;
 };
 
 // Full model import result preserving all geometry sections from the source model.

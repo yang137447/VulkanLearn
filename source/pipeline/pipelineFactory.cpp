@@ -53,7 +53,7 @@ std::shared_ptr<ComputePipeline> PipelineFactory::CreateComputePipeline(const st
     return pipeline;
 }
 
-std::shared_ptr<GraphicsPipeline> PipelineFactory::CreateGraphicsPipeline(
+std::shared_ptr<PipelineBase> PipelineFactory::CreateGraphicsPipeline(
     vk::RenderPass* renderPass,
     const ShaderVariantKey& shaderVariantKey,
     vk::SampleCountFlagBits sampleCount,

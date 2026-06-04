@@ -1,14 +1,12 @@
 #include "graphicsPipeline.h"
 #include "../vertexDataStruct.h"
 #include <cstdint>
-#include <fstream>
-#include <iostream>
-#include <vulkan/vulkan_enums.hpp>
 #include "../commonFunction.h"
 #include "graphicsPipelineBuilder.h"
 #include "pipelineLayoutBuilder.h"
 #include "../profiler.h"
 #include "shaderReflectionService.h"
+#include "vulkanPipelineDiagnostics.h"
 #include "../vulkanDebug.h"
 #include "../shaderCompiler.h"
 
@@ -36,10 +34,6 @@ GraphicsPipeline::~GraphicsPipeline()
     DestroyDescriptorSetLayouts();
     DestroyShader();
     DestroyPipelineLayout();
-}
-
-GraphicsPipeline::GraphicsPipeline()
-{
 }
 
 void GraphicsPipeline::CreateDescriptorSetLayouts()
@@ -77,7 +71,11 @@ void GraphicsPipeline::CreateShader()
         .setCodeSize(vertexShaderCode.size())
         .setPCode(reinterpret_cast<const uint32_t*>(vertexShaderCode.data()));
     vk::Result result = device->createShaderModule(&vertexShaderModuleCreateInfo, nullptr, &vertexShaderModule);
-    assert(result == vk::Result::eSuccess);
+    VL::RequireVulkanPipelineSuccess(
+        result,
+        "Create vertex shader module",
+        shaderVariantKey.GetDisplayName(),
+        "graphics pipeline");
     VulkanDebug::SetObjectName(*device, vertexShaderModule, vk::ObjectType::eShaderModule, "ShaderModule_Vert: " + shaderVariantKey.GetDisplayName());
 
     vk::ShaderModule fragmentShaderModule;
@@ -86,7 +84,11 @@ void GraphicsPipeline::CreateShader()
         .setCodeSize(fragmentShaderCode.size())
         .setPCode(reinterpret_cast<const uint32_t*>(fragmentShaderCode.data()));
     result = device->createShaderModule(&fragmentShaderModuleCreateInfo, nullptr, &fragmentShaderModule);
-    assert(result == vk::Result::eSuccess);
+    VL::RequireVulkanPipelineSuccess(
+        result,
+        "Create fragment shader module",
+        shaderVariantKey.GetDisplayName(),
+        "graphics pipeline");
     VulkanDebug::SetObjectName(*device, fragmentShaderModule, vk::ObjectType::eShaderModule, "ShaderModule_Frag: " + shaderVariantKey.GetDisplayName());
     shaderStages.resize(2);
     shaderStages[0]

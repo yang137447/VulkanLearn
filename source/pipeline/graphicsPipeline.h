@@ -7,7 +7,6 @@
 #include "graphicsPipelineBuilder.h"
 #include "../shaderVariant.h"
 
-class DrawableObject;
 struct ShaderBinding;
 
 class GraphicsPipeline : public PipelineBase
@@ -26,13 +25,10 @@ public:
 
     inline vk::PipelineBindPoint GetBindPoint() const override { return vk::PipelineBindPoint::eGraphics; }
     inline const vk::Pipeline& GetPipeline() const override { return graphicsPipeline; }
-    inline const vk::PipelineLayout& GetPipelineLayout() const { return pipelineLayout; }
-    inline const vk::Pipeline& GetGraphicsPipeline() const { return graphicsPipeline; }
+    inline const vk::PipelineLayout& GetPipelineLayout() const override { return pipelineLayout; }
     inline const std::vector<vk::DescriptorSetLayout>& GetDescriptorSetLayouts() const override { return descriptorSetLayouts; }
     inline const std::vector<ShaderBinding>& GetShaderBindings() const override { return shaderBindings; }
 private:
-    GraphicsPipeline();
-
     void CreateDescriptorSetLayouts();
     void DestroyDescriptorSetLayouts();
 

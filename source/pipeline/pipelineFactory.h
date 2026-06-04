@@ -10,6 +10,7 @@
 
 class ComputePipeline;
 class GraphicsPipeline;
+class PipelineBase;
 namespace vk
 {
     class Device;
@@ -50,7 +51,7 @@ class PipelineFactory
 public:
     PipelineFactory(vk::Device* device);
     std::shared_ptr<ComputePipeline> CreateComputePipeline(const std::string& shaderName);
-    std::shared_ptr<GraphicsPipeline> CreateGraphicsPipeline(
+    std::shared_ptr<PipelineBase> CreateGraphicsPipeline(
         vk::RenderPass* renderPass,
         const ShaderVariantKey& shaderVariantKey,
         vk::SampleCountFlagBits sampleCount,

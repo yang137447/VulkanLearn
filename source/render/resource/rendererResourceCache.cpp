@@ -2,13 +2,9 @@
 
 #include <utility>
 
-#include "material.h"
 #include "materialInstance.h"
 #include "render/backend/rendererObjectResourceRegistry.h"
-#include "renderableObject.h"
 #include "render/resource/resourceRetireQueue.h"
-#include "sceneObject.h"
-#include "texture.h"
 
 namespace VL
 {
@@ -59,7 +55,6 @@ void RendererResourceCache::ClearWorldLocalResources()
     RetireResourceMap(materials, "Material", currentWorldGeneration, lastUsedEpoch);
     RetireResourceMap(materialInstances, "MaterialInstance", currentWorldGeneration, lastUsedEpoch);
     RetireResourceMap(objectResources, "ObjectGpuResources", currentWorldGeneration, lastUsedEpoch);
-    RetireResourceMap(sceneObjects, "SceneObject", currentWorldGeneration, lastUsedEpoch);
     RetireResourceMap(textures, "Texture", currentWorldGeneration, lastUsedEpoch);
     retireQueue.CollectCompletedEpoch(retireQueue.GetLastCompletedEpoch());
 }
@@ -73,7 +68,6 @@ RendererResourceCache::WorldLocalResourceSnapshot RendererResourceCache::Capture
     snapshot.materials = materials;
     snapshot.materialInstances = materialInstances;
     snapshot.objectResources = objectResources;
-    snapshot.sceneObjects = sceneObjects;
     snapshot.textures = textures;
     return snapshot;
 }
@@ -87,7 +81,6 @@ void RendererResourceCache::RestoreWorldLocalResources(WorldLocalResourceSnapsho
     materials = std::move(snapshot.materials);
     materialInstances = std::move(snapshot.materialInstances);
     objectResources = std::move(snapshot.objectResources);
-    sceneObjects = std::move(snapshot.sceneObjects);
     textures = std::move(snapshot.textures);
 }
 
@@ -250,28 +243,6 @@ const std::shared_ptr<RendererObjectResourceEntry>* RendererResourceCache::GetOb
     }
 
     return &objectResourceIt->second;
-}
-
-void RendererResourceCache::BindSceneObject(std::string objectName, std::shared_ptr<SceneObject> object)
-{
-    if (!object)
-    {
-        sceneObjects.erase(objectName);
-        return;
-    }
-
-    sceneObjects[std::move(objectName)] = std::move(object);
-}
-
-const std::shared_ptr<SceneObject>* RendererResourceCache::GetSceneObject(std::string_view objectName) const
-{
-    auto sceneObjectIt = sceneObjects.find(std::string(objectName));
-    if (sceneObjectIt == sceneObjects.end())
-    {
-        return nullptr;
-    }
-
-    return &sceneObjectIt->second;
 }
 
 void RendererResourceCache::BindTexture(std::string textureKey, std::shared_ptr<Texture> texture)

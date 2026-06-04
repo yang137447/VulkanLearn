@@ -6,8 +6,8 @@
 #include "../meshAssetTypes.h"
 
 // Converts effective mesh asset JSON into load plans and validates section/material-slot mapping.
-// Input comes from MeshAssetResolver and IModelImporter output; the temporary
-// RendererMeshLoader consumes the result when it creates renderable sections
+// Input comes from MeshAssetResolver and IModelImporter output; RendererMeshLoader
+// consumes the result when it creates renderable sections
 // and loads material instances. It does not read files, import model geometry,
 // create Vulkan resources, fuzzy-match slot names, or repair asset naming.
 class MeshAssetValidator

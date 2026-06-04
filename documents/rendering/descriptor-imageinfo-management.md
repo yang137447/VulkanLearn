@@ -2,14 +2,16 @@
 
 ## 背景
 
-当前仓库在材质贴图和全局贴图上采用了两种不同的管理方式：
+当前仓库在材质贴图、pass 输入贴图和全局渲染贴图上统一采用“资源持有默认描述，descriptor 写入阶段只引用稳定描述”的方式：
 
-- `MaterialInstance` 会在初始化阶段预先生成并缓存自己的 `vk::DescriptorImageInfo`
-- `SceneLoader` 持有的全局贴图在更新 Descriptor Set 时临时拼装 `vk::DescriptorImageInfo`
+- `Texture` 在创建完成后持有默认 `vk::DescriptorImageInfo`
+- `MaterialInstance::GetTextureDescriptorInfo()` 直接返回对应 `Texture` 的默认描述
+- pass / object descriptor 写入通过 `RendererDescriptorContext`、`RendererDescriptorWriter` 和 `RendererObjectResourceManager` 读取稳定描述并提交给 backend
+- `RendererBackendVulkan` 把现有 `vk::WriteDescriptorSet` 映射成 Vulkan device boundary 使用的 `RHIDescriptorWrite`
 
-后者为了保证 `vk::WriteDescriptorSet` 引用的内存生命周期有效，引入了局部 `std::vector<vk::DescriptorImageInfo>` 作为补丁式缓存。这个方案能工作，但代码风格不统一，也让资源描述和绑定逻辑分散在调用点。
+`vk::WriteDescriptorSet` 引用的 image info 不再依赖调用点临时拼装出来的局部对象。若 descriptor writer 需要批量提交，它只在 backend/device boundary 调用范围内复制成提交所需的短生命周期数组，不把补丁式缓存散落到 pass 或 object 代码里。
 
-本文总结 3 种常见思路，并给出当前仓库的推荐方向。
+本文总结 3 种常见思路，并记录当前仓库已经采用的合同。
 
 ## 方案 1: 资源自带描述信息
 
@@ -65,7 +67,7 @@ write.setImageInfo(texture->GetDescriptorInfo());
 - 更灵活
 - 同一张图可以支持多种读取视图
 - 采样器可以复用，不和具体贴图强耦合
-- 更接近大型引擎的底层 RHI 设计
+- 更接近大型引擎的底层资源视图 / backend 设计
 
 ### 缺点
 
@@ -76,7 +78,7 @@ write.setImageInfo(texture->GetDescriptorInfo());
 ### 适用场景
 
 - 需要同一张贴图支持不同 mip 范围、array slice、cube face 或采样状态
-- 已经有比较明确的 RHI / RenderGraph 资源层
+- 已经有比较明确的 Vulkan backend / RenderGraph 资源层
 
 ## 方案 3: Bindless / 全局描述符表
 
@@ -107,37 +109,39 @@ write.setImageInfo(texture->GetDescriptorInfo());
 - 大规模现代渲染架构
 - 已经明确要走 bindless 或 descriptor indexing 路线
 
-## 当前仓库推荐
+## 当前仓库合同
 
-当前仓库最适合采用方案 1。
+当前仓库采用方案 1。
 
 原因：
 
 - `Texture` 已经持有 `image`、`imageView`、`sampler`
 - `MaterialInstance` 本身就已经在做“预先缓存贴图描述信息”这类工作
-- 当前问题主要出在全局贴图没有统一的描述持有位置，而不是架构本身不支持
-- 方案 1 改动范围最小，却能把 `sceneObject.cpp` 和 `renderGraph.cpp` 里的临时补丁逻辑去掉
+- pass 输入和 object descriptor 写入已经通过 renderer descriptor context / writer 显式传递
+- 资源描述和 descriptor 写入逻辑集中在 `Texture`、`MaterialInstance`、`RendererDescriptorWriter`、`RendererObjectResourceManager` 和 Vulkan backend/device boundary
 
-## 当前落地建议
+## 当前落地状态
 
-### 第一步
+### Texture
 
-给 `Texture` 增加默认 `vk::DescriptorImageInfo` 缓存，并提供只读访问接口。
+`Texture` 保存默认 `vk::DescriptorImageInfo`，并通过 `GetDescriptorInfo()` 提供只读访问。
 
-### 第二步
+### Material
 
-在 `Texture` 构造完成时初始化这份缓存。
+`MaterialInstance::GetTextureDescriptorInfo()` 从绑定的 `Texture` 读取描述，不在材质实例里重复创建 image info。
 
-### 第三步
+### Pass / Object Descriptor
 
-把以下调用点切换为直接读取 `Texture` 自带的描述信息：
+`RenderGraph` 和 object descriptor 更新不回读 mutable World，也不依赖已删除的 scene wrapper。当前写入入口是：
 
-- `SceneObject::UpdateDescriptorSet()`
-- `Renderpass::UpdateDescriptorSets()`
+- `RendererDescriptorWriter`
+- `RendererObjectResourceManager`
+- `RendererBackendVulkan::UpdateDescriptorSets()`
+- `RHIDeviceVulkan::UpdateDescriptorSets()`
 
-### 第四步
+### Backend / Device Boundary
 
-删除局部 `std::vector<vk::DescriptorImageInfo>` 这类为保活临时对象而引入的补丁代码。
+`RHIDescriptorWrite` 保持 Vulkan-native descriptor type、buffer info 和 image info。`RHIDescriptorWrite`、`RHIBufferHandle`、`RHIImageHandle` 等名称只表示当前 Vulkan resource lifecycle handle 语境，不引入 API-neutral descriptor 类型。
 
 ## 后续演进建议
 

@@ -8,8 +8,8 @@ namespace VL
 {
 class RendererBackendVulkan;
 
-// Creates global and environment render textures during the transition phase.
-// The resulting Texture objects are registered in RendererResourceCache by
+// Creates global and environment render textures for the current Vulkan
+// renderer resource cache. The resulting Texture objects are registered by
 // binding name so descriptor code can stay independent from scene loading.
 class RendererEnvironmentLoader
 {

@@ -3,6 +3,7 @@
 #include "../vulkanDebug.h"
 #include "pipelineLayoutBuilder.h"
 #include "shaderReflectionService.h"
+#include "vulkanPipelineDiagnostics.h"
 
 ComputePipeline::ComputePipeline(vk::Device* device, const std::string& shaderName)
 {
@@ -23,10 +24,6 @@ ComputePipeline::~ComputePipeline()
     DestroyPipelineLayout();
 }
 
-ComputePipeline::ComputePipeline()
-{
-}
-
 void ComputePipeline::CreateShader()
 {
     const std::string computeShaderPath = CommonFunction::Path(shaderName + "_comp.spv");
@@ -38,7 +35,7 @@ void ComputePipeline::CreateShader()
         .setPCode(reinterpret_cast<const uint32_t*>(computeShaderCode.data()));
 
     vk::Result result = device->createShaderModule(&shaderModuleCreateInfo, nullptr, &shaderModule);
-    assert(result == vk::Result::eSuccess);
+    VL::RequireVulkanPipelineSuccess(result, "Create shader module", shaderName, "compute pipeline");
     VulkanDebug::SetObjectName(*device, shaderModule, vk::ObjectType::eShaderModule, "ShaderModule_Comp: " + shaderName);
 
     shaderBindings = ShaderReflectionService::ReflectComputeFromDebugSpirv(shaderName);
@@ -88,11 +85,11 @@ void ComputePipeline::CreateComputePipeline()
         .setPInitialData(nullptr);
 
     vk::Result result = device->createPipelineCache(&pipelineCacheCreateInfo, nullptr, &pipelineCache);
-    assert(result == vk::Result::eSuccess);
+    VL::RequireVulkanPipelineSuccess(result, "Create pipeline cache", shaderName, "compute pipeline");
     VulkanDebug::SetObjectName(*device, pipelineCache, vk::ObjectType::ePipelineCache, "ComputePipelineCache: " + shaderName);
 
     result = device->createComputePipelines(pipelineCache, 1, &pipelineCreateInfo, nullptr, &computePipeline);
-    assert(result == vk::Result::eSuccess);
+    VL::RequireVulkanPipelineSuccess(result, "Create compute pipeline", shaderName, "compute pipeline");
     VulkanDebug::SetObjectName(*device, computePipeline, vk::ObjectType::ePipeline, "ComputePipeline: " + shaderName);
 }
 

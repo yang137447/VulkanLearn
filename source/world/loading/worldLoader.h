@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 
@@ -15,6 +16,7 @@ struct WorldBuildPlan
     std::string scenePath;
     nlohmann::json sceneJson;
     SceneAssetBuildPlan sceneAssetPlan;
+    std::vector<MeshObjectBuildPlan> meshObjectPlans;
 };
 
 // IO and validation stage for loading a World. It produces a pure build plan;
