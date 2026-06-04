@@ -4,11 +4,33 @@
 #include <shaderc/shaderc.hpp>
 #include <filesystem>
 #include <fstream>
-#include <iostream>
+#include <stdexcept>
 #include <nlohmann/json.hpp>
 
-#include "shaderReflect.h"
 #include "commonFunction.h"
+
+namespace
+{
+bool TryGetShaderKindForExtension(const std::string& shaderExtension, shaderc_shader_kind& kind)
+{
+    if (shaderExtension == "vert")
+    {
+        kind = shaderc_shader_kind::shaderc_vertex_shader;
+        return true;
+    }
+    if (shaderExtension == "frag")
+    {
+        kind = shaderc_shader_kind::shaderc_fragment_shader;
+        return true;
+    }
+    if (shaderExtension == "comp")
+    {
+        kind = shaderc_shader_kind::shaderc_compute_shader;
+        return true;
+    }
+    return false;
+}
+}
 
 shaderc_include_result* Include::GetInclude(const char* requested_source, shaderc_include_type type, const char* requesting_source, size_t include_depth)
 {
@@ -19,8 +41,6 @@ shaderc_include_result* Include::GetInclude(const char* requested_source, shader
     std::string fileFolder = std::filesystem::path(requesting_source).parent_path().string();
     std::string filePath = fileFolder + "/" + requested_source;
 
-    std::cout << std::string(2 * include_depth, ' ') << "->Including file: " << filePath << std::endl;
-    
     // 读取文件内容
     std::string glslCode = CommonFunction::ReadFile(filePath);
     
@@ -53,19 +73,8 @@ void Include::ReleaseInclude(shaderc_include_result* data)
     delete data;
 }
 
-ShaderCompiler::ShaderCompiler()
-{
-}
-
-ShaderCompiler::~ShaderCompiler()
-{
-}
-
 void ShaderCompiler::StartCompile(const std::string& shaderFilePath)
 {
-    std::cout << "Info: "
-              << "start compiled shader: "
-              << std::endl;
     SetShaderPath(shaderFilePath);
     std::filesystem::recursive_directory_iterator glslShaders(glslPath);
     for (const auto &shader : glslShaders)
@@ -85,21 +94,8 @@ void ShaderCompiler::StartCompile(const std::string& shaderFilePath)
             //获取编译后文件路径
             std::string compiledShaderPath = spirvPath + "/" + shaderName + "_" + shaderExtension + "." + "spv";
             std::string compiledDebugShaderPath = spirvPath + "/" + shaderName + "_" + shaderExtension + "." + "debug";
-            if (shaderExtension == "vert")
+            if (!TryGetShaderKindForExtension(shaderExtension, kind))
             {
-                kind = shaderc_shader_kind::shaderc_vertex_shader;
-            }
-            else if (shaderExtension == "frag")
-            {
-                kind = shaderc_shader_kind::shaderc_fragment_shader;
-            }
-            else if (shaderExtension == "comp")
-            {
-                kind = shaderc_shader_kind::shaderc_compute_shader;
-            }
-            else
-            {
-                std::cout << "Unknown shader type: " << glslShaderPath << std::endl;
                 continue;
             }
 
@@ -134,12 +130,6 @@ void ShaderCompiler::StartCompile(const std::string& shaderFilePath)
                 SaveSPIRVToFile(spvDebugCode, compiledDebugShaderPath);
             }
 
-            //ShaderReflect shaderReflect(spvCode);
-
-            std::cout << "Info: "
-                      << "compiled shader: "
-                      << compiledShaderPath
-                      << std::endl;
         }
     }
 }
@@ -205,7 +195,6 @@ void ShaderCompiler::SaveSPIRVToFile(const std::vector<uint32_t>& spirv, const s
     {
         throw std::runtime_error("Failed to open file: " + std::string(spvPath));
     }
-    std::cout << spvPath << spirv.size() * sizeof(uint32_t) << std::endl;
     file.write(reinterpret_cast<const char *>(spirv.data()), spirv.size() * sizeof(uint32_t));
     file.close();
 }
@@ -269,12 +258,6 @@ ShaderCompiler::ShaderVariantCompileResult ShaderCompiler::CompileGraphicsVarian
 
     const std::string vertexShaderSourcePath = glslPath + "/" + shaderVariantKey.shaderName + ".vert";
     const std::string fragmentShaderSourcePath = glslPath + "/" + shaderVariantKey.shaderName + ".frag";
-
-    std::cout << "Info: compiling shader variant "
-              << shaderVariantKey.GetShortDebugString()
-              << " hash="
-              << compileResult.variantHash
-              << std::endl;
 
     const std::string vertexShaderCode = CommonFunction::ReadFile(vertexShaderSourcePath);
     const std::string fragmentShaderCode = CommonFunction::ReadFile(fragmentShaderSourcePath);

@@ -81,7 +81,7 @@ public:
     // resolved scene from the new generation.
     void SetActiveWorld(std::shared_ptr<const VL::World> world);
 private:
-    RenderSystem();
+    RenderSystem() = default;
     void UpdateUBOGlobal(vk::CommandBuffer& commandBuffer);
     void UpdateUBOGlobalForShadow(vk::CommandBuffer& commandBuffer, uint32_t PassSizeWidth, uint32_t PassSizeHeight);
     void RefreshRenderSceneFromActiveWorld();

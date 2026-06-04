@@ -1,7 +1,7 @@
 #include "runtimeResult.h"
 
 // This translation unit keeps the runtime result contract in the build so
-// compile errors surface even before other UE-Lite systems start using it.
+// compile errors surface wherever the shared loading result type is used.
 
 namespace VL
 {

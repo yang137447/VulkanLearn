@@ -8,9 +8,9 @@ The goal is to move texture loading settings out of material instances, while ke
 
 This is not intended to become a full Unreal-style texture importer in V1.
 
-## Current Problem
+## Problem Solved By V1
 
-Material instances currently bind textures directly by image path:
+Before Texture Asset JSON V1, material instances bound textures directly by image path:
 
 ```json
 "textures": {
@@ -26,7 +26,7 @@ The loader then infers texture behavior from the shader binding name:
 - `pbrParamMap` is treated as linear packed data
 - other textures default to sRGB color
 
-This works for the current content, but it makes texture loading rules implicit and easy to mix up when more assets are added.
+That worked for early content, but it made texture loading rules implicit and easy to mix up when more assets were added. Current material instances must reference `T_*.json` texture asset files instead.
 
 ## Texture JSON Format
 
@@ -252,7 +252,7 @@ Without these fields in the cache key, the loader could incorrectly reuse one te
 The following fields are intentionally not part of Texture JSON V1:
 
 - `semantic` or `usage`
-  - not added in V1; `colorSpace` is enough for the first migration step
+  - not added in V1; `colorSpace` is enough for the current texture loading contract
 - `flipY`
   - stays as an engine-side import convention for now
 - full `sampler`
@@ -266,14 +266,14 @@ The following fields are intentionally not part of Texture JSON V1:
 - editor-side color adjustment
   - brightness, saturation, hue, and similar import adjustments are outside the current renderer scope
 
-## Implementation Plan
+## Current Implementation
 
-1. Add a small texture asset description parser.
-2. Extend texture creation options to include `colorSpace`, `mipmaps`, `filter`, and `wrapMode`.
-3. Update `SceneLoader::LoadMaterialInstance` so material texture entries must reference `T_*.json` files.
-4. Add `T_*.json` files for existing project textures.
-5. Move raw image files under `resources/textures/datas/`.
-6. Update material instances to reference texture asset JSON files.
+1. `textureAssetLoader.*` parses texture asset JSON and builds `TextureBindingLoadDesc`.
+2. `Texture::CreateDesc` carries `colorSpace`, `mipmaps`, `filter`, and `wrapMode` into Vulkan texture creation.
+3. `RendererMaterialLoader::LoadMaterialInstance()` requires material texture entries to reference `T_*.json` files.
+4. Texture cache keys include the asset path plus source, transfer, mipmap, filter, and wrap mode state.
+5. Raw image files live under `resources/textures/datas/`.
+6. Material instances bind shader slots to texture asset JSON files, not direct image paths.
 
 ## Design Boundary
 

@@ -72,7 +72,7 @@ public:
 // Frame marking (usually at end of frame)
 #define PROFILE_FRAME() PROFILE_TRACY_FRAME()
 
-// Legacy compatibility
+// Minimal session facade kept for callers that only need scoped profiling macros.
 class Profiler {
 public:
     static Profiler& Instance() {

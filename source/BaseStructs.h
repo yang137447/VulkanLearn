@@ -2,23 +2,29 @@
 
 #include <array>
 #include <cstddef>
-#include <optional>
+#include <vector>
 #include <vulkan/vulkan.hpp>
 #include <Eigen/Dense>
 
-struct QueueFamilyIndices
-{
-    std::optional<uint32_t> graphicsQueue;
-    std::optional<uint32_t> presentQueue;
-};
+#include "render/rhi/rhiResourceHandles.h"
 
 struct Buffer
 {
-  uint32_t bufferSize;
+  uint32_t bufferSize = 0;
+  std::vector<VL::RHIBufferHandle> bufferHandles;
   std::vector<vk::Buffer> buffers;
   std::vector<vk::DeviceMemory> bufferMemories;
   std::vector<void*> buffersMapped;
   std::vector<vk::DescriptorBufferInfo> bufferInfos;
+
+  bool HasResources() const
+  {
+    return !bufferHandles.empty() ||
+      !buffers.empty() ||
+      !bufferMemories.empty() ||
+      !buffersMapped.empty() ||
+      !bufferInfos.empty();
+  }
 };
 
 struct alignas(16) UBOGlobal

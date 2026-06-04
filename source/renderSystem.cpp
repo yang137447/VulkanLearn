@@ -1,12 +1,11 @@
 #include "renderSystem.h"
-#include <iostream>
 #include <limits>
 #include <algorithm>
 #include <array>
 #include <stdexcept>
 #include <string>
 #include "core/runtimeResult.h"
-#include "sceneObject.h"
+#include "sceneNode.h"
 #include "materialInstance.h"
 #include "material.h"
 #include "pipeline/pipelineBase.h"
@@ -25,7 +24,7 @@ namespace
 
 std::shared_ptr<MaterialInstance> GetPassMaterialInstance(const char* passName)
 {
-    auto& renderpasses = RenderGraph::GetInstance().GetRenderpasses();
+    const auto& renderpasses = RenderGraph::GetInstance().GetRenderpasses();
     auto passIt = renderpasses.find(passName);
     if (passIt == renderpasses.end())
     {
@@ -64,9 +63,6 @@ bool SetPassVectorComponent(
 
 } // namespace
 
-RenderSystem::RenderSystem()
-{
-}
 RenderSystem::~RenderSystem()
 {
     ShutdownRenderObject();
@@ -254,9 +250,9 @@ void RenderSystem::UpdateObjectUBOForPass(
     VL::RendererObjectGpuResources& objectResources,
     const VL::RenderDrawPacket& drawPacket)
 {
-    // Object transforms come from the frozen RenderDrawPacket, not from the
-    // mutable SceneObject. The upload path now addresses backend-owned object
-    // GPU resources through the resolved draw packet.
+    // Object transforms come from the frozen RenderDrawPacket. The upload path
+    // addresses backend-owned object GPU resources through the resolved draw
+    // packet.
     frameResources.UpdateObjectUniformBuffer(swapChainImageIndex, objectResources, drawPacket);
 }
 
@@ -487,9 +483,7 @@ void RenderSystem::UpdateUBOGlobalForShadow(vk::CommandBuffer& commandBuffer, ui
 
 RenderSystem::ShadowProjectionParams RenderSystem::CalculateShadowMatrix_DynamicTight(
     const std::vector<Eigen::Vector3f>& pointsInShadowSys,
-    const Eigen::Matrix3f& worldToShadowRotation, // Not used here as points are already transformed? 
-                                                  // Wait, if we want to rotate the box, we need to know the base rotation?
-                                                  // Points are in "Light Aligned World Space" (Shadow Space).
+    const Eigen::Matrix3f& worldToShadowRotation,
     float sceneMaxZ, 
     float sceneZRange)
 {
@@ -558,7 +552,8 @@ RenderSystem::ShadowProjectionParams RenderSystem::CalculateShadowMatrix_Dynamic
 
     Eigen::Vector3f ShadowCameraPositionInShadowSys = Eigen::Vector3f(center2DInShadowSys.x(), center2DInShadowSys.y(), sceneMaxZ);
     
-    // 4. 计算shadowCamera的位置 (World Space)
+    // 4. 计算shadowCamera的位置 (World Space)。pointsInShadowSys 已经在 light-aligned shadow space，
+    // worldToShadowRotation 用于把拟合出的 shadow-space camera 位置和方向转回世界空间。
     Eigen::Vector3f shadowCameraPosition = worldToShadowRotation.transpose() * ShadowCameraPositionInShadowSys;
 
     // 更新Camera
@@ -811,7 +806,7 @@ void RenderSystem::InitializeCurrentRenderSceneResources()
 
 void RenderSystem::RecordAndSubmitCurrentRenderScene()
 {
-    RenderGraph& renderGraph = RenderGraph::GetInstance();
+    const RenderGraph& renderGraph = RenderGraph::GetInstance();
 
     // Backend owns swapchain frame synchronization. RenderSystem only records
     // pass work into the command buffer it receives for this image.

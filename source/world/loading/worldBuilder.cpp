@@ -5,7 +5,7 @@
 #include "commonFunction.h"
 #include "pipeline/environmentSHGenerator.h"
 #include "render/resource/rendererResourceCache.h"
-#include "sceneObject.h"
+#include "sceneNode.h"
 #include "world/loading/worldLoader.h"
 
 namespace VL
@@ -156,7 +156,7 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
         environment.hasBrdfLut = resourceCache.HasGlobalTexture("brdfLut");
 
         const nlohmann::json& objectsJson = worldBuildPlan.sceneJson["objects"];
-        for (const SceneObjectBuildPlan& objectPlan : worldBuildPlan.sceneAssetPlan.objectPlans)
+        for (const SceneAssetObjectPlan& objectPlan : worldBuildPlan.sceneAssetPlan.objectPlans)
         {
             const nlohmann::json& objectJson = objectsJson[objectPlan.objectIndex];
             const std::string& type = objectPlan.objectType;
@@ -195,12 +195,17 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
 
         world->SetEnvironment(environment);
 
-        // Mesh SceneObject instances still come from the renderer resource
-        // cache because they own descriptors and UBOs. Gameplay-owned
-        // camera/light data comes directly from the validated WorldBuildPlan.
-        for (const auto& [objectName, object] : resourceCache.GetSceneObjects())
+        for (const MeshObjectBuildPlan& meshObjectPlan : worldBuildPlan.meshObjectPlans)
         {
-            world->AddSceneObject(objectName, object);
+            WorldMeshObject object;
+            object.debugName = meshObjectPlan.debugName;
+            object.model = meshObjectPlan.model;
+            object.localBoundsMin = meshObjectPlan.localBoundsMin;
+            object.localBoundsMax = meshObjectPlan.localBoundsMax;
+            object.meshKey = meshObjectPlan.meshKey;
+            object.materialKey = meshObjectPlan.materialKey;
+            object.materialInstanceKey = meshObjectPlan.materialInstanceKey;
+            world->AddMeshObject(meshObjectPlan.objectName, std::move(object));
         }
 
         return RuntimeResult<std::shared_ptr<World>>::Success(std::move(world));

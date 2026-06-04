@@ -1,7 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <memory>
-#include <Eigen/Dense>
+#include <string>
 #include <vulkan/vulkan.hpp>
 #include "pipeline/graphicsPipelineBuilder.h"
 #include "shaderVariant.h"
@@ -12,7 +12,7 @@ class PipelineFactory;
 class Material: public std::enable_shared_from_this<Material>
 {
 public:
-    ~Material();
+    ~Material() = default;
     Material(PipelineFactory& pipelineFactory, vk::RenderPass* renderPass, const ShaderVariantKey& shaderVariantKey, const std::string& materialKey, vk::SampleCountFlagBits samples, uint32_t colorAttachmentCount, const GraphicsPipelineStateDesc& pipelineStateDesc = {},
                     bool bIsShadowPass = false);
 
@@ -24,8 +24,6 @@ public:
     const std::shared_ptr<PipelineBase>& GetRenderPipeline() const { return renderPipeline; }
     
 private:
-    Material();
-
     ShaderVariantKey shaderVariantKey;
     std::string materialKey;
     std::shared_ptr<PipelineBase> renderPipeline;

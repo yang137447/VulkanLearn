@@ -2,6 +2,9 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
+
+#include "scene/sceneAssetTypes.h"
 
 class PipelineFactory;
 
@@ -9,6 +12,11 @@ namespace VL
 {
 class RendererBackendVulkan;
 struct WorldBuildPlan;
+
+struct RendererWorldResourceLoadResult
+{
+    std::vector<MeshObjectBuildPlan> meshObjectPlans;
+};
 
 // Coordinates renderer resource loading for one validated WorldBuildPlan.
 // WorldLoader/WorldBuilder own scene IO, validation, camera, lights, and World
@@ -25,7 +33,9 @@ public:
 
     void SetPipelineFactory(PipelineFactory* pipelineFactory);
     void SetRendererBackend(RendererBackendVulkan* rendererBackend);
-    void LoadRendererResources(const WorldBuildPlan& worldBuildPlan, uint64_t ownerGeneration);
+    RendererWorldResourceLoadResult LoadRendererResources(
+        const WorldBuildPlan& worldBuildPlan,
+        uint64_t ownerGeneration);
 
 private:
     RendererResourceLoadCoordinator();

@@ -11,6 +11,7 @@
 #include "controller.h"
 #include "engine/gameInstance.h"
 #include "engine/runtimeCommandExecutor.h"
+#include "engine/runtimeTestHooks.h"
 #include "engine/subsystemCollection.h"
 #include "material/generator/materialParameterIncludeGenerator.h"
 #include "pipeline/pipelineFactory.h"
@@ -34,6 +35,42 @@ namespace
 {
 
 constexpr int RenderGraphRetireDrainFrameBudget = 180;
+
+int CountRequestedEngineLoopTests(const RuntimeCommandExecutionResult& commandResult)
+{
+    int requestedCount = 0;
+    if (commandResult.resizeStressRequested)
+    {
+        ++requestedCount;
+    }
+    if (commandResult.renderGraphReloadStressRequested)
+    {
+        ++requestedCount;
+    }
+    if (commandResult.frameSmokeRequested)
+    {
+        ++requestedCount;
+    }
+    return requestedCount;
+}
+
+std::string FormatRequestedEngineLoopTests(const RuntimeCommandExecutionResult& commandResult)
+{
+    std::string tests;
+    if (commandResult.resizeStressRequested)
+    {
+        tests += tests.empty() ? "resizestress" : ", resizestress";
+    }
+    if (commandResult.renderGraphReloadStressRequested)
+    {
+        tests += tests.empty() ? "graphreloadstress" : ", graphreloadstress";
+    }
+    if (commandResult.frameSmokeRequested)
+    {
+        tests += tests.empty() ? "framesmoke" : ", framesmoke";
+    }
+    return tests;
+}
 
 }
 
@@ -302,6 +339,11 @@ void EngineLoop::Tick()
         GetRuntimeConfig(),
         GetSubsystems().GetDiagnosticsSubsystem());
 
+    StartRequestedEngineLoopTests(commandResult);
+    if (shouldClose)
+    {
+        return;
+    }
     commandResult.activeWorldBeforeCommand = activeWorldBeforeCommand;
 
     if (commandResult.worldChanged)
@@ -540,6 +582,66 @@ void EngineLoop::PollRenderThreadFatalError()
     shouldClose = true;
 }
 
+void EngineLoop::StartRequestedEngineLoopTests(const RuntimeCommandExecutionResult& commandResult)
+{
+    const int requestedTestCount = CountRequestedEngineLoopTests(commandResult);
+    if (requestedTestCount == 0)
+    {
+        return;
+    }
+
+    if (requestedTestCount > 1)
+    {
+        GetSubsystems().GetDiagnosticsSubsystem().ReportError(
+            "Runtime validation command rejected because multiple EngineLoop-owned tests were requested in one frame: " +
+            FormatRequestedEngineLoopTests(commandResult) +
+            ".");
+        if (exitAfterRuntimeTests)
+        {
+            exitCode = 2;
+            shouldClose = true;
+        }
+        return;
+    }
+
+    if (resizeStressActive || graphReloadStressActive || frameSmokeActive)
+    {
+        GetSubsystems().GetDiagnosticsSubsystem().ReportError(
+            "Runtime validation command rejected because an EngineLoop-owned runtime test is already running.");
+        if (exitAfterRuntimeTests)
+        {
+            exitCode = 2;
+            shouldClose = true;
+        }
+        return;
+    }
+
+    if (GetSubsystems().GetRuntimeTestHooks().GetRuntimeTestStatus() == RuntimeTestStatus::Running)
+    {
+        GetSubsystems().GetDiagnosticsSubsystem().ReportError(
+            "Runtime validation command rejected because a runtime test hook is already running.");
+        if (exitAfterRuntimeTests)
+        {
+            exitCode = 2;
+            shouldClose = true;
+        }
+        return;
+    }
+
+    if (commandResult.resizeStressRequested)
+    {
+        StartResizeStress(commandResult.resizeStressCount);
+    }
+    if (commandResult.renderGraphReloadStressRequested)
+    {
+        StartRenderGraphReloadStress(commandResult.renderGraphReloadStressCount);
+    }
+    if (commandResult.frameSmokeRequested)
+    {
+        StartFrameSmokeTest(commandResult.frameSmokeCount);
+    }
+}
+
 RuntimeResult<void> EngineLoop::BindActiveWorldRuntimeObjects(const WorldHandle& worldHandle)
 {
     if (!worldHandle.IsValid())
@@ -577,7 +679,7 @@ RuntimeResult<void> EngineLoop::BindActiveWorldRuntimeObjects(const WorldHandle&
             worldHandle.scenePath));
     }
 
-    controller->SetSceneObject(viewTarget);
+    controller->SetViewTarget(viewTarget);
     GetSubsystems().GetDiagnosticsSubsystem().ReportInfo(
         "Active world bound: " + worldHandle.scenePath);
     return RuntimeResult<void>::Success();

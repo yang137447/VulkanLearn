@@ -1,6 +1,7 @@
 #include "graphicsPipelineBuilder.h"
 #include "../commonFunction.h"
 #include "../vulkanDebug.h"
+#include "vulkanPipelineDiagnostics.h"
 
 GraphicsPipelineBuildResult GraphicsPipelineBuilder::Build(const GraphicsPipelineBuildDesc& desc)
 {
@@ -156,11 +157,11 @@ GraphicsPipelineBuildResult GraphicsPipelineBuilder::Build(const GraphicsPipelin
         .setPInitialData(nullptr);
 
     vk::Result result = desc.device.createPipelineCache(&pipelineCacheCreateInfo, nullptr, &buildResult.pipelineCache);
-    assert(result == vk::Result::eSuccess);
+    VL::RequireVulkanPipelineSuccess(result, "Create pipeline cache", desc.pipelineName, "graphics pipeline");
     VulkanDebug::SetObjectName(desc.device, buildResult.pipelineCache, vk::ObjectType::ePipelineCache, "PipelineCache: " + desc.pipelineName);
 
     result = desc.device.createGraphicsPipelines(buildResult.pipelineCache, 1, &graphicsPipelineCreateInfo, nullptr, &buildResult.graphicsPipeline);
-    assert(result == vk::Result::eSuccess);
+    VL::RequireVulkanPipelineSuccess(result, "Create graphics pipeline", desc.pipelineName, "graphics pipeline");
     VulkanDebug::SetObjectName(desc.device, buildResult.graphicsPipeline, vk::ObjectType::ePipeline, "Pipeline: " + desc.pipelineName);
 
     return buildResult;

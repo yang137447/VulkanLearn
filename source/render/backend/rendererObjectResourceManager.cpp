@@ -63,7 +63,7 @@ void CreateObjectDescriptorSets(
     const auto& pipelineSetLayouts = baseMaterial->GetRenderPipeline()->GetDescriptorSetLayouts();
 
     // Pass descriptors are owned by RenderGraph/Renderpass. Object draw
-    // resources allocate global, material, and object sets for the legacy path.
+    // resources allocate the pipeline sets used by per-object rendering.
     std::vector<vk::DescriptorSetLayout> allocateLayouts;
     for (size_t i = 0; i < pipelineSetLayouts.size(); ++i)
     {
@@ -83,6 +83,8 @@ void CreateObjectDescriptorSets(
     resources.descriptorPool = rendererBackend.CreateDescriptorPool(
         descriptorPoolCreateInfo,
         "DescriptorPool: " + objectName);
+    resources.descriptorPoolHandle =
+        rendererBackend.GetDescriptorPoolHandle(resources.descriptorPool);
 
     vk::DescriptorSetAllocateInfo descriptorSetAllocateInfo;
     descriptorSetAllocateInfo
@@ -90,12 +92,16 @@ void CreateObjectDescriptorSets(
         .setSetLayouts(allocateLayouts);
 
     resources.descriptorSets.resize(swapChainImageCount);
+    resources.descriptorSetHandles.resize(swapChainImageCount);
     for (uint32_t i = 0; i < swapChainImageCount; i++)
     {
         resources.descriptorSets[i].resize(setLayoutCount);
         rendererBackend.AllocateDescriptorSets(descriptorSetAllocateInfo, resources.descriptorSets[i]);
+        resources.descriptorSetHandles[i].resize(resources.descriptorSets[i].size());
         for (uint32_t j = 0; j < setLayoutCount; j++)
         {
+            resources.descriptorSetHandles[i][j] =
+                rendererBackend.GetDescriptorSetHandle(resources.descriptorSets[i][j]);
             rendererBackend.SetDescriptorSetDebugName(
                 resources.descriptorSets[i][j],
                 "DescriptorSet: " + objectName +
@@ -255,6 +261,8 @@ void CreateShadowDescriptorSets(
     resources.shadowDescriptorPool = rendererBackend.CreateDescriptorPool(
         descriptorPoolCreateInfo,
         "DescriptorPool: Shadow: " + objectName);
+    resources.shadowDescriptorPoolHandle =
+        rendererBackend.GetDescriptorPoolHandle(resources.shadowDescriptorPool);
 
     vk::DescriptorSetLayout objectSetLayout = pipelineSetLayouts[ObjectSetIndex];
     std::vector<vk::DescriptorSetLayout> allocateLayouts(swapChainImageCount, objectSetLayout);
@@ -268,10 +276,14 @@ void CreateShadowDescriptorSets(
     rendererBackend.AllocateDescriptorSets(descriptorSetAllocateInfo, allocatedSets);
 
     resources.shadowDescriptorSets.resize(swapChainImageCount);
+    resources.shadowDescriptorSetHandles.resize(swapChainImageCount);
     for (uint32_t i = 0; i < swapChainImageCount; i++)
     {
         resources.shadowDescriptorSets[i].resize(ObjectSetIndex + 1);
         resources.shadowDescriptorSets[i][ObjectSetIndex] = allocatedSets[i];
+        resources.shadowDescriptorSetHandles[i].resize(ObjectSetIndex + 1);
+        resources.shadowDescriptorSetHandles[i][ObjectSetIndex] =
+            rendererBackend.GetDescriptorSetHandle(allocatedSets[i]);
         rendererBackend.SetDescriptorSetDebugName(
             allocatedSets[i],
             "DescriptorSet: Shadow: " + objectName +
@@ -346,19 +358,30 @@ void DestroyObjectDescriptorSets(
     RendererBackendVulkan& rendererBackend,
     RendererObjectGpuResources& resources)
 {
-    if (resources.descriptorSets.empty())
+    if (resources.descriptorSets.empty() &&
+        !resources.descriptorPoolHandle.IsValid() &&
+        !resources.descriptorPool)
     {
         return;
     }
 
-    for (std::vector<vk::DescriptorSet>& set : resources.descriptorSets)
+    if (resources.descriptorPoolHandle.IsValid())
     {
-        for (vk::DescriptorSet& descriptorSet : set)
-        {
-            rendererBackend.FreeDescriptorSet(resources.descriptorPool, descriptorSet);
-        }
+        rendererBackend.DestroyDescriptorPool(resources.descriptorPoolHandle);
+        resources.descriptorPool = nullptr;
     }
-    rendererBackend.DestroyDescriptorPool(resources.descriptorPool);
+    else
+    {
+        for (std::vector<vk::DescriptorSet>& set : resources.descriptorSets)
+        {
+            for (vk::DescriptorSet& descriptorSet : set)
+            {
+                rendererBackend.FreeDescriptorSet(resources.descriptorPool, descriptorSet);
+            }
+        }
+        rendererBackend.DestroyDescriptorPool(resources.descriptorPool);
+    }
+    resources.descriptorSetHandles.clear();
     resources.descriptorSets.clear();
     resources.writeDescriptorSets.clear();
 }
@@ -367,10 +390,16 @@ void DestroyShadowDescriptorSets(
     RendererBackendVulkan& rendererBackend,
     RendererObjectGpuResources& resources)
 {
-    if (resources.shadowDescriptorPool)
+    if (resources.shadowDescriptorPoolHandle.IsValid())
+    {
+        rendererBackend.DestroyDescriptorPool(resources.shadowDescriptorPoolHandle);
+        resources.shadowDescriptorPool = nullptr;
+    }
+    else if (resources.shadowDescriptorPool)
     {
         rendererBackend.DestroyDescriptorPool(resources.shadowDescriptorPool);
     }
+    resources.shadowDescriptorSetHandles.clear();
     resources.shadowDescriptorSets.clear();
     resources.shadowWriteDescriptorSets.clear();
 }
@@ -409,7 +438,7 @@ void RendererObjectResourceManager::ShutdownObjectResources(
 
     DestroyShadowDescriptorSets(*rendererBackend, resources);
     DestroyObjectDescriptorSets(*rendererBackend, resources);
-    if (!resources.objectUniformBuffer.buffers.empty())
+    if (resources.objectUniformBuffer.HasResources())
     {
         rendererBackend->DestroyBufferSet(resources.objectUniformBuffer);
     }

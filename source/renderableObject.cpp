@@ -2,12 +2,7 @@
 #include "vertexDataStruct.h"
 #include "render/backend/rendererBackendVulkan.h"
 
-#include <vulkan/vulkan.hpp>
 #include <cstring>
-
-RenderableObject::RenderableObject()
-{
-}
 
 RenderableObject::RenderableObject(
     std::vector<Vertex> vertices,
@@ -38,7 +33,6 @@ RenderableObject::~RenderableObject()
 
 void RenderableObject::Draw(vk::CommandBuffer &commandBuffer, uint32_t width, uint32_t height)
 {
-    //commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
     vk::Viewport viewport;
     viewport
         .setX(0.0f)
@@ -55,10 +49,8 @@ void RenderableObject::Draw(vk::CommandBuffer &commandBuffer, uint32_t width, ui
             static_cast<uint32_t>(height) });
     commandBuffer.setViewport(0, 1, &viewport);
     commandBuffer.setScissor(0, 1, &scissor);
-    //commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout, 0, descriptorSet, nullptr);
     commandBuffer.bindVertexBuffers(0, 1, &vertexBuffer, &vertexBufferInfo.offset);
     commandBuffer.bindIndexBuffer(indexBuffer, 0, vk::IndexType::eUint32);
-    //commandBuffer.draw(vertices->size(), 1, 0,0);
     commandBuffer.drawIndexed(indices.size(), 1, 0, 0, 0);
 }
 
@@ -76,7 +68,7 @@ void RenderableObject::CreateVertexBuffer()
         "StagingBuffer: Vertex (" + name + ")");
 
     void *data = rendererBackend->MapMemory(stagingBufferMemory, bufferSize);
-    memcpy(data, vertices.data(), static_cast<size_t>(bufferSize));
+    std::memcpy(data, vertices.data(), static_cast<size_t>(bufferSize));
     rendererBackend->UnmapMemory(stagingBufferMemory);
 
     vk::BufferUsageFlags vertexBufferUsage = vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst;
@@ -120,7 +112,7 @@ void RenderableObject::CreateIndexBuffer()
         "StagingBuffer: Index (" + name + ")");
 
     void *data = rendererBackend->MapMemory(stagingBufferMemory, bufferSize);
-    memcpy(data, indices.data(), static_cast<size_t>(bufferSize));
+    std::memcpy(data, indices.data(), static_cast<size_t>(bufferSize));
     rendererBackend->UnmapMemory(stagingBufferMemory);
 
     vk::BufferUsageFlags indexBufferUsage = vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eTransferDst;

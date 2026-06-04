@@ -18,6 +18,8 @@ enum class RuntimeTestOption
     ReloadStress,
     ReloadFailureRollback,
     GeneratedMaterialFailureRollback,
+    GeneratedMeshFailureRollback,
+    GeneratedTextureFailureRollback,
     GeneratedHighLightReloadStress,
     ResizeStress,
     RenderGraphReloadStress,
@@ -49,42 +51,86 @@ bool TryParsePositiveInt(const std::string& value, int& outNumber)
     }
 }
 
-bool HasRuntimeTest(const LaunchOptions& options, RuntimeTestOption excludedOption)
+std::string GetRuntimeTestOptionName(RuntimeTestOption option)
+{
+    switch (option)
+    {
+    case RuntimeTestOption::ReloadStress:
+        return "--reloadstress";
+    case RuntimeTestOption::ReloadFailureRollback:
+        return "--reloadfail";
+    case RuntimeTestOption::GeneratedMaterialFailureRollback:
+        return "--reloadfail-material";
+    case RuntimeTestOption::GeneratedMeshFailureRollback:
+        return "--reloadfail-mesh";
+    case RuntimeTestOption::GeneratedTextureFailureRollback:
+        return "--reloadfail-texture";
+    case RuntimeTestOption::GeneratedHighLightReloadStress:
+        return "--lightstress";
+    case RuntimeTestOption::ResizeStress:
+        return "--resizestress";
+    case RuntimeTestOption::RenderGraphReloadStress:
+        return "--graphreloadstress";
+    case RuntimeTestOption::FrameSmoke:
+        return "--framesmoke";
+    case RuntimeTestOption::None:
+        break;
+    }
+
+    return {};
+}
+
+RuntimeTestOption FindRuntimeTest(const LaunchOptions& options, RuntimeTestOption excludedOption)
 {
     if (excludedOption != RuntimeTestOption::ReloadStress && options.runReloadStress)
     {
-        return true;
+        return RuntimeTestOption::ReloadStress;
     }
     if (excludedOption != RuntimeTestOption::ReloadFailureRollback &&
         options.runReloadFailureRollbackTest)
     {
-        return true;
+        return RuntimeTestOption::ReloadFailureRollback;
     }
     if (excludedOption != RuntimeTestOption::GeneratedMaterialFailureRollback &&
         options.runGeneratedMaterialFailureRollbackTest)
     {
-        return true;
+        return RuntimeTestOption::GeneratedMaterialFailureRollback;
+    }
+    if (excludedOption != RuntimeTestOption::GeneratedMeshFailureRollback &&
+        options.runGeneratedMeshFailureRollbackTest)
+    {
+        return RuntimeTestOption::GeneratedMeshFailureRollback;
+    }
+    if (excludedOption != RuntimeTestOption::GeneratedTextureFailureRollback &&
+        options.runGeneratedTextureFailureRollbackTest)
+    {
+        return RuntimeTestOption::GeneratedTextureFailureRollback;
     }
     if (excludedOption != RuntimeTestOption::GeneratedHighLightReloadStress &&
         options.runGeneratedHighLightReloadStress)
     {
-        return true;
+        return RuntimeTestOption::GeneratedHighLightReloadStress;
     }
     if (excludedOption != RuntimeTestOption::ResizeStress && options.runResizeStress)
     {
-        return true;
+        return RuntimeTestOption::ResizeStress;
     }
     if (excludedOption != RuntimeTestOption::RenderGraphReloadStress &&
         options.runRenderGraphReloadStress)
     {
-        return true;
+        return RuntimeTestOption::RenderGraphReloadStress;
     }
     if (excludedOption != RuntimeTestOption::FrameSmoke && options.runFrameSmokeTest)
     {
-        return true;
+        return RuntimeTestOption::FrameSmoke;
     }
 
-    return false;
+    return RuntimeTestOption::None;
+}
+
+bool HasRuntimeTest(const LaunchOptions& options, RuntimeTestOption excludedOption)
+{
+    return FindRuntimeTest(options, excludedOption) != RuntimeTestOption::None;
 }
 
 bool RejectRuntimeTestConflict(
@@ -92,12 +138,17 @@ bool RejectRuntimeTestConflict(
     const std::string& optionName,
     RuntimeTestOption currentOption)
 {
-    if (!HasRuntimeTest(options, currentOption))
+    const RuntimeTestOption existingOption = FindRuntimeTest(options, currentOption);
+    if (existingOption == RuntimeTestOption::None)
     {
         return false;
     }
 
-    options.errorMessage = optionName + " cannot be combined with another runtime test.";
+    options.errorMessage =
+        optionName +
+        " cannot be combined with " +
+        GetRuntimeTestOptionName(existingOption) +
+        ". Runtime tests must run one at a time because shader/SPIR-V outputs are shared.";
     return true;
 }
 
@@ -208,6 +259,34 @@ LaunchOptions ParseLaunchOptions(int argc, char** argv)
             continue;
         }
 
+        if (argument == "--reloadfail-mesh")
+        {
+            if (RejectRuntimeTestConflict(
+                options,
+                "--reloadfail-mesh",
+                RuntimeTestOption::GeneratedMeshFailureRollback))
+            {
+                return options;
+            }
+
+            options.runGeneratedMeshFailureRollbackTest = true;
+            continue;
+        }
+
+        if (argument == "--reloadfail-texture")
+        {
+            if (RejectRuntimeTestConflict(
+                options,
+                "--reloadfail-texture",
+                RuntimeTestOption::GeneratedTextureFailureRollback))
+            {
+                return options;
+            }
+
+            options.runGeneratedTextureFailureRollbackTest = true;
+            continue;
+        }
+
         if (argument == "--lightstress")
         {
             if (RejectRuntimeTestConflict(
@@ -311,7 +390,7 @@ LaunchOptions ParseLaunchOptions(int argc, char** argv)
     if (options.exitAfterTests &&
         !HasRuntimeTest(options, RuntimeTestOption::None))
     {
-        options.errorMessage = "--exit-after-tests requires --reloadstress, --reloadfail, --reloadfail-material, --lightstress, --resizestress, --graphreloadstress, or --framesmoke.";
+        options.errorMessage = "--exit-after-tests requires --reloadstress, --reloadfail, --reloadfail-material, --reloadfail-mesh, --reloadfail-texture, --lightstress, --resizestress, --graphreloadstress, or --framesmoke.";
     }
     return options;
 }
@@ -322,6 +401,8 @@ void PrintLaunchUsage()
         << "Usage: main.exe [--reloadstress <scene-path> [count] --exit-after-tests]\n"
         << "       main.exe [--reloadfail <scene-path> --exit-after-tests]\n"
         << "       main.exe [--reloadfail-material --exit-after-tests]\n"
+        << "       main.exe [--reloadfail-mesh --exit-after-tests]\n"
+        << "       main.exe [--reloadfail-texture --exit-after-tests]\n"
         << "       main.exe [--lightstress [count] --exit-after-tests]\n"
         << "       main.exe [--resizestress [count] --exit-after-tests]\n"
         << "       main.exe [--graphreloadstress [count] --exit-after-tests]\n"
@@ -329,6 +410,8 @@ void PrintLaunchUsage()
         << "  --reloadstress <scene-path> [count]  Queue world reload stress through CommandBus.\n"
         << "  --reloadfail <scene-path>            Verify failed reload preserves active World.\n"
         << "  --reloadfail-material                Generate bad material fixture and verify rollback.\n"
+        << "  --reloadfail-mesh                    Generate bad mesh fixture and verify rollback.\n"
+        << "  --reloadfail-texture                 Generate bad texture fixture and verify rollback.\n"
         << "  --lightstress [count]                Generate a high-light scene and reload it to test light SSBO growth.\n"
         << "  --resizestress [count]               Recreate swapchain and graph resources across window sizes.\n"
         << "  --graphreloadstress [count]          Reload frame graph GPU resources through retire queue.\n"
@@ -359,6 +442,26 @@ void QueueLaunchCommands(EngineLoop& engineLoop, const LaunchOptions& options)
         return;
     }
 
+    if (options.runGeneratedMeshFailureRollbackTest)
+    {
+        RuntimeCommand command;
+        command.type = RuntimeCommandType::RunGeneratedMeshFailureRollbackTest;
+        command.sourceText = "argv: --reloadfail-mesh";
+        engineLoop.QueueRuntimeCommand(std::move(command));
+        engineLoop.SetExitAfterRuntimeTests(options.exitAfterTests);
+        return;
+    }
+
+    if (options.runGeneratedTextureFailureRollbackTest)
+    {
+        RuntimeCommand command;
+        command.type = RuntimeCommandType::RunGeneratedTextureFailureRollbackTest;
+        command.sourceText = "argv: --reloadfail-texture";
+        engineLoop.QueueRuntimeCommand(std::move(command));
+        engineLoop.SetExitAfterRuntimeTests(options.exitAfterTests);
+        return;
+    }
+
     if (options.runReloadStress)
     {
         RuntimeCommand command;
@@ -384,21 +487,33 @@ void QueueLaunchCommands(EngineLoop& engineLoop, const LaunchOptions& options)
 
     if (options.runResizeStress)
     {
-        engineLoop.StartResizeStress(options.resizeStressCount);
+        RuntimeCommand command;
+        command.type = RuntimeCommandType::RunResizeStress;
+        command.intValue = options.resizeStressCount;
+        command.sourceText = "argv: --resizestress";
+        engineLoop.QueueRuntimeCommand(std::move(command));
         engineLoop.SetExitAfterRuntimeTests(options.exitAfterTests);
         return;
     }
 
     if (options.runRenderGraphReloadStress)
     {
-        engineLoop.StartRenderGraphReloadStress(options.graphReloadStressCount);
+        RuntimeCommand command;
+        command.type = RuntimeCommandType::RunRenderGraphReloadStress;
+        command.intValue = options.graphReloadStressCount;
+        command.sourceText = "argv: --graphreloadstress";
+        engineLoop.QueueRuntimeCommand(std::move(command));
         engineLoop.SetExitAfterRuntimeTests(options.exitAfterTests);
         return;
     }
 
     if (options.runFrameSmokeTest)
     {
-        engineLoop.StartFrameSmokeTest(options.frameSmokeCount);
+        RuntimeCommand command;
+        command.type = RuntimeCommandType::RunFrameSmokeTest;
+        command.intValue = options.frameSmokeCount;
+        command.sourceText = "argv: --framesmoke";
+        engineLoop.QueueRuntimeCommand(std::move(command));
         engineLoop.SetExitAfterRuntimeTests(options.exitAfterTests);
     }
 }

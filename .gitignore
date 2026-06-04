@@ -2,6 +2,7 @@
 /build
 /.vscode
 /.cache
+/artifacts
 /shader/spv
 /shader/glsl/**/generate/
 /resources/*

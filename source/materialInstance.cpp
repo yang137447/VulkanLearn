@@ -1,42 +1,37 @@
 #include "materialInstance.h"
 #include "texture.h"
 #include "material.h"
-#include "pipeline/graphicsPipeline.h"
 #include "render/backend/rendererBackendVulkan.h"
-#include "shaderReflect.h"
 
-MaterialInstance::MaterialInstance()
-{
-}
 MaterialInstance::~MaterialInstance()
 {
     DestroyUniformBuffers();
 }
 void MaterialInstance::SetParameter(const std::string& parameterName, const float& value)
 {
-    uint32_t size = parameters.size();
-    parameters[parameterName] = ParamMap(ParamType::Float, size);
+    ClearParameterValues(parameterName);
+    parameters.insert_or_assign(parameterName, ParamMap(ParamType::Float));
     floatParameters[parameterName] = value;
 }
 
 void MaterialInstance::SetParameter(const std::string& parameterName, const Eigen::Vector2f& value)
 {
-    uint32_t size = parameters.size();
-    parameters[parameterName] = ParamMap(ParamType::Vec2, size);
+    ClearParameterValues(parameterName);
+    parameters.insert_or_assign(parameterName, ParamMap(ParamType::Vec2));
     vec2Parameters[parameterName] = value;
 }
 
 void MaterialInstance::SetParameter(const std::string& parameterName, const Eigen::Vector3f& value)
 {
-    uint32_t size = parameters.size();
-    parameters[parameterName] = ParamMap(ParamType::Vec3, size);
+    ClearParameterValues(parameterName);
+    parameters.insert_or_assign(parameterName, ParamMap(ParamType::Vec3));
     vec3Parameters[parameterName] = value;
 }
 
 void MaterialInstance::SetParameter(const std::string& parameterName, const Eigen::Vector4f& value)
 {
-    uint32_t size = parameters.size();
-    parameters[parameterName] = ParamMap(ParamType::Vec4, size);
+    ClearParameterValues(parameterName);
+    parameters.insert_or_assign(parameterName, ParamMap(ParamType::Vec4));
     vec4Parameters[parameterName] = value;
 }
 
@@ -45,9 +40,12 @@ bool MaterialInstance::HasParameter(const std::string& parameterName) const
     return parameters.find(parameterName) != parameters.end();
 }
 
-void MaterialInstance::RemoveParameter(const std::string& parameterName)
+void MaterialInstance::ClearParameterValues(const std::string& parameterName)
 {
-    parameters.erase(parameterName);
+    floatParameters.erase(parameterName);
+    vec2Parameters.erase(parameterName);
+    vec3Parameters.erase(parameterName);
+    vec4Parameters.erase(parameterName);
 }
 
 void MaterialInstance::SetTexture(const std::string& textureName, const std::shared_ptr<Texture>& texture)
@@ -55,7 +53,7 @@ void MaterialInstance::SetTexture(const std::string& textureName, const std::sha
     textures[textureName] = texture;
 }
 
-const std::shared_ptr<Texture> MaterialInstance::GetTexture(const std::string& textureName) const
+std::shared_ptr<Texture> MaterialInstance::GetTexture(const std::string& textureName) const
 {
     auto it = textures.find(textureName);
     if (it != textures.end())
@@ -72,12 +70,17 @@ bool MaterialInstance::HasTexture(const std::string& textureName) const
 
 const vk::DescriptorImageInfo& MaterialInstance::GetTextureDescriptorInfo(const std::string& textureName) const
 {
-    return textures.at(textureName)->GetDescriptorInfo();
-}
+    auto it = textures.find(textureName);
+    if (it == textures.end() || it->second == nullptr)
+    {
+        throw std::runtime_error(
+            "Texture binding not found in material instance '" +
+            materialInstanceName +
+            "': " +
+            textureName);
+    }
 
-void MaterialInstance::RemoveTexture(const std::string& textureName)
-{
-    textures.erase(textureName);
+    return it->second->GetDescriptorInfo();
 }
 
 void MaterialInstance::RenderInitialize(VL::RendererBackendVulkan& rendererBackend)
@@ -111,7 +114,7 @@ void MaterialInstance::CreateUniformBuffers()
         // Materials without a material UBO have no per-instance parameter
         // buffer to create. Descriptor planning decides whether a UBO binding
         // is actually required for the shader.
-        if (!uboMaterialInstance.buffers.empty())
+        if (uboMaterialInstance.HasResources())
         {
             rendererBackend->DestroyBufferSet(uboMaterialInstance);
         }
@@ -131,7 +134,7 @@ void MaterialInstance::CreateUniformBuffers()
 }
 void MaterialInstance::DestroyUniformBuffers()
 {
-    if (!renderInitialized && uboMaterialInstance.buffers.empty())
+    if (!renderInitialized && !uboMaterialInstance.HasResources())
     {
         return;
     }
@@ -146,7 +149,7 @@ void MaterialInstance::DestroyUniformBuffers()
 
 void MaterialInstance::SetupDescriptors()
 {
-    if (uboMaterialInstance.buffers.empty())
+    if (!uboMaterialInstance.HasResources())
     {
         return;
     }

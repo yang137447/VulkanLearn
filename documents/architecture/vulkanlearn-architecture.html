@@ -277,7 +277,7 @@
             <a href="#patterns">5. 设计模式与使用边界</a>
             <a href="#engine-platform">6. Platform / Engine / Input</a>
             <a href="#asset-material">7. Asset / Material / Shader</a>
-            <a href="#renderer-rhi">8. Renderer / RHI / FrameGraph</a>
+            <a href="#renderer-vulkan-backend">8. Renderer / Vulkan Backend / FrameGraph</a>
             <a href="#tooling">9. Config / Debug / Test</a>
             <a href="#ownership">10. 模块职责与所有权</a>
             <a href="#data">11. 核心数据模型</a>
@@ -287,10 +287,11 @@
             <a href="#lifecycle">15. 生命周期时序</a>
             <a href="#resources">16. 资源与 GPU 生命周期</a>
             <a href="#contracts">17. 核心接口契约</a>
-            <a href="#migration">18. 代码迁移蓝图</a>
+            <a href="#code-cutover">18. 代码收尾蓝图</a>
             <a href="#adapter">19. 一次性 Cutover 清单</a>
             <a href="#acceptance">20. 验收矩阵</a>
             <a href="#milestone">21. 里程碑与风险</a>
+            <a href="#ue-lite-completion">22. UE-Lite 完成基线</a>
         </nav>
     </aside>
 
@@ -303,10 +304,13 @@
                 <span class="chip">可选 Render Thread（只读快照）</span>
                 <span class="chip">WorldSubsystem 生命周期跟随 World</span>
                 <span class="chip">无过渡期，直接全量重构切换</span>
+                <span class="chip">Vulkan 唯一图形 API</span>
+                <span class="chip">无 API-neutral 设备过渡封装</span>
             </div>
-            <p class="muted">这 5 条是后续所有设计讨论的硬边界，新增方案不能违反它们。</p>
-            <p class="summary">本文档描述 VulkanLearn V1 的正式架构、当前落地进度和后续切换门槛。它的作用是把 <code>main.cpp</code>、<code>engineLoop.*</code>、<code>rendererResourceLoadCoordinator.*</code>、<code>renderSystem.*</code>、<code>renderGraph.*</code> 等现有职责重新划入稳定边界。</p>
-            <p class="rule">代码命名约定：<code>UE-Lite</code> 只作为前期架构路线名和文档背景，不进入 C++ namespace。引擎侧新增代码统一放入 <code>VL</code> namespace，表示 Vulkan Learn / Vulkan Lite。</p>
+            <p class="muted">这些约束是后续所有设计讨论的硬边界，新增方案不能违反它们。</p>
+            <p class="summary">本文档描述 VulkanLearn V1 的正式架构、当前完成基线和后续演进门槛。它的作用是把 <code>main.cpp</code>、<code>engineLoop.*</code>、<code>rendererResourceLoadCoordinator.*</code>、<code>renderSystem.*</code>、<code>renderGraph.*</code> 等现有职责重新划入稳定边界。</p>
+            <p class="rule">代码命名约定：<code>UE-Lite</code> 只作为前期架构路线名、文档背景和验收脚本名，不进入 C++ namespace。引擎侧新增代码统一放入 <code>VL</code> namespace，表示 Vulkan Learn / Vulkan Lite。</p>
+            <p class="rule">2026-06-04 同步结论：旧 <code>RHIDevice</code> 抽象接口和早期 tutorial render path 已从当前架构基线移除；<code>source/render/rhi/vulkan/rhiDeviceVulkan.*</code> 保留为 concrete Vulkan device boundary，<code>RHIBufferHandle</code>、<code>RHIImageHandle</code> 等 handle 只表示 Vulkan 资源生命周期 identity。后续扩展默认直接扩展 Vulkan-native backend / device boundary，不增加 DirectX/Metal/OpenGL 预留层、mock backend 或 API-neutral enum/createInfo/descriptor wrapper。</p>
         </section>
 
         <section id="scope">
@@ -329,12 +333,15 @@
                         <li>不引入 UObject、反射系统、GC、编辑器、蓝图、Cook/DDC 全套内容管线。</li>
                         <li>不把 Actor/Component 做成复杂 ECS；保留学习项目可读性。</li>
                         <li>不并行维护旧 scene/resource 执行路径和新 World 执行路径。</li>
+                        <li>不把 <code>RHIDeviceVulkan</code> 或 lifecycle handle 扩展成跨图形 API 的过渡封装。</li>
                         <li>不在 shader 或每帧路径加入冗余防御逻辑；数据正确性由 JSON 校验和构建期保证。</li>
+                        <li>不把学习注释、必要报错、调试入口或仍有明确用途的 public 方法当作冗余清理掉。</li>
                         <li>不借这次重构顺手改渲染算法、材质格式或资源目录命名。</li>
                     </ul>
                 </div>
             </div>
             <p class="rule">设计原则：先把生命周期、所有权和数据边界固定，再在稳定边界内继续扩展渲染特性。</p>
+            <p class="rule">优化判定：冗余指旧执行路径、重复 owner、无调用且无计划用途的 API、以及会掩盖数据错误的 silent fallback；不包括用于学习 Vulkan/引擎边界的短注释、定位失败所需的结构化错误、debug/profiling/test hook、或已经进入架构合同的方法。</p>
         </section>
 
         <section id="component">
@@ -619,11 +626,11 @@
                     <tr>
                         <td>4B. Asset & Resource</td>
                         <td>AssetManager、ShaderLibrary、MaterialLibrary、ResourceCache、TextureUpload、RetireQueue。</td>
-                        <td>Asset 输出描述；GPU 对象创建/释放由资源和 RHI 边界处理。</td>
+                        <td>Asset 输出描述；GPU 对象创建/释放由资源和 Vulkan device boundary 处理；pipeline Vulkan object 创建失败必须保留 operation、pipeline/shader 名称和 Vulkan result，不能只依赖 assert。</td>
                     </tr>
                     <tr>
                         <td>4C. Renderer</td>
-                        <td>RendererFrontend、RenderScene、FrameGraphCompiler、PassRuntime、Backend、RHI、Swapchain。</td>
+                        <td>RendererFrontend、RenderScene、FrameGraphCompiler、PassRuntime、Backend、Vulkan Device Boundary、Swapchain。</td>
                         <td>只读 snapshot/render DTO，不反向读取 mutable World。</td>
                     </tr>
                     <tr>
@@ -637,7 +644,7 @@
 
         <section id="system-map">
             <h2>4) 非 World 系统总览</h2>
-            <p class="summary">World 是架构核心之一，但不是全部。完整 V1 需要同时定义 Platform、Engine Host、Input、Console、Asset、Material、Shader、Renderer、RHI、Config、Debug/Test 的边界。否则 World 拆干净以后，耦合会转移到别的单例里。</p>
+            <p class="summary">World 是架构核心之一，但不是全部。完整 V1 需要同时定义 Platform、Engine Host、Input、Console、Asset、Material、Shader、Renderer、Vulkan Backend、Config、Debug/Test 的边界。否则 World 拆干净以后，耦合会转移到别的单例里。</p>
             <table>
                 <thead>
                     <tr>
@@ -685,7 +692,7 @@
                         <td><code>shaderCompiler.*</code>、<code>material/*</code>、<code>PipelineFactory</code></td>
                     </tr>
                     <tr>
-                        <td>Renderer / RHI</td>
+                        <td>Renderer / Vulkan Backend</td>
                         <td>分离渲染数据组织、frame graph 编译、Vulkan 提交和底层设备封装。</td>
                         <td><code>RendererFrontend</code>、<code>FrameGraphCompiler</code>、<code>RendererBackendVulkan</code>、<code>RHIDeviceVulkan</code></td>
                         <td><code>renderSystem.*</code>、<code>renderGraph.*</code>、<code>vulkanManager.*</code></td>
@@ -770,14 +777,14 @@
                     </tr>
                     <tr>
                         <td><strong>RAII</strong></td>
-                        <td>RHI wrapper、GPU buffer/image、descriptor pool、render pass、framebuffer</td>
+                        <td>Vulkan device boundary、GPU buffer/image/image view/sampler、descriptor pool/set、render pass、framebuffer</td>
                         <td>让 C++ 对象表达 Vulkan 资源 ownership，减少泄漏和重复 destroy。</td>
                         <td>RAII 析构不能无视 GPU in-flight；需要结合 <code>ResourceRetireQueue</code>。</td>
                     </tr>
                     <tr>
-                        <td><strong>Bridge</strong></td>
-                        <td>Renderer frontend/backend 与 RHI Vulkan 后端</td>
-                        <td>让渲染意图和 Vulkan 实现分离，未来保留替换 RHI 或 mock backend 的空间。</td>
+                        <td><strong>Boundary Facade</strong></td>
+                        <td>Renderer frontend/backend 与 Vulkan device boundary</td>
+                        <td>让渲染意图、frame policy 和底层 VulkanManager/global device state 分离，保留 Vulkan 学习项目的原生 API 表达。</td>
                         <td>V1 只有 Vulkan 实现，不为了“多后端想象”提前制造复杂接口层。</td>
                     </tr>
                     <tr>
@@ -815,8 +822,8 @@
                         <td>Asset/Material/Shader library 用 key 查询和复用；Factory 创建 pipeline；Validator 在构建期报告绑定错误。</td>
                     </tr>
                     <tr>
-                        <td>Renderer / RHI</td>
-                        <td>Facade、Bridge、Builder、RAII、Strategy</td>
+                        <td>Renderer / Vulkan Backend</td>
+                        <td>Facade、Boundary、Builder、RAII、Strategy</td>
                         <td>Frontend/Backend 分离；FrameGraph 编译 pass plan；Vulkan wrapper 管理资源；少数算法用 Strategy 显式切换。</td>
                     </tr>
                     <tr>
@@ -860,7 +867,7 @@
                     <tr>
                         <td>Abstract Factory</td>
                         <td>V1 不做完整多后端抽象工厂。</td>
-                        <td>当前只有 Vulkan 后端。先保留 RHI Bridge 边界，等真实第二后端或 mock 后端出现再扩展。</td>
+                        <td>Vulkan 是当前唯一图形 API。保留 Vulkan device boundary 管住全局 device/swapchain/queue 访问，不再以第二后端、mock backend 或 API-neutral backend abstraction 作为 V1 收尾目标。</td>
                     </tr>
                     <tr>
                         <td>ECS / Data-Oriented Framework</td>
@@ -936,7 +943,7 @@
 
         <section id="asset-material">
             <h2>7) Asset / Material / Shader</h2>
-            <p class="muted">这部分是 World 与 Renderer 之间最容易重新耦合的区域。V1 要把“资产解析”和“GPU 可用资源”拆成两层：Asset 层输出描述，Resource/RHI 层负责创建和释放。</p>
+            <p class="muted">这部分是 World 与 Renderer 之间最容易重新耦合的区域。V1 要把“资产解析”和“GPU 可用资源”拆成两层：Asset 层输出描述，Resource / Vulkan Backend 层负责创建和释放。</p>
             <table>
                 <thead>
                     <tr>
@@ -988,11 +995,15 @@
   -> RendererFrontend builds binding requests
   -> FrameGraph/Backend writes descriptor sets</code></pre>
             <p class="rule">绑定规则：shader reflection 是材质参数和 descriptor binding 的真实裁判；JSON 负责提供正确数据，运行时渲染路径不做重复兜底。</p>
+            <p class="rule">数据正确性边界：scene object <code>type</code> 必须在 scene validation 阶段识别；mesh asset <code>materialSlots</code> 必须是非空有序数组，并且数量与源模型 material slot 数一致。未知 scene object type、缺失 slot、slot 数不一致或 section 无法按源 slot 序号映射，都应加载失败；禁止用 unsafe fallback material 或 renderer 侧静默跳过掩盖资产错误。</p>
+            <p class="rule">加载错误域：scene / mesh validation 失败在 <code>WorldLoader</code> 边界归类为 <code>Scene.LoadFailed</code> 或 <code>Mesh.LoadFailed</code>；renderer resource load 阶段失败在 <code>WorldTransitionCoordinator</code> 边界归类为 <code>Material.LoadFailed</code>、<code>Texture.LoadFailed</code>、<code>Mesh.LoadFailed</code>、<code>Shader.LoadFailed</code> 或保底 <code>WorldTransition.LoadFailed</code>。</p>
         </section>
 
-        <section id="renderer-rhi">
-            <h2>8) Renderer / RHI / FrameGraph</h2>
-            <p class="muted">Renderer 不是一个大类，而是三段：Frontend 组织渲染数据，FrameGraph 编译 pass/resource，Backend/RHI 执行 Vulkan。</p>
+        <section id="renderer-vulkan-backend">
+            <h2>8) Renderer / Vulkan Backend / FrameGraph</h2>
+            <p class="muted">Renderer 不是一个大类，而是三段：Frontend 组织渲染数据，FrameGraph 编译 pass/resource，Backend / Vulkan device boundary 执行 Vulkan。</p>
+            <p class="rule">图形 API 策略：VulkanLearn V1 以 Vulkan 作为唯一图形 API。代码中保留的 <code>RHIDeviceVulkan</code>、<code>RHIBufferHandle</code> 等名称是历史命名和资源生命周期 handle 语境，不代表跨 DirectX/Metal/OpenGL 的抽象层；后续扩展优先增加 Vulkan-native backend 能力，而不是把 <code>vk::*</code> enum、createInfo 或 descriptor info 包成 API-neutral 类型。</p>
+            <p class="rule">渲染设备边界处置状态：已删除旧 <code>source/render/rhi/rhiDevice.h</code> 虚接口；当前 <code>source/render/rhi/</code> 目录只承载 Vulkan device boundary 与 lifecycle handle 定义。若以后清理命名，应作为一次机械命名迁移单独处理，而不是借机恢复多后端抽象。</p>
             <table>
                 <thead>
                     <tr>
@@ -1011,7 +1022,7 @@
                     </tr>
                     <tr>
                         <td><code>ResolvedRenderSceneBuilder</code></td>
-                        <td>当前实现中的后端过渡层：把 <code>RenderScene</code> 的逻辑 handle 解析成现有 Vulkan draw path 需要的 material、materialInstance、renderable object 与 backend object resource entry；resolved draw packet 不再保留 <code>SceneObject</code> 引用。</td>
+                        <td>当前实现中的后端解析层：把 <code>RenderScene</code> 的逻辑 handle 解析成当前 Vulkan draw path 需要的 material、materialInstance、renderable object 与 backend object resource entry；resolved draw packet 不再保留 <code>SceneObject</code> 引用。</td>
                         <td>RenderScene、RendererResourceCache</td>
                         <td>ResolvedRenderScene；包含 resolved draw packet 与 backend object resource entry</td>
                     </tr>
@@ -1023,27 +1034,27 @@
                     </tr>
                     <tr>
                         <td><code>PassRuntime</code></td>
-                        <td>按 pass 类型录制 shadow、geometry、post-process 工作；当前 <code>source/render/pass/passRuntime.*</code> 已接管 pass 分派、执行 compiled barrier plan 和 begin/end render pass。shadow / geometry 的对象 draw 循环已抽到 backend 侧 <code>RendererDrawExecutor</code>，executor 直接消费 <code>ResolvedDrawPacket</code> 中的 renderable handle 和 <code>RendererObjectResourceEntry</code>，PassRuntime 不再直接遍历 legacy <code>SceneObject</code> draw path。</td>
+                        <td>按 pass 类型录制 shadow、geometry、post-process 工作；当前 <code>source/render/pass/passRuntime.*</code> 已接管 pass 分派、执行 compiled barrier plan 和 begin/end render pass。shadow / geometry 的对象 draw 循环已抽到 backend 侧 <code>RendererDrawExecutor</code>，executor 直接消费 <code>ResolvedDrawPacket</code> 中的 renderable handle 和 <code>RendererObjectResourceEntry</code>，PassRuntime 不再直接遍历 <code>SceneObject</code> draw path。</td>
                         <td>Renderpass、RenderScene、ResolvedRenderScene、swapchain image index、frame resource 更新服务</td>
                         <td>写入当前帧 command buffer；对象 draw 执行交给 backend executor，object GPU resources 已由 backend object resource entry 承接</td>
                     </tr>
                     <tr>
                         <td><code>RendererFrameResources</code></td>
-                        <td>持有按 swapchain image 分配的 frame-local GPU buffer 和 descriptor info；当前 <code>source/render/backend/rendererFrameResources.*</code> 已接管 global UBO 与 light SSBO 的创建、释放、descriptor infos、更新和必要 barrier，并集中处理 material instance UBO 与 object UBO 的写入；descriptor info 由 <code>RenderSystem</code> 组装成 <code>RendererDescriptorContext</code> 后单向传给 <code>RenderGraph</code> 与 <code>RendererObjectResourceManager</code>，写入解析由 <code>RendererDescriptorWriter</code> 复用。</td>
+                        <td>持有按 swapchain image 分配的 frame-local GPU buffer handle、raw buffer 字段和 descriptor info；当前 <code>source/render/backend/rendererFrameResources.*</code> 已接管 global UBO 与 light SSBO 的创建、释放、descriptor infos、更新和必要 barrier，并集中处理 material instance UBO 与 object UBO 的写入；descriptor info 由 <code>RenderSystem</code> 组装成 <code>RendererDescriptorContext</code> 后单向传给 <code>RenderGraph</code> 与 <code>RendererObjectResourceManager</code>，写入解析由 <code>RendererDescriptorWriter</code> 复用。</td>
                         <td>RendererBackendVulkan、UBOGlobal、LightSnapshot、RenderDrawPacket、swapchain image index</td>
                         <td>global UBO / light SSBO descriptor buffer infos、frame uniform/storage buffer 更新；object UBO 使用 snapshot 冻结矩阵</td>
                     </tr>
                     <tr>
                         <td><code>RendererBackendVulkan</code></td>
-                        <td>目标态负责完整 frame render；当前已承接每帧 wait/acquire/reset，并通过 <code>SubmitFrame(frameContext, currentFrame)</code> 在 backend 内部解析 queue、swapchain、semaphore、fence 与 retire epoch 后执行 submit/present。Vulkan 初始化、resize、waitIdle 和 buffer、image/view/sampler、descriptor、render pass、framebuffer、single-time command、readback copy 等低层 helper 已委托给 <code>RHIDeviceVulkan</code>。</td>
+                        <td>目标态负责完整 frame render；当前已承接每帧 wait/acquire/reset，并通过 <code>SubmitFrame(frameContext, currentFrame)</code> 在 backend 内部解析 queue、swapchain、semaphore、fence 与 retire epoch 后执行 submit/present。Vulkan 初始化、resize、waitIdle 和 buffer、image/view/sampler、descriptor、render pass、framebuffer、single-time command、readback copy 等低层 helper 已委托给 <code>RHIDeviceVulkan</code>；buffer 创建、map、copy、destroy 在 <code>RHIDeviceVulkan</code> contract 上已改为 opaque <code>RHIBufferHandle</code>，per-swapchain <code>Buffer</code> 资源包已保存 <code>RHIBufferHandle</code> 并在创建/销毁时优先使用 handle，raw buffer 与 descriptor buffer info 保留给当前 command buffer / descriptor 写入使用；image 创建、layout transition、copy、mipmap、destroy 已改为 opaque <code>RHIImageHandle</code>，image view 创建/销毁已改为 opaque <code>RHIImageViewHandle</code>，sampler 创建/销毁已改为 opaque <code>RHISamplerHandle</code>，<code>Texture</code> 资源包已保存 image/view/sampler lifecycle handles 并在析构时优先按 handle 释放，raw image/view/sampler 与 descriptor image info 保留给当前 descriptor 写入使用；descriptor layout/pool/set 创建、分配、free、update 和 debug name 已改为 opaque <code>RHIDescriptorSetLayoutHandle</code> / <code>RHIDescriptorPoolHandle</code> / <code>RHIDescriptorSetHandle</code> / <code>RHIDescriptorWrite</code>，<code>RHIDescriptorWrite</code> 保持 Vulkan-native descriptor type、descriptor image info 和 descriptor buffer info，<code>vk::WriteDescriptorSet</code> 只在 backend facade 内映射 destination set handle；render pass/framebuffer 创建销毁已改为 opaque <code>RHIRenderPassHandle</code> / <code>RHIFramebufferHandle</code>，<code>RenderGraph</code> resource/pass 资源包已保存 image/view/sampler、descriptor、render pass 和 framebuffer lifecycle handles，并在 graph reload retire 与 resize immediate shutdown 中优先按 handle 释放；backend facade 内部维护 raw buffer/image/image view/sampler/descriptor/render pass/framebuffer 到 lifecycle handle 的映射。</td>
                         <td>当前：PlatformWindow、Vulkan extensions、resize event、RenderSystem 录制好的 command buffer、RendererFrameResources 和 RenderGraph GPU 对象创建请求；目标：CompiledFrameGraph、RenderScene、frame resources</td>
-                        <td>当前：Vulkan device/swapchain lifecycle、backend-owned submit/present、draw executor、retire epoch、buffer/image/descriptor/renderpass/framebuffer handles；目标：完整 GPU work 调度</td>
+                        <td>当前：Vulkan device/swapchain lifecycle、backend-owned submit/present、draw executor、retire epoch、buffer/image/image view/sampler/descriptor/renderpass/framebuffer handles；目标：完整 GPU work 调度</td>
                     </tr>
                     <tr>
                         <td><code>RHIDeviceVulkan</code></td>
-                        <td>封装 instance/device/queue/swapchain/image/buffer/sampler/descriptor pool 的创建销毁；当前 <code>source/render/rhi/vulkan/rhiDeviceVulkan.*</code> 已成为唯一直接访问 <code>VulkanManager::GetInstance()</code> 的渲染侧边界，backend 不再直接 include 或调用 VulkanManager。</td>
+                        <td>历史命名下的 Vulkan device boundary，封装 instance/device/queue/swapchain/image/buffer/image view/sampler/descriptor pool 的创建销毁；当前 <code>source/render/rhi/vulkan/rhiDeviceVulkan.*</code> 已成为唯一直接访问 <code>VulkanManager::GetInstance()</code> 的渲染侧边界，backend 不再直接 include 或调用 VulkanManager。该层不是跨 API 图形抽象，public contract 允许继续使用 Vulkan-native enum、createInfo、layout 和 descriptor info，只把资源身份与释放目标收敛到 lifecycle handles。</td>
                         <td>PlatformWindow、Vulkan extensions、device config</td>
-                        <td>稳定 RHI handles 和 debug name API</td>
+                        <td>稳定 lifecycle handles 和 Vulkan debug name API</td>
                     </tr>
                 </tbody>
             </table>
@@ -1095,8 +1106,8 @@
                     <tr>
                         <td>Diagnostics / Profiling</td>
                         <td><code>DiagnosticsSubsystem</code></td>
-                        <td>集中 runtime info/warn/error 输出和 <code>RuntimeError</code> 格式化；保留 Tracy/NVTX marker，并按 Engine/World/Renderer/RHI 分层命名。</td>
-                        <td>命令执行、窗口事件、启动失败和后续 validation/test hook 都有统一诊断入口。</td>
+                        <td>集中 runtime info/warn/error 输出和 <code>RuntimeError</code> 格式化；load world 失败保留结构化 code，覆盖 <code>Scene.*</code>、<code>Mesh.*</code>、<code>Material.*</code>、<code>Texture.*</code>、<code>Shader.*</code>、<code>WorldTransition.*</code>；保留 Tracy/NVTX marker，并按 Engine/World/Renderer/VulkanBackend 分层命名。</td>
+                        <td>命令执行、窗口事件、启动失败和后续 validation/test hook 都有统一诊断入口；generated material/mesh/texture rollback 会断言对应 error code。</td>
                     </tr>
                     <tr>
                         <td>Validation</td>
@@ -1118,6 +1129,8 @@
                     </tr>
                 </tbody>
             </table>
+            <p class="rule">诊断保留规则：清理启动噪声时只移除重复、无状态价值的进度输出；保留能定位配置路径、资源名、JSON 节点、shader/material binding、Vulkan 资源创建/释放失败和 runtime command 失败的报错与调试信息。错误路径优先抛出或返回带 code/context 的 <code>RuntimeError</code>，不要静默吞掉。</p>
+            <p class="rule">学习注释规则：注释用于解释 Vulkan lifecycle、descriptor ownership、frame/retire epoch、GT/RT snapshot 边界和非直观数据流时应保留或补充；只删除过期、误导、复述代码字面行为或指向已删除路径的注释。</p>
         </section>
 
         <section id="ownership">
@@ -1179,7 +1192,7 @@
                     <tr>
                         <td>FrameGraphCompiler</td>
                         <td>pass 顺序、render resource、attachment layout、descriptor set 规划</td>
-                        <td>RenderGraphConfig、RendererFrontend 输出、RHI 抽象</td>
+                        <td>RenderGraphConfig、RendererFrontend 输出、Vulkan device boundary</td>
                         <td>向 renderer resource cache 反查环境纹理或材质实例</td>
                         <td><code>RenderGraph</code>、<code>Renderpass</code>、<code>PassBarrier</code></td>
                     </tr>
@@ -1188,7 +1201,7 @@
                         <td>命令缓冲、队列提交、fence/semaphore、swapchain frame 状态</td>
                         <td>CompiledFrameGraph、RenderScene、RHIDeviceVulkan</td>
                         <td>解析 scene JSON、持有 World 写引用</td>
-                        <td><code>source/render/backend/rendererBackendVulkan.*</code> 已承接 EngineLoop 的 frame policy，拥有每帧 begin/end、submit/present 与 fence epoch；queue、swapchain、semaphore、fence、command buffer 和 submitted epoch 已从 RenderSystem 调用点中移入 backend-owned <code>SubmitFrame</code> 流程。backend 对外仍保留 buffer/map/destroy 等过渡接口，但实际低层 VulkanManager 访问已集中到 <code>source/render/rhi/vulkan/rhiDeviceVulkan.*</code>，并由 <code>source/render/rhi/rhiDevice.h</code> 明确当前 RHI 设备契约。<code>source/render/backend/rendererObjectGpuResources.h</code> 已定义对象 GPU 资源包，<code>RendererObjectResourceEntry</code> 已作为 backend object resource registry 条目接管资源包生命周期，<code>RendererObjectResourceManager</code> 负责创建、销毁和 descriptor 写入，<code>source/render/backend/rendererDrawExecutor.*</code> 已从 PassRuntime 接过 shadow / geometry 对象 draw 循环并消费该资源包；<code>source/render/backend/rendererFrameResources.*</code> 已接管 global UBO buffer、light SSBO、material instance UBO 写入，并把 object UBO 写入目标改为 <code>RendererObjectGpuResources</code>；<code>source/render/pass/passRuntime.*</code> 已接管 pass 前 barrier 准备以及 pass 录制分派。</td>
+                        <td><code>source/render/backend/rendererBackendVulkan.*</code> 已承接 EngineLoop 的 frame policy，拥有每帧 begin/end、submit/present 与 fence epoch；queue、swapchain、semaphore、fence、command buffer 和 submitted epoch 已从 RenderSystem 调用点中移入 backend-owned <code>SubmitFrame</code> 流程。backend 对外保留 buffer/image/image view/sampler/descriptor/render pass/framebuffer/map/destroy 等 Vulkan-native low-level 接口，内部通过 <code>RHIBufferHandle</code> / <code>RHIImageHandle</code> / <code>RHIImageViewHandle</code> / <code>RHISamplerHandle</code> / <code>RHIDescriptorSetLayoutHandle</code> / <code>RHIDescriptorPoolHandle</code> / <code>RHIDescriptorSetHandle</code> / <code>RHIRenderPassHandle</code> / <code>RHIFramebufferHandle</code> 调用 <code>RHIDeviceVulkan</code>，并维护 raw buffer/image/image view/sampler/descriptor/render pass/framebuffer/memory 到 lifecycle handle 的映射；per-swapchain <code>Buffer</code> 资源包现在携带 <code>RHIBufferHandle</code>，frame/object/material UBO 与 light SSBO 的 buffer set 生命周期已优先通过 handle 创建、map、unmap 和销毁；<code>Texture</code> 资源包现在携带 image/view/sampler lifecycle handles，普通材质贴图和生成贴图的 Texture 析构已优先通过 handle 释放；<code>RenderGraph</code> resource/pass 资源包现在携带 image/view/sampler、descriptor、render pass 和 framebuffer lifecycle handles，graph reload retire 与 resize shutdown 已优先通过 handle 释放；pipeline 直接创建的 descriptor set layout 会被 backend 注册为 non-owning lifecycle handle，仅用于 descriptor set 分配，原 pipeline owner 仍负责销毁。实际低层 VulkanManager 访问已集中到 <code>source/render/rhi/vulkan/rhiDeviceVulkan.*</code>，并由 <code>RHIDeviceVulkan</code> 明确当前 Vulkan device boundary 合同。<code>source/render/backend/rendererObjectGpuResources.h</code> 已定义对象 GPU 资源包，并保存 object/shadow descriptor pool/set lifecycle handles；<code>RendererObjectResourceEntry</code> 已作为 backend object resource registry 条目接管资源包生命周期，<code>RendererObjectResourceManager</code> 负责创建、销毁和 descriptor 写入，object resource shutdown 已优先通过 descriptor pool handle 释放；<code>source/render/backend/rendererDrawExecutor.*</code> 已从 PassRuntime 接过 shadow / geometry 对象 draw 循环并消费该资源包；<code>source/render/backend/rendererFrameResources.*</code> 已接管 global UBO buffer、light SSBO、material instance UBO 写入，并把 object UBO 写入目标改为 <code>RendererObjectGpuResources</code>；<code>source/render/pass/passRuntime.*</code> 已接管 pass 前 barrier 准备以及 pass 录制分派。</td>
                     </tr>
                     <tr>
                         <td>ResourceRetireQueue</td>
@@ -1199,6 +1212,7 @@
                     </tr>
                 </tbody>
             </table>
+            <p class="rule">收尾清理边界：删除的是旧架构入口、重复生命周期 owner、误导性的跨 API 抽象和已经不可达的 tutorial path；保留有学习说明价值的注释、有助于快速定位问题的错误/调试输出、runtime test hook，以及虽暂时调用少但属于架构合同或后续明确扩展点的方法。</p>
         </section>
 
         <section id="data">
@@ -1271,7 +1285,7 @@
                     </tr>
                     <tr>
                         <td><code>GpuResource</code></td>
-                        <td>ResourceCache / RHI</td>
+                        <td>ResourceCache / Vulkan Backend</td>
                         <td>资源创建线程；释放由 retire 队列提交</td>
                         <td>global、world-local 或 frame-local</td>
                         <td>FrameGraph、material、backend</td>
@@ -1427,7 +1441,7 @@ if (snapshot.has_value()) {
                     <rect class="snapBox" x="632" y="250" width="198" height="84"/>
                     <text class="snapT" x="652" y="278">6. ResolvedRenderScene</text>
                     <text class="snapM" x="652" y="300">ResourceHandle -> backend entry</text>
-                    <text class="snapS" x="652" y="318">当前 Vulkan 过渡层</text>
+                    <text class="snapS" x="652" y="318">当前 Vulkan 后端边界</text>
 
                     <rect class="snapBox" x="918" y="134" width="276" height="94"/>
                     <text class="snapT" x="938" y="162">7. Backend / FrameGraph</text>
@@ -1697,7 +1711,7 @@ std::optional&lt;WorldSnapshotPtr&gt; WorldSnapshotQueue::ConsumeLatest()
                 </div>
                 <div class="card">
                     <strong>GPU 资源仍归渲染层</strong>
-                    <p class="muted">Snapshot 只带逻辑 <code>ResourceHandle</code>。材质、mesh、texture、object buffer、descriptor 继续由 <code>RendererResourceCache</code>、Backend 和 RHI 管。</p>
+                    <p class="muted">Snapshot 只带逻辑 <code>ResourceHandle</code>。材质、mesh、texture、object buffer、descriptor 继续由 <code>RendererResourceCache</code>、Backend 和 Vulkan device boundary 管。</p>
                 </div>
             </div>
 
@@ -1783,7 +1797,7 @@ RT finishes A, then consumes latest snapshot
                     <tr>
                         <td><code>source/render/backend/resolvedRenderScene.h/.cpp</code></td>
                         <td>把 <code>RenderScene</code> 的逻辑 handle 解析成当前 Vulkan draw path 使用的对象和 backend resource entry。</td>
-                        <td>这是过渡层；正式 backend draw packet 完成后可继续收敛。</td>
+                        <td>这是当前解析边界；backend draw packet 已承接对象 draw 输入，后续可继续收紧资源归属。</td>
                     </tr>
                     <tr>
                         <td><code>source/renderSystem.cpp</code></td>
@@ -2033,7 +2047,7 @@ while (renderRunning) {
         <section id="resources">
             <h2>16) 资源与 GPU 生命周期</h2>
             <p class="summary">当前代码里 <code>RendererResourceLoadCoordinator</code>、<code>ResolvedRenderSceneBuilder</code>、<code>RenderGraph</code> 和 <code>RenderSystem</code> 都会间接碰到材质、贴图、descriptor 和 pass 资源。V1 需要继续按 owner 拆开，否则 World 切换仍然会产生隐式悬空引用。</p>
-            <p class="muted">当前实现已先把资源表集中到 <code>RendererResourceCache</code>，并拆出 global / world-local 清理边界：<code>RendererEnvironmentLoader</code> 只在缺失时创建 global <code>brdfLut</code>，active environment cube / prefilter 进入 world-local texture 槽；<code>RendererMaterialLoader</code> 创建 material/texture，<code>RendererMeshLoader</code> 创建 mesh/renderable/SceneObject，<code>RendererResourceLoadCoordinator</code> 只负责编排 loader 并调用 <code>BeginWorldLocalResourceLoad()</code>。普通材质贴图上传、mesh vertex/index buffer 上传、BRDF LUT 生成、environment cubemap / prefilter 生成和 Texture/RenderableObject 销毁仍走 <code>RendererBackendVulkan</code> 门面，但底层 buffer/image/sampler/descriptor/renderpass/framebuffer 操作已由 <code>RHIDeviceVulkan</code> 执行；world-local 清理现在进入 <code>ResourceRetireQueue</code>，由 backend 在复用 frame fence 前推进 completed epoch。</p>
+            <p class="muted">当前实现已先把资源表集中到 <code>RendererResourceCache</code>，并拆出 global / world-local 清理边界：<code>RendererEnvironmentLoader</code> 只在缺失时创建 global <code>brdfLut</code>，active environment cube / prefilter 进入 world-local texture 槽；<code>RendererMaterialLoader</code> 创建 material/texture，<code>RendererMeshLoader</code> 创建 mesh/renderable 并返回纯数据 <code>MeshObjectBuildPlan</code>，<code>RendererResourceLoadCoordinator</code> 负责编排 loader、调用 <code>BeginWorldLocalResourceLoad()</code>，并把 mesh object plans 汇总到 <code>RendererWorldResourceLoadResult</code>。mesh runtime 不再通过 <code>SceneObject</code> wrapper 或 renderer cache binding 回流到 <code>World</code>；<code>WorldTransitionCoordinator</code> 将 renderer resource load result 写入 <code>WorldBuildPlan::meshObjectPlans</code>，<code>WorldBuilder</code> 只消费该纯数据计划生成 <code>WorldMeshObject</code>。普通材质贴图上传、mesh vertex/index buffer 上传、BRDF LUT 生成、environment cubemap / prefilter 生成和 Texture/RenderableObject 销毁仍走 <code>RendererBackendVulkan</code> 门面，但底层 buffer/image/image view/sampler/descriptor layout/pool/set/render pass/framebuffer 操作已由 <code>RHIDeviceVulkan</code> 执行；<code>Texture</code> 已保存 image/view/sampler lifecycle handles 并优先按 handle 释放，raw descriptor image info 仍作为 backend facade 的 descriptor 写入输入；<code>RHIDescriptorWrite</code> 保持 Vulkan-native descriptor type、descriptor image info 和 descriptor buffer info；<code>RenderGraph</code> resource/pass 资源包已保存 image/view/sampler、descriptor、render pass 和 framebuffer lifecycle handles，graph reload retire 与 resize shutdown 优先按 handle 释放；world-local 清理现在进入 <code>ResourceRetireQueue</code>，由 backend 在复用 frame fence 前推进 completed epoch。</p>
             <table>
                 <thead>
                     <tr>
@@ -2092,7 +2106,7 @@ while (renderRunning) {
                         <td><code>RendererBackendVulkan</code></td>
                         <td>frame index + buffer role</td>
                         <td>Renderer init / swapchain frame count 变化</td>
-                        <td>global UBO、light SSBO、material instance UBO 写入与 object UBO 写入已进入 <code>RendererFrameResources</code>；object UBO 使用 <code>RenderDrawPacket</code> 冻结矩阵，不在 pass 录制时回读 mutable <code>SceneObject</code> transform。mesh vertex/index buffer 与普通材质贴图上传已使用 backend buffer/image helper；对象 descriptor layout/pool/set/update 已由 <code>RendererObjectResourceManager</code> 与 backend descriptor helper 执行，pass descriptor layout/pool/set/update 已走 RenderGraph/backend 路径；RenderGraph render target、render pass、framebuffer 创建和显式 shutdown 释放也已改由 backend 执行。swapchain rebuild 现在先销毁 descriptor/framebuffer，再重建 per-swapchain buffer set。</td>
+                        <td>global UBO、light SSBO、material instance UBO 写入与 object UBO 写入已进入 <code>RendererFrameResources</code>；object UBO 使用 <code>RenderDrawPacket</code> 冻结矩阵，不在 pass 录制时回读 mutable <code>SceneObject</code> transform。mesh vertex/index buffer 与普通材质贴图上传已使用 backend buffer/image helper；对象 descriptor layout/pool/set/update 已由 <code>RendererObjectResourceManager</code> 与 backend descriptor helper 执行，object/shadow descriptor pool/set 已回填 lifecycle handles 并在 shutdown 时优先按 descriptor pool handle 释放；pass descriptor layout/pool/set/update 已走 RenderGraph/backend 路径；RenderGraph render target、descriptor、render pass、framebuffer 创建已回填 lifecycle handles，显式 shutdown 与 graph reload retire 优先按 handle 释放。swapchain rebuild 现在先销毁 descriptor/framebuffer，再重建 per-swapchain buffer set。</td>
                     </tr>
                 </tbody>
             </table>
@@ -2145,7 +2159,7 @@ while (renderRunning) {
                         <td><code>WorldBuildPlan</code>、AssetManager、WorldResourceCache</td>
                         <td>完整 stagingWorld、初始 WorldSnapshot 所需数据</td>
                         <td>构建失败销毁 stagingWorld，不能污染 activeWorld</td>
-                        <td>GT 写；资源上传按 RHI 规则排队</td>
+                        <td>GT 写；资源上传按 Vulkan backend 规则排队</td>
                     </tr>
                     <tr>
                         <td><code>IWorldSnapshotBuilder</code></td>
@@ -2180,7 +2194,7 @@ while (renderRunning) {
                         <td>retire request、completed epoch、owner generation</td>
                         <td>安全释放动作、泄漏统计</td>
                         <td>epoch 未完成则继续排队</td>
-                        <td>GT 消费，RHI destroy 必须在合法线程执行</td>
+                        <td>GT 消费，Vulkan resource destroy 必须在合法线程执行</td>
                     </tr>
                 </tbody>
             </table>
@@ -2199,9 +2213,9 @@ struct RuntimeResult {
 };</code></pre>
         </section>
 
-        <section id="migration">
-            <h2>18) 代码迁移蓝图</h2>
-            <p class="summary">无过渡期不等于一次提交完成所有文件。它的意思是最终切换点不维护双运行路径；实现上仍然可以先在新目录中搭骨架、编译通过、测试通过，再一次性替换入口。</p>
+        <section id="code-cutover">
+            <h2>18) 代码收尾蓝图</h2>
+            <p class="summary">无过渡期不等于一次提交完成所有文件。它的意思是最终切换点不维护双运行路径；实现上可以先在目标目录中搭骨架、编译通过、测试通过，再一次性替换入口。</p>
             <h3>目标目录</h3>
             <pre><code>source/
   platform/
@@ -2246,7 +2260,7 @@ struct RuntimeResult {
       rendererObjectResourceRegistry.h/.cpp
       resolvedRenderScene.h/.cpp
     rhi/
-      rhiDevice.h
+      rhiResourceHandles.h
       vulkan/rhiDeviceVulkan.h/.cpp
   resource/
     assetManager.h/.cpp
@@ -2257,7 +2271,7 @@ struct RuntimeResult {
     consoleSubsystem.h/.cpp
     diagnosticsSubsystem.h/.cpp
     runtimeTestHooks.h/.cpp</code></pre>
-            <h3>迁移顺序</h3>
+            <h3>收尾顺序</h3>
             <table>
                 <thead>
                     <tr>
@@ -2422,8 +2436,8 @@ struct RuntimeResult {
                         <td>Asset 层创建 Vulkan 对象，或材质错误延迟到绘制时才暴露</td>
                     </tr>
                     <tr>
-                        <td>RHI/Swapchain</td>
-                        <td>swapchain recreate 只重建 RHI/frame graph 尺寸相关资源，不破坏 World 和 Asset cache</td>
+                        <td>Vulkan Device / Swapchain</td>
+                        <td>swapchain recreate 只重建 Vulkan backend/frame graph 尺寸相关资源，不破坏 World 和 Asset cache</td>
                         <td><code>build/bin/main.exe --resizestress 6 --exit-after-tests</code> + validation layer</td>
                         <td>resize 后 descriptor/framebuffer 悬空或 World 数据丢失</td>
                     </tr>
@@ -2458,13 +2472,13 @@ struct RuntimeResult {
                 </div>
                 <div class="card">
                     <h3>Milestone C</h3>
-                    <p><span class="ok">当前进展：</span>Coordinator 状态机 + WorldBuilder 构建 stagingWorld 已落地；active reload 已接入 resource cache / pass material 快照回滚，并在成功后重绑 RenderSystem active world 与 Controller view target；<code>RuntimeTestHooks</code> 提供 <code>reloadstress</code> 逐帧压测入口，命令行 <code>--reloadstress &lt;scene-path&gt; [count] --exit-after-tests</code> 可自动退出并用进程退出码表达验收结果；reloadstress 结束前会继续等待 <code>ResourceRetireQueue</code> drain，多次 reload 时还会确认曾观察到 retired world-local resources，防止旧 World 资源被立即释放或没有进入 retire 流程；<code>--reloadfail &lt;bad-scene-path&gt; --exit-after-tests</code> 已补充预期失败路径，验证失败加载不会触发 runtime rebind，且失败前后的 active World handle 保持一致；<code>--reloadfail-material --exit-after-tests</code> 会生成临时 scene/mesh/material fixture，让 scene 与 mesh 验证通过后在 renderer material load 阶段因未知参数失败，并比较失败前后的 renderer resource cache / pass material 指纹，用来覆盖资源加载中途失败后的内容级回滚；<code>--lightstress [count] --exit-after-tests</code> 会生成高灯光 scene 并复用 reloadstress 路径，覆盖 frame-local light SSBO 扩容。</p>
-                    <p><span class="warn">验收：</span>用 <code>build/bin/main.exe --reloadstress &lt;scene-path&gt; 20 --exit-after-tests</code> 连续切场景无崩溃且返回 0，并确认 retire queue 曾出现 pending 后 drain 到 0；用 <code>build/bin/main.exe --reloadfail &lt;bad-scene-path&gt; --exit-after-tests</code> 验证坏 scene 路径失败后旧 World 仍为 active；用 <code>build/bin/main.exe --reloadfail-material --exit-after-tests</code> 验证 material/resource 加载中途失败后旧 World 仍为 active，renderer resource cache / pass material 指纹保持一致，且临时 fixture 会自动清理；用 <code>build/bin/main.exe --lightstress 3 --exit-after-tests</code> 验证超过默认灯光容量后旧 light SSBO 进入 retire queue。</p>
+                    <p><span class="ok">当前进展：</span>Coordinator 状态机 + WorldBuilder 构建 stagingWorld 已落地；active reload 已接入 resource cache / pass material 快照回滚，并在成功后重绑 RenderSystem active world 与 Controller view target；<code>RuntimeTestHooks</code> 提供 <code>reloadstress</code> 逐帧压测入口，命令行 <code>--reloadstress &lt;scene-path&gt; [count] --exit-after-tests</code> 可自动退出并用进程退出码表达验收结果；reloadstress 结束前会继续等待 <code>ResourceRetireQueue</code> drain，多次 reload 时还会确认曾观察到 retired world-local resources，防止旧 World 资源被立即释放或没有进入 retire 流程；<code>--reloadfail &lt;bad-scene-path&gt; --exit-after-tests</code> 已补充预期失败路径，验证失败加载不会触发 runtime rebind，且失败前后的 active World handle 保持一致；<code>--reloadfail-material --exit-after-tests</code> 会生成 scene/mesh/material fixture，让 scene 与 mesh 验证通过后在 renderer material load 阶段因未知参数失败，并比较失败前后的 renderer resource cache / pass material 指纹，用来覆盖资源加载中途失败后的内容级回滚；<code>--reloadfail-mesh --exit-after-tests</code> 覆盖 mesh/source 预检失败；<code>--reloadfail-texture --exit-after-tests</code> 覆盖 texture source 在 renderer resource load 阶段失败后的回滚；<code>--lightstress [count] --exit-after-tests</code> 会生成高灯光 scene 并复用 reloadstress 路径，覆盖 frame-local light SSBO 扩容。</p>
+                    <p><span class="warn">验收：</span>用 <code>build/bin/main.exe --reloadstress &lt;scene-path&gt; 20 --exit-after-tests</code> 连续切场景无崩溃且返回 0，并确认 retire queue 曾出现 pending 后 drain 到 0；用 <code>build/bin/main.exe --reloadfail &lt;bad-scene-path&gt; --exit-after-tests</code> 验证坏 scene 路径失败后旧 World 仍为 active；用 <code>build/bin/main.exe --reloadfail-material --exit-after-tests</code>、<code>--reloadfail-mesh --exit-after-tests</code>、<code>--reloadfail-texture --exit-after-tests</code> 验证 asset/resource 加载失败后旧 World 仍为 active，renderer resource cache / pass material 指纹保持一致，且生成式 fixture 会自动清理；用 <code>build/bin/main.exe --lightstress 3 --exit-after-tests</code> 验证超过默认灯光容量后旧 light SSBO 进入 retire queue。</p>
                 </div>
                 <div class="card">
                     <h3>Milestone D</h3>
-                    <p><span class="ok">当前进展：</span><code>WorldSnapshot</code> -> <code>RenderScene</code> -> <code>ResolvedRenderScene</code> 的过渡路径已接入现有 Vulkan draw path，单线程模式也按 GT/RT 数据边界 publish/consume snapshot；<code>WorldSnapshotBuilder</code> 已按 stable object id 缓存 previous model，不再需要 <code>RenderSystem</code> 帧末回写 <code>SceneObject</code>；<code>RendererBackendVulkan</code> 过渡门面已接管 swapchain frame begin/end、submit/present 与 fence epoch，<code>RenderSystem</code> 只把录制完成的 <code>RendererFrameContext</code> 交回 <code>SubmitFrame(frameContext, currentFrame)</code>，本帧 command buffer、queue、swapchain、semaphore、fence、wait stage 与 submitted epoch 都保持为 backend 内部细节。<code>source/render/rhi/rhiDevice.h</code> 已补出当前 RHI 设备抽象面，<code>RHIDeviceVulkan</code> 实现该契约并承接 Vulkan init、resize、waitIdle、swapchain 查询，以及 buffer、image/view/sampler、descriptor、render pass、framebuffer、single-time command、buffer/image copy helper；扫描结果显示渲染侧直接 <code>VulkanManager::GetInstance()</code> 访问已收敛到 <code>source/render/rhi/vulkan/rhiDeviceVulkan.cpp</code>，<code>RHIDevice</code> 抽象契约不再暴露 raw device/queue/swapchain/fence getter，且 <code>RendererBackendVulkan</code> 不再向上层暴露 <code>GetDevice()</code> / <code>GetGpuMemoryProperties()</code> 裸 getter 或 <code>GetRhiDevice()</code> 逃逸口，<code>PipelineFactory</code> 改由 backend 创建。<code>RendererObjectGpuResources</code> 已定义对象 GPU 资源包，<code>RendererObjectResourceEntry</code> 已作为 backend object resource registry 条目接管资源包生命周期，<code>RendererObjectResourceManager</code> 负责创建、销毁和 descriptor 写入；<code>ResolvedDrawPacket</code> 现在携带 renderable handle 与 object resource entry；<code>RendererDrawExecutor</code> 已从 <code>PassRuntime</code> 接过 shadow / geometry 对象 draw 循环，并直接消费这些 backend 资源。PassRuntime 现在主要负责 pass 分派、barrier、render pass begin/end 和 post-process 特例；global UBO buffer、light SSBO、material instance UBO 写入与 object UBO 写入已由 <code>RendererFrameResources</code> 持有或集中处理；object UBO 使用 <code>RenderDrawPacket</code> 冻结矩阵，不在 pass 录制时重新读取 mutable <code>SceneObject</code> transform。mesh vertex/index buffer、普通材质贴图上传、BRDF LUT、environment cubemap / prefilter 生成、对象 descriptor、pass descriptor layout/pool/set/update、RenderGraph render target/render pass/framebuffer 创建释放已迁入 backend/RHI 路径。<code>RenderGraph</code> 和对象 descriptor 刷新已改为消费 <code>RendererDescriptorContext</code>，不再 include <code>renderSystem.h</code> 或反向读取 <code>RenderSystem</code> 单例；<code>RendererDescriptorPlanCache</code> 已从 <code>Renderpass</code> 接过 descriptor write plan 归属，<code>RendererDescriptorWriter</code> 已统一 descriptor write 解析，减少 pass/object 两套重复分支。</p>
-                    <p><span class="warn">验收：</span><code>tool/ue-lite-boundary-audit.ps1</code> 已提供静态边界验收，覆盖 legacy <code>SceneLoader</code>/<code>LightManager</code> 文件和引用不可回流、渲染 draw path 不回读 World/SceneObject、RenderSystem 不直接查询或绑定对象 GPU 资源、上层不从 backend facade 拉取 raw device/memory getter、backend 不暴露 <code>GetRhiDevice()</code>、submit/present DTO 不泄露出 backend、<code>RHIDevice</code> 抽象不重新开放 raw Vulkan getter，以及渲染侧不绕过 RHI 访问 <code>VulkanManager</code>；运行时 reloadstress 已覆盖当前单线程 snapshot handoff。长期演进方向是继续把 RHI 设备契约从 Vulkan 资源句柄参数推进到 API 无关资源句柄。</p>
+                    <p><span class="ok">当前进展：</span><code>WorldSnapshot</code> -> <code>RenderScene</code> -> <code>ResolvedRenderScene</code> 的解析路径已接入当前 Vulkan draw path，单线程模式也按 GT/RT 数据边界 publish/consume snapshot；mesh runtime 已迁入 <code>WorldMeshObject</code>，<code>WorldSnapshotBuilder</code> 已从 <code>World::GetMeshObjects()</code> 复制 model、bounds 与 mesh/material logical keys，并按 stable object id 缓存 previous model，不再需要 <code>RenderSystem</code> 帧末回写 <code>SceneObject</code>。<code>RendererBackendVulkan</code> 已接管 swapchain frame begin/end、submit/present 与 fence epoch，<code>RenderSystem</code> 只把录制完成的 <code>RendererFrameContext</code> 交回 <code>SubmitFrame(frameContext, currentFrame)</code>，本帧 command buffer、queue、swapchain、semaphore、fence、wait stage 与 submitted epoch 都保持为 backend 内部细节。<code>RHIDeviceVulkan</code> 直接作为 Vulkan device boundary，承接 Vulkan init、resize、waitIdle、swapchain 查询，以及 buffer、image/view/sampler、descriptor、render pass、framebuffer、single-time command、buffer/image copy helper；旧 <code>RHIDevice</code> 虚接口已移除，避免单实现抽象层误导为跨 API 路线。buffer 创建、map、copy、destroy 已在 Vulkan device boundary contract 中改为 <code>RHIBufferHandle</code>，image 创建、layout transition、copy、mipmap、destroy 已改为 <code>RHIImageHandle</code>，image view 创建/销毁已改为 <code>RHIImageViewHandle</code>，sampler 创建/销毁已改为 <code>RHISamplerHandle</code>，descriptor layout/pool/set 创建、分配、free、update、debug name 已改为 <code>RHIDescriptorSetLayoutHandle</code> / <code>RHIDescriptorPoolHandle</code> / <code>RHIDescriptorSetHandle</code> / <code>RHIDescriptorWrite</code>，render pass/framebuffer 创建销毁已改为 <code>RHIRenderPassHandle</code> / <code>RHIFramebufferHandle</code>，<code>RHIDeviceVulkan</code> 内部维护 handle registry，backend facade 只在现有 raw buffer/image/image view/sampler/descriptor/render pass/framebuffer 数据结构需要 Vulkan handle 时解包；pipeline 直接创建的 descriptor set layout 暂注册为 non-owning lifecycle handle，由原 pipeline owner 仍负责销毁。扫描结果显示渲染侧直接 <code>VulkanManager::GetInstance()</code> 访问已收敛到 <code>source/render/rhi/vulkan/rhiDeviceVulkan.cpp</code>，且 <code>RendererBackendVulkan</code> 不再向上层暴露 <code>GetDevice()</code> / <code>GetGpuMemoryProperties()</code> 裸 getter 或 <code>GetRhiDevice()</code> 逃逸口；<code>RHIDeviceVulkan</code> 的 <code>GetDevice()</code>、<code>GetPhysicalDevice()</code>、<code>GetGpuMemoryProperties()</code> 和 <code>GetCommandPool()</code> 已收为 private，backend 通过 <code>CreatePipelineFactory()</code>、<code>WaitForFence()</code>、<code>ResetFence()</code>、<code>AcquireNextSwapchainImage()</code> 表达具体意图。<code>RendererObjectGpuResources</code> 已定义对象 GPU 资源包，并携带 object/shadow descriptor pool/set lifecycle handles；<code>RendererObjectResourceEntry</code> 已作为 backend object resource registry 条目接管资源包生命周期，<code>RendererObjectResourceManager</code> 负责创建、销毁和 descriptor 写入；<code>ResolvedDrawPacket</code> 现在携带 renderable handle 与 object resource entry；<code>RendererDrawExecutor</code> 已从 <code>PassRuntime</code> 接过 shadow / geometry 对象 draw 循环，并直接消费这些 backend 资源。PassRuntime 现在主要负责 pass 分派、barrier、render pass begin/end 和 post-process 特例；global UBO buffer、light SSBO、material instance UBO 写入与 object UBO 写入已由 <code>RendererFrameResources</code> 持有或集中处理；object UBO 使用 <code>RenderDrawPacket</code> 冻结矩阵。mesh vertex/index buffer、普通材质贴图上传、BRDF LUT、environment cubemap / prefilter 生成、对象 descriptor、pass descriptor layout/pool/set/update、RenderGraph render target/render pass/framebuffer 创建释放已迁入 backend/device boundary 路径，且对象 descriptor 资源包与 RenderGraph resource/pass 资源包都已携带对应 lifecycle handles。<code>RenderGraph</code> 和对象 descriptor 刷新已改为消费 <code>RendererDescriptorContext</code>，不再 include <code>renderSystem.h</code> 或反向读取 <code>RenderSystem</code> 单例；<code>RendererDescriptorPlanCache</code> 已从 <code>Renderpass</code> 接过 descriptor write plan 归属，<code>RendererDescriptorWriter</code> 已统一 descriptor write 解析，减少 pass/object 两套重复分支。</p>
+                    <p><span class="warn">验收：</span><code>tool/ue-lite-boundary-audit.ps1</code> 已提供静态边界验收，覆盖已删除的 <code>SceneLoader</code>/<code>LightManager</code> 文件和引用不可回流、渲染 draw path 不回读 World/SceneObject、<code>source/render/pass/*</code> 不 include gameplay World/SceneObject、descriptor writer/context/plan 只能通过显式 <code>RendererDescriptorContext</code> 和调用方输入更新 descriptor、RenderSystem 不直接查询或绑定对象 GPU 资源、上层不从 backend facade 拉取 raw device/memory getter、backend 不暴露 <code>GetRhiDevice()</code>、submit/present DTO 不泄露出 backend、旧 <code>RHIDevice</code> 虚接口不可回流，<code>RHIDeviceVulkan</code> buffer/image/image view/sampler/descriptor/render pass/framebuffer 创建、copy、分配、update、destroy 不回退到 raw <code>vk::Buffer</code> / <code>vk::Image</code> / <code>vk::ImageView</code> / <code>vk::Sampler</code> / <code>vk::DescriptorSetLayout</code> / <code>vk::DescriptorPool</code> / <code>vk::DescriptorSet</code> / <code>vk::RenderPass</code> / <code>vk::Framebuffer</code> / <code>vk::DeviceMemory</code> public contract，descriptor write 保持 Vulkan-native descriptor info，<code>VulkanManager</code> public contract 只保留 <code>GetInstance()</code>，raw device/swapchain/queue/sync getter 只允许 <code>RHIDeviceVulkan</code> 通过 friend 边界访问，以及渲染侧不绕过 Vulkan device boundary 访问 <code>VulkanManager</code>；运行时 reloadstress 已覆盖当前单线程 snapshot handoff。长期演进方向是继续收紧 Vulkan device/global state 访问和 GPU 生命周期 owner，而不是推进跨 API 抽象层。</p>
                 </div>
                 <div class="card">
                     <h3>Milestone E</h3>
@@ -2502,6 +2516,188 @@ struct RuntimeResult {
                 </div>
             </div>
             <p class="muted">说明：这是“无过渡期全量重构”执行底稿，后续讨论默认以一次性 cutover 为前提。</p>
+        </section>
+
+        <section id="ue-lite-completion">
+            <h2>22) UE-Lite 完成基线与回归门槛</h2>
+            <p class="summary">截至 2026-06-04，UE-Lite 收尾已并入 VulkanLearn V1 当前架构基线。完成标准不是把所有类改成 Unreal 风格命名，而是把 VulkanLearn 收敛到稳定的 V1 引擎骨架：GT 拥有 mutable World，renderer 只消费 snapshot，resource lifetime 有明确 owner，reload/resize/graph reload/rollback 都能自动验收。</p>
+            <p class="rule">当前正式命名仍是 <code>VL</code> namespace。<code>UE-Lite</code> 只保留为前期架构路线、历史文档语境和验收脚本名；新架构讨论默认使用 <code>VulkanLearn V1</code>。</p>
+            <p class="rule">当前图形 API 状态：旧 <code>source/render/rhi/rhiDevice.h</code> 虚接口已删除，<code>RHIDeviceVulkan</code> 是 concrete Vulkan device boundary；Vulkan 是唯一图形 API，不保留第二后端、mock backend、API-neutral backend/device facade 或过渡封装。剩余 <code>RHIBufferHandle</code>、<code>RHIImageHandle</code>、<code>RHIDescriptorSetHandle</code> 等名称只表示 Vulkan 资源生命周期 identity，不代表要继续扩展成跨 API enum/createInfo/descriptor 抽象。<code>VulkanManager</code> 现在只公开 singleton 入口，初始化、resize、raw device/swapchain/queue/sync getter 均收在 private friend 边界内；后续图形能力扩展优先在 Vulkan-native backend / device boundary 内直接增加意图接口。</p>
+            <p class="rule">最终验收记录：<code>powershell -ExecutionPolicy Bypass -File tool/ue-lite-final-validation.ps1</code> 已串行通过，最近完整日志目录为 <code>artifacts/ue-lite-validation/20260604-002925</code>，覆盖 build、静态边界审计、120 frame smoke、100 次 reload stress、坏 scene/material/mesh/texture rollback、light buffer retire、resize stress 和 render graph reload stress。</p>
+
+            <h3>当前基线</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>领域</th>
+                        <th>已落地</th>
+                        <th>当前约束 / 后续收尾</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>World / Load</td>
+                        <td><code>WorldManager</code>、<code>WorldTransitionCoordinator</code>、<code>WorldBuilder</code>、<code>RuntimeResult</code> 已形成 scene load / rollback 事务边界；mesh runtime 已进入 <code>WorldMeshObject</code>，mesh section 计划通过 <code>MeshObjectBuildPlan</code> 汇入 <code>WorldBuildPlan</code>；unknown scene object type、mesh <code>materialSlots</code> 缺失或无法按源 slot 映射都会在 load/validation 边界失败，不再流入 renderer 侧 fallback；load failure 已按 <code>Scene.*</code>、<code>Mesh.*</code>、<code>Material.*</code>、<code>Texture.*</code>、<code>Shader.*</code>、<code>WorldTransition.*</code> 分类。</td>
+                        <td>terrain、material、texture、shader reflection 的 plan/result 仍需继续统一到 Asset 构建计划边界。</td>
+                    </tr>
+                    <tr>
+                        <td>GT -> Renderer</td>
+                        <td><code>WorldSnapshot</code>、<code>WorldSnapshotQueue</code>、<code>RenderScene</code>、<code>ResolvedRenderScene</code> 已形成只读数据流；<code>WorldSnapshotBuilder</code> 从 <code>World::GetMeshObjects()</code> 生成 mesh draw snapshot。</td>
+                        <td>snapshot 仍携带 logical resource keys，由 <code>ResolvedRenderScene</code> 在 renderer cache 中解析 backend entries。</td>
+                    </tr>
+                    <tr>
+                        <td>Renderer / Vulkan Backend</td>
+                        <td><code>RendererBackendVulkan</code> 接管 frame begin / submit / present / fence epoch；<code>RHIDeviceVulkan</code> 是历史命名下的 Vulkan device boundary，也是唯一直接访问 <code>VulkanManager</code> 的渲染侧边界；<code>VulkanManager</code> public contract 只保留 <code>GetInstance()</code>，raw Vulkan device、memory、command buffer、graphics queue、swapchain、semaphore/fence 等状态只通过 private friend 边界供 <code>RHIDeviceVulkan</code> 消费；backend header 只 forward declare concrete device boundary 并以 private <code>std::unique_ptr&lt;RHIDeviceVulkan&gt;</code> 持有，不向上层传播完整 <code>rhiDeviceVulkan.h</code>；Vulkan device boundary buffer/image/image view/sampler/descriptor/render pass/framebuffer contract 已切到 <code>RHIBufferHandle</code> / <code>RHIImageHandle</code> / <code>RHIImageViewHandle</code> / <code>RHISamplerHandle</code> / <code>RHIDescriptor*Handle</code> / <code>RHIRenderPassHandle</code> / <code>RHIFramebufferHandle</code>，descriptor write 保持 Vulkan-native descriptor info；frame sync raw collection getter 已收进 private，backend 通过单帧/单 swapchain image 的 Vulkan-native sync resource 访问 fence、semaphore 和 command buffer；queue/swapchain raw getter 也已收进 private，backend 通过 <code>SubmitToGraphicsQueue()</code> 和 <code>PresentSwapchainImage()</code> 表达 Vulkan submit/present 意图；per-swapchain <code>Buffer</code> 资源包已携带 <code>RHIBufferHandle</code>，<code>Texture</code> 资源包已携带 image/view/sampler lifecycle handles，object descriptor 资源包与 <code>RenderGraph</code> resource/pass 资源包已携带对应 lifecycle handles。</td>
+                        <td>Vulkan 是唯一图形 API，image/view/sampler、descriptor layout/pool、render pass/framebuffer 创建参数继续保留 Vulkan enum/createInfo；backend facade 在现有数据结构需要 Vulkan handle 时解包 raw buffer/image/image view/sampler/descriptor/render pass/framebuffer；<code>Buffer</code> 保留 raw buffer 和 descriptor buffer info 供现有 command buffer 与 descriptor 写入使用，<code>Texture</code> 保留 raw descriptor image info 供现有 descriptor 写入入口使用，object descriptor 与 <code>RenderGraph</code> 保留 raw descriptor/attachment/render pass/framebuffer 字段供当前 draw bind、pass 录制与 descriptor 写入使用。这些 raw 字段是 Vulkan-native 工作数据，不是多 API 抽象层。</td>
+                    </tr>
+                    <tr>
+                        <td>Resource Lifetime</td>
+                        <td><code>ResourceRetireQueue</code> 已覆盖 world reload、graph reload、light SSBO 扩容和 backend fence epoch。</td>
+                        <td><code>RendererResourceCache</code> 仍同时持有 renderer resources、material/texture cache 和 world-local rollback snapshot；不再保存 <code>SceneObject</code> wrapper 或 mesh object binding 表。</td>
+                    </tr>
+                    <tr>
+                        <td>Automation</td>
+                        <td><code>--reloadstress</code>、<code>--reloadfail</code>、<code>--reloadfail-material</code>、<code>--reloadfail-mesh</code>、<code>--reloadfail-texture</code>、<code>--lightstress</code>、<code>--resizestress</code>、<code>--graphreloadstress</code>、<code>--framesmoke</code> 已进入 runtime test path；启动参数入口只投递 <code>RuntimeCommand</code>，generated material/mesh/texture failure rollback 会检查 <code>RuntimeError</code> code。</td>
+                        <td><code>tool/ue-lite-boundary-audit.ps1</code> 已固化 SceneObject cutover、mesh binding cutover、早期 tutorial render path 删除、runtime error code、VulkanManager public raw boundary、Vulkan device boundary raw getter、Vulkan device boundary buffer/image/image view/sampler/descriptor/render pass/framebuffer handle、RenderGraph resource package handle、object descriptor resource package handle、submit boundary、runtime test command boundary 和历史拼写命名不可回流；<code>EngineLoop</code> 会拒绝同帧多项 EngineLoop-owned runtime test 或与正在运行的 runtime test hook 混跑。</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>V1 完成定义</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>领域</th>
+                        <th>完成定义</th>
+                        <th>禁止回归</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>World 所有权</td>
+                        <td><code>World</code> 持有 camera、light、environment、object runtime state；renderer 不持有 mutable gameplay 指针。</td>
+                        <td>RT、pass runtime、draw executor、descriptor 代码回读 <code>World</code> 或 <code>SceneObject</code>。</td>
+                    </tr>
+                    <tr>
+                        <td>加载事务</td>
+                        <td>任意 world load 失败后旧 active world、renderer cache、pass material binding 保持可用。</td>
+                        <td>半切换、半加载、部分新资源污染 active cache。</td>
+                    </tr>
+                    <tr>
+                        <td>快照边界</td>
+                        <td>每帧渲染只消费 <code>WorldSnapshot -> RenderScene -> ResolvedRenderScene</code>。</td>
+                        <td>渲染录制时为了 transform、material、light 回查 mutable scene。</td>
+                    </tr>
+                    <tr>
+                        <td>Renderer / Vulkan Backend</td>
+                        <td>上层只调用 backend/device boundary 的意图接口；Vulkan 是唯一图形 API；资源 lifecycle handle 只承担 identity，不演化为 API-neutral wrapper。</td>
+                        <td><code>source/render/rhi/rhiDevice.h</code>、<code>RHIDevice</code> base class、<code>GetDevice()</code>、<code>GetGpuMemoryProperties()</code>、<code>GetRhiDevice()</code> 逃逸口恢复，或新增 <code>RHIImageLayout</code> / <code>RHIDescriptorType</code> 这类 API-neutral 描述。</td>
+                    </tr>
+                    <tr>
+                        <td>资源生命周期</td>
+                        <td>world-local、graph-local、frame-local GPU 对象都通过 retire 或明确 idle 释放。</td>
+                        <td>reload/resize 时直接销毁仍可能被 GPU 使用的资源。</td>
+                    </tr>
+                    <tr>
+                        <td>命令与测试</td>
+                        <td>控制台/启动参数只投递命令；runtime tests 走用户同路径。</td>
+                        <td>test hook 直接调用 coordinator、render system 或 render graph 内部。</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>收尾阶段</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>阶段</th>
+                        <th>目标</th>
+                        <th>主要动作</th>
+                        <th>出关验收</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>0. 冻结边界基线</td>
+                        <td>把已完成的 hard cutover 边界变成不可回退合同。</td>
+                        <td>扩展 <code>ue-lite-boundary-audit.ps1</code>；新增系统先归属 Engine / World / Asset / Renderer Frontend / Backend / Vulkan Device Boundary / Diagnostics。</td>
+                        <td><code>powershell -ExecutionPolicy Bypass -File tool/ue-lite-boundary-audit.ps1</code> 返回 0。</td>
+                    </tr>
+                    <tr>
+                        <td>1. 移除 mesh 的 renderer wrapper 依赖</td>
+                        <td>已完成：mesh object 由 World-owned <code>WorldMeshObject</code> 承载，renderer 只收 logical handles。</td>
+                        <td>已新增 <code>WorldMeshObject</code>；<code>WorldBuilder</code> 不再从 <code>RendererResourceCache::GetSceneObjects()</code> 或 mesh binding 表导入；cache 中的 <code>SceneObject</code> map 和旧 mesh binding API 已删除；<code>SceneObject</code> wrapper 文件已删除，基础 <code>SceneNode</code>/<code>Camera</code>/<code>Light</code> 由 <code>sceneNode.h/.cpp</code> 承载。</td>
+                        <td><code>ue-lite-boundary-audit.ps1</code>、<code>cmake --build build -j</code>、<code>--framesmoke 5</code>、<code>--reloadstress scenes/SC_speedtree.json 3</code>、<code>--reloadfail-material</code> 已通过。</td>
+                    </tr>
+                    <tr>
+                        <td>2. Asset 构建计划统一化</td>
+                        <td>scene、mesh、terrain、material、texture、shader reflection 校验都输出纯数据计划。</td>
+                        <td>mesh section 桥接已通过 <code>MeshObjectBuildPlan</code> 落地；mesh <code>materialSlots</code> 已改为严格源 slot 数量/顺序验证，失配直接产生 <code>Mesh.LoadFailed</code>，不再生成 unsafe fallback material；<code>--reloadfail-material</code>、<code>--reloadfail-mesh</code>、<code>--reloadfail-texture</code> 已覆盖关键失败回滚点并断言 <code>Material.LoadFailed</code>、<code>Mesh.LoadFailed</code>、<code>Texture.LoadFailed</code>；继续统一 terrain/material/texture/shader reflection 的 plan/result 类型；asset validation 不创建 Vulkan runtime object。</td>
+                        <td>坏 scene、坏 material、坏 mesh、坏 texture 都能通过 runtime command path 验证旧 active world 与 renderer resource 指纹保持不变；boundary audit 固化 runtime error code 分类。</td>
+                    </tr>
+                    <tr>
+                        <td>3. Renderer frontend / frame graph 收口</td>
+                        <td>固定 <code>WorldSnapshot -> RenderScene -> compiled graph/pass runtime -> backend</code> 数据流。</td>
+                        <td><code>RendererFrontend</code> 只产 <code>RenderScene</code>；<code>PassRuntime</code> 只做 pass 分派/barrier/begin-end；graph reload 走 retire。</td>
+                        <td><code>--graphreloadstress 6 --exit-after-tests</code> 与 <code>--framesmoke 120 --exit-after-tests</code> 通过。</td>
+                    </tr>
+                    <tr>
+                        <td>4. Vulkan device boundary 资源句柄推进</td>
+                        <td>Vulkan device boundary contract 从 raw Vulkan handle 释放目标推进到引擎资源生命周期句柄；旧 <code>RHIDevice</code> 虚接口已移除，现有 handle 名称只作为历史命名保留，不作为跨 API 抽象继续扩展。</td>
+                        <td>buffer/image/image view/sampler/descriptor/render pass/framebuffer 生命周期 handle 化已完成；per-swapchain <code>Buffer</code> 已携带 <code>RHIBufferHandle</code> 并用于 frame/object/material UBO 与 light SSBO 生命周期；<code>Texture</code> 已携带 image/view/sampler lifecycle handles 并用于析构释放；object descriptor 资源包与 <code>RenderGraph</code> resource/pass 资源包已携带对应 lifecycle handles；后续不再把 descriptor/render pass/framebuffer 参数改成非 Vulkan 描述，优先补齐生命周期验证、owner 顺序和命名清理。</td>
+                        <td>旧 <code>RHIDevice</code> 虚接口不可回流；<code>RHIDeviceVulkan</code> raw device/memory/command-pool getter 不在 public contract；<code>VulkanManager</code> 除 <code>GetInstance()</code> 外不开放 raw public getter；resize 和 frame smoke 通过；上层不依赖 queue/fence/semaphore/raw device。</td>
+                    </tr>
+                    <tr>
+                        <td>5. 生命周期与回滚完整覆盖</td>
+                        <td>所有替换 GPU 资源的路径都有释放策略和压力验证。</td>
+                        <td>覆盖 world reload success/failure、material failure、light SSBO grow、resize、graph reload、shutdown。</td>
+                        <td>reload、reloadfail、reloadfail-material、lightstress、resizestress、graphreloadstress 全部返回 0，retire queue drain。</td>
+                    </tr>
+                    <tr>
+                        <td>6. Subsystem 与启动流定稿</td>
+                        <td><code>EngineLoop</code> 只编排，不继续吸收具体业务。</td>
+                        <td><code>RuntimeConfig</code>、<code>PlatformApplication</code>、<code>SubsystemCollection</code>、<code>RuntimeCommandExecutor</code> 各自守住边界。</td>
+                        <td>startup order 与 <code>AGENTS.md</code> 一致；新增 runtime command 不绕过 <code>CommandBus</code>；必要错误上下文、debug/profiling/test 入口、rollback 指纹、frame smoke 统计和 retire queue 计数属于需要保留的诊断信息。</td>
+                    </tr>
+                    <tr>
+                        <td>7. 文档升格与计划清理</td>
+                        <td>已实现合同进入正式 architecture/rendering 文档，未来项留在 plan。</td>
+                        <td>更新本文件当前合同；资产/渲染格式进入 <code>documents/rendering/</code>；清理失效临时 notes。</td>
+                        <td><code>documents/README.md</code> 的 source-of-truth 指向无冲突。</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h3>最终验收命令组</h3>
+            <p class="rule">运行约束：runtime 验证命令必须串行执行。程序启动阶段会编译 shader 并写入 <code>shader/spv/</code> 反射/debug 输出，并发运行多个 <code>main.exe</code> 进程可能互相覆盖生成文件，导致非目标失败。</p>
+            <p class="rule">推荐入口：<code>powershell -ExecutionPolicy Bypass -File tool/ue-lite-final-validation.ps1</code>。脚本会串行执行下列矩阵，并把每一步日志写入 <code>artifacts/ue-lite-validation/&lt;timestamp&gt;/</code>。</p>
+            <pre><code>cmake --build build -j
+powershell -ExecutionPolicy Bypass -File tool/ue-lite-boundary-audit.ps1
+build\bin\main.exe --framesmoke 120 --exit-after-tests
+build\bin\main.exe --reloadstress scenes/SC_speedtree.json 100 --exit-after-tests
+build\bin\main.exe --reloadfail scenes/DOES_NOT_EXIST.json --exit-after-tests
+build\bin\main.exe --reloadfail-material --exit-after-tests
+build\bin\main.exe --reloadfail-mesh --exit-after-tests
+build\bin\main.exe --reloadfail-texture --exit-after-tests
+build\bin\main.exe --lightstress 3 --exit-after-tests
+build\bin\main.exe --resizestress 6 --exit-after-tests
+build\bin\main.exe --graphreloadstress 6 --exit-after-tests</code></pre>
+
+            <h3>禁止项</h3>
+            <ul class="dense-list">
+                <li>恢复 <code>SceneLoader</code> / <code>LightManager</code> 旧文件或旧 include。</li>
+                <li>恢复早期三角形教程渲染链：<code>render.*</code>、<code>renderProcess.*</code>、<code>swapchain.*</code>、<code>shaderModule.*</code> 或 <code>triangleData.*</code>。</li>
+                <li>为了兼容保留新旧双 runtime 执行路径。</li>
+                <li>在 renderer draw/pass/descriptor 路径保存 <code>World*</code>、<code>SceneObject*</code> 或 mutable component 指针。</li>
+                <li>test hook 直接调用 coordinator、render system 或 render graph 内部接口绕过 command path。</li>
+                <li>asset validation 阶段创建 Vulkan runtime 对象。</li>
+                <li>恢复旧 <code>RHIDevice</code> 虚接口，或让 backend facade 重新开放 raw device/queue/swapchain/fence getter。</li>
+                <li>把 Vulkan enum、createInfo、descriptor info 包装成 <code>RHIImageLayout</code>、<code>RHIDescriptorType</code> 等 API-neutral 类型，重新走向半成品多后端抽象。</li>
+                <li>在 shader runtime 热路径补与 JSON/source data correctness 重复的 defensive clamp。</li>
+                <li>以“去冗余”为名删除学习型注释、必要错误上下文、debug/profiling/test 入口，或删除仍属于架构合同/明确扩展点的方法。</li>
+            </ul>
+
+            <p class="muted">更细的逐项执行清单保留在 <code>documents/plan/architecture/ue-lite-completion-plan.md</code>；本节记录正式架构文档中的完成定义、阶段门槛和禁止回归项。</p>
         </section>
     </main>
 </div>

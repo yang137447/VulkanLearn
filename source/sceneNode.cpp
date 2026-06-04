@@ -1,24 +1,43 @@
-#include "sceneObject.h"
-#include <memory>
-#include <iostream>
+#include "sceneNode.h"
 
-#include "renderableObject.h"
 #include "commonFunction.h"
 
-void SceneNode::SetPosition(Eigen::Vector3f& position)
+namespace
+{
+
+Eigen::Matrix4f BuildTransformMatrix(
+    const Eigen::Vector3f& position,
+    const Eigen::Quaternionf& rotation,
+    const Eigen::Vector3f& scale)
+{
+    Eigen::Matrix4f scaleMatrix;
+    scaleMatrix <<
+        scale.x(), 0.0f, 0.0f, 0.0f,
+        0.0f, scale.y(), 0.0f, 0.0f,
+        0.0f, 0.0f, scale.z(), 0.0f,
+        0.0f, 0.0f, 0.0f, 1.0f;
+
+    Eigen::Matrix4f rotationMatrix = CommonFunction::QuatToMatrix(rotation);
+    Eigen::Matrix4f translationMatrix;
+    translationMatrix <<
+        1.0f, 0.0f, 0.0f, position.x(),
+        0.0f, 1.0f, 0.0f, position.y(),
+        0.0f, 0.0f, 1.0f, position.z(),
+        0.0f, 0.0f, 0.0f, 1.0f;
+
+    return translationMatrix * rotationMatrix * scaleMatrix;
+}
+
+} // namespace
+
+void SceneNode::SetPosition(const Eigen::Vector3f& position)
 {
     this->position = position;
 }
 
-void SceneNode::SetRotation(Eigen::Vector3f& rotation)
+void SceneNode::SetRotation(const Eigen::Vector3f& rotation)
 {
     quaternion = CommonFunction::RotationToQuat(rotation);
-    this->rotation = CommonFunction::QuatToRotation(quaternion);
-}
-
-void SceneNode::SetRotation(Eigen::Quaternionf& quaternion)
-{
-    this->quaternion = quaternion;
     this->rotation = CommonFunction::QuatToRotation(quaternion);
 }
 
@@ -26,10 +45,9 @@ void SceneNode::SetRotation(Eigen::Quaternionf quaternion)
 {
     this->quaternion = quaternion;
     this->rotation = CommonFunction::QuatToRotation(quaternion);
-    //std::cout << "rotation: " << rotation.x() << " " << rotation.y() << " " << rotation.z() << std::endl;
 }
 
-void SceneNode::SetDeltaRotation(Eigen::Vector3f& deltaRotation)
+void SceneNode::SetDeltaRotation(const Eigen::Vector3f& deltaRotation)
 {
     Eigen::Quaternionf deltaRotationQuaternion = CommonFunction::RotationToQuat(deltaRotation);
     quaternion = quaternion * deltaRotationQuaternion;
@@ -38,7 +56,7 @@ void SceneNode::SetDeltaRotation(Eigen::Vector3f& deltaRotation)
     this->rotation = CommonFunction::QuatToRotation(quaternion);
 }
 
-void SceneNode::SetScale(Eigen::Vector3f& scale)
+void SceneNode::SetScale(const Eigen::Vector3f& scale)
 {
     this->scale = scale;
 }
@@ -58,51 +76,24 @@ Eigen::Vector3f SceneNode::GetUpVector() const
     return quaternion * Eigen::Vector3f(0.0f, 1.0f, 0.0f);
 }
 
-void SceneNode::SetTransform(Eigen::Vector3f& position, Eigen::Vector3f& rotation, Eigen::Vector3f& scale)
+void SceneNode::SetTransform(
+    const Eigen::Vector3f& position,
+    const Eigen::Vector3f& rotation,
+    const Eigen::Vector3f& scale)
 {
     SetPosition(position);
     SetRotation(rotation);
     SetScale(scale);
 
-    Eigen::Matrix4f scaleMatrix;
-    scaleMatrix <<
-        scale.x(), 0.0f, 0.0f, 0.0f,
-        0.0f, scale.y(), 0.0f, 0.0f,
-        0.0f, 0.0f, scale.z(), 0.0f,
-        0.0f, 0.0f, 0.0f, 1.0f;
-
-    Eigen::Matrix4f rotationMatrix = CommonFunction::QuatToMatrix(quaternion);
-    Eigen::Matrix4f translationMatrix;
-    translationMatrix <<
-        1.0f, 0.0f, 0.0f, position.x(),
-        0.0f, 1.0f, 0.0f, position.y(),
-        0.0f, 0.0f, 1.0f, position.z(),
-        0.0f, 0.0f, 0.0f, 1.0f;
-
-    modelMatrix = translationMatrix * rotationMatrix * scaleMatrix;
+    modelMatrix = BuildTransformMatrix(position, quaternion, scale);
 }
 
 void SceneNode::UpdateModelMatrix()
 {
-    Eigen::Matrix4f scaleMatrix;
-    scaleMatrix <<
-        scale.x(), 0.0f, 0.0f, 0.0f,
-        0.0f, scale.y(), 0.0f, 0.0f,
-        0.0f, 0.0f, scale.z(), 0.0f,
-        0.0f, 0.0f, 0.0f, 1.0f;
-
-    Eigen::Matrix4f rotationMatrix = CommonFunction::QuatToMatrix(quaternion);
-    Eigen::Matrix4f translationMatrix;
-    translationMatrix <<
-        1.0f, 0.0f, 0.0f, position.x(),
-        0.0f, 1.0f, 0.0f, position.y(),
-        0.0f, 0.0f, 1.0f, position.z(),
-        0.0f, 0.0f, 0.0f, 1.0f;
-
-    modelMatrix = translationMatrix * rotationMatrix * scaleMatrix;
+    modelMatrix = BuildTransformMatrix(position, quaternion, scale);
 }
 
-void DirectionalLight::SetColor(Eigen::Vector3f& color)
+void DirectionalLight::SetColor(const Eigen::Vector3f& color)
 {
     this->color = color;
 }
@@ -111,11 +102,8 @@ void DirectionalLight::SetIntensity(float intensity)
     this->intensity = intensity;
 }
 
-// PointLight 的 SetColor 和 SetIntensity 方法已内联在头文件中
 Camera::Camera()
 {
-    isOrthographic = false;
-
     SetCamera(Eigen::Vector3f(0.0f, 2.0f, 2.0f), Eigen::Vector3f(0.0f, 0.0f, 0.0f), Eigen::Vector3f(0.0f, 1.0f, 0.0f));
 
     SetProjection(
@@ -130,10 +118,6 @@ Camera::Camera()
         0.0f, 0.0f, -0.5f, 0.5f,
         0.0f, 0.0f, 0.0f, 1.0f;
 }
-void Camera::SetSize(float size)
-{
-    this->size = size;
-}
 void Camera::SetHFOV(float fov)
 {
     this->hFov = fov;
@@ -144,24 +128,23 @@ void Camera::SetClip(float near, float far)
     this->clipNear = near;
     this->clipFar = far;
 }
-void Camera::EnableOrthographic(bool enable)
+void Camera::SetCamera(
+    const Eigen::Vector3f& cameraPosition,
+    const Eigen::Vector3f& lookAtPosition,
+    const Eigen::Vector3f& up)
 {
-    isOrthographic = enable;
-}
-void Camera::SetCamera(Eigen::Vector3f cameraPosition, Eigen::Vector3f lookAtPosition, Eigen::Vector3f up)
-{
-    const Eigen::Vector3f& f = -1.0 * (lookAtPosition - cameraPosition).normalized();
-    const Eigen::Vector3f& r = up.cross(f).normalized();
-    const Eigen::Vector3f& u = f.cross(r).normalized();
-    const Eigen::Vector3f& p = cameraPosition;
+    const Eigen::Vector3f f = -1.0f * (lookAtPosition - cameraPosition).normalized();
+    const Eigen::Vector3f r = up.cross(f).normalized();
+    const Eigen::Vector3f u = f.cross(r).normalized();
+    const Eigen::Vector3f p = cameraPosition;
 
-    static Eigen::Matrix4f matrix01;
+    Eigen::Matrix4f matrix01;
     matrix01 <<
         r.x(), r.y(), r.z(), 0.0f,
         u.x(), u.y(), u.z(), 0.0f,
         f.x(), f.y(), f.z(), 0.0f,
         0.0f, 0.0f, 0.0f, 1.0f;
-    static Eigen::Matrix4f matrix02;
+    Eigen::Matrix4f matrix02;
     matrix02 <<
         1.0f, 0.0f, 0.0f, -p.x(),
         0.0f, 1.0f, 0.0f, -p.y(),
@@ -174,18 +157,16 @@ void Camera::SetCamera(Eigen::Vector3f cameraPosition, Eigen::Vector3f lookAtPos
     SetRotation(Eigen::Quaternionf(matrix01.block<3,3>(0,0).transpose()));
 }
 
-void Camera::SetCamera(Eigen::Vector3f cameraPosition, Eigen::Vector3f cameraRotation)
+void Camera::SetCamera(const Eigen::Vector3f& cameraPosition, const Eigen::Vector3f& cameraRotation)
 {
-    Eigen::Vector3f position = cameraPosition;
-
     //对于旋转处理，遵循 Yaw Pitch Roll 的顺序,即 先绕Y轴旋转，再绕X轴旋转，最后绕Z轴旋转
     Eigen::Matrix4f rotationMatrix = CommonFunction::RotationToMatrix(cameraRotation);
 
     Eigen::Matrix4f translationMatrix;
     translationMatrix <<
-        1.0f, 0.0f, 0.0f, -position.x(),
-        0.0f, 1.0f, 0.0f, -position.y(),
-        0.0f, 0.0f, 1.0f, -position.z(),
+        1.0f, 0.0f, 0.0f, -cameraPosition.x(),
+        0.0f, 1.0f, 0.0f, -cameraPosition.y(),
+        0.0f, 0.0f, 1.0f, -cameraPosition.z(),
         0.0f, 0.0f, 0.0f, 1.0f;
 
     viewMatrix =  rotationMatrix.transpose() * translationMatrix;
@@ -220,23 +201,20 @@ void Camera::SetOrthographic(float size, float aspect, float near, float far)
         0.0f, 0.0f, 2.0f/(n-f), -1.0f*(n + f)/(n - f),
         0.0f, 0.0f, 0.0f, 1.0f;
 
-    SetSize(size);
     SetClip(near, far);
 }
 
-Eigen::Matrix4f& Camera::GetViewMatrix()
+const Eigen::Matrix4f& Camera::GetViewMatrix()
 {
-    updateViewMatrix();
+    UpdateViewMatrix();
     return viewMatrix;
 }
-Eigen::Matrix4f& Camera::GetProjectionMatrix()
+Eigen::Matrix4f Camera::GetProjectionMatrix() const
 {
-    static Eigen::Matrix4f matrix;
-    matrix = ndcMatrix * projectionMatrix;
-    return matrix;
+    return ndcMatrix * projectionMatrix;
 }
 
-void Camera::updateViewMatrix()
+void Camera::UpdateViewMatrix()
 {
     //对于旋转处理，遵循 Yaw Pitch Roll 的顺序,即 先绕Y轴旋转，再绕X轴旋转，最后绕Z轴旋转
     Eigen::Matrix4f rotationMatrix = CommonFunction::QuatToMatrix(quaternion);
@@ -251,26 +229,3 @@ void Camera::updateViewMatrix()
     viewMatrix =  rotationMatrix.transpose() * translationMatrix;
 }
 
-SceneObject::SceneObject()
-{
-}
-
-SceneObject::SceneObject(std::shared_ptr<RenderableObject> renderableObject, std::shared_ptr<MaterialInstance> materialInstance)
-{
-    SetRenderableObject(renderableObject);
-    SetMaterialInstance(materialInstance);
-}
-
-SceneObject::~SceneObject()
-{
-}
-
-void SceneObject::SetRenderableObject(std::shared_ptr<RenderableObject> renderableObject)
-{
-    this->renderableObject = renderableObject;
-}
-
-void SceneObject::SetMaterialInstance(std::shared_ptr<MaterialInstance> materialInstance)
-{
-    this->materialInstance = materialInstance;
-}

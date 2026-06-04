@@ -30,8 +30,6 @@ private:
 
     void CreateIndexBuffer();
     void DestroyIndexBuffer();
-private:
-    RenderableObject();
 
     std::string name;
     VL::RendererBackendVulkan* rendererBackend = nullptr;

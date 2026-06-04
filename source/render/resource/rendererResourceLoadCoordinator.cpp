@@ -1,12 +1,10 @@
 #include "render/resource/rendererResourceLoadCoordinator.h"
 
-#include <iostream>
+#include <iterator>
 #include <stdexcept>
 
 #include <nlohmann/json.hpp>
 
-#include "pipeline/pipelineFactory.h"
-#include "render/backend/rendererBackendVulkan.h"
 #include "render/resource/rendererEnvironmentLoader.h"
 #include "render/resource/rendererMaterialLoader.h"
 #include "render/resource/rendererMeshLoader.h"
@@ -30,7 +28,7 @@ void RendererResourceLoadCoordinator::SetRendererBackend(RendererBackendVulkan* 
     this->rendererBackend = rendererBackend;
 }
 
-void RendererResourceLoadCoordinator::LoadRendererResources(
+RendererWorldResourceLoadResult RendererResourceLoadCoordinator::LoadRendererResources(
     const WorldBuildPlan& worldBuildPlan,
     uint64_t ownerGeneration)
 {
@@ -49,6 +47,7 @@ void RendererResourceLoadCoordinator::LoadRendererResources(
     RendererEnvironmentLoader environmentLoader(*pipelineFactory, *rendererBackend);
     RendererMaterialLoader materialLoader(*pipelineFactory, *rendererBackend);
     RendererMeshLoader meshLoader(*pipelineFactory, *rendererBackend);
+    RendererWorldResourceLoadResult loadResult;
 
     environmentLoader.LoadGlobalResources();
 
@@ -59,7 +58,7 @@ void RendererResourceLoadCoordinator::LoadRendererResources(
     // Delegate renderer-facing resource creation by scene object type.
     // Gameplay-facing camera/light/environment metadata is owned by WorldBuilder.
     const nlohmann::json& scnJson = worldBuildPlan.sceneJson;
-    for (const SceneObjectBuildPlan& objectPlan : worldBuildPlan.sceneAssetPlan.objectPlans)
+    for (const SceneAssetObjectPlan& objectPlan : worldBuildPlan.sceneAssetPlan.objectPlans)
     {
         const auto& obj = scnJson["objects"][objectPlan.objectIndex];
         const std::string& type = objectPlan.objectType;
@@ -72,7 +71,12 @@ void RendererResourceLoadCoordinator::LoadRendererResources(
                     "Scene mesh object missing mesh load request: " + worldBuildPlan.scenePath +
                     " object=" + objectPlan.objectName);
             }
-            meshLoader.LoadMeshObject(obj, *objectPlan.meshLoadRequest);
+            std::vector<MeshObjectBuildPlan> meshObjectPlans =
+                meshLoader.LoadMeshObject(obj, *objectPlan.meshLoadRequest);
+            loadResult.meshObjectPlans.insert(
+                loadResult.meshObjectPlans.end(),
+                std::make_move_iterator(meshObjectPlans.begin()),
+                std::make_move_iterator(meshObjectPlans.end()));
         }
         else if (type == "environment")
         {
@@ -90,9 +94,13 @@ void RendererResourceLoadCoordinator::LoadRendererResources(
         }
         else
         {
-            std::cout << "Unknown object type: " << objectPlan.objectName << std::endl;
+            throw std::runtime_error(
+                "Renderer resource load received unsupported validated object type: " +
+                type + " object=" + objectPlan.objectName);
         }
     }
+
+    return loadResult;
 }
 
 } // namespace VL

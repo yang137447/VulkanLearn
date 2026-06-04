@@ -10,6 +10,7 @@
 #include "render/backend/rendererDescriptorWriter.h"
 #include "render/backend/rendererDescriptorPlan.h"
 #include "render/framegraph/frameGraphCompiler.h"
+#include "render/rhi/rhiResourceHandles.h"
 
 // RenderGraph-owned image resource. MSAA resources are currently modeled as an
 // explicit source image plus a resolved image when a pass needs to read the
@@ -18,10 +19,13 @@
 struct RenderResource
 {
     std::string name;
+    VL::RHIImageHandle imageHandle;
     vk::Image image;
     vk::DeviceMemory memory;
+    VL::RHIImageViewHandle imageViewHandle;
     vk::ImageView imageView;
     vk::Format format;
+    VL::RHISamplerHandle samplerHandle;
     vk::Sampler sampler;
     uint32_t width;
     uint32_t height;
@@ -48,7 +52,7 @@ struct Renderpass
     void Draw(vk::CommandBuffer& commandBuffer) const;
 
     void CreateUniformBuffers();
-    void SetupDescriptors(class RenderGraph& renderGraph, VL::RendererBackendVulkan& rendererBackend);
+    void SetupDescriptors(const class RenderGraph& renderGraph, VL::RendererBackendVulkan& rendererBackend);
     void CreatePassDescriptorSetLayout(VL::RendererBackendVulkan& rendererBackend);
     void CreateDescriptorSets(VL::RendererBackendVulkan& rendererBackend);
     void UpdateDescriptorSets(
@@ -59,8 +63,10 @@ struct Renderpass
     const std::vector<std::vector<vk::DescriptorSet>>& GetDescriptorSets() const { return descriptorSets; }
 
     std::string name;
+    VL::RHIRenderPassHandle renderPassHandle;
     vk::RenderPass renderPass;
     std::vector<vk::ClearValue> clearValues;
+    std::vector<VL::RHIFramebufferHandle> framebufferHandles;
     std::vector<vk::Framebuffer> framebuffers;
     uint32_t width;
     uint32_t height;
@@ -75,9 +81,13 @@ struct Renderpass
     // pass 输入描述符集, 统一使用Set3。inputDescriptorImageInfos 按 binding 下标保存，
     // binding 关系来自 CompiledFrameGraph，而不是运行时的输入数组顺序推断。
     vk::DescriptorPool descriptorPool;
+    VL::RHIDescriptorPoolHandle descriptorPoolHandle;
     std::vector<std::vector<vk::DescriptorImageInfo>> inputDescriptorImageInfos;
+    VL::RHIDescriptorSetLayoutHandle emptyDescriptorSetLayoutHandle;
     vk::DescriptorSetLayout emptyDescriptorSetLayout;
+    VL::RHIDescriptorSetLayoutHandle descriptorSetLayoutHandle;
     vk::DescriptorSetLayout descriptorSetLayout;
+    std::vector<std::vector<VL::RHIDescriptorSetHandle>> descriptorSetHandles;
     std::vector<std::vector<vk::DescriptorSet>> descriptorSets;
     std::vector<std::vector<vk::WriteDescriptorSet>> writeDescriptorSets;
 
@@ -104,14 +114,12 @@ public:
     void Shutdown(
         VL::RendererBackendVulkan& rendererBackend,
         VL::RenderGraphReleaseMode releaseMode = VL::RenderGraphReleaseMode::Immediate);
-    std::vector<std::string>& GetRenderpassesOrdered() { return renderpassesOrdered; }
+    const std::vector<std::string>& GetRenderpassesOrdered() const { return renderpassesOrdered; }
     std::unordered_map<std::string, Renderpass>& GetRenderpasses() { return renderpasses; }
+    const std::unordered_map<std::string, Renderpass>& GetRenderpasses() const { return renderpasses; }
     const VL::CompiledFrameGraph& GetCompiledFrameGraph() const { return compiledFrameGraph; }
-    std::vector<RenderResource>& GetDepthResourceMsaa() { return resourcesMsaa["sceneDepth"]; }
-    std::vector<RenderResource>& GetDepthResourceResolve() { return resourcesResolve["sceneDepth"]; }
-    std::vector<RenderResource>& GetShadowMap() { return resourcesResolve["shadowMap"]; }
-    std::unordered_map<std::string, std::vector<RenderResource>>& GetResourcesMsaa() { return resourcesMsaa; }
-    std::unordered_map<std::string, std::vector<RenderResource>>& GetResourcesResolve() { return resourcesResolve; }
+    const std::unordered_map<std::string, std::vector<RenderResource>>& GetResourcesMsaa() const { return resourcesMsaa; }
+    const std::unordered_map<std::string, std::vector<RenderResource>>& GetResourcesResolve() const { return resourcesResolve; }
     // Initial render-graph setup creates pass-owned descriptors. Runtime
     // refreshes reuse the compiled graph but update descriptors after a world
     // reload changes scene resources, lights, or pass material instances.
@@ -146,26 +154,22 @@ private:
         VL::RenderGraphReleaseMode releaseMode);
 
     vk::RenderPass CreateVkRenderPass(
-        Renderpass& renderpass,
+        const Renderpass& renderpass,
         VL::RendererBackendVulkan& rendererBackend,
         bool bUseMsaa);
-    void DestroyVkRenderPass(vk::RenderPass& renderPass, VL::RendererBackendVulkan& rendererBackend);
 
     std::vector<vk::Framebuffer> CreateVkFrameBuffers(
-        Renderpass renderPass,
-        std::vector<std::string>& inputResources,
-        std::vector<std::string>& outputResources,
+        const Renderpass& renderpass,
+        const std::vector<std::string>& outputResources,
         VL::RendererBackendVulkan& rendererBackend,
         bool bUseMsaa);
-    void DestroyVkFrameBuffers(
-        std::vector<vk::Framebuffer>& framebuffers,
-        VL::RendererBackendVulkan& rendererBackend);
 
     vk::Format GetFormat(const std::string& formatStr);
     vk::ImageUsageFlags GetImageUsage(const std::vector<std::string>& usageStr);
 
     vk::AttachmentLoadOp GetAttachmentLoadOp(const std::string& loadOpStr);
     vk::AttachmentStoreOp GetAttachmentStoreOp(const std::string& storeOpStr);
+    bool IsDepthResource(const std::string& resourceName) const;
     
     std::vector<vk::ClearValue> GetClearValues(const std::vector<std::string>& outputResources, bool bUseMsaa);
 private:

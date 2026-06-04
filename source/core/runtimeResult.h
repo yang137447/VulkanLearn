@@ -7,7 +7,7 @@
 namespace VL
 {
 
-// Structured runtime error used by UE-Lite loading and transition code. The
+// Structured runtime error used by loading and transition code. The
 // source fields are optional so call sites can add file/node context when it is
 // available without inventing a different error type for each subsystem.
 struct RuntimeError

@@ -26,8 +26,6 @@ public:
 
     std::vector<ShaderBinding> GetShaderBindings();
 private:
-    ShaderReflect();
-    vk::DescriptorType GetVulkanDescriptorType(SpvReflectDescriptorType type);
     vk::ShaderStageFlags GetVulkanShaderStage(SpvReflectShaderStageFlagBits stage);
 
     std::vector<SpvReflectShaderModule> shaderModules;

@@ -1,5 +1,6 @@
 #include "render/backend/resolvedRenderScene.h"
 
+#include <string>
 #include <utility>
 
 #include "material.h"
@@ -57,7 +58,11 @@ RuntimeResult<ResolvedRenderScene> ResolvedRenderSceneBuilder::Build(
                 {
                     return RuntimeResult<ResolvedRenderScene>::Failure(MakeRuntimeError(
                         "ResolvedRenderScene.DrawPacketIndexOutOfRange",
-                        "RenderScene material grouping references a draw packet index outside the draw packet array."));
+                        "RenderScene material grouping references draw packet index " +
+                            std::to_string(drawPacketIndex) +
+                            ", but draw packet count is " +
+                            std::to_string(renderScene.drawPackets.size()) +
+                            "."));
                 }
 
                 const RenderDrawPacket& packet = renderScene.drawPackets.at(drawPacketIndex);

@@ -3,13 +3,14 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include <vulkan/vulkan.hpp>
 
 #include "baseStructs.h"
-#include "render/rhi/vulkan/rhiDeviceVulkan.h"
+#include "render/rhi/rhiResourceHandles.h"
 
 class PipelineFactory;
 struct SDL_Window;
@@ -17,20 +18,28 @@ struct SDL_Window;
 namespace VL
 {
 
+class RHIDeviceVulkan;
+
 struct RendererFrameContext
 {
+    // frameIndex addresses the frame-in-flight sync ring; swapchainImageIndex
+    // addresses per-swapchain-image command buffers, framebuffers, descriptors,
+    // and UBO resources.
     uint32_t frameIndex = 0;
     uint32_t swapchainImageIndex = 0;
     uint32_t swapchainImageCount = 0;
     vk::CommandBuffer commandBuffer;
 };
 
-// Transitional Vulkan backend facade. It owns frame policy and delegates raw
-// Vulkan device/resource work to the RHI device while RenderSystem still
-// records pass commands during the backend split.
+// Vulkan backend facade. It owns frame policy and delegates low-level
+// Vulkan device/resource work to RHIDeviceVulkan while RenderSystem
+// coordinates frame orchestration.
 class RendererBackendVulkan
 {
 public:
+    RendererBackendVulkan();
+    ~RendererBackendVulkan();
+
     void Initialize(std::vector<const char*>& instanceExtensions, SDL_Window* window);
     void WaitIdle();
     void RecreateSwapchain(int width, int height);
@@ -133,19 +142,31 @@ public:
         uint32_t width,
         uint32_t height,
         uint32_t mipLevels);
+    RHIImageHandle GetImageHandle(vk::Image image) const;
+    RHIImageViewHandle GetImageViewHandle(vk::ImageView imageView) const;
+    RHISamplerHandle GetSamplerHandle(vk::Sampler sampler) const;
     void DestroyImageResource(
         vk::Image& image,
         vk::DeviceMemory& memory,
         vk::ImageView& imageView,
         vk::Sampler& sampler);
+    void DestroyImageResource(
+        RHIImageHandle& imageHandle,
+        RHIImageViewHandle& imageViewHandle,
+        RHISamplerHandle& samplerHandle);
     vk::DescriptorSetLayout CreateDescriptorSetLayout(
         const vk::DescriptorSetLayoutCreateInfo& createInfo,
         const std::string& debugName);
+    RHIDescriptorSetLayoutHandle GetDescriptorSetLayoutHandle(vk::DescriptorSetLayout descriptorSetLayout) const;
     void DestroyDescriptorSetLayout(vk::DescriptorSetLayout& descriptorSetLayout);
+    void DestroyDescriptorSetLayout(RHIDescriptorSetLayoutHandle& descriptorSetLayoutHandle);
     vk::DescriptorPool CreateDescriptorPool(
         const vk::DescriptorPoolCreateInfo& createInfo,
         const std::string& debugName);
+    RHIDescriptorPoolHandle GetDescriptorPoolHandle(vk::DescriptorPool descriptorPool) const;
     void DestroyDescriptorPool(vk::DescriptorPool& descriptorPool);
+    void DestroyDescriptorPool(RHIDescriptorPoolHandle& descriptorPoolHandle);
+    RHIDescriptorSetHandle GetDescriptorSetHandle(vk::DescriptorSet descriptorSet) const;
     void AllocateDescriptorSets(
         const vk::DescriptorSetAllocateInfo& allocateInfo,
         std::vector<vk::DescriptorSet>& descriptorSets);
@@ -155,18 +176,69 @@ public:
     vk::RenderPass CreateRenderPass(
         const vk::RenderPassCreateInfo2& createInfo,
         const std::string& debugName);
+    RHIRenderPassHandle GetRenderPassHandle(vk::RenderPass renderPass) const;
     void DestroyRenderPass(vk::RenderPass& renderPass);
+    void DestroyRenderPass(RHIRenderPassHandle& renderPassHandle);
     vk::Framebuffer CreateFramebuffer(
         const vk::FramebufferCreateInfo& createInfo,
         const std::string& debugName);
+    RHIFramebufferHandle GetFramebufferHandle(vk::Framebuffer framebuffer) const;
     void DestroyFramebuffers(std::vector<vk::Framebuffer>& framebuffers);
+    void DestroyFramebuffers(std::vector<RHIFramebufferHandle>& framebufferHandles);
     RendererFrameContext BeginFrame(uint32_t currentFrame);
     void SubmitFrame(const RendererFrameContext& frameContext, uint32_t currentFrame);
 
 private:
-    RHIDeviceVulkan rhiDevice;
+    RHIBufferHandle RequireBufferHandle(vk::Buffer buffer) const;
+    RHIBufferHandle RequireBufferMemoryHandle(vk::DeviceMemory memory) const;
+    void BindBufferHandle(RHIBufferHandle bufferHandle);
+    void UnbindBufferHandle(RHIBufferHandle bufferHandle);
+    RHIImageHandle RequireImageHandle(vk::Image image) const;
+    RHIImageHandle RequireImageMemoryHandle(vk::DeviceMemory memory) const;
+    void BindImageHandle(RHIImageHandle imageHandle);
+    void UnbindImageHandle(RHIImageHandle imageHandle);
+    RHIImageViewHandle RequireImageViewHandle(vk::ImageView imageView) const;
+    void BindImageViewHandle(RHIImageViewHandle imageViewHandle);
+    void UnbindImageViewHandle(RHIImageViewHandle imageViewHandle);
+    RHISamplerHandle RequireSamplerHandle(vk::Sampler sampler) const;
+    void BindSamplerHandle(RHISamplerHandle samplerHandle);
+    void UnbindSamplerHandle(RHISamplerHandle samplerHandle);
+    RHIDescriptorSetLayoutHandle RequireDescriptorSetLayoutHandle(vk::DescriptorSetLayout descriptorSetLayout) const;
+    RHIDescriptorSetLayoutHandle ResolveDescriptorSetLayoutHandle(vk::DescriptorSetLayout descriptorSetLayout);
+    void BindDescriptorSetLayoutHandle(RHIDescriptorSetLayoutHandle descriptorSetLayoutHandle);
+    void UnbindDescriptorSetLayoutHandle(RHIDescriptorSetLayoutHandle descriptorSetLayoutHandle);
+    RHIDescriptorPoolHandle RequireDescriptorPoolHandle(vk::DescriptorPool descriptorPool) const;
+    void BindDescriptorPoolHandle(RHIDescriptorPoolHandle descriptorPoolHandle);
+    void UnbindDescriptorPoolHandle(RHIDescriptorPoolHandle descriptorPoolHandle);
+    RHIDescriptorSetHandle RequireDescriptorSetHandle(vk::DescriptorSet descriptorSet) const;
+    void BindDescriptorSetHandle(
+        RHIDescriptorSetHandle descriptorSetHandle,
+        RHIDescriptorPoolHandle descriptorPoolHandle);
+    void UnbindDescriptorSetHandle(RHIDescriptorSetHandle descriptorSetHandle);
+    std::vector<RHIDescriptorWrite> BuildDescriptorWrites(
+        const std::vector<vk::WriteDescriptorSet>& writeDescriptorSets) const;
+    RHIRenderPassHandle RequireRenderPassHandle(vk::RenderPass renderPass) const;
+    void BindRenderPassHandle(RHIRenderPassHandle renderPassHandle);
+    void UnbindRenderPassHandle(RHIRenderPassHandle renderPassHandle);
+    RHIFramebufferHandle RequireFramebufferHandle(vk::Framebuffer framebuffer) const;
+    void BindFramebufferHandle(RHIFramebufferHandle framebufferHandle);
+    void UnbindFramebufferHandle(RHIFramebufferHandle framebufferHandle);
+
+    std::unique_ptr<RHIDeviceVulkan> rhiDevice;
     bool initialized = false;
     std::vector<uint64_t> frameFenceEpochs;
+    std::unordered_map<VkBuffer, RHIBufferHandle> bufferHandlesByBuffer;
+    std::unordered_map<VkDeviceMemory, RHIBufferHandle> bufferHandlesByMemory;
+    std::unordered_map<VkImage, RHIImageHandle> imageHandlesByImage;
+    std::unordered_map<VkDeviceMemory, RHIImageHandle> imageHandlesByMemory;
+    std::unordered_map<VkImageView, RHIImageViewHandle> imageViewHandlesByImageView;
+    std::unordered_map<VkSampler, RHISamplerHandle> samplerHandlesBySampler;
+    std::unordered_map<VkDescriptorSetLayout, RHIDescriptorSetLayoutHandle> descriptorSetLayoutHandlesByLayout;
+    std::unordered_map<VkDescriptorPool, RHIDescriptorPoolHandle> descriptorPoolHandlesByPool;
+    std::unordered_map<VkDescriptorSet, RHIDescriptorSetHandle> descriptorSetHandlesBySet;
+    std::unordered_map<VkDescriptorPool, std::vector<RHIDescriptorSetHandle>> descriptorSetHandlesByPool;
+    std::unordered_map<VkRenderPass, RHIRenderPassHandle> renderPassHandlesByRenderPass;
+    std::unordered_map<VkFramebuffer, RHIFramebufferHandle> framebufferHandlesByFramebuffer;
 };
 
 } // namespace VL

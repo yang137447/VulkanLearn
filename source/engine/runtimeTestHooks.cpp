@@ -41,7 +41,6 @@ bool SameRendererResourceFingerprint(
         lhs.materials == rhs.materials &&
         lhs.materialInstances == rhs.materialInstances &&
         lhs.objectResources == rhs.objectResources &&
-        lhs.sceneObjects == rhs.sceneObjects &&
         lhs.textures == rhs.textures &&
         lhs.passMaterialInstances == rhs.passMaterialInstances;
 }
@@ -66,8 +65,6 @@ std::string FormatRendererResourceFingerprint(
         std::to_string(fingerprint.materialInstances.size()) +
         ", objectResources=" +
         std::to_string(fingerprint.objectResources.size()) +
-        ", sceneObjects=" +
-        std::to_string(fingerprint.sceneObjects.size()) +
         ", textures=" +
         std::to_string(fingerprint.textures.size()) +
         ", passMaterialInstances=" +
@@ -81,7 +78,7 @@ std::filesystem::path BuildGeneratedFixtureDirectory(
     const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
     return std::filesystem::path(resourcePath) /
         "generated" /
-        "ue-lite-runtime-tests" /
+        "runtime-validation" /
         (namePrefix + std::to_string(now));
 }
 
@@ -145,6 +142,140 @@ std::filesystem::path CreateGeneratedMaterialFailureScene(const std::string& res
         "  \"objects\": [\n"
         "    {\n"
         "      \"name\": \"BadMaterialMesh_001\",\n"
+        "      \"type\": \"mesh\",\n"
+        "      \"modelPath\": \"" + meshAssetPath.generic_string() + "\",\n"
+        "      \"position\": [0, 0, 0],\n"
+        "      \"scale\": [1, 1, 1],\n"
+        "      \"rotation\": [0, 0, 0]\n"
+        "    },\n"
+        "    {\n"
+        "      \"name\": \"Camera_01\",\n"
+        "      \"type\": \"camera\",\n"
+        "      \"fov\": 90,\n"
+        "      \"near_clip\": 0.1,\n"
+        "      \"far_clip\": 2000,\n"
+        "      \"position\": [0, 2, 6],\n"
+        "      \"rotation\": [0, 0, 0],\n"
+        "      \"scale\": [1, 1, 1]\n"
+        "    }\n"
+        "  ]\n"
+        "}\n");
+
+    return scenePath;
+}
+
+std::filesystem::path CreateGeneratedMeshFailureScene(const std::string& resourcePath)
+{
+    const std::filesystem::path fixtureDirectory =
+        BuildGeneratedFixtureDirectory(resourcePath, "bad-mesh-");
+    std::filesystem::create_directories(fixtureDirectory);
+
+    const std::filesystem::path meshAssetPath = fixtureDirectory / "SM_bad_mesh_runtime_test.json";
+    const std::filesystem::path scenePath = fixtureDirectory / "SC_bad_mesh_runtime_test.json";
+
+    WriteTextFile(
+        meshAssetPath,
+        "{\n"
+        "  \"name\": \"Bad Mesh Runtime Test Mesh\",\n"
+        "  \"type\": \"mesh\",\n"
+        "  \"modelDataPath\": \"models/datas/RUNTIME_VALIDATION_MISSING_ASSET.obj\",\n"
+        "  \"materialSlots\": [\n"
+        "    {\n"
+        "      \"name\": \"Default\",\n"
+        "      \"materialInstancePath\": \"materials/MI_axis.json\"\n"
+        "    }\n"
+        "  ]\n"
+        "}\n");
+
+    WriteTextFile(
+        scenePath,
+        "{\n"
+        "  \"name\": \"Bad Mesh Runtime Test Scene\",\n"
+        "  \"type\": \"scene\",\n"
+        "  \"objects\": [\n"
+        "    {\n"
+        "      \"name\": \"BadMesh_001\",\n"
+        "      \"type\": \"mesh\",\n"
+        "      \"modelPath\": \"" + meshAssetPath.generic_string() + "\",\n"
+        "      \"position\": [0, 0, 0],\n"
+        "      \"scale\": [1, 1, 1],\n"
+        "      \"rotation\": [0, 0, 0]\n"
+        "    },\n"
+        "    {\n"
+        "      \"name\": \"Camera_01\",\n"
+        "      \"type\": \"camera\",\n"
+        "      \"fov\": 90,\n"
+        "      \"near_clip\": 0.1,\n"
+        "      \"far_clip\": 2000,\n"
+        "      \"position\": [0, 2, 6],\n"
+        "      \"rotation\": [0, 0, 0],\n"
+        "      \"scale\": [1, 1, 1]\n"
+        "    }\n"
+        "  ]\n"
+        "}\n");
+
+    return scenePath;
+}
+
+std::filesystem::path CreateGeneratedTextureFailureScene(const std::string& resourcePath)
+{
+    const std::filesystem::path fixtureDirectory =
+        BuildGeneratedFixtureDirectory(resourcePath, "bad-texture-");
+    std::filesystem::create_directories(fixtureDirectory);
+
+    const std::filesystem::path textureAssetPath = fixtureDirectory / "T_bad_runtime_test.json";
+    const std::filesystem::path materialInstancePath = fixtureDirectory / "MI_bad_texture_runtime_test.json";
+    const std::filesystem::path meshAssetPath = fixtureDirectory / "SM_bad_texture_runtime_test.json";
+    const std::filesystem::path scenePath = fixtureDirectory / "SC_bad_texture_runtime_test.json";
+
+    WriteTextFile(
+        textureAssetPath,
+        R"({
+  "name": "Bad Runtime Test Texture",
+  "type": "texture",
+  "source": "textures/datas/RUNTIME_VALIDATION_MISSING_ASSET.png",
+  "colorSpace": "srgb",
+  "mipmaps": true,
+  "filter": "linear",
+  "wrapMode": "repeat"
+})");
+
+    WriteTextFile(
+        materialInstancePath,
+        "{\n"
+        "  \"name\": \"Bad Runtime Test Texture Material Instance\",\n"
+        "  \"type\": \"materialInstance\",\n"
+        "  \"material\": \"shader/glsl/M_unlit.json\",\n"
+        "  \"parameters\": {\n"
+        "    \"u_tintColor\": [1, 1, 1, 1]\n"
+        "  },\n"
+        "  \"textures\": {\n"
+        "    \"albedoMap\": \"" + textureAssetPath.generic_string() + "\"\n"
+        "  }\n"
+        "}\n");
+
+    WriteTextFile(
+        meshAssetPath,
+        "{\n"
+        "  \"name\": \"Bad Texture Runtime Test Mesh\",\n"
+        "  \"type\": \"mesh\",\n"
+        "  \"modelDataPath\": \"models/datas/axis.obj\",\n"
+        "  \"materialSlots\": [\n"
+        "    {\n"
+        "      \"name\": \"Default\",\n"
+        "      \"materialInstancePath\": \"" + materialInstancePath.generic_string() + "\"\n"
+        "    }\n"
+        "  ]\n"
+        "}\n");
+
+    WriteTextFile(
+        scenePath,
+        "{\n"
+        "  \"name\": \"Bad Texture Runtime Test Scene\",\n"
+        "  \"type\": \"scene\",\n"
+        "  \"objects\": [\n"
+        "    {\n"
+        "      \"name\": \"BadTextureMesh_001\",\n"
         "      \"type\": \"mesh\",\n"
         "      \"modelPath\": \"" + meshAssetPath.generic_string() + "\",\n"
         "      \"position\": [0, 0, 0],\n"
@@ -342,7 +473,8 @@ bool RuntimeTestHooks::BeginWorldReloadStress(
 
 bool RuntimeTestHooks::BeginWorldReloadFailureRollbackTest(
     std::string scenePath,
-    const DiagnosticsSubsystem& diagnostics)
+    const DiagnosticsSubsystem& diagnostics,
+    std::string expectedErrorCode)
 {
     if (scenePath.empty())
     {
@@ -358,6 +490,7 @@ bool RuntimeTestHooks::BeginWorldReloadFailureRollbackTest(
     }
 
     failureRollbackScenePath = std::move(scenePath);
+    failureRollbackExpectedErrorCode = std::move(expectedErrorCode);
     waitingForFailureRollbackResult = false;
     failureRollbackTestActive = true;
     runtimeTestStatus = RuntimeTestStatus::Running;
@@ -378,7 +511,10 @@ bool RuntimeTestHooks::BeginGeneratedMaterialFailureRollbackTest(
         const std::filesystem::path scenePath = CreateGeneratedMaterialFailureScene(resourcePath);
         generatedFailureFixtureDirectory = scenePath.parent_path().string();
         cleanupGeneratedFailureFixture = true;
-        const bool started = BeginWorldReloadFailureRollbackTest(scenePath.string(), diagnostics);
+        const bool started = BeginWorldReloadFailureRollbackTest(
+            scenePath.string(),
+            diagnostics,
+            "Material.LoadFailed");
         if (!started)
         {
             CleanupGeneratedRuntimeFixture(generatedFailureFixtureDirectory, diagnostics);
@@ -392,6 +528,76 @@ bool RuntimeTestHooks::BeginGeneratedMaterialFailureRollbackTest(
         runtimeTestStatus = RuntimeTestStatus::Failed;
         diagnostics.ReportError(
             std::string("Failed to create generated material failure rollback fixture: ") +
+            exception.what());
+        CleanupGeneratedRuntimeFixture(generatedFailureFixtureDirectory, diagnostics);
+        cleanupGeneratedFailureFixture = false;
+        generatedFailureFixtureDirectory.clear();
+        return false;
+    }
+}
+
+bool RuntimeTestHooks::BeginGeneratedMeshFailureRollbackTest(
+    const std::string& resourcePath,
+    const DiagnosticsSubsystem& diagnostics)
+{
+    try
+    {
+        generatedFailureFixtureDirectory.clear();
+        const std::filesystem::path scenePath = CreateGeneratedMeshFailureScene(resourcePath);
+        generatedFailureFixtureDirectory = scenePath.parent_path().string();
+        cleanupGeneratedFailureFixture = true;
+        const bool started = BeginWorldReloadFailureRollbackTest(
+            scenePath.string(),
+            diagnostics,
+            "Mesh.LoadFailed");
+        if (!started)
+        {
+            CleanupGeneratedRuntimeFixture(generatedFailureFixtureDirectory, diagnostics);
+            cleanupGeneratedFailureFixture = false;
+            generatedFailureFixtureDirectory.clear();
+        }
+        return started;
+    }
+    catch (const std::exception& exception)
+    {
+        runtimeTestStatus = RuntimeTestStatus::Failed;
+        diagnostics.ReportError(
+            std::string("Failed to create generated mesh failure rollback fixture: ") +
+            exception.what());
+        CleanupGeneratedRuntimeFixture(generatedFailureFixtureDirectory, diagnostics);
+        cleanupGeneratedFailureFixture = false;
+        generatedFailureFixtureDirectory.clear();
+        return false;
+    }
+}
+
+bool RuntimeTestHooks::BeginGeneratedTextureFailureRollbackTest(
+    const std::string& resourcePath,
+    const DiagnosticsSubsystem& diagnostics)
+{
+    try
+    {
+        generatedFailureFixtureDirectory.clear();
+        const std::filesystem::path scenePath = CreateGeneratedTextureFailureScene(resourcePath);
+        generatedFailureFixtureDirectory = scenePath.parent_path().string();
+        cleanupGeneratedFailureFixture = true;
+        const bool started = BeginWorldReloadFailureRollbackTest(
+            scenePath.string(),
+            diagnostics,
+            "Texture.LoadFailed");
+        if (!started)
+        {
+            CleanupGeneratedRuntimeFixture(generatedFailureFixtureDirectory, diagnostics);
+            cleanupGeneratedFailureFixture = false;
+            generatedFailureFixtureDirectory.clear();
+        }
+        return started;
+    }
+    catch (const std::exception& exception)
+    {
+        runtimeTestStatus = RuntimeTestStatus::Failed;
+        diagnostics.ReportError(
+            std::string("Failed to create generated texture failure rollback fixture: ") +
             exception.what());
         CleanupGeneratedRuntimeFixture(generatedFailureFixtureDirectory, diagnostics);
         cleanupGeneratedFailureFixture = false;
@@ -569,6 +775,7 @@ void RuntimeTestHooks::NotifyCommandResult(
             runtimeTestStatus = RuntimeTestStatus::Failed;
             diagnostics.ReportError(
                 "World reload failure rollback test expected load to fail, but it succeeded.");
+            failureRollbackExpectedErrorCode.clear();
             if (shouldCleanupGeneratedFixture)
             {
                 CleanupGeneratedRuntimeFixture(generatedFailureFixtureDirectory, diagnostics);
@@ -577,11 +784,47 @@ void RuntimeTestHooks::NotifyCommandResult(
             return;
         }
 
+        if (!failureRollbackExpectedErrorCode.empty())
+        {
+            if (!commandResult.loadWorldError.has_value())
+            {
+                runtimeTestStatus = RuntimeTestStatus::Failed;
+                diagnostics.ReportError(
+                    "World reload failure rollback test failed because the expected load failure did not expose a RuntimeError.");
+                failureRollbackExpectedErrorCode.clear();
+                if (shouldCleanupGeneratedFixture)
+                {
+                    CleanupGeneratedRuntimeFixture(generatedFailureFixtureDirectory, diagnostics);
+                    generatedFailureFixtureDirectory.clear();
+                }
+                return;
+            }
+
+            if (commandResult.loadWorldError->code != failureRollbackExpectedErrorCode)
+            {
+                runtimeTestStatus = RuntimeTestStatus::Failed;
+                diagnostics.ReportError(
+                    "World reload failure rollback test failed because the load error code was " +
+                    commandResult.loadWorldError->code +
+                    ", expected " +
+                    failureRollbackExpectedErrorCode +
+                    ".");
+                failureRollbackExpectedErrorCode.clear();
+                if (shouldCleanupGeneratedFixture)
+                {
+                    CleanupGeneratedRuntimeFixture(generatedFailureFixtureDirectory, diagnostics);
+                    generatedFailureFixtureDirectory.clear();
+                }
+                return;
+            }
+        }
+
         if (commandResult.worldChanged || commandResult.worldRuntimeBindingAttempted)
         {
             runtimeTestStatus = RuntimeTestStatus::Failed;
             diagnostics.ReportError(
                 "World reload failure rollback test failed because a failed load attempted to rebind runtime world state.");
+            failureRollbackExpectedErrorCode.clear();
             if (shouldCleanupGeneratedFixture)
             {
                 CleanupGeneratedRuntimeFixture(generatedFailureFixtureDirectory, diagnostics);
@@ -597,6 +840,7 @@ void RuntimeTestHooks::NotifyCommandResult(
             runtimeTestStatus = RuntimeTestStatus::Failed;
             diagnostics.ReportError(
                 "World reload failure rollback test failed because active world handle changed after the expected load failure.");
+            failureRollbackExpectedErrorCode.clear();
             if (shouldCleanupGeneratedFixture)
             {
                 CleanupGeneratedRuntimeFixture(generatedFailureFixtureDirectory, diagnostics);
@@ -616,6 +860,7 @@ void RuntimeTestHooks::NotifyCommandResult(
                 "} after={" +
                 FormatRendererResourceFingerprint(commandResult.rendererResourcesAfterLoad) +
                 "}");
+            failureRollbackExpectedErrorCode.clear();
             if (shouldCleanupGeneratedFixture)
             {
                 CleanupGeneratedRuntimeFixture(generatedFailureFixtureDirectory, diagnostics);
@@ -627,6 +872,7 @@ void RuntimeTestHooks::NotifyCommandResult(
         runtimeTestStatus = RuntimeTestStatus::Succeeded;
         diagnostics.ReportInfo(
             "World reload failure rollback test completed: active world, renderer resource cache, and pass material bindings preserved after expected load failure.");
+        failureRollbackExpectedErrorCode.clear();
         if (shouldCleanupGeneratedFixture)
         {
             CleanupGeneratedRuntimeFixture(generatedFailureFixtureDirectory, diagnostics);

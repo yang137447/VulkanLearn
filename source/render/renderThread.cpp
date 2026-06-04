@@ -1,7 +1,6 @@
 #include "render/renderThread.h"
 
 #include <exception>
-#include <stdexcept>
 
 #include "profiler.h"
 #include "renderSystem.h"

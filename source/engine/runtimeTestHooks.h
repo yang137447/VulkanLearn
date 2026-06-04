@@ -19,9 +19,9 @@ enum class RuntimeTestStatus
     Failed
 };
 
-// Runtime-only validation hooks for UE-Lite migration work. These hooks drive
-// systems through the public command path, so test pressure uses the same
-// WorldTransitionCoordinator and EngineLoop rebinding path as a user command.
+// Runtime-only validation hooks. These hooks drive systems through the public
+// command path, so test pressure uses the same WorldTransitionCoordinator and
+// EngineLoop rebinding path as a user command.
 class RuntimeTestHooks
 {
 public:
@@ -31,8 +31,15 @@ public:
         const DiagnosticsSubsystem& diagnostics);
     bool BeginWorldReloadFailureRollbackTest(
         std::string scenePath,
-        const DiagnosticsSubsystem& diagnostics);
+        const DiagnosticsSubsystem& diagnostics,
+        std::string expectedErrorCode = {});
     bool BeginGeneratedMaterialFailureRollbackTest(
+        const std::string& resourcePath,
+        const DiagnosticsSubsystem& diagnostics);
+    bool BeginGeneratedMeshFailureRollbackTest(
+        const std::string& resourcePath,
+        const DiagnosticsSubsystem& diagnostics);
+    bool BeginGeneratedTextureFailureRollbackTest(
         const std::string& resourcePath,
         const DiagnosticsSubsystem& diagnostics);
     bool BeginGeneratedHighLightReloadStress(
@@ -44,9 +51,7 @@ public:
         const RuntimeCommandExecutionResult& commandResult,
         const DiagnosticsSubsystem& diagnostics);
 
-    bool IsWorldReloadStressActive() const { return worldReloadStressActive; }
     RuntimeTestStatus GetRuntimeTestStatus() const { return runtimeTestStatus; }
-    RuntimeTestStatus GetWorldReloadStressStatus() const { return runtimeTestStatus; }
 
 private:
     std::string worldReloadStressScenePath;
@@ -62,6 +67,7 @@ private:
     std::string generatedReloadStressFixtureDirectory;
 
     std::string failureRollbackScenePath;
+    std::string failureRollbackExpectedErrorCode;
     bool failureRollbackTestActive = false;
     bool waitingForFailureRollbackResult = false;
     bool cleanupGeneratedFailureFixture = false;

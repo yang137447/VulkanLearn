@@ -8,12 +8,12 @@ The terrain system is intentionally small:
 
 - load a heightmap exported by terrain tools such as World Creator
 - generate one CPU mesh at scene-load time
-- render it through the existing `RenderableObject`, `SceneObject`, and `MaterialInstance` path
+- render it through World-owned terrain/object runtime data, `WorldSnapshot`, renderer resource loading, `RenderableObject`, and `MaterialInstance`
 - keep terrain material textures in the existing `MI_*.json` and `T_*.json` asset system
 
 This is not yet a streaming terrain, clipmap, virtual texture, or tiled LOD system.
 
-## Scene Object
+## Scene Entry
 
 Scene files can reference a terrain descriptor with a `terrain` object:
 
@@ -28,7 +28,7 @@ Scene files can reference a terrain descriptor with a `terrain` object:
 }
 ```
 
-The scene node owns transform only. Terrain source data belongs in `terrains/TR_*.json`.
+The scene entry owns transform only. Terrain source data belongs in `terrains/TR_*.json`. Runtime terrain data should follow the current VulkanLearn V1 boundary: World owns mutable terrain/object state, renderer consumes snapshot/resource keys, and no new terrain path should depend on the removed `SceneObject` wrapper.
 
 ## Terrain Descriptor
 

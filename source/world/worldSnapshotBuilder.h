@@ -34,8 +34,8 @@ private:
     std::optional<uint64_t> previousWorldGeneration;
     std::optional<Eigen::Matrix4f> previousViewProjection;
     // Previous object transforms are renderer input history, so the builder
-    // caches them by stable object id instead of asking RenderSystem to mutate
-    // SceneObject after command submission.
+    // caches them by stable object id instead of asking RenderSystem to write
+    // back into mutable World objects after command submission.
     std::unordered_map<RuntimeId, Eigen::Matrix4f> previousObjectModels;
 };
 

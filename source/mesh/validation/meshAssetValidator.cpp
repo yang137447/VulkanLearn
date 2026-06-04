@@ -6,8 +6,6 @@
 
 namespace
 {
-    constexpr const char* UnsafeSlotFallbackMaterialInstancePath = "materials/MI_fallback_unsafe_slot.json";
-
     void EnsureObject(const nlohmann::json& json, std::string_view meshAssetPath)
     {
         if (!json.is_object())
@@ -152,25 +150,6 @@ namespace
         return static_cast<size_t>(std::distance(sourceSlots.begin(), it));
     }
 
-    std::vector<MeshSectionLoadPlan> BuildUnsafeFallbackSectionLoadPlans(
-        const ModelResource& modelResource,
-        const std::string& reason)
-    {
-        std::vector<MeshSectionLoadPlan> sectionPlans;
-        sectionPlans.reserve(modelResource.sections.size());
-        for (const MeshSection& section : modelResource.sections)
-        {
-            MeshSectionLoadPlan sectionPlan;
-            sectionPlan.sectionName = section.sectionName;
-            sectionPlan.materialSlotName = "UnsafeSlotFallback";
-            sectionPlan.materialInstancePath = UnsafeSlotFallbackMaterialInstancePath;
-            sectionPlan.bUsesUnsafeFallbackMaterial = true;
-            sectionPlan.unsafeFallbackReason = reason;
-            sectionPlans.push_back(sectionPlan);
-        }
-        return sectionPlans;
-    }
-
     std::string BuildSlotCountMismatchReason(
         const MeshAssetBuildPlan& buildPlan,
         size_t sourceSlotCount,
@@ -231,15 +210,11 @@ std::vector<MeshSectionLoadPlan> MeshAssetValidator::BuildSectionLoadPlans(
     const std::vector<std::string> sourceSlots = BuildUniqueSourceMaterialSlots(modelResource);
     if (buildPlan.assetType == "speedtree" && buildPlan.materialSlots.size() != sourceSlots.size())
     {
-        return BuildUnsafeFallbackSectionLoadPlans(
-            modelResource,
-            BuildSlotCountMismatchReason(buildPlan, sourceSlots.size(), true));
+        throw std::runtime_error(BuildSlotCountMismatchReason(buildPlan, sourceSlots.size(), true));
     }
     if (buildPlan.assetType != "speedtree" && buildPlan.materialSlots.size() != sourceSlots.size())
     {
-        return BuildUnsafeFallbackSectionLoadPlans(
-            modelResource,
-            BuildSlotCountMismatchReason(buildPlan, sourceSlots.size(), false));
+        throw std::runtime_error(BuildSlotCountMismatchReason(buildPlan, sourceSlots.size(), false));
     }
 
     for (const MeshSection& section : modelResource.sections)
@@ -255,8 +230,7 @@ std::vector<MeshSectionLoadPlan> MeshAssetValidator::BuildSectionLoadPlans(
         const size_t sourceSlotIndex = FindSourceSlotIndex(sourceSlots, section.materialSlotName);
         if (sourceSlotIndex >= buildPlan.materialSlots.size())
         {
-            return BuildUnsafeFallbackSectionLoadPlans(
-                modelResource,
+            throw std::runtime_error(
                 "Mesh section material slot cannot be mapped by source slot index: " +
                 buildPlan.meshAssetPath + " model=" + buildPlan.modelDataPath +
                 " section=" + section.sectionName +

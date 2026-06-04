@@ -26,9 +26,9 @@ void World::SetEnvironment(WorldEnvironment environment)
     this->environment = std::move(environment);
 }
 
-void World::AddSceneObject(std::string name, std::shared_ptr<SceneObject> object)
+void World::AddMeshObject(std::string name, WorldMeshObject object)
 {
-    sceneObjects[std::move(name)] = std::move(object);
+    meshObjects[std::move(name)] = std::move(object);
 }
 
 void World::AddDirectionalLight(std::string name, std::shared_ptr<DirectionalLight> light)

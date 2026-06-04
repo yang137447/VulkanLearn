@@ -39,8 +39,6 @@ public:
     RuntimeResult<WorldTransitionResult> LoadInitialWorld(const std::string& scenePath);
     RuntimeResult<WorldTransitionResult> RequestWorldLoad(const std::string& scenePath);
 
-    WorldTransitionState GetState() const { return state; }
-
 private:
     RuntimeResult<WorldTransitionResult> LoadWorldThroughResourceCoordinator(const std::string& scenePath);
 

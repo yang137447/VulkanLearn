@@ -1,16 +1,11 @@
 #include "vulkanManager.h"
 #include "SDL3/SDL_vulkan.h"
 #include <algorithm>
+#include <cassert>
 #include <cstdint>
-#include <iostream>
-#include <chrono>
-#include "pipeline/graphicsPipeline.h"
+#include <stdexcept>
 #include "commonFunction.h"
 #include "vulkanDebug.h"
-
-VulkanManager::VulkanManager()
-{
-}
 
 void VulkanManager::Init(std::vector<const char *> &extensions, SDL_Window *window)
 {
@@ -20,10 +15,6 @@ void VulkanManager::Init(std::vector<const char *> &extensions, SDL_Window *wind
     instanceExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
 #endif
     sdlWindow = window;
-    for (auto extension : instanceExtensions)
-    {
-        std::cout << "instanceExtension:" << extension << std::endl;
-    }
 
     CreateVkInstance();
     EnumeratePhysicalDevices();
@@ -32,7 +23,6 @@ void VulkanManager::Init(std::vector<const char *> &extensions, SDL_Window *wind
     CreateVkSwapChain();
     CreateVkCommandBuffer();
     CreateSyncObjects();
-    InitInstance(); //初始化实例
 }
 
 VulkanManager::~VulkanManager()
@@ -71,11 +61,6 @@ void VulkanManager::ReCreateSwapChain(int newWidth, int newHeight)
 
 void VulkanManager::CreateVkInstance()
 {
-    std::cout << "Valid Vulkan Instance Layers:" << std::endl;
-    for(auto& Layer :vk::enumerateInstanceLayerProperties())
-    {
-        std::cout << "  ->Layer:" << Layer.layerName << std::endl;
-    }
     vk::ApplicationInfo applicationInfo;
     applicationInfo.setApiVersion(VK_API_VERSION_1_3);
     vk::InstanceCreateInfo instanceCreateInfo;
@@ -88,8 +73,7 @@ void VulkanManager::CreateVkInstance()
     instance = vk::createInstance(instanceCreateInfo);
     if (!instance)
     {
-        std::cout << "Failed to create Vulkan instance" << std::endl;
-        return;
+        throw std::runtime_error("Failed to create Vulkan instance.");
     }
     VulkanDebug::Init(instance);
 }
@@ -97,56 +81,44 @@ void VulkanManager::CreateVkInstance()
 void VulkanManager::DestroyVkInstance()
 {
     instance.destroy();
-    std::cout << "Destroy VkInstance" << std::endl;
 }
 
 void VulkanManager::EnumeratePhysicalDevices()
 {
     physicalDevices = instance.enumeratePhysicalDevices();
 
-    gpuCount = static_cast<uint32_t>(physicalDevices.size());
+    const uint32_t gpuCount = static_cast<uint32_t>(physicalDevices.size());
 
     if (gpuCount == 0)
     {
-        std::cout << "No GPU found" << std::endl;
-        return;
-    }
-    std::cout << "GPU count: " << gpuCount << std::endl;
-    for (uint32_t i = 0; i < gpuCount; i++)
-    {
-        vk::PhysicalDeviceProperties deviceProperties = physicalDevices[i].getProperties();
-        std::cout << "GPU " << i << ": " << deviceProperties.deviceName << std::endl;
+        throw std::runtime_error("No Vulkan physical device found.");
     }
     vk::PhysicalDevice physicalDevice = physicalDevices[0];
     gpuMemoryProperties = physicalDevice.getMemoryProperties();
-    sampleCount = CommonFunction::GetMaxUsableSampleCount(physicalDevice);
-    std::cout << "Max Sample Count: " << (uint32_t)sampleCount << std::endl;
-    uint32_t maxColorAttachmentsCount = physicalDevice.getProperties().limits.maxColorAttachments;
-    std::cout << "Max Color Attachments Count: " << maxColorAttachmentsCount << std::endl;
 }
 
 void VulkanManager::CreateVkSurface()
 {
     bool result = SDL_Vulkan_CreateSurface(sdlWindow, instance, nullptr,&surface);
-    if(result == true)
+    if(result == false)
     {
-        std::cout << "Create VkSurface" << std::endl;
+        throw std::runtime_error("Failed to create Vulkan surface.");
     }
-    
 }
 
 void VulkanManager::DestroyVkSurface()
 {
     instance.destroySurfaceKHR(surface);
-    std::cout << "Destroy VkSurface" << std::endl;
 }
 
 void VulkanManager::CreateVkDevice()
 {
-    // 找一下quequeFamilys
-    physicalDevices[GPUIndex].getQueueFamilyProperties(&queueFamilyCount, nullptr);
+    // Find queue families used by the current Vulkan device boundary.
+    uint32_t queueFamilyCount = 0;
+    physicalDevices[kGpuIndex].getQueueFamilyProperties(&queueFamilyCount, nullptr);
+    std::vector<vk::QueueFamilyProperties> queueFamilyProperties;
     queueFamilyProperties.resize(queueFamilyCount);
-    physicalDevices[GPUIndex].getQueueFamilyProperties(&queueFamilyCount, queueFamilyProperties.data());
+    physicalDevices[kGpuIndex].getQueueFamilyProperties(&queueFamilyCount, queueFamilyProperties.data());
 
     std::vector<uint32_t> presentQueueFamilyIndices;
     std::vector<uint32_t> graphicQueueFamilyIndices;
@@ -158,7 +130,7 @@ void VulkanManager::CreateVkDevice()
         {
             graphicQueueFamilyIndices.push_back(i);
         }
-        if (physicalDevices[GPUIndex].getSurfaceSupportKHR(i, surface))
+        if (physicalDevices[kGpuIndex].getSurfaceSupportKHR(i, surface))
         {
             presentQueueFamilyIndices.push_back(i);
         }
@@ -167,15 +139,13 @@ void VulkanManager::CreateVkDevice()
     // Check if we have a graphics queue family
     if (graphicQueueFamilyIndices.empty())
     {
-        std::cout << "No graphics queue family found" << std::endl;
-        return;
+        throw std::runtime_error("No Vulkan graphics queue family found.");
     }
 
     // Check if we have a present queue family
     if (presentQueueFamilyIndices.empty())
     {
-        std::cout << "No present queue family found" << std::endl;
-        return;
+        throw std::runtime_error("No Vulkan present queue family found.");
     }
     // 找到一个Graphics和Present都支持的队列
     for (uint32_t i = 0; i < graphicQueueFamilyIndices.size(); i++)
@@ -184,27 +154,25 @@ void VulkanManager::CreateVkDevice()
         {
             if (graphicQueueFamilyIndices[i] == presentQueueFamilyIndices[j])
             {
-                graphicQueueFamilyIndex = graphicQueueFamilyIndices[i];
+                graphicsQueueFamilyIndex = graphicQueueFamilyIndices[i];
                 presentQueueFamilyIndex = presentQueueFamilyIndices[j];
-                std::cout << "Found a queue family that supports both graphics and present: " << graphicQueueFamilyIndex.value() << std::endl;
                 break;
             }
         }
     }
     // 如果没有找到，就用第一个Graphics和第一个Present
-    if (!graphicQueueFamilyIndex.has_value())
+    if (!graphicsQueueFamilyIndex.has_value())
     {
-        graphicQueueFamilyIndex = graphicQueueFamilyIndices[0];
+        graphicsQueueFamilyIndex = graphicQueueFamilyIndices[0];
         presentQueueFamilyIndex = presentQueueFamilyIndices[0];
-        std::cout << "Using the first graphics and present queue family: " << graphicQueueFamilyIndex.value() << presentQueueFamilyIndex.value() << std::endl;
     }
 
     vk::DeviceQueueCreateInfo deviceGraphicsQueueCreateInfo;
-    float graohicsQueuePriorities[1] = {0.0f};
+    float graphicsQueuePriorities[1] = {0.0f};
     deviceGraphicsQueueCreateInfo
-        .setQueueFamilyIndex(graphicQueueFamilyIndex.value())
+        .setQueueFamilyIndex(graphicsQueueFamilyIndex.value())
         .setQueueCount(1)
-        .setPQueuePriorities(graohicsQueuePriorities);
+        .setPQueuePriorities(graphicsQueuePriorities);
 
     // Required by the current shadow and sampler paths. A future device
     // selection pass should reject GPUs that do not expose these features
@@ -223,26 +191,22 @@ void VulkanManager::CreateVkDevice()
         .setPEnabledFeatures(&deviceFeatures)
         .setEnabledLayerCount(0);
     
-    device = physicalDevices[GPUIndex].createDevice(deviceCreateInfo);
+    device = physicalDevices[kGpuIndex].createDevice(deviceCreateInfo);
     assert(device);
-    std::cout << "Create VkDevice" << std::endl;
 
     // Get the graphics queue
-    device.getQueue(graphicQueueFamilyIndex.value(), 0, &graphicQueue);
-    // Get the present queue
-    device.getQueue(presentQueueFamilyIndex.value(), 0, &presentQueue);
+    device.getQueue(graphicsQueueFamilyIndex.value(), 0, &graphicsQueue);
 }
 
 void VulkanManager::DestroyVkDevice()
 {
     device.destroy();
-    std::cout << "Destroy VkDevice" << std::endl;
 }
 
 void VulkanManager::CreateVkSwapChain()
 {
     // 获取支持的表面格式
-    surfaceFormats = physicalDevices[GPUIndex].getSurfaceFormatsKHR(surface);
+    std::vector<vk::SurfaceFormatKHR> surfaceFormats = physicalDevices[kGpuIndex].getSurfaceFormatsKHR(surface);
     assert(!surfaceFormats.empty());
     for(const auto &availableFormat : surfaceFormats)
     {
@@ -252,26 +216,10 @@ void VulkanManager::CreateVkSwapChain()
             break;
         }
     }
-    std::cout << "Surface format: " << vk::to_string(surfaceFormat.format) << std::endl;
-    for (const auto &surfaceFormat : surfaceFormats)
-    {
-        std::cout << "  ->Support Surface format: " << vk::to_string(surfaceFormat.format) << std::endl;
-    }
     // 获取KHR表面能力
-    surfaceCapabilities = physicalDevices[GPUIndex].getSurfaceCapabilitiesKHR(surface);
-    std::cout << "Surface capabilities: " << std::endl;
-    std::cout << "  ->minImageCount: " << surfaceCapabilities.minImageCount << std::endl;
-    std::cout << "  ->maxImageCount: " << surfaceCapabilities.maxImageCount << std::endl;
-    std::cout << "  ->currentExtent: " << surfaceCapabilities.currentExtent.width << "x" << surfaceCapabilities.currentExtent.height << std::endl;
-    std::cout << "  ->minImageExtent: " << surfaceCapabilities.minImageExtent.width << "x" << surfaceCapabilities.minImageExtent.height << std::endl;
-    std::cout << "  ->maxImageExtent: " << surfaceCapabilities.maxImageExtent.width << "x" << surfaceCapabilities.maxImageExtent.height << std::endl;
-    std::cout << "  ->maxImageArrayLayers: " << surfaceCapabilities.maxImageArrayLayers << std::endl;
-    std::cout << "  ->supportedTransforms: " << vk::to_string(surfaceCapabilities.supportedTransforms) << std::endl;
-    std::cout << "  ->currentTransform: " << vk::to_string(surfaceCapabilities.currentTransform) << std::endl;
-    std::cout << "  ->supportedCompositeAlpha: " << vk::to_string(surfaceCapabilities.supportedCompositeAlpha) << std::endl;
-    std::cout << "  ->supportedUsageFlags: " << vk::to_string(surfaceCapabilities.supportedUsageFlags) << std::endl;
+    vk::SurfaceCapabilitiesKHR surfaceCapabilities = physicalDevices[kGpuIndex].getSurfaceCapabilitiesKHR(surface);
     //获取支持的显示模式数量
-    presentModes = physicalDevices[GPUIndex].getSurfacePresentModesKHR(surface);
+    std::vector<vk::PresentModeKHR> presentModes = physicalDevices[kGpuIndex].getSurfacePresentModesKHR(surface);
     assert(!presentModes.empty());
     // 确定一下显示模式
     vk::PresentModeKHR presentMode = vk::PresentModeKHR::eFifo;
@@ -289,11 +237,6 @@ void VulkanManager::CreateVkSwapChain()
         {
             presentMode = availablePresentMode;
         }
-    }
-    std::cout << "Present mode: " << vk::to_string(presentMode) << std::endl;
-    for (const auto &presentMode : presentModes)
-    {
-        std::cout << "  ->Support present mode: " << vk::to_string(presentMode) << std::endl;
     }
     // 确定surface的高度和宽度
     if(surfaceCapabilities.currentExtent.width == 0xFFFFFFFF)
@@ -354,11 +297,11 @@ void VulkanManager::CreateVkSwapChain()
         // one. If we move to Vulkan oldSwapchain handoff, this becomes the
         // previous handle and ownership must be updated in DestroyVkSwapChain.
         .setOldSwapchain(nullptr);
-    if(graphicQueueFamilyIndex.value() != presentQueueFamilyIndex.value())
+    if(graphicsQueueFamilyIndex.value() != presentQueueFamilyIndex.value())
     {
         //如果图形队列和呈现队列不是同一个队列族
         //则需要设置共享模式
-        uint32_t queueFamilyIndices[] = { graphicQueueFamilyIndex.value(), presentQueueFamilyIndex.value() };
+        uint32_t queueFamilyIndices[] = { graphicsQueueFamilyIndex.value(), presentQueueFamilyIndex.value() };
         swapChainCreateInfo
             .setImageSharingMode(vk::SharingMode::eConcurrent)
             .setQueueFamilyIndexCount(2)
@@ -370,8 +313,8 @@ void VulkanManager::CreateVkSwapChain()
     // 获取交换链中的图像数量
     vk::Result result = device.getSwapchainImagesKHR(swapChain, &swapChainImageCount, nullptr);
     assert(result == vk::Result::eSuccess);
-    std::cout << "Swap chain image count: " << swapChainImageCount << std::endl;
     // 获取交换链中的图像
+    std::vector<vk::Image> swapChainImages;
     swapChainImages.resize(swapChainImageCount);
     result = device.getSwapchainImagesKHR(swapChain, &swapChainImageCount, swapChainImages.data());
     assert(result == vk::Result::eSuccess);
@@ -389,11 +332,6 @@ void VulkanManager::CreateVkSwapChain()
             "SwapChainImageView_Index_" + std::to_string(i));
         assert(swapChainImageViews[i]);
     }
-    std::cout << "Create VkSwapChain" << std::endl;
-    std::cout << "  Swap chain image format: " << vk::to_string(surfaceFormat.format) << std::endl;
-    std::cout << "  Swap chain image extent: " << swapChainExtent.width << "x" << swapChainExtent.height << std::endl;
-    std::cout << "  Swap chain image color space: " << vk::to_string(surfaceFormat.colorSpace) << std::endl;
-    std::cout << "  Swap chain image view count: " << swapChainImageCount << std::endl;
 }
 
 void VulkanManager::DestroyVkSwapChain()
@@ -406,7 +344,6 @@ void VulkanManager::DestroyVkSwapChain()
         }
     }
     swapChainImageViews.clear();
-    swapChainImages.clear();
 
     if (swapChain)
     {
@@ -414,14 +351,13 @@ void VulkanManager::DestroyVkSwapChain()
         swapChain = nullptr;
     }
     swapChainImageCount = 0;
-    std::cout << "Destroy VkSwapChain" << std::endl;
 }
 
 void VulkanManager::CreateVkCommandBuffer()
 {
     vk::CommandPoolCreateInfo commandPoolCreateInfo;
     commandPoolCreateInfo
-        .setQueueFamilyIndex(graphicQueueFamilyIndex.value())
+        .setQueueFamilyIndex(graphicsQueueFamilyIndex.value())
         .setFlags(vk::CommandPoolCreateFlagBits::eResetCommandBuffer);
     commandPool = device.createCommandPool(commandPoolCreateInfo);
     assert(commandPool);
@@ -441,15 +377,6 @@ void VulkanManager::CreateVkCommandBuffer()
         VulkanDebug::SetObjectName(device, commandBuffers[i], vk::ObjectType::eCommandBuffer, "CommandBuffer: SwapchainIndex " + std::to_string(i));
     }
 
-    commandBufferBeginInfo
-        .setPInheritanceInfo(nullptr);
-
-    vk::PipelineStageFlags* piplineStageFlags = new vk::PipelineStageFlags();
-    *piplineStageFlags = vk::PipelineStageFlagBits::eColorAttachmentOutput;
-    submitInfo[0]
-        .setPWaitDstStageMask(piplineStageFlags)
-        .setCommandBuffers(commandBuffers)
-        .setSignalSemaphores(nullptr);
 }
 
 void VulkanManager::DestroyVkCommandBuffer()
@@ -464,7 +391,6 @@ void VulkanManager::DestroyVkCommandBuffer()
         commandPool = nullptr;
     }
     commandBuffers.clear();
-    std::cout << "Destroy VkCommandBuffer" << std::endl;
 }
 
 void VulkanManager::CreateSyncObjects()
@@ -487,8 +413,6 @@ void VulkanManager::CreateSyncObjects()
         assert(renderFinishedSemaphores[i]);
         VulkanDebug::SetObjectName(device, renderFinishedSemaphores[i], vk::ObjectType::eSemaphore, "Semaphore_RenderFinished_" + std::to_string(i));
     }
-    std::cout << "Create VkSemaphore" << std::endl;
-
     //创建 Fence
     vk::FenceCreateInfo fenceCreateInfo;
     fenceCreateInfo
@@ -501,7 +425,6 @@ void VulkanManager::CreateSyncObjects()
         assert(result == vk::Result::eSuccess);
         VulkanDebug::SetObjectName(device, taskFinishedFences[i], vk::ObjectType::eFence, "Fence: TaskFinished (FrameIndex " + std::to_string(i) + ")");
     }
-    std::cout << "Create VkFence" << std::endl;
 
     imagesInFlightFences.resize(swapChainImageCount, nullptr);
 }
@@ -525,7 +448,6 @@ void VulkanManager::DestroySyncObjects()
         }
     }
     renderFinishedSemaphores.clear();
-    std::cout << "Destroy VkSemaphore" << std::endl;
     
     for (vk::Fence& fence : taskFinishedFences)
     {
@@ -535,11 +457,6 @@ void VulkanManager::DestroySyncObjects()
         }
     }
     taskFinishedFences.clear();
-    std::cout << "Destroy VkFence" << std::endl;
 
     imagesInFlightFences.clear();
-}
-
-void VulkanManager::InitInstance()
-{
 }

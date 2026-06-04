@@ -41,8 +41,8 @@ Documentation in this repository is split by responsibility:
 
 - `architecture/vulkanlearn-architecture.html`
   - VulkanLearn V1 formal architecture HTML
-  - covers Platform/Input, EngineLoop, World, Asset/Material/Shader, Renderer/RHI/FrameGraph, Config/Debug/Test, design patterns, GT/RT data boundaries, WorldSnapshot publish/consume, resource lifetime, migration status, acceptance checks, and risk records
-  - naming rule: `UE-Lite` is only the earlier architecture route name; new C++ engine code uses the `VL` namespace
+  - covers Platform/Input, EngineLoop, World, Asset/Material/Shader, Renderer/Vulkan Backend/FrameGraph, Config/Debug/Test, design patterns, GT/RT data boundaries, WorldSnapshot publish/consume, resource lifetime, hard cutover status, acceptance checks, and risk records
+  - naming rule: `UE-Lite` is only the earlier architecture route name and validation-script context; new C++ engine code uses the `VL` namespace
 - `architecture/coding-guidelines.md`
   - general C++ coding conventions
   - currently records public header responsibility comment rules
@@ -62,6 +62,8 @@ Architecture plans:
 
 - `plan/architecture/modern-engine-refactor-blueprint.html`
   - earlier modern-engine refactor blueprint kept as planning context
+- `plan/architecture/ue-lite-completion-plan.md`
+  - completed UE-Lite/VulkanLearn V1 architecture baseline, hard boundary regression rules, and validation matrix context
 
 Rendering plans:
 

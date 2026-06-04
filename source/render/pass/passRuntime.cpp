@@ -1,7 +1,5 @@
 #include "render/pass/passRuntime.h"
 
-#include <iostream>
-
 #include "commonFunction.h"
 #include "material.h"
 #include "materialInstance.h"
@@ -9,7 +7,6 @@
 #include "pipeline/pipelineBase.h"
 #include "profiler.h"
 #include "renderGraph.h"
-#include "shaderReflect.h"
 
 namespace VL
 {
@@ -69,7 +66,6 @@ void PassRuntime::RecordShadowPass(PassRuntimeContext& context) const
     std::shared_ptr<MaterialInstance> passMaterialInstance = renderPass.materialInstance.lock();
     if (!passMaterialInstance)
     {
-        std::cout << "materialInstance is expired" << std::endl;
         commandBuffer.endRenderPass();
         return;
     }
@@ -78,7 +74,6 @@ void PassRuntime::RecordShadowPass(PassRuntimeContext& context) const
     std::shared_ptr<Material> baseMaterial = passMaterialInstance->GetBaseMaterial().lock();
     if (!baseMaterial)
     {
-        std::cout << "base material is expired" << std::endl;
         commandBuffer.endRenderPass();
         return;
     }
@@ -128,7 +123,6 @@ void PassRuntime::RecordPostProcessPass(PassRuntimeContext& context) const
     std::shared_ptr<MaterialInstance> passMaterialInstance = renderPass.materialInstance.lock();
     if (!passMaterialInstance)
     {
-        std::cout << "materialInstance is expired" << std::endl;
         return;
     }
 
@@ -136,7 +130,6 @@ void PassRuntime::RecordPostProcessPass(PassRuntimeContext& context) const
     std::shared_ptr<Material> baseMaterial = passMaterialInstance->GetBaseMaterial().lock();
     if (!baseMaterial)
     {
-        std::cout << "base material is expired" << std::endl;
         return;
     }
 

@@ -1,10 +1,7 @@
 #include "render/backend/rendererDrawExecutor.h"
 
-#include <iostream>
-
 #include "commonFunction.h"
 #include "material.h"
-#include "materialInstance.h"
 #include "pipeline/pipelineBase.h"
 #include "renderGraph.h"
 #include "render/backend/rendererObjectResourceRegistry.h"
@@ -12,8 +9,71 @@
 #include "shaderReflect.h"
 #include "vulkanDebug.h"
 
+#include <stdexcept>
+#include <string>
+#include <utility>
+
 namespace VL
 {
+namespace
+{
+
+struct ResolvedDrawResources
+{
+    std::shared_ptr<RenderableObject> renderableObject;
+    RendererObjectGpuResources* objectResources = nullptr;
+    const RenderDrawPacket* drawPacket = nullptr;
+};
+
+std::string BuildResolvedDrawErrorPrefix(const char* passName, const ResolvedDrawPacket& draw)
+{
+    return std::string("RendererDrawExecutor.") + passName +
+        " received invalid resolved draw packet at index " +
+        std::to_string(draw.drawPacketIndex) + ": ";
+}
+
+ResolvedDrawResources RequireResolvedDrawResources(
+    const char* passName,
+    const ResolvedDrawPacket& draw,
+    const RenderScene& renderScene)
+{
+    if (draw.drawPacketIndex >= renderScene.drawPackets.size())
+    {
+        throw std::runtime_error(
+            BuildResolvedDrawErrorPrefix(passName, draw) +
+            "draw packet count is " +
+            std::to_string(renderScene.drawPackets.size()) + ".");
+    }
+
+    const RenderDrawPacket& drawPacket = renderScene.drawPackets[draw.drawPacketIndex];
+    std::shared_ptr<RenderableObject> renderableObject = draw.renderableObject.lock();
+    if (!renderableObject)
+    {
+        throw std::runtime_error(
+            BuildResolvedDrawErrorPrefix(passName, draw) +
+            "renderable object expired for '" +
+            drawPacket.debugName +
+            "' (mesh='" +
+            drawPacket.mesh.key +
+            "').");
+    }
+    if (!draw.objectResourceEntry)
+    {
+        throw std::runtime_error(
+            BuildResolvedDrawErrorPrefix(passName, draw) +
+            "object GPU resource entry is missing for '" +
+            drawPacket.debugName +
+            "'. RendererObjectResourceRegistry should initialize resolved draw resources before pass recording.");
+    }
+
+    ResolvedDrawResources resources;
+    resources.renderableObject = std::move(renderableObject);
+    resources.objectResources = &draw.objectResourceEntry->GetResources();
+    resources.drawPacket = &drawPacket;
+    return resources;
+}
+
+} // namespace
 
 bool RendererDrawExecutor::PipelineUsesDescriptorSet(
     const PipelineBase& pipeline,
@@ -44,20 +104,10 @@ void RendererDrawExecutor::DrawShadowScene(
 
             for (const ResolvedDrawPacket& draw : materialInstanceGroup.draws)
             {
-                if (draw.renderableObject.expired() || !draw.objectResourceEntry)
-                {
-                    std::cout << "object draw resources are expired" << std::endl;
-                    continue;
-                }
-                if (draw.drawPacketIndex >= context.renderScene.drawPackets.size())
-                {
-                    std::cout << "draw packet index is out of range" << std::endl;
-                    continue;
-                }
-
-                std::shared_ptr<RenderableObject> renderableObject = draw.renderableObject.lock();
-                RendererObjectGpuResources& objectResources = draw.objectResourceEntry->GetResources();
-                const RenderDrawPacket& drawPacket = context.renderScene.drawPackets[draw.drawPacketIndex];
+                ResolvedDrawResources drawResources =
+                    RequireResolvedDrawResources("Shadow", draw, context.renderScene);
+                RendererObjectGpuResources& objectResources = *drawResources.objectResources;
+                const RenderDrawPacket& drawPacket = *drawResources.drawPacket;
                 VulkanDebug::ScopedRegion region(
                     commandBuffer,
                     drawPacket.debugName,
@@ -79,7 +129,7 @@ void RendererDrawExecutor::DrawShadowScene(
                     nullptr);
 
                 context.services.UpdateObjectUBOForPass(objectResources, drawPacket);
-                renderableObject->Draw(commandBuffer, renderPass.width, renderPass.height);
+                drawResources.renderableObject->Draw(commandBuffer, renderPass.width, renderPass.height);
             }
         }
     }
@@ -119,20 +169,10 @@ void RendererDrawExecutor::DrawGeometryScene(RendererDrawContext& context) const
 
             for (const ResolvedDrawPacket& draw : materialInstanceGroup.draws)
             {
-                if (draw.renderableObject.expired() || !draw.objectResourceEntry)
-                {
-                    std::cout << "object draw resources are expired" << std::endl;
-                    continue;
-                }
-                if (draw.drawPacketIndex >= context.renderScene.drawPackets.size())
-                {
-                    std::cout << "draw packet index is out of range" << std::endl;
-                    continue;
-                }
-
-                std::shared_ptr<RenderableObject> renderableObject = draw.renderableObject.lock();
-                RendererObjectGpuResources& objectResources = draw.objectResourceEntry->GetResources();
-                const RenderDrawPacket& drawPacket = context.renderScene.drawPackets[draw.drawPacketIndex];
+                ResolvedDrawResources drawResources =
+                    RequireResolvedDrawResources("Geometry", draw, context.renderScene);
+                RendererObjectGpuResources& objectResources = *drawResources.objectResources;
+                const RenderDrawPacket& drawPacket = *drawResources.drawPacket;
                 VulkanDebug::ScopedRegion region(
                     commandBuffer,
                     drawPacket.debugName,
@@ -145,7 +185,7 @@ void RendererDrawExecutor::DrawGeometryScene(RendererDrawContext& context) const
                     nullptr);
 
                 context.services.UpdateObjectUBOForPass(objectResources, drawPacket);
-                renderableObject->Draw(commandBuffer, renderPass.width, renderPass.height);
+                drawResources.renderableObject->Draw(commandBuffer, renderPass.width, renderPass.height);
             }
         }
     }

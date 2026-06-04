@@ -56,8 +56,13 @@ Texture::Texture(
     DeviceTextureCreateOptions createOptions;
     createOptions.semantic = cpuImage->semantic;
     createOptions.generateMipmapsOnDevice = createDesc.generateMipmaps;
-    std::tie(image, imageMemory, mipLevels, format) =
-        DeviceTextureFactory::CreateFromHostImage(rendererBackend, *cpuImage, debugName, createOptions);
+    DeviceTextureResource textureResource =
+        DeviceTextureFactory::CreateResourceFromHostImage(rendererBackend, *cpuImage, debugName, createOptions);
+    imageHandle = textureResource.imageHandle;
+    image = textureResource.image;
+    imageMemory = textureResource.imageMemory;
+    mipLevels = textureResource.mipLevels;
+    format = textureResource.format;
 
     imageView = rendererBackend.Create2DImageView(
         image,
@@ -65,11 +70,13 @@ Texture::Texture(
         format,
         vk::ImageAspectFlagBits::eColor,
         "TextureView: " + debugName);
+    imageViewHandle = rendererBackend.GetImageViewHandle(imageView);
     sampler = rendererBackend.Create2DSampler(
         createDesc.filter,
         createDesc.wrapMode,
         createDesc.generateMipmaps,
         "TextureSampler: " + debugName);
+    samplerHandle = rendererBackend.GetSamplerHandle(sampler);
     descriptorInfo
         .setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
         .setImageView(imageView)
@@ -92,6 +99,18 @@ Texture::Texture(
     this->sampler = sampler;
     this->mipLevels = mipLevels;
     this->format = format;
+    if (image)
+    {
+        imageHandle = rendererBackend.GetImageHandle(image);
+    }
+    if (imageView)
+    {
+        imageViewHandle = rendererBackend.GetImageViewHandle(imageView);
+    }
+    if (sampler)
+    {
+        samplerHandle = rendererBackend.GetSamplerHandle(sampler);
+    }
     descriptorInfo
         .setImageLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
         .setImageView(imageView)
@@ -102,6 +121,17 @@ Texture::~Texture()
 {
     if (rendererBackend != nullptr)
     {
-        rendererBackend->DestroyImageResource(image, imageMemory, imageView, sampler);
+        if (imageHandle.IsValid() || imageViewHandle.IsValid() || samplerHandle.IsValid())
+        {
+            rendererBackend->DestroyImageResource(imageHandle, imageViewHandle, samplerHandle);
+            image = nullptr;
+            imageMemory = nullptr;
+            imageView = nullptr;
+            sampler = nullptr;
+        }
+        else
+        {
+            rendererBackend->DestroyImageResource(image, imageMemory, imageView, sampler);
+        }
     }
 }

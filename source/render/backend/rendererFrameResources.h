@@ -17,9 +17,9 @@ struct RenderDrawPacket;
 struct RendererObjectGpuResources;
 class RendererBackendVulkan;
 
-// Backend-owned per-swapchain frame data. Global/light buffers live here now;
-// material helpers still write legacy MaterialInstance buffers, while object
-// updates already target RendererObjectGpuResources directly.
+// Backend-owned per-swapchain frame data. Global/light buffers live here;
+// material and object updates are centralized so pass recording does not own
+// frame-local GPU buffer lifetime.
 class RendererFrameResources
 {
 public:

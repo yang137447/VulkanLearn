@@ -161,12 +161,6 @@ RuntimeResult<void> RuntimeConfig::Load()
     return RuntimeResult<void>::Success();
 }
 
-const nlohmann::json& RuntimeConfig::GetConfigJson() const
-{
-    EnsureLoaded();
-    return configJson;
-}
-
 const nlohmann::json& RuntimeConfig::GetRenderGraphJson() const
 {
     EnsureLoaded();
@@ -189,12 +183,6 @@ const std::string& RuntimeConfig::GetInitialSceneRelativePath() const
 {
     EnsureLoaded();
     return initialSceneRelativePath;
-}
-
-const std::string& RuntimeConfig::GetProjectPath() const
-{
-    EnsureLoaded();
-    return projectPath;
 }
 
 const std::string& RuntimeConfig::GetResourcePath() const

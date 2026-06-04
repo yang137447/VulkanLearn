@@ -9,7 +9,6 @@
 class Material;
 class MaterialInstance;
 class RenderableObject;
-class SceneObject;
 class Texture;
 
 namespace VL
@@ -17,9 +16,9 @@ namespace VL
 
 class RendererObjectResourceEntry;
 
-// Renderer-side CPU resource cache for the current transition phase. Global
-// resources survive world reloads; world-local resources are captured/restored
-// around a staged load and retired through ResourceRetireQueue when replaced.
+// Renderer-side CPU resource cache. Global resources survive world reloads;
+// world-local resources are captured/restored around a staged load and retired
+// through ResourceRetireQueue when replaced.
 class RendererResourceCache
 {
 public:
@@ -31,7 +30,6 @@ public:
         std::unordered_map<std::string, std::shared_ptr<Material>> materials;
         std::unordered_map<std::string, std::shared_ptr<MaterialInstance>> materialInstances;
         std::unordered_map<std::string, std::shared_ptr<RendererObjectResourceEntry>> objectResources;
-        std::unordered_map<std::string, std::shared_ptr<SceneObject>> sceneObjects;
         std::unordered_map<std::string, std::shared_ptr<Texture>> textures;
     };
 
@@ -43,7 +41,6 @@ public:
 
     void Clear();
     void BeginWorldLocalResourceLoad(uint64_t ownerGeneration);
-    void ClearWorldLocalResources();
     // Used by WorldTransitionCoordinator rollback. The snapshot holds shared
     // references to the active world's renderer resources while a new world is
     // being loaded, so a failed load can restore the old binding table.
@@ -73,15 +70,12 @@ public:
     void BindObjectResource(std::string objectName, std::shared_ptr<RendererObjectResourceEntry> objectResource);
     const std::shared_ptr<RendererObjectResourceEntry>* GetObjectResource(std::string_view objectName) const;
 
-    void BindSceneObject(std::string objectName, std::shared_ptr<SceneObject> object);
-    const std::shared_ptr<SceneObject>* GetSceneObject(std::string_view objectName) const;
-    const std::unordered_map<std::string, std::shared_ptr<SceneObject>>& GetSceneObjects() const { return sceneObjects; }
-
     void BindTexture(std::string textureKey, std::shared_ptr<Texture> texture);
     const std::shared_ptr<Texture>* GetTexture(std::string_view textureKey) const;
 
 private:
     RendererResourceCache() = default;
+    void ClearWorldLocalResources();
 
     uint64_t currentWorldGeneration = 0;
     std::unordered_map<std::string, std::shared_ptr<Texture>> globalTextures;
@@ -90,7 +84,6 @@ private:
     std::unordered_map<std::string, std::shared_ptr<Material>> materials;
     std::unordered_map<std::string, std::shared_ptr<MaterialInstance>> materialInstances;
     std::unordered_map<std::string, std::shared_ptr<RendererObjectResourceEntry>> objectResources;
-    std::unordered_map<std::string, std::shared_ptr<SceneObject>> sceneObjects;
     std::unordered_map<std::string, std::shared_ptr<Texture>> textures;
 };
 

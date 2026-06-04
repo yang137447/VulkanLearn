@@ -19,9 +19,8 @@ struct Renderpass;
 namespace VL
 {
 
-// Temporary service bridge used while pass recording is moving out of
-// RenderSystem. PassRuntime owns pass flow; services expose the remaining frame
-// data uploads until descriptor-backed draw packets are fully backend-owned.
+// Narrow upload service used by pass recording. PassRuntime owns pass flow,
+// while RenderSystem supplies frame data updates through this explicit boundary.
 class PassRuntimeServices : public RendererDrawUploadServices
 {
 public:
@@ -46,7 +45,7 @@ struct PassRuntimeContext
 {
     vk::CommandBuffer& commandBuffer;
     const Renderpass& renderPass;
-    RenderGraph& renderGraph;
+    const RenderGraph& renderGraph;
     size_t passIndex = 0;
     uint32_t swapChainImageIndex = 0;
     const RenderScene& renderScene;
@@ -54,9 +53,8 @@ struct PassRuntimeContext
     PassRuntimeServices& services;
 };
 
-// Records one compiled Renderpass using render-domain data. This is still a
-// bridge over the existing Vulkan draw path, but it gives FrameGraph/PassRuntime
-// a real ownership point separate from RenderSystem::Render().
+// Records one compiled Renderpass using render-domain data. FrameGraph and
+// PassRuntime own pass flow separately from RenderSystem frame orchestration.
 class PassRuntime
 {
 public:

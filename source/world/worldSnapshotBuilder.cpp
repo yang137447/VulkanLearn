@@ -7,10 +7,7 @@
 #include <unordered_map>
 
 #include "commonFunction.h"
-#include "material.h"
-#include "materialInstance.h"
-#include "renderableObject.h"
-#include "sceneObject.h"
+#include "sceneNode.h"
 
 namespace VL
 {
@@ -94,28 +91,23 @@ std::string BuildLightRuntimeKey(const World& world, const std::string& lightNam
 }
 
 MeshDrawSnapshot BuildMeshDrawSnapshot(
-    const World& world,
     const std::string& objectName,
     RuntimeId objectId,
-    const SceneObject& sceneObject,
-    const Eigen::Matrix4f& model,
+    const WorldMeshObject& meshObject,
     const Eigen::Matrix4f& previousModel)
 {
-    const std::shared_ptr<RenderableObject> renderableObject = sceneObject.GetRenderableObject();
-    const std::shared_ptr<MaterialInstance> materialInstance = sceneObject.GetMaterialInstance();
-
     MeshDrawSnapshot snapshot;
     snapshot.objectId = objectId;
-    snapshot.debugName = objectName;
-    snapshot.model = model;
+    snapshot.debugName = meshObject.debugName.empty() ? objectName : meshObject.debugName;
+    snapshot.model = meshObject.model;
     snapshot.previousModel = previousModel;
-    snapshot.mesh = MakeResourceHandle(renderableObject->GetName());
-    snapshot.material = MakeResourceHandle(materialInstance->GetBaseMaterial().lock()->GetMaterialKey());
-    snapshot.materialInstance = MakeResourceHandle(materialInstance->GetName());
+    snapshot.mesh = MakeResourceHandle(meshObject.meshKey);
+    snapshot.material = MakeResourceHandle(meshObject.materialKey);
+    snapshot.materialInstance = MakeResourceHandle(meshObject.materialInstanceKey);
 
     const std::array<Eigen::Vector3f, 8> worldCorners = BuildWorldCorners(
-        renderableObject->GetBoundsMin(),
-        renderableObject->GetBoundsMax(),
+        meshObject.localBoundsMin,
+        meshObject.localBoundsMax,
         snapshot.model);
     ComputeWorldBounds(worldCorners, snapshot.worldBoundsMin, snapshot.worldBoundsMax);
 
@@ -246,28 +238,25 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
     snapshot.camera.clipNear = camera.GetClipNear();
     snapshot.camera.clipFar = camera.GetClipFar();
 
-    snapshot.meshDraws.reserve(world.GetSceneObjects().size());
+    snapshot.meshDraws.reserve(world.GetMeshObjects().size());
     std::unordered_map<RuntimeId, Eigen::Matrix4f> currentObjectModels;
-    currentObjectModels.reserve(world.GetSceneObjects().size());
-    for (const auto& [objectName, sceneObject] : world.GetSceneObjects())
+    currentObjectModels.reserve(world.GetMeshObjects().size());
+    for (const auto& [objectName, meshObject] : world.GetMeshObjects())
     {
         const RuntimeId objectId = StableRuntimeId(BuildObjectRuntimeKey(world, objectName));
-        const Eigen::Matrix4f model = sceneObject->GetModelMatrix();
 
         const auto previousModelIt = previousObjectModels.find(objectId);
         const Eigen::Matrix4f previousModel =
             previousModelIt != previousObjectModels.end()
                 ? previousModelIt->second
-                : model;
+                : meshObject.model;
 
         snapshot.meshDraws.push_back(BuildMeshDrawSnapshot(
-            world,
             objectName,
             objectId,
-            *sceneObject,
-            model,
+            meshObject,
             previousModel));
-        currentObjectModels[objectId] = model;
+        currentObjectModels[objectId] = meshObject.model;
     }
 
     const size_t lightCount =

@@ -22,9 +22,9 @@ struct WorldHandle
     bool IsValid() const { return generation != 0 && !scenePath.empty(); }
 };
 
-// Metadata owner for the active UE-Lite World. Renderer resource loaders still
-// back mesh resources during migration, but WorldManager owns the stable
-// world identity that snapshots and renderer data validate against.
+// Metadata owner for the active World. Renderer resource loaders own GPU-side
+// mesh resources, while WorldManager owns the stable world identity that
+// snapshots and renderer data validate against.
 class WorldManager
 {
 public:
