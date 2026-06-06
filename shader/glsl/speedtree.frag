@@ -33,7 +33,7 @@ layout(location = 0) out vec4 outSceneColor;
 // MaterialPixel 是片元阶段的公开材质入口：一般材质作者改这里。
 // SpeedTree 的 packed 参数约定：
 // - normalMap.rgb: tangent-space normal
-// - normalMap.a: roughness
+// - normalMap.a: gloss, converted to roughness for VulkanLearn lighting
 // - vertexColor.a: ambient occlusion
 void MaterialPixel(in MaterialPixelContext pixel, inout MaterialSurface surface)
 {
@@ -71,7 +71,7 @@ void MaterialPixel(in MaterialPixelContext pixel, inout MaterialSurface surface)
             normalTS.x * pixel.worldTangent.xyz +
             normalTS.y * bitangent +
             normalTS.z * pixel.worldNormal);
-        surface.roughness = normalSample.a;
+        surface.roughness = 1.0 - normalSample.a;
     #endif
 }
 
