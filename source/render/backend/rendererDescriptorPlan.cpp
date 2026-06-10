@@ -14,10 +14,10 @@ namespace
 {
 
 void BuildPassInputDescriptorUpdates(
-    const std::vector<CompiledFrameGraphPassInputDescriptor>& inputDescriptorPlan,
+    const std::vector<CompiledRenderGraphPassInputDescriptor>& inputDescriptorPlan,
     RendererPassDescriptorPlan& plan)
 {
-    for (const CompiledFrameGraphPassInputDescriptor& inputDescriptor : inputDescriptorPlan)
+    for (const CompiledRenderGraphPassInputDescriptor& inputDescriptor : inputDescriptorPlan)
     {
         RendererDescriptorUpdate update;
         update.setIndex = PassSetIndex;
@@ -103,7 +103,7 @@ void RendererDescriptorPlanCache::Clear()
 
 void RendererDescriptorPlanCache::RebuildPassPlan(
     const std::string& passName,
-    const std::vector<CompiledFrameGraphPassInputDescriptor>& inputDescriptorPlan,
+    const std::vector<CompiledRenderGraphPassInputDescriptor>& inputDescriptorPlan,
     const std::weak_ptr<MaterialInstance>& passMaterialInstance)
 {
     RendererPassDescriptorPlan plan;

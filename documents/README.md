@@ -51,6 +51,8 @@ Documentation in this repository is split by responsibility:
 
 - `rendering/descriptor-imageinfo-management.md`
   - texture `vk::DescriptorImageInfo` ownership and descriptor write lifetime rules
+- `rendering/csm-shadow-map-m1.md`
+  - implemented Basic CSM contract for shadowMap array resources, per-layer framebuffer views, runtime CSM settings, shader UBO fields, and debug views
 - `rendering/material-param-authoring-and-reflection.md`
   - material parameter include generation and shader reflection as the runtime binding truth
 - `rendering/texture-asset-json-v1.md`
@@ -68,7 +70,7 @@ Architecture plans:
 Rendering plans:
 
 - `plan/rendering/csm-shadow-map-roadmap.md`
-  - cascaded shadow map route for directional light shadows, starting with a fixed-size 2D array implementation
+  - four-phase cascaded shadow route: Basic CSM, screen-space shadow mask, stability/seam control, and custom filtering
 - `plan/rendering/deferred-gbuffer-ue-aligned-plan.html`
   - deferred GBuffer, UE legacy slot alignment, M_/MI_ material layering, and forward/deferred shader structure plan
 - `plan/rendering/foliage-speedtree-sss-wind-roadmap.md`

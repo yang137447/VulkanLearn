@@ -12,7 +12,7 @@ class PassBarrier
 {
 public:
     // PassBarrier executes the compiled graph's pass-boundary image layout
-    // plan. FrameGraphCompiler decides which resources need transitions;
+    // plan. RenderGraphCompiler decides which resources need transitions;
     // this class only maps those planned transitions to Vulkan barriers.
     static void PrepareForPass(
         vk::CommandBuffer& commandBuffer,

@@ -9,7 +9,7 @@
 
 #include "render/backend/rendererDescriptorWriter.h"
 #include "render/backend/rendererDescriptorPlan.h"
-#include "render/framegraph/frameGraphCompiler.h"
+#include "render/rendergraph/renderGraphCompiler.h"
 #include "render/rhi/rhiResourceHandles.h"
 
 // RenderGraph-owned image resource. MSAA resources are currently modeled as an
@@ -18,17 +18,28 @@
 // the frame graph compiler owns those dependencies end to end.
 struct RenderResource
 {
+    vk::ImageView GetShaderDescriptorView() const;
+    vk::ImageView GetFramebufferAttachmentView(uint32_t layer = 0) const;
+
     std::string name;
+    std::string type = "texture2D";
     VL::RHIImageHandle imageHandle;
     vk::Image image;
     vk::DeviceMemory memory;
-    VL::RHIImageViewHandle imageViewHandle;
+    // Full-resource view used by shader descriptors. texture2DArray resources
+    // expose all layers through this view.
     vk::ImageView imageView;
+    VL::RHIImageViewHandle imageViewHandle;
+    // Per-layer views used by framebuffer attachments. Single-layer resources
+    // still keep layer 0 here so attachment binding is uniform.
+    std::vector<vk::ImageView> imageViews;
+    std::vector<VL::RHIImageViewHandle> imageViewHandles;
     vk::Format format;
     VL::RHISamplerHandle samplerHandle;
     vk::Sampler sampler;
     uint32_t width;
     uint32_t height;
+    uint32_t arrayLayers = 1;
 };
 
 class MaterialInstance;
@@ -63,6 +74,8 @@ struct Renderpass
     const std::vector<std::vector<vk::DescriptorSet>>& GetDescriptorSets() const { return descriptorSets; }
 
     std::string name;
+    std::string type;
+    uint32_t shadowCascadeIndex = 0;
     VL::RHIRenderPassHandle renderPassHandle;
     vk::RenderPass renderPass;
     std::vector<vk::ClearValue> clearValues;
@@ -74,12 +87,13 @@ struct Renderpass
     vk::SampleCountFlagBits sampleCount = vk::SampleCountFlagBits::e1;
     // pass 输入输出资源
     std::vector<std::string> inputResources;
-    std::vector<VL::CompiledFrameGraphPassInputDescriptor> inputDescriptorPlan;
+    std::vector<VL::CompiledRenderGraphPassInputDescriptor> inputDescriptorPlan;
     std::vector<std::string> outputResources;
+    std::unordered_map<std::string, uint32_t> outputLayers;
     std::unordered_map<std::string, vk::AttachmentLoadOp> outputLoadOps;
     std::unordered_map<std::string, vk::AttachmentStoreOp> outputStoreOps;
     // pass 输入描述符集, 统一使用Set3。inputDescriptorImageInfos 按 binding 下标保存，
-    // binding 关系来自 CompiledFrameGraph，而不是运行时的输入数组顺序推断。
+    // binding 关系来自 CompiledRenderGraph，而不是运行时的输入数组顺序推断。
     vk::DescriptorPool descriptorPool;
     VL::RHIDescriptorPoolHandle descriptorPoolHandle;
     std::vector<std::vector<vk::DescriptorImageInfo>> inputDescriptorImageInfos;
@@ -117,7 +131,7 @@ public:
     const std::vector<std::string>& GetRenderpassesOrdered() const { return renderpassesOrdered; }
     std::unordered_map<std::string, Renderpass>& GetRenderpasses() { return renderpasses; }
     const std::unordered_map<std::string, Renderpass>& GetRenderpasses() const { return renderpasses; }
-    const VL::CompiledFrameGraph& GetCompiledFrameGraph() const { return compiledFrameGraph; }
+    const VL::CompiledRenderGraph& GetCompiledRenderGraph() const { return compiledFrameGraph; }
     const std::unordered_map<std::string, std::vector<RenderResource>>& GetResourcesMsaa() const { return resourcesMsaa; }
     const std::unordered_map<std::string, std::vector<RenderResource>>& GetResourcesResolve() const { return resourcesResolve; }
     // Initial render-graph setup creates pass-owned descriptors. Runtime
@@ -137,7 +151,7 @@ public:
     
 private:
     RenderResource CreateRenderResource(
-        const VL::CompiledFrameGraphResource& resourceDesc,
+        const VL::CompiledRenderGraphResource& resourceDesc,
         VL::RendererBackendVulkan& rendererBackend,
         bool bIsMsaaSource = false);
     void DestroyRenderResource(
@@ -146,7 +160,7 @@ private:
         VL::RenderGraphReleaseMode releaseMode);
     
     Renderpass CreateRenderpass(
-        const VL::CompiledFrameGraphPass& passDesc,
+        const VL::CompiledRenderGraphPass& passDesc,
         VL::RendererBackendVulkan& rendererBackend);
     void DestroyRenderpass(
         Renderpass& renderpass,
@@ -178,6 +192,6 @@ private:
 
     std::vector<std::string> renderpassesOrdered;
     std::unordered_map<std::string, Renderpass> renderpasses;
-    VL::CompiledFrameGraph compiledFrameGraph;
+    VL::CompiledRenderGraph compiledFrameGraph;
     VL::RendererDescriptorPlanCache descriptorPlanCache;
 };

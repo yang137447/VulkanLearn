@@ -29,6 +29,7 @@ public:
         std::string_view passName,
         vk::SampleCountFlagBits sampleCount,
         const GraphicsPipelineStateDesc& passPipelineStateDesc,
+        bool bIsShadowPass,
         const nlohmann::json& materialInstanceJson);
 
     // 用 shader reflection 结果校验材质实例参数和贴图绑定是否与 shader 声明一致。

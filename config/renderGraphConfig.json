@@ -40,8 +40,16 @@
             "depthWriteEnable": "是否写入深度。",
             "depthCompareOp": "深度比较函数，取值见 depthCompareOpSupport。"
         },
+        "pass": {
+            "type": "必填 pass 行为类型。当前支持 shadow、geometry、postProcess；name 只作为唯一身份、缓存 key 和调试标签。"
+        },
+        "resource": {
+            "type": "可选资源类型。默认 texture2D；CSM shadowMap 使用 texture2DArray。",
+            "arrayLayers": "texture2DArray 的数组层数。默认 1；CSM 启用时必须等于 config.json 中 csm.cascadeCount。"
+        },
         "output": {
             "resource": "当前 pass 输出的逻辑资源名。",
+            "layer": "可选输出数组层。默认 0；CSM shadowCascadeN 使用它选择 shadowMap 的目标层。",
             "loadOp": "attachment 开始时的加载策略。",
             "storeOp": "attachment 结束时的保存策略。"
         }
@@ -49,9 +57,11 @@
     "resources":[
         {
             "name": "shadowMap",
+            "type": "texture2DArray",
             "format": "D32_SFLOAT",
             "widthSize": 2048,
             "heightSize": 2048,
+            "arrayLayers": 4,
             "usage": ["depthStencilAttachment", "sampled", "transferSrc", "transferDst"]
         },
         {
@@ -184,7 +194,8 @@
     ],
     "passes":[
         {
-            "name": "shadow",
+            "name": "shadowCascade0",
+            "type": "shadow",
             "needCreateMaterial": true,
             "materialInstancePath": "materials/MI_shadow.json",
             "pipelineState": {
@@ -198,6 +209,73 @@
             "output":[
                 {
                     "resource": "shadowMap",
+                    "layer": 0,
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
+            "name": "shadowCascade1",
+            "type": "shadow",
+            "needCreateMaterial": true,
+            "materialInstancePath": "materials/MI_shadow.json",
+            "pipelineState": {
+                "useVertexInput": true,
+                "depthTestEnable": true,
+                "depthWriteEnable": true,
+                "depthCompareOp": "less"
+            },
+            "input": [
+            ],
+            "output":[
+                {
+                    "resource": "shadowMap",
+                    "layer": 1,
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
+            "name": "shadowCascade2",
+            "type": "shadow",
+            "needCreateMaterial": true,
+            "materialInstancePath": "materials/MI_shadow.json",
+            "pipelineState": {
+                "useVertexInput": true,
+                "depthTestEnable": true,
+                "depthWriteEnable": true,
+                "depthCompareOp": "less"
+            },
+            "input": [
+            ],
+            "output":[
+                {
+                    "resource": "shadowMap",
+                    "layer": 2,
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
+            "name": "shadowCascade3",
+            "type": "shadow",
+            "needCreateMaterial": true,
+            "materialInstancePath": "materials/MI_shadow.json",
+            "pipelineState": {
+                "useVertexInput": true,
+                "depthTestEnable": true,
+                "depthWriteEnable": true,
+                "depthCompareOp": "less"
+            },
+            "input": [
+            ],
+            "output":[
+                {
+                    "resource": "shadowMap",
+                    "layer": 3,
                     "loadOp": "clear",
                     "storeOp": "store"
                 }
@@ -205,6 +283,7 @@
         },
         {
             "name": "geometry",
+            "type": "geometry",
             "needMsaa": false,
             "pipelineState": {
                 "useVertexInput": true,
@@ -264,9 +343,9 @@
         },
         {
             "name": "deferredLighting",
+            "type": "postProcess",
             "needCreateMaterial": true,
             "materialInstancePath": "materials/pass/MI_deferredLighting.json",
-            "bIsPostProcess": true,
             "pipelineState": {
                 "useVertexInput": false,
                 "depthTestEnable": false,
@@ -315,9 +394,9 @@
         },
         {
             "name": "sky",
+            "type": "postProcess",
             "needCreateMaterial": true,
             "materialInstancePath": "materials/pass/MI_sky.json",
-            "bIsPostProcess": true,
             "pipelineState": {
                 "useVertexInput": false,
                 "depthTestEnable": true,
@@ -340,9 +419,9 @@
         },
         {
             "name": "bloomPrefilter",
+            "type": "postProcess",
             "needCreateMaterial": true,
             "materialInstancePath": "materials/pass/MI_bloomPrefilter.json",
-            "bIsPostProcess": true,
             "pipelineState": {
                 "useVertexInput": false,
                 "depthTestEnable": false,
@@ -364,9 +443,9 @@
         },
         {
             "name": "bloomDownsample",
+            "type": "postProcess",
             "needCreateMaterial": true,
             "materialInstancePath": "materials/pass/MI_bloomDownsample.json",
-            "bIsPostProcess": true,
             "pipelineState": {
                 "useVertexInput": false,
                 "depthTestEnable": false,
@@ -388,9 +467,9 @@
         },
         {
             "name": "bloomDownsample2",
+            "type": "postProcess",
             "needCreateMaterial": true,
             "materialInstancePath": "materials/pass/MI_bloomDownsample.json",
-            "bIsPostProcess": true,
             "pipelineState": {
                 "useVertexInput": false,
                 "depthTestEnable": false,
@@ -412,9 +491,9 @@
         },
         {
             "name": "bloomDownsample3",
+            "type": "postProcess",
             "needCreateMaterial": true,
             "materialInstancePath": "materials/pass/MI_bloomDownsample.json",
-            "bIsPostProcess": true,
             "pipelineState": {
                 "useVertexInput": false,
                 "depthTestEnable": false,
@@ -436,9 +515,9 @@
         },
         {
             "name": "bloomUpsample3",
+            "type": "postProcess",
             "needCreateMaterial": true,
             "materialInstancePath": "materials/pass/MI_bloomUpsample.json",
-            "bIsPostProcess": true,
             "pipelineState": {
                 "useVertexInput": false,
                 "depthTestEnable": false,
@@ -463,9 +542,9 @@
         },
         {
             "name": "bloomUpsample2",
+            "type": "postProcess",
             "needCreateMaterial": true,
             "materialInstancePath": "materials/pass/MI_bloomUpsample.json",
-            "bIsPostProcess": true,
             "pipelineState": {
                 "useVertexInput": false,
                 "depthTestEnable": false,
@@ -490,9 +569,9 @@
         },
         {
             "name": "bloomUpsample",
+            "type": "postProcess",
             "needCreateMaterial": true,
             "materialInstancePath": "materials/pass/MI_bloomUpsample.json",
-            "bIsPostProcess": true,
             "pipelineState": {
                 "useVertexInput": false,
                 "depthTestEnable": false,
@@ -517,9 +596,9 @@
         },
         {
             "name": "toneMapping",
+            "type": "postProcess",
             "needCreateMaterial": true,
             "materialInstancePath": "materials/pass/MI_toneMapping.json",
-            "bIsPostProcess": true,
             "pipelineState": {
                 "useVertexInput": false,
                 "depthTestEnable": false,

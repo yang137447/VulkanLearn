@@ -11,6 +11,7 @@ vec4 BuildMaterialForwardOutput(in MaterialSurface surface)
     vec4 color = vec4(lighting.finalColor, surface.opacity);
     MaterialDebugLightingData debugLighting = CreateMaterialDebugLightingData(
         lighting.shadow,
+        lighting.shadowCascadeIndex,
         lighting.directLighting,
         lighting.indirectDiffuse,
         lighting.indirectSpecular);

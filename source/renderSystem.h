@@ -3,6 +3,7 @@
 #include <Eigen/Dense>
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -10,6 +11,7 @@
 #include <string>
 #include <utility>
 #include "baseStructs.h"
+#include "engine/runtimeConfig.h"
 #include "render/backend/rendererDescriptorContext.h"
 #include "render/backend/rendererFrameResources.h"
 #include "render/backend/resolvedRenderScene.h"
@@ -52,6 +54,7 @@ public:
     void RenderLatestSnapshotOrLastGood();
     void Render();
     void SetRendererBackend(VL::RendererBackendVulkan* backend) { rendererBackend = backend; }
+    void SetCsmSettings(const VL::CsmSettings& settings);
     void ReleaseSwapchainDependentResources();
     void RebuildSwapchainDependentResources();
     void RebuildRenderGraphDependentResources();
@@ -83,7 +86,11 @@ public:
 private:
     RenderSystem() = default;
     void UpdateUBOGlobal(vk::CommandBuffer& commandBuffer);
-    void UpdateUBOGlobalForShadow(vk::CommandBuffer& commandBuffer, uint32_t PassSizeWidth, uint32_t PassSizeHeight);
+    void UpdateUBOGlobalForShadow(
+        vk::CommandBuffer& commandBuffer,
+        uint32_t passSizeWidth,
+        uint32_t passSizeHeight,
+        uint32_t cascadeIndex);
     void RefreshRenderSceneFromActiveWorld();
     bool ConsumeLatestSnapshotIntoRenderScene();
     void BuildResolvedRenderScene();
@@ -95,7 +102,8 @@ private:
     void UpdateShadowGlobalUBOForPass(
         vk::CommandBuffer& commandBuffer,
         uint32_t passWidth,
-        uint32_t passHeight) override;
+        uint32_t passHeight,
+        uint32_t cascadeIndex) override;
     void UpdateMaterialInstanceUBOForPass(
         const std::shared_ptr<MaterialInstance>& materialInstance) override;
     void UpdateObjectUBOForPass(
@@ -128,6 +136,25 @@ private:
         Eigen::Matrix4f projectionMatrix;
     };
 
+    struct ShadowCascadeFrameData {
+        std::array<Eigen::Matrix4f, 4> view{};
+        std::array<Eigen::Matrix4f, 4> projection{};
+        std::array<Eigen::Matrix4f, 4> lightViewProj{};
+        Eigen::Vector4f cascadeSplits = Eigen::Vector4f::Zero();
+        std::array<Eigen::Vector4f, 4> bias{};
+        uint64_t frameIndex = std::numeric_limits<uint64_t>::max();
+        uint64_t worldGeneration = 0;
+        uint32_t width = 0;
+        uint32_t height = 0;
+        bool valid = false;
+    };
+
+    void BuildShadowCascadeFrameData(uint32_t passSizeWidth, uint32_t passSizeHeight);
+    ShadowProjectionParams CalculateShadowMatrixForCameraRange(
+        float splitNear,
+        float splitFar,
+        uint32_t passSizeWidth,
+        uint32_t passSizeHeight);
     ShadowProjectionParams CalculateShadowMatrix_DynamicTight(const std::vector<Eigen::Vector3f>& pointsInShadowSys, const Eigen::Matrix3f& worldToShadowRotation, float sceneMaxZ, float sceneZRange);
     ShadowProjectionParams CalculateShadowMatrix_StableSphere(const std::vector<Eigen::Vector3f>& pointsInShadowSys, const Eigen::Matrix3f& worldToShadowRotation, float shadowMapResolution, float sceneMaxZ, float sceneZRange);
     ShadowProjectionParams CalculateShadowMatrix_StableRectangular(const std::vector<Eigen::Vector3f>& pointsInShadowSys, const Eigen::Matrix3f& worldToShadowRotation, float shadowMapResolution, float sceneMaxZ, float sceneZRange);
@@ -140,7 +167,8 @@ private:
     bool hasRenderScene = false;
     uint64_t initializedRenderWorldGeneration = 0;
     
-    Eigen::Matrix4f lightViewProj = Eigen::Matrix4f::Identity();
+    VL::CsmSettings csmSettings;
+    ShadowCascadeFrameData shadowCascadeFrameData;
     VL::RendererFrameResources frameResources;
     VL::WorldSnapshotBuilder worldSnapshotBuilder;
     VL::WorldSnapshotQueue worldSnapshotQueue;

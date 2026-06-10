@@ -108,9 +108,15 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
     MaterialInstanceResolveResult materialInstanceResolveResult =
         MaterialInstanceResolver::Resolve(materialInstancePath, materialInstanceJson);
     const nlohmann::json& effectiveMaterialInstanceJson = materialInstanceResolveResult.effectiveMaterialInstanceJson;
-    MaterialInstanceBuildPlan loadPlan = MaterialInstanceValidator::BuildLoadPlan(materialInstancePath, passName, sampleCount, pipelineStateDesc, effectiveMaterialInstanceJson);
     const std::string passNameKey(passName);
     Renderpass& renderPass = renderGraph.GetRenderpasses().at(passNameKey);
+    MaterialInstanceBuildPlan loadPlan = MaterialInstanceValidator::BuildLoadPlan(
+        materialInstancePath,
+        passName,
+        sampleCount,
+        pipelineStateDesc,
+        renderPass.type == "shadow",
+        effectiveMaterialInstanceJson);
     std::shared_ptr<Material> material;
     const std::shared_ptr<Material>* cachedMaterial = resourceCache.GetMaterial(loadPlan.materialKey);
     if(cachedMaterial != nullptr && *cachedMaterial != nullptr)

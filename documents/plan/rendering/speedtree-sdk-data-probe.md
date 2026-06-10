@@ -224,6 +224,7 @@ The first runtime-facing `.stsdk` importer lives behind `SpeedTreeSourceAdapter`
 - it applies the same conversion to `lodPosition` and vector-like data that is decoded as vectors
 - it reverses each triangle's index order during import to match VulkanLearn's current `vk::FrontFace::eClockwise` pipeline convention, mirroring the existing Assimp `ModelLoader` behavior
 - packed source TBN and wind bytes are preserved as raw SpeedTree auxiliary data; source normals use an experimental Fibonacci-sphere decode path, while render tangent/sign are generated with MikkTSpace until the official SDK result is available
+- current SpeedTree material sampling treats `_Normal.rgb` as tangent-space normal and `_Normal.a` as gloss; the shader converts gloss to VulkanLearn roughness with `roughness = 1.0 - gloss`
 
 For `Oak_Complex_Rules.stsdk`, the current observed blocks are:
 

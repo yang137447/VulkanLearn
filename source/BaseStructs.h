@@ -35,7 +35,9 @@ struct alignas(16) UBOGlobal
     Eigen::Matrix4f invProjection;
     Eigen::Matrix4f viewProjection;
     Eigen::Matrix4f invViewProjection;
-    Eigen::Matrix4f lightViewProj;
+    std::array<Eigen::Matrix4f, 4> lightViewProj;
+    Eigen::Vector4f cascadeSplits = Eigen::Vector4f::Zero();
+    std::array<Eigen::Vector4f, 4> shadowBias{};
     alignas(16) Eigen::Vector3f cameraPosition;
     int debugViewMode = 0;
     float environmentIntensity = 1.0f;
@@ -43,10 +45,12 @@ struct alignas(16) UBOGlobal
     Eigen::Matrix4f previousViewProjection = Eigen::Matrix4f::Identity();
 };
 
-static_assert(offsetof(UBOGlobal, debugViewMode) == 460, "UBOGlobal debugViewMode must match GLSL std140 layout");
-static_assert(offsetof(UBOGlobal, environmentIntensity) == 464, "UBOGlobal environmentIntensity must match GLSL std140 layout");
-static_assert(offsetof(UBOGlobal, environmentSH) == 480, "UBOGlobal environmentSH must match GLSL std140 layout");
-static_assert(offsetof(UBOGlobal, previousViewProjection) == 624, "UBOGlobal previousViewProjection must match GLSL std140 layout");
+static_assert(offsetof(UBOGlobal, cascadeSplits) == 640, "UBOGlobal cascadeSplits must match GLSL std140 layout");
+static_assert(offsetof(UBOGlobal, shadowBias) == 656, "UBOGlobal shadowBias must match GLSL std140 layout");
+static_assert(offsetof(UBOGlobal, debugViewMode) == 732, "UBOGlobal debugViewMode must match GLSL std140 layout");
+static_assert(offsetof(UBOGlobal, environmentIntensity) == 736, "UBOGlobal environmentIntensity must match GLSL std140 layout");
+static_assert(offsetof(UBOGlobal, environmentSH) == 752, "UBOGlobal environmentSH must match GLSL std140 layout");
+static_assert(offsetof(UBOGlobal, previousViewProjection) == 896, "UBOGlobal previousViewProjection must match GLSL std140 layout");
 
 struct alignas(16) UBOModel
 {

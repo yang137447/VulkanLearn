@@ -260,6 +260,7 @@ void DebugConsole::PrintHelp() const
     std::cout << "    8: Direct Lighting\n";
     std::cout << "    9: Indirect Diffuse\n";
     std::cout << "    10: Indirect Specular\n";
+    std::cout << "    11: Shadow Cascade Index\n";
     std::cout << "  tonemap <mode> - set tone mapping mode\n";
     std::cout << "    0: Linear clamp\n";
     std::cout << "    1: Reinhard\n";

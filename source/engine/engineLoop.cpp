@@ -249,6 +249,7 @@ RuntimeResult<void> EngineLoop::InitializeRuntimeSystems(
     rendererBackend->Initialize(vulkanExtensions, window.GetNativeHandle());
     rendererBackendInitialized = true;
     RenderSystem::GetInstance().SetRendererBackend(rendererBackend.get());
+    RenderSystem::GetInstance().SetCsmSettings(GetRuntimeConfig().GetCsmSettings());
 
     pipelineFactory = rendererBackend->CreatePipelineFactory();
     runtimeCommandExecutor = std::make_unique<RuntimeCommandExecutor>();
@@ -460,6 +461,7 @@ void EngineLoop::Tick()
 
         if (renderThread && renderThread->IsRunning())
         {
+            // 这里是多线程模式
             RenderSystem::GetInstance().PublishSnapshotFromActiveWorld();
             renderThread->SubmitFrame();
             // V1 keeps the GT/RT split deterministic instead of fully async:
@@ -469,6 +471,7 @@ void EngineLoop::Tick()
         }
         else
         {
+            // 这里是单线程模式
             RenderSystem::GetInstance().Render();
         }
 

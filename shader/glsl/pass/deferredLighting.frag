@@ -19,7 +19,7 @@ layout(set = 3, binding = 5) uniform sampler2D gbufferVelocity;
 layout(set = 3, binding = 6) uniform sampler2D gbufferF;
 layout(set = 3, binding = 7) uniform sampler2D sceneColorBase;
 layout(set = 3, binding = 8) uniform sampler2D sceneDepth;
-layout(set = 3, binding = 9) uniform sampler2DShadow shadowMap;
+layout(set = 3, binding = 9) uniform sampler2DArrayShadow shadowMap;
 
 GBufferData SampleGBuffer(vec2 uv)
 {
@@ -47,6 +47,7 @@ void main()
     vec4 finalColor = vec4(lighting.finalColor, surface.opacity);
     MaterialDebugLightingData debugLighting = CreateMaterialDebugLightingData(
         lighting.shadow,
+        lighting.shadowCascadeIndex,
         lighting.directLighting,
         lighting.indirectDiffuse,
         lighting.indirectSpecular);

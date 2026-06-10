@@ -30,7 +30,8 @@ public:
     virtual void UpdateShadowGlobalUBOForPass(
         vk::CommandBuffer& commandBuffer,
         uint32_t passWidth,
-        uint32_t passHeight) = 0;
+        uint32_t passHeight,
+        uint32_t cascadeIndex) = 0;
     virtual void UpdateMaterialInstanceUBOForPass(
         const std::shared_ptr<MaterialInstance>& materialInstance) = 0;
     virtual void UpdateObjectUBOForPass(

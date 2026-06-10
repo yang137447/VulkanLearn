@@ -5,6 +5,18 @@
     "initScene": "scenes/SC_speedtree.json",
     "msaa": 2,
     "workerThreadCount": 2,
+    "csm": {
+        "enabled": true,
+        "cascadeCount": 4,
+        "shadowDistance": 300.0,
+        "splitLambda": 0.65,
+        "bias": [
+            [0.0010, 1.0, 0.0, 0.0],
+            [0.0015, 1.5, 0.0, 0.0],
+            [0.0020, 2.0, 0.0, 0.0],
+            [0.0030, 3.0, 0.0, 0.0]
+        ]
+    },
     "renderStateDebugColors": {
         "ePass": [0.0, 1.0, 0.0, 1.0],
         "eObject": [0.0, 0.0, 1.0, 1.0],

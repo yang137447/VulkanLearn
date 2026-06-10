@@ -8,13 +8,14 @@
 // Forward pass 如果需要阴影，由具体 pass shader 在 include 前定义 VL_FORWARD_DECLARE_SHADOWMAP_INPUT。
 // 这样默认 include 本文件不会占用 Set 3；只有真正的 forward-with-shadow pass 才声明 shadowMap 输入。
 #if defined(VL_FORWARD_DECLARE_SHADOWMAP_INPUT)
-layout (set = 3, binding = 0) uniform sampler2DShadow shadowMap;
+layout (set = 3, binding = 0) uniform sampler2DArrayShadow shadowMap;
 #endif
 
 struct ForwardLightingResult
 {
     vec3 directLighting;
     float shadow;
+    float shadowCascadeIndex;
     vec3 indirectDiffuse;
     vec3 indirectSpecular;
     vec3 indirectLighting;
@@ -26,6 +27,7 @@ ForwardLightingResult CreateDefaultForwardLightingResult()
     ForwardLightingResult result;
     result.directLighting = vec3(0.0);
     result.shadow = 1.0;
+    result.shadowCascadeIndex = 0.0;
     result.indirectDiffuse = vec3(0.0);
     result.indirectSpecular = vec3(0.0);
     result.indirectLighting = vec3(0.0);
@@ -46,7 +48,9 @@ ForwardLightingResult ShadeDefaultLitForwardSurface(in MaterialSurface surface)
         surface.roughness,
         surface.metallic);
     #if defined(VL_FORWARD_DECLARE_SHADOWMAP_INPUT)
-        result.shadow = CalculateShadow(shadowMap, uboVP.lightViewProj, surface.worldPosition, 0.002);
+        int cascadeIndex = 0;
+        result.shadow = CalculateCsmShadow(shadowMap, surface.worldPosition, cascadeIndex);
+        result.shadowCascadeIndex = ShadowCascadeDebugValue(cascadeIndex);
     #else
         result.shadow = 1.0;
     #endif
@@ -85,6 +89,7 @@ ForwardLightingResult ShadeForwardSurfaceDetailed(in MaterialSurface surface)
     ForwardLightingResult result = CreateDefaultForwardLightingResult();
     result.directLighting = mix(defaultLit.directLighting, unlit.directLighting, unlitMask);
     result.shadow = mix(defaultLit.shadow, unlit.shadow, unlitMask);
+    result.shadowCascadeIndex = mix(defaultLit.shadowCascadeIndex, unlit.shadowCascadeIndex, unlitMask);
     result.indirectDiffuse = mix(defaultLit.indirectDiffuse, unlit.indirectDiffuse, unlitMask);
     result.indirectSpecular = mix(defaultLit.indirectSpecular, unlit.indirectSpecular, unlitMask);
     result.indirectLighting = mix(defaultLit.indirectLighting, unlit.indirectLighting, unlitMask);

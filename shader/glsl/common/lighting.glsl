@@ -26,15 +26,36 @@ layout(set = 0, binding = 3) uniform sampler2D brdfLut;
 
 // ShadowMap 属于“当前 pass 输入”，因此具体 binding 必须由 pass shader 自己声明。
 // 这样 common/lighting.glsl 不会偷偷占用 Set 3，deferredLighting 才能把 Set 3 用作 GBuffer 输入集合。
-float CalculateShadow(in sampler2DShadow inputShadowMap, mat4 lightViewProj, vec3 worldPos, float bias)
+int SelectShadowCascade(vec3 worldPos)
 {
-    vec4 lightViewProjPos = lightViewProj * vec4(worldPos, 1.0);
+    vec4 viewPos = uboVP.view * vec4(worldPos, 1.0);
+    float viewDepth = -viewPos.z;
+    if (viewDepth <= uboVP.cascadeSplits.x) return 0;
+    if (viewDepth <= uboVP.cascadeSplits.y) return 1;
+    if (viewDepth <= uboVP.cascadeSplits.z) return 2;
+    return 3;
+}
+
+float ShadowCascadeDebugValue(int cascadeIndex)
+{
+    return float(cascadeIndex) / 3.0;
+}
+
+float CalculateCsmShadow(in sampler2DArrayShadow inputShadowMap, vec3 worldPos, out int cascadeIndex)
+{
+    cascadeIndex = SelectShadowCascade(worldPos);
+    float viewDepth = -(uboVP.view * vec4(worldPos, 1.0)).z;
+    if (viewDepth > uboVP.cascadeSplits.w)
+    {
+        return 1.0;
+    }
+    vec4 lightViewProjPos = uboVP.lightViewProj[cascadeIndex] * vec4(worldPos, 1.0);
     vec3 shadowNdc = lightViewProjPos.xyz / lightViewProjPos.w;
     vec2 shadowUv = shadowNdc.xy * 0.5 + 0.5;
     float shadow = 1.0;
     if (shadowUv.x >= 0.0 && shadowUv.x <= 1.0 && shadowUv.y >= 0.0 && shadowUv.y <= 1.0 && shadowNdc.z >= 0.0 && shadowNdc.z <= 1.0)
     {
-        shadow = texture(inputShadowMap, vec3(shadowUv, shadowNdc.z - bias));
+        shadow = texture(inputShadowMap, vec4(shadowUv, float(cascadeIndex), shadowNdc.z - uboVP.shadowBias[cascadeIndex].x));
     }
     return shadow;
 }

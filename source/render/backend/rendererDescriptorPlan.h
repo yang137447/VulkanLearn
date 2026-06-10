@@ -6,7 +6,7 @@
 #include <vector>
 
 #include "render/backend/rendererDescriptorWriter.h"
-#include "render/framegraph/frameGraphCompiler.h"
+#include "render/rendergraph/renderGraphCompiler.h"
 
 class MaterialInstance;
 
@@ -27,7 +27,7 @@ public:
     void Clear();
     void RebuildPassPlan(
         const std::string& passName,
-        const std::vector<CompiledFrameGraphPassInputDescriptor>& inputDescriptorPlan,
+        const std::vector<CompiledRenderGraphPassInputDescriptor>& inputDescriptorPlan,
         const std::weak_ptr<MaterialInstance>& passMaterialInstance);
     const RendererPassDescriptorPlan& GetPassPlan(const std::string& passName) const;
 

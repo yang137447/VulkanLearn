@@ -68,6 +68,12 @@ RenderSystem::~RenderSystem()
     ShutdownRenderObject();
 }
 
+void RenderSystem::SetCsmSettings(const VL::CsmSettings& settings)
+{
+    csmSettings = settings;
+    shadowCascadeFrameData.valid = false;
+}
+
 void RenderSystem::SetActiveWorld(std::shared_ptr<const VL::World> world)
 {
     activeWorld = std::move(world);
@@ -78,6 +84,7 @@ void RenderSystem::SetActiveWorld(std::shared_ptr<const VL::World> world)
     hasRenderScene = false;
     initializedRenderWorldGeneration = 0;
     nextSnapshotFrameIndex = 0;
+    shadowCascadeFrameData.valid = false;
 }
 
 bool RenderSystem::SetToneMappingMode(int mode, std::string& outMessage)
@@ -235,9 +242,10 @@ void RenderSystem::UpdateGlobalUBOForPass(vk::CommandBuffer& commandBuffer)
 void RenderSystem::UpdateShadowGlobalUBOForPass(
     vk::CommandBuffer& commandBuffer,
     uint32_t passWidth,
-    uint32_t passHeight)
+    uint32_t passHeight,
+    uint32_t cascadeIndex)
 {
-    UpdateUBOGlobalForShadow(commandBuffer, passWidth, passHeight);
+    UpdateUBOGlobalForShadow(commandBuffer, passWidth, passHeight, cascadeIndex);
 }
 
 void RenderSystem::UpdateMaterialInstanceUBOForPass(
@@ -271,7 +279,7 @@ void RenderSystem::UpdateUBOGlobal(vk::CommandBuffer& commandBuffer)
         RefreshRenderSceneFromActiveWorld();
     }
 
-    static UBOGlobal ubo;
+    UBOGlobal ubo;
     const VL::CameraSnapshot& camera = currentRenderScene.camera;
     ubo.view = camera.view;
     ubo.projection = camera.projection;
@@ -280,7 +288,13 @@ void RenderSystem::UpdateUBOGlobal(vk::CommandBuffer& commandBuffer)
     ubo.viewProjection = camera.viewProjection;
     ubo.invViewProjection = ubo.viewProjection.inverse();
     ubo.previousViewProjection = camera.previousViewProjection;
-    ubo.lightViewProj = lightViewProj;
+    if (!shadowCascadeFrameData.valid)
+    {
+        BuildShadowCascadeFrameData(1, 1);
+    }
+    ubo.lightViewProj = shadowCascadeFrameData.lightViewProj;
+    ubo.cascadeSplits = shadowCascadeFrameData.cascadeSplits;
+    ubo.shadowBias = shadowCascadeFrameData.bias;
     ubo.cameraPosition = camera.position;
     ubo.environmentSH = currentRenderScene.environment.sphericalHarmonics;
     ubo.debugViewMode = currentRenderScene.debugViewMode;
@@ -289,13 +303,107 @@ void RenderSystem::UpdateUBOGlobal(vk::CommandBuffer& commandBuffer)
     frameResources.UpdateGlobalUniformBuffer(commandBuffer, swapChainImageIndex, ubo);
 }
 
-void RenderSystem::UpdateUBOGlobalForShadow(vk::CommandBuffer& commandBuffer, uint32_t PassSizeWidth, uint32_t PassSizeHeight)
+void RenderSystem::UpdateUBOGlobalForShadow(
+    vk::CommandBuffer& commandBuffer,
+    uint32_t passSizeWidth,
+    uint32_t passSizeHeight,
+    uint32_t cascadeIndex)
 {
     PROFILE_FUNCTION();
     if (!hasRenderScene)
     {
         RefreshRenderSceneFromActiveWorld();
     }
+
+    BuildShadowCascadeFrameData(passSizeWidth, passSizeHeight);
+    const uint32_t activeCascadeIndex =
+        std::min(cascadeIndex, csmSettings.cascadeCount - 1);
+
+    UBOGlobal ubo;
+    ubo.view = shadowCascadeFrameData.view[activeCascadeIndex];
+    ubo.projection = shadowCascadeFrameData.projection[activeCascadeIndex];
+    ubo.invView = ubo.view.inverse();
+    ubo.invProjection = ubo.projection.inverse();
+    ubo.viewProjection = ubo.projection * ubo.view;
+    ubo.invViewProjection = ubo.viewProjection.inverse();
+    ubo.previousViewProjection = ubo.viewProjection;
+    ubo.lightViewProj = shadowCascadeFrameData.lightViewProj;
+    ubo.cascadeSplits = shadowCascadeFrameData.cascadeSplits;
+    ubo.shadowBias = shadowCascadeFrameData.bias;
+    ubo.environmentSH = currentRenderScene.environment.sphericalHarmonics;
+    ubo.debugViewMode = currentRenderScene.debugViewMode;
+    ubo.environmentIntensity = currentRenderScene.environment.intensity;
+    {
+        Eigen::Matrix3f rotT = ubo.view.block<3, 3>(0, 0);
+        Eigen::Vector3f trans = ubo.view.block<3, 1>(0, 3);
+        ubo.cameraPosition = -(rotT.transpose() * trans);
+    }
+
+    frameResources.UpdateGlobalUniformBuffer(commandBuffer, swapChainImageIndex, ubo);
+}
+
+void RenderSystem::BuildShadowCascadeFrameData(uint32_t passSizeWidth, uint32_t passSizeHeight)
+{
+    if (csmSettings.cascadeCount < 1)
+    {
+        csmSettings.cascadeCount = 1;
+    }
+
+    // 如果本帧已经计算过相同场景、相同分辨率的 cascade 数据，直接复用缓存
+    if (shadowCascadeFrameData.valid &&
+        shadowCascadeFrameData.frameIndex == currentFrame &&
+        shadowCascadeFrameData.worldGeneration == currentRenderScene.worldGeneration &&
+        shadowCascadeFrameData.width == passSizeWidth &&
+        shadowCascadeFrameData.height == passSizeHeight)
+    {
+        return;
+    }
+
+    const VL::CameraSnapshot& camera = currentRenderScene.camera;
+    const float cascadeNear = camera.clipNear;
+    const float cascadeFar = std::max(cascadeNear + 0.1f, csmSettings.shadowDistance);
+
+    shadowCascadeFrameData.view.fill(Eigen::Matrix4f::Identity());
+    shadowCascadeFrameData.projection.fill(Eigen::Matrix4f::Identity());
+    shadowCascadeFrameData.lightViewProj.fill(Eigen::Matrix4f::Identity());
+    shadowCascadeFrameData.cascadeSplits = Eigen::Vector4f::Zero();
+    shadowCascadeFrameData.bias = csmSettings.bias;
+
+    float previousSplit = cascadeNear;
+    for (uint32_t cascadeIndex = 0; cascadeIndex < csmSettings.cascadeCount; ++cascadeIndex)
+    {
+        const float p = static_cast<float>(cascadeIndex + 1) / static_cast<float>(csmSettings.cascadeCount);
+        const float logSplit = cascadeNear * std::pow(cascadeFar / cascadeNear, p);
+        const float uniformSplit = cascadeNear + (cascadeFar - cascadeNear) * p;
+        // splitFar 最大不能超过 cascadeFar，按照实际的值是几十就是几十，是几百就是几百
+        const float splitFar = csmSettings.splitLambda * logSplit + (1.0f - csmSettings.splitLambda) * uniformSplit;
+
+        ShadowProjectionParams params = CalculateShadowMatrixForCameraRange(
+            previousSplit,
+            splitFar,
+            passSizeWidth,
+            passSizeHeight);
+        shadowCascadeFrameData.view[cascadeIndex] = params.viewMatrix;
+        shadowCascadeFrameData.projection[cascadeIndex] = params.projectionMatrix;
+        shadowCascadeFrameData.lightViewProj[cascadeIndex] = params.projectionMatrix * params.viewMatrix;
+        shadowCascadeFrameData.cascadeSplits[cascadeIndex] = splitFar;
+        previousSplit = splitFar;
+    }
+
+    shadowCascadeFrameData.frameIndex = currentFrame;
+    shadowCascadeFrameData.worldGeneration = currentRenderScene.worldGeneration;
+    shadowCascadeFrameData.width = passSizeWidth;
+    shadowCascadeFrameData.height = passSizeHeight;
+    shadowCascadeFrameData.valid = true;
+}
+
+RenderSystem::ShadowProjectionParams RenderSystem::CalculateShadowMatrixForCameraRange(
+    float splitNear,
+    float splitFar,
+    uint32_t passSizeWidth,
+    uint32_t passSizeHeight)
+{
+    PROFILE_FUNCTION();
 
     // 建立一个与光源同轴（Z）的 shadowCoordinateSystem。这里不再读取 Camera 或 Light 对象，
     // 而是只消费当前帧 RenderScene 中冻结的相机、灯光和包围盒数据。
@@ -320,9 +428,8 @@ void RenderSystem::UpdateUBOGlobalForShadow(vk::CommandBuffer& commandBuffer, ui
     Eigen::Vector3f cameraPosition = camera.position;
     Eigen::Vector3f cameraDirection = camera.forward;
         // near, far
-    float cameraNear = camera.clipNear;
-    float cameraFar = camera.clipFar;
-    cameraFar = 10.0f;
+    float cameraNear = splitNear;
+    float cameraFar = splitFar;
     float frustumPadding = 0.1f;
 
     Eigen::Vector3f cameraRight = camera.right;
@@ -365,7 +472,10 @@ void RenderSystem::UpdateUBOGlobalForShadow(vk::CommandBuffer& commandBuffer, ui
     }
     if (!directionalLight)
     {
-        return;
+        ShadowProjectionParams params;
+        params.viewMatrix = Eigen::Matrix4f::Identity();
+        params.projectionMatrix = Eigen::Matrix4f::Identity();
+        return params;
     }
         // 2.1构建worldCoordinateSystem -> shadowCoordinateSystem
     Eigen::Matrix3f worldToShadowMatrix = directionalLight->worldToLight;
@@ -446,35 +556,14 @@ void RenderSystem::UpdateUBOGlobalForShadow(vk::CommandBuffer& commandBuffer, ui
         params = CalculateShadowMatrix_DynamicTight(pointsInShadowSys, worldToShadowMatrix.block<3, 3>(0, 0), maxZ, zFar);
         break;
     case ShadowStrategy::StableBoundingSphere:
-        params = CalculateShadowMatrix_StableSphere(pointsInShadowSys, worldToShadowMatrix.block<3, 3>(0, 0), static_cast<float>(PassSizeWidth), maxZ, zFar);
+        params = CalculateShadowMatrix_StableSphere(pointsInShadowSys, worldToShadowMatrix.block<3, 3>(0, 0), static_cast<float>(passSizeWidth), maxZ, zFar);
         break;
     case ShadowStrategy::StableRectangular:
-        params = CalculateShadowMatrix_StableRectangular(pointsInShadowSys, worldToShadowMatrix.block<3, 3>(0, 0), static_cast<float>(PassSizeWidth), maxZ, zFar);
+        params = CalculateShadowMatrix_StableRectangular(pointsInShadowSys, worldToShadowMatrix.block<3, 3>(0, 0), static_cast<float>(passSizeWidth), maxZ, zFar);
         break;
     }
 
-    static UBOGlobal ubo;
-    ubo.view = params.viewMatrix;
-    ubo.projection = params.projectionMatrix;
-    ubo.invView = ubo.view.inverse();
-    ubo.invProjection = ubo.projection.inverse();
-    ubo.viewProjection = ubo.projection * ubo.view;
-    ubo.invViewProjection = ubo.viewProjection.inverse();
-    // Shadow pass 不写 velocity，这里把 previousViewProjection 设为当前值，保持 UBOGlobal 完整初始化。
-    ubo.previousViewProjection = ubo.viewProjection;
-    lightViewProj = ubo.projection * ubo.view;
-    ubo.lightViewProj = lightViewProj;
-    ubo.environmentSH = currentRenderScene.environment.sphericalHarmonics;
-    ubo.debugViewMode = currentRenderScene.debugViewMode;
-    ubo.environmentIntensity = currentRenderScene.environment.intensity;
-    
-    {
-        Eigen::Matrix3f rotT = ubo.view.block<3, 3>(0, 0);
-        Eigen::Vector3f trans = ubo.view.block<3, 1>(0, 3);
-        ubo.cameraPosition = -(rotT.transpose() * trans);
-    }
-
-    frameResources.UpdateGlobalUniformBuffer(commandBuffer, swapChainImageIndex, ubo);
+    return params;
 }
 
 // ====================================================================================================

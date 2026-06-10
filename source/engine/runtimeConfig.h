@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+#include <cstdint>
 #include <string>
 
 #include <Eigen/Dense>
@@ -10,6 +12,15 @@
 
 namespace VL
 {
+
+struct CsmSettings
+{
+    bool enabled = false;
+    uint32_t cascadeCount = 1;
+    float shadowDistance = 10.0f;
+    float splitLambda = 0.65f;
+    std::array<Eigen::Vector4f, 4> bias{};
+};
 
 // RuntimeConfig is the engine-facing view of config/config.json and related
 // runtime files. FileSystem handles physical paths; RuntimeConfig handles the
@@ -26,6 +37,7 @@ public:
     const std::string& GetInitialSceneRelativePath() const;
     const std::string& GetResourcePath() const;
     bool ShouldUseRenderThread() const;
+    const CsmSettings& GetCsmSettings() const;
 
     std::string ResolvePath(const std::string& path) const;
 
@@ -33,6 +45,8 @@ private:
     void EnsureLoaded() const;
     RuntimeResult<void> LoadJsonFiles();
     RuntimeResult<void> LoadConfigFields();
+    RuntimeResult<void> LoadCsmSettings();
+    RuntimeResult<void> ValidateCsmAgainstRenderGraph() const;
 
     FileSystem fileSystem;
     bool loaded = false;
@@ -43,6 +57,7 @@ private:
     std::string projectPath;
     std::string resourcePath;
     int workerThreadCount = 1;
+    CsmSettings csmSettings;
 };
 
 } // namespace VL

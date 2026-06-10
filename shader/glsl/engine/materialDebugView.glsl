@@ -7,6 +7,7 @@
 struct MaterialDebugLightingData
 {
     float shadow;
+    float shadowCascadeIndex;
     vec3 directLighting;
     vec3 indirectDiffuse;
     vec3 indirectSpecular;
@@ -14,12 +15,14 @@ struct MaterialDebugLightingData
 
 MaterialDebugLightingData CreateMaterialDebugLightingData(
     float shadow,
+    float shadowCascadeIndex,
     vec3 directLighting,
     vec3 indirectDiffuse,
     vec3 indirectSpecular)
 {
     MaterialDebugLightingData data;
     data.shadow = shadow;
+    data.shadowCascadeIndex = shadowCascadeIndex;
     data.directLighting = directLighting;
     data.indirectDiffuse = indirectDiffuse;
     data.indirectSpecular = indirectSpecular;
@@ -50,6 +53,7 @@ vec4 ResolveMaterialDebugView(
     float directLightingMask = MaterialDebugViewModeMask(8);
     float indirectDiffuseMask = MaterialDebugViewModeMask(9);
     float indirectSpecularMask = MaterialDebugViewModeMask(10);
+    float shadowCascadeMask = MaterialDebugViewModeMask(11);
 
     float debugMask = min(
         baseColorMask +
@@ -61,7 +65,8 @@ vec4 ResolveMaterialDebugView(
         shadowMask +
         directLightingMask +
         indirectDiffuseMask +
-        indirectSpecularMask,
+        indirectSpecularMask +
+        shadowCascadeMask,
         1.0);
 
     vec4 debugColor =
@@ -74,7 +79,8 @@ vec4 ResolveMaterialDebugView(
         shadowMask * vec4(vec3(lighting.shadow), 1.0) +
         directLightingMask * vec4(lighting.directLighting, 1.0) +
         indirectDiffuseMask * vec4(lighting.indirectDiffuse, 1.0) +
-        indirectSpecularMask * vec4(lighting.indirectSpecular, 1.0);
+        indirectSpecularMask * vec4(lighting.indirectSpecular, 1.0) +
+        shadowCascadeMask * vec4(vec3(lighting.shadowCascadeIndex), 1.0);
 
     return mix(defaultColor, debugColor, debugMask);
 #else

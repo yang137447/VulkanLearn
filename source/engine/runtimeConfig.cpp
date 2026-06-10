@@ -116,6 +116,46 @@ RuntimeResult<int> ReadWorkerThreadCount(const nlohmann::json& json)
     return RuntimeResult<int>::Success(static_cast<int>(count));
 }
 
+RuntimeResult<float> ReadNumberField(
+    const nlohmann::json& json,
+    const char* fieldName,
+    const std::string& sourceContext)
+{
+    if (!json.contains(fieldName) || !json[fieldName].is_number())
+    {
+        return RuntimeResult<float>::Failure(MakeRuntimeError(
+            "RuntimeConfig.InvalidNumber",
+            "Expected a numeric field.",
+            "config/config.json",
+            sourceContext + "." + fieldName));
+    }
+
+    return RuntimeResult<float>::Success(json[fieldName].get<float>());
+}
+
+uint32_t FindShadowMapArrayLayers(const nlohmann::json& renderGraphJson)
+{
+    if (!renderGraphJson.contains("resources") || !renderGraphJson["resources"].is_array())
+    {
+        return 1;
+    }
+
+    for (const nlohmann::json& resourceNode : renderGraphJson["resources"])
+    {
+        if (!resourceNode.is_object() ||
+            !resourceNode.contains("name") ||
+            !resourceNode["name"].is_string() ||
+            resourceNode["name"].get<std::string>() != "shadowMap")
+        {
+            continue;
+        }
+
+        return resourceNode.value("arrayLayers", 1u);
+    }
+
+    return 1;
+}
+
 } // namespace
 
 RuntimeResult<void> RuntimeConfig::Load()
@@ -139,6 +179,20 @@ RuntimeResult<void> RuntimeConfig::Load()
     {
         loaded = false;
         return fieldResult;
+    }
+
+    auto csmResult = LoadCsmSettings();
+    if (csmResult.IsFailure())
+    {
+        loaded = false;
+        return csmResult;
+    }
+
+    auto csmGraphResult = ValidateCsmAgainstRenderGraph();
+    if (csmGraphResult.IsFailure())
+    {
+        loaded = false;
+        return csmGraphResult;
     }
 
     if (windowSize.x() <= 0.0f || windowSize.y() <= 0.0f)
@@ -195,6 +249,12 @@ bool RuntimeConfig::ShouldUseRenderThread() const
 {
     EnsureLoaded();
     return workerThreadCount == 2;
+}
+
+const CsmSettings& RuntimeConfig::GetCsmSettings() const
+{
+    EnsureLoaded();
+    return csmSettings;
 }
 
 std::string RuntimeConfig::ResolvePath(const std::string& path) const
@@ -275,6 +335,142 @@ RuntimeResult<void> RuntimeConfig::LoadConfigFields()
         return RuntimeResult<void>::Failure(workerThreadCountResult.Error());
     }
     workerThreadCount = workerThreadCountResult.Value();
+
+    return RuntimeResult<void>::Success();
+}
+
+RuntimeResult<void> RuntimeConfig::LoadCsmSettings()
+{
+    csmSettings = CsmSettings{};
+    for (Eigen::Vector4f& bias : csmSettings.bias)
+    {
+        bias = Eigen::Vector4f(0.002f, 1.0f, 0.0f, 0.0f);
+    }
+
+    if (!configJson.contains("csm"))
+    {
+        return RuntimeResult<void>::Success();
+    }
+    if (!configJson["csm"].is_object())
+    {
+        return RuntimeResult<void>::Failure(MakeRuntimeError(
+            "RuntimeConfig.InvalidCsm",
+            "csm must be an object.",
+            "config/config.json",
+            "csm"));
+    }
+
+    const nlohmann::json& csmJson = configJson["csm"];
+    csmSettings.enabled = csmJson.value("enabled", false);
+    if (csmJson.contains("cascadeCount"))
+    {
+        if (!csmJson["cascadeCount"].is_number_unsigned())
+        {
+            return RuntimeResult<void>::Failure(MakeRuntimeError(
+                "RuntimeConfig.InvalidCsmCascadeCount",
+                "csm.cascadeCount must be an unsigned integer.",
+                "config/config.json",
+                "csm.cascadeCount"));
+        }
+        csmSettings.cascadeCount = csmJson["cascadeCount"].get<uint32_t>();
+    }
+    if (csmSettings.cascadeCount < 1 || csmSettings.cascadeCount > 4)
+    {
+        return RuntimeResult<void>::Failure(MakeRuntimeError(
+            "RuntimeConfig.InvalidCsmCascadeCount",
+            "M1 CSM supports cascadeCount in the range [1, 4].",
+            "config/config.json",
+            "csm.cascadeCount"));
+    }
+    if (csmSettings.enabled && csmSettings.cascadeCount != 4)
+    {
+        return RuntimeResult<void>::Failure(MakeRuntimeError(
+            "RuntimeConfig.InvalidCsmCascadeCount",
+            "M1 CSM uses four explicit shadow cascade passes and requires csm.cascadeCount == 4 when enabled.",
+            "config/config.json",
+            "csm.cascadeCount"));
+    }
+
+    auto shadowDistanceResult = ReadNumberField(csmJson, "shadowDistance", "csm");
+    if (shadowDistanceResult.IsFailure())
+    {
+        return RuntimeResult<void>::Failure(shadowDistanceResult.Error());
+    }
+    csmSettings.shadowDistance = shadowDistanceResult.Value();
+    if (csmSettings.shadowDistance <= 0.0f)
+    {
+        return RuntimeResult<void>::Failure(MakeRuntimeError(
+            "RuntimeConfig.InvalidCsmShadowDistance",
+            "csm.shadowDistance must be positive.",
+            "config/config.json",
+            "csm.shadowDistance"));
+    }
+
+    auto splitLambdaResult = ReadNumberField(csmJson, "splitLambda", "csm");
+    if (splitLambdaResult.IsFailure())
+    {
+        return RuntimeResult<void>::Failure(splitLambdaResult.Error());
+    }
+    csmSettings.splitLambda = splitLambdaResult.Value();
+    if (csmSettings.splitLambda < 0.0f || csmSettings.splitLambda > 1.0f)
+    {
+        return RuntimeResult<void>::Failure(MakeRuntimeError(
+            "RuntimeConfig.InvalidCsmSplitLambda",
+            "csm.splitLambda must be in the range [0, 1].",
+            "config/config.json",
+            "csm.splitLambda"));
+    }
+
+    if (csmJson.contains("bias"))
+    {
+        if (!csmJson["bias"].is_array() ||
+            csmJson["bias"].size() < csmSettings.cascadeCount)
+        {
+            return RuntimeResult<void>::Failure(MakeRuntimeError(
+                "RuntimeConfig.InvalidCsmBias",
+                "csm.bias must provide one vec4 array per enabled cascade.",
+                "config/config.json",
+                "csm.bias"));
+        }
+
+        for (uint32_t cascadeIndex = 0; cascadeIndex < csmSettings.cascadeCount; ++cascadeIndex)
+        {
+            const nlohmann::json& biasNode = csmJson["bias"][cascadeIndex];
+            if (!biasNode.is_array() || biasNode.size() != 4)
+            {
+                return RuntimeResult<void>::Failure(MakeRuntimeError(
+                    "RuntimeConfig.InvalidCsmBias",
+                    "Each csm.bias entry must be a four-element numeric array.",
+                    "config/config.json",
+                    "csm.bias"));
+            }
+            csmSettings.bias[cascadeIndex] = Eigen::Vector4f(
+                biasNode[0].get<float>(),
+                biasNode[1].get<float>(),
+                biasNode[2].get<float>(),
+                biasNode[3].get<float>());
+        }
+    }
+
+    return RuntimeResult<void>::Success();
+}
+
+RuntimeResult<void> RuntimeConfig::ValidateCsmAgainstRenderGraph() const
+{
+    if (!csmSettings.enabled)
+    {
+        return RuntimeResult<void>::Success();
+    }
+
+    const uint32_t shadowMapArrayLayers = FindShadowMapArrayLayers(renderGraphJson);
+    if (shadowMapArrayLayers != csmSettings.cascadeCount)
+    {
+        return RuntimeResult<void>::Failure(MakeRuntimeError(
+            "RuntimeConfig.CsmRenderGraphMismatch",
+            "csm.cascadeCount must match renderGraph shadowMap.arrayLayers when CSM is enabled.",
+            "config/config.json",
+            "csm.cascadeCount"));
+    }
 
     return RuntimeResult<void>::Success();
 }

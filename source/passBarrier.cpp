@@ -1,7 +1,7 @@
 #include "passBarrier.h"
 
 #include "commonFunction.h"
-#include "render/framegraph/frameGraphCompiler.h"
+#include "render/rendergraph/renderGraphCompiler.h"
 #include "renderGraph.h"
 
 void PassBarrier::PrepareForPass(
@@ -19,22 +19,22 @@ void PassBarrier::ApplyCompiledBarrierPlan(
     size_t passIndex,
     uint32_t swapChainImageIndex)
 {
-    const VL::CompiledFrameGraph& compiledGraph = renderGraph.GetCompiledFrameGraph();
+    const VL::CompiledRenderGraph& compiledGraph = renderGraph.GetCompiledRenderGraph();
     if (passIndex >= compiledGraph.passes.size())
     {
         return;
     }
 
-    const VL::CompiledFrameGraphPass& compiledPass = compiledGraph.passes[passIndex];
-    for (const VL::CompiledFrameGraphBarrier& barrier : compiledPass.barriersBeforePass)
+    const VL::CompiledRenderGraphPass& compiledPass = compiledGraph.passes[passIndex];
+    for (const VL::CompiledRenderGraphBarrier& barrier : compiledPass.barriersBeforePass)
     {
-        if (barrier.type == VL::CompiledFrameGraphBarrierType::AttachmentToShaderRead)
+        if (barrier.type == VL::CompiledRenderGraphBarrierType::AttachmentToShaderRead)
         {
             // 当前 pass 会把这个资源当 texture 采样，因此需要在 beginRenderPass 前保证它处于 shader-read layout。
             // 这里转换的是 Vulkan image layout，不是 R16G16B16A16 / D32 这类像素 format。
             TransitionAttachmentToShaderRead(commandBuffer, renderGraph, barrier.resource, swapChainImageIndex);
         }
-        else if (barrier.type == VL::CompiledFrameGraphBarrierType::ShaderReadToAttachment)
+        else if (barrier.type == VL::CompiledRenderGraphBarrierType::ShaderReadToAttachment)
         {
             // Render pass 的 attachment initialLayout 不能凭空从 shader-read 变回 attachment layout。
             // 如果资源刚被某个 pass 采样过，并且当前 pass 又要 load 它继续写/测，就需要在 beginRenderPass 前显式转回。
@@ -68,7 +68,7 @@ void PassBarrier::TransitionAttachmentToShaderRead(
     vk::ImageMemoryBarrier imageBarrier;
     imageBarrier
         .setImage(resource.image)
-        .setSubresourceRange(vk::ImageSubresourceRange(aspectMask, 0, 1, 0, 1));
+        .setSubresourceRange(vk::ImageSubresourceRange(aspectMask, 0, 1, 0, resource.arrayLayers));
 
     vk::PipelineStageFlags srcStage;
     vk::PipelineStageFlags dstStage = vk::PipelineStageFlagBits::eFragmentShader;
@@ -128,7 +128,7 @@ void PassBarrier::TransitionShaderReadToAttachment(
     vk::ImageMemoryBarrier imageBarrier;
     imageBarrier
         .setImage(resource.image)
-        .setSubresourceRange(vk::ImageSubresourceRange(aspectMask, 0, 1, 0, 1))
+        .setSubresourceRange(vk::ImageSubresourceRange(aspectMask, 0, 1, 0, resource.arrayLayers))
         .setSrcAccessMask(vk::AccessFlagBits::eShaderRead)
         .setOldLayout(bIsDepth ? vk::ImageLayout::eDepthStencilReadOnlyOptimal : vk::ImageLayout::eShaderReadOnlyOptimal)
         .setNewLayout(bIsDepth ? vk::ImageLayout::eDepthStencilAttachmentOptimal : vk::ImageLayout::eColorAttachmentOptimal);

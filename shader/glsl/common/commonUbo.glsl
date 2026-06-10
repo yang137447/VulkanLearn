@@ -8,7 +8,9 @@ layout(std140, set = 0, binding = 0) uniform UBOGlobal{
     mat4 invProjection;
     mat4 viewProjection;
     mat4 invViewProjection;
-    mat4 lightViewProj;
+    mat4 lightViewProj[4];
+    vec4 cascadeSplits;
+    vec4 shadowBias[4];
     vec3 cameraPosition;
     int debugViewMode;
     float environmentIntensity;

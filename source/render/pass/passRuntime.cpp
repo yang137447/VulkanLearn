@@ -1,5 +1,7 @@
 #include "render/pass/passRuntime.h"
 
+#include <stdexcept>
+
 #include "commonFunction.h"
 #include "material.h"
 #include "materialInstance.h"
@@ -15,18 +17,27 @@ void PassRuntime::RecordPass(const std::string& passName, PassRuntimeContext& co
 {
     PreparePassResources(context);
 
-    if (passName == "shadow")
+    if (context.renderPass.type == "shadow")
     {
         RecordShadowPass(context);
+        return;
     }
-    else if (passName == "geometry")
+    if (context.renderPass.type == "geometry")
     {
         RecordGeometryPass(context);
+        return;
     }
-    else
+    if (context.renderPass.type == "postProcess")
     {
         RecordPostProcessPass(context);
+        return;
     }
+
+    throw std::runtime_error(
+        "Unsupported render pass type for pass '" +
+        passName +
+        "': " +
+        context.renderPass.type);
 }
 
 void PassRuntime::PreparePassResources(PassRuntimeContext& context) const
@@ -60,12 +71,17 @@ void PassRuntime::RecordShadowPass(PassRuntimeContext& context) const
 
     // Shadow still uses a dedicated pass material while the full PassRuntime
     // model is landing. Keep render pass begin/end ownership local here.
-    context.services.UpdateShadowGlobalUBOForPass(commandBuffer, renderPass.width, renderPass.height);
+    context.services.UpdateShadowGlobalUBOForPass(
+        commandBuffer,
+        renderPass.width,
+        renderPass.height,
+        renderPass.shadowCascadeIndex);
     BeginConfiguredRenderPass(context);
 
     std::shared_ptr<MaterialInstance> passMaterialInstance = renderPass.materialInstance.lock();
     if (!passMaterialInstance)
     {
+        // 这里是个保底，确保pass执行，不会导致crash，以下类似操作同理
         commandBuffer.endRenderPass();
         return;
     }

@@ -1,4 +1,4 @@
-#include "render/framegraph/frameGraphCompiler.h"
+#include "render/rendergraph/renderGraphCompiler.h"
 
 #include <unordered_map>
 #include <unordered_set>
@@ -41,6 +41,16 @@ bool IsSupportedFormat(const std::string& format)
     return kSupportedFormats.find(format) != kSupportedFormats.end();
 }
 
+bool IsSupportedResourceType(const std::string& type)
+{
+    return type == "texture2D" || type == "texture2DArray";
+}
+
+bool IsSupportedPassType(const std::string& type)
+{
+    return type == "shadow" || type == "geometry" || type == "postProcess";
+}
+
 bool IsDepthFormatString(const std::string& format)
 {
     return format == "D16_UNORM" ||
@@ -73,14 +83,14 @@ bool IsSupportedStoreOp(const std::string& storeOp)
 
 RuntimeResult<void> CompileResourceSize(
     const nlohmann::json& resourceNode,
-    CompiledFrameGraphResource& resource)
+    CompiledRenderGraphResource& resource)
 {
     if (resourceNode.contains("widthSize"))
     {
         if (!resourceNode["widthSize"].is_number())
         {
             return RuntimeResult<void>::Failure(MakeCompileError(
-                "FrameGraphCompiler.InvalidResourceSize",
+                "RenderGraphCompiler.InvalidResourceSize",
                 "Render graph resource widthSize must be numeric.",
                 resource.name));
         }
@@ -92,7 +102,7 @@ RuntimeResult<void> CompileResourceSize(
         if (!resourceNode["widthScale"].is_number())
         {
             return RuntimeResult<void>::Failure(MakeCompileError(
-                "FrameGraphCompiler.InvalidResourceSize",
+                "RenderGraphCompiler.InvalidResourceSize",
                 "Render graph resource widthScale must be numeric.",
                 resource.name));
         }
@@ -102,7 +112,7 @@ RuntimeResult<void> CompileResourceSize(
     else
     {
         return RuntimeResult<void>::Failure(MakeCompileError(
-            "FrameGraphCompiler.InvalidResourceSize",
+            "RenderGraphCompiler.InvalidResourceSize",
             "Render graph resource must provide widthSize or widthScale.",
             resource.name));
     }
@@ -112,7 +122,7 @@ RuntimeResult<void> CompileResourceSize(
         if (!resourceNode["heightSize"].is_number())
         {
             return RuntimeResult<void>::Failure(MakeCompileError(
-                "FrameGraphCompiler.InvalidResourceSize",
+                "RenderGraphCompiler.InvalidResourceSize",
                 "Render graph resource heightSize must be numeric.",
                 resource.name));
         }
@@ -124,7 +134,7 @@ RuntimeResult<void> CompileResourceSize(
         if (!resourceNode["heightScale"].is_number())
         {
             return RuntimeResult<void>::Failure(MakeCompileError(
-                "FrameGraphCompiler.InvalidResourceSize",
+                "RenderGraphCompiler.InvalidResourceSize",
                 "Render graph resource heightScale must be numeric.",
                 resource.name));
         }
@@ -134,7 +144,7 @@ RuntimeResult<void> CompileResourceSize(
     else
     {
         return RuntimeResult<void>::Failure(MakeCompileError(
-            "FrameGraphCompiler.InvalidResourceSize",
+            "RenderGraphCompiler.InvalidResourceSize",
             "Render graph resource must provide heightSize or heightScale.",
             resource.name));
     }
@@ -142,7 +152,7 @@ RuntimeResult<void> CompileResourceSize(
     if (resource.widthValue <= 0.0f || resource.heightValue <= 0.0f)
     {
         return RuntimeResult<void>::Failure(MakeCompileError(
-            "FrameGraphCompiler.InvalidResourceSize",
+            "RenderGraphCompiler.InvalidResourceSize",
             "Render graph resource size or scale must be positive.",
             resource.name));
     }
@@ -157,7 +167,7 @@ RuntimeResult<std::vector<std::string>> CompileUsageList(
     if (!resourceNode.contains("usage") || !resourceNode["usage"].is_array())
     {
         return RuntimeResult<std::vector<std::string>>::Failure(MakeCompileError(
-            "FrameGraphCompiler.InvalidResourceUsage",
+            "RenderGraphCompiler.InvalidResourceUsage",
             "Render graph resource must provide a usage array.",
             resourceName));
     }
@@ -168,7 +178,7 @@ RuntimeResult<std::vector<std::string>> CompileUsageList(
         if (!usageNode.is_string())
         {
             return RuntimeResult<std::vector<std::string>>::Failure(MakeCompileError(
-                "FrameGraphCompiler.InvalidResourceUsage",
+                "RenderGraphCompiler.InvalidResourceUsage",
                 "Render graph resource usage entries must be strings.",
                 resourceName));
         }
@@ -176,7 +186,7 @@ RuntimeResult<std::vector<std::string>> CompileUsageList(
         if (!IsSupportedUsage(usage))
         {
             return RuntimeResult<std::vector<std::string>>::Failure(MakeCompileError(
-                "FrameGraphCompiler.UnsupportedResourceUsage",
+                "RenderGraphCompiler.UnsupportedResourceUsage",
                 "Render graph resource usage is not supported.",
                 resourceName + ":" + usage));
         }
@@ -185,28 +195,28 @@ RuntimeResult<std::vector<std::string>> CompileUsageList(
     return RuntimeResult<std::vector<std::string>>::Success(std::move(usageList));
 }
 
-RuntimeResult<std::vector<CompiledFrameGraphPassInputDescriptor>> CompilePassInputs(
+RuntimeResult<std::vector<CompiledRenderGraphPassInputDescriptor>> CompilePassInputs(
     const nlohmann::json& passNode,
     const std::string& passName,
     const std::unordered_set<std::string>& resourceNames)
 {
     if (!passNode.contains("input") || !passNode["input"].is_array())
     {
-        return RuntimeResult<std::vector<CompiledFrameGraphPassInputDescriptor>>::Failure(MakeCompileError(
-            "FrameGraphCompiler.InvalidPassInput",
+        return RuntimeResult<std::vector<CompiledRenderGraphPassInputDescriptor>>::Failure(MakeCompileError(
+            "RenderGraphCompiler.InvalidPassInput",
             "Render graph pass must provide an input array.",
             passName));
     }
 
-    std::vector<CompiledFrameGraphPassInputDescriptor> inputs;
+    std::vector<CompiledRenderGraphPassInputDescriptor> inputs;
     std::unordered_set<uint32_t> inputBindings;
     uint32_t defaultBinding = 0;
     for (const nlohmann::json& inputNode : passNode["input"])
     {
         if (!HasStringField(inputNode, "resource"))
         {
-            return RuntimeResult<std::vector<CompiledFrameGraphPassInputDescriptor>>::Failure(MakeCompileError(
-                "FrameGraphCompiler.InvalidPassInput",
+            return RuntimeResult<std::vector<CompiledRenderGraphPassInputDescriptor>>::Failure(MakeCompileError(
+                "RenderGraphCompiler.InvalidPassInput",
                 "Render graph pass input must name a resource.",
                 passName));
         }
@@ -214,20 +224,20 @@ RuntimeResult<std::vector<CompiledFrameGraphPassInputDescriptor>> CompilePassInp
         const std::string resourceName = inputNode["resource"].get<std::string>();
         if (resourceNames.find(resourceName) == resourceNames.end())
         {
-            return RuntimeResult<std::vector<CompiledFrameGraphPassInputDescriptor>>::Failure(MakeCompileError(
-                "FrameGraphCompiler.UnknownInputResource",
+            return RuntimeResult<std::vector<CompiledRenderGraphPassInputDescriptor>>::Failure(MakeCompileError(
+                "RenderGraphCompiler.UnknownInputResource",
                 "Render graph pass input references a resource that is not declared.",
                 passName + ":" + resourceName));
         }
 
-        CompiledFrameGraphPassInputDescriptor descriptor;
+        CompiledRenderGraphPassInputDescriptor descriptor;
         descriptor.resource = resourceName;
         if (inputNode.contains("binding"))
         {
             if (!inputNode["binding"].is_number_unsigned())
             {
-                return RuntimeResult<std::vector<CompiledFrameGraphPassInputDescriptor>>::Failure(MakeCompileError(
-                    "FrameGraphCompiler.InvalidPassInputBinding",
+                return RuntimeResult<std::vector<CompiledRenderGraphPassInputDescriptor>>::Failure(MakeCompileError(
+                    "RenderGraphCompiler.InvalidPassInputBinding",
                     "Render graph pass input binding must be an unsigned integer.",
                     passName + ":" + resourceName));
             }
@@ -240,8 +250,8 @@ RuntimeResult<std::vector<CompiledFrameGraphPassInputDescriptor>> CompilePassInp
 
         if (inputBindings.find(descriptor.binding) != inputBindings.end())
         {
-            return RuntimeResult<std::vector<CompiledFrameGraphPassInputDescriptor>>::Failure(MakeCompileError(
-                "FrameGraphCompiler.DuplicatePassInputBinding",
+            return RuntimeResult<std::vector<CompiledRenderGraphPassInputDescriptor>>::Failure(MakeCompileError(
+                "RenderGraphCompiler.DuplicatePassInputBinding",
                 "Render graph pass input descriptor bindings must be unique.",
                 passName + ":" + resourceName + ":" + std::to_string(descriptor.binding)));
         }
@@ -250,70 +260,92 @@ RuntimeResult<std::vector<CompiledFrameGraphPassInputDescriptor>> CompilePassInp
         inputs.push_back(std::move(descriptor));
         ++defaultBinding;
     }
-    return RuntimeResult<std::vector<CompiledFrameGraphPassInputDescriptor>>::Success(std::move(inputs));
+    return RuntimeResult<std::vector<CompiledRenderGraphPassInputDescriptor>>::Success(std::move(inputs));
 }
 
-RuntimeResult<std::vector<CompiledFrameGraphPassOutput>> CompilePassOutputs(
+RuntimeResult<std::vector<CompiledRenderGraphPassOutput>> CompilePassOutputs(
     const nlohmann::json& passNode,
     const std::string& passName,
-    const std::unordered_set<std::string>& resourceNames)
+    const std::unordered_set<std::string>& resourceNames,
+    const std::unordered_map<std::string, uint32_t>& resourceArrayLayers)
 {
     if (!passNode.contains("output") || !passNode["output"].is_array())
     {
-        return RuntimeResult<std::vector<CompiledFrameGraphPassOutput>>::Failure(MakeCompileError(
-            "FrameGraphCompiler.InvalidPassOutput",
+        return RuntimeResult<std::vector<CompiledRenderGraphPassOutput>>::Failure(MakeCompileError(
+            "RenderGraphCompiler.InvalidPassOutput",
             "Render graph pass must provide an output array.",
             passName));
     }
 
-    std::vector<CompiledFrameGraphPassOutput> outputs;
+    std::vector<CompiledRenderGraphPassOutput> outputs;
     for (const nlohmann::json& outputNode : passNode["output"])
     {
         if (!HasStringField(outputNode, "resource"))
         {
-            return RuntimeResult<std::vector<CompiledFrameGraphPassOutput>>::Failure(MakeCompileError(
-                "FrameGraphCompiler.InvalidPassOutput",
+            return RuntimeResult<std::vector<CompiledRenderGraphPassOutput>>::Failure(MakeCompileError(
+                "RenderGraphCompiler.InvalidPassOutput",
                 "Render graph pass output must name a resource.",
                 passName));
         }
 
-        CompiledFrameGraphPassOutput output;
+        CompiledRenderGraphPassOutput output;
         output.resource = outputNode["resource"].get<std::string>();
         if (resourceNames.find(output.resource) == resourceNames.end())
         {
-            return RuntimeResult<std::vector<CompiledFrameGraphPassOutput>>::Failure(MakeCompileError(
-                "FrameGraphCompiler.UnknownOutputResource",
+            return RuntimeResult<std::vector<CompiledRenderGraphPassOutput>>::Failure(MakeCompileError(
+                "RenderGraphCompiler.UnknownOutputResource",
                 "Render graph pass output references a resource that is not declared.",
                 passName + ":" + output.resource));
+        }
+        if (outputNode.contains("layer"))
+        {
+            if (!outputNode["layer"].is_number_unsigned())
+            {
+                return RuntimeResult<std::vector<CompiledRenderGraphPassOutput>>::Failure(MakeCompileError(
+                    "RenderGraphCompiler.InvalidPassOutputLayer",
+                    "Render graph pass output layer must be an unsigned integer.",
+                    passName + ":" + output.resource));
+            }
+            output.layer = outputNode["layer"].get<uint32_t>();
+        }
+        const auto layerCountIt = resourceArrayLayers.find(output.resource);
+        const uint32_t layerCount =
+            layerCountIt != resourceArrayLayers.end() ? layerCountIt->second : 1;
+        if (output.layer >= layerCount)
+        {
+            return RuntimeResult<std::vector<CompiledRenderGraphPassOutput>>::Failure(MakeCompileError(
+                "RenderGraphCompiler.InvalidPassOutputLayer",
+                "Render graph pass output layer exceeds the resource arrayLayers.",
+                passName + ":" + output.resource + ":" + std::to_string(output.layer)));
         }
         output.loadOp = outputNode.value("loadOp", std::string("clear"));
         output.storeOp = outputNode.value("storeOp", std::string("store"));
         if (!IsSupportedLoadOp(output.loadOp))
         {
-            return RuntimeResult<std::vector<CompiledFrameGraphPassOutput>>::Failure(MakeCompileError(
-                "FrameGraphCompiler.UnsupportedLoadOp",
+            return RuntimeResult<std::vector<CompiledRenderGraphPassOutput>>::Failure(MakeCompileError(
+                "RenderGraphCompiler.UnsupportedLoadOp",
                 "Render graph pass output loadOp is not supported.",
                 passName + ":" + output.resource + ":" + output.loadOp));
         }
         if (!IsSupportedStoreOp(output.storeOp))
         {
-            return RuntimeResult<std::vector<CompiledFrameGraphPassOutput>>::Failure(MakeCompileError(
-                "FrameGraphCompiler.UnsupportedStoreOp",
+            return RuntimeResult<std::vector<CompiledRenderGraphPassOutput>>::Failure(MakeCompileError(
+                "RenderGraphCompiler.UnsupportedStoreOp",
                 "Render graph pass output storeOp is not supported.",
                 passName + ":" + output.resource + ":" + output.storeOp));
         }
         outputs.push_back(std::move(output));
     }
-    return RuntimeResult<std::vector<CompiledFrameGraphPassOutput>>::Success(std::move(outputs));
+    return RuntimeResult<std::vector<CompiledRenderGraphPassOutput>>::Success(std::move(outputs));
 }
 
 void AddResourceAccess(
-    CompiledFrameGraphResourceUsagePlan& usagePlan,
+    CompiledRenderGraphResourceUsagePlan& usagePlan,
     const std::string& passName,
     uint32_t passIndex,
-    CompiledFrameGraphAccessType accessType)
+    CompiledRenderGraphAccessType accessType)
 {
-    CompiledFrameGraphResourceAccess access;
+    CompiledRenderGraphResourceAccess access;
     access.passName = passName;
     access.passIndex = passIndex;
     access.accessType = accessType;
@@ -332,11 +364,11 @@ void AddResourceAccess(
 }
 
 void AddBarrier(
-    CompiledFrameGraphPass& pass,
+    CompiledRenderGraphPass& pass,
     const std::string& resourceName,
-    CompiledFrameGraphBarrierType barrierType)
+    CompiledRenderGraphBarrierType barrierType)
 {
-    CompiledFrameGraphBarrier barrier;
+    CompiledRenderGraphBarrier barrier;
     barrier.resource = resourceName;
     barrier.type = barrierType;
     pass.barriersBeforePass.push_back(std::move(barrier));
@@ -344,56 +376,90 @@ void AddBarrier(
 
 } // namespace
 
-RuntimeResult<CompiledFrameGraph> FrameGraphCompiler::Compile(const nlohmann::json& renderGraphJson) const
+RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::json& renderGraphJson) const
 {
     if (!renderGraphJson.contains("resources") || !renderGraphJson["resources"].is_array())
     {
-        return RuntimeResult<CompiledFrameGraph>::Failure(MakeCompileError(
-            "FrameGraphCompiler.MissingResources",
+        return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+            "RenderGraphCompiler.MissingResources",
             "Render graph config must contain a resources array."));
     }
     if (!renderGraphJson.contains("passes") || !renderGraphJson["passes"].is_array())
     {
-        return RuntimeResult<CompiledFrameGraph>::Failure(MakeCompileError(
-            "FrameGraphCompiler.MissingPasses",
+        return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+            "RenderGraphCompiler.MissingPasses",
             "Render graph config must contain a passes array."));
     }
 
-    CompiledFrameGraph compiledGraph;
+    CompiledRenderGraph compiledGraph;
     std::unordered_set<std::string> resourceNames;
     std::unordered_map<std::string, std::string> resourceFormats;
+    std::unordered_map<std::string, uint32_t> resourceArrayLayers;
     std::unordered_map<std::string, size_t> resourceUsagePlanIndices;
 
     for (const nlohmann::json& resourceNode : renderGraphJson["resources"])
     {
         if (!resourceNode.is_object() || !HasStringField(resourceNode, "name"))
         {
-            return RuntimeResult<CompiledFrameGraph>::Failure(MakeCompileError(
-                "FrameGraphCompiler.InvalidResource",
+            return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                "RenderGraphCompiler.InvalidResource",
                 "Render graph resource entries must be objects with a string name."));
         }
 
-        CompiledFrameGraphResource resource;
+        CompiledRenderGraphResource resource;
         resource.name = resourceNode["name"].get<std::string>();
         if (resource.name.empty() || resourceNames.find(resource.name) != resourceNames.end())
         {
-            return RuntimeResult<CompiledFrameGraph>::Failure(MakeCompileError(
-                "FrameGraphCompiler.DuplicateResource",
+            return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                "RenderGraphCompiler.DuplicateResource",
                 "Render graph resource names must be non-empty and unique.",
                 resource.name));
         }
         if (!HasStringField(resourceNode, "format"))
         {
-            return RuntimeResult<CompiledFrameGraph>::Failure(MakeCompileError(
-                "FrameGraphCompiler.InvalidResourceFormat",
+            return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                "RenderGraphCompiler.InvalidResourceFormat",
                 "Render graph resource must provide a format string.",
+                resource.name));
+        }
+        resource.type = resourceNode.value("type", std::string("texture2D"));
+        if (!IsSupportedResourceType(resource.type))
+        {
+            return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                "RenderGraphCompiler.UnsupportedResourceType",
+                "Render graph resource type is not supported.",
+                resource.name + ":" + resource.type));
+        }
+        if (resourceNode.contains("arrayLayers"))
+        {
+            if (!resourceNode["arrayLayers"].is_number_unsigned())
+            {
+                return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                    "RenderGraphCompiler.InvalidResourceArrayLayers",
+                    "Render graph resource arrayLayers must be an unsigned integer.",
+                    resource.name));
+            }
+            resource.arrayLayers = resourceNode["arrayLayers"].get<uint32_t>();
+        }
+        if (resource.arrayLayers < 1)
+        {
+            return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                "RenderGraphCompiler.InvalidResourceArrayLayers",
+                "Render graph resource arrayLayers must be at least 1.",
+                resource.name));
+        }
+        if (resource.type == "texture2D" && resource.arrayLayers != 1)
+        {
+            return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                "RenderGraphCompiler.InvalidResourceArrayLayers",
+                "Only texture2DArray resources may declare arrayLayers greater than 1.",
                 resource.name));
         }
         const std::string format = resourceNode["format"].get<std::string>();
         if (!IsSupportedFormat(format))
         {
-            return RuntimeResult<CompiledFrameGraph>::Failure(MakeCompileError(
-                "FrameGraphCompiler.UnsupportedResourceFormat",
+            return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                "RenderGraphCompiler.UnsupportedResourceFormat",
                 "Render graph resource format is not supported.",
                 resource.name + ":" + format));
         }
@@ -401,13 +467,13 @@ RuntimeResult<CompiledFrameGraph> FrameGraphCompiler::Compile(const nlohmann::js
         auto usageResult = CompileUsageList(resourceNode, resource.name);
         if (usageResult.IsFailure())
         {
-            return RuntimeResult<CompiledFrameGraph>::Failure(usageResult.Error());
+            return RuntimeResult<CompiledRenderGraph>::Failure(usageResult.Error());
         }
 
         auto sizeResult = CompileResourceSize(resourceNode, resource);
         if (sizeResult.IsFailure())
         {
-            return RuntimeResult<CompiledFrameGraph>::Failure(sizeResult.Error());
+            return RuntimeResult<CompiledRenderGraph>::Failure(sizeResult.Error());
         }
 
         resource.format = format;
@@ -415,8 +481,9 @@ RuntimeResult<CompiledFrameGraph> FrameGraphCompiler::Compile(const nlohmann::js
         resource.isSwapchain = resource.name == "swapChain";
         resourceNames.insert(resource.name);
         resourceFormats.emplace(resource.name, resource.format);
+        resourceArrayLayers.emplace(resource.name, resource.arrayLayers);
 
-        CompiledFrameGraphResourceUsagePlan usagePlan;
+        CompiledRenderGraphResourceUsagePlan usagePlan;
         usagePlan.resource = resource.name;
         resourceUsagePlanIndices.emplace(resource.name, compiledGraph.resourceUsagePlans.size());
         compiledGraph.resourceUsagePlans.push_back(std::move(usagePlan));
@@ -430,17 +497,17 @@ RuntimeResult<CompiledFrameGraph> FrameGraphCompiler::Compile(const nlohmann::js
     {
         if (!passNode.is_object() || !HasStringField(passNode, "name"))
         {
-            return RuntimeResult<CompiledFrameGraph>::Failure(MakeCompileError(
-                "FrameGraphCompiler.InvalidPass",
+            return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                "RenderGraphCompiler.InvalidPass",
                 "Render graph pass entries must be objects with a string name."));
         }
 
-        CompiledFrameGraphPass pass;
+        CompiledRenderGraphPass pass;
         pass.name = passNode["name"].get<std::string>();
         if (pass.name.empty() || passNames.find(pass.name) != passNames.end())
         {
-            return RuntimeResult<CompiledFrameGraph>::Failure(MakeCompileError(
-                "FrameGraphCompiler.DuplicatePass",
+            return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                "RenderGraphCompiler.DuplicatePass",
                 "Render graph pass names must be non-empty and unique.",
                 pass.name));
         }
@@ -448,27 +515,42 @@ RuntimeResult<CompiledFrameGraph> FrameGraphCompiler::Compile(const nlohmann::js
         auto inputResult = CompilePassInputs(passNode, pass.name, resourceNames);
         if (inputResult.IsFailure())
         {
-            return RuntimeResult<CompiledFrameGraph>::Failure(inputResult.Error());
+            return RuntimeResult<CompiledRenderGraph>::Failure(inputResult.Error());
         }
-        auto outputResult = CompilePassOutputs(passNode, pass.name, resourceNames);
+        auto outputResult = CompilePassOutputs(passNode, pass.name, resourceNames, resourceArrayLayers);
         if (outputResult.IsFailure())
         {
-            return RuntimeResult<CompiledFrameGraph>::Failure(outputResult.Error());
+            return RuntimeResult<CompiledRenderGraph>::Failure(outputResult.Error());
         }
         if (outputResult.Value().empty())
         {
-            return RuntimeResult<CompiledFrameGraph>::Failure(MakeCompileError(
-                "FrameGraphCompiler.EmptyPassOutput",
+            return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                "RenderGraphCompiler.EmptyPassOutput",
                 "Render graph pass must write at least one output resource.",
                 pass.name));
         }
 
+        if (!HasStringField(passNode, "type"))
+        {
+            return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                "RenderGraphCompiler.InvalidPassType",
+                "Render graph pass must provide a type string.",
+                pass.name));
+        }
+        pass.type = passNode["type"].get<std::string>();
+        if (!IsSupportedPassType(pass.type))
+        {
+            return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                "RenderGraphCompiler.UnsupportedPassType",
+                "Render graph pass type is not supported.",
+                pass.name + ":" + pass.type));
+        }
         pass.needMsaa = passNode.value("needMsaa", false);
         pass.needCreateMaterial = passNode.value("needCreateMaterial", false);
         pass.materialInstancePath = passNode.value("materialInstancePath", std::string());
         pass.inputDescriptors = std::move(inputResult.Value());
         pass.inputResources.reserve(pass.inputDescriptors.size());
-        for (const CompiledFrameGraphPassInputDescriptor& inputDescriptor : pass.inputDescriptors)
+        for (const CompiledRenderGraphPassInputDescriptor& inputDescriptor : pass.inputDescriptors)
         {
             pass.inputResources.push_back(inputDescriptor.resource);
         }
@@ -480,15 +562,15 @@ RuntimeResult<CompiledFrameGraph> FrameGraphCompiler::Compile(const nlohmann::js
                 AddBarrier(
                     pass,
                     inputResource,
-                    CompiledFrameGraphBarrierType::AttachmentToShaderRead);
+                    CompiledRenderGraphBarrierType::AttachmentToShaderRead);
             }
             AddResourceAccess(
                 compiledGraph.resourceUsagePlans.at(resourceUsagePlanIndices.at(inputResource)),
                 pass.name,
                 passIndex,
-                CompiledFrameGraphAccessType::Read);
+                CompiledRenderGraphAccessType::Read);
         }
-        for (const CompiledFrameGraphPassOutput& output : pass.outputResources)
+        for (const CompiledRenderGraphPassOutput& output : pass.outputResources)
         {
             if (output.resource != "swapChain" &&
                 output.loadOp == "load" &&
@@ -497,13 +579,13 @@ RuntimeResult<CompiledFrameGraph> FrameGraphCompiler::Compile(const nlohmann::js
                 AddBarrier(
                     pass,
                     output.resource,
-                    CompiledFrameGraphBarrierType::ShaderReadToAttachment);
+                    CompiledRenderGraphBarrierType::ShaderReadToAttachment);
             }
             AddResourceAccess(
                 compiledGraph.resourceUsagePlans.at(resourceUsagePlanIndices.at(output.resource)),
                 pass.name,
                 passIndex,
-                CompiledFrameGraphAccessType::Write);
+                CompiledRenderGraphAccessType::Write);
             pass.outputsSwapchain = pass.outputsSwapchain || output.resource == "swapChain";
             const auto formatIt = resourceFormats.find(output.resource);
             const bool isDepthOutput =
@@ -519,7 +601,7 @@ RuntimeResult<CompiledFrameGraph> FrameGraphCompiler::Compile(const nlohmann::js
         {
             previousResourceUses[inputResource] = ResourcePreviousUse::Sampled;
         }
-        for (const CompiledFrameGraphPassOutput& output : pass.outputResources)
+        for (const CompiledRenderGraphPassOutput& output : pass.outputResources)
         {
             previousResourceUses[output.resource] = ResourcePreviousUse::Attachment;
         }
@@ -530,7 +612,7 @@ RuntimeResult<CompiledFrameGraph> FrameGraphCompiler::Compile(const nlohmann::js
         ++passIndex;
     }
 
-    return RuntimeResult<CompiledFrameGraph>::Success(std::move(compiledGraph));
+    return RuntimeResult<CompiledRenderGraph>::Success(std::move(compiledGraph));
 }
 
 } // namespace VL

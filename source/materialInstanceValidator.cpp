@@ -239,6 +239,7 @@ MaterialInstanceBuildPlan MaterialInstanceValidator::BuildLoadPlan(
     std::string_view passName,
     vk::SampleCountFlagBits sampleCount,
     const GraphicsPipelineStateDesc& passPipelineStateDesc,
+    bool bIsShadowPass,
     const nlohmann::json& materialInstanceJson)
 {
     MaterialInstanceBuildPlan loadPlan;
@@ -256,7 +257,7 @@ MaterialInstanceBuildPlan MaterialInstanceValidator::BuildLoadPlan(
     loadPlan.pipelineStateDesc.depthCompareOp = passPipelineStateDesc.depthCompareOp;
     loadPlan.pipelineStateDesc.cullMode = ParseCullMode(materialInstanceJson);
 
-    loadPlan.bIsShadowPass = passName == "shadow";
+    loadPlan.bIsShadowPass = bIsShadowPass;
     loadPlan.materialKey = BuildMaterialCacheKey(
         passName,
         loadPlan.shaderVariantKey,
