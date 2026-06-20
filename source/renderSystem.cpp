@@ -405,39 +405,29 @@ RenderSystem::ShadowProjectionParams RenderSystem::CalculateShadowMatrixForCamer
 {
     PROFILE_FUNCTION();
 
-    // 建立一个与光源同轴（Z）的 shadowCoordinateSystem。这里不再读取 Camera 或 Light 对象，
-    // 而是只消费当前帧 RenderScene 中冻结的相机、灯光和包围盒数据。
-    // 将点集从世界空间转换到shadowCoordinateSystem
-    //  ->shadowCoordinateSystem
-    //      获取一组Z=0的投影点集(Eigen::Vector2f)
-    //      获取凸包点序(uint32_t)
-    //      对每条边都建立EdgeCoordinateSystem(2D坐标系，方便加速运算)
-    //      ->EdgeCoordinateSystem
-    //          将凸包点转换到EdgeCoordinateSystem
-    //          计算AABB，获取EdgeLengthMax
-    //          在循环中找到最小的EdgeLengthMax
-    //              找到后，记录EdgeLengthMax，记录CenterInEdge坐标(Eigen::Vector2f)
-    //      <-shadowCoordinateSystem
-    //      计算CenterInShadow(Eigen::Vector3f):CenterInEdge坐标转换到shadowCoordinateSystem
-    //      计算ZNear和ZFar
-    //      获取ShadowCameraPositonInShadow(Eigen::Vector3f):(CenterInShadow.x(), CenterInShadow.y(), ZNear)
-    //  <-shadowCoordinateSystem
-    //  计算ShadowCameraPositon(Eigen::Vector3f)
-    // 1. 先获取相机的数据
+    // 根据相机级联范围 (splitNear, splitFar) 计算当前级联的阴影投影矩阵。
+    //
+    // 流程：
+    // 1. 从 camera 构建视锥体 8 个角点（世界空间）
+    // 2. 将角点变换到光源空间 (worldToShadowMatrix)
+    // 3. 计算光源空间 XY 范围 + Z 深度范围
+    // 4. 可选：遍历场景 drawPacket 收紧 Z 范围 (ComputeCascadeLightSpaceZBounds)
+    // 5. 根据当前 ShadowStrategy 委托具体算法：
+    //    - DynamicTightBox  : 凸包 + 旋转边最小包围矩形
+    //    - StableBoundingSphere : 视锥体外接球 + texel snapping
+    //    - StableRectangular    : 光源空间 AABB + texel snapping
     const VL::CameraSnapshot& camera = currentRenderScene.camera;
     Eigen::Vector3f cameraPosition = camera.position;
     Eigen::Vector3f cameraDirection = camera.forward;
         // near, far
     float cameraNear = splitNear;
     float cameraFar = splitFar;
-    float frustumPadding = 0.1f;
 
     Eigen::Vector3f cameraRight = camera.right;
     Eigen::Vector3f cameraUp = camera.up;
     float cameraHFov = camera.horizontalFovDegrees;
     float aspect = static_cast<float>(CommonFunction::GetWindowSize().x()) / static_cast<float>(CommonFunction::GetWindowSize().y());
     float cameraHFovRad = cameraHFov * static_cast<float>(M_PI) / 180.0f;
-    Eigen::Matrix4f viewMatrix = camera.view;
 
     float tanHalfFov = std::tan(cameraHFovRad * 0.5f);
     float nearHalfWidth = tanHalfFov * cameraNear;
@@ -498,52 +488,40 @@ RenderSystem::ShadowProjectionParams RenderSystem::CalculateShadowMatrixForCamer
     ShadowProjectionParams params;
 
     // Calculate Z bounds first as they are needed for all strategies
+    float minX = std::numeric_limits<float>::max();
+    float maxX = std::numeric_limits<float>::lowest();
+    float minY = std::numeric_limits<float>::max();
+    float maxY = std::numeric_limits<float>::lowest();
     float defaultMinZ = std::numeric_limits<float>::max();
     float defaultMaxZ = std::numeric_limits<float>::lowest();
     for(const auto& point : pointsInShadowSys)
     {
+        maxX = std::max(maxX, point.x());
+        minX = std::min(minX, point.x());
+        maxY = std::max(maxY, point.y());
+        minY = std::min(minY, point.y());
         defaultMaxZ = std::max(defaultMaxZ, point.z());
         defaultMinZ = std::min(defaultMinZ, point.z());
     }
 
-    float minZ = std::numeric_limits<float>::max();
-    float maxZ = std::numeric_limits<float>::lowest();
-    bool hasObjectBounds = false;
-
-    Eigen::Vector3f shadowAxisWorld = worldToShadowMatrix.transpose() * Eigen::Vector3f(0.0f, 0.0f, 1.0f);
-
-    #if !defined(VULKANLEARN_SHADOW_TIGHT_Z_BOUNDS)
-        #define VULKANLEARN_SHADOW_TIGHT_Z_BOUNDS 0
-    #endif
-
-    #if VULKANLEARN_SHADOW_TIGHT_Z_BOUNDS
-        for (const VL::RenderDrawPacket& drawPacket : currentRenderScene.drawPackets)
-        {
-            auto worldCorners = BuildWorldCorners(
-                drawPacket.worldBoundsMin,
-                drawPacket.worldBoundsMax,
-                Eigen::Matrix4f::Identity());
-
-            Eigen::Vector3f viewMin;
-            Eigen::Vector3f viewMax;
-            ComputeViewAabbFromWorldCorners(viewMatrix, worldCorners, viewMin, viewMax);
-
-            if (!IntersectsSplitFrustumFast(viewMin, viewMax, cameraNear, cameraFar, cameraHFovRad, aspect, frustumPadding))
-            {
-                continue;
-            }
-
-            auto axisRange = ComputeMinMaxAlongAxis(drawPacket.worldBoundsMin, drawPacket.worldBoundsMax, shadowAxisWorld);
-            minZ = std::min(minZ, axisRange.first);
-            maxZ = std::max(maxZ, axisRange.second);
-            hasObjectBounds = true;
-        }
-    #endif
-
-    if (!hasObjectBounds)
+    float minZ = defaultMinZ;
+    float maxZ = defaultMaxZ;
+    if (csmSettings.lightSpaceCasterBounds)
     {
-        minZ = defaultMinZ;
-        maxZ = defaultMaxZ;
+        // Performance note: this scans all draw packets once per cascade. Current scenes are small
+        // enough for this straightforward path; if profiling shows CPU pressure here, precompute
+        // light-space draw bounds once per shadow frame and reuse them across cascades.
+        const auto cascadeLightSpaceZBounds = ComputeCascadeLightSpaceZBounds(
+            worldToShadowMatrix,
+            minX,
+            maxX,
+            minY,
+            maxY);
+        if (cascadeLightSpaceZBounds.has_value())
+        {
+            minZ = cascadeLightSpaceZBounds->first;
+            maxZ = cascadeLightSpaceZBounds->second;
+        }
     }
 
     float zNear = 0.0f;
@@ -570,6 +548,23 @@ RenderSystem::ShadowProjectionParams RenderSystem::CalculateShadowMatrixForCamer
 // Shadow Strategy Implementations
 // ====================================================================================================
 
+// DynamicTightBox：凸包 + 最小包围矩形。对光源空间视锥体的 XY 投影点计算凸包，
+// 遍历每条凸包边作为候选方向，在该方向上求 AABB，选取边长最小的方向，得到
+// 最小面积包围矩形。然后构建正交投影矩阵。
+//
+// 算法步骤：
+//   ->shadowCoordinateSystem
+//       获取凸包点序 (ConvexHull)
+//       对每条边建立 EdgeCoordinateSystem (2D 坐标系)
+//       ->EdgeCoordinateSystem
+//           将凸包点转换到 EdgeCoordinateSystem
+//           计算 AABB，获取 maxEdgeLength
+//           在循环中找到最小的 maxEdgeLength → 记录 CenterInEdge
+//       <-EdgeCoordinateSystem
+//       将 CenterInEdge 转回 shadowCoordinateSystem
+//       计算 ShadowCameraPosition、ZNear、ZFar
+//   <-shadowCoordinateSystem
+//   转回世界空间，构建 view/projection 矩阵
 RenderSystem::ShadowProjectionParams RenderSystem::CalculateShadowMatrix_DynamicTight(
     const std::vector<Eigen::Vector3f>& pointsInShadowSys,
     const Eigen::Matrix3f& worldToShadowRotation,
@@ -1020,7 +1015,66 @@ std::pair<float, float> RenderSystem::ComputeMinMaxAlongAxis(const Eigen::Vector
     return { minProj, maxProj };
 }
 
-std::array<Eigen::Vector3f, 8> RenderSystem::BuildWorldCorners(const Eigen::Vector3f& localMin, const Eigen::Vector3f& localMax, const Eigen::Matrix4f& modelMatrix)
+std::optional<std::pair<float, float>> RenderSystem::ComputeCascadeLightSpaceZBounds(
+    const Eigen::Matrix3f& worldToShadowMatrix,
+    float minX,
+    float maxX,
+    float minY,
+    float maxY) const
+{
+    if (currentRenderScene.drawPackets.empty())
+    {
+        return std::nullopt;
+    }
+
+    float minZ = std::numeric_limits<float>::max();
+    float maxZ = std::numeric_limits<float>::lowest();
+    bool hasCaster = false;
+    const Eigen::Vector3f lightSpaceXAxis = worldToShadowMatrix.row(0).transpose();
+    const Eigen::Vector3f lightSpaceYAxis = worldToShadowMatrix.row(1).transpose();
+    const Eigen::Vector3f lightSpaceZAxis = worldToShadowMatrix.row(2).transpose();
+    const Eigen::Vector3f absLightSpaceXAxis = lightSpaceXAxis.cwiseAbs();
+    const Eigen::Vector3f absLightSpaceYAxis = lightSpaceYAxis.cwiseAbs();
+    const Eigen::Vector3f absLightSpaceZAxis = lightSpaceZAxis.cwiseAbs();
+
+    for (const VL::RenderDrawPacket& drawPacket : currentRenderScene.drawPackets)
+    {
+        const Eigen::Vector3f center = (drawPacket.worldBoundsMin + drawPacket.worldBoundsMax) * 0.5f;
+        const Eigen::Vector3f extent = (drawPacket.worldBoundsMax - drawPacket.worldBoundsMin) * 0.5f;
+        const float projectedCenterX = lightSpaceXAxis.dot(center);
+        const float projectedRadiusX = absLightSpaceXAxis.dot(extent);
+        const float objectMinX = projectedCenterX - projectedRadiusX;
+        const float objectMaxX = projectedCenterX + projectedRadiusX;
+        if (objectMaxX < minX || objectMinX > maxX)
+        {
+            continue;
+        }
+
+        const float projectedCenterY = lightSpaceYAxis.dot(center);
+        const float projectedRadiusY = absLightSpaceYAxis.dot(extent);
+        const float objectMinY = projectedCenterY - projectedRadiusY;
+        const float objectMaxY = projectedCenterY + projectedRadiusY;
+        if (objectMaxY < minY || objectMinY > maxY)
+        {
+            continue;
+        }
+
+        const float projectedCenterZ = lightSpaceZAxis.dot(center);
+        const float projectedRadiusZ = absLightSpaceZAxis.dot(extent);
+        minZ = std::min(minZ, projectedCenterZ - projectedRadiusZ);
+        maxZ = std::max(maxZ, projectedCenterZ + projectedRadiusZ);
+        hasCaster = true;
+    }
+
+    if (!hasCaster)
+    {
+        return std::nullopt;
+    }
+
+    return std::make_pair(minZ, maxZ);
+}
+
+std::array<Eigen::Vector3f, 8> RenderSystem::BuildWorldCorners(const Eigen::Vector3f& localMin, const Eigen::Vector3f& localMax, const Eigen::Matrix4f& modelMatrix) const
 {
     return {
         (modelMatrix * Eigen::Vector4f(localMin.x(), localMin.y(), localMin.z(), 1.0f)).head<3>(),

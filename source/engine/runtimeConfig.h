@@ -19,6 +19,7 @@ struct CsmSettings
     uint32_t cascadeCount = 1;
     float shadowDistance = 10.0f;
     float splitLambda = 0.65f;
+    bool lightSpaceCasterBounds = true;
     std::array<Eigen::Vector4f, 4> bias{};
 };
 

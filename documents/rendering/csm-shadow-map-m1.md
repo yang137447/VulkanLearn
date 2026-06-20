@@ -15,6 +15,7 @@ shadow maps.
   - `cascadeCount`
   - `shadowDistance`
   - `splitLambda`
+  - `lightSpaceCasterBounds`
   - per-cascade `bias`
 - `RuntimeConfig` parses and validates `csm`; `RenderSystem` consumes the parsed
   settings and does not read JSON directly.
@@ -59,6 +60,25 @@ used for ordering, material binding, cache keys, debug labels, and commands.
 
 Shadow sampling uses `sampler2DArrayShadow`. The selected cascade layer comes
 from camera view-space depth compared against `cascadeSplits`.
+
+## Light-Space Coverage
+
+Each cascade fits its XY orthographic coverage from the camera split frustum.
+By default, the shadow camera Z range is expanded from current RenderScene draw
+packet world bounds projected into directional-light space, but only for objects
+whose light-space XY bounds overlap the cascade coverage. This includes casters
+outside the camera split that may still cast shadows into it without expanding
+every cascade to the full scene depth. If no overlapping draw packets are
+available, the Z range falls back to the split frustum corner bounds.
+
+`csm.lightSpaceCasterBounds` exists only as a diagnostic/performance fallback;
+the intended default is `true`.
+
+Current implementation note: when this option is enabled, `RenderSystem` scans
+the current frame's draw packets once per cascade to compute light-space Z
+bounds. This is acceptable for the current small scenes. If larger scenes make
+this visible in CPU profiling, precompute light-space draw bounds once per
+shadow frame and reuse them across cascades.
 
 Debug views:
 

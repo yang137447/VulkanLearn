@@ -362,6 +362,18 @@ RuntimeResult<void> RuntimeConfig::LoadCsmSettings()
 
     const nlohmann::json& csmJson = configJson["csm"];
     csmSettings.enabled = csmJson.value("enabled", false);
+    if (csmJson.contains("lightSpaceCasterBounds"))
+    {
+        if (!csmJson["lightSpaceCasterBounds"].is_boolean())
+        {
+            return RuntimeResult<void>::Failure(MakeRuntimeError(
+                "RuntimeConfig.InvalidCsmLightSpaceCasterBounds",
+                "csm.lightSpaceCasterBounds must be a boolean.",
+                "config/config.json",
+                "csm.lightSpaceCasterBounds"));
+        }
+        csmSettings.lightSpaceCasterBounds = csmJson["lightSpaceCasterBounds"].get<bool>();
+    }
     if (csmJson.contains("cascadeCount"))
     {
         if (!csmJson["cascadeCount"].is_number_unsigned())

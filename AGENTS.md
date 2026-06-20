@@ -2,6 +2,10 @@
 
 This file is the first-stop guide for AI coding agents working in this repository.
 
+## Knowledge Base
+
+User's personal knowledge base lives at `D:\YYBWorkSpace\GitHub\yyb-knowledge-book`. When the user mentions "知识库", refer to this path.
+
 ## Document Responsibilities
 
 Use repository documents according to their role:
