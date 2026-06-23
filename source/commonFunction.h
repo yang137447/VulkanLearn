@@ -689,9 +689,9 @@ namespace CommonFunction
         samplerInfo
             .setMagFilter(vk::Filter::eLinear)
             .setMinFilter(vk::Filter::eLinear)
-            .setAddressModeU(vk::SamplerAddressMode::eRepeat)
-            .setAddressModeV(vk::SamplerAddressMode::eRepeat)
-            .setAddressModeW(vk::SamplerAddressMode::eRepeat)
+            .setAddressModeU(vk::SamplerAddressMode::eClampToEdge)
+            .setAddressModeV(vk::SamplerAddressMode::eClampToEdge)
+            .setAddressModeW(vk::SamplerAddressMode::eClampToEdge)
             .setAnisotropyEnable(VK_TRUE)
             .setMaxAnisotropy(physicalDeviceProperties.limits.maxSamplerAnisotropy)
             .setBorderColor(vk::BorderColor::eIntOpaqueBlack)
