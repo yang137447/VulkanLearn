@@ -899,35 +899,37 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
     swapChainImageIndex = frameContext.swapchainImageIndex;
     vk::CommandBuffer commandBuffer = frameContext.commandBuffer;
 
-    VulkanDebug::ScopedRegion frameRegion(
-        commandBuffer,
-        "Frame:" + std::to_string(frameIndex) + " Image:" + std::to_string(swapChainImageIndex),
-        VulkanDebug::DebugCategory::eDefault);
-
-    const auto& renderPassOrdered = renderGraph.GetRenderpassesOrdered();
-    for (size_t passIndex = 0; passIndex < renderPassOrdered.size(); ++passIndex)
     {
-        const auto& renderPassName = renderPassOrdered[passIndex];
-        std::string renderPassScopeName = "RenderPass:" + renderPassName;
-        PROFILE_SCOPE(renderPassScopeName.c_str());
-        const auto& renderPass = renderGraph.GetRenderpasses().at(renderPassName);
-
-        VulkanDebug::ScopedRegion passRegion(
+        VulkanDebug::ScopedRegion frameRegion(
             commandBuffer,
-            renderPassName,
-            VulkanDebug::DebugCategory::ePass);
+            "Frame:" + std::to_string(frameIndex) + " Image:" + std::to_string(swapChainImageIndex),
+            VulkanDebug::DebugCategory::eDefault);
 
-        VL::PassRuntimeContext passContext{
-            commandBuffer,
-            renderPass,
-            renderGraph,
-            passIndex,
-            swapChainImageIndex,
-            currentRenderScene,
-            currentResolvedRenderScene,
-            *this
-        };
-        passRuntime.RecordPass(renderPassName, passContext);
+        const auto& renderPassOrdered = renderGraph.GetRenderpassesOrdered();
+        for (size_t passIndex = 0; passIndex < renderPassOrdered.size(); ++passIndex)
+        {
+            const auto& renderPassName = renderPassOrdered[passIndex];
+            std::string renderPassScopeName = "RenderPass:" + renderPassName;
+            PROFILE_SCOPE(renderPassScopeName.c_str());
+            const auto& renderPass = renderGraph.GetRenderpasses().at(renderPassName);
+
+            VulkanDebug::ScopedRegion passRegion(
+                commandBuffer,
+                renderPassName,
+                VulkanDebug::DebugCategory::ePass);
+
+            VL::PassRuntimeContext passContext{
+                commandBuffer,
+                renderPass,
+                renderGraph,
+                passIndex,
+                swapChainImageIndex,
+                currentRenderScene,
+                currentResolvedRenderScene,
+                *this
+            };
+            passRuntime.RecordPass(renderPassName, passContext);
+        }
     }
 
     // RenderSystem only records pass commands. Queue, semaphore, fence,
