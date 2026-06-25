@@ -281,7 +281,7 @@ RuntimeResult<void> EngineLoop::LoadInitialWorldAndRenderer()
 
     controller = std::make_unique<Controller>();
     controller->SetMoveVelocity(10.0f);
-    controller->SetRotationSpeed(10.0f);
+    controller->SetRotationSpeed(0.1f);
 
     auto bindResult = BindActiveWorldRuntimeObjects(initialWorldResult.Value().world);
     if (bindResult.IsFailure())

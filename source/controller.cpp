@@ -34,7 +34,10 @@ void Controller::Update(float deltaTime, const VL::InputActionState& input)
     {
         moveFactor.y() = 1;
     }
-    moveFactor.normalize();
+    if (moveFactor.squaredNorm() > 0.0f)
+    {
+        moveFactor.normalize();
+    }
 
     Eigen::Vector3f position = viewTarget->GetPosition();
     Eigen::Vector3f forward = viewTarget->GetForwardVector();
@@ -46,7 +49,6 @@ void Controller::Update(float deltaTime, const VL::InputActionState& input)
     
     viewTarget->SetPosition(position);
     Eigen::Vector3f deltaRot(deltaRotationX, deltaRotationY, 0.0f);
-    deltaRot *= deltaTime *mouseRotationSpeed;
     viewTarget->SetDeltaRotation(deltaRot);
 }
 
