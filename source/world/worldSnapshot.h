@@ -11,6 +11,8 @@
 
 #include <Eigen/Dense>
 
+#include "baseStructs.h"
+
 namespace VL
 {
 
@@ -80,6 +82,7 @@ struct EnvironmentSnapshot
     ResourceHandle cube;
     ResourceHandle prefilteredCube;
     ResourceHandle brdfLut;
+    SkyParametersGPU skyParameters;
     std::array<Eigen::Vector4f, 9> sphericalHarmonics{};
     bool hasSphericalHarmonics = false;
     float intensity = 1.0f;

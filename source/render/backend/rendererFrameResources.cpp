@@ -122,6 +122,12 @@ void RendererFrameResources::Initialize(RendererBackendVulkan& rendererBackend)
         usage,
         memoryPropertyFlags,
         "UBO_Global");
+    rendererBackend.CreatePerSwapchainBufferSet(
+        skyParametersBuffer,
+        sizeof(SkyParametersGPU),
+        usage,
+        memoryPropertyFlags,
+        "UBO_SkyParameters");
     initialized = true;
 }
 
@@ -133,6 +139,7 @@ void RendererFrameResources::Shutdown(RendererBackendVulkan& rendererBackend)
     }
 
     DestroyLightBuffer(rendererBackend);
+    rendererBackend.DestroyBufferSet(skyParametersBuffer);
     rendererBackend.DestroyBufferSet(globalUniformBuffer);
     initialized = false;
 }
@@ -184,6 +191,43 @@ void RendererFrameResources::UpdateGlobalUniformBuffer(
     commandBuffer.pipelineBarrier(
         vk::PipelineStageFlagBits::eTransfer,
         vk::PipelineStageFlagBits::eVertexShader | vk::PipelineStageFlagBits::eFragmentShader,
+        vk::DependencyFlags(),
+        0,
+        nullptr,
+        1,
+        &barrier,
+        0,
+        nullptr);
+}
+
+void RendererFrameResources::UpdateSkyParametersBuffer(
+    vk::CommandBuffer& commandBuffer,
+    uint32_t swapChainImageIndex,
+    const SkyParametersGPU& skyParameters)
+{
+    if (!initialized || swapChainImageIndex >= skyParametersBuffer.buffers.size())
+    {
+        throw std::runtime_error("RendererFrameResources sky parameters UBO is not initialized for this swapchain image.");
+    }
+
+    commandBuffer.updateBuffer(
+        skyParametersBuffer.buffers[swapChainImageIndex],
+        0,
+        sizeof(SkyParametersGPU),
+        &skyParameters);
+
+    vk::BufferMemoryBarrier barrier;
+    barrier.setSrcAccessMask(vk::AccessFlagBits::eTransferWrite)
+        .setDstAccessMask(vk::AccessFlagBits::eUniformRead)
+        .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+        .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+        .setBuffer(skyParametersBuffer.buffers[swapChainImageIndex])
+        .setOffset(0)
+        .setSize(sizeof(SkyParametersGPU));
+
+    commandBuffer.pipelineBarrier(
+        vk::PipelineStageFlagBits::eTransfer,
+        vk::PipelineStageFlagBits::eFragmentShader,
         vk::DependencyFlags(),
         0,
         nullptr,
@@ -362,6 +406,11 @@ void RendererFrameResources::UpdateObjectUniformBuffer(
 const std::vector<vk::DescriptorBufferInfo>& RendererFrameResources::GetGlobalUniformBufferInfos() const
 {
     return globalUniformBuffer.bufferInfos;
+}
+
+const std::vector<vk::DescriptorBufferInfo>& RendererFrameResources::GetSkyParametersBufferInfos() const
+{
+    return skyParametersBuffer.bufferInfos;
 }
 
 const std::vector<vk::DescriptorBufferInfo>& RendererFrameResources::GetLightBufferInfos() const

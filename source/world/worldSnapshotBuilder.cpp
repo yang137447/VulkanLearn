@@ -184,6 +184,7 @@ EnvironmentSnapshot BuildEnvironmentSnapshot(
         snapshot.brdfLut = MakeResourceHandle("global/brdfLut");
     }
 
+    snapshot.skyParameters = environment.skyParameters;
     snapshot.sphericalHarmonics = environment.sphericalHarmonics;
     snapshot.hasSphericalHarmonics = environment.hasSphericalHarmonics;
     snapshot.intensity = desc.environmentIntensity;

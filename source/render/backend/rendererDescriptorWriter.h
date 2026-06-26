@@ -16,6 +16,7 @@ namespace VL
 enum class RendererDescriptorUpdateSource
 {
     GlobalUniform,
+    GlobalSkyUniform,
     MaterialUniform,
     ObjectUniform,
     LightStorage,

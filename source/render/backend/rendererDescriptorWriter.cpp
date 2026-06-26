@@ -70,6 +70,14 @@ bool BuildRendererDescriptorWrite(
             "RendererDescriptorWriter",
             "global uniform buffer info"));
     }
+    else if (update.source == RendererDescriptorUpdateSource::GlobalSkyUniform)
+    {
+        outWrite.setBufferInfo(RequireRendererDescriptorBufferInfo(
+            inputs.descriptorContext->skyParametersBufferInfos,
+            swapChainImageIndex,
+            "RendererDescriptorWriter",
+            "sky parameters uniform buffer info"));
+    }
     else if (update.source == RendererDescriptorUpdateSource::MaterialUniform)
     {
         if (inputs.materialInstance == nullptr)

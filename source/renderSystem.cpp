@@ -340,6 +340,11 @@ void RenderSystem::UpdateUBOGlobalForShadow(
     }
 
     frameResources.UpdateGlobalUniformBuffer(commandBuffer, swapChainImageIndex, ubo);
+    // 天空参数虽然也是set0, 但是 shadow pass 不需要更新
+    // frameResources.UpdateSkyParametersBuffer(
+    //     commandBuffer,
+    //     swapChainImageIndex,
+    //     currentRenderScene.environment.skyParameters);
 }
 
 void RenderSystem::BuildShadowCascadeFrameData(uint32_t passSizeWidth, uint32_t passSizeHeight)
@@ -949,6 +954,7 @@ VL::RendererDescriptorContext RenderSystem::BuildRendererDescriptorContext() con
 {
     VL::RendererDescriptorContext descriptorContext;
     descriptorContext.globalUniformBufferInfos = &GetUBOGlobalBufferInfo();
+    descriptorContext.skyParametersBufferInfos = &GetSkyParametersBufferInfo();
     descriptorContext.lightBufferInfos = &GetLightBufferInfo();
     descriptorContext.resourceCache = &VL::RendererResourceCache::GetInstance();
     return descriptorContext;

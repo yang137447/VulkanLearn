@@ -63,6 +63,10 @@ public:
     {
         return frameResources.GetGlobalUniformBufferInfos();
     }
+    const std::vector<vk::DescriptorBufferInfo>& GetSkyParametersBufferInfo() const
+    {
+        return frameResources.GetSkyParametersBufferInfos();
+    }
     const std::vector<vk::DescriptorBufferInfo>& GetLightBufferInfo() const
     {
         return frameResources.GetLightBufferInfos();

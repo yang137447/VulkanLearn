@@ -8,6 +8,8 @@
 
 #include <Eigen/Dense>
 
+#include "baseStructs.h"
+
 class Camera;
 class DirectionalLight;
 class PointLight;
@@ -21,6 +23,7 @@ struct WorldEnvironment
 {
     std::string hdrPath;
     uint32_t cubeSize = 512;
+    SkyParametersGPU skyParameters;
     std::array<Eigen::Vector4f, 9> sphericalHarmonics{};
     bool hasSphericalHarmonics = false;
     bool hasBrdfLut = false;

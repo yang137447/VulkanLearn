@@ -21,6 +21,7 @@ constexpr uint32_t GlobalSetIndex = 0;
 constexpr uint32_t MaterialSetIndex = 1;
 constexpr uint32_t ObjectSetIndex = 2;
 constexpr uint32_t PassSetIndex = 3;
+constexpr uint32_t SkyParametersBindingIndex = 4;
 
 namespace JsonParser
 {

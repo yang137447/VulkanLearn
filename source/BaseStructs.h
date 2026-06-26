@@ -58,6 +58,17 @@ struct alignas(16) UBOModel
     Eigen::Matrix4f previousModel;
 };
 
+struct alignas(16) SkyParametersGPU
+{
+    Eigen::Vector4f sunDirectionIntensity = Eigen::Vector4f(-0.381299f, 0.421436f, 0.822803f, 1.0f);
+    Eigen::Vector4f sunColorAngularRadius = Eigen::Vector4f(22.0f, 17.5f, 10.0f, 0.18f);
+    Eigen::Vector4f zenithColor = Eigen::Vector4f(0.09f, 0.32f, 0.95f, 0.0f);
+    Eigen::Vector4f horizonColor = Eigen::Vector4f(0.85f, 0.78f, 0.58f, 0.0f);
+    Eigen::Vector4f groundColor = Eigen::Vector4f(0.06f, 0.07f, 0.055f, 0.0f);
+    Eigen::Vector4f scatteringControls = Eigen::Vector4f(0.42f, 0.35f, 96.0f, 0.45f);
+    Eigen::Vector4f cloudControls = Eigen::Vector4f::Zero();
+};
+
 struct alignas(4) LightSSBOHeader
 {
     int directionalLightOffset;

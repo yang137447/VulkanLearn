@@ -14,9 +14,27 @@ namespace VL
 namespace
 {
 
-Eigen::Vector3f ReadVector3(const nlohmann::json& node, const char* fieldName)
+SkyParametersGPU BuildSkyParameters(const nlohmann::json& environmentNode)
 {
-    return JsonParser::ParseValue<Eigen::Vector3f>(node[fieldName]);
+    SkyParametersGPU skyParameters;
+    if (!environmentNode.contains("skyParameters"))
+    {
+        return skyParameters;
+    }
+
+    const nlohmann::json& node = environmentNode["skyParameters"];
+    skyParameters.sunDirectionIntensity.w() = JsonParser::ParseValue<float>(node["sunIntensity"]);
+    skyParameters.sunColorAngularRadius.head<3>() = JsonParser::ParseValue<Eigen::Vector3f>(node["sunColor"]);
+    skyParameters.sunColorAngularRadius.w() = JsonParser::ParseValue<float>(node["sunAngularRadius"]);
+    skyParameters.zenithColor.head<3>() = JsonParser::ParseValue<Eigen::Vector3f>(node["zenithColor"]);
+    skyParameters.horizonColor.head<3>() = JsonParser::ParseValue<Eigen::Vector3f>(node["horizonColor"]);
+    skyParameters.groundColor.head<3>() = JsonParser::ParseValue<Eigen::Vector3f>(node["groundColor"]);
+    skyParameters.scatteringControls.x() = JsonParser::ParseValue<float>(node["skyGradientExponent"]);
+    skyParameters.scatteringControls.y() = JsonParser::ParseValue<float>(node["groundGradientExponent"]);
+    skyParameters.scatteringControls.z() = JsonParser::ParseValue<float>(node["sunHaloExponent"]);
+    skyParameters.scatteringControls.w() = JsonParser::ParseValue<float>(node["sunHaloStrength"]);
+
+    return skyParameters;
 }
 
 std::shared_ptr<Camera> BuildCamera(const nlohmann::json& node)
@@ -25,8 +43,8 @@ std::shared_ptr<Camera> BuildCamera(const nlohmann::json& node)
     const float fov = node["fov"].get<float>();
     const float nearClip = node["near_clip"].get<float>();
     const float farClip = node["far_clip"].get<float>();
-    Eigen::Vector3f position = ReadVector3(node, "position");
-    Eigen::Vector3f rotation = ReadVector3(node, "rotation");
+    Eigen::Vector3f position = JsonParser::ParseValue<Eigen::Vector3f>(node["position"]);
+    Eigen::Vector3f rotation = JsonParser::ParseValue<Eigen::Vector3f>(node["rotation"]);
 
     std::shared_ptr<Camera> camera = std::make_shared<Camera>();
     camera->SetName(name);
@@ -40,9 +58,9 @@ std::shared_ptr<Camera> BuildCamera(const nlohmann::json& node)
 std::shared_ptr<DirectionalLight> BuildDirectionalLight(const nlohmann::json& node)
 {
     const std::string name = node["name"];
-    Eigen::Vector3f position = ReadVector3(node, "position");
-    Eigen::Vector3f rotation = ReadVector3(node, "rotation");
-    Eigen::Vector3f color = ReadVector3(node, "color");
+    Eigen::Vector3f position = JsonParser::ParseValue<Eigen::Vector3f>(node["position"]);
+    Eigen::Vector3f rotation = JsonParser::ParseValue<Eigen::Vector3f>(node["rotation"]);
+    Eigen::Vector3f color = JsonParser::ParseValue<Eigen::Vector3f>(node["color"]);
     const float intensity = JsonParser::ParseValue<float>(node["intensity"]);
 
     std::shared_ptr<DirectionalLight> light = std::make_shared<DirectionalLight>();
@@ -57,9 +75,9 @@ std::shared_ptr<DirectionalLight> BuildDirectionalLight(const nlohmann::json& no
 std::shared_ptr<PointLight> BuildPointLight(const nlohmann::json& node)
 {
     const std::string name = node["name"];
-    Eigen::Vector3f position = ReadVector3(node, "position");
-    Eigen::Vector3f rotation = ReadVector3(node, "rotation");
-    Eigen::Vector3f color = ReadVector3(node, "color");
+    Eigen::Vector3f position = JsonParser::ParseValue<Eigen::Vector3f>(node["position"]);
+    Eigen::Vector3f rotation = JsonParser::ParseValue<Eigen::Vector3f>(node["rotation"]);
+    Eigen::Vector3f color = JsonParser::ParseValue<Eigen::Vector3f>(node["color"]);
     const float intensity = JsonParser::ParseValue<float>(node["intensity"]);
     const float radius = node.value("radius", 0.0f);
 
@@ -76,9 +94,9 @@ std::shared_ptr<PointLight> BuildPointLight(const nlohmann::json& node)
 std::shared_ptr<SpotLight> BuildSpotLight(const nlohmann::json& node)
 {
     const std::string name = node["name"];
-    Eigen::Vector3f position = ReadVector3(node, "position");
-    Eigen::Vector3f rotation = ReadVector3(node, "rotation");
-    Eigen::Vector3f color = ReadVector3(node, "color");
+    Eigen::Vector3f position = JsonParser::ParseValue<Eigen::Vector3f>(node["position"]);
+    Eigen::Vector3f rotation = JsonParser::ParseValue<Eigen::Vector3f>(node["rotation"]);
+    Eigen::Vector3f color = JsonParser::ParseValue<Eigen::Vector3f>(node["color"]);
     const float intensity = JsonParser::ParseValue<float>(node["intensity"]);
     const float radius = node.value("radius", 0.0f);
     const float coneAngleOuter = JsonParser::ParseValue<float>(node["cone_angle_outer"]);
@@ -101,6 +119,7 @@ WorldEnvironment BuildEnvironment(const nlohmann::json& node, bool hasBrdfLut)
     WorldEnvironment environment;
     environment.hdrPath = node.value("hdrPath", std::string());
     environment.cubeSize = node.value("cubeSize", 512u);
+    environment.skyParameters = BuildSkyParameters(node);
     environment.hasBrdfLut = hasBrdfLut;
 
     if (!environment.hdrPath.empty())
@@ -110,6 +129,23 @@ WorldEnvironment BuildEnvironment(const nlohmann::json& node, bool hasBrdfLut)
     }
 
     return environment;
+}
+
+void SetSkySunDirection(WorldEnvironment& environment, const Eigen::Vector3f& sceneToSunDirection)
+{
+    const Eigen::Vector3f normalizedDirection = sceneToSunDirection.normalized();
+    environment.skyParameters.sunDirectionIntensity.x() = normalizedDirection.x();
+    environment.skyParameters.sunDirectionIntensity.y() = normalizedDirection.y();
+    environment.skyParameters.sunDirectionIntensity.z() = normalizedDirection.z();
+}
+
+void SyncEnvironmentWithPrimaryDirectionalLight(
+    WorldEnvironment& environment,
+    const DirectionalLight& light)
+{
+    // Convert incoming light-ray direction back to the scene-to-sun direction
+    // used by sky evaluation.
+    SetSkySunDirection(environment, -light.GetForwardVector());
 }
 
 void AddDirectionalLightIfFirst(World& world, std::shared_ptr<DirectionalLight> light)
@@ -154,6 +190,7 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
 
         WorldEnvironment environment;
         environment.hasBrdfLut = resourceCache.HasGlobalTexture("brdfLut");
+        std::shared_ptr<DirectionalLight> primaryDirectionalLight;
 
         const nlohmann::json& objectsJson = worldBuildPlan.sceneJson["objects"];
         for (const SceneAssetObjectPlan& objectPlan : worldBuildPlan.sceneAssetPlan.objectPlans)
@@ -169,7 +206,12 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
             }
             else if (type == "directionalLight")
             {
-                AddDirectionalLightIfFirst(*world, BuildDirectionalLight(objectJson));
+                std::shared_ptr<DirectionalLight> light = BuildDirectionalLight(objectJson);
+                if (!primaryDirectionalLight)
+                {
+                    primaryDirectionalLight = light;
+                }
+                AddDirectionalLightIfFirst(*world, std::move(light));
             }
             else if (type == "pointLight")
             {
@@ -192,6 +234,8 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
                 "Cannot build a World because the build plan has no camera.",
                 worldBuildPlan.scenePath));
         }
+
+        SyncEnvironmentWithPrimaryDirectionalLight(environment, *primaryDirectionalLight);
 
         world->SetEnvironment(environment);
 

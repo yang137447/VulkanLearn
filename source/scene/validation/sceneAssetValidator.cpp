@@ -139,6 +139,26 @@ namespace
                 throw std::runtime_error("Scene environment field \"cubeSize\" must be > 0: " + std::string(context));
             }
         }
+
+        if (objectJson.contains("skyParameters"))
+        {
+            if (!objectJson["skyParameters"].is_object())
+            {
+                throw std::runtime_error("Scene environment field \"skyParameters\" must be an object: " + std::string(context));
+            }
+
+            const nlohmann::json& skyParameters = objectJson["skyParameters"];
+            RequireVector3Field(skyParameters, "sunColor", context);
+            RequireVector3Field(skyParameters, "zenithColor", context);
+            RequireVector3Field(skyParameters, "horizonColor", context);
+            RequireVector3Field(skyParameters, "groundColor", context);
+            RequireNumberField(skyParameters, "sunIntensity", context);
+            RequireNumberField(skyParameters, "sunAngularRadius", context);
+            RequireNumberField(skyParameters, "skyGradientExponent", context);
+            RequireNumberField(skyParameters, "groundGradientExponent", context);
+            RequireNumberField(skyParameters, "sunHaloExponent", context);
+            RequireNumberField(skyParameters, "sunHaloStrength", context);
+        }
     }
 }
 
