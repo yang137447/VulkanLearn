@@ -296,11 +296,13 @@ void RenderSystem::UpdateUBOGlobal(vk::CommandBuffer& commandBuffer)
     ubo.cascadeSplits = shadowCascadeFrameData.cascadeSplits;
     ubo.shadowBias = shadowCascadeFrameData.bias;
     ubo.cameraPosition = camera.position;
-    ubo.environmentSH = currentRenderScene.environment.sphericalHarmonics;
+    // 这里以后由computer shader计算
+    // ubo.environmentSH = currentRenderScene.environment.sphericalHarmonics;
     ubo.debugViewMode = currentRenderScene.debugViewMode;
     ubo.environmentIntensity = currentRenderScene.environment.intensity;
+    ubo.skyParameters = currentRenderScene.environment.skyParameters;
 
-    frameResources.UpdateGlobalUniformBuffer(commandBuffer, swapChainImageIndex, ubo);
+    frameResources.UpdateGlobalUniformBufferExceptGpuOwnedRanges(commandBuffer, swapChainImageIndex, ubo);
 }
 
 void RenderSystem::UpdateUBOGlobalForShadow(
@@ -330,21 +332,18 @@ void RenderSystem::UpdateUBOGlobalForShadow(
     ubo.lightViewProj = shadowCascadeFrameData.lightViewProj;
     ubo.cascadeSplits = shadowCascadeFrameData.cascadeSplits;
     ubo.shadowBias = shadowCascadeFrameData.bias;
-    ubo.environmentSH = currentRenderScene.environment.sphericalHarmonics;
+    // 这里以后由computer shader计算
+    // ubo.environmentSH = currentRenderScene.environment.sphericalHarmonics;
     ubo.debugViewMode = currentRenderScene.debugViewMode;
     ubo.environmentIntensity = currentRenderScene.environment.intensity;
+    ubo.skyParameters = currentRenderScene.environment.skyParameters;
     {
         Eigen::Matrix3f rotT = ubo.view.block<3, 3>(0, 0);
         Eigen::Vector3f trans = ubo.view.block<3, 1>(0, 3);
         ubo.cameraPosition = -(rotT.transpose() * trans);
     }
 
-    frameResources.UpdateGlobalUniformBuffer(commandBuffer, swapChainImageIndex, ubo);
-    // 天空参数虽然也是set0, 但是 shadow pass 不需要更新
-    // frameResources.UpdateSkyParametersBuffer(
-    //     commandBuffer,
-    //     swapChainImageIndex,
-    //     currentRenderScene.environment.skyParameters);
+    frameResources.UpdateGlobalUniformBufferExceptGpuOwnedRanges(commandBuffer, swapChainImageIndex, ubo);
 }
 
 void RenderSystem::BuildShadowCascadeFrameData(uint32_t passSizeWidth, uint32_t passSizeHeight)
@@ -880,6 +879,9 @@ void RenderSystem::InitializeCurrentRenderSceneResources()
 
     VL::RendererDescriptorContext descriptorContext = BuildRendererDescriptorContext();
     VL::RendererResourceCache& resourceCache = VL::RendererResourceCache::GetInstance();
+    
+    PrepareEnvironmentResources(); // 环境光照的资源准备
+
     RenderGraph::GetInstance().RefreshRuntimeDescriptors(*rendererBackend, descriptorContext);
 
     VL::RendererObjectResourceRegistry objectResourceRegistry;
@@ -909,6 +911,13 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
             commandBuffer,
             "Frame:" + std::to_string(frameIndex) + " Image:" + std::to_string(swapChainImageIndex),
             VulkanDebug::DebugCategory::eDefault);
+
+        // Procedural sky IBL needs the latest camera and sky parameters in global UBO,
+        // but environmentSH is GPU-owned and must not be overwritten by this upload.
+        UpdateUBOGlobal(commandBuffer);
+        // Generate the procedural sky cubemap and write environmentSH before graphics
+        // passes read global lighting data.
+        RecordEnvironmentIbl(commandBuffer, swapChainImageIndex);
 
         const auto& renderPassOrdered = renderGraph.GetRenderpassesOrdered();
         for (size_t passIndex = 0; passIndex < renderPassOrdered.size(); ++passIndex)
@@ -954,7 +963,6 @@ VL::RendererDescriptorContext RenderSystem::BuildRendererDescriptorContext() con
 {
     VL::RendererDescriptorContext descriptorContext;
     descriptorContext.globalUniformBufferInfos = &GetUBOGlobalBufferInfo();
-    descriptorContext.skyParametersBufferInfos = &GetSkyParametersBufferInfo();
     descriptorContext.lightBufferInfos = &GetLightBufferInfo();
     descriptorContext.resourceCache = &VL::RendererResourceCache::GetInstance();
     return descriptorContext;
@@ -971,9 +979,21 @@ void RenderSystem::InitializeFrameResources()
     {
         throw std::runtime_error("RenderSystem cannot initialize frame resources without a renderer backend");
     }
+    if (pipelineFactory == nullptr)
+    {
+        throw std::runtime_error("RenderSystem cannot initialize procedural sky IBL without a pipeline factory");
+    }
 
     frameResources.Initialize(*rendererBackend);
     frameResources.EnsureLightCapacity(currentRenderScene.lights.size(), *rendererBackend);
+    proceduralSkyCubeGenerator.Initialize(
+        *pipelineFactory,
+        *rendererBackend,
+        frameResources.GetGlobalUniformBufferInfos());
+    environmentIblBaker.Initialize(
+        *pipelineFactory,
+        *rendererBackend,
+        frameResources.GetGlobalUniformBufferInfos());
 }
 
 void RenderSystem::ShutdownFrameResources()
@@ -983,6 +1003,9 @@ void RenderSystem::ShutdownFrameResources()
         return;
     }
 
+    environmentIblBaker.Shutdown(*rendererBackend);
+    proceduralSkyCubeGenerator.Shutdown(*rendererBackend);
+    
     frameResources.Shutdown(*rendererBackend);
 }
 
@@ -1138,4 +1161,53 @@ bool RenderSystem::IntersectsSplitFrustumFast(const Eigen::Vector3f& viewMin, co
         return false;
     }
     return true;
+}
+
+std::shared_ptr<Texture> RenderSystem::GetActiveEnvironmentCube()
+{
+    switch(currentRenderScene.environment.type)
+    {
+        case VL::EnvironmentType::ProceduralSky:
+            return proceduralSkyCubeGenerator.GetEnvironmentCube();
+        case VL::EnvironmentType::Hdri:
+            const std::shared_ptr<Texture>* environmentCube = 
+                VL::RendererResourceCache::GetInstance()
+                .GetWorldTexture("environmentCube");
+            if(environmentCube == nullptr || *environmentCube == nullptr)
+            {
+                throw std::runtime_error("Environment cube not found");
+            }
+            return *environmentCube;
+    }
+    throw std::runtime_error("Unknown environment type");
+}
+
+void RenderSystem::PrepareEnvironmentResources()
+{
+    VL::RendererResourceCache& rendererResourceCache = VL::RendererResourceCache::GetInstance();
+
+    std::shared_ptr<Texture> environmentCube = GetActiveEnvironmentCube();
+
+    rendererResourceCache.BindWorldTexture("environmentCube", environmentCube);
+
+    std::shared_ptr<Texture> prefilteredEnvironmentCube = environmentIblBaker.GetPrefilteredEnvironmentCube();
+
+    if(prefilteredEnvironmentCube == nullptr)
+    {
+        throw std::runtime_error("Prefiltered environment cube is not initialized");
+    }
+
+    rendererResourceCache.BindWorldTexture("prefilteredEnvironmentCube", prefilteredEnvironmentCube);
+}
+
+void RenderSystem::RecordEnvironmentIbl(vk::CommandBuffer commandBuffer, uint32_t swapchainImageIndex)
+{
+    std::shared_ptr<Texture> environmentCube = GetActiveEnvironmentCube();
+    
+    if(currentRenderScene.environment.type == VL::EnvironmentType::ProceduralSky)
+    {
+        proceduralSkyCubeGenerator.Record(commandBuffer, swapchainImageIndex);
+    }
+
+    environmentIblBaker.Record(commandBuffer, environmentCube, swapchainImageIndex);
 }

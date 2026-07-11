@@ -1,6 +1,8 @@
 #include "render/backend/rendererFrameResources.h"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstring>
 #include <memory>
 #include <stdexcept>
@@ -22,6 +24,65 @@ namespace VL
 {
 namespace
 {
+struct CpuUploadSkipRange
+{
+    vk::DeviceSize offset = 0;
+    vk::DeviceSize size = 0;
+};
+
+// 这里使用宏定义来计算UBO字段的偏移量和大小
+#define VL_UBO_FIELD_RANGE(StructType, FieldName) \
+    CpuUploadSkipRange{ \
+        static_cast<vk::DeviceSize>(offsetof(StructType, FieldName)), \
+        static_cast<vk::DeviceSize>(sizeof(((StructType*)nullptr)->FieldName)) \
+    }
+
+static constexpr std::array<CpuUploadSkipRange, 1> kUboGlobalGpuOwnedRanges = {
+    VL_UBO_FIELD_RANGE(UBOGlobal, environmentSH)
+};
+
+static bool CompareCpuUploadSkipRangeByOffset(
+    const CpuUploadSkipRange& left,
+    const CpuUploadSkipRange& right)
+{
+    return left.offset < right.offset;
+}
+
+static void UpdateBufferExcludingRanges(
+    vk::CommandBuffer& commandBuffer,
+    vk::Buffer buffer,
+    const void* data,
+    vk::DeviceSize totalSize,
+    std::vector<CpuUploadSkipRange> skipRanges)
+{
+    std::sort(skipRanges.begin(), skipRanges.end(), CompareCpuUploadSkipRangeByOffset);
+
+    const char* bytes = reinterpret_cast<const char*>(data);
+    vk::DeviceSize cursor = 0;
+
+    for (const CpuUploadSkipRange& range : skipRanges)
+    {
+        if (cursor < range.offset)
+        {
+            commandBuffer.updateBuffer(
+                buffer,
+                cursor,
+                range.offset - cursor,
+                bytes + cursor);
+        }
+
+        cursor = std::max(cursor, range.offset + range.size);
+    }
+
+    if (cursor < totalSize)
+    {
+        commandBuffer.updateBuffer(
+            buffer,
+            cursor,
+            totalSize - cursor,
+            bytes + cursor);
+    }
+}
 
 constexpr size_t kDefaultLightCapacity = 64;
 
@@ -109,9 +170,15 @@ void RendererFrameResources::Initialize(RendererBackendVulkan& rendererBackend)
         return;
     }
 
-    vk::BufferUsageFlags usage =
+    vk::BufferUsageFlags globalUniformUsage =
+        vk::BufferUsageFlagBits::eUniformBuffer |
+        vk::BufferUsageFlagBits::eStorageBuffer |
+        vk::BufferUsageFlagBits::eTransferDst;
+    // 这里留给一般的ubo使用
+    vk::BufferUsageFlags uniformUsage =
         vk::BufferUsageFlagBits::eUniformBuffer |
         vk::BufferUsageFlagBits::eTransferDst;
+
     vk::MemoryPropertyFlags memoryPropertyFlags =
         vk::MemoryPropertyFlagBits::eHostVisible |
         vk::MemoryPropertyFlagBits::eHostCoherent;
@@ -119,15 +186,9 @@ void RendererFrameResources::Initialize(RendererBackendVulkan& rendererBackend)
     rendererBackend.CreatePerSwapchainBufferSet(
         globalUniformBuffer,
         sizeof(UBOGlobal),
-        usage,
+        globalUniformUsage,
         memoryPropertyFlags,
         "UBO_Global");
-    rendererBackend.CreatePerSwapchainBufferSet(
-        skyParametersBuffer,
-        sizeof(SkyParametersGPU),
-        usage,
-        memoryPropertyFlags,
-        "UBO_SkyParameters");
     initialized = true;
 }
 
@@ -139,7 +200,6 @@ void RendererFrameResources::Shutdown(RendererBackendVulkan& rendererBackend)
     }
 
     DestroyLightBuffer(rendererBackend);
-    rendererBackend.DestroyBufferSet(skyParametersBuffer);
     rendererBackend.DestroyBufferSet(globalUniformBuffer);
     initialized = false;
 }
@@ -190,7 +250,9 @@ void RendererFrameResources::UpdateGlobalUniformBuffer(
 
     commandBuffer.pipelineBarrier(
         vk::PipelineStageFlagBits::eTransfer,
-        vk::PipelineStageFlagBits::eVertexShader | vk::PipelineStageFlagBits::eFragmentShader,
+        vk::PipelineStageFlagBits::eComputeShader |
+            vk::PipelineStageFlagBits::eVertexShader |
+            vk::PipelineStageFlagBits::eFragmentShader,
         vk::DependencyFlags(),
         0,
         nullptr,
@@ -200,34 +262,41 @@ void RendererFrameResources::UpdateGlobalUniformBuffer(
         nullptr);
 }
 
-void RendererFrameResources::UpdateSkyParametersBuffer(
+void RendererFrameResources::UpdateGlobalUniformBufferExceptGpuOwnedRanges(
     vk::CommandBuffer& commandBuffer,
     uint32_t swapChainImageIndex,
-    const SkyParametersGPU& skyParameters)
+    const UBOGlobal& uboGlobal)
 {
-    if (!initialized || swapChainImageIndex >= skyParametersBuffer.buffers.size())
+    if (!initialized || swapChainImageIndex >= globalUniformBuffer.buffers.size())
     {
-        throw std::runtime_error("RendererFrameResources sky parameters UBO is not initialized for this swapchain image.");
+        throw std::runtime_error("RendererFrameResources global UBO is not initialized for this swapchain image.");
     }
 
-    commandBuffer.updateBuffer(
-        skyParametersBuffer.buffers[swapChainImageIndex],
-        0,
-        sizeof(SkyParametersGPU),
-        &skyParameters);
+    vk::Buffer buffer = globalUniformBuffer.buffers[swapChainImageIndex];
+
+    UpdateBufferExcludingRanges(
+        commandBuffer,
+        buffer,
+        &uboGlobal,
+        sizeof(UBOGlobal),
+        std::vector<CpuUploadSkipRange>(
+            kUboGlobalGpuOwnedRanges.begin(),
+            kUboGlobalGpuOwnedRanges.end()));
 
     vk::BufferMemoryBarrier barrier;
     barrier.setSrcAccessMask(vk::AccessFlagBits::eTransferWrite)
         .setDstAccessMask(vk::AccessFlagBits::eUniformRead)
         .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
         .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
-        .setBuffer(skyParametersBuffer.buffers[swapChainImageIndex])
+        .setBuffer(buffer)
         .setOffset(0)
-        .setSize(sizeof(SkyParametersGPU));
+        .setSize(sizeof(UBOGlobal));
 
     commandBuffer.pipelineBarrier(
         vk::PipelineStageFlagBits::eTransfer,
-        vk::PipelineStageFlagBits::eFragmentShader,
+        vk::PipelineStageFlagBits::eComputeShader |
+            vk::PipelineStageFlagBits::eVertexShader |
+            vk::PipelineStageFlagBits::eFragmentShader,
         vk::DependencyFlags(),
         0,
         nullptr,
@@ -406,11 +475,6 @@ void RendererFrameResources::UpdateObjectUniformBuffer(
 const std::vector<vk::DescriptorBufferInfo>& RendererFrameResources::GetGlobalUniformBufferInfos() const
 {
     return globalUniformBuffer.bufferInfos;
-}
-
-const std::vector<vk::DescriptorBufferInfo>& RendererFrameResources::GetSkyParametersBufferInfos() const
-{
-    return skyParametersBuffer.bufferInfos;
 }
 
 const std::vector<vk::DescriptorBufferInfo>& RendererFrameResources::GetLightBufferInfos() const

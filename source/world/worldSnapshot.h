@@ -12,6 +12,7 @@
 #include <Eigen/Dense>
 
 #include "baseStructs.h"
+#include "environmentType.h"
 
 namespace VL
 {
@@ -79,13 +80,12 @@ struct LightSnapshot
 
 struct EnvironmentSnapshot
 {
+    EnvironmentType type = EnvironmentType::ProceduralSky;
     ResourceHandle cube;
     ResourceHandle prefilteredCube;
     ResourceHandle brdfLut;
-    SkyParametersGPU skyParameters;
-    std::array<Eigen::Vector4f, 9> sphericalHarmonics{};
-    bool hasSphericalHarmonics = false;
     float intensity = 1.0f;
+    SkyParametersGPU skyParameters;
 };
 
 // Immutable render-facing copy of one World frame. The renderer may keep this

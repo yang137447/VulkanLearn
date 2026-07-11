@@ -31,10 +31,10 @@ public:
         vk::CommandBuffer& commandBuffer,
         uint32_t swapChainImageIndex,
         const UBOGlobal& uboGlobal);
-    void UpdateSkyParametersBuffer(
+    void UpdateGlobalUniformBufferExceptGpuOwnedRanges(
         vk::CommandBuffer& commandBuffer,
         uint32_t swapChainImageIndex,
-        const SkyParametersGPU& skyParameters);
+        const UBOGlobal& uboGlobal);
     void UpdateLightBuffer(
         uint32_t swapChainImageIndex,
         const std::vector<LightSnapshot>& lights);
@@ -47,7 +47,6 @@ public:
         const RenderDrawPacket& drawPacket);
 
     const std::vector<vk::DescriptorBufferInfo>& GetGlobalUniformBufferInfos() const;
-    const std::vector<vk::DescriptorBufferInfo>& GetSkyParametersBufferInfos() const;
     const std::vector<vk::DescriptorBufferInfo>& GetLightBufferInfos() const;
     size_t GetLightCapacity() const { return maxLightCount; }
     bool IsInitialized() const { return initialized; }
@@ -57,7 +56,6 @@ private:
     void DestroyLightBuffer(RendererBackendVulkan& rendererBackend);
 
     Buffer globalUniformBuffer;
-    Buffer skyParametersBuffer;
     Buffer lightBuffer;
     size_t maxLightCount = 0;
     bool initialized = false;

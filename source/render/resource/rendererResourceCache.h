@@ -57,6 +57,7 @@ public:
     // texture such as the active environment cubemap.
     const std::shared_ptr<Texture>* GetGlobalTexture(std::string_view bindingName) const;
     bool HasGlobalTexture(std::string_view bindingName) const;
+    const std::shared_ptr<Texture>* GetWorldTexture(std::string_view bindingName) const;
 
     void BindRenderableObject(std::string objectKey, std::shared_ptr<RenderableObject> object);
     const std::shared_ptr<RenderableObject>* GetRenderableObject(std::string_view objectKey) const;

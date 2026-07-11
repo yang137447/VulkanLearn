@@ -150,9 +150,7 @@ void UpdateObjectDescriptorSets(
             {
                 if (binding.set == GlobalSetIndex)
                 {
-                    update.source = binding.binding == SkyParametersBindingIndex
-                        ? RendererDescriptorUpdateSource::GlobalSkyUniform
-                        : RendererDescriptorUpdateSource::GlobalUniform;
+                    update.source = RendererDescriptorUpdateSource::GlobalUniform;
                 }
                 else if (binding.set == MaterialSetIndex)
                 {

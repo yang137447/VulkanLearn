@@ -156,6 +156,8 @@ void EngineLoop::Shutdown()
         RendererResourceCache::GetInstance().Clear();
         ResourceRetireQueue::GetInstance().ForceReleaseAll();
         RenderSystem::GetInstance().SetRendererBackend(nullptr);
+        RenderSystem::GetInstance().SetPipelineFactory(nullptr);
+
     }
 
     Profiler::Instance().EndSession();
@@ -252,6 +254,7 @@ RuntimeResult<void> EngineLoop::InitializeRuntimeSystems(
     RenderSystem::GetInstance().SetCsmSettings(GetRuntimeConfig().GetCsmSettings());
 
     pipelineFactory = rendererBackend->CreatePipelineFactory();
+    RenderSystem::GetInstance().SetPipelineFactory(pipelineFactory.get());
     runtimeCommandExecutor = std::make_unique<RuntimeCommandExecutor>();
     RendererResourceLoadCoordinator& resourceLoadCoordinator =
         RendererResourceLoadCoordinator::GetInstance();

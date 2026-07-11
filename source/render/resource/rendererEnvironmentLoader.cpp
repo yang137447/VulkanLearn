@@ -10,6 +10,7 @@
 #include "render/backend/rendererBackendVulkan.h"
 #include "render/resource/rendererResourceCache.h"
 #include "texture.h"
+#include "world/environmentType.h"
 
 namespace VL
 {
@@ -36,13 +37,16 @@ void RendererEnvironmentLoader::LoadGlobalResources() const
 
 void RendererEnvironmentLoader::LoadEnvironmentObject(const nlohmann::basic_json<>& node) const
 {
-    const std::string environmentHdrPath = node.value("hdrPath", std::string());
-    const uint32_t environmentCubeSize = node.value("cubeSize", 512u);
+    const nlohmann::json& config = node["environment"];
+    EnvironmentType type = ParseEnvironmentType(config["type"].get<std::string>());
 
-    if (environmentHdrPath.empty())
+    if (type == EnvironmentType::ProceduralSky)
     {
         return;
     }
+
+    const std::string environmentHdrPath = config["hdrPath"].get<std::string>();
+    const uint32_t environmentCubeSize = config.value("cubeSize", 512u);
 
     RendererResourceCache& resourceCache = RendererResourceCache::GetInstance();
     std::shared_ptr<Texture> environmentCube =
@@ -52,16 +56,6 @@ void RendererEnvironmentLoader::LoadEnvironmentObject(const nlohmann::basic_json
             pipelineFactory,
             rendererBackend);
     resourceCache.BindWorldTexture("environmentCube", environmentCube);
-    if (environmentCube != nullptr)
-    {
-        resourceCache.BindWorldTexture(
-            "prefilteredEnvironmentCube",
-            EnvironmentPrefilterGenerator::Generate(
-                *environmentCube,
-                environmentCubeSize,
-                pipelineFactory,
-                rendererBackend));
-    }
 }
 
 } // namespace VL

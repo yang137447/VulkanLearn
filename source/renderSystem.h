@@ -15,6 +15,8 @@
 #include "render/backend/rendererDescriptorContext.h"
 #include "render/backend/rendererFrameResources.h"
 #include "render/backend/resolvedRenderScene.h"
+#include "render/environment/environmentIblBaker.h"
+#include "render/environment/proceduralSkyCubeGenerator.h"
 #include "render/frontend/renderScene.h"
 #include "render/frontend/rendererFrontend.h"
 #include "render/pass/passRuntime.h"
@@ -23,6 +25,7 @@
 class Material;
 class MaterialInstance;
 struct Renderpass;
+class PipelineFactory;
 
 namespace VL
 {
@@ -63,10 +66,6 @@ public:
     {
         return frameResources.GetGlobalUniformBufferInfos();
     }
-    const std::vector<vk::DescriptorBufferInfo>& GetSkyParametersBufferInfo() const
-    {
-        return frameResources.GetSkyParametersBufferInfos();
-    }
     const std::vector<vk::DescriptorBufferInfo>& GetLightBufferInfo() const
     {
         return frameResources.GetLightBufferInfos();
@@ -87,6 +86,7 @@ public:
     // from the previous World. The next Render() builds a fresh snapshot and
     // resolved scene from the new generation.
     void SetActiveWorld(std::shared_ptr<const VL::World> world);
+    void SetPipelineFactory(PipelineFactory* factory) { pipelineFactory = factory; }
 private:
     RenderSystem() = default;
     void UpdateUBOGlobal(vk::CommandBuffer& commandBuffer);
@@ -173,6 +173,13 @@ private:
     ShadowProjectionParams CalculateShadowMatrix_DynamicTight(const std::vector<Eigen::Vector3f>& pointsInShadowSys, const Eigen::Matrix3f& worldToShadowRotation, float sceneMaxZ, float sceneZRange);
     ShadowProjectionParams CalculateShadowMatrix_StableSphere(const std::vector<Eigen::Vector3f>& pointsInShadowSys, const Eigen::Matrix3f& worldToShadowRotation, float shadowMapResolution, float sceneMaxZ, float sceneZRange);
     ShadowProjectionParams CalculateShadowMatrix_StableRectangular(const std::vector<Eigen::Vector3f>& pointsInShadowSys, const Eigen::Matrix3f& worldToShadowRotation, float shadowMapResolution, float sceneMaxZ, float sceneZRange);
+    
+    // 环境IBL相关
+    std::shared_ptr<Texture> GetActiveEnvironmentCube();
+    void PrepareEnvironmentResources();
+    void RecordEnvironmentIbl(
+        vk::CommandBuffer commandBuffer,
+        uint32_t swapchainImageIndex);
 
     uint32_t currentFrame = 0;
     uint32_t swapChainImageIndex = 0;
@@ -194,4 +201,7 @@ private:
     VL::ResolvedRenderScene currentResolvedRenderScene;
     std::shared_ptr<const VL::World> activeWorld;
     VL::RendererBackendVulkan* rendererBackend = nullptr;
+    PipelineFactory* pipelineFactory = nullptr;
+    VL::ProceduralSkyCubeGenerator proceduralSkyCubeGenerator;
+    VL::EnvironmentIblBaker environmentIblBaker;
 };

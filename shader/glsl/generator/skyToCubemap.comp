@@ -1,0 +1,21 @@
+#version 450
+#include "../common/commonUbo.glsl"
+#include "../common/proceduralSky.glsl"
+#include "../common/cubemapFace.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2DArray outCubemap;
+
+void main()
+{
+    ivec2 pixelCoord = ivec2(gl_GlobalInvocationID.xy);
+    int faceIndex = int(gl_GlobalInvocationID.z);
+    ivec3 cubeSize = imageSize(outCubemap);
+
+    if (pixelCoord.x >= cubeSize.x || pixelCoord.y >= cubeSize.y || faceIndex >= cubeSize.z)
+        return;
+
+    vec3 dir = GetDirectionFromFace(pixelCoord, cubeSize.xy, faceIndex);
+    vec4 skyColor = vec4(EvaluateProceduralSky(dir), 1.0);
+    imageStore(outCubemap, ivec3(pixelCoord, faceIndex), skyColor);
+}

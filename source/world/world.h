@@ -9,6 +9,7 @@
 #include <Eigen/Dense>
 
 #include "baseStructs.h"
+#include "environmentType.h"
 
 class Camera;
 class DirectionalLight;
@@ -21,12 +22,11 @@ namespace VL
 
 struct WorldEnvironment
 {
+    EnvironmentType type = EnvironmentType::ProceduralSky;
+    uint32_t cubeSize = 128;
+    float intensity = 1.0f;
     std::string hdrPath;
-    uint32_t cubeSize = 512;
     SkyParametersGPU skyParameters;
-    std::array<Eigen::Vector4f, 9> sphericalHarmonics{};
-    bool hasSphericalHarmonics = false;
-    bool hasBrdfLut = false;
 };
 
 struct WorldMeshObject

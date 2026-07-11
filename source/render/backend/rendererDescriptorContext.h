@@ -15,7 +15,6 @@ class RendererResourceCache;
 struct RendererDescriptorContext
 {
     const std::vector<vk::DescriptorBufferInfo>* globalUniformBufferInfos = nullptr;
-    const std::vector<vk::DescriptorBufferInfo>* skyParametersBufferInfos = nullptr;
     const std::vector<vk::DescriptorBufferInfo>* lightBufferInfos = nullptr;
     const RendererResourceCache* resourceCache = nullptr;
 };

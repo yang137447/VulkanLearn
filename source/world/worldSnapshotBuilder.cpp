@@ -170,24 +170,20 @@ EnvironmentSnapshot BuildEnvironmentSnapshot(
 {
     EnvironmentSnapshot snapshot;
     const WorldEnvironment& environment = world.GetEnvironment();
-    const std::string& hdrPath = environment.hdrPath;
 
-    if (!hdrPath.empty())
+    snapshot.type = environment.type;
+    snapshot.intensity = environment.intensity * desc.environmentIntensity;
+    snapshot.skyParameters = environment.skyParameters;
+
+    if (environment.type == EnvironmentType::Hdri && !environment.hdrPath.empty())
     {
         const std::string cubeSize = std::to_string(environment.cubeSize);
-        snapshot.cube = MakeResourceHandle("environment/cube|" + hdrPath + "|" + cubeSize);
-        snapshot.prefilteredCube = MakeResourceHandle("environment/prefilter|" + hdrPath + "|" + cubeSize);
+        snapshot.cube = MakeResourceHandle("environment/cube|" + environment.hdrPath + "|" + cubeSize);
+        snapshot.prefilteredCube = MakeResourceHandle("environment/prefilter|" + environment.hdrPath + "|" + cubeSize);
     }
 
-    if (environment.hasBrdfLut)
-    {
-        snapshot.brdfLut = MakeResourceHandle("global/brdfLut");
-    }
+    snapshot.brdfLut = MakeResourceHandle("global/brdfLut");
 
-    snapshot.skyParameters = environment.skyParameters;
-    snapshot.sphericalHarmonics = environment.sphericalHarmonics;
-    snapshot.hasSphericalHarmonics = environment.hasSphericalHarmonics;
-    snapshot.intensity = desc.environmentIntensity;
     return snapshot;
 }
 

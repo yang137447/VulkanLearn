@@ -148,6 +148,18 @@ bool RendererResourceCache::HasGlobalTexture(std::string_view bindingName) const
     return textureIt != globalTextures.end() && textureIt->second != nullptr;
 }
 
+const std::shared_ptr<Texture>* RendererResourceCache::GetWorldTexture(std::string_view bindingName) const
+{
+    auto textureIt = worldTextures.find(std::string(bindingName));
+    if (textureIt != worldTextures.end())
+    {
+        return &textureIt->second;
+    }
+
+    return nullptr;
+}
+
+
 void RendererResourceCache::BindRenderableObject(
     std::string objectKey,
     std::shared_ptr<RenderableObject> object)

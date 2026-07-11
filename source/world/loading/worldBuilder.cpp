@@ -3,7 +3,6 @@
 #include <exception>
 
 #include "commonFunction.h"
-#include "pipeline/environmentSHGenerator.h"
 #include "render/resource/rendererResourceCache.h"
 #include "sceneNode.h"
 #include "world/loading/worldLoader.h"
@@ -114,19 +113,16 @@ std::shared_ptr<SpotLight> BuildSpotLight(const nlohmann::json& node)
     return light;
 }
 
-WorldEnvironment BuildEnvironment(const nlohmann::json& node, bool hasBrdfLut)
+WorldEnvironment BuildEnvironment(const nlohmann::json& node)
 {
-    WorldEnvironment environment;
-    environment.hdrPath = node.value("hdrPath", std::string());
-    environment.cubeSize = node.value("cubeSize", 512u);
-    environment.skyParameters = BuildSkyParameters(node);
-    environment.hasBrdfLut = hasBrdfLut;
+    const nlohmann::json& config = node["environment"];
 
-    if (!environment.hdrPath.empty())
-    {
-        environment.sphericalHarmonics = EnvironmentSHGenerator::Generate(environment.hdrPath);
-        environment.hasSphericalHarmonics = true;
-    }
+    WorldEnvironment environment;
+    environment.type = ParseEnvironmentType(config["type"].get<std::string>());
+    environment.cubeSize = config.value("cubeSize", 128u);
+    environment.intensity = config.value("intensity", 1.0f);
+    environment.hdrPath = config.value("hdrPath", std::string());
+    environment.skyParameters = BuildSkyParameters(config);
 
     return environment;
 }
@@ -189,7 +185,6 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
             worldBuildPlan.scenePath);
 
         WorldEnvironment environment;
-        environment.hasBrdfLut = resourceCache.HasGlobalTexture("brdfLut");
         std::shared_ptr<DirectionalLight> primaryDirectionalLight;
 
         const nlohmann::json& objectsJson = worldBuildPlan.sceneJson["objects"];
@@ -223,7 +218,7 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
             }
             else if (type == "environment")
             {
-                environment = BuildEnvironment(objectJson, resourceCache.HasGlobalTexture("brdfLut"));
+                environment = BuildEnvironment(objectJson);
             }
         }
 

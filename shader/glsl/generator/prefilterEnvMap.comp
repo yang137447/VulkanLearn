@@ -1,5 +1,6 @@
 #version 450
 #include "../common/defines.glsl"
+#include "../common/cubemapFace.glsl"
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
@@ -9,26 +10,6 @@ layout(set = 0, binding = 2) uniform PrefilterParams
 {
     vec4 params;
 } uboPrefilter;
-
-vec3 GetDirectionFromFace(ivec2 pixelCoord, ivec2 faceSize, int faceIndex)
-{
-    vec2 uv = (vec2(pixelCoord) + vec2(0.5)) / vec2(faceSize);
-    uv = uv * 2.0 - 1.0;
-    uv.y = -uv.y;
-
-    vec3 dir;
-    switch (faceIndex)
-    {
-        case 0: dir = vec3( 1.0, uv.y, -uv.x); break;
-        case 1: dir = vec3(-1.0, uv.y,  uv.x); break;
-        case 2: dir = vec3( uv.x, 1.0, -uv.y); break;
-        case 3: dir = vec3( uv.x,-1.0,  uv.y); break;
-        case 4: dir = vec3( uv.x, uv.y,  1.0); break;
-        case 5: dir = vec3(-uv.x, uv.y, -1.0); break;
-        default: dir = vec3(0.0, 0.0, 1.0); break;
-    }
-    return normalize(dir);
-}
 
 float RadicalInverseVdC(uint bits)
 {

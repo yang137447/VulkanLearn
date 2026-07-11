@@ -1,0 +1,169 @@
+#version 450
+
+#include "../common/cubemapFace.glsl"
+
+// 这个 shader 做一件事：
+//   采样程序化天空 cubemap，把全天空 radiance 投影成 9 项 SH 系数。
+//
+// 重要语义：
+//   1. 输出仍是 radiance SH，不提前做 Lambert diffuse convolution。
+//   2. lighting.glsl::EvaluateIrradianceSH() 会在消费端乘 bandWeights。
+//   3. environmentIntensity 不在这里相乘，消费端统一处理强度。
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+// 输入：skyToCubemap.comp 生成的天空 cubemap。
+// 底层资源需要是 cube-compatible image；这里按方向采样即可，不关心真实分辨率。
+layout(set = 0, binding = 1) uniform samplerCube inSkyCube;
+
+// 输出：和 graphics 端 commonUbo.glsl 完全同布局的 global buffer。
+// compute 端声明为 buffer 才能写 environmentSH；graphics 端仍声明为 uniform 读取。
+layout(std140, set = 0, binding = 0) buffer UBOGlobalCompute {
+#include "../common/uboGlobalFields.glsl"
+} uboGlobal;
+
+const float kPi = 3.14159265358979323846;
+const int kShCoefficientCount = 9;
+
+// SH9 只表达低频环境光。这里的 16x16 是每个 cubemap face 的“虚拟采样网格”，
+// 不是 sky cubemap 的真实纹理尺寸。总采样数 = 6 * 16 * 16 = 1536。
+const int kSampleGridSize = 16;
+const int kFaceCount = 6;
+const int kLocalInvocationCount = 256; // local_size_x * local_size_y * local_size_z
+
+// 归约时一次只处理一个 SH 系数，复用同一块 shared memory。
+// 这样比 shared vec3[9 * 256] 更省 shared memory，也更容易审查。
+shared vec3 shReduce[kLocalInvocationCount];
+
+// cubemap face 上一个虚拟采样点对应的球面立体角。
+//
+// 注意：这里的 (4 / N^2) / (1 + u^2 + v^2)^(3/2) 已经是从 cube face
+// 面积映射到球面的微分立体角近似。六个 face 累加后应接近 4π；
+// 不要再额外乘一次单个 face 的立体角 2π/3。
+float CubemapTexelSolidAngle(ivec2 coord, int gridSize)
+{
+    vec2 uv = (vec2(coord) + vec2(0.5)) / float(gridSize);
+    uv = uv * 2.0 - 1.0;
+
+    float denom = pow(1.0 + uv.x * uv.x + uv.y * uv.y, 1.5);
+    float cellAreaOnCubeFace = 4.0 / float(gridSize * gridSize);
+    return cellAreaOnCubeFace / denom;
+}
+
+// 9 项实数 SH 基底，顺序必须和下面两处保持一致：
+//   - source/pipeline/environmentSHGenerator.cpp::EvaluateSH9()
+//   - shader/glsl/common/lighting.glsl::EvaluateIrradianceSH()
+void EvaluateShBasis(vec3 dir, out float basis[kShCoefficientCount])
+{
+    float x = dir.x;
+    float y = dir.y;
+    float z = dir.z;
+
+    basis[0] = 0.282095;
+    basis[1] = 0.488603 * y;
+    basis[2] = 0.488603 * z;
+    basis[3] = 0.488603 * x;
+    basis[4] = 1.092548 * x * y;
+    basis[5] = 1.092548 * y * z;
+    basis[6] = 0.315392 * (3.0 * z * z - 1.0);
+    basis[7] = 1.092548 * x * z;
+    basis[8] = 0.546274 * (x * x - y * y);
+}
+
+void main()
+{
+    // 本 shader 设计为 dispatch(1, 1, 1)：
+    // 一个 workgroup 内 256 个线程共同处理 1536 个虚拟采样点。
+    uint localIdx = gl_LocalInvocationIndex;
+    uint threadCount = uint(kLocalInvocationCount);
+
+    int texelsPerFace = kSampleGridSize * kSampleGridSize;
+    int totalTexels = kFaceCount * texelsPerFace;
+
+    // ---------------------------------------------------------------------
+    // Phase 1: 每个线程处理自己负责的若干采样点，得到 localAccum[9]。
+    //
+    // 线性采样点编号 idx 的分配方式：
+    //   idx = localIdx * texelsPerThread + t
+    //
+    // 当前参数下：
+    //   totalTexels = 1536
+    //   threadCount = 256
+    //   texelsPerThread = 6
+    //
+    // 所以 thread 0 处理 idx 0..5，thread 1 处理 idx 6..11，依此类推。
+    // ---------------------------------------------------------------------
+    vec3 localAccum[kShCoefficientCount] = vec3[kShCoefficientCount](
+        vec3(0.0), vec3(0.0), vec3(0.0),
+        vec3(0.0), vec3(0.0), vec3(0.0),
+        vec3(0.0), vec3(0.0), vec3(0.0));
+
+    // 这里手动向上取整算法，确保没有遗漏像素
+    uint texelsPerThread = (uint(totalTexels) + threadCount - 1u) / threadCount;
+
+    for (uint t = 0u; t < texelsPerThread; ++t)
+    {
+        uint idx = localIdx * texelsPerThread + t;
+        if (idx >= uint(totalTexels))
+        {
+            break;  // 超出的像素点直接跳过
+        }
+
+        // 把线性 idx 拆回 cubemap 的 face + face 内二维坐标。
+        uint idxInFace = idx % uint(texelsPerFace);
+        int faceIndex = int(idx / uint(texelsPerFace));
+        ivec2 coord = ivec2(
+            int(idxInFace % uint(kSampleGridSize)),
+            int(idxInFace / uint(kSampleGridSize)));
+
+        vec3 dir = GetDirectionFromFace(coord, ivec2(kSampleGridSize), faceIndex);
+        vec3 radiance = textureLod(inSkyCube, dir, 0.0).rgb;
+        float solidAngle = CubemapTexelSolidAngle(coord, kSampleGridSize);
+
+        float basis[kShCoefficientCount];
+        EvaluateShBasis(dir, basis);
+
+        for (int coefficientIndex = 0; coefficientIndex < kShCoefficientCount; ++coefficientIndex)
+        {
+            localAccum[coefficientIndex] +=
+                radiance * basis[coefficientIndex] * solidAngle;
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Phase 2-4: 对 9 个 SH 系数逐个做 workgroup 内归约。
+    //
+    // 每轮：
+    //   1. 每个线程把自己的 localAccum[coefficientIndex] 放进 shared memory
+    //   2. 256 -> 128 -> ... -> 1 做树形求和
+    //   3. localIdx == 0 的线程写出最终系数
+    //
+    // barrier / memoryBarrierShared 只同步当前 workgroup，因此必须保持 dispatch(1,1,1)
+    // 或者后续扩展成“两阶段归约”（每组输出 partial，再二次归约）。
+    // ---------------------------------------------------------------------
+    for (int coefficientIndex = 0; coefficientIndex < kShCoefficientCount; ++coefficientIndex)
+    {
+        shReduce[localIdx] = localAccum[coefficientIndex];
+        memoryBarrierShared();
+        barrier();
+
+        for (uint stride = threadCount / 2u; stride > 0u; stride >>= 1u)
+        {
+            if (localIdx < stride)
+            {
+                shReduce[localIdx] += shReduce[localIdx + stride];
+            }
+
+            memoryBarrierShared();
+            barrier();
+        }
+
+        if (localIdx == 0u)
+        {
+            uboGlobal.environmentSH[coefficientIndex] = vec4(shReduce[0], 0.0);
+        }
+
+        // 让所有线程一起进入下一个 coefficient 的 shared memory 写入阶段。
+        barrier();
+    }
+}
