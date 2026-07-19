@@ -5,6 +5,12 @@
 #include <shaderc/shaderc.hpp>
 #include "shaderVariant.h"
 
+namespace VL
+{
+struct ComposedMaterialShaderSource;
+struct MaterialShaderCompileRequest;
+}
+
 class Include: public shaderc::CompileOptions::IncluderInterface
 {
 public:
@@ -27,6 +33,10 @@ public:
 
     void StartCompile(const std::string& shaderFilePath);
     static ShaderVariantCompileResult EnsureGraphicsVariantCompiled(const ShaderVariantKey& shaderVariantKey);
+    // 編譯 Composer 已裝配的完整 GLSL；不在此判斷材質 Feature 或 Shadow 路由。
+    static ShaderVariantCompileResult EnsureMaterialGraphicsVariantCompiled(
+        const VL::MaterialShaderCompileRequest& request,
+        const VL::ComposedMaterialShaderSource& source);
 private:
     //设置shader文件夹的路径
     void SetShaderPath(const std::string& shaderFilePath);
@@ -35,8 +45,21 @@ private:
     //保存spirv
     void SaveSPIRVToFile(const std::vector<uint32_t>& spirv,const std::string& spvPath);
     ShaderVariantCompileResult CompileGraphicsVariant(const ShaderVariantKey& shaderVariantKey);
+    ShaderVariantCompileResult CompileMaterialGraphicsVariant(
+        const VL::MaterialShaderCompileRequest& request,
+        const VL::ComposedMaterialShaderSource& source);
+    void CompileGraphicsSourcePair(
+        const std::string& vertexShaderCode,
+        const std::string& fragmentShaderCode,
+        const std::string& vertexSourcePath,
+        const std::string& fragmentSourcePath,
+        const std::vector<std::string>& compileMacros,
+        const ShaderVariantCompileResult& compileResult);
     static std::vector<std::string> BuildRenderModeMacros(RenderMode renderMode);
+    static std::vector<std::string> BuildGraphicsVariantMacros(
+        const ShaderVariantKey& shaderVariantKey);
     static void UpdateVariantManifest(const ShaderVariantKey& shaderVariantKey);
+    static void UpdateMaterialVariantManifest(const VL::MaterialShaderCompileRequest& request);
     std::string shaderPath;
     std::string glslPath;
     std::string spirvPath;

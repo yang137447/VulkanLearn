@@ -1,19 +1,15 @@
-#version 450
+#ifndef VL_PASS_TEMPLATE_BASE_FRAG_GLSL
+#define VL_PASS_TEMPLATE_BASE_FRAG_GLSL
 
-#include "common/commonUbo.glsl"
-#include "generate/M_pbrParamter.glsl"
-#include "engine/materialContext.glsl"
-#include "engine/materialSurface.glsl"
-#include "materialFunction/mf_pbrSurface.glsl"
-#include "engine/materialPass.glsl"
+#include "../../common/commonUbo.glsl"
+#include "../../materialFunction/mf_alphaClip.glsl"
+#include "../materialPass.glsl"
 
 #if VL_MATERIAL_OUTPUT_GBUFFER
-    #include "engine/materialGBufferOutput.glsl"
+    #include "../materialGBufferOutput.glsl"
 #else
-    // Forward transparent pass 的 Set 3 由当前 pass 自己声明。
-    // 约定 binding 0 = shadowMap；它不影响 opaque/GBuffer 变体，也不占用 deferredLighting 的 Set 3。
     #define VL_FORWARD_DECLARE_SHADOWMAP_INPUT
-    #include "engine/materialForwardOutput.glsl"
+    #include "../materialForwardOutput.glsl"
 #endif
 
 layout(location = 0) in MaterialVaryings v2f;
@@ -31,19 +27,15 @@ layout(location = 7) out vec4 outSceneColorBase;
 layout(location = 0) out vec4 outSceneColor;
 #endif
 
-// MaterialPixel 是片元阶段的公开材质入口：一般材质作者改这里。
-// 材质采样、模块组合和参数解释写入 MaterialSurface；forward/deferred 分流留给底层封装。
-void MaterialPixel(in MaterialPixelContext pixel, inout MaterialSurface surface)
-{
-    surface = EvaluatePbrSurface(pixel);
-}
-
 void main()
 {
-    // main 保留为引擎包装层：准备 context，调用材质入口，再按编译期 pass 类型输出。
     MaterialPixelContext pixel = CreateMaterialPixelContext(v2f);
-    MaterialSurface surface = CreateDefaultMaterialSurface();
-    MaterialPixel(pixel, surface);
+    MaterialSurface surface = EvaluateMaterialSurface(pixel);
+
+    // Coverage 是 Pass 行為：所有需要 Alpha Clip 的 pass 都在消費 Surface 後統一執行。
+#if MATERIAL_USES_OPACITY_MASK
+    ApplyAlphaClip(surface.opacity, u_alphaClipThreshold);
+#endif
 
 #if VL_MATERIAL_OUTPUT_GBUFFER
     GBufferData gbuffer = BuildMaterialGBufferOutput(surface, pixel);
@@ -59,3 +51,5 @@ void main()
     outSceneColor = BuildMaterialForwardOutput(surface);
 #endif
 }
+
+#endif

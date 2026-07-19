@@ -1,9 +1,8 @@
 #ifndef VL_ENGINE_MATERIAL_CONTEXT_GLSL
 #define VL_ENGINE_MATERIAL_CONTEXT_GLSL
 
-// 材质作者入口的公开数据层。
-// 一般使用者优先通过 MaterialVertex / MaterialPixel 读写这些 context；
-// main、descriptor、lighting、GBuffer 和 debug view 属于底层封装，默认不在普通材质里改。
+// 材質求值與 Mesh Pass 模板之間的穩定數據合同。
+// 材質只修改局部頂點語義和 Surface；投影、GBuffer 與 ShadowDepth 由模板負責。
 struct MaterialVertexInput
 {
     vec3 localPosition;
@@ -12,6 +11,26 @@ struct MaterialVertexInput
     vec2 texCoord;
     vec4 localTangent;
 };
+
+struct MaterialVertex
+{
+    vec3 localPosition;
+    vec3 localNormal;
+    vec4 vertexColor;
+    vec2 texCoord;
+    vec4 localTangent;
+};
+
+MaterialVertex CreateDefaultMaterialVertex(in MaterialVertexInput vertexInput)
+{
+    MaterialVertex vertex;
+    vertex.localPosition = vertexInput.localPosition;
+    vertex.localNormal = vertexInput.localNormal;
+    vertex.vertexColor = vertexInput.vertexColor;
+    vertex.texCoord = vertexInput.texCoord;
+    vertex.localTangent = vertexInput.localTangent;
+    return vertex;
+}
 
 struct MaterialVertexOutput
 {
@@ -23,14 +42,6 @@ struct MaterialVertexOutput
     vec4 vertexColor;
     vec2 texCoord;
     vec4 worldTangent;
-};
-
-struct MaterialVertexContext
-{
-    // 当前先只暴露 modelMatrix。view/projection 仍来自全局 UBO，避免把 pass 级状态塞进材质入口。
-    mat4 modelMatrix;
-    MaterialVertexInput vertexInput;
-    MaterialVertexOutput vertexOutput;
 };
 
 struct MaterialVaryings

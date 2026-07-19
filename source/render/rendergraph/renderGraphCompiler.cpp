@@ -81,6 +81,106 @@ bool IsSupportedStoreOp(const std::string& storeOp)
     return storeOp == "store" || storeOp == "dontCare";
 }
 
+RuntimeResult<CompiledDepthCompareOp> CompileDepthCompareOp(
+    const nlohmann::json& stateNode,
+    const std::string& passName)
+{
+    if (!stateNode.contains("depthCompareOp"))
+    {
+        return RuntimeResult<CompiledDepthCompareOp>::Success(
+            CompiledDepthCompareOp::Less);
+    }
+    if (!stateNode["depthCompareOp"].is_string())
+    {
+        return RuntimeResult<CompiledDepthCompareOp>::Failure(MakeCompileError(
+            "RenderGraphCompiler.InvalidPipelineState",
+            "Render graph pass depthCompareOp must be a string.",
+            passName));
+    }
+
+    const std::string compareOp = stateNode["depthCompareOp"].get<std::string>();
+    if (compareOp == "less")
+    {
+        return RuntimeResult<CompiledDepthCompareOp>::Success(CompiledDepthCompareOp::Less);
+    }
+    if (compareOp == "lessOrEqual")
+    {
+        return RuntimeResult<CompiledDepthCompareOp>::Success(CompiledDepthCompareOp::LessOrEqual);
+    }
+    if (compareOp == "equal")
+    {
+        return RuntimeResult<CompiledDepthCompareOp>::Success(CompiledDepthCompareOp::Equal);
+    }
+    if (compareOp == "greater")
+    {
+        return RuntimeResult<CompiledDepthCompareOp>::Success(CompiledDepthCompareOp::Greater);
+    }
+    if (compareOp == "greaterOrEqual")
+    {
+        return RuntimeResult<CompiledDepthCompareOp>::Success(CompiledDepthCompareOp::GreaterOrEqual);
+    }
+    if (compareOp == "always")
+    {
+        return RuntimeResult<CompiledDepthCompareOp>::Success(CompiledDepthCompareOp::Always);
+    }
+    return RuntimeResult<CompiledDepthCompareOp>::Failure(MakeCompileError(
+        "RenderGraphCompiler.InvalidPipelineState",
+        "Render graph pass depthCompareOp is unsupported.",
+        passName));
+}
+
+RuntimeResult<CompiledGraphicsPipelineState> CompilePipelineState(
+    const nlohmann::json& passNode,
+    const std::string& passName)
+{
+    CompiledGraphicsPipelineState pipelineState;
+    if (!passNode.contains("pipelineState"))
+    {
+        return RuntimeResult<CompiledGraphicsPipelineState>::Success(std::move(pipelineState));
+    }
+
+    const nlohmann::json& stateNode = passNode["pipelineState"];
+    if (!stateNode.is_object())
+    {
+        return RuntimeResult<CompiledGraphicsPipelineState>::Failure(MakeCompileError(
+            "RenderGraphCompiler.InvalidPipelineState",
+            "Render graph pass pipelineState must be an object.",
+            passName));
+    }
+
+    const char* boolFields[] = {
+        "useVertexInput",
+        "depthTestEnable",
+        "depthWriteEnable"
+    };
+    for (const char* fieldName : boolFields)
+    {
+        if (stateNode.contains(fieldName) && !stateNode[fieldName].is_boolean())
+        {
+            return RuntimeResult<CompiledGraphicsPipelineState>::Failure(MakeCompileError(
+                "RenderGraphCompiler.InvalidPipelineState",
+                "Render graph pass pipeline state field must be boolean: " +
+                    std::string(fieldName),
+                passName));
+        }
+    }
+    auto depthCompareResult = CompileDepthCompareOp(stateNode, passName);
+    if (depthCompareResult.IsFailure())
+    {
+        return RuntimeResult<CompiledGraphicsPipelineState>::Failure(
+            depthCompareResult.Error());
+    }
+
+    pipelineState.useVertexInput =
+        stateNode.value("useVertexInput", pipelineState.useVertexInput);
+    pipelineState.depthTestEnable =
+        stateNode.value("depthTestEnable", pipelineState.depthTestEnable);
+    pipelineState.depthWriteEnable =
+        stateNode.value("depthWriteEnable", pipelineState.depthWriteEnable);
+    pipelineState.depthCompareOp = depthCompareResult.Value();
+    return RuntimeResult<CompiledGraphicsPipelineState>::Success(std::move(pipelineState));
+}
+
 RuntimeResult<void> CompileResourceSize(
     const nlohmann::json& resourceNode,
     CompiledRenderGraphResource& resource)
@@ -548,6 +648,26 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
         pass.needMsaa = passNode.value("needMsaa", false);
         pass.needCreateMaterial = passNode.value("needCreateMaterial", false);
         pass.materialInstancePath = passNode.value("materialInstancePath", std::string());
+        if (pass.type == "shadow" && !pass.needCreateMaterial)
+        {
+            return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                "RenderGraphCompiler.MissingShadowPassMaterial",
+                "Shadow passes require the common opaque pass material.",
+                pass.name));
+        }
+        if (pass.needCreateMaterial && pass.materialInstancePath.empty())
+        {
+            return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                "RenderGraphCompiler.MissingPassMaterial",
+                "Render graph pass with needCreateMaterial must provide materialInstancePath.",
+                pass.name));
+        }
+        auto pipelineStateResult = CompilePipelineState(passNode, pass.name);
+        if (pipelineStateResult.IsFailure())
+        {
+            return RuntimeResult<CompiledRenderGraph>::Failure(pipelineStateResult.Error());
+        }
+        pass.pipelineState = std::move(pipelineStateResult.Value());
         pass.inputDescriptors = std::move(inputResult.Value());
         pass.inputResources.reserve(pass.inputDescriptors.size());
         for (const CompiledRenderGraphPassInputDescriptor& inputDescriptor : pass.inputDescriptors)

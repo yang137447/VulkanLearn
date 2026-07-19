@@ -2,6 +2,13 @@
     "name": "M_pbr",
     "type": "material",
     "shadingModel": "DefaultLit",
+    "shaderEvaluation": {
+        "vertex": "materialFunction/mf_pbrVertex.glsl",
+        "surface": "materialFunction/mf_pbrSurface.glsl"
+    },
+    "features": {
+        "modifiesMeshPosition": false
+    },
     "renderStates": {
         "renderMode": "Opaque",
         "cullMode": "Back"
@@ -16,6 +23,10 @@
         "USE_ANISOTROPY": 0
     },
     "parameters": {
+        "u_alphaClipThreshold": {
+            "type": "float",
+            "default": 0.5
+        },
         "u_tintColor": {
             "type": "vec4",
             "default": [1.0, 1.0, 1.0, 1.0]

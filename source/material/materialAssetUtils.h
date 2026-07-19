@@ -53,6 +53,11 @@ namespace MaterialAssetUtils
         return path.generic_string();
     }
 
+    inline std::string NormalizeAssetPath(std::string_view path)
+    {
+        return std::filesystem::path(path).lexically_normal().generic_string();
+    }
+
     inline std::string Trim(std::string value)
     {
         const auto beginIt = std::find_if_not(value.begin(), value.end(), [](unsigned char ch) {
@@ -103,6 +108,23 @@ namespace MaterialAssetUtils
             return stream.str();
         }
         return std::to_string(value.get<int64_t>());
+    }
+
+    inline bool IsMaterialParameterType(std::string_view type)
+    {
+        return type == "float" || type == "vec2" || type == "vec3" || type == "vec4";
+    }
+
+    inline bool MaterialParameterValueMatchesType(
+        const nlohmann::json& value,
+        std::string_view type)
+    {
+        if (type == "float") return value.is_number();
+        if (!value.is_array()) return false;
+        if (type == "vec2") return value.size() == 2;
+        if (type == "vec3") return value.size() == 3;
+        if (type == "vec4") return value.size() == 4;
+        return false;
     }
 
     inline uint32_t ShadingModelToId(std::string_view shadingModel)

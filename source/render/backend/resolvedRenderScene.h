@@ -5,6 +5,7 @@
 
 #include "core/runtimeResult.h"
 #include "render/frontend/renderScene.h"
+#include "render/shadow/materialShadowCasterPolicy.h"
 
 class Material;
 class MaterialInstance;
@@ -35,6 +36,7 @@ struct ResolvedMaterialInstanceGroup
 struct ResolvedMaterialGroup
 {
     std::shared_ptr<Material> material;
+    MaterialShadowCasterDecision shadowCaster;
     std::vector<ResolvedMaterialInstanceGroup> materialInstances;
 };
 

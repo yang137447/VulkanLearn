@@ -8,6 +8,8 @@
 #include <nlohmann/json.hpp>
 
 #include "commonFunction.h"
+#include "material/compiler/materialShaderCompileRequest.h"
+#include "material/compiler/materialShaderComposer.h"
 
 namespace
 {
@@ -29,6 +31,36 @@ bool TryGetShaderKindForExtension(const std::string& shaderExtension, shaderc_sh
         return true;
     }
     return false;
+}
+
+std::string GetVariantManifestPath()
+{
+    return CommonFunction::GetProjectPath() + "/shader/spv/variants.json";
+}
+
+nlohmann::json LoadVariantManifest(const std::string& manifestPath)
+{
+    nlohmann::json manifestJson = nlohmann::json::object();
+    if (!std::filesystem::exists(manifestPath))
+    {
+        return manifestJson;
+    }
+
+    std::ifstream manifestFile(manifestPath);
+    if (manifestFile.is_open() && manifestFile.peek() != std::ifstream::traits_type::eof())
+    {
+        manifestFile >> manifestJson;
+    }
+    return manifestJson;
+}
+
+void SaveVariantManifest(
+    const std::string& manifestPath,
+    const nlohmann::json& manifestJson)
+{
+    std::filesystem::create_directories(std::filesystem::path(manifestPath).parent_path());
+    std::ofstream manifestOutput(manifestPath);
+    manifestOutput << manifestJson.dump(4);
 }
 }
 
@@ -141,6 +173,15 @@ ShaderCompiler::ShaderVariantCompileResult ShaderCompiler::EnsureGraphicsVariant
     return shaderCompiler.CompileGraphicsVariant(shaderVariantKey);
 }
 
+ShaderCompiler::ShaderVariantCompileResult ShaderCompiler::EnsureMaterialGraphicsVariantCompiled(
+    const VL::MaterialShaderCompileRequest& request,
+    const VL::ComposedMaterialShaderSource& source)
+{
+    ShaderCompiler shaderCompiler;
+    shaderCompiler.SetShaderPath(CommonFunction::GetProjectPath() + "/shader");
+    return shaderCompiler.CompileMaterialGraphicsVariant(request, source);
+}
+
 void ShaderCompiler::SetShaderPath(const std::string& shaderFilePath)
 {
     shaderPath = shaderFilePath;
@@ -216,19 +257,24 @@ std::vector<std::string> ShaderCompiler::BuildRenderModeMacros(RenderMode render
     }
 }
 
+std::vector<std::string> ShaderCompiler::BuildGraphicsVariantMacros(
+    const ShaderVariantKey& shaderVariantKey)
+{
+    std::vector<std::string> compileMacros =
+        BuildRenderModeMacros(shaderVariantKey.renderMode);
+    compileMacros.push_back(
+        "MATERIAL_SHADING_MODEL=" + shaderVariantKey.shadingModelMacro);
+    compileMacros.insert(
+        compileMacros.end(),
+        shaderVariantKey.macros.begin(),
+        shaderVariantKey.macros.end());
+    return compileMacros;
+}
+
 void ShaderCompiler::UpdateVariantManifest(const ShaderVariantKey& shaderVariantKey)
 {
-    const std::string manifestPath = CommonFunction::GetProjectPath() + "/shader/spv/variants.json";
-    nlohmann::json manifestJson = nlohmann::json::object();
-
-    if (std::filesystem::exists(manifestPath))
-    {
-        std::ifstream manifestFile(manifestPath);
-        if (manifestFile.is_open() && manifestFile.peek() != std::ifstream::traits_type::eof())
-        {
-            manifestFile >> manifestJson;
-        }
-    }
+    const std::string manifestPath = GetVariantManifestPath();
+    nlohmann::json manifestJson = LoadVariantManifest(manifestPath);
 
     manifestJson[shaderVariantKey.GetVariantHash()] = {
         {"normalizedKey", shaderVariantKey.GetNormalizedKey()},
@@ -238,9 +284,84 @@ void ShaderCompiler::UpdateVariantManifest(const ShaderVariantKey& shaderVariant
         {"macros", shaderVariantKey.macros}
     };
 
-    std::filesystem::create_directories(std::filesystem::path(manifestPath).parent_path());
-    std::ofstream manifestOutput(manifestPath);
-    manifestOutput << manifestJson.dump(4);
+    SaveVariantManifest(manifestPath, manifestJson);
+}
+
+void ShaderCompiler::UpdateMaterialVariantManifest(
+    const VL::MaterialShaderCompileRequest& request)
+{
+    const std::string manifestPath = GetVariantManifestPath();
+    nlohmann::json manifestJson = LoadVariantManifest(manifestPath);
+
+    manifestJson[request.GetRequestHash()] = {
+        {"normalizedKey", request.GetNormalizedKey()},
+        {"shaderName", request.shaderVariantKey.shaderName},
+        {"materialPass", VL::MaterialPassToString(request.pass)},
+        {"vertexFactory", request.vertexFactoryKey},
+        {"features", request.features.GetNormalizedKey()},
+        {"renderMode", RenderModeToString(request.shaderVariantKey.renderMode)},
+        {"shadingModel", request.shaderVariantKey.shadingModelMacro},
+        {"macros", request.shaderVariantKey.macros}
+    };
+
+    SaveVariantManifest(manifestPath, manifestJson);
+}
+
+void ShaderCompiler::CompileGraphicsSourcePair(
+    const std::string& vertexShaderCode,
+    const std::string& fragmentShaderCode,
+    const std::string& vertexSourcePath,
+    const std::string& fragmentSourcePath,
+    const std::vector<std::string>& compileMacrosInput,
+    const ShaderVariantCompileResult& compileResult)
+{
+    std::vector<std::string> compileMacros = compileMacrosInput;
+    bool isDebugInfo = false;
+#ifndef NDEBUG
+    isDebugInfo = true;
+    compileMacros.push_back("ENABLE_DEBUG_VIEW");
+#endif
+
+    const std::vector<uint32_t> vertexSpv = CompileGLSLToSPIRV(
+        vertexShaderCode,
+        shaderc_shader_kind::shaderc_vertex_shader,
+        vertexSourcePath,
+        compileMacros,
+        isDebugInfo);
+    const std::vector<uint32_t> fragmentSpv = CompileGLSLToSPIRV(
+        fragmentShaderCode,
+        shaderc_shader_kind::shaderc_fragment_shader,
+        fragmentSourcePath,
+        compileMacros,
+        isDebugInfo);
+    SaveSPIRVToFile(vertexSpv, compileResult.vertexSpvPath);
+    SaveSPIRVToFile(fragmentSpv, compileResult.fragmentSpvPath);
+
+    if (isDebugInfo)
+    {
+        SaveSPIRVToFile(vertexSpv, compileResult.vertexDebugPath);
+        SaveSPIRVToFile(fragmentSpv, compileResult.fragmentDebugPath);
+        return;
+    }
+
+    // Release runtime SPIR-V 不帶 debug view；reflection artifact 額外啟用它，
+    // 保持 descriptor preflight 與 Debug build 的可見資源合同一致。
+    std::vector<std::string> debugMacros = compileMacrosInput;
+    debugMacros.push_back("ENABLE_DEBUG_VIEW");
+    const std::vector<uint32_t> vertexSpvDebug = CompileGLSLToSPIRV(
+        vertexShaderCode,
+        shaderc_shader_kind::shaderc_vertex_shader,
+        vertexSourcePath,
+        debugMacros,
+        true);
+    const std::vector<uint32_t> fragmentSpvDebug = CompileGLSLToSPIRV(
+        fragmentShaderCode,
+        shaderc_shader_kind::shaderc_fragment_shader,
+        fragmentSourcePath,
+        debugMacros,
+        true);
+    SaveSPIRVToFile(vertexSpvDebug, compileResult.vertexDebugPath);
+    SaveSPIRVToFile(fragmentSpvDebug, compileResult.fragmentDebugPath);
 }
 
 ShaderCompiler::ShaderVariantCompileResult ShaderCompiler::CompileGraphicsVariant(const ShaderVariantKey& shaderVariantKeyInput)
@@ -262,34 +383,47 @@ ShaderCompiler::ShaderVariantCompileResult ShaderCompiler::CompileGraphicsVarian
     const std::string vertexShaderCode = CommonFunction::ReadFile(vertexShaderSourcePath);
     const std::string fragmentShaderCode = CommonFunction::ReadFile(fragmentShaderSourcePath);
 
-    std::vector<std::string> compileMacros = BuildRenderModeMacros(shaderVariantKey.renderMode);
-    compileMacros.push_back("MATERIAL_SHADING_MODEL=" + shaderVariantKey.shadingModelMacro);
-    compileMacros.insert(compileMacros.end(), shaderVariantKey.macros.begin(), shaderVariantKey.macros.end());
+    const std::vector<std::string> compileMacros =
+        BuildGraphicsVariantMacros(shaderVariantKey);
 
-    bool isDebugInfo = false;
-#ifndef NDEBUG
-    isDebugInfo = true;
-    compileMacros.push_back("ENABLE_DEBUG_VIEW");
-#endif
-
-    const std::vector<uint32_t> vertexSpv = CompileGLSLToSPIRV(vertexShaderCode, shaderc_shader_kind::shaderc_vertex_shader, vertexShaderSourcePath, compileMacros, isDebugInfo);
-    const std::vector<uint32_t> fragmentSpv = CompileGLSLToSPIRV(fragmentShaderCode, shaderc_shader_kind::shaderc_fragment_shader, fragmentShaderSourcePath, compileMacros, isDebugInfo);
-    SaveSPIRVToFile(vertexSpv, compileResult.vertexSpvPath);
-    SaveSPIRVToFile(fragmentSpv, compileResult.fragmentSpvPath);
-
-    if (isDebugInfo)
-    {
-        SaveSPIRVToFile(vertexSpv, compileResult.vertexDebugPath);
-        SaveSPIRVToFile(fragmentSpv, compileResult.fragmentDebugPath);
-    }
-    else
-    {
-        const std::vector<uint32_t> vertexSpvDebug = CompileGLSLToSPIRV(vertexShaderCode, shaderc_shader_kind::shaderc_vertex_shader, vertexShaderSourcePath, compileMacros, true);
-        const std::vector<uint32_t> fragmentSpvDebug = CompileGLSLToSPIRV(fragmentShaderCode, shaderc_shader_kind::shaderc_fragment_shader, fragmentShaderSourcePath, compileMacros, true);
-        SaveSPIRVToFile(vertexSpvDebug, compileResult.vertexDebugPath);
-        SaveSPIRVToFile(fragmentSpvDebug, compileResult.fragmentDebugPath);
-    }
+    CompileGraphicsSourcePair(
+        vertexShaderCode,
+        fragmentShaderCode,
+        vertexShaderSourcePath,
+        fragmentShaderSourcePath,
+        compileMacros,
+        compileResult);
 
     UpdateVariantManifest(shaderVariantKey);
+    return compileResult;
+}
+
+ShaderCompiler::ShaderVariantCompileResult ShaderCompiler::CompileMaterialGraphicsVariant(
+    const VL::MaterialShaderCompileRequest& requestInput,
+    const VL::ComposedMaterialShaderSource& source)
+{
+    VL::MaterialShaderCompileRequest request = requestInput;
+    request.shaderVariantKey.macros = NormalizeMaterialMacros(request.shaderVariantKey.macros);
+
+    ShaderVariantCompileResult compileResult;
+    compileResult.variantHash = request.GetRequestHash();
+    compileResult.normalizedKey = request.GetNormalizedKey();
+    const std::string outputRoot = spirvPath + "/material/" + compileResult.variantHash;
+    compileResult.vertexSpvPath = outputRoot + ".vert.spv";
+    compileResult.fragmentSpvPath = outputRoot + ".frag.spv";
+    compileResult.vertexDebugPath = outputRoot + ".vert.debug";
+    compileResult.fragmentDebugPath = outputRoot + ".frag.debug";
+
+    const std::vector<std::string> compileMacros =
+        BuildGraphicsVariantMacros(request.shaderVariantKey);
+
+    CompileGraphicsSourcePair(
+        source.vertexSource,
+        source.fragmentSource,
+        source.vertexVirtualPath,
+        source.fragmentVirtualPath,
+        compileMacros,
+        compileResult);
+    UpdateMaterialVariantManifest(request);
     return compileResult;
 }

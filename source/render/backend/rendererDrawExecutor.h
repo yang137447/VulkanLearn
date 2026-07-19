@@ -50,7 +50,7 @@ class RendererDrawExecutor
 {
 public:
     bool PipelineUsesDescriptorSet(const PipelineBase& pipeline, uint32_t setIndex) const;
-    void DrawShadowScene(const PipelineBase& shadowPipeline, RendererDrawContext& context) const;
+    void DrawShadowScene(const PipelineBase& commonOpaquePipeline, RendererDrawContext& context) const;
     void DrawGeometryScene(RendererDrawContext& context) const;
 };
 

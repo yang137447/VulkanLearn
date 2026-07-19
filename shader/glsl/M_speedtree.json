@@ -2,20 +2,31 @@
     "name": "M_speedtree",
     "type": "material",
     "shadingModel": "DefaultLit",
+    "shaderEvaluation": {
+        "vertex": "materialFunction/mf_speedtreeVertex.glsl",
+        "surface": "materialFunction/mf_speedtreeSurface.glsl"
+    },
+    "features": {
+        "modifiesMeshPosition": true
+    },
     "renderStates": {
         "renderMode": "Opaque",
-        "cullMode": "Back",
-        "shadowMode": "Opaque"
+        "cullMode": "Back"
     },
     "macros": {
         "USE_ALBEDO_MAP": 0,
         "USE_NORMAL_MAP": 0,
+        "USE_PBR_MAP": 0,
         "USE_EMISSION_MAP": 0,
         "USE_CUSTOM_DATA": 0,
         "USE_PRECOMPUTED_SHADOW_FACTORS": 0,
         "USE_ANISOTROPY": 0
     },
     "parameters": {
+        "u_alphaClipThreshold": {
+            "type": "float",
+            "default": 0.5
+        },
         "u_tintColor": {
             "type": "vec4",
             "default": [1.0, 1.0, 1.0, 1.0]
@@ -47,6 +58,10 @@
             "default": null
         },
         "normalMap": {
+            "type": "sampler2D",
+            "default": null
+        },
+        "pbrParamMap": {
             "type": "sampler2D",
             "default": null
         },

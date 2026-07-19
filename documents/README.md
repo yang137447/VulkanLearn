@@ -54,7 +54,9 @@ Documentation in this repository is split by responsibility:
 - `rendering/csm-shadow-map-m1.md`
   - implemented Basic CSM contract for shadowMap array resources, per-layer framebuffer views, runtime CSM settings, shader UBO fields, and debug views
 - `rendering/material-param-authoring-and-reflection.md`
-  - material parameter include generation and shader reflection as the runtime binding truth
+  - material parameter include generation, Set 1 schema ownership, and per-pass reflection validation
+- `rendering/material-mesh-pass-composition.md`
+  - implemented Material Evaluation, Base/ShadowDepth templates, Composer identity, and Shadow routing contract
 - `rendering/texture-asset-json-v1.md`
   - texture asset JSON V1 fields, defaults, material instance references, and loader behavior
 
@@ -69,6 +71,10 @@ Architecture plans:
 
 Rendering plans:
 
+- `plan/rendering/lightweight-material-shadow-caster-plan.md`
+  - superseded first-stage execution record for explicit ShadowCaster variants; current behavior is defined by the CSM and Material Mesh Pass contracts
+- `plan/rendering/common-masked-shadow-caster-plan.md`
+  - superseded Common Opaque / Masked experiment retained as historical design context; the lightweight material ShadowCaster plan is the current direction
 - `plan/rendering/csm-shadow-map-roadmap.md`
   - four-phase cascaded shadow route: Basic CSM, screen-space shadow mask, stability/seam control, and custom filtering
 - `plan/rendering/deferred-gbuffer-ue-aligned-plan.html`
@@ -79,14 +85,18 @@ Rendering plans:
   - HTML reading version of the foliage / SpeedTree route
 - `plan/rendering/material-module-system.md`
   - future material module boundary, public/private semantics, and dependency ordering
+- `plan/rendering/material-multipass-pass-tag-plan.md`
+  - future Material Multi-Pass asset model, PassTag matching, common RG hooks, render-state JSON draft, and draw-list execution plan
 - `plan/rendering/material-shader-variant-and-debugview-options.md`
   - deprecated shader variant options retained as context; use the deferred GBuffer plan for the current direction
+- `plan/rendering/environment-cubemap-ibl-unification-plan.md`
+  - executable migration plan that limits environment-type branching to cubemap generation and unifies SH/prefilter through one GPU IBL baker
 - `plan/rendering/sky-pass-environment-roadmap.md`
   - independent Sky Pass, procedural sky, dynamic environment IBL, and frame-spread update route
 - `plan/rendering/sky-pass-environment-roadmap.html`
   - HTML reading version of the Sky Pass route
 - `plan/rendering/shadow-mode-material-pass-plan.html`
-  - explicit `shadowMode` material contract, common opaque shadow path, masked material shadow variants, and rollout plan
+  - superseded explicit `shadowMode` proposal retained as historical context; current Common ShadowCaster selection derives from `renderMode`
 - `plan/rendering/speedtree-sdk-data-probe.md`
   - SDK-backed SpeedTree data probe before final runtime foliage format decisions
 - `plan/rendering/terrain-worldcreator-mvp.md`

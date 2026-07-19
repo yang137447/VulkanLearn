@@ -60,10 +60,6 @@ namespace
         nlohmann::json parameters = nlohmann::json::object();
         for (const auto& [name, paramDesc] : materialJson["parameters"].items())
         {
-            if (!paramDesc.is_object() || !paramDesc.contains("type") || !paramDesc["type"].is_string() || !paramDesc.contains("default"))
-            {
-                throw std::runtime_error("Material parameter must contain type and default: " + name);
-            }
             parameters[name] = instanceOverrides.contains(name) ? instanceOverrides[name] : paramDesc["default"];
         }
         return parameters;
@@ -80,10 +76,6 @@ namespace
         nlohmann::json textures = nlohmann::json::object();
         for (const auto& [name, textureDesc] : materialJson["textures"].items())
         {
-            if (!textureDesc.is_object() || !textureDesc.contains("type") || !textureDesc["type"].is_string() || !textureDesc.contains("default"))
-            {
-                throw std::runtime_error("Material texture must contain type and default: " + name);
-            }
             const nlohmann::json value = instanceOverrides.contains(name) ? instanceOverrides[name] : textureDesc["default"];
             if (!value.is_null())
             {

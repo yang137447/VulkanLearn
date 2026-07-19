@@ -1,8 +1,11 @@
 #pragma once
 
+#include <memory>
 #include <vector>
 
 #include <vulkan/vulkan.hpp>
+
+class Material;
 
 namespace VL
 {
@@ -17,6 +20,7 @@ struct RendererDescriptorContext
     const std::vector<vk::DescriptorBufferInfo>* globalUniformBufferInfos = nullptr;
     const std::vector<vk::DescriptorBufferInfo>* lightBufferInfos = nullptr;
     const RendererResourceCache* resourceCache = nullptr;
+    std::shared_ptr<Material> commonOpaqueShadowMaterial;
 };
 
 } // namespace VL

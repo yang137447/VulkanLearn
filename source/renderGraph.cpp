@@ -2,6 +2,7 @@
 #include "commonFunction.h"
 #include "shaderReflect.h"
 #include "material.h"
+#include "material/materialAssetUtils.h"
 #include "materialInstance.h"
 #include "pipeline/graphicsPipeline.h"
 #include "render/backend/rendererBackendVulkan.h"
@@ -33,6 +34,26 @@ vk::ImageView RenderResource::GetFramebufferAttachmentView(uint32_t layer) const
 
 namespace
 {
+
+vk::CompareOp GetDepthCompareOp(VL::CompiledDepthCompareOp compareOp)
+{
+    switch (compareOp)
+    {
+    case VL::CompiledDepthCompareOp::Less:
+        return vk::CompareOp::eLess;
+    case VL::CompiledDepthCompareOp::LessOrEqual:
+        return vk::CompareOp::eLessOrEqual;
+    case VL::CompiledDepthCompareOp::Equal:
+        return vk::CompareOp::eEqual;
+    case VL::CompiledDepthCompareOp::Greater:
+        return vk::CompareOp::eGreater;
+    case VL::CompiledDepthCompareOp::GreaterOrEqual:
+        return vk::CompareOp::eGreaterOrEqual;
+    case VL::CompiledDepthCompareOp::Always:
+        return vk::CompareOp::eAlways;
+    }
+    throw std::runtime_error("Compiled render graph contains an unknown depthCompareOp");
+}
 
 bool HasRenderResourceHandles(const RenderResource& resource)
 {
@@ -564,6 +585,7 @@ void RenderGraph::Shutdown(
     resourcesResolve.clear();
     renderpasses.clear();
     renderpassesOrdered.clear();
+    canonicalShadowPassName.clear();
     descriptorPlanCache.Clear();
 }
 
@@ -617,6 +639,59 @@ void RenderGraph::LoadRenderGraph(
         renderpassesOrdered.push_back(passName);
         Renderpass renderpass = CreateRenderpass(passDesc, rendererBackend);
         renderpasses[passName] = renderpass;
+    }
+    ValidateAndResolveCanonicalShadowPass();
+}
+
+Renderpass* RenderGraph::FindCanonicalShadowPass()
+{
+    if (canonicalShadowPassName.empty())
+    {
+        return nullptr;
+    }
+    return &renderpasses.at(canonicalShadowPassName);
+}
+
+void RenderGraph::ValidateAndResolveCanonicalShadowPass()
+{
+    canonicalShadowPassName.clear();
+    const Renderpass* canonicalShadowPass = nullptr;
+    std::string canonicalShadowMaterialPath;
+
+    // 第一条 Shadow pass 是专用 Shadow pipeline 的创建模板。其他 cascade
+    // 必须共享相同管线合同和公共材质资产，才能复用同一套 pipeline/MI。
+    for (const std::string& passName : renderpassesOrdered)
+    {
+        const Renderpass& renderpass = renderpasses.at(passName);
+        if (renderpass.type != "shadow")
+        {
+            continue;
+        }
+
+        const std::string materialPath =
+            MaterialAssetUtils::NormalizeAssetPath(renderpass.materialInstancePath);
+        if (canonicalShadowPass == nullptr)
+        {
+            canonicalShadowPass = &renderpass;
+            canonicalShadowPassName = passName;
+            canonicalShadowMaterialPath = materialPath;
+            continue;
+        }
+
+        if (renderpass.pipelineContractKey != canonicalShadowPass->pipelineContractKey)
+        {
+            throw std::runtime_error(
+                "Shadow pass '" + renderpass.name +
+                "' is not pipeline-compatible with canonical shadow pass '" +
+                canonicalShadowPass->name + "'");
+        }
+        if (materialPath != canonicalShadowMaterialPath)
+        {
+            throw std::runtime_error(
+                "Shadow pass '" + renderpass.name +
+                "' must use the canonical shadow material instance path '" +
+                canonicalShadowMaterialPath + "'");
+        }
     }
 }
 
@@ -679,25 +754,75 @@ void RenderGraph::RefreshRuntimeDescriptors(
     }
 }
 
-std::unordered_map<std::string, std::weak_ptr<MaterialInstance>> RenderGraph::CapturePassMaterialInstances() const
+std::unordered_map<std::string, std::shared_ptr<MaterialInstance>> RenderGraph::CapturePassMaterialInstances() const
 {
-    std::unordered_map<std::string, std::weak_ptr<MaterialInstance>> passMaterials;
+    std::unordered_map<std::string, std::shared_ptr<MaterialInstance>> passMaterials;
     for (const auto& [passName, renderpass] : renderpasses)
     {
-        passMaterials.emplace(passName, renderpass.materialInstance);
+        // Snapshot 在 graph/world 重建窗口內負責保活；Renderpass 本身仍只持有 weak_ptr，
+        // 不改變正常運行時的資源所有權，也不形成循環引用。
+        passMaterials.emplace(passName, renderpass.materialInstance.lock());
     }
     return passMaterials;
 }
 
 void RenderGraph::RestorePassMaterialInstances(
-    const std::unordered_map<std::string, std::weak_ptr<MaterialInstance>>& passMaterials)
+    const std::unordered_map<std::string, std::shared_ptr<MaterialInstance>>& passMaterials)
 {
-    for (auto& [passName, materialInstance] : passMaterials)
+    // RenderGraph 在 resize 或 graph reload 后会生成新的 Renderpass 对象，旧 MI
+    // 只有在资产身份和完整管线合同都兼容时才能继续复用。先预检所有需要材质的
+    // pass，避免校验中途失败后留下部分恢复、部分未恢复的状态。
+    for (const auto& [passName, renderpass] : renderpasses)
     {
-        auto passIt = renderpasses.find(passName);
-        if (passIt != renderpasses.end())
+        // geometry 等由场景对象提供材质的 pass 不持有 pass material，无需恢复。
+        if (!renderpass.needsMaterial)
         {
-            passIt->second.materialInstance = materialInstance;
+            continue;
+        }
+
+        auto materialIt = passMaterials.find(passName);
+        if (materialIt == passMaterials.end())
+        {
+            throw std::runtime_error(
+                "Cannot restore missing material binding for pass: " + passName);
+        }
+
+        const std::shared_ptr<MaterialInstance>& restoredInstance = materialIt->second;
+        // 初次 World 載入前 pass material 尚未建立，合法快照可以為空。
+        // shared_ptr 快照已消除「捕獲後過期」狀態，因此空值表示原狀就是未綁定。
+        if (!restoredInstance)
+        {
+            continue;
+        }
+
+        // pass 名称相同不代表配置未变；必须确认旧 MI 仍是新图声明的同一资产。
+        if (restoredInstance->GetName() !=
+            MaterialAssetUtils::NormalizeAssetPath(renderpass.materialInstancePath))
+        {
+            throw std::runtime_error(
+                "Cannot restore a different material asset for pass: " + passName);
+        }
+
+        std::shared_ptr<Material> restoredMaterial =
+            restoredInstance->GetBaseMaterial().lock();
+        // RenderPass 兼容性不足以覆盖全部管线状态。采样数、附件数量、顶点输入、
+        // 深度状态和 Shadow pass 类型均由 PassPipelineContractKey 统一校验。
+        if (!restoredMaterial ||
+            restoredMaterial->GetPassPipelineContractKey() != renderpass.pipelineContractKey)
+        {
+            throw std::runtime_error(
+                "Cannot restore pass material across an incompatible pipeline contract: " +
+                passName);
+        }
+    }
+
+    // 全部预检通过后再统一写回，保证恢复操作对 RenderGraph 是原子的。
+    for (auto& [passName, renderpass] : renderpasses)
+    {
+        auto materialIt = passMaterials.find(passName);
+        if (materialIt != passMaterials.end())
+        {
+            renderpass.materialInstance = materialIt->second;
         }
     }
 }
@@ -861,9 +986,16 @@ Renderpass RenderGraph::CreateRenderpass(
     Renderpass renderpass;
     renderpass.name = passDesc.name;
     renderpass.type = passDesc.type;
+    renderpass.needsMaterial = passDesc.needCreateMaterial;
+    renderpass.materialInstancePath = passDesc.materialInstancePath;
     bool bIsShadowPass = renderpass.type == "shadow";
     bool bUseMsaa = passDesc.needMsaa;
-    renderpass.sampleCount = bUseMsaa ? CommonFunction::GetMsaaSampleCount() : vk::SampleCountFlagBits::e1;
+    renderpass.pipelineContractKey.useVertexInput = passDesc.pipelineState.useVertexInput;
+    renderpass.pipelineContractKey.depthTestEnable = passDesc.pipelineState.depthTestEnable;
+    renderpass.pipelineContractKey.depthWriteEnable = passDesc.pipelineState.depthWriteEnable;
+    renderpass.pipelineContractKey.depthCompareOp =
+        GetDepthCompareOp(passDesc.pipelineState.depthCompareOp);
+    renderpass.pipelineContractKey.isShadowPass = bIsShadowPass;
 
     renderpass.inputResources = passDesc.inputResources;
     renderpass.inputDescriptorPlan = passDesc.inputDescriptors;
@@ -879,8 +1011,6 @@ Renderpass RenderGraph::CreateRenderpass(
             renderpass.shadowCascadeIndex = output.layer;
         }
     }
-    renderpass.colorAttachmentCount = passDesc.colorOutputCount;
-
     vk::RenderPass vkRenderPass = CreateVkRenderPass(renderpass, rendererBackend, bUseMsaa);
     renderpass.renderPass = vkRenderPass;
     renderpass.renderPassHandle = rendererBackend.GetRenderPassHandle(renderpass.renderPass);
@@ -999,7 +1129,7 @@ void RenderGraph::DestroyRenderpass(
 }
 
 vk::RenderPass RenderGraph::CreateVkRenderPass(
-    const Renderpass& renderpass,
+    Renderpass& renderpass,
     VL::RendererBackendVulkan& rendererBackend,
     bool bUseMsaa)
 {
@@ -1211,6 +1341,37 @@ vk::RenderPass RenderGraph::CreateVkRenderPass(
         .setAttachments(attachmentDescriptions)
         .setSubpasses(subpassDescription)
         .setDependencies(subpassDependency);
+
+    // 构建 RenderPass 兼容性键，用于在 PipelineFactory 中跨兼容的 render pass 复用 graphics pipeline。
+    // 仅记录 Vulkan render-pass 兼容性规则关心的字段（format / samples / attachment 索引），
+    // load/store 操作和 image layout 不影响兼容性，因此不纳入。
+    RenderPassCompatibilityKey compatibilityKey;
+    compatibilityKey.attachments.reserve(attachmentDescriptions.size());
+    for (const vk::AttachmentDescription2& attachment : attachmentDescriptions)
+    {
+        compatibilityKey.attachments.push_back({attachment.format, attachment.samples});
+    }
+    compatibilityKey.colorAttachments.reserve(colorAttachmentReferences.size());
+    for (const vk::AttachmentReference2& attachment : colorAttachmentReferences)
+    {
+        compatibilityKey.colorAttachments.push_back(attachment.attachment);
+    }
+    compatibilityKey.resolveAttachments.reserve(resolveAttachmentReferences.size());
+    for (const vk::AttachmentReference2& attachment : resolveAttachmentReferences)
+    {
+        compatibilityKey.resolveAttachments.push_back(attachment.attachment);
+    }
+    compatibilityKey.hasDepthAttachment = bHasDepth;
+    if (bHasDepth)
+    {
+        compatibilityKey.depthAttachment = depthAttachmentReference.attachment;
+    }
+    compatibilityKey.hasDepthResolveAttachment = bHasDepthResolve;
+    if (bHasDepthResolve)
+    {
+        compatibilityKey.depthResolveAttachment = depthResolveAttachmentReference.attachment;
+    }
+    renderpass.pipelineContractKey.renderPassCompatibilityKey = std::move(compatibilityKey);
 
     return rendererBackend.CreateRenderPass(renderPassCreateInfo, renderpass.name);
 }

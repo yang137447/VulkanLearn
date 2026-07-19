@@ -1,11 +1,13 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include <vector>
 #include "vulkan/vulkan.hpp"
 #include "pipelineBase.h"
 #include "graphicsPipelineBuilder.h"
-#include "../shaderVariant.h"
+#include "graphicsPipelineLayoutDesc.h"
+#include "graphicsShaderVariantArtifact.h"
 
 struct ShaderBinding;
 
@@ -15,11 +17,12 @@ public:
     
     GraphicsPipeline(vk::Device *device,
                     vk::RenderPass *renderPass,
-                    const ShaderVariantKey& shaderVariantKey,
+                    const GraphicsShaderVariantArtifact& shaderArtifact,
                     vk::SampleCountFlagBits sampleCount,
                     uint32_t colorAttachmentCount,
                     const GraphicsPipelineStateDesc& pipelineStateDesc = {},
-                    bool bIsShadowPass = false
+                    bool bIsShadowPass = false,
+                    const GraphicsPipelineLayoutDesc& pipelineLayoutDesc = {}
                 );
     ~GraphicsPipeline();
 
@@ -28,8 +31,9 @@ public:
     inline const vk::PipelineLayout& GetPipelineLayout() const override { return pipelineLayout; }
     inline const std::vector<vk::DescriptorSetLayout>& GetDescriptorSetLayouts() const override { return descriptorSetLayouts; }
     inline const std::vector<ShaderBinding>& GetShaderBindings() const override { return shaderBindings; }
+    inline const std::vector<ShaderBinding>& GetDescriptorLayoutBindings() const override { return descriptorLayoutBindings; }
 private:
-    void CreateDescriptorSetLayouts();
+    void CreateDescriptorSetLayouts(const GraphicsPipelineLayoutDesc& pipelineLayoutDesc);
     void DestroyDescriptorSetLayouts();
 
     void CreatePipelineLayout();
@@ -40,20 +44,23 @@ private:
     
     void initVertexAttribute();
 
-    void CreateGraphicsPipeline();
+    void CreateGraphicsPipeline(
+        vk::RenderPass& renderPass,
+        vk::SampleCountFlagBits sampleCount,
+        uint32_t colorAttachmentCount,
+        const GraphicsPipelineStateDesc& pipelineStateDesc,
+        bool bIsShadowPass);
     void DestroyGraphicsPipeline();
 private: 
     
     vk::Device* device;
-    vk::RenderPass* renderPass;
-    vk::SampleCountFlagBits sampleCount;
-    uint32_t colorAttachmentCount = 1;
-    GraphicsPipelineStateDesc pipelineStateDesc;
-    bool bIsShadowPass;
 
-    ShaderVariantKey shaderVariantKey;
+    std::string shaderDisplayName;
+    std::string vertexSpvPath;
+    std::string fragmentSpvPath;
 
     std::vector<ShaderBinding> shaderBindings;
+    std::vector<ShaderBinding> descriptorLayoutBindings;
 
     std::vector<vk::DescriptorSetLayout> descriptorSetLayouts;
     vk::PipelineLayout pipelineLayout;

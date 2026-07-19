@@ -8,46 +8,18 @@
 
 #include "commonFunction.h"
 #include "material.h"
+#include "material/materialAssetUtils.h"
 #include "material/loader/materialInstanceResolver.h"
 #include "materialInstance.h"
 #include "materialInstanceValidator.h"
-#include "pipeline/graphicsPipeline.h"
+#include "pipeline/pipelineBase.h"
 #include "pipeline/pipelineFactory.h"
 #include "render/backend/rendererBackendVulkan.h"
 #include "render/resource/rendererResourceCache.h"
+#include "render/shadow/materialShadowPipelineBuilder.h"
 #include "renderGraph.h"
 #include "texture.h"
 #include "textureAssetLoader.h"
-
-namespace
-{
-
-vk::CompareOp ParseDepthCompareOp(const std::string& compareOp)
-{
-    if (compareOp == "lessOrEqual")
-    {
-        return vk::CompareOp::eLessOrEqual;
-    }
-    if (compareOp == "equal")
-    {
-        return vk::CompareOp::eEqual;
-    }
-    if (compareOp == "greater")
-    {
-        return vk::CompareOp::eGreater;
-    }
-    if (compareOp == "greaterOrEqual")
-    {
-        return vk::CompareOp::eGreaterOrEqual;
-    }
-    if (compareOp == "always")
-    {
-        return vk::CompareOp::eAlways;
-    }
-    return vk::CompareOp::eLess;
-}
-
-} // namespace
 
 namespace VL
 {
@@ -64,30 +36,16 @@ void RendererMaterialLoader::LoadPassMaterials() const
 {
     RenderGraph& renderGraph = RenderGraph::GetInstance();
 
-    auto& renderGraphJson = CommonFunction::InitRenderGraphJson();
-    for(auto& passJson : renderGraphJson["passes"])
+    for (const CompiledRenderGraphPass& passDesc :
+         renderGraph.GetCompiledRenderGraph().passes)
     {
-        bool bNeedCreateMaterial = passJson.value("needCreateMaterial", false);
-        if(!bNeedCreateMaterial)
+        if (!passDesc.needCreateMaterial)
         {
             continue;
         }
-        std::string passName = passJson["name"];
-        std::string materialInstancePath = passJson["materialInstancePath"];
-        
-        GraphicsPipelineStateDesc pipelineStateDesc;
-        if (passJson.contains("pipelineState"))
-        {
-            const auto& pipelineStateJson = passJson["pipelineState"];
-            pipelineStateDesc.bUseVertexInput = pipelineStateJson.value("useVertexInput", pipelineStateDesc.bUseVertexInput);
-            pipelineStateDesc.bDepthTestEnable = pipelineStateJson.value("depthTestEnable", pipelineStateDesc.bDepthTestEnable);
-            pipelineStateDesc.bDepthWriteEnable = pipelineStateJson.value("depthWriteEnable", pipelineStateDesc.bDepthWriteEnable);
-            pipelineStateDesc.depthCompareOp = ParseDepthCompareOp(pipelineStateJson.value("depthCompareOp", std::string("less")));
-        }
-
-        Renderpass& renderPass = renderGraph.GetRenderpasses().at(passName);
+        Renderpass& renderPass = renderGraph.GetRenderpasses().at(passDesc.name);
         std::shared_ptr<MaterialInstance> materialInstance =
-            LoadMaterialInstance(materialInstancePath, renderPass.sampleCount, passName, pipelineStateDesc);
+            LoadMaterialInstance(passDesc.materialInstancePath, renderPass);
         
         renderPass.materialInstance = materialInstance;
     }
@@ -95,28 +53,45 @@ void RendererMaterialLoader::LoadPassMaterials() const
 
 std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
     std::string_view materialInstancePath,
-    vk::SampleCountFlagBits sampleCount,
-    std::string_view passName,
-    const GraphicsPipelineStateDesc& pipelineStateDesc) const
+    Renderpass& renderPass) const
 {
-    RenderGraph& renderGraph = RenderGraph::GetInstance();
     RendererResourceCache& resourceCache = RendererResourceCache::GetInstance();
+    // MI 以规范化资产路径作为唯一身份。同一份 MI 再次加载时必须返回同一对象，
+    // 但它的 Material 管线合同仍需与目标 pass 一致，避免把旧图管线带入新图。
+    const std::string materialInstanceKey =
+        MaterialAssetUtils::NormalizeAssetPath(materialInstancePath);
+    const std::shared_ptr<MaterialInstance>* cachedMaterialInstance =
+        resourceCache.GetMaterialInstance(materialInstanceKey);
+    if (cachedMaterialInstance != nullptr && *cachedMaterialInstance != nullptr)
+    {
+        std::shared_ptr<Material> cachedBaseMaterial =
+            (*cachedMaterialInstance)->GetBaseMaterial().lock();
+        if (!cachedBaseMaterial ||
+            cachedBaseMaterial->GetPassPipelineContractKey() !=
+                renderPass.pipelineContractKey)
+        {
+            throw std::runtime_error(
+                "Material instance asset '" + materialInstanceKey +
+                "' was requested with an incompatible pass pipeline contract");
+        }
+        return *cachedMaterialInstance;
+    }
 
-    std::ifstream materialInstanceFile(CommonFunction::Path(materialInstancePath.data()));
+    const std::string materialInstancePathString(materialInstancePath);
+    std::ifstream materialInstanceFile(CommonFunction::Path(materialInstancePathString));
     nlohmann::json materialInstanceJson;
     materialInstanceFile >> materialInstanceJson;
     MaterialInstanceResolveResult materialInstanceResolveResult =
         MaterialInstanceResolver::Resolve(materialInstancePath, materialInstanceJson);
     const nlohmann::json& effectiveMaterialInstanceJson = materialInstanceResolveResult.effectiveMaterialInstanceJson;
-    const std::string passNameKey(passName);
-    Renderpass& renderPass = renderGraph.GetRenderpasses().at(passNameKey);
+    // Resolve 先合并材质定义与 MI 覆写，BuildLoadPlan 再一次性生成 shader variant、
+    // 固定管线状态和缓存 key；后续步骤只消费结果，不重复解释 JSON。
     MaterialInstanceBuildPlan loadPlan = MaterialInstanceValidator::BuildLoadPlan(
         materialInstancePath,
-        passName,
-        sampleCount,
-        pipelineStateDesc,
-        renderPass.type == "shadow",
-        effectiveMaterialInstanceJson);
+        renderPass.pipelineContractKey,
+        effectiveMaterialInstanceJson,
+        materialInstanceResolveResult.materialPath,
+        materialInstanceResolveResult.materialJson);
     std::shared_ptr<Material> material;
     const std::shared_ptr<Material>* cachedMaterial = resourceCache.GetMaterial(loadPlan.materialKey);
     if(cachedMaterial != nullptr && *cachedMaterial != nullptr)
@@ -125,35 +100,42 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
     }
     else
     {
+        // Material 拥有 Surface pipeline；相同 materialKey 的 MI 共用这个 Material。
         material = std::make_shared<Material>(
             pipelineFactory, 
             &renderPass.renderPass,
+            renderPass.pipelineContractKey,
             loadPlan.shaderVariantKey,
+            loadPlan.materialFeatureKey,
+            loadPlan.materialDescriptorSchema,
+            loadPlan.baseShaderCompileRequest,
             loadPlan.materialKey,
-            sampleCount,
-            renderPass.colorAttachmentCount,
-            loadPlan.pipelineStateDesc,
-            loadPlan.bIsShadowPass
+            loadPlan.cullMode,
+            loadPlan.blendMode
         );
+        if (renderPass.type != "shadow")
+        {
+            // 专用 ShadowCaster pipeline 同样由 Material 持有且只构建一次。
+            // Shadow pass 自己的公共材质不再递归寻找 `.shadow` shader。
+            material->SetShadowPipeline(BuildMaterialShadowPipeline(
+                pipelineFactory,
+                RenderGraph::GetInstance().FindCanonicalShadowPass(),
+                loadPlan,
+                *material));
+        }
     }
     const auto& shaderParameters = effectiveMaterialInstanceJson["parameters"];
     const auto& shaderTextures = effectiveMaterialInstanceJson.contains("textures")
         ? effectiveMaterialInstanceJson["textures"]
         : nlohmann::json::object();
-    MaterialInstanceValidator::Validate(materialInstancePath, effectiveMaterialInstanceJson, material->GetRenderPipeline()->GetShaderBindings());
+    MaterialInstanceValidator::Validate(
+        materialInstancePath,
+        effectiveMaterialInstanceJson,
+        material->GetMaterialDescriptorSchema(),
+        material->GetActiveShaderBindings());
 
-    std::shared_ptr<MaterialInstance> materialInstance;
-    const std::shared_ptr<MaterialInstance>* cachedMaterialInstance =
-        resourceCache.GetMaterialInstance(loadPlan.materialInstanceKey);
-    if(cachedMaterialInstance != nullptr && *cachedMaterialInstance != nullptr)
-    {
-        materialInstance = *cachedMaterialInstance;
-    }
-    else
-    {
-        materialInstance = material->CreateInstance();
-        materialInstance->SetName(loadPlan.materialInstanceKey);
-    }
+    std::shared_ptr<MaterialInstance> materialInstance = material->CreateInstance();
+    materialInstance->SetName(loadPlan.materialInstanceKey);
 
     // Parameter JSON was validated against shader reflection above; this block
     // only copies typed values into MaterialInstance storage.
@@ -220,10 +202,6 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
     }
 
     resourceCache.BindMaterial(loadPlan.materialKey, material);
-    if (passName != "geometry")
-    {
-        resourceCache.BindMaterial(loadPlan.shaderName, material);
-    }
     resourceCache.BindMaterialInstance(loadPlan.materialInstanceKey, materialInstance);
 
     return materialInstance;

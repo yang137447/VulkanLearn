@@ -50,19 +50,6 @@ std::unordered_map<std::string, std::uintptr_t> CaptureSharedResourcePointers(
     return pointers;
 }
 
-std::unordered_map<std::string, std::uintptr_t> CapturePassMaterialPointers(
-    const std::unordered_map<std::string, std::weak_ptr<MaterialInstance>>& passMaterials)
-{
-    std::unordered_map<std::string, std::uintptr_t> pointers;
-    pointers.reserve(passMaterials.size());
-    for (const auto& [passName, materialInstance] : passMaterials)
-    {
-        const std::shared_ptr<MaterialInstance> lockedMaterial = materialInstance.lock();
-        pointers.emplace(passName, reinterpret_cast<std::uintptr_t>(lockedMaterial.get()));
-    }
-    return pointers;
-}
-
 RuntimeRendererResourceFingerprint CaptureRuntimeRendererResourceFingerprint()
 {
     RendererResourceCache::WorldLocalResourceSnapshot resourceSnapshot =
@@ -78,7 +65,7 @@ RuntimeRendererResourceFingerprint CaptureRuntimeRendererResourceFingerprint()
     fingerprint.materialInstances = CaptureSharedResourcePointers(resourceSnapshot.materialInstances);
     fingerprint.objectResources = CaptureSharedResourcePointers(resourceSnapshot.objectResources);
     fingerprint.textures = CaptureSharedResourcePointers(resourceSnapshot.textures);
-    fingerprint.passMaterialInstances = CapturePassMaterialPointers(passMaterialSnapshot);
+    fingerprint.passMaterialInstances = CaptureSharedResourcePointers(passMaterialSnapshot);
     return fingerprint;
 }
 

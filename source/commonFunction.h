@@ -59,7 +59,7 @@ namespace JsonParser
 
     inline uint32_t ParseValueSize(const nlohmann::basic_json<>& Value)
     {
-        if(Value.is_number_float())
+        if(Value.is_number())
         {
             return sizeof(float);
         }

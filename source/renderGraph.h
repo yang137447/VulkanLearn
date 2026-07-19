@@ -11,6 +11,7 @@
 #include "render/backend/rendererDescriptorPlan.h"
 #include "render/rendergraph/renderGraphCompiler.h"
 #include "render/rhi/rhiResourceHandles.h"
+#include "pipeline/passPipelineContractKey.h"
 
 // RenderGraph-owned image resource. MSAA resources are currently modeled as an
 // explicit source image plus a resolved image when a pass needs to read the
@@ -83,8 +84,7 @@ struct Renderpass
     std::vector<vk::Framebuffer> framebuffers;
     uint32_t width;
     uint32_t height;
-    uint32_t colorAttachmentCount = 0;
-    vk::SampleCountFlagBits sampleCount = vk::SampleCountFlagBits::e1;
+    PassPipelineContractKey pipelineContractKey;
     // pass 输入输出资源
     std::vector<std::string> inputResources;
     std::vector<VL::CompiledRenderGraphPassInputDescriptor> inputDescriptorPlan;
@@ -106,6 +106,8 @@ struct Renderpass
     std::vector<std::vector<vk::WriteDescriptorSet>> writeDescriptorSets;
 
     // materialInstance 相关
+    bool needsMaterial = false;
+    std::string materialInstancePath;
     std::weak_ptr<MaterialInstance> materialInstance;
 };
 
@@ -131,6 +133,9 @@ public:
     const std::vector<std::string>& GetRenderpassesOrdered() const { return renderpassesOrdered; }
     std::unordered_map<std::string, Renderpass>& GetRenderpasses() { return renderpasses; }
     const std::unordered_map<std::string, Renderpass>& GetRenderpasses() const { return renderpasses; }
+    // 返回构图阶段已经校验过的第一条 Shadow pass；当前图没有 Shadow pass
+    // 时返回 nullptr。调用方不得跨 RenderGraph shutdown/reload 保存该指针。
+    Renderpass* FindCanonicalShadowPass();
     const VL::CompiledRenderGraph& GetCompiledRenderGraph() const { return compiledFrameGraph; }
     const std::unordered_map<std::string, std::vector<RenderResource>>& GetResourcesMsaa() const { return resourcesMsaa; }
     const std::unordered_map<std::string, std::vector<RenderResource>>& GetResourcesResolve() const { return resourcesResolve; }
@@ -146,8 +151,8 @@ public:
     // Pass materials are world-local in the current bridge. Capture/restore is
     // used to roll back a failed world load without leaving passes bound to the
     // partially loaded world's material instances.
-    std::unordered_map<std::string, std::weak_ptr<MaterialInstance>> CapturePassMaterialInstances() const;
-    void RestorePassMaterialInstances(const std::unordered_map<std::string, std::weak_ptr<MaterialInstance>>& passMaterials);
+    std::unordered_map<std::string, std::shared_ptr<MaterialInstance>> CapturePassMaterialInstances() const;
+    void RestorePassMaterialInstances(const std::unordered_map<std::string, std::shared_ptr<MaterialInstance>>& passMaterials);
     
 private:
     RenderResource CreateRenderResource(
@@ -162,13 +167,14 @@ private:
     Renderpass CreateRenderpass(
         const VL::CompiledRenderGraphPass& passDesc,
         VL::RendererBackendVulkan& rendererBackend);
+    void ValidateAndResolveCanonicalShadowPass();
     void DestroyRenderpass(
         Renderpass& renderpass,
         VL::RendererBackendVulkan& rendererBackend,
         VL::RenderGraphReleaseMode releaseMode);
 
     vk::RenderPass CreateVkRenderPass(
-        const Renderpass& renderpass,
+        Renderpass& renderpass,
         VL::RendererBackendVulkan& rendererBackend,
         bool bUseMsaa);
 
@@ -192,6 +198,7 @@ private:
 
     std::vector<std::string> renderpassesOrdered;
     std::unordered_map<std::string, Renderpass> renderpasses;
+    std::string canonicalShadowPassName;
     VL::CompiledRenderGraph compiledFrameGraph;
     VL::RendererDescriptorPlanCache descriptorPlanCache;
 };

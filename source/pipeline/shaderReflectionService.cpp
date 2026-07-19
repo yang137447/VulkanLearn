@@ -1,15 +1,6 @@
 #include "shaderReflectionService.h"
 #include "../commonFunction.h"
 
-std::vector<ShaderBinding> ShaderReflectionService::ReflectGraphicsFromDebugSpirv(const ShaderVariantKey& shaderVariantKey)
-{
-    const std::vector<std::string> shaderPaths = {
-        CommonFunction::Path(shaderVariantKey.GetStageDebugRelativePath("vert")),
-        CommonFunction::Path(shaderVariantKey.GetStageDebugRelativePath("frag"))
-    };
-    return ReflectFromDebugSpirvFiles(shaderPaths);
-}
-
 std::vector<ShaderBinding> ShaderReflectionService::ReflectComputeFromDebugSpirv(const std::string& shaderName)
 {
     const std::vector<std::string> shaderPaths = {

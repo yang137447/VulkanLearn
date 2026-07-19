@@ -9,6 +9,7 @@ class MaterialInstance;
 namespace VL
 {
 
+enum class MaterialShadowCasterKind;
 struct RendererDescriptorContext;
 class RendererBackendVulkan;
 class RendererResourceCache;
@@ -34,7 +35,8 @@ public:
     void Initialize(
         RendererBackendVulkan& rendererBackend,
         const RendererDescriptorContext& descriptorContext,
-        MaterialInstance& materialInstance);
+        MaterialInstance& materialInstance,
+        MaterialShadowCasterKind shadowCasterKind);
     void Shutdown();
 
 private:

@@ -663,7 +663,7 @@ struct MeshSectionLoadPlan
                             <ul>
                                 <li><code>MI_speedtree_trunk.json</code>：<code>renderMode=Opaque</code></li>
                                 <li><code>MI_speedtree_leaf.json</code>：<code>renderMode=OpaqueClip</code>，<code>cullMode=None</code></li>
-                                <li><code>u_pbrFactors.w</code> 继续作为 alpha clip threshold</li>
+                                <li><code>u_alphaClipThreshold</code> 作为独立 alpha clip threshold</li>
                             </ul>
                         </div>
                         <div>
@@ -688,7 +688,8 @@ struct MeshSectionLoadPlan
                             <p>新增 <code>foliage.vert</code>、<code>foliage.frag</code> 和 <code>foliageLighting.glsl</code>。SSS 第一版只做树叶薄表面透射，不做屏幕空间 blur。</p>
                             <pre><code>UBOMIParamters:
   vec4 u_tintColor;
-  vec4 u_pbrFactors;        // roughness, metallic, ao, alphaClip
+  vec4 u_pbrFactors;        // roughness, metallic, ao, reserved
+  float u_alphaClipThreshold;
   vec4 u_transmissionColor; // rgb color, a strength
   vec4 u_foliageFactors;    // wrap, backPower, normalBlend, shadowTransmission
   float u_emissiveStrength;</code></pre>

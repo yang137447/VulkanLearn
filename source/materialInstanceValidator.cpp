@@ -2,6 +2,7 @@
 
 #include <sstream>
 #include <stdexcept>
+#include <filesystem>
 #include "commonFunction.h"
 #include "material/materialAssetUtils.h"
 
@@ -91,192 +92,148 @@ namespace
         return NormalizeMaterialMacros(std::move(macros));
     }
 
-    // 先按 render mode 写入一套默认状态，再由 pass 级配置进行覆盖。
-    void ApplyRenderModeDefaults(RenderMode renderMode, GraphicsPipelineStateDesc& pipelineStateDesc)
+    GraphicsPipelineBlendMode ResolveRenderModeBlendMode(RenderMode renderMode)
     {
         switch (renderMode)
         {
         case RenderMode::Opaque:
         case RenderMode::OpaqueClip:
-            pipelineStateDesc.blendMode = GraphicsPipelineBlendMode::Opaque;
-            pipelineStateDesc.bDepthTestEnable = true;
-            pipelineStateDesc.bDepthWriteEnable = true;
-            break;
+            return GraphicsPipelineBlendMode::Opaque;
         case RenderMode::TransparentAlphaBlend:
-            pipelineStateDesc.blendMode = GraphicsPipelineBlendMode::AlphaBlend;
-            pipelineStateDesc.bDepthTestEnable = true;
-            pipelineStateDesc.bDepthWriteEnable = false;
-            break;
+            return GraphicsPipelineBlendMode::AlphaBlend;
         case RenderMode::TransparentAdditive:
-            pipelineStateDesc.blendMode = GraphicsPipelineBlendMode::Additive;
-            pipelineStateDesc.bDepthTestEnable = true;
-            pipelineStateDesc.bDepthWriteEnable = false;
-            break;
+            return GraphicsPipelineBlendMode::Additive;
         default:
-            throw std::runtime_error("Unsupported renderMode when applying pipeline defaults");
+            throw std::runtime_error("Unsupported renderMode when resolving blend mode");
         }
     }
 
     std::string BuildMaterialCacheKey(
-        std::string_view passName,
         const ShaderVariantKey& shaderVariantKey,
-        vk::SampleCountFlagBits sampleCount,
-        const GraphicsPipelineStateDesc& pipelineStateDesc,
-        bool bIsShadowPass)
+        const VL::MaterialFeatureKey& materialFeatureKey,
+        const PassPipelineContractKey& passPipelineContractKey,
+        vk::CullModeFlags cullMode,
+        GraphicsPipelineBlendMode blendMode)
     {
-        return std::string(passName) + "|" +
-            shaderVariantKey.GetNormalizedKey() + "|" +
-            "sampleCount=" + std::to_string(static_cast<uint32_t>(sampleCount)) + "|" +
-            "vertexInput=" + std::to_string(pipelineStateDesc.bUseVertexInput) + "|" +
-            "depthTest=" + std::to_string(pipelineStateDesc.bDepthTestEnable) + "|" +
-            "depthWrite=" + std::to_string(pipelineStateDesc.bDepthWriteEnable) + "|" +
-            "depthCompare=" + std::to_string(static_cast<uint32_t>(pipelineStateDesc.depthCompareOp)) + "|" +
-            "cullMode=" + std::to_string(static_cast<uint32_t>(pipelineStateDesc.cullMode)) + "|" +
-            "blendMode=" + std::to_string(static_cast<uint32_t>(pipelineStateDesc.blendMode)) + "|" +
-            "shadowPass=" + std::to_string(bIsShadowPass);
+        return shaderVariantKey.GetNormalizedKey() + "|" +
+            "features=" + materialFeatureKey.GetNormalizedKey() + "|" +
+            "pass=" + passPipelineContractKey.GetNormalizedKey() + "|" +
+            "cullMode=" + std::to_string(static_cast<uint32_t>(cullMode)) + "|" +
+            "blendMode=" + std::to_string(static_cast<uint32_t>(blendMode));
     }
 
-    std::string BuildMaterialInstanceCacheKey(std::string_view materialInstancePath, const std::string& materialKey)
+    std::string BuildMaterialInstanceCacheKey(std::string_view materialInstancePath)
     {
-        return std::string(materialInstancePath) + "|" + materialKey;
+        return MaterialAssetUtils::NormalizeAssetPath(materialInstancePath);
     }
 
-    // 只要求材质实例提供 shader 声明过的纹理名；纹理类型正确性由资源加载阶段保证。
-    void ValidateTextures(
-        std::string_view materialInstancePath,
-        const nlohmann::json& shaderTextures,
-        const std::vector<ShaderBinding>& shaderBindings)
+    std::string BuildParameterIncludePath(
+        std::string_view materialPath,
+        const nlohmann::json& materialJson)
     {
-        std::vector<std::string> expectedTextureNames;
-        for (const auto& binding : shaderBindings)
+        const std::filesystem::path normalizedPath =
+            std::filesystem::path(materialPath).lexically_normal();
+        std::filesystem::path relativeToGlsl;
+        bool foundGlsl = false;
+        for (const std::filesystem::path& part : normalizedPath)
         {
-            if (binding.set == MaterialSetIndex && binding.type == vk::DescriptorType::eCombinedImageSampler)
+            if (foundGlsl)
             {
-                expectedTextureNames.push_back(binding.name);
+                relativeToGlsl /= part;
+            }
+            else if (part == "glsl")
+            {
+                foundGlsl = true;
             }
         }
-
-        bool texturesMatch = shaderTextures.is_object();
-        if (texturesMatch)
+        if (!foundGlsl)
         {
-            for (const auto& textureName : expectedTextureNames)
-            {
-                if (!shaderTextures.contains(textureName))
-                {
-                    texturesMatch = false;
-                    break;
-                }
-            }
+            throw std::runtime_error(
+                "Material definition must be under shader/glsl: " + std::string(materialPath));
         }
 
-        if (!texturesMatch)
-        {
-            throw std::runtime_error(std::string("Missing required material textures in material instance: ") + materialInstancePath.data());
-        }
+        return (relativeToGlsl.parent_path() / "generate" /
+            (materialJson.at("name").get<std::string>() + "Paramter.glsl")).generic_string();
     }
 
-    // 当前仍按 MaterialSet binding 0 的 UBO 布局校验参数名与大小。
-    void ValidateParameters(
-        std::string_view materialInstancePath,
-        const nlohmann::json& shaderParameters,
-        const std::vector<ShaderBinding>& shaderBindings)
+    VL::MaterialFeatureKey BuildMaterialFeatureKey(
+        RenderMode renderMode,
+        vk::CullModeFlags cullMode,
+        const nlohmann::json& materialJson)
     {
-        const uint32_t parameterCount = shaderParameters.size();
-        bool validParameters = false;
-        bool hasMaterialUbo = false;
-        for (const auto& binding : shaderBindings)
-        {
-            if (binding.set != MaterialSetIndex || binding.binding != 0)
-            {
-                continue;
-            }
-            if (binding.type != vk::DescriptorType::eUniformBuffer)
-            {
-                continue;
-            }
-
-            hasMaterialUbo = true;
-            if (binding.memberCount != parameterCount)
-            {
-                break;
-            }
-
-            bool allMatch = true;
-            for (uint32_t i = 0; i < binding.memberNames.size(); ++i)
-            {
-                const std::string& memberName = binding.memberNames[i];
-                if (!shaderParameters.contains(memberName))
-                {
-                    allMatch = false;
-                    break;
-                }
-
-                const auto& paramValue = shaderParameters[memberName];
-                const size_t paramSize = JsonParser::ParseValueSize(paramValue);
-                if (i >= binding.members.size() || paramSize != binding.members[i])
-                {
-                    allMatch = false;
-                    break;
-                }
-            }
-
-            if (allMatch)
-            {
-                validParameters = true;
-                break;
-            }
-        }
-
-        if (!validParameters && !(parameterCount == 0 && !hasMaterialUbo))
-        {
-            throw std::runtime_error(std::string("Parameter types or sizes mismatch in material instance: ") + materialInstancePath.data());
-        }
+        VL::MaterialFeatureKey features;
+        features.writesEveryPixel = renderMode == RenderMode::Opaque;
+        features.usesOpacityMask = renderMode == RenderMode::OpaqueClip;
+        features.twoSided = cullMode == vk::CullModeFlagBits::eNone;
+        features.modifiesMeshPosition = materialJson.value(
+            "features",
+            nlohmann::json::object()).value("modifiesMeshPosition", false);
+        return features;
     }
 }
 
 MaterialInstanceBuildPlan MaterialInstanceValidator::BuildLoadPlan(
     std::string_view materialInstancePath,
-    std::string_view passName,
-    vk::SampleCountFlagBits sampleCount,
-    const GraphicsPipelineStateDesc& passPipelineStateDesc,
-    bool bIsShadowPass,
-    const nlohmann::json& materialInstanceJson)
+    const PassPipelineContractKey& passPipelineContractKey,
+    const nlohmann::json& materialInstanceJson,
+    std::string_view materialPath,
+    const nlohmann::json& materialJson)
 {
     MaterialInstanceBuildPlan loadPlan;
-    loadPlan.shaderName = materialInstanceJson.at("shaderName").get<std::string>();
-    loadPlan.shaderVariantKey.shaderName = loadPlan.shaderName;
+    loadPlan.shaderVariantKey.shaderName =
+        materialInstanceJson.at("shaderName").get<std::string>();
     loadPlan.shaderVariantKey.renderMode = ParseRenderMode(materialInstanceJson);
     loadPlan.shaderVariantKey.shadingModelMacro =
         MaterialAssetUtils::ShadingModelToShaderDefine(materialInstanceJson.at("shadingModel").get<std::string>());
     loadPlan.shaderVariantKey.macros = ParseMaterialMacros(materialInstanceJson);
 
-    ApplyRenderModeDefaults(loadPlan.shaderVariantKey.renderMode, loadPlan.pipelineStateDesc);
-    loadPlan.pipelineStateDesc.bUseVertexInput = passPipelineStateDesc.bUseVertexInput;
-    loadPlan.pipelineStateDesc.bDepthTestEnable = passPipelineStateDesc.bDepthTestEnable;
-    loadPlan.pipelineStateDesc.bDepthWriteEnable = passPipelineStateDesc.bDepthWriteEnable;
-    loadPlan.pipelineStateDesc.depthCompareOp = passPipelineStateDesc.depthCompareOp;
-    loadPlan.pipelineStateDesc.cullMode = ParseCullMode(materialInstanceJson);
+    loadPlan.blendMode = ResolveRenderModeBlendMode(loadPlan.shaderVariantKey.renderMode);
+    loadPlan.cullMode = ParseCullMode(materialInstanceJson);
+    loadPlan.materialFeatureKey = BuildMaterialFeatureKey(
+        loadPlan.shaderVariantKey.renderMode,
+        loadPlan.cullMode,
+        materialJson);
+    loadPlan.materialDescriptorSchema =
+        VL::MaterialDescriptorSchema::Build(materialJson, materialPath);
 
-    loadPlan.bIsShadowPass = bIsShadowPass;
+    if (materialJson.contains("shaderEvaluation"))
+    {
+        VL::MaterialShaderCompileRequest request;
+        request.shaderVariantKey = loadPlan.shaderVariantKey;
+        request.pass = VL::MaterialPass::Base;
+        request.features = loadPlan.materialFeatureKey;
+        request.source.materialSourcePath = MaterialAssetUtils::NormalizeAssetPath(materialPath);
+        request.source.vertexEvaluationPath =
+            materialJson.at("shaderEvaluation").at("vertex").get<std::string>();
+        request.source.surfaceEvaluationPath =
+            materialJson.at("shaderEvaluation").at("surface").get<std::string>();
+        request.source.parameterIncludePath =
+            BuildParameterIncludePath(materialPath, materialJson);
+        loadPlan.baseShaderCompileRequest = std::move(request);
+    }
+
     loadPlan.materialKey = BuildMaterialCacheKey(
-        passName,
         loadPlan.shaderVariantKey,
-        sampleCount,
-        loadPlan.pipelineStateDesc,
-        loadPlan.bIsShadowPass);
-    loadPlan.materialInstanceKey = BuildMaterialInstanceCacheKey(materialInstancePath, loadPlan.materialKey);
+        loadPlan.materialFeatureKey,
+        passPipelineContractKey,
+        loadPlan.cullMode,
+        loadPlan.blendMode);
+    loadPlan.materialInstanceKey = BuildMaterialInstanceCacheKey(materialInstancePath);
     return loadPlan;
 }
 
 void MaterialInstanceValidator::Validate(
     std::string_view materialInstancePath,
     const nlohmann::json& materialInstanceJson,
-    const std::vector<ShaderBinding>& shaderBindings)
+    const VL::MaterialDescriptorSchema& descriptorSchema,
+    const std::vector<ShaderBinding>& activeShaderBindings)
 {
     const auto& shaderTextures = materialInstanceJson.contains("textures")
         ? materialInstanceJson["textures"]
         : nlohmann::json::object();
-    const auto& shaderParameters = materialInstanceJson["parameters"];
-    ValidateTextures(materialInstancePath, shaderTextures, shaderBindings);
-    ValidateParameters(materialInstancePath, shaderParameters, shaderBindings);
+    descriptorSchema.ValidateInstanceValues(
+        materialInstanceJson.at("parameters"),
+        shaderTextures,
+        activeShaderBindings,
+        materialInstancePath);
 }

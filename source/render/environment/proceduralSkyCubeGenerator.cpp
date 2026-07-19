@@ -137,6 +137,8 @@ void ProceduralSkyCubeGenerator::Record(vk::CommandBuffer commandBuffer, uint32_
 
 void ProceduralSkyCubeGenerator::CreateSkyCubeResources(RendererBackendVulkan& rendererBackend)
 {
+    skyCube.layout = vk::ImageLayout::eUndefined;
+
     vk::ImageCreateInfo imageInfo;
     imageInfo
         .setFlags(vk::ImageCreateFlagBits::eCubeCompatible)
@@ -193,6 +195,7 @@ void ProceduralSkyCubeGenerator::DestroySkyCubeResources(RendererBackendVulkan& 
 {
     rendererBackend.DestroyImageView(skyCube.storageView);
     skyCube.texture.reset();
+    skyCube.layout = vk::ImageLayout::eUndefined;
 }
 
 void ProceduralSkyCubeGenerator::CreateDescriptorResources(

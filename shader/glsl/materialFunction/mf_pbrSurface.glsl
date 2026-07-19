@@ -8,7 +8,8 @@
 #define MATERIAL_SHADING_MODEL SHADING_MODEL_DEFAULT_LIT
 #endif
 
-MaterialSurface EvaluatePbrSurface(in MaterialPixelContext pixel)
+// PBR 唯一片元材質入口。它只描述 Surface 語義，Alpha Clip 和輸出由 Pass 模板處理。
+MaterialSurface EvaluateMaterialSurface(in MaterialPixelContext pixel)
 {
     MaterialSurface surface = CreateDefaultMaterialSurface();
     surface.worldPosition = pixel.worldPosition;
@@ -25,15 +26,7 @@ MaterialSurface EvaluatePbrSurface(in MaterialPixelContext pixel)
     surface.baseColor = baseColor.rgb;
     surface.opacity = baseColor.a;
 
-    #if defined(RENDER_MODE_OPAQUE_CLIP)
-    // u_pbrFactors.w 预留作为 alphaClipThreshold 使用。
-    if (surface.opacity < u_pbrFactors.w)
-    {
-        discard;
-    }
-    #endif
-
-    // u_pbrFactors: x=roughness, y=metallic, z=ao, w=预留。
+    // u_pbrFactors: x=roughness, y=metallic, z=ao, w=reserved.
     // 粗糙度、金属度、AO 确保在上游 Material Instance 配置正确，此处直接使用。
     #if USE_PBR_MAP
         vec4 pbrParam = texture(pbrParamMap, pixel.texCoord);

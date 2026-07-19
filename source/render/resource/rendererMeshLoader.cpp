@@ -64,7 +64,7 @@ std::vector<MeshObjectBuildPlan> RendererMeshLoader::LoadMeshObject(
     const ModelResource& modelResource = importResult.modelResource;
     const std::vector<MeshSectionLoadPlan>& sectionPlans = importResult.sectionPlans;
 
-    const RenderGraph& renderGraph = RenderGraph::GetInstance();
+    RenderGraph& renderGraph = RenderGraph::GetInstance();
     RendererResourceCache& resourceCache = RendererResourceCache::GetInstance();
     RendererMaterialLoader materialLoader(pipelineFactory, rendererBackend);
 
@@ -72,7 +72,7 @@ std::vector<MeshObjectBuildPlan> RendererMeshLoader::LoadMeshObject(
     Eigen::Vector3f rotation = JsonParser::ParseValue<Eigen::Vector3f>(node["rotation"]);
     Eigen::Vector3f scale = JsonParser::ParseValue<Eigen::Vector3f>(node["scale"]);
     const std::string meshObjectBaseName = node["name"];
-    const auto& geometryPass = renderGraph.GetRenderpasses().at("geometry");
+    Renderpass& geometryPass = renderGraph.GetRenderpasses().at("geometry");
     std::vector<MeshObjectBuildPlan> meshObjectPlans;
     meshObjectPlans.reserve(modelResource.sections.size());
     std::unordered_set<std::string> usedObjectNames;
@@ -102,7 +102,7 @@ std::vector<MeshObjectBuildPlan> RendererMeshLoader::LoadMeshObject(
         }
 
         std::shared_ptr<MaterialInstance> materialInstance =
-            materialLoader.LoadMaterialInstance(sectionPlan.materialInstancePath, geometryPass.sampleCount);
+            materialLoader.LoadMaterialInstance(sectionPlan.materialInstancePath, geometryPass);
 
         std::string meshObjectName = meshObjectBaseName;
         if (modelResource.sections.size() > 1)

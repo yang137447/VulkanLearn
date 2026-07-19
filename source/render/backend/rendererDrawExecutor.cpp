@@ -90,17 +90,58 @@ bool RendererDrawExecutor::PipelineUsesDescriptorSet(
 }
 
 void RendererDrawExecutor::DrawShadowScene(
-    const PipelineBase& shadowPipeline,
+    const PipelineBase& commonOpaquePipeline,
     RendererDrawContext& context) const
 {
     const Renderpass& renderPass = context.renderPass;
     vk::CommandBuffer& commandBuffer = context.commandBuffer;
+    vk::Pipeline boundPipeline;
 
     for (const ResolvedMaterialGroup& materialGroup : context.resolvedRenderScene.materialGroups)
     {
+        // ResolvedScene 已经完成最终路由：None 跳过，CommonOpaque 使用 pass 公共管线，
+        // MaterialPass 使用 Material 持有的专用管线。
+        if (materialGroup.shadowCaster.kind == MaterialShadowCasterKind::None)
+        {
+            continue;
+        }
+
+        const PipelineBase* shadowPipeline = &commonOpaquePipeline;
+        if (materialGroup.shadowCaster.kind == MaterialShadowCasterKind::MaterialPass)
+        {
+            const std::shared_ptr<PipelineBase>& materialShadowPipeline =
+                materialGroup.material->GetShadowPipeline();
+            if (!materialShadowPipeline)
+            {
+                throw std::runtime_error(
+                    "Resolved material group selected MaterialPass ShadowCaster without a pipeline: " +
+                    materialGroup.material->GetMaterialKey());
+            }
+            shadowPipeline = materialShadowPipeline.get();
+        }
+
+        const std::string pipelineRegionName =
+            "Shadow Pipeline: " + materialGroup.material->GetMaterialKey();
+        VulkanDebug::ScopedRegion pipelineRegion(
+            commandBuffer,
+            pipelineRegionName,
+            VulkanDebug::DebugCategory::ePipeline);
+        if (boundPipeline != shadowPipeline->GetPipeline())
+        {
+            commandBuffer.bindPipeline(shadowPipeline->GetBindPoint(), shadowPipeline->GetPipeline());
+            boundPipeline = shadowPipeline->GetPipeline();
+        }
+
+        const bool usesMaterialShadowPass =
+            materialGroup.shadowCaster.kind == MaterialShadowCasterKind::MaterialPass;
         for (const ResolvedMaterialInstanceGroup& materialInstanceGroup : materialGroup.materialInstances)
         {
-            context.services.UpdateMaterialInstanceUBOForPass(materialInstanceGroup.materialInstance);
+            // 只有专用 Shadow shader 会读取材质参数；公共 Opaque 路径没有 Set 1，
+            // 因而无需更新 MaterialInstance UBO。
+            if (usesMaterialShadowPass)
+            {
+                context.services.UpdateMaterialInstanceUBOForPass(materialInstanceGroup.materialInstance);
+            }
 
             for (const ResolvedDrawPacket& draw : materialInstanceGroup.draws)
             {
@@ -113,20 +154,36 @@ void RendererDrawExecutor::DrawShadowScene(
                     drawPacket.debugName,
                     VulkanDebug::DebugCategory::eObject);
 
-                const auto& descriptorSets =
-                    objectResources.shadowDescriptorSets[context.swapChainImageIndex];
-                commandBuffer.bindDescriptorSets(
-                    vk::PipelineBindPoint::eGraphics,
-                    shadowPipeline.GetPipelineLayout(),
-                    GlobalSetIndex,
-                    renderPass.GetDescriptorSets()[context.swapChainImageIndex][GlobalSetIndex],
-                    nullptr);
-                commandBuffer.bindDescriptorSets(
-                    vk::PipelineBindPoint::eGraphics,
-                    shadowPipeline.GetPipelineLayout(),
-                    ObjectSetIndex,
-                    descriptorSets[ObjectSetIndex],
-                    nullptr);
+                if (usesMaterialShadowPass)
+                {
+                    // 专用 Shadow pipeline 的 layout 与 Surface Set 0~2 完全一致，
+                    // 从 Set 0 起一次绑定对象已有的 Global/Material/Object sets。
+                    commandBuffer.bindDescriptorSets(
+                        vk::PipelineBindPoint::eGraphics,
+                        shadowPipeline->GetPipelineLayout(),
+                        GlobalSetIndex,
+                        objectResources.descriptorSets[context.swapChainImageIndex],
+                        nullptr);
+                }
+                else
+                {
+                    // 公共 Opaque pipeline 只使用 Shadow pass 的 Global set 和对象的
+                    // 精简 Object set，不绑定 Surface Material set。
+                    const auto& descriptorSets =
+                        objectResources.shadowDescriptorSets[context.swapChainImageIndex];
+                    commandBuffer.bindDescriptorSets(
+                        vk::PipelineBindPoint::eGraphics,
+                        shadowPipeline->GetPipelineLayout(),
+                        GlobalSetIndex,
+                        renderPass.GetDescriptorSets()[context.swapChainImageIndex][GlobalSetIndex],
+                        nullptr);
+                    commandBuffer.bindDescriptorSets(
+                        vk::PipelineBindPoint::eGraphics,
+                        shadowPipeline->GetPipelineLayout(),
+                        ObjectSetIndex,
+                        descriptorSets[ObjectSetIndex],
+                        nullptr);
+                }
 
                 context.services.UpdateObjectUBOForPass(objectResources, drawPacket);
                 drawResources.renderableObject->Draw(commandBuffer, renderPass.width, renderPass.height);

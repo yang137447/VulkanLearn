@@ -5,27 +5,82 @@
 #include "graphicsPipelineBuilder.h"
 #include "pipelineLayoutBuilder.h"
 #include "../profiler.h"
-#include "shaderReflectionService.h"
 #include "vulkanPipelineDiagnostics.h"
 #include "../vulkanDebug.h"
-#include "../shaderCompiler.h"
+#include <algorithm>
 
-GraphicsPipeline::GraphicsPipeline(vk::Device *device, vk::RenderPass* renderPass, const ShaderVariantKey& shaderVariantKey, vk::SampleCountFlagBits sampleCount, uint32_t colorAttachmentCount, const GraphicsPipelineStateDesc& pipelineStateDesc, bool bIsShadowPass)
+namespace
+{
+
+bool ComparePipelineLayoutBindings(
+    const ShaderBinding& lhs,
+    const ShaderBinding& rhs)
+{
+    if (lhs.set != rhs.set)
+    {
+        return lhs.set < rhs.set;
+    }
+    return lhs.binding < rhs.binding;
+}
+
+std::vector<ShaderBinding> BuildPipelineLayoutBindings(
+    const std::vector<ShaderBinding>& shaderBindings,
+    const GraphicsPipelineLayoutDesc& layoutDesc)
+{
+    std::vector<ShaderBinding> bindings;
+    for (const ShaderBinding& binding : shaderBindings)
+    {
+        if (!layoutDesc.HasSetOverride(binding.set))
+        {
+            bindings.push_back(binding);
+        }
+    }
+
+    for (uint32_t setIndex = 0; setIndex < MAX_DESCRIPTOR_SETS; ++setIndex)
+    {
+        if (!layoutDesc.HasSetOverride(setIndex))
+        {
+            continue;
+        }
+        bindings.insert(
+            bindings.end(),
+            layoutDesc.setBindings[setIndex].begin(),
+            layoutDesc.setBindings[setIndex].end());
+    }
+
+    std::sort(bindings.begin(), bindings.end(), ComparePipelineLayoutBindings);
+    return bindings;
+}
+
+} // namespace
+
+GraphicsPipeline::GraphicsPipeline(
+    vk::Device *device,
+    vk::RenderPass* renderPass,
+    const GraphicsShaderVariantArtifact& shaderArtifact,
+    vk::SampleCountFlagBits sampleCount,
+    uint32_t colorAttachmentCount,
+    const GraphicsPipelineStateDesc& pipelineStateDesc,
+    bool bIsShadowPass,
+    const GraphicsPipelineLayoutDesc& pipelineLayoutDesc)
 {
     PROFILE_FUNCTION();
     this->device = device;
-    this->renderPass = renderPass;
-    this->shaderVariantKey = shaderVariantKey;
-    this->sampleCount = sampleCount;
-    this->colorAttachmentCount = colorAttachmentCount;
-    this->pipelineStateDesc = pipelineStateDesc;
-    this->bIsShadowPass = bIsShadowPass;
+    this->shaderDisplayName = shaderArtifact.displayName;
+    this->vertexSpvPath = shaderArtifact.vertexSpvPath;
+    this->fragmentSpvPath = shaderArtifact.fragmentSpvPath;
+    this->shaderBindings = shaderArtifact.shaderBindings;
 
     CreateShader();
-    CreateDescriptorSetLayouts();
+    CreateDescriptorSetLayouts(pipelineLayoutDesc);
     CreatePipelineLayout();
     initVertexAttribute();
-    CreateGraphicsPipeline();
+    CreateGraphicsPipeline(
+        *renderPass,
+        sampleCount,
+        colorAttachmentCount,
+        pipelineStateDesc,
+        bIsShadowPass);
 }
 
 GraphicsPipeline::~GraphicsPipeline()
@@ -36,9 +91,18 @@ GraphicsPipeline::~GraphicsPipeline()
     DestroyPipelineLayout();
 }
 
-void GraphicsPipeline::CreateDescriptorSetLayouts()
+void GraphicsPipeline::CreateDescriptorSetLayouts(
+    const GraphicsPipelineLayoutDesc& pipelineLayoutDesc)
 {
-    descriptorSetLayouts = PipelineLayoutBuilder::CreateDescriptorSetLayouts(*device, shaderBindings, shaderVariantKey.GetDisplayName());
+    // Material ShadowCaster shaders may read only a subset of Surface resources,
+    // while binding descriptor sets allocated from the full Surface contract.
+    // Keep shaderBindings as reflection truth and apply overrides only to layout creation.
+    descriptorLayoutBindings =
+        BuildPipelineLayoutBindings(shaderBindings, pipelineLayoutDesc);
+    descriptorSetLayouts = PipelineLayoutBuilder::CreateDescriptorSetLayouts(
+        *device,
+        descriptorLayoutBindings,
+        shaderDisplayName);
 }
 
 void GraphicsPipeline::DestroyDescriptorSetLayouts()
@@ -48,7 +112,7 @@ void GraphicsPipeline::DestroyDescriptorSetLayouts()
 
 void GraphicsPipeline::CreatePipelineLayout()
 {
-    pipelineLayout = PipelineLayoutBuilder::CreatePipelineLayout(*device, descriptorSetLayouts, shaderVariantKey.GetDisplayName());
+    pipelineLayout = PipelineLayoutBuilder::CreatePipelineLayout(*device, descriptorSetLayouts, shaderDisplayName);
 }
 
 void GraphicsPipeline::DestroyPipelineLayout()
@@ -58,12 +122,8 @@ void GraphicsPipeline::DestroyPipelineLayout()
 
 void GraphicsPipeline::CreateShader()
 {
-    ShaderCompiler::EnsureGraphicsVariantCompiled(shaderVariantKey);
-    const std::string vertexShaderPath = CommonFunction::Path(shaderVariantKey.GetStageSpvRelativePath("vert"));
-    const std::string fragmentShaderPath = CommonFunction::Path(shaderVariantKey.GetStageSpvRelativePath("frag"));
-
-    std::string vertexShaderCode = CommonFunction::ReadFile(vertexShaderPath);
-    std::string fragmentShaderCode = CommonFunction::ReadFile(fragmentShaderPath);
+    std::string vertexShaderCode = CommonFunction::ReadFile(vertexSpvPath);
+    std::string fragmentShaderCode = CommonFunction::ReadFile(fragmentSpvPath);
 
     vk::ShaderModule vertexShaderModule;
     vk::ShaderModuleCreateInfo vertexShaderModuleCreateInfo;
@@ -74,9 +134,9 @@ void GraphicsPipeline::CreateShader()
     VL::RequireVulkanPipelineSuccess(
         result,
         "Create vertex shader module",
-        shaderVariantKey.GetDisplayName(),
+        shaderDisplayName,
         "graphics pipeline");
-    VulkanDebug::SetObjectName(*device, vertexShaderModule, vk::ObjectType::eShaderModule, "ShaderModule_Vert: " + shaderVariantKey.GetDisplayName());
+    VulkanDebug::SetObjectName(*device, vertexShaderModule, vk::ObjectType::eShaderModule, "ShaderModule_Vert: " + shaderDisplayName);
 
     vk::ShaderModule fragmentShaderModule;
     vk::ShaderModuleCreateInfo fragmentShaderModuleCreateInfo;
@@ -87,9 +147,9 @@ void GraphicsPipeline::CreateShader()
     VL::RequireVulkanPipelineSuccess(
         result,
         "Create fragment shader module",
-        shaderVariantKey.GetDisplayName(),
+        shaderDisplayName,
         "graphics pipeline");
-    VulkanDebug::SetObjectName(*device, fragmentShaderModule, vk::ObjectType::eShaderModule, "ShaderModule_Frag: " + shaderVariantKey.GetDisplayName());
+    VulkanDebug::SetObjectName(*device, fragmentShaderModule, vk::ObjectType::eShaderModule, "ShaderModule_Frag: " + shaderDisplayName);
     shaderStages.resize(2);
     shaderStages[0]
         .setStage(vk::ShaderStageFlagBits::eVertex)
@@ -102,7 +162,6 @@ void GraphicsPipeline::CreateShader()
         .setPName("main")
         .setPSpecializationInfo(nullptr);
 
-    this->shaderBindings = ShaderReflectionService::ReflectGraphicsFromDebugSpirv(shaderVariantKey);
 }
 
 void GraphicsPipeline::DestroyShader()
@@ -119,16 +178,21 @@ void GraphicsPipeline::initVertexAttribute()
     vertexInputAttributeDescriptions = VertexInfo::vertexInputAttributeDescriptions;
 }
 
-void GraphicsPipeline::CreateGraphicsPipeline()
+void GraphicsPipeline::CreateGraphicsPipeline(
+    vk::RenderPass& renderPass,
+    vk::SampleCountFlagBits sampleCount,
+    uint32_t colorAttachmentCount,
+    const GraphicsPipelineStateDesc& pipelineStateDesc,
+    bool bIsShadowPass)
 {
     GraphicsPipelineBuildDesc buildDesc{
         *device,
-        *renderPass,
+        renderPass,
         pipelineLayout,
         shaderStages,
         vertexInputBindingDescription,
         vertexInputAttributeDescriptions,
-        shaderVariantKey.GetDisplayName(),
+        shaderDisplayName,
         sampleCount,
         colorAttachmentCount,
         pipelineStateDesc,

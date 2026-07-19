@@ -5,29 +5,50 @@
 本文档定义一套精简的材质参数工作流，同时满足两类需求：
 
 - 让 shader 编写阶段有稳定的参数声明，不因为未手写 `set = 1` 资源而报错
-- 让运行时继续以 shader 反射结果为准，避免 descriptor 绑定错误
+- 让 M_ schema 为跨 Pass 的 Set 1 layout 提供稳定合同
+- 让 shader 反射验证每个 Pass 的实际使用子集
 
-这套方案不引入新的 shader 语言，也不把 `param json` 作为运行时真相源。
+这套方案不引入新的 shader 语言。M_ 参数与贴图 schema 是 Set 1 layout 真相源，
+SPIR-V reflection 是单个 Pass 实际资源使用情况的真相源。
 
 ## 核心定位
 
-三类数据的职责边界如下：
+四类数据的职责边界如下：
 
-- `param json`
-  - 仅服务于 shader 编写体验
-  - 描述参数名、贴图名、默认值和生成顺序
-  - 生成给 GLSL 使用的参数声明文件
+- `M_*.json`
+  - 描述参数名、类型、贴图和默认值
+  - 生成 GLSL include 与完整 `MaterialDescriptorSchema`
+  - 决定 Set 1 binding、UBO std140 offset 和 layout stage visibility
 - `MaterialInstance`
   - 仅保存实例值
   - 不定义 shader 接口
 - shader reflection
-  - 作为运行时真实使用资源的依据
-  - 决定 descriptor layout、descriptor write 和校验行为
+  - 描述一个 Base/ShadowDepth Pass 实际使用的资源子集
+  - 必须通过 `MaterialDescriptorSchema` 子集校验
+- `Material`
+  - 持有完整 Set 1 Schema
+  - 汇总 Base 与 ShadowDepth 的 active binding，驱动 descriptor write
 
 核心原则：
 
-- 编写期便利性来自 `param json`
-- 运行时安全性来自反射
+- 编写期声明与运行时 layout 来自同一个 M_ schema
+- reflection 不再生成 Set 1 完整 layout，只负责实际使用与一致性校验
+
+## MaterialInstance 运行时身份
+
+同一个 MI asset 在一次 world resource generation 内只对应一个运行时
+`MaterialInstance`。Cache key 使用规范化后的 MI asset path，不包含：
+
+- pass name
+- render-pass identity
+- pipeline state
+- pipeline cache key
+
+多个兼容 pass 引用同一个 MI asset 时，共享参数、纹理、材质 UBO 和 runtime instance。
+Material/pipeline 使用独立的 render-pass compatibility key；当前单一 `baseMaterial` 模型要求
+同一 MI 的所有 pass 引用具备兼容 pipeline contract。不兼容复用在加载阶段报错，不能通过
+复制 MaterialInstance 隐式解决。完整的不兼容 multi-pass variant 由后续 Material Multi-Pass
+设计处理。
 
 ## Set 约定
 
@@ -41,22 +62,57 @@
 其中 `set 1` 约定为材质专用槽位：
 
 - `binding 0`: 材质参数 UBO
-- `binding 1..N`: 材质贴图，按 `param json` 中声明顺序生成
+- `binding 1..N`: 材质贴图，按 M_ schema 稳定顺序生成
 
-这个顺序只用于生成声明，运行时仍以反射出的实际资源为准。
+完整 Set 1 layout、UBO 大小和 member offset 都由 `MaterialDescriptorSchema` 生成。
+第一版所有 Set 1 binding 的 stage visibility 固定为 Vertex + Fragment。
+
+## Material ShadowCaster 约定
+
+当前轻量 ShadowCaster 不引入第二份 MI 或参数表。带 `shaderEvaluation` 的 M_ 材质
+会从相同的顶点和 Surface Evaluation 自动组合 ShadowDepth；Surface shader `xxx`
+仍可通过以下完整文件对提供最高优先级 override：
+
+```text
+shader/glsl/xxx.shadow.vert
+shader/glsl/xxx.shadow.frag
+```
+
+文件对从现有 `shaderName` 自动推导，不需要在 `M_*.json` 或 `MI_*.json` 中增加
+`shadowMode`/`shadowShader` 字段。两个文件都不存在表示没有专用实现；只存在一个 stage
+会输出资产警告并继续自动路由。完整配对的编译失败或反射合同不兼容仍会终止加载。
+
+专用 Shadow variant 继承 Base variant 的 `renderMode`、ShadingModel 和材质宏，因此
+Alpha Clip、Wind/WPO 等静态分支与当前 MI 保持一致。运行时 `Material` 持有 Base pipeline
+和可选 Shadow pipeline，`MaterialInstance` 仍只持有一份参数与纹理值。
+
+专用 Shadow pipeline 直接绑定对象已经创建的 Base Set 0..2。为保证 descriptor set
+兼容，Set 0/2 继承 Base engine reflection 合同，Set 1 始终使用完整 M_ schema；Shadow
+SPIR-V 的 Set 1 binding 必须是 schema 子集，并逐项校验：
+
+- set/binding 与 descriptor type
+- binding 名称
+- shader stage visibility 必须是 schema visibility 的子集
+- UBO block size、member size、member offset 与 member name
+
+第一版禁止专用 Shadow shader 使用 Set 3 或更高 set。Set 1 schema 已包含 Vertex +
+Fragment visibility，因此 WPO/Wind 不再依赖 Base reflection 恰好保留 Vertex visibility。
+
+没有 override 时，Opacity Mask、WPO 或 Two-Sided 材质自动生成 ShadowDepth；普通
+`Opaque` 使用公共 Opaque ShadowCaster；透明材质不进入普通 Shadow Map。
 
 ## 生成文件位置
 
-生成文件使用“同目录 `generated/` 子目录”方案。
+生成文件使用“同目录 `generate/` 子目录”方案。
 
 推荐目录示例：
 
 - `shader/glsl/unlit.vert`
 - `shader/glsl/unlit.frag`
-- `shader/glsl/generated/unlit.param`
+- `shader/glsl/generate/M_unlitParamter.glsl`
 - `shader/glsl/pass/sky.vert`
 - `shader/glsl/pass/sky.frag`
-- `shader/glsl/pass/generated/sky.param`
+- `shader/glsl/pass/generate/M_skyParamter.glsl`
 
 推荐原因：
 
@@ -68,25 +124,25 @@
 
 - `build/`
 - `shader/spv/`
-- 全局统一的 `shader/glsl/generated/...` 根目录
+- 全局统一的 `shader/glsl/generate/...` 根目录
 
 ## 工作流
 
 推荐工作流如下：
 
-1. 编写 `shader/meta/<shaderName>.param.json`
-2. 工具生成与 shader 同目录对应的 `generated/<shaderName>.param`
-3. `vert` 或 `frag` 按需 `#include` 该生成文件
-4. 现有编译链继续执行 `glsl -> spv`
-5. 运行时通过 SPIR-V 反射获取真实的 `set / binding / type / stage`
-6. 材质实例仅按参数名和贴图名提供值
-7. 反射结果与实例值做匹配和绑定
+1. 编写 `M_*.json` 的 parameters、textures 与静态 features
+2. 工具生成同目录 `generate/M_*Paramter.glsl`
+3. Schema Builder 从同一个 M_ 生成完整 Set 1 layout
+4. Standalone shader 或 Material Composer include 生成文件
+5. 现有编译链继续执行 `glsl -> spv`
+6. SPIR-V reflection 校验为 schema 子集
+7. MI 提供实例值；descriptor write 使用已选择 Pass 的 reflection 并集
 
 ## 生成文件格式
 
 推荐每个 shader 生成一份参数声明文件，例如：
 
-`shader/glsl/generated/unlit.param`
+`shader/glsl/generate/M_unlitParamter.glsl`
 
 示例：
 
@@ -104,7 +160,7 @@ layout(set = 1, binding = 2) uniform sampler2D normalMap;
 shader 中按需引用：
 
 ```glsl
-#include "generated/unlit.param"
+#include "generate/M_unlitParamter.glsl"
 ```
 
 注意：
@@ -113,44 +169,48 @@ shader 中按需引用：
 - 哪个阶段用到材质资源，哪个阶段就应 `include`
 - 如果两个阶段都声明同一资源，则声明必须保持一致
 
-## Param Json 的作用范围
+## M_ Schema 的作用范围
 
-`param json` 只负责以下内容：
+M_ schema 负责以下内容：
 
 - 参数名
 - 参数类型
 - 贴图名
 - 贴图类型
 - 默认值
-- 生成顺序
+- 稳定生成顺序
+- Set 1 descriptor layout
+- UBO std140 member offset 与 block size
 
-`param json` 不负责以下内容：
+M_ schema 不负责以下内容：
 
-- 决定运行时最终哪些 binding 必须创建
-- 替代反射生成 descriptor set layout
-- 作为运行时资源使用真相源
+- 猜测某个 Pass 实际执行了哪些材质逻辑
+- 强迫 MI 提供未被任何选中 Pass 使用的可选贴图
+- 替代 reflection 检查最终 SPIR-V
 
-原因是未被 shader 实际使用的资源，可能在编译优化后被移除。运行时如果仍强行按 `param json` 绑定，反而更容易出错。
+声明但未使用的资源可能在编译优化后被移除，因此 layout 使用完整 schema，实际
+descriptor write 使用 Base 与 ShadowDepth reflection 并集。
 
 ## 反射的职责
 
-反射仍然是这套方案的核心安全机制：
+反射仍然是这套方案的核心安全机制，但不再拥有完整 Set 1 layout：
 
 - 确认 shader 实际使用了哪些材质资源
 - 确认真实的 `set / binding / descriptor type / stage`
-- 避免 `param json` 与最终 SPIR-V 不一致时发生错误绑定
+- 验证最终 SPIR-V 的每个 Set 1 binding 都属于 M_ schema
 
 推荐规则如下：
 
-- `param json` 负责生成声明
-- 反射负责运行时绑定
+- M_ schema 负责生成声明和完整 layout
+- reflection 负责子集校验和 active descriptor write
 - 两者之间允许存在“声明了但未使用”的情况
 
 ## 功能模块
 
 对于闪点、边缘光、溶解、流光这类“美术功能”，推荐把它们视为材质功能模块，而不是零散参数。
 
-模块只影响 authoring 层，运行时依然只认最终 shader 的反射结果。
+模块只影响 authoring 层；合并后的 M_ schema 决定 Set 1 layout，最终 shader
+reflection 决定各 Pass 的 active 使用子集。
 
 当前推荐的模块模型是“库式模块”：
 
@@ -165,7 +225,7 @@ shader 中按需引用：
 - `public`
   - 模块向材质公开的参数、贴图和函数入口
   - 会进入最终的材质参数表
-  - 会参与 `*.param` 生成
+  - 会参与 `M_*Paramter.glsl` 生成
   - 允许 `MaterialInstance` 提供实例值
 - `private`
   - 模块内部使用的常量、辅助函数和中间实现细节
@@ -177,7 +237,8 @@ shader 中按需引用：
 
 - 只有 `public` 资源可以出现在材质参数 JSON 中
 - `private` 资源不应成为外部材质约定的一部分
-- 运行时绑定只关心最终 shader 反射出的真实资源，不关心它来自哪个模块
+- 完整 layout 只关心模块合并后的 schema；active write 只关心最终 reflection，
+  两者都不需要知道资源来自哪个模块
 
 ### 模块边界
 
@@ -273,19 +334,14 @@ shader 中按需引用：
 
 ## 与当前工程的关系
 
-当前工程已经具备以下基础：
+当前工程已经实现：
 
 - `MaterialInstance` 负责实例参数与贴图保存
-- shader 编译链已经支持 `#include`
-- pipeline 创建阶段已经读取 debug SPIR-V 并做反射
-
-当前仍存在的缺口主要是：
-
-- `set 1` 的材质声明仍然需要在 GLSL 中手写
-- 材质接口定义没有独立资产层
-- 编写期缺少自动生成的参数声明文件
-
-因此，这份方案的第一目标不是替换现有系统，而是在现有链路前面增加一个轻量的 authoring 层。
+- `MaterialParameterIncludeGenerator` 生成 M_ 参数声明
+- `MaterialDescriptorSchema` 生成完整 Set 1 layout 与 UBO offset
+- Base/ShadowDepth debug SPIR-V reflection 做 schema 子集校验
+- Descriptor pool 按完整 layout 分配，write 按 active reflection 并集执行
+- Material Composer 的详细合同见 `material-mesh-pass-composition.md`
 
 ## 第一版非目标
 
@@ -297,40 +353,16 @@ shader 中按需引用：
 - 自动生成整套 pipeline state
 - 复杂材质编辑器
 
-第一版只需要做到：
-
-- 用 `param json` 生成一份可 `include` 的参数声明
-- 让 shader 编写时不报未定义错误
-- 让运行时继续完全依赖反射结果绑定
-
-## 建议实施顺序
-
-### 阶段 1
-
-- 定义 `param json` 格式
-- 支持参数 UBO 和 `sampler2D` 两类资源
-
-### 阶段 2
-
-- 实现生成器
-- 输出同目录 `generated/*.param`
-
-### 阶段 3
-
-- 在材质 shader 中接入 `#include`
-- 保持现有 `shaderc` 编译链不变
-
-### 阶段 4
-
-- 在加载材质实例时，继续使用反射结果做绑定与校验
-- 只把 `param json` 用作编写辅助，不进入运行时绑定真相链
+第一版参数类型只支持 `float`、`vec2`、`vec3`、`vec4`，贴图只支持
+`sampler2D`。更多 descriptor 类型、Bindless Material Table 与动态数组不在
+当前合同内。
 
 ## 一句话结论
 
 这套方案的本质是：
 
-- 用 `param json` 提供编写期材质声明
-- 用同目录 `generated/*.param` 保证 shader 开发体验
-- 用反射保证运行时绑定正确
+- 用 M_ schema 同时生成编写期声明和运行时 Set 1 layout
+- 用 reflection 验证各 Pass 子集并决定 active descriptor write
+- 让 Base 与 ShadowDepth 共用同一份 MI 参数、贴图和 descriptor set
 
 它是对当前系统的增量增强，而不是一次新的 shader 语言替换。

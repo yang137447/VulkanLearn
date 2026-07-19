@@ -18,6 +18,7 @@ public:
     inline const vk::PipelineLayout& GetPipelineLayout() const override { return pipelineLayout; }
     inline const std::vector<vk::DescriptorSetLayout>& GetDescriptorSetLayouts() const override { return descriptorSetLayouts; }
     inline const std::vector<ShaderBinding>& GetShaderBindings() const override { return shaderBindings; }
+    inline const std::vector<ShaderBinding>& GetDescriptorLayoutBindings() const override { return shaderBindings; }
 
     void Bind(vk::CommandBuffer commandBuffer) const;
     void Dispatch(vk::CommandBuffer commandBuffer, uint32_t groupX, uint32_t groupY, uint32_t groupZ) const;

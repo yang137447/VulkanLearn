@@ -11,7 +11,6 @@
 
 namespace VL
 {
-
 RuntimeResult<ResolvedRenderScene> ResolvedRenderSceneBuilder::Build(
     const RenderScene& renderScene,
     const RendererResourceCache& resourceCache) const
@@ -33,6 +32,9 @@ RuntimeResult<ResolvedRenderScene> ResolvedRenderSceneBuilder::Build(
 
         ResolvedMaterialGroup resolvedMaterialGroup;
         resolvedMaterialGroup.material = *material;
+        // 在 ResolvedScene 边界只解析一次 ShadowCaster 路由。资源创建和绘制阶段
+        // 都消费这个结果，不能再次根据 renderMode 或 pipeline 指针各自判断。
+        resolvedMaterialGroup.shadowCaster = ResolveMaterialShadowCaster(**material);
         resolvedMaterialGroup.materialInstances.reserve(materialGroup.materialInstances.size());
 
         for (const MaterialInstanceDrawGroup& materialInstanceGroup : materialGroup.materialInstances)

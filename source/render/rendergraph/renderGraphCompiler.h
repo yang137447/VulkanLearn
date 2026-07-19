@@ -75,6 +75,24 @@ struct CompiledRenderGraphPassInputDescriptor
     uint32_t binding = 0;
 };
 
+enum class CompiledDepthCompareOp
+{
+    Less,
+    LessOrEqual,
+    Equal,
+    Greater,
+    GreaterOrEqual,
+    Always
+};
+
+struct CompiledGraphicsPipelineState
+{
+    bool useVertexInput = true;
+    bool depthTestEnable = true;
+    bool depthWriteEnable = true;
+    CompiledDepthCompareOp depthCompareOp = CompiledDepthCompareOp::Less;
+};
+
 struct CompiledRenderGraphPass
 {
     std::string name;
@@ -85,6 +103,7 @@ struct CompiledRenderGraphPass
     bool outputsDepth = false;
     uint32_t colorOutputCount = 0;
     std::string materialInstancePath;
+    CompiledGraphicsPipelineState pipelineState;
     std::vector<std::string> inputResources;
     std::vector<CompiledRenderGraphPassInputDescriptor> inputDescriptors;
     std::vector<CompiledRenderGraphPassOutput> outputResources;

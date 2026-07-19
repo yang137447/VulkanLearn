@@ -1,74 +1,17 @@
 #include "materialParameterIncludeGenerator.h"
 
-#include <algorithm>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
 #include <string>
-#include <vector>
 #include <nlohmann/json.hpp>
 #include "../../commonFunction.h"
 #include "../materialAssetUtils.h"
+#include "../materialDescriptorSchema.h"
 #include "../validation/materialAssetValidator.h"
 
 namespace
 {
-    std::string ParameterGlslType(std::string_view type)
-    {
-        if (type == "float" || type == "vec2" || type == "vec3" || type == "vec4" || type == "int" || type == "uint")
-        {
-            return std::string(type);
-        }
-        throw std::runtime_error("Unsupported material parameter type: " + std::string(type));
-    }
-
-    std::string TextureGlslType(std::string_view type)
-    {
-        if (type == "sampler2D")
-        {
-            return "sampler2D";
-        }
-        throw std::runtime_error("Unsupported material texture type: " + std::string(type));
-    }
-
-    uint32_t ParameterTypeRank(std::string_view type)
-    {
-        if (type == "vec4")
-        {
-            return 0;
-        }
-        if (type == "vec3")
-        {
-            return 1;
-        }
-        if (type == "vec2")
-        {
-            return 2;
-        }
-        return 3;
-    }
-
-    std::vector<std::string> BuildParameterEmissionOrder(const nlohmann::json& parameters)
-    {
-        std::vector<std::string> names;
-        names.reserve(parameters.size());
-        for (const auto& [name, paramDesc] : parameters.items())
-        {
-            names.push_back(name);
-        }
-
-        std::sort(names.begin(), names.end(), [&parameters](const std::string& lhs, const std::string& rhs) {
-            const uint32_t lhsRank = ParameterTypeRank(parameters[lhs]["type"].get<std::string>());
-            const uint32_t rhsRank = ParameterTypeRank(parameters[rhs]["type"].get<std::string>());
-            if (lhsRank != rhsRank)
-            {
-                return lhsRank < rhsRank;
-            }
-            return lhs < rhs;
-        });
-        return names;
-    }
-
     std::filesystem::path FindShaderGlslRoot(const std::filesystem::path& materialFilePath)
     {
         std::filesystem::path current = materialFilePath.parent_path();
@@ -93,6 +36,10 @@ namespace
     std::string BuildParamterIncludeSource(const nlohmann::json& materialJson, const std::filesystem::path& materialFilePath)
     {
         MaterialAssetValidator::ValidateDefinition(materialJson, MaterialAssetUtils::ToGenericString(materialFilePath));
+        const VL::MaterialDescriptorSchema descriptorSchema =
+            VL::MaterialDescriptorSchema::Build(
+                materialJson,
+                MaterialAssetUtils::ToGenericString(materialFilePath));
         const std::string materialName = materialJson["name"].get<std::string>();
         const std::string guardName = "VL_GENERATED_" + MaterialAssetUtils::ToUpperIdentifier(materialName) + "_PARAMTERS";
         const std::string shadingModelDefine = MaterialAssetUtils::ShadingModelToShaderDefine(materialJson["shadingModel"].get<std::string>());
@@ -119,23 +66,20 @@ namespace
             stream << "\n";
         }
 
-        if (!materialJson["parameters"].empty())
+        if (!descriptorSchema.GetParameters().empty())
         {
             stream << "layout(set = 1, binding = 0) uniform UBOMIParamters {\n";
-            const std::vector<std::string> parameterOrder = BuildParameterEmissionOrder(materialJson["parameters"]);
-            for (const std::string& name : parameterOrder)
+            for (const VL::MaterialParameterSchemaEntry& parameter : descriptorSchema.GetParameters())
             {
-                const auto& paramDesc = materialJson["parameters"][name];
-                stream << "    " << ParameterGlslType(paramDesc["type"].get<std::string>()) << " " << name << ";\n";
+                stream << "    " << parameter.glslType << " " << parameter.name << ";\n";
             }
             stream << "};\n\n";
         }
 
-        uint32_t binding = 1;
-        for (const auto& [name, textureDesc] : materialJson["textures"].items())
+        for (const VL::MaterialTextureSchemaEntry& texture : descriptorSchema.GetTextures())
         {
-            stream << "layout(set = 1, binding = " << binding++ << ") uniform "
-                   << TextureGlslType(textureDesc["type"].get<std::string>()) << " " << name << ";\n";
+            stream << "layout(set = 1, binding = " << texture.binding << ") uniform "
+                   << texture.glslType << " " << texture.name << ";\n";
         }
 
         stream << "\n#endif\n";

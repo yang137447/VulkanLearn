@@ -29,7 +29,8 @@ RendererObjectResourceEntry::~RendererObjectResourceEntry()
 void RendererObjectResourceEntry::Initialize(
     RendererBackendVulkan& rendererBackend,
     const RendererDescriptorContext& descriptorContext,
-    MaterialInstance& materialInstance)
+    MaterialInstance& materialInstance,
+    MaterialShadowCasterKind shadowCasterKind)
 {
     this->rendererBackend = &rendererBackend;
 
@@ -39,6 +40,7 @@ void RendererObjectResourceEntry::Initialize(
         descriptorContext,
         objectName,
         materialInstance,
+        shadowCasterKind,
         resources);
 }
 
@@ -85,10 +87,13 @@ void RendererObjectResourceRegistry::InitializeResolvedSceneResources(
                     resourceCache.BindObjectResource(drawPacket.debugName, objectResourceEntry);
                 }
 
+                // 将 ResolvedScene 已确定的 caster 类型传给 GPU 资源层，确保描述符
+                // 分配与随后 DrawShadowScene 使用的是同一份路由结果。
                 objectResourceEntry->Initialize(
                     rendererBackend,
                     descriptorContext,
-                    *materialInstanceGroup.materialInstance);
+                    *materialInstanceGroup.materialInstance,
+                    materialGroup.shadowCaster.kind);
                 draw.objectResourceEntry = objectResourceEntry;
             }
         }

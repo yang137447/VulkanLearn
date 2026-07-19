@@ -306,6 +306,13 @@
         <main>
             <header>
                 <h1>Shadow Mode 与材质 Pass 方案</h1>
+                <div class="callout">
+                    <strong>已废弃：</strong>
+                    当前实现不再使用独立 <code>shadowMode</code>。Common ShadowCaster 直接由
+                    <code>renderMode</code> 选择：Opaque 使用公共 Opaque，OpaqueClip 使用公共
+                    Masked，Transparent 跳过 common shadow draw。本文仅保留为历史设计上下文；
+                    当前契约见 <code>documents/rendering/csm-shadow-map-m1.md</code>。
+                </div>
                 <p class="lead">
                     本方案把 shadow 投影策略变成材质的显式静态属性：<code>M_*.json</code> 必须声明
                     <code>shadowMode</code>，<code>MI_*.json</code> 可通过 <code>renderStateOverrides</code> 覆写。
@@ -364,7 +371,7 @@
         "USE_ALBEDO_MAP": 1
     },
     "parameters": {
-        "u_pbrFactors": [0.5, 0.0, 1.0, 0.45]
+        "u_alphaClipThreshold": 0.45
     }
 }</code></pre>
 
@@ -477,7 +484,7 @@ enum class ShadowMode
 void ApplyPbrAlphaClip(in MaterialSurface surface)
 {
 #if defined(RENDER_MODE_OPAQUE_CLIP) || defined(SHADOW_MODE_MASKED)
-    if (surface.opacity &lt; u_pbrFactors.w)
+    if (surface.opacity &lt; u_alphaClipThreshold)
     {
         discard;
     }
@@ -554,7 +561,7 @@ ApplyPbrAlphaClip(surface);
                     <li>扩展 <code>MaterialInstanceResolver</code>：从 <code>M_</code> 继承 shadowMode，再应用 <code>MI_</code> 覆写。</li>
                     <li>扩展 <code>MaterialInstanceValidator</code>：解析 <code>ShadowMode</code>，把它写入 build plan / material instance。</li>
                     <li>保留公共 <code>M_shadow</code> 给 <code>Opaque</code> 使用。</li>
-                    <li>为 <code>Masked</code> 增加 shadow role variant，并让 PBR shadow fragment 复用 albedo alpha 与 <code>u_pbrFactors.w</code>。</li>
+                    <li>为 <code>Masked</code> 增加 shadow role variant，并让 PBR shadow fragment 复用 albedo alpha 与 <code>u_alphaClipThreshold</code>。</li>
                     <li>改造 <code>DrawShadowScene</code>：按 material instance 的 shadowMode 选择 skip、公共 shadow pipeline 或材质 shadow pipeline。</li>
                     <li>给 SpeedTree 叶片创建独立 <code>MI_</code>：<code>renderMode=OpaqueClip</code>、<code>cullMode=None</code>、<code>shadowMode=Masked</code>。</li>
                 </ol>

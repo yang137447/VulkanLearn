@@ -385,18 +385,8 @@ void RendererFrameResources::UpdateMaterialInstanceUniformBuffer(
         return;
     }
 
-    const std::vector<ShaderBinding>& bindings = baseMaterial->GetRenderPipeline()->GetShaderBindings();
-    const ShaderBinding* uboBinding = nullptr;
-    for (const ShaderBinding& binding : bindings)
-    {
-        if (binding.set == MaterialSetIndex &&
-            binding.binding == 0 &&
-            binding.type == vk::DescriptorType::eUniformBuffer)
-        {
-            uboBinding = &binding;
-            break;
-        }
-    }
+    const ShaderBinding* uboBinding =
+        baseMaterial->GetMaterialDescriptorSchema().FindBinding(0);
 
     if (uboBinding == nullptr)
     {
@@ -407,24 +397,23 @@ void RendererFrameResources::UpdateMaterialInstanceUniformBuffer(
         throw std::runtime_error("Material instance UBO is not initialized for this swapchain image.");
     }
 
-    uint32_t offset = 0;
     for (size_t memberIndex = 0; memberIndex < uboBinding->memberNames.size(); ++memberIndex)
     {
         const std::string& memberName = uboBinding->memberNames[memberIndex];
         auto paramIt = parameters.find(memberName);
         if (paramIt == parameters.end())
         {
-            // Reflection defines the shader layout even when a JSON material
-            // instance omits a member. Advance by the reflected size so later
-            // parameters still land at the correct byte offset.
-            if (memberIndex < uboBinding->members.size())
-            {
-                offset += uboBinding->members[memberIndex];
-            }
             continue;
         }
 
         const ParamMap& parameter = paramIt->second;
+        if (memberIndex >= uboBinding->memberOffsets.size())
+        {
+            throw std::runtime_error("Material schema is missing a UBO member offset.");
+        }
+        // 使用 schema 的 std140 offset，而不是把 CPU 參數尺寸連續相加。
+        // 這保證 Base 與 ShadowDepth 共用同一份 MI UBO layout。
+        const uint32_t offset = uboBinding->memberOffsets[memberIndex];
         uint8_t* uboData =
             static_cast<uint8_t*>(materialInstance.GetUboMaterialInstanceMapped()[swapChainImageIndex]) +
             offset;
@@ -448,8 +437,6 @@ void RendererFrameResources::UpdateMaterialInstanceUniformBuffer(
             const Eigen::Vector4f value = materialInstance.GetParameter<Eigen::Vector4f>(memberName);
             std::memcpy(uboData, &value, parameter.size);
         }
-
-        offset += parameter.size;
     }
 }
 

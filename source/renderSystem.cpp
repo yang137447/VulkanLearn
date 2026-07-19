@@ -965,6 +965,17 @@ VL::RendererDescriptorContext RenderSystem::BuildRendererDescriptorContext() con
     descriptorContext.globalUniformBufferInfos = &GetUBOGlobalBufferInfo();
     descriptorContext.lightBufferInfos = &GetLightBufferInfo();
     descriptorContext.resourceCache = &VL::RendererResourceCache::GetInstance();
+    Renderpass* canonicalShadowPass = RenderGraph::GetInstance().FindCanonicalShadowPass();
+    if (canonicalShadowPass != nullptr)
+    {
+        std::shared_ptr<MaterialInstance> shadowMaterialInstance =
+            canonicalShadowPass->materialInstance.lock();
+        if (shadowMaterialInstance)
+        {
+            descriptorContext.commonOpaqueShadowMaterial =
+                shadowMaterialInstance->GetBaseMaterial().lock();
+        }
+    }
     return descriptorContext;
 }
 

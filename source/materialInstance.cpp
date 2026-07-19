@@ -104,16 +104,22 @@ void MaterialInstance::ShutdownRenderResources()
 void MaterialInstance::CreateUniformBuffers()
 {
     uint32_t bufferSize = 0;
-    for (const auto& parameter : parameters)
+    const std::shared_ptr<Material> material = baseMaterial.lock();
+    if (material)
     {
-        bufferSize += parameter.second.size;
+        const ShaderBinding* materialUbo =
+            material->GetMaterialDescriptorSchema().FindBinding(0);
+        if (materialUbo != nullptr &&
+            materialUbo->type == vk::DescriptorType::eUniformBuffer)
+        {
+            bufferSize = materialUbo->size;
+        }
     }
 
     if (bufferSize == 0)
     {
-        // Materials without a material UBO have no per-instance parameter
-        // buffer to create. Descriptor planning decides whether a UBO binding
-        // is actually required for the shader.
+        // M_ schema沒有材質 UBO 時不建立空 buffer。Shader reflection
+        // 不參與大小計算，避免不同 pass 對同一 MI 得到不同結果。
         if (uboMaterialInstance.HasResources())
         {
             rendererBackend->DestroyBufferSet(uboMaterialInstance);

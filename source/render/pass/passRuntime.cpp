@@ -69,33 +69,28 @@ void PassRuntime::RecordShadowPass(PassRuntimeContext& context) const
     const Renderpass& renderPass = context.renderPass;
     vk::CommandBuffer& commandBuffer = context.commandBuffer;
 
-    // Shadow still uses a dedicated pass material while the full PassRuntime
-    // model is landing. Keep render pass begin/end ownership local here.
+    std::shared_ptr<MaterialInstance> passMaterialInstance = renderPass.materialInstance.lock();
+    if (!passMaterialInstance)
+    {
+        throw std::runtime_error(
+            "Shadow pass '" + renderPass.name + "' has no common opaque pass material instance");
+    }
+
+    std::shared_ptr<Material> baseMaterial = passMaterialInstance->GetBaseMaterial().lock();
+    if (!baseMaterial)
+    {
+        throw std::runtime_error(
+            "Shadow pass '" + renderPass.name + "' common opaque material has expired");
+    }
+
+    const PipelineBase& commonOpaquePipeline = *baseMaterial->GetRenderPipeline();
+
     context.services.UpdateShadowGlobalUBOForPass(
         commandBuffer,
         renderPass.width,
         renderPass.height,
         renderPass.shadowCascadeIndex);
     BeginConfiguredRenderPass(context);
-
-    std::shared_ptr<MaterialInstance> passMaterialInstance = renderPass.materialInstance.lock();
-    if (!passMaterialInstance)
-    {
-        // 这里是个保底，确保pass执行，不会导致crash，以下类似操作同理
-        commandBuffer.endRenderPass();
-        return;
-    }
-
-    context.services.UpdateMaterialInstanceUBOForPass(passMaterialInstance);
-    std::shared_ptr<Material> baseMaterial = passMaterialInstance->GetBaseMaterial().lock();
-    if (!baseMaterial)
-    {
-        commandBuffer.endRenderPass();
-        return;
-    }
-
-    const PipelineBase& renderPipeline = *baseMaterial->GetRenderPipeline();
-    commandBuffer.bindPipeline(renderPipeline.GetBindPoint(), renderPipeline.GetPipeline());
 
     RendererDrawContext drawContext{
         commandBuffer,
@@ -105,7 +100,7 @@ void PassRuntime::RecordShadowPass(PassRuntimeContext& context) const
         context.resolvedRenderScene,
         context.services
     };
-    drawExecutor.DrawShadowScene(renderPipeline, drawContext);
+    drawExecutor.DrawShadowScene(commonOpaquePipeline, drawContext);
 
     commandBuffer.endRenderPass();
 }

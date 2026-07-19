@@ -10,6 +10,7 @@
 #include "render/backend/rendererBackendVulkan.h"
 #include "render/backend/rendererDescriptorWriter.h"
 #include "render/resource/rendererResourceCache.h"
+#include "render/shadow/materialShadowCasterPolicy.h"
 #include "shaderReflect.h"
 
 namespace VL
@@ -43,10 +44,13 @@ void CreateObjectDescriptorSets(
 {
     const uint32_t swapChainImageCount = rendererBackend.GetSwapchainImageCount();
     std::shared_ptr<Material> baseMaterial = materialInstance.GetBaseMaterial().lock();
-    const std::vector<ShaderBinding>& shaderBindings = baseMaterial->GetRenderPipeline()->GetShaderBindings();
+    const std::vector<ShaderBinding>& layoutBindings =
+        baseMaterial->GetRenderPipeline()->GetDescriptorLayoutBindings();
     std::vector<vk::DescriptorPoolSize> descriptorPoolSizes;
 
-    for (const ShaderBinding& binding : shaderBindings)
+    // Descriptor pool容量必須覆蓋完整 pipeline layout，即使某個 pass
+    // 沒有實際讀取 schema 中的可選材質 binding。
+    for (const ShaderBinding& binding : layoutBindings)
     {
         if (binding.set == PassSetIndex)
         {
@@ -120,7 +124,7 @@ void UpdateObjectDescriptorSets(
     const uint32_t swapChainImageCount = rendererBackend.GetSwapchainImageCount();
     resources.writeDescriptorSets.resize(swapChainImageCount);
     std::shared_ptr<Material> baseMaterial = materialInstance.GetBaseMaterial().lock();
-    const auto& shaderBindings = baseMaterial->GetRenderPipeline()->GetShaderBindings();
+    const auto& shaderBindings = baseMaterial->GetActiveShaderBindings();
 
     for (uint32_t i = 0; i < swapChainImageCount; i++)
     {
@@ -199,19 +203,6 @@ void UpdateObjectDescriptorSets(
     }
 }
 
-std::shared_ptr<Material> GetShadowMaterial(
-    const RendererDescriptorContext& descriptorContext)
-{
-    const RendererResourceCache& resourceCache =
-        RequireRendererDescriptorResourceCache(descriptorContext, "RendererObjectResourceManager");
-    const std::shared_ptr<Material>* shadowMaterialPtr = resourceCache.GetMaterial("shadow");
-    if (shadowMaterialPtr == nullptr)
-    {
-        return nullptr;
-    }
-    return *shadowMaterialPtr;
-}
-
 void CreateShadowDescriptorSets(
     RendererBackendVulkan& rendererBackend,
     const RendererDescriptorContext& descriptorContext,
@@ -219,7 +210,7 @@ void CreateShadowDescriptorSets(
     RendererObjectGpuResources& resources)
 {
     const uint32_t swapChainImageCount = rendererBackend.GetSwapchainImageCount();
-    std::shared_ptr<Material> shadowMaterial = GetShadowMaterial(descriptorContext);
+    std::shared_ptr<Material> shadowMaterial = descriptorContext.commonOpaqueShadowMaterial;
     if (!shadowMaterial)
     {
         return;
@@ -302,7 +293,7 @@ void UpdateShadowDescriptorSets(
     }
 
     const uint32_t swapChainImageCount = rendererBackend.GetSwapchainImageCount();
-    std::shared_ptr<Material> shadowMaterial = GetShadowMaterial(descriptorContext);
+    std::shared_ptr<Material> shadowMaterial = descriptorContext.commonOpaqueShadowMaterial;
     if (!shadowMaterial)
     {
         return;
@@ -411,6 +402,7 @@ void RendererObjectResourceManager::InitializeObjectResources(
     const RendererDescriptorContext& descriptorContext,
     const std::string& objectName,
     MaterialInstance& materialInstance,
+    MaterialShadowCasterKind shadowCasterKind,
     RendererObjectGpuResources& resources) const
 {
     if (resources.initialized)
@@ -421,8 +413,14 @@ void RendererObjectResourceManager::InitializeObjectResources(
     CreateObjectUniformBuffer(rendererBackend, objectName, resources);
     CreateObjectDescriptorSets(rendererBackend, objectName, materialInstance, resources);
     UpdateObjectDescriptorSets(rendererBackend, descriptorContext, materialInstance, resources);
-    CreateShadowDescriptorSets(rendererBackend, descriptorContext, objectName, resources);
-    UpdateShadowDescriptorSets(rendererBackend, descriptorContext, resources);
+    // 公共 Opaque 管线有自己的精简 descriptor layout，因此需要 shadowDescriptorSets。
+    // 专用 ShadowCaster 直接复用 Surface Set 0~2；None 不参与 Shadow pass，二者都
+    // 不应额外分配公共 Shadow descriptor。
+    if (shadowCasterKind == MaterialShadowCasterKind::CommonOpaque)
+    {
+        CreateShadowDescriptorSets(rendererBackend, descriptorContext, objectName, resources);
+        UpdateShadowDescriptorSets(rendererBackend, descriptorContext, resources);
+    }
     resources.initialized = true;
 }
 

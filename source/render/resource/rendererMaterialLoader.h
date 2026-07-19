@@ -3,12 +3,9 @@
 #include <memory>
 #include <string_view>
 
-#include <vulkan/vulkan.hpp>
-
-#include "pipeline/graphicsPipelineBuilder.h"
-
 class MaterialInstance;
 class PipelineFactory;
+struct Renderpass;
 
 namespace VL
 {
@@ -26,9 +23,7 @@ public:
 
     std::shared_ptr<MaterialInstance> LoadMaterialInstance(
         std::string_view materialInstancePath,
-        vk::SampleCountFlagBits sampleCount,
-        std::string_view passName = "geometry",
-        const GraphicsPipelineStateDesc& pipelineStateDesc = {}) const;
+        Renderpass& renderPass) const;
 
 private:
     PipelineFactory& pipelineFactory;
