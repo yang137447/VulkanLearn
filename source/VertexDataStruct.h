@@ -33,7 +33,7 @@ namespace VertexInfo{
         vk::VertexInputAttributeDescription(
             0, // location
             0, // binding
-            vk::Format::eR32G32B32A32Sfloat, // format
+            vk::Format::eR32G32B32Sfloat, // format
             offsetof(Vertex, position) // offset
         ),
         // 法线
@@ -47,7 +47,7 @@ namespace VertexInfo{
         vk::VertexInputAttributeDescription(
             2, // location
             0, // binding
-            vk::Format::eR32G32B32Sfloat, // format
+            vk::Format::eR32G32B32A32Sfloat, // format
             offsetof(Vertex, color) // offset
         ),
         // 纹理坐标

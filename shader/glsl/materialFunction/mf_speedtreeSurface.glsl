@@ -36,6 +36,8 @@ MaterialSurface EvaluateMaterialSurface(in MaterialPixelContext pixel)
         surface.metallic = u_pbrFactors.y;
         surface.ambientOcclusion = pixel.vertexColor.a;
     #endif
+    // 这里树的ao压在了vertexColor.a，所以这里直接用vertexColor.a即可。
+    surface.ambientOcclusion = pixel.vertexColor.a;
 
     surface.worldNormal = normalize(pixel.worldNormal);
     #if USE_NORMAL_MAP

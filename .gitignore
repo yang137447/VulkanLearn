@@ -1,9 +1,19 @@
 
-/build
+/build/
+/build_debug/
+/build_debug_with_profile/
+/build_release/
+/build-*/
 /.vscode
 /.cache
+/.playwright-cli
 /artifacts
+/extern/Assimp/Assimp/
+/extern/SDL3/SDL3/
+/extern/nvtx/nvtx/
+/extern/tracy/tracy/
 /shader/spv
 /shader/glsl/**/generate/
 /resources/*
 !/resources/README.md
+/output/playwright

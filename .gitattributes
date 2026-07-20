@@ -42,7 +42,9 @@ resources/**/*.json filter=lfs diff=lfs merge=lfs -text
 shader/spv/*.spv -diff -merge -text
 
 # Documentation and configs (keep in regular Git)
-*.md -filter=lfs diff merge text
+*.md -filter=lfs merge text
+# Preserve this legacy CRLF document until line-ending normalization is handled separately.
+documents/rendering/material-param-authoring-and-reflection.md -filter=lfs merge -text whitespace=cr-at-eol
 *.txt -filter=lfs diff merge text
 *.xml -filter=lfs diff merge text
 *.html -filter=lfs diff merge text
