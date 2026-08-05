@@ -19,8 +19,9 @@ struct Renderpass;
 namespace VL
 {
 
-// Narrow upload service used by pass recording. PassRuntime owns pass flow,
-// while RenderSystem supplies frame data updates through this explicit boundary.
+// Frame-data upload and renderer-state query service used by pass recording.
+// PassRuntime owns pass flow, while RenderSystem supplies updates and policy
+// through this explicit boundary.
 class PassRuntimeServices : public RendererDrawUploadServices
 {
 public:
@@ -40,6 +41,7 @@ public:
     virtual void UploadLightsForPass(
         uint32_t swapChainImageIndex,
         const std::vector<LightSnapshot>& lights) = 0;
+    virtual bool IsCsmEnabled() const = 0;
 };
 
 struct PassRuntimeContext

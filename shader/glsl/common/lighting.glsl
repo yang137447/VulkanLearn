@@ -43,6 +43,13 @@ float ShadowCascadeDebugValue(int cascadeIndex)
 
 float CalculateCsmShadow(in sampler2DArrayShadow inputShadowMap, vec3 worldPos, out int cascadeIndex)
 {
+    cascadeIndex = 0;
+    // Zero cascade splits marks CSM disabled; return fully lit without sampling.
+    if (uboVP.cascadeSplits.w <= 0.0)
+    {
+        return 1.0;
+    }
+
     cascadeIndex = SelectShadowCascade(worldPos);
     float viewDepth = -(uboVP.view * vec4(worldPos, 1.0)).z;
     if (viewDepth > uboVP.cascadeSplits.w)

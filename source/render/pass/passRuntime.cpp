@@ -69,6 +69,16 @@ void PassRuntime::RecordShadowPass(PassRuntimeContext& context) const
     const Renderpass& renderPass = context.renderPass;
     vk::CommandBuffer& commandBuffer = context.commandBuffer;
 
+    // Keep the compiled shadow pass and its layout transition even when CSM is
+    // disabled: the geometry pass still expects shadowMap to leave this pass
+    // in a valid shader-readable layout.
+    if (!context.services.IsCsmEnabled())
+    {
+        BeginConfiguredRenderPass(context);
+        commandBuffer.endRenderPass();
+        return;
+    }
+
     std::shared_ptr<MaterialInstance> passMaterialInstance = renderPass.materialInstance.lock();
     if (!passMaterialInstance)
     {

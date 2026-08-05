@@ -271,6 +271,11 @@ void RenderSystem::UploadLightsForPass(
     frameResources.UpdateLightBuffer(swapChainImageIndex, lights);
 }
 
+bool RenderSystem::IsCsmEnabled() const
+{
+    return csmSettings.enabled;
+}
+
 void RenderSystem::UpdateUBOGlobal(vk::CommandBuffer& commandBuffer)
 {
     PROFILE_FUNCTION();
@@ -288,13 +293,27 @@ void RenderSystem::UpdateUBOGlobal(vk::CommandBuffer& commandBuffer)
     ubo.viewProjection = camera.viewProjection;
     ubo.invViewProjection = ubo.viewProjection.inverse();
     ubo.previousViewProjection = camera.previousViewProjection;
-    if (!shadowCascadeFrameData.valid)
+    if (csmSettings.enabled)
     {
-        BuildShadowCascadeFrameData(1, 1);
+        if (!shadowCascadeFrameData.valid)
+        {
+            BuildShadowCascadeFrameData(1, 1);
+        }
+        ubo.lightViewProj = shadowCascadeFrameData.lightViewProj;
+        ubo.cascadeSplits = shadowCascadeFrameData.cascadeSplits;
+        ubo.shadowBias = shadowCascadeFrameData.bias;
     }
-    ubo.lightViewProj = shadowCascadeFrameData.lightViewProj;
-    ubo.cascadeSplits = shadowCascadeFrameData.cascadeSplits;
-    ubo.shadowBias = shadowCascadeFrameData.bias;
+    else
+    {
+        // Zero cascade splits is the GPU-side disabled flag consumed by
+        // CalculateCsmShadow; keep every shadow field explicitly neutral.
+        ubo.cascadeSplits = Eigen::Vector4f::Zero();
+        ubo.shadowBias.fill(Eigen::Vector4f::Zero());
+        for (Eigen::Matrix4f& lightViewProj : ubo.lightViewProj)
+        {
+            lightViewProj = Eigen::Matrix4f::Identity();
+        }
+    }
     ubo.cameraPosition = camera.position;
     // 这里以后由computer shader计算
     // ubo.environmentSH = currentRenderScene.environment.sphericalHarmonics;

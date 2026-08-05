@@ -116,6 +116,7 @@ private:
     void UploadLightsForPass(
         uint32_t swapChainImageIndex,
         const std::vector<VL::LightSnapshot>& lights) override;
+    bool IsCsmEnabled() const override;
 
     void InitializeFrameResources();
     void ShutdownFrameResources();
