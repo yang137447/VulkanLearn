@@ -2,6 +2,10 @@ file(GLOB_RECURSE sources CONFIGURE_DEPENDS "*.h" "*.cpp")
 
 add_executable(main ${sources})
 
+if(TARGET copy_shaderc_dll)
+    add_dependencies(main copy_shaderc_dll)
+endif()
+
 target_include_directories(main PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 option(VULKANLEARN_ENABLE_TRACY "Enable Tracy profiler markers and client connection." OFF)
