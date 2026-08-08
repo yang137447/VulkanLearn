@@ -91,6 +91,8 @@ Rendering plans:
   - deprecated shader variant options retained as context; use the deferred GBuffer plan for the current direction
 - `plan/rendering/environment-cubemap-ibl-unification-plan.md`
   - executable migration plan that limits environment-type branching to cubemap generation and unifies SH/prefilter through one GPU IBL baker
+- `plan/rendering/uds-replication-roadmap.md`
+  - UDS / UDW runtime feature scope, staged implementation plan, estimates, risks, and acceptance criteria
 - `plan/rendering/sky-pass-environment-roadmap.md`
   - independent Sky Pass, procedural sky, dynamic environment IBL, and frame-spread update route
 - `plan/rendering/sky-pass-environment-roadmap.html`
@@ -103,6 +105,11 @@ Rendering plans:
   - World Creator terrain intake MVP and future terrain boundaries
 - `plan/rendering/weather-gi-long-term-roadmap.html`
   - long-term weather, reflection, GI, DDGI, and Lumen-like system route
+
+UI plans:
+
+- `plan/ui/game-ui-stack-plan.md`
+  - future two-layer game UI direction: RmlUi for player-facing runtime UI, Dear ImGui for developer tools, shared SDL3 input and Vulkan overlay boundaries, hot reload, threading, performance, and cross-platform constraints
 
 ## References
 
