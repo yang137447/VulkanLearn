@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>SpeedTree Wind Data Inspector</title>
+  <style>
+    :root { color-scheme: dark; --bg:#111417; --panel:#1a1f24; --line:#303840; --text:#e8edf2; --muted:#9aa7b2; --accent:#63c5ad; --accent2:#f0a35b; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 system-ui, sans-serif; }
+    header { border-bottom:1px solid var(--line); padding:16px 22px; display:flex; align-items:center; gap:18px; flex-wrap:wrap; }
+    h1 { font-size:18px; margin:0; font-weight:650; letter-spacing:0; }
+    .toolbar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    input[type=file], button, select { color:var(--text); background:#222931; border:1px solid #46515b; border-radius:5px; padding:7px 10px; }
+    button { cursor:pointer; } button:hover { border-color:var(--accent); }
+    main { display:grid; grid-template-columns:minmax(260px, 320px) minmax(0, 1fr); min-height:calc(100vh - 70px); }
+    aside { border-right:1px solid var(--line); padding:18px; overflow:auto; }
+    section { padding:18px 22px 34px; min-width:0; }
+    h2 { font-size:14px; margin:0 0 10px; font-weight:650; }
+    .block { border-bottom:1px solid var(--line); padding-bottom:15px; margin-bottom:15px; }
+    .kv { display:grid; grid-template-columns:110px 1fr; gap:4px 10px; }
+    .kv div:nth-child(odd) { color:var(--muted); }
+    .value { overflow-wrap:anywhere; }
+    .tabs { display:flex; gap:6px; flex-wrap:wrap; margin:0 0 12px; }
+    .tabs button.active { color:#07130f; background:var(--accent); border-color:var(--accent); }
+    .chart-wrap { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:12px; }
+    canvas { width:100%; height:340px; display:block; }
+    .model-wrap { background:#0d1114; border:1px solid var(--line); border-radius:6px; overflow:hidden; }
+    #modelCanvas { width:100%; height:520px; display:block; touch-action:none; }
+    .model-toolbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:0 0 10px; }
+    .model-toolbar span { color:var(--muted); font-size:12px; }
+    .model-info { display:grid; grid-template-columns:92px minmax(0,1fr); gap:5px 12px; padding:12px 14px; border-top:1px solid var(--line); background:var(--panel); }
+    .model-info dt { color:var(--muted); }
+    .model-info dd { margin:0; overflow-wrap:anywhere; }
+    .heat-scale { display:inline-block; width:150px; height:10px; margin:0 8px; border:1px solid #56616a; background:linear-gradient(90deg,#004cff,#19d1bc,#f3d43c,#e52822); }
+    .axis-key { display:inline-flex; gap:9px; }
+    .axis-key b:nth-child(1) { color:#ff6b6b; }
+    .axis-key b:nth-child(2) { color:#6fd08c; }
+    .axis-key b:nth-child(3) { color:#70a5ff; }
+    .section-key { display:flex; flex-wrap:wrap; gap:7px 14px; }
+    .section-key span { white-space:nowrap; }
+    .section-key i { display:inline-block; width:10px; height:10px; margin-right:5px; border:1px solid #75818c; }
+    .control-row { display:flex; align-items:center; gap:12px; margin:12px 0 16px; }
+    input[type=range] { width:min(420px, 60vw); accent-color:var(--accent); }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:12px; margin-top:16px; }
+    .stat { background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:12px; }
+    .stat strong { display:block; font-size:16px; margin-top:3px; }
+    table { width:100%; border-collapse:collapse; font-size:12px; }
+    th, td { border-bottom:1px solid var(--line); padding:7px 5px; text-align:left; white-space:nowrap; }
+    th { color:var(--muted); font-weight:500; }
+    .empty { color:var(--muted); padding:50px 10px; text-align:center; }
+    .warning { color:#ffd28a; border-left:3px solid var(--accent2); padding-left:10px; }
+    .legend { display:flex; gap:14px; flex-wrap:wrap; color:var(--muted); font-size:12px; margin-top:8px; }
+    .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:5px; background:var(--accent); }
+    .dot.orange { background:var(--accent2); }
+    .data-flow { display:grid; grid-template-columns:repeat(auto-fit,minmax(205px,1fr)); gap:10px; }
+    .data-flow article { padding:12px; border:1px solid var(--line); background:var(--panel); border-radius:6px; }
+    .data-flow h3 { font-size:13px; margin:0 0 5px; font-weight:650; }
+    .data-flow p { color:var(--muted); margin:0; font-size:12px; }
+    .formula { display:block; margin-top:8px; color:#d8e4ee; font-family:ui-monospace,Consolas,monospace; font-size:12px; overflow-wrap:anywhere; }
+    .runtime-table td { white-space:normal; vertical-align:top; }
+    @media (max-width:780px) { main { grid-template-columns:1fr; } aside { border-right:0; border-bottom:1px solid var(--line); } canvas { height:280px; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>SpeedTree Wind Data Inspector</h1>
+    <div class="toolbar">
+      <input id="file" type="file" accept=".json,application/json">
+      <button id="oak" type="button">Load Oak preview</button>
+      <button id="sample" type="button">Load embedded sample</button>
+    </div>
+  </header>
+  <main>
+    <aside id="summary"><div class="empty">Choose an exported JSON file.</div></aside>
+    <section id="content"><div class="empty">Export with <code>speedtree_wind_validation &lt;asset.stsdk&gt; --export-json output.json</code>, then open that file here.</div></section>
+  </main>
+  <script>
+    const state = { data:null, stage:'shared', strength:0.5 };
+    const stageLabels = { shared:'Shared', branch1:'Branch 1', branch2:'Branch 2', ripple:'Ripple' };
+    const curveNames = {
+      shared:['bend','oscillation','speed','turbulence','flexibility'],
+      branch1:['bend','oscillation','speed','turbulence','flexibility'],
+      branch2:['bend','oscillation','speed','turbulence','flexibility'],
+      ripple:['planar','directional','speed','flexibility']
+    };
+    const modelModes = [
+      { label:'Material section', source:'section + material slot', meaning:'Categorical mesh regions', use:'Separates trunk, branch, leaf and other authored geometry sections.', kind:'section' },
+      { label:'Branch 1 weight', source:'Branch1.x', meaning:'Coarse branch length / influence weight', use:'branchLength = weight * branch1StretchLimit; also scales branch motion.', kind:'heat' },
+      { label:'Branch 2 weight', source:'Branch2.x', meaning:'Fine branch length / influence weight', use:'branchLength = weight * branch2StretchLimit; also scales branch motion.', kind:'heat' },
+      { label:'Ripple weight', source:'Branch1.w', meaning:'Leaf / frond local ripple influence', use:'Multiplies ripple displacement and the ripple noise phase offset.', kind:'heat' },
+      { label:'Branch 1 direction', source:'Branch1.y', meaning:'Decoded coarse branch axis', use:'branchAnchor = position - direction * branchLength.', kind:'direction' },
+      { label:'Branch 2 direction', source:'Branch2.y', meaning:'Decoded fine branch axis', use:'branchAnchor = position - direction * branchLength.', kind:'direction' },
+      { label:'Branch 1 noise offset', source:'Branch1.z', meaning:'Decoded per-branch noise coordinate offset', use:'Offsets the noise sample so separate coarse branches do not move in phase.', kind:'offset' },
+      { label:'Branch 2 noise offset', source:'Branch2.z', meaning:'Decoded per-branch noise coordinate offset', use:'Offsets the noise sample so separate fine branches do not move in phase.', kind:'offset' },
+      { label:'Branch 2 blend', source:'Branch2.w', meaning:'Packed branch-level blend channel', use:'Present in the Standard.lua vertex payload; currently not consumed by VulkanLearn deformation.', kind:'heat' }
+    ];
+    const colors = ['#63c5ad','#f0a35b','#83a9ef','#d783d7','#e9d56d'];
+    const $ = id => document.getElementById(id);
+    $('file').addEventListener('change', e => { const file=e.target.files[0]; if (!file) return; const reader=new FileReader(); reader.onload=()=>load(JSON.parse(reader.result)); reader.readAsText(file); });
+    $('oak').addEventListener('click', loadOakPreview);
+    $('sample').addEventListener('click', () => load(sampleData));
+
+    async function loadOakPreview() {
+      if (location.protocol === 'file:') {
+        $('content').innerHTML = '<div class="empty">Serve the project directory over HTTP to load the bundled Oak preview, or choose a JSON file manually.</div>';
+        return;
+      }
+      $('content').innerHTML = '<div class="empty">Loading Oak geometry and wind attributes...</div>';
+      try {
+        const response = await fetch('../artifacts/speedtree-wind/Oak_Complex_Rules_full.json');
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        load(await response.json());
+      } catch (error) {
+        $('content').innerHTML = `<div class="empty">Oak preview failed to load: ${escapeHtml(error.message)}</div>`;
+      }
+    }
+
+    if (new URLSearchParams(location.search).get('asset') === 'oak') loadOakPreview();
+
+    function load(data) { state.data=data; render(); }
+    function fmt(value) { return Number(value ?? 0).toFixed(4); }
+    function escapeHtml(value) { return String(value ?? '').replace(/[&<>\"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;'}[c])); }
+    function render() {
+      const d=state.data, b=d.bounds || {min:[0,0,0],max:[0,0,0]};
+      $('summary').innerHTML = `
+        <div class="block"><h2>Asset</h2><div class="kv">
+          <div>File</div><div class="value">${escapeHtml(d.asset)}</div>
+          <div>Format</div><div>${escapeHtml((d.formatVersion||[]).join('.'))}</div>
+          <div>Packer</div><div>${escapeHtml(d.vertexPacker)}</div>
+          <div>Materials</div><div>${(d.materials||[]).length}</div>
+          <div>Sections</div><div>${(d.sections||[]).length}</div>
+        </div></div>
+        <div class="block"><h2>Source bounds</h2><div class="kv">
+          <div>Min</div><div>[${b.min.map(fmt).join(', ')}]</div>
+          <div>Max</div><div>[${b.max.map(fmt).join(', ')}]</div>
+        </div></div>
+        <div class="block"><h2>Feature flags</h2><div class="kv">
+          <div>Shared</div><div>${d.wind?.doShared}</div>
+          <div>Branch 1</div><div>${d.wind?.doBranch1}</div>
+          <div>Branch 2</div><div>${d.wind?.doBranch2}</div>
+          <div>Ripple</div><div>${d.wind?.doRipple}</div>
+          <div>Shimmer</div><div>${d.wind?.doShimmer}</div>
+        </div></div>`;
+      const common = d.wind?.common || {};
+      const curveValues = Object.keys(stageLabels).flatMap(stage => (curveNames[stage] || []).flatMap(name => d.wind?.[stage]?.[name] || []));
+      const curvesAreZero = curveValues.length > 0 && curveValues.every(value => Math.abs(Number(value)) < 1e-6);
+      const vertexWeights = (d.sections || []).flatMap(section => {
+        const stats = section.windVertexStats || {};
+        return [stats.branch1Weight?.max, stats.branch2Weight?.max, stats.rippleWeight?.max].filter(value => value !== undefined);
+      });
+      const hasVertexWind = vertexWeights.some(value => Number(value) > 1e-5);
+      const diagnostic = curvesAreZero && hasVertexWind
+        ? '<div class="block"><h2>Diagnostic</h2><div class="warning">Vertex wind attributes are present, but all authored response curves are zero. This asset may have been exported with an empty wind profile.</div></div>'
+        : '';
+      const hasGeometry = (d.sections || []).some(section => section.geometry);
+      $('content').innerHTML = `
+        ${diagnostic}
+        ${hasGeometry ? `<div class="block"><h2>Model data view</h2><div class="model-toolbar"><button id="modelReset" type="button" title="Reset camera">Reset view</button><label>Color by <select id="modelMode">${modelModes.map((mode,index)=>`<option value="${index}">${mode.label}</option>`).join('')}</select></label></div><div class="model-wrap"><canvas id="modelCanvas" width="1200" height="520"></canvas><dl id="modelModeInfo" class="model-info"></dl></div></div>` : ''}
+        <div class="block"><h2>Other wind data: from asset to shader</h2><div id="runtimeInspector"></div></div>
+        <div class="block"><h2>Common wind parameters</h2><div class="grid">
+          ${[['strengthResponse','Strength response'],['directionResponse','Direction response'],['gustFrequency','Gust frequency'],['gustStrengthMin','Gust strength min'],['gustStrengthMax','Gust strength max'],['gustDurationMin','Gust duration min'],['gustDurationMax','Gust duration max'],['gustRiseScalar','Gust rise scalar'],['gustFallScalar','Gust fall scalar']].map(([key,label])=>`<div class="stat"><span>${label}</span><strong>${fmt(common[key])}</strong></div>`).join('')}
+        </div></div>
+        <div class="tabs">${Object.keys(stageLabels).map(k=>`<button data-stage="${k}" class="${k===state.stage?'active':''}">${stageLabels[k]}</button>`).join('')}</div>
+        <div class="control-row"><label for="strength">Wind strength</label><input id="strength" type="range" min="0" max="1" step="0.001" value="${state.strength}"><strong id="strengthValue">${fmt(state.strength)}</strong></div>
+        <div class="chart-wrap"><canvas id="chart" width="1100" height="340"></canvas><div id="curveLegend" class="legend"></div></div>
+        <div id="curveStats" class="grid"></div>
+        <div class="block" style="margin-top:20px"><h2>Geometry and vertex wind attributes</h2><div style="overflow:auto"><table id="sections"></table></div></div>`;
+      document.querySelectorAll('[data-stage]').forEach(button=>button.addEventListener('click',()=>{state.stage=button.dataset.stage;render();}));
+      $('strength').addEventListener('input',e=>{state.strength=Number(e.target.value);draw();renderRuntimeInspector();});
+      if (hasGeometry) initModelViewer();
+      draw(); renderRuntimeInspector(); renderSections();
+    }
+    function getCurves() { return state.data.wind?.[state.stage] || {}; }
+    function sample(values, x) { const p=Math.max(0,Math.min(1,x))*(values.length-1), i=Math.floor(p), j=Math.min(i+1,values.length-1); return values[i]+(values[j]-values[i])*(p-i); }
+    function draw() {
+      const canvas=$('chart'); if (!canvas) return; const ctx=canvas.getContext('2d'), w=canvas.width, h=canvas.height; ctx.clearRect(0,0,w,h);
+      const pad={l:62,r:18,t:18,b:38}, cw=w-pad.l-pad.r, ch=h-pad.t-pad.b;
+      ctx.strokeStyle='#303840'; ctx.lineWidth=1; ctx.font='12px system-ui'; ctx.fillStyle='#9aa7b2';
+      const curves=getCurves();
+      const curveValues=(curveNames[state.stage]||[]).flatMap(name=>curves[name]||[]).map(Number).filter(Number.isFinite);
+      const valueMin=curveValues.length?Math.min(0,...curveValues):0;
+      const valueMax=curveValues.length?Math.max(1,...curveValues):1;
+      const valueRange=Math.max(valueMax-valueMin,1e-6);
+      const yForValue=value=>pad.t+ch*(1-(value-valueMin)/valueRange);
+      for(let i=0;i<=4;i++){const y=pad.t+ch*i/4;ctx.beginPath();ctx.moveTo(pad.l,y);ctx.lineTo(w-pad.r,y);ctx.stroke();ctx.fillText(fmt(valueMax-valueRange*i/4),8,y+4);}
+      for(let i=0;i<20;i++){const x=pad.l+cw*i/19;ctx.beginPath();ctx.moveTo(x,pad.t);ctx.lineTo(x,h-pad.b);ctx.stroke();if(i%2===0||i===19)ctx.fillText(String(i),x-3,h-14);}
+      (curveNames[state.stage]||[]).forEach((name,index)=>{const values=curves[name]||[]; if(!values.length)return;const color=colors[index%colors.length];ctx.strokeStyle=color;ctx.lineWidth=2;ctx.beginPath();values.forEach((v,i)=>{const x=pad.l+cw*i/19,y=yForValue(v);i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.stroke();ctx.fillStyle=color;values.forEach((v,i)=>{ctx.beginPath();ctx.arc(pad.l+cw*i/19,yForValue(v),3,0,Math.PI*2);ctx.fill();});});
+      const x=pad.l+cw*state.strength;ctx.strokeStyle='#f0a35b';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(x,pad.t);ctx.lineTo(x,h-pad.b);ctx.stroke();$('strengthValue').textContent=fmt(state.strength);
+      $('curveLegend').innerHTML=(curveNames[state.stage]||[]).map((name,index)=>`<span><i class="dot" style="background:${colors[index%colors.length]}"></i>${name}</span>`).join('')+'<span><i class="dot orange"></i>current strength sample</span>';
+      const stats=$('curveStats');stats.innerHTML=(curveNames[state.stage]||[]).map(name=>{const values=curves[name]||[];return `<div class="stat"><span>${name}</span><strong>${fmt(sample(values,state.strength))}</strong><small>sampled value at strength ${fmt(state.strength)}</small></div>`;}).join('');
+    }
+    function renderRuntimeInspector() {
+      const node=$('runtimeInspector'); if (!node) return;
+      const wind=state.data.wind||{};
+      const layerRows=Object.keys(stageLabels).map(stage => {
+        const layer=wind[stage]||{};
+        const sampled=(curveNames[stage]||[]).map(name => `${name}=${fmt(sample(layer[name]||[0],state.strength))}`).join(', ');
+        const staticValues=stage==='ripple'
+          ? `independence=${fmt(layer.independence)}, shimmer=${fmt(layer.shimmer)}`
+          : `independence=${fmt(layer.independence)}`;
+        return `<tr><td>${stageLabels[stage]}</td><td>${sampled}</td><td>${staticValues}</td></tr>`;
+      }).join('');
+      node.innerHTML=`<div class="data-flow">
+        <article><h3>1. Weather input</h3><p>Live scene state. Base wind direction and strength are not authored per tree. Gust is a temporary addition created by its runtime state machine.</p><span class="formula">combined = clamp(base + gust, 0, 1)</span></article>
+        <article><h3>2. Species profile</h3><p>Static asset data. The 19 curves describe how this tree species reacts at each combined strength; they do not animate by themselves.</p><span class="formula">curve[20] + lerp -> response value</span></article>
+        <article><h3>3. Profile runtime state</h3><p>One state per tree profile. It stores the smoothed direction/strength and four continuously accumulated noise positions.</p><span class="formula">noisePos -= direction * dt * 0.1 * speed</span></article>
+        <article><h3>4. Instance contribution</h3><p>Each model transform contributes tree world position. It offsets the noise domain, so different instances do not move in exact lockstep.</p><span class="formula">globalNoise = instancePos * independence</span></article>
+      </div>
+      <div style="overflow:auto;margin-top:14px"><table class="runtime-table"><tr><th>Runtime state / source</th><th>What it contains</th><th>Where the shader uses it</th></tr>
+        <tr><td>Wind vector</td><td>Current smoothed direction and combined strength</td><td>Direction drives Ripple, Branch 2, Branch 1 and Shared. Strength selects every curve sample.</td></tr>
+        <tr><td>Tree bounds</td><td>Profile source bounds after coordinate conversion</td><td>Expands the decoded branch noise offset into tree units; Shared also uses top height.</td></tr>
+        <tr><td>Stretch limits</td><td>Branch 1 and Branch 2 profile constants</td><td>branchLength = vertexWeight * stretchLimit, which establishes the derived branch anchor.</td></tr>
+        <tr><td>Shared start height</td><td>Profile constant</td><td>Below this height, Shared whole-tree bending is zero; above it, the squared height weight grows.</td></tr>
+        <tr><td>Noise positions</td><td>One accumulated position for Shared, Branch 1, Branch 2 and Ripple</td><td>Moves the procedural noise sample continuously. The sampled speed curve controls how quickly each one advances.</td></tr>
+      </table></div>
+      <div style="overflow:auto;margin-top:14px"><table class="runtime-table"><tr><th>Layer</th><th>Curve outputs at current inspector strength</th><th>Static per-layer values</th></tr>${layerRows}</table></div>
+      <p class="runtime-note">The strength slider below represents the curve input after weather and Gust have been combined. This inspector deliberately does not invent a Gust timeline: its exact result depends on time, smoothing, random seed and profile parameters.</p>`;
+    }
+    function statRange(stats,key){return `${fmt(stats[key]?.min)}..${fmt(stats[key]?.max)}`;}
+    function renderSections(){const table=$('sections');if(!table)return;const rows=(state.data.sections||[]).map(s=>{const x=s.windVertexStats||{};return `<tr><td>${escapeHtml(s.name)}</td><td>${escapeHtml(s.material)}</td><td>${s.vertexCount}</td><td>${s.indexCount}</td><td>${statRange(x,'branch1Weight')}</td><td>${statRange(x,'branch1PackedDirection')}</td><td>${statRange(x,'branch1NoiseOffset')}</td><td>${statRange(x,'rippleWeight')}</td><td>${statRange(x,'branch2Weight')}</td><td>${statRange(x,'branch2PackedDirection')}</td><td>${statRange(x,'branch2NoiseOffset')}</td><td>${statRange(x,'branch2Blend')}</td></tr>`;}).join('');table.innerHTML=`<tr><th>Section</th><th>Material</th><th>Vertices</th><th>Indices</th><th>B1.x weight</th><th>B1.y direction</th><th>B1.z offset</th><th>B1.w ripple</th><th>B2.x weight</th><th>B2.y direction</th><th>B2.z offset</th><th>B2.w blend</th></tr>${rows}`;}
+
+    let modelViewer = null;
+    function mat4Multiply(a,b){const out=new Float32Array(16);for(let c=0;c<4;c++)for(let r=0;r<4;r++)out[c*4+r]=a[r]*b[c*4]+a[4+r]*b[c*4+1]+a[8+r]*b[c*4+2]+a[12+r]*b[c*4+3];return out;}
+    function mat4Perspective(fovy,aspect,near,far){const f=1/Math.tan(fovy/2),nf=1/(near-far);return new Float32Array([f/aspect,0,0,0,0,f,0,0,0,0,(far+near)*nf,-1,0,0,2*far*near*nf,0]);}
+    function mat4LookAt(eye,center,up){let z=[eye[0]-center[0],eye[1]-center[1],eye[2]-center[2]],zl=Math.hypot(...z);z=z.map(v=>v/zl);let x=[up[1]*z[2]-up[2]*z[1],up[2]*z[0]-up[0]*z[2],up[0]*z[1]-up[1]*z[0]],xl=Math.hypot(...x);x=x.map(v=>v/xl);const y=[z[1]*x[2]-z[2]*x[1],z[2]*x[0]-z[0]*x[2],z[0]*x[1]-z[1]*x[0]];return new Float32Array([x[0],y[0],z[0],0,x[1],y[1],z[1],0,x[2],y[2],z[2],0,-(x[0]*eye[0]+x[1]*eye[1]+x[2]*eye[2]),-(y[0]*eye[0]+y[1]*eye[1]+y[2]*eye[2]),-(z[0]*eye[0]+z[1]*eye[1]+z[2]*eye[2]),1]);}
+    function initModelViewer(){if(modelViewer){modelViewer.destroy();modelViewer=null;}const canvas=$('modelCanvas');if(canvas)modelViewer=new ModelViewer(canvas,state.data);}
+    class ModelViewer {
+      constructor(canvas,data){this.canvas=canvas;this.data=data;this.colorMode=1;this.yaw=0.7;this.pitch=0.18;this.distance=1;this.center=[0,0,0];this.radius=1;this.gl=canvas.getContext('webgl2',{antialias:true});if(!this.gl){canvas.parentElement.innerHTML='<div class="empty">WebGL2 is required for the model preview.</div>';return;}this.initDataProgram();this.initGeometry();this.bindInput();$('modelMode').value=String(this.colorMode);this.resize();this.updateModeInfo();this.frame();}
+      initDataProgram(){const gl=this.gl;const vs=`#version 300 es
+precision highp float;
+layout(location=0) in vec3 aPosition; layout(location=1) in vec3 aNormal;
+layout(location=2) in vec4 aWind1; layout(location=3) in vec4 aWind2;
+uniform mat4 uMvp; uniform int uColorMode; uniform vec3 uSectionColor;
+out vec3 vNormal; out vec3 vColor;
+const float GoldenAngle=2.39996323;
+vec3 Heat(float value){float v=clamp(value,0.0,1.0);return vec3(smoothstep(.35,1.0,v),.15+sin(v*3.14159265)*.72,1.0-smoothstep(0.0,.65,v));}
+vec3 DecodeDirection(float packed){float i=floor(packed*255.0+.5),sourceZ=.99609375-.0078125*i,radial=sqrt(max(1.0-sourceZ*sourceZ,0.0)),angle=i*GoldenAngle;vec3 source=vec3(cos(angle)*radial,sin(angle)*radial,sourceZ);return vec3(source.x,source.z,-source.y);}
+vec3 DecodeOffset(float packed){float p=floor(packed*255.0+.5),sourceZ=floor(p/81.0);p-=sourceZ*81.0;float sourceY=floor(p/9.0),sourceX=p-sourceY*9.0;return vec3(sourceX/8.0,sourceZ/2.0,-sourceY/8.0);}
+void main(){vColor=uSectionColor;if(uColorMode==1)vColor=Heat(aWind1.x);else if(uColorMode==2)vColor=Heat(aWind2.x);else if(uColorMode==3)vColor=Heat(aWind1.w);else if(uColorMode==4)vColor=DecodeDirection(aWind1.y)*.5+.5;else if(uColorMode==5)vColor=DecodeDirection(aWind2.y)*.5+.5;else if(uColorMode==6){vec3 o=DecodeOffset(aWind1.z);vColor=vec3(o.x,o.y,-o.z);}else if(uColorMode==7){vec3 o=DecodeOffset(aWind2.z);vColor=vec3(o.x,o.y,-o.z);}else if(uColorMode==8)vColor=Heat(aWind2.w);vNormal=aNormal;gl_Position=uMvp*vec4(aPosition,1.0);}`;
+        const fs=`#version 300 es
+precision highp float; in vec3 vNormal; in vec3 vColor; out vec4 outColor;
+void main(){vec3 n=normalize(gl_FrontFacing?vNormal:-vNormal),l=normalize(vec3(-.35,.8,.45));float light=.4+.6*max(dot(n,l),0.0);outColor=vec4(vColor*light,1.0);}`;
+        const compile=(type,src)=>{const s=gl.createShader(type);gl.shaderSource(s,src);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw new Error(gl.getShaderInfoLog(s));return s;};
+        const program=gl.createProgram();gl.attachShader(program,compile(gl.VERTEX_SHADER,vs));gl.attachShader(program,compile(gl.FRAGMENT_SHADER,fs));gl.linkProgram(program);if(!gl.getProgramParameter(program,gl.LINK_STATUS))throw new Error(gl.getProgramInfoLog(program));
+        this.program=program;this.loc={mvp:gl.getUniformLocation(program,'uMvp'),time:null,strength:null,previewScale:null,min:null,max:null,color:gl.getUniformLocation(program,'uSectionColor'),colorMode:gl.getUniformLocation(program,'uColorMode')};}
+      initGeometry(){const gl=this.gl;this.meshes=[];const palette=[[.24,.67,.56],[.91,.54,.24],[.28,.49,.78],[.73,.34,.47],[.61,.63,.28],[.44,.40,.69],[.31,.64,.72]];let min=[Infinity,Infinity,Infinity],max=[-Infinity,-Infinity,-Infinity];for(const section of this.data.sections||[]){if(!section.geometry)continue;const g=section.geometry,p=g.positions;for(let i=0;i<p.length;i+=3){min[0]=Math.min(min[0],p[i]);min[1]=Math.min(min[1],p[i+1]);min[2]=Math.min(min[2],p[i+2]);max[0]=Math.max(max[0],p[i]);max[1]=Math.max(max[1],p[i+1]);max[2]=Math.max(max[2],p[i+2]);}const count=p.length/3,interleaved=new Float32Array(count*14);for(let i=0;i<count;i++){interleaved.set(p.slice(i*3,i*3+3),i*14);interleaved.set(g.normals.slice(i*3,i*3+3),i*14+3);interleaved.set(g.windBranch1.slice(i*4,i*4+4),i*14+6);interleaved.set(g.windBranch2.slice(i*4,i*4+4),i*14+10);}const vao=gl.createVertexArray(),buffer=gl.createBuffer(),index=gl.createBuffer();gl.bindVertexArray(vao);gl.bindBuffer(gl.ARRAY_BUFFER,buffer);gl.bufferData(gl.ARRAY_BUFFER,interleaved,gl.STATIC_DRAW);gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,index);gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,new Uint32Array(g.indices),gl.STATIC_DRAW);for(const [loc,size,offset] of [[0,3,0],[1,3,3],[2,4,6],[3,4,10]]){gl.enableVertexAttribArray(loc);gl.vertexAttribPointer(loc,size,gl.FLOAT,false,14*4,offset*4);}gl.bindVertexArray(null);this.meshes.push({vao,count:g.indices.length,color:palette[this.meshes.length%palette.length],section:section.name,material:section.material});}this.center=[(min[0]+max[0])/2,(min[1]+max[1])/2,(min[2]+max[2])/2];this.radius=Math.max(max[0]-min[0],max[1]-min[1],max[2]-min[2])*.58;this.distance=2.7*this.radius;this.bounds={min,max};}
+      bindInput(){let dragging=false,lastX=0,lastY=0;const redraw=()=>this.frame();this.canvas.addEventListener('pointerdown',e=>{dragging=true;lastX=e.clientX;lastY=e.clientY;this.canvas.setPointerCapture(e.pointerId);});this.canvas.addEventListener('pointermove',e=>{if(!dragging)return;this.yaw+=(e.clientX-lastX)*.008;this.pitch=Math.max(-1.2,Math.min(1.2,this.pitch+(e.clientY-lastY)*.008));lastX=e.clientX;lastY=e.clientY;redraw();});this.canvas.addEventListener('pointerup',()=>dragging=false);this.canvas.addEventListener('wheel',e=>{e.preventDefault();this.distance*=Math.exp(e.deltaY*.001);this.distance=Math.max(this.radius*.5,Math.min(this.radius*12,this.distance));redraw();},{passive:false});$('modelReset').addEventListener('click',()=>{this.yaw=.7;this.pitch=.18;this.distance=2.7*this.radius;redraw();});$('modelMode').addEventListener('change',e=>{this.colorMode=Number(e.target.value);this.updateModeInfo();redraw();});}
+      updateModeInfo(){const info=$('modelModeInfo'),mode=modelModes[this.colorMode];if(!info||!mode)return;let legend='';if(mode.kind==='section'){legend=`<div class="section-key">${this.meshes.map(mesh=>`<span><i style="background:rgb(${mesh.color.map(value=>Math.round(value*255)).join(',')})"></i>${escapeHtml(mesh.section)} / ${escapeHtml(mesh.material)}</span>`).join('')}</div>`;}else if(mode.kind==='heat')legend='Low <span class="heat-scale"></span> High';else if(mode.kind==='direction')legend='<span class="axis-key"><b>R = X</b><b>G = Y</b><b>B = Z</b></span> (signed direction remapped to 0..1)';else if(mode.kind==='offset')legend='<span class="axis-key"><b>R = X</b><b>G = Y</b><b>B = Z</b></span> (decoded offset magnitude)';info.innerHTML=`<dt>Source</dt><dd>${mode.source}</dd><dt>Meaning</dt><dd>${mode.meaning}</dd><dt>Calculation</dt><dd><code>${mode.use}</code></dd><dt>Color</dt><dd>${legend}</dd>`;}
+      resize(){const dpr=Math.min(2,window.devicePixelRatio||1),rect=this.canvas.getBoundingClientRect(),w=Math.max(1,Math.floor(rect.width*dpr)),h=Math.max(1,Math.floor(rect.height*dpr));if(this.canvas.width!==w||this.canvas.height!==h){this.canvas.width=w;this.canvas.height=h;}this.gl.viewport(0,0,w,h);}
+      frame(){if(!this.gl)return;this.resize();const gl=this.gl;gl.enable(gl.DEPTH_TEST);gl.disable(gl.CULL_FACE);gl.clearColor(.035,.05,.06,1);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);const aspect=this.canvas.width/this.canvas.height,eye=[this.center[0]+Math.cos(this.pitch)*Math.sin(this.yaw)*this.distance,this.center[1]+Math.sin(this.pitch)*this.distance,this.center[2]+Math.cos(this.pitch)*Math.cos(this.yaw)*this.distance],mvp=mat4Multiply(mat4Perspective(.62,aspect,this.radius*.01,this.radius*20),mat4LookAt(eye,this.center,[0,1,0]));gl.useProgram(this.program);gl.uniformMatrix4fv(this.loc.mvp,false,mvp);if(this.loc.colorMode)gl.uniform1i(this.loc.colorMode,this.colorMode);for(const mesh of this.meshes){gl.uniform3fv(this.loc.color,mesh.color);gl.bindVertexArray(mesh.vao);gl.drawElements(gl.TRIANGLES,mesh.count,gl.UNSIGNED_INT,0);}gl.bindVertexArray(null);}
+      destroy(){for(const mesh of this.meshes||[])this.gl.deleteVertexArray(mesh.vao);}
+    }
+
+    const sampleData = { schema:'vulkanlearn.speedtree.wind-inspection.v1', asset:'embedded sample', formatVersion:[10,2], vertexPacker:'Standard.lua', materials:[], bounds:{min:[-1,-1,-1],max:[1,1,1]}, wind:{common:{strengthResponse:0.5,directionResponse:0.4,gustFrequency:0.2,gustStrengthMin:0.1,gustStrengthMax:0.3,gustDurationMin:0.5,gustDurationMax:1.5,gustRiseScalar:1,gustFallScalar:1},shared:{bend:[0,0.1,0.2,0.35,0.5,0.6,0.7,0.78,0.84,0.89,0.92,0.94,0.96,0.97,0.98,0.99,1,1,1,1],oscillation:Array(20).fill(0.4),speed:Array(20).fill(0.5),turbulence:Array(20).fill(0.2),flexibility:Array(20).fill(0.6),independence:1},branch1:{bend:Array(20).fill(0.4),oscillation:Array(20).fill(0.5),speed:Array(20).fill(0.5),turbulence:Array(20).fill(0.3),flexibility:Array(20).fill(0.6),independence:1},branch2:{bend:Array(20).fill(0.3),oscillation:Array(20).fill(0.4),speed:Array(20).fill(0.6),turbulence:Array(20).fill(0.2),flexibility:Array(20).fill(0.5),independence:1},ripple:{planar:Array(20).fill(0.3),directional:Array(20).fill(0.3),speed:Array(20).fill(0.7),flexibility:Array(20).fill(0.5),shimmer:0.2,independence:1},sharedStartHeight:0,branch1StretchLimit:1,branch2StretchLimit:1,doShared:true,doBranch1:true,doBranch2:true,doRipple:true,doShimmer:true},sections:[]};
+  </script>
+</body>
+</html>
