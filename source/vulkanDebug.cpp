@@ -8,9 +8,7 @@ PFN_vkSetDebugUtilsObjectNameEXT VulkanDebug::pfnSetDebugUtilsObjectNameEXT = nu
 
 void VulkanDebug::Init(vk::Instance instance)
 {
-#if defined(NDEBUG)
-}
-#else
+#if !defined(NDEBUG)
     pfnCmdBeginDebugUtilsLabelEXT = reinterpret_cast<PFN_vkCmdBeginDebugUtilsLabelEXT>(instance.getProcAddr("vkCmdBeginDebugUtilsLabelEXT"));
     pfnCmdEndDebugUtilsLabelEXT = reinterpret_cast<PFN_vkCmdEndDebugUtilsLabelEXT>(instance.getProcAddr("vkCmdEndDebugUtilsLabelEXT"));
     pfnSetDebugUtilsObjectNameEXT = reinterpret_cast<PFN_vkSetDebugUtilsObjectNameEXT>(instance.getProcAddr("vkSetDebugUtilsObjectNameEXT"));
@@ -19,9 +17,7 @@ void VulkanDebug::Init(vk::Instance instance)
 
 void VulkanDebug::BeginRegion(vk::CommandBuffer cmd, const std::string& labelName, DebugCategory category)
 {
-#if defined(NDEBUG)
-}
-#else
+#if !defined(NDEBUG)
     if (pfnCmdBeginDebugUtilsLabelEXT)
     {
         VkDebugUtilsLabelEXT labelInfo = {};
@@ -88,9 +84,7 @@ std::array<float, 4> VulkanDebug::GetColor(DebugCategory category)
 
 void VulkanDebug::EndRegion(vk::CommandBuffer cmd)
 {
-#if defined(NDEBUG)
-}
-#else
+#if !defined(NDEBUG)
     if (pfnCmdEndDebugUtilsLabelEXT)
     {
         pfnCmdEndDebugUtilsLabelEXT(cmd);
@@ -100,9 +94,7 @@ void VulkanDebug::EndRegion(vk::CommandBuffer cmd)
 
 void VulkanDebug::SetObjectName(vk::Device device, uint64_t object, vk::ObjectType objectType, const std::string& name)
 {
-#if defined(NDEBUG)
-}
-#else
+#if !defined(NDEBUG)
     if (pfnSetDebugUtilsObjectNameEXT)
     {
         VkDebugUtilsObjectNameInfoEXT nameInfo = {};
