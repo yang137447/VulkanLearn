@@ -1,0 +1,13 @@
+# Project-wide clangd settings.
+#
+# CMake writes compile_commands.json into build/. Keep clangd pointed at that
+# database so diagnostics, navigation, and completion use the same flags as the
+# MinGW build.
+CompileFlags:
+  CompilationDatabase: build
+
+Diagnostics:
+  # Keep include-cleaner diagnostics useful for spotting accidental extra
+  # includes, but do not ask clangd to invent missing include fixes for us.
+  UnusedIncludes: Strict
+  MissingIncludes: None
