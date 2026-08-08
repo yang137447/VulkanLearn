@@ -69,7 +69,10 @@ void EnvironmentIblBaker::Shutdown(RendererBackendVulkan& rendererBackend)
 }
 
 void EnvironmentIblBaker::Record(
-    vk::CommandBuffer commandBuffer, const std::shared_ptr<Texture>& environmentCube, uint32_t swapchainImageIndex)
+    vk::CommandBuffer commandBuffer,
+    const std::shared_ptr<Texture>& environmentCube,
+    uint32_t swapchainImageIndex,
+    bool rebuildEvenIfUnchanged)
 {
     if (!initialized)
     {
@@ -84,7 +87,13 @@ void EnvironmentIblBaker::Record(
         throw std::runtime_error("EnvironmentIblBaker resources are missing.");
     }
 
-    if (boundEnvironmentCubes[swapchainImageIndex] != environmentCube)
+    const bool environmentChanged =
+        boundEnvironmentCubes[swapchainImageIndex] != environmentCube;
+    if (!environmentChanged && !rebuildEvenIfUnchanged)
+    {
+        return;
+    }
+    if (environmentChanged)
     {
         UpdateEnvironmentCubeDescriptors(
             *rendererBackend,

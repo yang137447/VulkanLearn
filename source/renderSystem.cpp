@@ -351,7 +351,6 @@ void RenderSystem::UpdateUBOGlobal(vk::CommandBuffer& commandBuffer)
     ubo.debugViewMode = currentRenderScene.debugViewMode;
     ubo.environmentIntensity = currentRenderScene.environment.intensity;
     ubo.skyParameters = currentRenderScene.environment.skyParameters;
-
     frameResources.UpdateGlobalUniformBufferExceptGpuOwnedRanges(commandBuffer, swapChainImageIndex, ubo);
 }
 
@@ -1296,5 +1295,11 @@ void RenderSystem::RecordEnvironmentIbl(vk::CommandBuffer commandBuffer, uint32_
         proceduralSkyCubeGenerator.Record(commandBuffer, swapchainImageIndex);
     }
 
-    environmentIblBaker.Record(commandBuffer, environmentCube, swapchainImageIndex);
+    const bool dynamicEnvironment =
+        currentRenderScene.environment.type == VL::EnvironmentType::ProceduralSky;
+    environmentIblBaker.Record(
+        commandBuffer,
+        environmentCube,
+        swapchainImageIndex,
+        dynamicEnvironment);
 }

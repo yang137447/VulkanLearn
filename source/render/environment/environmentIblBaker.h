@@ -26,9 +26,10 @@ public:
     bool IsInitialized() const { return initialized; }
 
     void Record(
-        vk::CommandBuffer commandBuffer, 
-        const std::shared_ptr<Texture>& environmentCube, 
-        uint32_t swapchainImageIndex);
+        vk::CommandBuffer commandBuffer,
+        const std::shared_ptr<Texture>& environmentCube,
+        uint32_t swapchainImageIndex,
+        bool rebuildEvenIfUnchanged);
 
     std::shared_ptr<Texture> GetPrefilteredEnvironmentCube() const { return prefilterCube.texture; }
 

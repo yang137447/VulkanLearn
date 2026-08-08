@@ -11,7 +11,6 @@
 #include "pipeline/computePipeline.h"
 #include "pipeline/pipelineFactory.h"
 #include "render/backend/rendererBackendVulkan.h"
-#include "render/resource/rendererResourceCache.h"
 #include "texture.h"
 
 namespace VL
@@ -185,10 +184,6 @@ void ProceduralSkyCubeGenerator::CreateSkyCubeResources(RendererBackendVulkan& r
         sampler,
         1,
         skyCube.format);
-
-    RendererResourceCache::GetInstance().BindWorldTexture(
-        "environmentCube", 
-        skyCube.texture);
 }
 
 void ProceduralSkyCubeGenerator::DestroySkyCubeResources(RendererBackendVulkan& rendererBackend)
