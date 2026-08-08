@@ -30,3 +30,15 @@ public:
 
 Use this rule especially for loader, resolver, validator, factory, cache, and runtime resource classes, because their boundaries are easy to blur as the renderer grows.
 
+## Input Validation Boundaries
+
+Validate external or authored input once at the boundary that owns its interpretation. Examples include console command parsers, JSON loaders, asset importers, and future network-message decoders.
+
+- Reject invalid syntax, non-finite numeric values, and out-of-contract ranges before publishing runtime commands or runtime data.
+- After a value crosses that boundary, downstream engine and rendering code should trust the established contract instead of repeating the same validation in every layer, frame update, or shader.
+- Document important downstream preconditions near the public API when they are not obvious from the type system.
+- Every new producer of the same runtime data must perform the required validation before handing the data to shared downstream consumers.
+- Add a downstream check only when the code crosses a new independent trust boundary or when it protects memory safety from corrupted state; do not add redundant defensive checks by default.
+
+For example, the SpeedTree `windstrength` console command validates that its value is finite and inside `[0, 1]` before creating a runtime command. `SpeedTreeWindProfileSet` then consumes the normalized value under that contract without checking the same range again.
+

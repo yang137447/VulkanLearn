@@ -234,6 +234,11 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
 
         world->SetEnvironment(environment);
 
+        for (const SpeedTreeWindProfile& profile : worldBuildPlan.speedTreeWindProfiles)
+        {
+            world->AddSpeedTreeWindProfile(profile);
+        }
+
         for (const MeshObjectBuildPlan& meshObjectPlan : worldBuildPlan.meshObjectPlans)
         {
             WorldMeshObject object;
@@ -244,6 +249,7 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
             object.meshKey = meshObjectPlan.meshKey;
             object.materialKey = meshObjectPlan.materialKey;
             object.materialInstanceKey = meshObjectPlan.materialInstanceKey;
+            object.speedTreeWindProfileKey = meshObjectPlan.speedTreeWindProfileKey;
             world->AddMeshObject(meshObjectPlan.objectName, std::move(object));
         }
 

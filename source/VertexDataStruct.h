@@ -10,6 +10,12 @@ struct Vertex
     Eigen::Vector4f color;      // 顶点颜色，w 可承载 alpha / AO 等顶点附加通道
     Eigen::Vector2f texCoord;   // 纹理坐标
     Eigen::Vector4f tangent;    // xyz: 切线, w: MikkTSpace handedness
+    // SpeedTree Runtime SDK attributes remain normalized exactly as the
+    // source packer declares them. Non-SpeedTree importers leave them zero.
+    // TODO: 将这两个属性拆成 SpeedTree 专用辅助顶点流，避免普通 Mesh 也承担
+    // SpeedTree 风动字段带来的额外 stride 和顶点缓冲占用。
+    Eigen::Vector4f speedTreeWindBranch1 = Eigen::Vector4f::Zero();
+    Eigen::Vector4f speedTreeWindBranch2 = Eigen::Vector4f::Zero();
 
     Vertex() {}
     Vertex(
@@ -63,6 +69,20 @@ namespace VertexInfo{
             0, // binding
             vk::Format::eR32G32B32A32Sfloat, // format
             offsetof(Vertex, tangent) // offset
+        ),
+        // SpeedTree branch 1: weight, packed direction, packed noise offset, ripple
+        vk::VertexInputAttributeDescription(
+            5, // location
+            0, // binding
+            vk::Format::eR32G32B32A32Sfloat, // format
+            offsetof(Vertex, speedTreeWindBranch1) // offset
+        ),
+        // SpeedTree branch 2: weight, packed direction, packed noise offset, blend
+        vk::VertexInputAttributeDescription(
+            6, // location
+            0, // binding
+            vk::Format::eR32G32B32A32Sfloat, // format
+            offsetof(Vertex, speedTreeWindBranch2) // offset
         )
     };
 } // namespace VertexFormat

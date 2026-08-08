@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -14,6 +15,14 @@
 
 namespace
 {
+    std::filesystem::path ToFilesystemPath(const std::string& path)
+    {
+        // Runtime asset paths are UTF-8 strings from JSON. Constructing a
+        // filesystem path first preserves non-ASCII Windows paths instead of
+        // routing them through the active narrow-character locale.
+        return std::filesystem::u8path(path);
+    }
+
     struct PackedSpeedTreeVertex
     {
         Vertex vertex;
@@ -51,7 +60,7 @@ namespace
 
     std::vector<uint8_t> ReadBinaryFile(const std::string& path)
     {
-        std::ifstream file(path, std::ios::binary);
+        std::ifstream file(ToFilesystemPath(path), std::ios::binary);
         if (!file.is_open())
         {
             throw std::runtime_error("Failed to open SpeedTree source file: " + path);
@@ -173,6 +182,310 @@ namespace
     float ReadHalfLE(const std::vector<uint8_t>& data, size_t offset)
     {
         return HalfToFloat(ReadU16LE(data, offset));
+    }
+
+    float DecodeNormalizedByte(uint8_t value)
+    {
+        return static_cast<float>(value) / 255.0f;
+    }
+
+    std::array<float, 4> DecodeNormalizedByte4(const std::array<uint8_t, 4>& values)
+    {
+        return {
+            DecodeNormalizedByte(values[0]),
+            DecodeNormalizedByte(values[1]),
+            DecodeNormalizedByte(values[2]),
+            DecodeNormalizedByte(values[3])
+        };
+    }
+
+    bool HasAsciiMarker(const std::vector<uint8_t>& data, const char* marker)
+    {
+        const size_t markerLength = std::char_traits<char>::length(marker);
+        return data.size() >= markerLength &&
+            std::equal(marker, marker + markerLength, data.begin());
+    }
+
+    uint32_t ReadOakRootValue(const std::vector<uint8_t>& data, uint32_t rootIndex)
+    {
+        constexpr size_t RootTableOffset = 16;
+        if (data.size() < RootTableOffset + 4)
+        {
+            throw std::runtime_error("Oak SpeedTree root table is truncated");
+        }
+
+        const uint32_t rootCount = ReadU32LE(data, RootTableOffset);
+        const size_t rootTableEnd = RootTableOffset + 4 + static_cast<size_t>(rootCount) * 4;
+        if (rootCount == 0 || rootTableEnd > data.size() || rootIndex >= rootCount)
+        {
+            throw std::runtime_error("Oak SpeedTree root index is out of range");
+        }
+
+        const uint32_t relativeOffset = ReadU32LE(data, RootTableOffset + 4 + static_cast<size_t>(rootIndex) * 4);
+        const size_t valueOffset = RootTableOffset + relativeOffset;
+        if (valueOffset + 4 > data.size())
+        {
+            throw std::runtime_error("Oak SpeedTree root value is out of range");
+        }
+        return ReadU32LE(data, valueOffset);
+    }
+
+    float ReadF32LE(const std::vector<uint8_t>& data, size_t offset)
+    {
+        if (offset + 4 > data.size())
+        {
+            throw std::runtime_error("ReadF32LE out of range while parsing SpeedTree source");
+        }
+        const uint32_t bits = ReadU32LE(data, offset);
+        float value = 0.0f;
+        std::memcpy(&value, &bits, sizeof(value));
+        return value;
+    }
+
+    size_t ReadOakRootTableAddress(const std::vector<uint8_t>& data, uint32_t rootIndex)
+    {
+        constexpr size_t RootTableOffset = 16;
+        if (data.size() < RootTableOffset + 4)
+        {
+            throw std::runtime_error("Oak SpeedTree root table is truncated");
+        }
+
+        const uint32_t rootCount = ReadU32LE(data, RootTableOffset);
+        if (rootIndex >= rootCount)
+        {
+            throw std::runtime_error("Oak SpeedTree root index is out of range");
+        }
+
+        const uint32_t relativeOffset = ReadU32LE(
+            data,
+            RootTableOffset + 4 + static_cast<size_t>(rootIndex) * 4);
+        const size_t valueOffset = RootTableOffset + relativeOffset;
+        if (valueOffset + 4 > data.size())
+        {
+            throw std::runtime_error("Oak SpeedTree root table value is out of range");
+        }
+        return valueOffset;
+    }
+
+    size_t ReadOakTableFieldAddress(
+        const std::vector<uint8_t>& data,
+        size_t tableOffset,
+        uint32_t fieldIndex)
+    {
+        if (tableOffset + 4 > data.size())
+        {
+            throw std::runtime_error("Oak SpeedTree table is truncated");
+        }
+
+        const uint32_t fieldCount = ReadU32LE(data, tableOffset);
+        if (fieldIndex >= fieldCount)
+        {
+            throw std::runtime_error("Oak SpeedTree table field is out of range");
+        }
+
+        const size_t fieldOffsetAddress = tableOffset + 4 + static_cast<size_t>(fieldIndex) * 4;
+        if (fieldOffsetAddress + 4 > data.size())
+        {
+            throw std::runtime_error("Oak SpeedTree table field offset is out of range");
+        }
+
+        const uint32_t relativeOffset = ReadU32LE(data, fieldOffsetAddress);
+        const size_t valueOffset = tableOffset + relativeOffset;
+        if (valueOffset + 4 > data.size())
+        {
+            throw std::runtime_error("Oak SpeedTree table field value is out of range");
+        }
+        return valueOffset;
+    }
+
+    float ReadOakTableFieldFloat(
+        const std::vector<uint8_t>& data,
+        size_t tableOffset,
+        uint32_t fieldIndex)
+    {
+        return ReadF32LE(data, ReadOakTableFieldAddress(data, tableOffset, fieldIndex));
+    }
+
+    bool ReadOakTableFieldBool(
+        const std::vector<uint8_t>& data,
+        size_t tableOffset,
+        uint32_t fieldIndex)
+    {
+        return ReadU32LE(data, ReadOakTableFieldAddress(data, tableOffset, fieldIndex)) != 0;
+    }
+
+    SpeedTreeWindCurve ReadOakWindCurve(
+        const std::vector<uint8_t>& data,
+        size_t curveOffset,
+        const char* curveName)
+    {
+        constexpr uint32_t ExpectedCurveCount = 20;
+        const uint32_t curveCount = ReadU32LE(data, curveOffset);
+        if (curveCount != ExpectedCurveCount ||
+            curveOffset + 4 + static_cast<size_t>(curveCount) * sizeof(float) > data.size())
+        {
+            throw std::runtime_error(
+                std::string("Oak SpeedTree wind curve '") + curveName +
+                "' is not the expected 20-point curve");
+        }
+
+        SpeedTreeWindCurve curve;
+        for (uint32_t curveIndex = 0; curveIndex < ExpectedCurveCount; ++curveIndex)
+        {
+            curve.values[curveIndex] = ReadF32LE(data, curveOffset + 4 + static_cast<size_t>(curveIndex) * 4);
+        }
+        return curve;
+    }
+
+    SpeedTreeWindBranchConfig ReadOakWindBranchConfig(
+        const std::vector<uint8_t>& data,
+        size_t tableOffset,
+        const char* branchName)
+    {
+        SpeedTreeWindBranchConfig branch;
+        branch.bend = ReadOakWindCurve(
+            data,
+            ReadOakTableFieldAddress(data, tableOffset, 0),
+            (std::string(branchName) + ".bend").c_str());
+        branch.oscillation = ReadOakWindCurve(
+            data,
+            ReadOakTableFieldAddress(data, tableOffset, 1),
+            (std::string(branchName) + ".oscillation").c_str());
+        branch.speed = ReadOakWindCurve(
+            data,
+            ReadOakTableFieldAddress(data, tableOffset, 2),
+            (std::string(branchName) + ".speed").c_str());
+        branch.turbulence = ReadOakWindCurve(
+            data,
+            ReadOakTableFieldAddress(data, tableOffset, 3),
+            (std::string(branchName) + ".turbulence").c_str());
+        branch.flexibility = ReadOakWindCurve(
+            data,
+            ReadOakTableFieldAddress(data, tableOffset, 4),
+            (std::string(branchName) + ".flexibility").c_str());
+        branch.independence = ReadOakTableFieldFloat(data, tableOffset, 5);
+        return branch;
+    }
+
+    SpeedTreeWindRippleConfig ReadOakWindRippleConfig(
+        const std::vector<uint8_t>& data,
+        size_t tableOffset)
+    {
+        SpeedTreeWindRippleConfig ripple;
+        ripple.planar = ReadOakWindCurve(
+            data,
+            ReadOakTableFieldAddress(data, tableOffset, 0),
+            "ripple.planar");
+        ripple.directional = ReadOakWindCurve(
+            data,
+            ReadOakTableFieldAddress(data, tableOffset, 1),
+            "ripple.directional");
+        ripple.speed = ReadOakWindCurve(
+            data,
+            ReadOakTableFieldAddress(data, tableOffset, 2),
+            "ripple.speed");
+        ripple.flexibility = ReadOakWindCurve(
+            data,
+            ReadOakTableFieldAddress(data, tableOffset, 3),
+            "ripple.flexibility");
+        ripple.shimmer = ReadOakTableFieldFloat(data, tableOffset, 4);
+        ripple.independence = ReadOakTableFieldFloat(data, tableOffset, 5);
+        return ripple;
+    }
+
+    SpeedTreeWindConfig ReadOakWindConfig(const std::vector<uint8_t>& data)
+    {
+        // Runtime SDK exports from Modeler 10.0 and 10.2 place the Games 9
+        // 20-field wind configuration at root index 10. Keep the version
+        // whitelist explicit until another format version is inspected.
+        const size_t windTableOffset = ReadOakRootTableAddress(data, 10);
+        SpeedTreeWindConfig wind;
+
+        const size_t commonTableOffset = ReadOakTableFieldAddress(data, windTableOffset, 0);
+        wind.common.strengthResponse = ReadOakTableFieldFloat(data, commonTableOffset, 0);
+        wind.common.directionResponse = ReadOakTableFieldFloat(data, commonTableOffset, 1);
+        wind.common.gustFrequency = ReadOakTableFieldFloat(data, commonTableOffset, 5);
+        wind.common.gustStrengthMin = ReadOakTableFieldFloat(data, commonTableOffset, 6);
+        wind.common.gustStrengthMax = ReadOakTableFieldFloat(data, commonTableOffset, 7);
+        wind.common.gustDurationMin = ReadOakTableFieldFloat(data, commonTableOffset, 8);
+        wind.common.gustDurationMax = ReadOakTableFieldFloat(data, commonTableOffset, 9);
+        wind.common.gustRiseScalar = ReadOakTableFieldFloat(data, commonTableOffset, 10);
+        wind.common.gustFallScalar = ReadOakTableFieldFloat(data, commonTableOffset, 11);
+        // Runtime SDK 10 omits the v9-only serialized CurrentStrength field;
+        // the live state manager owns the initial/current value instead.
+
+        wind.shared = ReadOakWindBranchConfig(
+            data,
+            ReadOakTableFieldAddress(data, windTableOffset, 1),
+            "shared");
+        wind.branch1 = ReadOakWindBranchConfig(
+            data,
+            ReadOakTableFieldAddress(data, windTableOffset, 2),
+            "branch1");
+        wind.branch2 = ReadOakWindBranchConfig(
+            data,
+            ReadOakTableFieldAddress(data, windTableOffset, 3),
+            "branch2");
+        wind.ripple = ReadOakWindRippleConfig(
+            data,
+            ReadOakTableFieldAddress(data, windTableOffset, 4));
+
+        wind.sharedStartHeight = ReadOakTableFieldFloat(data, windTableOffset, 10);
+        wind.branch1StretchLimit = ReadOakTableFieldFloat(data, windTableOffset, 11);
+        wind.branch2StretchLimit = ReadOakTableFieldFloat(data, windTableOffset, 12);
+        wind.doShared = ReadOakTableFieldBool(data, windTableOffset, 15);
+        wind.doBranch1 = ReadOakTableFieldBool(data, windTableOffset, 16);
+        wind.doBranch2 = ReadOakTableFieldBool(data, windTableOffset, 17);
+        wind.doRipple = ReadOakTableFieldBool(data, windTableOffset, 18);
+        wind.doShimmer = ReadOakTableFieldBool(data, windTableOffset, 19);
+        return wind;
+    }
+
+    std::pair<Eigen::Vector3f, Eigen::Vector3f> ReadOakSourceBounds(
+        const std::vector<uint8_t>& data)
+    {
+        const size_t boundsOffset = ReadOakRootTableAddress(data, 3);
+        Eigen::Vector3f minBounds(
+            ReadF32LE(data, boundsOffset + 0),
+            ReadF32LE(data, boundsOffset + 4),
+            ReadF32LE(data, boundsOffset + 8));
+        Eigen::Vector3f maxBounds(
+            ReadF32LE(data, boundsOffset + 12),
+            ReadF32LE(data, boundsOffset + 16),
+            ReadF32LE(data, boundsOffset + 20));
+        return {minBounds, maxBounds};
+    }
+
+    void ValidateSpeedTreeV10Header(const std::vector<uint8_t>& data, const std::string& modelDataPath)
+    {
+        if (!HasAsciiMarker(data, "SpeedTreeSDK____"))
+        {
+            throw std::runtime_error("SpeedTree source is not SpeedTreeSDK format: " + modelDataPath);
+        }
+
+        if (data.size() < 20 || ReadU32LE(data, 16) != 41)
+        {
+            throw std::runtime_error("SpeedTree root table is not the expected v10 layout: " + modelDataPath);
+        }
+
+        const uint32_t versionMajor = ReadOakRootValue(data, 0);
+        const uint32_t versionMinor = ReadOakRootValue(data, 1);
+        const bool isSupportedVersion =
+            versionMajor == 10 && (versionMinor == 0 || versionMinor == 2);
+        if (!isSupportedVersion)
+        {
+            throw std::runtime_error(
+                "Unsupported SpeedTree version " + std::to_string(versionMajor) + "." +
+                std::to_string(versionMinor) + ": " + modelDataPath);
+        }
+    }
+
+    bool HasEmbeddedPacker(const std::vector<uint8_t>& data, const char* programName)
+    {
+        const std::string text(reinterpret_cast<const char*>(data.data()), data.size());
+        const std::string marker = "Program=\"" + std::string(programName) + "\"";
+        return text.find("<SpeedTreeVertexPacker") != std::string::npos &&
+            text.find(marker) != std::string::npos;
     }
 
     bool HasMainMarker(const std::vector<uint8_t>& data, size_t offset)
@@ -385,19 +698,43 @@ namespace
         return Eigen::Vector3f(vector.x(), vector.z(), -vector.y());
     }
 
-    Eigen::Vector3f DecodeSpeedTreePackedDirection(uint8_t packedDirection)
+    // SpeedTree Runtime SDK 10's Standard.lua packer stores a Fibonacci-sphere
+    // direction as an 8-bit index. The SDK sample shader decodes the byte with
+    // a 256-step denominator (not 255), then the source-to-engine conversion is
+    // applied to move from SpeedTree's Y-up source coordinates to VulkanLearn.
+    Eigen::Vector3f DecodeSpeedTreeV10FibonacciDirection(uint8_t packedDirection)
     {
-        constexpr float DirectionTableMaxIndex = 255.0f;
+        constexpr float DirectionTableStep = 0.0078125f;
         constexpr float GoldenAngle = 2.39996323f;
 
         const float tableIndex = static_cast<float>(packedDirection);
-        const float y = 1.0f - 2.0f * tableIndex / DirectionTableMaxIndex;
-        const float radial = std::sqrt(std::max(0.0f, 1.0f - y * y));
-        const float angle = -tableIndex * GoldenAngle;
-        return Eigen::Vector3f(
-            radial * std::cos(angle),
-            y,
-            radial * std::sin(angle));
+        const float sourceZ = 0.99609375f - DirectionTableStep * tableIndex;
+        const float radial = std::sqrt(std::max(0.0f, 1.0f - sourceZ * sourceZ));
+        const float angle = tableIndex * GoldenAngle;
+        const Eigen::Vector3f sourceDirection(
+            std::cos(angle) * radial,
+            std::sin(angle) * radial,
+            sourceZ);
+        return ConvertSpeedTreeVector(sourceDirection);
+    }
+
+    // Standard.lua packs branch noise offsets with UnpackInteger3(offset * 255,
+    // float3(9, 9, 3)). The result is a normalized coordinate in [0, 1]^3;
+    // the Runtime SDK multiplies it by the tree extent in the shader.
+    Eigen::Vector3f DecodeSpeedTreeV10NoiseOffset(uint8_t packedOffset)
+    {
+        float value = static_cast<float>(packedOffset);
+        constexpr float xCoefficient = 9.0f;
+        constexpr float yCoefficient = 9.0f;
+        constexpr float zCoefficient = 3.0f;
+        const float xyCoefficient = xCoefficient * yCoefficient;
+
+        const float z = std::floor(value / xyCoefficient);
+        value -= z * xyCoefficient;
+        const float y = std::floor(value / xCoefficient);
+        value -= y * xCoefficient;
+        const float x = value;
+        return Eigen::Vector3f(x / (xCoefficient - 1.0f), y / (yCoefficient - 1.0f), z / (zCoefficient - 1.0f));
     }
 
     size_t SelectHighestLodBlockIndex(const std::vector<GeometryBlock>& blocks)
@@ -458,9 +795,10 @@ namespace
             result.aux.sourcePackedTangent,
             result.aux.ambientOcclusion
         };
-        result.aux.sourceNormal = DecodeSpeedTreePackedDirection(result.aux.sourcePackedNormal);
-        result.aux.sourceBinormal = DecodeSpeedTreePackedDirection(result.aux.sourcePackedBinormal);
-        result.aux.sourceTangent = DecodeSpeedTreePackedDirection(result.aux.sourcePackedTangent);
+        result.aux.sourceNormalizedTbnAo = DecodeNormalizedByte4(result.aux.sourcePackedTbnAo);
+        result.aux.sourceNormal = DecodeSpeedTreeV10FibonacciDirection(result.aux.sourcePackedNormal);
+        result.aux.sourceBinormal = DecodeSpeedTreeV10FibonacciDirection(result.aux.sourcePackedBinormal);
+        result.aux.sourceTangent = DecodeSpeedTreeV10FibonacciDirection(result.aux.sourcePackedTangent);
         result.aux.hasSourceNormalVector = true;
         result.aux.hasSourceBinormalVector = true;
         result.aux.hasSourceTangentVector = true;
@@ -477,6 +815,12 @@ namespace
             data[vertexOffset + 26],
             data[vertexOffset + 27]
         };
+        result.aux.windBranch1Normalized = DecodeNormalizedByte4(result.aux.windBranch1);
+        result.aux.windBranch2Normalized = DecodeNormalizedByte4(result.aux.windBranch2);
+        result.aux.windBranch1Direction = DecodeSpeedTreeV10FibonacciDirection(result.aux.windBranch1[1]);
+        result.aux.windBranch2Direction = DecodeSpeedTreeV10FibonacciDirection(result.aux.windBranch2[1]);
+        result.aux.windBranch1NoiseOffsetNormalized = DecodeSpeedTreeV10NoiseOffset(result.aux.windBranch1[2]);
+        result.aux.windBranch2NoiseOffsetNormalized = DecodeSpeedTreeV10NoiseOffset(result.aux.windBranch2[2]);
         return result;
     }
 
@@ -615,7 +959,18 @@ namespace
         const PackedSpeedTreeVertex packedVertex = ReadPackedVertex(data, block, sourceIndex);
         const uint32_t localIndex = static_cast<uint32_t>(section.vertices.size());
         localIndexBySourceIndex.emplace(sourceIndex, localIndex);
-        section.vertices.push_back(packedVertex.vertex);
+        Vertex vertex = packedVertex.vertex;
+        vertex.speedTreeWindBranch1 = Eigen::Vector4f(
+            packedVertex.aux.windBranch1Normalized[0],
+            packedVertex.aux.windBranch1Normalized[1],
+            packedVertex.aux.windBranch1Normalized[2],
+            packedVertex.aux.windBranch1Normalized[3]);
+        vertex.speedTreeWindBranch2 = Eigen::Vector4f(
+            packedVertex.aux.windBranch2Normalized[0],
+            packedVertex.aux.windBranch2Normalized[1],
+            packedVertex.aux.windBranch2Normalized[2],
+            packedVertex.aux.windBranch2Normalized[3]);
+        section.vertices.push_back(vertex);
         section.speedTreeAuxVertices.push_back(packedVertex.aux);
         return localIndex;
     }
@@ -664,7 +1019,7 @@ namespace
 
 void SpeedTreeSourceAdapter::ValidateSource(const std::string& sourcePath, const std::string& modelDataPath) const
 {
-    if (!std::filesystem::exists(sourcePath))
+    if (!std::filesystem::exists(ToFilesystemPath(sourcePath)))
     {
         throw std::runtime_error("SpeedTree source file not found: " + modelDataPath);
     }
@@ -675,15 +1030,31 @@ SpeedTreeSourceData SpeedTreeSourceAdapter::ReadSource(const std::string& source
     ValidateSource(sourcePath, modelDataPath);
 
     const std::vector<uint8_t> data = ReadBinaryFile(sourcePath);
+    ValidateSpeedTreeV10Header(data, modelDataPath);
+    if (!HasEmbeddedPacker(data, "Standard.lua"))
+    {
+        throw std::runtime_error("SpeedTree v10 Standard.lua packer metadata is missing: " + modelDataPath);
+    }
+
     const std::vector<std::string> materialNames = ExtractOrderedMaterialNames(ExtractPrintableStrings(data, 4));
     const std::vector<GeometryBlock> blocks = FindGeometryBlocks(data);
     if (blocks.empty())
     {
         throw std::runtime_error("SpeedTree parser found no geometry blocks: " + modelDataPath);
     }
+    if (std::any_of(blocks.begin(), blocks.end(), [](const GeometryBlock& block) { return block.vertexStride == 16; }) &&
+        !HasEmbeddedPacker(data, "Standard_Billboard.lua"))
+    {
+        throw std::runtime_error("SpeedTree v10 billboard packer metadata is missing: " + modelDataPath);
+    }
 
     SpeedTreeSourceData sourceData;
+    sourceData.formatVersionMajor = ReadOakRootValue(data, 0);
+    sourceData.formatVersionMinor = ReadOakRootValue(data, 1);
+    sourceData.vertexPackerProgram = "Standard.lua";
     sourceData.materialNames = materialNames;
+    const auto sourceBounds = ReadOakSourceBounds(data);
+    const SpeedTreeWindConfig windConfig = ReadOakWindConfig(data);
     const size_t blockIndex = SelectHighestLodBlockIndex(blocks);
     const GeometryBlock& block = blocks[blockIndex];
     std::vector<MaterialSection> sections = block.sections;
@@ -696,6 +1067,10 @@ SpeedTreeSourceData SpeedTreeSourceAdapter::ReadSource(const std::string& source
         sections.push_back(defaultSection);
     }
     sourceData.modelResource.sourceMaterialSlotNames = BuildMaterialNamesForSections(sections, materialNames);
+    sourceData.modelResource.hasSpeedTreeWind = true;
+    sourceData.modelResource.speedTreeSourceBoundsMin = sourceBounds.first;
+    sourceData.modelResource.speedTreeSourceBoundsMax = sourceBounds.second;
+    sourceData.modelResource.speedTreeWind = windConfig;
 
     for (size_t sectionIndex = 0; sectionIndex < sections.size(); ++sectionIndex)
     {

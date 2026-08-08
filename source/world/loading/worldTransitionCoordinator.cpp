@@ -134,6 +134,7 @@ RuntimeResult<WorldTransitionResult> WorldTransitionCoordinator::LoadWorldThroug
         RendererWorldResourceLoadResult resourceLoadResult =
             resourceLoadCoordinator.LoadRendererResources(worldBuildPlan, worldGeneration);
         worldBuildPlan.meshObjectPlans = std::move(resourceLoadResult.meshObjectPlans);
+        worldBuildPlan.speedTreeWindProfiles = std::move(resourceLoadResult.speedTreeWindProfiles);
 
         WorldBuilder worldBuilder;
         auto worldResult = worldBuilder.BuildFromLoadedScene(

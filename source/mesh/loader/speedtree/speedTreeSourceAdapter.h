@@ -1,11 +1,16 @@
 #pragma once
 
+#include <cstdint>
+#include <array>
 #include <string>
 #include <vector>
 #include "../../meshAssetTypes.h"
 
 struct SpeedTreeSourceData
 {
+    uint32_t formatVersionMajor = 0;
+    uint32_t formatVersionMinor = 0;
+    std::string vertexPackerProgram;
     std::vector<std::string> materialNames;
     ModelResource modelResource;
 };

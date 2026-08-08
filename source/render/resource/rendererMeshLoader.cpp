@@ -55,7 +55,7 @@ RendererMeshLoader::RendererMeshLoader(
 {
 }
 
-std::vector<MeshObjectBuildPlan> RendererMeshLoader::LoadMeshObject(
+RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
     const nlohmann::basic_json<>& node,
     const MeshAssetLoadRequest& meshLoadRequest) const
 {
@@ -63,6 +63,17 @@ std::vector<MeshObjectBuildPlan> RendererMeshLoader::LoadMeshObject(
     const MeshAssetBuildPlan& buildPlan = importResult.buildPlan;
     const ModelResource& modelResource = importResult.modelResource;
     const std::vector<MeshSectionLoadPlan>& sectionPlans = importResult.sectionPlans;
+
+    RendererMeshLoadResult result;
+    if (modelResource.hasSpeedTreeWind)
+    {
+        SpeedTreeWindProfile profile;
+        profile.key = buildPlan.modelCacheKey;
+        profile.sourceBoundsMin = modelResource.speedTreeSourceBoundsMin;
+        profile.sourceBoundsMax = modelResource.speedTreeSourceBoundsMax;
+        profile.config = modelResource.speedTreeWind;
+        result.speedTreeWindProfile = std::move(profile);
+    }
 
     RenderGraph& renderGraph = RenderGraph::GetInstance();
     RendererResourceCache& resourceCache = RendererResourceCache::GetInstance();
@@ -73,7 +84,7 @@ std::vector<MeshObjectBuildPlan> RendererMeshLoader::LoadMeshObject(
     Eigen::Vector3f scale = JsonParser::ParseValue<Eigen::Vector3f>(node["scale"]);
     const std::string meshObjectBaseName = node["name"];
     Renderpass& geometryPass = renderGraph.GetRenderpasses().at("geometry");
-    std::vector<MeshObjectBuildPlan> meshObjectPlans;
+    std::vector<MeshObjectBuildPlan>& meshObjectPlans = result.objectPlans;
     meshObjectPlans.reserve(modelResource.sections.size());
     std::unordered_set<std::string> usedObjectNames;
 
@@ -124,11 +135,15 @@ std::vector<MeshObjectBuildPlan> RendererMeshLoader::LoadMeshObject(
         meshObjectPlan.meshKey = renderableObject->GetName();
         meshObjectPlan.materialKey = materialInstance->GetBaseMaterial().lock()->GetMaterialKey();
         meshObjectPlan.materialInstanceKey = materialInstance->GetName();
+        if (result.speedTreeWindProfile.has_value())
+        {
+            meshObjectPlan.speedTreeWindProfileKey = result.speedTreeWindProfile->key;
+        }
 
         meshObjectPlans.push_back(std::move(meshObjectPlan));
     }
 
-    return meshObjectPlans;
+    return result;
 }
 
 } // namespace VL

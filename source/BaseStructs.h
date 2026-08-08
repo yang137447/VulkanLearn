@@ -38,6 +38,32 @@ struct alignas(16) SkyParametersGPU
     Eigen::Vector4f cloudControls = Eigen::Vector4f::Zero();
 };
 
+// Runtime SDK 10 / Games 9 wind state consumed by the shared SpeedTree
+// vertex deformation path. The public SDK shader contract is represented by
+// the state vectors below, with converted bounding-box min/max retained for
+// the height and packed-offset calculations.
+struct alignas(16) SpeedTreeWindStateGPU
+{
+    // Profile state stores a world-space direction. Object UBO assembly replaces
+    // xyz with the normalized object-local direction before GPU upload.
+    Eigen::Vector4f windVector = Eigen::Vector4f(1.0f, 0.0f, 0.0f, 0.0f);
+    Eigen::Vector4f treeExtentsSharedHeightStart = Eigen::Vector4f::Zero();
+    Eigen::Vector4f treeBoundsMin = Eigen::Vector4f::Zero();
+    Eigen::Vector4f treeBoundsMax = Eigen::Vector4f::Zero();
+    // branch 1 limit, branch 2 limit, instance wind independence, import scale
+    Eigen::Vector4f branchStretchLimits = Eigen::Vector4f(0.0f, 0.0f, 0.5f, 1.0f);
+    Eigen::Vector4f sharedNoisePosTurbulenceIndependence = Eigen::Vector4f::Zero();
+    Eigen::Vector4f sharedBendOscillationTurbulenceFlexibility = Eigen::Vector4f::Zero();
+    Eigen::Vector4f branch1NoisePosTurbulenceIndependence = Eigen::Vector4f::Zero();
+    Eigen::Vector4f branch1BendOscillationTurbulenceFlexibility = Eigen::Vector4f::Zero();
+    Eigen::Vector4f branch2NoisePosTurbulenceIndependence = Eigen::Vector4f::Zero();
+    Eigen::Vector4f branch2BendOscillationTurbulenceFlexibility = Eigen::Vector4f::Zero();
+    Eigen::Vector4f rippleNoisePosTurbulenceIndependence = Eigen::Vector4f::Zero();
+    Eigen::Vector4f ripplePlanarDirectionalFlexibilityShimmer = Eigen::Vector4f::Zero();
+};
+
+static_assert(sizeof(SpeedTreeWindStateGPU) == 208, "SpeedTreeWindStateGPU must match the 13 GLSL vec4 fields");
+
 struct alignas(16) UBOGlobal
 {
     Eigen::Matrix4f view;
@@ -81,12 +107,18 @@ static_assert(offsetof(UBOGlobal, skyParameters) + offsetof(SkyParametersGPU, ho
 static_assert(offsetof(UBOGlobal, skyParameters) + offsetof(SkyParametersGPU, groundColor) == 1024, "UBOGlobal groundColor must match GLSL std140 layout");
 static_assert(offsetof(UBOGlobal, skyParameters) + offsetof(SkyParametersGPU, scatteringControls) == 1040, "UBOGlobal scatteringControls must match GLSL std140 layout");
 static_assert(offsetof(UBOGlobal, skyParameters) + offsetof(SkyParametersGPU, cloudControls) == 1056, "UBOGlobal cloudControls must match GLSL std140 layout");
-
 struct alignas(16) UBOModel
 {
     Eigen::Matrix4f model;
     Eigen::Matrix4f previousModel;
+    // TODO: 将 SpeedTree 风动状态从所有对象共享的 UBOModel 中拆出，改为
+    // SpeedTree Pipeline 才绑定的可选 Profile/Instance Buffer，避免普通 Mesh
+    // 分配并重复上传无用的 208 字节风动数据。
+    SpeedTreeWindStateGPU speedTreeWind;
 };
+
+static_assert(offsetof(UBOModel, speedTreeWind) == 128, "UBOModel speedTreeWind must match GLSL std140 layout");
+static_assert(sizeof(UBOModel) == 336, "UBOModel size must match the GLSL std140 block");
 
 struct alignas(4) LightSSBOHeader
 {

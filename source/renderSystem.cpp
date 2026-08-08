@@ -82,9 +82,34 @@ void RenderSystem::SetActiveWorld(std::shared_ptr<const VL::World> world)
     currentRenderScene = VL::RenderScene();
     currentResolvedRenderScene = VL::ResolvedRenderScene();
     hasRenderScene = false;
+    windClockInitialized = false;
+    currentWindTimeSeconds = 0.0;
     initializedRenderWorldGeneration = 0;
     nextSnapshotFrameIndex = 0;
     shadowCascadeFrameData.valid = false;
+    if (activeWorld)
+    {
+        speedTreeWindProfiles.Configure(activeWorld->GetSpeedTreeWindProfiles());
+    }
+    else
+    {
+        speedTreeWindProfiles.Reset();
+    }
+}
+
+bool RenderSystem::ForceSpeedTreeGust()
+{
+    return speedTreeWindProfiles.ForceGust();
+}
+
+bool RenderSystem::SetSpeedTreeStrength(float strength)
+{
+    return speedTreeWindProfiles.SetStrength(strength);
+}
+
+bool RenderSystem::SetSpeedTreeGustingEnabled(bool enabled)
+{
+    return speedTreeWindProfiles.SetGustingEnabled(enabled);
 }
 
 bool RenderSystem::SetToneMappingMode(int mode, std::string& outMessage)
@@ -261,7 +286,13 @@ void RenderSystem::UpdateObjectUBOForPass(
     // Object transforms come from the frozen RenderDrawPacket. The upload path
     // addresses backend-owned object GPU resources through the resolved draw
     // packet.
-    frameResources.UpdateObjectUniformBuffer(swapChainImageIndex, objectResources, drawPacket);
+    const SpeedTreeWindStateGPU* windState =
+        speedTreeWindProfiles.FindGpuState(drawPacket.speedTreeWindProfileKey);
+    frameResources.UpdateObjectUniformBuffer(
+        swapChainImageIndex,
+        objectResources,
+        drawPacket,
+        windState);
 }
 
 void RenderSystem::UploadLightsForPass(
@@ -931,6 +962,9 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
             "Frame:" + std::to_string(frameIndex) + " Image:" + std::to_string(swapChainImageIndex),
             VulkanDebug::DebugCategory::eDefault);
 
+        // Tick every tree species once so shadow and geometry consume the same
+        // per-object wind state for the complete frame.
+        AdvanceSpeedTreeWindProfiles();
         // Procedural sky IBL needs the latest camera and sky parameters in global UBO,
         // but environmentSH is GPU-owned and must not be overwritten by this upload.
         UpdateUBOGlobal(commandBuffer);
@@ -998,6 +1032,11 @@ VL::RendererDescriptorContext RenderSystem::BuildRendererDescriptorContext() con
     return descriptorContext;
 }
 
+void RenderSystem::AdvanceSpeedTreeWindProfiles()
+{
+    speedTreeWindProfiles.AdvanceTo(GetSpeedTreeWindTimeSeconds());
+}
+
 void RenderSystem::ShutdownRenderObject()
 {
     ShutdownFrameResources();
@@ -1045,6 +1084,21 @@ void RenderSystem::ValidateFrameResourceDescriptors()
     {
         throw std::runtime_error("RenderSystem cannot expose frame resource descriptors before frame resources are initialized");
     }
+}
+
+double RenderSystem::GetSpeedTreeWindTimeSeconds()
+{
+    if (!windClockInitialized)
+    {
+        windStartTime = std::chrono::steady_clock::now();
+        windClockInitialized = true;
+        currentWindTimeSeconds = 0.0;
+        return currentWindTimeSeconds;
+    }
+
+    currentWindTimeSeconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - windStartTime).count();
+    return currentWindTimeSeconds;
 }
 
 std::pair<float, float> RenderSystem::ComputeMinMaxAlongAxis(const Eigen::Vector3f& aabbMin, const Eigen::Vector3f& aabbMax, const Eigen::Vector3f& axis) const
@@ -1100,6 +1154,9 @@ std::optional<std::pair<float, float>> RenderSystem::ComputeCascadeLightSpaceZBo
 
     for (const VL::RenderDrawPacket& drawPacket : currentRenderScene.drawPackets)
     {
+        // TODO: SpeedTree 的 worldBounds 当前来自未形变的静态网格，没有包含顶点
+        // Shader 风动后的位移。后续定义风动扩展包围盒契约后，应在这里使用扩展后的
+        // caster bounds，避免强风时 CSM 的光源空间 Z 范围裁掉枝叶阴影。
         const Eigen::Vector3f center = (drawPacket.worldBoundsMin + drawPacket.worldBoundsMax) * 0.5f;
         const Eigen::Vector3f extent = (drawPacket.worldBoundsMax - drawPacket.worldBoundsMin) * 0.5f;
         const float projectedCenterX = lightSpaceXAxis.dot(center);

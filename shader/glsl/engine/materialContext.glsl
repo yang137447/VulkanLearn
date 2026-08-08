@@ -10,6 +10,8 @@ struct MaterialVertexInput
     vec4 vertexColor;
     vec2 texCoord;
     vec4 localTangent;
+    vec4 speedTreeWindBranch1;
+    vec4 speedTreeWindBranch2;
 };
 
 struct MaterialVertex

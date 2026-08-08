@@ -10,6 +10,8 @@ layout(location = 1) in vec3 inNormal;
 layout(location = 2) in vec4 inColor;
 layout(location = 3) in vec2 inTexCoord;
 layout(location = 4) in vec4 inTangent;
+layout(location = 5) in vec4 inSpeedTreeWindBranch1;
+layout(location = 6) in vec4 inSpeedTreeWindBranch2;
 
 #if MATERIAL_USES_OPACITY_MASK
 layout(location = 0) out MaterialVaryings v2f;
@@ -23,6 +25,8 @@ void main()
     vertexInput.vertexColor = inColor;
     vertexInput.texCoord = inTexCoord;
     vertexInput.localTangent = inTangent;
+    vertexInput.speedTreeWindBranch1 = inSpeedTreeWindBranch1;
+    vertexInput.speedTreeWindBranch2 = inSpeedTreeWindBranch2;
 
     MaterialVertex vertex = EvaluateMaterialVertex(vertexInput);
     mat4 modelMatrix = uboM.model;

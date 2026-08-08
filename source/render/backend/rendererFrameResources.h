@@ -44,7 +44,8 @@ public:
     void UpdateObjectUniformBuffer(
         uint32_t swapChainImageIndex,
         RendererObjectGpuResources& objectResources,
-        const RenderDrawPacket& drawPacket);
+        const RenderDrawPacket& drawPacket,
+        const SpeedTreeWindStateGPU* speedTreeWindState);
 
     const std::vector<vk::DescriptorBufferInfo>& GetGlobalUniformBufferInfos() const;
     const std::vector<vk::DescriptorBufferInfo>& GetLightBufferInfos() const;

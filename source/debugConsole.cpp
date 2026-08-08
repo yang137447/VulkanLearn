@@ -2,6 +2,7 @@
 
 #include <conio.h>
 #include <cctype>
+#include <cmath>
 #include <iostream>
 #include <sstream>
 #include <utility>
@@ -242,6 +243,62 @@ void DebugConsole::ProcessCommand(const std::string& line)
         return;
     }
 
+    if (command == "windgust")
+    {
+        std::string mode;
+        if (!(commandStream >> mode))
+        {
+            std::cout << "Usage: windgust <on|off|once>" << std::endl;
+            return;
+        }
+
+        VL::RuntimeCommand runtimeCommand;
+        if (mode == "on")
+        {
+            runtimeCommand.type = VL::RuntimeCommandType::SetSpeedTreeGustingEnabled;
+            runtimeCommand.intValue = 1;
+        }
+        else if (mode == "off")
+        {
+            runtimeCommand.type = VL::RuntimeCommandType::SetSpeedTreeGustingEnabled;
+            runtimeCommand.intValue = 0;
+        }
+        else if (mode == "once")
+        {
+            runtimeCommand.type = VL::RuntimeCommandType::ForceSpeedTreeGust;
+        }
+        else
+        {
+            std::cout << "Usage: windgust <on|off|once>" << std::endl;
+            return;
+        }
+        runtimeCommand.sourceText = line;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
+    if (command == "windstrength")
+    {
+        float value = 0.0f;
+        if (!(commandStream >> value))
+        {
+            std::cout << "Usage: windstrength <0..1>" << std::endl;
+            return;
+        }
+        if (!std::isfinite(value) || value < 0.0f || value > 1.0f)
+        {
+            std::cout << "windstrength must be a finite value in range 0..1." << std::endl;
+            return;
+        }
+
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type = VL::RuntimeCommandType::SetSpeedTreeStrength;
+        runtimeCommand.floatValue = value;
+        runtimeCommand.sourceText = line;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
     std::cout << "Unknown command: " << command << std::endl;
 }
 
@@ -274,6 +331,8 @@ void DebugConsole::PrintHelp() const
     std::cout << "  reloadstress <scene-path> [count] - reload a scene once per frame for validation\n";
     std::cout << "  lightstress [count] - generate a high-light scene and reload it for validation\n";
     std::cout << "  environment <value> - set unified sky and IBL intensity\n";
+    std::cout << "  windgust <on|off|once> - toggle or trigger one SpeedTree gust\n";
+    std::cout << "  windstrength <0..1> - set the SpeedTree base strength target\n";
 }
 
 void DebugConsole::PrintPrompt() const

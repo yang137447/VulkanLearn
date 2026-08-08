@@ -16,6 +16,7 @@ struct WorldBuildPlan;
 struct RendererWorldResourceLoadResult
 {
     std::vector<MeshObjectBuildPlan> meshObjectPlans;
+    std::vector<SpeedTreeWindProfile> speedTreeWindProfiles;
 };
 
 // Coordinates renderer resource loading for one validated WorldBuildPlan.

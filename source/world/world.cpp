@@ -31,6 +31,11 @@ void World::AddMeshObject(std::string name, WorldMeshObject object)
     meshObjects[std::move(name)] = std::move(object);
 }
 
+void World::AddSpeedTreeWindProfile(SpeedTreeWindProfile profile)
+{
+    speedTreeWindProfiles[profile.key] = std::move(profile);
+}
+
 void World::AddDirectionalLight(std::string name, std::shared_ptr<DirectionalLight> light)
 {
     directionalLights[std::move(name)] = std::move(light);

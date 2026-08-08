@@ -42,4 +42,5 @@ struct MeshObjectBuildPlan
     std::string meshKey;
     std::string materialKey;
     std::string materialInstanceKey;
+    std::string speedTreeWindProfileKey;
 };

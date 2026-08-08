@@ -2,6 +2,7 @@
 #include <vulkan/vulkan.hpp>
 #include <Eigen/Dense>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -20,6 +21,7 @@
 #include "render/frontend/renderScene.h"
 #include "render/frontend/rendererFrontend.h"
 #include "render/pass/passRuntime.h"
+#include "render/foliage/speedTreeWindSystem.h"
 #include "world/worldSnapshotBuilder.h"
 
 class Material;
@@ -75,6 +77,9 @@ public:
     int GetDebugViewMode() const { return debugViewMode; }
     void SetEnvironmentIntensity(float intensity) { environmentIntensity = intensity; }
     float GetEnvironmentIntensity() const { return environmentIntensity; }
+    bool SetSpeedTreeStrength(float strength);
+    bool SetSpeedTreeGustingEnabled(bool enabled);
+    bool ForceSpeedTreeGust();
     // Renderer-owned debug/post-process controls. Runtime commands call these
     // APIs instead of reaching through RenderGraph to pass material instances.
     bool SetToneMappingMode(int mode, std::string& outMessage);
@@ -100,6 +105,7 @@ private:
     void BuildResolvedRenderScene();
     void InitializeCurrentRenderSceneResources();
     void RecordAndSubmitCurrentRenderScene();
+    void AdvanceSpeedTreeWindProfiles();
     void RenderInitialize();
     VL::RendererDescriptorContext BuildRendererDescriptorContext() const;
     void UpdateGlobalUBOForPass(vk::CommandBuffer& commandBuffer) override;
@@ -121,6 +127,7 @@ private:
     void InitializeFrameResources();
     void ShutdownFrameResources();
     void ValidateFrameResourceDescriptors();
+    double GetSpeedTreeWindTimeSeconds();
 
         // 用于使用boundingbox加速
     std::pair<float, float> ComputeMinMaxAlongAxis(const Eigen::Vector3f& aabbMin, const Eigen::Vector3f& aabbMax, const Eigen::Vector3f& axis) const;
@@ -188,6 +195,10 @@ private:
     int debugViewMode = 0;
     float environmentIntensity = 1.0f;
     bool hasRenderScene = false;
+    bool windClockInitialized = false;
+    std::chrono::steady_clock::time_point windStartTime;
+    double currentWindTimeSeconds = 0.0;
+    SpeedTreeWindProfileSet speedTreeWindProfiles;
     uint64_t initializedRenderWorldGeneration = 0;
     
     VL::CsmSettings csmSettings;

@@ -72,6 +72,9 @@ MaterialSurface EvaluateMaterialSurface(in MaterialPixelContext pixel)
             normalTS.y * bitangent +
             normalTS.z * pixel.worldNormal);
     #endif
+    #if MATERIAL_TWO_SIDED
+        surface.worldNormal = gl_FrontFacing ? surface.worldNormal : -surface.worldNormal;
+    #endif
 
     return surface;
 }

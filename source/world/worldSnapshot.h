@@ -55,6 +55,7 @@ struct MeshDrawSnapshot
     ResourceHandle mesh;
     ResourceHandle material;
     ResourceHandle materialInstance;
+    std::string speedTreeWindProfileKey;
 };
 
 enum class LightSnapshotType

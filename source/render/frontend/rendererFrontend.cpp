@@ -3,6 +3,8 @@
 #include <string>
 #include <utility>
 
+#include "render/foliage/speedTreeWindTransform.h"
+
 namespace VL
 {
 namespace
@@ -18,8 +20,14 @@ RenderDrawPacket BuildDrawPacket(const MeshDrawSnapshot& drawSnapshot)
     packet.materialInstance = drawSnapshot.materialInstance;
     packet.model = drawSnapshot.model;
     packet.previousModel = drawSnapshot.previousModel;
+    if (!drawSnapshot.speedTreeWindProfileKey.empty())
+    {
+        packet.speedTreeWorldToLocalDirection =
+            BuildSpeedTreeWorldToLocalDirectionMatrix(drawSnapshot.model);
+    }
     packet.worldBoundsMin = drawSnapshot.worldBoundsMin;
     packet.worldBoundsMax = drawSnapshot.worldBoundsMax;
+    packet.speedTreeWindProfileKey = drawSnapshot.speedTreeWindProfileKey;
     return packet;
 }
 

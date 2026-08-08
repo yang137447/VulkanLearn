@@ -71,12 +71,17 @@ RendererWorldResourceLoadResult RendererResourceLoadCoordinator::LoadRendererRes
                     "Scene mesh object missing mesh load request: " + worldBuildPlan.scenePath +
                     " object=" + objectPlan.objectName);
             }
-            std::vector<MeshObjectBuildPlan> meshObjectPlans =
+            RendererMeshLoadResult meshLoadResult =
                 meshLoader.LoadMeshObject(obj, *objectPlan.meshLoadRequest);
             loadResult.meshObjectPlans.insert(
                 loadResult.meshObjectPlans.end(),
-                std::make_move_iterator(meshObjectPlans.begin()),
-                std::make_move_iterator(meshObjectPlans.end()));
+                std::make_move_iterator(meshLoadResult.objectPlans.begin()),
+                std::make_move_iterator(meshLoadResult.objectPlans.end()));
+            if (meshLoadResult.speedTreeWindProfile.has_value())
+            {
+                loadResult.speedTreeWindProfiles.push_back(
+                    std::move(*meshLoadResult.speedTreeWindProfile));
+            }
         }
         else if (type == "environment")
         {

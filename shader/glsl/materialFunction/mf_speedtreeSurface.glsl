@@ -52,6 +52,9 @@ MaterialSurface EvaluateMaterialSurface(in MaterialPixelContext pixel)
             surface.roughness = 1.0 - normalSample.a;
         #endif
     #endif
+    #if MATERIAL_TWO_SIDED
+        surface.worldNormal = gl_FrontFacing ? surface.worldNormal : -surface.worldNormal;
+    #endif
 
     return surface;
 }

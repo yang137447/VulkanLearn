@@ -16,6 +16,7 @@
 #include "pipeline/pipelineBase.h"
 #include "render/backend/rendererBackendVulkan.h"
 #include "render/backend/rendererObjectGpuResources.h"
+#include "render/foliage/speedTreeWindTransform.h"
 #include "render/frontend/renderScene.h"
 #include "render/resource/resourceRetireQueue.h"
 #include "shaderReflect.h"
@@ -443,7 +444,8 @@ void RendererFrameResources::UpdateMaterialInstanceUniformBuffer(
 void RendererFrameResources::UpdateObjectUniformBuffer(
     uint32_t swapChainImageIndex,
     RendererObjectGpuResources& objectResources,
-    const RenderDrawPacket& drawPacket)
+    const RenderDrawPacket& drawPacket,
+    const SpeedTreeWindStateGPU* speedTreeWindState)
 {
     if (swapChainImageIndex >= objectResources.objectUniformBuffer.buffersMapped.size())
     {
@@ -453,6 +455,14 @@ void RendererFrameResources::UpdateObjectUniformBuffer(
     UBOModel ubo{};
     ubo.model = drawPacket.model;
     ubo.previousModel = drawPacket.previousModel;
+    if (speedTreeWindState != nullptr)
+    {
+        ubo.speedTreeWind = *speedTreeWindState;
+        ubo.speedTreeWind.windVector.head<3>() =
+            TransformSpeedTreeWindDirectionToLocal(
+                drawPacket.speedTreeWorldToLocalDirection,
+                speedTreeWindState->windVector.head<3>());
+    }
     std::memcpy(
         objectResources.objectUniformBuffer.buffersMapped[swapChainImageIndex],
         &ubo,

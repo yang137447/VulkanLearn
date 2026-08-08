@@ -10,6 +10,7 @@
 
 #include "baseStructs.h"
 #include "environmentType.h"
+#include "mesh/meshAssetTypes.h"
 
 class Camera;
 class DirectionalLight;
@@ -38,6 +39,7 @@ struct WorldMeshObject
     std::string meshKey;
     std::string materialKey;
     std::string materialInstanceKey;
+    std::string speedTreeWindProfileKey;
 };
 
 // Runtime view of the active game world. Camera, light, environment, and mesh
@@ -61,11 +63,13 @@ public:
     const WorldEnvironment& GetEnvironment() const { return environment; }
 
     void AddMeshObject(std::string name, WorldMeshObject object);
+    void AddSpeedTreeWindProfile(SpeedTreeWindProfile profile);
     void AddDirectionalLight(std::string name, std::shared_ptr<DirectionalLight> light);
     void AddPointLight(std::string name, std::shared_ptr<PointLight> light);
     void AddSpotLight(std::string name, std::shared_ptr<SpotLight> light);
 
     const std::unordered_map<std::string, WorldMeshObject>& GetMeshObjects() const { return meshObjects; }
+    const std::unordered_map<std::string, SpeedTreeWindProfile>& GetSpeedTreeWindProfiles() const { return speedTreeWindProfiles; }
     const std::unordered_map<std::string, std::shared_ptr<DirectionalLight>>& GetDirectionalLights() const { return directionalLights; }
     const std::unordered_map<std::string, std::shared_ptr<PointLight>>& GetPointLights() const { return pointLights; }
     const std::unordered_map<std::string, std::shared_ptr<SpotLight>>& GetSpotLights() const { return spotLights; }
@@ -77,6 +81,7 @@ private:
     std::shared_ptr<Camera> camera;
     WorldEnvironment environment;
     std::unordered_map<std::string, WorldMeshObject> meshObjects;
+    std::unordered_map<std::string, SpeedTreeWindProfile> speedTreeWindProfiles;
     std::unordered_map<std::string, std::shared_ptr<DirectionalLight>> directionalLights;
     std::unordered_map<std::string, std::shared_ptr<PointLight>> pointLights;
     std::unordered_map<std::string, std::shared_ptr<SpotLight>> spotLights;

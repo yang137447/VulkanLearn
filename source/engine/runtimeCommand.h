@@ -20,6 +20,9 @@ enum class RuntimeCommandType
     RunFrameSmokeTest,
     SetDebugViewMode,
     SetEnvironmentIntensity,
+    SetSpeedTreeStrength,
+    SetSpeedTreeGustingEnabled,
+    ForceSpeedTreeGust,
     SetToneMappingMode,
     SetBloomParameter
 };

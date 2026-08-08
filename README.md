@@ -67,6 +67,28 @@ cmake --build build -j
 
 编译成功后，可执行文件 `main.exe` 将生成在 `build/bin` 目录下。
 
+### SpeedTree 风数值验证
+
+本机安装 `C:\Software\SpeedTree_10.2.0_extracted\{app}` 时，默认构建额外的
+`speedtree_wind_validation.exe`。它直接使用 Modeler 的 `SpeedTreeWind.h` 推进
+官方 Runtime SDK CPU 状态，并逐层比较 SDK source-space 与 VulkanLearn Y-up
+公式：
+
+```bash
+cmake --build build --target speedtree_wind_validation -j
+build/bin/speedtree_wind_validation.exe
+ctest --test-dir build -R speedtree_wind_numeric --output-on-failure
+```
+
+默认从 `config/config.json -> resourcePath` 查找
+`models/datas/Oak_Complex_Rules.stsdk`，也可以把其他 `.stsdk` 路径作为第一个参数传入。
+Oak 使用固定顶点和贴图接缝回归；其他树种自动选择各 section 中风权重最大的代表顶点。
+
+如果 Modeler 安装在其他位置，配置时传入
+`-DSPEEDTREE_MODELER_ROOT=<Modeler 根目录>`。没有 SDK 的机器会跳过这个可选目标，
+不会影响 `main.exe`。顶点对照目前是 CPU 上的双公式求值，不是 Vulkan shader 的
+GPU readback；实际 SPIR-V 输出仍需后续 capture/readback 验证。
+
 ## 运行时资源位置
 
 当前仓库不再以 git 形式保存完整 `resources/` 资产。
