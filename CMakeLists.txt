@@ -11,6 +11,10 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 find_package(Threads REQUIRED)
 
+option(VULKANLEARN_ENABLE_DEVELOPER_UI
+    "Build the Dear ImGui developer UI layer."
+    ON)
+
 add_subdirectory(extern)
 add_subdirectory(source)
 

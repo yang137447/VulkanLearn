@@ -22,6 +22,8 @@
 #include "render/frontend/rendererFrontend.h"
 #include "render/pass/passRuntime.h"
 #include "render/foliage/speedTreeWindSystem.h"
+#include "ui/uiOverlayRendererVulkan.h"
+#include "ui/uiRenderSnapshotQueue.h"
 #include "world/worldSnapshotBuilder.h"
 
 class Material;
@@ -59,6 +61,8 @@ public:
     void RenderLatestSnapshotOrLastGood();
     void Render();
     void SetRendererBackend(VL::RendererBackendVulkan* backend) { rendererBackend = backend; }
+    void SetUiRenderSnapshotQueue(VL::UiRenderSnapshotQueue* queue) { uiRenderSnapshotQueue = queue; }
+    void SetUiOverlayShaderPaths(std::string vertexPath, std::string fragmentPath);
     void SetCsmSettings(const VL::CsmSettings& settings);
     void ReleaseSwapchainDependentResources();
     void RebuildSwapchainDependentResources();
@@ -78,15 +82,26 @@ public:
     void SetEnvironmentIntensity(float intensity) { environmentIntensity = intensity; }
     float GetEnvironmentIntensity() const { return environmentIntensity; }
     bool SetSpeedTreeStrength(float strength);
+    float GetSpeedTreeStrength() const { return speedTreeStrength; }
     bool SetSpeedTreeGustingEnabled(bool enabled);
+    bool GetSpeedTreeGustingEnabled() const { return speedTreeGustingEnabled; }
+    uint32_t GetSpeedTreeWindProfileCount() const
+    {
+        return static_cast<uint32_t>(speedTreeWindProfiles.GetProfileCount());
+    }
     bool ForceSpeedTreeGust();
     // Renderer-owned debug/post-process controls. Runtime commands call these
     // APIs instead of reaching through RenderGraph to pass material instances.
     bool SetToneMappingMode(int mode, std::string& outMessage);
+    int GetToneMappingMode() const { return toneMappingMode; }
     bool SetBloomStrength(float value, std::string& outMessage);
+    float GetBloomStrength() const { return bloomStrength; }
     bool SetBloomThreshold(float value, std::string& outMessage);
+    float GetBloomThreshold() const { return bloomThreshold; }
     bool SetBloomKnee(float value, std::string& outMessage);
+    float GetBloomKnee() const { return bloomKnee; }
     bool SetBloomClamp(float value, std::string& outMessage);
+    float GetBloomClamp() const { return bloomClamp; }
     // Rebinding the active World invalidates all CPU-side render views derived
     // from the previous World. The next Render() builds a fresh snapshot and
     // resolved scene from the new generation.
@@ -194,6 +209,13 @@ private:
     uint64_t nextSnapshotFrameIndex = 0;
     int debugViewMode = 0;
     float environmentIntensity = 1.0f;
+    int toneMappingMode = 3;
+    float bloomStrength = 0.08f;
+    float bloomThreshold = 1.0f;
+    float bloomKnee = 0.5f;
+    float bloomClamp = 12.0f;
+    float speedTreeStrength = 0.35f;
+    bool speedTreeGustingEnabled = true;
     bool hasRenderScene = false;
     bool windClockInitialized = false;
     std::chrono::steady_clock::time_point windStartTime;
@@ -216,4 +238,9 @@ private:
     PipelineFactory* pipelineFactory = nullptr;
     VL::ProceduralSkyCubeGenerator proceduralSkyCubeGenerator;
     VL::EnvironmentIblBaker environmentIblBaker;
+    VL::UiOverlayRendererVulkan uiOverlayRenderer;
+    VL::UiRenderSnapshotQueue* uiRenderSnapshotQueue = nullptr;
+    std::shared_ptr<const VL::UiRenderSnapshot> currentUiRenderSnapshot;
+    std::string uiVertexShaderPath;
+    std::string uiFragmentShaderPath;
 };

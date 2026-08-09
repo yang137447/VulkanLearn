@@ -189,6 +189,18 @@ LaunchOptions ParseLaunchOptions(int argc, char** argv)
             continue;
         }
 
+        if (argument == "--dev-ui")
+        {
+            options.developerUiMode = DeveloperUiLaunchMode::Enabled;
+            continue;
+        }
+
+        if (argument == "--no-dev-ui")
+        {
+            options.developerUiMode = DeveloperUiLaunchMode::Disabled;
+            continue;
+        }
+
         if (argument == "--exit-after-tests")
         {
             options.exitAfterTests = true;
@@ -416,6 +428,8 @@ void PrintLaunchUsage()
         << "  --resizestress [count]               Recreate swapchain and graph resources across window sizes.\n"
         << "  --graphreloadstress [count]          Reload frame graph GPU resources through retire queue.\n"
         << "  --framesmoke [count]                 Render fixed frames and report frame-time baseline.\n"
+        << "  --dev-ui                            Enable Dear ImGui developer tools for this launch.\n"
+        << "  --no-dev-ui                         Disable Dear ImGui developer tools for this launch.\n"
         << "  --exit-after-tests                  Exit with 0 on success or 2 on test failure.\n";
 }
 

@@ -63,6 +63,18 @@ GraphicsPipelineBuildResult GraphicsPipelineBuilder::Build(const GraphicsPipelin
                 .setDstAlphaBlendFactor(vk::BlendFactor::eOneMinusSrcAlpha);
         }
     }
+    else if (desc.pipelineStateDesc.blendMode == GraphicsPipelineBlendMode::PremultipliedAlpha)
+    {
+        for (auto& attachmentState : pipelineColorBlendAttachmentStates)
+        {
+            attachmentState
+                .setBlendEnable(true)
+                .setSrcColorBlendFactor(vk::BlendFactor::eOne)
+                .setDstColorBlendFactor(vk::BlendFactor::eOneMinusSrcAlpha)
+                .setSrcAlphaBlendFactor(vk::BlendFactor::eOne)
+                .setDstAlphaBlendFactor(vk::BlendFactor::eOneMinusSrcAlpha);
+        }
+    }
     else if (desc.pipelineStateDesc.blendMode == GraphicsPipelineBlendMode::Additive)
     {
         for (auto& attachmentState : pipelineColorBlendAttachmentStates)

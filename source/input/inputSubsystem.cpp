@@ -17,6 +17,11 @@ RuntimeResult<void> InputSubsystem::Initialize(PlatformWindow& window)
     }
 
     this->window = &window;
+    relativeMouseModeEnabled = false;
+    gameKeyboardEnabled = true;
+    gamePointerEnabled = true;
+    this->window->SetRelativeMouseMode(false);
+    SDL_GetRelativeMouseState(nullptr, nullptr);
     return RuntimeResult<void>::Success();
 }
 
@@ -24,9 +29,18 @@ void InputSubsystem::UpdateActionState()
 {
     actionState = {};
 
-    if (isMouseCaptured)
+    float mouseDeltaX = 0.0f;
+    float mouseDeltaY = 0.0f;
+    SDL_GetRelativeMouseState(&mouseDeltaX, &mouseDeltaY);
+    if (gamePointerEnabled)
     {
-        SDL_GetRelativeMouseState(&actionState.mouseDeltaX, &actionState.mouseDeltaY);
+        actionState.mouseDeltaX = mouseDeltaX;
+        actionState.mouseDeltaY = mouseDeltaY;
+    }
+
+    if (!gameKeyboardEnabled)
+    {
+        return;
     }
 
     const bool* state = SDL_GetKeyboardState(nullptr);
@@ -38,16 +52,16 @@ void InputSubsystem::UpdateActionState()
     actionState.moveUp = state[SDL_SCANCODE_E];
 }
 
-void InputSubsystem::SetMouseCaptured(bool captured)
+void InputSubsystem::SetRelativeMouseModeEnabled(bool enabled)
 {
-    isMouseCaptured = captured;
-    window->SetRelativeMouseMode(captured);
+    relativeMouseModeEnabled = enabled;
+    window->SetRelativeMouseMode(enabled);
     SDL_GetRelativeMouseState(nullptr, nullptr);
 }
 
-void InputSubsystem::ToggleMouseCaptured()
+void InputSubsystem::ToggleRelativeMouseMode()
 {
-    SetMouseCaptured(!isMouseCaptured);
+    SetRelativeMouseModeEnabled(!relativeMouseModeEnabled);
 }
 
 } // namespace VL

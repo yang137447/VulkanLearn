@@ -1,11 +1,15 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "core/runtimeResult.h"
 #include "platform/platformEvent.h"
 #include "platform/platformWindow.h"
+
+struct SDL_Gamepad;
 
 namespace VL
 {
@@ -41,10 +45,15 @@ public:
     std::vector<const char*>& GetVulkanExtensions() { return vulkanExtensions; }
 
 private:
+    bool OpenGamepad(uint32_t instanceId);
+    bool CloseGamepad(uint32_t instanceId);
+    void CloseAllGamepads();
+
     bool sdlInitialized = false;
     bool vulkanLoaderLoaded = false;
     PlatformWindow window;
     std::vector<const char*> vulkanExtensions;
+    std::unordered_map<uint32_t, SDL_Gamepad*> gamepads;
 };
 
 } // namespace VL

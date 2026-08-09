@@ -68,6 +68,12 @@ RenderSystem::~RenderSystem()
     ShutdownRenderObject();
 }
 
+void RenderSystem::SetUiOverlayShaderPaths(std::string vertexPath, std::string fragmentPath)
+{
+    uiVertexShaderPath = std::move(vertexPath);
+    uiFragmentShaderPath = std::move(fragmentPath);
+}
+
 void RenderSystem::SetCsmSettings(const VL::CsmSettings& settings)
 {
     csmSettings = settings;
@@ -90,6 +96,8 @@ void RenderSystem::SetActiveWorld(std::shared_ptr<const VL::World> world)
     if (activeWorld)
     {
         speedTreeWindProfiles.Configure(activeWorld->GetSpeedTreeWindProfiles());
+        (void)speedTreeWindProfiles.SetStrength(speedTreeStrength);
+        (void)speedTreeWindProfiles.SetGustingEnabled(speedTreeGustingEnabled);
     }
     else
     {
@@ -104,12 +112,22 @@ bool RenderSystem::ForceSpeedTreeGust()
 
 bool RenderSystem::SetSpeedTreeStrength(float strength)
 {
-    return speedTreeWindProfiles.SetStrength(strength);
+    if (!speedTreeWindProfiles.SetStrength(strength))
+    {
+        return false;
+    }
+    speedTreeStrength = strength;
+    return true;
 }
 
 bool RenderSystem::SetSpeedTreeGustingEnabled(bool enabled)
 {
-    return speedTreeWindProfiles.SetGustingEnabled(enabled);
+    if (!speedTreeWindProfiles.SetGustingEnabled(enabled))
+    {
+        return false;
+    }
+    speedTreeGustingEnabled = enabled;
+    return true;
 }
 
 bool RenderSystem::SetToneMappingMode(int mode, std::string& outMessage)
@@ -126,6 +144,7 @@ bool RenderSystem::SetToneMappingMode(int mode, std::string& outMessage)
     }
 
     outMessage = "Tone mapping mode set to " + std::to_string(mode);
+    toneMappingMode = mode;
     return true;
 }
 
@@ -143,6 +162,7 @@ bool RenderSystem::SetBloomStrength(float value, std::string& outMessage)
     }
 
     outMessage = "Bloom strength set to " + std::to_string(value);
+    bloomStrength = value;
     return true;
 }
 
@@ -160,6 +180,7 @@ bool RenderSystem::SetBloomThreshold(float value, std::string& outMessage)
     }
 
     outMessage = "Bloom threshold set to " + std::to_string(value);
+    bloomThreshold = value;
     return true;
 }
 
@@ -177,6 +198,7 @@ bool RenderSystem::SetBloomKnee(float value, std::string& outMessage)
     }
 
     outMessage = "Bloom knee set to " + std::to_string(value);
+    bloomKnee = value;
     return true;
 }
 
@@ -194,6 +216,7 @@ bool RenderSystem::SetBloomClamp(float value, std::string& outMessage)
     }
 
     outMessage = "Bloom clamp set to " + std::to_string(value);
+    bloomClamp = value;
     return true;
 }
 
@@ -210,6 +233,13 @@ void RenderSystem::InitRenderObject()
     VL::RendererDescriptorContext descriptorContext = BuildRendererDescriptorContext();
     renderGraph.RenderInitialize(*rendererBackend, descriptorContext);
     InitializeCurrentRenderSceneResources();
+    if (uiRenderSnapshotQueue != nullptr && !uiVertexShaderPath.empty() && !uiFragmentShaderPath.empty())
+    {
+        uiOverlayRenderer.Initialize(
+            *rendererBackend,
+            uiVertexShaderPath,
+            uiFragmentShaderPath);
+    }
 }
 
 void RenderSystem::Render()
@@ -223,6 +253,7 @@ void RenderSystem::Render()
 
 void RenderSystem::ReleaseSwapchainDependentResources()
 {
+    uiOverlayRenderer.ReleaseSwapchainDependentResources();
     VL::RendererResourceCache::GetInstance().ShutdownSwapchainDependentWorldResources();
     ShutdownFrameResources();
     initializedRenderWorldGeneration = 0;
@@ -239,6 +270,10 @@ void RenderSystem::RebuildSwapchainDependentResources()
     VL::RendererDescriptorContext descriptorContext = BuildRendererDescriptorContext();
     renderGraph.RenderInitialize(*rendererBackend, descriptorContext);
     InitializeCurrentRenderSceneResources();
+    if (uiOverlayRenderer.IsInitialized())
+    {
+        uiOverlayRenderer.RebuildSwapchainDependentResources();
+    }
 }
 
 void RenderSystem::RebuildRenderGraphDependentResources()
@@ -948,9 +983,21 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
 {
     const RenderGraph& renderGraph = RenderGraph::GetInstance();
 
+    if (uiRenderSnapshotQueue != nullptr)
+    {
+        std::shared_ptr<const VL::UiRenderSnapshot> latestUiSnapshot =
+            uiRenderSnapshotQueue->ConsumeLatest();
+        if (latestUiSnapshot != nullptr)
+        {
+            currentUiRenderSnapshot = std::move(latestUiSnapshot);
+            uiOverlayRenderer.SynchronizeTextures(*currentUiRenderSnapshot);
+        }
+    }
+
     // Backend owns swapchain frame synchronization. RenderSystem only records
     // pass work into the command buffer it receives for this image.
     VL::RendererFrameContext frameContext = rendererBackend->BeginFrame(currentFrame);
+    uiOverlayRenderer.CollectRetiredTextures();
     uint32_t frameIndex = frameContext.frameIndex;
     swapChainImageIndex = frameContext.swapchainImageIndex;
     vk::CommandBuffer commandBuffer = frameContext.commandBuffer;
@@ -996,6 +1043,18 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
             };
             passRuntime.RecordPass(renderPassName, passContext);
         }
+
+        if (uiOverlayRenderer.IsInitialized() && currentUiRenderSnapshot != nullptr)
+        {
+            VulkanDebug::ScopedRegion uiRegion(
+                commandBuffer,
+                "UI Overlay",
+                VulkanDebug::DebugCategory::eDefault);
+            uiOverlayRenderer.Record(
+                commandBuffer,
+                swapChainImageIndex,
+                *currentUiRenderSnapshot);
+        }
     }
 
     // RenderSystem only records pass commands. Queue, semaphore, fence,
@@ -1038,6 +1097,8 @@ void RenderSystem::AdvanceSpeedTreeWindProfiles()
 
 void RenderSystem::ShutdownRenderObject()
 {
+    uiOverlayRenderer.Shutdown();
+    currentUiRenderSnapshot.reset();
     ShutdownFrameResources();
 }
 

@@ -1,0 +1,194 @@
+<rml>
+    <head>
+        <title>VulkanLearn Runtime UI</title>
+        <link type="text/rcss" href="runtime-control.rcss" />
+    </head>
+    <body data-model="game_ui">
+        <div id="ui-root">
+            <div id="hud">
+                <div class="hud-card">
+                    <div class="hud-scene">{{world_text}}</div>
+                </div>
+            </div>
+
+            <div id="control-backdrop">
+                <div id="control-panel">
+                    <div class="panel-header">
+                        <div class="panel-heading">
+                            <h1>{{panel_title}}</h1>
+                            <p>{{panel_subtitle}}</p>
+                        </div>
+                        <button id="close-button" class="close-button" data-event-click="close_page">{{close_label}}</button>
+                    </div>
+
+                    <div class="panel-tabs">
+                        <button data-class-selected="active_section == 0" data-event-click="active_section = 0">{{tab_overview_label}}</button>
+                        <button data-class-selected="active_section == 1" data-event-click="active_section = 1">{{tab_visualization_label}}</button>
+                        <button data-class-selected="active_section == 2" data-event-click="active_section = 2">{{tab_post_process_label}}</button>
+                        <button data-class-selected="active_section == 3" data-event-click="active_section = 3">{{tab_environment_label}}</button>
+                        <button data-class-selected="active_section == 4" data-event-click="active_section = 4">{{tab_system_label}}</button>
+                    </div>
+
+                    <div id="control-scroll">
+                        <div class="section-page" data-if="active_section == 0">
+                            <h2>{{tab_overview_label}}</h2>
+                            <div class="status-card">
+                                <div class="status-row">
+                                    <div class="status-label">{{frame_label}}</div>
+                                    <div class="status-value">{{frame_value}}</div>
+                                </div>
+                                <div class="status-row">
+                                    <div class="status-label">{{fps_label}}</div>
+                                    <div class="status-value">{{fps_value}}</div>
+                                </div>
+                                <div class="status-row">
+                                    <div class="status-label">{{scene_label}}</div>
+                                    <div class="status-value">{{world_text}}</div>
+                                </div>
+                                <div class="status-row">
+                                    <div class="status-label">{{debug_view_label}}</div>
+                                    <div class="status-value">{{debug_view_value}}</div>
+                                </div>
+                                <div class="status-row">
+                                    <div class="status-label">{{wind_profiles_label}}</div>
+                                    <div class="status-value">{{wind_profiles_value}}</div>
+                                </div>
+                                <div class="status-row">
+                                    <div class="status-label">{{input_mode_label}}</div>
+                                    <div class="status-value">{{input_mode_value}}</div>
+                                </div>
+                            </div>
+
+                            <div class="status-card status-card-wide">
+                                <div class="status-row status-row-multiline">
+                                    <div class="status-label">{{hot_reload_label}}</div>
+                                    <div class="status-detail">{{hot_reload_status}}</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="section-page" data-if="active_section == 1">
+                            <div class="section-heading-row">
+                                <h2>{{tab_visualization_label}}</h2>
+                                <div class="section-current">{{debug_view_value}}</div>
+                            </div>
+                            <div class="debug-grid">
+                                <button data-class-selected="debug_view_mode == 0" data-event-click="set_debug_view(0)">{{debug_full_label}}</button>
+                                <button data-class-selected="debug_view_mode == 1" data-event-click="set_debug_view(1)">{{debug_base_color_label}}</button>
+                                <button data-class-selected="debug_view_mode == 2" data-event-click="set_debug_view(2)">{{debug_emissive_label}}</button>
+                                <button data-class-selected="debug_view_mode == 3" data-event-click="set_debug_view(3)">{{debug_normal_label}}</button>
+                                <button data-class-selected="debug_view_mode == 4" data-event-click="set_debug_view(4)">{{debug_roughness_label}}</button>
+                                <button data-class-selected="debug_view_mode == 5" data-event-click="set_debug_view(5)">{{debug_metallic_label}}</button>
+                                <button data-class-selected="debug_view_mode == 6" data-event-click="set_debug_view(6)">{{debug_ao_label}}</button>
+                                <button data-class-selected="debug_view_mode == 7" data-event-click="set_debug_view(7)">{{debug_shadow_label}}</button>
+                                <button data-class-selected="debug_view_mode == 8" data-event-click="set_debug_view(8)">{{debug_direct_lighting_label}}</button>
+                                <button data-class-selected="debug_view_mode == 9" data-event-click="set_debug_view(9)">{{debug_indirect_diffuse_label}}</button>
+                                <button data-class-selected="debug_view_mode == 10" data-event-click="set_debug_view(10)">{{debug_indirect_specular_label}}</button>
+                                <button data-class-selected="debug_view_mode == 11" data-event-click="set_debug_view(11)">{{debug_shadow_cascade_label}}</button>
+                            </div>
+                        </div>
+
+                        <div class="section-page" data-if="active_section == 2">
+                            <h2>{{tab_post_process_label}}</h2>
+
+                            <div class="control-row tone-row">
+                                <div class="control-topline">
+                                    <div class="control-label">{{tone_mapping_label}}</div>
+                                    <div class="control-value">{{tone_mapping_value}}</div>
+                                </div>
+                                <div class="control-buttons tone-buttons">
+                                    <button data-class-selected="tone_mapping_mode == 0" data-event-click="tone_none">{{tone_none_label}}</button>
+                                    <button data-class-selected="tone_mapping_mode == 1" data-event-click="tone_reinhard">{{tone_reinhard_label}}</button>
+                                    <button data-class-selected="tone_mapping_mode == 2" data-event-click="tone_hable">{{tone_hable_label}}</button>
+                                    <button data-class-selected="tone_mapping_mode == 3" data-event-click="tone_aces">{{tone_aces_label}}</button>
+                                </div>
+                            </div>
+
+                            <div class="control-row slider-row">
+                                <div class="control-topline">
+                                    <div class="control-label">{{bloom_strength_label}}</div>
+                                    <div class="control-value">{{bloom_strength_value}}</div>
+                                </div>
+                                <input id="bloom-strength-slider" class="control-slider" type="range" min="0" max="5" step="0.01" data-value="bloom_strength" data-event-change="bloom_strength_changed" />
+                            </div>
+                            <div class="control-row slider-row">
+                                <div class="control-topline">
+                                    <div class="control-label">{{bloom_threshold_label}}</div>
+                                    <div class="control-value">{{bloom_threshold_value}}</div>
+                                </div>
+                                <input id="bloom-threshold-slider" class="control-slider" type="range" min="0" max="10" step="0.01" data-value="bloom_threshold" data-event-change="bloom_threshold_changed" />
+                            </div>
+                            <div class="control-row slider-row">
+                                <div class="control-topline">
+                                    <div class="control-label">{{bloom_knee_label}}</div>
+                                    <div class="control-value">{{bloom_knee_value}}</div>
+                                </div>
+                                <input id="bloom-knee-slider" class="control-slider" type="range" min="0" max="1" step="0.01" data-value="bloom_knee" data-event-change="bloom_knee_changed" />
+                            </div>
+                            <div class="control-row slider-row">
+                                <div class="control-topline">
+                                    <div class="control-label">{{bloom_clamp_label}}</div>
+                                    <div class="control-value">{{bloom_clamp_value}}</div>
+                                </div>
+                                <input id="bloom-clamp-slider" class="control-slider" type="range" min="0" max="100" step="0.5" data-value="bloom_clamp" data-event-change="bloom_clamp_changed" />
+                            </div>
+                        </div>
+
+                        <div class="section-page" data-if="active_section == 3">
+                            <h2>{{tab_environment_label}}</h2>
+                            <div class="control-row slider-row">
+                                <div class="control-topline">
+                                    <div class="control-label">{{environment_label}}</div>
+                                    <div class="control-value">{{environment_value}}</div>
+                                </div>
+                                <input id="environment-slider" class="control-slider" type="range" min="0" max="8" step="0.01" data-value="environment_intensity" data-event-change="environment_intensity_changed" />
+                            </div>
+
+                            <h2>{{vegetation_heading}}</h2>
+                            <div class="control-row slider-row">
+                                <div class="control-topline">
+                                    <div class="control-label">{{wind_strength_label}}</div>
+                                    <div class="control-value">{{wind_strength_value}}</div>
+                                </div>
+                                <input id="speedtree-strength-slider" class="control-slider" type="range" min="0" max="1" step="0.01" data-value="speedtree_strength" data-event-change="speedtree_strength_changed" />
+                            </div>
+
+                            <div class="control-row gust-row">
+                                <div class="control-topline">
+                                    <div class="control-label">{{gusting_label}}</div>
+                                    <div class="control-value">{{gusting_value}}</div>
+                                </div>
+                                <div class="control-buttons gust-buttons">
+                                    <button data-class-selected="speedtree_gusting_enabled" data-event-click="set_speedtree_gusting(1)">{{gust_on_label}}</button>
+                                    <button data-class-selected="!speedtree_gusting_enabled" data-event-click="set_speedtree_gusting(0)">{{gust_off_label}}</button>
+                                    <button data-event-click="force_speedtree_gust">{{gust_once_label}}</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="section-page" data-if="active_section == 4">
+                            <h2>{{tab_system_label}}</h2>
+                            <div class="status-card">
+                                <div class="status-row">
+                                    <div class="status-label">{{locale_label}}</div>
+                                    <div class="status-value">{{locale_value}}</div>
+                                </div>
+                                <div class="status-row">
+                                    <div class="status-label">{{developer_ui_label}}</div>
+                                    <div class="status-value">{{developer_ui_value}}</div>
+                                </div>
+                            </div>
+
+                            <div class="system-actions">
+                                <button data-class-selected="locale_value == 'en-US'" data-event-click="locale_en">English</button>
+                                <button data-class-selected="locale_value == 'zh-CN'" data-event-click="locale_zh">简体中文</button>
+                                <button class="wide-action" data-event-click="toggle_developer_ui">{{developer_ui_toggle_label}}</button>
+                                <button class="danger-action wide-action" data-event-click="quit">{{quit_label}}</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </body>
+</rml>

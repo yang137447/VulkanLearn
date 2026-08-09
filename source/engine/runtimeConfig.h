@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include <Eigen/Dense>
 #include <nlohmann/json.hpp>
@@ -23,6 +24,19 @@ struct CsmSettings
     std::array<Eigen::Vector4f, 4> bias{};
 };
 
+struct UiSettings
+{
+    bool enabled = true;
+    bool hotReload = true;
+    bool developerUiEnabled = true;
+    bool developerUiVisible = false;
+    std::string assetRoot = "ui";
+    std::string document = "runtime-control.rml";
+    std::string localization = "localization.json";
+    std::string defaultLocale = "en-US";
+    std::vector<std::string> fontFaces;
+};
+
 // RuntimeConfig is the engine-facing view of config/config.json and related
 // runtime files. FileSystem handles physical paths; RuntimeConfig handles the
 // semantic fields engine startup needs.
@@ -39,6 +53,7 @@ public:
     const std::string& GetResourcePath() const;
     bool ShouldUseRenderThread() const;
     const CsmSettings& GetCsmSettings() const;
+    const UiSettings& GetUiSettings() const;
 
     std::string ResolvePath(const std::string& path) const;
 
@@ -47,6 +62,7 @@ private:
     RuntimeResult<void> LoadJsonFiles();
     RuntimeResult<void> LoadConfigFields();
     RuntimeResult<void> LoadCsmSettings();
+    RuntimeResult<void> LoadUiSettings();
     RuntimeResult<void> ValidateCsmAgainstRenderGraph() const;
 
     FileSystem fileSystem;
@@ -59,6 +75,7 @@ private:
     std::string resourcePath;
     int workerThreadCount = 1;
     CsmSettings csmSettings;
+    UiSettings uiSettings;
 };
 
 } // namespace VL

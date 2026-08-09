@@ -36,13 +36,17 @@ public:
     void SetTitle(const std::string& title);
     void SetSize(int width, int height);
     void SetRelativeMouseMode(bool enabled);
+    void SetTextInputEnabled(bool enabled);
+    void SetTextInputArea(int x, int y, int width, int height);
 
     SDL_Window* GetNativeHandle() const { return window; }
     bool IsValid() const { return window != nullptr; }
+    bool IsTextInputEnabled() const { return textInputEnabled; }
 
 private:
     SDL_Window* window = nullptr;
     std::string currentTitle;
+    bool textInputEnabled = false;
 };
 
 } // namespace VL

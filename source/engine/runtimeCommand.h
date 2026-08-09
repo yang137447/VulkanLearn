@@ -3,6 +3,8 @@
 #include <string>
 #include <vector>
 
+#include "ui/uiAction.h"
+
 namespace VL
 {
 
@@ -51,10 +53,13 @@ class CommandBus
 {
 public:
     void Queue(RuntimeCommand command);
+    void Queue(UiAction action);
     std::vector<RuntimeCommand> Drain();
+    std::vector<UiAction> DrainUiActions();
 
 private:
     std::vector<RuntimeCommand> pendingCommands;
+    std::vector<UiAction> pendingUiActions;
 };
 
 } // namespace VL

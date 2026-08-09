@@ -17,3 +17,7 @@
 /resources/*
 !/resources/README.md
 /output/playwright
+/imgui.ini
+/extern/FreeType/freetype/
+/extern/ImGui/imgui/
+/extern/RmlUi/RmlUi/

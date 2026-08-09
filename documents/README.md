@@ -31,8 +31,8 @@ Documentation in this repository is split by responsibility:
   - current rendering contracts that are implemented or actively used by code
   - data formats and ownership rules that contributors should follow now
 - `plan/`
-  - future or partially implemented work
-  - roadmaps, migration blueprints, long-term rendering plans, and deprecated design options kept for context
+  - future or partially implemented work, plus completed decision records retained for context
+  - roadmaps, migration blueprints, long-term rendering plans, and deprecated design options; current contracts do not live here
 - `reference/`
   - tutorials, courses, and study material
   - useful background that is not itself a live implementation plan
@@ -106,10 +106,12 @@ Rendering plans:
 - `plan/rendering/weather-gi-long-term-roadmap.html`
   - long-term weather, reflection, GI, DDGI, and Lumen-like system route
 
-UI plans:
+UI documents:
 
+- `architecture/game-ui-stack.md`
+  - current implementation contract for the RmlUi runtime layer, optional Dear ImGui developer layer, SDL3 input arbitration, immutable UI snapshots, hot reload, and Vulkan overlay recording
 - `plan/ui/game-ui-stack-plan.md`
-  - future two-layer game UI direction: RmlUi for player-facing runtime UI, Dear ImGui for developer tools, shared SDL3 input and Vulkan overlay boundaries, hot reload, threading, performance, and cross-platform constraints
+  - implemented decision record and adoption checklist for the two-layer UI stack
 
 ## References
 
@@ -123,7 +125,7 @@ UI plans:
 Use these rules when adding or moving documents:
 
 - Current implemented contracts go under `architecture/` or `rendering/`.
-- Future work, partially implemented routes, migration plans, and deprecated design options go under `plan/`.
+- Future work, partially implemented routes, migration plans, and deprecated design options go under `plan/`; completed decisions may remain there only as history, while the implementation contract moves to `architecture/` or `rendering/`.
 - Tutorials and background study material go under `reference/`.
 - Historical notes that no longer guide implementation should be deleted or folded into a current document instead of staying as live guidance.
 

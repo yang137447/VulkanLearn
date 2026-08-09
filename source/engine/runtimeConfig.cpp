@@ -133,6 +133,47 @@ RuntimeResult<float> ReadNumberField(
     return RuntimeResult<float>::Success(json[fieldName].get<float>());
 }
 
+RuntimeResult<void> ReadOptionalUiBoolean(
+    const nlohmann::json& uiJson,
+    const char* field,
+    bool& value)
+{
+    if (!uiJson.contains(field))
+    {
+        return RuntimeResult<void>::Success();
+    }
+    if (!uiJson[field].is_boolean())
+    {
+        return RuntimeResult<void>::Failure(MakeRuntimeError(
+            "RuntimeConfig.InvalidUiBoolean",
+            std::string("ui.") + field + " must be a boolean.",
+            "config/config.json",
+            std::string("ui.") + field));
+    }
+    value = uiJson[field].get<bool>();
+    return RuntimeResult<void>::Success();
+}
+
+RuntimeResult<void> ReadOptionalUiString(
+    const nlohmann::json& uiJson,
+    const char* field,
+    std::string& value)
+{
+    if (!uiJson.contains(field))
+    {
+        return RuntimeResult<void>::Success();
+    }
+    if (!uiJson[field].is_string() || uiJson[field].get<std::string>().empty())
+    {
+        return RuntimeResult<void>::Failure(MakeRuntimeError(
+            "RuntimeConfig.InvalidUiString",
+            std::string("ui.") + field + " must be a non-empty string.",
+            "config/config.json",
+            std::string("ui.") + field));
+    }
+    value = uiJson[field].get<std::string>();
+    return RuntimeResult<void>::Success();
+}
 uint32_t FindShadowMapArrayLayers(const nlohmann::json& renderGraphJson)
 {
     if (!renderGraphJson.contains("resources") || !renderGraphJson["resources"].is_array())
@@ -186,6 +227,13 @@ RuntimeResult<void> RuntimeConfig::Load()
     {
         loaded = false;
         return csmResult;
+    }
+
+    auto uiResult = LoadUiSettings();
+    if (uiResult.IsFailure())
+    {
+        loaded = false;
+        return uiResult;
     }
 
     auto csmGraphResult = ValidateCsmAgainstRenderGraph();
@@ -255,6 +303,12 @@ const CsmSettings& RuntimeConfig::GetCsmSettings() const
 {
     EnsureLoaded();
     return csmSettings;
+}
+
+const UiSettings& RuntimeConfig::GetUiSettings() const
+{
+    EnsureLoaded();
+    return uiSettings;
 }
 
 std::string RuntimeConfig::ResolvePath(const std::string& path) const
@@ -461,6 +515,91 @@ RuntimeResult<void> RuntimeConfig::LoadCsmSettings()
                 biasNode[1].get<float>(),
                 biasNode[2].get<float>(),
                 biasNode[3].get<float>());
+        }
+    }
+
+    return RuntimeResult<void>::Success();
+}
+
+RuntimeResult<void> RuntimeConfig::LoadUiSettings()
+{
+    uiSettings = UiSettings{};
+    if (!configJson.contains("ui"))
+    {
+        return RuntimeResult<void>::Success();
+    }
+    if (!configJson["ui"].is_object())
+    {
+        return RuntimeResult<void>::Failure(MakeRuntimeError(
+            "RuntimeConfig.InvalidUi",
+            "ui must be an object.",
+            "config/config.json",
+            "ui"));
+    }
+
+    const nlohmann::json& uiJson = configJson["ui"];
+    RuntimeResult<void> result = ReadOptionalUiBoolean(
+        uiJson,
+        "enabled",
+        uiSettings.enabled);
+    if (result.IsFailure()) return result;
+    result = ReadOptionalUiBoolean(
+        uiJson,
+        "hotReload",
+        uiSettings.hotReload);
+    if (result.IsFailure()) return result;
+    result = ReadOptionalUiBoolean(
+        uiJson,
+        "developerUiEnabled",
+        uiSettings.developerUiEnabled);
+    if (result.IsFailure()) return result;
+    result = ReadOptionalUiBoolean(
+        uiJson,
+        "developerUiVisible",
+        uiSettings.developerUiVisible);
+    if (result.IsFailure()) return result;
+    result = ReadOptionalUiString(
+        uiJson,
+        "assetRoot",
+        uiSettings.assetRoot);
+    if (result.IsFailure()) return result;
+    result = ReadOptionalUiString(
+        uiJson,
+        "document",
+        uiSettings.document);
+    if (result.IsFailure()) return result;
+    result = ReadOptionalUiString(
+        uiJson,
+        "localization",
+        uiSettings.localization);
+    if (result.IsFailure()) return result;
+    result = ReadOptionalUiString(
+        uiJson,
+        "defaultLocale",
+        uiSettings.defaultLocale);
+    if (result.IsFailure()) return result;
+
+    if (uiJson.contains("fontFaces"))
+    {
+        if (!uiJson["fontFaces"].is_array())
+        {
+            return RuntimeResult<void>::Failure(MakeRuntimeError(
+                "RuntimeConfig.InvalidUiFontFaces",
+                "ui.fontFaces must be an array of non-empty strings.",
+                "config/config.json",
+                "ui.fontFaces"));
+        }
+        for (const nlohmann::json& fontFace : uiJson["fontFaces"])
+        {
+            if (!fontFace.is_string() || fontFace.get<std::string>().empty())
+            {
+                return RuntimeResult<void>::Failure(MakeRuntimeError(
+                    "RuntimeConfig.InvalidUiFontFace",
+                    "Each ui.fontFaces entry must be a non-empty string.",
+                    "config/config.json",
+                    "ui.fontFaces"));
+            }
+            uiSettings.fontFaces.push_back(fontFace.get<std::string>());
         }
     }
 

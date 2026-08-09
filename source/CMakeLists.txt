@@ -24,9 +24,15 @@ PRIVATE
     MikkTSpace
     Spirv_Reflect
     OpenEXR::OpenEXR
+    RmlUi::Core
     Threads::Threads
     ws2_32 dbghelp advapi32 user32 secur32
     )
+
+if(VULKANLEARN_ENABLE_DEVELOPER_UI)
+    target_compile_definitions(main PRIVATE VULKANLEARN_ENABLE_DEVELOPER_UI)
+    target_link_libraries(main PRIVATE ImGui::ImGui)
+endif()
 
 if(VULKANLEARN_ENABLE_TRACY)
     target_compile_definitions(main PRIVATE TRACY_ENABLE)

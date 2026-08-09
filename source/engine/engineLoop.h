@@ -7,6 +7,8 @@
 #include "core/runtimeResult.h"
 #include "platform/platformEvent.h"
 #include "engine/runtimeCommand.h"
+#include "engine/launchOptions.h"
+#include "ui/uiSubsystem.h"
 
 class Controller;
 class PipelineFactory;
@@ -36,7 +38,10 @@ public:
     EngineLoop();
     ~EngineLoop();
 
-    RuntimeResult<void> Init(PlatformApplication& platformApplication, const RuntimeConfig& runtimeConfig);
+    RuntimeResult<void> Init(
+        PlatformApplication& platformApplication,
+        const RuntimeConfig& runtimeConfig,
+        const LaunchOptions& launchOptions);
     int Run();
     void Shutdown();
     void QueueRuntimeCommand(RuntimeCommand command);
@@ -45,11 +50,15 @@ public:
 private:
     void Tick();
     void PumpPlatformEvents();
+    void ApplyQueuedUiActions();
+    void UpdateUiInputPolicy();
+    void UpdateUiViewModel(float deltaTime);
     const RuntimeConfig& GetRuntimeConfig() const;
     SubsystemCollection& GetSubsystems();
     RuntimeResult<void> InitializeRuntimeSystems(
         PlatformWindow& window,
-        std::vector<const char*>& vulkanExtensions);
+        std::vector<const char*>& vulkanExtensions,
+        DeveloperUiLaunchMode developerUiMode);
     RuntimeResult<void> LoadInitialWorldAndRenderer();
     RuntimeResult<void> BindActiveWorldRuntimeObjects(const WorldHandle& worldHandle);
     RuntimeResult<void> RecreateRendererForWindowResize(uint32_t width, uint32_t height);
@@ -116,6 +125,8 @@ private:
     std::unique_ptr<RuntimeCommandExecutor> runtimeCommandExecutor;
     std::unique_ptr<WorldTransitionCoordinator> worldTransitionCoordinator;
     std::unique_ptr<Controller> controller;
+    std::unique_ptr<UiSubsystem> uiSubsystem;
+    uint64_t uiFrameIndex = 0;
 };
 
 } // namespace VL

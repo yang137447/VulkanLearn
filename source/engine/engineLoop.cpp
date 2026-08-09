@@ -5,6 +5,7 @@
 #include <cmath>
 #include <exception>
 #include <limits>
+#include <filesystem>
 #include <string>
 #include <utility>
 
@@ -27,6 +28,7 @@
 #include "renderSystem.h"
 #include "shaderCompiler.h"
 #include "world/loading/worldTransitionCoordinator.h"
+#include "ui/uiRenderSnapshot.h"
 
 namespace VL
 {
@@ -79,7 +81,8 @@ EngineLoop::~EngineLoop() = default;
 
 RuntimeResult<void> EngineLoop::Init(
     PlatformApplication& platformApplication,
-    const RuntimeConfig& runtimeConfig)
+    const RuntimeConfig& runtimeConfig,
+    const LaunchOptions& launchOptions)
 {
     PlatformWindow& platformWindow = platformApplication.GetWindow();
     if (!platformWindow.IsValid())
@@ -103,7 +106,8 @@ RuntimeResult<void> EngineLoop::Init(
 
     auto runtimeResult = InitializeRuntimeSystems(
         platformWindow,
-        platformApplication.GetVulkanExtensions());
+        platformApplication.GetVulkanExtensions(),
+        launchOptions.developerUiMode);
     if (runtimeResult.IsFailure())
     {
         return runtimeResult;
@@ -117,7 +121,7 @@ RuntimeResult<void> EngineLoop::Init(
 
     window->CenterOnScreen();
     window->Show();
-    GetSubsystems().GetInputSubsystem().SetMouseCaptured(true);
+    UpdateUiInputPolicy();
     GetSubsystems().GetRuntimeClock().Reset();
     return RuntimeResult<void>::Success();
 }
@@ -148,6 +152,12 @@ void EngineLoop::Shutdown()
         }
 
         rendererBackend->WaitIdle();
+        if (uiSubsystem)
+        {
+            RenderSystem::GetInstance().SetUiRenderSnapshotQueue(nullptr);
+            uiSubsystem->Shutdown();
+            uiSubsystem.reset();
+        }
         RenderSystem::GetInstance().SetActiveWorld(nullptr);
         RenderSystem::GetInstance().ShutdownRenderObject();
         RenderGraph::GetInstance().Shutdown(*rendererBackend);
@@ -236,7 +246,8 @@ void EngineLoop::StartFrameSmokeTest(int frameCount)
 
 RuntimeResult<void> EngineLoop::InitializeRuntimeSystems(
     PlatformWindow& window,
-    std::vector<const char*>& vulkanExtensions)
+    std::vector<const char*>& vulkanExtensions,
+    DeveloperUiLaunchMode developerUiMode)
 {
     // Material parameter includes are generated before shader compilation so
     // GLSL sees the latest JSON-driven parameter layout.
@@ -264,6 +275,52 @@ RuntimeResult<void> EngineLoop::InitializeRuntimeSystems(
     RenderGraph::GetInstance().LoadRenderGraph(
         GetRuntimeConfig().GetRenderGraphJson(),
         *rendererBackend);
+
+    const UiSettings& uiSettings = GetRuntimeConfig().GetUiSettings();
+    if (uiSettings.enabled)
+    {
+        UiSubsystemDesc uiDesc;
+        uiDesc.viewportWidth = static_cast<uint32_t>(GetRuntimeConfig().GetWindowSize().x());
+        uiDesc.viewportHeight = static_cast<uint32_t>(GetRuntimeConfig().GetWindowSize().y());
+        uiDesc.assetRoot = GetRuntimeConfig().ResolvePath(uiSettings.assetRoot);
+        uiDesc.documentPath = GetRuntimeConfig().ResolvePath(
+            (std::filesystem::path(uiSettings.assetRoot) / uiSettings.document).generic_string());
+        uiDesc.localizationPath = GetRuntimeConfig().ResolvePath(
+            (std::filesystem::path(uiSettings.assetRoot) / uiSettings.localization).generic_string());
+        uiDesc.defaultLocale = uiSettings.defaultLocale;
+        for (const std::string& fontFace : uiSettings.fontFaces)
+        {
+            uiDesc.fontFaces.emplace_back(fontFace);
+        }
+        uiDesc.hotReload = uiSettings.hotReload;
+        uiDesc.developerUiEnabled = uiSettings.developerUiEnabled;
+        if (developerUiMode == DeveloperUiLaunchMode::Enabled)
+        {
+            uiDesc.developerUiEnabled = true;
+        }
+        else if (developerUiMode == DeveloperUiLaunchMode::Disabled)
+        {
+            uiDesc.developerUiEnabled = false;
+        }
+        uiDesc.developerUiVisible = uiSettings.developerUiVisible;
+
+        uiSubsystem = std::make_unique<UiSubsystem>();
+        auto uiResult = uiSubsystem->Initialize(
+            uiDesc,
+            window,
+            GetSubsystems().GetCommandBus(),
+            GetSubsystems().GetDiagnosticsSubsystem());
+        if (uiResult.IsFailure())
+        {
+            return uiResult;
+        }
+
+        RenderSystem::GetInstance().SetUiRenderSnapshotQueue(
+            &uiSubsystem->GetRenderSnapshotQueue());
+        RenderSystem::GetInstance().SetUiOverlayShaderPaths(
+            GetRuntimeConfig().ResolvePath("uiOverlay_vert.spv"),
+            GetRuntimeConfig().ResolvePath("uiOverlay_frag.spv"));
+    }
     worldTransitionCoordinator = std::make_unique<WorldTransitionCoordinator>(
         GetSubsystems().GetWorldManager(),
         resourceLoadCoordinator,
@@ -322,6 +379,13 @@ void EngineLoop::Tick()
     PROFILE_SCOPE("Frame");
 
     GetSubsystems().GetConsoleSubsystem().Update();
+
+    ApplyQueuedUiActions();
+    UpdateUiInputPolicy();
+    if (shouldClose)
+    {
+        return;
+    }
 
     GetSubsystems().GetRuntimeTestHooks().Update(
         GetSubsystems().GetCommandBus(),
@@ -433,6 +497,7 @@ void EngineLoop::Tick()
     {
         return;
     }
+    UpdateUiInputPolicy();
 
     UpdateResizeStress();
     if (shouldClose)
@@ -452,6 +517,8 @@ void EngineLoop::Tick()
         PROFILE_SCOPE("Update");
         controller->Update(deltaTime, GetSubsystems().GetInputSubsystem().GetActionState());
     }
+
+    UpdateUiViewModel(deltaTime);
 
     {
         PROFILE_SCOPE("RenderLoop");
@@ -502,6 +569,133 @@ void EngineLoop::Tick()
     UpdateFrameSmokeTest(frameTimeMs);
 }
 
+void EngineLoop::ApplyQueuedUiActions()
+{
+    std::vector<UiAction> actions = GetSubsystems().GetCommandBus().DrainUiActions();
+    for (const UiAction& action : actions)
+    {
+        if (action.type == UiActionType::ToggleRuntimePage ||
+            action.type == UiActionType::CloseRuntimePage ||
+            action.type == UiActionType::ToggleDeveloperUi ||
+            action.type == UiActionType::SetLocale)
+        {
+            if (uiSubsystem != nullptr)
+            {
+                uiSubsystem->ApplyAction(action);
+            }
+            continue;
+        }
+
+        if (action.type == UiActionType::Quit)
+        {
+            shouldClose = true;
+            continue;
+        }
+
+        RuntimeCommand command;
+        command.sourceText = "ui";
+        switch (action.type)
+        {
+        case UiActionType::SetDebugViewMode:
+            command.type = RuntimeCommandType::SetDebugViewMode;
+            command.intValue = action.intValue;
+            break;
+        case UiActionType::SetToneMappingMode:
+            command.type = RuntimeCommandType::SetToneMappingMode;
+            command.intValue = action.intValue;
+            break;
+        case UiActionType::SetBloomStrength:
+            command.type = RuntimeCommandType::SetBloomParameter;
+            command.bloomParameter = BloomParameter::Strength;
+            command.floatValue = action.floatValue;
+            break;
+        case UiActionType::SetBloomThreshold:
+            command.type = RuntimeCommandType::SetBloomParameter;
+            command.bloomParameter = BloomParameter::Threshold;
+            command.floatValue = action.floatValue;
+            break;
+        case UiActionType::SetBloomKnee:
+            command.type = RuntimeCommandType::SetBloomParameter;
+            command.bloomParameter = BloomParameter::Knee;
+            command.floatValue = action.floatValue;
+            break;
+        case UiActionType::SetBloomClamp:
+            command.type = RuntimeCommandType::SetBloomParameter;
+            command.bloomParameter = BloomParameter::Clamp;
+            command.floatValue = action.floatValue;
+            break;
+        case UiActionType::SetEnvironmentIntensity:
+            command.type = RuntimeCommandType::SetEnvironmentIntensity;
+            command.floatValue = action.floatValue;
+            break;
+        case UiActionType::SetSpeedTreeStrength:
+            command.type = RuntimeCommandType::SetSpeedTreeStrength;
+            command.floatValue = action.floatValue;
+            break;
+        case UiActionType::SetSpeedTreeGustingEnabled:
+            command.type = RuntimeCommandType::SetSpeedTreeGustingEnabled;
+            command.intValue = action.intValue;
+            break;
+        case UiActionType::ForceSpeedTreeGust:
+            command.type = RuntimeCommandType::ForceSpeedTreeGust;
+            break;
+        default:
+            continue;
+        }
+        GetSubsystems().GetCommandBus().Queue(std::move(command));
+    }
+}
+
+void EngineLoop::UpdateUiInputPolicy()
+{
+    auto& inputSubsystem = GetSubsystems().GetInputSubsystem();
+    if (uiSubsystem == nullptr || !uiSubsystem->IsInitialized())
+    {
+        inputSubsystem.SetGameKeyboardEnabled(true);
+        inputSubsystem.SetGamePointerEnabled(true);
+        if (!inputSubsystem.IsRelativeMouseModeEnabled())
+        {
+            inputSubsystem.SetRelativeMouseModeEnabled(true);
+        }
+        return;
+    }
+
+    inputSubsystem.SetGameKeyboardEnabled(uiSubsystem->ShouldGameReceiveKeyboard());
+    inputSubsystem.SetGamePointerEnabled(uiSubsystem->ShouldGameReceivePointer());
+    const bool shouldUseRelativeMouseMode = uiSubsystem->ShouldUseRelativeMouseModeForGame();
+    if (inputSubsystem.IsRelativeMouseModeEnabled() != shouldUseRelativeMouseMode)
+    {
+        inputSubsystem.SetRelativeMouseModeEnabled(shouldUseRelativeMouseMode);
+    }
+}
+
+void EngineLoop::UpdateUiViewModel(float deltaTime)
+{
+    if (uiSubsystem == nullptr || !uiSubsystem->IsInitialized())
+    {
+        return;
+    }
+
+    UiViewModelSnapshot snapshot;
+    snapshot.frameIndex = uiFrameIndex++;
+    snapshot.deltaTimeSeconds = deltaTime;
+    snapshot.framesPerSecond = GetSubsystems().GetFpsTool().getFPS();
+    const RenderSystem& renderSystem = RenderSystem::GetInstance();
+    snapshot.debugViewMode = renderSystem.GetDebugViewMode();
+    snapshot.toneMappingMode = renderSystem.GetToneMappingMode();
+    snapshot.bloomStrength = renderSystem.GetBloomStrength();
+    snapshot.bloomThreshold = renderSystem.GetBloomThreshold();
+    snapshot.bloomKnee = renderSystem.GetBloomKnee();
+    snapshot.bloomClamp = renderSystem.GetBloomClamp();
+    snapshot.environmentIntensity = renderSystem.GetEnvironmentIntensity();
+    snapshot.speedTreeStrength = renderSystem.GetSpeedTreeStrength();
+    snapshot.speedTreeGustingEnabled = renderSystem.GetSpeedTreeGustingEnabled();
+    snapshot.speedTreeWindProfileCount = renderSystem.GetSpeedTreeWindProfileCount();
+    const WorldHandle& activeWorld = GetSubsystems().GetWorldManager().GetActiveWorldHandle();
+    snapshot.activeWorldPath = activeWorld.scenePath;
+    uiSubsystem->Update(snapshot);
+}
+
 void EngineLoop::PumpPlatformEvents()
 {
     PROFILE_SCOPE("Events");
@@ -509,17 +703,13 @@ void EngineLoop::PumpPlatformEvents()
     platformApplication->PollEvents(platformEvents);
     for (const PlatformEvent& event : platformEvents)
     {
+        if (uiSubsystem != nullptr && uiSubsystem->HandlePlatformEvent(event))
+        {
+            continue;
+        }
+
         if (event.type == PlatformEventType::KeyDown)
         {
-            if (!event.repeat && event.key == PlatformKey::Escape)
-            {
-                auto& inputSubsystem = GetSubsystems().GetInputSubsystem();
-                inputSubsystem.ToggleMouseCaptured();
-                GetSubsystems().GetDiagnosticsSubsystem().ReportInfo(
-                    std::string("Mouse capture ") +
-                    (inputSubsystem.IsMouseCaptured() ? "enabled" : "disabled") +
-                    " (press Esc to toggle)");
-            }
             continue;
         }
 

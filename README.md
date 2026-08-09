@@ -25,8 +25,8 @@
   - 存放当前已经落地或正在被代码使用的渲染契约
   - 例如材质参数生成、贴图资产 JSON、descriptor image info 管理
 - `documents/plan/`
-  - 存放未实现、部分实现或长期路线型文档
-  - 例如 Sky Pass、compute bloom、deferred GBuffer、foliage / SpeedTree、weather / GI 等规划
+  - 存放未实现、部分实现或长期路线型文档；已落地方案可以保留决策记录
+  - 当前实现契约必须迁移到 `documents/architecture/` 或 `documents/rendering/`
 - `documents/reference/`
   - 存放教程、课程和背景学习资料
 
@@ -35,6 +35,7 @@
 - `AGENTS.md`
 - `documents/README.md`
 - `documents/architecture/vulkanlearn-architecture.html`
+- `documents/architecture/game-ui-stack.md`
 - `documents/rendering/texture-asset-json-v1.md`
 - `documents/rendering/material-param-authoring-and-reflection.md`
 - `documents/rendering/descriptor-imageinfo-management.md`
@@ -66,6 +67,34 @@ cmake --build build -j
 如果你的 MinGW 环境没有自动进入 `PATH`，请先确保 `g++`、`gcc` 和 `mingw32-make` 可用，再执行上面的 CMake 命令。
 
 编译成功后，可执行文件 `main.exe` 将生成在 `build/bin` 目录下。
+
+### UI 构建与运行
+
+默认构建包含 RmlUi 运行时 UI 和 Dear ImGui 开发者 UI。只需要运行时 UI
+时，可以在配置阶段关闭开发者层：
+
+```bash
+cmake -S . -B build -G "MinGW Makefiles" -DVULKANLEARN_ENABLE_DEVELOPER_UI=OFF
+cmake --build build -j
+```
+
+运行时 UI 资产位于仓库内的 `ui/`，由 `config/config.json -> ui` 配置块选择。
+`Esc` 或手柄 `Start` 打开/关闭运行时控制页，`F1` 切换开发者工具。启动参数
+`--dev-ui` 和 `--no-dev-ui` 可以覆盖配置中的开发者 UI 开关：
+
+```bash
+build/bin/main.exe --dev-ui
+build/bin/main.exe --no-dev-ui
+```
+
+UI 初始化和渲染线程路径可用短帧烟雾验证：
+
+```bash
+build/bin/main.exe --framesmoke 2 --exit-after-tests
+```
+
+RML/RCSS/本地化文件在开发模式下支持候选解析、校验、提交式热重载；失败候选
+不会替换最后一个有效页面。实现契约见 `documents/architecture/game-ui-stack.md`。
 
 ### SpeedTree 风数值验证
 

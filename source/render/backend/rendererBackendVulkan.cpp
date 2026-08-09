@@ -112,6 +112,16 @@ const std::vector<vk::ImageView>& RendererBackendVulkan::GetSwapchainImageViews(
     return rhiDevice->GetSwapchainImageViews();
 }
 
+vk::Device& RendererBackendVulkan::GetDevice()
+{
+    return rhiDevice->GetDevice();
+}
+
+const vk::Device& RendererBackendVulkan::GetDevice() const
+{
+    return rhiDevice->GetDevice();
+}
+
 RHIBufferHandle RendererBackendVulkan::RequireBufferHandle(vk::Buffer buffer) const
 {
     auto handleIt = bufferHandlesByBuffer.find(static_cast<VkBuffer>(buffer));

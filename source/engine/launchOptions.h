@@ -7,6 +7,13 @@ namespace VL
 
 class EngineLoop;
 
+enum class DeveloperUiLaunchMode
+{
+    UseConfig,
+    Enabled,
+    Disabled
+};
+
 // Owns command-line launch parsing and translation into startup runtime
 // commands. It does not initialize platform, config, renderer, or world state.
 struct LaunchOptions
@@ -22,6 +29,7 @@ struct LaunchOptions
     bool runRenderGraphReloadStress = false;
     bool runFrameSmokeTest = false;
     bool exitAfterTests = false;
+    DeveloperUiLaunchMode developerUiMode = DeveloperUiLaunchMode::UseConfig;
     std::string reloadStressScenePath;
     std::string reloadFailureScenePath;
     int reloadStressCount = 20;

@@ -44,7 +44,7 @@ int main(int argc, char **argv)
     }
 
     VL::EngineLoop engineLoop;
-    auto initResult = engineLoop.Init(platformApplication, runtimeConfig);
+    auto initResult = engineLoop.Init(platformApplication, runtimeConfig, launchOptions);
     if (initResult.IsFailure())
     {
         diagnostics.ReportRuntimeError("EngineLoop init failed", initResult.Error());

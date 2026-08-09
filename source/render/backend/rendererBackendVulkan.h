@@ -49,6 +49,8 @@ public:
     vk::Extent2D GetSwapchainExtent() const;
     vk::Format GetSwapchainImageFormat() const;
     const std::vector<vk::ImageView>& GetSwapchainImageViews() const;
+    vk::Device& GetDevice();
+    const vk::Device& GetDevice() const;
     std::pair<vk::Buffer, vk::DeviceMemory> CreateBuffer(
         vk::DeviceSize size,
         vk::BufferUsageFlags usage,

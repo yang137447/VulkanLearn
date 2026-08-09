@@ -30,14 +30,18 @@ public:
     void UpdateActionState();
     const InputActionState& GetActionState() const { return actionState; }
 
-    void SetMouseCaptured(bool captured);
-    void ToggleMouseCaptured();
-    bool IsMouseCaptured() const { return isMouseCaptured; }
+    void SetRelativeMouseModeEnabled(bool enabled);
+    void ToggleRelativeMouseMode();
+    bool IsRelativeMouseModeEnabled() const { return relativeMouseModeEnabled; }
+    void SetGameKeyboardEnabled(bool enabled) { gameKeyboardEnabled = enabled; }
+    void SetGamePointerEnabled(bool enabled) { gamePointerEnabled = enabled; }
 
 private:
     PlatformWindow* window = nullptr;
     InputActionState actionState;
-    bool isMouseCaptured = true;
+    bool relativeMouseModeEnabled = false;
+    bool gameKeyboardEnabled = true;
+    bool gamePointerEnabled = true;
 };
 
 } // namespace VL

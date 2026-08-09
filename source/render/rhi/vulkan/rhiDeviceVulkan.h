@@ -252,9 +252,9 @@ public:
     void DestroyFramebuffer(RHIFramebufferHandle framebufferHandle);
     const VulkanFramebufferResource& GetVulkanFramebufferResource(
         RHIFramebufferHandle framebufferHandle) const;
+    vk::Device& GetDevice();
 
 private:
-    vk::Device& GetDevice();
     vk::PhysicalDevice& GetPhysicalDevice();
     vk::PhysicalDeviceMemoryProperties& GetGpuMemoryProperties();
     vk::CommandPool& GetCommandPool();

@@ -18,6 +18,8 @@ PlatformWindow::PlatformWindow(PlatformWindow&& other) noexcept
 {
     other.window = nullptr;
     other.currentTitle.clear();
+    textInputEnabled = other.textInputEnabled;
+    other.textInputEnabled = false;
 }
 
 PlatformWindow& PlatformWindow::operator=(PlatformWindow&& other) noexcept
@@ -27,8 +29,10 @@ PlatformWindow& PlatformWindow::operator=(PlatformWindow&& other) noexcept
         Destroy();
         window = other.window;
         currentTitle = std::move(other.currentTitle);
+        textInputEnabled = other.textInputEnabled;
         other.window = nullptr;
         other.currentTitle.clear();
+        other.textInputEnabled = false;
     }
 
     return *this;
@@ -72,6 +76,7 @@ void PlatformWindow::Destroy()
         SDL_DestroyWindow(window);
         window = nullptr;
         currentTitle.clear();
+        textInputEnabled = false;
     }
 }
 
@@ -104,6 +109,30 @@ void PlatformWindow::SetSize(int width, int height)
 void PlatformWindow::SetRelativeMouseMode(bool enabled)
 {
     SDL_SetWindowRelativeMouseMode(window, enabled);
+}
+
+void PlatformWindow::SetTextInputEnabled(bool enabled)
+{
+    if (textInputEnabled == enabled)
+    {
+        return;
+    }
+
+    if (enabled)
+    {
+        SDL_StartTextInput(window);
+    }
+    else
+    {
+        SDL_StopTextInput(window);
+    }
+    textInputEnabled = enabled;
+}
+
+void PlatformWindow::SetTextInputArea(int x, int y, int width, int height)
+{
+    SDL_Rect rect{x, y, width, height};
+    SDL_SetTextInputArea(window, &rect, 0);
 }
 
 } // namespace VL

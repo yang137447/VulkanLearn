@@ -2,9 +2,9 @@
 
 ## Status
 
-This document records a future UI direction. Neither RmlUi nor Dear ImGui is
-currently integrated into VulkanLearn, and this plan is not an implemented
-runtime contract.
+Implemented for the Windows-first Vulkan runtime. The current implementation
+contract lives in `documents/architecture/game-ui-stack.md`; this file remains
+the decision record and adoption checklist that led to that implementation.
 
 ## Decision
 
@@ -109,9 +109,9 @@ Game input receives events that were not consumed by an active UI layer.
 Keyboard focus, pointer capture, controller focus, and text input must have one
 explicit owner at a time.
 
-The initial runtime UI acceptance scope should include mouse and keyboard.
-Gamepad focus navigation, touch, IME, clipboard, accessibility, and platform
-safe-area behavior require explicit follow-up acceptance criteria.
+The implemented runtime acceptance scope includes mouse, keyboard, clipboard,
+gamepad focus navigation, UTF-8 input, IME composition, and focus-loss cleanup.
+Touch, accessibility, and platform safe-area behavior remain follow-up work.
 
 ## Hot Editing
 

@@ -5,6 +5,17 @@
     "initScene": "scenes/SC_speedtree.json",
     "msaa": 2,
     "workerThreadCount": 2,
+    "ui": {
+        "enabled": true,
+        "hotReload": true,
+        "assetRoot": "ui",
+        "document": "runtime-control.rml",
+        "localization": "localization.json",
+        "defaultLocale": "en-US",
+        "fontFaces": [],
+        "developerUiEnabled": true,
+        "developerUiVisible": false
+    },
     "csm": {
         "enabled": true,
         "cascadeCount": 4,

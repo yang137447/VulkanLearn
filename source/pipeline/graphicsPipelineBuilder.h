@@ -8,6 +8,7 @@ enum class GraphicsPipelineBlendMode
 {
     Opaque,
     AlphaBlend,
+    PremultipliedAlpha,
     Additive
 };
 
