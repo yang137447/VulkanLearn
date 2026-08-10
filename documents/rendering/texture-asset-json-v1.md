@@ -87,7 +87,11 @@ Required.
 
 Path to the real source image, relative to the project resource root used by `CommonFunction::Path`.
 
-Texture descriptor files live directly under `resources/textures/` and use `T_*.json` names. Raw image assets live under `resources/textures/datas/`.
+Texture descriptor files live under `resources/textures/` and use `T_*.json`
+names. Domain subdirectories such as `textures/uds/` and
+`textures/bistro_modular/` are allowed when they keep related descriptors
+organized. Raw image assets live under `resources/textures/datas/` and may use
+matching domain subdirectories.
 
 Example:
 
@@ -202,6 +206,9 @@ Texture assets use this layout:
 ```txt
 resources/textures/T_Sifi_Head_01_Param.json
 resources/textures/datas/T_Sifi_Head_01_Param.tga
+
+resources/textures/uds/T_MountainRange01_Param.json
+resources/textures/datas/uds/mountain_range_01/pbrParam_range01.png
 ```
 
 The JSON descriptor is the asset that material instances reference. The image in `datas/` is source data used by the descriptor.

@@ -24,6 +24,11 @@ struct MeshMaterialSlot
     std::string materialInstancePath;
 };
 
+struct MeshImportOptions
+{
+    bool generateSmoothNormals = false;
+};
+
 // Runtime SDK 10 keeps the Games 9 wind authoring model. Curves are sampled
 // at twenty authored strength points in the .stsdk table.
 struct SpeedTreeWindCurve
@@ -134,6 +139,7 @@ struct MeshAssetBuildPlan
     std::string assetType;
     std::string meshAssetPath;
     std::string modelDataPath;
+    MeshImportOptions importOptions;
     std::vector<MeshMaterialSlot> materialSlots;
     std::string modelCacheKey;
 };

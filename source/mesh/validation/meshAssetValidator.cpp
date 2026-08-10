@@ -121,6 +121,37 @@ namespace
         return materialSlots;
     }
 
+    MeshImportOptions ReadImportOptions(
+        const nlohmann::json& json,
+        std::string_view meshAssetPath,
+        std::string_view modelDataPath)
+    {
+        MeshImportOptions importOptions;
+        if (!json.contains("importOptions"))
+        {
+            return importOptions;
+        }
+        if (!json["importOptions"].is_object())
+        {
+            throw std::runtime_error(
+                "Mesh asset importOptions must be an object: " +
+                std::string(meshAssetPath) + " model=" + std::string(modelDataPath));
+        }
+
+        const auto& optionsJson = json["importOptions"];
+        if (optionsJson.contains("generateSmoothNormals"))
+        {
+            if (!optionsJson["generateSmoothNormals"].is_boolean())
+            {
+                throw std::runtime_error(
+                    "Mesh asset importOptions.generateSmoothNormals must be a boolean: " +
+                    std::string(meshAssetPath) + " model=" + std::string(modelDataPath));
+            }
+            importOptions.generateSmoothNormals = optionsJson["generateSmoothNormals"].get<bool>();
+        }
+        return importOptions;
+    }
+
     std::vector<std::string> BuildUniqueSourceMaterialSlots(const ModelResource& modelResource)
     {
         if (!modelResource.sourceMaterialSlotNames.empty())
@@ -189,8 +220,16 @@ MeshAssetBuildPlan MeshAssetValidator::BuildLoadPlan(
     }
     loadPlan.meshAssetPath = std::string(meshAssetPath);
     loadPlan.modelDataPath = ReadRequiredString(effectiveMeshAssetJson, "modelDataPath", meshAssetPath);
+    loadPlan.importOptions = ReadImportOptions(
+        effectiveMeshAssetJson,
+        meshAssetPath,
+        loadPlan.modelDataPath);
     loadPlan.materialSlots = ReadMaterialSlots(effectiveMeshAssetJson, meshAssetPath, loadPlan.modelDataPath);
     loadPlan.modelCacheKey = loadPlan.modelDataPath;
+    if (loadPlan.importOptions.generateSmoothNormals)
+    {
+        loadPlan.modelCacheKey += "|generateSmoothNormals";
+    }
     return loadPlan;
 }
 

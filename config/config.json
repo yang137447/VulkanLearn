@@ -2,7 +2,7 @@
     "projectPath": "D:\\YYBWorkSpace\\GitHub\\VulkanLearn",
     "resourcePath": "D:\\YYBWorkSpace\\GitHub\\VukanLearnResources",
     "windowSize": [1280, 720],
-    "initScene": "scenes/SC_speedtree.json",
+    "initScene": "scenes/SC_uds_mountain_range.json",
     "msaa": 2,
     "workerThreadCount": 2,
     "ui": {

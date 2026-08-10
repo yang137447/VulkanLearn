@@ -14,7 +14,10 @@ class AssimpSourceAdapter
 {
 public:
     void ValidateSource(const std::string& sourcePath, const std::string& modelDataPath) const;
-    ModelResource ReadSource(const std::string& sourcePath, const std::string& modelDataPath) const;
+    ModelResource ReadSource(
+        const std::string& sourcePath,
+        const std::string& modelDataPath,
+        const MeshImportOptions& importOptions) const;
 
 private:
     void ProcessNode(aiNode* node, const aiScene* scene, ModelResource& outModelResource) const;

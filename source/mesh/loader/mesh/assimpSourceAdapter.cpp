@@ -60,12 +60,20 @@ void AssimpSourceAdapter::ValidateSource(const std::string& sourcePath, const st
     }
 }
 
-ModelResource AssimpSourceAdapter::ReadSource(const std::string& sourcePath, const std::string& modelDataPath) const
+ModelResource AssimpSourceAdapter::ReadSource(
+    const std::string& sourcePath,
+    const std::string& modelDataPath,
+    const MeshImportOptions& importOptions) const
 {
     ValidateSource(sourcePath, modelDataPath);
 
     Assimp::Importer importer;
-    const aiScene* scene = importer.ReadFile(sourcePath, aiProcess_Triangulate);
+    unsigned int postProcessFlags = aiProcess_Triangulate;
+    if (importOptions.generateSmoothNormals)
+    {
+        postProcessFlags |= aiProcess_GenSmoothNormals;
+    }
+    const aiScene* scene = importer.ReadFile(sourcePath, postProcessFlags);
     if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode)
     {
         throw std::runtime_error(

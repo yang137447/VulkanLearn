@@ -8,5 +8,8 @@ void AssimpModelImporter::ValidateImportRequest(const ModelImportRequest& reques
 ModelResource AssimpModelImporter::Import(const ModelImportRequest& request)
 {
     ValidateImportRequest(request);
-    return sourceAdapter.ReadSource(request.absoluteModelPath, request.buildPlan.modelDataPath);
+    return sourceAdapter.ReadSource(
+        request.absoluteModelPath,
+        request.buildPlan.modelDataPath,
+        request.buildPlan.importOptions);
 }
