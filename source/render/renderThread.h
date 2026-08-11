@@ -14,7 +14,7 @@ namespace VL
 // WorldSnapshot instances into RenderSystem's mailbox; this worker consumes the
 // latest snapshot and records/submits the Vulkan frame. V1 intentionally has no
 // thread pool or TaskGraph, and EngineLoop still waits at frame/resource-change
-// boundaries so shutdown, resize, reload, and smoke-test timing stay deterministic.
+// boundaries so shutdown, resize, reload, and frame timing stay deterministic.
 class RenderThread
 {
 public:

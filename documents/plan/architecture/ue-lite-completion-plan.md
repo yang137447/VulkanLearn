@@ -22,8 +22,8 @@ UE-Lite 的完成标准不是“把所有类改成 Unreal 风格命名”，而�
 - `WorldTransitionCoordinator` 串起 scene validate、renderer resource load、`WorldBuilder` staging world 构建、active world 交换和失败回滚。
 - `RuntimeResult` / `RuntimeError` 已作为加载与切换路径的结构化错误边界。
 - `RuntimeCommand`、`CommandBus`、`RuntimeCommandExecutor`、`ConsoleSubsystem` 已把 reload/test 操作收敛到命令路径；`--reloadstress`、`--reloadfail*`、`--lightstress`、`--resizestress`、`--graphreloadstress` 和 `--framesmoke` 的启动参数入口都只投递 runtime command。
-- `RuntimeTestHooks` 已覆盖 reload stress、reload failure rollback、material/mesh/texture failure rollback、light stress 等 runtime 验收入口。
-- `EngineLoop` 私有持有 resize stress、render graph reload stress 和 frame smoke 的运行状态；`RuntimeCommandExecutor` 只记录请求，`EngineLoop` 在稳定帧点启动测试，并拒绝同帧多测试或与正在运行的 runtime test hook 混跑。
+- `RuntimeTestHooks` 统一持有 reload、rollback、light、resize、render graph reload 和 frame smoke 等 runtime 验收状态机。
+- `EngineLoop` 不保存测试阶段、计数、断言或完成状态，只在稳定帧点调用测试子系统，并提供窗口 / renderer 重建、render graph reload 和帧耗时等既有生产操作与观测值。
 - `WorldSnapshot` / `WorldSnapshotQueue` / `WorldSnapshotBuilder` 已作为 GT -> RT 的只读 DTO 和 mailbox。
 - `RenderScene` / `ResolvedRenderScene` / `RendererDrawExecutor` 已让 shadow / geometry draw 路径消费 frozen draw packet 和 backend resource entry。
 - `RendererBackendVulkan` 已接管 frame begin、submit/present、fence epoch 和主要 GPU helper 门面。
@@ -316,7 +316,7 @@ build\bin\main.exe --graphreloadstress 6 --exit-after-tests
 - `PlatformApplication` 负责 SDL/Vulkan loader-facing platform setup。
 - `SubsystemCollection` 持有 Input、Console、Diagnostics、RuntimeClock、WorldManager 等跨 world subsystem。
 - `EngineLoop` 只顺序初始化 subsystem、shader/material generation、renderer backend、pipeline factory、render graph、initial world、console commands。
-- runtime commands 在 `RuntimeCommandExecutor` 内转成 coordinator / render option / diagnostics 操作；EngineLoop-owned runtime tests 只在 `EngineLoop` 私有入口启动，命令层只记录请求，不直接调用 resize、frame graph reload 或 frame smoke 内部流程。
+- runtime commands 在 `RuntimeCommandExecutor` 内转成 coordinator / render option / diagnostics 操作；全部 runtime test 状态机统一由 `RuntimeTestHooks` 持有，`EngineLoop` 仅提供帧时机和其本来就拥有的生命周期操作。
 - 保留必要错误上下文：启动参数互斥报错、runtime test 冲突报错、rollback 指纹、frame smoke 时间统计和 retire queue 计数都属于验收诊断信息，不按冗余清理。
 - 控制器只消费 `InputSubsystem` 和 active view target，不直接读 SDL。
 

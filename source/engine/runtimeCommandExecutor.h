@@ -3,10 +3,10 @@
 #include <cstdint>
 #include <optional>
 #include <string>
-#include <unordered_map>
 
 #include "core/runtimeResult.h"
 #include "engine/runtimeCommand.h"
+#include "engine/runtimeTestHooks.h"
 #include "world/worldManager.h"
 
 class RenderSystem;
@@ -16,24 +16,7 @@ namespace VL
 
 class DiagnosticsSubsystem;
 class RuntimeConfig;
-class RuntimeTestHooks;
 class WorldTransitionCoordinator;
-
-// Lightweight identity snapshot used by runtime rollback tests. It records the
-// renderer binding tables without holding resources alive or exposing backend
-// objects to the command layer.
-struct RuntimeRendererResourceFingerprint
-{
-    bool captured = false;
-    uint64_t worldOwnerGeneration = 0;
-    std::unordered_map<std::string, std::uintptr_t> worldTextures;
-    std::unordered_map<std::string, std::uintptr_t> renderableObjects;
-    std::unordered_map<std::string, std::uintptr_t> materials;
-    std::unordered_map<std::string, std::uintptr_t> materialInstances;
-    std::unordered_map<std::string, std::uintptr_t> objectResources;
-    std::unordered_map<std::string, std::uintptr_t> textures;
-    std::unordered_map<std::string, std::uintptr_t> passMaterialInstances;
-};
 
 struct RuntimeCommandExecutionResult
 {
@@ -42,12 +25,6 @@ struct RuntimeCommandExecutionResult
     bool worldRuntimeBindingSucceeded = false;
     bool loadWorldAttempted = false;
     bool loadWorldSucceeded = false;
-    bool resizeStressRequested = false;
-    bool renderGraphReloadStressRequested = false;
-    bool frameSmokeRequested = false;
-    int resizeStressCount = 0;
-    int renderGraphReloadStressCount = 0;
-    int frameSmokeCount = 0;
     std::string loadWorldCommandPath;
     std::string loadWorldResolvedPath;
     std::optional<RuntimeError> loadWorldError;
@@ -106,15 +83,18 @@ private:
         const RuntimeConfig& runtimeConfig,
         RuntimeTestHooks& runtimeTestHooks,
         const DiagnosticsSubsystem& diagnostics) const;
-    void ApplyResizeStressRequest(
+    void ApplyResizeStress(
         const RuntimeCommand& command,
-        RuntimeCommandExecutionResult& executionResult) const;
-    void ApplyRenderGraphReloadStressRequest(
+        RuntimeTestHooks& runtimeTestHooks,
+        const DiagnosticsSubsystem& diagnostics) const;
+    void ApplyRenderGraphReloadStress(
         const RuntimeCommand& command,
-        RuntimeCommandExecutionResult& executionResult) const;
-    void ApplyFrameSmokeRequest(
+        RuntimeTestHooks& runtimeTestHooks,
+        const DiagnosticsSubsystem& diagnostics) const;
+    void ApplyFrameSmokeTest(
         const RuntimeCommand& command,
-        RuntimeCommandExecutionResult& executionResult) const;
+        RuntimeTestHooks& runtimeTestHooks,
+        const DiagnosticsSubsystem& diagnostics) const;
     void ApplyLoadWorld(
         const RuntimeCommand& command,
         WorldTransitionCoordinator& worldTransitionCoordinator,

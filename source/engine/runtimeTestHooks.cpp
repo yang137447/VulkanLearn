@@ -5,13 +5,17 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
 
 #include "engine/diagnosticsSubsystem.h"
+#include "engine/engineLoop.h"
+#include "engine/runtimeConfig.h"
 #include "engine/runtimeCommandExecutor.h"
+#include "platform/platformWindow.h"
 #include "render/resource/resourceRetireQueue.h"
 
 namespace VL
@@ -446,7 +450,7 @@ bool RuntimeTestHooks::BeginWorldReloadStress(
         return false;
     }
 
-    if (worldReloadStressActive || failureRollbackTestActive)
+    if (runtimeTestStatus == RuntimeTestStatus::Running)
     {
         diagnostics.ReportWarning("A runtime validation test is already running.");
         return false;
@@ -483,7 +487,7 @@ bool RuntimeTestHooks::BeginWorldReloadFailureRollbackTest(
         return false;
     }
 
-    if (worldReloadStressActive || failureRollbackTestActive)
+    if (runtimeTestStatus == RuntimeTestStatus::Running)
     {
         diagnostics.ReportWarning("A runtime validation test is already running.");
         return false;
@@ -642,6 +646,103 @@ bool RuntimeTestHooks::BeginGeneratedHighLightReloadStress(
     }
 }
 
+bool RuntimeTestHooks::BeginResizeStress(
+    int resizeCount,
+    const DiagnosticsSubsystem& diagnostics)
+{
+    if (resizeCount <= 0)
+    {
+        runtimeTestStatus = RuntimeTestStatus::Failed;
+        diagnostics.ReportWarning("Resize stress ignored because resize count must be positive.");
+        return false;
+    }
+
+    if (runtimeTestStatus == RuntimeTestStatus::Running)
+    {
+        diagnostics.ReportWarning("A runtime validation test is already running.");
+        return false;
+    }
+
+    resizeStressTotal = resizeCount;
+    resizeStressRemaining = resizeCount;
+    resizeStressCompletedCount = 0;
+    resizeStressActive = true;
+    runtimeTestStatus = RuntimeTestStatus::Running;
+
+    diagnostics.ReportInfo(
+        "Resize stress started: count=" + std::to_string(resizeStressTotal));
+    return true;
+}
+
+bool RuntimeTestHooks::BeginRenderGraphReloadStress(
+    int reloadCount,
+    const DiagnosticsSubsystem& diagnostics)
+{
+    if (reloadCount <= 0)
+    {
+        runtimeTestStatus = RuntimeTestStatus::Failed;
+        diagnostics.ReportWarning(
+            "Render graph reload stress ignored because reload count must be positive.");
+        return false;
+    }
+
+    if (runtimeTestStatus == RuntimeTestStatus::Running)
+    {
+        diagnostics.ReportWarning("A runtime validation test is already running.");
+        return false;
+    }
+
+    graphReloadStressTotal = reloadCount;
+    graphReloadStressRemaining = reloadCount;
+    graphReloadStressCompletedCount = 0;
+    graphReloadStressWaitingForDrain = false;
+    graphReloadRetireDrainFramesRemaining = 0;
+    graphReloadMaxPendingRetiredResources = 0;
+    graphReloadStressActive = true;
+    runtimeTestStatus = RuntimeTestStatus::Running;
+
+    diagnostics.ReportInfo(
+        "Render graph reload stress started: count=" +
+        std::to_string(graphReloadStressTotal));
+    return true;
+}
+
+bool RuntimeTestHooks::BeginFrameSmokeTest(
+    int frameCount,
+    const DiagnosticsSubsystem& diagnostics)
+{
+    if (frameCount <= 0)
+    {
+        runtimeTestStatus = RuntimeTestStatus::Failed;
+        diagnostics.ReportWarning("Frame smoke test ignored because frame count must be positive.");
+        return false;
+    }
+
+    if (runtimeTestStatus == RuntimeTestStatus::Running)
+    {
+        diagnostics.ReportWarning("A runtime validation test is already running.");
+        return false;
+    }
+
+    frameSmokeTotal = frameCount;
+    frameSmokeCompletedCount = 0;
+    frameSmokeTotalMs = 0.0;
+    frameSmokeMaxMs = 0.0;
+    frameSmokeMinMs = std::numeric_limits<double>::max();
+    frameSmokeIntervalFrameCount = 0;
+    frameSmokeIntervalTotalMs = 0.0;
+    frameSmokeIntervalMaxMs = 0.0;
+    frameSmokeIntervalMinMs = std::numeric_limits<double>::max();
+    frameSmokeIntervalRenderLoopTotalMs = 0.0;
+    frameSmokeIntervalRenderLoopMaxMs = 0.0;
+    frameSmokeActive = true;
+    runtimeTestStatus = RuntimeTestStatus::Running;
+
+    diagnostics.ReportInfo(
+        "Frame smoke test started: frames=" + std::to_string(frameSmokeTotal));
+    return true;
+}
+
 void RuntimeTestHooks::Update(
     CommandBus& commandBus,
     const DiagnosticsSubsystem& diagnostics)
@@ -747,6 +848,330 @@ void RuntimeTestHooks::Update(
     diagnostics.ReportInfo(
         "World reload failure rollback test queued expected-failure load: " +
         failureRollbackScenePath);
+}
+
+void RuntimeTestHooks::UpdateEngineLoopTests(
+    EngineLoop& engineLoop,
+    const DiagnosticsSubsystem& diagnostics)
+{
+    if (resizeStressActive)
+    {
+        UpdateResizeStress(engineLoop, diagnostics);
+        return;
+    }
+
+    if (graphReloadStressActive)
+    {
+        UpdateRenderGraphReloadStress(engineLoop, diagnostics);
+    }
+}
+
+void RuntimeTestHooks::UpdateResizeStress(
+    EngineLoop& engineLoop,
+    const DiagnosticsSubsystem& diagnostics)
+{
+    if (!resizeStressActive || resizeStressRemaining <= 0)
+    {
+        return;
+    }
+
+    if (engineLoop.window == nullptr)
+    {
+        resizeStressActive = false;
+        runtimeTestStatus = RuntimeTestStatus::Failed;
+        diagnostics.ReportError("Resize stress failed because EngineLoop has no active window.");
+        return;
+    }
+
+    const Eigen::Vector2f configuredWindowSize = engineLoop.GetRuntimeConfig().GetWindowSize();
+    const int baseWidth = static_cast<int>(configuredWindowSize.x());
+    const int baseHeight = static_cast<int>(configuredWindowSize.y());
+    const bool useSmallerSize = (resizeStressCompletedCount % 2) == 0;
+    const int targetWidth = useSmallerSize ? std::max(320, baseWidth - 160) : baseWidth;
+    const int targetHeight = useSmallerSize ? std::max(240, baseHeight - 90) : baseHeight;
+
+    engineLoop.window->SetSize(targetWidth, targetHeight);
+    suppressNextResizeEvent = true;
+    suppressedResizeWidth = static_cast<uint32_t>(targetWidth);
+    suppressedResizeHeight = static_cast<uint32_t>(targetHeight);
+
+    auto resizeResult = engineLoop.RecreateRendererForWindowResize(
+        static_cast<uint32_t>(targetWidth),
+        static_cast<uint32_t>(targetHeight));
+    if (resizeResult.IsFailure())
+    {
+        resizeStressActive = false;
+        runtimeTestStatus = RuntimeTestStatus::Failed;
+        diagnostics.ReportRuntimeError("Resize stress failed", resizeResult.Error());
+        return;
+    }
+
+    ++resizeStressCompletedCount;
+    --resizeStressRemaining;
+    diagnostics.ReportInfo(
+        "Resize stress step completed: " +
+        std::to_string(resizeStressCompletedCount) +
+        "/" +
+        std::to_string(resizeStressTotal) +
+        " size=" +
+        std::to_string(targetWidth) +
+        "x" +
+        std::to_string(targetHeight));
+
+    if (resizeStressRemaining <= 0)
+    {
+        resizeStressActive = false;
+        runtimeTestStatus = RuntimeTestStatus::Succeeded;
+        diagnostics.ReportInfo(
+            "Resize stress completed: " +
+            std::to_string(resizeStressCompletedCount) +
+            "/" +
+            std::to_string(resizeStressTotal) +
+            " resize transactions succeeded.");
+    }
+}
+
+void RuntimeTestHooks::UpdateRenderGraphReloadStress(
+    EngineLoop& engineLoop,
+    const DiagnosticsSubsystem& diagnostics)
+{
+    if (!graphReloadStressActive)
+    {
+        return;
+    }
+
+    ResourceRetireQueue& retireQueue = ResourceRetireQueue::GetInstance();
+    if (graphReloadStressWaitingForDrain)
+    {
+        const size_t pendingRetiredResources = retireQueue.GetPendingCount();
+        UpdateMaxPendingRetiredResources(
+            pendingRetiredResources,
+            graphReloadMaxPendingRetiredResources);
+
+        if (pendingRetiredResources == 0)
+        {
+            graphReloadStressActive = false;
+            graphReloadStressWaitingForDrain = false;
+            runtimeTestStatus = RuntimeTestStatus::Succeeded;
+            diagnostics.ReportInfo(
+                "Render graph reload stress completed: " +
+                std::to_string(graphReloadStressCompletedCount) +
+                "/" +
+                std::to_string(graphReloadStressTotal) +
+                " reloads succeeded, retire queue max pending=" +
+                std::to_string(graphReloadMaxPendingRetiredResources) +
+                ", completedEpoch=" +
+                std::to_string(retireQueue.GetLastCompletedEpoch()) +
+                ".");
+            return;
+        }
+
+        --graphReloadRetireDrainFramesRemaining;
+        if (graphReloadRetireDrainFramesRemaining <= 0)
+        {
+            graphReloadStressActive = false;
+            graphReloadStressWaitingForDrain = false;
+            runtimeTestStatus = RuntimeTestStatus::Failed;
+            diagnostics.ReportError(
+                "Render graph reload stress failed because retired graph resources did not drain before the frame budget expired. pending=" +
+                std::to_string(pendingRetiredResources) +
+                ", submittedEpoch=" +
+                std::to_string(retireQueue.GetLastSubmittedEpoch()) +
+                ", completedEpoch=" +
+                std::to_string(retireQueue.GetLastCompletedEpoch()) +
+                ".");
+        }
+        return;
+    }
+
+    if (graphReloadStressRemaining <= 0)
+    {
+        const size_t pendingRetiredResources = retireQueue.GetPendingCount();
+        UpdateMaxPendingRetiredResources(
+            pendingRetiredResources,
+            graphReloadMaxPendingRetiredResources);
+
+        if (graphReloadStressTotal > 1 && graphReloadMaxPendingRetiredResources == 0)
+        {
+            graphReloadStressActive = false;
+            runtimeTestStatus = RuntimeTestStatus::Failed;
+            diagnostics.ReportError(
+                "Render graph reload stress failed because no retired graph resources were observed after repeated reloads.");
+            return;
+        }
+
+        graphReloadStressWaitingForDrain = true;
+        graphReloadRetireDrainFramesRemaining = RetireDrainFrameBudget;
+        diagnostics.ReportInfo(
+            "Render graph reload stress waiting for retire queue drain: pending=" +
+            std::to_string(pendingRetiredResources) +
+            ", maxPending=" +
+            std::to_string(graphReloadMaxPendingRetiredResources) +
+            ".");
+        return;
+    }
+
+    auto reloadResult = engineLoop.ReloadRenderGraphResources();
+    if (reloadResult.IsFailure())
+    {
+        graphReloadStressActive = false;
+        runtimeTestStatus = RuntimeTestStatus::Failed;
+        diagnostics.ReportRuntimeError(
+            "Render graph reload stress failed",
+            reloadResult.Error());
+        return;
+    }
+
+    --graphReloadStressRemaining;
+    ++graphReloadStressCompletedCount;
+
+    const size_t pendingRetiredResources = retireQueue.GetPendingCount();
+    UpdateMaxPendingRetiredResources(
+        pendingRetiredResources,
+        graphReloadMaxPendingRetiredResources);
+    diagnostics.ReportInfo(
+        "Render graph reload stress reloaded graph " +
+        std::to_string(graphReloadStressCompletedCount) +
+        "/" +
+        std::to_string(graphReloadStressTotal) +
+        ", pending retired resources=" +
+        std::to_string(pendingRetiredResources) +
+        ".");
+}
+
+void RuntimeTestHooks::RecordFrameRenderLoopTime(double renderLoopTimeMs)
+{
+    if (!frameSmokeActive)
+    {
+        return;
+    }
+
+    frameSmokeIntervalRenderLoopTotalMs += renderLoopTimeMs;
+    frameSmokeIntervalRenderLoopMaxMs =
+        std::max(frameSmokeIntervalRenderLoopMaxMs, renderLoopTimeMs);
+}
+
+void RuntimeTestHooks::RecordFrameTime(
+    double frameTimeMs,
+    const DiagnosticsSubsystem& diagnostics)
+{
+    if (!frameSmokeActive)
+    {
+        return;
+    }
+
+    if (frameTimeMs <= 0.0 || !std::isfinite(frameTimeMs))
+    {
+        frameSmokeActive = false;
+        runtimeTestStatus = RuntimeTestStatus::Failed;
+        diagnostics.ReportError(
+            "Frame smoke test failed because a measured frame time was invalid.");
+        return;
+    }
+
+    ++frameSmokeCompletedCount;
+    frameSmokeTotalMs += frameTimeMs;
+    frameSmokeMaxMs = std::max(frameSmokeMaxMs, frameTimeMs);
+    frameSmokeMinMs = std::min(frameSmokeMinMs, frameTimeMs);
+    ++frameSmokeIntervalFrameCount;
+    frameSmokeIntervalTotalMs += frameTimeMs;
+    frameSmokeIntervalMaxMs = std::max(frameSmokeIntervalMaxMs, frameTimeMs);
+    frameSmokeIntervalMinMs = std::min(frameSmokeIntervalMinMs, frameTimeMs);
+
+    if (frameSmokeIntervalFrameCount >= frameSmokeIntervalSize)
+    {
+        ReportFrameSmokeInterval(diagnostics);
+    }
+
+    if (frameSmokeCompletedCount < frameSmokeTotal)
+    {
+        return;
+    }
+
+    if (frameSmokeIntervalFrameCount > 0)
+    {
+        ReportFrameSmokeInterval(diagnostics);
+    }
+
+    frameSmokeActive = false;
+    runtimeTestStatus = RuntimeTestStatus::Succeeded;
+    const double averageFrameMs = frameSmokeTotalMs /
+        static_cast<double>(std::max(1, frameSmokeCompletedCount));
+    const double averageFps = 1000.0 / averageFrameMs;
+
+    diagnostics.ReportInfo(
+        "Frame smoke test completed: " +
+        std::to_string(frameSmokeCompletedCount) +
+        "/" +
+        std::to_string(frameSmokeTotal) +
+        " frames, avgFrameMs=" +
+        std::to_string(averageFrameMs) +
+        ", minFrameMs=" +
+        std::to_string(frameSmokeMinMs) +
+        ", maxFrameMs=" +
+        std::to_string(frameSmokeMaxMs) +
+        ", avgFps=" +
+        std::to_string(averageFps));
+}
+
+void RuntimeTestHooks::ReportFrameSmokeInterval(
+    const DiagnosticsSubsystem& diagnostics)
+{
+    const double averageFrameMs = frameSmokeIntervalTotalMs /
+        static_cast<double>(std::max(1, frameSmokeIntervalFrameCount));
+    const double averageFps = 1000.0 / averageFrameMs;
+    const double averageRenderLoopMs = frameSmokeIntervalRenderLoopTotalMs /
+        static_cast<double>(std::max(1, frameSmokeIntervalFrameCount));
+    const ResourceRetireQueue& retireQueue = ResourceRetireQueue::GetInstance();
+
+    diagnostics.ReportInfo(
+        "Frame smoke interval: frame=" +
+        std::to_string(frameSmokeCompletedCount) +
+        "/" +
+        std::to_string(frameSmokeTotal) +
+        ", intervalFrames=" +
+        std::to_string(frameSmokeIntervalFrameCount) +
+        ", avgFrameMs=" +
+        std::to_string(averageFrameMs) +
+        ", minFrameMs=" +
+        std::to_string(frameSmokeIntervalMinMs) +
+        ", maxFrameMs=" +
+        std::to_string(frameSmokeIntervalMaxMs) +
+        ", avgFps=" +
+        std::to_string(averageFps) +
+        ", avgRenderLoopMs=" +
+        std::to_string(averageRenderLoopMs) +
+        ", maxRenderLoopMs=" +
+        std::to_string(frameSmokeIntervalRenderLoopMaxMs) +
+        ", retiredPending=" +
+        std::to_string(retireQueue.GetPendingCount()) +
+        ", submittedEpoch=" +
+        std::to_string(retireQueue.GetLastSubmittedEpoch()) +
+        ", completedEpoch=" +
+        std::to_string(retireQueue.GetLastCompletedEpoch()));
+
+    frameSmokeIntervalFrameCount = 0;
+    frameSmokeIntervalTotalMs = 0.0;
+    frameSmokeIntervalMaxMs = 0.0;
+    frameSmokeIntervalMinMs = std::numeric_limits<double>::max();
+    frameSmokeIntervalRenderLoopTotalMs = 0.0;
+    frameSmokeIntervalRenderLoopMaxMs = 0.0;
+}
+
+bool RuntimeTestHooks::ShouldSuppressResizeEvent(uint32_t width, uint32_t height)
+{
+    if (!suppressNextResizeEvent)
+    {
+        return false;
+    }
+
+    if (width == suppressedResizeWidth && height == suppressedResizeHeight)
+    {
+        suppressNextResizeEvent = false;
+        return true;
+    }
+
+    return false;
 }
 
 void RuntimeTestHooks::NotifyCommandResult(

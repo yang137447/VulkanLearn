@@ -985,10 +985,39 @@ Test-FilePatternsAbsent `
 
 Test-FilePatternsPresent `
     -Failures $failures `
-    -RelativePath "source/engine/engineLoop.cpp" `
+    -RelativePath "source/engine/runtimeTestHooks.cpp" `
     -Patterns @(
+        'BeginResizeStress',
+        'UpdateResizeStress',
+        'BeginRenderGraphReloadStress',
+        'UpdateRenderGraphReloadStress',
+        'BeginFrameSmokeTest',
+        'RecordFrameTime'
+    ) `
+    -RuleName "Runtime validation state owned by test subsystem"
+
+Test-FilePatternsAbsent `
+    -Failures $failures `
+    -RelativePaths @("source/engine/engineLoop.cpp", "source/engine/engineLoop.h") `
+    -Patterns @(
+        'StartResizeStress',
+        'UpdateResizeStress',
+        'resizeStressActive',
+        'StartRenderGraphReloadStress',
+        'UpdateRenderGraphReloadStress',
+        'graphReloadStressActive',
         'StartFrameSmokeTest',
         'UpdateFrameSmokeTest',
+        'frameSmokeActive'
+    ) `
+    -RuleName "Runtime test state stays out of EngineLoop"
+
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "source/engine/runtimeTestHooks.cpp" `
+    -Patterns @(
+        'BeginFrameSmokeTest',
+        'RecordFrameTime',
         'avgFrameMs',
         'avgFps',
         'Frame smoke test completed'
@@ -1001,7 +1030,16 @@ Test-FilePatternsPresent `
     -Patterns @(
         'RecreateRendererForWindowResize',
         'ReleaseSwapchainDependentResources',
-        'RebuildSwapchainDependentResources',
+        'RebuildSwapchainDependentResources'
+    ) `
+    -RuleName "Swapchain resize production lifecycle"
+
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "source/engine/runtimeTestHooks.cpp" `
+    -Patterns @(
+        'BeginResizeStress',
+        'UpdateResizeStress',
         'Resize stress completed'
     ) `
     -RuleName "Swapchain resize runtime validation"
@@ -1011,7 +1049,16 @@ Test-FilePatternsPresent `
     -RelativePath "source/engine/engineLoop.cpp" `
     -Patterns @(
         'ReloadRenderGraphResources',
-        'RenderGraphReleaseMode::Retire',
+        'RenderGraphReleaseMode::Retire'
+    ) `
+    -RuleName "Render graph reload production lifecycle"
+
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "source/engine/runtimeTestHooks.cpp" `
+    -Patterns @(
+        'BeginRenderGraphReloadStress',
+        'UpdateRenderGraphReloadStress',
         'Render graph reload stress',
         'retired graph resources did not drain'
     ) `

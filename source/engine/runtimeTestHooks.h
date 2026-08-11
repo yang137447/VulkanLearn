@@ -1,7 +1,9 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
+#include <unordered_map>
 
 #include "engine/runtimeCommand.h"
 
@@ -9,7 +11,23 @@ namespace VL
 {
 
 class DiagnosticsSubsystem;
+class EngineLoop;
 struct RuntimeCommandExecutionResult;
+
+// Identity-only renderer snapshot for rollback validation. It observes owner
+// tables without keeping resources alive or exposing backend objects.
+struct RuntimeRendererResourceFingerprint
+{
+    bool captured = false;
+    uint64_t worldOwnerGeneration = 0;
+    std::unordered_map<std::string, std::uintptr_t> worldTextures;
+    std::unordered_map<std::string, std::uintptr_t> renderableObjects;
+    std::unordered_map<std::string, std::uintptr_t> materials;
+    std::unordered_map<std::string, std::uintptr_t> materialInstances;
+    std::unordered_map<std::string, std::uintptr_t> objectResources;
+    std::unordered_map<std::string, std::uintptr_t> textures;
+    std::unordered_map<std::string, std::uintptr_t> passMaterialInstances;
+};
 
 enum class RuntimeTestStatus
 {
@@ -19,9 +37,9 @@ enum class RuntimeTestStatus
     Failed
 };
 
-// Runtime-only validation hooks. These hooks drive systems through the public
-// command path, so test pressure uses the same WorldTransitionCoordinator and
-// EngineLoop rebinding path as a user command.
+// Single owner for runtime validation state machines. Tests drive systems
+// through production command/lifecycle paths; EngineLoop only provides stable
+// frame hooks and the renderer operations it already owns.
 class RuntimeTestHooks
 {
 public:
@@ -46,7 +64,27 @@ public:
         const std::string& resourcePath,
         int reloadCount,
         const DiagnosticsSubsystem& diagnostics);
-    void Update(CommandBus& commandBus, const DiagnosticsSubsystem& diagnostics);
+    bool BeginResizeStress(
+        int resizeCount,
+        const DiagnosticsSubsystem& diagnostics);
+    bool BeginRenderGraphReloadStress(
+        int reloadCount,
+        const DiagnosticsSubsystem& diagnostics);
+    bool BeginFrameSmokeTest(
+        int frameCount,
+        const DiagnosticsSubsystem& diagnostics);
+    void Update(
+        CommandBus& commandBus,
+        const DiagnosticsSubsystem& diagnostics);
+    void UpdateEngineLoopTests(
+        EngineLoop& engineLoop,
+        const DiagnosticsSubsystem& diagnostics);
+    bool ShouldCollectFrameTiming() const { return frameSmokeActive; }
+    void RecordFrameRenderLoopTime(double renderLoopTimeMs);
+    void RecordFrameTime(
+        double frameTimeMs,
+        const DiagnosticsSubsystem& diagnostics);
+    bool ShouldSuppressResizeEvent(uint32_t width, uint32_t height);
     void NotifyCommandResult(
         const RuntimeCommandExecutionResult& commandResult,
         const DiagnosticsSubsystem& diagnostics);
@@ -54,6 +92,14 @@ public:
     RuntimeTestStatus GetRuntimeTestStatus() const { return runtimeTestStatus; }
 
 private:
+    void UpdateResizeStress(
+        EngineLoop& engineLoop,
+        const DiagnosticsSubsystem& diagnostics);
+    void UpdateRenderGraphReloadStress(
+        EngineLoop& engineLoop,
+        const DiagnosticsSubsystem& diagnostics);
+    void ReportFrameSmokeInterval(const DiagnosticsSubsystem& diagnostics);
+
     std::string worldReloadStressScenePath;
     int totalWorldReloads = 0;
     int remainingWorldReloads = 0;
@@ -72,6 +118,36 @@ private:
     bool waitingForFailureRollbackResult = false;
     bool cleanupGeneratedFailureFixture = false;
     std::string generatedFailureFixtureDirectory;
+
+    bool resizeStressActive = false;
+    int resizeStressTotal = 0;
+    int resizeStressRemaining = 0;
+    int resizeStressCompletedCount = 0;
+    bool suppressNextResizeEvent = false;
+    uint32_t suppressedResizeWidth = 0;
+    uint32_t suppressedResizeHeight = 0;
+
+    bool graphReloadStressActive = false;
+    bool graphReloadStressWaitingForDrain = false;
+    int graphReloadStressTotal = 0;
+    int graphReloadStressRemaining = 0;
+    int graphReloadStressCompletedCount = 0;
+    int graphReloadRetireDrainFramesRemaining = 0;
+    size_t graphReloadMaxPendingRetiredResources = 0;
+
+    bool frameSmokeActive = false;
+    int frameSmokeTotal = 0;
+    int frameSmokeCompletedCount = 0;
+    double frameSmokeTotalMs = 0.0;
+    double frameSmokeMaxMs = 0.0;
+    double frameSmokeMinMs = 0.0;
+    int frameSmokeIntervalSize = 5000;
+    int frameSmokeIntervalFrameCount = 0;
+    double frameSmokeIntervalTotalMs = 0.0;
+    double frameSmokeIntervalMaxMs = 0.0;
+    double frameSmokeIntervalMinMs = 0.0;
+    double frameSmokeIntervalRenderLoopTotalMs = 0.0;
+    double frameSmokeIntervalRenderLoopMaxMs = 0.0;
 
     RuntimeTestStatus runtimeTestStatus = RuntimeTestStatus::Idle;
 };

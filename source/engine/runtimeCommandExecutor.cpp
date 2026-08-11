@@ -128,13 +128,13 @@ void RuntimeCommandExecutor::ExecuteCommand(
         ApplyGeneratedHighLightReloadStress(command, runtimeConfig, runtimeTestHooks, diagnostics);
         break;
     case RuntimeCommandType::RunResizeStress:
-        ApplyResizeStressRequest(command, executionResult);
+        ApplyResizeStress(command, runtimeTestHooks, diagnostics);
         break;
     case RuntimeCommandType::RunRenderGraphReloadStress:
-        ApplyRenderGraphReloadStressRequest(command, executionResult);
+        ApplyRenderGraphReloadStress(command, runtimeTestHooks, diagnostics);
         break;
     case RuntimeCommandType::RunFrameSmokeTest:
-        ApplyFrameSmokeRequest(command, executionResult);
+        ApplyFrameSmokeTest(command, runtimeTestHooks, diagnostics);
         break;
     case RuntimeCommandType::SetDebugViewMode:
         renderSystem.SetDebugViewMode(command.intValue);
@@ -304,28 +304,28 @@ void RuntimeCommandExecutor::ApplyGeneratedHighLightReloadStress(
         diagnostics);
 }
 
-void RuntimeCommandExecutor::ApplyResizeStressRequest(
+void RuntimeCommandExecutor::ApplyResizeStress(
     const RuntimeCommand& command,
-    RuntimeCommandExecutionResult& executionResult) const
+    RuntimeTestHooks& runtimeTestHooks,
+    const DiagnosticsSubsystem& diagnostics) const
 {
-    executionResult.resizeStressRequested = true;
-    executionResult.resizeStressCount = command.intValue;
+    (void)runtimeTestHooks.BeginResizeStress(command.intValue, diagnostics);
 }
 
-void RuntimeCommandExecutor::ApplyRenderGraphReloadStressRequest(
+void RuntimeCommandExecutor::ApplyRenderGraphReloadStress(
     const RuntimeCommand& command,
-    RuntimeCommandExecutionResult& executionResult) const
+    RuntimeTestHooks& runtimeTestHooks,
+    const DiagnosticsSubsystem& diagnostics) const
 {
-    executionResult.renderGraphReloadStressRequested = true;
-    executionResult.renderGraphReloadStressCount = command.intValue;
+    (void)runtimeTestHooks.BeginRenderGraphReloadStress(command.intValue, diagnostics);
 }
 
-void RuntimeCommandExecutor::ApplyFrameSmokeRequest(
+void RuntimeCommandExecutor::ApplyFrameSmokeTest(
     const RuntimeCommand& command,
-    RuntimeCommandExecutionResult& executionResult) const
+    RuntimeTestHooks& runtimeTestHooks,
+    const DiagnosticsSubsystem& diagnostics) const
 {
-    executionResult.frameSmokeRequested = true;
-    executionResult.frameSmokeCount = command.intValue;
+    (void)runtimeTestHooks.BeginFrameSmokeTest(command.intValue, diagnostics);
 }
 
 void RuntimeCommandExecutor::ApplyToneMappingMode(
