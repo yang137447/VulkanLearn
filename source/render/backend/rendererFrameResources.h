@@ -31,10 +31,6 @@ public:
         vk::CommandBuffer& commandBuffer,
         uint32_t swapChainImageIndex,
         const UBOGlobal& uboGlobal);
-    void UpdateGlobalUniformBufferExceptGpuOwnedRanges(
-        vk::CommandBuffer& commandBuffer,
-        uint32_t swapChainImageIndex,
-        const UBOGlobal& uboGlobal);
     void UpdateLightBuffer(
         uint32_t swapChainImageIndex,
         const std::vector<LightSnapshot>& lights);

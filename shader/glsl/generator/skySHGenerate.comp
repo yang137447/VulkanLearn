@@ -16,11 +16,11 @@ layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 // 底层资源需要是 cube-compatible image；这里按方向采样即可，不关心真实分辨率。
 layout(set = 0, binding = 1) uniform samplerCube inSkyCube;
 
-// 输出：和 graphics 端 commonUbo.glsl 完全同布局的 global buffer。
-// compute 端声明为 buffer 才能写 environmentSH；graphics 端仍声明为 uniform 读取。
-layout(std140, set = 0, binding = 0) buffer UBOGlobalCompute {
-#include "../common/uboGlobalFields.glsl"
-} uboGlobal;
+// 输出：共享 SH compute buffer。CPU 只录制一次投影，然后通过 144 字节
+// buffer copy 把结果广播到所有 frame-local Global UBO。
+layout(std140, set = 0, binding = 0) buffer EnvironmentSHCompute {
+    vec4 environmentSH[9];
+} environmentShOutput;
 
 const float kPi = 3.14159265358979323846;
 const int kShCoefficientCount = 9;
@@ -160,7 +160,7 @@ void main()
 
         if (localIdx == 0u)
         {
-            uboGlobal.environmentSH[coefficientIndex] = vec4(shReduce[0], 0.0);
+            environmentShOutput.environmentSH[coefficientIndex] = vec4(shReduce[0], 0.0);
         }
 
         // 让所有线程一起进入下一个 coefficient 的 shared memory 写入阶段。

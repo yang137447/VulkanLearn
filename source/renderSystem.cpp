@@ -80,6 +80,13 @@ void RenderSystem::SetCsmSettings(const VL::CsmSettings& settings)
     shadowCascadeFrameData.valid = false;
 }
 
+VL::EnvironmentUpdateDiagnostics RenderSystem::GetEnvironmentUpdateDiagnostics() const
+{
+    // 这里用了raii锁，确保在访问环境诊断信息时不会发生数据竞争。
+    std::lock_guard<std::mutex> lock(environmentDiagnosticsMutex);
+    return environmentDiagnostics;
+}
+
 void RenderSystem::SetActiveWorld(std::shared_ptr<const VL::World> world)
 {
     activeWorld = std::move(world);
@@ -381,12 +388,12 @@ void RenderSystem::UpdateUBOGlobal(vk::CommandBuffer& commandBuffer)
         }
     }
     ubo.cameraPosition = camera.position;
-    // 这里以后由computer shader计算
-    // ubo.environmentSH = currentRenderScene.environment.sphericalHarmonics;
+    // environmentSH 由 GPU 在环境代际 commit 时广播，常规 CPU 上传会跳过该区间。
     ubo.debugViewMode = currentRenderScene.debugViewMode;
     ubo.environmentIntensity = currentRenderScene.environment.intensity;
+    ubo.environmentType = currentRenderScene.environment.type == VL::EnvironmentType::ProceduralSky ? 1 : 0;
     ubo.skyParameters = currentRenderScene.environment.skyParameters;
-    frameResources.UpdateGlobalUniformBufferExceptGpuOwnedRanges(commandBuffer, swapChainImageIndex, ubo);
+    frameResources.UpdateGlobalUniformBuffer(commandBuffer, swapChainImageIndex, ubo);
 }
 
 void RenderSystem::UpdateUBOGlobalForShadow(
@@ -416,10 +423,10 @@ void RenderSystem::UpdateUBOGlobalForShadow(
     ubo.lightViewProj = shadowCascadeFrameData.lightViewProj;
     ubo.cascadeSplits = shadowCascadeFrameData.cascadeSplits;
     ubo.shadowBias = shadowCascadeFrameData.bias;
-    // 这里以后由computer shader计算
-    // ubo.environmentSH = currentRenderScene.environment.sphericalHarmonics;
+    // environmentSH 由 GPU 在环境代际 commit 时广播，常规 CPU 上传会跳过该区间。
     ubo.debugViewMode = currentRenderScene.debugViewMode;
     ubo.environmentIntensity = currentRenderScene.environment.intensity;
+    ubo.environmentType = currentRenderScene.environment.type == VL::EnvironmentType::ProceduralSky ? 1 : 0;
     ubo.skyParameters = currentRenderScene.environment.skyParameters;
     {
         Eigen::Matrix3f rotT = ubo.view.block<3, 3>(0, 0);
@@ -427,7 +434,7 @@ void RenderSystem::UpdateUBOGlobalForShadow(
         ubo.cameraPosition = -(rotT.transpose() * trans);
     }
 
-    frameResources.UpdateGlobalUniformBufferExceptGpuOwnedRanges(commandBuffer, swapChainImageIndex, ubo);
+    frameResources.UpdateGlobalUniformBuffer(commandBuffer, swapChainImageIndex, ubo);
 }
 
 void RenderSystem::BuildShadowCascadeFrameData(uint32_t passSizeWidth, uint32_t passSizeHeight)
@@ -960,6 +967,10 @@ void RenderSystem::BuildResolvedRenderScene()
 void RenderSystem::InitializeCurrentRenderSceneResources()
 {
     frameResources.EnsureLightCapacity(currentRenderScene.lights.size(), *rendererBackend);
+    environmentUpdateState.Reset();
+    environmentUpdateScheduler.Reset();
+    environmentUpdateSourceCube.reset();
+    RefreshEnvironmentUpdateDiagnostics();
 
     VL::RendererDescriptorContext descriptorContext = BuildRendererDescriptorContext();
     VL::RendererResourceCache& resourceCache = VL::RendererResourceCache::GetInstance();
@@ -1117,12 +1128,12 @@ void RenderSystem::InitializeFrameResources()
     frameResources.EnsureLightCapacity(currentRenderScene.lights.size(), *rendererBackend);
     proceduralSkyCubeGenerator.Initialize(
         *pipelineFactory,
-        *rendererBackend,
-        frameResources.GetGlobalUniformBufferInfos());
+        *rendererBackend);
     environmentIblBaker.Initialize(
         *pipelineFactory,
         *rendererBackend,
         frameResources.GetGlobalUniformBufferInfos());
+    environmentGpuTimer.Initialize(*rendererBackend);
 }
 
 void RenderSystem::ShutdownFrameResources()
@@ -1132,8 +1143,11 @@ void RenderSystem::ShutdownFrameResources()
         return;
     }
 
+    environmentGpuTimer.Shutdown(*rendererBackend);
     environmentIblBaker.Shutdown(*rendererBackend);
     proceduralSkyCubeGenerator.Shutdown(*rendererBackend);
+    environmentUpdateScheduler.Reset();
+    environmentUpdateSourceCube.reset();
     
     frameResources.Shutdown(*rendererBackend);
 }
@@ -1315,7 +1329,7 @@ std::shared_ptr<Texture> RenderSystem::GetActiveEnvironmentCube()
     switch(currentRenderScene.environment.type)
     {
         case VL::EnvironmentType::ProceduralSky:
-            return proceduralSkyCubeGenerator.GetEnvironmentCube();
+            return proceduralSkyCubeGenerator.GetActiveEnvironmentCube();
         case VL::EnvironmentType::Hdri:
             const std::shared_ptr<Texture>* environmentCube = 
                 VL::RendererResourceCache::GetInstance()
@@ -1349,18 +1363,143 @@ void RenderSystem::PrepareEnvironmentResources()
 
 void RenderSystem::RecordEnvironmentIbl(vk::CommandBuffer commandBuffer, uint32_t swapchainImageIndex)
 {
-    std::shared_ptr<Texture> environmentCube = GetActiveEnvironmentCube();
-    
-    if(currentRenderScene.environment.type == VL::EnvironmentType::ProceduralSky)
+    PROFILE_SCOPE("EnvironmentIbl");
+    environmentGpuTimer.BeginFrame(commandBuffer, swapchainImageIndex);
+
+    // Sky Pass 每帧直接读取最新参数；cubemap、SH 和 prefilter 只在源数据 dirty 时
+    // 启动新代际，避免相机移动或单纯强度变化触发昂贵重建。
+    environmentUpdateState.Observe(currentRenderScene.environment);
+    if (environmentUpdateState.IsDirty())
     {
-        proceduralSkyCubeGenerator.Record(commandBuffer, swapchainImageIndex);
+        const uint64_t requestedGeneration = environmentUpdateState.BeginUpdate();
+        const bool startedNewGeneration = environmentUpdateScheduler.RequestUpdate(
+            requestedGeneration,
+            currentRenderScene.environment,
+            environmentIblBaker.GetPrefilterMipCount());
+        if (startedNewGeneration)
+        {
+            // 程序化天空先写 pending cubemap；HDRI 本身已经完整，可以直接作为冻结输入。
+            environmentUpdateSourceCube =
+                currentRenderScene.environment.type == VL::EnvironmentType::ProceduralSky
+                ? proceduralSkyCubeGenerator.GetPendingEnvironmentCube()
+                : GetActiveEnvironmentCube();
+        }
     }
 
-    const bool dynamicEnvironment =
-        currentRenderScene.environment.type == VL::EnvironmentType::ProceduralSky;
-    environmentIblBaker.Record(
-        commandBuffer,
-        environmentCube,
-        swapchainImageIndex,
-        dynamicEnvironment);
+    VL::EnvironmentUpdateFramePlan framePlan = environmentUpdateScheduler.BuildFramePlan();
+    if (!framePlan.HasWork())
+    {
+        RefreshEnvironmentUpdateDiagnostics();
+        return;
+    }
+    if (!environmentUpdateSourceCube)
+    {
+        throw std::runtime_error("Environment update source cube is missing.");
+    }
+
+    const VL::EnvironmentSnapshot& pendingSnapshot =
+        environmentUpdateScheduler.GetPendingSnapshot();
+    if (framePlan.cubemapFaceCount > 0)
+    {
+        // 这里的 for 只消费 Scheduler 为“当前渲染帧”分配的 face 批次，
+        // 并不是在一帧内固定遍历 cubemap 的 6 个面。默认 cubemapFacesPerFrame == 1：
+        //
+        // 渲染帧        cubemapFaceCount        本帧录制
+        // Frame 1              1                 Face 0
+        // Frame 2              1                 Face 1
+        // Frame 3              1                 Face 2
+        // Frame 4              1                 Face 3
+        // Frame 5              1                 Face 4
+        // Frame 6              1                 Face 5
+        //
+        // 如果预算改为 2，这个 for 才会每帧循环两次，并用 3 帧完成全部 6 个面。
+        environmentGpuTimer.BeginProduct(
+            commandBuffer,
+            swapchainImageIndex,
+            VL::EnvironmentGpuProduct::Cubemap);
+        for (uint32_t faceOffset = 0; faceOffset < framePlan.cubemapFaceCount; ++faceOffset)
+        {
+            PROFILE_SCOPE("EnvironmentIbl::CubemapFace");
+            proceduralSkyCubeGenerator.RecordFace(
+                commandBuffer,
+                swapchainImageIndex,
+                pendingSnapshot.skyParameters,
+                framePlan.cubemapFaces[faceOffset]);
+        }
+        environmentGpuTimer.EndProduct(
+            commandBuffer,
+            swapchainImageIndex,
+            VL::EnvironmentGpuProduct::Cubemap);
+    }
+
+    if (framePlan.projectSphericalHarmonics)
+    {
+        PROFILE_SCOPE("EnvironmentIbl::SH");
+        environmentGpuTimer.BeginProduct(
+            commandBuffer,
+            swapchainImageIndex,
+            VL::EnvironmentGpuProduct::SphericalHarmonics);
+        environmentIblBaker.RecordSphericalHarmonics(
+            commandBuffer,
+            environmentUpdateSourceCube,
+            swapchainImageIndex);
+        environmentGpuTimer.EndProduct(
+            commandBuffer,
+            swapchainImageIndex,
+            VL::EnvironmentGpuProduct::SphericalHarmonics);
+    }
+
+    if (!framePlan.prefilterMips.empty())
+    {
+        environmentGpuTimer.BeginProduct(
+            commandBuffer,
+            swapchainImageIndex,
+            VL::EnvironmentGpuProduct::Prefilter);
+        for (uint32_t mipLevel : framePlan.prefilterMips)
+        {
+            PROFILE_SCOPE("EnvironmentIbl::PrefilterMip");
+            environmentIblBaker.RecordPrefilterMip(
+                commandBuffer,
+                environmentUpdateSourceCube,
+                swapchainImageIndex,
+                mipLevel);
+        }
+        environmentGpuTimer.EndProduct(
+            commandBuffer,
+            swapchainImageIndex,
+            VL::EnvironmentGpuProduct::Prefilter);
+    }
+
+    if (framePlan.commit)
+    {
+        PROFILE_SCOPE("EnvironmentIbl::Commit");
+        environmentGpuTimer.BeginProduct(
+            commandBuffer,
+            swapchainImageIndex,
+            VL::EnvironmentGpuProduct::Commit);
+        if (pendingSnapshot.type == VL::EnvironmentType::ProceduralSky)
+        {
+            proceduralSkyCubeGenerator.RecordCommit(commandBuffer);
+        }
+        environmentIblBaker.RecordCommit(commandBuffer);
+        environmentGpuTimer.EndProduct(
+            commandBuffer,
+            swapchainImageIndex,
+            VL::EnvironmentGpuProduct::Commit);
+        environmentUpdateScheduler.CompleteCommit(framePlan.generation);
+        environmentUpdateState.CompleteUpdate(framePlan.generation);
+        environmentUpdateSourceCube.reset();
+    }
+
+    RefreshEnvironmentUpdateDiagnostics();
+}
+
+void RenderSystem::RefreshEnvironmentUpdateDiagnostics()
+{
+    VL::EnvironmentUpdateDiagnostics snapshot;
+    snapshot.progress = environmentUpdateScheduler.GetProgress();
+    snapshot.gpuTiming = environmentGpuTimer.GetSnapshot();
+
+    std::lock_guard<std::mutex> lock(environmentDiagnosticsMutex);
+    environmentDiagnostics = std::move(snapshot);
 }

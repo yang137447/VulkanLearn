@@ -16,13 +16,9 @@ mat4 previousViewProjection;
 
 // 环境相关参数
 float environmentIntensity;
+// 0 = HDRI，1 = 程序化天空；字段放在 intensity 后以保持后续 environmentSH 对齐。
+int environmentType;
 vec4 environmentSH[9];
-vec4 sunDirectionIntensity;
-vec4 sunColorAngularRadius;
-vec4 zenithColor;
-vec4 horizonColor;
-vec4 groundColor;
-vec4 scatteringControls;
-vec4 cloudControls;
+#include "skyParametersFields.glsl"
 
 #endif

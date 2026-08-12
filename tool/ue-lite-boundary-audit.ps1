@@ -965,10 +965,12 @@ Test-FilePatternsPresent `
         '--resizestress',
         '--graphreloadstress',
         '--framesmoke',
+        '--environmentstress',
         '--exit-after-tests',
         'RuntimeCommandType::RunResizeStress',
         'RuntimeCommandType::RunRenderGraphReloadStress',
         'RuntimeCommandType::RunFrameSmokeTest',
+        'RuntimeCommandType::RunEnvironmentUpdateStress',
         'QueueRuntimeCommand\('
     ) `
     -RuleName "Automated runtime validation entry"
@@ -992,7 +994,11 @@ Test-FilePatternsPresent `
         'BeginRenderGraphReloadStress',
         'UpdateRenderGraphReloadStress',
         'BeginFrameSmokeTest',
-        'RecordFrameTime'
+        'RecordFrameTime',
+        'BeginEnvironmentUpdateStress',
+        'UpdateEnvironmentUpdateStress',
+        'RuntimeCommandType::SetProceduralSkyParameters',
+        'Environment update stress completed'
     ) `
     -RuleName "Runtime validation state owned by test subsystem"
 
@@ -1008,7 +1014,10 @@ Test-FilePatternsAbsent `
         'graphReloadStressActive',
         'StartFrameSmokeTest',
         'UpdateFrameSmokeTest',
-        'frameSmokeActive'
+        'frameSmokeActive',
+        'StartEnvironmentUpdateStress',
+        'UpdateEnvironmentUpdateStress',
+        'environmentUpdateStressPhase'
     ) `
     -RuleName "Runtime test state stays out of EngineLoop"
 

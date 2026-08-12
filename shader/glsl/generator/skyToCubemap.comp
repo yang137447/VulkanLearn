@@ -1,5 +1,11 @@
 #version 450
-#include "../common/commonUbo.glsl"
+
+layout(std140, set = 0, binding = 0) uniform SkyCubeDispatchParams
+{
+#include "../common/skyParametersFields.glsl"
+    ivec4 updateControl;
+} uboVP;
+
 #include "../common/proceduralSky.glsl"
 #include "../common/cubemapFace.glsl"
 
@@ -9,7 +15,7 @@ layout(set = 0, binding = 1, rgba16f) uniform writeonly image2DArray outCubemap;
 void main()
 {
     ivec2 pixelCoord = ivec2(gl_GlobalInvocationID.xy);
-    int faceIndex = int(gl_GlobalInvocationID.z);
+    int faceIndex = uboVP.updateControl.x;
     ivec3 cubeSize = imageSize(outCubemap);
 
     if (pixelCoord.x >= cubeSize.x || pixelCoord.y >= cubeSize.y || faceIndex >= cubeSize.z)

@@ -1,17 +1,21 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string>
 #include <unordered_map>
 
+#include "baseStructs.h"
 #include "engine/runtimeCommand.h"
+#include "render/environment/environmentUpdateDiagnostics.h"
 
 namespace VL
 {
 
 class DiagnosticsSubsystem;
 class EngineLoop;
+class WorldManager;
 struct RuntimeCommandExecutionResult;
 
 // Identity-only renderer snapshot for rollback validation. It observes owner
@@ -73,8 +77,13 @@ public:
     bool BeginFrameSmokeTest(
         int frameCount,
         const DiagnosticsSubsystem& diagnostics);
+    bool BeginEnvironmentUpdateStress(
+        int updateCount,
+        const DiagnosticsSubsystem& diagnostics);
     void Update(
         CommandBus& commandBus,
+        const WorldManager& worldManager,
+        const EnvironmentUpdateDiagnostics& environmentDiagnostics,
         const DiagnosticsSubsystem& diagnostics);
     void UpdateEngineLoopTests(
         EngineLoop& engineLoop,
@@ -85,6 +94,9 @@ public:
         double frameTimeMs,
         const DiagnosticsSubsystem& diagnostics);
     bool ShouldSuppressResizeEvent(uint32_t width, uint32_t height);
+    void NotifyProceduralSkyParametersResult(
+        bool succeeded,
+        const DiagnosticsSubsystem& diagnostics);
     void NotifyCommandResult(
         const RuntimeCommandExecutionResult& commandResult,
         const DiagnosticsSubsystem& diagnostics);
@@ -92,6 +104,22 @@ public:
     RuntimeTestStatus GetRuntimeTestStatus() const { return runtimeTestStatus; }
 
 private:
+    enum class EnvironmentUpdateStressPhase
+    {
+        Idle,
+        WaitInitialGeneration,
+        RequestMutation,
+        WaitMutation,
+        RequestRestore,
+        WaitRestore,
+        WaitTimingDrain
+    };
+
+    void UpdateEnvironmentUpdateStress(
+        CommandBus& commandBus,
+        const WorldManager& worldManager,
+        const EnvironmentUpdateDiagnostics& environmentDiagnostics,
+        const DiagnosticsSubsystem& diagnostics);
     void UpdateResizeStress(
         EngineLoop& engineLoop,
         const DiagnosticsSubsystem& diagnostics);
@@ -99,6 +127,9 @@ private:
         EngineLoop& engineLoop,
         const DiagnosticsSubsystem& diagnostics);
     void ReportFrameSmokeInterval(const DiagnosticsSubsystem& diagnostics);
+    void FailEnvironmentUpdateStress(
+        const std::string& message,
+        const DiagnosticsSubsystem& diagnostics);
 
     std::string worldReloadStressScenePath;
     int totalWorldReloads = 0;
@@ -148,6 +179,22 @@ private:
     double frameSmokeIntervalMinMs = 0.0;
     double frameSmokeIntervalRenderLoopTotalMs = 0.0;
     double frameSmokeIntervalRenderLoopMaxMs = 0.0;
+
+    // 环境压力测试只持有测试状态和冻结基线；参数修改继续通过 CommandBus 进入 owner 侧。
+    int environmentUpdateStressTotal = 0;
+    int environmentUpdateStressCompletedCount = 0;
+    int environmentUpdateStressFrameBudget = 0;
+    uint64_t environmentUpdateStressPreviousActiveGeneration = 0;
+    bool environmentUpdateStressActive = false;
+    bool environmentUpdateStressObservedPreviousResources = false;
+    bool waitingForProceduralSkyParametersResult = false;
+    SkyParametersGPU environmentUpdateStressOriginalSkyParameters;
+    std::array<uint64_t, 4> environmentUpdateStressBaselineTimingSamples{};
+    uint32_t environmentUpdateStressPrefilterMipCount = 0;
+    std::uintptr_t environmentUpdateStressEnvironmentCubeIdentity = 0;
+    std::uintptr_t environmentUpdateStressPrefilterCubeIdentity = 0;
+    EnvironmentUpdateStressPhase environmentUpdateStressPhase =
+        EnvironmentUpdateStressPhase::Idle;
 
     RuntimeTestStatus runtimeTestStatus = RuntimeTestStatus::Idle;
 };

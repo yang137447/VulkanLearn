@@ -136,6 +136,74 @@ vk::Device& RHIDeviceVulkan::GetDevice()
     return VulkanManager::GetInstance().GetDevice();
 }
 
+float RHIDeviceVulkan::GetTimestampPeriodNanoseconds()
+{
+    return GetPhysicalDevice().getProperties().limits.timestampPeriod;
+}
+
+uint32_t RHIDeviceVulkan::GetGraphicsTimestampValidBits()
+{
+    return VulkanManager::GetInstance().GetGraphicsQueueTimestampValidBits();
+}
+
+vk::QueryPool RHIDeviceVulkan::CreateTimestampQueryPool(
+    uint32_t queryCount,
+    const std::string& debugName)
+{
+    if (queryCount == 0)
+    {
+        throw std::runtime_error("Timestamp query pool must contain at least one query.");
+    }
+
+    vk::QueryPoolCreateInfo createInfo;
+    createInfo
+        .setQueryType(vk::QueryType::eTimestamp)
+        .setQueryCount(queryCount);
+    vk::QueryPool queryPool = GetDevice().createQueryPool(createInfo);
+    VulkanDebug::SetObjectName(
+        GetDevice(),
+        queryPool,
+        vk::ObjectType::eQueryPool,
+        debugName);
+    return queryPool;
+}
+
+void RHIDeviceVulkan::DestroyQueryPool(vk::QueryPool& queryPool)
+{
+    if (!queryPool)
+    {
+        return;
+    }
+
+    GetDevice().destroyQueryPool(queryPool);
+    queryPool = nullptr;
+}
+
+void RHIDeviceVulkan::ReadTimestampQueryPair(
+    vk::QueryPool queryPool,
+    uint32_t firstQuery,
+    std::array<uint64_t, 2>& timestamps)
+{
+    const VkResult result = vkGetQueryPoolResults(
+        static_cast<VkDevice>(GetDevice()),
+        static_cast<VkQueryPool>(queryPool),
+        firstQuery,
+        static_cast<uint32_t>(timestamps.size()),
+        sizeof(timestamps),
+        timestamps.data(),
+        sizeof(uint64_t),
+        VK_QUERY_RESULT_64_BIT);
+    if (result == VK_NOT_READY)
+    {
+        throw std::runtime_error(
+            "Vulkan timestamp query was not ready after its swapchain image fence completed.");
+    }
+    if (result != VK_SUCCESS)
+    {
+        throw std::runtime_error("Failed to read Vulkan timestamp query results.");
+    }
+}
+
 vk::PhysicalDevice& RHIDeviceVulkan::GetPhysicalDevice()
 {
     return VulkanManager::GetInstance().GetPhysicalDevice();

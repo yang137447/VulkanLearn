@@ -66,12 +66,12 @@
 - 当前有运动矢量，但没有完整的 TAA、历史颜色、时域重投影和历史资源管理
 - 当前没有通用 GPU 降水粒子系统
 - 当前没有全局材质天气参数集合，wetness、puddle、snow 等不能统一驱动 PBR 材质
-- 当前环境 IBL 路径仍需要优先改成 dirty 和分帧更新
+- 环境 IBL Phase 0 已完成 dirty、分帧预算、active/pending 提交和 GPU timestamp；后续天气系统直接复用该调度基础
 - 当前没有面向天气调参的专用 UI，只能依赖 JSON、控制台和调试视图
 
 ### 2.3 必须优先处理的性能问题
 
-程序化环境路径当前会把天空 cubemap、SH 和 prefilter 作为动态环境链路录制。若时间或天气每帧变化，直接全量重建会导致 GPU 时间随 cubemap 分辨率、mip 数和采样数快速增长。
+旧程序化环境路径曾在单帧内全量录制 cubemap、SH 和 prefilter。Phase 0 已将该路径改为按代际和预算分帧更新，当前契约见 `documents/rendering/environment-update-scheduler.md`。
 
 在接入 time-of-day 之前必须完成：
 
@@ -80,6 +80,31 @@
 3. cubemap face、prefilter mip 和 SH 支持独立更新预算
 4. 新环境资源完成前继续使用旧资源
 5. 记录每个派生资源的完成进度和 GPU 时间
+
+### 2.4 UDS 研究基准场景
+
+第一阶段使用 `scenes/SC_uds_mountain_range.json` 作为大尺度户外背景板。
+
+- 源资产：Gaea `mountain_range_01`
+- 网格：513×513 顶点网格，524,288 个三角面
+- 运行时尺度：500 米见方，约 87 米高差
+- 纹理：4096×4096 Base Color、Normal、Roughness、AO 与原始 Height
+- 用途：验证 Sky、IBL、Time of Day、height fog、aerial perspective、云影和天气能见度
+- 约束：保留完整网格和原始纹理，不通过减面、裁剪或移除远景降低测试压力
+
+该场景是环境系统集成基准，不替代后续用于材质 wetness、puddle 和
+snow accumulation 的近景 PBR 校准场景。
+
+资源验收状态（2026-08-09）：
+
+- [x] 场景、模型、材质和纹理 JSON 通过运行时校验
+- [x] Base Color 使用 sRGB；Normal 与 packed PBR 使用 linear
+- [x] packed PBR 通道为 `R=roughness`、`G=metallic(0)`、`B=AO`
+- [x] normal map R/G 方向与高度图梯度及当前 MikkTSpace 约定一致
+- [x] 山地 OBJ 通过模型级 `importOptions.generateSmoothNormals=true` 生成缺失的平滑法线；Assimp 不再全局生成法线
+- [x] OBJ、JPEG 和 PNG 资源由 Git LFS 管理
+- [x] 派生 packed PBR 贴图可通过工具脚本确定性重建
+- [x] 三次 World reload stress 和 300 帧 frame smoke 通过
 
 ## 3. 目标架构
 
@@ -134,13 +159,22 @@ Atmosphere LUT / Sky / Clouds / Fog / Precipitation
 
 目标：让动态天空成为可持续更新的基础，而不是每帧全量重建环境。
 
-- [ ] 完成 environment cubemap、SH、prefilter 的职责拆分
-- [ ] 增加 `EnvironmentUpdateState` 和 dirty 标记
-- [ ] 实现 cubemap face、prefilter mip 和 SH 的更新游标
-- [ ] 支持旧资源在新资源完成前继续提供采样
-- [ ] 增加 compute-to-compute、compute-to-fragment 和 UBO 可见性验证
-- [ ] 用 Tracy/NVTX 记录每类环境更新的 GPU 时间
-- [ ] 验收无 validation layer 的 layout、access 和 lifetime 错误
+- [x] 完成 environment cubemap、SH、prefilter 的职责拆分
+- [x] 增加 `EnvironmentUpdateState` 和 dirty 标记
+- [x] 实现 cubemap face、prefilter mip 和 SH 的更新游标
+- [x] 支持旧资源在新资源完成前继续提供采样
+- [x] 增加 compute-to-compute、compute-to-fragment 和 UBO 可见性验证
+- [x] 用 Tracy/NVTX 记录每类环境更新的 GPU 时间
+- [x] 验收 validation layer 未报告 layout、access 和 lifetime 错误
+
+完成记录（2026-08-11）：
+
+- 默认预算为每帧 1 个 cubemap face、1 次 SH、1 个 prefilter mip 和 1 次 commit
+- 程序化 cubemap 与 prefilter 使用稳定 active image 加独立 pending image
+- SH 每代际只计算一次，再把 144 字节结果广播到全部 swapchain Global UBO
+- `--environmentstress` 由 `RuntimeTestHooks` 持有状态机，通过 CommandBus 验证连续参数 dirty、旧 active 资源窗口、稳定 descriptor 身份和四类 GPU timestamp
+- 最终验收通过 `cmake --build build -j`、300 帧 smoke、3 次环境更新、3 次 UDS 场景重载、6 次 resize、6 次 render graph 重载和 2 次 HDRI 场景重载；全部退出码为 0，未出现 validation layer 错误
+- 本机 Debug 构建最后一次环境样本为 cubemap `0.005888 ms`、SH `0.012288 ms`、prefilter `0.041728 ms`、commit `0.016320 ms`
 
 ### Phase 1：Time of Day 与天空控制（3–5 人周）
 
@@ -309,12 +343,12 @@ Atmosphere LUT / Sky / Clouds / Fog / Precipitation
 
 建议下一轮实际编码只做以下内容，不直接进入体积云：
 
-- [ ] 创建 Phase 0 的独立执行清单
-- [ ] 统计当前 procedural sky、SH 和 prefilter 每帧 GPU 时间
-- [ ] 将环境资源更新改成 dirty 驱动
+- [x] 创建 Phase 0 的独立执行清单
+- [x] 统计当前 procedural sky、SH 和 prefilter 每帧 GPU 时间
+- [x] 将环境资源更新改成 dirty 驱动
 - [ ] 增加 `TimeOfDayState` 的最小数据结构
 - [ ] 增加 `WeatherState` 的最小数据结构
-- [ ] 将 Sky Pass 背景显示与 IBL 派生更新解耦
+- [x] 将 Sky Pass 背景显示与 IBL 派生更新解耦
 - [ ] 增加 clear、cloudy、rainy 三个最小天气 preset
 - [ ] 添加固定时间点和天气切换的截图回归场景
 

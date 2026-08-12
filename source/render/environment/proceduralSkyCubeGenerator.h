@@ -2,9 +2,12 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include <vulkan/vulkan.hpp>
+
+#include "baseStructs.h"
 
 class ComputePipeline;
 class PipelineFactory;
@@ -19,15 +22,20 @@ class ProceduralSkyCubeGenerator
 public:
     void Initialize(
         PipelineFactory& pipelineFactory,
-        RendererBackendVulkan& rendererBackend,
-        const std::vector<vk::DescriptorBufferInfo>& globalUniformBufferInfos);
+        RendererBackendVulkan& rendererBackend);
     void Shutdown(RendererBackendVulkan& rendererBackend);
 
     bool IsInitialized() const { return initialized; }
 
-    void Record(vk::CommandBuffer commandBuffer, uint32_t swapchainImageIndex);
-    
-    std::shared_ptr<Texture> GetEnvironmentCube();
+    void RecordFace(
+        vk::CommandBuffer commandBuffer,
+        uint32_t swapchainImageIndex,
+        const SkyParametersGPU& skyParameters,
+        uint32_t faceIndex);
+    void RecordCommit(vk::CommandBuffer commandBuffer);
+
+    std::shared_ptr<Texture> GetActiveEnvironmentCube() const;
+    std::shared_ptr<Texture> GetPendingEnvironmentCube() const;
 
 private:
     struct SkyCubeResources
@@ -38,28 +46,43 @@ private:
         vk::Format format = vk::Format::eR16G16B16A16Sfloat;
         vk::ImageLayout layout = vk::ImageLayout::eUndefined;
     };
+
     struct BufferResource
     {
         vk::Buffer buffer;
         vk::DeviceMemory memory;
+        void* mapped = nullptr;
     };
 
-
     void CreateSkyCubeResources(RendererBackendVulkan& rendererBackend);
-    void DestroySkyCubeResources(RendererBackendVulkan& rendererBackend);
-    void CreateDescriptorResources(
+    void CreateSkyCubeResource(
         RendererBackendVulkan& rendererBackend,
-        const std::vector<vk::DescriptorBufferInfo>& globalUniformBufferInfos);
+        SkyCubeResources& resources,
+        bool createStorageView,
+        const std::string& debugName);
+    void InitializeActiveCube(RendererBackendVulkan& rendererBackend);
+    void DestroySkyCubeResources(RendererBackendVulkan& rendererBackend);
+    void DestroySkyCubeResource(
+        RendererBackendVulkan& rendererBackend,
+        SkyCubeResources& resources);
+    void CreateDescriptorResources(RendererBackendVulkan& rendererBackend);
     void DestroyDescriptorResources(RendererBackendVulkan& rendererBackend);
+    void PreparePendingCubeForCompute(vk::CommandBuffer commandBuffer);
+    void FinalizePendingCubeForSampling(vk::CommandBuffer commandBuffer);
 
     std::shared_ptr<ComputePipeline> skyToCubemapPipeline;
 
     vk::DescriptorPool descriptorPool;
     std::vector<vk::DescriptorSet> skyToCubemapDescriptorSets;
-    std::vector<vk::DescriptorBufferInfo> globalUniformBufferInfos;
+    std::vector<BufferResource> dispatchParamBuffers;
 
-    SkyCubeResources skyCube;
+    // active 的 image/view/sampler 地址在运行期保持不变；pending 完整后只复制像素内容。
+    // 这样所有已建立的 graphics descriptor 都能继续安全引用 active。
+    SkyCubeResources activeCube;
+    SkyCubeResources pendingCube;
 
+    RendererBackendVulkan* rendererBackend = nullptr;
     bool initialized = false;
 };
+
 } // namespace VL

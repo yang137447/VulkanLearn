@@ -405,7 +405,7 @@ worldTextures["prefilteredEnvironmentCube"]
 ## 最终帧内顺序
 
 ```text
-UpdateGlobalUniformBufferExceptGpuOwnedRanges
+UpdateGlobalUniformBuffer  // 内部跳过 GPU-owned environmentSH 区间
 
 if environment.type == ProceduralSky
   skyToCubemap

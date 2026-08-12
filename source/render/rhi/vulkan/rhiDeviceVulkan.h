@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -16,6 +17,8 @@ class PipelineFactory;
 
 namespace VL
 {
+
+class RendererBackendVulkan;
 
 struct VulkanBufferResource
 {
@@ -252,9 +255,21 @@ public:
     void DestroyFramebuffer(RHIFramebufferHandle framebufferHandle);
     const VulkanFramebufferResource& GetVulkanFramebufferResource(
         RHIFramebufferHandle framebufferHandle) const;
-    vk::Device& GetDevice();
+    float GetTimestampPeriodNanoseconds();
+    uint32_t GetGraphicsTimestampValidBits();
+    vk::QueryPool CreateTimestampQueryPool(
+        uint32_t queryCount,
+        const std::string& debugName);
+    void DestroyQueryPool(vk::QueryPool& queryPool);
+    void ReadTimestampQueryPair(
+        vk::QueryPool queryPool,
+        uint32_t firstQuery,
+        std::array<uint64_t, 2>& timestamps);
 
 private:
+    friend class RendererBackendVulkan;
+
+    vk::Device& GetDevice();
     vk::PhysicalDevice& GetPhysicalDevice();
     vk::PhysicalDeviceMemoryProperties& GetGpuMemoryProperties();
     vk::CommandPool& GetCommandPool();

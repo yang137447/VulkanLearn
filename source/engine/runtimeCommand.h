@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 
+#include "baseStructs.h"
 #include "ui/uiAction.h"
 
 namespace VL
@@ -20,8 +21,10 @@ enum class RuntimeCommandType
     RunResizeStress,
     RunRenderGraphReloadStress,
     RunFrameSmokeTest,
+    RunEnvironmentUpdateStress,
     SetDebugViewMode,
     SetEnvironmentIntensity,
+    SetProceduralSkyParameters,
     SetSpeedTreeStrength,
     SetSpeedTreeGustingEnabled,
     ForceSpeedTreeGust,
@@ -43,6 +46,8 @@ struct RuntimeCommand
     BloomParameter bloomParameter = BloomParameter::Strength;
     int intValue = 0;
     float floatValue = 0.0f;
+    // 环境压力测试通过值语义投递完整天空参数，执行端只在 active World 所有权侧写回。
+    SkyParametersGPU skyParametersValue;
     std::string stringValue;
     std::string sourceText;
 };

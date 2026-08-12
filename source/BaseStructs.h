@@ -81,6 +81,8 @@ struct alignas(16) UBOGlobal
 
     // 环境相关
     float environmentIntensity;
+    // 与 uboGlobalFields.glsl 对齐：0 = HDRI，1 = 程序化天空。
+    int environmentType = 0;
     alignas(16) std::array<Eigen::Vector4f, 9> environmentSH{};
     SkyParametersGPU skyParameters;
 };
@@ -98,6 +100,7 @@ static_assert(offsetof(UBOGlobal, shadowBias) == 656, "UBOGlobal shadowBias must
 static_assert(offsetof(UBOGlobal, debugViewMode) == 732, "UBOGlobal debugViewMode must match GLSL std140 layout");
 static_assert(offsetof(UBOGlobal, previousViewProjection) == 736, "UBOGlobal previousViewProjection must match GLSL std140 layout");
 static_assert(offsetof(UBOGlobal, environmentIntensity) == 800, "UBOGlobal environmentIntensity must match GLSL std140 layout");
+static_assert(offsetof(UBOGlobal, environmentType) == 804, "UBOGlobal environmentType must match GLSL std140 layout");
 static_assert(offsetof(UBOGlobal, environmentSH) == 816, "UBOGlobal environmentSH must match GLSL std140 layout");
 static_assert(offsetof(UBOGlobal, skyParameters) == 960, "UBOGlobal skyParameters must match GLSL std140 layout");
 static_assert(offsetof(UBOGlobal, skyParameters) + offsetof(SkyParametersGPU, sunDirectionIntensity) == 960, "UBOGlobal sunDirectionIntensity must match GLSL std140 layout");

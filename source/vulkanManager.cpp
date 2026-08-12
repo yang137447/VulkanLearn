@@ -166,6 +166,8 @@ void VulkanManager::CreateVkDevice()
         graphicsQueueFamilyIndex = graphicQueueFamilyIndices[0];
         presentQueueFamilyIndex = presentQueueFamilyIndices[0];
     }
+    graphicsQueueTimestampValidBits =
+        queueFamilyProperties[graphicsQueueFamilyIndex.value()].timestampValidBits;
 
     vk::DeviceQueueCreateInfo deviceGraphicsQueueCreateInfo;
     float graphicsQueuePriorities[1] = {0.0f};

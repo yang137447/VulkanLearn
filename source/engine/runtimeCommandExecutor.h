@@ -44,6 +44,7 @@ public:
     RuntimeCommandExecutionResult ExecuteQueuedCommands(
         CommandBus& commandBus,
         RenderSystem& renderSystem,
+        WorldManager& worldManager,
         WorldTransitionCoordinator& worldTransitionCoordinator,
         RuntimeTestHooks& runtimeTestHooks,
         const RuntimeConfig& runtimeConfig,
@@ -53,6 +54,7 @@ private:
     void ExecuteCommand(
         const RuntimeCommand& command,
         RenderSystem& renderSystem,
+        WorldManager& worldManager,
         WorldTransitionCoordinator& worldTransitionCoordinator,
         RuntimeTestHooks& runtimeTestHooks,
         const RuntimeConfig& runtimeConfig,
@@ -93,6 +95,15 @@ private:
         const DiagnosticsSubsystem& diagnostics) const;
     void ApplyFrameSmokeTest(
         const RuntimeCommand& command,
+        RuntimeTestHooks& runtimeTestHooks,
+        const DiagnosticsSubsystem& diagnostics) const;
+    void ApplyEnvironmentUpdateStress(
+        const RuntimeCommand& command,
+        RuntimeTestHooks& runtimeTestHooks,
+        const DiagnosticsSubsystem& diagnostics) const;
+    void ApplyProceduralSkyParameters(
+        const RuntimeCommand& command,
+        WorldManager& worldManager,
         RuntimeTestHooks& runtimeTestHooks,
         const DiagnosticsSubsystem& diagnostics) const;
     void ApplyLoadWorld(

@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <vector>
 #include <unordered_map>
@@ -17,6 +18,10 @@
 #include "render/backend/rendererFrameResources.h"
 #include "render/backend/resolvedRenderScene.h"
 #include "render/environment/environmentIblBaker.h"
+#include "render/environment/environmentGpuTimer.h"
+#include "render/environment/environmentUpdateScheduler.h"
+#include "render/environment/environmentUpdateState.h"
+#include "render/environment/environmentUpdateDiagnostics.h"
 #include "render/environment/proceduralSkyCubeGenerator.h"
 #include "render/frontend/renderScene.h"
 #include "render/frontend/rendererFrontend.h"
@@ -81,6 +86,7 @@ public:
     int GetDebugViewMode() const { return debugViewMode; }
     void SetEnvironmentIntensity(float intensity) { environmentIntensity = intensity; }
     float GetEnvironmentIntensity() const { return environmentIntensity; }
+    VL::EnvironmentUpdateDiagnostics GetEnvironmentUpdateDiagnostics() const;
     bool SetSpeedTreeStrength(float strength);
     float GetSpeedTreeStrength() const { return speedTreeStrength; }
     bool SetSpeedTreeGustingEnabled(bool enabled);
@@ -203,6 +209,7 @@ private:
     void RecordEnvironmentIbl(
         vk::CommandBuffer commandBuffer,
         uint32_t swapchainImageIndex);
+    void RefreshEnvironmentUpdateDiagnostics();
 
     uint32_t currentFrame = 0;
     uint32_t swapChainImageIndex = 0;
@@ -238,6 +245,12 @@ private:
     PipelineFactory* pipelineFactory = nullptr;
     VL::ProceduralSkyCubeGenerator proceduralSkyCubeGenerator;
     VL::EnvironmentIblBaker environmentIblBaker;
+    VL::EnvironmentGpuTimer environmentGpuTimer;
+    VL::EnvironmentUpdateScheduler environmentUpdateScheduler;
+    VL::EnvironmentUpdateState environmentUpdateState;
+    std::shared_ptr<Texture> environmentUpdateSourceCube;
+    mutable std::mutex environmentDiagnosticsMutex;
+    VL::EnvironmentUpdateDiagnostics environmentDiagnostics;
     VL::UiOverlayRendererVulkan uiOverlayRenderer;
     VL::UiRenderSnapshotQueue* uiRenderSnapshotQueue = nullptr;
     std::shared_ptr<const VL::UiRenderSnapshot> currentUiRenderSnapshot;

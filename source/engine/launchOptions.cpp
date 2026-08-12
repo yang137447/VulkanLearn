@@ -23,7 +23,8 @@ enum class RuntimeTestOption
     GeneratedHighLightReloadStress,
     ResizeStress,
     RenderGraphReloadStress,
-    FrameSmoke
+    FrameSmoke,
+    EnvironmentUpdateStress
 };
 
 bool IsOptionToken(const std::string& value)
@@ -73,6 +74,8 @@ std::string GetRuntimeTestOptionName(RuntimeTestOption option)
         return "--graphreloadstress";
     case RuntimeTestOption::FrameSmoke:
         return "--framesmoke";
+    case RuntimeTestOption::EnvironmentUpdateStress:
+        return "--environmentstress";
     case RuntimeTestOption::None:
         break;
     }
@@ -123,6 +126,11 @@ RuntimeTestOption FindRuntimeTest(const LaunchOptions& options, RuntimeTestOptio
     if (excludedOption != RuntimeTestOption::FrameSmoke && options.runFrameSmokeTest)
     {
         return RuntimeTestOption::FrameSmoke;
+    }
+    if (excludedOption != RuntimeTestOption::EnvironmentUpdateStress &&
+        options.runEnvironmentUpdateStress)
+    {
+        return RuntimeTestOption::EnvironmentUpdateStress;
     }
 
     return RuntimeTestOption::None;
@@ -395,6 +403,30 @@ LaunchOptions ParseLaunchOptions(int argc, char** argv)
             continue;
         }
 
+        if (argument == "--environmentstress")
+        {
+            if (RejectRuntimeTestConflict(
+                options,
+                "--environmentstress",
+                RuntimeTestOption::EnvironmentUpdateStress))
+            {
+                return options;
+            }
+
+            options.runEnvironmentUpdateStress = true;
+            if (!TryConsumeOptionalPositiveInt(
+                argc,
+                argv,
+                i,
+                options.environmentUpdateStressCount,
+                "--environmentstress",
+                options))
+            {
+                return options;
+            }
+            continue;
+        }
+
         options.errorMessage = "Unknown launch option: " + argument;
         return options;
     }
@@ -402,7 +434,7 @@ LaunchOptions ParseLaunchOptions(int argc, char** argv)
     if (options.exitAfterTests &&
         !HasRuntimeTest(options, RuntimeTestOption::None))
     {
-        options.errorMessage = "--exit-after-tests requires --reloadstress, --reloadfail, --reloadfail-material, --reloadfail-mesh, --reloadfail-texture, --lightstress, --resizestress, --graphreloadstress, or --framesmoke.";
+        options.errorMessage = "--exit-after-tests requires --reloadstress, --reloadfail, --reloadfail-material, --reloadfail-mesh, --reloadfail-texture, --lightstress, --resizestress, --graphreloadstress, --framesmoke, or --environmentstress.";
     }
     return options;
 }
@@ -419,6 +451,7 @@ void PrintLaunchUsage()
         << "       main.exe [--resizestress [count] --exit-after-tests]\n"
         << "       main.exe [--graphreloadstress [count] --exit-after-tests]\n"
         << "       main.exe [--framesmoke [count] --exit-after-tests]\n"
+        << "       main.exe [--environmentstress [count] --exit-after-tests]\n"
         << "  --reloadstress <scene-path> [count]  Queue world reload stress through CommandBus.\n"
         << "  --reloadfail <scene-path>            Verify failed reload preserves active World.\n"
         << "  --reloadfail-material                Generate bad material fixture and verify rollback.\n"
@@ -428,6 +461,7 @@ void PrintLaunchUsage()
         << "  --resizestress [count]               Recreate swapchain and graph resources across window sizes.\n"
         << "  --graphreloadstress [count]          Reload frame graph GPU resources through retire queue.\n"
         << "  --framesmoke [count]                 Render fixed frames and report frame-time baseline.\n"
+        << "  --environmentstress [count]          Change procedural sky inputs and verify incremental IBL generations.\n"
         << "  --dev-ui                            Enable Dear ImGui developer tools for this launch.\n"
         << "  --no-dev-ui                         Disable Dear ImGui developer tools for this launch.\n"
         << "  --exit-after-tests                  Exit with 0 on success or 2 on test failure.\n";
@@ -527,6 +561,17 @@ void QueueLaunchCommands(EngineLoop& engineLoop, const LaunchOptions& options)
         command.type = RuntimeCommandType::RunFrameSmokeTest;
         command.intValue = options.frameSmokeCount;
         command.sourceText = "argv: --framesmoke";
+        engineLoop.QueueRuntimeCommand(std::move(command));
+        engineLoop.SetExitAfterRuntimeTests(options.exitAfterTests);
+        return;
+    }
+
+    if (options.runEnvironmentUpdateStress)
+    {
+        RuntimeCommand command;
+        command.type = RuntimeCommandType::RunEnvironmentUpdateStress;
+        command.intValue = options.environmentUpdateStressCount;
+        command.sourceText = "argv: --environmentstress";
         engineLoop.QueueRuntimeCommand(std::move(command));
         engineLoop.SetExitAfterRuntimeTests(options.exitAfterTests);
     }

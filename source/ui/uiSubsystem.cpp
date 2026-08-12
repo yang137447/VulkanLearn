@@ -1364,6 +1364,32 @@ void UiSubsystem::BuildDeveloperPanels()
         lastViewModel.bloomKnee,
         lastViewModel.bloomClamp);
     ImGui::Text("Environment intensity: %.2f", lastViewModel.environmentIntensity);
+    ImGui::Text(
+        "Environment update: %s  active=%llu pending=%llu  old=%s",
+        lastViewModel.environmentUpdateStage.c_str(),
+        static_cast<unsigned long long>(lastViewModel.environmentActiveGeneration),
+        static_cast<unsigned long long>(lastViewModel.environmentPendingGeneration),
+        lastViewModel.environmentUsesPreviousResources ? "yes" : "no");
+    ImGui::Text(
+        "IBL progress: cube %u/%u  SH %u/1  prefilter %u/%u",
+        lastViewModel.environmentCubemapFacesCompleted,
+        lastViewModel.environmentCubemapFaceCount,
+        lastViewModel.environmentShUpdatesCompleted,
+        lastViewModel.environmentPrefilterMipsCompleted,
+        lastViewModel.environmentPrefilterMipCount);
+    if (lastViewModel.environmentGpuTimingSupported)
+    {
+        ImGui::Text(
+            "IBL GPU ms: cube %.3f  SH %.3f  prefilter %.3f  commit %.3f",
+            lastViewModel.environmentCubemapGpuMs,
+            lastViewModel.environmentShGpuMs,
+            lastViewModel.environmentPrefilterGpuMs,
+            lastViewModel.environmentCommitGpuMs);
+    }
+    else
+    {
+        ImGui::Text("IBL GPU timing: unsupported");
+    }
     ImGui::Text("SpeedTree: profiles=%u strength=%.2f gusting=%s",
         lastViewModel.speedTreeWindProfileCount,
         lastViewModel.speedTreeStrength,

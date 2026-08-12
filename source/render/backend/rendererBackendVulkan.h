@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -51,6 +52,16 @@ public:
     const std::vector<vk::ImageView>& GetSwapchainImageViews() const;
     vk::Device& GetDevice();
     const vk::Device& GetDevice() const;
+    float GetTimestampPeriodNanoseconds();
+    uint32_t GetGraphicsTimestampValidBits();
+    vk::QueryPool CreateTimestampQueryPool(
+        uint32_t queryCount,
+        const std::string& debugName);
+    void DestroyQueryPool(vk::QueryPool& queryPool);
+    void ReadTimestampQueryPair(
+        vk::QueryPool queryPool,
+        uint32_t firstQuery,
+        std::array<uint64_t, 2>& timestamps);
     std::pair<vk::Buffer, vk::DeviceMemory> CreateBuffer(
         vk::DeviceSize size,
         vk::BufferUsageFlags usage,

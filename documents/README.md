@@ -51,6 +51,8 @@ Documentation in this repository is split by responsibility:
 
 - `rendering/descriptor-imageinfo-management.md`
   - texture `vk::DescriptorImageInfo` ownership and descriptor write lifetime rules
+- `rendering/environment-update-scheduler.md`
+  - implemented environment dirty generations, face/mip budgets, active/pending commit, SH swapchain broadcast, Vulkan barriers, and GPU timestamp diagnostics
 - `rendering/csm-shadow-map-m1.md`
   - implemented Basic CSM contract for shadowMap array resources, per-layer framebuffer views, runtime CSM settings, shader UBO fields, and debug views
 - `rendering/material-param-authoring-and-reflection.md`
@@ -89,6 +91,8 @@ Rendering plans:
   - future Material Multi-Pass asset model, PassTag matching, common RG hooks, render-state JSON draft, and draw-list execution plan
 - `plan/rendering/material-shader-variant-and-debugview-options.md`
   - deprecated shader variant options retained as context; use the deferred GBuffer plan for the current direction
+- `plan/rendering/shader-incremental-compile-and-hot-reload-plan.md`
+  - staged Shader build-cache and hot-reload plan covering stable MD5 identities, transitive include invalidation, ABI-compatible pipeline replacement, render-thread safe commit, and deferred GPU resource retirement
 - `plan/rendering/environment-cubemap-ibl-unification-plan.md`
   - executable migration plan that limits environment-type branching to cubemap generation and unifies SH/prefilter through one GPU IBL baker
 - `plan/rendering/uds-replication-roadmap.md`

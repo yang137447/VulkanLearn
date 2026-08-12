@@ -244,6 +244,7 @@ When making changes:
 - Avoid broad refactors unless the task clearly calls for them.
 - Preserve learning-oriented readability over over-abstraction.
 - Generally avoid lambda expressions in engine code. In long flow-heavy files such as `source/renderSystem.cpp`, prefer small named helper functions or clearly scoped private methods so the control flow stays readable and code size does not balloon.
+- Add concise comments for non-obvious engine and rendering code, especially around data ownership, frozen snapshots, dirty state, Vulkan synchronization, resource lifetime, and intentional performance tradeoffs. Comments should explain design intent rather than restate the code.
 
 ## Common Task Map
 

@@ -42,22 +42,14 @@ static constexpr std::array<CpuUploadSkipRange, 1> kUboGlobalGpuOwnedRanges = {
     VL_UBO_FIELD_RANGE(UBOGlobal, environmentSH)
 };
 
-static bool CompareCpuUploadSkipRangeByOffset(
-    const CpuUploadSkipRange& left,
-    const CpuUploadSkipRange& right)
-{
-    return left.offset < right.offset;
-}
-
+template <size_t RangeCount>
 static void UpdateBufferExcludingRanges(
     vk::CommandBuffer& commandBuffer,
     vk::Buffer buffer,
     const void* data,
     vk::DeviceSize totalSize,
-    std::vector<CpuUploadSkipRange> skipRanges)
+    const std::array<CpuUploadSkipRange, RangeCount>& skipRanges)
 {
-    std::sort(skipRanges.begin(), skipRanges.end(), CompareCpuUploadSkipRangeByOffset);
-
     const char* bytes = reinterpret_cast<const char*>(data);
     vk::DeviceSize cursor = 0;
 
@@ -173,7 +165,6 @@ void RendererFrameResources::Initialize(RendererBackendVulkan& rendererBackend)
 
     vk::BufferUsageFlags globalUniformUsage =
         vk::BufferUsageFlagBits::eUniformBuffer |
-        vk::BufferUsageFlagBits::eStorageBuffer |
         vk::BufferUsageFlagBits::eTransferDst;
     // 这里留给一般的ubo使用
     vk::BufferUsageFlags uniformUsage =
@@ -190,6 +181,13 @@ void RendererFrameResources::Initialize(RendererBackendVulkan& rendererBackend)
         globalUniformUsage,
         memoryPropertyFlags,
         "UBO_Global");
+
+    // environmentSH 由 GPU 在代际 commit 时写入，而常规 CPU 上传会跳过该区间。
+    // 首个环境代际尚未完成时先保持零值，使 active 黑色 IBL 也具有确定结果。
+    for (void* mappedBuffer : globalUniformBuffer.buffersMapped)
+    {
+        std::memset(mappedBuffer, 0, sizeof(UBOGlobal));
+    }
     initialized = true;
 }
 
@@ -234,55 +232,16 @@ void RendererFrameResources::UpdateGlobalUniformBuffer(
         throw std::runtime_error("RendererFrameResources global UBO is not initialized for this swapchain image.");
     }
 
-    commandBuffer.updateBuffer(
-        globalUniformBuffer.buffers[swapChainImageIndex],
-        0,
-        sizeof(UBOGlobal),
-        &uboGlobal);
-
-    vk::BufferMemoryBarrier barrier;
-    barrier.setSrcAccessMask(vk::AccessFlagBits::eTransferWrite)
-        .setDstAccessMask(vk::AccessFlagBits::eUniformRead)
-        .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
-        .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
-        .setBuffer(globalUniformBuffer.buffers[swapChainImageIndex])
-        .setOffset(0)
-        .setSize(sizeof(UBOGlobal));
-
-    commandBuffer.pipelineBarrier(
-        vk::PipelineStageFlagBits::eTransfer,
-        vk::PipelineStageFlagBits::eComputeShader |
-            vk::PipelineStageFlagBits::eVertexShader |
-            vk::PipelineStageFlagBits::eFragmentShader,
-        vk::DependencyFlags(),
-        0,
-        nullptr,
-        1,
-        &barrier,
-        0,
-        nullptr);
-}
-
-void RendererFrameResources::UpdateGlobalUniformBufferExceptGpuOwnedRanges(
-    vk::CommandBuffer& commandBuffer,
-    uint32_t swapChainImageIndex,
-    const UBOGlobal& uboGlobal)
-{
-    if (!initialized || swapChainImageIndex >= globalUniformBuffer.buffers.size())
-    {
-        throw std::runtime_error("RendererFrameResources global UBO is not initialized for this swapchain image.");
-    }
-
     vk::Buffer buffer = globalUniformBuffer.buffers[swapChainImageIndex];
 
+    // environmentSH 由 GPU 在代际 commit 时广播；常规 frame upload 永远跳过
+    // GPU-owned 区间，避免任何 pass 意外把全部 swapchain 的新 SH 覆盖掉。
     UpdateBufferExcludingRanges(
         commandBuffer,
         buffer,
         &uboGlobal,
         sizeof(UBOGlobal),
-        std::vector<CpuUploadSkipRange>(
-            kUboGlobalGpuOwnedRanges.begin(),
-            kUboGlobalGpuOwnedRanges.end()));
+        kUboGlobalGpuOwnedRanges);
 
     vk::BufferMemoryBarrier barrier;
     barrier.setSrcAccessMask(vk::AccessFlagBits::eTransferWrite)

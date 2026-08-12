@@ -47,10 +47,12 @@ public:
 #define PROFILE_TRACY_FUNCTION() ZoneScoped
 
 #define PROFILE_TRACY_FRAME() FrameMark
+#define PROFILE_TRACY_VALUE(name, value) TracyPlot(name, static_cast<double>(value))
 #else
 #define PROFILE_TRACY_SCOPE(name)
 #define PROFILE_TRACY_FUNCTION()
 #define PROFILE_TRACY_FRAME()
+#define PROFILE_TRACY_VALUE(name, value)
 #endif
 
 // ------------------------------------------------------------------------------------------------
@@ -71,6 +73,9 @@ public:
 
 // Frame marking (usually at end of frame)
 #define PROFILE_FRAME() PROFILE_TRACY_FRAME()
+
+// 将 Vulkan timestamp 换算后的毫秒值送入 Tracy Plot；未启用 Tracy 时为空操作。
+#define PROFILE_GPU_VALUE(name, value) PROFILE_TRACY_VALUE(name, value)
 
 // Minimal session facade kept for callers that only need scoped profiling macros.
 class Profiler {

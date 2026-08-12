@@ -122,6 +122,36 @@ const vk::Device& RendererBackendVulkan::GetDevice() const
     return rhiDevice->GetDevice();
 }
 
+float RendererBackendVulkan::GetTimestampPeriodNanoseconds()
+{
+    return rhiDevice->GetTimestampPeriodNanoseconds();
+}
+
+uint32_t RendererBackendVulkan::GetGraphicsTimestampValidBits()
+{
+    return rhiDevice->GetGraphicsTimestampValidBits();
+}
+
+vk::QueryPool RendererBackendVulkan::CreateTimestampQueryPool(
+    uint32_t queryCount,
+    const std::string& debugName)
+{
+    return rhiDevice->CreateTimestampQueryPool(queryCount, debugName);
+}
+
+void RendererBackendVulkan::DestroyQueryPool(vk::QueryPool& queryPool)
+{
+    rhiDevice->DestroyQueryPool(queryPool);
+}
+
+void RendererBackendVulkan::ReadTimestampQueryPair(
+    vk::QueryPool queryPool,
+    uint32_t firstQuery,
+    std::array<uint64_t, 2>& timestamps)
+{
+    rhiDevice->ReadTimestampQueryPair(queryPool, firstQuery, timestamps);
+}
+
 RHIBufferHandle RendererBackendVulkan::RequireBufferHandle(vk::Buffer buffer) const
 {
     auto handleIt = bufferHandlesByBuffer.find(static_cast<VkBuffer>(buffer));

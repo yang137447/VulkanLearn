@@ -49,6 +49,10 @@ private:
     inline vk::SurfaceFormatKHR& GetSurfaceFormat() { return surfaceFormat; }
     inline std::vector<vk::ImageView>& GetSwapChainImageViews() { return swapChainImageViews; }
     inline vk::Extent2D GetSwapChainExtent() const { return swapChainExtent; }
+    inline uint32_t GetGraphicsQueueTimestampValidBits() const
+    {
+        return graphicsQueueTimestampValidBits;
+    }
 
     void CreateVkInstance();
     void DestroyVkInstance();
@@ -87,6 +91,7 @@ private:
     std::vector<vk::PhysicalDevice> physicalDevices;
     vk::PhysicalDeviceMemoryProperties gpuMemoryProperties;
     std::optional<uint32_t> graphicsQueueFamilyIndex;
+    uint32_t graphicsQueueTimestampValidBits = 0;
     vk::Queue graphicsQueue;
     std::optional<uint32_t> presentQueueFamilyIndex;
 

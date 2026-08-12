@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include <vulkan/vulkan.hpp>
@@ -25,15 +26,28 @@ public:
 
     bool IsInitialized() const { return initialized; }
 
-    void Record(
+    void RecordSphericalHarmonics(
+        vk::CommandBuffer commandBuffer,
+        const std::shared_ptr<Texture>& environmentCube,
+        uint32_t swapchainImageIndex);
+    void RecordPrefilterMip(
         vk::CommandBuffer commandBuffer,
         const std::shared_ptr<Texture>& environmentCube,
         uint32_t swapchainImageIndex,
-        bool rebuildEvenIfUnchanged);
+        uint32_t mipLevel);
+    void RecordCommit(vk::CommandBuffer commandBuffer);
 
-    std::shared_ptr<Texture> GetPrefilteredEnvironmentCube() const { return prefilterCube.texture; }
+    std::shared_ptr<Texture> GetPrefilteredEnvironmentCube() const;
+    uint32_t GetPrefilterMipCount() const { return pendingPrefilterCube.mipLevels; }
 
 private:
+    enum class ShBufferAccess
+    {
+        Undefined,
+        ComputeWrite,
+        TransferRead
+    };
+
     struct BufferResource
     {
         vk::Buffer buffer;
@@ -53,14 +67,26 @@ private:
     void CreateDescriptorResources(
         RendererBackendVulkan& rendererBackend,
         const std::vector<vk::DescriptorBufferInfo>& globalUniformBufferInfos);
-    void UpdateEnvironmentCubeDescriptors(
-        RendererBackendVulkan& rendererBackend,
+    void EnsureEnvironmentCubeDescriptors(
         const std::shared_ptr<Texture>& environmentCube,
         uint32_t swapchainImageIndex);
+    void CreateEnvironmentShResources(RendererBackendVulkan& rendererBackend);
+    void DestroyEnvironmentShResources(RendererBackendVulkan& rendererBackend);
+    void PrepareEnvironmentShOutputForCompute(vk::CommandBuffer commandBuffer);
+    void BroadcastEnvironmentShToGlobalBuffers(vk::CommandBuffer commandBuffer);
     void DestroyDescriptorResources(RendererBackendVulkan& rendererBackend);
     void CreatePrefilteredCubeResources(RendererBackendVulkan& rendererBackend);
+    void CreatePrefilteredCubeResource(
+        RendererBackendVulkan& rendererBackend,
+        PrefilteredCubeResources& resources,
+        bool createStorageViews,
+        const std::string& debugName);
+    void InitializeActivePrefilteredCube(RendererBackendVulkan& rendererBackend);
+    void PreparePendingPrefilterForCompute(vk::CommandBuffer commandBuffer);
     void DestroyPrefilteredCubeResources(RendererBackendVulkan& rendererBackend);
-
+    void DestroyPrefilteredCubeResource(
+        RendererBackendVulkan& rendererBackend,
+        PrefilteredCubeResources& resources);
 
     std::shared_ptr<ComputePipeline> skySHGeneratePipeline;
     std::shared_ptr<ComputePipeline> prefilterEnvMapPipeline;
@@ -71,11 +97,16 @@ private:
     std::vector<vk::DescriptorSet> prefilterDescriptorSets;
     std::vector<BufferResource> prefilterParamBuffers;
     std::vector<std::shared_ptr<Texture>> boundEnvironmentCubes;
+    BufferResource environmentShOutputBuffer;
+    ShBufferAccess environmentShAccess = ShBufferAccess::Undefined;
 
-    PrefilteredCubeResources prefilterCube;
+    // graphics descriptor 永远引用 active；所有 SH/prefilter 工作只写 pending。
+    // commit 在同一个命令缓冲中复制完整结果并广播 SH，避免暴露半成品。
+    PrefilteredCubeResources activePrefilterCube;
+    PrefilteredCubeResources pendingPrefilterCube;
 
     RendererBackendVulkan* rendererBackend = nullptr;
-
     bool initialized = false;
 };
+
 } // namespace VL

@@ -21,8 +21,8 @@ UE-Lite 的完成标准不是“把所有类改成 Unreal 风格命名”，而�
 - `WorldManager` 管理 active world generation、scene path 和 view target。
 - `WorldTransitionCoordinator` 串起 scene validate、renderer resource load、`WorldBuilder` staging world 构建、active world 交换和失败回滚。
 - `RuntimeResult` / `RuntimeError` 已作为加载与切换路径的结构化错误边界。
-- `RuntimeCommand`、`CommandBus`、`RuntimeCommandExecutor`、`ConsoleSubsystem` 已把 reload/test 操作收敛到命令路径；`--reloadstress`、`--reloadfail*`、`--lightstress`、`--resizestress`、`--graphreloadstress` 和 `--framesmoke` 的启动参数入口都只投递 runtime command。
-- `RuntimeTestHooks` 统一持有 reload、rollback、light、resize、render graph reload 和 frame smoke 等 runtime 验收状态机。
+- `RuntimeCommand`、`CommandBus`、`RuntimeCommandExecutor`、`ConsoleSubsystem` 已把 reload/test 操作收敛到命令路径；`--reloadstress`、`--reloadfail*`、`--lightstress`、`--resizestress`、`--graphreloadstress`、`--framesmoke` 和 `--environmentstress` 的启动参数入口都只投递 runtime command。
+- `RuntimeTestHooks` 统一持有 reload、rollback、light、resize、render graph reload、frame smoke 和环境增量更新等 runtime 验收状态机；环境测试的天空参数修改也通过 CommandBus 回到 active World owner 侧。
 - `EngineLoop` 不保存测试阶段、计数、断言或完成状态，只在稳定帧点调用测试子系统，并提供窗口 / renderer 重建、render graph reload 和帧耗时等既有生产操作与观测值。
 - `WorldSnapshot` / `WorldSnapshotQueue` / `WorldSnapshotBuilder` 已作为 GT -> RT 的只读 DTO 和 mailbox。
 - `RenderScene` / `ResolvedRenderScene` / `RendererDrawExecutor` 已让 shadow / geometry draw 路径消费 frozen draw packet 和 backend resource entry。
@@ -316,7 +316,7 @@ build\bin\main.exe --graphreloadstress 6 --exit-after-tests
 - `PlatformApplication` 负责 SDL/Vulkan loader-facing platform setup。
 - `SubsystemCollection` 持有 Input、Console、Diagnostics、RuntimeClock、WorldManager 等跨 world subsystem。
 - `EngineLoop` 只顺序初始化 subsystem、shader/material generation、renderer backend、pipeline factory、render graph、initial world、console commands。
-- runtime commands 在 `RuntimeCommandExecutor` 内转成 coordinator / render option / diagnostics 操作；全部 runtime test 状态机统一由 `RuntimeTestHooks` 持有，`EngineLoop` 仅提供帧时机和其本来就拥有的生命周期操作。
+- runtime commands 在 `RuntimeCommandExecutor` 内转成 coordinator / world mutation / render option / diagnostics 操作；全部 runtime test 状态机统一由 `RuntimeTestHooks` 持有，`EngineLoop` 仅提供帧时机和其本来就拥有的生命周期操作。
 - 保留必要错误上下文：启动参数互斥报错、runtime test 冲突报错、rollback 指纹、frame smoke 时间统计和 retire queue 计数都属于验收诊断信息，不按冗余清理。
 - 控制器只消费 `InputSubsystem` 和 active view target，不直接读 SDL。
 
@@ -374,6 +374,7 @@ powershell -ExecutionPolicy Bypass -File tool\ue-lite-final-validation.ps1
 | Build | `cmake --build build -j` | 编译成功 |
 | Static boundary | `powershell -ExecutionPolicy Bypass -File tool/ue-lite-boundary-audit.ps1` | 返回 0 |
 | Frame smoke | `build\bin\main.exe --framesmoke 120 --exit-after-tests` | 输出 frame stats，返回 0 |
+| Environment update | `build\bin\main.exe --environmentstress 3 --exit-after-tests --no-dev-ui` | 增量代际、旧资源窗口、稳定 active 资源和 timestamp 样本均通过 |
 | World reload | `build\bin\main.exe --reloadstress scenes/SC_speedtree.json 100 --exit-after-tests` | 无崩溃、无黑屏、retire drain |
 | Bad scene rollback | `build\bin\main.exe --reloadfail scenes/DOES_NOT_EXIST.json --exit-after-tests` | 旧 active world 不变 |
 | Bad material rollback | `build\bin\main.exe --reloadfail-material --exit-after-tests` | renderer cache/pass material 指纹不变 |

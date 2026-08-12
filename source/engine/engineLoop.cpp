@@ -281,9 +281,13 @@ void EngineLoop::Tick()
         return;
     }
 
+    const EnvironmentUpdateDiagnostics environmentTestDiagnostics =
+        RenderSystem::GetInstance().GetEnvironmentUpdateDiagnostics();
     RuntimeTestHooks& runtimeTests = GetSubsystems().GetRuntimeTestHooks();
     runtimeTests.Update(
         GetSubsystems().GetCommandBus(),
+        GetSubsystems().GetWorldManager(),
+        environmentTestDiagnostics,
         GetSubsystems().GetDiagnosticsSubsystem());
     PollRenderThreadFatalError();
     if (shouldClose)
@@ -297,6 +301,7 @@ void EngineLoop::Tick()
     RuntimeCommandExecutionResult commandResult = runtimeCommandExecutor->ExecuteQueuedCommands(
         GetSubsystems().GetCommandBus(),
         RenderSystem::GetInstance(),
+        GetSubsystems().GetWorldManager(),
         *worldTransitionCoordinator,
         runtimeTests,
         GetRuntimeConfig(),
@@ -553,6 +558,29 @@ void EngineLoop::UpdateUiViewModel(float deltaTime)
     snapshot.bloomKnee = renderSystem.GetBloomKnee();
     snapshot.bloomClamp = renderSystem.GetBloomClamp();
     snapshot.environmentIntensity = renderSystem.GetEnvironmentIntensity();
+    const EnvironmentUpdateDiagnostics environmentDiagnostics =
+        renderSystem.GetEnvironmentUpdateDiagnostics();
+    snapshot.environmentActiveGeneration = environmentDiagnostics.progress.activeGeneration;
+    snapshot.environmentPendingGeneration = environmentDiagnostics.progress.pendingGeneration;
+    snapshot.environmentUpdateStage = ToString(environmentDiagnostics.progress.stage);
+    snapshot.environmentCubemapFacesCompleted =
+        environmentDiagnostics.progress.cubemapFacesCompleted;
+    snapshot.environmentCubemapFaceCount = environmentDiagnostics.progress.cubemapFaceCount;
+    snapshot.environmentShUpdatesCompleted = environmentDiagnostics.progress.shUpdatesCompleted;
+    snapshot.environmentPrefilterMipsCompleted =
+        environmentDiagnostics.progress.prefilterMipsCompleted;
+    snapshot.environmentPrefilterMipCount = environmentDiagnostics.progress.prefilterMipCount;
+    snapshot.environmentUsesPreviousResources =
+        environmentDiagnostics.progress.usingPreviousResources;
+    snapshot.environmentGpuTimingSupported = environmentDiagnostics.gpuTiming.supported;
+    snapshot.environmentCubemapGpuMs = environmentDiagnostics.gpuTiming
+        .Get(EnvironmentGpuProduct::Cubemap).lastMilliseconds;
+    snapshot.environmentShGpuMs = environmentDiagnostics.gpuTiming
+        .Get(EnvironmentGpuProduct::SphericalHarmonics).lastMilliseconds;
+    snapshot.environmentPrefilterGpuMs = environmentDiagnostics.gpuTiming
+        .Get(EnvironmentGpuProduct::Prefilter).lastMilliseconds;
+    snapshot.environmentCommitGpuMs = environmentDiagnostics.gpuTiming
+        .Get(EnvironmentGpuProduct::Commit).lastMilliseconds;
     snapshot.speedTreeStrength = renderSystem.GetSpeedTreeStrength();
     snapshot.speedTreeGustingEnabled = renderSystem.GetSpeedTreeGustingEnabled();
     snapshot.speedTreeWindProfileCount = renderSystem.GetSpeedTreeWindProfileCount();

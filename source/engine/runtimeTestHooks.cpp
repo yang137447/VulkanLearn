@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <fstream>
 #include <limits>
+#include <memory>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -16,7 +17,10 @@
 #include "engine/runtimeConfig.h"
 #include "engine/runtimeCommandExecutor.h"
 #include "platform/platformWindow.h"
+#include "render/resource/rendererResourceCache.h"
 #include "render/resource/resourceRetireQueue.h"
+#include "world/world.h"
+#include "world/worldManager.h"
 
 namespace VL
 {
@@ -24,6 +28,15 @@ namespace
 {
 
 constexpr int RetireDrainFrameBudget = 180;
+
+std::uintptr_t GetWorldTextureIdentity(const std::string& key)
+{
+    const std::shared_ptr<Texture>* texture =
+        RendererResourceCache::GetInstance().GetWorldTexture(key);
+    return texture != nullptr && *texture
+        ? reinterpret_cast<std::uintptr_t>(texture->get())
+        : 0;
+}
 
 bool SameWorldHandle(const WorldHandle& lhs, const WorldHandle& rhs)
 {
@@ -743,10 +756,60 @@ bool RuntimeTestHooks::BeginFrameSmokeTest(
     return true;
 }
 
-void RuntimeTestHooks::Update(
-    CommandBus& commandBus,
+bool RuntimeTestHooks::BeginEnvironmentUpdateStress(
+    int updateCount,
     const DiagnosticsSubsystem& diagnostics)
 {
+    if (updateCount <= 0)
+    {
+        runtimeTestStatus = RuntimeTestStatus::Failed;
+        diagnostics.ReportWarning(
+            "Environment update stress ignored because update count must be positive.");
+        return false;
+    }
+
+    if (runtimeTestStatus == RuntimeTestStatus::Running)
+    {
+        diagnostics.ReportWarning("A runtime validation test is already running.");
+        return false;
+    }
+
+    environmentUpdateStressTotal = updateCount;
+    environmentUpdateStressCompletedCount = 0;
+    environmentUpdateStressFrameBudget = std::max(300, (updateCount + 2) * 120);
+    environmentUpdateStressPreviousActiveGeneration = 0;
+    environmentUpdateStressObservedPreviousResources = false;
+    waitingForProceduralSkyParametersResult = false;
+    environmentUpdateStressBaselineTimingSamples.fill(0);
+    environmentUpdateStressPrefilterMipCount = 0;
+    environmentUpdateStressEnvironmentCubeIdentity = 0;
+    environmentUpdateStressPrefilterCubeIdentity = 0;
+    environmentUpdateStressPhase = EnvironmentUpdateStressPhase::WaitInitialGeneration;
+    environmentUpdateStressActive = true;
+    runtimeTestStatus = RuntimeTestStatus::Running;
+
+    diagnostics.ReportInfo(
+        "Environment update stress started: changes=" +
+        std::to_string(environmentUpdateStressTotal));
+    return true;
+}
+
+void RuntimeTestHooks::Update(
+    CommandBus& commandBus,
+    const WorldManager& worldManager,
+    const EnvironmentUpdateDiagnostics& environmentDiagnostics,
+    const DiagnosticsSubsystem& diagnostics)
+{
+    if (environmentUpdateStressActive)
+    {
+        UpdateEnvironmentUpdateStress(
+            commandBus,
+            worldManager,
+            environmentDiagnostics,
+            diagnostics);
+        return;
+    }
+
     if (worldReloadStressActive &&
         waitingForRetireDrain)
     {
@@ -1172,6 +1235,287 @@ bool RuntimeTestHooks::ShouldSuppressResizeEvent(uint32_t width, uint32_t height
     }
 
     return false;
+}
+
+void RuntimeTestHooks::UpdateEnvironmentUpdateStress(
+    CommandBus& commandBus,
+    const WorldManager& worldManager,
+    const EnvironmentUpdateDiagnostics& environmentDiagnostics,
+    const DiagnosticsSubsystem& diagnostics)
+{
+    --environmentUpdateStressFrameBudget;
+    if (environmentUpdateStressFrameBudget <= 0)
+    {
+        FailEnvironmentUpdateStress(
+            "Environment update stress exceeded its frame budget.",
+            diagnostics);
+        return;
+    }
+
+    const std::shared_ptr<World>& activeWorld = worldManager.GetActiveWorld();
+    if (!activeWorld)
+    {
+        FailEnvironmentUpdateStress(
+            "Environment update stress requires an active World.",
+            diagnostics);
+        return;
+    }
+
+    const WorldEnvironment& worldEnvironment = activeWorld->GetEnvironment();
+    if (worldEnvironment.type != EnvironmentType::ProceduralSky)
+    {
+        FailEnvironmentUpdateStress(
+            "Environment update stress requires a procedural-sky World.",
+            diagnostics);
+        return;
+    }
+
+    const EnvironmentUpdateProgress& progress = environmentDiagnostics.progress;
+    const EnvironmentGpuTimingSnapshot& timing = environmentDiagnostics.gpuTiming;
+
+    if (environmentUpdateStressPhase == EnvironmentUpdateStressPhase::WaitInitialGeneration)
+    {
+        const bool initialTimingsReady =
+            timing.supported &&
+            timing.Get(EnvironmentGpuProduct::Cubemap).sampleCount > 0 &&
+            timing.Get(EnvironmentGpuProduct::SphericalHarmonics).sampleCount > 0 &&
+            timing.Get(EnvironmentGpuProduct::Prefilter).sampleCount > 0 &&
+            timing.Get(EnvironmentGpuProduct::Commit).sampleCount > 0;
+        if (progress.stage != EnvironmentUpdateStage::Idle ||
+            progress.activeGeneration == 0 ||
+            !initialTimingsReady)
+        {
+            return;
+        }
+
+        environmentUpdateStressOriginalSkyParameters = worldEnvironment.skyParameters;
+        environmentUpdateStressPreviousActiveGeneration = progress.activeGeneration;
+        environmentUpdateStressPrefilterMipCount = progress.prefilterMipCount;
+        environmentUpdateStressEnvironmentCubeIdentity =
+            GetWorldTextureIdentity("environmentCube");
+        environmentUpdateStressPrefilterCubeIdentity =
+            GetWorldTextureIdentity("prefilteredEnvironmentCube");
+        if (environmentUpdateStressEnvironmentCubeIdentity == 0 ||
+            environmentUpdateStressPrefilterCubeIdentity == 0 ||
+            environmentUpdateStressPrefilterMipCount == 0)
+        {
+            FailEnvironmentUpdateStress(
+                "Environment update stress could not capture active environment resources.",
+                diagnostics);
+            return;
+        }
+
+        environmentUpdateStressBaselineTimingSamples[0] =
+            timing.Get(EnvironmentGpuProduct::Cubemap).sampleCount;
+        environmentUpdateStressBaselineTimingSamples[1] =
+            timing.Get(EnvironmentGpuProduct::SphericalHarmonics).sampleCount;
+        environmentUpdateStressBaselineTimingSamples[2] =
+            timing.Get(EnvironmentGpuProduct::Prefilter).sampleCount;
+        environmentUpdateStressBaselineTimingSamples[3] =
+            timing.Get(EnvironmentGpuProduct::Commit).sampleCount;
+        environmentUpdateStressPhase = EnvironmentUpdateStressPhase::RequestMutation;
+        return;
+    }
+
+    if (environmentUpdateStressPhase == EnvironmentUpdateStressPhase::RequestMutation)
+    {
+        SkyParametersGPU changedSkyParameters = environmentUpdateStressOriginalSkyParameters;
+        const int mutationIndex = environmentUpdateStressCompletedCount + 1;
+        const float direction = (mutationIndex % 2) == 1 ? 1.0f : -1.0f;
+        Eigen::Vector3f changedSunDirection =
+            changedSkyParameters.sunDirectionIntensity.head<3>();
+        changedSunDirection.x() += direction * 0.02f;
+        changedSunDirection.normalize();
+        changedSkyParameters.sunDirectionIntensity.head<3>() = changedSunDirection;
+
+        // 测试子系统只投递意图；active World 的可变状态仍由命令执行器在 owner 侧修改。
+        RuntimeCommand command;
+        command.type = RuntimeCommandType::SetProceduralSkyParameters;
+        command.skyParametersValue = changedSkyParameters;
+        command.sourceText = "runtime-test: environmentstress mutation";
+        commandBus.Queue(std::move(command));
+
+        environmentUpdateStressPreviousActiveGeneration = progress.activeGeneration;
+        environmentUpdateStressObservedPreviousResources = false;
+        waitingForProceduralSkyParametersResult = true;
+        environmentUpdateStressPhase = EnvironmentUpdateStressPhase::WaitMutation;
+        diagnostics.ReportInfo(
+            "Environment update stress requested dirty generation " +
+            std::to_string(mutationIndex) +
+            "/" +
+            std::to_string(environmentUpdateStressTotal) +
+            ".");
+        return;
+    }
+
+    if (environmentUpdateStressPhase == EnvironmentUpdateStressPhase::WaitMutation)
+    {
+        if (waitingForProceduralSkyParametersResult)
+        {
+            return;
+        }
+        if (progress.usingPreviousResources &&
+            progress.activeGeneration == environmentUpdateStressPreviousActiveGeneration)
+        {
+            environmentUpdateStressObservedPreviousResources = true;
+        }
+
+        if (progress.stage != EnvironmentUpdateStage::Idle ||
+            progress.activeGeneration <= environmentUpdateStressPreviousActiveGeneration)
+        {
+            return;
+        }
+        if (!environmentUpdateStressObservedPreviousResources)
+        {
+            FailEnvironmentUpdateStress(
+                "Environment update committed without exposing the previous-resource interval.",
+                diagnostics);
+            return;
+        }
+        if (GetWorldTextureIdentity("environmentCube") !=
+                environmentUpdateStressEnvironmentCubeIdentity ||
+            GetWorldTextureIdentity("prefilteredEnvironmentCube") !=
+                environmentUpdateStressPrefilterCubeIdentity)
+        {
+            FailEnvironmentUpdateStress(
+                "Environment active texture identity changed during an incremental generation.",
+                diagnostics);
+            return;
+        }
+
+        ++environmentUpdateStressCompletedCount;
+        environmentUpdateStressPreviousActiveGeneration = progress.activeGeneration;
+        diagnostics.ReportInfo(
+            "Environment update stress committed generation " +
+            std::to_string(environmentUpdateStressCompletedCount) +
+            "/" +
+            std::to_string(environmentUpdateStressTotal) +
+            ".");
+        environmentUpdateStressPhase =
+            environmentUpdateStressCompletedCount < environmentUpdateStressTotal
+            ? EnvironmentUpdateStressPhase::RequestMutation
+            : EnvironmentUpdateStressPhase::RequestRestore;
+        return;
+    }
+
+    if (environmentUpdateStressPhase == EnvironmentUpdateStressPhase::RequestRestore)
+    {
+        RuntimeCommand command;
+        command.type = RuntimeCommandType::SetProceduralSkyParameters;
+        command.skyParametersValue = environmentUpdateStressOriginalSkyParameters;
+        command.sourceText = "runtime-test: environmentstress restore";
+        commandBus.Queue(std::move(command));
+
+        environmentUpdateStressPreviousActiveGeneration = progress.activeGeneration;
+        environmentUpdateStressObservedPreviousResources = false;
+        waitingForProceduralSkyParametersResult = true;
+        environmentUpdateStressPhase = EnvironmentUpdateStressPhase::WaitRestore;
+        return;
+    }
+
+    if (environmentUpdateStressPhase == EnvironmentUpdateStressPhase::WaitRestore)
+    {
+        if (waitingForProceduralSkyParametersResult)
+        {
+            return;
+        }
+        if (progress.usingPreviousResources &&
+            progress.activeGeneration == environmentUpdateStressPreviousActiveGeneration)
+        {
+            environmentUpdateStressObservedPreviousResources = true;
+        }
+        if (progress.stage != EnvironmentUpdateStage::Idle ||
+            progress.activeGeneration <= environmentUpdateStressPreviousActiveGeneration)
+        {
+            return;
+        }
+        if (!environmentUpdateStressObservedPreviousResources)
+        {
+            FailEnvironmentUpdateStress(
+                "Environment restore generation did not preserve the previous active resources.",
+                diagnostics);
+            return;
+        }
+
+        environmentUpdateStressPhase = EnvironmentUpdateStressPhase::WaitTimingDrain;
+        return;
+    }
+
+    if (environmentUpdateStressPhase == EnvironmentUpdateStressPhase::WaitTimingDrain)
+    {
+        const uint64_t generationCount =
+            static_cast<uint64_t>(environmentUpdateStressTotal + 1);
+        const uint64_t expectedCubemapSamples =
+            environmentUpdateStressBaselineTimingSamples[0] + generationCount * 6;
+        const uint64_t expectedShSamples =
+            environmentUpdateStressBaselineTimingSamples[1] + generationCount;
+        const uint64_t expectedPrefilterSamples =
+            environmentUpdateStressBaselineTimingSamples[2] +
+            generationCount * environmentUpdateStressPrefilterMipCount;
+        const uint64_t expectedCommitSamples =
+            environmentUpdateStressBaselineTimingSamples[3] + generationCount;
+
+        if (timing.Get(EnvironmentGpuProduct::Cubemap).sampleCount < expectedCubemapSamples ||
+            timing.Get(EnvironmentGpuProduct::SphericalHarmonics).sampleCount < expectedShSamples ||
+            timing.Get(EnvironmentGpuProduct::Prefilter).sampleCount < expectedPrefilterSamples ||
+            timing.Get(EnvironmentGpuProduct::Commit).sampleCount < expectedCommitSamples)
+        {
+            return;
+        }
+
+        environmentUpdateStressActive = false;
+        environmentUpdateStressPhase = EnvironmentUpdateStressPhase::Idle;
+        runtimeTestStatus = RuntimeTestStatus::Succeeded;
+        diagnostics.ReportInfo(
+            "Environment update stress completed: changes=" +
+            std::to_string(environmentUpdateStressCompletedCount) +
+            ", cubeLastMs=" +
+            std::to_string(timing.Get(EnvironmentGpuProduct::Cubemap).lastMilliseconds) +
+            ", shLastMs=" +
+            std::to_string(timing.Get(EnvironmentGpuProduct::SphericalHarmonics).lastMilliseconds) +
+            ", prefilterLastMs=" +
+            std::to_string(timing.Get(EnvironmentGpuProduct::Prefilter).lastMilliseconds) +
+            ", commitLastMs=" +
+            std::to_string(timing.Get(EnvironmentGpuProduct::Commit).lastMilliseconds) +
+            ".");
+    }
+}
+
+void RuntimeTestHooks::FailEnvironmentUpdateStress(
+    const std::string& message,
+    const DiagnosticsSubsystem& diagnostics)
+{
+    environmentUpdateStressActive = false;
+    waitingForProceduralSkyParametersResult = false;
+    environmentUpdateStressPhase = EnvironmentUpdateStressPhase::Idle;
+    runtimeTestStatus = RuntimeTestStatus::Failed;
+    diagnostics.ReportError(message);
+}
+
+void RuntimeTestHooks::NotifyProceduralSkyParametersResult(
+    bool succeeded,
+    const DiagnosticsSubsystem& diagnostics)
+{
+    if (!environmentUpdateStressActive)
+    {
+        return;
+    }
+
+    if (!waitingForProceduralSkyParametersResult)
+    {
+        FailEnvironmentUpdateStress(
+            "Environment update stress received an unexpected sky-parameter command result.",
+            diagnostics);
+        return;
+    }
+
+    waitingForProceduralSkyParametersResult = false;
+    if (!succeeded)
+    {
+        FailEnvironmentUpdateStress(
+            "Environment update stress could not apply procedural sky parameters through CommandBus.",
+            diagnostics);
+    }
 }
 
 void RuntimeTestHooks::NotifyCommandResult(

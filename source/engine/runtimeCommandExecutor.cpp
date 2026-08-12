@@ -4,6 +4,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <utility>
 
 #include "engine/diagnosticsSubsystem.h"
 #include "engine/runtimeConfig.h"
@@ -13,6 +14,7 @@
 #include "renderGraph.h"
 #include "renderSystem.h"
 #include "world/loading/worldTransitionCoordinator.h"
+#include "world/world.h"
 
 namespace VL
 {
@@ -74,6 +76,7 @@ RuntimeRendererResourceFingerprint CaptureRuntimeRendererResourceFingerprint()
 RuntimeCommandExecutionResult RuntimeCommandExecutor::ExecuteQueuedCommands(
     CommandBus& commandBus,
     RenderSystem& renderSystem,
+    WorldManager& worldManager,
     WorldTransitionCoordinator& worldTransitionCoordinator,
     RuntimeTestHooks& runtimeTestHooks,
     const RuntimeConfig& runtimeConfig,
@@ -86,6 +89,7 @@ RuntimeCommandExecutionResult RuntimeCommandExecutor::ExecuteQueuedCommands(
         ExecuteCommand(
             command,
             renderSystem,
+            worldManager,
             worldTransitionCoordinator,
             runtimeTestHooks,
             runtimeConfig,
@@ -98,6 +102,7 @@ RuntimeCommandExecutionResult RuntimeCommandExecutor::ExecuteQueuedCommands(
 void RuntimeCommandExecutor::ExecuteCommand(
     const RuntimeCommand& command,
     RenderSystem& renderSystem,
+    WorldManager& worldManager,
     WorldTransitionCoordinator& worldTransitionCoordinator,
     RuntimeTestHooks& runtimeTestHooks,
     const RuntimeConfig& runtimeConfig,
@@ -136,6 +141,9 @@ void RuntimeCommandExecutor::ExecuteCommand(
     case RuntimeCommandType::RunFrameSmokeTest:
         ApplyFrameSmokeTest(command, runtimeTestHooks, diagnostics);
         break;
+    case RuntimeCommandType::RunEnvironmentUpdateStress:
+        ApplyEnvironmentUpdateStress(command, runtimeTestHooks, diagnostics);
+        break;
     case RuntimeCommandType::SetDebugViewMode:
         renderSystem.SetDebugViewMode(command.intValue);
         diagnostics.ReportInfo("Debug view mode set to " + std::to_string(command.intValue));
@@ -143,6 +151,13 @@ void RuntimeCommandExecutor::ExecuteCommand(
     case RuntimeCommandType::SetEnvironmentIntensity:
         renderSystem.SetEnvironmentIntensity(command.floatValue);
         diagnostics.ReportInfo("Environment intensity set to " + std::to_string(command.floatValue));
+        break;
+    case RuntimeCommandType::SetProceduralSkyParameters:
+        ApplyProceduralSkyParameters(
+            command,
+            worldManager,
+            runtimeTestHooks,
+            diagnostics);
         break;
     case RuntimeCommandType::SetSpeedTreeStrength:
         if (renderSystem.SetSpeedTreeStrength(command.floatValue))
@@ -326,6 +341,46 @@ void RuntimeCommandExecutor::ApplyFrameSmokeTest(
     const DiagnosticsSubsystem& diagnostics) const
 {
     (void)runtimeTestHooks.BeginFrameSmokeTest(command.intValue, diagnostics);
+}
+
+void RuntimeCommandExecutor::ApplyEnvironmentUpdateStress(
+    const RuntimeCommand& command,
+    RuntimeTestHooks& runtimeTestHooks,
+    const DiagnosticsSubsystem& diagnostics) const
+{
+    (void)runtimeTestHooks.BeginEnvironmentUpdateStress(
+        command.intValue,
+        diagnostics);
+}
+
+void RuntimeCommandExecutor::ApplyProceduralSkyParameters(
+    const RuntimeCommand& command,
+    WorldManager& worldManager,
+    RuntimeTestHooks& runtimeTestHooks,
+    const DiagnosticsSubsystem& diagnostics) const
+{
+    const std::shared_ptr<World>& activeWorld = worldManager.GetActiveWorld();
+    if (!activeWorld)
+    {
+        diagnostics.ReportError(
+            "Procedural sky parameters update rejected because no active World exists.");
+        runtimeTestHooks.NotifyProceduralSkyParametersResult(false, diagnostics);
+        return;
+    }
+
+    const WorldEnvironment& currentEnvironment = activeWorld->GetEnvironment();
+    if (currentEnvironment.type != EnvironmentType::ProceduralSky)
+    {
+        diagnostics.ReportError(
+            "Procedural sky parameters update rejected because the active World uses HDRI.");
+        runtimeTestHooks.NotifyProceduralSkyParametersResult(false, diagnostics);
+        return;
+    }
+
+    WorldEnvironment updatedEnvironment = currentEnvironment;
+    updatedEnvironment.skyParameters = command.skyParametersValue;
+    activeWorld->SetEnvironment(std::move(updatedEnvironment));
+    runtimeTestHooks.NotifyProceduralSkyParametersResult(true, diagnostics);
 }
 
 void RuntimeCommandExecutor::ApplyToneMappingMode(

@@ -28,6 +28,7 @@ struct LaunchOptions
     bool runResizeStress = false;
     bool runRenderGraphReloadStress = false;
     bool runFrameSmokeTest = false;
+    bool runEnvironmentUpdateStress = false;
     bool exitAfterTests = false;
     DeveloperUiLaunchMode developerUiMode = DeveloperUiLaunchMode::UseConfig;
     std::string reloadStressScenePath;
@@ -37,6 +38,7 @@ struct LaunchOptions
     int resizeStressCount = 6;
     int graphReloadStressCount = 6;
     int frameSmokeCount = 120;
+    int environmentUpdateStressCount = 3;
     std::string errorMessage;
 };
 
