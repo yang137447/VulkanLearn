@@ -557,6 +557,44 @@ RenderGraph::~RenderGraph()
     // valid. The destructor intentionally has no fallback device path.
 }
 
+void RenderGraph::SwapState(RenderGraph& other) noexcept
+{
+    resourcesMsaa.swap(other.resourcesMsaa);
+    resourcesResolve.swap(other.resourcesResolve);
+    renderpassesOrdered.swap(other.renderpassesOrdered);
+    renderpasses.swap(other.renderpasses);
+    canonicalShadowPassName.swap(other.canonicalShadowPassName);
+    using std::swap;
+    swap(ownerGeneration, other.ownerGeneration);
+    compiledFrameGraph.resources.swap(
+        other.compiledFrameGraph.resources);
+    compiledFrameGraph.passes.swap(
+        other.compiledFrameGraph.passes);
+    compiledFrameGraph.passOrder.swap(
+        other.compiledFrameGraph.passOrder);
+    compiledFrameGraph.resourceUsagePlans.swap(
+        other.compiledFrameGraph.resourceUsagePlans);
+    descriptorPlanCache.Swap(other.descriptorPlanCache);
+}
+
+bool RenderGraph::HasState() const noexcept
+{
+    return !resourcesMsaa.empty() ||
+        !resourcesResolve.empty() ||
+        !renderpasses.empty() ||
+        !renderpassesOrdered.empty();
+}
+
+void RenderGraph::SetTestFaultInjection(
+    TestFaultInjection injection) noexcept
+{
+    testFaultInjection = injection;
+    testResourceCreationCount = 0;
+    testRenderPassCreationCount = 0;
+    testFramebufferCreationCount = 0;
+    testDescriptorCreationCount = 0;
+}
+
 void RenderGraph::Shutdown(
     VL::RendererBackendVulkan& rendererBackend,
     VL::RenderGraphReleaseMode releaseMode)
@@ -587,60 +625,92 @@ void RenderGraph::Shutdown(
     renderpassesOrdered.clear();
     canonicalShadowPassName.clear();
     descriptorPlanCache.Clear();
+    ownerGeneration = 0;
 }
 
 void RenderGraph::LoadRenderGraph(
     const nlohmann::json& renderGraphJson,
     VL::RendererBackendVulkan& rendererBackend)
 {
-    VL::RenderGraphCompiler compiler;
-    auto compileResult = compiler.Compile(renderGraphJson);
-    if (compileResult.IsFailure())
+    try
     {
-        throw std::runtime_error(VL::FormatRuntimeError(compileResult.Error()));
-    }
-    compiledFrameGraph = std::move(compileResult.Value());
-    descriptorPlanCache.Clear();
-
-    uint32_t swapChainImageCount = rendererBackend.GetSwapchainImageCount();
-    // GPU object creation still happens here; the compiler above now owns the
-    // validated pass/resource order that future FrameGraph work will consume.
-    for (const VL::CompiledRenderGraphResource& resourceDesc : compiledFrameGraph.resources)
-    {
-        std::string name = resourceDesc.name;
-        if(name == "swapChain") continue;
-
-        // 先建立msaa资源
-        if (name != "shadowMap")
+        VL::RenderGraphCompiler compiler;
+        auto compileResult = compiler.Compile(renderGraphJson);
+        if (compileResult.IsFailure())
         {
-            std::vector<RenderResource> msaaResources;
-            msaaResources.reserve(swapChainImageCount);
+            throw std::runtime_error(
+                VL::FormatRuntimeError(
+                    compileResult.Error()));
+        }
+        compiledFrameGraph =
+            std::move(compileResult.Value());
+        descriptorPlanCache.Clear();
+
+        uint32_t swapChainImageCount =
+            rendererBackend.GetSwapchainImageCount();
+        // GPU object creation still happens here; the compiler above now owns
+        // the validated pass/resource order.
+        for (const VL::CompiledRenderGraphResource& resourceDesc :
+             compiledFrameGraph.resources)
+        {
+            std::string name = resourceDesc.name;
+            if(name == "swapChain") continue;
+
+            // 先建立msaa资源
+            if (name != "shadowMap")
+            {
+                std::vector<RenderResource>& msaaResources =
+                    resourcesMsaa.try_emplace(name).first->second;
+                msaaResources.reserve(swapChainImageCount);
+                for(uint32_t i = 0; i < swapChainImageCount; ++i)
+                {
+                    RenderResource resource =
+                        CreateRenderResource(
+                            resourceDesc,
+                            rendererBackend,
+                            true);
+                    msaaResources.push_back(
+                        std::move(resource));
+                }
+            }
+
+            // 再建立resolve资源
+            std::vector<RenderResource>& resolveResources =
+                resourcesResolve.try_emplace(name).first->second;
+            resolveResources.reserve(
+                swapChainImageCount);
             for(uint32_t i = 0; i < swapChainImageCount; ++i)
             {
-                RenderResource resource = CreateRenderResource(resourceDesc, rendererBackend, true);
-                msaaResources.push_back(std::move(resource));
+                RenderResource resourceResolve =
+                    CreateRenderResource(
+                        resourceDesc,
+                        rendererBackend);
+                resolveResources.push_back(
+                    std::move(resourceResolve));
             }
-            resourcesMsaa.emplace(name, std::move(msaaResources));
         }
-
-        // 再建立resolve资源
-        std::vector<RenderResource> resolveResources;
-        resolveResources.reserve(swapChainImageCount);
-        for(uint32_t i = 0; i < swapChainImageCount; ++i)
+        for (const VL::CompiledRenderGraphPass& passDesc :
+             compiledFrameGraph.passes)
         {
-            RenderResource resourceResolve = CreateRenderResource(resourceDesc, rendererBackend);
-            resolveResources.push_back(std::move(resourceResolve));
+            std::string passName = passDesc.name;
+            renderpassesOrdered.push_back(passName);
+            Renderpass renderpass =
+                CreateRenderpass(
+                    passDesc,
+                    rendererBackend);
+            renderpasses.emplace(
+                passName,
+                std::move(renderpass));
         }
-        resourcesResolve.emplace(name, std::move(resolveResources));
+        ValidateAndResolveCanonicalShadowPass();
     }
-    for (const VL::CompiledRenderGraphPass& passDesc : compiledFrameGraph.passes)
+    catch (...)
     {
-        std::string passName = passDesc.name;
-        renderpassesOrdered.push_back(passName);
-        Renderpass renderpass = CreateRenderpass(passDesc, rendererBackend);
-        renderpasses[passName] = renderpass;
+        Shutdown(
+            rendererBackend,
+            VL::RenderGraphReleaseMode::Immediate);
+        throw;
     }
-    ValidateAndResolveCanonicalShadowPass();
 }
 
 Renderpass* RenderGraph::FindCanonicalShadowPass()
@@ -699,8 +769,9 @@ void RenderGraph::RenderInitialize(
     VL::RendererBackendVulkan& rendererBackend,
     const VL::RendererDescriptorContext& descriptorContext)
 {
-    for(auto& [passName, renderpass] : renderpasses)
+    for (const std::string& passName : renderpassesOrdered)
     {
+        Renderpass& renderpass = renderpasses.at(passName);
         renderpass.CreateUniformBuffers();
         renderpass.SetupDescriptors(*this, rendererBackend);
         if (auto passMaterialInstance = renderpass.materialInstance.lock())
@@ -724,6 +795,7 @@ void RenderGraph::RenderInitialize(
             passName,
             renderpass.inputDescriptorPlan,
             renderpass.materialInstance);
+        MaybeFailDescriptorCreation();
         renderpass.CreatePassDescriptorSetLayout(rendererBackend);
         renderpass.CreateDescriptorSets(rendererBackend);
         renderpass.UpdateDescriptorSets(
@@ -769,6 +841,12 @@ std::unordered_map<std::string, std::shared_ptr<MaterialInstance>> RenderGraph::
 void RenderGraph::RestorePassMaterialInstances(
     const std::unordered_map<std::string, std::shared_ptr<MaterialInstance>>& passMaterials)
 {
+    if (testFaultInjection.failPassMaterialContract)
+    {
+        throw std::runtime_error(
+            "Injected pass material contract failure");
+    }
+
     // RenderGraph 在 resize 或 graph reload 后会生成新的 Renderpass 对象，旧 MI
     // 只有在资产身份和完整管线合同都兼容时才能继续复用。先预检所有需要材质的
     // pass，避免校验中途失败后留下部分恢复、部分未恢复的状态。
@@ -832,81 +910,111 @@ RenderResource RenderGraph::CreateRenderResource(
     VL::RendererBackendVulkan& rendererBackend,
     bool bIsMsaaSource)
 {
+    MaybeFailResourceCreation();
     RenderResource resource;
-
-    resource.name = resourceDesc.name;
-    resource.type = resourceDesc.type;
-    resource.arrayLayers = resourceDesc.arrayLayers;
-
-    resource.format = GetFormat(resourceDesc.format);
-
-    bool bIsDepthFormat = CommonFunction::IsDepthFormat(resource.format);
-
-    const vk::Extent2D swapchainExtent = rendererBackend.GetSwapchainExtent();
-    const float baseWidth = static_cast<float>(swapchainExtent.width);
-    const float baseHeight = static_cast<float>(swapchainExtent.height);
-    resource.width = static_cast<uint32_t>(
-        resourceDesc.hasFixedWidth
-            ? resourceDesc.widthValue
-            : std::max(1.0f, baseWidth * resourceDesc.widthValue));
-    resource.height = static_cast<uint32_t>(
-        resourceDesc.hasFixedHeight
-            ? resourceDesc.heightValue
-            : std::max(1.0f, baseHeight * resourceDesc.heightValue));
-
-    vk::ImageUsageFlags usage = GetImageUsage(resourceDesc.usage);
-
-    vk::MemoryPropertyFlags memoryPropertyFlags = vk::MemoryPropertyFlagBits::eDeviceLocal;
-    vk::ImageTiling tiling = vk::ImageTiling::eOptimal;
-    const vk::SampleCountFlagBits sampleCount =
-        bIsMsaaSource ? CommonFunction::GetMsaaSampleCount() : vk::SampleCountFlagBits::e1;
-    vk::ImageCreateInfo imageCreateInfo;
-    imageCreateInfo
-        .setImageType(vk::ImageType::e2D)
-        .setExtent(vk::Extent3D(resource.width, resource.height, 1))
-        .setMipLevels(1)
-        .setArrayLayers(resource.arrayLayers)
-        .setSamples(sampleCount)
-        .setFormat(resource.format)
-        .setTiling(tiling)
-        .setUsage(usage)
-        .setSharingMode(vk::SharingMode::eExclusive)
-        .setInitialLayout(vk::ImageLayout::eUndefined);
-    std::tie(resource.image, resource.memory) = rendererBackend.CreateImage(
-        imageCreateInfo,
-        memoryPropertyFlags,
-        "Image: " + resource.name);
-    resource.imageHandle = rendererBackend.GetImageHandle(resource.image);
-    vk::ImageAspectFlagBits aspect = vk::ImageAspectFlagBits::eColor;
-    if(bIsDepthFormat)
+    try
     {
-        aspect = vk::ImageAspectFlagBits::eDepth;
-        if(CommonFunction::HasStencilComponent(resource.format))
+        resource.name = resourceDesc.name;
+        resource.type = resourceDesc.type;
+        resource.arrayLayers =
+            resourceDesc.arrayLayers;
+        resource.format =
+            GetFormat(resourceDesc.format);
+
+        bool bIsDepthFormat =
+            CommonFunction::IsDepthFormat(
+                resource.format);
+        const vk::Extent2D swapchainExtent =
+            rendererBackend.GetSwapchainExtent();
+        const float baseWidth =
+            static_cast<float>(
+                swapchainExtent.width);
+        const float baseHeight =
+            static_cast<float>(
+                swapchainExtent.height);
+        resource.width = static_cast<uint32_t>(
+            resourceDesc.hasFixedWidth
+                ? resourceDesc.widthValue
+                : std::max(
+                      1.0f,
+                      baseWidth *
+                          resourceDesc.widthValue));
+        resource.height = static_cast<uint32_t>(
+            resourceDesc.hasFixedHeight
+                ? resourceDesc.heightValue
+                : std::max(
+                      1.0f,
+                      baseHeight *
+                          resourceDesc.heightValue));
+
+        vk::ImageUsageFlags usage =
+            GetImageUsage(resourceDesc.usage);
+        vk::MemoryPropertyFlags memoryPropertyFlags =
+            vk::MemoryPropertyFlagBits::eDeviceLocal;
+        const vk::SampleCountFlagBits sampleCount =
+            bIsMsaaSource
+                ? CommonFunction::GetMsaaSampleCount()
+                : vk::SampleCountFlagBits::e1;
+        vk::ImageCreateInfo imageCreateInfo;
+        imageCreateInfo
+            .setImageType(vk::ImageType::e2D)
+            .setExtent(vk::Extent3D(
+                resource.width,
+                resource.height,
+                1))
+            .setMipLevels(1)
+            .setArrayLayers(resource.arrayLayers)
+            .setSamples(sampleCount)
+            .setFormat(resource.format)
+            .setTiling(vk::ImageTiling::eOptimal)
+            .setUsage(usage)
+            .setSharingMode(
+                vk::SharingMode::eExclusive)
+            .setInitialLayout(
+                vk::ImageLayout::eUndefined);
+        std::tie(resource.image, resource.memory) =
+            rendererBackend.CreateImage(
+                imageCreateInfo,
+                memoryPropertyFlags,
+                "Image: " + resource.name);
+        resource.imageHandle =
+            rendererBackend.GetImageHandle(
+                resource.image);
+        vk::ImageAspectFlagBits aspect =
+            vk::ImageAspectFlagBits::eColor;
+        if (bIsDepthFormat)
         {
-            // Depth/stencil formats are only used as depth attachments today.
-            // Keep stencil out of the view until a pass explicitly declares
-            // stencil load/store and matching barriers.
-            // aspect |= vk::ImageAspectFlagBits::eStencil;
+            aspect =
+                vk::ImageAspectFlagBits::eDepth;
         }
-    }
-    const vk::ImageViewType imageViewType =
-        resource.type == "texture2DArray" ? vk::ImageViewType::e2DArray : vk::ImageViewType::e2D;
-    resource.imageView = rendererBackend.CreateImageView(
-        resource.image,
-        imageViewType,
-        resource.format,
-        aspect,
-        0,
-        1,
-        0,
-        resource.arrayLayers,
-        resource.name + "_View");
-    resource.imageViewHandle = rendererBackend.GetImageViewHandle(resource.imageView);
-    resource.imageViews.reserve(resource.arrayLayers);
-    resource.imageViewHandles.reserve(resource.arrayLayers);
-    for (uint32_t layer = 0; layer < resource.arrayLayers; ++layer)
-    {
-        vk::ImageView layerImageView = rendererBackend.CreateImageView(
+        const vk::ImageViewType imageViewType =
+            resource.type == "texture2DArray"
+                ? vk::ImageViewType::e2DArray
+                : vk::ImageViewType::e2D;
+        resource.imageView =
+            rendererBackend.CreateImageView(
+                resource.image,
+                imageViewType,
+                resource.format,
+                aspect,
+                0,
+                1,
+                0,
+                resource.arrayLayers,
+                resource.name + "_View");
+        resource.imageViewHandle =
+            rendererBackend.GetImageViewHandle(
+                resource.imageView);
+        resource.imageViews.reserve(
+            resource.arrayLayers);
+        resource.imageViewHandles.reserve(
+            resource.arrayLayers);
+        for (uint32_t layer = 0;
+             layer < resource.arrayLayers;
+             ++layer)
+        {
+            vk::ImageView layerImageView =
+                rendererBackend.CreateImageView(
             resource.image,
             vk::ImageViewType::e2D,
             resource.format,
@@ -916,19 +1024,39 @@ RenderResource RenderGraph::CreateRenderResource(
             layer,
             1,
             resource.name + "_Layer" + std::to_string(layer) + "_View");
-        resource.imageViews.push_back(layerImageView);
-        resource.imageViewHandles.push_back(
-            rendererBackend.GetImageViewHandle(layerImageView));
+            resource.imageViews.push_back(
+                layerImageView);
+            resource.imageViewHandles.push_back(
+                rendererBackend.GetImageViewHandle(
+                    layerImageView));
+        }
+
+        resource.sampler = bIsDepthFormat
+            ? (resource.name == "shadowMap"
+                ? rendererBackend
+                      .CreateDepthCompareSampler(
+                          "Sampler: " +
+                          resource.name)
+                : rendererBackend
+                      .CreateDepthSampler(
+                          "Sampler: " +
+                          resource.name))
+            : rendererBackend.Create2DSampler(
+                  "Sampler: " +
+                  resource.name);
+        resource.samplerHandle =
+            rendererBackend.GetSamplerHandle(
+                resource.sampler);
+        return resource;
     }
-
-    resource.sampler = bIsDepthFormat
-        ? (resource.name == "shadowMap"
-            ? rendererBackend.CreateDepthCompareSampler("Sampler: " + resource.name)
-            : rendererBackend.CreateDepthSampler("Sampler: " + resource.name))
-        : rendererBackend.Create2DSampler("Sampler: " + resource.name);
-    resource.samplerHandle = rendererBackend.GetSamplerHandle(resource.sampler);
-
-    return resource;
+    catch (...)
+    {
+        DestroyRenderResource(
+            resource,
+            rendererBackend,
+            VL::RenderGraphReleaseMode::Immediate);
+        throw;
+    }
 }
 
 void RenderGraph::DestroyRenderResource(
@@ -984,68 +1112,110 @@ Renderpass RenderGraph::CreateRenderpass(
     VL::RendererBackendVulkan& rendererBackend)
 {
     Renderpass renderpass;
-    renderpass.name = passDesc.name;
-    renderpass.type = passDesc.type;
-    renderpass.needsMaterial = passDesc.needCreateMaterial;
-    renderpass.materialInstancePath = passDesc.materialInstancePath;
-    bool bIsShadowPass = renderpass.type == "shadow";
-    bool bUseMsaa = passDesc.needMsaa;
-    renderpass.pipelineContractKey.useVertexInput = passDesc.pipelineState.useVertexInput;
-    renderpass.pipelineContractKey.depthTestEnable = passDesc.pipelineState.depthTestEnable;
-    renderpass.pipelineContractKey.depthWriteEnable = passDesc.pipelineState.depthWriteEnable;
-    renderpass.pipelineContractKey.depthCompareOp =
-        GetDepthCompareOp(passDesc.pipelineState.depthCompareOp);
-    renderpass.pipelineContractKey.isShadowPass = bIsShadowPass;
+    try
+    {
+        renderpass.name = passDesc.name;
+        renderpass.type = passDesc.type;
+        renderpass.needsMaterial = passDesc.needCreateMaterial;
+        renderpass.materialInstancePath = passDesc.materialInstancePath;
+        const bool bIsShadowPass = renderpass.type == "shadow";
+        const bool bUseMsaa = passDesc.needMsaa;
+        renderpass.pipelineContractKey.useVertexInput =
+            passDesc.pipelineState.useVertexInput;
+        renderpass.pipelineContractKey.depthTestEnable =
+            passDesc.pipelineState.depthTestEnable;
+        renderpass.pipelineContractKey.depthWriteEnable =
+            passDesc.pipelineState.depthWriteEnable;
+        renderpass.pipelineContractKey.depthCompareOp =
+            GetDepthCompareOp(passDesc.pipelineState.depthCompareOp);
+        renderpass.pipelineContractKey.isShadowPass = bIsShadowPass;
 
-    renderpass.inputResources = passDesc.inputResources;
-    renderpass.inputDescriptorPlan = passDesc.inputDescriptors;
-    for (const VL::CompiledRenderGraphPassOutput& output : passDesc.outputResources)
-    {
-        const std::string& resourceName = output.resource;
-        renderpass.outputResources.push_back(resourceName);
-        renderpass.outputLayers[resourceName] = output.layer;
-        renderpass.outputLoadOps[resourceName] = GetAttachmentLoadOp(output.loadOp);
-        renderpass.outputStoreOps[resourceName] = GetAttachmentStoreOp(output.storeOp);
-        if (bIsShadowPass)
+        renderpass.inputResources = passDesc.inputResources;
+        renderpass.inputDescriptorPlan = passDesc.inputDescriptors;
+        for (const VL::CompiledRenderGraphPassOutput& output :
+             passDesc.outputResources)
         {
-            renderpass.shadowCascadeIndex = output.layer;
+            const std::string& resourceName = output.resource;
+            renderpass.outputResources.push_back(resourceName);
+            renderpass.outputLayers[resourceName] = output.layer;
+            renderpass.outputLoadOps[resourceName] =
+                GetAttachmentLoadOp(output.loadOp);
+            renderpass.outputStoreOps[resourceName] =
+                GetAttachmentStoreOp(output.storeOp);
+            if (bIsShadowPass)
+            {
+                renderpass.shadowCascadeIndex = output.layer;
+            }
         }
+
+        MaybeFailRenderPassCreation();
+        renderpass.renderPass =
+            CreateVkRenderPass(
+                renderpass,
+                rendererBackend,
+                bUseMsaa);
+        renderpass.renderPassHandle =
+            rendererBackend.GetRenderPassHandle(
+                renderpass.renderPass);
+
+        if (renderpass.outputResources[0] == "swapChain")
+        {
+            const auto extent =
+                rendererBackend.GetSwapchainExtent();
+            renderpass.width = extent.width;
+            renderpass.height = extent.height;
+        }
+        else if (bIsShadowPass)
+        {
+            renderpass.width =
+                resourcesResolve.at("shadowMap")[0].width;
+            renderpass.height =
+                resourcesResolve.at("shadowMap")[0].height;
+        }
+        else
+        {
+            const std::vector<RenderResource>& resources =
+                resourcesMsaa.at(
+                    renderpass.outputResources[0]);
+            renderpass.width = resources[0].width;
+            renderpass.height = resources[0].height;
+        }
+
+        renderpass.clearValues =
+            GetClearValues(
+                renderpass.outputResources,
+                bUseMsaa);
+        renderpass.framebuffers =
+            CreateVkFrameBuffers(
+                renderpass,
+                renderpass.outputResources,
+                rendererBackend,
+                bUseMsaa);
+
+        std::vector<VL::RHIFramebufferHandle>
+            framebufferHandles;
+        framebufferHandles.reserve(
+            renderpass.framebuffers.size());
+        for (vk::Framebuffer framebuffer :
+             renderpass.framebuffers)
+        {
+            framebufferHandles.push_back(
+                rendererBackend
+                    .GetFramebufferHandle(
+                        framebuffer));
+        }
+        renderpass.framebufferHandles =
+            std::move(framebufferHandles);
+        return renderpass;
     }
-    vk::RenderPass vkRenderPass = CreateVkRenderPass(renderpass, rendererBackend, bUseMsaa);
-    renderpass.renderPass = vkRenderPass;
-    renderpass.renderPassHandle = rendererBackend.GetRenderPassHandle(renderpass.renderPass);
-    
-    if (renderpass.outputResources[0] == "swapChain")
+    catch (...)
     {
-        auto extent = rendererBackend.GetSwapchainExtent();
-        renderpass.width = extent.width;
-        renderpass.height = extent.height;
+        DestroyRenderpass(
+            renderpass,
+            rendererBackend,
+            VL::RenderGraphReleaseMode::Immediate);
+        throw;
     }
-    else if (bIsShadowPass)
-    {
-        renderpass.width = resourcesResolve["shadowMap"][0].width;
-        renderpass.height = resourcesResolve["shadowMap"][0].height;
-    }
-    else
-    {
-        renderpass.width = resourcesMsaa[renderpass.outputResources[0]][0].width;
-        renderpass.height = resourcesMsaa[renderpass.outputResources[0]][0].height;
-    }
-    
-    renderpass.clearValues = GetClearValues(renderpass.outputResources, bUseMsaa);
-    renderpass.framebuffers = CreateVkFrameBuffers(
-        renderpass,
-        renderpass.outputResources,
-        rendererBackend,
-        bUseMsaa);
-    renderpass.framebufferHandles.reserve(renderpass.framebuffers.size());
-    for (vk::Framebuffer framebuffer : renderpass.framebuffers)
-    {
-        renderpass.framebufferHandles.push_back(
-            rendererBackend.GetFramebufferHandle(framebuffer));
-    }
-    
-    return renderpass;
 }
 
 void RenderGraph::DestroyRenderpass(
@@ -1392,11 +1562,16 @@ std::vector<vk::Framebuffer> RenderGraph::CreateVkFrameBuffers(
     uint32_t framebufferSize = swapChainImageCount;
 
     std::vector<vk::Framebuffer> framebuffers;
-    framebuffers.resize(framebufferSize);
+    framebuffers.reserve(framebufferSize);
 
-    for (uint32_t i = 0; i < framebufferSize; i++)
+    try
     {
-        std::vector<vk::ImageView> attachments;
+        for (uint32_t i = 0;
+             i < framebufferSize;
+             i++)
+        {
+            MaybeFailFramebufferCreation();
+            std::vector<vk::ImageView> attachments;
         // 1. MSAA view (Only if MSAA enabled)
         if (bUseMsaa)
         {
@@ -1456,13 +1631,71 @@ std::vector<vk::Framebuffer> RenderGraph::CreateVkFrameBuffers(
             .setHeight(renderpass.height)
             .setLayers(1);
         
-        framebuffers[i] = rendererBackend.CreateFramebuffer(
-            framebufferCreateInfo,
-            "Framebuffer: " + renderpass.name +
-                " (SwapchainIndex " + std::to_string(i) + ")");
+            framebuffers.push_back(
+                rendererBackend.CreateFramebuffer(
+                    framebufferCreateInfo,
+                    "Framebuffer: " +
+                        renderpass.name +
+                        " (SwapchainIndex " +
+                        std::to_string(i) +
+                        ")"));
+        }
+        return framebuffers;
     }
-    
-    return framebuffers;
+    catch (...)
+    {
+        rendererBackend.DestroyFramebuffers(
+            framebuffers);
+        throw;
+    }
+}
+
+void RenderGraph::MaybeFailResourceCreation()
+{
+    ++testResourceCreationCount;
+    if (testFaultInjection.failResourceCreationAt != 0 &&
+        testResourceCreationCount ==
+            testFaultInjection.failResourceCreationAt)
+    {
+        throw std::runtime_error(
+            "Injected render graph resource creation failure");
+    }
+}
+
+void RenderGraph::MaybeFailRenderPassCreation()
+{
+    ++testRenderPassCreationCount;
+    if (testFaultInjection.failRenderPassCreationAt != 0 &&
+        testRenderPassCreationCount ==
+            testFaultInjection.failRenderPassCreationAt)
+    {
+        throw std::runtime_error(
+            "Injected render pass creation failure");
+    }
+}
+
+void RenderGraph::MaybeFailFramebufferCreation()
+{
+    ++testFramebufferCreationCount;
+    if (testFaultInjection.failFramebufferCreationAt != 0 &&
+        testFramebufferCreationCount ==
+            testFaultInjection.failFramebufferCreationAt)
+    {
+        throw std::runtime_error(
+            "Injected framebuffer creation failure");
+    }
+}
+
+void RenderGraph::MaybeFailDescriptorCreation()
+{
+    ++testDescriptorCreationCount;
+    if (testFaultInjection.failDescriptorCreationAt != 0 &&
+        testDescriptorCreationCount ==
+            testFaultInjection.failDescriptorCreationAt)
+    {
+        throw std::runtime_error(
+            "Injected render graph descriptor creation failure");
+    }
 }
 
 vk::Format RenderGraph::GetFormat(const std::string& formatStr)

@@ -79,6 +79,37 @@ vk::AccessFlags GetPendingPrefilterSourceAccess(vk::ImageLayout layout)
     }
 }
 
+class PreparedDescriptorPoolGuard
+{
+public:
+    PreparedDescriptorPoolGuard(
+        VL::RendererBackendVulkan& rendererBackend,
+        vk::DescriptorPool& descriptorPool)
+        : rendererBackend(rendererBackend),
+          descriptorPool(descriptorPool)
+    {
+    }
+
+    ~PreparedDescriptorPoolGuard()
+    {
+        if (armed && descriptorPool)
+        {
+            rendererBackend.DestroyDescriptorPool(descriptorPool);
+            descriptorPool = nullptr;
+        }
+    }
+
+    void Disarm() noexcept
+    {
+        armed = false;
+    }
+
+private:
+    VL::RendererBackendVulkan& rendererBackend;
+    vk::DescriptorPool& descriptorPool;
+    bool armed = true;
+};
+
 } // namespace
 
 namespace VL
@@ -112,8 +143,13 @@ void EnvironmentIblBaker::Initialize(
         }
     }
 
-    skySHGeneratePipeline = pipelineFactory.CreateComputePipeline("generator/skySHGenerate");
-    prefilterEnvMapPipeline = pipelineFactory.CreateComputePipeline("generator/prefilterEnvMap");
+    pipelineFactoryService = &pipelineFactory;
+    skySHGeneratePipeline = pipelineFactory.CreateComputePipeline(
+        "generator/skySHGenerate",
+        &activeSkySHGenerateArtifact);
+    prefilterEnvMapPipeline = pipelineFactory.CreateComputePipeline(
+        "generator/prefilterEnvMap",
+        &activePrefilterEnvMapArtifact);
     CreatePrefilteredCubeResources(rendererBackend);
     CreateEnvironmentShResources(rendererBackend);
     CreateDescriptorResources(rendererBackend, globalUniformBufferInfos);
@@ -136,7 +172,18 @@ void EnvironmentIblBaker::Shutdown(RendererBackendVulkan& rendererBackend)
     prefilterEnvMapPipeline.reset();
 
     this->rendererBackend = nullptr;
+    pipelineFactoryService = nullptr;
     initialized = false;
+}
+
+PipelineFactory& EnvironmentIblBaker::GetPipelineFactory() const
+{
+    if (pipelineFactoryService == nullptr)
+    {
+        throw std::runtime_error(
+            "Environment IBL baker has no PipelineFactory");
+    }
+    return *pipelineFactoryService;
 }
 
 void EnvironmentIblBaker::RecordSphericalHarmonics(
@@ -320,6 +367,14 @@ std::shared_ptr<Texture> EnvironmentIblBaker::GetPrefilteredEnvironmentCube() co
     return activePrefilterCube.texture;
 }
 
+void EnvironmentIblBaker::InvalidateEnvironmentCubeBindings() noexcept
+{
+    std::fill(
+        boundEnvironmentCubes.begin(),
+        boundEnvironmentCubes.end(),
+        nullptr);
+}
+
 void EnvironmentIblBaker::CreateDescriptorResources(
     RendererBackendVulkan& rendererBackend,
     const std::vector<vk::DescriptorBufferInfo>& globalUniformBufferInfos)
@@ -329,22 +384,38 @@ void EnvironmentIblBaker::CreateDescriptorResources(
     const uint32_t prefilterDescriptorSetCount =
         descriptorSetCount * pendingPrefilterCube.mipLevels;
 
-    std::array<vk::DescriptorPoolSize, 4> poolSizes = {
-        vk::DescriptorPoolSize{ vk::DescriptorType::eStorageBuffer, descriptorSetCount },
+    // 每个 Compute pipeline 拥有独立 descriptor pool，热重载参与者可以
+    // 单独事务替换自己那份资源，不触碰另一条 pipeline 的 package。
+    std::array<vk::DescriptorPoolSize, 2> shPoolSizes = {
+        vk::DescriptorPoolSize{
+            vk::DescriptorType::eStorageBuffer, descriptorSetCount },
+        vk::DescriptorPoolSize{
+            vk::DescriptorType::eCombinedImageSampler, descriptorSetCount },
+    };
+    vk::DescriptorPoolCreateInfo shPoolCreateInfo;
+    shPoolCreateInfo
+        .setPoolSizes(shPoolSizes)
+        .setMaxSets(descriptorSetCount);
+    skySHDescriptorPool = rendererBackend.CreateDescriptorPool(
+        shPoolCreateInfo,
+        "DescriptorPool: EnvironmentIblBakerSkySH");
+
+    std::array<vk::DescriptorPoolSize, 3> prefilterPoolSizes = {
         vk::DescriptorPoolSize{
             vk::DescriptorType::eCombinedImageSampler,
-            descriptorSetCount + prefilterDescriptorSetCount },
-        vk::DescriptorPoolSize{ vk::DescriptorType::eStorageImage, prefilterDescriptorSetCount },
-        vk::DescriptorPoolSize{ vk::DescriptorType::eUniformBuffer, prefilterDescriptorSetCount },
+            prefilterDescriptorSetCount },
+        vk::DescriptorPoolSize{
+            vk::DescriptorType::eStorageImage, prefilterDescriptorSetCount },
+        vk::DescriptorPoolSize{
+            vk::DescriptorType::eUniformBuffer, prefilterDescriptorSetCount },
     };
-
-    vk::DescriptorPoolCreateInfo poolCreateInfo;
-    poolCreateInfo
-        .setPoolSizes(poolSizes)
-        .setMaxSets(descriptorSetCount + prefilterDescriptorSetCount);
-    descriptorPool = rendererBackend.CreateDescriptorPool(
-        poolCreateInfo,
-        "DescriptorPool: EnvironmentIblBaker");
+    vk::DescriptorPoolCreateInfo prefilterPoolCreateInfo;
+    prefilterPoolCreateInfo
+        .setPoolSizes(prefilterPoolSizes)
+        .setMaxSets(prefilterDescriptorSetCount);
+    prefilterDescriptorPool = rendererBackend.CreateDescriptorPool(
+        prefilterPoolCreateInfo,
+        "DescriptorPool: EnvironmentIblBakerPrefilter");
 
     std::vector<vk::DescriptorSetLayout> shLayouts(
         descriptorSetCount,
@@ -359,9 +430,9 @@ void EnvironmentIblBaker::CreateDescriptorResources(
     boundEnvironmentCubes.resize(descriptorSetCount);
 
     vk::DescriptorSetAllocateInfo allocInfo;
-    allocInfo.setDescriptorPool(descriptorPool).setSetLayouts(shLayouts);
+    allocInfo.setDescriptorPool(skySHDescriptorPool).setSetLayouts(shLayouts);
     rendererBackend.AllocateDescriptorSets(allocInfo, skySHGenerateDescriptorSets);
-    allocInfo.setSetLayouts(prefilterLayouts);
+    allocInfo.setDescriptorPool(prefilterDescriptorPool).setSetLayouts(prefilterLayouts);
     rendererBackend.AllocateDescriptorSets(allocInfo, prefilterDescriptorSets);
 
     vk::DescriptorBufferInfo shOutputInfo;
@@ -644,7 +715,247 @@ void EnvironmentIblBaker::DestroyDescriptorResources(
     boundEnvironmentCubes.clear();
     globalUniformBufferInfos.clear();
     skySHGenerateDescriptorSets.clear();
-    rendererBackend.DestroyDescriptorPool(descriptorPool);
+    if (skySHDescriptorPool)
+    {
+        rendererBackend.DestroyDescriptorPool(skySHDescriptorPool);
+        skySHDescriptorPool = nullptr;
+    }
+    if (prefilterDescriptorPool)
+    {
+        rendererBackend.DestroyDescriptorPool(prefilterDescriptorPool);
+        prefilterDescriptorPool = nullptr;
+    }
+}
+
+ComputeDescriptorReplacement
+EnvironmentIblBaker::PrepareSkyShDescriptorReplacement(
+    const std::shared_ptr<ComputePipeline>& replacementPipeline) const
+{
+    if (!replacementPipeline || rendererBackend == nullptr ||
+        globalUniformBufferInfos.empty())
+    {
+        throw std::runtime_error(
+            "Cannot prepare SkySH descriptor replacement without a pipeline and Global UBO infos");
+    }
+
+    const uint32_t descriptorSetCount =
+        static_cast<uint32_t>(globalUniformBufferInfos.size());
+    std::array<vk::DescriptorPoolSize, 2> poolSizes = {
+        vk::DescriptorPoolSize{
+            vk::DescriptorType::eStorageBuffer, descriptorSetCount },
+        vk::DescriptorPoolSize{
+            vk::DescriptorType::eCombinedImageSampler, descriptorSetCount },
+    };
+    vk::DescriptorPoolCreateInfo poolCreateInfo;
+    poolCreateInfo
+        .setPoolSizes(poolSizes)
+        .setMaxSets(descriptorSetCount);
+    ComputeDescriptorReplacement replacement;
+    replacement.descriptorPool = rendererBackend->CreateDescriptorPool(
+        poolCreateInfo,
+        "DescriptorPool: EnvironmentIblBakerSkySHReload");
+    PreparedDescriptorPoolGuard poolGuard(
+        *rendererBackend,
+        replacement.descriptorPool);
+    std::vector<vk::DescriptorSetLayout> layouts(
+        descriptorSetCount,
+        replacementPipeline->GetDescriptorSetLayouts()[0]);
+    replacement.descriptorSets.resize(descriptorSetCount);
+    vk::DescriptorSetAllocateInfo allocInfo;
+    allocInfo
+        .setDescriptorPool(replacement.descriptorPool)
+        .setSetLayouts(layouts);
+    rendererBackend->AllocateDescriptorSets(
+        allocInfo,
+        replacement.descriptorSets);
+
+    vk::DescriptorBufferInfo shOutputInfo;
+    shOutputInfo
+        .setBuffer(environmentShOutputBuffer.buffer)
+        .setOffset(0)
+        .setRange(kEnvironmentShSize);
+    for (uint32_t imageIndex = 0;
+         imageIndex < descriptorSetCount;
+         ++imageIndex)
+    {
+        vk::WriteDescriptorSet write;
+        write
+            .setDstSet(replacement.descriptorSets[imageIndex])
+            .setDstBinding(0)
+            .setDescriptorCount(1)
+            .setDescriptorType(vk::DescriptorType::eStorageBuffer)
+            .setBufferInfo(shOutputInfo);
+        rendererBackend->UpdateDescriptorSets({write});
+    }
+    replacement.release =
+        [backend = rendererBackend,
+         pool = replacement.descriptorPool]()
+        mutable
+        {
+            if (pool)
+            {
+                backend->DestroyDescriptorPool(pool);
+            }
+        };
+    replacement.retirement =
+        MakePreparedRetiredResourcePackage(
+            [backend = rendererBackend,
+             pool = skySHDescriptorPool]()
+            mutable
+            {
+                if (pool)
+                {
+                    backend->DestroyDescriptorPool(pool);
+                }
+            });
+    poolGuard.Disarm();
+    return replacement;
+}
+
+void EnvironmentIblBaker::CommitSkyShReplacement(
+    ComputeShaderArtifact committedArtifact,
+    std::shared_ptr<ComputePipeline> replacementPipeline,
+    ComputeDescriptorReplacement&& descriptors) noexcept
+{
+    skySHDescriptorPool = descriptors.descriptorPool;
+    skySHGenerateDescriptorSets =
+        std::move(descriptors.descriptorSets);
+    skySHGeneratePipeline = std::move(replacementPipeline);
+    activeSkySHGenerateArtifact = std::move(committedArtifact);
+    // 新 descriptor sets 尚未写入 sampler 绑定；重置缓存强制下一帧重写。
+    std::fill(
+        boundEnvironmentCubes.begin(),
+        boundEnvironmentCubes.end(),
+        nullptr);
+}
+
+ComputeDescriptorReplacement
+EnvironmentIblBaker::PreparePrefilterDescriptorReplacement(
+    const std::shared_ptr<ComputePipeline>& replacementPipeline) const
+{
+    if (!replacementPipeline || rendererBackend == nullptr ||
+        prefilterParamBuffers.empty())
+    {
+        throw std::runtime_error(
+            "Cannot prepare prefilter descriptor replacement without a pipeline and param buffers");
+    }
+
+    const uint32_t descriptorSetCount =
+        static_cast<uint32_t>(prefilterParamBuffers.size());
+    std::array<vk::DescriptorPoolSize, 3> poolSizes = {
+        vk::DescriptorPoolSize{
+            vk::DescriptorType::eCombinedImageSampler, descriptorSetCount },
+        vk::DescriptorPoolSize{
+            vk::DescriptorType::eStorageImage, descriptorSetCount },
+        vk::DescriptorPoolSize{
+            vk::DescriptorType::eUniformBuffer, descriptorSetCount },
+    };
+    vk::DescriptorPoolCreateInfo poolCreateInfo;
+    poolCreateInfo
+        .setPoolSizes(poolSizes)
+        .setMaxSets(descriptorSetCount);
+    ComputeDescriptorReplacement replacement;
+    replacement.descriptorPool = rendererBackend->CreateDescriptorPool(
+        poolCreateInfo,
+        "DescriptorPool: EnvironmentIblBakerPrefilterReload");
+    PreparedDescriptorPoolGuard poolGuard(
+        *rendererBackend,
+        replacement.descriptorPool);
+    std::vector<vk::DescriptorSetLayout> layouts(
+        descriptorSetCount,
+        replacementPipeline->GetDescriptorSetLayouts()[0]);
+    replacement.descriptorSets.resize(descriptorSetCount);
+    vk::DescriptorSetAllocateInfo allocInfo;
+    allocInfo
+        .setDescriptorPool(replacement.descriptorPool)
+        .setSetLayouts(layouts);
+    rendererBackend->AllocateDescriptorSets(
+        allocInfo,
+        replacement.descriptorSets);
+
+    const uint32_t swapchainImageCount =
+        static_cast<uint32_t>(globalUniformBufferInfos.size());
+    const uint32_t mipLevels =
+        pendingPrefilterCube.mipLevels;
+    for (uint32_t imageIndex = 0;
+         imageIndex < swapchainImageCount;
+         ++imageIndex)
+    {
+        for (uint32_t mipLevel = 0;
+             mipLevel < mipLevels;
+             ++mipLevel)
+        {
+            const uint32_t descriptorIndex =
+                imageIndex * mipLevels + mipLevel;
+            vk::DescriptorImageInfo outputMipInfo;
+            outputMipInfo
+                .setImageView(
+                    pendingPrefilterCube.storageViews[mipLevel])
+                .setImageLayout(vk::ImageLayout::eGeneral);
+            vk::DescriptorBufferInfo paramBufferInfo;
+            paramBufferInfo
+                .setBuffer(prefilterParamBuffers[descriptorIndex].buffer)
+                .setOffset(0)
+                .setRange(sizeof(PrefilterParams));
+
+            std::array<vk::WriteDescriptorSet, 2> writes;
+            writes[0]
+                .setDstSet(replacement.descriptorSets[descriptorIndex])
+                .setDstBinding(1)
+                .setDescriptorCount(1)
+                .setDescriptorType(vk::DescriptorType::eStorageImage)
+                .setImageInfo(outputMipInfo);
+            writes[1]
+                .setDstSet(replacement.descriptorSets[descriptorIndex])
+                .setDstBinding(2)
+                .setDescriptorCount(1)
+                .setDescriptorType(vk::DescriptorType::eUniformBuffer)
+                .setBufferInfo(paramBufferInfo);
+            rendererBackend->UpdateDescriptorSets(
+                std::vector<vk::WriteDescriptorSet>(
+                    writes.begin(),
+                    writes.end()));
+        }
+    }
+    replacement.release =
+        [backend = rendererBackend,
+         pool = replacement.descriptorPool]()
+        mutable
+        {
+            if (pool)
+            {
+                backend->DestroyDescriptorPool(pool);
+            }
+        };
+    replacement.retirement =
+        MakePreparedRetiredResourcePackage(
+            [backend = rendererBackend,
+             pool = prefilterDescriptorPool]()
+            mutable
+            {
+                if (pool)
+                {
+                    backend->DestroyDescriptorPool(pool);
+                }
+            });
+    poolGuard.Disarm();
+    return replacement;
+}
+
+void EnvironmentIblBaker::CommitPrefilterReplacement(
+    ComputeShaderArtifact committedArtifact,
+    std::shared_ptr<ComputePipeline> replacementPipeline,
+    ComputeDescriptorReplacement&& descriptors) noexcept
+{
+    prefilterDescriptorPool = descriptors.descriptorPool;
+    prefilterDescriptorSets =
+        std::move(descriptors.descriptorSets);
+    prefilterEnvMapPipeline = std::move(replacementPipeline);
+    activePrefilterEnvMapArtifact = std::move(committedArtifact);
+    std::fill(
+        boundEnvironmentCubes.begin(),
+        boundEnvironmentCubes.end(),
+        nullptr);
 }
 
 void EnvironmentIblBaker::CreatePrefilteredCubeResources(

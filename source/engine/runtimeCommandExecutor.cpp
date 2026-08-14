@@ -52,26 +52,44 @@ std::unordered_map<std::string, std::uintptr_t> CaptureSharedResourcePointers(
     return pointers;
 }
 
-RuntimeRendererResourceFingerprint CaptureRuntimeRendererResourceFingerprint()
+} // namespace
+
+RuntimeRendererResourceFingerprint
+CaptureRuntimeRendererResourceFingerprint()
 {
     RendererResourceCache::WorldLocalResourceSnapshot resourceSnapshot =
         RendererResourceCache::GetInstance().CaptureWorldLocalResources();
-    const auto passMaterialSnapshot = RenderGraph::GetInstance().CapturePassMaterialInstances();
+    const auto passMaterialSnapshot =
+        RenderGraph::GetInstance()
+            .CapturePassMaterialInstances();
 
     RuntimeRendererResourceFingerprint fingerprint;
     fingerprint.captured = true;
-    fingerprint.worldOwnerGeneration = resourceSnapshot.ownerGeneration;
-    fingerprint.worldTextures = CaptureSharedResourcePointers(resourceSnapshot.worldTextures);
-    fingerprint.renderableObjects = CaptureSharedResourcePointers(resourceSnapshot.renderableObjects);
-    fingerprint.materials = CaptureSharedResourcePointers(resourceSnapshot.materials);
-    fingerprint.materialInstances = CaptureSharedResourcePointers(resourceSnapshot.materialInstances);
-    fingerprint.objectResources = CaptureSharedResourcePointers(resourceSnapshot.objectResources);
-    fingerprint.textures = CaptureSharedResourcePointers(resourceSnapshot.textures);
-    fingerprint.passMaterialInstances = CaptureSharedResourcePointers(passMaterialSnapshot);
+    fingerprint.worldOwnerGeneration =
+        resourceSnapshot.ownerGeneration;
+    fingerprint.worldTextures =
+        CaptureSharedResourcePointers(
+            resourceSnapshot.worldTextures);
+    fingerprint.renderableObjects =
+        CaptureSharedResourcePointers(
+            resourceSnapshot.renderableObjects);
+    fingerprint.materials =
+        CaptureSharedResourcePointers(
+            resourceSnapshot.materials);
+    fingerprint.materialInstances =
+        CaptureSharedResourcePointers(
+            resourceSnapshot.materialInstances);
+    fingerprint.objectResources =
+        CaptureSharedResourcePointers(
+            resourceSnapshot.objectResources);
+    fingerprint.textures =
+        CaptureSharedResourcePointers(
+            resourceSnapshot.textures);
+    fingerprint.passMaterialInstances =
+        CaptureSharedResourcePointers(
+            passMaterialSnapshot);
     return fingerprint;
 }
-
-} // namespace
 
 RuntimeCommandExecutionResult RuntimeCommandExecutor::ExecuteQueuedCommands(
     CommandBus& commandBus,
@@ -144,6 +162,32 @@ void RuntimeCommandExecutor::ExecuteCommand(
     case RuntimeCommandType::RunEnvironmentUpdateStress:
         ApplyEnvironmentUpdateStress(command, runtimeTestHooks, diagnostics);
         break;
+    case RuntimeCommandType::RunShaderReloadTest:
+        ApplyShaderReloadTest(runtimeConfig, runtimeTestHooks, diagnostics);
+        break;
+    case RuntimeCommandType::RunShaderAutoReloadTest:
+        ApplyShaderAutoReloadTest(runtimeConfig, runtimeTestHooks, diagnostics);
+        break;
+    case RuntimeCommandType::RunShaderComputeReloadTest:
+        ApplyShaderComputeReloadTest(runtimeConfig, runtimeTestHooks, diagnostics);
+        break;
+    case RuntimeCommandType::RunShaderDefinitionReloadTest:
+        ApplyShaderDefinitionReloadTest(runtimeConfig, runtimeTestHooks, diagnostics);
+        break;
+    case RuntimeCommandType::RunWorldGraphTransactionTest:
+        ApplyWorldGraphTransactionTest(
+            runtimeConfig,
+            runtimeTestHooks,
+            diagnostics);
+        break;
+    case RuntimeCommandType::RunShaderUiReloadTest:
+        ApplyShaderUiReloadTest(runtimeConfig, runtimeTestHooks, diagnostics);
+        break;
+    case RuntimeCommandType::RunShaderShutdownInflightTest:
+        ApplyShaderShutdownInflightTest(
+            runtimeTestHooks,
+            diagnostics);
+        break;
     case RuntimeCommandType::SetDebugViewMode:
         renderSystem.SetDebugViewMode(command.intValue);
         diagnostics.ReportInfo("Debug view mode set to " + std::to_string(command.intValue));
@@ -199,6 +243,14 @@ void RuntimeCommandExecutor::ExecuteCommand(
     case RuntimeCommandType::SetBloomParameter:
         ApplyBloomParameter(command.bloomParameter, command.floatValue, renderSystem, diagnostics);
         break;
+    case RuntimeCommandType::ReloadShaders:
+        executionResult.shaderReloadRequested = true;
+        executionResult.shaderReloadScope =
+            command.shaderReloadScope;
+        break;
+    case RuntimeCommandType::ReportShaderCacheStatistics:
+        executionResult.shaderCacheStatisticsRequested = true;
+        break;
     }
 }
 
@@ -239,21 +291,7 @@ void RuntimeCommandExecutor::ApplyLoadWorld(
         return;
     }
     executionResult.loadWorldResolvedPath = resolvedScenePath;
-
-    auto worldLoadResult = worldTransitionCoordinator.RequestWorldLoad(resolvedScenePath);
-    if (worldLoadResult.IsFailure())
-    {
-        diagnostics.ReportRuntimeError("LoadWorld failed", worldLoadResult.Error());
-        executionResult.loadWorldError = worldLoadResult.Error();
-        executionResult.rendererResourcesAfterLoad = CaptureRuntimeRendererResourceFingerprint();
-        return;
-    }
-
-    executionResult.worldChanged = true;
-    executionResult.loadWorldSucceeded = true;
-    executionResult.loadedWorld = worldLoadResult.Value().world;
-    diagnostics.ReportInfo("World loaded: " + resolvedScenePath);
-    executionResult.rendererResourcesAfterLoad = CaptureRuntimeRendererResourceFingerprint();
+    executionResult.worldLoadRequested = true;
 }
 
 void RuntimeCommandExecutor::ApplyWorldReloadStress(
@@ -350,6 +388,74 @@ void RuntimeCommandExecutor::ApplyEnvironmentUpdateStress(
 {
     (void)runtimeTestHooks.BeginEnvironmentUpdateStress(
         command.intValue,
+        diagnostics);
+}
+
+void RuntimeCommandExecutor::ApplyShaderReloadTest(
+    const RuntimeConfig& runtimeConfig,
+    RuntimeTestHooks& runtimeTestHooks,
+    const DiagnosticsSubsystem& diagnostics) const
+{
+    (void)runtimeTestHooks.BeginShaderReloadTest(
+        runtimeConfig.GetResourcePath(),
+        diagnostics);
+}
+
+void RuntimeCommandExecutor::ApplyShaderAutoReloadTest(
+    const RuntimeConfig& runtimeConfig,
+    RuntimeTestHooks& runtimeTestHooks,
+    const DiagnosticsSubsystem& diagnostics) const
+{
+    (void)runtimeTestHooks.BeginShaderAutoReloadTest(
+        runtimeConfig.GetResourcePath(),
+        diagnostics);
+}
+
+void RuntimeCommandExecutor::ApplyShaderComputeReloadTest(
+    const RuntimeConfig& runtimeConfig,
+    RuntimeTestHooks& runtimeTestHooks,
+    const DiagnosticsSubsystem& diagnostics) const
+{
+    (void)runtimeTestHooks.BeginShaderComputeReloadTest(
+        runtimeConfig.GetResourcePath(),
+        diagnostics);
+}
+
+void RuntimeCommandExecutor::ApplyShaderDefinitionReloadTest(
+    const RuntimeConfig& runtimeConfig,
+    RuntimeTestHooks& runtimeTestHooks,
+    const DiagnosticsSubsystem& diagnostics) const
+{
+    (void)runtimeTestHooks.BeginShaderDefinitionReloadTest(
+        runtimeConfig.GetResourcePath(),
+        diagnostics);
+}
+
+void RuntimeCommandExecutor::ApplyWorldGraphTransactionTest(
+    const RuntimeConfig& runtimeConfig,
+    RuntimeTestHooks& runtimeTestHooks,
+    const DiagnosticsSubsystem& diagnostics) const
+{
+    (void)runtimeTestHooks.BeginWorldGraphTransactionTest(
+        runtimeConfig.GetResourcePath(),
+        diagnostics);
+}
+
+void RuntimeCommandExecutor::ApplyShaderUiReloadTest(
+    const RuntimeConfig& runtimeConfig,
+    RuntimeTestHooks& runtimeTestHooks,
+    const DiagnosticsSubsystem& diagnostics) const
+{
+    (void)runtimeTestHooks.BeginShaderUiReloadTest(
+        runtimeConfig.GetResourcePath(),
+        diagnostics);
+}
+
+void RuntimeCommandExecutor::ApplyShaderShutdownInflightTest(
+    RuntimeTestHooks& runtimeTestHooks,
+    const DiagnosticsSubsystem& diagnostics) const
+{
+    (void)runtimeTestHooks.BeginShaderShutdownInflightTest(
         diagnostics);
 }
 

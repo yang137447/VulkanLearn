@@ -24,7 +24,14 @@ enum class RuntimeTestOption
     ResizeStress,
     RenderGraphReloadStress,
     FrameSmoke,
-    EnvironmentUpdateStress
+    EnvironmentUpdateStress,
+    ShaderReloadTest,
+    ShaderAutoReloadTest,
+    ShaderComputeReloadTest,
+    ShaderDefinitionReloadTest,
+    WorldGraphTransactionTest,
+    ShaderUiReloadTest,
+    ShaderShutdownInflightTest
 };
 
 bool IsOptionToken(const std::string& value)
@@ -76,6 +83,20 @@ std::string GetRuntimeTestOptionName(RuntimeTestOption option)
         return "--framesmoke";
     case RuntimeTestOption::EnvironmentUpdateStress:
         return "--environmentstress";
+    case RuntimeTestOption::ShaderReloadTest:
+        return "--shader-reload-test";
+    case RuntimeTestOption::ShaderAutoReloadTest:
+        return "--shader-auto-reload-test";
+    case RuntimeTestOption::ShaderComputeReloadTest:
+        return "--shader-compute-reload-test";
+    case RuntimeTestOption::ShaderDefinitionReloadTest:
+        return "--shader-definition-reload-test";
+    case RuntimeTestOption::WorldGraphTransactionTest:
+        return "--world-graph-transaction-test";
+    case RuntimeTestOption::ShaderUiReloadTest:
+        return "--shader-ui-reload-test";
+    case RuntimeTestOption::ShaderShutdownInflightTest:
+        return "--shader-shutdown-inflight-test";
     case RuntimeTestOption::None:
         break;
     }
@@ -131,6 +152,42 @@ RuntimeTestOption FindRuntimeTest(const LaunchOptions& options, RuntimeTestOptio
         options.runEnvironmentUpdateStress)
     {
         return RuntimeTestOption::EnvironmentUpdateStress;
+    }
+    if (excludedOption != RuntimeTestOption::ShaderReloadTest &&
+        options.runShaderReloadTest)
+    {
+        return RuntimeTestOption::ShaderReloadTest;
+    }
+    if (excludedOption != RuntimeTestOption::ShaderAutoReloadTest &&
+        options.runShaderAutoReloadTest)
+    {
+        return RuntimeTestOption::ShaderAutoReloadTest;
+    }
+    if (excludedOption != RuntimeTestOption::ShaderComputeReloadTest &&
+        options.runShaderComputeReloadTest)
+    {
+        return RuntimeTestOption::ShaderComputeReloadTest;
+    }
+    if (excludedOption != RuntimeTestOption::ShaderDefinitionReloadTest &&
+        options.runShaderDefinitionReloadTest)
+    {
+        return RuntimeTestOption::ShaderDefinitionReloadTest;
+    }
+    if (excludedOption != RuntimeTestOption::WorldGraphTransactionTest &&
+        options.runWorldGraphTransactionTest)
+    {
+        return RuntimeTestOption::WorldGraphTransactionTest;
+    }
+    if (excludedOption != RuntimeTestOption::ShaderUiReloadTest &&
+        options.runShaderUiReloadTest)
+    {
+        return RuntimeTestOption::ShaderUiReloadTest;
+    }
+    if (excludedOption !=
+            RuntimeTestOption::ShaderShutdownInflightTest &&
+        options.runShaderShutdownInflightTest)
+    {
+        return RuntimeTestOption::ShaderShutdownInflightTest;
     }
 
     return RuntimeTestOption::None;
@@ -212,6 +269,38 @@ LaunchOptions ParseLaunchOptions(int argc, char** argv)
         if (argument == "--exit-after-tests")
         {
             options.exitAfterTests = true;
+            continue;
+        }
+
+        if (argument == "--shader-force-rebuild")
+        {
+            options.forceShaderRebuild = true;
+            continue;
+        }
+
+        if (argument == "--worker-thread-count")
+        {
+            if (i + 1 >= argc || IsOptionToken(argv[i + 1]))
+            {
+                options.errorMessage =
+                    "--worker-thread-count requires 1 or 2.";
+                return options;
+            }
+
+            int workerThreadCount = 0;
+            const std::string countText = argv[++i];
+            if (!TryParsePositiveInt(
+                    countText,
+                    workerThreadCount) ||
+                (workerThreadCount != 1 &&
+                 workerThreadCount != 2))
+            {
+                options.errorMessage =
+                    "--worker-thread-count must be 1 or 2.";
+                return options;
+            }
+            options.workerThreadCountOverride =
+                workerThreadCount;
             continue;
         }
 
@@ -427,6 +516,104 @@ LaunchOptions ParseLaunchOptions(int argc, char** argv)
             continue;
         }
 
+        if (argument == "--shader-reload-test")
+        {
+            if (RejectRuntimeTestConflict(
+                options,
+                "--shader-reload-test",
+                RuntimeTestOption::ShaderReloadTest))
+            {
+                return options;
+            }
+
+            options.runShaderReloadTest = true;
+            continue;
+        }
+
+        if (argument == "--shader-auto-reload-test")
+        {
+            if (RejectRuntimeTestConflict(
+                options,
+                "--shader-auto-reload-test",
+                RuntimeTestOption::ShaderAutoReloadTest))
+            {
+                return options;
+            }
+
+            options.runShaderAutoReloadTest = true;
+            continue;
+        }
+
+        if (argument == "--shader-compute-reload-test")
+        {
+            if (RejectRuntimeTestConflict(
+                options,
+                "--shader-compute-reload-test",
+                RuntimeTestOption::ShaderComputeReloadTest))
+            {
+                return options;
+            }
+
+            options.runShaderComputeReloadTest = true;
+            continue;
+        }
+
+        if (argument == "--shader-definition-reload-test")
+        {
+            if (RejectRuntimeTestConflict(
+                options,
+                "--shader-definition-reload-test",
+                RuntimeTestOption::ShaderDefinitionReloadTest))
+            {
+                return options;
+            }
+
+            options.runShaderDefinitionReloadTest = true;
+            continue;
+        }
+
+        if (argument == "--world-graph-transaction-test")
+        {
+            if (RejectRuntimeTestConflict(
+                options,
+                "--world-graph-transaction-test",
+                RuntimeTestOption::WorldGraphTransactionTest))
+            {
+                return options;
+            }
+
+            options.runWorldGraphTransactionTest = true;
+            continue;
+        }
+
+        if (argument == "--shader-ui-reload-test")
+        {
+            if (RejectRuntimeTestConflict(
+                options,
+                "--shader-ui-reload-test",
+                RuntimeTestOption::ShaderUiReloadTest))
+            {
+                return options;
+            }
+
+            options.runShaderUiReloadTest = true;
+            continue;
+        }
+
+        if (argument == "--shader-shutdown-inflight-test")
+        {
+            if (RejectRuntimeTestConflict(
+                options,
+                "--shader-shutdown-inflight-test",
+                RuntimeTestOption::ShaderShutdownInflightTest))
+            {
+                return options;
+            }
+
+            options.runShaderShutdownInflightTest = true;
+            continue;
+        }
+
         options.errorMessage = "Unknown launch option: " + argument;
         return options;
     }
@@ -434,7 +621,7 @@ LaunchOptions ParseLaunchOptions(int argc, char** argv)
     if (options.exitAfterTests &&
         !HasRuntimeTest(options, RuntimeTestOption::None))
     {
-        options.errorMessage = "--exit-after-tests requires --reloadstress, --reloadfail, --reloadfail-material, --reloadfail-mesh, --reloadfail-texture, --lightstress, --resizestress, --graphreloadstress, --framesmoke, or --environmentstress.";
+        options.errorMessage = "--exit-after-tests requires --reloadstress, --reloadfail, --reloadfail-material, --reloadfail-mesh, --reloadfail-texture, --lightstress, --resizestress, --graphreloadstress, --framesmoke, --environmentstress, --shader-reload-test, --shader-auto-reload-test, --shader-compute-reload-test, --shader-definition-reload-test, --world-graph-transaction-test, --shader-ui-reload-test, or --shader-shutdown-inflight-test.";
     }
     return options;
 }
@@ -452,6 +639,15 @@ void PrintLaunchUsage()
         << "       main.exe [--graphreloadstress [count] --exit-after-tests]\n"
         << "       main.exe [--framesmoke [count] --exit-after-tests]\n"
         << "       main.exe [--environmentstress [count] --exit-after-tests]\n"
+        << "       main.exe [--shader-reload-test --exit-after-tests]\n"
+        << "       main.exe [--shader-auto-reload-test --exit-after-tests]\n"
+        << "       main.exe [--shader-compute-reload-test --exit-after-tests]\n"
+        << "       main.exe [--shader-definition-reload-test --exit-after-tests]\n"
+        << "       main.exe [--world-graph-transaction-test --exit-after-tests]\n"
+        << "       main.exe [--shader-ui-reload-test --exit-after-tests]\n"
+        << "       main.exe [--shader-shutdown-inflight-test --exit-after-tests]\n"
+        << "       main.exe [--shader-force-rebuild]\n"
+        << "       main.exe [--worker-thread-count <1|2>]\n"
         << "  --reloadstress <scene-path> [count]  Queue world reload stress through CommandBus.\n"
         << "  --reloadfail <scene-path>            Verify failed reload preserves active World.\n"
         << "  --reloadfail-material                Generate bad material fixture and verify rollback.\n"
@@ -462,6 +658,15 @@ void PrintLaunchUsage()
         << "  --graphreloadstress [count]          Reload frame graph GPU resources through retire queue.\n"
         << "  --framesmoke [count]                 Render fixed frames and report frame-time baseline.\n"
         << "  --environmentstress [count]          Change procedural sky inputs and verify incremental IBL generations.\n"
+        << "  --shader-reload-test                Run the graphics shader hot-reload rollback matrix.\n"
+        << "  --shader-auto-reload-test           Run the FileMonitor + compile-worker auto reload matrix.\n"
+        << "  --shader-compute-reload-test        Run the compute pipeline reload participant matrix.\n"
+        << "  --shader-definition-reload-test     Run the M_*.json schema rebuild/rollback matrix.\n"
+        << "  --world-graph-transaction-test      Run deterministic World/RenderGraph transaction rollback faults.\n"
+        << "  --shader-ui-reload-test             Run the UI Overlay pipeline pair reload matrix.\n"
+        << "  --shader-shutdown-inflight-test     Stop after a complete worker candidate and verify shutdown discards it.\n"
+        << "  --shader-force-rebuild              Recompile and republish every startup shader artifact.\n"
+        << "  --worker-thread-count <1|2>         Override config worker mode for this process.\n"
         << "  --dev-ui                            Enable Dear ImGui developer tools for this launch.\n"
         << "  --no-dev-ui                         Disable Dear ImGui developer tools for this launch.\n"
         << "  --exit-after-tests                  Exit with 0 on success or 2 on test failure.\n";
@@ -574,6 +779,82 @@ void QueueLaunchCommands(EngineLoop& engineLoop, const LaunchOptions& options)
         command.sourceText = "argv: --environmentstress";
         engineLoop.QueueRuntimeCommand(std::move(command));
         engineLoop.SetExitAfterRuntimeTests(options.exitAfterTests);
+        return;
+    }
+
+    if (options.runShaderReloadTest)
+    {
+        RuntimeCommand command;
+        command.type = RuntimeCommandType::RunShaderReloadTest;
+        command.sourceText = "argv: --shader-reload-test";
+        engineLoop.QueueRuntimeCommand(std::move(command));
+        engineLoop.SetExitAfterRuntimeTests(options.exitAfterTests);
+        return;
+    }
+
+    if (options.runShaderAutoReloadTest)
+    {
+        RuntimeCommand command;
+        command.type = RuntimeCommandType::RunShaderAutoReloadTest;
+        command.sourceText = "argv: --shader-auto-reload-test";
+        engineLoop.QueueRuntimeCommand(std::move(command));
+        engineLoop.SetExitAfterRuntimeTests(options.exitAfterTests);
+        return;
+    }
+
+    if (options.runShaderComputeReloadTest)
+    {
+        RuntimeCommand command;
+        command.type = RuntimeCommandType::RunShaderComputeReloadTest;
+        command.sourceText = "argv: --shader-compute-reload-test";
+        engineLoop.QueueRuntimeCommand(std::move(command));
+        engineLoop.SetExitAfterRuntimeTests(options.exitAfterTests);
+        return;
+    }
+
+    if (options.runShaderDefinitionReloadTest)
+    {
+        RuntimeCommand command;
+        command.type = RuntimeCommandType::RunShaderDefinitionReloadTest;
+        command.sourceText = "argv: --shader-definition-reload-test";
+        engineLoop.QueueRuntimeCommand(std::move(command));
+        engineLoop.SetExitAfterRuntimeTests(options.exitAfterTests);
+        return;
+    }
+
+    if (options.runWorldGraphTransactionTest)
+    {
+        RuntimeCommand command;
+        command.type =
+            RuntimeCommandType::RunWorldGraphTransactionTest;
+        command.sourceText =
+            "argv: --world-graph-transaction-test";
+        engineLoop.QueueRuntimeCommand(std::move(command));
+        engineLoop.SetExitAfterRuntimeTests(
+            options.exitAfterTests);
+        return;
+    }
+
+    if (options.runShaderUiReloadTest)
+    {
+        RuntimeCommand command;
+        command.type = RuntimeCommandType::RunShaderUiReloadTest;
+        command.sourceText = "argv: --shader-ui-reload-test";
+        engineLoop.QueueRuntimeCommand(std::move(command));
+        engineLoop.SetExitAfterRuntimeTests(options.exitAfterTests);
+        return;
+    }
+
+    if (options.runShaderShutdownInflightTest)
+    {
+        RuntimeCommand command;
+        command.type =
+            RuntimeCommandType::RunShaderShutdownInflightTest;
+        command.sourceText =
+            "argv: --shader-shutdown-inflight-test";
+        engineLoop.QueueRuntimeCommand(std::move(command));
+        engineLoop.SetExitAfterRuntimeTests(
+            options.exitAfterTests);
     }
 }
 

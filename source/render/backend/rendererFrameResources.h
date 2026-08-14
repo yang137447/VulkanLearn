@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <memory>
 #include <vector>
 
 #include <vulkan/vulkan.hpp>
@@ -23,10 +24,38 @@ class RendererBackendVulkan;
 class RendererFrameResources
 {
 public:
+    struct PreparedLightCapacity
+    {
+        Buffer replacement;
+        size_t capacity = 0;
+        RendererBackendVulkan* rendererBackend = nullptr;
+        std::shared_ptr<void> retiredResource;
+        bool adopted = false;
+
+        PreparedLightCapacity() = default;
+        ~PreparedLightCapacity();
+        PreparedLightCapacity(const PreparedLightCapacity&) = delete;
+        PreparedLightCapacity& operator=(const PreparedLightCapacity&) = delete;
+        PreparedLightCapacity(PreparedLightCapacity&& other) noexcept;
+        PreparedLightCapacity& operator=(PreparedLightCapacity&& other) noexcept;
+
+        bool HasReplacement() const noexcept
+        {
+            return replacement.HasResources();
+        }
+        const std::vector<vk::DescriptorBufferInfo>& GetBufferInfos(
+            const RendererFrameResources& active) const;
+    };
+
     void Initialize(RendererBackendVulkan& rendererBackend);
     void Shutdown(RendererBackendVulkan& rendererBackend);
 
     bool EnsureLightCapacity(size_t requestedLightCount, RendererBackendVulkan& rendererBackend);
+    PreparedLightCapacity PrepareLightCapacity(
+        size_t requestedLightCount,
+        RendererBackendVulkan& rendererBackend) const;
+    std::shared_ptr<void> CommitPreparedLightCapacity(
+        PreparedLightCapacity&& prepared) noexcept;
     void UpdateGlobalUniformBuffer(
         vk::CommandBuffer& commandBuffer,
         uint32_t swapChainImageIndex,
@@ -46,9 +75,17 @@ public:
     const std::vector<vk::DescriptorBufferInfo>& GetGlobalUniformBufferInfos() const;
     const std::vector<vk::DescriptorBufferInfo>& GetLightBufferInfos() const;
     size_t GetLightCapacity() const { return maxLightCount; }
+    const std::vector<RHIBufferHandle>&
+        GetLightBufferHandlesForTest() const noexcept
+    {
+        return lightBuffer.bufferHandles;
+    }
     bool IsInitialized() const { return initialized; }
 
 private:
+    static Buffer CreateLightBufferSet(
+        size_t requestedLightCount,
+        RendererBackendVulkan& rendererBackend);
     void CreateLightBuffer(size_t requestedLightCount, RendererBackendVulkan& rendererBackend);
     void DestroyLightBuffer(RendererBackendVulkan& rendererBackend);
 

@@ -7,11 +7,12 @@
 
 #include <cstddef>
 #include <functional>
-#include <iomanip>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 
+#include "shader/build/contentHash.h"
 #include "shaderVariant.h"
 
 namespace VL
@@ -69,6 +70,10 @@ struct MaterialEvaluationSourceDesc
     std::string vertexEvaluationPath;
     std::string surfaceEvaluationPath;
     std::string parameterIncludePath;
+    // M_ reload prepares generated include bytes in memory. The bytes are
+    // intentionally excluded from the logical request identity; they enter the
+    // source fingerprint through ShaderBuildRequest::sourceSnapshot.
+    std::optional<std::string> parameterIncludeBytes;
 };
 
 // 一份生成材质 Pass Shader 所需的完整身份与源码输入。
@@ -100,11 +105,9 @@ struct MaterialShaderCompileRequest
 
     std::string GetRequestHash() const
     {
-        const std::size_t hashValue = std::hash<std::string>{}(GetNormalizedKey());
-        std::ostringstream stream;
-        stream << std::uppercase << std::hex << std::setw(16) << std::setfill('0')
-               << static_cast<unsigned long long>(hashValue);
-        return stream.str();
+        CanonicalFieldHasher hasher("MaterialGraphicsShaderLogicalBuildIdV1");
+        hasher.AddString("normalizedKey", GetNormalizedKey());
+        return hasher.Finalize().ToHex();
     }
 
     std::string GetDisplayName() const

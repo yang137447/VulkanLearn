@@ -2,15 +2,42 @@
 #include "../commonFunction.h"
 #include "../vulkanDebug.h"
 #include "pipelineLayoutBuilder.h"
+#include "render/backend/rendererBackendVulkan.h"
 #include "shaderReflectionService.h"
 #include "vulkanPipelineDiagnostics.h"
 
-ComputePipeline::ComputePipeline(vk::Device* device, const std::string& shaderName)
+ComputePipeline::ComputePipeline(
+    VL::RendererBackendVulkan* rendererBackend,
+    const std::string& shaderName)
 {
-    this->device = device;
+    this->rendererBackend = rendererBackend;
+    this->device = &rendererBackend->GetDevice();
     this->shaderName = shaderName;
 
-    CreateShader();
+    const std::string computeShaderPath = CommonFunction::Path(shaderName + "_comp.spv");
+    std::string computeShaderCode = CommonFunction::ReadFile(computeShaderPath);
+    std::vector<uint32_t> spirv(
+        reinterpret_cast<const uint32_t*>(computeShaderCode.data()),
+        reinterpret_cast<const uint32_t*>(
+            computeShaderCode.data() + computeShaderCode.size()));
+
+    shaderBindings = ShaderReflectionService::ReflectComputeFromDebugSpirv(shaderName);
+    CreateShader(spirv);
+    CreateDescriptorSetLayouts();
+    CreatePipelineLayout();
+    CreateComputePipeline();
+}
+
+ComputePipeline::ComputePipeline(
+    VL::RendererBackendVulkan* rendererBackend,
+    const ComputeShaderArtifact& artifact)
+{
+    this->rendererBackend = rendererBackend;
+    this->device = &rendererBackend->GetDevice();
+    this->shaderName = artifact.shaderName;
+    shaderBindings = artifact.shaderBindings;
+
+    CreateShader(artifact.runtimeSpirv);
     CreateDescriptorSetLayouts();
     CreatePipelineLayout();
     CreateComputePipeline();
@@ -24,21 +51,17 @@ ComputePipeline::~ComputePipeline()
     DestroyPipelineLayout();
 }
 
-void ComputePipeline::CreateShader()
+void ComputePipeline::CreateShader(const std::vector<uint32_t>& spirv)
 {
-    const std::string computeShaderPath = CommonFunction::Path(shaderName + "_comp.spv");
-    std::string computeShaderCode = CommonFunction::ReadFile(computeShaderPath);
-
     vk::ShaderModuleCreateInfo shaderModuleCreateInfo;
     shaderModuleCreateInfo
-        .setCodeSize(computeShaderCode.size())
-        .setPCode(reinterpret_cast<const uint32_t*>(computeShaderCode.data()));
+        .setCodeSize(spirv.size() * sizeof(uint32_t))
+        .setPCode(spirv.data());
 
     vk::Result result = device->createShaderModule(&shaderModuleCreateInfo, nullptr, &shaderModule);
     VL::RequireVulkanPipelineSuccess(result, "Create shader module", shaderName, "compute pipeline");
     VulkanDebug::SetObjectName(*device, shaderModule, vk::ObjectType::eShaderModule, "ShaderModule_Comp: " + shaderName);
 
-    shaderBindings = ShaderReflectionService::ReflectComputeFromDebugSpirv(shaderName);
 }
 
 void ComputePipeline::DestroyShader()
@@ -48,12 +71,18 @@ void ComputePipeline::DestroyShader()
 
 void ComputePipeline::CreateDescriptorSetLayouts()
 {
-    descriptorSetLayouts = PipelineLayoutBuilder::CreateDescriptorSetLayouts(*device, shaderBindings, shaderName);
+    descriptorSetLayouts =
+        PipelineLayoutBuilder::CreateDescriptorSetLayouts(
+            *rendererBackend,
+            shaderBindings,
+            shaderName);
 }
 
 void ComputePipeline::DestroyDescriptorSetLayouts()
 {
-    PipelineLayoutBuilder::DestroyDescriptorSetLayouts(*device, descriptorSetLayouts);
+    PipelineLayoutBuilder::DestroyDescriptorSetLayouts(
+        *rendererBackend,
+        descriptorSetLayouts);
 }
 
 void ComputePipeline::CreatePipelineLayout()

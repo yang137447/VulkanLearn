@@ -8,28 +8,30 @@
 #include <vulkan/vulkan.hpp>
 #include "pipeline/graphicsPipelineBuilder.h"
 #include "pipeline/passPipelineContractKey.h"
+#include "pipeline/pipelineFactory.h"
 #include "shaderVariant.h"
 #include "material/compiler/materialShaderCompileRequest.h"
 #include "material/materialDescriptorSchema.h"
+#include "material/materialPipelineReload.h"
 
 class MaterialInstance; // Forward declaration
 class PipelineBase;
-class PipelineFactory;
+struct Renderpass;
 class Material: public std::enable_shared_from_this<Material>
 {
 public:
     ~Material() = default;
     Material(
         PipelineFactory& pipelineFactory,
-        vk::RenderPass* renderPass,
-        const PassPipelineContractKey& passPipelineContractKey,
+        Renderpass& renderPass,
         const ShaderVariantKey& shaderVariantKey,
         const VL::MaterialFeatureKey& materialFeatureKey,
         const VL::MaterialDescriptorSchema& materialDescriptorSchema,
         const std::optional<VL::MaterialShaderCompileRequest>& baseShaderCompileRequest,
         const std::string& materialKey,
         vk::CullModeFlags cullMode,
-        GraphicsPipelineBlendMode blendMode);
+        GraphicsPipelineBlendMode blendMode,
+        PipelineFactory::GraphicsCandidateState* candidateState = nullptr);
 
     std::shared_ptr<MaterialInstance> CreateInstance();
 
@@ -42,7 +44,29 @@ public:
     const std::vector<ShaderBinding>& GetActiveShaderBindings() const { return activeShaderBindings; }
     const std::shared_ptr<PipelineBase>& GetRenderPipeline() const { return renderPipeline; }
     const std::shared_ptr<PipelineBase>& GetShadowPipeline() const { return shadowPipeline; }
-    void SetShadowPipeline(std::shared_ptr<PipelineBase> pipeline);
+    const VL::MaterialPipelineReloadRecipe& GetPipelineReloadRecipe() const
+    {
+        return pipelineReloadRecipe;
+    }
+    const GraphicsShaderVariantArtifact& GetSurfaceShaderArtifact() const
+    {
+        return surfaceShaderArtifact;
+    }
+    const std::optional<GraphicsShaderVariantArtifact>& GetShadowShaderArtifact() const
+    {
+        return shadowShaderArtifact;
+    }
+    static std::vector<ShaderBinding> BuildActiveShaderBindings(
+        const std::vector<ShaderBinding>& surfaceBindings,
+        const std::vector<ShaderBinding>* shadowBindings);
+    void SetShadowPipeline(
+        std::shared_ptr<PipelineBase> pipeline,
+        const GraphicsShaderVariantArtifact& shaderArtifact,
+        const VL::MaterialGraphicsPassReloadRecipe& reloadRecipe);
+    void ValidatePipelineReloadCommit(
+        const VL::MaterialPipelineReloadCommit& commit) const;
+    VL::RetiredMaterialPipelines CommitPipelineReload(
+        VL::MaterialPipelineReloadCommit commit) noexcept;
     
 private:
     ShaderVariantKey shaderVariantKey;
@@ -53,4 +77,7 @@ private:
     std::vector<ShaderBinding> activeShaderBindings;
     std::shared_ptr<PipelineBase> renderPipeline;
     std::shared_ptr<PipelineBase> shadowPipeline;
+    VL::MaterialPipelineReloadRecipe pipelineReloadRecipe;
+    GraphicsShaderVariantArtifact surfaceShaderArtifact;
+    std::optional<GraphicsShaderVariantArtifact> shadowShaderArtifact;
 };

@@ -72,6 +72,7 @@ std::string DescribeBinding(const ShaderBinding& binding)
     std::ostringstream stream;
     stream << "name=" << binding.name
            << ", type=" << static_cast<uint32_t>(binding.type)
+           << ", count=" << binding.descriptorCount
            << ", stages=" << static_cast<uint32_t>(binding.stageFlags)
            << ", size=" << binding.size
            << ", memberCount=" << binding.memberCount
@@ -82,6 +83,7 @@ std::string DescribeBinding(const ShaderBinding& binding)
         stream << binding.memberNames[index];
         if (index < binding.members.size()) stream << ":size=" << binding.members[index];
         if (index < binding.memberOffsets.size()) stream << ":offset=" << binding.memberOffsets[index];
+        if (index < binding.memberTypes.size()) stream << ":type=" << binding.memberTypes[index];
     }
     stream << "]";
     return stream.str();
@@ -116,6 +118,7 @@ MaterialDescriptorSchema MaterialDescriptorSchema::Build(
         uboBinding.set = MaterialSetIndex;
         uboBinding.binding = 0;
         uboBinding.type = vk::DescriptorType::eUniformBuffer;
+        uboBinding.descriptorCount = 1;
         uboBinding.stageFlags =
             vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment;
         // GLSL block沒有 instance name；SPIR-V descriptor binding name 因而為空。
@@ -131,6 +134,7 @@ MaterialDescriptorSchema MaterialDescriptorSchema::Build(
             uboBinding.members.push_back(typeLayout.size);
             uboBinding.memberOffsets.push_back(offset);
             uboBinding.memberNames.push_back(parameter.name);
+            uboBinding.memberTypes.push_back(parameter.glslType);
             offset += typeLayout.size;
         }
         uboBinding.memberCount = static_cast<uint32_t>(schema.parameters.size());
@@ -151,6 +155,7 @@ MaterialDescriptorSchema MaterialDescriptorSchema::Build(
         textureBindingDesc.set = MaterialSetIndex;
         textureBindingDesc.binding = texture.binding;
         textureBindingDesc.type = vk::DescriptorType::eCombinedImageSampler;
+        textureBindingDesc.descriptorCount = 1;
         textureBindingDesc.stageFlags =
             vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment;
         textureBindingDesc.memberCount = 0;

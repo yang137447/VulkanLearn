@@ -8,6 +8,7 @@
 #include <vulkan/vulkan.hpp>
 
 #include "ui/uiRenderSnapshot.h"
+#include "shader/reload/uiOverlayReloadParticipant.h"
 
 namespace VL
 {
@@ -17,6 +18,7 @@ class RendererBackendVulkan;
 // Records immutable UI snapshots into the final swapchain image after render-graph passes.
 // It owns Vulkan overlay resources but does not own widget state or input.
 class UiOverlayRendererVulkan
+    : public UiOverlayReloadParticipant
 {
 public:
     void Initialize(
@@ -35,6 +37,22 @@ public:
         const UiRenderSnapshot& snapshot);
 
     bool IsInitialized() const { return initialized; }
+
+    std::string GetShaderName() const override;
+    const GraphicsShaderVariantArtifact& GetActiveArtifact() const override
+    {
+        return activeShaderArtifact;
+    }
+    void SetActiveShaderArtifact(
+        const GraphicsShaderVariantArtifact& artifact)
+    {
+        activeShaderArtifact = artifact;
+    }
+    UiOverlayPipelineReplacement PrepareReplacementPipelines(
+        const GraphicsShaderVariantArtifact& candidate) override;
+    void CommitReplacement(
+        GraphicsShaderVariantArtifact committedArtifact,
+        UiOverlayPipelineReplacement&& replacement) noexcept override;
 
 private:
     struct DynamicBuffer
@@ -75,6 +93,9 @@ private:
     void CreateRenderPassAndFramebuffers();
     void DestroyRenderPassAndFramebuffers();
     void CreatePipelines();
+    UiOverlayPipelineReplacement BuildUiOverlayPipelinePair(
+        const std::vector<uint32_t>& vertexSpirv,
+        const std::vector<uint32_t>& fragmentSpirv);
     void DestroyPipelines();
     void CreateFrameBuffers();
     void DestroyFrameBuffers();
@@ -104,6 +125,7 @@ private:
     vk::Pipeline straightAlphaPipeline;
     vk::PipelineCache premultipliedAlphaPipelineCache;
     vk::Pipeline premultipliedAlphaPipeline;
+    GraphicsShaderVariantArtifact activeShaderArtifact;
     std::unordered_map<UiTextureId, GpuTexture> textures;
     std::vector<RetiredTexture> retiredTextures;
     bool initialized = false;

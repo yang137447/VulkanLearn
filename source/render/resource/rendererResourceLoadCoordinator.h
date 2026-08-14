@@ -11,6 +11,7 @@ class PipelineFactory;
 namespace VL
 {
 class RendererBackendVulkan;
+struct RendererResourceLoadContext;
 struct WorldBuildPlan;
 
 struct RendererWorldResourceLoadResult
@@ -37,6 +38,9 @@ public:
     RendererWorldResourceLoadResult LoadRendererResources(
         const WorldBuildPlan& worldBuildPlan,
         uint64_t ownerGeneration);
+    RendererWorldResourceLoadResult LoadRendererResources(
+        const WorldBuildPlan& worldBuildPlan,
+        RendererResourceLoadContext& loadContext);
 
 private:
     RendererResourceLoadCoordinator();

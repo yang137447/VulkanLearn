@@ -70,11 +70,6 @@ void RHIDeviceVulkan::RecreateSwapchain(int width, int height)
     VulkanManager::GetInstance().ReCreateSwapChain(width, height);
 }
 
-std::unique_ptr<PipelineFactory> RHIDeviceVulkan::CreatePipelineFactory()
-{
-    return std::make_unique<PipelineFactory>(&GetDevice());
-}
-
 void RHIDeviceVulkan::WaitForFence(vk::Fence fence)
 {
     const vk::Result result = GetDevice().waitForFences(fence, true, UINT64_MAX);

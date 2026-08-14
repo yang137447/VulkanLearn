@@ -10,6 +10,7 @@ struct Renderpass;
 namespace VL
 {
 class RendererBackendVulkan;
+struct RendererResourceLoadContext;
 
 // Creates current Material/MaterialInstance GPU objects and records them in
 // RendererResourceCache. It owns material JSON resolution and texture binding
@@ -17,7 +18,10 @@ class RendererBackendVulkan;
 class RendererMaterialLoader
 {
 public:
-    RendererMaterialLoader(PipelineFactory& pipelineFactory, RendererBackendVulkan& rendererBackend);
+    RendererMaterialLoader(
+        PipelineFactory& pipelineFactory,
+        RendererBackendVulkan& rendererBackend,
+        RendererResourceLoadContext& loadContext);
 
     void LoadPassMaterials() const;
 
@@ -28,6 +32,7 @@ public:
 private:
     PipelineFactory& pipelineFactory;
     RendererBackendVulkan& rendererBackend;
+    RendererResourceLoadContext& loadContext;
 };
 
 } // namespace VL

@@ -9,6 +9,7 @@
 #include "pipeline/pipelineFactory.h"
 #include "render/backend/rendererBackendVulkan.h"
 #include "render/resource/rendererResourceCache.h"
+#include "render/resource/rendererResourceLoadContext.h"
 #include "texture.h"
 #include "world/environmentType.h"
 
@@ -17,20 +18,22 @@ namespace VL
 
 RendererEnvironmentLoader::RendererEnvironmentLoader(
     PipelineFactory& pipelineFactory,
-    RendererBackendVulkan& rendererBackend)
+    RendererBackendVulkan& rendererBackend,
+    RendererResourceLoadContext& loadContext)
     : pipelineFactory(pipelineFactory)
     , rendererBackend(rendererBackend)
+    , loadContext(loadContext)
 {
 }
 
 void RendererEnvironmentLoader::LoadGlobalResources() const
 {
-    if (RendererResourceCache::GetInstance().HasGlobalTexture("brdfLut"))
+    if (loadContext.resourceCache.HasGlobalTexture("brdfLut"))
     {
         return;
     }
 
-    RendererResourceCache::GetInstance().BindGlobalTexture(
+    loadContext.resourceCache.BindGlobalTexture(
         "brdfLut",
         BrdfLutGenerator::Generate(pipelineFactory, rendererBackend));
 }
@@ -48,7 +51,8 @@ void RendererEnvironmentLoader::LoadEnvironmentObject(const nlohmann::basic_json
     const std::string environmentHdrPath = config["hdrPath"].get<std::string>();
     const uint32_t environmentCubeSize = config.value("cubeSize", 512u);
 
-    RendererResourceCache& resourceCache = RendererResourceCache::GetInstance();
+    RendererResourceCache& resourceCache =
+        loadContext.resourceCache;
     std::shared_ptr<Texture> environmentCube =
         EnvironmentCubemapGenerator::Generate(
             environmentHdrPath,

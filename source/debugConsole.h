@@ -18,6 +18,7 @@ private:
     void HandleInput(int ch);
     void ProcessCommand(const std::string& line);
     void PrintHelp() const;
+    void PrintShaderReloadHelp() const;
     void PrintPrompt() const;
 
     VL::CommandBus& commandBus;

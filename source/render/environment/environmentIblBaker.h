@@ -7,6 +7,9 @@
 
 #include <vulkan/vulkan.hpp>
 
+#include "shader/reload/computePipelineReloadParticipant.h"
+#include "shader/reload/computeShaderArtifact.h"
+
 class ComputePipeline;
 class PipelineFactory;
 class Texture;
@@ -38,7 +41,40 @@ public:
     void RecordCommit(vk::CommandBuffer commandBuffer);
 
     std::shared_ptr<Texture> GetPrefilteredEnvironmentCube() const;
+    void InvalidateEnvironmentCubeBindings() noexcept;
     uint32_t GetPrefilterMipCount() const { return pendingPrefilterCube.mipLevels; }
+
+    const ComputeShaderArtifact& GetActiveSkySHGenerateArtifact() const
+    {
+        return activeSkySHGenerateArtifact;
+    }
+    const ComputeShaderArtifact& GetActivePrefilterEnvMapArtifact() const
+    {
+        return activePrefilterEnvMapArtifact;
+    }
+    std::shared_ptr<ComputePipeline> GetSkySHGeneratePipeline() const
+    {
+        return skySHGeneratePipeline;
+    }
+    std::shared_ptr<ComputePipeline> GetPrefilterEnvMapPipeline() const
+    {
+        return prefilterEnvMapPipeline;
+    }
+    PipelineFactory& GetPipelineFactory() const;
+
+    ComputeDescriptorReplacement PrepareSkyShDescriptorReplacement(
+        const std::shared_ptr<ComputePipeline>& replacementPipeline) const;
+    void CommitSkyShReplacement(
+        ComputeShaderArtifact committedArtifact,
+        std::shared_ptr<ComputePipeline> replacementPipeline,
+        ComputeDescriptorReplacement&& descriptors) noexcept;
+
+    ComputeDescriptorReplacement PreparePrefilterDescriptorReplacement(
+        const std::shared_ptr<ComputePipeline>& replacementPipeline) const;
+    void CommitPrefilterReplacement(
+        ComputeShaderArtifact committedArtifact,
+        std::shared_ptr<ComputePipeline> replacementPipeline,
+        ComputeDescriptorReplacement&& descriptors) noexcept;
 
 private:
     enum class ShBufferAccess
@@ -90,8 +126,12 @@ private:
 
     std::shared_ptr<ComputePipeline> skySHGeneratePipeline;
     std::shared_ptr<ComputePipeline> prefilterEnvMapPipeline;
+    ComputeShaderArtifact activeSkySHGenerateArtifact;
+    ComputeShaderArtifact activePrefilterEnvMapArtifact;
+    PipelineFactory* pipelineFactoryService = nullptr;
 
-    vk::DescriptorPool descriptorPool;
+    vk::DescriptorPool skySHDescriptorPool;
+    vk::DescriptorPool prefilterDescriptorPool;
     std::vector<vk::DescriptorSet> skySHGenerateDescriptorSets;
     std::vector<vk::DescriptorBufferInfo> globalUniformBufferInfos;
     std::vector<vk::DescriptorSet> prefilterDescriptorSets;

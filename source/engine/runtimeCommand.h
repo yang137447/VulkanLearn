@@ -22,6 +22,13 @@ enum class RuntimeCommandType
     RunRenderGraphReloadStress,
     RunFrameSmokeTest,
     RunEnvironmentUpdateStress,
+    RunShaderReloadTest,
+    RunShaderAutoReloadTest,
+    RunShaderComputeReloadTest,
+    RunShaderDefinitionReloadTest,
+    RunWorldGraphTransactionTest,
+    RunShaderUiReloadTest,
+    RunShaderShutdownInflightTest,
     SetDebugViewMode,
     SetEnvironmentIntensity,
     SetProceduralSkyParameters,
@@ -29,7 +36,15 @@ enum class RuntimeCommandType
     SetSpeedTreeGustingEnabled,
     ForceSpeedTreeGust,
     SetToneMappingMode,
-    SetBloomParameter
+    SetBloomParameter,
+    ReloadShaders,
+    ReportShaderCacheStatistics
+};
+
+enum class RuntimeShaderReloadScope
+{
+    Changed,
+    All
 };
 
 enum class BloomParameter
@@ -44,6 +59,8 @@ struct RuntimeCommand
 {
     RuntimeCommandType type = RuntimeCommandType::SetDebugViewMode;
     BloomParameter bloomParameter = BloomParameter::Strength;
+    RuntimeShaderReloadScope shaderReloadScope =
+        RuntimeShaderReloadScope::Changed;
     int intValue = 0;
     float floatValue = 0.0f;
     // 环境压力测试通过值语义投递完整天空参数，执行端只在 active World 所有权侧写回。

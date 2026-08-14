@@ -1,9 +1,9 @@
 #include "graphicsPipeline.h"
 #include "../vertexDataStruct.h"
 #include <cstdint>
-#include "../commonFunction.h"
 #include "graphicsPipelineBuilder.h"
 #include "pipelineLayoutBuilder.h"
+#include "render/backend/rendererBackendVulkan.h"
 #include "../profiler.h"
 #include "vulkanPipelineDiagnostics.h"
 #include "../vulkanDebug.h"
@@ -55,7 +55,7 @@ std::vector<ShaderBinding> BuildPipelineLayoutBindings(
 } // namespace
 
 GraphicsPipeline::GraphicsPipeline(
-    vk::Device *device,
+    VL::RendererBackendVulkan* rendererBackend,
     vk::RenderPass* renderPass,
     const GraphicsShaderVariantArtifact& shaderArtifact,
     vk::SampleCountFlagBits sampleCount,
@@ -65,22 +65,34 @@ GraphicsPipeline::GraphicsPipeline(
     const GraphicsPipelineLayoutDesc& pipelineLayoutDesc)
 {
     PROFILE_FUNCTION();
-    this->device = device;
+    this->rendererBackend = rendererBackend;
+    this->device = &rendererBackend->GetDevice();
     this->shaderDisplayName = shaderArtifact.displayName;
-    this->vertexSpvPath = shaderArtifact.vertexSpvPath;
-    this->fragmentSpvPath = shaderArtifact.fragmentSpvPath;
+    this->vertexSpirv = shaderArtifact.vertexSpirv;
+    this->fragmentSpirv = shaderArtifact.fragmentSpirv;
     this->shaderBindings = shaderArtifact.shaderBindings;
 
-    CreateShader();
-    CreateDescriptorSetLayouts(pipelineLayoutDesc);
-    CreatePipelineLayout();
-    initVertexAttribute();
-    CreateGraphicsPipeline(
-        *renderPass,
-        sampleCount,
-        colorAttachmentCount,
-        pipelineStateDesc,
-        bIsShadowPass);
+    try
+    {
+        CreateShader();
+        CreateDescriptorSetLayouts(pipelineLayoutDesc);
+        CreatePipelineLayout();
+        initVertexAttribute();
+        CreateGraphicsPipeline(
+            *renderPass,
+            sampleCount,
+            colorAttachmentCount,
+            pipelineStateDesc,
+            bIsShadowPass);
+    }
+    catch (...)
+    {
+        DestroyGraphicsPipeline();
+        DestroyDescriptorSetLayouts();
+        DestroyShader();
+        DestroyPipelineLayout();
+        throw;
+    }
 }
 
 GraphicsPipeline::~GraphicsPipeline()
@@ -100,14 +112,16 @@ void GraphicsPipeline::CreateDescriptorSetLayouts(
     descriptorLayoutBindings =
         BuildPipelineLayoutBindings(shaderBindings, pipelineLayoutDesc);
     descriptorSetLayouts = PipelineLayoutBuilder::CreateDescriptorSetLayouts(
-        *device,
+        *rendererBackend,
         descriptorLayoutBindings,
         shaderDisplayName);
 }
 
 void GraphicsPipeline::DestroyDescriptorSetLayouts()
 {
-    PipelineLayoutBuilder::DestroyDescriptorSetLayouts(*device, descriptorSetLayouts);
+    PipelineLayoutBuilder::DestroyDescriptorSetLayouts(
+        *rendererBackend,
+        descriptorSetLayouts);
 }
 
 void GraphicsPipeline::CreatePipelineLayout()
@@ -122,14 +136,11 @@ void GraphicsPipeline::DestroyPipelineLayout()
 
 void GraphicsPipeline::CreateShader()
 {
-    std::string vertexShaderCode = CommonFunction::ReadFile(vertexSpvPath);
-    std::string fragmentShaderCode = CommonFunction::ReadFile(fragmentSpvPath);
-
     vk::ShaderModule vertexShaderModule;
     vk::ShaderModuleCreateInfo vertexShaderModuleCreateInfo;
     vertexShaderModuleCreateInfo
-        .setCodeSize(vertexShaderCode.size())
-        .setPCode(reinterpret_cast<const uint32_t*>(vertexShaderCode.data()));
+        .setCodeSize(vertexSpirv.size() * sizeof(uint32_t))
+        .setPCode(vertexSpirv.data());
     vk::Result result = device->createShaderModule(&vertexShaderModuleCreateInfo, nullptr, &vertexShaderModule);
     VL::RequireVulkanPipelineSuccess(
         result,
@@ -141,14 +152,18 @@ void GraphicsPipeline::CreateShader()
     vk::ShaderModule fragmentShaderModule;
     vk::ShaderModuleCreateInfo fragmentShaderModuleCreateInfo;
     fragmentShaderModuleCreateInfo
-        .setCodeSize(fragmentShaderCode.size())
-        .setPCode(reinterpret_cast<const uint32_t*>(fragmentShaderCode.data()));
+        .setCodeSize(fragmentSpirv.size() * sizeof(uint32_t))
+        .setPCode(fragmentSpirv.data());
     result = device->createShaderModule(&fragmentShaderModuleCreateInfo, nullptr, &fragmentShaderModule);
-    VL::RequireVulkanPipelineSuccess(
-        result,
-        "Create fragment shader module",
-        shaderDisplayName,
-        "graphics pipeline");
+    if (result != vk::Result::eSuccess)
+    {
+        device->destroyShaderModule(vertexShaderModule, nullptr);
+        VL::RequireVulkanPipelineSuccess(
+            result,
+            "Create fragment shader module",
+            shaderDisplayName,
+            "graphics pipeline");
+    }
     VulkanDebug::SetObjectName(*device, fragmentShaderModule, vk::ObjectType::eShaderModule, "ShaderModule_Frag: " + shaderDisplayName);
     shaderStages.resize(2);
     shaderStages[0]
@@ -166,8 +181,15 @@ void GraphicsPipeline::CreateShader()
 
 void GraphicsPipeline::DestroyShader()
 {
-    device->destroyShaderModule(shaderStages[0].module, nullptr);
-    device->destroyShaderModule(shaderStages[1].module, nullptr);  
+    for (vk::PipelineShaderStageCreateInfo& stage : shaderStages)
+    {
+        if (stage.module)
+        {
+            device->destroyShaderModule(stage.module, nullptr);
+            stage.module = nullptr;
+        }
+    }
+    shaderStages.clear();
 }
 
 void GraphicsPipeline::initVertexAttribute()
@@ -205,6 +227,14 @@ void GraphicsPipeline::CreateGraphicsPipeline(
 
 void GraphicsPipeline::DestroyGraphicsPipeline()
 {
-    device->destroyPipeline(graphicsPipeline);
-    device->destroyPipelineCache(pipelineCache);
+    if (graphicsPipeline)
+    {
+        device->destroyPipeline(graphicsPipeline);
+        graphicsPipeline = nullptr;
+    }
+    if (pipelineCache)
+    {
+        device->destroyPipelineCache(pipelineCache);
+        pipelineCache = nullptr;
+    }
 }

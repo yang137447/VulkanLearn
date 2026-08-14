@@ -107,6 +107,16 @@ struct RetiredFrameBufferSet
     }
 };
 
+void DestroyPreparedBufferSet(
+    RendererBackendVulkan* rendererBackend,
+    Buffer& bufferSet)
+{
+    if (rendererBackend != nullptr && bufferSet.HasResources())
+    {
+        rendererBackend->DestroyBufferSet(bufferSet);
+    }
+}
+
 void RetireFrameBufferSet(
     RendererBackendVulkan& rendererBackend,
     Buffer& bufferSet,
@@ -155,6 +165,57 @@ LightGPU BuildLightGPU(const LightSnapshot& light)
 }
 
 } // namespace
+
+RendererFrameResources::PreparedLightCapacity::~PreparedLightCapacity()
+{
+    if (!adopted)
+    {
+        DestroyPreparedBufferSet(rendererBackend, replacement);
+    }
+}
+
+RendererFrameResources::PreparedLightCapacity::PreparedLightCapacity(
+    PreparedLightCapacity&& other) noexcept
+    : replacement(std::move(other.replacement))
+    , capacity(other.capacity)
+    , rendererBackend(other.rendererBackend)
+    , retiredResource(std::move(other.retiredResource))
+    , adopted(other.adopted)
+{
+    other.rendererBackend = nullptr;
+    other.adopted = true;
+}
+
+RendererFrameResources::PreparedLightCapacity&
+RendererFrameResources::PreparedLightCapacity::operator=(
+    PreparedLightCapacity&& other) noexcept
+{
+    if (this == &other)
+    {
+        return *this;
+    }
+    if (!adopted)
+    {
+        DestroyPreparedBufferSet(rendererBackend, replacement);
+    }
+    replacement = std::move(other.replacement);
+    capacity = other.capacity;
+    rendererBackend = other.rendererBackend;
+    retiredResource = std::move(other.retiredResource);
+    adopted = other.adopted;
+    other.rendererBackend = nullptr;
+    other.adopted = true;
+    return *this;
+}
+
+const std::vector<vk::DescriptorBufferInfo>&
+RendererFrameResources::PreparedLightCapacity::GetBufferInfos(
+    const RendererFrameResources& active) const
+{
+    return HasReplacement()
+        ? replacement.bufferInfos
+        : active.GetLightBufferInfos();
+}
 
 void RendererFrameResources::Initialize(RendererBackendVulkan& rendererBackend)
 {
@@ -220,6 +281,59 @@ bool RendererFrameResources::EnsureLightCapacity(
 
     CreateLightBuffer(requiredLightCapacity, rendererBackend);
     return true;
+}
+
+RendererFrameResources::PreparedLightCapacity
+RendererFrameResources::PrepareLightCapacity(
+    size_t requestedLightCount,
+    RendererBackendVulkan& rendererBackend) const
+{
+    if (!initialized)
+    {
+        throw std::runtime_error(
+            "RendererFrameResources must be initialized before preparing light capacity.");
+    }
+
+    PreparedLightCapacity prepared;
+    const size_t requiredLightCapacity =
+        std::max(requestedLightCount, kDefaultLightCapacity);
+    if (lightBuffer.HasResources() &&
+        requiredLightCapacity <= maxLightCount)
+    {
+        return prepared;
+    }
+
+    prepared.replacement =
+        CreateLightBufferSet(requiredLightCapacity, rendererBackend);
+    prepared.capacity = requiredLightCapacity;
+    prepared.rendererBackend = &rendererBackend;
+    auto retiredBufferSet =
+        std::make_shared<RetiredFrameBufferSet>();
+    retiredBufferSet->rendererBackend = &rendererBackend;
+    prepared.retiredResource =
+        std::static_pointer_cast<void>(
+            std::move(retiredBufferSet));
+    return prepared;
+}
+
+std::shared_ptr<void>
+RendererFrameResources::CommitPreparedLightCapacity(
+    PreparedLightCapacity&& prepared) noexcept
+{
+    if (!prepared.HasReplacement())
+    {
+        prepared.adopted = true;
+        return {};
+    }
+
+    auto retiredBufferSet =
+        std::static_pointer_cast<RetiredFrameBufferSet>(
+            prepared.retiredResource);
+    retiredBufferSet->bufferSet = std::move(lightBuffer);
+    lightBuffer = std::move(prepared.replacement);
+    maxLightCount = prepared.capacity;
+    prepared.adopted = true;
+    return std::move(prepared.retiredResource);
 }
 
 void RendererFrameResources::UpdateGlobalUniformBuffer(
@@ -447,20 +561,31 @@ void RendererFrameResources::CreateLightBuffer(
     // the retire queue instead of a whole-device wait.
     RetireFrameBufferSet(rendererBackend, lightBuffer, "FrameLocalLightSSBO");
     maxLightCount = requestedLightCount;
+    lightBuffer = CreateLightBufferSet(
+        requestedLightCount,
+        rendererBackend);
+}
 
+Buffer RendererFrameResources::CreateLightBufferSet(
+    size_t requestedLightCount,
+    RendererBackendVulkan& rendererBackend)
+{
+    Buffer bufferSet;
     const vk::DeviceSize lightSSBOSize =
-        sizeof(LightSSBOHeader) + sizeof(LightGPU) * maxLightCount;
+        sizeof(LightSSBOHeader) +
+        sizeof(LightGPU) * requestedLightCount;
     vk::BufferUsageFlags usage = vk::BufferUsageFlagBits::eStorageBuffer;
     vk::MemoryPropertyFlags memoryPropertyFlags =
         vk::MemoryPropertyFlagBits::eHostVisible |
         vk::MemoryPropertyFlagBits::eHostCoherent;
 
     rendererBackend.CreatePerSwapchainBufferSet(
-        lightBuffer,
+        bufferSet,
         lightSSBOSize,
         usage,
         memoryPropertyFlags,
         "SSBO_Light");
+    return bufferSet;
 }
 
 void RendererFrameResources::DestroyLightBuffer(RendererBackendVulkan& rendererBackend)

@@ -118,7 +118,7 @@ public:
     std::optional<WorldSnapshotPtr> ConsumeLatest();
     std::optional<WorldSnapshotPtr> PeekLatest() const;
 
-    void Clear();
+    void Clear() noexcept;
     bool HasPendingSnapshot() const;
 
 private:

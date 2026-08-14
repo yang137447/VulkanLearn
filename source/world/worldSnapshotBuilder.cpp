@@ -290,4 +290,15 @@ void WorldSnapshotBuilder::Reset()
     previousObjectModels.clear();
 }
 
+void WorldSnapshotBuilder::Swap(
+    WorldSnapshotBuilder& other) noexcept
+{
+    previousWorldGeneration.swap(
+        other.previousWorldGeneration);
+    previousViewProjection.swap(
+        other.previousViewProjection);
+    previousObjectModels.swap(
+        other.previousObjectModels);
+}
+
 } // namespace VL

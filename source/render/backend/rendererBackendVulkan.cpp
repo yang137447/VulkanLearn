@@ -1,5 +1,6 @@
 #include "render/backend/rendererBackendVulkan.h"
 
+#include <algorithm>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -81,6 +82,51 @@ void RendererBackendVulkan::WaitIdle()
     rhiDevice->WaitIdle();
 }
 
+RendererBackendResourceIdentityCounts
+RendererBackendVulkan::CaptureResourceIdentityCounts() const noexcept
+{
+    RendererBackendResourceIdentityCounts counts;
+    counts.buffers = bufferHandlesByBuffer.size();
+    counts.images = imageHandlesByImage.size();
+    counts.imageViews = imageViewHandlesByImageView.size();
+    counts.samplers = samplerHandlesBySampler.size();
+    counts.descriptorSetLayouts =
+        descriptorSetLayoutHandlesByLayout.size();
+    counts.descriptorPools = descriptorPoolHandlesByPool.size();
+    counts.descriptorSets = descriptorSetHandlesBySet.size();
+    counts.renderPasses = renderPassHandlesByRenderPass.size();
+    counts.framebuffers = framebufferHandlesByFramebuffer.size();
+    return counts;
+}
+
+RendererBackendImageResourceDebugNames
+RendererBackendVulkan::CaptureImageResourceDebugNames() const
+{
+    RendererBackendImageResourceDebugNames names;
+    names.images.reserve(imageDebugNamesByImage.size());
+    names.imageViews.reserve(imageViewDebugNamesByImageView.size());
+    names.samplers.reserve(samplerDebugNamesBySampler.size());
+    for (const auto& [image, debugName] : imageDebugNamesByImage)
+    {
+        (void)image;
+        names.images.push_back(debugName);
+    }
+    for (const auto& [imageView, debugName] : imageViewDebugNamesByImageView)
+    {
+        (void)imageView;
+        names.imageViews.push_back(debugName);
+    }
+    for (const auto& [sampler, debugName] : samplerDebugNamesBySampler)
+    {
+        (void)sampler;
+        names.samplers.push_back(debugName);
+    }
+    std::sort(names.images.begin(), names.images.end());
+    std::sort(names.imageViews.begin(), names.imageViews.end());
+    std::sort(names.samplers.begin(), names.samplers.end());
+    return names;
+}
+
 void RendererBackendVulkan::RecreateSwapchain(int width, int height)
 {
     rhiDevice->RecreateSwapchain(width, height);
@@ -89,7 +135,7 @@ void RendererBackendVulkan::RecreateSwapchain(int width, int height)
 
 std::unique_ptr<PipelineFactory> RendererBackendVulkan::CreatePipelineFactory()
 {
-    return rhiDevice->CreatePipelineFactory();
+    return std::make_unique<PipelineFactory>(this);
 }
 
 uint32_t RendererBackendVulkan::GetSwapchainImageCount() const
@@ -687,6 +733,8 @@ std::pair<vk::Image, vk::DeviceMemory> RendererBackendVulkan::CreateImage(
         debugName);
     BindImageHandle(imageHandle);
     const VulkanImageResource& imageResource = rhiDevice->GetVulkanImageResource(imageHandle);
+    imageDebugNamesByImage[static_cast<VkImage>(imageResource.image)] =
+        debugName;
     return { imageResource.image, imageResource.memory };
 }
 
@@ -698,6 +746,8 @@ std::pair<vk::Image, vk::DeviceMemory> RendererBackendVulkan::CreateImage(
     RHIImageHandle imageHandle = rhiDevice->CreateImage(createInfo, memoryPropertyFlags, debugName);
     BindImageHandle(imageHandle);
     const VulkanImageResource& imageResource = rhiDevice->GetVulkanImageResource(imageHandle);
+    imageDebugNamesByImage[static_cast<VkImage>(imageResource.image)] =
+        debugName;
     return { imageResource.image, imageResource.memory };
 }
 
@@ -721,7 +771,11 @@ vk::ImageView RendererBackendVulkan::Create2DImageView(
     RHIImageViewHandle imageViewHandle =
         rhiDevice->Create2DImageView(RequireImageHandle(image), mipLevels, format, aspectMask, debugName);
     BindImageViewHandle(imageViewHandle);
-    return rhiDevice->GetVulkanImageViewResource(imageViewHandle).imageView;
+    const vk::ImageView imageView =
+        rhiDevice->GetVulkanImageViewResource(imageViewHandle).imageView;
+    imageViewDebugNamesByImageView[static_cast<VkImageView>(imageView)] =
+        debugName;
+    return imageView;
 }
 
 vk::ImageView RendererBackendVulkan::CreateImageView(
@@ -746,7 +800,11 @@ vk::ImageView RendererBackendVulkan::CreateImageView(
         layerCount,
         debugName);
     BindImageViewHandle(imageViewHandle);
-    return rhiDevice->GetVulkanImageViewResource(imageViewHandle).imageView;
+    const vk::ImageView imageView =
+        rhiDevice->GetVulkanImageViewResource(imageViewHandle).imageView;
+    imageViewDebugNamesByImageView[static_cast<VkImageView>(imageView)] =
+        debugName;
+    return imageView;
 }
 
 vk::ImageView RendererBackendVulkan::CreateCubeImageView(
@@ -758,7 +816,11 @@ vk::ImageView RendererBackendVulkan::CreateCubeImageView(
     RHIImageViewHandle imageViewHandle =
         rhiDevice->CreateCubeImageView(RequireImageHandle(image), mipLevels, format, debugName);
     BindImageViewHandle(imageViewHandle);
-    return rhiDevice->GetVulkanImageViewResource(imageViewHandle).imageView;
+    const vk::ImageView imageView =
+        rhiDevice->GetVulkanImageViewResource(imageViewHandle).imageView;
+    imageViewDebugNamesByImageView[static_cast<VkImageView>(imageView)] =
+        debugName;
+    return imageView;
 }
 
 vk::ImageView RendererBackendVulkan::CreateCubeStorageImageView(
@@ -769,7 +831,11 @@ vk::ImageView RendererBackendVulkan::CreateCubeStorageImageView(
     RHIImageViewHandle imageViewHandle =
         rhiDevice->CreateCubeStorageImageView(RequireImageHandle(image), format, debugName);
     BindImageViewHandle(imageViewHandle);
-    return rhiDevice->GetVulkanImageViewResource(imageViewHandle).imageView;
+    const vk::ImageView imageView =
+        rhiDevice->GetVulkanImageViewResource(imageViewHandle).imageView;
+    imageViewDebugNamesByImageView[static_cast<VkImageView>(imageView)] =
+        debugName;
+    return imageView;
 }
 
 void RendererBackendVulkan::DestroyImageView(vk::ImageView& imageView)
@@ -780,6 +846,8 @@ void RendererBackendVulkan::DestroyImageView(vk::ImageView& imageView)
     }
 
     RHIImageViewHandle imageViewHandle = RequireImageViewHandle(imageView);
+    imageViewDebugNamesByImageView.erase(
+        static_cast<VkImageView>(imageView));
     UnbindImageViewHandle(imageViewHandle);
     rhiDevice->DestroyImageView(imageViewHandle);
     imageView = nullptr;
@@ -789,7 +857,11 @@ vk::Sampler RendererBackendVulkan::Create2DSampler(const std::string& debugName)
 {
     RHISamplerHandle samplerHandle = rhiDevice->Create2DSampler(debugName);
     BindSamplerHandle(samplerHandle);
-    return rhiDevice->GetVulkanSamplerResource(samplerHandle).sampler;
+    const vk::Sampler sampler =
+        rhiDevice->GetVulkanSamplerResource(samplerHandle).sampler;
+    samplerDebugNamesBySampler[static_cast<VkSampler>(sampler)] =
+        debugName;
+    return sampler;
 }
 
 vk::Sampler RendererBackendVulkan::Create2DSampler(
@@ -801,7 +873,11 @@ vk::Sampler RendererBackendVulkan::Create2DSampler(
     RHISamplerHandle samplerHandle =
         rhiDevice->Create2DSampler(filter, addressMode, enableMipmaps, debugName);
     BindSamplerHandle(samplerHandle);
-    return rhiDevice->GetVulkanSamplerResource(samplerHandle).sampler;
+    const vk::Sampler sampler =
+        rhiDevice->GetVulkanSamplerResource(samplerHandle).sampler;
+    samplerDebugNamesBySampler[static_cast<VkSampler>(sampler)] =
+        debugName;
+    return sampler;
 }
 
 vk::Sampler RendererBackendVulkan::CreateSampler(
@@ -810,7 +886,11 @@ vk::Sampler RendererBackendVulkan::CreateSampler(
 {
     RHISamplerHandle samplerHandle = rhiDevice->CreateSampler(createInfo, debugName);
     BindSamplerHandle(samplerHandle);
-    return rhiDevice->GetVulkanSamplerResource(samplerHandle).sampler;
+    const vk::Sampler sampler =
+        rhiDevice->GetVulkanSamplerResource(samplerHandle).sampler;
+    samplerDebugNamesBySampler[static_cast<VkSampler>(sampler)] =
+        debugName;
+    return sampler;
 }
 
 vk::Sampler RendererBackendVulkan::CreateCubeSampler(
@@ -819,7 +899,11 @@ vk::Sampler RendererBackendVulkan::CreateCubeSampler(
 {
     RHISamplerHandle samplerHandle = rhiDevice->CreateCubeSampler(maxLod, debugName);
     BindSamplerHandle(samplerHandle);
-    return rhiDevice->GetVulkanSamplerResource(samplerHandle).sampler;
+    const vk::Sampler sampler =
+        rhiDevice->GetVulkanSamplerResource(samplerHandle).sampler;
+    samplerDebugNamesBySampler[static_cast<VkSampler>(sampler)] =
+        debugName;
+    return sampler;
 }
 
 void RendererBackendVulkan::DestroySampler(vk::Sampler& sampler)
@@ -830,6 +914,8 @@ void RendererBackendVulkan::DestroySampler(vk::Sampler& sampler)
     }
 
     RHISamplerHandle samplerHandle = RequireSamplerHandle(sampler);
+    samplerDebugNamesBySampler.erase(
+        static_cast<VkSampler>(sampler));
     UnbindSamplerHandle(samplerHandle);
     rhiDevice->DestroySampler(samplerHandle);
     sampler = nullptr;
@@ -839,14 +925,22 @@ vk::Sampler RendererBackendVulkan::CreateDepthSampler(const std::string& debugNa
 {
     RHISamplerHandle samplerHandle = rhiDevice->CreateDepthSampler(debugName);
     BindSamplerHandle(samplerHandle);
-    return rhiDevice->GetVulkanSamplerResource(samplerHandle).sampler;
+    const vk::Sampler sampler =
+        rhiDevice->GetVulkanSamplerResource(samplerHandle).sampler;
+    samplerDebugNamesBySampler[static_cast<VkSampler>(sampler)] =
+        debugName;
+    return sampler;
 }
 
 vk::Sampler RendererBackendVulkan::CreateDepthCompareSampler(const std::string& debugName)
 {
     RHISamplerHandle samplerHandle = rhiDevice->CreateDepthCompareSampler(debugName);
     BindSamplerHandle(samplerHandle);
-    return rhiDevice->GetVulkanSamplerResource(samplerHandle).sampler;
+    const vk::Sampler sampler =
+        rhiDevice->GetVulkanSamplerResource(samplerHandle).sampler;
+    samplerDebugNamesBySampler[static_cast<VkSampler>(sampler)] =
+        debugName;
+    return sampler;
 }
 
 vk::CommandBuffer RendererBackendVulkan::BeginSingleTimeCommands()
@@ -928,13 +1022,19 @@ void RendererBackendVulkan::DestroyImageResource(
     if (imageView)
     {
         imageViewHandle = RequireImageViewHandle(imageView);
+        imageViewDebugNamesByImageView.erase(
+            static_cast<VkImageView>(imageView));
         UnbindImageViewHandle(imageViewHandle);
     }
     if (sampler)
     {
         samplerHandle = RequireSamplerHandle(sampler);
+        samplerDebugNamesBySampler.erase(
+            static_cast<VkSampler>(sampler));
         UnbindSamplerHandle(samplerHandle);
     }
+    imageDebugNamesByImage.erase(
+        static_cast<VkImage>(image));
     UnbindImageHandle(imageHandle);
     rhiDevice->DestroyImageResource(imageHandle, imageViewHandle, samplerHandle);
     image = nullptr;
@@ -952,12 +1052,22 @@ void RendererBackendVulkan::DestroyImageResource(
     {
         if (imageViewHandle.IsValid())
         {
+            const vk::ImageView imageView =
+                rhiDevice->GetVulkanImageViewResource(
+                    imageViewHandle).imageView;
+            imageViewDebugNamesByImageView.erase(
+                static_cast<VkImageView>(imageView));
             UnbindImageViewHandle(imageViewHandle);
             rhiDevice->DestroyImageView(imageViewHandle);
             imageViewHandle = RHIImageViewHandle();
         }
         if (samplerHandle.IsValid())
         {
+            const vk::Sampler sampler =
+                rhiDevice->GetVulkanSamplerResource(
+                    samplerHandle).sampler;
+            samplerDebugNamesBySampler.erase(
+                static_cast<VkSampler>(sampler));
             UnbindSamplerHandle(samplerHandle);
             rhiDevice->DestroySampler(samplerHandle);
             samplerHandle = RHISamplerHandle();
@@ -967,12 +1077,27 @@ void RendererBackendVulkan::DestroyImageResource(
 
     if (imageViewHandle.IsValid())
     {
+        const vk::ImageView imageView =
+            rhiDevice->GetVulkanImageViewResource(
+                imageViewHandle).imageView;
+        imageViewDebugNamesByImageView.erase(
+            static_cast<VkImageView>(imageView));
         UnbindImageViewHandle(imageViewHandle);
     }
     if (samplerHandle.IsValid())
     {
+        const vk::Sampler sampler =
+            rhiDevice->GetVulkanSamplerResource(
+                samplerHandle).sampler;
+        samplerDebugNamesBySampler.erase(
+            static_cast<VkSampler>(sampler));
         UnbindSamplerHandle(samplerHandle);
     }
+    const vk::Image image =
+        rhiDevice->GetVulkanImageResource(
+            imageHandle).image;
+    imageDebugNamesByImage.erase(
+        static_cast<VkImage>(image));
     UnbindImageHandle(imageHandle);
     rhiDevice->DestroyImageResource(imageHandle, imageViewHandle, samplerHandle);
 

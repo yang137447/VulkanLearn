@@ -2,11 +2,12 @@
 
 #include <algorithm>
 #include <cctype>
-#include <iomanip>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+#include "shader/build/contentHash.h"
 
 enum class RenderMode
 {
@@ -102,10 +103,9 @@ struct ShaderVariantKey
 
     std::string GetVariantHash() const
     {
-        const size_t hashValue = std::hash<std::string>{}(GetNormalizedKey());
-        std::ostringstream oss;
-        oss << std::uppercase << std::hex << std::setw(16) << std::setfill('0') << static_cast<unsigned long long>(hashValue);
-        return oss.str();
+        VL::CanonicalFieldHasher hasher("GraphicsShaderLogicalBuildIdV1");
+        hasher.AddString("normalizedKey", GetNormalizedKey());
+        return hasher.Finalize().ToHex();
     }
 
     std::string GetDisplayName() const

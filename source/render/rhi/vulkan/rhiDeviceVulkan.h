@@ -92,7 +92,6 @@ public:
 
     void WaitIdle();
     void RecreateSwapchain(int width, int height);
-    std::unique_ptr<PipelineFactory> CreatePipelineFactory();
     void WaitForFence(vk::Fence fence);
     void ResetFence(vk::Fence fence);
     void AcquireNextSwapchainImage(

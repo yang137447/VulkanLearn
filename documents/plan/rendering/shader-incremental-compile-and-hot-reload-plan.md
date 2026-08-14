@@ -2,13 +2,20 @@
 
 ## 文档状态
 
-- 类型：当前专项计划
+- 类型：已完成专项计划历史
 - 日期：2026-08-11
-- 状态：规划，尚未实现
+- 状态：已实现（P1-P4）；2026-08-13 R1-R4 完成审核已关闭；稳定合同已迁入 `documents/rendering/shader-build-cache.md` 与 `documents/rendering/shader-hot-reload.md`
 - 范围：GLSL 源码、生成材质 include、shaderc 编译、SPIR-V 缓存、反射、Graphics/Compute Pipeline 更新与安全退休
 - 第一目标：启动阶段只编译缺失或过期的 Shader 产物
 - 第二目标：运行时支持不改变 Shader ABI 的 Graphics Shader 安全热重载
-- 非当前契约：本文描述的缓存 manifest、运行时命令和热重载接口在实现完成前不能被资产或其他模块依赖
+- 已完成迁移：本文描述的缓存 manifest、运行时命令和热重载接口现为当前契约，资产与其他模块依赖以 `documents/rendering/` 正式文档为准
+
+> 完成审核说明（2026-08-13）：后续审核发现并关闭了异步 source staleness、
+> pending source 丢失、M_ live 状态迁移、World/RenderGraph 半提交、publication
+> preflight 和 shutdown-in-flight 缺口。审核过程与证据保留在
+> `shader-incremental-compile-and-hot-reload-completion-fix-plan.md`；当前行为只以
+> `documents/rendering/shader-build-cache.md`、`documents/rendering/shader-hot-reload.md`
+> 和架构文档为准。下文保留为原始实施背景，不应覆盖这些稳定合同。
 
 本文档是 VulkanLearn 的项目专项实施计划，不替代以下当前合同：
 
@@ -167,26 +174,38 @@ Pipeline build request。
 第一阶段不改变运行时资源所有权，只优化启动和首次 variant 准备。热重载在缓存正确性
 稳定后单独接入。
 
-### 2. 使用 MD5 作为内容变更判定
+### 2. 使用 BLAKE3-256 作为稳定内容哈希
 
-V1 使用 MD5 计算 Shader 编译输入的稳定内容摘要。
+V1 使用 BLAKE3 默认的 256-bit 输出计算 Shader 编译输入摘要。内存中使用固定 32 字节
+digest，manifest、日志和产物路径使用 64 字符小写十六进制文本。
 
 理由：
 
-- Shader 和 JSON/include 文件规模小，MD5 性能不是瓶颈。
-- 128 位摘要足够处理本地非对抗性构建缓存。
-- 结果稳定，适合写入磁盘 manifest 和诊断日志。
+- 结果跨启动、编译器和标准库稳定，适合持久化 manifest 和产物身份。
+- 256-bit 摘要为本地缓存、未来共享缓存和远程编译保留统一的可靠性边界。
+- BLAKE3 支持增量输入，适合直接输入带类型和长度的规范化编译字段。
+- 性能足以覆盖大量 Shader、include 和产物摘要计算，不需要为远期规模再次迁移算法。
 - 相比时间戳，不受 Git checkout、文件复制、时间戳精度和编辑器保存策略影响。
-- MD5 的密码学碰撞弱点不影响本地 Shader cache invalidation 场景。
 
 V1 规则：
 
-- 对文件原始字节计算 MD5，不做换行符或 BOM 归一化。
+- 对文件原始字节计算 BLAKE3-256，不做换行符或 BOM 归一化。
 - 换行符变化会触发一次保守重编译。
 - 不使用 `std::hash` 生成持久化 ID。
-- 不使用 SDL test 模块中的 MD5 作为引擎正式依赖。
-- 增加独立、可测试的内容哈希工具。
-- 时间戳和文件大小未来可以作为性能快速路径，但不能替代最终 MD5 判断。
+- 不截断 digest 作为正式 LogicalBuildId、SourceFingerprint、ABI fingerprint 或输出摘要。
+- 增加独立、可测试的 BLAKE3-256 内容哈希封装，业务层不直接依赖第三方 C API。
+- 时间戳和文件大小未来可以作为性能快速路径，但不能替代最终 BLAKE3-256 判断。
+
+第三方接入规则：
+
+- 使用 BLAKE3 官方 C 实现，固定明确的 upstream release/tag 或 commit。
+- 依赖放在 `extern/BLAKE3/` 并保留对应 license，不从浮动 `master` 构建。
+- 增加 `BLAKE3::blake3` CMake target，业务代码只链接该 target。
+- 根工程开启 `C` 与 `CXX` 语言，不把官方 `.c` 文件强制按 C++ 编译。
+- MinGW V1 先使用 `blake3.c`、`blake3_dispatch.c` 和 `blake3_portable.c`，并定义
+  `BLAKE3_NO_SSE2`、`BLAKE3_NO_SSE41`、`BLAKE3_NO_AVX2`、`BLAKE3_NO_AVX512`，
+  优先保证构建可移植性；Shader 文件规模下不引入汇编优化复杂度。
+- 后续只有 profiling 证明哈希成为瓶颈时，才单独启用官方 Windows GNU SIMD 实现。
 
 ### 3. 区分逻辑身份与源码代际
 
@@ -220,7 +239,7 @@ shader/spv/shader-build-cache.json
 - cache schema 和 compile policy 版本
 - LogicalBuildKey 的稳定 ID
 - SourceFingerprint
-- 已记录依赖及其 MD5
+- 已记录依赖及其 BLAKE3-256 digest
 - runtime/debug SPIR-V 输出路径和输出摘要
 - 最近一次成功反射得到的 ABI 摘要
 
@@ -332,7 +351,7 @@ Material Include Generation
 Shader Build Request
     -> LogicalBuildKey
     -> Previous Dependency Snapshot
-    -> MD5 Validation
+    -> BLAKE3-256 Validation
           |
           +-- cache hit --> load artifact metadata
           |
@@ -387,10 +406,10 @@ policy=ShaderCompilePolicyV1
 ### Material Composer Variant
 
 LogicalBuildKey 使用现有 `MaterialShaderCompileRequest::GetNormalizedKey()` 的语义输入，
-但持久化 ID 改为稳定 MD5：
+但持久化 ID 改为稳定 BLAKE3-256：
 
 ```text
-logicalId = MD5(normalizedLogicalKey)
+logicalId = BLAKE3_256(normalizedLogicalKey)
 ```
 
 源码内容不进入 logical ID，而进入 SourceFingerprint。这样源码变化后仍能识别为同一个
@@ -398,10 +417,10 @@ logicalId = MD5(normalizedLogicalKey)
 
 ## SourceFingerprint 设计
 
-SourceFingerprint 对一份规范化输入流计算 MD5：
+SourceFingerprint 对一份规范化二进制字段流计算 BLAKE3-256：
 
 ```text
-MD5(
+BLAKE3_256(
     cacheSchemaVersion
     + compilePolicyVersion
     + targetEnvironment
@@ -410,26 +429,27 @@ MD5(
     + shaderStage
     + normalizedMacros
     + primarySourceIdentity
-    + primarySourceMD5
-    + sortedDependencyPathAndMD5
+    + primarySourceDigest
+    + sortedDependencyPathAndDigest
 )
 ```
 
 依赖条目格式：
 
 ```text
-normalized/path/to/include.glsl:<md5>
+normalized/path/to/include.glsl:<blake3-256>
 ```
 
 规则：
 
+- 每个字段写入明确的 type tag、固定宽度长度和原始字节，不直接拼接无边界字符串。
 - 路径相对 `shader/glsl/` 保存。
 - 路径使用 `/` 分隔符。
 - 依赖按规范化路径排序后进入 fingerprint。
 - 同一路径只记录一次。
 - 主源码单独记录，同时也允许出现在统一依赖集合中。
 - 宏先按当前项目规则规范化，再参与 fingerprint。
-- Material Composer 生成的完整 vertex/fragment 字符串直接计算 MD5。
+- Material Composer 生成的完整 vertex/fragment 字符串直接计算 BLAKE3-256。
 - Composer 源码中的递归 include 继续由 Includer 收集。
 
 ## 依赖收集与失效
@@ -439,7 +459,7 @@ normalized/path/to/include.glsl:<md5>
 扩展现有 shaderc Includer，使每次 include 成功读取后记录：
 
 - 规范化源路径
-- 文件原始内容 MD5
+- 文件原始内容 BLAKE3-256 digest
 - requesting source
 - include depth
 
@@ -449,8 +469,8 @@ ShaderCompiler 完成后返回 Dependency Snapshot，不让 Includer 直接写�
 
 已有成功 manifest 时：
 
-1. 重新计算主源码 MD5。
-2. 按 manifest 中记录的依赖路径重新计算每个依赖 MD5。
+1. 重新计算主源码 BLAKE3-256 digest。
+2. 按 manifest 中记录的依赖路径重新计算每个依赖 BLAKE3-256 digest。
 3. 比较 compile policy 和 LogicalBuildKey。
 4. 检查全部 runtime/debug 输出存在。
 5. 检查输出摘要与 manifest 一致。
@@ -477,37 +497,38 @@ source path -> logical build IDs
 ```json
 {
   "schemaVersion": 1,
+  "hashAlgorithm": "BLAKE3-256",
   "compilePolicy": "ShaderCompilePolicyV1",
   "targetEnvironment": "Vulkan1.4",
   "artifacts": {
     "<logicalBuildId>": {
       "normalizedKey": "...",
-      "sourceFingerprint": "<md5>",
+      "sourceFingerprint": "<blake3-256>",
       "dependencies": [
         {
           "path": "common/lighting.glsl",
-          "md5": "<md5>"
+          "digest": "<blake3-256>"
         }
       ],
       "outputs": {
         "runtimeVertex": {
           "path": "...",
-          "md5": "<md5>"
+          "digest": "<blake3-256>"
         },
         "runtimeFragment": {
           "path": "...",
-          "md5": "<md5>"
+          "digest": "<blake3-256>"
         },
         "debugVertex": {
           "path": "...",
-          "md5": "<md5>"
+          "digest": "<blake3-256>"
         },
         "debugFragment": {
           "path": "...",
-          "md5": "<md5>"
+          "digest": "<blake3-256>"
         }
       },
-      "abiFingerprint": "<stable-md5>"
+      "abiFingerprint": "<blake3-256>"
     }
   }
 }
@@ -537,7 +558,7 @@ Stage Entry 和 Compute artifact 只记录自身实际存在的输出字段。
 6. 最后更新 manifest。
 
 manifest 是缓存有效性的最终提交标记。进程异常导致输出和 manifest 不一致时，下次启动通过
-输出 MD5 不一致发现问题并重新编译。
+输出 BLAKE3-256 digest 不一致发现问题并重新编译。
 
 启动编译可以在严格失败语义下完成临时文件替换并最后提交 manifest。热重载候选则必须继续
 保存在内存或候选临时文件中；在 Pipeline 创建和批次提交成功前，不能覆盖当前正式输出，
@@ -577,7 +598,7 @@ GenerateAllIncludes(write-if-changed)
     -> Load shader-build-cache.json
     -> Scan shader/glsl entry files
     -> Build LogicalBuildKey
-    -> Validate source/dependency MD5
+    -> Validate source/dependency BLAKE3-256
        -> hit: skip shaderc
        -> miss: compile and commit
     -> continue renderer initialization
@@ -654,7 +675,7 @@ shadercache stats
 ### 一次 Reload Batch
 
 ```text
-1. 扫描当前内容 MD5，得到 changed source paths
+1. 扫描当前内容 BLAKE3-256，得到 changed source paths
 2. 通过反向依赖索引找出 affected logical variants
 3. 过滤当前 live variants
 4. 为全部 live variants 生成候选源码和编译请求
@@ -785,12 +806,12 @@ P3 增加自动监听。Windows-first V1 优先采用简单、可调试的轮询
 ```text
 每 200~500ms 扫描 source-of-truth 文件
     -> 比较缓存的 size/mtime 快速候选
-    -> 对候选计算 MD5
+    -> 对候选计算 BLAKE3-256
     -> debounce
     -> 提交稳定 changed path 集合
 ```
 
-MD5 仍是最终变更判定。mtime/size 只减少不必要的文件读取。
+BLAKE3-256 仍是最终变更判定。mtime/size 只减少不必要的文件读取。
 
 监听规则：
 
@@ -869,18 +890,19 @@ Current pipeline remains active.
 
 目标：不改变运行时资源行为，连续启动跳过未修改 Shader。
 
-- [ ] 增加独立 MD5 内容哈希工具和测试。
-- [ ] 用稳定 MD5 替换持久化 variant/request 文件名中的 `std::hash`。
-- [ ] 为旧 `std::hash` 产物提供一次自然重建，不做长期双格式兼容。
-- [ ] 扩展 shaderc Includer，返回 Dependency Snapshot。
-- [ ] 增加 `shader-build-cache.json` 读写和 schema version。
-- [ ] 实现 Stage Entry、普通 Graphics Variant、Composer Variant 的统一 cache lookup。
-- [ ] 把 runtime/debug Graphics Pair 作为一个提交单元。
-- [ ] 保存并验证输出文件 MD5。
-- [ ] Material include 生成改为 write-if-changed。
-- [ ] 保持启动 dirty compile 失败即失败。
-- [ ] 输出 cache hit/miss 和耗时摘要。
-- [ ] 保留显式 force rebuild 入口，用于验证全部 Shader。
+- [x] 接入锁定版本的官方 BLAKE3 C 实现，并完成 MinGW portable 构建。
+- [x] 增加独立 BLAKE3-256 内容哈希封装和测试。
+- [x] 用稳定 BLAKE3-256 替换持久化 variant/request 文件名中的 `std::hash`。
+- [x] 为旧 `std::hash` 产物提供一次自然重建，不做长期双格式兼容。
+- [x] 扩展 shaderc Includer，返回 Dependency Snapshot。
+- [x] 增加 `shader-build-cache.json` 读写和 schema version。
+- [x] 实现 Stage Entry、普通 Graphics Variant、Composer Variant 的统一 cache lookup。
+- [x] 把 runtime/debug Graphics Pair 作为一个提交单元。
+- [x] 保存并验证输出文件 BLAKE3-256 digest。
+- [x] Material include 生成改为 write-if-changed。
+- [x] 保持启动 dirty compile 失败即失败。
+- [x] 输出 cache hit/miss 和耗时摘要。
+- [x] 保留显式 force rebuild 入口，用于验证全部 Shader。
 
 验收：
 
@@ -894,20 +916,20 @@ Current pipeline remains active.
 
 目标：通过控制台命令安全更新 PipelineFactory 管理的 Material Graphics Pipeline。
 
-- [ ] 扩展 reflection，生成完整 Shader ABI Signature。
-- [ ] 给 Graphics artifact 增加 source generation。
-- [ ] Pipeline key 纳入 artifact generation。
-- [ ] 定义不可变 Graphics Pipeline rebuild recipe。
-- [ ] Material 保存 Surface/Shadow reload 所需配方。
-- [ ] 增加 live variant/reload participant 注册。
-- [ ] 增加 source path 反向依赖索引。
-- [ ] 增加 `shaderreload changed/all` RuntimeCommand。
-- [ ] 编译、反射、ABI 检查全部候选。
-- [ ] 在 Render Thread idle 后创建全部候选 Pipeline。
-- [ ] 批次 all-or-nothing 替换 Surface/Shadow Pipeline。
-- [ ] 失效或重新发布 resolved draw references。
-- [ ] 旧 Pipeline 进入 ResourceRetireQueue。
-- [ ] 失败时保留旧 Pipeline 和旧 manifest generation。
+- [x] 扩展 reflection，生成完整 Shader ABI Signature。
+- [x] 给 Graphics artifact 增加 source generation。
+- [x] Pipeline key 纳入 artifact generation。
+- [x] 定义不可变 Graphics Pipeline rebuild recipe。
+- [x] Material 保存 Surface/Shadow reload 所需配方。
+- [x] 增加 live variant/reload participant 注册。
+- [x] 增加 source path 反向依赖索引。
+- [x] 增加 `shaderreload changed/all` RuntimeCommand。
+- [x] 编译、反射、ABI 检查全部候选。
+- [x] 在 Render Thread idle 后创建全部候选 Pipeline。
+- [x] 批次 all-or-nothing 替换 Surface/Shadow Pipeline。
+- [x] 失效或重新发布 resolved draw references。
+- [x] 旧 Pipeline 进入 ResourceRetireQueue。
+- [x] 失败时保留旧 Pipeline 和旧 manifest generation。
 
 验收：
 
@@ -922,15 +944,15 @@ Current pipeline remains active.
 
 目标：自动发现变化，避免 shaderc 阻塞正常帧循环。
 
-- [ ] 增加轮询 FileMonitor。
-- [ ] 增加 debounce 和文件稳定性判断。
-- [ ] 忽略生成目录、SPIR-V 目录和临时文件。
-- [ ] 增加独立 Shader Compile Worker。
-- [ ] worker 输出不可变 candidate batch。
-- [ ] EngineLoop 在更新边界消费完成 batch。
-- [ ] 增加 reload 请求合并和过时代际丢弃。
-- [ ] 同一 Shader 新修改到达时，不提交较旧的异步编译结果。
-- [ ] 增加编译中、成功、失败状态到开发 UI/诊断系统。
+- [x] 增加轮询 FileMonitor。
+- [x] 增加 debounce 和文件稳定性判断。
+- [x] 忽略生成目录、SPIR-V 目录和临时文件。
+- [x] 增加独立 Shader Compile Worker。
+- [x] worker 输出不可变 candidate batch。
+- [x] EngineLoop 在更新边界消费完成 batch。
+- [x] 增加 reload 请求合并和过时代际丢弃。
+- [x] 同一 Shader 新修改到达时，不提交较旧的异步编译结果。
+- [x] 增加编译中、成功、失败状态到诊断系统。
 
 验收：
 
@@ -943,14 +965,14 @@ Current pipeline remains active.
 
 目标：扩展覆盖面，并支持需要重建绑定资源的高级更新。
 
-- [ ] 为 Compute owner 定义 reload participant 和 descriptor rebuild recipe。
-- [ ] 接入环境生成器、IBL baker 等 Compute Pipeline。
-- [ ] UI Overlay 接入统一 artifact/reload 管理。
-- [ ] `M_*.json` 变化触发单材质 include/schema rebuild。
-- [ ] descriptor layout 变化时创建新的 descriptor package。
-- [ ] MaterialInstance 参数/贴图按新 schema 迁移和校验。
-- [ ] RenderGraph Pass Material 输入变化时重新校验 pass contract。
-- [ ] 以新旧资源包事务切换，旧包进入 ResourceRetireQueue。
+- [x] 为 Compute owner 定义 reload participant 和 descriptor rebuild recipe。
+- [x] 接入环境生成器、IBL baker 等 Compute Pipeline。
+- [x] UI Overlay 接入统一 artifact/reload 管理。
+- [x] `M_*.json` 变化触发单材质 include/schema rebuild。
+- [x] descriptor layout 变化时创建新的 descriptor package。
+- [x] MaterialInstance 参数/贴图按新 schema 迁移和校验。
+- [x] RenderGraph Pass Material 输入变化时重新校验 pass contract。
+- [x] 以新旧资源包事务切换，旧包进入 ResourceRetireQueue。
 
 这一阶段必须单独设计，不在 P2 中通过临时判断逐步放宽 ABI 限制。
 
@@ -958,6 +980,9 @@ Current pipeline remains active.
 
 P1 主要涉及：
 
+- `CMakeLists.txt`
+- `extern/CMakeLists.txt`
+- `source/CMakeLists.txt`
 - `source/shaderCompiler.h`
 - `source/shaderCompiler.cpp`
 - `source/shaderVariant.h`
@@ -1026,7 +1051,7 @@ P3 通过异步 CPU 编译降低帧阻塞，不能通过漏编译换性能。
 ### 3. Debug reflection 与 runtime SPIR-V 宏不同
 
 Release 当前会为 reflection 额外启用 `ENABLE_DEBUG_VIEW`。缓存 key 和 compile policy 必须明确
-记录该规则，不能只按主源码 MD5 判断两个输出都有效。
+记录该规则，不能只按主源码 BLAKE3-256 判断两个输出都有效。
 
 ### 4. PipelineFactory 弱缓存和 Material 强所有权
 
@@ -1066,7 +1091,7 @@ P2/P3 实现完成后：
 
 ```text
 稳定逻辑身份
-    + MD5 内容与传递依赖
+    + BLAKE3-256 内容与传递依赖
     + 原子 artifact cache
     + 完整 Shader ABI 比较
     + Pipeline 候选提交
@@ -1076,3 +1101,26 @@ P2/P3 实现完成后：
 
 实施顺序固定为：先保证启动增量编译正确，再支持手动兼容热重载，最后增加自动监听、异步
 编译和 layout-changing 资源重建。
+
+## 实施完成记录（2026-08-13）
+
+P1-P4 已全部落地并通过 Debug/Release、单线程/`workerThreadCount=2` 验证矩阵。
+本文保留阶段边界、核心决策与历史取舍；当前实现合同已迁入：
+
+- `documents/rendering/shader-build-cache.md`
+- `documents/rendering/shader-hot-reload.md`
+
+相对本文原 P4 非目标范围的扩展：按最终需求，P4 额外纳入了 Compute owner、
+UI Overlay 与 `M_*.json` schema 重建热更新。实现取舍如下，供后续演进参考：
+
+- Compute/UI 原地替换仍遵守 ABI 完全兼容，但每次提交都会把 descriptor
+  pool/set 重建到新 pipeline layout 对象，旧 layout 随旧管线退休。
+- `M_*.json` 的 schema 变化通过 candidate include overlay、独立 World-local
+  resource package 和 `PreparedRenderGraphState` 实现；兼容 live MI 参数/贴图会迁移，
+  未受影响 shader 走缓存命中。prepare 失败时 active owner 不变，成功时通过 no-throw
+  ownership swap 整包提交。
+- FileMonitor 以 mtime/size 为快速候选，BLAKE3-256 为最终判定，并每 4 次扫描
+  强制全量重哈希，兜底时间戳粒度与时间戳被还原的编辑。
+- 异步编译 worker 只执行纯 CPU 阶段；candidate 捕获时冻结全部源码快照，防止
+  编译中途读到更新的磁盘内容。`latestObservedSourceEpoch` 负责快速拒绝，stable
+  source identities 在 pending 集合中求并集，最终提交仍复核 primary/dependency digest。

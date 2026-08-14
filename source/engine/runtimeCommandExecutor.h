@@ -24,6 +24,7 @@ struct RuntimeCommandExecutionResult
     bool worldRuntimeBindingAttempted = false;
     bool worldRuntimeBindingSucceeded = false;
     bool loadWorldAttempted = false;
+    bool worldLoadRequested = false;
     bool loadWorldSucceeded = false;
     std::string loadWorldCommandPath;
     std::string loadWorldResolvedPath;
@@ -33,7 +34,14 @@ struct RuntimeCommandExecutionResult
     WorldHandle activeWorldAfterCommand;
     RuntimeRendererResourceFingerprint rendererResourcesBeforeLoad;
     RuntimeRendererResourceFingerprint rendererResourcesAfterLoad;
+    bool shaderReloadRequested = false;
+    RuntimeShaderReloadScope shaderReloadScope =
+        RuntimeShaderReloadScope::Changed;
+    bool shaderCacheStatisticsRequested = false;
 };
+
+RuntimeRendererResourceFingerprint
+CaptureRuntimeRendererResourceFingerprint();
 
 // Applies queued runtime commands at the owner side of the target systems. This
 // keeps DebugConsole and the command layer from directly editing RenderGraph or
@@ -99,6 +107,33 @@ private:
         const DiagnosticsSubsystem& diagnostics) const;
     void ApplyEnvironmentUpdateStress(
         const RuntimeCommand& command,
+        RuntimeTestHooks& runtimeTestHooks,
+        const DiagnosticsSubsystem& diagnostics) const;
+    void ApplyShaderReloadTest(
+        const RuntimeConfig& runtimeConfig,
+        RuntimeTestHooks& runtimeTestHooks,
+        const DiagnosticsSubsystem& diagnostics) const;
+    void ApplyShaderAutoReloadTest(
+        const RuntimeConfig& runtimeConfig,
+        RuntimeTestHooks& runtimeTestHooks,
+        const DiagnosticsSubsystem& diagnostics) const;
+    void ApplyShaderComputeReloadTest(
+        const RuntimeConfig& runtimeConfig,
+        RuntimeTestHooks& runtimeTestHooks,
+        const DiagnosticsSubsystem& diagnostics) const;
+    void ApplyShaderDefinitionReloadTest(
+        const RuntimeConfig& runtimeConfig,
+        RuntimeTestHooks& runtimeTestHooks,
+        const DiagnosticsSubsystem& diagnostics) const;
+    void ApplyWorldGraphTransactionTest(
+        const RuntimeConfig& runtimeConfig,
+        RuntimeTestHooks& runtimeTestHooks,
+        const DiagnosticsSubsystem& diagnostics) const;
+    void ApplyShaderUiReloadTest(
+        const RuntimeConfig& runtimeConfig,
+        RuntimeTestHooks& runtimeTestHooks,
+        const DiagnosticsSubsystem& diagnostics) const;
+    void ApplyShaderShutdownInflightTest(
         RuntimeTestHooks& runtimeTestHooks,
         const DiagnosticsSubsystem& diagnostics) const;
     void ApplyProceduralSkyParameters(

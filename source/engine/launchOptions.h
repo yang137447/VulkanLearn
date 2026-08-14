@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <string>
 
 namespace VL
@@ -29,8 +30,17 @@ struct LaunchOptions
     bool runRenderGraphReloadStress = false;
     bool runFrameSmokeTest = false;
     bool runEnvironmentUpdateStress = false;
+    bool runShaderReloadTest = false;
+    bool runShaderAutoReloadTest = false;
+    bool runShaderComputeReloadTest = false;
+    bool runShaderDefinitionReloadTest = false;
+    bool runWorldGraphTransactionTest = false;
+    bool runShaderUiReloadTest = false;
+    bool runShaderShutdownInflightTest = false;
+    bool forceShaderRebuild = false;
     bool exitAfterTests = false;
     DeveloperUiLaunchMode developerUiMode = DeveloperUiLaunchMode::UseConfig;
+    std::optional<int> workerThreadCountOverride;
     std::string reloadStressScenePath;
     std::string reloadFailureScenePath;
     int reloadStressCount = 20;

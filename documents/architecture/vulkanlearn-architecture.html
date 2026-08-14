@@ -2683,6 +2683,23 @@ build\bin\main.exe --lightstress 3 --exit-after-tests
 build\bin\main.exe --resizestress 6 --exit-after-tests
 build\bin\main.exe --graphreloadstress 6 --exit-after-tests</code></pre>
 
+            <h3>Shader 增量构建与热重载线程/数据流</h3>
+            <p class="rule">正式合同见 <code>documents/rendering/shader-build-cache.md</code> 与 <code>documents/rendering/shader-hot-reload.md</code>；本节只记录与本架构文档相关的线程归属与资源生命周期。</p>
+            <pre><code>GT (EngineLoop)
+  -> ShaderFileMonitor::Poll（observed source epoch + debounce stable event）
+  -> stable source identity 合并进 pending union
+  -> worker idle 时捕获 live recipe 与 frozen primary/include snapshot
+  -> ShaderCompileWorker（纯 CPU：shaderc + 反射 + ABI 校验，不触 Vulkan / live cache / manifest）
+GT 更新边界
+  -> source epoch 快速拒绝过时 candidate
+  -> 提交前复核全部 primary/dependency digest
+  -> WaitForRenderThreadIdle 安全点创建 Vulkan Pipeline / descriptor package
+  -> 事务提交 Material Surface/Shadow、Compute、UI 引用
+  -> 旧 Pipeline/descriptor/UI 资源进 ResourceRetireQueue
+  -> 等待 GPU frame epoch 完成后析构</code></pre>
+            <p class="rule">World reload 与 M_*.json 定义变化共用候选事务：解析、候选 generated include、World-local resource package、<code>PreparedRenderGraphState</code>、Material/MI descriptor package、resolved scene 与 view target 都在 staging owner 中完成。prepare 不修改 active owner；全部可失败工作结束后，正式 artifact/include 发布和 World/resource/graph/RenderSystem/Controller 的 ownership move/swap 进入 no-throw commit。任一 prepare 失败时旧 World、graph、runtime binding 与正式文件保持，成功 swap 后才激活 <code>PreparedResourceRetirements</code> 或 <code>PreparedRetiredResourcePackage::Activate()</code>。</p>
+            <p class="rule">worker 在 Vulkan teardown 前 stop + join，完成但尚未提交的 candidate 会被丢弃，不得在 teardown 后回调。验证入口：<code>--shader-reload-test</code>、<code>--shader-auto-reload-test</code>、<code>--shader-compute-reload-test</code>、<code>--shader-definition-reload-test</code>、<code>--shader-ui-reload-test</code>、<code>--shader-shutdown-inflight-test</code>、<code>--world-graph-transaction-test</code>；运行时验证共享 <code>shader/spv/</code>，必须串行执行。</p>
+
             <h3>禁止项</h3>
             <ul class="dense-list">
                 <li>恢复 <code>SceneLoader</code> / <code>LightManager</code> 旧文件或旧 include。</li>
@@ -2694,6 +2711,8 @@ build\bin\main.exe --graphreloadstress 6 --exit-after-tests</code></pre>
                 <li>恢复旧 <code>RHIDevice</code> 虚接口，或让 backend facade 重新开放 raw device/queue/swapchain/fence getter。</li>
                 <li>把 Vulkan enum、createInfo、descriptor info 包装成 <code>RHIImageLayout</code>、<code>RHIDescriptorType</code> 等 API-neutral 类型，重新走向半成品多后端抽象。</li>
                 <li>在 shader runtime 热路径补与 JSON/source data correctness 重复的 defensive clamp。</li>
+                <li>用全局 <code>device.waitIdle()</code>、删除 <code>shader/spv/</code>、忽略 include 依赖或静默回退旧产物来绕过 shader build-cache 或热重载事务。</li>
+                <li>让 shader 编译 worker 访问 Vulkan device、live Material/PipelineFactory cache，或只凭 generation 接受 candidate、跳过提交时 primary/dependency digest 复核。</li>
                 <li>以“去冗余”为名删除学习型注释、必要错误上下文、debug/profiling/test 入口，或删除仍属于架构合同/明确扩展点的方法。</li>
             </ul>
 

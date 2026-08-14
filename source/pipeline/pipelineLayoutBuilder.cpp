@@ -1,45 +1,55 @@
 #include "pipelineLayoutBuilder.h"
+#include "render/backend/rendererBackendVulkan.h"
 #include "../vulkanDebug.h"
 #include "vulkanPipelineDiagnostics.h"
 
 std::vector<vk::DescriptorSetLayout> PipelineLayoutBuilder::CreateDescriptorSetLayouts(
-    vk::Device& device,
+    VL::RendererBackendVulkan& rendererBackend,
     const std::vector<ShaderBinding>& shaderBindings,
     const std::string& pipelineName,
     uint32_t setCount)
 {
+    vk::Device& device = rendererBackend.GetDevice();
     std::vector<vk::DescriptorSetLayout> descriptorSetLayouts;
     descriptorSetLayouts.resize(setCount);
-    for (uint32_t i = 0; i < setCount; i++)
+    try
     {
-        std::vector<vk::DescriptorSetLayoutBinding> descriptorSetLayoutBindings;
-        for (const auto& binding : shaderBindings)
+        for (uint32_t i = 0; i < setCount; i++)
         {
-            if (binding.set != i)
+            std::vector<vk::DescriptorSetLayoutBinding> descriptorSetLayoutBindings;
+            for (const auto& binding : shaderBindings)
             {
-                continue;
+                if (binding.set != i)
+                {
+                    continue;
+                }
+                vk::DescriptorSetLayoutBinding layoutBinding;
+                layoutBinding
+                    .setBinding(binding.binding)
+                    .setDescriptorType(binding.type)
+                    .setDescriptorCount(binding.descriptorCount)
+                    .setStageFlags(binding.stageFlags)
+                    .setPImmutableSamplers(nullptr);
+                descriptorSetLayoutBindings.push_back(layoutBinding);
             }
-            vk::DescriptorSetLayoutBinding layoutBinding;
-            layoutBinding
-                .setBinding(binding.binding)
-                .setDescriptorType(binding.type)
-                .setDescriptorCount(1)
-                .setStageFlags(binding.stageFlags)
-                .setPImmutableSamplers(nullptr);
-            descriptorSetLayoutBindings.push_back(layoutBinding);
+
+            vk::DescriptorSetLayoutCreateInfo descriptorSetLayoutCreateInfo;
+            descriptorSetLayoutCreateInfo
+                .setBindings(descriptorSetLayoutBindings);
+
+            descriptorSetLayouts[i] =
+                rendererBackend.CreateDescriptorSetLayout(
+                    descriptorSetLayoutCreateInfo,
+                    "SetLayout_" + std::to_string(i) +
+                        ": " + pipelineName);
         }
-
-        vk::DescriptorSetLayoutCreateInfo descriptorSetLayoutCreateInfo;
-        descriptorSetLayoutCreateInfo
-            .setBindings(descriptorSetLayoutBindings);
-
-        vk::Result result = device.createDescriptorSetLayout(&descriptorSetLayoutCreateInfo, nullptr, &descriptorSetLayouts[i]);
-        VL::RequireVulkanPipelineSuccess(
-            result,
-            "Create descriptor set layout " + std::to_string(i),
-            pipelineName,
-            "pipeline layout");
-        VulkanDebug::SetObjectName(device, descriptorSetLayouts[i], vk::ObjectType::eDescriptorSetLayout, "SetLayout_" + std::to_string(i) + ": " + pipelineName);
+    }
+    catch (...)
+    {
+        DestroyDescriptorSetLayouts(
+            rendererBackend,
+            descriptorSetLayouts);
+        throw;
     }
     return descriptorSetLayouts;
 }
@@ -61,18 +71,27 @@ vk::PipelineLayout PipelineLayoutBuilder::CreatePipelineLayout(
 }
 
 void PipelineLayoutBuilder::DestroyDescriptorSetLayouts(
-    vk::Device& device,
+    VL::RendererBackendVulkan& rendererBackend,
     std::vector<vk::DescriptorSetLayout>& descriptorSetLayouts)
 {
     for (auto& layout : descriptorSetLayouts)
     {
-        device.destroyDescriptorSetLayout(layout, nullptr);
+        if (layout)
+        {
+            rendererBackend.DestroyDescriptorSetLayout(
+                layout);
+        }
     }
+    descriptorSetLayouts.clear();
 }
 
 void PipelineLayoutBuilder::DestroyPipelineLayout(
     vk::Device& device,
     vk::PipelineLayout& pipelineLayout)
 {
-    device.destroyPipelineLayout(pipelineLayout, nullptr);
+    if (pipelineLayout)
+    {
+        device.destroyPipelineLayout(pipelineLayout, nullptr);
+        pipelineLayout = nullptr;
+    }
 }

@@ -23,6 +23,7 @@ PRIVATE
     Json
     MikkTSpace
     Spirv_Reflect
+    BLAKE3::blake3
     OpenEXR::OpenEXR
     RmlUi::Core
     Threads::Threads

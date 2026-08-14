@@ -45,7 +45,7 @@ std::optional<WorldSnapshotPtr> WorldSnapshotQueue::PeekLatest() const
     return latestSnapshot;
 }
 
-void WorldSnapshotQueue::Clear()
+void WorldSnapshotQueue::Clear() noexcept
 {
     std::lock_guard<std::mutex> lock(mutex);
     latestSnapshot.reset();

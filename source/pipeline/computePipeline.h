@@ -4,13 +4,23 @@
 #include <vector>
 #include "vulkan/vulkan.hpp"
 #include "pipelineBase.h"
+#include "shader/reload/computeShaderArtifact.h"
 
 struct ShaderBinding;
+namespace VL
+{
+class RendererBackendVulkan;
+}
 
 class ComputePipeline : public PipelineBase
 {
 public:
-    ComputePipeline(vk::Device* device, const std::string& shaderName);
+    ComputePipeline(
+        VL::RendererBackendVulkan* rendererBackend,
+        const std::string& shaderName);
+    ComputePipeline(
+        VL::RendererBackendVulkan* rendererBackend,
+        const ComputeShaderArtifact& artifact);
     ~ComputePipeline();
 
     inline vk::PipelineBindPoint GetBindPoint() const override { return vk::PipelineBindPoint::eCompute; }
@@ -23,7 +33,7 @@ public:
     void Bind(vk::CommandBuffer commandBuffer) const;
     void Dispatch(vk::CommandBuffer commandBuffer, uint32_t groupX, uint32_t groupY, uint32_t groupZ) const;
 private:
-    void CreateShader();
+    void CreateShader(const std::vector<uint32_t>& spirv);
     void DestroyShader();
     void CreateDescriptorSetLayouts();
     void DestroyDescriptorSetLayouts();
@@ -32,7 +42,8 @@ private:
     void CreateComputePipeline();
     void DestroyComputePipeline();
 
-    vk::Device* device;
+    VL::RendererBackendVulkan* rendererBackend = nullptr;
+    vk::Device* device = nullptr;
     std::string shaderName;
 
     vk::ShaderModule shaderModule;

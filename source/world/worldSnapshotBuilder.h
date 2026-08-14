@@ -29,6 +29,7 @@ public:
         const World& world,
         const WorldSnapshotBuildDesc& desc);
     void Reset();
+    void Swap(WorldSnapshotBuilder& other) noexcept;
 
 private:
     std::optional<uint64_t> previousWorldGeneration;

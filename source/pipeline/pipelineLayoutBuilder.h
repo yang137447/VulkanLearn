@@ -6,11 +6,16 @@
 #include "../shaderReflect.h"
 #include "vulkan/vulkan.hpp"
 
+namespace VL
+{
+class RendererBackendVulkan;
+}
+
 class PipelineLayoutBuilder
 {
 public:
     static std::vector<vk::DescriptorSetLayout> CreateDescriptorSetLayouts(
-        vk::Device& device,
+        VL::RendererBackendVulkan& rendererBackend,
         const std::vector<ShaderBinding>& shaderBindings,
         const std::string& pipelineName,
         uint32_t setCount = MAX_DESCRIPTOR_SETS);
@@ -21,7 +26,7 @@ public:
         const std::string& pipelineName);
 
     static void DestroyDescriptorSetLayouts(
-        vk::Device& device,
+        VL::RendererBackendVulkan& rendererBackend,
         std::vector<vk::DescriptorSetLayout>& descriptorSetLayouts);
 
     static void DestroyPipelineLayout(

@@ -173,7 +173,16 @@ GraphicsPipelineBuildResult GraphicsPipelineBuilder::Build(const GraphicsPipelin
     VulkanDebug::SetObjectName(desc.device, buildResult.pipelineCache, vk::ObjectType::ePipelineCache, "PipelineCache: " + desc.pipelineName);
 
     result = desc.device.createGraphicsPipelines(buildResult.pipelineCache, 1, &graphicsPipelineCreateInfo, nullptr, &buildResult.graphicsPipeline);
-    VL::RequireVulkanPipelineSuccess(result, "Create graphics pipeline", desc.pipelineName, "graphics pipeline");
+    if (result != vk::Result::eSuccess)
+    {
+        desc.device.destroyPipelineCache(buildResult.pipelineCache, nullptr);
+        buildResult.pipelineCache = nullptr;
+        VL::RequireVulkanPipelineSuccess(
+            result,
+            "Create graphics pipeline",
+            desc.pipelineName,
+            "graphics pipeline");
+    }
     VulkanDebug::SetObjectName(desc.device, buildResult.graphicsPipeline, vk::ObjectType::ePipeline, "Pipeline: " + desc.pipelineName);
 
     return buildResult;

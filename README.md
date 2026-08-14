@@ -139,6 +139,55 @@ GPU readback；实际 SPIR-V 输出仍需后续 capture/readback 验证。
 
 本地生成资源输出写入 `resourcePath/generated/`。
 
+## Shader 增量编译与热重载
+
+启动阶段 Shader 编译是内容寻址增量构建：未修改的 entry/variant 直接命中
+`shader/spv/shader-build-cache.json`，不再调用 shaderc。首次启动摘要类似：
+
+```text
+Shader build: entries=29, artifacts=17, hits=0, misses=17, compiled=17,
+shaderc=29, failed=0, elapsedMs=2043.1
+```
+
+第二次无修改启动应看到 `compiled=0, shaderc=0`。缓存身份、manifest schema 和
+失败语义见 `documents/rendering/shader-build-cache.md`。
+
+运行时支持以下调试命令：
+
+```text
+shaderreload changed   重新编译并事务性发布受影响的 live graphics shader
+shaderreload all       强制重新发布全部 live graphics shader
+shadercache stats      输出启动构建统计与 manifest artifact 数
+```
+
+`shader/glsl` 下的 `.vert/.frag/.comp/.glsl` 与 `M_*.json` 会被自动监听：
+CPU 编译在独立 worker 完成，EngineLoop 在 Render Thread 安全点创建 Vulkan
+对象并事务提交，旧 Pipeline/descriptor 经 GPU frame epoch 延迟退休。热重载
+的 ABI 边界、参与者和事务语义见 `documents/rendering/shader-hot-reload.md`。
+连续保存会按 stable source identity 求并集；source epoch 用于快速拒绝旧任务，正式
+提交前仍复核 primary/include digest。`M_*.json` schema 更新会在候选 World/Graph
+中迁移兼容的 live 参数和贴图，失败时 active runtime 与正式 artifact 整包保持。
+
+可重复验证入口（全部 `--exit-after-tests`，退出码 0 成功、2 失败，串行执行）：
+
+```text
+build/bin/main.exe --shader-reload-test --exit-after-tests
+build/bin/main.exe --shader-auto-reload-test --exit-after-tests
+build/bin/main.exe --shader-compute-reload-test --exit-after-tests
+build/bin/main.exe --shader-definition-reload-test --exit-after-tests
+build/bin/main.exe --shader-ui-reload-test --exit-after-tests
+build/bin/main.exe --shader-shutdown-inflight-test --exit-after-tests
+build/bin/main.exe --world-graph-transaction-test --exit-after-tests
+```
+
+`--shader-force-rebuild` 强制重建全部启动 artifact。单元/集成测试覆盖
+BLAKE3 向量、规范化边界、write-if-changed、FileMonitor 防抖、warm start、
+依赖失效、manifest 损坏/schema 升级和提交回滚：
+
+```bash
+ctest --test-dir build -R shader_build --output-on-failure
+```
+
 ## 性能分析工具使用
 
 本项目集成了两种性能分析工具：**Tracy Profiler** 和 **NVIDIA Nsight Systems**。代码中的 `PROFILE_SCOPE` 宏会同时触发两者的标记，你可以根据需求选择使用。

@@ -1,6 +1,7 @@
 #include "materialInstance.h"
 #include "texture.h"
 #include "material.h"
+#include "material/materialAssetUtils.h"
 #include "render/backend/rendererBackendVulkan.h"
 
 MaterialInstance::~MaterialInstance()
@@ -51,6 +52,24 @@ void MaterialInstance::ClearParameterValues(const std::string& parameterName)
 void MaterialInstance::SetTexture(const std::string& textureName, const std::shared_ptr<Texture>& texture)
 {
     textures[textureName] = texture;
+    textureBindingIdentities.erase(textureName);
+}
+
+void MaterialInstance::SetTexture(
+    const std::string& textureName,
+    const std::shared_ptr<Texture>& texture,
+    std::optional<std::string> textureAssetIdentity,
+    std::optional<std::string> textureCacheIdentity)
+{
+    textures[textureName] = texture;
+    if (textureAssetIdentity)
+    {
+        *textureAssetIdentity =
+            MaterialAssetUtils::NormalizeAssetPath(*textureAssetIdentity);
+    }
+    textureBindingIdentities[textureName] = {
+        std::move(textureAssetIdentity),
+        std::move(textureCacheIdentity)};
 }
 
 std::shared_ptr<Texture> MaterialInstance::GetTexture(const std::string& textureName) const
@@ -66,6 +85,56 @@ std::shared_ptr<Texture> MaterialInstance::GetTexture(const std::string& texture
 bool MaterialInstance::HasTexture(const std::string& textureName) const
 {
     return textures.find(textureName) != textures.end();
+}
+
+MaterialInstanceStateSnapshot MaterialInstance::CaptureStateSnapshot() const
+{
+    MaterialInstanceStateSnapshot::ParameterMap parameterValues;
+    for (const auto& [parameterName, parameter] : parameters)
+    {
+        switch (parameter.type)
+        {
+        case ParamType::Float:
+            parameterValues.emplace(parameterName, floatParameters.at(parameterName));
+            break;
+        case ParamType::Vec2:
+            parameterValues.emplace(parameterName, vec2Parameters.at(parameterName));
+            break;
+        case ParamType::Vec3:
+            parameterValues.emplace(parameterName, vec3Parameters.at(parameterName));
+            break;
+        case ParamType::Vec4:
+            parameterValues.emplace(parameterName, vec4Parameters.at(parameterName));
+            break;
+        }
+    }
+
+    MaterialInstanceStateSnapshot::TextureMap textureBindings;
+    for (const auto& [textureName, texture] : textures)
+    {
+        std::optional<std::string> textureAssetIdentity;
+        std::optional<std::string> textureCacheIdentity;
+        const auto identityIt = textureBindingIdentities.find(textureName);
+        if (identityIt != textureBindingIdentities.end())
+        {
+            textureAssetIdentity =
+                identityIt->second.textureAssetIdentity;
+            textureCacheIdentity =
+                identityIt->second.textureCacheIdentity;
+        }
+
+        textureBindings.emplace(
+            textureName,
+            MaterialInstanceTextureBindingSnapshot(
+                texture,
+                std::move(textureAssetIdentity),
+                std::move(textureCacheIdentity)));
+    }
+
+    return MaterialInstanceStateSnapshot(
+        MaterialAssetUtils::NormalizeAssetPath(materialInstanceName),
+        std::move(parameterValues),
+        std::move(textureBindings));
 }
 
 const vk::DescriptorImageInfo& MaterialInstance::GetTextureDescriptorInfo(const std::string& textureName) const

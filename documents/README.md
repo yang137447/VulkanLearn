@@ -59,6 +59,10 @@ Documentation in this repository is split by responsibility:
   - material parameter include generation, Set 1 schema ownership, and per-pass reflection validation
 - `rendering/material-mesh-pass-composition.md`
   - implemented Material Evaluation, Base/ShadowDepth templates, Composer identity, and Shadow routing contract
+- `rendering/shader-build-cache.md`
+  - implemented BLAKE3-256 shader identities, versioned build-cache manifest, batch-wide publication preflight, stale cache-hit rejection, atomic artifact commit, and startup failure semantics
+- `rendering/shader-hot-reload.md`
+  - implemented source-epoch/digest staleness protocol, pending source union, frozen compilation snapshots, Material/Compute/UI transactions, M_*.json live-state migration, World/Graph staging, and GPU-epoch retirement
 - `rendering/texture-asset-json-v1.md`
   - texture asset JSON V1 fields, defaults, material instance references, and loader behavior
 
@@ -66,6 +70,8 @@ Documentation in this repository is split by responsibility:
 
 Architecture plans:
 
+- `plan/architecture/architecture-maintenance-recovery-plan.md`
+  - executable 2026-08-14 repair plan for restoring Vulkan device/test boundaries, extracting Shader and World/Graph transaction ownership from EngineLoop, converging World loading paths, and rerunning the complete architecture validation matrix
 - `plan/architecture/modern-engine-refactor-blueprint.html`
   - earlier modern-engine refactor blueprint kept as planning context
 - `plan/architecture/ue-lite-completion-plan.md`
@@ -92,7 +98,9 @@ Rendering plans:
 - `plan/rendering/material-shader-variant-and-debugview-options.md`
   - deprecated shader variant options retained as context; use the deferred GBuffer plan for the current direction
 - `plan/rendering/shader-incremental-compile-and-hot-reload-plan.md`
-  - staged Shader build-cache and hot-reload plan covering stable MD5 identities, transitive include invalidation, ABI-compatible pipeline replacement, render-thread safe commit, and deferred GPU resource retirement
+  - completed staged Shader build-cache and hot-reload plan; the stable P1-P4 contracts have migrated to `rendering/shader-build-cache.md` and `rendering/shader-hot-reload.md`
+- `plan/rendering/shader-incremental-compile-and-hot-reload-completion-fix-plan.md`
+  - completed 2026-08-13 R1-R4 audit history covering async staleness, M_ live-state migration, World/RenderGraph atomic commit, publication hardening, shutdown, and the final validation matrix
 - `plan/rendering/environment-cubemap-ibl-unification-plan.md`
   - executable migration plan that limits environment-type branching to cubemap generation and unifies SH/prefilter through one GPU IBL baker
 - `plan/rendering/uds-replication-roadmap.md`

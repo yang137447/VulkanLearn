@@ -25,6 +25,7 @@ class RendererDescriptorPlanCache
 {
 public:
     void Clear();
+    void Swap(RendererDescriptorPlanCache& other) noexcept;
     void RebuildPassPlan(
         const std::string& passName,
         const std::vector<CompiledRenderGraphPassInputDescriptor>& inputDescriptorPlan,

@@ -7,23 +7,46 @@
 
 #include <memory>
 
+#include "material/materialPipelineReload.h"
+#include "pipeline/graphicsPipelineLayoutDesc.h"
+#include "pipeline/pipelineFactory.h"
+
 class Material;
 class PipelineBase;
-class PipelineFactory;
 struct MaterialInstanceBuildPlan;
 struct Renderpass;
 
 namespace VL
 {
 
+class MaterialDescriptorSchema;
+
+struct MaterialShadowPipelineBuildResult
+{
+    std::shared_ptr<PipelineBase> pipeline;
+    GraphicsShaderVariantArtifact shaderArtifact;
+    MaterialGraphicsPassReloadRecipe reloadRecipe;
+};
+
 // 按显式 `.shadow` override、自动 Material ShadowDepth 的优先级构建材质专用管线。
 // 输入来自已验证的 MI 构建计划；普通 Opaque 返回空指针，由渲染场景选择公共管线。
 // Builds a material-specific pipeline, preferring an explicit `.shadow` override over generated ShadowDepth.
 // Input comes from a validated MI plan; common opaque materials return null for scene-level routing.
-std::shared_ptr<PipelineBase> BuildMaterialShadowPipeline(
+MaterialShadowPipelineBuildResult BuildMaterialShadowPipeline(
     PipelineFactory& pipelineFactory,
     Renderpass* canonicalShadowPass,
     const MaterialInstanceBuildPlan& loadPlan,
-    const Material& material);
+    const Material& material,
+    PipelineFactory::GraphicsCandidateState* candidateState = nullptr);
+
+void ValidateMaterialShadowShaderBindings(
+    const std::string& materialName,
+    const MaterialDescriptorSchema& materialDescriptorSchema,
+    const std::vector<ShaderBinding>& surfaceBindings,
+    const std::vector<ShaderBinding>& shadowBindings);
+
+GraphicsPipelineLayoutDesc BuildMaterialShadowPipelineLayout(
+    const MaterialDescriptorSchema& materialDescriptorSchema,
+    const std::vector<ShaderBinding>& surfaceBindings);
 
 } // namespace VL

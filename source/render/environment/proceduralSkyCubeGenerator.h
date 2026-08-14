@@ -8,6 +8,8 @@
 #include <vulkan/vulkan.hpp>
 
 #include "baseStructs.h"
+#include "shader/reload/computePipelineReloadParticipant.h"
+#include "shader/reload/computeShaderArtifact.h"
 
 class ComputePipeline;
 class PipelineFactory;
@@ -18,6 +20,7 @@ namespace VL
 class RendererBackendVulkan;
 
 class ProceduralSkyCubeGenerator
+    : public VL::ComputePipelineReloadParticipant
 {
 public:
     void Initialize(
@@ -36,6 +39,19 @@ public:
 
     std::shared_ptr<Texture> GetActiveEnvironmentCube() const;
     std::shared_ptr<Texture> GetPendingEnvironmentCube() const;
+
+    std::string GetShaderName() const override;
+    std::shared_ptr<ComputePipeline> GetActivePipeline() const override;
+    const ComputeShaderArtifact& GetActiveArtifact() const override;
+    VL::ComputeDescriptorReplacement PrepareReplacementDescriptors(
+        const ComputeShaderArtifact& candidate,
+        const std::shared_ptr<ComputePipeline>& replacementPipeline)
+        const override;
+    void CommitReplacement(
+        ComputeShaderArtifact committedArtifact,
+        std::shared_ptr<ComputePipeline> replacementPipeline,
+        VL::ComputeDescriptorReplacement&& replacementDescriptors)
+        noexcept override;
 
 private:
     struct SkyCubeResources
@@ -71,6 +87,8 @@ private:
     void FinalizePendingCubeForSampling(vk::CommandBuffer commandBuffer);
 
     std::shared_ptr<ComputePipeline> skyToCubemapPipeline;
+    ComputeShaderArtifact activeSkyToCubemapArtifact;
+    PipelineFactory* pipelineFactoryService = nullptr;
 
     vk::DescriptorPool descriptorPool;
     std::vector<vk::DescriptorSet> skyToCubemapDescriptorSets;

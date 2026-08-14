@@ -11,6 +11,12 @@ std::vector<ShaderBinding> ShaderReflectionService::ReflectComputeFromDebugSpirv
 
 std::vector<ShaderBinding> ShaderReflectionService::ReflectFromDebugSpirvFiles(const std::vector<std::string>& shaderPaths)
 {
+    return ReflectDetailedFromDebugSpirvFiles(shaderPaths).shaderBindings;
+}
+
+ShaderReflectionResult ShaderReflectionService::ReflectDetailedFromDebugSpirvFiles(
+    const std::vector<std::string>& shaderPaths)
+{
     std::vector<std::vector<uint32_t>> shaderCodes;
     shaderCodes.reserve(shaderPaths.size());
     for (const auto& shaderPath : shaderPaths)
@@ -21,11 +27,20 @@ std::vector<ShaderBinding> ShaderReflectionService::ReflectFromDebugSpirvFiles(c
             reinterpret_cast<uint32_t*>(shaderCode.data() + shaderCode.size()));
         shaderCodes.push_back(std::move(shaderCode32));
     }
-    return ReflectFromDebugSpirvCode(shaderCodes);
+    return ReflectDetailedFromDebugSpirvCode(shaderCodes);
 }
 
 std::vector<ShaderBinding> ShaderReflectionService::ReflectFromDebugSpirvCode(const std::vector<std::vector<uint32_t>>& shaderCodes)
 {
+    return ReflectDetailedFromDebugSpirvCode(shaderCodes).shaderBindings;
+}
+
+ShaderReflectionResult ShaderReflectionService::ReflectDetailedFromDebugSpirvCode(
+    const std::vector<std::vector<uint32_t>>& shaderCodes)
+{
     ShaderReflect shaderReflect(shaderCodes);
-    return shaderReflect.GetShaderBindings();
+    ShaderReflectionResult result;
+    result.shaderBindings = shaderReflect.GetShaderBindings();
+    result.abiSignature = shaderReflect.GetShaderAbiSignature();
+    return result;
 }

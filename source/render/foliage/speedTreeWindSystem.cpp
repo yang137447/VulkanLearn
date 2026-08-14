@@ -488,6 +488,12 @@ void SpeedTreeWindProfileSet::Reset()
     systems.clear();
 }
 
+void SpeedTreeWindProfileSet::Swap(
+    SpeedTreeWindProfileSet& other) noexcept
+{
+    systems.swap(other.systems);
+}
+
 void SpeedTreeWindProfileSet::AdvanceTo(double timeSeconds)
 {
     for (auto& [profileKey, system] : systems)

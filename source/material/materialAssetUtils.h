@@ -58,6 +58,32 @@ namespace MaterialAssetUtils
         return std::filesystem::path(path).lexically_normal().generic_string();
     }
 
+    inline std::string NormalizeShaderGlslRelativePath(std::string_view path)
+    {
+        const std::filesystem::path normalizedPath =
+            std::filesystem::path(path).lexically_normal();
+        std::filesystem::path relativePath;
+        bool foundGlsl = false;
+        for (const std::filesystem::path& part : normalizedPath)
+        {
+            if (foundGlsl)
+            {
+                relativePath /= part;
+            }
+            else if (part == "glsl")
+            {
+                foundGlsl = true;
+            }
+        }
+        if (!foundGlsl || relativePath.empty())
+        {
+            throw std::runtime_error(
+                "Shader source path must be under shader/glsl: " +
+                std::string(path));
+        }
+        return relativePath.generic_string();
+    }
+
     inline std::string Trim(std::string value)
     {
         const auto beginIt = std::find_if_not(value.begin(), value.end(), [](unsigned char ch) {

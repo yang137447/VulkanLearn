@@ -1,0 +1,24 @@
+{
+    "name": "M_shaderReloadBatchTest",
+    "type": "material",
+    "shadingModel": "Unlit",
+    "shaderEvaluation": {
+        "vertex": "runtimeTest/mf_shaderReloadTestVertex.glsl",
+        "surface": "runtimeTest/mf_shaderReloadBatchTestSurface.glsl"
+    },
+    "features": {
+        "modifiesMeshPosition": false
+    },
+    "renderStates": {
+        "renderMode": "Opaque",
+        "cullMode": "Back"
+    },
+    "macros": {},
+    "parameters": {
+        "u_reloadBatchColor": {
+            "type": "vec4",
+            "default": [0.15, 0.7, 0.35, 1.0]
+        }
+    },
+    "textures": {}
+}

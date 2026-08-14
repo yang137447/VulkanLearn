@@ -78,6 +78,37 @@ vk::AccessFlags GetPendingSourceAccess(vk::ImageLayout layout)
     }
 }
 
+class PreparedDescriptorPoolGuard
+{
+public:
+    PreparedDescriptorPoolGuard(
+        VL::RendererBackendVulkan& rendererBackend,
+        vk::DescriptorPool& descriptorPool)
+        : rendererBackend(rendererBackend),
+          descriptorPool(descriptorPool)
+    {
+    }
+
+    ~PreparedDescriptorPoolGuard()
+    {
+        if (armed && descriptorPool)
+        {
+            rendererBackend.DestroyDescriptorPool(descriptorPool);
+            descriptorPool = nullptr;
+        }
+    }
+
+    void Disarm() noexcept
+    {
+        armed = false;
+    }
+
+private:
+    VL::RendererBackendVulkan& rendererBackend;
+    vk::DescriptorPool& descriptorPool;
+    bool armed = true;
+};
+
 } // namespace
 
 namespace VL
@@ -92,7 +123,10 @@ void ProceduralSkyCubeGenerator::Initialize(
         return;
     }
 
-    skyToCubemapPipeline = pipelineFactory.CreateComputePipeline("generator/skyToCubemap");
+    pipelineFactoryService = &pipelineFactory;
+    skyToCubemapPipeline = pipelineFactory.CreateComputePipeline(
+        "generator/skyToCubemap",
+        &activeSkyToCubemapArtifact);
     CreateSkyCubeResources(rendererBackend);
     CreateDescriptorResources(rendererBackend);
 
@@ -112,7 +146,149 @@ void ProceduralSkyCubeGenerator::Shutdown(RendererBackendVulkan& rendererBackend
     skyToCubemapPipeline.reset();
 
     this->rendererBackend = nullptr;
+    pipelineFactoryService = nullptr;
     initialized = false;
+}
+
+std::string ProceduralSkyCubeGenerator::GetShaderName() const
+{
+    return "generator/skyToCubemap";
+}
+
+std::shared_ptr<ComputePipeline>
+ProceduralSkyCubeGenerator::GetActivePipeline() const
+{
+    return skyToCubemapPipeline;
+}
+
+const ComputeShaderArtifact&
+ProceduralSkyCubeGenerator::GetActiveArtifact() const
+{
+    return activeSkyToCubemapArtifact;
+}
+
+VL::ComputeDescriptorReplacement
+ProceduralSkyCubeGenerator::PrepareReplacementDescriptors(
+    const ComputeShaderArtifact& candidate,
+    const std::shared_ptr<ComputePipeline>& replacementPipeline) const
+{
+    (void)candidate;
+    if (!replacementPipeline || rendererBackend == nullptr ||
+        dispatchParamBuffers.empty())
+    {
+        throw std::runtime_error(
+            "Cannot prepare procedural sky descriptor replacement without a pipeline and param buffers");
+    }
+
+    const uint32_t swapchainImageCount =
+        rendererBackend->GetSwapchainImageCount();
+    const uint32_t descriptorSetCount =
+        swapchainImageCount * kCubemapFaceCount;
+    std::array<vk::DescriptorPoolSize, 2> poolSizes = {
+        vk::DescriptorPoolSize{
+            vk::DescriptorType::eUniformBuffer, descriptorSetCount },
+        vk::DescriptorPoolSize{
+            vk::DescriptorType::eStorageImage, descriptorSetCount },
+    };
+    vk::DescriptorPoolCreateInfo poolCreateInfo;
+    poolCreateInfo
+        .setPoolSizes(poolSizes)
+        .setMaxSets(descriptorSetCount);
+    VL::ComputeDescriptorReplacement replacement;
+    replacement.descriptorPool = rendererBackend->CreateDescriptorPool(
+        poolCreateInfo,
+        "DescriptorPool: ProceduralSkyCubeReload");
+    PreparedDescriptorPoolGuard poolGuard(
+        *rendererBackend,
+        replacement.descriptorPool);
+    std::vector<vk::DescriptorSetLayout> layouts(
+        descriptorSetCount,
+        replacementPipeline->GetDescriptorSetLayouts()[0]);
+    replacement.descriptorSets.resize(descriptorSetCount);
+    vk::DescriptorSetAllocateInfo allocInfo;
+    allocInfo
+        .setDescriptorPool(replacement.descriptorPool)
+        .setSetLayouts(layouts);
+    rendererBackend->AllocateDescriptorSets(
+        allocInfo,
+        replacement.descriptorSets);
+
+    for (uint32_t imageIndex = 0;
+         imageIndex < swapchainImageCount;
+         ++imageIndex)
+    {
+        for (uint32_t faceIndex = 0;
+             faceIndex < kCubemapFaceCount;
+             ++faceIndex)
+        {
+            const size_t descriptorIndex =
+                static_cast<size_t>(imageIndex) * kCubemapFaceCount +
+                faceIndex;
+            vk::DescriptorBufferInfo paramInfo;
+            paramInfo
+                .setBuffer(dispatchParamBuffers[descriptorIndex].buffer)
+                .setOffset(0)
+                .setRange(sizeof(SkyCubeDispatchParams));
+            vk::DescriptorImageInfo storageInfo;
+            storageInfo
+                .setImageView(pendingCube.storageView)
+                .setImageLayout(vk::ImageLayout::eGeneral);
+
+            std::array<vk::WriteDescriptorSet, 2> writes;
+            writes[0]
+                .setDstSet(replacement.descriptorSets[descriptorIndex])
+                .setDstBinding(0)
+                .setDescriptorCount(1)
+                .setDescriptorType(vk::DescriptorType::eUniformBuffer)
+                .setBufferInfo(paramInfo);
+            writes[1]
+                .setDstSet(replacement.descriptorSets[descriptorIndex])
+                .setDstBinding(1)
+                .setDescriptorCount(1)
+                .setDescriptorType(vk::DescriptorType::eStorageImage)
+                .setImageInfo(storageInfo);
+            rendererBackend->UpdateDescriptorSets(
+                std::vector<vk::WriteDescriptorSet>(
+                    writes.begin(),
+                    writes.end()));
+        }
+    }
+    replacement.release =
+        [backend = rendererBackend,
+         pool = replacement.descriptorPool]()
+        mutable
+        {
+            if (pool)
+            {
+                backend->DestroyDescriptorPool(pool);
+            }
+        };
+    replacement.retirement =
+        VL::MakePreparedRetiredResourcePackage(
+            [backend = rendererBackend,
+             pool = descriptorPool]()
+            mutable
+            {
+                if (pool)
+                {
+                    backend->DestroyDescriptorPool(pool);
+                }
+            });
+    poolGuard.Disarm();
+    return replacement;
+}
+
+void
+ProceduralSkyCubeGenerator::CommitReplacement(
+    ComputeShaderArtifact committedArtifact,
+    std::shared_ptr<ComputePipeline> replacementPipeline,
+    VL::ComputeDescriptorReplacement&& replacementDescriptors) noexcept
+{
+    descriptorPool = replacementDescriptors.descriptorPool;
+    skyToCubemapDescriptorSets =
+        std::move(replacementDescriptors.descriptorSets);
+    skyToCubemapPipeline = std::move(replacementPipeline);
+    activeSkyToCubemapArtifact = std::move(committedArtifact);
 }
 
 void ProceduralSkyCubeGenerator::RecordFace(

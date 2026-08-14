@@ -1,4 +1,5 @@
 #include "renderSystem.h"
+#include "shader/reload/shaderReloadCoordinator.h"
 #include <limits>
 #include <algorithm>
 #include <array>
@@ -9,6 +10,7 @@
 #include "materialInstance.h"
 #include "material.h"
 #include "pipeline/pipelineBase.h"
+#include "pipeline/pipelineFactory.h"
 #include "commonFunction.h"
 #include "renderGraph.h"
 #include "render/backend/rendererObjectResourceRegistry.h"
@@ -85,6 +87,28 @@ VL::EnvironmentUpdateDiagnostics RenderSystem::GetEnvironmentUpdateDiagnostics()
     // 这里用了raii锁，确保在访问环境诊断信息时不会发生数据竞争。
     std::lock_guard<std::mutex> lock(environmentDiagnosticsMutex);
     return environmentDiagnostics;
+}
+
+ComputeShaderArtifact RenderSystem::GetActiveComputeShaderArtifact(
+    const std::string& shaderName) const
+{
+    if (shaderName == "generator/skyToCubemap")
+    {
+        return proceduralSkyCubeGenerator.GetActiveArtifact();
+    }
+    if (shaderName == "generator/skySHGenerate")
+    {
+        return environmentIblBaker
+            .GetActiveSkySHGenerateArtifact();
+    }
+    if (shaderName == "generator/prefilterEnvMap")
+    {
+        return environmentIblBaker
+            .GetActivePrefilterEnvMapArtifact();
+    }
+    throw std::runtime_error(
+        "No live compute reload participant for shader: " +
+        shaderName);
 }
 
 void RenderSystem::SetActiveWorld(std::shared_ptr<const VL::World> world)
@@ -246,6 +270,16 @@ void RenderSystem::InitRenderObject()
             *rendererBackend,
             uiVertexShaderPath,
             uiFragmentShaderPath);
+        ShaderVariantKey uiVariant;
+        uiVariant.shaderName = "uiOverlay";
+        uiOverlayRenderer.SetActiveShaderArtifact(
+            pipelineFactory->PrepareGraphicsShaderVariant(
+                uiVariant));
+        if (shaderReloadCoordinator != nullptr)
+        {
+            shaderReloadCoordinator->SetUiOverlayParticipant(
+                &uiOverlayRenderer);
+        }
     }
 }
 
@@ -299,6 +333,233 @@ void RenderSystem::RebuildRenderGraphDependentResources()
     VL::RendererDescriptorContext descriptorContext = BuildRendererDescriptorContext();
     renderGraph.RenderInitialize(*rendererBackend, descriptorContext);
     InitializeCurrentRenderSceneResources();
+}
+
+void RenderSystem::RefreshResolvedSceneAfterShaderReload()
+{
+    if (hasRenderScene)
+    {
+        BuildResolvedRenderScene();
+    }
+}
+
+VL::PreparedRuntimeBinding RenderSystem::PrepareRuntimeBinding(
+    std::shared_ptr<const VL::World> world,
+    VL::RendererResourceCache& candidateCache,
+    RenderGraph& candidateGraph)
+{
+    if (!world)
+    {
+        throw std::runtime_error(
+            "Cannot prepare runtime binding without a candidate World");
+    }
+    if (rendererBackend == nullptr)
+    {
+        throw std::runtime_error(
+            "Cannot prepare runtime binding without a renderer backend");
+    }
+
+    VL::PreparedRuntimeBinding prepared;
+    prepared.world = std::move(world);
+
+    VL::WorldSnapshotBuildDesc snapshotDesc;
+    snapshotDesc.worldGeneration =
+        prepared.world->GetGeneration();
+    snapshotDesc.frameIndex = nextSnapshotFrameIndex;
+    snapshotDesc.debugViewMode = debugViewMode;
+    snapshotDesc.environmentIntensity =
+        environmentIntensity;
+    auto snapshotResult =
+        prepared.snapshotBuilder.Build(
+            *prepared.world,
+            snapshotDesc);
+    if (snapshotResult.IsFailure())
+    {
+        throw std::runtime_error(
+            VL::FormatRuntimeError(snapshotResult.Error()));
+    }
+
+    auto renderSceneResult =
+        rendererFrontend.BuildRenderScene(
+            snapshotResult.Value());
+    if (renderSceneResult.IsFailure())
+    {
+        throw std::runtime_error(
+            VL::FormatRuntimeError(
+                renderSceneResult.Error()));
+    }
+    prepared.renderScene =
+        std::move(renderSceneResult.Value());
+
+    auto resolvedSceneResult =
+        resolvedRenderSceneBuilder.Build(
+            prepared.renderScene,
+            candidateCache);
+    if (resolvedSceneResult.IsFailure())
+    {
+        throw std::runtime_error(
+            VL::FormatRuntimeError(
+                resolvedSceneResult.Error()));
+    }
+    prepared.resolvedRenderScene =
+        std::move(resolvedSceneResult.Value());
+
+    prepared.lightCapacity =
+        frameResources.PrepareLightCapacity(
+            prepared.renderScene.lights.size(),
+            *rendererBackend);
+    PrepareEnvironmentResources(
+        prepared.renderScene,
+        candidateCache);
+
+    const std::vector<vk::DescriptorBufferInfo>&
+        candidateLightBufferInfos =
+            prepared.lightCapacity.GetBufferInfos(
+                frameResources);
+    const VL::RendererDescriptorContext
+        descriptorContext =
+            BuildRendererDescriptorContext(
+                candidateCache,
+                candidateGraph,
+                candidateLightBufferInfos);
+    candidateGraph.RenderInitialize(
+        *rendererBackend,
+        descriptorContext);
+
+    VL::RendererObjectResourceRegistry
+        objectResourceRegistry;
+    objectResourceRegistry.InitializeResolvedSceneResources(
+        *rendererBackend,
+        descriptorContext,
+        prepared.renderScene,
+        prepared.resolvedRenderScene,
+        candidateCache);
+
+    prepared.speedTreeWindProfiles.Configure(
+        prepared.world->GetSpeedTreeWindProfiles());
+    (void)prepared.speedTreeWindProfiles.SetStrength(
+        speedTreeStrength);
+    (void)prepared.speedTreeWindProfiles
+        .SetGustingEnabled(speedTreeGustingEnabled);
+    prepared.nextSnapshotFrameIndex =
+        nextSnapshotFrameIndex + 1;
+    return prepared;
+}
+
+std::shared_ptr<void>
+RenderSystem::CommitPreparedRuntimeBinding(
+    VL::PreparedRuntimeBinding prepared) noexcept
+{
+    activeWorld.swap(prepared.world);
+    worldSnapshotBuilder.Swap(
+        prepared.snapshotBuilder);
+
+    using std::swap;
+    swap(
+        currentRenderScene.worldGeneration,
+        prepared.renderScene.worldGeneration);
+    swap(
+        currentRenderScene.frameIndex,
+        prepared.renderScene.frameIndex);
+    swap(
+        currentRenderScene.camera,
+        prepared.renderScene.camera);
+    currentRenderScene.drawPackets.swap(
+        prepared.renderScene.drawPackets);
+    currentRenderScene.materialGroups.swap(
+        prepared.renderScene.materialGroups);
+    currentRenderScene.lights.swap(
+        prepared.renderScene.lights);
+    swap(
+        currentRenderScene.environment,
+        prepared.renderScene.environment);
+    swap(
+        currentRenderScene.debugViewMode,
+        prepared.renderScene.debugViewMode);
+    currentResolvedRenderScene.materialGroups.swap(
+        prepared.resolvedRenderScene.materialGroups);
+    speedTreeWindProfiles.Swap(
+        prepared.speedTreeWindProfiles);
+
+    std::shared_ptr<void> retiredLightBuffer =
+        frameResources.CommitPreparedLightCapacity(
+            std::move(prepared.lightCapacity));
+    hasRenderScene = true;
+    windClockInitialized = false;
+    currentWindTimeSeconds = 0.0;
+    initializedRenderWorldGeneration =
+        currentRenderScene.worldGeneration;
+    nextSnapshotFrameIndex =
+        prepared.nextSnapshotFrameIndex;
+    shadowCascadeFrameData.valid = false;
+    environmentUpdateState.Reset();
+    environmentUpdateScheduler.Reset();
+    environmentUpdateSourceCube.reset();
+    // The old World package keeps its HDRI alive until the prepared retire
+    // epoch. Drop descriptor-source mirrors now so they cannot outlive that
+    // package; the next IBL use rewrites the acquired image's descriptor.
+    environmentIblBaker.InvalidateEnvironmentCubeBindings();
+    return retiredLightBuffer;
+}
+
+void RenderSystem::ClearPendingWorldSnapshots() noexcept
+{
+    worldSnapshotQueue.Clear();
+}
+
+void RenderSystem::PrepareRenderGraphReload(
+    RenderGraph& candidateGraph)
+{
+    if (!activeWorld || !hasRenderScene)
+    {
+        throw std::runtime_error(
+            "Cannot prepare a RenderGraph reload without an active runtime binding");
+    }
+    const VL::RendererDescriptorContext
+        descriptorContext =
+            BuildRendererDescriptorContext(
+                VL::RendererResourceCache::GetInstance(),
+                candidateGraph,
+                GetLightBufferInfo());
+    candidateGraph.RenderInitialize(
+        *rendererBackend,
+        descriptorContext);
+}
+
+std::string RenderSystem::GetResolvedShaderGenerationFingerprint() const
+{
+    std::string fingerprint;
+    for (const VL::ResolvedMaterialGroup& materialGroup :
+         currentResolvedRenderScene.materialGroups)
+    {
+        if (!materialGroup.material)
+        {
+            continue;
+        }
+        fingerprint += materialGroup.material->GetMaterialKey();
+        fingerprint += ":";
+        fingerprint +=
+            materialGroup.material
+                ->GetSurfaceShaderArtifact()
+                .artifactGenerationKey;
+        if (materialGroup.material->GetShadowShaderArtifact())
+        {
+            fingerprint += ":";
+            fingerprint +=
+                materialGroup.material
+                    ->GetShadowShaderArtifact()
+                    ->artifactGenerationKey;
+        }
+        fingerprint += ";";
+    }
+    return fingerprint;
+}
+
+uint64_t RenderSystem::GetActiveWorldGeneration() const noexcept
+{
+    return activeWorld
+        ? activeWorld->GetGeneration()
+        : 0;
 }
 
 void RenderSystem::UpdateGlobalUBOForPass(vk::CommandBuffer& commandBuffer)
@@ -1083,11 +1344,27 @@ void RenderSystem::RenderInitialize()
 
 VL::RendererDescriptorContext RenderSystem::BuildRendererDescriptorContext() const
 {
+    return BuildRendererDescriptorContext(
+        VL::RendererResourceCache::GetInstance(),
+        RenderGraph::GetInstance(),
+        GetLightBufferInfo());
+}
+
+VL::RendererDescriptorContext
+RenderSystem::BuildRendererDescriptorContext(
+    const VL::RendererResourceCache& resourceCache,
+    RenderGraph& renderGraph,
+    const std::vector<vk::DescriptorBufferInfo>&
+        lightBufferInfos) const
+{
     VL::RendererDescriptorContext descriptorContext;
     descriptorContext.globalUniformBufferInfos = &GetUBOGlobalBufferInfo();
-    descriptorContext.lightBufferInfos = &GetLightBufferInfo();
-    descriptorContext.resourceCache = &VL::RendererResourceCache::GetInstance();
-    Renderpass* canonicalShadowPass = RenderGraph::GetInstance().FindCanonicalShadowPass();
+    descriptorContext.lightBufferInfos =
+        &lightBufferInfos;
+    descriptorContext.resourceCache =
+        &resourceCache;
+    Renderpass* canonicalShadowPass =
+        renderGraph.FindCanonicalShadowPass();
     if (canonicalShadowPass != nullptr)
     {
         std::shared_ptr<MaterialInstance> shadowMaterialInstance =
@@ -1108,6 +1385,10 @@ void RenderSystem::AdvanceSpeedTreeWindProfiles()
 
 void RenderSystem::ShutdownRenderObject()
 {
+    if (shaderReloadCoordinator != nullptr)
+    {
+        shaderReloadCoordinator->SetUiOverlayParticipant(nullptr);
+    }
     uiOverlayRenderer.Shutdown();
     currentUiRenderSnapshot.reset();
     ShutdownFrameResources();
@@ -1133,6 +1414,15 @@ void RenderSystem::InitializeFrameResources()
         *pipelineFactory,
         *rendererBackend,
         frameResources.GetGlobalUniformBufferInfos());
+    if (shaderReloadCoordinator != nullptr)
+    {
+        shaderReloadCoordinator->RegisterComputeParticipant(
+            &proceduralSkyCubeGenerator);
+        shaderReloadCoordinator->RegisterComputeParticipant(
+            &skyShReloadParticipant);
+        shaderReloadCoordinator->RegisterComputeParticipant(
+            &prefilterReloadParticipant);
+    }
     environmentGpuTimer.Initialize(*rendererBackend);
 }
 
@@ -1144,6 +1434,15 @@ void RenderSystem::ShutdownFrameResources()
     }
 
     environmentGpuTimer.Shutdown(*rendererBackend);
+    if (shaderReloadCoordinator != nullptr)
+    {
+        shaderReloadCoordinator->UnregisterComputeParticipant(
+            &proceduralSkyCubeGenerator);
+        shaderReloadCoordinator->UnregisterComputeParticipant(
+            &skyShReloadParticipant);
+        shaderReloadCoordinator->UnregisterComputeParticipant(
+            &prefilterReloadParticipant);
+    }
     environmentIblBaker.Shutdown(*rendererBackend);
     proceduralSkyCubeGenerator.Shutdown(*rendererBackend);
     environmentUpdateScheduler.Reset();
@@ -1326,14 +1625,23 @@ bool RenderSystem::IntersectsSplitFrustumFast(const Eigen::Vector3f& viewMin, co
 
 std::shared_ptr<Texture> RenderSystem::GetActiveEnvironmentCube()
 {
-    switch(currentRenderScene.environment.type)
+    return GetEnvironmentCube(
+        currentRenderScene,
+        VL::RendererResourceCache::GetInstance());
+}
+
+std::shared_ptr<Texture> RenderSystem::GetEnvironmentCube(
+    const VL::RenderScene& renderScene,
+    const VL::RendererResourceCache& resourceCache) const
+{
+    switch(renderScene.environment.type)
     {
         case VL::EnvironmentType::ProceduralSky:
             return proceduralSkyCubeGenerator.GetActiveEnvironmentCube();
         case VL::EnvironmentType::Hdri:
             const std::shared_ptr<Texture>* environmentCube = 
-                VL::RendererResourceCache::GetInstance()
-                .GetWorldTexture("environmentCube");
+                resourceCache.GetWorldTexture(
+                    "environmentCube");
             if(environmentCube == nullptr || *environmentCube == nullptr)
             {
                 throw std::runtime_error("Environment cube not found");
@@ -1345,20 +1653,31 @@ std::shared_ptr<Texture> RenderSystem::GetActiveEnvironmentCube()
 
 void RenderSystem::PrepareEnvironmentResources()
 {
-    VL::RendererResourceCache& rendererResourceCache = VL::RendererResourceCache::GetInstance();
+    PrepareEnvironmentResources(
+        currentRenderScene,
+        VL::RendererResourceCache::GetInstance());
+}
 
-    std::shared_ptr<Texture> environmentCube = GetActiveEnvironmentCube();
+void RenderSystem::PrepareEnvironmentResources(
+    const VL::RenderScene& renderScene,
+    VL::RendererResourceCache& resourceCache) const
+{
+    std::shared_ptr<Texture> environmentCube =
+        GetEnvironmentCube(renderScene, resourceCache);
+    resourceCache.BindWorldTexture(
+        "environmentCube",
+        environmentCube);
 
-    rendererResourceCache.BindWorldTexture("environmentCube", environmentCube);
-
-    std::shared_ptr<Texture> prefilteredEnvironmentCube = environmentIblBaker.GetPrefilteredEnvironmentCube();
-
-    if(prefilteredEnvironmentCube == nullptr)
+    std::shared_ptr<Texture> prefilteredEnvironmentCube =
+        environmentIblBaker
+            .GetPrefilteredEnvironmentCube();
+    if (prefilteredEnvironmentCube == nullptr)
     {
         throw std::runtime_error("Prefiltered environment cube is not initialized");
     }
-
-    rendererResourceCache.BindWorldTexture("prefilteredEnvironmentCube", prefilteredEnvironmentCube);
+    resourceCache.BindWorldTexture(
+        "prefilteredEnvironmentCube",
+        prefilteredEnvironmentCube);
 }
 
 void RenderSystem::RecordEnvironmentIbl(vk::CommandBuffer commandBuffer, uint32_t swapchainImageIndex)

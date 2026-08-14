@@ -293,6 +293,12 @@ const std::string& RuntimeConfig::GetResourcePath() const
     return resourcePath;
 }
 
+int RuntimeConfig::GetWorkerThreadCount() const
+{
+    EnsureLoaded();
+    return workerThreadCount;
+}
+
 bool RuntimeConfig::ShouldUseRenderThread() const
 {
     EnsureLoaded();

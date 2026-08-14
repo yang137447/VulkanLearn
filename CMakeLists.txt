@@ -1,8 +1,12 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(vulkan_learn LANGUAGES CXX)
+project(vulkan_learn LANGUAGES C CXX)
 
 include(CTest)
+
+option(VULKANLEARN_BUILD_TESTS
+    "Build VulkanLearn-owned unit and integration test executables."
+    ON)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -33,4 +37,10 @@ if(VULKANLEARN_BUILD_SPEEDTREE_WIND_VALIDATION)
             "SpeedTree wind validator disabled: SpeedTree Modeler root was not found at "
             "${SPEEDTREE_MODELER_ROOT}")
     endif()
+endif()
+
+if(VULKANLEARN_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tool/shader-build-core-tests)
+    add_subdirectory(tool/shader-build-integration-tests)
 endif()

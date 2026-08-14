@@ -12,6 +12,7 @@
 #include "render/backend/rendererBackendVulkan.h"
 #include "render/resource/rendererMaterialLoader.h"
 #include "render/resource/rendererResourceCache.h"
+#include "render/resource/rendererResourceLoadContext.h"
 #include "renderGraph.h"
 #include "renderableObject.h"
 #include "scene/sceneAssetTypes.h"
@@ -49,9 +50,11 @@ Eigen::Matrix4f BuildModelMatrix(
 
 RendererMeshLoader::RendererMeshLoader(
     PipelineFactory& pipelineFactory,
-    RendererBackendVulkan& rendererBackend)
+    RendererBackendVulkan& rendererBackend,
+    RendererResourceLoadContext& loadContext)
     : pipelineFactory(pipelineFactory)
     , rendererBackend(rendererBackend)
+    , loadContext(loadContext)
 {
 }
 
@@ -75,9 +78,13 @@ RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
         result.speedTreeWindProfile = std::move(profile);
     }
 
-    RenderGraph& renderGraph = RenderGraph::GetInstance();
-    RendererResourceCache& resourceCache = RendererResourceCache::GetInstance();
-    RendererMaterialLoader materialLoader(pipelineFactory, rendererBackend);
+    RenderGraph& renderGraph = loadContext.renderGraph;
+    RendererResourceCache& resourceCache =
+        loadContext.resourceCache;
+    RendererMaterialLoader materialLoader(
+        pipelineFactory,
+        rendererBackend,
+        loadContext);
 
     Eigen::Vector3f position = JsonParser::ParseValue<Eigen::Vector3f>(node["position"]);
     Eigen::Vector3f rotation = JsonParser::ParseValue<Eigen::Vector3f>(node["rotation"]);

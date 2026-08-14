@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 
+#include "shader/shaderAbiSignature.h"
+#include "shader/build/shaderBuildArtifact.h"
 #include "shaderReflect.h"
 
 // PipelineFactory 持有的一份规范化图形 Shader 变体产物。
@@ -16,11 +18,23 @@
 // Pipeline creation and preflight validation share it to avoid duplicate compilation and reflection.
 struct GraphicsShaderVariantArtifact
 {
+    std::string logicalBuildId;
     std::string normalizedKey;
     std::string displayName;
+    std::string sourceFingerprint;
+    std::string artifactGenerationKey;
     std::string vertexSpvPath;
     std::string fragmentSpvPath;
     std::string vertexDebugPath;
     std::string fragmentDebugPath;
+    std::vector<uint32_t> vertexSpirv;
+    std::vector<uint32_t> fragmentSpirv;
+    std::vector<uint32_t> vertexDebugSpirv;
+    std::vector<uint32_t> fragmentDebugSpirv;
     std::vector<ShaderBinding> shaderBindings;
+    VL::ShaderAbiSignature abiSignature;
 };
+
+GraphicsShaderVariantArtifact BuildGraphicsShaderVariantArtifact(
+    const VL::ShaderBuildArtifact& buildArtifact,
+    const std::string& displayName);

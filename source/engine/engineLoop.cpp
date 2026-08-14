@@ -12,23 +12,158 @@
 #include "engine/runtimeTestHooks.h"
 #include "engine/subsystemCollection.h"
 #include "material/generator/materialParameterIncludeGenerator.h"
+#include "material/generator/materialDefinitionReloadBatch.h"
 #include "pipeline/pipelineFactory.h"
 #include "platform/platformApplication.h"
 #include "platform/platformWindow.h"
 #include "profiler.h"
 #include "render/backend/rendererBackendVulkan.h"
 #include "render/renderThread.h"
+#include "render/rendergraph/preparedRenderGraphState.h"
 #include "render/resource/rendererResourceLoadCoordinator.h"
 #include "render/resource/rendererResourceCache.h"
 #include "render/resource/resourceRetireQueue.h"
 #include "renderGraph.h"
 #include "renderSystem.h"
 #include "shaderCompiler.h"
+#include "shader/build/contentHash.h"
+#include "shader/reload/shaderCompileWorker.h"
+#include "shader/reload/shaderFileMonitor.h"
+#include "shader/reload/shaderReloadCoordinator.h"
 #include "world/loading/worldTransitionCoordinator.h"
 #include "ui/uiRenderSnapshot.h"
 
 namespace VL
 {
+namespace
+{
+
+MaterialDefinitionReloadBatch BuildMaterialDefinitionReloadBatch(
+    uint64_t batchId,
+    const std::set<std::string>& sourceIdentities,
+    const std::filesystem::path& shaderRoot)
+{
+    MaterialDefinitionReloadBatch batch;
+    batch.batchId = batchId;
+    const std::filesystem::path glslRoot =
+        shaderRoot / "glsl";
+    for (const std::string& identity :
+         sourceIdentities)
+    {
+        const std::filesystem::path materialPath =
+            glslRoot / identity;
+        auto candidate =
+            MaterialParameterIncludeGenerator::
+                BuildGeneratedIncludeContent(
+                    materialPath);
+        const std::string includeIdentity =
+            std::filesystem::relative(
+                candidate.outputPath,
+                glslRoot)
+                .lexically_normal()
+                .generic_string();
+        if (!batch.includeOverlays.emplace(
+                includeIdentity,
+                candidate.generatedBytes)
+                 .second)
+        {
+            throw std::runtime_error(
+                "Material definition reload batch contains duplicate generated include identity: " +
+                includeIdentity);
+        }
+        batch.changedSources.push_back(identity);
+        batch.sourceDigests.emplace(
+            identity,
+            ContentHasher::HashFile(
+                materialPath).ToHex());
+        batch.generatedIncludes.push_back(
+            std::move(candidate));
+    }
+    return batch;
+}
+
+std::vector<AtomicFileWrite>
+BuildGeneratedIncludeWrites(
+    const MaterialDefinitionReloadBatch* batch)
+{
+    std::vector<AtomicFileWrite> writes;
+    if (batch == nullptr)
+    {
+        return writes;
+    }
+    for (const auto& candidate :
+         batch->generatedIncludes)
+    {
+        const std::vector<uint8_t> bytes(
+            candidate.generatedBytes.begin(),
+            candidate.generatedBytes.end());
+        if (std::filesystem::is_regular_file(
+                candidate.outputPath) &&
+            ReadBinaryFile(candidate.outputPath) ==
+                bytes)
+        {
+            continue;
+        }
+        writes.push_back({
+            candidate.outputPath,
+            bytes});
+    }
+    return writes;
+}
+
+void ValidateMaterialDefinitionSourcesStillCurrent(
+    const MaterialDefinitionReloadBatch* batch,
+    const std::filesystem::path& shaderRoot)
+{
+    if (batch == nullptr)
+    {
+        return;
+    }
+    const std::filesystem::path glslRoot =
+        shaderRoot / "glsl";
+    for (const auto& [identity, capturedDigest] :
+         batch->sourceDigests)
+    {
+        const std::filesystem::path sourcePath =
+            glslRoot / identity;
+        if (!std::filesystem::is_regular_file(
+                sourcePath))
+        {
+            throw std::runtime_error(
+                "Material definition source disappeared before commit: " +
+                identity);
+        }
+        const std::string currentDigest =
+            ContentHasher::HashFile(
+                sourcePath).ToHex();
+        if (currentDigest != capturedDigest)
+        {
+            throw std::runtime_error(
+                "Material definition source changed before commit: " +
+                identity);
+        }
+    }
+}
+
+RenderGraph::TestFaultInjection
+BuildRenderGraphTestFaultInjection(
+    const WorldGraphTransactionTestFaultInjection& injection)
+{
+    RenderGraph::TestFaultInjection graphFault;
+    graphFault.failResourceCreationAt =
+        injection.failGraphResourceCreationAt;
+    graphFault.failRenderPassCreationAt =
+        injection.failRenderPassCreationAt;
+    graphFault.failFramebufferCreationAt =
+        injection.failFramebufferCreationAt;
+    graphFault.failDescriptorCreationAt =
+        injection.failDescriptorCreationAt;
+    graphFault.failPassMaterialContract =
+        injection.failPassMaterialContract;
+    return graphFault;
+}
+
+} // namespace
 
 EngineLoop::EngineLoop() = default;
 EngineLoop::~EngineLoop() = default;
@@ -51,6 +186,10 @@ RuntimeResult<void> EngineLoop::Init(
     gameInstance = std::make_unique<GameInstance>(runtimeConfig);
     shouldClose = false;
     shutdownCompleted = false;
+    useRenderThread =
+        launchOptions.workerThreadCountOverride
+            .value_or(
+                runtimeConfig.GetWorkerThreadCount()) == 2;
 
     auto inputResult = GetSubsystems().GetInputSubsystem().Initialize(platformWindow);
     if (inputResult.IsFailure())
@@ -61,7 +200,8 @@ RuntimeResult<void> EngineLoop::Init(
     auto runtimeResult = InitializeRuntimeSystems(
         platformWindow,
         platformApplication.GetVulkanExtensions(),
-        launchOptions.developerUiMode);
+        launchOptions.developerUiMode,
+        launchOptions.forceShaderRebuild);
     if (runtimeResult.IsFailure())
     {
         return runtimeResult;
@@ -97,6 +237,29 @@ void EngineLoop::Shutdown()
         return;
     }
 
+    // Stop the CPU compile worker before any Vulkan teardown. The worker never
+    // touches Vulkan, and dropping its in-flight candidate here guarantees no
+    // callback can run after device resources are released.
+    RuntimeTestHooks& runtimeTests =
+        GetSubsystems().GetRuntimeTestHooks();
+    const DiagnosticsSubsystem& diagnostics =
+        GetSubsystems().GetDiagnosticsSubsystem();
+    if (shaderCompileWorker)
+    {
+        shaderCompileWorker->Shutdown();
+        const ShaderCompileWorkerShutdownDiagnostics
+            workerDiagnostics =
+                shaderCompileWorker
+                    ->GetShutdownDiagnostics();
+        (void)runtimeTests
+            .FinalizeShaderShutdownInflightTestAfterWorkerShutdown(
+                *this,
+                workerDiagnostics,
+                diagnostics);
+        pendingAutoReloadSources.clear();
+    }
+    shaderFileMonitor.reset();
+
     if (rendererBackendInitialized)
     {
         if (renderThread)
@@ -126,6 +289,8 @@ void EngineLoop::Shutdown()
 
     Profiler::Instance().EndSession();
     shutdownCompleted = true;
+    diagnostics.ReportInfo(
+        "EngineLoop teardown complete.");
 }
 
 void EngineLoop::QueueRuntimeCommand(RuntimeCommand command)
@@ -141,16 +306,19 @@ void EngineLoop::SetExitAfterRuntimeTests(bool enabled)
 RuntimeResult<void> EngineLoop::InitializeRuntimeSystems(
     PlatformWindow& window,
     std::vector<const char*>& vulkanExtensions,
-    DeveloperUiLaunchMode developerUiMode)
+    DeveloperUiLaunchMode developerUiMode,
+    bool forceShaderRebuild)
 {
     // Material parameter includes are generated before shader compilation so
     // GLSL sees the latest JSON-driven parameter layout.
     MaterialParameterIncludeGenerator::GenerateAllIncludes();
-    ShaderCompiler shaderCompiler;
     std::string shaderFolderPath = GetRuntimeConfig().ResolvePath("shader");
     GetSubsystems().GetDiagnosticsSubsystem().ReportInfo(
         "Shader folder path: " + shaderFolderPath);
-    shaderCompiler.StartCompile(shaderFolderPath);
+    shaderCompiler = std::make_unique<ShaderCompiler>();
+    shaderCompiler->StartCompile(
+        shaderFolderPath,
+        forceShaderRebuild);
 
     rendererBackend = std::make_unique<RendererBackendVulkan>();
     rendererBackend->Initialize(vulkanExtensions, window.GetNativeHandle());
@@ -159,6 +327,18 @@ RuntimeResult<void> EngineLoop::InitializeRuntimeSystems(
     RenderSystem::GetInstance().SetCsmSettings(GetRuntimeConfig().GetCsmSettings());
 
     pipelineFactory = rendererBackend->CreatePipelineFactory();
+    pipelineFactory->SetShaderCompiler(shaderCompiler.get());
+    shaderReloadCoordinator =
+        std::make_unique<ShaderReloadCoordinator>(
+            *shaderCompiler,
+            *pipelineFactory);
+    RenderSystem::GetInstance().SetShaderReloadCoordinator(
+        shaderReloadCoordinator.get());
+    shaderFileMonitor = std::make_unique<ShaderFileMonitor>();
+    shaderFileMonitor->Initialize(
+        shaderCompiler->GetShaderRoot());
+    shaderCompileWorker = std::make_unique<ShaderCompileWorker>();
+    shaderCompileWorker->Start(*shaderCompiler);
     RenderSystem::GetInstance().SetPipelineFactory(pipelineFactory.get());
     runtimeCommandExecutor = std::make_unique<RuntimeCommandExecutor>();
     RendererResourceLoadCoordinator& resourceLoadCoordinator =
@@ -245,7 +425,7 @@ RuntimeResult<void> EngineLoop::LoadInitialWorldAndRenderer()
 
     RenderSystem::GetInstance().InitRenderObject();
 
-    if (GetRuntimeConfig().ShouldUseRenderThread())
+    if (useRenderThread)
     {
         renderThread = std::make_unique<RenderThread>();
         renderThread->Start(RenderSystem::GetInstance());
@@ -308,31 +488,17 @@ void EngineLoop::Tick()
         GetSubsystems().GetDiagnosticsSubsystem());
     commandResult.activeWorldBeforeCommand = activeWorldBeforeCommand;
 
-    if (commandResult.worldChanged)
-    {
-        commandResult.worldRuntimeBindingAttempted = true;
+    ProcessRequestedWorldTransition(commandResult);
 
-        auto bindResult = BindActiveWorldRuntimeObjects(commandResult.loadedWorld);
-        if (bindResult.IsFailure())
-        {
-            GetSubsystems().GetDiagnosticsSubsystem().ReportRuntimeError(
-                "World runtime binding failed",
-                bindResult.Error());
-        }
-        else
-        {
-            auto graphReloadResult = ReloadRenderGraphResources(VL::RenderGraphReleaseMode::Retire);
-            if (graphReloadResult.IsFailure())
-            {
-                GetSubsystems().GetDiagnosticsSubsystem().ReportRuntimeError(
-                    "World render graph rebinding failed",
-                    graphReloadResult.Error());
-            }
-            else
-            {
-                commandResult.worldRuntimeBindingSucceeded = true;
-            }
-        }
+    ProcessShaderRuntimeRequests(commandResult);
+    if (shouldClose)
+    {
+        return;
+    }
+    ProcessAutomaticShaderReloads();
+    if (shouldClose)
+    {
+        return;
     }
 
     commandResult.activeWorldAfterCommand =
@@ -673,6 +839,912 @@ void EngineLoop::PollRenderThreadFatalError()
     shouldClose = true;
 }
 
+void EngineLoop::ProcessShaderRuntimeRequests(
+    const RuntimeCommandExecutionResult& commandResult)
+{
+    const DiagnosticsSubsystem& diagnostics =
+        GetSubsystems().GetDiagnosticsSubsystem();
+    if (commandResult.shaderCacheStatisticsRequested)
+    {
+        const ShaderBuildManifestSnapshot manifest =
+            shaderCompiler->CaptureManifestSnapshot();
+        diagnostics.ReportInfo(
+            ShaderCompiler::FormatStatistics(
+                shaderCompiler->GetLastStatistics()) +
+            ", manifestArtifacts=" +
+            std::to_string(manifest.artifacts.size()));
+    }
+
+    if (!commandResult.shaderReloadRequested)
+    {
+        return;
+    }
+
+    const ShaderReloadScope scope =
+        commandResult.shaderReloadScope ==
+                RuntimeShaderReloadScope::All
+            ? ShaderReloadScope::All
+            : ShaderReloadScope::Changed;
+    const uint64_t generation =
+        nextShaderReloadGeneration++;
+    latestManualShaderReloadGeneration = generation;
+    const uint64_t worldGeneration =
+        GetSubsystems().GetWorldManager()
+            .GetActiveWorldHandle().generation;
+
+    try
+    {
+        ShaderReloadPlan plan =
+            shaderReloadCoordinator->CaptureGraphicsPlan(
+                scope,
+                generation,
+                worldGeneration);
+        diagnostics.ReportInfo(
+            "Shader reload batch " +
+            std::to_string(generation) +
+            " prepared: changedSources=" +
+            std::to_string(plan.changedSources.size()) +
+            ", affectedBuilds=" +
+            std::to_string(
+                plan.builds.size() +
+                plan.computeBuilds.size() +
+                (plan.uiBuild.has_value() ? 1u : 0u)) +
+            ", liveMaterials=" +
+            std::to_string(plan.materials.size()));
+
+        ShaderReloadCandidateBatch batch =
+            shaderReloadCoordinator->CompileGraphicsCandidates(
+                std::move(plan));
+
+        WaitForRenderThreadIdle();
+        if (shouldClose)
+        {
+            return;
+        }
+
+        const uint64_t currentWorldGeneration =
+            GetSubsystems().GetWorldManager()
+                .GetActiveWorldHandle().generation;
+        const ShaderReloadCommitStatistics statistics =
+            shaderReloadCoordinator->CommitGraphicsCandidates(
+                batch,
+                currentWorldGeneration);
+        RenderSystem::GetInstance()
+            .RefreshResolvedSceneAfterShaderReload();
+
+        diagnostics.ReportInfo(
+            "Shader reload batch " +
+            std::to_string(statistics.generation) +
+            ": changedSources=" +
+            std::to_string(statistics.changedSourceCount) +
+            ", affectedBuilds=" +
+            std::to_string(statistics.affectedBuildCount) +
+            ", liveMaterials=" +
+            std::to_string(statistics.liveMaterialCount) +
+            ", compiled=" +
+            std::to_string(statistics.compiledBuildCount) +
+            ", shaderc=" +
+            std::to_string(statistics.shadercInvocations) +
+            ", pipelinesCreated=" +
+            std::to_string(statistics.pipelinesCreated) +
+            ", committed=" +
+            std::string(statistics.committed ? "true" : "false") +
+            ", retiredPipelines=" +
+            std::to_string(statistics.pipelinesRetired) +
+            ", retirePending=" +
+            std::to_string(
+                ResourceRetireQueue::GetInstance()
+                    .GetPendingCount()));
+        latestManualShaderReloadCommittedGeneration = generation;
+    }
+    catch (const std::exception& exception)
+    {
+        latestManualShaderReloadFailedGeneration = generation;
+        diagnostics.ReportError(
+            "Shader reload batch " +
+            std::to_string(generation) +
+            " rejected; current pipelines and formal artifacts remain active: " +
+            exception.what());
+    }
+
+    // A synchronous reload supersedes older asynchronous work. The monitor
+    // baseline is intentionally left untouched: a save that raced with the
+    // manual capture must still become a stable automatic event.
+}
+
+void EngineLoop::ProcessAutomaticShaderReloads()
+{
+    if (!shaderFileMonitor || !shaderCompileWorker ||
+        !shaderCompileWorker->IsRunning())
+    {
+        return;
+    }
+
+    const DiagnosticsSubsystem& diagnostics =
+        GetSubsystems().GetDiagnosticsSubsystem();
+
+    const std::optional<ShaderFileMonitor::ChangeBatch> changeBatch =
+        shaderFileMonitor->Poll();
+    if (changeBatch)
+    {
+        if (!changeBatch->observedSources.empty())
+        {
+            ++latestObservedSourceEpoch;
+            if (!pendingAutoReloadSources.empty())
+            {
+                pendingAutoReloadSourceEpoch =
+                    latestObservedSourceEpoch;
+            }
+            diagnostics.ReportInfo(
+                "Shader source epoch " +
+                std::to_string(latestObservedSourceEpoch) +
+                " observed content transitions=" +
+                std::to_string(
+                    changeBatch->observedSources.size()));
+        }
+
+        std::vector<std::string> shaderSources;
+        std::vector<std::string> materialDefinitionSources;
+        for (const std::string& source :
+             changeBatch->changedSources)
+        {
+            const std::filesystem::path sourcePath(source);
+            const bool isMaterialDefinition =
+                sourcePath.extension() == ".json" &&
+                sourcePath.filename().string().rfind("M_", 0) == 0;
+            if (isMaterialDefinition)
+            {
+                materialDefinitionSources.push_back(source);
+            }
+            else
+            {
+                shaderSources.push_back(source);
+            }
+        }
+
+        if (!shaderSources.empty())
+        {
+            MergePendingAutomaticShaderSources(
+                shaderSources,
+                latestObservedSourceEpoch);
+            diagnostics.ReportInfo(
+                "Shader source epoch " +
+                std::to_string(latestObservedSourceEpoch) +
+                " accepted stable shader sources=" +
+                std::to_string(shaderSources.size()) +
+                ", pendingUnion=" +
+                std::to_string(
+                    pendingAutoReloadSources.size()));
+        }
+
+        if (!materialDefinitionSources.empty())
+        {
+            pendingMaterialDefinitionSources.insert(
+                materialDefinitionSources.begin(),
+                materialDefinitionSources.end());
+            pendingMaterialDefinitionSourceEpoch =
+                std::max(
+                    pendingMaterialDefinitionSourceEpoch,
+                    latestObservedSourceEpoch);
+            if (failedPendingMaterialDefinitionSourceEpoch != 0 &&
+                pendingMaterialDefinitionSourceEpoch >
+                    failedPendingMaterialDefinitionSourceEpoch)
+            {
+                failedPendingMaterialDefinitionSourceEpoch = 0;
+            }
+            diagnostics.ReportInfo(
+                "Shader source epoch " +
+                std::to_string(
+                    latestObservedSourceEpoch) +
+                " accepted stable material definitions=" +
+                std::to_string(
+                    materialDefinitionSources.size()) +
+                ", pendingM_Union=" +
+                std::to_string(
+                    pendingMaterialDefinitionSources.size()));
+        }
+    }
+
+    if (shaderCompileWorker->HasCompletedResult())
+    {
+        ShaderCompileWorkerResult result =
+            shaderCompileWorker->TakeCompletedResult();
+        totalAutoReloadShadercInvocations +=
+            result.shadercInvocations;
+        const uint64_t resultSourceEpoch =
+            result.sourceEpoch;
+        const bool supersededByObservedSource =
+            resultSourceEpoch < latestObservedSourceEpoch;
+        const bool supersededByManualReload =
+            result.generation <
+                latestManualShaderReloadGeneration;
+        if (result.generation !=
+                inFlightAutoReloadGeneration ||
+            supersededByObservedSource ||
+            supersededByManualReload)
+        {
+            latestAutoReloadStaleDiscardGeneration =
+                result.generation;
+            lastStaleAutoReloadSources =
+                result.changedSources;
+            MergePendingAutomaticShaderSources(
+                result.changedSources,
+                latestObservedSourceEpoch);
+            diagnostics.ReportInfo(
+                "Shader auto reload batch " +
+                std::to_string(result.generation) +
+                " discarded as stale: capturedSourceEpoch=" +
+                std::to_string(resultSourceEpoch) +
+                ", latestObservedSourceEpoch=" +
+                std::to_string(latestObservedSourceEpoch) +
+                ", latestManualGeneration=" +
+                    std::to_string(
+                    latestManualShaderReloadGeneration) +
+                ", discardedSources=" +
+                std::to_string(result.changedSources.size()) +
+                ", pendingUnion=" +
+                std::to_string(pendingAutoReloadSources.size()));
+        }
+        else if (!result.succeeded)
+        {
+            latestAutoReloadFailedGeneration =
+                result.generation;
+            MergePendingAutomaticShaderSources(
+                result.changedSources,
+                resultSourceEpoch);
+            failedPendingAutoReloadSourceEpoch =
+                pendingAutoReloadSourceEpoch;
+            diagnostics.ReportError(
+                "Shader auto reload batch " +
+                std::to_string(result.generation) +
+                " compile failed; current pipelines remain active: " +
+                result.errorMessage);
+        }
+        else
+        {
+            try
+            {
+                // Vulkan pipeline creation and live-reference replacement only
+                // happen at the render-thread safe point.
+                WaitForRenderThreadIdle();
+                if (shouldClose)
+                {
+                    return;
+                }
+                const uint64_t currentWorldGeneration =
+                    GetSubsystems().GetWorldManager()
+                        .GetActiveWorldHandle().generation;
+                const ShaderReloadCommitStatistics statistics =
+                    shaderReloadCoordinator->CommitGraphicsCandidates(
+                        result.batch,
+                        currentWorldGeneration);
+                latestAutoReloadCommittedGeneration =
+                    result.generation;
+                latestAutoReloadShadercInvocations =
+                    statistics.shadercInvocations;
+                lastCommittedAutoReloadSources =
+                    result.changedSources;
+                RenderSystem::GetInstance()
+                    .RefreshResolvedSceneAfterShaderReload();
+                diagnostics.ReportInfo(
+                    "Shader auto reload batch " +
+                    std::to_string(statistics.generation) +
+                    ": changedSources=" +
+                    std::to_string(statistics.changedSourceCount) +
+                    ", affectedBuilds=" +
+                    std::to_string(statistics.affectedBuildCount) +
+                    ", liveMaterials=" +
+                    std::to_string(statistics.liveMaterialCount) +
+                    ", compiled=" +
+                    std::to_string(statistics.compiledBuildCount) +
+                    ", shaderc=" +
+                    std::to_string(statistics.shadercInvocations) +
+                    ", pipelinesCreated=" +
+                    std::to_string(statistics.pipelinesCreated) +
+                    ", committed=" +
+                    std::string(statistics.committed ? "true" : "false") +
+                    ", retiredPipelines=" +
+                    std::to_string(statistics.pipelinesRetired) +
+                    ", compileMs=" +
+                    std::to_string(result.elapsedMilliseconds) +
+                    ", retirePending=" +
+                    std::to_string(
+                        ResourceRetireQueue::GetInstance()
+                            .GetPendingCount()) +
+                ", sourceEpoch=" +
+                std::to_string(resultSourceEpoch) +
+                ", pendingUnion=" +
+                std::to_string(pendingAutoReloadSources.size()));
+            }
+            catch (const std::exception& exception)
+            {
+                latestAutoReloadFailedGeneration =
+                    result.generation;
+                MergePendingAutomaticShaderSources(
+                    result.changedSources,
+                    std::max(
+                        resultSourceEpoch,
+                        latestObservedSourceEpoch));
+                failedPendingAutoReloadSourceEpoch =
+                    pendingAutoReloadSourceEpoch;
+                diagnostics.ReportError(
+                    "Shader auto reload batch " +
+                    std::to_string(result.generation) +
+                    " rejected; current pipelines and formal artifacts remain active: " +
+                    exception.what());
+            }
+        }
+
+        inFlightAutoReloadGeneration = 0;
+        inFlightAutoReloadSourceEpoch = 0;
+    }
+
+    ProcessPendingMaterialDefinitionReload();
+    SubmitPendingAutomaticShaderReload();
+}
+
+void EngineLoop::MergePendingAutomaticShaderSources(
+    const std::vector<std::string>& sourceIdentities,
+    uint64_t sourceEpoch)
+{
+    pendingAutoReloadSources.insert(
+        sourceIdentities.begin(),
+        sourceIdentities.end());
+    pendingAutoReloadSourceEpoch =
+        std::max(
+            pendingAutoReloadSourceEpoch,
+            sourceEpoch);
+    if (failedPendingAutoReloadSourceEpoch != 0 &&
+        pendingAutoReloadSourceEpoch >
+            failedPendingAutoReloadSourceEpoch)
+    {
+        failedPendingAutoReloadSourceEpoch = 0;
+    }
+}
+
+void EngineLoop::SubmitPendingAutomaticShaderReload()
+{
+    if (pendingAutoReloadSources.empty() ||
+        !shaderCompileWorker->IsIdle() ||
+        shaderFileMonitor->HasUnstableSourceChanges() ||
+        failedPendingAutoReloadSourceEpoch ==
+            pendingAutoReloadSourceEpoch)
+    {
+        return;
+    }
+
+    const DiagnosticsSubsystem& diagnostics =
+        GetSubsystems().GetDiagnosticsSubsystem();
+    const std::vector<std::string> shaderSources(
+        pendingAutoReloadSources.begin(),
+        pendingAutoReloadSources.end());
+    const uint64_t generation =
+        nextShaderReloadGeneration++;
+    const uint64_t worldGeneration =
+        GetSubsystems().GetWorldManager()
+            .GetActiveWorldHandle().generation;
+    try
+    {
+        ShaderReloadPlan plan =
+            shaderReloadCoordinator->CaptureGraphicsPlanForSources(
+                shaderSources,
+                generation,
+                worldGeneration);
+        plan.sourceEpoch =
+            pendingAutoReloadSourceEpoch;
+        diagnostics.ReportInfo(
+            "Shader auto reload batch " +
+            std::to_string(generation) +
+            " prepared: sourceEpoch=" +
+            std::to_string(plan.sourceEpoch) +
+            ", changedSources=" +
+            std::to_string(plan.changedSources.size()) +
+            ", affectedBuilds=" +
+            std::to_string(
+                plan.builds.size() +
+                plan.computeBuilds.size() +
+                (plan.uiBuild.has_value() ? 1u : 0u)) +
+            ", liveMaterials=" +
+            std::to_string(plan.materials.size()));
+
+        if (!shaderCompileWorker->Submit(std::move(plan)))
+        {
+            return;
+        }
+
+        latestSubmittedAutoReloadGeneration = generation;
+        inFlightAutoReloadGeneration = generation;
+        inFlightAutoReloadSourceEpoch =
+            pendingAutoReloadSourceEpoch;
+        lastSubmittedAutoReloadSources = shaderSources;
+        for (const std::string& source : shaderSources)
+        {
+            pendingAutoReloadSources.erase(source);
+        }
+        if (pendingAutoReloadSources.empty())
+        {
+            pendingAutoReloadSourceEpoch = 0;
+        }
+    }
+    catch (const std::exception& exception)
+    {
+        failedPendingAutoReloadSourceEpoch =
+            pendingAutoReloadSourceEpoch;
+        diagnostics.ReportError(
+            "Shader auto reload batch " +
+            std::to_string(generation) +
+            " plan capture failed; current pipelines remain active: " +
+            exception.what());
+    }
+}
+
+RuntimeResult<WorldHandle>
+EngineLoop::ExecuteWorldGraphTransaction(
+    const std::string& scenePath,
+    const MaterialDefinitionReloadBatch*
+        materialDefinitionReload)
+{
+    if (rendererBackend == nullptr ||
+        !rendererBackendInitialized)
+    {
+        return RuntimeResult<WorldHandle>::Failure(
+            MakeRuntimeError(
+                "EngineLoop.WorldTransactionBeforeRendererInit",
+                "Cannot prepare a World/RenderGraph transaction before the renderer backend is initialized.",
+                scenePath));
+    }
+    if (!controller)
+    {
+        return RuntimeResult<WorldHandle>::Failure(
+            MakeRuntimeError(
+                "EngineLoop.MissingController",
+                "Cannot commit a World/RenderGraph transaction without a Controller.",
+                scenePath));
+    }
+
+    try
+    {
+        auto candidateGraph =
+            std::make_shared<
+                PreparedRenderGraphState>(
+                *rendererBackend);
+        candidateGraph->GetGraph()
+            .SetTestFaultInjection(
+                BuildRenderGraphTestFaultInjection(
+                    worldGraphTransactionTestFaultInjection));
+        candidateGraph->Load(
+            GetRuntimeConfig()
+                .GetRenderGraphJson());
+
+        auto preparedWorldResult =
+            worldTransitionCoordinator
+                ->PrepareWorldLoad(
+                    scenePath,
+                    candidateGraph->GetGraph(),
+                    materialDefinitionReload);
+        if (preparedWorldResult.IsFailure())
+        {
+            return RuntimeResult<WorldHandle>::Failure(
+                preparedWorldResult.Error());
+        }
+        PreparedWorldTransition preparedWorld =
+            std::move(
+                preparedWorldResult.Value());
+        if (worldGraphTransactionTestFaultInjection
+                .failAfterCandidateWorldBuilt)
+        {
+            throw std::runtime_error(
+                "Injected failure after candidate World build");
+        }
+
+        candidateGraph->GetGraph()
+            .RestorePassMaterialInstances(
+                preparedWorld.passMaterialBindings);
+        candidateGraph->GetGraph()
+            .SetOwnerGeneration(
+                preparedWorld.activation
+                    .handle.generation);
+
+        std::shared_ptr<SceneNode> viewTarget =
+            preparedWorld.activation
+                .handle.viewTarget.lock();
+        if (worldGraphTransactionTestFaultInjection
+                .failViewTargetPrecheck ||
+            !viewTarget)
+        {
+            return RuntimeResult<WorldHandle>::Failure(
+                MakeRuntimeError(
+                    "EngineLoop.MissingViewTarget",
+                    "Candidate World has no controller view target.",
+                    scenePath));
+        }
+
+        PreparedRuntimeBinding preparedRuntime =
+            RenderSystem::GetInstance()
+                .PrepareRuntimeBinding(
+                    preparedWorld.world,
+                    *preparedWorld.resourceCache,
+                    candidateGraph->GetGraph());
+        if (worldGraphTransactionTestFaultInjection
+                .failAfterRuntimeBindingPrepared)
+        {
+            throw std::runtime_error(
+                "Injected failure after runtime binding prepare");
+        }
+        PipelineFactory::
+            PreparedGraphicsCandidateCommit
+                preparedPipelineCommit =
+                    pipelineFactory
+                        ->PrepareCandidateCommit(
+                            preparedWorld
+                                .graphicsCandidateState);
+
+        std::vector<ShaderBuildArtifact>
+            artifactsToCommit;
+        artifactsToCommit.reserve(
+            preparedWorld.graphicsCandidateState
+                .shaderBuildArtifacts.size());
+        for (auto& preparedBuild :
+             preparedWorld.graphicsCandidateState
+                 .shaderBuildArtifacts)
+        {
+            const ShaderCompiler::
+                CandidateSourceValidationResult
+                    sourceValidation =
+                        shaderCompiler
+                            ->ValidateCandidateSourcesStillCurrent(
+                                preparedBuild.request,
+                                preparedBuild.artifact);
+            if (!sourceValidation.current)
+            {
+                throw std::runtime_error(
+                    "World transaction shader candidate source validation failed: " +
+                    sourceValidation.reason +
+                    "; source=" +
+                    sourceValidation.sourceIdentity +
+                    "; capturedDigest=" +
+                    sourceValidation.capturedDigest +
+                    "; currentDigest=" +
+                    sourceValidation.currentDigest);
+            }
+            artifactsToCommit.push_back(
+                std::move(
+                    preparedBuild.artifact));
+        }
+        ValidateMaterialDefinitionSourcesStillCurrent(
+            materialDefinitionReload,
+            shaderCompiler->GetShaderRoot());
+        std::vector<AtomicFileWrite>
+            generatedIncludeWrites =
+                BuildGeneratedIncludeWrites(
+                    materialDefinitionReload);
+
+        WaitForRenderThreadIdle();
+        if (shouldClose)
+        {
+            return RuntimeResult<WorldHandle>::Failure(
+                MakeRuntimeError(
+                    "EngineLoop.RenderThreadFailedBeforeWorldTransaction",
+                    "Cannot commit the World/RenderGraph transaction because the render thread failed.",
+                    scenePath));
+        }
+
+        // Recheck immediately before the final fallible publication step.
+        for (size_t buildIndex = 0;
+             buildIndex <
+                 artifactsToCommit.size();
+             ++buildIndex)
+        {
+            const auto& preparedBuild =
+                preparedWorld
+                    .graphicsCandidateState
+                    .shaderBuildArtifacts[
+                        buildIndex];
+            const ShaderCompiler::
+                CandidateSourceValidationResult
+                    sourceValidation =
+                        shaderCompiler
+                            ->ValidateCandidateSourcesStillCurrent(
+                                preparedBuild.request,
+                                artifactsToCommit[
+                                    buildIndex]);
+            if (!sourceValidation.current)
+            {
+                throw std::runtime_error(
+                    "World transaction shader candidate became stale before commit: " +
+                    sourceValidation.reason +
+                    "; source=" +
+                    sourceValidation.sourceIdentity);
+            }
+        }
+        ValidateMaterialDefinitionSourcesStillCurrent(
+            materialDefinitionReload,
+            shaderCompiler->GetShaderRoot());
+        if (worldGraphTransactionTestFaultInjection
+                .failBeforeCommit)
+        {
+            throw std::runtime_error(
+                "Injected failure after all World/graph/runtime prepare steps");
+        }
+
+        ResourceRetireQueue& retireQueue =
+            ResourceRetireQueue::GetInstance();
+        constexpr size_t MaximumRetirementCount = 4;
+        std::vector<RetiredResource>
+            retirementResources;
+        retirementResources.reserve(
+            MaximumRetirementCount);
+        const uint64_t oldWorldGeneration =
+            GetSubsystems()
+                .GetWorldManager()
+                .GetActiveWorldHandle()
+                .generation;
+        const uint64_t lastUsedEpoch =
+            retireQueue.GetLastSubmittedEpoch();
+        retirementResources.push_back({
+            "WorldTransaction:World",
+            oldWorldGeneration,
+            lastUsedEpoch,
+            {}});
+        retirementResources.push_back({
+            "WorldTransaction:WorldLocalResources",
+            oldWorldGeneration,
+            lastUsedEpoch,
+            {}});
+        retirementResources.push_back({
+            "WorldTransaction:RenderGraph",
+            oldWorldGeneration,
+            lastUsedEpoch,
+            {}});
+        retirementResources.push_back({
+            "WorldTransaction:FrameLightBuffer",
+            oldWorldGeneration,
+            lastUsedEpoch,
+            {}});
+        PreparedResourceRetirements
+            preparedRetirements =
+                retireQueue.PrepareRetirements(
+                    std::move(
+                        retirementResources));
+        const WorldHandle committedHandle =
+            preparedWorld.activation.handle;
+        RuntimeResult<WorldHandle> committedResult =
+            RuntimeResult<WorldHandle>::Success(
+                committedHandle);
+        const std::string commitDiagnostic =
+            "World/graph transaction committed: generation=" +
+            std::to_string(committedHandle.generation) +
+            ", scene=" + committedHandle.scenePath +
+            ", graphGeneration=" +
+            std::to_string(committedHandle.generation) +
+            ", renderSystemGeneration=" +
+            std::to_string(committedHandle.generation) +
+            ", controllerGeneration=" +
+            std::to_string(committedHandle.generation);
+
+        shaderCompiler
+            ->CommitArtifactsWithAdditionalFiles(
+                artifactsToCommit,
+                generatedIncludeWrites);
+
+        // All work below is a prevalidated ownership swap. The complete
+        // retirement queue state was prepared before file publication.
+        RenderSystem::GetInstance()
+            .ClearPendingWorldSnapshots();
+        pipelineFactory->CommitPreparedCandidate(
+            std::move(preparedPipelineCommit));
+
+        RendererResourceCache::
+            WorldLocalResourcePackageHandle
+                retiredWorldResources =
+                    RendererResourceCache::
+                        GetInstance()
+                            .CommitCandidate(
+                                std::move(
+                                    *preparedWorld
+                                         .resourceCache));
+        RenderGraph::GetInstance().SwapState(
+            candidateGraph->GetGraph());
+        std::shared_ptr<World> retiredWorld =
+            GetSubsystems()
+                .GetWorldManager()
+                .CommitPreparedActivation(
+                    std::move(
+                        preparedWorld.activation));
+        std::shared_ptr<void>
+            retiredLightBuffer =
+                RenderSystem::GetInstance()
+                    .CommitPreparedRuntimeBinding(
+                        std::move(
+                            preparedRuntime));
+        controller->SetViewTarget(
+            std::move(viewTarget),
+            GetSubsystems()
+                .GetWorldManager()
+                .GetActiveWorldHandle()
+                .generation);
+
+        preparedRetirements
+            .GetAdditionalResource(0)
+            .resource =
+            std::static_pointer_cast<void>(
+                std::move(retiredWorld));
+        preparedRetirements
+            .GetAdditionalResource(1)
+            .resource =
+            std::static_pointer_cast<void>(
+                std::move(
+                    retiredWorldResources));
+        preparedRetirements
+            .GetAdditionalResource(2)
+            .resource =
+            std::static_pointer_cast<void>(
+                std::move(candidateGraph));
+        preparedRetirements
+            .GetAdditionalResource(3)
+            .resource =
+            std::move(retiredLightBuffer);
+        retireQueue.CommitPreparedRetirements(
+            std::move(
+                preparedRetirements));
+
+        try
+        {
+            GetSubsystems()
+                .GetDiagnosticsSubsystem()
+                .ReportInfo(commitDiagnostic);
+        }
+        catch (...)
+        {
+        }
+        return committedResult;
+    }
+    catch (const std::exception& exception)
+    {
+        return RuntimeResult<WorldHandle>::Failure(
+            MakeRuntimeError(
+                "EngineLoop.WorldGraphTransactionFailed",
+                exception.what(),
+                scenePath));
+    }
+}
+
+RuntimeResult<WorldHandle>
+EngineLoop::ExecuteMaterialDefinitionWorldGraphTransactionForTest(
+    const std::set<std::string>& sourceIdentities,
+    uint64_t batchId)
+{
+    MaterialDefinitionReloadBatch batch =
+        BuildMaterialDefinitionReloadBatch(
+            batchId,
+            sourceIdentities,
+            shaderCompiler->GetShaderRoot());
+    return ExecuteWorldGraphTransaction(
+        GetSubsystems().GetWorldManager()
+            .GetActiveWorldHandle().scenePath,
+        &batch);
+}
+
+void EngineLoop::SetWorldGraphTransactionTestFaultInjection(
+    WorldGraphTransactionTestFaultInjection injection) noexcept
+{
+    worldGraphTransactionTestFaultInjection =
+        injection;
+}
+
+void EngineLoop::ProcessRequestedWorldTransition(
+    RuntimeCommandExecutionResult& commandResult)
+{
+    if (!commandResult.worldLoadRequested)
+    {
+        return;
+    }
+
+    commandResult.worldRuntimeBindingAttempted =
+        true;
+    auto transactionResult =
+        ExecuteWorldGraphTransaction(
+            commandResult
+                .loadWorldResolvedPath);
+    if (transactionResult.IsFailure())
+    {
+        commandResult.loadWorldError =
+            transactionResult.Error();
+        commandResult.rendererResourcesAfterLoad =
+            CaptureRuntimeRendererResourceFingerprint();
+        GetSubsystems()
+            .GetDiagnosticsSubsystem()
+            .ReportRuntimeError(
+                "LoadWorld transaction failed",
+                transactionResult.Error());
+        return;
+    }
+
+    commandResult.worldChanged = true;
+    commandResult.loadWorldSucceeded = true;
+    commandResult
+        .worldRuntimeBindingSucceeded = true;
+    commandResult.loadedWorld =
+        transactionResult.Value();
+    commandResult.rendererResourcesAfterLoad =
+        CaptureRuntimeRendererResourceFingerprint();
+}
+
+void EngineLoop::ProcessPendingMaterialDefinitionReload()
+{
+    if (pendingMaterialDefinitionSources.empty() ||
+        !shaderCompileWorker->IsIdle() ||
+        shaderFileMonitor
+            ->HasUnstableSourceChanges() ||
+        failedPendingMaterialDefinitionSourceEpoch ==
+            pendingMaterialDefinitionSourceEpoch)
+    {
+        return;
+    }
+
+    const WorldHandle& activeWorld =
+        GetSubsystems()
+            .GetWorldManager()
+            .GetActiveWorldHandle();
+    if (!activeWorld.IsValid())
+    {
+        return;
+    }
+
+    const uint64_t batchId =
+        nextShaderReloadGeneration++;
+    try
+    {
+        MaterialDefinitionReloadBatch batch =
+            BuildMaterialDefinitionReloadBatch(
+                batchId,
+                pendingMaterialDefinitionSources,
+                shaderCompiler->GetShaderRoot());
+        auto transactionResult =
+            ExecuteWorldGraphTransaction(
+                activeWorld.scenePath,
+                &batch);
+        if (transactionResult.IsFailure())
+        {
+            throw std::runtime_error(
+                FormatRuntimeError(
+                    transactionResult.Error()));
+        }
+
+        latestMaterialDefinitionReloadCommittedGeneration =
+            batchId;
+        pendingMaterialDefinitionSources.clear();
+        pendingMaterialDefinitionSourceEpoch = 0;
+        failedPendingMaterialDefinitionSourceEpoch = 0;
+        GetSubsystems()
+            .GetDiagnosticsSubsystem()
+            .ReportInfo(
+                "Material definition reload batch " +
+                std::to_string(batchId) +
+                " committed all-or-nothing: changedM_=" +
+                std::to_string(
+                    batch.changedSources.size()) +
+                ", worldGeneration=" +
+                std::to_string(
+                    transactionResult.Value()
+                        .generation));
+    }
+    catch (const std::exception& exception)
+    {
+        latestMaterialDefinitionReloadFailedGeneration =
+            batchId;
+        failedPendingMaterialDefinitionSourceEpoch =
+            pendingMaterialDefinitionSourceEpoch;
+        GetSubsystems()
+            .GetDiagnosticsSubsystem()
+            .ReportError(
+                "Material definition reload batch " +
+                std::to_string(batchId) +
+                " rejected; active World/graph/material resources and formal artifacts remain unchanged: " +
+                exception.what());
+    }
+}
+
 RuntimeResult<void> EngineLoop::BindActiveWorldRuntimeObjects(const WorldHandle& worldHandle)
 {
     if (!worldHandle.IsValid())
@@ -732,6 +1804,7 @@ RuntimeResult<void> EngineLoop::RecreateRendererForWindowResize(uint32_t width, 
             "Cannot resize renderer resources before the renderer backend is initialized."));
     }
 
+    bool liveResizeMutationStarted = false;
     try
     {
         WaitForRenderThreadIdle();
@@ -745,21 +1818,36 @@ RuntimeResult<void> EngineLoop::RecreateRendererForWindowResize(uint32_t width, 
         rendererBackend->WaitIdle();
 
         RenderGraph& renderGraph = RenderGraph::GetInstance();
+        const uint64_t graphOwnerGeneration =
+            renderGraph.GetOwnerGeneration();
         auto passMaterialSnapshot = renderGraph.CapturePassMaterialInstances();
 
+        liveResizeMutationStarted = true;
         renderGraph.Shutdown(*rendererBackend);
         RenderSystem::GetInstance().ReleaseSwapchainDependentResources();
         rendererBackend->RecreateSwapchain(
             static_cast<int>(width),
             static_cast<int>(height));
+        if (worldGraphTransactionTestFaultInjection
+                .failResizeAfterSwapchainRecreate)
+        {
+            throw std::runtime_error(
+                "Injected resize failure after swapchain recreation");
+        }
         renderGraph.LoadRenderGraph(
             GetRuntimeConfig().GetRenderGraphJson(),
             *rendererBackend);
         renderGraph.RestorePassMaterialInstances(passMaterialSnapshot);
+        renderGraph.SetOwnerGeneration(
+            graphOwnerGeneration);
         RenderSystem::GetInstance().RebuildSwapchainDependentResources();
     }
     catch (const std::exception& exception)
     {
+        if (liveResizeMutationStarted)
+        {
+            shouldClose = true;
+        }
         return RuntimeResult<void>::Failure(MakeRuntimeError(
             "EngineLoop.ResizeRecreateFailed",
             exception.what()));
@@ -787,15 +1875,65 @@ RuntimeResult<void> EngineLoop::ReloadRenderGraphResources(VL::RenderGraphReleas
                 "Cannot reload render graph resources because the render thread failed."));
         }
 
-        RenderGraph& renderGraph = RenderGraph::GetInstance();
-        auto passMaterialSnapshot = renderGraph.CapturePassMaterialInstances();
+        (void)releaseMode;
+        RenderGraph& renderGraph =
+            RenderGraph::GetInstance();
+        auto candidateGraph =
+            std::make_shared<
+                PreparedRenderGraphState>(
+                *rendererBackend);
+        candidateGraph->GetGraph()
+            .SetTestFaultInjection(
+                BuildRenderGraphTestFaultInjection(
+                    worldGraphTransactionTestFaultInjection));
+        candidateGraph->Load(
+            GetRuntimeConfig()
+                .GetRenderGraphJson());
+        candidateGraph->GetGraph()
+            .RestorePassMaterialInstances(
+                renderGraph
+                    .CapturePassMaterialInstances());
+        candidateGraph->GetGraph()
+            .SetOwnerGeneration(
+                renderGraph
+                    .GetOwnerGeneration());
+        RenderSystem::GetInstance()
+            .PrepareRenderGraphReload(
+                candidateGraph->GetGraph());
+        if (worldGraphTransactionTestFaultInjection
+                .failBeforeCommit)
+        {
+            throw std::runtime_error(
+                "Injected failure after RenderGraph reload prepare");
+        }
 
-        renderGraph.Shutdown(*rendererBackend, releaseMode);
-        renderGraph.LoadRenderGraph(
-            GetRuntimeConfig().GetRenderGraphJson(),
-            *rendererBackend);
-        renderGraph.RestorePassMaterialInstances(passMaterialSnapshot);
-        RenderSystem::GetInstance().RebuildRenderGraphDependentResources();
+        ResourceRetireQueue& retireQueue =
+            ResourceRetireQueue::GetInstance();
+        const uint64_t ownerGeneration =
+            renderGraph.GetOwnerGeneration();
+        const uint64_t lastUsedEpoch =
+            retireQueue.GetLastSubmittedEpoch();
+        std::vector<RetiredResource>
+            retirement;
+        retirement.reserve(1);
+        retirement.push_back({
+            "RenderGraphReload:State",
+            ownerGeneration,
+            lastUsedEpoch,
+            {}});
+        PreparedResourceRetirements
+            preparedRetirement =
+                retireQueue.PrepareRetirements(
+                    std::move(retirement));
+        renderGraph.SwapState(
+            candidateGraph->GetGraph());
+        preparedRetirement
+            .GetAdditionalResource(0)
+            .resource =
+            std::static_pointer_cast<void>(
+                std::move(candidateGraph));
+        retireQueue.CommitPreparedRetirements(
+            std::move(preparedRetirement));
     }
     catch (const std::exception& exception)
     {

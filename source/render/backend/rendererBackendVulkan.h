@@ -21,6 +21,46 @@ namespace VL
 
 class RHIDeviceVulkan;
 
+struct RendererBackendResourceIdentityCounts
+{
+    size_t buffers = 0;
+    size_t images = 0;
+    size_t imageViews = 0;
+    size_t samplers = 0;
+    size_t descriptorSetLayouts = 0;
+    size_t descriptorPools = 0;
+    size_t descriptorSets = 0;
+    size_t renderPasses = 0;
+    size_t framebuffers = 0;
+
+    bool operator==(
+        const RendererBackendResourceIdentityCounts& other) const noexcept
+    {
+        return buffers == other.buffers &&
+            images == other.images &&
+            imageViews == other.imageViews &&
+            samplers == other.samplers &&
+            descriptorSetLayouts == other.descriptorSetLayouts &&
+            descriptorPools == other.descriptorPools &&
+            descriptorSets == other.descriptorSets &&
+            renderPasses == other.renderPasses &&
+            framebuffers == other.framebuffers;
+    }
+
+    bool operator!=(
+        const RendererBackendResourceIdentityCounts& other) const noexcept
+    {
+        return !(*this == other);
+    }
+};
+
+struct RendererBackendImageResourceDebugNames
+{
+    std::vector<std::string> images;
+    std::vector<std::string> imageViews;
+    std::vector<std::string> samplers;
+};
+
 struct RendererFrameContext
 {
     // frameIndex addresses the frame-in-flight sync ring; swapchainImageIndex
@@ -43,6 +83,10 @@ public:
 
     void Initialize(std::vector<const char*>& instanceExtensions, SDL_Window* window);
     void WaitIdle();
+    RendererBackendResourceIdentityCounts
+        CaptureResourceIdentityCounts() const noexcept;
+    RendererBackendImageResourceDebugNames
+        CaptureImageResourceDebugNames() const;
     void RecreateSwapchain(int width, int height);
     std::unique_ptr<PipelineFactory> CreatePipelineFactory();
 
@@ -244,8 +288,11 @@ private:
     std::unordered_map<VkDeviceMemory, RHIBufferHandle> bufferHandlesByMemory;
     std::unordered_map<VkImage, RHIImageHandle> imageHandlesByImage;
     std::unordered_map<VkDeviceMemory, RHIImageHandle> imageHandlesByMemory;
+    std::unordered_map<VkImage, std::string> imageDebugNamesByImage;
     std::unordered_map<VkImageView, RHIImageViewHandle> imageViewHandlesByImageView;
+    std::unordered_map<VkImageView, std::string> imageViewDebugNamesByImageView;
     std::unordered_map<VkSampler, RHISamplerHandle> samplerHandlesBySampler;
+    std::unordered_map<VkSampler, std::string> samplerDebugNamesBySampler;
     std::unordered_map<VkDescriptorSetLayout, RHIDescriptorSetLayoutHandle> descriptorSetLayoutHandlesByLayout;
     std::unordered_map<VkDescriptorPool, RHIDescriptorPoolHandle> descriptorPoolHandlesByPool;
     std::unordered_map<VkDescriptorSet, RHIDescriptorSetHandle> descriptorSetHandlesBySet;

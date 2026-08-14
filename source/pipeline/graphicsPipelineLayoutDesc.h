@@ -42,6 +42,7 @@ struct GraphicsPipelineLayoutDesc
             {
                 stream << binding.binding << ","
                        << static_cast<uint32_t>(binding.type) << ","
+                       << binding.descriptorCount << ","
                        << static_cast<uint32_t>(binding.stageFlags) << ","
                        << binding.memberCount << ","
                        << binding.size << ","
@@ -56,6 +57,10 @@ struct GraphicsPipelineLayoutDesc
                     if (memberIndex < binding.memberOffsets.size())
                     {
                         stream << ",offset=" << binding.memberOffsets[memberIndex];
+                    }
+                    if (memberIndex < binding.memberTypes.size())
+                    {
+                        stream << ",type=" << binding.memberTypes[memberIndex];
                     }
                     stream << ";";
                 }

@@ -1,0 +1,47 @@
+{
+    "name": "M_shaderReloadTest",
+    "type": "material",
+    "shadingModel": "Unlit",
+    "shaderEvaluation": {
+        "vertex": "runtimeTest/mf_shaderReloadTestVertex.glsl",
+        "surface": "runtimeTest/mf_shaderReloadTestSurface.glsl"
+    },
+    "features": {
+        "modifiesMeshPosition": false
+    },
+    "renderStates": {
+        "renderMode": "OpaqueClip",
+        "cullMode": "Back"
+    },
+    "macros": {
+        "USE_RELOAD_REQUIRED_TEXTURE": 0
+    },
+    "parameters": {
+        "u_reloadTestColor": {
+            "type": "vec4",
+            "default": [0.2, 0.5, 0.9, 1.0]
+        },
+        "u_alphaClipThreshold": {
+            "type": "float",
+            "default": 0.25
+        },
+        "u_reloadRuntimeScalar": {
+            "type": "float",
+            "default": 0.125
+        }
+    },
+    "textures": {
+        "u_reloadTexture": {
+            "type": "sampler2D",
+            "default": "textures/T_Texture.json"
+        },
+        "u_reloadAlternateTexture": {
+            "type": "sampler2D",
+            "default": "textures/T_UV_Checker.json"
+        },
+        "u_zReloadRetiredTexture": {
+            "type": "sampler2D",
+            "default": "textures/T_Viking_Room.json"
+        }
+    }
+}

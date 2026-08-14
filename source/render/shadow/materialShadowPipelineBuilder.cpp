@@ -131,11 +131,12 @@ bool RequiresMaterialShadowPass(const VL::MaterialFeatureKey& features)
 
 } // namespace
 
-std::shared_ptr<PipelineBase> BuildMaterialShadowPipeline(
+MaterialShadowPipelineBuildResult BuildMaterialShadowPipeline(
     PipelineFactory& pipelineFactory,
     Renderpass* canonicalShadowPass,
     const MaterialInstanceBuildPlan& loadPlan,
-    const Material& material)
+    const Material& material,
+    PipelineFactory::GraphicsCandidateState* candidateState)
 {
     // 顯式 override 只在完整配對時啟用。不完整配對只忽略 override，後續仍可
     // 走自動生成；真正的編譯或合同錯誤則必須中止，不能靜默回退。
@@ -158,7 +159,7 @@ std::shared_ptr<PipelineBase> BuildMaterialShadowPipeline(
         RequiresMaterialShadowPass(loadPlan.materialFeatureKey);
     if (!hasExplicitOverride && !requiresGeneratedPass)
     {
-        return nullptr;
+        return {};
     }
     if (!hasExplicitOverride && !loadPlan.baseShaderCompileRequest)
     {
@@ -177,37 +178,117 @@ std::shared_ptr<PipelineBase> BuildMaterialShadowPipeline(
         // override 是完整 stage shader，只替換 shader pair，靜態 MI variant 保持一致。
         ShaderVariantKey shadowVariant = loadPlan.shaderVariantKey;
         shadowVariant.shaderName += ".shadow";
-        shadowShaderArtifact =
-            &pipelineFactory.PrepareGraphicsShaderVariant(shadowVariant);
+        shadowShaderArtifact = candidateState != nullptr
+            ? &pipelineFactory.PrepareGraphicsShaderVariantCandidate(
+                *candidateState,
+                shadowVariant)
+            : &pipelineFactory.PrepareGraphicsShaderVariant(
+                shadowVariant);
     }
     else
     {
         VL::MaterialShaderCompileRequest shadowRequest =
             *loadPlan.baseShaderCompileRequest;
         shadowRequest.pass = VL::MaterialPass::ShadowDepth;
-        shadowShaderArtifact =
-            &pipelineFactory.PrepareMaterialShaderVariant(shadowRequest);
+        shadowShaderArtifact = candidateState != nullptr
+            ? &pipelineFactory.PrepareMaterialShaderVariantCandidate(
+                *candidateState,
+                shadowRequest)
+            : &pipelineFactory.PrepareMaterialShaderVariant(
+                shadowRequest);
     }
 
     const std::vector<ShaderBinding>& surfaceBindings =
         material.GetRenderPipeline()->GetShaderBindings();
-    material.GetMaterialDescriptorSchema().ValidateShaderBindings(
-        shadowShaderArtifact->shaderBindings,
-        shadowShaderArtifact->displayName);
-    ValidateInheritedEngineBindings(
+    ValidateMaterialShadowShaderBindings(
         loadPlan.materialKey,
+        material.GetMaterialDescriptorSchema(),
         surfaceBindings,
         shadowShaderArtifact->shaderBindings);
 
     // 使用 canonical Shadow pass 的深度合同建立管線，並繼承 Base Set 0/2
     // 與完整材質 Set 1，使繪製時直接綁定 MI 已有 descriptor set。
-    return pipelineFactory.CreateGraphicsPipeline(
-        &canonicalShadowPass->renderPass,
-        canonicalShadowPass->pipelineContractKey,
-        *shadowShaderArtifact,
-        loadPlan.cullMode,
-        GraphicsPipelineBlendMode::Opaque,
-        BuildInheritedMaterialLayout(material, surfaceBindings));
+    MaterialShadowPipelineBuildResult result;
+    const GraphicsPipelineLayoutDesc shadowLayout =
+        BuildInheritedMaterialLayout(material, surfaceBindings);
+    result.pipeline = candidateState != nullptr
+        ? pipelineFactory.CreateGraphicsPipelineCandidate(
+            *candidateState,
+            &canonicalShadowPass->renderPass,
+            canonicalShadowPass->pipelineContractKey,
+            *shadowShaderArtifact,
+            loadPlan.cullMode,
+            GraphicsPipelineBlendMode::Opaque,
+            shadowLayout)
+        : pipelineFactory.CreateGraphicsPipeline(
+            &canonicalShadowPass->renderPass,
+            canonicalShadowPass->pipelineContractKey,
+            *shadowShaderArtifact,
+            loadPlan.cullMode,
+            GraphicsPipelineBlendMode::Opaque,
+            shadowLayout);
+    result.shaderArtifact = *shadowShaderArtifact;
+    result.reloadRecipe.passName = canonicalShadowPass->name;
+    result.reloadRecipe.passPipelineContractKey =
+        canonicalShadowPass->pipelineContractKey;
+    result.reloadRecipe.shader.shaderVariantKey =
+        loadPlan.shaderVariantKey;
+    if (hasExplicitOverride)
+    {
+        result.reloadRecipe.shader.shaderVariantKey.shaderName += ".shadow";
+    }
+    result.reloadRecipe.shader.kind = hasExplicitOverride
+        ? GraphicsShaderReloadRecipeKind::StandaloneVariant
+        : GraphicsShaderReloadRecipeKind::MaterialComposed;
+    if (!hasExplicitOverride)
+    {
+        MaterialShaderCompileRequest shadowRequest =
+            *loadPlan.baseShaderCompileRequest;
+        shadowRequest.pass = MaterialPass::ShadowDepth;
+        result.reloadRecipe.shader.materialCompileRequest =
+            std::move(shadowRequest);
+    }
+    result.reloadRecipe.cullMode = loadPlan.cullMode;
+    result.reloadRecipe.blendMode = GraphicsPipelineBlendMode::Opaque;
+    result.reloadRecipe.layoutKind =
+        MaterialPipelineLayoutRecipeKind::ShadowInheritedSurface;
+    return result;
+}
+
+void ValidateMaterialShadowShaderBindings(
+    const std::string& materialName,
+    const MaterialDescriptorSchema& materialDescriptorSchema,
+    const std::vector<ShaderBinding>& surfaceBindings,
+    const std::vector<ShaderBinding>& shadowBindings)
+{
+    materialDescriptorSchema.ValidateShaderBindings(
+        shadowBindings,
+        materialName);
+    ValidateInheritedEngineBindings(
+        materialName,
+        surfaceBindings,
+        shadowBindings);
+}
+
+GraphicsPipelineLayoutDesc BuildMaterialShadowPipelineLayout(
+    const MaterialDescriptorSchema& materialDescriptorSchema,
+    const std::vector<ShaderBinding>& surfaceBindings)
+{
+    GraphicsPipelineLayoutDesc layoutDesc;
+    for (uint32_t setIndex = GlobalSetIndex; setIndex <= ObjectSetIndex; ++setIndex)
+    {
+        layoutDesc.overrideSets[setIndex] = true;
+    }
+    for (const ShaderBinding& binding : surfaceBindings)
+    {
+        if (binding.set == GlobalSetIndex || binding.set == ObjectSetIndex)
+        {
+            layoutDesc.setBindings[binding.set].push_back(binding);
+        }
+    }
+    layoutDesc.setBindings[MaterialSetIndex] =
+        materialDescriptorSchema.GetSetBindings();
+    return layoutDesc;
 }
 
 } // namespace VL

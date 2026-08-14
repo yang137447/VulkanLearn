@@ -40,7 +40,7 @@ public:
         }
     }
 
-    void Reset()
+    void Reset() noexcept
     {
         observedSnapshot = EnvironmentSnapshot();
         requestedGeneration = 0;

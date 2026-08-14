@@ -101,6 +101,12 @@ void RendererDescriptorPlanCache::Clear()
     passPlans.clear();
 }
 
+void RendererDescriptorPlanCache::Swap(
+    RendererDescriptorPlanCache& other) noexcept
+{
+    passPlans.swap(other.passPlans);
+}
+
 void RendererDescriptorPlanCache::RebuildPassPlan(
     const std::string& passName,
     const std::vector<CompiledRenderGraphPassInputDescriptor>& inputDescriptorPlan,

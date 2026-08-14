@@ -52,9 +52,12 @@ void Controller::Update(float deltaTime, const VL::InputActionState& input)
     viewTarget->SetDeltaRotation(deltaRot);
 }
 
-void Controller::SetViewTarget(std::shared_ptr<SceneNode> viewTarget)
+void Controller::SetViewTarget(
+    std::shared_ptr<SceneNode> viewTarget,
+    uint64_t worldGeneration) noexcept
 {
-    this->viewTarget = viewTarget;
+    this->viewTarget = std::move(viewTarget);
+    boundWorldGeneration = worldGeneration;
 }
 
 void Controller::SetMoveVelocity(float moveSpeed)

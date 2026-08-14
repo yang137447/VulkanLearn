@@ -51,6 +51,7 @@ public:
     float GetWindowAspectRatio() const;
     const std::string& GetInitialSceneRelativePath() const;
     const std::string& GetResourcePath() const;
+    int GetWorkerThreadCount() const;
     bool ShouldUseRenderThread() const;
     const CsmSettings& GetCsmSettings() const;
     const UiSettings& GetUiSettings() const;

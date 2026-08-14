@@ -83,6 +83,7 @@ class SpeedTreeWindProfileSet
 public:
     void Configure(const std::unordered_map<std::string, SpeedTreeWindProfile>& profiles);
     void Reset();
+    void Swap(SpeedTreeWindProfileSet& other) noexcept;
     void AdvanceTo(double timeSeconds);
     // Expects a finite normalized strength in [0, 1]. External input must be
     // validated at its source before reaching the wind simulation.

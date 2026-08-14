@@ -118,12 +118,44 @@ struct Renderpass
 class RenderGraph
 {
 public:
+    struct TestFaultInjection
+    {
+        // Zero disables numbered creation failures. These faults are only
+        // configured on isolated candidate graphs by runtime validation tests.
+        size_t failResourceCreationAt = 0;
+        size_t failRenderPassCreationAt = 0;
+        size_t failFramebufferCreationAt = 0;
+        size_t failDescriptorCreationAt = 0;
+        bool failPassMaterialContract = false;
+    };
+
     static RenderGraph& GetInstance()
     {
         static RenderGraph instance;
         return instance;
     }
     ~RenderGraph();
+    RenderGraph() = default;
+    RenderGraph(const RenderGraph&) = delete;
+    RenderGraph& operator=(const RenderGraph&) = delete;
+    RenderGraph(RenderGraph&&) = delete;
+    RenderGraph& operator=(RenderGraph&&) = delete;
+
+    // Candidate graphs are built in an isolated instance. The final runtime
+    // transaction swaps only already-created state at the render-thread safe
+    // point, so no Vulkan creation or validation can fail after publication.
+    void SwapState(RenderGraph& other) noexcept;
+    bool HasState() const noexcept;
+    void SetTestFaultInjection(
+        TestFaultInjection injection) noexcept;
+    void SetOwnerGeneration(uint64_t generation) noexcept
+    {
+        ownerGeneration = generation;
+    }
+    uint64_t GetOwnerGeneration() const noexcept
+    {
+        return ownerGeneration;
+    }
     void LoadRenderGraph(
         const nlohmann::json& renderGraphJson,
         VL::RendererBackendVulkan& rendererBackend);
@@ -192,6 +224,10 @@ private:
     bool IsDepthResource(const std::string& resourceName) const;
     
     std::vector<vk::ClearValue> GetClearValues(const std::vector<std::string>& outputResources, bool bUseMsaa);
+    void MaybeFailResourceCreation();
+    void MaybeFailRenderPassCreation();
+    void MaybeFailFramebufferCreation();
+    void MaybeFailDescriptorCreation();
 private:
     std::unordered_map<std::string, std::vector<RenderResource>> resourcesMsaa;
     std::unordered_map<std::string, std::vector<RenderResource>> resourcesResolve;
@@ -201,4 +237,10 @@ private:
     std::string canonicalShadowPassName;
     VL::CompiledRenderGraph compiledFrameGraph;
     VL::RendererDescriptorPlanCache descriptorPlanCache;
+    uint64_t ownerGeneration = 0;
+    TestFaultInjection testFaultInjection;
+    size_t testResourceCreationCount = 0;
+    size_t testRenderPassCreationCount = 0;
+    size_t testFramebufferCreationCount = 0;
+    size_t testDescriptorCreationCount = 0;
 };

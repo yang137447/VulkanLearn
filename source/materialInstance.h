@@ -1,10 +1,14 @@
 #pragma once
 #include <cstdint>
+#include <map>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <unordered_map>
+#include <utility>
+#include <variant>
 #include <vulkan/vulkan.hpp>
 #include "baseStructs.h"
 #include <Eigen/Dense>
@@ -48,6 +52,48 @@ struct ParamMap
             break;
         }
     }
+};
+
+using MaterialInstanceParameterValue =
+    std::variant<float, Eigen::Vector2f, Eigen::Vector3f, Eigen::Vector4f>;
+
+struct MaterialInstanceTextureBindingSnapshot
+{
+    MaterialInstanceTextureBindingSnapshot(
+        std::shared_ptr<Texture> textureValue,
+        std::optional<std::string> textureAssetIdentityValue,
+        std::optional<std::string> textureCacheIdentityValue)
+        : texture(std::move(textureValue))
+        , textureAssetIdentity(std::move(textureAssetIdentityValue))
+        , textureCacheIdentity(std::move(textureCacheIdentityValue))
+    {
+    }
+
+    const std::shared_ptr<Texture> texture;
+    const std::optional<std::string> textureAssetIdentity;
+    const std::optional<std::string> textureCacheIdentity;
+};
+
+struct MaterialInstanceStateSnapshot
+{
+    using ParameterMap =
+        std::map<std::string, MaterialInstanceParameterValue>;
+    using TextureMap =
+        std::map<std::string, MaterialInstanceTextureBindingSnapshot>;
+
+    MaterialInstanceStateSnapshot(
+        std::string normalizedIdentity,
+        ParameterMap parameterValues,
+        TextureMap textureBindings)
+        : normalizedMaterialInstanceIdentity(std::move(normalizedIdentity))
+        , parameters(std::move(parameterValues))
+        , textures(std::move(textureBindings))
+    {
+    }
+
+    const std::string normalizedMaterialInstanceIdentity;
+    const ParameterMap parameters;
+    const TextureMap textures;
 };
 
 class MaterialInstance
@@ -99,6 +145,11 @@ public:
     bool HasParameter(const std::string& parameterName) const;
     //设置纹理
     void SetTexture(const std::string& textureName, const std::shared_ptr<Texture>& texture);
+    void SetTexture(
+        const std::string& textureName,
+        const std::shared_ptr<Texture>& texture,
+        std::optional<std::string> textureAssetIdentity,
+        std::optional<std::string> textureCacheIdentity);
     //获取纹理
     std::shared_ptr<Texture> GetTexture(const std::string& textureName) const;
     //检查纹理是否存在
@@ -109,6 +160,7 @@ public:
 
     void SetName(const std::string& name) { materialInstanceName = name; }
     const std::string& GetName() const { return materialInstanceName; }
+    MaterialInstanceStateSnapshot CaptureStateSnapshot() const;
 
     inline std::vector<void*>& GetUboMaterialInstanceMapped(){ return uboMaterialInstance.buffersMapped; }
     std::vector<vk::DescriptorBufferInfo>& GetUboMaterialInstanceInfo(){ return uboMaterialInstance.bufferInfos; }
@@ -133,6 +185,12 @@ private:
     std::unordered_map<std::string, Eigen::Vector3f> vec3Parameters;
     std::unordered_map<std::string, Eigen::Vector4f> vec4Parameters;
     std::unordered_map<std::string, std::shared_ptr<Texture>> textures;
+    struct TextureBindingIdentity
+    {
+        std::optional<std::string> textureAssetIdentity;
+        std::optional<std::string> textureCacheIdentity;
+    };
+    std::unordered_map<std::string, TextureBindingIdentity> textureBindingIdentities;
     Buffer uboMaterialInstance; 
     VL::RendererBackendVulkan* rendererBackend = nullptr;
     bool renderInitialized = false;

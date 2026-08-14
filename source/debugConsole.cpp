@@ -299,6 +299,54 @@ void DebugConsole::ProcessCommand(const std::string& line)
         return;
     }
 
+    if (command == "shaderreload")
+    {
+        std::string scope;
+        if (!(commandStream >> scope))
+        {
+            std::cout << "Usage: shaderreload <changed|all|help>" << std::endl;
+            return;
+        }
+        if (scope == "help")
+        {
+            PrintShaderReloadHelp();
+            return;
+        }
+        if (scope != "changed" && scope != "all")
+        {
+            std::cout << "Usage: shaderreload <changed|all|help>" << std::endl;
+            return;
+        }
+
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type =
+            VL::RuntimeCommandType::ReloadShaders;
+        runtimeCommand.shaderReloadScope =
+            scope == "all"
+                ? VL::RuntimeShaderReloadScope::All
+                : VL::RuntimeShaderReloadScope::Changed;
+        runtimeCommand.sourceText = line;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
+    if (command == "shadercache")
+    {
+        std::string action;
+        if (!(commandStream >> action) || action != "stats")
+        {
+            std::cout << "Usage: shadercache stats" << std::endl;
+            return;
+        }
+
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type =
+            VL::RuntimeCommandType::ReportShaderCacheStatistics;
+        runtimeCommand.sourceText = line;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
     std::cout << "Unknown command: " << command << std::endl;
 }
 
@@ -333,6 +381,25 @@ void DebugConsole::PrintHelp() const
     std::cout << "  environment <value> - set unified sky and IBL intensity\n";
     std::cout << "  windgust <on|off|once> - toggle or trigger one SpeedTree gust\n";
     std::cout << "  windstrength <0..1> - set the SpeedTree base strength target\n";
+    std::cout << "  shaderreload <changed|all> - transactionally publish live Graphics, Compute, and UI shaders\n";
+    std::cout << "  shaderreload help - show hot-reload triggers by resource type\n";
+    std::cout << "  shadercache stats - report shader build cache statistics\n";
+}
+
+void DebugConsole::PrintShaderReloadHelp() const
+{
+    std::cout << "Shader hot-reload triggers:\n";
+    std::cout << "  Material/Graphics - save .vert, .frag, or a depended-on .glsl file\n";
+    std::cout << "  Compute           - save .comp or a depended-on .glsl file\n";
+    std::cout << "  UI Overlay        - save uiOverlay .vert/.frag or a depended-on .glsl file\n";
+    std::cout << "  Material M_*.json - save the definition under shader/glsl; rebuilds World/Graph resources and migrates compatible live MI state\n";
+    std::cout << "  Shared include    - save .glsl; only live dependents are rebuilt\n";
+    std::cout << "Manual commands:\n";
+    std::cout << "  shaderreload changed - rebuild live dependents changed since the committed manifest\n";
+    std::cout << "  shaderreload all     - rebuild all live Graphics, Compute, and UI shaders\n";
+    std::cout << "  M_*.json schema reload is automatic; it has no manual shaderreload scope\n";
+    std::cout << "Not watched by this system: MI_*.json, scene JSON, RenderGraph JSON, shader/spv outputs\n";
+    std::cout << "Regular Graphics/Compute/UI replacement requires ABI compatibility.\n";
 }
 
 void DebugConsole::PrintPrompt() const

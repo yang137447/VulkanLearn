@@ -10,12 +10,16 @@
 #include "graphicsShaderVariantArtifact.h"
 
 struct ShaderBinding;
+namespace VL
+{
+class RendererBackendVulkan;
+}
 
 class GraphicsPipeline : public PipelineBase
 {
 public:
     
-    GraphicsPipeline(vk::Device *device,
+    GraphicsPipeline(VL::RendererBackendVulkan* rendererBackend,
                     vk::RenderPass *renderPass,
                     const GraphicsShaderVariantArtifact& shaderArtifact,
                     vk::SampleCountFlagBits sampleCount,
@@ -52,12 +56,12 @@ private:
         bool bIsShadowPass);
     void DestroyGraphicsPipeline();
 private: 
-    
+    VL::RendererBackendVulkan* rendererBackend = nullptr;
     vk::Device* device;
 
     std::string shaderDisplayName;
-    std::string vertexSpvPath;
-    std::string fragmentSpvPath;
+    std::vector<uint32_t> vertexSpirv;
+    std::vector<uint32_t> fragmentSpirv;
 
     std::vector<ShaderBinding> shaderBindings;
     std::vector<ShaderBinding> descriptorLayoutBindings;

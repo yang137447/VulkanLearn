@@ -18,6 +18,8 @@
 #include "render/backend/rendererFrameResources.h"
 #include "render/backend/resolvedRenderScene.h"
 #include "render/environment/environmentIblBaker.h"
+#include "render/environment/environmentComputeReloadParticipants.h"
+#include "shader/reload/computeShaderArtifact.h"
 #include "render/environment/environmentGpuTimer.h"
 #include "render/environment/environmentUpdateScheduler.h"
 #include "render/environment/environmentUpdateState.h"
@@ -40,7 +42,25 @@ namespace VL
 {
 class World;
 class RendererBackendVulkan;
+class ShaderReloadCoordinator;
 }
+
+namespace VL
+{
+
+struct PreparedRuntimeBinding
+{
+    std::shared_ptr<const World> world;
+    WorldSnapshotBuilder snapshotBuilder;
+    RenderScene renderScene;
+    ResolvedRenderScene resolvedRenderScene;
+    RendererFrameResources::PreparedLightCapacity
+        lightCapacity;
+    SpeedTreeWindProfileSet speedTreeWindProfiles;
+    uint64_t nextSnapshotFrameIndex = 0;
+};
+
+} // namespace VL
 
 // Owns the renderer-facing frame path: it converts the active World into an
 // immutable WorldSnapshot, resolves that snapshot into GPU resource handles,
@@ -72,6 +92,36 @@ public:
     void ReleaseSwapchainDependentResources();
     void RebuildSwapchainDependentResources();
     void RebuildRenderGraphDependentResources();
+    void RefreshResolvedSceneAfterShaderReload();
+    std::string GetResolvedShaderGenerationFingerprint() const;
+    uint64_t GetActiveWorldGeneration() const noexcept;
+    VL::PreparedRuntimeBinding PrepareRuntimeBinding(
+        std::shared_ptr<const VL::World> world,
+        VL::RendererResourceCache& candidateCache,
+        RenderGraph& candidateGraph);
+    std::shared_ptr<void> CommitPreparedRuntimeBinding(
+        VL::PreparedRuntimeBinding prepared) noexcept;
+    void ClearPendingWorldSnapshots() noexcept;
+    bool HasPendingWorldSnapshotForTest() const
+    {
+        return worldSnapshotQueue.HasPendingSnapshot();
+    }
+    VL::WorldSnapshotPtr PeekPendingWorldSnapshotForTest() const
+    {
+        const auto pending = worldSnapshotQueue.PeekLatest();
+        return pending ? *pending : nullptr;
+    }
+    size_t GetLightCapacityForTest() const noexcept
+    {
+        return frameResources.GetLightCapacity();
+    }
+    const std::vector<VL::RHIBufferHandle>&
+        GetLightBufferHandlesForTest() const noexcept
+    {
+        return frameResources.GetLightBufferHandlesForTest();
+    }
+    void PrepareRenderGraphReload(
+        RenderGraph& candidateGraph);
     
     const std::vector<vk::DescriptorBufferInfo>& GetUBOGlobalBufferInfo() const
     {
@@ -87,6 +137,8 @@ public:
     void SetEnvironmentIntensity(float intensity) { environmentIntensity = intensity; }
     float GetEnvironmentIntensity() const { return environmentIntensity; }
     VL::EnvironmentUpdateDiagnostics GetEnvironmentUpdateDiagnostics() const;
+    ComputeShaderArtifact GetActiveComputeShaderArtifact(
+        const std::string& shaderName) const;
     bool SetSpeedTreeStrength(float strength);
     float GetSpeedTreeStrength() const { return speedTreeStrength; }
     bool SetSpeedTreeGustingEnabled(bool enabled);
@@ -113,6 +165,11 @@ public:
     // resolved scene from the new generation.
     void SetActiveWorld(std::shared_ptr<const VL::World> world);
     void SetPipelineFactory(PipelineFactory* factory) { pipelineFactory = factory; }
+    void SetShaderReloadCoordinator(
+        VL::ShaderReloadCoordinator* coordinator)
+    {
+        shaderReloadCoordinator = coordinator;
+    }
 private:
     RenderSystem() = default;
     void UpdateUBOGlobal(vk::CommandBuffer& commandBuffer);
@@ -129,6 +186,17 @@ private:
     void AdvanceSpeedTreeWindProfiles();
     void RenderInitialize();
     VL::RendererDescriptorContext BuildRendererDescriptorContext() const;
+    VL::RendererDescriptorContext BuildRendererDescriptorContext(
+        const VL::RendererResourceCache& resourceCache,
+        RenderGraph& renderGraph,
+        const std::vector<vk::DescriptorBufferInfo>&
+            lightBufferInfos) const;
+    std::shared_ptr<Texture> GetEnvironmentCube(
+        const VL::RenderScene& renderScene,
+        const VL::RendererResourceCache& resourceCache) const;
+    void PrepareEnvironmentResources(
+        const VL::RenderScene& renderScene,
+        VL::RendererResourceCache& resourceCache) const;
     void UpdateGlobalUBOForPass(vk::CommandBuffer& commandBuffer) override;
     void UpdateShadowGlobalUBOForPass(
         vk::CommandBuffer& commandBuffer,
@@ -243,8 +311,13 @@ private:
     std::shared_ptr<const VL::World> activeWorld;
     VL::RendererBackendVulkan* rendererBackend = nullptr;
     PipelineFactory* pipelineFactory = nullptr;
+    VL::ShaderReloadCoordinator* shaderReloadCoordinator = nullptr;
     VL::ProceduralSkyCubeGenerator proceduralSkyCubeGenerator;
     VL::EnvironmentIblBaker environmentIblBaker;
+    VL::SkyShGenerateReloadParticipant skyShReloadParticipant{
+        environmentIblBaker};
+    VL::PrefilterEnvMapReloadParticipant prefilterReloadParticipant{
+        environmentIblBaker};
     VL::EnvironmentGpuTimer environmentGpuTimer;
     VL::EnvironmentUpdateScheduler environmentUpdateScheduler;
     VL::EnvironmentUpdateState environmentUpdateState;

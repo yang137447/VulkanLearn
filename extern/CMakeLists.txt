@@ -1,4 +1,5 @@
 add_subdirectory(VulkanSDK)
+add_subdirectory(BLAKE3)
 add_subdirectory(Shaderc)
 add_subdirectory(Eigen3)
 add_subdirectory(STB)

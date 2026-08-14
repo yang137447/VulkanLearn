@@ -22,7 +22,7 @@ class RendererObjectResourceEntry;
 class RendererResourceCache
 {
 public:
-    struct WorldLocalResourceSnapshot
+    struct WorldLocalResourcePackage
     {
         uint64_t ownerGeneration = 0;
         std::unordered_map<std::string, std::shared_ptr<Texture>> worldTextures;
@@ -31,7 +31,17 @@ public:
         std::unordered_map<std::string, std::shared_ptr<MaterialInstance>> materialInstances;
         std::unordered_map<std::string, std::shared_ptr<RendererObjectResourceEntry>> objectResources;
         std::unordered_map<std::string, std::shared_ptr<Texture>> textures;
+
+        bool Empty() const noexcept;
     };
+
+    // Compatibility bridge for existing rollback callers. New staged loads
+    // should retain immutable package references instead of copying the maps.
+    using WorldLocalResourceSnapshot = WorldLocalResourcePackage;
+    using WorldLocalResourcePackageHandle =
+        std::shared_ptr<WorldLocalResourcePackage>;
+    using ImmutableWorldLocalResourceRefs =
+        std::shared_ptr<const WorldLocalResourcePackage>;
 
     static RendererResourceCache& GetInstance()
     {
@@ -39,7 +49,28 @@ public:
         return instance;
     }
 
+    RendererResourceCache(const RendererResourceCache&) = delete;
+    RendererResourceCache& operator=(const RendererResourceCache&) = delete;
+    RendererResourceCache(RendererResourceCache&&) noexcept = default;
+    RendererResourceCache& operator=(RendererResourceCache&&) noexcept = default;
+
     void Clear();
+
+    // Creates an isolated cache for candidate construction. Global texture
+    // bindings are copied for lookup; all later Bind calls affect only the
+    // returned cache instance.
+    RendererResourceCache BeginCandidate(uint64_t ownerGeneration) const;
+
+    // Keeps the currently active package alive without exposing mutable maps.
+    ImmutableWorldLocalResourceRefs
+    CaptureActiveWorldLocalResources() const noexcept;
+
+    // The candidate must come from BeginCandidate(). Commit only swaps the
+    // world-local package pointer; the caller owns retirement of the returned
+    // old package after the appropriate GPU epoch.
+    WorldLocalResourcePackageHandle CommitCandidate(
+        RendererResourceCache&& candidate) noexcept;
+
     void BeginWorldLocalResourceLoad(uint64_t ownerGeneration);
     // Used by WorldTransitionCoordinator rollback. The snapshot holds shared
     // references to the active world's renderer resources while a new world is
@@ -75,17 +106,17 @@ public:
     const std::shared_ptr<Texture>* GetTexture(std::string_view textureKey) const;
 
 private:
-    RendererResourceCache() = default;
+    RendererResourceCache();
+    RendererResourceCache(
+        std::unordered_map<std::string, std::shared_ptr<Texture>>
+            inheritedGlobalTextures,
+        uint64_t ownerGeneration);
+    WorldLocalResourcePackage& GetMutableWorldLocalResources();
     void ClearWorldLocalResources();
 
-    uint64_t currentWorldGeneration = 0;
     std::unordered_map<std::string, std::shared_ptr<Texture>> globalTextures;
-    std::unordered_map<std::string, std::shared_ptr<Texture>> worldTextures;
-    std::unordered_map<std::string, std::shared_ptr<RenderableObject>> renderableObjects;
-    std::unordered_map<std::string, std::shared_ptr<Material>> materials;
-    std::unordered_map<std::string, std::shared_ptr<MaterialInstance>> materialInstances;
-    std::unordered_map<std::string, std::shared_ptr<RendererObjectResourceEntry>> objectResources;
-    std::unordered_map<std::string, std::shared_ptr<Texture>> textures;
+    WorldLocalResourcePackageHandle worldLocalResources;
+    bool retireWorldLocalResourcesOnClear = true;
 };
 
 } // namespace VL

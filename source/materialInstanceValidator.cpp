@@ -202,7 +202,9 @@ MaterialInstanceBuildPlan MaterialInstanceValidator::BuildLoadPlan(
         request.shaderVariantKey = loadPlan.shaderVariantKey;
         request.pass = VL::MaterialPass::Base;
         request.features = loadPlan.materialFeatureKey;
-        request.source.materialSourcePath = MaterialAssetUtils::NormalizeAssetPath(materialPath);
+        request.source.materialSourcePath =
+            MaterialAssetUtils::NormalizeShaderGlslRelativePath(
+                materialPath);
         request.source.vertexEvaluationPath =
             materialJson.at("shaderEvaluation").at("vertex").get<std::string>();
         request.source.surfaceEvaluationPath =

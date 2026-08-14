@@ -24,10 +24,12 @@ std::string BuildFeatureDefines(const MaterialFeatureKey& features)
 std::string BuildInclude(
     const std::filesystem::path& virtualSourceDirectory,
     const std::filesystem::path& shaderGlslRoot,
-    const std::string& relativePath)
+    const std::string& relativePath,
+    bool allowPreparedOverlay = false)
 {
     const std::filesystem::path targetPath = shaderGlslRoot / relativePath;
-    if (!std::filesystem::is_regular_file(targetPath))
+    if (!allowPreparedOverlay &&
+        !std::filesystem::is_regular_file(targetPath))
     {
         throw std::runtime_error(
             "Material shader composition source does not exist: " + targetPath.generic_string());
@@ -42,9 +44,14 @@ void AppendInclude(
     std::ostringstream& stream,
     const std::filesystem::path& virtualSourceDirectory,
     const std::filesystem::path& shaderGlslRoot,
-    const std::string& relativePath)
+    const std::string& relativePath,
+    bool allowPreparedOverlay = false)
 {
-    stream << BuildInclude(virtualSourceDirectory, shaderGlslRoot, relativePath);
+    stream << BuildInclude(
+        virtualSourceDirectory,
+        shaderGlslRoot,
+        relativePath,
+        allowPreparedOverlay);
 }
 
 std::string BuildStageSource(
@@ -60,7 +67,12 @@ std::string BuildStageSource(
     if (vertexStage)
     {
         AppendInclude(stream, virtualSourceDirectory, shaderGlslRoot, "engine/materialContext.glsl");
-        AppendInclude(stream, virtualSourceDirectory, shaderGlslRoot, request.source.parameterIncludePath);
+        AppendInclude(
+            stream,
+            virtualSourceDirectory,
+            shaderGlslRoot,
+            request.source.parameterIncludePath,
+            request.source.parameterIncludeBytes.has_value());
         AppendInclude(stream, virtualSourceDirectory, shaderGlslRoot, request.source.vertexEvaluationPath);
         AppendInclude(stream, virtualSourceDirectory, shaderGlslRoot, request.pass == MaterialPass::Base
             ? "engine/passTemplate/base.vert.glsl"
@@ -70,7 +82,12 @@ std::string BuildStageSource(
     {
         AppendInclude(stream, virtualSourceDirectory, shaderGlslRoot, "engine/materialContext.glsl");
         AppendInclude(stream, virtualSourceDirectory, shaderGlslRoot, "engine/materialSurface.glsl");
-        AppendInclude(stream, virtualSourceDirectory, shaderGlslRoot, request.source.parameterIncludePath);
+        AppendInclude(
+            stream,
+            virtualSourceDirectory,
+            shaderGlslRoot,
+            request.source.parameterIncludePath,
+            request.source.parameterIncludeBytes.has_value());
         AppendInclude(stream, virtualSourceDirectory, shaderGlslRoot, request.source.surfaceEvaluationPath);
         AppendInclude(stream, virtualSourceDirectory, shaderGlslRoot, request.pass == MaterialPass::Base
             ? "engine/passTemplate/base.frag.glsl"

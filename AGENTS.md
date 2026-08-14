@@ -48,6 +48,8 @@ Current implemented areas include:
 - Shadow pass
 - Post-process pipeline
 - Bloom and tone mapping
+- Shader BLAKE3-256 incremental build cache and transitive include invalidation
+- Shader hot reload: manual/FileMonitor triggers, compile worker, ABI-compatible Material/Compute/UI replacement, M_*.json schema rebuild, GPU-epoch retirement
 - Tracy and NVTX profiling markers
 
 The codebase mixes engine experimentation and learning-oriented iteration. Prefer small, explicit, reversible changes.
@@ -73,6 +75,8 @@ Design references currently live under `documents/`:
 - `documents/rendering/texture-asset-json-v1.md`
 - `documents/rendering/material-param-authoring-and-reflection.md`
 - `documents/rendering/descriptor-imageinfo-management.md`
+- `documents/rendering/shader-build-cache.md`
+- `documents/rendering/shader-hot-reload.md`
 - `documents/plan/rendering/sky-pass-environment-roadmap.md`
 - `documents/reference/rendering/tone-mapping-tutorial.html`
 
@@ -144,6 +148,8 @@ If a change affects boot behavior, verify it against this order.
 - `source/`: engine and renderer source
 - `source/pipeline/`: pipeline factory, builders, graphics and compute pipeline code
 - `source/resource/`: image and device texture helpers
+- `source/shader/`: BLAKE3 content hashing, atomic file/commit, build-cache manifest, ABI signature, FileMonitor, compile worker, reload coordinator, compute/UI participants
+- `extern/BLAKE3/`: locked official BLAKE3 C implementation (MinGW portable path)
 - `config/`: top-level runtime config and render graph config
 - `<resourcePath>/scenes/`: scene JSON files
 - `<resourcePath>/models/`: mesh description JSON and source model data
@@ -204,6 +210,10 @@ These relationships are important and easy to miss:
 - Material parameter validation depends on shader reflection results.
 - Pass input textures depend on descriptor set and binding conventions.
 - `shader/glsl/` is the editable shader source; `shader/spv/` is generated output used at runtime and for reflection.
+- Shader cache validity is owned by `shader/spv/shader-build-cache.json`; the manifest is the final commit marker and must never be edited by hand.
+- Hot reload candidates are compiled as in-memory artifacts on the compile worker and only published after CPU/ABI/Vulkan validation succeeds; the manifest stays at the last committed generation on failure.
+- Shader publication preflight is batch-wide and uses normalized physical paths for cache hits, cache misses, and generated includes. Cache-hit outputs must be rehashed immediately before any write; a path conflict or stale hit rejects the batch with zero publication side effects.
+- World/M_ reload prepares an isolated World-local resource package and `PreparedRenderGraphState`. The active World, graph, RenderSystem, Controller, and resource cache change only through prevalidated no-throw ownership swaps; prepared retirements become active only after the live swap succeeds.
 
 ## High-Risk Areas
 
@@ -217,6 +227,12 @@ Be careful when changing these files or systems:
   - JSON parsing, material loading, texture loading, shader binding validation
 - `source/renderSystem.cpp`
   - frame rendering flow and descriptor usage
+- `source/shaderCompiler.cpp` and `source/shader/build/*`
+  - cache-hit ordering, dependency digest validation, atomic output replacement, manifest commit/rollback
+- `source/shader/reload/*`
+  - reload plan capture, worker/GT boundary, ABI validation, render-thread safe commit, descriptor package rebuild, epoch retirement
+- `source/render/environment/*` (compute participants) and `source/ui/uiOverlayRendererVulkan.*`
+  - compute/UI reload participants must keep descriptor rebuild and pipeline swap transactional
 - `config/renderGraphConfig.json`
   - small ordering mistakes can break attachments or descriptor assumptions
 
@@ -238,6 +254,8 @@ When making changes:
 
 - Prefer source-of-truth files over generated outputs.
 - For shader work, edit `shader/glsl/` first.
+- For shader identity/cache work, use only the stable BLAKE3-256 wrappers; never `std::hash`, timestamps, or truncated digests as persistent identity. Change the ABI description format only by bumping the `abi=` compile-policy version.
+- Do not bypass the shader build cache with per-frame fallbacks, global `device.waitIdle()`, or by deleting `shader/spv` as a fix; recompiles must be driven by the documented miss reasons.
 - For shader resource declarations such as `sampler2D emissionMap`, do not add `#if defined(...)` guards by default. Prefer relying on the compiler to optimize out unused resources unless the active reflection/toolchain path is explicitly verified to require guarded declarations.
 - Only edit `shader/spv/` directly if the task is specifically about generated artifacts or debug outputs.
 - Keep JSON structure and naming stable unless the task is a format migration.
@@ -282,6 +300,16 @@ If asked to debug startup failures:
 - inspect `source/commonFunction.h`
 - inspect `config/config.json`
 - confirm runtime working directory assumptions
+
+If asked to add or change shader build-cache/hot-reload behavior:
+
+- inspect `documents/rendering/shader-build-cache.md` and `shader-hot-reload.md`
+- inspect `source/shaderCompiler.*`, `source/shader/build/*`, `source/shader/reload/*`
+- respect the GT/worker split: compile workers must not touch Vulkan or live Material/PipelineFactory caches
+- respect the staleness protocol: `latestObservedSourceEpoch` is a fast rejection signal, stable source identities are unioned while pending, and every candidate still requires commit-time primary/dependency digest validation; generation alone is not proof that source bytes are current
+- keep Material Surface/Shadow, Compute descriptor packages, and UI blend-variant pairs transactional (all-or-nothing) with GPU-epoch retirement
+- keep World/RenderGraph prepare isolated from active owners, make the final ownership commit no-throw, and activate prepared retirement packages only after the live references have been swapped
+- runtime validation tests must run serially because they share `shader/spv/`
 
 ## Preferred Agent Behavior
 

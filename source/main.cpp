@@ -54,8 +54,8 @@ int main(int argc, char **argv)
     }
 
     VL::QueueLaunchCommands(engineLoop, launchOptions);
-    const int exitCode = engineLoop.Run();
+    (void)engineLoop.Run();
     engineLoop.Shutdown();
     platformApplication.Shutdown();
-    return exitCode;
+    return engineLoop.GetExitCode();
 }

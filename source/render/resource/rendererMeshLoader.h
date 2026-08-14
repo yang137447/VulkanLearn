@@ -14,6 +14,7 @@ struct MeshObjectBuildPlan;
 namespace VL
 {
 class RendererBackendVulkan;
+struct RendererResourceLoadContext;
 
 struct RendererMeshLoadResult
 {
@@ -27,7 +28,10 @@ struct RendererMeshLoadResult
 class RendererMeshLoader
 {
 public:
-    RendererMeshLoader(PipelineFactory& pipelineFactory, RendererBackendVulkan& rendererBackend);
+    RendererMeshLoader(
+        PipelineFactory& pipelineFactory,
+        RendererBackendVulkan& rendererBackend,
+        RendererResourceLoadContext& loadContext);
 
     RendererMeshLoadResult LoadMeshObject(
         const nlohmann::basic_json<>& node,
@@ -36,6 +40,7 @@ public:
 private:
     PipelineFactory& pipelineFactory;
     RendererBackendVulkan& rendererBackend;
+    RendererResourceLoadContext& loadContext;
 };
 
 } // namespace VL

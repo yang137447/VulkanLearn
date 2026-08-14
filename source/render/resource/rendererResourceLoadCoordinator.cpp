@@ -9,6 +9,8 @@
 #include "render/resource/rendererMaterialLoader.h"
 #include "render/resource/rendererMeshLoader.h"
 #include "render/resource/rendererResourceCache.h"
+#include "render/resource/rendererResourceLoadContext.h"
+#include "renderGraph.h"
 #include "world/loading/worldLoader.h"
 
 namespace VL
@@ -43,10 +45,40 @@ RendererWorldResourceLoadResult RendererResourceLoadCoordinator::LoadRendererRes
 
     RendererResourceCache& resourceCache = RendererResourceCache::GetInstance();
     resourceCache.BeginWorldLocalResourceLoad(ownerGeneration);
+    RendererResourceLoadContext loadContext{
+        resourceCache,
+        RenderGraph::GetInstance()};
+    return LoadRendererResources(
+        worldBuildPlan,
+        loadContext);
+}
 
-    RendererEnvironmentLoader environmentLoader(*pipelineFactory, *rendererBackend);
-    RendererMaterialLoader materialLoader(*pipelineFactory, *rendererBackend);
-    RendererMeshLoader meshLoader(*pipelineFactory, *rendererBackend);
+RendererWorldResourceLoadResult
+RendererResourceLoadCoordinator::LoadRendererResources(
+    const WorldBuildPlan& worldBuildPlan,
+    RendererResourceLoadContext& loadContext)
+{
+    if (pipelineFactory == nullptr)
+    {
+        throw std::runtime_error("PipelineFactory is not set in RendererResourceLoadCoordinator");
+    }
+    if (rendererBackend == nullptr)
+    {
+        throw std::runtime_error("RendererBackendVulkan is not set in RendererResourceLoadCoordinator");
+    }
+
+    RendererEnvironmentLoader environmentLoader(
+        *pipelineFactory,
+        *rendererBackend,
+        loadContext);
+    RendererMaterialLoader materialLoader(
+        *pipelineFactory,
+        *rendererBackend,
+        loadContext);
+    RendererMeshLoader meshLoader(
+        *pipelineFactory,
+        *rendererBackend,
+        loadContext);
     RendererWorldResourceLoadResult loadResult;
 
     environmentLoader.LoadGlobalResources();

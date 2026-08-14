@@ -5,6 +5,7 @@
 #include <string_view>
 
 #include "render/resource/rendererResourceLoadCoordinator.h"
+#include "render/resource/rendererResourceLoadContext.h"
 #include "render/resource/rendererResourceCache.h"
 #include "renderGraph.h"
 #include "sceneNode.h"
@@ -96,6 +97,101 @@ RuntimeResult<WorldTransitionResult> WorldTransitionCoordinator::RequestWorldLoa
     const std::string& scenePath)
 {
     return LoadWorldThroughResourceCoordinator(scenePath);
+}
+
+RuntimeResult<PreparedWorldTransition>
+WorldTransitionCoordinator::PrepareWorldLoad(
+    const std::string& scenePath,
+    RenderGraph& pipelineContractGraph,
+    const MaterialDefinitionReloadBatch* materialDefinitionReload)
+{
+    if (scenePath.empty())
+    {
+        state = WorldTransitionState::Failed;
+        return RuntimeResult<PreparedWorldTransition>::Failure(
+            MakeRuntimeError(
+                "WorldTransition.EmptyScenePath",
+                "Cannot load a world from an empty scene path."));
+    }
+
+    state = WorldTransitionState::Validating;
+    WorldLoader worldLoader;
+    auto worldBuildPlanResult = worldLoader.Load(scenePath);
+    if (worldBuildPlanResult.IsFailure())
+    {
+        state = WorldTransitionState::Failed;
+        return RuntimeResult<PreparedWorldTransition>::Failure(
+            worldBuildPlanResult.Error());
+    }
+    WorldBuildPlan worldBuildPlan =
+        std::move(worldBuildPlanResult.Value());
+
+    try
+    {
+        state = WorldTransitionState::Loading;
+        const uint64_t worldGeneration =
+            worldManager.GetNextWorldGeneration();
+        RendererResourceCache& activeCache =
+            RendererResourceCache::GetInstance();
+
+        PreparedWorldTransition prepared;
+        prepared.resourceCache =
+            std::make_shared<RendererResourceCache>(
+                activeCache.BeginCandidate(worldGeneration));
+        RendererResourceLoadContext loadContext{
+            *prepared.resourceCache,
+            pipelineContractGraph};
+        loadContext.graphicsCandidateState =
+            &prepared.graphicsCandidateState;
+        loadContext.previousWorldResources =
+            activeCache.CaptureActiveWorldLocalResources();
+        loadContext.materialDefinitionReload =
+            materialDefinitionReload;
+        loadContext.passMaterialBindings =
+            &prepared.passMaterialBindings;
+
+        RendererWorldResourceLoadResult resourceLoadResult =
+            resourceLoadCoordinator.LoadRendererResources(
+                worldBuildPlan,
+                loadContext);
+        worldBuildPlan.meshObjectPlans =
+            std::move(resourceLoadResult.meshObjectPlans);
+        worldBuildPlan.speedTreeWindProfiles =
+            std::move(resourceLoadResult.speedTreeWindProfiles);
+
+        WorldBuilder worldBuilder;
+        auto worldResult =
+            worldBuilder.BuildFromLoadedScene(
+                worldGeneration,
+                worldBuildPlan,
+                *prepared.resourceCache);
+        if (worldResult.IsFailure())
+        {
+            state = WorldTransitionState::Failed;
+            return RuntimeResult<PreparedWorldTransition>::Failure(
+                worldResult.Error());
+        }
+
+        prepared.world = std::move(worldResult.Value());
+        ConfigureInitialCamera(
+            *prepared.world->GetCamera(),
+            initialCameraAspectRatio);
+        prepared.activation =
+            worldManager.PrepareActivation(prepared.world);
+        state = WorldTransitionState::Active;
+        return RuntimeResult<PreparedWorldTransition>::Success(
+            std::move(prepared));
+    }
+    catch (const std::exception& exception)
+    {
+        state = WorldTransitionState::Failed;
+        const std::string errorMessage = exception.what();
+        return RuntimeResult<PreparedWorldTransition>::Failure(
+            MakeRuntimeError(
+                ClassifyRendererResourceLoadError(errorMessage),
+                errorMessage,
+                scenePath));
+    }
 }
 
 RuntimeResult<WorldTransitionResult> WorldTransitionCoordinator::LoadWorldThroughResourceCoordinator(
