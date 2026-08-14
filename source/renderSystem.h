@@ -76,7 +76,13 @@ public:
         return instance;
     }
     ~RenderSystem();
-    void InitRenderObject();
+    // Startup frame/environment resources must exist before the initial World
+    // transaction prepares graph descriptors and candidate light capacity.
+    void InitializeWorldTransactionResources();
+    // The World transaction already commits the active scene, graph, and
+    // object resources. Startup only has to attach the optional UI participant
+    // after that commit succeeds.
+    void FinalizeInitialRenderObjectInitialization();
     void ShutdownRenderObject();
     // GT-only snapshot production. In workerThreadCount=1 Render() consumes it
     // immediately; in workerThreadCount=2 RenderThread consumes it later.

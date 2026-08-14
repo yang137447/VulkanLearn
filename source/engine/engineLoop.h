@@ -12,6 +12,8 @@
 #include "engine/runtimeCommand.h"
 #include "engine/launchOptions.h"
 #include "ui/uiSubsystem.h"
+#include "world/loading/worldGraphTransactionCoordinator.h"
+#include "shader/reload/shaderReloadRuntime.h"
 
 class Controller;
 class PipelineFactory;
@@ -27,37 +29,18 @@ class RendererBackendVulkan;
 class RenderThread;
 class RuntimeConfig;
 class RuntimeCommandExecutor;
-class RuntimeTestHooks;
+class RuntimeValidationServices;
 class SubsystemCollection;
 class WorldTransitionCoordinator;
-class ShaderReloadCoordinator;
-class ShaderCompileWorker;
-class ShaderFileMonitor;
 enum class RenderGraphReleaseMode;
 struct MaterialDefinitionReloadBatch;
 struct RuntimeCommandExecutionResult;
-struct ShaderCompileWorkerResult;
-struct ShaderReloadPlan;
 struct WorldHandle;
-
-struct WorldGraphTransactionTestFaultInjection
-{
-    size_t failGraphResourceCreationAt = 0;
-    size_t failRenderPassCreationAt = 0;
-    size_t failFramebufferCreationAt = 0;
-    size_t failDescriptorCreationAt = 0;
-    bool failPassMaterialContract = false;
-    bool failAfterCandidateWorldBuilt = false;
-    bool failViewTargetPrecheck = false;
-    bool failAfterRuntimeBindingPrepared = false;
-    bool failBeforeCommit = false;
-    bool failResizeAfterSwapchainRecreate = false;
-};
 
 // Owns the high-level runtime lifecycle after PlatformApplication is ready.
 // PlatformApplication hides SDL startup/window/event details; EngineLoop owns
 // engine init, per-frame event/update/render dispatch, and renderer shutdown.
-class EngineLoop
+class EngineLoop : public ShaderReloadRuntimeHost
 {
 public:
     EngineLoop();
@@ -74,7 +57,7 @@ public:
     void SetExitAfterRuntimeTests(bool enabled);
 
 private:
-    friend class RuntimeTestHooks;
+    friend class RuntimeValidationServices;
 
     void Tick();
     void PumpPlatformEvents();
@@ -83,12 +66,14 @@ private:
     void UpdateUiViewModel(float deltaTime);
     const RuntimeConfig& GetRuntimeConfig() const;
     SubsystemCollection& GetSubsystems();
+    const SubsystemCollection& GetSubsystems() const;
     RuntimeResult<void> InitializeRuntimeSystems(
         PlatformWindow& window,
         std::vector<const char*>& vulkanExtensions,
         DeveloperUiLaunchMode developerUiMode,
         bool forceShaderRebuild);
-    RuntimeResult<void> LoadInitialWorldAndRenderer();
+    RuntimeResult<void> LoadInitialWorldAndRenderer(
+        const std::string& initialSceneOverride);
     RuntimeResult<void> BindActiveWorldRuntimeObjects(const WorldHandle& worldHandle);
     RuntimeResult<void> RecreateRendererForWindowResize(uint32_t width, uint32_t height);
     RuntimeResult<void> ReloadRenderGraphResources();
@@ -110,11 +95,14 @@ private:
         WorldGraphTransactionTestFaultInjection injection) noexcept;
     void ProcessRequestedWorldTransition(
         RuntimeCommandExecutionResult& commandResult);
-    void ProcessPendingMaterialDefinitionReload();
-    void MergePendingAutomaticShaderSources(
-        const std::vector<std::string>& sourceIdentities,
-        uint64_t sourceEpoch);
-    void SubmitPendingAutomaticShaderReload();
+
+    uint64_t GetShaderReloadWorldGeneration() const noexcept override;
+    void WaitForShaderReloadSafePoint() override;
+    bool IsShaderReloadClosing() const noexcept override;
+    void RefreshSceneAfterShaderReload() override;
+    size_t GetShaderReloadRetirePendingCount() const noexcept override;
+    RuntimeResult<WorldHandle> CommitMaterialDefinitionReload(
+        const MaterialDefinitionReloadBatch& batch) override;
 
     PlatformApplication* platformApplication = nullptr;
     PlatformWindow* window = nullptr;
@@ -129,40 +117,18 @@ private:
 
     std::unique_ptr<ShaderCompiler> shaderCompiler;
     std::unique_ptr<ShaderReloadCoordinator> shaderReloadCoordinator;
-    std::unique_ptr<ShaderFileMonitor> shaderFileMonitor;
-    std::unique_ptr<ShaderCompileWorker> shaderCompileWorker;
+    std::unique_ptr<ShaderReloadRuntime> shaderReloadRuntime;
     std::unique_ptr<PipelineFactory> pipelineFactory;
     std::unique_ptr<RendererBackendVulkan> rendererBackend;
     std::unique_ptr<RenderThread> renderThread;
     std::unique_ptr<RuntimeCommandExecutor> runtimeCommandExecutor;
+    std::unique_ptr<RuntimeValidationServices> runtimeValidationServices;
     std::unique_ptr<WorldTransitionCoordinator> worldTransitionCoordinator;
+    std::unique_ptr<WorldGraphTransactionCoordinator>
+        worldGraphTransactionCoordinator;
     std::unique_ptr<Controller> controller;
     std::unique_ptr<UiSubsystem> uiSubsystem;
     uint64_t uiFrameIndex = 0;
-    uint64_t nextShaderReloadGeneration = 1;
-    uint64_t latestObservedSourceEpoch = 0;
-    uint64_t latestSubmittedAutoReloadGeneration = 0;
-    uint64_t inFlightAutoReloadGeneration = 0;
-    uint64_t inFlightAutoReloadSourceEpoch = 0;
-    uint64_t latestManualShaderReloadGeneration = 0;
-    uint64_t latestManualShaderReloadCommittedGeneration = 0;
-    uint64_t latestManualShaderReloadFailedGeneration = 0;
-    uint64_t latestAutoReloadStaleDiscardGeneration = 0;
-    uint64_t latestAutoReloadFailedGeneration = 0;
-    uint64_t latestAutoReloadCommittedGeneration = 0;
-    uint64_t latestAutoReloadShadercInvocations = 0;
-    uint64_t totalAutoReloadShadercInvocations = 0;
-    uint64_t pendingAutoReloadSourceEpoch = 0;
-    uint64_t failedPendingAutoReloadSourceEpoch = 0;
-    uint64_t pendingMaterialDefinitionSourceEpoch = 0;
-    uint64_t failedPendingMaterialDefinitionSourceEpoch = 0;
-    uint64_t latestMaterialDefinitionReloadCommittedGeneration = 0;
-    uint64_t latestMaterialDefinitionReloadFailedGeneration = 0;
-    std::set<std::string> pendingAutoReloadSources;
-    std::set<std::string> pendingMaterialDefinitionSources;
-    std::vector<std::string> lastSubmittedAutoReloadSources;
-    std::vector<std::string> lastStaleAutoReloadSources;
-    std::vector<std::string> lastCommittedAutoReloadSources;
     WorldGraphTransactionTestFaultInjection
         worldGraphTransactionTestFaultInjection;
 };

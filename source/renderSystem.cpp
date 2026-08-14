@@ -251,19 +251,15 @@ bool RenderSystem::SetBloomClamp(float value, std::string& outMessage)
     return true;
 }
 
-void RenderSystem::InitRenderObject()
+void RenderSystem::InitializeWorldTransactionResources()
 {
     PROFILE_FUNCTION();
-    auto& renderGraph = RenderGraph::GetInstance();
-    
-    RefreshRenderSceneFromActiveWorld();
-    BuildResolvedRenderScene();
+    RenderInitialize();
+}
 
-    //初始化渲染需要的资源
-    this->RenderInitialize();
-    VL::RendererDescriptorContext descriptorContext = BuildRendererDescriptorContext();
-    renderGraph.RenderInitialize(*rendererBackend, descriptorContext);
-    InitializeCurrentRenderSceneResources();
+void RenderSystem::FinalizeInitialRenderObjectInitialization()
+{
+    PROFILE_FUNCTION();
     if (uiRenderSnapshotQueue != nullptr && !uiVertexShaderPath.empty() && !uiFragmentShaderPath.empty())
     {
         uiOverlayRenderer.Initialize(
@@ -1527,9 +1523,10 @@ std::optional<std::pair<float, float>> RenderSystem::ComputeCascadeLightSpaceZBo
 
     for (const VL::RenderDrawPacket& drawPacket : currentRenderScene.drawPackets)
     {
-        // TODO: SpeedTree 的 worldBounds 当前来自未形变的静态网格，没有包含顶点
-        // Shader 风动后的位移。后续定义风动扩展包围盒契约后，应在这里使用扩展后的
-        // caster bounds，避免强风时 CSM 的光源空间 Z 范围裁掉枝叶阴影。
+        // Current limitation: SpeedTree world bounds describe the undeformed
+        // mesh and exclude vertex-shader wind displacement. The foliage bounds
+        // contract must eventually provide expanded caster bounds so strong
+        // wind cannot clip branch shadows from the CSM light-space Z range.
         const Eigen::Vector3f center = (drawPacket.worldBoundsMin + drawPacket.worldBoundsMax) * 0.5f;
         const Eigen::Vector3f extent = (drawPacket.worldBoundsMax - drawPacket.worldBoundsMin) * 0.5f;
         const float projectedCenterX = lightSpaceXAxis.dot(center);

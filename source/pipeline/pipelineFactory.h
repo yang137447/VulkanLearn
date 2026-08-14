@@ -98,8 +98,6 @@ public:
             graphicsPipelines;
     };
 
-    explicit PipelineFactory(
-        VL::RendererBackendVulkan* rendererBackend);
     void SetShaderCompiler(ShaderCompiler* shaderCompiler);
     ShaderCompiler& GetShaderCompiler() const;
     static std::string GetGraphicsShaderVariantCacheKey(
@@ -150,6 +148,12 @@ public:
     std::string CaptureIdentityFingerprintForTest(
         bool includeWeakPipelineLiveness = true) const;
 private:
+    friend class VL::RendererBackendVulkan;
+
+    PipelineFactory(
+        VL::RendererBackendVulkan* rendererBackend,
+        vk::Device& device);
+
     struct CachedComputePipeline
     {
         std::weak_ptr<ComputePipeline> pipeline;

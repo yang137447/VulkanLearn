@@ -7,9 +7,11 @@
 #include <type_traits>
 
 #include "pipeline/pipelineFactory.h"
+#include "pipeline/graphicsPipelineBuilder.h"
 #include "profiler.h"
 #include "render/rhi/vulkan/rhiDeviceVulkan.h"
 #include "render/resource/resourceRetireQueue.h"
+#include "vulkanDebug.h"
 
 namespace VL
 {
@@ -135,7 +137,86 @@ void RendererBackendVulkan::RecreateSwapchain(int width, int height)
 
 std::unique_ptr<PipelineFactory> RendererBackendVulkan::CreatePipelineFactory()
 {
-    return std::make_unique<PipelineFactory>(this);
+    return std::unique_ptr<PipelineFactory>(
+        new PipelineFactory(this, rhiDevice->GetDevice()));
+}
+
+vk::ShaderModule RendererBackendVulkan::CreateShaderModule(
+    const vk::ShaderModuleCreateInfo& createInfo,
+    const std::string& debugName)
+{
+    vk::Device& device = rhiDevice->GetDevice();
+    vk::ShaderModule shaderModule = device.createShaderModule(createInfo);
+    VulkanDebug::SetObjectName(
+        device,
+        shaderModule,
+        vk::ObjectType::eShaderModule,
+        debugName);
+    return shaderModule;
+}
+
+void RendererBackendVulkan::DestroyShaderModule(
+    vk::ShaderModule& shaderModule) noexcept
+{
+    if (shaderModule)
+    {
+        rhiDevice->GetDevice().destroyShaderModule(shaderModule);
+        shaderModule = nullptr;
+    }
+}
+
+vk::PipelineLayout RendererBackendVulkan::CreatePipelineLayout(
+    const vk::PipelineLayoutCreateInfo& createInfo,
+    const std::string& debugName)
+{
+    vk::Device& device = rhiDevice->GetDevice();
+    vk::PipelineLayout pipelineLayout =
+        device.createPipelineLayout(createInfo);
+    VulkanDebug::SetObjectName(
+        device,
+        pipelineLayout,
+        vk::ObjectType::ePipelineLayout,
+        debugName);
+    return pipelineLayout;
+}
+
+void RendererBackendVulkan::DestroyPipelineLayout(
+    vk::PipelineLayout& pipelineLayout) noexcept
+{
+    if (pipelineLayout)
+    {
+        rhiDevice->GetDevice().destroyPipelineLayout(pipelineLayout);
+        pipelineLayout = nullptr;
+    }
+}
+
+GraphicsPipelineBuildResult
+RendererBackendVulkan::BuildGraphicsPipeline(
+    const GraphicsPipelineBuildDesc& buildDesc)
+{
+    return GraphicsPipelineBuilder::Build(
+        rhiDevice->GetDevice(),
+        buildDesc);
+}
+
+void RendererBackendVulkan::DestroyPipeline(
+    vk::Pipeline& pipeline) noexcept
+{
+    if (pipeline)
+    {
+        rhiDevice->GetDevice().destroyPipeline(pipeline);
+        pipeline = nullptr;
+    }
+}
+
+void RendererBackendVulkan::DestroyPipelineCache(
+    vk::PipelineCache& pipelineCache) noexcept
+{
+    if (pipelineCache)
+    {
+        rhiDevice->GetDevice().destroyPipelineCache(pipelineCache);
+        pipelineCache = nullptr;
+    }
 }
 
 uint32_t RendererBackendVulkan::GetSwapchainImageCount() const
@@ -156,16 +237,6 @@ vk::Format RendererBackendVulkan::GetSwapchainImageFormat() const
 const std::vector<vk::ImageView>& RendererBackendVulkan::GetSwapchainImageViews() const
 {
     return rhiDevice->GetSwapchainImageViews();
-}
-
-vk::Device& RendererBackendVulkan::GetDevice()
-{
-    return rhiDevice->GetDevice();
-}
-
-const vk::Device& RendererBackendVulkan::GetDevice() const
-{
-    return rhiDevice->GetDevice();
 }
 
 float RendererBackendVulkan::GetTimestampPeriodNanoseconds()

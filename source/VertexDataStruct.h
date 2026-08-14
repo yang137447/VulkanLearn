@@ -12,8 +12,9 @@ struct Vertex
     Eigen::Vector4f tangent;    // xyz: 切线, w: MikkTSpace handedness
     // SpeedTree Runtime SDK attributes remain normalized exactly as the
     // source packer declares them. Non-SpeedTree importers leave them zero.
-    // TODO: 将这两个属性拆成 SpeedTree 专用辅助顶点流，避免普通 Mesh 也承担
-    // SpeedTree 风动字段带来的额外 stride 和顶点缓冲占用。
+    // Current limitation: these attributes remain in the shared vertex stream.
+    // A SpeedTree-only auxiliary stream would remove their stride and buffer
+    // cost from ordinary meshes.
     Eigen::Vector4f speedTreeWindBranch1 = Eigen::Vector4f::Zero();
     Eigen::Vector4f speedTreeWindBranch2 = Eigen::Vector4f::Zero();
 

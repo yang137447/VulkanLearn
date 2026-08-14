@@ -557,8 +557,9 @@ bool SpeedTreeWindProfileSet::ForceGust()
 const SpeedTreeWindStateGPU* SpeedTreeWindProfileSet::FindGpuState(
     std::string_view profileKey) const
 {
-    // TODO: World/RenderScene 构建阶段将 profile key 解析为稳定的数值句柄，
-    // 避免对象 UBO 热路径反复构造 std::string 并执行字符串哈希查询。
+    // Current limitation: profile lookup still constructs a string and hashes
+    // it on the object UBO path. World/RenderScene preparation can remove that
+    // cost by resolving profile keys to stable numeric handles.
     const auto systemIt = systems.find(std::string(profileKey));
     if (systemIt == systems.end())
     {

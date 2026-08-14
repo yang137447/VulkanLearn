@@ -304,6 +304,18 @@ LaunchOptions ParseLaunchOptions(int argc, char** argv)
             continue;
         }
 
+        if (argument == "--initial-scene")
+        {
+            if (i + 1 >= argc || IsOptionToken(argv[i + 1]))
+            {
+                options.errorMessage =
+                    "--initial-scene requires a scene path.";
+                return options;
+            }
+            options.initialSceneOverride = argv[++i];
+            continue;
+        }
+
         if (argument == "--reloadstress")
         {
             if (RejectRuntimeTestConflict(
@@ -647,6 +659,7 @@ void PrintLaunchUsage()
         << "       main.exe [--shader-ui-reload-test --exit-after-tests]\n"
         << "       main.exe [--shader-shutdown-inflight-test --exit-after-tests]\n"
         << "       main.exe [--shader-force-rebuild]\n"
+        << "       main.exe [--initial-scene <scene-path>]\n"
         << "       main.exe [--worker-thread-count <1|2>]\n"
         << "  --reloadstress <scene-path> [count]  Queue world reload stress through CommandBus.\n"
         << "  --reloadfail <scene-path>            Verify failed reload preserves active World.\n"
@@ -666,6 +679,7 @@ void PrintLaunchUsage()
         << "  --shader-ui-reload-test             Run the UI Overlay pipeline pair reload matrix.\n"
         << "  --shader-shutdown-inflight-test     Stop after a complete worker candidate and verify shutdown discards it.\n"
         << "  --shader-force-rebuild              Recompile and republish every startup shader artifact.\n"
+        << "  --initial-scene <scene-path>        Override config initScene for this process.\n"
         << "  --worker-thread-count <1|2>         Override config worker mode for this process.\n"
         << "  --dev-ui                            Enable Dear ImGui developer tools for this launch.\n"
         << "  --no-dev-ui                         Disable Dear ImGui developer tools for this launch.\n"

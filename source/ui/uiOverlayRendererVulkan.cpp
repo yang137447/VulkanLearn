@@ -34,7 +34,7 @@ vk::DeviceSize NextBufferCapacity(vk::DeviceSize requiredSize, vk::DeviceSize in
 }
 
 vk::ShaderModule CreateShaderModule(
-    vk::Device& device,
+    RendererBackendVulkan& backend,
     const std::string& path,
     const std::string& debugName)
 {
@@ -48,17 +48,11 @@ vk::ShaderModule CreateShaderModule(
     createInfo
         .setCodeSize(shaderCode.size())
         .setPCode(reinterpret_cast<const uint32_t*>(shaderCode.data()));
-    vk::ShaderModule shaderModule = device.createShaderModule(createInfo);
-    VulkanDebug::SetObjectName(
-        device,
-        shaderModule,
-        vk::ObjectType::eShaderModule,
-        debugName);
-    return shaderModule;
+    return backend.CreateShaderModule(createInfo, debugName);
 }
 
 vk::ShaderModule CreateShaderModuleFromSpirv(
-    vk::Device& device,
+    RendererBackendVulkan& backend,
     const std::vector<uint32_t>& spirv,
     const std::string& debugName)
 {
@@ -71,20 +65,14 @@ vk::ShaderModule CreateShaderModuleFromSpirv(
     createInfo
         .setCodeSize(spirv.size() * sizeof(uint32_t))
         .setPCode(spirv.data());
-    vk::ShaderModule shaderModule = device.createShaderModule(createInfo);
-    VulkanDebug::SetObjectName(
-        device,
-        shaderModule,
-        vk::ObjectType::eShaderModule,
-        debugName);
-    return shaderModule;
+    return backend.CreateShaderModule(createInfo, debugName);
 }
 
 class UiPipelineBuildGuard
 {
 public:
-    explicit UiPipelineBuildGuard(vk::Device& device)
-        : device(device)
+    explicit UiPipelineBuildGuard(RendererBackendVulkan& backend)
+        : backend(backend)
     {
     }
 
@@ -96,27 +84,28 @@ public:
         }
         if (straightAlphaPipeline)
         {
-            device.destroyPipeline(straightAlphaPipeline);
+            backend.DestroyPipeline(straightAlphaPipeline);
         }
         if (straightAlphaPipelineCache)
         {
-            device.destroyPipelineCache(straightAlphaPipelineCache);
+            backend.DestroyPipelineCache(straightAlphaPipelineCache);
         }
         if (premultipliedAlphaPipeline)
         {
-            device.destroyPipeline(premultipliedAlphaPipeline);
+            backend.DestroyPipeline(premultipliedAlphaPipeline);
         }
         if (premultipliedAlphaPipelineCache)
         {
-            device.destroyPipelineCache(premultipliedAlphaPipelineCache);
+            backend.DestroyPipelineCache(
+                premultipliedAlphaPipelineCache);
         }
         if (vertexShader)
         {
-            device.destroyShaderModule(vertexShader);
+            backend.DestroyShaderModule(vertexShader);
         }
         if (fragmentShader)
         {
-            device.destroyShaderModule(fragmentShader);
+            backend.DestroyShaderModule(fragmentShader);
         }
     }
 
@@ -124,13 +113,11 @@ public:
     {
         if (vertexShader)
         {
-            device.destroyShaderModule(vertexShader);
-            vertexShader = nullptr;
+            backend.DestroyShaderModule(vertexShader);
         }
         if (fragmentShader)
         {
-            device.destroyShaderModule(fragmentShader);
-            fragmentShader = nullptr;
+            backend.DestroyShaderModule(fragmentShader);
         }
     }
 
@@ -147,7 +134,7 @@ public:
     vk::PipelineCache premultipliedAlphaPipelineCache;
 
 private:
-    vk::Device& device;
+    RendererBackendVulkan& backend;
     bool armed = true;
 };
 
@@ -155,9 +142,9 @@ class UiPreparedReplacementGuard
 {
 public:
     UiPreparedReplacementGuard(
-        vk::Device& device,
+        RendererBackendVulkan& backend,
         UiOverlayPipelineReplacement& replacement)
-        : device(device),
+        : backend(backend),
           replacement(replacement)
     {
     }
@@ -170,21 +157,22 @@ public:
         }
         if (replacement.straightAlphaPipeline)
         {
-            device.destroyPipeline(replacement.straightAlphaPipeline);
+            backend.DestroyPipeline(
+                replacement.straightAlphaPipeline);
         }
         if (replacement.straightAlphaPipelineCache)
         {
-            device.destroyPipelineCache(
+            backend.DestroyPipelineCache(
                 replacement.straightAlphaPipelineCache);
         }
         if (replacement.premultipliedAlphaPipeline)
         {
-            device.destroyPipeline(
+            backend.DestroyPipeline(
                 replacement.premultipliedAlphaPipeline);
         }
         if (replacement.premultipliedAlphaPipelineCache)
         {
-            device.destroyPipelineCache(
+            backend.DestroyPipelineCache(
                 replacement.premultipliedAlphaPipelineCache);
         }
     }
@@ -195,7 +183,7 @@ public:
     }
 
 private:
-    vk::Device& device;
+    RendererBackendVulkan& backend;
     UiOverlayPipelineReplacement& replacement;
     bool armed = true;
 };
@@ -445,11 +433,8 @@ void UiOverlayRendererVulkan::CreateDescriptorResources()
 
     vk::PipelineLayoutCreateInfo pipelineLayoutCreateInfo;
     pipelineLayoutCreateInfo.setSetLayouts(descriptorSetLayout);
-    pipelineLayout = backend->GetDevice().createPipelineLayout(pipelineLayoutCreateInfo);
-    VulkanDebug::SetObjectName(
-        backend->GetDevice(),
-        pipelineLayout,
-        vk::ObjectType::ePipelineLayout,
+    pipelineLayout = backend->CreatePipelineLayout(
+        pipelineLayoutCreateInfo,
         "UI Overlay Pipeline Layout");
 }
 
@@ -457,8 +442,7 @@ void UiOverlayRendererVulkan::DestroyDescriptorResources()
 {
     if (pipelineLayout)
     {
-        backend->GetDevice().destroyPipelineLayout(pipelineLayout);
-        pipelineLayout = nullptr;
+        backend->DestroyPipelineLayout(pipelineLayout);
     }
     if (descriptorPool)
     {
@@ -556,7 +540,6 @@ void UiOverlayRendererVulkan::DestroyRenderPassAndFramebuffers()
 
 void UiOverlayRendererVulkan::CreatePipelines()
 {
-    vk::Device& device = backend->GetDevice();
     const std::string vertexCode = CommonFunction::ReadFile(vertexShaderPath);
     const std::string fragmentCode = CommonFunction::ReadFile(fragmentShaderPath);
     if (vertexCode.empty() || fragmentCode.empty())
@@ -588,14 +571,13 @@ UiOverlayRendererVulkan::BuildUiOverlayPipelinePair(
     const std::vector<uint32_t>& vertexSpirv,
     const std::vector<uint32_t>& fragmentSpirv)
 {
-    vk::Device& device = backend->GetDevice();
-    UiPipelineBuildGuard buildGuard(device);
+    UiPipelineBuildGuard buildGuard(*backend);
     buildGuard.vertexShader = CreateShaderModuleFromSpirv(
-        device,
+        *backend,
         vertexSpirv,
         "UI Overlay Vertex Shader");
     buildGuard.fragmentShader = CreateShaderModuleFromSpirv(
-        device,
+        *backend,
         fragmentSpirv,
         "UI Overlay Fragment Shader");
 
@@ -626,7 +608,6 @@ UiOverlayRendererVulkan::BuildUiOverlayPipelinePair(
 
     state.blendMode = GraphicsPipelineBlendMode::AlphaBlend;
     GraphicsPipelineBuildDesc straightDesc{
-        device,
         renderPass,
         pipelineLayout,
         shaderStages,
@@ -638,13 +619,13 @@ UiOverlayRendererVulkan::BuildUiOverlayPipelinePair(
         state,
         false
     };
-    GraphicsPipelineBuildResult straightResult = GraphicsPipelineBuilder::Build(straightDesc);
+    GraphicsPipelineBuildResult straightResult =
+        backend->BuildGraphicsPipeline(straightDesc);
     buildGuard.straightAlphaPipelineCache = straightResult.pipelineCache;
     buildGuard.straightAlphaPipeline = straightResult.graphicsPipeline;
 
     state.blendMode = GraphicsPipelineBlendMode::PremultipliedAlpha;
     GraphicsPipelineBuildDesc premultipliedDesc{
-        device,
         renderPass,
         pipelineLayout,
         shaderStages,
@@ -656,7 +637,8 @@ UiOverlayRendererVulkan::BuildUiOverlayPipelinePair(
         state,
         false
     };
-    GraphicsPipelineBuildResult premultipliedResult = GraphicsPipelineBuilder::Build(premultipliedDesc);
+    GraphicsPipelineBuildResult premultipliedResult =
+        backend->BuildGraphicsPipeline(premultipliedDesc);
     buildGuard.premultipliedAlphaPipelineCache =
         premultipliedResult.pipelineCache;
     buildGuard.premultipliedAlphaPipeline =
@@ -695,12 +677,11 @@ UiOverlayRendererVulkan::PrepareReplacementPipelines(
         BuildUiOverlayPipelinePair(
         candidate.vertexSpirv,
         candidate.fragmentSpirv);
-    vk::Device& device = backend->GetDevice();
     UiPreparedReplacementGuard replacementGuard(
-        device,
+        *backend,
         replacement);
     replacement.release =
-        [device = &device,
+        [backend = backend,
          straight = replacement.straightAlphaPipeline,
          straightCache = replacement.straightAlphaPipelineCache,
          premultiplied = replacement.premultipliedAlphaPipeline,
@@ -708,24 +689,28 @@ UiOverlayRendererVulkan::PrepareReplacementPipelines(
         {
             if (straight)
             {
-                device->destroyPipeline(straight);
+                vk::Pipeline resource = straight;
+                backend->DestroyPipeline(resource);
             }
             if (straightCache)
             {
-                device->destroyPipelineCache(straightCache);
+                vk::PipelineCache resource = straightCache;
+                backend->DestroyPipelineCache(resource);
             }
             if (premultiplied)
             {
-                device->destroyPipeline(premultiplied);
+                vk::Pipeline resource = premultiplied;
+                backend->DestroyPipeline(resource);
             }
             if (premultipliedCache)
             {
-                device->destroyPipelineCache(premultipliedCache);
+                vk::PipelineCache resource = premultipliedCache;
+                backend->DestroyPipelineCache(resource);
             }
         };
     replacement.retirement =
         MakePreparedRetiredResourcePackage(
-            [device = &device,
+            [backend = backend,
              straight = straightAlphaPipeline,
              straightCache = straightAlphaPipelineCache,
              premultiplied = premultipliedAlphaPipeline,
@@ -733,19 +718,26 @@ UiOverlayRendererVulkan::PrepareReplacementPipelines(
             {
                 if (straight)
                 {
-                    device->destroyPipeline(straight);
+                    vk::Pipeline resource = straight;
+                    backend->DestroyPipeline(resource);
                 }
                 if (straightCache)
                 {
-                    device->destroyPipelineCache(straightCache);
+                    vk::PipelineCache resource =
+                        straightCache;
+                    backend->DestroyPipelineCache(resource);
                 }
                 if (premultiplied)
                 {
-                    device->destroyPipeline(premultiplied);
+                    vk::Pipeline resource =
+                        premultiplied;
+                    backend->DestroyPipeline(resource);
                 }
                 if (premultipliedCache)
                 {
-                    device->destroyPipelineCache(premultipliedCache);
+                    vk::PipelineCache resource =
+                        premultipliedCache;
+                    backend->DestroyPipelineCache(resource);
                 }
             });
     replacementGuard.Disarm();
@@ -769,26 +761,24 @@ void UiOverlayRendererVulkan::CommitReplacement(
 
 void UiOverlayRendererVulkan::DestroyPipelines()
 {
-    vk::Device& device = backend->GetDevice();
     if (straightAlphaPipeline)
     {
-        device.destroyPipeline(straightAlphaPipeline);
-        straightAlphaPipeline = nullptr;
+        backend->DestroyPipeline(straightAlphaPipeline);
     }
     if (straightAlphaPipelineCache)
     {
-        device.destroyPipelineCache(straightAlphaPipelineCache);
-        straightAlphaPipelineCache = nullptr;
+        backend->DestroyPipelineCache(
+            straightAlphaPipelineCache);
     }
     if (premultipliedAlphaPipeline)
     {
-        device.destroyPipeline(premultipliedAlphaPipeline);
-        premultipliedAlphaPipeline = nullptr;
+        backend->DestroyPipeline(
+            premultipliedAlphaPipeline);
     }
     if (premultipliedAlphaPipelineCache)
     {
-        device.destroyPipelineCache(premultipliedAlphaPipelineCache);
-        premultipliedAlphaPipelineCache = nullptr;
+        backend->DestroyPipelineCache(
+            premultipliedAlphaPipelineCache);
     }
 }
 

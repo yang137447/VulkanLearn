@@ -19,8 +19,8 @@ shaderreload all
 shadercache stats
 ```
 
-命令通过 RuntimeCommand 队列进入 EngineLoop，不从控制台线程直接触碰 Shader 或
-Vulkan 对象。
+命令通过 RuntimeCommand 队列进入 EngineLoop，再由 GT-owned
+`ShaderReloadRuntime` 处理，不从控制台线程直接触碰 Shader 或 Vulkan 对象。
 
 自动监听：
 
@@ -78,8 +78,12 @@ V1 策略：
 
 ## 异步编译（FileMonitor + Compile Worker）
 
-- GT 侧捕获 plan（读 live 注册与 active artifact），worker 只执行纯 CPU 编译并
-  发布不可变 candidate batch。
+- `ShaderReloadRuntime` 拥有 `ShaderFileMonitor`、`ShaderCompileWorker`、
+  pending source union、source epoch、generation 和自动/手动提交诊断状态。
+  `EngineLoop` 只提供稳定 safe point、active World generation、resolved scene
+  refresh 和 M_ World transaction host 操作。
+- GT 侧由 `ShaderReloadRuntime` 捕获 plan（读 live 注册与 active artifact），worker
+  只执行纯 CPU 编译并发布不可变 candidate batch。
 - worker 不访问 Vulkan device、live Material/PipelineFactory cache 或 manifest。
 - 每个编译任务使用独立 `shaderc::Compiler` 与 CompileOptions。
 - stable source identity 进入 `pendingAutoReloadSources` 并求并集；worker 空闲时才按
@@ -117,8 +121,9 @@ V1 策略：
 ```text
 M_*.json 稳定变化
     -> 批量解析并生成不可变 candidate include overlay
-    -> 在独立 World-local resource package 与 PreparedRenderGraphState 中编译/校验
-    -> 迁移兼容的 live MaterialInstance 参数与贴图
+    -> WorldGraphTransactionCoordinator 在独立 World-local resource package
+       与 PreparedRenderGraphState 中编译/校验
+    -> 保留合同兼容的 live MaterialInstance 参数与贴图状态
     -> 原子发布 artifact + generated include
     -> no-throw swap World/resource/graph/runtime owner
 ```
@@ -132,6 +137,16 @@ M_*.json 稳定变化
 - 同名参数类型变化、贴图 binding 不兼容、未知字段或缺失必需值会拒绝整批。多个
   `M_*.json` 同批变化也是 all-or-nothing。
 - RenderGraph Pass Material 在候选 graph 中重新校验 pipeline contract 与输入。
+- 初始 World、运行时 World reload 和 M_ 定义 reload 都调用
+  `WorldTransitionCoordinator::PrepareWorldLoad()`，再由
+  `WorldGraphTransactionCoordinator` 协调 candidate graph、pipeline cache、
+  runtime binding、正式文件发布、live owner swap 与 retire activation。旧的
+  mutable cache snapshot/restore World 加载路径已删除。
+- 启动在第一次事务前调用
+  `RenderSystem::InitializeWorldTransactionResources()`，事务提交后再调用
+  `FinalizeInitialRenderObjectInitialization()` 初始化 UI overlay。初始 candidate
+  lazy 创建的 process-global BRDF LUT binding 会随 World-local package 一起发布；
+  后续候选只能继承该稳定 identity，不能替换或删除现有 global binding。
 - 任一 prepare/发布前步骤失败时，active World、World-local resources、RenderGraph、
   RenderSystem、Controller、正式 include/manifest 与旧材质整包均不变。
 - 旧资源统一进入 ResourceRetireQueue。不满足“单材质”粒度的资源重建是可接受的

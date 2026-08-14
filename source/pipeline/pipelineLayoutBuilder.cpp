@@ -9,7 +9,6 @@ std::vector<vk::DescriptorSetLayout> PipelineLayoutBuilder::CreateDescriptorSetL
     const std::string& pipelineName,
     uint32_t setCount)
 {
-    vk::Device& device = rendererBackend.GetDevice();
     std::vector<vk::DescriptorSetLayout> descriptorSetLayouts;
     descriptorSetLayouts.resize(setCount);
     try

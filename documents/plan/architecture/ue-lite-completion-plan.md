@@ -16,14 +16,15 @@ UE-Lite 的完成标准不是“把所有类改成 Unreal 风格命名”，而�
 
 ## 当前基线
 
-截至 2026-06-04，代码已经具备以下 UE-Lite / VulkanLearn V1 基线：
+截至 2026-08-14，代码已经具备以下 UE-Lite / VulkanLearn V1 基线：
 
 - `WorldManager` 管理 active world generation、scene path 和 view target。
-- `WorldTransitionCoordinator` 串起 scene validate、renderer resource load、`WorldBuilder` staging world 构建、active world 交换和失败回滚。
+- `WorldTransitionCoordinator::PrepareWorldLoad()` 串起 scene validate、隔离 renderer resource package 和 `WorldBuilder` staging World 构建；`WorldGraphTransactionCoordinator` 协调 candidate RenderGraph、pipeline cache、runtime binding、正式 Shader 文件发布、active owner swap 和退休激活。
 - `RuntimeResult` / `RuntimeError` 已作为加载与切换路径的结构化错误边界。
 - `RuntimeCommand`、`CommandBus`、`RuntimeCommandExecutor`、`ConsoleSubsystem` 已把 reload/test 操作收敛到命令路径；`--reloadstress`、`--reloadfail*`、`--lightstress`、`--resizestress`、`--graphreloadstress`、`--framesmoke` 和 `--environmentstress` 的启动参数入口都只投递 runtime command。
-- `RuntimeTestHooks` 统一持有 reload、rollback、light、resize、render graph reload、frame smoke 和环境增量更新等 runtime 验收状态机；环境测试的天空参数修改也通过 CommandBus 回到 active World owner 侧。
-- `EngineLoop` 不保存测试阶段、计数、断言或完成状态，只在稳定帧点调用测试子系统，并提供窗口 / renderer 重建、render graph reload 和帧耗时等既有生产操作与观测值。
+- `RuntimeTestHooks` 统一持有 runtime 验收状态机，具体实现已拆到 renderer lifecycle、Shader reload、World transaction 和 fixture 文件；环境测试的天空参数修改也通过 CommandBus 回到 active World owner 侧。
+- `RuntimeValidationServices` 是测试访问生产 owner 的唯一 adapter；feature tests 不 include/call RenderSystem 或 RenderGraph，也不通过 EngineLoop friendship 导航内部字段。
+- `EngineLoop` 不保存测试阶段、Shader monitor/worker/pending-source 状态或 World/Graph prepare/commit 实现，只在稳定帧点编排 `RuntimeTestHooks`、`ShaderReloadRuntime` 和 `WorldGraphTransactionCoordinator`。
 - `WorldSnapshot` / `WorldSnapshotQueue` / `WorldSnapshotBuilder` 已作为 GT -> RT 的只读 DTO 和 mailbox。
 - `RenderScene` / `ResolvedRenderScene` / `RendererDrawExecutor` 已让 shadow / geometry draw 路径消费 frozen draw packet 和 backend resource entry。
 - `RendererBackendVulkan` 已接管 frame begin、submit/present、fence epoch 和主要 GPU helper 门面。
@@ -32,7 +33,7 @@ UE-Lite 的完成标准不是“把所有类改成 Unreal 风格命名”，而�
 - `ResourceRetireQueue` 已接入 world reload、render graph reload、light SSBO 扩容和 fence epoch。
 - `tool/ue-lite-boundary-audit.ps1` 已固化关键静态边界。
 - mesh runtime 已从 `SceneObject` wrapper 迁到 `WorldMeshObject`；mesh section 的纯数据通过 `MeshObjectBuildPlan` 汇入 `WorldBuildPlan`，`WorldBuilder` 不再读取 renderer cache mesh binding。
-- `RendererResourceCache` 已移除 `SceneObject` wrapper 指针表和 mesh object binding 表，仍同时持有 world-local renderer resources、material/texture cache 和回滚快照。
+- `RendererResourceCache` 已移除 `SceneObject` wrapper 指针表、mesh object binding 表和 World 切换用的 copied rollback snapshot API；World 加载通过隔离 candidate package 提交。
 - `RHIDeviceVulkan` buffer、image、image view、sampler、descriptor layout/pool/set、render pass 和 framebuffer 创建、分配、更新、销毁已推进到 opaque `RHIBufferHandle` / `RHIImageHandle` / `RHIImageViewHandle` / `RHISamplerHandle` / `RHIDescriptor*Handle` / `RHIRenderPassHandle` / `RHIFramebufferHandle`；这些历史命名的 handle 只负责 Vulkan 资源生命周期注册和安全释放，不再作为跨 API 路线推进，descriptor/createInfo 保持 Vulkan-native。
 
 当前仍需继续演进的部分：
@@ -274,7 +275,7 @@ build\bin\main.exe --framesmoke 120 --exit-after-tests
 覆盖路径：
 
 - world reload success：旧 world-local resources retire。
-- world reload failure：旧 active world 和 renderer cache snapshot restore。
+- world reload failure：candidate package 被丢弃，旧 active World、renderer cache、RenderGraph、RenderSystem 和 Controller owner 保持不变。
 - material load failure：资源加载中途失败后内容级 rollback。
 - light SSBO 扩容：旧 frame-local buffer retire。
 - swapchain resize：尺寸相关 graph/frame resources 重建，不触发 world reload。
@@ -316,7 +317,8 @@ build\bin\main.exe --graphreloadstress 6 --exit-after-tests
 - `PlatformApplication` 负责 SDL/Vulkan loader-facing platform setup。
 - `SubsystemCollection` 持有 Input、Console、Diagnostics、RuntimeClock、WorldManager 等跨 world subsystem。
 - `EngineLoop` 只顺序初始化 subsystem、shader/material generation、renderer backend、pipeline factory、render graph、initial world、console commands。
-- runtime commands 在 `RuntimeCommandExecutor` 内转成 coordinator / world mutation / render option / diagnostics 操作；全部 runtime test 状态机统一由 `RuntimeTestHooks` 持有，`EngineLoop` 仅提供帧时机和其本来就拥有的生命周期操作。
+- runtime commands 在 `RuntimeCommandExecutor` 内转成 world request / render option / diagnostics 操作；全部 runtime test 状态机由 `RuntimeTestHooks` 持有，测试只通过 `RuntimeValidationServices` 获取值快照和窄操作。
+- Shader monitor/worker scheduling 属于 `ShaderReloadRuntime`；World/Graph candidate prepare 与 no-throw live commit 属于 `WorldGraphTransactionCoordinator`。
 - 保留必要错误上下文：启动参数互斥报错、runtime test 冲突报错、rollback 指纹、frame smoke 时间统计和 retire queue 计数都属于验收诊断信息，不按冗余清理。
 - 控制器只消费 `InputSubsystem` 和 active view target，不直接读 SDL。
 
@@ -373,8 +375,10 @@ powershell -ExecutionPolicy Bypass -File tool\ue-lite-final-validation.ps1
 | --- | --- | --- |
 | Build | `cmake --build build -j` | 编译成功 |
 | Static boundary | `powershell -ExecutionPolicy Bypass -File tool/ue-lite-boundary-audit.ps1` | 返回 0 |
+| CTest | `ctest --test-dir build --output-on-failure` | 全部测试通过 |
+| Shader/World transactions | 依次串行运行 6 个 `--shader-*-test` 和 `--world-graph-transaction-test` | 每项返回 0，共享 `shader/spv/` 时无并发写入 |
 | Frame smoke | `build\bin\main.exe --framesmoke 120 --exit-after-tests` | 输出 frame stats，返回 0 |
-| Environment update | `build\bin\main.exe --environmentstress 3 --exit-after-tests --no-dev-ui` | 增量代际、旧资源窗口、稳定 active 资源和 timestamp 样本均通过 |
+| Environment update | `build\bin\main.exe --environmentstress 3 --initial-scene scenes/SC_speedtree.json --exit-after-tests --no-dev-ui` | 用进程级初始场景覆盖运行 procedural-sky 环境压力；增量代际、旧资源窗口、稳定 active 资源和 timestamp 样本均通过 |
 | World reload | `build\bin\main.exe --reloadstress scenes/SC_speedtree.json 100 --exit-after-tests` | 无崩溃、无黑屏、retire drain |
 | Bad scene rollback | `build\bin\main.exe --reloadfail scenes/DOES_NOT_EXIST.json --exit-after-tests` | 旧 active world 不变 |
 | Bad material rollback | `build\bin\main.exe --reloadfail-material --exit-after-tests` | renderer cache/pass material 指纹不变 |

@@ -134,8 +134,12 @@ The current startup sequence is split between `source/main.cpp` and
    - initialize the Vulkan renderer backend
    - create `PipelineFactory` and bind renderer resource loading services
    - load the render graph from `RuntimeConfig::GetRenderGraphJson()`
-   - load the initial world through `WorldTransitionCoordinator`
-   - bind active world runtime objects and initialize `RenderSystem`
+   - initialize the `RenderSystem` resources required by World/Graph candidate preparation
+   - load and publish the initial World through the same
+     `WorldTransitionCoordinator::PrepareWorldLoad()` +
+     `WorldGraphTransactionCoordinator` transaction used by runtime replacement
+   - finalize initial-only render objects such as the UI overlay after the
+     World/Graph transaction commits
    - start the render thread only when `workerThreadCount == 2`
    - initialize the console subsystem
 5. Queue launch-time runtime commands, if any

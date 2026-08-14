@@ -8,10 +8,11 @@
 
 ComputePipeline::ComputePipeline(
     VL::RendererBackendVulkan* rendererBackend,
+    vk::Device& device,
     const std::string& shaderName)
 {
     this->rendererBackend = rendererBackend;
-    this->device = &rendererBackend->GetDevice();
+    this->device = &device;
     this->shaderName = shaderName;
 
     const std::string computeShaderPath = CommonFunction::Path(shaderName + "_comp.spv");
@@ -30,10 +31,11 @@ ComputePipeline::ComputePipeline(
 
 ComputePipeline::ComputePipeline(
     VL::RendererBackendVulkan* rendererBackend,
+    vk::Device& device,
     const ComputeShaderArtifact& artifact)
 {
     this->rendererBackend = rendererBackend;
-    this->device = &rendererBackend->GetDevice();
+    this->device = &device;
     this->shaderName = artifact.shaderName;
     shaderBindings = artifact.shaderBindings;
 

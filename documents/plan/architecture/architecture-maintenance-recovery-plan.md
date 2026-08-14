@@ -4,13 +4,78 @@
 
 - Type: executable architecture repair plan
 - Created: 2026-08-14
-- State: pending implementation
+- Completed: 2026-08-14
+- State: completed; retained as implementation history
 - Current architecture contract:
   - `documents/architecture/vulkanlearn-architecture.html`
   - `documents/plan/architecture/ue-lite-completion-plan.md`
 - Related rendering contracts:
   - `documents/rendering/shader-build-cache.md`
   - `documents/rendering/shader-hot-reload.md`
+- Deferred R6 follow-up:
+  - `documents/plan/architecture/renderer-cohesive-runtime-extraction-plan.md`
+
+## Completion Record
+
+R1-R5 and R7 were implemented. R6 was deliberately deferred because extracting
+CSM state, post-process controls, environment orchestration, and RenderGraph
+Vulkan state ownership in the same repair would materially expand the lifetime
+risk. The exact follow-up scope and acceptance matrix are recorded in
+`renderer-cohesive-runtime-extraction-plan.md`.
+
+Implemented ownership boundaries:
+
+- `RendererBackendVulkan::CreatePipelineFactory()` is the Vulkan owner-only
+  construction path for pipeline objects; no public backend raw device, memory,
+  or RHI getter remains.
+- `RuntimeTestHooks` owns test state machines, feature implementations live
+  under `source/engine/testing/`, and only
+  `RuntimeValidationServices` may adapt tests to `RenderSystem`/`RenderGraph`.
+- `ShaderReloadRuntime` owns monitor, compile worker, pending source union,
+  source epochs, generations, scheduling, and reload diagnostics.
+- `WorldGraphTransactionCoordinator` owns World/resource/RenderGraph/pipeline/
+  runtime binding prepare and prevalidated commit orchestration.
+- Initial World loading, runtime World replacement, and M_ definition reload use
+  `WorldTransitionCoordinator::PrepareWorldLoad()` and isolated candidate
+  `RendererResourceCache` packages. The mutable cache snapshot/restore bridge
+  and old direct initial-load path were removed.
+- Startup initializes only the RenderSystem resources required by candidate
+  preparation before the initial transaction, then initializes the UI overlay
+  after successful publication. The initial candidate publishes any missing
+  process-global BRDF LUT binding together with its World-local package;
+  established global bindings are immutable.
+
+Validation completed on 2026-08-14:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tool/ue-lite-final-validation.ps1 -ReloadStressCount 20
+```
+
+The maintained Debug matrix passed build, boundary audit, CTest 3/3, all seven
+Shader/World transaction tests, 120-frame smoke, procedural-sky environment
+stress, 20 World reloads, bad scene/material/mesh/texture rollback, high-light
+buffer retirement, resize 6/6, and RenderGraph reload 6/6. Logs:
+`artifacts/ue-lite-validation/20260814-143055/`.
+
+An isolated explicit MinGW Release configuration also passed:
+
+```powershell
+cmake -S . -B build-architecture-release-mingw `
+  -G "MinGW Makefiles" `
+  -DCMAKE_BUILD_TYPE=Release `
+  -DCMAKE_C_COMPILER=C:/Software/mingw64/bin/gcc.exe `
+  -DCMAKE_CXX_COMPILER=C:/Software/mingw64/bin/g++.exe
+cmake --build build-architecture-release-mingw -j
+ctest --test-dir build-architecture-release-mingw --output-on-failure -j 1
+```
+
+The Release build used GCC/G++ 15.1.0 and CTest passed 3/3. The final boundary
+audit and focused searches found no raw backend device getter call, legacy
+World loading/cache snapshot API, RuntimeTestHooks/feature-test singleton
+access outside the exact adapter, ambiguous production maintenance marker, or
+Shader/World `waitIdle()` call. No Vulkan validation error, device loss,
+half-committed owner generation, use-after-free, or retirement leak was
+observed in the completed runtime matrix.
 
 This plan repairs architecture regressions found after the Shader incremental
 build and hot-reload work. It is not a renderer redesign. Preserve the existing
@@ -618,4 +683,3 @@ The implementing thread must report:
 - exact build/test/runtime commands run and their outcomes;
 - any deliberately deferred R6 extraction with a concrete follow-up document;
 - remaining risks, if any.
-

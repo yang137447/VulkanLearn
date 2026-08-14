@@ -17,7 +17,7 @@ namespace VL
 class RendererObjectResourceEntry;
 
 // Renderer-side CPU resource cache. Global resources survive world reloads;
-// world-local resources are captured/restored around a staged load and retired
+// world-local resources are prepared in isolated candidate packages and retired
 // through ResourceRetireQueue when replaced.
 class RendererResourceCache
 {
@@ -35,9 +35,6 @@ public:
         bool Empty() const noexcept;
     };
 
-    // Compatibility bridge for existing rollback callers. New staged loads
-    // should retain immutable package references instead of copying the maps.
-    using WorldLocalResourceSnapshot = WorldLocalResourcePackage;
     using WorldLocalResourcePackageHandle =
         std::shared_ptr<WorldLocalResourcePackage>;
     using ImmutableWorldLocalResourceRefs =
@@ -65,18 +62,16 @@ public:
     ImmutableWorldLocalResourceRefs
     CaptureActiveWorldLocalResources() const noexcept;
 
-    // The candidate must come from BeginCandidate(). Commit only swaps the
-    // world-local package pointer; the caller owns retirement of the returned
-    // old package after the appropriate GPU epoch.
+    // The candidate must come from BeginCandidate(). Commit publishes any
+    // missing process-global bindings prepared by the initial candidate and
+    // swaps the world-local package pointer. Existing global bindings are
+    // immutable, so inherited resources keep the same identity across World
+    // generations. The caller owns retirement of the returned old package
+    // after the appropriate GPU epoch.
     WorldLocalResourcePackageHandle CommitCandidate(
         RendererResourceCache&& candidate) noexcept;
 
     void BeginWorldLocalResourceLoad(uint64_t ownerGeneration);
-    // Used by WorldTransitionCoordinator rollback. The snapshot holds shared
-    // references to the active world's renderer resources while a new world is
-    // being loaded, so a failed load can restore the old binding table.
-    WorldLocalResourceSnapshot CaptureWorldLocalResources() const;
-    void RestoreWorldLocalResources(WorldLocalResourceSnapshot snapshot);
     // Swapchain recreation keeps CPU-side resource bindings, but all
     // per-swapchain buffers and descriptor sets must be rebuilt.
     void ShutdownSwapchainDependentWorldResources();

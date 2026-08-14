@@ -139,6 +139,13 @@ GPU readback；实际 SPIR-V 输出仍需后续 capture/readback 验证。
 
 本地生成资源输出写入 `resourcePath/generated/`。
 
+单次启动需要临时覆盖 `config/config.json -> initScene` 时，可以使用进程级参数，
+不会改写配置文件：
+
+```bash
+build/bin/main.exe --initial-scene scenes/SC_speedtree.json
+```
+
 ## Shader 增量编译与热重载
 
 启动阶段 Shader 编译是内容寻址增量构建：未修改的 entry/variant 直接命中

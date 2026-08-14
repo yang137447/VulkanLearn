@@ -18,16 +18,6 @@ class RendererBackendVulkan;
 class GraphicsPipeline : public PipelineBase
 {
 public:
-    
-    GraphicsPipeline(VL::RendererBackendVulkan* rendererBackend,
-                    vk::RenderPass *renderPass,
-                    const GraphicsShaderVariantArtifact& shaderArtifact,
-                    vk::SampleCountFlagBits sampleCount,
-                    uint32_t colorAttachmentCount,
-                    const GraphicsPipelineStateDesc& pipelineStateDesc = {},
-                    bool bIsShadowPass = false,
-                    const GraphicsPipelineLayoutDesc& pipelineLayoutDesc = {}
-                );
     ~GraphicsPipeline();
 
     inline vk::PipelineBindPoint GetBindPoint() const override { return vk::PipelineBindPoint::eGraphics; }
@@ -37,6 +27,19 @@ public:
     inline const std::vector<ShaderBinding>& GetShaderBindings() const override { return shaderBindings; }
     inline const std::vector<ShaderBinding>& GetDescriptorLayoutBindings() const override { return descriptorLayoutBindings; }
 private:
+    friend class PipelineFactory;
+
+    GraphicsPipeline(
+        VL::RendererBackendVulkan* rendererBackend,
+        vk::Device& device,
+        vk::RenderPass* renderPass,
+        const GraphicsShaderVariantArtifact& shaderArtifact,
+        vk::SampleCountFlagBits sampleCount,
+        uint32_t colorAttachmentCount,
+        const GraphicsPipelineStateDesc& pipelineStateDesc = {},
+        bool bIsShadowPass = false,
+        const GraphicsPipelineLayoutDesc& pipelineLayoutDesc = {});
+
     void CreateDescriptorSetLayouts(const GraphicsPipelineLayoutDesc& pipelineLayoutDesc);
     void DestroyDescriptorSetLayouts();
 

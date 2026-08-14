@@ -11,34 +11,17 @@
 
 #include "baseStructs.h"
 #include "engine/runtimeCommand.h"
+#include "engine/testing/runtimeValidationServices.h"
 #include "render/environment/environmentUpdateDiagnostics.h"
 
 namespace VL
 {
 
 class DiagnosticsSubsystem;
-class EngineLoop;
-class ShaderCompileWorker;
-class ShaderFileMonitor;
 class WorldManager;
 struct ShaderCompileWorkerShutdownDiagnostics;
 struct RuntimeCommandExecutionResult;
 struct WorldGraphTransactionTestFaultInjection;
-
-// Identity-only renderer snapshot for rollback validation. It observes owner
-// tables without keeping resources alive or exposing backend objects.
-struct RuntimeRendererResourceFingerprint
-{
-    bool captured = false;
-    uint64_t worldOwnerGeneration = 0;
-    std::unordered_map<std::string, std::uintptr_t> worldTextures;
-    std::unordered_map<std::string, std::uintptr_t> renderableObjects;
-    std::unordered_map<std::string, std::uintptr_t> materials;
-    std::unordered_map<std::string, std::uintptr_t> materialInstances;
-    std::unordered_map<std::string, std::uintptr_t> objectResources;
-    std::unordered_map<std::string, std::uintptr_t> textures;
-    std::unordered_map<std::string, std::uintptr_t> passMaterialInstances;
-};
 
 enum class RuntimeTestStatus
 {
@@ -110,16 +93,17 @@ public:
     bool BeginShaderShutdownInflightTest(
         const DiagnosticsSubsystem& diagnostics);
     bool FinalizeShaderShutdownInflightTestAfterWorkerShutdown(
-        EngineLoop& engineLoop,
+        RuntimeValidationServices& validationServices,
         const ShaderCompileWorkerShutdownDiagnostics& workerDiagnostics,
         const DiagnosticsSubsystem& diagnostics);
     void Update(
         CommandBus& commandBus,
         const WorldManager& worldManager,
         const EnvironmentUpdateDiagnostics& environmentDiagnostics,
+        RuntimeValidationServices& validationServices,
         const DiagnosticsSubsystem& diagnostics);
     void UpdateEngineLoopTests(
-        EngineLoop& engineLoop,
+        RuntimeValidationServices& validationServices,
         const DiagnosticsSubsystem& diagnostics);
     bool ShouldCollectFrameTiming() const { return frameSmokeActive; }
     void RecordFrameRenderLoopTime(double renderLoopTimeMs);
@@ -154,30 +138,31 @@ private:
         CommandBus& commandBus,
         const WorldManager& worldManager,
         const EnvironmentUpdateDiagnostics& environmentDiagnostics,
+        RuntimeValidationServices& validationServices,
         const DiagnosticsSubsystem& diagnostics);
     void UpdateResizeStress(
-        EngineLoop& engineLoop,
+        RuntimeValidationServices& validationServices,
         const DiagnosticsSubsystem& diagnostics);
     void UpdateRenderGraphReloadStress(
-        EngineLoop& engineLoop,
+        RuntimeValidationServices& validationServices,
         const DiagnosticsSubsystem& diagnostics);
     void UpdateShaderReloadTest(
-        EngineLoop& engineLoop,
+        RuntimeValidationServices& validationServices,
         const DiagnosticsSubsystem& diagnostics);
     void UpdateShaderAutoReloadTest(
-        EngineLoop& engineLoop,
+        RuntimeValidationServices& validationServices,
         const DiagnosticsSubsystem& diagnostics);
     void UpdateShaderComputeReloadTest(
-        EngineLoop& engineLoop,
+        RuntimeValidationServices& validationServices,
         const DiagnosticsSubsystem& diagnostics);
     void UpdateShaderDefinitionReloadTest(
-        EngineLoop& engineLoop,
+        RuntimeValidationServices& validationServices,
         const DiagnosticsSubsystem& diagnostics);
     void UpdateWorldGraphTransactionTest(
-        EngineLoop& engineLoop,
+        RuntimeValidationServices& validationServices,
         const DiagnosticsSubsystem& diagnostics);
     void ValidateWorldGraphTransactionFailure(
-        EngineLoop& engineLoop,
+        RuntimeValidationServices& validationServices,
         const WorldGraphTransactionTestFaultInjection& injection,
         bool graphOnly,
         bool materialDefinitionTransaction,
@@ -187,32 +172,33 @@ private:
     void AdvanceWorldGraphTransactionTestAfterRenderedFrames(
         WorldGraphTransactionTestPhase nextPhase) noexcept;
     std::string CaptureShaderDefinitionRuntimeFingerprint(
-        EngineLoop& engineLoop) const;
+        RuntimeValidationServices& validationServices) const;
     std::string CaptureWorldGraphRuntimeFingerprint(
-        EngineLoop& engineLoop,
+        RuntimeValidationServices& validationServices,
         const std::string& primaryDefinitionPath,
         const std::string& batchDefinitionPath,
         bool includeFrameLifecycleDiagnostics = true,
         std::string* details = nullptr) const;
     void UpdateShaderUiReloadTest(
-        EngineLoop& engineLoop,
+        RuntimeValidationServices& validationServices,
         const DiagnosticsSubsystem& diagnostics);
     void UpdateShaderShutdownInflightTest(
-        EngineLoop& engineLoop,
+        RuntimeValidationServices& validationServices,
         const DiagnosticsSubsystem& diagnostics);
     std::string CaptureShaderShutdownInflightFingerprint(
-        EngineLoop& engineLoop) const;
+        RuntimeValidationServices& validationServices) const;
     bool SurfaceArtifactDependsOnSourceWithDigest(
-        EngineLoop& engineLoop,
+        RuntimeValidationServices& validationServices,
         const std::string& surfaceLogicalBuildId,
         const std::string& dependencyIdentity,
         const std::string& expectedDigest);
     bool UiArtifactFragmentMatchesCurrentSource(
-        EngineLoop& engineLoop) const;
+        RuntimeValidationServices& validationServices) const;
     void FailShaderReloadTest(
         const std::string& message,
         const DiagnosticsSubsystem& diagnostics);
     void FailShaderAutoReloadTest(
+        RuntimeValidationServices* validationServices,
         const std::string& message,
         const DiagnosticsSubsystem& diagnostics);
     void FailShaderComputeReloadTest(
@@ -222,13 +208,14 @@ private:
         const std::string& message,
         const DiagnosticsSubsystem& diagnostics);
     void FailWorldGraphTransactionTest(
+        RuntimeValidationServices* validationServices,
         const std::string& message,
         const DiagnosticsSubsystem& diagnostics);
     void FailShaderUiReloadTest(
         const std::string& message,
         const DiagnosticsSubsystem& diagnostics);
     void FailShaderShutdownInflightTest(
-        EngineLoop& engineLoop,
+        RuntimeValidationServices& validationServices,
         const std::string& message,
         const DiagnosticsSubsystem& diagnostics);
     void ReportFrameSmokeInterval(const DiagnosticsSubsystem& diagnostics);
@@ -386,8 +373,6 @@ private:
     bool shaderAutoReloadTestPhaseEntryPending = false;
     bool shaderAutoReloadTestQueueManualReload = false;
     bool shaderAutoReloadTestManualReloadQueued = false;
-    ShaderCompileWorker* shaderAutoReloadTestWorker = nullptr;
-    EngineLoop* shaderAutoReloadTestEngineLoop = nullptr;
     std::filesystem::file_time_type
         shaderAutoReloadTestOriginalWriteTime{};
     bool shaderAutoReloadTestOriginalWriteTimeCaptured = false;
@@ -543,7 +528,6 @@ private:
     bool worldGraphTransactionTestActive = false;
     bool waitingForWorldGraphTransactionTestWorld = false;
     bool worldGraphTransactionTestMonitorSuspended = false;
-    ShaderFileMonitor* worldGraphTransactionTestMonitor = nullptr;
     int worldGraphTransactionTestFramesUntilNextPhase = 0;
     int worldGraphTransactionTestRetireDrainFramesRemaining = 0;
     size_t worldGraphTransactionTestMaxPendingRetiredResources = 0;

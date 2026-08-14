@@ -6,7 +6,7 @@
 
 #include "core/runtimeResult.h"
 #include "engine/runtimeCommand.h"
-#include "engine/runtimeTestHooks.h"
+#include "engine/testing/runtimeValidationServices.h"
 #include "world/worldManager.h"
 
 class RenderSystem;
@@ -16,11 +16,15 @@ namespace VL
 
 class DiagnosticsSubsystem;
 class RuntimeConfig;
+class RuntimeTestHooks;
 class WorldTransitionCoordinator;
 
 struct RuntimeCommandExecutionResult
 {
     bool worldChanged = false;
+    // The transactional World path only publishes runtime binding after every
+    // prepare step succeeds, so this records entry into the no-throw live
+    // ownership commit rather than candidate preparation.
     bool worldRuntimeBindingAttempted = false;
     bool worldRuntimeBindingSucceeded = false;
     bool loadWorldAttempted = false;

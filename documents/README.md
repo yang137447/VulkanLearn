@@ -71,7 +71,9 @@ Documentation in this repository is split by responsibility:
 Architecture plans:
 
 - `plan/architecture/architecture-maintenance-recovery-plan.md`
-  - executable 2026-08-14 repair plan for restoring Vulkan device/test boundaries, extracting Shader and World/Graph transaction ownership from EngineLoop, converging World loading paths, and rerunning the complete architecture validation matrix
+  - completed 2026-08-14 repair record for restoring Vulkan device/test boundaries, extracting Shader and World/Graph transaction ownership from EngineLoop, converging World loading paths, and rerunning the complete architecture validation matrix
+- `plan/architecture/renderer-cohesive-runtime-extraction-plan.md`
+  - deferred R6 follow-up for CSM frame data, post-process controls, environment orchestration, and RenderGraph Vulkan state-package ownership
 - `plan/architecture/modern-engine-refactor-blueprint.html`
   - earlier modern-engine refactor blueprint kept as planning context
 - `plan/architecture/ue-lite-completion-plan.md`

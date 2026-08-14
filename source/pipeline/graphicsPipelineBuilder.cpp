@@ -3,7 +3,9 @@
 #include "../vulkanDebug.h"
 #include "vulkanPipelineDiagnostics.h"
 
-GraphicsPipelineBuildResult GraphicsPipelineBuilder::Build(const GraphicsPipelineBuildDesc& desc)
+GraphicsPipelineBuildResult GraphicsPipelineBuilder::Build(
+    vk::Device& device,
+    const GraphicsPipelineBuildDesc& desc)
 {
     std::vector<vk::DynamicState> dynamicStates = {
         vk::DynamicState::eViewport,
@@ -168,14 +170,14 @@ GraphicsPipelineBuildResult GraphicsPipelineBuilder::Build(const GraphicsPipelin
         .setInitialDataSize(0)
         .setPInitialData(nullptr);
 
-    vk::Result result = desc.device.createPipelineCache(&pipelineCacheCreateInfo, nullptr, &buildResult.pipelineCache);
+    vk::Result result = device.createPipelineCache(&pipelineCacheCreateInfo, nullptr, &buildResult.pipelineCache);
     VL::RequireVulkanPipelineSuccess(result, "Create pipeline cache", desc.pipelineName, "graphics pipeline");
-    VulkanDebug::SetObjectName(desc.device, buildResult.pipelineCache, vk::ObjectType::ePipelineCache, "PipelineCache: " + desc.pipelineName);
+    VulkanDebug::SetObjectName(device, buildResult.pipelineCache, vk::ObjectType::ePipelineCache, "PipelineCache: " + desc.pipelineName);
 
-    result = desc.device.createGraphicsPipelines(buildResult.pipelineCache, 1, &graphicsPipelineCreateInfo, nullptr, &buildResult.graphicsPipeline);
+    result = device.createGraphicsPipelines(buildResult.pipelineCache, 1, &graphicsPipelineCreateInfo, nullptr, &buildResult.graphicsPipeline);
     if (result != vk::Result::eSuccess)
     {
-        desc.device.destroyPipelineCache(buildResult.pipelineCache, nullptr);
+        device.destroyPipelineCache(buildResult.pipelineCache, nullptr);
         buildResult.pipelineCache = nullptr;
         VL::RequireVulkanPipelineSuccess(
             result,
@@ -183,7 +185,7 @@ GraphicsPipelineBuildResult GraphicsPipelineBuilder::Build(const GraphicsPipelin
             desc.pipelineName,
             "graphics pipeline");
     }
-    VulkanDebug::SetObjectName(desc.device, buildResult.graphicsPipeline, vk::ObjectType::ePipeline, "Pipeline: " + desc.pipelineName);
+    VulkanDebug::SetObjectName(device, buildResult.graphicsPipeline, vk::ObjectType::ePipeline, "Pipeline: " + desc.pipelineName);
 
     return buildResult;
 }

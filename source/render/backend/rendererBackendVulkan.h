@@ -14,6 +14,8 @@
 #include "render/rhi/rhiResourceHandles.h"
 
 class PipelineFactory;
+struct GraphicsPipelineBuildDesc;
+struct GraphicsPipelineBuildResult;
 struct SDL_Window;
 
 namespace VL
@@ -89,13 +91,23 @@ public:
         CaptureImageResourceDebugNames() const;
     void RecreateSwapchain(int width, int height);
     std::unique_ptr<PipelineFactory> CreatePipelineFactory();
+    vk::ShaderModule CreateShaderModule(
+        const vk::ShaderModuleCreateInfo& createInfo,
+        const std::string& debugName);
+    void DestroyShaderModule(vk::ShaderModule& shaderModule) noexcept;
+    vk::PipelineLayout CreatePipelineLayout(
+        const vk::PipelineLayoutCreateInfo& createInfo,
+        const std::string& debugName);
+    void DestroyPipelineLayout(vk::PipelineLayout& pipelineLayout) noexcept;
+    GraphicsPipelineBuildResult BuildGraphicsPipeline(
+        const GraphicsPipelineBuildDesc& buildDesc);
+    void DestroyPipeline(vk::Pipeline& pipeline) noexcept;
+    void DestroyPipelineCache(vk::PipelineCache& pipelineCache) noexcept;
 
     uint32_t GetSwapchainImageCount() const;
     vk::Extent2D GetSwapchainExtent() const;
     vk::Format GetSwapchainImageFormat() const;
     const std::vector<vk::ImageView>& GetSwapchainImageViews() const;
-    vk::Device& GetDevice();
-    const vk::Device& GetDevice() const;
     float GetTimestampPeriodNanoseconds();
     uint32_t GetGraphicsTimestampValidBits();
     vk::QueryPool CreateTimestampQueryPool(

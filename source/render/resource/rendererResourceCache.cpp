@@ -1,5 +1,6 @@
 #include "render/resource/rendererResourceCache.h"
 
+#include <stdexcept>
 #include <utility>
 
 #include "materialInstance.h"
@@ -61,6 +62,7 @@ RendererResourceCache::WorldLocalResourcePackageHandle
 RendererResourceCache::CommitCandidate(
     RendererResourceCache&& candidate) noexcept
 {
+    globalTextures.swap(candidate.globalTextures);
     worldLocalResources.swap(candidate.worldLocalResources);
     return std::move(candidate.worldLocalResources);
 }
@@ -110,20 +112,6 @@ void RendererResourceCache::ClearWorldLocalResources()
     retireQueue.CollectCompletedEpoch(retireQueue.GetLastCompletedEpoch());
 }
 
-RendererResourceCache::WorldLocalResourceSnapshot RendererResourceCache::CaptureWorldLocalResources() const
-{
-    return *worldLocalResources;
-}
-
-void RendererResourceCache::RestoreWorldLocalResources(WorldLocalResourceSnapshot snapshot)
-{
-    WorldLocalResourcePackageHandle restoredPackage =
-        std::make_shared<WorldLocalResourcePackage>(
-            std::move(snapshot));
-    ClearWorldLocalResources();
-    worldLocalResources = std::move(restoredPackage);
-}
-
 void RendererResourceCache::ShutdownSwapchainDependentWorldResources()
 {
     for (auto& [objectName, objectResource] :
@@ -149,11 +137,31 @@ void RendererResourceCache::BindGlobalTexture(std::string bindingName, std::shar
 {
     if (!texture)
     {
-        globalTextures.erase(bindingName);
+        if (globalTextures.find(bindingName) !=
+            globalTextures.end())
+        {
+            throw std::runtime_error(
+                "Renderer global texture bindings cannot be removed after creation: " +
+                bindingName);
+        }
         return;
     }
 
-    globalTextures[std::move(bindingName)] = std::move(texture);
+    const auto existing = globalTextures.find(bindingName);
+    if (existing != globalTextures.end())
+    {
+        if (existing->second != texture)
+        {
+            throw std::runtime_error(
+                "Renderer global texture bindings are immutable after creation: " +
+                bindingName);
+        }
+        return;
+    }
+
+    globalTextures.emplace(
+        std::move(bindingName),
+        std::move(texture));
 }
 
 void RendererResourceCache::BindWorldTexture(std::string bindingName, std::shared_ptr<Texture> texture)

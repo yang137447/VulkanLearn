@@ -56,6 +56,7 @@ std::vector<ShaderBinding> BuildPipelineLayoutBindings(
 
 GraphicsPipeline::GraphicsPipeline(
     VL::RendererBackendVulkan* rendererBackend,
+    vk::Device& device,
     vk::RenderPass* renderPass,
     const GraphicsShaderVariantArtifact& shaderArtifact,
     vk::SampleCountFlagBits sampleCount,
@@ -66,7 +67,7 @@ GraphicsPipeline::GraphicsPipeline(
 {
     PROFILE_FUNCTION();
     this->rendererBackend = rendererBackend;
-    this->device = &rendererBackend->GetDevice();
+    this->device = &device;
     this->shaderDisplayName = shaderArtifact.displayName;
     this->vertexSpirv = shaderArtifact.vertexSpirv;
     this->fragmentSpirv = shaderArtifact.fragmentSpirv;
@@ -208,7 +209,6 @@ void GraphicsPipeline::CreateGraphicsPipeline(
     bool bIsShadowPass)
 {
     GraphicsPipelineBuildDesc buildDesc{
-        *device,
         renderPass,
         pipelineLayout,
         shaderStages,
@@ -220,7 +220,8 @@ void GraphicsPipeline::CreateGraphicsPipeline(
         pipelineStateDesc,
         bIsShadowPass
     };
-    auto buildResult = GraphicsPipelineBuilder::Build(buildDesc);
+    auto buildResult =
+        GraphicsPipelineBuilder::Build(*device, buildDesc);
     pipelineCache = buildResult.pipelineCache;
     graphicsPipeline = buildResult.graphicsPipeline;
 }

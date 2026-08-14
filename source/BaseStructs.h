@@ -114,9 +114,9 @@ struct alignas(16) UBOModel
 {
     Eigen::Matrix4f model;
     Eigen::Matrix4f previousModel;
-    // TODO: 将 SpeedTree 风动状态从所有对象共享的 UBOModel 中拆出，改为
-    // SpeedTree Pipeline 才绑定的可选 Profile/Instance Buffer，避免普通 Mesh
-    // 分配并重复上传无用的 208 字节风动数据。
+    // Current limitation: SpeedTree wind state is stored in the shared
+    // UBOModel. A foliage-only Profile/Instance buffer would avoid allocating
+    // and uploading these 208 bytes for ordinary meshes.
     SpeedTreeWindStateGPU speedTreeWind;
 };
 

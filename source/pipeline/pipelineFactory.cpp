@@ -46,10 +46,11 @@ size_t GraphicsPipelineKeyHash::operator()(const GraphicsPipelineKey& key) const
 }
 
 PipelineFactory::PipelineFactory(
-    VL::RendererBackendVulkan* rendererBackend)
+    VL::RendererBackendVulkan* rendererBackend,
+    vk::Device& device)
 {
     this->rendererBackend = rendererBackend;
-    this->device = &rendererBackend->GetDevice();
+    this->device = &device;
 }
 
 void PipelineFactory::SetShaderCompiler(ShaderCompiler* compiler)
@@ -116,9 +117,10 @@ std::shared_ptr<ComputePipeline> PipelineFactory::CreateComputePipeline(
             }
         }
 
-        pipeline = std::make_shared<ComputePipeline>(
+        pipeline = std::shared_ptr<ComputePipeline>(new ComputePipeline(
             rendererBackend,
-            artifact);
+            *device,
+            artifact));
         computePipelines[shaderName] = {
             pipeline,
             artifact.artifactGenerationKey};
@@ -135,9 +137,10 @@ std::shared_ptr<ComputePipeline> PipelineFactory::CreateComputePipeline(
         }
     }
 
-    pipeline = std::make_shared<ComputePipeline>(
+    pipeline = std::shared_ptr<ComputePipeline>(new ComputePipeline(
         rendererBackend,
-        shaderName);
+        *device,
+        shaderName));
     computePipelines[shaderName] = {pipeline, {}};
     return pipeline;
 }
@@ -147,9 +150,10 @@ std::shared_ptr<ComputePipeline> PipelineFactory::CreateComputePipeline(
 {
     // Replacement pipelines are created per reload batch and owned by the
     // participant; they intentionally bypass the weak process cache.
-    return std::make_shared<ComputePipeline>(
+    return std::shared_ptr<ComputePipeline>(new ComputePipeline(
         rendererBackend,
-        artifact);
+        *device,
+        artifact));
 }
 
 const GraphicsShaderVariantArtifact& PipelineFactory::PrepareGraphicsShaderVariant(
@@ -403,15 +407,16 @@ PipelineFactory::CreateGraphicsPipelineInternal(
         passPipelineContractKey.BuildGraphicsPipelineStateDesc(cullMode, blendMode);
     // PassPipelineContractKey 提供 pass-owned 状态，cull/blend 来自 Material；
     // 这里只在 Vulkan 管线创建边界把两部分合成为最终 state desc。
-    auto pipeline = std::make_shared<GraphicsPipeline>(
+    auto pipeline = std::shared_ptr<GraphicsPipeline>(new GraphicsPipeline(
         rendererBackend,
+        *device,
         renderPass,
         shaderArtifact,
         passPipelineContractKey.renderPassCompatibilityKey.GetRasterizationSampleCount(),
         passPipelineContractKey.renderPassCompatibilityKey.GetColorAttachmentCount(),
         pipelineStateDesc,
         passPipelineContractKey.isShadowPass,
-        pipelineLayoutDesc);
+        pipelineLayoutDesc));
     pipelineCache[key] = pipeline;
     return pipeline;
 }

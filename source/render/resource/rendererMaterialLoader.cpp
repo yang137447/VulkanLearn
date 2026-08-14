@@ -446,7 +446,7 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
                     *newParameter))
             {
                 throw std::runtime_error(
-                    "MaterialInstance live parameter type changed during migration: " +
+                    "MaterialInstance live parameter type changed during state transfer: " +
                     loadPlan.materialInstanceKey + "." + name);
             }
             SetParameterValue(
@@ -476,7 +476,7 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
                 oldTexture->glslType != newTexture->glslType)
             {
                 throw std::runtime_error(
-                    "MaterialInstance live texture binding changed during migration: " +
+                    "MaterialInstance live texture binding changed during state transfer: " +
                     loadPlan.materialInstanceKey + "." + name);
             }
             materialInstance->SetTexture(

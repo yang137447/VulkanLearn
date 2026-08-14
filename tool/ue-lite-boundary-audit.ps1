@@ -68,6 +68,53 @@ function Test-DirectoryPatternsAbsent {
     }
 }
 
+function Test-RuntimeValidationAdapterBoundary {
+    param([System.Collections.Generic.List[string]]$Failures)
+
+    $adapterPath = (
+        Resolve-RepoPath "source/engine/testing/runtimeValidationServices.cpp"
+    ).ToLowerInvariant()
+    if (!(Test-Path -LiteralPath $adapterPath)) {
+        Add-Failure $Failures "Runtime validation adapter boundary: missing explicit adapter 'source/engine/testing/runtimeValidationServices.cpp'."
+        return
+    }
+
+    $files = @()
+    $files += Get-Item -LiteralPath (
+        Resolve-RepoPath "source/engine/runtimeTestHooks.h"
+    )
+    $files += Get-Item -LiteralPath (
+        Resolve-RepoPath "source/engine/runtimeTestHooks.cpp"
+    )
+    $files += Get-ChildItem `
+        -LiteralPath (Resolve-RepoPath "source/engine/testing") `
+        -Recurse `
+        -File `
+        -Include *.h,*.cpp
+
+    $patterns = @(
+        '#include\s+"renderSystem\.h"',
+        '#include\s+"renderGraph\.h"',
+        '\bRenderSystem::',
+        '\bRenderGraph::',
+        '\bRenderSystem\s*[*&]',
+        '\bRenderGraph\s*[*&]'
+    )
+    foreach ($file in $files) {
+        if ($file.FullName.ToLowerInvariant() -eq $adapterPath) {
+            continue
+        }
+
+        foreach ($pattern in $patterns) {
+            $matches = Select-String -LiteralPath $file.FullName -Pattern $pattern
+            foreach ($match in $matches) {
+                $relative = Resolve-Path -LiteralPath $file.FullName -Relative
+                Add-Failure $Failures "Runtime validation adapter boundary: '${relative}:$($match.LineNumber)' bypasses RuntimeValidationServices with '$pattern'."
+            }
+        }
+    }
+}
+
 function Test-FilePatternsPresent {
     param(
         [System.Collections.Generic.List[string]]$Failures,
@@ -623,9 +670,10 @@ Test-FilePatternsPresent `
     ) `
     -RuleName "WorldBuilder mesh object plan consumption"
 
-# Runtime validation hooks must apply pressure through CommandBus. If they call
-# world loading or renderer internals directly, reloadstress stops proving the
-# same path that users and console commands exercise.
+# Runtime validation hooks and feature tests must apply pressure through
+# CommandBus or the one explicit adapter. Only RuntimeValidationServices.cpp
+# may touch RenderSystem/RenderGraph; allowing the testing directory as a whole
+# would recreate the owner leak that this boundary closes.
 Test-FilePatternsAbsent `
     -Failures $failures `
     -RelativePaths @(
@@ -641,6 +689,8 @@ Test-FilePatternsAbsent `
         'RenderGraph::'
     ) `
     -RuleName "Runtime test hook command boundary"
+
+Test-RuntimeValidationAdapterBoundary -Failures $failures
 
 # RHIDeviceVulkan is the concrete Vulkan device-facing boundary. The old abstract
 # RHIDevice interface was removed because Vulkan is the only graphics API and a
@@ -987,7 +1037,7 @@ Test-FilePatternsAbsent `
 
 Test-FilePatternsPresent `
     -Failures $failures `
-    -RelativePath "source/engine/runtimeTestHooks.cpp" `
+    -RelativePath "source/engine/testing/rendererLifecycleRuntimeTests.cpp" `
     -Patterns @(
         'BeginResizeStress',
         'UpdateResizeStress',
@@ -1017,13 +1067,14 @@ Test-FilePatternsAbsent `
         'frameSmokeActive',
         'StartEnvironmentUpdateStress',
         'UpdateEnvironmentUpdateStress',
-        'environmentUpdateStressPhase'
+        'environmentUpdateStressPhase',
+        'friend\s+class\s+RuntimeTestHooks'
     ) `
     -RuleName "Runtime test state stays out of EngineLoop"
 
 Test-FilePatternsPresent `
     -Failures $failures `
-    -RelativePath "source/engine/runtimeTestHooks.cpp" `
+    -RelativePath "source/engine/testing/rendererLifecycleRuntimeTests.cpp" `
     -Patterns @(
         'BeginFrameSmokeTest',
         'RecordFrameTime',
@@ -1045,7 +1096,7 @@ Test-FilePatternsPresent `
 
 Test-FilePatternsPresent `
     -Failures $failures `
-    -RelativePath "source/engine/runtimeTestHooks.cpp" `
+    -RelativePath "source/engine/testing/rendererLifecycleRuntimeTests.cpp" `
     -Patterns @(
         'BeginResizeStress',
         'UpdateResizeStress',
@@ -1064,7 +1115,7 @@ Test-FilePatternsPresent `
 
 Test-FilePatternsPresent `
     -Failures $failures `
-    -RelativePath "source/engine/runtimeTestHooks.cpp" `
+    -RelativePath "source/engine/testing/rendererLifecycleRuntimeTests.cpp" `
     -Patterns @(
         'BeginRenderGraphReloadStress',
         'UpdateRenderGraphReloadStress',
@@ -1086,7 +1137,7 @@ Test-FilePatternsPresent `
 
 Test-FilePatternsPresent `
     -Failures $failures `
-    -RelativePath "source/engine/runtimeTestHooks.cpp" `
+    -RelativePath "source/engine/testing/worldTransactionRuntimeTests.cpp" `
     -Patterns @(
         'World reload failure rollback test',
         'CreateGeneratedMaterialFailureScene',
@@ -1096,6 +1147,26 @@ Test-FilePatternsPresent `
         'Mesh.LoadFailed',
         'Texture.LoadFailed',
         'CreateGeneratedHighLightStressScene',
+        'SameRendererResourceFingerprint'
+    ) `
+    -RuleName "World reload failure state machine validation"
+
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "source/engine/testing/runtimeTestFixtures.cpp" `
+    -Patterns @(
+        'CreateGeneratedMaterialFailureScene',
+        'CreateGeneratedMeshFailureScene',
+        'CreateGeneratedTextureFailureScene',
+        'CreateGeneratedHighLightStressScene',
+        'SameRendererResourceFingerprint'
+    ) `
+    -RuleName "World reload failure fixture validation"
+
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "source/engine/runtimeTestHooks.cpp" `
+    -Patterns @(
         'activeWorldBeforeCommand',
         'activeWorldAfterCommand',
         'loadWorldError',
@@ -1103,7 +1174,7 @@ Test-FilePatternsPresent `
         'rendererResourcesBeforeLoad',
         'pass material bindings preserved'
     ) `
-    -RuleName "World reload failure rollback validation"
+    -RuleName "World reload failure command result validation"
 
 Test-FilePatternsPresent `
     -Failures $failures `
@@ -1174,7 +1245,16 @@ Test-FilePatternsPresent `
     -Failures $failures `
     -RelativePath "tool/ue-lite-final-validation.ps1" `
     -Patterns @(
+        'ctest',
+        '--shader-reload-test',
+        '--shader-auto-reload-test',
+        '--shader-compute-reload-test',
+        '--shader-definition-reload-test',
+        '--shader-ui-reload-test',
+        '--shader-shutdown-inflight-test',
+        '--world-graph-transaction-test',
         '--framesmoke',
+        '--environmentstress',
         '--reloadstress',
         '--reloadfail',
         '--reloadfail-material',

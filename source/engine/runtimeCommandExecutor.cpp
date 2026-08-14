@@ -57,34 +57,39 @@ std::unordered_map<std::string, std::uintptr_t> CaptureSharedResourcePointers(
 RuntimeRendererResourceFingerprint
 CaptureRuntimeRendererResourceFingerprint()
 {
-    RendererResourceCache::WorldLocalResourceSnapshot resourceSnapshot =
-        RendererResourceCache::GetInstance().CaptureWorldLocalResources();
+    const RendererResourceCache::ImmutableWorldLocalResourceRefs
+        resourceSnapshot =
+            RendererResourceCache::GetInstance()
+                .CaptureActiveWorldLocalResources();
     const auto passMaterialSnapshot =
         RenderGraph::GetInstance()
             .CapturePassMaterialInstances();
 
     RuntimeRendererResourceFingerprint fingerprint;
     fingerprint.captured = true;
-    fingerprint.worldOwnerGeneration =
-        resourceSnapshot.ownerGeneration;
-    fingerprint.worldTextures =
-        CaptureSharedResourcePointers(
-            resourceSnapshot.worldTextures);
-    fingerprint.renderableObjects =
-        CaptureSharedResourcePointers(
-            resourceSnapshot.renderableObjects);
-    fingerprint.materials =
-        CaptureSharedResourcePointers(
-            resourceSnapshot.materials);
-    fingerprint.materialInstances =
-        CaptureSharedResourcePointers(
-            resourceSnapshot.materialInstances);
-    fingerprint.objectResources =
-        CaptureSharedResourcePointers(
-            resourceSnapshot.objectResources);
-    fingerprint.textures =
-        CaptureSharedResourcePointers(
-            resourceSnapshot.textures);
+    if (resourceSnapshot)
+    {
+        fingerprint.worldOwnerGeneration =
+            resourceSnapshot->ownerGeneration;
+        fingerprint.worldTextures =
+            CaptureSharedResourcePointers(
+                resourceSnapshot->worldTextures);
+        fingerprint.renderableObjects =
+            CaptureSharedResourcePointers(
+                resourceSnapshot->renderableObjects);
+        fingerprint.materials =
+            CaptureSharedResourcePointers(
+                resourceSnapshot->materials);
+        fingerprint.materialInstances =
+            CaptureSharedResourcePointers(
+                resourceSnapshot->materialInstances);
+        fingerprint.objectResources =
+            CaptureSharedResourcePointers(
+                resourceSnapshot->objectResources);
+        fingerprint.textures =
+            CaptureSharedResourcePointers(
+                resourceSnapshot->textures);
+    }
     fingerprint.passMaterialInstances =
         CaptureSharedResourcePointers(
             passMaterialSnapshot);

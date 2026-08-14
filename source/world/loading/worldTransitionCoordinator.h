@@ -57,16 +57,12 @@ public:
         RendererResourceLoadCoordinator& resourceLoadCoordinator,
         float initialCameraAspectRatio);
 
-    RuntimeResult<WorldTransitionResult> LoadInitialWorld(const std::string& scenePath);
-    RuntimeResult<WorldTransitionResult> RequestWorldLoad(const std::string& scenePath);
     RuntimeResult<PreparedWorldTransition> PrepareWorldLoad(
         const std::string& scenePath,
         RenderGraph& pipelineContractGraph,
         const MaterialDefinitionReloadBatch* materialDefinitionReload = nullptr);
 
 private:
-    RuntimeResult<WorldTransitionResult> LoadWorldThroughResourceCoordinator(const std::string& scenePath);
-
     WorldManager& worldManager;
     RendererResourceLoadCoordinator& resourceLoadCoordinator;
     float initialCameraAspectRatio = 1.0f;

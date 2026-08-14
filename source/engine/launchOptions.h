@@ -41,6 +41,7 @@ struct LaunchOptions
     bool exitAfterTests = false;
     DeveloperUiLaunchMode developerUiMode = DeveloperUiLaunchMode::UseConfig;
     std::optional<int> workerThreadCountOverride;
+    std::string initialSceneOverride;
     std::string reloadStressScenePath;
     std::string reloadFailureScenePath;
     int reloadStressCount = 20;

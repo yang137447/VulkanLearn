@@ -15,12 +15,6 @@ class RendererBackendVulkan;
 class ComputePipeline : public PipelineBase
 {
 public:
-    ComputePipeline(
-        VL::RendererBackendVulkan* rendererBackend,
-        const std::string& shaderName);
-    ComputePipeline(
-        VL::RendererBackendVulkan* rendererBackend,
-        const ComputeShaderArtifact& artifact);
     ~ComputePipeline();
 
     inline vk::PipelineBindPoint GetBindPoint() const override { return vk::PipelineBindPoint::eCompute; }
@@ -33,6 +27,17 @@ public:
     void Bind(vk::CommandBuffer commandBuffer) const;
     void Dispatch(vk::CommandBuffer commandBuffer, uint32_t groupX, uint32_t groupY, uint32_t groupZ) const;
 private:
+    friend class PipelineFactory;
+
+    ComputePipeline(
+        VL::RendererBackendVulkan* rendererBackend,
+        vk::Device& device,
+        const std::string& shaderName);
+    ComputePipeline(
+        VL::RendererBackendVulkan* rendererBackend,
+        vk::Device& device,
+        const ComputeShaderArtifact& artifact);
+
     void CreateShader(const std::vector<uint32_t>& spirv);
     void DestroyShader();
     void CreateDescriptorSetLayouts();

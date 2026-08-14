@@ -3,6 +3,8 @@ param(
     [string]$BuildDirectory = "build",
     [int]$FrameSmokeCount = 120,
     [int]$ReloadStressCount = 100,
+    [int]$EnvironmentStressCount = 3,
+    [string]$EnvironmentStressScene = "scenes/SC_speedtree.json",
     [int]$LightStressCount = 3,
     [int]$ResizeStressCount = 6,
     [int]$GraphReloadStressCount = 6,
@@ -91,6 +93,7 @@ try {
     $commonRuntimePatterns = @(
         '\[Diagnostics\]\[(Info|Error|Warning)\]',
         'Frame smoke test completed',
+        'Environment update stress completed',
         'World reload stress completed',
         'World reload failure rollback test completed',
         'Resize stress completed',
@@ -119,66 +122,136 @@ try {
         -SummaryPatterns @('UE-Lite boundary audit passed', 'UE-Lite boundary audit failed')
 
     Invoke-ValidationStep `
+        -Name "CTest" `
+        -FilePath "ctest" `
+        -Arguments @("--test-dir", $BuildDirectory, "--output-on-failure") `
+        -LogPath (Join-Path $logDirectory "02-ctest.log") `
+        -SummaryPatterns @('tests passed', 'tests failed', 'Test project')
+
+    Invoke-ValidationStep `
+        -Name "Shader manual reload transaction" `
+        -FilePath $mainExe `
+        -Arguments @("--shader-reload-test", "--exit-after-tests") `
+        -LogPath (Join-Path $logDirectory "03-shader-reload.log") `
+        -SummaryPatterns $commonRuntimePatterns
+
+    Invoke-ValidationStep `
+        -Name "Shader automatic reload transaction" `
+        -FilePath $mainExe `
+        -Arguments @("--shader-auto-reload-test", "--exit-after-tests") `
+        -LogPath (Join-Path $logDirectory "04-shader-auto-reload.log") `
+        -SummaryPatterns $commonRuntimePatterns
+
+    Invoke-ValidationStep `
+        -Name "Shader compute reload transaction" `
+        -FilePath $mainExe `
+        -Arguments @("--shader-compute-reload-test", "--exit-after-tests") `
+        -LogPath (Join-Path $logDirectory "05-shader-compute-reload.log") `
+        -SummaryPatterns $commonRuntimePatterns
+
+    Invoke-ValidationStep `
+        -Name "Shader definition reload transaction" `
+        -FilePath $mainExe `
+        -Arguments @("--shader-definition-reload-test", "--exit-after-tests") `
+        -LogPath (Join-Path $logDirectory "06-shader-definition-reload.log") `
+        -SummaryPatterns $commonRuntimePatterns
+
+    Invoke-ValidationStep `
+        -Name "Shader UI reload transaction" `
+        -FilePath $mainExe `
+        -Arguments @("--shader-ui-reload-test", "--exit-after-tests") `
+        -LogPath (Join-Path $logDirectory "07-shader-ui-reload.log") `
+        -SummaryPatterns $commonRuntimePatterns
+
+    Invoke-ValidationStep `
+        -Name "Shader shutdown in-flight transaction" `
+        -FilePath $mainExe `
+        -Arguments @("--shader-shutdown-inflight-test", "--exit-after-tests") `
+        -LogPath (Join-Path $logDirectory "08-shader-shutdown-inflight.log") `
+        -SummaryPatterns $commonRuntimePatterns
+
+    Invoke-ValidationStep `
+        -Name "World graph transaction" `
+        -FilePath $mainExe `
+        -Arguments @("--world-graph-transaction-test", "--exit-after-tests") `
+        -LogPath (Join-Path $logDirectory "09-world-graph-transaction.log") `
+        -SummaryPatterns $commonRuntimePatterns
+
+    Invoke-ValidationStep `
         -Name "Frame smoke" `
         -FilePath $mainExe `
         -Arguments @("--framesmoke", $FrameSmokeCount.ToString(), "--exit-after-tests") `
-        -LogPath (Join-Path $logDirectory "02-framesmoke.log") `
+        -LogPath (Join-Path $logDirectory "10-framesmoke.log") `
+        -SummaryPatterns $commonRuntimePatterns
+
+    Invoke-ValidationStep `
+        -Name "Environment update stress" `
+        -FilePath $mainExe `
+        -Arguments @(
+            "--environmentstress",
+            $EnvironmentStressCount.ToString(),
+            "--initial-scene",
+            $EnvironmentStressScene,
+            "--exit-after-tests",
+            "--no-dev-ui"
+        ) `
+        -LogPath (Join-Path $logDirectory "11-environmentstress.log") `
         -SummaryPatterns $commonRuntimePatterns
 
     Invoke-ValidationStep `
         -Name "World reload stress" `
         -FilePath $mainExe `
         -Arguments @("--reloadstress", $ReloadStressScene, $ReloadStressCount.ToString(), "--exit-after-tests") `
-        -LogPath (Join-Path $logDirectory "03-reloadstress.log") `
+        -LogPath (Join-Path $logDirectory "12-reloadstress.log") `
         -SummaryPatterns $commonRuntimePatterns
 
     Invoke-ValidationStep `
         -Name "Bad scene rollback" `
         -FilePath $mainExe `
         -Arguments @("--reloadfail", "scenes/DOES_NOT_EXIST.json", "--exit-after-tests") `
-        -LogPath (Join-Path $logDirectory "04-reloadfail-scene.log") `
+        -LogPath (Join-Path $logDirectory "13-reloadfail-scene.log") `
         -SummaryPatterns $commonRuntimePatterns
 
     Invoke-ValidationStep `
         -Name "Bad material rollback" `
         -FilePath $mainExe `
         -Arguments @("--reloadfail-material", "--exit-after-tests") `
-        -LogPath (Join-Path $logDirectory "05-reloadfail-material.log") `
+        -LogPath (Join-Path $logDirectory "14-reloadfail-material.log") `
         -SummaryPatterns $commonRuntimePatterns
 
     Invoke-ValidationStep `
         -Name "Bad mesh rollback" `
         -FilePath $mainExe `
         -Arguments @("--reloadfail-mesh", "--exit-after-tests") `
-        -LogPath (Join-Path $logDirectory "06-reloadfail-mesh.log") `
+        -LogPath (Join-Path $logDirectory "15-reloadfail-mesh.log") `
         -SummaryPatterns $commonRuntimePatterns
 
     Invoke-ValidationStep `
         -Name "Bad texture rollback" `
         -FilePath $mainExe `
         -Arguments @("--reloadfail-texture", "--exit-after-tests") `
-        -LogPath (Join-Path $logDirectory "07-reloadfail-texture.log") `
+        -LogPath (Join-Path $logDirectory "16-reloadfail-texture.log") `
         -SummaryPatterns $commonRuntimePatterns
 
     Invoke-ValidationStep `
         -Name "Light buffer retire" `
         -FilePath $mainExe `
         -Arguments @("--lightstress", $LightStressCount.ToString(), "--exit-after-tests") `
-        -LogPath (Join-Path $logDirectory "08-lightstress.log") `
+        -LogPath (Join-Path $logDirectory "17-lightstress.log") `
         -SummaryPatterns $commonRuntimePatterns
 
     Invoke-ValidationStep `
         -Name "Resize stress" `
         -FilePath $mainExe `
         -Arguments @("--resizestress", $ResizeStressCount.ToString(), "--exit-after-tests") `
-        -LogPath (Join-Path $logDirectory "09-resizestress.log") `
+        -LogPath (Join-Path $logDirectory "18-resizestress.log") `
         -SummaryPatterns $commonRuntimePatterns
 
     Invoke-ValidationStep `
         -Name "Render graph reload stress" `
         -FilePath $mainExe `
         -Arguments @("--graphreloadstress", $GraphReloadStressCount.ToString(), "--exit-after-tests") `
-        -LogPath (Join-Path $logDirectory "10-graphreloadstress.log") `
+        -LogPath (Join-Path $logDirectory "19-graphreloadstress.log") `
         -SummaryPatterns $commonRuntimePatterns
 
     Write-Host "UE-Lite final validation passed."

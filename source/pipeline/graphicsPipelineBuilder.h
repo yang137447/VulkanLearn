@@ -24,7 +24,6 @@ struct GraphicsPipelineStateDesc
 
 struct GraphicsPipelineBuildDesc
 {
-    vk::Device& device;
     vk::RenderPass& renderPass;
     vk::PipelineLayout& pipelineLayout;
     const std::vector<vk::PipelineShaderStageCreateInfo>& shaderStages;
@@ -46,5 +45,7 @@ struct GraphicsPipelineBuildResult
 class GraphicsPipelineBuilder
 {
 public:
-    static GraphicsPipelineBuildResult Build(const GraphicsPipelineBuildDesc& desc);
+    static GraphicsPipelineBuildResult Build(
+        vk::Device& device,
+        const GraphicsPipelineBuildDesc& desc);
 };

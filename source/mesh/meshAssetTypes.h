@@ -103,9 +103,9 @@ struct SpeedTreeWindProfile
 // is generated through MikkTSpace.
 struct SpeedTreeVertexAux
 {
-    // TODO: 接入 SpeedTree Mesh LOD 时，将 lodPosition 与 blend 纳入专用
-    // GPU 顶点流，先完成基础几何 Morph，再执行 Runtime SDK 风动形变。
-    // 当前只渲染最高精度 3D Block，因此这些 LOD 数据仅在导入侧保留。
+    // Current limitation: the renderer uses only the highest-detail 3D block,
+    // so LOD position and blend data remain import-side metadata. A future
+    // foliage vertex stream must apply geometry morph before SDK wind.
     Eigen::Vector3f lodPosition = Eigen::Vector3f::Zero();
     Eigen::Vector3f renderBinormal = Eigen::Vector3f::Zero();
     Eigen::Vector3f sourceNormal = Eigen::Vector3f::Zero();

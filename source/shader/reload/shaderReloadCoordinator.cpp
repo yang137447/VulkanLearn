@@ -93,16 +93,22 @@ std::string BuildShaderDisplayName(
 
 std::vector<std::shared_ptr<Material>> CaptureLiveMaterials()
 {
-    RendererResourceCache::WorldLocalResourceSnapshot resourceSnapshot =
-        RendererResourceCache::GetInstance().CaptureWorldLocalResources();
+    const RendererResourceCache::ImmutableWorldLocalResourceRefs
+        resourceSnapshot =
+            RendererResourceCache::GetInstance()
+                .CaptureActiveWorldLocalResources();
     std::map<std::string, std::shared_ptr<Material>> materialsByKey;
-    for (const auto& resourceEntry : resourceSnapshot.materials)
+    if (resourceSnapshot)
     {
-        const std::shared_ptr<Material>& material =
-            resourceEntry.second;
-        if (material)
+        for (const auto& resourceEntry :
+             resourceSnapshot->materials)
         {
-            materialsByKey[material->GetMaterialKey()] = material;
+            const std::shared_ptr<Material>& material =
+                resourceEntry.second;
+            if (material)
+            {
+                materialsByKey[material->GetMaterialKey()] = material;
+            }
         }
     }
 
