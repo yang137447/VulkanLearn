@@ -55,7 +55,8 @@ public:
     WorldTransitionCoordinator(
         WorldManager& worldManager,
         RendererResourceLoadCoordinator& resourceLoadCoordinator,
-        float initialCameraAspectRatio);
+        float initialCameraAspectRatio,
+        uint32_t shadowCascadeCount);
 
     RuntimeResult<PreparedWorldTransition> PrepareWorldLoad(
         const std::string& scenePath,
@@ -66,6 +67,7 @@ private:
     WorldManager& worldManager;
     RendererResourceLoadCoordinator& resourceLoadCoordinator;
     float initialCameraAspectRatio = 1.0f;
+    uint32_t shadowCascadeCount = 4;
     WorldTransitionState state = WorldTransitionState::Idle;
 };
 

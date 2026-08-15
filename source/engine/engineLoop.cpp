@@ -252,7 +252,6 @@ RuntimeResult<void> EngineLoop::InitializeRuntimeSystems(
     rendererBackend->Initialize(vulkanExtensions, window.GetNativeHandle());
     rendererBackendInitialized = true;
     RenderSystem::GetInstance().SetRendererBackend(rendererBackend.get());
-    RenderSystem::GetInstance().SetCsmSettings(GetRuntimeConfig().GetCsmSettings());
 
     pipelineFactory = rendererBackend->CreatePipelineFactory();
     pipelineFactory->SetShaderCompiler(shaderCompiler.get());
@@ -326,7 +325,8 @@ RuntimeResult<void> EngineLoop::InitializeRuntimeSystems(
     worldTransitionCoordinator = std::make_unique<WorldTransitionCoordinator>(
         GetSubsystems().GetWorldManager(),
         resourceLoadCoordinator,
-        GetRuntimeConfig().GetWindowAspectRatio());
+        GetRuntimeConfig().GetWindowAspectRatio(),
+        GetRuntimeConfig().GetShadowCascadeCount());
     return RuntimeResult<void>::Success();
 }
 
@@ -605,6 +605,49 @@ void EngineLoop::ApplyQueuedUiActions()
             command.bloomParameter = BloomParameter::Clamp;
             command.floatValue = action.floatValue;
             break;
+        case UiActionType::SetCsmCastShadows:
+            command.type = RuntimeCommandType::SetCsmCastShadows;
+            command.intValue = action.intValue;
+            break;
+        case UiActionType::SetCsmDynamicShadowDistance:
+            command.type = RuntimeCommandType::SetCsmDynamicShadowDistance;
+            command.floatValue = action.floatValue;
+            break;
+        case UiActionType::SetCsmDynamicShadowCascades:
+            command.type = RuntimeCommandType::SetCsmDynamicShadowCascades;
+            command.intValue = action.intValue;
+            break;
+        case UiActionType::SetCsmCascadeDistributionExponent:
+            command.type =
+                RuntimeCommandType::SetCsmCascadeDistributionExponent;
+            command.floatValue = action.floatValue;
+            break;
+        case UiActionType::SetCsmCascadeTransitionFraction:
+            command.type =
+                RuntimeCommandType::SetCsmCascadeTransitionFraction;
+            command.floatValue = action.floatValue;
+            break;
+        case UiActionType::SetCsmShadowDistanceFadeoutFraction:
+            command.type =
+                RuntimeCommandType::SetCsmShadowDistanceFadeoutFraction;
+            command.floatValue = action.floatValue;
+            break;
+        case UiActionType::SetCsmShadowBias:
+            command.type = RuntimeCommandType::SetCsmShadowBias;
+            command.floatValue = action.floatValue;
+            break;
+        case UiActionType::SetCsmShadowSlopeBias:
+            command.type = RuntimeCommandType::SetCsmShadowSlopeBias;
+            command.floatValue = action.floatValue;
+            break;
+        case UiActionType::SetCsmShadowCascadeBiasDistribution:
+            command.type =
+                RuntimeCommandType::SetCsmShadowCascadeBiasDistribution;
+            command.floatValue = action.floatValue;
+            break;
+        case UiActionType::SaveCsmSettingsToScene:
+            command.type = RuntimeCommandType::SaveCsmSettingsToScene;
+            break;
         case UiActionType::SetEnvironmentIntensity:
             command.type = RuntimeCommandType::SetEnvironmentIntensity;
             command.floatValue = action.floatValue;
@@ -668,6 +711,23 @@ void EngineLoop::UpdateUiViewModel(float deltaTime)
     snapshot.bloomThreshold = renderSystem.GetBloomThreshold();
     snapshot.bloomKnee = renderSystem.GetBloomKnee();
     snapshot.bloomClamp = renderSystem.GetBloomClamp();
+    const CsmSettings& csmSettings = renderSystem.GetCsmSettings();
+    snapshot.csmCastShadows = csmSettings.castShadows;
+    snapshot.csmDynamicShadowDistance =
+        csmSettings.dynamicShadowDistance;
+    snapshot.csmDynamicShadowCascades =
+        csmSettings.cascadeCount;
+    snapshot.csmCascadeDistributionExponent =
+        csmSettings.cascadeDistributionExponent;
+    snapshot.csmCascadeTransitionFraction =
+        csmSettings.cascadeTransitionFraction;
+    snapshot.csmShadowDistanceFadeoutFraction =
+        csmSettings.shadowDistanceFadeoutFraction;
+    snapshot.csmShadowBias = csmSettings.shadowBias;
+    snapshot.csmShadowSlopeBias =
+        csmSettings.shadowSlopeBias;
+    snapshot.csmShadowCascadeBiasDistribution =
+        csmSettings.shadowCascadeBiasDistribution;
     snapshot.environmentIntensity = renderSystem.GetEnvironmentIntensity();
     const EnvironmentUpdateDiagnostics environmentDiagnostics =
         renderSystem.GetEnvironmentUpdateDiagnostics();

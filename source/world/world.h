@@ -11,6 +11,7 @@
 #include "baseStructs.h"
 #include "environmentType.h"
 #include "mesh/meshAssetTypes.h"
+#include "render/shadow/csmSettings.h"
 
 class Camera;
 class DirectionalLight;
@@ -62,6 +63,9 @@ public:
     void SetEnvironment(WorldEnvironment environment);
     const WorldEnvironment& GetEnvironment() const { return environment; }
 
+    void SetCsmSettings(CsmSettings settings);
+    const CsmSettings& GetCsmSettings() const { return csmSettings; }
+
     void AddMeshObject(std::string name, WorldMeshObject object);
     void AddSpeedTreeWindProfile(SpeedTreeWindProfile profile);
     void AddDirectionalLight(std::string name, std::shared_ptr<DirectionalLight> light);
@@ -80,6 +84,7 @@ private:
     std::weak_ptr<SceneNode> viewTarget;
     std::shared_ptr<Camera> camera;
     WorldEnvironment environment;
+    CsmSettings csmSettings;
     std::unordered_map<std::string, WorldMeshObject> meshObjects;
     std::unordered_map<std::string, SpeedTreeWindProfile> speedTreeWindProfiles;
     std::unordered_map<std::string, std::shared_ptr<DirectionalLight>> directionalLights;

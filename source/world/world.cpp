@@ -26,6 +26,11 @@ void World::SetEnvironment(WorldEnvironment environment)
     this->environment = std::move(environment);
 }
 
+void World::SetCsmSettings(CsmSettings settings)
+{
+    csmSettings = std::move(settings);
+}
+
 void World::AddMeshObject(std::string name, WorldMeshObject object)
 {
     meshObjects[std::move(name)] = std::move(object);

@@ -45,7 +45,7 @@
         },
         "resource": {
             "type": "可选资源类型。默认 texture2D；CSM shadowMap 使用 texture2DArray。",
-            "arrayLayers": "texture2DArray 的数组层数。默认 1；CSM 启用时必须等于 config.json 中 csm.cascadeCount。"
+            "arrayLayers": "texture2DArray 的物理数组层数。CSM 将它作为最大级联容量；场景 directionalLight.shadow.dynamicShadowCascades 决定活动级联数。"
         },
         "output": {
             "resource": "当前 pass 输出的逻辑资源名。",

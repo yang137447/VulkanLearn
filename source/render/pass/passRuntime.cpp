@@ -72,7 +72,9 @@ void PassRuntime::RecordShadowPass(PassRuntimeContext& context) const
     // Keep the compiled shadow pass and its layout transition even when CSM is
     // disabled: the geometry pass still expects shadowMap to leave this pass
     // in a valid shader-readable layout.
-    if (!context.services.IsCsmEnabled())
+    if (!context.services.IsCsmEnabled() ||
+        !context.services.IsShadowCascadeActive(
+            renderPass.shadowCascadeIndex))
     {
         BeginConfiguredRenderPass(context);
         commandBuffer.endRenderPass();

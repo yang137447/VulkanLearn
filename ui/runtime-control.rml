@@ -13,6 +13,8 @@
 
             <div id="control-backdrop">
                 <div id="control-panel">
+                    <div class="panel-top-mask"></div>
+
                     <div class="panel-header">
                         <div class="panel-heading">
                             <h1>{{panel_title}}</h1>
@@ -26,7 +28,8 @@
                         <button data-class-selected="active_section == 1" data-event-click="active_section = 1">{{tab_visualization_label}}</button>
                         <button data-class-selected="active_section == 2" data-event-click="active_section = 2">{{tab_post_process_label}}</button>
                         <button data-class-selected="active_section == 3" data-event-click="active_section = 3">{{tab_environment_label}}</button>
-                        <button data-class-selected="active_section == 4" data-event-click="active_section = 4">{{tab_system_label}}</button>
+                        <button data-class-selected="active_section == 4" data-event-click="active_section = 4">{{tab_shadows_label}}</button>
+                        <button data-class-selected="active_section == 5" data-event-click="active_section = 5">{{tab_system_label}}</button>
                     </div>
 
                     <div id="control-scroll">
@@ -167,6 +170,105 @@
                         </div>
 
                         <div class="section-page" data-if="active_section == 4">
+                            <h2>{{tab_shadows_label}}</h2>
+
+                            <div class="shadow-actions">
+                                <button data-event-click="save_csm_to_scene">{{shadow_save_label}}</button>
+                            </div>
+
+                            <div class="control-row shadow-toggle-row">
+                                <div class="control-topline">
+                                    <div class="control-label">{{shadow_cast_shadows_label}}</div>
+                                    <div class="control-value">{{shadow_cast_shadows_value}}</div>
+                                </div>
+                                <div class="control-buttons shadow-toggle-buttons">
+                                    <button data-class-selected="csm_cast_shadows" data-event-click="set_csm_cast_shadows(1)">{{shadow_enable_label}}</button>
+                                    <button data-class-selected="!csm_cast_shadows" data-event-click="set_csm_cast_shadows(0)">{{shadow_disable_label}}</button>
+                                </div>
+                            </div>
+
+                            <div data-if="csm_cast_shadows">
+                                <div class="control-row slider-row">
+                                    <div class="control-topline">
+                                        <div class="control-label">{{shadow_dynamic_distance_label}}</div>
+                                        <div class="control-value">{{shadow_dynamic_distance_value}}</div>
+                                    </div>
+                                    <input id="shadow-dynamic-distance-slider" class="control-slider" type="range" min="5" max="1000" step="1" data-value="csm_dynamic_shadow_distance" data-event-change="csm_dynamic_shadow_distance_changed" />
+                                </div>
+
+                                <div class="control-row cascade-selector-row">
+                                    <div class="control-topline">
+                                        <div class="control-label">{{shadow_dynamic_cascades_label}}</div>
+                                    </div>
+                                    <div class="control-buttons cascade-buttons">
+                                        <button data-class-selected="csm_dynamic_shadow_cascades == 1" data-event-click="set_csm_dynamic_shadow_cascades(1)">1</button>
+                                        <button data-class-selected="csm_dynamic_shadow_cascades == 2" data-event-click="set_csm_dynamic_shadow_cascades(2)">2</button>
+                                        <button data-class-selected="csm_dynamic_shadow_cascades == 3" data-event-click="set_csm_dynamic_shadow_cascades(3)">3</button>
+                                        <button data-class-selected="csm_dynamic_shadow_cascades == 4" data-event-click="set_csm_dynamic_shadow_cascades(4)">4</button>
+                                    </div>
+                                </div>
+
+                                <div class="control-row slider-row">
+                                    <div class="control-topline">
+                                        <div class="control-label">{{shadow_cascade_distribution_exponent_label}}</div>
+                                        <div class="control-value">{{shadow_cascade_distribution_exponent_value}}</div>
+                                    </div>
+                                    <input id="shadow-cascade-distribution-exponent-slider" class="control-slider" type="range" min="1" max="10" step="0.1" data-value="csm_cascade_distribution_exponent" data-event-change="csm_cascade_distribution_exponent_changed" />
+                                </div>
+
+                                <div class="control-row slider-row">
+                                    <div class="control-topline">
+                                        <div class="control-label">{{shadow_cascade_transition_fraction_label}}</div>
+                                        <div class="control-value">{{shadow_cascade_transition_fraction_value}}</div>
+                                    </div>
+                                    <input id="shadow-cascade-transition-fraction-slider" class="control-slider" type="range" min="0" max="1" step="0.01" data-value="csm_cascade_transition_fraction" data-event-change="csm_cascade_transition_fraction_changed" />
+                                </div>
+
+                                <div class="control-row slider-row">
+                                    <div class="control-topline">
+                                        <div class="control-label">{{shadow_distance_fadeout_fraction_label}}</div>
+                                        <div class="control-value">{{shadow_distance_fadeout_fraction_value}}</div>
+                                    </div>
+                                    <input id="shadow-distance-fadeout-fraction-slider" class="control-slider" type="range" min="0" max="1" step="0.01" data-value="csm_shadow_distance_fadeout_fraction" data-event-change="csm_shadow_distance_fadeout_fraction_changed" />
+                                </div>
+
+                                <div class="control-row slider-row">
+                                    <div class="control-topline">
+                                        <div class="control-label">{{shadow_bias_label}}</div>
+                                        <div class="control-value">{{shadow_bias_value}}</div>
+                                    </div>
+                                    <input id="shadow-bias-slider" class="control-slider" type="range" min="0" max="1" step="0.01" data-value="csm_shadow_bias" data-event-change="csm_shadow_bias_changed" />
+                                </div>
+
+                                <div class="control-row slider-row">
+                                    <div class="control-topline">
+                                        <div class="control-label">{{shadow_slope_bias_label}}</div>
+                                        <div class="control-value">{{shadow_slope_bias_value}}</div>
+                                    </div>
+                                    <input id="shadow-slope-bias-slider" class="control-slider" type="range" min="0" max="1" step="0.01" data-value="csm_shadow_slope_bias" data-event-change="csm_shadow_slope_bias_changed" />
+                                </div>
+
+                                <div class="control-row slider-row">
+                                    <div class="control-topline">
+                                        <div class="control-label">{{shadow_cascade_bias_distribution_label}}</div>
+                                        <div class="control-value">{{shadow_cascade_bias_distribution_value}}</div>
+                                    </div>
+                                    <input id="shadow-cascade-bias-distribution-slider" class="control-slider" type="range" min="0" max="1" step="0.01" data-value="csm_shadow_cascade_bias_distribution" data-event-change="csm_shadow_cascade_bias_distribution_changed" />
+                                </div>
+
+                                <div class="control-row shadow-debug-row">
+                                    <div class="control-topline">
+                                        <div class="control-label">{{shadow_debug_label}}</div>
+                                    </div>
+                                    <div class="control-buttons shadow-toggle-buttons">
+                                        <button data-class-selected="debug_view_mode == 0" data-event-click="set_debug_view(0)">{{shadow_debug_full_label}}</button>
+                                        <button data-class-selected="debug_view_mode == 11" data-event-click="set_debug_view(11)">{{shadow_debug_cascades_label}}</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="section-page" data-if="active_section == 5">
                             <h2>{{tab_system_label}}</h2>
                             <div class="status-card">
                                 <div class="status-row">

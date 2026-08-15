@@ -2,9 +2,9 @@
     "projectPath": "D:\\YYBWorkSpace\\GitHub\\VulkanLearn",
     "resourcePath": "D:\\YYBWorkSpace\\GitHub\\VukanLearnResources",
     "windowSize": [1280, 720],
-    "initScene": "scenes/SC_uds_mountain_range.json",
+    "initScene": "scenes/SC_car_showcase.json",
     "msaa": 2,
-    "workerThreadCount": 2,
+  "workerThreadCount": 2,
     "ui": {
         "enabled": true,
         "hotReload": true,
@@ -15,19 +15,6 @@
         "fontFaces": [],
         "developerUiEnabled": true,
         "developerUiVisible": false
-    },
-    "csm": {
-        "enabled": true,
-        "cascadeCount": 4,
-        "shadowDistance": 300.0,
-        "splitLambda": 0.65,
-        "lightSpaceCasterBounds": true,
-        "bias": [
-            [0.0010, 1.0, 0.0, 0.0],
-            [0.0015, 1.5, 0.0, 0.0],
-            [0.0020, 2.0, 0.0, 0.0],
-            [0.0030, 3.0, 0.0, 0.0]
-        ]
     },
     "renderStateDebugColors": {
         "ePass": [0.0, 1.0, 0.0, 1.0],

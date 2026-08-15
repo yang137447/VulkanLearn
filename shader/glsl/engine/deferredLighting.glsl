@@ -54,7 +54,11 @@ DeferredLightingResult ShadeDefaultLitDeferredSurfaceDetailed(in MaterialSurface
 
     // 阴影贴图是当前 deferredLighting pass 的输入，所以 sampler 由 pass shader 传入。
     int cascadeIndex = 0;
-    result.shadow = CalculateCsmShadow(inputShadowMap, surface.worldPosition, cascadeIndex);
+    result.shadow = CalculateCsmShadow(
+        inputShadowMap,
+        surface.worldPosition,
+        surface.worldNormal,
+        cascadeIndex);
     result.shadowCascadeIndex = ShadowCascadeDebugValue(cascadeIndex);
     // GBufferE.r 先作为学习版的预计算直接光可见性项：1 = 不遮蔽，0 = 完全遮蔽。
     // 后续接 lightmap / stationary light 时，可以继续细分 rgba 的具体光源语义。

@@ -82,6 +82,159 @@ void RenderSystem::SetCsmSettings(const VL::CsmSettings& settings)
     shadowCascadeFrameData.valid = false;
 }
 
+bool RenderSystem::SetCsmCastShadows(bool enabled, std::string& outMessage)
+{
+    csmSettings.castShadows = enabled;
+    shadowCascadeFrameData.valid = false;
+    outMessage = std::string("CSM ") + (enabled ? "enabled." : "disabled.");
+    return true;
+}
+
+bool RenderSystem::SetCsmDynamicShadowDistance(
+    float distance,
+    std::string& outMessage)
+{
+    if (distance <= 0.0f)
+    {
+        outMessage = "CSM shadow distance must be positive.";
+        return false;
+    }
+
+    csmSettings.dynamicShadowDistance = distance;
+    shadowCascadeFrameData.valid = false;
+    outMessage = "CSM shadow distance set to " + std::to_string(distance);
+    return true;
+}
+
+bool RenderSystem::SetCsmCascadeCount(
+    uint32_t cascadeCount,
+    std::string& outMessage)
+{
+    if (cascadeCount < 1 ||
+        cascadeCount > VL::CsmSettings::MaxCascadeCount)
+    {
+        outMessage = "CSM cascade count must be in the range [1, 4].";
+        return false;
+    }
+
+    csmSettings.cascadeCount = cascadeCount;
+    shadowCascadeFrameData.valid = false;
+    outMessage =
+        "CSM cascade count set to " +
+        std::to_string(cascadeCount);
+    return true;
+}
+
+bool RenderSystem::SetCsmCascadeDistributionExponent(
+    float exponent,
+    std::string& outMessage)
+{
+    if (exponent < 1.0f || exponent > 10.0f)
+    {
+        outMessage =
+            "CSM cascade distribution exponent must be in the range [1, 10].";
+        return false;
+    }
+
+    csmSettings.cascadeDistributionExponent = exponent;
+    shadowCascadeFrameData.valid = false;
+    outMessage =
+        "CSM cascade distribution exponent set to " +
+        std::to_string(exponent);
+    return true;
+}
+
+bool RenderSystem::SetCsmCascadeTransitionFraction(
+    float fraction,
+    std::string& outMessage)
+{
+    if (fraction < 0.0f || fraction > 1.0f)
+    {
+        outMessage =
+            "CSM cascade transition fraction must be in the range [0, 1].";
+        return false;
+    }
+
+    csmSettings.cascadeTransitionFraction = fraction;
+    shadowCascadeFrameData.valid = false;
+    outMessage =
+        "CSM cascade transition fraction set to " +
+        std::to_string(fraction);
+    return true;
+}
+
+bool RenderSystem::SetCsmShadowDistanceFadeoutFraction(
+    float fraction,
+    std::string& outMessage)
+{
+    if (fraction < 0.0f || fraction > 1.0f)
+    {
+        outMessage =
+            "CSM shadow distance fadeout fraction must be in the range [0, 1].";
+        return false;
+    }
+
+    csmSettings.shadowDistanceFadeoutFraction = fraction;
+    shadowCascadeFrameData.valid = false;
+    outMessage =
+        "CSM shadow distance fadeout fraction set to " +
+        std::to_string(fraction);
+    return true;
+}
+
+bool RenderSystem::SetCsmShadowBias(
+    float value,
+    std::string& outMessage)
+{
+    if (value < 0.0f || value > 1.0f)
+    {
+        outMessage = "CSM shadow bias must be in the range [0, 1].";
+        return false;
+    }
+
+    csmSettings.shadowBias = value;
+    shadowCascadeFrameData.valid = false;
+    outMessage = "CSM shadow bias set to " + std::to_string(value);
+    return true;
+}
+
+bool RenderSystem::SetCsmShadowSlopeBias(
+    float value,
+    std::string& outMessage)
+{
+    if (value < 0.0f || value > 1.0f)
+    {
+        outMessage = "CSM shadow slope bias must be in the range [0, 1].";
+        return false;
+    }
+
+    csmSettings.shadowSlopeBias = value;
+    shadowCascadeFrameData.valid = false;
+    outMessage =
+        "CSM shadow slope bias set to " +
+        std::to_string(value);
+    return true;
+}
+
+bool RenderSystem::SetCsmShadowCascadeBiasDistribution(
+    float value,
+    std::string& outMessage)
+{
+    if (value < 0.0f || value > 1.0f)
+    {
+        outMessage =
+            "CSM shadow cascade bias distribution must be in the range [0, 1].";
+        return false;
+    }
+
+    csmSettings.shadowCascadeBiasDistribution = value;
+    shadowCascadeFrameData.valid = false;
+    outMessage =
+        "CSM shadow cascade bias distribution set to " +
+        std::to_string(value);
+    return true;
+}
+
 VL::EnvironmentUpdateDiagnostics RenderSystem::GetEnvironmentUpdateDiagnostics() const
 {
     // 这里用了raii锁，确保在访问环境诊断信息时不会发生数据竞争。
@@ -357,6 +510,8 @@ VL::PreparedRuntimeBinding RenderSystem::PrepareRuntimeBinding(
 
     VL::PreparedRuntimeBinding prepared;
     prepared.world = std::move(world);
+    prepared.csmSettings =
+        prepared.world->GetCsmSettings();
 
     VL::WorldSnapshotBuildDesc snapshotDesc;
     snapshotDesc.worldGeneration =
@@ -476,6 +631,7 @@ RenderSystem::CommitPreparedRuntimeBinding(
         prepared.resolvedRenderScene.materialGroups);
     speedTreeWindProfiles.Swap(
         prepared.speedTreeWindProfiles);
+    swap(csmSettings, prepared.csmSettings);
 
     std::shared_ptr<void> retiredLightBuffer =
         frameResources.CommitPreparedLightCapacity(
@@ -603,7 +759,14 @@ void RenderSystem::UploadLightsForPass(
 
 bool RenderSystem::IsCsmEnabled() const
 {
-    return csmSettings.enabled;
+    return csmSettings.castShadows;
+}
+
+bool RenderSystem::IsShadowCascadeActive(
+    uint32_t cascadeIndex) const
+{
+    return csmSettings.castShadows &&
+        cascadeIndex < csmSettings.cascadeCount;
 }
 
 void RenderSystem::UpdateUBOGlobal(vk::CommandBuffer& commandBuffer)
@@ -623,7 +786,7 @@ void RenderSystem::UpdateUBOGlobal(vk::CommandBuffer& commandBuffer)
     ubo.viewProjection = camera.viewProjection;
     ubo.invViewProjection = ubo.viewProjection.inverse();
     ubo.previousViewProjection = camera.previousViewProjection;
-    if (csmSettings.enabled)
+    if (csmSettings.castShadows)
     {
         if (!shadowCascadeFrameData.valid)
         {
@@ -632,6 +795,7 @@ void RenderSystem::UpdateUBOGlobal(vk::CommandBuffer& commandBuffer)
         ubo.lightViewProj = shadowCascadeFrameData.lightViewProj;
         ubo.cascadeSplits = shadowCascadeFrameData.cascadeSplits;
         ubo.shadowBias = shadowCascadeFrameData.bias;
+        ubo.csmParameters = shadowCascadeFrameData.csmParameters;
     }
     else
     {
@@ -639,6 +803,7 @@ void RenderSystem::UpdateUBOGlobal(vk::CommandBuffer& commandBuffer)
         // CalculateCsmShadow; keep every shadow field explicitly neutral.
         ubo.cascadeSplits = Eigen::Vector4f::Zero();
         ubo.shadowBias.fill(Eigen::Vector4f::Zero());
+        ubo.csmParameters = Eigen::Vector4f::Zero();
         for (Eigen::Matrix4f& lightViewProj : ubo.lightViewProj)
         {
             lightViewProj = Eigen::Matrix4f::Identity();
@@ -680,6 +845,7 @@ void RenderSystem::UpdateUBOGlobalForShadow(
     ubo.lightViewProj = shadowCascadeFrameData.lightViewProj;
     ubo.cascadeSplits = shadowCascadeFrameData.cascadeSplits;
     ubo.shadowBias = shadowCascadeFrameData.bias;
+    ubo.csmParameters = shadowCascadeFrameData.csmParameters;
     // environmentSH 由 GPU 在环境代际 commit 时广播，常规 CPU 上传会跳过该区间。
     ubo.debugViewMode = currentRenderScene.debugViewMode;
     ubo.environmentIntensity = currentRenderScene.environment.intensity;
@@ -696,11 +862,6 @@ void RenderSystem::UpdateUBOGlobalForShadow(
 
 void RenderSystem::BuildShadowCascadeFrameData(uint32_t passSizeWidth, uint32_t passSizeHeight)
 {
-    if (csmSettings.cascadeCount < 1)
-    {
-        csmSettings.cascadeCount = 1;
-    }
-
     // 如果本帧已经计算过相同场景、相同分辨率的 cascade 数据，直接复用缓存
     if (shadowCascadeFrameData.valid &&
         shadowCascadeFrameData.frameIndex == currentFrame &&
@@ -713,22 +874,35 @@ void RenderSystem::BuildShadowCascadeFrameData(uint32_t passSizeWidth, uint32_t 
 
     const VL::CameraSnapshot& camera = currentRenderScene.camera;
     const float cascadeNear = camera.clipNear;
-    const float cascadeFar = std::max(cascadeNear + 0.1f, csmSettings.shadowDistance);
+    const float cascadeFar =
+        std::max(
+            cascadeNear + 0.1f,
+            csmSettings.dynamicShadowDistance);
 
     shadowCascadeFrameData.view.fill(Eigen::Matrix4f::Identity());
     shadowCascadeFrameData.projection.fill(Eigen::Matrix4f::Identity());
     shadowCascadeFrameData.lightViewProj.fill(Eigen::Matrix4f::Identity());
     shadowCascadeFrameData.cascadeSplits = Eigen::Vector4f::Zero();
-    shadowCascadeFrameData.bias = csmSettings.bias;
+    shadowCascadeFrameData.bias.fill(Eigen::Vector4f::Zero());
+    shadowCascadeFrameData.csmParameters = Eigen::Vector4f(
+        csmSettings.cascadeTransitionFraction,
+        csmSettings.shadowDistanceFadeoutFraction,
+        static_cast<float>(csmSettings.cascadeCount),
+        csmSettings.dynamicShadowDistance);
 
     float previousSplit = cascadeNear;
     for (uint32_t cascadeIndex = 0; cascadeIndex < csmSettings.cascadeCount; ++cascadeIndex)
     {
         const float p = static_cast<float>(cascadeIndex + 1) / static_cast<float>(csmSettings.cascadeCount);
-        const float logSplit = cascadeNear * std::pow(cascadeFar / cascadeNear, p);
-        const float uniformSplit = cascadeNear + (cascadeFar - cascadeNear) * p;
-        // splitFar 最大不能超过 cascadeFar，按照实际的值是几十就是几十，是几百就是几百
-        const float splitFar = csmSettings.splitLambda * logSplit + (1.0f - csmSettings.splitLambda) * uniformSplit;
+        // UE 风格 Distribution Exponent：指数越大，越多分辨率集中到相机附近。
+        // 最后一级始终精确落在 Dynamic Shadow Distance。
+        const float splitFraction =
+            std::pow(
+                p,
+                csmSettings.cascadeDistributionExponent);
+        const float splitFar =
+            cascadeNear +
+            (cascadeFar - cascadeNear) * splitFraction;
 
         ShadowProjectionParams params = CalculateShadowMatrixForCameraRange(
             previousSplit,
@@ -739,7 +913,31 @@ void RenderSystem::BuildShadowCascadeFrameData(uint32_t passSizeWidth, uint32_t 
         shadowCascadeFrameData.projection[cascadeIndex] = params.projectionMatrix;
         shadowCascadeFrameData.lightViewProj[cascadeIndex] = params.projectionMatrix * params.viewMatrix;
         shadowCascadeFrameData.cascadeSplits[cascadeIndex] = splitFar;
+
+        // 用户只编辑 UE 风格的全局 Bias。每级实际接收面 Bias 在这里派生，
+        // Distribution 为 0 时各级相同，为 1 时按级联序号逐级增大。
+        const float cascadeBiasScale =
+            1.0f +
+            csmSettings.shadowCascadeBiasDistribution *
+                static_cast<float>(cascadeIndex);
+        shadowCascadeFrameData.bias[cascadeIndex] =
+            Eigen::Vector4f(
+                csmSettings.shadowBias *
+                    VL::CsmSettings::MaxReceiverDepthBias *
+                    cascadeBiasScale,
+                csmSettings.shadowSlopeBias *
+                    VL::CsmSettings::MaxSlopeBiasMultiplier,
+                0.0f,
+                0.0f);
         previousSplit = splitFar;
+    }
+
+    for (uint32_t cascadeIndex = csmSettings.cascadeCount;
+         cascadeIndex < VL::CsmSettings::MaxCascadeCount;
+         ++cascadeIndex)
+    {
+        shadowCascadeFrameData.cascadeSplits[cascadeIndex] =
+            cascadeFar;
     }
 
     shadowCascadeFrameData.frameIndex = currentFrame;

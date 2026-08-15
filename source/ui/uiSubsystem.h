@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -100,6 +101,7 @@ private:
         Rml::String tabVisualizationLabel;
         Rml::String tabPostProcessLabel;
         Rml::String tabEnvironmentLabel;
+        Rml::String tabShadowsLabel;
         Rml::String tabSystemLabel;
 
         Rml::String frameLabel;
@@ -149,6 +151,39 @@ private:
         Rml::String bloomClampLabel;
         Rml::String bloomClampValue;
         float bloomClamp = 0.0f;
+
+        Rml::String shadowCastShadowsLabel;
+        Rml::String shadowCastShadowsValue;
+        bool csmCastShadows = false;
+        Rml::String shadowEnableLabel;
+        Rml::String shadowDisableLabel;
+        Rml::String shadowDynamicDistanceLabel;
+        Rml::String shadowDynamicDistanceValue;
+        float csmDynamicShadowDistance = 10.0f;
+        Rml::String shadowDynamicCascadesLabel;
+        uint32_t csmDynamicShadowCascades = 4;
+        Rml::String shadowCascadeDistributionExponentLabel;
+        Rml::String shadowCascadeDistributionExponentValue;
+        float csmCascadeDistributionExponent = 3.0f;
+        Rml::String shadowCascadeTransitionFractionLabel;
+        Rml::String shadowCascadeTransitionFractionValue;
+        float csmCascadeTransitionFraction = 0.1f;
+        Rml::String shadowDistanceFadeoutFractionLabel;
+        Rml::String shadowDistanceFadeoutFractionValue;
+        float csmShadowDistanceFadeoutFraction = 0.1f;
+        Rml::String shadowBiasLabel;
+        Rml::String shadowBiasValue;
+        float csmShadowBias = 0.5f;
+        Rml::String shadowSlopeBiasLabel;
+        Rml::String shadowSlopeBiasValue;
+        float csmShadowSlopeBias = 0.5f;
+        Rml::String shadowCascadeBiasDistributionLabel;
+        Rml::String shadowCascadeBiasDistributionValue;
+        float csmShadowCascadeBiasDistribution = 1.0f;
+        Rml::String shadowDebugLabel;
+        Rml::String shadowDebugFullLabel;
+        Rml::String shadowDebugCascadesLabel;
+        Rml::String shadowSaveLabel;
 
         Rml::String environmentLabel;
         Rml::String environmentValue;
@@ -230,6 +265,16 @@ private:
     void OnBloomThresholdChanged(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
     void OnBloomKneeChanged(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
     void OnBloomClampChanged(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
+    void OnCsmCastShadowsSelected(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
+    void OnCsmDynamicShadowDistanceChanged(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
+    void OnCsmDynamicShadowCascadesSelected(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
+    void OnCsmCascadeDistributionExponentChanged(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
+    void OnCsmCascadeTransitionFractionChanged(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
+    void OnCsmShadowDistanceFadeoutFractionChanged(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
+    void OnCsmShadowBiasChanged(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
+    void OnCsmShadowSlopeBiasChanged(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
+    void OnCsmShadowCascadeBiasDistributionChanged(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
+    void OnSaveCsmSettingsToScene(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
     void OnEnvironmentIntensityChanged(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
     void OnSpeedTreeStrengthChanged(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
     void OnSpeedTreeGustingSelected(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);

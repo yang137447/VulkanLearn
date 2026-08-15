@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -53,6 +54,15 @@ struct UiViewModelSnapshot
     float bloomThreshold = 0.0f;
     float bloomKnee = 0.0f;
     float bloomClamp = 0.0f;
+    bool csmCastShadows = false;
+    float csmDynamicShadowDistance = 10.0f;
+    uint32_t csmDynamicShadowCascades = 4;
+    float csmCascadeDistributionExponent = 3.0f;
+    float csmCascadeTransitionFraction = 0.1f;
+    float csmShadowDistanceFadeoutFraction = 0.1f;
+    float csmShadowBias = 0.5f;
+    float csmShadowSlopeBias = 0.5f;
+    float csmShadowCascadeBiasDistribution = 1.0f;
     float environmentIntensity = 1.0f;
     uint64_t environmentActiveGeneration = 0;
     uint64_t environmentPendingGeneration = 0;

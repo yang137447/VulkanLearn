@@ -34,9 +34,9 @@ implementation.
 
 - RenderGraph owns render resource shape and pass connections.
 - `config/renderGraphConfig.json` owns shadow texture resolution, format, array
-  layer count, pass order, and pass inputs/outputs.
-- `config/config.json` owns algorithm settings such as cascade count, shadow
-  distance, split lambda, quality mode, and bias values.
+  layer capacity, pass order, and pass inputs/outputs.
+- the primary scene `directionalLight.shadow` object owns the active cascade
+  count and artist-facing UE-style shadow parameters.
 - Runtime CSM code must consume parsed runtime configuration instead of reading
   JSON directly from `RenderSystem`.
 - Shadow pass material instances remain shared. Per-cascade matrices, splits,
@@ -70,27 +70,31 @@ RenderGraph example for the basic CSM shadow resource:
 }
 ```
 
-Runtime config example:
+Primary directional-light scene example:
 
 ```json
-"csm": {
-    "enabled": true,
-    "cascadeCount": 4,
-    "shadowDistance": 300.0,
-    "splitLambda": 0.65,
-    "bias": [
-        [0.0010, 1.0, 0.0, 0.0],
-        [0.0015, 1.5, 0.0, 0.0],
-        [0.0020, 2.0, 0.0, 0.0],
-        [0.0030, 3.0, 0.0, 0.0]
-    ]
+{
+    "name": "MainLight",
+    "type": "directionalLight",
+    "shadow": {
+        "castShadows": true,
+        "dynamicShadowDistance": 300.0,
+        "dynamicShadowCascades": 4,
+        "cascadeDistributionExponent": 3.0,
+        "cascadeTransitionFraction": 0.1,
+        "shadowDistanceFadeoutFraction": 0.1,
+        "shadowBias": 0.5,
+        "shadowSlopeBias": 0.5,
+        "shadowCascadeBiasDistribution": 1.0
+    }
 }
 ```
 
-`shadowDistance` is the maximum camera-forward distance covered by the main
-directional light. `splitLambda` controls the practical split blend between
-uniform and logarithmic distribution. Startup validation should ensure
-`csm.cascadeCount == shadowMap.arrayLayers` when CSM is enabled.
+`dynamicShadowDistance` is the maximum camera-forward distance covered by the
+main directional light. `cascadeDistributionExponent` controls how strongly
+resolution is concentrated near the camera. `dynamicShadowCascades` selects the
+active count, while `shadowMap.arrayLayers` remains the physical capacity; the
+current implementation requires four layers of capacity.
 
 ## M1. Basic CSM
 
@@ -124,7 +128,7 @@ shadowMap layer 3 = cascade 3
 - Expand frame/global shader data for:
   - `lightViewProj[4]`
   - `cascadeSplits`
-  - first-version per-cascade bias values
+  - runtime-derived per-cascade bias values
 - Build per-frame cascade split distances and light matrices once per frame.
 - Switch basic deferred shadow sampling to array-layer CSM sampling.
 - Keep forward shadow sampling compiling against the same CSM helper.

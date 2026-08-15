@@ -13,7 +13,6 @@
 #include <string>
 #include <utility>
 #include "baseStructs.h"
-#include "engine/runtimeConfig.h"
 #include "render/backend/rendererDescriptorContext.h"
 #include "render/backend/rendererFrameResources.h"
 #include "render/backend/resolvedRenderScene.h"
@@ -29,6 +28,7 @@
 #include "render/frontend/rendererFrontend.h"
 #include "render/pass/passRuntime.h"
 #include "render/foliage/speedTreeWindSystem.h"
+#include "render/shadow/csmSettings.h"
 #include "ui/uiOverlayRendererVulkan.h"
 #include "ui/uiRenderSnapshotQueue.h"
 #include "world/worldSnapshotBuilder.h"
@@ -57,6 +57,7 @@ struct PreparedRuntimeBinding
     RendererFrameResources::PreparedLightCapacity
         lightCapacity;
     SpeedTreeWindProfileSet speedTreeWindProfiles;
+    CsmSettings csmSettings;
     uint64_t nextSnapshotFrameIndex = 0;
 };
 
@@ -95,6 +96,18 @@ public:
     void SetUiRenderSnapshotQueue(VL::UiRenderSnapshotQueue* queue) { uiRenderSnapshotQueue = queue; }
     void SetUiOverlayShaderPaths(std::string vertexPath, std::string fragmentPath);
     void SetCsmSettings(const VL::CsmSettings& settings);
+    const VL::CsmSettings& GetCsmSettings() const noexcept { return csmSettings; }
+    bool SetCsmCastShadows(bool enabled, std::string& outMessage);
+    bool SetCsmDynamicShadowDistance(float distance, std::string& outMessage);
+    bool SetCsmCascadeCount(uint32_t cascadeCount, std::string& outMessage);
+    bool SetCsmCascadeDistributionExponent(float exponent, std::string& outMessage);
+    bool SetCsmCascadeTransitionFraction(float fraction, std::string& outMessage);
+    bool SetCsmShadowDistanceFadeoutFraction(float fraction, std::string& outMessage);
+    bool SetCsmShadowBias(float value, std::string& outMessage);
+    bool SetCsmShadowSlopeBias(float value, std::string& outMessage);
+    bool SetCsmShadowCascadeBiasDistribution(
+        float value,
+        std::string& outMessage);
     void ReleaseSwapchainDependentResources();
     void RebuildSwapchainDependentResources();
     void RebuildRenderGraphDependentResources();
@@ -218,6 +231,7 @@ private:
         uint32_t swapChainImageIndex,
         const std::vector<VL::LightSnapshot>& lights) override;
     bool IsCsmEnabled() const override;
+    bool IsShadowCascadeActive(uint32_t cascadeIndex) const override;
 
     void InitializeFrameResources();
     void ShutdownFrameResources();
@@ -260,6 +274,7 @@ private:
         std::array<Eigen::Matrix4f, 4> lightViewProj{};
         Eigen::Vector4f cascadeSplits = Eigen::Vector4f::Zero();
         std::array<Eigen::Vector4f, 4> bias{};
+        Eigen::Vector4f csmParameters = Eigen::Vector4f::Zero();
         uint64_t frameIndex = std::numeric_limits<uint64_t>::max();
         uint64_t worldGeneration = 0;
         uint32_t width = 0;

@@ -49,7 +49,11 @@ ForwardLightingResult ShadeDefaultLitForwardSurface(in MaterialSurface surface)
         surface.metallic);
     #if defined(VL_FORWARD_DECLARE_SHADOWMAP_INPUT)
         int cascadeIndex = 0;
-        result.shadow = CalculateCsmShadow(shadowMap, surface.worldPosition, cascadeIndex);
+        result.shadow = CalculateCsmShadow(
+            shadowMap,
+            surface.worldPosition,
+            surface.worldNormal,
+            cascadeIndex);
         result.shadowCascadeIndex = ShadowCascadeDebugValue(cascadeIndex);
     #else
         result.shadow = 1.0;

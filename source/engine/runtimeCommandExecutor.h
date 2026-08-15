@@ -160,6 +160,10 @@ private:
         float value,
         RenderSystem& renderSystem,
         const DiagnosticsSubsystem& diagnostics) const;
+    void ApplySaveCsmSettingsToScene(
+        RenderSystem& renderSystem,
+        WorldManager& worldManager,
+        const DiagnosticsSubsystem& diagnostics) const;
 };
 
 } // namespace VL

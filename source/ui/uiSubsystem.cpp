@@ -573,6 +573,7 @@ RuntimeResult<void> UiSubsystem::InitializeDataModel()
     bound = constructor.Bind("tab_visualization_label", &bindingData.tabVisualizationLabel) && bound;
     bound = constructor.Bind("tab_post_process_label", &bindingData.tabPostProcessLabel) && bound;
     bound = constructor.Bind("tab_environment_label", &bindingData.tabEnvironmentLabel) && bound;
+    bound = constructor.Bind("tab_shadows_label", &bindingData.tabShadowsLabel) && bound;
     bound = constructor.Bind("tab_system_label", &bindingData.tabSystemLabel) && bound;
 
     bound = constructor.Bind("frame_label", &bindingData.frameLabel) && bound;
@@ -623,6 +624,39 @@ RuntimeResult<void> UiSubsystem::InitializeDataModel()
     bound = constructor.Bind("bloom_clamp_value", &bindingData.bloomClampValue) && bound;
     bound = constructor.Bind("bloom_clamp", &bindingData.bloomClamp) && bound;
 
+    bound = constructor.Bind("shadow_cast_shadows_label", &bindingData.shadowCastShadowsLabel) && bound;
+    bound = constructor.Bind("shadow_cast_shadows_value", &bindingData.shadowCastShadowsValue) && bound;
+    bound = constructor.Bind("csm_cast_shadows", &bindingData.csmCastShadows) && bound;
+    bound = constructor.Bind("shadow_enable_label", &bindingData.shadowEnableLabel) && bound;
+    bound = constructor.Bind("shadow_disable_label", &bindingData.shadowDisableLabel) && bound;
+    bound = constructor.Bind("shadow_dynamic_distance_label", &bindingData.shadowDynamicDistanceLabel) && bound;
+    bound = constructor.Bind("shadow_dynamic_distance_value", &bindingData.shadowDynamicDistanceValue) && bound;
+    bound = constructor.Bind("csm_dynamic_shadow_distance", &bindingData.csmDynamicShadowDistance) && bound;
+    bound = constructor.Bind("shadow_dynamic_cascades_label", &bindingData.shadowDynamicCascadesLabel) && bound;
+    bound = constructor.Bind("csm_dynamic_shadow_cascades", &bindingData.csmDynamicShadowCascades) && bound;
+    bound = constructor.Bind("shadow_cascade_distribution_exponent_label", &bindingData.shadowCascadeDistributionExponentLabel) && bound;
+    bound = constructor.Bind("shadow_cascade_distribution_exponent_value", &bindingData.shadowCascadeDistributionExponentValue) && bound;
+    bound = constructor.Bind("csm_cascade_distribution_exponent", &bindingData.csmCascadeDistributionExponent) && bound;
+    bound = constructor.Bind("shadow_cascade_transition_fraction_label", &bindingData.shadowCascadeTransitionFractionLabel) && bound;
+    bound = constructor.Bind("shadow_cascade_transition_fraction_value", &bindingData.shadowCascadeTransitionFractionValue) && bound;
+    bound = constructor.Bind("csm_cascade_transition_fraction", &bindingData.csmCascadeTransitionFraction) && bound;
+    bound = constructor.Bind("shadow_distance_fadeout_fraction_label", &bindingData.shadowDistanceFadeoutFractionLabel) && bound;
+    bound = constructor.Bind("shadow_distance_fadeout_fraction_value", &bindingData.shadowDistanceFadeoutFractionValue) && bound;
+    bound = constructor.Bind("csm_shadow_distance_fadeout_fraction", &bindingData.csmShadowDistanceFadeoutFraction) && bound;
+    bound = constructor.Bind("shadow_bias_label", &bindingData.shadowBiasLabel) && bound;
+    bound = constructor.Bind("shadow_bias_value", &bindingData.shadowBiasValue) && bound;
+    bound = constructor.Bind("csm_shadow_bias", &bindingData.csmShadowBias) && bound;
+    bound = constructor.Bind("shadow_slope_bias_label", &bindingData.shadowSlopeBiasLabel) && bound;
+    bound = constructor.Bind("shadow_slope_bias_value", &bindingData.shadowSlopeBiasValue) && bound;
+    bound = constructor.Bind("csm_shadow_slope_bias", &bindingData.csmShadowSlopeBias) && bound;
+    bound = constructor.Bind("shadow_cascade_bias_distribution_label", &bindingData.shadowCascadeBiasDistributionLabel) && bound;
+    bound = constructor.Bind("shadow_cascade_bias_distribution_value", &bindingData.shadowCascadeBiasDistributionValue) && bound;
+    bound = constructor.Bind("csm_shadow_cascade_bias_distribution", &bindingData.csmShadowCascadeBiasDistribution) && bound;
+    bound = constructor.Bind("shadow_debug_label", &bindingData.shadowDebugLabel) && bound;
+    bound = constructor.Bind("shadow_debug_full_label", &bindingData.shadowDebugFullLabel) && bound;
+    bound = constructor.Bind("shadow_debug_cascades_label", &bindingData.shadowDebugCascadesLabel) && bound;
+    bound = constructor.Bind("shadow_save_label", &bindingData.shadowSaveLabel) && bound;
+
     bound = constructor.Bind("environment_label", &bindingData.environmentLabel) && bound;
     bound = constructor.Bind("environment_value", &bindingData.environmentValue) && bound;
     bound = constructor.Bind("environment_intensity", &bindingData.environmentIntensity) && bound;
@@ -653,6 +687,16 @@ RuntimeResult<void> UiSubsystem::InitializeDataModel()
     bound = constructor.BindEventCallback("bloom_threshold_changed", &UiSubsystem::OnBloomThresholdChanged, this) && bound;
     bound = constructor.BindEventCallback("bloom_knee_changed", &UiSubsystem::OnBloomKneeChanged, this) && bound;
     bound = constructor.BindEventCallback("bloom_clamp_changed", &UiSubsystem::OnBloomClampChanged, this) && bound;
+    bound = constructor.BindEventCallback("set_csm_cast_shadows", &UiSubsystem::OnCsmCastShadowsSelected, this) && bound;
+    bound = constructor.BindEventCallback("csm_dynamic_shadow_distance_changed", &UiSubsystem::OnCsmDynamicShadowDistanceChanged, this) && bound;
+    bound = constructor.BindEventCallback("set_csm_dynamic_shadow_cascades", &UiSubsystem::OnCsmDynamicShadowCascadesSelected, this) && bound;
+    bound = constructor.BindEventCallback("csm_cascade_distribution_exponent_changed", &UiSubsystem::OnCsmCascadeDistributionExponentChanged, this) && bound;
+    bound = constructor.BindEventCallback("csm_cascade_transition_fraction_changed", &UiSubsystem::OnCsmCascadeTransitionFractionChanged, this) && bound;
+    bound = constructor.BindEventCallback("csm_shadow_distance_fadeout_fraction_changed", &UiSubsystem::OnCsmShadowDistanceFadeoutFractionChanged, this) && bound;
+    bound = constructor.BindEventCallback("csm_shadow_bias_changed", &UiSubsystem::OnCsmShadowBiasChanged, this) && bound;
+    bound = constructor.BindEventCallback("csm_shadow_slope_bias_changed", &UiSubsystem::OnCsmShadowSlopeBiasChanged, this) && bound;
+    bound = constructor.BindEventCallback("csm_shadow_cascade_bias_distribution_changed", &UiSubsystem::OnCsmShadowCascadeBiasDistributionChanged, this) && bound;
+    bound = constructor.BindEventCallback("save_csm_to_scene", &UiSubsystem::OnSaveCsmSettingsToScene, this) && bound;
     bound = constructor.BindEventCallback("environment_intensity_changed", &UiSubsystem::OnEnvironmentIntensityChanged, this) && bound;
     bound = constructor.BindEventCallback("speedtree_strength_changed", &UiSubsystem::OnSpeedTreeStrengthChanged, this) && bound;
     bound = constructor.BindEventCallback("set_speedtree_gusting", &UiSubsystem::OnSpeedTreeGustingSelected, this) && bound;
@@ -1085,6 +1129,7 @@ void UiSubsystem::SyncBindingData()
     bindingData.tabVisualizationLabel = Localize("tab.visualization");
     bindingData.tabPostProcessLabel = Localize("tab.post_process");
     bindingData.tabEnvironmentLabel = Localize("tab.environment");
+    bindingData.tabShadowsLabel = Localize("tab.shadows");
     bindingData.tabSystemLabel = Localize("tab.system");
 
     bindingData.frameLabel = Localize("status.frame");
@@ -1135,6 +1180,73 @@ void UiSubsystem::SyncBindingData()
     bindingData.bloomClamp = lastViewModel.bloomClamp;
     bindingData.bloomClampValue = FormatFloat(lastViewModel.bloomClamp);
 
+    bindingData.shadowCastShadowsLabel =
+        Localize("control.shadow_cast_shadows");
+    bindingData.csmCastShadows =
+        lastViewModel.csmCastShadows;
+    bindingData.shadowCastShadowsValue =
+        lastViewModel.csmCastShadows ?
+        Localize("status.enabled") : Localize("status.disabled");
+    bindingData.shadowEnableLabel = Localize("action.enable");
+    bindingData.shadowDisableLabel = Localize("action.disable");
+    bindingData.shadowDynamicDistanceLabel =
+        Localize("control.shadow_dynamic_distance");
+    bindingData.csmDynamicShadowDistance =
+        lastViewModel.csmDynamicShadowDistance;
+    bindingData.shadowDynamicDistanceValue =
+        FormatFloat(
+            lastViewModel.csmDynamicShadowDistance);
+    bindingData.shadowDynamicCascadesLabel =
+        Localize("control.shadow_dynamic_cascades");
+    bindingData.csmDynamicShadowCascades =
+        lastViewModel.csmDynamicShadowCascades;
+    bindingData.shadowCascadeDistributionExponentLabel =
+        Localize(
+            "control.shadow_cascade_distribution_exponent");
+    bindingData.csmCascadeDistributionExponent =
+        lastViewModel.csmCascadeDistributionExponent;
+    bindingData.shadowCascadeDistributionExponentValue =
+        FormatFloat(
+            lastViewModel.csmCascadeDistributionExponent);
+    bindingData.shadowCascadeTransitionFractionLabel =
+        Localize(
+            "control.shadow_cascade_transition_fraction");
+    bindingData.csmCascadeTransitionFraction =
+        lastViewModel.csmCascadeTransitionFraction;
+    bindingData.shadowCascadeTransitionFractionValue =
+        FormatFloat(
+            lastViewModel.csmCascadeTransitionFraction);
+    bindingData.shadowDistanceFadeoutFractionLabel =
+        Localize(
+            "control.shadow_distance_fadeout_fraction");
+    bindingData.csmShadowDistanceFadeoutFraction =
+        lastViewModel.csmShadowDistanceFadeoutFraction;
+    bindingData.shadowDistanceFadeoutFractionValue =
+        FormatFloat(
+            lastViewModel.csmShadowDistanceFadeoutFraction);
+    bindingData.shadowBiasLabel =
+        Localize("control.shadow_bias");
+    bindingData.csmShadowBias =
+        lastViewModel.csmShadowBias;
+    bindingData.shadowBiasValue =
+        FormatFloat(lastViewModel.csmShadowBias);
+    bindingData.shadowSlopeBiasLabel = Localize("control.shadow_slope_bias");
+    bindingData.csmShadowSlopeBias =
+        lastViewModel.csmShadowSlopeBias;
+    bindingData.shadowSlopeBiasValue =
+        FormatFloat(lastViewModel.csmShadowSlopeBias);
+    bindingData.shadowCascadeBiasDistributionLabel =
+        Localize(
+            "control.shadow_cascade_bias_distribution");
+    bindingData.csmShadowCascadeBiasDistribution =
+        lastViewModel.csmShadowCascadeBiasDistribution;
+    bindingData.shadowCascadeBiasDistributionValue =
+        FormatFloat(
+            lastViewModel.csmShadowCascadeBiasDistribution);
+    bindingData.shadowDebugLabel = Localize("control.shadow_debug");
+    bindingData.shadowDebugFullLabel = Localize("debug.full");
+    bindingData.shadowDebugCascadesLabel = Localize("debug.shadow_cascade");
+    bindingData.shadowSaveLabel = Localize("action.save_to_scene");
     bindingData.environmentLabel = Localize("control.environment");
     bindingData.environmentIntensity = lastViewModel.environmentIntensity;
     bindingData.environmentValue = FormatFloat(lastViewModel.environmentIntensity);
@@ -1998,6 +2110,136 @@ void UiSubsystem::OnBloomKneeChanged(Rml::DataModelHandle, Rml::Event& event, co
 void UiSubsystem::OnBloomClampChanged(Rml::DataModelHandle, Rml::Event& event, const Rml::VariantList&)
 {
     QueueChangedFloatAction(UiActionType::SetBloomClamp, event.GetParameter<float>("value", lastViewModel.bloomClamp), lastViewModel.bloomClamp);
+}
+
+void UiSubsystem::OnCsmCastShadowsSelected(
+    Rml::DataModelHandle,
+    Rml::Event&,
+    const Rml::VariantList& arguments)
+{
+    const bool enabled = arguments[0].Get<int>() != 0;
+    if (enabled != lastViewModel.csmCastShadows)
+    {
+        QueueIntAction(
+            UiActionType::SetCsmCastShadows,
+            enabled ? 1 : 0);
+    }
+}
+
+void UiSubsystem::OnCsmDynamicShadowDistanceChanged(
+    Rml::DataModelHandle,
+    Rml::Event& event,
+    const Rml::VariantList&)
+{
+    QueueChangedFloatAction(
+        UiActionType::SetCsmDynamicShadowDistance,
+        event.GetParameter<float>(
+            "value",
+            lastViewModel.csmDynamicShadowDistance),
+        lastViewModel.csmDynamicShadowDistance);
+}
+
+void UiSubsystem::OnCsmDynamicShadowCascadesSelected(
+    Rml::DataModelHandle,
+    Rml::Event&,
+    const Rml::VariantList& arguments)
+{
+    const int cascadeCount = arguments[0].Get<int>();
+    if (cascadeCount !=
+        static_cast<int>(
+            lastViewModel.csmDynamicShadowCascades))
+    {
+        QueueIntAction(
+            UiActionType::SetCsmDynamicShadowCascades,
+            cascadeCount);
+    }
+}
+
+void UiSubsystem::OnCsmCascadeDistributionExponentChanged(
+    Rml::DataModelHandle,
+    Rml::Event& event,
+    const Rml::VariantList&)
+{
+    QueueChangedFloatAction(
+        UiActionType::SetCsmCascadeDistributionExponent,
+        event.GetParameter<float>(
+            "value",
+            lastViewModel.csmCascadeDistributionExponent),
+        lastViewModel.csmCascadeDistributionExponent);
+}
+
+void UiSubsystem::OnCsmCascadeTransitionFractionChanged(
+    Rml::DataModelHandle,
+    Rml::Event& event,
+    const Rml::VariantList&)
+{
+    QueueChangedFloatAction(
+        UiActionType::SetCsmCascadeTransitionFraction,
+        event.GetParameter<float>(
+            "value",
+            lastViewModel.csmCascadeTransitionFraction),
+        lastViewModel.csmCascadeTransitionFraction);
+}
+
+void UiSubsystem::OnCsmShadowDistanceFadeoutFractionChanged(
+    Rml::DataModelHandle,
+    Rml::Event& event,
+    const Rml::VariantList&)
+{
+    QueueChangedFloatAction(
+        UiActionType::SetCsmShadowDistanceFadeoutFraction,
+        event.GetParameter<float>(
+            "value",
+            lastViewModel.csmShadowDistanceFadeoutFraction),
+        lastViewModel.csmShadowDistanceFadeoutFraction);
+}
+
+void UiSubsystem::OnCsmShadowBiasChanged(
+    Rml::DataModelHandle,
+    Rml::Event& event,
+    const Rml::VariantList&)
+{
+    QueueChangedFloatAction(
+        UiActionType::SetCsmShadowBias,
+        event.GetParameter<float>(
+            "value",
+            lastViewModel.csmShadowBias),
+        lastViewModel.csmShadowBias);
+}
+
+void UiSubsystem::OnCsmShadowSlopeBiasChanged(
+    Rml::DataModelHandle,
+    Rml::Event& event,
+    const Rml::VariantList&)
+{
+    QueueChangedFloatAction(
+        UiActionType::SetCsmShadowSlopeBias,
+        event.GetParameter<float>(
+            "value",
+            lastViewModel.csmShadowSlopeBias),
+        lastViewModel.csmShadowSlopeBias);
+}
+
+void UiSubsystem::OnCsmShadowCascadeBiasDistributionChanged(
+    Rml::DataModelHandle,
+    Rml::Event& event,
+    const Rml::VariantList&)
+{
+    QueueChangedFloatAction(
+        UiActionType::SetCsmShadowCascadeBiasDistribution,
+        event.GetParameter<float>(
+            "value",
+            lastViewModel.csmShadowCascadeBiasDistribution),
+        lastViewModel.csmShadowCascadeBiasDistribution);
+}
+
+void UiSubsystem::OnSaveCsmSettingsToScene(
+    Rml::DataModelHandle,
+    Rml::Event&,
+    const Rml::VariantList&)
+{
+    QueueAction(UiAction{
+        UiActionType::SaveCsmSettingsToScene});
 }
 
 void UiSubsystem::OnEnvironmentIntensityChanged(Rml::DataModelHandle, Rml::Event& event, const Rml::VariantList&)

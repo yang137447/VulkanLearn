@@ -42,6 +42,7 @@ public:
         uint32_t swapChainImageIndex,
         const std::vector<LightSnapshot>& lights) = 0;
     virtual bool IsCsmEnabled() const = 0;
+    virtual bool IsShadowCascadeActive(uint32_t cascadeIndex) const = 0;
 };
 
 struct PassRuntimeContext

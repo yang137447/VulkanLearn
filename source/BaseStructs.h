@@ -75,6 +75,11 @@ struct alignas(16) UBOGlobal
     std::array<Eigen::Matrix4f, 4> lightViewProj;
     Eigen::Vector4f cascadeSplits = Eigen::Vector4f::Zero();
     std::array<Eigen::Vector4f, 4> shadowBias{};
+    // x：级联过渡比例
+    // y：阴影距离淡出比例
+    // z：活动级联数
+    // w：动态阴影距离
+    Eigen::Vector4f csmParameters = Eigen::Vector4f::Zero();
     alignas(16) Eigen::Vector3f cameraPosition;
     int debugViewMode = 0;
     Eigen::Matrix4f previousViewProjection = Eigen::Matrix4f::Identity();
@@ -97,19 +102,20 @@ static_assert(offsetof(SkyParametersGPU, cloudControls) == 96, "SkyParametersGPU
 
 static_assert(offsetof(UBOGlobal, cascadeSplits) == 640, "UBOGlobal cascadeSplits must match GLSL std140 layout");
 static_assert(offsetof(UBOGlobal, shadowBias) == 656, "UBOGlobal shadowBias must match GLSL std140 layout");
-static_assert(offsetof(UBOGlobal, debugViewMode) == 732, "UBOGlobal debugViewMode must match GLSL std140 layout");
-static_assert(offsetof(UBOGlobal, previousViewProjection) == 736, "UBOGlobal previousViewProjection must match GLSL std140 layout");
-static_assert(offsetof(UBOGlobal, environmentIntensity) == 800, "UBOGlobal environmentIntensity must match GLSL std140 layout");
-static_assert(offsetof(UBOGlobal, environmentType) == 804, "UBOGlobal environmentType must match GLSL std140 layout");
-static_assert(offsetof(UBOGlobal, environmentSH) == 816, "UBOGlobal environmentSH must match GLSL std140 layout");
-static_assert(offsetof(UBOGlobal, skyParameters) == 960, "UBOGlobal skyParameters must match GLSL std140 layout");
-static_assert(offsetof(UBOGlobal, skyParameters) + offsetof(SkyParametersGPU, sunDirectionIntensity) == 960, "UBOGlobal sunDirectionIntensity must match GLSL std140 layout");
-static_assert(offsetof(UBOGlobal, skyParameters) + offsetof(SkyParametersGPU, sunColorAngularRadius) == 976, "UBOGlobal sunColorAngularRadius must match GLSL std140 layout");
-static_assert(offsetof(UBOGlobal, skyParameters) + offsetof(SkyParametersGPU, zenithColor) == 992, "UBOGlobal zenithColor must match GLSL std140 layout");
-static_assert(offsetof(UBOGlobal, skyParameters) + offsetof(SkyParametersGPU, horizonColor) == 1008, "UBOGlobal horizonColor must match GLSL std140 layout");
-static_assert(offsetof(UBOGlobal, skyParameters) + offsetof(SkyParametersGPU, groundColor) == 1024, "UBOGlobal groundColor must match GLSL std140 layout");
-static_assert(offsetof(UBOGlobal, skyParameters) + offsetof(SkyParametersGPU, scatteringControls) == 1040, "UBOGlobal scatteringControls must match GLSL std140 layout");
-static_assert(offsetof(UBOGlobal, skyParameters) + offsetof(SkyParametersGPU, cloudControls) == 1056, "UBOGlobal cloudControls must match GLSL std140 layout");
+static_assert(offsetof(UBOGlobal, csmParameters) == 720, "UBOGlobal csmParameters must match GLSL std140 layout");
+static_assert(offsetof(UBOGlobal, debugViewMode) == 748, "UBOGlobal debugViewMode must match GLSL std140 layout");
+static_assert(offsetof(UBOGlobal, previousViewProjection) == 752, "UBOGlobal previousViewProjection must match GLSL std140 layout");
+static_assert(offsetof(UBOGlobal, environmentIntensity) == 816, "UBOGlobal environmentIntensity must match GLSL std140 layout");
+static_assert(offsetof(UBOGlobal, environmentType) == 820, "UBOGlobal environmentType must match GLSL std140 layout");
+static_assert(offsetof(UBOGlobal, environmentSH) == 832, "UBOGlobal environmentSH must match GLSL std140 layout");
+static_assert(offsetof(UBOGlobal, skyParameters) == 976, "UBOGlobal skyParameters must match GLSL std140 layout");
+static_assert(offsetof(UBOGlobal, skyParameters) + offsetof(SkyParametersGPU, sunDirectionIntensity) == 976, "UBOGlobal sunDirectionIntensity must match GLSL std140 layout");
+static_assert(offsetof(UBOGlobal, skyParameters) + offsetof(SkyParametersGPU, sunColorAngularRadius) == 992, "UBOGlobal sunColorAngularRadius must match GLSL std140 layout");
+static_assert(offsetof(UBOGlobal, skyParameters) + offsetof(SkyParametersGPU, zenithColor) == 1008, "UBOGlobal zenithColor must match GLSL std140 layout");
+static_assert(offsetof(UBOGlobal, skyParameters) + offsetof(SkyParametersGPU, horizonColor) == 1024, "UBOGlobal horizonColor must match GLSL std140 layout");
+static_assert(offsetof(UBOGlobal, skyParameters) + offsetof(SkyParametersGPU, groundColor) == 1040, "UBOGlobal groundColor must match GLSL std140 layout");
+static_assert(offsetof(UBOGlobal, skyParameters) + offsetof(SkyParametersGPU, scatteringControls) == 1056, "UBOGlobal scatteringControls must match GLSL std140 layout");
+static_assert(offsetof(UBOGlobal, skyParameters) + offsetof(SkyParametersGPU, cloudControls) == 1072, "UBOGlobal cloudControls must match GLSL std140 layout");
 struct alignas(16) UBOModel
 {
     Eigen::Matrix4f model;

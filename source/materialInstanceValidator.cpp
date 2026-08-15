@@ -49,6 +49,10 @@ namespace
         {
             return vk::CullModeFlagBits::eBack;
         }
+        if (cullMode == "Front")
+        {
+            return vk::CullModeFlagBits::eFront;
+        }
         if (cullMode == "None")
         {
             return vk::CullModeFlagBits::eNone;

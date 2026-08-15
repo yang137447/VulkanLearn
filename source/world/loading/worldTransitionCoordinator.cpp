@@ -3,6 +3,7 @@
 #include <exception>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "render/resource/rendererResourceLoadCoordinator.h"
 #include "render/resource/rendererResourceLoadContext.h"
@@ -71,10 +72,12 @@ void ConfigureInitialCamera(Camera& camera, float aspectRatio)
 WorldTransitionCoordinator::WorldTransitionCoordinator(
     WorldManager& worldManager,
     RendererResourceLoadCoordinator& resourceLoadCoordinator,
-    float initialCameraAspectRatio)
+    float initialCameraAspectRatio,
+    uint32_t shadowCascadeCount)
     : worldManager(worldManager)
     , resourceLoadCoordinator(resourceLoadCoordinator)
     , initialCameraAspectRatio(initialCameraAspectRatio)
+    , shadowCascadeCount(shadowCascadeCount)
 {
 }
 
@@ -143,7 +146,8 @@ WorldTransitionCoordinator::PrepareWorldLoad(
             worldBuilder.BuildFromLoadedScene(
                 worldGeneration,
                 worldBuildPlan,
-                *prepared.resourceCache);
+                *prepared.resourceCache,
+                shadowCascadeCount);
         if (worldResult.IsFailure())
         {
             state = WorldTransitionState::Failed;

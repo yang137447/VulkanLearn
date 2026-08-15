@@ -10,6 +10,8 @@ mat4 invViewProjection;
 mat4 lightViewProj[4];
 vec4 cascadeSplits;
 vec4 shadowBias[4];
+// x: 级联过渡比例，y: 最远距离淡出比例，z: 活动级联数，w: 阴影距离。
+vec4 csmParameters;
 vec3 cameraPosition;
 int debugViewMode;
 mat4 previousViewProjection;

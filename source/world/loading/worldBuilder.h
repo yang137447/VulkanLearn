@@ -21,7 +21,8 @@ public:
     RuntimeResult<std::shared_ptr<World>> BuildFromLoadedScene(
         uint64_t generation,
         const WorldBuildPlan& worldBuildPlan,
-        const RendererResourceCache& resourceCache) const;
+        const RendererResourceCache& resourceCache,
+        uint32_t shadowCascadeCount) const;
 };
 
 } // namespace VL

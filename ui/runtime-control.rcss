@@ -68,13 +68,12 @@ h2 {
     position: absolute;
     left: auto;
     right: 20dp;
-    top: 50%;
+    top: 4%;
     width: 420dp;
     height: 660dp;
     max-width: 92%;
     max-height: 92%;
     box-sizing: border-box;
-    transform: translate(0, -50%);
     display: block;
     padding: 20dp;
     background-color: #111a2e;
@@ -82,16 +81,32 @@ h2 {
     border-color: #6e9bff;
     border-radius: 12dp;
     overflow: hidden;
+    clip: always;
     z-index: 11;
 }
 
+.panel-top-mask {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 152dp;
+    background-color: #111a2e;
+    z-index: 1;
+}
+
 .panel-header {
-    position: relative;
+    position: absolute;
+    left: 20dp;
+    top: 20dp;
     display: block;
-    height: 70dp;
+    width: 378dp;
+    height: 80dp;
+    box-sizing: border-box;
     padding-bottom: 10dp;
     border-width: 0 0 1dp 0;
     border-color: #2b416d;
+    z-index: 2;
 }
 
 .panel-heading {
@@ -117,16 +132,21 @@ h2 {
 }
 
 .panel-tabs {
+    position: absolute;
+    left: 20dp;
+    top: 108dp;
     display: block;
     width: 378dp;
     height: 42dp;
-    margin-top: 8dp;
+    margin-top: 0;
     white-space: nowrap;
     overflow: hidden;
+    background-color: #111a2e;
+    z-index: 2;
 }
 
 .panel-tabs button {
-    width: 70dp;
+    width: 59dp;
     min-width: 0;
     min-height: 34dp;
     margin-right: 3dp;
@@ -139,14 +159,20 @@ h2 {
 }
 
 #control-scroll {
+    position: absolute;
+    left: 20dp;
+    top: 152dp;
+    bottom: 20dp;
     display: block;
     width: 378dp;
-    height: 484dp;
+    height: auto;
     box-sizing: border-box;
-    margin-top: 2dp;
+    margin-top: 0;
     overflow-x: hidden;
     overflow-y: auto;
+    clip: always;
     padding-right: 8dp;
+    z-index: 0;
 }
 
 #control-scroll scrollbarvertical {
@@ -364,6 +390,41 @@ h2 {
 
 .gust-row {
     min-height: 76dp;
+}
+
+.shadow-toggle-row,
+.shadow-debug-row {
+    min-height: 76dp;
+}
+
+.shadow-toggle-buttons button {
+    width: 160dp;
+    min-width: 0;
+    margin-right: 4dp;
+}
+
+.cascade-selector-row {
+    min-height: 54dp;
+}
+
+.cascade-buttons button {
+    width: 78dp;
+    min-width: 0;
+    margin-right: 4dp;
+    padding-left: 2dp;
+    padding-right: 2dp;
+    font-size: 13dp;
+}
+
+.shadow-actions {
+    display: block;
+    width: 360dp;
+    margin-bottom: 6dp;
+}
+
+.shadow-actions button {
+    width: 338dp;
+    min-width: 0;
 }
 
 .control-slider {

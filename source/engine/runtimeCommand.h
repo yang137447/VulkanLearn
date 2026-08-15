@@ -37,6 +37,16 @@ enum class RuntimeCommandType
     ForceSpeedTreeGust,
     SetToneMappingMode,
     SetBloomParameter,
+    SetCsmCastShadows,
+    SetCsmDynamicShadowDistance,
+    SetCsmDynamicShadowCascades,
+    SetCsmCascadeDistributionExponent,
+    SetCsmCascadeTransitionFraction,
+    SetCsmShadowDistanceFadeoutFraction,
+    SetCsmShadowBias,
+    SetCsmShadowSlopeBias,
+    SetCsmShadowCascadeBiasDistribution,
+    SaveCsmSettingsToScene,
     ReloadShaders,
     ReportShaderCacheStatistics
 };

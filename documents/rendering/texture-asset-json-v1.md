@@ -199,6 +199,23 @@ Use it to document packed textures:
 
 This field is useful for maps such as PBR parameter textures, masks, and other packed data textures. It is normally unnecessary for base color, normal, or emission textures.
 
+## Packed PBR Parameter Contract
+
+`pbrParamMap` uses one fixed linear-data channel layout:
+
+```text
+R = roughness
+G = metallic
+B = ambient occlusion
+A = reserved
+```
+
+Every bound `pbrParamMap` must provide all three defined channels. If an asset
+has no baked ambient occlusion, its B channel must be authored as `1.0` (white)
+instead of leaving the channel black or undefined. Material macros must not
+reinterpret or bypass individual packed channels; asset conversion owns channel
+packing correctness.
+
 ## File Layout
 
 Texture assets use this layout:

@@ -176,7 +176,8 @@ void AddSpotLightIfFirst(World& world, std::shared_ptr<SpotLight> light)
 RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
     uint64_t generation,
     const WorldBuildPlan& worldBuildPlan,
-    const RendererResourceCache& resourceCache) const
+    const RendererResourceCache& resourceCache,
+    uint32_t shadowCascadeCount) const
 {
     try
     {
@@ -186,6 +187,7 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
 
         WorldEnvironment environment;
         std::shared_ptr<DirectionalLight> primaryDirectionalLight;
+        CsmSettings csmSettings;
 
         const nlohmann::json& objectsJson = worldBuildPlan.sceneJson["objects"];
         for (const SceneAssetObjectPlan& objectPlan : worldBuildPlan.sceneAssetPlan.objectPlans)
@@ -205,6 +207,18 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
                 if (!primaryDirectionalLight)
                 {
                     primaryDirectionalLight = light;
+                    auto csmResult =
+                        BuildDirectionalLightCsmSettings(
+                            objectJson,
+                            shadowCascadeCount,
+                            worldBuildPlan.scenePath);
+                    if (csmResult.IsFailure())
+                    {
+                        return RuntimeResult<std::shared_ptr<World>>::Failure(
+                            csmResult.Error());
+                    }
+                    csmSettings =
+                        std::move(csmResult.Value());
                 }
                 AddDirectionalLightIfFirst(*world, std::move(light));
             }
@@ -233,6 +247,7 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
         SyncEnvironmentWithPrimaryDirectionalLight(environment, *primaryDirectionalLight);
 
         world->SetEnvironment(environment);
+        world->SetCsmSettings(std::move(csmSettings));
 
         for (const SpeedTreeWindProfile& profile : worldBuildPlan.speedTreeWindProfiles)
         {
