@@ -52,6 +52,13 @@ public:
     bool PipelineUsesDescriptorSet(const PipelineBase& pipeline, uint32_t setIndex) const;
     void DrawShadowScene(const PipelineBase& commonOpaquePipeline, RendererDrawContext& context) const;
     void DrawGeometryScene(RendererDrawContext& context) const;
+    void DrawForwardTransparentScene(RendererDrawContext& context) const;
+
+private:
+    void DrawSurfaceScene(
+        const char* passName,
+        bool drawTransparent,
+        RendererDrawContext& context) const;
 };
 
 } // namespace VL

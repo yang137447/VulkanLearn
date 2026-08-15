@@ -75,7 +75,7 @@ struct Renderpass
     const std::vector<std::vector<vk::DescriptorSet>>& GetDescriptorSets() const { return descriptorSets; }
 
     std::string name;
-    std::string type;
+    VL::RenderGraphPassType type = VL::RenderGraphPassType::Unknown;
     uint32_t shadowCascadeIndex = 0;
     VL::RHIRenderPassHandle renderPassHandle;
     vk::RenderPass renderPass;
@@ -165,6 +165,10 @@ public:
     const std::vector<std::string>& GetRenderpassesOrdered() const { return renderpassesOrdered; }
     std::unordered_map<std::string, Renderpass>& GetRenderpasses() { return renderpasses; }
     const std::unordered_map<std::string, Renderpass>& GetRenderpasses() const { return renderpasses; }
+    // Geometry/ForwardTransparent 等单例行为按 type 查询，调用方不依赖
+    // config 中可变的 pass name。若图违反唯一性合同则立即失败。
+    Renderpass& RequireUniquePass(VL::RenderGraphPassType type);
+    const Renderpass& RequireUniquePass(VL::RenderGraphPassType type) const;
     // 返回构图阶段已经校验过的第一条 Shadow pass；当前图没有 Shadow pass
     // 时返回 nullptr。调用方不得跨 RenderGraph shutdown/reload 保存该指针。
     Renderpass* FindCanonicalShadowPass();

@@ -74,10 +74,11 @@ shadowCascade0 -> shadowCascade1 -> shadowCascade2 -> shadowCascade3
 
 Each `shadowCascadeN` pass has `type: "shadow"` and writes `shadowMap` layer
 `N`. `PassRuntime` dispatches pass behavior from the compiled pass type:
-`shadow`, `geometry`, or `postProcess`. Pass `name` remains the unique identity
+`shadow`, `geometry`, `forwardTransparent`, or `postProcess`. Pass `name` remains the unique identity
 used for ordering, pass binding, debug labels, and commands. Material and
 pipeline cache identity uses shader/state plus render-pass compatibility, not
-the pass name. Pipeline state is validated and stored in
+the pass name. Pass type strings are parsed once at the RenderGraphCompiler
+boundary; compiled and runtime state use `RenderGraphPassType`. Pipeline state is validated and stored in
 `CompiledRenderGraphPass`; Material loading consumes that compiled state and
 does not reparse raw RenderGraph JSON.
 

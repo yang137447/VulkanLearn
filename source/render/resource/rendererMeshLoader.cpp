@@ -90,7 +90,6 @@ RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
     Eigen::Vector3f rotation = JsonParser::ParseValue<Eigen::Vector3f>(node["rotation"]);
     Eigen::Vector3f scale = JsonParser::ParseValue<Eigen::Vector3f>(node["scale"]);
     const std::string meshObjectBaseName = node["name"];
-    Renderpass& geometryPass = renderGraph.GetRenderpasses().at("geometry");
     std::vector<MeshObjectBuildPlan>& meshObjectPlans = result.objectPlans;
     meshObjectPlans.reserve(modelResource.sections.size());
     std::unordered_set<std::string> usedObjectNames;
@@ -120,7 +119,8 @@ RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
         }
 
         std::shared_ptr<MaterialInstance> materialInstance =
-            materialLoader.LoadMaterialInstance(sectionPlan.materialInstancePath, geometryPass);
+            materialLoader.LoadSceneMaterialInstance(
+                sectionPlan.materialInstancePath);
 
         std::string meshObjectName = meshObjectBaseName;
         if (modelResource.sections.size() > 1)

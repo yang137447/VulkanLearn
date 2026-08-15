@@ -67,6 +67,7 @@ public:
 private:
     void RecordShadowPass(PassRuntimeContext& context) const;
     void RecordGeometryPass(PassRuntimeContext& context) const;
+    void RecordForwardTransparentPass(PassRuntimeContext& context) const;
     void RecordPostProcessPass(PassRuntimeContext& context) const;
 
     void PreparePassResources(PassRuntimeContext& context) const;

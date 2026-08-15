@@ -17,27 +17,31 @@ void PassRuntime::RecordPass(const std::string& passName, PassRuntimeContext& co
 {
     PreparePassResources(context);
 
-    if (context.renderPass.type == "shadow")
+    switch (context.renderPass.type)
     {
+    case RenderGraphPassType::Shadow:
         RecordShadowPass(context);
         return;
-    }
-    if (context.renderPass.type == "geometry")
-    {
+    case RenderGraphPassType::Geometry:
         RecordGeometryPass(context);
         return;
-    }
-    if (context.renderPass.type == "postProcess")
-    {
+    case RenderGraphPassType::ForwardTransparent:
+        RecordForwardTransparentPass(context);
+        return;
+    case RenderGraphPassType::PostProcess:
         RecordPostProcessPass(context);
         return;
+    case RenderGraphPassType::Unknown:
+        break;
     }
 
     throw std::runtime_error(
         "Unsupported render pass type for pass '" +
         passName +
         "': " +
-        context.renderPass.type);
+        std::string(
+            RenderGraphPassTypeToString(
+                context.renderPass.type)));
 }
 
 void PassRuntime::PreparePassResources(PassRuntimeContext& context) const
@@ -134,6 +138,30 @@ void PassRuntime::RecordGeometryPass(PassRuntimeContext& context) const
         context.services
     };
     drawExecutor.DrawGeometryScene(drawContext);
+
+    commandBuffer.endRenderPass();
+}
+
+void PassRuntime::RecordForwardTransparentPass(
+    PassRuntimeContext& context) const
+{
+    const Renderpass& renderPass = context.renderPass;
+    vk::CommandBuffer& commandBuffer = context.commandBuffer;
+
+    // 透明表面复用场景的 Global/Light 数据，在已有 sceneColor 上混合；
+    // 深度只测试不写入，具体状态由 forwardTransparent 的 pass contract 决定。
+    context.services.UpdateGlobalUBOForPass(commandBuffer);
+    BeginConfiguredRenderPass(context);
+
+    RendererDrawContext drawContext{
+        commandBuffer,
+        renderPass,
+        context.swapChainImageIndex,
+        context.renderScene,
+        context.resolvedRenderScene,
+        context.services
+    };
+    drawExecutor.DrawForwardTransparentScene(drawContext);
 
     commandBuffer.endRenderPass();
 }

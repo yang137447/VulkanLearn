@@ -722,6 +722,47 @@ Renderpass* RenderGraph::FindCanonicalShadowPass()
     return &renderpasses.at(canonicalShadowPassName);
 }
 
+Renderpass& RenderGraph::RequireUniquePass(
+    VL::RenderGraphPassType type)
+{
+    return const_cast<Renderpass&>(
+        static_cast<const RenderGraph&>(*this)
+            .RequireUniquePass(type));
+}
+
+const Renderpass& RenderGraph::RequireUniquePass(
+    VL::RenderGraphPassType type) const
+{
+    const Renderpass* matchedPass = nullptr;
+    for (const std::string& passName : renderpassesOrdered)
+    {
+        const Renderpass& renderpass =
+            renderpasses.at(passName);
+        if (renderpass.type != type)
+        {
+            continue;
+        }
+        if (matchedPass != nullptr)
+        {
+            throw std::runtime_error(
+                "RenderGraph expected one pass of type '" +
+                std::string(VL::RenderGraphPassTypeToString(type)) +
+                "', but found both '" + matchedPass->name +
+                "' and '" + renderpass.name + "'");
+        }
+        matchedPass = &renderpass;
+    }
+
+    if (matchedPass == nullptr)
+    {
+        throw std::runtime_error(
+            "RenderGraph is missing required pass type '" +
+            std::string(VL::RenderGraphPassTypeToString(type)) +
+            "'");
+    }
+    return *matchedPass;
+}
+
 void RenderGraph::ValidateAndResolveCanonicalShadowPass()
 {
     canonicalShadowPassName.clear();
@@ -733,7 +774,8 @@ void RenderGraph::ValidateAndResolveCanonicalShadowPass()
     for (const std::string& passName : renderpassesOrdered)
     {
         const Renderpass& renderpass = renderpasses.at(passName);
-        if (renderpass.type != "shadow")
+        if (renderpass.type !=
+            VL::RenderGraphPassType::Shadow)
         {
             continue;
         }
@@ -1118,7 +1160,9 @@ Renderpass RenderGraph::CreateRenderpass(
         renderpass.type = passDesc.type;
         renderpass.needsMaterial = passDesc.needCreateMaterial;
         renderpass.materialInstancePath = passDesc.materialInstancePath;
-        const bool bIsShadowPass = renderpass.type == "shadow";
+        const bool bIsShadowPass =
+            renderpass.type ==
+            VL::RenderGraphPassType::Shadow;
         const bool bUseMsaa = passDesc.needMsaa;
         renderpass.pipelineContractKey.useVertexInput =
             passDesc.pipelineState.useVertexInput;

@@ -232,6 +232,43 @@ void RendererMaterialLoader::LoadPassMaterials() const
     }
 }
 
+std::shared_ptr<MaterialInstance>
+RendererMaterialLoader::LoadSceneMaterialInstance(
+    std::string_view materialInstancePath) const
+{
+    const std::string materialInstancePathString(materialInstancePath);
+    std::ifstream materialInstanceFile(
+        CommonFunction::Path(materialInstancePathString));
+    if (!materialInstanceFile.is_open())
+    {
+        throw std::runtime_error(
+            "Failed to open material instance: " +
+            materialInstancePathString);
+    }
+
+    nlohmann::json materialInstanceJson;
+    materialInstanceFile >> materialInstanceJson;
+    const MaterialInstanceResolveResult resolveResult =
+        MaterialInstanceResolver::Resolve(
+            materialInstancePath,
+            materialInstanceJson);
+    const RenderMode renderMode =
+        MaterialInstanceValidator::ResolveRenderMode(
+            resolveResult.effectiveMaterialInstanceJson);
+
+    // Surface 材质按强类型 Pass 行为选择管线合同，不能依赖 config 中可变的
+    // pass name。透明材质也不能复用 Geometry 的 8 MRT 管线，否则 fragment
+    // output 和 Set 3 阴影描述符都不兼容。
+    const RenderGraphPassType surfacePassType =
+        IsTransparentRenderMode(renderMode)
+        ? RenderGraphPassType::ForwardTransparent
+        : RenderGraphPassType::Geometry;
+    Renderpass& renderPass =
+        loadContext.renderGraph.RequireUniquePass(
+            surfacePassType);
+    return LoadMaterialInstance(materialInstancePath, renderPass);
+}
+
 std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
     std::string_view materialInstancePath,
     Renderpass& renderPass) const
@@ -333,7 +370,8 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
             loadPlan.blendMode,
             loadContext.graphicsCandidateState
         );
-        if (renderPass.type != "shadow")
+        if (renderPass.type !=
+            RenderGraphPassType::Shadow)
         {
             // 专用 ShadowCaster pipeline 同样由 Material 持有且只构建一次。
             // Shadow pass 自己的公共材质不再递归寻找 `.shadow` shader。

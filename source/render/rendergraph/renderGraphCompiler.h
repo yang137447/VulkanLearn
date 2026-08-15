@@ -7,6 +7,7 @@
 #include <nlohmann/json.hpp>
 
 #include "core/runtimeResult.h"
+#include "render/rendergraph/renderGraphPassType.h"
 
 namespace VL
 {
@@ -96,7 +97,7 @@ struct CompiledGraphicsPipelineState
 struct CompiledRenderGraphPass
 {
     std::string name;
-    std::string type;
+    RenderGraphPassType type = RenderGraphPassType::Unknown;
     bool needMsaa = false;
     bool needCreateMaterial = false;
     bool outputsSwapchain = false;

@@ -46,11 +46,6 @@ bool IsSupportedResourceType(const std::string& type)
     return type == "texture2D" || type == "texture2DArray";
 }
 
-bool IsSupportedPassType(const std::string& type)
-{
-    return type == "shadow" || type == "geometry" || type == "postProcess";
-}
-
 bool IsDepthFormatString(const std::string& format)
 {
     return format == "D16_UNORM" ||
@@ -474,6 +469,45 @@ void AddBarrier(
     pass.barriersBeforePass.push_back(std::move(barrier));
 }
 
+RuntimeResult<void> ValidateRequiredSingletonPassType(
+    const CompiledRenderGraph& compiledGraph,
+    RenderGraphPassType requiredType)
+{
+    size_t passCount = 0;
+    std::string passNames;
+    for (const CompiledRenderGraphPass& pass : compiledGraph.passes)
+    {
+        if (pass.type != requiredType)
+        {
+            continue;
+        }
+
+        if (!passNames.empty())
+        {
+            passNames += ", ";
+        }
+        passNames += pass.name;
+        ++passCount;
+    }
+
+    if (passCount == 1)
+    {
+        return RuntimeResult<void>::Success();
+    }
+
+    const std::string typeName(
+        RenderGraphPassTypeToString(requiredType));
+    return RuntimeResult<void>::Failure(MakeCompileError(
+        "RenderGraphCompiler.InvalidSingletonPassType",
+        "Render graph must contain exactly one pass of type '" +
+            typeName + "'.",
+        passNames.empty()
+            ? typeName + ":count=0"
+            : typeName + ":count=" +
+                std::to_string(passCount) +
+                ":passes=" + passNames));
+}
+
 } // namespace
 
 RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::json& renderGraphJson) const
@@ -637,18 +671,23 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
                 "Render graph pass must provide a type string.",
                 pass.name));
         }
-        pass.type = passNode["type"].get<std::string>();
-        if (!IsSupportedPassType(pass.type))
+        const std::string passTypeName =
+            passNode["type"].get<std::string>();
+        const std::optional<RenderGraphPassType> passType =
+            ParseRenderGraphPassType(passTypeName);
+        if (!passType.has_value())
         {
             return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
                 "RenderGraphCompiler.UnsupportedPassType",
                 "Render graph pass type is not supported.",
-                pass.name + ":" + pass.type));
+                pass.name + ":" + passTypeName));
         }
+        pass.type = *passType;
         pass.needMsaa = passNode.value("needMsaa", false);
         pass.needCreateMaterial = passNode.value("needCreateMaterial", false);
         pass.materialInstancePath = passNode.value("materialInstancePath", std::string());
-        if (pass.type == "shadow" && !pass.needCreateMaterial)
+        if (pass.type == RenderGraphPassType::Shadow &&
+            !pass.needCreateMaterial)
         {
             return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
                 "RenderGraphCompiler.MissingShadowPassMaterial",
@@ -730,6 +769,24 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
         compiledGraph.passOrder.push_back(pass.name);
         compiledGraph.passes.push_back(std::move(pass));
         ++passIndex;
+    }
+
+    auto geometryPassResult = ValidateRequiredSingletonPassType(
+        compiledGraph,
+        RenderGraphPassType::Geometry);
+    if (geometryPassResult.IsFailure())
+    {
+        return RuntimeResult<CompiledRenderGraph>::Failure(
+            geometryPassResult.Error());
+    }
+    auto forwardTransparentPassResult =
+        ValidateRequiredSingletonPassType(
+            compiledGraph,
+            RenderGraphPassType::ForwardTransparent);
+    if (forwardTransparentPassResult.IsFailure())
+    {
+        return RuntimeResult<CompiledRenderGraph>::Failure(
+            forwardTransparentPassResult.Error());
     }
 
     return RuntimeResult<CompiledRenderGraph>::Success(std::move(compiledGraph));

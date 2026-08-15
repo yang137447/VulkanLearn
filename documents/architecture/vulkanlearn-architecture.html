@@ -1034,7 +1034,7 @@
                     </tr>
                     <tr>
                         <td><code>PassRuntime</code></td>
-                        <td>按 pass 类型录制 shadow、geometry、post-process 工作；当前 <code>source/render/pass/passRuntime.*</code> 已接管 pass 分派、执行 compiled barrier plan 和 begin/end render pass。shadow / geometry 的对象 draw 循环已抽到 backend 侧 <code>RendererDrawExecutor</code>，executor 直接消费 <code>ResolvedDrawPacket</code> 中的 renderable handle 和 <code>RendererObjectResourceEntry</code>，PassRuntime 不再直接遍历 <code>SceneObject</code> draw path。</td>
+                        <td>按 pass 类型录制 shadow、geometry、forward-transparent、post-process 工作；JSON 字符串只在 RenderGraphCompiler 边界解析，<code>CompiledRenderGraphPass</code>、<code>Renderpass</code> 和运行时分派统一使用集中定义的 <code>RenderGraphPassType</code>。当前 <code>source/render/pass/passRuntime.*</code> 已接管 pass 分派、执行 compiled barrier plan 和 begin/end render pass。shadow / geometry / forward-transparent 的对象 draw 循环已抽到 backend 侧 <code>RendererDrawExecutor</code>，executor 直接消费 <code>ResolvedDrawPacket</code> 中的 renderable handle 和 <code>RendererObjectResourceEntry</code>。Surface 材质按 effective <code>RenderMode</code> 选择 Geometry 或 ForwardTransparent pass contract，两条 draw path 再做互斥过滤，PassRuntime 不再直接遍历 <code>SceneObject</code> draw path。</td>
                         <td>Renderpass、RenderScene、ResolvedRenderScene、swapchain image index、frame resource 更新服务</td>
                         <td>写入当前帧 command buffer；对象 draw 执行交给 backend executor，object GPU resources 已由 backend object resource entry 承接</td>
                     </tr>

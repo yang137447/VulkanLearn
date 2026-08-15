@@ -41,7 +41,7 @@
             "depthCompareOp": "深度比较函数，取值见 depthCompareOpSupport。"
         },
         "pass": {
-            "type": "必填 pass 行为类型。当前支持 shadow、geometry、postProcess；name 只作为唯一身份、缓存 key 和调试标签。"
+            "type": "必填 pass 行为类型。当前支持 shadow、geometry、forwardTransparent、postProcess；name 只作为唯一身份、缓存 key 和调试标签。"
         },
         "resource": {
             "type": "可选资源类型。默认 texture2D；CSM shadowMap 使用 texture2DArray。",
@@ -404,6 +404,35 @@
                 "depthCompareOp": "lessOrEqual"
             },
             "input": [],
+            "output":[
+                {
+                    "resource": "sceneColor",
+                    "loadOp": "load",
+                    "storeOp": "store"
+                },
+                {
+                    "resource": "sceneDepth",
+                    "loadOp": "load",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
+            "name": "forwardTransparent",
+            "type": "forwardTransparent",
+            "needMsaa": false,
+            "pipelineState": {
+                "useVertexInput": true,
+                "depthTestEnable": true,
+                "depthWriteEnable": false,
+                "depthCompareOp": "less"
+            },
+            "input": [
+                {
+                    "resource": "shadowMap",
+                    "binding": 0
+                }
+            ],
             "output":[
                 {
                     "resource": "sceneColor",

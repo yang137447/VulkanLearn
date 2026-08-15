@@ -8,35 +8,6 @@
 
 namespace
 {
-    // Render mode is a static material property: it participates in shader
-    // variant selection and selects the default pipeline state for the instance.
-    RenderMode ParseRenderMode(const nlohmann::json& materialInstanceJson)
-    {
-        if (!materialInstanceJson.contains("renderStates"))
-        {
-            return RenderMode::Opaque;
-        }
-        const auto& renderStatesJson = materialInstanceJson["renderStates"];
-        const std::string renderMode = renderStatesJson.value("renderMode", std::string("Opaque"));
-        if (renderMode == "Opaque")
-        {
-            return RenderMode::Opaque;
-        }
-        if (renderMode == "OpaqueClip")
-        {
-            return RenderMode::OpaqueClip;
-        }
-        if (renderMode == "TransparentAlphaBlend")
-        {
-            return RenderMode::TransparentAlphaBlend;
-        }
-        if (renderMode == "TransparentAdditive")
-        {
-            return RenderMode::TransparentAdditive;
-        }
-        throw std::runtime_error("Unsupported renderMode: " + renderMode);
-    }
-
     vk::CullModeFlags ParseCullMode(const nlohmann::json& materialInstanceJson)
     {
         if (!materialInstanceJson.contains("renderStates"))
@@ -176,6 +147,36 @@ namespace
     }
 }
 
+RenderMode MaterialInstanceValidator::ResolveRenderMode(
+    const nlohmann::json& effectiveMaterialInstanceJson)
+{
+    if (!effectiveMaterialInstanceJson.contains("renderStates"))
+    {
+        return RenderMode::Opaque;
+    }
+    const auto& renderStatesJson =
+        effectiveMaterialInstanceJson["renderStates"];
+    const std::string renderMode =
+        renderStatesJson.value("renderMode", std::string("Opaque"));
+    if (renderMode == "Opaque")
+    {
+        return RenderMode::Opaque;
+    }
+    if (renderMode == "OpaqueClip")
+    {
+        return RenderMode::OpaqueClip;
+    }
+    if (renderMode == "TransparentAlphaBlend")
+    {
+        return RenderMode::TransparentAlphaBlend;
+    }
+    if (renderMode == "TransparentAdditive")
+    {
+        return RenderMode::TransparentAdditive;
+    }
+    throw std::runtime_error("Unsupported renderMode: " + renderMode);
+}
+
 MaterialInstanceBuildPlan MaterialInstanceValidator::BuildLoadPlan(
     std::string_view materialInstancePath,
     const PassPipelineContractKey& passPipelineContractKey,
@@ -186,7 +187,7 @@ MaterialInstanceBuildPlan MaterialInstanceValidator::BuildLoadPlan(
     MaterialInstanceBuildPlan loadPlan;
     loadPlan.shaderVariantKey.shaderName =
         materialInstanceJson.at("shaderName").get<std::string>();
-    loadPlan.shaderVariantKey.renderMode = ParseRenderMode(materialInstanceJson);
+    loadPlan.shaderVariantKey.renderMode = ResolveRenderMode(materialInstanceJson);
     loadPlan.shaderVariantKey.shadingModelMacro =
         MaterialAssetUtils::ShadingModelToShaderDefine(materialInstanceJson.at("shadingModel").get<std::string>());
     loadPlan.shaderVariantKey.macros = ParseMaterialMacros(materialInstanceJson);

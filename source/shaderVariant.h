@@ -17,6 +17,12 @@ enum class RenderMode
     TransparentAdditive
 };
 
+inline bool IsTransparentRenderMode(RenderMode renderMode)
+{
+    return renderMode == RenderMode::TransparentAlphaBlend ||
+        renderMode == RenderMode::TransparentAdditive;
+}
+
 inline std::string RenderModeToString(RenderMode renderMode)
 {
     switch (renderMode)

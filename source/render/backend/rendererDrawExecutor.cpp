@@ -194,13 +194,41 @@ void RendererDrawExecutor::DrawShadowScene(
 
 void RendererDrawExecutor::DrawGeometryScene(RendererDrawContext& context) const
 {
+    context.services.UploadLightsForPass(
+        context.swapChainImageIndex,
+        context.renderScene.lights);
+    DrawSurfaceScene("Geometry", false, context);
+}
+
+void RendererDrawExecutor::DrawForwardTransparentScene(
+    RendererDrawContext& context) const
+{
+    context.services.UploadLightsForPass(
+        context.swapChainImageIndex,
+        context.renderScene.lights);
+    DrawSurfaceScene("ForwardTransparent", true, context);
+}
+
+void RendererDrawExecutor::DrawSurfaceScene(
+    const char* passName,
+    bool drawTransparent,
+    RendererDrawContext& context) const
+{
     const Renderpass& renderPass = context.renderPass;
     vk::CommandBuffer& commandBuffer = context.commandBuffer;
 
-    context.services.UploadLightsForPass(context.swapChainImageIndex, context.renderScene.lights);
-
     for (const ResolvedMaterialGroup& materialGroup : context.resolvedRenderScene.materialGroups)
     {
+        // Surface pipeline 在资源加载时已经按 RenderMode 绑定到对应的 pass
+        // contract；这里仍必须做互斥过滤，保证透明材质不进入 GBuffer，
+        // 不透明材质也不会在 sceneColor 上被重复绘制。
+        const bool isTransparent = IsTransparentRenderMode(
+            materialGroup.material->GetShaderVariantKey().renderMode);
+        if (isTransparent != drawTransparent)
+        {
+            continue;
+        }
+
         const std::string& materialKey = materialGroup.material->GetMaterialKey();
         const PipelineBase& renderPipeline = *materialGroup.material->GetRenderPipeline();
 
@@ -227,7 +255,7 @@ void RendererDrawExecutor::DrawGeometryScene(RendererDrawContext& context) const
             for (const ResolvedDrawPacket& draw : materialInstanceGroup.draws)
             {
                 ResolvedDrawResources drawResources =
-                    RequireResolvedDrawResources("Geometry", draw, context.renderScene);
+                    RequireResolvedDrawResources(passName, draw, context.renderScene);
                 RendererObjectGpuResources& objectResources = *drawResources.objectResources;
                 const RenderDrawPacket& drawPacket = *drawResources.drawPacket;
                 VulkanDebug::ScopedRegion region(

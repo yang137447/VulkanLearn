@@ -25,6 +25,11 @@ public:
 
     void LoadPassMaterials() const;
 
+    // Scene surface materials select their pass from the effective RenderMode:
+    // opaque variants use geometry, transparent variants use forwardTransparent.
+    std::shared_ptr<MaterialInstance> LoadSceneMaterialInstance(
+        std::string_view materialInstancePath) const;
+
     std::shared_ptr<MaterialInstance> LoadMaterialInstance(
         std::string_view materialInstancePath,
         Renderpass& renderPass) const;

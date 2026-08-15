@@ -30,6 +30,11 @@ struct MaterialInstanceBuildPlan
 class MaterialInstanceValidator
 {
 public:
+    // RenderMode 必须从 M_ 与 MI_ 合并后的 effective JSON 读取，避免资源路由与
+    // shader variant 各自解释 override 后得到不同结果。
+    static RenderMode ResolveRenderMode(
+        const nlohmann::json& effectiveMaterialInstanceJson);
+
     // 在 MI override 合併完成後推導 Feature，確保 OpaqueClip/TwoSided 使用 effective state。
     static MaterialInstanceBuildPlan BuildLoadPlan(
         std::string_view materialInstancePath,
