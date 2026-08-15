@@ -17,6 +17,8 @@ RuntimeResult<void> InputSubsystem::Initialize(PlatformWindow& window)
     }
 
     this->window = &window;
+    relativeMouseModeRequested = true;
+    relativeMouseModeAllowed = false;
     relativeMouseModeEnabled = false;
     gameKeyboardEnabled = true;
     gamePointerEnabled = true;
@@ -32,7 +34,8 @@ void InputSubsystem::UpdateActionState()
     float mouseDeltaX = 0.0f;
     float mouseDeltaY = 0.0f;
     SDL_GetRelativeMouseState(&mouseDeltaX, &mouseDeltaY);
-    if (gamePointerEnabled)
+    // 即使释放捕获也要持续清空 SDL 累积量，但自由光标移动不能驱动相机。
+    if (gamePointerEnabled && relativeMouseModeEnabled)
     {
         actionState.mouseDeltaX = mouseDeltaX;
         actionState.mouseDeltaY = mouseDeltaY;
@@ -52,16 +55,34 @@ void InputSubsystem::UpdateActionState()
     actionState.moveUp = state[SDL_SCANCODE_E];
 }
 
-void InputSubsystem::SetRelativeMouseModeEnabled(bool enabled)
+void InputSubsystem::SetRelativeMouseModeRequested(bool requested)
 {
-    relativeMouseModeEnabled = enabled;
-    window->SetRelativeMouseMode(enabled);
-    SDL_GetRelativeMouseState(nullptr, nullptr);
+    relativeMouseModeRequested = requested;
+    ApplyRelativeMouseMode();
 }
 
-void InputSubsystem::ToggleRelativeMouseMode()
+void InputSubsystem::SetRelativeMouseModeAllowed(bool allowed)
 {
-    SetRelativeMouseModeEnabled(!relativeMouseModeEnabled);
+    relativeMouseModeAllowed = allowed;
+    ApplyRelativeMouseMode();
+}
+
+void InputSubsystem::ToggleRelativeMouseModeRequest()
+{
+    SetRelativeMouseModeRequested(!relativeMouseModeRequested);
+}
+
+void InputSubsystem::ApplyRelativeMouseMode()
+{
+    const bool shouldEnable = relativeMouseModeRequested && relativeMouseModeAllowed;
+    if (relativeMouseModeEnabled == shouldEnable)
+    {
+        return;
+    }
+
+    relativeMouseModeEnabled = shouldEnable;
+    window->SetRelativeMouseMode(shouldEnable);
+    SDL_GetRelativeMouseState(nullptr, nullptr);
 }
 
 } // namespace VL

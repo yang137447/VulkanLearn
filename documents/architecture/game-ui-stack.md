@@ -110,16 +110,20 @@ and text input. With only the developer UI visible, the mode is `GameAndUi`:
 relative mouse mode is disabled so the pointer remains visible, ImGui claims
 only events covered by its `WantCapture*` or navigation state, and
 `InputSubsystem` still drains SDL relative deltas every frame but publishes them
-to the game only while the pointer owner is `Game`. The pass-through dockspace
-keeps uncovered scene pixels eligible for game camera input. With no UI modal or
-developer panel visible, the game owns input and relative mouse mode is restored.
+to the game only while the pointer owner is `Game` and relative mouse mode is
+actually enabled. Releasing capture therefore exposes a free cursor without
+continuing to rotate the game camera. The pass-through dockspace keeps uncovered
+scene pixels eligible for game camera input. With no UI modal or developer panel
+visible, the game owns input and the player's requested relative mouse mode is
+restored.
 
 `PlatformApplication` initializes SDL's gamepad subsystem, opens and closes
 connected gamepads, and publishes connection lifecycle events. The lifecycle
 updates `ImGuiBackendFlags_HasGamepad`; RmlUi D-pad and analog navigation use
 reference-counted key state so every direction press has a matching release,
-including axis recenter, focus loss, page close, and device removal. `Esc` and
-gamepad `Start` toggle or close the runtime page; `F1` toggles developer UI;
+including axis recenter, focus loss, page close, and device removal. `F10` and
+gamepad `Start` toggle the runtime page; `Esc` toggles the player's requested
+mouse capture state; `F1` toggles developer UI;
 gamepad `East` closes an open runtime page.
 
 SDL focus events are forwarded to ImGui with `AddFocusEvent()` and clear RmlUi
@@ -278,6 +282,9 @@ The implemented stack is considered healthy when all of the following hold:
    their completed frame epochs.
 7. Focus loss, keyboard navigation, D-pad navigation, analog recenter, gamepad
    removal, UTF-8 input, and IME composition leave no stuck input state.
+8. `Esc` releases mouse capture without publishing free-cursor motion to the
+   game camera; UI ownership may suspend capture without overwriting the
+   player's requested capture state.
 
 The first three checks are automated by the repository's existing configure,
 build, and frame-smoke commands. Interactive resize, hot reload, and visual

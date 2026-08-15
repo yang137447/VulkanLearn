@@ -59,6 +59,7 @@ Rml::Input::KeyIdentifier ToRmlKey(PlatformKey key)
     case PlatformKey::Y: return Rml::Input::KI_Y;
     case PlatformKey::Z: return Rml::Input::KI_Z;
     case PlatformKey::F1: return Rml::Input::KI_F1;
+    case PlatformKey::F10: return Rml::Input::KI_F10;
     case PlatformKey::Num0: return Rml::Input::KI_0;
     case PlatformKey::Num1: return Rml::Input::KI_1;
     case PlatformKey::Num2: return Rml::Input::KI_2;
@@ -148,6 +149,7 @@ ImGuiKey ToImGuiKey(PlatformKey key)
     case PlatformKey::Y: return ImGuiKey_Y;
     case PlatformKey::Z: return ImGuiKey_Z;
     case PlatformKey::F1: return ImGuiKey_F1;
+    case PlatformKey::F10: return ImGuiKey_F10;
     case PlatformKey::Num0: return ImGuiKey_0;
     case PlatformKey::Num1: return ImGuiKey_1;
     case PlatformKey::Num2: return ImGuiKey_2;
@@ -1972,10 +1974,12 @@ bool UiSubsystem::HandleGlobalShortcut(const PlatformEvent& event)
 {
     if (event.type == PlatformEventType::KeyDown && !event.repeat)
     {
-        if (event.key == PlatformKey::Escape)
+        if (event.key == PlatformKey::F10)
         {
             UiAction action;
-            action.type = runtimePageVisible ? UiActionType::CloseRuntimePage : UiActionType::ToggleRuntimePage;
+            action.type = runtimePageVisible ?
+                UiActionType::CloseRuntimePage :
+                UiActionType::ToggleRuntimePage;
             QueueAction(std::move(action));
             return true;
         }

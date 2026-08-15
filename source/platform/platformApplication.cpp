@@ -35,6 +35,7 @@ PlatformKey TranslateKey(SDL_Scancode scancode)
     case SDL_SCANCODE_Y: return PlatformKey::Y;
     case SDL_SCANCODE_Z: return PlatformKey::Z;
     case SDL_SCANCODE_F1: return PlatformKey::F1;
+    case SDL_SCANCODE_F10: return PlatformKey::F10;
     case SDL_SCANCODE_0: return PlatformKey::Num0;
     case SDL_SCANCODE_1: return PlatformKey::Num1;
     case SDL_SCANCODE_2: return PlatformKey::Num2;

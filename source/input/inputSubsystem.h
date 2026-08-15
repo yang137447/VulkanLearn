@@ -30,15 +30,22 @@ public:
     void UpdateActionState();
     const InputActionState& GetActionState() const { return actionState; }
 
-    void SetRelativeMouseModeEnabled(bool enabled);
-    void ToggleRelativeMouseMode();
+    void SetRelativeMouseModeRequested(bool requested);
+    void SetRelativeMouseModeAllowed(bool allowed);
+    void ToggleRelativeMouseModeRequest();
+    bool IsRelativeMouseModeRequested() const { return relativeMouseModeRequested; }
     bool IsRelativeMouseModeEnabled() const { return relativeMouseModeEnabled; }
     void SetGameKeyboardEnabled(bool enabled) { gameKeyboardEnabled = enabled; }
     void SetGamePointerEnabled(bool enabled) { gamePointerEnabled = enabled; }
 
 private:
+    void ApplyRelativeMouseMode();
+
     PlatformWindow* window = nullptr;
     InputActionState actionState;
+    // UI visibility may suspend capture without overwriting the player's Esc preference.
+    bool relativeMouseModeRequested = true;
+    bool relativeMouseModeAllowed = false;
     bool relativeMouseModeEnabled = false;
     bool gameKeyboardEnabled = true;
     bool gamePointerEnabled = true;

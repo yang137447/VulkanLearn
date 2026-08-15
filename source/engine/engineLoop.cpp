@@ -677,20 +677,14 @@ void EngineLoop::UpdateUiInputPolicy()
     {
         inputSubsystem.SetGameKeyboardEnabled(true);
         inputSubsystem.SetGamePointerEnabled(true);
-        if (!inputSubsystem.IsRelativeMouseModeEnabled())
-        {
-            inputSubsystem.SetRelativeMouseModeEnabled(true);
-        }
+        inputSubsystem.SetRelativeMouseModeAllowed(true);
         return;
     }
 
     inputSubsystem.SetGameKeyboardEnabled(uiSubsystem->ShouldGameReceiveKeyboard());
     inputSubsystem.SetGamePointerEnabled(uiSubsystem->ShouldGameReceivePointer());
-    const bool shouldUseRelativeMouseMode = uiSubsystem->ShouldUseRelativeMouseModeForGame();
-    if (inputSubsystem.IsRelativeMouseModeEnabled() != shouldUseRelativeMouseMode)
-    {
-        inputSubsystem.SetRelativeMouseModeEnabled(shouldUseRelativeMouseMode);
-    }
+    inputSubsystem.SetRelativeMouseModeAllowed(
+        uiSubsystem->ShouldUseRelativeMouseModeForGame());
 }
 
 void EngineLoop::UpdateUiViewModel(float deltaTime)
@@ -767,6 +761,37 @@ void EngineLoop::PumpPlatformEvents()
     platformApplication->PollEvents(platformEvents);
     for (const PlatformEvent& event : platformEvents)
     {
+        if ((event.type == PlatformEventType::KeyDown ||
+             event.type == PlatformEventType::KeyUp) &&
+            event.key == PlatformKey::Escape)
+        {
+            if (event.type == PlatformEventType::KeyDown && !event.repeat)
+            {
+                auto& inputSubsystem = GetSubsystems().GetInputSubsystem();
+                inputSubsystem.ToggleRelativeMouseModeRequest();
+                const bool captureRequested =
+                    inputSubsystem.IsRelativeMouseModeRequested();
+                std::string message;
+                if (!captureRequested)
+                {
+                    message = "Mouse capture disabled";
+                }
+                else if (inputSubsystem.IsRelativeMouseModeEnabled())
+                {
+                    message = "Mouse capture enabled";
+                }
+                else
+                {
+                    message =
+                        "Mouse capture requested "
+                        "(suspended while UI owns the pointer)";
+                }
+                message += " (press Esc to toggle)";
+                GetSubsystems().GetDiagnosticsSubsystem().ReportInfo(message);
+            }
+            continue;
+        }
+
         if (uiSubsystem != nullptr && uiSubsystem->HandlePlatformEvent(event))
         {
             continue;
