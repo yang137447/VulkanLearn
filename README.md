@@ -79,7 +79,8 @@ cmake --build build -j
 ```
 
 运行时 UI 资产位于仓库内的 `ui/`，由 `config/config.json -> ui` 配置块选择。
-`Esc` 或手柄 `Start` 打开/关闭运行时控制页，`F1` 切换开发者工具。启动参数
+`F10` 或手柄 `Start` 打开/关闭运行时控制页，`Esc` 切换鼠标捕获，
+`F1` 切换开发者工具。启动参数
 `--dev-ui` 和 `--no-dev-ui` 可以覆盖配置中的开发者 UI 开关：
 
 ```bash
