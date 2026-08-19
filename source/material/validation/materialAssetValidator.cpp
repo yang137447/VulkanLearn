@@ -32,6 +32,19 @@ namespace
         const std::filesystem::path normalized = path.lexically_normal();
         return normalized.begin() == normalized.end() || *normalized.begin() != "..";
     }
+
+    void ValidateSparseOverrideObject(
+        const nlohmann::json& overrides,
+        std::string_view field,
+        std::string_view materialInstancePath)
+    {
+        if (overrides.is_object() && overrides.empty())
+        {
+            throw std::runtime_error(
+                "Empty material instance " + std::string(field) +
+                " object must be omitted: " + std::string(materialInstancePath));
+        }
+    }
 }
 
 void MaterialAssetValidator::ValidateDefinition(
@@ -179,6 +192,126 @@ void MaterialAssetValidator::ValidateInstanceHeader(
     if (materialInstanceJson.contains("textures") && !materialInstanceJson["textures"].is_object())
     {
         throw std::runtime_error("Material instance textures must be an object: " + std::string(materialInstancePath));
+    }
+}
+
+void MaterialAssetValidator::ValidateInstanceOverrides(
+    const nlohmann::json& materialJson,
+    const nlohmann::json& materialInstanceJson,
+    std::string_view materialInstancePath)
+{
+    const nlohmann::json emptyObject = nlohmann::json::object();
+    const auto& macroOverrides = materialInstanceJson.value("macros", emptyObject);
+    const auto& parameterOverrides = materialInstanceJson.value("parameters", emptyObject);
+    const auto& textureOverrides = materialInstanceJson.value("textures", emptyObject);
+    const auto& renderStateOverrides = materialInstanceJson.value("renderStateOverrides", emptyObject);
+
+    if (materialInstanceJson.contains("macros"))
+    {
+        ValidateSparseOverrideObject(macroOverrides, "macros", materialInstancePath);
+    }
+    if (materialInstanceJson.contains("parameters"))
+    {
+        ValidateSparseOverrideObject(parameterOverrides, "parameters", materialInstancePath);
+    }
+    if (materialInstanceJson.contains("textures"))
+    {
+        ValidateSparseOverrideObject(textureOverrides, "textures", materialInstancePath);
+    }
+    if (materialInstanceJson.contains("renderStateOverrides"))
+    {
+        ValidateSparseOverrideObject(
+            renderStateOverrides,
+            "renderStateOverrides",
+            materialInstancePath);
+    }
+
+    EnsureKnownOverrideKeys(
+        macroOverrides,
+        materialJson["macros"],
+        "macro",
+        materialInstancePath);
+    EnsureKnownOverrideKeys(
+        parameterOverrides,
+        materialJson["parameters"],
+        "parameter",
+        materialInstancePath);
+    EnsureKnownOverrideKeys(
+        textureOverrides,
+        materialJson["textures"],
+        "texture",
+        materialInstancePath);
+
+    for (const auto& [name, value] : macroOverrides.items())
+    {
+        if (!MaterialAssetUtils::IsNumericMacroValue(value))
+        {
+            throw std::runtime_error(
+                "Material instance macro overrides must be numeric: " +
+                std::string(materialInstancePath));
+        }
+        if (value == materialJson["macros"].at(name))
+        {
+            throw std::runtime_error(
+                "Material instance macro redundantly repeats M_ default \"" + name +
+                "\": " + std::string(materialInstancePath));
+        }
+    }
+
+    for (const auto& [name, value] : renderStateOverrides.items())
+    {
+        if (name == "shadingModel")
+        {
+            if (!value.is_string())
+            {
+                throw std::runtime_error(
+                    "renderStateOverrides.shadingModel must be a string: " +
+                    std::string(materialInstancePath));
+            }
+            MaterialAssetUtils::ShadingModelToId(value.get<std::string>());
+            if (value == materialJson["shadingModel"])
+            {
+                throw std::runtime_error(
+                    "Material instance redundantly repeats M_ shadingModel: " +
+                    std::string(materialInstancePath));
+            }
+            continue;
+        }
+
+        if (!materialJson["renderStates"].contains(name))
+        {
+            throw std::runtime_error(
+                "Material instance overrides unknown render state \"" + name + "\": " +
+                std::string(materialInstancePath));
+        }
+        if (value == materialJson["renderStates"].at(name))
+        {
+            throw std::runtime_error(
+                "Material instance redundantly repeats M_ render state \"" + name +
+                "\": " + std::string(materialInstancePath));
+        }
+    }
+
+    for (const auto& [name, value] : parameterOverrides.items())
+    {
+        const auto& descriptor = materialJson["parameters"].at(name);
+        if (value == descriptor.at("default"))
+        {
+            throw std::runtime_error(
+                "Material instance parameter redundantly repeats M_ default \"" + name +
+                "\": " + std::string(materialInstancePath));
+        }
+    }
+
+    for (const auto& [name, value] : textureOverrides.items())
+    {
+        const auto& descriptor = materialJson["textures"].at(name);
+        if (value == descriptor.at("default"))
+        {
+            throw std::runtime_error(
+                "Material instance texture redundantly repeats M_ default \"" + name +
+                "\": " + std::string(materialInstancePath));
+        }
     }
 }
 

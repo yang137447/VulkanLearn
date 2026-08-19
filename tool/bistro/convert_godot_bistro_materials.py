@@ -2,8 +2,15 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Any
+
+TOOL_ROOT = Path(__file__).resolve().parents[1]
+if str(TOOL_ROOT) not in sys.path:
+    sys.path.insert(0, str(TOOL_ROOT))
+
+from material.canonicalize_material_instances import canonicalize_instance
 
 # Bistro's Godot source still ships legacy *_Specular.dds files. The .tres
 # files author them as channel-packed roughness/metallic sources:
@@ -15,6 +22,19 @@ from typing import Any
 
 def canon(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_]+", "_", value).strip("_")
+
+
+def canonicalize_output_material_instance(
+    material_instance: dict[str, Any],
+) -> dict[str, Any]:
+    material_path = material_instance.get("material")
+    if not isinstance(material_path, str):
+        raise RuntimeError("Generated material instance has no material reference")
+
+    project_root = Path(__file__).resolve().parents[2]
+    material_definition = json.loads((project_root / material_path).read_text(encoding="utf-8"))
+    canonical, _ = canonicalize_instance(material_instance, material_definition)
+    return canonical
 
 
 def read_scalar(text: str, field: str, default: float) -> float:
@@ -239,6 +259,7 @@ def build_materials(
             material_instance["macros"]["USE_PBR_MAP"] = 0
             material_instance["textures"].pop("pbrParamMap", None)
             constant_count += 1
+        material_instance = canonicalize_output_material_instance(material_instance)
         output_name = f"MI_{safe_name}.json"
         output_path = material_output / output_name
         output_path.write_text(json.dumps(material_instance, indent=2) + "\n", encoding="utf-8")

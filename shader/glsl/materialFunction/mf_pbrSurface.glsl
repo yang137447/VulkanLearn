@@ -8,6 +8,19 @@
 #define MATERIAL_SHADING_MODEL SHADING_MODEL_DEFAULT_LIT
 #endif
 
+vec3 TransformMaterialNormalToWorld(
+    in MaterialPixelContext pixel,
+    in vec3 normal_TS)
+{
+    vec3 bitangent =
+        cross(pixel.worldNormal, pixel.worldTangent.xyz) *
+        pixel.worldTangent.w;
+    return normalize(
+        normal_TS.x * pixel.worldTangent.xyz +
+        normal_TS.y * bitangent +
+        normal_TS.z * pixel.worldNormal);
+}
+
 // PBR 唯一片元材質入口。它只描述 Surface 語義，Alpha Clip 和輸出由 Pass 模板處理。
 MaterialSurface EvaluateMaterialSurface(in MaterialPixelContext pixel)
 {
@@ -44,36 +57,58 @@ MaterialSurface EvaluateMaterialSurface(in MaterialPixelContext pixel)
         surface.emissiveColor = texture(emissionMap, pixel.texCoord).rgb * u_emissiveStrength;
     #endif
 
-    // 阶段 8 启用 optional GBuffer 数据：
-    // - customData 留给 ClearCoat / Subsurface / Hair 等后续 shading model 复用。
-    // - precomputedShadowFactors 当前以 .r 作为预计算直接光遮蔽项，默认 1 表示不遮蔽。
-    // - anisotropy 配合 worldTangent 写入 GBufferF，后续可接各向异性 BRDF。
-    // 这些开关是 static macro，普通材质不启用时不会声明对应 SelectiveOutputMask。
-    #if USE_CUSTOM_DATA
-        surface.customData = u_customData;
+    #if defined(VL_PBR_USE_CLEAR_COAT_INPUTS)
+        // customData.xy 对齐 UE Legacy Clear Coat：x=清漆权重，y=清漆粗糙度。
+        // 启用贴图后 RG 直接替代常量输入，不再与常量相乘。
+        vec2 clearCoatInputs = vec2(
+            u_clearCoat,
+            u_clearCoatRoughness);
+        #if USE_CLEAR_COAT_MAP
+            clearCoatInputs = texture(
+                clearCoatMap,
+                pixel.texCoord).rg;
+        #endif
+        surface.customData.xy = clearCoatInputs;
         surface.selectiveOutputMask |= GBUFFER_HAS_CUSTOM_DATA_MASK;
-    #endif
-    #if USE_PRECOMPUTED_SHADOW_FACTORS
-        surface.precomputedShadowFactors = u_precomputedShadowFactors;
-        surface.selectiveOutputMask |= GBUFFER_HAS_PRECOMPUTED_SHADOW_MASK;
-    #endif
-    #if USE_ANISOTROPY
-        surface.anisotropy = u_anisotropy;
-        surface.selectiveOutputMask |= GBUFFER_HAS_ANISOTROPY_MASK;
     #endif
 
     surface.worldNormal = normalize(pixel.worldNormal);
     #if USE_NORMAL_MAP
         vec3 normalTS = texture(normalMap, pixel.texCoord).xyz * 2.0 - 1.0;
-        vec3 bitangent = cross(pixel.worldNormal, pixel.worldTangent.xyz) * pixel.worldTangent.w;
         // 这里沿用顶点阶段保留下来的未归一化 T/B/N，避免与烘焙端切线空间产生额外偏差。
-        surface.worldNormal = normalize(
-            normalTS.x * pixel.worldTangent.xyz +
-            normalTS.y * bitangent +
-            normalTS.z * pixel.worldNormal);
+        surface.worldNormal = TransformMaterialNormalToWorld(pixel, normalTS);
+    #endif
+    // 未提供独立底层法线时，两层共用同一法线，模型自然退化为光滑清漆覆盖。
+    surface.clearCoatBottomNormal = surface.worldNormal;
+    #if USE_CLEAR_COAT_BOTTOM_NORMAL_MAP
+        #if defined(VL_PBR_USE_CLEAR_COAT_BOTTOM_NORMAL_CONTROLS)
+            vec2 bottomNormalTexCoord =
+                pixel.texCoord * u_clearCoatBottomNormalTiling;
+        #else
+            vec2 bottomNormalTexCoord = pixel.texCoord;
+        #endif
+        vec3 bottomNormalTS =
+            texture(
+                clearCoatBottomNormalMap,
+                bottomNormalTexCoord).xyz * 2.0 - 1.0;
+        #if defined(VL_PBR_USE_CLEAR_COAT_BOTTOM_NORMAL_CONTROLS)
+            // 对齐 Blender Normal Map Strength：先在切线空间把细节法线向中性法线
+            // (0, 0, 1) 混合，再转换到世界空间。
+            bottomNormalTS = normalize(mix(
+                vec3(0.0, 0.0, 1.0),
+                bottomNormalTS,
+                u_clearCoatBottomNormalStrength));
+        #endif
+        surface.clearCoatBottomNormal =
+            TransformMaterialNormalToWorld(pixel, bottomNormalTS);
     #endif
     #if MATERIAL_TWO_SIDED
+        // 双面材质翻面时两层法线必须同步翻转，否则顶层与底层会落在不同半球。
         surface.worldNormal = gl_FrontFacing ? surface.worldNormal : -surface.worldNormal;
+        surface.clearCoatBottomNormal =
+            gl_FrontFacing
+                ? surface.clearCoatBottomNormal
+                : -surface.clearCoatBottomNormal;
     #endif
 
     return surface;

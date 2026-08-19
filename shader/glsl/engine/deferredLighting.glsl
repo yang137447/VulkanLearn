@@ -82,6 +82,62 @@ DeferredLightingResult ShadeDefaultLitDeferredSurfaceDetailed(in MaterialSurface
     return result;
 }
 
+DeferredLightingResult ShadeClearCoatDeferredSurfaceDetailed(
+    in MaterialSurface surface,
+    in sampler2DArrayShadow inputShadowMap)
+{
+    DeferredLightingResult result = CreateDefaultDeferredLightingResult();
+    vec3 viewDir = normalize(uboVP.cameraPosition - surface.worldPosition);
+
+    // GBuffer 解码后恢复出顶层/底层两条法线；customData.xy 继续作为
+    // 清漆权重和清漆粗糙度，确保 deferred 与 forward 走同一套 BRDF。
+    result.directLighting = CalculateClearCoatDirectLighting(
+        surface.worldNormal,
+        surface.clearCoatBottomNormal,
+        surface.worldPosition,
+        uboVP.cameraPosition,
+        surface.baseColor,
+        surface.roughness,
+        surface.metallic,
+        surface.customData.x,
+        surface.customData.y);
+
+    int cascadeIndex = 0;
+    result.shadow = CalculateCsmShadow(
+        inputShadowMap,
+        surface.worldPosition,
+        surface.worldNormal,
+        cascadeIndex);
+    result.shadowCascadeIndex = ShadowCascadeDebugValue(cascadeIndex);
+    result.shadow *= surface.precomputedShadowFactors.r;
+    result.directLighting *= result.shadow;
+
+    // AO 仍只作用于最终间接光；清漆层内部的 Fresnel 与介质透射已在 IBL 函数中处理。
+    result.indirectDiffuse = CalculateClearCoatDiffuseIbl(
+        surface.worldNormal,
+        surface.clearCoatBottomNormal,
+        viewDir,
+        surface.baseColor,
+        surface.roughness,
+        surface.metallic,
+        surface.customData.x);
+    result.indirectSpecular = CalculateClearCoatSpecularIbl(
+        surface.worldNormal,
+        surface.clearCoatBottomNormal,
+        viewDir,
+        surface.baseColor,
+        surface.roughness,
+        surface.metallic,
+        surface.customData.x,
+        surface.customData.y);
+    result.indirectLighting = result.indirectDiffuse + result.indirectSpecular;
+    result.finalColor =
+        surface.emissiveColor +
+        result.directLighting +
+        result.indirectLighting * surface.ambientOcclusion;
+    return result;
+}
+
 vec3 ShadeDefaultLitDeferredSurface(in MaterialSurface surface, in sampler2DArrayShadow inputShadowMap)
 {
     return ShadeDefaultLitDeferredSurfaceDetailed(surface, inputShadowMap).finalColor;
@@ -102,21 +158,15 @@ vec3 ShadeUnlitDeferredSurface(in MaterialSurface surface)
 
 DeferredLightingResult ShadeDeferredSurfaceDetailed(in MaterialSurface surface, in sampler2DArrayShadow inputShadowMap)
 {
-    // 先保留阶段 6 的线性分发风格：当前支持 DefaultLit / Unlit，
-    // 未来 shading model 变多后可以把这里升级成更完整的 dispatch 表。
-    DeferredLightingResult defaultLit = ShadeDefaultLitDeferredSurfaceDetailed(surface, inputShadowMap);
-    DeferredLightingResult unlit = ShadeUnlitDeferredSurfaceDetailed(surface);
-    float unlitMask = ShadingModelMask(surface.shadingModel, SHADING_MODEL_UNLIT);
-
-    DeferredLightingResult result = CreateDefaultDeferredLightingResult();
-    result.directLighting = mix(defaultLit.directLighting, unlit.directLighting, unlitMask);
-    result.shadow = mix(defaultLit.shadow, unlit.shadow, unlitMask);
-    result.shadowCascadeIndex = mix(defaultLit.shadowCascadeIndex, unlit.shadowCascadeIndex, unlitMask);
-    result.indirectDiffuse = mix(defaultLit.indirectDiffuse, unlit.indirectDiffuse, unlitMask);
-    result.indirectSpecular = mix(defaultLit.indirectSpecular, unlit.indirectSpecular, unlitMask);
-    result.indirectLighting = mix(defaultLit.indirectLighting, unlit.indirectLighting, unlitMask);
-    result.finalColor = mix(defaultLit.finalColor, unlit.finalColor, unlitMask);
-    return result;
+    switch (surface.shadingModel)
+    {
+        case SHADING_MODEL_UNLIT:
+            return ShadeUnlitDeferredSurfaceDetailed(surface);
+        case SHADING_MODEL_CLEAR_COAT:
+            return ShadeClearCoatDeferredSurfaceDetailed(surface, inputShadowMap);
+        default:
+            return ShadeDefaultLitDeferredSurfaceDetailed(surface, inputShadowMap);
+    }
 }
 
 vec3 ShadeDeferredSurface(in MaterialSurface surface, in sampler2DArrayShadow inputShadowMap)

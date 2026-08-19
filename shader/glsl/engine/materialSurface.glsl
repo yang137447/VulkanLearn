@@ -6,7 +6,9 @@
 struct MaterialSurface
 {
     vec3 worldPosition;
+    // worldNormal 表示清漆顶层法线；底层法线用于底漆的漫反射和高光。
     vec3 worldNormal;
+    vec3 clearCoatBottomNormal;
     vec3 baseColor;
     float opacity;
     vec3 emissiveColor;
@@ -26,6 +28,7 @@ MaterialSurface CreateDefaultMaterialSurface()
     MaterialSurface surface;
     surface.worldPosition = vec3(0.0);
     surface.worldNormal = vec3(0.0, 0.0, 1.0);
+    surface.clearCoatBottomNormal = vec3(0.0, 0.0, 1.0);
     surface.baseColor = vec3(1.0);
     surface.opacity = 1.0;
     surface.emissiveColor = vec3(0.0);

@@ -1326,7 +1326,7 @@ void DeferredGBufferFragment()
                     <li><code>gbufferE</code> 已经常驻，此阶段开始接入 lightmap / baked shadow / precomputed shadow factors。</li>
                     <li><code>gbufferF</code> 已经常驻，此阶段开始接入 anisotropy 和 world tangent。</li>
                     <li><code>gbufferB.a</code> 的 high nibble 正式写入 <code>GBUFFER_HAS_CUSTOM_DATA_MASK</code>、<code>GBUFFER_HAS_PRECOMPUTED_SHADOW_MASK</code>、<code>GBUFFER_HAS_VELOCITY_MASK</code>、<code>GBUFFER_HAS_ANISOTROPY_MASK</code>。</li>
-                    <li>PBR 第一版通过 static macros 和参数启用 optional 数据：<code>USE_CUSTOM_DATA</code>、<code>USE_PRECOMPUTED_SHADOW_FACTORS</code>、<code>USE_ANISOTROPY</code>。</li>
+                    <li>GBuffer 保留 optional 数据槽位，但材质 authoring 只暴露已有真实生产者和光照消费路径的输入；Clear Coat 由 shading-model wrapper 固定写入 CustomData，PrecomputedShadowFactors 与 Anisotropy 在对应运行时数据和 BRDF 接入前不提供 MI 开关。</li>
                 </ul>
 
                 <h3>阶段 9：拆出 forward transparent shader 输出壳</h3>

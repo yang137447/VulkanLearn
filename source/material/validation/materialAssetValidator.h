@@ -19,6 +19,12 @@ public:
         const nlohmann::json& materialInstanceJson,
         std::string_view materialInstancePath);
 
+    // Validates sparse MI overrides against fields and defaults declared by M_.
+    static void ValidateInstanceOverrides(
+        const nlohmann::json& materialJson,
+        const nlohmann::json& materialInstanceJson,
+        std::string_view materialInstancePath);
+
     // Ensures an MI_ override object only targets fields declared by the referenced M_ asset.
     static void EnsureKnownOverrideKeys(
         const nlohmann::json& overrides,

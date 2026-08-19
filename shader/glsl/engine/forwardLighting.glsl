@@ -75,6 +75,63 @@ ForwardLightingResult ShadeDefaultLitForwardSurface(in MaterialSurface surface)
     return result;
 }
 
+ForwardLightingResult ShadeClearCoatForwardSurface(in MaterialSurface surface)
+{
+    ForwardLightingResult result = CreateDefaultForwardLightingResult();
+    vec3 viewDir = normalize(uboVP.cameraPosition - surface.worldPosition);
+
+    // 顶层法线负责清漆高光，底层法线负责底漆响应；customData.xy 分别是
+    // 清漆权重和清漆粗糙度，与 deferred 路径保持同一输入合同。
+    result.directLighting = CalculateClearCoatDirectLighting(
+        surface.worldNormal,
+        surface.clearCoatBottomNormal,
+        surface.worldPosition,
+        uboVP.cameraPosition,
+        surface.baseColor,
+        surface.roughness,
+        surface.metallic,
+        surface.customData.x,
+        surface.customData.y);
+    #if defined(VL_FORWARD_DECLARE_SHADOWMAP_INPUT)
+        int cascadeIndex = 0;
+        result.shadow = CalculateCsmShadow(
+            shadowMap,
+            surface.worldPosition,
+            surface.worldNormal,
+            cascadeIndex);
+        result.shadowCascadeIndex = ShadowCascadeDebugValue(cascadeIndex);
+    #else
+        result.shadow = 1.0;
+    #endif
+    result.directLighting *= result.shadow;
+
+    // Legacy Clear Coat 的间接光也按两层拆分：底层使用底层法线，
+    // 顶层环境高光使用顶层法线，最后按 Fresnel 透射关系合成。
+    result.indirectDiffuse = CalculateClearCoatDiffuseIbl(
+        surface.worldNormal,
+        surface.clearCoatBottomNormal,
+        viewDir,
+        surface.baseColor,
+        surface.roughness,
+        surface.metallic,
+        surface.customData.x);
+    result.indirectSpecular = CalculateClearCoatSpecularIbl(
+        surface.worldNormal,
+        surface.clearCoatBottomNormal,
+        viewDir,
+        surface.baseColor,
+        surface.roughness,
+        surface.metallic,
+        surface.customData.x,
+        surface.customData.y);
+    result.indirectLighting = result.indirectDiffuse + result.indirectSpecular;
+    result.finalColor =
+        surface.emissiveColor +
+        result.directLighting +
+        result.indirectLighting * surface.ambientOcclusion;
+    return result;
+}
+
 ForwardLightingResult ShadeUnlitForwardSurface(in MaterialSurface surface)
 {
     ForwardLightingResult result = CreateDefaultForwardLightingResult();
@@ -84,21 +141,15 @@ ForwardLightingResult ShadeUnlitForwardSurface(in MaterialSurface surface)
 
 ForwardLightingResult ShadeForwardSurfaceDetailed(in MaterialSurface surface)
 {
-    // 与 deferred lighting 保持同一套分发风格：先算当前支持的 shading model，
-    // 再用 mask 选择结果，避免在材质 shader 里散落动态分支。
-    ForwardLightingResult defaultLit = ShadeDefaultLitForwardSurface(surface);
-    ForwardLightingResult unlit = ShadeUnlitForwardSurface(surface);
-    float unlitMask = ShadingModelMask(surface.shadingModel, SHADING_MODEL_UNLIT);
-
-    ForwardLightingResult result = CreateDefaultForwardLightingResult();
-    result.directLighting = mix(defaultLit.directLighting, unlit.directLighting, unlitMask);
-    result.shadow = mix(defaultLit.shadow, unlit.shadow, unlitMask);
-    result.shadowCascadeIndex = mix(defaultLit.shadowCascadeIndex, unlit.shadowCascadeIndex, unlitMask);
-    result.indirectDiffuse = mix(defaultLit.indirectDiffuse, unlit.indirectDiffuse, unlitMask);
-    result.indirectSpecular = mix(defaultLit.indirectSpecular, unlit.indirectSpecular, unlitMask);
-    result.indirectLighting = mix(defaultLit.indirectLighting, unlit.indirectLighting, unlitMask);
-    result.finalColor = mix(defaultLit.finalColor, unlit.finalColor, unlitMask);
-    return result;
+    switch (surface.shadingModel)
+    {
+        case SHADING_MODEL_UNLIT:
+            return ShadeUnlitForwardSurface(surface);
+        case SHADING_MODEL_CLEAR_COAT:
+            return ShadeClearCoatForwardSurface(surface);
+        default:
+            return ShadeDefaultLitForwardSurface(surface);
+    }
 }
 
 vec3 ShadeForwardSurface(in MaterialSurface surface)

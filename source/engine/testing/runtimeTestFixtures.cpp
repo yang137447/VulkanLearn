@@ -389,13 +389,9 @@ std::filesystem::path CreateShaderReloadTestScene(
   "type": "materialInstance",
   "material": "shader/glsl/runtimeTest/M_shaderReloadTest.json",
   "parameters": {
-    "u_reloadTestColor": [0.2, 0.5, 0.9, 1.0],
-    "u_alphaClipThreshold": 0.25,
-    "u_reloadRuntimeScalar": 0.125
-  },
-  "textures": {
-    "u_reloadTexture": "textures/T_Texture.json",
-    "u_reloadAlternateTexture": "textures/T_UV_Checker.json"
+    "u_reloadTestColor": [0.3, 0.6, 0.95, 0.9],
+    "u_alphaClipThreshold": 0.3,
+    "u_reloadRuntimeScalar": 0.25
   }
 })");
 
@@ -406,9 +402,8 @@ std::filesystem::path CreateShaderReloadTestScene(
   "type": "materialInstance",
   "material": "shader/glsl/runtimeTest/M_shaderReloadBatchTest.json",
   "parameters": {
-    "u_reloadBatchColor": [0.15, 0.7, 0.35, 1.0]
-  },
-  "textures": {}
+    "u_reloadBatchColor": [0.25, 0.8, 0.4, 1.0]
+  }
 })");
 
     WriteTextFile(
@@ -825,8 +820,7 @@ std::filesystem::path CreateGeneratedMaterialFailureScene(const std::string& res
   "material": "shader/glsl/M_vertexColor.json",
   "parameters": {
     "u_missingGeneratedRuntimeTestParam": [1, 1, 1, 1]
-  },
-  "textures": {}
+  }
 })");
 
     WriteTextFile(

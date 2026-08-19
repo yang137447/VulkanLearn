@@ -188,6 +188,10 @@ MaterialInstanceResolveResult MaterialInstanceResolver::Resolve(
     MaterialInstanceResolveResult result;
     result.materialPath = materialInstanceJson["material"].get<std::string>();
     result.materialJson = LoadDefinition(result.materialPath);
+    MaterialAssetValidator::ValidateInstanceOverrides(
+        result.materialJson,
+        materialInstanceJson,
+        materialInstancePath);
     result.shaderName = InferShaderNameFromMaterialPath(result.materialPath);
 
     result.effectiveMaterialInstanceJson = nlohmann::json::object();

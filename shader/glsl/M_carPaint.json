@@ -1,10 +1,10 @@
 {
-    "name": "M_pbr",
+    "name": "M_carPaint",
     "type": "material",
-    "shadingModel": "DefaultLit",
+    "shadingModel": "ClearCoat",
     "shaderEvaluation": {
         "vertex": "materialFunction/mf_pbrVertex.glsl",
-        "surface": "materialFunction/mf_pbrSurface.glsl"
+        "surface": "materialFunction/mf_clearCoatSurface.glsl"
     },
     "features": {
         "modifiesMeshPosition": false
@@ -16,6 +16,8 @@
     "macros": {
         "USE_ALBEDO_MAP": 0,
         "USE_NORMAL_MAP": 0,
+        "USE_CLEAR_COAT_MAP": 0,
+        "USE_CLEAR_COAT_BOTTOM_NORMAL_MAP": 0,
         "USE_PBR_MAP": 0,
         "USE_EMISSION_MAP": 0
     },
@@ -26,15 +28,31 @@
         },
         "u_tintColor": {
             "type": "vec4",
-            "default": [1.0, 1.0, 1.0, 1.0]
+            "default": [0.0, 0.3099, 1.0, 1.0]
         },
         "u_pbrFactors": {
             "type": "vec4",
-            "default": [0.5, 0.0, 1.0, 0.0]
+            "default": [0.3409, 1.0, 1.0, 0.0]
         },
         "u_emissiveStrength": {
             "type": "float",
+            "default": 0.0
+        },
+        "u_clearCoat": {
+            "type": "float",
             "default": 1.0
+        },
+        "u_clearCoatRoughness": {
+            "type": "float",
+            "default": 0.0
+        },
+        "u_clearCoatBottomNormalTiling": {
+            "type": "float",
+            "default": 64.0
+        },
+        "u_clearCoatBottomNormalStrength": {
+            "type": "float",
+            "default": 0.074
         }
     },
     "textures": {
@@ -43,6 +61,14 @@
             "default": null
         },
         "normalMap": {
+            "type": "sampler2D",
+            "default": null
+        },
+        "clearCoatMap": {
+            "type": "sampler2D",
+            "default": null
+        },
+        "clearCoatBottomNormalMap": {
             "type": "sampler2D",
             "default": null
         },

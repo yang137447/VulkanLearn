@@ -12,6 +12,13 @@ const uint SHADING_MODEL_HAIR = 7u;
 const uint SHADING_MODEL_CLOTH = 8u;
 const uint SHADING_MODEL_EYE = 9u;
 
+// SHADING_MODEL_CLEAR_COAT 使用 GBufferD/customData 传递清漆层参数：
+//   x = 清漆层权重
+//   y = 清漆层粗糙度
+//   w,z = 底层法线相对顶层法线的 UE 八面体偏移编码
+// 车漆材质把底漆保留为 MaterialSurface 的 baseColor/roughness/metallic，
+// 顶层使用固定 IOR 1.5 / F0 0.04；普通 worldNormal 表示顶层法线。
+
 // GBufferB.a 使用 UE-style packed byte 语义：
 //   low  4 bits = ShadingModelID
 //   high 4 bits = SelectiveOutputMask / optional data flags

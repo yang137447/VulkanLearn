@@ -22,6 +22,8 @@ SPIR-V reflection 是单个 Pass 实际资源使用情况的真相源。
 - `MaterialInstance`
   - 仅保存实例值
   - 不定义 shader 接口
+  - `renderStateOverrides`、`macros`、`parameters`、`textures` 都只保存显式 override
+  - 等于 M_ 默认值或为空的 override 对象必须省略
 - shader reflection
   - 描述一个 Base/ShadowDepth Pass 实际使用的资源子集
   - 必须通过 `MaterialDescriptorSchema` 子集校验
@@ -33,6 +35,16 @@ SPIR-V reflection 是单个 Pass 实际资源使用情况的真相源。
 
 - 编写期声明与运行时 layout 来自同一个 M_ schema
 - reflection 不再生成 Set 1 完整 layout，只负责实际使用与一致性校验
+- M_ 保存 static macro 默认值，MI 保持稀疏；resolver 在构建 variant key 前合成完整有效宏
+
+## 输入 Schema 职责
+
+M_ 参数和贴图只声明完整、稳定的材质 schema，不要求材质作者重复维护输入与宏或
+Render Mode 的条件关系。MI 可以稀疏覆盖任意已声明参数和贴图；宏负责选择 shader
+variant，SPIR-V reflection 负责描述该 Pass/variant 实际使用的资源子集。
+
+如果后续调参面板需要按当前 variant 隐藏未使用输入，应从已编译 variant 的 reflection
+或引擎生成的元数据推导，不能把同一条件再次交给 M_ 作者手写维护。
 
 ## MaterialInstance 运行时身份
 

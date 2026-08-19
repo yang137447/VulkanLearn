@@ -59,6 +59,8 @@ Documentation in this repository is split by responsibility:
   - material parameter include generation, Set 1 schema ownership, and per-pass reflection validation
 - `rendering/material-mesh-pass-composition.md`
   - implemented Material Evaluation, Base/ShadowDepth templates, Composer identity, and Shadow routing contract
+- `rendering/car-paint-shading-model.md`
+  - implemented ClearCoat-based car paint contract, custom data packing, and authoring parameters
 - `rendering/shader-build-cache.md`
   - implemented BLAKE3-256 shader identities, versioned build-cache manifest, batch-wide publication preflight, stale cache-hit rejection, atomic artifact commit, and startup failure semantics
 - `rendering/shader-hot-reload.md`

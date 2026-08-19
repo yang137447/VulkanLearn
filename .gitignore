@@ -18,6 +18,7 @@
 !/resources/README.md
 /output/playwright
 /imgui.ini
+__pycache__/
 /extern/FreeType/freetype/
 /extern/ImGui/imgui/
 /extern/RmlUi/RmlUi/

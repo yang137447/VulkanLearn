@@ -254,6 +254,46 @@ vec3 CalculateDiffuseIbl(
     return irradiance * baseColor * (1.0 - metallic) / PI;
 }
 
+vec3 SamplePrefilteredEnvironment(
+    in vec3 normal_WS,
+    in vec3 viewDir_WS,
+    in float roughness)
+{
+    vec3 N = normalize(normal_WS);
+    vec3 V = normalize(viewDir_WS);
+    vec3 R = reflect(-V, N);
+    float maxLod = float(max(textureQueryLevels(prefilteredEnvironmentCube) - 1, 0));
+    return textureLod(
+        prefilteredEnvironmentCube,
+        R,
+        roughness * maxLod).rgb;
+}
+
+vec2 SampleEnvironmentBrdf(float NdotV, float roughness)
+{
+    return texture(brdfLut, vec2(NdotV, roughness)).rg;
+}
+
+vec3 CalculateSpecularIblWithF0(
+    in vec3 normal_WS,
+    in vec3 viewDir_WS,
+    in vec3 F0,
+    in float roughness)
+{
+    vec3 N = normalize(normal_WS);
+    vec3 V = normalize(viewDir_WS);
+    float NdotV = max(dot(N, V), 0.0);
+    vec3 prefilteredColor = SamplePrefilteredEnvironment(
+        normal_WS,
+        viewDir_WS,
+        roughness);
+    vec2 brdfAB = SampleEnvironmentBrdf(NdotV, roughness);
+    return
+        prefilteredColor *
+        (F0 * brdfAB.x + brdfAB.y) *
+        uboVP.environmentIntensity;
+}
+
 vec3 CalculateSpecularIbl(
     in vec3 normal_WS,
     in vec3 viewDir_WS,
@@ -261,34 +301,177 @@ vec3 CalculateSpecularIbl(
     in float roughness,
     in float metallic)
 {
-    vec3 N = normalize(normal_WS);
-    vec3 V = normalize(viewDir_WS);
-    vec3 R = reflect(-V, N);
-
-    float NdotV = max(dot(N, V), 0.0);
     vec3 F0 = mix(vec3(0.04), baseColor, metallic);
+    return CalculateSpecularIblWithF0(
+        normal_WS,
+        viewDir_WS,
+        F0,
+        roughness);
+}
 
-    // Epic / UE4 在 split-sum IBL 上更接近下面这条标准组合：
-    //   specularIBL ~= prefilteredEnv * (F0 * A + B)
-    // 也就是材质的 F0 不进 LUT，而是在运行时再乘回去。
-    // 常见教程里那种：
-    //   prefilteredEnv * (F * A + B)
-    // 其中 F = fresnelSchlickRoughness(NdotV, F0, roughness)
-    // 更像后续流传很广的工程化写法，不是当前这份 A/B LUT 定义下最标准的 Epic split-sum 表达。
+// UE Legacy Clear Coat 把顶层视为固定 IOR 1.5 的无色介质：
+// 空气进入清漆时 eta=1/1.5，对应法向入射 F0=0.04。
+const float UE_CLEAR_COAT_F0 = 0.04;
+const float UE_CLEAR_COAT_ETA = 1.0 / 1.5;
+// 0.02 是模型合同的一部分，用于避免顶层 GGX 在完全光滑时退化成数值奇点。
+const float UE_CLEAR_COAT_MIN_ROUGHNESS = 0.02;
 
-    // 当前严格遵循 split-sum approximation 的标准组合：
-    //   specularIBL ~= prefilteredEnv(R, roughness) * (F0 * A + B)
-    // 其中 A/B 来自 BRDF LUT 的预积分结果，F0 在运行时按材质计算。
-    // 这种写法与 brfdLut.comp 中的积分定义一一对应。
-    //
-    // 常见的工程写法也会使用：
-    //   prefilteredEnv * (F * A + B)
-    // 其中 F = fresnelSchlickRoughness(NdotV, F0, roughness)
-    // 它通常是为了做更强的视觉修正，而不是严格来自当前这份 LUT 推导。
-    float maxLod = float(max(textureQueryLevels(prefilteredEnvironmentCube) - 1, 0));
-    vec3 prefilteredColor = textureLod(prefilteredEnvironmentCube, R, roughness * maxLod).rgb;
-    vec2 brdfAB = texture(brdfLut, vec2(NdotV, roughness)).rg;
-    return prefilteredColor * (F0 * brdfAB.x + brdfAB.y) * uboVP.environmentIntensity;
+float GetUeClearCoatRoughness(float roughness)
+{
+    return max(roughness, UE_CLEAR_COAT_MIN_ROUGHNESS);
+}
+
+float UeClearCoatFresnel(float cosine)
+{
+    // 顶层是固定无色介质，因此这里只需要计算标量 Schlick Fresnel。
+    float fresnelCurve = pow(1.0 - cosine, 5.0);
+    return fresnelCurve + (1.0 - fresnelCurve) * UE_CLEAR_COAT_F0;
+}
+
+vec3 FresnelSchlickUe(vec3 specularColor, float cosine)
+{
+    float fresnelCurve = pow(1.0 - cosine, 5.0);
+    float grazingReflectance = clamp(50.0 * specularColor.g, 0.0, 1.0);
+    return
+        grazingReflectance * fresnelCurve +
+        (1.0 - fresnelCurve) * specularColor;
+}
+
+void CalculateUeClearCoatIndirectColors(
+    in vec3 baseColor,
+    in float roughness,
+    in float metallic,
+    in float clearCoatWeight,
+    in float topNdotV,
+    out vec3 diffuseColor,
+    out vec3 specularColor)
+{
+    // UE Legacy Clear Coat 的间接光不是简单在 Default Lit 上叠一层高光。
+    // 这里先根据顶层视角、底层粗糙度和金属度重映射底层 diffuse/specular 颜色，
+    // 使底层在清漆折射和吸收之后仍与 UE 的能量分配保持一致。
+    float refractionScale =
+        ((topNdotV * 0.5 + 0.5) * topNdotV - 1.0) *
+        clamp(1.25 - 1.25 * roughness, 0.0, 1.0) +
+        1.0;
+
+    const float metalSpecular = 0.9;
+    vec3 absorptionColor = baseColor / metalSpecular;
+    vec3 absorption =
+        absorptionColor *
+        ((topNdotV - 1.0) * 0.85 *
+            (vec3(1.0) - mix(
+                absorptionColor,
+                absorptionColor * absorptionColor,
+                -0.78)) +
+        vec3(1.0));
+
+    float layerAttenuation = mix(
+        1.0,
+        1.0 - UeClearCoatFresnel(topNdotV),
+        clearCoatWeight);
+    vec3 remappedBaseColor = mix(
+        baseColor * layerAttenuation,
+        metalSpecular * absorption * refractionScale,
+        metallic * clearCoatWeight);
+    diffuseColor = remappedBaseColor * (1.0 - metallic);
+
+    float specular = mix(0.5, refractionScale, clearCoatWeight);
+    specularColor = mix(
+        vec3(0.08 * specular),
+        remappedBaseColor,
+        metallic);
+}
+
+vec3 CalculateClearCoatDiffuseIbl(
+    in vec3 topNormal_WS,
+    in vec3 bottomNormal_WS,
+    in vec3 viewDir_WS,
+    in vec3 baseColor,
+    in float roughness,
+    in float metallic,
+    in float clearCoatWeight)
+{
+    vec3 topNormal = normalize(topNormal_WS);
+    vec3 viewDir = normalize(viewDir_WS);
+    float topNdotV = clamp(abs(dot(topNormal, viewDir)) + 1e-5, 0.0, 1.0);
+    vec3 diffuseColor;
+    vec3 unusedSpecularColor;
+    CalculateUeClearCoatIndirectColors(
+        baseColor,
+        roughness,
+        metallic,
+        clearCoatWeight,
+        topNdotV,
+        diffuseColor,
+        unusedSpecularColor);
+    // 漫反射来自清漆下方的底层，因此球谐辐照度使用 bottom normal 采样。
+    return
+        EvaluateIrradianceSH(bottomNormal_WS) *
+        diffuseColor /
+        PI;
+}
+
+vec3 CalculateClearCoatSpecularIbl(
+    in vec3 topNormal_WS,
+    in vec3 bottomNormal_WS,
+    in vec3 viewDir_WS,
+    in vec3 baseColor,
+    in float roughness,
+    in float metallic,
+    in float clearCoatWeight,
+    in float clearCoatRoughness)
+{
+    vec3 topNormal = normalize(topNormal_WS);
+    vec3 bottomNormal = normalize(bottomNormal_WS);
+    vec3 viewDir = normalize(viewDir_WS);
+
+    // 对齐 UE 稳定 NoV 约定：双面情况下使用绝对值，并把 BRDF LUT 坐标限制在有效范围。
+    float topNdotV = clamp(abs(dot(topNormal, viewDir)) + 1e-5, 0.0, 1.0);
+    float bottomNdotV = clamp(abs(dot(bottomNormal, viewDir)) + 1e-5, 0.0, 1.0);
+
+    vec3 unusedDiffuseColor;
+    vec3 specularColor;
+    CalculateUeClearCoatIndirectColors(
+        baseColor,
+        roughness,
+        metallic,
+        clearCoatWeight,
+        topNdotV,
+        unusedDiffuseColor,
+        specularColor);
+
+    // 底层环境高光使用底层法线、底层粗糙度和重映射后的 specularColor。
+    vec3 bottomEnvironment = SamplePrefilteredEnvironment(
+        bottomNormal_WS,
+        viewDir_WS,
+        roughness);
+    vec2 bottomBrdf = SampleEnvironmentBrdf(bottomNdotV, roughness);
+    vec3 bottomFactor =
+        specularColor * bottomBrdf.x +
+        bottomBrdf.y *
+            clamp(50.0 * specularColor.g, 0.0, 1.0) *
+            (1.0 - clearCoatWeight);
+    vec3 bottomLayer = bottomEnvironment * bottomFactor;
+
+    float coatRoughness = GetUeClearCoatRoughness(clearCoatRoughness);
+
+    // 顶层环境高光固定使用 F0=0.04，并由独立的 Clear Coat Roughness 选择 mip。
+    vec3 topEnvironment = SamplePrefilteredEnvironment(
+        topNormal_WS,
+        viewDir_WS,
+        coatRoughness);
+    vec2 topBrdf = SampleEnvironmentBrdf(
+        topNdotV,
+        coatRoughness);
+    float topFresnel =
+        (UE_CLEAR_COAT_F0 * topBrdf.x + topBrdf.y) *
+        clearCoatWeight;
+
+    // topFresnel 同时决定顶层反射能量以及能进入底层的剩余能量。
+    return
+        (bottomLayer * (1.0 - topFresnel) +
+            topEnvironment * topFresnel) *
+        uboVP.environmentIntensity;
 }
 
 // 间接光总入口。目前只封装 diffuse IBL，后续可继续并入 specular IBL、
@@ -343,6 +526,247 @@ float GeometrySmith(vec3 N, vec3 V, vec3 L, float roughness)
     return ggx1 * ggx2;
 }
 
+float DistributionGgxUe(float alphaSquared, float NdotH)
+{
+    float denominator =
+        (NdotH * alphaSquared - NdotH) * NdotH + 1.0;
+    return alphaSquared / (PI * denominator * denominator);
+}
+
+float VisibilitySmithJointApproxUe(
+    float alphaSquared,
+    float NdotV,
+    float NdotL)
+{
+    float alpha = sqrt(alphaSquared);
+    float visibilityV = NdotL * (NdotV * (1.0 - alpha) + alpha);
+    float visibilityL = NdotV * (NdotL * (1.0 - alpha) + alpha);
+    return 0.5 / (visibilityV + visibilityL);
+}
+
+float RefractBlendClearCoatApprox(float VdotH)
+{
+    // UE 针对 eta=1/1.5 的多项式近似，用于避免逐光源执行完整折射向量运算。
+    return (0.63 - 0.22 * VdotH) * VdotH - 0.745;
+}
+
+struct UeClearCoatRefractionContext
+{
+    float NdotV;
+    float NdotL;
+    float VdotH;
+};
+
+UeClearCoatRefractionContext RefractClearCoatContext(
+    float NdotV,
+    float NdotL,
+    float NdotH,
+    float VdotH)
+{
+    // 把底层 BRDF 使用的 NoV/NoL/VoH 投影到穿过清漆后的近似折射空间。
+    // 后续只需替换这些点积，不需要显式构造折射后的 L/V/H 向量。
+    float refractionBlend = RefractBlendClearCoatApprox(VdotH);
+    float refractionProjection = refractionBlend * NdotH;
+
+    UeClearCoatRefractionContext context;
+    context.NdotV = clamp(
+        UE_CLEAR_COAT_ETA * NdotV - refractionProjection,
+        0.001,
+        1.0);
+    context.NdotL = clamp(
+        UE_CLEAR_COAT_ETA * NdotL - refractionProjection,
+        0.001,
+        1.0);
+    context.VdotH = clamp(
+        UE_CLEAR_COAT_ETA * VdotH - refractionBlend,
+        0.0,
+        1.0);
+    return context;
+}
+
+vec3 SimpleClearCoatTransmittance(
+    float NdotL,
+    float NdotV,
+    float metallic,
+    vec3 baseColor)
+{
+    // UE 的简化薄层透射：非金属底层保持无色透射；金属底层根据 baseColor
+    // 构造消光系数，并用 1/NoV + 1/NoL 近似光线往返薄层的路径长度。
+    vec3 transmittance = vec3(1.0);
+    if (metallic > 0.0)
+    {
+        vec3 transmittanceColor = baseColor / PI;
+        vec3 extinctionCoefficient =
+            -log(max(transmittanceColor, vec3(0.0001))) * 0.5;
+        float thinDistance = 1.0 / NdotV + 1.0 / NdotL;
+        vec3 opticalDepth =
+            extinctionCoefficient * max(thinDistance - 2.0, 0.0);
+        transmittance = mix(
+            vec3(1.0),
+            exp(-opticalDepth),
+            metallic);
+    }
+    return transmittance;
+}
+
+vec3 EvaluateDefaultPbrLight(
+    in vec3 normal_WS,
+    in vec3 pixelPos_WS,
+    in vec3 cameraPos_WS,
+    in vec3 baseColor,
+    in float roughness,
+    in float metallic,
+    in vec3 lightDirection_WS,
+    in vec3 radiance)
+{
+    vec3 N = normalize(normal_WS);
+    vec3 L = normalize(lightDirection_WS);
+    vec3 V = normalize(cameraPos_WS - pixelPos_WS);
+    vec3 H = normalize(L + V);
+
+    float NdotL = max(dot(N, L), 0.0);
+    float NdotV = max(dot(N, V), 0.0);
+    vec3 F0 = mix(vec3(0.04), baseColor, metallic);
+    vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
+    vec3 diffuseWeight = (vec3(1.0) - F) * (1.0 - metallic);
+    float distribution = DistributionGGX(N, H, roughness);
+    float geometry = GeometrySmith(N, V, L, roughness);
+    vec3 diffuseBrdf = diffuseWeight * baseColor / PI;
+    vec3 specularBrdf =
+        F * distribution * geometry /
+        max(4.0 * NdotL * NdotV, 1e-4);
+    return (diffuseBrdf + specularBrdf) * radiance * NdotL;
+}
+
+vec3 EvaluateUeClearCoatLight(
+    in vec3 topNormal_WS,
+    in vec3 bottomNormal_WS,
+    in vec3 pixelPos_WS,
+    in vec3 cameraPos_WS,
+    in vec3 baseColor,
+    in float roughness,
+    in float metallic,
+    in float clearCoatWeight,
+    in float clearCoatRoughness,
+    in vec3 lightDirection_WS,
+    in vec3 radiance)
+{
+    vec3 topNormal = normalize(topNormal_WS);
+    vec3 bottomNormal = normalize(bottomNormal_WS);
+    vec3 lightDirection = normalize(lightDirection_WS);
+    vec3 viewDirection = normalize(cameraPos_WS - pixelPos_WS);
+    vec3 halfDirection = normalize(lightDirection + viewDirection);
+
+    float bottomNdotL = max(dot(bottomNormal, lightDirection), 0.0);
+    float bottomNdotV = clamp(
+        abs(dot(bottomNormal, viewDirection)) + 1e-5,
+        0.0,
+        1.0);
+    float bottomNdotH = max(dot(bottomNormal, halfDirection), 0.0);
+    float VdotH = max(dot(viewDirection, halfDirection), 0.0);
+    if (bottomNdotL <= 0.0)
+    {
+        return vec3(0.0);
+    }
+
+    // UE Legacy Clear Coat 使用顶层法线计算清漆 BRDF，但是否受光仍沿用
+    // UE 延迟光照预处理语义中的底层 NoL 门限与余弦项。
+    float topNdotV = clamp(
+        abs(dot(topNormal, viewDirection)) + 1e-5,
+        0.0,
+        1.0);
+    float topNdotH = max(dot(topNormal, halfDirection), 0.0);
+    float coatRoughness = GetUeClearCoatRoughness(clearCoatRoughness);
+    float coatAlpha = coatRoughness * coatRoughness;
+    float coatAlphaSquared = coatAlpha * coatAlpha;
+    float coatFresnel = UeClearCoatFresnel(VdotH);
+    float coatDistribution = DistributionGgxUe(
+        coatAlphaSquared,
+        topNdotH);
+    float coatVisibility = VisibilitySmithJointApproxUe(
+        coatAlphaSquared,
+        topNdotV,
+        bottomNdotL);
+    // 顶层只包含固定介质 GGX 高光，强度由 Clear Coat Weight 控制。
+    vec3 topLayer =
+        radiance * bottomNdotL *
+        coatDistribution * coatVisibility * coatFresnel *
+        clearCoatWeight;
+
+    // 同时计算未穿过清漆的默认底层响应，以及穿过清漆后的折射底层响应，
+    // 最后按 Clear Coat Weight 混合；Weight=0 时选择未折射的底层分支。
+    UeClearCoatRefractionContext refracted =
+        RefractClearCoatContext(
+            bottomNdotV,
+            bottomNdotL,
+            bottomNdotH,
+            VdotH);
+    float bottomAlphaSquared =
+        roughness * roughness * roughness * roughness;
+    float bottomDistribution = DistributionGgxUe(
+        bottomAlphaSquared,
+        bottomNdotH);
+    float defaultVisibility = VisibilitySmithJointApproxUe(
+        bottomAlphaSquared,
+        bottomNdotV,
+        bottomNdotL);
+
+    float refractedVisibility = VisibilitySmithJointApproxUe(
+        bottomAlphaSquared,
+        refracted.NdotV,
+        refracted.NdotL);
+
+    vec3 defaultCommonSpecular =
+        radiance * bottomNdotL *
+        bottomDistribution * defaultVisibility;
+
+    vec3 refractedCommonSpecular =
+        radiance * bottomNdotL *
+        bottomDistribution * refractedVisibility;
+
+    vec3 bottomF0 = mix(vec3(0.04), baseColor, metallic);
+
+    vec3 defaultSpecular =
+        defaultCommonSpecular *
+        FresnelSchlickUe(bottomF0, VdotH);
+
+    // 光线进入和离开清漆各经历一次 Fresnel 透射，因此使用 (1-F)^2。
+    float fresnelTransmission = 1.0 - coatFresnel;
+    fresnelTransmission *= fresnelTransmission;
+
+    // 介质吸收只作用于穿过清漆的底层分量，不影响顶层直接反射。
+    vec3 mediumTransmission = SimpleClearCoatTransmittance(
+        refracted.NdotL,
+        refracted.NdotV,
+        metallic,
+        baseColor);
+
+    vec3 refractedSpecular =
+        refractedCommonSpecular *
+        fresnelTransmission *
+        mediumTransmission *
+        FresnelSchlickUe(bottomF0, refracted.VdotH);
+
+    vec3 defaultDiffuse =
+        radiance * bottomNdotL *
+        baseColor * (1.0 - metallic) / PI;
+    vec3 refractedDiffuse =
+        defaultDiffuse *
+        fresnelTransmission * mediumTransmission;
+
+    vec3 defaultBottomLayer =
+        defaultDiffuse + defaultSpecular;
+
+    vec3 refractedBottomLayer =
+        refractedDiffuse + refractedSpecular;
+
+    vec3 bottomLayer = mix(
+        defaultBottomLayer,
+        refractedBottomLayer,
+        clearCoatWeight);
+    return bottomLayer + topLayer;
+}
+
 vec3 CalculateDirectionalLight(
     in vec3 normal_WS,
     in vec3 pixelPos_WS,
@@ -353,43 +777,49 @@ vec3 CalculateDirectionalLight(
     in Light directionalLight
 )
 {
-    // 根据金属度计算 F0：金属用 col，非金属用 0.04
-    vec3 F0 = mix(vec3(0.04), baseColor, metallic);
-
     // 提取点光源的位置、半径、颜色、强度
     vec3 lightColor = directionalLight.colorIntensity.xyz;
     float lightIntensity = directionalLight.colorIntensity.w;
     vec3 lightDirection_WS = directionalLight.directionPad.xyz;
-
-    // 中间量计算
-    vec3 N = normalize(normal_WS);
-    vec3 L = normalize(-lightDirection_WS);
-    vec3 V = normalize(cameraPos_WS - pixelPos_WS);
-    vec3 H = normalize(L + V);
-
-    float NdotL = max(dot(N, L), 0.0);
-    float NdotV = max(dot(N, V), 0.0);
-
     vec3 radiance = lightIntensity * lightColor;
+    return EvaluateDefaultPbrLight(
+        normal_WS,
+        pixelPos_WS,
+        cameraPos_WS,
+        baseColor,
+        roughness,
+        metallic,
+        normalize(-lightDirection_WS),
+        radiance);
+}
 
-    // Cook-Torrance BRDF
-    float D = DistributionGGX(N, H, roughness);
-    float G = GeometrySmith(N, V, L, roughness);
-    float cosTheta = max(dot(H, V), 0.0);
-    vec3  F = fresnelSchlick(cosTheta, F0);
-
-    vec3 kS = F;
-        // 金属没有漫反射！光线进入金属内部后会被自由电子迅速吸收并转化为热能。所以纯金属的漫反射颜色应该是黑色（0）
-    vec3 kD = (vec3(1.0) - kS) * (1.0 - metallic);
-
-    // BRDF 分量
-    vec3 diffuseBRDF  = kD * baseColor / PI;
-    // 注意：分母中的 4*NdotL*NdotV 已在 GeometrySmith 中体现，这里直接乘上 NdotL
-    vec3 specularBRDF = kS * D * G / max(4.0 * NdotL * NdotV, 1e-4);
-
-    // 最终颜色
-    vec3 color = (diffuseBRDF + specularBRDF) * radiance * NdotL;
-    return color;
+vec3 CalculateClearCoatDirectionalLight(
+    in vec3 topNormal_WS,
+    in vec3 bottomNormal_WS,
+    in vec3 pixelPos_WS,
+    in vec3 cameraPos_WS,
+    in vec3 baseColor,
+    in float roughness,
+    in float metallic,
+    in float clearCoatWeight,
+    in float clearCoatRoughness,
+    in Light directionalLight)
+{
+    vec3 radiance =
+        directionalLight.colorIntensity.xyz *
+        directionalLight.colorIntensity.w;
+    return EvaluateUeClearCoatLight(
+        topNormal_WS,
+        bottomNormal_WS,
+        pixelPos_WS,
+        cameraPos_WS,
+        baseColor,
+        roughness,
+        metallic,
+        clearCoatWeight,
+        clearCoatRoughness,
+        normalize(-directionalLight.directionPad.xyz),
+        radiance);
 }
 
 vec3 CalculatePointLight(
@@ -401,23 +831,11 @@ vec3 CalculatePointLight(
     in float metallic,
     in Light pointLight)
 {
-    // 根据金属度计算 F0：金属用 baseColor，非金属用 0.04
-    vec3 F0 = mix(vec3(0.04), baseColor, metallic);
-
     // 提取点光源的位置、半径、颜色、强度
     vec3 lightColor = pointLight.colorIntensity.xyz;
     float lightIntensity = pointLight.colorIntensity.w;
     vec3 lightPos_WS = pointLight.positionRadius.xyz;
     float lightRadius = pointLight.positionRadius.w;
-
-    // 中间量计算
-    vec3 N = normalize(normal_WS);
-    vec3 L = normalize(lightPos_WS - pixelPos_WS);
-    vec3 V = normalize(cameraPos_WS - pixelPos_WS);
-    vec3 H = normalize(L + V);
-
-    float NdotL = max(dot(N, L), 0.0);
-    float NdotV = max(dot(N, V), 0.0);
 
     // 距离衰减：平方反比，并额外用 lightRadius 做平滑截断
     float distance = length(lightPos_WS - pixelPos_WS);
@@ -425,23 +843,48 @@ vec3 CalculatePointLight(
     float attenuation = 1.0 / denom;
     //attenuation *= 1.0 - smoothstep(lightRadius * 0.8, lightRadius, distance);
     vec3 radiance = attenuation * lightIntensity * lightColor;
+    return EvaluateDefaultPbrLight(
+        normal_WS,
+        pixelPos_WS,
+        cameraPos_WS,
+        baseColor,
+        roughness,
+        metallic,
+        normalize(lightPos_WS - pixelPos_WS),
+        radiance);
+}
 
-    // Cook-Torrance BRDF
-    float D = DistributionGGX(N, H, roughness);
-    float G = GeometrySmith(N, V, L, roughness);
-    vec3  F = fresnelSchlick(max(dot(H, V), 0.0), F0);
-
-    vec3 kS = F;
-    vec3 kD = (vec3(1.0) - kS) * (1.0 - metallic);
-
-    // BRDF 分量
-    vec3 diffuseBRDF  = kD * baseColor / PI;
-    // 注意：分母中的 4*NdotL*NdotV 已在 GeometrySmith 中体现，这里直接乘上 NdotL
-    vec3 specularBRDF = kS * D * G / max(4.0 * NdotL * NdotV, 1e-4);
-
-    // 最终颜色
-    vec3 color = (diffuseBRDF + specularBRDF) * radiance * NdotL;
-    return color;
+vec3 CalculateClearCoatPointLight(
+    in vec3 topNormal_WS,
+    in vec3 bottomNormal_WS,
+    in vec3 pixelPos_WS,
+    in vec3 cameraPos_WS,
+    in vec3 baseColor,
+    in float roughness,
+    in float metallic,
+    in float clearCoatWeight,
+    in float clearCoatRoughness,
+    in Light pointLight)
+{
+    vec3 lightOffset = pointLight.positionRadius.xyz - pixelPos_WS;
+    float distance = length(lightOffset);
+    float attenuation = 1.0 / (distance * distance + 1e-4);
+    vec3 radiance =
+        attenuation *
+        pointLight.colorIntensity.w *
+        pointLight.colorIntensity.xyz;
+    return EvaluateUeClearCoatLight(
+        topNormal_WS,
+        bottomNormal_WS,
+        pixelPos_WS,
+        cameraPos_WS,
+        baseColor,
+        roughness,
+        metallic,
+        clearCoatWeight,
+        clearCoatRoughness,
+        normalize(lightOffset),
+        radiance);
 }
 
 vec3 CalculateSpotLight(
@@ -453,9 +896,6 @@ vec3 CalculateSpotLight(
     in float metallic,
     in Light spotLight)
 {
-    // 根据金属度计算 F0：金属用 baseColor，非金属用 0.04
-    vec3 F0 = mix(vec3(0.04), baseColor, metallic);
-
     // 提取点光源的位置、半径、颜色、强度
     vec3 lightColor = spotLight.colorIntensity.xyz;
     float lightIntensity = spotLight.colorIntensity.w;
@@ -464,18 +904,10 @@ vec3 CalculateSpotLight(
     vec3 lightDirection_WS = spotLight.directionPad.xyz;
     float outerConeAngle = spotLight.coneAngleOuterInnerPadPad.x;
     float innerConeAngle = spotLight.coneAngleOuterInnerPadPad.y;
-    
-    // 中间量计算
-    vec3 N = normalize(normal_WS);
-    vec3 L = normalize(lightPos_WS - pixelPos_WS);
-    vec3 V = normalize(cameraPos_WS - pixelPos_WS);
-    vec3 H = normalize(L + V);
-
-    float NdotL = max(dot(N, L), 0.0);
-    float NdotV = max(dot(N, V), 0.0);
 
     // 聚光灯角度
-    float spotLightAngle = acos(dot(L, -lightDirection_WS));
+    vec3 lightDirectionToSurface_WS = normalize(lightPos_WS - pixelPos_WS);
+    float spotLightAngle = acos(dot(lightDirectionToSurface_WS, -lightDirection_WS));
     float epsilon = innerConeAngle - outerConeAngle;
     float angleIntensity = clamp((spotLightAngle - outerConeAngle) / epsilon, 0.0, 1.0);
     lightIntensity *= angleIntensity;
@@ -486,23 +918,60 @@ vec3 CalculateSpotLight(
     float attenuation = 1.0 / denom;
     //attenuation *= 1.0 - smoothstep(lightRadius * 0.8, lightRadius, distance);
     vec3 radiance = attenuation * lightIntensity * lightColor;
+    return EvaluateDefaultPbrLight(
+        normal_WS,
+        pixelPos_WS,
+        cameraPos_WS,
+        baseColor,
+        roughness,
+        metallic,
+        lightDirectionToSurface_WS,
+        radiance);
+}
 
-    // Cook-Torrance BRDF
-    float D = DistributionGGX(N, H, roughness);
-    float G = GeometrySmith(N, V, L, roughness);
-    vec3  F = fresnelSchlick(max(dot(H, V), 0.0), F0);
-
-    vec3 kS = F;
-    vec3 kD = (vec3(1.0) - kS) * (1.0 - metallic);
-
-    // BRDF 分量
-    vec3 diffuseBRDF  = kD * baseColor / PI;
-    // 注意：分母中的 4*NdotL*NdotV 已在 GeometrySmith 中体现，这里直接乘上 NdotL
-    vec3 specularBRDF = kS * D * G / max(4.0 * NdotL * NdotV, 1e-4);
-
-    // 最终颜色
-    vec3 color = (diffuseBRDF + specularBRDF) * radiance * NdotL;
-    return color;
+vec3 CalculateClearCoatSpotLight(
+    in vec3 topNormal_WS,
+    in vec3 bottomNormal_WS,
+    in vec3 pixelPos_WS,
+    in vec3 cameraPos_WS,
+    in vec3 baseColor,
+    in float roughness,
+    in float metallic,
+    in float clearCoatWeight,
+    in float clearCoatRoughness,
+    in Light spotLight)
+{
+    vec3 lightOffset = spotLight.positionRadius.xyz - pixelPos_WS;
+    vec3 lightDirectionToSurface_WS = normalize(lightOffset);
+    float spotLightAngle = acos(dot(
+        lightDirectionToSurface_WS,
+        -spotLight.directionPad.xyz));
+    float angleRange =
+        spotLight.coneAngleOuterInnerPadPad.y -
+        spotLight.coneAngleOuterInnerPadPad.x;
+    float angleIntensity = clamp(
+        (spotLightAngle - spotLight.coneAngleOuterInnerPadPad.x) /
+            angleRange,
+        0.0,
+        1.0);
+    float distance = length(lightOffset);
+    float attenuation = 1.0 / (distance * distance + 1e-4);
+    vec3 radiance =
+        attenuation * angleIntensity *
+        spotLight.colorIntensity.w *
+        spotLight.colorIntensity.xyz;
+    return EvaluateUeClearCoatLight(
+        topNormal_WS,
+        bottomNormal_WS,
+        pixelPos_WS,
+        cameraPos_WS,
+        baseColor,
+        roughness,
+        metallic,
+        clearCoatWeight,
+        clearCoatRoughness,
+        lightDirectionToSurface_WS,
+        radiance);
 }
 
 vec3 CalculateDirectLighting(
@@ -562,6 +1031,71 @@ vec3 CalculateDirectLighting(
                                 uboLight.lights[i]);
     }
 
+    return lighting;
+}
+
+vec3 CalculateClearCoatDirectLighting(
+    in vec3 topNormal_WS,
+    in vec3 bottomNormal_WS,
+    in vec3 pixelPos_WS,
+    in vec3 cameraPos_WS,
+    in vec3 baseColor,
+    in float roughness,
+    in float metallic,
+    in float clearCoatWeight,
+    in float clearCoatRoughness)
+{
+    vec3 lighting = vec3(0.0);
+    int offset = uboLight.directionalLightOffset;
+    int end = offset + uboLight.directionalLightCount;
+    for (int i = offset; i < end; ++i)
+    {
+        lighting += CalculateClearCoatDirectionalLight(
+            topNormal_WS,
+            bottomNormal_WS,
+            pixelPos_WS,
+            cameraPos_WS,
+            baseColor,
+            roughness,
+            metallic,
+            clearCoatWeight,
+            clearCoatRoughness,
+            uboLight.lights[i]);
+    }
+
+    offset = uboLight.pointLightOffset;
+    end = offset + uboLight.pointLightCount;
+    for (int i = offset; i < end; ++i)
+    {
+        lighting += CalculateClearCoatPointLight(
+            topNormal_WS,
+            bottomNormal_WS,
+            pixelPos_WS,
+            cameraPos_WS,
+            baseColor,
+            roughness,
+            metallic,
+            clearCoatWeight,
+            clearCoatRoughness,
+            uboLight.lights[i]);
+    }
+
+    offset = uboLight.spotLightOffset;
+    end = offset + uboLight.spotLightCount;
+    for (int i = offset; i < end; ++i)
+    {
+        lighting += CalculateClearCoatSpotLight(
+            topNormal_WS,
+            bottomNormal_WS,
+            pixelPos_WS,
+            cameraPos_WS,
+            baseColor,
+            roughness,
+            metallic,
+            clearCoatWeight,
+            clearCoatRoughness,
+            uboLight.lights[i]);
+    }
     return lighting;
 }
 
