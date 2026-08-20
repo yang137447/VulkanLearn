@@ -151,9 +151,9 @@ MaterialShadowPipelineBuildResult BuildMaterialShadowPipeline(
 
     const bool hasExplicitOverride = pairState == ShadowShaderPairState::Complete;
     const RenderMode renderMode = loadPlan.shaderVariantKey.renderMode;
-    const bool isTransparent =
-        renderMode == RenderMode::TransparentAlphaBlend ||
-        renderMode == RenderMode::TransparentAdditive;
+    // ThinTranslucent 与其它透明模式一样不自动生成普通 Shadow Map；只有显式 shadow
+    // override 才能表达作者确实需要的投影行为。
+    const bool isTransparent = IsTransparentRenderMode(renderMode);
     // 透明材質只有顯式 override 才進普通 Shadow Map；WPO 本身不等於投影意圖。
     const bool requiresGeneratedPass = !isTransparent &&
         RequiresMaterialShadowPass(loadPlan.materialFeatureKey);

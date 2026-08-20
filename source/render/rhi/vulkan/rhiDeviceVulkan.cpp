@@ -141,6 +141,12 @@ uint32_t RHIDeviceVulkan::GetGraphicsTimestampValidBits()
     return VulkanManager::GetInstance().GetGraphicsQueueTimestampValidBits();
 }
 
+bool RHIDeviceVulkan::IsDualSourceBlendEnabled() const
+{
+    // 由 VulkanManager 返回创建逻辑设备时实际启用的状态，避免误用仅物理支持的结果。
+    return VulkanManager::GetInstance().IsDualSourceBlendEnabled();
+}
+
 vk::QueryPool RHIDeviceVulkan::CreateTimestampQueryPool(
     uint32_t queryCount,
     const std::string& debugName)

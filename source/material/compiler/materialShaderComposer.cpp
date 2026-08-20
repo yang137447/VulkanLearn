@@ -62,6 +62,17 @@ std::string BuildStageSource(
 {
     std::ostringstream stream;
     stream << "#version 450\n\n";
+    // index=1 的第二颜色源只在 fragment stage 使用。仅对已确认启用双源混合的
+    // Thin Translucent variant 声明扩展，避免普通材质无故增加平台编译要求。
+    if (!vertexStage &&
+        request.shaderVariantKey.renderMode == RenderMode::ThinTranslucent &&
+        HasMaterialMacroValue(
+            request.shaderVariantKey.macros,
+            kThinTranslucentDualSourceMacro,
+            "1"))
+    {
+        stream << "#extension GL_EXT_blend_func_extended : require\n\n";
+    }
     stream << BuildFeatureDefines(request.features);
 
     if (vertexStage)

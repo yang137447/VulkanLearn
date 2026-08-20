@@ -337,51 +337,6 @@ vec3 FresnelSchlickUe(vec3 specularColor, float cosine)
         (1.0 - fresnelCurve) * specularColor;
 }
 
-void CalculateUeClearCoatIndirectColors(
-    in vec3 baseColor,
-    in float roughness,
-    in float metallic,
-    in float clearCoatWeight,
-    in float topNdotV,
-    out vec3 diffuseColor,
-    out vec3 specularColor)
-{
-    // UE Legacy Clear Coat 的间接光不是简单在 Default Lit 上叠一层高光。
-    // 这里先根据顶层视角、底层粗糙度和金属度重映射底层 diffuse/specular 颜色，
-    // 使底层在清漆折射和吸收之后仍与 UE 的能量分配保持一致。
-    float refractionScale =
-        ((topNdotV * 0.5 + 0.5) * topNdotV - 1.0) *
-        clamp(1.25 - 1.25 * roughness, 0.0, 1.0) +
-        1.0;
-
-    const float metalSpecular = 0.9;
-    vec3 absorptionColor = baseColor / metalSpecular;
-    vec3 absorption =
-        absorptionColor *
-        ((topNdotV - 1.0) * 0.85 *
-            (vec3(1.0) - mix(
-                absorptionColor,
-                absorptionColor * absorptionColor,
-                -0.78)) +
-        vec3(1.0));
-
-    float layerAttenuation = mix(
-        1.0,
-        1.0 - UeClearCoatFresnel(topNdotV),
-        clearCoatWeight);
-    vec3 remappedBaseColor = mix(
-        baseColor * layerAttenuation,
-        metalSpecular * absorption * refractionScale,
-        metallic * clearCoatWeight);
-    diffuseColor = remappedBaseColor * (1.0 - metallic);
-
-    float specular = mix(0.5, refractionScale, clearCoatWeight);
-    specularColor = mix(
-        vec3(0.08 * specular),
-        remappedBaseColor,
-        metallic);
-}
-
 vec3 CalculateClearCoatDiffuseIbl(
     in vec3 topNormal_WS,
     in vec3 bottomNormal_WS,
@@ -391,24 +346,22 @@ vec3 CalculateClearCoatDiffuseIbl(
     in float metallic,
     in float clearCoatWeight)
 {
-    vec3 topNormal = normalize(topNormal_WS);
+    // 清漆底层不再使用独立的 UE 颜色重映射，而是直接复用 Default Lit 漫反射 IBL。
+    // 顶层 Fresnel 只负责减少能够进入底漆的环境能量，保证基层 BRDF 与 Default Lit 一致。
     vec3 viewDir = normalize(viewDir_WS);
-    float topNdotV = clamp(abs(dot(topNormal, viewDir)) + 1e-5, 0.0, 1.0);
-    vec3 diffuseColor;
-    vec3 unusedSpecularColor;
-    CalculateUeClearCoatIndirectColors(
+    vec3 topNormal = normalize(topNormal_WS);
+    float topNdotV = clamp(
+        abs(dot(topNormal, viewDir)) + 1e-5,
+        0.0,
+        1.0);
+    float coatTransmission = mix(
+        1.0,
+        1.0 - UeClearCoatFresnel(topNdotV),
+        clearCoatWeight);
+    return CalculateDiffuseIbl(
+        bottomNormal_WS,
         baseColor,
-        roughness,
-        metallic,
-        clearCoatWeight,
-        topNdotV,
-        diffuseColor,
-        unusedSpecularColor);
-    // 漫反射来自清漆下方的底层，因此球谐辐照度使用 bottom normal 采样。
-    return
-        EvaluateIrradianceSH(bottomNormal_WS) *
-        diffuseColor /
-        PI;
+        metallic) * coatTransmission;
 }
 
 vec3 CalculateClearCoatSpecularIbl(
@@ -421,37 +374,19 @@ vec3 CalculateClearCoatSpecularIbl(
     in float clearCoatWeight,
     in float clearCoatRoughness)
 {
+    // 底漆环境高光复用 Default Lit 的法线、粗糙度、金属度和 F0；顶层清漆仍使用
+    // 独立粗糙度与固定 F0=0.04 的环境高光，二者按顶层 Fresnel 分配能量。
     vec3 topNormal = normalize(topNormal_WS);
-    vec3 bottomNormal = normalize(bottomNormal_WS);
     vec3 viewDir = normalize(viewDir_WS);
 
     // 对齐 UE 稳定 NoV 约定：双面情况下使用绝对值，并把 BRDF LUT 坐标限制在有效范围。
     float topNdotV = clamp(abs(dot(topNormal, viewDir)) + 1e-5, 0.0, 1.0);
-    float bottomNdotV = clamp(abs(dot(bottomNormal, viewDir)) + 1e-5, 0.0, 1.0);
-
-    vec3 unusedDiffuseColor;
-    vec3 specularColor;
-    CalculateUeClearCoatIndirectColors(
-        baseColor,
-        roughness,
-        metallic,
-        clearCoatWeight,
-        topNdotV,
-        unusedDiffuseColor,
-        specularColor);
-
-    // 底层环境高光使用底层法线、底层粗糙度和重映射后的 specularColor。
-    vec3 bottomEnvironment = SamplePrefilteredEnvironment(
+    vec3 bottomLayer = CalculateSpecularIbl(
         bottomNormal_WS,
         viewDir_WS,
-        roughness);
-    vec2 bottomBrdf = SampleEnvironmentBrdf(bottomNdotV, roughness);
-    vec3 bottomFactor =
-        specularColor * bottomBrdf.x +
-        bottomBrdf.y *
-            clamp(50.0 * specularColor.g, 0.0, 1.0) *
-            (1.0 - clearCoatWeight);
-    vec3 bottomLayer = bottomEnvironment * bottomFactor;
+        baseColor,
+        roughness,
+        metallic);
 
     float coatRoughness = GetUeClearCoatRoughness(clearCoatRoughness);
 
@@ -469,9 +404,8 @@ vec3 CalculateClearCoatSpecularIbl(
 
     // topFresnel 同时决定顶层反射能量以及能进入底层的剩余能量。
     return
-        (bottomLayer * (1.0 - topFresnel) +
-            topEnvironment * topFresnel) *
-        uboVP.environmentIntensity;
+        bottomLayer * (1.0 - topFresnel) +
+        topEnvironment * topFresnel * uboVP.environmentIntensity;
 }
 
 // 间接光总入口。目前只封装 diffuse IBL，后续可继续并入 specular IBL、
@@ -609,7 +543,22 @@ vec3 SimpleClearCoatTransmittance(
     return transmittance;
 }
 
-vec3 EvaluateDefaultPbrLight(
+struct LightingLobes
+{
+    // 将直接光拆开，Thin Translucent 才能只对 diffuse/emissive 应用 RootOpacity。
+    vec3 diffuse;
+    vec3 specular;
+};
+
+LightingLobes CreateLightingLobes()
+{
+    LightingLobes lobes;
+    lobes.diffuse = vec3(0.0);
+    lobes.specular = vec3(0.0);
+    return lobes;
+}
+
+LightingLobes EvaluateDefaultPbrLightLobes(
     in vec3 normal_WS,
     in vec3 pixelPos_WS,
     in vec3 cameraPos_WS,
@@ -619,6 +568,8 @@ vec3 EvaluateDefaultPbrLight(
     in vec3 lightDirection_WS,
     in vec3 radiance)
 {
+    // 这是当前 renderer 的 Default Lit 基准 BRDF。DefaultLit、ClearCoat 底漆和
+    // Thin Translucent 表面反射都必须从这里取值，避免三条路径逐渐产生数值漂移。
     vec3 N = normalize(normal_WS);
     vec3 L = normalize(lightDirection_WS);
     vec3 V = normalize(cameraPos_WS - pixelPos_WS);
@@ -631,14 +582,17 @@ vec3 EvaluateDefaultPbrLight(
     vec3 diffuseWeight = (vec3(1.0) - F) * (1.0 - metallic);
     float distribution = DistributionGGX(N, H, roughness);
     float geometry = GeometrySmith(N, V, L, roughness);
-    vec3 diffuseBrdf = diffuseWeight * baseColor / PI;
-    vec3 specularBrdf =
+    LightingLobes lobes;
+    lobes.diffuse =
+        diffuseWeight * baseColor / PI * radiance * NdotL;
+    lobes.specular =
         F * distribution * geometry /
-        max(4.0 * NdotL * NdotV, 1e-4);
-    return (diffuseBrdf + specularBrdf) * radiance * NdotL;
+        max(4.0 * NdotL * NdotV, 1e-4) *
+        radiance * NdotL;
+    return lobes;
 }
 
-vec3 EvaluateUeClearCoatLight(
+vec3 EvaluateClearCoatLight(
     in vec3 topNormal_WS,
     in vec3 bottomNormal_WS,
     in vec3 pixelPos_WS,
@@ -651,6 +605,8 @@ vec3 EvaluateUeClearCoatLight(
     in vec3 lightDirection_WS,
     in vec3 radiance)
 {
+    // 清漆只保留顶层 UE Legacy 特化；底层直接光通过共享 Default Lit lobe 计算。
+    // 因此本函数的特殊数学只影响顶层反射、清漆透射和底层介质吸收。
     vec3 topNormal = normalize(topNormal_WS);
     vec3 bottomNormal = normalize(bottomNormal_WS);
     vec3 lightDirection = normalize(lightDirection_WS);
@@ -701,34 +657,18 @@ vec3 EvaluateUeClearCoatLight(
             bottomNdotL,
             bottomNdotH,
             VdotH);
-    float bottomAlphaSquared =
-        roughness * roughness * roughness * roughness;
-    float bottomDistribution = DistributionGgxUe(
-        bottomAlphaSquared,
-        bottomNdotH);
-    float defaultVisibility = VisibilitySmithJointApproxUe(
-        bottomAlphaSquared,
-        bottomNdotV,
-        bottomNdotL);
-
-    float refractedVisibility = VisibilitySmithJointApproxUe(
-        bottomAlphaSquared,
-        refracted.NdotV,
-        refracted.NdotL);
-
-    vec3 defaultCommonSpecular =
-        radiance * bottomNdotL *
-        bottomDistribution * defaultVisibility;
-
-    vec3 refractedCommonSpecular =
-        radiance * bottomNdotL *
-        bottomDistribution * refractedVisibility;
-
-    vec3 bottomF0 = mix(vec3(0.04), baseColor, metallic);
-
-    vec3 defaultSpecular =
-        defaultCommonSpecular *
-        FresnelSchlickUe(bottomF0, VdotH);
+    LightingLobes defaultBottomLobes =
+        EvaluateDefaultPbrLightLobes(
+            bottomNormal,
+            pixelPos_WS,
+            cameraPos_WS,
+            baseColor,
+            roughness,
+            metallic,
+            lightDirection,
+            radiance);
+    vec3 defaultBottomLayer =
+        defaultBottomLobes.diffuse + defaultBottomLobes.specular;
 
     // 光线进入和离开清漆各经历一次 Fresnel 透射，因此使用 (1-F)^2。
     float fresnelTransmission = 1.0 - coatFresnel;
@@ -741,24 +681,10 @@ vec3 EvaluateUeClearCoatLight(
         metallic,
         baseColor);
 
-    vec3 refractedSpecular =
-        refractedCommonSpecular *
-        fresnelTransmission *
-        mediumTransmission *
-        FresnelSchlickUe(bottomF0, refracted.VdotH);
-
-    vec3 defaultDiffuse =
-        radiance * bottomNdotL *
-        baseColor * (1.0 - metallic) / PI;
-    vec3 refractedDiffuse =
-        defaultDiffuse *
-        fresnelTransmission * mediumTransmission;
-
-    vec3 defaultBottomLayer =
-        defaultDiffuse + defaultSpecular;
-
     vec3 refractedBottomLayer =
-        refractedDiffuse + refractedSpecular;
+        defaultBottomLayer *
+        fresnelTransmission *
+        mediumTransmission;
 
     vec3 bottomLayer = mix(
         defaultBottomLayer,
@@ -767,29 +693,26 @@ vec3 EvaluateUeClearCoatLight(
     return bottomLayer + topLayer;
 }
 
-vec3 CalculateDirectionalLight(
+LightingLobes CalculateDirectionalLightLobes(
     in vec3 normal_WS,
     in vec3 pixelPos_WS,
     in vec3 cameraPos_WS,
     in vec3 baseColor,
     in float roughness,
     in float metallic,
-    in Light directionalLight
-)
+    in Light directionalLight)
 {
-    // 提取点光源的位置、半径、颜色、强度
-    vec3 lightColor = directionalLight.colorIntensity.xyz;
-    float lightIntensity = directionalLight.colorIntensity.w;
-    vec3 lightDirection_WS = directionalLight.directionPad.xyz;
-    vec3 radiance = lightIntensity * lightColor;
-    return EvaluateDefaultPbrLight(
+    vec3 radiance =
+        directionalLight.colorIntensity.xyz *
+        directionalLight.colorIntensity.w;
+    return EvaluateDefaultPbrLightLobes(
         normal_WS,
         pixelPos_WS,
         cameraPos_WS,
         baseColor,
         roughness,
         metallic,
-        normalize(-lightDirection_WS),
+        normalize(-directionalLight.directionPad.xyz),
         radiance);
 }
 
@@ -808,7 +731,7 @@ vec3 CalculateClearCoatDirectionalLight(
     vec3 radiance =
         directionalLight.colorIntensity.xyz *
         directionalLight.colorIntensity.w;
-    return EvaluateUeClearCoatLight(
+    return EvaluateClearCoatLight(
         topNormal_WS,
         bottomNormal_WS,
         pixelPos_WS,
@@ -822,7 +745,7 @@ vec3 CalculateClearCoatDirectionalLight(
         radiance);
 }
 
-vec3 CalculatePointLight(
+LightingLobes CalculatePointLightLobes(
     in vec3 normal_WS,
     in vec3 pixelPos_WS,
     in vec3 cameraPos_WS,
@@ -831,26 +754,21 @@ vec3 CalculatePointLight(
     in float metallic,
     in Light pointLight)
 {
-    // 提取点光源的位置、半径、颜色、强度
-    vec3 lightColor = pointLight.colorIntensity.xyz;
-    float lightIntensity = pointLight.colorIntensity.w;
-    vec3 lightPos_WS = pointLight.positionRadius.xyz;
-    float lightRadius = pointLight.positionRadius.w;
-
-    // 距离衰减：平方反比，并额外用 lightRadius 做平滑截断
-    float distance = length(lightPos_WS - pixelPos_WS);
-    float denom = distance * distance + 1e-4;
-    float attenuation = 1.0 / denom;
-    //attenuation *= 1.0 - smoothstep(lightRadius * 0.8, lightRadius, distance);
-    vec3 radiance = attenuation * lightIntensity * lightColor;
-    return EvaluateDefaultPbrLight(
+    vec3 lightOffset = pointLight.positionRadius.xyz - pixelPos_WS;
+    float distance = length(lightOffset);
+    float attenuation = 1.0 / (distance * distance + 1e-4);
+    vec3 radiance =
+        attenuation *
+        pointLight.colorIntensity.w *
+        pointLight.colorIntensity.xyz;
+    return EvaluateDefaultPbrLightLobes(
         normal_WS,
         pixelPos_WS,
         cameraPos_WS,
         baseColor,
         roughness,
         metallic,
-        normalize(lightPos_WS - pixelPos_WS),
+        normalize(lightOffset),
         radiance);
 }
 
@@ -873,7 +791,7 @@ vec3 CalculateClearCoatPointLight(
         attenuation *
         pointLight.colorIntensity.w *
         pointLight.colorIntensity.xyz;
-    return EvaluateUeClearCoatLight(
+    return EvaluateClearCoatLight(
         topNormal_WS,
         bottomNormal_WS,
         pixelPos_WS,
@@ -884,48 +802,6 @@ vec3 CalculateClearCoatPointLight(
         clearCoatWeight,
         clearCoatRoughness,
         normalize(lightOffset),
-        radiance);
-}
-
-vec3 CalculateSpotLight(
-    in vec3 normal_WS,
-    in vec3 pixelPos_WS,
-    in vec3 cameraPos_WS,
-    in vec3 baseColor,
-    in float roughness,
-    in float metallic,
-    in Light spotLight)
-{
-    // 提取点光源的位置、半径、颜色、强度
-    vec3 lightColor = spotLight.colorIntensity.xyz;
-    float lightIntensity = spotLight.colorIntensity.w;
-    vec3 lightPos_WS = spotLight.positionRadius.xyz;
-    float lightRadius = spotLight.positionRadius.w;
-    vec3 lightDirection_WS = spotLight.directionPad.xyz;
-    float outerConeAngle = spotLight.coneAngleOuterInnerPadPad.x;
-    float innerConeAngle = spotLight.coneAngleOuterInnerPadPad.y;
-
-    // 聚光灯角度
-    vec3 lightDirectionToSurface_WS = normalize(lightPos_WS - pixelPos_WS);
-    float spotLightAngle = acos(dot(lightDirectionToSurface_WS, -lightDirection_WS));
-    float epsilon = innerConeAngle - outerConeAngle;
-    float angleIntensity = clamp((spotLightAngle - outerConeAngle) / epsilon, 0.0, 1.0);
-    lightIntensity *= angleIntensity;
-
-    // 距离衰减：平方反比，并额外用 lightRadius 做平滑截断
-    float distance = length(lightPos_WS - pixelPos_WS);
-    float denom = distance * distance + 1e-4;
-    float attenuation = 1.0 / denom;
-    //attenuation *= 1.0 - smoothstep(lightRadius * 0.8, lightRadius, distance);
-    vec3 radiance = attenuation * lightIntensity * lightColor;
-    return EvaluateDefaultPbrLight(
-        normal_WS,
-        pixelPos_WS,
-        cameraPos_WS,
-        baseColor,
-        roughness,
-        metallic,
-        lightDirectionToSurface_WS,
         radiance);
 }
 
@@ -960,7 +836,7 @@ vec3 CalculateClearCoatSpotLight(
         attenuation * angleIntensity *
         spotLight.colorIntensity.w *
         spotLight.colorIntensity.xyz;
-    return EvaluateUeClearCoatLight(
+    return EvaluateClearCoatLight(
         topNormal_WS,
         bottomNormal_WS,
         pixelPos_WS,
@@ -974,6 +850,108 @@ vec3 CalculateClearCoatSpotLight(
         radiance);
 }
 
+LightingLobes CalculateSpotLightLobes(
+    in vec3 normal_WS,
+    in vec3 pixelPos_WS,
+    in vec3 cameraPos_WS,
+    in vec3 baseColor,
+    in float roughness,
+    in float metallic,
+    in Light spotLight)
+{
+    vec3 lightOffset = spotLight.positionRadius.xyz - pixelPos_WS;
+    vec3 lightDirectionToSurface_WS = normalize(lightOffset);
+    float spotLightAngle = acos(dot(
+        lightDirectionToSurface_WS,
+        -spotLight.directionPad.xyz));
+    float angleRange =
+        spotLight.coneAngleOuterInnerPadPad.y -
+        spotLight.coneAngleOuterInnerPadPad.x;
+    float angleIntensity = clamp(
+        (spotLightAngle - spotLight.coneAngleOuterInnerPadPad.x) /
+            angleRange,
+        0.0,
+        1.0);
+    float distance = length(lightOffset);
+    float attenuation = 1.0 / (distance * distance + 1e-4);
+    vec3 radiance =
+        attenuation * angleIntensity *
+        spotLight.colorIntensity.w *
+        spotLight.colorIntensity.xyz;
+    return EvaluateDefaultPbrLightLobes(
+        normal_WS,
+        pixelPos_WS,
+        cameraPos_WS,
+        baseColor,
+        roughness,
+        metallic,
+        lightDirectionToSurface_WS,
+        radiance);
+}
+
+LightingLobes CalculateDirectLightingLobes(
+    in vec3 normal_WS,
+    in vec3 pixelPos_WS,
+    in vec3 cameraPos_WS,
+    in vec3 baseColor,
+    in float roughness,
+    in float metallic)
+{
+    // 所有显式光源统一累积到同一组 lobe，DefaultLit 可直接相加，Thin 则保留分量。
+    LightingLobes lighting = CreateLightingLobes();
+    int offset = uboLight.directionalLightOffset;
+    int end = offset + uboLight.directionalLightCount;
+    for (int i = offset; i < end; ++i)
+    {
+        LightingLobes lightLobes =
+            CalculateDirectionalLightLobes(
+                normal_WS,
+                pixelPos_WS,
+                cameraPos_WS,
+                baseColor,
+                roughness,
+                metallic,
+                uboLight.lights[i]);
+        lighting.diffuse += lightLobes.diffuse;
+        lighting.specular += lightLobes.specular;
+    }
+
+    offset = uboLight.pointLightOffset;
+    end = offset + uboLight.pointLightCount;
+    for (int i = offset; i < end; ++i)
+    {
+        LightingLobes lightLobes =
+            CalculatePointLightLobes(
+                normal_WS,
+                pixelPos_WS,
+                cameraPos_WS,
+                baseColor,
+                roughness,
+                metallic,
+                uboLight.lights[i]);
+        lighting.diffuse += lightLobes.diffuse;
+        lighting.specular += lightLobes.specular;
+    }
+
+    offset = uboLight.spotLightOffset;
+    end = offset + uboLight.spotLightCount;
+    for (int i = offset; i < end; ++i)
+    {
+        LightingLobes lightLobes =
+            CalculateSpotLightLobes(
+                normal_WS,
+                pixelPos_WS,
+                cameraPos_WS,
+                baseColor,
+                roughness,
+                metallic,
+                uboLight.lights[i]);
+        lighting.diffuse += lightLobes.diffuse;
+        lighting.specular += lightLobes.specular;
+    }
+    return lighting;
+}
+
 vec3 CalculateDirectLighting(
     in vec3 normal_WS,
     in vec3 pixelPos_WS,
@@ -984,54 +962,14 @@ vec3 CalculateDirectLighting(
 )
 {
     // 直接光总入口：只聚合显式光源，不承担任何 IBL 或其他间接光职责。
-    vec3 lighting = vec3(0.0);
-    // 计算方向光
-    int offset = uboLight.directionalLightOffset;
-    int dirCount = uboLight.directionalLightCount;
-    int end = offset + dirCount;
-    for(int i = offset; i < end; i++)
-    {
-        lighting += CalculateDirectionalLight(
-                                normal_WS, 
-                                pixelPos_WS, 
-                                cameraPos_WS, 
-                                baseColor, 
-                                roughness, 
-                                metallic, 
-                                uboLight.lights[i]);
-    }
-    // 计算点光源
-    offset = uboLight.pointLightOffset;
-    int pointCount = uboLight.pointLightCount;
-    end = offset + pointCount;
-    for(int i = offset; i < end; i++)
-    {
-        lighting += CalculatePointLight(
-                                normal_WS, 
-                                pixelPos_WS, 
-                                cameraPos_WS, 
-                                baseColor, 
-                                roughness, 
-                                metallic, 
-                                uboLight.lights[i]);
-    }
-    // 计算聚光灯
-    offset = uboLight.spotLightOffset;
-    int spotCount = uboLight.spotLightCount;
-    end = offset + spotCount;
-    for(int i = offset; i < end; i++)
-    {
-        lighting += CalculateSpotLight(
-                                normal_WS, 
-                                pixelPos_WS, 
-                                cameraPos_WS, 
-                                baseColor, 
-                                roughness, 
-                                metallic, 
-                                uboLight.lights[i]);
-    }
-
-    return lighting;
+    LightingLobes lobes = CalculateDirectLightingLobes(
+        normal_WS,
+        pixelPos_WS,
+        cameraPos_WS,
+        baseColor,
+        roughness,
+        metallic);
+    return lobes.diffuse + lobes.specular;
 }
 
 vec3 CalculateClearCoatDirectLighting(

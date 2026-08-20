@@ -13,8 +13,8 @@
 #include "material/compiler/materialShaderCompileRequest.h"
 #include "material/materialDescriptorSchema.h"
 
-// 將已合併的 M_/MI_ 資料轉成材質 Feature、Set 1 Schema、編譯請求、
-// Pipeline 固定狀態與 cache identity；它不建立 GPU 資源。
+// 将已合并的 M_/MI_ 数据转换成材质 Feature、Set 1 Schema、编译请求、
+// Pipeline 固定状态与 cache identity；它不创建 GPU 资源。
 struct MaterialInstanceBuildPlan
 {
     ShaderVariantKey shaderVariantKey;
@@ -35,15 +35,17 @@ public:
     static RenderMode ResolveRenderMode(
         const nlohmann::json& effectiveMaterialInstanceJson);
 
-    // 在 MI override 合併完成後推導 Feature，確保 OpaqueClip/TwoSided 使用 effective state。
+    // 在 MI override 合并完成后推导 Feature，确保 OpaqueClip/TwoSided 使用 effective state。
+    // supportsDualSourceBlend 同时决定 Thin Translucent 的 shader 能力宏与固定混合状态。
     static MaterialInstanceBuildPlan BuildLoadPlan(
         std::string_view materialInstancePath,
         const PassPipelineContractKey& passPipelineContractKey,
         const nlohmann::json& materialInstanceJson,
         std::string_view materialPath,
-        const nlohmann::json& materialJson);
+        const nlohmann::json& materialJson,
+        bool supportsDualSourceBlend);
 
-    // 用完整 schema 校驗參數，並按已選 Base/ShadowDepth reflection 並集校驗必需貼圖。
+    // 用完整 schema 校验参数，并按已选 Base/ShadowDepth reflection 并集校验必需贴图。
     static void Validate(
         std::string_view materialInstancePath,
         const nlohmann::json& materialInstanceJson,

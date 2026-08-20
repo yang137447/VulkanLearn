@@ -11,6 +11,7 @@ const uint SHADING_MODEL_TWOSIDED_FOLIAGE = 6u;
 const uint SHADING_MODEL_HAIR = 7u;
 const uint SHADING_MODEL_CLOTH = 8u;
 const uint SHADING_MODEL_EYE = 9u;
+const uint SHADING_MODEL_THIN_TRANSLUCENT = 10u;
 
 // SHADING_MODEL_CLEAR_COAT 使用 GBufferD/customData 传递清漆层参数：
 //   x = 清漆层权重

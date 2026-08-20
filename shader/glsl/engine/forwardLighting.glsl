@@ -5,8 +5,9 @@
 #include "materialSurface.glsl"
 #include "../common/lighting.glsl"
 
-// Forward pass 如果需要阴影，由具体 pass shader 在 include 前定义 VL_FORWARD_DECLARE_SHADOWMAP_INPUT。
-// 这样默认 include 本文件不会占用 Set 3；只有真正的 forward-with-shadow pass 才声明 shadowMap 输入。
+// 前向 pass 如果需要阴影，由具体 pass shader 在 include 前定义
+// VL_FORWARD_DECLARE_SHADOWMAP_INPUT。默认 include 不占用 Set 3，只有真正带阴影的
+// forward pass 才声明 shadowMap 输入，避免材质布局被无关 pass 污染。
 #if defined(VL_FORWARD_DECLARE_SHADOWMAP_INPUT)
 layout (set = 3, binding = 0) uniform sampler2DArrayShadow shadowMap;
 #endif
@@ -14,6 +15,8 @@ layout (set = 3, binding = 0) uniform sampler2DArrayShadow shadowMap;
 struct ForwardLightingResult
 {
     vec3 directLighting;
+    vec3 directDiffuse;
+    vec3 directSpecular;
     float shadow;
     float shadowCascadeIndex;
     vec3 indirectDiffuse;
@@ -26,6 +29,8 @@ ForwardLightingResult CreateDefaultForwardLightingResult()
 {
     ForwardLightingResult result;
     result.directLighting = vec3(0.0);
+    result.directDiffuse = vec3(0.0);
+    result.directSpecular = vec3(0.0);
     result.shadow = 1.0;
     result.shadowCascadeIndex = 0.0;
     result.indirectDiffuse = vec3(0.0);
@@ -72,6 +77,58 @@ ForwardLightingResult ShadeDefaultLitForwardSurface(in MaterialSurface surface)
         surface.metallic);
     result.indirectLighting = result.indirectDiffuse + result.indirectSpecular;
     result.finalColor = surface.emissiveColor + result.directLighting + result.indirectLighting * surface.ambientOcclusion;
+    return result;
+}
+
+ForwardLightingResult ShadeThinTranslucentForwardSurface(
+    in MaterialSurface surface)
+{
+    // Thin Translucent 复用 Default Lit 的表面反射，但必须保留 diffuse/specular 分量，
+    // 因为 RootOpacity 只覆盖 diffuse 与 emissive，表面高光不随根透明度衰减。
+    ForwardLightingResult result = CreateDefaultForwardLightingResult();
+    vec3 viewDir = normalize(
+        uboVP.cameraPosition - surface.worldPosition);
+
+    LightingLobes directLobes = CalculateDirectLightingLobes(
+        surface.worldNormal,
+        surface.worldPosition,
+        uboVP.cameraPosition,
+        surface.baseColor,
+        surface.roughness,
+        surface.metallic);
+    #if defined(VL_FORWARD_DECLARE_SHADOWMAP_INPUT)
+        int cascadeIndex = 0;
+        result.shadow = CalculateCsmShadow(
+            shadowMap,
+            surface.worldPosition,
+            surface.worldNormal,
+            cascadeIndex);
+        result.shadowCascadeIndex =
+            ShadowCascadeDebugValue(cascadeIndex);
+    #else
+        result.shadow = 1.0;
+    #endif
+    result.directDiffuse = directLobes.diffuse * result.shadow;
+    result.directSpecular = directLobes.specular * result.shadow;
+    result.directLighting =
+        result.directDiffuse + result.directSpecular;
+
+    result.indirectDiffuse = CalculateDiffuseIbl(
+        surface.worldNormal,
+        surface.baseColor,
+        surface.metallic);
+    result.indirectSpecular = CalculateSpecularIbl(
+        surface.worldNormal,
+        viewDir,
+        surface.baseColor,
+        surface.roughness,
+        surface.metallic);
+    result.indirectLighting =
+        result.indirectDiffuse + result.indirectSpecular;
+    result.finalColor =
+        surface.emissiveColor +
+        result.directLighting +
+        result.indirectLighting * surface.ambientOcclusion;
     return result;
 }
 
@@ -147,6 +204,8 @@ ForwardLightingResult ShadeForwardSurfaceDetailed(in MaterialSurface surface)
             return ShadeUnlitForwardSurface(surface);
         case SHADING_MODEL_CLEAR_COAT:
             return ShadeClearCoatForwardSurface(surface);
+        case SHADING_MODEL_THIN_TRANSLUCENT:
+            return ShadeThinTranslucentForwardSurface(surface);
         default:
             return ShadeDefaultLitForwardSurface(surface);
     }

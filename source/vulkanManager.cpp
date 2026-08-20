@@ -176,13 +176,19 @@ void VulkanManager::CreateVkDevice()
         .setQueueCount(1)
         .setPQueuePriorities(graphicsQueuePriorities);
 
-    // Required by the current shadow and sampler paths. A future device
-    // selection pass should reject GPUs that do not expose these features
-    // before logical device creation reaches this point.
+    // depthClamp 和 samplerAnisotropy 是现有渲染路径的基础能力。双源混合是可选能力：
+    // 支持时在逻辑设备上启用并走彩色透射，缺失时保留设备可用性并走标量 alpha 降级。
+    const vk::PhysicalDeviceFeatures supportedFeatures =
+        physicalDevices[kGpuIndex].getFeatures();
+    dualSourceBlendEnabled =
+        supportedFeatures.dualSrcBlend == VK_TRUE;
+
     vk::PhysicalDeviceFeatures deviceFeatures;
     deviceFeatures
         .setDepthClamp(VK_TRUE)
-        .setSamplerAnisotropy(VK_TRUE);
+        .setSamplerAnisotropy(VK_TRUE)
+        .setDualSrcBlend(
+            dualSourceBlendEnabled ? VK_TRUE : VK_FALSE);
     
     vk::DeviceCreateInfo deviceCreateInfo;
     deviceCreateInfo

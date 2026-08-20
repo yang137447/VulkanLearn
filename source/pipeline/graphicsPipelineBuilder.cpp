@@ -3,6 +3,8 @@
 #include "../vulkanDebug.h"
 #include "vulkanPipelineDiagnostics.h"
 
+#include <stdexcept>
+
 GraphicsPipelineBuildResult GraphicsPipelineBuilder::Build(
     vk::Device& device,
     const GraphicsPipelineBuildDesc& desc)
@@ -88,6 +90,25 @@ GraphicsPipelineBuildResult GraphicsPipelineBuilder::Build(
                 .setSrcAlphaBlendFactor(vk::BlendFactor::eOne)
                 .setDstAlphaBlendFactor(vk::BlendFactor::eOne);
         }
+    }
+    else if (desc.pipelineStateDesc.blendMode == GraphicsPipelineBlendMode::ThinTranslucentDualSource)
+    {
+        // 双源混合的两个 fragment 输出共享同一个 location，只用 index 区分，
+        // 因此该模式的 pass 必须只有一个颜色附件，不能套用 Geometry 多 MRT 配置。
+        if (desc.colorAttachmentCount != 1)
+        {
+            throw std::runtime_error(
+                "Thin Translucent dual-source blending requires exactly one color attachment");
+        }
+
+        // 最终颜色为 Add + Multiplier * Destination：
+        // index=0 写入 Add，index=1 通过 Src1Color/Src1Alpha 提供逐通道目标乘数。
+        pipelineColorBlendAttachmentStates[0]
+            .setBlendEnable(true)
+            .setSrcColorBlendFactor(vk::BlendFactor::eOne)
+            .setDstColorBlendFactor(vk::BlendFactor::eSrc1Color)
+            .setSrcAlphaBlendFactor(vk::BlendFactor::eOne)
+            .setDstAlphaBlendFactor(vk::BlendFactor::eSrc1Alpha);
     }
 
     vk::PipelineColorBlendStateCreateInfo pipelineColorBlendStateCreateInfo;

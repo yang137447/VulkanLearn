@@ -61,6 +61,8 @@ Documentation in this repository is split by responsibility:
   - implemented Material Evaluation, Base/ShadowDepth templates, Composer identity, and Shadow routing contract
 - `rendering/car-paint-shading-model.md`
   - implemented ClearCoat-based car paint contract, custom data packing, and authoring parameters
+- `rendering/thin-translucent-shading-model.md`
+  - implemented UE 5.8 Legacy Thin Translucent closure, dual-source blend path, scalar fallback, sorting, and lamp-cover authoring contract
 - `rendering/shader-build-cache.md`
   - implemented BLAKE3-256 shader identities, versioned build-cache manifest, batch-wide publication preflight, stale cache-hit rejection, atomic artifact commit, and startup failure semantics
 - `rendering/shader-hot-reload.md`

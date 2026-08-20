@@ -16,9 +16,8 @@ struct Renderpass;
 namespace VL
 {
 
-// Upload callbacks needed by backend-side draw execution. RenderSystem
-// implements this narrow frame-update boundary while frame resources and
-// object descriptors remain backend-owned.
+// Backend 绘制阶段所需的上传回调。RenderSystem 只实现这条窄更新边界，
+// 帧资源和对象描述符的所有权仍留在 renderer backend。
 class RendererDrawUploadServices
 {
 public:
@@ -44,8 +43,7 @@ struct RendererDrawContext
     RendererDrawUploadServices& services;
 };
 
-// Backend-side draw packet execution. It consumes resolved renderable handles
-// and backend-owned object GPU resources directly.
+// Backend 侧 DrawPacket 执行器，直接消费已解析的 Renderable 句柄和 backend GPU 资源。
 class RendererDrawExecutor
 {
 public:
@@ -59,6 +57,8 @@ private:
         const char* passName,
         bool drawTransparent,
         RendererDrawContext& context) const;
+    // 透明绘制必须跨材质全局后向前排序，不能复用按 Material 分组的普通 Surface 遍历。
+    void DrawSortedTransparentScene(RendererDrawContext& context) const;
 };
 
 } // namespace VL

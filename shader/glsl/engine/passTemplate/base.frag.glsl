@@ -23,6 +23,10 @@ layout(location = 4) out vec4 outGBufferE;
 layout(location = 5) out vec4 outGBufferVelocity;
 layout(location = 6) out vec4 outGBufferF;
 layout(location = 7) out vec4 outSceneColorBase;
+#elif VL_MATERIAL_OUTPUT_THIN_TRANSLUCENT && VL_THIN_TRANSLUCENT_DUAL_SOURCE
+// 双源输出共享 location=0，通过 index=0/1 分别表示 Add 和 Multiplier。
+layout(location = 0, index = 0) out vec4 outThinTranslucentAdd;
+layout(location = 0, index = 1) out vec4 outThinTranslucentMultiplier;
 #else
 layout(location = 0) out vec4 outSceneColor;
 #endif
@@ -47,6 +51,16 @@ void main()
     outGBufferVelocity = gbuffer.gbufferVelocity;
     outGBufferF = gbuffer.gbufferF;
     outSceneColorBase = gbuffer.sceneColorBase;
+#elif VL_MATERIAL_OUTPUT_THIN_TRANSLUCENT
+    // 先构造统一的 Add/Mul 结果，再按平台能力选择双源输出或标量 alpha 降级。
+    ThinTranslucentOutput thinOutput =
+        BuildThinTranslucentForwardOutput(surface);
+    #if VL_THIN_TRANSLUCENT_DUAL_SOURCE
+        outThinTranslucentAdd = thinOutput.add;
+        outThinTranslucentMultiplier = thinOutput.multiplier;
+    #else
+        outSceneColor = BuildThinTranslucentFallbackOutput(thinOutput);
+    #endif
 #else
     outSceneColor = BuildMaterialForwardOutput(surface);
 #endif

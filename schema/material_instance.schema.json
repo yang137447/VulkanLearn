@@ -30,7 +30,8 @@
                         "Opaque",
                         "OpaqueClip",
                         "TransparentAlphaBlend",
-                        "TransparentAdditive"
+                        "TransparentAdditive",
+                        "ThinTranslucent"
                     ]
                 },
                 "cullMode": {
@@ -52,7 +53,8 @@
                         "TwoSidedFoliage",
                         "Hair",
                         "Cloth",
-                        "Eye"
+                        "Eye",
+                        "ThinTranslucent"
                     ],
                     "description": "Static shading model override. Top-level shadingModel is intentionally not part of MI_ files."
                 }

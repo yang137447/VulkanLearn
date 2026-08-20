@@ -94,6 +94,9 @@ std::vector<std::string> BuildRenderModeMacros(RenderMode renderMode)
         return {"RENDER_MODE_TRANSPARENT_ALPHA_BLEND"};
     case RenderMode::TransparentAdditive:
         return {"RENDER_MODE_TRANSPARENT_ADDITIVE"};
+    case RenderMode::ThinTranslucent:
+        // 具体是否输出第二颜色源由独立能力宏决定；RenderMode 宏只选择闭包输出壳。
+        return {"RENDER_MODE_THIN_TRANSLUCENT"};
     }
     throw std::runtime_error("Unknown RenderMode when building shader macros");
 }

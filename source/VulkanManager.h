@@ -53,6 +53,10 @@ private:
     {
         return graphicsQueueTimestampValidBits;
     }
+    inline bool IsDualSourceBlendEnabled() const
+    {
+        return dualSourceBlendEnabled;
+    }
 
     void CreateVkInstance();
     void DestroyVkInstance();
@@ -92,6 +96,8 @@ private:
     vk::PhysicalDeviceMemoryProperties gpuMemoryProperties;
     std::optional<uint32_t> graphicsQueueFamilyIndex;
     uint32_t graphicsQueueTimestampValidBits = 0;
+    // 记录逻辑设备实际启用的能力，而不是仅记录物理设备是否宣称支持。
+    bool dualSourceBlendEnabled = false;
     vk::Queue graphicsQueue;
     std::optional<uint32_t> presentQueueFamilyIndex;
 

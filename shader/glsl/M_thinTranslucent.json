@@ -1,0 +1,58 @@
+{
+    "name": "M_thinTranslucent",
+    "type": "material",
+    "shadingModel": "ThinTranslucent",
+    "shaderEvaluation": {
+        "vertex": "materialFunction/mf_pbrVertex.glsl",
+        "surface": "materialFunction/mf_thinTranslucentSurface.glsl"
+    },
+    "features": {
+        "modifiesMeshPosition": false
+    },
+    "renderStates": {
+        "renderMode": "ThinTranslucent",
+        "cullMode": "Back"
+    },
+    "macros": {
+        "USE_BASE_COLOR_MAP": 0,
+        "USE_NORMAL_MAP": 0,
+        "USE_TRANSMITTANCE_MAP": 0,
+        "USE_EMISSION_MAP": 0
+    },
+    "parameters": {
+        "u_baseColorOpacity": {
+            "type": "vec4",
+            "default": [0.0, 0.0, 0.0, 0.0]
+        },
+        "u_transmittanceColorCoverage": {
+            "type": "vec4",
+            "default": [1.0, 1.0, 1.0, 1.0]
+        },
+        "u_surfaceFactors": {
+            "type": "vec4",
+            "default": [0.1, 0.0, 0.5, 1.0]
+        },
+        "u_emissiveColorStrength": {
+            "type": "vec4",
+            "default": [0.0, 0.0, 0.0, 0.0]
+        }
+    },
+    "textures": {
+        "baseColorMap": {
+            "type": "sampler2D",
+            "default": null
+        },
+        "normalMap": {
+            "type": "sampler2D",
+            "default": null
+        },
+        "transmittanceMap": {
+            "type": "sampler2D",
+            "default": null
+        },
+        "emissionMap": {
+            "type": "sampler2D",
+            "default": null
+        }
+    }
+}

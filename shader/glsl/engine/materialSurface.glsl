@@ -14,7 +14,12 @@ struct MaterialSurface
     vec3 emissiveColor;
     float roughness;
     float metallic;
+    // Thin Translucent 的 Specular 只进入 UE Legacy 透射 Fresnel；表面反射使用 Default Lit F0。
+    float specular;
     float ambientOcclusion;
+    // 薄介质透射颜色和覆盖率分别控制透射吸收与 Add/Mul 对目标的作用范围。
+    vec3 transmittanceColor;
+    float surfaceCoverage;
     uint shadingModel;
     uint selectiveOutputMask;
     vec4 customData;
@@ -34,7 +39,10 @@ MaterialSurface CreateDefaultMaterialSurface()
     surface.emissiveColor = vec3(0.0);
     surface.roughness = 1.0;
     surface.metallic = 0.0;
+    surface.specular = 0.5;
     surface.ambientOcclusion = 1.0;
+    surface.transmittanceColor = vec3(1.0);
+    surface.surfaceCoverage = 1.0;
     surface.shadingModel = SHADING_MODEL_DEFAULT_LIT;
     surface.selectiveOutputMask = 0u;
     surface.customData = vec4(0.0);

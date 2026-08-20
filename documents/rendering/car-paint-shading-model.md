@@ -23,14 +23,16 @@ Substrate 式材质分层，应作为新的材质架构演进，不在此 Shadin
 
 - 底层复用 `baseColor`、`roughness`、`metallic` 和底层法线
 - 顶层固定 IOR 1.5、F0 0.04，并使用独立 Clear Coat Roughness 和顶层法线
-- 直接光使用 UE 的 `D_GGX`、`Vis_SmithJointApprox` 和固定 Eta 折射点积近似
+- 底层直接光和间接光复用 renderer 当前 Default Lit 的 BRDF/IBL；清漆只在其上添加
+  专用的顶层反射与底层透射组合
+- 顶层直接光保留 UE Legacy 的 `D_GGX`、`Vis_SmithJointApprox` 和固定 Eta 折射点积近似
 - 底层透射使用双程 Fresnel `(1 - F)^2` 和 `SimpleClearCoatTransmittance`
-- 底层 Schlick 使用 UE 的掠射反射率规则 `saturate(50 * SpecularColor.g)`
-- 间接光使用 UE Legacy Clear Coat 的 diffuse/specular color remap 和双层 IBL 合成
+- 顶层环境反射使用独立 Clear Coat Roughness、顶层法线和固定 F0=0.04
 - forward 与 deferred lighting 使用同一套 Clear Coat 入口
 
-当前路径保持 UE Legacy 默认的单次散射行为，没有额外启用 UE 可选的 GGX energy
-conservation/preservation 路径。
+当前路径只保留清漆层的 UE Legacy 特化行为；底层反射暂以 renderer Default Lit 为准，
+没有额外启用 UE 可选的 GGX energy conservation/preservation 路径。后续若继续对齐 UE，
+应单独演进底层 BRDF，而不改变三种材质共享现有 Default Lit 基层的当前合同。
 
 ## 材质输入
 

@@ -310,7 +310,17 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
         renderPass.pipelineContractKey,
         effectiveMaterialInstanceJson,
         materialInstanceResolveResult.materialPath,
-        materialInstanceResolveResult.materialJson);
+        materialInstanceResolveResult.materialJson,
+        rendererBackend.SupportsDualSourceBlend());
+    // Thin Translucent 的输出数量、Set 3 阴影输入和混合状态都只与
+    // forwardTransparent 合同兼容；这里在创建 pipeline 前锁死路由。
+    if (loadPlan.shaderVariantKey.renderMode == RenderMode::ThinTranslucent &&
+        renderPass.type != RenderGraphPassType::ForwardTransparent)
+    {
+        throw std::runtime_error(
+            "ThinTranslucent material must use the forwardTransparent pass: " +
+            std::string(materialInstancePath));
+    }
     if (loadPlan.baseShaderCompileRequest &&
         loadContext.materialDefinitionReload != nullptr)
     {

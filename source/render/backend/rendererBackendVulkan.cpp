@@ -249,6 +249,12 @@ uint32_t RendererBackendVulkan::GetGraphicsTimestampValidBits()
     return rhiDevice->GetGraphicsTimestampValidBits();
 }
 
+bool RendererBackendVulkan::SupportsDualSourceBlend() const
+{
+    // 材质加载只读取 backend 的能力快照，避免把 Vulkan 设备细节泄漏到资源层。
+    return rhiDevice->IsDualSourceBlendEnabled();
+}
+
 vk::QueryPool RendererBackendVulkan::CreateTimestampQueryPool(
     uint32_t queryCount,
     const std::string& debugName)

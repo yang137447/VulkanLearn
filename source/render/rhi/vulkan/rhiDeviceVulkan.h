@@ -256,6 +256,8 @@ public:
         RHIFramebufferHandle framebufferHandle) const;
     float GetTimestampPeriodNanoseconds();
     uint32_t GetGraphicsTimestampValidBits();
+    // 向上暴露逻辑设备已启用的双源混合能力，供材质 variant 与 pipeline 同步降级。
+    bool IsDualSourceBlendEnabled() const;
     vk::QueryPool CreateTimestampQueryPool(
         uint32_t queryCount,
         const std::string& debugName);

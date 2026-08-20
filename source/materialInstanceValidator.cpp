@@ -67,7 +67,9 @@ namespace
         return NormalizeMaterialMacros(std::move(macros));
     }
 
-    GraphicsPipelineBlendMode ResolveRenderModeBlendMode(RenderMode renderMode)
+    GraphicsPipelineBlendMode ResolveRenderModeBlendMode(
+        RenderMode renderMode,
+        bool supportsDualSourceBlend)
     {
         switch (renderMode)
         {
@@ -78,6 +80,12 @@ namespace
             return GraphicsPipelineBlendMode::AlphaBlend;
         case RenderMode::TransparentAdditive:
             return GraphicsPipelineBlendMode::Additive;
+        case RenderMode::ThinTranslucent:
+            // 原生路径用第二颜色源提供逐通道目标乘数；不支持时退化为
+            // premultiplied alpha，并由 shader 把彩色乘数压缩成单一透明度。
+            return supportsDualSourceBlend
+                ? GraphicsPipelineBlendMode::ThinTranslucentDualSource
+                : GraphicsPipelineBlendMode::PremultipliedAlpha;
         default:
             throw std::runtime_error("Unsupported renderMode when resolving blend mode");
         }
@@ -174,6 +182,10 @@ RenderMode MaterialInstanceValidator::ResolveRenderMode(
     {
         return RenderMode::TransparentAdditive;
     }
+    if (renderMode == "ThinTranslucent")
+    {
+        return RenderMode::ThinTranslucent;
+    }
     throw std::runtime_error("Unsupported renderMode: " + renderMode);
 }
 
@@ -182,17 +194,54 @@ MaterialInstanceBuildPlan MaterialInstanceValidator::BuildLoadPlan(
     const PassPipelineContractKey& passPipelineContractKey,
     const nlohmann::json& materialInstanceJson,
     std::string_view materialPath,
-    const nlohmann::json& materialJson)
+    const nlohmann::json& materialJson,
+    bool supportsDualSourceBlend)
 {
     MaterialInstanceBuildPlan loadPlan;
     loadPlan.shaderVariantKey.shaderName =
         materialInstanceJson.at("shaderName").get<std::string>();
     loadPlan.shaderVariantKey.renderMode = ResolveRenderMode(materialInstanceJson);
+    const std::string shadingModel =
+        materialInstanceJson.at("shadingModel").get<std::string>();
+    const bool usesThinTranslucentShadingModel =
+        shadingModel == "ThinTranslucent";
+    // RenderMode 决定 pass、混合和排序，ShadingModel 决定闭包数学；两者必须成对，
+    // 否则会出现“薄透射公式写入普通透明混合”或“普通闭包写入双源混合”的错误组合。
+    if (usesThinTranslucentShadingModel !=
+        (loadPlan.shaderVariantKey.renderMode == RenderMode::ThinTranslucent))
+    {
+        throw std::runtime_error(
+            "ThinTranslucent shadingModel and renderMode must be selected together: " +
+            std::string(materialInstancePath));
+    }
+
     loadPlan.shaderVariantKey.shadingModelMacro =
-        MaterialAssetUtils::ShadingModelToShaderDefine(materialInstanceJson.at("shadingModel").get<std::string>());
+        MaterialAssetUtils::ShadingModelToShaderDefine(shadingModel);
     loadPlan.shaderVariantKey.macros = ParseMaterialMacros(materialInstanceJson);
 
-    loadPlan.blendMode = ResolveRenderModeBlendMode(loadPlan.shaderVariantKey.renderMode);
+    if (loadPlan.shaderVariantKey.renderMode == RenderMode::ThinTranslucent)
+    {
+        // 平台能力是运行时事实，由引擎独占该宏。禁止资产写入可避免内容数据伪造
+        // 设备能力，也保证 shader variant 与最终 pipeline blend state 始终一致。
+        if (HasMaterialMacroName(
+                loadPlan.shaderVariantKey.macros,
+                kThinTranslucentDualSourceMacro))
+        {
+            throw std::runtime_error(
+                std::string(kThinTranslucentDualSourceMacro) + " is engine-owned and cannot be authored by a material: " +
+                std::string(materialInstancePath));
+        }
+        loadPlan.shaderVariantKey.macros.push_back(
+            supportsDualSourceBlend
+                ? std::string(kThinTranslucentDualSourceMacro) + "=1"
+                : std::string(kThinTranslucentDualSourceMacro) + "=0");
+        loadPlan.shaderVariantKey.macros = NormalizeMaterialMacros(
+            std::move(loadPlan.shaderVariantKey.macros));
+    }
+
+    loadPlan.blendMode = ResolveRenderModeBlendMode(
+        loadPlan.shaderVariantKey.renderMode,
+        supportsDualSourceBlend);
     loadPlan.cullMode = ParseCullMode(materialInstanceJson);
     loadPlan.materialFeatureKey = BuildMaterialFeatureKey(
         loadPlan.shaderVariantKey.renderMode,

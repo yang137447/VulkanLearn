@@ -9,7 +9,9 @@ enum class GraphicsPipelineBlendMode
     Opaque,
     AlphaBlend,
     PremultipliedAlpha,
-    Additive
+    Additive,
+    // 颜色公式为 Add + Multiplier * Destination，第二颜色源提供逐通道 Multiplier。
+    ThinTranslucentDualSource
 };
 
 struct GraphicsPipelineStateDesc

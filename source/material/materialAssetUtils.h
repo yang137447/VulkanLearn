@@ -11,9 +11,8 @@
 #include <string_view>
 #include <nlohmann/json.hpp>
 
-// Small shared helpers used by material asset validation, resolving, and include generation.
-// Keep this namespace limited to pure formatting/parsing helpers; file IO and policy decisions
-// should live in loader, validation, or generator classes.
+// 材质资产校验、解析和 include 生成共享的纯格式化/解析工具。
+// 文件 IO 与策略判断应留在 loader、validator 或 generator，避免工具层承担运行时职责。
 namespace MaterialAssetUtils
 {
     struct ShadingModelDesc
@@ -23,7 +22,8 @@ namespace MaterialAssetUtils
         std::string_view shaderDefine;
     };
 
-    inline constexpr std::array<ShadingModelDesc, 10> kShadingModels = {{
+    // ID 会写入 GBuffer/MaterialSurface，并与 GLSL 常量一一对应；只能追加，不能重排。
+    inline constexpr std::array<ShadingModelDesc, 11> kShadingModels = {{
         {"DefaultLit", 0u, "SHADING_MODEL_DEFAULT_LIT"},
         {"Unlit", 1u, "SHADING_MODEL_UNLIT"},
         {"Subsurface", 2u, "SHADING_MODEL_SUBSURFACE"},
@@ -34,6 +34,7 @@ namespace MaterialAssetUtils
         {"Hair", 7u, "SHADING_MODEL_HAIR"},
         {"Cloth", 8u, "SHADING_MODEL_CLOTH"},
         {"Eye", 9u, "SHADING_MODEL_EYE"},
+        {"ThinTranslucent", 10u, "SHADING_MODEL_THIN_TRANSLUCENT"},
     }};
 
     inline const ShadingModelDesc& FindShadingModel(std::string_view shadingModel)

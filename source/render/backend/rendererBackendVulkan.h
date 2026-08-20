@@ -110,6 +110,8 @@ public:
     const std::vector<vk::ImageView>& GetSwapchainImageViews() const;
     float GetTimestampPeriodNanoseconds();
     uint32_t GetGraphicsTimestampValidBits();
+    // 材质加载阶段只依赖 backend 能力接口，不直接穿透到 VulkanManager。
+    bool SupportsDualSourceBlend() const;
     vk::QueryPool CreateTimestampQueryPool(
         uint32_t queryCount,
         const std::string& debugName);
