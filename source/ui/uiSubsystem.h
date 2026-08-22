@@ -131,6 +131,15 @@ private:
         Rml::String debugIndirectDiffuseLabel;
         Rml::String debugIndirectSpecularLabel;
         Rml::String debugShadowCascadeLabel;
+        Rml::String debugShadingModelLabel;
+        Rml::String debugSubsurfaceWeightLabel;
+        Rml::String debugTransmissionWeightLabel;
+        Rml::String debugSubsurfaceAssetIdLabel;
+        Rml::String debugLocalSubsurfaceLabel;
+        Rml::String debugDiffuseBeforeSssLabel;
+        Rml::String debugDiffuseAfterSssLabel;
+        Rml::String debugSssPixelRadiusLabel;
+        Rml::String debugSssValidWeightLabel;
 
         Rml::String toneMappingLabel;
         Rml::String toneMappingValue;

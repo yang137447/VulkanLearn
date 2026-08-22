@@ -1,0 +1,22 @@
+{
+    "name": "M_sssHorizontal",
+    "type": "material",
+    "shadingModel": "Unlit",
+    "renderStates": {
+        "renderMode": "Opaque",
+        "cullMode": "Back"
+    },
+    "macros": {},
+    "parameters": {
+        "u_sssFilterParameters": {
+            "type": "vec4",
+            "default": [0.002, 0.85, 0.0, 0.0]
+        }
+    },
+    "textures": {
+        "subsurfaceProfileTable": {
+            "type": "sampler2D",
+            "default": null
+        }
+    }
+}

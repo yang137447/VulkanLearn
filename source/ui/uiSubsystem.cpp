@@ -605,6 +605,15 @@ RuntimeResult<void> UiSubsystem::InitializeDataModel()
     bound = constructor.Bind("debug_indirect_diffuse_label", &bindingData.debugIndirectDiffuseLabel) && bound;
     bound = constructor.Bind("debug_indirect_specular_label", &bindingData.debugIndirectSpecularLabel) && bound;
     bound = constructor.Bind("debug_shadow_cascade_label", &bindingData.debugShadowCascadeLabel) && bound;
+    bound = constructor.Bind("debug_shading_model_label", &bindingData.debugShadingModelLabel) && bound;
+    bound = constructor.Bind("debug_subsurface_weight_label", &bindingData.debugSubsurfaceWeightLabel) && bound;
+    bound = constructor.Bind("debug_transmission_weight_label", &bindingData.debugTransmissionWeightLabel) && bound;
+    bound = constructor.Bind("debug_subsurface_asset_id_label", &bindingData.debugSubsurfaceAssetIdLabel) && bound;
+    bound = constructor.Bind("debug_local_subsurface_label", &bindingData.debugLocalSubsurfaceLabel) && bound;
+    bound = constructor.Bind("debug_diffuse_before_sss_label", &bindingData.debugDiffuseBeforeSssLabel) && bound;
+    bound = constructor.Bind("debug_diffuse_after_sss_label", &bindingData.debugDiffuseAfterSssLabel) && bound;
+    bound = constructor.Bind("debug_sss_pixel_radius_label", &bindingData.debugSssPixelRadiusLabel) && bound;
+    bound = constructor.Bind("debug_sss_valid_weight_label", &bindingData.debugSssValidWeightLabel) && bound;
 
     bound = constructor.Bind("tone_mapping_label", &bindingData.toneMappingLabel) && bound;
     bound = constructor.Bind("tone_mapping_value", &bindingData.toneMappingValue) && bound;
@@ -1161,6 +1170,15 @@ void UiSubsystem::SyncBindingData()
     bindingData.debugIndirectDiffuseLabel = Localize("debug.indirect_diffuse");
     bindingData.debugIndirectSpecularLabel = Localize("debug.indirect_specular");
     bindingData.debugShadowCascadeLabel = Localize("debug.shadow_cascade");
+    bindingData.debugShadingModelLabel = Localize("debug.shading_model");
+    bindingData.debugSubsurfaceWeightLabel = Localize("debug.subsurface_weight");
+    bindingData.debugTransmissionWeightLabel = Localize("debug.transmission_weight");
+    bindingData.debugSubsurfaceAssetIdLabel = Localize("debug.subsurface_asset_id");
+    bindingData.debugLocalSubsurfaceLabel = Localize("debug.local_subsurface");
+    bindingData.debugDiffuseBeforeSssLabel = Localize("debug.diffuse_before_sss");
+    bindingData.debugDiffuseAfterSssLabel = Localize("debug.diffuse_after_sss");
+    bindingData.debugSssPixelRadiusLabel = Localize("debug.sss_pixel_radius");
+    bindingData.debugSssValidWeightLabel = Localize("debug.sss_valid_weight");
 
     bindingData.toneMappingLabel = Localize("control.tone_mapping");
     bindingData.toneMappingMode = lastViewModel.toneMappingMode;
@@ -1318,6 +1336,15 @@ std::string UiSubsystem::GetDebugViewName(int mode) const
     case 9: return Localize("debug.indirect_diffuse");
     case 10: return Localize("debug.indirect_specular");
     case 11: return Localize("debug.shadow_cascade");
+    case 12: return Localize("debug.shading_model");
+    case 13: return Localize("debug.subsurface_weight");
+    case 14: return Localize("debug.transmission_weight");
+    case 15: return Localize("debug.subsurface_asset_id");
+    case 16: return Localize("debug.local_subsurface");
+    case 17: return Localize("debug.diffuse_before_sss");
+    case 18: return Localize("debug.diffuse_after_sss");
+    case 19: return Localize("debug.sss_pixel_radius");
+    case 20: return Localize("debug.sss_valid_weight");
     default: return Localize("debug.unknown");
     }
 }

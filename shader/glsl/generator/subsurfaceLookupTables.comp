@@ -1,0 +1,238 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(rgba16f, set = 0, binding = 0) uniform writeonly image2D profileTable;
+layout(rgba16f, set = 0, binding = 1) uniform writeonly image2D skinLutTable;
+
+// 这些常量必须与 C++ 资产合同和 GenerationParameters 的数组尺寸保持一致。
+// 一个 dispatch 同时覆盖两张图；较小的 profile table 通过边界判断复用同一线程网格。
+const uint PROFILE_COUNT = 256u;
+const uint PROFILE_TAP_COUNT = 13u;
+const uint PROFILE_TABLE_WIDTH = 14u;
+const uint SKIN_LUT_COUNT = 16u;
+const uint SKIN_LUT_WIDTH = 128u;
+const uint SKIN_LUT_TILE_HEIGHT = 64u;
+const float PI = 3.14159265358979323846;
+
+layout(std430, set = 0, binding = 2) readonly buffer GenerationParameters
+{
+    // 数组下标就是稳定 asset ID，未启用的行由 CPU 写入 neutral 参数。
+    vec4 profileColorDistance[PROFILE_COUNT];
+    vec4 profileScaleActive[PROFILE_COUNT];
+    vec4 skinScatterMode[SKIN_LUT_COUNT];
+    vec4 skinTransmissionThickness[SKIN_LUT_COUNT];
+    vec4 skinScaleActive[SKIN_LUT_COUNT];
+} parameters;
+
+float ProfileTapPosition(uint tapIndex)
+{
+    // 二次映射让中心附近的 tap 更密，减少有限 tap 对轮廓响应的离散误差。
+    float position =
+        float(tapIndex) / float(PROFILE_TAP_COUNT - 1u) * 2.0 - 1.0;
+    return sign(position) * position * position;
+}
+
+vec3 EvaluateSeparableProfile(vec3 scatterDistance, float radius)
+{
+    return
+        (exp(vec3(-radius) / scatterDistance) +
+         exp(vec3(-radius) / (3.0 * scatterDistance))) /
+        (8.0 * scatterDistance);
+}
+
+void GenerateProfileTexel(uvec2 coordinate)
+{
+    uint profileId = coordinate.y;
+    bool isActive = parameters.profileScaleActive[profileId].y > 0.5;
+    if (!isActive)
+    {
+        // 未绑定的 profile 行保持单位中心响应，避免采样未初始化 texel。
+        vec4 value = vec4(0.0);
+        if (coordinate.x == 0u)
+        {
+            value = vec4(1.0, 1.0, 1.0, 0.0);
+        }
+        else if (coordinate.x - 1u == PROFILE_TAP_COUNT / 2u)
+        {
+            value = vec4(1.0, 1.0, 1.0, 0.0);
+        }
+        imageStore(profileTable, ivec2(coordinate), value);
+        return;
+    }
+
+    vec4 colorDistance = parameters.profileColorDistance[profileId];
+    float worldScale = parameters.profileScaleActive[profileId].x;
+    vec3 scatterDistance =
+        colorDistance.rgb * colorDistance.w * worldScale;
+    float maximumRadius = 3.0 * max(
+        scatterDistance.r,
+        max(scatterDistance.g, scatterDistance.b));
+
+    if (coordinate.x == 0u)
+    {
+        // 第 0 列是 metadata：RGB 保存 MFP 颜色，A 保存世界空间最大半径。
+        imageStore(
+            profileTable,
+            ivec2(coordinate),
+            vec4(colorDistance.rgb, maximumRadius));
+        return;
+    }
+
+    uint tapIndex = coordinate.x - 1u;
+    float position = ProfileTapPosition(tapIndex);
+    vec3 weights = EvaluateSeparableProfile(
+        scatterDistance,
+        abs(position) * maximumRadius);
+    // 每个 RGB 通道独立归一化，保证离散 kernel 的能量不会随颜色距离漂移。
+    vec3 weightSum = vec3(0.0);
+    for (uint sampleIndex = 0u;
+         sampleIndex < PROFILE_TAP_COUNT;
+         ++sampleIndex)
+    {
+        float samplePosition = ProfileTapPosition(sampleIndex);
+        weightSum += EvaluateSeparableProfile(
+            scatterDistance,
+            abs(samplePosition) * maximumRadius);
+    }
+    imageStore(
+        profileTable,
+        ivec2(coordinate),
+        vec4(weights / weightSum, position));
+}
+
+vec3 EvaluateSkinResponse(
+    vec3 scatterColor,
+    float outputMode,
+    float nDotL,
+    float normalizedThickness)
+{
+    // V1 只定义局部二维 response；不是完整 BSSRDF，也不读取邻域像素。
+    float thinness = 1.0 - normalizedThickness;
+    vec3 scatterTint = mix(
+        scatterColor,
+        vec3(1.0),
+        normalizedThickness);
+    if (outputMode < 0.5)
+    {
+        float grazingBoost =
+            1.0 + 0.35 * thinness * (1.0 - max(nDotL, 0.0));
+        return scatterTint * grazingBoost;
+    }
+
+    float wrapWidth = 0.5 * thinness;
+    float wrappedNoL = max(
+        (nDotL + wrapWidth) / (1.0 + wrapWidth),
+        0.0);
+    return scatterTint * wrappedNoL / PI;
+}
+
+vec3 EvaluateSkinIblAverage(
+    vec3 scatterColor,
+    float outputMode)
+{
+    // metadata 行保存同一 Compute response 的环境光平均值，避免运行时再做半球积分。
+    const uint SAMPLE_COUNT = 64u;
+    vec3 integral = vec3(0.0);
+    float lambertIntegral = 0.0;
+    for (uint sampleIndex = 0u;
+         sampleIndex < SAMPLE_COUNT;
+         ++sampleIndex)
+    {
+        float nDotL =
+            (float(sampleIndex) + 0.5) / float(SAMPLE_COUNT);
+        float weight = 2.0 * nDotL / float(SAMPLE_COUNT);
+        vec3 response = EvaluateSkinResponse(
+            scatterColor,
+            outputMode,
+            nDotL,
+            0.5);
+        if (outputMode < 0.5)
+        {
+            response *= nDotL / PI;
+        }
+        integral += response * weight;
+        lambertIntegral += nDotL / PI * weight;
+    }
+    return integral / lambertIntegral;
+}
+
+void GenerateSkinTexel(uvec2 coordinate)
+{
+    uint skinLutId = coordinate.y / SKIN_LUT_TILE_HEIGHT;
+    uint localY = coordinate.y % SKIN_LUT_TILE_HEIGHT;
+    bool isActive = parameters.skinScaleActive[skinLutId].y > 0.5;
+    if (!isActive)
+    {
+        // inactive tile 使用 neutral metadata/response，ID 0 可以安全作为 fallback。
+        imageStore(
+            skinLutTable,
+            ivec2(coordinate),
+            localY == 0u && coordinate.x > 1u
+                ? vec4(0.0)
+                : vec4(1.0));
+        return;
+    }
+
+    vec4 scatterMode = parameters.skinScatterMode[skinLutId];
+    vec4 transmissionThickness =
+        parameters.skinTransmissionThickness[skinLutId];
+    float thicknessMaxWorld =
+        transmissionThickness.w *
+        parameters.skinScaleActive[skinLutId].x;
+
+    if (localY == 0u)
+    {
+        // 每个 tile 第 0 行是 metadata，不参与普通 (N·L, thickness) response 采样。
+        vec4 metadata = vec4(0.0);
+        if (coordinate.x == 0u)
+        {
+            metadata = vec4(
+                EvaluateSkinIblAverage(
+                    scatterMode.rgb,
+                    scatterMode.w),
+                scatterMode.w);
+        }
+        else if (coordinate.x == 1u)
+        {
+            metadata = vec4(
+                transmissionThickness.rgb,
+                thicknessMaxWorld);
+        }
+        imageStore(skinLutTable, ivec2(coordinate), metadata);
+        return;
+    }
+
+    // 普通 response 从第 1 行开始，最后一行对应 thicknessMax。
+    float nDotL =
+        float(coordinate.x) / float(SKIN_LUT_WIDTH - 1u) * 2.0 - 1.0;
+    float normalizedThickness =
+        float(localY - 1u) /
+        float(SKIN_LUT_TILE_HEIGHT - 2u);
+    imageStore(
+        skinLutTable,
+        ivec2(coordinate),
+        vec4(
+            EvaluateSkinResponse(
+                scatterMode.rgb,
+                scatterMode.w,
+                nDotL,
+                normalizedThickness),
+            1.0));
+}
+
+void main()
+{
+    // 同一 invocation 可能只命中其中一张图；边界判断保证两张不同尺寸的图互不越界。
+    uvec2 coordinate = gl_GlobalInvocationID.xy;
+    if (coordinate.x < PROFILE_TABLE_WIDTH &&
+        coordinate.y < PROFILE_COUNT)
+    {
+        GenerateProfileTexel(coordinate);
+    }
+    if (coordinate.x < SKIN_LUT_WIDTH &&
+        coordinate.y < SKIN_LUT_COUNT * SKIN_LUT_TILE_HEIGHT)
+    {
+        GenerateSkinTexel(coordinate);
+    }
+}

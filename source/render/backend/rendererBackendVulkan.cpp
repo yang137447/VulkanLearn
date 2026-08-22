@@ -1030,6 +1030,11 @@ void RendererBackendVulkan::EndSingleTimeCommands(vk::CommandBuffer& commandBuff
     rhiDevice->EndSingleTimeCommands(commandBuffer);
 }
 
+void RendererBackendVulkan::AbortSingleTimeCommands(vk::CommandBuffer& commandBuffer)
+{
+    rhiDevice->AbortSingleTimeCommands(commandBuffer);
+}
+
 void RendererBackendVulkan::CopyBufferToImage(
     vk::Buffer buffer,
     vk::Image image,

@@ -19,6 +19,8 @@
 #include "render/backend/rendererBackendVulkan.h"
 #include "render/resource/rendererResourceCache.h"
 #include "render/resource/rendererResourceLoadContext.h"
+#include "render/subsurface/subsurfaceMaterialContract.h"
+#include "render/subsurface/subsurfaceResourceSet.h"
 #include "render/shadow/materialShadowPipelineBuilder.h"
 #include "renderGraph.h"
 #include "texture.h"
@@ -146,6 +148,31 @@ nlohmann::json BuildCandidateValidationJson(
         }
     }
     return validationJson;
+}
+
+void BindEngineSubsurfaceTextures(
+    MaterialInstance& materialInstance,
+    const Material& material,
+    const SubsurfaceResourceSet& resources)
+{
+    // lookup texture 属于 World-local resource set，由引擎注入；MI 只作者化资产路径，
+    // 不能自行绑定另一 generation 的 profile/LUT texture。
+    if (FindTextureSchema(
+            material.GetMaterialDescriptorSchema(),
+            "subsurfaceProfileTable") != nullptr)
+    {
+        materialInstance.SetTexture(
+            "subsurfaceProfileTable",
+            resources.profileTableTexture);
+    }
+    if (FindTextureSchema(
+            material.GetMaterialDescriptorSchema(),
+            "preintegratedSkinLutTable") != nullptr)
+    {
+        materialInstance.SetTexture(
+            "preintegratedSkinLutTable",
+            resources.skinLutTableTexture);
+    }
 }
 
 void ApplyParameterJson(
@@ -302,7 +329,21 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
     materialInstanceFile >> materialInstanceJson;
     MaterialInstanceResolveResult materialInstanceResolveResult =
         MaterialInstanceResolver::Resolve(materialInstancePath, materialInstanceJson);
-    const nlohmann::json& effectiveMaterialInstanceJson = materialInstanceResolveResult.effectiveMaterialInstanceJson;
+    nlohmann::json& effectiveMaterialInstanceJson =
+        materialInstanceResolveResult.effectiveMaterialInstanceJson;
+    const std::shared_ptr<const SubsurfaceResourceSet>& subsurfaceResources =
+        resourceCache.GetSubsurfaceResources();
+    if (!subsurfaceResources)
+    {
+        throw std::runtime_error(
+            "Renderer material loading requires a prepared subsurface resource set");
+    }
+    const ResolvedSubsurfaceMaterialAssets resolvedSubsurfaceAssets =
+        ResolveSubsurfaceMaterialContract(
+            materialInstanceJson,
+            effectiveMaterialInstanceJson,
+            *subsurfaceResources,
+            materialInstancePath);
     // Resolve 先合并材质定义与 MI 覆写，BuildLoadPlan 再一次性生成 shader variant、
     // 固定管线状态和缓存 key；后续步骤只消费结果，不重复解释 JSON。
     MaterialInstanceBuildPlan loadPlan = MaterialInstanceValidator::BuildLoadPlan(
@@ -541,6 +582,16 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
             }
         }
     }
+
+    // 派生 ID 和引擎 lookup texture 必须在 snapshot 恢复后重新注入，
+    // 然后才进行最终 descriptor/schema 校验。
+    ReapplyResolvedSubsurfaceMaterialIds(
+        resolvedSubsurfaceAssets,
+        *materialInstance);
+    BindEngineSubsurfaceTextures(
+        *materialInstance,
+        *material,
+        *subsurfaceResources);
 
     const MaterialInstanceStateSnapshot candidateSnapshot =
         materialInstance->CaptureStateSnapshot();

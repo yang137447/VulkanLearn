@@ -461,16 +461,87 @@ namespace CommonFunction
 
     inline void EndSingleTimeCommands(vk::Device& device, vk::CommandBuffer& commandBuffer, vk::Queue& graphicsQueue, vk::CommandPool& commandPool)
     {
-        commandBuffer.end();
+        vk::Fence fence;
+        bool submitted = false;
+        try
+        {
+            commandBuffer.end();
 
-        vk::SubmitInfo submitInfo;
-        submitInfo
-            .setCommandBuffers(commandBuffer);
-        
-        graphicsQueue.submit(submitInfo);
-        graphicsQueue.waitIdle();
+            vk::FenceCreateInfo fenceCreateInfo;
+            fence = device.createFence(fenceCreateInfo);
 
+            vk::SubmitInfo submitInfo;
+            submitInfo
+                .setCommandBuffers(commandBuffer);
+
+            graphicsQueue.submit(submitInfo, fence);
+            submitted = true;
+            const vk::Result waitResult =
+                device.waitForFences(fence, true, UINT64_MAX);
+            if (waitResult != vk::Result::eSuccess)
+            {
+                throw std::runtime_error(
+                    "Failed to wait for single-time command fence");
+            }
+
+            device.destroyFence(fence);
+            fence = nullptr;
+            device.freeCommandBuffers(commandPool, commandBuffer);
+            commandBuffer = nullptr;
+        }
+        catch (...)
+        {
+            // 提交后的异常路径先尽力等待队列，再释放 command buffer，避免
+            // candidate 失败时把仍在 GPU 使用的命令缓冲提前回收。
+            if (submitted)
+            {
+                try
+                {
+                    graphicsQueue.waitIdle();
+                }
+                catch (...)
+                {
+                }
+            }
+            if (commandBuffer)
+            {
+                try
+                {
+                    device.freeCommandBuffers(commandPool, commandBuffer);
+                }
+                catch (...)
+                {
+                }
+                commandBuffer = nullptr;
+            }
+            if (fence)
+            {
+                try
+                {
+                    device.destroyFence(fence);
+                }
+                catch (...)
+                {
+                }
+            }
+            throw;
+        }
+    }
+
+    inline void AbortSingleTimeCommands(
+        vk::Device& device,
+        vk::CommandBuffer& commandBuffer,
+        vk::CommandPool& commandPool)
+    {
+        if (!commandBuffer)
+        {
+            return;
+        }
+
+        // 录制阶段发生异常时，command buffer 尚未提交，可以直接释放，
+        // 避免 World candidate 失败后留下不可见的 command pool 资源。
         device.freeCommandBuffers(commandPool, commandBuffer);
+        commandBuffer = nullptr;
     }
 
     inline std::pair<vk::Buffer, vk::DeviceMemory> CreateBuffer(vk::Device& device, vk::DeviceSize& size, vk::BufferUsageFlags& usage, vk::PhysicalDeviceMemoryProperties& physicalDeviceMemoryProperties, vk::MemoryPropertyFlags& memoryPropertyFlags, const std::string& name = "")

@@ -730,6 +730,14 @@ void RHIDeviceVulkan::EndSingleTimeCommands(vk::CommandBuffer& commandBuffer)
         GetCommandPool());
 }
 
+void RHIDeviceVulkan::AbortSingleTimeCommands(vk::CommandBuffer& commandBuffer)
+{
+    CommonFunction::AbortSingleTimeCommands(
+        GetDevice(),
+        commandBuffer,
+        GetCommandPool());
+}
+
 void RHIDeviceVulkan::CopyBufferToImage(
     RHIBufferHandle bufferHandle,
     RHIImageHandle imageHandle,

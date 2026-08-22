@@ -10,6 +10,7 @@
 #include "render/resource/rendererMeshLoader.h"
 #include "render/resource/rendererResourceCache.h"
 #include "render/resource/rendererResourceLoadContext.h"
+#include "render/subsurface/subsurfaceResourceLoader.h"
 #include "renderGraph.h"
 #include "world/loading/worldLoader.h"
 
@@ -71,6 +72,10 @@ RendererResourceLoadCoordinator::LoadRendererResources(
         *pipelineFactory,
         *rendererBackend,
         loadContext);
+    SubsurfaceResourceLoader subsurfaceResourceLoader(
+        *pipelineFactory,
+        *rendererBackend,
+        loadContext);
     RendererMaterialLoader materialLoader(
         *pipelineFactory,
         *rendererBackend,
@@ -82,6 +87,8 @@ RendererResourceLoadCoordinator::LoadRendererResources(
     RendererWorldResourceLoadResult loadResult;
 
     environmentLoader.LoadGlobalResources();
+    // lookup texture 和 path->stable ID 必须先进入 candidate cache，材质加载才能只消费同一 World generation。
+    subsurfaceResourceLoader.Load();
 
     // Load pass materials before scene meshes so descriptor setup can reference
     // render graph pass material instances.

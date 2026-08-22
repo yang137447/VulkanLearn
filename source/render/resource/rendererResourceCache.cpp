@@ -17,7 +17,8 @@ bool RendererResourceCache::WorldLocalResourcePackage::Empty() const noexcept
         materials.empty() &&
         materialInstances.empty() &&
         objectResources.empty() &&
-        textures.empty();
+        textures.empty() &&
+        !subsurfaceResources;
 }
 
 RendererResourceCache::RendererResourceCache()
@@ -363,6 +364,20 @@ const std::shared_ptr<Texture>* RendererResourceCache::GetTexture(std::string_vi
     }
 
     return nullptr;
+}
+
+// SSS lookup 只写入当前 candidate package；commit 前 active World 看不到半成品资源。
+void RendererResourceCache::BindSubsurfaceResources(
+    std::shared_ptr<const SubsurfaceResourceSet> resources)
+{
+    GetMutableWorldLocalResources().subsurfaceResources =
+        std::move(resources);
+}
+
+const std::shared_ptr<const SubsurfaceResourceSet>&
+RendererResourceCache::GetSubsurfaceResources() const noexcept
+{
+    return worldLocalResources->subsurfaceResources;
 }
 
 } // namespace VL

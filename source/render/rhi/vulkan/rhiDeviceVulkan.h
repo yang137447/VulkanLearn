@@ -189,7 +189,9 @@ public:
     RHISamplerHandle CreateDepthSampler(const std::string& debugName);
     RHISamplerHandle CreateDepthCompareSampler(const std::string& debugName);
     vk::CommandBuffer BeginSingleTimeCommands();
+    // 这是一次性提交的生命周期边界：提交后必须等待完成，未提交时才可 Abort。
     void EndSingleTimeCommands(vk::CommandBuffer& commandBuffer);
+    void AbortSingleTimeCommands(vk::CommandBuffer& commandBuffer);
     void CopyBufferToImage(
         RHIBufferHandle bufferHandle,
         RHIImageHandle imageHandle,

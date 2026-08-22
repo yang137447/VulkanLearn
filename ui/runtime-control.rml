@@ -88,6 +88,15 @@
                                 <button data-class-selected="debug_view_mode == 9" data-event-click="set_debug_view(9)">{{debug_indirect_diffuse_label}}</button>
                                 <button data-class-selected="debug_view_mode == 10" data-event-click="set_debug_view(10)">{{debug_indirect_specular_label}}</button>
                                 <button data-class-selected="debug_view_mode == 11" data-event-click="set_debug_view(11)">{{debug_shadow_cascade_label}}</button>
+                                <button data-class-selected="debug_view_mode == 12" data-event-click="set_debug_view(12)">{{debug_shading_model_label}}</button>
+                                <button data-class-selected="debug_view_mode == 13" data-event-click="set_debug_view(13)">{{debug_subsurface_weight_label}}</button>
+                                <button data-class-selected="debug_view_mode == 14" data-event-click="set_debug_view(14)">{{debug_transmission_weight_label}}</button>
+                                <button data-class-selected="debug_view_mode == 15" data-event-click="set_debug_view(15)">{{debug_subsurface_asset_id_label}}</button>
+                                <button data-class-selected="debug_view_mode == 16" data-event-click="set_debug_view(16)">{{debug_local_subsurface_label}}</button>
+                                <button data-class-selected="debug_view_mode == 17" data-event-click="set_debug_view(17)">{{debug_diffuse_before_sss_label}}</button>
+                                <button data-class-selected="debug_view_mode == 18" data-event-click="set_debug_view(18)">{{debug_diffuse_after_sss_label}}</button>
+                                <button data-class-selected="debug_view_mode == 19" data-event-click="set_debug_view(19)">{{debug_sss_pixel_radius_label}}</button>
+                                <button data-class-selected="debug_view_mode == 20" data-event-click="set_debug_view(20)">{{debug_sss_valid_weight_label}}</button>
                             </div>
                         </div>
 

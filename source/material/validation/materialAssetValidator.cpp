@@ -188,7 +188,9 @@ void MaterialAssetValidator::ValidateInstanceHeader(
         "renderStateOverrides",
         "macros",
         "parameters",
-        "textures"
+        "textures",
+        "subsurfaceProfile",
+        "skinLut"
     };
     for (const auto& [field, value] : materialInstanceJson.items())
     {
@@ -221,6 +223,22 @@ void MaterialAssetValidator::ValidateInstanceHeader(
     if (materialInstanceJson.contains("textures") && !materialInstanceJson["textures"].is_object())
     {
         throw std::runtime_error("Material instance textures must be an object: " + std::string(materialInstancePath));
+    }
+    if (materialInstanceJson.contains("subsurfaceProfile") &&
+        (!materialInstanceJson["subsurfaceProfile"].is_string() ||
+         materialInstanceJson["subsurfaceProfile"].get<std::string>().empty()))
+    {
+        throw std::runtime_error(
+            "subsurfaceProfile must be a non-empty asset path string: " +
+            std::string(materialInstancePath));
+    }
+    if (materialInstanceJson.contains("skinLut") &&
+        (!materialInstanceJson["skinLut"].is_string() ||
+         materialInstanceJson["skinLut"].get<std::string>().empty()))
+    {
+        throw std::runtime_error(
+            "skinLut must be a non-empty asset path string: " +
+            std::string(materialInstancePath));
     }
 }
 

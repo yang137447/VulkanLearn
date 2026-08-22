@@ -107,6 +107,10 @@ public:
     std::shared_ptr<ComputePipeline> CreateComputePipeline(
         const std::string& shaderName,
         ComputeShaderArtifact* activeArtifact = nullptr);
+    // Candidate prepare 使用此入口创建一次性 Compute pipeline，不写入 active cache。
+    std::shared_ptr<ComputePipeline> CreateComputePipelineCandidate(
+        const std::string& shaderName,
+        ComputeShaderArtifact* candidateArtifact = nullptr);
     std::shared_ptr<ComputePipeline> CreateComputePipeline(
         const ComputeShaderArtifact& artifact);
     const GraphicsShaderVariantArtifact& PrepareGraphicsShaderVariant(

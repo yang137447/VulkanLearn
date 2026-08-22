@@ -79,6 +79,41 @@
             "usage": ["colorAttachment", "sampled"]
         },
         {
+            "name": "diffuseLighting",
+            "format": "R16G16B16A16_SFLOAT",
+            "widthScale": 1.0,
+            "heightScale": 1.0,
+            "usage": ["colorAttachment", "sampled"]
+        },
+        {
+            "name": "nonDiffuseLighting",
+            "format": "R16G16B16A16_SFLOAT",
+            "widthScale": 1.0,
+            "heightScale": 1.0,
+            "usage": ["colorAttachment", "sampled"]
+        },
+        {
+            "name": "transmissionLighting",
+            "format": "R16G16B16A16_SFLOAT",
+            "widthScale": 1.0,
+            "heightScale": 1.0,
+            "usage": ["colorAttachment", "sampled"]
+        },
+        {
+            "name": "sssPing",
+            "format": "R16G16B16A16_SFLOAT",
+            "widthScale": 1.0,
+            "heightScale": 1.0,
+            "usage": ["colorAttachment", "sampled"]
+        },
+        {
+            "name": "sssPong",
+            "format": "R16G16B16A16_SFLOAT",
+            "widthScale": 1.0,
+            "heightScale": 1.0,
+            "usage": ["colorAttachment", "sampled"]
+        },
+        {
             "name": "gbufferA",
             "format": "R16G16B16A16_SFLOAT",
             "widthScale": 1.0,
@@ -385,6 +420,124 @@
                 }
             ],
             "output":[
+                {
+                    "resource": "diffuseLighting",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                },
+                {
+                    "resource": "nonDiffuseLighting",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                },
+                {
+                    "resource": "transmissionLighting",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
+            "name": "sssHorizontal",
+            "type": "postProcess",
+            "needCreateMaterial": true,
+            "materialInstancePath": "materials/pass/MI_sssHorizontal.json",
+            "pipelineState": {
+                "useVertexInput": false,
+                "depthTestEnable": false,
+                "depthWriteEnable": false,
+                "depthCompareOp": "less"
+            },
+            "input": [
+                {
+                    "resource": "diffuseLighting"
+                },
+                {
+                    "resource": "gbufferB"
+                },
+                {
+                    "resource": "gbufferD"
+                },
+                {
+                    "resource": "sceneDepth"
+                }
+            ],
+            "output": [
+                {
+                    "resource": "sssPing",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
+            "name": "sssVertical",
+            "type": "postProcess",
+            "needCreateMaterial": true,
+            "materialInstancePath": "materials/pass/MI_sssVertical.json",
+            "pipelineState": {
+                "useVertexInput": false,
+                "depthTestEnable": false,
+                "depthWriteEnable": false,
+                "depthCompareOp": "less"
+            },
+            "input": [
+                {
+                    "resource": "sssPing"
+                },
+                {
+                    "resource": "gbufferB"
+                },
+                {
+                    "resource": "gbufferD"
+                },
+                {
+                    "resource": "sceneDepth"
+                }
+            ],
+            "output": [
+                {
+                    "resource": "sssPong",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
+            "name": "sssComposition",
+            "type": "postProcess",
+            "needCreateMaterial": true,
+            "materialInstancePath": "materials/pass/MI_sssComposition.json",
+            "pipelineState": {
+                "useVertexInput": false,
+                "depthTestEnable": false,
+                "depthWriteEnable": false,
+                "depthCompareOp": "less"
+            },
+            "input": [
+                {
+                    "resource": "diffuseLighting"
+                },
+                {
+                    "resource": "nonDiffuseLighting"
+                },
+                {
+                    "resource": "transmissionLighting"
+                },
+                {
+                    "resource": "sssPong"
+                },
+                {
+                    "resource": "gbufferB"
+                },
+                {
+                    "resource": "gbufferD"
+                },
+                {
+                    "resource": "sceneDepth"
+                }
+            ],
+            "output": [
                 {
                     "resource": "sceneColor",
                     "loadOp": "clear",

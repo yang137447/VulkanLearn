@@ -4,11 +4,12 @@
 #include "../common/commonUbo.glsl"
 #include "materialSurface.glsl"
 #include "../common/lighting.glsl"
+#include "subsurfaceLighting.glsl"
+#include "preintegratedSkinLighting.glsl"
+#include "subsurfaceProfileLighting.glsl"
 
 vec3 ReconstructWorldPositionFromSceneDepth(vec2 uv, float deviceDepth)
 {
-    // Vulkan 的屏幕深度范围是 0..1。这里把 fullscreen uv 还原成 NDC xy，
-    // 再配合 sceneDepth 中保存的 deviceDepth，通过 invViewProjection 回到世界空间。
     vec2 ndc = uv * 2.0 - 1.0;
     vec4 clipPosition = vec4(ndc, deviceDepth, 1.0);
     vec4 worldPosition = uboVP.invViewProjection * clipPosition;
@@ -17,34 +18,78 @@ vec3 ReconstructWorldPositionFromSceneDepth(vec2 uv, float deviceDepth)
 
 struct DeferredLightingResult
 {
+    vec3 directDiffuse;
+    vec3 directSpecular;
     vec3 directLighting;
     float shadow;
     float shadowCascadeIndex;
     vec3 indirectDiffuse;
     vec3 indirectSpecular;
     vec3 indirectLighting;
+    vec3 diffuseLighting;
+    vec3 nonDiffuseLighting;
+    vec3 transmissionLighting;
+    vec3 localSubsurfaceLighting;
+    vec3 defaultDiffuseLighting;
+    float subsurfaceWeight;
+    float transmissionWeight;
     vec3 finalColor;
 };
 
 DeferredLightingResult CreateDefaultDeferredLightingResult()
 {
     DeferredLightingResult result;
+    result.directDiffuse = vec3(0.0);
+    result.directSpecular = vec3(0.0);
     result.directLighting = vec3(0.0);
     result.shadow = 1.0;
     result.shadowCascadeIndex = 0.0;
     result.indirectDiffuse = vec3(0.0);
     result.indirectSpecular = vec3(0.0);
     result.indirectLighting = vec3(0.0);
+    result.diffuseLighting = vec3(0.0);
+    result.nonDiffuseLighting = vec3(0.0);
+    result.transmissionLighting = vec3(0.0);
+    result.localSubsurfaceLighting = vec3(0.0);
+    result.defaultDiffuseLighting = vec3(0.0);
+    result.subsurfaceWeight = 0.0;
+    result.transmissionWeight = 0.0;
     result.finalColor = vec3(0.0);
     return result;
 }
 
-DeferredLightingResult ShadeDefaultLitDeferredSurfaceDetailed(in MaterialSurface surface, in sampler2DArrayShadow inputShadowMap)
+void ResolveDeferredLightingComposition(
+    in MaterialSurface surface,
+    inout DeferredLightingResult result)
 {
-    DeferredLightingResult result = CreateDefaultDeferredLightingResult();
-    vec3 viewDir = normalize(uboVP.cameraPosition - surface.worldPosition);
+    result.directLighting =
+        result.directDiffuse +
+        result.directSpecular +
+        result.transmissionLighting;
+    result.indirectLighting =
+        result.indirectDiffuse + result.indirectSpecular;
+    result.diffuseLighting =
+        result.directDiffuse +
+        result.indirectDiffuse * surface.ambientOcclusion;
+    result.nonDiffuseLighting =
+        surface.emissiveColor +
+        result.directSpecular +
+        result.indirectSpecular * surface.ambientOcclusion;
+    result.finalColor =
+        result.diffuseLighting +
+        result.nonDiffuseLighting +
+        result.transmissionLighting;
+}
 
-    result.directLighting = CalculateDirectLighting(
+DeferredLightingResult ShadeDefaultLitDeferredSurfaceDetailed(
+    in MaterialSurface surface,
+    in sampler2DArrayShadow inputShadowMap)
+{
+    DeferredLightingResult result =
+        CreateDefaultDeferredLightingResult();
+    vec3 viewDir = normalize(
+        uboVP.cameraPosition - surface.worldPosition);
+    LightingLobes directLobes = CalculateDirectLightingLobes(
         surface.worldNormal,
         surface.worldPosition,
         uboVP.cameraPosition,
@@ -52,18 +97,17 @@ DeferredLightingResult ShadeDefaultLitDeferredSurfaceDetailed(in MaterialSurface
         surface.roughness,
         surface.metallic);
 
-    // 阴影贴图是当前 deferredLighting pass 的输入，所以 sampler 由 pass shader 传入。
     int cascadeIndex = 0;
     result.shadow = CalculateCsmShadow(
         inputShadowMap,
         surface.worldPosition,
         surface.worldNormal,
         cascadeIndex);
-    result.shadowCascadeIndex = ShadowCascadeDebugValue(cascadeIndex);
-    // GBufferE.r 先作为学习版的预计算直接光可见性项：1 = 不遮蔽，0 = 完全遮蔽。
-    // 后续接 lightmap / stationary light 时，可以继续细分 rgba 的具体光源语义。
+    result.shadowCascadeIndex =
+        ShadowCascadeDebugValue(cascadeIndex);
     result.shadow *= surface.precomputedShadowFactors.r;
-    result.directLighting *= result.shadow;
+    result.directDiffuse = directLobes.diffuse * result.shadow;
+    result.directSpecular = directLobes.specular * result.shadow;
 
     result.indirectDiffuse = CalculateDiffuseIbl(
         surface.worldNormal,
@@ -75,10 +119,131 @@ DeferredLightingResult ShadeDefaultLitDeferredSurfaceDetailed(in MaterialSurface
         surface.baseColor,
         surface.roughness,
         surface.metallic);
-    result.indirectLighting = result.indirectDiffuse + result.indirectSpecular;
+    ResolveDeferredLightingComposition(surface, result);
+    result.defaultDiffuseLighting = result.diffuseLighting;
+    return result;
+}
 
-    // AO 主要遮蔽间接光，不乘到直接光上；这和阶段 6 的约定保持一致。
-    result.finalColor = surface.emissiveColor + result.directLighting + result.indirectLighting * surface.ambientOcclusion;
+DeferredLightingResult ShadeSubsurfaceDeferredSurfaceDetailed(
+    in MaterialSurface surface,
+    in sampler2DArrayShadow inputShadowMap)
+{
+    DeferredLightingResult result =
+        ShadeDefaultLitDeferredSurfaceDetailed(
+            surface,
+            inputShadowMap);
+    SubsurfaceLocalLighting localLighting =
+        CalculateSubsurfaceLocalDirectLighting(surface);
+    vec3 localDirectDiffuse =
+        localLighting.diffuse * result.shadow;
+    vec3 localIndirectDiffuse =
+        CalculateSubsurfaceLocalIndirectDiffuse(surface);
+    float weight = surface.modelInputs.subsurface.weight;
+    float transmissionWeight =
+        weight *
+        surface.modelInputs.subsurface.transmissionWeight;
+    // 先从 diffuse 反射能量中预留 transmission 份额，避免 profile/local response 重复计能。
+    float reflectedFraction = 1.0 - transmissionWeight;
+
+    result.localSubsurfaceLighting =
+        localDirectDiffuse +
+        localIndirectDiffuse * surface.ambientOcclusion;
+    result.subsurfaceWeight = weight;
+    result.transmissionWeight = transmissionWeight;
+    result.directDiffuse = mix(
+        result.directDiffuse,
+        localDirectDiffuse,
+        weight) * reflectedFraction;
+    result.indirectDiffuse = mix(
+        result.indirectDiffuse,
+        localIndirectDiffuse,
+        weight) * reflectedFraction;
+    result.transmissionLighting =
+        localLighting.transmission *
+        result.shadow *
+        transmissionWeight;
+    ResolveDeferredLightingComposition(surface, result);
+    return result;
+}
+
+DeferredLightingResult ShadePreintegratedSkinDeferredSurfaceDetailed(
+    in MaterialSurface surface,
+    in sampler2DArrayShadow inputShadowMap,
+    in sampler2D skinLutTable)
+{
+    DeferredLightingResult result =
+        ShadeDefaultLitDeferredSurfaceDetailed(
+            surface,
+            inputShadowMap);
+    PreintegratedSkinLighting skinLighting =
+        CalculatePreintegratedSkinDirectLighting(
+            surface,
+            skinLutTable);
+    vec3 localDirectDiffuse =
+        skinLighting.diffuse * result.shadow;
+    vec3 localIndirectDiffuse =
+        CalculatePreintegratedSkinIndirectDiffuse(
+            surface,
+            skinLutTable);
+    float weight =
+        surface.modelInputs.preintegratedSkin.weight;
+    float transmissionWeight =
+        weight *
+        surface.modelInputs.preintegratedSkin.transmissionWeight;
+    // transmission 与 LUT diffuse response 分路输出，最终 composition 只合成一次。
+    float reflectedFraction = 1.0 - transmissionWeight;
+
+    result.localSubsurfaceLighting =
+        localDirectDiffuse +
+        localIndirectDiffuse * surface.ambientOcclusion;
+    result.subsurfaceWeight = weight;
+    result.transmissionWeight = transmissionWeight;
+    result.directDiffuse = mix(
+        result.directDiffuse,
+        localDirectDiffuse,
+        weight) * reflectedFraction;
+    result.indirectDiffuse = mix(
+        result.indirectDiffuse,
+        localIndirectDiffuse,
+        weight) * reflectedFraction;
+    result.transmissionLighting =
+        skinLighting.transmission *
+        result.shadow *
+        transmissionWeight;
+    ResolveDeferredLightingComposition(surface, result);
+    return result;
+}
+
+DeferredLightingResult ShadeSubsurfaceProfileDeferredSurfaceDetailed(
+    in MaterialSurface surface,
+    in sampler2DArrayShadow inputShadowMap,
+    in sampler2D profileTable)
+{
+    DeferredLightingResult result =
+        ShadeDefaultLitDeferredSurfaceDetailed(
+            surface,
+            inputShadowMap);
+    float weight =
+        surface.modelInputs.subsurfaceProfile.weight;
+    float transmissionWeight =
+        weight *
+        surface.modelInputs.subsurfaceProfile.transmissionWeight;
+    // profile filter 只处理 diffuse；transmission 先扣除反射份额再独立输出。
+    float reflectedFraction = 1.0 - transmissionWeight;
+    result.directDiffuse *= reflectedFraction;
+    result.indirectDiffuse *= reflectedFraction;
+    result.subsurfaceWeight = weight;
+    result.transmissionWeight = transmissionWeight;
+    result.transmissionLighting =
+        CalculateSubsurfaceProfileTransmission(
+            surface,
+            profileTable) *
+        result.shadow *
+        transmissionWeight;
+    ResolveDeferredLightingComposition(surface, result);
+    // ID 5 的空间 response 在后处理 profile filter 中产生；这里不把未过滤 diffuse
+    // 冒充为 Debug View 16 的 local response，避免与 ID 2/3 的语义混淆。
+    result.localSubsurfaceLighting = vec3(0.0);
     return result;
 }
 
@@ -86,11 +251,10 @@ DeferredLightingResult ShadeClearCoatDeferredSurfaceDetailed(
     in MaterialSurface surface,
     in sampler2DArrayShadow inputShadowMap)
 {
-    DeferredLightingResult result = CreateDefaultDeferredLightingResult();
-    vec3 viewDir = normalize(uboVP.cameraPosition - surface.worldPosition);
-
-    // GBuffer 解码后恢复出顶层/底层两条法线；customData.xy 继续作为
-    // 清漆权重和清漆粗糙度，确保 deferred 与 forward 走同一套 BRDF。
+    DeferredLightingResult result =
+        CreateDefaultDeferredLightingResult();
+    vec3 viewDir = normalize(
+        uboVP.cameraPosition - surface.worldPosition);
     result.directLighting = CalculateClearCoatDirectLighting(
         surface.worldNormal,
         surface.clearCoatBottomNormal,
@@ -108,11 +272,11 @@ DeferredLightingResult ShadeClearCoatDeferredSurfaceDetailed(
         surface.worldPosition,
         surface.worldNormal,
         cascadeIndex);
-    result.shadowCascadeIndex = ShadowCascadeDebugValue(cascadeIndex);
+    result.shadowCascadeIndex =
+        ShadowCascadeDebugValue(cascadeIndex);
     result.shadow *= surface.precomputedShadowFactors.r;
     result.directLighting *= result.shadow;
 
-    // AO 仍只作用于最终间接光；清漆层内部的 Fresnel 与介质透射已在 IBL 函数中处理。
     result.indirectDiffuse = CalculateClearCoatDiffuseIbl(
         surface.worldNormal,
         surface.clearCoatBottomNormal,
@@ -130,48 +294,74 @@ DeferredLightingResult ShadeClearCoatDeferredSurfaceDetailed(
         surface.metallic,
         surface.customData.x,
         surface.customData.y);
-    result.indirectLighting = result.indirectDiffuse + result.indirectSpecular;
-    result.finalColor =
+    result.indirectLighting =
+        result.indirectDiffuse + result.indirectSpecular;
+    result.nonDiffuseLighting =
         surface.emissiveColor +
         result.directLighting +
         result.indirectLighting * surface.ambientOcclusion;
+    result.finalColor = result.nonDiffuseLighting;
     return result;
 }
 
-vec3 ShadeDefaultLitDeferredSurface(in MaterialSurface surface, in sampler2DArrayShadow inputShadowMap)
+DeferredLightingResult ShadeUnlitDeferredSurfaceDetailed(
+    in MaterialSurface surface)
 {
-    return ShadeDefaultLitDeferredSurfaceDetailed(surface, inputShadowMap).finalColor;
-}
-
-DeferredLightingResult ShadeUnlitDeferredSurfaceDetailed(in MaterialSurface surface)
-{
-    DeferredLightingResult result = CreateDefaultDeferredLightingResult();
+    DeferredLightingResult result =
+        CreateDefaultDeferredLightingResult();
     result.shadow = 1.0;
-    result.finalColor = surface.baseColor + surface.emissiveColor;
+    result.nonDiffuseLighting =
+        surface.baseColor + surface.emissiveColor;
+    result.finalColor = result.nonDiffuseLighting;
     return result;
 }
 
-vec3 ShadeUnlitDeferredSurface(in MaterialSurface surface)
-{
-    return ShadeUnlitDeferredSurfaceDetailed(surface).finalColor;
-}
-
-DeferredLightingResult ShadeDeferredSurfaceDetailed(in MaterialSurface surface, in sampler2DArrayShadow inputShadowMap)
+DeferredLightingResult ShadeDeferredSurfaceDetailed(
+    in MaterialSurface surface,
+    in sampler2DArrayShadow inputShadowMap,
+    in sampler2D profileTable,
+    in sampler2D skinLutTable)
 {
     switch (surface.shadingModel)
     {
         case SHADING_MODEL_UNLIT:
             return ShadeUnlitDeferredSurfaceDetailed(surface);
+        case SHADING_MODEL_SUBSURFACE:
+            return ShadeSubsurfaceDeferredSurfaceDetailed(
+                surface,
+                inputShadowMap);
+        case SHADING_MODEL_PREINTEGRATED_SKIN:
+            return ShadePreintegratedSkinDeferredSurfaceDetailed(
+                surface,
+                inputShadowMap,
+                skinLutTable);
         case SHADING_MODEL_CLEAR_COAT:
-            return ShadeClearCoatDeferredSurfaceDetailed(surface, inputShadowMap);
+            return ShadeClearCoatDeferredSurfaceDetailed(
+                surface,
+                inputShadowMap);
+        case SHADING_MODEL_SUBSURFACE_PROFILE:
+            return ShadeSubsurfaceProfileDeferredSurfaceDetailed(
+                surface,
+                inputShadowMap,
+                profileTable);
         default:
-            return ShadeDefaultLitDeferredSurfaceDetailed(surface, inputShadowMap);
+            return ShadeDefaultLitDeferredSurfaceDetailed(
+                surface,
+                inputShadowMap);
     }
 }
 
-vec3 ShadeDeferredSurface(in MaterialSurface surface, in sampler2DArrayShadow inputShadowMap)
+vec3 ShadeDeferredSurface(
+    in MaterialSurface surface,
+    in sampler2DArrayShadow inputShadowMap,
+    in sampler2D profileTable,
+    in sampler2D skinLutTable)
 {
-    return ShadeDeferredSurfaceDetailed(surface, inputShadowMap).finalColor;
+    return ShadeDeferredSurfaceDetailed(
+        surface,
+        inputShadowMap,
+        profileTable,
+        skinLutTable).finalColor;
 }
 
 #endif

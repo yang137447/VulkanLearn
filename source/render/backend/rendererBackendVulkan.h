@@ -195,7 +195,9 @@ public:
     vk::Sampler CreateDepthSampler(const std::string& debugName);
     vk::Sampler CreateDepthCompareSampler(const std::string& debugName);
     vk::CommandBuffer BeginSingleTimeCommands();
+    // End 会提交并等待专用 fence；Abort 只允许释放尚未提交的 command buffer。
     void EndSingleTimeCommands(vk::CommandBuffer& commandBuffer);
+    void AbortSingleTimeCommands(vk::CommandBuffer& commandBuffer);
     void CopyBufferToImage(
         vk::Buffer buffer,
         vk::Image image,

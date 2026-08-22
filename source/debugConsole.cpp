@@ -366,6 +366,15 @@ void DebugConsole::PrintHelp() const
     std::cout << "    9: Indirect Diffuse\n";
     std::cout << "    10: Indirect Specular\n";
     std::cout << "    11: Shadow Cascade Index\n";
+    std::cout << "    12: Shading Model\n";
+    std::cout << "    13: Subsurface Weight\n";
+    std::cout << "    14: Transmission Weight\n";
+    std::cout << "    15: SSS Asset ID\n";
+    std::cout << "    16: Local SSS Response\n";
+    std::cout << "    17: Diffuse Before SSS\n";
+    std::cout << "    18: Diffuse After SSS\n";
+    std::cout << "    19: SSS Pixel Radius\n";
+    std::cout << "    20: SSS Valid Weight\n";
     std::cout << "  tonemap <mode> - set tone mapping mode\n";
     std::cout << "    0: Linear clamp\n";
     std::cout << "    1: Reinhard\n";

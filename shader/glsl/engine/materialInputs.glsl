@@ -16,11 +16,43 @@ struct ThinTranslucentMaterialInputs
     float surfaceCoverage;
 };
 
+struct SubsurfaceMaterialInputs
+{
+    vec3 color;
+    float weight;
+    float wrapWidth;
+    float backscatterPower;
+    float backscatterWeight;
+    float thickness;
+    float transmissionWeight;
+};
+
+struct PreintegratedSkinMaterialInputs
+{
+    float skinLutId;
+    float thickness;
+    float thicknessScale;
+    float weight;
+    float curvature;
+    float transmissionWeight;
+};
+
+struct SubsurfaceProfileMaterialInputs
+{
+    float profileId;
+    float weight;
+    float thickness;
+    float transmissionWeight;
+};
+
 struct MaterialModelInputs
 {
     // 每个字段只属于一个 ShadingModel，禁止把模型专用数据塞进无语义 customData。
     ClearCoatMaterialInputs clearCoat;
     ThinTranslucentMaterialInputs thinTranslucent;
+    SubsurfaceMaterialInputs subsurface;
+    PreintegratedSkinMaterialInputs preintegratedSkin;
+    SubsurfaceProfileMaterialInputs subsurfaceProfile;
     float anisotropy;
 };
 
@@ -66,6 +98,23 @@ MaterialInputs CreateDefaultMaterialInputs()
     inputs.modelInputs.clearCoat.bottomNormal = inputs.normal;
     inputs.modelInputs.thinTranslucent.transmittanceColor = vec3(1.0);
     inputs.modelInputs.thinTranslucent.surfaceCoverage = 1.0;
+    inputs.modelInputs.subsurface.color = vec3(1.0);
+    inputs.modelInputs.subsurface.weight = 0.0;
+    inputs.modelInputs.subsurface.wrapWidth = 0.5;
+    inputs.modelInputs.subsurface.backscatterPower = 4.0;
+    inputs.modelInputs.subsurface.backscatterWeight = 0.5;
+    inputs.modelInputs.subsurface.thickness = 0.01;
+    inputs.modelInputs.subsurface.transmissionWeight = 0.0;
+    inputs.modelInputs.preintegratedSkin.skinLutId = 0.0;
+    inputs.modelInputs.preintegratedSkin.thickness = 0.01;
+    inputs.modelInputs.preintegratedSkin.thicknessScale = 1.0;
+    inputs.modelInputs.preintegratedSkin.weight = 0.0;
+    inputs.modelInputs.preintegratedSkin.curvature = 0.0;
+    inputs.modelInputs.preintegratedSkin.transmissionWeight = 0.0;
+    inputs.modelInputs.subsurfaceProfile.profileId = 0.0;
+    inputs.modelInputs.subsurfaceProfile.weight = 0.0;
+    inputs.modelInputs.subsurfaceProfile.thickness = 0.01;
+    inputs.modelInputs.subsurfaceProfile.transmissionWeight = 0.0;
     inputs.modelInputs.anisotropy = 0.0;
     return inputs;
 }

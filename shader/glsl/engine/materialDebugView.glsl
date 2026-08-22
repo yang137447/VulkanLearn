@@ -11,6 +11,10 @@ struct MaterialDebugLightingData
     vec3 directLighting;
     vec3 indirectDiffuse;
     vec3 indirectSpecular;
+    vec3 localSubsurfaceLighting;
+    vec3 diffuseBeforeSubsurface;
+    float subsurfaceWeight;
+    float transmissionWeight;
 };
 
 MaterialDebugLightingData CreateMaterialDebugLightingData(
@@ -26,6 +30,10 @@ MaterialDebugLightingData CreateMaterialDebugLightingData(
     data.directLighting = directLighting;
     data.indirectDiffuse = indirectDiffuse;
     data.indirectSpecular = indirectSpecular;
+    data.localSubsurfaceLighting = vec3(0.0);
+    data.diffuseBeforeSubsurface = vec3(0.0);
+    data.subsurfaceWeight = 0.0;
+    data.transmissionWeight = 0.0;
     return data;
 }
 
@@ -54,6 +62,24 @@ vec4 ResolveMaterialDebugView(
     float indirectDiffuseMask = MaterialDebugViewModeMask(9);
     float indirectSpecularMask = MaterialDebugViewModeMask(10);
     float shadowCascadeMask = MaterialDebugViewModeMask(11);
+    float shadingModelMask = MaterialDebugViewModeMask(12);
+    float subsurfaceWeightMask = MaterialDebugViewModeMask(13);
+    float transmissionWeightMask = MaterialDebugViewModeMask(14);
+    float subsurfaceAssetIdMask = MaterialDebugViewModeMask(15);
+    float localSubsurfaceMask = MaterialDebugViewModeMask(16);
+    float diffuseBeforeSubsurfaceMask = MaterialDebugViewModeMask(17);
+
+    float subsurfaceAssetId = 0.0;
+    if (surface.shadingModel == SHADING_MODEL_PREINTEGRATED_SKIN)
+    {
+        subsurfaceAssetId =
+            surface.modelInputs.preintegratedSkin.skinLutId / 15.0;
+    }
+    else if (surface.shadingModel == SHADING_MODEL_SUBSURFACE_PROFILE)
+    {
+        subsurfaceAssetId =
+            surface.modelInputs.subsurfaceProfile.profileId / 255.0;
+    }
 
     float debugMask = min(
         baseColorMask +
@@ -66,7 +92,13 @@ vec4 ResolveMaterialDebugView(
         directLightingMask +
         indirectDiffuseMask +
         indirectSpecularMask +
-        shadowCascadeMask,
+        shadowCascadeMask +
+        shadingModelMask +
+        subsurfaceWeightMask +
+        transmissionWeightMask +
+        subsurfaceAssetIdMask +
+        localSubsurfaceMask +
+        diffuseBeforeSubsurfaceMask,
         1.0);
 
     vec4 debugColor =
@@ -80,7 +112,13 @@ vec4 ResolveMaterialDebugView(
         directLightingMask * vec4(lighting.directLighting, 1.0) +
         indirectDiffuseMask * vec4(lighting.indirectDiffuse, 1.0) +
         indirectSpecularMask * vec4(lighting.indirectSpecular, 1.0) +
-        shadowCascadeMask * vec4(vec3(lighting.shadowCascadeIndex), 1.0);
+        shadowCascadeMask * vec4(vec3(lighting.shadowCascadeIndex), 1.0) +
+        shadingModelMask * vec4(vec3(float(surface.shadingModel) / 10.0), 1.0) +
+        subsurfaceWeightMask * vec4(vec3(lighting.subsurfaceWeight), 1.0) +
+        transmissionWeightMask * vec4(vec3(lighting.transmissionWeight), 1.0) +
+        subsurfaceAssetIdMask * vec4(vec3(subsurfaceAssetId), 1.0) +
+        localSubsurfaceMask * vec4(lighting.localSubsurfaceLighting, 1.0) +
+        diffuseBeforeSubsurfaceMask * vec4(lighting.diffuseBeforeSubsurface, 1.0);
 
     return mix(defaultColor, debugColor, debugMask);
 #else

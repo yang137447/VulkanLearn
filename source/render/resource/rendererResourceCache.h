@@ -15,6 +15,7 @@ namespace VL
 {
 
 class RendererObjectResourceEntry;
+class SubsurfaceResourceSet;
 
 // Renderer-side CPU resource cache. Global resources survive world reloads;
 // world-local resources are prepared in isolated candidate packages and retired
@@ -31,6 +32,8 @@ public:
         std::unordered_map<std::string, std::shared_ptr<MaterialInstance>> materialInstances;
         std::unordered_map<std::string, std::shared_ptr<RendererObjectResourceEntry>> objectResources;
         std::unordered_map<std::string, std::shared_ptr<Texture>> textures;
+        // lookup texture 与 stable ID 只属于当前 World；发布后通过 const 句柄消费。
+        std::shared_ptr<const SubsurfaceResourceSet> subsurfaceResources;
 
         bool Empty() const noexcept;
     };
@@ -99,6 +102,11 @@ public:
 
     void BindTexture(std::string textureKey, std::shared_ptr<Texture> texture);
     const std::shared_ptr<Texture>* GetTexture(std::string_view textureKey) const;
+    // 只绑定已完成的 candidate resource set，不允许 material loader 修改其内容。
+    void BindSubsurfaceResources(
+        std::shared_ptr<const SubsurfaceResourceSet> resources);
+    const std::shared_ptr<const SubsurfaceResourceSet>&
+    GetSubsurfaceResources() const noexcept;
 
 private:
     RendererResourceCache();

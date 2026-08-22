@@ -6,7 +6,9 @@
 #include "../engine/materialDebugView.glsl"
 
 layout(location = 0) in vec2 inUV;
-layout(location = 0) out vec4 outColor;
+layout(location = 0) out vec4 outDiffuseLighting;
+layout(location = 1) out vec4 outNonDiffuseLighting;
+layout(location = 2) out vec4 outTransmissionLighting;
 
 // Set 3 是 RenderGraph 为“当前 pass 输入”预留的 descriptor set。
 // 这里的 binding 顺序必须和 config/renderGraphConfig.json 中 deferredLighting.input 完全一致。
@@ -43,7 +45,11 @@ void main()
     float deviceDepth = texture(sceneDepth, inUV).r;
     surface.worldPosition = ReconstructWorldPositionFromSceneDepth(inUV, deviceDepth);
 
-    DeferredLightingResult lighting = ShadeDeferredSurfaceDetailed(surface, shadowMap);
+    DeferredLightingResult lighting = ShadeDeferredSurfaceDetailed(
+        surface,
+        shadowMap,
+        subsurfaceProfileTable,
+        preintegratedSkinLutTable);
     vec4 finalColor = vec4(lighting.finalColor, surface.opacity);
     MaterialDebugLightingData debugLighting = CreateMaterialDebugLightingData(
         lighting.shadow,
@@ -51,5 +57,27 @@ void main()
         lighting.directLighting,
         lighting.indirectDiffuse,
         lighting.indirectSpecular);
-    outColor = ResolveMaterialDebugView(surface, debugLighting, finalColor);
+    debugLighting.localSubsurfaceLighting =
+        lighting.localSubsurfaceLighting;
+    debugLighting.diffuseBeforeSubsurface =
+        lighting.defaultDiffuseLighting;
+    debugLighting.subsurfaceWeight = lighting.subsurfaceWeight;
+    debugLighting.transmissionWeight = lighting.transmissionWeight;
+    vec4 resolvedColor = ResolveMaterialDebugView(
+        surface,
+        debugLighting,
+        finalColor);
+
+    if (uboVP.debugViewMode >= 1 &&
+        uboVP.debugViewMode <= 17)
+    {
+        outDiffuseLighting = resolvedColor;
+        outNonDiffuseLighting = vec4(0.0);
+        outTransmissionLighting = vec4(0.0);
+        return;
+    }
+
+    outDiffuseLighting = vec4(lighting.diffuseLighting, surface.opacity);
+    outNonDiffuseLighting = vec4(lighting.nonDiffuseLighting, 0.0);
+    outTransmissionLighting = vec4(lighting.transmissionLighting, 0.0);
 }

@@ -22,7 +22,7 @@ struct GBufferData
     vec4 gbufferE;
     // Velocity: xy = current screen uv - previous screen uv, zw reserved.
     vec4 gbufferVelocity;
-    // F: world tangent encoded to 0..1, alpha = anisotropy. Valid when GBUFFER_HAS_ANISOTROPY_MASK is set.
+    // F: world tangent/anisotropy for ordinary lit models, or secondary SSS custom data for IDs 2 and 3.
     vec4 gbufferF;
     // Not a GBuffer slot: base pass scene contribution such as emissive.
     vec4 sceneColorBase;
@@ -154,6 +154,12 @@ GBufferData EncodeGBuffer(in MaterialSurface surface, in GBufferPixelData pixelD
 {
     GBufferData data;
     data.gbufferA = vec4(surface.baseColor, surface.opacity);
+    // ID 2 为了保持 opaque GBuffer 预算，把 transmissionWeight 放在 GBufferA.a。
+    if (surface.shadingModel == SHADING_MODEL_SUBSURFACE)
+    {
+        data.gbufferA.a =
+            surface.modelInputs.subsurface.transmissionWeight;
+    }
     data.gbufferB = vec4(EncodeGBufferDirection(normalize(surface.worldNormal)), EncodeGBufferPacked(surface.shadingModel, surface.selectiveOutputMask));
     data.gbufferC = vec4(surface.metallic, 0.5, surface.roughness, surface.ambientOcclusion);
     data.gbufferD = surface.customData;
@@ -170,6 +176,23 @@ GBufferData EncodeGBuffer(in MaterialSurface surface, in GBufferPixelData pixelD
     data.gbufferE = surface.precomputedShadowFactors;
     data.gbufferVelocity = vec4(pixelData.velocity, 0.0, 0.0);
     data.gbufferF = vec4(EncodeGBufferDirection(normalize(surface.worldTangent.xyz)), surface.anisotropy);
+    // 三类 SSS 使用互不重叠的 customData 语义；decode 必须与 materialInputs 一一对应。
+    if (surface.shadingModel == SHADING_MODEL_SUBSURFACE)
+    {
+        data.gbufferF = vec4(
+            surface.modelInputs.subsurface.wrapWidth,
+            surface.modelInputs.subsurface.backscatterPower,
+            surface.modelInputs.subsurface.backscatterWeight,
+            surface.modelInputs.subsurface.thickness);
+    }
+    else if (surface.shadingModel == SHADING_MODEL_PREINTEGRATED_SKIN)
+    {
+        data.gbufferF = vec4(
+            surface.modelInputs.preintegratedSkin.curvature,
+            surface.modelInputs.preintegratedSkin.transmissionWeight,
+            0.0,
+            0.0);
+    }
     data.sceneColorBase = vec4(surface.emissiveColor, surface.opacity);
     return data;
 }
@@ -202,6 +225,33 @@ MaterialSurface DecodeGBufferSurface(in GBufferData data)
     surface.worldTangent = vec4(DecodeGBufferDirection(data.gbufferF.rgb), 1.0);
     surface.anisotropy = data.gbufferF.a;
     surface.emissiveColor = data.sceneColorBase.rgb;
+    if (surface.shadingModel == SHADING_MODEL_SUBSURFACE)
+    {
+        surface.opacity = 1.0;
+        surface.modelInputs.subsurface.color = surface.customData.rgb;
+        surface.modelInputs.subsurface.weight = surface.customData.a;
+        surface.modelInputs.subsurface.wrapWidth = data.gbufferF.x;
+        surface.modelInputs.subsurface.backscatterPower = data.gbufferF.y;
+        surface.modelInputs.subsurface.backscatterWeight = data.gbufferF.z;
+        surface.modelInputs.subsurface.thickness = data.gbufferF.w;
+        surface.modelInputs.subsurface.transmissionWeight = data.gbufferA.a;
+    }
+    else if (surface.shadingModel == SHADING_MODEL_PREINTEGRATED_SKIN)
+    {
+        surface.modelInputs.preintegratedSkin.skinLutId = surface.customData.x;
+        surface.modelInputs.preintegratedSkin.thickness = surface.customData.y;
+        surface.modelInputs.preintegratedSkin.thicknessScale = surface.customData.z;
+        surface.modelInputs.preintegratedSkin.weight = surface.customData.w;
+        surface.modelInputs.preintegratedSkin.curvature = data.gbufferF.x;
+        surface.modelInputs.preintegratedSkin.transmissionWeight = data.gbufferF.y;
+    }
+    else if (surface.shadingModel == SHADING_MODEL_SUBSURFACE_PROFILE)
+    {
+        surface.modelInputs.subsurfaceProfile.profileId = surface.customData.x;
+        surface.modelInputs.subsurfaceProfile.weight = surface.customData.y;
+        surface.modelInputs.subsurfaceProfile.thickness = surface.customData.z;
+        surface.modelInputs.subsurfaceProfile.transmissionWeight = surface.customData.w;
+    }
     return surface;
 }
 

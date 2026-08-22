@@ -65,6 +65,8 @@ Documentation in this repository is split by responsibility:
   - implemented ClearCoat-based car paint contract, custom data packing, and authoring parameters
 - `rendering/thin-translucent-shading-model.md`
   - implemented UE 5.8 Legacy Thin Translucent closure, dual-source blend path, scalar fallback, sorting, and lamp-cover authoring contract
+- `rendering/subsurface-shading-models.md`
+  - implemented Subsurface, PreintegratedSkin, and SubsurfaceProfile contracts, including Compute-only lookup generation, GBuffer packing, lighting-lobe composition, profile filtering, and validation
 - `rendering/shader-build-cache.md`
   - implemented BLAKE3-256 shader identities, versioned build-cache manifest, batch-wide publication preflight, stale cache-hit rejection, atomic artifact commit, and startup failure semantics
 - `rendering/shader-hot-reload.md`
@@ -99,6 +101,8 @@ Rendering plans:
   - markdown route for SpeedTree, foliage SSS, wind, and multi-pivot work
 - `plan/rendering/foliage-speedtree-sss-wind-roadmap.html`
   - HTML reading version of the foliage / SpeedTree route
+- `plan/rendering/subsurface-shading-models-development-plan.md`
+  - completed 2026-08-22 implementation record for Subsurface, PreintegratedSkin, and SubsurfaceProfile; the current contract lives in `rendering/subsurface-shading-models.md`
 - `plan/rendering/material-module-system.md`
   - future material module boundary, public/private semantics, and dependency ordering
 - `plan/rendering/neox-character-shader-feature-inventory.md`

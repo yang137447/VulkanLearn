@@ -145,6 +145,36 @@ std::shared_ptr<ComputePipeline> PipelineFactory::CreateComputePipeline(
     return pipeline;
 }
 
+std::shared_ptr<ComputePipeline>
+PipelineFactory::CreateComputePipelineCandidate(
+    const std::string& shaderName,
+    ComputeShaderArtifact* candidateArtifact)
+{
+    if (shaderCompiler != nullptr)
+    {
+        const VL::ShaderBuildArtifact buildArtifact =
+            GetShaderCompiler().EnsureComputeStageCompiled(
+                shaderName);
+        ComputeShaderArtifact artifact =
+            BuildComputeShaderArtifact(
+                buildArtifact,
+                shaderName);
+        if (candidateArtifact != nullptr)
+        {
+            *candidateArtifact = artifact;
+        }
+
+        // Candidate 生成器的 pipeline 只服务本次资源 prepare，不能污染
+        // active compute cache；资源事务失败时它会随局部 shared_ptr 释放。
+        return CreateComputePipeline(artifact);
+    }
+
+    return std::shared_ptr<ComputePipeline>(new ComputePipeline(
+        rendererBackend,
+        *device,
+        shaderName));
+}
+
 std::shared_ptr<ComputePipeline> PipelineFactory::CreateComputePipeline(
     const ComputeShaderArtifact& artifact)
 {

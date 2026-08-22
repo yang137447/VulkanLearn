@@ -1,0 +1,22 @@
+{
+    "name": "M_sssComposition",
+    "type": "material",
+    "shadingModel": "Unlit",
+    "renderStates": {
+        "renderMode": "Opaque",
+        "cullMode": "Back"
+    },
+    "macros": {},
+    "parameters": {
+        "u_sssDiagnosticsParameters": {
+            "type": "vec4",
+            "default": [16.0, 0.0, 0.0, 0.0]
+        }
+    },
+    "textures": {
+        "subsurfaceProfileTable": {
+            "type": "sampler2D",
+            "default": null
+        }
+    }
+}

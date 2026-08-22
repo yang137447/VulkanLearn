@@ -29,6 +29,7 @@ struct MaterialSurface
     // 薄介质透射颜色和覆盖率分别控制透射吸收与 Add/Mul 对目标的作用范围。
     vec3 transmittanceColor;
     float surfaceCoverage;
+    MaterialModelInputs modelInputs;
     uint shadingModel;
     uint selectiveOutputMask;
     // customData 只属于 GBuffer 编码层，不是 Material Function 的公共输入接口。
@@ -53,6 +54,7 @@ MaterialSurface CreateDefaultMaterialSurface()
     surface.ambientOcclusion = 1.0;
     surface.transmittanceColor = vec3(1.0);
     surface.surfaceCoverage = 1.0;
+    surface.modelInputs = CreateDefaultMaterialInputs().modelInputs;
     surface.shadingModel = SHADING_MODEL_DEFAULT_LIT;
     surface.selectiveOutputMask = 0u;
     surface.customData = vec4(0.0);
@@ -85,16 +87,43 @@ MaterialSurface ResolveMaterialSurface(
         inputs.modelInputs.thinTranslucent.transmittanceColor;
     surface.surfaceCoverage =
         inputs.modelInputs.thinTranslucent.surfaceCoverage;
+    surface.modelInputs = inputs.modelInputs;
     surface.shadingModel = MATERIAL_SHADING_MODEL;
     surface.precomputedShadowFactors = vec4(1.0);
     surface.anisotropy = inputs.modelInputs.anisotropy;
 
+    // 这里把模型专用输入一次性编码到 GBuffer customData；后续 pass 不再读取 MaterialInputs。
     if (surface.shadingModel == SHADING_MODEL_CLEAR_COAT)
     {
         // Clear Coat 的模型专用输入只在这里转换为 GBuffer 内部编码。
         surface.customData.xy = vec2(
             inputs.modelInputs.clearCoat.weight,
             inputs.modelInputs.clearCoat.roughness);
+        surface.selectiveOutputMask |= GBUFFER_HAS_CUSTOM_DATA_MASK;
+    }
+    else if (surface.shadingModel == SHADING_MODEL_SUBSURFACE)
+    {
+        surface.customData = vec4(
+            inputs.modelInputs.subsurface.color,
+            inputs.modelInputs.subsurface.weight);
+        surface.selectiveOutputMask |= GBUFFER_HAS_CUSTOM_DATA_MASK;
+    }
+    else if (surface.shadingModel == SHADING_MODEL_PREINTEGRATED_SKIN)
+    {
+        surface.customData = vec4(
+            inputs.modelInputs.preintegratedSkin.skinLutId,
+            inputs.modelInputs.preintegratedSkin.thickness,
+            inputs.modelInputs.preintegratedSkin.thicknessScale,
+            inputs.modelInputs.preintegratedSkin.weight);
+        surface.selectiveOutputMask |= GBUFFER_HAS_CUSTOM_DATA_MASK;
+    }
+    else if (surface.shadingModel == SHADING_MODEL_SUBSURFACE_PROFILE)
+    {
+        surface.customData = vec4(
+            inputs.modelInputs.subsurfaceProfile.profileId,
+            inputs.modelInputs.subsurfaceProfile.weight,
+            inputs.modelInputs.subsurfaceProfile.thickness,
+            inputs.modelInputs.subsurfaceProfile.transmissionWeight);
         surface.selectiveOutputMask |= GBUFFER_HAS_CUSTOM_DATA_MASK;
     }
 
