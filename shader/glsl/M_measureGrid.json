@@ -1,17 +1,26 @@
 {
-    "name": "M_measureGrid",
-    "type": "material",
-    "shadingModel": "DefaultLit",
-    "renderStates": {
-        "renderMode": "Opaque",
-        "cullMode": "Back"
-    },
-    "macros": {},
-    "parameters": {
-        "u_tintColor": {
-            "type": "vec4",
-            "default": [1.0, 1.0, 1.0, 1.0]
-        }
-    },
-    "textures": {}
+  "name": "M_measureGrid",
+  "type": "material",
+  "shadingModel": "DefaultLit",
+  "renderStates": {
+    "renderMode": "Opaque",
+    "cullMode": "Back"
+  },
+  "macros": {},
+  "parameters": {
+    "u_tintColor": {
+      "type": "vec4",
+      "default": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ]
+    }
+  },
+  "textures": {},
+  "shaderEvaluation": {
+    "vertex": "M_measureGrid.vertex.glsl",
+    "surface": "M_measureGrid.surface.glsl"
+  }
 }

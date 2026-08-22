@@ -119,8 +119,8 @@ Fragment visibility，因此 WPO/Wind 不再依赖 Base reflection 恰好保留 
 
 推荐目录示例：
 
-- `shader/glsl/unlit.vert`
-- `shader/glsl/unlit.frag`
+- `shader/glsl/M_unlit.vertex.glsl`
+- `shader/glsl/M_unlit.surface.glsl`
 - `shader/glsl/generate/M_unlitParamter.glsl`
 - `shader/glsl/pass/sky.vert`
 - `shader/glsl/pass/sky.frag`

@@ -5,23 +5,23 @@
 #include "../engine/materialSurface.glsl"
 #include "shaderReloadTestShared.glsl"
 
-MaterialSurface EvaluateMaterialSurface(in MaterialPixelContext pixel)
+MaterialInputs EvaluateMaterialInputs(in MaterialFunctionContext pixel)
 {
-    MaterialSurface surface = CreateDefaultMaterialSurface();
-    surface.shadingModel = SHADING_MODEL_UNLIT;
+    MaterialInputs inputs = CreateDefaultMaterialInputs();
+    
     vec3 primaryTexture =
         texture(u_reloadTexture, pixel.texCoord).rgb;
     vec3 alternateTexture =
         texture(u_reloadAlternateTexture, pixel.texCoord).rgb;
-    surface.baseColor =
+    inputs.baseColor =
         ShaderReloadTestColor(pixel) *
         mix(primaryTexture, alternateTexture, 0.05);
 #if USE_RELOAD_REQUIRED_TEXTURE
-    surface.baseColor *=
+    inputs.baseColor *=
         texture(u_zReloadRequiredTexture, pixel.texCoord).rgb;
 #endif
-    surface.opacity = u_reloadTestColor.a;
-    return surface;
+    inputs.opacity = u_reloadTestColor.a;
+    return inputs;
 }
 
 #endif

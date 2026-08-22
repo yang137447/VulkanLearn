@@ -17,7 +17,7 @@ M_ 默认值 + MI_ override
 ```
 
 - Material Evaluation 只实现 `EvaluateMaterialVertex()` 和
-  `EvaluateMaterialSurface()`。
+  `EvaluateMaterialInputs()`。
 - Pass Template 持有 `main()`、投影、Alpha Clip 和 Pass 输出。
 - `MaterialShaderComposer` 只组合 include、feature define 与模板，不解析 GLSL。
 - `ShaderCompiler` 继续负责 shaderc、SPIR-V、优化和 debug reflection artifact。
@@ -29,8 +29,8 @@ M_ 默认值 + MI_ override
 
 ```json
 "shaderEvaluation": {
-    "vertex": "materialFunction/mf_pbrVertex.glsl",
-    "surface": "materialFunction/mf_pbrSurface.glsl"
+    "vertex": "M_pbr.vertex.glsl",
+    "surface": "M_pbr.surface.glsl"
 },
 "features": {
     "modifiesMeshPosition": false
@@ -52,11 +52,11 @@ MI asset path 保持运行时唯一，不会为 ShadowDepth 创建第二份 MI�
 
 ```glsl
 MaterialVertex EvaluateMaterialVertex(in MaterialVertexInput vertexInput);
-MaterialSurface EvaluateMaterialSurface(in MaterialPixelContext pixel);
+MaterialInputs EvaluateMaterialInputs(in MaterialFunctionContext context);
 ```
 
 顶点 Evaluation 只返回局部空间材质结果。Base 与 ShadowDepth 模板分别完成
-世界空间和裁剪空间变换。片元 Evaluation 只填 `MaterialSurface`，不得调用
+世界空间和裁剪空间变换。片元 Evaluation 只填 `MaterialInputs`，不得调用
 `ApplyAlphaClip()`；需要 coverage 的模板在消费 Surface 后统一执行 Clip。
 
 第一版固定 `vertexFactoryKey = StaticMesh`，对应当前固定顶点输入 locations。

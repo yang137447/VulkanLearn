@@ -8,9 +8,9 @@ layout(location = 0) in MaterialVaryings v2f;
 
 void main()
 {
-    MaterialPixelContext pixel = CreateMaterialPixelContext(v2f);
-    MaterialSurface surface = EvaluateMaterialSurface(pixel);
-    ApplyAlphaClip(surface.opacity, u_alphaClipThreshold);
+    MaterialFunctionContext context = CreateMaterialFunctionContext(v2f);
+    MaterialInputs inputs = EvaluateMaterialInputs(context);
+    ApplyAlphaClip(inputs.opacityMask, u_alphaClipThreshold);
 }
 #else
 void main()

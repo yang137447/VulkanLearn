@@ -33,6 +33,34 @@ namespace
         return normalized.begin() == normalized.end() || *normalized.begin() != "..";
     }
 
+    void ValidateMaterialEvaluationPaths(
+        const nlohmann::json& evaluation,
+        std::string_view materialPath)
+    {
+        const std::string materialGlslPath =
+            MaterialAssetUtils::NormalizeShaderGlslRelativePath(materialPath);
+        const std::filesystem::path materialFilePath(materialGlslPath);
+        const std::string materialStem = materialFilePath.stem().string();
+        const std::filesystem::path materialDirectory = materialFilePath.parent_path();
+        const std::string expectedVertex =
+            (materialDirectory / (materialStem + ".vertex.glsl")).generic_string();
+        const std::string expectedSurface =
+            (materialDirectory / (materialStem + ".surface.glsl")).generic_string();
+        const std::string actualVertex =
+            std::filesystem::path(evaluation.at("vertex").get<std::string>())
+                .lexically_normal().generic_string();
+        const std::string actualSurface =
+            std::filesystem::path(evaluation.at("surface").get<std::string>())
+                .lexically_normal().generic_string();
+        if (actualVertex != expectedVertex || actualSurface != expectedSurface)
+        {
+            throw std::runtime_error(
+                "shaderEvaluation must point to the material-local public entries " +
+                expectedVertex + " and " + expectedSurface + ": " +
+                std::string(materialPath));
+        }
+    }
+
     void ValidateSparseOverrideObject(
         const nlohmann::json& overrides,
         std::string_view field,
@@ -99,6 +127,7 @@ void MaterialAssetValidator::ValidateDefinition(
                 "shaderEvaluation must contain shader/glsl-relative vertex and surface paths: " +
                 std::string(materialPath));
         }
+        ValidateMaterialEvaluationPaths(evaluation, materialPath);
     }
 
     for (const auto& [macroName, macroValue] : materialJson["macros"].items())

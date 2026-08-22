@@ -33,16 +33,17 @@ layout(location = 0) out vec4 outSceneColor;
 
 void main()
 {
-    MaterialPixelContext pixel = CreateMaterialPixelContext(v2f);
-    MaterialSurface surface = EvaluateMaterialSurface(pixel);
+    MaterialFunctionContext context = CreateMaterialFunctionContext(v2f);
+    MaterialInputs inputs = EvaluateMaterialInputs(context);
+    MaterialSurface surface = ResolveMaterialSurface(inputs, context);
 
     // Coverage 是 Pass 行為：所有需要 Alpha Clip 的 pass 都在消費 Surface 後統一執行。
 #if MATERIAL_USES_OPACITY_MASK
-    ApplyAlphaClip(surface.opacity, u_alphaClipThreshold);
+    ApplyAlphaClip(inputs.opacityMask, u_alphaClipThreshold);
 #endif
 
 #if VL_MATERIAL_OUTPUT_GBUFFER
-    GBufferData gbuffer = BuildMaterialGBufferOutput(surface, pixel);
+    GBufferData gbuffer = BuildMaterialGBufferOutput(surface, context);
     outGBufferA = gbuffer.gbufferA;
     outGBufferB = gbuffer.gbufferB;
     outGBufferC = gbuffer.gbufferC;

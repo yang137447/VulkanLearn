@@ -3,8 +3,8 @@
     "type": "material",
     "shadingModel": "ThinTranslucent",
     "shaderEvaluation": {
-        "vertex": "materialFunction/mf_pbrVertex.glsl",
-        "surface": "materialFunction/mf_thinTranslucentSurface.glsl"
+        "vertex": "M_thinTranslucent.vertex.glsl",
+        "surface": "M_thinTranslucent.surface.glsl"
     },
     "features": {
         "modifiesMeshPosition": false

@@ -99,7 +99,7 @@ native dual-source 路径颜色等价。回退是显式平台降级，不会静�
 ## 材质资产合同
 
 源材质为 `shader/glsl/M_thinTranslucent.json`，Surface 入口为
-`shader/glsl/materialFunction/mf_thinTranslucentSurface.glsl`：
+`shader/glsl/M_thinTranslucent.surface.glsl`：
 
 | 参数 | 通道 | 语义 |
 | --- | --- | --- |

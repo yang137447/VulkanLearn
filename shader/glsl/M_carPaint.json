@@ -3,8 +3,8 @@
     "type": "material",
     "shadingModel": "ClearCoat",
     "shaderEvaluation": {
-        "vertex": "materialFunction/mf_pbrVertex.glsl",
-        "surface": "materialFunction/mf_clearCoatSurface.glsl"
+        "vertex": "M_carPaint.vertex.glsl",
+        "surface": "M_carPaint.surface.glsl"
     },
     "features": {
         "modifiesMeshPosition": false

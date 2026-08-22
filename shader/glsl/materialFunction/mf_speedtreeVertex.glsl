@@ -5,8 +5,8 @@
 #include "../common/commonUbo.glsl"
 #include "mf_speedtreeDeformation.glsl"
 
-// Wind/WPO 只在這個材質入口修改局部頂點，Base 與 ShadowDepth 不再各自複製變形。
-MaterialVertex EvaluateMaterialVertex(in MaterialVertexInput vertexInput)
+// SpeedTree 变形是可复用顶点函数；公开 EvaluateMaterialVertex 位于 M_speedtree.vertex.glsl。
+MaterialVertex EvaluateMFSpeedTreeVertex(in MaterialVertexInput vertexInput)
 {
     MaterialVertex vertex = CreateDefaultMaterialVertex(vertexInput);
     vertex.localPosition = EvaluateSpeedTreeDeformedPosition(

@@ -2,7 +2,16 @@
 #define VL_ENGINE_MATERIAL_SURFACE_GLSL
 
 #include "../common/shadingModel.glsl"
+#include "materialContext.glsl"
+#include "materialInputs.glsl"
 
+#ifndef MATERIAL_SHADING_MODEL
+#define MATERIAL_SHADING_MODEL SHADING_MODEL_DEFAULT_LIT
+#endif
+
+// MaterialSurface 是 Engine 将 MaterialInputs 与当前像素上下文合并后的内部数据。
+// 它可以携带 Lighting/GBuffer 所需的世界空间位置和编码辅助字段，
+// 但母材质公开入口不得直接构造或返回它。
 struct MaterialSurface
 {
     vec3 worldPosition;
@@ -22,6 +31,7 @@ struct MaterialSurface
     float surfaceCoverage;
     uint shadingModel;
     uint selectiveOutputMask;
+    // customData 只属于 GBuffer 编码层，不是 Material Function 的公共输入接口。
     vec4 customData;
     vec4 precomputedShadowFactors;
     vec4 worldTangent;
@@ -49,6 +59,45 @@ MaterialSurface CreateDefaultMaterialSurface()
     surface.precomputedShadowFactors = vec4(1.0);
     surface.worldTangent = vec4(1.0, 0.0, 0.0, 1.0);
     surface.anisotropy = 0.0;
+    return surface;
+}
+
+// MeshPass 在调用 ShadingModel 或输出编码前统一执行这次语义解析。
+// 这样 MaterialInputs 的所有权保持在母材质，Surface 的临时编码字段保持在 Engine。
+MaterialSurface ResolveMaterialSurface(
+    in MaterialInputs inputs,
+    in MaterialFunctionContext context)
+{
+    MaterialSurface surface = CreateDefaultMaterialSurface();
+    surface.worldPosition = context.worldPosition;
+    surface.worldNormal = normalize(inputs.normal);
+    surface.clearCoatBottomNormal =
+        normalize(inputs.modelInputs.clearCoat.bottomNormal);
+    surface.worldTangent = inputs.tangent;
+    surface.baseColor = inputs.baseColor;
+    surface.opacity = inputs.opacity;
+    surface.emissiveColor = inputs.emissiveColor;
+    surface.roughness = inputs.roughness;
+    surface.metallic = inputs.metallic;
+    surface.specular = inputs.specular;
+    surface.ambientOcclusion = inputs.ambientOcclusion;
+    surface.transmittanceColor =
+        inputs.modelInputs.thinTranslucent.transmittanceColor;
+    surface.surfaceCoverage =
+        inputs.modelInputs.thinTranslucent.surfaceCoverage;
+    surface.shadingModel = MATERIAL_SHADING_MODEL;
+    surface.precomputedShadowFactors = vec4(1.0);
+    surface.anisotropy = inputs.modelInputs.anisotropy;
+
+    if (surface.shadingModel == SHADING_MODEL_CLEAR_COAT)
+    {
+        // Clear Coat 的模型专用输入只在这里转换为 GBuffer 内部编码。
+        surface.customData.xy = vec2(
+            inputs.modelInputs.clearCoat.weight,
+            inputs.modelInputs.clearCoat.roughness);
+        surface.selectiveOutputMask |= GBUFFER_HAS_CUSTOM_DATA_MASK;
+    }
+
     return surface;
 }
 

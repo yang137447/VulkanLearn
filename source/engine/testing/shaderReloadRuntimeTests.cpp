@@ -157,12 +157,12 @@ bool RuntimeTestHooks::BeginShaderAutoReloadTest(
             (std::filesystem::path(
                 CommonFunction::GetProjectPath()) /
                 "shader" / "glsl" / "runtimeTest" /
-                "mf_shaderReloadTestVertex.glsl").string();
+                "M_shaderReloadTest.vertex.glsl").string();
         shaderAutoReloadTestSurfaceSourcePath =
             (std::filesystem::path(
                 CommonFunction::GetProjectPath()) /
                 "shader" / "glsl" / "runtimeTest" /
-                "mf_shaderReloadTestSurface.glsl").string();
+                "M_shaderReloadTest.surface.glsl").string();
         shaderAutoReloadTestOriginalSource =
             ReadTextFileBytes(sourcePath);
         shaderAutoReloadTestOriginalVertexSource =
@@ -1017,9 +1017,9 @@ void RuntimeTestHooks::UpdateShaderAutoReloadTest(
     const std::string sharedIdentity =
         "runtimeTest/shaderReloadTestShared.glsl";
     const std::string vertexIdentity =
-        "runtimeTest/mf_shaderReloadTestVertex.glsl";
+        "runtimeTest/M_shaderReloadTest.vertex.glsl";
     const std::string surfaceIdentity =
-        "runtimeTest/mf_shaderReloadTestSurface.glsl";
+        "runtimeTest/M_shaderReloadTest.surface.glsl";
     const std::vector<std::string> unionSources = {
         sharedIdentity,
         surfaceIdentity,

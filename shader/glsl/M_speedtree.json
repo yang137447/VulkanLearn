@@ -3,8 +3,8 @@
     "type": "material",
     "shadingModel": "DefaultLit",
     "shaderEvaluation": {
-        "vertex": "materialFunction/mf_speedtreeVertex.glsl",
-        "surface": "materialFunction/mf_speedtreeSurface.glsl"
+        "vertex": "M_speedtree.vertex.glsl",
+        "surface": "M_speedtree.surface.glsl"
     },
     "features": {
         "modifiesMeshPosition": true

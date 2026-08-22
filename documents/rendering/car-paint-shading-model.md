@@ -75,7 +75,7 @@ Bottom Normal 使用 UE 的 relative octahedral encoding：先分别编码顶层
 - Clear Coat wrapper 固定写入 `customData.xy` 与 `GBUFFER_HAS_CUSTOM_DATA_MASK`，不再暴露恒为 1 的实例宏
 - 按需启用 `USE_CLEAR_COAT_MAP` 和 `USE_CLEAR_COAT_BOTTOM_NORMAL_MAP`
 
-Clear Coat 的命名参数入口由 `mf_clearCoatSurface.glsl` 固定选择，不作为 MI 宏暴露；
+Clear Coat 的命名参数入口由 `M_carPaint.surface.glsl` 固定选择，不作为 MI 宏暴露；
 这样调参面板不会出现一个可关闭但关闭后会破坏参数合同的技术开关。
 
 材质调参面板不能只读取 SPIR-V reflection。宏会让未使用参数或贴图从当前 variant 的

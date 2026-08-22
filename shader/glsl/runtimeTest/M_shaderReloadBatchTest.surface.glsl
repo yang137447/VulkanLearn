@@ -4,15 +4,15 @@
 #include "../engine/materialContext.glsl"
 #include "../engine/materialSurface.glsl"
 
-MaterialSurface EvaluateMaterialSurface(in MaterialPixelContext pixel)
+MaterialInputs EvaluateMaterialInputs(in MaterialFunctionContext pixel)
 {
-    MaterialSurface surface = CreateDefaultMaterialSurface();
-    surface.shadingModel = SHADING_MODEL_UNLIT;
-    surface.baseColor =
+    MaterialInputs inputs = CreateDefaultMaterialInputs();
+    
+    inputs.baseColor =
         u_reloadBatchColor.rgb *
         (0.95 + 0.05 * pixel.vertexColor.rgb);
-    surface.opacity = u_reloadBatchColor.a;
-    return surface;
+    inputs.opacity = u_reloadBatchColor.a;
+    return inputs;
 }
 
 #endif

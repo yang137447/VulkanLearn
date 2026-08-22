@@ -3,8 +3,8 @@
     "type": "material",
     "shadingModel": "DefaultLit",
     "shaderEvaluation": {
-        "vertex": "materialFunction/mf_pbrVertex.glsl",
-        "surface": "materialFunction/mf_pbrSurface.glsl"
+        "vertex": "M_pbr.vertex.glsl",
+        "surface": "M_pbr.surface.glsl"
     },
     "features": {
         "modifiesMeshPosition": false

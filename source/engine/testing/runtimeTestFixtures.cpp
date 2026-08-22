@@ -549,7 +549,7 @@ std::string BuildShaderReloadCompatibleSource(
     return
         "#ifndef VL_SHADER_RELOAD_TEST_SHARED_GLSL\n"
         "#define VL_SHADER_RELOAD_TEST_SHARED_GLSL\n\n"
-        "vec3 ShaderReloadTestColor(in MaterialPixelContext pixel)\n"
+        "vec3 ShaderReloadTestColor(in MaterialFunctionContext pixel)\n"
         "{\n"
         "    return " + expression + ";\n"
         "}\n\n"
@@ -561,7 +561,7 @@ std::string BuildShaderReloadSyntaxErrorSource()
     return
         "#ifndef VL_SHADER_RELOAD_TEST_SHARED_GLSL\n"
         "#define VL_SHADER_RELOAD_TEST_SHARED_GLSL\n\n"
-        "vec3 ShaderReloadTestColor(in MaterialPixelContext pixel)\n"
+        "vec3 ShaderReloadTestColor(in MaterialFunctionContext pixel)\n"
         "{\n"
         "    return this is invalid GLSL;\n"
         "}\n\n"
@@ -575,7 +575,7 @@ std::string BuildShaderReloadAbiIncompatibleSource()
         "#define VL_SHADER_RELOAD_TEST_SHARED_GLSL\n\n"
         "layout(set = 1, binding = 4) uniform sampler2D "
         "u_reloadAbiTexture;\n\n"
-        "vec3 ShaderReloadTestColor(in MaterialPixelContext pixel)\n"
+        "vec3 ShaderReloadTestColor(in MaterialFunctionContext pixel)\n"
         "{\n"
         "    return u_reloadTestColor.rgb + "
         "texture(u_reloadAbiTexture, vec2(0.0)).rgb;\n"

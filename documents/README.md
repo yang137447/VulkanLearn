@@ -59,6 +59,8 @@ Documentation in this repository is split by responsibility:
   - material parameter include generation, Set 1 schema ownership, and per-pass reflection validation
 - `rendering/material-mesh-pass-composition.md`
   - implemented Material Evaluation, Base/ShadowDepth templates, Composer identity, and Shadow routing contract
+- `rendering/shader-structure-and-material-function.md`
+  - current Shader Structure, UE-style Material Inputs, Material Function composition, Shading Model boundaries, and MF/Pass validation rules
 - `rendering/car-paint-shading-model.md`
   - implemented ClearCoat-based car paint contract, custom data packing, and authoring parameters
 - `rendering/thin-translucent-shading-model.md`
@@ -99,6 +101,8 @@ Rendering plans:
   - HTML reading version of the foliage / SpeedTree route
 - `plan/rendering/material-module-system.md`
   - future material module boundary, public/private semantics, and dependency ordering
+- `plan/rendering/neox-character-shader-feature-inventory.md`
+  - first-pass NeoX b_f_3725 material-family inventory and VulkanLearn migration order
 - `plan/rendering/material-multipass-pass-tag-plan.md`
   - future Material Multi-Pass asset model, PassTag matching, common RG hooks, render-state JSON draft, and draw-list execution plan
 - `plan/rendering/material-shader-variant-and-debugview-options.md`

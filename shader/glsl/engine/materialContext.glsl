@@ -1,8 +1,8 @@
 #ifndef VL_ENGINE_MATERIAL_CONTEXT_GLSL
 #define VL_ENGINE_MATERIAL_CONTEXT_GLSL
 
-// 材質求值與 Mesh Pass 模板之間的穩定數據合同。
-// 材質只修改局部頂點語義和 Surface；投影、GBuffer 與 ShadowDepth 由模板負責。
+// 母材质 Vertex/Surface 入口与 Mesh Pass 模板之间的稳定数据合同。
+// 母材质只修改材质语义；投影、GBuffer、Forward 输出和 ShadowDepth 由模板负责。
 struct MaterialVertexInput
 {
     vec3 localPosition;
@@ -58,9 +58,11 @@ struct MaterialVaryings
     vec4 worldTangent;
 };
 
-struct MaterialPixelContext
+// MaterialFunctionContext 是片元 Material Function 共享的阶段数据。
+// 它不暴露灯光列表、Shadow Map 或最终 Pass 输出。
+struct MaterialFunctionContext
 {
-    // 片元入口只保存材质求值需要的插值数据；lighting / GBuffer 决策不放在这里。
+    // 片元入口只保存材质求值需要的插值数据；Lighting / GBuffer 决策不放在这里。
     vec4 clipPosition;
     vec4 previousClipPosition;
     vec3 worldPosition;
@@ -83,17 +85,17 @@ MaterialVaryings CreateMaterialVaryings(in MaterialVertexOutput vertexOutput)
     return varyings;
 }
 
-MaterialPixelContext CreateMaterialPixelContext(in MaterialVaryings varyings)
+MaterialFunctionContext CreateMaterialFunctionContext(in MaterialVaryings varyings)
 {
-    MaterialPixelContext pixel;
-    pixel.clipPosition = varyings.clipPosition;
-    pixel.previousClipPosition = varyings.previousClipPosition;
-    pixel.worldPosition = varyings.worldPosition;
-    pixel.worldNormal = varyings.worldNormal;
-    pixel.vertexColor = varyings.vertexColor;
-    pixel.texCoord = varyings.texCoord;
-    pixel.worldTangent = varyings.worldTangent;
-    return pixel;
+    MaterialFunctionContext context;
+    context.clipPosition = varyings.clipPosition;
+    context.previousClipPosition = varyings.previousClipPosition;
+    context.worldPosition = varyings.worldPosition;
+    context.worldNormal = varyings.worldNormal;
+    context.vertexColor = varyings.vertexColor;
+    context.texCoord = varyings.texCoord;
+    context.worldTangent = varyings.worldTangent;
+    return context;
 }
 
 #endif

@@ -3,8 +3,8 @@
     "type": "material",
     "shadingModel": "Unlit",
     "shaderEvaluation": {
-        "vertex": "runtimeTest/mf_shaderReloadTestVertex.glsl",
-        "surface": "runtimeTest/mf_shaderReloadTestSurface.glsl"
+        "vertex": "runtimeTest/M_shaderReloadTest.vertex.glsl",
+        "surface": "runtimeTest/M_shaderReloadTest.surface.glsl"
     },
     "features": {
         "modifiesMeshPosition": false
