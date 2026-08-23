@@ -31,7 +31,8 @@ enum class RuntimeTestOption
     ShaderDefinitionReloadTest,
     WorldGraphTransactionTest,
     ShaderUiReloadTest,
-    ShaderShutdownInflightTest
+    ShaderShutdownInflightTest,
+    HairValidationTest
 };
 
 bool IsOptionToken(const std::string& value)
@@ -97,6 +98,8 @@ std::string GetRuntimeTestOptionName(RuntimeTestOption option)
         return "--shader-ui-reload-test";
     case RuntimeTestOption::ShaderShutdownInflightTest:
         return "--shader-shutdown-inflight-test";
+    case RuntimeTestOption::HairValidationTest:
+        return "--hair-validation-test";
     case RuntimeTestOption::None:
         break;
     }
@@ -188,6 +191,11 @@ RuntimeTestOption FindRuntimeTest(const LaunchOptions& options, RuntimeTestOptio
         options.runShaderShutdownInflightTest)
     {
         return RuntimeTestOption::ShaderShutdownInflightTest;
+    }
+    if (excludedOption != RuntimeTestOption::HairValidationTest &&
+        options.runHairValidationTest)
+    {
+        return RuntimeTestOption::HairValidationTest;
     }
 
     return RuntimeTestOption::None;
@@ -626,6 +634,20 @@ LaunchOptions ParseLaunchOptions(int argc, char** argv)
             continue;
         }
 
+        if (argument == "--hair-validation-test")
+        {
+            if (RejectRuntimeTestConflict(
+                options,
+                "--hair-validation-test",
+                RuntimeTestOption::HairValidationTest))
+            {
+                return options;
+            }
+
+            options.runHairValidationTest = true;
+            continue;
+        }
+
         options.errorMessage = "Unknown launch option: " + argument;
         return options;
     }
@@ -633,7 +655,7 @@ LaunchOptions ParseLaunchOptions(int argc, char** argv)
     if (options.exitAfterTests &&
         !HasRuntimeTest(options, RuntimeTestOption::None))
     {
-        options.errorMessage = "--exit-after-tests requires --reloadstress, --reloadfail, --reloadfail-material, --reloadfail-mesh, --reloadfail-texture, --lightstress, --resizestress, --graphreloadstress, --framesmoke, --environmentstress, --shader-reload-test, --shader-auto-reload-test, --shader-compute-reload-test, --shader-definition-reload-test, --world-graph-transaction-test, --shader-ui-reload-test, or --shader-shutdown-inflight-test.";
+        options.errorMessage = "--exit-after-tests requires --reloadstress, --reloadfail, --reloadfail-material, --reloadfail-mesh, --reloadfail-texture, --lightstress, --resizestress, --graphreloadstress, --framesmoke, --environmentstress, --shader-reload-test, --shader-auto-reload-test, --shader-compute-reload-test, --shader-definition-reload-test, --world-graph-transaction-test, --shader-ui-reload-test, --shader-shutdown-inflight-test, or --hair-validation-test.";
     }
     return options;
 }
@@ -658,6 +680,7 @@ void PrintLaunchUsage()
         << "       main.exe [--world-graph-transaction-test --exit-after-tests]\n"
         << "       main.exe [--shader-ui-reload-test --exit-after-tests]\n"
         << "       main.exe [--shader-shutdown-inflight-test --exit-after-tests]\n"
+        << "       main.exe [--hair-validation-test --exit-after-tests]\n"
         << "       main.exe [--shader-force-rebuild]\n"
         << "       main.exe [--initial-scene <scene-path>]\n"
         << "       main.exe [--worker-thread-count <1|2>]\n"
@@ -678,6 +701,7 @@ void PrintLaunchUsage()
         << "  --world-graph-transaction-test      Run deterministic World/RenderGraph transaction rollback faults.\n"
         << "  --shader-ui-reload-test             Run the UI Overlay pipeline pair reload matrix.\n"
         << "  --shader-shutdown-inflight-test     Stop after a complete worker candidate and verify shutdown discards it.\n"
+        << "  --hair-validation-test              Run the Hair Card/material/debug-view runtime validation.\n"
         << "  --shader-force-rebuild              Recompile and republish every startup shader artifact.\n"
         << "  --initial-scene <scene-path>        Override config initScene for this process.\n"
         << "  --worker-thread-count <1|2>         Override config worker mode for this process.\n"
@@ -869,6 +893,15 @@ void QueueLaunchCommands(EngineLoop& engineLoop, const LaunchOptions& options)
         engineLoop.QueueRuntimeCommand(std::move(command));
         engineLoop.SetExitAfterRuntimeTests(
             options.exitAfterTests);
+    }
+
+    if (options.runHairValidationTest)
+    {
+        RuntimeCommand command;
+        command.type = RuntimeCommandType::RunHairValidationTest;
+        command.sourceText = "argv: --hair-validation-test";
+        engineLoop.QueueRuntimeCommand(std::move(command));
+        engineLoop.SetExitAfterRuntimeTests(options.exitAfterTests);
     }
 }
 

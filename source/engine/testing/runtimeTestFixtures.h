@@ -137,6 +137,15 @@ std::filesystem::path CreateGeneratedTextureFailureScene(
 std::filesystem::path CreateGeneratedHighLightStressScene(
     const std::string& resourcePath);
 
+struct HairValidationFixture
+{
+    std::filesystem::path directory;
+    std::vector<std::filesystem::path> scenePaths;
+};
+
+HairValidationFixture CreateHairValidationFixtures(
+    const std::string& resourcePath);
+
 void UpdateMaxPendingRetiredResources(
     size_t pendingCount,
     size_t& maxPendingRetiredResources);

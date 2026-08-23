@@ -22,7 +22,6 @@ layout(set = 3, binding = 6) uniform sampler2D gbufferF;
 layout(set = 3, binding = 7) uniform sampler2D sceneColorBase;
 layout(set = 3, binding = 8) uniform sampler2D sceneDepth;
 layout(set = 3, binding = 9) uniform sampler2DArrayShadow shadowMap;
-
 GBufferData SampleGBuffer(vec2 uv)
 {
     GBufferData data;
@@ -57,6 +56,29 @@ void main()
         lighting.directLighting,
         lighting.indirectDiffuse,
         lighting.indirectSpecular);
+    if (surface.shadingModel == SHADING_MODEL_HAIR)
+    {
+        SetMaterialDebugHairData(
+            debugLighting,
+            lighting.hairRPath,
+            lighting.hairTTPath,
+            lighting.hairTRTPath,
+            lighting.hairPathLength,
+            lighting.hairAbsorption,
+            lighting.hairLutCoordinates,
+            lighting.hairIblFallback,
+            lighting.hairMultipleScatteringFallback,
+            lighting.hairTangent,
+            lighting.hairBitangent,
+            lighting.hairThetaI,
+            lighting.hairThetaO,
+            lighting.hairThetaH,
+            lighting.hairThetaD,
+            lighting.hairDeltaPhi,
+            lighting.hairCoverage,
+            lighting.hairDensity,
+            lighting.hairShadowTransmittance);
+    }
     debugLighting.localSubsurfaceLighting =
         lighting.localSubsurfaceLighting;
     debugLighting.diffuseBeforeSubsurface =
@@ -68,8 +90,10 @@ void main()
         debugLighting,
         finalColor);
 
-    if (uboVP.debugViewMode >= 1 &&
-        uboVP.debugViewMode <= 17)
+    if ((uboVP.debugViewMode >= 1 &&
+         uboVP.debugViewMode <= 17) ||
+        (uboVP.debugViewMode >= 21 &&
+         uboVP.debugViewMode <= 41))
     {
         outDiffuseLighting = resolvedColor;
         outNonDiffuseLighting = vec4(0.0);

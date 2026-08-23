@@ -1,6 +1,5 @@
 #pragma once
 
-#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -35,9 +34,6 @@ public:
 
     void SetPipelineFactory(PipelineFactory* pipelineFactory);
     void SetRendererBackend(RendererBackendVulkan* rendererBackend);
-    RendererWorldResourceLoadResult LoadRendererResources(
-        const WorldBuildPlan& worldBuildPlan,
-        uint64_t ownerGeneration);
     RendererWorldResourceLoadResult LoadRendererResources(
         const WorldBuildPlan& worldBuildPlan,
         RendererResourceLoadContext& loadContext);

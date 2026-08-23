@@ -19,6 +19,8 @@ struct MaterialSurface
     vec3 worldNormal;
     vec3 clearCoatBottomNormal;
     vec3 baseColor;
+    // Hair 的 BaseColor 已在 Material Function 一次性转换成 sigma_a；Forward/Deferred 只消费该快照。
+    vec3 hairAbsorption;
     float opacity;
     vec3 emissiveColor;
     float roughness;
@@ -46,6 +48,7 @@ MaterialSurface CreateDefaultMaterialSurface()
     surface.worldNormal = vec3(0.0, 0.0, 1.0);
     surface.clearCoatBottomNormal = vec3(0.0, 0.0, 1.0);
     surface.baseColor = vec3(1.0);
+    surface.hairAbsorption = vec3(1.0);
     surface.opacity = 1.0;
     surface.emissiveColor = vec3(0.0);
     surface.roughness = 1.0;
@@ -77,6 +80,7 @@ MaterialSurface ResolveMaterialSurface(
         normalize(inputs.modelInputs.clearCoat.bottomNormal);
     surface.worldTangent = inputs.tangent;
     surface.baseColor = inputs.baseColor;
+    surface.hairAbsorption = inputs.modelInputs.hair.absorption;
     surface.opacity = inputs.opacity;
     surface.emissiveColor = inputs.emissiveColor;
     surface.roughness = inputs.roughness;
@@ -124,6 +128,16 @@ MaterialSurface ResolveMaterialSurface(
             inputs.modelInputs.subsurfaceProfile.weight,
             inputs.modelInputs.subsurfaceProfile.thickness,
             inputs.modelInputs.subsurfaceProfile.transmissionWeight);
+        surface.selectiveOutputMask |= GBUFFER_HAS_CUSTOM_DATA_MASK;
+    }
+    else if (surface.shadingModel == SHADING_MODEL_HAIR)
+    {
+        // Hair 的模型字段进入稳定的 Surface snapshot，lighting pass 不再读取母材质参数 UBO。
+        surface.customData = vec4(
+            inputs.modelInputs.hair.scatter,
+            inputs.modelInputs.hair.backlit,
+            inputs.modelInputs.hair.cuticleTilt,
+            inputs.modelInputs.hair.multipleScatteringWeight);
         surface.selectiveOutputMask |= GBUFFER_HAS_CUSTOM_DATA_MASK;
     }
 

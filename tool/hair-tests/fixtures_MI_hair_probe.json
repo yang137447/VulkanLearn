@@ -1,0 +1,12 @@
+{
+    "type": "materialInstance",
+    "name": "MI_hairProbe",
+    "material": "shader/glsl/M_hairProbe.json",
+    "parameters": {
+        "u_tintColor": [0.12, 0.025, 0.008, 0.72],
+        "u_pbrFactors": [0.3, 0.0, 1.0, 0.5],
+        "u_hairOptical": [8.0, 1.55, 0.00005, 0.04],
+        "u_hairScattering": [0.25, 0.35, 0.22, 0.25],
+        "u_hairCoverage": [0.8, 0.35, 1.0, 0.0]
+    }
+}

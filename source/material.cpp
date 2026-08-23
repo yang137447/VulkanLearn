@@ -1,7 +1,7 @@
 #include "material.h"
 #include "materialInstance.h"
+#include "material/materialPipelineLayout.h"
 #include "pipeline/pipelineFactory.h"
-#include "pipeline/graphicsPipelineLayoutDesc.h"
 #include "pipeline/graphicsShaderVariantArtifact.h"
 #include "pipeline/pipelineBase.h"
 #include "renderGraph.h"
@@ -83,11 +83,14 @@ Material::Material(
         shaderArtifact.shaderBindings,
         shaderArtifact.displayName);
 
-    // Set 1 layout始終來自 M_ schema；單個 pass 的 reflection 只描述它實際使用的子集。
-    GraphicsPipelineLayoutDesc pipelineLayoutDesc;
-    pipelineLayoutDesc.overrideSets[MaterialSetIndex] = true;
-    pipelineLayoutDesc.setBindings[MaterialSetIndex] =
-        this->materialDescriptorSchema.GetSetBindings();
+    // Set 1 使用 M_ 的完整 schema；Set 3 使用 RenderGraph 的完整输入合同。
+    // 不能只采用当前 shader 的反射子集，否则 Hair LUT 会让不同 forward variant
+    // 生成不兼容的 pass descriptor layout。
+    GraphicsPipelineLayoutDesc pipelineLayoutDesc =
+        VL::BuildMaterialSurfacePipelineLayout(
+            renderPass,
+            this->materialDescriptorSchema,
+            shaderArtifact.shaderBindings);
 
     renderPipeline = candidateState != nullptr
         ? pipelineFactory.CreateGraphicsPipelineCandidate(

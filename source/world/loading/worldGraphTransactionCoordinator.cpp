@@ -60,6 +60,23 @@ BuildGeneratedIncludeWrites(
     return writes;
 }
 
+void AppendPendingGeneratedResourceWrites(
+    const std::vector<PendingGeneratedResourceFile>& pendingFiles,
+    std::vector<AtomicFileWrite>& writes)
+{
+    for (const PendingGeneratedResourceFile& pendingFile : pendingFiles)
+    {
+        if (std::filesystem::is_regular_file(pendingFile.path) &&
+            ReadBinaryFile(pendingFile.path) == pendingFile.bytes)
+        {
+            continue;
+        }
+        writes.push_back({
+            pendingFile.path,
+            pendingFile.bytes});
+    }
+}
+
 void ValidateMaterialDefinitionSourcesStillCurrent(
     const MaterialDefinitionReloadBatch* batch,
     const std::filesystem::path& shaderRoot)
@@ -234,8 +251,11 @@ WorldGraphTransactionCoordinator::Execute(
         ValidateMaterialDefinitionSourcesStillCurrent(
             materialDefinitionReload,
             shaderCompiler.GetShaderRoot());
-        std::vector<AtomicFileWrite> generatedIncludeWrites =
+        std::vector<AtomicFileWrite> additionalPublicationWrites =
             BuildGeneratedIncludeWrites(materialDefinitionReload);
+        AppendPendingGeneratedResourceWrites(
+            preparedWorld.pendingGeneratedFiles,
+            additionalPublicationWrites);
 
         if (renderThread && renderThread->IsRunning())
         {
@@ -329,7 +349,7 @@ WorldGraphTransactionCoordinator::Execute(
 
         shaderCompiler.CommitArtifactsWithAdditionalFiles(
             artifactsToCommit,
-            generatedIncludeWrites);
+            additionalPublicationWrites);
 
         // Formal publication above is the final fallible step. Every update
         // below is a prevalidated ownership move or swap.

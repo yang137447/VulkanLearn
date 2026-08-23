@@ -12,6 +12,7 @@
 #include "material.h"
 #include "material/compiler/materialShaderComposer.h"
 #include "materialInstance.h"
+#include "material/materialPipelineLayout.h"
 #include "pipeline/computePipeline.h"
 #include "pipeline/graphicsPipelineLayoutDesc.h"
 #include "pipeline/pipelineFactory.h"
@@ -156,15 +157,6 @@ std::string FormatAbiRejection(
     return stream.str();
 }
 
-GraphicsPipelineLayoutDesc BuildSurfaceLayout(
-    const MaterialDescriptorSchema& descriptorSchema)
-{
-    GraphicsPipelineLayoutDesc layoutDesc;
-    layoutDesc.overrideSets[MaterialSetIndex] = true;
-    layoutDesc.setBindings[MaterialSetIndex] =
-        descriptorSchema.GetSetBindings();
-    return layoutDesc;
-}
 
 Renderpass& ResolveCurrentPass(
     const MaterialGraphicsPassReloadRecipe& recipe)
@@ -807,8 +799,10 @@ ShaderReloadCoordinator::CommitGraphicsCandidates(
                     candidate.surfaceArtifact,
                     candidate.plan.recipe.surface.cullMode,
                     candidate.plan.recipe.surface.blendMode,
-                    BuildSurfaceLayout(
-                        candidate.plan.descriptorSchema));
+                    BuildMaterialSurfacePipelineLayout(
+                        surfacePass,
+                        candidate.plan.descriptorSchema,
+                        candidate.surfaceArtifact.shaderBindings));
             ++statistics.pipelinesCreated;
         }
 

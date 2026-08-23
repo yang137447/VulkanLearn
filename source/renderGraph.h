@@ -64,7 +64,10 @@ struct Renderpass
     void Draw(vk::CommandBuffer& commandBuffer) const;
 
     void CreateUniformBuffers();
-    void SetupDescriptors(const class RenderGraph& renderGraph, VL::RendererBackendVulkan& rendererBackend);
+    void SetupDescriptors(
+        const class RenderGraph& renderGraph,
+        VL::RendererBackendVulkan& rendererBackend,
+        const VL::RendererDescriptorContext& descriptorContext);
     void CreatePassDescriptorSetLayout(VL::RendererBackendVulkan& rendererBackend);
     void CreateDescriptorSets(VL::RendererBackendVulkan& rendererBackend);
     void UpdateDescriptorSets(

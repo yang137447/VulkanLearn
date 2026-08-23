@@ -15,13 +15,42 @@ struct ThinTranslucentOutput
 vec4 BuildMaterialForwardOutput(in MaterialSurface surface)
 {
     ForwardLightingResult lighting = ShadeForwardSurfaceDetailed(surface);
-    vec4 color = vec4(lighting.finalColor, surface.opacity);
+    float resolvedOpacity = surface.opacity;
+    if (surface.shadingModel == SHADING_MODEL_HAIR)
+    {
+        // 透明 Hair 探针把 coverage 交给混合 alpha；OpaqueClip 仍由 alpha clip 决定可见性。
+        resolvedOpacity *= surface.modelInputs.hair.coverage;
+    }
+    vec4 color = vec4(lighting.finalColor, resolvedOpacity);
     MaterialDebugLightingData debugLighting = CreateMaterialDebugLightingData(
         lighting.shadow,
         lighting.shadowCascadeIndex,
         lighting.directLighting,
         lighting.indirectDiffuse,
         lighting.indirectSpecular);
+    if (surface.shadingModel == SHADING_MODEL_HAIR)
+    {
+        SetMaterialDebugHairData(
+            debugLighting,
+            lighting.hairRPath,
+            lighting.hairTTPath,
+            lighting.hairTRTPath,
+            lighting.hairPathLength,
+            lighting.hairAbsorption,
+            lighting.hairLutCoordinates,
+            lighting.hairIblFallback,
+            lighting.hairMultipleScatteringFallback,
+            lighting.hairTangent,
+            lighting.hairBitangent,
+            lighting.hairThetaI,
+            lighting.hairThetaO,
+            lighting.hairThetaH,
+            lighting.hairThetaD,
+            lighting.hairDeltaPhi,
+            lighting.hairCoverage,
+            lighting.hairDensity,
+            lighting.hairShadowTransmittance);
+    }
     return ResolveMaterialDebugView(surface, debugLighting, color);
 }
 
@@ -48,6 +77,29 @@ ThinTranslucentOutput BuildThinTranslucentForwardOutput(
         lighting.directLighting,
         lighting.indirectDiffuse,
         lighting.indirectSpecular);
+    if (surface.shadingModel == SHADING_MODEL_HAIR)
+    {
+        SetMaterialDebugHairData(
+            debugLighting,
+            lighting.hairRPath,
+            lighting.hairTTPath,
+            lighting.hairTRTPath,
+            lighting.hairPathLength,
+            lighting.hairAbsorption,
+            lighting.hairLutCoordinates,
+            lighting.hairIblFallback,
+            lighting.hairMultipleScatteringFallback,
+            lighting.hairTangent,
+            lighting.hairBitangent,
+            lighting.hairThetaI,
+            lighting.hairThetaO,
+            lighting.hairThetaH,
+            lighting.hairThetaD,
+            lighting.hairDeltaPhi,
+            lighting.hairCoverage,
+            lighting.hairDensity,
+            lighting.hairShadowTransmittance);
+    }
     surfaceLighting = ResolveMaterialDebugView(
         surface,
         debugLighting,

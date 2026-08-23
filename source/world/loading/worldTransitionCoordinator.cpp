@@ -32,6 +32,11 @@ std::string ClassifyRendererResourceLoadError(std::string_view message)
     {
         return "Texture.LoadFailed";
     }
+    if (ContainsText(message, "Hair") ||
+        ContainsText(message, "hair"))
+    {
+        return "Hair.LoadFailed";
+    }
     if (ContainsText(message, "Material") ||
         ContainsText(message, "material") ||
         ContainsText(message, "parameter") ||
@@ -159,6 +164,8 @@ WorldTransitionCoordinator::PrepareWorldLoad(
         ConfigureInitialCamera(
             *prepared.world->GetCamera(),
             initialCameraAspectRatio);
+        prepared.pendingGeneratedFiles =
+            std::move(loadContext.pendingGeneratedFiles);
         prepared.activation =
             worldManager.PrepareActivation(prepared.world);
         state = WorldTransitionState::Active;

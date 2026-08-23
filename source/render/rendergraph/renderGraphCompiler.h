@@ -73,6 +73,8 @@ struct CompiledRenderGraphPassOutput
 struct CompiledRenderGraphPassInputDescriptor
 {
     std::string resource;
+    // renderGraph 读取图内 attachment；worldTexture 读取 candidate World-local texture。
+    std::string source = "renderGraph";
     uint32_t binding = 0;
 };
 

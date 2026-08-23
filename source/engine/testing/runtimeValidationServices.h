@@ -106,6 +106,34 @@ struct RuntimeValidationWorldPackageIdentities
     bool materialInstanceHasCandidateParameter = false;
 };
 
+struct RuntimeHairMaterialSnapshot
+{
+    std::string name;
+    std::string materialKey;
+    std::string shaderName;
+    std::string shadingModelMacro;
+    std::string renderMode;
+    bool hasRenderPipeline = false;
+    bool hasShadowPipeline = false;
+    bool hasHairParameters = false;
+    bool forwardDescriptorLayoutCompatible = false;
+    std::unordered_map<std::string, std::string> parameterValues;
+};
+
+struct RuntimeHairValidationSnapshot
+{
+    bool captured = false;
+    uint64_t worldGeneration = 0;
+    bool hasHairResources = false;
+    std::string sourceIdentity;
+    std::uintptr_t hairLutTextureIdentity = 0;
+    std::uintptr_t boundHairWorldTextureIdentity = 0;
+    bool forwardHairLutBinding = false;
+    bool deferredHairLutBinding = false;
+    std::vector<std::string> meshObjectNames;
+    std::vector<RuntimeHairMaterialSnapshot> materials;
+};
+
 class RuntimeValidationServices
 {
 public:
@@ -113,6 +141,7 @@ public:
 
     std::string GetResourcePath() const;
     std::array<uint32_t, 2> GetConfiguredWindowSize() const;
+    int GetDebugViewMode() const noexcept;
     void QueueRuntimeCommand(RuntimeCommand command);
 
     WorldHandle GetActiveWorldHandle() const;
@@ -120,6 +149,8 @@ public:
     RuntimeValidationBackendSnapshot CaptureBackendSnapshot() const;
     RuntimeValidationWorldPackageIdentities
         CaptureWorldPackageIdentities() const;
+    RuntimeHairValidationSnapshot
+        CaptureHairValidationSnapshot() const;
     RuntimeRendererResourceFingerprint
         CaptureRendererResourceFingerprint() const;
     std::string CaptureWorldGraphRuntimeFingerprint(

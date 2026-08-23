@@ -135,13 +135,14 @@ Shading Model 消费 MaterialInputs，负责 UE 对齐的光照响应。Shading 
 | ClearCoat | 已实现 | Deferred 和 Forward，使用 GBufferD/customData 的双层法线与清漆输入。 |
 | ThinTranslucent | 已实现 | Forward 专用；依赖 ThinTranslucent RenderMode，不等同于普通 AlphaBlend。 |
 | Subsurface / PreintegratedSkin / SubsurfaceProfile | 待专项 | ID 已注册，但当前光照分发仍回退到 DefaultLit；不得在角色迁移中假定皮肤响应已经存在。 |
-| Hair | 待专项 | ID 已注册，头发高光、覆盖率和透明阴影尚无独立实现。 |
+| Hair | 已实现（VulkanLearn MVP） | 已补齐 HairMaterialInputs、Forward/Deferred evaluator、Hair GBuffer、Card coverage、ShadowDepth 和 Debug View 21–41；runtime validation 入口已接入但仍要求正式 authoring LUT，不声称 UE 私有 shader 逐行 parity。 |
 | Eye | 待专项 | ID 已注册，虹膜、角膜和眼部 IBL 尚无独立实现。 |
 | Cloth | 待专项 | ID 已注册，布料专用高光尚无独立实现。 |
 | TwoSidedFoliage | 待专项 | ID 已注册，双面叶片/透光响应尚无独立实现。 |
 | Iridescence | 待定义 | 当前没有独立的 Shading Model ID 和 GBuffer 合同。 |
 
-“已注册 ID”只表示资产校验和 GBuffer 编码可以识别该名称，不表示对应的 BRDF、光照 Lobe 或 Pass 已经完成。专项实现应同时补齐 Forward/Deferred 分发、MaterialInputs 扩展、GBuffer/customData 合同、Debug View 和验证样例。
+对仍标记为“待专项”的模型，“已注册 ID”只表示资产校验和 GBuffer 编码可以识别该名称；Hair 是已完成专项实现的例外，
+已补齐 Forward/Deferred 分发、MaterialInputs、GBuffer/customData 合同和 Debug View；runtime validation 入口已接入，但正式 authoring LUT 缺失时必须失败。其他专项仍需在各自合同中明确 BRDF、光照 Lobe、Pass 和验收边界。
 
 ### MeshPass
 

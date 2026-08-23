@@ -37,7 +37,10 @@ void main()
         0);
 
     // 1..17 的 debug view 在 deferred lighting 已经求出颜色，这里只负责通路合成。
-    if (uboVP.debugViewMode >= 1 && uboVP.debugViewMode <= 17)
+    if ((uboVP.debugViewMode >= 1 &&
+         uboVP.debugViewMode <= 17) ||
+        (uboVP.debugViewMode >= 21 &&
+         uboVP.debugViewMode <= 41))
     {
         outColor = vec4(
             diffuse.rgb + nonDiffuse + transmission,

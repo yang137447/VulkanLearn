@@ -97,6 +97,27 @@
                                 <button data-class-selected="debug_view_mode == 18" data-event-click="set_debug_view(18)">{{debug_diffuse_after_sss_label}}</button>
                                 <button data-class-selected="debug_view_mode == 19" data-event-click="set_debug_view(19)">{{debug_sss_pixel_radius_label}}</button>
                                 <button data-class-selected="debug_view_mode == 20" data-event-click="set_debug_view(20)">{{debug_sss_valid_weight_label}}</button>
+                                <button data-class-selected="debug_view_mode == 21" data-event-click="set_debug_view(21)">{{debug_hair_world_tangent_label}}</button>
+                                <button data-class-selected="debug_view_mode == 22" data-event-click="set_debug_view(22)">{{debug_hair_tangent_rootward_label}}</button>
+                                <button data-class-selected="debug_view_mode == 23" data-event-click="set_debug_view(23)">{{debug_hair_theta_io_label}}</button>
+                                <button data-class-selected="debug_view_mode == 24" data-event-click="set_debug_view(24)">{{debug_hair_delta_phi_label}}</button>
+                                <button data-class-selected="debug_view_mode == 25" data-event-click="set_debug_view(25)">{{debug_hair_r_label}}</button>
+                                <button data-class-selected="debug_view_mode == 26" data-event-click="set_debug_view(26)">{{debug_hair_tt_label}}</button>
+                                <button data-class-selected="debug_view_mode == 27" data-event-click="set_debug_view(27)">{{debug_hair_trt_label}}</button>
+                                <button data-class-selected="debug_view_mode == 28" data-event-click="set_debug_view(28)">{{debug_hair_path_length_label}}</button>
+                                <button data-class-selected="debug_view_mode == 29" data-event-click="set_debug_view(29)">{{debug_hair_absorption_label}}</button>
+                                <button data-class-selected="debug_view_mode == 30" data-event-click="set_debug_view(30)">{{debug_hair_coverage_label}}</button>
+                                <button data-class-selected="debug_view_mode == 31" data-event-click="set_debug_view(31)">{{debug_hair_shadow_transmittance_label}}</button>
+                                <button data-class-selected="debug_view_mode == 32" data-event-click="set_debug_view(32)">{{debug_hair_lut_coordinates_label}}</button>
+                                <button data-class-selected="debug_view_mode == 33" data-event-click="set_debug_view(33)">{{debug_hair_primary_highlight_label}}</button>
+                                <button data-class-selected="debug_view_mode == 34" data-event-click="set_debug_view(34)">{{debug_hair_secondary_highlight_label}}</button>
+                                <button data-class-selected="debug_view_mode == 35" data-event-click="set_debug_view(35)">{{debug_hair_scatter_label}}</button>
+                                <button data-class-selected="debug_view_mode == 36" data-event-click="set_debug_view(36)">{{debug_hair_backlit_label}}</button>
+                                <button data-class-selected="debug_view_mode == 37" data-event-click="set_debug_view(37)">{{debug_hair_r_path_color_label}}</button>
+                                <button data-class-selected="debug_view_mode == 38" data-event-click="set_debug_view(38)">{{debug_hair_tt_path_color_label}}</button>
+                                <button data-class-selected="debug_view_mode == 39" data-event-click="set_debug_view(39)">{{debug_hair_trt_path_color_label}}</button>
+                                <button data-class-selected="debug_view_mode == 40" data-event-click="set_debug_view(40)">{{debug_hair_ibl_fallback_label}}</button>
+                                <button data-class-selected="debug_view_mode == 41" data-event-click="set_debug_view(41)">{{debug_hair_ms_fallback_label}}</button>
                             </div>
                         </div>
 

@@ -8,7 +8,8 @@ param(
     [int]$LightStressCount = 3,
     [int]$ResizeStressCount = 6,
     [int]$GraphReloadStressCount = 6,
-    [string]$ReloadStressScene = "scenes/SC_speedtree.json"
+    [string]$ReloadStressScene = "scenes/SC_speedtree.json",
+    [switch]$RunHairValidation
 )
 
 $ErrorActionPreference = "Stop"
@@ -84,8 +85,35 @@ function Invoke-ValidationStep {
     }
 }
 
+function Get-HairAuthoringMetadataPath {
+    param([string]$Root)
+
+    $configPath = Join-Path $Root "config/config.json"
+    if (!(Test-Path -LiteralPath $configPath)) {
+        throw "Missing runtime config: $configPath"
+    }
+
+    $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
+    $resourcePath = [string]$config.resourcePath
+    if ([string]::IsNullOrWhiteSpace($resourcePath)) {
+        throw "config/config.json does not define resourcePath."
+    }
+
+    if (![System.IO.Path]::IsPathRooted($resourcePath)) {
+        $resourcePath = Join-Path $Root $resourcePath
+    }
+
+    return [System.IO.Path]::GetFullPath(
+        (Join-Path $resourcePath "hair/hairAzimuthalLut.json"))
+}
+
 Push-Location -LiteralPath $RepoRoot
 try {
+    $hairAuthoringMetadataPath = Get-HairAuthoringMetadataPath -Root $RepoRoot
+    if (!(Test-Path -LiteralPath $hairAuthoringMetadataPath -PathType Leaf)) {
+        throw "Runtime validation requires the authored Hair LUT metadata asset: $hairAuthoringMetadataPath. The generated-only LUT is not a substitute."
+    }
+
     $logDirectory = New-ValidationLogDirectory -Root $RepoRoot
     $mainExe = Join-Path $RepoRoot (Join-Path $BuildDirectory "bin/main.exe")
     $boundaryAudit = Join-Path $RepoRoot "tool/ue-lite-boundary-audit.ps1"
@@ -127,6 +155,19 @@ try {
         -Arguments @("--test-dir", $BuildDirectory, "--output-on-failure") `
         -LogPath (Join-Path $logDirectory "02-ctest.log") `
         -SummaryPatterns @('tests passed', 'tests failed', 'Test project')
+
+    if ($RunHairValidation) {
+        Invoke-ValidationStep `
+            -Name "Hair runtime validation" `
+            -FilePath $mainExe `
+            -Arguments @("--hair-validation-test", "--exit-after-tests") `
+            -LogPath (Join-Path $logDirectory "hair-runtime-validation.log") `
+            -SummaryPatterns @(
+                'Hair runtime validation started',
+                'Hair runtime validation succeeded',
+                'Hair runtime validation failed'
+            )
+    }
 
     Invoke-ValidationStep `
         -Name "Shader manual reload transaction" `

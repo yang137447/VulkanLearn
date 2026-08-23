@@ -317,7 +317,18 @@ RuntimeResult<std::vector<CompiledRenderGraphPassInputDescriptor>> CompilePassIn
         }
 
         const std::string resourceName = inputNode["resource"].get<std::string>();
-        if (resourceNames.find(resourceName) == resourceNames.end())
+        const std::string source = inputNode.value(
+            "source",
+            std::string("renderGraph"));
+        if (source != "renderGraph" && source != "worldTexture")
+        {
+            return RuntimeResult<std::vector<CompiledRenderGraphPassInputDescriptor>>::Failure(MakeCompileError(
+                "RenderGraphCompiler.UnsupportedInputSource",
+                "Render graph pass input source must be renderGraph or worldTexture.",
+                passName + ":" + resourceName));
+        }
+        if (source == "renderGraph" &&
+            resourceNames.find(resourceName) == resourceNames.end())
         {
             return RuntimeResult<std::vector<CompiledRenderGraphPassInputDescriptor>>::Failure(MakeCompileError(
                 "RenderGraphCompiler.UnknownInputResource",
@@ -327,6 +338,7 @@ RuntimeResult<std::vector<CompiledRenderGraphPassInputDescriptor>> CompilePassIn
 
         CompiledRenderGraphPassInputDescriptor descriptor;
         descriptor.resource = resourceName;
+        descriptor.source = source;
         if (inputNode.contains("binding"))
         {
             if (!inputNode["binding"].is_number_unsigned())
@@ -711,7 +723,10 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
         pass.inputResources.reserve(pass.inputDescriptors.size());
         for (const CompiledRenderGraphPassInputDescriptor& inputDescriptor : pass.inputDescriptors)
         {
-            pass.inputResources.push_back(inputDescriptor.resource);
+            if (inputDescriptor.source == "renderGraph")
+            {
+                pass.inputResources.push_back(inputDescriptor.resource);
+            }
         }
         pass.outputResources = std::move(outputResult.Value());
         for (const std::string& inputResource : pass.inputResources)

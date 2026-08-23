@@ -103,6 +103,8 @@ Rendering plans:
   - HTML reading version of the foliage / SpeedTree route
 - `plan/rendering/subsurface-shading-models-development-plan.md`
   - completed 2026-08-22 implementation record for Subsurface, PreintegratedSkin, and SubsurfaceProfile; the current contract lives in `rendering/subsurface-shading-models.md`
+- `plan/rendering/hair-shading-model-development-plan.md`
+  - executable Hair Shading Model route from contract freeze and CPU Reference through versioned LUT, Forward/Deferred evaluator, Card coverage/shadow, Hair IBL, and multiple scattering
 - `plan/rendering/material-module-system.md`
   - future material module boundary, public/private semantics, and dependency ordering
 - `plan/rendering/neox-character-shader-feature-inventory.md`

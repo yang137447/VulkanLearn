@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <utility>
 
+#include "commonFunction.h"
 #include "controller.h"
 #include "engine/engineLoop.h"
 #include "engine/runtimeCommand.h"
@@ -16,13 +17,16 @@
 #include "material.h"
 #include "materialInstance.h"
 #include "pipeline/pipelineFactory.h"
+#include "pipeline/pipelineBase.h"
 #include "platform/platformWindow.h"
 #include "render/backend/rendererBackendVulkan.h"
 #include "render/backend/rendererObjectResourceRegistry.h"
 #include "render/resource/rendererResourceCache.h"
+#include "render/hair/hairResourceSet.h"
 #include "render/resource/resourceRetireQueue.h"
 #include "renderGraph.h"
 #include "renderSystem.h"
+#include "world/world.h"
 #include "shader/build/contentHash.h"
 #include "shaderCompiler.h"
 
@@ -365,6 +369,92 @@ bool ManifestArtifactDependsOnAllSources(
     return true;
 }
 
+std::string FormatHairParameterValue(
+    const MaterialInstanceParameterValue& value)
+{
+    return std::visit(
+        [](const auto& currentValue)
+        {
+            using ValueType = std::decay_t<decltype(currentValue)>;
+            std::ostringstream stream;
+            if constexpr (std::is_same_v<ValueType, float>)
+            {
+                stream << currentValue;
+            }
+            else
+            {
+                stream << currentValue.x() << "," << currentValue.y();
+                if constexpr (ValueType::RowsAtCompileTime >= 3)
+                {
+                    stream << "," << currentValue.z();
+                }
+                if constexpr (ValueType::RowsAtCompileTime >= 4)
+                {
+                    stream << "," << currentValue.w();
+                }
+            }
+            return stream.str();
+        },
+        value);
+}
+
+bool HasHairLutBinding(
+    const Renderpass& renderpass,
+    uint32_t expectedBinding)
+{
+    for (const CompiledRenderGraphPassInputDescriptor& descriptor :
+         renderpass.inputDescriptorPlan)
+    {
+        if (descriptor.resource == "hairAzimuthalLut" &&
+            descriptor.source == "worldTexture" &&
+            descriptor.binding == expectedBinding)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool HasCompatiblePassDescriptorLayout(
+    const PipelineBase& pipeline,
+    const Renderpass& renderpass)
+{
+    const std::vector<ShaderBinding>& layoutBindings =
+        pipeline.GetDescriptorLayoutBindings();
+    size_t passBindingCount = 0;
+    for (const ShaderBinding& binding : layoutBindings)
+    {
+        if (binding.set != PassSetIndex)
+        {
+            continue;
+        }
+        ++passBindingCount;
+        if (binding.type != vk::DescriptorType::eCombinedImageSampler ||
+            binding.descriptorCount != 1 ||
+            binding.stageFlags != vk::ShaderStageFlagBits::eFragment)
+        {
+            return false;
+        }
+
+        bool foundInput = false;
+        for (const CompiledRenderGraphPassInputDescriptor& inputDescriptor :
+             renderpass.inputDescriptorPlan)
+        {
+            if (inputDescriptor.binding == binding.binding)
+            {
+                foundInput = true;
+                break;
+            }
+        }
+        if (!foundInput)
+        {
+            return false;
+        }
+    }
+
+    return passBindingCount == renderpass.inputDescriptorPlan.size();
+}
+
 } // namespace
 
 RuntimeValidationServices::RuntimeValidationServices(
@@ -386,6 +476,11 @@ RuntimeValidationServices::GetConfiguredWindowSize() const
     return {
         static_cast<uint32_t>(size.x()),
         static_cast<uint32_t>(size.y())};
+}
+
+int RuntimeValidationServices::GetDebugViewMode() const noexcept
+{
+    return RenderSystem::GetInstance().GetDebugViewMode();
 }
 
 void RuntimeValidationServices::QueueRuntimeCommand(
@@ -501,6 +596,166 @@ RuntimeValidationServices::CaptureWorldPackageIdentities() const
         materialInstance &&
         materialInstance->HasParameter(
             "u_worldGraphTransactionCandidate");
+    return snapshot;
+}
+
+RuntimeHairValidationSnapshot
+RuntimeValidationServices::CaptureHairValidationSnapshot() const
+{
+    RuntimeHairValidationSnapshot snapshot;
+    const WorldHandle& worldHandle =
+        engineLoop->GetSubsystems()
+            .GetWorldManager()
+            .GetActiveWorldHandle();
+    snapshot.worldGeneration = worldHandle.generation;
+
+    const RendererResourceCache::ImmutableWorldLocalResourceRefs resources =
+        RendererResourceCache::GetInstance()
+            .CaptureActiveWorldLocalResources();
+    if (!resources)
+    {
+        return snapshot;
+    }
+
+    const std::shared_ptr<World> activeWorld =
+        engineLoop->GetSubsystems().GetWorldManager().GetActiveWorld();
+    if (!activeWorld)
+    {
+        return snapshot;
+    }
+
+    // World 是 mesh object 名称的权威 owner；按名称排序后快照保持稳定，避免
+    // unordered_map 遍历顺序让 runtime validation 产生非确定性结果。
+    snapshot.meshObjectNames.reserve(activeWorld->GetMeshObjects().size());
+    for (const auto& [objectName, object] : activeWorld->GetMeshObjects())
+    {
+        (void)object;
+        snapshot.meshObjectNames.push_back(objectName);
+    }
+    std::sort(
+        snapshot.meshObjectNames.begin(),
+        snapshot.meshObjectNames.end());
+
+    snapshot.hasHairResources = resources->hairResources != nullptr;
+    if (resources->hairResources)
+    {
+        snapshot.sourceIdentity =
+            resources->hairResources->sourceIdentity;
+        snapshot.hairLutTextureIdentity = reinterpret_cast<std::uintptr_t>(
+            resources->hairResources->azimuthalLutTexture.get());
+    }
+
+    const std::shared_ptr<Texture>* boundHairTexture =
+        RendererResourceCache::GetInstance().GetWorldTexture(
+            "hairAzimuthalLut");
+    snapshot.boundHairWorldTextureIdentity =
+        boundHairTexture != nullptr && *boundHairTexture != nullptr
+        ? reinterpret_cast<std::uintptr_t>(boundHairTexture->get())
+        : 0;
+
+    const RenderGraph& renderGraph = RenderGraph::GetInstance();
+    const auto forwardPassIt =
+        renderGraph.GetRenderpasses().find("forwardTransparent");
+    if (forwardPassIt != renderGraph.GetRenderpasses().end())
+    {
+        snapshot.forwardHairLutBinding = HasHairLutBinding(
+            forwardPassIt->second,
+            1);
+    }
+    const auto deferredPassIt =
+        renderGraph.GetRenderpasses().find("deferredLighting");
+    if (deferredPassIt != renderGraph.GetRenderpasses().end())
+    {
+        snapshot.deferredHairLutBinding = HasHairLutBinding(
+            deferredPassIt->second,
+            10);
+    }
+
+    const auto appendMaterialSnapshot =
+        [&snapshot, &renderGraph](
+            const std::shared_ptr<MaterialInstance>& instance)
+        {
+            if (!instance)
+            {
+                return;
+            }
+            const std::shared_ptr<Material> material =
+                instance->GetBaseMaterial().lock();
+            if (!material ||
+                material->GetShaderVariantKey().shadingModelMacro !=
+                    "SHADING_MODEL_HAIR")
+            {
+                return;
+            }
+
+            RuntimeHairMaterialSnapshot materialSnapshot;
+            materialSnapshot.name = instance->GetName();
+            materialSnapshot.materialKey = material->GetMaterialKey();
+            materialSnapshot.shaderName = material->GetShaderName();
+            materialSnapshot.shadingModelMacro =
+                material->GetShaderVariantKey().shadingModelMacro;
+            materialSnapshot.renderMode = RenderModeToString(
+                material->GetShaderVariantKey().renderMode);
+            materialSnapshot.hasRenderPipeline =
+                material->GetRenderPipeline() != nullptr;
+            materialSnapshot.hasShadowPipeline =
+                material->GetShadowPipeline() != nullptr;
+
+            const MaterialInstanceStateSnapshot state =
+                instance->CaptureStateSnapshot();
+            for (const auto& [parameterName, parameterValue] : state.parameters)
+            {
+                materialSnapshot.parameterValues[parameterName] =
+                    FormatHairParameterValue(parameterValue);
+            }
+            // hairTangent 来自几何/顶点 frame，不是 MI 参数；这里校验 M_* 的完整材质合同。
+            static const std::array<const char*, 7> requiredHairParameters = {
+                "u_alphaClipThreshold",
+                "u_tintColor",
+                "u_pbrFactors",
+                "u_hairOptical",
+                "u_hairScattering",
+                "u_hairCoverage",
+                "u_emissiveStrength"};
+            materialSnapshot.hasHairParameters = true;
+            for (const char* parameterName : requiredHairParameters)
+            {
+                if (materialSnapshot.parameterValues.find(parameterName) ==
+                    materialSnapshot.parameterValues.end())
+                {
+                    materialSnapshot.hasHairParameters = false;
+                    break;
+                }
+            }
+
+            if (materialSnapshot.renderMode == "TransparentAlphaBlend")
+            {
+                const auto forwardIt =
+                    renderGraph.GetRenderpasses().find("forwardTransparent");
+                if (forwardIt != renderGraph.GetRenderpasses().end() &&
+                    material->GetRenderPipeline() != nullptr)
+                {
+
+                    // 两个独立创建的 VkDescriptorSetLayout 句柄不会因定义相同而相等，
+                    // 必须比较完整 binding 合同，而不是比较句柄身份。
+                    materialSnapshot.forwardDescriptorLayoutCompatible =
+                        material->GetPassPipelineContractKey() ==
+                            forwardIt->second.pipelineContractKey &&
+                        HasCompatiblePassDescriptorLayout(
+                            *material->GetRenderPipeline(),
+                            forwardIt->second);
+                }
+            }
+            snapshot.materials.push_back(std::move(materialSnapshot));
+        };
+
+    for (const auto& [materialInstanceKey, instance] : resources->materialInstances)
+    {
+        (void)materialInstanceKey;
+        appendMaterialSnapshot(instance);
+    }
+
+    snapshot.captured = true;
     return snapshot;
 }
 

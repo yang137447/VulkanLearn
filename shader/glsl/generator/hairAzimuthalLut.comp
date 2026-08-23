@@ -1,0 +1,113 @@
+#version 450
+
+// Hair Azimuthal LUT 只在 GPU 生成。CPU host 仅提交 contract 参数，避免生产 texel
+// 与 CPU reference 形成两条无法追踪的数值 source of truth。
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba16f) uniform writeonly image2DArray outHairAzimuthalLut;
+
+layout(std430, set = 0, binding = 1) readonly buffer GenerationParameters
+{
+    // x=IOR, y=fiberRadius(m), z=longitudinal roughness, w=azimuthal roughness。
+    vec4 contract;
+} generationParameters;
+
+const float PI = 3.14159265358979323846;
+const float HALF_PI = 1.57079632679489661923;
+const float EPSILON = 1.0e-5;
+
+float HairFresnel(float cosineIncident, float relativeIor)
+{
+    float cosine = abs(clamp(cosineIncident, -1.0, 1.0));
+    float sine = sqrt(max(1.0 - cosine * cosine, 0.0));
+    float transmittedSine = sine / relativeIor;
+    if (transmittedSine >= 1.0)
+    {
+        return 1.0;
+    }
+    float transmittedCosine = sqrt(max(1.0 - transmittedSine * transmittedSine, 0.0));
+    float parallel =
+        (relativeIor * cosine - transmittedCosine) /
+        (relativeIor * cosine + transmittedCosine);
+    float perpendicular =
+        (cosine - relativeIor * transmittedCosine) /
+        (cosine + relativeIor * transmittedCosine);
+    return clamp(0.5 * (parallel * parallel + perpendicular * perpendicular), 0.0, 1.0);
+}
+
+float PathShift(uint layer, float cuticleTilt)
+{
+    if (layer == 1u)
+    {
+        return cuticleTilt;
+    }
+    if (layer == 2u)
+    {
+        return -cuticleTilt;
+    }
+    return 0.0;
+}
+
+void main()
+{
+    ivec3 coordinate = ivec3(gl_GlobalInvocationID);
+    ivec3 lutSize = imageSize(outHairAzimuthalLut);
+    if (coordinate.x >= lutSize.x ||
+        coordinate.y >= lutSize.y ||
+        coordinate.z >= lutSize.z)
+    {
+        return;
+    }
+
+    // X 以 deltaPhi repeat，Y 是 roughness slice + thetaD 的线性 atlas。
+    float deltaPhi = (float(coordinate.x) + 0.5) / float(lutSize.x) * 2.0 * PI - PI;
+    uint thetaDIndex = uint(coordinate.y) % 64u;
+    uint roughnessIndex = uint(coordinate.y) / 64u;
+    float thetaD =
+        (float(thetaDIndex) + 0.5) / 64.0 * 2.0 * HALF_PI - HALF_PI;
+    float roughness = (float(roughnessIndex) + 0.5) / 8.0;
+
+    float ior = generationParameters.contract.x;
+    float radius = generationParameters.contract.y;
+    float azimuthalRoughness = max(
+        generationParameters.contract.w * mix(0.5, 1.5, roughness),
+        0.02);
+    float phase =
+        float(coordinate.z) * PI +
+        2.0 * asin(clamp(sin(deltaPhi * 0.5) * 0.98, -1.0, 1.0));
+    float phaseResidual = sin(0.5 * (phase - deltaPhi));
+    float azimuthal = exp(
+        -0.5 * phaseResidual * phaseResidual /
+        (azimuthalRoughness * azimuthalRoughness));
+    float interfaceFresnel = HairFresnel(cos(thetaD), ior);
+    float pathLength = coordinate.z == 0u
+        ? 0.0
+        : 2.0 * radius * sqrt(max(1.0 - phaseResidual * phaseResidual, 0.0)) *
+            (coordinate.z == 2u ? 3.0 : 1.0);
+    // LUT 只负责方位根的预积分、界面权重和 Jacobian。thetaH 的纵向峰
+    // 必须在 runtime evaluator 以当前材质的 cuticleTilt/roughness 求值，
+    // 否则同一份 LUT 会把 longitudinal lobe 重复乘入一次。
+    float interfaceWeight = interfaceFresnel;
+    if (coordinate.z == 1u)
+    {
+        interfaceWeight = (1.0 - interfaceFresnel) * (1.0 - interfaceFresnel);
+    }
+    else if (coordinate.z == 2u)
+    {
+        float internalFresnel = HairFresnel(
+            sqrt(max(1.0 - sin(thetaD) * sin(thetaD) / (ior * ior), 0.0)),
+            1.0 / ior);
+        interfaceWeight =
+            (1.0 - interfaceFresnel) *
+            (1.0 - interfaceFresnel) *
+            internalFresnel;
+    }
+
+    float jacobian = 1.0 / max(abs(cos(phaseResidual)), 0.05);
+    float response =
+        clamp(azimuthal * interfaceWeight * jacobian, 0.0, 64.0);
+    imageStore(
+        outHairAzimuthalLut,
+        coordinate,
+        vec4(response, pathLength, interfaceWeight, jacobian));
+}

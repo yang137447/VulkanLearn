@@ -692,6 +692,54 @@ Test-FilePatternsAbsent `
 
 Test-RuntimeValidationAdapterBoundary -Failures $failures
 
+Test-PathsAbsent `
+    -Failures $failures `
+    -RelativePaths @(
+        "source/render/hair/hairReference.h",
+        "source/render/hair/hairReference.cpp",
+        "source/render/hair/hairGBufferCodec.h",
+        "source/render/hair/hairGBufferCodec.cpp"
+    ) `
+    -RuleName "Hair test oracle production boundary"
+
+Test-FilePatternsAbsent `
+    -Failures $failures `
+    -RelativePaths @("source/CMakeLists.txt") `
+    -Patterns @(
+        'hairReference',
+        'hairGBufferCodec'
+    ) `
+    -RuleName "Hair test oracle production target boundary"
+
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "tool/hair-tests/CMakeLists.txt" `
+    -Patterns @(
+        'support/hairReference.cpp',
+        'support/hairGBufferCodec.cpp'
+    ) `
+    -RuleName "Hair test oracle support boundary"
+
+Test-FilePatternsAbsent `
+    -Failures $failures `
+    -RelativePaths @("source/render/hair/hairAssets.cpp") `
+    -Patterns @(
+        'TryLoadHairAzimuthalLutAsset',
+        'ResolveMetadataPath',
+        'generated/hairAzimuthalLut.json'
+    ) `
+    -RuleName "Hair authoring metadata loader boundary"
+
+Test-FilePatternsAbsent `
+    -Failures $failures `
+    -RelativePaths @("source/render/hair/hairLutBaker.cpp") `
+    -Patterns @(
+        'default-neutral-hair-lut',
+        'CommitGeneratedMetadata',
+        'WriteFileBatchAtomically'
+    ) `
+    -RuleName "Hair candidate metadata publication boundary"
+
 # RHIDeviceVulkan is the concrete Vulkan device-facing boundary. The old abstract
 # RHIDevice interface was removed because Vulkan is the only graphics API and a
 # single-implementation virtual layer was redundant historical architecture.
@@ -1253,6 +1301,9 @@ Test-FilePatternsPresent `
         '--shader-ui-reload-test',
         '--shader-shutdown-inflight-test',
         '--world-graph-transaction-test',
+        'RunHairValidation',
+        '--hair-validation-test',
+        'hairAzimuthalLut.json',
         '--framesmoke',
         '--environmentstress',
         '--reloadstress',

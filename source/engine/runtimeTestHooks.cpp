@@ -32,6 +32,7 @@ namespace VL
 using namespace RuntimeTestFixtures;
 RuntimeTestHooks::~RuntimeTestHooks()
 {
+    CleanupHairValidationTestFixture();
     if (!shaderReloadTestSourcePath.empty() &&
         !shaderReloadTestOriginalSource.empty())
     {
@@ -263,6 +264,28 @@ void RuntimeTestHooks::Update(
     RuntimeValidationServices& validationServices,
     const DiagnosticsSubsystem& diagnostics)
 {
+    if (hairValidationTestActive)
+    {
+        if (hairValidationTestPhase ==
+                HairValidationTestPhase::WaitWorldLoad &&
+            !waitingForHairValidationWorld)
+        {
+            RuntimeCommand command;
+            command.type = RuntimeCommandType::LoadWorld;
+            command.stringValue = hairValidationScenePaths.at(
+                hairValidationSceneIndex);
+            command.sourceText = "runtime-test: hair-validation";
+            commandBus.Queue(std::move(command));
+            waitingForHairValidationWorld = true;
+            diagnostics.ReportInfo(
+                "Hair validation queued scene " +
+                std::to_string(hairValidationSceneIndex + 1) +
+                "/" +
+                std::to_string(hairValidationScenePaths.size()));
+        }
+        return;
+    }
+
     if (shaderReloadTestActive &&
         shaderReloadTestPhase ==
             ShaderReloadTestPhase::WaitWorldLoad &&
@@ -484,6 +507,12 @@ void RuntimeTestHooks::UpdateEngineLoopTests(
     RuntimeValidationServices& validationServices,
     const DiagnosticsSubsystem& diagnostics)
 {
+    if (hairValidationTestActive)
+    {
+        UpdateHairValidationTest(validationServices, diagnostics);
+        return;
+    }
+
     if (shaderShutdownInflightTestActive)
     {
         UpdateShaderShutdownInflightTest(
@@ -568,6 +597,26 @@ void RuntimeTestHooks::NotifyCommandResult(
     const RuntimeCommandExecutionResult& commandResult,
     const DiagnosticsSubsystem& diagnostics)
 {
+    if (hairValidationTestActive && waitingForHairValidationWorld)
+    {
+        if (!commandResult.loadWorldAttempted)
+        {
+            return;
+        }
+        waitingForHairValidationWorld = false;
+        if (!commandResult.loadWorldSucceeded ||
+            !commandResult.worldRuntimeBindingSucceeded)
+        {
+            FailHairValidationTest(
+                "Hair validation fixture World failed to load or bind.",
+                diagnostics);
+            return;
+        }
+        hairValidationTestPhase =
+            HairValidationTestPhase::ValidateWorld;
+        return;
+    }
+
     if (shaderReloadTestActive &&
         waitingForShaderReloadTestWorld)
     {

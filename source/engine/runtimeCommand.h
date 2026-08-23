@@ -29,6 +29,7 @@ enum class RuntimeCommandType
     RunWorldGraphTransactionTest,
     RunShaderUiReloadTest,
     RunShaderShutdownInflightTest,
+    RunHairValidationTest,
     SetDebugViewMode,
     SetEnvironmentIntensity,
     SetProceduralSkyParameters,

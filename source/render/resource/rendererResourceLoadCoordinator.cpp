@@ -11,6 +11,7 @@
 #include "render/resource/rendererResourceCache.h"
 #include "render/resource/rendererResourceLoadContext.h"
 #include "render/subsurface/subsurfaceResourceLoader.h"
+#include "render/hair/hairLutBaker.h"
 #include "renderGraph.h"
 #include "world/loading/worldLoader.h"
 
@@ -29,29 +30,6 @@ void RendererResourceLoadCoordinator::SetPipelineFactory(PipelineFactory* pipeli
 void RendererResourceLoadCoordinator::SetRendererBackend(RendererBackendVulkan* rendererBackend)
 {
     this->rendererBackend = rendererBackend;
-}
-
-RendererWorldResourceLoadResult RendererResourceLoadCoordinator::LoadRendererResources(
-    const WorldBuildPlan& worldBuildPlan,
-    uint64_t ownerGeneration)
-{
-    if (pipelineFactory == nullptr)
-    {
-        throw std::runtime_error("PipelineFactory is not set in RendererResourceLoadCoordinator");
-    }
-    if (rendererBackend == nullptr)
-    {
-        throw std::runtime_error("RendererBackendVulkan is not set in RendererResourceLoadCoordinator");
-    }
-
-    RendererResourceCache& resourceCache = RendererResourceCache::GetInstance();
-    resourceCache.BeginWorldLocalResourceLoad(ownerGeneration);
-    RendererResourceLoadContext loadContext{
-        resourceCache,
-        RenderGraph::GetInstance()};
-    return LoadRendererResources(
-        worldBuildPlan,
-        loadContext);
 }
 
 RendererWorldResourceLoadResult
@@ -76,6 +54,10 @@ RendererResourceLoadCoordinator::LoadRendererResources(
         *pipelineFactory,
         *rendererBackend,
         loadContext);
+    HairResourceLoader hairResourceLoader(
+        *pipelineFactory,
+        *rendererBackend,
+        loadContext);
     RendererMaterialLoader materialLoader(
         *pipelineFactory,
         *rendererBackend,
@@ -89,6 +71,8 @@ RendererResourceLoadCoordinator::LoadRendererResources(
     environmentLoader.LoadGlobalResources();
     // lookup texture 和 path->stable ID 必须先进入 candidate cache，材质加载才能只消费同一 World generation。
     subsurfaceResourceLoader.Load();
+    // Hair pass 的外部 LUT descriptor 必须在材质和 candidate graph 初始化前就绪.
+    hairResourceLoader.Load();
 
     // Load pass materials before scene meshes so descriptor setup can reference
     // render graph pass material instances.

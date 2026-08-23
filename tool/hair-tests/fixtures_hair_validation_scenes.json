@@ -1,0 +1,62 @@
+{
+    "schemaVersion": 1,
+    "material": "MI_hair",
+    "fixedRenderContract": {
+        "resolution": [1280, 720],
+        "exposure": 0.0,
+        "toneMapping": "linear",
+        "postProcess": "disabled",
+        "taa": "off-for-golden"
+    },
+    "parameterSweeps": {
+        "scatter": [0.0, 0.25, 0.5, 1.0],
+        "backlit": [0.0, 0.35, 0.7, 1.0],
+        "specular": [0.1, 0.5, 1.0],
+        "roughness": [0.08, 0.22, 0.5, 0.9],
+        "tangentHandedness": [1.0, -1.0],
+        "lod": [0, 1, 2],
+        "flowMap": ["none", "rootward-x", "rootward-y"]
+    },
+    "scenes": [
+        {
+            "name": "single-card",
+            "description": "单张 Hair Card，用于观察 tangent、R/TT/TRT 和 coverage。",
+            "geometry": {"layout": "single-card", "coverageMip": "near-mid-far", "mirroredUv": false},
+            "camera": {"position": [0.0, 0.0, 2.8], "target": [0.0, 0.0, 0.0], "fov": 35.0},
+            "lighting": {"mode": "key-plus-fill", "backlit": false, "shadow": false},
+            "material": "MI_hair"
+        },
+        {
+            "name": "crossed-cards",
+            "description": "两张正交 Hair Card，用于检查 mirrored UV 和 edge-on silhouette。",
+            "geometry": {"layout": "crossed-cards", "coverageMip": "near-mid-far", "mirroredUv": true},
+            "camera": {"position": [0.0, 0.0, 3.2], "target": [0.0, 0.0, 0.0], "fov": 38.0},
+            "lighting": {"mode": "key-plus-fill", "backlit": false, "shadow": false},
+            "material": "MI_hair"
+        },
+        {
+            "name": "dense-hair",
+            "description": "密集卡片层，用于 sparse-to-dense、LOD/CLOD 和 MS budget。",
+            "geometry": {"layout": "dense-cards", "coverageMip": "near-mid-far", "mirroredUv": false},
+            "camera": {"position": [0.0, 0.1, 4.6], "target": [0.0, 0.0, 0.0], "fov": 42.0},
+            "lighting": {"mode": "key-plus-fill", "backlit": false, "shadow": true},
+            "material": "MI_hair"
+        },
+        {
+            "name": "backlit-hair",
+            "description": "逆光卡片，用于 Backlit 与 TT body response。",
+            "geometry": {"layout": "single-card", "coverageMip": "near-mid-far", "mirroredUv": false},
+            "camera": {"position": [0.0, 0.0, 3.4], "target": [0.0, 0.0, 0.0], "fov": 36.0},
+            "lighting": {"mode": "backlight", "backlit": true, "shadow": false},
+            "material": "MI_hair"
+        },
+        {
+            "name": "hair-shadow",
+            "description": "带 CSM 的 masked Hair Card，用于主 Pass/ShadowDepth coverage 一致性。",
+            "geometry": {"layout": "crossed-cards", "coverageMip": "near-mid-far", "mirroredUv": true},
+            "camera": {"position": [0.0, 0.2, 3.8], "target": [0.0, 0.0, 0.0], "fov": 40.0},
+            "lighting": {"mode": "directional-shadow", "backlit": false, "shadow": true},
+            "material": "MI_hair"
+        }
+    ]
+}

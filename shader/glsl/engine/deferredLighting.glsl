@@ -2,11 +2,13 @@
 #define VL_ENGINE_DEFERRED_LIGHTING_GLSL
 
 #include "../common/commonUbo.glsl"
+layout(set = 3, binding = 10) uniform sampler2DArray hairAzimuthalLut;
 #include "materialSurface.glsl"
 #include "../common/lighting.glsl"
 #include "subsurfaceLighting.glsl"
 #include "preintegratedSkinLighting.glsl"
 #include "subsurfaceProfileLighting.glsl"
+#include "hairLighting.glsl"
 
 vec3 ReconstructWorldPositionFromSceneDepth(vec2 uv, float deviceDepth)
 {
@@ -33,6 +35,25 @@ struct DeferredLightingResult
     vec3 defaultDiffuseLighting;
     float subsurfaceWeight;
     float transmissionWeight;
+    // Hair path decomposition is kept in the same result snapshot for Forward/Deferred debug views.
+    vec3 hairRPath;
+    vec3 hairTTPath;
+    vec3 hairTRTPath;
+    float hairPathLength;
+    vec3 hairAbsorption;
+    vec2 hairLutCoordinates;
+    float hairIblFallback;
+    float hairMultipleScatteringFallback;
+    vec3 hairTangent;
+    vec3 hairBitangent;
+    float hairThetaI;
+    float hairThetaO;
+    float hairThetaH;
+    float hairThetaD;
+    float hairDeltaPhi;
+    float hairCoverage;
+    float hairDensity;
+    float hairShadowTransmittance;
     vec3 finalColor;
 };
 
@@ -54,6 +75,24 @@ DeferredLightingResult CreateDefaultDeferredLightingResult()
     result.defaultDiffuseLighting = vec3(0.0);
     result.subsurfaceWeight = 0.0;
     result.transmissionWeight = 0.0;
+    result.hairRPath = vec3(0.0);
+    result.hairTTPath = vec3(0.0);
+    result.hairTRTPath = vec3(0.0);
+    result.hairPathLength = 0.0;
+    result.hairAbsorption = vec3(0.0);
+    result.hairLutCoordinates = vec2(0.0);
+    result.hairIblFallback = 0.0;
+    result.hairMultipleScatteringFallback = 0.0;
+    result.hairTangent = vec3(1.0, 0.0, 0.0);
+    result.hairBitangent = vec3(0.0, 1.0, 0.0);
+    result.hairThetaI = 0.0;
+    result.hairThetaO = 0.0;
+    result.hairThetaH = 0.0;
+    result.hairThetaD = 0.0;
+    result.hairDeltaPhi = 0.0;
+    result.hairCoverage = 1.0;
+    result.hairDensity = 1.0;
+    result.hairShadowTransmittance = 1.0;
     result.finalColor = vec3(0.0);
     return result;
 }
@@ -304,6 +343,46 @@ DeferredLightingResult ShadeClearCoatDeferredSurfaceDetailed(
     return result;
 }
 
+DeferredLightingResult ShadeHairDeferredSurfaceDetailed(
+    in MaterialSurface surface,
+    in sampler2DArrayShadow inputShadowMap)
+{
+    // Deferred 只恢复 GBuffer V1 已冻结的 Hair 子集；所有路径公式仍由共享
+    // evaluator 提供，避免 Forward 与 Deferred 演化出两套能量账本。
+    HairLightingResult hair = ShadeHairSurface(
+        surface,
+        inputShadowMap,
+        surface.precomputedShadowFactors.r);
+    DeferredLightingResult result =
+        CreateDefaultDeferredLightingResult();
+    result.directSpecular = hair.directLighting;
+    result.indirectDiffuse = hair.multipleScattering;
+    result.indirectSpecular =
+        hair.indirectR + hair.indirectTT + hair.indirectTRT;
+    result.shadow = hair.shadow;
+    result.shadowCascadeIndex = hair.shadowCascadeIndex;
+    result.hairRPath = hair.directR;
+    result.hairTTPath = hair.directTT;
+    result.hairTRTPath = hair.directTRT;
+    result.hairPathLength = hair.pathLength;
+    result.hairAbsorption = hair.absorption;
+    result.hairLutCoordinates = hair.lutCoordinates;
+    result.hairIblFallback = hair.hairIblFallback;
+    result.hairMultipleScatteringFallback = hair.multipleScatteringFallback;
+    result.hairTangent = hair.tangent;
+    result.hairBitangent = hair.bitangent;
+    result.hairThetaI = hair.thetaI;
+    result.hairThetaO = hair.thetaO;
+    result.hairThetaH = hair.thetaH;
+    result.hairThetaD = hair.thetaD;
+    result.hairDeltaPhi = hair.deltaPhi;
+    result.hairCoverage = hair.coverage;
+    result.hairDensity = hair.density;
+    result.hairShadowTransmittance = hair.shadowTransmittance;
+    ResolveDeferredLightingComposition(surface, result);
+    result.defaultDiffuseLighting = result.diffuseLighting;
+    return result;
+}
 DeferredLightingResult ShadeUnlitDeferredSurfaceDetailed(
     in MaterialSurface surface)
 {
@@ -344,6 +423,10 @@ DeferredLightingResult ShadeDeferredSurfaceDetailed(
                 surface,
                 inputShadowMap,
                 profileTable);
+        case SHADING_MODEL_HAIR:
+            return ShadeHairDeferredSurfaceDetailed(
+                surface,
+                inputShadowMap);
         default:
             return ShadeDefaultLitDeferredSurfaceDetailed(
                 surface,

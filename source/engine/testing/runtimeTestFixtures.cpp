@@ -1091,6 +1091,343 @@ std::filesystem::path CreateGeneratedHighLightStressScene(const std::string& res
     return scenePath;
 }
 
+namespace
+{
+
+void AppendHairMaterialParameterIfNonDefault(
+    nlohmann::json& parameters,
+    const char* parameterName,
+    const nlohmann::json& value,
+    const nlohmann::json& defaultValue)
+{
+    if (value != defaultValue)
+    {
+        parameters[parameterName] = value;
+    }
+}
+
+nlohmann::json BuildHairMaterialInstanceJson(
+    const std::string& name,
+    const std::string& materialPath,
+    const nlohmann::json& tintColor,
+    const nlohmann::json& pbrFactors,
+    const nlohmann::json& hairOptical,
+    const nlohmann::json& hairScattering,
+    const nlohmann::json& hairCoverage)
+{
+    const nlohmann::json defaultTint = {0.18, 0.04, 0.015, 1.0};
+    const nlohmann::json defaultPbr = {0.32, 0.0, 1.0, 0.5};
+    const nlohmann::json defaultOptical = {8.0, 1.55, 0.00005, 0.04};
+    const nlohmann::json defaultScattering = {0.25, 0.35, 0.22, 0.25};
+    const nlohmann::json defaultCoverage = {1.0, 0.35, 1.0, 0.0};
+    nlohmann::json parameters = nlohmann::json::object();
+
+    // 材质实例只记录作者真正覆盖的值；重复写入 M_* 默认值会违反 authoring contract。
+    AppendHairMaterialParameterIfNonDefault(
+        parameters, "u_tintColor", tintColor, defaultTint);
+    AppendHairMaterialParameterIfNonDefault(
+        parameters, "u_pbrFactors", pbrFactors, defaultPbr);
+    AppendHairMaterialParameterIfNonDefault(
+        parameters, "u_hairOptical", hairOptical, defaultOptical);
+    AppendHairMaterialParameterIfNonDefault(
+        parameters, "u_hairScattering", hairScattering, defaultScattering);
+    AppendHairMaterialParameterIfNonDefault(
+        parameters, "u_hairCoverage", hairCoverage, defaultCoverage);
+    parameters["u_emissiveStrength"] = 0.0;
+
+    return {
+        {"type", "materialInstance"},
+        {"name", name},
+        {"material", materialPath},
+        {"parameters", parameters}};
+}
+
+nlohmann::json BuildHairMeshJson(
+    const std::string& name,
+    const std::filesystem::path& materialInstancePath)
+{
+    return {
+        {"name", name},
+        {"type", "mesh"},
+        {"modelDataPath", "models/datas/plane.obj"},
+        {"materialSlots", nlohmann::json::array({
+            {
+                {"name", "Default"},
+                {"materialInstancePath", materialInstancePath.generic_string()}}})}};
+}
+
+nlohmann::json BuildHairMeshObject(
+    const std::string& name,
+    const std::filesystem::path& meshPath,
+    const std::array<float, 3>& position,
+    const std::array<float, 3>& scale,
+    const std::array<float, 3>& rotation)
+{
+    return {
+        {"name", name},
+        {"type", "mesh"},
+        {"modelPath", meshPath.generic_string()},
+        {"position", position},
+        {"scale", scale},
+        {"rotation", rotation}};
+}
+
+void AppendHairReferenceEnvironment(nlohmann::json& scene)
+{
+    scene["objects"].push_back({
+        {"name", "HairValidation_Sun"},
+        {"type", "directionalLight"},
+        {"position", {2.0, 5.0, 4.0}},
+        {"rotation", {-35.0, -25.0, 0.0}},
+        {"color", {1.0, 0.96, 0.9}},
+        {"intensity", 3.0}});
+    scene["objects"].push_back({
+        {"name", "HairValidation_Camera"},
+        {"type", "camera"},
+        {"fov", 45.0},
+        {"near_clip", 0.1},
+        {"far_clip", 100.0},
+        {"position", {0.0, 2.2, 7.0}},
+        {"rotation", {0.0, 0.0, 0.0}},
+        {"scale", {1.0, 1.0, 1.0}}});
+}
+
+std::filesystem::path WriteHairValidationScene(
+    const std::filesystem::path& directory,
+    const std::string& name,
+    const nlohmann::json& meshObjects)
+{
+    nlohmann::json scene = {
+        {"name", "Hair Validation " + name},
+        {"type", "scene"},
+        {"objects", meshObjects}};
+    AppendHairReferenceEnvironment(scene);
+    const std::filesystem::path scenePath =
+        directory / ("SC_hair_" + name + ".json");
+    WriteTextFile(scenePath, scene.dump(2) + "\n");
+    return scenePath;
+}
+
+} // namespace
+
+HairValidationFixture CreateHairValidationFixtures(
+    const std::string& resourcePath)
+{
+    HairValidationFixture fixture;
+    fixture.directory = BuildGeneratedFixtureDirectory(
+        resourcePath,
+        "hair-validation-");
+    std::filesystem::create_directories(fixture.directory);
+
+    const std::filesystem::path hairMaterialPath =
+        std::filesystem::path("shader/glsl/M_hair.json");
+    const std::filesystem::path hairProbeMaterialPath =
+        std::filesystem::path("shader/glsl/M_hairProbe.json");
+    const nlohmann::json defaultTint = {0.18, 0.04, 0.015, 1.0};
+    const nlohmann::json probeTint = {0.18, 0.04, 0.015, 0.72};
+    const nlohmann::json defaultPbr = {0.32, 0.0, 1.0, 0.5};
+    const nlohmann::json defaultOptical = {8.0, 1.55, 0.00005, 0.04};
+
+    const std::filesystem::path singleMaterialPath =
+        fixture.directory / "MI_hair_single.json";
+    const std::filesystem::path crossedMaterialPath =
+        fixture.directory / "MI_hair_crossed.json";
+    const std::filesystem::path denseMaterialPath =
+        fixture.directory / "MI_hair_dense.json";
+    const std::filesystem::path backlitMaterialPath =
+        fixture.directory / "MI_hair_backlit.json";
+    const std::filesystem::path shadowMaterialPath =
+        fixture.directory / "MI_hair_shadow.json";
+    const std::filesystem::path sweepScatterMaterialPath =
+        fixture.directory / "MI_hair_sweep_scatter.json";
+    const std::filesystem::path sweepBacklitMaterialPath =
+        fixture.directory / "MI_hair_sweep_backlit.json";
+    const std::filesystem::path sweepSpecularMaterialPath =
+        fixture.directory / "MI_hair_sweep_specular.json";
+    const std::filesystem::path sweepRoughnessMaterialPath =
+        fixture.directory / "MI_hair_sweep_roughness.json";
+    const std::filesystem::path sweepTangentMaterialPath =
+        fixture.directory / "MI_hair_sweep_tangent.json";
+
+    WriteTextFile(
+        singleMaterialPath,
+        BuildHairMaterialInstanceJson(
+            "MI_hair_validation_single",
+            hairMaterialPath.generic_string(),
+            defaultTint,
+            defaultPbr,
+            defaultOptical,
+            {0.25, 0.35, 0.22, 0.25},
+            {1.0, 0.35, 1.0, 0.0}).dump(2) + "\n");
+    WriteTextFile(
+        crossedMaterialPath,
+        BuildHairMaterialInstanceJson(
+            "MI_hair_validation_crossed",
+            hairMaterialPath.generic_string(),
+            defaultTint,
+            defaultPbr,
+            defaultOptical,
+            {0.35, 0.35, 0.22, 0.25},
+            {0.95, 0.35, 1.0, 0.0}).dump(2) + "\n");
+    WriteTextFile(
+        denseMaterialPath,
+        BuildHairMaterialInstanceJson(
+            "MI_hair_validation_dense",
+            hairMaterialPath.generic_string(),
+            defaultTint,
+            defaultPbr,
+            defaultOptical,
+            {0.8, 0.15, 0.18, 0.32},
+            {0.9, 0.45, 0.75, 0.0}).dump(2) + "\n");
+    WriteTextFile(
+        backlitMaterialPath,
+        BuildHairMaterialInstanceJson(
+            "MI_hair_validation_backlit",
+            hairProbeMaterialPath.generic_string(),
+            probeTint,
+            {0.32, 0.0, 1.0, 0.6},
+            defaultOptical,
+            {0.4, 0.95, 0.22, 0.3},
+            {0.8, 0.4, 1.0, 0.0}).dump(2) + "\n");
+    WriteTextFile(
+        shadowMaterialPath,
+        BuildHairMaterialInstanceJson(
+            "MI_hair_validation_shadow",
+            hairMaterialPath.generic_string(),
+            defaultTint,
+            defaultPbr,
+            defaultOptical,
+            {0.25, 0.35, 0.22, 0.25},
+            {0.72, 0.35, 0.85, 0.0}).dump(2) + "\n");
+    WriteTextFile(
+        sweepScatterMaterialPath,
+        BuildHairMaterialInstanceJson(
+            "MI_hair_validation_sweep_scatter",
+            hairMaterialPath.generic_string(),
+            defaultTint,
+            defaultPbr,
+            defaultOptical,
+            {1.0, 0.0, 0.22, 0.25},
+            {1.0, 0.35, 1.0, 0.0}).dump(2) + "\n");
+    WriteTextFile(
+        sweepBacklitMaterialPath,
+        BuildHairMaterialInstanceJson(
+            "MI_hair_validation_sweep_backlit",
+            hairMaterialPath.generic_string(),
+            defaultTint,
+            defaultPbr,
+            defaultOptical,
+            {0.25, 1.0, 0.22, 0.25},
+            {1.0, 0.35, 1.0, 0.0}).dump(2) + "\n");
+    WriteTextFile(
+        sweepSpecularMaterialPath,
+        BuildHairMaterialInstanceJson(
+            "MI_hair_validation_sweep_specular",
+            hairMaterialPath.generic_string(),
+            defaultTint,
+            {0.32, 0.0, 1.0, 0.95},
+            defaultOptical,
+            {0.25, 0.35, 0.22, 0.25},
+            {1.0, 0.35, 1.0, 0.0}).dump(2) + "\n");
+    WriteTextFile(
+        sweepRoughnessMaterialPath,
+        BuildHairMaterialInstanceJson(
+            "MI_hair_validation_sweep_roughness",
+            hairMaterialPath.generic_string(),
+            defaultTint,
+            defaultPbr,
+            defaultOptical,
+            {0.25, 0.35, 0.85, 0.65},
+            {1.0, 0.35, 1.0, 0.0}).dump(2) + "\n");
+    WriteTextFile(
+        sweepTangentMaterialPath,
+        BuildHairMaterialInstanceJson(
+            "MI_hair_validation_sweep_tangent",
+            hairMaterialPath.generic_string(),
+            defaultTint,
+            defaultPbr,
+            defaultOptical,
+            {0.25, 0.35, 0.22, 0.25},
+            {1.0, 0.35, 1.0, 0.0}).dump(2) + "\n");
+
+    const std::filesystem::path singleMeshPath =
+        fixture.directory / "SM_hair_single.json";
+    const std::filesystem::path crossedMeshPath =
+        fixture.directory / "SM_hair_crossed.json";
+    const std::filesystem::path denseMeshPath =
+        fixture.directory / "SM_hair_dense.json";
+    const std::filesystem::path backlitMeshPath =
+        fixture.directory / "SM_hair_backlit.json";
+    const std::filesystem::path shadowMeshPath =
+        fixture.directory / "SM_hair_shadow.json";
+    const std::filesystem::path sweepScatterMeshPath =
+        fixture.directory / "SM_hair_sweep_scatter.json";
+    const std::filesystem::path sweepBacklitMeshPath =
+        fixture.directory / "SM_hair_sweep_backlit.json";
+    const std::filesystem::path sweepSpecularMeshPath =
+        fixture.directory / "SM_hair_sweep_specular.json";
+    const std::filesystem::path sweepRoughnessMeshPath =
+        fixture.directory / "SM_hair_sweep_roughness.json";
+    const std::filesystem::path sweepTangentMeshPath =
+        fixture.directory / "SM_hair_sweep_tangent.json";
+    const std::filesystem::path groundMeshPath =
+        std::filesystem::path(resourcePath) / "models" / "SM_plane.json";
+
+    WriteTextFile(singleMeshPath, BuildHairMeshJson("SM_hair_single", singleMaterialPath).dump(2) + "\n");
+    WriteTextFile(crossedMeshPath, BuildHairMeshJson("SM_hair_crossed", crossedMaterialPath).dump(2) + "\n");
+    WriteTextFile(denseMeshPath, BuildHairMeshJson("SM_hair_dense", denseMaterialPath).dump(2) + "\n");
+    WriteTextFile(backlitMeshPath, BuildHairMeshJson("SM_hair_backlit", backlitMaterialPath).dump(2) + "\n");
+    WriteTextFile(shadowMeshPath, BuildHairMeshJson("SM_hair_shadow", shadowMaterialPath).dump(2) + "\n");
+    WriteTextFile(sweepScatterMeshPath, BuildHairMeshJson("SM_hair_sweep_scatter", sweepScatterMaterialPath).dump(2) + "\n");
+    WriteTextFile(sweepBacklitMeshPath, BuildHairMeshJson("SM_hair_sweep_backlit", sweepBacklitMaterialPath).dump(2) + "\n");
+    WriteTextFile(sweepSpecularMeshPath, BuildHairMeshJson("SM_hair_sweep_specular", sweepSpecularMaterialPath).dump(2) + "\n");
+    WriteTextFile(sweepRoughnessMeshPath, BuildHairMeshJson("SM_hair_sweep_roughness", sweepRoughnessMaterialPath).dump(2) + "\n");
+    WriteTextFile(sweepTangentMeshPath, BuildHairMeshJson("SM_hair_sweep_tangent", sweepTangentMaterialPath).dump(2) + "\n");
+
+    nlohmann::json singleObjects = nlohmann::json::array({
+        BuildHairMeshObject("HairSingleCard", singleMeshPath, {0.0, 0.0, 0.0}, {1.0, 1.0, 1.0}, {0.0, 0.0, 0.0})});
+    fixture.scenePaths.push_back(WriteHairValidationScene(fixture.directory, "single_card", singleObjects));
+
+    nlohmann::json crossedObjects = nlohmann::json::array({
+        BuildHairMeshObject("HairCrossCardA", crossedMeshPath, {-1.1, 0.0, 0.0}, {0.75, 0.75, 0.75}, {0.0, 0.0, 0.0}),
+        BuildHairMeshObject("HairCrossCardMirrored", crossedMeshPath, {1.1, 0.0, 0.0}, {-0.75, 0.75, 0.75}, {0.0, 90.0, 0.0})});
+    fixture.scenePaths.push_back(WriteHairValidationScene(fixture.directory, "crossed_cards", crossedObjects));
+
+    nlohmann::json denseObjects = nlohmann::json::array();
+    for (int cardIndex = 0; cardIndex < 6; ++cardIndex)
+    {
+        const float x = (static_cast<float>(cardIndex) - 2.5f) * 0.42f;
+        const float rotation = static_cast<float>((cardIndex % 3) - 1) * 18.0f;
+        denseObjects.push_back(BuildHairMeshObject(
+            "HairDenseCard_" + std::to_string(cardIndex),
+            denseMeshPath,
+            {x, 0.0f, static_cast<float>(cardIndex % 2) * 0.08f},
+            {0.46f, 0.46f, 0.46f},
+            {0.0f, rotation, 0.0f}));
+    }
+    fixture.scenePaths.push_back(WriteHairValidationScene(fixture.directory, "dense_hair", denseObjects));
+
+    nlohmann::json backlitObjects = nlohmann::json::array({
+        BuildHairMeshObject("HairBacklitCard", backlitMeshPath, {0.0, 0.0, 0.0}, {1.0, 1.0, 1.0}, {0.0, 180.0, 0.0})});
+    fixture.scenePaths.push_back(WriteHairValidationScene(fixture.directory, "backlit_hair", backlitObjects));
+
+    nlohmann::json shadowObjects = nlohmann::json::array({
+        BuildHairMeshObject("HairShadowGround", groundMeshPath, {0.0, -0.05, 0.0}, {1.5, 1.5, 1.5}, {0.0, 0.0, 0.0}),
+        BuildHairMeshObject("HairShadowCardA", shadowMeshPath, {-0.8, 0.15, 0.0}, {0.55, 0.55, 0.55}, {0.0, 0.0, 0.0}),
+        BuildHairMeshObject("HairShadowCardMirrored", shadowMeshPath, {0.8, 0.15, 0.0}, {-0.55, 0.55, 0.55}, {0.0, 90.0, 0.0})});
+    fixture.scenePaths.push_back(WriteHairValidationScene(fixture.directory, "hair_shadow", shadowObjects));
+
+    nlohmann::json sweepObjects = nlohmann::json::array({
+        BuildHairMeshObject("HairSweepScatter", sweepScatterMeshPath, {-4.5, 0.0, 0.0}, {0.38, 0.38, 0.38}, {0.0, 0.0, 0.0}),
+        BuildHairMeshObject("HairSweepBacklit", sweepBacklitMeshPath, {-2.25, 0.0, 0.0}, {0.38, 0.38, 0.38}, {0.0, 0.0, 0.0}),
+        BuildHairMeshObject("HairSweepSpecular", sweepSpecularMeshPath, {0.0, 0.0, 0.0}, {0.38, 0.38, 0.38}, {0.0, 0.0, 0.0}),
+        BuildHairMeshObject("HairSweepRoughness", sweepRoughnessMeshPath, {2.25, 0.0, 0.0}, {0.38, 0.38, 0.38}, {0.0, 0.0, 0.0}),
+        BuildHairMeshObject("HairSweepTangentMirrored", sweepTangentMeshPath, {4.5, 0.0, 0.0}, {-0.38, 0.38, 0.38}, {0.0, 0.0, 0.0})});
+    fixture.scenePaths.push_back(WriteHairValidationScene(fixture.directory, "parameter_sweep", sweepObjects));
+
+    return fixture;
+}
+
 void UpdateMaxPendingRetiredResources(size_t pendingCount, size_t& maxPendingRetiredResources)
 {
     maxPendingRetiredResources = std::max(maxPendingRetiredResources, pendingCount);

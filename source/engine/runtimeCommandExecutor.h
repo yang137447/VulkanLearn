@@ -140,6 +140,10 @@ private:
     void ApplyShaderShutdownInflightTest(
         RuntimeTestHooks& runtimeTestHooks,
         const DiagnosticsSubsystem& diagnostics) const;
+    void ApplyHairValidationTest(
+        const RuntimeConfig& runtimeConfig,
+        RuntimeTestHooks& runtimeTestHooks,
+        const DiagnosticsSubsystem& diagnostics) const;
     void ApplyProceduralSkyParameters(
         const RuntimeCommand& command,
         WorldManager& worldManager,

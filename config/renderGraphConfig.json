@@ -417,6 +417,11 @@
                 },
                 {
                     "resource": "shadowMap"
+                },
+                {
+                    "resource": "hairAzimuthalLut",
+                    "source": "worldTexture",
+                    "binding": 10
                 }
             ],
             "output":[
@@ -584,6 +589,11 @@
                 {
                     "resource": "shadowMap",
                     "binding": 0
+                },
+                {
+                    "resource": "hairAzimuthalLut",
+                    "source": "worldTexture",
+                    "binding": 1
                 }
             ],
             "output":[

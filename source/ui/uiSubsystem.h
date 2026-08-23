@@ -140,6 +140,27 @@ private:
         Rml::String debugDiffuseAfterSssLabel;
         Rml::String debugSssPixelRadiusLabel;
         Rml::String debugSssValidWeightLabel;
+        Rml::String debugHairWorldTangentLabel;
+        Rml::String debugHairTangentRootwardLabel;
+        Rml::String debugHairThetaIoLabel;
+        Rml::String debugHairDeltaPhiLabel;
+        Rml::String debugHairRLabel;
+        Rml::String debugHairTtLabel;
+        Rml::String debugHairTrtLabel;
+        Rml::String debugHairPathLengthLabel;
+        Rml::String debugHairAbsorptionLabel;
+        Rml::String debugHairCoverageLabel;
+        Rml::String debugHairShadowTransmittanceLabel;
+        Rml::String debugHairLutCoordinatesLabel;
+        Rml::String debugHairPrimaryHighlightLabel;
+        Rml::String debugHairSecondaryHighlightLabel;
+        Rml::String debugHairScatterLabel;
+        Rml::String debugHairBacklitLabel;
+        Rml::String debugHairRPathColorLabel;
+        Rml::String debugHairTtPathColorLabel;
+        Rml::String debugHairTrtPathColorLabel;
+        Rml::String debugHairIblFallbackLabel;
+        Rml::String debugHairMultipleScatteringFallbackLabel;
 
         Rml::String toneMappingLabel;
         Rml::String toneMappingValue;

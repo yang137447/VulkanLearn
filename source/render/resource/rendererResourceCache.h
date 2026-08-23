@@ -16,6 +16,7 @@ namespace VL
 
 class RendererObjectResourceEntry;
 class SubsurfaceResourceSet;
+class HairResourceSet;
 
 // Renderer-side CPU resource cache. Global resources survive world reloads;
 // world-local resources are prepared in isolated candidate packages and retired
@@ -34,6 +35,8 @@ public:
         std::unordered_map<std::string, std::shared_ptr<Texture>> textures;
         // lookup texture 与 stable ID 只属于当前 World；发布后通过 const 句柄消费。
         std::shared_ptr<const SubsurfaceResourceSet> subsurfaceResources;
+        // Hair LUT 与 metadata 属于同一 World-local generation，不能跨 candidate 猜测。
+        std::shared_ptr<const HairResourceSet> hairResources;
 
         bool Empty() const noexcept;
     };
@@ -107,6 +110,10 @@ public:
         std::shared_ptr<const SubsurfaceResourceSet> resources);
     const std::shared_ptr<const SubsurfaceResourceSet>&
     GetSubsurfaceResources() const noexcept;
+    void BindHairResources(
+        std::shared_ptr<const HairResourceSet> resources);
+    const std::shared_ptr<const HairResourceSet>&
+    GetHairResources() const noexcept;
 
 private:
     RendererResourceCache();

@@ -18,7 +18,8 @@ bool RendererResourceCache::WorldLocalResourcePackage::Empty() const noexcept
         materialInstances.empty() &&
         objectResources.empty() &&
         textures.empty() &&
-        !subsurfaceResources;
+        !subsurfaceResources &&
+        !hairResources;
 }
 
 RendererResourceCache::RendererResourceCache()
@@ -379,5 +380,19 @@ RendererResourceCache::GetSubsurfaceResources() const noexcept
 {
     return worldLocalResources->subsurfaceResources;
 }
+
+// Hair LUT 与 SSS 使用相同的 candidate ownership 边界，避免 World reload 中途暴露半成品。
+void RendererResourceCache::BindHairResources(
+    std::shared_ptr<const HairResourceSet> resources)
+{
+    GetMutableWorldLocalResources().hairResources = std::move(resources);
+}
+
+const std::shared_ptr<const HairResourceSet>&
+RendererResourceCache::GetHairResources() const noexcept
+{
+    return worldLocalResources->hairResources;
+}
+
 
 } // namespace VL

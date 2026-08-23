@@ -92,6 +92,9 @@ public:
         const DiagnosticsSubsystem& diagnostics);
     bool BeginShaderShutdownInflightTest(
         const DiagnosticsSubsystem& diagnostics);
+    bool BeginHairValidationTest(
+        const std::string& resourcePath,
+        const DiagnosticsSubsystem& diagnostics);
     bool FinalizeShaderShutdownInflightTestAfterWorkerShutdown(
         RuntimeValidationServices& validationServices,
         const ShaderCompileWorkerShutdownDiagnostics& workerDiagnostics,
@@ -185,6 +188,9 @@ private:
     void UpdateShaderShutdownInflightTest(
         RuntimeValidationServices& validationServices,
         const DiagnosticsSubsystem& diagnostics);
+    void UpdateHairValidationTest(
+        RuntimeValidationServices& validationServices,
+        const DiagnosticsSubsystem& diagnostics);
     std::string CaptureShaderShutdownInflightFingerprint(
         RuntimeValidationServices& validationServices) const;
     bool SurfaceArtifactDependsOnSourceWithDigest(
@@ -218,6 +224,10 @@ private:
         RuntimeValidationServices& validationServices,
         const std::string& message,
         const DiagnosticsSubsystem& diagnostics);
+    void FailHairValidationTest(
+        const std::string& message,
+        const DiagnosticsSubsystem& diagnostics);
+    void CleanupHairValidationTestFixture() noexcept;
     void ReportFrameSmokeInterval(const DiagnosticsSubsystem& diagnostics);
     void FailEnvironmentUpdateStress(
         const std::string& message,
@@ -604,6 +614,28 @@ private:
     ShaderShutdownInflightTestPhase
         shaderShutdownInflightTestPhase =
             ShaderShutdownInflightTestPhase::Idle;
+
+    enum class HairValidationTestPhase
+    {
+        Idle,
+        WaitWorldLoad,
+        ValidateWorld,
+        QueueDebugView,
+        WaitDebugView
+    };
+
+    std::string hairValidationFixtureDirectory;
+    std::vector<std::string> hairValidationScenePaths;
+    std::string hairValidationGeneratedMetadataPath;
+    std::string hairValidationOriginalGeneratedMetadata;
+    bool hairValidationHadGeneratedMetadata = false;
+    std::string hairValidationExpectedSourceIdentity;
+    bool hairValidationTestActive = false;
+    bool waitingForHairValidationWorld = false;
+    size_t hairValidationSceneIndex = 0;
+    int hairValidationNextDebugView = 21;
+    HairValidationTestPhase hairValidationTestPhase =
+        HairValidationTestPhase::Idle;
 
     RuntimeTestStatus runtimeTestStatus = RuntimeTestStatus::Idle;
 };

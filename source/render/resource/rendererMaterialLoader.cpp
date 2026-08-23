@@ -19,6 +19,7 @@
 #include "render/backend/rendererBackendVulkan.h"
 #include "render/resource/rendererResourceCache.h"
 #include "render/resource/rendererResourceLoadContext.h"
+#include "render/hair/hairMaterialContract.h"
 #include "render/subsurface/subsurfaceMaterialContract.h"
 #include "render/subsurface/subsurfaceResourceSet.h"
 #include "render/shadow/materialShadowPipelineBuilder.h"
@@ -344,6 +345,10 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
             effectiveMaterialInstanceJson,
             *subsurfaceResources,
             materialInstancePath);
+    ValidateHairMaterialContract(
+        effectiveMaterialInstanceJson,
+        resourceCache.GetHairResources().get(),
+        materialInstancePath);
     // Resolve 先合并材质定义与 MI 覆写，BuildLoadPlan 再一次性生成 shader variant、
     // 固定管线状态和缓存 key；后续步骤只消费结果，不重复解释 JSON。
     MaterialInstanceBuildPlan loadPlan = MaterialInstanceValidator::BuildLoadPlan(

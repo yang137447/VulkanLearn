@@ -1,0 +1,20 @@
+{
+    "schemaVersion": 1,
+    "lutVersion": 1,
+    "kernelVersion": 1,
+    "width": 128,
+    "height": 512,
+    "layers": 3,
+    "channels": 4,
+    "roughnessSlices": 8,
+    "thetaDSamples": 64,
+    "ior": 1.55,
+    "fiberRadius": 0.00005,
+    "unit": "meter",
+    "thetaDCoordinate": "normalized[-pi/2,pi/2]",
+    "deltaPhiCoordinate": "normalized[-pi,pi]",
+    "roughnessMapping": "slice-linear-8",
+    "wrap": "deltaPhi-repeat-thetaD-clamp",
+    "pathConvention": "layer0=R,layer1=TT,layer2=TRT",
+    "sourceIdentity": "hair-author-fixture-v1"
+}

@@ -251,6 +251,12 @@ void RuntimeCommandExecutor::ExecuteCommand(
             runtimeTestHooks,
             diagnostics);
         break;
+    case RuntimeCommandType::RunHairValidationTest:
+        ApplyHairValidationTest(
+            runtimeConfig,
+            runtimeTestHooks,
+            diagnostics);
+        break;
     case RuntimeCommandType::SetDebugViewMode:
         renderSystem.SetDebugViewMode(command.intValue);
         diagnostics.ReportInfo("Debug view mode set to " + std::to_string(command.intValue));
@@ -654,6 +660,16 @@ void RuntimeCommandExecutor::ApplyShaderShutdownInflightTest(
     const DiagnosticsSubsystem& diagnostics) const
 {
     (void)runtimeTestHooks.BeginShaderShutdownInflightTest(
+        diagnostics);
+}
+
+void RuntimeCommandExecutor::ApplyHairValidationTest(
+    const RuntimeConfig& runtimeConfig,
+    RuntimeTestHooks& runtimeTestHooks,
+    const DiagnosticsSubsystem& diagnostics) const
+{
+    (void)runtimeTestHooks.BeginHairValidationTest(
+        runtimeConfig.GetResourcePath(),
         diagnostics);
 }
 

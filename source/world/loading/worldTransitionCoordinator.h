@@ -3,10 +3,12 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "core/runtimeResult.h"
 #include "pipeline/pipelineFactory.h"
 #include "render/resource/rendererResourceCache.h"
+#include "render/resource/rendererResourceLoadContext.h"
 #include "world/worldManager.h"
 
 class MaterialInstance;
@@ -42,6 +44,7 @@ struct PreparedWorldTransition
         std::string,
         std::shared_ptr<MaterialInstance>>
         passMaterialBindings;
+    std::vector<PendingGeneratedResourceFile> pendingGeneratedFiles;
     PipelineFactory::GraphicsCandidateState
         graphicsCandidateState;
 };

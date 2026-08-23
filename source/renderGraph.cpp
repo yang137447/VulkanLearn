@@ -9,11 +9,14 @@
 #include "render/backend/rendererDescriptorWriter.h"
 #include "render/rendergraph/renderGraphCompiler.h"
 #include "render/resource/resourceRetireQueue.h"
+#include "render/resource/rendererResourceCache.h"
+#include "texture.h"
 #include <algorithm>
 #include <memory>
 #include <stdint.h>
 #include <stdexcept>
 #include <utility>
+#include <unordered_set>
 #include "profiler.h"
 
 vk::ImageView RenderResource::GetShaderDescriptorView() const
@@ -35,6 +38,37 @@ vk::ImageView RenderResource::GetFramebufferAttachmentView(uint32_t layer) const
 namespace
 {
 
+void AddDescriptorPoolBinding(
+    std::vector<vk::DescriptorPoolSize>& descriptorPoolSizes,
+    std::unordered_set<uint64_t>& seenBindings,
+    uint32_t set,
+    uint32_t binding,
+    vk::DescriptorType type,
+    uint32_t descriptorCount)
+{
+    const uint64_t bindingKey =
+        (static_cast<uint64_t>(set) << 32u) | binding;
+    if (!seenBindings.insert(bindingKey).second)
+    {
+        return;
+    }
+
+    const uint32_t requiredCount = descriptorCount;
+    for (vk::DescriptorPoolSize& poolSize : descriptorPoolSizes)
+    {
+        if (poolSize.type == type)
+        {
+            poolSize.descriptorCount += requiredCount;
+            return;
+        }
+    }
+
+    vk::DescriptorPoolSize poolSize;
+    poolSize
+        .setType(type)
+        .setDescriptorCount(requiredCount);
+    descriptorPoolSizes.push_back(poolSize);
+}
 vk::CompareOp GetDepthCompareOp(VL::CompiledDepthCompareOp compareOp)
 {
     switch (compareOp)
@@ -304,7 +338,8 @@ void Renderpass::CreateUniformBuffers()
 }
 void Renderpass::SetupDescriptors(
     const RenderGraph& renderGraph,
-    VL::RendererBackendVulkan& rendererBackend)
+    VL::RendererBackendVulkan& rendererBackend,
+    const VL::RendererDescriptorContext& descriptorContext)
 {
     uint32_t swapChainImageCount = rendererBackend.GetSwapchainImageCount();
     inputDescriptorImageInfos.clear();
@@ -319,6 +354,31 @@ void Renderpass::SetupDescriptors(
         {
             const std::string& inputResource = inputDescriptor.resource;
             const RenderResource* resource = nullptr;
+            if (inputDescriptor.source == "worldTexture")
+            {
+                if (descriptorContext.resourceCache == nullptr)
+                {
+                    throw std::runtime_error(
+                        "Renderpass external input is missing a resource cache: " +
+                        name + ":" + inputResource);
+                }
+                const std::shared_ptr<Texture>* texture =
+                    descriptorContext.resourceCache->GetWorldTexture(inputResource);
+                if (texture == nullptr || *texture == nullptr)
+                {
+                    throw std::runtime_error(
+                        "Renderpass external worldTexture is not active: " +
+                        name + ":" + inputResource);
+                }
+                if (inputDescriptor.binding >= inputDescriptorImageInfos[imageIndex].size())
+                {
+                    inputDescriptorImageInfos[imageIndex].resize(
+                        inputDescriptor.binding + 1);
+                }
+                inputDescriptorImageInfos[imageIndex][inputDescriptor.binding] =
+                    (*texture)->GetDescriptorInfo();
+                continue;
+            }
             
             const auto& resolveMap = renderGraph.GetResourcesResolve();
             auto resolveIt = resolveMap.find(inputResource);
@@ -372,39 +432,19 @@ void Renderpass::CreatePassDescriptorSetLayout(VL::RendererBackendVulkan& render
         rendererBackend.GetDescriptorSetLayoutHandle(emptyDescriptorSetLayout);
 
     std::vector<vk::DescriptorSetLayoutBinding> descriptorSetLayoutBindings;
-    if(!materialInstance.expired())
+    // Pass Set 3 的 layout 必须由 RenderGraph 输入全集决定，不能跟随当前
+    // pass 材质的反射子集变化；否则 Hair 等场景材质无法安全复用同一 pass。
+    for (const VL::CompiledRenderGraphPassInputDescriptor& inputDescriptor :
+         inputDescriptorPlan)
     {
-        auto baseMaterial = materialInstance.lock()->GetBaseMaterial().lock();
-        const auto& shaderBindings = baseMaterial->GetRenderPipeline()->GetShaderBindings();
-        for(const auto& binding : shaderBindings)
-        {
-            if(binding.set != PassSetIndex)
-            {
-                continue;
-            }
-            vk::DescriptorSetLayoutBinding layoutBinding;
-            layoutBinding
-                .setBinding(binding.binding)
-                .setDescriptorType(binding.type)
-                .setDescriptorCount(1)
-                .setStageFlags(binding.stageFlags)
-                .setPImmutableSamplers(nullptr);
-            descriptorSetLayoutBindings.push_back(layoutBinding);
-        }
-    }
-    else
-    {
-        for(const VL::CompiledRenderGraphPassInputDescriptor& inputDescriptor : inputDescriptorPlan)
-        {
-            vk::DescriptorSetLayoutBinding layoutBinding;
-            layoutBinding
-                .setBinding(inputDescriptor.binding)
-                .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
-                .setDescriptorCount(1)
-                .setStageFlags(vk::ShaderStageFlagBits::eFragment)
-                .setPImmutableSamplers(nullptr);
-            descriptorSetLayoutBindings.push_back(layoutBinding);
-        }
+        vk::DescriptorSetLayoutBinding layoutBinding;
+        layoutBinding
+            .setBinding(inputDescriptor.binding)
+            .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
+            .setDescriptorCount(1)
+            .setStageFlags(vk::ShaderStageFlagBits::eFragment)
+            .setPImmutableSamplers(nullptr);
+        descriptorSetLayoutBindings.push_back(layoutBinding);
     }
 
     vk::DescriptorSetLayoutCreateInfo descriptorSetLayoutCreateInfo;
@@ -427,14 +467,42 @@ void Renderpass::CreateDescriptorSets(VL::RendererBackendVulkan& rendererBackend
     {
         auto baseMaterial = materialInstance.lock()->GetBaseMaterial().lock();
         const std::vector<ShaderBinding>& shaderBindings = baseMaterial->GetRenderPipeline()->GetShaderBindings();
-        // std::vector<vk::DescriptorPoolSize> descriptorPoolSizes;
-        for(const auto& binding : shaderBindings)
+        std::unordered_set<uint64_t> seenDescriptorBindings;
+        for (const ShaderBinding& binding : shaderBindings)
         {
-            vk::DescriptorPoolSize poolSize;
-            poolSize
-                .setType(binding.type)
-                .setDescriptorCount(swapChainImageCount);
-            descriptorPoolSizes.push_back(poolSize);
+            AddDescriptorPoolBinding(
+                descriptorPoolSizes,
+                seenDescriptorBindings,
+                binding.set,
+                binding.binding,
+                binding.type,
+                swapChainImageCount * binding.descriptorCount);
+        }
+        // Set 1 layout 使用完整 M_ schema；即使编译器优化掉未使用纹理，
+        // descriptor pool 仍必须覆盖实际分配的完整 layout。
+        for (const ShaderBinding& binding :
+             baseMaterial->GetMaterialDescriptorSchema().GetSetBindings())
+        {
+            AddDescriptorPoolBinding(
+                descriptorPoolSizes,
+                seenDescriptorBindings,
+                binding.set,
+                binding.binding,
+                binding.type,
+                swapChainImageCount * binding.descriptorCount);
+        }
+        // Set 3 layout 使用 RenderGraph 输入全集；Hair LUT 可能不在普通
+        // ThinTranslucent variant 的反射子集中，但仍属于同一 pass contract。
+        for (const VL::CompiledRenderGraphPassInputDescriptor& inputDescriptor :
+             inputDescriptorPlan)
+        {
+            AddDescriptorPoolBinding(
+                descriptorPoolSizes,
+                seenDescriptorBindings,
+                PassSetIndex,
+                inputDescriptor.binding,
+                vk::DescriptorType::eCombinedImageSampler,
+                swapChainImageCount);
         }
         const auto& pipelineSetLayouts = baseMaterial->GetRenderPipeline()->GetDescriptorSetLayouts();
         
@@ -815,7 +883,7 @@ void RenderGraph::RenderInitialize(
     {
         Renderpass& renderpass = renderpasses.at(passName);
         renderpass.CreateUniformBuffers();
-        renderpass.SetupDescriptors(*this, rendererBackend);
+        renderpass.SetupDescriptors(*this, rendererBackend, descriptorContext);
         if (auto passMaterialInstance = renderpass.materialInstance.lock())
         {
             auto baseMaterial = passMaterialInstance->GetBaseMaterial().lock();

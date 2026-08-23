@@ -153,7 +153,11 @@ vec3 DecodeClearCoatBottomNormal(
 GBufferData EncodeGBuffer(in MaterialSurface surface, in GBufferPixelData pixelData)
 {
     GBufferData data;
-    data.gbufferA = vec4(surface.baseColor, surface.opacity);
+    // Hair 的 RGB 是已经完成一次 BaseColor->absorption 转换的 sigma_a；
+    // 其余 ShadingModel 继续保持原有 baseColor 语义。
+    data.gbufferA = surface.shadingModel == SHADING_MODEL_HAIR
+        ? vec4(surface.hairAbsorption, surface.opacity)
+        : vec4(surface.baseColor, surface.opacity);
     // ID 2 为了保持 opaque GBuffer 预算，把 transmissionWeight 放在 GBufferA.a。
     if (surface.shadingModel == SHADING_MODEL_SUBSURFACE)
     {
@@ -175,7 +179,13 @@ GBufferData EncodeGBuffer(in MaterialSurface surface, in GBufferPixelData pixelD
     }
     data.gbufferE = surface.precomputedShadowFactors;
     data.gbufferVelocity = vec4(pixelData.velocity, 0.0, 0.0);
-    data.gbufferF = vec4(EncodeGBufferDirection(normalize(surface.worldTangent.xyz)), surface.anisotropy);
+    data.gbufferF = surface.shadingModel == SHADING_MODEL_HAIR
+        ? vec4(
+            EncodeGBufferDirection(normalize(surface.worldTangent.xyz)),
+            surface.worldTangent.w)
+        : vec4(
+            EncodeGBufferDirection(normalize(surface.worldTangent.xyz)),
+            surface.anisotropy);
     // 三类 SSS 使用互不重叠的 customData 语义；decode 必须与 materialInputs 一一对应。
     if (surface.shadingModel == SHADING_MODEL_SUBSURFACE)
     {
@@ -222,7 +232,9 @@ MaterialSurface DecodeGBufferSurface(in GBufferData data)
         surface.clearCoatBottomNormal = surface.worldNormal;
     }
     surface.precomputedShadowFactors = data.gbufferE;
-    surface.worldTangent = vec4(DecodeGBufferDirection(data.gbufferF.rgb), 1.0);
+    surface.worldTangent = vec4(
+        DecodeGBufferDirection(data.gbufferF.rgb),
+        surface.shadingModel == SHADING_MODEL_HAIR ? data.gbufferF.a : 1.0);
     surface.anisotropy = data.gbufferF.a;
     surface.emissiveColor = data.sceneColorBase.rgb;
     if (surface.shadingModel == SHADING_MODEL_SUBSURFACE)
@@ -251,6 +263,25 @@ MaterialSurface DecodeGBufferSurface(in GBufferData data)
         surface.modelInputs.subsurfaceProfile.weight = surface.customData.y;
         surface.modelInputs.subsurfaceProfile.thickness = surface.customData.z;
         surface.modelInputs.subsurfaceProfile.transmissionWeight = surface.customData.w;
+    }
+    else if (surface.shadingModel == SHADING_MODEL_HAIR)
+    {
+        // Deferred V1 只从 GBuffer 恢复已冻结的 Hair 子集；IOR/radius 使用
+        // LUT 合同的固定默认值，不能把普通通道偷偷解释成新的资产字段。
+        surface.hairAbsorption = data.gbufferA.rgb;
+        surface.modelInputs.hair.absorption = data.gbufferA.rgb;
+        surface.modelInputs.hair.scatter = surface.customData.r;
+        surface.modelInputs.hair.backlit = surface.customData.g;
+        surface.modelInputs.hair.cuticleTilt = surface.customData.b;
+        surface.modelInputs.hair.multipleScatteringWeight = surface.customData.a;
+        surface.modelInputs.hair.ior = 1.55;
+        surface.modelInputs.hair.fiberRadius = 0.00005;
+        surface.modelInputs.hair.coverage = 1.0;
+        // common roughness 的 mapping version=1，同时提供两个 lobe 的宽度。
+        surface.modelInputs.hair.longitudinalRoughness =
+            max(0.04 + surface.roughness * 0.40, 0.02);
+        surface.modelInputs.hair.azimuthalRoughness =
+            max(0.08 + surface.roughness * 0.40, 0.02);
     }
     return surface;
 }

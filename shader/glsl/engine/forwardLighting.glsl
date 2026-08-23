@@ -4,6 +4,8 @@
 #include "../common/commonUbo.glsl"
 #include "materialSurface.glsl"
 #include "../common/lighting.glsl"
+layout (set = 3, binding = 1) uniform sampler2DArray hairAzimuthalLut;
+#include "hairLighting.glsl"
 
 // 前向 pass 如果需要阴影，由具体 pass shader 在 include 前定义
 // VL_FORWARD_DECLARE_SHADOWMAP_INPUT。默认 include 不占用 Set 3，只有真正带阴影的
@@ -23,6 +25,25 @@ struct ForwardLightingResult
     vec3 indirectSpecular;
     vec3 indirectLighting;
     vec3 finalColor;
+    // Hair debug data 与普通光照结果同一份 snapshot，Forward/Deferred 使用同一 evaluator。
+    vec3 hairRPath;
+    vec3 hairTTPath;
+    vec3 hairTRTPath;
+    float hairPathLength;
+    vec3 hairAbsorption;
+    vec2 hairLutCoordinates;
+    float hairIblFallback;
+    float hairMultipleScatteringFallback;
+    vec3 hairTangent;
+    vec3 hairBitangent;
+    float hairThetaI;
+    float hairThetaO;
+    float hairThetaH;
+    float hairThetaD;
+    float hairDeltaPhi;
+    float hairCoverage;
+    float hairDensity;
+    float hairShadowTransmittance;
 };
 
 ForwardLightingResult CreateDefaultForwardLightingResult()
@@ -37,6 +58,24 @@ ForwardLightingResult CreateDefaultForwardLightingResult()
     result.indirectSpecular = vec3(0.0);
     result.indirectLighting = vec3(0.0);
     result.finalColor = vec3(0.0);
+    result.hairRPath = vec3(0.0);
+    result.hairTTPath = vec3(0.0);
+    result.hairTRTPath = vec3(0.0);
+    result.hairPathLength = 0.0;
+    result.hairAbsorption = vec3(0.0);
+    result.hairLutCoordinates = vec2(0.0);
+    result.hairIblFallback = 0.0;
+    result.hairMultipleScatteringFallback = 0.0;
+    result.hairTangent = vec3(1.0, 0.0, 0.0);
+    result.hairBitangent = vec3(0.0, 1.0, 0.0);
+    result.hairThetaI = 0.0;
+    result.hairThetaO = 0.0;
+    result.hairThetaH = 0.0;
+    result.hairThetaD = 0.0;
+    result.hairDeltaPhi = 0.0;
+    result.hairCoverage = 1.0;
+    result.hairDensity = 1.0;
+    result.hairShadowTransmittance = 1.0;
     return result;
 }
 
@@ -189,6 +228,39 @@ ForwardLightingResult ShadeClearCoatForwardSurface(in MaterialSurface surface)
     return result;
 }
 
+ForwardLightingResult ShadeHairForwardSurface(in MaterialSurface surface)
+{
+    HairLightingResult hair = ShadeHairSurface(surface, shadowMap);
+    ForwardLightingResult result = CreateDefaultForwardLightingResult();
+    result.directSpecular = hair.directLighting;
+    result.directLighting = hair.directLighting;
+    result.shadow = hair.shadow;
+    result.shadowCascadeIndex = hair.shadowCascadeIndex;
+    result.indirectDiffuse = hair.multipleScattering;
+    result.indirectSpecular = hair.indirectR + hair.indirectTT + hair.indirectTRT;
+    result.indirectLighting =
+        result.indirectDiffuse + result.indirectSpecular;
+    result.finalColor = hair.finalColor;
+    result.hairRPath = hair.directR;
+    result.hairTTPath = hair.directTT;
+    result.hairTRTPath = hair.directTRT;
+    result.hairPathLength = hair.pathLength;
+    result.hairAbsorption = hair.absorption;
+    result.hairLutCoordinates = hair.lutCoordinates;
+    result.hairIblFallback = hair.hairIblFallback;
+    result.hairMultipleScatteringFallback = hair.multipleScatteringFallback;
+    result.hairTangent = hair.tangent;
+    result.hairBitangent = hair.bitangent;
+    result.hairThetaI = hair.thetaI;
+    result.hairThetaO = hair.thetaO;
+    result.hairThetaH = hair.thetaH;
+    result.hairThetaD = hair.thetaD;
+    result.hairDeltaPhi = hair.deltaPhi;
+    result.hairCoverage = hair.coverage;
+    result.hairDensity = hair.density;
+    result.hairShadowTransmittance = hair.shadowTransmittance;
+    return result;
+}
 ForwardLightingResult ShadeUnlitForwardSurface(in MaterialSurface surface)
 {
     ForwardLightingResult result = CreateDefaultForwardLightingResult();
@@ -206,6 +278,8 @@ ForwardLightingResult ShadeForwardSurfaceDetailed(in MaterialSurface surface)
             return ShadeClearCoatForwardSurface(surface);
         case SHADING_MODEL_THIN_TRANSLUCENT:
             return ShadeThinTranslucentForwardSurface(surface);
+        case SHADING_MODEL_HAIR:
+            return ShadeHairForwardSurface(surface);
         default:
             return ShadeDefaultLitForwardSurface(surface);
     }

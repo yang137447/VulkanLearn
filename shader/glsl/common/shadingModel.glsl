@@ -29,6 +29,9 @@ const uint GBUFFER_HAS_PRECOMPUTED_SHADOW_MASK = 0x20u;
 const uint GBUFFER_HAS_VELOCITY_MASK = 0x40u;
 const uint GBUFFER_HAS_ANISOTROPY_MASK = 0x80u;
 
+// GBufferF.a 按 ShadingModel 解释：普通 Lit 模型保存 anisotropy，Hair 保存
+// tangent.w 的 bitangent handedness。两者不能在 Deferred decode 中互换消费。
+
 float ShadingModelMask(uint actualShadingModel, uint expectedShadingModel)
 {
     // 返回 1 表示匹配，0 表示不匹配；给 lighting dispatch / debug 这类选择逻辑使用。

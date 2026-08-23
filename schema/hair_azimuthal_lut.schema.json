@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VulkanLearn Hair Azimuthal LUT metadata",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "lutVersion", "kernelVersion", "width", "height",
+    "layers", "channels", "roughnessSlices", "thetaDSamples", "ior",
+    "fiberRadius", "unit", "thetaDCoordinate", "deltaPhiCoordinate",
+    "roughnessMapping", "wrap", "pathConvention", "sourceIdentity"
+  ],
+  "properties": {
+    "schemaVersion": {"type": "integer", "const": 1},
+    "lutVersion": {"type": "integer", "const": 1},
+    "kernelVersion": {"type": "integer", "const": 1},
+    "width": {"type": "integer", "const": 128},
+    "height": {"type": "integer", "const": 512},
+    "layers": {"type": "integer", "const": 3},
+    "channels": {"type": "integer", "const": 4},
+    "roughnessSlices": {"type": "integer", "const": 8},
+    "thetaDSamples": {"type": "integer", "const": 64},
+    "ior": {"type": "number", "exclusiveMinimum": 1.0},
+    "fiberRadius": {"type": "number", "exclusiveMinimum": 0.0},
+    "unit": {"type": "string", "const": "meter"},
+    "thetaDCoordinate": {"type": "string", "const": "normalized[-pi/2,pi/2]"},
+    "deltaPhiCoordinate": {"type": "string", "const": "normalized[-pi,pi]"},
+    "roughnessMapping": {"type": "string", "const": "slice-linear-8"},
+    "wrap": {"type": "string", "const": "deltaPhi-repeat-thetaD-clamp"},
+    "pathConvention": {"type": "string", "const": "layer0=R,layer1=TT,layer2=TRT"},
+    "sourceIdentity": {"type": "string", "minLength": 1}
+  }
+}

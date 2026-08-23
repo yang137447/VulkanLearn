@@ -45,6 +45,21 @@ struct SubsurfaceProfileMaterialInputs
     float transmissionWeight;
 };
 
+struct HairMaterialInputs
+{
+    float scatter;
+    float backlit;
+    float cuticleTilt;
+    float longitudinalRoughness;
+    float azimuthalRoughness;
+    float ior;
+    vec3 absorption;
+    float fiberRadius;
+    float multipleScatteringWeight;
+    float coverage;
+    float density;
+};
+
 struct MaterialModelInputs
 {
     // 每个字段只属于一个 ShadingModel，禁止把模型专用数据塞进无语义 customData。
@@ -53,6 +68,7 @@ struct MaterialModelInputs
     SubsurfaceMaterialInputs subsurface;
     PreintegratedSkinMaterialInputs preintegratedSkin;
     SubsurfaceProfileMaterialInputs subsurfaceProfile;
+    HairMaterialInputs hair;
     float anisotropy;
 };
 
@@ -115,6 +131,18 @@ MaterialInputs CreateDefaultMaterialInputs()
     inputs.modelInputs.subsurfaceProfile.weight = 0.0;
     inputs.modelInputs.subsurfaceProfile.thickness = 0.01;
     inputs.modelInputs.subsurfaceProfile.transmissionWeight = 0.0;
+    inputs.modelInputs.hair.scatter = 0.0;
+    inputs.modelInputs.hair.backlit = 0.0;
+    inputs.modelInputs.hair.cuticleTilt = 0.0;
+    inputs.modelInputs.hair.longitudinalRoughness = 0.22;
+    inputs.modelInputs.hair.azimuthalRoughness = 0.25;
+    inputs.modelInputs.hair.ior = 1.55;
+    inputs.modelInputs.hair.absorption = vec3(1.0);
+    inputs.modelInputs.hair.fiberRadius = 0.00005;
+    inputs.modelInputs.hair.multipleScatteringWeight = 0.0;
+    inputs.modelInputs.hair.coverage = 1.0;
+    inputs.modelInputs.hair.density = 1.0;
+    inputs.modelInputs.hair.density = 1.0;
     inputs.modelInputs.anisotropy = 0.0;
     return inputs;
 }
