@@ -91,6 +91,20 @@ vec4 BuildMaterialForwardOutput(in MaterialSurface surface)
             lighting.eyeLimbusMask,
             lighting.eyeCausticGain);
     }
+    if (surface.shadingModel == SHADING_MODEL_CLOTH)
+    {
+        SetMaterialDebugClothData(
+            debugLighting,
+            lighting.clothSheenColor,
+            lighting.clothSheenRoughness,
+            lighting.clothCharlieD,
+            lighting.clothNeubeltVisibility,
+            lighting.clothDirectionalAlbedo,
+            lighting.clothBaseEnergyScale,
+            lighting.clothDirectSheen,
+            lighting.clothIndirectSheen,
+            lighting.clothIblFallback);
+    }
     return ResolveMaterialDebugView(surface, debugLighting, color);
 }
 

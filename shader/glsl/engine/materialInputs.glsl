@@ -58,7 +58,15 @@ struct HairMaterialInputs
     float multipleScatteringWeight;
     float coverage;
     float density;
-};struct EyeMaterialInputs
+};
+
+struct ClothMaterialInputs
+{
+    vec3 sheenColor;
+    float sheenRoughness;
+};
+
+struct EyeMaterialInputs
 {
     vec3 corneaNormal;
     float corneaIor;
@@ -97,6 +105,7 @@ struct MaterialModelInputs
     PreintegratedSkinMaterialInputs preintegratedSkin;
     SubsurfaceProfileMaterialInputs subsurfaceProfile;
     HairMaterialInputs hair;
+    ClothMaterialInputs cloth;
     EyeMaterialInputs eye;
     float anisotropy;
 };
@@ -172,6 +181,8 @@ MaterialInputs CreateDefaultMaterialInputs()
     inputs.modelInputs.hair.coverage = 1.0;
     inputs.modelInputs.hair.density = 1.0;
     inputs.modelInputs.hair.density = 1.0;
+    inputs.modelInputs.cloth.sheenColor = vec3(0.0);
+    inputs.modelInputs.cloth.sheenRoughness = 0.5;
     inputs.modelInputs.eye.corneaNormal = inputs.normal;
     inputs.modelInputs.eye.corneaIor = 1.376;
     inputs.modelInputs.eye.irisNormal = inputs.normal;

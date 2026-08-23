@@ -375,6 +375,16 @@ void DebugConsole::PrintHelp() const
     std::cout << "    18: Diffuse After SSS\n";
     std::cout << "    19: SSS Pixel Radius\n";
     std::cout << "    20: SSS Valid Weight\n";
+    std::cout << "    64: Cloth Shading Model\n";
+    std::cout << "    65: Cloth Sheen Color\n";
+    std::cout << "    66: Cloth Sheen Roughness\n";
+    std::cout << "    67: Cloth Charlie D\n";
+    std::cout << "    68: Cloth Neubelt Visibility\n";
+    std::cout << "    69: Cloth Directional Albedo\n";
+    std::cout << "    70: Cloth Base Energy Scale\n";
+    std::cout << "    71: Cloth Direct Sheen\n";
+    std::cout << "    72: Cloth Indirect Sheen\n";
+    std::cout << "    73: Cloth IBL Fallback\n";
     std::cout << "  tonemap <mode> - set tone mapping mode\n";
     std::cout << "    0: Linear clamp\n";
     std::cout << "    1: Reinhard\n";

@@ -635,6 +635,16 @@ RuntimeResult<void> UiSubsystem::InitializeDataModel()
     bound = constructor.Bind("debug_hair_trt_path_color_label", &bindingData.debugHairTrtPathColorLabel) && bound;
     bound = constructor.Bind("debug_hair_ibl_fallback_label", &bindingData.debugHairIblFallbackLabel) && bound;
     bound = constructor.Bind("debug_hair_ms_fallback_label", &bindingData.debugHairMultipleScatteringFallbackLabel) && bound;
+    bound = constructor.Bind("debug_cloth_model_label", &bindingData.debugClothModelLabel) && bound;
+    bound = constructor.Bind("debug_cloth_sheen_color_label", &bindingData.debugClothSheenColorLabel) && bound;
+    bound = constructor.Bind("debug_cloth_sheen_roughness_label", &bindingData.debugClothSheenRoughnessLabel) && bound;
+    bound = constructor.Bind("debug_cloth_charlie_d_label", &bindingData.debugClothCharlieDLabel) && bound;
+    bound = constructor.Bind("debug_cloth_neubelt_visibility_label", &bindingData.debugClothNeubeltVisibilityLabel) && bound;
+    bound = constructor.Bind("debug_cloth_directional_albedo_label", &bindingData.debugClothDirectionalAlbedoLabel) && bound;
+    bound = constructor.Bind("debug_cloth_base_energy_scale_label", &bindingData.debugClothBaseEnergyScaleLabel) && bound;
+    bound = constructor.Bind("debug_cloth_direct_sheen_label", &bindingData.debugClothDirectSheenLabel) && bound;
+    bound = constructor.Bind("debug_cloth_indirect_sheen_label", &bindingData.debugClothIndirectSheenLabel) && bound;
+    bound = constructor.Bind("debug_cloth_ibl_fallback_label", &bindingData.debugClothIblFallbackLabel) && bound;
 
     bound = constructor.Bind("tone_mapping_label", &bindingData.toneMappingLabel) && bound;
     bound = constructor.Bind("tone_mapping_value", &bindingData.toneMappingValue) && bound;
@@ -1221,6 +1231,16 @@ void UiSubsystem::SyncBindingData()
     bindingData.debugHairTrtPathColorLabel = Localize("debug.hair_trt_path_color");
     bindingData.debugHairIblFallbackLabel = Localize("debug.hair_ibl_fallback");
     bindingData.debugHairMultipleScatteringFallbackLabel = Localize("debug.hair_ms_fallback");
+    bindingData.debugClothModelLabel = Localize("debug.cloth_model");
+    bindingData.debugClothSheenColorLabel = Localize("debug.cloth_sheen_color");
+    bindingData.debugClothSheenRoughnessLabel = Localize("debug.cloth_sheen_roughness");
+    bindingData.debugClothCharlieDLabel = Localize("debug.cloth_charlie_d");
+    bindingData.debugClothNeubeltVisibilityLabel = Localize("debug.cloth_neubelt_visibility");
+    bindingData.debugClothDirectionalAlbedoLabel = Localize("debug.cloth_directional_albedo");
+    bindingData.debugClothBaseEnergyScaleLabel = Localize("debug.cloth_base_energy_scale");
+    bindingData.debugClothDirectSheenLabel = Localize("debug.cloth_direct_sheen");
+    bindingData.debugClothIndirectSheenLabel = Localize("debug.cloth_indirect_sheen");
+    bindingData.debugClothIblFallbackLabel = Localize("debug.cloth_ibl_fallback");
 
     bindingData.toneMappingLabel = Localize("control.tone_mapping");
     bindingData.toneMappingMode = lastViewModel.toneMappingMode;
@@ -1430,6 +1450,16 @@ std::string UiSubsystem::GetDebugViewName(int mode) const
     case 61: return Localize("debug.eye_inner_shadow");
     case 62: return Localize("debug.eye_cornea_shadow");
     case 63: return Localize("debug.eye_profile");
+    case 64: return Localize("debug.cloth_model");
+    case 65: return Localize("debug.cloth_sheen_color");
+    case 66: return Localize("debug.cloth_sheen_roughness");
+    case 67: return Localize("debug.cloth_charlie_d");
+    case 68: return Localize("debug.cloth_neubelt_visibility");
+    case 69: return Localize("debug.cloth_directional_albedo");
+    case 70: return Localize("debug.cloth_base_energy_scale");
+    case 71: return Localize("debug.cloth_direct_sheen");
+    case 72: return Localize("debug.cloth_indirect_sheen");
+    case 73: return Localize("debug.cloth_ibl_fallback");
     default: return Localize("debug.unknown");
     }
 }

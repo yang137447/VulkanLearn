@@ -154,6 +154,15 @@ MaterialSurface ResolveMaterialSurface(
             inputs.modelInputs.hair.multipleScatteringWeight);
         surface.selectiveOutputMask |= GBUFFER_HAS_CUSTOM_DATA_MASK;
     }
+    else if (surface.shadingModel == SHADING_MODEL_CLOTH)
+    {
+        // Cloth 的 GBufferD 是版本化的 sheenColor/sheenRoughness 快照，
+        // 不与其它模型共享 customData 解释。
+        surface.customData = vec4(
+            inputs.modelInputs.cloth.sheenColor,
+            inputs.modelInputs.cloth.sheenRoughness);
+        surface.selectiveOutputMask |= GBUFFER_HAS_CUSTOM_DATA_MASK;
+    }
 
     return surface;
 }

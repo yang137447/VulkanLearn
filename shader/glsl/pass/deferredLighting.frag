@@ -101,6 +101,20 @@ void main()
             lighting.hairDensity,
             lighting.hairShadowTransmittance);
     }
+    if (surface.shadingModel == SHADING_MODEL_CLOTH)
+    {
+        SetMaterialDebugClothData(
+            debugLighting,
+            lighting.clothSheenColor,
+            lighting.clothSheenRoughness,
+            lighting.clothCharlieD,
+            lighting.clothNeubeltVisibility,
+            lighting.clothDirectionalAlbedo,
+            lighting.clothBaseEnergyScale,
+            lighting.clothDirectSheen,
+            lighting.clothIndirectSheen,
+            lighting.clothIblFallback);
+    }
     debugLighting.localSubsurfaceLighting =
         lighting.localSubsurfaceLighting;
     debugLighting.diffuseBeforeSubsurface =
@@ -115,7 +129,9 @@ void main()
     if ((uboVP.debugViewMode >= 1 &&
          uboVP.debugViewMode <= 17) ||
         (uboVP.debugViewMode >= 21 &&
-         uboVP.debugViewMode <= 41))
+         uboVP.debugViewMode <= 41) ||
+        (uboVP.debugViewMode >= 64 &&
+         uboVP.debugViewMode <= 73))
     {
         outDiffuseLighting = resolvedColor;
         outNonDiffuseLighting = vec4(0.0);

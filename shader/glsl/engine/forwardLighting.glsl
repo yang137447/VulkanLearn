@@ -5,7 +5,9 @@
 #include "materialSurface.glsl"
 #include "../common/lighting.glsl"
 layout (set = 3, binding = 1) uniform sampler2DArray hairAzimuthalLut;
+layout (set = 3, binding = 3) uniform sampler2D clothDirectionalAlbedoLut;
 #include "hairLighting.glsl"
+#include "clothLighting.glsl"
 
 
 // 前向 pass 如果需要阴影，由具体 pass shader 在 include 前定义
@@ -69,6 +71,15 @@ struct ForwardLightingResult
     float eyePupilMask;
     float eyeLimbusMask;
     float eyeCausticGain;
+    vec3 clothDirectSheen;
+    vec3 clothIndirectSheen;
+    vec3 clothBaseEnergyScale;
+    float clothDirectionalAlbedo;
+    float clothIblFallback;
+    vec3 clothSheenColor;
+    float clothSheenRoughness;
+    float clothCharlieD;
+    float clothNeubeltVisibility;
 };
 
 ForwardLightingResult CreateDefaultForwardLightingResult()
@@ -118,6 +129,15 @@ ForwardLightingResult CreateDefaultForwardLightingResult()
     result.eyePupilMask = 0.0;
     result.eyeLimbusMask = 0.0;
     result.eyeCausticGain = 1.0;
+    result.clothDirectSheen = vec3(0.0);
+    result.clothIndirectSheen = vec3(0.0);
+    result.clothBaseEnergyScale = vec3(1.0);
+    result.clothDirectionalAlbedo = 0.0;
+    result.clothIblFallback = 1.0;
+    result.clothSheenColor = vec3(0.0);
+    result.clothSheenRoughness = 0.0;
+    result.clothCharlieD = 0.0;
+    result.clothNeubeltVisibility = 0.0;
     return result;
 }
 
@@ -303,6 +323,38 @@ ForwardLightingResult ShadeHairForwardSurface(in MaterialSurface surface)
     result.hairShadowTransmittance = hair.shadowTransmittance;
     return result;
 }
+
+ForwardLightingResult ShadeClothForwardSurface(in MaterialSurface surface)
+{
+    ClothLightingResult cloth = ShadeClothSurface(
+        surface,
+        clothDirectionalAlbedoLut,
+        shadowMap);
+    ForwardLightingResult result = CreateDefaultForwardLightingResult();
+    result.directDiffuse = cloth.directDiffuse;
+    result.directSpecular = cloth.directSpecular;
+    result.directLighting = cloth.directDiffuse +
+        cloth.directSpecular + cloth.directSheen;
+    result.indirectDiffuse = cloth.indirectDiffuse;
+    result.indirectSpecular = cloth.indirectSpecular;
+    result.indirectLighting = cloth.indirectDiffuse +
+        cloth.indirectSpecular + cloth.indirectSheen;
+    result.finalColor = surface.emissiveColor +
+        result.directLighting + result.indirectLighting *
+            surface.ambientOcclusion;
+    result.shadow = cloth.shadow;
+    result.shadowCascadeIndex = cloth.shadowCascadeIndex;
+    result.clothDirectSheen = cloth.directSheen;
+    result.clothIndirectSheen = cloth.indirectSheen;
+    result.clothBaseEnergyScale = cloth.baseEnergyScale;
+    result.clothDirectionalAlbedo = cloth.directionalAlbedo;
+    result.clothIblFallback = cloth.iblFallback;
+    result.clothSheenColor = cloth.sheenColor;
+    result.clothSheenRoughness = cloth.sheenRoughness;
+    result.clothCharlieD = cloth.charlieD;
+    result.clothNeubeltVisibility = cloth.neubeltVisibility;
+    return result;
+}
 #if MATERIAL_IS_EYE
 ForwardLightingResult ShadeEyeForwardSurface(in MaterialSurface surface)
 {
@@ -355,6 +407,8 @@ ForwardLightingResult ShadeForwardSurfaceDetailed(in MaterialSurface surface)
             return ShadeThinTranslucentForwardSurface(surface);
         case SHADING_MODEL_HAIR:
             return ShadeHairForwardSurface(surface);
+        case SHADING_MODEL_CLOTH:
+            return ShadeClothForwardSurface(surface);
 #if MATERIAL_IS_EYE
         case SHADING_MODEL_EYE:
             return ShadeEyeForwardSurface(surface);

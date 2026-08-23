@@ -33,6 +33,15 @@ struct MaterialDebugLightingData
     float hairCoverage;
     float hairDensity;
     float hairShadowTransmittance;
+    vec3 clothSheenColor;
+    float clothSheenRoughness;
+    float clothCharlieD;
+    float clothNeubeltVisibility;
+    float clothDirectionalAlbedo;
+    vec3 clothBaseEnergyScale;
+    vec3 clothDirectSheen;
+    vec3 clothIndirectSheen;
+    float clothIblFallback;
     vec3 eyeCorneaSpecular;
     vec3 eyeIrisDirect;
     vec3 eyeScleraDirect;
@@ -87,6 +96,15 @@ MaterialDebugLightingData CreateMaterialDebugLightingData(
     data.hairCoverage = 1.0;
     data.hairDensity = 1.0;
     data.hairShadowTransmittance = 1.0;
+    data.clothSheenColor = vec3(0.0);
+    data.clothSheenRoughness = 0.0;
+    data.clothCharlieD = 0.0;
+    data.clothNeubeltVisibility = 0.0;
+    data.clothDirectionalAlbedo = 0.0;
+    data.clothBaseEnergyScale = vec3(1.0);
+    data.clothDirectSheen = vec3(0.0);
+    data.clothIndirectSheen = vec3(0.0);
+    data.clothIblFallback = 1.0;
     data.eyeCorneaSpecular = vec3(0.0);
     data.eyeIrisDirect = vec3(0.0);
     data.eyeScleraDirect = vec3(0.0);
@@ -105,6 +123,29 @@ MaterialDebugLightingData CreateMaterialDebugLightingData(
     data.eyeLimbusMask = 0.0;
     data.eyeCausticGain = 1.0;
     return data;
+}
+
+void SetMaterialDebugClothData(
+    inout MaterialDebugLightingData data,
+    vec3 sheenColor,
+    float sheenRoughness,
+    float charlieD,
+    float neubeltVisibility,
+    float directionalAlbedo,
+    vec3 baseEnergyScale,
+    vec3 directSheen,
+    vec3 indirectSheen,
+    float iblFallback)
+{
+    data.clothSheenColor = sheenColor;
+    data.clothSheenRoughness = sheenRoughness;
+    data.clothCharlieD = charlieD;
+    data.clothNeubeltVisibility = neubeltVisibility;
+    data.clothDirectionalAlbedo = directionalAlbedo;
+    data.clothBaseEnergyScale = baseEnergyScale;
+    data.clothDirectSheen = directSheen;
+    data.clothIndirectSheen = indirectSheen;
+    data.clothIblFallback = iblFallback;
 }
 
 void SetMaterialDebugHairData(
@@ -260,6 +301,16 @@ vec4 ResolveMaterialDebugView(
     float eyeInnerShadowMask = MaterialDebugViewModeMask(61);
     float eyeCorneaShadowMask = MaterialDebugViewModeMask(62);
     float eyeProfileMask = MaterialDebugViewModeMask(63);
+    float clothModelMask = MaterialDebugViewModeMask(64);
+    float clothSheenColorMask = MaterialDebugViewModeMask(65);
+    float clothSheenRoughnessMask = MaterialDebugViewModeMask(66);
+    float clothCharlieDMask = MaterialDebugViewModeMask(67);
+    float clothNeubeltVisibilityMask = MaterialDebugViewModeMask(68);
+    float clothDirectionalAlbedoMask = MaterialDebugViewModeMask(69);
+    float clothBaseEnergyScaleMask = MaterialDebugViewModeMask(70);
+    float clothDirectSheenMask = MaterialDebugViewModeMask(71);
+    float clothIndirectSheenMask = MaterialDebugViewModeMask(72);
+    float clothIblFallbackMask = MaterialDebugViewModeMask(73);
 
     float subsurfaceAssetId = 0.0;
     if (surface.shadingModel == SHADING_MODEL_PREINTEGRATED_SKIN)
@@ -333,9 +384,20 @@ vec4 ResolveMaterialDebugView(
         eyeCausticMask +
         eyeInnerShadowMask +
         eyeCorneaShadowMask +
-        eyeProfileMask,
+        eyeProfileMask +
+        clothModelMask +
+        clothSheenColorMask +
+        clothSheenRoughnessMask +
+        clothCharlieDMask +
+        clothNeubeltVisibilityMask +
+        clothDirectionalAlbedoMask +
+        clothBaseEnergyScaleMask +
+        clothDirectSheenMask +
+        clothIndirectSheenMask +
+        clothIblFallbackMask,
         1.0);
 
+    float clothModel = surface.shadingModel == SHADING_MODEL_CLOTH ? 1.0 : 0.0;
     vec4 debugColor =
         baseColorMask * vec4(surface.baseColor, 1.0) +
         emissiveMask * vec4(surface.emissiveColor, 1.0) +
@@ -403,7 +465,17 @@ vec4 ResolveMaterialDebugView(
         + eyeCausticMask * vec4(vec3(lighting.eyeCausticGain), 1.0)
         + eyeInnerShadowMask * vec4(vec3(lighting.eyeShadowInner), 1.0)
         + eyeCorneaShadowMask * vec4(vec3(lighting.eyeShadowCornea), 1.0)
-        + eyeProfileMask * vec4(vec3(surface.modelInputs.eye.causticProfileId / 15.0), 1.0);
+        + eyeProfileMask * vec4(vec3(surface.modelInputs.eye.causticProfileId / 15.0), 1.0)
+        + clothModelMask * vec4(vec3(clothModel), 1.0)
+        + clothSheenColorMask * vec4(lighting.clothSheenColor, 1.0)
+        + clothSheenRoughnessMask * vec4(vec3(lighting.clothSheenRoughness), 1.0)
+        + clothCharlieDMask * vec4(vec3(lighting.clothCharlieD), 1.0)
+        + clothNeubeltVisibilityMask * vec4(vec3(lighting.clothNeubeltVisibility), 1.0)
+        + clothDirectionalAlbedoMask * vec4(vec3(lighting.clothDirectionalAlbedo), 1.0)
+        + clothBaseEnergyScaleMask * vec4(lighting.clothBaseEnergyScale, 1.0)
+        + clothDirectSheenMask * vec4(lighting.clothDirectSheen, 1.0)
+        + clothIndirectSheenMask * vec4(lighting.clothIndirectSheen, 1.0)
+        + clothIblFallbackMask * vec4(vec3(lighting.clothIblFallback), 1.0);
 
     return mix(defaultColor, debugColor, debugMask);
 #else

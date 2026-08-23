@@ -397,6 +397,13 @@ MaterialSurface DecodeGBufferSurface(in GBufferData data)
         surface.modelInputs.hair.azimuthalRoughness =
             max(0.08 + surface.roughness * 0.40, 0.02);
     }
+    else if (surface.shadingModel == SHADING_MODEL_CLOTH)
+    {
+        // Cloth 首阶段只消费 GBufferD 的线性 sheen 颜色和 perceptual roughness。
+        surface.modelInputs.cloth.sheenColor = surface.customData.rgb;
+        surface.modelInputs.cloth.sheenRoughness = surface.customData.a;
+        surface.metallic = 0.0;
+    }
     return surface;
 }
 

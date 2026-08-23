@@ -24,6 +24,7 @@
 #include "render/environment/environmentUpdateState.h"
 #include "render/environment/environmentUpdateDiagnostics.h"
 #include "render/eye/eyeComputeReloadParticipant.h"
+#include "render/cloth/clothComputeReloadParticipant.h"
 #include "render/eye/eyePerformanceBudget.h"
 #include "render/environment/proceduralSkyCubeGenerator.h"
 #include "render/frontend/renderScene.h"
@@ -190,6 +191,10 @@ public:
     {
         return eyeComputeReloadParticipant;
     }
+    VL::ClothComputeReloadParticipant& GetClothComputeReloadParticipant() noexcept
+    {
+        return clothComputeReloadParticipant;
+    }
     const VL::EyePerformanceBudget& GetEyePerformanceBudget() const noexcept
     {
         return eyePerformanceBudget;
@@ -225,6 +230,7 @@ private:
     void InitializeCurrentRenderSceneResources();
     void RecordAndSubmitCurrentRenderScene();
     void RefreshEyeDescriptorsIfNeeded();
+    void RefreshClothDescriptorsIfNeeded();
     void AdvanceSpeedTreeWindProfiles();
     void RenderInitialize();
     VL::RendererDescriptorContext BuildRendererDescriptorContext() const;
@@ -366,6 +372,7 @@ private:
         environmentIblBaker};
     VL::EnvironmentGpuTimer environmentGpuTimer;
     VL::EyeComputeReloadParticipant eyeComputeReloadParticipant;
+    VL::ClothComputeReloadParticipant clothComputeReloadParticipant;
     VL::EyePerformanceBudget eyePerformanceBudget;
     VL::EyePerformanceFrameStats eyePerformanceFrameStats;
     bool eyePerformanceFrameWithinBudget = true;

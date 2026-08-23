@@ -504,6 +504,11 @@
                     "resource": "eyeCausticLut",
                     "source": "worldTexture",
                     "binding": 11
+                },
+                {
+                    "resource": "clothDirectionalAlbedoLut",
+                    "source": "worldTexture",
+                    "binding": 12
                 }
             ],
             "output": [
@@ -664,6 +669,11 @@
                     "resource": "eyeCausticLut",
                     "source": "worldTexture",
                     "binding": 2
+                },
+                {
+                    "resource": "clothDirectionalAlbedoLut",
+                    "source": "worldTexture",
+                    "binding": 3
                 }
             ],
             "output": [
@@ -703,6 +713,11 @@
                     "resource": "eyeCausticLut",
                     "source": "worldTexture",
                     "binding": 2
+                },
+                {
+                    "resource": "clothDirectionalAlbedoLut",
+                    "source": "worldTexture",
+                    "binding": 3
                 }
             ],
             "output": [
@@ -742,6 +757,11 @@
                     "resource": "eyeCausticLut",
                     "source": "worldTexture",
                     "binding": 2
+                },
+                {
+                    "resource": "clothDirectionalAlbedoLut",
+                    "source": "worldTexture",
+                    "binding": 3
                 }
             ],
             "output": [
@@ -801,6 +821,11 @@
                     "resource": "hairAzimuthalLut",
                     "source": "worldTexture",
                     "binding": 1
+                },
+                {
+                    "resource": "clothDirectionalAlbedoLut",
+                    "source": "worldTexture",
+                    "binding": 3
                 }
             ],
             "output": [

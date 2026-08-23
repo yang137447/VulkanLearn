@@ -1473,6 +1473,22 @@ void RenderSystem::RefreshEyeDescriptorsIfNeeded()
         descriptorContext);
     eyeComputeReloadParticipant.MarkDescriptorRefreshHandled();
 }
+void RenderSystem::RefreshClothDescriptorsIfNeeded()
+{
+    if (!clothComputeReloadParticipant.NeedsDescriptorRefresh())
+    {
+        return;
+    }
+
+    // Cloth LUT replacement swaps a World-local image identity；在下一帧记录前
+    // 刷新 pass descriptor，旧 image 仍由 Compute replacement 的 epoch retirement 持有。
+    VL::RendererDescriptorContext descriptorContext =
+        BuildRendererDescriptorContext();
+    RenderGraph::GetInstance().RefreshRuntimeDescriptors(
+        *rendererBackend,
+        descriptorContext);
+    clothComputeReloadParticipant.MarkDescriptorRefreshHandled();
+}
 void RenderSystem::RecordAndSubmitCurrentRenderScene()
 {
     eyePerformanceFrameStats = {};
@@ -1481,6 +1497,7 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
         eyePerformanceFrameStats,
         &eyePerformanceViolation);
     RefreshEyeDescriptorsIfNeeded();
+    RefreshClothDescriptorsIfNeeded();
     const RenderGraph& renderGraph = RenderGraph::GetInstance();
 
     if (uiRenderSnapshotQueue != nullptr)
@@ -1658,6 +1675,8 @@ void RenderSystem::InitializeFrameResources()
         frameResources.GetGlobalUniformBufferInfos());
     eyeComputeReloadParticipant.Initialize(
         *pipelineFactory,
+        *rendererBackend);    clothComputeReloadParticipant.Initialize(
+        *pipelineFactory,
         *rendererBackend);
     if (shaderReloadCoordinator != nullptr)
     {
@@ -1668,7 +1687,8 @@ void RenderSystem::InitializeFrameResources()
         shaderReloadCoordinator->RegisterComputeParticipant(
             &prefilterReloadParticipant);
         shaderReloadCoordinator->RegisterComputeParticipant(
-            &eyeComputeReloadParticipant);
+            &eyeComputeReloadParticipant);        shaderReloadCoordinator->RegisterComputeParticipant(
+            &clothComputeReloadParticipant);
     }
     environmentGpuTimer.Initialize(*rendererBackend);
 }
@@ -1690,10 +1710,12 @@ void RenderSystem::ShutdownFrameResources()
         shaderReloadCoordinator->UnregisterComputeParticipant(
             &prefilterReloadParticipant);
         shaderReloadCoordinator->UnregisterComputeParticipant(
-            &eyeComputeReloadParticipant);
+            &eyeComputeReloadParticipant);        shaderReloadCoordinator->UnregisterComputeParticipant(
+            &clothComputeReloadParticipant);
     }
     environmentIblBaker.Shutdown(*rendererBackend);
     eyeComputeReloadParticipant.Shutdown();
+    clothComputeReloadParticipant.Shutdown();
     proceduralSkyCubeGenerator.Shutdown(*rendererBackend);
     environmentUpdateScheduler.Reset();
     environmentUpdateSourceCube.reset();

@@ -75,6 +75,8 @@ Documentation in this repository is split by responsibility:
   - texture asset JSON V1 fields, defaults, material instance references, and loader behavior
 - `rendering/eye-shading-model.md`
   - implemented Eye contract covering ForwardOpaque single-shell, Deferred GBuffer V1 fallback, dual-shell inner/cornea passes, Compute-only caustic LUT, local SSS composition, authoring/LOD fields, runtime validation, and transactional Compute reload
+- `rendering/cloth-shading-model.md`
+  - implemented Cloth MVP contract covering Charlie/Neubelt direct lighting, Compute-only directional-albedo LUT, Forward/Deferred shared evaluator, GBufferD ownership, energy compensation, reload, and explicit diffuse IBL fallback
 
 ## Plans
 
@@ -105,6 +107,8 @@ Rendering plans:
   - HTML reading version of the foliage / SpeedTree route
 - `plan/rendering/subsurface-shading-models-development-plan.md`
   - completed 2026-08-22 implementation record for Subsurface, PreintegratedSkin, and SubsurfaceProfile; the current contract lives in `rendering/subsurface-shading-models.md`
+- `plan/rendering/cloth-shading-model-development-plan.md`
+  - completed 2026-08-23 Cloth MVP implementation record; the current contract lives in `rendering/cloth-shading-model.md`, while Charlie-specific IBL prefilter remains a documented target extension
 - `plan/rendering/hair-shading-model-development-plan.md`
   - executable Hair Shading Model route from contract freeze and CPU Reference through versioned LUT, Forward/Deferred evaluator, Card coverage/shadow, Hair IBL, and multiple scattering
 - `plan/rendering/eye-shading-model-development-plan.md`

@@ -20,7 +20,8 @@ bool RendererResourceCache::WorldLocalResourcePackage::Empty() const noexcept
         textures.empty() &&
         !subsurfaceResources &&
         !hairResources &&
-        !eyeResources;
+        !eyeResources &&
+        !clothResources;
 }
 
 RendererResourceCache::RendererResourceCache()
@@ -408,6 +409,18 @@ RendererResourceCache::GetEyeResources() const noexcept
     return worldLocalResources->eyeResources;
 }
 
+void RendererResourceCache::BindClothResources(
+    std::shared_ptr<const ClothResourceSet> resources)
+{
+    GetMutableWorldLocalResources().clothResources = std::move(resources);
+}
+
+const std::shared_ptr<const ClothResourceSet>&
+RendererResourceCache::GetClothResources() const noexcept
+{
+    return worldLocalResources->clothResources;
+}
+
 RendererResourceCache::PreparedEyeResourceReplacement
 RendererResourceCache::PrepareEyeResourceReplacement(
     std::shared_ptr<const EyeResourceSet> resources,
@@ -432,6 +445,42 @@ RendererResourceCache::PrepareEyeResourceReplacement(
 RendererResourceCache::WorldLocalResourcePackageHandle
 RendererResourceCache::CommitPreparedEyeResourceReplacement(
     PreparedEyeResourceReplacement&& replacement) noexcept
+{
+    if (!replacement.replacementPackage)
+    {
+        return {};
+    }
+
+    WorldLocalResourcePackageHandle retired =
+        std::move(worldLocalResources);
+    worldLocalResources = std::move(replacement.replacementPackage);
+    return retired;
+}
+RendererResourceCache::PreparedClothResourceReplacement
+RendererResourceCache::PrepareClothResourceReplacement(
+    std::shared_ptr<const ClothResourceSet> resources,
+    std::shared_ptr<Texture> directionalAlbedoLutTexture) const
+{
+    if (!resources || !directionalAlbedoLutTexture)
+    {
+        throw std::runtime_error(
+            "Cloth resource replacement requires a complete resource set and LUT texture");
+    }
+
+    PreparedClothResourceReplacement replacement;
+    replacement.previousPackage = worldLocalResources;
+    replacement.replacementPackage =
+        std::make_shared<WorldLocalResourcePackage>(*worldLocalResources);
+    replacement.replacementPackage->clothResources = std::move(resources);
+    replacement.replacementPackage->worldTextures[
+        "clothDirectionalAlbedoLut"] =
+        std::move(directionalAlbedoLutTexture);
+    return replacement;
+}
+
+RendererResourceCache::WorldLocalResourcePackageHandle
+RendererResourceCache::CommitPreparedClothResourceReplacement(
+    PreparedClothResourceReplacement&& replacement) noexcept
 {
     if (!replacement.replacementPackage)
     {

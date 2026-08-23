@@ -118,6 +118,16 @@
                                 <button data-class-selected="debug_view_mode == 39" data-event-click="set_debug_view(39)">{{debug_hair_trt_path_color_label}}</button>
                                 <button data-class-selected="debug_view_mode == 40" data-event-click="set_debug_view(40)">{{debug_hair_ibl_fallback_label}}</button>
                                 <button data-class-selected="debug_view_mode == 41" data-event-click="set_debug_view(41)">{{debug_hair_ms_fallback_label}}</button>
+                                <button data-class-selected="debug_view_mode == 64" data-event-click="set_debug_view(64)">{{debug_cloth_model_label}}</button>
+                                <button data-class-selected="debug_view_mode == 65" data-event-click="set_debug_view(65)">{{debug_cloth_sheen_color_label}}</button>
+                                <button data-class-selected="debug_view_mode == 66" data-event-click="set_debug_view(66)">{{debug_cloth_sheen_roughness_label}}</button>
+                                <button data-class-selected="debug_view_mode == 67" data-event-click="set_debug_view(67)">{{debug_cloth_charlie_d_label}}</button>
+                                <button data-class-selected="debug_view_mode == 68" data-event-click="set_debug_view(68)">{{debug_cloth_neubelt_visibility_label}}</button>
+                                <button data-class-selected="debug_view_mode == 69" data-event-click="set_debug_view(69)">{{debug_cloth_directional_albedo_label}}</button>
+                                <button data-class-selected="debug_view_mode == 70" data-event-click="set_debug_view(70)">{{debug_cloth_base_energy_scale_label}}</button>
+                                <button data-class-selected="debug_view_mode == 71" data-event-click="set_debug_view(71)">{{debug_cloth_direct_sheen_label}}</button>
+                                <button data-class-selected="debug_view_mode == 72" data-event-click="set_debug_view(72)">{{debug_cloth_indirect_sheen_label}}</button>
+                                <button data-class-selected="debug_view_mode == 73" data-event-click="set_debug_view(73)">{{debug_cloth_ibl_fallback_label}}</button>
                             </div>
                         </div>
 

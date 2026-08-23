@@ -13,6 +13,8 @@
 #include "render/resource/rendererResourceLoadContext.h"
 #include "render/subsurface/subsurfaceResourceLoader.h"
 #include "render/hair/hairLutBaker.h"
+#include "render/cloth/clothResourceLoader.h"
+#include "render/cloth/clothComputeReloadParticipant.h"
 #include "renderGraph.h"
 #include "world/loading/worldLoader.h"
 
@@ -37,6 +39,11 @@ void RendererResourceLoadCoordinator::SetEyeComputeReloadParticipant(
     EyeComputeReloadParticipant* participant)
 {
     eyeComputeReloadParticipant = participant;
+}
+void RendererResourceLoadCoordinator::SetClothComputeReloadParticipant(
+    ClothComputeReloadParticipant* participant)
+{
+    clothComputeReloadParticipant = participant;
 }
 
 RendererWorldResourceLoadResult
@@ -65,6 +72,11 @@ RendererResourceLoadCoordinator::LoadRendererResources(
         *pipelineFactory,
         *rendererBackend,
         loadContext);
+    ClothResourceLoader clothResourceLoader(
+        *pipelineFactory,
+        *rendererBackend,
+        loadContext,
+        clothComputeReloadParticipant);
     EyeResourceLoader eyeResourceLoader(
         *pipelineFactory,
         *rendererBackend,
@@ -85,6 +97,8 @@ RendererResourceLoadCoordinator::LoadRendererResources(
     subsurfaceResourceLoader.Load();
     // Hair pass 的外部 LUT descriptor 必须在材质和 candidate graph 初始化前就绪.
     hairResourceLoader.Load();
+    // Cloth directional-albedo LUT 必须在所有 Cloth MI 解析前进入 candidate cache。
+    clothResourceLoader.Load();
     // Eye profile 与 caustic LUT 必须在所有 Eye MI 解析前进入 candidate cache。
     eyeResourceLoader.Load();
 

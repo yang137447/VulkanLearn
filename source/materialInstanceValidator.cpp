@@ -3,6 +3,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <filesystem>
+#include <cmath>
 #include "commonFunction.h"
 #include "material/materialAssetUtils.h"
 
@@ -159,6 +160,103 @@ namespace
     }
 }
 
+namespace
+{
+    bool IsFiniteClothValue(const nlohmann::json& value)
+    {
+        return value.is_number() && std::isfinite(value.get<double>());
+    }
+
+    void ValidateClothEffectiveParameters(
+        const nlohmann::json& effectiveMaterialInstanceJson,
+        std::string_view materialInstancePath)
+    {
+        if (effectiveMaterialInstanceJson.at("shadingModel").get<std::string>() !=
+            "Cloth")
+        {
+            return;
+        }
+
+        const auto& parameters = effectiveMaterialInstanceJson.at("parameters");
+        const auto& macros = effectiveMaterialInstanceJson.at("macros");
+        if (!parameters.contains("u_clothSheenColor") ||
+            !parameters.contains("u_clothSheenRoughness") ||
+            !parameters.contains("u_pbrFactors"))
+        {
+            throw std::runtime_error(
+                "Cloth effective parameters are incomplete: " +
+                std::string(materialInstancePath));
+        }
+        if (macros.contains("USE_PBR_MAP") &&
+            macros.at("USE_PBR_MAP").get<double>() != 0.0)
+        {
+            throw std::runtime_error(
+                "Cloth does not support metallic/roughness values from USE_PBR_MAP: " +
+                std::string(materialInstancePath));
+        }
+
+        const auto& sheenColor = parameters.at("u_clothSheenColor");
+        if (!sheenColor.is_array() || sheenColor.size() != 4)
+        {
+            throw std::runtime_error(
+                "Cloth sheen color must be a four-component linear RGBA value: " +
+                std::string(materialInstancePath));
+        }
+        for (const auto& component : sheenColor)
+        {
+            if (!IsFiniteClothValue(component) || component.get<double>() < 0.0 ||
+                component.get<double>() > 1.0)
+            {
+                throw std::runtime_error(
+                    "Cloth sheen color must be finite and within [0, 1]: " +
+                    std::string(materialInstancePath));
+            }
+        }
+        if (sheenColor[3].get<double>() != 1.0)
+        {
+            throw std::runtime_error(
+                "Cloth sheen color alpha is reserved and must remain 1: " +
+                std::string(materialInstancePath));
+        }
+
+        const auto& sheenRoughness = parameters.at("u_clothSheenRoughness");
+        if (!IsFiniteClothValue(sheenRoughness) ||
+            sheenRoughness.get<double>() < 0.02 ||
+            sheenRoughness.get<double>() > 1.0)
+        {
+            throw std::runtime_error(
+                "Cloth sheen roughness must be within [0.02, 1]: " +
+                std::string(materialInstancePath));
+        }
+
+        const auto& pbrFactors = parameters.at("u_pbrFactors");
+        if (!pbrFactors.is_array() || pbrFactors.size() != 4)
+        {
+            throw std::runtime_error(
+                "Cloth u_pbrFactors must be a four-component value: " +
+                std::string(materialInstancePath));
+        }
+        for (const auto& component : pbrFactors)
+        {
+            if (!IsFiniteClothValue(component))
+            {
+                throw std::runtime_error(
+                    "Cloth u_pbrFactors must be finite: " +
+                    std::string(materialInstancePath));
+            }
+        }
+        if (pbrFactors[0].get<double>() < 0.02 ||
+            pbrFactors[0].get<double>() > 1.0 ||
+            pbrFactors[1].get<double>() != 0.0 ||
+            pbrFactors[2].get<double>() < 0.0 ||
+            pbrFactors[2].get<double>() > 1.0)
+        {
+            throw std::runtime_error(
+                "Cloth base PBR values require roughness [0.02, 1], metallic 0 and AO [0, 1]: " +
+                std::string(materialInstancePath));
+        }
+    }
+}
 RenderMode MaterialInstanceValidator::ResolveRenderMode(
     const nlohmann::json& effectiveMaterialInstanceJson)
 {
@@ -219,6 +317,8 @@ MaterialInstanceBuildPlan MaterialInstanceValidator::BuildLoadPlan(
     loadPlan.shaderVariantKey.renderMode = ResolveRenderMode(materialInstanceJson);
     const std::string shadingModel =
         materialInstanceJson.at("shadingModel").get<std::string>();
+    ValidateClothEffectiveParameters(materialInstanceJson, materialInstancePath);
+
     const bool usesThinTranslucentShadingModel =
         shadingModel == "ThinTranslucent";
     const bool usesEyeShadingModel = shadingModel == "Eye";

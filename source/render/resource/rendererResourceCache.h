@@ -18,6 +18,7 @@ class RendererObjectResourceEntry;
 class SubsurfaceResourceSet;
 class HairResourceSet;
 class EyeResourceSet;
+class ClothResourceSet;
 
 // Renderer-side CPU resource cache. Global resources survive world reloads;
 // world-local resources are prepared in isolated candidate packages and retired
@@ -40,6 +41,8 @@ public:
         std::shared_ptr<const HairResourceSet> hairResources;
         // Eye profile、caustic LUT 与 stable ID 必须跟随同一 World generation。
         std::shared_ptr<const EyeResourceSet> eyeResources;
+        // Cloth directional-albedo LUT 与版本 digest 属于同一 World generation。
+        std::shared_ptr<const ClothResourceSet> clothResources;
 
         bool Empty() const noexcept;
     };
@@ -50,6 +53,12 @@ public:
         std::shared_ptr<const WorldLocalResourcePackage>;
 
     struct PreparedEyeResourceReplacement
+    {
+        WorldLocalResourcePackageHandle replacementPackage;
+        ImmutableWorldLocalResourceRefs previousPackage;
+    };
+
+    struct PreparedClothResourceReplacement
     {
         WorldLocalResourcePackageHandle replacementPackage;
         ImmutableWorldLocalResourceRefs previousPackage;
@@ -127,6 +136,10 @@ public:
         std::shared_ptr<const EyeResourceSet> resources);
     const std::shared_ptr<const EyeResourceSet>&
     GetEyeResources() const noexcept;
+    void BindClothResources(
+        std::shared_ptr<const ClothResourceSet> resources);
+    const std::shared_ptr<const ClothResourceSet>&
+    GetClothResources() const noexcept;
 
     // Candidate 阶段完整复制当前 World package 并只替换 Eye LUT/metadata；
     // commit 阶段只交换 shared_ptr，避免在 noexcept ownership swap 中触发
@@ -136,6 +149,12 @@ public:
         std::shared_ptr<Texture> causticLutTexture) const;
     WorldLocalResourcePackageHandle CommitPreparedEyeResourceReplacement(
         PreparedEyeResourceReplacement&& replacement) noexcept;
+
+    PreparedClothResourceReplacement PrepareClothResourceReplacement(
+        std::shared_ptr<const ClothResourceSet> resources,
+        std::shared_ptr<Texture> directionalAlbedoLutTexture) const;
+    WorldLocalResourcePackageHandle CommitPreparedClothResourceReplacement(
+        PreparedClothResourceReplacement&& replacement) noexcept;
 
 private:
     RendererResourceCache();

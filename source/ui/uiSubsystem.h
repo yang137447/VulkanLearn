@@ -161,6 +161,16 @@ private:
         Rml::String debugHairTrtPathColorLabel;
         Rml::String debugHairIblFallbackLabel;
         Rml::String debugHairMultipleScatteringFallbackLabel;
+        Rml::String debugClothModelLabel;
+        Rml::String debugClothSheenColorLabel;
+        Rml::String debugClothSheenRoughnessLabel;
+        Rml::String debugClothCharlieDLabel;
+        Rml::String debugClothNeubeltVisibilityLabel;
+        Rml::String debugClothDirectionalAlbedoLabel;
+        Rml::String debugClothBaseEnergyScaleLabel;
+        Rml::String debugClothDirectSheenLabel;
+        Rml::String debugClothIndirectSheenLabel;
+        Rml::String debugClothIblFallbackLabel;
 
         Rml::String toneMappingLabel;
         Rml::String toneMappingValue;

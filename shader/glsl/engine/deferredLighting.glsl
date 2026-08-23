@@ -5,6 +5,7 @@
 layout(set = 3, binding = 9) uniform sampler2DArrayShadow shadowMap;
 layout(set = 3, binding = 10) uniform sampler2DArray hairAzimuthalLut;
 layout(set = 3, binding = 11) uniform sampler2DArray eyeCausticLut;
+layout(set = 3, binding = 12) uniform sampler2D clothDirectionalAlbedoLut;
 #include "materialSurface.glsl"
 #include "../common/lighting.glsl"
 #include "subsurfaceLighting.glsl"
@@ -12,6 +13,7 @@ layout(set = 3, binding = 11) uniform sampler2DArray eyeCausticLut;
 #include "subsurfaceProfileLighting.glsl"
 #include "hairLighting.glsl"
 #include "eyeLighting.glsl"
+#include "clothLighting.glsl"
 
 vec3 ReconstructWorldPositionFromSceneDepth(vec2 uv, float deviceDepth)
 {
@@ -74,6 +76,15 @@ struct DeferredLightingResult
     float eyePupilMask;
     float eyeLimbusMask;
     float eyeCausticGain;
+    vec3 clothDirectSheen;
+    vec3 clothIndirectSheen;
+    vec3 clothBaseEnergyScale;
+    float clothDirectionalAlbedo;
+    float clothIblFallback;
+    vec3 clothSheenColor;
+    float clothSheenRoughness;
+    float clothCharlieD;
+    float clothNeubeltVisibility;
     vec3 finalColor;
 };
 
@@ -130,6 +141,15 @@ DeferredLightingResult CreateDefaultDeferredLightingResult()
     result.eyePupilMask = 0.0;
     result.eyeLimbusMask = 0.0;
     result.eyeCausticGain = 1.0;
+    result.clothDirectSheen = vec3(0.0);
+    result.clothIndirectSheen = vec3(0.0);
+    result.clothBaseEnergyScale = vec3(1.0);
+    result.clothDirectionalAlbedo = 0.0;
+    result.clothIblFallback = 1.0;
+    result.clothSheenColor = vec3(0.0);
+    result.clothSheenRoughness = 0.0;
+    result.clothCharlieD = 0.0;
+    result.clothNeubeltVisibility = 0.0;
     result.finalColor = vec3(0.0);
     return result;
 }
@@ -453,6 +473,35 @@ DeferredLightingResult ShadeEyeDeferredSurfaceDetailed(
     return result;
 }
 
+DeferredLightingResult ShadeClothDeferredSurfaceDetailed(
+    in MaterialSurface surface,
+    in sampler2DArrayShadow inputShadowMap)
+{
+    ClothLightingResult cloth = ShadeClothSurface(
+        surface,
+        clothDirectionalAlbedoLut,
+        inputShadowMap);
+    DeferredLightingResult result = CreateDefaultDeferredLightingResult();
+    result.directDiffuse = cloth.directDiffuse;
+    result.directSpecular = cloth.directSpecular + cloth.directSheen;
+    result.indirectDiffuse = cloth.indirectDiffuse;
+    result.indirectSpecular = cloth.indirectSpecular + cloth.indirectSheen;
+    result.shadow = cloth.shadow;
+    result.shadowCascadeIndex = cloth.shadowCascadeIndex;
+    result.clothDirectSheen = cloth.directSheen;
+    result.clothIndirectSheen = cloth.indirectSheen;
+    result.clothBaseEnergyScale = cloth.baseEnergyScale;
+    result.clothDirectionalAlbedo = cloth.directionalAlbedo;
+    result.clothIblFallback = cloth.iblFallback;
+    result.clothSheenColor = cloth.sheenColor;
+    result.clothSheenRoughness = cloth.sheenRoughness;
+    result.clothCharlieD = cloth.charlieD;
+    result.clothNeubeltVisibility = cloth.neubeltVisibility;
+    ResolveDeferredLightingComposition(surface, result);
+    result.defaultDiffuseLighting = result.diffuseLighting;
+    return result;
+}
+
 DeferredLightingResult ShadeUnlitDeferredSurfaceDetailed(
     in MaterialSurface surface)
 {
@@ -499,6 +548,10 @@ DeferredLightingResult ShadeDeferredSurfaceDetailed(
                 inputShadowMap);
         case SHADING_MODEL_EYE:
             return ShadeEyeDeferredSurfaceDetailed(surface);
+        case SHADING_MODEL_CLOTH:
+            return ShadeClothDeferredSurfaceDetailed(
+                surface,
+                inputShadowMap);
         default:
             return ShadeDefaultLitDeferredSurfaceDetailed(
                 surface,
