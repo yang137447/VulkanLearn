@@ -1,0 +1,67 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba16f) uniform image2DArray eyeCausticLut;
+
+struct EyeProfileParameters
+{
+    vec4 optical; // x=IOR, y=cornea radius(m), z=iris distance(m), w=caustic strength
+};
+
+layout(std430, set = 0, binding = 1) readonly buffer EyeProfileBuffer
+{
+    EyeProfileParameters profiles[];
+};
+
+const uint EYE_ELEVATION_SLICES = 16u;
+const uint EYE_MAX_PROFILE_ID = 15u;
+const uint EYE_WIDTH = 64u;
+const uint EYE_HEIGHT = 64u;
+
+void main()
+{
+    uvec3 invocation = gl_GlobalInvocationID;
+    if (invocation.x >= EYE_WIDTH || invocation.y >= EYE_HEIGHT ||
+        invocation.z >= (EYE_MAX_PROFILE_ID + 1u) * EYE_ELEVATION_SLICES)
+    {
+        return;
+    }
+
+    uint profileId = invocation.z / EYE_ELEVATION_SLICES;
+    uint elevationIndex = invocation.z % EYE_ELEVATION_SLICES;
+    vec2 unitDisk = (vec2(invocation.xy) + vec2(0.5)) /
+        vec2(float(EYE_WIDTH), float(EYE_HEIGHT)) * 2.0 - 1.0;
+    float radialSquared = dot(unitDisk, unitDisk);
+    float validDomain = step(radialSquared, 1.0);
+    float elevation =
+        (float(elevationIndex) + 0.5) / float(EYE_ELEVATION_SLICES);
+
+    EyeProfileParameters profile = profiles[profileId];
+    float frontLightWeight = 0.35 + 0.65 * elevation;
+    float hasProfile = step(0.5, float(profileId));
+    float gain = mix(
+        1.0,
+        1.0 + profile.optical.w *
+            (1.0 - 2.0 * radialSquared) * frontLightWeight,
+        hasProfile);
+    float f0 = pow((1.0 - profile.optical.x) / (1.0 + profile.optical.x), 2.0);
+    float transmission = mix(
+        1.0,
+        (1.0 - f0) * frontLightWeight,
+        hasProfile);
+    float jacobian = mix(
+        1.0,
+        1.0 + profile.optical.w *
+            (1.0 - radialSquared) * frontLightWeight,
+        hasProfile);
+
+    imageStore(
+        eyeCausticLut,
+        ivec3(invocation),
+        vec4(
+            mix(0.0, gain, validDomain),
+            mix(0.0, transmission, validDomain),
+            validDomain,
+            mix(0.0, jacobian, validDomain)));
+}

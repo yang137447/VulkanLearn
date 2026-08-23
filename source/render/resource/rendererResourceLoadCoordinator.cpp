@@ -6,6 +6,7 @@
 #include <nlohmann/json.hpp>
 
 #include "render/resource/rendererEnvironmentLoader.h"
+#include "render/eye/eyeResourceLoader.h"
 #include "render/resource/rendererMaterialLoader.h"
 #include "render/resource/rendererMeshLoader.h"
 #include "render/resource/rendererResourceCache.h"
@@ -30,6 +31,12 @@ void RendererResourceLoadCoordinator::SetPipelineFactory(PipelineFactory* pipeli
 void RendererResourceLoadCoordinator::SetRendererBackend(RendererBackendVulkan* rendererBackend)
 {
     this->rendererBackend = rendererBackend;
+}
+
+void RendererResourceLoadCoordinator::SetEyeComputeReloadParticipant(
+    EyeComputeReloadParticipant* participant)
+{
+    eyeComputeReloadParticipant = participant;
 }
 
 RendererWorldResourceLoadResult
@@ -58,6 +65,11 @@ RendererResourceLoadCoordinator::LoadRendererResources(
         *pipelineFactory,
         *rendererBackend,
         loadContext);
+    EyeResourceLoader eyeResourceLoader(
+        *pipelineFactory,
+        *rendererBackend,
+        loadContext,
+        eyeComputeReloadParticipant);
     RendererMaterialLoader materialLoader(
         *pipelineFactory,
         *rendererBackend,
@@ -73,6 +85,8 @@ RendererResourceLoadCoordinator::LoadRendererResources(
     subsurfaceResourceLoader.Load();
     // Hair pass 的外部 LUT descriptor 必须在材质和 candidate graph 初始化前就绪.
     hairResourceLoader.Load();
+    // Eye profile 与 caustic LUT 必须在所有 Eye MI 解析前进入 candidate cache。
+    eyeResourceLoader.Load();
 
     // Load pass materials before scene meshes so descriptor setup can reference
     // render graph pass material instances.

@@ -17,6 +17,7 @@ namespace VL
 class RendererObjectResourceEntry;
 class SubsurfaceResourceSet;
 class HairResourceSet;
+class EyeResourceSet;
 
 // Renderer-side CPU resource cache. Global resources survive world reloads;
 // world-local resources are prepared in isolated candidate packages and retired
@@ -37,6 +38,8 @@ public:
         std::shared_ptr<const SubsurfaceResourceSet> subsurfaceResources;
         // Hair LUT 与 metadata 属于同一 World-local generation，不能跨 candidate 猜测。
         std::shared_ptr<const HairResourceSet> hairResources;
+        // Eye profile、caustic LUT 与 stable ID 必须跟随同一 World generation。
+        std::shared_ptr<const EyeResourceSet> eyeResources;
 
         bool Empty() const noexcept;
     };
@@ -45,6 +48,12 @@ public:
         std::shared_ptr<WorldLocalResourcePackage>;
     using ImmutableWorldLocalResourceRefs =
         std::shared_ptr<const WorldLocalResourcePackage>;
+
+    struct PreparedEyeResourceReplacement
+    {
+        WorldLocalResourcePackageHandle replacementPackage;
+        ImmutableWorldLocalResourceRefs previousPackage;
+    };
 
     static RendererResourceCache& GetInstance()
     {
@@ -114,6 +123,19 @@ public:
         std::shared_ptr<const HairResourceSet> resources);
     const std::shared_ptr<const HairResourceSet>&
     GetHairResources() const noexcept;
+    void BindEyeResources(
+        std::shared_ptr<const EyeResourceSet> resources);
+    const std::shared_ptr<const EyeResourceSet>&
+    GetEyeResources() const noexcept;
+
+    // Candidate 阶段完整复制当前 World package 并只替换 Eye LUT/metadata；
+    // commit 阶段只交换 shared_ptr，避免在 noexcept ownership swap 中触发
+    // map 分配或 descriptor 资源创建。
+    PreparedEyeResourceReplacement PrepareEyeResourceReplacement(
+        std::shared_ptr<const EyeResourceSet> resources,
+        std::shared_ptr<Texture> causticLutTexture) const;
+    WorldLocalResourcePackageHandle CommitPreparedEyeResourceReplacement(
+        PreparedEyeResourceReplacement&& replacement) noexcept;
 
 private:
     RendererResourceCache();

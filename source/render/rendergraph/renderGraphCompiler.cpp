@@ -794,6 +794,15 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
         return RuntimeResult<CompiledRenderGraph>::Failure(
             geometryPassResult.Error());
     }
+    auto forwardOpaquePassResult =
+        ValidateRequiredSingletonPassType(
+            compiledGraph,
+            RenderGraphPassType::ForwardOpaque);
+    if (forwardOpaquePassResult.IsFailure())
+    {
+        return RuntimeResult<CompiledRenderGraph>::Failure(
+            forwardOpaquePassResult.Error());
+    }
     auto forwardTransparentPassResult =
         ValidateRequiredSingletonPassType(
             compiledGraph,

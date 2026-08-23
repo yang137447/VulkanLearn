@@ -23,6 +23,8 @@
 #include "render/environment/environmentUpdateScheduler.h"
 #include "render/environment/environmentUpdateState.h"
 #include "render/environment/environmentUpdateDiagnostics.h"
+#include "render/eye/eyeComputeReloadParticipant.h"
+#include "render/eye/eyePerformanceBudget.h"
 #include "render/environment/proceduralSkyCubeGenerator.h"
 #include "render/frontend/renderScene.h"
 #include "render/frontend/rendererFrontend.h"
@@ -184,6 +186,26 @@ public:
     // resolved scene from the new generation.
     void SetActiveWorld(std::shared_ptr<const VL::World> world);
     void SetPipelineFactory(PipelineFactory* factory) { pipelineFactory = factory; }
+    VL::EyeComputeReloadParticipant& GetEyeComputeReloadParticipant() noexcept
+    {
+        return eyeComputeReloadParticipant;
+    }
+    const VL::EyePerformanceBudget& GetEyePerformanceBudget() const noexcept
+    {
+        return eyePerformanceBudget;
+    }
+    const VL::EyePerformanceFrameStats& GetEyePerformanceFrameStats() const noexcept
+    {
+        return eyePerformanceFrameStats;
+    }
+    bool IsEyePerformanceFrameWithinBudget() const noexcept
+    {
+        return eyePerformanceFrameWithinBudget;
+    }
+    const std::string& GetEyePerformanceViolation() const noexcept
+    {
+        return eyePerformanceViolation;
+    }
     void SetShaderReloadCoordinator(
         VL::ShaderReloadCoordinator* coordinator)
     {
@@ -202,6 +224,7 @@ private:
     void BuildResolvedRenderScene();
     void InitializeCurrentRenderSceneResources();
     void RecordAndSubmitCurrentRenderScene();
+    void RefreshEyeDescriptorsIfNeeded();
     void AdvanceSpeedTreeWindProfiles();
     void RenderInitialize();
     VL::RendererDescriptorContext BuildRendererDescriptorContext() const;
@@ -230,6 +253,8 @@ private:
     void UploadLightsForPass(
         uint32_t swapChainImageIndex,
         const std::vector<VL::LightSnapshot>& lights) override;
+    void RecordEyeDescriptorBind() override;
+    void RecordEyeDraw(size_t lutSampleCount) override;
     bool IsCsmEnabled() const override;
     bool IsShadowCascadeActive(uint32_t cascadeIndex) const override;
 
@@ -340,6 +365,11 @@ private:
     VL::PrefilterEnvMapReloadParticipant prefilterReloadParticipant{
         environmentIblBaker};
     VL::EnvironmentGpuTimer environmentGpuTimer;
+    VL::EyeComputeReloadParticipant eyeComputeReloadParticipant;
+    VL::EyePerformanceBudget eyePerformanceBudget;
+    VL::EyePerformanceFrameStats eyePerformanceFrameStats;
+    bool eyePerformanceFrameWithinBudget = true;
+    std::string eyePerformanceViolation;
     VL::EnvironmentUpdateScheduler environmentUpdateScheduler;
     VL::EnvironmentUpdateState environmentUpdateState;
     std::shared_ptr<Texture> environmentUpdateSourceCube;

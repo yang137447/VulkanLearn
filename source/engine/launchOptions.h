@@ -38,6 +38,9 @@ struct LaunchOptions
     bool runShaderUiReloadTest = false;
     bool runShaderShutdownInflightTest = false;
     bool runHairValidationTest = false;
+    bool runEyeValidationTest = false;
+    bool runEyePerformanceTest = false;
+    bool runEyeComputeReloadTest = false;
     bool forceShaderRebuild = false;
     bool exitAfterTests = false;
     DeveloperUiLaunchMode developerUiMode = DeveloperUiLaunchMode::UseConfig;

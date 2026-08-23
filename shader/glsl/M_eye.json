@@ -1,0 +1,122 @@
+{
+    "name": "M_eye",
+    "type": "material",
+    "shadingModel": "Eye",
+    "shaderEvaluation": {
+        "vertex": "M_eye.vertex.glsl",
+        "surface": "M_eye.surface.glsl"
+    },
+    "features": {
+        "modifiesMeshPosition": false
+    },
+    "renderStates": {
+        "renderMode": "ForwardOpaque",
+        "cullMode": "Back"
+    },
+    "macros": {
+        "USE_ALBEDO_MAP": 0,
+        "USE_NORMAL_MAP": 0,
+        "USE_PBR_MAP": 0,
+        "USE_EMISSION_MAP": 0,
+        "USE_IRIS_COLOR_MAP": 1,
+        "USE_IRIS_NORMAL_MAP": 0,
+        "USE_IRIS_MASK_MAP": 0,
+        "USE_SCLERA_COLOR_MAP": 1
+    },
+    "parameters": {
+        "u_tintColor": {
+            "type": "vec4",
+            "default": [1.0, 1.0, 1.0, 1.0]
+        },
+        "u_pbrFactors": {
+            "type": "vec4",
+            "default": [0.18, 0.0, 1.0, 0.0]
+        },
+        "u_emissiveStrength": {
+            "type": "float",
+            "default": 1.0
+        },
+        "u_eyeSurface": {
+            "type": "vec4",
+            "default": [0.08, 1.0, 1.0, 0.0]
+        },
+        "u_eyeGeometry": {
+            "type": "vec4",
+            "default": [0.003, 0.006, 0.002, 0.0005]
+        },
+        "u_eyeIrisColor": {
+            "type": "vec4",
+            "default": [0.08, 0.22, 0.06, 1.0]
+        },
+        "u_eyeScleraColor": {
+            "type": "vec4",
+            "default": [0.88, 0.90, 0.94, 1.0]
+        },
+        "u_eyeEmissiveColor": {
+            "type": "vec4",
+            "default": [0.0, 0.0, 0.0, 0.0]
+        },
+        "u_eyeProfileId": {
+            "type": "float",
+            "default": 0.0
+        },
+        "u_eyeScleraProfileId": {
+            "type": "float",
+            "default": 0.0
+        },
+        "u_eyeCorneaIor": {
+            "type": "float",
+            "default": 1.376
+        },
+        "u_eyeCausticStrength": {
+            "type": "float",
+            "default": 0.15
+        },
+        "u_eyeLayer": {
+            "type": "float",
+            "default": 0.0
+        },
+        "u_eyeContactVisibility": {
+            "type": "float",
+            "default": 1.0
+        },
+        "u_eyeCiliaVisibility": {
+            "type": "float",
+            "default": 1.0
+        },
+        "u_eyeUvHandedness": {
+            "type": "float",
+            "default": 1.0
+        },
+        "u_eyePupilDilation": {
+            "type": "float",
+            "default": 0.5
+        },
+        "u_eyeGaze": {
+            "type": "vec4",
+            "default": [0.0, 0.0, 1.0, 1.0]
+        }
+    },
+    "textures": {
+        "irisColorMap": {
+            "type": "sampler2D",
+            "default": null
+        },
+        "irisNormalMap": {
+            "type": "sampler2D",
+            "default": null
+        },
+        "irisMaskMap": {
+            "type": "sampler2D",
+            "default": null
+        },
+        "scleraColorMap": {
+            "type": "sampler2D",
+            "default": null
+        },
+        "emissionMap": {
+            "type": "sampler2D",
+            "default": null
+        }
+    }
+}

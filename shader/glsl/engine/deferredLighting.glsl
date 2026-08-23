@@ -2,13 +2,16 @@
 #define VL_ENGINE_DEFERRED_LIGHTING_GLSL
 
 #include "../common/commonUbo.glsl"
+layout(set = 3, binding = 9) uniform sampler2DArrayShadow shadowMap;
 layout(set = 3, binding = 10) uniform sampler2DArray hairAzimuthalLut;
+layout(set = 3, binding = 11) uniform sampler2DArray eyeCausticLut;
 #include "materialSurface.glsl"
 #include "../common/lighting.glsl"
 #include "subsurfaceLighting.glsl"
 #include "preintegratedSkinLighting.glsl"
 #include "subsurfaceProfileLighting.glsl"
 #include "hairLighting.glsl"
+#include "eyeLighting.glsl"
 
 vec3 ReconstructWorldPositionFromSceneDepth(vec2 uv, float deviceDepth)
 {
@@ -54,6 +57,23 @@ struct DeferredLightingResult
     float hairCoverage;
     float hairDensity;
     float hairShadowTransmittance;
+    vec3 eyeCorneaSpecular;
+    vec3 eyeIrisDirect;
+    vec3 eyeScleraDirect;
+    vec3 eyeInnerIbl;
+    vec3 eyeRefractedViewDirection;
+    float eyeShadowCornea;
+    float eyeShadowInner;
+    float eyeCorneaFresnel;
+    float eyeTransmissionIn;
+    float eyeTransmissionOut;
+    float eyeIrisHitDistance;
+    vec2 eyeIrisUv;
+    float eyeValidIrisHit;
+    float eyeIrisMask;
+    float eyePupilMask;
+    float eyeLimbusMask;
+    float eyeCausticGain;
     vec3 finalColor;
 };
 
@@ -93,6 +113,23 @@ DeferredLightingResult CreateDefaultDeferredLightingResult()
     result.hairCoverage = 1.0;
     result.hairDensity = 1.0;
     result.hairShadowTransmittance = 1.0;
+    result.eyeCorneaSpecular = vec3(0.0);
+    result.eyeIrisDirect = vec3(0.0);
+    result.eyeScleraDirect = vec3(0.0);
+    result.eyeInnerIbl = vec3(0.0);
+    result.eyeRefractedViewDirection = vec3(0.0, 0.0, -1.0);
+    result.eyeShadowCornea = 1.0;
+    result.eyeShadowInner = 1.0;
+    result.eyeCorneaFresnel = 0.0;
+    result.eyeTransmissionIn = 1.0;
+    result.eyeTransmissionOut = 1.0;
+    result.eyeIrisHitDistance = 0.0;
+    result.eyeIrisUv = vec2(0.0);
+    result.eyeValidIrisHit = 0.0;
+    result.eyeIrisMask = 0.0;
+    result.eyePupilMask = 0.0;
+    result.eyeLimbusMask = 0.0;
+    result.eyeCausticGain = 1.0;
     result.finalColor = vec3(0.0);
     return result;
 }
@@ -383,6 +420,39 @@ DeferredLightingResult ShadeHairDeferredSurfaceDetailed(
     result.defaultDiffuseLighting = result.diffuseLighting;
     return result;
 }
+DeferredLightingResult ShadeEyeDeferredSurfaceDetailed(
+    in MaterialSurface surface)
+{
+    // Deferred 只消费 GBuffer V1 快照；Eye evaluator 与 Forward 共用同一条账本。
+    EyeLightingResult eye = ShadeEyeSurface(surface);
+    DeferredLightingResult result = CreateDefaultDeferredLightingResult();
+    result.directDiffuse = eye.directDiffuse;
+    result.directSpecular = eye.directSpecular;
+    result.indirectDiffuse = eye.indirectDiffuse;
+    result.indirectSpecular = eye.indirectSpecular;
+    result.shadow = eye.shadowCornea;
+    result.eyeCorneaSpecular = eye.corneaSpecular;
+    result.eyeIrisDirect = eye.irisDirect;
+    result.eyeScleraDirect = eye.scleraDirect;
+    result.eyeInnerIbl = eye.innerIbl;
+    result.eyeRefractedViewDirection = eye.refractedViewDirection;
+    result.eyeShadowCornea = eye.shadowCornea;
+    result.eyeShadowInner = eye.shadowInner;
+    result.eyeCorneaFresnel = eye.corneaFresnel;
+    result.eyeTransmissionIn = eye.transmissionIn;
+    result.eyeTransmissionOut = eye.transmissionOut;
+    result.eyeIrisHitDistance = eye.irisHitDistance;
+    result.eyeIrisUv = eye.irisUv;
+    result.eyeValidIrisHit = eye.validIrisHit;
+    result.eyeIrisMask = eye.irisMask;
+    result.eyePupilMask = eye.pupilMask;
+    result.eyeLimbusMask = eye.limbusMask;
+    result.eyeCausticGain = eye.causticGain;
+    ResolveDeferredLightingComposition(surface, result);
+    result.defaultDiffuseLighting = result.diffuseLighting;
+    return result;
+}
+
 DeferredLightingResult ShadeUnlitDeferredSurfaceDetailed(
     in MaterialSurface surface)
 {
@@ -427,6 +497,8 @@ DeferredLightingResult ShadeDeferredSurfaceDetailed(
             return ShadeHairDeferredSurfaceDetailed(
                 surface,
                 inputShadowMap);
+        case SHADING_MODEL_EYE:
+            return ShadeEyeDeferredSurfaceDetailed(surface);
         default:
             return ShadeDefaultLitDeferredSurfaceDetailed(
                 surface,

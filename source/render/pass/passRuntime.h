@@ -67,6 +67,9 @@ public:
 private:
     void RecordShadowPass(PassRuntimeContext& context) const;
     void RecordGeometryPass(PassRuntimeContext& context) const;
+    void RecordForwardOpaquePass(PassRuntimeContext& context) const;
+    void RecordForwardEyeInnerPass(PassRuntimeContext& context) const;
+    void RecordForwardEyeCorneaPass(PassRuntimeContext& context) const;
     void RecordForwardTransparentPass(PassRuntimeContext& context) const;
     void RecordPostProcessPass(PassRuntimeContext& context) const;
 

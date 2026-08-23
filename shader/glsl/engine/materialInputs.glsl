@@ -58,6 +58,34 @@ struct HairMaterialInputs
     float multipleScatteringWeight;
     float coverage;
     float density;
+};struct EyeMaterialInputs
+{
+    vec3 corneaNormal;
+    float corneaIor;
+    vec3 irisNormal;
+    float irisMask;
+    vec3 irisPlaneNormal;
+    float irisDistance;
+    vec3 irisColor;
+    float irisRadius;
+    vec3 scleraColor;
+    float pupilRadius;
+    float limbusWidth;
+    float causticProfileId;
+    float scleraProfileId;
+    float causticStrength;
+    float validIrisHit;
+    vec2 irisUv;
+    float irisHitDistance;
+    float pupilMask;
+    float limbusMask;
+    float eyeLayer;
+    float contactVisibility;
+    float ciliaVisibility;
+    float uvHandedness;
+    float pupilDilation;
+    vec3 gazeDirection;
+    float gazeWeight;
 };
 
 struct MaterialModelInputs
@@ -69,6 +97,7 @@ struct MaterialModelInputs
     PreintegratedSkinMaterialInputs preintegratedSkin;
     SubsurfaceProfileMaterialInputs subsurfaceProfile;
     HairMaterialInputs hair;
+    EyeMaterialInputs eye;
     float anisotropy;
 };
 
@@ -143,6 +172,32 @@ MaterialInputs CreateDefaultMaterialInputs()
     inputs.modelInputs.hair.coverage = 1.0;
     inputs.modelInputs.hair.density = 1.0;
     inputs.modelInputs.hair.density = 1.0;
+    inputs.modelInputs.eye.corneaNormal = inputs.normal;
+    inputs.modelInputs.eye.corneaIor = 1.376;
+    inputs.modelInputs.eye.irisNormal = inputs.normal;
+    inputs.modelInputs.eye.irisMask = 1.0;
+    inputs.modelInputs.eye.irisPlaneNormal = inputs.normal;
+    inputs.modelInputs.eye.irisDistance = 0.003;
+    inputs.modelInputs.eye.irisColor = vec3(0.35, 0.12, 0.04);
+    inputs.modelInputs.eye.irisRadius = 0.006;
+    inputs.modelInputs.eye.scleraColor = vec3(0.9, 0.92, 0.95);
+    inputs.modelInputs.eye.pupilRadius = 0.002;
+    inputs.modelInputs.eye.limbusWidth = 0.0005;
+    inputs.modelInputs.eye.causticProfileId = 0.0;
+    inputs.modelInputs.eye.scleraProfileId = 0.0;
+    inputs.modelInputs.eye.causticStrength = 0.0;
+    inputs.modelInputs.eye.validIrisHit = 0.0;
+    inputs.modelInputs.eye.irisUv = vec2(0.0);
+    inputs.modelInputs.eye.irisHitDistance = 0.0;
+    inputs.modelInputs.eye.pupilMask = 0.0;
+    inputs.modelInputs.eye.limbusMask = 0.0;
+    inputs.modelInputs.eye.eyeLayer = 0.0;
+    inputs.modelInputs.eye.contactVisibility = 1.0;
+    inputs.modelInputs.eye.ciliaVisibility = 1.0;
+    inputs.modelInputs.eye.uvHandedness = 1.0;
+    inputs.modelInputs.eye.pupilDilation = 0.5;
+    inputs.modelInputs.eye.gazeDirection = vec3(0.0, 0.0, 1.0);
+    inputs.modelInputs.eye.gazeWeight = 1.0;
     inputs.modelInputs.anisotropy = 0.0;
     return inputs;
 }

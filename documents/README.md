@@ -73,6 +73,8 @@ Documentation in this repository is split by responsibility:
   - implemented source-epoch/digest staleness protocol, pending source union, frozen compilation snapshots, Material/Compute/UI transactions, M_*.json live-state migration, World/Graph staging, and GPU-epoch retirement
 - `rendering/texture-asset-json-v1.md`
   - texture asset JSON V1 fields, defaults, material instance references, and loader behavior
+- `rendering/eye-shading-model.md`
+  - implemented Eye contract covering ForwardOpaque single-shell, Deferred GBuffer V1 fallback, dual-shell inner/cornea passes, Compute-only caustic LUT, local SSS composition, authoring/LOD fields, runtime validation, and transactional Compute reload
 
 ## Plans
 
@@ -105,6 +107,8 @@ Rendering plans:
   - completed 2026-08-22 implementation record for Subsurface, PreintegratedSkin, and SubsurfaceProfile; the current contract lives in `rendering/subsurface-shading-models.md`
 - `plan/rendering/hair-shading-model-development-plan.md`
   - executable Hair Shading Model route from contract freeze and CPU Reference through versioned LUT, Forward/Deferred evaluator, Card coverage/shadow, Hair IBL, and multiple scattering
+- `plan/rendering/eye-shading-model-development-plan.md`
+  - completed 2026-08-23 Eye implementation record; the current Forward/Deferred/dual-shell, Compute LUT, local SSS, reload, validation, and performance contracts live in `rendering/eye-shading-model.md`
 - `plan/rendering/material-module-system.md`
   - future material module boundary, public/private semantics, and dependency ordering
 - `plan/rendering/neox-character-shader-feature-inventory.md`

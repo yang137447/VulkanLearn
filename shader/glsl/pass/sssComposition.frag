@@ -10,15 +10,17 @@ layout(location = 0) out vec4 outColor;
 layout(set = 3, binding = 0) uniform sampler2D diffuseLighting;
 layout(set = 3, binding = 1) uniform sampler2D nonDiffuseLighting;
 layout(set = 3, binding = 2) uniform sampler2D transmissionLighting;
-layout(set = 3, binding = 3) uniform sampler2D sssPong;
-layout(set = 3, binding = 4) uniform sampler2D gbufferB;
-layout(set = 3, binding = 5) uniform sampler2D gbufferD;
-layout(set = 3, binding = 6) uniform sampler2D sceneDepth;
+layout(set = 3, binding = 3) uniform sampler2D sssSource;
+layout(set = 3, binding = 4) uniform sampler2D sssPong;
+layout(set = 3, binding = 5) uniform sampler2D gbufferB;
+layout(set = 3, binding = 6) uniform sampler2D gbufferD;
+layout(set = 3, binding = 7) uniform sampler2D sceneDepth;
 
 void main()
 {
     vec4 diffuse = texture(diffuseLighting, inUV);
     vec4 filteredDiffuse = texture(sssPong, inUV);
+    vec3 sssSourceColor = texture(sssSource, inUV).rgb;
     vec3 nonDiffuse = texture(nonDiffuseLighting, inUV).rgb;
     vec3 transmission = texture(transmissionLighting, inUV).rgb;
     // GBuffer 的 shading model、profile ID 和 profile weight 是离散编码，
@@ -65,6 +67,19 @@ void main()
                 int(customData.x + 0.5),
                 textureSize(diffuseLighting, 0).y);
         }
+        else if (shadingModel == SHADING_MODEL_EYE)
+        {
+            uint packedEye = uint(customData.z + 0.5);
+            if (IsEyePackedProfileVersionValid(packedEye))
+            {
+                pixelRadius = CalculateSubsurfaceProfilePixelRadius(
+                    inUV,
+                    sceneDepth,
+                    subsurfaceProfileTable,
+                    int((packedEye >> 4u) & 0x0fu),
+                    textureSize(diffuseLighting, 0).y);
+            }
+        }
         outColor = vec4(
             vec3(pixelRadius / u_sssDiagnosticsParameters.x),
             1.0);
@@ -72,10 +87,12 @@ void main()
     }
     if (uboVP.debugViewMode == 20)
     {
-        float validWeight =
-            shadingModel == SHADING_MODEL_SUBSURFACE_PROFILE
-                ? filteredDiffuse.a
-                : 0.0;
+        float validWeight = 0.0;
+        if (shadingModel == SHADING_MODEL_SUBSURFACE_PROFILE ||
+            shadingModel == SHADING_MODEL_EYE)
+        {
+            validWeight = filteredDiffuse.a;
+        }
         outColor = vec4(vec3(validWeight), 1.0);
         return;
     }
@@ -88,6 +105,16 @@ void main()
             diffuse.rgb,
             filteredDiffuse.rgb,
             customData.y);
+    }
+    else if (shadingModel == SHADING_MODEL_EYE)
+    {
+        // Eye 的 filter source 只包含 sclera tissue；虹膜/角膜保持原始 diffuse/specular。
+        float scleraWeight = 1.0 - customData.w;
+        vec3 filteredSclera = mix(
+            sssSourceColor,
+            filteredDiffuse.rgb,
+            scleraWeight);
+        resolvedDiffuse = diffuse.rgb - sssSourceColor + filteredSclera;
     }
     outColor = vec4(
         resolvedDiffuse + nonDiffuse + transmission,

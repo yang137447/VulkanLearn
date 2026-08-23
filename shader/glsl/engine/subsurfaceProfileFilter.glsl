@@ -37,6 +37,10 @@ float CalculateSubsurfaceProfilePixelRadius(
         deviceDepth);
     float viewDepth = abs(
         (uboVP.view * vec4(worldPosition, 1.0)).z);
+    if (profileId < 0 || profileId > 15 || viewDepth <= 1.0e-5)
+    {
+        return 0.0;
+    }
     float worldRadius = texelFetch(
         profileTableTexture,
         ivec2(0, profileId),
@@ -84,10 +88,27 @@ vec4 FilterSubsurfaceProfile(
         0);
     uint centerShadingModel = DecodeGBufferShadingModel(
         centerGBufferB.a);
-    int centerProfileId = int(
-        centerGBufferD.x + 0.5);
-    // 只有 ID 5 进入邻域 filter；其它模型必须原样通过，避免跨模型污染。
-    if (centerShadingModel != SHADING_MODEL_SUBSURFACE_PROFILE ||
+    int centerProfileId = 0;
+    if (centerShadingModel == SHADING_MODEL_SUBSURFACE_PROFILE)
+    {
+        centerProfileId = int(centerGBufferD.x + 0.5);
+    }
+    else if (centerShadingModel == SHADING_MODEL_EYE)
+    {
+        uint packedEye = uint(centerGBufferD.z + 0.5);
+        if (((packedEye >> 9u) & 0x7fu) != EYE_GBUFFER_ENCODING_VERSION)
+        {
+            centerShadingModel = SHADING_MODEL_DEFAULT_LIT;
+        }
+        else
+        {
+            centerProfileId = int((packedEye >> 4u) & 0x0fu);
+        }
+    }
+    // ID 5 与 Eye sclera layer 进入邻域 filter；其它模型必须原样通过。
+    bool filterEye = centerShadingModel == SHADING_MODEL_EYE;
+    bool filterProfile = centerShadingModel == SHADING_MODEL_SUBSURFACE_PROFILE;
+    if ((!filterProfile && !filterEye) ||
         (uboVP.debugViewMode >= 1 && uboVP.debugViewMode <= 17))
     {
         return centerLighting;
@@ -139,11 +160,27 @@ vec4 FilterSubsurfaceProfile(
             0);
         uint sampleShadingModel = DecodeGBufferShadingModel(
             sampleGBufferB.a);
-        int sampleProfileId = int(
-            texelFetch(
-                gbufferDTexture,
-                sampleGBufferDCoordinate,
-                0).x + 0.5);
+        vec4 sampleGBufferD = texelFetch(
+            gbufferDTexture,
+            sampleGBufferDCoordinate,
+            0);
+        int sampleProfileId = 0;
+        if (sampleShadingModel == SHADING_MODEL_SUBSURFACE_PROFILE)
+        {
+            sampleProfileId = int(sampleGBufferD.x + 0.5);
+        }
+        else if (sampleShadingModel == SHADING_MODEL_EYE)
+        {
+            uint samplePackedEye = uint(sampleGBufferD.z + 0.5);
+            if (((samplePackedEye >> 9u) & 0x7fu) != EYE_GBUFFER_ENCODING_VERSION)
+            {
+                sampleShadingModel = SHADING_MODEL_DEFAULT_LIT;
+            }
+            else
+            {
+                sampleProfileId = int((samplePackedEye >> 4u) & 0x0fu);
+            }
+        }
         vec3 sampleNormal = DecodeGBufferDirection(
             sampleGBufferB.rgb);
         float sampleDepth = texelFetch(
@@ -152,7 +189,8 @@ vec4 FilterSubsurfaceProfile(
             0).r;
         // depth、normal、shading model 和 profile ID 四重 rejection，防止屏幕空间跨表面扩散。
         bool sameSurface =
-            sampleShadingModel == SHADING_MODEL_SUBSURFACE_PROFILE &&
+            ((filterProfile && sampleShadingModel == SHADING_MODEL_SUBSURFACE_PROFILE) ||
+             (filterEye && sampleShadingModel == SHADING_MODEL_EYE)) &&
             sampleProfileId == centerProfileId &&
             dot(centerNormal, sampleNormal) >= filterParameters.y &&
             abs(centerDepth - sampleDepth) <= filterParameters.x;
@@ -170,6 +208,11 @@ vec4 FilterSubsurfaceProfile(
     }
 
     // rejection 后按 RGB 独立重归一化，避免屏幕边缘或轮廓处因丢 tap 而变暗。
+    if (dot(validWeight, vec3(1.0)) <= 1.0e-6)
+    {
+        // 所有 tap 都被 rejection 丢弃时保持中心值，不能把边缘像素变成 NaN。
+        return centerLighting;
+    }
     vec3 filteredLighting = weightedLighting / validWeight;
     float averageValidWeight =
         dot(validWeight, vec3(1.0 / 3.0));

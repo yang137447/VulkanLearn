@@ -190,7 +190,8 @@ void MaterialAssetValidator::ValidateInstanceHeader(
         "parameters",
         "textures",
         "subsurfaceProfile",
-        "skinLut"
+        "skinLut",
+        "eyeProfile"
     };
     for (const auto& [field, value] : materialInstanceJson.items())
     {
@@ -238,6 +239,14 @@ void MaterialAssetValidator::ValidateInstanceHeader(
     {
         throw std::runtime_error(
             "skinLut must be a non-empty asset path string: " +
+            std::string(materialInstancePath));
+    }
+    if (materialInstanceJson.contains("eyeProfile") &&
+        (!materialInstanceJson["eyeProfile"].is_string() ||
+         materialInstanceJson["eyeProfile"].get<std::string>().empty()))
+    {
+        throw std::runtime_error(
+            "eyeProfile must be a non-empty asset path string: " +
             std::string(materialInstancePath));
     }
 }

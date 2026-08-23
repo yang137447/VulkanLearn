@@ -150,14 +150,45 @@ vec3 DecodeClearCoatBottomNormal(
     return OctahedronToUnitVector(bottomOctahedron);
 }
 
+
+// Eye GBuffer V1 不复用普通 customData：所有字段都由本表独占并版本化。
+const uint EYE_GBUFFER_ENCODING_VERSION = 1u;
+
+float EncodeEyeProfilePair(
+    float causticProfileId,
+    float scleraProfileId,
+    float validIrisHit)
+{
+    uint causticId = uint(causticProfileId + 0.5);
+    uint scleraId = uint(scleraProfileId + 0.5);
+    uint valid = validIrisHit > 0.5 ? 1u : 0u;
+    return float(
+        causticId +
+        scleraId * 16u +
+        valid * 256u +
+        (EYE_GBUFFER_ENCODING_VERSION << 9u));
+}
+
+uint DecodeEyePackedProfile(float encodedValue)
+{
+    return uint(encodedValue + 0.5);
+}
+
+bool IsEyePackedProfileVersionValid(uint packedProfile)
+{
+    return ((packedProfile >> 9u) & 0x7fu) ==
+        EYE_GBUFFER_ENCODING_VERSION;
+}
+
 GBufferData EncodeGBuffer(in MaterialSurface surface, in GBufferPixelData pixelData)
 {
     GBufferData data;
-    // Hair 的 RGB 是已经完成一次 BaseColor->absorption 转换的 sigma_a；
-    // 其余 ShadingModel 继续保持原有 baseColor 语义。
-    data.gbufferA = surface.shadingModel == SHADING_MODEL_HAIR
-        ? vec4(surface.hairAbsorption, surface.opacity)
-        : vec4(surface.baseColor, surface.opacity);
+    // Eye 的 A 通道保存 Base Pass 已采样的 iris color；其它模型保持既有 baseColor 语义。
+    data.gbufferA = surface.shadingModel == SHADING_MODEL_EYE
+        ? vec4(surface.modelInputs.eye.irisColor, surface.opacity)
+        : surface.shadingModel == SHADING_MODEL_HAIR
+            ? vec4(surface.hairAbsorption, surface.opacity)
+            : vec4(surface.baseColor, surface.opacity);
     // ID 2 为了保持 opaque GBuffer 预算，把 transmissionWeight 放在 GBufferA.a。
     if (surface.shadingModel == SHADING_MODEL_SUBSURFACE)
     {
@@ -165,8 +196,23 @@ GBufferData EncodeGBuffer(in MaterialSurface surface, in GBufferPixelData pixelD
             surface.modelInputs.subsurface.transmissionWeight;
     }
     data.gbufferB = vec4(EncodeGBufferDirection(normalize(surface.worldNormal)), EncodeGBufferPacked(surface.shadingModel, surface.selectiveOutputMask));
-    data.gbufferC = vec4(surface.metallic, 0.5, surface.roughness, surface.ambientOcclusion);
-    data.gbufferD = surface.customData;
+    // Eye metallic/specular 不参与 evaluator；这两个通道改存 IOR 与 caustic strength。
+    data.gbufferC = surface.shadingModel == SHADING_MODEL_EYE
+        ? vec4(
+            surface.modelInputs.eye.corneaIor,
+            surface.modelInputs.eye.causticStrength,
+            surface.roughness,
+            surface.ambientOcclusion)
+        : vec4(surface.metallic, 0.5, surface.roughness, surface.ambientOcclusion);
+    data.gbufferD = surface.shadingModel == SHADING_MODEL_EYE
+        ? vec4(
+            surface.modelInputs.eye.irisUv,
+            EncodeEyeProfilePair(
+                surface.modelInputs.eye.causticProfileId,
+                surface.modelInputs.eye.scleraProfileId,
+                surface.modelInputs.eye.validIrisHit),
+            surface.modelInputs.eye.irisMask)
+        : surface.customData;
     if (surface.shadingModel == SHADING_MODEL_CLEAR_COAT)
     {
         vec2 encodedBottomNormal = EncodeClearCoatBottomNormal(
@@ -177,9 +223,26 @@ GBufferData EncodeGBuffer(in MaterialSurface surface, in GBufferPixelData pixelD
         data.gbufferD.w = encodedBottomNormal.x;
         data.gbufferD.z = encodedBottomNormal.y;
     }
-    data.gbufferE = surface.precomputedShadowFactors;
-    data.gbufferVelocity = vec4(pixelData.velocity, 0.0, 0.0);
-    data.gbufferF = surface.shadingModel == SHADING_MODEL_HAIR
+    // Eye E.rgb 保存 sclera color，E.a 保存 iris radius；Eye evaluator 自己计算 shadow。
+    data.gbufferE = surface.shadingModel == SHADING_MODEL_EYE
+        ? vec4(
+            surface.modelInputs.eye.scleraColor,
+            surface.modelInputs.eye.irisRadius)
+        : surface.precomputedShadowFactors;
+    data.gbufferVelocity = surface.shadingModel == SHADING_MODEL_EYE
+        ? vec4(
+            pixelData.velocity,
+            surface.modelInputs.eye.pupilRadius /
+                surface.modelInputs.eye.irisRadius,
+            surface.modelInputs.eye.limbusWidth /
+                surface.modelInputs.eye.irisRadius)
+        : vec4(pixelData.velocity, 0.0, 0.0);
+    data.gbufferF = surface.shadingModel == SHADING_MODEL_EYE
+        ? vec4(
+            EncodeGBufferDirection(
+                normalize(surface.modelInputs.eye.irisNormal)),
+            surface.modelInputs.eye.irisDistance)
+        : surface.shadingModel == SHADING_MODEL_HAIR
         ? vec4(
             EncodeGBufferDirection(normalize(surface.worldTangent.xyz)),
             surface.worldTangent.w)
@@ -218,6 +281,11 @@ MaterialSurface DecodeGBufferSurface(in GBufferData data)
     surface.metallic = data.gbufferC.r;
     surface.roughness = data.gbufferC.b;
     surface.ambientOcclusion = data.gbufferC.a;
+    if (surface.shadingModel == SHADING_MODEL_EYE)
+    {
+        surface.metallic = 0.0;
+        surface.specular = 0.5;
+    }
     surface.customData = data.gbufferD;
     if (surface.shadingModel == SHADING_MODEL_CLEAR_COAT)
     {
@@ -263,6 +331,52 @@ MaterialSurface DecodeGBufferSurface(in GBufferData data)
         surface.modelInputs.subsurfaceProfile.weight = surface.customData.y;
         surface.modelInputs.subsurfaceProfile.thickness = surface.customData.z;
         surface.modelInputs.subsurfaceProfile.transmissionWeight = surface.customData.w;
+    }
+    else if (surface.shadingModel == SHADING_MODEL_EYE)
+    {
+        uint packedProfile = DecodeEyePackedProfile(data.gbufferD.z);
+        bool validEncoding = IsEyePackedProfileVersionValid(packedProfile);
+        uint validIrisHit = validEncoding &&
+            (packedProfile & 256u) != 0u ? 1u : 0u;
+        uint profilePair = validEncoding ? packedProfile & 255u : 0u;
+        float irisRadius = data.gbufferE.a;
+        float pupilRatio = data.gbufferVelocity.z;
+        float limbusRatio = data.gbufferVelocity.w;
+        float radial = length((data.gbufferD.xy - vec2(0.5)) * 2.0);
+        float pupilRatioEdge = pupilRatio + 0.04;
+        float limbusStart = 1.0 - limbusRatio;
+        surface.baseColor = data.gbufferA.rgb;
+        surface.modelInputs.eye.corneaNormal = surface.worldNormal;
+        surface.modelInputs.eye.corneaIor = data.gbufferC.r;
+        surface.modelInputs.eye.irisNormal =
+            DecodeGBufferDirection(data.gbufferF.rgb);
+        surface.modelInputs.eye.irisPlaneNormal = surface.worldNormal;
+        surface.modelInputs.eye.irisDistance = data.gbufferF.a;
+        surface.modelInputs.eye.irisRadius = irisRadius;
+        surface.modelInputs.eye.pupilRadius = pupilRatio * irisRadius;
+        surface.modelInputs.eye.limbusWidth = limbusRatio * irisRadius;
+        surface.modelInputs.eye.irisColor = data.gbufferA.rgb;
+        surface.modelInputs.eye.scleraColor = data.gbufferE.rgb;
+        // Unknown packing versions must not leak stale UV/profile data into the
+        // evaluator; neutral values force the invalid-hit path instead.
+        surface.modelInputs.eye.irisUv = validEncoding
+            ? data.gbufferD.xy
+            : vec2(0.5);
+        surface.modelInputs.eye.irisMask = validEncoding
+            ? data.gbufferD.a
+            : 0.0;
+        surface.modelInputs.eye.causticProfileId = float(profilePair & 15u);
+        surface.modelInputs.eye.scleraProfileId = float((profilePair >> 4u) & 15u);
+        surface.modelInputs.eye.causticStrength = data.gbufferC.g;
+        surface.modelInputs.eye.validIrisHit = float(validIrisHit);
+        surface.modelInputs.eye.irisHitDistance = data.gbufferF.a;
+        surface.modelInputs.eye.pupilMask = float(validIrisHit) *
+            (1.0 - smoothstep(pupilRatio, pupilRatioEdge, radial)) *
+            surface.modelInputs.eye.irisMask;
+        surface.modelInputs.eye.limbusMask = float(validIrisHit) *
+            smoothstep(limbusStart, 1.0, radial);
+        // F 的 RGB 已属于 Eye iris normal，不再伪装成普通 tangent。
+        surface.worldTangent = vec4(surface.worldNormal, 1.0);
     }
     else if (surface.shadingModel == SHADING_MODEL_HAIR)
     {

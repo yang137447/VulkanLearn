@@ -19,7 +19,8 @@ bool RendererResourceCache::WorldLocalResourcePackage::Empty() const noexcept
         objectResources.empty() &&
         textures.empty() &&
         !subsurfaceResources &&
-        !hairResources;
+        !hairResources &&
+        !eyeResources;
 }
 
 RendererResourceCache::RendererResourceCache()
@@ -392,6 +393,55 @@ const std::shared_ptr<const HairResourceSet>&
 RendererResourceCache::GetHairResources() const noexcept
 {
     return worldLocalResources->hairResources;
+}
+
+// Eye 资源与 profile ID 一起发布，避免材质在 candidate 阶段看到另一代 LUT。
+void RendererResourceCache::BindEyeResources(
+    std::shared_ptr<const EyeResourceSet> resources)
+{
+    GetMutableWorldLocalResources().eyeResources = std::move(resources);
+}
+
+const std::shared_ptr<const EyeResourceSet>&
+RendererResourceCache::GetEyeResources() const noexcept
+{
+    return worldLocalResources->eyeResources;
+}
+
+RendererResourceCache::PreparedEyeResourceReplacement
+RendererResourceCache::PrepareEyeResourceReplacement(
+    std::shared_ptr<const EyeResourceSet> resources,
+    std::shared_ptr<Texture> causticLutTexture) const
+{
+    if (!resources || !causticLutTexture)
+    {
+        throw std::runtime_error(
+            "Eye resource replacement requires a complete resource set and LUT texture");
+    }
+
+    PreparedEyeResourceReplacement replacement;
+    replacement.previousPackage = worldLocalResources;
+    replacement.replacementPackage =
+        std::make_shared<WorldLocalResourcePackage>(*worldLocalResources);
+    replacement.replacementPackage->eyeResources = std::move(resources);
+    replacement.replacementPackage->worldTextures["eyeCausticLut"] =
+        std::move(causticLutTexture);
+    return replacement;
+}
+
+RendererResourceCache::WorldLocalResourcePackageHandle
+RendererResourceCache::CommitPreparedEyeResourceReplacement(
+    PreparedEyeResourceReplacement&& replacement) noexcept
+{
+    if (!replacement.replacementPackage)
+    {
+        return {};
+    }
+
+    WorldLocalResourcePackageHandle retired =
+        std::move(worldLocalResources);
+    worldLocalResources = std::move(replacement.replacementPackage);
+    return retired;
 }
 
 

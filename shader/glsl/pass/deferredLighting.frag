@@ -9,6 +9,7 @@ layout(location = 0) in vec2 inUV;
 layout(location = 0) out vec4 outDiffuseLighting;
 layout(location = 1) out vec4 outNonDiffuseLighting;
 layout(location = 2) out vec4 outTransmissionLighting;
+layout(location = 3) out vec4 outSssSource;
 
 // Set 3 是 RenderGraph 为“当前 pass 输入”预留的 descriptor set。
 // 这里的 binding 顺序必须和 config/renderGraphConfig.json 中 deferredLighting.input 完全一致。
@@ -21,7 +22,6 @@ layout(set = 3, binding = 5) uniform sampler2D gbufferVelocity;
 layout(set = 3, binding = 6) uniform sampler2D gbufferF;
 layout(set = 3, binding = 7) uniform sampler2D sceneColorBase;
 layout(set = 3, binding = 8) uniform sampler2D sceneDepth;
-layout(set = 3, binding = 9) uniform sampler2DArrayShadow shadowMap;
 GBufferData SampleGBuffer(vec2 uv)
 {
     GBufferData data;
@@ -56,6 +56,28 @@ void main()
         lighting.directLighting,
         lighting.indirectDiffuse,
         lighting.indirectSpecular);
+    if (surface.shadingModel == SHADING_MODEL_EYE)
+    {
+        SetMaterialDebugEyeData(
+            debugLighting,
+            lighting.eyeCorneaSpecular,
+            lighting.eyeIrisDirect,
+            lighting.eyeScleraDirect,
+            lighting.eyeInnerIbl,
+            lighting.eyeRefractedViewDirection,
+            lighting.eyeShadowCornea,
+            lighting.eyeShadowInner,
+            lighting.eyeCorneaFresnel,
+            lighting.eyeTransmissionIn,
+            lighting.eyeTransmissionOut,
+            lighting.eyeIrisHitDistance,
+            lighting.eyeIrisUv,
+            lighting.eyeValidIrisHit,
+            lighting.eyeIrisMask,
+            lighting.eyePupilMask,
+            lighting.eyeLimbusMask,
+            lighting.eyeCausticGain);
+    }
     if (surface.shadingModel == SHADING_MODEL_HAIR)
     {
         SetMaterialDebugHairData(
@@ -98,10 +120,23 @@ void main()
         outDiffuseLighting = resolvedColor;
         outNonDiffuseLighting = vec4(0.0);
         outTransmissionLighting = vec4(0.0);
+        outSssSource = vec4(0.0);
         return;
     }
 
     outDiffuseLighting = vec4(lighting.diffuseLighting, surface.opacity);
     outNonDiffuseLighting = vec4(lighting.nonDiffuseLighting, 0.0);
     outTransmissionLighting = vec4(lighting.transmissionLighting, 0.0);
+    vec3 sssSource = vec3(0.0);
+    if (surface.shadingModel == SHADING_MODEL_SUBSURFACE_PROFILE)
+    {
+        sssSource = lighting.diffuseLighting;
+    }
+    else if (surface.shadingModel == SHADING_MODEL_EYE)
+    {
+        sssSource = lighting.eyeScleraDirect +
+            lighting.eyeInnerIbl *
+                (1.0 - lighting.eyeIrisMask);
+    }
+    outSssSource = vec4(sssSource, 1.0);
 }

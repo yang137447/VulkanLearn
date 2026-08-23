@@ -350,6 +350,9 @@ RuntimeResult<void> EngineLoop::LoadInitialWorldAndRenderer(
 
     RenderSystem& renderSystem = RenderSystem::GetInstance();
     renderSystem.InitializeWorldTransactionResources();
+    RendererResourceLoadCoordinator::GetInstance()
+        .SetEyeComputeReloadParticipant(
+            &renderSystem.GetEyeComputeReloadParticipant());
 
     // Startup uses the same isolated candidate package and transaction
     // publication path as runtime World replacement. The only difference is

@@ -7,12 +7,19 @@
 layout (set = 3, binding = 1) uniform sampler2DArray hairAzimuthalLut;
 #include "hairLighting.glsl"
 
+
 // 前向 pass 如果需要阴影，由具体 pass shader 在 include 前定义
 // VL_FORWARD_DECLARE_SHADOWMAP_INPUT。默认 include 不占用 Set 3，只有真正带阴影的
 // forward pass 才声明 shadowMap 输入，避免材质布局被无关 pass 污染。
 #if defined(VL_FORWARD_DECLARE_SHADOWMAP_INPUT)
 layout (set = 3, binding = 0) uniform sampler2DArrayShadow shadowMap;
 #endif
+
+#if MATERIAL_IS_EYE
+layout (set = 3, binding = 2) uniform sampler2DArray eyeCausticLut;
+#include "eyeLighting.glsl"
+#endif
+
 
 struct ForwardLightingResult
 {
@@ -44,6 +51,24 @@ struct ForwardLightingResult
     float hairCoverage;
     float hairDensity;
     float hairShadowTransmittance;
+    // Eye debug/path ledger；只在 Eye variant 写入，其他模型保持零值。
+    vec3 eyeCorneaSpecular;
+    vec3 eyeIrisDirect;
+    vec3 eyeScleraDirect;
+    vec3 eyeInnerIbl;
+    float eyeShadowCornea;
+    float eyeShadowInner;
+    float eyeCorneaFresnel;
+    float eyeTransmissionIn;
+    float eyeTransmissionOut;
+    float eyeIrisHitDistance;
+    vec2 eyeIrisUv;
+    vec3 eyeRefractedViewDirection;
+    float eyeValidIrisHit;
+    float eyeIrisMask;
+    float eyePupilMask;
+    float eyeLimbusMask;
+    float eyeCausticGain;
 };
 
 ForwardLightingResult CreateDefaultForwardLightingResult()
@@ -76,6 +101,23 @@ ForwardLightingResult CreateDefaultForwardLightingResult()
     result.hairCoverage = 1.0;
     result.hairDensity = 1.0;
     result.hairShadowTransmittance = 1.0;
+    result.eyeCorneaSpecular = vec3(0.0);
+    result.eyeIrisDirect = vec3(0.0);
+    result.eyeScleraDirect = vec3(0.0);
+    result.eyeInnerIbl = vec3(0.0);
+    result.eyeShadowCornea = 1.0;
+    result.eyeShadowInner = 1.0;
+    result.eyeCorneaFresnel = 0.0;
+    result.eyeTransmissionIn = 1.0;
+    result.eyeTransmissionOut = 1.0;
+    result.eyeIrisHitDistance = 0.0;
+    result.eyeIrisUv = vec2(0.0);
+    result.eyeRefractedViewDirection = vec3(0.0, 0.0, -1.0);
+    result.eyeValidIrisHit = 0.0;
+    result.eyeIrisMask = 0.0;
+    result.eyePupilMask = 0.0;
+    result.eyeLimbusMask = 0.0;
+    result.eyeCausticGain = 1.0;
     return result;
 }
 
@@ -261,6 +303,39 @@ ForwardLightingResult ShadeHairForwardSurface(in MaterialSurface surface)
     result.hairShadowTransmittance = hair.shadowTransmittance;
     return result;
 }
+#if MATERIAL_IS_EYE
+ForwardLightingResult ShadeEyeForwardSurface(in MaterialSurface surface)
+{
+    EyeLightingResult eye = ShadeEyeSurface(surface);
+    ForwardLightingResult result = CreateDefaultForwardLightingResult();
+    result.directLighting = eye.directLighting;
+    result.directDiffuse = eye.directDiffuse;
+    result.directSpecular = eye.directSpecular;
+    result.indirectDiffuse = eye.indirectDiffuse;
+    result.indirectSpecular = eye.indirectSpecular;
+    result.indirectLighting = eye.indirectDiffuse + eye.indirectSpecular;
+    result.finalColor = eye.finalColor;
+    result.shadow = eye.shadowCornea;
+    result.eyeCorneaSpecular = eye.corneaSpecular;
+    result.eyeIrisDirect = eye.irisDirect;
+    result.eyeScleraDirect = eye.scleraDirect;
+    result.eyeInnerIbl = eye.innerIbl;
+    result.eyeShadowCornea = eye.shadowCornea;
+    result.eyeShadowInner = eye.shadowInner;
+    result.eyeCorneaFresnel = eye.corneaFresnel;
+    result.eyeTransmissionIn = eye.transmissionIn;
+    result.eyeTransmissionOut = eye.transmissionOut;
+    result.eyeIrisHitDistance = eye.irisHitDistance;
+    result.eyeIrisUv = eye.irisUv;
+    result.eyeRefractedViewDirection = eye.refractedViewDirection;
+    result.eyeValidIrisHit = eye.validIrisHit;
+    result.eyeIrisMask = eye.irisMask;
+    result.eyePupilMask = eye.pupilMask;
+    result.eyeLimbusMask = eye.limbusMask;
+    result.eyeCausticGain = eye.causticGain;
+    return result;
+}
+#endif
 ForwardLightingResult ShadeUnlitForwardSurface(in MaterialSurface surface)
 {
     ForwardLightingResult result = CreateDefaultForwardLightingResult();
@@ -280,6 +355,10 @@ ForwardLightingResult ShadeForwardSurfaceDetailed(in MaterialSurface surface)
             return ShadeThinTranslucentForwardSurface(surface);
         case SHADING_MODEL_HAIR:
             return ShadeHairForwardSurface(surface);
+#if MATERIAL_IS_EYE
+        case SHADING_MODEL_EYE:
+            return ShadeEyeForwardSurface(surface);
+#endif
         default:
             return ShadeDefaultLitForwardSurface(surface);
     }

@@ -1,6 +1,5 @@
 {
-    "configHelp":
-    {
+    "configHelp": {
         "formatSupport": [
             "R8G8B8A8_SRGB",
             "R8G8B8A8_UNORM",
@@ -41,7 +40,7 @@
             "depthCompareOp": "深度比较函数，取值见 depthCompareOpSupport。"
         },
         "pass": {
-            "type": "必填 pass 行为类型。当前支持 shadow、geometry、forwardTransparent、postProcess；name 只作为唯一身份、缓存 key 和调试标签。"
+            "type": "必填 pass 行为类型。当前支持 shadow、geometry、forwardOpaque、forwardTransparent、postProcess；name 只作为唯一身份、缓存 key 和调试标签。"
         },
         "resource": {
             "type": "可选资源类型。默认 texture2D；CSM shadowMap 使用 texture2DArray。",
@@ -54,7 +53,7 @@
             "storeOp": "attachment 结束时的保存策略。"
         }
     },
-    "resources":[
+    "resources": [
         {
             "name": "shadowMap",
             "type": "texture2DArray",
@@ -62,172 +61,255 @@
             "widthSize": 2048,
             "heightSize": 2048,
             "arrayLayers": 4,
-            "usage": ["depthStencilAttachment", "sampled", "transferSrc", "transferDst"]
+            "usage": [
+                "depthStencilAttachment",
+                "sampled",
+                "transferSrc",
+                "transferDst"
+            ]
         },
         {
             "name": "swapChain",
             "format": "R8G8B8A8_SRGB",
-            "widthScale": 1.0,
-            "heightScale": 1.0,
-            "usage": ["colorAttachment", "present"]
+            "widthScale": 1,
+            "heightScale": 1,
+            "usage": [
+                "colorAttachment",
+                "present"
+            ]
         },
         {
             "name": "sceneColor",
             "format": "R16G16B16A16_SFLOAT",
-            "widthScale": 1.0,
-            "heightScale": 1.0,
-            "usage": ["colorAttachment", "sampled"]
+            "widthScale": 1,
+            "heightScale": 1,
+            "usage": [
+                "colorAttachment",
+                "sampled"
+            ]
         },
         {
             "name": "diffuseLighting",
             "format": "R16G16B16A16_SFLOAT",
-            "widthScale": 1.0,
-            "heightScale": 1.0,
-            "usage": ["colorAttachment", "sampled"]
+            "widthScale": 1,
+            "heightScale": 1,
+            "usage": [
+                "colorAttachment",
+                "sampled"
+            ]
         },
         {
             "name": "nonDiffuseLighting",
             "format": "R16G16B16A16_SFLOAT",
-            "widthScale": 1.0,
-            "heightScale": 1.0,
-            "usage": ["colorAttachment", "sampled"]
+            "widthScale": 1,
+            "heightScale": 1,
+            "usage": [
+                "colorAttachment",
+                "sampled"
+            ]
         },
         {
             "name": "transmissionLighting",
             "format": "R16G16B16A16_SFLOAT",
-            "widthScale": 1.0,
-            "heightScale": 1.0,
-            "usage": ["colorAttachment", "sampled"]
+            "widthScale": 1,
+            "heightScale": 1,
+            "usage": [
+                "colorAttachment",
+                "sampled"
+            ]
+        },
+        {
+            "name": "sssSource",
+            "format": "R16G16B16A16_SFLOAT",
+            "widthScale": 1,
+            "heightScale": 1,
+            "usage": [
+                "colorAttachment",
+                "sampled"
+            ]
         },
         {
             "name": "sssPing",
             "format": "R16G16B16A16_SFLOAT",
-            "widthScale": 1.0,
-            "heightScale": 1.0,
-            "usage": ["colorAttachment", "sampled"]
+            "widthScale": 1,
+            "heightScale": 1,
+            "usage": [
+                "colorAttachment",
+                "sampled"
+            ]
         },
         {
             "name": "sssPong",
             "format": "R16G16B16A16_SFLOAT",
-            "widthScale": 1.0,
-            "heightScale": 1.0,
-            "usage": ["colorAttachment", "sampled"]
+            "widthScale": 1,
+            "heightScale": 1,
+            "usage": [
+                "colorAttachment",
+                "sampled"
+            ]
         },
         {
             "name": "gbufferA",
             "format": "R16G16B16A16_SFLOAT",
-            "widthScale": 1.0,
-            "heightScale": 1.0,
-            "usage": ["colorAttachment", "sampled"]
+            "widthScale": 1,
+            "heightScale": 1,
+            "usage": [
+                "colorAttachment",
+                "sampled"
+            ]
         },
         {
             "name": "gbufferB",
             "format": "R16G16B16A16_SFLOAT",
-            "widthScale": 1.0,
-            "heightScale": 1.0,
-            "usage": ["colorAttachment", "sampled"]
+            "widthScale": 1,
+            "heightScale": 1,
+            "usage": [
+                "colorAttachment",
+                "sampled"
+            ]
         },
         {
             "name": "gbufferC",
             "format": "R16G16B16A16_SFLOAT",
-            "widthScale": 1.0,
-            "heightScale": 1.0,
-            "usage": ["colorAttachment", "sampled"]
+            "widthScale": 1,
+            "heightScale": 1,
+            "usage": [
+                "colorAttachment",
+                "sampled"
+            ]
         },
         {
             "name": "gbufferD",
             "format": "R16G16B16A16_SFLOAT",
-            "widthScale": 1.0,
-            "heightScale": 1.0,
-            "usage": ["colorAttachment", "sampled"]
+            "widthScale": 1,
+            "heightScale": 1,
+            "usage": [
+                "colorAttachment",
+                "sampled"
+            ]
         },
         {
             "name": "gbufferE",
             "format": "R16G16B16A16_SFLOAT",
-            "widthScale": 1.0,
-            "heightScale": 1.0,
-            "usage": ["colorAttachment", "sampled"]
+            "widthScale": 1,
+            "heightScale": 1,
+            "usage": [
+                "colorAttachment",
+                "sampled"
+            ]
         },
         {
             "name": "gbufferVelocity",
             "format": "R16G16B16A16_SFLOAT",
-            "widthScale": 1.0,
-            "heightScale": 1.0,
-            "usage": ["colorAttachment", "sampled"]
+            "widthScale": 1,
+            "heightScale": 1,
+            "usage": [
+                "colorAttachment",
+                "sampled"
+            ]
         },
         {
             "name": "gbufferF",
             "format": "R16G16B16A16_SFLOAT",
-            "widthScale": 1.0,
-            "heightScale": 1.0,
-            "usage": ["colorAttachment", "sampled"]
+            "widthScale": 1,
+            "heightScale": 1,
+            "usage": [
+                "colorAttachment",
+                "sampled"
+            ]
         },
         {
             "name": "sceneColorBase",
             "format": "R16G16B16A16_SFLOAT",
-            "widthScale": 1.0,
-            "heightScale": 1.0,
-            "usage": ["colorAttachment", "sampled"]
+            "widthScale": 1,
+            "heightScale": 1,
+            "usage": [
+                "colorAttachment",
+                "sampled"
+            ]
         },
         {
             "name": "bloomDownSample1",
             "format": "R16G16B16A16_SFLOAT",
             "widthScale": 0.5,
             "heightScale": 0.5,
-            "usage": ["colorAttachment", "sampled"]
+            "usage": [
+                "colorAttachment",
+                "sampled"
+            ]
         },
         {
             "name": "bloomDownSample2",
             "format": "R16G16B16A16_SFLOAT",
             "widthScale": 0.25,
             "heightScale": 0.25,
-            "usage": ["colorAttachment", "sampled"]
+            "usage": [
+                "colorAttachment",
+                "sampled"
+            ]
         },
         {
             "name": "bloomDownSample3",
             "format": "R16G16B16A16_SFLOAT",
             "widthScale": 0.125,
             "heightScale": 0.125,
-            "usage": ["colorAttachment", "sampled"]
+            "usage": [
+                "colorAttachment",
+                "sampled"
+            ]
         },
         {
             "name": "bloomDownSample4",
             "format": "R16G16B16A16_SFLOAT",
             "widthScale": 0.0625,
             "heightScale": 0.0625,
-            "usage": ["colorAttachment", "sampled"]
+            "usage": [
+                "colorAttachment",
+                "sampled"
+            ]
         },
         {
             "name": "bloomUpSample1",
             "format": "R16G16B16A16_SFLOAT",
             "widthScale": 0.5,
             "heightScale": 0.5,
-            "usage": ["colorAttachment", "sampled"]
+            "usage": [
+                "colorAttachment",
+                "sampled"
+            ]
         },
         {
             "name": "bloomUpSample2",
             "format": "R16G16B16A16_SFLOAT",
             "widthScale": 0.25,
             "heightScale": 0.25,
-            "usage": ["colorAttachment", "sampled"]
+            "usage": [
+                "colorAttachment",
+                "sampled"
+            ]
         },
         {
             "name": "bloomUpSample3",
             "format": "R16G16B16A16_SFLOAT",
             "widthScale": 0.125,
             "heightScale": 0.125,
-            "usage": ["colorAttachment", "sampled"]
+            "usage": [
+                "colorAttachment",
+                "sampled"
+            ]
         },
-        
         {
             "name": "sceneDepth",
             "format": "D32_SFLOAT",
-            "widthScale": 1.0,
-            "heightScale": 1.0,
-            "usage": ["depthStencilAttachment", "sampled"]
+            "widthScale": 1,
+            "heightScale": 1,
+            "usage": [
+                "depthStencilAttachment",
+                "sampled"
+            ]
         }
     ],
-    "passes":[
+    "passes": [
         {
             "name": "shadowCascade0",
             "type": "shadow",
@@ -239,9 +321,8 @@
                 "depthWriteEnable": true,
                 "depthCompareOp": "less"
             },
-            "input": [
-            ],
-            "output":[
+            "input": [],
+            "output": [
                 {
                     "resource": "shadowMap",
                     "layer": 0,
@@ -261,9 +342,8 @@
                 "depthWriteEnable": true,
                 "depthCompareOp": "less"
             },
-            "input": [
-            ],
-            "output":[
+            "input": [],
+            "output": [
                 {
                     "resource": "shadowMap",
                     "layer": 1,
@@ -283,9 +363,8 @@
                 "depthWriteEnable": true,
                 "depthCompareOp": "less"
             },
-            "input": [
-            ],
-            "output":[
+            "input": [],
+            "output": [
                 {
                     "resource": "shadowMap",
                     "layer": 2,
@@ -305,9 +384,8 @@
                 "depthWriteEnable": true,
                 "depthCompareOp": "less"
             },
-            "input": [
-            ],
-            "output":[
+            "input": [],
+            "output": [
                 {
                     "resource": "shadowMap",
                     "layer": 3,
@@ -326,9 +404,8 @@
                 "depthWriteEnable": true,
                 "depthCompareOp": "less"
             },
-            "input": [
-            ],
-            "output":[
+            "input": [],
+            "output": [
                 {
                     "resource": "gbufferA",
                     "loadOp": "clear",
@@ -422,9 +499,14 @@
                     "resource": "hairAzimuthalLut",
                     "source": "worldTexture",
                     "binding": 10
+                },
+                {
+                    "resource": "eyeCausticLut",
+                    "source": "worldTexture",
+                    "binding": 11
                 }
             ],
-            "output":[
+            "output": [
                 {
                     "resource": "diffuseLighting",
                     "loadOp": "clear",
@@ -437,6 +519,11 @@
                 },
                 {
                     "resource": "transmissionLighting",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                },
+                {
+                    "resource": "sssSource",
                     "loadOp": "clear",
                     "storeOp": "store"
                 }
@@ -455,7 +542,7 @@
             },
             "input": [
                 {
-                    "resource": "diffuseLighting"
+                    "resource": "sssSource"
                 },
                 {
                     "resource": "gbufferB"
@@ -530,6 +617,9 @@
                     "resource": "transmissionLighting"
                 },
                 {
+                    "resource": "sssSource"
+                },
+                {
                     "resource": "sssPong"
                 },
                 {
@@ -551,6 +641,123 @@
             ]
         },
         {
+            "name": "forwardOpaque",
+            "type": "forwardOpaque",
+            "needMsaa": false,
+            "pipelineState": {
+                "useVertexInput": true,
+                "depthTestEnable": true,
+                "depthWriteEnable": true,
+                "depthCompareOp": "less"
+            },
+            "input": [
+                {
+                    "resource": "shadowMap",
+                    "binding": 0
+                },
+                {
+                    "resource": "hairAzimuthalLut",
+                    "source": "worldTexture",
+                    "binding": 1
+                },
+                {
+                    "resource": "eyeCausticLut",
+                    "source": "worldTexture",
+                    "binding": 2
+                }
+            ],
+            "output": [
+                {
+                    "resource": "sceneColor",
+                    "loadOp": "load",
+                    "storeOp": "store"
+                },
+                {
+                    "resource": "sceneDepth",
+                    "loadOp": "load",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
+            "name": "forwardEyeInner",
+            "type": "forwardEyeInner",
+            "pipelineState": {
+                "useVertexInput": true,
+                "depthTestEnable": true,
+                "depthWriteEnable": true,
+                "depthCompareOp": "less"
+            },
+            "needMsaa": false,
+            "input": [
+                {
+                    "resource": "shadowMap",
+                    "binding": 0
+                },
+                {
+                    "resource": "hairAzimuthalLut",
+                    "source": "worldTexture",
+                    "binding": 1
+                },
+                {
+                    "resource": "eyeCausticLut",
+                    "source": "worldTexture",
+                    "binding": 2
+                }
+            ],
+            "output": [
+                {
+                    "resource": "sceneColor",
+                    "loadOp": "load",
+                    "storeOp": "store"
+                },
+                {
+                    "resource": "sceneDepth",
+                    "loadOp": "load",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
+            "name": "forwardEyeCornea",
+            "type": "forwardEyeCornea",
+            "pipelineState": {
+                "useVertexInput": true,
+                "depthTestEnable": true,
+                "depthWriteEnable": false,
+                "depthCompareOp": "lessOrEqual"
+            },
+            "needMsaa": false,
+            "input": [
+                {
+                    "resource": "shadowMap",
+                    "binding": 0
+                },
+                {
+                    "resource": "hairAzimuthalLut",
+                    "source": "worldTexture",
+                    "binding": 1
+                },
+                {
+                    "resource": "eyeCausticLut",
+                    "source": "worldTexture",
+                    "binding": 2
+                }
+            ],
+            "output": [
+                {
+                    "resource": "sceneColor",
+                    "loadOp": "load",
+                    "storeOp": "store"
+                },
+                {
+                    "resource": "sceneDepth",
+                    "loadOp": "load",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
             "name": "sky",
             "type": "postProcess",
             "needCreateMaterial": true,
@@ -562,7 +769,7 @@
                 "depthCompareOp": "lessOrEqual"
             },
             "input": [],
-            "output":[
+            "output": [
                 {
                     "resource": "sceneColor",
                     "loadOp": "load",
@@ -596,7 +803,7 @@
                     "binding": 1
                 }
             ],
-            "output":[
+            "output": [
                 {
                     "resource": "sceneColor",
                     "loadOp": "load",
@@ -625,7 +832,7 @@
                     "resource": "sceneColor"
                 }
             ],
-            "output":[
+            "output": [
                 {
                     "resource": "bloomDownSample1",
                     "loadOp": "clear",
@@ -649,7 +856,7 @@
                     "resource": "bloomDownSample1"
                 }
             ],
-            "output":[
+            "output": [
                 {
                     "resource": "bloomDownSample2",
                     "loadOp": "clear",
@@ -673,7 +880,7 @@
                     "resource": "bloomDownSample2"
                 }
             ],
-            "output":[
+            "output": [
                 {
                     "resource": "bloomDownSample3",
                     "loadOp": "clear",
@@ -697,7 +904,7 @@
                     "resource": "bloomDownSample3"
                 }
             ],
-            "output":[
+            "output": [
                 {
                     "resource": "bloomDownSample4",
                     "loadOp": "clear",
@@ -724,7 +931,7 @@
                     "resource": "bloomDownSample4"
                 }
             ],
-            "output":[
+            "output": [
                 {
                     "resource": "bloomUpSample3",
                     "loadOp": "clear",
@@ -751,7 +958,7 @@
                     "resource": "bloomUpSample3"
                 }
             ],
-            "output":[
+            "output": [
                 {
                     "resource": "bloomUpSample2",
                     "loadOp": "clear",
@@ -778,7 +985,7 @@
                     "resource": "bloomUpSample2"
                 }
             ],
-            "output":[
+            "output": [
                 {
                     "resource": "bloomUpSample1",
                     "loadOp": "clear",
@@ -805,7 +1012,7 @@
                     "resource": "bloomUpSample1"
                 }
             ],
-            "output":[
+            "output": [
                 {
                     "resource": "swapChain",
                     "loadOp": "clear",

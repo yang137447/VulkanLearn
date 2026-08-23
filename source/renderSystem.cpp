@@ -757,6 +757,17 @@ void RenderSystem::UploadLightsForPass(
     frameResources.UpdateLightBuffer(swapChainImageIndex, lights);
 }
 
+void RenderSystem::RecordEyeDescriptorBind()
+{
+    ++eyePerformanceFrameStats.eyeDescriptorBindCount;
+}
+
+void RenderSystem::RecordEyeDraw(size_t lutSampleCount)
+{
+    ++eyePerformanceFrameStats.eyeDrawCount;
+    eyePerformanceFrameStats.eyeLutSampleCount += lutSampleCount;
+}
+
 bool RenderSystem::IsCsmEnabled() const
 {
     return csmSettings.castShadows;
@@ -1445,8 +1456,31 @@ void RenderSystem::InitializeCurrentRenderSceneResources()
     initializedRenderWorldGeneration = currentRenderScene.worldGeneration;
 }
 
+void RenderSystem::RefreshEyeDescriptorsIfNeeded()
+{
+    if (!eyeComputeReloadParticipant.NeedsDescriptorRefresh())
+    {
+        return;
+    }
+
+    // Eye LUT replacement swaps the World-local texture identity. Refresh the
+    // external pass descriptors before recording the next frame; the actual
+    // Vulkan allocations were prepared before the Compute owner swap.
+    VL::RendererDescriptorContext descriptorContext =
+        BuildRendererDescriptorContext();
+    RenderGraph::GetInstance().RefreshRuntimeDescriptors(
+        *rendererBackend,
+        descriptorContext);
+    eyeComputeReloadParticipant.MarkDescriptorRefreshHandled();
+}
 void RenderSystem::RecordAndSubmitCurrentRenderScene()
 {
+    eyePerformanceFrameStats = {};
+    eyePerformanceFrameWithinBudget = ValidateEyePerformanceFrame(
+        eyePerformanceBudget,
+        eyePerformanceFrameStats,
+        &eyePerformanceViolation);
+    RefreshEyeDescriptorsIfNeeded();
     const RenderGraph& renderGraph = RenderGraph::GetInstance();
 
     if (uiRenderSnapshotQueue != nullptr)
@@ -1489,6 +1523,15 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
         {
             const auto& renderPassName = renderPassOrdered[passIndex];
             std::string renderPassScopeName = "RenderPass:" + renderPassName;
+            if (renderPassName == "deferredLighting")
+            {
+                renderPassScopeName = "Eye/Deferred";
+            }
+            else if (renderPassName == "sssHorizontal" ||
+                     renderPassName == "sssVertical")
+            {
+                renderPassScopeName = "Eye/SSSFilter";
+            }
             PROFILE_SCOPE(renderPassScopeName.c_str());
             const auto& renderPass = renderGraph.GetRenderpasses().at(renderPassName);
 
@@ -1509,6 +1552,11 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
             };
             passRuntime.RecordPass(renderPassName, passContext);
         }
+
+        eyePerformanceFrameWithinBudget = ValidateEyePerformanceFrame(
+            eyePerformanceBudget,
+            eyePerformanceFrameStats,
+            &eyePerformanceViolation);
 
         if (uiOverlayRenderer.IsInitialized() && currentUiRenderSnapshot != nullptr)
         {
@@ -1608,6 +1656,9 @@ void RenderSystem::InitializeFrameResources()
         *pipelineFactory,
         *rendererBackend,
         frameResources.GetGlobalUniformBufferInfos());
+    eyeComputeReloadParticipant.Initialize(
+        *pipelineFactory,
+        *rendererBackend);
     if (shaderReloadCoordinator != nullptr)
     {
         shaderReloadCoordinator->RegisterComputeParticipant(
@@ -1616,6 +1667,8 @@ void RenderSystem::InitializeFrameResources()
             &skyShReloadParticipant);
         shaderReloadCoordinator->RegisterComputeParticipant(
             &prefilterReloadParticipant);
+        shaderReloadCoordinator->RegisterComputeParticipant(
+            &eyeComputeReloadParticipant);
     }
     environmentGpuTimer.Initialize(*rendererBackend);
 }
@@ -1636,8 +1689,11 @@ void RenderSystem::ShutdownFrameResources()
             &skyShReloadParticipant);
         shaderReloadCoordinator->UnregisterComputeParticipant(
             &prefilterReloadParticipant);
+        shaderReloadCoordinator->UnregisterComputeParticipant(
+            &eyeComputeReloadParticipant);
     }
     environmentIblBaker.Shutdown(*rendererBackend);
+    eyeComputeReloadParticipant.Shutdown();
     proceduralSkyCubeGenerator.Shutdown(*rendererBackend);
     environmentUpdateScheduler.Reset();
     environmentUpdateSourceCube.reset();

@@ -25,6 +25,15 @@ void PassRuntime::RecordPass(const std::string& passName, PassRuntimeContext& co
     case RenderGraphPassType::Geometry:
         RecordGeometryPass(context);
         return;
+    case RenderGraphPassType::ForwardOpaque:
+        RecordForwardOpaquePass(context);
+        return;
+    case RenderGraphPassType::ForwardEyeInner:
+        RecordForwardEyeInnerPass(context);
+        return;
+    case RenderGraphPassType::ForwardEyeCornea:
+        RecordForwardEyeCorneaPass(context);
+        return;
     case RenderGraphPassType::ForwardTransparent:
         RecordForwardTransparentPass(context);
         return;
@@ -139,6 +148,68 @@ void PassRuntime::RecordGeometryPass(PassRuntimeContext& context) const
     };
     drawExecutor.DrawGeometryScene(drawContext);
 
+    commandBuffer.endRenderPass();
+}
+
+void PassRuntime::RecordForwardOpaquePass(
+    PassRuntimeContext& context) const
+{
+    const Renderpass& renderPass = context.renderPass;
+    vk::CommandBuffer& commandBuffer = context.commandBuffer;
+
+    // Eye 先写入 sceneColor/depth，再由 sky 和透明 pass 继续消费；
+    // 该 pass 不参与 GBuffer，避免普通 deferred packing 被模型专用字段挤占。
+    context.services.UpdateGlobalUBOForPass(commandBuffer);
+    BeginConfiguredRenderPass(context);
+
+    RendererDrawContext drawContext{
+        commandBuffer,
+        renderPass,
+        context.swapChainImageIndex,
+        context.renderScene,
+        context.resolvedRenderScene,
+        context.services
+    };
+    drawExecutor.DrawForwardOpaqueScene(drawContext);
+
+    commandBuffer.endRenderPass();
+}
+
+void PassRuntime::RecordForwardEyeInnerPass(
+    PassRuntimeContext& context) const
+{
+    const Renderpass& renderPass = context.renderPass;
+    vk::CommandBuffer& commandBuffer = context.commandBuffer;
+    context.services.UpdateGlobalUBOForPass(commandBuffer);
+    BeginConfiguredRenderPass(context);
+    RendererDrawContext drawContext{
+        commandBuffer,
+        renderPass,
+        context.swapChainImageIndex,
+        context.renderScene,
+        context.resolvedRenderScene,
+        context.services
+    };
+    drawExecutor.DrawForwardEyeInnerScene(drawContext);
+    commandBuffer.endRenderPass();
+}
+
+void PassRuntime::RecordForwardEyeCorneaPass(
+    PassRuntimeContext& context) const
+{
+    const Renderpass& renderPass = context.renderPass;
+    vk::CommandBuffer& commandBuffer = context.commandBuffer;
+    context.services.UpdateGlobalUBOForPass(commandBuffer);
+    BeginConfiguredRenderPass(context);
+    RendererDrawContext drawContext{
+        commandBuffer,
+        renderPass,
+        context.swapChainImageIndex,
+        context.renderScene,
+        context.resolvedRenderScene,
+        context.services
+    };
+    drawExecutor.DrawForwardEyeCorneaScene(drawContext);
     commandBuffer.endRenderPass();
 }
 

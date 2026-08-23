@@ -293,6 +293,17 @@ ResolvedSubsurfaceMaterialAssets ResolveSubsurfaceMaterialContract(
             effectiveMaterialInstanceJson,
             materialInstancePath);
     }
+    else if (shadingModel == "Eye")
+    {
+        // Eye 的巩膜 profile 由 eyeMaterialContract 解析；这里仅允许该共享资产字段
+        // 通过 SSS resource set 校验，避免把 Eye 的专用输入误当成普通 GBuffer SSS。
+        if (materialInstanceJson.contains("skinLut"))
+        {
+            throw std::runtime_error(
+                "Eye material cannot bind a preintegrated skin LUT: " +
+                std::string(materialInstancePath));
+        }
+    }
     else if (materialInstanceJson.contains("subsurfaceProfile") ||
              materialInstanceJson.contains("skinLut"))
     {

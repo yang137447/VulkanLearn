@@ -14,6 +14,10 @@ enum class RenderMode
 {
     Opaque,
     OpaqueClip,
+    // Eye 使用独立 Forward Opaque pass，避免占用普通 GBuffer。
+    ForwardOpaque,
+    ForwardEyeInner,
+    ForwardEyeCornea,
     TransparentAlphaBlend,
     TransparentAdditive,
     // 薄透射走 forwardTransparent，并根据设备能力选择双源或标量降级混合。
@@ -24,6 +28,23 @@ enum class RenderMode
 // 该宏同时参与 shader identity，确保原生双源路径和标量降级路径拥有独立缓存产物。
 inline constexpr std::string_view kThinTranslucentDualSourceMacro =
     "VL_THIN_TRANSLUCENT_DUAL_SOURCE";
+
+inline bool IsForwardOpaqueRenderMode(RenderMode renderMode)
+{
+    return renderMode == RenderMode::ForwardOpaque;
+}
+
+inline bool IsForwardEyeLayerRenderMode(RenderMode renderMode)
+{
+    return renderMode == RenderMode::ForwardEyeInner ||
+        renderMode == RenderMode::ForwardEyeCornea;
+}
+
+inline bool IsGeometryRenderMode(RenderMode renderMode)
+{
+    return renderMode == RenderMode::Opaque ||
+        renderMode == RenderMode::OpaqueClip;
+}
 
 inline bool IsTransparentRenderMode(RenderMode renderMode)
 {
@@ -40,6 +61,12 @@ inline std::string RenderModeToString(RenderMode renderMode)
         return "Opaque";
     case RenderMode::OpaqueClip:
         return "OpaqueClip";
+    case RenderMode::ForwardOpaque:
+        return "ForwardOpaque";
+    case RenderMode::ForwardEyeInner:
+        return "ForwardEyeInner";
+    case RenderMode::ForwardEyeCornea:
+        return "ForwardEyeCornea";
     case RenderMode::TransparentAlphaBlend:
         return "TransparentAlphaBlend";
     case RenderMode::TransparentAdditive:

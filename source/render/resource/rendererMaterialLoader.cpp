@@ -19,6 +19,8 @@
 #include "render/backend/rendererBackendVulkan.h"
 #include "render/resource/rendererResourceCache.h"
 #include "render/resource/rendererResourceLoadContext.h"
+#include "render/eye/eyeMaterialContract.h"
+#include "render/eye/eyeResourceSet.h"
 #include "render/hair/hairMaterialContract.h"
 #include "render/subsurface/subsurfaceMaterialContract.h"
 #include "render/subsurface/subsurfaceResourceSet.h"
@@ -288,9 +290,15 @@ RendererMaterialLoader::LoadSceneMaterialInstance(
     // pass name。透明材质也不能复用 Geometry 的 8 MRT 管线，否则 fragment
     // output 和 Set 3 阴影描述符都不兼容。
     const RenderGraphPassType surfacePassType =
-        IsTransparentRenderMode(renderMode)
-        ? RenderGraphPassType::ForwardTransparent
-        : RenderGraphPassType::Geometry;
+        renderMode == RenderMode::ForwardOpaque
+        ? RenderGraphPassType::ForwardOpaque
+        : renderMode == RenderMode::ForwardEyeInner
+            ? RenderGraphPassType::ForwardEyeInner
+            : renderMode == RenderMode::ForwardEyeCornea
+                ? RenderGraphPassType::ForwardEyeCornea
+                : IsTransparentRenderMode(renderMode)
+                    ? RenderGraphPassType::ForwardTransparent
+                    : RenderGraphPassType::Geometry;
     Renderpass& renderPass =
         loadContext.renderGraph.RequireUniquePass(
             surfacePassType);
@@ -345,6 +353,13 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
             effectiveMaterialInstanceJson,
             *subsurfaceResources,
             materialInstancePath);
+    const ResolvedEyeMaterialAssets resolvedEyeAssets =
+        ResolveEyeMaterialContract(
+            materialInstanceJson,
+            effectiveMaterialInstanceJson,
+            resourceCache.GetEyeResources().get(),
+            *subsurfaceResources,
+            materialInstancePath);
     ValidateHairMaterialContract(
         effectiveMaterialInstanceJson,
         resourceCache.GetHairResources().get(),
@@ -365,6 +380,27 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
     {
         throw std::runtime_error(
             "ThinTranslucent material must use the forwardTransparent pass: " +
+            std::string(materialInstancePath));
+    }
+    if (loadPlan.shaderVariantKey.renderMode == RenderMode::ForwardOpaque &&
+        renderPass.type != RenderGraphPassType::ForwardOpaque)
+    {
+        throw std::runtime_error(
+            "ForwardOpaque material must use the forwardOpaque pass: " +
+            std::string(materialInstancePath));
+    }
+    if (loadPlan.shaderVariantKey.renderMode == RenderMode::ForwardEyeInner &&
+        renderPass.type != RenderGraphPassType::ForwardEyeInner)
+    {
+        throw std::runtime_error(
+            "ForwardEyeInner material must use the forwardEyeInner pass: " +
+            std::string(materialInstancePath));
+    }
+    if (loadPlan.shaderVariantKey.renderMode == RenderMode::ForwardEyeCornea &&
+        renderPass.type != RenderGraphPassType::ForwardEyeCornea)
+    {
+        throw std::runtime_error(
+            "ForwardEyeCornea material must use the forwardEyeCornea pass: " +
             std::string(materialInstancePath));
     }
     if (loadPlan.baseShaderCompileRequest &&
@@ -592,6 +628,9 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
     // 然后才进行最终 descriptor/schema 校验。
     ReapplyResolvedSubsurfaceMaterialIds(
         resolvedSubsurfaceAssets,
+        *materialInstance);
+    ReapplyResolvedEyeMaterialIds(
+        resolvedEyeAssets,
         *materialInstance);
     BindEngineSubsurfaceTextures(
         *materialInstance,

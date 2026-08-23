@@ -19,6 +19,8 @@
 #include "shader/reload/shaderReloadRuntime.h"
 #include "world/loading/worldGraphTransactionCoordinator.h"
 #include "world/worldManager.h"
+#include "render/eye/eyePerformanceBudget.h"
+#include "render/eye/eyeLodContract.h"
 
 namespace VL
 {
@@ -120,6 +122,49 @@ struct RuntimeHairMaterialSnapshot
     std::unordered_map<std::string, std::string> parameterValues;
 };
 
+struct RuntimeEyeMaterialSnapshot
+{
+    std::string name;
+    std::string materialKey;
+    std::string shadingModelMacro;
+    std::string renderMode;
+    bool hasRenderPipeline = false;
+    bool hasShadowPipeline = false;
+    bool hasShadowRoute = false;
+    bool hasEyeParameters = false;
+    bool forwardDescriptorLayoutCompatible = false;
+    bool deferredDescriptorLayoutCompatible = false;
+    bool dualShellLayerContract = false;
+    std::unordered_map<std::string, std::string> parameterValues;
+};
+
+struct RuntimeEyeValidationSnapshot
+{
+    bool captured = false;
+    uint64_t worldGeneration = 0;
+    bool hasEyeResources = false;
+    std::string sourceDigest;
+    std::string artifactGenerationKey;
+    uint32_t lutWidth = 0;
+    uint32_t lutHeight = 0;
+    uint32_t lutLayers = 0;
+    std::uintptr_t eyeLutTextureIdentity = 0;
+    std::uintptr_t boundEyeWorldTextureIdentity = 0;
+    bool forwardEyeLutBinding = false;
+    bool deferredEyeLutBinding = false;
+    bool forwardEyeInnerPassPresent = false;
+    bool forwardEyeCorneaPassPresent = false;
+    bool deferredGBufferContract = false;
+    size_t deferredGBufferAttachmentCount = 0;
+    bool sssSourcePresent = false;
+    bool lodContractValid = false;
+    size_t eyeLutMemoryBytes = 0;
+    EyePerformanceFrameStats performanceStats;
+    bool performanceWithinBudget = true;
+    std::vector<std::string> meshObjectNames;
+    std::vector<RuntimeEyeMaterialSnapshot> materials;
+};
+
 struct RuntimeHairValidationSnapshot
 {
     bool captured = false;
@@ -151,6 +196,8 @@ public:
         CaptureWorldPackageIdentities() const;
     RuntimeHairValidationSnapshot
         CaptureHairValidationSnapshot() const;
+    RuntimeEyeValidationSnapshot
+        CaptureEyeValidationSnapshot() const;
     RuntimeRendererResourceFingerprint
         CaptureRendererResourceFingerprint() const;
     std::string CaptureWorldGraphRuntimeFingerprint(

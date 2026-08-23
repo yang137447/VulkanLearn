@@ -32,7 +32,10 @@ enum class RuntimeTestOption
     WorldGraphTransactionTest,
     ShaderUiReloadTest,
     ShaderShutdownInflightTest,
-    HairValidationTest
+    HairValidationTest,
+    EyePerformanceTest,
+    EyeComputeReloadTest,
+    EyeValidationTest
 };
 
 bool IsOptionToken(const std::string& value)
@@ -100,6 +103,12 @@ std::string GetRuntimeTestOptionName(RuntimeTestOption option)
         return "--shader-shutdown-inflight-test";
     case RuntimeTestOption::HairValidationTest:
         return "--hair-validation-test";
+    case RuntimeTestOption::EyeValidationTest:
+        return "--eye-validation-test";
+    case RuntimeTestOption::EyePerformanceTest:
+        return "--eye-performance-test";
+    case RuntimeTestOption::EyeComputeReloadTest:
+        return "--eye-compute-reload-test";
     case RuntimeTestOption::None:
         break;
     }
@@ -197,7 +206,22 @@ RuntimeTestOption FindRuntimeTest(const LaunchOptions& options, RuntimeTestOptio
     {
         return RuntimeTestOption::HairValidationTest;
     }
+    if (excludedOption != RuntimeTestOption::EyeValidationTest &&
+        options.runEyeValidationTest)
+    {
+        return RuntimeTestOption::EyeValidationTest;
+    }
 
+    if (excludedOption != RuntimeTestOption::EyePerformanceTest &&
+        options.runEyePerformanceTest)
+    {
+        return RuntimeTestOption::EyePerformanceTest;
+    }
+    if (excludedOption != RuntimeTestOption::EyeComputeReloadTest &&
+        options.runEyeComputeReloadTest)
+    {
+        return RuntimeTestOption::EyeComputeReloadTest;
+    }
     return RuntimeTestOption::None;
 }
 
@@ -648,6 +672,46 @@ LaunchOptions ParseLaunchOptions(int argc, char** argv)
             continue;
         }
 
+        if (argument == "--eye-validation-test")
+        {
+            if (RejectRuntimeTestConflict(
+                options,
+                "--eye-validation-test",
+                RuntimeTestOption::EyeValidationTest))
+            {
+                return options;
+            }
+
+            options.runEyeValidationTest = true;
+            continue;
+        }
+        if (argument == "--eye-performance-test")
+        {
+            if (RejectRuntimeTestConflict(
+                options,
+                "--eye-performance-test",
+                RuntimeTestOption::EyePerformanceTest))
+            {
+                return options;
+            }
+
+            options.runEyePerformanceTest = true;
+            continue;
+        }
+        if (argument == "--eye-compute-reload-test")
+        {
+            if (RejectRuntimeTestConflict(
+                options,
+                "--eye-compute-reload-test",
+                RuntimeTestOption::EyeComputeReloadTest))
+            {
+                return options;
+            }
+
+            options.runEyeComputeReloadTest = true;
+            continue;
+        }
+
         options.errorMessage = "Unknown launch option: " + argument;
         return options;
     }
@@ -655,7 +719,9 @@ LaunchOptions ParseLaunchOptions(int argc, char** argv)
     if (options.exitAfterTests &&
         !HasRuntimeTest(options, RuntimeTestOption::None))
     {
-        options.errorMessage = "--exit-after-tests requires --reloadstress, --reloadfail, --reloadfail-material, --reloadfail-mesh, --reloadfail-texture, --lightstress, --resizestress, --graphreloadstress, --framesmoke, --environmentstress, --shader-reload-test, --shader-auto-reload-test, --shader-compute-reload-test, --shader-definition-reload-test, --world-graph-transaction-test, --shader-ui-reload-test, --shader-shutdown-inflight-test, or --hair-validation-test.";
+        options.errorMessage = "--exit-after-tests requires --reloadstress, --reloadfail, --reloadfail-material, --reloadfail-mesh, --reloadfail-texture, --lightstress, --resizestress, --graphreloadstress, --framesmoke, --environmentstress, --shader-reload-test, --shader-auto-reload-test, --shader-compute-reload-test, --shader-definition-reload-test, --world-graph-transaction-test, --shader-ui-reload-test, --shader-shutdown-inflight-test, --hair-validation-test, or --eye-validation-test.";
+        options.errorMessage += " --eye-performance-test is also supported.";
+        options.errorMessage += " --eye-compute-reload-test is also supported.";
     }
     return options;
 }
@@ -681,7 +747,10 @@ void PrintLaunchUsage()
         << "       main.exe [--shader-ui-reload-test --exit-after-tests]\n"
         << "       main.exe [--shader-shutdown-inflight-test --exit-after-tests]\n"
         << "       main.exe [--hair-validation-test --exit-after-tests]\n"
+        << "       main.exe [--eye-validation-test --exit-after-tests]\n"
         << "       main.exe [--shader-force-rebuild]\n"
+        << "       main.exe [--eye-performance-test --exit-after-tests]\n"
+        << "       main.exe [--eye-compute-reload-test --exit-after-tests]\n"
         << "       main.exe [--initial-scene <scene-path>]\n"
         << "       main.exe [--worker-thread-count <1|2>]\n"
         << "  --reloadstress <scene-path> [count]  Queue world reload stress through CommandBus.\n"
@@ -702,7 +771,10 @@ void PrintLaunchUsage()
         << "  --shader-ui-reload-test             Run the UI Overlay pipeline pair reload matrix.\n"
         << "  --shader-shutdown-inflight-test     Stop after a complete worker candidate and verify shutdown discards it.\n"
         << "  --hair-validation-test              Run the Hair Card/material/debug-view runtime validation.\n"
+        << "  --eye-validation-test               Run the Eye LUT/material/rollback/debug-view validation.\n"
         << "  --shader-force-rebuild              Recompile and republish every startup shader artifact.\n"
+        << "  --eye-performance-test            Run fixed-frame Eye performance budget sampling (no LUT readback).\n"
+        << "  --eye-compute-reload-test         Run the Eye Compute/LUT/package hot-reload transaction matrix.\n"
         << "  --initial-scene <scene-path>        Override config initScene for this process.\n"
         << "  --worker-thread-count <1|2>         Override config worker mode for this process.\n"
         << "  --dev-ui                            Enable Dear ImGui developer tools for this launch.\n"
@@ -903,6 +975,33 @@ void QueueLaunchCommands(EngineLoop& engineLoop, const LaunchOptions& options)
         engineLoop.QueueRuntimeCommand(std::move(command));
         engineLoop.SetExitAfterRuntimeTests(options.exitAfterTests);
     }
-}
 
+    if (options.runEyeValidationTest)
+    {
+        RuntimeCommand command;
+        command.type = RuntimeCommandType::RunEyeValidationTest;
+        command.sourceText = "argv: --eye-validation-test";
+        engineLoop.QueueRuntimeCommand(std::move(command));
+        engineLoop.SetExitAfterRuntimeTests(options.exitAfterTests);
+    }
+
+    if (options.runEyePerformanceTest)
+    {
+        RuntimeCommand command;
+        command.type = RuntimeCommandType::RunEyePerformanceTest;
+        command.sourceText = "argv: --eye-performance-test";
+        engineLoop.QueueRuntimeCommand(std::move(command));
+        engineLoop.SetExitAfterRuntimeTests(options.exitAfterTests);
+    }
+
+
+    if (options.runEyeComputeReloadTest)
+    {
+        RuntimeCommand command;
+        command.type = RuntimeCommandType::RunEyeComputeReloadTest;
+        command.sourceText = "argv: --eye-compute-reload-test";
+        engineLoop.QueueRuntimeCommand(std::move(command));
+        engineLoop.SetExitAfterRuntimeTests(options.exitAfterTests);
+    }
+}
 } // namespace VL

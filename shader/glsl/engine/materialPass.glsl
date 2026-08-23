@@ -6,7 +6,11 @@
 // - Transparent*：直接 forward shading 并输出 sceneColor，由 forwardTransparent pass 做 blend。
 // - ThinTranslucent：同样走 forward，但输出 UE Legacy 所需的 Add / Mul 双源结果。
 // 这里是预处理器分流，不是运行时动态分支。
-#if defined(RENDER_MODE_THIN_TRANSLUCENT)
+#if defined(RENDER_MODE_FORWARD_OPAQUE) || defined(RENDER_MODE_FORWARD_EYE_INNER) || defined(RENDER_MODE_FORWARD_EYE_CORNEA)
+    #define VL_MATERIAL_OUTPUT_FORWARD 1
+    #define VL_MATERIAL_OUTPUT_GBUFFER 0
+    #define VL_MATERIAL_OUTPUT_THIN_TRANSLUCENT 0
+#elif defined(RENDER_MODE_THIN_TRANSLUCENT)
     #define VL_MATERIAL_OUTPUT_FORWARD 1
     #define VL_MATERIAL_OUTPUT_GBUFFER 0
     #define VL_MATERIAL_OUTPUT_THIN_TRANSLUCENT 1

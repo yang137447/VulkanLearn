@@ -257,6 +257,24 @@ void RuntimeCommandExecutor::ExecuteCommand(
             runtimeTestHooks,
             diagnostics);
         break;
+    case RuntimeCommandType::RunEyeValidationTest:
+        ApplyEyeValidationTest(
+            runtimeConfig,
+            runtimeTestHooks,
+            diagnostics);
+        break;
+    case RuntimeCommandType::RunEyePerformanceTest:
+        ApplyEyePerformanceTest(
+            runtimeConfig,
+            runtimeTestHooks,
+            diagnostics);
+        break;
+    case RuntimeCommandType::RunEyeComputeReloadTest:
+        ApplyEyeComputeReloadTest(
+            runtimeConfig,
+            runtimeTestHooks,
+            diagnostics);
+        break;
     case RuntimeCommandType::SetDebugViewMode:
         renderSystem.SetDebugViewMode(command.intValue);
         diagnostics.ReportInfo("Debug view mode set to " + std::to_string(command.intValue));
@@ -669,6 +687,36 @@ void RuntimeCommandExecutor::ApplyHairValidationTest(
     const DiagnosticsSubsystem& diagnostics) const
 {
     (void)runtimeTestHooks.BeginHairValidationTest(
+        runtimeConfig.GetResourcePath(),
+        diagnostics);
+}
+
+void RuntimeCommandExecutor::ApplyEyeValidationTest(
+    const RuntimeConfig& runtimeConfig,
+    RuntimeTestHooks& runtimeTestHooks,
+    const DiagnosticsSubsystem& diagnostics) const
+{
+    (void)runtimeTestHooks.BeginEyeValidationTest(
+        runtimeConfig.GetResourcePath(),
+        diagnostics);
+}
+
+void RuntimeCommandExecutor::ApplyEyePerformanceTest(
+    const RuntimeConfig& runtimeConfig,
+    RuntimeTestHooks& runtimeTestHooks,
+    const DiagnosticsSubsystem& diagnostics) const
+{
+    (void)runtimeTestHooks.BeginEyePerformanceTest(
+        runtimeConfig.GetResourcePath(),
+        diagnostics);
+}
+
+void RuntimeCommandExecutor::ApplyEyeComputeReloadTest(
+    const RuntimeConfig& runtimeConfig,
+    RuntimeTestHooks& runtimeTestHooks,
+    const DiagnosticsSubsystem& diagnostics) const
+{
+    (void)runtimeTestHooks.BeginEyeComputeReloadTest(
         runtimeConfig.GetResourcePath(),
         diagnostics);
 }

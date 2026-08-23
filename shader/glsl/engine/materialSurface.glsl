@@ -15,6 +15,7 @@
 struct MaterialSurface
 {
     vec3 worldPosition;
+    vec2 texCoord;
     // worldNormal 表示清漆顶层法线；底层法线用于底漆的漫反射和高光。
     vec3 worldNormal;
     vec3 clearCoatBottomNormal;
@@ -45,6 +46,7 @@ MaterialSurface CreateDefaultMaterialSurface()
 {
     MaterialSurface surface;
     surface.worldPosition = vec3(0.0);
+    surface.texCoord = vec2(0.0);
     surface.worldNormal = vec3(0.0, 0.0, 1.0);
     surface.clearCoatBottomNormal = vec3(0.0, 0.0, 1.0);
     surface.baseColor = vec3(1.0);
@@ -75,6 +77,7 @@ MaterialSurface ResolveMaterialSurface(
 {
     MaterialSurface surface = CreateDefaultMaterialSurface();
     surface.worldPosition = context.worldPosition;
+    surface.texCoord = context.texCoord;
     surface.worldNormal = normalize(inputs.normal);
     surface.clearCoatBottomNormal =
         normalize(inputs.modelInputs.clearCoat.bottomNormal);
@@ -128,6 +131,17 @@ MaterialSurface ResolveMaterialSurface(
             inputs.modelInputs.subsurfaceProfile.weight,
             inputs.modelInputs.subsurfaceProfile.thickness,
             inputs.modelInputs.subsurfaceProfile.transmissionWeight);
+        surface.selectiveOutputMask |= GBUFFER_HAS_CUSTOM_DATA_MASK;
+    }
+    else if (surface.shadingModel == SHADING_MODEL_EYE)
+    {
+        // Eye 的 GBuffer V1 由独立 codec 编码；这里仅声明模型专用字段存在，
+        // 不把 iris/sclera 语义借用给普通 customData。
+        surface.customData = vec4(
+            inputs.modelInputs.eye.irisMask,
+            inputs.modelInputs.eye.validIrisHit,
+            inputs.modelInputs.eye.causticProfileId,
+            inputs.modelInputs.eye.scleraProfileId);
         surface.selectiveOutputMask |= GBUFFER_HAS_CUSTOM_DATA_MASK;
     }
     else if (surface.shadingModel == SHADING_MODEL_HAIR)

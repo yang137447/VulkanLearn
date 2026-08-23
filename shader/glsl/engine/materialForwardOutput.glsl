@@ -21,7 +21,25 @@ vec4 BuildMaterialForwardOutput(in MaterialSurface surface)
         // 透明 Hair 探针把 coverage 交给混合 alpha；OpaqueClip 仍由 alpha clip 决定可见性。
         resolvedOpacity *= surface.modelInputs.hair.coverage;
     }
-    vec4 color = vec4(lighting.finalColor, resolvedOpacity);
+    vec3 resolvedLightingColor = lighting.finalColor;
+#if defined(RENDER_MODE_FORWARD_EYE_INNER)
+#if MATERIAL_IS_EYE
+    // Inner shell 只写 tissue/iris ledger；cornea shell 随后以 additive composition 加入。
+    resolvedLightingColor =
+        lighting.eyeIrisDirect +
+        lighting.eyeScleraDirect +
+        lighting.eyeInnerIbl * surface.ambientOcclusion +
+        surface.emissiveColor;
+#endif
+#elif defined(RENDER_MODE_FORWARD_EYE_CORNEA)
+#if MATERIAL_IS_EYE
+    // Cornea shell 不覆盖 inner shell，只输出顶层 reflection/highlight。
+    resolvedLightingColor =
+        lighting.eyeCorneaSpecular +
+        lighting.indirectSpecular * surface.ambientOcclusion;
+#endif
+#endif
+    vec4 color = vec4(resolvedLightingColor, resolvedOpacity);
     MaterialDebugLightingData debugLighting = CreateMaterialDebugLightingData(
         lighting.shadow,
         lighting.shadowCascadeIndex,
@@ -50,6 +68,28 @@ vec4 BuildMaterialForwardOutput(in MaterialSurface surface)
             lighting.hairCoverage,
             lighting.hairDensity,
             lighting.hairShadowTransmittance);
+    }
+    if (surface.shadingModel == SHADING_MODEL_EYE)
+    {
+        SetMaterialDebugEyeData(
+            debugLighting,
+            lighting.eyeCorneaSpecular,
+            lighting.eyeIrisDirect,
+            lighting.eyeScleraDirect,
+            lighting.eyeInnerIbl,
+            lighting.eyeRefractedViewDirection,
+            lighting.eyeShadowCornea,
+            lighting.eyeShadowInner,
+            lighting.eyeCorneaFresnel,
+            lighting.eyeTransmissionIn,
+            lighting.eyeTransmissionOut,
+            lighting.eyeIrisHitDistance,
+            lighting.eyeIrisUv,
+            lighting.eyeValidIrisHit,
+            lighting.eyeIrisMask,
+            lighting.eyePupilMask,
+            lighting.eyeLimbusMask,
+            lighting.eyeCausticGain);
     }
     return ResolveMaterialDebugView(surface, debugLighting, color);
 }

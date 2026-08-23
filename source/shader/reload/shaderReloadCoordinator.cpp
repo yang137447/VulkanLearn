@@ -1032,6 +1032,9 @@ ShaderReloadCoordinator::CommitGraphicsCandidates(
         for (PendingComputeCommit& pending :
              pendingComputeCommits)
         {
+            const uint64_t descriptorRetirementEpoch = std::max(
+                lastUsedEpoch,
+                pending.descriptors.minimumRetirementEpoch);
             const std::shared_ptr<ComputePipeline> oldPipeline =
                 pending.candidate->plan.participant
                     ->GetActivePipeline();
@@ -1051,7 +1054,7 @@ ShaderReloadCoordinator::CommitGraphicsCandidates(
                     "ShaderReload:ComputeDescriptors:" +
                         pending.candidate->plan.shaderName,
                     currentWorldGeneration,
-                    lastUsedEpoch,
+                    descriptorRetirementEpoch,
                     pending.descriptors.retirement.TakeResource()});
             }
         }

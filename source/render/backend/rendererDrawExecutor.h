@@ -31,6 +31,12 @@ public:
     virtual void UploadLightsForPass(
         uint32_t swapChainImageIndex,
         const std::vector<LightSnapshot>& lights) = 0;
+
+    virtual void RecordEyeDescriptorBind() {}
+    virtual void RecordEyeDraw(size_t lutSampleCount)
+    {
+        (void)lutSampleCount;
+    }
 };
 
 struct RendererDrawContext
@@ -50,12 +56,23 @@ public:
     bool PipelineUsesDescriptorSet(const PipelineBase& pipeline, uint32_t setIndex) const;
     void DrawShadowScene(const PipelineBase& commonOpaquePipeline, RendererDrawContext& context) const;
     void DrawGeometryScene(RendererDrawContext& context) const;
+    void DrawForwardOpaqueScene(RendererDrawContext& context) const;
+    void DrawForwardEyeInnerScene(RendererDrawContext& context) const;
+    void DrawForwardEyeCorneaScene(RendererDrawContext& context) const;
     void DrawForwardTransparentScene(RendererDrawContext& context) const;
 
 private:
+    enum class SurfaceDrawDomain
+    {
+        Geometry,
+        ForwardOpaque,
+        ForwardEyeInner,
+        ForwardEyeCornea
+    };
+
     void DrawSurfaceScene(
         const char* passName,
-        bool drawTransparent,
+        SurfaceDrawDomain domain,
         RendererDrawContext& context) const;
     // 透明绘制必须跨材质全局后向前排序，不能复用按 Material 分组的普通 Surface 遍历。
     void DrawSortedTransparentScene(RendererDrawContext& context) const;

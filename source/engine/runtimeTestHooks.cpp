@@ -33,6 +33,8 @@ using namespace RuntimeTestFixtures;
 RuntimeTestHooks::~RuntimeTestHooks()
 {
     CleanupHairValidationTestFixture();
+    CleanupEyeComputeReloadTestFixture();
+    CleanupEyeValidationTestFixture();
     if (!shaderReloadTestSourcePath.empty() &&
         !shaderReloadTestOriginalSource.empty())
     {
@@ -264,6 +266,135 @@ void RuntimeTestHooks::Update(
     RuntimeValidationServices& validationServices,
     const DiagnosticsSubsystem& diagnostics)
 {
+    if (eyeComputeReloadTestActive)
+    {
+        if (!waitingForEyeComputeReloadWorld &&
+            eyeComputeReloadTestPhase ==
+                EyeComputeReloadTestPhase::WaitWorldLoad)
+        {
+            RuntimeCommand command;
+            command.type = RuntimeCommandType::LoadWorld;
+            command.stringValue = eyeComputeReloadScenePath;
+            command.sourceText = "runtime-test: eye-compute-reload";
+            commandBus.Queue(std::move(command));
+            waitingForEyeComputeReloadWorld = true;
+            diagnostics.ReportInfo(
+                "Eye Compute reload test queued its probe World.");
+        }
+        return;
+    }
+
+    if (eyePerformanceTestActive)
+    {
+        if (!waitingForEyePerformanceWorld &&
+            eyePerformanceTestPhase ==
+                EyePerformanceTestPhase::WaitWorldLoad)
+        {
+            RuntimeCommand command;
+            command.type = RuntimeCommandType::LoadWorld;
+            command.stringValue = eyePerformanceScenePath;
+            command.sourceText = "runtime-test: eye-performance";
+            commandBus.Queue(std::move(command));
+            waitingForEyePerformanceWorld = true;
+            diagnostics.ReportInfo(
+                "Eye performance test queued its Forward probe World.");
+        }
+        else if (!waitingForEyePerformanceWorld &&
+                 eyePerformanceTestPhase ==
+                     EyePerformanceTestPhase::QueueDeferred)
+        {
+            RuntimeCommand command;
+            command.type = RuntimeCommandType::LoadWorld;
+            command.stringValue = eyePerformanceDeferredScenePath;
+            command.sourceText = "runtime-test: eye-performance-deferred";
+            commandBus.Queue(std::move(command));
+            waitingForEyePerformanceWorld = true;
+            eyePerformanceTestPhase = EyePerformanceTestPhase::WaitDeferred;
+            return;
+        }
+        else if (!waitingForEyePerformanceWorld &&
+                 eyePerformanceTestPhase ==
+                     EyePerformanceTestPhase::QueueDualShell)
+        {
+            RuntimeCommand command;
+            command.type = RuntimeCommandType::LoadWorld;
+            command.stringValue = eyePerformanceDualShellScenePath;
+            command.sourceText = "runtime-test: eye-performance-dual-shell";
+            commandBus.Queue(std::move(command));
+            waitingForEyePerformanceWorld = true;
+            eyePerformanceTestPhase = EyePerformanceTestPhase::WaitDualShell;
+            return;
+        }
+        return;
+    }
+
+    if (eyeValidationTestActive)
+    {
+        if (!waitingForEyeValidationWorld &&
+            eyeValidationTestPhase == EyeValidationTestPhase::WaitWorldLoad)
+        {
+            RuntimeCommand command;
+            command.type = RuntimeCommandType::LoadWorld;
+            command.stringValue = eyeValidationScenePath;
+            command.sourceText = "runtime-test: eye-validation";
+            commandBus.Queue(std::move(command));
+            waitingForEyeValidationWorld = true;
+            diagnostics.ReportInfo(
+                "Eye validation queued its probe World.");
+        }
+        else if (!waitingForEyeValidationWorld &&
+                 eyeValidationTestPhase == EyeValidationTestPhase::QueueDeferred)
+        {
+            RuntimeCommand command;
+            command.type = RuntimeCommandType::LoadWorld;
+            command.stringValue = eyeValidationDeferredScenePath;
+            command.sourceText = "runtime-test: eye-validation-deferred";
+            commandBus.Queue(std::move(command));
+            waitingForEyeValidationWorld = true;
+            eyeValidationTestPhase = EyeValidationTestPhase::WaitDeferred;
+            return;
+        }
+        else if (!waitingForEyeValidationWorld &&
+                 eyeValidationTestPhase == EyeValidationTestPhase::QueueDualShell)
+        {
+            RuntimeCommand command;
+            command.type = RuntimeCommandType::LoadWorld;
+            command.stringValue = eyeValidationDualShellScenePath;
+            command.sourceText = "runtime-test: eye-validation-dual-shell";
+            commandBus.Queue(std::move(command));
+            waitingForEyeValidationWorld = true;
+            eyeValidationTestPhase = EyeValidationTestPhase::WaitDualShell;
+            return;
+        }
+        else if (!waitingForEyeValidationWorld &&
+                 eyeValidationTestPhase ==
+                     EyeValidationTestPhase::QueueSameWorldReload)
+        {
+            RuntimeCommand command;
+            command.type = RuntimeCommandType::LoadWorld;
+            command.stringValue = eyeValidationScenePath;
+            command.sourceText = "runtime-test: eye-validation-reload";
+            commandBus.Queue(std::move(command));
+            waitingForEyeValidationWorld = true;
+            eyeValidationTestPhase =
+                EyeValidationTestPhase::WaitSameWorldReload;
+            return;
+        }
+        else if (!waitingForEyeValidationWorld &&
+                 eyeValidationTestPhase == EyeValidationTestPhase::QueueFailure)
+        {
+            RuntimeCommand command;
+            command.type = RuntimeCommandType::LoadWorld;
+            command.stringValue = eyeValidationFailureScenePath;
+            command.sourceText = "runtime-test: eye-validation-failure";
+            commandBus.Queue(std::move(command));
+            waitingForEyeValidationWorld = true;
+            eyeValidationTestPhase = EyeValidationTestPhase::WaitFailure;
+            return;
+        }
+        return;
+    }
+
     if (hairValidationTestActive)
     {
         if (hairValidationTestPhase ==
@@ -503,10 +634,29 @@ void RuntimeTestHooks::Update(
         failureRollbackScenePath);
 }
 
+
 void RuntimeTestHooks::UpdateEngineLoopTests(
     RuntimeValidationServices& validationServices,
     const DiagnosticsSubsystem& diagnostics)
 {
+    if (eyeComputeReloadTestActive)
+    {
+        UpdateEyeComputeReloadTest(validationServices, diagnostics);
+        return;
+    }
+
+    if (eyePerformanceTestActive)
+    {
+        UpdateEyePerformanceTest(validationServices, diagnostics);
+        return;
+    }
+
+    if (eyeValidationTestActive)
+    {
+        UpdateEyeValidationTest(validationServices, diagnostics);
+        return;
+    }
+
     if (hairValidationTestActive)
     {
         UpdateHairValidationTest(validationServices, diagnostics);
@@ -597,6 +747,146 @@ void RuntimeTestHooks::NotifyCommandResult(
     const RuntimeCommandExecutionResult& commandResult,
     const DiagnosticsSubsystem& diagnostics)
 {
+    if (eyeComputeReloadTestActive && waitingForEyeComputeReloadWorld)
+    {
+        if (!commandResult.loadWorldAttempted)
+        {
+            return;
+        }
+        waitingForEyeComputeReloadWorld = false;
+        if (!commandResult.loadWorldSucceeded ||
+            !commandResult.worldRuntimeBindingSucceeded)
+        {
+            FailEyeComputeReloadTest(
+                "Eye Compute reload probe World failed to load or bind.",
+                diagnostics);
+            return;
+        }
+        eyeComputeReloadTestPhase = EyeComputeReloadTestPhase::ValidateWorld;
+        return;
+    }
+
+    if (eyePerformanceTestActive && waitingForEyePerformanceWorld)
+    {
+        if (!commandResult.loadWorldAttempted)
+        {
+            return;
+        }
+        waitingForEyePerformanceWorld = false;
+        if (!commandResult.loadWorldSucceeded ||
+            !commandResult.worldRuntimeBindingSucceeded)
+        {
+            const char* phaseName =
+                eyePerformanceTestPhase ==
+                        EyePerformanceTestPhase::WaitWorldLoad
+                    ? "Forward"
+                    : eyePerformanceTestPhase ==
+                            EyePerformanceTestPhase::WaitDeferred
+                        ? "Deferred"
+                        : "Dual-shell";
+            FailEyePerformanceTest(
+                std::string("Eye ") + phaseName +
+                    " probe World failed to load or bind.",
+                diagnostics);
+            return;
+        }
+        if (eyePerformanceTestPhase == EyePerformanceTestPhase::WaitWorldLoad)
+        {
+            eyePerformanceTestPhase = EyePerformanceTestPhase::ValidateForward;
+        }
+        else if (eyePerformanceTestPhase ==
+                 EyePerformanceTestPhase::WaitDeferred)
+        {
+            eyePerformanceTestPhase = EyePerformanceTestPhase::ValidateDeferred;
+        }
+        else if (eyePerformanceTestPhase ==
+                 EyePerformanceTestPhase::WaitDualShell)
+        {
+            eyePerformanceTestPhase = EyePerformanceTestPhase::ValidateDualShell;
+        }
+        return;
+    }
+
+    if (eyeValidationTestActive && waitingForEyeValidationWorld)
+    {
+        if (!commandResult.loadWorldAttempted)
+        {
+            return;
+        }
+        waitingForEyeValidationWorld = false;
+        if (eyeValidationTestPhase == EyeValidationTestPhase::WaitWorldLoad)
+        {
+            if (!commandResult.loadWorldSucceeded ||
+                !commandResult.worldRuntimeBindingSucceeded)
+            {
+                FailEyeValidationTest(
+                    "Eye validation probe World failed to load or bind.",
+                    diagnostics);
+                return;
+            }
+            eyeValidationTestPhase = EyeValidationTestPhase::ValidateWorld;
+            return;
+        }
+        if (eyeValidationTestPhase == EyeValidationTestPhase::WaitDeferred)
+        {
+            if (!commandResult.loadWorldSucceeded ||
+                !commandResult.worldRuntimeBindingSucceeded)
+            {
+                FailEyeValidationTest(
+                    "Deferred Eye probe World failed to load or bind.",
+                    diagnostics);
+                return;
+            }
+            eyeValidationTestPhase = EyeValidationTestPhase::ValidateDeferred;
+            return;
+        }
+        if (eyeValidationTestPhase == EyeValidationTestPhase::WaitDualShell)
+        {
+            if (!commandResult.loadWorldSucceeded ||
+                !commandResult.worldRuntimeBindingSucceeded)
+            {
+                FailEyeValidationTest(
+                    "Dual-shell Eye probe World failed to load or bind.",
+                    diagnostics);
+                return;
+            }
+            eyeValidationTestPhase = EyeValidationTestPhase::ValidateDualShell;
+            return;
+        }
+        if (eyeValidationTestPhase ==
+            EyeValidationTestPhase::WaitSameWorldReload)
+        {
+            if (!commandResult.loadWorldSucceeded ||
+                !commandResult.worldRuntimeBindingSucceeded)
+            {
+                FailEyeValidationTest(
+                    "same-digest Eye World reload failed.",
+                    diagnostics);
+                return;
+            }
+            eyeValidationTestPhase = EyeValidationTestPhase::ValidateReload;
+            return;
+        }
+        if (eyeValidationTestPhase == EyeValidationTestPhase::WaitFailure)
+        {
+            if (commandResult.loadWorldSucceeded ||
+                commandResult.activeWorldAfterCommand.generation !=
+                    eyeValidationBaselineWorld.generation ||
+                commandResult.activeWorldAfterCommand.scenePath !=
+                    eyeValidationBaselineWorld.scenePath)
+            {
+                FailEyeValidationTest(
+                    "failed Eye candidate changed the active World.",
+                    diagnostics);
+                return;
+            }
+            eyeValidationTestPhase = EyeValidationTestPhase::QueueDebugView;
+            diagnostics.ReportInfo(
+                "Eye failed candidate preserved the active World; checking debug modes.");
+            return;
+        }
+    }
+
     if (hairValidationTestActive && waitingForHairValidationWorld)
     {
         if (!commandResult.loadWorldAttempted)

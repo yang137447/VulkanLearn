@@ -921,6 +921,9 @@ void RenderGraph::RefreshRuntimeDescriptors(
 {
     for (auto& [passName, renderpass] : renderpasses)
     {
+        // World-local 纹理替换会同时改变缓存的 image view/sampler 与写入计划。
+        // 必须先重建 pass-input 快照，避免刷新时把待退休的 Eye LUT 写回活动 descriptor。
+        renderpass.SetupDescriptors(*this, rendererBackend, descriptorContext);
         if (auto passMaterialInstance = renderpass.materialInstance.lock())
         {
             passMaterialInstance->RenderInitialize(rendererBackend);

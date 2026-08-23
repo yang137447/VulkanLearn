@@ -33,6 +33,23 @@ struct MaterialDebugLightingData
     float hairCoverage;
     float hairDensity;
     float hairShadowTransmittance;
+    vec3 eyeCorneaSpecular;
+    vec3 eyeIrisDirect;
+    vec3 eyeScleraDirect;
+    vec3 eyeInnerIbl;
+    vec3 eyeRefractedViewDirection;
+    float eyeShadowCornea;
+    float eyeShadowInner;
+    float eyeCorneaFresnel;
+    float eyeTransmissionIn;
+    float eyeTransmissionOut;
+    float eyeIrisHitDistance;
+    vec2 eyeIrisUv;
+    float eyeValidIrisHit;
+    float eyeIrisMask;
+    float eyePupilMask;
+    float eyeLimbusMask;
+    float eyeCausticGain;
 };
 
 MaterialDebugLightingData CreateMaterialDebugLightingData(
@@ -70,6 +87,23 @@ MaterialDebugLightingData CreateMaterialDebugLightingData(
     data.hairCoverage = 1.0;
     data.hairDensity = 1.0;
     data.hairShadowTransmittance = 1.0;
+    data.eyeCorneaSpecular = vec3(0.0);
+    data.eyeIrisDirect = vec3(0.0);
+    data.eyeScleraDirect = vec3(0.0);
+    data.eyeInnerIbl = vec3(0.0);
+    data.eyeRefractedViewDirection = vec3(0.0, 0.0, -1.0);
+    data.eyeShadowCornea = 1.0;
+    data.eyeShadowInner = 1.0;
+    data.eyeCorneaFresnel = 0.0;
+    data.eyeTransmissionIn = 1.0;
+    data.eyeTransmissionOut = 1.0;
+    data.eyeIrisHitDistance = 0.0;
+    data.eyeIrisUv = vec2(0.0);
+    data.eyeValidIrisHit = 0.0;
+    data.eyeIrisMask = 0.0;
+    data.eyePupilMask = 0.0;
+    data.eyeLimbusMask = 0.0;
+    data.eyeCausticGain = 1.0;
     return data;
 }
 
@@ -113,6 +147,45 @@ void SetMaterialDebugHairData(
     data.hairDensity = density;
     data.hairShadowTransmittance = shadowTransmittance;
 }
+void SetMaterialDebugEyeData(
+    inout MaterialDebugLightingData data,
+    vec3 corneaSpecular,
+    vec3 irisDirect,
+    vec3 scleraDirect,
+    vec3 innerIbl,
+    vec3 refractedViewDirection,
+    float shadowCornea,
+    float shadowInner,
+    float corneaFresnel,
+    float transmissionIn,
+    float transmissionOut,
+    float irisHitDistance,
+    vec2 irisUv,
+    float validIrisHit,
+    float irisMask,
+    float pupilMask,
+    float limbusMask,
+    float causticGain)
+{
+    data.eyeCorneaSpecular = corneaSpecular;
+    data.eyeIrisDirect = irisDirect;
+    data.eyeScleraDirect = scleraDirect;
+    data.eyeInnerIbl = innerIbl;
+    data.eyeRefractedViewDirection = refractedViewDirection;
+    data.eyeShadowCornea = shadowCornea;
+    data.eyeShadowInner = shadowInner;
+    data.eyeCorneaFresnel = corneaFresnel;
+    data.eyeTransmissionIn = transmissionIn;
+    data.eyeTransmissionOut = transmissionOut;
+    data.eyeIrisHitDistance = irisHitDistance;
+    data.eyeIrisUv = irisUv;
+    data.eyeValidIrisHit = validIrisHit;
+    data.eyeIrisMask = irisMask;
+    data.eyePupilMask = pupilMask;
+    data.eyeLimbusMask = limbusMask;
+    data.eyeCausticGain = causticGain;
+}
+
 float MaterialDebugViewModeMask(int mode)
 {
     return 1.0 - min(abs(float(uboVP.debugViewMode - mode)), 1.0);
@@ -165,6 +238,28 @@ vec4 ResolveMaterialDebugView(
     float hairTRTPathColorMask = MaterialDebugViewModeMask(39);
     float hairIblFallbackMask = MaterialDebugViewModeMask(40);
     float hairMsFallbackMask = MaterialDebugViewModeMask(41);
+    float eyeFrameMask = MaterialDebugViewModeMask(42);
+    float eyeCorneaNormalMask = MaterialDebugViewModeMask(43);
+    float eyeIrisNormalMask = MaterialDebugViewModeMask(44);
+    float eyeIrisPlaneNormalMask = MaterialDebugViewModeMask(45);
+    float eyeFresnelMask = MaterialDebugViewModeMask(46);
+    float eyeCorneaSpecularMask = MaterialDebugViewModeMask(47);
+    float eyeRefractedViewMask = MaterialDebugViewModeMask(48);
+    float eyeHitDistanceMask = MaterialDebugViewModeMask(49);
+    float eyeUvMask = MaterialDebugViewModeMask(50);
+    float eyeValidHitMask = MaterialDebugViewModeMask(51);
+    float eyeIrisMask = MaterialDebugViewModeMask(52);
+    float eyePupilMask = MaterialDebugViewModeMask(53);
+    float eyeLimbusMask = MaterialDebugViewModeMask(54);
+    float eyeTransmissionInMask = MaterialDebugViewModeMask(55);
+    float eyeTransmissionOutMask = MaterialDebugViewModeMask(56);
+    float eyeIrisDirectMask = MaterialDebugViewModeMask(57);
+    float eyeScleraDirectMask = MaterialDebugViewModeMask(58);
+    float eyeInnerIblMask = MaterialDebugViewModeMask(59);
+    float eyeCausticMask = MaterialDebugViewModeMask(60);
+    float eyeInnerShadowMask = MaterialDebugViewModeMask(61);
+    float eyeCorneaShadowMask = MaterialDebugViewModeMask(62);
+    float eyeProfileMask = MaterialDebugViewModeMask(63);
 
     float subsurfaceAssetId = 0.0;
     if (surface.shadingModel == SHADING_MODEL_PREINTEGRATED_SKIN)
@@ -216,7 +311,29 @@ vec4 ResolveMaterialDebugView(
         hairTTPathColorMask +
         hairTRTPathColorMask +
         hairIblFallbackMask +
-        hairMsFallbackMask,
+        hairMsFallbackMask +
+        eyeFrameMask +
+        eyeCorneaNormalMask +
+        eyeIrisNormalMask +
+        eyeIrisPlaneNormalMask +
+        eyeFresnelMask +
+        eyeCorneaSpecularMask +
+        eyeRefractedViewMask +
+        eyeHitDistanceMask +
+        eyeUvMask +
+        eyeValidHitMask +
+        eyeIrisMask +
+        eyePupilMask +
+        eyeLimbusMask +
+        eyeTransmissionInMask +
+        eyeTransmissionOutMask +
+        eyeIrisDirectMask +
+        eyeScleraDirectMask +
+        eyeInnerIblMask +
+        eyeCausticMask +
+        eyeInnerShadowMask +
+        eyeCorneaShadowMask +
+        eyeProfileMask,
         1.0);
 
     vec4 debugColor =
@@ -264,7 +381,29 @@ vec4 ResolveMaterialDebugView(
         + hairTTPathColorMask * vec4(lighting.hairTTPath, 1.0)
         + hairTRTPathColorMask * vec4(lighting.hairTRTPath, 1.0)
         + hairIblFallbackMask * vec4(vec3(lighting.hairIblFallback), 1.0)
-        + hairMsFallbackMask * vec4(vec3(lighting.hairMultipleScatteringFallback), 1.0);
+        + hairMsFallbackMask * vec4(vec3(lighting.hairMultipleScatteringFallback), 1.0)
+        + eyeFrameMask * vec4(surface.modelInputs.eye.corneaNormal * 0.5 + 0.5, 1.0)
+        + eyeCorneaNormalMask * vec4(surface.modelInputs.eye.corneaNormal * 0.5 + 0.5, 1.0)
+        + eyeIrisNormalMask * vec4(surface.modelInputs.eye.irisNormal * 0.5 + 0.5, 1.0)
+        + eyeIrisPlaneNormalMask * vec4(surface.modelInputs.eye.irisPlaneNormal * 0.5 + 0.5, 1.0)
+        + eyeFresnelMask * vec4(vec3(lighting.eyeCorneaFresnel), 1.0)
+        + eyeCorneaSpecularMask * vec4(lighting.eyeCorneaSpecular, 1.0)
+        + eyeRefractedViewMask * vec4(lighting.eyeRefractedViewDirection * 0.5 + 0.5, 1.0)
+        + eyeHitDistanceMask * vec4(vec3(1.0 - exp(-lighting.eyeIrisHitDistance * 1000.0)), 1.0)
+        + eyeUvMask * vec4(lighting.eyeIrisUv, 0.0, 1.0)
+        + eyeValidHitMask * vec4(vec3(lighting.eyeValidIrisHit), 1.0)
+        + eyeIrisMask * vec4(vec3(lighting.eyeIrisMask), 1.0)
+        + eyePupilMask * vec4(vec3(lighting.eyePupilMask), 1.0)
+        + eyeLimbusMask * vec4(vec3(lighting.eyeLimbusMask), 1.0)
+        + eyeTransmissionInMask * vec4(vec3(lighting.eyeTransmissionIn), 1.0)
+        + eyeTransmissionOutMask * vec4(vec3(lighting.eyeTransmissionOut), 1.0)
+        + eyeIrisDirectMask * vec4(lighting.eyeIrisDirect, 1.0)
+        + eyeScleraDirectMask * vec4(lighting.eyeScleraDirect, 1.0)
+        + eyeInnerIblMask * vec4(lighting.eyeInnerIbl, 1.0)
+        + eyeCausticMask * vec4(vec3(lighting.eyeCausticGain), 1.0)
+        + eyeInnerShadowMask * vec4(vec3(lighting.eyeShadowInner), 1.0)
+        + eyeCorneaShadowMask * vec4(vec3(lighting.eyeShadowCornea), 1.0)
+        + eyeProfileMask * vec4(vec3(surface.modelInputs.eye.causticProfileId / 15.0), 1.0);
 
     return mix(defaultColor, debugColor, debugMask);
 #else

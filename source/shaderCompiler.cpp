@@ -90,6 +90,12 @@ std::vector<std::string> BuildRenderModeMacros(RenderMode renderMode)
         return {"RENDER_MODE_OPAQUE"};
     case RenderMode::OpaqueClip:
         return {"RENDER_MODE_OPAQUE_CLIP"};
+    case RenderMode::ForwardOpaque:
+        return {"RENDER_MODE_FORWARD_OPAQUE"};
+    case RenderMode::ForwardEyeInner:
+        return {"RENDER_MODE_FORWARD_EYE_INNER"};
+    case RenderMode::ForwardEyeCornea:
+        return {"RENDER_MODE_FORWARD_EYE_CORNEA"};
     case RenderMode::TransparentAlphaBlend:
         return {"RENDER_MODE_TRANSPARENT_ALPHA_BLEND"};
     case RenderMode::TransparentAdditive:
@@ -108,6 +114,12 @@ std::vector<std::string> BuildGraphicsVariantMacros(
         BuildRenderModeMacros(shaderVariantKey.renderMode);
     macros.push_back(
         "MATERIAL_SHADING_MODEL=" + shaderVariantKey.shadingModelMacro);
+    // GLSL 的 shading model 常量是 const uint，不能用于预处理器 #if；
+    // 额外注入数值宏供材质专用资源声明选择，避免 Eye binding 污染其他 Forward pass。
+    macros.push_back(
+        shaderVariantKey.shadingModelMacro == "SHADING_MODEL_EYE"
+            ? "MATERIAL_IS_EYE=1"
+            : "MATERIAL_IS_EYE=0");
     macros.insert(
         macros.end(),
         shaderVariantKey.macros.begin(),

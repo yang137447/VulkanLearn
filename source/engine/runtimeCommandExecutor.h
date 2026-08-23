@@ -144,6 +144,18 @@ private:
         const RuntimeConfig& runtimeConfig,
         RuntimeTestHooks& runtimeTestHooks,
         const DiagnosticsSubsystem& diagnostics) const;
+    void ApplyEyeValidationTest(
+        const RuntimeConfig& runtimeConfig,
+        RuntimeTestHooks& runtimeTestHooks,
+        const DiagnosticsSubsystem& diagnostics) const;
+    void ApplyEyePerformanceTest(
+        const RuntimeConfig& runtimeConfig,
+        RuntimeTestHooks& runtimeTestHooks,
+        const DiagnosticsSubsystem& diagnostics) const;
+    void ApplyEyeComputeReloadTest(
+        const RuntimeConfig& runtimeConfig,
+        RuntimeTestHooks& runtimeTestHooks,
+        const DiagnosticsSubsystem& diagnostics) const;
     void ApplyProceduralSkyParameters(
         const RuntimeCommand& command,
         WorldManager& worldManager,

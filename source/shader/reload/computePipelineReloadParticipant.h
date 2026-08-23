@@ -27,7 +27,16 @@ struct ComputeDescriptorReplacement
 {
     vk::DescriptorPool descriptorPool;
     std::vector<vk::DescriptorSet> descriptorSets;
+    // 某些 Compute owner 不只持有 descriptor package，还需要把候选的
+    // GPU product（例如 Eye LUT）与 pipeline 一起原子发布。这里使用
+    // type-erased shared ownership，具体 owner 在 CommitReplacement 中
+    // 恢复自己的 payload 类型；worker 阶段仍不会触碰 Vulkan 对象。
+    std::shared_ptr<void> replacementPayload;
     // Destroys the prepared pool when the batch rolls back before commit.
+    // 默认使用 coordinator 捕获的最近提交 epoch；需要先刷新外部
+    // descriptor 的 owner 可显式推迟到指定 epoch，避免旧 image 在下一帧
+    // descriptor 更新前被提前释放。
+    uint64_t minimumRetirementEpoch = 0;
     std::function<void()> release;
     // Starts disarmed so every prepare/rollback failure leaves the still-live
     // old pool untouched. The coordinator activates it immediately before the

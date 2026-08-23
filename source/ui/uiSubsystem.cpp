@@ -1408,6 +1408,28 @@ std::string UiSubsystem::GetDebugViewName(int mode) const
     case 39: return Localize("debug.hair_trt_path_color");
     case 40: return Localize("debug.hair_ibl_fallback");
     case 41: return Localize("debug.hair_ms_fallback");
+    case 42: return Localize("debug.eye_frame");
+    case 43: return Localize("debug.eye_cornea_normal");
+    case 44: return Localize("debug.eye_iris_normal");
+    case 45: return Localize("debug.eye_iris_plane_normal");
+    case 46: return Localize("debug.eye_cornea_fresnel");
+    case 47: return Localize("debug.eye_cornea_specular");
+    case 48: return Localize("debug.eye_refracted_view_direction");
+    case 49: return Localize("debug.eye_iris_hit_distance");
+    case 50: return Localize("debug.eye_iris_uv");
+    case 51: return Localize("debug.eye_valid_iris_hit");
+    case 52: return Localize("debug.eye_iris_mask");
+    case 53: return Localize("debug.eye_pupil_mask");
+    case 54: return Localize("debug.eye_limbus_mask");
+    case 55: return Localize("debug.eye_light_transmission_in");
+    case 56: return Localize("debug.eye_view_transmission_out");
+    case 57: return Localize("debug.eye_iris_direct");
+    case 58: return Localize("debug.eye_sclera_direct");
+    case 59: return Localize("debug.eye_inner_ibl");
+    case 60: return Localize("debug.eye_caustic_gain");
+    case 61: return Localize("debug.eye_inner_shadow");
+    case 62: return Localize("debug.eye_cornea_shadow");
+    case 63: return Localize("debug.eye_profile");
     default: return Localize("debug.unknown");
     }
 }

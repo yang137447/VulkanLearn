@@ -95,6 +95,15 @@ public:
     bool BeginHairValidationTest(
         const std::string& resourcePath,
         const DiagnosticsSubsystem& diagnostics);
+    bool BeginEyeValidationTest(
+        const std::string& resourcePath,
+        const DiagnosticsSubsystem& diagnostics);
+    bool BeginEyePerformanceTest(
+        const std::string& resourcePath,
+        const DiagnosticsSubsystem& diagnostics);
+    bool BeginEyeComputeReloadTest(
+        const std::string& resourcePath,
+        const DiagnosticsSubsystem& diagnostics);
     bool FinalizeShaderShutdownInflightTestAfterWorkerShutdown(
         RuntimeValidationServices& validationServices,
         const ShaderCompileWorkerShutdownDiagnostics& workerDiagnostics,
@@ -191,6 +200,9 @@ private:
     void UpdateHairValidationTest(
         RuntimeValidationServices& validationServices,
         const DiagnosticsSubsystem& diagnostics);
+    void UpdateEyeValidationTest(
+        RuntimeValidationServices& validationServices,
+        const DiagnosticsSubsystem& diagnostics);
     std::string CaptureShaderShutdownInflightFingerprint(
         RuntimeValidationServices& validationServices) const;
     bool SurfaceArtifactDependsOnSourceWithDigest(
@@ -203,6 +215,10 @@ private:
     void FailShaderReloadTest(
         const std::string& message,
         const DiagnosticsSubsystem& diagnostics);
+    void FailEyeValidationTest(
+        const std::string& message,
+        const DiagnosticsSubsystem& diagnostics);
+    void CleanupEyeValidationTestFixture() noexcept;
     void FailShaderAutoReloadTest(
         RuntimeValidationServices* validationServices,
         const std::string& message,
@@ -228,6 +244,22 @@ private:
         const std::string& message,
         const DiagnosticsSubsystem& diagnostics);
     void CleanupHairValidationTestFixture() noexcept;
+    void UpdateEyePerformanceTest(
+        RuntimeValidationServices& validationServices,
+        const DiagnosticsSubsystem& diagnostics);
+    void FailEyePerformanceTest(
+        const std::string& message,
+        const DiagnosticsSubsystem& diagnostics);
+    void CleanupEyePerformanceTestFixture() noexcept;
+    void UpdateEyeComputeReloadTest(
+        RuntimeValidationServices& validationServices,
+        const DiagnosticsSubsystem& diagnostics);
+    void FailEyeComputeReloadTest(
+        const std::string& message,
+        const DiagnosticsSubsystem& diagnostics);
+    void CleanupEyeComputeReloadTestFixture() noexcept;
+
+
     void ReportFrameSmokeInterval(const DiagnosticsSubsystem& diagnostics);
     void FailEnvironmentUpdateStress(
         const std::string& message,
@@ -637,7 +669,98 @@ private:
     HairValidationTestPhase hairValidationTestPhase =
         HairValidationTestPhase::Idle;
 
+    enum class EyeValidationTestPhase
+    {
+        Idle,
+        WaitWorldLoad,
+        ValidateWorld,
+        QueueDeferred,
+        WaitDeferred,
+        ValidateDeferred,
+        QueueDualShell,
+        WaitDualShell,
+        ValidateDualShell,
+        QueueSameWorldReload,
+        WaitSameWorldReload,
+        ValidateReload,
+        QueueFailure,
+        WaitFailure,
+        QueueDebugView,
+        WaitDebugView
+    };
+
+    std::string eyeValidationFixtureDirectory;
+    std::string eyeValidationScenePath;
+    std::string eyeValidationDeferredScenePath;
+    std::string eyeValidationDualShellScenePath;
+    std::string eyeValidationFailureScenePath;
+    std::string eyeValidationSourceDigest;
+    std::string eyeValidationArtifactGenerationKey;
+    std::uintptr_t eyeValidationLutTextureIdentity = 0;
+    WorldHandle eyeValidationBaselineWorld;
+    bool eyeValidationTestActive = false;
+    bool waitingForEyeValidationWorld = false;
+    int eyeValidationNextDebugView = 42;
+    EyeValidationTestPhase eyeValidationTestPhase =
+        EyeValidationTestPhase::Idle;
+
+    enum class EyePerformanceTestPhase
+    {
+        Idle,
+        WaitWorldLoad,
+        ValidateForward,
+        QueueDeferred,
+        WaitDeferred,
+        ValidateDeferred,
+        QueueDualShell,
+        WaitDualShell,
+        ValidateDualShell
+    };
+
+    std::string eyePerformanceScenePath;
+    std::string eyePerformanceDeferredScenePath;
+    std::string eyePerformanceDualShellScenePath;
+    bool eyePerformanceTestActive = false;
+    bool waitingForEyePerformanceWorld = false;
+    int eyePerformanceWarmupFramesRemaining = 0;
+    int eyePerformanceFramesRemaining = 0;
+    EyePerformanceTestPhase eyePerformanceTestPhase =
+        EyePerformanceTestPhase::Idle;
+
     RuntimeTestStatus runtimeTestStatus = RuntimeTestStatus::Idle;
+    enum class EyeComputeReloadTestPhase
+    {
+        Idle,
+        WaitWorldLoad,
+        ValidateWorld,
+        ApplyCompatible,
+        CheckCompatible,
+        ApplyAbiRejection,
+        CheckAbiRejection,
+        ApplyRestore,
+        CheckRestore,
+        WaitRetireDrain
+    };
+
+    std::string eyeComputeReloadScenePath;
+    std::string eyeComputeReloadSourcePath;
+    std::string eyeComputeReloadOriginalSource;
+    std::string eyeComputeReloadCompatibleSource;
+    std::string eyeComputeReloadAbiIncompatibleSource;
+    std::string eyeComputeReloadBaselineSourceDigest;
+    std::string eyeComputeReloadBaselineArtifactGenerationKey;
+    std::string eyeComputeReloadCompatibleSourceDigest;
+    std::string eyeComputeReloadCompatibleArtifactGenerationKey;
+    std::uintptr_t eyeComputeReloadBaselineLutIdentity = 0;
+    std::uintptr_t eyeComputeReloadCompatibleLutIdentity = 0;
+    size_t eyeComputeReloadBaselinePendingRetiredResources = 0;
+    size_t eyeComputeReloadMaxPendingRetiredResources = 0;
+    int eyeComputeReloadRetireDrainFramesRemaining = 0;
+    bool eyeComputeReloadTestActive = false;
+    bool waitingForEyeComputeReloadWorld = false;
+    EyeComputeReloadTestPhase eyeComputeReloadTestPhase =
+        EyeComputeReloadTestPhase::Idle;
+
 };
 
 } // namespace VL

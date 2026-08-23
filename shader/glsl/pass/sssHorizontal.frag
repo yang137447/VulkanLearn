@@ -6,7 +6,7 @@
 layout(location = 0) in vec2 inUV;
 layout(location = 0) out vec4 outColor;
 
-layout(set = 3, binding = 0) uniform sampler2D diffuseLighting;
+layout(set = 3, binding = 0) uniform sampler2D sssSource;
 layout(set = 3, binding = 1) uniform sampler2D gbufferB;
 layout(set = 3, binding = 2) uniform sampler2D gbufferD;
 layout(set = 3, binding = 3) uniform sampler2D sceneDepth;
@@ -17,7 +17,7 @@ void main()
     outColor = FilterSubsurfaceProfile(
         inUV,
         vec2(1.0, 0.0),
-        diffuseLighting,
+        sssSource,
         gbufferB,
         gbufferD,
         sceneDepth,

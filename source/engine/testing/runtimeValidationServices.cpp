@@ -23,6 +23,7 @@
 #include "render/backend/rendererObjectResourceRegistry.h"
 #include "render/resource/rendererResourceCache.h"
 #include "render/hair/hairResourceSet.h"
+#include "render/eye/eyeResourceSet.h"
 #include "render/resource/resourceRetireQueue.h"
 #include "renderGraph.h"
 #include "renderSystem.h"
@@ -415,6 +416,23 @@ bool HasHairLutBinding(
     return false;
 }
 
+bool HasEyeLutBinding(
+    const Renderpass& renderpass,
+    uint32_t expectedBinding)
+{
+    for (const CompiledRenderGraphPassInputDescriptor& descriptor :
+         renderpass.inputDescriptorPlan)
+    {
+        if (descriptor.resource == "eyeCausticLut" &&
+            descriptor.source == "worldTexture" &&
+            descriptor.binding == expectedBinding)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool HasCompatiblePassDescriptorLayout(
     const PipelineBase& pipeline,
     const Renderpass& renderpass)
@@ -753,6 +771,263 @@ RuntimeValidationServices::CaptureHairValidationSnapshot() const
     {
         (void)materialInstanceKey;
         appendMaterialSnapshot(instance);
+    }
+
+    snapshot.captured = true;
+    return snapshot;
+}
+
+RuntimeEyeValidationSnapshot
+RuntimeValidationServices::CaptureEyeValidationSnapshot() const
+{
+    RuntimeEyeValidationSnapshot snapshot;
+    const WorldHandle& worldHandle =
+        engineLoop->GetSubsystems()
+            .GetWorldManager()
+            .GetActiveWorldHandle();
+    snapshot.worldGeneration = worldHandle.generation;
+
+    const RendererResourceCache::ImmutableWorldLocalResourceRefs resources =
+        RendererResourceCache::GetInstance()
+            .CaptureActiveWorldLocalResources();
+    if (!resources)
+    {
+        return snapshot;
+    }
+
+    const std::shared_ptr<World> activeWorld =
+        engineLoop->GetSubsystems().GetWorldManager().GetActiveWorld();
+    if (!activeWorld)
+    {
+        return snapshot;
+    }
+
+    snapshot.meshObjectNames.reserve(activeWorld->GetMeshObjects().size());
+    for (const auto& [objectName, object] : activeWorld->GetMeshObjects())
+    {
+        (void)object;
+        snapshot.meshObjectNames.push_back(objectName);
+    }
+    std::sort(
+        snapshot.meshObjectNames.begin(),
+        snapshot.meshObjectNames.end());
+
+    snapshot.hasEyeResources = resources->eyeResources != nullptr;
+    if (resources->eyeResources)
+    {
+        snapshot.sourceDigest = resources->eyeResources->sourceDigest;
+        snapshot.artifactGenerationKey =
+            resources->eyeResources->computeArtifactGenerationKey;
+        snapshot.lutWidth = resources->eyeResources->lutMetadata.width;
+        snapshot.lutHeight = resources->eyeResources->lutMetadata.height;
+        snapshot.lutLayers = resources->eyeResources->lutMetadata.layers;
+        snapshot.eyeLutTextureIdentity = reinterpret_cast<std::uintptr_t>(
+            resources->eyeResources->causticLutTexture.get());
+    }
+
+    const std::shared_ptr<Texture>* boundEyeTexture =
+        RendererResourceCache::GetInstance().GetWorldTexture(
+            "eyeCausticLut");
+    snapshot.boundEyeWorldTextureIdentity =
+        boundEyeTexture != nullptr && *boundEyeTexture != nullptr
+        ? reinterpret_cast<std::uintptr_t>(boundEyeTexture->get())
+        : 0;
+
+    const RenderGraph& renderGraph = RenderGraph::GetInstance();
+    const auto findPass = [&renderGraph](const char* name)
+        -> const Renderpass*
+    {
+        const auto it = renderGraph.GetRenderpasses().find(name);
+        return it == renderGraph.GetRenderpasses().end()
+            ? nullptr
+            : &it->second;
+    };
+    const Renderpass* forwardPass = findPass("forwardOpaque");
+    const Renderpass* innerPass = findPass("forwardEyeInner");
+    const Renderpass* corneaPass = findPass("forwardEyeCornea");
+    const Renderpass* deferredPass = findPass("deferredLighting");
+    snapshot.forwardEyeLutBinding =
+        forwardPass != nullptr && HasEyeLutBinding(*forwardPass, 2);
+    snapshot.forwardEyeInnerPassPresent =
+        innerPass != nullptr && HasEyeLutBinding(*innerPass, 2);
+    snapshot.forwardEyeCorneaPassPresent =
+        corneaPass != nullptr && HasEyeLutBinding(*corneaPass, 2);
+    snapshot.deferredEyeLutBinding =
+        deferredPass != nullptr && HasEyeLutBinding(*deferredPass, 11);
+    snapshot.sssSourcePresent = false;
+    if (deferredPass != nullptr)
+    {
+        for (const std::string& output : deferredPass->outputResources)
+        {
+            if (output == "sssSource")
+            {
+                snapshot.sssSourcePresent = true;
+                break;
+            }
+        }
+    }
+
+    const auto& compiledGraph = renderGraph.GetCompiledRenderGraph();
+    for (const VL::CompiledRenderGraphPass& pass : compiledGraph.passes)
+    {
+        if (pass.name != "geometry")
+        {
+            continue;
+        }
+        snapshot.deferredGBufferAttachmentCount =
+            pass.outputResources.size();
+        const std::array<const char*, 9> requiredOutputs = {
+            "gbufferA", "gbufferB", "gbufferC", "gbufferD", "gbufferE",
+            "gbufferVelocity", "gbufferF", "sceneColorBase", "sceneDepth"};
+        snapshot.deferredGBufferContract =
+            pass.outputResources.size() == requiredOutputs.size();
+        for (const char* required : requiredOutputs)
+        {
+            bool found = false;
+            for (const VL::CompiledRenderGraphPassOutput& output :
+                 pass.outputResources)
+            {
+                if (output.resource == required)
+                {
+                    found = true;
+                    break;
+                }
+            }
+            snapshot.deferredGBufferContract =
+                snapshot.deferredGBufferContract && found;
+        }
+        break;
+    }
+
+    snapshot.eyeLutMemoryBytes = CalculateEyeLutMemoryBytes(
+        RenderSystem::GetInstance().GetEyePerformanceBudget());
+    snapshot.performanceStats =
+        RenderSystem::GetInstance().GetEyePerformanceFrameStats();
+    snapshot.performanceWithinBudget =
+        RenderSystem::GetInstance().IsEyePerformanceFrameWithinBudget();
+    snapshot.lodContractValid = true;
+    for (const EyeProfileAsset& profile : resources->eyeResources->profiles)
+    {
+        try
+        {
+            ValidateEyeLodContract(profile.lodContract, profile.assetPath);
+            snapshot.lodContractValid = snapshot.lodContractValid &&
+                profile.lodContract.profileVersion == profile.profileVersion &&
+                profile.lodContract.lutVersion == profile.causticLutVersion;
+        }
+        catch (...)
+        {
+            snapshot.lodContractValid = false;
+        }
+    }
+
+    const std::array<const char*, 14> requiredEyeParameters = {
+        "u_eyeSurface",
+        "u_eyeGeometry",
+        "u_eyeIrisColor",
+        "u_eyeScleraColor",
+        "u_eyeProfileId",
+        "u_eyeScleraProfileId",
+        "u_eyeCorneaIor",
+        "u_eyeCausticStrength",
+        "u_eyeLayer",
+        "u_eyeContactVisibility",
+        "u_eyeCiliaVisibility",
+        "u_eyeUvHandedness",
+        "u_eyePupilDilation",
+        "u_eyeGaze"};
+    for (const auto& [materialInstanceKey, instance] :
+         resources->materialInstances)
+    {
+        (void)materialInstanceKey;
+        if (!instance)
+        {
+            continue;
+        }
+        const std::shared_ptr<Material> material =
+            instance->GetBaseMaterial().lock();
+        if (!material ||
+            material->GetShaderVariantKey().shadingModelMacro !=
+                "SHADING_MODEL_EYE")
+        {
+            continue;
+        }
+
+        RuntimeEyeMaterialSnapshot materialSnapshot;
+        materialSnapshot.name = instance->GetName();
+        materialSnapshot.materialKey = material->GetMaterialKey();
+        materialSnapshot.shadingModelMacro =
+            material->GetShaderVariantKey().shadingModelMacro;
+        materialSnapshot.renderMode = RenderModeToString(
+            material->GetShaderVariantKey().renderMode);
+        materialSnapshot.hasRenderPipeline =
+            material->GetRenderPipeline() != nullptr;
+        materialSnapshot.hasShadowPipeline =
+            material->GetShadowPipeline() != nullptr;
+        // ForwardOpaque/Opaque 普通材质由公共 Shadow pipeline 投影；只有
+        // OpaqueClip/WPO 等特殊材质才拥有 Material-local Shadow pipeline。
+        materialSnapshot.hasShadowRoute =
+            materialSnapshot.hasShadowPipeline ||
+            materialSnapshot.renderMode == "Opaque" ||
+            materialSnapshot.renderMode == "ForwardOpaque";
+
+        const MaterialInstanceStateSnapshot state =
+            instance->CaptureStateSnapshot();
+        for (const auto& [parameterName, parameterValue] : state.parameters)
+        {
+            materialSnapshot.parameterValues[parameterName] =
+                FormatHairParameterValue(parameterValue);
+        }
+        materialSnapshot.hasEyeParameters = true;
+        for (const char* parameterName : requiredEyeParameters)
+        {
+            if (materialSnapshot.parameterValues.find(parameterName) ==
+                materialSnapshot.parameterValues.end())
+            {
+                materialSnapshot.hasEyeParameters = false;
+                break;
+            }
+        }
+        if (material->GetRenderPipeline() != nullptr)
+        {
+            const Renderpass* expectedPass = nullptr;
+            if (materialSnapshot.renderMode == "ForwardOpaque")
+            {
+                expectedPass = forwardPass;
+            }
+            else if (materialSnapshot.renderMode == "ForwardEyeInner")
+            {
+                expectedPass = innerPass;
+            }
+            else if (materialSnapshot.renderMode == "ForwardEyeCornea")
+            {
+                expectedPass = corneaPass;
+            }
+            else if (materialSnapshot.renderMode == "Opaque")
+            {
+                expectedPass = findPass("geometry");
+            }
+            if (expectedPass != nullptr)
+            {
+                const bool compatible =
+                    material->GetPassPipelineContractKey() ==
+                        expectedPass->pipelineContractKey &&
+                    HasCompatiblePassDescriptorLayout(
+                        *material->GetRenderPipeline(),
+                        *expectedPass);
+                materialSnapshot.forwardDescriptorLayoutCompatible =
+                    (materialSnapshot.renderMode == "ForwardOpaque" ||
+                     materialSnapshot.renderMode == "ForwardEyeInner" ||
+                     materialSnapshot.renderMode == "ForwardEyeCornea") &&
+                    compatible;
+                materialSnapshot.deferredDescriptorLayoutCompatible =
+                    materialSnapshot.renderMode == "Opaque" && compatible;
+            }
+        }
+        materialSnapshot.dualShellLayerContract =
+            materialSnapshot.parameterValues.find("u_eyeLayer") !=
+            materialSnapshot.parameterValues.end();
+        snapshot.materials.push_back(std::move(materialSnapshot));
     }
 
     snapshot.captured = true;

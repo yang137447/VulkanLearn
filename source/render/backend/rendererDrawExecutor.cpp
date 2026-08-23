@@ -2,6 +2,7 @@
 
 #include "commonFunction.h"
 #include "material.h"
+#include "Profiler.h"
 #include "pipeline/pipelineBase.h"
 #include "renderGraph.h"
 #include "render/backend/rendererObjectResourceRegistry.h"
@@ -282,7 +283,42 @@ void RendererDrawExecutor::DrawGeometryScene(RendererDrawContext& context) const
     context.services.UploadLightsForPass(
         context.swapChainImageIndex,
         context.renderScene.lights);
-    DrawSurfaceScene("Geometry", false, context);
+    DrawSurfaceScene("Geometry", SurfaceDrawDomain::Geometry, context);
+}
+
+void RendererDrawExecutor::DrawForwardOpaqueScene(
+    RendererDrawContext& context) const
+{
+    context.services.UploadLightsForPass(
+        context.swapChainImageIndex,
+        context.renderScene.lights);
+    DrawSurfaceScene("ForwardOpaque", SurfaceDrawDomain::ForwardOpaque, context);
+}
+
+void RendererDrawExecutor::DrawForwardEyeInnerScene(
+    RendererDrawContext& context) const
+{
+    PROFILE_SCOPE("Eye/ForwardEyeInner");
+    context.services.UploadLightsForPass(
+        context.swapChainImageIndex,
+        context.renderScene.lights);
+    DrawSurfaceScene(
+        "ForwardEyeInner",
+        SurfaceDrawDomain::ForwardEyeInner,
+        context);
+}
+
+void RendererDrawExecutor::DrawForwardEyeCorneaScene(
+    RendererDrawContext& context) const
+{
+    PROFILE_SCOPE("Eye/ForwardEyeCornea");
+    context.services.UploadLightsForPass(
+        context.swapChainImageIndex,
+        context.renderScene.lights);
+    DrawSurfaceScene(
+        "ForwardEyeCornea",
+        SurfaceDrawDomain::ForwardEyeCornea,
+        context);
 }
 
 void RendererDrawExecutor::DrawForwardTransparentScene(
@@ -379,7 +415,7 @@ void RendererDrawExecutor::DrawSortedTransparentScene(
 
 void RendererDrawExecutor::DrawSurfaceScene(
     const char* passName,
-    bool drawTransparent,
+    SurfaceDrawDomain domain,
     RendererDrawContext& context) const
 {
     const Renderpass& renderPass = context.renderPass;
@@ -387,12 +423,17 @@ void RendererDrawExecutor::DrawSurfaceScene(
 
     for (const ResolvedMaterialGroup& materialGroup : context.resolvedRenderScene.materialGroups)
     {
-        // Surface pipeline 在资源加载时已经按 RenderMode 绑定到对应的 pass
-        // contract；这里仍必须做互斥过滤，保证透明材质不进入 GBuffer，
-        // 不透明材质也不会在 sceneColor 上被重复绘制。
-        const bool isTransparent = IsTransparentRenderMode(
-            materialGroup.material->GetShaderVariantKey().renderMode);
-        if (isTransparent != drawTransparent)
+        const RenderMode renderMode =
+            materialGroup.material->GetShaderVariantKey().renderMode;
+        const bool matchesDomain =
+            domain == SurfaceDrawDomain::Geometry
+                ? IsGeometryRenderMode(renderMode)
+                : domain == SurfaceDrawDomain::ForwardOpaque
+                    ? renderMode == RenderMode::ForwardOpaque
+                    : domain == SurfaceDrawDomain::ForwardEyeInner
+                        ? renderMode == RenderMode::ForwardEyeInner
+                        : renderMode == RenderMode::ForwardEyeCornea;
+        if (!matchesDomain)
         {
             continue;
         }
@@ -414,6 +455,11 @@ void RendererDrawExecutor::DrawSurfaceScene(
                 PassSetIndex,
                 renderPass.GetDescriptorSets()[context.swapChainImageIndex][PassSetIndex],
                 nullptr);
+        }
+        if (materialGroup.material->GetShaderVariantKey().shadingModelMacro ==
+            "SHADING_MODEL_EYE")
+        {
+            context.services.RecordEyeDescriptorBind();
         }
 
         for (const ResolvedMaterialInstanceGroup& materialInstanceGroup : materialGroup.materialInstances)
@@ -437,6 +483,13 @@ void RendererDrawExecutor::DrawSurfaceScene(
                     objectResources.descriptorSets[context.swapChainImageIndex],
                     nullptr);
 
+                if (materialGroup.material->GetShaderVariantKey().shadingModelMacro ==
+                    "SHADING_MODEL_EYE")
+                {
+                    // Geometry/Forward 的 Eye evaluator 至少消费一次 caustic LUT；
+                    // 该值是 CPU-side draw-domain estimate，不把 debug readback 当 steady-state。
+                    context.services.RecordEyeDraw(1);
+                }
                 context.services.UpdateObjectUBOForPass(objectResources, drawPacket);
                 drawResources.renderableObject->Draw(commandBuffer, renderPass.width, renderPass.height);
             }

@@ -75,7 +75,11 @@ namespace
         {
         case RenderMode::Opaque:
         case RenderMode::OpaqueClip:
+        case RenderMode::ForwardOpaque:
+        case RenderMode::ForwardEyeInner:
             return GraphicsPipelineBlendMode::Opaque;
+        case RenderMode::ForwardEyeCornea:
+            return GraphicsPipelineBlendMode::Additive;
         case RenderMode::TransparentAlphaBlend:
             return GraphicsPipelineBlendMode::AlphaBlend;
         case RenderMode::TransparentAdditive:
@@ -174,6 +178,18 @@ RenderMode MaterialInstanceValidator::ResolveRenderMode(
     {
         return RenderMode::OpaqueClip;
     }
+    if (renderMode == "ForwardOpaque")
+    {
+        return RenderMode::ForwardOpaque;
+    }
+    if (renderMode == "ForwardEyeInner")
+    {
+        return RenderMode::ForwardEyeInner;
+    }
+    if (renderMode == "ForwardEyeCornea")
+    {
+        return RenderMode::ForwardEyeCornea;
+    }
     if (renderMode == "TransparentAlphaBlend")
     {
         return RenderMode::TransparentAlphaBlend;
@@ -205,6 +221,30 @@ MaterialInstanceBuildPlan MaterialInstanceValidator::BuildLoadPlan(
         materialInstanceJson.at("shadingModel").get<std::string>();
     const bool usesThinTranslucentShadingModel =
         shadingModel == "ThinTranslucent";
+    const bool usesEyeShadingModel = shadingModel == "Eye";
+    const bool usesForwardOpaqueRenderMode =
+        loadPlan.shaderVariantKey.renderMode == RenderMode::ForwardOpaque;
+    const bool usesEyeLayerRenderMode =
+        IsForwardEyeLayerRenderMode(loadPlan.shaderVariantKey.renderMode);
+    const bool usesDeferredOpaqueRenderMode =
+        loadPlan.shaderVariantKey.renderMode == RenderMode::Opaque;
+    // Eye 可以显式选择单壳 Forward、双壳 layer 或版本化 Deferred fallback。
+    if (usesEyeShadingModel &&
+        !usesForwardOpaqueRenderMode &&
+        !usesEyeLayerRenderMode &&
+        !usesDeferredOpaqueRenderMode)
+    {
+        throw std::runtime_error(
+            "Eye shadingModel requires an explicit Eye render path: " +
+            std::string(materialInstancePath));
+    }
+    if (!usesEyeShadingModel &&
+        (usesForwardOpaqueRenderMode || usesEyeLayerRenderMode))
+    {
+        throw std::runtime_error(
+            "Only Eye shadingModel may use an Eye forward render path: " +
+            std::string(materialInstancePath));
+    }
     // RenderMode 决定 pass、混合和排序，ShadingModel 决定闭包数学；两者必须成对，
     // 否则会出现“薄透射公式写入普通透明混合”或“普通闭包写入双源混合”的错误组合。
     if (usesThinTranslucentShadingModel !=
