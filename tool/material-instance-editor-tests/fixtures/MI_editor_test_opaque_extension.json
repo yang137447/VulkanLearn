@@ -1,0 +1,12 @@
+{
+  "name": "MI_editor_test_opaque_extension",
+  "type": "materialInstance",
+  "material": "shader/glsl/M_editor_test.json",
+  "editorExtension": {
+    "owner": "future-editor",
+    "keep": true
+  },
+  "parameters": {
+    "u_scalar": 0.75
+  }
+}

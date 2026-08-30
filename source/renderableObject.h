@@ -17,7 +17,7 @@ public:
         const std::string& name = "");
     ~RenderableObject();
 
-    void Draw(vk::CommandBuffer& commandBuffer, uint32_t width, uint32_t height);
+    void Draw(vk::CommandBuffer& commandBuffer);
     const Eigen::Vector3f& GetBoundsMin() const { return boundsMin; }
     const Eigen::Vector3f& GetBoundsMax() const { return boundsMax; }
     const std::string& GetName() const { return name; }

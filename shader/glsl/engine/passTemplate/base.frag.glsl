@@ -29,6 +29,7 @@ layout(location = 0, index = 0) out vec4 outThinTranslucentAdd;
 layout(location = 0, index = 1) out vec4 outThinTranslucentMultiplier;
 #else
 layout(location = 0) out vec4 outSceneColor;
+layout(location = 1) out vec4 outSelectionMask;
 #endif
 
 void main()
@@ -56,6 +57,10 @@ void main()
     outGBufferD = gbuffer.gbufferD;
     outGBufferE = gbuffer.gbufferE;
     outGBufferVelocity = gbuffer.gbufferVelocity;
+    // Geometry 已占满设备允许的 8 个颜色附件，选中标记复用 Velocity 的保留 z 通道；
+    // Eye 的 z/w 有既定语义，因此只对普通 GBuffer 表面写入标记。
+    if (surface.shadingModel != SHADING_MODEL_EYE)
+        outGBufferVelocity.z = uboM.selectionData.x;
     outGBufferF = gbuffer.gbufferF;
     outSceneColorBase = gbuffer.sceneColorBase;
 #elif VL_MATERIAL_OUTPUT_THIN_TRANSLUCENT
@@ -65,11 +70,15 @@ void main()
     #if VL_THIN_TRANSLUCENT_DUAL_SOURCE
         outThinTranslucentAdd = thinOutput.add;
         outThinTranslucentMultiplier = thinOutput.multiplier;
+        // Vulkan 双源混合要求所有 fragment output 都位于 dual-source location 0；
+        // 因此该变体不能额外写 selectionMask，透明双源材质暂不参与轮廓描边。
     #else
         outSceneColor = BuildThinTranslucentFallbackOutput(thinOutput);
+        outSelectionMask = vec4(uboM.selectionData.x * step(0.001, inputs.opacity));
     #endif
 #else
     outSceneColor = BuildMaterialForwardOutput(surface);
+    outSelectionMask = vec4(uboM.selectionData.x * step(0.001, inputs.opacity));
 #endif
 }
 

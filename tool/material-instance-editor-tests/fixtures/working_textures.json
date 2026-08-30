@@ -1,0 +1,4 @@
+{
+  "albedoMap": "textures/T_albedo_default.json",
+  "normalMap": "textures/T_normal_override.json"
+}

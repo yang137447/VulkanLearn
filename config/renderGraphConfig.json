@@ -229,6 +229,16 @@
             ]
         },
         {
+            "name": "selectionMask",
+            "format": "R8G8B8A8_UNORM",
+            "widthScale": 1,
+            "heightScale": 1,
+            "usage": [
+                "colorAttachment",
+                "sampled"
+            ]
+        },
+        {
             "name": "bloomDownSample1",
             "format": "R16G16B16A16_SFLOAT",
             "widthScale": 0.5,
@@ -683,6 +693,11 @@
                     "storeOp": "store"
                 },
                 {
+                    "resource": "selectionMask",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                },
+                {
                     "resource": "sceneDepth",
                     "loadOp": "load",
                     "storeOp": "store"
@@ -727,6 +742,11 @@
                     "storeOp": "store"
                 },
                 {
+                    "resource": "selectionMask",
+                    "loadOp": "load",
+                    "storeOp": "store"
+                },
+                {
                     "resource": "sceneDepth",
                     "loadOp": "load",
                     "storeOp": "store"
@@ -767,6 +787,11 @@
             "output": [
                 {
                     "resource": "sceneColor",
+                    "loadOp": "load",
+                    "storeOp": "store"
+                },
+                {
+                    "resource": "selectionMask",
                     "loadOp": "load",
                     "storeOp": "store"
                 },
@@ -831,6 +856,11 @@
             "output": [
                 {
                     "resource": "sceneColor",
+                    "loadOp": "load",
+                    "storeOp": "store"
+                },
+                {
+                    "resource": "selectionMask",
                     "loadOp": "load",
                     "storeOp": "store"
                 },
@@ -1035,6 +1065,12 @@
                 },
                 {
                     "resource": "bloomUpSample1"
+                },
+                {
+                    "resource": "gbufferVelocity"
+                },
+                {
+                    "resource": "selectionMask"
                 }
             ],
             "output": [

@@ -29,12 +29,14 @@
 #include "render/environment/proceduralSkyCubeGenerator.h"
 #include "render/frontend/renderScene.h"
 #include "render/frontend/rendererFrontend.h"
+#include "editor/selection/materialInstanceSelection.h"
 #include "render/pass/passRuntime.h"
 #include "render/foliage/speedTreeWindSystem.h"
 #include "render/shadow/csmSettings.h"
 #include "ui/uiOverlayRendererVulkan.h"
 #include "ui/uiRenderSnapshotQueue.h"
 #include "world/worldSnapshotBuilder.h"
+#include "editor/preview/materialInstancePreviewAdapter.h"
 
 class Material;
 class MaterialInstance;
@@ -71,7 +73,9 @@ struct PreparedRuntimeBinding
 // records render graph passes, and hands the completed frame back to the Vulkan
 // backend. It does not mutate gameplay World data; RT mode only enters through
 // the snapshot mailbox.
-class RenderSystem : private VL::PassRuntimeServices
+class RenderSystem
+    : private VL::PassRuntimeServices
+    , private VL::Editor::Preview::IRendererMaterialInstancePreviewOwner
 {
 public:
     static RenderSystem& GetInstance()
@@ -117,6 +121,26 @@ public:
     void RefreshResolvedSceneAfterShaderReload();
     std::string GetResolvedShaderGenerationFingerprint() const;
     uint64_t GetActiveWorldGeneration() const noexcept;
+    std::optional<VL::Editor::Selection::MaterialInstanceSelection>
+    PickMaterialInstanceAt(
+        float mouseX,
+        float mouseY,
+        uint32_t viewportWidth,
+        uint32_t viewportHeight) const;
+    std::vector<VL::Editor::Selection::MaterialInstanceModelContext>
+    GetMaterialInstanceModelContexts() const;
+    void SetSelectedMaterialInstanceModel(
+        const VL::Editor::Selection::MaterialInstanceModelContext& model);
+    void SetSelectedMaterialInstance(
+        const VL::Editor::Selection::MaterialInstanceSelection& selection);
+    void ClearSelectedMaterialInstance() noexcept;
+    VL::Editor::Preview::IMaterialInstancePreviewAdapter&
+    GetMaterialInstancePreviewAdapter() noexcept
+    {
+        return materialInstancePreviewAdapter;
+    }
+    std::unique_ptr<VL::Editor::Preview::IMaterialInstancePreviewAdapter>
+    CreateMaterialInstancePreviewAdapter();
     VL::PreparedRuntimeBinding PrepareRuntimeBinding(
         std::shared_ptr<const VL::World> world,
         VL::RendererResourceCache& candidateCache,
@@ -217,8 +241,36 @@ public:
         shaderReloadCoordinator = coordinator;
     }
 private:
-    RenderSystem() = default;
+    class MaterialInstancePreviewSession;
+
+    RenderSystem()
+        : materialInstancePreviewAdapter(*this)
+    {
+    }
+    std::optional<VL::Editor::Preview::MaterialInstancePreviewWorldIdentity>
+    GetActiveWorldIdentity() const override;
+    VL::Editor::Preview::MaterialInstancePreviewAdapterResult
+    CaptureMaterialInstancePreviewSession(
+        const VL::Editor::Preview::MaterialInstancePreviewAdapterCommand& command,
+        std::shared_ptr<
+            VL::Editor::Preview::IRendererMaterialInstancePreviewSession>&
+            outSession) override;
+    VL::Editor::Preview::MaterialInstancePreviewAdapterResult
+    CommitMaterialInstancePreviewDraft(
+        const VL::Editor::Preview::MaterialInstancePreviewWorldIdentity& world,
+        const VL::Editor::Preview::NormalizedMaterialInstancePath& materialInstancePath,
+        const VL::Editor::Preview::MaterialInstancePreviewDraft& draft) override;
+    void ApplyMaterialInstancePreviewMaterialOverride(
+        VL::RenderScene& renderScene) const;
+    void RebuildRenderSceneMaterialGroups(
+        VL::RenderScene& renderScene) const;
     void UpdateUBOGlobal(vk::CommandBuffer& commandBuffer);
+    void UpdateUBOGlobalWithProjectionTransform(
+        vk::CommandBuffer& commandBuffer,
+        float projectionScaleX,
+        float projectionScaleY,
+        float projectionOffsetX,
+        float projectionOffsetY);
     void UpdateUBOGlobalForShadow(
         vk::CommandBuffer& commandBuffer,
         uint32_t passSizeWidth,
@@ -330,10 +382,20 @@ private:
         vk::CommandBuffer commandBuffer,
         uint32_t swapchainImageIndex);
     void RefreshEnvironmentUpdateDiagnostics();
+    void ApplyPendingSelectionFocus();
+    void ScheduleSelectionFocus(
+        uint64_t worldGeneration,
+        const Eigen::Vector3f& boundsMin,
+        const Eigen::Vector3f& boundsMax);
 
     uint32_t currentFrame = 0;
     uint32_t swapChainImageIndex = 0;
     uint64_t nextSnapshotFrameIndex = 0;
+    bool hasSelectedDraw = false;
+    bool selectedAllMaterialSlots = false;
+    VL::RuntimeId selectedObjectId = 0;
+    uint32_t selectedMaterialSlotIndex = 0;
+    uint64_t selectedWorldGeneration = 0;
     int debugViewMode = 0;
     float environmentIntensity = 1.0f;
     int toneMappingMode = 3;
@@ -360,7 +422,13 @@ private:
     VL::PassRuntime passRuntime;
     VL::RenderScene currentRenderScene;
     VL::ResolvedRenderScene currentResolvedRenderScene;
+    // 拾取只读 GT 发布快照时生成的副本，避免 worker render thread 更新
+    // currentRenderScene 时与鼠标事件并发读写同一对象。
+    VL::RenderScene pickingRenderScene;
+    bool hasPickingRenderScene = false;
     std::shared_ptr<const VL::World> activeWorld;
+    VL::Editor::Preview::RendererOwnedMaterialInstancePreviewAdapter
+        materialInstancePreviewAdapter;
     VL::RendererBackendVulkan* rendererBackend = nullptr;
     PipelineFactory* pipelineFactory = nullptr;
     VL::ShaderReloadCoordinator* shaderReloadCoordinator = nullptr;
@@ -387,4 +455,14 @@ private:
     std::shared_ptr<const VL::UiRenderSnapshot> currentUiRenderSnapshot;
     std::string uiVertexShaderPath;
     std::string uiFragmentShaderPath;
+    struct PendingSelectionFocus
+    {
+        uint64_t worldGeneration = 0;
+        Eigen::Vector3f boundsMin = Eigen::Vector3f::Zero();
+        Eigen::Vector3f boundsMax = Eigen::Vector3f::Zero();
+    };
+    std::optional<PendingSelectionFocus> pendingSelectionFocus;
+    bool hasMaterialInstancePreviewMaterialOverride = false;
+    std::string materialInstancePreviewOverridePath;
+    std::string materialInstancePreviewOverrideMaterialKey;
 };

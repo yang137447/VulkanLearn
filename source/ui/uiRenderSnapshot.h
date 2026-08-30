@@ -102,6 +102,16 @@ struct UiClipRect
     uint32_t height = 0;
 };
 
+// 像素坐标系中的可渲染视口。原点位于最终 framebuffer 左上角；矩形已经
+// 排除了停靠窗口的标题栏和内容 padding，renderer 可以直接把它作为安全区域。
+struct UiViewportRect
+{
+    int32_t x = 0;
+    int32_t y = 0;
+    uint32_t width = 0;
+    uint32_t height = 0;
+};
+
 struct UiDrawCommand
 {
     uint32_t firstIndex = 0;
@@ -128,6 +138,7 @@ struct UiRenderSnapshot
     uint64_t frameIndex = 0;
     uint32_t viewportWidth = 0;
     uint32_t viewportHeight = 0;
+    UiViewportRect sceneViewportRect;
     std::vector<UiVertex> vertices;
     std::vector<uint32_t> indices;
     std::vector<UiDrawCommand> drawCommands;

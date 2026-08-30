@@ -1,6 +1,8 @@
 #include "material/materialDescriptorSchema.h"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <sstream>
 #include <stdexcept>
 
@@ -103,6 +105,28 @@ MaterialDescriptorSchema MaterialDescriptorSchema::Build(
         MaterialParameterSchemaEntry entry;
         entry.name = name;
         entry.glslType = parameterJson.at("type").get<std::string>();
+        if (parameterJson.contains("channels"))
+        {
+            static constexpr std::array<std::string_view, 4> componentNames = {
+                "x", "y", "z", "w"};
+            const nlohmann::json& channels = parameterJson.at("channels");
+            entry.channels.reserve(channels.size());
+            for (size_t componentIndex = 0;
+                 componentIndex < channels.size();
+                 ++componentIndex)
+            {
+                const nlohmann::json& channel = channels.at(
+                    std::string(componentNames[componentIndex]));
+                MaterialParameterChannelSchemaEntry channelEntry;
+                channelEntry.name = channel.at("name").get<std::string>();
+                channelEntry.description =
+                    channel.at("description").get<std::string>();
+                const nlohmann::json& range = channel.at("range");
+                channelEntry.min = range.at("min").get<float>();
+                channelEntry.max = range.at("max").get<float>();
+                entry.channels.push_back(std::move(channelEntry));
+            }
+        }
         entry.size = GetParameterTypeLayout(entry.glslType).size;
         schema.parameters.push_back(std::move(entry));
     }
@@ -225,6 +249,27 @@ void MaterialDescriptorSchema::ValidateInstanceValues(
             throw std::runtime_error(
                 "Material instance parameter does not match schema: " + parameter.name + " in " +
                 std::string(materialInstancePath));
+        }
+        if (!parameter.channels.empty())
+        {
+            const nlohmann::json& value = parametersJson.at(parameter.name);
+            for (size_t componentIndex = 0;
+                 componentIndex < parameter.channels.size();
+                 ++componentIndex)
+            {
+                const double componentValue =
+                    value.at(componentIndex).get<double>();
+                const auto& channel = parameter.channels[componentIndex];
+                if (!std::isfinite(componentValue) ||
+                    componentValue < static_cast<double>(*channel.min) ||
+                    componentValue > static_cast<double>(*channel.max))
+                {
+                    throw std::runtime_error(
+                        "Material instance parameter is outside its declared channel range: " +
+                        parameter.name + "[" + std::to_string(componentIndex) + "] in " +
+                        std::string(materialInstancePath));
+                }
+            }
         }
     }
 

@@ -25,6 +25,12 @@ public:
         const nlohmann::json& materialInstanceJson,
         std::string_view materialInstancePath);
 
+    // Validates renderer-independent pairing rules for effective material state.
+    static void ValidateRenderStateCombination(
+        std::string_view shadingModel,
+        std::string_view renderMode,
+        std::string_view materialInstancePath);
+
     // Ensures an MI_ override object only targets fields declared by the referenced M_ asset.
     static void EnsureKnownOverrideKeys(
         const nlohmann::json& overrides,

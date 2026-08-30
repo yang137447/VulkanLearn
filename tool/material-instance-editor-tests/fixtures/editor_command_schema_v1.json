@@ -1,0 +1,176 @@
+{
+  "protocolVersion": 1,
+  "sources": [
+    "imgui",
+    "console",
+    "ai",
+    "runtime_test"
+  ],
+  "statuses": [
+    "Accepted",
+    "Running",
+    "Succeeded",
+    "Rejected",
+    "Failed"
+  ],
+  "errorCodes": [
+    "None",
+    "InvalidProtocolVersion",
+    "InvalidCommandId",
+    "InvalidCommandType",
+    "InvalidPayload",
+    "MissingExpectedDocumentRevision",
+    "StaleDocumentRevision",
+    "DuplicateCommandId",
+    "ResultStoreCapacityExceeded",
+    "AssetNotFound",
+    "InvalidAssetType",
+    "ReferenceResolutionFailed",
+    "DocumentNotOpen",
+    "DocumentDirty",
+    "UnknownParameter",
+    "ParameterTypeMismatch",
+    "UnknownTextureSlot",
+    "InvalidTextureAssetReference",
+    "SourceChanged",
+    "ValidationFailed",
+    "AtomicWriteFailed",
+    "PreviewUnavailable",
+    "PreviewGenerationChanged",
+    "PreviewPrepareFailed",
+    "PreviewCommitFailed"
+  ],
+  "parameterTypes": [
+    "float",
+    "vec2",
+    "vec3",
+    "vec4"
+  ],
+  "commands": {
+    "material.resolve_scene_reference": {
+      "requiredPayload": ["scenePath", "objectId"],
+      "optionalPayload": ["selector"],
+      "requiresExpectedDocumentRevision": false
+    },
+    "material.list_assets": {
+      "requiredPayload": [],
+      "optionalPayload": ["search", "page", "pageSize"],
+      "requiresExpectedDocumentRevision": false
+    },
+    "material.open": {
+      "requiredPayload": ["assetPath"],
+      "optionalPayload": ["navigationOrigin"],
+      "requiresExpectedDocumentRevision": false
+    },
+    "material.select": {
+      "requiredPayload": ["assetPath"],
+      "optionalPayload": [],
+      "requiresExpectedDocumentRevision": false
+    },
+    "material.close": {
+      "requiredPayload": ["assetPath"],
+      "optionalPayload": ["dirtyPolicy"],
+      "requiresExpectedDocumentRevision": true
+    },
+    "material.get_document": {
+      "requiredPayload": ["assetPath"],
+      "optionalPayload": [],
+      "requiresExpectedDocumentRevision": false
+    },
+    "material.get_reference_context": {
+      "requiredPayload": ["assetPath"],
+      "optionalPayload": [],
+      "requiresExpectedDocumentRevision": false
+    },
+    "material.set_parameter": {
+      "requiredPayload": ["assetPath", "parameter", "type", "value"],
+      "optionalPayload": [],
+      "requiresExpectedDocumentRevision": true
+    },
+    "material.clear_parameter": {
+      "requiredPayload": ["assetPath", "parameter"],
+      "optionalPayload": [],
+      "requiresExpectedDocumentRevision": true
+    },
+    "material.set_texture": {
+      "requiredPayload": ["assetPath", "slot", "textureAssetPath"],
+      "optionalPayload": [],
+      "requiresExpectedDocumentRevision": true
+    },
+    "material.clear_texture": {
+      "requiredPayload": ["assetPath", "slot"],
+      "optionalPayload": [],
+      "requiresExpectedDocumentRevision": true
+    },
+    "material.set_render_state": {
+      "requiredPayload": ["assetPath", "field", "value"],
+      "optionalPayload": [],
+      "requiresExpectedDocumentRevision": true
+    },
+    "material.clear_render_state": {
+      "requiredPayload": ["assetPath", "field"],
+      "optionalPayload": [],
+      "requiresExpectedDocumentRevision": true
+    },
+    "material.reset_overrides": {
+      "requiredPayload": ["assetPath", "scope"],
+      "optionalPayload": [],
+      "requiresExpectedDocumentRevision": true
+    },
+    "material.validate": {
+      "requiredPayload": ["assetPath"],
+      "optionalPayload": [],
+      "requiresExpectedDocumentRevision": false
+    },
+    "material.save": {
+      "requiredPayload": ["assetPath"],
+      "optionalPayload": [],
+      "requiresExpectedDocumentRevision": true
+    },
+    "material.revert": {
+      "requiredPayload": ["assetPath"],
+      "optionalPayload": [],
+      "requiresExpectedDocumentRevision": true
+    },
+    "material.reload": {
+      "requiredPayload": ["assetPath"],
+      "optionalPayload": [],
+      "requiresExpectedDocumentRevision": true
+    },
+    "material.preview.connect": {
+      "requiredPayload": ["assetPath"],
+      "optionalPayload": [],
+      "requiresExpectedDocumentRevision": false
+    },
+    "material.preview.apply": {
+      "requiredPayload": ["assetPath", "documentRevision"],
+      "optionalPayload": [],
+      "requiresExpectedDocumentRevision": false
+    },
+    "material.preview.restore_baseline": {
+      "requiredPayload": ["assetPath"],
+      "optionalPayload": ["documentRevision"],
+      "requiresExpectedDocumentRevision": false
+    },
+    "material.preview.disconnect": {
+      "requiredPayload": ["assetPath"],
+      "optionalPayload": [],
+      "requiresExpectedDocumentRevision": false
+    },
+    "editor.get_command_result": {
+      "requiredPayload": ["commandId"],
+      "optionalPayload": [],
+      "requiresExpectedDocumentRevision": false
+    },
+    "editor.list_events": {
+      "requiredPayload": [],
+      "optionalPayload": ["afterEventId", "limit"],
+      "requiresExpectedDocumentRevision": false
+    },
+    "editor.execute_batch": {
+      "requiredPayload": ["commands"],
+      "optionalPayload": [],
+      "requiresExpectedDocumentRevision": true
+    }
+  }
+}

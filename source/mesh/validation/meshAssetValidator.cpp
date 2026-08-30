@@ -279,6 +279,7 @@ std::vector<MeshSectionLoadPlan> MeshAssetValidator::BuildSectionLoadPlans(
 
         MeshSectionLoadPlan sectionPlan;
         sectionPlan.sectionName = section.sectionName;
+        sectionPlan.materialSlotIndex = static_cast<uint32_t>(sourceSlotIndex);
         sectionPlan.materialSlotName = materialSlot.name;
         sectionPlan.materialInstancePath = materialSlot.materialInstancePath;
         sectionPlans.push_back(sectionPlan);

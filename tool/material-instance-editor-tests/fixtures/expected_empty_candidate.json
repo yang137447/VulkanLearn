@@ -1,0 +1,14 @@
+{
+  "name": "MI_editor_test",
+  "type": "materialInstance",
+  "configHelp": {
+    "description": "Opaque authoring help must survive a sparse save"
+  },
+  "material": "shader/glsl/M_editor_test.json",
+  "renderStateOverrides": {
+    "cullMode": "None"
+  },
+  "macros": {
+    "USE_DETAIL": 2
+  }
+}

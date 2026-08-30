@@ -1,0 +1,9 @@
+{
+  "name": "T_normal_override",
+  "type": "texture",
+  "source": "textures/datas/normal_override.ppm",
+  "colorSpace": "linear",
+  "mipmaps": true,
+  "filter": "linear",
+  "wrapMode": "repeat"
+}

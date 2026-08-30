@@ -1,0 +1,12 @@
+{
+  "protocolVersion": 1,
+  "commandId": 1005,
+  "source": "imgui",
+  "command": "material.set_render_state",
+  "expectedDocumentRevision": 8,
+  "payload": {
+    "assetPath": "materials\\MI_editor_test.json",
+    "field": "cullMode",
+    "value": "None"
+  }
+}

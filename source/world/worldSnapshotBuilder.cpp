@@ -94,11 +94,18 @@ MeshDrawSnapshot BuildMeshDrawSnapshot(
     const std::string& objectName,
     RuntimeId objectId,
     const WorldMeshObject& meshObject,
-    const Eigen::Matrix4f& previousModel)
+    const Eigen::Matrix4f& previousModel,
+    bool selected)
 {
     MeshDrawSnapshot snapshot;
     snapshot.objectId = objectId;
+    snapshot.selected = selected;
     snapshot.debugName = meshObject.debugName.empty() ? objectName : meshObject.debugName;
+    snapshot.sceneObjectIdentity = meshObject.sceneObjectIdentity.empty()
+        ? objectName
+        : meshObject.sceneObjectIdentity;
+    snapshot.materialSlotIndex = meshObject.materialSlotIndex;
+    snapshot.materialSlotName = meshObject.materialSlotName;
     snapshot.model = meshObject.model;
     snapshot.previousModel = previousModel;
     snapshot.mesh = MakeResourceHandle(meshObject.meshKey);
@@ -253,7 +260,11 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
             objectName,
             objectId,
             meshObject,
-            previousModel));
+            previousModel,
+            desc.hasSelectedDraw &&
+                desc.selectedObjectId == objectId &&
+                (desc.selectedAllMaterialSlots ||
+                 desc.selectedMaterialSlotIndex == meshObject.materialSlotIndex)));
         currentObjectModels[objectId] = meshObject.model;
     }
 

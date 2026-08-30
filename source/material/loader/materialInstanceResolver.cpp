@@ -111,6 +111,10 @@ namespace
         std::string_view materialInstancePath)
     {
         nlohmann::json renderStates = materialJson["renderStates"];
+        if (!renderStates.contains("renderMode"))
+        {
+            renderStates["renderMode"] = "Opaque";
+        }
         if (materialInstanceJson.contains("renderStateOverrides"))
         {
             for (const auto& [name, value] : materialInstanceJson["renderStateOverrides"].items())
@@ -124,7 +128,8 @@ namespace
                     MaterialAssetUtils::ShadingModelToId(value.get<std::string>());
                     continue;
                 }
-                if (!materialJson["renderStates"].contains(name))
+                if (name != "renderMode" &&
+                    !materialJson["renderStates"].contains(name))
                 {
                     throw std::runtime_error(
                         "Material instance overrides unknown render state \"" + name + "\": " +

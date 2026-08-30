@@ -1,0 +1,9 @@
+{
+  "name": "T_albedo_override",
+  "type": "texture",
+  "source": "textures/datas/albedo_override.ppm",
+  "colorSpace": "srgb",
+  "mipmaps": true,
+  "filter": "linear",
+  "wrapMode": "repeat"
+}

@@ -1,0 +1,13 @@
+{
+  "protocolVersion": 1,
+  "commandId": 1010,
+  "source": "console",
+  "command": "material.set_parameter",
+  "expectedDocumentRevision": 7,
+  "payload": {
+    "assetPath": "materials/MI_editor_test.json",
+    "parameter": "u_tint",
+    "type": "vec3",
+    "value": [0.4, 0.5]
+  }
+}

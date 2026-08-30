@@ -171,6 +171,7 @@ struct MeshSection
 struct MeshSectionLoadPlan
 {
     std::string sectionName;
+    uint32_t materialSlotIndex = 0;
     std::string materialSlotName;
     std::string materialInstancePath;
 };

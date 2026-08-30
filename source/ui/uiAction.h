@@ -11,6 +11,7 @@ enum class UiActionType
     CloseRuntimePage,
     ToggleDeveloperUi,
     SetLocale,
+    LoadWorld,
     SetDebugViewMode,
     SetToneMappingMode,
     SetBloomStrength,

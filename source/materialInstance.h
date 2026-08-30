@@ -56,6 +56,8 @@ struct ParamMap
 
 using MaterialInstanceParameterValue =
     std::variant<float, Eigen::Vector2f, Eigen::Vector3f, Eigen::Vector4f>;
+using MaterialInstanceNumericParameterValues =
+    std::map<std::string, MaterialInstanceParameterValue>;
 
 struct MaterialInstanceTextureBindingSnapshot
 {
@@ -76,8 +78,7 @@ struct MaterialInstanceTextureBindingSnapshot
 
 struct MaterialInstanceStateSnapshot
 {
-    using ParameterMap =
-        std::map<std::string, MaterialInstanceParameterValue>;
+    using ParameterMap = MaterialInstanceNumericParameterValues;
     using TextureMap =
         std::map<std::string, MaterialInstanceTextureBindingSnapshot>;
 
@@ -106,6 +107,10 @@ public:
     void SetParameter(const std::string& parameterName, const Eigen::Vector2f& value);
     void SetParameter(const std::string& parameterName, const Eigen::Vector3f& value);
     void SetParameter(const std::string& parameterName, const Eigen::Vector4f& value);
+    // 批量数值更新只覆盖已存在且同类型的参数；先校验全部输入，再提交暂存副本。
+    // 未包含的参数与全部纹理绑定保持原状，旧 SetParameter 仍保留加载期建表语义。
+    void CommitNumericParameterValues(
+        const MaterialInstanceNumericParameterValues& parameterValues);
     //获取参数的模板函数
     template<typename T>
     T GetParameter(const std::string& parameterName) const

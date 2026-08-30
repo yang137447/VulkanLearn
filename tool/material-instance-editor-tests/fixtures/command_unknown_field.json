@@ -1,0 +1,14 @@
+{
+  "protocolVersion": 1,
+  "commandId": 1012,
+  "source": "ai",
+  "command": "material.set_parameter",
+  "expectedDocumentRevision": 7,
+  "payload": {
+    "assetPath": "materials/MI_editor_test.json",
+    "parameter": "u_tint",
+    "type": "vec3",
+    "value": [0.4, 0.5, 0.6],
+    "callback": "not serializable"
+  }
+}

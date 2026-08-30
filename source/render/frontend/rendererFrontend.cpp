@@ -14,7 +14,11 @@ RenderDrawPacket BuildDrawPacket(const MeshDrawSnapshot& drawSnapshot)
 {
     RenderDrawPacket packet;
     packet.objectId = drawSnapshot.objectId;
+    packet.selected = drawSnapshot.selected;
     packet.debugName = drawSnapshot.debugName;
+    packet.sceneObjectIdentity = drawSnapshot.sceneObjectIdentity;
+    packet.materialSlotIndex = drawSnapshot.materialSlotIndex;
+    packet.materialSlotName = drawSnapshot.materialSlotName;
     packet.mesh = drawSnapshot.mesh;
     packet.material = drawSnapshot.material;
     packet.materialInstance = drawSnapshot.materialInstance;

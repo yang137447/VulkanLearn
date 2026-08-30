@@ -1,0 +1,10 @@
+{
+  "protocolVersion": 1,
+  "commandId": 1003,
+  "source": "runtime_test",
+  "command": "material.preview.apply",
+  "payload": {
+    "assetPath": "materials/MI_editor_test.json",
+    "documentRevision": 9
+  }
+}

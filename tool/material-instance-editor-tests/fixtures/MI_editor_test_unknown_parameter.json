@@ -1,0 +1,8 @@
+{
+  "name": "MI_editor_test_unknown_parameter",
+  "type": "materialInstance",
+  "material": "shader/glsl/M_editor_test.json",
+  "parameters": {
+    "u_missing": 1.0
+  }
+}

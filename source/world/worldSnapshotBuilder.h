@@ -18,6 +18,10 @@ struct WorldSnapshotBuildDesc
     uint64_t frameIndex = 0;
     int debugViewMode = 0;
     float environmentIntensity = 1.0f;
+    bool hasSelectedDraw = false;
+    bool selectedAllMaterialSlots = false;
+    RuntimeId selectedObjectId = 0;
+    uint32_t selectedMaterialSlotIndex = 0;
 };
 
 // Exports the immutable render-facing data for one World frame. This builder

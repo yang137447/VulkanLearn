@@ -42,11 +42,14 @@ not exposed as clickable runtime controls.
 ### Developer UI
 
 Dear ImGui is compiled only when `VULKANLEARN_ENABLE_DEVELOPER_UI=ON` and is
-runtime-toggleable with `F1`. Its current panel is read-only and exposes frame,
-world, debug-view, post-process, SpeedTree, UI input-ownership, and hot-reload
-diagnostics. Mutable runtime tuning lives in RmlUi so the two interfaces do not
-present duplicate controls. Dear ImGui remains code-defined and is not part of
-RML/RCSS asset reload.
+runtime-toggleable with `F1`. It is a material-instance tuning surface: the
+selected model's material-instance navigation occupies the left 18% and the
+material inspector occupies the right 30%. The center area is only a dock
+layout and input region; the scene remains displayed directly by the SDL3/Vulkan
+render path. Dear ImGui must not display the scene through `ImGui::Image`, bind
+a RenderGraph-owned scene texture, or introduce a scene texture ID into the UI
+snapshot. The editor is mutable through the typed editor-command boundary;
+Dear ImGui remains code-defined and is not part of RML/RCSS asset reload.
 
 ### Platform and renderer
 
@@ -66,16 +69,18 @@ The UI boundary has three explicit data types:
   update step. It contains frame timing, active world, debug view, tone mapping,
   bloom, environment, SpeedTree wind, locale, and visibility state.
 - `UiRenderSnapshot` is immutable draw data consumed by the renderer. It owns
-  vertices, indices, clip rectangles, blend modes, and generation-tagged RGBA8
-  texture snapshots.
+  vertices, indices, clip rectangles, blend modes, generation-tagged RGBA8
+  UI texture snapshots, and the pixel-space `sceneViewportRect` used as layout
+  and picking metadata for the SDL3/Vulkan scene view. It does not own or
+  reference a scene image.
 
-RmlUi callbacks queue `UiAction` objects into `CommandBus`. The current ImGui
-panel is diagnostic-only; any future mutable ImGui tool must use the same action
-boundary. `EngineLoop::ApplyQueuedUiActions()` drains the queue at the stable
-beginning of a frame. UI visibility and locale are applied to `UiSubsystem`,
-`UiActionType::Quit` is handled directly by `EngineLoop`, and render,
-post-process, environment, and SpeedTree actions become normal `RuntimeCommand`
-objects. No UI callback mutates renderer state directly.
+RmlUi callbacks queue `UiAction` objects into `CommandBus`. ImGui material-
+instance edits use the typed editor-command boundary and never mutate live
+renderer state from a widget callback. `EngineLoop::ApplyQueuedUiActions()`
+drains the queue at the stable beginning of a frame. UI visibility and locale
+are applied to `UiSubsystem`, `UiActionType::Quit` is handled directly by
+`EngineLoop`, and render, post-process, environment, SpeedTree, and material-
+instance editor actions use their respective engine-owned command paths.
 
 ## Threading And Ownership
 
@@ -112,8 +117,11 @@ only events covered by its `WantCapture*` or navigation state, and
 `InputSubsystem` still drains SDL relative deltas every frame but publishes them
 to the game only while the pointer owner is `Game` and relative mouse mode is
 actually enabled. Releasing capture therefore exposes a free cursor without
-continuing to rotate the game camera. The pass-through dockspace keeps uncovered
-scene pixels eligible for game camera input. With no UI modal or developer panel
+continuing to rotate the game camera. The pass-through center dock region keeps
+the directly rendered SDL3/Vulkan scene eligible for game camera input. Scene
+picking converts window coordinates into that layout rectangle and uses the
+same aspect ratio as rendering, so clicking a model continues to select the
+correct material instance after docking. With no UI modal or developer panel
 visible, the game owns input and the player's requested relative mouse mode is
 restored.
 
@@ -159,9 +167,18 @@ CSS shorthand coverage.
 
 When compiled in, `UiSubsystem` creates a docking-enabled ImGui context with
 keyboard and gamepad navigation enabled. The subsystem owns `NewFrame()`, panel
-construction, draw-data conversion, and shutdown. ImGui draw lists are appended
-to the same `UiRenderSnapshot` as RmlUi geometry, but the two widget models do
-not share state or callbacks.
+construction, draw-data conversion, and shutdown. ImGui draw lists contain
+developer panels only and are appended to the same `UiRenderSnapshot` as RmlUi
+geometry, but the two widget models do not share state or callbacks. The
+center dock is not an ImGui scene-image surface: it does not emit an
+`ImGui::Image` command or consume a RenderGraph external texture.
+
+The material editor runtime snapshot is built once per frame and shared by two
+docked content surfaces. The left navigation lists only material slots from the
+currently selected model; the right inspector owns document actions, tabs,
+parameters, texture bindings, and status. Parameter or texture edits create
+sparse overrides directly, while highlighted `Reset` actions restore the base
+material value without a separate override checkbox.
 
 The ImGui font atlas is copied into the RmlUi texture bridge and is rendered
 through the same Vulkan texture-generation path. The UI overlay supports both
@@ -182,9 +199,11 @@ owns:
 - texture generations and retired GPU textures
 
 `RenderSystem::RecordAndSubmitCurrentRenderScene()` records the configured
-render graph first, then records the UI overlay into the same swapchain image.
-The overlay preserves the scene color and leaves queue submission and present
-synchronization to `RendererBackendVulkan`.
+SDL3/Vulkan render path first, then records the UI overlay into the same
+swapchain image. The scene is therefore displayed by Vulkan directly; the
+overlay only draws RmlUi and ImGui panels over it. `UiOverlayRendererVulkan`
+does not own, sample, or import the scene image, and leaves queue submission
+and present synchronization to `RendererBackendVulkan`.
 
 Swapchain-dependent framebuffers, pipelines, and dynamic buffers are released
 and rebuilt through the renderer resize lifecycle. Replaced or removed GPU
@@ -276,7 +295,7 @@ The implemented stack is considered healthy when all of the following hold:
    ImGui, while `--no-dev-ui` on an ImGui-enabled build skips its runtime
    initialization for that launch.
 5. A resize rebuilds the UI swapchain resources without destroying the active
-   document or scene color.
+   document; direct SDL3/Vulkan scene display continues after the rebuild.
 6. Repeated valid and malformed hot reloads keep the last valid document,
    release obsolete CPU texture records, and drain retired GPU textures after
    their completed frame epochs.

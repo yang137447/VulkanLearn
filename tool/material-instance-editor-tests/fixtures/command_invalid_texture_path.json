@@ -1,0 +1,12 @@
+{
+  "protocolVersion": 1,
+  "commandId": 1011,
+  "source": "console",
+  "command": "material.set_texture",
+  "expectedDocumentRevision": 7,
+  "payload": {
+    "assetPath": "materials/MI_editor_test.json",
+    "slot": "normalMap",
+    "textureAssetPath": "textures/editor_normal.png"
+  }
+}

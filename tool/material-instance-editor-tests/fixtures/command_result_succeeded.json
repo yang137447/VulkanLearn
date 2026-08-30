@@ -1,0 +1,12 @@
+{
+  "protocolVersion": 1,
+  "commandId": 1001,
+  "status": "Succeeded",
+  "errorCode": "None",
+  "message": "parameter override accepted",
+  "documentRevision": 8,
+  "payload": {
+    "assetPath": "materials/MI_editor_test.json",
+    "dirty": true
+  }
+}

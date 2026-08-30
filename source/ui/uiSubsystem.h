@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -14,6 +15,7 @@
 #include <RmlUi/Core/Input.h>
 
 #include "core/runtimeResult.h"
+#include "editor/ui/materialInstanceAssetEditorPanel.h"
 #include "platform/platformEvent.h"
 #include "ui/rmlUiInterfaces.h"
 #include "ui/uiAction.h"
@@ -34,6 +36,23 @@ class CommandBus;
 class DiagnosticsSubsystem;
 class PlatformWindow;
 
+namespace Editor
+{
+    class MaterialInstanceEditorRuntime;
+namespace Selection
+{
+struct MaterialInstanceSelection;
+}
+namespace Preview
+{
+class IMaterialInstancePreviewAdapter;
+}
+}
+
+namespace EditorUi
+{
+}
+
 // Describes UI assets, viewport, localization, fonts, and runtime feature switches.
 // RuntimeConfig supplies it; UiSubsystem owns the resulting widget contexts.
 struct UiSubsystemDesc
@@ -43,19 +62,30 @@ struct UiSubsystemDesc
     std::filesystem::path assetRoot;
     std::filesystem::path documentPath;
     std::filesystem::path localizationPath;
+    std::filesystem::path sceneRoot;
     std::string defaultLocale;
     std::vector<std::filesystem::path> fontFaces;
     bool hotReload = true;
     bool developerUiEnabled = true;
     bool developerUiVisible = false;
+    // EngineLoop 注入 renderer-owned adapter；UiSubsystem 不拥有也不直接调用它。
+    Editor::Preview::IMaterialInstancePreviewAdapter* previewAdapter = nullptr;
+};
+
+struct UiSceneOption
+{
+    Rml::String label;
+    Rml::String path;
+    bool active = false;
+    std::string normalizedPhysicalPath;
 };
 
 // Owns game-thread RmlUi and optional Dear ImGui contexts, input arbitration, and hot reload.
 // It publishes typed actions and immutable snapshots, but does not mutate renderer internals.
-class UiSubsystem
+class UiSubsystem : public EditorUi::IMaterialInstanceSceneSelectionSink
 {
 public:
-    UiSubsystem() = default;
+    UiSubsystem();
     ~UiSubsystem();
 
     UiSubsystem(const UiSubsystem&) = delete;
@@ -72,11 +102,34 @@ public:
     void Update(const UiViewModelSnapshot& viewModelSnapshot);
     void Resize(uint32_t width, uint32_t height);
     void ApplyAction(const UiAction& action);
+    void NotifyWorldChanged(const std::string& worldPath, uint64_t generation);
+    void NotifyWorldLoadCompleted();
+    // 只由 EngineLoop 在稳定帧边界调用，避免 UI 回调触碰 live MaterialInstance。
+    void TickMaterialInstanceEditor();
+    // 视口拾取只负责打开文档并记录导航来源，实际编辑仍经由 EditorCommand。
+    bool OpenMaterialInstanceFromSelection(
+        const Editor::Selection::MaterialInstanceSelection& selection);
+    void SetMaterialInstanceSceneModels(
+        const std::vector<Editor::Selection::MaterialInstanceModelContext>& models);
+    std::optional<Editor::Selection::MaterialInstanceModelContext>
+        ConsumeMaterialInstanceModelSelectionRequest();
+    std::optional<Editor::Selection::MaterialInstanceSelection>
+        ConsumeMaterialInstanceSelectionRequest();
+    void ClearMaterialInstanceSceneSelection() noexcept;
+
+    bool RequestModelSelection(
+        const Editor::Selection::MaterialInstanceModelContext& model) override;
+    bool RequestMaterialSelection(
+        const Editor::Selection::MaterialInstanceSelection& selection) override;
 
     bool IsInitialized() const { return initialized; }
     bool IsRuntimePageVisible() const { return runtimePageVisible; }
     bool IsDeveloperUiVisible() const { return developerUiVisible; }
     bool IsDeveloperUiEnabled() const { return developerUiEnabled; }
+    uint32_t GetViewportWidth() const { return desc.viewportWidth; }
+    uint32_t GetViewportHeight() const { return desc.viewportHeight; }
+    const UiViewportRect& GetSceneViewportRect() const { return sceneViewportRect; }
+    bool IsScenePickTarget(float mouseX, float mouseY) const;
     bool ShouldUseRelativeMouseModeForGame() const;
     bool ShouldGameReceiveKeyboard() const;
     bool ShouldGameReceivePointer() const;
@@ -102,7 +155,15 @@ private:
         Rml::String tabPostProcessLabel;
         Rml::String tabEnvironmentLabel;
         Rml::String tabShadowsLabel;
+        Rml::String tabScenesLabel;
         Rml::String tabSystemLabel;
+
+        Rml::String sceneListTitle;
+        Rml::String sceneListHint;
+        Rml::String sceneEmptyLabel;
+        Rml::String sceneLoadingLabel;
+        bool sceneLoading = false;
+        std::vector<UiSceneOption> sceneOptions;
 
         Rml::String frameLabel;
         Rml::String frameValue;
@@ -249,7 +310,9 @@ private:
     RuntimeResult<void> InitializeRmlUi();
     RuntimeResult<void> InitializeDataModel();
     RuntimeResult<void> InitializeDeveloperUi();
+    RuntimeResult<void> InitializeMaterialInstanceEditor();
     RuntimeResult<void> LoadFonts();
+    void LoadSceneOptions();
     RuntimeResult<LocalizationDatabase> LoadLocalizationCandidate() const;
     RuntimeResult<Rml::ElementDocument*> LoadDocumentCandidate();
     RuntimeResult<void> CommitInitialAssets();
@@ -296,6 +359,7 @@ private:
     void QueueChangedFloatAction(UiActionType type, float value, float currentValue);
 
     void OnClosePage(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
+    void OnLoadScene(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
     void OnDebugViewSelected(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
     void OnToneMappingNone(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
     void OnToneMappingReinhard(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
@@ -328,6 +392,18 @@ private:
     PlatformWindow* window = nullptr;
     CommandBus* commandBus = nullptr;
     const DiagnosticsSubsystem* diagnostics = nullptr;
+    std::unique_ptr<Editor::MaterialInstanceEditorRuntime>
+        materialInstanceEditorRuntime;
+    std::unique_ptr<EditorUi::MaterialInstanceAssetEditorPanel>
+        materialInstanceEditorPanel;
+    std::optional<EditorUi::MaterialInstanceModelSnapshot>
+        selectedModelMaterials;
+    std::optional<uint32_t> selectedMaterialSlotIndex;
+    std::vector<EditorUi::MaterialInstanceModelSnapshot> sceneModels;
+    std::optional<Editor::Selection::MaterialInstanceModelContext>
+        pendingMaterialInstanceModelSelection;
+    std::optional<Editor::Selection::MaterialInstanceSelection>
+        pendingMaterialInstanceSelection;
     Rml::Context* rmlContext = nullptr;
     Rml::ElementDocument* runtimeDocument = nullptr;
     RmlUiSystemInterface rmlSystemInterface;
@@ -350,12 +426,14 @@ private:
     std::string currentLocale;
     std::string hotReloadStatus;
     UiTextureId imguiFontTextureId = 0;
+    UiViewportRect sceneViewportRect;
     bool initialized = false;
     bool rmlInitialized = false;
     bool runtimePageVisible = false;
     bool developerUiEnabled = false;
     bool developerUiVisible = false;
     bool imguiInitialized = false;
+    bool developerDockLayoutBuilt = false;
     bool gamepadConnected = false;
     bool rmlAxisLeftDown = false;
     bool rmlAxisRightDown = false;

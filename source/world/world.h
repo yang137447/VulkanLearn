@@ -34,6 +34,11 @@ struct WorldEnvironment
 struct WorldMeshObject
 {
     std::string debugName;
+    // 渲染对象名和场景对象身份分开保存，避免多 section 展开后无法回到
+    // scene JSON 的原始对象，从而不能为选中的 MI 构造导航上下文。
+    std::string sceneObjectIdentity;
+    uint32_t materialSlotIndex = 0;
+    std::string materialSlotName;
     Eigen::Matrix4f model = Eigen::Matrix4f::Identity();
     Eigen::Vector3f localBoundsMin = Eigen::Vector3f::Zero();
     Eigen::Vector3f localBoundsMax = Eigen::Vector3f::Zero();

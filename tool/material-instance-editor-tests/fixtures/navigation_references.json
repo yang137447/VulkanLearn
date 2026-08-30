@@ -1,0 +1,31 @@
+{
+  "scenePath": "scenes/scene_material_editor_fixture.json",
+  "objects": [
+    {
+      "objectId": "mesh-car",
+      "type": "mesh",
+      "assetPath": "models/SM_editor_car.json",
+      "sections": [
+        {
+          "index": 0,
+          "materialInstancePath": "materials/MI_editor_test.json"
+        },
+        {
+          "index": 1,
+          "materialInstancePath": "materials/MI_editor_glass.json"
+        }
+      ]
+    },
+    {
+      "objectId": "terrain-ground",
+      "type": "terrain",
+      "assetPath": "terrains/TR_editor_ground.json",
+      "materialSlots": [
+        {
+          "slot": "surface",
+          "materialInstancePath": "materials\\MI_editor_test.json"
+        }
+      ]
+    }
+  ]
+}

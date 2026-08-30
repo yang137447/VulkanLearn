@@ -1,0 +1,9 @@
+{
+  "protocolVersion": 1,
+  "commandId": 1004,
+  "status": "Rejected",
+  "errorCode": "StaleDocumentRevision",
+  "message": "expected revision does not match the open document",
+  "documentRevision": 7,
+  "payload": {}
+}

@@ -12,6 +12,7 @@
 #include "engine/runtimeTestHooks.h"
 #include "engine/subsystemCollection.h"
 #include "engine/testing/runtimeValidationServices.h"
+#include "editor/selection/materialInstanceSelection.h"
 #include "material/generator/materialParameterIncludeGenerator.h"
 #include "material/generator/materialDefinitionReloadBatch.h"
 #include "pipeline/pipelineFactory.h"
@@ -288,6 +289,8 @@ RuntimeResult<void> EngineLoop::InitializeRuntimeSystems(
             (std::filesystem::path(uiSettings.assetRoot) / uiSettings.document).generic_string());
         uiDesc.localizationPath = GetRuntimeConfig().ResolvePath(
             (std::filesystem::path(uiSettings.assetRoot) / uiSettings.localization).generic_string());
+        uiDesc.sceneRoot =
+            std::filesystem::path(GetRuntimeConfig().GetResourcePath()) / "scenes";
         uiDesc.defaultLocale = uiSettings.defaultLocale;
         for (const std::string& fontFace : uiSettings.fontFaces)
         {
@@ -304,6 +307,8 @@ RuntimeResult<void> EngineLoop::InitializeRuntimeSystems(
             uiDesc.developerUiEnabled = false;
         }
         uiDesc.developerUiVisible = uiSettings.developerUiVisible;
+        uiDesc.previewAdapter =
+            &RenderSystem::GetInstance().GetMaterialInstancePreviewAdapter();
 
         uiSubsystem = std::make_unique<UiSubsystem>();
         auto uiResult = uiSubsystem->Initialize(
@@ -368,6 +373,15 @@ RuntimeResult<void> EngineLoop::LoadInitialWorldAndRenderer(
     if (initialWorldResult.IsFailure())
     {
         return RuntimeResult<void>::Failure(initialWorldResult.Error());
+    }
+
+    if (uiSubsystem != nullptr)
+    {
+        const WorldHandle& activeWorld =
+            GetSubsystems().GetWorldManager().GetActiveWorldHandle();
+        uiSubsystem->NotifyWorldChanged(
+            activeWorld.scenePath,
+            activeWorld.generation);
     }
 
     renderSystem.FinalizeInitialRenderObjectInitialization();
@@ -439,6 +453,11 @@ void EngineLoop::Tick()
     commandResult.activeWorldBeforeCommand = activeWorldBeforeCommand;
 
     ProcessRequestedWorldTransition(commandResult);
+    if (commandResult.loadWorldAttempted &&
+        uiSubsystem != nullptr)
+    {
+        uiSubsystem->NotifyWorldLoadCompleted();
+    }
 
     ProcessShaderRuntimeRequests(commandResult);
     if (shouldClose)
@@ -453,6 +472,17 @@ void EngineLoop::Tick()
 
     commandResult.activeWorldAfterCommand =
         GetSubsystems().GetWorldManager().GetActiveWorldHandle();
+
+    if (uiSubsystem != nullptr &&
+        (activeWorldBeforeCommand.generation !=
+             commandResult.activeWorldAfterCommand.generation ||
+         activeWorldBeforeCommand.scenePath !=
+             commandResult.activeWorldAfterCommand.scenePath))
+    {
+        uiSubsystem->NotifyWorldChanged(
+            commandResult.activeWorldAfterCommand.scenePath,
+            commandResult.activeWorldAfterCommand.generation);
+    }
 
     runtimeTests.NotifyCommandResult(
         commandResult,
@@ -502,6 +532,11 @@ void EngineLoop::Tick()
         controller->Update(deltaTime, GetSubsystems().GetInputSubsystem().GetActionState());
     }
 
+    if (uiSubsystem != nullptr)
+    {
+        // 先在 GT 稳定帧边界处理 editor/preview，再生成 UI 与 World snapshot。
+        uiSubsystem->TickMaterialInstanceEditor();
+    }
     UpdateUiViewModel(deltaTime);
 
     {
@@ -582,6 +617,10 @@ void EngineLoop::ApplyQueuedUiActions()
         command.sourceText = "ui";
         switch (action.type)
         {
+        case UiActionType::LoadWorld:
+            command.type = RuntimeCommandType::LoadWorld;
+            command.stringValue = action.stringValue;
+            break;
         case UiActionType::SetDebugViewMode:
             command.type = RuntimeCommandType::SetDebugViewMode;
             command.intValue = action.intValue;
@@ -673,6 +712,29 @@ void EngineLoop::ApplyQueuedUiActions()
         }
         GetSubsystems().GetCommandBus().Queue(std::move(command));
     }
+
+    // ImGui 场景列表只提交值语义 selection 请求；在这里统一落到 renderer，
+    // 确保描边和相机聚焦与常规视口拾取走同一个稳定帧边界。
+    if (uiSubsystem != nullptr)
+    {
+        const std::optional<Editor::Selection::MaterialInstanceModelContext>
+            modelSelection =
+                uiSubsystem->ConsumeMaterialInstanceModelSelectionRequest();
+        if (modelSelection.has_value())
+        {
+            RenderSystem::GetInstance().SetSelectedMaterialInstanceModel(
+                modelSelection.value());
+        }
+
+        const std::optional<Editor::Selection::MaterialInstanceSelection>
+            materialSelection =
+                uiSubsystem->ConsumeMaterialInstanceSelectionRequest();
+        if (materialSelection.has_value())
+        {
+            RenderSystem::GetInstance().SetSelectedMaterialInstance(
+                materialSelection.value());
+        }
+    }
 }
 
 void EngineLoop::UpdateUiInputPolicy()
@@ -756,6 +818,8 @@ void EngineLoop::UpdateUiViewModel(float deltaTime)
     snapshot.speedTreeWindProfileCount = renderSystem.GetSpeedTreeWindProfileCount();
     const WorldHandle& activeWorld = GetSubsystems().GetWorldManager().GetActiveWorldHandle();
     snapshot.activeWorldPath = activeWorld.scenePath;
+    uiSubsystem->SetMaterialInstanceSceneModels(
+        renderSystem.GetMaterialInstanceModelContexts());
     uiSubsystem->Update(snapshot);
 }
 
@@ -795,6 +859,46 @@ void EngineLoop::PumpPlatformEvents()
                 GetSubsystems().GetDiagnosticsSubsystem().ReportInfo(message);
             }
             continue;
+        }
+
+        if (uiSubsystem != nullptr &&
+            uiSubsystem->IsScenePickTarget(event.mouseX, event.mouseY))
+        {
+            const std::optional<Editor::Selection::ScenePickRequest> pickRequest =
+                Editor::Selection::BuildScenePickRequest(
+                    event,
+                    uiSubsystem->GetViewportWidth(),
+                    uiSubsystem->GetViewportHeight());
+            if (pickRequest.has_value())
+            {
+                const std::optional<Editor::Selection::MaterialInstanceSelection>
+                    selection = RenderSystem::GetInstance().PickMaterialInstanceAt(
+                        pickRequest->mouseX,
+                        pickRequest->mouseY,
+                        pickRequest->viewportWidth,
+                        pickRequest->viewportHeight);
+                if (selection.has_value())
+                {
+                    // 高亮是视口选择反馈，不依赖 MI 面板是否成功打开；
+                    // 这样即使编辑器文档暂时不可用，点击结果仍立即可见。
+                    RenderSystem::GetInstance().SetSelectedMaterialInstance(*selection);
+                    const bool opened =
+                        uiSubsystem->OpenMaterialInstanceFromSelection(*selection);
+                    GetSubsystems().GetDiagnosticsSubsystem().ReportInfo(
+                        opened
+                            ? "Selected Material Instance '" +
+                                selection->materialInstancePath + "' from '" +
+                                selection->objectIdentity + "'."
+                            : "Selected scene object '" +
+                                selection->objectIdentity +
+                                "' but the MI editor could not open its document.");
+                }
+                else
+                {
+                    RenderSystem::GetInstance().ClearSelectedMaterialInstance();
+                    uiSubsystem->ClearMaterialInstanceSceneSelection();
+                }
+            }
         }
 
         if (uiSubsystem != nullptr && uiSubsystem->HandlePlatformEvent(event))

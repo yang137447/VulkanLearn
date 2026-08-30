@@ -1,0 +1,12 @@
+{
+  "protocolVersion": 1,
+  "commandId": 1002,
+  "source": "imgui",
+  "command": "material.set_texture",
+  "expectedDocumentRevision": 8,
+  "payload": {
+    "assetPath": "materials/MI_editor_test.json",
+    "slot": "normalMap",
+    "textureAssetPath": "textures\\T_normal_override.json"
+  }
+}

@@ -93,12 +93,12 @@ GraphicsPipelineBuildResult GraphicsPipelineBuilder::Build(
     }
     else if (desc.pipelineStateDesc.blendMode == GraphicsPipelineBlendMode::ThinTranslucentDualSource)
     {
-        // 双源混合的两个 fragment 输出共享同一个 location，只用 index 区分，
-        // 因此该模式的 pass 必须只有一个颜色附件，不能套用 Geometry 多 MRT 配置。
-        if (desc.colorAttachmentCount != 1)
+        // 双源混合只占用 location 0；selectionMask 等普通输出可以追加在
+        // 后续颜色附件上，但不能改变 location 0 的双源混合状态。
+        if (desc.colorAttachmentCount == 0)
         {
             throw std::runtime_error(
-                "Thin Translucent dual-source blending requires exactly one color attachment");
+                "Thin Translucent dual-source blending requires a color attachment");
         }
 
         // 最终颜色为 Add + Multiplier * Destination：
@@ -109,6 +109,16 @@ GraphicsPipelineBuildResult GraphicsPipelineBuilder::Build(
             .setDstColorBlendFactor(vk::BlendFactor::eSrc1Color)
             .setSrcAlphaBlendFactor(vk::BlendFactor::eOne)
             .setDstAlphaBlendFactor(vk::BlendFactor::eSrc1Alpha);
+
+        // 未启用 independentBlend 时，所有颜色附件必须拥有完全相同的 blend state。
+        // 双源材质不会写 selectionMask，但仍需让该占位附件复用同一状态以满足 Vulkan 合同。
+        for (size_t attachmentIndex = 1;
+             attachmentIndex < pipelineColorBlendAttachmentStates.size();
+             ++attachmentIndex)
+        {
+            pipelineColorBlendAttachmentStates[attachmentIndex] =
+                pipelineColorBlendAttachmentStates[0];
+        }
     }
 
     vk::PipelineColorBlendStateCreateInfo pipelineColorBlendStateCreateInfo;

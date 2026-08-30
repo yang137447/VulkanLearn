@@ -6,6 +6,7 @@
 // unifying parameter layout, texture bindings, and per-pass reflection validation without creating descriptors.
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -17,12 +18,23 @@
 namespace VL
 {
 
+// 一个 packed 参数分量的 authoring 元数据；不参与 UBO layout 或 shader ABI。
+struct MaterialParameterChannelSchemaEntry
+{
+    std::string name;
+    std::string description;
+    std::optional<float> min;
+    std::optional<float> max;
+};
+
 // 一个材质 UBO 参数的 std140 布局信息。
 // std140 layout information for one material UBO parameter.
 struct MaterialParameterSchemaEntry
 {
     std::string name;
     std::string glslType;
+    // 按 x/y/z/w 顺序保留 M_ 通道元数据；为空表示资产未声明。
+    std::vector<MaterialParameterChannelSchemaEntry> channels;
     uint32_t size = 0;
     uint32_t offset = 0;
 };

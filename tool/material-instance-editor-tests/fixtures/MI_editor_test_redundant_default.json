@@ -1,0 +1,8 @@
+{
+  "name": "MI_editor_test_redundant_default",
+  "type": "materialInstance",
+  "material": "shader/glsl/M_editor_test.json",
+  "parameters": {
+    "u_scalar": 0.5
+  }
+}

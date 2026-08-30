@@ -1,0 +1,9 @@
+{
+  "name": "T_normal_default",
+  "type": "texture",
+  "source": "textures/datas/normal_default.ppm",
+  "colorSpace": "linear",
+  "mipmaps": true,
+  "filter": "linear",
+  "wrapMode": "repeat"
+}

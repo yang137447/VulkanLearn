@@ -1,8 +1,12 @@
 #include "renderSystem.h"
 #include "shader/reload/shaderReloadCoordinator.h"
+#include <cmath>
 #include <limits>
 #include <algorithm>
 #include <array>
+#include <fstream>
+#include <iostream>
+#include <map>
 #include <stdexcept>
 #include <string>
 #include "core/runtimeResult.h"
@@ -15,9 +19,15 @@
 #include "renderGraph.h"
 #include "render/backend/rendererObjectResourceRegistry.h"
 #include "render/resource/rendererResourceCache.h"
+#include "render/resource/rendererMaterialLoader.h"
+#include "render/resource/rendererResourceLoadContext.h"
+#include "render/resource/resourceRetireQueue.h"
+#include "material/materialAssetUtils.h"
+#include "material/loader/materialInstanceResolver.h"
 #include "render/backend/rendererBackendVulkan.h"
 #include "shaderReflect.h"
 #include "profiler.h"
+#include "ui/uiRenderSnapshot.h"
 #include "vulkanDebug.h"
 #include "world/world.h"
 
@@ -63,7 +73,500 @@ bool SetPassVectorComponent(
     return true;
 }
 
+using PreviewRenderStateValues = std::map<std::string, std::string>;
+
+struct NumericPreviewDraftParseResult
+{
+    std::optional<MaterialInstanceNumericParameterValues> values;
+    std::optional<nlohmann::json> serializedJson;
+    PreviewRenderStateValues renderStates;
+    std::string errorMessage;
+};
+
+PreviewRenderStateValues BuildPreviewRenderStateValues(
+    const nlohmann::json& effectiveMaterialInstanceJson)
+{
+    PreviewRenderStateValues result;
+    result.emplace(
+        "shadingModel",
+        effectiveMaterialInstanceJson.at("shadingModel").get<std::string>());
+    const nlohmann::json& renderStates =
+        effectiveMaterialInstanceJson.at("renderStates");
+    if (!renderStates.is_object())
+    {
+        throw std::runtime_error(
+            "Material instance preview render states must be a JSON object.");
+    }
+    for (const auto& [name, value] : renderStates.items())
+    {
+        if (!value.is_string())
+        {
+            throw std::runtime_error(
+                "Material instance preview render state must be a string: " +
+                name);
+        }
+        result.emplace(name, value.get<std::string>());
+    }
+    return result;
+}
+
+bool ReadFinitePreviewNumber(
+    const nlohmann::json& value,
+    float& outValue)
+{
+    if (!value.is_number())
+    {
+        return false;
+    }
+
+    const double doubleValue = value.get<double>();
+    const float floatValue = static_cast<float>(doubleValue);
+    if (!std::isfinite(doubleValue) || !std::isfinite(floatValue))
+    {
+        return false;
+    }
+    outValue = floatValue;
+    return true;
+}
+
+void ApplyMaterialOverrideToRenderScene(
+    VL::RenderScene& renderScene,
+    const std::string& materialInstancePath,
+    const std::string& materialKey)
+{
+    for (VL::RenderDrawPacket& drawPacket : renderScene.drawPackets)
+    {
+        if (drawPacket.materialInstance.key == materialInstancePath)
+        {
+            drawPacket.material = VL::ResourceHandle{materialKey, 0};
+        }
+    }
+}
+
+void RebuildRenderSceneMaterialGroupsImpl(VL::RenderScene& renderScene)
+{
+    renderScene.materialGroups.clear();
+    for (size_t drawPacketIndex = 0;
+         drawPacketIndex < renderScene.drawPackets.size();
+         ++drawPacketIndex)
+    {
+        const VL::RenderDrawPacket& drawPacket =
+            renderScene.drawPackets[drawPacketIndex];
+        VL::MaterialDrawGroup* materialGroup = nullptr;
+        for (VL::MaterialDrawGroup& candidateGroup :
+             renderScene.materialGroups)
+        {
+            if (candidateGroup.material.key == drawPacket.material.key &&
+                candidateGroup.material.generation ==
+                    drawPacket.material.generation)
+            {
+                materialGroup = &candidateGroup;
+                break;
+            }
+        }
+        if (materialGroup == nullptr)
+        {
+            VL::MaterialDrawGroup newGroup;
+            newGroup.material = drawPacket.material;
+            renderScene.materialGroups.push_back(std::move(newGroup));
+            materialGroup = &renderScene.materialGroups.back();
+        }
+
+        VL::MaterialInstanceDrawGroup* materialInstanceGroup = nullptr;
+        for (VL::MaterialInstanceDrawGroup& candidateGroup :
+             materialGroup->materialInstances)
+        {
+            if (candidateGroup.materialInstance.key ==
+                    drawPacket.materialInstance.key &&
+                candidateGroup.materialInstance.generation ==
+                    drawPacket.materialInstance.generation)
+            {
+                materialInstanceGroup = &candidateGroup;
+                break;
+            }
+        }
+        if (materialInstanceGroup == nullptr)
+        {
+            VL::MaterialInstanceDrawGroup newGroup;
+            newGroup.materialInstance = drawPacket.materialInstance;
+            materialGroup->materialInstances.push_back(std::move(newGroup));
+            materialInstanceGroup =
+                &materialGroup->materialInstances.back();
+        }
+        materialInstanceGroup->drawPacketIndices.push_back(drawPacketIndex);
+    }
+}
+
+NumericPreviewDraftParseResult ParseNumericPreviewDraft(
+    const VL::Editor::Preview::MaterialInstancePreviewDraft& draft,
+    const VL::Editor::Preview::NormalizedMaterialInstancePath& expectedPath,
+    const MaterialInstanceStateSnapshot::TextureMap& activeTextures)
+{
+    NumericPreviewDraftParseResult result;
+    const VL::Editor::Preview::MaterialInstancePreviewPathNormalizationResult
+        draftPath =
+            VL::Editor::Preview::NormalizeMaterialInstancePath(
+                draft.materialInstancePath);
+    if (!draftPath.Succeeded())
+    {
+        result.errorMessage = draftPath.errorMessage;
+        return result;
+    }
+    if (draftPath.path->value != expectedPath.value)
+    {
+        result.errorMessage =
+            "Material instance preview draft does not match the connected MI path.";
+        return result;
+    }
+    if (draft.serializedWorkingDraft.empty())
+    {
+        result.errorMessage =
+            "Material instance preview draft must contain serialized content.";
+        return result;
+    }
+
+    try
+    {
+        const nlohmann::json materialInstanceJson =
+            nlohmann::json::parse(draft.serializedWorkingDraft);
+        if (!materialInstanceJson.is_object())
+        {
+            result.errorMessage =
+                "Material instance preview draft must be a JSON object.";
+            return result;
+        }
+        if (materialInstanceJson.contains("textures"))
+        {
+            const nlohmann::json& textures = materialInstanceJson.at("textures");
+            if (!textures.is_object())
+            {
+                result.errorMessage =
+                    "Material instance preview textures must be a JSON object.";
+                return result;
+            }
+
+            // 数值 preview 不创建 descriptor；只有能用 active MI 的稳定 asset
+            // identity 证明纹理未变化时，才允许携带原有 texture override。
+            for (const auto& [textureName, textureValue] : textures.items())
+            {
+                if (!textureValue.is_string())
+                {
+                    result.errorMessage =
+                        "Material instance texture preview changes are unavailable: " +
+                        textureName;
+                    return result;
+                }
+
+                const auto activeTextureIt = activeTextures.find(textureName);
+                if (activeTextureIt == activeTextures.end() ||
+                    !activeTextureIt->second.textureAssetIdentity.has_value() ||
+                    MaterialAssetUtils::NormalizeAssetPath(
+                        textureValue.get<std::string>()) !=
+                        MaterialAssetUtils::NormalizeAssetPath(
+                            *activeTextureIt->second.textureAssetIdentity))
+                {
+                    result.errorMessage =
+                        "Material instance texture preview changes are unavailable: " +
+                        textureName;
+                    return result;
+                }
+            }
+        }
+
+        const MaterialInstanceResolveResult resolved =
+            MaterialInstanceResolver::Resolve(
+                expectedPath.value,
+                materialInstanceJson);
+        PreviewRenderStateValues renderStates =
+            BuildPreviewRenderStateValues(
+                resolved.effectiveMaterialInstanceJson);
+        result.renderStates = renderStates;
+        result.serializedJson = materialInstanceJson;
+        const nlohmann::json& parameters =
+            resolved.effectiveMaterialInstanceJson.at("parameters");
+        if (!parameters.is_object())
+        {
+            result.errorMessage =
+                "Material instance preview parameters must be a JSON object.";
+            return result;
+        }
+
+        MaterialInstanceNumericParameterValues values;
+        for (const auto& [parameterName, parameterValue] : parameters.items())
+        {
+            if (parameterValue.is_number())
+            {
+                float scalarValue = 0.0f;
+                if (!ReadFinitePreviewNumber(parameterValue, scalarValue))
+                {
+                    result.errorMessage =
+                        "Material instance preview numeric value is invalid: " +
+                        parameterName;
+                    return result;
+                }
+                values.emplace(parameterName, scalarValue);
+                continue;
+            }
+
+            if (!parameterValue.is_array() ||
+                (parameterValue.size() != 2 &&
+                 parameterValue.size() != 3 &&
+                 parameterValue.size() != 4))
+            {
+                result.errorMessage =
+                    "Material instance preview parameter must be float, vec2, vec3, or vec4: " +
+                    parameterName;
+                return result;
+            }
+
+            float components[4] = {};
+            for (size_t componentIndex = 0;
+                 componentIndex < parameterValue.size();
+                 ++componentIndex)
+            {
+                if (!ReadFinitePreviewNumber(
+                        parameterValue.at(componentIndex),
+                        components[componentIndex]))
+                {
+                    result.errorMessage =
+                        "Material instance preview numeric value is invalid: " +
+                        parameterName;
+                    return result;
+                }
+            }
+
+            if (parameterValue.size() == 2)
+            {
+                values.emplace(
+                    parameterName,
+                    Eigen::Vector2f(components[0], components[1]));
+            }
+            else if (parameterValue.size() == 3)
+            {
+                values.emplace(
+                    parameterName,
+                    Eigen::Vector3f(
+                        components[0],
+                        components[1],
+                        components[2]));
+            }
+            else
+            {
+                values.emplace(
+                    parameterName,
+                    Eigen::Vector4f(
+                        components[0],
+                        components[1],
+                        components[2],
+                        components[3]));
+            }
+        }
+        result.values = std::move(values);
+    }
+    catch (const std::exception& exception)
+    {
+        result.errorMessage =
+            std::string("Material instance preview draft validation failed: ") +
+            exception.what();
+    }
+    return result;
+}
+
 } // namespace
+
+class RenderSystem::MaterialInstancePreviewSession final
+    : public VL::Editor::Preview::IRendererMaterialInstancePreviewSession
+{
+public:
+    MaterialInstancePreviewSession(
+        RenderSystem& ownerValue,
+        VL::Editor::Preview::MaterialInstancePreviewWorldIdentity worldValue,
+        VL::Editor::Preview::NormalizedMaterialInstancePath pathValue,
+        uint64_t ownerGenerationValue,
+        std::shared_ptr<MaterialInstance> materialInstanceValue,
+        MaterialInstanceNumericParameterValues baselineParametersValue,
+        MaterialInstanceStateSnapshot::TextureMap baselineTexturesValue,
+        PreviewRenderStateValues baselineRenderStatesValue,
+        VL::Editor::Preview::MaterialInstancePreviewDraft baselineDraftValue)
+        : owner(ownerValue)
+        , world(std::move(worldValue))
+        , materialInstancePath(std::move(pathValue))
+        , ownerGeneration(ownerGenerationValue)
+        , materialInstance(std::move(materialInstanceValue))
+        , baselineParameters(std::move(baselineParametersValue))
+        , baselineTextures(std::move(baselineTexturesValue))
+        , baselineRenderStates(std::move(baselineRenderStatesValue))
+        , activeRenderStates(baselineRenderStates)
+        , baselineDraft(std::move(baselineDraftValue))
+    {
+    }
+
+    VL::Editor::Preview::MaterialInstancePreviewAdapterResult Apply(
+        const VL::Editor::Preview::MaterialInstancePreviewDraft& draft) override
+    {
+        return Commit(draft, false);
+    }
+
+    VL::Editor::Preview::MaterialInstancePreviewAdapterResult RestoreBaseline(
+        const VL::Editor::Preview::MaterialInstancePreviewDraft& baselineDraft) override
+    {
+        // 仍使用调用方 revision 参与门禁，但内容来自 connect 时捕获的源快照，
+        // 避免外部 document 在连接期间改写 baseline 后影响运行时 Restore。
+        VL::Editor::Preview::MaterialInstancePreviewDraft restoreDraft =
+            this->baselineDraft;
+        restoreDraft.documentRevision = baselineDraft.documentRevision;
+        return Commit(restoreDraft, true);
+    }
+
+private:
+    VL::Editor::Preview::MaterialInstancePreviewAdapterResult Commit(
+        const VL::Editor::Preview::MaterialInstancePreviewDraft& draft,
+        bool restoreBaseline)
+    {
+        NumericPreviewDraftParseResult parsed =
+        ParseNumericPreviewDraft(
+                draft,
+                materialInstancePath,
+                baselineTextures);
+        if (!parsed.values.has_value())
+        {
+            VL::Editor::Preview::MaterialInstancePreviewAdapterResult result;
+            result.status =
+                VL::Editor::Preview::PreviewAdapterOperationStatus::Failed;
+            result.failureStage =
+                VL::Editor::Preview::PreviewAdapterFailureStage::Prepare;
+            result.message = std::move(parsed.errorMessage);
+            return result;
+        }
+
+        const bool renderStateChanged =
+            parsed.renderStates != activeRenderStates;
+
+        const std::optional<
+            VL::Editor::Preview::MaterialInstancePreviewWorldIdentity>
+            activeWorld = owner.GetActiveWorldIdentity();
+        if (!activeWorld.has_value())
+        {
+            VL::Editor::Preview::MaterialInstancePreviewAdapterResult result;
+            result.status =
+                VL::Editor::Preview::PreviewAdapterOperationStatus::Unavailable;
+            result.failureStage =
+                VL::Editor::Preview::PreviewAdapterFailureStage::Prepare;
+            result.message =
+                "Renderer-owned material instance preview lost its active World.";
+            return result;
+        }
+        if (*activeWorld != world)
+        {
+            VL::Editor::Preview::MaterialInstancePreviewAdapterResult result;
+            result.status =
+                VL::Editor::Preview::PreviewAdapterOperationStatus::Failed;
+            result.failureStage =
+                VL::Editor::Preview::PreviewAdapterFailureStage::Prepare;
+            result.message =
+                "Material instance preview World generation changed before commit.";
+            return result;
+        }
+
+        const std::optional<
+            VL::RendererResourceCache::WorldLocalMaterialInstanceCapture>
+            currentCapture =
+                VL::RendererResourceCache::GetInstance()
+                    .CaptureMaterialInstanceForGeneration(
+                        ownerGeneration,
+                        materialInstancePath.value);
+        if (!currentCapture.has_value() ||
+            currentCapture->ownerGeneration != ownerGeneration ||
+            currentCapture->materialInstance.get() != materialInstance.get())
+        {
+            VL::Editor::Preview::MaterialInstancePreviewAdapterResult result;
+            result.status =
+                VL::Editor::Preview::PreviewAdapterOperationStatus::Failed;
+            result.failureStage =
+                VL::Editor::Preview::PreviewAdapterFailureStage::Prepare;
+            result.message =
+                "Material instance preview target is no longer the active World-local MI.";
+            return result;
+        }
+
+        if (renderStateChanged)
+        {
+            VL::Editor::Preview::MaterialInstancePreviewAdapterResult result =
+                owner.CommitMaterialInstancePreviewDraft(
+                    world,
+                    materialInstancePath,
+                    draft);
+            if (result.status ==
+                VL::Editor::Preview::PreviewAdapterOperationStatus::Completed)
+            {
+                const std::optional<
+                    VL::RendererResourceCache::WorldLocalMaterialInstanceCapture>
+                    replacementCapture =
+                        VL::RendererResourceCache::GetInstance()
+                            .CaptureMaterialInstanceForGeneration(
+                                ownerGeneration,
+                                materialInstancePath.value);
+                if (!replacementCapture.has_value() ||
+                    !replacementCapture->materialInstance)
+                {
+                    result.status =
+                        VL::Editor::Preview::PreviewAdapterOperationStatus::Failed;
+                    result.failureStage =
+                        VL::Editor::Preview::PreviewAdapterFailureStage::Commit;
+                    result.liveSwapCommitted = false;
+                    result.replacesLiveResource = false;
+                    result.message =
+                        "Material instance preview committed without an active replacement MI.";
+                    return result;
+                }
+                materialInstance = replacementCapture->materialInstance;
+                ownerGeneration = replacementCapture->ownerGeneration;
+                activeRenderStates = parsed.renderStates;
+            }
+            return result;
+        }
+
+        try
+        {
+            materialInstance->CommitNumericParameterValues(
+                restoreBaseline ? baselineParameters : *parsed.values);
+        }
+        catch (const std::exception& exception)
+        {
+            VL::Editor::Preview::MaterialInstancePreviewAdapterResult result;
+            result.status =
+                VL::Editor::Preview::PreviewAdapterOperationStatus::Failed;
+            result.failureStage =
+                VL::Editor::Preview::PreviewAdapterFailureStage::Commit;
+            result.message =
+                std::string("Material instance numeric preview commit failed: ") +
+                exception.what();
+            return result;
+        }
+
+        VL::Editor::Preview::MaterialInstancePreviewAdapterResult result;
+        result.status =
+            VL::Editor::Preview::PreviewAdapterOperationStatus::Completed;
+        result.runtimeResourceGeneration = ownerGeneration;
+        result.liveSwapCommitted = true;
+        result.replacesLiveResource = false;
+        result.message = restoreBaseline
+            ? "Material instance numeric preview baseline restored."
+            : "Material instance numeric preview applied.";
+        return result;
+    }
+
+    RenderSystem& owner;
+    VL::Editor::Preview::MaterialInstancePreviewWorldIdentity world;
+    VL::Editor::Preview::NormalizedMaterialInstancePath materialInstancePath;
+    uint64_t ownerGeneration = 0;
+    std::shared_ptr<MaterialInstance> materialInstance;
+    MaterialInstanceNumericParameterValues baselineParameters;
+    MaterialInstanceStateSnapshot::TextureMap baselineTextures;
+    PreviewRenderStateValues baselineRenderStates;
+    PreviewRenderStateValues activeRenderStates;
+    VL::Editor::Preview::MaterialInstancePreviewDraft baselineDraft;
+};
 
 RenderSystem::~RenderSystem()
 {
@@ -266,12 +769,21 @@ ComputeShaderArtifact RenderSystem::GetActiveComputeShaderArtifact(
 
 void RenderSystem::SetActiveWorld(std::shared_ptr<const VL::World> world)
 {
+    // World 换代先释放旧 preview session，避免旧 MI shared_ptr 延长已退休
+    // package 的生命周期；新的连接必须重新按 generation/path 捕获目标。
+    materialInstancePreviewAdapter.Reset();
     activeWorld = std::move(world);
     worldSnapshotQueue.Clear();
     worldSnapshotBuilder.Reset();
     currentRenderScene = VL::RenderScene();
     currentResolvedRenderScene = VL::ResolvedRenderScene();
+    pickingRenderScene = VL::RenderScene();
+    hasPickingRenderScene = false;
+    hasMaterialInstancePreviewMaterialOverride = false;
+    materialInstancePreviewOverridePath.clear();
+    materialInstancePreviewOverrideMaterialKey.clear();
     hasRenderScene = false;
+    ClearSelectedMaterialInstance();
     windClockInitialized = false;
     currentWindTimeSeconds = 0.0;
     initializedRenderWorldGeneration = 0;
@@ -520,6 +1032,13 @@ VL::PreparedRuntimeBinding RenderSystem::PrepareRuntimeBinding(
     snapshotDesc.debugViewMode = debugViewMode;
     snapshotDesc.environmentIntensity =
         environmentIntensity;
+    snapshotDesc.hasSelectedDraw =
+        hasSelectedDraw && selectedWorldGeneration == prepared.world->GetGeneration();
+    snapshotDesc.selectedAllMaterialSlots =
+        selectedAllMaterialSlots &&
+        selectedWorldGeneration == prepared.world->GetGeneration();
+    snapshotDesc.selectedObjectId = selectedObjectId;
+    snapshotDesc.selectedMaterialSlotIndex = selectedMaterialSlotIndex;
     auto snapshotResult =
         prepared.snapshotBuilder.Build(
             *prepared.world,
@@ -643,6 +1162,7 @@ RenderSystem::CommitPreparedRuntimeBinding(
         currentRenderScene.worldGeneration;
     nextSnapshotFrameIndex =
         prepared.nextSnapshotFrameIndex;
+    ClearSelectedMaterialInstance();
     shadowCascadeFrameData.valid = false;
     environmentUpdateState.Reset();
     environmentUpdateScheduler.Reset();
@@ -714,6 +1234,507 @@ uint64_t RenderSystem::GetActiveWorldGeneration() const noexcept
         : 0;
 }
 
+std::optional<VL::Editor::Selection::MaterialInstanceSelection>
+RenderSystem::PickMaterialInstanceAt(
+    float mouseX,
+    float mouseY,
+    uint32_t viewportWidth,
+    uint32_t viewportHeight) const
+{
+    if (!activeWorld || !hasPickingRenderScene ||
+        pickingRenderScene.worldGeneration != activeWorld->GetGeneration())
+    {
+        return std::nullopt;
+    }
+
+    VL::Editor::Selection::ScenePickRequest request;
+    request.mouseX = mouseX;
+    request.mouseY = mouseY;
+    request.viewportWidth = viewportWidth;
+    request.viewportHeight = viewportHeight;
+    return VL::Editor::Selection::SceneObjectPicker().Pick(
+        pickingRenderScene,
+        activeWorld->GetScenePath(),
+        request);
+}
+
+std::vector<VL::Editor::Selection::MaterialInstanceModelContext>
+RenderSystem::GetMaterialInstanceModelContexts() const
+{
+    if (!activeWorld || !hasPickingRenderScene ||
+        pickingRenderScene.worldGeneration != activeWorld->GetGeneration())
+    {
+        return {};
+    }
+
+    std::vector<VL::Editor::Selection::MaterialInstanceModelContext> result;
+    std::unordered_map<std::string, std::size_t> modelIndices;
+    modelIndices.reserve(pickingRenderScene.drawPackets.size());
+    for (const VL::RenderDrawPacket& drawPacket : pickingRenderScene.drawPackets)
+    {
+        if (drawPacket.objectId == 0 || !drawPacket.materialInstance.IsValid())
+        {
+            continue;
+        }
+        const std::string objectIdentity = drawPacket.sceneObjectIdentity.empty()
+            ? drawPacket.debugName
+            : drawPacket.sceneObjectIdentity;
+        if (objectIdentity.empty())
+        {
+            continue;
+        }
+
+        const std::string key = std::to_string(drawPacket.objectId) + "|" +
+            objectIdentity;
+        auto [iterator, inserted] = modelIndices.emplace(key, result.size());
+        if (inserted)
+        {
+            result.push_back(
+                VL::Editor::Selection::AggregateSceneModel(
+                    pickingRenderScene,
+                    activeWorld->GetScenePath(),
+                    drawPacket.objectId,
+                    objectIdentity));
+        }
+        static_cast<void>(iterator);
+    }
+
+    std::sort(
+        result.begin(),
+        result.end(),
+        [](const auto& left, const auto& right)
+        {
+            const std::string& leftName = left.displayName.empty()
+                ? left.objectIdentity
+                : left.displayName;
+            const std::string& rightName = right.displayName.empty()
+                ? right.objectIdentity
+                : right.displayName;
+            if (leftName != rightName)
+            {
+                return leftName < rightName;
+            }
+            return left.objectIdentity < right.objectIdentity;
+        });
+    return result;
+}
+
+void RenderSystem::SetSelectedMaterialInstanceModel(
+    const VL::Editor::Selection::MaterialInstanceModelContext& model)
+{
+    if (!activeWorld || model.worldGeneration != activeWorld->GetGeneration() ||
+        model.objectId == 0)
+    {
+        ClearSelectedMaterialInstance();
+        return;
+    }
+
+    hasSelectedDraw = true;
+    selectedAllMaterialSlots = true;
+    selectedObjectId = model.objectId;
+    selectedMaterialSlotIndex = 0;
+    selectedWorldGeneration = model.worldGeneration;
+    if (model.hasWorldBounds)
+    {
+        ScheduleSelectionFocus(
+            model.worldGeneration,
+            model.worldBoundsMin,
+            model.worldBoundsMax);
+    }
+}
+
+void RenderSystem::SetSelectedMaterialInstance(
+    const VL::Editor::Selection::MaterialInstanceSelection& selection)
+{
+    if (!activeWorld ||
+        selection.worldGeneration != activeWorld->GetGeneration() ||
+        selection.objectId == 0)
+    {
+        ClearSelectedMaterialInstance();
+        return;
+    }
+
+    hasSelectedDraw = true;
+    selectedAllMaterialSlots = false;
+    selectedObjectId = selection.objectId;
+    selectedMaterialSlotIndex = selection.materialSlotIndex;
+    selectedWorldGeneration = selection.worldGeneration;
+    if (selection.hasWorldBounds)
+    {
+        ScheduleSelectionFocus(
+            selection.worldGeneration,
+            selection.worldBoundsMin,
+            selection.worldBoundsMax);
+    }
+}
+
+void RenderSystem::ClearSelectedMaterialInstance() noexcept
+{
+    hasSelectedDraw = false;
+    selectedAllMaterialSlots = false;
+    selectedObjectId = 0;
+    selectedMaterialSlotIndex = 0;
+    selectedWorldGeneration = 0;
+    pendingSelectionFocus.reset();
+}
+
+std::unique_ptr<VL::Editor::Preview::IMaterialInstancePreviewAdapter>
+RenderSystem::CreateMaterialInstancePreviewAdapter()
+{
+    VL::Editor::Preview::IRendererMaterialInstancePreviewOwner& owner = *this;
+    return std::make_unique<
+        VL::Editor::Preview::RendererOwnedMaterialInstancePreviewAdapter>(owner);
+}
+
+std::optional<VL::Editor::Preview::MaterialInstancePreviewWorldIdentity>
+RenderSystem::GetActiveWorldIdentity() const
+{
+    if (!activeWorld)
+    {
+        return std::nullopt;
+    }
+
+    VL::Editor::Preview::MaterialInstancePreviewWorldIdentity identity;
+    identity.generation = activeWorld->GetGeneration();
+    identity.scenePath = activeWorld->GetScenePath();
+    return VL::Editor::Preview::NormalizeWorldIdentity(std::move(identity));
+}
+
+VL::Editor::Preview::MaterialInstancePreviewAdapterResult
+RenderSystem::CaptureMaterialInstancePreviewSession(
+    const VL::Editor::Preview::MaterialInstancePreviewAdapterCommand& command,
+    std::shared_ptr<
+        VL::Editor::Preview::IRendererMaterialInstancePreviewSession>&
+        outSession)
+{
+    using namespace VL::Editor::Preview;
+
+    outSession.reset();
+    MaterialInstancePreviewAdapterResult result;
+    result.failureStage = PreviewAdapterFailureStage::Prepare;
+
+    if (!command.world.IsValid() ||
+        !command.materialInstancePath.IsValid())
+    {
+        result.status = PreviewAdapterOperationStatus::Failed;
+        result.message =
+            "Renderer owner received an invalid World identity or MI path.";
+        return result;
+    }
+
+    const std::optional<MaterialInstancePreviewWorldIdentity> activeWorldIdentity =
+        GetActiveWorldIdentity();
+    if (!activeWorldIdentity.has_value())
+    {
+        result.status = PreviewAdapterOperationStatus::Unavailable;
+        result.message =
+            "Renderer owner cannot capture a preview target without an active World.";
+        return result;
+    }
+    if (*activeWorldIdentity != command.world)
+    {
+        result.status = PreviewAdapterOperationStatus::Failed;
+        result.message =
+            "Renderer owner rejected a preview target from an obsolete World generation.";
+        return result;
+    }
+
+    const std::optional<
+        VL::RendererResourceCache::WorldLocalMaterialInstanceCapture>
+        capture =
+            VL::RendererResourceCache::GetInstance()
+                .CaptureMaterialInstanceForGeneration(
+                    command.world.generation,
+                    command.materialInstancePath.value);
+    if (!capture.has_value() || !capture->materialInstance)
+    {
+        result.status = PreviewAdapterOperationStatus::Failed;
+        result.message =
+            "Active World-local MaterialInstance was not found for the normalized MI path.";
+        return result;
+    }
+
+    try
+    {
+        const MaterialInstanceStateSnapshot snapshot =
+            capture->materialInstance->CaptureStateSnapshot();
+        std::ifstream materialInstanceFile(
+            CommonFunction::Path(command.materialInstancePath.value));
+        if (!materialInstanceFile.is_open())
+        {
+            result.status = PreviewAdapterOperationStatus::Failed;
+            result.message =
+                "Renderer owner failed to read the connected MI source.";
+            return result;
+        }
+        nlohmann::json materialInstanceJson;
+        materialInstanceFile >> materialInstanceJson;
+        const MaterialInstanceResolveResult resolved =
+            MaterialInstanceResolver::Resolve(
+                command.materialInstancePath.value,
+                materialInstanceJson);
+        const PreviewRenderStateValues baselineRenderStates =
+            BuildPreviewRenderStateValues(
+                resolved.effectiveMaterialInstanceJson);
+        VL::Editor::Preview::MaterialInstancePreviewDraft baselineDraft;
+        baselineDraft.materialInstancePath =
+            command.materialInstancePath.value;
+        baselineDraft.documentRevision =
+            command.documentRevision.value_or(0);
+        baselineDraft.serializedWorkingDraft =
+            materialInstanceJson.dump();
+        outSession = std::make_shared<MaterialInstancePreviewSession>(
+            *this,
+            command.world,
+            command.materialInstancePath,
+            capture->ownerGeneration,
+            capture->materialInstance,
+            snapshot.parameters,
+            snapshot.textures,
+            baselineRenderStates,
+            std::move(baselineDraft));
+    }
+    catch (const std::exception& exception)
+    {
+        result.status = PreviewAdapterOperationStatus::Failed;
+        result.message =
+            std::string("Renderer owner failed to capture MI numeric baseline: ") +
+            exception.what();
+        return result;
+    }
+
+    result.status = PreviewAdapterOperationStatus::Completed;
+    result.runtimeResourceGeneration = capture->ownerGeneration;
+    result.liveSwapCommitted = false;
+    result.replacesLiveResource = false;
+    result.message =
+        "Renderer-owned numeric material instance preview connected.";
+    return result;
+}
+
+VL::Editor::Preview::MaterialInstancePreviewAdapterResult
+RenderSystem::CommitMaterialInstancePreviewDraft(
+    const VL::Editor::Preview::MaterialInstancePreviewWorldIdentity& world,
+    const VL::Editor::Preview::NormalizedMaterialInstancePath& materialInstancePath,
+    const VL::Editor::Preview::MaterialInstancePreviewDraft& draft)
+{
+    using namespace VL::Editor::Preview;
+
+    MaterialInstancePreviewAdapterResult result;
+    result.failureStage = PreviewAdapterFailureStage::Prepare;
+    if (!world.IsValid() || !materialInstancePath.IsValid())
+    {
+        result.status = PreviewAdapterOperationStatus::Failed;
+        result.message =
+            "Material instance preview replacement received an invalid identity.";
+        return result;
+    }
+    if (rendererBackend == nullptr || pipelineFactory == nullptr)
+    {
+        result.status = PreviewAdapterOperationStatus::Unavailable;
+        result.message =
+            "Material instance preview replacement requires initialized renderer services.";
+        return result;
+    }
+    if (!activeWorld || !hasRenderScene ||
+        activeWorld->GetGeneration() != world.generation ||
+        currentRenderScene.worldGeneration != world.generation)
+    {
+        result.status = PreviewAdapterOperationStatus::Failed;
+        result.message =
+            "Material instance preview replacement targets an obsolete or uninitialized World.";
+        return result;
+    }
+
+    VL::RendererResourceCache& activeCache =
+        VL::RendererResourceCache::GetInstance();
+    const std::optional<VL::RendererResourceCache::WorldLocalMaterialInstanceCapture>
+        activeCapture = activeCache.CaptureMaterialInstanceForGeneration(
+            world.generation,
+            materialInstancePath.value);
+    if (!activeCapture.has_value() || !activeCapture->materialInstance)
+    {
+        result.status = PreviewAdapterOperationStatus::Failed;
+        result.message =
+            "Active World-local MaterialInstance was not found for the preview replacement.";
+        return result;
+    }
+
+    NumericPreviewDraftParseResult parsed =
+        ParseNumericPreviewDraft(
+            draft,
+            materialInstancePath,
+            activeCapture->materialInstance->CaptureStateSnapshot().textures);
+    if (!parsed.serializedJson.has_value())
+    {
+        result.status = PreviewAdapterOperationStatus::Failed;
+        result.message = std::move(parsed.errorMessage);
+        return result;
+    }
+
+    size_t targetDrawCount = 0;
+    for (const VL::RenderDrawPacket& drawPacket : currentRenderScene.drawPackets)
+    {
+        if (drawPacket.materialInstance.key == materialInstancePath.value)
+        {
+            ++targetDrawCount;
+        }
+    }
+    if (targetDrawCount == 0)
+    {
+        result.status = PreviewAdapterOperationStatus::Failed;
+        result.message =
+            "The preview material instance is not referenced by the active RenderScene.";
+        return result;
+    }
+
+    try
+    {
+        VL::RendererResourceCache candidateCache =
+            activeCache.BeginActiveWorldCandidate(world.generation);
+        RenderGraph& renderGraph = RenderGraph::GetInstance();
+        PipelineFactory::GraphicsCandidateState graphicsCandidateState;
+        VL::RendererResourceLoadContext loadContext{
+            candidateCache,
+            renderGraph};
+        loadContext.graphicsCandidateState = &graphicsCandidateState;
+        loadContext.materialInstanceOverridePath = materialInstancePath.value;
+        loadContext.materialInstanceOverrideJson = *parsed.serializedJson;
+
+        VL::RendererMaterialLoader materialLoader(
+            *pipelineFactory,
+            *rendererBackend,
+            loadContext);
+        const std::shared_ptr<MaterialInstance> replacementMaterialInstance =
+            materialLoader.LoadSceneMaterialInstance(materialInstancePath.value);
+        if (!replacementMaterialInstance)
+        {
+            throw std::runtime_error(
+                "Renderer material loader returned an empty preview MaterialInstance");
+        }
+        const std::shared_ptr<Material> replacementMaterial =
+            replacementMaterialInstance->GetBaseMaterial().lock();
+        if (!replacementMaterial)
+        {
+            throw std::runtime_error(
+                "Preview MaterialInstance has no replacement base Material");
+        }
+
+        VL::RenderScene candidateRenderScene = currentRenderScene;
+        ApplyMaterialOverrideToRenderScene(
+            candidateRenderScene,
+            materialInstancePath.value,
+            replacementMaterial->GetMaterialKey());
+        RebuildRenderSceneMaterialGroupsImpl(candidateRenderScene);
+
+        auto resolvedSceneResult = resolvedRenderSceneBuilder.Build(
+            candidateRenderScene,
+            candidateCache);
+        if (resolvedSceneResult.IsFailure())
+        {
+            throw std::runtime_error(
+                VL::FormatRuntimeError(resolvedSceneResult.Error()));
+        }
+        VL::ResolvedRenderScene candidateResolvedRenderScene =
+            std::move(resolvedSceneResult.Value());
+
+        const VL::RendererDescriptorContext descriptorContext =
+            BuildRendererDescriptorContext(
+                candidateCache,
+                renderGraph,
+                GetLightBufferInfo());
+        VL::RendererObjectResourceRegistry objectResourceRegistry;
+        objectResourceRegistry.InitializeResolvedSceneResources(
+            *rendererBackend,
+            descriptorContext,
+            candidateRenderScene,
+            candidateResolvedRenderScene,
+            candidateCache);
+
+        PipelineFactory::PreparedGraphicsCandidateCommit preparedPipelineCommit =
+            pipelineFactory->PrepareCandidateCommit(graphicsCandidateState);
+
+        const std::string replacementMaterialKey =
+            replacementMaterial->GetMaterialKey();
+        std::string replacementPath = materialInstancePath.value;
+        std::string replacementKey = replacementMaterialKey;
+        VL::RenderScene candidatePickingRenderScene = pickingRenderScene;
+        ApplyMaterialOverrideToRenderScene(
+            candidatePickingRenderScene,
+            materialInstancePath.value,
+            replacementMaterialKey);
+        RebuildRenderSceneMaterialGroupsImpl(candidatePickingRenderScene);
+
+        VL::ResourceRetireQueue& retireQueue =
+            VL::ResourceRetireQueue::GetInstance();
+        std::vector<VL::RetiredResource> retirementResources;
+        retirementResources.reserve(1);
+        retirementResources.push_back({
+            "MaterialInstancePreview:WorldLocalResources",
+            world.generation,
+            retireQueue.GetLastSubmittedEpoch(),
+            {}});
+        VL::PreparedResourceRetirements preparedRetirements =
+            retireQueue.PrepareRetirements(std::move(retirementResources));
+
+        pipelineFactory->CommitPreparedCandidate(
+            std::move(preparedPipelineCommit));
+        VL::RendererResourceCache::WorldLocalResourcePackageHandle retiredPackage =
+        activeCache.CommitCandidate(std::move(candidateCache));
+        std::swap(currentRenderScene, candidateRenderScene);
+        std::swap(currentResolvedRenderScene, candidateResolvedRenderScene);
+        std::swap(pickingRenderScene, candidatePickingRenderScene);
+
+        hasMaterialInstancePreviewMaterialOverride = true;
+        materialInstancePreviewOverridePath.swap(replacementPath);
+        materialInstancePreviewOverrideMaterialKey.swap(replacementKey);
+
+        preparedRetirements.GetAdditionalResource(0).resource =
+            std::static_pointer_cast<void>(std::move(retiredPackage));
+        retireQueue.CommitPreparedRetirements(
+            std::move(preparedRetirements));
+
+        result.status = PreviewAdapterOperationStatus::Completed;
+        result.failureStage = PreviewAdapterFailureStage::None;
+        result.runtimeResourceGeneration = world.generation;
+        result.liveSwapCommitted = true;
+        result.replacesLiveResource = true;
+        result.message =
+            "Material instance render-state preview applied with a live resource replacement.";
+        return result;
+    }
+    catch (const std::exception& exception)
+    {
+        result.status = PreviewAdapterOperationStatus::Failed;
+        result.failureStage = PreviewAdapterFailureStage::Prepare;
+        result.message =
+            std::string("Material instance preview resource replacement failed: ") +
+            exception.what();
+        return result;
+    }
+}
+
+void RenderSystem::ApplyMaterialInstancePreviewMaterialOverride(
+    VL::RenderScene& renderScene) const
+{
+    if (!hasMaterialInstancePreviewMaterialOverride ||
+        materialInstancePreviewOverridePath.empty() ||
+        materialInstancePreviewOverrideMaterialKey.empty())
+    {
+        return;
+    }
+    ApplyMaterialOverrideToRenderScene(
+        renderScene,
+        materialInstancePreviewOverridePath,
+        materialInstancePreviewOverrideMaterialKey);
+}
+
+void RenderSystem::RebuildRenderSceneMaterialGroups(
+    VL::RenderScene& renderScene) const
+{
+    RebuildRenderSceneMaterialGroupsImpl(renderScene);
+}
+
 void RenderSystem::UpdateGlobalUBOForPass(vk::CommandBuffer& commandBuffer)
 {
     UpdateUBOGlobal(commandBuffer);
@@ -782,6 +1803,21 @@ bool RenderSystem::IsShadowCascadeActive(
 
 void RenderSystem::UpdateUBOGlobal(vk::CommandBuffer& commandBuffer)
 {
+    UpdateUBOGlobalWithProjectionTransform(
+        commandBuffer,
+        1.0f,
+        1.0f,
+        0.0f,
+        0.0f);
+}
+
+void RenderSystem::UpdateUBOGlobalWithProjectionTransform(
+    vk::CommandBuffer& commandBuffer,
+    float projectionScaleX,
+    float projectionScaleY,
+    float projectionOffsetX,
+    float projectionOffsetY)
+{
     PROFILE_FUNCTION();
     if (!hasRenderScene)
     {
@@ -790,13 +1826,37 @@ void RenderSystem::UpdateUBOGlobal(vk::CommandBuffer& commandBuffer)
 
     UBOGlobal ubo;
     const VL::CameraSnapshot& camera = currentRenderScene.camera;
+    Eigen::Matrix4f projection = camera.projection;
+    Eigen::Matrix4f previousViewProjection = camera.previousViewProjection;
+    if (!std::isfinite(projectionScaleX) || projectionScaleX <= 0.0f ||
+        !std::isfinite(projectionScaleY) || projectionScaleY <= 0.0f ||
+        !std::isfinite(projectionOffsetX) ||
+        !std::isfinite(projectionOffsetY))
+    {
+        projectionScaleX = 1.0f;
+        projectionScaleY = 1.0f;
+        projectionOffsetX = 0.0f;
+        projectionOffsetY = 0.0f;
+    }
+    projection.row(0) =
+        projectionScaleX * camera.projection.row(0) +
+        projectionOffsetX * camera.projection.row(3);
+    projection.row(1) =
+        projectionScaleY * camera.projection.row(1) +
+        projectionOffsetY * camera.projection.row(3);
+    previousViewProjection.row(0) =
+        projectionScaleX * camera.previousViewProjection.row(0) +
+        projectionOffsetX * camera.previousViewProjection.row(3);
+    previousViewProjection.row(1) =
+        projectionScaleY * camera.previousViewProjection.row(1) +
+        projectionOffsetY * camera.previousViewProjection.row(3);
     ubo.view = camera.view;
-    ubo.projection = camera.projection;
+    ubo.projection = projection;
     ubo.invView = ubo.view.inverse();
     ubo.invProjection = ubo.projection.inverse();
-    ubo.viewProjection = camera.viewProjection;
+    ubo.viewProjection = ubo.projection * ubo.view;
     ubo.invViewProjection = ubo.viewProjection.inverse();
-    ubo.previousViewProjection = camera.previousViewProjection;
+    ubo.previousViewProjection = previousViewProjection;
     if (csmSettings.castShadows)
     {
         if (!shadowCascadeFrameData.valid)
@@ -1352,6 +2412,77 @@ void RenderSystem::RefreshRenderSceneFromActiveWorld()
     }
 }
 
+void RenderSystem::ScheduleSelectionFocus(
+    uint64_t worldGeneration,
+    const Eigen::Vector3f& boundsMin,
+    const Eigen::Vector3f& boundsMax)
+{
+    if (!boundsMin.allFinite() || !boundsMax.allFinite() ||
+        (boundsMin.array() > boundsMax.array()).any())
+    {
+        return;
+    }
+
+    pendingSelectionFocus = PendingSelectionFocus{
+        worldGeneration,
+        boundsMin,
+        boundsMax};
+}
+
+void RenderSystem::ApplyPendingSelectionFocus()
+{
+    if (!pendingSelectionFocus.has_value())
+    {
+        return;
+    }
+
+    if (!activeWorld || pendingSelectionFocus->worldGeneration !=
+            activeWorld->GetGeneration() || !activeWorld->GetCamera())
+    {
+        pendingSelectionFocus.reset();
+        return;
+    }
+
+    const Eigen::Vector3f& boundsMin = pendingSelectionFocus->boundsMin;
+    const Eigen::Vector3f& boundsMax = pendingSelectionFocus->boundsMax;
+    const Eigen::Vector3f center = (boundsMin + boundsMax) * 0.5f;
+    const float radius = std::max(
+        0.5f,
+        (boundsMax - boundsMin).norm() * 0.5f);
+    Camera& camera = *activeWorld->GetCamera();
+
+    Eigen::Vector3f forward = camera.GetForwardVector();
+    if (!forward.allFinite() || forward.squaredNorm() <= 1.0e-8f)
+    {
+        forward = Eigen::Vector3f(0.0f, 0.0f, -1.0f);
+    }
+    else
+    {
+        forward.normalize();
+    }
+
+    constexpr float degreesToRadians = 0.01745329251994329577f;
+    const float halfFovRadians = std::max(
+        0.1f,
+        camera.GetHFOV() * degreesToRadians * 0.5f);
+    const float tangent = std::tan(halfFovRadians);
+    const float fitDistance = tangent > 1.0e-4f
+        ? radius / tangent * 1.25f
+        : radius * 2.0f;
+    const float distance = std::max(
+        fitDistance,
+        camera.GetClipNear() + radius * 0.25f);
+    const Eigen::Vector3f position = center - forward * distance;
+
+    // 只改变相机当前姿态，不写回 scene JSON；下一次 controller 更新仍可继续
+    // 操作该相机，模型列表聚焦因此是一次性导航而非锁定视角。
+    camera.SetCamera(position, center, camera.GetUpVector());
+    camera.SetClip(
+        camera.GetClipNear(),
+        std::max(camera.GetClipFar(), distance + radius * 4.0f));
+    pendingSelectionFocus.reset();
+}
+
 void RenderSystem::PublishSnapshotFromActiveWorld()
 {
     if (!activeWorld)
@@ -1359,11 +2490,20 @@ void RenderSystem::PublishSnapshotFromActiveWorld()
         throw std::runtime_error("RenderSystem active World is not set");
     }
 
+    ApplyPendingSelectionFocus();
+
     VL::WorldSnapshotBuildDesc buildDesc;
     buildDesc.worldGeneration = activeWorld->GetGeneration();
     buildDesc.frameIndex = nextSnapshotFrameIndex++;
     buildDesc.debugViewMode = debugViewMode;
     buildDesc.environmentIntensity = environmentIntensity;
+    buildDesc.hasSelectedDraw =
+        hasSelectedDraw && selectedWorldGeneration == activeWorld->GetGeneration();
+    buildDesc.selectedAllMaterialSlots =
+        selectedAllMaterialSlots &&
+        selectedWorldGeneration == activeWorld->GetGeneration();
+    buildDesc.selectedObjectId = selectedObjectId;
+    buildDesc.selectedMaterialSlotIndex = selectedMaterialSlotIndex;
 
     auto snapshotResult = worldSnapshotBuilder.Build(*activeWorld, buildDesc);
     if (snapshotResult.IsFailure())
@@ -1371,7 +2511,18 @@ void RenderSystem::PublishSnapshotFromActiveWorld()
         throw std::runtime_error(VL::FormatRuntimeError(snapshotResult.Error()));
     }
 
-    worldSnapshotQueue.Publish(std::move(snapshotResult.Value()));
+    VL::WorldSnapshot snapshot = std::move(snapshotResult.Value());
+    auto pickingRenderSceneResult = rendererFrontend.BuildRenderScene(snapshot);
+    if (pickingRenderSceneResult.IsFailure())
+    {
+        throw std::runtime_error(
+            VL::FormatRuntimeError(pickingRenderSceneResult.Error()));
+    }
+    pickingRenderScene = std::move(pickingRenderSceneResult.Value());
+    ApplyMaterialInstancePreviewMaterialOverride(pickingRenderScene);
+    RebuildRenderSceneMaterialGroups(pickingRenderScene);
+    hasPickingRenderScene = true;
+    worldSnapshotQueue.Publish(std::move(snapshot));
 }
 
 bool RenderSystem::ConsumeLatestSnapshotIntoRenderScene()
@@ -1389,6 +2540,8 @@ bool RenderSystem::ConsumeLatestSnapshotIntoRenderScene()
     }
 
     currentRenderScene = std::move(renderSceneResult.Value());
+    ApplyMaterialInstancePreviewMaterialOverride(currentRenderScene);
+    RebuildRenderSceneMaterialGroups(currentRenderScene);
     hasRenderScene = true;
     return true;
 }
@@ -1644,6 +2797,7 @@ void RenderSystem::AdvanceSpeedTreeWindProfiles()
 
 void RenderSystem::ShutdownRenderObject()
 {
+    materialInstancePreviewAdapter.Reset();
     if (shaderReloadCoordinator != nullptr)
     {
         shaderReloadCoordinator->SetUiOverlayParticipant(nullptr);

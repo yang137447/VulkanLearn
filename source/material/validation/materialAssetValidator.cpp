@@ -1,7 +1,9 @@
 #include "materialAssetValidator.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstddef>
 #include <filesystem>
 #include <stdexcept>
 #include <string>
@@ -10,6 +12,8 @@
 
 namespace
 {
+    bool IsFiniteNumber(const nlohmann::json& value);
+
     void RequireObjectField(const nlohmann::json& json, std::string_view field, std::string_view context)
     {
         const std::string fieldName(field);
@@ -72,6 +76,134 @@ namespace
             throw std::runtime_error(
                 "Empty material instance " + std::string(field) +
                 " object must be omitted: " + std::string(materialInstancePath));
+        }
+    }
+
+    size_t GetMaterialParameterComponentCount(std::string_view type)
+    {
+        if (type == "vec2") return 2;
+        if (type == "vec3") return 3;
+        if (type == "vec4") return 4;
+        return 1;
+    }
+
+    void ValidateParameterChannels(
+        const nlohmann::json& parameterJson,
+        std::string_view parameterName,
+        std::string_view type,
+        std::string_view materialPath)
+    {
+        if (!parameterJson.contains("channels"))
+        {
+            return;
+        }
+        if (type == "float")
+        {
+            throw std::runtime_error(
+                "Scalar material parameter cannot declare channels: " +
+                std::string(parameterName) + " in " + std::string(materialPath));
+        }
+
+        const nlohmann::json& channels = parameterJson.at("channels");
+        if (!channels.is_object())
+        {
+            throw std::runtime_error(
+                "Material parameter channels must be an object: " +
+                std::string(parameterName) + " in " + std::string(materialPath));
+        }
+
+        static constexpr std::array<std::string_view, 4> componentNames = {
+            "x", "y", "z", "w"};
+        const size_t componentCount =
+            GetMaterialParameterComponentCount(type);
+        if (channels.size() != componentCount)
+        {
+            throw std::runtime_error(
+                "Material parameter channels must describe every " +
+                std::string(type) + " component exactly once: " +
+                std::string(parameterName) + " in " + std::string(materialPath));
+        }
+
+        for (size_t componentIndex = 0;
+             componentIndex < componentCount;
+             ++componentIndex)
+        {
+            const std::string componentName(componentNames[componentIndex]);
+            if (!channels.contains(componentName) ||
+                !channels.at(componentName).is_object())
+            {
+                throw std::runtime_error(
+                    "Material parameter channels is missing object component \"" +
+                    componentName + "\": " + std::string(parameterName) +
+                    " in " + std::string(materialPath));
+            }
+
+            const nlohmann::json& channel = channels.at(componentName);
+            if (!channel.contains("name") || !channel.at("name").is_string() ||
+                MaterialAssetUtils::Trim(channel.at("name").get<std::string>()).empty() ||
+                !channel.contains("description") ||
+                !channel.at("description").is_string() ||
+                MaterialAssetUtils::Trim(
+                    channel.at("description").get<std::string>()).empty())
+            {
+                throw std::runtime_error(
+                    "Material parameter channel requires non-empty name and description: " +
+                    std::string(parameterName) + "." + componentName +
+                    " in " + std::string(materialPath));
+            }
+
+            if (!channel.contains("range") || !channel.at("range").is_object() ||
+                !channel.at("range").contains("min") ||
+                !channel.at("range").contains("max") ||
+                !IsFiniteNumber(channel.at("range").at("min")) ||
+                !IsFiniteNumber(channel.at("range").at("max")))
+            {
+                throw std::runtime_error(
+                    "Material parameter channel requires finite range min/max: " +
+                    std::string(parameterName) + "." + componentName +
+                    " in " + std::string(materialPath));
+            }
+
+            const double minimum =
+                channel.at("range").at("min").get<double>();
+            const double maximum =
+                channel.at("range").at("max").get<double>();
+            if (minimum > maximum)
+            {
+                throw std::runtime_error(
+                    "Material parameter channel range min must not exceed max: " +
+                    std::string(parameterName) + "." + componentName +
+                    " in " + std::string(materialPath));
+            }
+
+            const nlohmann::json& defaultValue =
+                parameterJson.at("default").at(componentIndex);
+            if (!IsFiniteNumber(defaultValue) ||
+                defaultValue.get<double>() < minimum ||
+                defaultValue.get<double>() > maximum)
+            {
+                throw std::runtime_error(
+                    "Material parameter default is outside its declared channel range: " +
+                    std::string(parameterName) + "." + componentName +
+                    " in " + std::string(materialPath));
+            }
+        }
+
+        for (const auto& [componentName, channel] : channels.items())
+        {
+            (void)channel;
+            const auto componentEnd =
+                componentNames.begin() + static_cast<std::ptrdiff_t>(componentCount);
+            if (std::find(
+                    componentNames.begin(),
+                    componentEnd,
+                    componentName) == componentEnd)
+            {
+                throw std::runtime_error(
+                    "Material parameter channels contains unknown component \"" +
+                    componentName + "\": " + std::string(parameterName) +
+                    " in " + std::string(materialPath));
+            }
         }
     }
 }
@@ -256,6 +388,12 @@ void MaterialAssetValidator::ValidateDefinition(
                 "Material parameter type/default mismatch: " + parameterName +
                 " in " + std::string(materialPath));
         }
+        // 通道说明只服务作者与工具；完整性在资产入口校验，不能改变 UBO 或 shader ABI。
+        ValidateParameterChannels(
+            parameterJson,
+            parameterName,
+            type,
+            materialPath);
     }
 
     for (const auto& [textureName, textureJson] : materialJson["textures"].items())
@@ -434,13 +572,18 @@ void MaterialAssetValidator::ValidateInstanceOverrides(
             continue;
         }
 
-        if (!materialJson["renderStates"].contains(name))
+        if (name != "renderMode" &&
+            !materialJson["renderStates"].contains(name))
         {
             throw std::runtime_error(
                 "Material instance overrides unknown render state \"" + name + "\": " +
                 std::string(materialInstancePath));
         }
-        if (value == materialJson["renderStates"].at(name))
+        const std::string materialDefault =
+            materialJson["renderStates"].value(
+                name,
+                name == "renderMode" ? std::string("Opaque") : std::string());
+        if (value == materialDefault)
         {
             throw std::runtime_error(
                 "Material instance redundantly repeats M_ render state \"" + name +
@@ -468,6 +611,86 @@ void MaterialAssetValidator::ValidateInstanceOverrides(
                 "Material instance texture redundantly repeats M_ default \"" + name +
                 "\": " + std::string(materialInstancePath));
         }
+    }
+
+    const auto shadingModelOverride = renderStateOverrides.find("shadingModel");
+    const std::string shadingModel = shadingModelOverride !=
+            renderStateOverrides.end()
+        ? shadingModelOverride->get<std::string>()
+        : materialJson.at("shadingModel").get<std::string>();
+    const auto renderModeOverride = renderStateOverrides.find("renderMode");
+    const std::string renderMode = renderModeOverride !=
+            renderStateOverrides.end()
+        ? renderModeOverride->get<std::string>()
+        : materialJson["renderStates"].value("renderMode", std::string("Opaque"));
+    ValidateRenderStateCombination(
+        shadingModel,
+        renderMode,
+        materialInstancePath);
+}
+
+void MaterialAssetValidator::ValidateRenderStateCombination(
+    std::string_view shadingModel,
+    std::string_view renderMode,
+    std::string_view materialInstancePath)
+{
+    if (shadingModel.empty())
+    {
+        throw std::runtime_error(
+            "Material shadingModel must not be empty: " +
+            std::string(materialInstancePath));
+    }
+    MaterialAssetUtils::ShadingModelToId(shadingModel);
+
+    static constexpr std::array<std::string_view, 9> renderModes = {
+        "Opaque",
+        "OpaqueClip",
+        "ForwardOpaque",
+        "ForwardEyeInner",
+        "ForwardEyeCornea",
+        "TransparentAlphaBlend",
+        "TransparentAlphaBlendWriteDepth",
+        "TransparentAdditive",
+        "ThinTranslucent"};
+    if (std::find(renderModes.begin(), renderModes.end(), renderMode) ==
+        renderModes.end())
+    {
+        throw std::runtime_error(
+            "Unsupported renderMode: " + std::string(renderMode) +
+            ": " + std::string(materialInstancePath));
+    }
+
+    const bool usesThinTranslucentShadingModel =
+        shadingModel == "ThinTranslucent";
+    const bool usesEyeShadingModel = shadingModel == "Eye";
+    const bool usesForwardOpaqueRenderMode = renderMode == "ForwardOpaque";
+    const bool usesEyeLayerRenderMode =
+        renderMode == "ForwardEyeInner" ||
+        renderMode == "ForwardEyeCornea";
+    const bool usesDeferredOpaqueRenderMode = renderMode == "Opaque";
+
+    if (usesEyeShadingModel &&
+        !usesForwardOpaqueRenderMode &&
+        !usesEyeLayerRenderMode &&
+        !usesDeferredOpaqueRenderMode)
+    {
+        throw std::runtime_error(
+            "Eye shadingModel requires an explicit Eye render path: " +
+            std::string(materialInstancePath));
+    }
+    if (!usesEyeShadingModel &&
+        (usesForwardOpaqueRenderMode || usesEyeLayerRenderMode))
+    {
+        throw std::runtime_error(
+            "Only Eye shadingModel may use an Eye forward render path: " +
+            std::string(materialInstancePath));
+    }
+    if (usesThinTranslucentShadingModel !=
+        (renderMode == "ThinTranslucent"))
+    {
+        throw std::runtime_error(
+            "ThinTranslucent shadingModel and renderMode must be selected together: " +
+            std::string(materialInstancePath));
     }
 }
 

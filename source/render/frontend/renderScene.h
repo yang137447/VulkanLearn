@@ -10,7 +10,11 @@ namespace VL
 struct RenderDrawPacket
 {
     RuntimeId objectId = 0;
+    bool selected = false;
     std::string debugName;
+    std::string sceneObjectIdentity;
+    uint32_t materialSlotIndex = 0;
+    std::string materialSlotName;
     ResourceHandle mesh;
     ResourceHandle material;
     ResourceHandle materialInstance;

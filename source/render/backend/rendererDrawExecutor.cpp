@@ -272,7 +272,7 @@ void RendererDrawExecutor::DrawShadowScene(
                 }
 
                 context.services.UpdateObjectUBOForPass(objectResources, drawPacket);
-                drawResources.renderableObject->Draw(commandBuffer, renderPass.width, renderPass.height);
+                drawResources.renderableObject->Draw(commandBuffer);
             }
         }
     }
@@ -407,9 +407,7 @@ void RendererDrawExecutor::DrawSortedTransparentScene(
             objectResources,
             drawPacket);
         drawResources.renderableObject->Draw(
-            commandBuffer,
-            renderPass.width,
-            renderPass.height);
+            commandBuffer);
     }
 }
 
@@ -491,7 +489,7 @@ void RendererDrawExecutor::DrawSurfaceScene(
                     context.services.RecordEyeDraw(1);
                 }
                 context.services.UpdateObjectUBOForPass(objectResources, drawPacket);
-                drawResources.renderableObject->Draw(commandBuffer, renderPass.width, renderPass.height);
+                drawResources.renderableObject->Draw(commandBuffer);
             }
         }
     }

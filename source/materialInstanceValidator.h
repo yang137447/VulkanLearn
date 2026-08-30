@@ -18,6 +18,8 @@
 struct MaterialInstanceBuildPlan
 {
     ShaderVariantKey shaderVariantKey;
+    // 同一 forwardTransparent RenderPass 可按材质变体选择是否写深度；该合同必须进入缓存身份。
+    PassPipelineContractKey surfacePassPipelineContractKey;
     VL::MaterialFeatureKey materialFeatureKey;
     VL::MaterialDescriptorSchema materialDescriptorSchema;
     std::optional<VL::MaterialShaderCompileRequest> baseShaderCompileRequest;
@@ -34,6 +36,10 @@ public:
     // shader variant 各自解释 override 后得到不同结果。
     static RenderMode ResolveRenderMode(
         const nlohmann::json& effectiveMaterialInstanceJson);
+
+    static PassPipelineContractKey ResolveSurfacePipelineContractKey(
+        const PassPipelineContractKey& passPipelineContractKey,
+        RenderMode renderMode);
 
     // 在 MI override 合并完成后推导 Feature，确保 OpaqueClip/TwoSided 使用 effective state。
     // supportsDualSourceBlend 同时决定 Thin Translucent 的 shader 能力宏与固定混合状态。

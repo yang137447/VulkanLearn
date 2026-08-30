@@ -34,6 +34,32 @@ namespace VL
 namespace
 {
 
+nlohmann::json LoadMaterialInstanceJson(
+    const RendererResourceLoadContext& loadContext,
+    std::string_view materialInstancePath)
+{
+    const std::string normalizedPath =
+        MaterialAssetUtils::NormalizeAssetPath(materialInstancePath);
+    if (loadContext.materialInstanceOverrideJson.has_value() &&
+        loadContext.materialInstanceOverridePath == normalizedPath)
+    {
+        return *loadContext.materialInstanceOverrideJson;
+    }
+
+    std::ifstream materialInstanceFile(
+        CommonFunction::Path(std::string(materialInstancePath)));
+    if (!materialInstanceFile.is_open())
+    {
+        throw std::runtime_error(
+            "Failed to open material instance: " +
+            std::string(materialInstancePath));
+    }
+
+    nlohmann::json materialInstanceJson;
+    materialInstanceFile >> materialInstanceJson;
+    return materialInstanceJson;
+}
+
 const MaterialParameterSchemaEntry* FindParameterSchema(
     const MaterialDescriptorSchema& schema,
     const std::string& name)
@@ -266,18 +292,8 @@ std::shared_ptr<MaterialInstance>
 RendererMaterialLoader::LoadSceneMaterialInstance(
     std::string_view materialInstancePath) const
 {
-    const std::string materialInstancePathString(materialInstancePath);
-    std::ifstream materialInstanceFile(
-        CommonFunction::Path(materialInstancePathString));
-    if (!materialInstanceFile.is_open())
-    {
-        throw std::runtime_error(
-            "Failed to open material instance: " +
-            materialInstancePathString);
-    }
-
-    nlohmann::json materialInstanceJson;
-    materialInstanceFile >> materialInstanceJson;
+    const nlohmann::json materialInstanceJson =
+        LoadMaterialInstanceJson(loadContext, materialInstancePath);
     const MaterialInstanceResolveResult resolveResult =
         MaterialInstanceResolver::Resolve(
             materialInstancePath,
@@ -315,15 +331,31 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
     // 但它的 Material 管线合同仍需与目标 pass 一致，避免把旧图管线带入新图。
     const std::string materialInstanceKey =
         MaterialAssetUtils::NormalizeAssetPath(materialInstancePath);
+    const nlohmann::json materialInstanceJson =
+        LoadMaterialInstanceJson(loadContext, materialInstancePath);
+    MaterialInstanceResolveResult materialInstanceResolveResult =
+        MaterialInstanceResolver::Resolve(materialInstancePath, materialInstanceJson);
+    nlohmann::json& effectiveMaterialInstanceJson =
+        materialInstanceResolveResult.effectiveMaterialInstanceJson;
+    const RenderMode effectiveRenderMode =
+        MaterialInstanceValidator::ResolveRenderMode(effectiveMaterialInstanceJson);
+    const PassPipelineContractKey effectiveSurfacePipelineContractKey =
+        MaterialInstanceValidator::ResolveSurfacePipelineContractKey(
+            renderPass.pipelineContractKey,
+            effectiveRenderMode);
     const std::shared_ptr<MaterialInstance>* cachedMaterialInstance =
         resourceCache.GetMaterialInstance(materialInstanceKey);
-    if (cachedMaterialInstance != nullptr && *cachedMaterialInstance != nullptr)
+    const bool isOverriddenMaterialInstance =
+        loadContext.materialInstanceOverrideJson.has_value() &&
+        loadContext.materialInstanceOverridePath == materialInstanceKey;
+    if (!isOverriddenMaterialInstance &&
+        cachedMaterialInstance != nullptr && *cachedMaterialInstance != nullptr)
     {
         std::shared_ptr<Material> cachedBaseMaterial =
             (*cachedMaterialInstance)->GetBaseMaterial().lock();
         if (!cachedBaseMaterial ||
             cachedBaseMaterial->GetPassPipelineContractKey() !=
-                renderPass.pipelineContractKey)
+                effectiveSurfacePipelineContractKey)
         {
             throw std::runtime_error(
                 "Material instance asset '" + materialInstanceKey +
@@ -331,15 +363,6 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
         }
         return *cachedMaterialInstance;
     }
-
-    const std::string materialInstancePathString(materialInstancePath);
-    std::ifstream materialInstanceFile(CommonFunction::Path(materialInstancePathString));
-    nlohmann::json materialInstanceJson;
-    materialInstanceFile >> materialInstanceJson;
-    MaterialInstanceResolveResult materialInstanceResolveResult =
-        MaterialInstanceResolver::Resolve(materialInstancePath, materialInstanceJson);
-    nlohmann::json& effectiveMaterialInstanceJson =
-        materialInstanceResolveResult.effectiveMaterialInstanceJson;
     const std::shared_ptr<const SubsurfaceResourceSet>& subsurfaceResources =
         resourceCache.GetSubsurfaceResources();
     if (!subsurfaceResources)
@@ -373,13 +396,13 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
         materialInstanceResolveResult.materialPath,
         materialInstanceResolveResult.materialJson,
         rendererBackend.SupportsDualSourceBlend());
-    // Thin Translucent 的输出数量、Set 3 阴影输入和混合状态都只与
-    // forwardTransparent 合同兼容；这里在创建 pipeline 前锁死路由。
-    if (loadPlan.shaderVariantKey.renderMode == RenderMode::ThinTranslucent &&
+    // 所有连续透明输出都只能进入 forwardTransparent；写深度模式只改变该材质
+    // pipeline 的 DepthWrite 状态，不允许借用 Geometry 的多 MRT 合同。
+    if (IsTransparentRenderMode(loadPlan.shaderVariantKey.renderMode) &&
         renderPass.type != RenderGraphPassType::ForwardTransparent)
     {
         throw std::runtime_error(
-            "ThinTranslucent material must use the forwardTransparent pass: " +
+            "Transparent material must use the forwardTransparent pass: " +
             std::string(materialInstancePath));
     }
     if (loadPlan.shaderVariantKey.renderMode == RenderMode::ForwardOpaque &&
@@ -453,6 +476,7 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
         material = std::make_shared<Material>(
             pipelineFactory, 
             renderPass,
+            loadPlan.surfacePassPipelineContractKey,
             loadPlan.shaderVariantKey,
             loadPlan.materialFeatureKey,
             loadPlan.materialDescriptorSchema,

@@ -6,6 +6,7 @@
 #include <cmath>
 #include "commonFunction.h"
 #include "material/materialAssetUtils.h"
+#include "material/validation/materialAssetValidator.h"
 
 namespace
 {
@@ -82,6 +83,7 @@ namespace
         case RenderMode::ForwardEyeCornea:
             return GraphicsPipelineBlendMode::Additive;
         case RenderMode::TransparentAlphaBlend:
+        case RenderMode::TransparentAlphaBlendWriteDepth:
             return GraphicsPipelineBlendMode::AlphaBlend;
         case RenderMode::TransparentAdditive:
             return GraphicsPipelineBlendMode::Additive;
@@ -292,6 +294,10 @@ RenderMode MaterialInstanceValidator::ResolveRenderMode(
     {
         return RenderMode::TransparentAlphaBlend;
     }
+    if (renderMode == "TransparentAlphaBlendWriteDepth")
+    {
+        return RenderMode::TransparentAlphaBlendWriteDepth;
+    }
     if (renderMode == "TransparentAdditive")
     {
         return RenderMode::TransparentAdditive;
@@ -301,6 +307,28 @@ RenderMode MaterialInstanceValidator::ResolveRenderMode(
         return RenderMode::ThinTranslucent;
     }
     throw std::runtime_error("Unsupported renderMode: " + renderMode);
+}
+
+PassPipelineContractKey MaterialInstanceValidator::ResolveSurfacePipelineContractKey(
+    const PassPipelineContractKey& passPipelineContractKey,
+    RenderMode renderMode)
+{
+    PassPipelineContractKey resolvedContract = passPipelineContractKey;
+    if (!RequiresTransparentDepthWrite(renderMode))
+    {
+        return resolvedContract;
+    }
+
+    if (!resolvedContract.depthTestEnable)
+    {
+        throw std::runtime_error(
+            "TransparentAlphaBlendWriteDepth requires a depth-tested surface pass");
+    }
+
+    // 深度附件和 load/store 仍由 forwardTransparent pass 持有；这里只覆盖材质管线的
+    // DepthWrite 固定状态，因此无需复制 RenderGraph pass 或修改环境配置。
+    resolvedContract.depthWriteEnable = true;
+    return resolvedContract;
 }
 
 MaterialInstanceBuildPlan MaterialInstanceValidator::BuildLoadPlan(
@@ -315,45 +343,19 @@ MaterialInstanceBuildPlan MaterialInstanceValidator::BuildLoadPlan(
     loadPlan.shaderVariantKey.shaderName =
         materialInstanceJson.at("shaderName").get<std::string>();
     loadPlan.shaderVariantKey.renderMode = ResolveRenderMode(materialInstanceJson);
+    loadPlan.surfacePassPipelineContractKey = ResolveSurfacePipelineContractKey(
+        passPipelineContractKey,
+        loadPlan.shaderVariantKey.renderMode);
     const std::string shadingModel =
         materialInstanceJson.at("shadingModel").get<std::string>();
     ValidateClothEffectiveParameters(materialInstanceJson, materialInstancePath);
 
-    const bool usesThinTranslucentShadingModel =
-        shadingModel == "ThinTranslucent";
-    const bool usesEyeShadingModel = shadingModel == "Eye";
-    const bool usesForwardOpaqueRenderMode =
-        loadPlan.shaderVariantKey.renderMode == RenderMode::ForwardOpaque;
-    const bool usesEyeLayerRenderMode =
-        IsForwardEyeLayerRenderMode(loadPlan.shaderVariantKey.renderMode);
-    const bool usesDeferredOpaqueRenderMode =
-        loadPlan.shaderVariantKey.renderMode == RenderMode::Opaque;
-    // Eye 可以显式选择单壳 Forward、双壳 layer 或版本化 Deferred fallback。
-    if (usesEyeShadingModel &&
-        !usesForwardOpaqueRenderMode &&
-        !usesEyeLayerRenderMode &&
-        !usesDeferredOpaqueRenderMode)
-    {
-        throw std::runtime_error(
-            "Eye shadingModel requires an explicit Eye render path: " +
-            std::string(materialInstancePath));
-    }
-    if (!usesEyeShadingModel &&
-        (usesForwardOpaqueRenderMode || usesEyeLayerRenderMode))
-    {
-        throw std::runtime_error(
-            "Only Eye shadingModel may use an Eye forward render path: " +
-            std::string(materialInstancePath));
-    }
-    // RenderMode 决定 pass、混合和排序，ShadingModel 决定闭包数学；两者必须成对，
-    // 否则会出现“薄透射公式写入普通透明混合”或“普通闭包写入双源混合”的错误组合。
-    if (usesThinTranslucentShadingModel !=
-        (loadPlan.shaderVariantKey.renderMode == RenderMode::ThinTranslucent))
-    {
-        throw std::runtime_error(
-            "ThinTranslucent shadingModel and renderMode must be selected together: " +
-            std::string(materialInstancePath));
-    }
+    // RenderMode 决定 pass、混合和排序，ShadingModel 决定闭包数学；编辑器与
+    // runtime 共用这组 renderer-independent 配对规则，pass 合同仍在下方单独校验。
+    MaterialAssetValidator::ValidateRenderStateCombination(
+        shadingModel,
+        RenderModeToString(loadPlan.shaderVariantKey.renderMode),
+        materialInstancePath);
 
     loadPlan.shaderVariantKey.shadingModelMacro =
         MaterialAssetUtils::ShadingModelToShaderDefine(shadingModel);
@@ -411,7 +413,7 @@ MaterialInstanceBuildPlan MaterialInstanceValidator::BuildLoadPlan(
     loadPlan.materialKey = BuildMaterialCacheKey(
         loadPlan.shaderVariantKey,
         loadPlan.materialFeatureKey,
-        passPipelineContractKey,
+        loadPlan.surfacePassPipelineContractKey,
         loadPlan.cullMode,
         loadPlan.blendMode);
     loadPlan.materialInstanceKey = BuildMaterialInstanceCacheKey(materialInstancePath);

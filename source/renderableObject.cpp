@@ -31,24 +31,10 @@ RenderableObject::~RenderableObject()
     rendererBackend = nullptr;
 }
 
-void RenderableObject::Draw(vk::CommandBuffer &commandBuffer, uint32_t width, uint32_t height)
+void RenderableObject::Draw(vk::CommandBuffer &commandBuffer)
 {
-    vk::Viewport viewport;
-    viewport
-        .setX(0.0f)
-        .setY(0.0f)
-        .setWidth(static_cast<float>(width))
-        .setHeight(static_cast<float>(height))
-        .setMinDepth(0.0f)
-        .setMaxDepth(1.0f);
-    vk::Rect2D scissor;
-    scissor
-        .setOffset({ 0, 0 })
-        .setExtent({ 
-            static_cast<uint32_t>(width), 
-            static_cast<uint32_t>(height) });
-    commandBuffer.setViewport(0, 1, &viewport);
-    commandBuffer.setScissor(0, 1, &scissor);
+    // viewport/scissor 由 PassRuntime 按 pass 统一设置，避免每个对象把中心
+    // 视口覆盖回整张资源。
     commandBuffer.bindVertexBuffers(0, 1, &vertexBuffer, &vertexBufferInfo.offset);
     commandBuffer.bindIndexBuffer(indexBuffer, 0, vk::IndexType::eUint32);
     commandBuffer.drawIndexed(indices.size(), 1, 0, 0, 0);

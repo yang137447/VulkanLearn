@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -35,6 +36,10 @@ struct SceneAssetBuildPlan
 struct MeshObjectBuildPlan
 {
     std::string objectName;
+    // 这是场景 JSON 中的原始对象身份；objectName 可能因多 section 被展开。
+    std::string sceneObjectIdentity;
+    uint32_t materialSlotIndex = 0;
+    std::string materialSlotName;
     std::string debugName;
     Eigen::Matrix4f model = Eigen::Matrix4f::Identity();
     Eigen::Vector3f localBoundsMin = Eigen::Vector3f::Zero();

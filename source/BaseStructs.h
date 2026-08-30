@@ -124,10 +124,13 @@ struct alignas(16) UBOModel
     // UBOModel. A foliage-only Profile/Instance buffer would avoid allocating
     // and uploading these 208 bytes for ordinary meshes.
     SpeedTreeWindStateGPU speedTreeWind;
+    // x=1 表示该 DrawPacket 是当前编辑器选中的可见子模型。
+    Eigen::Vector4f selectionData = Eigen::Vector4f::Zero();
 };
 
 static_assert(offsetof(UBOModel, speedTreeWind) == 128, "UBOModel speedTreeWind must match GLSL std140 layout");
-static_assert(sizeof(UBOModel) == 336, "UBOModel size must match the GLSL std140 block");
+static_assert(offsetof(UBOModel, selectionData) == 336, "UBOModel selectionData must match GLSL std140 layout");
+static_assert(sizeof(UBOModel) == 352, "UBOModel size must match the GLSL std140 block");
 
 struct alignas(4) LightSSBOHeader
 {

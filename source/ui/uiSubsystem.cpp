@@ -1,11 +1,13 @@
 #include "ui/uiSubsystem.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
+#include <string_view>
 #include <utility>
 
 #include <RmlUi/Core/Context.h>
@@ -18,10 +20,14 @@
 
 #ifdef VULKANLEARN_ENABLE_DEVELOPER_UI
 #include <imgui.h>
+#include <imgui_internal.h>
 #endif
 
 #include "engine/diagnosticsSubsystem.h"
 #include "engine/runtimeCommand.h"
+#include "editor/selection/materialInstanceSelection.h"
+#include "editor/runtime/materialInstanceEditorRuntime.h"
+#include "editor/ui/materialInstanceAssetEditorPanel.h"
 #include "platform/platformEvent.h"
 #include "platform/platformWindow.h"
 
@@ -32,6 +38,136 @@ namespace
 {
 
 constexpr float GamepadNavigationThreshold = 0.55f;
+
+#ifdef VULKANLEARN_ENABLE_DEVELOPER_UI
+constexpr const char* DeveloperDockSpaceName = "VulkanLearnDeveloperDockSpace";
+constexpr const char* MaterialInstanceNavigationWindowName = "Material Instance Navigation";
+constexpr const char* MaterialInstanceInspectorWindowName = "Material Instance Inspector";
+constexpr float NavigationDockWidthFraction = 0.18f;
+constexpr float InspectorDockWidthFraction = 0.30f;
+
+void BuildDefaultDeveloperDockLayout(
+    ImGuiID dockspaceId,
+    const ImGuiViewport& mainViewport)
+{
+    ImGui::DockBuilderRemoveNode(dockspaceId);
+    ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
+    ImGui::DockBuilderSetNodePos(dockspaceId, mainViewport.WorkPos);
+    ImGui::DockBuilderSetNodeSize(dockspaceId, mainViewport.WorkSize);
+
+    ImGuiID centerNode = dockspaceId;
+    ImGuiID leftNode = 0;
+    ImGuiID rightNode = 0;
+    ImGui::DockBuilderSplitNode(
+        centerNode,
+        ImGuiDir_Left,
+        NavigationDockWidthFraction,
+        &leftNode,
+        &centerNode);
+    // 第二次 split 面向扣除左栏后的剩余区域，换算后仍让右栏约占主视口 30%。
+    const float inspectorFractionOfRemaining =
+        InspectorDockWidthFraction / (1.0f - NavigationDockWidthFraction);
+    ImGui::DockBuilderSplitNode(
+        centerNode,
+        ImGuiDir_Right,
+        inspectorFractionOfRemaining,
+        &rightNode,
+        &centerNode);
+
+    ImGui::DockBuilderDockWindow(MaterialInstanceNavigationWindowName, leftNode);
+    ImGui::DockBuilderDockWindow(MaterialInstanceInspectorWindowName, rightNode);
+    // 中央 Dock 保持为空，让真实 SDL3/Vulkan framebuffer 贯穿窗口，不再被
+    // 一个仅用于占位的 ImGui 3D Viewport 窗口覆盖或改变输入区域。
+    ImGui::DockBuilderFinish(dockspaceId);
+}
+
+bool IsPointInsideActiveDeveloperWindow(
+    const ImGuiWindow* window,
+    float mouseX,
+    float mouseY)
+{
+    if (window == nullptr || !window->WasActive)
+    {
+        return false;
+    }
+    return window->OuterRectClipped.Contains(ImVec2(mouseX, mouseY));
+}
+#endif
+
+std::string NormalizePathForComparison(const std::filesystem::path& path)
+{
+    if (path.empty())
+    {
+        return {};
+    }
+
+    std::error_code error;
+    std::filesystem::path normalizedPath = std::filesystem::absolute(path, error);
+    if (error)
+    {
+        normalizedPath = path;
+    }
+    std::string normalized = normalizedPath.lexically_normal().generic_string();
+#ifdef _WIN32
+    for (char& character : normalized)
+    {
+        character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+    }
+#endif
+    return normalized;
+}
+
+bool IsSceneOptionLess(const UiSceneOption& left, const UiSceneOption& right)
+{
+    std::string leftSortKey = left.label;
+    std::string rightSortKey = right.label;
+    for (char& character : leftSortKey)
+    {
+        character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+    }
+    for (char& character : rightSortKey)
+    {
+        character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+    }
+
+    // 场景显示名是面向用户的标签，排序时忽略 ASCII 大小写，避免小写资源名沉到列表末尾。
+    if (leftSortKey != rightSortKey)
+    {
+        return leftSortKey < rightSortKey;
+    }
+    if (left.label != right.label)
+    {
+        return left.label < right.label;
+    }
+    return left.path < right.path;
+}
+
+bool IsSupportedSceneObjectType(std::string_view type)
+{
+    return type == "mesh" ||
+        type == "terrain" ||
+        type == "directionalLight" ||
+        type == "pointLight" ||
+        type == "spotLight" ||
+        type == "camera" ||
+        type == "environment";
+}
+
+bool HasSupportedSceneObjectTypes(const nlohmann::json& sceneJson)
+{
+    for (const nlohmann::json& objectJson : sceneJson["objects"])
+    {
+        if (!objectJson.is_object() ||
+            !objectJson.contains("type") ||
+            !objectJson["type"].is_string() ||
+            !IsSupportedSceneObjectType(
+                objectJson["type"].get<std::string>()))
+        {
+            return false;
+        }
+    }
+    return true;
+}
 
 Rml::Input::KeyIdentifier ToRmlKey(PlatformKey key)
 {
@@ -212,6 +348,8 @@ uint64_t GetFileFingerprint(const std::filesystem::directory_entry& entry)
 
 } // namespace
 
+UiSubsystem::UiSubsystem() = default;
+
 UiSubsystem::~UiSubsystem()
 {
     Shutdown();
@@ -239,6 +377,11 @@ RuntimeResult<void> UiSubsystem::Initialize(
     }
 
     desc = initializeDesc;
+    sceneViewportRect = {
+        0,
+        0,
+        desc.viewportWidth,
+        desc.viewportHeight};
     window = &platformWindow;
     commandBus = &initializeCommandBus;
     diagnostics = &diagnosticsSubsystem;
@@ -246,6 +389,7 @@ RuntimeResult<void> UiSubsystem::Initialize(
     developerUiEnabled = desc.developerUiEnabled;
     developerUiVisible = developerUiEnabled && desc.developerUiVisible;
     nextHotReloadCheck = std::chrono::steady_clock::now();
+    LoadSceneOptions();
 
     RuntimeResult<void> rmlResult = InitializeRmlUi();
     if (rmlResult.IsFailure())
@@ -282,6 +426,14 @@ RuntimeResult<void> UiSubsystem::Initialize(
         return developerResult;
     }
 
+    RuntimeResult<void> materialEditorResult =
+        InitializeMaterialInstanceEditor();
+    if (materialEditorResult.IsFailure())
+    {
+        diagnostics->ReportWarning(
+            FormatRuntimeError(materialEditorResult.Error()));
+    }
+
     initialized = true;
     UpdateInputOwnership();
     diagnostics->ReportInfo(
@@ -310,6 +462,9 @@ void UiSubsystem::Shutdown()
         imguiInitialized = false;
     }
 #endif
+
+    materialInstanceEditorPanel.reset();
+    materialInstanceEditorRuntime.reset();
 
     if (rmlContext != nullptr && runtimeDocument != nullptr)
     {
@@ -342,6 +497,7 @@ void UiSubsystem::Shutdown()
     runtimePageVisible = false;
     developerUiVisible = false;
     developerUiEnabled = false;
+    developerDockLayoutBuilt = false;
     hotReloadStatus.clear();
     rmlKeyPressCounts.clear();
     rmlPressedKeyboardKeys.clear();
@@ -460,10 +616,52 @@ void UiSubsystem::Resize(uint32_t width, uint32_t height)
 
     desc.viewportWidth = width;
     desc.viewportHeight = height;
+    sceneViewportRect = {0, 0, width, height};
     if (rmlContext != nullptr)
     {
         rmlContext->SetDimensions(Rml::Vector2i(static_cast<int>(width), static_cast<int>(height)));
     }
+}
+
+bool UiSubsystem::IsScenePickTarget(float mouseX, float mouseY) const
+{
+#ifdef VULKANLEARN_ENABLE_DEVELOPER_UI
+    if (!developerUiVisible || runtimePageVisible || !imguiInitialized ||
+        !std::isfinite(mouseX) || !std::isfinite(mouseY))
+    {
+        return false;
+    }
+
+    if (mouseX < static_cast<float>(sceneViewportRect.x) ||
+        mouseY < static_cast<float>(sceneViewportRect.y) ||
+        mouseX >= static_cast<float>(
+            sceneViewportRect.x + static_cast<int32_t>(sceneViewportRect.width)) ||
+        mouseY >= static_cast<float>(
+            sceneViewportRect.y + static_cast<int32_t>(sceneViewportRect.height)))
+    {
+        return false;
+    }
+
+    const ImGuiWindow* navigationWindow =
+        ImGui::FindWindowByName(MaterialInstanceNavigationWindowName);
+    if (IsPointInsideActiveDeveloperWindow(navigationWindow, mouseX, mouseY))
+    {
+        return false;
+    }
+
+    const ImGuiWindow* inspectorWindow =
+        ImGui::FindWindowByName(MaterialInstanceInspectorWindowName);
+    if (IsPointInsideActiveDeveloperWindow(inspectorWindow, mouseX, mouseY))
+    {
+        return false;
+    }
+
+    return true;
+#else
+    static_cast<void>(mouseX);
+    static_cast<void>(mouseY);
+    return false;
+#endif
 }
 
 void UiSubsystem::ApplyAction(const UiAction& action)
@@ -505,6 +703,241 @@ void UiSubsystem::ApplyAction(const UiAction& action)
         break;
     }
     UpdateInputOwnership();
+}
+
+void UiSubsystem::NotifyWorldChanged(
+    const std::string& worldPath,
+    uint64_t generation)
+{
+    selectedModelMaterials.reset();
+    selectedMaterialSlotIndex.reset();
+    sceneModels.clear();
+    pendingMaterialInstanceModelSelection.reset();
+    pendingMaterialInstanceSelection.reset();
+    if (materialInstanceEditorRuntime != nullptr)
+    {
+        materialInstanceEditorRuntime->NotifyWorldChanged(
+            worldPath,
+            generation);
+    }
+}
+
+void UiSubsystem::NotifyWorldLoadCompleted()
+{
+    if (!bindingData.sceneLoading)
+    {
+        return;
+    }
+    bindingData.sceneLoading = false;
+    dataModelHandle.DirtyVariable("scene_loading");
+}
+
+void UiSubsystem::TickMaterialInstanceEditor()
+{
+    if (!initialized || materialInstanceEditorRuntime == nullptr)
+    {
+        return;
+    }
+    materialInstanceEditorRuntime->Tick();
+}
+
+bool UiSubsystem::OpenMaterialInstanceFromSelection(
+    const Editor::Selection::MaterialInstanceSelection& selection)
+{
+    if (!developerUiEnabled || materialInstanceEditorRuntime == nullptr)
+    {
+        return false;
+    }
+
+    Editor::Selection::MaterialInstanceEditorRuntimeSelectionTarget target(
+        *materialInstanceEditorRuntime);
+    if (!target.OpenMaterialInstance(selection))
+    {
+        return false;
+    }
+
+    if (materialInstanceEditorPanel != nullptr)
+    {
+        materialInstanceEditorPanel->SetVisible(true);
+    }
+
+    EditorUi::MaterialInstanceModelSnapshot modelSnapshot;
+    modelSnapshot.worldGeneration = selection.modelContext.worldGeneration;
+    modelSnapshot.scenePath = selection.modelContext.scenePath;
+    modelSnapshot.objectId = selection.modelContext.objectId;
+    modelSnapshot.displayName = selection.modelContext.displayName;
+    modelSnapshot.objectIdentity = selection.modelContext.objectIdentity;
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        modelSnapshot.worldBoundsMin[axis] =
+            selection.modelContext.worldBoundsMin[axis];
+        modelSnapshot.worldBoundsMax[axis] =
+            selection.modelContext.worldBoundsMax[axis];
+    }
+    modelSnapshot.materials.reserve(selection.modelContext.materials.size());
+    for (const Editor::Selection::MaterialInstanceModelMaterial& material :
+         selection.modelContext.materials)
+    {
+        EditorUi::MaterialInstanceModelMaterialSnapshot materialSnapshot;
+        materialSnapshot.objectId = material.objectId;
+        materialSnapshot.materialSlotIndex = material.materialSlotIndex;
+        materialSnapshot.materialSlotName = material.materialSlotName;
+        materialSnapshot.materialInstancePath = material.materialInstancePath;
+        for (int axis = 0; axis < 3; ++axis)
+        {
+            materialSnapshot.worldBoundsMin[axis] = material.worldBoundsMin[axis];
+            materialSnapshot.worldBoundsMax[axis] = material.worldBoundsMax[axis];
+        }
+        modelSnapshot.materials.push_back(
+            std::move(materialSnapshot));
+    }
+    selectedModelMaterials = std::move(modelSnapshot);
+    selectedMaterialSlotIndex = selection.materialSlotIndex;
+    return true;
+}
+
+void UiSubsystem::SetMaterialInstanceSceneModels(
+    const std::vector<Editor::Selection::MaterialInstanceModelContext>& models)
+{
+    sceneModels.clear();
+    sceneModels.reserve(models.size());
+    for (const Editor::Selection::MaterialInstanceModelContext& model : models)
+    {
+        EditorUi::MaterialInstanceModelSnapshot modelSnapshot;
+        modelSnapshot.worldGeneration = model.worldGeneration;
+        modelSnapshot.scenePath = model.scenePath;
+        modelSnapshot.objectId = model.objectId;
+        modelSnapshot.displayName = model.displayName;
+        modelSnapshot.objectIdentity = model.objectIdentity;
+        for (int axis = 0; axis < 3; ++axis)
+        {
+            modelSnapshot.worldBoundsMin[axis] = model.worldBoundsMin[axis];
+            modelSnapshot.worldBoundsMax[axis] = model.worldBoundsMax[axis];
+        }
+        modelSnapshot.materials.reserve(model.materials.size());
+        for (const Editor::Selection::MaterialInstanceModelMaterial& material :
+             model.materials)
+        {
+            EditorUi::MaterialInstanceModelMaterialSnapshot materialSnapshot;
+            materialSnapshot.objectId = material.objectId;
+            materialSnapshot.materialSlotIndex = material.materialSlotIndex;
+            materialSnapshot.materialSlotName = material.materialSlotName;
+            materialSnapshot.materialInstancePath = material.materialInstancePath;
+            for (int axis = 0; axis < 3; ++axis)
+            {
+                materialSnapshot.worldBoundsMin[axis] = material.worldBoundsMin[axis];
+                materialSnapshot.worldBoundsMax[axis] = material.worldBoundsMax[axis];
+            }
+            modelSnapshot.materials.push_back(std::move(materialSnapshot));
+        }
+        sceneModels.push_back(std::move(modelSnapshot));
+    }
+
+    if (!selectedModelMaterials.has_value())
+    {
+        return;
+    }
+
+    const auto selected = std::find_if(
+        sceneModels.begin(),
+        sceneModels.end(),
+        [this](const EditorUi::MaterialInstanceModelSnapshot& model)
+        {
+            return selectedModelMaterials->objectId != 0 &&
+                model.objectId == selectedModelMaterials->objectId &&
+                model.worldGeneration == selectedModelMaterials->worldGeneration;
+        });
+    if (selected == sceneModels.end())
+    {
+        selectedModelMaterials.reset();
+        selectedMaterialSlotIndex.reset();
+        return;
+    }
+    selectedModelMaterials = *selected;
+}
+
+std::optional<Editor::Selection::MaterialInstanceModelContext>
+UiSubsystem::ConsumeMaterialInstanceModelSelectionRequest()
+{
+    std::optional<Editor::Selection::MaterialInstanceModelContext> result =
+        std::move(pendingMaterialInstanceModelSelection);
+    pendingMaterialInstanceModelSelection.reset();
+    return result;
+}
+
+std::optional<Editor::Selection::MaterialInstanceSelection>
+UiSubsystem::ConsumeMaterialInstanceSelectionRequest()
+{
+    std::optional<Editor::Selection::MaterialInstanceSelection> result =
+        std::move(pendingMaterialInstanceSelection);
+    pendingMaterialInstanceSelection.reset();
+    return result;
+}
+
+void UiSubsystem::ClearMaterialInstanceSceneSelection() noexcept
+{
+    selectedModelMaterials.reset();
+    selectedMaterialSlotIndex.reset();
+    pendingMaterialInstanceModelSelection.reset();
+    pendingMaterialInstanceSelection.reset();
+}
+
+bool UiSubsystem::RequestModelSelection(
+    const Editor::Selection::MaterialInstanceModelContext& model)
+{
+    if (!developerUiEnabled || model.worldGeneration == 0 ||
+        model.objectId == 0 || model.objectIdentity.empty())
+    {
+        return false;
+    }
+
+    EditorUi::MaterialInstanceModelSnapshot modelSnapshot;
+    modelSnapshot.worldGeneration = model.worldGeneration;
+    modelSnapshot.scenePath = model.scenePath;
+    modelSnapshot.objectId = model.objectId;
+    modelSnapshot.displayName = model.displayName;
+    modelSnapshot.objectIdentity = model.objectIdentity;
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        modelSnapshot.worldBoundsMin[axis] = model.worldBoundsMin[axis];
+        modelSnapshot.worldBoundsMax[axis] = model.worldBoundsMax[axis];
+    }
+    modelSnapshot.materials.reserve(model.materials.size());
+    for (const Editor::Selection::MaterialInstanceModelMaterial& material : model.materials)
+    {
+        EditorUi::MaterialInstanceModelMaterialSnapshot materialSnapshot;
+        materialSnapshot.objectId = material.objectId;
+        materialSnapshot.materialSlotIndex = material.materialSlotIndex;
+        materialSnapshot.materialSlotName = material.materialSlotName;
+        materialSnapshot.materialInstancePath = material.materialInstancePath;
+        for (int axis = 0; axis < 3; ++axis)
+        {
+            materialSnapshot.worldBoundsMin[axis] = material.worldBoundsMin[axis];
+            materialSnapshot.worldBoundsMax[axis] = material.worldBoundsMax[axis];
+        }
+        modelSnapshot.materials.push_back(std::move(materialSnapshot));
+    }
+    selectedModelMaterials = std::move(modelSnapshot);
+    selectedMaterialSlotIndex.reset();
+    pendingMaterialInstanceSelection.reset();
+    pendingMaterialInstanceModelSelection = model;
+    return true;
+}
+
+bool UiSubsystem::RequestMaterialSelection(
+    const Editor::Selection::MaterialInstanceSelection& selection)
+{
+    if (!developerUiEnabled || selection.worldGeneration == 0 ||
+        selection.objectId == 0 || selection.objectIdentity.empty() ||
+        selection.materialInstancePath.empty())
+    {
+        return false;
+    }
+
+    selectedMaterialSlotIndex = selection.materialSlotIndex;
+    pendingMaterialInstanceModelSelection.reset();
+    pendingMaterialInstanceSelection = selection;
+    return true;
 }
 
 bool UiSubsystem::ShouldUseRelativeMouseModeForGame() const
@@ -564,6 +997,18 @@ RuntimeResult<void> UiSubsystem::InitializeDataModel()
     }
 
     bool bound = true;
+    if (auto sceneOptionHandle = constructor.RegisterStruct<UiSceneOption>())
+    {
+        bound = sceneOptionHandle.RegisterMember("label", &UiSceneOption::label) && bound;
+        bound = sceneOptionHandle.RegisterMember("path", &UiSceneOption::path) && bound;
+        bound = sceneOptionHandle.RegisterMember("active", &UiSceneOption::active) && bound;
+    }
+    else
+    {
+        bound = false;
+    }
+    bound = constructor.RegisterArray<decltype(bindingData.sceneOptions)>() && bound;
+
     bound = constructor.Bind("active_section", &bindingData.activeSection) && bound;
     bound = constructor.Bind("world_text", &bindingData.worldText) && bound;
     bound = constructor.Bind("panel_title", &bindingData.panelTitle) && bound;
@@ -576,7 +1021,15 @@ RuntimeResult<void> UiSubsystem::InitializeDataModel()
     bound = constructor.Bind("tab_post_process_label", &bindingData.tabPostProcessLabel) && bound;
     bound = constructor.Bind("tab_environment_label", &bindingData.tabEnvironmentLabel) && bound;
     bound = constructor.Bind("tab_shadows_label", &bindingData.tabShadowsLabel) && bound;
+    bound = constructor.Bind("tab_scenes_label", &bindingData.tabScenesLabel) && bound;
     bound = constructor.Bind("tab_system_label", &bindingData.tabSystemLabel) && bound;
+
+    bound = constructor.Bind("scene_list_title", &bindingData.sceneListTitle) && bound;
+    bound = constructor.Bind("scene_list_hint", &bindingData.sceneListHint) && bound;
+    bound = constructor.Bind("scene_empty_label", &bindingData.sceneEmptyLabel) && bound;
+    bound = constructor.Bind("scene_loading_label", &bindingData.sceneLoadingLabel) && bound;
+    bound = constructor.Bind("scene_loading", &bindingData.sceneLoading) && bound;
+    bound = constructor.Bind("scene_options", &bindingData.sceneOptions) && bound;
 
     bound = constructor.Bind("frame_label", &bindingData.frameLabel) && bound;
     bound = constructor.Bind("frame_value", &bindingData.frameValue) && bound;
@@ -720,6 +1173,7 @@ RuntimeResult<void> UiSubsystem::InitializeDataModel()
     bound = constructor.Bind("developer_ui_toggle_label", &bindingData.developerUiToggleLabel) && bound;
 
     bound = constructor.BindEventCallback("close_page", &UiSubsystem::OnClosePage, this) && bound;
+    bound = constructor.BindEventCallback("load_scene", &UiSubsystem::OnLoadScene, this) && bound;
     bound = constructor.BindEventCallback("set_debug_view", &UiSubsystem::OnDebugViewSelected, this) && bound;
     bound = constructor.BindEventCallback("tone_none", &UiSubsystem::OnToneMappingNone, this) && bound;
     bound = constructor.BindEventCallback("tone_reinhard", &UiSubsystem::OnToneMappingReinhard, this) && bound;
@@ -819,6 +1273,49 @@ RuntimeResult<void> UiSubsystem::InitializeDeveloperUi()
     return RuntimeResult<void>::Success();
 }
 
+RuntimeResult<void> UiSubsystem::InitializeMaterialInstanceEditor()
+{
+    materialInstanceEditorPanel.reset();
+    materialInstanceEditorRuntime.reset();
+
+    if (!developerUiEnabled)
+    {
+        return RuntimeResult<void>::Success();
+    }
+
+    std::filesystem::path resourceRoot;
+    if (!desc.sceneRoot.empty())
+    {
+        resourceRoot = desc.sceneRoot.parent_path();
+    }
+
+    std::filesystem::path projectRoot;
+    if (!desc.assetRoot.empty())
+    {
+        projectRoot = desc.assetRoot.parent_path();
+    }
+
+    auto runtime = std::make_unique<Editor::MaterialInstanceEditorRuntime>();
+    RuntimeResult<void> result = runtime->Initialize(
+        Editor::MaterialInstanceEditorRuntime::Config{
+            std::move(resourceRoot),
+            std::move(projectRoot),
+            256,
+            desc.previewAdapter});
+    if (result.IsFailure())
+    {
+        return result;
+    }
+
+    materialInstanceEditorRuntime = std::move(runtime);
+    materialInstanceEditorPanel =
+        std::make_unique<EditorUi::MaterialInstanceAssetEditorPanel>(
+            materialInstanceEditorRuntime.get());
+    materialInstanceEditorPanel->SetSceneSelectionSink(this);
+    materialInstanceEditorPanel->SetVisible(true);
+    return RuntimeResult<void>::Success();
+}
+
 RuntimeResult<void> UiSubsystem::LoadFonts()
 {
     std::vector<std::filesystem::path> candidates = desc.fontFaces;
@@ -853,6 +1350,94 @@ RuntimeResult<void> UiSubsystem::LoadFonts()
             desc.assetRoot.string()));
     }
     return RuntimeResult<void>::Success();
+}
+
+void UiSubsystem::LoadSceneOptions()
+{
+    bindingData.sceneOptions.clear();
+    if (desc.sceneRoot.empty())
+    {
+        diagnostics->ReportWarning("UI scene selector disabled because sceneRoot is empty.");
+        return;
+    }
+
+    std::error_code error;
+    std::filesystem::recursive_directory_iterator iterator(
+        desc.sceneRoot,
+        std::filesystem::directory_options::skip_permission_denied,
+        error);
+    std::filesystem::recursive_directory_iterator end;
+    if (error)
+    {
+        diagnostics->ReportWarning(
+            "UI scene selector could not scan scene root: " + desc.sceneRoot.string());
+        return;
+    }
+
+    while (iterator != end)
+    {
+        const std::filesystem::directory_entry& entry = *iterator;
+        if (entry.is_regular_file(error) && entry.path().extension() == ".json")
+        {
+            try
+            {
+                std::ifstream stream(entry.path());
+                nlohmann::json sceneJson;
+                stream >> sceneJson;
+                const bool isSceneAsset =
+                    sceneJson.is_object() &&
+                    sceneJson.value("type", std::string()) == "scene" &&
+                    sceneJson.contains("objects") &&
+                    sceneJson["objects"].is_array() &&
+                    HasSupportedSceneObjectTypes(sceneJson);
+                if (isSceneAsset)
+                {
+                    UiSceneOption option;
+                    option.label = sceneJson.value(
+                        "name",
+                        entry.path().stem().string());
+                    std::filesystem::path relativePath = std::filesystem::relative(
+                        entry.path(),
+                        desc.sceneRoot.parent_path(),
+                        error);
+                    if (error)
+                    {
+                        error.clear();
+                        relativePath = std::filesystem::path("scenes") / entry.path().filename();
+                    }
+                    option.path = relativePath.generic_string();
+                    option.normalizedPhysicalPath = NormalizePathForComparison(entry.path());
+                    bindingData.sceneOptions.push_back(std::move(option));
+                }
+                else if (sceneJson.is_object() &&
+                    sceneJson.value("type", std::string()) == "scene")
+                {
+                    diagnostics->ReportWarning(
+                        "UI scene selector skipped an unsupported scene asset: " +
+                        entry.path().string());
+                }
+            }
+            catch (const std::exception& exception)
+            {
+                diagnostics->ReportWarning(
+                    "UI scene selector skipped invalid JSON: " +
+                    entry.path().string() + " (" + exception.what() + ")");
+            }
+        }
+        error.clear();
+        iterator.increment(error);
+        if (error)
+        {
+            diagnostics->ReportWarning(
+                "UI scene selector stopped while scanning: " + desc.sceneRoot.string());
+            break;
+        }
+    }
+
+    std::sort(
+        bindingData.sceneOptions.begin(),
+        bindingData.sceneOptions.end(),
+        IsSceneOptionLess);
 }
 
 RuntimeResult<UiSubsystem::LocalizationDatabase> UiSubsystem::LoadLocalizationCandidate() const
@@ -1172,7 +1757,21 @@ void UiSubsystem::SyncBindingData()
     bindingData.tabPostProcessLabel = Localize("tab.post_process");
     bindingData.tabEnvironmentLabel = Localize("tab.environment");
     bindingData.tabShadowsLabel = Localize("tab.shadows");
+    bindingData.tabScenesLabel = Localize("tab.scenes");
     bindingData.tabSystemLabel = Localize("tab.system");
+
+    bindingData.sceneListTitle = Localize("scene.list_title");
+    bindingData.sceneListHint = Localize("scene.list_hint");
+    bindingData.sceneEmptyLabel = Localize("scene.empty");
+    bindingData.sceneLoadingLabel = Localize("scene.loading");
+    const std::string activeWorldPath =
+        NormalizePathForComparison(lastViewModel.activeWorldPath);
+    for (UiSceneOption& option : bindingData.sceneOptions)
+    {
+        option.active =
+            !activeWorldPath.empty() &&
+            option.normalizedPhysicalPath == activeWorldPath;
+    }
 
     bindingData.frameLabel = Localize("status.frame");
     bindingData.frameValue = std::to_string(lastViewModel.frameIndex);
@@ -1493,6 +2092,12 @@ void UiSubsystem::BuildAndPublishRenderSnapshot()
     snapshot->frameIndex = uiFrameIndex++;
     snapshot->viewportWidth = desc.viewportWidth;
     snapshot->viewportHeight = desc.viewportHeight;
+    snapshot->sceneViewportRect = {
+        0,
+        0,
+        desc.viewportWidth,
+        desc.viewportHeight};
+    sceneViewportRect = snapshot->sceneViewportRect;
 
     rmlRenderInterface.BeginFrame(*snapshot);
     rmlContext->Render();
@@ -1517,10 +2122,7 @@ void UiSubsystem::AppendDeveloperDrawData(UiRenderSnapshot& snapshot)
         static_cast<float>(desc.viewportHeight));
     io.DeltaTime = lastViewModel.deltaTimeSeconds > 0.0f ? lastViewModel.deltaTimeSeconds : 1.0f / 60.0f;
     ImGui::NewFrame();
-    if (developerUiVisible)
-    {
-        BuildDeveloperPanels();
-    }
+    BuildDeveloperPanels();
     ImGui::Render();
     if (developerUiWasVisible && !developerUiVisible)
     {
@@ -1597,67 +2199,58 @@ void UiSubsystem::AppendDeveloperDrawData(UiRenderSnapshot& snapshot)
 void UiSubsystem::BuildDeveloperPanels()
 {
 #ifdef VULKANLEARN_ENABLE_DEVELOPER_UI
-    ImGui::DockSpaceOverViewport(
-        0,
-        ImGui::GetMainViewport(),
-        ImGuiDockNodeFlags_PassthruCentralNode);
-    if (!ImGui::Begin("VulkanLearn Developer Tools", &developerUiVisible))
+    // KeepAliveOnly 仍会生成覆盖主视口的 ImGui 宿主窗口；隐藏编辑器时
+    // 必须完全跳过 DockSpace，避免其 WindowBg 作为灰色遮罩写入最终 framebuffer。
+    if (!developerUiVisible)
     {
-        ImGui::End();
         return;
     }
 
-    ImGui::Text("Frame: %llu", static_cast<unsigned long long>(lastViewModel.frameIndex));
-    ImGui::Text("FPS: %.1f", lastViewModel.framesPerSecond);
-    ImGui::TextWrapped("World: %s", lastViewModel.activeWorldPath.c_str());
-
-    ImGui::SeparatorText("Renderer State");
-    ImGui::Text("Debug view: %d", lastViewModel.debugViewMode);
-    ImGui::Text("Tone mapping: %d", lastViewModel.toneMappingMode);
-    ImGui::Text("Bloom: %.2f / %.2f / %.2f / %.2f",
-        lastViewModel.bloomStrength,
-        lastViewModel.bloomThreshold,
-        lastViewModel.bloomKnee,
-        lastViewModel.bloomClamp);
-    ImGui::Text("Environment intensity: %.2f", lastViewModel.environmentIntensity);
-    ImGui::Text(
-        "Environment update: %s  active=%llu pending=%llu  old=%s",
-        lastViewModel.environmentUpdateStage.c_str(),
-        static_cast<unsigned long long>(lastViewModel.environmentActiveGeneration),
-        static_cast<unsigned long long>(lastViewModel.environmentPendingGeneration),
-        lastViewModel.environmentUsesPreviousResources ? "yes" : "no");
-    ImGui::Text(
-        "IBL progress: cube %u/%u  SH %u/1  prefilter %u/%u",
-        lastViewModel.environmentCubemapFacesCompleted,
-        lastViewModel.environmentCubemapFaceCount,
-        lastViewModel.environmentShUpdatesCompleted,
-        lastViewModel.environmentPrefilterMipsCompleted,
-        lastViewModel.environmentPrefilterMipCount);
-    if (lastViewModel.environmentGpuTimingSupported)
+    const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
+    const ImGuiID dockspaceId = ImGui::GetID(DeveloperDockSpaceName);
+    if (!developerDockLayoutBuilt)
     {
-        ImGui::Text(
-            "IBL GPU ms: cube %.3f  SH %.3f  prefilter %.3f  commit %.3f",
-            lastViewModel.environmentCubemapGpuMs,
-            lastViewModel.environmentShGpuMs,
-            lastViewModel.environmentPrefilterGpuMs,
-            lastViewModel.environmentCommitGpuMs);
+        BuildDefaultDeveloperDockLayout(dockspaceId, *mainViewport);
+        developerDockLayoutBuilt = true;
     }
-    else
-    {
-        ImGui::Text("IBL GPU timing: unsupported");
-    }
-    ImGui::Text("SpeedTree: profiles=%u strength=%.2f gusting=%s",
-        lastViewModel.speedTreeWindProfileCount,
-        lastViewModel.speedTreeStrength,
-        lastViewModel.speedTreeGustingEnabled ? "on" : "off");
+    ImGui::DockSpaceOverViewport(
+        dockspaceId,
+        mainViewport,
+        ImGuiDockNodeFlags_PassthruCentralNode);
 
-    ImGui::SeparatorText("UI Runtime");
-    ImGui::Text("Input mode: %d", static_cast<int>(inputOwnership.mode));
-    ImGui::Text("Keyboard owner: %d", static_cast<int>(inputOwnership.keyboardOwner));
-    ImGui::Text("Pointer owner: %d", static_cast<int>(inputOwnership.pointerOwner));
-    ImGui::TextWrapped("%s", hotReloadStatus.c_str());
-    ImGui::TextDisabled("Runtime controls are authored in RmlUi.");
-    ImGui::End();
+    // 同一帧只冻结一次编辑器快照，左右 Dock 窗口共享完全相同的数据视图。
+    if (materialInstanceEditorPanel != nullptr &&
+        materialInstanceEditorRuntime != nullptr)
+    {
+        EditorUi::MaterialInstanceEditorSnapshot editorSnapshot =
+            materialInstanceEditorRuntime->GetSnapshot();
+        editorSnapshot.sceneModels = sceneModels;
+        editorSnapshot.selectedModel = selectedModelMaterials;
+        editorSnapshot.selectedMaterialSlotIndex = selectedMaterialSlotIndex;
+        materialInstanceEditorPanel->Build(editorSnapshot);
+
+        if (materialInstanceEditorPanel->IsVisible())
+        {
+            if (ImGui::Begin(
+                    MaterialInstanceNavigationWindowName,
+                    nullptr,
+                    ImGuiWindowFlags_NoCollapse))
+            {
+                materialInstanceEditorPanel->RenderNavigationContents();
+            }
+            ImGui::End();
+
+            if (ImGui::Begin(
+                    MaterialInstanceInspectorWindowName,
+                    nullptr,
+                    ImGuiWindowFlags_NoCollapse))
+            {
+                materialInstanceEditorPanel->RenderInspectorContents();
+            }
+            ImGui::End();
+        }
+    }
+
 #endif
 }
 
@@ -2192,6 +2785,47 @@ void UiSubsystem::OnClosePage(Rml::DataModelHandle, Rml::Event&, const Rml::Vari
     UiAction action;
     action.type = UiActionType::CloseRuntimePage;
     QueueAction(std::move(action));
+}
+
+void UiSubsystem::OnLoadScene(
+    Rml::DataModelHandle,
+    Rml::Event&,
+    const Rml::VariantList& arguments)
+{
+    if (arguments.empty())
+    {
+        return;
+    }
+
+    const Rml::String requestedPath = arguments[0].Get<Rml::String>();
+    for (const UiSceneOption& option : bindingData.sceneOptions)
+    {
+        if (option.path != requestedPath)
+        {
+            continue;
+        }
+        if (option.active)
+        {
+            return;
+        }
+        if (bindingData.sceneLoading)
+        {
+            return;
+        }
+
+        // UI 只提交场景切换请求，World 与 RenderGraph 仍由既有事务链路统一换代。
+        // 本帧先发布加载提示，下一帧同步事务即使耗时较长，用户也能区分“正在准备”与死锁。
+        bindingData.sceneLoading = true;
+        dataModelHandle.DirtyVariable("scene_loading");
+        UiAction action;
+        action.type = UiActionType::LoadWorld;
+        action.stringValue = requestedPath;
+        QueueAction(std::move(action));
+        return;
+    }
+
+    diagnostics->ReportWarning(
+        "UI scene selector rejected an unknown scene path: " + requestedPath);
 }
 
 void UiSubsystem::OnDebugViewSelected(

@@ -11,6 +11,8 @@ layout(set = 1, binding = 0) uniform UBOMIParamters {
 
 layout(set = 3, binding = 0) uniform sampler2D sceneColor;
 layout(set = 3, binding = 1) uniform sampler2D bloomColor;
+layout(set = 3, binding = 2) uniform sampler2D gbufferVelocity;
+layout(set = 3, binding = 3) uniform sampler2D selectionMask;
 
 // Tone Mapping Functions
 
@@ -72,6 +74,30 @@ vec3 ApplySaturation(vec3 color, float saturation) {
     return mix(vec3(luma), color, saturation);
 }
 
+float ResolveSelectionOutline(vec2 uv)
+{
+    ivec2 maskSize = textureSize(selectionMask, 0);
+    vec2 texelSize = 1.0 / vec2(maskSize);
+    float center = max(
+        step(0.5, texture(gbufferVelocity, uv).b),
+        step(0.5, texture(selectionMask, uv).r));
+    float neighbor = 0.0;
+    for (int radius = 1; radius <= 2; ++radius)
+    {
+        vec2 offset = texelSize * float(radius);
+        neighbor = max(neighbor, max(step(0.5, texture(gbufferVelocity, uv + vec2(offset.x, 0.0)).b), step(0.5, texture(selectionMask, uv + vec2(offset.x, 0.0)).r)));
+        neighbor = max(neighbor, max(step(0.5, texture(gbufferVelocity, uv - vec2(offset.x, 0.0)).b), step(0.5, texture(selectionMask, uv - vec2(offset.x, 0.0)).r)));
+        neighbor = max(neighbor, max(step(0.5, texture(gbufferVelocity, uv + vec2(0.0, offset.y)).b), step(0.5, texture(selectionMask, uv + vec2(0.0, offset.y)).r)));
+        neighbor = max(neighbor, max(step(0.5, texture(gbufferVelocity, uv - vec2(0.0, offset.y)).b), step(0.5, texture(selectionMask, uv - vec2(0.0, offset.y)).r)));
+        neighbor = max(neighbor, max(step(0.5, texture(gbufferVelocity, uv + offset).b), step(0.5, texture(selectionMask, uv + offset).r)));
+        neighbor = max(neighbor, max(step(0.5, texture(gbufferVelocity, uv - offset).b), step(0.5, texture(selectionMask, uv - offset).r)));
+        neighbor = max(neighbor, max(step(0.5, texture(gbufferVelocity, uv + vec2(offset.x, -offset.y)).b), step(0.5, texture(selectionMask, uv + vec2(offset.x, -offset.y)).r)));
+        neighbor = max(neighbor, max(step(0.5, texture(gbufferVelocity, uv + vec2(-offset.x, offset.y)).b), step(0.5, texture(selectionMask, uv + vec2(-offset.x, offset.y)).r)));
+    }
+    // 选中区域外扩两像素，避免高分辨率下单像素轮廓难以辨认。
+    return (1.0 - center) * min(neighbor, 1.0);
+}
+
 void main()
 {
     vec3 scene = texture(sceneColor, inUV).rgb;
@@ -87,6 +113,10 @@ void main()
     
     vec3 color = ApplyToneMap(exposed, mode);
     color = ApplySaturation(color, saturation);
+
+    // 轮廓只在最终合成阶段叠加，保持场景材质和 MI 调参结果不被染色。
+    float selectionOutline = ResolveSelectionOutline(inUV);
+    color = mix(color, vec3(1.0, 0.55, 0.08), selectionOutline * 0.9);
     
     outColor = vec4(color, 1.0);
 }

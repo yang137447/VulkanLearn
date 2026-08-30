@@ -135,6 +135,9 @@ RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
 
         MeshObjectBuildPlan meshObjectPlan;
         meshObjectPlan.objectName = meshObjectName;
+        meshObjectPlan.sceneObjectIdentity = meshObjectBaseName;
+        meshObjectPlan.materialSlotIndex = sectionPlan.materialSlotIndex;
+        meshObjectPlan.materialSlotName = sectionPlan.materialSlotName;
         meshObjectPlan.debugName = meshObjectName;
         meshObjectPlan.model = BuildModelMatrix(position, rotation, scale);
         meshObjectPlan.localBoundsMin = renderableObject->GetBoundsMin();

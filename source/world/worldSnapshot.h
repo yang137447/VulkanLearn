@@ -47,7 +47,11 @@ struct CameraSnapshot
 struct MeshDrawSnapshot
 {
     RuntimeId objectId = 0;
+    bool selected = false;
     std::string debugName;
+    std::string sceneObjectIdentity;
+    uint32_t materialSlotIndex = 0;
+    std::string materialSlotName;
     Eigen::Matrix4f model = Eigen::Matrix4f::Identity();
     Eigen::Matrix4f previousModel = Eigen::Matrix4f::Identity();
     Eigen::Vector3f worldBoundsMin = Eigen::Vector3f::Zero();

@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -10,6 +11,8 @@
 
 #include "pipeline/pipelineFactory.h"
 #include "render/resource/rendererResourceCache.h"
+
+#include <nlohmann/json.hpp>
 
 class RenderGraph;
 class MaterialInstance;
@@ -36,6 +39,9 @@ struct RendererResourceLoadContext
     RendererResourceCache::ImmutableWorldLocalResourceRefs
         previousWorldResources;
     const MaterialDefinitionReloadBatch* materialDefinitionReload = nullptr;
+    // MI preview 使用内存草稿覆盖单个规范化资产路径，不提前写回磁盘。
+    std::string materialInstanceOverridePath;
+    std::optional<nlohmann::json> materialInstanceOverrideJson;
     std::unordered_map<
         std::string,
         std::shared_ptr<MaterialInstance>>*

@@ -311,24 +311,10 @@ uint64_t GetGraphResourceLastUsedEpoch()
 
 void Renderpass::Draw(vk::CommandBuffer& commandBuffer) const
 {
-        PROFILE_FUNCTION();
-        vk::Viewport viewport;
-        viewport
-            .setX(0.0f)
-            .setY(0.0f)
-            .setWidth(static_cast<float>(width))
-            .setHeight(static_cast<float>(height))
-            .setMinDepth(0.0f)
-            .setMaxDepth(1.0f);
-        vk::Rect2D scissor;
-        scissor
-            .setOffset({ 0, 0 })
-            .setExtent({ 
-                static_cast<uint32_t>(width), 
-                static_cast<uint32_t>(height) });
-        commandBuffer.setViewport(0, 1, &viewport);
-        commandBuffer.setScissor(0, 1, &scissor);
-        commandBuffer.draw(3, 1, 0,0);
+    PROFILE_FUNCTION();
+    // PassRuntime 已在 render pass 开始后设置 viewport/scissor；全屏三角形
+    // 只负责提交几何，不能在这里恢复整张资源的动态状态。
+    commandBuffer.draw(3, 1, 0, 0);
 }
 
 void Renderpass::CreateUniformBuffers()

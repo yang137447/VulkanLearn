@@ -1,8 +1,70 @@
 #include "materialInstance.h"
+
+#include <cmath>
+
 #include "texture.h"
 #include "material.h"
 #include "material/materialAssetUtils.h"
 #include "render/backend/rendererBackendVulkan.h"
+
+namespace
+{
+
+ParamType GetParameterValueType(
+    const MaterialInstanceParameterValue& value)
+{
+    if (std::holds_alternative<float>(value))
+    {
+        return ParamType::Float;
+    }
+    if (std::holds_alternative<Eigen::Vector2f>(value))
+    {
+        return ParamType::Vec2;
+    }
+    if (std::holds_alternative<Eigen::Vector3f>(value))
+    {
+        return ParamType::Vec3;
+    }
+    return ParamType::Vec4;
+}
+
+const char* GetParameterTypeName(ParamType type)
+{
+    switch (type)
+    {
+    case ParamType::Float:
+        return "float";
+    case ParamType::Vec2:
+        return "vec2";
+    case ParamType::Vec3:
+        return "vec3";
+    case ParamType::Vec4:
+        return "vec4";
+    }
+    return "unknown";
+}
+
+bool IsFiniteParameterValue(
+    const MaterialInstanceParameterValue& value)
+{
+    if (const float* scalar = std::get_if<float>(&value))
+    {
+        return std::isfinite(*scalar);
+    }
+    if (const Eigen::Vector2f* vector =
+            std::get_if<Eigen::Vector2f>(&value))
+    {
+        return vector->allFinite();
+    }
+    if (const Eigen::Vector3f* vector =
+            std::get_if<Eigen::Vector3f>(&value))
+    {
+        return vector->allFinite();
+    }
+    return std::get<Eigen::Vector4f>(value).allFinite();
+}
+
+}
 
 MaterialInstance::~MaterialInstance()
 {
@@ -34,6 +96,69 @@ void MaterialInstance::SetParameter(const std::string& parameterName, const Eige
     ClearParameterValues(parameterName);
     parameters.insert_or_assign(parameterName, ParamMap(ParamType::Vec4));
     vec4Parameters[parameterName] = value;
+}
+
+void MaterialInstance::CommitNumericParameterValues(
+    const MaterialInstanceNumericParameterValues& parameterValues)
+{
+    for (const auto& [parameterName, value] : parameterValues)
+    {
+        const auto parameterIt = parameters.find(parameterName);
+        if (parameterIt == parameters.end())
+        {
+            throw std::invalid_argument(
+                "Material instance numeric parameter not found: " +
+                parameterName);
+        }
+
+        const ParamType valueType = GetParameterValueType(value);
+        if (parameterIt->second.type != valueType)
+        {
+            throw std::invalid_argument(
+                "Material instance numeric parameter type mismatch: " +
+                parameterName + " expected " +
+                GetParameterTypeName(parameterIt->second.type) +
+                ", got " + GetParameterTypeName(valueType));
+        }
+        if (!IsFiniteParameterValue(value))
+        {
+            throw std::invalid_argument(
+                "Material instance numeric parameter is not finite: " +
+                parameterName);
+        }
+    }
+
+    auto stagedFloatParameters = floatParameters;
+    auto stagedVec2Parameters = vec2Parameters;
+    auto stagedVec3Parameters = vec3Parameters;
+    auto stagedVec4Parameters = vec4Parameters;
+    for (const auto& [parameterName, value] : parameterValues)
+    {
+        switch (parameters.at(parameterName).type)
+        {
+        case ParamType::Float:
+            stagedFloatParameters.at(parameterName) = std::get<float>(value);
+            break;
+        case ParamType::Vec2:
+            stagedVec2Parameters.at(parameterName) =
+                std::get<Eigen::Vector2f>(value);
+            break;
+        case ParamType::Vec3:
+            stagedVec3Parameters.at(parameterName) =
+                std::get<Eigen::Vector3f>(value);
+            break;
+        case ParamType::Vec4:
+            stagedVec4Parameters.at(parameterName) =
+                std::get<Eigen::Vector4f>(value);
+            break;
+        }
+    }
+
+    // 四份暂存表均准备成功后才交换，输入错误或分配失败不会留下部分更新。
+    floatParameters.swap(stagedFloatParameters);
+    vec2Parameters.swap(stagedVec2Parameters);
+    vec3Parameters.swap(stagedVec3Parameters);
+    vec4Parameters.swap(stagedVec4Parameters);
 }
 
 bool MaterialInstance::HasParameter(const std::string& parameterName) const

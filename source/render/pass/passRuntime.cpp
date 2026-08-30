@@ -12,6 +12,37 @@
 
 namespace VL
 {
+namespace
+{
+
+struct PassViewportState
+{
+    vk::Viewport viewport;
+    vk::Rect2D scissor;
+};
+
+PassViewportState BuildPassViewportState(const PassRuntimeContext& context)
+{
+    const Renderpass& renderPass = context.renderPass;
+    const uint32_t passWidth = renderPass.width;
+    const uint32_t passHeight = renderPass.height;
+    PassViewportState state;
+    // SDL3/Vulkan 始终渲染完整 framebuffer，ImGui 只在最终阶段覆盖编辑器
+    // 面板；不能把 Dock 矩形传到这里，否则 fullscreen pass 的 UV 会失配。
+    state.viewport
+        .setX(0.0f)
+        .setY(0.0f)
+        .setWidth(static_cast<float>(passWidth))
+        .setHeight(static_cast<float>(passHeight))
+        .setMinDepth(0.0f)
+        .setMaxDepth(1.0f);
+    state.scissor
+        .setOffset({ 0, 0 })
+        .setExtent({ passWidth, passHeight });
+    return state;
+}
+
+} // namespace
 
 void PassRuntime::RecordPass(const std::string& passName, PassRuntimeContext& context) const
 {
@@ -66,6 +97,7 @@ void PassRuntime::PreparePassResources(PassRuntimeContext& context) const
 void PassRuntime::BeginConfiguredRenderPass(PassRuntimeContext& context) const
 {
     const Renderpass& renderPass = context.renderPass;
+    const PassViewportState viewportState = BuildPassViewportState(context);
 
     vk::RenderPassBeginInfo renderPassBeginInfo;
     renderPassBeginInfo.setRenderPass(renderPass.renderPass);
@@ -75,6 +107,13 @@ void PassRuntime::BeginConfiguredRenderPass(PassRuntimeContext& context) const
         vk::Extent2D(renderPass.width, renderPass.height)));
     renderPassBeginInfo.setClearValues(renderPass.clearValues);
     context.commandBuffer.beginRenderPass(renderPassBeginInfo, vk::SubpassContents::eInline);
+    context.commandBuffer.setViewport(0, viewportState.viewport);
+    context.commandBuffer.setScissor(0, viewportState.scissor);
+}
+
+void PassRuntime::UpdateSceneGlobalUBO(PassRuntimeContext& context) const
+{
+    context.services.UpdateGlobalUBOForPass(context.commandBuffer);
 }
 
 void PassRuntime::RecordShadowPass(PassRuntimeContext& context) const
@@ -135,7 +174,7 @@ void PassRuntime::RecordGeometryPass(PassRuntimeContext& context) const
     const Renderpass& renderPass = context.renderPass;
     vk::CommandBuffer& commandBuffer = context.commandBuffer;
 
-    context.services.UpdateGlobalUBOForPass(commandBuffer);
+    UpdateSceneGlobalUBO(context);
     BeginConfiguredRenderPass(context);
 
     RendererDrawContext drawContext{
@@ -159,7 +198,7 @@ void PassRuntime::RecordForwardOpaquePass(
 
     // Eye 先写入 sceneColor/depth，再由 sky 和透明 pass 继续消费；
     // 该 pass 不参与 GBuffer，避免普通 deferred packing 被模型专用字段挤占。
-    context.services.UpdateGlobalUBOForPass(commandBuffer);
+    UpdateSceneGlobalUBO(context);
     BeginConfiguredRenderPass(context);
 
     RendererDrawContext drawContext{
@@ -180,7 +219,7 @@ void PassRuntime::RecordForwardEyeInnerPass(
 {
     const Renderpass& renderPass = context.renderPass;
     vk::CommandBuffer& commandBuffer = context.commandBuffer;
-    context.services.UpdateGlobalUBOForPass(commandBuffer);
+    UpdateSceneGlobalUBO(context);
     BeginConfiguredRenderPass(context);
     RendererDrawContext drawContext{
         commandBuffer,
@@ -199,7 +238,7 @@ void PassRuntime::RecordForwardEyeCorneaPass(
 {
     const Renderpass& renderPass = context.renderPass;
     vk::CommandBuffer& commandBuffer = context.commandBuffer;
-    context.services.UpdateGlobalUBOForPass(commandBuffer);
+    UpdateSceneGlobalUBO(context);
     BeginConfiguredRenderPass(context);
     RendererDrawContext drawContext{
         commandBuffer,
@@ -220,8 +259,8 @@ void PassRuntime::RecordForwardTransparentPass(
     vk::CommandBuffer& commandBuffer = context.commandBuffer;
 
     // 透明表面复用场景的 Global/Light 数据，在已有 sceneColor 上混合；
-    // 深度只测试不写入，具体状态由 forwardTransparent 的 pass contract 决定。
-    context.services.UpdateGlobalUBOForPass(commandBuffer);
+    // 深度测试与写入策略由具体材质管线合同决定。
+    UpdateSceneGlobalUBO(context);
     BeginConfiguredRenderPass(context);
 
     RendererDrawContext drawContext{
@@ -258,7 +297,7 @@ void PassRuntime::RecordPostProcessPass(PassRuntimeContext& context) const
     const PipelineBase& renderPipeline = *baseMaterial->GetRenderPipeline();
     if (drawExecutor.PipelineUsesDescriptorSet(renderPipeline, GlobalSetIndex))
     {
-        context.services.UpdateGlobalUBOForPass(commandBuffer);
+        UpdateSceneGlobalUBO(context);
     }
 
     BeginConfiguredRenderPass(context);

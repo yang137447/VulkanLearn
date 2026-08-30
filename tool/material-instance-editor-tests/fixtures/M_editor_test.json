@@ -1,0 +1,99 @@
+{
+  "name": "M_editor_test",
+  "type": "material",
+  "shadingModel": "DefaultLit",
+  "renderStates": {
+    "cullMode": "Back"
+  },
+  "macros": {
+    "USE_DETAIL": 1
+  },
+  "parameters": {
+    "u_scalar": {
+      "type": "float",
+      "default": 0.5
+    },
+    "u_uvScale": {
+      "type": "vec2",
+      "default": [1.0, 1.0]
+    },
+    "u_tint": {
+      "type": "vec3",
+      "default": [0.2, 0.4, 0.6],
+      "channels": {
+        "x": {
+          "name": "red",
+          "description": "Red tint channel",
+          "range": {
+            "min": 0.0,
+            "max": 1.0
+          }
+        },
+        "y": {
+          "name": "green",
+          "description": "Green tint channel",
+          "range": {
+            "min": 0.0,
+            "max": 1.0
+          }
+        },
+        "z": {
+          "name": "blue",
+          "description": "Blue tint channel",
+          "range": {
+            "min": 0.0,
+            "max": 1.0
+          }
+        }
+      }
+    },
+    "u_packed": {
+      "type": "vec4",
+      "default": [0.1, 0.2, 0.3, 0.4],
+      "channels": {
+        "x": {
+          "name": "first",
+          "description": "First packed value",
+          "range": {
+            "min": 0.0,
+            "max": 1.0
+          }
+        },
+        "y": {
+          "name": "second",
+          "description": "Second packed value",
+          "range": {
+            "min": 0.0,
+            "max": 1.0
+          }
+        },
+        "z": {
+          "name": "third",
+          "description": "Third packed value",
+          "range": {
+            "min": 0.0,
+            "max": 1.0
+          }
+        },
+        "w": {
+          "name": "fourth",
+          "description": "Fourth packed value",
+          "range": {
+            "min": 0.0,
+            "max": 1.0
+          }
+        }
+      }
+    }
+  },
+  "textures": {
+    "albedoMap": {
+      "type": "sampler2D",
+      "default": "textures/T_albedo_default.json"
+    },
+    "normalMap": {
+      "type": "sampler2D",
+      "default": "textures/T_normal_default.json"
+    }
+  }
+}

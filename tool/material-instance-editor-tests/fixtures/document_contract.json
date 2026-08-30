@@ -1,0 +1,10 @@
+{
+  "assetPath": "materials\\MI_editor_test.json",
+  "schemaDigest": "schema-v1",
+  "origins": [
+    "scene:scene_material_editor_fixture.json/mesh-car/section-0",
+    "browser:materials/MI_editor_test.json"
+  ],
+  "worldBefore": "world-generation-1",
+  "worldAfter": "world-generation-2"
+}

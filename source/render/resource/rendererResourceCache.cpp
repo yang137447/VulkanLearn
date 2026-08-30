@@ -56,10 +56,53 @@ RendererResourceCache RendererResourceCache::BeginCandidate(
         ownerGeneration);
 }
 
+RendererResourceCache RendererResourceCache::BeginActiveWorldCandidate(
+    uint64_t ownerGeneration) const
+{
+    RendererResourceCache candidate(
+        globalTextures,
+        ownerGeneration);
+    candidate.worldLocalResources =
+        std::make_shared<WorldLocalResourcePackage>(
+            *worldLocalResources);
+    candidate.worldLocalResources->ownerGeneration = ownerGeneration;
+    // Object descriptor layouts depend on the candidate Material. Reusing the
+    // active entries would mutate live Vulkan state during prepare.
+    candidate.worldLocalResources->objectResources.clear();
+    return candidate;
+}
+
 RendererResourceCache::ImmutableWorldLocalResourceRefs
 RendererResourceCache::CaptureActiveWorldLocalResources() const noexcept
 {
     return worldLocalResources;
+}
+
+std::optional<RendererResourceCache::WorldLocalMaterialInstanceCapture>
+RendererResourceCache::CaptureMaterialInstanceForGeneration(
+    uint64_t expectedOwnerGeneration,
+    std::string_view normalizedMaterialInstancePath) const
+{
+    // package 句柄先复制，随后 map 查找和 MI shared_ptr 复制都在同一份
+    // World-local 快照上完成；generation 不匹配时不向调用方泄露旧对象。
+    const ImmutableWorldLocalResourceRefs package = worldLocalResources;
+    if (!package || package->ownerGeneration != expectedOwnerGeneration)
+    {
+        return std::nullopt;
+    }
+
+    const auto materialInstanceIt =
+        package->materialInstances.find(std::string(normalizedMaterialInstancePath));
+    if (materialInstanceIt == package->materialInstances.end() ||
+        !materialInstanceIt->second)
+    {
+        return std::nullopt;
+    }
+
+    WorldLocalMaterialInstanceCapture capture;
+    capture.ownerGeneration = package->ownerGeneration;
+    capture.materialInstance = materialInstanceIt->second;
+    return capture;
 }
 
 RendererResourceCache::WorldLocalResourcePackageHandle
@@ -294,6 +337,13 @@ void RendererResourceCache::BindMaterialInstance(
     resources.materialInstances[
         std::move(materialInstanceKey)] =
         std::move(materialInstance);
+}
+
+void RendererResourceCache::RemoveMaterialInstance(
+    std::string_view materialInstanceKey)
+{
+    GetMutableWorldLocalResources().materialInstances.erase(
+        std::string(materialInstanceKey));
 }
 
 const std::shared_ptr<MaterialInstance>* RendererResourceCache::GetMaterialInstance(

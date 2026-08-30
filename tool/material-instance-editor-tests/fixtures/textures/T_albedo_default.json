@@ -1,0 +1,9 @@
+{
+  "name": "T_albedo_default",
+  "type": "texture",
+  "source": "textures/datas/albedo_default.ppm",
+  "colorSpace": "srgb",
+  "mipmaps": true,
+  "filter": "linear",
+  "wrapMode": "repeat"
+}

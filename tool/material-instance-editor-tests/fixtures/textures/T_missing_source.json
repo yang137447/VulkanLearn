@@ -1,0 +1,9 @@
+{
+  "name": "T_missing_source",
+  "type": "texture",
+  "source": "textures/datas/does_not_exist.ppm",
+  "colorSpace": "linear",
+  "mipmaps": false,
+  "filter": "linear",
+  "wrapMode": "repeat"
+}

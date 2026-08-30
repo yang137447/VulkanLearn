@@ -75,6 +75,7 @@ private:
 
     void PreparePassResources(PassRuntimeContext& context) const;
     void BeginConfiguredRenderPass(PassRuntimeContext& context) const;
+    void UpdateSceneGlobalUBO(PassRuntimeContext& context) const;
 
     RendererDrawExecutor drawExecutor;
 };

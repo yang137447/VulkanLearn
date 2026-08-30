@@ -29,7 +29,8 @@
                         <button data-class-selected="active_section == 2" data-event-click="active_section = 2">{{tab_post_process_label}}</button>
                         <button data-class-selected="active_section == 3" data-event-click="active_section = 3">{{tab_environment_label}}</button>
                         <button data-class-selected="active_section == 4" data-event-click="active_section = 4">{{tab_shadows_label}}</button>
-                        <button data-class-selected="active_section == 5" data-event-click="active_section = 5">{{tab_system_label}}</button>
+                        <button data-class-selected="active_section == 5" data-event-click="active_section = 5">{{tab_scenes_label}}</button>
+                        <button data-class-selected="active_section == 6" data-event-click="active_section = 6">{{tab_system_label}}</button>
                     </div>
 
                     <div id="control-scroll">
@@ -309,6 +310,24 @@
                         </div>
 
                         <div class="section-page" data-if="active_section == 5">
+                            <h2>{{scene_list_title}}</h2>
+                            <div class="scene-current-card">
+                                <div class="scene-current-label">{{scene_label}}</div>
+                                <div class="scene-current-value">{{world_text}}</div>
+                                <div class="scene-list-hint">{{scene_list_hint}}</div>
+                                <div class="scene-loading" data-if="scene_loading">{{scene_loading_label}}</div>
+                            </div>
+
+                            <div class="scene-list">
+                                <button data-for="scene : scene_options" data-class-selected="scene.active" data-event-click="load_scene(scene.path)">
+                                    <div class="scene-option-label">{{scene.label}}</div>
+                                    <div class="scene-option-path">{{scene.path}}</div>
+                                </button>
+                                <div class="scene-empty" data-if="scene_options.size == 0">{{scene_empty_label}}</div>
+                            </div>
+                        </div>
+
+                        <div class="section-page" data-if="active_section == 6">
                             <h2>{{tab_system_label}}</h2>
                             <div class="status-card">
                                 <div class="status-row">

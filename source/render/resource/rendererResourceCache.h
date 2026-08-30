@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -52,6 +53,12 @@ public:
     using ImmutableWorldLocalResourceRefs =
         std::shared_ptr<const WorldLocalResourcePackage>;
 
+    struct WorldLocalMaterialInstanceCapture
+    {
+        uint64_t ownerGeneration = 0;
+        std::shared_ptr<MaterialInstance> materialInstance;
+    };
+
     struct PreparedEyeResourceReplacement
     {
         WorldLocalResourcePackageHandle replacementPackage;
@@ -82,9 +89,21 @@ public:
     // returned cache instance.
     RendererResourceCache BeginCandidate(uint64_t ownerGeneration) const;
 
+    // MI preview 复用当前 World 的稳定资源，但独立创建可替换的材质、MI
+    // 和对象 descriptor；旧 package 仍由 active owner 持有直到提交完成。
+    RendererResourceCache BeginActiveWorldCandidate(
+        uint64_t ownerGeneration) const;
+
     // Keeps the currently active package alive without exposing mutable maps.
     ImmutableWorldLocalResourceRefs
     CaptureActiveWorldLocalResources() const noexcept;
+
+    // 先固定 package shared_ptr，再校验 generation 并复制 MI；调用方不会
+    // 持有 map 内部地址，因此 World package 交换或回收不会使预览目标悬空。
+    std::optional<WorldLocalMaterialInstanceCapture>
+    CaptureMaterialInstanceForGeneration(
+        uint64_t expectedOwnerGeneration,
+        std::string_view normalizedMaterialInstancePath) const;
 
     // The candidate must come from BeginCandidate(). Commit publishes any
     // missing process-global bindings prepared by the initial candidate and
@@ -116,6 +135,7 @@ public:
     const std::shared_ptr<Material>* GetMaterial(std::string_view materialKey) const;
 
     void BindMaterialInstance(std::string materialInstanceKey, std::shared_ptr<MaterialInstance> materialInstance);
+    void RemoveMaterialInstance(std::string_view materialInstanceKey);
     const std::shared_ptr<MaterialInstance>* GetMaterialInstance(std::string_view materialInstanceKey) const;
 
     void BindObjectResource(std::string objectName, std::shared_ptr<RendererObjectResourceEntry> objectResource);
