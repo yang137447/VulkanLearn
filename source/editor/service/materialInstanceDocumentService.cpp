@@ -860,6 +860,19 @@ MaterialInstanceDocumentService::MakeSnapshotResult(
     return result;
 }
 
+MaterialEditorServiceResult
+MaterialInstanceDocumentService::MakeDocumentResult(
+    MaterialEditorServiceResult result,
+    Document* document)
+{
+    if (document != nullptr)
+    {
+        result.documentRevision = document->revision;
+        result.document = MakeDocumentSnapshot(*document);
+    }
+    return result;
+}
+
 std::string MaterialInstanceDocumentService::JsonString(
     const Json& value)
 {
@@ -1235,10 +1248,17 @@ MaterialInstanceDocumentService::InspectTextureAsset(
 std::vector<MaterialEditorTextureAssetSnapshot>
 MaterialInstanceDocumentService::ListTextureAssets() const
 {
+    if (textureAssetCatalogCached)
+    {
+        return textureAssetCatalog;
+    }
+
     std::vector<MaterialEditorTextureAssetSnapshot> result;
     if (!std::filesystem::is_directory(config.resourceRoot))
     {
-        return result;
+        textureAssetCatalogCached = true;
+        textureAssetCatalog.clear();
+        return textureAssetCatalog;
     }
     std::error_code iteratorError;
     std::filesystem::recursive_directory_iterator iterator(
@@ -1280,7 +1300,9 @@ MaterialInstanceDocumentService::ListTextureAssets() const
         {
             return left.assetPath < right.assetPath;
         });
-    return result;
+    textureAssetCatalog = std::move(result);
+    textureAssetCatalogCached = true;
+    return textureAssetCatalog;
 }
 
 MaterialEditorSnapshot MaterialInstanceDocumentService::BuildSnapshot()
@@ -1330,9 +1352,10 @@ MaterialInstanceDocumentService::ListMaterialInstanceAssets(
     snapshot.documentTabs = ListOpenDocumentEntries();
     snapshot.textureAssets = ListTextureAssets();
 
-    std::vector<MaterialEditorAssetEntry> allAssets;
-    if (std::filesystem::is_directory(config.resourceRoot))
+    if (!materialInstanceAssetCatalogCached &&
+        std::filesystem::is_directory(config.resourceRoot))
     {
+        std::vector<MaterialEditorAssetEntry> discoveredAssets;
         std::error_code iteratorError;
         std::filesystem::recursive_directory_iterator iterator(
             config.resourceRoot,
@@ -1362,27 +1385,37 @@ MaterialInstanceDocumentService::ListMaterialInstanceAssets(
                 continue;
             }
             const std::string logicalPath = relative.generic_string();
-            if (!searchText.empty() &&
-                logicalPath.find(searchText) == std::string::npos)
-            {
-                continue;
-            }
             MaterialEditorAssetEntry entry;
             entry.assetPath = logicalPath;
-            const auto openIt = documents.find(logicalPath);
-            entry.dirty = openIt != documents.end() &&
-                (openIt->second.state != MaterialEditorDocumentState::Clean);
-            allAssets.push_back(std::move(entry));
+            discoveredAssets.push_back(std::move(entry));
         }
+        std::sort(
+            discoveredAssets.begin(),
+            discoveredAssets.end(),
+            [](const MaterialEditorAssetEntry& left,
+               const MaterialEditorAssetEntry& right)
+            {
+                return left.assetPath < right.assetPath;
+            });
+        materialInstanceAssetCatalog = std::move(discoveredAssets);
+        materialInstanceAssetCatalogCached = true;
     }
-    std::sort(
-        allAssets.begin(),
-        allAssets.end(),
-        [](const MaterialEditorAssetEntry& left,
-           const MaterialEditorAssetEntry& right)
+
+    std::vector<MaterialEditorAssetEntry> allAssets;
+    allAssets.reserve(materialInstanceAssetCatalog.size());
+    for (const MaterialEditorAssetEntry& cachedAsset : materialInstanceAssetCatalog)
+    {
+        if (!searchText.empty() &&
+            cachedAsset.assetPath.find(searchText) == std::string::npos)
         {
-            return left.assetPath < right.assetPath;
-        });
+            continue;
+        }
+        MaterialEditorAssetEntry entry = cachedAsset;
+        const auto openIt = documents.find(entry.assetPath);
+        entry.dirty = openIt != documents.end() &&
+            openIt->second.state != MaterialEditorDocumentState::Clean;
+        allAssets.push_back(std::move(entry));
+    }
 
     const std::size_t begin = std::min<std::size_t>(
         static_cast<std::size_t>(pageIndex) * pageSize,
@@ -1772,7 +1805,7 @@ MaterialInstanceDocumentService::SetMaterialParameterOverride(
         document.validationMessage = "draft parameter is valid";
         UpdateDirtyState(document);
         IncrementRevision(document);
-        return MakeSnapshotResult(
+        return MakeDocumentResult(
             MakeSuccess("material parameter override updated", &document),
             &document);
     }
@@ -1828,7 +1861,7 @@ MaterialInstanceDocumentService::ClearMaterialParameterOverride(
         document.validationMessage = "draft parameter reset to material default";
         UpdateDirtyState(document);
         IncrementRevision(document);
-        return MakeSnapshotResult(
+        return MakeDocumentResult(
             MakeSuccess("material parameter override cleared", &document),
             &document);
     }

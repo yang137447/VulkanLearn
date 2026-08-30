@@ -332,6 +332,14 @@ void MaterialInstanceAssetEditorPanel::SetSceneSelectionSink(
 void MaterialInstanceAssetEditorPanel::SetSnapshot(const MaterialInstanceEditorSnapshot& value)
 {
     snapshot = value;
+    if (!snapshot.activeDocument ||
+        snapshot.activeDocument->assetPath != pendingParameterEditAssetPath ||
+        snapshot.activeDocument->revision != pendingParameterEditRevision)
+    {
+        pendingParameterEditAssetPath.clear();
+        pendingParameterEditRevision = 0;
+        pendingParameterEdits.clear();
+    }
     if (!snapshot.activeDocument)
     {
         openTexturePicker = false;
@@ -819,7 +827,17 @@ void MaterialInstanceAssetEditorPanel::RenderParameter(
     ImGui::PushID(parameter.name.c_str());
     const bool overridden = parameter.overrideValue.has_value();
     EditorParameterValue edited = parameter.effectiveValue;
+    if (pendingParameterEditAssetPath == document.assetPath &&
+        pendingParameterEditRevision == document.revision)
+    {
+        const auto pending = pendingParameterEdits.find(parameter.name);
+        if (pending != pendingParameterEdits.end())
+        {
+            edited = pending->second;
+        }
+    }
     bool changed = false;
+    bool editFinished = false;
 
     const uint32_t componentCount = ParameterComponentCount(parameter.type);
     for (uint32_t componentIndex = 0; componentIndex < componentCount; ++componentIndex)
@@ -859,6 +877,10 @@ void MaterialInstanceAssetEditorPanel::RenderParameter(
         {
             changed = true;
         }
+        if (ImGui::IsItemDeactivatedAfterEdit())
+        {
+            editFinished = true;
+        }
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
         {
             const char* description = channel.description.empty()
@@ -894,8 +916,17 @@ void MaterialInstanceAssetEditorPanel::RenderParameter(
         }
     }
 
-    if (changed && std::all_of(edited.values.begin(), edited.values.begin() + edited.ComponentCount(),
-        [](float value) { return std::isfinite(value); }))
+    if (changed)
+    {
+        pendingParameterEditAssetPath = document.assetPath;
+        pendingParameterEditRevision = document.revision;
+        pendingParameterEdits[parameter.name] = edited;
+    }
+
+    const auto pending = pendingParameterEdits.find(parameter.name);
+    if (editFinished && (changed || pending != pendingParameterEdits.end()) &&
+        std::all_of(edited.values.begin(), edited.values.begin() + edited.ComponentCount(),
+            [](float value) { return std::isfinite(value); }))
     {
         Submit(MakeSetParameterCommand(document, parameter, edited));
     }

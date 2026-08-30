@@ -352,6 +352,9 @@ private:
     MaterialEditorServiceResult MakeSnapshotResult(
         MaterialEditorServiceResult result,
         Document* document);
+    MaterialEditorServiceResult MakeDocumentResult(
+        MaterialEditorServiceResult result,
+        Document* document);
     void IncrementRevision(Document& document);
     void UpdateDirtyState(Document& document);
     MaterialEditorDocumentSnapshot MakeDocumentSnapshot(
@@ -362,6 +365,11 @@ private:
     std::vector<MaterialEditorTextureAssetSnapshot> ListTextureAssets() const;
     std::vector<MaterialEditorAssetEntry> ListOpenDocumentEntries() const;
     static std::string JsonString(const Json& value);
+
+    mutable bool materialInstanceAssetCatalogCached = false;
+    mutable std::vector<MaterialEditorAssetEntry> materialInstanceAssetCatalog;
+    mutable bool textureAssetCatalogCached = false;
+    mutable std::vector<MaterialEditorTextureAssetSnapshot> textureAssetCatalog;
 };
 
 // 允许上层按职责名接入，同时保留完整类名作为稳定 API。

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "editor/command/editorCommand.h"
@@ -197,6 +198,9 @@ private:
     bool openTexturePicker = false;
     std::array<char, 256> assetSearch{};
     std::array<char, 256> textureSearch{};
+    std::string pendingParameterEditAssetPath;
+    uint64_t pendingParameterEditRevision = 0;
+    std::unordered_map<std::string, EditorParameterValue> pendingParameterEdits;
 };
 
 } // namespace VL::EditorUi

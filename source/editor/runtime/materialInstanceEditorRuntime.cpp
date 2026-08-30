@@ -1046,6 +1046,12 @@ void MaterialInstanceEditorRuntime::ApplyServiceResult(
     {
         snapshot = ConvertSnapshot(result.editor.value());
     }
+    else if (result.document.has_value() && snapshot.activeDocument.has_value() &&
+        snapshot.activeDocument->assetPath == result.document->assetPath)
+    {
+        // 高频参数编辑只返回当前文档，保留资产目录和场景导航快照。
+        snapshot.activeDocument = ConvertDocument(result.document.value());
+    }
     else
     {
         RefreshSnapshotFromService();
