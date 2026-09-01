@@ -1,5 +1,6 @@
 #version 450
 #include "../common/function.glsl"
+#include "../common/commonUbo.glsl"
 
 layout(location = 0) in vec2 inUV;
 layout(location = 0) out vec4 outColor;
@@ -74,6 +75,79 @@ vec3 ApplySaturation(vec3 color, float saturation) {
     return mix(vec3(luma), color, saturation);
 }
 
+bool IsRawDebugView(int debugMode)
+{
+    // UE Buffer Visualization 的材质/参数视图不是 HDR scene color，
+    // 这里按模式固定契约绕过 bloom、曝光和 tone mapping。
+    switch (debugMode)
+    {
+        case 1:
+        case 3:
+        case 4:
+        case 5:
+        case 6:
+        case 7:
+        case 11:
+        case 12:
+        case 13:
+        case 14:
+        case 15:
+        case 19:
+        case 20:
+        case 21:
+        case 22:
+        case 23:
+        case 24:
+        case 28:
+        case 29:
+        case 30:
+        case 31:
+        case 32:
+        case 35:
+        case 36:
+        case 40:
+        case 41:
+        case 42:
+        case 43:
+        case 44:
+        case 45:
+        case 46:
+        case 48:
+        case 49:
+        case 50:
+        case 51:
+        case 52:
+        case 53:
+        case 54:
+        case 55:
+        case 56:
+        case 61:
+        case 62:
+        case 63:
+        case 64:
+        case 65:
+        case 66:
+        case 67:
+        case 68:
+        case 69:
+        case 70:
+        case 73:
+        case 80:
+        case 81:
+        case 82:
+        case 83:
+        case 84:
+        case 85:
+        case 86:
+        case 87:
+        case 88:
+        case 89:
+            return true;
+        default:
+            return false;
+    }
+}
+
 float ResolveSelectionOutline(vec2 uv)
 {
     ivec2 maskSize = textureSize(selectionMask, 0);
@@ -108,11 +182,20 @@ void main()
     float saturation = u_toneMappingParams.z;
     int mode = int(u_toneMappingParams.w);
 
-    vec3 hdr = scene + bloom * bloomStrength;
-    vec3 exposed = hdr * exposure;
-    
-    vec3 color = ApplyToneMap(exposed, mode);
-    color = ApplySaturation(color, saturation);
+    vec3 color;
+    if (IsRawDebugView(uboVP.debugViewMode))
+    {
+        // sceneColor 中的 raw debug 值已完成编码，只保留最终 framebuffer
+        // 的 sRGB 显示编码；HDR 光照类 debug 仍走下面的 Beauty 变换。
+        color = clamp(scene, 0.0, 1.0);
+    }
+    else
+    {
+        vec3 hdr = scene + bloom * bloomStrength;
+        vec3 exposed = hdr * exposure;
+        color = ApplyToneMap(exposed, mode);
+        color = ApplySaturation(color, saturation);
+    }
 
     // 轮廓只在最终合成阶段叠加，保持场景材质和 MI 调参结果不被染色。
     float selectionOutline = ResolveSelectionOutline(inUV);
