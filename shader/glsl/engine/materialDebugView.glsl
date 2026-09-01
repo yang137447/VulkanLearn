@@ -36,12 +36,17 @@ struct MaterialDebugLightingData
     vec3 clothSheenColor;
     float clothSheenRoughness;
     float clothCharlieD;
-    float clothNeubeltVisibility;
+    float clothVisibility;
     float clothDirectionalAlbedo;
     vec3 clothBaseEnergyScale;
     vec3 clothDirectSheen;
     vec3 clothIndirectSheen;
     float clothIblFallback;
+    float clothModelVersion;
+    vec3 clothWorldTangent;
+    float clothAnisotropy;
+    float clothAnisotropyCross;
+    vec2 clothRoughnessAxes;
     vec3 eyeCorneaSpecular;
     vec3 eyeIrisDirect;
     vec3 eyeScleraDirect;
@@ -99,12 +104,17 @@ MaterialDebugLightingData CreateMaterialDebugLightingData(
     data.clothSheenColor = vec3(0.0);
     data.clothSheenRoughness = 0.0;
     data.clothCharlieD = 0.0;
-    data.clothNeubeltVisibility = 0.0;
+    data.clothVisibility = 0.0;
     data.clothDirectionalAlbedo = 0.0;
     data.clothBaseEnergyScale = vec3(1.0);
     data.clothDirectSheen = vec3(0.0);
     data.clothIndirectSheen = vec3(0.0);
     data.clothIblFallback = 1.0;
+    data.clothModelVersion = 0.0;
+    data.clothWorldTangent = vec3(0.0);
+    data.clothAnisotropy = 0.0;
+    data.clothAnisotropyCross = 0.0;
+    data.clothRoughnessAxes = vec2(0.0);
     data.eyeCorneaSpecular = vec3(0.0);
     data.eyeIrisDirect = vec3(0.0);
     data.eyeScleraDirect = vec3(0.0);
@@ -130,7 +140,12 @@ void SetMaterialDebugClothData(
     vec3 sheenColor,
     float sheenRoughness,
     float charlieD,
-    float neubeltVisibility,
+    float visibility,
+    float modelVersion,
+    vec3 worldTangent,
+    float anisotropy,
+    float anisotropyCross,
+    vec2 roughnessAxes,
     float directionalAlbedo,
     vec3 baseEnergyScale,
     vec3 directSheen,
@@ -140,7 +155,12 @@ void SetMaterialDebugClothData(
     data.clothSheenColor = sheenColor;
     data.clothSheenRoughness = sheenRoughness;
     data.clothCharlieD = charlieD;
-    data.clothNeubeltVisibility = neubeltVisibility;
+    data.clothVisibility = visibility;
+    data.clothModelVersion = modelVersion;
+    data.clothWorldTangent = worldTangent;
+    data.clothAnisotropy = anisotropy;
+    data.clothAnisotropyCross = anisotropyCross;
+    data.clothRoughnessAxes = roughnessAxes;
     data.clothDirectionalAlbedo = directionalAlbedo;
     data.clothBaseEnergyScale = baseEnergyScale;
     data.clothDirectSheen = directSheen;
@@ -311,6 +331,16 @@ vec4 ResolveMaterialDebugView(
     float clothDirectSheenMask = MaterialDebugViewModeMask(71);
     float clothIndirectSheenMask = MaterialDebugViewModeMask(72);
     float clothIblFallbackMask = MaterialDebugViewModeMask(73);
+    float clothV2ModelMask = MaterialDebugViewModeMask(80);
+    float clothWorldTangentMask = MaterialDebugViewModeMask(81);
+    float clothAnisotropyMask = MaterialDebugViewModeMask(82);
+    float clothAnisotropyCrossMask = MaterialDebugViewModeMask(83);
+    float clothRoughnessAxesMask = MaterialDebugViewModeMask(84);
+    float clothAnisotropicCharlieDMask = MaterialDebugViewModeMask(85);
+    float clothVisibilityMask = MaterialDebugViewModeMask(86);
+    float clothV2DirectionalAlbedoMask = MaterialDebugViewModeMask(87);
+    float clothV2BaseEnergyScaleMask = MaterialDebugViewModeMask(88);
+    float clothV2IblFallbackMask = MaterialDebugViewModeMask(89);
 
     float subsurfaceAssetId = 0.0;
     if (surface.shadingModel == SHADING_MODEL_PREINTEGRATED_SKIN)
@@ -394,7 +424,17 @@ vec4 ResolveMaterialDebugView(
         clothBaseEnergyScaleMask +
         clothDirectSheenMask +
         clothIndirectSheenMask +
-        clothIblFallbackMask,
+        clothIblFallbackMask +
+        clothV2ModelMask +
+        clothWorldTangentMask +
+        clothAnisotropyMask +
+        clothAnisotropyCrossMask +
+        clothRoughnessAxesMask +
+        clothAnisotropicCharlieDMask +
+        clothVisibilityMask +
+        clothV2DirectionalAlbedoMask +
+        clothV2BaseEnergyScaleMask +
+        clothV2IblFallbackMask,
         1.0);
 
     float clothModel = surface.shadingModel == SHADING_MODEL_CLOTH ? 1.0 : 0.0;
@@ -470,12 +510,22 @@ vec4 ResolveMaterialDebugView(
         + clothSheenColorMask * vec4(lighting.clothSheenColor, 1.0)
         + clothSheenRoughnessMask * vec4(vec3(lighting.clothSheenRoughness), 1.0)
         + clothCharlieDMask * vec4(vec3(lighting.clothCharlieD), 1.0)
-        + clothNeubeltVisibilityMask * vec4(vec3(lighting.clothNeubeltVisibility), 1.0)
+        + clothNeubeltVisibilityMask * vec4(vec3(lighting.clothVisibility), 1.0)
         + clothDirectionalAlbedoMask * vec4(vec3(lighting.clothDirectionalAlbedo), 1.0)
         + clothBaseEnergyScaleMask * vec4(lighting.clothBaseEnergyScale, 1.0)
         + clothDirectSheenMask * vec4(lighting.clothDirectSheen, 1.0)
         + clothIndirectSheenMask * vec4(lighting.clothIndirectSheen, 1.0)
-        + clothIblFallbackMask * vec4(vec3(lighting.clothIblFallback), 1.0);
+        + clothIblFallbackMask * vec4(vec3(lighting.clothIblFallback), 1.0)
+        + clothV2ModelMask * vec4(vec3(lighting.clothModelVersion / 2.0), 1.0)
+        + clothWorldTangentMask * vec4(lighting.clothWorldTangent * 0.5 + 0.5, 1.0)
+        + clothAnisotropyMask * vec4(vec3(lighting.clothAnisotropy * 0.5 + 0.5), 1.0)
+        + clothAnisotropyCrossMask * vec4(vec3(lighting.clothAnisotropyCross), 1.0)
+        + clothRoughnessAxesMask * vec4(lighting.clothRoughnessAxes, 0.0, 1.0)
+        + clothAnisotropicCharlieDMask * vec4(vec3(lighting.clothCharlieD), 1.0)
+        + clothVisibilityMask * vec4(vec3(lighting.clothVisibility), 1.0)
+        + clothV2DirectionalAlbedoMask * vec4(vec3(lighting.clothDirectionalAlbedo), 1.0)
+        + clothV2BaseEnergyScaleMask * vec4(lighting.clothBaseEnergyScale, 1.0)
+        + clothV2IblFallbackMask * vec4(vec3(lighting.clothIblFallback), 1.0);
 
     return mix(defaultColor, debugColor, debugMask);
 #else

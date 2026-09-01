@@ -76,7 +76,7 @@ Documentation in this repository is split by responsibility:
 - `rendering/eye-shading-model.md`
   - implemented Eye contract covering ForwardOpaque single-shell, Deferred GBuffer V1 fallback, dual-shell inner/cornea passes, Compute-only caustic LUT, local SSS composition, authoring/LOD fields, runtime validation, and transactional Compute reload
 - `rendering/cloth-shading-model.md`
-  - implemented Cloth MVP contract covering Charlie/Neubelt direct lighting, Compute-only directional-albedo LUT, Forward/Deferred shared evaluator, GBufferD ownership, energy compensation, reload, and explicit diffuse IBL fallback
+  - current Cloth v2 contract covering v1-compatible and anisotropic Charlie direct lighting, dual Compute-only directional-albedo LUTs, versioned GBuffer tangent/anisotropy ownership, Forward/Deferred shared evaluator, energy compensation, reload, and explicit diffuse IBL fallback
 
 ## Plans
 
@@ -109,6 +109,8 @@ Rendering plans:
   - completed 2026-08-22 implementation record for Subsurface, PreintegratedSkin, and SubsurfaceProfile; the current contract lives in `rendering/subsurface-shading-models.md`
 - `plan/rendering/cloth-shading-model-development-plan.md`
   - completed 2026-08-23 Cloth MVP implementation record; the current contract lives in `rendering/cloth-shading-model.md`, while Charlie-specific IBL prefilter remains a documented target extension
+- `plan/rendering/cloth-shading-model-v2-anisotropy-upgrade-handoff.md`
+  - executed 2026-09-01 handoff for upgrading Cloth ID 8 with NeoX Silk/Cloth anisotropy while preserving the existing Shading Model identity; anisotropic IBL remains an explicit follow-up
 - `plan/rendering/hair-shading-model-development-plan.md`
   - executable Hair Shading Model route from contract freeze and CPU Reference through versioned LUT, Forward/Deferred evaluator, Card coverage/shadow, Hair IBL, and multiple scattering
 - `plan/rendering/eye-shading-model-development-plan.md`

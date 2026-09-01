@@ -15,6 +15,7 @@ class RendererBackendVulkan;
 struct ClothLookupTableGenerationResult
 {
     std::shared_ptr<Texture> directionalAlbedoLutTexture;
+    std::shared_ptr<Texture> anisotropicDirectionalAlbedoLutTexture;
 };
 
 class ClothLookupTableGenerator

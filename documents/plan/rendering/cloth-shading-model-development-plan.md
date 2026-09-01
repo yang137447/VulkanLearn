@@ -2,19 +2,20 @@
 
 ## 状态
 
-- 类型：已完成首阶段 MVP 的实施记录；Target realtime 扩展继续保留为后续路线
-- 验收状态：已完成（2026-08-23；build、启动期 shader 编译、Cloth runtime smoke）
+- 类型：Cloth v1 MVP 完成记录与 Cloth v2 各向异性迁移记录；Target realtime 扩展继续保留为后续路线
+- 验收状态：v1 已完成（2026-08-23）；v2 输入/GBuffer/direct 已实现（2026-09-01，构建与测试证据见文末）
 - Shading Model：`Cloth` / ID `8`
 - 知识库基线：`D:\YYBWorkSpace\GitHub\yyb-knowledge-book\src\content\docs\rendering\materials\shading-models\cloth-sheen.mdx`
 - VulkanLearn 当前合同基线：`documents/rendering/shader-structure-and-material-function.md`
 - 当前合同：`documents/rendering/cloth-shading-model.md`（已完成迁移）
 - 首阶段执行域：Opaque Forward + Opaque Deferred
-- 首阶段模型：各向同性 Charlie NDF + Neubelt visibility
+- v1 首阶段模型：各向同性 Charlie NDF + Neubelt visibility
+- v2 当前模型：非零 anisotropy 使用椭圆 Charlie + anisotropic visibility；`anisotropy = 0` 保留 v1 路径
 - 预计算约束：所有运行时 Lookup、积分、环境预滤波和派生纹理必须由 Compute Shader 生成
 - CPU 约束：CPU 只做解析、校验、参数打包、资源编排、digest 和事务生命周期管理
-- 非目标：首阶段不实现各向异性 Charlie、纤维级透射、BSSRDF、薄布背光和真实纱线级几何
+- v1 非目标：不实现各向异性 Charlie、纤维级透射、BSSRDF、薄布背光和真实纱线级几何
 
-本文现保留为 Cloth 首阶段 MVP 的完成记录。实现中的公式、资源格式和生命周期已经迁移到
+本文保留 Cloth 首阶段 MVP 的历史完成记录，并补充 Cloth v2 迁移结果。实现中的公式、资源格式和生命周期已经迁移到
 `documents/rendering/cloth-shading-model.md`，后续代码以正式合同为准；Charlie 专用环境预滤波仍是
 明确标注的 Target realtime 扩展，不能被当前 MVP fallback 宣称为已实现能力。
 
@@ -25,6 +26,16 @@
 - 完成材质加载期约束、World-local Cloth resource package、Compute 热重载、GPU epoch 退休、Debug View 64–73、测试场景和最小 runtime smoke。
 - 按“避免写不必要的测试”的要求，没有新增独立 `cloth_contract`/白炉测试目标；验证使用现有 build、启动期 shader 编译和 Cloth 场景 smoke，未引入 CPU production LUT 路径。
 - 未实现各向异性 Charlie、纤维透射、BSSRDF、薄布背光、真实纱线几何和 Charlie 专用环境 prefilter；这些边界已写入正式合同。
+
+### Cloth v2 迁移记录（2026-09-01）
+
+- `ClothMaterialInputs` 新增 `anisotropy`（`[-1, 1]`）和 `anisotropyCross`（`[0, 1]`）；NeoX Silk 的 `u_anisotropy`、`ParamMap.B` mask 和 `u_anisotropy_cross` 通过 MF 标准化接入。
+- 非零 anisotropy 使用 `aspect = 2^anisotropy` 的椭圆 Charlie closure、匹配的 warp-domain visibility 和 v2 directional-albedo array LUT；零值严格走 v1 isotropic closure 与 v1 LUT。
+- Cloth v2 使用 GBufferF.xyz 保存 world tangent，GBufferF.w 保存 5+5 bit anisotropy/cross；`GBUFFER_HAS_ANISOTROPY_MASK` 缺失时 Deferred 显式回退到 v1 isotropic。
+- Forward/Deferred 共用 `clothLighting.glsl` evaluator，并将 model version、tangent、roughness axes、visibility 等字段传播到 Debug View 80–89。
+- C++ resource digest、双 LUT resource package、Compute reload 和 GPU epoch retirement 已同步升级；生产 LUT 仍只由 Compute Shader 生成。
+- 已增加 `tool/cloth-tests` 的 CPU contract/reference 测试；它只验证版本、参数范围、GBuffer packed round-trip 和轴向对称性，不生成生产 LUT。
+- 当前明确缺口：`sheenIblVersion = 0` 仍是 diffuse irradiance fallback，因此 Cloth v2 仅完成输入/GBuffer/direct 阶段，IBL 或其它能力仍为显式缺口；checkout 缺少 `M_neoxSilk`，未宣称 NeoX full fixture 完成。
 
 ## 1. 目标与固定边界
 

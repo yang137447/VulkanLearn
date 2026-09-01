@@ -64,6 +64,10 @@ struct ClothMaterialInputs
 {
     vec3 sheenColor;
     float sheenRoughness;
+    // signed anisotropy：正值沿 fiber tangent 拉伸，负值交换 tangent/bitangent 主轴。
+    float anisotropy;
+    // cross=1 时等权叠加正交纤维瓣；0 时只保留主纤维瓣。
+    float anisotropyCross;
 };
 
 struct EyeMaterialInputs
@@ -183,6 +187,8 @@ MaterialInputs CreateDefaultMaterialInputs()
     inputs.modelInputs.hair.density = 1.0;
     inputs.modelInputs.cloth.sheenColor = vec3(0.0);
     inputs.modelInputs.cloth.sheenRoughness = 0.5;
+    inputs.modelInputs.cloth.anisotropy = 0.0;
+    inputs.modelInputs.cloth.anisotropyCross = 0.0;
     inputs.modelInputs.eye.corneaNormal = inputs.normal;
     inputs.modelInputs.eye.corneaIor = 1.376;
     inputs.modelInputs.eye.irisNormal = inputs.normal;

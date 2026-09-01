@@ -183,6 +183,8 @@ namespace
         const auto& macros = effectiveMaterialInstanceJson.at("macros");
         if (!parameters.contains("u_clothSheenColor") ||
             !parameters.contains("u_clothSheenRoughness") ||
+            !parameters.contains("u_clothAnisotropy") ||
+            !parameters.contains("u_clothAnisotropyCross") ||
             !parameters.contains("u_pbrFactors"))
         {
             throw std::runtime_error(
@@ -228,6 +230,27 @@ namespace
         {
             throw std::runtime_error(
                 "Cloth sheen roughness must be within [0.02, 1]: " +
+                std::string(materialInstancePath));
+        }
+
+        const auto& anisotropy = parameters.at("u_clothAnisotropy");
+        if (!IsFiniteClothValue(anisotropy) ||
+            anisotropy.get<double>() < -1.0 ||
+            anisotropy.get<double>() > 1.0)
+        {
+            throw std::runtime_error(
+                "Cloth anisotropy must be within [-1, 1]: " +
+                std::string(materialInstancePath));
+        }
+
+        const auto& anisotropyCross =
+            parameters.at("u_clothAnisotropyCross");
+        if (!IsFiniteClothValue(anisotropyCross) ||
+            anisotropyCross.get<double>() < 0.0 ||
+            anisotropyCross.get<double>() > 1.0)
+        {
+            throw std::runtime_error(
+                "Cloth anisotropy cross must be within [0, 1]: " +
                 std::string(materialInstancePath));
         }
 

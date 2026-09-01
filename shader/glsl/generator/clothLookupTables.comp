@@ -5,6 +5,7 @@
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout(rgba16f, set = 0, binding = 0) uniform image2D directionalAlbedoLut;
+layout(rgba16f, set = 0, binding = 1) uniform image2DArray anisotropicDirectionalAlbedoLut;
 
 const uint CLOTH_LUT_SAMPLE_COUNT = 128u;
 
@@ -64,18 +65,77 @@ float IntegrateDirectionalAlbedo(float NdotV, float alpha)
     return response;
 }
 
+float IntegrateAnisotropicDirectionalAlbedo(
+    float NdotV,
+    float alpha,
+    float anisotropy,
+    float viewPhi)
+{
+    vec3 viewDirection = vec3(
+        sqrt(1.0 - NdotV * NdotV) * cos(viewPhi),
+        sqrt(1.0 - NdotV * NdotV) * sin(viewPhi),
+        NdotV);
+    float response = 0.0;
+    for (uint sampleIndex = 0u;
+         sampleIndex < CLOTH_LUT_SAMPLE_COUNT;
+         ++sampleIndex)
+    {
+        vec3 lightDirection = UniformHemisphere(
+            Hammersley(sampleIndex, CLOTH_LUT_SAMPLE_COUNT));
+        response += ClothAnisotropicLobeResponse(
+            alpha,
+            anisotropy,
+            lightDirection,
+            viewDirection) *
+            lightDirection.z * (2.0 * PI) /
+            float(CLOTH_LUT_SAMPLE_COUNT);
+    }
+    return response;
+}
+
 void main()
 {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
-    ivec2 size = imageSize(directionalAlbedoLut);
-    if (pixel.x >= size.x || pixel.y >= size.y)
+    ivec2 isotropicSize = imageSize(directionalAlbedoLut);
+    ivec3 anisotropicSize = imageSize(anisotropicDirectionalAlbedoLut);
+    if (pixel.x >= isotropicSize.x || pixel.y >= isotropicSize.y)
     {
         return;
     }
-    vec2 uv = (vec2(pixel) + vec2(0.5)) / vec2(size);
+    vec2 uv = (vec2(pixel) + vec2(0.5)) / vec2(isotropicSize);
     float NdotV = uv.x;
     // LUT 的 y 轴就是 alpha_s；不要把 alpha 重新解释成 perceptual roughness。
     float alpha = max(uv.y, CLOTH_DIRECTIONAL_ALBEDO_MIN_ALPHA);
     float value = IntegrateDirectionalAlbedo(NdotV, alpha);
     imageStore(directionalAlbedoLut, pixel, vec4(value, 0.0, 0.0, 1.0));
+
+    if (pixel.x < anisotropicSize.x && pixel.y < anisotropicSize.y &&
+        gl_GlobalInvocationID.z < uint(anisotropicSize.z))
+    {
+        float anisotropy =
+            float(gl_GlobalInvocationID.z) / float(anisotropicSize.z - 1) *
+            2.0 - 1.0;
+        vec2 anisotropicUv =
+            (vec2(pixel) + vec2(0.5)) / vec2(anisotropicSize.xy);
+        float anisotropicNdotV = anisotropicUv.x;
+        float anisotropicAlpha = max(
+            anisotropicUv.y,
+            CLOTH_DIRECTIONAL_ALBEDO_MIN_ALPHA);
+        // v2 array 的 R/G 是同一 anisotropy 下 phi=0 与 phi=pi/2 的
+        // unit-sheen directional albedo，lighting 端再以 cos(2phi) 连续插值。
+        float tangentAxisResponse = IntegrateAnisotropicDirectionalAlbedo(
+            anisotropicNdotV,
+            anisotropicAlpha,
+            anisotropy,
+            0.0);
+        float bitangentAxisResponse = IntegrateAnisotropicDirectionalAlbedo(
+            anisotropicNdotV,
+            anisotropicAlpha,
+            anisotropy,
+            0.5 * PI);
+        imageStore(
+            anisotropicDirectionalAlbedoLut,
+            ivec3(pixel, int(gl_GlobalInvocationID.z)),
+            vec4(tangentAxisResponse, bitangentAxisResponse, 0.0, 1.0));
+    }
 }

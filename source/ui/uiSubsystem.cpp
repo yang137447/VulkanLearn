@@ -1093,6 +1093,16 @@ RuntimeResult<void> UiSubsystem::InitializeDataModel()
     bound = constructor.Bind("debug_cloth_direct_sheen_label", &bindingData.debugClothDirectSheenLabel) && bound;
     bound = constructor.Bind("debug_cloth_indirect_sheen_label", &bindingData.debugClothIndirectSheenLabel) && bound;
     bound = constructor.Bind("debug_cloth_ibl_fallback_label", &bindingData.debugClothIblFallbackLabel) && bound;
+    bound = constructor.Bind("debug_cloth_v2_model_label", &bindingData.debugClothV2ModelLabel) && bound;
+    bound = constructor.Bind("debug_cloth_world_tangent_label", &bindingData.debugClothWorldTangentLabel) && bound;
+    bound = constructor.Bind("debug_cloth_anisotropy_label", &bindingData.debugClothAnisotropyLabel) && bound;
+    bound = constructor.Bind("debug_cloth_anisotropy_cross_label", &bindingData.debugClothAnisotropyCrossLabel) && bound;
+    bound = constructor.Bind("debug_cloth_roughness_axes_label", &bindingData.debugClothRoughnessAxesLabel) && bound;
+    bound = constructor.Bind("debug_cloth_anisotropic_charlie_d_label", &bindingData.debugClothAnisotropicCharlieDLabel) && bound;
+    bound = constructor.Bind("debug_cloth_visibility_label", &bindingData.debugClothVisibilityLabel) && bound;
+    bound = constructor.Bind("debug_cloth_v2_directional_albedo_label", &bindingData.debugClothV2DirectionalAlbedoLabel) && bound;
+    bound = constructor.Bind("debug_cloth_v2_base_energy_scale_label", &bindingData.debugClothV2BaseEnergyScaleLabel) && bound;
+    bound = constructor.Bind("debug_cloth_v2_ibl_fallback_label", &bindingData.debugClothV2IblFallbackLabel) && bound;
 
     bound = constructor.Bind("tone_mapping_label", &bindingData.toneMappingLabel) && bound;
     bound = constructor.Bind("tone_mapping_value", &bindingData.toneMappingValue) && bound;
@@ -1862,6 +1872,16 @@ void UiSubsystem::SyncBindingData()
     bindingData.debugClothDirectSheenLabel = Localize("debug.cloth_direct_sheen");
     bindingData.debugClothIndirectSheenLabel = Localize("debug.cloth_indirect_sheen");
     bindingData.debugClothIblFallbackLabel = Localize("debug.cloth_ibl_fallback");
+    bindingData.debugClothV2ModelLabel = Localize("debug.cloth_v2_model");
+    bindingData.debugClothWorldTangentLabel = Localize("debug.cloth_world_tangent");
+    bindingData.debugClothAnisotropyLabel = Localize("debug.cloth_anisotropy");
+    bindingData.debugClothAnisotropyCrossLabel = Localize("debug.cloth_anisotropy_cross");
+    bindingData.debugClothRoughnessAxesLabel = Localize("debug.cloth_roughness_axes");
+    bindingData.debugClothAnisotropicCharlieDLabel = Localize("debug.cloth_anisotropic_charlie_d");
+    bindingData.debugClothVisibilityLabel = Localize("debug.cloth_visibility");
+    bindingData.debugClothV2DirectionalAlbedoLabel = Localize("debug.cloth_v2_directional_albedo");
+    bindingData.debugClothV2BaseEnergyScaleLabel = Localize("debug.cloth_v2_base_energy_scale");
+    bindingData.debugClothV2IblFallbackLabel = Localize("debug.cloth_v2_ibl_fallback");
 
     bindingData.toneMappingLabel = Localize("control.tone_mapping");
     bindingData.toneMappingMode = lastViewModel.toneMappingMode;
@@ -2081,6 +2101,16 @@ std::string UiSubsystem::GetDebugViewName(int mode) const
     case 71: return Localize("debug.cloth_direct_sheen");
     case 72: return Localize("debug.cloth_indirect_sheen");
     case 73: return Localize("debug.cloth_ibl_fallback");
+    case 80: return Localize("debug.cloth_v2_model");
+    case 81: return Localize("debug.cloth_world_tangent");
+    case 82: return Localize("debug.cloth_anisotropy");
+    case 83: return Localize("debug.cloth_anisotropy_cross");
+    case 84: return Localize("debug.cloth_roughness_axes");
+    case 85: return Localize("debug.cloth_anisotropic_charlie_d");
+    case 86: return Localize("debug.cloth_visibility");
+    case 87: return Localize("debug.cloth_v2_directional_albedo");
+    case 88: return Localize("debug.cloth_v2_base_energy_scale");
+    case 89: return Localize("debug.cloth_v2_ibl_fallback");
     default: return Localize("debug.unknown");
     }
 }

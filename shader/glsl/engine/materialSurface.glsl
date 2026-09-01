@@ -97,7 +97,9 @@ MaterialSurface ResolveMaterialSurface(
     surface.modelInputs = inputs.modelInputs;
     surface.shadingModel = MATERIAL_SHADING_MODEL;
     surface.precomputedShadowFactors = vec4(1.0);
-    surface.anisotropy = inputs.modelInputs.anisotropy;
+    surface.anisotropy = surface.shadingModel == SHADING_MODEL_CLOTH
+        ? inputs.modelInputs.cloth.anisotropy
+        : inputs.modelInputs.anisotropy;
 
     // 这里把模型专用输入一次性编码到 GBuffer customData；后续 pass 不再读取 MaterialInputs。
     if (surface.shadingModel == SHADING_MODEL_CLEAR_COAT)
@@ -162,6 +164,9 @@ MaterialSurface ResolveMaterialSurface(
             inputs.modelInputs.cloth.sheenColor,
             inputs.modelInputs.cloth.sheenRoughness);
         surface.selectiveOutputMask |= GBUFFER_HAS_CUSTOM_DATA_MASK;
+        // Cloth v2 的方向与双轴参数由 GBufferF 独占；flags 用来阻止旧
+        // GBuffer 像素被当成 v2 packed anisotropy 解码。
+        surface.selectiveOutputMask |= GBUFFER_HAS_ANISOTROPY_MASK;
     }
 
     return surface;

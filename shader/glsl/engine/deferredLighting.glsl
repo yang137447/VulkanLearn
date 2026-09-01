@@ -6,6 +6,7 @@ layout(set = 3, binding = 9) uniform sampler2DArrayShadow shadowMap;
 layout(set = 3, binding = 10) uniform sampler2DArray hairAzimuthalLut;
 layout(set = 3, binding = 11) uniform sampler2DArray eyeCausticLut;
 layout(set = 3, binding = 12) uniform sampler2D clothDirectionalAlbedoLut;
+layout(set = 3, binding = 13) uniform sampler2DArray clothAnisotropicDirectionalAlbedoLut;
 #include "materialSurface.glsl"
 #include "../common/lighting.glsl"
 #include "subsurfaceLighting.glsl"
@@ -84,7 +85,12 @@ struct DeferredLightingResult
     vec3 clothSheenColor;
     float clothSheenRoughness;
     float clothCharlieD;
-    float clothNeubeltVisibility;
+    float clothVisibility;
+    float clothModelVersion;
+    vec3 clothWorldTangent;
+    float clothAnisotropy;
+    float clothAnisotropyCross;
+    vec2 clothRoughnessAxes;
     vec3 finalColor;
 };
 
@@ -149,7 +155,12 @@ DeferredLightingResult CreateDefaultDeferredLightingResult()
     result.clothSheenColor = vec3(0.0);
     result.clothSheenRoughness = 0.0;
     result.clothCharlieD = 0.0;
-    result.clothNeubeltVisibility = 0.0;
+    result.clothVisibility = 0.0;
+    result.clothModelVersion = 0.0;
+    result.clothWorldTangent = vec3(0.0);
+    result.clothAnisotropy = 0.0;
+    result.clothAnisotropyCross = 0.0;
+    result.clothRoughnessAxes = vec2(0.0);
     result.finalColor = vec3(0.0);
     return result;
 }
@@ -480,6 +491,7 @@ DeferredLightingResult ShadeClothDeferredSurfaceDetailed(
     ClothLightingResult cloth = ShadeClothSurface(
         surface,
         clothDirectionalAlbedoLut,
+        clothAnisotropicDirectionalAlbedoLut,
         inputShadowMap);
     DeferredLightingResult result = CreateDefaultDeferredLightingResult();
     result.directDiffuse = cloth.directDiffuse;
@@ -496,7 +508,12 @@ DeferredLightingResult ShadeClothDeferredSurfaceDetailed(
     result.clothSheenColor = cloth.sheenColor;
     result.clothSheenRoughness = cloth.sheenRoughness;
     result.clothCharlieD = cloth.charlieD;
-    result.clothNeubeltVisibility = cloth.neubeltVisibility;
+    result.clothVisibility = cloth.visibility;
+    result.clothModelVersion = cloth.modelVersion;
+    result.clothWorldTangent = cloth.worldTangent;
+    result.clothAnisotropy = cloth.anisotropy;
+    result.clothAnisotropyCross = cloth.anisotropyCross;
+    result.clothRoughnessAxes = cloth.roughnessAxes;
     ResolveDeferredLightingComposition(surface, result);
     result.defaultDiffuseLighting = result.diffuseLighting;
     return result;

@@ -519,6 +519,11 @@
                     "resource": "clothDirectionalAlbedoLut",
                     "source": "worldTexture",
                     "binding": 12
+                },
+                {
+                    "resource": "clothAnisotropicDirectionalAlbedoLut",
+                    "source": "worldTexture",
+                    "binding": 13
                 }
             ],
             "output": [
@@ -684,6 +689,11 @@
                     "resource": "clothDirectionalAlbedoLut",
                     "source": "worldTexture",
                     "binding": 3
+                },
+                {
+                    "resource": "clothAnisotropicDirectionalAlbedoLut",
+                    "source": "worldTexture",
+                    "binding": 4
                 }
             ],
             "output": [
@@ -733,6 +743,11 @@
                     "resource": "clothDirectionalAlbedoLut",
                     "source": "worldTexture",
                     "binding": 3
+                },
+                {
+                    "resource": "clothAnisotropicDirectionalAlbedoLut",
+                    "source": "worldTexture",
+                    "binding": 4
                 }
             ],
             "output": [
@@ -782,6 +797,11 @@
                     "resource": "clothDirectionalAlbedoLut",
                     "source": "worldTexture",
                     "binding": 3
+                },
+                {
+                    "resource": "clothAnisotropicDirectionalAlbedoLut",
+                    "source": "worldTexture",
+                    "binding": 4
                 }
             ],
             "output": [
@@ -851,6 +871,11 @@
                     "resource": "clothDirectionalAlbedoLut",
                     "source": "worldTexture",
                     "binding": 3
+                },
+                {
+                    "resource": "clothAnisotropicDirectionalAlbedoLut",
+                    "source": "worldTexture",
+                    "binding": 4
                 }
             ],
             "output": [

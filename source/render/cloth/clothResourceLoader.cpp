@@ -23,7 +23,7 @@ namespace VL
 std::string BuildClothResourceSourceDigest(
     std::string_view artifactGenerationKey)
 {
-    CanonicalFieldHasher hasher("vulkanlearn.cloth-resource-set.v1");
+    CanonicalFieldHasher hasher("vulkanlearn.cloth-resource-set.v2");
     hasher.AddUInt32("clothModelVersion", ClothModelVersion);
     hasher.AddUInt32(
         "sheenRoughnessMappingVersion",
@@ -32,14 +32,32 @@ std::string BuildClothResourceSourceDigest(
         "charlieDistributionVersion",
         ClothCharlieDistributionVersion);
     hasher.AddUInt32(
-        "neubeltVisibilityVersion",
-        ClothNeubeltVisibilityVersion);
+        "anisotropyMappingVersion",
+        ClothAnisotropyMappingVersion);
+    hasher.AddUInt32(
+        "visibilityVersion",
+        ClothVisibilityVersion);
     hasher.AddUInt32(
         "directionalAlbedoLutVersion",
         ClothDirectionalAlbedoLutVersion);
+    hasher.AddUInt32(
+        "anisotropicDirectionalAlbedoLutVersion",
+        ClothAnisotropicDirectionalAlbedoLutVersion);
+    hasher.AddUInt32(
+        "gbufferEncodingVersion",
+        ClothGBufferEncodingVersion);
     hasher.AddUInt32("sheenIblVersion", ClothSheenIblVersion);
     hasher.AddUInt32("lutWidth", ClothDirectionalAlbedoLutWidth);
     hasher.AddUInt32("lutHeight", ClothDirectionalAlbedoLutHeight);
+    hasher.AddUInt32(
+        "anisotropicLutWidth",
+        ClothAnisotropicDirectionalAlbedoLutWidth);
+    hasher.AddUInt32(
+        "anisotropicLutHeight",
+        ClothAnisotropicDirectionalAlbedoLutHeight);
+    hasher.AddUInt32(
+        "anisotropicLutLayers",
+        ClothAnisotropicDirectionalAlbedoLutLayers);
     hasher.AddString("artifactGenerationKey", artifactGenerationKey);
     hasher.AddDigest(
         "generatorShader",
@@ -73,6 +91,13 @@ std::shared_ptr<ClothResourceSet> BuildClothResourceSet(
     {
         throw std::runtime_error(
             "Cloth lookup generation returned an empty directional albedo LUT");
+    }
+    resourceSet->anisotropicDirectionalAlbedoLutTexture =
+        std::move(generated.anisotropicDirectionalAlbedoLutTexture);
+    if (!resourceSet->anisotropicDirectionalAlbedoLutTexture)
+    {
+        throw std::runtime_error(
+            "Cloth lookup generation returned an empty anisotropic directional albedo LUT");
     }
     return resourceSet;
 }
@@ -120,7 +145,9 @@ void ClothResourceLoader::Load() const
         loadContext.previousWorldResources->clothResources->sourceDigest ==
             sourceDigest &&
         loadContext.previousWorldResources->clothResources
-            ->directionalAlbedoLutTexture)
+            ->directionalAlbedoLutTexture &&
+        loadContext.previousWorldResources->clothResources
+            ->anisotropicDirectionalAlbedoLutTexture)
     {
         loadContext.resourceCache.BindClothResources(
             loadContext.previousWorldResources->clothResources);
@@ -128,6 +155,10 @@ void ClothResourceLoader::Load() const
             "clothDirectionalAlbedoLut",
             loadContext.previousWorldResources->clothResources
                 ->directionalAlbedoLutTexture);
+        loadContext.resourceCache.BindWorldTexture(
+            "clothAnisotropicDirectionalAlbedoLut",
+            loadContext.previousWorldResources->clothResources
+                ->anisotropicDirectionalAlbedoLutTexture);
         return;
     }
 
@@ -139,6 +170,9 @@ void ClothResourceLoader::Load() const
     loadContext.resourceCache.BindWorldTexture(
         "clothDirectionalAlbedoLut",
         resourceSet->directionalAlbedoLutTexture);
+    loadContext.resourceCache.BindWorldTexture(
+        "clothAnisotropicDirectionalAlbedoLut",
+        resourceSet->anisotropicDirectionalAlbedoLutTexture);
     loadContext.resourceCache.BindClothResources(std::move(resourceSet));
 }
 

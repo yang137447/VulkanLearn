@@ -259,6 +259,16 @@ private:
         Rml::String debugClothDirectSheenLabel;
         Rml::String debugClothIndirectSheenLabel;
         Rml::String debugClothIblFallbackLabel;
+        Rml::String debugClothV2ModelLabel;
+        Rml::String debugClothWorldTangentLabel;
+        Rml::String debugClothAnisotropyLabel;
+        Rml::String debugClothAnisotropyCrossLabel;
+        Rml::String debugClothRoughnessAxesLabel;
+        Rml::String debugClothAnisotropicCharlieDLabel;
+        Rml::String debugClothVisibilityLabel;
+        Rml::String debugClothV2DirectionalAlbedoLabel;
+        Rml::String debugClothV2BaseEnergyScaleLabel;
+        Rml::String debugClothV2IblFallbackLabel;
 
         Rml::String toneMappingLabel;
         Rml::String toneMappingValue;

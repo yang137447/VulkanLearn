@@ -98,7 +98,8 @@ ClothComputeReloadParticipant::PrepareReplacementDescriptors(
         RendererResourceCache::GetInstance()
             .CaptureActiveWorldLocalResources();
     if (!activePackage || !activePackage->clothResources ||
-        !activePackage->clothResources->directionalAlbedoLutTexture)
+        !activePackage->clothResources->directionalAlbedoLutTexture ||
+        !activePackage->clothResources->anisotropicDirectionalAlbedoLutTexture)
     {
         throw std::runtime_error(
             "Cloth Compute reload requires an active World-local Cloth resource package");
@@ -118,7 +119,8 @@ ClothComputeReloadParticipant::PrepareReplacementDescriptors(
         RendererResourceCache::GetInstance()
             .PrepareClothResourceReplacement(
                 std::shared_ptr<const ClothResourceSet>(resourceSet),
-                resourceSet->directionalAlbedoLutTexture);
+                resourceSet->directionalAlbedoLutTexture,
+                resourceSet->anisotropicDirectionalAlbedoLutTexture);
 
     const RendererResourceCache::ImmutableWorldLocalResourceRefs oldPackage =
         payload.cacheReplacement.previousPackage;

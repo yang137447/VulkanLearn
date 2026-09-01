@@ -108,7 +108,12 @@ void main()
             lighting.clothSheenColor,
             lighting.clothSheenRoughness,
             lighting.clothCharlieD,
-            lighting.clothNeubeltVisibility,
+            lighting.clothVisibility,
+            lighting.clothModelVersion,
+            lighting.clothWorldTangent,
+            lighting.clothAnisotropy,
+            lighting.clothAnisotropyCross,
+            lighting.clothRoughnessAxes,
             lighting.clothDirectionalAlbedo,
             lighting.clothBaseEnergyScale,
             lighting.clothDirectSheen,
@@ -131,7 +136,7 @@ void main()
         (uboVP.debugViewMode >= 21 &&
          uboVP.debugViewMode <= 41) ||
         (uboVP.debugViewMode >= 64 &&
-         uboVP.debugViewMode <= 73))
+         uboVP.debugViewMode <= 89))
     {
         outDiffuseLighting = resolvedColor;
         outNonDiffuseLighting = vec4(0.0);

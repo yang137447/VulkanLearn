@@ -172,7 +172,8 @@ public:
 
     PreparedClothResourceReplacement PrepareClothResourceReplacement(
         std::shared_ptr<const ClothResourceSet> resources,
-        std::shared_ptr<Texture> directionalAlbedoLutTexture) const;
+        std::shared_ptr<Texture> directionalAlbedoLutTexture,
+        std::shared_ptr<Texture> anisotropicDirectionalAlbedoLutTexture) const;
     WorldLocalResourcePackageHandle CommitPreparedClothResourceReplacement(
         PreparedClothResourceReplacement&& replacement) noexcept;
 

@@ -6,6 +6,7 @@
 #include "../common/lighting.glsl"
 layout (set = 3, binding = 1) uniform sampler2DArray hairAzimuthalLut;
 layout (set = 3, binding = 3) uniform sampler2D clothDirectionalAlbedoLut;
+layout (set = 3, binding = 4) uniform sampler2DArray clothAnisotropicDirectionalAlbedoLut;
 #include "hairLighting.glsl"
 #include "clothLighting.glsl"
 
@@ -79,7 +80,12 @@ struct ForwardLightingResult
     vec3 clothSheenColor;
     float clothSheenRoughness;
     float clothCharlieD;
-    float clothNeubeltVisibility;
+    float clothVisibility;
+    float clothModelVersion;
+    vec3 clothWorldTangent;
+    float clothAnisotropy;
+    float clothAnisotropyCross;
+    vec2 clothRoughnessAxes;
 };
 
 ForwardLightingResult CreateDefaultForwardLightingResult()
@@ -137,7 +143,12 @@ ForwardLightingResult CreateDefaultForwardLightingResult()
     result.clothSheenColor = vec3(0.0);
     result.clothSheenRoughness = 0.0;
     result.clothCharlieD = 0.0;
-    result.clothNeubeltVisibility = 0.0;
+    result.clothVisibility = 0.0;
+    result.clothModelVersion = 0.0;
+    result.clothWorldTangent = vec3(0.0);
+    result.clothAnisotropy = 0.0;
+    result.clothAnisotropyCross = 0.0;
+    result.clothRoughnessAxes = vec2(0.0);
     return result;
 }
 
@@ -329,6 +340,7 @@ ForwardLightingResult ShadeClothForwardSurface(in MaterialSurface surface)
     ClothLightingResult cloth = ShadeClothSurface(
         surface,
         clothDirectionalAlbedoLut,
+        clothAnisotropicDirectionalAlbedoLut,
         shadowMap);
     ForwardLightingResult result = CreateDefaultForwardLightingResult();
     result.directDiffuse = cloth.directDiffuse;
@@ -352,7 +364,12 @@ ForwardLightingResult ShadeClothForwardSurface(in MaterialSurface surface)
     result.clothSheenColor = cloth.sheenColor;
     result.clothSheenRoughness = cloth.sheenRoughness;
     result.clothCharlieD = cloth.charlieD;
-    result.clothNeubeltVisibility = cloth.neubeltVisibility;
+    result.clothVisibility = cloth.visibility;
+    result.clothModelVersion = cloth.modelVersion;
+    result.clothWorldTangent = cloth.worldTangent;
+    result.clothAnisotropy = cloth.anisotropy;
+    result.clothAnisotropyCross = cloth.anisotropyCross;
+    result.clothRoughnessAxes = cloth.roughnessAxes;
     return result;
 }
 #if MATERIAL_IS_EYE

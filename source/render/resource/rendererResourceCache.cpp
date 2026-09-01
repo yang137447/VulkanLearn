@@ -509,9 +509,11 @@ RendererResourceCache::CommitPreparedEyeResourceReplacement(
 RendererResourceCache::PreparedClothResourceReplacement
 RendererResourceCache::PrepareClothResourceReplacement(
     std::shared_ptr<const ClothResourceSet> resources,
-    std::shared_ptr<Texture> directionalAlbedoLutTexture) const
+    std::shared_ptr<Texture> directionalAlbedoLutTexture,
+    std::shared_ptr<Texture> anisotropicDirectionalAlbedoLutTexture) const
 {
-    if (!resources || !directionalAlbedoLutTexture)
+    if (!resources || !directionalAlbedoLutTexture ||
+        !anisotropicDirectionalAlbedoLutTexture)
     {
         throw std::runtime_error(
             "Cloth resource replacement requires a complete resource set and LUT texture");
@@ -525,6 +527,9 @@ RendererResourceCache::PrepareClothResourceReplacement(
     replacement.replacementPackage->worldTextures[
         "clothDirectionalAlbedoLut"] =
         std::move(directionalAlbedoLutTexture);
+    replacement.replacementPackage->worldTextures[
+        "clothAnisotropicDirectionalAlbedoLut"] =
+        std::move(anisotropicDirectionalAlbedoLutTexture);
     return replacement;
 }
 

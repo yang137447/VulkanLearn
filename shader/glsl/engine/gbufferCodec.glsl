@@ -91,6 +91,28 @@ vec3 DecodeGBufferDirection(vec3 encodedDirection)
     return normalize(encodedDirection * 2.0 - 1.0);
 }
 
+float EncodeClothAnisotropy(
+    float anisotropy,
+    float anisotropyCross)
+{
+    // GBufferF.w 是 R16F，不能假设它能无损保存两个 8 bit 通道；v2 采用
+    // 5+5 bit packed 语义，在半精度下仍能稳定 round-trip，误差约为 1/31。
+    uint anisotropyCode = uint(round(
+        (anisotropy * 0.5 + 0.5) * 31.0));
+    uint crossCode = uint(round(anisotropyCross * 31.0));
+    return float((anisotropyCode << 5u) | crossCode) / 1023.0;
+}
+
+vec2 DecodeClothAnisotropy(float encodedValue)
+{
+    uint packedValue = uint(round(encodedValue * 1023.0));
+    uint anisotropyCode = (packedValue >> 5u) & 31u;
+    uint crossCode = packedValue & 31u;
+    return vec2(
+        float(anisotropyCode) / 31.0 * 2.0 - 1.0,
+        float(crossCode) / 31.0);
+}
+
 // UE Legacy Clear Coat 不直接存储完整底层法线，而是分别把顶层、底层法线映射到
 // 八面体平面，再保存二者的相对偏移。这样只需占用 CustomData 剩余的两个通道。
 vec2 UnitVectorToOctahedron(vec3 direction)
@@ -246,6 +268,12 @@ GBufferData EncodeGBuffer(in MaterialSurface surface, in GBufferPixelData pixelD
         ? vec4(
             EncodeGBufferDirection(normalize(surface.worldTangent.xyz)),
             surface.worldTangent.w)
+        : surface.shadingModel == SHADING_MODEL_CLOTH
+        ? vec4(
+            EncodeGBufferDirection(normalize(surface.worldTangent.xyz)),
+            EncodeClothAnisotropy(
+                surface.modelInputs.cloth.anisotropy,
+                surface.modelInputs.cloth.anisotropyCross))
         : vec4(
             EncodeGBufferDirection(normalize(surface.worldTangent.xyz)),
             surface.anisotropy);
@@ -304,6 +332,26 @@ MaterialSurface DecodeGBufferSurface(in GBufferData data)
         DecodeGBufferDirection(data.gbufferF.rgb),
         surface.shadingModel == SHADING_MODEL_HAIR ? data.gbufferF.a : 1.0);
     surface.anisotropy = data.gbufferF.a;
+    if (surface.shadingModel == SHADING_MODEL_CLOTH)
+    {
+        if ((surface.selectiveOutputMask & GBUFFER_HAS_ANISOTROPY_MASK) != 0u)
+        {
+            // Cloth 椭圆瓣对 T/B 的符号具有 180 度对称性，因此 Deferred
+            // 只需恢复主方向与轴宽度，不必把 tangent.w 误当 handedness。
+            vec2 clothAnisotropy = DecodeClothAnisotropy(data.gbufferF.a);
+            surface.modelInputs.cloth.anisotropy = clothAnisotropy.x;
+            surface.modelInputs.cloth.anisotropyCross = clothAnisotropy.y;
+            surface.anisotropy = clothAnisotropy.x;
+        }
+        else
+        {
+            // 旧 Cloth v1 没有 v2 flag；它的 GBufferF 不携带可消费的
+            // anisotropy，必须回退到各向同性 closure。
+            surface.modelInputs.cloth.anisotropy = 0.0;
+            surface.modelInputs.cloth.anisotropyCross = 0.0;
+            surface.anisotropy = 0.0;
+        }
+    }
     surface.emissiveColor = data.sceneColorBase.rgb;
     if (surface.shadingModel == SHADING_MODEL_SUBSURFACE)
     {
@@ -399,7 +447,8 @@ MaterialSurface DecodeGBufferSurface(in GBufferData data)
     }
     else if (surface.shadingModel == SHADING_MODEL_CLOTH)
     {
-        // Cloth 首阶段只消费 GBufferD 的线性 sheen 颜色和 perceptual roughness。
+        // Cloth D 保存 v1/v2 共用的 sheen 参数；方向和 anisotropy 已在上面
+        // 通过版本 flag 从 GBufferF 恢复，不能把 packed w 当 roughness。
         surface.modelInputs.cloth.sheenColor = surface.customData.rgb;
         surface.modelInputs.cloth.sheenRoughness = surface.customData.a;
         surface.metallic = 0.0;
