@@ -16,9 +16,11 @@ struct MaterialSurface
 {
     vec3 worldPosition;
     vec2 texCoord;
-    // worldNormal 表示清漆顶层法线；底层法线用于底漆的漫反射和高光。
+    // worldNormal 是顶层法线；Skin bottom normal 只属于 Skin LUT 漫反射输入，
+    // Clear Coat bottom normal 仍保持独立，不能互相借用。
     vec3 worldNormal;
     vec3 clearCoatBottomNormal;
+    vec3 preintegratedSkinBottomNormal;
     vec3 baseColor;
     // Hair 的 BaseColor 已在 Material Function 一次性转换成 sigma_a；Forward/Deferred 只消费该快照。
     vec3 hairAbsorption;
@@ -49,6 +51,7 @@ MaterialSurface CreateDefaultMaterialSurface()
     surface.texCoord = vec2(0.0);
     surface.worldNormal = vec3(0.0, 0.0, 1.0);
     surface.clearCoatBottomNormal = vec3(0.0, 0.0, 1.0);
+    surface.preintegratedSkinBottomNormal = vec3(0.0, 0.0, 1.0);
     surface.baseColor = vec3(1.0);
     surface.hairAbsorption = vec3(1.0);
     surface.opacity = 1.0;
@@ -81,6 +84,8 @@ MaterialSurface ResolveMaterialSurface(
     surface.worldNormal = normalize(inputs.normal);
     surface.clearCoatBottomNormal =
         normalize(inputs.modelInputs.clearCoat.bottomNormal);
+    surface.preintegratedSkinBottomNormal = normalize(
+        inputs.modelInputs.preintegratedSkin.bottomNormal);
     surface.worldTangent = inputs.tangent;
     surface.baseColor = inputs.baseColor;
     surface.hairAbsorption = inputs.modelInputs.hair.absorption;

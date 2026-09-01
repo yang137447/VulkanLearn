@@ -106,6 +106,19 @@ void TestRenderModeContract()
         RenderModeToString(RenderMode::ThinTranslucent) ==
             "ThinTranslucent",
         "ThinTranslucent render-mode identity mismatch");
+    Require(
+        IsTransparentRenderMode(
+            RenderMode::TransparentAlphaBlendWriteDepth),
+        "Depth-writing alpha blend was not routed as transparent");
+    Require(
+        RequiresTransparentDepthWrite(
+            RenderMode::TransparentAlphaBlendWriteDepth),
+        "Depth-writing alpha blend lost its pipeline-state requirement");
+    Require(
+        RenderModeToString(
+            RenderMode::TransparentAlphaBlendWriteDepth) ==
+            "TransparentAlphaBlendWriteDepth",
+        "Depth-writing alpha blend render-mode identity mismatch");
 }
 
 } // namespace

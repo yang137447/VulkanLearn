@@ -99,6 +99,7 @@ public:
     // RenderScene after one has been initialized.
     void RenderLatestSnapshotOrLastGood();
     void Render();
+    void RequestScreenshot(std::string path);
     void SetRendererBackend(VL::RendererBackendVulkan* backend) { rendererBackend = backend; }
     void SetUiRenderSnapshotQueue(VL::UiRenderSnapshotQueue* queue) { uiRenderSnapshotQueue = queue; }
     void SetUiOverlayShaderPaths(std::string vertexPath, std::string fragmentPath);
@@ -449,6 +450,9 @@ private:
     std::shared_ptr<const VL::UiRenderSnapshot> currentUiRenderSnapshot;
     std::string uiVertexShaderPath;
     std::string uiFragmentShaderPath;
+    // 截图请求只在 GT 命令执行端写入，在当前帧提交后由 RenderSystem 消费，
+    // 确保回读不会与仍在录制的 command buffer 交叉。
+    std::optional<std::string> pendingScreenshotPath;
     bool hasMaterialInstancePreviewMaterialOverride = false;
     std::string materialInstancePreviewOverridePath;
     std::string materialInstancePreviewOverrideMaterialKey;

@@ -16,7 +16,7 @@ SPIR-V reflection 是单个 Pass 实际资源使用情况的真相源。
 四类数据的职责边界如下：
 
 - `M_*.json`
-  - 描述参数名、类型、贴图和默认值
+  - 描述参数名、类型、默认值、packed vector 通道语义和贴图
   - 生成 GLSL include 与完整 `MaterialDescriptorSchema`
   - 决定 Set 1 binding、UBO std140 offset 和 layout stage visibility
 - `MaterialInstance`
@@ -37,6 +37,24 @@ SPIR-V reflection 是单个 Pass 实际资源使用情况的真相源。
 - reflection 不再生成 Set 1 完整 layout，只负责实际使用与一致性校验
 - M_ 保存 static macro 默认值，MI 保持稀疏；resolver 在构建 variant key 前合成完整有效宏
 
+### 参数默认值合成
+
+目标材质运行时只存在一份有效参数值，合成优先级固定为：
+
+```text
+MI.parameters[name]（显式实例覆写）
+    > M_.parameters[name].default（母材质默认值）
+```
+
+因此：
+
+- M_ 默认值必须是目标 Shader/Material Function 在没有实例覆写时的完整、可运行语义；
+- MI 只记录与 M_ 默认值不同的显式作者意图；
+- 不能在 Material Function、Shading Model 或 Pass 中再设置一套隐含业务默认值，
+  以免出现 JSON、生成 include 和运行时行为三套默认值；
+- 如果目标默认值来自源引擎迁移，源默认值解析和目标映射必须在离线阶段完成，并进入迁移审计；
+- 缺少源默认值且无法证明目标替代值等价时，迁移必须报告缺口，不能静默使用普通材质默认值。
+
 ## 输入 Schema 职责
 
 M_ 参数和贴图只声明完整、稳定的材质 schema，不要求材质作者重复维护输入与宏或
@@ -45,6 +63,58 @@ variant，SPIR-V reflection 负责描述该 Pass/variant 实际使用的资源�
 
 如果后续调参面板需要按当前 variant 隐藏未使用输入，应从已编译 variant 的 reflection
 或引擎生成的元数据推导，不能把同一条件再次交给 M_ 作者手写维护。
+
+### Packed Vector 通道说明
+
+`vec2`、`vec3`、`vec4` 参数可以在 `M_*.json` 中声明可选的
+`channels`，把打包向量的名称、语义和范围固定在参数真相源旁边：
+
+```json
+"u_hairCharacterLighting": {
+    "type": "vec4",
+    "default": [1.0, 1.0, 1.0, 0.0],
+    "channels": {
+        "x": {
+            "name": "environmentLightingMultiplier",
+            "description": "environment lighting multiplier",
+            "range": {"min": 0.0, "max": 4.0}
+        },
+        "y": {
+            "name": "directionalLightingMultiplier",
+            "description": "directional lighting multiplier",
+            "range": {"min": 0.0, "max": 4.0}
+        },
+        "z": {
+            "name": "localLightingMultiplier",
+            "description": "local lighting multiplier",
+            "range": {"min": 0.0, "max": 4.0}
+        },
+        "w": {
+                    "name": "virtualLightIntensity",
+                    "description": "achromatic Virtual Light intensity",
+            "range": {"min": 0.0, "max": 4.0}
+        }
+    }
+}
+```
+
+合同规则：
+
+- 字段可省略，以兼容尚未补齐说明的旧 `M_`；
+- 一旦声明，就必须是对象，并完整且仅包含对应 GLSL 分量：
+  `vec2=x/y`、`vec3=x/y/z`、`vec4=x/y/z/w`；
+- 每个通道必须包含非空的稳定 `name`、人类可读的 `description` 和
+  `range`；保留通道也要明确写成 `reserved`，并可用
+  `range: {"min": 0.0, "max": 0.0}` 表示必须为零；
+- `range` 是包含边界的闭区间，`min` 不得大于 `max`；当前使用紧凑单行对象格式；
+- `float` 没有分量打包语义，禁止声明 `channels`；
+- 使用 `x/y/z/w` 而不是 `r/g/b/a`，因为该字段描述的是参数分量合同；
+  颜色参数可在 `name` 或 `description` 中明确对应 red/green/blue/alpha；
+- `MaterialAssetValidator` 在资产入口校验完整性，`MaterialDescriptorSchema` 按
+  `x/y/z/w` 顺序保留通道元数据，范围同时用于 M_ 默认值和 MI 有效值校验，
+  供编辑器、调试 UI 和迁移工具读取；
+- 该元数据不参与 UBO 排列、descriptor layout、shader ABI 或生成 GLSL；
+  它只约束 authoring 数据，不在 shader 中增加运行时 `clamp()`。
 
 ## MaterialInstance 运行时身份
 

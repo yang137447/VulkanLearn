@@ -64,6 +64,7 @@ SubsurfaceGBufferPayload EncodePreintegratedSkinGBuffer(
         0.0f,
         0.0f,
     };
+    payload.gbufferE = inputs.characterLighting;
     return payload;
 }
 
@@ -77,6 +78,7 @@ PreintegratedSkinMaterialGBufferInputs DecodePreintegratedSkinGBuffer(
     inputs.subsurfaceWeight = payload.gbufferD[3];
     inputs.curvature = payload.gbufferF[0];
     inputs.transmissionWeight = payload.gbufferF[1];
+    inputs.characterLighting = payload.gbufferE;
     return inputs;
 }
 

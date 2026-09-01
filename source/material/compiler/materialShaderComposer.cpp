@@ -92,13 +92,15 @@ std::string BuildStageSource(
     else if (request.pass == MaterialPass::Base || request.features.usesOpacityMask)
     {
         AppendInclude(stream, virtualSourceDirectory, shaderGlslRoot, "engine/materialContext.glsl");
-        AppendInclude(stream, virtualSourceDirectory, shaderGlslRoot, "engine/materialSurface.glsl");
+        // 生成参数 include 必须先于 materialSurface；它定义 MATERIAL_SHADING_MODEL，
+        // 否则 materialSurface 的 DefaultLit 兜底会吞掉 Skin/Cloth 等真实模型选择。
         AppendInclude(
             stream,
             virtualSourceDirectory,
             shaderGlslRoot,
             request.source.parameterIncludePath,
             request.source.parameterIncludeBytes.has_value());
+        AppendInclude(stream, virtualSourceDirectory, shaderGlslRoot, "engine/materialSurface.glsl");
         AppendInclude(stream, virtualSourceDirectory, shaderGlslRoot, request.source.surfaceEvaluationPath);
         AppendInclude(stream, virtualSourceDirectory, shaderGlslRoot, request.pass == MaterialPass::Base
             ? "engine/passTemplate/base.frag.glsl"

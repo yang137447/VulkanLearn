@@ -25,6 +25,7 @@ MaterialShadowCasterDecision ResolveMaterialShadowCaster(const Material& materia
         throw std::runtime_error(
             "OpaqueClip material reached ShadowCaster routing without a ShadowDepth pipeline");
     case RenderMode::TransparentAlphaBlend:
+    case RenderMode::TransparentAlphaBlendWriteDepth:
     case RenderMode::TransparentAdditive:
     case RenderMode::ThinTranslucent:
         // 当前 Shadow Map 不表达彩色透射或透明覆盖率；透明材质默认不投影，

@@ -303,6 +303,11 @@ const std::vector<vk::ImageView>& RHIDeviceVulkan::GetSwapchainImageViews() cons
     return VulkanManager::GetInstance().GetSwapChainImageViews();
 }
 
+const std::vector<vk::Image>& RHIDeviceVulkan::GetSwapchainImages() const
+{
+    return VulkanManager::GetInstance().GetSwapChainImages();
+}
+
 std::vector<vk::Fence>& RHIDeviceVulkan::GetTaskFinishedFences()
 {
     return VulkanManager::GetInstance().GetTaskFinishedFences();

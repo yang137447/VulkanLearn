@@ -33,6 +33,7 @@ struct PreintegratedSkinMaterialGBufferInputs
     float subsurfaceWeight = 0.0f;
     float curvature = 0.0f;
     float transmissionWeight = 0.0f;
+    std::array<float, 4> characterLighting = {1.0f, 1.0f, 1.0f, 0.0f};
 };
 
 // ID 5 Surface Evaluation 产生的输入快照，供 CPU round-trip 合同测试消费；
@@ -50,6 +51,7 @@ struct SubsurfaceGBufferPayload
 {
     std::array<float, 4> gbufferA{};
     std::array<float, 4> gbufferD{};
+    std::array<float, 4> gbufferE{};
     std::array<float, 4> gbufferF{};
 };
 

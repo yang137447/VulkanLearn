@@ -9,6 +9,8 @@ layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inNormal;
 layout(location = 2) in vec4 inColor;
 layout(location = 3) in vec2 inTexCoord;
+// location 7 保持可选 UV1 的稳定顶点 ABI；无 UV1 的网格由导入端提供零值。
+layout(location = 7) in vec2 inTexCoord1;
 layout(location = 4) in vec4 inTangent;
 layout(location = 5) in vec4 inSpeedTreeWindBranch1;
 layout(location = 6) in vec4 inSpeedTreeWindBranch2;
@@ -22,6 +24,7 @@ void main()
     vertexInput.localNormal = inNormal;
     vertexInput.vertexColor = inColor;
     vertexInput.texCoord = inTexCoord;
+    vertexInput.texCoord1 = inTexCoord1;
     vertexInput.localTangent = inTangent;
     vertexInput.speedTreeWindBranch1 = inSpeedTreeWindBranch1;
     vertexInput.speedTreeWindBranch2 = inSpeedTreeWindBranch2;
@@ -42,6 +45,7 @@ void main()
         GetNormal_WS_Unnormalized(modelMatrix, vertex.localNormal);
     outputVertex.vertexColor = vertex.vertexColor;
     outputVertex.texCoord = vertex.texCoord;
+    outputVertex.texCoord1 = vertex.texCoord1;
     outputVertex.worldTangent = vec4(
         GetDirection_WS_Unnormalized(modelMatrix, vertex.localTangent.xyz),
         vertex.localTangent.w);

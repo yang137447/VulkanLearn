@@ -240,8 +240,10 @@ weight, curvature, transmissionWeight
 profileId, weight, thickness, transmissionWeight
 ```
 
-V1 要求 `PreintegratedSkin.curvature == 0`。材质范围、厚度域和保留字段全部在加载期
-校验；shader 不负责按帧修补错误资产。
+V1 对 `u_skinSurface.w` 这个静态作者参数仍要求为 `0`，材质范围与厚度域在加载期
+校验；shader 不负责按帧修补错误资产。NeoX 脸部可以通过独立的 `skinAuxMap.R`
+提供逐像素 curvature，并写入上表的 `GBufferF.x`；当前 PreintegratedSkin LUT
+路径会保留该字段，但尚未复现 NeoX 源 shader 的完整 curvature response。
 
 ### 5.2 GBuffer Packing
 
@@ -253,6 +255,21 @@ V1 要求 `PreintegratedSkin.curvature == 0`。材质范围、厚度域和保留
 
 ID 2 当前只允许 Opaque，因此借用 `GBufferA.a` 保存 transmission weight，并在 decode 后
 恢复 opacity 为 1。CPU codec 只用于 encode/decode 合同测试，不生成任何 lookup 数据。
+
+对于 ID 3，`GBufferC.g` 在 Skin 像素中保存 `MaterialInputs.specular`；其它旧模型
+继续使用固定的 `0.5` 介电高光值，避免无关材质改变既有编码合同。
+
+NeoX Skin 的角色光照倍率单独保存于 `GBufferE`，不复用曲率或底层法线通道：
+
+```text
+GBufferE = characterLighting.x/y/z/w
+         = environment, directional, GI, Virtual Light
+```
+
+当前 V1 只消费 `x` 和 `y`：`x` 乘 Skin 的环境/IBL diffuse 与 specular，`y` 乘
+方向光的 Skin diffuse/specular/transmission。`z` 没有 VulkanLearn 独立 GI 光源分类，
+`w` 没有源虚拟光等价物，因此只保存、不硬映射；局部点光与聚光暂时保持 VulkanLearn
+自己的 radiance 合同。该差异是有意的，避免把源字段误当成当前引擎的光源类型。
 
 ## 6. Lighting 与能量合同
 

@@ -108,6 +108,11 @@ public:
     vk::Extent2D GetSwapchainExtent() const;
     vk::Format GetSwapchainImageFormat() const;
     const std::vector<vk::ImageView>& GetSwapchainImageViews() const;
+    bool RecordSwapchainScreenshot(
+        const RendererFrameContext& frameContext,
+        const std::string& path,
+        std::string& outError);
+    bool CompleteSwapchainScreenshot(std::string& outError);
     float GetTimestampPeriodNanoseconds();
     uint32_t GetGraphicsTimestampValidBits();
     // 材质加载阶段只依赖 backend 能力接口，不直接穿透到 VulkanManager。
@@ -315,6 +320,14 @@ private:
     std::unordered_map<VkDescriptorPool, std::vector<RHIDescriptorSetHandle>> descriptorSetHandlesByPool;
     std::unordered_map<VkRenderPass, RHIRenderPassHandle> renderPassHandlesByRenderPass;
     std::unordered_map<VkFramebuffer, RHIFramebufferHandle> framebufferHandlesByFramebuffer;
+    struct PendingScreenshot
+    {
+        vk::Buffer readbackBuffer;
+        vk::DeviceMemory readbackMemory;
+        vk::Extent2D extent;
+        vk::Format format = vk::Format::eUndefined;
+        std::string path;
+    } pendingScreenshot;
 };
 
 } // namespace VL

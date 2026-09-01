@@ -98,6 +98,8 @@ std::vector<std::string> BuildRenderModeMacros(RenderMode renderMode)
         return {"RENDER_MODE_FORWARD_EYE_CORNEA"};
     case RenderMode::TransparentAlphaBlend:
         return {"RENDER_MODE_TRANSPARENT_ALPHA_BLEND"};
+    case RenderMode::TransparentAlphaBlendWriteDepth:
+        return {"RENDER_MODE_TRANSPARENT_ALPHA_BLEND_WRITE_DEPTH"};
     case RenderMode::TransparentAdditive:
         return {"RENDER_MODE_TRANSPARENT_ADDITIVE"};
     case RenderMode::ThinTranslucent:

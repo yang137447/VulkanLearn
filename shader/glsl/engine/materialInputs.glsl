@@ -35,6 +35,10 @@ struct PreintegratedSkinMaterialInputs
     float weight;
     float curvature;
     float transmissionWeight;
+    // 顶层法线负责高光，bottomNormal 负责 Skin LUT 的漫反射/散射方向。
+    vec3 bottomNormal;
+    // x/y/z/w 对齐源角色光照倍率：环境、方向光、GI、虚拟光。
+    vec4 characterLighting;
 };
 
 struct SubsurfaceProfileMaterialInputs
@@ -58,6 +62,8 @@ struct HairMaterialInputs
     float multipleScatteringWeight;
     float coverage;
     float density;
+    // x/y/z/w 分别是角色环境光、方向光、局部光倍率和相机虚拟光强度。
+    vec4 characterLighting;
 };
 
 struct ClothMaterialInputs
@@ -169,6 +175,9 @@ MaterialInputs CreateDefaultMaterialInputs()
     inputs.modelInputs.preintegratedSkin.weight = 0.0;
     inputs.modelInputs.preintegratedSkin.curvature = 0.0;
     inputs.modelInputs.preintegratedSkin.transmissionWeight = 0.0;
+    inputs.modelInputs.preintegratedSkin.bottomNormal = inputs.normal;
+    inputs.modelInputs.preintegratedSkin.characterLighting =
+        vec4(1.0, 1.0, 1.0, 0.0);
     inputs.modelInputs.subsurfaceProfile.profileId = 0.0;
     inputs.modelInputs.subsurfaceProfile.weight = 0.0;
     inputs.modelInputs.subsurfaceProfile.thickness = 0.01;
@@ -184,7 +193,7 @@ MaterialInputs CreateDefaultMaterialInputs()
     inputs.modelInputs.hair.multipleScatteringWeight = 0.0;
     inputs.modelInputs.hair.coverage = 1.0;
     inputs.modelInputs.hair.density = 1.0;
-    inputs.modelInputs.hair.density = 1.0;
+    inputs.modelInputs.hair.characterLighting = vec4(1.0, 1.0, 1.0, 0.0);
     inputs.modelInputs.cloth.sheenColor = vec3(0.0);
     inputs.modelInputs.cloth.sheenRoughness = 0.5;
     inputs.modelInputs.cloth.anisotropy = 0.0;

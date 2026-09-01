@@ -62,9 +62,15 @@ std::string ClassifyRendererResourceLoadError(std::string_view message)
 
 void ConfigureInitialCamera(Camera& camera, float aspectRatio)
 {
-    // Current camera activation for the single-view runtime. The future
-    // World/Controller path should own this policy before snapshots are built.
-    camera.SetCamera(camera.GetPosition(), Eigen::Vector3f(0.0f, 0.0f, 0.0f), Eigen::Vector3f(0.0f, 1.0f, 0.0f));
+    // 旧场景没有显式 look_at，继续保留“启动时看向世界原点”的兼容行为；
+    // 新验证场景可以冻结作者机位，避免启动后再依赖交互命令修正视线。
+    if (!camera.HasInitialLookAt())
+    {
+        camera.SetCamera(
+            camera.GetPosition(),
+            Eigen::Vector3f(0.0f, 0.0f, 0.0f),
+            Eigen::Vector3f(0.0f, 1.0f, 0.0f));
+    }
     camera.SetProjection(
         camera.GetHFOV(),
         aspectRatio,

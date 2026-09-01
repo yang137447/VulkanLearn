@@ -39,6 +39,12 @@ struct DeferredLightingResult
     vec3 transmissionLighting;
     vec3 localSubsurfaceLighting;
     vec3 defaultDiffuseLighting;
+    vec3 skinDirectDiffuse;
+    vec3 skinTransmission;
+    float skinShadowVisibility;
+    vec3 skinIblDiffuse;
+    vec3 skinIblSpecular;
+    vec3 skinVirtualLight;
     float subsurfaceWeight;
     float transmissionWeight;
     // Hair path decomposition is kept in the same result snapshot for Forward/Deferred debug views.
@@ -110,6 +116,12 @@ DeferredLightingResult CreateDefaultDeferredLightingResult()
     result.transmissionLighting = vec3(0.0);
     result.localSubsurfaceLighting = vec3(0.0);
     result.defaultDiffuseLighting = vec3(0.0);
+    result.skinDirectDiffuse = vec3(0.0);
+    result.skinTransmission = vec3(0.0);
+    result.skinShadowVisibility = 1.0;
+    result.skinIblDiffuse = vec3(0.0);
+    result.skinIblSpecular = vec3(0.0);
+    result.skinVirtualLight = vec3(0.0);
     result.subsurfaceWeight = 0.0;
     result.transmissionWeight = 0.0;
     result.hairRPath = vec3(0.0);
@@ -286,8 +298,23 @@ DeferredLightingResult ShadePreintegratedSkinDeferredSurfaceDetailed(
         CalculatePreintegratedSkinDirectLighting(
             surface,
             skinLutTable);
+    // Skin 高光独立走源 dual-lobe GGX；Default Lit 的单 lobe 结果不能再缩放冒充它。
+    result.directSpecular =
+        skinLighting.specular * result.shadow +
+        skinLighting.virtualSpecular;
+    vec3 viewDir = normalize(
+        uboVP.cameraPosition - surface.worldPosition);
+    result.indirectSpecular = CalculateNeoXSkinDualSpecularIbl(
+        surface.worldNormal,
+        viewDir,
+        surface.baseColor,
+        surface.roughness,
+        surface.metallic,
+        surface.specular) *
+        surface.modelInputs.preintegratedSkin.characterLighting.x;
     vec3 localDirectDiffuse =
-        skinLighting.diffuse * result.shadow;
+        skinLighting.diffuse * result.shadow +
+        skinLighting.virtualDiffuse;
     vec3 localIndirectDiffuse =
         CalculatePreintegratedSkinIndirectDiffuse(
             surface,
@@ -303,6 +330,14 @@ DeferredLightingResult ShadePreintegratedSkinDeferredSurfaceDetailed(
     result.localSubsurfaceLighting =
         localDirectDiffuse +
         localIndirectDiffuse * surface.ambientOcclusion;
+    result.skinDirectDiffuse = localDirectDiffuse;
+    result.skinTransmission =
+        skinLighting.transmission * result.shadow * transmissionWeight;
+    result.skinShadowVisibility = result.shadow;
+    result.skinIblDiffuse = localIndirectDiffuse;
+    result.skinIblSpecular = result.indirectSpecular;
+    result.skinVirtualLight =
+        skinLighting.virtualDiffuse + skinLighting.virtualSpecular;
     result.subsurfaceWeight = weight;
     result.transmissionWeight = transmissionWeight;
     result.directDiffuse = mix(
@@ -313,10 +348,7 @@ DeferredLightingResult ShadePreintegratedSkinDeferredSurfaceDetailed(
         result.indirectDiffuse,
         localIndirectDiffuse,
         weight) * reflectedFraction;
-    result.transmissionLighting =
-        skinLighting.transmission *
-        result.shadow *
-        transmissionWeight;
+    result.transmissionLighting = result.skinTransmission;
     ResolveDeferredLightingComposition(surface, result);
     return result;
 }
@@ -425,8 +457,8 @@ DeferredLightingResult ShadeHairDeferredSurfaceDetailed(
         CreateDefaultDeferredLightingResult();
     result.directSpecular = hair.directLighting;
     result.indirectDiffuse = hair.multipleScattering;
-    result.indirectSpecular =
-        hair.indirectR + hair.indirectTT + hair.indirectTRT;
+    result.indirectSpecular = hair.indirectR + hair.indirectTT +
+        hair.indirectTRT + hair.indirectScatter;
     result.shadow = hair.shadow;
     result.shadowCascadeIndex = hair.shadowCascadeIndex;
     result.hairRPath = hair.directR;

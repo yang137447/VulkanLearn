@@ -14,10 +14,9 @@
 #include "graphicsPipelineBuilder.h"
 #include "renderPassCompatibilityKey.h"
 
-// 图形管线身份中由 Pass 持有的部分。RenderGraph reload 或兼容 Pass 复用 Material 时，
-// 必须完整比较该契约；cull/blend 由 Material 提供，仅在构建管线状态时合并。
-// The pass-owned portion of graphics pipeline identity, compared in full when a material is reused.
-// Material cull and blend state are merged only while building the final pipeline state.
+// 图形管线身份以 Pass 默认状态为起点。RenderGraph reload 或兼容 Pass 复用 Material 时，
+// 必须完整比较该契约；cull/blend 由 Material 提供，少数强类型 RenderMode 可在进入缓存前
+// 派生 depthWrite，最终合同仍在构建管线状态时一次性合并。
 struct PassPipelineContractKey
 {
     RenderPassCompatibilityKey renderPassCompatibilityKey;

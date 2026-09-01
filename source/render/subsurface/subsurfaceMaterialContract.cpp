@@ -175,6 +175,10 @@ void ValidatePreintegratedSkinMaterial(
         effectiveJson,
         "u_skinTransmissionWeight",
         materialInstancePath);
+    const std::array<float, 4> characterLighting = RequireVec4Parameter(
+        effectiveJson,
+        "u_skinCharacterLighting",
+        materialInstancePath);
     if (surface[0] <= 0.0f || surface[1] <= 0.0f)
     {
         throw std::runtime_error(
@@ -202,6 +206,16 @@ void ValidatePreintegratedSkinMaterial(
         transmissionWeight,
         "Preintegrated skin transmission weight",
         materialInstancePath);
+    for (size_t channel = 0; channel < characterLighting.size(); ++channel)
+    {
+        if (characterLighting[channel] < 0.0f ||
+            characterLighting[channel] > 4.0f)
+        {
+            throw std::runtime_error(
+                "Preintegrated skin character lighting multiplier must be inside [0, 4]: " +
+                std::string(materialInstancePath));
+        }
+    }
 }
 
 void ValidateSubsurfaceProfileMaterial(

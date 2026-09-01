@@ -46,6 +46,7 @@ void MergeActiveShaderBinding(
 Material::Material(
     PipelineFactory& pipelineFactory,
     Renderpass& renderPass,
+    const PassPipelineContractKey& surfacePassPipelineContractKey,
     const ShaderVariantKey& shaderVariantKey,
     const VL::MaterialFeatureKey& materialFeatureKey,
     const VL::MaterialDescriptorSchema& materialDescriptorSchema,
@@ -59,7 +60,7 @@ Material::Material(
     this->materialFeatureKey = materialFeatureKey;
     this->materialDescriptorSchema = materialDescriptorSchema;
     this->materialKey = materialKey;
-    this->passPipelineContractKey = renderPass.pipelineContractKey;
+    this->passPipelineContractKey = surfacePassPipelineContractKey;
 
     // M_ 声明 shaderEvaluation 时走材质装配路径；否则使用 shaderName 指向的完整 Shader 变体。
     // 两者是由资产格式明确选择的合法路径，不是材质装配失败后的回退。
@@ -96,14 +97,14 @@ Material::Material(
         ? pipelineFactory.CreateGraphicsPipelineCandidate(
             *candidateState,
             &renderPass.renderPass,
-            renderPass.pipelineContractKey,
+            surfacePassPipelineContractKey,
             shaderArtifact,
             cullMode,
             blendMode,
             pipelineLayoutDesc)
         : pipelineFactory.CreateGraphicsPipeline(
             &renderPass.renderPass,
-            renderPass.pipelineContractKey,
+            surfacePassPipelineContractKey,
             shaderArtifact,
             cullMode,
             blendMode,
@@ -113,7 +114,7 @@ Material::Material(
 
     pipelineReloadRecipe.surface.passName = renderPass.name;
     pipelineReloadRecipe.surface.passPipelineContractKey =
-        renderPass.pipelineContractKey;
+        surfacePassPipelineContractKey;
     pipelineReloadRecipe.surface.shader.shaderVariantKey = shaderVariantKey;
     pipelineReloadRecipe.surface.shader.materialCompileRequest =
         baseShaderCompileRequest;

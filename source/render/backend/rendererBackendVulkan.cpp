@@ -1,10 +1,14 @@
 #include "render/backend/rendererBackendVulkan.h"
 
 #include <algorithm>
+#include <array>
+#include <filesystem>
+#include <fstream>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <tuple>
 
 #include "pipeline/pipelineFactory.h"
 #include "pipeline/graphicsPipelineBuilder.h"
@@ -17,6 +21,121 @@ namespace VL
 {
 namespace
 {
+
+void WriteLittleEndianU32(
+    std::array<uint8_t, 54>& header,
+    size_t offset,
+    uint32_t value)
+{
+    header[offset + 0] = static_cast<uint8_t>(value & 0xffu);
+    header[offset + 1] = static_cast<uint8_t>((value >> 8u) & 0xffu);
+    header[offset + 2] = static_cast<uint8_t>((value >> 16u) & 0xffu);
+    header[offset + 3] = static_cast<uint8_t>((value >> 24u) & 0xffu);
+}
+
+void WriteLittleEndianI32(
+    std::array<uint8_t, 54>& header,
+    size_t offset,
+    int32_t value)
+{
+    WriteLittleEndianU32(header, offset, static_cast<uint32_t>(value));
+}
+
+bool WriteScreenshotBmp(
+    const std::filesystem::path& path,
+    const uint8_t* pixels,
+    uint32_t width,
+    uint32_t height,
+    vk::Format format,
+    std::string& outError)
+{
+    if (pixels == nullptr || width == 0 || height == 0)
+    {
+        outError = "Screenshot readback returned an empty image.";
+        return false;
+    }
+
+    if (format != vk::Format::eB8G8R8A8Unorm &&
+        format != vk::Format::eB8G8R8A8Srgb &&
+        format != vk::Format::eR8G8B8A8Unorm &&
+        format != vk::Format::eR8G8B8A8Srgb)
+    {
+        outError = "Unsupported swapchain screenshot format: " + vk::to_string(format);
+        return false;
+    }
+
+    try
+    {
+        const std::filesystem::path parent = path.parent_path();
+        if (!parent.empty())
+        {
+            std::filesystem::create_directories(parent);
+        }
+
+        const uint32_t rowBytes = width * 3u;
+        const uint32_t paddedRowBytes = (rowBytes + 3u) & ~3u;
+        const uint32_t pixelBytes = paddedRowBytes * height;
+        const uint32_t fileBytes = 54u + pixelBytes;
+        std::array<uint8_t, 54> header{};
+        header[0] = 'B';
+        header[1] = 'M';
+        WriteLittleEndianU32(header, 2, fileBytes);
+        WriteLittleEndianU32(header, 10, 54u);
+        WriteLittleEndianU32(header, 14, 40u);
+        WriteLittleEndianI32(header, 18, static_cast<int32_t>(width));
+        WriteLittleEndianI32(header, 22, -static_cast<int32_t>(height));
+        header[26] = 1;
+        header[28] = 24;
+        WriteLittleEndianU32(header, 34, pixelBytes);
+
+        std::ofstream output(path, std::ios::binary);
+        if (!output)
+        {
+            outError = "Cannot open screenshot path: " + path.string();
+            return false;
+        }
+        output.write(reinterpret_cast<const char*>(header.data()), header.size());
+
+        std::vector<uint8_t> row(paddedRowBytes, 0);
+        const bool isBgra = format == vk::Format::eB8G8R8A8Unorm ||
+            format == vk::Format::eB8G8R8A8Srgb;
+        for (uint32_t pixelY = 0; pixelY < height; ++pixelY)
+        {
+            const uint8_t* sourceRow =
+                pixels + static_cast<size_t>(pixelY) * width * 4u;
+            for (uint32_t pixelX = 0; pixelX < width; ++pixelX)
+            {
+                const uint8_t* source = sourceRow + pixelX * 4u;
+                uint8_t* destination = row.data() + pixelX * 3u;
+                if (isBgra)
+                {
+                    destination[0] = source[0];
+                    destination[1] = source[1];
+                    destination[2] = source[2];
+                }
+                else
+                {
+                    destination[0] = source[2];
+                    destination[1] = source[1];
+                    destination[2] = source[0];
+                }
+            }
+            output.write(reinterpret_cast<const char*>(row.data()), row.size());
+        }
+        if (!output)
+        {
+            outError = "Failed while writing screenshot: " + path.string();
+            return false;
+        }
+    }
+    catch (const std::exception& exception)
+    {
+        outError = exception.what();
+        return false;
+    }
+
+    return true;
+}
 
 struct RendererSubmitPlan
 {
@@ -82,6 +201,163 @@ void RendererBackendVulkan::Initialize(
 void RendererBackendVulkan::WaitIdle()
 {
     rhiDevice->WaitIdle();
+}
+
+bool RendererBackendVulkan::RecordSwapchainScreenshot(
+    const RendererFrameContext& frameContext,
+    const std::string& path,
+    std::string& outError)
+{
+    if (!initialized)
+    {
+        outError = "Cannot record a screenshot before the renderer is initialized.";
+        return false;
+    }
+    if (pendingScreenshot.readbackBuffer || pendingScreenshot.readbackMemory)
+    {
+        outError = "A screenshot readback is already pending.";
+        return false;
+    }
+
+    const vk::Extent2D extent = rhiDevice->GetSwapchainExtent();
+    const vk::Format format = rhiDevice->GetSwapchainImageFormat();
+    const std::vector<vk::Image>& images = rhiDevice->GetSwapchainImages();
+    if (frameContext.swapchainImageIndex >= images.size())
+    {
+        outError = "Swapchain image index is out of range: " +
+            std::to_string(frameContext.swapchainImageIndex);
+        return false;
+    }
+
+    const vk::DeviceSize readbackSize =
+        static_cast<vk::DeviceSize>(extent.width) *
+        static_cast<vk::DeviceSize>(extent.height) * 4u;
+    try
+    {
+        vk::Buffer readbackBuffer;
+        vk::DeviceMemory readbackMemory;
+        std::tie(readbackBuffer, readbackMemory) = CreateBuffer(
+            readbackSize,
+            vk::BufferUsageFlagBits::eTransferDst,
+            vk::MemoryPropertyFlagBits::eHostVisible |
+                vk::MemoryPropertyFlagBits::eHostCoherent,
+            "DebugScreenshotReadback");
+
+        vk::CommandBuffer commandBuffer = frameContext.commandBuffer;
+        vk::ImageMemoryBarrier toTransfer;
+        toTransfer
+            .setOldLayout(vk::ImageLayout::ePresentSrcKHR)
+            .setNewLayout(vk::ImageLayout::eTransferSrcOptimal)
+            .setSrcAccessMask(vk::AccessFlagBits::eNone)
+            .setDstAccessMask(vk::AccessFlagBits::eTransferRead)
+            .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+            .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+            .setImage(images[frameContext.swapchainImageIndex])
+            .setSubresourceRange(vk::ImageSubresourceRange()
+                .setAspectMask(vk::ImageAspectFlagBits::eColor)
+                .setBaseMipLevel(0)
+                .setLevelCount(1)
+                .setBaseArrayLayer(0)
+                .setLayerCount(1));
+        commandBuffer.pipelineBarrier(
+            vk::PipelineStageFlagBits::eBottomOfPipe,
+            vk::PipelineStageFlagBits::eTransfer,
+            vk::DependencyFlags(),
+            nullptr,
+            nullptr,
+            toTransfer);
+
+        vk::BufferImageCopy copyRegion;
+        copyRegion
+            .setBufferOffset(0)
+            .setBufferRowLength(0)
+            .setBufferImageHeight(0)
+            .setImageSubresource(vk::ImageSubresourceLayers()
+                .setAspectMask(vk::ImageAspectFlagBits::eColor)
+                .setMipLevel(0)
+                .setBaseArrayLayer(0)
+                .setLayerCount(1))
+            .setImageOffset(vk::Offset3D{0, 0, 0})
+            .setImageExtent(vk::Extent3D{extent.width, extent.height, 1});
+        commandBuffer.copyImageToBuffer(
+            images[frameContext.swapchainImageIndex],
+            vk::ImageLayout::eTransferSrcOptimal,
+            readbackBuffer,
+            copyRegion);
+
+        vk::ImageMemoryBarrier backToPresent = toTransfer;
+        backToPresent
+            .setOldLayout(vk::ImageLayout::eTransferSrcOptimal)
+            .setNewLayout(vk::ImageLayout::ePresentSrcKHR)
+            .setSrcAccessMask(vk::AccessFlagBits::eTransferRead)
+            .setDstAccessMask(vk::AccessFlagBits::eNone);
+        commandBuffer.pipelineBarrier(
+            vk::PipelineStageFlagBits::eTransfer,
+            vk::PipelineStageFlagBits::eBottomOfPipe,
+            vk::DependencyFlags(),
+            nullptr,
+            nullptr,
+            backToPresent);
+
+        pendingScreenshot.readbackBuffer = readbackBuffer;
+        pendingScreenshot.readbackMemory = readbackMemory;
+        pendingScreenshot.extent = extent;
+        pendingScreenshot.format = format;
+        pendingScreenshot.path = path;
+        return true;
+    }
+    catch (const std::exception& exception)
+    {
+        outError = exception.what();
+        return false;
+    }
+}
+
+bool RendererBackendVulkan::CompleteSwapchainScreenshot(std::string& outError)
+{
+    if (!pendingScreenshot.readbackBuffer || !pendingScreenshot.readbackMemory)
+    {
+        return false;
+    }
+
+    try
+    {
+        // 录制阶段已经在 acquired image 上完成 copy；这里只等待该提交完成，
+        // 再映射 staging buffer 写盘，避免把 present 后的 image 当作仍可访问资源。
+        rhiDevice->WaitIdle();
+        const vk::DeviceSize readbackSize =
+            static_cast<vk::DeviceSize>(pendingScreenshot.extent.width) *
+            static_cast<vk::DeviceSize>(pendingScreenshot.extent.height) * 4u;
+        void* mapped = MapMemory(pendingScreenshot.readbackMemory, readbackSize);
+        const bool writeSucceeded = WriteScreenshotBmp(
+            std::filesystem::path(pendingScreenshot.path),
+            static_cast<const uint8_t*>(mapped),
+            pendingScreenshot.extent.width,
+            pendingScreenshot.extent.height,
+            pendingScreenshot.format,
+            outError);
+        UnmapMemory(pendingScreenshot.readbackMemory);
+        DestroyBuffer(
+            pendingScreenshot.readbackBuffer,
+            pendingScreenshot.readbackMemory);
+        pendingScreenshot = {};
+        return writeSucceeded;
+    }
+    catch (const std::exception& exception)
+    {
+        outError = exception.what();
+        try
+        {
+            DestroyBuffer(
+                pendingScreenshot.readbackBuffer,
+                pendingScreenshot.readbackMemory);
+        }
+        catch (...)
+        {
+        }
+        pendingScreenshot = {};
+        return false;
+    }
 }
 
 RendererBackendResourceIdentityCounts

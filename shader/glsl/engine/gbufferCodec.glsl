@@ -17,8 +17,8 @@ struct GBufferData
     vec4 gbufferC;
     // D: shading-model-specific custom data. Valid when GBUFFER_HAS_CUSTOM_DATA_MASK is set.
     vec4 gbufferD;
-    // E: precomputed shadow factors / lightmap-style visibility data.
-    // Phase 8 treats .r as a coarse precomputed direct-light visibility multiplier; default is 1.
+    // E: precomputed shadow factors / model-specific visibility data.
+    // Skin 像素改存角色光照倍率；Skin decode 时没有可用的预计算阴影输入，回退为 1。
     vec4 gbufferE;
     // Velocity: xy = current screen uv - previous screen uv, zw reserved.
     vec4 gbufferVelocity;
@@ -225,6 +225,20 @@ GBufferData EncodeGBuffer(in MaterialSurface surface, in GBufferPixelData pixelD
             surface.modelInputs.eye.causticStrength,
             surface.roughness,
             surface.ambientOcclusion)
+        // Skin 的 u_skinSpecular 需要跨过 deferred GBuffer；其它旧模型继续
+        // 保留 V1 固定 0.5 的介电高光合同，避免无关材质 ABI 漂移。
+        : surface.shadingModel == SHADING_MODEL_PREINTEGRATED_SKIN
+        ? vec4(
+            surface.metallic,
+            surface.specular,
+            surface.roughness,
+            surface.ambientOcclusion)
+        : surface.shadingModel == SHADING_MODEL_HAIR
+        ? vec4(
+            surface.modelInputs.hair.characterLighting.x,
+            surface.specular,
+            surface.roughness,
+            surface.ambientOcclusion)
         : vec4(surface.metallic, 0.5, surface.roughness, surface.ambientOcclusion);
     data.gbufferD = surface.shadingModel == SHADING_MODEL_EYE
         ? vec4(
@@ -250,6 +264,12 @@ GBufferData EncodeGBuffer(in MaterialSurface surface, in GBufferPixelData pixelD
         ? vec4(
             surface.modelInputs.eye.scleraColor,
             surface.modelInputs.eye.irisRadius)
+        : surface.shadingModel == SHADING_MODEL_PREINTEGRATED_SKIN
+        ? surface.modelInputs.preintegratedSkin.characterLighting
+        : surface.shadingModel == SHADING_MODEL_HAIR
+        ? vec4(
+            surface.precomputedShadowFactors.r,
+            surface.modelInputs.hair.characterLighting.yzw)
         : surface.precomputedShadowFactors;
     data.gbufferVelocity = surface.shadingModel == SHADING_MODEL_EYE
         ? vec4(
@@ -288,11 +308,14 @@ GBufferData EncodeGBuffer(in MaterialSurface surface, in GBufferPixelData pixelD
     }
     else if (surface.shadingModel == SHADING_MODEL_PREINTEGRATED_SKIN)
     {
+        // Skin F.zw 专用保存 bottom normal 的八面体坐标；F.xy 仍保存曲率和透射权重。
+        // 这两个通道不与 Clear Coat customData 或普通 tangent 语义重叠。
+        vec2 encodedBottomNormal = UnitVectorToOctahedron(
+            surface.preintegratedSkinBottomNormal);
         data.gbufferF = vec4(
             surface.modelInputs.preintegratedSkin.curvature,
             surface.modelInputs.preintegratedSkin.transmissionWeight,
-            0.0,
-            0.0);
+            encodedBottomNormal);
     }
     data.sceneColorBase = vec4(surface.emissiveColor, surface.opacity);
     return data;
@@ -314,6 +337,17 @@ MaterialSurface DecodeGBufferSurface(in GBufferData data)
         surface.metallic = 0.0;
         surface.specular = 0.5;
     }
+    else if (surface.shadingModel == SHADING_MODEL_PREINTEGRATED_SKIN)
+    {
+        // 只有 Skin 消费 GBuffer C.g；其它模型仍使用旧的固定介电高光值。
+        surface.specular = data.gbufferC.g;
+    }
+    else if (surface.shadingModel == SHADING_MODEL_HAIR)
+    {
+        // Hair 的 R/TT/TRT 能量基线来自源材质 u_specular，不能在 Deferred
+        // 解码时回退到普通模型的固定 0.5，否则深色发丝会出现白色高光带。
+        surface.specular = data.gbufferC.g;
+    }
     surface.customData = data.gbufferD;
     if (surface.shadingModel == SHADING_MODEL_CLEAR_COAT)
     {
@@ -327,7 +361,10 @@ MaterialSurface DecodeGBufferSurface(in GBufferData data)
         // 非 Clear Coat 像素不消费 GBufferD.zw，统一回退到表面法线。
         surface.clearCoatBottomNormal = surface.worldNormal;
     }
-    surface.precomputedShadowFactors = data.gbufferE;
+    surface.precomputedShadowFactors =
+        surface.shadingModel == SHADING_MODEL_PREINTEGRATED_SKIN
+        ? vec4(1.0)
+        : data.gbufferE;
     surface.worldTangent = vec4(
         DecodeGBufferDirection(data.gbufferF.rgb),
         surface.shadingModel == SHADING_MODEL_HAIR ? data.gbufferF.a : 1.0);
@@ -372,6 +409,14 @@ MaterialSurface DecodeGBufferSurface(in GBufferData data)
         surface.modelInputs.preintegratedSkin.weight = surface.customData.w;
         surface.modelInputs.preintegratedSkin.curvature = data.gbufferF.x;
         surface.modelInputs.preintegratedSkin.transmissionWeight = data.gbufferF.y;
+        surface.preintegratedSkinBottomNormal = OctahedronToUnitVector(
+            data.gbufferF.zw);
+        surface.modelInputs.preintegratedSkin.bottomNormal =
+            surface.preintegratedSkinBottomNormal;
+        surface.modelInputs.preintegratedSkin.characterLighting =
+            data.gbufferE;
+        // Skin 不消费 F.rgb 作为普通 tangent，避免把曲率/八面体坐标伪装成切线。
+        surface.worldTangent = vec4(surface.worldNormal, 1.0);
     }
     else if (surface.shadingModel == SHADING_MODEL_SUBSURFACE_PROFILE)
     {
@@ -439,11 +484,18 @@ MaterialSurface DecodeGBufferSurface(in GBufferData data)
         surface.modelInputs.hair.ior = 1.55;
         surface.modelInputs.hair.fiberRadius = 0.00005;
         surface.modelInputs.hair.coverage = 1.0;
-        // common roughness 的 mapping version=1，同时提供两个 lobe 的宽度。
+        // Hair 独占 C.r 与 E.gba，冻结环境/方向/局部/虚拟光四个标量；E.r
+        // 继续保存预计算阴影，Forward 与 Deferred 因而消费同一角色光照合同。
+        surface.modelInputs.hair.characterLighting = vec4(
+            surface.metallic,
+            surface.precomputedShadowFactors.gba);
+        surface.metallic = 0.0;
+        // NeoX pbr_hair_transparent 的 roughness 直接进入 Hair lobe；Deferred
+        // 不能把源默认 0.3 再压成 0.16，否则 Core Pass 会比透明探针更干、更尖。
+        // RDI.B 的 strandId 只存在 Base Pass，Deferred 这里只恢复源基线。
         surface.modelInputs.hair.longitudinalRoughness =
-            max(0.04 + surface.roughness * 0.40, 0.02);
-        surface.modelInputs.hair.azimuthalRoughness =
-            max(0.08 + surface.roughness * 0.40, 0.02);
+            max(surface.roughness, 0.02);
+        surface.modelInputs.hair.azimuthalRoughness = 0.25;
     }
     else if (surface.shadingModel == SHADING_MODEL_CLOTH)
     {

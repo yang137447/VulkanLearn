@@ -157,6 +157,16 @@ void Camera::SetCamera(
     SetRotation(Eigen::Quaternionf(matrix01.block<3,3>(0,0).transpose()));
 }
 
+void Camera::SetInitialLookAt(
+    const Eigen::Vector3f& cameraPosition,
+    const Eigen::Vector3f& lookAtPosition)
+{
+    // 只有显式作者目标才绕过旧场景“启动时看向世界原点”的兼容策略；
+    // 运行时 camera pose 命令仍直接更新当前 View，不改变场景资产合同。
+    SetCamera(cameraPosition, lookAtPosition, Eigen::Vector3f(0.0f, 1.0f, 0.0f));
+    hasInitialLookAt = true;
+}
+
 void Camera::SetCamera(const Eigen::Vector3f& cameraPosition, const Eigen::Vector3f& cameraRotation)
 {
     //对于旋转处理，遵循 Yaw Pitch Roll 的顺序,即 先绕Y轴旋转，再绕X轴旋转，最后绕Z轴旋转

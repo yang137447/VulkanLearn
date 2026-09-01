@@ -44,6 +44,7 @@ Texture::Texture(
 
     TextureIO::LoadOptions loadOptions;
     loadOptions.semantic = createDesc.semantic;
+    // 文件型材质纹理统一恢复历史 V 方向合同；资产 JSON 不允许逐纹理覆盖该行为。
     loadOptions.flipY = TextureIO::LoadOptions::FlipYMode::ForceOn;
     loadOptions.transfer = createDesc.transfer;
     loadOptions.forceChannels = 4;

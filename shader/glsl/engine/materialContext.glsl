@@ -9,6 +9,8 @@ struct MaterialVertexInput
     vec3 localNormal;
     vec4 vertexColor;
     vec2 texCoord;
+    // texCoord1 只表示资产真实存在的第二套 UV；导入链路不会用 UV0 合成该通道。
+    vec2 texCoord1;
     vec4 localTangent;
     vec4 speedTreeWindBranch1;
     vec4 speedTreeWindBranch2;
@@ -20,6 +22,7 @@ struct MaterialVertex
     vec3 localNormal;
     vec4 vertexColor;
     vec2 texCoord;
+    vec2 texCoord1;
     vec4 localTangent;
 };
 
@@ -30,6 +33,7 @@ MaterialVertex CreateDefaultMaterialVertex(in MaterialVertexInput vertexInput)
     vertex.localNormal = vertexInput.localNormal;
     vertex.vertexColor = vertexInput.vertexColor;
     vertex.texCoord = vertexInput.texCoord;
+    vertex.texCoord1 = vertexInput.texCoord1;
     vertex.localTangent = vertexInput.localTangent;
     return vertex;
 }
@@ -43,6 +47,7 @@ struct MaterialVertexOutput
     vec3 worldNormal;
     vec4 vertexColor;
     vec2 texCoord;
+    vec2 texCoord1;
     vec4 worldTangent;
 };
 
@@ -55,6 +60,7 @@ struct MaterialVaryings
     vec3 worldNormal;
     vec4 vertexColor;
     vec2 texCoord;
+    vec2 texCoord1;
     vec4 worldTangent;
 };
 
@@ -69,6 +75,8 @@ struct MaterialFunctionContext
     vec3 worldNormal;
     vec4 vertexColor;
     vec2 texCoord;
+    // MF 可独立消费 UV0/UV1，例如 Pearl 中 UV0 负责覆盖率，UV1 负责 2U MatCap。
+    vec2 texCoord1;
     vec4 worldTangent;
 };
 
@@ -81,6 +89,7 @@ MaterialVaryings CreateMaterialVaryings(in MaterialVertexOutput vertexOutput)
     varyings.worldNormal = vertexOutput.worldNormal;
     varyings.vertexColor = vertexOutput.vertexColor;
     varyings.texCoord = vertexOutput.texCoord;
+    varyings.texCoord1 = vertexOutput.texCoord1;
     varyings.worldTangent = vertexOutput.worldTangent;
     return varyings;
 }
@@ -94,6 +103,7 @@ MaterialFunctionContext CreateMaterialFunctionContext(in MaterialVaryings varyin
     context.worldNormal = varyings.worldNormal;
     context.vertexColor = varyings.vertexColor;
     context.texCoord = varyings.texCoord;
+    context.texCoord1 = varyings.texCoord1;
     context.worldTangent = varyings.worldTangent;
     return context;
 }

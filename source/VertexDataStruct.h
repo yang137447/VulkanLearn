@@ -8,7 +8,9 @@ struct Vertex
     Eigen::Vector3f position;   // 顶点位置
     Eigen::Vector3f normal;     // 顶点法线
     Eigen::Vector4f color;      // 顶点颜色，w 可承载 alpha / AO 等顶点附加通道
-    Eigen::Vector2f texCoord;   // 纹理坐标
+    Eigen::Vector2f texCoord;   // 第一套纹理坐标
+    // 第二套 UV 是可选通道；没有 TEXCOORD_1 的源网格保持零值。
+    Eigen::Vector2f texCoord1 = Eigen::Vector2f::Zero();
     Eigen::Vector4f tangent;    // xyz: 切线, w: MikkTSpace handedness
     // SpeedTree Runtime SDK attributes remain normalized exactly as the
     // source packer declares them. Non-SpeedTree importers leave them zero.
@@ -63,6 +65,13 @@ namespace VertexInfo{
             0, // binding
             vk::Format::eR32G32Sfloat, // format
             offsetof(Vertex, texCoord) // offset
+        ),
+        // 第二套纹理坐标；仅有 2U 的源网格会写入导入数据
+        vk::VertexInputAttributeDescription(
+            7, // location
+            0, // binding
+            vk::Format::eR32G32Sfloat, // format
+            offsetof(Vertex, texCoord1) // offset
         ),
         // 切线
         vk::VertexInputAttributeDescription(

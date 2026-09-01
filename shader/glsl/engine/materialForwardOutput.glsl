@@ -16,11 +16,8 @@ vec4 BuildMaterialForwardOutput(in MaterialSurface surface)
 {
     ForwardLightingResult lighting = ShadeForwardSurfaceDetailed(surface);
     float resolvedOpacity = surface.opacity;
-    if (surface.shadingModel == SHADING_MODEL_HAIR)
-    {
-        // 透明 Hair 探针把 coverage 交给混合 alpha；OpaqueClip 仍由 alpha clip 决定可见性。
-        resolvedOpacity *= surface.modelInputs.hair.coverage;
-    }
+    // Hair MF 已按 NeoX mode 8 将 Tex0 alpha/clipValue 写入 surface.opacity；
+    // coverage 不再在输出层重复乘入混合 alpha。
     vec3 resolvedLightingColor = lighting.finalColor;
 #if defined(RENDER_MODE_FORWARD_EYE_INNER)
 #if MATERIAL_IS_EYE
@@ -40,6 +37,16 @@ vec4 BuildMaterialForwardOutput(in MaterialSurface surface)
 #endif
 #endif
     vec4 color = vec4(resolvedLightingColor, resolvedOpacity);
+#if defined(ENABLE_DEBUG_VIEW)
+    // Skin 专项 Debug View 只观察 Deferred Skin；眼缘等前向材质不能覆盖 Skin
+    // 快照，否则透明眼缘会把脸部调试结果误染成 DefaultLit 黑块。
+    if (uboVP.debugViewMode >= 74 &&
+        uboVP.debugViewMode <= 79 &&
+        surface.shadingModel != SHADING_MODEL_PREINTEGRATED_SKIN)
+    {
+        return vec4(0.0);
+    }
+#endif
     MaterialDebugLightingData debugLighting = CreateMaterialDebugLightingData(
         lighting.shadow,
         lighting.shadowCascadeIndex,

@@ -58,6 +58,25 @@ void RequireThrows(
     }
     throw std::runtime_error(message);
 }
+
+void TestHairBaseColorAbsorptionConvention()
+{
+    const float fiberRadius = 0.00005f;
+    const float referencePathLength = 4.0f * fiberRadius;
+    const float darkColor = 0.05f;
+    const float lightColor = 0.5f;
+    const float darkAbsorption = -std::log(darkColor) / referencePathLength;
+    const float lightAbsorption = -std::log(lightColor) / referencePathLength;
+    Require(
+        darkAbsorption > lightAbsorption,
+        "darker Hair BaseColor must produce greater absorption");
+    RequireNear(
+        std::exp(-darkAbsorption * referencePathLength),
+        darkColor,
+        1.0e-6f,
+        "Hair absorption reference path did not restore author color");
+}
+
 void TestHairAngleConvention()
 {
     const VL::Hair::HairTangentFrame frame =
@@ -263,7 +282,11 @@ void TestHairGBufferRoundTrip()
     expected.opacity = 0.73f;
     expected.tangent = {0.6f, -0.2f, 0.7745967f};
     expected.tangentHandedness = -1.0f;
+    expected.specular = 0.3f;
     expected.roughness = 0.42f;
+    expected.ambientOcclusion = 0.66f;
+    expected.characterLighting = {0.9f, 0.8f, 0.55f, 0.70588237f};
+    expected.precomputedShadowFactor = 0.74f;
     const VL::Hair::HairGBufferInputs actual =
         VL::Hair::DecodeHairGBuffer(VL::Hair::EncodeHairGBuffer(expected));
     RequireNear(actual.absorption[0], expected.absorption[0], 1.0e-6f, "Hair absorption R GBuffer mismatch");
@@ -279,7 +302,22 @@ void TestHairGBufferRoundTrip()
         1.0e-6f,
         "Hair MS GBuffer mismatch");
     RequireNear(actual.tangentHandedness, -1.0f, 1.0e-6f, "Hair tangent sign mismatch");
+    RequireNear(actual.specular, expected.specular, 1.0e-6f, "Hair specular GBuffer mismatch");
     RequireNear(actual.roughness, expected.roughness, 1.0e-6f, "Hair roughness GBuffer mismatch");
+    RequireNear(actual.ambientOcclusion, expected.ambientOcclusion, 1.0e-6f, "Hair AO GBuffer mismatch");
+    for (size_t index = 0; index < expected.characterLighting.size(); ++index)
+    {
+        RequireNear(
+            actual.characterLighting[index],
+            expected.characterLighting[index],
+            1.0e-6f,
+            "Hair character lighting GBuffer mismatch");
+    }
+    RequireNear(
+        actual.precomputedShadowFactor,
+        expected.precomputedShadowFactor,
+        1.0e-6f,
+        "Hair precomputed shadow GBuffer mismatch");
 }
 
 void TestHairLutCoordinateGolden()
@@ -316,9 +354,10 @@ void TestHairMaterialAuthoringContract()
     const nlohmann::json material = {
         {"shadingModel", "Hair"},
         {"parameters", {
-            {"u_hairOptical", {8.0f, metadata.ior, metadata.fiberRadius, 0.04f}},
+            {"u_hairOptical", {1.0f, metadata.ior, metadata.fiberRadius, 0.04f}},
             {"u_hairScattering", {0.25f, 0.35f, 0.22f, 0.25f}},
-            {"u_hairCoverage", {0.8f, 0.35f, 1.0f, 0.0f}}}}};
+            {"u_hairCoverage", {0.8f, 0.35f, 1.0f, 0.0f}},
+            {"u_hairCharacterLighting", {1.0f, 1.0f, 0.55f, 0.70588237f}}}}};
 
     VL::ValidateHairMaterialAuthoringContract(
         material,
@@ -336,6 +375,18 @@ void TestHairMaterialAuthoringContract()
                 "wrong-radius");
         },
         "Hair material contract accepted a mismatched fiber radius");
+
+    nlohmann::json wrongCharacterLighting = material;
+    wrongCharacterLighting["parameters"]["u_hairCharacterLighting"][2] = 4.1f;
+    RequireThrows(
+        [&wrongCharacterLighting, &metadata]()
+        {
+            VL::ValidateHairMaterialAuthoringContract(
+                wrongCharacterLighting,
+                metadata,
+                "wrong-character-lighting");
+        },
+        "Hair material contract accepted invalid character lighting");
 
     const std::filesystem::path missingResourceRoot =
         std::filesystem::path(VULKANLEARN_SOURCE_DIR) /
@@ -375,6 +426,7 @@ int main()
     try
     {
         TestHairAngleConvention();
+        TestHairBaseColorAbsorptionConvention();
         TestHairAzimuthalRoots();
         TestHairPathWeights();
         TestHairWhiteFurnaceAndParameterIsolation();

@@ -1,6 +1,7 @@
 #include "engine/runtimeCommandExecutor.h"
 
 #include <cmath>
+#include <filesystem>
 #include <exception>
 #include <fstream>
 #include <memory>
@@ -15,6 +16,7 @@
 #include "render/resource/rendererResourceCache.h"
 #include "renderGraph.h"
 #include "renderSystem.h"
+#include "sceneNode.h"
 #include "shader/build/atomicFile.h"
 #include "world/loading/worldTransitionCoordinator.h"
 #include "world/world.h"
@@ -40,6 +42,43 @@ const char* ToString(BloomParameter parameter)
     }
 
     return "unknown";
+}
+
+std::string FormatVector3(const Eigen::Vector3f& value)
+{
+    return "(" + std::to_string(value.x()) + ", " +
+        std::to_string(value.y()) + ", " +
+        std::to_string(value.z()) + ")";
+}
+
+std::string ResolveScreenshotPath(
+    const RuntimeCommand& command,
+    const RuntimeConfig& runtimeConfig)
+{
+    std::filesystem::path requestedPath(command.stringValue);
+    if (requestedPath.empty())
+    {
+        requestedPath = "hair_debug.bmp";
+    }
+    if (requestedPath.extension().empty())
+    {
+        requestedPath += ".bmp";
+    }
+    else if (requestedPath.extension() != ".bmp" &&
+             requestedPath.extension() != ".BMP")
+    {
+        requestedPath.replace_extension(".bmp");
+    }
+    if (requestedPath.is_absolute())
+    {
+        return requestedPath.lexically_normal().string();
+    }
+
+    return (
+        std::filesystem::path(runtimeConfig.GetResourcePath()) /
+        "generated" /
+        "screenshots" /
+        requestedPath).lexically_normal().string();
 }
 
 template <typename T>
@@ -279,6 +318,71 @@ void RuntimeCommandExecutor::ExecuteCommand(
         renderSystem.SetDebugViewMode(command.intValue);
         diagnostics.ReportInfo("Debug view mode set to " + std::to_string(command.intValue));
         break;
+    case RuntimeCommandType::CaptureScreenshot:
+    {
+        const std::string screenshotPath =
+            ResolveScreenshotPath(command, runtimeConfig);
+        renderSystem.RequestScreenshot(screenshotPath);
+        diagnostics.ReportInfo("Screenshot queued: " + screenshotPath);
+        break;
+    }
+    case RuntimeCommandType::SetCameraPosition:
+    case RuntimeCommandType::SetCameraLookAt:
+    case RuntimeCommandType::SetCameraPose:
+    case RuntimeCommandType::GetCameraState:
+    {
+        const std::shared_ptr<World>& activeWorld = worldManager.GetActiveWorld();
+        if (!activeWorld || !activeWorld->GetCamera())
+        {
+            diagnostics.ReportWarning("Camera command ignored because no active camera exists.");
+            break;
+        }
+
+        const std::shared_ptr<Camera>& camera = activeWorld->GetCamera();
+        if (command.type == RuntimeCommandType::SetCameraPosition)
+        {
+            camera->SetPosition(command.cameraPositionValue);
+            diagnostics.ReportInfo(
+                "Camera position set to " + FormatVector3(camera->GetPosition()));
+        }
+        else if (command.type == RuntimeCommandType::SetCameraLookAt)
+        {
+            if ((command.cameraLookAtValue - camera->GetPosition()).squaredNorm() <= 1.0e-8f)
+            {
+                diagnostics.ReportWarning("Camera look-at ignored because target equals camera position.");
+                break;
+            }
+            camera->SetCamera(
+                camera->GetPosition(),
+                command.cameraLookAtValue,
+                camera->GetUpVector());
+            diagnostics.ReportInfo(
+                "Camera look-at set to " + FormatVector3(command.cameraLookAtValue));
+        }
+        else if (command.type == RuntimeCommandType::SetCameraPose)
+        {
+            if ((command.cameraLookAtValue - command.cameraPositionValue).squaredNorm() <= 1.0e-8f)
+            {
+                diagnostics.ReportWarning("Camera pose ignored because target equals camera position.");
+                break;
+            }
+            camera->SetCamera(
+                command.cameraPositionValue,
+                command.cameraLookAtValue,
+                command.cameraUpValue);
+            diagnostics.ReportInfo(
+                "Camera pose set: position=" + FormatVector3(camera->GetPosition()) +
+                ", forward=" + FormatVector3(camera->GetForwardVector()));
+        }
+        else
+        {
+            diagnostics.ReportInfo(
+                "Camera state: position=" + FormatVector3(camera->GetPosition()) +
+                ", forward=" + FormatVector3(camera->GetForwardVector()) +
+                ", up=" + FormatVector3(camera->GetUpVector()));
+        }
+        break;
+    }
     case RuntimeCommandType::SetEnvironmentIntensity:
         renderSystem.SetEnvironmentIntensity(command.floatValue);
         diagnostics.ReportInfo("Environment intensity set to " + std::to_string(command.floatValue));

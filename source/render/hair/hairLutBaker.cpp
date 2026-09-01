@@ -302,7 +302,7 @@ void AddHairFloatBits(
 std::string BuildHairSourceDigest(
     const HairAzimuthalLutMetadata& metadata)
 {
-    CanonicalFieldHasher hasher("vulkanlearn.hair-azimuthal-lut.v1");
+    CanonicalFieldHasher hasher("vulkanlearn.hair-azimuthal-lut.v2");
     hasher.AddUInt32("schemaVersion", metadata.schemaVersion);
     hasher.AddUInt32("lutVersion", metadata.lutVersion);
     hasher.AddUInt32("kernelVersion", metadata.kernelVersion);

@@ -1,6 +1,7 @@
 #include "textureAssetLoader.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
@@ -66,6 +67,33 @@ namespace
         throw std::runtime_error(
             "Unsupported texture wrapMode in " + std::string(textureAssetPath) + ": " + std::string(wrapMode));
     }
+
+    void ValidateTextureAssetFields(
+        const nlohmann::json& textureAssetJson,
+        std::string_view textureAssetPath)
+    {
+        static constexpr std::array<std::string_view, 8> allowedFields = {
+            "name",
+            "type",
+            "source",
+            "colorSpace",
+            "mipmaps",
+            "filter",
+            "wrapMode",
+            "channelsDescription"};
+
+        // 资产门禁拒绝运行时方向补偿等未纳入合同的字段，避免错误约定静默进入渲染路径。
+        for (const auto& [field, value] : textureAssetJson.items())
+        {
+            static_cast<void>(value);
+            if (std::find(allowedFields.begin(), allowedFields.end(), field) == allowedFields.end())
+            {
+                throw std::runtime_error(
+                    "Texture asset contains unknown field \"" + field + "\": " +
+                    std::string(textureAssetPath));
+            }
+        }
+    }
 }
 
 void ValidateTextureAssetReference(
@@ -103,6 +131,7 @@ TextureBindingLoadDesc LoadTextureAssetDesc(std::string_view textureAssetPath)
     {
         throw std::runtime_error("Texture asset must be a JSON object: " + std::string(textureAssetPath));
     }
+    ValidateTextureAssetFields(textureAssetJson, textureAssetPath);
     if (textureAssetJson.value("type", std::string()) != "texture")
     {
         throw std::runtime_error("Texture asset type must be \"texture\": " + std::string(textureAssetPath));

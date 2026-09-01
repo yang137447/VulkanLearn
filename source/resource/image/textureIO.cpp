@@ -21,11 +21,7 @@ namespace
 {
     bool ShouldFlipY(TextureIO::LoadOptions::FlipYMode mode)
     {
-        if (mode == TextureIO::LoadOptions::FlipYMode::ForceOn)
-        {
-            return true;
-        }
-        return false;
+        return mode == TextureIO::LoadOptions::FlipYMode::ForceOn;
     }
 
     void FlipImageY(HostImage& image)
@@ -34,16 +30,20 @@ namespace
         {
             return;
         }
-        const size_t rowBytes = image.rowStrideBytes > 0 ? image.rowStrideBytes : image.width * image.GetPixelSize();
+
+        // 行翻转发生在 CPU 解码结果上，GPU 上传只接收已经确定方向的连续像素。
+        const size_t rowBytes = image.rowStrideBytes > 0 ?
+            image.rowStrideBytes : image.width * image.GetPixelSize();
         std::vector<uint8_t> rowBuffer(rowBytes);
         uint8_t* raw = image.data.data();
         for (uint32_t y = 0; y < image.height / 2; ++y)
         {
-            uint8_t* rowTop = raw + static_cast<size_t>(y) * rowBytes;
-            uint8_t* rowBottom = raw + static_cast<size_t>(image.height - 1 - y) * rowBytes;
-            std::memcpy(rowBuffer.data(), rowTop, rowBytes);
-            std::memcpy(rowTop, rowBottom, rowBytes);
-            std::memcpy(rowBottom, rowBuffer.data(), rowBytes);
+            uint8_t* topRow = raw + static_cast<size_t>(y) * rowBytes;
+            uint8_t* bottomRow =
+                raw + static_cast<size_t>(image.height - 1 - y) * rowBytes;
+            std::memcpy(rowBuffer.data(), topRow, rowBytes);
+            std::memcpy(topRow, bottomRow, rowBytes);
+            std::memcpy(bottomRow, rowBuffer.data(), rowBytes);
         }
     }
 
@@ -381,7 +381,10 @@ std::optional<HostImage> TextureIO::Load(const std::filesystem::path& path, cons
         stbi_image_free(pixels);
     }
 
-    if (ShouldFlipY(options.flipY)) FlipImageY(image);
+    if (ShouldFlipY(options.flipY))
+    {
+        FlipImageY(image);
+    }
     return image;
 }
 

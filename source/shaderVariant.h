@@ -19,6 +19,8 @@ enum class RenderMode
     ForwardEyeInner,
     ForwardEyeCornea,
     TransparentAlphaBlend,
+    // NeoX ALPHA_RW_Z：保持连续 Alpha 混合，同时写入场景深度。
+    TransparentAlphaBlendWriteDepth,
     TransparentAdditive,
     // 薄透射走 forwardTransparent，并根据设备能力选择双源或标量降级混合。
     ThinTranslucent
@@ -49,8 +51,14 @@ inline bool IsGeometryRenderMode(RenderMode renderMode)
 inline bool IsTransparentRenderMode(RenderMode renderMode)
 {
     return renderMode == RenderMode::TransparentAlphaBlend ||
+        renderMode == RenderMode::TransparentAlphaBlendWriteDepth ||
         renderMode == RenderMode::TransparentAdditive ||
         renderMode == RenderMode::ThinTranslucent;
+}
+
+inline bool RequiresTransparentDepthWrite(RenderMode renderMode)
+{
+    return renderMode == RenderMode::TransparentAlphaBlendWriteDepth;
 }
 
 inline std::string RenderModeToString(RenderMode renderMode)
@@ -69,6 +77,8 @@ inline std::string RenderModeToString(RenderMode renderMode)
         return "ForwardEyeCornea";
     case RenderMode::TransparentAlphaBlend:
         return "TransparentAlphaBlend";
+    case RenderMode::TransparentAlphaBlendWriteDepth:
+        return "TransparentAlphaBlendWriteDepth";
     case RenderMode::TransparentAdditive:
         return "TransparentAdditive";
     case RenderMode::ThinTranslucent:

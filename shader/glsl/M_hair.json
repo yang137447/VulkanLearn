@@ -21,31 +21,199 @@
     "parameters": {
         "u_alphaClipThreshold": {
             "type": "float",
-            "default": 0.5
+            "default": 0.5,
+            "range": {"min": 0.0, "max": 1.0}
         },
         "u_tintColor": {
             "type": "vec4",
-            "default": [0.18, 0.04, 0.015, 1.0]
+            "default": [
+                0.18,
+                0.04,
+                0.015,
+                1
+            ],
+            "channels": {
+                "x": {
+                    "name": "tintRed",
+                    "description": "base-color tint red",
+                    "range": {"min": 0, "max": 1}
+                },
+                "y": {
+                    "name": "tintGreen",
+                    "description": "base-color tint green",
+                    "range": {"min": 0, "max": 1}
+                },
+                "z": {
+                    "name": "tintBlue",
+                    "description": "base-color tint blue",
+                    "range": {"min": 0, "max": 1}
+                },
+                "w": {
+                    "name": "opacity",
+                    "description": "opacity multiplier",
+                    "range": {"min": 0, "max": 1}
+                }
+            }
         },
         "u_pbrFactors": {
             "type": "vec4",
-            "default": [0.32, 0.0, 1.0, 0.5]
+            "default": [
+                0.32,
+                0,
+                1,
+                0.5
+            ],
+            "channels": {
+                "x": {
+                    "name": "roughness",
+                    "description": "roughness when no PBR map is used",
+                    "range": {"min": 0, "max": 1}
+                },
+                "y": {
+                    "name": "metallic",
+                    "description": "metallic when no PBR map is used",
+                    "range": {"min": 0, "max": 1}
+                },
+                "z": {
+                    "name": "ambientOcclusion",
+                    "description": "ambient occlusion when no PBR map is used",
+                    "range": {"min": 0, "max": 1}
+                },
+                "w": {
+                    "name": "specular",
+                    "description": "hair specular intensity",
+                    "range": {"min": 0, "max": 1}
+                }
+            }
         },
         "u_hairOptical": {
             "type": "vec4",
-            "default": [8.0, 1.55, 0.00005, 0.04]
+            "default": [
+                1,
+                1.55,
+                0.00005,
+                0.04
+            ],
+            "channels": {
+                "x": {
+                    "name": "absorptionScale",
+                    "description": "base-color to absorption conversion scale",
+                    "range": {"min": 0.0001, "max": 2}
+                },
+                "y": {
+                    "name": "fiberIor",
+                    "description": "fiber index of refraction",
+                    "range": {"min": 1.0001, "max": 2.5}
+                },
+                "z": {
+                    "name": "fiberRadius",
+                    "description": "fiber radius in meters",
+                    "range": {"min": 1e-7, "max": 0.01}
+                },
+                "w": {
+                    "name": "cuticleTilt",
+                    "description": "cuticle tilt in radians",
+                    "range": {"min": -1.5707963267948966, "max": 1.5707963267948966}
+                }
+            }
         },
         "u_hairScattering": {
             "type": "vec4",
-            "default": [0.25, 0.35, 0.22, 0.25]
+            "default": [
+                0.25,
+                0.35,
+                0.22,
+                0.25
+            ],
+            "channels": {
+                "x": {
+                    "name": "scatter",
+                    "description": "multiple-scattering scatter factor",
+                    "range": {"min": 0, "max": 1}
+                },
+                "y": {
+                    "name": "backlit",
+                    "description": "backlit intensity",
+                    "range": {"min": 0, "max": 1}
+                },
+                "z": {
+                    "name": "longitudinalRoughness",
+                    "description": "longitudinal roughness",
+                    "range": {"min": 0.0001, "max": 1.5707963267948966}
+                },
+                "w": {
+                    "name": "azimuthalRoughness",
+                    "description": "azimuthal roughness",
+                    "range": {"min": 0.0001, "max": 1}
+                }
+            }
         },
         "u_hairCoverage": {
             "type": "vec4",
-            "default": [1.0, 0.35, 1.0, 0.0]
+            "default": [
+                1,
+                0.35,
+                1,
+                0
+            ],
+            "channels": {
+                "x": {
+                    "name": "coverage",
+                    "description": "surface coverage",
+                    "range": {"min": 0, "max": 1}
+                },
+                "y": {
+                    "name": "multipleScatteringWeight",
+                    "description": "multiple-scattering weight",
+                    "range": {"min": 0, "max": 1}
+                },
+                "z": {
+                    "name": "density",
+                    "description": "fiber density",
+                    "range": {"min": 0, "max": 1}
+                },
+                "w": {
+                    "name": "reserved",
+                    "description": "reserved; must be zero",
+                    "range": {"min": 0, "max": 0}
+                }
+            }
+        },
+        "u_hairCharacterLighting": {
+            "type": "vec4",
+            "default": [
+                1,
+                1,
+                1,
+                0
+            ],
+            "channels": {
+                "x": {
+                    "name": "environmentLightingMultiplier",
+                    "description": "environment lighting multiplier",
+                    "range": {"min": 0, "max": 4}
+                },
+                "y": {
+                    "name": "directionalLightingMultiplier",
+                    "description": "directional lighting multiplier",
+                    "range": {"min": 0, "max": 4}
+                },
+                "z": {
+                    "name": "localLightingMultiplier",
+                    "description": "local lighting multiplier",
+                    "range": {"min": 0, "max": 4}
+                },
+                "w": {
+                    "name": "cameraVirtualLightIntensity",
+                    "description": "achromatic camera virtual-light intensity",
+                    "range": {"min": 0, "max": 4}
+                }
+            }
         },
         "u_emissiveStrength": {
             "type": "float",
-            "default": 1.0
+            "default": 1,
+            "range": {"min": 0.0, "max": 4.0}
         }
     },
     "textures": {

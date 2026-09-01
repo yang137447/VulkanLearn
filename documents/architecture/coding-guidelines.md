@@ -30,6 +30,30 @@ public:
 
 Use this rule especially for loader, resolver, validator, factory, cache, and runtime resource classes, because their boundaries are easy to blur as the renderer grows.
 
+## Chinese Comments And Migration Fidelity
+
+New or modified non-obvious engine, rendering, and shader code must include concise Chinese comments. Keep API names, type names, shader symbols, and standard graphics terms in English when that is clearer, but explain the design intent in Chinese.
+
+Comments are especially required for:
+
+- ownership and lifetime boundaries
+- Vulkan synchronization and GPU/CPU publication timing
+- coordinate-space, handedness, normal, tangent, UV, and texture-channel conventions
+- shader formulas, approximations, masks, energy splits, and static branch rationale
+- source-data assumptions and intentionally omitted runtime validation
+- deliberate compatibility behavior or performance tradeoffs
+
+Migration work has a stronger requirement: read the source comments together with the surrounding implementation before rewriting the code. Recover the reason behind the source logic, then preserve that useful intent as Chinese comments near the migrated implementation.
+
+- Do not remove meaningful source comments without restoring their verified design intent.
+- Do not mechanically translate comments that no longer match the migrated behavior.
+- Rewrite source-specific descriptions around VulkanLearn's actual MF, Shading Model, MeshPass, resource, and ownership boundaries.
+- When the migrated implementation intentionally differs from the source, add a Chinese comment explaining what changed and why.
+- Preserve non-obvious source conventions such as UV transforms, coordinate directions, channel meanings, formula inputs, special-case branches, and known limitations.
+- Do not add comments that merely restate syntax or obvious assignments.
+
+For example, a NeoX shader migration should not only reproduce a UV transform formula. It should also retain the verified intent that UV0 controls coverage and fake-sphere normals while a real UV1 controls 2U MatCap sampling, and it should explain when Billboard geometry has been baked offline instead of reproduced at runtime.
+
 ## Input Validation Boundaries
 
 Validate external or authored input once at the boundary that owns its interpretation. Examples include console command parsers, JSON loaders, asset importers, and future network-message decoders.
@@ -41,4 +65,3 @@ Validate external or authored input once at the boundary that owns its interpret
 - Add a downstream check only when the code crosses a new independent trust boundary or when it protects memory safety from corrupted state; do not add redundant defensive checks by default.
 
 For example, the SpeedTree `windstrength` console command validates that its value is finite and inside `[0, 1]` before creating a runtime command. `SpeedTreeWindProfileSet` then consumes the normalized value under that contract without checking the same range again.
-

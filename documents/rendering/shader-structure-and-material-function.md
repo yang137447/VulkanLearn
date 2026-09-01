@@ -134,7 +134,8 @@ Shading Model 消费 MaterialInputs，负责 UE 对齐的光照响应。Shading 
 | Unlit | 已实现 | Deferred 和 Forward 非光照路径。 |
 | ClearCoat | 已实现 | Deferred 和 Forward，使用 GBufferD/customData 的双层法线与清漆输入。 |
 | ThinTranslucent | 已实现 | Forward 专用；依赖 ThinTranslucent RenderMode，不等同于普通 AlphaBlend。 |
-| Subsurface / PreintegratedSkin / SubsurfaceProfile | 待专项 | ID 已注册，但当前光照分发仍回退到 DefaultLit；不得在角色迁移中假定皮肤响应已经存在。 |
+| PreintegratedSkin | 部分实现（Deferred MVP） | 已接入 Skin MaterialInputs、GBuffer/customData 和 Deferred evaluator；当前 M_neoxSkin 为 Opaque 路径，Forward 仍回退到 DefaultLit。 |
+| Subsurface / SubsurfaceProfile | 待专项 | ID 已注册，但仍需独立完成光照闭包、GBuffer 和 Pass 合同。 |
 | Hair | 已实现（VulkanLearn MVP） | 已补齐 HairMaterialInputs、Forward/Deferred evaluator、Hair GBuffer、Card coverage、ShadowDepth 和 Debug View 21–41；runtime validation 入口已接入但仍要求正式 authoring LUT，不声称 UE 私有 shader 逐行 parity。 |
 | Eye | 待专项 | ID 已注册，虹膜、角膜和眼部 IBL 尚无独立实现。 |
 | Cloth | 待专项 | ID 已注册，布料专用高光尚无独立实现。 |
@@ -199,14 +200,14 @@ MF_CharacterSurface
 
 MaterialFunctionContext 用于承载多个 MF 共享的阶段数据，例如顶点阶段输入、片元阶段输入、UV、世界位置、法线、视线方向和时间信息。
 
-当前只确定以下原则：
+当前已冻结以下原则：
 
 - 共享的引擎阶段数据可以放入 Context；
 - MF 私有的材质参数必须放入 MF 的 Input Struct；
 - Context 不得成为任意全局资源访问入口；
 - 灯光、Shadow Map 和最终 Pass 输出不通过 Context 暴露给普通 MF。
 
-Context 的最终字段、顶点/片元分层和数据所有权需要结合 UE Material Function 的具体语义继续讨论后再冻结。
+`MaterialFunctionContext` 的片元阶段字段以 `materialContext.glsl` 为准，只承载位置、法线、切线、UV、顶点色和裁剪空间信息；不得通过 Context 暴露灯光列表、Shadow Map 或最终 Pass 输出。
 
 ## M_、MI_ 与 MF 的职责
 
@@ -242,6 +243,27 @@ MaterialShaderComposer
 ~~~
 
 MF 的参数和纹理仍必须进入当前 Material Schema 合同。MF 不应绕过 M_/MI_ 的参数生成、descriptor 分配和反射校验机制。
+
+当前 NeoX Default/Silk/Pearl/Crystal 静态材质是该边界的落地示例：
+
+- `M_neoxDefault.surface.glsl` 与 `M_neoxSilk.surface.glsl` 只选择各自的输入 MF；
+- `mf_neoxPackedSurfaceTextures.glsl` 统一采样 Default/Silk 的标准化纹理，
+  `mf_neoxPackedSurface.glsl` 解释共享表面语义，DefaultLit/Cloth MF 再补专用字段；
+- `M_neoxPearl.surface.glsl` 只选择 Pearl 组合 MF；`mf_neoxPearlTextures.glsl` 负责图集/噪声采样，
+  `mf_neoxPearlInputs.glsl` 负责 Pearl、Emission 和 Subsurface 的最终拼装；
+- `mf_pearlescentInputs.glsl` 生成 Pearl 颜色、假球法线、覆盖率和 PBR 输入；
+- `mf_emission.glsl` 负责 Base/Emission 能量拆分；
+- `mf_subsurfaceInputs.glsl` 只返回 `SubsurfaceMaterialInputs`，不修改整份 `MaterialInputs`；
+- `M_neoxCrystal.surface.glsl` 只选择 Crystal 输入 MF；`mf_neoxCrystalTextures.glsl` 负责贴图采样，
+  `mf_neoxCrystalInputs.glsl` 负责 ThinTranslucent、Emission、coverage 和双面法线组装；
+- Alpha Clip 和 Cull 仍分别由 MeshPass 与 M_ Render State 负责；
+- Billboard 几何展开不属于片元 MF，当前 Pose 版本在离线 glTF 中烘焙。
+
+M_ 的参数 include 必须先于 `materialSurface.glsl` 和 `M_*.surface.glsl` 进入 Fragment translation unit，
+以便 `MATERIAL_SHADING_MODEL` 在 Engine 默认值生效前完成定义；这一顺序由
+`source/material/compiler/materialShaderComposer.cpp` 统一保证。
+
+组合 MF 应优先返回其拥有的专属输出结构。除非该 MF 明确拥有完整表面生成职责，否则不得通过 `inout MaterialInputs` 或复制整份 `MaterialInputs` 隐式修改其他功能字段。
 
 ## 静态开关、动态参数和离线转换
 

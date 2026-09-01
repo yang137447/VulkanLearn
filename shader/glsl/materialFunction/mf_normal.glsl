@@ -17,4 +17,16 @@ vec3 TransformMaterialNormalToWorld(
         normalTS.z * context.worldNormal);
 }
 
+vec4 OrthonormalizeMaterialTangent(
+    in vec3 worldNormal,
+    in vec4 worldTangent)
+{
+    // Normal Map 改变 N 后必须重新把 T 投影到新切平面；B 仍由 handedness
+    // 在 lighting 端恢复，镜像 UV 因而不会丢失左右手系语义。
+    vec3 tangent = normalize(
+        worldTangent.xyz -
+        worldNormal * dot(worldNormal, worldTangent.xyz));
+    return vec4(tangent, worldTangent.w);
+}
+
 #endif

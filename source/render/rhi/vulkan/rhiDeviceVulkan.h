@@ -111,6 +111,7 @@ public:
     vk::Extent2D GetSwapchainExtent() const;
     vk::Format GetSwapchainImageFormat() const;
     const std::vector<vk::ImageView>& GetSwapchainImageViews() const;
+    const std::vector<vk::Image>& GetSwapchainImages() const;
 
     RHIBufferHandle CreateBuffer(
         vk::DeviceSize size,

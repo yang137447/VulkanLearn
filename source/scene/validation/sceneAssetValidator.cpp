@@ -118,6 +118,10 @@ namespace
         RequireNumberField(objectJson, "near_clip", context);
         RequireNumberField(objectJson, "far_clip", context);
         RequireTransformFields(objectJson, context);
+        if (objectJson.contains("look_at"))
+        {
+            RequireVector3Field(objectJson, "look_at", context);
+        }
     }
 
     void ValidateEnvironmentObject(const nlohmann::json& objectJson, std::string_view context)

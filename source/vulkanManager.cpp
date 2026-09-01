@@ -293,7 +293,9 @@ void VulkanManager::CreateVkSwapChain()
         .setImageColorSpace(surfaceFormat.colorSpace)
         .setImageExtent(swapChainExtent)
         .setImageArrayLayers(1)
-        .setImageUsage(vk::ImageUsageFlagBits::eColorAttachment)
+        .setImageUsage(
+            vk::ImageUsageFlagBits::eColorAttachment |
+            vk::ImageUsageFlagBits::eTransferSrc)
         .setImageSharingMode(vk::SharingMode::eExclusive)
         .setQueueFamilyIndexCount(0)
         .setPQueueFamilyIndices(nullptr)
@@ -322,7 +324,7 @@ void VulkanManager::CreateVkSwapChain()
     vk::Result result = device.getSwapchainImagesKHR(swapChain, &swapChainImageCount, nullptr);
     assert(result == vk::Result::eSuccess);
     // 获取交换链中的图像
-    std::vector<vk::Image> swapChainImages;
+    swapChainImages.clear();
     swapChainImages.resize(swapChainImageCount);
     result = device.getSwapchainImagesKHR(swapChain, &swapChainImageCount, swapChainImages.data());
     assert(result == vk::Result::eSuccess);

@@ -14,6 +14,8 @@ MaterialInputs EvaluateMaterialInputs(in MaterialFunctionContext context)
     inputs.modelInputs.preintegratedSkin.curvature = u_skinSurface.w;
     inputs.modelInputs.preintegratedSkin.transmissionWeight =
         u_skinTransmissionWeight;
+    inputs.modelInputs.preintegratedSkin.characterLighting =
+        u_skinCharacterLighting;
     return inputs;
 }
 

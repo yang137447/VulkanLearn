@@ -12,13 +12,9 @@ void main()
     MaterialFunctionContext context = CreateMaterialFunctionContext(v2f);
     MaterialInputs inputs = EvaluateMaterialInputs(context);
     MaterialSurface surface = ResolveMaterialSurface(inputs, context);
-    float resolvedOpacityMask = inputs.opacityMask;
-    if (surface.shadingModel == SHADING_MODEL_HAIR)
-    {
-        // ShadowDepth 复用与主 Pass 相同的 coverage/opacity 顺序，避免边缘与阴影脱节。
-        resolvedOpacityMask *= surface.modelInputs.hair.coverage;
-    }
-    ApplyAlphaClip(resolvedOpacityMask, u_alphaClipThreshold);
+    // ShadowDepth 与主 Pass 使用同一原始 coverage mask；Hair coverage 只属于
+    // lighting visibility，不能让投影边界和 Core Pass 再发生一次乘法。
+    ApplyAlphaClip(inputs.opacityMask, u_alphaClipThreshold);
 }
 #else
 void main()

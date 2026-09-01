@@ -49,8 +49,22 @@ std::shared_ptr<Camera> BuildCamera(const nlohmann::json& node)
     camera->SetName(name);
     camera->SetHFOV(fov);
     camera->SetClip(nearClip, farClip);
-    camera->SetPosition(position);
-    camera->SetRotation(rotation);
+    if (node.contains("look_at"))
+    {
+        const Eigen::Vector3f lookAt =
+            JsonParser::ParseValue<Eigen::Vector3f>(node["look_at"]);
+        if ((lookAt - position).squaredNorm() <= 1.0e-8f)
+        {
+            throw std::runtime_error(
+                "Camera look_at must differ from position: " + name);
+        }
+        camera->SetInitialLookAt(position, lookAt);
+    }
+    else
+    {
+        camera->SetPosition(position);
+        camera->SetRotation(rotation);
+    }
     return camera;
 }
 

@@ -56,6 +56,17 @@ void main()
         lighting.directLighting,
         lighting.indirectDiffuse,
         lighting.indirectSpecular);
+    if (surface.shadingModel == SHADING_MODEL_PREINTEGRATED_SKIN)
+    {
+        SetMaterialDebugSkinData(
+            debugLighting,
+            lighting.skinDirectDiffuse,
+            lighting.skinTransmission,
+            lighting.skinShadowVisibility,
+            lighting.skinIblDiffuse,
+            lighting.skinIblSpecular,
+            lighting.skinVirtualLight);
+    }
     if (surface.shadingModel == SHADING_MODEL_EYE)
     {
         SetMaterialDebugEyeData(

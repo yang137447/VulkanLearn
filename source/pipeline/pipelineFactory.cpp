@@ -435,8 +435,8 @@ PipelineFactory::CreateGraphicsPipelineInternal(
 
     const GraphicsPipelineStateDesc pipelineStateDesc =
         passPipelineContractKey.BuildGraphicsPipelineStateDesc(cullMode, blendMode);
-    // PassPipelineContractKey 提供 pass-owned 状态，cull/blend 来自 Material；
-    // 这里只在 Vulkan 管线创建边界把两部分合成为最终 state desc。
+    // PassPipelineContractKey 已包含 Pass 默认状态和强类型 RenderMode 派生状态，
+    // cull/blend 来自 Material；这里只在 Vulkan 管线创建边界合成为最终 state desc。
     auto pipeline = std::shared_ptr<GraphicsPipeline>(new GraphicsPipeline(
         rendererBackend,
         *device,

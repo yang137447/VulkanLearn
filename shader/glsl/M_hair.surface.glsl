@@ -2,6 +2,7 @@
 #define VL_M_HAIR_SURFACE_GLSL
 
 #include "materialFunction/mf_pbrInputs.glsl"
+#include "materialFunction/mf_hairAbsorption.glsl"
 
 // Hair Material Function 只把作者参数转换为稳定 HairMaterialInputs；R/TT/TRT
 // 的界面权重、Beer-Lambert 和 LUT 采样统一由 ShadingModel evaluator 消费。
@@ -16,12 +17,14 @@ MaterialInputs EvaluateMaterialInputs(in MaterialFunctionContext context)
     inputs.modelInputs.hair.ior = u_hairOptical.y;
     inputs.modelInputs.hair.fiberRadius = u_hairOptical.z;
     inputs.modelInputs.hair.cuticleTilt = u_hairOptical.w;
-    inputs.modelInputs.hair.absorption = max(
-        inputs.baseColor * u_hairOptical.x,
-        vec3(0.001));
+    inputs.modelInputs.hair.absorption = ConvertHairBaseColorToAbsorption(
+        inputs.baseColor,
+        u_hairOptical.x,
+        inputs.modelInputs.hair.fiberRadius);
     inputs.modelInputs.hair.coverage = u_hairCoverage.x;
     inputs.modelInputs.hair.density = u_hairCoverage.z;
     inputs.modelInputs.hair.multipleScatteringWeight = u_hairCoverage.y;
+    inputs.modelInputs.hair.characterLighting = u_hairCharacterLighting;
     // opacityMask 仍由 BaseColor/alpha map 提供；coverage 只进入 Hair closure，不能
     // 被错误地当作 Beer-Lambert 吸收或在 ShadowDepth 中重新解释。
     return inputs;

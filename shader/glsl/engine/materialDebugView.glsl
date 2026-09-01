@@ -15,6 +15,12 @@ struct MaterialDebugLightingData
     vec3 diffuseBeforeSubsurface;
     float subsurfaceWeight;
     float transmissionWeight;
+    vec3 skinDirectDiffuse;
+    vec3 skinTransmission;
+    float skinShadowVisibility;
+    vec3 skinIblDiffuse;
+    vec3 skinIblSpecular;
+    vec3 skinVirtualLight;
     vec3 hairRPath;
     vec3 hairTTPath;
     vec3 hairTRTPath;
@@ -83,6 +89,12 @@ MaterialDebugLightingData CreateMaterialDebugLightingData(
     data.diffuseBeforeSubsurface = vec3(0.0);
     data.subsurfaceWeight = 0.0;
     data.transmissionWeight = 0.0;
+    data.skinDirectDiffuse = vec3(0.0);
+    data.skinTransmission = vec3(0.0);
+    data.skinShadowVisibility = 1.0;
+    data.skinIblDiffuse = vec3(0.0);
+    data.skinIblSpecular = vec3(0.0);
+    data.skinVirtualLight = vec3(0.0);
     data.hairRPath = vec3(0.0);
     data.hairTTPath = vec3(0.0);
     data.hairTRTPath = vec3(0.0);
@@ -135,6 +147,23 @@ MaterialDebugLightingData CreateMaterialDebugLightingData(
     return data;
 }
 
+void SetMaterialDebugSkinData(
+    inout MaterialDebugLightingData data,
+    vec3 directDiffuse,
+    vec3 transmission,
+    float shadowVisibility,
+    vec3 iblDiffuse,
+    vec3 iblSpecular,
+    vec3 virtualLight)
+{
+    data.skinDirectDiffuse = directDiffuse;
+    data.skinTransmission = transmission;
+    data.skinShadowVisibility = shadowVisibility;
+    data.skinIblDiffuse = iblDiffuse;
+    data.skinIblSpecular = iblSpecular;
+    data.skinVirtualLight = virtualLight;
+}
+
 void SetMaterialDebugClothData(
     inout MaterialDebugLightingData data,
     vec3 sheenColor,
@@ -156,16 +185,16 @@ void SetMaterialDebugClothData(
     data.clothSheenRoughness = sheenRoughness;
     data.clothCharlieD = charlieD;
     data.clothVisibility = visibility;
-    data.clothModelVersion = modelVersion;
-    data.clothWorldTangent = worldTangent;
-    data.clothAnisotropy = anisotropy;
-    data.clothAnisotropyCross = anisotropyCross;
-    data.clothRoughnessAxes = roughnessAxes;
     data.clothDirectionalAlbedo = directionalAlbedo;
     data.clothBaseEnergyScale = baseEnergyScale;
     data.clothDirectSheen = directSheen;
     data.clothIndirectSheen = indirectSheen;
     data.clothIblFallback = iblFallback;
+    data.clothModelVersion = modelVersion;
+    data.clothWorldTangent = worldTangent;
+    data.clothAnisotropy = anisotropy;
+    data.clothAnisotropyCross = anisotropyCross;
+    data.clothRoughnessAxes = roughnessAxes;
 }
 
 void SetMaterialDebugHairData(
@@ -341,6 +370,12 @@ vec4 ResolveMaterialDebugView(
     float clothV2DirectionalAlbedoMask = MaterialDebugViewModeMask(87);
     float clothV2BaseEnergyScaleMask = MaterialDebugViewModeMask(88);
     float clothV2IblFallbackMask = MaterialDebugViewModeMask(89);
+    float skinDirectDiffuseMask = MaterialDebugViewModeMask(74);
+    float skinTransmissionMask = MaterialDebugViewModeMask(75);
+    float skinShadowMask = MaterialDebugViewModeMask(76);
+    float skinIblDiffuseMask = MaterialDebugViewModeMask(77);
+    float skinIblSpecularMask = MaterialDebugViewModeMask(78);
+    float skinVirtualLightMask = MaterialDebugViewModeMask(79);
 
     float subsurfaceAssetId = 0.0;
     if (surface.shadingModel == SHADING_MODEL_PREINTEGRATED_SKIN)
@@ -434,7 +469,13 @@ vec4 ResolveMaterialDebugView(
         clothVisibilityMask +
         clothV2DirectionalAlbedoMask +
         clothV2BaseEnergyScaleMask +
-        clothV2IblFallbackMask,
+        clothV2IblFallbackMask +
+         skinDirectDiffuseMask +
+         skinTransmissionMask +
+         skinShadowMask +
+         skinIblDiffuseMask +
+         skinIblSpecularMask +
+         skinVirtualLightMask,
         1.0);
 
     float clothModel = surface.shadingModel == SHADING_MODEL_CLOTH ? 1.0 : 0.0;
@@ -456,6 +497,12 @@ vec4 ResolveMaterialDebugView(
         subsurfaceAssetIdMask * vec4(vec3(subsurfaceAssetId), 1.0) +
         localSubsurfaceMask * vec4(lighting.localSubsurfaceLighting, 1.0) +
         diffuseBeforeSubsurfaceMask * vec4(lighting.diffuseBeforeSubsurface, 1.0)
+         + skinDirectDiffuseMask * vec4(lighting.skinDirectDiffuse, 1.0)
+         + skinTransmissionMask * vec4(lighting.skinTransmission, 1.0)
+         + skinShadowMask * vec4(vec3(lighting.skinShadowVisibility), 1.0)
+         + skinIblDiffuseMask * vec4(lighting.skinIblDiffuse, 1.0)
+         + skinIblSpecularMask * vec4(lighting.skinIblSpecular, 1.0)
+         + skinVirtualLightMask * vec4(lighting.skinVirtualLight, 1.0)
         + hairFrameMask * vec4(lighting.hairBitangent * 0.5 + 0.5, 1.0)
         + hairTangentMask * vec4(lighting.hairTangent * 0.5 + 0.5, 1.0)
         + hairThetaMask * vec4(vec3(

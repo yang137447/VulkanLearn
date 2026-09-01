@@ -27,17 +27,26 @@ HairGBufferPayload EncodeHairGBuffer(const HairGBufferInputs& inputs)
         inputs.absorption[1],
         inputs.absorption[2],
         inputs.opacity};
+    payload.gbufferC = {
+        inputs.characterLighting[0],
+        inputs.specular,
+        inputs.roughness,
+        inputs.ambientOcclusion};
     payload.gbufferD = {
         inputs.scatter,
         inputs.backlit,
         inputs.cuticleTilt,
         inputs.multipleScatteringWeight};
+    payload.gbufferE = {
+        inputs.precomputedShadowFactor,
+        inputs.characterLighting[1],
+        inputs.characterLighting[2],
+        inputs.characterLighting[3]};
     payload.gbufferF = {
         EncodeDirection(inputs.tangent[0]),
         EncodeDirection(inputs.tangent[1]),
         EncodeDirection(inputs.tangent[2]),
         inputs.tangentHandedness < 0.0f ? -1.0f : 1.0f};
-    payload.roughness = inputs.roughness;
     return payload;
 }
 
@@ -49,6 +58,14 @@ HairGBufferInputs DecodeHairGBuffer(const HairGBufferPayload& payload)
         payload.gbufferA[1],
         payload.gbufferA[2]};
     inputs.opacity = payload.gbufferA[3];
+    inputs.characterLighting = {
+        payload.gbufferC[0],
+        payload.gbufferE[1],
+        payload.gbufferE[2],
+        payload.gbufferE[3]};
+    inputs.specular = payload.gbufferC[1];
+    inputs.roughness = payload.gbufferC[2];
+    inputs.ambientOcclusion = payload.gbufferC[3];
     inputs.scatter = payload.gbufferD[0];
     inputs.backlit = payload.gbufferD[1];
     inputs.cuticleTilt = payload.gbufferD[2];
@@ -69,7 +86,7 @@ HairGBufferInputs DecodeHairGBuffer(const HairGBufferPayload& payload)
         }
     }
     inputs.tangentHandedness = payload.gbufferF[3] < 0.0f ? -1.0f : 1.0f;
-    inputs.roughness = payload.roughness;
+    inputs.precomputedShadowFactor = payload.gbufferE[0];
     return inputs;
 }
 

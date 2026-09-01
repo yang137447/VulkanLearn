@@ -93,7 +93,9 @@ public:
   inline float GetClipNear() const { return clipNear; }
   inline float GetClipFar() const { return clipFar;}
   void SetCamera(const Eigen::Vector3f& cameraPosition, const Eigen::Vector3f& lookAtPosition, const Eigen::Vector3f& up);
+  void SetInitialLookAt(const Eigen::Vector3f& cameraPosition, const Eigen::Vector3f& lookAtPosition);
   void SetCamera(const Eigen::Vector3f& cameraPosition, const Eigen::Vector3f& cameraRotation);
+  inline bool HasInitialLookAt() const { return hasInitialLookAt; }
   void SetProjection(float fov, float aspect, float near, float far);
   void SetOrthographic(float size, float aspect, float near, float far);
   const Eigen::Matrix4f& GetViewMatrix();
@@ -109,4 +111,5 @@ private:
   Eigen::Matrix4f viewMatrix = Eigen::Matrix4f::Identity();
   Eigen::Matrix4f projectionMatrix = Eigen::Matrix4f::Identity();
   Eigen::Matrix4f ndcMatrix = Eigen::Matrix4f::Identity();
+  bool hasInitialLookAt = false;
 };

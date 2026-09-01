@@ -151,6 +151,11 @@ MeshSection AssimpSourceAdapter::ProcessMesh(aiMesh* mesh, const aiScene* scene)
         {
             vertex.texCoord = Eigen::Vector2f(0.0f, 0.0f);
         }
+        // 第二套 UV 只接受源模型真实提供的数据；缺失时保留 Vertex 的零值，禁止复制 UV0 伪造 2U。
+        if(mesh->mTextureCoords[1])
+        {
+            vertex.texCoord1 = Eigen::Vector2f(mesh->mTextureCoords[1][i].x, mesh->mTextureCoords[1][i].y);
+        }
         if(mesh->HasTangentsAndBitangents())
         {
             const Eigen::Vector3f tangent(mesh->mTangents[i].x, mesh->mTangents[i].y, mesh->mTangents[i].z);

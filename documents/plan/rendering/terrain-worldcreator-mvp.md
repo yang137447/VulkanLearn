@@ -42,7 +42,6 @@ The scene entry owns transform only. Terrain source data belongs in `terrains/TR
     "heightScale": 80.0,
     "heightOffset": 0.0,
     "uvScale": [8.0, 8.0],
-    "flipY": false,
     "heightChannel": "r"
 }
 ```

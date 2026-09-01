@@ -180,6 +180,27 @@ Expected behavior:
 
 V1 uses one wrap mode for both U and V. If per-axis control is needed later, it should be added deliberately instead of being exposed by default.
 
+### Image Orientation And Asset Gate
+
+Texture JSON does not expose image-row or UV-direction correction. File-backed
+material textures use one engine-wide convention: `Texture` vertically flips decoded
+image rows exactly once before GPU upload. This behavior is not asset data and cannot
+be overridden per `T_*.json`.
+
+`TextureIO` remains a general image decoder whose low-level default is `ForceOff`.
+Material texture creation explicitly selects `ForceOn`; non-material paths must state
+their own orientation contract. Environment HDRI loading explicitly selects
+`ForceOff`, and generated Vulkan images do not pass through the file-backed material
+texture path.
+
+Mesh UVs are imported unchanged. Blender/glTF, OBJ, terrain, and other asset pipelines
+must author source images and UVs for the engine material-texture convention instead
+of adding Shader compensation or a per-asset runtime switch.
+
+The texture asset loader rejects unknown fields. In particular, `flipY` is an
+invalid `T_*.json` field and must fail asset preflight rather than silently changing
+the sampled result.
+
 ### `channelsDescription`
 
 Optional.
@@ -215,6 +236,24 @@ has no baked ambient occlusion, its B channel must be authored as `1.0` (white)
 instead of leaving the channel black or undefined. Material macros must not
 reinterpret or bypass individual packed channels; asset conversion owns channel
 packing correctness.
+
+## Preintegrated Skin Auxiliary Contract
+
+`PreintegratedSkin` 的 NeoX 脸部和身体资源不能把源 `ParamMap` 伪装成通用
+`pbrParamMap`。Skin MI 使用独立的 texture slots：
+
+```text
+skinParamMap  R=roughness, G=metallic, B=skinColorMask, A=ambientOcclusion
+skinAuxMap    R=curvature, G=detailNormalMask, B/A=reserved
+skinDetailMap RGB=离线重建的 detail normal XYZ, A=poreModulation
+```
+
+`skinParamMap`、`skinAuxMap` 与 `skinDetailMap` 是线性数据；Skin BaseColor/Normal 使用
+`clamp` 地址模式，Detail 使用 `repeat`，与 NeoX 源 sampler 合同一致。身体 P0 的
+`nb_f_2023002a/m/n` 与脸部资源共享这一套 slot 合同，纹理尺寸可以不同，运行时按各自
+UV 独立采样，不要求离线重采样到统一分辨率。
+这些 slots 只由 `M_preintegratedSkin` 的 `USE_SKIN_*_MAP` 变体消费，不能
+改变通用 `pbrParamMap` 的 R/G/B/A 解释。
 
 ## File Layout
 
@@ -278,7 +317,7 @@ The following fields are intentionally not part of Texture JSON V1:
 - `semantic` or `usage`
   - not added in V1; `colorSpace` is enough for the current texture loading contract
 - `flipY`
-  - stays as an engine-side import convention for now
+  - forbidden; material texture row flipping is a fixed engine convention, not asset data
 - full `sampler`
   - too low-level and too easy to misuse
 - compression settings
@@ -293,11 +332,12 @@ The following fields are intentionally not part of Texture JSON V1:
 ## Current Implementation
 
 1. `textureAssetLoader.*` parses texture asset JSON and builds `TextureBindingLoadDesc`.
-2. `Texture::CreateDesc` carries `colorSpace`, `mipmaps`, `filter`, and `wrapMode` into Vulkan texture creation.
+2. `Texture::CreateDesc` carries `colorSpace`, `mipmaps`, `filter`, and `wrapMode` into Vulkan texture creation; `Texture` applies the fixed material-texture vertical row flip before upload.
 3. `RendererMaterialLoader::LoadMaterialInstance()` requires material texture entries to reference `T_*.json` files.
 4. Texture cache keys include the asset path plus source, transfer, mipmap, filter, and wrap mode state.
-5. Raw image files live under `resources/textures/datas/`.
-6. Material instances bind shader slots to texture asset JSON files, not direct image paths.
+5. Texture asset preflight rejects unknown fields such as `flipY`; orientation is deliberately absent from the texture cache identity because every file-backed material texture uses the same engine policy.
+6. Raw image files live under `resources/textures/datas/`.
+7. Material instances bind shader slots to texture asset JSON files, not direct image paths.
 
 ## Design Boundary
 

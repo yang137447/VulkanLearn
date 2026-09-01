@@ -40,13 +40,9 @@ void main()
 
     // Coverage 是 Pass 行為：所有需要 Alpha Clip 的 pass 都在消費 Surface 後統一執行。
 #if MATERIAL_USES_OPACITY_MASK
-    float resolvedOpacityMask = inputs.opacityMask;
-    if (surface.shadingModel == SHADING_MODEL_HAIR)
-    {
-        // Hair coverage 与 opacityMask 在主 Pass 只合并一次；它不参与 absorption。
-        resolvedOpacityMask *= surface.modelInputs.hair.coverage;
-    }
-    ApplyAlphaClip(resolvedOpacityMask, u_alphaClipThreshold);
+    // UE/NeoX Hair mode 8 用原始 Tex0 alpha 做 clip；coverage 是 Hair closure
+    // 的可见率，不得再次乘进几何裁剪，否则 Core/Fringe 会产生双重稀释。
+    ApplyAlphaClip(inputs.opacityMask, u_alphaClipThreshold);
 #endif
 
 #if VL_MATERIAL_OUTPUT_GBUFFER

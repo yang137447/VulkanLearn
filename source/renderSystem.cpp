@@ -953,6 +953,11 @@ void RenderSystem::Render()
     RenderLatestSnapshotOrLastGood();
 }
 
+void RenderSystem::RequestScreenshot(std::string path)
+{
+    pendingScreenshotPath = std::move(path);
+}
+
 void RenderSystem::ReleaseSwapchainDependentResources()
 {
     uiOverlayRenderer.ReleaseSwapchainDependentResources();
@@ -2653,9 +2658,43 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
         }
     }
 
+    const std::optional<std::string> screenshotPath =
+        std::move(pendingScreenshotPath);
+    pendingScreenshotPath.reset();
+
+    bool screenshotRecorded = false;
+    std::string screenshotRecordError;
+    if (screenshotPath.has_value())
+    {
+        screenshotRecorded = rendererBackend->RecordSwapchainScreenshot(
+            frameContext,
+            screenshotPath.value(),
+            screenshotRecordError);
+        if (!screenshotRecorded)
+        {
+            std::cout << "[Diagnostics][Warning] Screenshot record failed: " <<
+                screenshotRecordError << std::endl;
+        }
+    }
+
     // RenderSystem only records pass commands. Queue, semaphore, fence,
     // swapchain, present, and retire epoch details stay backend-owned.
     rendererBackend->SubmitFrame(frameContext, currentFrame);
+
+    if (screenshotRecorded)
+    {
+        std::string screenshotError;
+        if (rendererBackend->CompleteSwapchainScreenshot(screenshotError))
+        {
+            std::cout << "[Diagnostics][Info] Screenshot saved: " <<
+                screenshotPath.value() << std::endl;
+        }
+        else
+        {
+            std::cout << "[Diagnostics][Warning] Screenshot failed: " <<
+                screenshotError << std::endl;
+        }
+    }
 
     currentFrame = currentFrame + 1;
 }

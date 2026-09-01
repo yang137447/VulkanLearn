@@ -203,12 +203,17 @@ void TestPreintegratedSkinRoundTrip()
     input.subsurfaceWeight = 0.9f;
     input.curvature = 0.0f;
     input.transmissionWeight = 0.1f;
+    input.characterLighting = {1.8f, 1.37f, 1.0f, 0.75f};
     const VL::PreintegratedSkinMaterialGBufferInputs decoded =
         VL::DecodePreintegratedSkinGBuffer(
             VL::EncodePreintegratedSkinGBuffer(input));
     Require(decoded.skinLutId == input.skinLutId, "Skin LUT ID round-trip mismatch");
     RequireNear(decoded.thickness, input.thickness, 0.0f, "Skin thickness round-trip mismatch");
     RequireNear(decoded.transmissionWeight, input.transmissionWeight, 0.0f, "Skin transmission round-trip mismatch");
+    RequireNear(decoded.characterLighting[0], input.characterLighting[0], 0.0f, "Skin environment multiplier round-trip mismatch");
+    RequireNear(decoded.characterLighting[1], input.characterLighting[1], 0.0f, "Skin directional multiplier round-trip mismatch");
+    RequireNear(decoded.characterLighting[2], input.characterLighting[2], 0.0f, "Skin GI multiplier round-trip mismatch");
+    RequireNear(decoded.characterLighting[3], input.characterLighting[3], 0.0f, "Skin virtual-light multiplier round-trip mismatch");
 }
 
 void TestSubsurfaceProfileRoundTrip()
@@ -317,6 +322,53 @@ void TestCompositionDiscreteGBufferSamplingContract()
         "SSS composition still linearly samples discrete GBuffer data");
 }
 
+void TestPreintegratedSkinBottomNormalContract()
+{
+    const std::filesystem::path root(VULKANLEARN_SOURCE_DIR);
+    const std::string inputs = ReadText(
+        root / "shader/glsl/engine/materialInputs.glsl");
+    const std::string surface = ReadText(
+        root / "shader/glsl/engine/materialSurface.glsl");
+    const std::string codec = ReadText(
+        root / "shader/glsl/engine/gbufferCodec.glsl");
+    const std::string skinLighting = ReadText(
+        root / "shader/glsl/engine/preintegratedSkinLighting.glsl");
+    Require(
+        inputs.find("vec3 bottomNormal") != std::string::npos &&
+            surface.find("preintegratedSkinBottomNormal") != std::string::npos,
+        "PreintegratedSkin bottom normal is missing from the material contract");
+    Require(
+        codec.find("gbufferF.zw") != std::string::npos &&
+            codec.find("OctahedronToUnitVector") != std::string::npos,
+        "Skin bottom normal does not have an explicit GBuffer F.zw codec");
+    Require(
+        skinLighting.find("preintegratedSkin.bottomNormal") !=
+            std::string::npos,
+        "PreintegratedSkin lighting does not consume bottom normal");
+}
+void TestVirtualLightModuleContract()
+{
+    const std::filesystem::path root(VULKANLEARN_SOURCE_DIR);
+    const std::string virtualLight = ReadText(
+        root / "shader/glsl/engine/virtualLight.glsl");
+    const std::string hairLighting = ReadText(
+        root / "shader/glsl/engine/hairLighting.glsl");
+    const std::string skinLighting = ReadText(
+        root / "shader/glsl/engine/preintegratedSkinLighting.glsl");
+    Require(
+        virtualLight.find("struct VirtualLight") != std::string::npos &&
+            virtualLight.find("CreateCameraVirtualLight") != std::string::npos &&
+            virtualLight.find("EvaluateVirtualLightVisibility") !=
+                std::string::npos,
+        "Virtual Light module does not expose the shared direction/radiance/visibility contract");
+    Require(
+        hairLighting.find("CreateCameraVirtualLight") != std::string::npos &&
+            skinLighting.find("CreateCameraVirtualLight") != std::string::npos,
+        "Hair and Skin do not consume the shared Virtual Light module");
+    Require(
+        skinLighting.find("transmissionMultiplier") != std::string::npos,
+        "Skin Virtual Light cannot disable transmission independently");
+}
 void TestDebugView16Contract()
 {
     const std::filesystem::path root(VULKANLEARN_SOURCE_DIR);
@@ -363,6 +415,8 @@ int main()
         TestComputeOnlyGenerationContract();
         TestDiscreteGBufferSamplingContract();
         TestCompositionDiscreteGBufferSamplingContract();
+        TestPreintegratedSkinBottomNormalContract();
+        TestVirtualLightModuleContract();
         TestDebugView16Contract();
         std::cout << "Subsurface contract tests passed." << std::endl;
         return 0;

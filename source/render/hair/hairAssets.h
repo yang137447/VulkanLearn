@@ -14,8 +14,8 @@ namespace VL
 // 这些常量同时约束 metadata、Compute atlas 和 GLSL 采样坐标；修改任一项都必须
 // 提升版本并同步更新 shader/cache 合同，避免旧 LUT 被新 evaluator 静默消费。
 inline constexpr uint32_t HairAzimuthalLutSchemaVersion = 1;
-inline constexpr uint32_t HairAzimuthalLutVersion = 1;
-inline constexpr uint32_t HairAzimuthalLutKernelVersion = 1;
+inline constexpr uint32_t HairAzimuthalLutVersion = 2;
+inline constexpr uint32_t HairAzimuthalLutKernelVersion = 2;
 inline constexpr uint32_t HairAzimuthalLutWidth = 128;
 inline constexpr uint32_t HairAzimuthalLutHeight = 512;
 inline constexpr uint32_t HairAzimuthalLutLayerCount = 3;

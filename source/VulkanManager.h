@@ -47,6 +47,7 @@ private:
     inline std::vector<vk::Fence>& GetImagesInFlightFences() { return imagesInFlightFences; }
     inline uint32_t GetSwapChainImageCount() { return swapChainImageCount; }
     inline vk::SurfaceFormatKHR& GetSurfaceFormat() { return surfaceFormat; }
+    inline const std::vector<vk::Image>& GetSwapChainImages() const { return swapChainImages; }
     inline std::vector<vk::ImageView>& GetSwapChainImageViews() { return swapChainImageViews; }
     inline vk::Extent2D GetSwapChainExtent() const { return swapChainExtent; }
     inline uint32_t GetGraphicsQueueTimestampValidBits() const
@@ -112,6 +113,7 @@ private:
     std::optional<vk::Extent2D> requestedSwapChainExtent;
     uint32_t swapChainImageCount = 0;
     vk::SwapchainKHR swapChain;
+    std::vector<vk::Image> swapChainImages;
     std::vector<vk::ImageView> swapChainImageViews;
 
     std::vector<vk::Semaphore> imageAcquiredSemaphores;

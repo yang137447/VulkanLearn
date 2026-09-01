@@ -109,9 +109,12 @@ void ValidateHairMaterialAuthoringContract(
         RequireVec4(parameters, "u_hairScattering", materialInstancePath);
     const std::array<float, 4> coverage =
         RequireVec4(parameters, "u_hairCoverage", materialInstancePath);
+    const std::array<float, 4> characterLighting =
+        RequireVec4(parameters, "u_hairCharacterLighting", materialInstancePath);
 
-    // u_hairOptical: absorption scale, IOR, fiber radius(m), cuticle tilt(rad)。
-    RequireRange(optical[0], 0.0001f, 100000.0f, "u_hairOptical.x", materialInstancePath);
+    // u_hairOptical: absorption multiplier, IOR, fiber radius(m), cuticle tilt(rad)。
+    // 上限同时保证最暗作者颜色转换出的 sigma_a 可安全写入 RGBA16F GBuffer。
+    RequireRange(optical[0], 0.0001f, 2.0f, "u_hairOptical.x", materialInstancePath);
     RequireRange(optical[1], 1.0001f, 2.5f, "u_hairOptical.y", materialInstancePath);
     RequireNear(optical[1], lutMetadata.ior, "u_hairOptical.y", materialInstancePath);
     RequireRange(optical[2], 1.0e-7f, 0.01f, "u_hairOptical.z", materialInstancePath);
@@ -134,6 +137,13 @@ void ValidateHairMaterialAuthoringContract(
             "u_hairCoverage.w is reserved and must be zero: " +
             std::string(materialInstancePath));
     }
+
+    // u_hairCharacterLighting: ambient、directional、local、camera virtual light。
+    // 数值在资产侧冻结；shader 不做逐像素防御性裁切。
+    RequireRange(characterLighting[0], 0.0f, 4.0f, "u_hairCharacterLighting.x", materialInstancePath);
+    RequireRange(characterLighting[1], 0.0f, 4.0f, "u_hairCharacterLighting.y", materialInstancePath);
+    RequireRange(characterLighting[2], 0.0f, 4.0f, "u_hairCharacterLighting.z", materialInstancePath);
+    RequireRange(characterLighting[3], 0.0f, 4.0f, "u_hairCharacterLighting.w", materialInstancePath);
 }
 
 void ValidateHairMaterialContract(

@@ -2,8 +2,8 @@
 
 ## 状态
 
-- **状态**：H0–H7 已落地；Hair ID 7 具备 Forward、Deferred、Card coverage、ShadowDepth、R/TT/TRT direct single scattering 和显式 IBL/MS fallback。
-- **实现身份**：VulkanLearn MVP，不声称 UE 私有 shader 逐行 parity，也不把 Kajiya–Kay 当作 Reference。
+- **状态**：H0–H7 已落地；Hair ID 7 具备 Forward、Deferred、Card coverage、ShadowDepth、UE-compatible R/TT/TRT direct response、direct scatter 和显式 IBL/MS fallback。
+- **实现身份**：角色生产路径对齐 UE 实时 Hair 近似；CPU 求根与 Hair LUT 属于 Reference/Debug，不再直接驱动角色光照能量。
 - **生产边界**：Hair Card 的 masked 路径可进入 Geometry/Deferred；透明探针仍受排序、远景 coverage 和普通 Shadow Map 限制。
 
 ## 1. 路径身份与单位
@@ -27,8 +27,23 @@ deltaPhi   = wrap(phiO - phiI, [-pi, pi])
 ```
 
 `theta = 0` 表示方向位于纤维法截面；`sigma_a` 的单位是 `1/m`；fiber radius、path length
-和世界位置使用米制。`Tangent` 采用 rootward 方向，`tangent.w` 只保存 mirrored UV 后的
-bitangent handedness（正值为正向，负值为翻转）；evaluator 不重复翻转 tangent。
+和世界位置使用米制。普通 Hair 输入的 `Tangent` 采用 rootward 方向，`tangent.w` 只保存
+mirrored UV 后的 bitangent handedness（正值为正向，负值为翻转）。NeoX Hair 的 MF 会把
+mirrored 符号提前烘入 fiber axis，同时保留原始 `tangent.w` 供横截面基底重建；evaluator
+不再用该符号二次翻转 fiber axis。
+
+NeoX Hair 的源字段名与此目标语义不同：源 shader 先计算
+`p = cross(normalTS, float3(1,0,0))`，再在顶点切线/副切线/几何法线基底中生成 fiber axis；
+该轴写入目标 `MaterialInputs.tangent`，几何法线写入 `MaterialInputs.normal`，不能直接沿用
+普通 PBR 的 normal/tangent 接线。
+
+NeoX 的 `u_backlit_intensity` 也不是可直接写入 Hair `Backlit` 的最终常量。源材质先以
+几何法线的 `NoV`、RDI.R 的 root mask、`u_root_intensity` 和 AO 生成逐像素遮蔽，再把
+结果交给 Hair 光照。当前 `b_f_3725` Hair 槽未覆写 `u_root_intensity`，因此 NeoX 的
+Backlit 辅助输出保持为零；这不等于关闭主 TT/TRT 路径，主路径仍按源 Hair 公式消费
+BaseColor 的透射颜色。
+源实现还叠加了专用 `u_dir_direction` 项，VulkanLearn 当前没有对应作者方向输入；在该项
+正式进入材质合同前不得用场景灯光方向写回 Shading Model。
 
 ## 2. Hair Material Inputs
 
@@ -47,28 +62,77 @@ Hair 专用数据由 `HairMaterialInputs` 持有：
 | `fiberRadius` | 米 | 内部路径长度换算 |
 | `multipleScatteringWeight` | `[0,1]` | 后续 MS 的能量上限 |
 | `coverage` | `[0,1]` | Card 可见率；与 absorption 完全分离 |
+| `density` | `[0,1]` | 可见纤维密度；只进入 visibility/MS 预算 |
+| `characterLighting` | `vec4` | `x/y/z/w` 分别为环境、方向、局部光倍率和无色相机虚拟光强度 |
 
 ### BaseColor 单一转换点
 
 `M_hair` 在 Material Function 阶段执行一次：
 
 ```text
-sigma_a = max(BaseColor.rgb * u_hairOptical.x, vec3(0.001))
+referencePathLength = 4 * fiberRadius
+sigma_a = -log(clamp(BaseColor.rgb, 1/255, 1))
+          * u_hairOptical.x / referencePathLength
 ```
 
 Forward 的 `surface.hairAbsorption` 与 Hair GBuffer 的 `gbufferA.rgb` 都保存这份已经转换
-的结果；Deferred decode 直接恢复它。R 路径不读取 `hairAbsorption`，TT/TRT 只在 evaluator
-中各自应用一次，禁止再乘 `BaseColor`。
+的结果；Deferred decode 直接恢复它。UE direct evaluator 统一在四倍半径参考光程恢复：
 
-## 3. Longitudinal 与 Azimuthal
+```text
+pathColor = exp(-sigma_a * 4 * fiberRadius)
+```
 
-CPU reference 保留 `Phi_p(h)` 的全部有效 roots 和 `1/abs(dPhi/dh)` Jacobian。生产路径不在
-每像素求根，而是采样 `hairAzimuthalLut`：
+随后按 UE 的 TT/TRT 指数使用该颜色；R 不读取 `hairAbsorption`。该转换必须保持颜色
+单调性：BaseColor 越暗，`sigma_a` 越大；不能把颜色直接乘常数后冒充米制吸收系数。
+MS fallback 使用相同 `pathColor`，禁止注入无色白光。
+
+### NeoX MF 组合
+
+`M_neoxHair.surface.glsl` 只负责把 MI 参数接入 MF。可复用功能拆为：
+
+- `mf_neoxHairTextures.glsl`：采样 BaseColor/RDI/Normal，并恢复切线空间法线；
+- `mf_neoxHairFiberFrame.glsl`：按 NeoX 的 `cross(normalTS, X)` 规则生成 fiber axis；
+- `mf_neoxHairInputs.glsl`：组合颜色、coverage、AO、吸收和 `HairMaterialInputs`。
+
+这些 MF 不读取灯光、不执行 `discard`，Alpha Clip 仍由 MeshPass Template 统一执行。
+
+`u_hairCharacterLighting` 是 NeoX 分离角色光照在 Hair 材质侧的冻结合同。默认
+`[1,1,1,0]` 不改变通用 Hair；`b_f_3725` 根据 event 1708 的实值使用
+目标角色 `b_f_3725` 的 P5 固定机位校准值为 `[0.25,1,0.55,0.25]`；普通 `M_hair`
+仍使用默认值。虚拟光以 `camera_vector` 同时作为 `L`，先按卡片几何法线
+抑制背面漏光，再复用完整 Direct HairBxDF；它不是发色增益，也不能通过修改 BaseColor
+替代。
+
+## 3. UE Direct 与 Reference LUT
+
+角色 Direct Hair 使用 UE 实时近似，而不是把 Reference 焦散 LUT 的幅值直接当成生产能量：
+
+```text
+Alpha = [-2 * cuticleTilt, cuticleTilt, 4 * cuticleTilt]
+B     = 0.2 + roughness^2 * [1, 0.5, 2]
+R     = Hair_G(...) * (0.25 * CosHalfPhi) * Hair_F(...) * (Specular * 2)
+TT    = Hair_G(...) * exp(-3.65 * CosPhi - 3.98) * F_TT^2
+        * pow(pathColor, ttPathExponent)
+TRT   = Hair_G(...) * exp(17 * CosPhi - 16.78) * F_TRT^2 * F_internal
+        * pow(pathColor, 0.8 / CosThetaD)
+```
+
+`F_TT`/`F_TRT` 使用源 shader 的 `0.046521/0.953479` 常量；`Backlit` 是 NeoX 的
+逐像素辅助输出，不会被误当成 TT 主路径的开关。
+
+`Scatter` 使用 UE 风格 soft Kajiya-Kay direct body response，并继续约束 MS fallback；它不改写
+R/TT/TRT 的路径身份。Hair closure 不再额外乘 card 几何法线的 `NdotL/crossSection`，避免
+发片表面法线把圆柱纤维响应重新压成普通表面高光。
+
+CPU reference 仍保留 `Phi_p(h)` 的全部有效 roots 和 `1/abs(dPhi/dh)` Jacobian。
+`hairAzimuthalLut` 继续由运行时事务管理并服务 Debug/Reference 对照：
 
 - `R/TT/TRT` 分别是 array layer `0/1/2`；
 - `x` 是 `deltaPhi`，范围 `[-pi, pi]`，repeat；
 - `y` 是 `thetaD` 与 roughness 的线性 atlas，thetaD clamp；
 - `thetaH` 的 longitudinal lobe 在 shader 中直接求值；
+- kernel v2 直接数值求解与 CPU oracle 相同的 `Phi_p(h)` roots，并写入
+  `sum(interfaceWeight / abs(dPhi/dh))`；禁止用经验 phase 高斯或倒置 Jacobian 替代；
 - LUT metadata 的 `schemaVersion/lutVersion/kernelVersion/IOR/coordinate/wrap/pathConvention`
   必须与 shader 合同一致，不接受未知版本。
 - 运行时只接受 `resourcePath/hair/hairAzimuthalLut.json` 作者 metadata；
@@ -91,16 +155,26 @@ Hair GBuffer V1：
 gbufferA.rgb = hairAbsorption (BaseColor→absorption 结果)
 gbufferA.a   = surface opacity
 gbufferB.a   = ShadingModelID 7 + SelectiveOutputMask
+gbufferC.r   = character ambient multiplier
+gbufferC.g   = Hair specular / R-TT-TRT interface energy scale
 gbufferC.b   = common roughness
+gbufferC.a   = material AO
 gbufferD.r   = scatter
 gbufferD.g   = backlit
 gbufferD.b   = cuticleTilt
 gbufferD.a   = multipleScatteringWeight
+gbufferE.r   = precomputed shadow factor
+gbufferE.g   = character directional multiplier
+gbufferE.b   = character local-light multiplier
+gbufferE.a   = achromatic Virtual Light intensity
 gbufferF.rgb = encoded world tangent
 gbufferF.a   = tangent handedness
 ```
 
-非 Hair 模型继续使用 `gbufferF.a = anisotropy`。Deferred V1 不偷偷复用通道保存独立 IOR、
+Hair 必须显式恢复 `gbufferC.g` 的作者 specular 和 `gbufferC.r/gbufferE.gba` 的角色光照；
+如果像普通旧模型一样固定 specular 为 `0.5`，
+深色发丝的无色 R 路径会被放大成白色高光带。非 Hair 模型继续使用
+`gbufferF.a = anisotropy`。Deferred V1 不偷偷复用通道保存独立 IOR、
 fiber radius、melanin、path weights 或 LUT ID；decode 使用稳定 LUT 默认 IOR/radius 和统一
 roughness mapping。
 
@@ -112,12 +186,12 @@ roughness mapping。
   coverage 限制在资产/Debug 中保持可见。
 - directional 使用现有 CSM visibility；point/spot 使用各自 attenuation，当前没有额外阴影
   输入时只影响对应 direct light path。
-- Hair IBL V1 只提供 R 的低阶方向 basis；TT/TRT IBL 和 MS 缺失时输出显式 fallback 状态。
+- Hair specular IBL 在专用 UE Hair 环境卷积接入前保持为零并输出 fallback 状态；禁止复用普通 GGX reflection vector/mip 制造白色发片宽带。
 - MS 预算不超过剩余单次散射能量、coverage 和 `multipleScatteringWeight`，关闭 MS 可回到
   direct single scattering。
 - Strands/curves 只通过 `HairVisibilityInputs` 接口提供 fiber visibility、self-shadow、
   transmittance、LOD/CLOD，不新建 Shading Model。
-- Kajiya–Kay fallback 是低端非 Reference 路径，Debug/日志中明确标识。
+- UE soft Kajiya-Kay 只承担 `Scatter` 的低频 body response；若未来增加 Kajiya-only 低端 fallback，必须与当前 R/TT/TRT evaluator 分开标识。
 
 ## 6. 参数隔离验收表
 
@@ -125,9 +199,9 @@ roughness mapping。
 | --- | --- | --- |
 | `Tangent` | 高光沿 rootward 轴旋转/移动 | BaseColor、coverage |
 | `Roughness` | longitudinal/azimuthal 峰宽 | path identity、shadow |
-| `Specular` | R/TT/TRT 界面 lobe 总体强度 | Fresnel 本身、coverage |
-| `Scatter` | MS/through-scatter 预算 | opacityMask、R 单次散射 |
-| `Backlit` | TT/back-light body response | absorption、R |
+| `Specular` | UE primary/R 界面 lobe 强度 | Fresnel 本身、coverage、TT/TRT path tint |
+| `Scatter` | UE soft Kajiya-Kay direct body response 与 MS 预算 | opacityMask、R/TT/TRT 路径身份 |
+| `Backlit` | NeoX root/depth/AO 产生的辅助背光量 | 直接改写 TT 主路径、absorption、path tint |
 | `BaseColor` | 一次 absorption 转换后的 TT/TRT 颜色 | R 颜色 |
 
 ## 7. Debug View 编号

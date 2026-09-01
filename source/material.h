@@ -24,6 +24,7 @@ public:
     Material(
         PipelineFactory& pipelineFactory,
         Renderpass& renderPass,
+        const PassPipelineContractKey& surfacePassPipelineContractKey,
         const ShaderVariantKey& shaderVariantKey,
         const VL::MaterialFeatureKey& materialFeatureKey,
         const VL::MaterialDescriptorSchema& materialDescriptorSchema,

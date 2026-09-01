@@ -299,6 +299,104 @@ void DebugConsole::ProcessCommand(const std::string& line)
         return;
     }
 
+    if (command == "screenshot")
+    {
+        std::string path;
+        commandStream >> path;
+        if (path.empty())
+        {
+            path = "hair_debug.bmp";
+        }
+        const std::string extension =
+            path.size() >= 4 ? path.substr(path.size() - 4) : std::string();
+        if (extension != ".bmp" && extension != ".BMP")
+        {
+            const size_t extensionOffset = path.find_last_of('.');
+            if (extensionOffset == std::string::npos)
+            {
+                path += ".bmp";
+            }
+            else
+            {
+                path.replace(extensionOffset, std::string::npos, ".bmp");
+            }
+        }
+
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type = VL::RuntimeCommandType::CaptureScreenshot;
+        runtimeCommand.stringValue = std::move(path);
+        runtimeCommand.sourceText = line;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
+    if (command == "camera")
+    {
+        std::string mode;
+        if (!(commandStream >> mode))
+        {
+            std::cout << "Usage: camera <get|position|lookat|pose> ..." << std::endl;
+            return;
+        }
+
+        VL::RuntimeCommand runtimeCommand;
+        if (mode == "get")
+        {
+            runtimeCommand.type = VL::RuntimeCommandType::GetCameraState;
+        }
+        else if (mode == "position")
+        {
+            runtimeCommand.type = VL::RuntimeCommandType::SetCameraPosition;
+            if (!(commandStream >> runtimeCommand.cameraPositionValue.x() >>
+                    runtimeCommand.cameraPositionValue.y() >>
+                    runtimeCommand.cameraPositionValue.z()))
+            {
+                std::cout << "Usage: camera position <x> <y> <z>" << std::endl;
+                return;
+            }
+        }
+        else if (mode == "lookat")
+        {
+            runtimeCommand.type = VL::RuntimeCommandType::SetCameraLookAt;
+            if (!(commandStream >> runtimeCommand.cameraLookAtValue.x() >>
+                    runtimeCommand.cameraLookAtValue.y() >>
+                    runtimeCommand.cameraLookAtValue.z()))
+            {
+                std::cout << "Usage: camera lookat <x> <y> <z>" << std::endl;
+                return;
+            }
+        }
+        else if (mode == "pose")
+        {
+            runtimeCommand.type = VL::RuntimeCommandType::SetCameraPose;
+            if (!(commandStream >> runtimeCommand.cameraPositionValue.x() >>
+                    runtimeCommand.cameraPositionValue.y() >>
+                    runtimeCommand.cameraPositionValue.z() >>
+                    runtimeCommand.cameraLookAtValue.x() >>
+                    runtimeCommand.cameraLookAtValue.y() >>
+                    runtimeCommand.cameraLookAtValue.z()))
+            {
+                std::cout << "Usage: camera pose <px> <py> <pz> <tx> <ty> <tz>" << std::endl;
+                return;
+            }
+        }
+        else
+        {
+            std::cout << "Usage: camera <get|position|lookat|pose> ..." << std::endl;
+            return;
+        }
+
+        if (!runtimeCommand.cameraPositionValue.allFinite() ||
+            !runtimeCommand.cameraLookAtValue.allFinite())
+        {
+            std::cout << "Camera values must be finite." << std::endl;
+            return;
+        }
+        runtimeCommand.sourceText = line;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
     if (command == "shaderreload")
     {
         std::string scope;
@@ -385,6 +483,12 @@ void DebugConsole::PrintHelp() const
     std::cout << "    71: Cloth Direct Sheen\n";
     std::cout << "    72: Cloth Indirect Sheen\n";
     std::cout << "    73: Cloth IBL Fallback\n";
+    std::cout << "    74: Skin Direct Diffuse\n";
+    std::cout << "    75: Skin Transmission\n";
+    std::cout << "    76: Skin Shadow Visibility\n";
+    std::cout << "    77: Skin IBL Diffuse\n";
+    std::cout << "    78: Skin IBL Specular\n";
+    std::cout << "    79: Skin Virtual Light\n";
     std::cout << "  tonemap <mode> - set tone mapping mode\n";
     std::cout << "    0: Linear clamp\n";
     std::cout << "    1: Reinhard\n";
@@ -400,6 +504,11 @@ void DebugConsole::PrintHelp() const
     std::cout << "  environment <value> - set unified sky and IBL intensity\n";
     std::cout << "  windgust <on|off|once> - toggle or trigger one SpeedTree gust\n";
     std::cout << "  windstrength <0..1> - set the SpeedTree base strength target\n";
+    std::cout << "  screenshot [file.bmp] - capture the presented swapchain image\n";
+    std::cout << "  camera get - print the active camera pose\n";
+    std::cout << "  camera position <x> <y> <z> - set camera position\n";
+    std::cout << "  camera lookat <x> <y> <z> - aim camera at a world-space target\n";
+    std::cout << "  camera pose <px> <py> <pz> <tx> <ty> <tz> - set position and look-at\n";
     std::cout << "  shaderreload <changed|all> - transactionally publish live Graphics, Compute, and UI shaders\n";
     std::cout << "  shaderreload help - show hot-reload triggers by resource type\n";
     std::cout << "  shadercache stats - report shader build cache statistics\n";

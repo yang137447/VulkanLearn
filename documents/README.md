@@ -51,6 +51,8 @@ Documentation in this repository is split by responsibility:
 
 - `rendering/descriptor-imageinfo-management.md`
   - texture `vk::DescriptorImageInfo` ownership and descriptor write lifetime rules
+- `rendering/debug-runtime-commands.md`
+  - background camera control and swapchain screenshot commands for renderer debugging
 - `rendering/environment-update-scheduler.md`
   - implemented environment dirty generations, face/mip budgets, active/pending commit, SH swapchain broadcast, Vulkan barriers, and GPU timestamp diagnostics
 - `rendering/csm-shadow-map-m1.md`
@@ -65,8 +67,12 @@ Documentation in this repository is split by responsibility:
   - implemented ClearCoat-based car paint contract, custom data packing, and authoring parameters
 - `rendering/thin-translucent-shading-model.md`
   - implemented UE 5.8 Legacy Thin Translucent closure, dual-source blend path, scalar fallback, sorting, and lamp-cover authoring contract
+- `rendering/neox-character-alignment-contract-v1.md`
+  - NeoX 角色从 MTG/源 Shader/纹理/glTF 到 VulkanLearn Material、RenderState、Pass 和验证的当前对齐合同
 - `rendering/subsurface-shading-models.md`
   - implemented Subsurface, PreintegratedSkin, and SubsurfaceProfile contracts, including Compute-only lookup generation, GBuffer packing, lighting-lobe composition, profile filtering, and validation
+- `rendering/neox-skin-effect-alignment-contract-v1.md`
+  - NeoX `pbr_skin` 到现有 `PreintegratedSkin` 的输入、MF、能量、RenderState 和验证规则；不新增 Shading Model
 - `rendering/shader-build-cache.md`
   - implemented BLAKE3-256 shader identities, versioned build-cache manifest, batch-wide publication preflight, stale cache-hit rejection, atomic artifact commit, and startup failure semantics
 - `rendering/shader-hot-reload.md`
@@ -93,6 +99,8 @@ Architecture plans:
 
 Rendering plans:
 
+- `plan/rendering/material-instance-imgui-editor-plan.md`
+  - planned command-only UE-style MI Asset Editor: scenes reveal referenced assets, documents own numeric/texture configuration and atomic save, runtime preview is an optional bridge, and ImGui/Console/tests/AI share one versioned command protocol
 - `plan/rendering/lightweight-material-shadow-caster-plan.md`
   - superseded first-stage execution record for explicit ShadowCaster variants; current behavior is defined by the CSM and Material Mesh Pass contracts
 - `plan/rendering/common-masked-shadow-caster-plan.md`
@@ -103,6 +111,10 @@ Rendering plans:
   - deferred GBuffer, UE legacy slot alignment, M_/MI_ material layering, and forward/deferred shader structure plan
 - `plan/rendering/foliage-speedtree-sss-wind-roadmap.md`
   - markdown route for SpeedTree, foliage SSS, wind, and multi-pivot work
+- plan/rendering/neox-b-f-3725-skin-p0-baseline-v1.md
+  - _f_3725 Skin P0 源槽位、目标 MI、纹理通道、指纹和运行时 smoke 基线
+- `plan/rendering/neox-b-f-3725-skin-effect-alignment-plan.md`
+  - `b_f_3725` 身体/脸部 Skin 的分阶段对齐计划、阶段门和验证矩阵
 - `plan/rendering/foliage-speedtree-sss-wind-roadmap.html`
   - HTML reading version of the foliage / SpeedTree route
 - `plan/rendering/subsurface-shading-models-development-plan.md`
@@ -118,7 +130,11 @@ Rendering plans:
 - `plan/rendering/material-module-system.md`
   - future material module boundary, public/private semantics, and dependency ordering
 - `plan/rendering/neox-character-shader-feature-inventory.md`
-  - first-pass NeoX b_f_3725 material-family inventory and VulkanLearn migration order
+  - NeoX b_f_3725 material-family inventory, verified source-channel contracts, landed 35-slot migration status, and remaining visual calibration scope
+- `plan/rendering/neox-b-f-3725-character-restoration-handoff.md`
+  - 2026-08-24 b_f_3725 restoration handoff covering frozen constraints, source assets, 35-slot mapping, regeneration commands, procedural-sky scene, validation, intentional differences, and external resource transfer requirements
+- `plan/rendering/neox-b-f-3725-hair-effect-alignment-plan.md`
+  - executable b_f_3725 Hair effect alignment plan that freezes the shared UE-aligned Hair Shading Model and confines NeoX texture, TBN, coverage, variation, and authoring semantics to Material Functions and assets
 - `plan/rendering/material-multipass-pass-tag-plan.md`
   - future Material Multi-Pass asset model, PassTag matching, common RG hooks, render-state JSON draft, and draw-list execution plan
 - `plan/rendering/material-shader-variant-and-debugview-options.md`

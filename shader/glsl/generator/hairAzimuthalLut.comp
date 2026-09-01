@@ -8,13 +8,24 @@ layout(set = 0, binding = 0, rgba16f) uniform writeonly image2DArray outHairAzim
 
 layout(std430, set = 0, binding = 1) readonly buffer GenerationParameters
 {
-    // x=IOR, y=fiberRadius(m), z=longitudinal roughness, w=azimuthal roughness。
+    // x=IOR, y=fiberRadius(m)，zw 在 kernel v2 中保留给后续预滤波合同。
     vec4 contract;
 } generationParameters;
 
 const float PI = 3.14159265358979323846;
 const float HALF_PI = 1.57079632679489661923;
-const float EPSILON = 1.0e-5;
+const float ROOT_HEIGHT_LIMIT = 0.9999;
+const float ROOT_RESIDUAL_TOLERANCE = 0.002;
+const float ROOT_DUPLICATE_TOLERANCE = 0.001;
+const float NUMERICAL_EPSILON = 1.0e-6;
+const int ROOT_SEARCH_SAMPLE_COUNT = 129;
+const int ROOT_REFINE_ITERATION_COUNT = 12;
+const int MAX_ROOT_COUNT = 4;
+
+float WrapAngle(float angle)
+{
+    return angle - 2.0 * PI * floor((angle + PI) / (2.0 * PI));
+}
 
 float HairFresnel(float cosineIncident, float relativeIor)
 {
@@ -35,17 +46,145 @@ float HairFresnel(float cosineIncident, float relativeIor)
     return clamp(0.5 * (parallel * parallel + perpendicular * perpendicular), 0.0, 1.0);
 }
 
-float PathShift(uint layer, float cuticleTilt)
+float ComputePathAngle(uint path, float height, float thetaD, float ior)
 {
-    if (layer == 1u)
+    float effectiveCosine = cos(thetaD);
+    float effectiveIor = sqrt(max(
+        ior * ior - sin(thetaD) * sin(thetaD),
+        NUMERICAL_EPSILON)) / effectiveCosine;
+    float incidentGamma = asin(clamp(height, -1.0, 1.0));
+    float transmittedGamma = asin(clamp(height / effectiveIor, -1.0, 1.0));
+    float pathIndex = float(path);
+    return 2.0 * pathIndex * transmittedGamma -
+        2.0 * incidentGamma + pathIndex * PI;
+}
+
+float ComputeResidual(
+    uint path,
+    float height,
+    float thetaD,
+    float deltaPhi,
+    float ior)
+{
+    return WrapAngle(ComputePathAngle(path, height, thetaD, ior) - deltaPhi);
+}
+
+float RefineRoot(
+    uint path,
+    float thetaD,
+    float deltaPhi,
+    float ior,
+    float lowerHeight,
+    float upperHeight)
+{
+    float lowerResidual = ComputeResidual(
+        path, lowerHeight, thetaD, deltaPhi, ior);
+    for (int iteration = 0; iteration < ROOT_REFINE_ITERATION_COUNT; ++iteration)
     {
-        return cuticleTilt;
+        float middleHeight = 0.5 * (lowerHeight + upperHeight);
+        float middleResidual = ComputeResidual(
+            path, middleHeight, thetaD, deltaPhi, ior);
+        if (abs(middleResidual) <= ROOT_RESIDUAL_TOLERANCE)
+        {
+            return middleHeight;
+        }
+        if (lowerResidual * middleResidual <= 0.0)
+        {
+            upperHeight = middleHeight;
+        }
+        else
+        {
+            lowerHeight = middleHeight;
+            lowerResidual = middleResidual;
+        }
     }
-    if (layer == 2u)
+    return 0.5 * (lowerHeight + upperHeight);
+}
+
+float EvaluatePathDerivative(
+    uint path,
+    float height,
+    float thetaD,
+    float ior)
+{
+    float stepSize = 1.0e-4;
+    float lowerHeight = max(-ROOT_HEIGHT_LIMIT, height - stepSize);
+    float upperHeight = min(ROOT_HEIGHT_LIMIT, height + stepSize);
+    return (
+        ComputePathAngle(path, upperHeight, thetaD, ior) -
+        ComputePathAngle(path, lowerHeight, thetaD, ior)) /
+        (upperHeight - lowerHeight);
+}
+
+float EvaluateInterfaceWeight(uint path, float thetaD, float ior)
+{
+    float surfaceFresnel = HairFresnel(cos(thetaD), ior);
+    if (path == 0u)
     {
-        return -cuticleTilt;
+        return surfaceFresnel;
     }
-    return 0.0;
+    if (path == 1u)
+    {
+        return (1.0 - surfaceFresnel) * (1.0 - surfaceFresnel);
+    }
+    float internalCosine = sqrt(max(
+        1.0 - sin(thetaD) * sin(thetaD) / (ior * ior),
+        0.0));
+    float internalFresnel = HairFresnel(internalCosine, 1.0 / ior);
+    return (1.0 - surfaceFresnel) *
+        (1.0 - surfaceFresnel) * internalFresnel;
+}
+
+float EvaluatePathLength(
+    uint path,
+    float height,
+    float thetaD,
+    float ior,
+    float fiberRadius)
+{
+    if (path == 0u)
+    {
+        return 0.0;
+    }
+    float effectiveCosine = max(cos(thetaD), 1.0e-4);
+    float effectiveIor = sqrt(max(
+        ior * ior - sin(thetaD) * sin(thetaD),
+        NUMERICAL_EPSILON)) / effectiveCosine;
+    float transmittedHeight = height / effectiveIor;
+    float chordCosine = sqrt(max(
+        1.0 - transmittedHeight * transmittedHeight,
+        0.0));
+    float baseChord = 2.0 * fiberRadius * chordCosine;
+    return path == 1u ? baseChord : baseChord + 4.0 * fiberRadius * chordCosine;
+}
+
+void AccumulateRoot(
+    uint path,
+    float rootHeight,
+    float thetaD,
+    float ior,
+    float fiberRadius,
+    inout float response,
+    inout float weightedPathLength,
+    inout float azimuthalWeightSum,
+    inout float interfaceWeightSum,
+    inout float derivativeSum)
+{
+    float derivative = abs(EvaluatePathDerivative(
+        path, rootHeight, thetaD, ior));
+    if (derivative <= NUMERICAL_EPSILON)
+    {
+        return;
+    }
+    float azimuthalWeight = 1.0 / max(derivative, 1.0e-4);
+    float interfaceWeight = EvaluateInterfaceWeight(path, thetaD, ior);
+    float pathLength = EvaluatePathLength(
+        path, rootHeight, thetaD, ior, fiberRadius);
+    response += interfaceWeight * azimuthalWeight;
+    weightedPathLength += pathLength * azimuthalWeight;
+    azimuthalWeightSum += azimuthalWeight;
+    interfaceWeightSum += interfaceWeight * azimuthalWeight;
+    derivativeSum += derivative;
 }
 
 void main()
@@ -59,55 +198,82 @@ void main()
         return;
     }
 
-    // X 以 deltaPhi repeat，Y 是 roughness slice + thetaD 的线性 atlas。
-    float deltaPhi = (float(coordinate.x) + 0.5) / float(lutSize.x) * 2.0 * PI - PI;
+    // X 以 deltaPhi repeat；Y 仍保留 8 个 roughness slice，但 kernel v2 的
+    // root/Jacobian oracle 不再用经验高斯替代真实方位根，各 slice 共享同一响应。
+    float deltaPhi = (float(coordinate.x) + 0.5) /
+        float(lutSize.x) * 2.0 * PI - PI;
     uint thetaDIndex = uint(coordinate.y) % 64u;
-    uint roughnessIndex = uint(coordinate.y) / 64u;
-    float thetaD =
-        (float(thetaDIndex) + 0.5) / 64.0 * 2.0 * HALF_PI - HALF_PI;
-    float roughness = (float(roughnessIndex) + 0.5) / 8.0;
-
+    float thetaD = (float(thetaDIndex) + 0.5) /
+        64.0 * 2.0 * HALF_PI - HALF_PI;
+    uint path = uint(coordinate.z);
     float ior = generationParameters.contract.x;
-    float radius = generationParameters.contract.y;
-    float azimuthalRoughness = max(
-        generationParameters.contract.w * mix(0.5, 1.5, roughness),
-        0.02);
-    float phase =
-        float(coordinate.z) * PI +
-        2.0 * asin(clamp(sin(deltaPhi * 0.5) * 0.98, -1.0, 1.0));
-    float phaseResidual = sin(0.5 * (phase - deltaPhi));
-    float azimuthal = exp(
-        -0.5 * phaseResidual * phaseResidual /
-        (azimuthalRoughness * azimuthalRoughness));
-    float interfaceFresnel = HairFresnel(cos(thetaD), ior);
-    float pathLength = coordinate.z == 0u
-        ? 0.0
-        : 2.0 * radius * sqrt(max(1.0 - phaseResidual * phaseResidual, 0.0)) *
-            (coordinate.z == 2u ? 3.0 : 1.0);
-    // LUT 只负责方位根的预积分、界面权重和 Jacobian。thetaH 的纵向峰
-    // 必须在 runtime evaluator 以当前材质的 cuticleTilt/roughness 求值，
-    // 否则同一份 LUT 会把 longitudinal lobe 重复乘入一次。
-    float interfaceWeight = interfaceFresnel;
-    if (coordinate.z == 1u)
+    float fiberRadius = generationParameters.contract.y;
+
+    float response = 0.0;
+    float weightedPathLength = 0.0;
+    float azimuthalWeightSum = 0.0;
+    float interfaceWeightSum = 0.0;
+    float derivativeSum = 0.0;
+    int rootCount = 0;
+    float lastRootHeight = -2.0;
+    float previousHeight = -ROOT_HEIGHT_LIMIT;
+    float previousResidual = ComputeResidual(
+        path, previousHeight, thetaD, deltaPhi, ior);
+
+    for (int sampleIndex = 1;
+        sampleIndex < ROOT_SEARCH_SAMPLE_COUNT && rootCount < MAX_ROOT_COUNT;
+        ++sampleIndex)
     {
-        interfaceWeight = (1.0 - interfaceFresnel) * (1.0 - interfaceFresnel);
-    }
-    else if (coordinate.z == 2u)
-    {
-        float internalFresnel = HairFresnel(
-            sqrt(max(1.0 - sin(thetaD) * sin(thetaD) / (ior * ior), 0.0)),
-            1.0 / ior);
-        interfaceWeight =
-            (1.0 - interfaceFresnel) *
-            (1.0 - interfaceFresnel) *
-            internalFresnel;
+        float currentHeight = -ROOT_HEIGHT_LIMIT +
+            2.0 * ROOT_HEIGHT_LIMIT * float(sampleIndex) /
+                float(ROOT_SEARCH_SAMPLE_COUNT - 1);
+        float currentResidual = ComputeResidual(
+            path, currentHeight, thetaD, deltaPhi, ior);
+        bool nearRoot = abs(currentResidual) <= ROOT_RESIDUAL_TOLERANCE;
+        bool crossedRoot = previousResidual * currentResidual < 0.0;
+        if (nearRoot || crossedRoot)
+        {
+            float rootHeight = nearRoot
+                ? currentHeight
+                : RefineRoot(
+                    path,
+                    thetaD,
+                    deltaPhi,
+                    ior,
+                    previousHeight,
+                    currentHeight);
+            if (abs(rootHeight - lastRootHeight) > ROOT_DUPLICATE_TOLERANCE)
+            {
+                AccumulateRoot(
+                    path,
+                    rootHeight,
+                    thetaD,
+                    ior,
+                    fiberRadius,
+                    response,
+                    weightedPathLength,
+                    azimuthalWeightSum,
+                    interfaceWeightSum,
+                    derivativeSum);
+                lastRootHeight = rootHeight;
+                ++rootCount;
+            }
+        }
+        previousHeight = currentHeight;
+        previousResidual = currentResidual;
     }
 
-    float jacobian = 1.0 / max(abs(cos(phaseResidual)), 0.05);
-    float response =
-        clamp(azimuthal * interfaceWeight * jacobian, 0.0, 64.0);
+    float pathLength = azimuthalWeightSum > 0.0
+        ? weightedPathLength / azimuthalWeightSum
+        : 0.0;
+    float interfaceWeight = azimuthalWeightSum > 0.0
+        ? interfaceWeightSum / azimuthalWeightSum
+        : 0.0;
+    float averageDerivative = rootCount > 0
+        ? derivativeSum / float(rootCount)
+        : 0.0;
     imageStore(
         outHairAzimuthalLut,
         coordinate,
-        vec4(response, pathLength, interfaceWeight, jacobian));
+        vec4(response, pathLength, interfaceWeight, averageDerivative));
 }

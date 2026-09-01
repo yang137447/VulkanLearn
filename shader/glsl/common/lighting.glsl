@@ -592,6 +592,83 @@ LightingLobes EvaluateDefaultPbrLightLobes(
     return lobes;
 }
 
+const float NEOX_SKIN_DUAL_LOBE_ROUGHNESS0 = 0.61601;
+const float NEOX_SKIN_DUAL_LOBE_ROUGHNESS1 = 1.06777;
+const float NEOX_SKIN_DUAL_LOBE_MIX = 0.85;
+
+vec3 EvaluateNeoXSkinDualSpecularLight(
+    in vec3 normal_WS,
+    in vec3 pixelPos_WS,
+    in vec3 cameraPos_WS,
+    in vec3 baseColor,
+    in float roughness,
+    in float metallic,
+    in float specular,
+    in vec3 lightDirection_WS,
+    in vec3 radiance)
+{
+    vec3 normal = normalize(normal_WS);
+    vec3 lightDirection = normalize(lightDirection_WS);
+    vec3 viewDirection = normalize(cameraPos_WS - pixelPos_WS);
+    vec3 halfVector = normalize(lightDirection + viewDirection);
+    float normalLight = max(dot(normal, lightDirection), 0.0);
+    float normalView = max(dot(normal, viewDirection), 0.0);
+    float halfView = max(dot(halfVector, viewDirection), 0.0);
+    float averageRoughness = roughness;
+    float lobe0Roughness = max(
+        min(averageRoughness * NEOX_SKIN_DUAL_LOBE_ROUGHNESS0, 1.0),
+        0.02);
+    float lobe1Roughness = min(
+        averageRoughness * NEOX_SKIN_DUAL_LOBE_ROUGHNESS1,
+        1.0);
+    // 源 Skin 的 dual-lobe 使用平均粗糙度控制 Smith G，两个 lobe 只混合 GGX D；
+    // 这样不会把同一份 diffuse 或 shadow 再叠加一次。
+    float distribution = mix(
+        DistributionGGX(normal, halfVector, lobe0Roughness),
+        DistributionGGX(normal, halfVector, lobe1Roughness),
+        NEOX_SKIN_DUAL_LOBE_MIX);
+    float geometry = GeometrySmith(
+        normal,
+        viewDirection,
+        lightDirection,
+        averageRoughness);
+    vec3 dielectricF0 = vec3(specular * 0.08);
+    vec3 f0 = mix(dielectricF0, baseColor, metallic);
+    vec3 fresnel = fresnelSchlick(halfView, f0);
+    return fresnel * distribution * geometry /
+        max(4.0 * normalLight * normalView, 1e-4) *
+        radiance * normalLight;
+}
+
+vec3 CalculateNeoXSkinDualSpecularIbl(
+    in vec3 normal_WS,
+    in vec3 viewDir_WS,
+    in vec3 baseColor,
+    in float roughness,
+    in float metallic,
+    in float specular)
+{
+    float lobe0Roughness = max(
+        min(roughness * NEOX_SKIN_DUAL_LOBE_ROUGHNESS0, 1.0),
+        0.02);
+    float lobe1Roughness = min(
+        roughness * NEOX_SKIN_DUAL_LOBE_ROUGHNESS1,
+        1.0);
+    vec3 dielectricF0 = vec3(specular * 0.08);
+    vec3 f0 = mix(dielectricF0, baseColor, metallic);
+    vec3 lobe0 = CalculateSpecularIblWithF0(
+        normal_WS,
+        viewDir_WS,
+        f0,
+        lobe0Roughness);
+    vec3 lobe1 = CalculateSpecularIblWithF0(
+        normal_WS,
+        viewDir_WS,
+        f0,
+        lobe1Roughness);
+    return mix(lobe0, lobe1, NEOX_SKIN_DUAL_LOBE_MIX);
+}
+
 vec3 EvaluateClearCoatLight(
     in vec3 topNormal_WS,
     in vec3 bottomNormal_WS,

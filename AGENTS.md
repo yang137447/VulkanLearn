@@ -266,7 +266,9 @@ When making changes:
 - Avoid broad refactors unless the task clearly calls for them.
 - Preserve learning-oriented readability over over-abstraction.
 - Generally avoid lambda expressions in engine code. In long flow-heavy files such as `source/renderSystem.cpp`, prefer small named helper functions or clearly scoped private methods so the control flow stays readable and code size does not balloon.
-- Add concise Chinese comments for non-obvious engine and rendering code, especially around data ownership, frozen snapshots, dirty state, Vulkan synchronization, resource lifetime, and intentional performance tradeoffs. Comments should explain design intent rather than restate the code; ordinary API/type names may remain in English, but new or modified code must not leave important design boundaries undocumented.
+- Add concise Chinese comments for non-obvious engine, rendering, and shader code, especially around data ownership, frozen snapshots, dirty state, Vulkan synchronization, resource lifetime, coordinate spaces, texture-channel semantics, mathematical approximations, and intentional performance tradeoffs. Comments should explain design intent rather than restate the code; ordinary API/type names may remain in English, but new or modified code must not leave important design boundaries undocumented.
+- Shader/code migration must begin by reading and understanding the source implementation's comments together with the surrounding behavior. Preserve the original comments' useful intent in concise Chinese comments near the migrated code, including formula meaning, coordinate/UV conventions, branch rationale, source limitations, and deliberately retained quirks. Do not silently discard meaningful source comments merely because names or structure changed.
+- Do not mechanically translate or copy stale source comments. Verify each comment against the migrated behavior, rewrite it for VulkanLearn's ownership boundaries, and explicitly document intentional differences from the source implementation. Obvious syntax does not need comments, but non-obvious migration decisions do.
 
 ## Common Task Map
 

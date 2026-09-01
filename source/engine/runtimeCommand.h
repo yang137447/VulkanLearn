@@ -34,6 +34,11 @@ enum class RuntimeCommandType
     RunEyePerformanceTest,
     RunEyeComputeReloadTest,
     SetDebugViewMode,
+    CaptureScreenshot,
+    SetCameraPosition,
+    SetCameraLookAt,
+    SetCameraPose,
+    GetCameraState,
     SetEnvironmentIntensity,
     SetProceduralSkyParameters,
     SetSpeedTreeStrength,
@@ -79,6 +84,10 @@ struct RuntimeCommand
     float floatValue = 0.0f;
     // 环境压力测试通过值语义投递完整天空参数，执行端只在 active World 所有权侧写回。
     SkyParametersGPU skyParametersValue;
+    // 相机命令通过值语义跨越 Console -> GT，避免 Console 线程持有 World/Camera 裸指针。
+    Eigen::Vector3f cameraPositionValue = Eigen::Vector3f::Zero();
+    Eigen::Vector3f cameraLookAtValue = Eigen::Vector3f::Zero();
+    Eigen::Vector3f cameraUpValue = Eigen::Vector3f(0.0f, 1.0f, 0.0f);
     std::string stringValue;
     std::string sourceText;
 };

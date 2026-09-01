@@ -17,15 +17,20 @@ struct HairGBufferInputs
     float opacity = 1.0f;
     std::array<float, 3> tangent = {1.0f, 0.0f, 0.0f};
     float tangentHandedness = 1.0f;
+    float specular = 0.5f;
     float roughness = 0.5f;
+    float ambientOcclusion = 1.0f;
+    std::array<float, 4> characterLighting = {1.0f, 1.0f, 1.0f, 0.0f};
+    float precomputedShadowFactor = 1.0f;
 };
 
 struct HairGBufferPayload
 {
     std::array<float, 4> gbufferA = {1.0f, 1.0f, 1.0f, 1.0f};
+    std::array<float, 4> gbufferC = {1.0f, 0.5f, 0.5f, 1.0f};
     std::array<float, 4> gbufferD = {0.0f, 0.0f, 0.0f, 0.0f};
+    std::array<float, 4> gbufferE = {1.0f, 1.0f, 1.0f, 0.0f};
     std::array<float, 4> gbufferF = {0.5f, 0.5f, 0.5f, 1.0f};
-    float roughness = 0.5f;
 };
 
 HairGBufferPayload EncodeHairGBuffer(const HairGBufferInputs& inputs);

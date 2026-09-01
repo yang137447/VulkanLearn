@@ -48,6 +48,9 @@ MaterialInputs EvaluateMFPbrInputs(in MaterialFunctionContext context)
         // 保留顶点阶段传来的 T/B/N 方向，避免与烘焙端切线空间产生额外偏差。
         inputs.normal = TransformMaterialNormalToWorld(context, normalTS);
     #endif
+    inputs.tangent = OrthonormalizeMaterialTangent(
+        inputs.normal,
+        inputs.tangent);
 
     inputs.modelInputs.clearCoat.bottomNormal = inputs.normal;
     #if defined(VL_PBR_USE_CLEAR_COAT_INPUTS)

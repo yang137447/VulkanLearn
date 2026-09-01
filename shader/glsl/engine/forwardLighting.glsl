@@ -310,7 +310,8 @@ ForwardLightingResult ShadeHairForwardSurface(in MaterialSurface surface)
     result.shadow = hair.shadow;
     result.shadowCascadeIndex = hair.shadowCascadeIndex;
     result.indirectDiffuse = hair.multipleScattering;
-    result.indirectSpecular = hair.indirectR + hair.indirectTT + hair.indirectTRT;
+    result.indirectSpecular = hair.indirectR + hair.indirectTT +
+        hair.indirectTRT + hair.indirectScatter;
     result.indirectLighting =
         result.indirectDiffuse + result.indirectSpecular;
     result.finalColor = hair.finalColor;
