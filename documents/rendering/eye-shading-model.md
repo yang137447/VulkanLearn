@@ -134,7 +134,7 @@ deferredLighting:
   Set 3 / binding 11: eyeCausticLut (source=worldTexture)
 ```
 
-Deferred GBuffer V1 当前固定 9 个输出：`gbufferA`–`gbufferE`、`gbufferVelocity`、`gbufferF`、`sceneColorBase`、`sceneDepth`。Eye 的 profile/valid-hit/UV/normal/geometry 字段由独立 codec 编解码；`sssSource` 是独立 attachment，经过 rejection、水平/垂直 filter 和 composition 后才进入最终颜色。
+Deferred GBuffer V1 当前固定 9 个输出：`gbufferA`–`gbufferE`、`gbufferVelocity`、`gbufferF`、`sceneColorBase`、`sceneDepth`。其中 A/B/C 已按 UE Legacy 对齐为法线、材质参数、基础色/AO；Eye 的 IOR/caustic strength 使用 B.rg 扩展语义，iris color 使用 C.rgb，opacity 使用 `sceneColorBase.a`。Eye 的 profile/valid-hit/UV/normal/geometry 字段由独立 codec 编解码；`sssSource` 是独立 attachment，经过 rejection、水平/垂直 filter 和 composition 后才进入最终颜色。
 
 `EyeResourceSet` 是一个 World generation 对应的不可变 package，包含 profile 列表、稳定 ID map、LUT metadata、source digest、Compute artifact generation key 和 LUT texture。资源加载顺序保证 Eye resource set 在 Eye MI 解析前完成。
 

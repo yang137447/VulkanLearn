@@ -31,6 +31,7 @@ bool HasStringField(const nlohmann::json& node, const char* fieldName)
 bool IsSupportedFormat(const std::string& format)
 {
     static const std::unordered_set<std::string> kSupportedFormats = {
+        "A2B10G10R10_UNORM_PACK32",
         "R8G8B8A8_SRGB",
         "R8G8B8A8_UNORM",
         "R16G16B16A16_SFLOAT",

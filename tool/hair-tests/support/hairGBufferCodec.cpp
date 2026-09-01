@@ -22,15 +22,16 @@ float DecodeDirection(float value) noexcept
 HairGBufferPayload EncodeHairGBuffer(const HairGBufferInputs& inputs)
 {
     HairGBufferPayload payload;
-    payload.gbufferA = {
-        inputs.absorption[0],
-        inputs.absorption[1],
-        inputs.absorption[2],
-        inputs.opacity};
-    payload.gbufferC = {
+    payload.gbufferA = {0.5f, 0.5f, 1.0f, 0.0f};
+    payload.gbufferB = {
         inputs.characterLighting[0],
         inputs.specular,
         inputs.roughness,
+        0.0f};
+    payload.gbufferC = {
+        inputs.absorption[0],
+        inputs.absorption[1],
+        inputs.absorption[2],
         inputs.ambientOcclusion};
     payload.gbufferD = {
         inputs.scatter,
@@ -47,6 +48,7 @@ HairGBufferPayload EncodeHairGBuffer(const HairGBufferInputs& inputs)
         EncodeDirection(inputs.tangent[1]),
         EncodeDirection(inputs.tangent[2]),
         inputs.tangentHandedness < 0.0f ? -1.0f : 1.0f};
+    payload.sceneColorBase = {0.0f, 0.0f, 0.0f, inputs.opacity};
     return payload;
 }
 
@@ -54,17 +56,17 @@ HairGBufferInputs DecodeHairGBuffer(const HairGBufferPayload& payload)
 {
     HairGBufferInputs inputs;
     inputs.absorption = {
-        payload.gbufferA[0],
-        payload.gbufferA[1],
-        payload.gbufferA[2]};
-    inputs.opacity = payload.gbufferA[3];
-    inputs.characterLighting = {
         payload.gbufferC[0],
+        payload.gbufferC[1],
+        payload.gbufferC[2]};
+    inputs.opacity = payload.sceneColorBase[3];
+    inputs.characterLighting = {
+        payload.gbufferB[0],
         payload.gbufferE[1],
         payload.gbufferE[2],
         payload.gbufferE[3]};
-    inputs.specular = payload.gbufferC[1];
-    inputs.roughness = payload.gbufferC[2];
+    inputs.specular = payload.gbufferB[1];
+    inputs.roughness = payload.gbufferB[2];
     inputs.ambientOcclusion = payload.gbufferC[3];
     inputs.scatter = payload.gbufferD[0];
     inputs.backlit = payload.gbufferD[1];

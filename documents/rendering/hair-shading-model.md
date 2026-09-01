@@ -75,7 +75,7 @@ sigma_a = -log(clamp(BaseColor.rgb, 1/255, 1))
           * u_hairOptical.x / referencePathLength
 ```
 
-Forward 的 `surface.hairAbsorption` 与 Hair GBuffer 的 `gbufferA.rgb` 都保存这份已经转换
+Forward 的 `surface.hairAbsorption` 与 Hair GBuffer 的 `gbufferC.rgb` 都保存这份已经转换
 的结果；Deferred decode 直接恢复它。UE direct evaluator 统一在四倍半径参考光程恢复：
 
 ```text
@@ -152,12 +152,12 @@ Hair evaluator 只有一份，Forward/Deferred 只提供输入与输出壳。For
 Hair GBuffer V1：
 
 ```text
-gbufferA.rgb = hairAbsorption (BaseColor→absorption 结果)
-gbufferA.a   = surface opacity
+gbufferA.rgb = encoded world normal，gbufferA.a = PerObjectGBufferData（当前为 0）
+gbufferB.r   = character ambient multiplier
+gbufferB.g   = Hair specular / R-TT-TRT interface energy scale
+gbufferB.b   = common roughness
 gbufferB.a   = ShadingModelID 7 + SelectiveOutputMask
-gbufferC.r   = character ambient multiplier
-gbufferC.g   = Hair specular / R-TT-TRT interface energy scale
-gbufferC.b   = common roughness
+gbufferC.rgb = hairAbsorption (BaseColor→absorption 结果)
 gbufferC.a   = material AO
 gbufferD.r   = scatter
 gbufferD.g   = backlit
@@ -169,9 +169,10 @@ gbufferE.b   = character local-light multiplier
 gbufferE.a   = achromatic Virtual Light intensity
 gbufferF.rgb = encoded world tangent
 gbufferF.a   = tangent handedness
+sceneColorBase.a = surface opacity
 ```
 
-Hair 必须显式恢复 `gbufferC.g` 的作者 specular 和 `gbufferC.r/gbufferE.gba` 的角色光照；
+Hair 必须显式恢复 `gbufferB.g` 的作者 specular 和 `gbufferB.r/gbufferE.gba` 的角色光照；
 如果像普通旧模型一样固定 specular 为 `0.5`，
 深色发丝的无色 R 路径会被放大成白色高光带。非 Hair 模型继续使用
 `gbufferF.a = anisotropy`。Deferred V1 不偷偷复用通道保存独立 IOR、

@@ -393,21 +393,21 @@
                     <tbody>
                         <tr>
                             <td><code>gbufferA</code></td>
-                            <td><code>R16G16B16A16_SFLOAT</code> 起步，后续可压缩</td>
-                            <td><code>rgb = baseColor</code>, <code>a = opacity</code></td>
-                            <td>当前实现先保存基础颜色和透明度，便于 deferredLighting 直接还原 <code>MaterialSurface</code>。</td>
+                            <td><code>A2B10G10R10_UNORM_PACK32</code></td>
+                            <td><code>rgb = encoded world normal</code>, <code>a = PerObjectGBufferData</code></td>
+                            <td>对齐 UE Legacy 的法线槽位；当前 VulkanLearn 尚未接入 per-object data producer，alpha 写 0。</td>
                         </tr>
                         <tr>
                             <td><code>gbufferB</code></td>
-                            <td><code>R16G16B16A16_SFLOAT</code> 起步，后续可压缩</td>
-                            <td><code>rgb = encoded worldNormal</code>, <code>a = packed ShadingModelID + SelectiveOutputMask</code></td>
-                            <td>法线用 <code>direction * 0.5 + 0.5</code> 写入；alpha 按低 4 位 shading model、高 4 位 optional flags 解释。</td>
+                            <td><code>R16G16B16A16_SFLOAT</code>（特殊模型扩展）</td>
+                            <td><code>r = metallic</code>, <code>g = specular</code>, <code>b = roughness</code>, <code>a = packed ShadingModelID + SelectiveOutputMask</code></td>
+                            <td>alpha 按低 4 位 shading model、高 4 位 optional flags 解释并归一化存储；Eye/Hair 的既有扩展字段继续复用 B.rg。</td>
                         </tr>
                         <tr>
                             <td><code>gbufferC</code></td>
-                            <td><code>R16G16B16A16_SFLOAT</code> 起步，后续可压缩</td>
-                            <td><code>r = metallic</code>, <code>g = specular</code>, <code>b = roughness</code>, <code>a = ambientOcclusion</code></td>
-                            <td>阶段 6 中 <code>specular</code> 先写固定默认值；AO 主要留给阶段 7 的间接光路径使用。</td>
+                            <td><code>R16G16B16A16_SFLOAT</code>（Hair absorption 扩展）</td>
+                            <td><code>rgb = baseColor</code>, <code>a = ambientOcclusion</code></td>
+                            <td>对齐 UE Legacy 的 BaseColor/AO 槽位；Hair 的 <code>rgb</code> 继续保存线性米制 absorption，因此暂不改为 sRGB/8-bit。</td>
                         </tr>
                         <tr>
                             <td><code>gbufferD</code></td>
@@ -436,8 +436,8 @@
                         <tr>
                             <td><code>sceneColorBase</code></td>
                             <td><code>R16G16B16A16_SFLOAT</code></td>
-                            <td><code>rgb = emissive / base pass scene contribution</code>, <code>a = opacity 或 spare</code></td>
-                            <td>不是 GBuffer 槽位。用于对齐 UE deferred base pass 中 emissive 不作为普通 GBuffer 材质属性保存的思路。</td>
+                            <td><code>rgb = emissive / base pass scene contribution</code>, <code>a = opacity 或 SSS transmissionWeight</code></td>
+                            <td>不是 GBuffer 槽位。常规模型保存 opacity；当前 opaque Subsurface 像素复用 alpha 保存 transmission weight。</td>
                         </tr>
                         <tr>
                             <td><code>sceneDepth</code></td>
@@ -526,16 +526,16 @@ float EncodeGBufferPacked(uint shadingModel, uint flags)
 
 uint DecodeShadingModel(float packedValue)
 {
-    return uint(packedValue + 0.5) &amp; 0x0fu;
+    return uint(packedValue * 255.0 + 0.5) &amp; 0x0fu;
 }
 
 uint DecodeGBufferFlags(float packedValue)
 {
-    return uint(packedValue + 0.5) &amp; 0xf0u;
+    return uint(packedValue * 255.0 + 0.5) &amp; 0xf0u;
 }</code></pre>
 
                 <div class="note">
-                    完整对齐后，<code>gbufferB.a</code> 的语义应按 8-bit packed channel 固定下来。VulkanLearn 可以先用 float attachment 承载这个 0-255 的整数值，但 shader codec 必须按低 4 bit / 高 4 bit 的 UE-style 语义编写，避免后续压缩格式时再改业务逻辑。
+                    <code>gbufferB.a</code> 按 8-bit packed channel 固定语义，实际 attachment 值使用 <code>packed / 255.0</code> 的归一化表示；decode 先乘回 255，再按低 4 bit / 高 4 bit 解释 UE-style shading model 与 optional flags。
                 </div>
             </section>
 

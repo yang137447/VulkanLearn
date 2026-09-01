@@ -54,15 +54,17 @@ EyeGBufferPayload EncodeEyeGBuffer(
     const EyeMaterialGBufferInputs& inputs)
 {
     EyeGBufferPayload payload;
-    payload.gbufferA = {
-        inputs.irisColor[0],
-        inputs.irisColor[1],
-        inputs.irisColor[2],
-        inputs.opacity};
-    payload.gbufferC = {
+    // Eye codec 只覆盖模型专用字段；A 的 world normal/per-object data 由通用 codec 写入。
+    payload.gbufferA = {0.5f, 0.5f, 1.0f, 0.0f};
+    payload.gbufferB = {
         inputs.corneaIor,
         inputs.causticStrength,
         inputs.roughness,
+        0.0f};
+    payload.gbufferC = {
+        inputs.irisColor[0],
+        inputs.irisColor[1],
+        inputs.irisColor[2],
         inputs.ambientOcclusion};
     payload.gbufferD = {
         inputs.irisUv[0],
@@ -91,6 +93,7 @@ EyeGBufferPayload EncodeEyeGBuffer(
         inputs.irisNormal[1] * 0.5f + 0.5f,
         inputs.irisNormal[2] * 0.5f + 0.5f,
         inputs.irisDistance};
+    payload.sceneColorBase = {0.0f, 0.0f, 0.0f, inputs.opacity};
     return payload;
 }
 
@@ -99,13 +102,13 @@ EyeMaterialGBufferInputs DecodeEyeGBuffer(
 {
     EyeMaterialGBufferInputs inputs;
     inputs.irisColor = {
-        payload.gbufferA[0],
-        payload.gbufferA[1],
-        payload.gbufferA[2]};
-    inputs.opacity = payload.gbufferA[3];
-    inputs.corneaIor = payload.gbufferC[0];
-    inputs.causticStrength = payload.gbufferC[1];
-    inputs.roughness = payload.gbufferC[2];
+        payload.gbufferC[0],
+        payload.gbufferC[1],
+        payload.gbufferC[2]};
+    inputs.opacity = payload.sceneColorBase[3];
+    inputs.corneaIor = payload.gbufferB[0];
+    inputs.causticStrength = payload.gbufferB[1];
+    inputs.roughness = payload.gbufferB[2];
     inputs.ambientOcclusion = payload.gbufferC[3];
     inputs.irisUv = {
         payload.gbufferD[0],

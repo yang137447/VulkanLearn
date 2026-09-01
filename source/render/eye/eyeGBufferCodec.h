@@ -6,7 +6,7 @@
 namespace VL
 {
 
-// Eye Deferred GBuffer V1 独占 D/E/F/Velocity 的 Eye 语义；版本变化必须同步
+// Eye Deferred GBuffer V1 独占 B/D/E/F/Velocity 的 Eye 语义；版本变化必须同步
 // GLSL codec、shader ABI 和 round-trip tests，不能静默复用旧 packing。
 inline constexpr uint32_t EyeGBufferEncodingVersion = 1;
 
@@ -34,11 +34,13 @@ struct EyeMaterialGBufferInputs
 struct EyeGBufferPayload
 {
     std::array<float, 4> gbufferA{};
+    std::array<float, 4> gbufferB{};
     std::array<float, 4> gbufferC{};
     std::array<float, 4> gbufferD{};
     std::array<float, 4> gbufferE{};
     std::array<float, 4> gbufferVelocity{};
     std::array<float, 4> gbufferF{};
+    std::array<float, 4> sceneColorBase{};
 };
 
 EyeGBufferPayload EncodeEyeGBuffer(

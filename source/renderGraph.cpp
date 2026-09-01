@@ -1801,7 +1801,11 @@ void RenderGraph::MaybeFailDescriptorCreation()
 
 vk::Format RenderGraph::GetFormat(const std::string& formatStr)
 {
-    if (formatStr == "R8G8B8A8_SRGB")
+    if (formatStr == "A2B10G10R10_UNORM_PACK32")
+    {
+        return vk::Format::eA2B10G10R10UnormPack32;
+    }
+    else if (formatStr == "R8G8B8A8_SRGB")
     {
         return vk::Format::eR8G8B8A8Srgb;
     }

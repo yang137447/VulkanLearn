@@ -46,13 +46,17 @@ struct SubsurfaceProfileMaterialGBufferInputs
     float transmissionWeight = 0.0f;
 };
 
-// 三类 SSS codec 的 CPU 表示，模拟 GLSL GBufferA/D/F 通道；不属于运行时资源包。
+// 三类 SSS codec 的 CPU 表示，模拟 GLSL GBufferA/B/C/D/E/F 与 sceneColorBase；
+// 不属于运行时资源包。
 struct SubsurfaceGBufferPayload
 {
     std::array<float, 4> gbufferA{};
+    std::array<float, 4> gbufferB{};
+    std::array<float, 4> gbufferC{};
     std::array<float, 4> gbufferD{};
     std::array<float, 4> gbufferE{};
     std::array<float, 4> gbufferF{};
+    std::array<float, 4> sceneColorBase{};
 };
 
 uint32_t DecodeSubsurfaceDiscreteId(float encodedValue);

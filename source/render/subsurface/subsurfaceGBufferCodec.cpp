@@ -13,7 +13,9 @@ SubsurfaceGBufferPayload EncodeSubsurfaceGBuffer(
 {
     // CPU codec 与 gbufferCodec.glsl 保持同一通道顺序，只用于合同 round-trip 测试。
     SubsurfaceGBufferPayload payload;
-    payload.gbufferA[3] = inputs.transmissionWeight;
+    payload.gbufferA = {0.5f, 0.5f, 1.0f, 0.0f};
+    payload.gbufferB = {0.0f, 0.5f, 1.0f, 0.0f};
+    payload.gbufferC = {1.0f, 1.0f, 1.0f, 1.0f};
     payload.gbufferD = {
         inputs.subsurfaceColor[0],
         inputs.subsurfaceColor[1],
@@ -26,6 +28,7 @@ SubsurfaceGBufferPayload EncodeSubsurfaceGBuffer(
         inputs.backscatterWeight,
         inputs.thickness,
     };
+    payload.sceneColorBase[3] = inputs.transmissionWeight;
     return payload;
 }
 
@@ -43,7 +46,7 @@ SubsurfaceMaterialGBufferInputs DecodeSubsurfaceGBuffer(
     inputs.backscatterPower = payload.gbufferF[1];
     inputs.backscatterWeight = payload.gbufferF[2];
     inputs.thickness = payload.gbufferF[3];
-    inputs.transmissionWeight = payload.gbufferA[3];
+    inputs.transmissionWeight = payload.sceneColorBase[3];
     return inputs;
 }
 
@@ -52,6 +55,9 @@ SubsurfaceGBufferPayload EncodePreintegratedSkinGBuffer(
 {
     // 离散 skinLutId 以 float 存入 GBuffer，decode 端统一执行 +0.5 的确定性还原。
     SubsurfaceGBufferPayload payload;
+    payload.gbufferA = {0.5f, 0.5f, 1.0f, 0.0f};
+    payload.gbufferB = {0.0f, 0.5f, 1.0f, 0.0f};
+    payload.gbufferC = {1.0f, 1.0f, 1.0f, 1.0f};
     payload.gbufferD = {
         static_cast<float>(inputs.skinLutId),
         inputs.thickness,
@@ -87,6 +93,9 @@ SubsurfaceGBufferPayload EncodeSubsurfaceProfileGBuffer(
 {
     // profileId 与 weight/thickness/transmissionWeight 共用 GBufferD，避免新增 attachment。
     SubsurfaceGBufferPayload payload;
+    payload.gbufferA = {0.5f, 0.5f, 1.0f, 0.0f};
+    payload.gbufferB = {0.0f, 0.5f, 1.0f, 0.0f};
+    payload.gbufferC = {1.0f, 1.0f, 1.0f, 1.0f};
     payload.gbufferD = {
         static_cast<float>(inputs.profileId),
         inputs.subsurfaceWeight,

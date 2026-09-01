@@ -141,10 +141,12 @@ CPU 只解析版本、创建 Vulkan image/buffer/descriptor/pipeline、提交 di
 Cloth 使用现有 attachment，不改变其它模型的字段所有权：
 
 ```text
-GBufferA.rgb = baseColor
+GBufferA.rgb = encoded world normal，GBufferA.a = PerObjectGBufferData（当前为 0）
+GBufferB.r   = metallic，必须为 0
+GBufferB.g   = specular（当前 Cloth 使用默认介电值）
+GBufferB.b   = base roughness
 GBufferB.a   = packed shadingModelId / flags，Cloth ID = 8
-GBufferC.r   = metallic，必须为 0
-GBufferC.b   = base roughness
+GBufferC.rgb = baseColor
 GBufferC.a   = ambient occlusion
 GBufferD.rgb = sheenColor，线性 RGB，已折叠 weight
 GBufferD.a   = sheenRoughness

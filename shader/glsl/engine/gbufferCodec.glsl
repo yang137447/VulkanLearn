@@ -5,15 +5,16 @@
 
 struct GBufferData
 {
-    // A: base color + opacity.
+    // A: encoded world normal + UE Legacy PerObjectGBufferData。
+    // 当前 VulkanLearn 尚未接入 per-object data producer，因此 alpha 写 0。
     vec4 gbufferA;
-    // B: world normal encoded to 0..1.
+    // B: metallic, specular, roughness + normalized packed ID/flags。
     // Alpha uses a UE-style packed integer value:
     //   low  4 bits: ShadingModelID, enough for 0..15 material shading models.
     //   high 4 bits: feature flags / SelectiveOutputMask, reserved for later phases.
-    // The attachment is float today, but the value is intentionally treated like an 8-bit integer.
+    // The attachment stores this 8-bit semantic as 0..1, matching UE's UNORM target.
     vec4 gbufferB;
-    // C: metallic, specular, roughness, ambient occlusion.
+    // C: base color + ambient occlusion.
     vec4 gbufferC;
     // D: shading-model-specific custom data. Valid when GBUFFER_HAS_CUSTOM_DATA_MASK is set.
     vec4 gbufferD;
@@ -56,20 +57,19 @@ float EncodeGBufferPacked(uint shadingModel, uint flags)
     //   shadingModel 0000ssss & 0x0f -> 0000ssss
     //   flags        ffff0000 & 0xf0 -> ffff0000
     //   packed                 -> ffffssss
-    return float((shadingModel & 0x0fu) | (flags & 0xf0u));
+    return float((shadingModel & 0x0fu) | (flags & 0xf0u)) / 255.0;
 }
 
 uint DecodeGBufferShadingModel(float packedValue)
 {
-    // The packed value is stored in a float render target, so round it back to the intended
-    // integer value before masking out the low 4-bit ShadingModelID.
-    return uint(packedValue + 0.5) & 0x0fu;
+    // The packed byte is normalized in the attachment; restore the integer before masking.
+    return uint(packedValue * 255.0 + 0.5) & 0x0fu;
 }
 
 uint DecodeGBufferFlags(float packedValue)
 {
     // High 4 bits are SelectiveOutputMask flags such as custom data, velocity and anisotropy.
-    return uint(packedValue + 0.5) & 0xf0u;
+    return uint(packedValue * 255.0 + 0.5) & 0xf0u;
 }
 
 vec2 CalculateGBufferVelocity(vec4 clipPosition, vec4 previousClipPosition)
@@ -205,41 +205,50 @@ bool IsEyePackedProfileVersionValid(uint packedProfile)
 GBufferData EncodeGBuffer(in MaterialSurface surface, in GBufferPixelData pixelData)
 {
     GBufferData data;
-    // Eye 的 A 通道保存 Base Pass 已采样的 iris color；其它模型保持既有 baseColor 语义。
-    data.gbufferA = surface.shadingModel == SHADING_MODEL_EYE
-        ? vec4(surface.modelInputs.eye.irisColor, surface.opacity)
-        : surface.shadingModel == SHADING_MODEL_HAIR
-            ? vec4(surface.hairAbsorption, surface.opacity)
-            : vec4(surface.baseColor, surface.opacity);
-    // ID 2 为了保持 opaque GBuffer 预算，把 transmissionWeight 放在 GBufferA.a。
-    if (surface.shadingModel == SHADING_MODEL_SUBSURFACE)
-    {
-        data.gbufferA.a =
-            surface.modelInputs.subsurface.transmissionWeight;
-    }
-    data.gbufferB = vec4(EncodeGBufferDirection(normalize(surface.worldNormal)), EncodeGBufferPacked(surface.shadingModel, surface.selectiveOutputMask));
-    // Eye metallic/specular 不参与 evaluator；这两个通道改存 IOR 与 caustic strength。
-    data.gbufferC = surface.shadingModel == SHADING_MODEL_EYE
+    // 对齐 UE Legacy：A 只保存法线和 PerObjectGBufferData，不再承担 BaseColor/Opacity。
+    data.gbufferA = vec4(
+        EncodeGBufferDirection(normalize(surface.worldNormal)),
+        0.0);
+    // Eye metallic/specular 不参与 evaluator；沿用原有扩展合同，把 IOR 与 caustic
+    // strength 放在 B.rg。Hair 的 B.r 继续保存角色环境光倍率。
+    data.gbufferB = surface.shadingModel == SHADING_MODEL_EYE
         ? vec4(
             surface.modelInputs.eye.corneaIor,
             surface.modelInputs.eye.causticStrength,
             surface.roughness,
-            surface.ambientOcclusion)
-        // Skin 的 u_skinSpecular 需要跨过 deferred GBuffer；其它旧模型继续
-        // 保留 V1 固定 0.5 的介电高光合同，避免无关材质 ABI 漂移。
-        : surface.shadingModel == SHADING_MODEL_PREINTEGRATED_SKIN
-        ? vec4(
-            surface.metallic,
-            surface.specular,
-            surface.roughness,
-            surface.ambientOcclusion)
+            EncodeGBufferPacked(
+                surface.shadingModel,
+                surface.selectiveOutputMask))
         : surface.shadingModel == SHADING_MODEL_HAIR
         ? vec4(
             surface.modelInputs.hair.characterLighting.x,
             surface.specular,
             surface.roughness,
-            surface.ambientOcclusion)
-        : vec4(surface.metallic, 0.5, surface.roughness, surface.ambientOcclusion);
+            EncodeGBufferPacked(
+                surface.shadingModel,
+                surface.selectiveOutputMask))
+        : surface.shadingModel == SHADING_MODEL_PREINTEGRATED_SKIN
+        ? vec4(
+            surface.metallic,
+            surface.specular,
+            surface.roughness,
+            EncodeGBufferPacked(
+                surface.shadingModel,
+                surface.selectiveOutputMask))
+        : vec4(
+            surface.metallic,
+            // 其它旧模型继续保留 V1 固定 0.5 的介电高光合同。
+            0.5,
+            surface.roughness,
+            EncodeGBufferPacked(
+                surface.shadingModel,
+                surface.selectiveOutputMask));
+    // C 承担 UE Legacy 的 BaseColor/AO；Eye 与 Hair 的现有特殊 BaseColor 语义随槽位迁移。
+    data.gbufferC = surface.shadingModel == SHADING_MODEL_EYE
+        ? vec4(surface.modelInputs.eye.irisColor, surface.ambientOcclusion)
+        : surface.shadingModel == SHADING_MODEL_HAIR
+        ? vec4(surface.hairAbsorption, surface.ambientOcclusion)
+        : vec4(surface.baseColor, surface.ambientOcclusion);
     data.gbufferD = surface.shadingModel == SHADING_MODEL_EYE
         ? vec4(
             surface.modelInputs.eye.irisUv,
@@ -318,35 +327,33 @@ GBufferData EncodeGBuffer(in MaterialSurface surface, in GBufferPixelData pixelD
             encodedBottomNormal);
     }
     data.sceneColorBase = vec4(surface.emissiveColor, surface.opacity);
+    if (surface.shadingModel == SHADING_MODEL_SUBSURFACE)
+    {
+        // ID 2 当前为 opaque，复用非 GBuffer 的 sceneColorBase.a 保存透射权重；
+        // 这样 A.a 可以恢复为 UE Legacy 的 PerObjectGBufferData。
+        data.sceneColorBase.a =
+            surface.modelInputs.subsurface.transmissionWeight;
+    }
     return data;
 }
 
 MaterialSurface DecodeGBufferSurface(in GBufferData data)
 {
     MaterialSurface surface = CreateDefaultMaterialSurface();
-    surface.baseColor = data.gbufferA.rgb;
-    surface.opacity = data.gbufferA.a;
-    surface.worldNormal = DecodeGBufferDirection(data.gbufferB.rgb);
+    surface.worldNormal = DecodeGBufferDirection(data.gbufferA.rgb);
     surface.shadingModel = DecodeGBufferShadingModel(data.gbufferB.a);
     surface.selectiveOutputMask = DecodeGBufferFlags(data.gbufferB.a);
-    surface.metallic = data.gbufferC.r;
-    surface.roughness = data.gbufferC.b;
+    surface.metallic = data.gbufferB.r;
+    surface.specular = data.gbufferB.g;
+    surface.roughness = data.gbufferB.b;
+    surface.baseColor = data.gbufferC.rgb;
     surface.ambientOcclusion = data.gbufferC.a;
+    // Eye metallic/specular 使用模型专用 B.rg；Surface evaluator 仍按原合同使用
+    // 非金属默认高光。Skin/Hair 的 specular 则分别消费 B.g。
     if (surface.shadingModel == SHADING_MODEL_EYE)
     {
         surface.metallic = 0.0;
         surface.specular = 0.5;
-    }
-    else if (surface.shadingModel == SHADING_MODEL_PREINTEGRATED_SKIN)
-    {
-        // 只有 Skin 消费 GBuffer C.g；其它模型仍使用旧的固定介电高光值。
-        surface.specular = data.gbufferC.g;
-    }
-    else if (surface.shadingModel == SHADING_MODEL_HAIR)
-    {
-        // Hair 的 R/TT/TRT 能量基线来自源材质 u_specular，不能在 Deferred
-        // 解码时回退到普通模型的固定 0.5，否则深色发丝会出现白色高光带。
-        surface.specular = data.gbufferC.g;
     }
     surface.customData = data.gbufferD;
     if (surface.shadingModel == SHADING_MODEL_CLEAR_COAT)
@@ -390,6 +397,7 @@ MaterialSurface DecodeGBufferSurface(in GBufferData data)
         }
     }
     surface.emissiveColor = data.sceneColorBase.rgb;
+    surface.opacity = data.sceneColorBase.a;
     if (surface.shadingModel == SHADING_MODEL_SUBSURFACE)
     {
         surface.opacity = 1.0;
@@ -399,7 +407,8 @@ MaterialSurface DecodeGBufferSurface(in GBufferData data)
         surface.modelInputs.subsurface.backscatterPower = data.gbufferF.y;
         surface.modelInputs.subsurface.backscatterWeight = data.gbufferF.z;
         surface.modelInputs.subsurface.thickness = data.gbufferF.w;
-        surface.modelInputs.subsurface.transmissionWeight = data.gbufferA.a;
+        surface.modelInputs.subsurface.transmissionWeight =
+            data.sceneColorBase.a;
     }
     else if (surface.shadingModel == SHADING_MODEL_PREINTEGRATED_SKIN)
     {
@@ -438,9 +447,9 @@ MaterialSurface DecodeGBufferSurface(in GBufferData data)
         float radial = length((data.gbufferD.xy - vec2(0.5)) * 2.0);
         float pupilRatioEdge = pupilRatio + 0.04;
         float limbusStart = 1.0 - limbusRatio;
-        surface.baseColor = data.gbufferA.rgb;
+        surface.baseColor = data.gbufferC.rgb;
         surface.modelInputs.eye.corneaNormal = surface.worldNormal;
-        surface.modelInputs.eye.corneaIor = data.gbufferC.r;
+        surface.modelInputs.eye.corneaIor = data.gbufferB.r;
         surface.modelInputs.eye.irisNormal =
             DecodeGBufferDirection(data.gbufferF.rgb);
         surface.modelInputs.eye.irisPlaneNormal = surface.worldNormal;
@@ -448,7 +457,7 @@ MaterialSurface DecodeGBufferSurface(in GBufferData data)
         surface.modelInputs.eye.irisRadius = irisRadius;
         surface.modelInputs.eye.pupilRadius = pupilRatio * irisRadius;
         surface.modelInputs.eye.limbusWidth = limbusRatio * irisRadius;
-        surface.modelInputs.eye.irisColor = data.gbufferA.rgb;
+        surface.modelInputs.eye.irisColor = data.gbufferC.rgb;
         surface.modelInputs.eye.scleraColor = data.gbufferE.rgb;
         // Unknown packing versions must not leak stale UV/profile data into the
         // evaluator; neutral values force the invalid-hit path instead.
@@ -460,7 +469,7 @@ MaterialSurface DecodeGBufferSurface(in GBufferData data)
             : 0.0;
         surface.modelInputs.eye.causticProfileId = float(profilePair & 15u);
         surface.modelInputs.eye.scleraProfileId = float((profilePair >> 4u) & 15u);
-        surface.modelInputs.eye.causticStrength = data.gbufferC.g;
+        surface.modelInputs.eye.causticStrength = data.gbufferB.g;
         surface.modelInputs.eye.validIrisHit = float(validIrisHit);
         surface.modelInputs.eye.irisHitDistance = data.gbufferF.a;
         surface.modelInputs.eye.pupilMask = float(validIrisHit) *
@@ -475,8 +484,8 @@ MaterialSurface DecodeGBufferSurface(in GBufferData data)
     {
         // Deferred V1 只从 GBuffer 恢复已冻结的 Hair 子集；IOR/radius 使用
         // LUT 合同的固定默认值，不能把普通通道偷偷解释成新的资产字段。
-        surface.hairAbsorption = data.gbufferA.rgb;
-        surface.modelInputs.hair.absorption = data.gbufferA.rgb;
+        surface.hairAbsorption = data.gbufferC.rgb;
+        surface.modelInputs.hair.absorption = data.gbufferC.rgb;
         surface.modelInputs.hair.scatter = surface.customData.r;
         surface.modelInputs.hair.backlit = surface.customData.g;
         surface.modelInputs.hair.cuticleTilt = surface.customData.b;
@@ -487,7 +496,7 @@ MaterialSurface DecodeGBufferSurface(in GBufferData data)
         // Hair 独占 C.r 与 E.gba，冻结环境/方向/局部/虚拟光四个标量；E.r
         // 继续保存预计算阴影，Forward 与 Deferred 因而消费同一角色光照合同。
         surface.modelInputs.hair.characterLighting = vec4(
-            surface.metallic,
+            data.gbufferB.r,
             surface.precomputedShadowFactors.gba);
         surface.metallic = 0.0;
         // NeoX pbr_hair_transparent 的 roughness 直接进入 Hair lobe；Deferred

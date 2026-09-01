@@ -247,16 +247,16 @@ V1 对 `u_skinSurface.w` 这个静态作者参数仍要求为 `0`，材质范围
 
 ### 5.2 GBuffer Packing
 
-| ID | GBufferA.a | GBufferD | GBufferF |
-| --- | --- | --- | --- |
-| 2 | `transmissionWeight` | `color.rgb, weight` | `wrapWidth, backscatterPower, backscatterWeight, thickness` |
-| 3 | 普通 opacity | `skinLutId, thickness, thicknessScale, weight` | `curvature, transmissionWeight, 0, 0` |
-| 5 | 普通 opacity | `profileId, weight, thickness, transmissionWeight` | 普通 tangent / anisotropy |
+| ID | GBufferB/C | GBufferD | GBufferF | sceneColorBase.a |
+| --- | --- | --- | --- | --- |
+| 2 | `metallic/specular/roughness` + `baseColor/AO` | `color.rgb, weight` | `wrapWidth, backscatterPower, backscatterWeight, thickness` | `transmissionWeight` |
+| 3 | `metallic/specular/roughness` + `baseColor/AO` | `skinLutId, thickness, thicknessScale, weight` | `curvature, transmissionWeight, 0, 0` | 普通 opacity |
+| 5 | `metallic/specular/roughness` + `baseColor/AO` | `profileId, weight, thickness, transmissionWeight` | 普通 tangent / anisotropy | 普通 opacity |
 
-ID 2 当前只允许 Opaque，因此借用 `GBufferA.a` 保存 transmission weight，并在 decode 后
+ID 2 当前只允许 Opaque，因此借用 `sceneColorBase.a` 保存 transmission weight，并在 decode 后
 恢复 opacity 为 1。CPU codec 只用于 encode/decode 合同测试，不生成任何 lookup 数据。
 
-对于 ID 3，`GBufferC.g` 在 Skin 像素中保存 `MaterialInputs.specular`；其它旧模型
+对于 ID 3，`GBufferB.g` 在 Skin 像素中保存 `MaterialInputs.specular`；其它旧模型
 继续使用固定的 `0.5` 介电高光值，避免无关材质改变既有编码合同。
 
 NeoX Skin 的角色光照倍率单独保存于 `GBufferE`，不复用曲率或底层法线通道：

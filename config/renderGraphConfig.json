@@ -1,6 +1,7 @@
 {
     "configHelp": {
         "formatSupport": [
+            "A2B10G10R10_UNORM_PACK32",
             "R8G8B8A8_SRGB",
             "R8G8B8A8_UNORM",
             "R16G16B16A16_SFLOAT",
@@ -150,7 +151,7 @@
         },
         {
             "name": "gbufferA",
-            "format": "R16G16B16A16_SFLOAT",
+            "format": "A2B10G10R10_UNORM_PACK32",
             "widthScale": 1,
             "heightScale": 1,
             "usage": [
