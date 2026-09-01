@@ -51,6 +51,11 @@ material groups. Texture live preview still has no descriptor replacement
 transaction; texture-inspector opening, event listing, and some navigation host
 routes remain integration gaps.
 
+When an active World and an open MI document are available, the runtime queues
+the same preview connection automatically, and reconnects after an MI or World
+switch. The ImGui panel therefore does not require a separate `Connect Preview`
+action; the explicit command remains available for protocol clients and tests.
+
 The renderer-independent document service and ImGui command producer already
 define typed `renderMode`, `shadingModel`, and `cullMode` edits. Direct
 runtime-facade routing for those Set/Clear commands must remain an explicit
@@ -81,6 +86,7 @@ P0 supports:
   `Ctrl+S` semantics;
 - sparse JSON generation, source-digest conflict detection, and atomic replace;
 - an optional typed preview bridge to a same-path live `MaterialInstance`;
+- automatic preview connection for the active MI document when a World is ready;
 - one versioned command and result protocol shared by ImGui, Console, AI, and
   runtime tests.
 

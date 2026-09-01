@@ -71,7 +71,7 @@ SliderRange ResolveSliderRange(
         return {parameter.minValue, parameter.maxValue};
     }
 
-    // 旧 M_ 文件没有范围时仍使用滑块，并根据当前值生成可编辑的稳定兜底范围。
+    // 旧 M_ 文件没有范围时按默认值生成固定兜底，避免错误输入继续扩大可调区间。
     const float magnitude = std::abs(currentValue);
     float extent = std::max(1.0f, magnitude * 2.0f);
     if (!std::isfinite(extent)) extent = 1.0f;
@@ -119,11 +119,6 @@ bool Matches(const std::string& text, const char* filter)
     return filter == nullptr || *filter == '\0' || text.find(filter) != std::string::npos;
 }
 
-Eigen::Vector3f ToEigenVector(const std::array<float, 3>& value)
-{
-    return Eigen::Vector3f(value[0], value[1], value[2]);
-}
-
 VL::Editor::Selection::MaterialInstanceModelContext ToSelectionModel(
     const MaterialInstanceModelSnapshot& model)
 {
@@ -133,11 +128,6 @@ VL::Editor::Selection::MaterialInstanceModelContext ToSelectionModel(
     result.objectId = model.objectId;
     result.displayName = model.displayName;
     result.objectIdentity = model.objectIdentity;
-    result.worldBoundsMin = ToEigenVector(model.worldBoundsMin);
-    result.worldBoundsMax = ToEigenVector(model.worldBoundsMax);
-    result.hasWorldBounds = result.worldBoundsMin.allFinite() &&
-        result.worldBoundsMax.allFinite() &&
-        !(result.worldBoundsMin.array() > result.worldBoundsMax.array()).any();
     result.materials.reserve(model.materials.size());
     for (const MaterialInstanceModelMaterialSnapshot& material : model.materials)
     {
@@ -149,11 +139,6 @@ VL::Editor::Selection::MaterialInstanceModelContext ToSelectionModel(
         selectionMaterial.materialSlotName = material.materialSlotName;
         selectionMaterial.materialInstancePath = material.materialInstancePath;
         selectionMaterial.displayName = material.materialSlotName;
-        selectionMaterial.worldBoundsMin = ToEigenVector(material.worldBoundsMin);
-        selectionMaterial.worldBoundsMax = ToEigenVector(material.worldBoundsMax);
-        selectionMaterial.hasWorldBounds = selectionMaterial.worldBoundsMin.allFinite() &&
-            selectionMaterial.worldBoundsMax.allFinite() &&
-            !(selectionMaterial.worldBoundsMin.array() > selectionMaterial.worldBoundsMax.array()).any();
         result.materials.push_back(std::move(selectionMaterial));
     }
     return result;
@@ -171,11 +156,6 @@ VL::Editor::Selection::MaterialInstanceSelection ToSelection(
     result.materialSlotIndex = material.materialSlotIndex;
     result.materialSlotName = material.materialSlotName;
     result.materialInstancePath = material.materialInstancePath;
-    result.worldBoundsMin = ToEigenVector(material.worldBoundsMin);
-    result.worldBoundsMax = ToEigenVector(material.worldBoundsMax);
-    result.hasWorldBounds = result.worldBoundsMin.allFinite() &&
-        result.worldBoundsMax.allFinite() &&
-        !(result.worldBoundsMin.array() > result.worldBoundsMax.array()).any();
     result.modelContext = ToSelectionModel(model);
     return result;
 }
@@ -222,6 +202,12 @@ EditorCommandEnvelope MakePathCommand(
         command.payload = VL::ResetMaterialInstanceOverridesPayload{
             assetPath,
             VL::EditorResetScope::All};
+    }
+    else if (type == VL::EditorCommandType::CloseMaterialInstanceAsset)
+    {
+        command.payload = VL::CloseMaterialInstanceAssetPayload{
+            assetPath,
+            VL::EditorDirtyDocumentPolicy::DiscardChanges};
     }
     return command;
 }
@@ -332,6 +318,10 @@ void MaterialInstanceAssetEditorPanel::SetSceneSelectionSink(
 void MaterialInstanceAssetEditorPanel::SetSnapshot(const MaterialInstanceEditorSnapshot& value)
 {
     snapshot = value;
+    // selectedDocumentPath 是异步服务快照，不能反向驱动 ImGui 选中状态；
+    // 否则旧快照返回时会把用户刚点开的页签抢回去。
+    if (snapshot.selectedDocumentPath == submittedTabSelection)
+        submittedTabSelection.clear();
     if (!snapshot.activeDocument ||
         snapshot.activeDocument->assetPath != pendingParameterEditAssetPath ||
         snapshot.activeDocument->revision != pendingParameterEditRevision)
@@ -344,6 +334,25 @@ void MaterialInstanceAssetEditorPanel::SetSnapshot(const MaterialInstanceEditorS
     {
         openTexturePicker = false;
         pickerSlot.clear();
+    }
+    for (auto iterator = pendingTabClosures.begin();
+         iterator != pendingTabClosures.end();)
+    {
+        const bool stillOpen = std::find_if(
+            snapshot.documentTabs.begin(),
+            snapshot.documentTabs.end(),
+            [path = *iterator](const MaterialInstanceAssetEntry& tab)
+            {
+                return tab.assetPath == path;
+            }) != snapshot.documentTabs.end();
+        if (!stillOpen)
+        {
+            iterator = pendingTabClosures.erase(iterator);
+        }
+        else
+        {
+            ++iterator;
+        }
     }
 }
 
@@ -370,6 +379,16 @@ void MaterialInstanceAssetEditorPanel::Submit(EditorCommandEnvelope command)
 }
 
 #ifdef VULKANLEARN_ENABLE_DEVELOPER_UI
+
+bool DrawCompactResetButton()
+{
+    const bool clicked = ImGui::SmallButton("\xE2\x86\xB6");
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+    {
+        ImGui::SetTooltip("Reset to M_ default");
+    }
+    return clicked;
+}
 
 void MaterialInstanceAssetEditorPanel::Render()
 {
@@ -424,10 +443,29 @@ void MaterialInstanceAssetEditorPanel::RenderSceneModels()
             ? model.objectIdentity
             : model.displayName) + "###scene_model_" +
             std::to_string(model.objectId);
-        if (ImGui::Selectable(label.c_str(), selected) &&
-            sceneSelectionSink != nullptr)
+        if (ImGui::Selectable(label.c_str(), selected))
         {
-            sceneSelectionSink->RequestModelSelection(ToSelectionModel(model));
+            if (sceneSelectionSink != nullptr)
+            {
+                sceneSelectionSink->RequestModelSelection(ToSelectionModel(model));
+            }
+            // 选中模型后立即打开该模型的首个材质，避免右侧 Inspector 继续停留在旧对象。
+            if (!model.materials.empty())
+            {
+                const MaterialInstanceModelMaterialSnapshot& material = model.materials.front();
+                pendingTabSelection = material.materialInstancePath;
+                submittedTabSelection.clear();
+                EditorCommandEnvelope command;
+                command.type = VL::EditorCommandType::OpenMaterialInstanceAsset;
+                command.payload = VL::OpenMaterialInstanceAssetPayload{
+                    material.materialInstancePath,
+                    EditorNavigationOrigin{
+                        model.scenePath,
+                        model.objectIdentity,
+                        material.materialSlotIndex,
+                        material.materialSlotName}};
+                Submit(std::move(command));
+            }
         }
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
         {
@@ -493,12 +531,6 @@ void MaterialInstanceAssetEditorPanel::RenderToolbar()
         Submit(MakePathCommand(
             VL::EditorCommandType::ValidateMaterialInstanceDocument,
             document.assetPath));
-    ImGui::SameLine();
-    if (ImGui::Button("Connect Preview"))
-        Submit(MakePathCommand(
-            VL::EditorCommandType::ConnectMaterialInstancePreview,
-            document.assetPath,
-            document.revision));
 
     const bool previewConnected =
         document.preview == EditorPreviewStatus::Connected ||
@@ -521,7 +553,7 @@ void MaterialInstanceAssetEditorPanel::RenderToolbar()
             document.assetPath,
             document.revision));
     ImGui::EndDisabled();
-    ImGui::TextDisabled("Status: %s", DocStatus(document.status));
+    ImGui::TextDisabled("Preview connects automatically | Status: %s", DocStatus(document.status));
 }
 
 void MaterialInstanceAssetEditorPanel::RenderSelectedModelMaterials()
@@ -574,6 +606,8 @@ void MaterialInstanceAssetEditorPanel::RenderSelectedModelMaterials()
             {
                 sceneSelectionSink->RequestMaterialSelection(ToSelection(model, material));
             }
+            pendingTabSelection = material.materialInstancePath;
+            submittedTabSelection.clear();
             EditorCommandEnvelope command;
             command.type = VL::EditorCommandType::OpenMaterialInstanceAsset;
             command.payload = VL::OpenMaterialInstanceAssetPayload{
@@ -600,14 +634,47 @@ void MaterialInstanceAssetEditorPanel::RenderTabs()
     if (!ImGui::BeginTabBar("MIAssetDocuments")) return;
     for (const auto& tab : snapshot.documentTabs)
     {
-        std::string label = tab.assetPath + (tab.dirty ? " *" : "") + "###" + tab.assetPath;
-        if (ImGui::BeginTabItem(label.c_str()))
+        if (pendingTabClosures.find(tab.assetPath) != pendingTabClosures.end())
         {
-            if (tab.assetPath != snapshot.selectedDocumentPath)
+            continue;
+        }
+        const std::size_t separator = tab.assetPath.find_last_of("/\\");
+        const std::string fileName = separator == std::string::npos
+            ? tab.assetPath
+            : tab.assetPath.substr(separator + 1);
+        std::string label = fileName + (tab.dirty ? " *" : "") + "###" + tab.assetPath;
+        const bool selectRequested = tab.assetPath == pendingTabSelection;
+        const ImGuiTabItemFlags flags = selectRequested
+            ? ImGuiTabItemFlags_SetSelected
+            : ImGuiTabItemFlags_None;
+        bool tabOpen = true;
+        const bool tabVisible = ImGui::BeginTabItem(label.c_str(), &tabOpen, flags);
+        const bool tabActivated = ImGui::IsItemActivated();
+        if (tabActivated && !selectRequested)
+        {
+            pendingTabSelection.clear();
+            if (tab.assetPath != snapshot.selectedDocumentPath &&
+                tab.assetPath != submittedTabSelection)
+            {
                 Submit(MakePathCommand(
                     VL::EditorCommandType::SelectMaterialInstanceDocument,
                     tab.assetPath));
+                submittedTabSelection = tab.assetPath;
+            }
+        }
+        if (tabVisible)
+        {
             ImGui::EndTabItem();
+        }
+        if (selectRequested && tabOpen) pendingTabSelection.clear();
+        if (!tabOpen)
+        {
+            if (pendingTabClosures.insert(tab.assetPath).second)
+            {
+                Submit(MakePathCommand(
+                    VL::EditorCommandType::CloseMaterialInstanceAsset,
+                    tab.assetPath));
+            }
         }
     }
     ImGui::EndTabBar();
@@ -637,7 +704,7 @@ void MaterialInstanceAssetEditorPanel::RenderDetails()
         {
             ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, 140.0f);
             ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn("Reset", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+            ImGui::TableSetupColumn("Reset", ImGuiTableColumnFlags_WidthFixed, 34.0f);
             ImGui::TableHeadersRow();
             for (const auto& renderState : document.renderStates)
             {
@@ -655,9 +722,9 @@ void MaterialInstanceAssetEditorPanel::RenderDetails()
         if (ImGui::BeginTable("MIParameters", 3,
             ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp))
         {
-            ImGui::TableSetupColumn("Parameter", ImGuiTableColumnFlags_WidthFixed, 180.0f);
+            ImGui::TableSetupColumn("Parameter", ImGuiTableColumnFlags_WidthFixed, 150.0f);
             ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn("Reset", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+            ImGui::TableSetupColumn("Reset", ImGuiTableColumnFlags_WidthFixed, 34.0f);
             ImGui::TableHeadersRow();
             for (const auto& parameter : document.parameters)
                 if (!showOnlyActive || parameter.active) RenderParameter(document, parameter);
@@ -807,7 +874,7 @@ void MaterialInstanceAssetEditorPanel::RenderRenderState(
             ImGuiCol_ButtonActive,
             ImGui::GetStyleColorVec4(ImGuiCol_HeaderActive));
     }
-    if (ImGui::SmallButton("Reset"))
+    if (DrawCompactResetButton())
     {
         const auto field = state.name == "renderMode"
             ? VL::EditorMaterialRenderStateField::RenderMode
@@ -840,33 +907,103 @@ void MaterialInstanceAssetEditorPanel::RenderParameter(
     bool editFinished = false;
 
     const uint32_t componentCount = ParameterComponentCount(parameter.type);
+    if (componentCount > 1)
+    {
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextUnformatted(parameter.name.c_str());
+        if (!parameter.active)
+        {
+            ImGui::SameLine();
+            ImGui::TextDisabled("(inactive)");
+        }
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+        {
+            ImGui::SetTooltip(
+                "Type: %s\nSource: %s\n%s",
+                TypeName(parameter.type),
+                overridden ? "MI override" : "M_ default",
+                parameter.description.c_str());
+        }
+        ImGui::TableSetColumnIndex(2);
+        ImGui::BeginDisabled(!overridden);
+        if (overridden)
+        {
+            ImGui::PushStyleColor(
+                ImGuiCol_Button,
+                ImGui::GetStyleColorVec4(ImGuiCol_Header));
+            ImGui::PushStyleColor(
+                ImGuiCol_ButtonHovered,
+                ImGui::GetStyleColorVec4(ImGuiCol_HeaderHovered));
+            ImGui::PushStyleColor(
+                ImGuiCol_ButtonActive,
+                ImGui::GetStyleColorVec4(ImGuiCol_HeaderActive));
+        }
+        if (DrawCompactResetButton())
+        {
+            Submit(MakeClearParameterCommand(document, parameter.name));
+        }
+        if (overridden)
+        {
+            ImGui::PopStyleColor(3);
+        }
+        ImGui::EndDisabled();
+    }
+
     for (uint32_t componentIndex = 0; componentIndex < componentCount; ++componentIndex)
     {
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
-        if (componentIndex == 0)
+        if (componentCount == 1)
         {
             ImGui::TextUnformatted(parameter.name.c_str());
-            if (!parameter.active) { ImGui::SameLine(); ImGui::TextDisabled("(inactive)"); }
+            if (!parameter.active)
+            {
+                ImGui::SameLine();
+                ImGui::TextDisabled("(inactive)");
+            }
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+            {
                 ImGui::SetTooltip(
                     "Type: %s\nSource: %s\n%s",
                     TypeName(parameter.type),
                     overridden ? "MI override" : "M_ default",
                     parameter.description.c_str());
+            }
+        }
+        else
+        {
+            const EditorParameterChannel& channel = parameter.channels[componentIndex];
+            const char* componentName = channel.name.empty()
+                ? DefaultComponentName(componentIndex)
+                : channel.name.c_str();
+            ImGui::Indent(ImGui::GetStyle().IndentSpacing);
+            ImGui::TextDisabled("%s", componentName);
+            ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
         }
 
         ImGui::TableSetColumnIndex(1);
         const EditorParameterChannel& channel = parameter.channels[componentIndex];
-        const char* componentName = channel.name.empty()
-            ? DefaultComponentName(componentIndex)
-            : channel.name.c_str();
-        ImGui::TextDisabled("%s", componentName);
-        ImGui::SameLine();
         ImGui::SetNextItemWidth(-FLT_MIN);
         ImGui::PushID(static_cast<int>(componentIndex));
         const SliderRange range = ResolveSliderRange(
-            parameter, channel, edited.values[componentIndex]);
+            parameter,
+            channel,
+            parameter.defaultValue.values[componentIndex]);
+        const float boundedValue = std::isfinite(edited.values[componentIndex])
+            ? std::clamp(
+                edited.values[componentIndex],
+                range.minValue,
+                range.maxValue)
+            : std::clamp(
+                parameter.defaultValue.values[componentIndex],
+                range.minValue,
+                range.maxValue);
+        if (edited.values[componentIndex] != boundedValue)
+        {
+            edited.values[componentIndex] = boundedValue;
+            changed = true;
+        }
         if (ImGui::SliderFloat(
                 "##value",
                 &edited.values[componentIndex],
@@ -891,7 +1028,7 @@ void MaterialInstanceAssetEditorPanel::RenderParameter(
         ImGui::PopID();
 
         ImGui::TableSetColumnIndex(2);
-        if (componentIndex == 0)
+        if (componentCount == 1)
         {
             ImGui::BeginDisabled(!overridden);
             if (overridden)
@@ -906,7 +1043,7 @@ void MaterialInstanceAssetEditorPanel::RenderParameter(
                     ImGuiCol_ButtonActive,
                     ImGui::GetStyleColorVec4(ImGuiCol_HeaderActive));
             }
-            if (ImGui::SmallButton("Reset"))
+            if (DrawCompactResetButton())
                 Submit(MakeClearParameterCommand(document, parameter.name));
             if (overridden)
             {
@@ -975,7 +1112,7 @@ void MaterialInstanceAssetEditorPanel::RenderTexture(
             ImGuiCol_ButtonActive,
             ImGui::GetStyleColorVec4(ImGuiCol_HeaderActive));
     }
-    if (ImGui::SmallButton("Reset"))
+    if (DrawCompactResetButton())
         Submit(MakeClearTextureCommand(document, texture.slotName));
     if (overridden) ImGui::PopStyleColor(3);
     ImGui::EndDisabled();

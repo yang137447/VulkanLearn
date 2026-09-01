@@ -173,38 +173,6 @@ std::string PacketDisplayName(const RenderDrawPacket& drawPacket)
     return drawPacket.debugName.empty() ? objectIdentity : drawPacket.debugName;
 }
 
-bool IsValidAabb(
-    const Eigen::Vector3f& boundsMin,
-    const Eigen::Vector3f& boundsMax)
-{
-    return IsFinite(boundsMin) && IsFinite(boundsMax) &&
-        !(boundsMin.array() > boundsMax.array()).any();
-}
-
-void IncludeAabb(
-    Eigen::Vector3f& boundsMin,
-    Eigen::Vector3f& boundsMax,
-    bool& hasBounds,
-    const Eigen::Vector3f& candidateMin,
-    const Eigen::Vector3f& candidateMax)
-{
-    if (!IsValidAabb(candidateMin, candidateMax))
-    {
-        return;
-    }
-
-    if (!hasBounds)
-    {
-        boundsMin = candidateMin;
-        boundsMax = candidateMax;
-        hasBounds = true;
-        return;
-    }
-
-    boundsMin = boundsMin.cwiseMin(candidateMin);
-    boundsMax = boundsMax.cwiseMax(candidateMax);
-}
-
 MaterialInstanceModelMaterial BuildModelMaterial(
     const RenderDrawPacket& drawPacket)
 {
@@ -216,28 +184,7 @@ MaterialInstanceModelMaterial BuildModelMaterial(
     material.displayName = drawPacket.materialSlotName.empty()
         ? drawPacket.materialInstance.key
         : drawPacket.materialSlotName;
-    material.worldBoundsMin = drawPacket.worldBoundsMin;
-    material.worldBoundsMax = drawPacket.worldBoundsMax;
-    material.hasWorldBounds = IsValidAabb(
-        material.worldBoundsMin,
-        material.worldBoundsMax);
     return material;
-}
-
-void MergeModelMaterial(
-    MaterialInstanceModelMaterial& target,
-    const MaterialInstanceModelMaterial& source)
-{
-    if (target.displayName.empty())
-    {
-        target.displayName = source.displayName;
-    }
-    IncludeAabb(
-        target.worldBoundsMin,
-        target.worldBoundsMax,
-        target.hasWorldBounds,
-        source.worldBoundsMin,
-        source.worldBoundsMax);
 }
 
 } // namespace
@@ -274,12 +221,6 @@ MaterialInstanceModelContext AggregateSceneModel(
         {
             model.displayName = PacketDisplayName(drawPacket);
         }
-        IncludeAabb(
-            model.worldBoundsMin,
-            model.worldBoundsMax,
-            model.hasWorldBounds,
-            drawPacket.worldBoundsMin,
-            drawPacket.worldBoundsMax);
 
         const MaterialInstanceModelMaterial candidate =
             BuildModelMaterial(drawPacket);
@@ -291,11 +232,7 @@ MaterialInstanceModelContext AggregateSceneModel(
                 return material.materialSlotIndex == candidate.materialSlotIndex &&
                     material.materialInstancePath == candidate.materialInstancePath;
             });
-        if (duplicate != model.materials.end())
-        {
-            MergeModelMaterial(*duplicate, candidate);
-            continue;
-        }
+        if (duplicate != model.materials.end()) continue;
 
         model.materials.push_back(candidate);
     }
@@ -353,13 +290,6 @@ std::optional<MaterialInstanceSelection> BuildSelectionFromModelMaterial(
     selection.displayName = material.displayName.empty()
         ? model.displayName
         : material.displayName;
-    selection.worldBoundsMin = material.hasWorldBounds
-        ? material.worldBoundsMin
-        : model.worldBoundsMin;
-    selection.worldBoundsMax = material.hasWorldBounds
-        ? material.worldBoundsMax
-        : model.worldBoundsMax;
-    selection.hasWorldBounds = material.hasWorldBounds || model.hasWorldBounds;
     return selection;
 }
 
@@ -443,11 +373,6 @@ std::optional<MaterialInstanceSelection> SceneObjectPicker::Pick(
         candidate.materialInstancePath = drawPacket.materialInstance.key;
         candidate.distance = *distance;
         candidate.displayName = PacketDisplayName(drawPacket);
-        candidate.worldBoundsMin = drawPacket.worldBoundsMin;
-        candidate.worldBoundsMax = drawPacket.worldBoundsMax;
-        candidate.hasWorldBounds = IsValidAabb(
-            candidate.worldBoundsMin,
-            candidate.worldBoundsMax);
         if (candidate.objectIdentity.empty() || candidate.materialInstancePath.empty())
         {
             continue;

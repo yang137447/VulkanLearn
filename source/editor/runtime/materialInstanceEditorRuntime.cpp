@@ -215,6 +215,9 @@ void MaterialInstanceEditorRuntime::Shutdown() noexcept
         previewController->Shutdown();
     }
     pendingPreviewCommand.reset();
+    queuedAutomaticPreviewDisconnectAssetPath.reset();
+    queuedAutomaticPreviewConnectionAssetPath.reset();
+    queuedAutomaticPreviewApplyAssetPath.reset();
     service.reset();
     commandBus.reset();
     previewController.reset();
@@ -241,41 +244,56 @@ void MaterialInstanceEditorRuntime::Tick()
 
     PollPreview();
 
-    const std::vector<EditorCommandEnvelope> commands = commandBus->Drain();
-    for (const EditorCommandEnvelope& command : commands)
+    // 自动预览命令可能由本轮参数编辑追加到 bus；持续 drain，保证一次
+    // 参数提交在同一个 UI/game tick 内完成 working draft -> live swap。
+    while (true)
     {
-        EditorCommandResult result;
-        try
+        const std::vector<EditorCommandEnvelope> commands = commandBus->Drain();
+        for (const EditorCommandEnvelope& command : commands)
         {
-            result = ExecuteCommand(command);
-        }
-        catch (const std::exception& exception)
-        {
-            result = MakeDiagnosticResult(
-                command,
-                EditorCommandStatus::Failed,
-                EditorErrorCode::ValidationFailed,
-                exception.what());
+            EditorCommandResult result;
+            try
+            {
+                result = ExecuteCommand(command);
+            }
+            catch (const std::exception& exception)
+            {
+                result = MakeDiagnosticResult(
+                    command,
+                    EditorCommandStatus::Failed,
+                    EditorErrorCode::ValidationFailed,
+                    exception.what());
+            }
+
+            if (result.status != EditorCommandStatus::Succeeded &&
+                result.status != EditorCommandStatus::Running)
+            {
+                diagnostic = result.message;
+                SetStatus(result.message);
+            }
+
+            if (result.status == EditorCommandStatus::Running)
+            {
+                // EditorCommandBus 已将该命令标记为 Running；终态由下一帧
+                // PreviewController::Poll() 发布，避免把异步预览伪装成成功。
+                continue;
+            }
+
+            if (!commandBus->PublishResult(std::move(result)))
+            {
+                diagnostic =
+                    "Material Instance editor could not publish command result.";
+            }
         }
 
-        if (result.status != EditorCommandStatus::Succeeded &&
-            result.status != EditorCommandStatus::Running)
+        // 先消费 UI/外部已经排队的命令，再追加自动预览命令，避免关闭
+        // 页签时自动重连抢在 close 前执行并访问已关闭的文档。
+        SubmitQueuedAutomaticPreviewDisconnect();
+        SubmitQueuedAutomaticPreviewConnection();
+        SubmitQueuedAutomaticPreviewApply();
+        if (commandBus->PendingCount() == 0)
         {
-            diagnostic = result.message;
-            SetStatus(result.message);
-        }
-
-        if (result.status == EditorCommandStatus::Running)
-        {
-            // EditorCommandBus 已将该命令标记为 Running；终态由下一帧
-            // PreviewController::Poll() 发布，避免把异步预览伪装成成功。
-            continue;
-        }
-
-        if (!commandBus->PublishResult(std::move(result)))
-        {
-            diagnostic =
-                "Material Instance editor could not publish command result.";
+            break;
         }
     }
 
@@ -307,6 +325,7 @@ void MaterialInstanceEditorRuntime::NotifyWorldChanged(
                 worldGeneration,
                 worldPath});
     }
+    QueueAutomaticPreviewConnection();
     ApplyRuntimeOverlay();
     if (worldPath.empty())
     {
@@ -359,6 +378,30 @@ EditorCommandSubmission MaterialInstanceEditorRuntime::SubmitInternal(
     }
 
     const EditorCommandSubmission submission = commandBus->Submit(
+        std::move(command));
+    if (submission.admission != EditorCommandAdmission::Queued)
+    {
+        SetStatus(submission.result.message);
+    }
+    return submission;
+}
+
+EditorCommandSubmission MaterialInstanceEditorRuntime::SubmitAutomaticPreviewCommand(
+    EditorCommandEnvelope command)
+{
+    if (commandBus == nullptr)
+    {
+        return EditorCommandSubmission{
+            0,
+            EditorCommandAdmission::Rejected,
+            MakeDiagnosticResult(
+                command,
+                EditorCommandStatus::Rejected,
+                EditorErrorCode::ValidationFailed,
+                RuntimeUnavailableMessage)};
+    }
+
+    const EditorCommandSubmission submission = commandBus->SubmitInternal(
         std::move(command));
     if (submission.admission != EditorCommandAdmission::Queued)
     {
@@ -622,6 +665,18 @@ EditorCommandResult MaterialInstanceEditorRuntime::FinishServiceResult(
     MaterialEditorServiceResult serviceResult)
 {
     ApplyServiceResult(serviceResult);
+
+    if (serviceResult.succeeded)
+    {
+        QueueAutomaticPreviewConnection();
+    }
+
+    if (serviceResult.succeeded && serviceResult.document.has_value() &&
+        (command.type == EditorCommandType::SetMaterialParameterOverride ||
+         command.type == EditorCommandType::ClearMaterialParameterOverride))
+    {
+        QueueAutomaticPreviewApply(serviceResult.document->assetPath);
+    }
 
     EditorCommandResult result = MakeResult(
         command,
@@ -1037,6 +1092,175 @@ void MaterialInstanceEditorRuntime::RejectPendingPreviewForWorldChange()
         commandBus->PublishResult(std::move(result));
     }
     pendingPreviewCommand.reset();
+}
+
+void MaterialInstanceEditorRuntime::QueueAutomaticPreviewConnection()
+{
+    if (previewController == nullptr)
+    {
+        return;
+    }
+
+    if (worldPath.empty() || worldGeneration == 0 ||
+        !snapshot.activeDocument.has_value())
+    {
+        // 关闭最后一个页签后仍可能保留旧连接，必须在命令边界主动释放，
+        // 不能只依赖“没有 active document”而静默跳过自动预览流程。
+        queuedAutomaticPreviewConnectionAssetPath.reset();
+        queuedAutomaticPreviewApplyAssetPath.reset();
+        const Preview::MaterialInstancePreviewStatus previewStatus =
+            previewController->GetStatus();
+        if (previewController->HasPendingOperation() ||
+            previewStatus.materialInstancePath.has_value() ||
+            previewStatus.state != Preview::MaterialInstancePreviewState::Disconnected)
+        {
+            queuedAutomaticPreviewDisconnectAssetPath =
+                previewStatus.materialInstancePath.has_value()
+                ? previewStatus.materialInstancePath->value
+                : std::string();
+        }
+        else
+        {
+            queuedAutomaticPreviewDisconnectAssetPath.reset();
+        }
+        return;
+    }
+
+    queuedAutomaticPreviewDisconnectAssetPath.reset();
+
+    const Preview::MaterialInstancePreviewPathNormalizationResult pathResult =
+        Preview::NormalizeMaterialInstancePath(
+            snapshot.activeDocument->assetPath);
+    if (!pathResult.Succeeded())
+    {
+        return;
+    }
+
+    const Preview::MaterialInstancePreviewStatus previewStatus =
+        previewController->GetStatus();
+    if (previewStatus.materialInstancePath.has_value() &&
+        previewStatus.materialInstancePath.value() == pathResult.path.value() &&
+        previewStatus.IsConnected())
+    {
+        return;
+    }
+
+    // 连接和应用都在 Tick() 的命令边界执行，避免从文档 service 直接触碰
+    // renderer-owned preview adapter。
+    queuedAutomaticPreviewConnectionAssetPath = pathResult.path->value;
+}
+
+void MaterialInstanceEditorRuntime::SubmitQueuedAutomaticPreviewDisconnect()
+{
+    if (!queuedAutomaticPreviewDisconnectAssetPath.has_value() ||
+        previewController == nullptr)
+    {
+        return;
+    }
+
+    const std::string assetPath =
+        queuedAutomaticPreviewDisconnectAssetPath.value();
+    queuedAutomaticPreviewDisconnectAssetPath.reset();
+    EditorCommandEnvelope command;
+    command.source = EditorCommandSource::ImGui;
+    command.type = EditorCommandType::DisconnectMaterialInstancePreview;
+    command.payload = MaterialInstanceAssetPathPayload{assetPath};
+    SubmitAutomaticPreviewCommand(std::move(command));
+}
+
+void MaterialInstanceEditorRuntime::SubmitQueuedAutomaticPreviewConnection()
+{
+    if (!queuedAutomaticPreviewConnectionAssetPath.has_value() ||
+        pendingPreviewCommand.has_value() || worldPath.empty() ||
+        worldGeneration == 0 || !snapshot.activeDocument.has_value())
+    {
+        return;
+    }
+
+    const Preview::MaterialInstancePreviewPathNormalizationResult pathResult =
+        Preview::NormalizeMaterialInstancePath(
+            snapshot.activeDocument->assetPath);
+    if (!pathResult.Succeeded() ||
+        pathResult.path->value != queuedAutomaticPreviewConnectionAssetPath.value())
+    {
+        queuedAutomaticPreviewConnectionAssetPath.reset();
+        return;
+    }
+
+    const Preview::MaterialInstancePreviewStatus previewStatus =
+        previewController->GetStatus();
+    if (previewStatus.materialInstancePath.has_value() &&
+        previewStatus.materialInstancePath.value() == pathResult.path.value() &&
+        previewStatus.IsConnected())
+    {
+        queuedAutomaticPreviewConnectionAssetPath.reset();
+        return;
+    }
+
+    queuedAutomaticPreviewConnectionAssetPath.reset();
+    EditorCommandEnvelope command;
+    command.source = EditorCommandSource::ImGui;
+    command.type = EditorCommandType::ConnectMaterialInstancePreview;
+    command.expectedDocumentRevision = snapshot.activeDocument->revision;
+    command.payload = MaterialInstanceAssetPathPayload{
+        snapshot.activeDocument->assetPath};
+    SubmitAutomaticPreviewCommand(std::move(command));
+}
+
+void MaterialInstanceEditorRuntime::QueueAutomaticPreviewApply(
+    std::string_view assetPath)
+{
+    if (previewController == nullptr || worldPath.empty() || worldGeneration == 0 ||
+        !snapshot.activeDocument.has_value())
+    {
+        return;
+    }
+
+    const Preview::MaterialInstancePreviewPathNormalizationResult pathResult =
+        Preview::NormalizeMaterialInstancePath(assetPath);
+    const Preview::MaterialInstancePreviewPathNormalizationResult documentPathResult =
+        Preview::NormalizeMaterialInstancePath(
+            snapshot.activeDocument->assetPath);
+    if (!pathResult.Succeeded() || !documentPathResult.Succeeded() ||
+        pathResult.path.value() != documentPathResult.path.value())
+    {
+        return;
+    }
+
+    // 只保留同一资产的最新请求；真正提交前重新读取当前文档 revision。
+    queuedAutomaticPreviewApplyAssetPath = pathResult.path->value;
+}
+
+void MaterialInstanceEditorRuntime::SubmitQueuedAutomaticPreviewApply()
+{
+    if (!queuedAutomaticPreviewApplyAssetPath.has_value() ||
+        pendingPreviewCommand.has_value() || !snapshot.activeDocument.has_value())
+    {
+        return;
+    }
+
+    const std::string assetPath = queuedAutomaticPreviewApplyAssetPath.value();
+    const Preview::MaterialInstancePreviewPathNormalizationResult pathResult =
+        Preview::NormalizeMaterialInstancePath(assetPath);
+    const auto& document = snapshot.activeDocument.value();
+    const Preview::MaterialInstancePreviewPathNormalizationResult documentPathResult =
+        Preview::NormalizeMaterialInstancePath(document.assetPath);
+    if (!pathResult.Succeeded() || !documentPathResult.Succeeded() ||
+        pathResult.path.value() != documentPathResult.path.value())
+    {
+        queuedAutomaticPreviewApplyAssetPath.reset();
+        return;
+    }
+
+    queuedAutomaticPreviewApplyAssetPath.reset();
+    EditorCommandEnvelope command;
+    command.source = EditorCommandSource::ImGui;
+    command.type = EditorCommandType::ApplyMaterialInstancePreview;
+    command.expectedDocumentRevision = document.revision;
+    command.payload = ApplyMaterialInstancePreviewPayload{
+        document.assetPath,
+        document.revision};
+    SubmitAutomaticPreviewCommand(std::move(command));
 }
 
 void MaterialInstanceEditorRuntime::ApplyServiceResult(

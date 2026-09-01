@@ -1334,13 +1334,6 @@ void RenderSystem::SetSelectedMaterialInstanceModel(
     selectedObjectId = model.objectId;
     selectedMaterialSlotIndex = 0;
     selectedWorldGeneration = model.worldGeneration;
-    if (model.hasWorldBounds)
-    {
-        ScheduleSelectionFocus(
-            model.worldGeneration,
-            model.worldBoundsMin,
-            model.worldBoundsMax);
-    }
 }
 
 void RenderSystem::SetSelectedMaterialInstance(
@@ -1359,13 +1352,6 @@ void RenderSystem::SetSelectedMaterialInstance(
     selectedObjectId = selection.objectId;
     selectedMaterialSlotIndex = selection.materialSlotIndex;
     selectedWorldGeneration = selection.worldGeneration;
-    if (selection.hasWorldBounds)
-    {
-        ScheduleSelectionFocus(
-            selection.worldGeneration,
-            selection.worldBoundsMin,
-            selection.worldBoundsMax);
-    }
 }
 
 void RenderSystem::ClearSelectedMaterialInstance() noexcept
@@ -1375,7 +1361,6 @@ void RenderSystem::ClearSelectedMaterialInstance() noexcept
     selectedObjectId = 0;
     selectedMaterialSlotIndex = 0;
     selectedWorldGeneration = 0;
-    pendingSelectionFocus.reset();
 }
 
 std::unique_ptr<VL::Editor::Preview::IMaterialInstancePreviewAdapter>
@@ -2412,85 +2397,12 @@ void RenderSystem::RefreshRenderSceneFromActiveWorld()
     }
 }
 
-void RenderSystem::ScheduleSelectionFocus(
-    uint64_t worldGeneration,
-    const Eigen::Vector3f& boundsMin,
-    const Eigen::Vector3f& boundsMax)
-{
-    if (!boundsMin.allFinite() || !boundsMax.allFinite() ||
-        (boundsMin.array() > boundsMax.array()).any())
-    {
-        return;
-    }
-
-    pendingSelectionFocus = PendingSelectionFocus{
-        worldGeneration,
-        boundsMin,
-        boundsMax};
-}
-
-void RenderSystem::ApplyPendingSelectionFocus()
-{
-    if (!pendingSelectionFocus.has_value())
-    {
-        return;
-    }
-
-    if (!activeWorld || pendingSelectionFocus->worldGeneration !=
-            activeWorld->GetGeneration() || !activeWorld->GetCamera())
-    {
-        pendingSelectionFocus.reset();
-        return;
-    }
-
-    const Eigen::Vector3f& boundsMin = pendingSelectionFocus->boundsMin;
-    const Eigen::Vector3f& boundsMax = pendingSelectionFocus->boundsMax;
-    const Eigen::Vector3f center = (boundsMin + boundsMax) * 0.5f;
-    const float radius = std::max(
-        0.5f,
-        (boundsMax - boundsMin).norm() * 0.5f);
-    Camera& camera = *activeWorld->GetCamera();
-
-    Eigen::Vector3f forward = camera.GetForwardVector();
-    if (!forward.allFinite() || forward.squaredNorm() <= 1.0e-8f)
-    {
-        forward = Eigen::Vector3f(0.0f, 0.0f, -1.0f);
-    }
-    else
-    {
-        forward.normalize();
-    }
-
-    constexpr float degreesToRadians = 0.01745329251994329577f;
-    const float halfFovRadians = std::max(
-        0.1f,
-        camera.GetHFOV() * degreesToRadians * 0.5f);
-    const float tangent = std::tan(halfFovRadians);
-    const float fitDistance = tangent > 1.0e-4f
-        ? radius / tangent * 1.25f
-        : radius * 2.0f;
-    const float distance = std::max(
-        fitDistance,
-        camera.GetClipNear() + radius * 0.25f);
-    const Eigen::Vector3f position = center - forward * distance;
-
-    // 只改变相机当前姿态，不写回 scene JSON；下一次 controller 更新仍可继续
-    // 操作该相机，模型列表聚焦因此是一次性导航而非锁定视角。
-    camera.SetCamera(position, center, camera.GetUpVector());
-    camera.SetClip(
-        camera.GetClipNear(),
-        std::max(camera.GetClipFar(), distance + radius * 4.0f));
-    pendingSelectionFocus.reset();
-}
-
 void RenderSystem::PublishSnapshotFromActiveWorld()
 {
     if (!activeWorld)
     {
         throw std::runtime_error("RenderSystem active World is not set");
     }
-
-    ApplyPendingSelectionFocus();
 
     VL::WorldSnapshotBuildDesc buildDesc;
     buildDesc.worldGeneration = activeWorld->GetGeneration();

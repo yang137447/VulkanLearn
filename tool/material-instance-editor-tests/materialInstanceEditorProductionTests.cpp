@@ -279,7 +279,10 @@ void SubmitRuntimeCommand(
     runtime.Submit(std::move(command));
     Require(
         runtime.PendingCommandCount() == 1,
-        "production runtime did not queue the command");
+        "production runtime did not queue command #" +
+            std::to_string(commandId) + " (" +
+            std::string(GetEditorCommandName(type)) + "): " +
+            runtime.GetSnapshot().statusMessage);
     runtime.Tick();
     Require(
         runtime.PendingCommandCount() == 0,
@@ -528,6 +531,18 @@ void TestProductionDocumentService()
         "production service did not expose an equal initial baseline and working draft");
     const std::string initialBaselineDraft =
         opened.document->serializedBaselineDraft;
+    const MaterialEditorServiceResult rejectedOutOfRange =
+        service.SetMaterialParameterOverride(
+            kMaterialInstancePath,
+            "u_scalar",
+            EditorMaterialParameterType::Float,
+            EditorMaterialParameterValue{1.1f});
+    Require(
+        !rejectedOutOfRange.succeeded &&
+            rejectedOutOfRange.errorCode == EditorErrorCode::ValidationFailed &&
+            rejectedOutOfRange.document.has_value() &&
+            rejectedOutOfRange.document->revision == opened.document->revision,
+        "production service accepted an out-of-range scalar parameter");
     RequireRenderState(
         *opened.document,
         "renderMode",
@@ -976,6 +991,12 @@ void TestProductionRuntime()
         "production runtime did not publish the material parameter schema");
     const EditorDocumentRevision openedRevision = opened.revision;
 
+    runtime.NotifyWorldChanged("scenes/scene_auto_preview.json", 1);
+    runtime.Tick();
+    Require(
+        RequireUiDocument(runtime).preview == EditorUi::EditorPreviewStatus::Connected,
+        "production runtime did not connect preview automatically after the active World became available");
+
     ResolveSceneMaterialAssetPayload resolvePayload{
         "scenes/scene_editor.json",
         "mesh-car",
@@ -1022,7 +1043,7 @@ void TestProductionRuntime()
     SetMaterialParameterOverridePayload stalePayload{
         kMaterialInstancePath,
         "u_scalar",
-        EditorMaterialParameterType::Float,
+            EditorMaterialParameterType::Float,
         0.95f};
     EditorCommandEnvelope staleCommand;
     staleCommand.commandId = 1004;
@@ -1119,29 +1140,55 @@ void TestProductionRuntime()
                 "Active World: scenes/scene_fake_preview.json") != std::string::npos,
         "production runtime did not preserve the document across World change");
 
-    const EditorDocumentRevision revisionBeforeFakeConnect =
-        RequireUiDocument(runtime).revision;
-    EditorCommandEnvelope fakeConnectCommand;
-    fakeConnectCommand.commandId = 1010;
-    fakeConnectCommand.source = EditorCommandSource::RuntimeTest;
-    fakeConnectCommand.type = EditorCommandType::ConnectMaterialInstancePreview;
-    fakeConnectCommand.expectedDocumentRevision = revisionBeforeFakeConnect;
-    fakeConnectCommand.payload = MaterialInstanceAssetPathPayload{
-        kMaterialInstancePath};
-    runtime.Submit(std::move(fakeConnectCommand));
     runtime.Tick();
     Require(
         runtime.PendingCommandCount() == 0 &&
             RequireUiDocument(runtime).preview == EditorUi::EditorPreviewStatus::Connected,
-        "runtime did not connect numeric preview through the injected adapter");
+        "runtime did not reconnect preview automatically after a World change");
     Require(
         !fakeAdapter.executeCommands.empty() &&
             fakeAdapter.executeCommands.back().type ==
                 VL::Editor::Preview::MaterialInstancePreviewCommandType::
                     ConnectMaterialInstancePreview &&
-            fakeAdapter.executeCommands.back().bridgeLiveGeneration ==
-                3,
-        "runtime did not pass the live generation to the injected adapter");
+            fakeAdapter.executeCommands.back().bridgeLiveGeneration != 0,
+        "runtime did not pass a live generation to the automatic preview connection");
+
+    const auto countDisconnectCommands = [&fakeAdapter]() {
+        return static_cast<std::size_t>(std::count_if(
+            fakeAdapter.executeCommands.begin(),
+            fakeAdapter.executeCommands.end(),
+            [](const auto& command) {
+                return command.type ==
+                    VL::Editor::Preview::MaterialInstancePreviewCommandType::
+                        DisconnectMaterialInstancePreview;
+            }));
+    };
+    const std::size_t disconnectCountBeforeClose = countDisconnectCommands();
+    SubmitRuntimeCommand(
+        runtime,
+        1010,
+        EditorCommandType::CloseMaterialInstanceAsset,
+        EditorCommandPayload{CloseMaterialInstanceAssetPayload{
+            kMaterialInstancePath,
+            EditorDirtyDocumentPolicy::DiscardChanges}});
+    Require(
+        !runtime.GetSnapshot().activeDocument.has_value() &&
+            runtime.GetSnapshot().documentTabs.empty() &&
+            countDisconnectCommands() > disconnectCountBeforeClose,
+        "closing the last material instance tab did not release its preview connection");
+
+    OpenMaterialInstanceAssetPayload reopenedPayload;
+    reopenedPayload.assetPath = kMaterialInstancePath;
+    SubmitRuntimeCommand(
+        runtime,
+        1014,
+        EditorCommandType::OpenMaterialInstanceAsset,
+        EditorCommandPayload{std::move(reopenedPayload)});
+    Require(
+        RequireUiDocument(runtime).preview == EditorUi::EditorPreviewStatus::Connected,
+        "reopening a material instance tab did not reconnect preview automatically");
+    const EditorDocumentRevision revisionBeforeEditAfterReopen =
+        RequireUiDocument(runtime).revision;
 
     SubmitRuntimeCommand(
         runtime,
@@ -1152,7 +1199,17 @@ void TestProductionRuntime()
             "u_scalar",
             EditorMaterialParameterType::Float,
             0.85f}},
-        revisionBeforeFakeConnect);
+        revisionBeforeEditAfterReopen);
+    Require(
+        fakeAdapter.executeCommands.back().type ==
+                VL::Editor::Preview::MaterialInstancePreviewCommandType::
+                    ApplyMaterialInstancePreview &&
+            fakeAdapter.executeCommands.back().draft.has_value() &&
+            fakeAdapter.executeCommands.back().draft->documentRevision ==
+                RequireUiDocument(runtime).revision &&
+            fakeAdapter.executeCommands.back().draft->serializedWorkingDraft.find(
+                "0.85") != std::string::npos,
+        "runtime did not automatically apply the edited numeric draft to preview");
     const EditorDocumentRevision revisionBeforeFakeApply =
         RequireUiDocument(runtime).revision;
     SubmitRuntimeCommand(

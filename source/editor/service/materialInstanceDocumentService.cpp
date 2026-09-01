@@ -1474,12 +1474,6 @@ void ValidateEditorParameterRange(
     const EditorMaterialParameterValue& value,
     std::string_view parameterName)
 {
-    if (!descriptor.contains("channels") ||
-        !descriptor.at("channels").is_object())
-    {
-        return;
-    }
-
     const nlohmann::json serialized =
         Persistence::SerializeMaterialInstanceNumericValue(
             std::visit(
@@ -1489,6 +1483,54 @@ void ValidateEditorParameterRange(
                     return typedValue;
                 },
                 value));
+
+    const auto readComponent = [&serialized](std::size_t index)
+        -> std::optional<float>
+    {
+        if (serialized.is_number())
+            return index == 0 ? std::optional<float>(serialized.get<float>())
+                              : std::nullopt;
+        if (!serialized.is_array() || index >= serialized.size())
+            return std::nullopt;
+        return serialized.at(index).get<float>();
+    };
+
+    if (descriptor.contains("range") && descriptor.at("range").is_object() &&
+        descriptor.at("range").contains("min") &&
+        descriptor.at("range").contains("max"))
+    {
+        const nlohmann::json& range = descriptor.at("range");
+        const float minValue = range.at("min").get<float>();
+        const float maxValue = range.at("max").get<float>();
+        if (!std::isfinite(minValue) || !std::isfinite(maxValue) ||
+            minValue > maxValue)
+        {
+            ThrowServiceError(
+                EditorErrorCode::ValidationFailed,
+                "parameter range is invalid: " + std::string(parameterName));
+        }
+        const std::size_t componentCount = serialized.is_array() ? serialized.size() : 1;
+        for (std::size_t index = 0; index < componentCount; ++index)
+        {
+            const std::optional<float> component = readComponent(index);
+            const float componentValue = component.value_or(0.0f);
+            if (!component.has_value() || !std::isfinite(componentValue) || componentValue < minValue ||
+                componentValue > maxValue)
+            {
+                ThrowServiceError(
+                    EditorErrorCode::ValidationFailed,
+                    "parameter is outside its declared range: " +
+                        std::string(parameterName) + "[" +
+                        std::to_string(index) + "]");
+            }
+        }
+    }
+
+    if (!descriptor.contains("channels") ||
+        !descriptor.at("channels").is_object())
+    {
+        return;
+    }
     static constexpr std::array<std::string_view, 4> componentNames = {
         "x", "y", "z", "w"};
     const nlohmann::json& channels = descriptor.at("channels");
@@ -1508,11 +1550,13 @@ void ValidateEditorParameterRange(
         {
             continue;
         }
-        const float componentValue = serialized.at(index).get<float>();
+        const std::optional<float> componentValue = readComponent(index);
+        if (!componentValue.has_value())
+            continue;
         const float minValue = range.at("min").get<float>();
         const float maxValue = range.at("max").get<float>();
-        if (!std::isfinite(componentValue) ||
-            componentValue < minValue || componentValue > maxValue)
+        if (!std::isfinite(componentValue.value()) ||
+            componentValue.value() < minValue || componentValue.value() > maxValue)
         {
             ThrowServiceError(
                 EditorErrorCode::ValidationFailed,

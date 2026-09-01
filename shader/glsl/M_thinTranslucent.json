@@ -22,19 +22,43 @@
     "parameters": {
         "u_baseColorOpacity": {
             "type": "vec4",
-            "default": [0.0, 0.0, 0.0, 0.0]
+            "default": [0.0, 0.0, 0.0, 0.0],
+            "channels": {
+                "x": {"name": "red", "description": "red channel", "range": {"min": 0.0, "max": 1.0}},
+                "y": {"name": "green", "description": "green channel", "range": {"min": 0.0, "max": 1.0}},
+                "z": {"name": "blue", "description": "blue channel", "range": {"min": 0.0, "max": 1.0}},
+                "w": {"name": "opacity", "description": "opacity channel", "range": {"min": 0.0, "max": 1.0}}
+            }
         },
         "u_transmittanceColorCoverage": {
             "type": "vec4",
-            "default": [1.0, 1.0, 1.0, 1.0]
+            "default": [1.0, 1.0, 1.0, 1.0],
+            "channels": {
+                "x": {"name": "red", "description": "red channel", "range": {"min": 0.0, "max": 1.0}},
+                "y": {"name": "green", "description": "green channel", "range": {"min": 0.0, "max": 1.0}},
+                "z": {"name": "blue", "description": "blue channel", "range": {"min": 0.0, "max": 1.0}},
+                "w": {"name": "coverage", "description": "coverage channel", "range": {"min": 0.0, "max": 1.0}}
+            }
         },
         "u_surfaceFactors": {
             "type": "vec4",
-            "default": [0.1, 0.0, 0.5, 1.0]
+            "default": [0.1, 0.0, 0.5, 1.0],
+            "channels": {
+                "x": {"name": "roughness", "description": "roughness channel", "range": {"min": 0.0, "max": 1.0}},
+                "y": {"name": "metallic", "description": "metallic channel", "range": {"min": 0.0, "max": 1.0}},
+                "z": {"name": "specular", "description": "specular channel", "range": {"min": 0.0, "max": 1.0}},
+                "w": {"name": "ambientOcclusion", "description": "ambient occlusion channel", "range": {"min": 0.0, "max": 1.0}}
+            }
         },
         "u_emissiveColorStrength": {
             "type": "vec4",
-            "default": [0.0, 0.0, 0.0, 0.0]
+            "default": [0.0, 0.0, 0.0, 0.0],
+            "channels": {
+                "x": {"name": "red", "description": "red channel", "range": {"min": 0.0, "max": 4.0}},
+                "y": {"name": "green", "description": "green channel", "range": {"min": 0.0, "max": 4.0}},
+                "z": {"name": "blue", "description": "blue channel", "range": {"min": 0.0, "max": 4.0}},
+                "w": {"name": "strength", "description": "strength channel", "range": {"min": 0.0, "max": 4.0}}
+            }
         }
     },
     "textures": {

@@ -26,75 +26,133 @@
     "parameters": {
         "u_tintColor": {
             "type": "vec4",
-            "default": [1.0, 1.0, 1.0, 1.0]
+            "default": [1.0, 1.0, 1.0, 1.0],
+            "channels": {
+                "x": {"name": "red", "description": "red channel", "range": {"min": 0.0, "max": 1.0}},
+                "y": {"name": "green", "description": "green channel", "range": {"min": 0.0, "max": 1.0}},
+                "z": {"name": "blue", "description": "blue channel", "range": {"min": 0.0, "max": 1.0}},
+                "w": {"name": "opacity", "description": "opacity channel", "range": {"min": 0.0, "max": 1.0}}
+            }
         },
         "u_pbrFactors": {
             "type": "vec4",
-            "default": [0.18, 0.0, 1.0, 0.0]
+            "default": [0.18, 0.0, 1.0, 0.0],
+            "channels": {
+                "x": {"name": "roughness", "description": "roughness channel", "range": {"min": 0.0, "max": 1.0}},
+                "y": {"name": "metallic", "description": "metallic channel", "range": {"min": 0.0, "max": 1.0}},
+                "z": {"name": "ambientOcclusion", "description": "ambient occlusion channel", "range": {"min": 0.0, "max": 1.0}},
+                "w": {"name": "reserved", "description": "reserved channel", "range": {"min": 0.0, "max": 0.0}}
+            }
         },
         "u_emissiveStrength": {
             "type": "float",
-            "default": 1.0
+            "default": 1.0,
+            "range": {"min": 0.0, "max": 4.0}
         },
         "u_eyeSurface": {
             "type": "vec4",
-            "default": [0.08, 1.0, 1.0, 0.0]
+            "default": [0.08, 1.0, 1.0, 0.0],
+            "channels": {
+                "x": {"name": "roughness", "description": "roughness channel", "range": {"min": 0.001, "max": 1.0}},
+                "y": {"name": "irisMask", "description": "iris mask channel", "range": {"min": 0.0, "max": 1.0}},
+                "z": {"name": "ambientOcclusion", "description": "ambient occlusion channel", "range": {"min": 0.0, "max": 1.0}},
+                "w": {"name": "reserved", "description": "reserved channel", "range": {"min": 0.0, "max": 0.0}}
+            }
         },
         "u_eyeGeometry": {
             "type": "vec4",
-            "default": [0.003, 0.006, 0.002, 0.0005]
+            "default": [0.003, 0.006, 0.002, 0.0005],
+            "channels": {
+                "x": {"name": "irisDistance", "description": "iris distance channel", "range": {"min": 0.000001, "max": 0.0078}},
+                "y": {"name": "irisRadius", "description": "iris radius channel", "range": {"min": 0.000001, "max": 0.0078}},
+                "z": {"name": "pupilRadius", "description": "pupil radius channel", "range": {"min": 0.000001, "max": 0.0078}},
+                "w": {"name": "limbusWidth", "description": "limbus width channel", "range": {"min": 0.000001, "max": 0.0078}}
+            }
         },
         "u_eyeIrisColor": {
             "type": "vec4",
-            "default": [0.08, 0.22, 0.06, 1.0]
+            "default": [0.08, 0.22, 0.06, 1.0],
+            "channels": {
+                "x": {"name": "red", "description": "red channel", "range": {"min": 0.0, "max": 1.0}},
+                "y": {"name": "green", "description": "green channel", "range": {"min": 0.0, "max": 1.0}},
+                "z": {"name": "blue", "description": "blue channel", "range": {"min": 0.0, "max": 1.0}},
+                "w": {"name": "reserved", "description": "reserved channel", "range": {"min": 0.0, "max": 1.0}}
+            }
         },
         "u_eyeScleraColor": {
             "type": "vec4",
-            "default": [0.88, 0.90, 0.94, 1.0]
+            "default": [0.88, 0.90, 0.94, 1.0],
+            "channels": {
+                "x": {"name": "red", "description": "red channel", "range": {"min": 0.0, "max": 1.0}},
+                "y": {"name": "green", "description": "green channel", "range": {"min": 0.0, "max": 1.0}},
+                "z": {"name": "blue", "description": "blue channel", "range": {"min": 0.0, "max": 1.0}},
+                "w": {"name": "reserved", "description": "reserved channel", "range": {"min": 0.0, "max": 1.0}}
+            }
         },
         "u_eyeEmissiveColor": {
             "type": "vec4",
-            "default": [0.0, 0.0, 0.0, 0.0]
+            "default": [0.0, 0.0, 0.0, 0.0],
+            "channels": {
+                "x": {"name": "red", "description": "red channel", "range": {"min": 0.0, "max": 4.0}},
+                "y": {"name": "green", "description": "green channel", "range": {"min": 0.0, "max": 4.0}},
+                "z": {"name": "blue", "description": "blue channel", "range": {"min": 0.0, "max": 4.0}},
+                "w": {"name": "reserved", "description": "reserved channel", "range": {"min": 0.0, "max": 4.0}}
+            }
         },
         "u_eyeProfileId": {
             "type": "float",
-            "default": 0.0
+            "default": 0.0,
+            "range": {"min": 0.0, "max": 65535.0}
         },
         "u_eyeScleraProfileId": {
             "type": "float",
-            "default": 0.0
+            "default": 0.0,
+            "range": {"min": 0.0, "max": 65535.0}
         },
         "u_eyeCorneaIor": {
             "type": "float",
-            "default": 1.376
+            "default": 1.376,
+            "range": {"min": 1.0001, "max": 2.5}
         },
         "u_eyeCausticStrength": {
             "type": "float",
-            "default": 0.15
+            "default": 0.15,
+            "range": {"min": 0.0, "max": 4.0}
         },
         "u_eyeLayer": {
             "type": "float",
-            "default": 0.0
+            "default": 0.0,
+            "range": {"min": 0.0, "max": 2.0}
         },
         "u_eyeContactVisibility": {
             "type": "float",
-            "default": 1.0
+            "default": 1.0,
+            "range": {"min": 0.0, "max": 1.0}
         },
         "u_eyeCiliaVisibility": {
             "type": "float",
-            "default": 1.0
+            "default": 1.0,
+            "range": {"min": 0.0, "max": 1.0}
         },
         "u_eyeUvHandedness": {
             "type": "float",
-            "default": 1.0
+            "default": 1.0,
+            "range": {"min": -1.0, "max": 1.0}
         },
         "u_eyePupilDilation": {
             "type": "float",
-            "default": 0.5
+            "default": 0.5,
+            "range": {"min": 0.0, "max": 1.0}
         },
         "u_eyeGaze": {
             "type": "vec4",
-            "default": [0.0, 0.0, 1.0, 1.0]
+            "default": [0.0, 0.0, 1.0, 1.0],
+            "channels": {
+                "x": {"name": "directionX", "description": "direction X channel", "range": {"min": -1.0, "max": 1.0}},
+                "y": {"name": "directionY", "description": "direction Y channel", "range": {"min": -1.0, "max": 1.0}},
+                "z": {"name": "directionZ", "description": "direction Z channel", "range": {"min": -1.0, "max": 1.0}},
+                "w": {"name": "weight", "description": "weight channel", "range": {"min": 0.0, "max": 1.0}}
+            }
         }
     },
     "textures": {

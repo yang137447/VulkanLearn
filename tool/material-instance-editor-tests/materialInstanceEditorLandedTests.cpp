@@ -343,7 +343,7 @@ void TestLandedJsonCommandCodec()
     EditorCommandEnvelope close = BuildPathCommand(
         EditorCommandType::CloseMaterialInstanceAsset,
         107,
-        true);
+        false);
     close.payload = CloseMaterialInstanceAssetPayload{
         "materials/MI_editor_test.json",
         EditorDirtyDocumentPolicy::DiscardChanges};

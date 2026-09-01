@@ -70,7 +70,7 @@
     "material.close": {
       "requiredPayload": ["assetPath"],
       "optionalPayload": ["dirtyPolicy"],
-      "requiresExpectedDocumentRevision": true
+      "requiresExpectedDocumentRevision": false
     },
     "material.get_document": {
       "requiredPayload": ["assetPath"],

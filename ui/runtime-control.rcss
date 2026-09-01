@@ -310,6 +310,27 @@ h2 {
     border-radius: 7dp;
 }
 
+.debug-group {
+    display: block;
+    width: 100%;
+    padding: 2dp 0 3dp 0;
+}
+
+.debug-group + .debug-group {
+    margin-top: 8dp;
+    padding-top: 10dp;
+    border-width: 1dp 0 0 0;
+    border-color: rgba(92, 126, 184, 0.7);
+}
+
+.debug-group-title {
+    display: block;
+    margin: 0 0 6dp 2dp;
+    color: #9fc2ff;
+    font-size: 12dp;
+    font-weight: 700;
+}
+
 .debug-grid button {
     width: 108dp;
     min-width: 0;

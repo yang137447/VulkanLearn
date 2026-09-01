@@ -32,9 +32,6 @@ struct MaterialInstanceModelMaterial
     std::string materialSlotName;
     std::string materialInstancePath;
     std::string displayName;
-    Eigen::Vector3f worldBoundsMin = Eigen::Vector3f::Zero();
-    Eigen::Vector3f worldBoundsMax = Eigen::Vector3f::Zero();
-    bool hasWorldBounds = false;
 };
 
 struct MaterialInstanceModelContext
@@ -45,9 +42,6 @@ struct MaterialInstanceModelContext
     std::vector<MaterialInstanceModelMaterial> materials;
     RuntimeId objectId = 0;
     std::string displayName;
-    Eigen::Vector3f worldBoundsMin = Eigen::Vector3f::Zero();
-    Eigen::Vector3f worldBoundsMax = Eigen::Vector3f::Zero();
-    bool hasWorldBounds = false;
 };
 
 struct MaterialInstanceSelection
@@ -62,14 +56,10 @@ struct MaterialInstanceSelection
     float distance = 0.0f;
     MaterialInstanceModelContext modelContext;
     std::string displayName;
-    Eigen::Vector3f worldBoundsMin = Eigen::Vector3f::Zero();
-    Eigen::Vector3f worldBoundsMax = Eigen::Vector3f::Zero();
-    bool hasWorldBounds = false;
 };
 
-// 从稳定的 RenderScene 快照聚合一个场景模型。聚合结果包含模型自身的
-// displayName/objectId，以及所有材质槽和模型级世界空间 AABB，供 UI 列表和
-// 后续 selection 回写共享同一份值语义数据。
+// 从稳定的 RenderScene 快照聚合一个场景模型，供 UI 列表和后续 selection
+// 回写共享同一份值语义数据。
 MaterialInstanceModelContext AggregateSceneModel(
     const RenderScene& renderScene,
     std::string_view scenePath,
@@ -77,7 +67,7 @@ MaterialInstanceModelContext AggregateSceneModel(
     std::string_view objectIdentity);
 
 // 从模型聚合结果中的一个材质项构造完整选择。该函数不依赖 renderer/UI，适合
-// 场景点击和 MI 列表点击复用，并保留 generation/objectId/AABB 绑定关系。
+// 场景点击和 MI 列表点击复用。
 std::optional<MaterialInstanceSelection> BuildSelectionFromModelMaterial(
     const MaterialInstanceModelContext& model,
     const MaterialInstanceModelMaterial& material,

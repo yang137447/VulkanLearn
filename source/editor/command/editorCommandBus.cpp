@@ -27,13 +27,39 @@ EditorCommandResult EditorCommandBus::MakeRejectedResult(
 
 EditorCommandSubmission EditorCommandBus::Submit(EditorCommandEnvelope command)
 {
+    return SubmitImpl(std::move(command), false);
+}
+
+EditorCommandSubmission EditorCommandBus::SubmitInternal(
+    EditorCommandEnvelope command)
+{
+    return SubmitImpl(std::move(command), true);
+}
+
+EditorCommandSubmission EditorCommandBus::SubmitImpl(
+    EditorCommandEnvelope command,
+    bool internalCommand)
+{
     std::lock_guard<std::mutex> lock(mutex);
     if (command.commandId == 0)
     {
-        command.commandId = nextCommandId++;
-        if (nextCommandId == 0) nextCommandId = 1;
+        if (internalCommand)
+        {
+            command.commandId = nextInternalCommandId--;
+            if (nextInternalCommandId == 0)
+            {
+                nextInternalCommandId =
+                    std::numeric_limits<EditorCommandId>::max();
+            }
+        }
+        else
+        {
+            command.commandId = nextCommandId++;
+            if (nextCommandId == 0) nextCommandId = 1;
+        }
     }
-    else if (command.commandId >= nextCommandId && command.commandId < std::numeric_limits<EditorCommandId>::max())
+    else if (!internalCommand && command.commandId >= nextCommandId &&
+        command.commandId < std::numeric_limits<EditorCommandId>::max())
     {
         nextCommandId = command.commandId + 1;
     }

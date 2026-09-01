@@ -271,6 +271,19 @@ void TestCommandCodecAndSchema()
             DecodeCommandEnvelope(missingRevision, schema);
         },
         "write command without expected revision was accepted");
+    const CommandEnvelope closeCommand = DecodeCommandEnvelope(
+        Json({
+            {"protocolVersion", 1},
+            {"commandId", 1002},
+            {"source", "imgui"},
+            {"command", "material.close"},
+            {"payload", {
+                {"assetPath", "materials/MI_editor_test.json"},
+                {"dirtyPolicy", "discard_changes"}}}}),
+        schema);
+    Require(
+        !closeCommand.expectedDocumentRevision.has_value(),
+        "close command unexpectedly requires a document revision");
     RequireThrows(
         [&schema]() {
             Json invalid = LoadFixture("command_set_parameter.json");

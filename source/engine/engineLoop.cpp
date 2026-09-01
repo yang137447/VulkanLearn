@@ -714,7 +714,7 @@ void EngineLoop::ApplyQueuedUiActions()
     }
 
     // ImGui 场景列表只提交值语义 selection 请求；在这里统一落到 renderer，
-    // 确保描边和相机聚焦与常规视口拾取走同一个稳定帧边界。
+    // 确保选择描边与常规视口拾取走同一个稳定帧边界。
     if (uiSubsystem != nullptr)
     {
         const std::optional<Editor::Selection::MaterialInstanceModelContext>

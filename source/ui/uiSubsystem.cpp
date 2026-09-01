@@ -767,13 +767,6 @@ bool UiSubsystem::OpenMaterialInstanceFromSelection(
     modelSnapshot.objectId = selection.modelContext.objectId;
     modelSnapshot.displayName = selection.modelContext.displayName;
     modelSnapshot.objectIdentity = selection.modelContext.objectIdentity;
-    for (int axis = 0; axis < 3; ++axis)
-    {
-        modelSnapshot.worldBoundsMin[axis] =
-            selection.modelContext.worldBoundsMin[axis];
-        modelSnapshot.worldBoundsMax[axis] =
-            selection.modelContext.worldBoundsMax[axis];
-    }
     modelSnapshot.materials.reserve(selection.modelContext.materials.size());
     for (const Editor::Selection::MaterialInstanceModelMaterial& material :
          selection.modelContext.materials)
@@ -783,11 +776,6 @@ bool UiSubsystem::OpenMaterialInstanceFromSelection(
         materialSnapshot.materialSlotIndex = material.materialSlotIndex;
         materialSnapshot.materialSlotName = material.materialSlotName;
         materialSnapshot.materialInstancePath = material.materialInstancePath;
-        for (int axis = 0; axis < 3; ++axis)
-        {
-            materialSnapshot.worldBoundsMin[axis] = material.worldBoundsMin[axis];
-            materialSnapshot.worldBoundsMax[axis] = material.worldBoundsMax[axis];
-        }
         modelSnapshot.materials.push_back(
             std::move(materialSnapshot));
     }
@@ -809,11 +797,6 @@ void UiSubsystem::SetMaterialInstanceSceneModels(
         modelSnapshot.objectId = model.objectId;
         modelSnapshot.displayName = model.displayName;
         modelSnapshot.objectIdentity = model.objectIdentity;
-        for (int axis = 0; axis < 3; ++axis)
-        {
-            modelSnapshot.worldBoundsMin[axis] = model.worldBoundsMin[axis];
-            modelSnapshot.worldBoundsMax[axis] = model.worldBoundsMax[axis];
-        }
         modelSnapshot.materials.reserve(model.materials.size());
         for (const Editor::Selection::MaterialInstanceModelMaterial& material :
              model.materials)
@@ -823,11 +806,6 @@ void UiSubsystem::SetMaterialInstanceSceneModels(
             materialSnapshot.materialSlotIndex = material.materialSlotIndex;
             materialSnapshot.materialSlotName = material.materialSlotName;
             materialSnapshot.materialInstancePath = material.materialInstancePath;
-            for (int axis = 0; axis < 3; ++axis)
-            {
-                materialSnapshot.worldBoundsMin[axis] = material.worldBoundsMin[axis];
-                materialSnapshot.worldBoundsMax[axis] = material.worldBoundsMax[axis];
-            }
             modelSnapshot.materials.push_back(std::move(materialSnapshot));
         }
         sceneModels.push_back(std::move(modelSnapshot));
@@ -897,11 +875,6 @@ bool UiSubsystem::RequestModelSelection(
     modelSnapshot.objectId = model.objectId;
     modelSnapshot.displayName = model.displayName;
     modelSnapshot.objectIdentity = model.objectIdentity;
-    for (int axis = 0; axis < 3; ++axis)
-    {
-        modelSnapshot.worldBoundsMin[axis] = model.worldBoundsMin[axis];
-        modelSnapshot.worldBoundsMax[axis] = model.worldBoundsMax[axis];
-    }
     modelSnapshot.materials.reserve(model.materials.size());
     for (const Editor::Selection::MaterialInstanceModelMaterial& material : model.materials)
     {
@@ -910,11 +883,6 @@ bool UiSubsystem::RequestModelSelection(
         materialSnapshot.materialSlotIndex = material.materialSlotIndex;
         materialSnapshot.materialSlotName = material.materialSlotName;
         materialSnapshot.materialInstancePath = material.materialInstancePath;
-        for (int axis = 0; axis < 3; ++axis)
-        {
-            materialSnapshot.worldBoundsMin[axis] = material.worldBoundsMin[axis];
-            materialSnapshot.worldBoundsMax[axis] = material.worldBoundsMax[axis];
-        }
         modelSnapshot.materials.push_back(std::move(materialSnapshot));
     }
     selectedModelMaterials = std::move(modelSnapshot);
@@ -1046,6 +1014,11 @@ RuntimeResult<void> UiSubsystem::InitializeDataModel()
     bound = constructor.Bind("debug_view_label", &bindingData.debugViewLabel) && bound;
     bound = constructor.Bind("debug_view_value", &bindingData.debugViewValue) && bound;
     bound = constructor.Bind("debug_view_mode", &bindingData.debugViewMode) && bound;
+    bound = constructor.Bind("debug_material_group_label", &bindingData.debugMaterialGroupLabel) && bound;
+    bound = constructor.Bind("debug_sss_group_label", &bindingData.debugSssGroupLabel) && bound;
+    bound = constructor.Bind("debug_hair_group_label", &bindingData.debugHairGroupLabel) && bound;
+    bound = constructor.Bind("debug_eye_group_label", &bindingData.debugEyeGroupLabel) && bound;
+    bound = constructor.Bind("debug_cloth_group_label", &bindingData.debugClothGroupLabel) && bound;
     bound = constructor.Bind("debug_full_label", &bindingData.debugFullLabel) && bound;
     bound = constructor.Bind("debug_base_color_label", &bindingData.debugBaseColorLabel) && bound;
     bound = constructor.Bind("debug_emissive_label", &bindingData.debugEmissiveLabel) && bound;
@@ -1088,6 +1061,28 @@ RuntimeResult<void> UiSubsystem::InitializeDataModel()
     bound = constructor.Bind("debug_hair_trt_path_color_label", &bindingData.debugHairTrtPathColorLabel) && bound;
     bound = constructor.Bind("debug_hair_ibl_fallback_label", &bindingData.debugHairIblFallbackLabel) && bound;
     bound = constructor.Bind("debug_hair_ms_fallback_label", &bindingData.debugHairMultipleScatteringFallbackLabel) && bound;
+    bound = constructor.Bind("debug_eye_frame_label", &bindingData.debugEyeFrameLabel) && bound;
+    bound = constructor.Bind("debug_eye_cornea_normal_label", &bindingData.debugEyeCorneaNormalLabel) && bound;
+    bound = constructor.Bind("debug_eye_iris_normal_label", &bindingData.debugEyeIrisNormalLabel) && bound;
+    bound = constructor.Bind("debug_eye_iris_plane_normal_label", &bindingData.debugEyeIrisPlaneNormalLabel) && bound;
+    bound = constructor.Bind("debug_eye_cornea_fresnel_label", &bindingData.debugEyeCorneaFresnelLabel) && bound;
+    bound = constructor.Bind("debug_eye_cornea_specular_label", &bindingData.debugEyeCorneaSpecularLabel) && bound;
+    bound = constructor.Bind("debug_eye_refracted_view_direction_label", &bindingData.debugEyeRefractedViewDirectionLabel) && bound;
+    bound = constructor.Bind("debug_eye_iris_hit_distance_label", &bindingData.debugEyeIrisHitDistanceLabel) && bound;
+    bound = constructor.Bind("debug_eye_iris_uv_label", &bindingData.debugEyeIrisUvLabel) && bound;
+    bound = constructor.Bind("debug_eye_valid_iris_hit_label", &bindingData.debugEyeValidIrisHitLabel) && bound;
+    bound = constructor.Bind("debug_eye_iris_mask_label", &bindingData.debugEyeIrisMaskLabel) && bound;
+    bound = constructor.Bind("debug_eye_pupil_mask_label", &bindingData.debugEyePupilMaskLabel) && bound;
+    bound = constructor.Bind("debug_eye_limbus_mask_label", &bindingData.debugEyeLimbusMaskLabel) && bound;
+    bound = constructor.Bind("debug_eye_light_transmission_in_label", &bindingData.debugEyeLightTransmissionInLabel) && bound;
+    bound = constructor.Bind("debug_eye_view_transmission_out_label", &bindingData.debugEyeViewTransmissionOutLabel) && bound;
+    bound = constructor.Bind("debug_eye_iris_direct_label", &bindingData.debugEyeIrisDirectLabel) && bound;
+    bound = constructor.Bind("debug_eye_sclera_direct_label", &bindingData.debugEyeScleraDirectLabel) && bound;
+    bound = constructor.Bind("debug_eye_inner_ibl_label", &bindingData.debugEyeInnerIblLabel) && bound;
+    bound = constructor.Bind("debug_eye_caustic_gain_label", &bindingData.debugEyeCausticGainLabel) && bound;
+    bound = constructor.Bind("debug_eye_inner_shadow_label", &bindingData.debugEyeInnerShadowLabel) && bound;
+    bound = constructor.Bind("debug_eye_cornea_shadow_label", &bindingData.debugEyeCorneaShadowLabel) && bound;
+    bound = constructor.Bind("debug_eye_profile_label", &bindingData.debugEyeProfileLabel) && bound;
     bound = constructor.Bind("debug_cloth_model_label", &bindingData.debugClothModelLabel) && bound;
     bound = constructor.Bind("debug_cloth_sheen_color_label", &bindingData.debugClothSheenColorLabel) && bound;
     bound = constructor.Bind("debug_cloth_sheen_roughness_label", &bindingData.debugClothSheenRoughnessLabel) && bound;
@@ -1788,6 +1783,11 @@ void UiSubsystem::SyncBindingData()
     bindingData.debugViewLabel = Localize("control.debug_view");
     bindingData.debugViewMode = lastViewModel.debugViewMode;
     bindingData.debugViewValue = GetDebugViewName(lastViewModel.debugViewMode);
+    bindingData.debugMaterialGroupLabel = Localize("debug.group.material");
+    bindingData.debugSssGroupLabel = Localize("debug.group.sss");
+    bindingData.debugHairGroupLabel = Localize("debug.group.hair");
+    bindingData.debugEyeGroupLabel = Localize("debug.group.eye");
+    bindingData.debugClothGroupLabel = Localize("debug.group.cloth");
     bindingData.debugFullLabel = Localize("debug.full");
     bindingData.debugBaseColorLabel = Localize("debug.base_color");
     bindingData.debugEmissiveLabel = Localize("debug.emissive");
@@ -1830,6 +1830,28 @@ void UiSubsystem::SyncBindingData()
     bindingData.debugHairTrtPathColorLabel = Localize("debug.hair_trt_path_color");
     bindingData.debugHairIblFallbackLabel = Localize("debug.hair_ibl_fallback");
     bindingData.debugHairMultipleScatteringFallbackLabel = Localize("debug.hair_ms_fallback");
+    bindingData.debugEyeFrameLabel = Localize("debug.eye_frame");
+    bindingData.debugEyeCorneaNormalLabel = Localize("debug.eye_cornea_normal");
+    bindingData.debugEyeIrisNormalLabel = Localize("debug.eye_iris_normal");
+    bindingData.debugEyeIrisPlaneNormalLabel = Localize("debug.eye_iris_plane_normal");
+    bindingData.debugEyeCorneaFresnelLabel = Localize("debug.eye_cornea_fresnel");
+    bindingData.debugEyeCorneaSpecularLabel = Localize("debug.eye_cornea_specular");
+    bindingData.debugEyeRefractedViewDirectionLabel = Localize("debug.eye_refracted_view_direction");
+    bindingData.debugEyeIrisHitDistanceLabel = Localize("debug.eye_iris_hit_distance");
+    bindingData.debugEyeIrisUvLabel = Localize("debug.eye_iris_uv");
+    bindingData.debugEyeValidIrisHitLabel = Localize("debug.eye_valid_iris_hit");
+    bindingData.debugEyeIrisMaskLabel = Localize("debug.eye_iris_mask");
+    bindingData.debugEyePupilMaskLabel = Localize("debug.eye_pupil_mask");
+    bindingData.debugEyeLimbusMaskLabel = Localize("debug.eye_limbus_mask");
+    bindingData.debugEyeLightTransmissionInLabel = Localize("debug.eye_light_transmission_in");
+    bindingData.debugEyeViewTransmissionOutLabel = Localize("debug.eye_view_transmission_out");
+    bindingData.debugEyeIrisDirectLabel = Localize("debug.eye_iris_direct");
+    bindingData.debugEyeScleraDirectLabel = Localize("debug.eye_sclera_direct");
+    bindingData.debugEyeInnerIblLabel = Localize("debug.eye_inner_ibl");
+    bindingData.debugEyeCausticGainLabel = Localize("debug.eye_caustic_gain");
+    bindingData.debugEyeInnerShadowLabel = Localize("debug.eye_inner_shadow");
+    bindingData.debugEyeCorneaShadowLabel = Localize("debug.eye_cornea_shadow");
+    bindingData.debugEyeProfileLabel = Localize("debug.eye_profile");
     bindingData.debugClothModelLabel = Localize("debug.cloth_model");
     bindingData.debugClothSheenColorLabel = Localize("debug.cloth_sheen_color");
     bindingData.debugClothSheenRoughnessLabel = Localize("debug.cloth_sheen_roughness");

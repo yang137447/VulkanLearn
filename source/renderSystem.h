@@ -382,12 +382,6 @@ private:
         vk::CommandBuffer commandBuffer,
         uint32_t swapchainImageIndex);
     void RefreshEnvironmentUpdateDiagnostics();
-    void ApplyPendingSelectionFocus();
-    void ScheduleSelectionFocus(
-        uint64_t worldGeneration,
-        const Eigen::Vector3f& boundsMin,
-        const Eigen::Vector3f& boundsMax);
-
     uint32_t currentFrame = 0;
     uint32_t swapChainImageIndex = 0;
     uint64_t nextSnapshotFrameIndex = 0;
@@ -455,13 +449,6 @@ private:
     std::shared_ptr<const VL::UiRenderSnapshot> currentUiRenderSnapshot;
     std::string uiVertexShaderPath;
     std::string uiFragmentShaderPath;
-    struct PendingSelectionFocus
-    {
-        uint64_t worldGeneration = 0;
-        Eigen::Vector3f boundsMin = Eigen::Vector3f::Zero();
-        Eigen::Vector3f boundsMax = Eigen::Vector3f::Zero();
-    };
-    std::optional<PendingSelectionFocus> pendingSelectionFocus;
     bool hasMaterialInstancePreviewMaterialOverride = false;
     std::string materialInstancePreviewOverridePath;
     std::string materialInstancePreviewOverrideMaterialKey;

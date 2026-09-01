@@ -77,6 +77,8 @@ public:
 
 private:
     EditorCommandSubmission SubmitInternal(EditorCommandEnvelope command);
+    EditorCommandSubmission SubmitAutomaticPreviewCommand(
+        EditorCommandEnvelope command);
     EditorCommandResult ExecuteCommand(const EditorCommandEnvelope& command);
     EditorCommandResult FinishServiceResult(
         const EditorCommandEnvelope& command,
@@ -100,6 +102,11 @@ private:
         BuildBaselinePreviewDraft(std::string_view assetPath) const;
     void PollPreview();
     void RejectPendingPreviewForWorldChange();
+    void QueueAutomaticPreviewConnection();
+    void SubmitQueuedAutomaticPreviewDisconnect();
+    void SubmitQueuedAutomaticPreviewConnection();
+    void QueueAutomaticPreviewApply(std::string_view assetPath);
+    void SubmitQueuedAutomaticPreviewApply();
 
     void ApplyServiceResult(const MaterialEditorServiceResult& result);
     void RefreshSnapshotFromService();
@@ -135,6 +142,9 @@ private:
     std::string lastCommandMessage;
     std::unique_ptr<Preview::MaterialInstancePreviewController> previewController;
     std::optional<EditorCommandEnvelope> pendingPreviewCommand;
+    std::optional<std::string> queuedAutomaticPreviewDisconnectAssetPath;
+    std::optional<std::string> queuedAutomaticPreviewConnectionAssetPath;
+    std::optional<std::string> queuedAutomaticPreviewApplyAssetPath;
     uint64_t worldGeneration = 0;
     bool initialized = false;
 };

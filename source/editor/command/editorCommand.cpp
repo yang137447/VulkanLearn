@@ -15,7 +15,7 @@ constexpr EditorCommandSpec kSpecs[] = {
     {EditorCommandType::OpenMaterialInstanceAsset, "material.open", 1, false, false, false},
     {EditorCommandType::OpenTextureAsset, "texture.open", 1, false, false, false},
     {EditorCommandType::SelectMaterialInstanceDocument, "material.select", 1, false, false, false},
-    {EditorCommandType::CloseMaterialInstanceAsset, "material.close", 1, false, true, false},
+    {EditorCommandType::CloseMaterialInstanceAsset, "material.close", 1, false, false, false},
     {EditorCommandType::GetMaterialInstanceDocument, "material.get_document", 1, false, false, false},
     {EditorCommandType::GetMaterialInstanceReferenceContext, "material.get_reference_context", 1, false, false, false},
     {EditorCommandType::SetMaterialParameterOverride, "material.set_parameter", 1, true, true, false},

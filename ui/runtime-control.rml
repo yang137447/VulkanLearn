@@ -77,6 +77,8 @@
                                 <div class="section-current">{{debug_view_value}}</div>
                             </div>
                             <div class="debug-grid">
+                                <div class="debug-group">
+                                    <div class="debug-group-title">{{debug_material_group_label}}</div>
                                 <button data-class-selected="debug_view_mode == 0" data-event-click="set_debug_view(0)">{{debug_full_label}}</button>
                                 <button data-class-selected="debug_view_mode == 1" data-event-click="set_debug_view(1)">{{debug_base_color_label}}</button>
                                 <button data-class-selected="debug_view_mode == 2" data-event-click="set_debug_view(2)">{{debug_emissive_label}}</button>
@@ -90,6 +92,9 @@
                                 <button data-class-selected="debug_view_mode == 10" data-event-click="set_debug_view(10)">{{debug_indirect_specular_label}}</button>
                                 <button data-class-selected="debug_view_mode == 11" data-event-click="set_debug_view(11)">{{debug_shadow_cascade_label}}</button>
                                 <button data-class-selected="debug_view_mode == 12" data-event-click="set_debug_view(12)">{{debug_shading_model_label}}</button>
+                                </div>
+                                <div class="debug-group">
+                                    <div class="debug-group-title">{{debug_sss_group_label}}</div>
                                 <button data-class-selected="debug_view_mode == 13" data-event-click="set_debug_view(13)">{{debug_subsurface_weight_label}}</button>
                                 <button data-class-selected="debug_view_mode == 14" data-event-click="set_debug_view(14)">{{debug_transmission_weight_label}}</button>
                                 <button data-class-selected="debug_view_mode == 15" data-event-click="set_debug_view(15)">{{debug_subsurface_asset_id_label}}</button>
@@ -98,6 +103,9 @@
                                 <button data-class-selected="debug_view_mode == 18" data-event-click="set_debug_view(18)">{{debug_diffuse_after_sss_label}}</button>
                                 <button data-class-selected="debug_view_mode == 19" data-event-click="set_debug_view(19)">{{debug_sss_pixel_radius_label}}</button>
                                 <button data-class-selected="debug_view_mode == 20" data-event-click="set_debug_view(20)">{{debug_sss_valid_weight_label}}</button>
+                                </div>
+                                <div class="debug-group">
+                                    <div class="debug-group-title">{{debug_hair_group_label}}</div>
                                 <button data-class-selected="debug_view_mode == 21" data-event-click="set_debug_view(21)">{{debug_hair_world_tangent_label}}</button>
                                 <button data-class-selected="debug_view_mode == 22" data-event-click="set_debug_view(22)">{{debug_hair_tangent_rootward_label}}</button>
                                 <button data-class-selected="debug_view_mode == 23" data-event-click="set_debug_view(23)">{{debug_hair_theta_io_label}}</button>
@@ -119,6 +127,34 @@
                                 <button data-class-selected="debug_view_mode == 39" data-event-click="set_debug_view(39)">{{debug_hair_trt_path_color_label}}</button>
                                 <button data-class-selected="debug_view_mode == 40" data-event-click="set_debug_view(40)">{{debug_hair_ibl_fallback_label}}</button>
                                 <button data-class-selected="debug_view_mode == 41" data-event-click="set_debug_view(41)">{{debug_hair_ms_fallback_label}}</button>
+                                </div>
+                                <div class="debug-group">
+                                    <div class="debug-group-title">{{debug_eye_group_label}}</div>
+                                    <button data-class-selected="debug_view_mode == 42" data-event-click="set_debug_view(42)">{{debug_eye_frame_label}}</button>
+                                    <button data-class-selected="debug_view_mode == 43" data-event-click="set_debug_view(43)">{{debug_eye_cornea_normal_label}}</button>
+                                    <button data-class-selected="debug_view_mode == 44" data-event-click="set_debug_view(44)">{{debug_eye_iris_normal_label}}</button>
+                                    <button data-class-selected="debug_view_mode == 45" data-event-click="set_debug_view(45)">{{debug_eye_iris_plane_normal_label}}</button>
+                                    <button data-class-selected="debug_view_mode == 46" data-event-click="set_debug_view(46)">{{debug_eye_cornea_fresnel_label}}</button>
+                                    <button data-class-selected="debug_view_mode == 47" data-event-click="set_debug_view(47)">{{debug_eye_cornea_specular_label}}</button>
+                                    <button data-class-selected="debug_view_mode == 48" data-event-click="set_debug_view(48)">{{debug_eye_refracted_view_direction_label}}</button>
+                                    <button data-class-selected="debug_view_mode == 49" data-event-click="set_debug_view(49)">{{debug_eye_iris_hit_distance_label}}</button>
+                                    <button data-class-selected="debug_view_mode == 50" data-event-click="set_debug_view(50)">{{debug_eye_iris_uv_label}}</button>
+                                    <button data-class-selected="debug_view_mode == 51" data-event-click="set_debug_view(51)">{{debug_eye_valid_iris_hit_label}}</button>
+                                    <button data-class-selected="debug_view_mode == 52" data-event-click="set_debug_view(52)">{{debug_eye_iris_mask_label}}</button>
+                                    <button data-class-selected="debug_view_mode == 53" data-event-click="set_debug_view(53)">{{debug_eye_pupil_mask_label}}</button>
+                                    <button data-class-selected="debug_view_mode == 54" data-event-click="set_debug_view(54)">{{debug_eye_limbus_mask_label}}</button>
+                                    <button data-class-selected="debug_view_mode == 55" data-event-click="set_debug_view(55)">{{debug_eye_light_transmission_in_label}}</button>
+                                    <button data-class-selected="debug_view_mode == 56" data-event-click="set_debug_view(56)">{{debug_eye_view_transmission_out_label}}</button>
+                                    <button data-class-selected="debug_view_mode == 57" data-event-click="set_debug_view(57)">{{debug_eye_iris_direct_label}}</button>
+                                    <button data-class-selected="debug_view_mode == 58" data-event-click="set_debug_view(58)">{{debug_eye_sclera_direct_label}}</button>
+                                    <button data-class-selected="debug_view_mode == 59" data-event-click="set_debug_view(59)">{{debug_eye_inner_ibl_label}}</button>
+                                    <button data-class-selected="debug_view_mode == 60" data-event-click="set_debug_view(60)">{{debug_eye_caustic_gain_label}}</button>
+                                    <button data-class-selected="debug_view_mode == 61" data-event-click="set_debug_view(61)">{{debug_eye_inner_shadow_label}}</button>
+                                    <button data-class-selected="debug_view_mode == 62" data-event-click="set_debug_view(62)">{{debug_eye_cornea_shadow_label}}</button>
+                                    <button data-class-selected="debug_view_mode == 63" data-event-click="set_debug_view(63)">{{debug_eye_profile_label}}</button>
+                                </div>
+                                <div class="debug-group">
+                                    <div class="debug-group-title">{{debug_cloth_group_label}}</div>
                                 <button data-class-selected="debug_view_mode == 64" data-event-click="set_debug_view(64)">{{debug_cloth_model_label}}</button>
                                 <button data-class-selected="debug_view_mode == 65" data-event-click="set_debug_view(65)">{{debug_cloth_sheen_color_label}}</button>
                                 <button data-class-selected="debug_view_mode == 66" data-event-click="set_debug_view(66)">{{debug_cloth_sheen_roughness_label}}</button>
@@ -129,6 +165,7 @@
                                 <button data-class-selected="debug_view_mode == 71" data-event-click="set_debug_view(71)">{{debug_cloth_direct_sheen_label}}</button>
                                 <button data-class-selected="debug_view_mode == 72" data-event-click="set_debug_view(72)">{{debug_cloth_indirect_sheen_label}}</button>
                                 <button data-class-selected="debug_view_mode == 73" data-event-click="set_debug_view(73)">{{debug_cloth_ibl_fallback_label}}</button>
+                                </div>
                             </div>
                         </div>
 

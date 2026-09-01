@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <deque>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -35,6 +36,7 @@ public:
     explicit EditorCommandBus(std::size_t maxResultCount = 256);
 
     EditorCommandSubmission Submit(EditorCommandEnvelope command);
+    EditorCommandSubmission SubmitInternal(EditorCommandEnvelope command);
     EditorCommandSubmission Queue(EditorCommandEnvelope command);
     std::vector<EditorCommandEnvelope> Drain(std::size_t maxCount = 0);
 
@@ -52,6 +54,9 @@ public:
     std::size_t PendingCount() const;
 
 private:
+    EditorCommandSubmission SubmitImpl(
+        EditorCommandEnvelope command,
+        bool internalCommand);
     EditorCommandResult MakeRejectedResult(
         EditorCommandId commandId,
         EditorErrorCode errorCode,
@@ -60,6 +65,8 @@ private:
 
     mutable std::mutex mutex;
     EditorCommandId nextCommandId = 1;
+    EditorCommandId nextInternalCommandId =
+        std::numeric_limits<EditorCommandId>::max();
     std::size_t maxResultCount;
     std::deque<EditorCommandEnvelope> pendingCommands;
     std::unordered_map<EditorCommandId, EditorCommandResult> results;

@@ -5,6 +5,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "editor/command/editorCommand.h"
@@ -32,8 +33,8 @@ public:
     virtual void Submit(VL::EditorCommandEnvelope command) = 0;
 };
 
-// 面板只提交场景选择请求，具体的描边、World 校验和相机聚焦由 EngineLoop
-// 在稳定帧边界统一处理，避免 ImGui 回调直接触碰 renderer-owned 状态。
+// 面板只提交场景选择请求，具体的描边和 World 校验由 EngineLoop 在稳定帧
+// 边界统一处理，避免 ImGui 回调直接触碰 renderer-owned 状态。
 class IMaterialInstanceSceneSelectionSink
 {
 public:
@@ -121,8 +122,6 @@ struct MaterialInstanceModelMaterialSnapshot
     uint32_t materialSlotIndex = 0;
     std::string materialSlotName;
     std::string materialInstancePath;
-    std::array<float, 3> worldBoundsMin{};
-    std::array<float, 3> worldBoundsMax{};
 };
 
 struct MaterialInstanceModelSnapshot
@@ -132,8 +131,6 @@ struct MaterialInstanceModelSnapshot
     VL::RuntimeId objectId = 0;
     std::string displayName;
     std::string objectIdentity;
-    std::array<float, 3> worldBoundsMin{};
-    std::array<float, 3> worldBoundsMax{};
     std::vector<MaterialInstanceModelMaterialSnapshot> materials;
 };
 
@@ -201,6 +198,9 @@ private:
     std::string pendingParameterEditAssetPath;
     uint64_t pendingParameterEditRevision = 0;
     std::unordered_map<std::string, EditorParameterValue> pendingParameterEdits;
+    std::unordered_set<std::string> pendingTabClosures;
+    std::string pendingTabSelection;
+    std::string submittedTabSelection;
 };
 
 } // namespace VL::EditorUi
