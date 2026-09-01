@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <string>
 
+#include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
 #include "textureAssetLoader.h"
@@ -133,30 +134,36 @@ namespace
                 "TextureIO ForceOn did not swap decoded image rows");
         }
     }
+} // namespace
+
+class TextureAssetTest : public ::testing::Test
+{
+protected:
+    void SetUp() override
+    {
+        fixtureDirectory =
+            std::filesystem::temp_directory_path() /
+            "vulkanlearn_texture_asset_tests";
+        fixturePath = fixtureDirectory / "T_textureAssetGate.json";
+        std::filesystem::remove_all(fixtureDirectory);
+        std::filesystem::create_directories(fixtureDirectory);
+    }
+
+    void TearDown() override
+    {
+        std::filesystem::remove_all(fixtureDirectory);
+    }
+
+    std::filesystem::path fixtureDirectory;
+    std::filesystem::path fixturePath;
+};
+
+TEST_F(TextureAssetTest, FieldGate)
+{
+    TestTextureAssetFieldGate(fixturePath);
 }
 
-int main()
+TEST_F(TextureAssetTest, VerticalFlip)
 {
-    const std::filesystem::path fixtureDirectory =
-        std::filesystem::temp_directory_path() /
-        "vulkanlearn_texture_asset_tests";
-    const std::filesystem::path fixturePath =
-        fixtureDirectory / "T_textureAssetGate.json";
-
-    try
-    {
-        std::filesystem::create_directories(fixtureDirectory);
-        TestTextureAssetFieldGate(fixturePath);
-        TestTextureIoVerticalFlip();
-        std::filesystem::remove_all(fixtureDirectory);
-        std::cout << "Texture asset contract tests passed." << std::endl;
-        return 0;
-    }
-    catch (const std::exception& exception)
-    {
-        std::filesystem::remove_all(fixtureDirectory);
-        std::cerr << "Texture asset contract tests failed: "
-                  << exception.what() << std::endl;
-        return 1;
-    }
+    TestTextureIoVerticalFlip();
 }

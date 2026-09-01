@@ -15,14 +15,23 @@ target_link_libraries(hair_lut_generator
         Json
 )
 
-add_test(
-    NAME hair_lut_generator_contract
-    COMMAND hair_lut_generator
-        --validate
-        ${CMAKE_CURRENT_SOURCE_DIR}/fixtures_hair_author_metadata.json)
+add_executable(hair_lut_generator_tests
+    hairLutGeneratorTests.cpp
+    ${PROJECT_SOURCE_DIR}/source/render/hair/hairAssets.cpp
+    ${PROJECT_SOURCE_DIR}/source/render/hair/hairConventions.cpp
+    ${PROJECT_SOURCE_DIR}/source/render/hair/hairLutCoordinates.cpp
+)
 
-add_test(
-    NAME hair_lut_generator_dispatch
-    COMMAND hair_lut_generator
-        --dispatch
-        ${CMAKE_CURRENT_SOURCE_DIR}/fixtures_hair_author_metadata.json)
+target_include_directories(hair_lut_generator_tests
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}/source
+)
+
+target_link_libraries(hair_lut_generator_tests
+    PRIVATE
+        Json
+)
+
+vulkanlearn_add_gtest(
+    hair_lut_generator_tests
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")

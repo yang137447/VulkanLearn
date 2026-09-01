@@ -11,6 +11,7 @@
 #include <utility>
 #include <vector>
 
+#include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
 #include "editor/command/editorCommand.h"
@@ -1377,25 +1378,37 @@ void TestLandedPreviewProtocolBoundaries()
 
 } // namespace
 
-int main()
+TEST(MaterialInstanceEditorLanded, CommandSchema)
 {
-    try
-    {
-        TestLandedCommandSchema();
-        TestLandedJsonCommandCodec();
-        TestLandedCommandBus();
-        TestLandedSparseCandidate();
-        TestLandedPersistenceConflict();
-        TestLandedPreviewTypes();
-        TestLandedPreviewProtocolBoundaries();
-        std::cout << "Material instance editor landed-interface tests passed."
-                  << std::endl;
-        return 0;
-    }
-    catch (const std::exception& exception)
-    {
-        std::cerr << "Material instance editor landed-interface tests failed: "
-                  << exception.what() << std::endl;
-        return 1;
-    }
+    TestLandedCommandSchema();
+}
+
+TEST(MaterialInstanceEditorLanded, JsonCommandCodec)
+{
+    TestLandedJsonCommandCodec();
+}
+
+TEST(MaterialInstanceEditorLanded, CommandBus)
+{
+    TestLandedCommandBus();
+}
+
+TEST(MaterialInstanceEditorLanded, SparseCandidate)
+{
+    TestLandedSparseCandidate();
+}
+
+TEST(MaterialInstanceEditorLanded, PersistenceConflict)
+{
+    TestLandedPersistenceConflict();
+}
+
+TEST(MaterialInstanceEditorLanded, PreviewTypes)
+{
+    TestLandedPreviewTypes();
+}
+
+TEST(MaterialInstanceEditorLanded, PreviewProtocolBoundaries)
+{
+    TestLandedPreviewProtocolBoundaries();
 }

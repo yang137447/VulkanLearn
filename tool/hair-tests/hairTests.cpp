@@ -4,6 +4,8 @@
 #include <filesystem>
 #include <stdexcept>
 #include <string>
+
+#include <gtest/gtest.h>
 #include <functional>
 #include <vector>
 
@@ -421,26 +423,52 @@ void TestHairValidationSceneManifest()
 
 } // namespace
 
-int main()
+TEST(Hair, AngleConvention)
 {
-    try
-    {
-        TestHairAngleConvention();
-        TestHairBaseColorAbsorptionConvention();
-        TestHairAzimuthalRoots();
-        TestHairPathWeights();
-        TestHairWhiteFurnaceAndParameterIsolation();
-        TestHairGBufferRoundTrip();
-        TestHairLutMetadataContract();
-        TestHairLutCoordinateGolden();
-        TestHairMaterialAuthoringContract();
-        TestHairValidationSceneManifest();
-        std::cout << "Hair contract tests passed." << std::endl;
-        return 0;
-    }
-    catch (const std::exception& exception)
-    {
-        std::cerr << "Hair contract tests failed: " << exception.what() << std::endl;
-        return 1;
-    }
+    TestHairAngleConvention();
+}
+
+TEST(Hair, BaseColorAbsorptionConvention)
+{
+    TestHairBaseColorAbsorptionConvention();
+}
+
+TEST(Hair, AzimuthalRoots)
+{
+    TestHairAzimuthalRoots();
+}
+
+TEST(Hair, PathWeights)
+{
+    TestHairPathWeights();
+}
+
+TEST(Hair, WhiteFurnaceAndParameterIsolation)
+{
+    TestHairWhiteFurnaceAndParameterIsolation();
+}
+
+TEST(Hair, GBufferRoundTrip)
+{
+    TestHairGBufferRoundTrip();
+}
+
+TEST(Hair, LutMetadataContract)
+{
+    TestHairLutMetadataContract();
+}
+
+TEST(Hair, LutCoordinateGolden)
+{
+    TestHairLutCoordinateGolden();
+}
+
+TEST(Hair, MaterialAuthoringContract)
+{
+    TestHairMaterialAuthoringContract();
+}
+
+TEST(Hair, ValidationSceneManifest)
+{
+    TestHairValidationSceneManifest();
 }

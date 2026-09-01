@@ -155,33 +155,11 @@ sample count。启用 Tracy 时，毫秒值同时写入对应 Tracy Plot；Vulka
 开发者 UI 显示 active/pending generation、当前阶段、face/SH/mip 进度、是否仍在使用
 旧资源，以及四类 GPU 毫秒值。
 
-## 10. 验证入口
-
-专用命令：
-
-```powershell
-build/bin/main.exe --environmentstress 3 --exit-after-tests --no-dev-ui
-```
-
-测试状态机由 `RuntimeTestHooks` 持有。它读取只读的环境诊断快照，并通过
-`RuntimeCommandType::SetProceduralSkyParameters` 投递参数修改；`RuntimeCommandExecutor`
-只在 active World 所有权侧写回参数。resize、render graph reload、frame smoke 与环境
-压力测试都遵守同一所有权规则；`EngineLoop` 不保存测试阶段、计数、断言或基线数据。
-
-测试会：
-
-1. 等待初始环境代际和 timestamp 样本完成；
-2. 连续修改程序化天空源参数；
-3. 验证 pending 期间 active generation 未变化；
-4. 验证 environment 与 prefilter active texture 地址保持稳定；
-5. 恢复原始天空参数；
-6. 验证每个新代际都产生预期数量的 cubemap、SH、prefilter 和 commit timestamp 样本。
-
-## 11. 必须保持的约束
+## 10. 必须保持的约束
 
 - 不得恢复“每个 swapchain image 各执行一次 SH 投影”的路径。
 - 不得在 pending 未完成时让 graphics descriptor 指向 pending。
 - 不得让分帧 cubemap face 读取会随帧变化的未冻结参数。
 - 不得用 `environmentIntensity` 触发派生资源重建。
 - 新增 queue 或 async compute 前，必须重新设计 ownership transfer 与跨 queue semaphore。
-- 修改预算、资源数或提交顺序时，必须更新本文和 `--environmentstress` 验收逻辑。
+- 修改预算、资源数或提交顺序时，必须同步更新本文和对应的模块测试。

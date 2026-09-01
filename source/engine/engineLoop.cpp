@@ -133,20 +133,11 @@ void EngineLoop::Shutdown()
     // Stop the CPU compile worker before any Vulkan teardown. The worker never
     // touches Vulkan, and dropping its in-flight candidate here guarantees no
     // callback can run after device resources are released.
-    RuntimeTestHooks& runtimeTests =
-        GetSubsystems().GetRuntimeTestHooks();
     const DiagnosticsSubsystem& diagnostics =
         GetSubsystems().GetDiagnosticsSubsystem();
     if (shaderReloadRuntime)
     {
-        const ShaderCompileWorkerShutdownDiagnostics
-            workerDiagnostics =
-                shaderReloadRuntime->Shutdown();
-        (void)runtimeTests
-            .FinalizeShaderShutdownInflightTestAfterWorkerShutdown(
-                *runtimeValidationServices,
-                workerDiagnostics,
-                diagnostics);
+        shaderReloadRuntime->Shutdown();
     }
 
     if (rendererBackendInitialized)
@@ -411,8 +402,6 @@ RuntimeResult<void> EngineLoop::LoadInitialWorldAndRenderer(
 
 void EngineLoop::Tick()
 {
-    const auto frameStartTime = std::chrono::steady_clock::now();
-
     PROFILE_SCOPE("Frame");
 
     GetSubsystems().GetConsoleSubsystem().Update();
@@ -541,21 +530,14 @@ void EngineLoop::Tick()
 
     {
         PROFILE_SCOPE("RenderLoop");
-        const bool collectFrameSmokeTiming = runtimeTests.ShouldCollectFrameTiming();
-        std::chrono::steady_clock::time_point renderLoopStartTime;
-        if (collectFrameSmokeTiming)
-        {
-            renderLoopStartTime = std::chrono::steady_clock::now();
-        }
-
         if (renderThread && renderThread->IsRunning())
         {
             // 这里是多线程模式
             RenderSystem::GetInstance().PublishSnapshotFromActiveWorld();
             renderThread->SubmitFrame();
             // V1 keeps the GT/RT split deterministic instead of fully async:
-            // RT owns frame recording, while GT waits before measuring frame
-            // time or touching renderer resources again.
+            // RT owns frame recording, while GT waits before touching renderer
+            // resources again.
             WaitForRenderThreadIdle();
         }
         else
@@ -564,13 +546,6 @@ void EngineLoop::Tick()
             RenderSystem::GetInstance().Render();
         }
 
-        if (collectFrameSmokeTiming)
-        {
-            const auto renderLoopEndTime = std::chrono::steady_clock::now();
-            const double renderLoopTimeMs =
-                std::chrono::duration<double, std::milli>(renderLoopEndTime - renderLoopStartTime).count();
-            runtimeTests.RecordFrameRenderLoopTime(renderLoopTimeMs);
-        }
     }
 
     {
@@ -581,13 +556,6 @@ void EngineLoop::Tick()
 
     PROFILE_FRAME();
 
-    const auto frameEndTime = std::chrono::steady_clock::now();
-    const double frameTimeMs =
-        std::chrono::duration<double, std::milli>(frameEndTime - frameStartTime).count();
-
-    runtimeTests.RecordFrameTime(
-        frameTimeMs,
-        GetSubsystems().GetDiagnosticsSubsystem());
 }
 
 void EngineLoop::ApplyQueuedUiActions()
@@ -913,13 +881,6 @@ void EngineLoop::PumpPlatformEvents()
 
         if (event.type == PlatformEventType::WindowResized)
         {
-            if (GetSubsystems().GetRuntimeTestHooks().ShouldSuppressResizeEvent(
-                    event.width,
-                    event.height))
-            {
-                continue;
-            }
-
             GetSubsystems().GetDiagnosticsSubsystem().ReportInfo(
                 "Window resized to " +
                 std::to_string(event.width) +

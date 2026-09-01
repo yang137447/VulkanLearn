@@ -17,4 +17,4 @@ target_link_libraries(material_schema_tests
         Spirv_Reflect
 )
 
-add_test(NAME material_schema_contract COMMAND material_schema_tests)
+vulkanlearn_add_gtest(material_schema_tests)

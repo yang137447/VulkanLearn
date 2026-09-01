@@ -202,17 +202,7 @@ build/bin/eye_authoring_adapter_tests.exe
 ctest --test-dir build --output-on-failure
 ```
 
-GPU/runtime 验证：
-
-```powershell
-build/bin/main.exe --eye-validation-test --exit-after-tests
-build/bin/main.exe --eye-performance-test --exit-after-tests
-build/bin/main.exe --eye-compute-reload-test --exit-after-tests
-```
-
-开启 `VULKANLEARN_EYE_LUT_READBACK=1` 后运行 validation，会执行 GPU readback；当前容差为各通道和 normalization error `<= 0.01`。`--eye-performance-test` 使用固定帧数检查 CPU-side draw-domain budget，而不是硬件 GPU counter。
-
-runtime validation 覆盖：
+模块测试覆盖：
 
 - Eye resource set、LUT metadata 和 World texture identity；
 - `forwardOpaque` binding 2 与 Eye descriptor layout；

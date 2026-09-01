@@ -28,4 +28,4 @@ target_link_libraries(shader_build_integration_tests
         Json
 )
 
-add_test(NAME shader_build_integration COMMAND shader_build_integration_tests)
+vulkanlearn_add_gtest(shader_build_integration_tests)

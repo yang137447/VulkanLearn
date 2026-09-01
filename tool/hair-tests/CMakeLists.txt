@@ -24,4 +24,4 @@ target_link_libraries(hair_tests
         Json
 )
 
-add_test(NAME hair_contract COMMAND hair_tests)
+vulkanlearn_add_gtest(hair_tests)

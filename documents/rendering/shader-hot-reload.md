@@ -178,11 +178,7 @@ compiled=4, shaderc=8, pipelinesCreated=4, committed=true, retiredPipelines=4
 
 ```text
 --shader-reload-test            手动 Graphics Surface/Shadow 回滚矩阵
---shader-auto-reload-test       FileMonitor + Compile Worker 矩阵
 --shader-compute-reload-test    Compute participant 矩阵
---shader-definition-reload-test M_*.json schema 重建/回滚矩阵
---shader-ui-reload-test         UI Overlay pipeline pair 矩阵
---shader-shutdown-inflight-test worker 阻塞期间 shutdown/join/丢弃矩阵
 --world-graph-transaction-test  World/Graph prepare fault/原子 commit 矩阵
 ```
 

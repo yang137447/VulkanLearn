@@ -15,4 +15,4 @@ target_link_libraries(shader_build_core_tests
         BLAKE3::blake3
 )
 
-add_test(NAME shader_build_core COMMAND shader_build_core_tests)
+vulkanlearn_add_gtest(shader_build_core_tests)

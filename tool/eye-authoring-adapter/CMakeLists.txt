@@ -34,4 +34,4 @@ target_link_libraries(eye_authoring_adapter_tests
         BLAKE3::blake3
 )
 
-add_test(NAME eye_authoring_adapter_contract COMMAND eye_authoring_adapter_tests)
+vulkanlearn_add_gtest(eye_authoring_adapter_tests)

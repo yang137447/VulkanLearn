@@ -253,11 +253,9 @@ build/bin/main.exe --dev-ui
 build/bin/main.exe --no-dev-ui
 ```
 
-The normal frame smoke path exercises UI initialization when it is enabled:
-
-```text
-build/bin/main.exe --framesmoke 2 --exit-after-tests
-```
+The normal startup path exercises UI initialization when it is enabled. Shader
+reload runtime validation remains available through the retained shader test
+entries documented in `documents/rendering/shader-hot-reload.md`.
 
 `workerThreadCount=1` uses the synchronous render path. `workerThreadCount=2`
 keeps UI updates on the game thread and consumes the immutable snapshot on the

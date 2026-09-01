@@ -3,6 +3,8 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+
+#include <gtest/gtest.h>
 #include <thread>
 #include <vector>
 
@@ -565,24 +567,37 @@ void TestStaleCacheHitRejectedBeforePublication()
 
 } // namespace
 
-int main()
+TEST(ShaderBuildIntegration, WarmStartAndTargetedInvalidation)
 {
-    try
-    {
-        TestWarmStartAndTargetedInvalidation();
-        TestManifestInvalidation();
-        TestStrictFailureAndRecovery();
-        TestVirtualSourceChangedScanAndCommitRollback();
-        TestFrozenIncludeAndCommitTimeSourceValidation();
-        TestMixedCacheHitPublicationPathConflict();
-        TestStaleCacheHitRejectedBeforePublication();
-        std::cout << "Shader build integration tests passed." << std::endl;
-        return 0;
-    }
-    catch (const std::exception& exception)
-    {
-        std::cerr << "Shader build integration tests failed: "
-                  << exception.what() << std::endl;
-        return 1;
-    }
+    TestWarmStartAndTargetedInvalidation();
+}
+
+TEST(ShaderBuildIntegration, ManifestInvalidation)
+{
+    TestManifestInvalidation();
+}
+
+TEST(ShaderBuildIntegration, StrictFailureAndRecovery)
+{
+    TestStrictFailureAndRecovery();
+}
+
+TEST(ShaderBuildIntegration, VirtualSourceChangedScanAndCommitRollback)
+{
+    TestVirtualSourceChangedScanAndCommitRollback();
+}
+
+TEST(ShaderBuildIntegration, FrozenIncludeAndCommitTimeSourceValidation)
+{
+    TestFrozenIncludeAndCommitTimeSourceValidation();
+}
+
+TEST(ShaderBuildIntegration, MixedCacheHitPublicationPathConflict)
+{
+    TestMixedCacheHitPublicationPathConflict();
+}
+
+TEST(ShaderBuildIntegration, StaleCacheHitRejectedBeforePublication)
+{
+    TestStaleCacheHitRejectedBeforePublication();
 }

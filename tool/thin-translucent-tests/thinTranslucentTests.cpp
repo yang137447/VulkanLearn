@@ -3,6 +3,8 @@
 #include <stdexcept>
 #include <string>
 
+#include <gtest/gtest.h>
+
 #include "thinTranslucentLegacyReference.h"
 #include "shaderVariant.h"
 
@@ -123,21 +125,22 @@ void TestRenderModeContract()
 
 } // namespace
 
-int main()
+TEST(ThinTranslucent, UeLegacyNormalIncidenceReference)
 {
-    try
-    {
-        TestUeLegacyNormalIncidenceReference();
-        TestCoverageAndFallbackReduction();
-        TestRenderModeContract();
-        TestMaterialMacroLookup();
-        std::cout << "Thin Translucent tests passed." << std::endl;
-        return 0;
-    }
-    catch (const std::exception& exception)
-    {
-        std::cerr << "Thin Translucent tests failed: "
-                  << exception.what() << std::endl;
-        return 1;
-    }
+    TestUeLegacyNormalIncidenceReference();
+}
+
+TEST(ThinTranslucent, CoverageAndFallbackReduction)
+{
+    TestCoverageAndFallbackReduction();
+}
+
+TEST(ThinTranslucent, RenderModeContract)
+{
+    TestRenderModeContract();
+}
+
+TEST(ThinTranslucent, MaterialMacroLookup)
+{
+    TestMaterialMacroLookup();
 }

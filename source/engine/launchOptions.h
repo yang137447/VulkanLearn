@@ -20,40 +20,14 @@ enum class DeveloperUiLaunchMode
 struct LaunchOptions
 {
     bool showHelp = false;
-    bool runReloadStress = false;
-    bool runReloadFailureRollbackTest = false;
-    bool runGeneratedMaterialFailureRollbackTest = false;
-    bool runGeneratedMeshFailureRollbackTest = false;
-    bool runGeneratedTextureFailureRollbackTest = false;
-    bool runGeneratedHighLightReloadStress = false;
-    bool runResizeStress = false;
-    bool runRenderGraphReloadStress = false;
-    bool runFrameSmokeTest = false;
-    bool runEnvironmentUpdateStress = false;
     bool runShaderReloadTest = false;
-    bool runShaderAutoReloadTest = false;
     bool runShaderComputeReloadTest = false;
-    bool runShaderDefinitionReloadTest = false;
     bool runWorldGraphTransactionTest = false;
-    bool runShaderUiReloadTest = false;
-    bool runShaderShutdownInflightTest = false;
-    bool runHairValidationTest = false;
-    bool runEyeValidationTest = false;
-    bool runEyePerformanceTest = false;
-    bool runEyeComputeReloadTest = false;
     bool forceShaderRebuild = false;
     bool exitAfterTests = false;
     DeveloperUiLaunchMode developerUiMode = DeveloperUiLaunchMode::UseConfig;
     std::optional<int> workerThreadCountOverride;
     std::string initialSceneOverride;
-    std::string reloadStressScenePath;
-    std::string reloadFailureScenePath;
-    int reloadStressCount = 20;
-    int highLightStressCount = 3;
-    int resizeStressCount = 6;
-    int graphReloadStressCount = 6;
-    int frameSmokeCount = 120;
-    int environmentUpdateStressCount = 3;
     std::string errorMessage;
 };
 

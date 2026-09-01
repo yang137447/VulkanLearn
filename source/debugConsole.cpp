@@ -183,49 +183,6 @@ void DebugConsole::ProcessCommand(const std::string& line)
         return;
     }
 
-    if (command == "reloadstress")
-    {
-        std::string scenePath;
-        int reloadCount = 20;
-        if (!(commandStream >> scenePath))
-        {
-            std::cout << "Usage: reloadstress <scene-path> [count]" << std::endl;
-            return;
-        }
-        commandStream >> std::ws;
-        if (!commandStream.eof() && !(commandStream >> reloadCount))
-        {
-            std::cout << "Usage: reloadstress <scene-path> [count]" << std::endl;
-            return;
-        }
-
-        VL::RuntimeCommand runtimeCommand;
-        runtimeCommand.type = VL::RuntimeCommandType::RunWorldReloadStress;
-        runtimeCommand.stringValue = scenePath;
-        runtimeCommand.intValue = reloadCount;
-        runtimeCommand.sourceText = line;
-        commandBus.Queue(std::move(runtimeCommand));
-        return;
-    }
-
-    if (command == "lightstress")
-    {
-        int reloadCount = 3;
-        commandStream >> std::ws;
-        if (!commandStream.eof() && !(commandStream >> reloadCount))
-        {
-            std::cout << "Usage: lightstress [count]" << std::endl;
-            return;
-        }
-
-        VL::RuntimeCommand runtimeCommand;
-        runtimeCommand.type = VL::RuntimeCommandType::RunGeneratedHighLightReloadStress;
-        runtimeCommand.intValue = reloadCount;
-        runtimeCommand.sourceText = line;
-        commandBus.Queue(std::move(runtimeCommand));
-        return;
-    }
-
     if (command == "environment")
     {
         float value = 0.0f;
@@ -499,8 +456,6 @@ void DebugConsole::PrintHelp() const
     std::cout << "  bloom knee <value> - set bloom soft knee\n";
     std::cout << "  bloom clamp <value> - set bloom fireflies clamp\n";
     std::cout << "  loadworld <scene-path> - request scene load through WorldTransitionCoordinator\n";
-    std::cout << "  reloadstress <scene-path> [count] - reload a scene once per frame for validation\n";
-    std::cout << "  lightstress [count] - generate a high-light scene and reload it for validation\n";
     std::cout << "  environment <value> - set unified sky and IBL intensity\n";
     std::cout << "  windgust <on|off|once> - toggle or trigger one SpeedTree gust\n";
     std::cout << "  windstrength <0..1> - set the SpeedTree base strength target\n";

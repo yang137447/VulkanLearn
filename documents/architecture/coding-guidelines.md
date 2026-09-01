@@ -65,3 +65,44 @@ Validate external or authored input once at the boundary that owns its interpret
 - Add a downstream check only when the code crosses a new independent trust boundary or when it protects memory safety from corrupted state; do not add redundant defensive checks by default.
 
 For example, the SpeedTree `windstrength` console command validates that its value is finite and inside `[0, 1]` before creating a runtime command. `SpeedTreeWindProfileSet` then consumes the normalized value under that contract without checking the same range again.
+
+## Test Governance
+
+Treat test code as owned production-support code: it must have a clear module
+owner, a narrow purpose, and a stable execution path. Do not add tests merely
+because a local experiment needs a one-off executable or a broad regression
+bucket.
+
+### Module Tests
+
+- Implement pure-logic, asset-contract, and module-integration tests with
+  GoogleTest. Register each target through the root
+  `vulkanlearn_add_gtest(...)` CMake helper so CTest discovers every `TEST`
+  independently.
+- Do not add a test-only `main()` function or a direct `add_test(...)` entry.
+  A real command-line tool may keep its production `main()`, but its automated
+  coverage must call focused GTest cases rather than invoke a second custom
+  test runner.
+- Put a new assertion in the nearest existing module test suite whenever that
+  module already has one. Create a new test target only for a distinct module
+  boundary with its own dependencies and ownership.
+- Keep one `TEST` focused on one observable behavior or contract. Split
+  unrelated scenarios so failures are diagnosable and GTest filtering remains
+  useful.
+- Fixtures must create and clean up only the resources they own. Do not rely
+  on test ordering, shared mutable files, or stale generated outputs.
+
+### Runtime Tests
+
+Runtime validation is intentionally exceptional. The supported engine runtime
+commands are limited to:
+
+- `--shader-reload-test`
+- `--shader-compute-reload-test`
+- `--world-graph-transaction-test`
+
+Do not add, restore, or expand runtime test commands without explicit user
+agreement and a written explanation of why a GoogleTest module test cannot
+validate the behavior. These runtime tests share `shader/spv/`, require serial
+execution, and exist only for end-to-end Vulkan publication and transaction
+paths that cannot be represented safely as module tests.

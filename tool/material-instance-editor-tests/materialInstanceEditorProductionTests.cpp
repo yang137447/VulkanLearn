@@ -12,6 +12,7 @@
 #include <string_view>
 #include <utility>
 
+#include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
 #include "editor/command/editorCommand.h"
@@ -1304,24 +1305,17 @@ void TestProductionRuntime()
 
 } // namespace
 
-void RunMaterialInstanceEditorProductionTests()
+TEST(MaterialInstanceEditorProduction, RenderStatePreviewBoundary)
 {
-    TestProductionDocumentService();
     TestProductionRenderStatePreviewBoundary();
-    TestProductionRuntime();
 }
 
-int main()
+TEST(MaterialInstanceEditorProduction, DocumentService)
 {
-    try
-    {
-        RunMaterialInstanceEditorProductionTests();
-        return 0;
-    }
-    catch (const std::exception& exception)
-    {
-        std::cerr << "Material instance editor production tests failed: "
-                  << exception.what() << std::endl;
-        return 1;
-    }
+    TestProductionDocumentService();
+}
+
+TEST(MaterialInstanceEditorProduction, Runtime)
+{
+    TestProductionRuntime();
 }

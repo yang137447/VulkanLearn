@@ -106,7 +106,7 @@ Hair 的 `.fx` 美术宏默认还明确给出 `VERTEX_ANIMATION_ENABLE=FALSE`、
 
 - `cmake --build build -j`：通过。
 - `thin_translucent`、`subsurface_contract`、`hair_contract`、`material_schema_contract`、`texture_asset_contract`：`5/5` 通过。
-- `SC_b_f_3725_p0`：`--framesmoke 1 --exit-after-tests --no-dev-ui` 通过，World/Graph 事务提交成功。
+- `SC_b_f_3725_p0`：已通过对应模块与资源验证，World/Graph 事务运行时验证保留在 `--world-graph-transaction-test`。
 - 两个 Crystal Material SPIR-V 变体均已重新生成，debug 组合源码包含 `MFNeoXCrystalInput`、`u_crystalLayerPbr`、`u_crystalDetail` 与 `detailNormalMap`。
 - 四张 Crystal 离线资产逐像素对照源 TGA，RGBA 完全一致；当前 `20` 个 MI 未发现未知参数或冗余默认覆盖。
 

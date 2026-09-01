@@ -6,6 +6,8 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+
+#include <gtest/gtest.h>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -503,26 +505,52 @@ void TestEyePerformanceBudget()
 
 } // namespace
 
-int main()
+TEST(Eye, ProfileUnitsAndDefaults)
 {
-    try
-    {
-        TestProfileUnitsAndDefaults();
-        TestVersionAndRangeRejection();
-        TestDuplicateIdsAreRejectedAtLoad();
-        TestResourcePathNormalization();
-        TestCausticGainNormalization();
-        TestPlaneSnellAndFresnelReference();
-        TestMaterialSchemaAndMetadata();
-        TestEyeGBufferRoundTripAndRejection();
-        TestEyeLodGazeAndPupilContract();
-        TestEyePerformanceBudget();
-        std::cout << "Eye contract tests passed.\n";
-        return 0;
-    }
-    catch (const std::exception& exception)
-    {
-        std::cerr << "Eye contract tests failed: " << exception.what() << '\n';
-        return 1;
-    }
+    TestProfileUnitsAndDefaults();
+}
+
+TEST(Eye, VersionAndRangeRejection)
+{
+    TestVersionAndRangeRejection();
+}
+
+TEST(Eye, DuplicateIdsAreRejectedAtLoad)
+{
+    TestDuplicateIdsAreRejectedAtLoad();
+}
+
+TEST(Eye, ResourcePathNormalization)
+{
+    TestResourcePathNormalization();
+}
+
+TEST(Eye, CausticGainNormalization)
+{
+    TestCausticGainNormalization();
+}
+
+TEST(Eye, PlaneSnellAndFresnelReference)
+{
+    TestPlaneSnellAndFresnelReference();
+}
+
+TEST(Eye, MaterialSchemaAndMetadata)
+{
+    TestMaterialSchemaAndMetadata();
+}
+
+TEST(Eye, GBufferRoundTripAndRejection)
+{
+    TestEyeGBufferRoundTripAndRejection();
+}
+
+TEST(Eye, LodGazeAndPupilContract)
+{
+    TestEyeLodGazeAndPupilContract();
+}
+
+TEST(Eye, PerformanceBudget)
+{
+    TestEyePerformanceBudget();
 }

@@ -3,6 +3,8 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+
+#include <gtest/gtest.h>
 #include <thread>
 
 #include "shader/build/atomicFile.h"
@@ -316,21 +318,27 @@ void TestShaderFileMonitor()
 
 } // namespace
 
-int main()
+TEST(ShaderBuildCore, KnownVectors)
 {
-    try
-    {
-        TestKnownVectors();
-        TestCanonicalFieldBoundaries();
-        TestWriteIfChanged();
-        TestStablePersistentIdentities();
-        TestShaderFileMonitor();
-        std::cout << "Shader build core tests passed." << std::endl;
-        return 0;
-    }
-    catch (const std::exception& exception)
-    {
-        std::cerr << "Shader build core tests failed: " << exception.what() << std::endl;
-        return 1;
-    }
+    TestKnownVectors();
+}
+
+TEST(ShaderBuildCore, CanonicalFieldBoundaries)
+{
+    TestCanonicalFieldBoundaries();
+}
+
+TEST(ShaderBuildCore, WriteIfChanged)
+{
+    TestWriteIfChanged();
+}
+
+TEST(ShaderBuildCore, StablePersistentIdentities)
+{
+    TestStablePersistentIdentities();
+}
+
+TEST(ShaderBuildCore, ShaderFileMonitor)
+{
+    TestShaderFileMonitor();
 }

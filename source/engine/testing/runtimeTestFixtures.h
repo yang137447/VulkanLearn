@@ -31,8 +31,6 @@ namespace RuntimeTestFixtures
 
 inline constexpr int RetireDrainFrameBudget = 180;
 inline constexpr std::chrono::seconds ShaderAsyncWaitTimeout{8};
-inline constexpr std::chrono::seconds ShaderDefinitionWaitTimeout{12};
-
 struct ShaderReloadRuntimeSnapshot
 {
     std::uintptr_t material = 0;
@@ -45,16 +43,6 @@ struct ShaderReloadRuntimeSnapshot
     std::string surfaceFragmentDigest;
     std::string shadowVertexDigest;
     std::string shadowFragmentDigest;
-};
-
-struct ShaderAutoReloadRuntimeSnapshot
-{
-    std::string surfaceLogicalBuildId;
-    std::string shadowLogicalBuildId;
-    std::string surfaceGeneration;
-    std::string shadowGeneration;
-    std::string manifestDigest;
-    std::string resolvedGeneration;
 };
 
 std::string FormatBackendIdentityCounts(
@@ -86,16 +74,6 @@ ShaderReloadRuntimeSnapshot CaptureShaderReloadRuntimeSnapshot(
 bool SameShaderReloadRuntimeSnapshot(
     const ShaderReloadRuntimeSnapshot& lhs,
     const ShaderReloadRuntimeSnapshot& rhs);
-ShaderAutoReloadRuntimeSnapshot
-    CaptureShaderAutoReloadRuntimeSnapshot(
-        RuntimeValidationServices& validationServices);
-bool SameShaderAutoReloadRuntimeSnapshot(
-    const ShaderAutoReloadRuntimeSnapshot& lhs,
-    const ShaderAutoReloadRuntimeSnapshot& rhs);
-bool ContainsAllSourceIdentities(
-    const std::vector<std::string>& sources,
-    const std::vector<std::string>& expected);
-
 std::filesystem::path CreateShaderReloadTestScene(
     const std::string& resourcePath);
 std::filesystem::path
@@ -121,31 +99,6 @@ std::shared_ptr<RendererObjectResourceEntry>
     FindShaderReloadTestObjectResources();
 uint64_t GetObjectDescriptorPoolIdentity(
     const std::shared_ptr<RendererObjectResourceEntry>& entry);
-void ValidateShaderDefinitionMigratedState(
-    const std::shared_ptr<MaterialInstance>& instance,
-    std::uintptr_t retainedTextureIdentity,
-    bool expectExtra,
-    bool expectRemoved,
-    bool expectMultiMain);
-
-std::filesystem::path CreateGeneratedMaterialFailureScene(
-    const std::string& resourcePath);
-std::filesystem::path CreateGeneratedMeshFailureScene(
-    const std::string& resourcePath);
-std::filesystem::path CreateGeneratedTextureFailureScene(
-    const std::string& resourcePath);
-std::filesystem::path CreateGeneratedHighLightStressScene(
-    const std::string& resourcePath);
-
-struct HairValidationFixture
-{
-    std::filesystem::path directory;
-    std::vector<std::filesystem::path> scenePaths;
-};
-
-HairValidationFixture CreateHairValidationFixtures(
-    const std::string& resourcePath);
-
 void UpdateMaxPendingRetiredResources(
     size_t pendingCount,
     size_t& maxPendingRetiredResources);

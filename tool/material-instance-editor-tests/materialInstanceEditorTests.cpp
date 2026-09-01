@@ -11,6 +11,7 @@
 #include <utility>
 #include <vector>
 
+#include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
 #include "editor/editorFacade.h"
@@ -850,24 +851,37 @@ void TestEditorFacadeCommandFlow()
 
 } // namespace
 
-int main()
+TEST(MaterialInstanceEditor, CommandCodecAndSchema)
 {
-    try
-    {
-        TestCommandCodecAndSchema();
-        TestMaterialSchemaAndAssetValidation();
-        TestNavigationAndDocumentBasics();
-        TestSparseCandidateAndTextureValidation();
-        TestConflictAndAtomicCandidateCommit();
-        TestPreviewRequestAndResultQuery();
-        TestEditorFacadeCommandFlow();
-        std::cout << "Material instance editor contract tests passed." << std::endl;
-        return 0;
-    }
-    catch (const std::exception& exception)
-    {
-        std::cerr << "Material instance editor contract tests failed: "
-                  << exception.what() << std::endl;
-        return 1;
-    }
+    TestCommandCodecAndSchema();
+}
+
+TEST(MaterialInstanceEditor, MaterialSchemaAndAssetValidation)
+{
+    TestMaterialSchemaAndAssetValidation();
+}
+
+TEST(MaterialInstanceEditor, NavigationAndDocumentBasics)
+{
+    TestNavigationAndDocumentBasics();
+}
+
+TEST(MaterialInstanceEditor, SparseCandidateAndTextureValidation)
+{
+    TestSparseCandidateAndTextureValidation();
+}
+
+TEST(MaterialInstanceEditor, ConflictAndAtomicCandidateCommit)
+{
+    TestConflictAndAtomicCandidateCommit();
+}
+
+TEST(MaterialInstanceEditor, PreviewRequestAndResultQuery)
+{
+    TestPreviewRequestAndResultQuery();
+}
+
+TEST(MaterialInstanceEditor, EditorFacadeCommandFlow)
+{
+    TestEditorFacadeCommandFlow();
 }

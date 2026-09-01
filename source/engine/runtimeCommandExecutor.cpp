@@ -234,82 +234,14 @@ void RuntimeCommandExecutor::ExecuteCommand(
     case RuntimeCommandType::LoadWorld:
         ApplyLoadWorld(command, worldTransitionCoordinator, runtimeConfig, diagnostics, executionResult);
         break;
-    case RuntimeCommandType::RunWorldReloadStress:
-        ApplyWorldReloadStress(command, runtimeTestHooks, diagnostics);
-        break;
-    case RuntimeCommandType::RunWorldReloadFailureRollbackTest:
-        ApplyWorldReloadFailureRollbackTest(command, runtimeTestHooks, diagnostics);
-        break;
-    case RuntimeCommandType::RunGeneratedMaterialFailureRollbackTest:
-        ApplyGeneratedMaterialFailureRollbackTest(runtimeConfig, runtimeTestHooks, diagnostics);
-        break;
-    case RuntimeCommandType::RunGeneratedMeshFailureRollbackTest:
-        ApplyGeneratedMeshFailureRollbackTest(runtimeConfig, runtimeTestHooks, diagnostics);
-        break;
-    case RuntimeCommandType::RunGeneratedTextureFailureRollbackTest:
-        ApplyGeneratedTextureFailureRollbackTest(runtimeConfig, runtimeTestHooks, diagnostics);
-        break;
-    case RuntimeCommandType::RunGeneratedHighLightReloadStress:
-        ApplyGeneratedHighLightReloadStress(command, runtimeConfig, runtimeTestHooks, diagnostics);
-        break;
-    case RuntimeCommandType::RunResizeStress:
-        ApplyResizeStress(command, runtimeTestHooks, diagnostics);
-        break;
-    case RuntimeCommandType::RunRenderGraphReloadStress:
-        ApplyRenderGraphReloadStress(command, runtimeTestHooks, diagnostics);
-        break;
-    case RuntimeCommandType::RunFrameSmokeTest:
-        ApplyFrameSmokeTest(command, runtimeTestHooks, diagnostics);
-        break;
-    case RuntimeCommandType::RunEnvironmentUpdateStress:
-        ApplyEnvironmentUpdateStress(command, runtimeTestHooks, diagnostics);
-        break;
     case RuntimeCommandType::RunShaderReloadTest:
         ApplyShaderReloadTest(runtimeConfig, runtimeTestHooks, diagnostics);
-        break;
-    case RuntimeCommandType::RunShaderAutoReloadTest:
-        ApplyShaderAutoReloadTest(runtimeConfig, runtimeTestHooks, diagnostics);
         break;
     case RuntimeCommandType::RunShaderComputeReloadTest:
         ApplyShaderComputeReloadTest(runtimeConfig, runtimeTestHooks, diagnostics);
         break;
-    case RuntimeCommandType::RunShaderDefinitionReloadTest:
-        ApplyShaderDefinitionReloadTest(runtimeConfig, runtimeTestHooks, diagnostics);
-        break;
     case RuntimeCommandType::RunWorldGraphTransactionTest:
         ApplyWorldGraphTransactionTest(
-            runtimeConfig,
-            runtimeTestHooks,
-            diagnostics);
-        break;
-    case RuntimeCommandType::RunShaderUiReloadTest:
-        ApplyShaderUiReloadTest(runtimeConfig, runtimeTestHooks, diagnostics);
-        break;
-    case RuntimeCommandType::RunShaderShutdownInflightTest:
-        ApplyShaderShutdownInflightTest(
-            runtimeTestHooks,
-            diagnostics);
-        break;
-    case RuntimeCommandType::RunHairValidationTest:
-        ApplyHairValidationTest(
-            runtimeConfig,
-            runtimeTestHooks,
-            diagnostics);
-        break;
-    case RuntimeCommandType::RunEyeValidationTest:
-        ApplyEyeValidationTest(
-            runtimeConfig,
-            runtimeTestHooks,
-            diagnostics);
-        break;
-    case RuntimeCommandType::RunEyePerformanceTest:
-        ApplyEyePerformanceTest(
-            runtimeConfig,
-            runtimeTestHooks,
-            diagnostics);
-        break;
-    case RuntimeCommandType::RunEyeComputeReloadTest:
-        ApplyEyeComputeReloadTest(
             runtimeConfig,
             runtimeTestHooks,
             diagnostics);
@@ -391,7 +323,6 @@ void RuntimeCommandExecutor::ExecuteCommand(
         ApplyProceduralSkyParameters(
             command,
             worldManager,
-            runtimeTestHooks,
             diagnostics);
         break;
     case RuntimeCommandType::SetSpeedTreeStrength:
@@ -620,119 +551,12 @@ void RuntimeCommandExecutor::ApplyLoadWorld(
     executionResult.worldLoadRequested = true;
 }
 
-void RuntimeCommandExecutor::ApplyWorldReloadStress(
-    const RuntimeCommand& command,
-    RuntimeTestHooks& runtimeTestHooks,
-    const DiagnosticsSubsystem& diagnostics) const
-{
-    (void)runtimeTestHooks.BeginWorldReloadStress(
-        command.stringValue,
-        command.intValue,
-        diagnostics);
-}
-
-void RuntimeCommandExecutor::ApplyWorldReloadFailureRollbackTest(
-    const RuntimeCommand& command,
-    RuntimeTestHooks& runtimeTestHooks,
-    const DiagnosticsSubsystem& diagnostics) const
-{
-    (void)runtimeTestHooks.BeginWorldReloadFailureRollbackTest(
-        command.stringValue,
-        diagnostics);
-}
-
-void RuntimeCommandExecutor::ApplyGeneratedMaterialFailureRollbackTest(
-    const RuntimeConfig& runtimeConfig,
-    RuntimeTestHooks& runtimeTestHooks,
-    const DiagnosticsSubsystem& diagnostics) const
-{
-    (void)runtimeTestHooks.BeginGeneratedMaterialFailureRollbackTest(
-        runtimeConfig.GetResourcePath(),
-        diagnostics);
-}
-
-void RuntimeCommandExecutor::ApplyGeneratedMeshFailureRollbackTest(
-    const RuntimeConfig& runtimeConfig,
-    RuntimeTestHooks& runtimeTestHooks,
-    const DiagnosticsSubsystem& diagnostics) const
-{
-    (void)runtimeTestHooks.BeginGeneratedMeshFailureRollbackTest(
-        runtimeConfig.GetResourcePath(),
-        diagnostics);
-}
-
-void RuntimeCommandExecutor::ApplyGeneratedTextureFailureRollbackTest(
-    const RuntimeConfig& runtimeConfig,
-    RuntimeTestHooks& runtimeTestHooks,
-    const DiagnosticsSubsystem& diagnostics) const
-{
-    (void)runtimeTestHooks.BeginGeneratedTextureFailureRollbackTest(
-        runtimeConfig.GetResourcePath(),
-        diagnostics);
-}
-
-void RuntimeCommandExecutor::ApplyGeneratedHighLightReloadStress(
-    const RuntimeCommand& command,
-    const RuntimeConfig& runtimeConfig,
-    RuntimeTestHooks& runtimeTestHooks,
-    const DiagnosticsSubsystem& diagnostics) const
-{
-    (void)runtimeTestHooks.BeginGeneratedHighLightReloadStress(
-        runtimeConfig.GetResourcePath(),
-        command.intValue,
-        diagnostics);
-}
-
-void RuntimeCommandExecutor::ApplyResizeStress(
-    const RuntimeCommand& command,
-    RuntimeTestHooks& runtimeTestHooks,
-    const DiagnosticsSubsystem& diagnostics) const
-{
-    (void)runtimeTestHooks.BeginResizeStress(command.intValue, diagnostics);
-}
-
-void RuntimeCommandExecutor::ApplyRenderGraphReloadStress(
-    const RuntimeCommand& command,
-    RuntimeTestHooks& runtimeTestHooks,
-    const DiagnosticsSubsystem& diagnostics) const
-{
-    (void)runtimeTestHooks.BeginRenderGraphReloadStress(command.intValue, diagnostics);
-}
-
-void RuntimeCommandExecutor::ApplyFrameSmokeTest(
-    const RuntimeCommand& command,
-    RuntimeTestHooks& runtimeTestHooks,
-    const DiagnosticsSubsystem& diagnostics) const
-{
-    (void)runtimeTestHooks.BeginFrameSmokeTest(command.intValue, diagnostics);
-}
-
-void RuntimeCommandExecutor::ApplyEnvironmentUpdateStress(
-    const RuntimeCommand& command,
-    RuntimeTestHooks& runtimeTestHooks,
-    const DiagnosticsSubsystem& diagnostics) const
-{
-    (void)runtimeTestHooks.BeginEnvironmentUpdateStress(
-        command.intValue,
-        diagnostics);
-}
-
 void RuntimeCommandExecutor::ApplyShaderReloadTest(
     const RuntimeConfig& runtimeConfig,
     RuntimeTestHooks& runtimeTestHooks,
     const DiagnosticsSubsystem& diagnostics) const
 {
     (void)runtimeTestHooks.BeginShaderReloadTest(
-        runtimeConfig.GetResourcePath(),
-        diagnostics);
-}
-
-void RuntimeCommandExecutor::ApplyShaderAutoReloadTest(
-    const RuntimeConfig& runtimeConfig,
-    RuntimeTestHooks& runtimeTestHooks,
-    const DiagnosticsSubsystem& diagnostics) const
-{
-    (void)runtimeTestHooks.BeginShaderAutoReloadTest(
         runtimeConfig.GetResourcePath(),
         diagnostics);
 }
@@ -747,16 +571,6 @@ void RuntimeCommandExecutor::ApplyShaderComputeReloadTest(
         diagnostics);
 }
 
-void RuntimeCommandExecutor::ApplyShaderDefinitionReloadTest(
-    const RuntimeConfig& runtimeConfig,
-    RuntimeTestHooks& runtimeTestHooks,
-    const DiagnosticsSubsystem& diagnostics) const
-{
-    (void)runtimeTestHooks.BeginShaderDefinitionReloadTest(
-        runtimeConfig.GetResourcePath(),
-        diagnostics);
-}
-
 void RuntimeCommandExecutor::ApplyWorldGraphTransactionTest(
     const RuntimeConfig& runtimeConfig,
     RuntimeTestHooks& runtimeTestHooks,
@@ -767,68 +581,9 @@ void RuntimeCommandExecutor::ApplyWorldGraphTransactionTest(
         diagnostics);
 }
 
-void RuntimeCommandExecutor::ApplyShaderUiReloadTest(
-    const RuntimeConfig& runtimeConfig,
-    RuntimeTestHooks& runtimeTestHooks,
-    const DiagnosticsSubsystem& diagnostics) const
-{
-    (void)runtimeTestHooks.BeginShaderUiReloadTest(
-        runtimeConfig.GetResourcePath(),
-        diagnostics);
-}
-
-void RuntimeCommandExecutor::ApplyShaderShutdownInflightTest(
-    RuntimeTestHooks& runtimeTestHooks,
-    const DiagnosticsSubsystem& diagnostics) const
-{
-    (void)runtimeTestHooks.BeginShaderShutdownInflightTest(
-        diagnostics);
-}
-
-void RuntimeCommandExecutor::ApplyHairValidationTest(
-    const RuntimeConfig& runtimeConfig,
-    RuntimeTestHooks& runtimeTestHooks,
-    const DiagnosticsSubsystem& diagnostics) const
-{
-    (void)runtimeTestHooks.BeginHairValidationTest(
-        runtimeConfig.GetResourcePath(),
-        diagnostics);
-}
-
-void RuntimeCommandExecutor::ApplyEyeValidationTest(
-    const RuntimeConfig& runtimeConfig,
-    RuntimeTestHooks& runtimeTestHooks,
-    const DiagnosticsSubsystem& diagnostics) const
-{
-    (void)runtimeTestHooks.BeginEyeValidationTest(
-        runtimeConfig.GetResourcePath(),
-        diagnostics);
-}
-
-void RuntimeCommandExecutor::ApplyEyePerformanceTest(
-    const RuntimeConfig& runtimeConfig,
-    RuntimeTestHooks& runtimeTestHooks,
-    const DiagnosticsSubsystem& diagnostics) const
-{
-    (void)runtimeTestHooks.BeginEyePerformanceTest(
-        runtimeConfig.GetResourcePath(),
-        diagnostics);
-}
-
-void RuntimeCommandExecutor::ApplyEyeComputeReloadTest(
-    const RuntimeConfig& runtimeConfig,
-    RuntimeTestHooks& runtimeTestHooks,
-    const DiagnosticsSubsystem& diagnostics) const
-{
-    (void)runtimeTestHooks.BeginEyeComputeReloadTest(
-        runtimeConfig.GetResourcePath(),
-        diagnostics);
-}
-
 void RuntimeCommandExecutor::ApplyProceduralSkyParameters(
     const RuntimeCommand& command,
     WorldManager& worldManager,
-    RuntimeTestHooks& runtimeTestHooks,
     const DiagnosticsSubsystem& diagnostics) const
 {
     const std::shared_ptr<World>& activeWorld = worldManager.GetActiveWorld();
@@ -836,7 +591,6 @@ void RuntimeCommandExecutor::ApplyProceduralSkyParameters(
     {
         diagnostics.ReportError(
             "Procedural sky parameters update rejected because no active World exists.");
-        runtimeTestHooks.NotifyProceduralSkyParametersResult(false, diagnostics);
         return;
     }
 
@@ -845,14 +599,12 @@ void RuntimeCommandExecutor::ApplyProceduralSkyParameters(
     {
         diagnostics.ReportError(
             "Procedural sky parameters update rejected because the active World uses HDRI.");
-        runtimeTestHooks.NotifyProceduralSkyParametersResult(false, diagnostics);
         return;
     }
 
     WorldEnvironment updatedEnvironment = currentEnvironment;
     updatedEnvironment.skyParameters = command.skyParametersValue;
     activeWorld->SetEnvironment(std::move(updatedEnvironment));
-    runtimeTestHooks.NotifyProceduralSkyParametersResult(true, diagnostics);
 }
 
 void RuntimeCommandExecutor::ApplyToneMappingMode(

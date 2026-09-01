@@ -72,52 +72,7 @@ private:
         const RuntimeConfig& runtimeConfig,
         const DiagnosticsSubsystem& diagnostics,
         RuntimeCommandExecutionResult& executionResult) const;
-    void ApplyWorldReloadStress(
-        const RuntimeCommand& command,
-        RuntimeTestHooks& runtimeTestHooks,
-        const DiagnosticsSubsystem& diagnostics) const;
-    void ApplyWorldReloadFailureRollbackTest(
-        const RuntimeCommand& command,
-        RuntimeTestHooks& runtimeTestHooks,
-        const DiagnosticsSubsystem& diagnostics) const;
-    void ApplyGeneratedMaterialFailureRollbackTest(
-        const RuntimeConfig& runtimeConfig,
-        RuntimeTestHooks& runtimeTestHooks,
-        const DiagnosticsSubsystem& diagnostics) const;
-    void ApplyGeneratedMeshFailureRollbackTest(
-        const RuntimeConfig& runtimeConfig,
-        RuntimeTestHooks& runtimeTestHooks,
-        const DiagnosticsSubsystem& diagnostics) const;
-    void ApplyGeneratedTextureFailureRollbackTest(
-        const RuntimeConfig& runtimeConfig,
-        RuntimeTestHooks& runtimeTestHooks,
-        const DiagnosticsSubsystem& diagnostics) const;
-    void ApplyGeneratedHighLightReloadStress(
-        const RuntimeCommand& command,
-        const RuntimeConfig& runtimeConfig,
-        RuntimeTestHooks& runtimeTestHooks,
-        const DiagnosticsSubsystem& diagnostics) const;
-    void ApplyResizeStress(
-        const RuntimeCommand& command,
-        RuntimeTestHooks& runtimeTestHooks,
-        const DiagnosticsSubsystem& diagnostics) const;
-    void ApplyRenderGraphReloadStress(
-        const RuntimeCommand& command,
-        RuntimeTestHooks& runtimeTestHooks,
-        const DiagnosticsSubsystem& diagnostics) const;
-    void ApplyFrameSmokeTest(
-        const RuntimeCommand& command,
-        RuntimeTestHooks& runtimeTestHooks,
-        const DiagnosticsSubsystem& diagnostics) const;
-    void ApplyEnvironmentUpdateStress(
-        const RuntimeCommand& command,
-        RuntimeTestHooks& runtimeTestHooks,
-        const DiagnosticsSubsystem& diagnostics) const;
     void ApplyShaderReloadTest(
-        const RuntimeConfig& runtimeConfig,
-        RuntimeTestHooks& runtimeTestHooks,
-        const DiagnosticsSubsystem& diagnostics) const;
-    void ApplyShaderAutoReloadTest(
         const RuntimeConfig& runtimeConfig,
         RuntimeTestHooks& runtimeTestHooks,
         const DiagnosticsSubsystem& diagnostics) const;
@@ -125,41 +80,13 @@ private:
         const RuntimeConfig& runtimeConfig,
         RuntimeTestHooks& runtimeTestHooks,
         const DiagnosticsSubsystem& diagnostics) const;
-    void ApplyShaderDefinitionReloadTest(
-        const RuntimeConfig& runtimeConfig,
-        RuntimeTestHooks& runtimeTestHooks,
-        const DiagnosticsSubsystem& diagnostics) const;
     void ApplyWorldGraphTransactionTest(
-        const RuntimeConfig& runtimeConfig,
-        RuntimeTestHooks& runtimeTestHooks,
-        const DiagnosticsSubsystem& diagnostics) const;
-    void ApplyShaderUiReloadTest(
-        const RuntimeConfig& runtimeConfig,
-        RuntimeTestHooks& runtimeTestHooks,
-        const DiagnosticsSubsystem& diagnostics) const;
-    void ApplyShaderShutdownInflightTest(
-        RuntimeTestHooks& runtimeTestHooks,
-        const DiagnosticsSubsystem& diagnostics) const;
-    void ApplyHairValidationTest(
-        const RuntimeConfig& runtimeConfig,
-        RuntimeTestHooks& runtimeTestHooks,
-        const DiagnosticsSubsystem& diagnostics) const;
-    void ApplyEyeValidationTest(
-        const RuntimeConfig& runtimeConfig,
-        RuntimeTestHooks& runtimeTestHooks,
-        const DiagnosticsSubsystem& diagnostics) const;
-    void ApplyEyePerformanceTest(
-        const RuntimeConfig& runtimeConfig,
-        RuntimeTestHooks& runtimeTestHooks,
-        const DiagnosticsSubsystem& diagnostics) const;
-    void ApplyEyeComputeReloadTest(
         const RuntimeConfig& runtimeConfig,
         RuntimeTestHooks& runtimeTestHooks,
         const DiagnosticsSubsystem& diagnostics) const;
     void ApplyProceduralSkyParameters(
         const RuntimeCommand& command,
         WorldManager& worldManager,
-        RuntimeTestHooks& runtimeTestHooks,
         const DiagnosticsSubsystem& diagnostics) const;
     void ApplyLoadWorld(
         const RuntimeCommand& command,

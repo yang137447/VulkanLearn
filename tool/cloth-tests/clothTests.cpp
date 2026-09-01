@@ -4,6 +4,8 @@
 #include <stdexcept>
 #include <string>
 
+#include <gtest/gtest.h>
+
 #include "render/cloth/clothAssets.h"
 
 namespace
@@ -131,21 +133,27 @@ void TestZeroAnisotropyContract()
 
 } // namespace
 
-int main()
+TEST(Cloth, VersionContract)
 {
-    try
-    {
-        TestVersionContract();
-        TestPackedAnisotropyRoundTrip();
-        TestAnisotropyAxisExchange();
-        TestDirectionalInterpolationContinuity();
-        TestZeroAnisotropyContract();
-        std::cout << "Cloth contract tests passed\n";
-        return 0;
-    }
-    catch (const std::exception& exception)
-    {
-        std::cerr << exception.what() << '\n';
-        return 1;
-    }
+    TestVersionContract();
+}
+
+TEST(Cloth, PackedAnisotropyRoundTrip)
+{
+    TestPackedAnisotropyRoundTrip();
+}
+
+TEST(Cloth, AnisotropyAxisExchange)
+{
+    TestAnisotropyAxisExchange();
+}
+
+TEST(Cloth, DirectionalInterpolationContinuity)
+{
+    TestDirectionalInterpolationContinuity();
+}
+
+TEST(Cloth, ZeroAnisotropyContract)
+{
+    TestZeroAnisotropyContract();
 }

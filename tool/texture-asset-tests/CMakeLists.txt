@@ -19,4 +19,4 @@ target_link_libraries(texture_asset_tests
         OpenEXR::OpenEXR
 )
 
-add_test(NAME texture_asset_contract COMMAND texture_asset_tests)
+vulkanlearn_add_gtest(texture_asset_tests)

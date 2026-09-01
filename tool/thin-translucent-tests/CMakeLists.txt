@@ -7,4 +7,4 @@ target_include_directories(thin_translucent_tests
         ${PROJECT_SOURCE_DIR}/source
 )
 
-add_test(NAME thin_translucent COMMAND thin_translucent_tests)
+vulkanlearn_add_gtest(thin_translucent_tests)

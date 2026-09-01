@@ -3,6 +3,8 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+
+#include <gtest/gtest.h>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -159,19 +161,12 @@ void TestChannelsValidation()
 
 } // namespace
 
-int main()
+TEST(MaterialSchema, ChannelsRetention)
 {
-    try
-    {
-        TestChannelsRetention();
-        TestChannelsValidation();
-        std::cout << "Material schema contract tests passed." << std::endl;
-        return 0;
-    }
-    catch (const std::exception& exception)
-    {
-        std::cerr << "Material schema contract tests failed: "
-                  << exception.what() << std::endl;
-        return 1;
-    }
+    TestChannelsRetention();
+}
+
+TEST(MaterialSchema, ChannelsValidation)
+{
+    TestChannelsValidation();
 }

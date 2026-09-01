@@ -88,12 +88,6 @@ build/bin/main.exe --dev-ui
 build/bin/main.exe --no-dev-ui
 ```
 
-UI 初始化和渲染线程路径可用短帧烟雾验证：
-
-```bash
-build/bin/main.exe --framesmoke 2 --exit-after-tests
-```
-
 RML/RCSS/本地化文件在开发模式下支持候选解析、校验、提交式热重载；失败候选
 不会替换最后一个有效页面。实现契约见 `documents/architecture/game-ui-stack.md`。
 
@@ -180,19 +174,18 @@ CPU 编译在独立 worker 完成，EngineLoop 在 Render Thread 安全点创建
 
 ```text
 build/bin/main.exe --shader-reload-test --exit-after-tests
-build/bin/main.exe --shader-auto-reload-test --exit-after-tests
 build/bin/main.exe --shader-compute-reload-test --exit-after-tests
-build/bin/main.exe --shader-definition-reload-test --exit-after-tests
-build/bin/main.exe --shader-ui-reload-test --exit-after-tests
-build/bin/main.exe --shader-shutdown-inflight-test --exit-after-tests
 build/bin/main.exe --world-graph-transaction-test --exit-after-tests
 ```
 
-`--shader-force-rebuild` 强制重建全部启动 artifact。单元/集成测试覆盖
-BLAKE3 向量、规范化边界、write-if-changed、FileMonitor 防抖、warm start、
-依赖失效、manifest 损坏/schema 升级和提交回滚：
+`--shader-force-rebuild` 强制重建全部启动 artifact。模块单元/集成测试统一由
+GoogleTest 承载，CTest 会按每个 `TEST` 独立发现和报告；首次配置会通过 CMake
+FetchContent 获取固定的 GoogleTest 版本。测试覆盖 BLAKE3 向量、规范化边界、
+write-if-changed、FileMonitor 防抖、warm start、依赖失效、manifest 损坏/schema
+升级和提交回滚：
 
 ```bash
+ctest --test-dir build --output-on-failure
 ctest --test-dir build -R shader_build --output-on-failure
 ```
 
@@ -217,14 +210,6 @@ cmake --build build -j
 ```
 
 调试断点会让进程暂停，Tracy 这类实时 profiler 的 socket 连接可能因此被对端关闭，并在 Windows 上表现为 `10054 ConnectionReset`。如果当前目标是单步调试逻辑而不是采样性能，可以关闭 Tracy/NVTX，但保留 Vulkan validation layer 用来检查 API 错误。
-
-### 长时间 FPS smoke 诊断
-
-`build/bin/main.exe --framesmoke [count] --exit-after-tests` 用于固定帧数性能基线。这个入口会每 5000 帧输出一次区间统计，包括 avg/min/max frame time、avg FPS、RenderLoop 耗时，以及 `ResourceRetireQueue` 的 pending/submitted/completed epoch。
-
-这些区间统计是有意保留的诊断代码，不是临时调试残留。它只在 `--framesmoke` 运行期间采样和输出，普通运行不会打印区间统计；RenderLoop 计时也只在 frame smoke 激活时执行。保留它的原因是：长时间挂机掉帧通常需要区分 GPU/API 开销、渲染循环耗时增长、资源退休队列堆积等情况，单个最终平均 FPS 不足以定位问题。
-
-一次已验证的结论：在高 FPS 空转场景下，开启 Vulkan validation layer / debug utils 会导致长时间 `--framesmoke` FPS 明显下降；Tracy/NVTX 会增加额外开销，但不是唯一来源。关闭 profiler 和 validation 后，60,000 帧 smoke run 稳定在约 2148 FPS，`retiredPending=0`，说明这次问题不是旧帧或退休资源队列堆积。
 
 ### 1. 使用 Tracy Profiler (实时 CPU 分析)
 

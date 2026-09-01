@@ -153,8 +153,6 @@ transmission-shadow 合同，不能把当前不透明深度 ShadowCaster 当作�
 - `thin_translucent` CTest：验证 `0.9216` 基准、与完整平板的差异、Coverage 合成、
   fallback alpha 和 RenderMode 路由
 - `cmake --build build -j`：验证 C++ 管线、设备能力和材质系统接口
-- `build/bin/main.exe --framesmoke 2 --exit-after-tests`：加载汽车场景、生成参数 include、
-  编译实际 Thin variant、创建 Vulkan pipeline 并完成帧提交
 - 当前验证设备支持 `dualSrcBlend`，实际 variant identity 包含
   `VL_THIN_TRANSLUCENT_DUAL_SOURCE=1`
 

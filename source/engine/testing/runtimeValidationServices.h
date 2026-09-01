@@ -19,8 +19,6 @@
 #include "shader/reload/shaderReloadRuntime.h"
 #include "world/loading/worldGraphTransactionCoordinator.h"
 #include "world/worldManager.h"
-#include "render/eye/eyePerformanceBudget.h"
-#include "render/eye/eyeLodContract.h"
 
 namespace VL
 {
@@ -108,77 +106,6 @@ struct RuntimeValidationWorldPackageIdentities
     bool materialInstanceHasCandidateParameter = false;
 };
 
-struct RuntimeHairMaterialSnapshot
-{
-    std::string name;
-    std::string materialKey;
-    std::string shaderName;
-    std::string shadingModelMacro;
-    std::string renderMode;
-    bool hasRenderPipeline = false;
-    bool hasShadowPipeline = false;
-    bool hasHairParameters = false;
-    bool forwardDescriptorLayoutCompatible = false;
-    std::unordered_map<std::string, std::string> parameterValues;
-};
-
-struct RuntimeEyeMaterialSnapshot
-{
-    std::string name;
-    std::string materialKey;
-    std::string shadingModelMacro;
-    std::string renderMode;
-    bool hasRenderPipeline = false;
-    bool hasShadowPipeline = false;
-    bool hasShadowRoute = false;
-    bool hasEyeParameters = false;
-    bool forwardDescriptorLayoutCompatible = false;
-    bool deferredDescriptorLayoutCompatible = false;
-    bool dualShellLayerContract = false;
-    std::unordered_map<std::string, std::string> parameterValues;
-};
-
-struct RuntimeEyeValidationSnapshot
-{
-    bool captured = false;
-    uint64_t worldGeneration = 0;
-    bool hasEyeResources = false;
-    std::string sourceDigest;
-    std::string artifactGenerationKey;
-    uint32_t lutWidth = 0;
-    uint32_t lutHeight = 0;
-    uint32_t lutLayers = 0;
-    std::uintptr_t eyeLutTextureIdentity = 0;
-    std::uintptr_t boundEyeWorldTextureIdentity = 0;
-    bool forwardEyeLutBinding = false;
-    bool deferredEyeLutBinding = false;
-    bool forwardEyeInnerPassPresent = false;
-    bool forwardEyeCorneaPassPresent = false;
-    bool deferredGBufferContract = false;
-    size_t deferredGBufferAttachmentCount = 0;
-    bool sssSourcePresent = false;
-    bool lodContractValid = false;
-    size_t eyeLutMemoryBytes = 0;
-    EyePerformanceFrameStats performanceStats;
-    bool performanceWithinBudget = true;
-    std::vector<std::string> meshObjectNames;
-    std::vector<RuntimeEyeMaterialSnapshot> materials;
-};
-
-struct RuntimeHairValidationSnapshot
-{
-    bool captured = false;
-    uint64_t worldGeneration = 0;
-    bool hasHairResources = false;
-    std::string sourceIdentity;
-    std::uintptr_t hairLutTextureIdentity = 0;
-    std::uintptr_t boundHairWorldTextureIdentity = 0;
-    bool forwardHairLutBinding = false;
-    bool deferredHairLutBinding = false;
-    std::vector<std::string> meshObjectNames;
-    std::vector<RuntimeHairMaterialSnapshot> materials;
-};
-
 class RuntimeValidationServices
 {
 public:
@@ -194,10 +121,6 @@ public:
     RuntimeValidationBackendSnapshot CaptureBackendSnapshot() const;
     RuntimeValidationWorldPackageIdentities
         CaptureWorldPackageIdentities() const;
-    RuntimeHairValidationSnapshot
-        CaptureHairValidationSnapshot() const;
-    RuntimeEyeValidationSnapshot
-        CaptureEyeValidationSnapshot() const;
     RuntimeRendererResourceFingerprint
         CaptureRendererResourceFingerprint() const;
     std::string CaptureWorldGraphRuntimeFingerprint(
@@ -205,18 +128,8 @@ public:
         const std::string& batchDefinitionPath,
         bool includeFrameLifecycleDiagnostics = true,
         std::string* details = nullptr) const;
-    std::string CaptureShaderShutdownInflightFingerprint() const;
-
     RuntimeValidationGraphicsShaderSnapshot
         CaptureGraphicsShaderSnapshot() const;
-    bool SurfaceArtifactDependsOnSourceWithDigest(
-        const std::string& logicalBuildId,
-        const std::string& dependencyIdentity,
-        const std::string& expectedDigest) const;
-    bool ManifestArtifactsDependOnAllSources(
-        const std::vector<std::string>& logicalBuildIds,
-        const std::vector<std::string>& sourceIdentities) const;
-    bool UiArtifactFragmentMatchesCurrentSource() const;
     std::string GetComputeShaderGeneration(
         const std::string& shaderName) const;
     RuntimeValidationManualShaderReloadResult

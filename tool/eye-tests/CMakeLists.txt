@@ -22,4 +22,4 @@ target_link_libraries(eye_tests
         Json
 )
 
-add_test(NAME eye_contract COMMAND eye_tests)
+vulkanlearn_add_gtest(eye_tests)

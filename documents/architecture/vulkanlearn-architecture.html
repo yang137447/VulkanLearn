@@ -1100,7 +1100,7 @@
                     <tr>
                         <td>控制台命令</td>
                         <td><code>ConsoleSubsystem</code> + <code>CommandBus</code></td>
-                        <td>命令只描述意图，例如 load world、reloadstress、lightstress、set debug view、set tonemap、set bloom、set environment intensity；<code>DebugConsole</code> 不直接拿 <code>RenderSystem</code>、<code>RenderGraph</code> 或 loader 改内部状态。</td>
+                        <td>命令只描述意图，例如 load world、set debug view、set tonemap、set bloom、set environment intensity；<code>DebugConsole</code> 不直接拿 <code>RenderSystem</code>、<code>RenderGraph</code> 或 loader 改内部状态。</td>
                         <td><code>RuntimeCommandExecutor</code> 集中应用命令，失败消息在执行端输出；tone/bloom/environment/debug view 走 <code>RenderSystem</code> 公开 API；load world 成功时返回 <code>RuntimeCommandExecutionResult</code>，由 <code>EngineLoop::BindActiveWorldRuntimeObjects()</code> 完成运行时重绑。</td>
                     </tr>
                     <tr>
@@ -2409,8 +2409,8 @@ struct RuntimeResult {
                     </tr>
                     <tr>
                         <td>World 切换</td>
-                        <td>连续切换 100 次 scene，无崩溃、无黑屏、无半切换状态</td>
-                        <td><code>build/bin/main.exe --reloadstress &lt;scene-path&gt; 100 --exit-after-tests</code> 验证连续切换、旧 world-local 资源进入 retire queue 并在 fence epoch 推进后 drain；<code>build/bin/main.exe --reloadfail &lt;bad-scene-path&gt; --exit-after-tests</code> 验证失败加载不改变 active World；<code>build/bin/main.exe --reloadfail-material --exit-after-tests</code> 生成坏 material fixture，并比较失败前后的 renderer resource cache / pass material 指纹，验证资源加载中途失败后的内容级回滚；<code>build/bin/main.exe --lightstress 3 --exit-after-tests</code> 生成 96 个 point light 的 scene，覆盖 frame-local light SSBO 扩容和旧 buffer retire。</td>
+                        <td>World/Graph 候选事务无崩溃、无黑屏、无半切换状态</td>
+                        <td><code>build/bin/main.exe --world-graph-transaction-test --exit-after-tests</code> 验证 World/Graph 事务的失败回滚、成功提交、资源 retire 与 fatal resize 契约。</td>
                         <td>失败后 activeWorld 为空、camera 丢失、旧资源提前释放</td>
                     </tr>
                     <tr>
@@ -2421,8 +2421,8 @@ struct RuntimeResult {
                     </tr>
                     <tr>
                         <td>资源释放</td>
-                        <td>World retire、swapchain resize、render graph reload 均无 Vulkan validation error</td>
-                        <td><code>build/bin/main.exe --graphreloadstress 6 --exit-after-tests</code>、Vulkan validation layer + Tracy/Nsight marker</td>
+                        <td>保留的 shader reload、compute reload、World/Graph 事务均无 Vulkan validation error</td>
+                        <td><code>build/bin/main.exe --shader-reload-test --exit-after-tests</code>、<code>--shader-compute-reload-test</code>、<code>--world-graph-transaction-test</code> + Vulkan validation layer</td>
                         <td>出现 use-after-free、descriptor 指向销毁 image view、framebuffer 悬空</td>
                     </tr>
                     <tr>
@@ -2440,13 +2440,13 @@ struct RuntimeResult {
                     <tr>
                         <td>Vulkan Device / Swapchain</td>
                         <td>swapchain recreate 只重建 Vulkan backend/frame graph 尺寸相关资源，不破坏 World 和 Asset cache</td>
-                        <td><code>build/bin/main.exe --resizestress 6 --exit-after-tests</code> + validation layer</td>
+                        <td>手动 resize + Vulkan validation layer</td>
                         <td>resize 后 descriptor/framebuffer 悬空或 World 数据丢失</td>
                     </tr>
                     <tr>
                         <td>性能基线</td>
                         <td>固定帧数 smoke run 能完成并输出 avg/min/max frame time 与 avg FPS；reload 峰值可解释</td>
-                        <td><code>build/bin/main.exe --framesmoke 120 --exit-after-tests</code> 记录当前 V1 性能基线；Tracy / Nsight Systems 可用于进一步对比</td>
+                        <td>截图对比与 Tracy/Nsight Systems 性能观察</td>
                         <td>每帧重复编译 pipeline 或重复创建 world-local 大资源</td>
                     </tr>
                     <tr>
@@ -2464,8 +2464,8 @@ struct RuntimeResult {
             <div class="grid">
                 <div class="card">
                     <h3>Milestone A</h3>
-                    <p><span class="ok">当前进展：</span><code>PlatformApplication</code>、<code>PlatformWindow</code>、<code>FileSystem</code>、<code>EngineLoop</code>、<code>GameInstance</code>、<code>SubsystemCollection</code>、<code>CommandBus</code>、<code>ConsoleSubsystem</code>、<code>DiagnosticsSubsystem</code>、<code>RuntimeConfig</code>、<code>RuntimeClock</code> 与 <code>InputSubsystem</code> 骨架已落地，启动配置、项目根发现、JSON 读取、runtime path 解析、窗口事件、输入采样、命令投递、runtime diagnostics、帧 delta、渲染循环和 shutdown 已从 <code>main.cpp</code> / <code>Controller</code> / <code>CommonFunction</code> 热路径中迁出。线程配置契约收敛为单个 <code>workerThreadCount</code>：V1 只支持 <code>1</code>（完全同步）和 <code>2</code>（GT + RT）。<code>--framesmoke [count] --exit-after-tests</code> 已作为固定帧数 smoke/performance baseline 入口接入 <code>RuntimeTestHooks</code>。</p>
-                    <p><span class="warn">V1 边界：</span>当前生命周期由 <code>EngineLoop</code> 显式编排；Shader monitor/worker 状态属于 <code>ShaderReloadRuntime</code>，World/Graph 事务属于 <code>WorldGraphTransactionCoordinator</code>。全部 runtime test 状态机由 <code>RuntimeTestHooks</code> 持有，测试通过 <code>RuntimeValidationServices</code> 的值快照和窄操作观察生产 owner，只有 adapter 实现可访问 RenderSystem/RenderGraph。<code>RuntimeConfig/FileSystem</code> 已接管启动配置与命令路径解析，部分资源加载 helper 仍保留 <code>CommonFunction::Path</code> 作为兼容入口，长期可继续迁到 AssetManager。active world reload 的连续压力验证已由 <code>--reloadstress scenes/SC_speedtree.json 20 --exit-after-tests</code> 覆盖，固定帧渲染基线由 <code>--framesmoke 120 --exit-after-tests</code> 覆盖，环境派生资源增量更新由 <code>--environmentstress 3 --exit-after-tests</code> 覆盖。</p>
+                    <p><span class="ok">当前进展：</span><code>PlatformApplication</code>、<code>EngineLoop</code>、<code>CommandBus</code> 与 runtime diagnostics 已落地；V1 线程配置支持 <code>workerThreadCount=1</code> 和 <code>2</code>。</p>
+                    <p><span class="warn">V1 边界：</span>当前生命周期由 <code>EngineLoop</code> 显式编排；Shader monitor/worker 状态属于 <code>ShaderReloadRuntime</code>，World/Graph 事务属于 <code>WorldGraphTransactionCoordinator</code>。runtime test 状态机由 <code>RuntimeTestHooks</code> 持有，正式入口仅保留三类测试。</p>
                 </div>
                 <div class="card">
                     <h3>Milestone B</h3>
@@ -2474,18 +2474,18 @@ struct RuntimeResult {
                 </div>
                 <div class="card">
                     <h3>Milestone C</h3>
-                    <p><span class="ok">当前进展：</span><code>WorldTransitionCoordinator::PrepareWorldLoad()</code> + <code>WorldBuilder</code> 构建 staging World 和隔离 resource package，<code>WorldGraphTransactionCoordinator</code> 统一协调 candidate RenderGraph、pipeline cache、runtime binding、Controller view target、正式 Shader artifact/include publication 与 retire package；启动和 active reload 复用同一 prepare 路径，不再存在 mutable cache 快照恢复桥。<code>RuntimeTestHooks</code> 提供 <code>reloadstress</code> 逐帧压测入口，命令行 <code>--reloadstress &lt;scene-path&gt; [count] --exit-after-tests</code> 可自动退出并用进程退出码表达验收结果；reloadstress 结束前会继续等待 <code>ResourceRetireQueue</code> drain，多次 reload 时还会确认曾观察到 retired world-local resources。<code>--reloadfail*</code> 分别覆盖坏 scene、material、mesh 和 texture，并比较失败前后的 owner generation、renderer resource cache / pass material 指纹；<code>--lightstress [count] --exit-after-tests</code> 覆盖 frame-local light SSBO 扩容。</p>
-                    <p><span class="warn">验收：</span>用 <code>build/bin/main.exe --reloadstress &lt;scene-path&gt; 20 --exit-after-tests</code> 连续切场景无崩溃且返回 0，并确认 retire queue 曾出现 pending 后 drain 到 0；用 <code>build/bin/main.exe --reloadfail &lt;bad-scene-path&gt; --exit-after-tests</code> 验证坏 scene 路径失败后旧 World 仍为 active；用 <code>build/bin/main.exe --reloadfail-material --exit-after-tests</code>、<code>--reloadfail-mesh --exit-after-tests</code>、<code>--reloadfail-texture --exit-after-tests</code> 验证 asset/resource 加载失败后旧 World 仍为 active，renderer resource cache / pass material 指纹保持一致，且生成式 fixture 会自动清理；用 <code>build/bin/main.exe --lightstress 3 --exit-after-tests</code> 验证超过默认灯光容量后旧 light SSBO 进入 retire queue。</p>
+                    <p><span class="ok">当前进展：</span><code>WorldGraphTransactionCoordinator</code> 统一协调候选 World、RenderGraph、runtime binding 与 retire package；runtime 验证仅保留 shader reload、compute reload 与 World/Graph transaction 三类入口。</p>
+                    <p><span class="warn">验收：</span>串行运行 <code>--shader-reload-test</code>、<code>--shader-compute-reload-test</code> 与 <code>--world-graph-transaction-test</code>，均通过进程退出码表达结果。</p>
                 </div>
                 <div class="card">
                     <h3>Milestone D</h3>
                     <p><span class="ok">当前进展：</span><code>WorldSnapshot</code> -> <code>RenderScene</code> -> <code>ResolvedRenderScene</code> 的解析路径已接入当前 Vulkan draw path，单线程模式也按 GT/RT 数据边界 publish/consume snapshot；mesh runtime 已迁入 <code>WorldMeshObject</code>，<code>WorldSnapshotBuilder</code> 已从 <code>World::GetMeshObjects()</code> 复制 model、bounds 与 mesh/material logical keys，并按 stable object id 缓存 previous model，不再需要 <code>RenderSystem</code> 帧末回写 <code>SceneObject</code>。<code>RendererBackendVulkan</code> 已接管 swapchain frame begin/end、submit/present 与 fence epoch，<code>RenderSystem</code> 只把录制完成的 <code>RendererFrameContext</code> 交回 <code>SubmitFrame(frameContext, currentFrame)</code>，本帧 command buffer、queue、swapchain、semaphore、fence、wait stage 与 submitted epoch 都保持为 backend 内部细节。<code>RHIDeviceVulkan</code> 直接作为 Vulkan device boundary，承接 Vulkan init、resize、waitIdle、swapchain 查询，以及 buffer、image/view/sampler、descriptor、render pass、framebuffer、single-time command、buffer/image copy helper；旧 <code>RHIDevice</code> 虚接口已移除，避免单实现抽象层误导为跨 API 路线。buffer 创建、map、copy、destroy 已在 Vulkan device boundary contract 中改为 <code>RHIBufferHandle</code>，image 创建、layout transition、copy、mipmap、destroy 已改为 <code>RHIImageHandle</code>，image view 创建/销毁已改为 <code>RHIImageViewHandle</code>，sampler 创建/销毁已改为 <code>RHISamplerHandle</code>，descriptor layout/pool/set 创建、分配、free、update、debug name 已改为 <code>RHIDescriptorSetLayoutHandle</code> / <code>RHIDescriptorPoolHandle</code> / <code>RHIDescriptorSetHandle</code> / <code>RHIDescriptorWrite</code>，render pass/framebuffer 创建销毁已改为 <code>RHIRenderPassHandle</code> / <code>RHIFramebufferHandle</code>，<code>RHIDeviceVulkan</code> 内部维护 handle registry，backend facade 只在现有 raw buffer/image/image view/sampler/descriptor/render pass/framebuffer 数据结构需要 Vulkan handle 时解包；pipeline 直接创建的 descriptor set layout 暂注册为 non-owning lifecycle handle，由原 pipeline owner 仍负责销毁。扫描结果显示渲染侧直接 <code>VulkanManager::GetInstance()</code> 访问已收敛到 <code>source/render/rhi/vulkan/rhiDeviceVulkan.cpp</code>，且 <code>RendererBackendVulkan</code> 不再向上层暴露 <code>GetDevice()</code> / <code>GetGpuMemoryProperties()</code> 裸 getter 或 <code>GetRhiDevice()</code> 逃逸口；<code>RHIDeviceVulkan</code> 的 <code>GetDevice()</code>、<code>GetPhysicalDevice()</code>、<code>GetGpuMemoryProperties()</code> 和 <code>GetCommandPool()</code> 已收为 private，backend 通过 <code>CreatePipelineFactory()</code>、<code>WaitForFence()</code>、<code>ResetFence()</code>、<code>AcquireNextSwapchainImage()</code> 表达具体意图。<code>RendererObjectGpuResources</code> 已定义对象 GPU 资源包，并携带 object/shadow descriptor pool/set lifecycle handles；<code>RendererObjectResourceEntry</code> 已作为 backend object resource registry 条目接管资源包生命周期，<code>RendererObjectResourceManager</code> 负责创建、销毁和 descriptor 写入；<code>ResolvedDrawPacket</code> 现在携带 renderable handle 与 object resource entry；<code>RendererDrawExecutor</code> 已从 <code>PassRuntime</code> 接过 shadow / geometry 对象 draw 循环，并直接消费这些 backend 资源。PassRuntime 现在主要负责 pass 分派、barrier、render pass begin/end 和 post-process 特例；global UBO buffer、light SSBO、material instance UBO 写入与 object UBO 写入已由 <code>RendererFrameResources</code> 持有或集中处理；object UBO 使用 <code>RenderDrawPacket</code> 冻结矩阵。mesh vertex/index buffer、普通材质贴图上传、BRDF LUT、environment cubemap / prefilter 生成、对象 descriptor、pass descriptor layout/pool/set/update、RenderGraph render target/render pass/framebuffer 创建释放已迁入 backend/device boundary 路径，且对象 descriptor 资源包与 RenderGraph resource/pass 资源包都已携带对应 lifecycle handles。<code>RenderGraph</code> 和对象 descriptor 刷新已改为消费 <code>RendererDescriptorContext</code>，不再 include <code>renderSystem.h</code> 或反向读取 <code>RenderSystem</code> 单例；<code>RendererDescriptorPlanCache</code> 已从 <code>Renderpass</code> 接过 descriptor write plan 归属，<code>RendererDescriptorWriter</code> 已统一 descriptor write 解析，减少 pass/object 两套重复分支。</p>
-                    <p><span class="warn">验收：</span><code>tool/ue-lite-boundary-audit.ps1</code> 已提供静态边界验收，覆盖已删除的 <code>SceneLoader</code>/<code>LightManager</code> 文件和引用不可回流、渲染 draw path 不回读 World/SceneObject、<code>source/render/pass/*</code> 不 include gameplay World/SceneObject、descriptor writer/context/plan 只能通过显式 <code>RendererDescriptorContext</code> 和调用方输入更新 descriptor、RenderSystem 不直接查询或绑定对象 GPU 资源、上层不从 backend facade 拉取 raw device/memory getter、backend 不暴露 <code>GetRhiDevice()</code>、submit/present DTO 不泄露出 backend、旧 <code>RHIDevice</code> 虚接口不可回流，<code>RHIDeviceVulkan</code> buffer/image/image view/sampler/descriptor/render pass/framebuffer 创建、copy、分配、update、destroy 不回退到 raw <code>vk::Buffer</code> / <code>vk::Image</code> / <code>vk::ImageView</code> / <code>vk::Sampler</code> / <code>vk::DescriptorSetLayout</code> / <code>vk::DescriptorPool</code> / <code>vk::DescriptorSet</code> / <code>vk::RenderPass</code> / <code>vk::Framebuffer</code> / <code>vk::DeviceMemory</code> public contract，descriptor write 保持 Vulkan-native descriptor info，<code>VulkanManager</code> public contract 只保留 <code>GetInstance()</code>，raw device/swapchain/queue/sync getter 只允许 <code>RHIDeviceVulkan</code> 通过 friend 边界访问，以及渲染侧不绕过 Vulkan device boundary 访问 <code>VulkanManager</code>；运行时 reloadstress 已覆盖当前单线程 snapshot handoff。长期演进方向是继续收紧 Vulkan device/global state 访问和 GPU 生命周期 owner，而不是推进跨 API 抽象层。</p>
+运行时验证集中在保留的 shader reload、compute reload 与 World/Graph transaction 入口。长期演进方向是继续收紧 Vulkan device/global state 访问和 GPU 生命周期 owner，而不是推进跨 API 抽象层。
                 </div>
                 <div class="card">
                     <h3>Milestone E</h3>
-                    <p><span class="ok">当前进展：</span><code>RendererResourceCache</code> 已拆出 global texture 与 world-local resource 清理边界；shutdown 现在先等待 GPU idle，再显式释放 <code>RendererFrameResources</code> global UBO / light SSBO、RenderGraph GPU 对象、active World、Controller 和 resource cache，最后 <code>ForceReleaseAll()</code>，确保 world-local material UBO、environment 预处理纹理与 frame graph 对象都在 <code>RendererBackendVulkan</code> 仍有效时销毁；<code>ResourceRetireQueue</code> 已接入 backend fence epoch；reloadstress 运行时会观察 retire queue pending 峰值并等待 drain，用自动化覆盖 old World world-local resource 延迟释放。swapchain resize 已接入保守重建事务：窗口事件或 <code>--resizestress</code> 会重建 swapchain、RenderGraph attachment/framebuffer/pass descriptor、frame buffer set、material UBO 和 object descriptor，且不触发 World reload。Render graph reload 已增加 <code>RenderGraphReleaseMode::Retire</code>，<code>--graphreloadstress</code> 会连续重载 graph config，并验证旧 graph GPU 对象进入 retire queue 后可 drain。Frame-local light SSBO 扩容已改为 retire 旧 buffer set，并已收敛为正式 <code>--lightstress</code> runtime test hook。</p>
-                    <p><span class="warn">长期验证：</span>当前 V1 自动化已覆盖 resize / graph reload / lightstress 的短压测；合入前可以按需要扩展成更长时间的 validation-layer 长跑。</p>
+保留的 World/Graph transaction runtime test 会观察 retire queue pending 峰值并等待 drain；swapchain resize 与 render graph reload 通过正常运行路径和模块测试验证。
+                    <p><span class="warn">长期验证：</span>当前 V1 自动化集中覆盖 shader reload、compute reload 与 World/Graph transaction；合入前可按需要扩展 validation-layer 长跑。</p>
                 </div>
                 <div class="card">
                     <h3>Milestone F</h3>
@@ -2559,7 +2559,7 @@ struct RuntimeResult {
                     </tr>
                     <tr>
                         <td>Automation</td>
-                        <td><code>--reloadstress</code>、<code>--reloadfail</code>、<code>--reloadfail-material</code>、<code>--reloadfail-mesh</code>、<code>--reloadfail-texture</code>、<code>--lightstress</code>、<code>--resizestress</code>、<code>--graphreloadstress</code>、<code>--framesmoke</code>、<code>--environmentstress</code> 已进入 runtime test path；启动参数入口只投递 <code>RuntimeCommand</code>，全部测试状态由 <code>RuntimeTestHooks</code> 持有。</td>
+                        <td><code>--shader-reload-test</code>、<code>--shader-compute-reload-test</code>、<code>--world-graph-transaction-test</code> 已进入 runtime test path；启动参数入口只投递 <code>RuntimeCommand</code>，全部测试状态由 <code>RuntimeTestHooks</code> 持有。</td>
                         <td><code>tool/ue-lite-boundary-audit.ps1</code> 已固化 SceneObject cutover、mesh binding cutover、早期 tutorial render path 删除、runtime error code、VulkanManager public raw boundary、Vulkan device boundary raw getter、Vulkan device boundary buffer/image/image view/sampler/descriptor/render pass/framebuffer handle、RenderGraph resource package handle、object descriptor resource package handle、submit boundary、runtime test command boundary 和历史拼写命名不可回流；任何 runtime test 的阶段、计数、断言或完成状态都不得回流到 <code>EngineLoop</code>。</td>
                     </tr>
                 </tbody>
@@ -2622,26 +2622,26 @@ struct RuntimeResult {
                     <tr>
                         <td>0. 冻结边界基线</td>
                         <td>把已完成的 hard cutover 边界变成不可回退合同。</td>
-                        <td>扩展 <code>ue-lite-boundary-audit.ps1</code>；新增系统先归属 Engine / World / Asset / Renderer Frontend / Backend / Vulkan Device Boundary / Diagnostics。</td>
+                        <td><code>ue-lite-boundary-audit.ps1</code>、<code>cmake --build build -j</code> 与三类保留 runtime test 已通过。</td>
                         <td><code>powershell -ExecutionPolicy Bypass -File tool/ue-lite-boundary-audit.ps1</code> 返回 0。</td>
                     </tr>
                     <tr>
                         <td>1. 移除 mesh 的 renderer wrapper 依赖</td>
                         <td>已完成：mesh object 由 World-owned <code>WorldMeshObject</code> 承载，renderer 只收 logical handles。</td>
                         <td>已新增 <code>WorldMeshObject</code>；<code>WorldBuilder</code> 不再从 <code>RendererResourceCache::GetSceneObjects()</code> 或 mesh binding 表导入；cache 中的 <code>SceneObject</code> map 和旧 mesh binding API 已删除；<code>SceneObject</code> wrapper 文件已删除，基础 <code>SceneNode</code>/<code>Camera</code>/<code>Light</code> 由 <code>sceneNode.h/.cpp</code> 承载。</td>
-                        <td><code>ue-lite-boundary-audit.ps1</code>、<code>cmake --build build -j</code>、<code>--framesmoke 5</code>、<code>--reloadstress scenes/SC_speedtree.json 3</code>、<code>--reloadfail-material</code> 已通过。</td>
+                        <td><code>ue-lite-boundary-audit.ps1</code>、<code>cmake --build build -j</code> 与三类保留 runtime test 已通过。</td>
                     </tr>
                     <tr>
                         <td>2. Asset 构建计划统一化</td>
                         <td>scene、mesh、terrain、material、texture、shader reflection 校验都输出纯数据计划。</td>
-                        <td>mesh section 桥接已通过 <code>MeshObjectBuildPlan</code> 落地；mesh <code>materialSlots</code> 已改为严格源 slot 数量/顺序验证，失配直接产生 <code>Mesh.LoadFailed</code>，不再生成 unsafe fallback material；<code>--reloadfail-material</code>、<code>--reloadfail-mesh</code>、<code>--reloadfail-texture</code> 已覆盖关键失败回滚点并断言 <code>Material.LoadFailed</code>、<code>Mesh.LoadFailed</code>、<code>Texture.LoadFailed</code>；继续统一 terrain/material/texture/shader reflection 的 plan/result 类型；asset validation 不创建 Vulkan runtime object。</td>
+                        <td>mesh section 桥接已通过 <code>MeshObjectBuildPlan</code> 落地；asset validation 不创建 Vulkan runtime object；普通失败场景由对应模块测试覆盖。</td>
                         <td>坏 scene、坏 material、坏 mesh、坏 texture 都能通过 runtime command path 验证旧 active world 与 renderer resource 指纹保持不变；boundary audit 固化 runtime error code 分类。</td>
                     </tr>
                     <tr>
                         <td>3. Renderer frontend / frame graph 收口</td>
                         <td>固定 <code>WorldSnapshot -> RenderScene -> compiled graph/pass runtime -> backend</code> 数据流。</td>
                         <td><code>RendererFrontend</code> 只产 <code>RenderScene</code>；<code>PassRuntime</code> 只做 pass 分派/barrier/begin-end；graph reload 走 retire。</td>
-                        <td><code>--graphreloadstress 6 --exit-after-tests</code> 与 <code>--framesmoke 120 --exit-after-tests</code> 通过。</td>
+                        <td>三类保留 runtime test 均通过。</td>
                     </tr>
                     <tr>
                         <td>4. Vulkan device boundary 资源句柄推进</td>
@@ -2653,7 +2653,7 @@ struct RuntimeResult {
                         <td>5. 生命周期与回滚完整覆盖</td>
                         <td>所有替换 GPU 资源的路径都有释放策略和压力验证。</td>
                         <td>覆盖 world reload success/failure、material failure、light SSBO grow、resize、graph reload、shutdown。</td>
-                        <td>reload、reloadfail、reloadfail-material、lightstress、resizestress、graphreloadstress 全部返回 0，retire queue drain。</td>
+                        <td>shader reload、compute reload、World/Graph transaction 全部返回 0，retire queue drain。</td>
                     </tr>
                     <tr>
                         <td>6. Subsystem 与启动流定稿</td>
@@ -2675,15 +2675,15 @@ struct RuntimeResult {
             <p class="rule">推荐入口：<code>powershell -ExecutionPolicy Bypass -File tool/ue-lite-final-validation.ps1</code>。脚本会串行执行下列矩阵，并把每一步日志写入 <code>artifacts/ue-lite-validation/&lt;timestamp&gt;/</code>。</p>
             <pre><code>cmake --build build -j
 powershell -ExecutionPolicy Bypass -File tool/ue-lite-boundary-audit.ps1
-build\bin\main.exe --framesmoke 120 --exit-after-tests
-build\bin\main.exe --reloadstress scenes/SC_speedtree.json 100 --exit-after-tests
-build\bin\main.exe --reloadfail scenes/DOES_NOT_EXIST.json --exit-after-tests
-build\bin\main.exe --reloadfail-material --exit-after-tests
-build\bin\main.exe --reloadfail-mesh --exit-after-tests
-build\bin\main.exe --reloadfail-texture --exit-after-tests
-build\bin\main.exe --lightstress 3 --exit-after-tests
-build\bin\main.exe --resizestress 6 --exit-after-tests
-build\bin\main.exe --graphreloadstress 6 --exit-after-tests</code></pre>
+build\bin\main.exe --shader-reload-test --exit-after-tests
+build\bin\main.exe --shader-compute-reload-test --exit-after-tests
+build\bin\main.exe --world-graph-transaction-test --exit-after-tests
+
+
+
+
+
+
 
             <h3>Shader 增量构建与热重载线程/数据流</h3>
             <p class="rule">正式合同见 <code>documents/rendering/shader-build-cache.md</code> 与 <code>documents/rendering/shader-hot-reload.md</code>；本节只记录与本架构文档相关的线程归属与资源生命周期。</p>
@@ -2700,7 +2700,7 @@ GT 更新边界
   -> 旧 Pipeline/descriptor/UI 资源进 ResourceRetireQueue
   -> 等待 GPU frame epoch 完成后析构</code></pre>
             <p class="rule"><code>WorldGraphTransactionCoordinator</code> 让启动 World、运行时 World reload 与 M_*.json 定义变化共用候选事务：解析、候选 generated include、World-local resource package、<code>PreparedRenderGraphState</code>、Material/MI descriptor package、resolved scene 与 view target 都在 staging owner 中完成。启动在事务前只建立 candidate prepare 所需的 RenderSystem 基础资源，事务成功后才初始化 UI overlay。初始 candidate 首次产生的 process-global texture binding 与 World-local package 一起发布，后续候选只能继承相同 global identity。prepare 不修改 active owner；全部可失败工作结束后，正式 artifact/include 发布和 World/resource/graph/RenderSystem/Controller 的 ownership move/swap 进入 no-throw commit。任一 prepare 失败时旧 World、graph、runtime binding 与正式文件保持，成功 swap 后才激活 <code>PreparedResourceRetirements</code> 或 <code>PreparedRetiredResourcePackage::Activate()</code>。</p>
-            <p class="rule">worker 在 Vulkan teardown 前 stop + join，完成但尚未提交的 candidate 会被丢弃，不得在 teardown 后回调。验证入口：<code>--shader-reload-test</code>、<code>--shader-auto-reload-test</code>、<code>--shader-compute-reload-test</code>、<code>--shader-definition-reload-test</code>、<code>--shader-ui-reload-test</code>、<code>--shader-shutdown-inflight-test</code>、<code>--world-graph-transaction-test</code>；运行时验证共享 <code>shader/spv/</code>，必须串行执行。</p>
+            <p class="rule">worker 在 Vulkan teardown 前 stop + join，完成但尚未提交的 candidate 会被丢弃，不得在 teardown 后回调。保留的 runtime 验证入口：<code>--shader-reload-test</code>、<code>--shader-compute-reload-test</code>、<code>--world-graph-transaction-test</code>；运行时验证共享 <code>shader/spv/</code>，必须串行执行。</p>
 
             <h3>禁止项</h3>
             <ul class="dense-list">

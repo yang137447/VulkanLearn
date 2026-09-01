@@ -86,11 +86,8 @@ target_link_libraries(material_instance_editor_tests
         Spirv_Reflect
         BLAKE3::blake3)
 
-enable_testing()
-add_test(
-    NAME material_instance_editor_contract
-    COMMAND material_instance_editor_tests)
-set_tests_properties(material_instance_editor_contract PROPERTIES
+vulkanlearn_add_gtest(
+    material_instance_editor_tests
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
 add_executable(material_instance_editor_landed_tests
@@ -128,10 +125,8 @@ target_link_libraries(material_instance_editor_landed_tests
         Spirv_Reflect
         BLAKE3::blake3)
 
-add_test(
-    NAME material_instance_editor_landed
-    COMMAND material_instance_editor_landed_tests)
-set_tests_properties(material_instance_editor_landed PROPERTIES
+vulkanlearn_add_gtest(
+    material_instance_editor_landed_tests
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
 add_executable(material_instance_editor_production_tests
@@ -176,8 +171,6 @@ target_link_libraries(material_instance_editor_production_tests
         Spirv_Reflect
         BLAKE3::blake3)
 
-add_test(
-    NAME material_instance_editor_production
-    COMMAND material_instance_editor_production_tests)
-set_tests_properties(material_instance_editor_production PROPERTIES
+vulkanlearn_add_gtest(
+    material_instance_editor_production_tests
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")

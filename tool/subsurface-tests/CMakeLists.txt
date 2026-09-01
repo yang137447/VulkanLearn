@@ -19,4 +19,4 @@ target_link_libraries(subsurface_tests
         Json
 )
 
-add_test(NAME subsurface_contract COMMAND subsurface_tests)
+vulkanlearn_add_gtest(subsurface_tests)

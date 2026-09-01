@@ -24,6 +24,7 @@
 #include "mesh/loader/speedtree/speedTreeSourceAdapter.h"
 #include "render/foliage/speedTreeWindSystem.h"
 #include "render/foliage/speedTreeWindTransform.h"
+#include "speedTreeWindValidation.h"
 
 namespace
 {
@@ -2316,7 +2317,7 @@ namespace
     }
 }
 
-int main(int argc, char** argv)
+int RunSpeedTreeWindValidation(int argc, char** argv)
 {
     try
     {

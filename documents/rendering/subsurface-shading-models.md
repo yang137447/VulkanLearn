@@ -427,19 +427,7 @@ ctest --test-dir build -j 1 --output-on-failure
 100% tests passed, 5/5
 ```
 
-### 10.2 Runtime Smoke
-
-已通过：
-
-```text
-build/bin/main.exe --framesmoke 2 --exit-after-tests
-build/bin/main.exe --initial-scene scenes/SC_subsurface_models.json --framesmoke 3 --exit-after-tests
-```
-
-验证范围包括 shader cache、Compute lookup 生成、两类资产加载、三种材质、Render Graph、
-World transaction 和实际帧提交。
-
-### 10.3 Visual Check
+### 10.2 Visual Check
 
 测试场景：`<resourcePath>/scenes/SC_subsurface_models.json`
 
@@ -453,19 +441,7 @@ World transaction 和实际帧提交。
 
 本次没有进行 path-traced BSSRDF reference 对比，因此不得宣称物理误差已经量化。
 
-### 10.4 本地性能基线
-
-2026-08-22、当前本机、120 帧 `framesmoke`：
-
-| Scene | avgFrameMs | minFrameMs | maxFrameMs | avgRenderLoopMs |
-| --- | ---: | ---: | ---: | ---: |
-| `SC_subsurface_models.json` | 2.431223 | 1.427300 | 39.469500 | 1.490060 |
-| `SC_car_showcase.json` | 3.469403 | 2.426000 | 37.252400 | 2.569046 |
-
-这些数字是场景级 smoke baseline，不是严格的 SSS pass GPU timing，也不能直接用两个复杂度
-不同的场景计算 SSS 开销。后续优化应增加 GPU timestamp pass breakdown 后再做成本结论。
-
-## 11. 关键文件
+## 10. 关键文件
 
 - `source/render/subsurface/subsurfaceAssets.*`
 - `source/render/subsurface/subsurfaceMaterialContract.*`

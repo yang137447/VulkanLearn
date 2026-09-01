@@ -1,7 +1,7 @@
 {
     "schemaVersion": 1,
-    "lutVersion": 1,
-    "kernelVersion": 1,
+    "lutVersion": 2,
+    "kernelVersion": 2,
     "width": 128,
     "height": 512,
     "layers": 3,
@@ -16,5 +16,5 @@
     "roughnessMapping": "slice-linear-8",
     "wrap": "deltaPhi-repeat-thetaD-clamp",
     "pathConvention": "layer0=R,layer1=TT,layer2=TRT",
-    "sourceIdentity": "hair-author-fixture-v1"
+    "sourceIdentity": "hair-author-fixture-v2"
 }

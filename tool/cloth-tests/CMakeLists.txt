@@ -12,4 +12,4 @@ target_link_libraries(cloth_tests
         Json
 )
 
-add_test(NAME cloth_contract COMMAND cloth_tests)
+vulkanlearn_add_gtest(cloth_tests)

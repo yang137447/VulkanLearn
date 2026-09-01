@@ -7,6 +7,8 @@
 #include <stdexcept>
 #include <string>
 
+#include <gtest/gtest.h>
+
 #include <nlohmann/json.hpp>
 
 #include "render/subsurface/subsurfaceAssets.h"
@@ -401,30 +403,67 @@ void TestDebugView16Contract()
 
 } // namespace
 
-int main()
+TEST(Subsurface, ProfileSchemaAndUnits)
 {
-    try
-    {
-        TestProfileSchemaAndUnits();
-        TestSchemaRejection();
-        TestSkinModesAndStableIds();
-        TestSubsurfaceRoundTrip();
-        TestPreintegratedSkinRoundTrip();
-        TestSubsurfaceProfileRoundTrip();
-        TestDefaultLitComponentRecomposition();
-        TestComputeOnlyGenerationContract();
-        TestDiscreteGBufferSamplingContract();
-        TestCompositionDiscreteGBufferSamplingContract();
-        TestPreintegratedSkinBottomNormalContract();
-        TestVirtualLightModuleContract();
-        TestDebugView16Contract();
-        std::cout << "Subsurface contract tests passed." << std::endl;
-        return 0;
-    }
-    catch (const std::exception& exception)
-    {
-        std::cerr << "Subsurface contract tests failed: "
-                  << exception.what() << std::endl;
-        return 1;
-    }
+    TestProfileSchemaAndUnits();
+}
+
+TEST(Subsurface, SchemaRejection)
+{
+    TestSchemaRejection();
+}
+
+TEST(Subsurface, SkinModesAndStableIds)
+{
+    TestSkinModesAndStableIds();
+}
+
+TEST(Subsurface, GBufferRoundTrip)
+{
+    TestSubsurfaceRoundTrip();
+}
+
+TEST(Subsurface, PreintegratedSkinRoundTrip)
+{
+    TestPreintegratedSkinRoundTrip();
+}
+
+TEST(Subsurface, ProfileRoundTrip)
+{
+    TestSubsurfaceProfileRoundTrip();
+}
+
+TEST(Subsurface, DefaultLitComponentRecomposition)
+{
+    TestDefaultLitComponentRecomposition();
+}
+
+TEST(Subsurface, ComputeOnlyGenerationContract)
+{
+    TestComputeOnlyGenerationContract();
+}
+
+TEST(Subsurface, DiscreteGBufferSamplingContract)
+{
+    TestDiscreteGBufferSamplingContract();
+}
+
+TEST(Subsurface, CompositionDiscreteGBufferSamplingContract)
+{
+    TestCompositionDiscreteGBufferSamplingContract();
+}
+
+TEST(Subsurface, PreintegratedSkinBottomNormalContract)
+{
+    TestPreintegratedSkinBottomNormalContract();
+}
+
+TEST(Subsurface, VirtualLightModuleContract)
+{
+    TestVirtualLightModuleContract();
+}
+
+TEST(Subsurface, DebugView16Contract)
+{
+    TestDebugView16Contract();
 }

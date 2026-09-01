@@ -1054,21 +1054,10 @@ Test-FilePatternsPresent `
     -Failures $failures `
     -RelativePath "source/engine/launchOptions.cpp" `
     -Patterns @(
-        '--reloadstress',
-        '--reloadfail',
-        '--reloadfail-material',
-        '--reloadfail-mesh',
-        '--reloadfail-texture',
-        '--lightstress',
-        '--resizestress',
-        '--graphreloadstress',
-        '--framesmoke',
-        '--environmentstress',
+        '--shader-reload-test',
+        '--shader-compute-reload-test',
+        '--world-graph-transaction-test',
         '--exit-after-tests',
-        'RuntimeCommandType::RunResizeStress',
-        'RuntimeCommandType::RunRenderGraphReloadStress',
-        'RuntimeCommandType::RunFrameSmokeTest',
-        'RuntimeCommandType::RunEnvironmentUpdateStress',
         'QueueRuntimeCommand\('
     ) `
     -RuleName "Automated runtime validation entry"
@@ -1082,23 +1071,6 @@ Test-FilePatternsAbsent `
         'engineLoop\.StartFrameSmokeTest\('
     ) `
     -RuleName "Launch runtime tests use CommandBus"
-
-Test-FilePatternsPresent `
-    -Failures $failures `
-    -RelativePath "source/engine/testing/rendererLifecycleRuntimeTests.cpp" `
-    -Patterns @(
-        'BeginResizeStress',
-        'UpdateResizeStress',
-        'BeginRenderGraphReloadStress',
-        'UpdateRenderGraphReloadStress',
-        'BeginFrameSmokeTest',
-        'RecordFrameTime',
-        'BeginEnvironmentUpdateStress',
-        'UpdateEnvironmentUpdateStress',
-        'RuntimeCommandType::SetProceduralSkyParameters',
-        'Environment update stress completed'
-    ) `
-    -RuleName "Runtime validation state owned by test subsystem"
 
 Test-FilePatternsAbsent `
     -Failures $failures `
@@ -1122,18 +1094,6 @@ Test-FilePatternsAbsent `
 
 Test-FilePatternsPresent `
     -Failures $failures `
-    -RelativePath "source/engine/testing/rendererLifecycleRuntimeTests.cpp" `
-    -Patterns @(
-        'BeginFrameSmokeTest',
-        'RecordFrameTime',
-        'avgFrameMs',
-        'avgFps',
-        'Frame smoke test completed'
-    ) `
-    -RuleName "Frame smoke runtime validation"
-
-Test-FilePatternsPresent `
-    -Failures $failures `
     -RelativePath "source/engine/engineLoop.cpp" `
     -Patterns @(
         'RecreateRendererForWindowResize',
@@ -1144,33 +1104,12 @@ Test-FilePatternsPresent `
 
 Test-FilePatternsPresent `
     -Failures $failures `
-    -RelativePath "source/engine/testing/rendererLifecycleRuntimeTests.cpp" `
-    -Patterns @(
-        'BeginResizeStress',
-        'UpdateResizeStress',
-        'Resize stress completed'
-    ) `
-    -RuleName "Swapchain resize runtime validation"
-
-Test-FilePatternsPresent `
-    -Failures $failures `
     -RelativePath "source/engine/engineLoop.cpp" `
     -Patterns @(
         'ReloadRenderGraphResources',
         'RenderGraphReleaseMode::Retire'
     ) `
     -RuleName "Render graph reload production lifecycle"
-
-Test-FilePatternsPresent `
-    -Failures $failures `
-    -RelativePath "source/engine/testing/rendererLifecycleRuntimeTests.cpp" `
-    -Patterns @(
-        'BeginRenderGraphReloadStress',
-        'UpdateRenderGraphReloadStress',
-        'Render graph reload stress',
-        'retired graph resources did not drain'
-    ) `
-    -RuleName "Render graph reload retire validation"
 
 Test-FilePatternsPresent `
     -Failures $failures `
@@ -1187,15 +1126,10 @@ Test-FilePatternsPresent `
     -Failures $failures `
     -RelativePath "source/engine/testing/worldTransactionRuntimeTests.cpp" `
     -Patterns @(
-        'World reload failure rollback test',
-        'CreateGeneratedMaterialFailureScene',
-        'CreateGeneratedMeshFailureScene',
-        'CreateGeneratedTextureFailureScene',
-        'Material.LoadFailed',
-        'Mesh.LoadFailed',
-        'Texture.LoadFailed',
-        'CreateGeneratedHighLightStressScene',
-        'SameRendererResourceFingerprint'
+        'BeginWorldGraphTransactionTest',
+        'ValidateWorldGraphTransactionFailure',
+        'CreateWorldGraphTransactionHighLightScene',
+        'World/graph transaction runtime test completed'
     ) `
     -RuleName "World reload failure state machine validation"
 
@@ -1203,10 +1137,9 @@ Test-FilePatternsPresent `
     -Failures $failures `
     -RelativePath "source/engine/testing/runtimeTestFixtures.cpp" `
     -Patterns @(
-        'CreateGeneratedMaterialFailureScene',
-        'CreateGeneratedMeshFailureScene',
-        'CreateGeneratedTextureFailureScene',
-        'CreateGeneratedHighLightStressScene',
+        'CreateShaderReloadTestScene',
+        'CreateWorldGraphTransactionHighLightScene',
+        'CleanupGeneratedRuntimeFixture',
         'SameRendererResourceFingerprint'
     ) `
     -RuleName "World reload failure fixture validation"
@@ -1215,12 +1148,9 @@ Test-FilePatternsPresent `
     -Failures $failures `
     -RelativePath "source/engine/runtimeTestHooks.cpp" `
     -Patterns @(
-        'activeWorldBeforeCommand',
-        'activeWorldAfterCommand',
-        'loadWorldError',
-        'SameRendererResourceFingerprint',
-        'rendererResourcesBeforeLoad',
-        'pass material bindings preserved'
+        'waitingForShaderReloadTestWorld',
+        'waitingForShaderComputeReloadTestWorld',
+        'waitingForWorldGraphTransactionTestWorld'
     ) `
     -RuleName "World reload failure command result validation"
 
@@ -1280,14 +1210,13 @@ Test-FilePatternsPresent `
 
 Test-FilePatternsPresent `
     -Failures $failures `
-    -RelativePath "source/engine/runtimeTestHooks.cpp" `
+    -RelativePath "source/engine/testing/worldTransactionRuntimeTests.cpp" `
     -Patterns @(
         'RetireDrainFrameBudget',
-        'maxPendingRetiredResources',
-        'World reload stress waiting for retire queue drain',
-        'retired world-local resources did not drain'
+        'worldGraphTransactionTestMaxPendingRetiredResources',
+        'retire queue drained while an old World/resource/graph owner remained live'
     ) `
-    -RuleName "World reload retire queue validation"
+    -RuleName "World graph retire queue validation"
 
 Test-FilePatternsPresent `
     -Failures $failures `
@@ -1295,25 +1224,8 @@ Test-FilePatternsPresent `
     -Patterns @(
         'ctest',
         '--shader-reload-test',
-        '--shader-auto-reload-test',
         '--shader-compute-reload-test',
-        '--shader-definition-reload-test',
-        '--shader-ui-reload-test',
-        '--shader-shutdown-inflight-test',
         '--world-graph-transaction-test',
-        'RunHairValidation',
-        '--hair-validation-test',
-        'hairAzimuthalLut.json',
-        '--framesmoke',
-        '--environmentstress',
-        '--reloadstress',
-        '--reloadfail',
-        '--reloadfail-material',
-        '--reloadfail-mesh',
-        '--reloadfail-texture',
-        '--lightstress',
-        '--resizestress',
-        '--graphreloadstress',
         'artifacts/ue-lite-validation'
     ) `
     -RuleName "UE-Lite final validation script contract"

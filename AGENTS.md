@@ -270,6 +270,23 @@ When making changes:
 - Shader/code migration must begin by reading and understanding the source implementation's comments together with the surrounding behavior. Preserve the original comments' useful intent in concise Chinese comments near the migrated code, including formula meaning, coordinate/UV conventions, branch rationale, source limitations, and deliberately retained quirks. Do not silently discard meaningful source comments merely because names or structure changed.
 - Do not mechanically translate or copy stale source comments. Verify each comment against the migrated behavior, rewrite it for VulkanLearn's ownership boundaries, and explicitly document intentional differences from the source implementation. Obvious syntax does not need comments, but non-obvious migration decisions do.
 
+## Test Governance
+
+Follow `documents/architecture/coding-guidelines.md#test-governance` for the
+complete test policy. The non-negotiable repository rules are:
+
+- Module and pure-logic tests must use GoogleTest and be registered through
+  the root `vulkanlearn_add_gtest(...)` helper; do not add test-only `main()`
+  entry points or manual `add_test(...)` registrations.
+- Keep each `TEST` focused on one behavior or contract. Extend the nearest
+  existing module suite instead of growing generic catch-all test files.
+- The only supported Vulkan runtime test commands are `--shader-reload-test`,
+  `--shader-compute-reload-test`, and `--world-graph-transaction-test`.
+  Do not add, restore, or broaden runtime tests without explicit user
+  agreement and a documented reason that a module test is insufficient.
+- Runtime tests share `shader/spv/` and must run serially. They are final
+  end-to-end validation, not a substitute for module coverage.
+
 ## Common Task Map
 
 If asked to add or change a scene:
