@@ -22,10 +22,11 @@ namespace MaterialAssetUtils
         std::string_view shaderDefine;
     };
 
-    // ID 会写入 GBuffer/MaterialSurface，并与 GLSL 常量一一对应；只能追加，不能重排。
+    // ID 会写入 GBuffer/MaterialSurface，并与 GLSL 的 UE Legacy 常量一一对应。
+    // SingleLayerWater/Strata 当前没有实现，不加入可 authoring 的材质列表，但保留其 ID 槽位。
     inline constexpr std::array<ShadingModelDesc, 11> kShadingModels = {{
-        {"DefaultLit", 0u, "SHADING_MODEL_DEFAULT_LIT"},
-        {"Unlit", 1u, "SHADING_MODEL_UNLIT"},
+        {"Unlit", 0u, "SHADING_MODEL_UNLIT"},
+        {"DefaultLit", 1u, "SHADING_MODEL_DEFAULT_LIT"},
         {"Subsurface", 2u, "SHADING_MODEL_SUBSURFACE"},
         {"PreintegratedSkin", 3u, "SHADING_MODEL_PREINTEGRATED_SKIN"},
         {"ClearCoat", 4u, "SHADING_MODEL_CLEAR_COAT"},
@@ -34,7 +35,7 @@ namespace MaterialAssetUtils
         {"Hair", 7u, "SHADING_MODEL_HAIR"},
         {"Cloth", 8u, "SHADING_MODEL_CLOTH"},
         {"Eye", 9u, "SHADING_MODEL_EYE"},
-        {"ThinTranslucent", 10u, "SHADING_MODEL_THIN_TRANSLUCENT"},
+        {"ThinTranslucent", 11u, "SHADING_MODEL_THIN_TRANSLUCENT"},
     }};
 
     inline const ShadingModelDesc& FindShadingModel(std::string_view shadingModel)

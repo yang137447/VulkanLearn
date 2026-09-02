@@ -91,6 +91,18 @@ vec3 DecodeGBufferDirection(vec3 encodedDirection)
     return normalize(encodedDirection * 2.0 - 1.0);
 }
 
+vec3 DecodeHairAbsorptionFromBaseColor(vec3 baseColor)
+{
+    // Hair GBuffer C 必须保留作者 BaseColor；Deferred 使用固定参考光程重建 sigma_a，
+    // 避免把米制吸收系数直接当颜色显示成白色，同时保持当前 Hair LUT 的默认合同。
+    const float referencePathLength = 4.0 * 0.00005;
+    vec3 referenceTransmittance = clamp(
+        baseColor,
+        vec3(1.0 / 255.0),
+        vec3(1.0));
+    return -log(referenceTransmittance) / referencePathLength;
+}
+
 float EncodeClothAnisotropy(
     float anisotropy,
     float anisotropyCross)
@@ -243,11 +255,9 @@ GBufferData EncodeGBuffer(in MaterialSurface surface, in GBufferPixelData pixelD
             EncodeGBufferPacked(
                 surface.shadingModel,
                 surface.selectiveOutputMask));
-    // C 承担 UE Legacy 的 BaseColor/AO；Eye 与 Hair 的现有特殊 BaseColor 语义随槽位迁移。
+    // C 承担 UE Legacy 的 BaseColor/AO；Eye 的 irisColor 是当前 Eye BaseColor 扩展。
     data.gbufferC = surface.shadingModel == SHADING_MODEL_EYE
         ? vec4(surface.modelInputs.eye.irisColor, surface.ambientOcclusion)
-        : surface.shadingModel == SHADING_MODEL_HAIR
-        ? vec4(surface.hairAbsorption, surface.ambientOcclusion)
         : vec4(surface.baseColor, surface.ambientOcclusion);
     data.gbufferD = surface.shadingModel == SHADING_MODEL_EYE
         ? vec4(
@@ -484,8 +494,8 @@ MaterialSurface DecodeGBufferSurface(in GBufferData data)
     {
         // Deferred V1 只从 GBuffer 恢复已冻结的 Hair 子集；IOR/radius 使用
         // LUT 合同的固定默认值，不能把普通通道偷偷解释成新的资产字段。
-        surface.hairAbsorption = data.gbufferC.rgb;
-        surface.modelInputs.hair.absorption = data.gbufferC.rgb;
+        surface.hairAbsorption = DecodeHairAbsorptionFromBaseColor(data.gbufferC.rgb);
+        surface.modelInputs.hair.absorption = surface.hairAbsorption;
         surface.modelInputs.hair.scatter = surface.customData.r;
         surface.modelInputs.hair.backlit = surface.customData.g;
         surface.modelInputs.hair.cuticleTilt = surface.customData.b;
@@ -493,7 +503,7 @@ MaterialSurface DecodeGBufferSurface(in GBufferData data)
         surface.modelInputs.hair.ior = 1.55;
         surface.modelInputs.hair.fiberRadius = 0.00005;
         surface.modelInputs.hair.coverage = 1.0;
-        // Hair 独占 C.r 与 E.gba，冻结环境/方向/局部/虚拟光四个标量；E.r
+        // Hair 独占 B.r 与 E.gba，冻结环境/方向/局部/虚拟光四个标量；E.r
         // 继续保存预计算阴影，Forward 与 Deferred 因而消费同一角色光照合同。
         surface.modelInputs.hair.characterLighting = vec4(
             data.gbufferB.r,

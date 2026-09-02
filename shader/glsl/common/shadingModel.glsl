@@ -1,8 +1,9 @@
 #ifndef VL_COMMON_SHADING_MODEL_GLSL
 #define VL_COMMON_SHADING_MODEL_GLSL
 
-const uint SHADING_MODEL_DEFAULT_LIT = 0u;
-const uint SHADING_MODEL_UNLIT = 1u;
+// UE 5.8 Legacy Material Shading Model ID；未实现模型仍保留原始槽位。
+const uint SHADING_MODEL_UNLIT = 0u;
+const uint SHADING_MODEL_DEFAULT_LIT = 1u;
 const uint SHADING_MODEL_SUBSURFACE = 2u;
 const uint SHADING_MODEL_PREINTEGRATED_SKIN = 3u;
 const uint SHADING_MODEL_CLEAR_COAT = 4u;
@@ -11,7 +12,9 @@ const uint SHADING_MODEL_TWOSIDED_FOLIAGE = 6u;
 const uint SHADING_MODEL_HAIR = 7u;
 const uint SHADING_MODEL_CLOTH = 8u;
 const uint SHADING_MODEL_EYE = 9u;
-const uint SHADING_MODEL_THIN_TRANSLUCENT = 10u;
+const uint SHADING_MODEL_SINGLE_LAYER_WATER = 10u;
+const uint SHADING_MODEL_THIN_TRANSLUCENT = 11u;
+const uint SHADING_MODEL_STRATA = 12u;
 
 // SHADING_MODEL_CLEAR_COAT 使用 GBufferD/customData 传递清漆层参数：
 //   x = 清漆层权重

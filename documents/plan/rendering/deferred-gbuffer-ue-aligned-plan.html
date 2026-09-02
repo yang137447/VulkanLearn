@@ -503,8 +503,9 @@
                 <pre><code>// UE-style packed channel：存储到 gbufferB.a。
 // 低 4 bit: ShadingModelID
 // 高 4 bit: SelectiveOutputMask
-const uint SHADING_MODEL_DEFAULT_LIT = 0u;
-const uint SHADING_MODEL_UNLIT = 1u;
+// UE 5.8 Legacy Material Shading Model ID；未实现模型仍保留原始槽位。
+const uint SHADING_MODEL_UNLIT = 0u;
+const uint SHADING_MODEL_DEFAULT_LIT = 1u;
 const uint SHADING_MODEL_SUBSURFACE = 2u;
 const uint SHADING_MODEL_PREINTEGRATED_SKIN = 3u;
 const uint SHADING_MODEL_CLEAR_COAT = 4u;
@@ -513,6 +514,9 @@ const uint SHADING_MODEL_TWOSIDED_FOLIAGE = 6u;
 const uint SHADING_MODEL_HAIR = 7u;
 const uint SHADING_MODEL_CLOTH = 8u;
 const uint SHADING_MODEL_EYE = 9u;
+const uint SHADING_MODEL_SINGLE_LAYER_WATER = 10u; // reserved
+const uint SHADING_MODEL_THIN_TRANSLUCENT = 11u;
+const uint SHADING_MODEL_STRATA = 12u; // reserved
 
 const uint GBUFFER_HAS_CUSTOM_DATA_MASK = 0x10u;
 const uint GBUFFER_HAS_PRECOMPUTED_SHADOW_MASK = 0x20u;
@@ -521,7 +525,7 @@ const uint GBUFFER_HAS_ANISOTROPY_MASK = 0x80u;
 
 float EncodeGBufferPacked(uint shadingModel, uint flags)
 {
-    return float((shadingModel &amp; 0x0fu) | (flags &amp; 0xf0u));
+    return float((shadingModel &amp; 0x0fu) | (flags &amp; 0xf0u)) / 255.0;
 }
 
 uint DecodeShadingModel(float packedValue)

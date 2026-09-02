@@ -175,8 +175,8 @@ vec3 EvaluateHairBaseColorResponse(
     defined(RENDER_MODE_TRANSPARENT_ADDITIVE)
     baseColor = surface.baseColor;
 #else
-    // Deferred Hair 的 GBuffer A 保存 sigma_a；按当前 Hair ABI 反解回源 BaseColor，
-    // 这样 Core 与 Forward Fringe 使用同一份发色，不会让高光脱离黑色发束。
+    // Deferred Hair 的 GBuffer C 保存源 BaseColor；按当前 Hair ABI 的固定参考光程
+    // 重建 sigma_a，确保 Core 与 Forward Fringe 使用同一份发色。
     baseColor = exp(-max(surface.hairAbsorption, vec3(0.0)) *
         (4.0 * 0.00005));
 #endif

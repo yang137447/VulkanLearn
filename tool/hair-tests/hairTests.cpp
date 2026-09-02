@@ -280,7 +280,12 @@ void TestHairGBufferRoundTrip()
     expected.backlit = 0.72f;
     expected.cuticleTilt = -0.08f;
     expected.multipleScatteringWeight = 0.21f;
-    expected.absorption = {0.8f, 1.4f, 2.1f};
+    expected.baseColor = {0.12f, 0.025f, 0.008f};
+    const float referencePathLength = 2.0e-4f;
+    expected.absorption = {
+        -std::log(expected.baseColor[0]) / referencePathLength,
+        -std::log(expected.baseColor[1]) / referencePathLength,
+        -std::log(expected.baseColor[2]) / referencePathLength};
     expected.opacity = 0.73f;
     expected.tangent = {0.6f, -0.2f, 0.7745967f};
     expected.tangentHandedness = -1.0f;
@@ -291,9 +296,12 @@ void TestHairGBufferRoundTrip()
     expected.precomputedShadowFactor = 0.74f;
     const VL::Hair::HairGBufferInputs actual =
         VL::Hair::DecodeHairGBuffer(VL::Hair::EncodeHairGBuffer(expected));
-    RequireNear(actual.absorption[0], expected.absorption[0], 1.0e-6f, "Hair absorption R GBuffer mismatch");
-    RequireNear(actual.absorption[1], expected.absorption[1], 1.0e-6f, "Hair absorption G GBuffer mismatch");
-    RequireNear(actual.absorption[2], expected.absorption[2], 1.0e-6f, "Hair absorption B GBuffer mismatch");
+    RequireNear(actual.baseColor[0], expected.baseColor[0], 1.0e-6f, "Hair base color R GBuffer mismatch");
+    RequireNear(actual.baseColor[1], expected.baseColor[1], 1.0e-6f, "Hair base color G GBuffer mismatch");
+    RequireNear(actual.baseColor[2], expected.baseColor[2], 1.0e-6f, "Hair base color B GBuffer mismatch");
+    RequireNear(actual.absorption[0], expected.absorption[0], 1.0e-3f, "Hair absorption R GBuffer mismatch");
+    RequireNear(actual.absorption[1], expected.absorption[1], 1.0e-3f, "Hair absorption G GBuffer mismatch");
+    RequireNear(actual.absorption[2], expected.absorption[2], 1.0e-3f, "Hair absorption B GBuffer mismatch");
     RequireNear(actual.opacity, expected.opacity, 1.0e-6f, "Hair opacity GBuffer mismatch");
     RequireNear(actual.scatter, expected.scatter, 1.0e-6f, "Hair scatter GBuffer mismatch");
     RequireNear(actual.backlit, expected.backlit, 1.0e-6f, "Hair backlit GBuffer mismatch");

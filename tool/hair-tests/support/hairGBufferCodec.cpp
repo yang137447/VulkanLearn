@@ -1,11 +1,14 @@
 #include "hairGBufferCodec.h"
 
 #include <cmath>
+#include <algorithm>
 
 namespace VL::Hair
 {
 namespace
 {
+
+constexpr float HairReferencePathLength = 2.0e-4f;
 
 float EncodeDirection(float value) noexcept
 {
@@ -29,9 +32,9 @@ HairGBufferPayload EncodeHairGBuffer(const HairGBufferInputs& inputs)
         inputs.roughness,
         0.0f};
     payload.gbufferC = {
-        inputs.absorption[0],
-        inputs.absorption[1],
-        inputs.absorption[2],
+        inputs.baseColor[0],
+        inputs.baseColor[1],
+        inputs.baseColor[2],
         inputs.ambientOcclusion};
     payload.gbufferD = {
         inputs.scatter,
@@ -56,6 +59,13 @@ HairGBufferInputs DecodeHairGBuffer(const HairGBufferPayload& payload)
 {
     HairGBufferInputs inputs;
     inputs.absorption = {
+        -std::log(std::clamp(payload.gbufferC[0], 1.0f / 255.0f, 1.0f)) /
+            HairReferencePathLength,
+        -std::log(std::clamp(payload.gbufferC[1], 1.0f / 255.0f, 1.0f)) /
+            HairReferencePathLength,
+        -std::log(std::clamp(payload.gbufferC[2], 1.0f / 255.0f, 1.0f)) /
+            HairReferencePathLength};
+    inputs.baseColor = {
         payload.gbufferC[0],
         payload.gbufferC[1],
         payload.gbufferC[2]};

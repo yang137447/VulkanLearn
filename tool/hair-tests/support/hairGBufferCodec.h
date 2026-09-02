@@ -5,7 +5,7 @@
 namespace VL::Hair
 {
 
-// CPU GBuffer codec 只用于验证 shader/gbufferCodec.glsl 的 Hair 专用槽位，
+// CPU GBuffer codec 只用于验证 shader/gbufferCodec.glsl 的 Hair 槽位合同，
 // 不参与生产渲染；非 Hair 模型的 GBufferF.a 仍由现有 anisotropy 合同解释。
 struct HairGBufferInputs
 {
@@ -13,6 +13,7 @@ struct HairGBufferInputs
     float backlit = 0.0f;
     float cuticleTilt = 0.0f;
     float multipleScatteringWeight = 0.0f;
+    std::array<float, 3> baseColor = {1.0f, 1.0f, 1.0f};
     std::array<float, 3> absorption = {1.0f, 1.0f, 1.0f};
     float opacity = 1.0f;
     std::array<float, 3> tangent = {1.0f, 0.0f, 0.0f};

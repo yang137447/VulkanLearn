@@ -491,7 +491,8 @@ vec4 ResolveMaterialDebugView(
         indirectDiffuseMask * vec4(lighting.indirectDiffuse, 1.0) +
         indirectSpecularMask * vec4(lighting.indirectSpecular, 1.0) +
         shadowCascadeMask * vec4(vec3(lighting.shadowCascadeIndex), 1.0) +
-        shadingModelMask * vec4(vec3(float(surface.shadingModel) / 10.0), 1.0) +
+        // ShadingModelID 占用 packed byte 的低 4 bit，按完整 nibble 映射到调试颜色。
+        shadingModelMask * vec4(vec3(float(surface.shadingModel) / 15.0), 1.0) +
         subsurfaceWeightMask * vec4(vec3(lighting.subsurfaceWeight), 1.0) +
         transmissionWeightMask * vec4(vec3(lighting.transmissionWeight), 1.0) +
         subsurfaceAssetIdMask * vec4(vec3(subsurfaceAssetId), 1.0) +

@@ -75,8 +75,9 @@ sigma_a = -log(clamp(BaseColor.rgb, 1/255, 1))
           * u_hairOptical.x / referencePathLength
 ```
 
-Forward 的 `surface.hairAbsorption` 与 Hair GBuffer 的 `gbufferC.rgb` 都保存这份已经转换
-的结果；Deferred decode 直接恢复它。UE direct evaluator 统一在四倍半径参考光程恢复：
+Forward 的 `surface.hairAbsorption` 保存转换后的 `sigma_a`；Hair GBuffer 的
+`gbufferC.rgb` 保存源 BaseColor，Deferred decode 按固定四倍半径参考光程重建 `sigma_a`。
+UE direct evaluator 统一在四倍半径参考光程恢复：
 
 ```text
 pathColor = exp(-sigma_a * 4 * fiberRadius)
@@ -157,7 +158,7 @@ gbufferB.r   = character ambient multiplier
 gbufferB.g   = Hair specular / R-TT-TRT interface energy scale
 gbufferB.b   = common roughness
 gbufferB.a   = ShadingModelID 7 + SelectiveOutputMask
-gbufferC.rgb = hairAbsorption (BaseColor→absorption 结果)
+gbufferC.rgb = source BaseColor
 gbufferC.a   = material AO
 gbufferD.r   = scatter
 gbufferD.g   = backlit
