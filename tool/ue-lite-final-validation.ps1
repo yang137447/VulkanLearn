@@ -95,7 +95,7 @@ function Get-HairAuthoringMetadataPath {
     }
 
     return [System.IO.Path]::GetFullPath(
-        (Join-Path $resourcePath "hair/hairAzimuthalLut.json"))
+        (Join-Path $resourcePath "Common/Profiles/Hair/hairAzimuthalLut.json"))
 }
 
 Push-Location -LiteralPath $RepoRoot

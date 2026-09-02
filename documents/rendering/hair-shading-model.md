@@ -136,8 +136,8 @@ CPU reference 仍保留 `Phi_p(h)` 的全部有效 roots 和 `1/abs(dPhi/dh)` Ja
   `sum(interfaceWeight / abs(dPhi/dh))`；禁止用经验 phase 高斯或倒置 Jacobian 替代；
 - LUT metadata 的 `schemaVersion/lutVersion/kernelVersion/IOR/coordinate/wrap/pathConvention`
   必须与 shader 合同一致，不接受未知版本。
-- 运行时只接受 `resourcePath/hair/hairAzimuthalLut.json` 作者 metadata；
-  `resourcePath/generated/hairAzimuthalLut.json` 仅是成功 World transaction 后的生成记录，
+- 运行时只接受 `resourcePath/Common/Profiles/Hair/hairAzimuthalLut.json` 作者 metadata；
+  `resourcePath/Generated/Runtime/hairAzimuthalLut.json` 仅是成功 World transaction 后的生成记录，
   不能作为下一次加载的输入，也不能替代作者资产。
 
 当前资源合同固定为 `128x512x3 RGBA16F`，roughness 8 slice、thetaD 64 sample。生产 texel

@@ -107,7 +107,7 @@ def compare(source_image, runtime_image, channels, flip_runtime_y):
 
 def main():
     arguments = parse_arguments()
-    runtime_root = Path(arguments.resource_root) / "textures" / "datas" / "car"
+    runtime_root = Path(arguments.resource_root) / "Maps" / "SC_car_showcase" / "Source" / "Textures" / "car"
     results = []
 
     for label, source_name, runtime_name, channels in TEXTURES:

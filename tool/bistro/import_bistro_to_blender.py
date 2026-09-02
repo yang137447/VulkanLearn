@@ -7,7 +7,7 @@ import bpy
 
 
 def import_unique_models(resources: Path, output_path: Path) -> None:
-    data_root = resources / "models/datas/bistro_modular"
+    data_root = resources / "Maps/SC_bistro_exterior_modular/Source/Models/bistro_modular"
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     bpy.ops.wm.read_factory_settings(use_empty=True)

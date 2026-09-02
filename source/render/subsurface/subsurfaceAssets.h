@@ -47,7 +47,7 @@ enum class PreintegratedSkinOutputMode
     FinalDiffuseResponse,
 };
 
-// 从 subsurfaceProfiles/*.json 解析出的 profile 作者参数，供资源 loader 校验、
+// 从 Common/Profiles/Subsurface/*.json 解析出的 profile 作者参数，供资源 loader 校验、
 // SSBO 打包和材质路径解析使用；不负责计算 kernel 或创建 GPU 资源。
 struct SubsurfaceProfileAsset
 {
@@ -61,7 +61,7 @@ struct SubsurfaceProfileAsset
     float worldUnitScale = 1.0f;
 };
 
-// 从 skinLuts/*.json 解析出的 skin LUT 作者参数，供资源 loader 校验、
+// 从 Common/Profiles/SkinLuts/*.json 解析出的 skin LUT 作者参数，供资源 loader 校验、
 // SSBO 打包和材质路径解析使用；不负责计算 LUT texel 或上传纹理。
 struct PreintegratedSkinLutAsset
 {

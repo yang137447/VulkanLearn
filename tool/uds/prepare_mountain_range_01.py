@@ -7,7 +7,7 @@ from PIL import Image
 
 
 def build_packed_pbr(resource_root: Path) -> Path:
-    texture_root = resource_root / "textures/datas/uds/mountain_range_01"
+    texture_root = resource_root / "Maps/SC_uds_mountain_range/Source/Textures/uds/mountain_range_01"
     roughness_path = texture_root / "roughness_range01.jpg"
     ambient_occlusion_path = texture_root / "ambientOcclusion_range01.jpg"
     output_path = texture_root / "pbrParam_range01.png"

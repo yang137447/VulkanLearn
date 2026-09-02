@@ -43,7 +43,7 @@ namespace
         return {
             {"name", "T_textureAssetGate"},
             {"type", "texture"},
-            {"source", "textures/datas/T_textureAssetGate.png"},
+            {"source", "Generated/Validation/texture-asset-tests/T_textureAssetGate.png"},
             {"colorSpace", "srgb"},
             {"mipmaps", true},
             {"filter", "linear"},

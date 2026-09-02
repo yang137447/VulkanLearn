@@ -22,7 +22,7 @@ def parse_arguments():
     parser.add_argument("--resource-root", required=True)
     parser.add_argument(
         "--manifest",
-        default="models/datas/car/car_asset_manifest.json",
+        default="Maps/SC_car_showcase/Source/Models/car/car_asset_manifest.json",
     )
     script_arguments = []
     if "--" in sys.argv:

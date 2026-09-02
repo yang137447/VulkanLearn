@@ -99,13 +99,13 @@ void TestProfileUnitsAndDefaults()
 {
     const VL::EyeProfileAsset millimeter = VL::ParseEyeProfileAsset(
         MakeProfile(1, "millimeter", 0.001f),
-        "eyeProfiles/EP_mm.json");
+        "Common/Profiles/Eye/EP_mm.json");
     const VL::EyeProfileAsset centimeter = VL::ParseEyeProfileAsset(
         MakeProfile(2, "centimeter", 0.01f),
-        "eyeProfiles/EP_cm.json");
+        "Common/Profiles/Eye/EP_cm.json");
     const VL::EyeProfileAsset meter = VL::ParseEyeProfileAsset(
         MakeProfile(3, "meter", 1.0f, 2.0f),
-        "eyeProfiles/EP_m.json");
+        "Common/Profiles/Eye/EP_m.json");
 
     for (const VL::EyeProfileAsset* profile :
          {&millimeter, &centimeter, &meter})
@@ -169,11 +169,11 @@ void TestDuplicateIdsAreRejectedAtLoad()
         "vulkanlearn-eye-contract-duplicate";
     std::error_code cleanupError;
     fs::remove_all(root, cleanupError);
-    fs::create_directories(root / "eyeProfiles");
+    fs::create_directories(root / "Common" / "Profiles" / "Eye");
     {
-        std::ofstream first(root / "eyeProfiles" / "EP_a.json");
+        std::ofstream first(root / "Common" / "Profiles" / "Eye" / "EP_a.json");
         first << MakeProfile(1, "millimeter", 0.001f).dump(2);
-        std::ofstream second(root / "eyeProfiles" / "EP_b.json");
+        std::ofstream second(root / "Common" / "Profiles" / "Eye" / "EP_b.json");
         second << MakeProfile(1, "millimeter", 0.001f).dump(2);
     }
     RequireThrows(
@@ -187,19 +187,19 @@ void TestResourcePathNormalization()
     VL::EyeResourceSet resources;
     VL::EyeProfileAsset profile = VL::ParseEyeProfileAsset(
         MakeProfile(1, "millimeter", 0.001f),
-        "eyeProfiles/EP_human_default.json");
+        "Common/Profiles/Eye/EP_human_default.json");
     resources.profiles.push_back(profile);
     resources.profileIdsByAssetPath.emplace(profile.assetPath, profile.profileId);
     resources.profileIndicesById.emplace(profile.profileId, 0);
 
     Require(
-        resources.ResolveProfileId("eyeProfiles\\EP_human_default.json") == 1,
+        resources.ResolveProfileId("Common\\Profiles\\Eye\\EP_human_default.json") == 1,
         "Eye profile path separator normalization failed");
     Require(
-        resources.GetProfile(1).assetPath == "eyeProfiles/EP_human_default.json",
+        resources.GetProfile(1).assetPath == "Common/Profiles/Eye/EP_human_default.json",
         "Eye profile reverse lookup failed");
     RequireThrows(
-        [&]() { resources.ResolveProfileId("eyeProfiles/EP_missing.json"); },
+        [&]() { resources.ResolveProfileId("Common/Profiles/Eye/EP_missing.json"); },
         "inactive Eye profile path was accepted");
 }
 

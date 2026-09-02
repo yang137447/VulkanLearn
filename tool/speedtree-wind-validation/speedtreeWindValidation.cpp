@@ -2120,7 +2120,8 @@ namespace
         }
         const nlohmann::json config = nlohmann::json::parse(configFile);
         return std::filesystem::path(config.at("resourcePath").get<std::string>()) /
-            "models" / "datas" / "Oak_Complex_Rules.stsdk";
+            "Maps" / "SC_speedtree" / "Source" / "Models" /
+            "Oak_Complex_Rules.stsdk";
     }
 
     void PrintSample(const Sample& sample)
@@ -2485,7 +2486,7 @@ int RunSpeedTreeWindValidation(int argc, char** argv)
             const std::filesystem::path resourceRoot =
                 assetPath.parent_path().parent_path().parent_path();
             const AlphaImage clusterBranchAlpha = LoadAlphaImage(
-                resourceRoot / "textures/datas/T_OakClusterBranch_BaseColor.tga");
+                resourceRoot / "Source/Textures/T_OakClusterBranch_BaseColor.tga");
             const std::vector<VisibleAttachmentSample> visibleAttachmentSamples =
                 FindComponentVisibleRootSamples(
                     source.modelResource.sections[1],

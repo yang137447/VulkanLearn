@@ -232,7 +232,7 @@ std::shared_ptr<Texture> BrdfLutGenerator::Generate(
         TextureIO::SaveOptions saveOptions;
         saveOptions.semantic = HostImage::TextureSemantic::Lut;
         saveOptions.format = TextureIO::FileFormat::Exr;
-        TextureIO::Save((std::filesystem::path(CommonFunction::GetResourcePath()) / "generated" / "brdf_lut.exr"), cpuImage, saveOptions);
+        TextureIO::Save((std::filesystem::path(CommonFunction::GetResourcePath()) / "Generated" / "Runtime" / "brdf_lut.exr"), cpuImage, saveOptions);
 
         rendererBackend.DestroyBuffer(stagingBuffer, stagingBufferMemory);
 

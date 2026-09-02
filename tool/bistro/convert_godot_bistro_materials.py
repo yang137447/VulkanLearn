@@ -167,9 +167,9 @@ def build_materials(
     mi_by_slot: dict[str, Path],
     force: bool = False,
 ) -> dict[str, str]:
-    material_output = resource_root / "materials/bistro_modular"
-    texture_output = resource_root / "textures/bistro_modular"
-    texture_data_output = resource_root / "textures/datas/bistro_modular/pbr"
+    material_output = resource_root / "Maps/SC_bistro_exterior_modular/Materials"
+    texture_output = resource_root / "Maps/SC_bistro_exterior_modular/Textures"
+    texture_data_output = resource_root / "Maps/SC_bistro_exterior_modular/Source/Textures/bistro_modular/pbr"
 
     if force:
         import shutil
@@ -245,7 +245,7 @@ def build_materials(
             descriptor = {
                 "name": f"T_bistro_modular_{texture_asset_name}_Param",
                 "type": "texture",
-                "source": f"textures/datas/bistro_modular/pbr/{data_name}",
+                "source": f"Maps/SC_bistro_exterior_modular/Source/Textures/bistro_modular/pbr/{data_name}",
                 "colorSpace": "linear",
                 "mipmaps": True,
                 "filter": "linear",
@@ -253,7 +253,7 @@ def build_materials(
             }
             descriptor_path.write_text(json.dumps(descriptor, indent=2) + "\n", encoding="utf-8")
             material_instance["macros"]["USE_PBR_MAP"] = 1
-            material_instance["textures"]["pbrParamMap"] = f"textures/bistro_modular/{descriptor_name}"
+            material_instance["textures"]["pbrParamMap"] = f"Maps/SC_bistro_exterior_modular/Textures/{descriptor_name}"
             packed_count += 1
         else:
             material_instance["macros"]["USE_PBR_MAP"] = 0
@@ -263,7 +263,7 @@ def build_materials(
         output_name = f"MI_{safe_name}.json"
         output_path = material_output / output_name
         output_path.write_text(json.dumps(material_instance, indent=2) + "\n", encoding="utf-8")
-        runtime_mapping[material_name] = f"materials/bistro_modular/{output_name}"
+        runtime_mapping[material_name] = f"Maps/SC_bistro_exterior_modular/Materials/{output_name}"
         slot_mapping.setdefault(base_slot, runtime_mapping[material_name])
 
     report = {

@@ -346,7 +346,7 @@ struct EyeMaterialInputs
 资源目录：
 
 ```text
-<resourcePath>/eyeProfiles/
+<resourcePath>/Common/Profiles/Eye/
 ```
 
 当前 schema 示例：
@@ -410,8 +410,8 @@ MI 使用资产引用：
 ```json
 {
     "material": "shader/glsl/M_eye.json",
-    "eyeProfile": "eyeProfiles/EP_human_default.json",
-    "subsurfaceProfile": "subsurfaceProfiles/SSP_skin.json"
+    "eyeProfile": "Common/Profiles/Eye/EP_human_default.json",
+    "subsurfaceProfile": "Common/Profiles/Subsurface/SSP_skin.json"
 }
 ```
 
@@ -929,17 +929,17 @@ tool/eye-authoring-adapter/*
 已在 `config/config.json -> resourcePath` 增加：
 
 ```text
-<resourcePath>/eyeProfiles/EP_*.json
-<resourcePath>/materials/MI_eye_*.json
-<resourcePath>/models/SM_eye_*.json
-<resourcePath>/textures/T_eye_*.json
-<resourcePath>/scenes/SC_eye_*.json
+<resourcePath>/Common/Profiles/Eye/EP_*.json
+<resourcePath>/Maps/SC_eye/Materials/MI_eye_*.json
+<resourcePath>/Maps/SC_eye/Meshes/SM_eye_*.json
+<resourcePath>/Maps/SC_eye/Textures/T_eye_*.json
+<resourcePath>/Maps/SC_eye/SC_eye.json
 ```
 
 生成输出如需落盘，只能写入：
 
 ```text
-<resourcePath>/generated/
+<resourcePath>/Generated/Validation/SC_eye/
 ```
 
 生成 metadata 或 readback 不能成为下一次运行的 authoring source of truth。

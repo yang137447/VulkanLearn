@@ -542,7 +542,7 @@ void HairResourceLoader::Load() const
     const std::string generatedMetadataBytes =
         SerializeHairAzimuthalLutMetadata(metadata).dump(4) + "\n";
     loadContext.QueueGeneratedFile(
-        resourceRoot / "generated" / "hairAzimuthalLut.json",
+        resourceRoot / "Generated" / "Runtime" / "hairAzimuthalLut.json",
         std::vector<uint8_t>(
             generatedMetadataBytes.begin(),
             generatedMetadataBytes.end()));

@@ -105,7 +105,7 @@ Typical runtime expectation:
 - Run from the repository root or from an environment where the project root can still be discovered.
 - The app expects `config/` and `shader/` inside the repository.
 - Runtime assets are loaded from `config/config.json -> resourcePath`.
-- Repository-local `resources/` is not the runtime asset root. Generated runtime outputs should go under `resourcePath/generated/`.
+- Repository-local `resources/` is not the runtime asset root. Generated runtime outputs should go under `resourcePath/Generated/`.
 
 Current local build context:
 
@@ -155,10 +155,10 @@ If a change affects boot behavior, verify it against this order.
 - `source/shader/`: BLAKE3 content hashing, atomic file/commit, build-cache manifest, ABI signature, FileMonitor, compile worker, reload coordinator, compute/UI participants
 - `extern/BLAKE3/`: locked official BLAKE3 C implementation (MinGW portable path)
 - `config/`: top-level runtime config and render graph config
-- `<resourcePath>/scenes/`: scene JSON files
-- `<resourcePath>/models/`: mesh description JSON and source model data
-- `<resourcePath>/terrains/`: terrain description JSON files
-- `<resourcePath>/materials/`: material instance JSON files
+- `<resourcePath>/Maps/SC_<scene-name>/`: scene JSON files
+- `<resourcePath>/Maps/SC_<scene-name>/Meshes/`: mesh description JSON and source model data
+- `<resourcePath>/Maps/SC_<scene-name>/Terrains/`: terrain description JSON files
+- `<resourcePath>/Maps/SC_<scene-name>/Materials/`: material instance JSON files
 - `shader/glsl/`: shader source of truth
 - `shader/spv/`: compiled shader output and debug reflection artifacts
 - `extern/`: third-party dependencies
@@ -292,13 +292,13 @@ complete test policy. The non-negotiable repository rules are:
 If asked to add or change a scene:
 
 - check `config/config.json`
-- inspect `<resourcePath>/scenes/*.json`
+- inspect `<resourcePath>/Maps/SC_<scene-name>/*.json`
 - inspect `source/sceneLoader.cpp`
 
 If asked to add or change a terrain:
 
-- inspect `<resourcePath>/scenes/*.json`
-- inspect `<resourcePath>/terrains/TR_*.json`
+- inspect `<resourcePath>/Maps/SC_<scene-name>/*.json`
+- inspect `<resourcePath>/Maps/SC_<scene-name>/Terrains/TR_*.json`
 - inspect `source/terrain.h` and `source/terrain.cpp`
 - inspect `source/sceneLoader.cpp`
 - keep World Creator surface textures in material / texture asset JSON unless the task explicitly adds terrain layer blending
@@ -307,12 +307,12 @@ If asked to add or change a render pass:
 
 - inspect `config/renderGraphConfig.json`
 - inspect `source/renderGraph.cpp`
-- inspect `<resourcePath>/materials/pass/*.json`
+- inspect `<resourcePath>/Common/Materials/Pass/*.json`
 - inspect corresponding shaders in `shader/glsl/pass/`
 
 If asked to add or change a material:
 
-- inspect `<resourcePath>/materials/*.json`
+- inspect `<resourcePath>/Maps/SC_<scene-name>/Materials/*.json`
 - inspect `source/material.cpp`
 - inspect `source/materialInstance.cpp`
 - inspect shader reflection-dependent code paths

@@ -168,9 +168,9 @@ def split_glb(
 
 
 def split_models(resources: Path) -> dict[str, list[tuple[str, str]]]:
-    model_output = resources / "models/bistro_modular"
-    data_output = resources / "models/datas/bistro_modular"
-    scene_path = resources / "scenes/SC_bistro_exterior_modular.json"
+    model_output = resources / "Maps/SC_bistro_exterior_modular/Meshes"
+    data_output = resources / "Maps/SC_bistro_exterior_modular/Source/Models/bistro_modular"
+    scene_path = resources / "Maps/SC_bistro_exterior_modular/SC_bistro_exterior_modular.json"
     scene = json.loads(scene_path.read_text(encoding="utf-8"))
 
     old_model_paths: dict[str, str] = {}
@@ -207,7 +207,7 @@ def split_models(resources: Path) -> dict[str, list[tuple[str, str]]]:
             groups.setdefault(key, []).append(index)
 
         if len(groups) <= 1:
-            old_model_path = f"models/bistro_modular/SM_{relative_stem}.json"
+            old_model_path = f"Maps/SC_bistro_exterior_modular/Meshes/SM_{relative_stem}.json"
             old_model_paths[str(glb)] = old_model_path
             continue
 
@@ -234,7 +234,7 @@ def split_models(resources: Path) -> dict[str, list[tuple[str, str]]]:
             descriptor = {
                 "name": descriptor_name,
                 "type": "mesh",
-                "modelDataPath": f"models/datas/bistro_modular/{data_rel.as_posix()}",
+                "modelDataPath": f"Maps/SC_bistro_exterior_modular/Source/Models/bistro_modular/{data_rel.as_posix()}",
                 "materialSlots": [
                     {"name": name, "materialInstancePath": slot_paths[name]}
                     for name in used_material_names
@@ -243,11 +243,11 @@ def split_models(resources: Path) -> dict[str, list[tuple[str, str]]]:
             descriptor_path.write_text(json.dumps(descriptor, indent=2) + "\n", encoding="utf-8")
             new_models.append(
                 (
-                    f"models/bistro_modular/{descriptor_name}.json",
+                    f"Maps/SC_bistro_exterior_modular/Meshes/{descriptor_name}.json",
                     f"{data_rel.stem}",
                 )
             )
-        replacements[f"models/bistro_modular/SM_{relative_stem}.json"] = new_models
+        replacements[f"Maps/SC_bistro_exterior_modular/Meshes/SM_{relative_stem}.json"] = new_models
 
     new_objects: list[dict[str, Any]] = []
     for obj in scene.get("objects", []):

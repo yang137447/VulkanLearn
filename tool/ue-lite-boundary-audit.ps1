@@ -726,7 +726,7 @@ Test-FilePatternsAbsent `
     -Patterns @(
         'TryLoadHairAzimuthalLutAsset',
         'ResolveMetadataPath',
-        'generated/hairAzimuthalLut.json'
+        'Generated/Runtime/hairAzimuthalLut.json'
     ) `
     -RuleName "Hair authoring metadata loader boundary"
 

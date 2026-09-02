@@ -8,10 +8,10 @@ import bpy
 
 
 WHEEL_PARTS = (
-    ("BL", "models/SM_car_wheel_bl.json"),
-    ("FR", "models/SM_car_wheel_fr.json"),
-    ("FL", "models/SM_car_wheel_fl.json"),
-    ("BR", "models/SM_car_wheel_br.json"),
+    ("BL", "Maps/SC_car_showcase/Meshes/SM_car_wheel_bl.json"),
+    ("FR", "Maps/SC_car_showcase/Meshes/SM_car_wheel_fr.json"),
+    ("FL", "Maps/SC_car_showcase/Meshes/SM_car_wheel_fl.json"),
+    ("BR", "Maps/SC_car_showcase/Meshes/SM_car_wheel_br.json"),
 )
 
 TEXTURE_GROUPS = (
@@ -183,7 +183,7 @@ def main():
     resource_root = Path(arguments.resource_root)
 
     manifest = load_json(
-        resource_root / "models/datas/car/car_asset_manifest.json"
+        resource_root / "Maps/SC_car_showcase/Source/Models/car/car_asset_manifest.json"
     )
     parts_by_object = {
         part["blenderObject"]: part for part in manifest["parts"]
@@ -227,7 +227,7 @@ def main():
             )
             runtime_path = (
                 resource_root
-                / "textures/datas/car"
+                / "Maps/SC_car_showcase/Source/Textures/car"
                 / f"{runtime_prefix}_{runtime_suffix}.tga"
             )
             runtime_image = bpy.data.images.load(

@@ -84,7 +84,8 @@ M_eye / M_eyeInner / M_eyeCornea / M_eyeDeferred + MI
 
 ## 4. Profile asset 合同
 
-Eye profile 位于运行时资源根的 `eyeProfiles/*.json`，`type` 必须为 `eyeProfile`。首版字段包括：
+Eye profile 位于 `<resourcePath>/Common/Profiles/Eye/*.json`，`type` 必须为
+`eyeProfile`。首版字段包括：
 
 - `schemaVersion=1`、`profileVersion=1`
 - `profileId`：`1..15`；`0` 保留给 neutral profile，不允许作为 authored profile。
@@ -158,11 +159,11 @@ World prepare/reload 行为：
 {
   "type": "materialInstance",
   "material": "shader/glsl/M_eye.json",
-  "eyeProfile": "eyeProfiles/EP_human_default.json",
-  "subsurfaceProfile": "subsurfaceProfiles/SSP_skin.json",
+  "eyeProfile": "Common/Profiles/Eye/EP_human_default.json",
+  "subsurfaceProfile": "Common/Profiles/Subsurface/SSP_skin.json",
   "textures": {
-    "irisColorMap": "textures/T_eye_iris_checker.json",
-    "scleraColorMap": "textures/T_eye_sclera_checker.json"
+    "irisColorMap": "Common/Textures/T_eye_iris_checker.json",
+    "scleraColorMap": "Common/Textures/T_eye_sclera_checker.json"
   }
 }
 ```

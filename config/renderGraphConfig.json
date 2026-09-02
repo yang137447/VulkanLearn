@@ -325,7 +325,7 @@
             "name": "shadowCascade0",
             "type": "shadow",
             "needCreateMaterial": true,
-            "materialInstancePath": "materials/MI_shadow.json",
+            "materialInstancePath": "Common/Materials/MI_shadow.json",
             "pipelineState": {
                 "useVertexInput": true,
                 "depthTestEnable": true,
@@ -346,7 +346,7 @@
             "name": "shadowCascade1",
             "type": "shadow",
             "needCreateMaterial": true,
-            "materialInstancePath": "materials/MI_shadow.json",
+            "materialInstancePath": "Common/Materials/MI_shadow.json",
             "pipelineState": {
                 "useVertexInput": true,
                 "depthTestEnable": true,
@@ -367,7 +367,7 @@
             "name": "shadowCascade2",
             "type": "shadow",
             "needCreateMaterial": true,
-            "materialInstancePath": "materials/MI_shadow.json",
+            "materialInstancePath": "Common/Materials/MI_shadow.json",
             "pipelineState": {
                 "useVertexInput": true,
                 "depthTestEnable": true,
@@ -388,7 +388,7 @@
             "name": "shadowCascade3",
             "type": "shadow",
             "needCreateMaterial": true,
-            "materialInstancePath": "materials/MI_shadow.json",
+            "materialInstancePath": "Common/Materials/MI_shadow.json",
             "pipelineState": {
                 "useVertexInput": true,
                 "depthTestEnable": true,
@@ -468,7 +468,7 @@
             "name": "deferredLighting",
             "type": "postProcess",
             "needCreateMaterial": true,
-            "materialInstancePath": "materials/pass/MI_deferredLighting.json",
+            "materialInstancePath": "Common/Materials/Pass/MI_deferredLighting.json",
             "pipelineState": {
                 "useVertexInput": false,
                 "depthTestEnable": false,
@@ -554,7 +554,7 @@
             "name": "sssHorizontal",
             "type": "postProcess",
             "needCreateMaterial": true,
-            "materialInstancePath": "materials/pass/MI_sssHorizontal.json",
+            "materialInstancePath": "Common/Materials/Pass/MI_sssHorizontal.json",
             "pipelineState": {
                 "useVertexInput": false,
                 "depthTestEnable": false,
@@ -587,7 +587,7 @@
             "name": "sssVertical",
             "type": "postProcess",
             "needCreateMaterial": true,
-            "materialInstancePath": "materials/pass/MI_sssVertical.json",
+            "materialInstancePath": "Common/Materials/Pass/MI_sssVertical.json",
             "pipelineState": {
                 "useVertexInput": false,
                 "depthTestEnable": false,
@@ -620,7 +620,7 @@
             "name": "sssComposition",
             "type": "postProcess",
             "needCreateMaterial": true,
-            "materialInstancePath": "materials/pass/MI_sssComposition.json",
+            "materialInstancePath": "Common/Materials/Pass/MI_sssComposition.json",
             "pipelineState": {
                 "useVertexInput": false,
                 "depthTestEnable": false,
@@ -827,7 +827,7 @@
             "name": "sky",
             "type": "postProcess",
             "needCreateMaterial": true,
-            "materialInstancePath": "materials/pass/MI_sky.json",
+            "materialInstancePath": "Common/Materials/Pass/MI_sky.json",
             "pipelineState": {
                 "useVertexInput": false,
                 "depthTestEnable": true,
@@ -901,7 +901,7 @@
             "name": "bloomPrefilter",
             "type": "postProcess",
             "needCreateMaterial": true,
-            "materialInstancePath": "materials/pass/MI_bloomPrefilter.json",
+            "materialInstancePath": "Common/Materials/Pass/MI_bloomPrefilter.json",
             "pipelineState": {
                 "useVertexInput": false,
                 "depthTestEnable": false,
@@ -925,7 +925,7 @@
             "name": "bloomDownsample",
             "type": "postProcess",
             "needCreateMaterial": true,
-            "materialInstancePath": "materials/pass/MI_bloomDownsample.json",
+            "materialInstancePath": "Common/Materials/Pass/MI_bloomDownsample.json",
             "pipelineState": {
                 "useVertexInput": false,
                 "depthTestEnable": false,
@@ -949,7 +949,7 @@
             "name": "bloomDownsample2",
             "type": "postProcess",
             "needCreateMaterial": true,
-            "materialInstancePath": "materials/pass/MI_bloomDownsample.json",
+            "materialInstancePath": "Common/Materials/Pass/MI_bloomDownsample.json",
             "pipelineState": {
                 "useVertexInput": false,
                 "depthTestEnable": false,
@@ -973,7 +973,7 @@
             "name": "bloomDownsample3",
             "type": "postProcess",
             "needCreateMaterial": true,
-            "materialInstancePath": "materials/pass/MI_bloomDownsample.json",
+            "materialInstancePath": "Common/Materials/Pass/MI_bloomDownsample.json",
             "pipelineState": {
                 "useVertexInput": false,
                 "depthTestEnable": false,
@@ -997,7 +997,7 @@
             "name": "bloomUpsample3",
             "type": "postProcess",
             "needCreateMaterial": true,
-            "materialInstancePath": "materials/pass/MI_bloomUpsample.json",
+            "materialInstancePath": "Common/Materials/Pass/MI_bloomUpsample.json",
             "pipelineState": {
                 "useVertexInput": false,
                 "depthTestEnable": false,
@@ -1024,7 +1024,7 @@
             "name": "bloomUpsample2",
             "type": "postProcess",
             "needCreateMaterial": true,
-            "materialInstancePath": "materials/pass/MI_bloomUpsample.json",
+            "materialInstancePath": "Common/Materials/Pass/MI_bloomUpsample.json",
             "pipelineState": {
                 "useVertexInput": false,
                 "depthTestEnable": false,
@@ -1051,7 +1051,7 @@
             "name": "bloomUpsample",
             "type": "postProcess",
             "needCreateMaterial": true,
-            "materialInstancePath": "materials/pass/MI_bloomUpsample.json",
+            "materialInstancePath": "Common/Materials/Pass/MI_bloomUpsample.json",
             "pipelineState": {
                 "useVertexInput": false,
                 "depthTestEnable": false,
@@ -1078,7 +1078,7 @@
             "name": "toneMapping",
             "type": "postProcess",
             "needCreateMaterial": true,
-            "materialInstancePath": "materials/pass/MI_toneMapping.json",
+            "materialInstancePath": "Common/Materials/Pass/MI_toneMapping.json",
             "pipelineState": {
                 "useVertexInput": false,
                 "depthTestEnable": false,

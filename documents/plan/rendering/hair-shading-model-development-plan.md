@@ -10,7 +10,7 @@
 | 当前仓库基线 | Hair ID 7 已接入完整 VulkanLearn MVP 路径，稳定合同见 `documents/rendering/hair-shading-model.md` |
 | 计划建立日期 | 2026-08-22 |
 | 文档职责 | H0–H7 执行记录、阶段门和验收证据；稳定字段以 `documents/rendering/` 合同为准 |
-| 最终验收 | 合同测试可重复通过；运行时验收须显式执行 `-RunHairValidation`，并要求 `<resourcePath>/hair/hairAzimuthalLut.json` 正式作者 metadata；当前工作区缺少该前置资产，不能宣称 runtime passed |
+| 最终验收 | 合同测试可重复通过；运行时验收须显式执行 `-RunHairValidation`，并要求 `<resourcePath>/Common/Profiles/Hair/hairAzimuthalLut.json` 正式作者 metadata；当前工作区缺少该前置资产，不能宣称 runtime passed |
 
 H0–H7 的实现、稳定字段、单位、编码、资源版本和显式 fallback 已迁移到
 `documents/rendering/hair-shading-model.md`。合同测试与静态边界审计已落地；运行时验收仍受
@@ -365,7 +365,7 @@ Emissive = independent additive output
 | 1 | `tool/hair-tests/` | 合同、白炉、GBuffer round-trip 和参数隔离 tests |
 | 2 | `shader/glsl/generator/hairAzimuthalLut.comp`、`source/render/hair/hairLutBaker.*` | Compute Shader 预积分、GPU barrier、readback 和资源提交 |
 | 2 | `tool/hair-lut-generator/` | Compute Shader dispatch/validation host，不直接生成生产 texel |
-| 2 | `schema/`、`<resourcePath>/generated/` | Hair LUT metadata 和生成输出 |
+| 2 | `schema/`、`<resourcePath>/Generated/Runtime/` | Hair LUT metadata 和生成输出 |
 | 2 | `config/renderGraphConfig.json`、对应 pass shader | pass-level LUT descriptor |
 | 3 | `shader/glsl/engine/materialInputs.glsl` | Hair MaterialInputs |
 | 3 | `shader/glsl/engine/materialSurface.glsl` | MaterialInputs 到 Surface 的一次性解析 |
@@ -523,8 +523,8 @@ powershell -ExecutionPolicy Bypass -File tool/ue-lite-final-validation.ps1 -RunH
 ```
 
 涉及 shader cache、reflection、runtime validation 或 `shader/spv/` 的测试必须串行执行；
-Hair runtime validation 还要求 `<resourcePath>/hair/hairAzimuthalLut.json` 已由作者流程提供；
-`<resourcePath>/generated/hairAzimuthalLut.json` 不能替代该前置资产。若当前 build 未配置测试目标，
+Hair runtime validation 还要求 `<resourcePath>/Common/Profiles/Hair/hairAzimuthalLut.json` 已由作者流程提供；
+`<resourcePath>/Generated/Runtime/hairAzimuthalLut.json` 不能替代该前置资产。若当前 build 未配置测试目标，
 应先按仓库约定重新配置，而不是删除生成产物绕过失败。
 
 ## 11. 完成判定

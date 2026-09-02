@@ -454,7 +454,7 @@ std::shared_ptr<Texture> EnvironmentCubemapGenerator::Generate(
 
         const std::filesystem::path outputDir =
             std::filesystem::path(CommonFunction::GetResourcePath()) /
-            "generated" / "cubemap" / hdrFullPath.stem();
+            "Generated" / "Runtime" / "cubemap" / hdrFullPath.stem();
         std::filesystem::create_directories(outputDir);
 
         TextureIO::SaveOptions saveOptions;

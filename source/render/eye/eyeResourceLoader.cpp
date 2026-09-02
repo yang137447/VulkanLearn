@@ -245,7 +245,7 @@ void EyeResourceLoader::Load() const
         SerializeEyeCausticLutMetadata(resourceSet->lutMetadata);
     const std::string metadataBytes = metadataJson.dump(4) + "\n";
     loadContext.QueueGeneratedFile(
-        resourceRoot / "generated" / "eyeCausticLut.json",
+        resourceRoot / "Generated" / "Runtime" / "eyeCausticLut.json",
         std::vector<uint8_t>(metadataBytes.begin(), metadataBytes.end()));
 
     loadContext.resourceCache.BindWorldTexture(

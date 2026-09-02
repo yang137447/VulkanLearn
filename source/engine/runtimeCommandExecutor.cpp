@@ -76,8 +76,8 @@ std::string ResolveScreenshotPath(
 
     return (
         std::filesystem::path(runtimeConfig.GetResourcePath()) /
-        "generated" /
-        "screenshots" /
+        "Generated" /
+        "Screenshots" /
         requestedPath).lexically_normal().string();
 }
 

@@ -37,8 +37,8 @@ lighting、Render Graph、资源生命周期和验证合同。后续改动必须
 
 SSS lookup 数据必须由 Compute Shader 生成。CPU 只允许：
 
-- 枚举并解析 `<resourcePath>/subsurfaceProfiles/*.json`；
-- 枚举并解析 `<resourcePath>/skinLuts/*.json`；
+- 枚举并解析 `<resourcePath>/Common/Profiles/Subsurface/*.json`；
+- 枚举并解析 `<resourcePath>/Common/Profiles/SkinLuts/*.json`；
 - 校验 schema、版本、ID、单位、范围和重复项；
 - 将作者参数序列化到 generation parameter buffer；
 - 创建 GPU image、buffer、descriptor、pipeline 和同步命令；
@@ -133,7 +133,7 @@ V1 支持两种 `outputMode`：
 
 ### 4.1 Profile Asset
 
-目录：`<resourcePath>/subsurfaceProfiles/`
+目录：`<resourcePath>/Common/Profiles/Subsurface/`
 
 ```json
 {
@@ -162,7 +162,7 @@ V1 支持两种 `outputMode`：
 
 ### 4.2 Skin LUT Asset
 
-目录：`<resourcePath>/skinLuts/`
+目录：`<resourcePath>/Common/Profiles/SkinLuts/`
 
 ```json
 {
@@ -198,13 +198,13 @@ V1 支持两种 `outputMode`：
 `PreintegratedSkin` MI 使用：
 
 ```json
-"skinLut": "skinLuts/PSL_skin.json"
+"skinLut": "Common/Profiles/SkinLuts/PSL_skin.json"
 ```
 
 `SubsurfaceProfile` MI 使用：
 
 ```json
-"subsurfaceProfile": "subsurfaceProfiles/SSP_skin.json"
+"subsurfaceProfile": "Common/Profiles/Subsurface/SSP_skin.json"
 ```
 
 Loader 将资产路径解析为稳定 ID，并覆盖引擎派生参数：

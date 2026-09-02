@@ -453,7 +453,7 @@ std::vector<SubsurfaceProfileAsset> LoadSubsurfaceProfileAssets(
 {
     std::vector<SubsurfaceProfileAsset> assets;
     const std::filesystem::path directory =
-        resourceRoot / "subsurfaceProfiles";
+        resourceRoot / "Common" / "Profiles" / "Subsurface";
     for (const std::filesystem::path& path :
          CollectJsonAssets(directory))
     {
@@ -473,7 +473,7 @@ LoadPreintegratedSkinLutAssets(
 {
     std::vector<PreintegratedSkinLutAsset> assets;
     const std::filesystem::path directory =
-        resourceRoot / "skinLuts";
+        resourceRoot / "Common" / "Profiles" / "SkinLuts";
     for (const std::filesystem::path& path :
          CollectJsonAssets(directory))
     {

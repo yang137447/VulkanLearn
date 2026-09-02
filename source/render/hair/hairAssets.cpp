@@ -106,7 +106,7 @@ std::string RequireString(
 std::filesystem::path GetAuthoredMetadataPath(
     const std::filesystem::path& resourceRoot)
 {
-    return resourceRoot / "hair" / "hairAzimuthalLut.json";
+    return resourceRoot / "Common" / "Profiles" / "Hair" / "hairAzimuthalLut.json";
 }
 
 } // namespace

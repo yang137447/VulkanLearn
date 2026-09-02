@@ -14,9 +14,9 @@ Before Texture Asset JSON V1, material instances bound textures directly by imag
 
 ```json
 "textures": {
-    "albedoMap": "textures/T_Sifi_Head_01_BaseColor.tga",
-    "normalMap": "textures/T_Sifi_Head_01_Normal.tga",
-    "pbrParamMap": "textures/T_Sifi_Head_01_Param.tga"
+    "albedoMap": "Maps/SC_sifi_head/Textures/T_Sifi_Head_01_BaseColor.json",
+    "normalMap": "Maps/SC_sifi_head/Textures/T_Sifi_Head_01_Normal.json",
+    "pbrParamMap": "Maps/SC_sifi_head/Textures/T_Sifi_Head_01_Param.json"
 }
 ```
 
@@ -36,7 +36,7 @@ Example:
 {
     "name": "T_Sifi_Head_01_Param",
     "type": "texture",
-    "source": "textures/datas/T_Sifi_Head_01_Param.tga",
+    "source": "Maps/SC_sifi_head/Source/Textures/T_Sifi_Head_01_Param.tga",
     "colorSpace": "linear",
     "mipmaps": true,
     "filter": "linear",
@@ -87,16 +87,14 @@ Required.
 
 Path to the real source image, relative to the project resource root used by `CommonFunction::Path`.
 
-Texture descriptor files live under `resources/textures/` and use `T_*.json`
-names. Domain subdirectories such as `textures/uds/` and
-`textures/bistro_modular/` are allowed when they keep related descriptors
-organized. Raw image assets live under `resources/textures/datas/` and may use
-matching domain subdirectories.
+Texture descriptor files live under `Common/Textures/` or the owning
+`Maps/SC_<scene-name>/Textures/` directory and use `T_*.json` names. Raw image
+assets live under the matching `Source/Textures/` directory.
 
 Example:
 
 ```json
-"source": "textures/datas/T_Sifi_Head_01_Param.tga"
+"source": "Maps/SC_sifi_head/Source/Textures/T_Sifi_Head_01_Param.tga"
 ```
 
 ### `colorSpace`
@@ -260,11 +258,11 @@ UV 独立采样，不要求离线重采样到统一分辨率。
 Texture assets use this layout:
 
 ```txt
-resources/textures/T_Sifi_Head_01_Param.json
-resources/textures/datas/T_Sifi_Head_01_Param.tga
+Maps/SC_sifi_head/Textures/T_Sifi_Head_01_Param.json
+Maps/SC_sifi_head/Source/Textures/T_Sifi_Head_01_Param.tga
 
-resources/textures/uds/T_MountainRange01_Param.json
-resources/textures/datas/uds/mountain_range_01/pbrParam_range01.png
+Maps/SC_uds_mountain_range/Textures/T_MountainRange01_Param.json
+Maps/SC_uds_mountain_range/Source/Textures/uds/mountain_range_01/pbrParam_range01.png
 ```
 
 The JSON descriptor is the asset that material instances reference. The image in `datas/` is source data used by the descriptor.
@@ -275,7 +273,7 @@ Material instances must reference texture asset JSON files:
 
 ```json
 "textures": {
-    "pbrParamMap": "textures/T_Sifi_Head_01_Param.json"
+    "pbrParamMap": "Maps/SC_sifi_head/Textures/T_Sifi_Head_01_Param.json"
 }
 ```
 
@@ -283,7 +281,7 @@ Direct image paths are not supported in material instances:
 
 ```json
 "textures": {
-    "pbrParamMap": "textures/datas/T_Sifi_Head_01_Param.tga"
+    "pbrParamMap": "Maps/SC_sifi_head/Source/Textures/T_Sifi_Head_01_Param.tga"
 }
 ```
 
@@ -336,7 +334,7 @@ The following fields are intentionally not part of Texture JSON V1:
 3. `RendererMaterialLoader::LoadMaterialInstance()` requires material texture entries to reference `T_*.json` files.
 4. Texture cache keys include the asset path plus source, transfer, mipmap, filter, and wrap mode state.
 5. Texture asset preflight rejects unknown fields such as `flipY`; orientation is deliberately absent from the texture cache identity because every file-backed material texture uses the same engine policy.
-6. Raw image files live under `resources/textures/datas/`.
+6. Raw image files live under the owning `Source/Textures/` directory.
 7. Material instances bind shader slots to texture asset JSON files, not direct image paths.
 
 ## Design Boundary

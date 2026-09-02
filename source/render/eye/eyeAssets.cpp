@@ -320,7 +320,8 @@ void ValidateEyeProfileAsset(
 std::vector<EyeProfileAsset> LoadEyeProfileAssets(
     const std::filesystem::path& resourceRoot)
 {
-    const std::filesystem::path profileDirectory = resourceRoot / "eyeProfiles";
+    const std::filesystem::path profileDirectory =
+        resourceRoot / "Common" / "Profiles" / "Eye";
     if (!std::filesystem::is_directory(profileDirectory))
     {
         return {};

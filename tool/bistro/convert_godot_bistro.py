@@ -179,7 +179,7 @@ def find_node_override(overrides,path,node_name,key,allow_leaf_match=False):
     return matches[0] if matches and all(value==matches[0] for value in matches[1:]) else None
 def material_mapping(resource_root,stage_root):
     mi_by_slot={}; mi_tex={}
-    for p in (resource_root/'materials/bistro').glob('MI_*.json'):
+    for p in (resource_root/'Maps/SC_bistro_exterior_modular/Materials').glob('MI_*.json'):
         data=json.loads(p.read_text(encoding='utf-8')); slot=data['name'].removeprefix('Bistro '); mi_by_slot[slot]=p
         for value in data.get('textures',{}).values(): mi_tex.setdefault(norm(Path(value).stem),set()).add(slot)
     result={}
@@ -336,7 +336,7 @@ def decompose_matrix(m):
     return position,rotation,scale
 def main():
     ap=argparse.ArgumentParser(); ap.add_argument('--stage',type=Path,required=True); ap.add_argument('--resources',type=Path,required=True); ap.add_argument('--force',action='store_true'); args=ap.parse_args()
-    stage=args.stage.resolve(); resources=args.resources.resolve(); data_out=resources/'models/datas/bistro_modular'; model_out=resources/'models/bistro_modular'; scene_out=resources/'scenes/SC_bistro_exterior_modular.json'
+    stage=args.stage.resolve(); resources=args.resources.resolve(); data_out=resources/'Maps/SC_bistro_exterior_modular/Source/Models/bistro_modular'; model_out=resources/'Maps/SC_bistro_exterior_modular/Meshes'; scene_out=resources/'Maps/SC_bistro_exterior_modular/SC_bistro_exterior_modular.json'
     if args.force:
         for p in (data_out,model_out):
             if p.exists():
@@ -361,9 +361,9 @@ def main():
         rel=glb.relative_to(stage/'Meshes'); rel_out=Path(str(rel).replace('\\','/')); out_glb=data_out/rel_out; slots=bake_glb(glb,out_glb,wrappers,material_map,runtime_materials)
         stem='bistro_'+re.sub(r'[^A-Za-z0-9]+','_',str(rel.with_suffix(''))).strip('_'); descriptor_path=model_out/f'SM_{stem.removeprefix("bistro_")}.json'
         descriptor_path.parent.mkdir(parents=True,exist_ok=True)
-        descriptor={'name':'Bistro Modular '+stem,'type':'mesh','modelDataPath':'models/datas/bistro_modular/'+rel_out.as_posix(),'materialSlots':[{'name':slot,'materialInstancePath':runtime_materials[slot]} for slot in slots]}
+        descriptor={'name':'Bistro Modular '+stem,'type':'mesh','modelDataPath':'Maps/SC_bistro_exterior_modular/Source/Models/bistro_modular/'+rel_out.as_posix(),'materialSlots':[{'name':slot,'materialInstancePath':runtime_materials[slot]} for slot in slots]}
         descriptor_path.write_text(json.dumps(descriptor,indent=2)+'\n',encoding='utf-8'); model_count+=1
-        model_path='models/bistro_modular/'+descriptor_path.name
+        model_path='Maps/SC_bistro_exterior_modular/Meshes/'+descriptor_path.name
         if glb.name=='PotPlants.glb':
             pot_instances=instances_by_scene.get('Scenes/FillOut/PotPlants.tscn',[]); shared_counts['FillOut_PotPlants']=len(pot_instances)
             for node in pot_instances:
@@ -372,18 +372,18 @@ def main():
             objects.append({'name':'BistroModular_'+stem,'type':'mesh','modelPath':model_path,'position':[0.0,0.0,0.0],'scale':[1.0,1.0,1.0],'rotation':[0.0,0.0,0.0]})
     for spec in variant_specs:
         rel_out=Path('FillOut')/(spec['name']+'.glb'); slots,selected=bake_variant_glb(stage/'Meshes'/spec['source'],data_out/rel_out,stage/spec['base'],stage/spec['scene'],material_map,runtime_materials,spec.get('rebase'))
-        descriptor_path=model_out/f'SM_{spec["name"]}.json'; descriptor={'name':'Bistro Modular '+spec['name'],'type':'mesh','modelDataPath':'models/datas/bistro_modular/'+rel_out.as_posix(),'materialSlots':[{'name':slot,'materialInstancePath':runtime_materials[slot]} for slot in slots]}
+        descriptor_path=model_out/f'SM_{spec["name"]}.json'; descriptor={'name':'Bistro Modular '+spec['name'],'type':'mesh','modelDataPath':'Maps/SC_bistro_exterior_modular/Source/Models/bistro_modular/'+rel_out.as_posix(),'materialSlots':[{'name':slot,'materialInstancePath':runtime_materials[slot]} for slot in slots]}
         descriptor_path.write_text(json.dumps(descriptor,indent=2)+'\n',encoding='utf-8'); model_count+=1
         authored_instances=instances_by_scene.get(spec['scene'],[]); shared_counts[spec['name']]=len(authored_instances)
         for node in authored_instances:
             name=node['name']
             if spec['name']=='FillOut_Lamp_Props' and node['parent']: name=node['parent'][-1]+'_Props'
-            pos,rot,scale=decompose_matrix(node['world']); objects.append({'name':name,'type':'mesh','modelPath':'models/bistro_modular/'+descriptor_path.name,'position':pos,'scale':scale,'rotation':rot})
+            pos,rot,scale=decompose_matrix(node['world']); objects.append({'name':name,'type':'mesh','modelPath':'Maps/SC_bistro_exterior_modular/Meshes/'+descriptor_path.name,'position':pos,'scale':scale,'rotation':rot})
         print(f'{spec["name"]}: {selected} visible meshes, {len(authored_instances)} scene instances')
     objects += [
         {'name':'Sun_Light','type':'directionalLight','position':[0.0,40.0,0.0],'rotation':[-42.0,-32.0,0.0],'color':[1.0,0.94,0.84],'intensity':7.0},
         {'name':'Camera_Street','type':'camera','fov':72.0,'near_clip':0.1,'far_clip':1000.0,'position':[24.0,6.0,72.0],'rotation':[-3.0,0.0,0.0],'scale':[1.0,1.0,1.0]},
-        {'name':'Environment_01','type':'environment','environment':{'type':'hdri','hdrPath':'hdri/bistro_san_giuseppe_bridge_4k.hdr','cubeSize':512,'intensity':1.0}}
+        {'name':'Environment_01','type':'environment','environment':{'type':'hdri','hdrPath':'Maps/SC_bistro_exterior_modular/Environments/bistro_san_giuseppe_bridge_4k.hdr','cubeSize':512,'intensity':1.0}}
     ]
     scene={'name':'Amazon Lumberyard Bistro Exterior Modular','type':'scene','objects':objects}; scene_out.parent.mkdir(parents=True,exist_ok=True); scene_out.write_text(json.dumps(scene,indent=2)+'\n',encoding='utf-8')
     print(json.dumps({'models':model_count,'scene_objects':len(objects),'mesh_objects':sum(x['type']=='mesh' for x in objects),'shared_instances':shared_counts,'material_mappings':len(runtime_materials)},indent=2))

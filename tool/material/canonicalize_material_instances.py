@@ -216,7 +216,9 @@ def main() -> int:
     changed_files = 0
     total_changes: Counter[str] = Counter()
 
-    for path in sorted((resource_root / "materials").rglob("MI_*.json")):
+    material_paths = list(resource_root.glob("Common/Materials/**/MI_*.json"))
+    material_paths.extend(resource_root.glob("Maps/*/Materials/MI_*.json"))
+    for path in sorted(material_paths):
         original_text = path.read_text(encoding="utf-8")
         material_instance = json.loads(original_text)
         material_reference = material_instance.get("material")

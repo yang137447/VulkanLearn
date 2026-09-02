@@ -2,7 +2,7 @@
     "projectPath": "D:\\YYBWorkSpace\\GitHub\\VulkanLearn",
     "resourcePath": "D:\\YYBWorkSpace\\GitHub\\VukanLearnResources",
     "windowSize": [1280, 720],
-    "initScene": "scenes/SC_car_showcase.json",
+    "initScene": "Maps/SC_sifi_head/SC_sifi_head.json",
     "msaa": 2,
   "workerThreadCount": 2,
     "ui": {

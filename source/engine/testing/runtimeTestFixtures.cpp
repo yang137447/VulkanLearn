@@ -236,7 +236,8 @@ std::filesystem::path BuildGeneratedFixtureDirectory(
 {
     const auto now = std::chrono::steady_clock::now().time_since_epoch().count();
     return std::filesystem::path(resourcePath) /
-        "generated" /
+        "Generated" /
+        "Validation" /
         "runtime-validation" /
         (namePrefix + std::to_string(now));
 }
@@ -405,7 +406,7 @@ std::filesystem::path CreateShaderReloadTestScene(
         "{\n"
         "  \"name\": \"Shader Reload Runtime Test Mesh\",\n"
         "  \"type\": \"mesh\",\n"
-        "  \"modelDataPath\": \"models/datas/axis.obj\",\n"
+        "  \"modelDataPath\": \"Common/Source/Models/axis.obj\",\n"
         "  \"materialSlots\": [\n"
         "    {\n"
         "      \"name\": \"Default\",\n"
@@ -421,7 +422,7 @@ std::filesystem::path CreateShaderReloadTestScene(
         "{\n"
         "  \"name\": \"Shader Reload Batch Runtime Test Mesh\",\n"
         "  \"type\": \"mesh\",\n"
-        "  \"modelDataPath\": \"models/datas/axis.obj\",\n"
+        "  \"modelDataPath\": \"Common/Source/Models/axis.obj\",\n"
         "  \"materialSlots\": [\n"
         "    {\n"
         "      \"name\": \"Default\",\n"
@@ -481,7 +482,7 @@ std::filesystem::path CreateShaderReloadTestScene(
         "      \"type\": \"environment\",\n"
         "      \"environment\": {\n"
         "        \"type\": \"hdri\",\n"
-        "        \"hdrPath\": \"hdri/sunset.exr\",\n"
+        "        \"hdrPath\": \"Common/Environments/sunset.exr\",\n"
         "        \"cubeSize\": 64\n"
         "      }\n"
         "    }\n"

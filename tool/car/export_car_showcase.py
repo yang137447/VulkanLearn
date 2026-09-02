@@ -19,18 +19,18 @@ PARTS = {
 }
 
 MATERIAL_INSTANCES = {
-    "M_Carpaint": "materials/car/MI_car_carpaint.json",
-    "M_Inner": "materials/car/MI_car_inner.json",
-    "M_Light": "materials/car/MI_car_light.json",
-    "M_Grid": "materials/car/MI_car_grille.json",
-    "M_Out": "materials/car/MI_car_exterior_trim.json",
-    "M_Logo": "materials/car/MI_car_logo.json",
-    "M_LicensePlate": "materials/car/MI_car_license_plate.json",
-    "M_Glass_Light": "materials/car/MI_car_light_glass.json",
-    "M_Wheel_Tread": "materials/car/MI_car_wheel_tread.json",
-    "M_Wheel_Brake": "materials/car/MI_car_wheel_brake.json",
-    "M_Wheel_Hub": "materials/car/MI_car_wheel_hub.json",
-    "M_Car_Showcase_Floor": "materials/car/MI_car_showcase_floor.json",
+    "M_Carpaint": "Maps/SC_car_showcase/Materials/MI_car_carpaint.json",
+    "M_Inner": "Maps/SC_car_showcase/Materials/MI_car_inner.json",
+    "M_Light": "Maps/SC_car_showcase/Materials/MI_car_light.json",
+    "M_Grid": "Maps/SC_car_showcase/Materials/MI_car_grille.json",
+    "M_Out": "Maps/SC_car_showcase/Materials/MI_car_exterior_trim.json",
+    "M_Logo": "Maps/SC_car_showcase/Materials/MI_car_logo.json",
+    "M_LicensePlate": "Maps/SC_car_showcase/Materials/MI_car_license_plate.json",
+    "M_Glass_Light": "Maps/SC_car_showcase/Materials/MI_car_light_glass.json",
+    "M_Wheel_Tread": "Maps/SC_car_showcase/Materials/MI_car_wheel_tread.json",
+    "M_Wheel_Brake": "Maps/SC_car_showcase/Materials/MI_car_wheel_brake.json",
+    "M_Wheel_Hub": "Maps/SC_car_showcase/Materials/MI_car_wheel_hub.json",
+    "M_Car_Showcase_Floor": "Maps/SC_car_showcase/Materials/MI_car_showcase_floor.json",
 }
 
 MATERIAL_EXPORT_NAMES = {
@@ -231,7 +231,7 @@ def create_model_descriptor(obj, asset_id):
     return {
         "name": logical_name,
         "type": "mesh",
-        "modelDataPath": f"models/datas/car/car_{asset_id}.obj",
+        "modelDataPath": f"Maps/SC_car_showcase/Source/Models/car/car_{asset_id}.obj",
         "materialSlots": material_slots,
     }
 
@@ -241,7 +241,7 @@ def create_scene_mesh_object(obj, asset_id):
     return {
         "name": logical_name,
         "type": "mesh",
-        "modelPath": f"models/{logical_name}.json",
+        "modelPath": f"Maps/SC_car_showcase/Meshes/{logical_name}.json",
         "position": engine_position(obj),
         "scale": engine_scale(obj),
         "rotation": engine_rotation(obj),
@@ -258,8 +258,8 @@ def main():
 
     resource_root = Path(arguments[0])
     scene_path = Path(arguments[1])
-    model_directory = resource_root / "models"
-    model_data_directory = model_directory / "datas" / "car"
+    model_directory = resource_root / "Maps/SC_car_showcase/Meshes"
+    model_data_directory = resource_root / "Maps/SC_car_showcase/Source/Models/car"
     manifest_path = model_data_directory / "car_asset_manifest.json"
 
     model_directory.mkdir(parents=True, exist_ok=True)

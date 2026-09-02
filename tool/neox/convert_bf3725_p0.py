@@ -74,9 +74,9 @@ def main():
 
     source_root = os.path.abspath(arguments.source_root)
     resource_root = os.path.abspath(arguments.resource_root)
-    generated_root = os.path.join(resource_root, "generated", "neox", "b_f_3725")
-    descriptor_root = os.path.join(resource_root, "textures", "neox", "b_f_3725")
-    material_root = os.path.join(resource_root, "materials", "neox", "b_f_3725")
+    generated_root = os.path.join(resource_root, "Generated", "Import", "neox", "b_f_3725")
+    descriptor_root = os.path.join(resource_root, "Maps/SC_b_f_3725/Textures")
+    material_root = os.path.join(resource_root, "Maps/SC_b_f_3725/Materials")
     for directory in (generated_root, descriptor_root, material_root):
         ensure_directory(directory)
 
@@ -228,7 +228,7 @@ def main():
         descriptor = {
             "name": descriptor_name,
             "type": "texture",
-            "source": "generated/neox/b_f_3725/" + outputs[key][0],
+            "source": "Maps/SC_b_f_3725/Source/Textures/" + outputs[key][0],
             "colorSpace": transfer,
             "mipmaps": True,
             "filter": "linear",
@@ -239,13 +239,13 @@ def main():
         if os.path.exists(descriptor_path) and not arguments.overwrite:
             raise RuntimeError("Descriptor exists: %s" % descriptor_path)
         write_json(descriptor_path, descriptor)
-        descriptors[key] = "textures/neox/b_f_3725/" + descriptor_name + ".json"
+        descriptors[key] = "Maps/SC_b_f_3725/Textures/" + descriptor_name + ".json"
 
     material_instance = {
         "name": "b_f_3725 Body P0 Preintegrated Skin",
         "type": "materialInstance",
         "material": "shader/glsl/M_neoxSkin.json",
-        "skinLut": "skinLuts/PSL_skin.json",
+        "skinLut": "Common/Profiles/SkinLuts/PSL_skin.json",
         # 身体槽没有源 ParamTable 数值覆盖；角色光照基线由 M_neoxSkin 统一持有，
         # MI 只绑定这张身体实际使用的 Skin 贴图，避免重复默认值被后续迁移误当成槽位特例。
         "macros": {
@@ -271,9 +271,9 @@ def main():
     manifest = {
         "name": "b_f_3725 P0 body texture conversion",
         "sourceRoot": source_root,
-        "materialInstance": "materials/neox/b_f_3725/MI_b_f_3725_body_p0.json",
+        "materialInstance": "Maps/SC_b_f_3725/Materials/MI_b_f_3725_body_p0.json",
         "shadingModel": "PreintegratedSkin",
-        "skinLut": "skinLuts/PSL_skin.json",
+        "skinLut": "Common/Profiles/SkinLuts/PSL_skin.json",
         "boundTextures": {
             "albedoMap": descriptors["baseColor"],
             "normalMap": descriptors["normalMap"],

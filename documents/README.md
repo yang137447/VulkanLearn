@@ -39,6 +39,9 @@ Documentation in this repository is split by responsibility:
 
 ## Formal Architecture
 
+- `architecture/asset-organization.md`
+  - runtime resource repository standard: `Common/`, `Maps/SC_<scene-name>/`,
+    type subdirectories, ownership rules, and generated-output boundaries
 - `architecture/vulkanlearn-architecture.html`
   - VulkanLearn V1 formal architecture HTML
   - covers Platform/Input, EngineLoop, World, Asset/Material/Shader, Renderer/Vulkan Backend/FrameGraph, Config/Debug/Test, design patterns, GT/RT data boundaries, WorldSnapshot publish/consume, resource lifetime, hard cutover status, acceptance checks, and risk records
@@ -125,6 +128,8 @@ Rendering plans:
   - executed 2026-09-01 handoff for upgrading Cloth ID 8 with NeoX Silk/Cloth anisotropy while preserving the existing Shading Model identity; anisotropic IBL remains an explicit follow-up
 - `plan/rendering/hair-shading-model-development-plan.md`
   - executable Hair Shading Model route from contract freeze and CPU Reference through versioned LUT, Forward/Deferred evaluator, Card coverage/shadow, Hair IBL, and multiple scattering
+- `plan/rendering/shading-model-validation-plan.md`
+  - shading model 具象验证案例、资产授权、场景构图、分阶段落地和验收矩阵
 - `plan/rendering/eye-shading-model-development-plan.md`
   - completed 2026-08-23 Eye implementation record; the current Forward/Deferred/dual-shell, Compute LUT, local SSS, reload, validation, and performance contracts live in `rendering/eye-shading-model.md`
 - `plan/rendering/material-module-system.md`

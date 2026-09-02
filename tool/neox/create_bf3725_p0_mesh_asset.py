@@ -9,48 +9,48 @@ from typing import Any
 
 # 角色还原完成后，35 个真实槽位必须全部显式映射；缺少任一槽位都应在生成阶段失败。
 MIGRATED_MATERIALS = {
-    "b_f_3725_1_high": "materials/neox/b_f_3725/MI_body_silk_flow.json",
-    "b_f_3725_2_high_0": "materials/neox/b_f_3725/MI_body_silk_flow.json",
-    "b_f_3725_2_high_1": "materials/neox/b_f_3725/MI_body_default_secondary.json",
-    "b_f_3725_2_high_2": "materials/neox/b_f_3725/MI_body_silk_emissive.json",
-    "b_f_3725_3_high_0": "materials/neox/b_f_3725/MI_b_f_3725_high_1_pearl.json",
-    "b_f_3725_3_high_1": "materials/neox/b_f_3725/MI_body_default_clip.json",
-    "b_f_3725_3_high_2": "materials/neox/b_f_3725/MI_body_silk_emissive.json",
-    "b_f_3725_4_high_0": "materials/neox/b_f_3725/MI_b_f_3725_high_1_pearl.json",
-    "b_f_3725_4_high_1": "materials/neox/b_f_3725/MI_body_silk_emissive.json",
-    "b_f_3725_5_high_0": "materials/neox/b_f_3725/MI_b_f_3725_high_1_pearl.json",
-    "b_f_3725_5_high_1": "materials/neox/b_f_3725/MI_body_default_clip.json",
-    "b_f_3725_5_high_2": "materials/neox/b_f_3725/MI_body_silk_emissive.json",
-    "b_f_3725_6_high_0": "materials/neox/b_f_3725/MI_b_f_3725_high_1_pearl.json",
-    "b_f_3725_6_high_1": "materials/neox/b_f_3725/MI_body_default_clip.json",
-    "b_f_3725_6_high_2": "materials/neox/b_f_3725/MI_body_silk_emissive.json",
-    "b_f_3725_6_high_3": "materials/neox/b_f_3725/MI_crystal_red_clip.json",
-    "b_f_3725_high_0": "materials/neox/b_f_3725/MI_b_f_3725_body_p0.json",
-    "b_f_3725_high_1": "materials/neox/b_f_3725/MI_b_f_3725_high_1_pearl.json",
-    "b_f_3725_high_2": "materials/neox/b_f_3725/MI_body_default_clip.json",
-    "b_f_3725_high_3": "materials/neox/b_f_3725/MI_body_silk_emissive.json",
-    "b_f_3725_high_4": "materials/neox/b_f_3725/MI_body_silk_plain.json",
-    "b_f_3725_high_5": "materials/neox/b_f_3725/MI_body_silk_plain.json",
-    "b_f_3725_high_6": "materials/neox/b_f_3725/MI_body_silk_emissive_alt.json",
-    "b_f_3725_high_7": "materials/neox/b_f_3725/MI_body_silk_flow.json",
-    "b_f_3725_high_8": "materials/neox/b_f_3725/MI_body_default_secondary.json",
-    "b_f_3725_high_9": "materials/neox/b_f_3725/MI_crystal_red_clip.json",
-    "b_f_3725_high_10": "materials/neox/b_f_3725/MI_crystal_red_opaque.json",
-    "b_f_3725_high_11": "materials/neox/b_f_3725/MI_crystal_gold_opaque.json",
-    "h_f_3725_high_0": "materials/neox/b_f_3725/MI_hair_cards.json",
-    "h_f_3725_high_1": "materials/neox/b_f_3725/MI_hair_pearl.json",
-    "h_f_3725_high_2": "materials/neox/b_f_3725/MI_hair_default_sparkle.json",
-    "h_f_3725_high_3": "materials/neox/b_f_3725/MI_hair_silk.json",
-    "07 - Default": "materials/neox/b_f_3725/MI_eye.json",
-    "09 - Default": "materials/neox/b_f_3725/MI_face_skin.json",
-    "08 - Default": "materials/neox/b_f_3725/MI_eye_edge.json",
+    "b_f_3725_1_high": "Maps/SC_b_f_3725/Materials/MI_body_silk_flow.json",
+    "b_f_3725_2_high_0": "Maps/SC_b_f_3725/Materials/MI_body_silk_flow.json",
+    "b_f_3725_2_high_1": "Maps/SC_b_f_3725/Materials/MI_body_default_secondary.json",
+    "b_f_3725_2_high_2": "Maps/SC_b_f_3725/Materials/MI_body_silk_emissive.json",
+    "b_f_3725_3_high_0": "Maps/SC_b_f_3725/Materials/MI_b_f_3725_high_1_pearl.json",
+    "b_f_3725_3_high_1": "Maps/SC_b_f_3725/Materials/MI_body_default_clip.json",
+    "b_f_3725_3_high_2": "Maps/SC_b_f_3725/Materials/MI_body_silk_emissive.json",
+    "b_f_3725_4_high_0": "Maps/SC_b_f_3725/Materials/MI_b_f_3725_high_1_pearl.json",
+    "b_f_3725_4_high_1": "Maps/SC_b_f_3725/Materials/MI_body_silk_emissive.json",
+    "b_f_3725_5_high_0": "Maps/SC_b_f_3725/Materials/MI_b_f_3725_high_1_pearl.json",
+    "b_f_3725_5_high_1": "Maps/SC_b_f_3725/Materials/MI_body_default_clip.json",
+    "b_f_3725_5_high_2": "Maps/SC_b_f_3725/Materials/MI_body_silk_emissive.json",
+    "b_f_3725_6_high_0": "Maps/SC_b_f_3725/Materials/MI_b_f_3725_high_1_pearl.json",
+    "b_f_3725_6_high_1": "Maps/SC_b_f_3725/Materials/MI_body_default_clip.json",
+    "b_f_3725_6_high_2": "Maps/SC_b_f_3725/Materials/MI_body_silk_emissive.json",
+    "b_f_3725_6_high_3": "Maps/SC_b_f_3725/Materials/MI_crystal_red_clip.json",
+    "b_f_3725_high_0": "Maps/SC_b_f_3725/Materials/MI_b_f_3725_body_p0.json",
+    "b_f_3725_high_1": "Maps/SC_b_f_3725/Materials/MI_b_f_3725_high_1_pearl.json",
+    "b_f_3725_high_2": "Maps/SC_b_f_3725/Materials/MI_body_default_clip.json",
+    "b_f_3725_high_3": "Maps/SC_b_f_3725/Materials/MI_body_silk_emissive.json",
+    "b_f_3725_high_4": "Maps/SC_b_f_3725/Materials/MI_body_silk_plain.json",
+    "b_f_3725_high_5": "Maps/SC_b_f_3725/Materials/MI_body_silk_plain.json",
+    "b_f_3725_high_6": "Maps/SC_b_f_3725/Materials/MI_body_silk_emissive_alt.json",
+    "b_f_3725_high_7": "Maps/SC_b_f_3725/Materials/MI_body_silk_flow.json",
+    "b_f_3725_high_8": "Maps/SC_b_f_3725/Materials/MI_body_default_secondary.json",
+    "b_f_3725_high_9": "Maps/SC_b_f_3725/Materials/MI_crystal_red_clip.json",
+    "b_f_3725_high_10": "Maps/SC_b_f_3725/Materials/MI_crystal_red_opaque.json",
+    "b_f_3725_high_11": "Maps/SC_b_f_3725/Materials/MI_crystal_gold_opaque.json",
+    "h_f_3725_high_0": "Maps/SC_b_f_3725/Materials/MI_hair_cards.json",
+    "h_f_3725_high_1": "Maps/SC_b_f_3725/Materials/MI_hair_pearl.json",
+    "h_f_3725_high_2": "Maps/SC_b_f_3725/Materials/MI_hair_default_sparkle.json",
+    "h_f_3725_high_3": "Maps/SC_b_f_3725/Materials/MI_hair_silk.json",
+    "07 - Default": "Maps/SC_b_f_3725/Materials/MI_eye.json",
+    "09 - Default": "Maps/SC_b_f_3725/Materials/MI_face_skin.json",
+    "08 - Default": "Maps/SC_b_f_3725/Materials/MI_eye_edge.json",
 }
 
 HAIR_MODE8_SLOT = "h_f_3725_high_0"
-HAIR_MODE8_CORE_MI = "materials/neox/b_f_3725/MI_hair_cards_clip.json"
-HAIR_MODE8_SOURCE_GLTF = "models/datas/neox/b_f_3725/b_f_3725.gltf"
-HAIR_MODE8_CORE_GLTF = "models/datas/neox/b_f_3725/b_f_3725_hair_core.gltf"
-HAIR_MODE8_CORE_MODEL = "models/neox/b_f_3725/SM_b_f_3725_hair_core.json"
+HAIR_MODE8_CORE_MI = "Maps/SC_b_f_3725/Materials/MI_hair_cards_clip.json"
+HAIR_MODE8_SOURCE_GLTF = "Maps/SC_b_f_3725/Source/Models/b_f_3725/b_f_3725.gltf"
+HAIR_MODE8_CORE_GLTF = "Maps/SC_b_f_3725/Source/Models/b_f_3725/b_f_3725_hair_core.gltf"
+HAIR_MODE8_CORE_MODEL = "Maps/SC_b_f_3725/Meshes/SM_b_f_3725_hair_core.json"
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -170,7 +170,7 @@ def build_mesh_asset(material_slots: list[str]) -> dict[str, Any]:
     return {
         "name": "b_f_3725 Restored Character",
         "type": "mesh",
-        "modelDataPath": "models/datas/neox/b_f_3725/b_f_3725.gltf",
+        "modelDataPath": "Maps/SC_b_f_3725/Source/Models/b_f_3725/b_f_3725.gltf",
         "materialSlots": [
             {
                 "name": slot_name,
@@ -203,7 +203,7 @@ def build_scene() -> dict[str, Any]:
             {
                 "name": "b_f_3725",
                 "type": "mesh",
-                "modelPath": "models/neox/b_f_3725/SM_b_f_3725_p0.json",
+                "modelPath": "Maps/SC_b_f_3725/Meshes/SM_b_f_3725_p0.json",
                 "position": [0.0, 0.0, 0.0],
                 "scale": [1.0, 1.0, 1.0],
                 "rotation": [0.0, 0.0, 0.0],
@@ -285,7 +285,7 @@ def build_scene() -> dict[str, Any]:
 def main() -> None:
     arguments = parse_arguments()
     resource_root = Path(arguments.resource_root).resolve()
-    audit_path = resource_root / "models/datas/neox/b_f_3725/b_f_3725.audit.json"
+    audit_path = resource_root / "Maps/SC_b_f_3725/Source/Models/b_f_3725/b_f_3725.audit.json"
     source_gltf_path = resource_root / HAIR_MODE8_SOURCE_GLTF
     required_paths = [audit_path, source_gltf_path, resource_root / HAIR_MODE8_CORE_MI]
     required_paths.extend(resource_root / path for path in MIGRATED_MATERIALS.values())
@@ -299,10 +299,10 @@ def main() -> None:
     material_slots = collect_ordered_material_slots(audit)
     source_gltf = read_json(source_gltf_path)
 
-    mesh_path = resource_root / "models/neox/b_f_3725/SM_b_f_3725_p0.json"
+    mesh_path = resource_root / "Maps/SC_b_f_3725/Meshes/SM_b_f_3725_p0.json"
     hair_core_gltf_path = resource_root / HAIR_MODE8_CORE_GLTF
     hair_core_mesh_path = resource_root / HAIR_MODE8_CORE_MODEL
-    scene_path = resource_root / "scenes/SC_b_f_3725_p0.json"
+    scene_path = resource_root / "Maps/SC_b_f_3725/SC_b_f_3725_p0.json"
     write_json(mesh_path, build_mesh_asset(material_slots), arguments.overwrite)
     write_json(hair_core_gltf_path, build_hair_core_gltf(source_gltf), arguments.overwrite)
     write_json(hair_core_mesh_path, build_hair_core_mesh_asset(), arguments.overwrite)

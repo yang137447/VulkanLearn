@@ -149,8 +149,8 @@ def descriptor(name, source, color_space, channels, wrap_mode="repeat"):
 
 def write_texture_asset(resource_root, asset_name, pixels, color_space, channels, overwrite, wrap_mode="repeat"):
     generated_name = asset_name + ".png"
-    generated_relative = "generated/neox/b_f_3725/" + generated_name
-    descriptor_relative = "textures/neox/b_f_3725/" + asset_name + ".json"
+    generated_relative = "Maps/SC_b_f_3725/Source/Textures/" + generated_name
+    descriptor_relative = "Maps/SC_b_f_3725/Textures/" + asset_name + ".json"
     save_rgba(os.path.join(resource_root, generated_relative.replace("/", os.sep)), pixels, overwrite)
     write_json(
         os.path.join(resource_root, descriptor_relative.replace("/", os.sep)),
@@ -451,7 +451,7 @@ def build_instances(textures, contracts):
         "name": "nf2022_f_01 Face Skin",
         "type": "materialInstance",
         "material": "shader/glsl/M_neoxSkin.json",
-        "skinLut": "skinLuts/PSL_skin.json",
+        "skinLut": "Common/Profiles/SkinLuts/PSL_skin.json",
         "macros": {
             "USE_ALBEDO_MAP": 1,
             "USE_NORMAL_MAP": 1,
@@ -473,8 +473,8 @@ def build_instances(textures, contracts):
         "name": "nf2022_f_01 Eye",
         "type": "materialInstance",
         "material": "shader/glsl/M_eye.json",
-        "eyeProfile": "eyeProfiles/EP_human_default.json",
-        "subsurfaceProfile": "subsurfaceProfiles/SSP_skin.json",
+        "eyeProfile": "Common/Profiles/Eye/EP_human_default.json",
+        "subsurfaceProfile": "Common/Profiles/Subsurface/SSP_skin.json",
         "textures": textures["eye"],
         "parameters": {
             "u_eyeGeometry": [0.0032, 0.0060, 0.00366, 0.0006],
@@ -547,7 +547,7 @@ def main():
     arguments = parser.parse_args()
     source_root = os.path.abspath(arguments.source_root)
     resource_root = os.path.abspath(arguments.resource_root)
-    generated_root = os.path.join(resource_root, "generated", "neox", "b_f_3725")
+    generated_root = os.path.join(resource_root, "Generated", "Import", "neox", "b_f_3725")
     ensure_directory(generated_root)
 
     contracts = parse_materials(source_root)
@@ -634,7 +634,7 @@ def main():
 
     instances = build_instances(textures, contracts)
     add_crystals(instances, textures["crystal"])
-    material_root = os.path.join(resource_root, "materials", "neox", "b_f_3725")
+    material_root = os.path.join(resource_root, "Maps", "SC_b_f_3725", "Materials")
     for filename, value in instances.items():
         write_json(os.path.join(material_root, filename), value, arguments.overwrite)
 
@@ -649,7 +649,7 @@ def main():
             "Missing required material instances from specialized converters: " +
             ", ".join(missing_material_instances))
 
-    audit_path = os.path.join(resource_root, "models", "datas", "neox", "b_f_3725", "b_f_3725.audit.json")
+    audit_path = os.path.join(resource_root, "Maps", "SC_b_f_3725", "Source", "Models", "b_f_3725", "b_f_3725.audit.json")
     with io.open(audit_path, "r", encoding="utf-8") as stream:
         audit = json.load(stream)
     ordered_slots = []
@@ -661,14 +661,14 @@ def main():
     if set(ordered_slots) != set(SLOT_TARGETS):
         raise RuntimeError("glTF audit does not match the 35 migrated MTG slots")
 
-    material_prefix = "materials/neox/b_f_3725/"
+    material_prefix = "Maps/SC_b_f_3725/Materials/"
     mesh = {
         "name": "b_f_3725 Restored Character",
         "type": "mesh",
-        "modelDataPath": "models/datas/neox/b_f_3725/b_f_3725.gltf",
+        "modelDataPath": "Maps/SC_b_f_3725/Source/Models/b_f_3725/b_f_3725.gltf",
         "materialSlots": [{"name": slot, "materialInstancePath": material_prefix + SLOT_TARGETS[slot]} for slot in ordered_slots],
     }
-    write_json(os.path.join(resource_root, "models", "neox", "b_f_3725", "SM_b_f_3725_p0.json"), mesh, arguments.overwrite)
+    write_json(os.path.join(resource_root, "Maps", "SC_b_f_3725", "Meshes", "SM_b_f_3725_p0.json"), mesh, arguments.overwrite)
 
     contract_by_slot = dict((row["slot"], row) for row in contracts)
     manifest = {
@@ -690,7 +690,7 @@ def main():
             "clipValue": HAIR_MODE8_CLIP_VALUE,
             "coreMaterialInstance": material_prefix + HAIR_MODE8_CORE_MI,
             "fringeMaterialInstance": material_prefix + HAIR_MODE8_BLEND_MI,
-            "coreModel": "models/neox/b_f_3725/SM_b_f_3725_hair_core.json",
+            "coreModel": "Maps/SC_b_f_3725/Meshes/SM_b_f_3725_hair_core.json",
         },
         "slots": [],
     }

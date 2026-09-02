@@ -21,19 +21,20 @@ from PIL import Image
 CHARACTER_NAME = "simple_character"
 SOURCE_ROOT_DEFAULT = r"K:\future\res"
 RESOURCE_ROOT_DEFAULT = r"D:\YYBWorkSpace\GitHub\VukanLearnResources"
-GLTF_RELATIVE = "models/datas/simple_character/simple_character.gltf"
-AUDIT_RELATIVE = "models/datas/simple_character/simple_character.audit.json"
-MODEL_RELATIVE = "models/simple_character/SM_simple_character.json"
-HAIR_CORE_GLTF_RELATIVE = "models/datas/simple_character/simple_character_hair_core.gltf"
-HAIR_CORE_MODEL_RELATIVE = "models/simple_character/SM_simple_character_hair_core.json"
-GROUND_OBJ_RELATIVE = "models/datas/simple_character/simple_character_ground.obj"
-GROUND_MTL_RELATIVE = "models/datas/simple_character/simple_character_ground.mtl"
-GROUND_MODEL_RELATIVE = "models/simple_character/SM_simple_character_ground.json"
-GROUND_MI_RELATIVE = "materials/simple_character/MI_simple_character_ground.json"
-SCENE_RELATIVE = "scenes/simple_character.json"
-MATERIAL_RELATIVE_ROOT = "materials/simple_character"
-TEXTURE_RELATIVE_ROOT = "textures/simple_character"
-GENERATED_RELATIVE_ROOT = "generated/simple_character"
+GLTF_RELATIVE = "Maps/SC_simple_character/Source/Models/simple_character/simple_character.gltf"
+AUDIT_RELATIVE = "Maps/SC_simple_character/Source/Models/simple_character/simple_character.audit.json"
+MODEL_RELATIVE = "Maps/SC_simple_character/Meshes/SM_simple_character.json"
+HAIR_CORE_GLTF_RELATIVE = "Maps/SC_simple_character/Source/Models/simple_character/simple_character_hair_core.gltf"
+HAIR_CORE_MODEL_RELATIVE = "Maps/SC_simple_character/Meshes/SM_simple_character_hair_core.json"
+GROUND_OBJ_RELATIVE = "Maps/SC_simple_character/Source/Models/simple_character/simple_character_ground.obj"
+GROUND_MTL_RELATIVE = "Maps/SC_simple_character/Source/Models/simple_character/simple_character_ground.mtl"
+GROUND_MODEL_RELATIVE = "Maps/SC_simple_character/Meshes/SM_simple_character_ground.json"
+GROUND_MI_RELATIVE = "Maps/SC_simple_character/Materials/MI_simple_character_ground.json"
+SCENE_RELATIVE = "Maps/SC_simple_character/SC_simple_character.json"
+MATERIAL_RELATIVE_ROOT = "Maps/SC_simple_character/Materials"
+TEXTURE_RELATIVE_ROOT = "Maps/SC_simple_character/Textures"
+TEXTURE_SOURCE_RELATIVE_ROOT = "Maps/SC_simple_character/Source/Textures"
+GENERATED_RELATIVE_ROOT = "Generated/Import/simple_character"
 
 
 def parse_arguments():
@@ -296,7 +297,7 @@ class TextureWriter(object):
         stem = re.sub(r"[^A-Za-z0-9_]+", "_", os.path.splitext(os.path.basename(source_reference))[0])
         digest = hashlib.sha1((source_reference + ":" + kind).encode("utf-8")).hexdigest()[:8]
         asset_name = "T_%s_%s_%s" % (CHARACTER_NAME, stem, digest)
-        generated_relative = GENERATED_RELATIVE_ROOT + "/" + asset_name + ".png"
+        generated_relative = TEXTURE_SOURCE_RELATIVE_ROOT + "/" + asset_name + ".png"
         descriptor_relative = TEXTURE_RELATIVE_ROOT + "/" + asset_name + ".json"
         generated_path = os.path.join(self.resource_root, generated_relative.replace("/", os.sep))
         descriptor_path = os.path.join(self.resource_root, descriptor_relative.replace("/", os.sep))
@@ -517,10 +518,10 @@ def build_material_instance(slot, contract, source_root, texture_writer, role):
     if state_overrides:
         instance["renderStateOverrides"] = state_overrides
     if role == "skin":
-        instance["skinLut"] = "skinLuts/PSL_skin.json"
+        instance["skinLut"] = "Common/Profiles/SkinLuts/PSL_skin.json"
     if role == "eye":
-        instance["eyeProfile"] = "eyeProfiles/EP_human_default.json"
-        instance["subsurfaceProfile"] = "subsurfaceProfiles/SSP_skin.json"
+        instance["eyeProfile"] = "Common/Profiles/Eye/EP_human_default.json"
+        instance["subsurfaceProfile"] = "Common/Profiles/Subsurface/SSP_skin.json"
     return remove_default_macros(remove_default_parameters(instance)), shading_family
 
 
@@ -676,7 +677,7 @@ def build_scene():
 
 
 def write_ground_assets(resource_root, overwrite):
-    ground_directory = os.path.join(resource_root, "models", "datas", CHARACTER_NAME)
+    ground_directory = os.path.join(resource_root, "Maps", "SC_simple_character", "Source", "Models", CHARACTER_NAME)
     write_text(
         os.path.join(ground_directory, os.path.basename(GROUND_MTL_RELATIVE)),
         "newmtl simple_character_ground\n"

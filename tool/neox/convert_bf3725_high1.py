@@ -44,9 +44,9 @@ def main():
     source_root = os.path.abspath(arguments.source_root)
     resource_root = os.path.abspath(arguments.resource_root)
     source_texture_root = os.path.join(source_root, "textures")
-    generated_root = os.path.join(resource_root, "generated", "neox", "b_f_3725")
-    descriptor_root = os.path.join(resource_root, "textures", "neox", "b_f_3725")
-    material_root = os.path.join(resource_root, "materials", "neox", "b_f_3725")
+    generated_root = os.path.join(resource_root, "Generated", "Import", "neox", "b_f_3725")
+    descriptor_root = os.path.join(resource_root, "Maps/SC_b_f_3725/Textures")
+    material_root = os.path.join(resource_root, "Maps/SC_b_f_3725/Materials")
     for directory in (generated_root, descriptor_root, material_root):
         ensure_directory(directory)
 
@@ -78,7 +78,7 @@ def main():
         descriptor = {
             "name": descriptor_name,
             "type": "texture",
-            "source": "generated/neox/b_f_3725/" + output_names[name],
+            "source": "Maps/SC_b_f_3725/Source/Textures/" + output_names[name],
             "colorSpace": "srgb" if name == "color" else "linear",
             "mipmaps": True,
             "filter": "linear",
@@ -94,7 +94,7 @@ def main():
         if os.path.exists(descriptor_path) and not arguments.overwrite:
             raise RuntimeError("Descriptor exists: %s" % descriptor_path)
         write_json(descriptor_path, descriptor)
-        descriptors[name] = "textures/neox/b_f_3725/" + descriptor_name + ".json"
+        descriptors[name] = "Maps/SC_b_f_3725/Textures/" + descriptor_name + ".json"
 
     # 参数顺序来自 b_f_3725_high001.mtg：
     # u_pearlSurface=(contrast, fresnel, brightness, emissive amount)，
@@ -137,7 +137,7 @@ def main():
         "sourceMacros": {
             "USE_2U_MIX": True,
         },
-        "targetMaterial": "materials/neox/b_f_3725/MI_b_f_3725_high_1_pearl.json",
+        "targetMaterial": "Maps/SC_b_f_3725/Materials/MI_b_f_3725_high_1_pearl.json",
         "targetShadingModel": "Subsurface",
         "targetRenderMode": "OpaqueClip",
         "targetCullMode": "None",

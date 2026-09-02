@@ -23,7 +23,7 @@ def parse_arguments() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output",
-        default=r"D:\YYBWorkSpace\GitHub\VukanLearnResources\models\datas\neox\b_f_3725\b_f_3725.gltf",
+        default=r"D:\YYBWorkSpace\GitHub\VukanLearnResources\Maps\SC_b_f_3725\Source\Models\b_f_3725\b_f_3725.gltf",
         help="Destination .gltf file. The .bin and textures are written beside it.",
     )
     parser.add_argument(

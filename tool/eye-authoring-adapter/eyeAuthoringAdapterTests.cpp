@@ -22,7 +22,7 @@ TEST(EyeAuthoringAdapter, ConvertsLegacyAuthoring)
 {
     const nlohmann::json legacy = {
         {"authoringModel", "Legacy"},
-        {"eyeProfile", "eyeProfiles/EP_human_default.json"},
+        {"eyeProfile", "Common/Profiles/Eye/EP_human_default.json"},
         {"irisColor", {0.1f, 0.2f, 0.3f}},
         {"scleraColor", {0.8f, 0.85f, 0.9f}},
         {"layer", "inner"},
@@ -47,7 +47,7 @@ TEST(EyeAuthoringAdapter, ConvertsSubstrateAuthoring)
 {
     const nlohmann::json substrate = {
         {"model", "Substrate"},
-        {"profilePath", "eyeProfiles/EP_human_default.json"},
+        {"profilePath", "Common/Profiles/Eye/EP_human_default.json"},
         {"layer", "cornea"},
         {"unsupportedParameters", {"clearCoatAnisotropy"}}};
     const VL::EyeAuthoringAdapterResult substrateResult =
@@ -65,7 +65,7 @@ TEST(EyeAuthoringAdapter, StrictModeRejectsUnsupportedFields)
 {
     const nlohmann::json substrate = {
         {"model", "Substrate"},
-        {"profilePath", "eyeProfiles/EP_human_default.json"},
+        {"profilePath", "Common/Profiles/Eye/EP_human_default.json"},
         {"layer", "cornea"},
         {"unsupportedParameters", {"clearCoatAnisotropy"}}};
     VL::EyeAuthoringAdapterOptions strict;

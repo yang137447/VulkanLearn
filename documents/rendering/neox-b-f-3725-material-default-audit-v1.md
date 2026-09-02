@@ -6,7 +6,8 @@
 - **角色**：`b_f_3725`
 - **源目录**：`K:\future\res\shader`
 - **源规则**：`.fx` 是美术宏、参数声明和编辑器默认值；`.nfx2` 是总宏展开后的最终宏环境、Uniform 节点和最终默认值。
-- **目标范围**：VulkanLearn `shader/glsl/M_*.json` 与 `VukanLearnResources/materials/neox/b_f_3725/MI_*.json`。
+- **目标范围**：VulkanLearn `shader/glsl/M_*.json` 与
+  `VukanLearnResources/Maps/SC_b_f_3725/Materials/MI_*.json`。
 
 ## 1. 源文件指纹
 

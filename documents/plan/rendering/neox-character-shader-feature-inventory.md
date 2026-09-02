@@ -8,10 +8,10 @@
 
 ## 已落地结果
 
-- 静态模型：`VukanLearnResources/models/datas/neox/b_f_3725/b_f_3725.gltf`；
-- 模型资产：`VukanLearnResources/models/neox/b_f_3725/SM_b_f_3725_p0.json`；
-- 验证场景：`VukanLearnResources/scenes/SC_b_f_3725_p0.json`；
-- 迁移清单：`VukanLearnResources/generated/neox/b_f_3725/b_f_3725-material-migration.json`；
+- 静态模型：`VukanLearnResources/Maps/SC_b_f_3725/Source/Models/b_f_3725/b_f_3725.gltf`；
+- 模型资产：`VukanLearnResources/Maps/SC_b_f_3725/Meshes/SM_b_f_3725_p0.json`；
+- 验证场景：`VukanLearnResources/Maps/SC_b_f_3725/SC_b_f_3725.json`；
+- 迁移清单：`VukanLearnResources/Generated/Import/neox/b_f_3725/b_f_3725-material-migration.json`；
 - 统一转换器：`tool/neox/convert_bf3725_character.py`；
 - 槽位结果：35/35 已迁移、19 个实际 MI 资产、0 fallback；Hair mode 8 额外使用一份 Clip MI；
 - UV 合同：9 个网格保留真实 UV0+UV1，`nf2022_f_01` 只导出 UV0，禁止用 UV0 合成 UV1。
@@ -166,7 +166,7 @@ NeoX 的来源解码不进入 VulkanLearn 运行时。P0 离线转换输出以�
 
 ## P0 转换落地状态
 
-已生成 `b_f_3725_high_0` 的 VulkanLearn 运行资源，转换工具位于 `tool/neox/convert_bf3725_p0.py`。工具读取 MTG 指定的 `nb_f_2023002a/m/n`、共享 `skin_detial_n.tga` 以及旧通用贴图审计输入，输出到 `resourcePath/generated/neox/b_f_3725/`，并生成对应的 `T_*.json` 与 `MI_*.json` 描述。
+已生成 `b_f_3725_high_0` 的 VulkanLearn 运行资源，转换工具位于 `tool/neox/convert_bf3725_p0.py`。工具读取 MTG 指定的 `nb_f_2023002a/m/n`、共享 `skin_detial_n.tga` 以及旧通用贴图审计输入，输出到 `resourcePath/Maps/SC_b_f_3725/`，导入审计记录写入 `resourcePath/Generated/Import/neox/b_f_3725/`，并生成对应的 `T_*.json` 与 `MI_*.json` 描述。
 
 当前材质实例使用 `shader/glsl/M_neoxSkin.json` 和 `skinLuts/PSL_skin.json`，已绑定：
 

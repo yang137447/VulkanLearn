@@ -105,7 +105,7 @@ ctest --test-dir build -R speedtree_wind_numeric --output-on-failure
 ```
 
 默认从 `config/config.json -> resourcePath` 查找
-`models/datas/Oak_Complex_Rules.stsdk`，也可以把其他 `.stsdk` 路径作为第一个参数传入。
+`Maps/SC_speedtree/Source/Models/Oak_Complex_Rules.stsdk`，也可以把其他 `.stsdk` 路径作为第一个参数传入。
 Oak 使用固定顶点和贴图接缝回归；其他树种自动选择各 section 中风权重最大的代表顶点。
 
 如果 Modeler 安装在其他位置，配置时传入
@@ -123,22 +123,15 @@ GPU readback；实际 SPIR-V 输出仍需后续 capture/readback 验证。
 "resourcePath": "D:\\YYBWorkSpace\\GitHub\\VukanLearnResources"
 ```
 
-运行前请确保 `resourcePath` 至少包含：
+运行前请确保 `resourcePath` 至少包含：`Common/`、对应的 `Maps/SC_<scene-name>/`，以及用于导入、运行时、验证和截图输出的 `Generated/`。场景专属资产放在场景目录下的 `Meshes/`、`Materials/`、`Textures/`、`Environments/` 和 `Source/`；RenderGraph Pass 材质和引擎级 Profile 放在 `Common/`。
 
-- `scenes/`
-- `models/`
-- `terrains/`（使用地形场景时需要）
-- `materials/`
-- `textures/`
-- `hdri/`
-
-本地生成资源输出写入 `resourcePath/generated/`。
+本地生成资源输出写入 `resourcePath/Generated/`。
 
 单次启动需要临时覆盖 `config/config.json -> initScene` 时，可以使用进程级参数，
 不会改写配置文件：
 
 ```bash
-build/bin/main.exe --initial-scene scenes/SC_speedtree.json
+build/bin/main.exe --initial-scene Maps/SC_speedtree/SC_speedtree.json
 ```
 
 ## Shader 增量编译与热重载
