@@ -215,11 +215,6 @@ ctest --test-dir build --output-on-failure
 - ABI-compatible / ABI-incompatible / restore 的 Eye Compute reload、descriptor refresh 和 epoch retirement；
 - Forward、Deferred、Dual-shell 各 3 个 steady-state sample frame 的 draw/descriptor/LUT sample budget。
 
-运行时 probe 资产位于当前 `config/config.json -> resourcePath` 下：
-`eyeProfiles/EP_human_default.json`、`materials/MI_eye_probe.json`、
-`models/SM_eye_probe.json` 和 `scenes/SC_eye_probe.json`。这些资产属于运行时资源根，
-不应复制到 `shader/spv/` 或作为 shader 生成物手工维护。
-
 ## 10. 性能预算
 
 Eye LUT 固定为 `64 x 64 x 256 x RGBA16F`，内存为 `8,388,608` bytes（约 `8 MiB`）。当前 steady-state budget：

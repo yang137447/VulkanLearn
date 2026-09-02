@@ -429,8 +429,6 @@ ctest --test-dir build -j 1 --output-on-failure
 
 ### 10.2 Visual Check
 
-测试场景：`<resourcePath>/scenes/SC_subsurface_models.json`
-
 已检查：
 
 - 三种模型均可见并保持独立外观；
