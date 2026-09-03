@@ -17,7 +17,11 @@
         "USE_ALBEDO_MAP": 0,
         "USE_NORMAL_MAP": 0,
         "USE_PBR_MAP": 0,
-        "USE_EMISSION_MAP": 0
+        "USE_EMISSION_MAP": 0,
+        "USE_SUBSURFACE_COLOR_MAP": 0,
+        "USE_SUBSURFACE_MASK_MAP": 0,
+        "USE_SUBSURFACE_THICKNESS_MAP": 0,
+        "USE_SUBSURFACE_TRANSMISSION_MAP": 0
     },
     "parameters": {
         "u_alphaClipThreshold": {
@@ -38,11 +42,23 @@
         },
         "u_subsurfaceColorWeight": {
             "type": "vec4",
-            "default": [1.0, 0.45, 0.3, 1.0]
+            "default": [1.0, 0.45, 0.3, 1.0],
+            "channels": {
+                "x": {"name": "subsurfaceColorRed", "description": "subsurface color red channel", "range": {"min": 0.0, "max": 1.0}},
+                "y": {"name": "subsurfaceColorGreen", "description": "subsurface color green channel", "range": {"min": 0.0, "max": 1.0}},
+                "z": {"name": "subsurfaceColorBlue", "description": "subsurface color blue channel", "range": {"min": 0.0, "max": 1.0}},
+                "w": {"name": "subsurfaceWeight", "description": "subsurface response weight", "range": {"min": 0.0, "max": 1.0}}
+            }
         },
         "u_subsurfaceShape": {
             "type": "vec4",
-            "default": [0.5, 4.0, 0.35, 0.01]
+            "default": [0.5, 4.0, 0.35, 0.01],
+            "channels": {
+                "x": {"name": "wrapWidth", "description": "wrapped diffuse width", "range": {"min": 0.0, "max": 1.0}},
+                "y": {"name": "backscatterPower", "description": "backscatter falloff power", "range": {"min": 0.000001, "max": 64.0}},
+                "z": {"name": "backscatterWeight", "description": "backscatter response weight", "range": {"min": 0.0, "max": 1.0}},
+                "w": {"name": "thickness", "description": "surface thickness in world units", "range": {"min": 0.000001, "max": 1.0}}
+            }
         },
         "u_subsurfaceTransmissionWeight": {
             "type": "float",
@@ -63,6 +79,22 @@
             "default": null
         },
         "emissionMap": {
+            "type": "sampler2D",
+            "default": null
+        },
+        "subsurfaceColorMap": {
+            "type": "sampler2D",
+            "default": null
+        },
+        "subsurfaceMaskMap": {
+            "type": "sampler2D",
+            "default": null
+        },
+        "subsurfaceThicknessMap": {
+            "type": "sampler2D",
+            "default": null
+        },
+        "subsurfaceTransmissionMap": {
             "type": "sampler2D",
             "default": null
         }

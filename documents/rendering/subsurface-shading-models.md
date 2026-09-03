@@ -240,6 +240,50 @@ weight, curvature, transmissionWeight
 profileId, weight, thickness, transmissionWeight
 ```
 
+### 5.1.1 M_ Authoring Interfaces
+
+三种 SSS 母材质都提供通用 PBR 入口：`albedoMap`、`normalMap`、`pbrParamMap`、
+`emissionMap` 以及对应的 `USE_*_MAP` 宏。宏默认关闭，材质实例可以按需开启；
+关闭时使用 M_ 参数标量 fallback。SSS 专用贴图也遵循这一规则，不要求没有对应
+资源的 MI 绑定空贴图。
+
+`M_subsurface` 额外提供：
+
+| 宏 | 贴图 | 通道 | 作用 |
+| --- | --- | --- | --- |
+| `USE_SUBSURFACE_COLOR_MAP` | `subsurfaceColorMap` | RGB | 乘到 `u_subsurfaceColorWeight.rgb` |
+| `USE_SUBSURFACE_MASK_MAP` | `subsurfaceMaskMap` | R | 乘到 `u_subsurfaceColorWeight.a` |
+| `USE_SUBSURFACE_THICKNESS_MAP` | `subsurfaceThicknessMap` | R | 乘到 `u_subsurfaceShape.w` |
+| `USE_SUBSURFACE_TRANSMISSION_MAP` | `subsurfaceTransmissionMap` | R | 乘到 transmission weight |
+
+`M_preintegratedSkin` 额外提供：
+
+| 宏 | 贴图 | 通道 | 作用 |
+| --- | --- | --- | --- |
+| `USE_SKIN_PARAM_MAP` | `skinParamMap` | R/G/B/A | roughness / metallic / skin response mask / AO |
+| `USE_SKIN_AUX_MAP` | `skinAuxMap` | R/G | curvature / detail normal mask |
+| `USE_SKIN_DETAIL_MAP` | `skinDetailMap` | RGB/A | bottom detail normal / pore modulation |
+| `USE_SKIN_THICKNESS_MAP` | `skinThicknessMap` | R | 乘到 Skin thickness |
+| `USE_SKIN_WEIGHT_MAP` | `skinWeightMap` | R | 乘到 Skin weight |
+| `USE_SKIN_TRANSMISSION_MAP` | `skinTransmissionMap` | R | 乘到 Skin transmission weight |
+
+`skinParamMap.B` 作为当前像素 Skin response mask，乘到 Skin weight；`skinAuxMap.R`
+写入 curvature；`skinDetailMap` 的 detail normal 只影响 Skin LUT 的 bottom normal，
+不覆盖顶层高光法线。`u_skinDetailStrength` 和 `u_skinPoreStrength` 分别控制 detail
+法线和 pore modulation。
+
+`M_subsurfaceProfile` 额外提供：
+
+| 宏 | 贴图 | 通道 | 作用 |
+| --- | --- | --- | --- |
+| `USE_SUBSURFACE_PROFILE_WEIGHT_MAP` | `subsurfaceProfileWeightMap` | R | 乘到 profile weight |
+| `USE_SUBSURFACE_PROFILE_THICKNESS_MAP` | `subsurfaceProfileThicknessMap` | R | 乘到 profile thickness |
+| `USE_SUBSURFACE_PROFILE_TRANSMISSION_MAP` | `subsurfaceProfileTransmissionMap` | R | 乘到 profile transmission weight |
+
+`profileId` 和 `skinLutId` 仍然由 MI 引用的资产路径解析为稳定 ID；本轮不把离散资产
+ID 伪装成普通连续贴图值。三种 M_ 的 SSS 专用贴图均为线性数据，采样设置由对应
+Texture Asset JSON 提供。
+
 V1 对 `u_skinSurface.w` 这个静态作者参数仍要求为 `0`，材质范围与厚度域在加载期
 校验；shader 不负责按帧修补错误资产。NeoX 脸部可以通过独立的 `skinAuxMap.R`
 提供逐像素 curvature，并写入上表的 `GBufferF.x`；当前 PreintegratedSkin LUT

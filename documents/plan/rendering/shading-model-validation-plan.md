@@ -5,7 +5,7 @@
 | 项目 | 内容 |
 | --- | --- |
 | 类型 | 资产驱动的 Shading Model 展示与验证计划 |
-| 状态 | 已完成案例方向整理，尚未开始新资产导入 |
+| 状态 | 已完成案例方向整理，等待外部资产导入 |
 | 建立日期 | 2026-09-02 |
 | 适用范围 | 场景、模型、材质实例、纹理和验证流程的规划 |
 | 当前实现合同 | `documents/rendering/` 下对应的 Shading Model 合同 |
@@ -78,7 +78,7 @@
 | 场景 | 资产 | 主材质分配 | 状态 |
 | --- | --- | --- | --- |
 | `SC_skin_head_scan` | Lee Perry Smith Head Scan | 头部使用 `PreintegratedSkin`、`Subsurface`、`SubsurfaceProfile` 三个变体 | 资产已选，入库时复核来源和授权 |
-| `SC_marble_bust_01` | Poly Haven Marble Bust 01 | 大理石主体使用 `SubsurfaceProfile` 或 `Subsurface`，底座使用 `DefaultLit` | 资产已选，待导入 |
+| `SC_marble_bust_01` | Poly Haven Marble Bust 01 | 大理石主体使用 `Subsurface`，辅助结构使用 `DefaultLit` | 已导入，已使用 `.blend` 参数；待运行时 smoke 与 Beauty 验收 |
 | `SC_foliage_potted_plant_02` | Poly Haven Potted Plant 02 | 叶片使用 `TwoSidedFoliage`，花盆和土壤使用 `DefaultLit` | 资产已选，待确认独立 foliage 入口 |
 | `SC_hair_showcase` | zHairezt 的 Short Wavy Hair With Bangs | 灰色头模使用 `DefaultLit`，发型使用 `Hair` | 模型已选，待官方下载和转换 |
 | `SC_cloth_showcase` | 灰色人模和 MD/CLO 披挂服装 | 人模使用 `DefaultLit`，服装使用 `Cloth` | 待获得可再分发的 MD/CLO 工程 |
@@ -220,14 +220,14 @@ Flame       -> M_unlit
 
 ## 6. 场景与灯光约定
 
-### 6.1 标准展示机位
+### 6.1 轻量验证机位
 
-每个独立 Case 至少提供以下观察条件：
+当前阶段不要求每个 Case 都制作完整的多机位证据集，统一采用渐进式验证：
 
-1. `Beauty`：中性环境、主光、填充光和轮廓光，展示最终外观。
-2. `KeyOnly`：关闭填充和环境干扰，观察主光下的 BRDF / BSSRDF 响应。
-3. `Backlight`：从背面或侧后方照射，观察皮肤、叶片、纸罩和头发轮廓。
-4. `Debug`：使用现有 Debug View 或纹理可视化，检查 Shading Model ID、法线、切线、Alpha 和专用数据。
+1. `Beauty` 是默认机位：使用统一相机、环境和主光，先确认模型、材质和整体观感。
+2. `Backlight` 只在验证皮肤、叶片、头发或薄透射时启用，用来回答明确的透光问题。
+3. `Debug` 只在出现材质绑定、法线、切线、Alpha 或 Shading Model ID 疑问时启用。
+4. `KeyOnly`、Forward / Deferred 对照和性能记录不作为每个 Case 的前置门槛，等视觉结果稳定后再针对问题补做。
 
 场景可以通过多个相机或运行时控制切换观察条件，但不要为每个观察条件复制一套模型资源。
 
@@ -273,13 +273,13 @@ Flame       -> M_unlit
 - [ ] 保持纸罩、骨架、火焰和发光源为独立材质和独立几何。
 - [ ] 验证 Cloth 的 Forward / Deferred 共用 evaluator，以及 ThinTranslucent 的 Forward 透明路径。
 
-### Phase 4：统一验证与证据归档
+### Phase 4：按需验证与证据归档
 
 - [ ] 对每个 Case 执行资源引用和材质反射校验。
 - [ ] 执行启动期 shader 编译、场景加载和运行时 smoke。
-- [ ] 记录 Beauty、Backlight 和 Debug 截图，截图文件放在资源仓库 `generated/` 下。
-- [ ] 对有明确合同的模型执行 Forward / Deferred 或 GBuffer 对照；对明确受限的模型记录限制，不伪造对等结论。
-- [ ] 记录性能基线：draw 数、三角形数、贴图尺寸、透明覆盖和 GPU 时间。
+- [ ] 为已稳定 Case 记录一张 Beauty 截图，截图文件放在资源仓库 `Generated/Validation/` 下。
+- [ ] 只有在具体视觉问题需要定位时，才补充 Backlight 或 Debug 截图。
+- [ ] Forward / Deferred、GBuffer 对照和性能基线改为专项回归任务，不作为资产入库前置条件。
 - [ ] 把发现的资产问题修复在转换或 authoring 阶段，不在 shader 中增加逐帧防御逻辑。
 
 ### Phase 5：可选的统一 Gallery
@@ -304,6 +304,7 @@ Gallery 只负责把已验收的标准 Case 组织到同一展示空间，不复
 - [ ] 辅助几何使用明确的 `DefaultLit` / `Unlit` 材质，不污染主案例结论。
 - [ ] 相机、主光、轮廓光、环境和曝光配置可重复。
 - [ ] 资产来源、许可证和转换记录齐全。
+- [ ] 已稳定 Case 至少有一张可复现的 Beauty 截图；Backlight / Debug 仅按需补充。
 
 ### 8.2 按模型的验收重点
 

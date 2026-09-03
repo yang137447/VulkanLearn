@@ -17,7 +17,10 @@
         "USE_ALBEDO_MAP": 0,
         "USE_NORMAL_MAP": 0,
         "USE_PBR_MAP": 0,
-        "USE_EMISSION_MAP": 0
+        "USE_EMISSION_MAP": 0,
+        "USE_SUBSURFACE_PROFILE_WEIGHT_MAP": 0,
+        "USE_SUBSURFACE_PROFILE_THICKNESS_MAP": 0,
+        "USE_SUBSURFACE_PROFILE_TRANSMISSION_MAP": 0
     },
     "parameters": {
         "u_alphaClipThreshold": {
@@ -42,7 +45,13 @@
         },
         "u_subsurfaceProfileSurface": {
             "type": "vec4",
-            "default": [1.0, 0.006, 0.1, 0.0]
+            "default": [1.0, 0.006, 0.1, 0.0],
+            "channels": {
+                "x": {"name": "profileWeight", "description": "profile diffuse blend weight", "range": {"min": 0.0, "max": 1.0}},
+                "y": {"name": "thickness", "description": "profile thickness in world units", "range": {"min": 0.000001, "max": 1.0}},
+                "z": {"name": "transmissionWeight", "description": "profile transmission weight", "range": {"min": 0.0, "max": 1.0}},
+                "w": {"name": "reserved", "description": "reserved channel", "range": {"min": 0.0, "max": 0.0}}
+            }
         }
     },
     "textures": {
@@ -59,6 +68,18 @@
             "default": null
         },
         "emissionMap": {
+            "type": "sampler2D",
+            "default": null
+        },
+        "subsurfaceProfileWeightMap": {
+            "type": "sampler2D",
+            "default": null
+        },
+        "subsurfaceProfileThicknessMap": {
+            "type": "sampler2D",
+            "default": null
+        },
+        "subsurfaceProfileTransmissionMap": {
             "type": "sampler2D",
             "default": null
         }

@@ -95,6 +95,8 @@ Architecture plans:
   - completed 2026-08-14 repair record for restoring Vulkan device/test boundaries, extracting Shader and World/Graph transaction ownership from EngineLoop, converging World loading paths, and rerunning the complete architecture validation matrix
 - `plan/architecture/renderer-cohesive-runtime-extraction-plan.md`
   - deferred R6 follow-up for CSM frame data, post-process controls, environment orchestration, and RenderGraph Vulkan state-package ownership
+- `plan/architecture/csharp-actor-runtime-plan.md`
+  - planned in-process C# gameplay Actor runtime using `*.actor.cs` source files, explicit native/managed ABI, World/Component lifecycle, scene binding, services, reload, and validation phases
 - `plan/architecture/modern-engine-refactor-blueprint.html`
   - earlier modern-engine refactor blueprint kept as planning context
 - `plan/architecture/ue-lite-completion-plan.md`
@@ -114,6 +116,8 @@ Rendering plans:
   - deferred GBuffer, UE legacy slot alignment, M_/MI_ material layering, and forward/deferred shader structure plan
 - `plan/rendering/foliage-speedtree-sss-wind-roadmap.md`
   - markdown route for SpeedTree, foliage SSS, wind, and multi-pivot work
+- `plan/rendering/two-sided-foliage-shading-model-development-plan.md`
+  - UE5.8 Legacy TwoSidedFoliage Shading Model 接入路线、GBuffer/Pass 合同、验证矩阵和后续边界
 - plan/rendering/neox-b-f-3725-skin-p0-baseline-v1.md
   - _f_3725 Skin P0 源槽位、目标 MI、纹理通道、指纹和运行时 smoke 基线
 - `plan/rendering/neox-b-f-3725-skin-effect-alignment-plan.md`

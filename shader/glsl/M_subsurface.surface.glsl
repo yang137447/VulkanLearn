@@ -16,6 +16,22 @@ MaterialInputs EvaluateMaterialInputs(in MaterialFunctionContext context)
     subsurfaceInput.backscatterWeight = u_subsurfaceShape.z;
     subsurfaceInput.thickness = u_subsurfaceShape.w;
     subsurfaceInput.transmissionWeight = u_subsurfaceTransmissionWeight;
+#if USE_SUBSURFACE_COLOR_MAP
+    subsurfaceInput.color *=
+        texture(subsurfaceColorMap, context.texCoord).rgb;
+#endif
+#if USE_SUBSURFACE_MASK_MAP
+    subsurfaceInput.weight *=
+        texture(subsurfaceMaskMap, context.texCoord).r;
+#endif
+#if USE_SUBSURFACE_THICKNESS_MAP
+    subsurfaceInput.thickness *=
+        texture(subsurfaceThicknessMap, context.texCoord).r;
+#endif
+#if USE_SUBSURFACE_TRANSMISSION_MAP
+    subsurfaceInput.transmissionWeight *=
+        texture(subsurfaceTransmissionMap, context.texCoord).r;
+#endif
     inputs.modelInputs.subsurface =
         EvaluateMFSubsurfaceInputs(subsurfaceInput);
     return inputs;

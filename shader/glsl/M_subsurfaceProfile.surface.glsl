@@ -15,6 +15,18 @@ MaterialInputs EvaluateMaterialInputs(in MaterialFunctionContext context)
         u_subsurfaceProfileSurface.y;
     inputs.modelInputs.subsurfaceProfile.transmissionWeight =
         u_subsurfaceProfileSurface.z;
+#if USE_SUBSURFACE_PROFILE_WEIGHT_MAP
+    inputs.modelInputs.subsurfaceProfile.weight *=
+        texture(subsurfaceProfileWeightMap, context.texCoord).r;
+#endif
+#if USE_SUBSURFACE_PROFILE_THICKNESS_MAP
+    inputs.modelInputs.subsurfaceProfile.thickness *=
+        texture(subsurfaceProfileThicknessMap, context.texCoord).r;
+#endif
+#if USE_SUBSURFACE_PROFILE_TRANSMISSION_MAP
+    inputs.modelInputs.subsurfaceProfile.transmissionWeight *=
+        texture(subsurfaceProfileTransmissionMap, context.texCoord).r;
+#endif
     return inputs;
 }
 
