@@ -169,19 +169,29 @@ MeshSection AssimpSourceAdapter::ProcessMesh(aiMesh* mesh, const aiScene* scene)
         }
         vertices.push_back(vertex);
     }
-    // 处理索引
+    // 处理索引：先用源模型原始绕序收集索引，保证 MikkTSpace 的 handedness（tangent.w）
+    // 与烘焙端（Blender/glTF 等）一致；切线生成后再统一反转绕序，满足 Vulkan CW front-face
+    // 裁剪。绕序反转只作用于索引层，不能提前到 MikkTSpace 之前，否则 tangent.w 翻号，
+    // 法线贴图 G 通道（副切线方向）会整体反号。
     for(uint32_t i = 0; i < mesh->mNumFaces; i++)
     {
         aiFace face = mesh->mFaces[i];
         for(uint32_t j = 0; j < face.mNumIndices; j++)
         {
-            indices.push_back(face.mIndices[face.mNumIndices-1-j]);
+            indices.push_back(face.mIndices[j]);
         }
     }
 
     if (mesh->HasNormals() && mesh->mTextureCoords[0])
     {
         MikkTSpaceMeshGenerator::Generate(vertices, indices);
+    }
+
+    // 反转三角形绕序（CCW→CW）：Vulkan 使用 CW front face，配合投影 Y 翻转。
+    // 只交换索引，不修改 tangent/normal 数据。
+    for (size_t i = 0; i + 2 < indices.size(); i += 3)
+    {
+        std::swap(indices[i], indices[i + 2]);
     }
 
     MeshSection section;
