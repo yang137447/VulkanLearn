@@ -165,6 +165,10 @@ private:
         bool sceneLoading = false;
         std::vector<UiSceneOption> sceneOptions;
 
+        Rml::String cameraMoveSpeedLabel;
+        Rml::String cameraMoveSpeedValue;
+        float cameraMoveSpeed = 10.0f;
+
         Rml::String frameLabel;
         Rml::String frameValue;
         Rml::String fpsLabel;
@@ -397,6 +401,7 @@ private:
 
     void OnClosePage(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
     void OnLoadScene(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
+    void OnCameraMoveSpeedChanged(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
     void OnDebugViewSelected(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
     void OnToneMappingNone(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
     void OnToneMappingReinhard(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);

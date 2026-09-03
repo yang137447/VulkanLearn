@@ -581,6 +581,14 @@ void EngineLoop::ApplyQueuedUiActions()
             continue;
         }
 
+        if (action.type == UiActionType::SetCameraMoveSpeed)
+        {
+            controller->SetMoveVelocity(action.floatValue);
+            GetSubsystems().GetDiagnosticsSubsystem().ReportInfo(
+                "Camera move speed set to " + std::to_string(action.floatValue));
+            continue;
+        }
+
         RuntimeCommand command;
         command.sourceText = "ui";
         switch (action.type)
@@ -733,6 +741,7 @@ void EngineLoop::UpdateUiViewModel(float deltaTime)
     snapshot.frameIndex = uiFrameIndex++;
     snapshot.deltaTimeSeconds = deltaTime;
     snapshot.framesPerSecond = GetSubsystems().GetFpsTool().getFPS();
+    snapshot.cameraMoveSpeed = controller->GetMoveVelocity();
     const RenderSystem& renderSystem = RenderSystem::GetInstance();
     snapshot.debugViewMode = renderSystem.GetDebugViewMode();
     snapshot.toneMappingMode = renderSystem.GetToneMappingMode();

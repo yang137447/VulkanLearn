@@ -31,6 +31,7 @@ runtime page is `ui/runtime-control.rml` with `ui/runtime-control.rcss` and
 - tone mapping plus bloom strength, threshold, knee, and clamp controls
 - environment intensity plus SpeedTree wind strength and gust controls
 - locale switching, developer-UI visibility, close, and quit actions
+- camera movement speed control on the System tab
 - development-time hot reload with last-valid-document rollback
 
 RmlUi does not receive direct access to `RenderGraph`, `MaterialInstance`, the

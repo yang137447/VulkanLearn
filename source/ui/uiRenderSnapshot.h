@@ -83,6 +83,7 @@ struct UiViewModelSnapshot
     uint32_t speedTreeWindProfileCount = 0;
     bool runtimePageVisible = false;
     bool developerUiVisible = false;
+    float cameraMoveSpeed = 10.0f;
     std::string activeWorldPath;
     std::string locale;
 };

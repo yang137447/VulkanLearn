@@ -20,6 +20,7 @@ public:
         return boundWorldGeneration;
     }
     void SetMoveVelocity(float moveSpeed);
+    float GetMoveVelocity() const { return moveSpeed; }
     void SetRotationSpeed(float mouseRotationSpeed);
 
 private:

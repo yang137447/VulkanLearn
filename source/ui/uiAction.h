@@ -12,6 +12,7 @@ enum class UiActionType
     ToggleDeveloperUi,
     SetLocale,
     LoadWorld,
+    SetCameraMoveSpeed,
     SetDebugViewMode,
     SetToneMappingMode,
     SetBloomStrength,

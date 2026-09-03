@@ -998,6 +998,9 @@ RuntimeResult<void> UiSubsystem::InitializeDataModel()
     bound = constructor.Bind("scene_loading_label", &bindingData.sceneLoadingLabel) && bound;
     bound = constructor.Bind("scene_loading", &bindingData.sceneLoading) && bound;
     bound = constructor.Bind("scene_options", &bindingData.sceneOptions) && bound;
+    bound = constructor.Bind("camera_move_speed_label", &bindingData.cameraMoveSpeedLabel) && bound;
+    bound = constructor.Bind("camera_move_speed_value", &bindingData.cameraMoveSpeedValue) && bound;
+    bound = constructor.Bind("camera_move_speed", &bindingData.cameraMoveSpeed) && bound;
 
     bound = constructor.Bind("frame_label", &bindingData.frameLabel) && bound;
     bound = constructor.Bind("frame_value", &bindingData.frameValue) && bound;
@@ -1179,6 +1182,7 @@ RuntimeResult<void> UiSubsystem::InitializeDataModel()
 
     bound = constructor.BindEventCallback("close_page", &UiSubsystem::OnClosePage, this) && bound;
     bound = constructor.BindEventCallback("load_scene", &UiSubsystem::OnLoadScene, this) && bound;
+    bound = constructor.BindEventCallback("camera_move_speed_changed", &UiSubsystem::OnCameraMoveSpeedChanged, this) && bound;
     bound = constructor.BindEventCallback("set_debug_view", &UiSubsystem::OnDebugViewSelected, this) && bound;
     bound = constructor.BindEventCallback("tone_none", &UiSubsystem::OnToneMappingNone, this) && bound;
     bound = constructor.BindEventCallback("tone_reinhard", &UiSubsystem::OnToneMappingReinhard, this) && bound;
@@ -1769,6 +1773,9 @@ void UiSubsystem::SyncBindingData()
     bindingData.sceneListHint = Localize("scene.list_hint");
     bindingData.sceneEmptyLabel = Localize("scene.empty");
     bindingData.sceneLoadingLabel = Localize("scene.loading");
+    bindingData.cameraMoveSpeedLabel = Localize("control.camera_move_speed");
+    bindingData.cameraMoveSpeed = lastViewModel.cameraMoveSpeed;
+    bindingData.cameraMoveSpeedValue = FormatFloat(lastViewModel.cameraMoveSpeed);
     const std::string activeWorldPath =
         NormalizePathForComparison(lastViewModel.activeWorldPath);
     for (UiSceneOption& option : bindingData.sceneOptions)
@@ -2878,6 +2885,17 @@ void UiSubsystem::OnLoadScene(
 
     diagnostics->ReportWarning(
         "UI scene selector rejected an unknown scene path: " + requestedPath);
+}
+
+void UiSubsystem::OnCameraMoveSpeedChanged(
+    Rml::DataModelHandle,
+    Rml::Event& event,
+    const Rml::VariantList&)
+{
+    QueueChangedFloatAction(
+        UiActionType::SetCameraMoveSpeed,
+        event.GetParameter<float>("value", lastViewModel.cameraMoveSpeed),
+        lastViewModel.cameraMoveSpeed);
 }
 
 void UiSubsystem::OnDebugViewSelected(

@@ -376,6 +376,13 @@
 
                         <div class="section-page" data-if="active_section == 6">
                             <h2>{{tab_system_label}}</h2>
+                            <div class="control-row slider-row">
+                                <div class="control-topline">
+                                    <div class="control-label">{{camera_move_speed_label}}</div>
+                                    <div class="control-value">{{camera_move_speed_value}}</div>
+                                </div>
+                                <input id="camera-move-speed-slider" class="control-slider" type="range" min="0.5" max="100" step="0.5" data-value="camera_move_speed" data-event-change="camera_move_speed_changed" />
+                            </div>
                             <div class="status-card">
                                 <div class="status-row">
                                     <div class="status-label">{{locale_label}}</div>
