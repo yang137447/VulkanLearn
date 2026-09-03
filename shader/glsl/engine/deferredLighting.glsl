@@ -15,6 +15,7 @@ layout(set = 3, binding = 13) uniform sampler2DArray clothAnisotropicDirectional
 #include "hairLighting.glsl"
 #include "eyeLighting.glsl"
 #include "clothLighting.glsl"
+#include "twoSidedFoliageLighting.glsl"
 
 vec3 ReconstructWorldPositionFromSceneDepth(vec2 uv, float deviceDepth)
 {
@@ -97,6 +98,8 @@ struct DeferredLightingResult
     float clothAnisotropy;
     float clothAnisotropyCross;
     vec2 clothRoughnessAxes;
+    vec3 foliageBacklitDirect;
+    float foliageBacklightFactor;
     vec3 finalColor;
 };
 
@@ -173,6 +176,8 @@ DeferredLightingResult CreateDefaultDeferredLightingResult()
     result.clothAnisotropy = 0.0;
     result.clothAnisotropyCross = 0.0;
     result.clothRoughnessAxes = vec2(0.0);
+    result.foliageBacklitDirect = vec3(0.0);
+    result.foliageBacklightFactor = 0.0;
     result.finalColor = vec3(0.0);
     return result;
 }
@@ -551,6 +556,33 @@ DeferredLightingResult ShadeClothDeferredSurfaceDetailed(
     return result;
 }
 
+DeferredLightingResult ShadeTwoSidedFoliageDeferredSurfaceDetailed(
+    in MaterialSurface surface,
+    in sampler2DArrayShadow inputShadowMap)
+{
+    TwoSidedFoliageLightingResult foliage =
+        ShadeTwoSidedFoliageSurface(surface);
+    DeferredLightingResult result = CreateDefaultDeferredLightingResult();
+    int cascadeIndex = 0;
+    result.shadow = CalculateCsmShadow(
+        inputShadowMap,
+        surface.worldPosition,
+        surface.worldNormal,
+        cascadeIndex);
+    result.shadow *= surface.precomputedShadowFactors.r;
+    result.shadowCascadeIndex = ShadowCascadeDebugValue(cascadeIndex);
+    result.directDiffuse =
+        (foliage.baseLighting.diffuse + foliage.backlitDirect) * result.shadow;
+    result.directSpecular = foliage.baseLighting.specular * result.shadow;
+    result.indirectDiffuse = foliage.indirectDiffuse;
+    result.indirectSpecular = foliage.indirectSpecular;
+    result.foliageBacklitDirect = foliage.backlitDirect * result.shadow;
+    result.foliageBacklightFactor = foliage.backlightFactor;
+    ResolveDeferredLightingComposition(surface, result);
+    result.defaultDiffuseLighting = result.diffuseLighting;
+    return result;
+}
+
 DeferredLightingResult ShadeUnlitDeferredSurfaceDetailed(
     in MaterialSurface surface)
 {
@@ -599,6 +631,10 @@ DeferredLightingResult ShadeDeferredSurfaceDetailed(
             return ShadeEyeDeferredSurfaceDetailed(surface);
         case SHADING_MODEL_CLOTH:
             return ShadeClothDeferredSurfaceDetailed(
+                surface,
+                inputShadowMap);
+        case SHADING_MODEL_TWOSIDED_FOLIAGE:
+            return ShadeTwoSidedFoliageDeferredSurfaceDetailed(
                 surface,
                 inputShadowMap);
         default:

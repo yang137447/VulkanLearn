@@ -33,6 +33,23 @@ namespace
         throw std::runtime_error("Unsupported cullMode: " + cullMode);
     }
 
+    std::string CullModeToString(vk::CullModeFlags cullMode)
+    {
+        if (cullMode == vk::CullModeFlagBits::eNone)
+        {
+            return "None";
+        }
+        if (cullMode == vk::CullModeFlagBits::eFront)
+        {
+            return "Front";
+        }
+        if (cullMode == vk::CullModeFlagBits::eBack)
+        {
+            return "Back";
+        }
+        return "Unsupported";
+    }
+
     bool IsNumericMacroValue(const nlohmann::json& value)
     {
         return value.is_number_integer() || value.is_number_unsigned() || value.is_number_float();
@@ -366,6 +383,7 @@ MaterialInstanceBuildPlan MaterialInstanceValidator::BuildLoadPlan(
     loadPlan.shaderVariantKey.shaderName =
         materialInstanceJson.at("shaderName").get<std::string>();
     loadPlan.shaderVariantKey.renderMode = ResolveRenderMode(materialInstanceJson);
+    loadPlan.cullMode = ParseCullMode(materialInstanceJson);
     loadPlan.surfacePassPipelineContractKey = ResolveSurfacePipelineContractKey(
         passPipelineContractKey,
         loadPlan.shaderVariantKey.renderMode);
@@ -378,6 +396,7 @@ MaterialInstanceBuildPlan MaterialInstanceValidator::BuildLoadPlan(
     MaterialAssetValidator::ValidateRenderStateCombination(
         shadingModel,
         RenderModeToString(loadPlan.shaderVariantKey.renderMode),
+        CullModeToString(loadPlan.cullMode),
         materialInstancePath);
 
     loadPlan.shaderVariantKey.shadingModelMacro =
@@ -407,7 +426,6 @@ MaterialInstanceBuildPlan MaterialInstanceValidator::BuildLoadPlan(
     loadPlan.blendMode = ResolveRenderModeBlendMode(
         loadPlan.shaderVariantKey.renderMode,
         supportsDualSourceBlend);
-    loadPlan.cullMode = ParseCullMode(materialInstanceJson);
     loadPlan.materialFeatureKey = BuildMaterialFeatureKey(
         loadPlan.shaderVariantKey.renderMode,
         loadPlan.cullMode,

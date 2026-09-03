@@ -25,6 +25,7 @@ struct MaterialSurface
     // Hair 的 BaseColor 已在 Material Function 一次性转换成 sigma_a；Forward/Deferred 只消费该快照。
     vec3 hairAbsorption;
     float opacity;
+    float opacityMask;
     vec3 emissiveColor;
     float roughness;
     float metallic;
@@ -39,6 +40,8 @@ struct MaterialSurface
     uint selectiveOutputMask;
     // customData 只属于 GBuffer 编码层，不是 Material Function 的公共输入接口。
     vec4 customData;
+    // 双面 foliage 的面向状态在 Base 阶段捕获，并随 GBuffer 一起进入 Deferred。
+    float foliageFrontFacing;
     vec4 precomputedShadowFactors;
     vec4 worldTangent;
     float anisotropy;
@@ -55,6 +58,7 @@ MaterialSurface CreateDefaultMaterialSurface()
     surface.baseColor = vec3(1.0);
     surface.hairAbsorption = vec3(1.0);
     surface.opacity = 1.0;
+    surface.opacityMask = 1.0;
     surface.emissiveColor = vec3(0.0);
     surface.roughness = 1.0;
     surface.metallic = 0.0;
@@ -66,6 +70,7 @@ MaterialSurface CreateDefaultMaterialSurface()
     surface.shadingModel = SHADING_MODEL_DEFAULT_LIT;
     surface.selectiveOutputMask = 0u;
     surface.customData = vec4(0.0);
+    surface.foliageFrontFacing = 1.0;
     surface.precomputedShadowFactors = vec4(1.0);
     surface.worldTangent = vec4(1.0, 0.0, 0.0, 1.0);
     surface.anisotropy = 0.0;
@@ -90,6 +95,7 @@ MaterialSurface ResolveMaterialSurface(
     surface.baseColor = inputs.baseColor;
     surface.hairAbsorption = inputs.modelInputs.hair.absorption;
     surface.opacity = inputs.opacity;
+    surface.opacityMask = inputs.opacityMask;
     surface.emissiveColor = inputs.emissiveColor;
     surface.roughness = inputs.roughness;
     surface.metallic = inputs.metallic;
@@ -100,6 +106,7 @@ MaterialSurface ResolveMaterialSurface(
     surface.surfaceCoverage =
         inputs.modelInputs.thinTranslucent.surfaceCoverage;
     surface.modelInputs = inputs.modelInputs;
+    surface.foliageFrontFacing = inputs.modelInputs.twoSidedFoliage.frontFacing;
     surface.shadingModel = MATERIAL_SHADING_MODEL;
     surface.precomputedShadowFactors = vec4(1.0);
     surface.anisotropy = surface.shadingModel == SHADING_MODEL_CLOTH
@@ -120,6 +127,14 @@ MaterialSurface ResolveMaterialSurface(
         surface.customData = vec4(
             inputs.modelInputs.subsurface.color,
             inputs.modelInputs.subsurface.weight);
+        surface.selectiveOutputMask |= GBUFFER_HAS_CUSTOM_DATA_MASK;
+    }
+    else if (surface.shadingModel == SHADING_MODEL_TWOSIDED_FOLIAGE)
+    {
+        // ID 6 独占 GBufferD.rgb；不借用普通 Subsurface 的 weight 或其它模型字段。
+        surface.customData = vec4(
+            inputs.modelInputs.twoSidedFoliage.subsurfaceColor,
+            0.0);
         surface.selectiveOutputMask |= GBUFFER_HAS_CUSTOM_DATA_MASK;
     }
     else if (surface.shadingModel == SHADING_MODEL_PREINTEGRATED_SKIN)

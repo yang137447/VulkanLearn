@@ -17,6 +17,7 @@ struct GBufferData
     // C: base color + ambient occlusion.
     vec4 gbufferC;
     // D: shading-model-specific custom data. Valid when GBUFFER_HAS_CUSTOM_DATA_MASK is set.
+    // ID 6 的 D.a 保持 0，后续版本化扩展不得静默改写该保留槽。
     vec4 gbufferD;
     // E: precomputed shadow factors / model-specific visibility data.
     // Skin 像素改存角色光照倍率；Skin decode 时没有可用的预计算阴影输入，回退为 1。
@@ -239,6 +240,14 @@ GBufferData EncodeGBuffer(in MaterialSurface surface, in GBufferPixelData pixelD
             EncodeGBufferPacked(
                 surface.shadingModel,
                 surface.selectiveOutputMask))
+        : surface.shadingModel == SHADING_MODEL_TWOSIDED_FOLIAGE
+        ? vec4(
+            surface.metallic,
+            surface.specular,
+            surface.roughness,
+            EncodeGBufferPacked(
+                surface.shadingModel,
+                surface.selectiveOutputMask))
         : surface.shadingModel == SHADING_MODEL_PREINTEGRATED_SKIN
         ? vec4(
             surface.metallic,
@@ -290,6 +299,8 @@ GBufferData EncodeGBuffer(in MaterialSurface surface, in GBufferPixelData pixelD
             surface.precomputedShadowFactors.r,
             surface.modelInputs.hair.characterLighting.yzw)
         : surface.precomputedShadowFactors;
+    // ID 6 在 Velocity.w 保存面向快照；Velocity.xy 仍保持运动矢量，z 仍由
+    // Base 模板复用为 selection 标记，避免占用 GBufferD.a 保留槽。
     data.gbufferVelocity = surface.shadingModel == SHADING_MODEL_EYE
         ? vec4(
             pixelData.velocity,
@@ -297,6 +308,8 @@ GBufferData EncodeGBuffer(in MaterialSurface surface, in GBufferPixelData pixelD
                 surface.modelInputs.eye.irisRadius,
             surface.modelInputs.eye.limbusWidth /
                 surface.modelInputs.eye.irisRadius)
+        : surface.shadingModel == SHADING_MODEL_TWOSIDED_FOLIAGE
+        ? vec4(pixelData.velocity, 0.0, surface.foliageFrontFacing)
         : vec4(pixelData.velocity, 0.0, 0.0);
     data.gbufferF = surface.shadingModel == SHADING_MODEL_EYE
         ? vec4(
@@ -366,6 +379,16 @@ MaterialSurface DecodeGBufferSurface(in GBufferData data)
         surface.specular = 0.5;
     }
     surface.customData = data.gbufferD;
+    if (surface.shadingModel == SHADING_MODEL_TWOSIDED_FOLIAGE)
+    {
+        // 缺失 custom-data flag 时禁止消费附件中的 stale D，回退为无背光增量。
+        bool validFoliageData =
+            (surface.selectiveOutputMask & GBUFFER_HAS_CUSTOM_DATA_MASK) != 0u;
+        surface.modelInputs.twoSidedFoliage.subsurfaceColor =
+            validFoliageData ? data.gbufferD.rgb : vec3(0.0);
+        surface.foliageFrontFacing =
+            validFoliageData ? data.gbufferVelocity.w : 1.0;
+    }
     if (surface.shadingModel == SHADING_MODEL_CLEAR_COAT)
     {
         // 先恢复相对八面体坐标，再以顶层 worldNormal 为基准重建底层法线。
@@ -408,6 +431,7 @@ MaterialSurface DecodeGBufferSurface(in GBufferData data)
     }
     surface.emissiveColor = data.sceneColorBase.rgb;
     surface.opacity = data.sceneColorBase.a;
+    surface.opacityMask = data.sceneColorBase.a;
     if (surface.shadingModel == SHADING_MODEL_SUBSURFACE)
     {
         surface.opacity = 1.0;

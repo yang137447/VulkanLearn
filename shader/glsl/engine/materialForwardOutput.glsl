@@ -117,6 +117,20 @@ vec4 BuildMaterialForwardOutput(in MaterialSurface surface)
             lighting.clothIndirectSheen,
             lighting.clothIblFallback);
     }
+    if (surface.shadingModel == SHADING_MODEL_TWOSIDED_FOLIAGE)
+    {
+        SetMaterialDebugFoliageData(
+            debugLighting,
+            surface.modelInputs.twoSidedFoliage.subsurfaceColor,
+            surface.worldNormal,
+            lighting.foliageBacklitDirect,
+            lighting.foliageBacklightFactor,
+            lighting.shadow,
+            surface.foliageFrontFacing,
+            surface.opacityMask,
+            1.0,
+            TWO_SIDED_FOLIAGE_DEBUG_GBUFFER_VERSION);
+    }
     return ResolveMaterialDebugView(surface, debugLighting, color);
 }
 

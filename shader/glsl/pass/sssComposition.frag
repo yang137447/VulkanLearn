@@ -44,7 +44,9 @@ void main()
         (uboVP.debugViewMode >= 21 &&
          uboVP.debugViewMode <= 41) ||
         (uboVP.debugViewMode >= 64 &&
-         uboVP.debugViewMode <= 73))
+         uboVP.debugViewMode <= 73) ||
+        (uboVP.debugViewMode >= 90 &&
+         uboVP.debugViewMode <= 99))
     {
         outColor = vec4(
             diffuse.rgb + nonDiffuse + transmission,
