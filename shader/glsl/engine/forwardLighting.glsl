@@ -9,6 +9,7 @@ layout (set = 3, binding = 3) uniform sampler2D clothDirectionalAlbedoLut;
 layout (set = 3, binding = 4) uniform sampler2DArray clothAnisotropicDirectionalAlbedoLut;
 #include "hairLighting.glsl"
 #include "clothLighting.glsl"
+#include "twoSidedFoliageLighting.glsl"
 
 
 // 前向 pass 如果需要阴影，由具体 pass shader 在 include 前定义
@@ -86,6 +87,8 @@ struct ForwardLightingResult
     float clothAnisotropy;
     float clothAnisotropyCross;
     vec2 clothRoughnessAxes;
+    vec3 foliageBacklitDirect;
+    float foliageBacklightFactor;
 };
 
 ForwardLightingResult CreateDefaultForwardLightingResult()
@@ -149,6 +152,8 @@ ForwardLightingResult CreateDefaultForwardLightingResult()
     result.clothAnisotropy = 0.0;
     result.clothAnisotropyCross = 0.0;
     result.clothRoughnessAxes = vec2(0.0);
+    result.foliageBacklitDirect = vec3(0.0);
+    result.foliageBacklightFactor = 0.0;
     return result;
 }
 
@@ -373,6 +378,37 @@ ForwardLightingResult ShadeClothForwardSurface(in MaterialSurface surface)
     result.clothRoughnessAxes = cloth.roughnessAxes;
     return result;
 }
+
+ForwardLightingResult ShadeTwoSidedFoliageForwardSurface(
+    in MaterialSurface surface)
+{
+    TwoSidedFoliageLightingResult foliage =
+        ShadeTwoSidedFoliageSurface(surface);
+    ForwardLightingResult result = CreateDefaultForwardLightingResult();
+#if defined(VL_FORWARD_DECLARE_SHADOWMAP_INPUT)
+    int cascadeIndex = 0;
+    result.shadow = CalculateCsmShadow(
+        shadowMap,
+        surface.worldPosition,
+        surface.worldNormal,
+        cascadeIndex);
+    result.shadowCascadeIndex = ShadowCascadeDebugValue(cascadeIndex);
+#else
+    result.shadow = 1.0;
+#endif
+    result.directDiffuse =
+        (foliage.baseLighting.diffuse + foliage.backlitDirect) * result.shadow;
+    result.directSpecular = foliage.baseLighting.specular * result.shadow;
+    result.directLighting = result.directDiffuse + result.directSpecular;
+    result.indirectDiffuse = foliage.indirectDiffuse;
+    result.indirectSpecular = foliage.indirectSpecular;
+    result.foliageBacklitDirect = foliage.backlitDirect * result.shadow;
+    result.foliageBacklightFactor = foliage.backlightFactor;
+    result.indirectLighting = result.indirectDiffuse + result.indirectSpecular;
+    result.finalColor = surface.emissiveColor + result.directLighting +
+        result.indirectLighting * surface.ambientOcclusion;
+    return result;
+}
 #if MATERIAL_IS_EYE
 ForwardLightingResult ShadeEyeForwardSurface(in MaterialSurface surface)
 {
@@ -427,6 +463,8 @@ ForwardLightingResult ShadeForwardSurfaceDetailed(in MaterialSurface surface)
             return ShadeHairForwardSurface(surface);
         case SHADING_MODEL_CLOTH:
             return ShadeClothForwardSurface(surface);
+        case SHADING_MODEL_TWOSIDED_FOLIAGE:
+            return ShadeTwoSidedFoliageForwardSurface(surface);
 #if MATERIAL_IS_EYE
         case SHADING_MODEL_EYE:
             return ShadeEyeForwardSurface(surface);

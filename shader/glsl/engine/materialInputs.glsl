@@ -27,6 +27,14 @@ struct SubsurfaceMaterialInputs
     float transmissionWeight;
 };
 
+struct TwoSidedFoliageMaterialInputs
+{
+    // UE Legacy Subsurface Color 的线性 RGB 语义；它只染 foliage 背光瓣。
+    vec3 subsurfaceColor;
+    // 片元阶段由 gl_FrontFacing 写入；它不是作者参数，而是双面方向快照。
+    float frontFacing;
+};
+
 struct PreintegratedSkinMaterialInputs
 {
     float skinLutId;
@@ -117,6 +125,7 @@ struct MaterialModelInputs
     HairMaterialInputs hair;
     ClothMaterialInputs cloth;
     EyeMaterialInputs eye;
+    TwoSidedFoliageMaterialInputs twoSidedFoliage;
     float anisotropy;
 };
 
@@ -169,6 +178,8 @@ MaterialInputs CreateDefaultMaterialInputs()
     inputs.modelInputs.subsurface.backscatterWeight = 0.5;
     inputs.modelInputs.subsurface.thickness = 0.01;
     inputs.modelInputs.subsurface.transmissionWeight = 0.0;
+    inputs.modelInputs.twoSidedFoliage.subsurfaceColor = vec3(0.0);
+    inputs.modelInputs.twoSidedFoliage.frontFacing = 1.0;
     inputs.modelInputs.preintegratedSkin.skinLutId = 0.0;
     inputs.modelInputs.preintegratedSkin.thickness = 0.01;
     inputs.modelInputs.preintegratedSkin.thicknessScale = 1.0;

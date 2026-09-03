@@ -1,0 +1,42 @@
+{
+    "name": "M_twoSidedFoliage",
+    "type": "material",
+    "shadingModel": "TwoSidedFoliage",
+    "shaderEvaluation": {
+        "vertex": "M_twoSidedFoliage.vertex.glsl",
+        "surface": "M_twoSidedFoliage.surface.glsl"
+    },
+    "features": {
+        "modifiesMeshPosition": false
+    },
+    "renderStates": {
+        "renderMode": "OpaqueClip",
+        "cullMode": "None"
+    },
+    "macros": {},
+    "parameters": {
+        "u_alphaClipThreshold": {
+            "type": "float",
+            "default": 0.5,
+            "range": {"min": 0.0, "max": 1.0}
+        },
+        "u_tintColor": {
+            "type": "vec4",
+            "default": [1.0, 1.0, 1.0, 1.0]
+        },
+        "u_subsurfaceColor": {
+            "type": "vec3",
+            "default": [0.5, 0.8, 0.35]
+        },
+        "u_pbrFactors": {
+            "type": "vec4",
+            "default": [0.65, 0.0, 1.0, 0.0]
+        },
+        "u_specular": {
+            "type": "float",
+            "default": 0.5,
+            "range": {"min": 0.0, "max": 1.0}
+        }
+    },
+    "textures": {}
+}

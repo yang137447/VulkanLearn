@@ -131,6 +131,24 @@ void main()
             lighting.clothIndirectSheen,
             lighting.clothIblFallback);
     }
+    if (surface.shadingModel == SHADING_MODEL_TWOSIDED_FOLIAGE)
+    {
+        bool foliageCustomDataValid =
+            (surface.selectiveOutputMask & GBUFFER_HAS_CUSTOM_DATA_MASK) != 0u;
+        SetMaterialDebugFoliageData(
+            debugLighting,
+            surface.modelInputs.twoSidedFoliage.subsurfaceColor,
+            surface.worldNormal,
+            lighting.foliageBacklitDirect,
+            lighting.foliageBacklightFactor,
+            lighting.shadow,
+            surface.foliageFrontFacing,
+            surface.opacityMask,
+            foliageCustomDataValid ? 1.0 : 0.0,
+            foliageCustomDataValid
+                ? TWO_SIDED_FOLIAGE_DEBUG_GBUFFER_VERSION
+                : 0.0);
+    }
     debugLighting.localSubsurfaceLighting =
         lighting.localSubsurfaceLighting;
     debugLighting.diffuseBeforeSubsurface =
@@ -147,7 +165,7 @@ void main()
         (uboVP.debugViewMode >= 21 &&
          uboVP.debugViewMode <= 41) ||
         (uboVP.debugViewMode >= 64 &&
-         uboVP.debugViewMode <= 89))
+         uboVP.debugViewMode <= 99))
     {
         outDiffuseLighting = resolvedColor;
         outNonDiffuseLighting = vec4(0.0);

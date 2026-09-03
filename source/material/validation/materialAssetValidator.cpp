@@ -352,6 +352,12 @@ void MaterialAssetValidator::ValidateDefinition(
     RequireObjectField(materialJson, "parameters", materialPath);
     RequireObjectField(materialJson, "textures", materialPath);
     MaterialAssetUtils::ShadingModelToId(materialJson["shadingModel"].get<std::string>());
+    const auto& renderStates = materialJson["renderStates"];
+    ValidateRenderStateCombination(
+        materialJson["shadingModel"].get<std::string>(),
+        renderStates.value("renderMode", std::string("Opaque")),
+        renderStates.value("cullMode", std::string("Back")),
+        materialPath);
     if (materialJson["shadingModel"].get<std::string>() == "Cloth")
     {
         ValidateClothDefinition(materialJson, materialPath);
@@ -647,15 +653,34 @@ void MaterialAssetValidator::ValidateInstanceOverrides(
             renderStateOverrides.end()
         ? renderModeOverride->get<std::string>()
         : materialJson["renderStates"].value("renderMode", std::string("Opaque"));
+    const auto cullModeOverride = renderStateOverrides.find("cullMode");
+    const std::string cullMode = cullModeOverride !=
+            renderStateOverrides.end()
+        ? cullModeOverride->get<std::string>()
+        : materialJson["renderStates"].value("cullMode", std::string("Back"));
     ValidateRenderStateCombination(
         shadingModel,
         renderMode,
+        cullMode,
         materialInstancePath);
 }
 
 void MaterialAssetValidator::ValidateRenderStateCombination(
     std::string_view shadingModel,
     std::string_view renderMode,
+    std::string_view materialInstancePath)
+{
+    ValidateRenderStateCombination(
+        shadingModel,
+        renderMode,
+        std::string_view(),
+        materialInstancePath);
+}
+
+void MaterialAssetValidator::ValidateRenderStateCombination(
+    std::string_view shadingModel,
+    std::string_view renderMode,
+    std::string_view cullMode,
     std::string_view materialInstancePath)
 {
     if (shadingModel.empty())
@@ -715,6 +740,22 @@ void MaterialAssetValidator::ValidateRenderStateCombination(
         throw std::runtime_error(
             "ThinTranslucent shadingModel and renderMode must be selected together: " +
             std::string(materialInstancePath));
+    }
+
+    if (shadingModel == "TwoSidedFoliage")
+    {
+        if (renderMode != "Opaque" && renderMode != "OpaqueClip")
+        {
+            throw std::runtime_error(
+                "TwoSidedFoliage only supports Opaque or OpaqueClip renderMode: " +
+                std::string(materialInstancePath));
+        }
+        if (!cullMode.empty() && cullMode != "None")
+        {
+            throw std::runtime_error(
+                "TwoSidedFoliage requires cullMode None: " +
+                std::string(materialInstancePath));
+        }
     }
 }
 
