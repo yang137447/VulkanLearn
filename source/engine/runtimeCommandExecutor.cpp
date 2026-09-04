@@ -319,6 +319,24 @@ void RuntimeCommandExecutor::ExecuteCommand(
         renderSystem.SetEnvironmentIntensity(command.floatValue);
         diagnostics.ReportInfo("Environment intensity set to " + std::to_string(command.floatValue));
         break;
+    case RuntimeCommandType::SetSunIntensity:
+    {
+        const std::shared_ptr<World>& activeWorld =
+            worldManager.GetActiveWorld();
+        if (!activeWorld || !activeWorld->GetPrimaryDirectionalLight())
+        {
+            diagnostics.ReportWarning(
+                "Sun intensity ignored because the active World has no directionalLight.");
+            break;
+        }
+
+        // 主太阳沿用 WorldBuilder 的约定：场景中第一个 directionalLight。
+        activeWorld->GetPrimaryDirectionalLight()->SetIntensity(
+            command.floatValue);
+        diagnostics.ReportInfo(
+            "Sun intensity set to " + std::to_string(command.floatValue));
+        break;
+    }
     case RuntimeCommandType::SetProceduralSkyParameters:
         ApplyProceduralSkyParameters(
             command,

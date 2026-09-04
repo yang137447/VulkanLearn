@@ -30,6 +30,7 @@ enum class UiActionType
     SetCsmShadowCascadeBiasDistribution,
     SaveCsmSettingsToScene,
     SetEnvironmentIntensity,
+    SetSunIntensity,
     SetSpeedTreeStrength,
     SetSpeedTreeGustingEnabled,
     ForceSpeedTreeGust,

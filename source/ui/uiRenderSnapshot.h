@@ -64,6 +64,7 @@ struct UiViewModelSnapshot
     float csmShadowSlopeBias = 0.5f;
     float csmShadowCascadeBiasDistribution = 1.0f;
     float environmentIntensity = 1.0f;
+    float sunIntensity = 1.0f;
     uint64_t environmentActiveGeneration = 0;
     uint64_t environmentPendingGeneration = 0;
     std::string environmentUpdateStage;

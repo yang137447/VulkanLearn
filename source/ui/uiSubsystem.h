@@ -330,6 +330,9 @@ private:
         Rml::String environmentLabel;
         Rml::String environmentValue;
         float environmentIntensity = 1.0f;
+        Rml::String sunLabel;
+        Rml::String sunValue;
+        float sunIntensity = 1.0f;
         Rml::String vegetationHeading;
         Rml::String windStrengthLabel;
         Rml::String windStrengthValue;
@@ -422,6 +425,7 @@ private:
     void OnCsmShadowCascadeBiasDistributionChanged(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
     void OnSaveCsmSettingsToScene(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
     void OnEnvironmentIntensityChanged(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
+    void OnSunIntensityChanged(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
     void OnSpeedTreeStrengthChanged(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
     void OnSpeedTreeGustingSelected(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
     void OnForceSpeedTreeGust(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);

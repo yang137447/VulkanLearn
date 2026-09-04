@@ -80,6 +80,7 @@ public:
     const std::unordered_map<std::string, WorldMeshObject>& GetMeshObjects() const { return meshObjects; }
     const std::unordered_map<std::string, SpeedTreeWindProfile>& GetSpeedTreeWindProfiles() const { return speedTreeWindProfiles; }
     const std::unordered_map<std::string, std::shared_ptr<DirectionalLight>>& GetDirectionalLights() const { return directionalLights; }
+    const std::shared_ptr<DirectionalLight>& GetPrimaryDirectionalLight() const;
     const std::unordered_map<std::string, std::shared_ptr<PointLight>>& GetPointLights() const { return pointLights; }
     const std::unordered_map<std::string, std::shared_ptr<SpotLight>>& GetSpotLights() const { return spotLights; }
 
@@ -93,6 +94,7 @@ private:
     std::unordered_map<std::string, WorldMeshObject> meshObjects;
     std::unordered_map<std::string, SpeedTreeWindProfile> speedTreeWindProfiles;
     std::unordered_map<std::string, std::shared_ptr<DirectionalLight>> directionalLights;
+    std::string primaryDirectionalLightName;
     std::unordered_map<std::string, std::shared_ptr<PointLight>> pointLights;
     std::unordered_map<std::string, std::shared_ptr<SpotLight>> spotLights;
 };

@@ -27,8 +27,10 @@
 #include "render/resource/resourceRetireQueue.h"
 #include "renderGraph.h"
 #include "renderSystem.h"
+#include "sceneNode.h"
 #include "shaderCompiler.h"
 #include "world/loading/worldTransitionCoordinator.h"
+#include "world/world.h"
 #include "ui/uiRenderSnapshot.h"
 
 namespace VL
@@ -672,6 +674,10 @@ void EngineLoop::ApplyQueuedUiActions()
             command.type = RuntimeCommandType::SetEnvironmentIntensity;
             command.floatValue = action.floatValue;
             break;
+        case UiActionType::SetSunIntensity:
+            command.type = RuntimeCommandType::SetSunIntensity;
+            command.floatValue = action.floatValue;
+            break;
         case UiActionType::SetSpeedTreeStrength:
             command.type = RuntimeCommandType::SetSpeedTreeStrength;
             command.floatValue = action.floatValue;
@@ -767,6 +773,14 @@ void EngineLoop::UpdateUiViewModel(float deltaTime)
     snapshot.csmShadowCascadeBiasDistribution =
         csmSettings.shadowCascadeBiasDistribution;
     snapshot.environmentIntensity = renderSystem.GetEnvironmentIntensity();
+    snapshot.sunIntensity = 1.0f;
+    const std::shared_ptr<World>& uiActiveWorld =
+        GetSubsystems().GetWorldManager().GetActiveWorld();
+    if (uiActiveWorld && uiActiveWorld->GetPrimaryDirectionalLight())
+    {
+        snapshot.sunIntensity =
+            uiActiveWorld->GetPrimaryDirectionalLight()->GetIntensity();
+    }
     const EnvironmentUpdateDiagnostics environmentDiagnostics =
         renderSystem.GetEnvironmentUpdateDiagnostics();
     snapshot.environmentActiveGeneration = environmentDiagnostics.progress.activeGeneration;

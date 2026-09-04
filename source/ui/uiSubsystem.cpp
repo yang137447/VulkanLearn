@@ -1163,6 +1163,9 @@ RuntimeResult<void> UiSubsystem::InitializeDataModel()
     bound = constructor.Bind("environment_label", &bindingData.environmentLabel) && bound;
     bound = constructor.Bind("environment_value", &bindingData.environmentValue) && bound;
     bound = constructor.Bind("environment_intensity", &bindingData.environmentIntensity) && bound;
+    bound = constructor.Bind("sun_label", &bindingData.sunLabel) && bound;
+    bound = constructor.Bind("sun_value", &bindingData.sunValue) && bound;
+    bound = constructor.Bind("sun_intensity", &bindingData.sunIntensity) && bound;
     bound = constructor.Bind("vegetation_heading", &bindingData.vegetationHeading) && bound;
     bound = constructor.Bind("wind_strength_label", &bindingData.windStrengthLabel) && bound;
     bound = constructor.Bind("wind_strength_value", &bindingData.windStrengthValue) && bound;
@@ -1203,6 +1206,7 @@ RuntimeResult<void> UiSubsystem::InitializeDataModel()
     bound = constructor.BindEventCallback("csm_shadow_cascade_bias_distribution_changed", &UiSubsystem::OnCsmShadowCascadeBiasDistributionChanged, this) && bound;
     bound = constructor.BindEventCallback("save_csm_to_scene", &UiSubsystem::OnSaveCsmSettingsToScene, this) && bound;
     bound = constructor.BindEventCallback("environment_intensity_changed", &UiSubsystem::OnEnvironmentIntensityChanged, this) && bound;
+    bound = constructor.BindEventCallback("sun_intensity_changed", &UiSubsystem::OnSunIntensityChanged, this) && bound;
     bound = constructor.BindEventCallback("speedtree_strength_changed", &UiSubsystem::OnSpeedTreeStrengthChanged, this) && bound;
     bound = constructor.BindEventCallback("set_speedtree_gusting", &UiSubsystem::OnSpeedTreeGustingSelected, this) && bound;
     bound = constructor.BindEventCallback("force_speedtree_gust", &UiSubsystem::OnForceSpeedTreeGust, this) && bound;
@@ -1980,6 +1984,9 @@ void UiSubsystem::SyncBindingData()
     bindingData.environmentLabel = Localize("control.environment");
     bindingData.environmentIntensity = lastViewModel.environmentIntensity;
     bindingData.environmentValue = FormatFloat(lastViewModel.environmentIntensity);
+    bindingData.sunLabel = Localize("control.sun_intensity");
+    bindingData.sunIntensity = lastViewModel.sunIntensity;
+    bindingData.sunValue = FormatFloat(lastViewModel.sunIntensity);
     bindingData.vegetationHeading = Localize("section.vegetation");
     bindingData.windStrengthLabel = Localize("control.wind_strength");
     bindingData.speedTreeStrength = lastViewModel.speedTreeStrength;
@@ -3108,6 +3115,17 @@ void UiSubsystem::OnEnvironmentIntensityChanged(Rml::DataModelHandle, Rml::Event
         UiActionType::SetEnvironmentIntensity,
         event.GetParameter<float>("value", lastViewModel.environmentIntensity),
         lastViewModel.environmentIntensity);
+}
+
+void UiSubsystem::OnSunIntensityChanged(
+    Rml::DataModelHandle,
+    Rml::Event& event,
+    const Rml::VariantList&)
+{
+    QueueChangedFloatAction(
+        UiActionType::SetSunIntensity,
+        event.GetParameter<float>("value", lastViewModel.sunIntensity),
+        lastViewModel.sunIntensity);
 }
 
 void UiSubsystem::OnSpeedTreeStrengthChanged(

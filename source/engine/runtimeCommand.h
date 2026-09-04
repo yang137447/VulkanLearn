@@ -22,6 +22,7 @@ enum class RuntimeCommandType
     SetCameraPose,
     GetCameraState,
     SetEnvironmentIntensity,
+    SetSunIntensity,
     SetProceduralSkyParameters,
     SetSpeedTreeStrength,
     SetSpeedTreeGustingEnabled,

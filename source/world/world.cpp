@@ -43,7 +43,18 @@ void World::AddSpeedTreeWindProfile(SpeedTreeWindProfile profile)
 
 void World::AddDirectionalLight(std::string name, std::shared_ptr<DirectionalLight> light)
 {
+    if (directionalLights.empty())
+    {
+        primaryDirectionalLightName = name;
+    }
     directionalLights[std::move(name)] = std::move(light);
+}
+
+const std::shared_ptr<DirectionalLight>& World::GetPrimaryDirectionalLight() const
+{
+    static const std::shared_ptr<DirectionalLight> empty;
+    const auto lightIt = directionalLights.find(primaryDirectionalLightName);
+    return lightIt != directionalLights.end() ? lightIt->second : empty;
 }
 
 void World::AddPointLight(std::string name, std::shared_ptr<PointLight> light)
