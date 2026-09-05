@@ -83,7 +83,7 @@ namespace
     {
         if (type == "vec2") return 2;
         if (type == "vec3") return 3;
-        if (type == "vec4") return 4;
+        if (type == "vec4" || type == "color") return 4;
         return 1;
     }
 
@@ -236,7 +236,7 @@ namespace
         std::string_view materialPath)
     {
         const auto& parameters = materialJson.at("parameters");
-        RequireClothParameter(parameters, "u_clothSheenColor", "vec4", materialPath);
+        RequireClothParameter(parameters, "u_clothSheenColor", "color", materialPath);
         RequireClothParameter(parameters, "u_clothSheenRoughness", "float", materialPath);
         RequireClothParameter(parameters, "u_clothAnisotropy", "float", materialPath);
         RequireClothParameter(parameters, "u_clothAnisotropyCross", "float", materialPath);

@@ -14,7 +14,7 @@
 namespace VL::EditorUi
 {
 
-enum class EditorParameterType : uint8_t { Float, Vec2, Vec3, Vec4 };
+enum class EditorParameterType : uint8_t { Float, Vec2, Vec3, Vec4, Color };
 
 struct EditorParameterValue
 {

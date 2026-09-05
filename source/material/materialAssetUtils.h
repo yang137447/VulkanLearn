@@ -140,7 +140,8 @@ namespace MaterialAssetUtils
 
     inline bool IsMaterialParameterType(std::string_view type)
     {
-        return type == "float" || type == "vec2" || type == "vec3" || type == "vec4";
+        return type == "float" || type == "vec2" || type == "vec3" ||
+            type == "vec4" || type == "color";
     }
 
     inline bool MaterialParameterValueMatchesType(
@@ -151,7 +152,7 @@ namespace MaterialAssetUtils
         if (!value.is_array()) return false;
         if (type == "vec2") return value.size() == 2;
         if (type == "vec3") return value.size() == 3;
-        if (type == "vec4") return value.size() == 4;
+        if (type == "vec4" || type == "color") return value.size() == 4;
         return false;
     }
 

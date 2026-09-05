@@ -21,6 +21,8 @@ namespace VL::Editor::Persistence
                 return 3;
             case MaterialInstanceNumericType::Vec4:
                 return 4;
+            case MaterialInstanceNumericType::Color:
+                return 4;
             }
             return 0;
         }
@@ -289,6 +291,8 @@ namespace VL::Editor::Persistence
             return MaterialInstanceNumericType::Vec3;
         case 3:
             return MaterialInstanceNumericType::Vec4;
+        case 4:
+            return MaterialInstanceNumericType::Color;
         default:
             return MaterialInstanceNumericType::Float;
         }
@@ -306,6 +310,8 @@ namespace VL::Editor::Persistence
             return "vec3";
         case MaterialInstanceNumericType::Vec4:
             return "vec4";
+        case MaterialInstanceNumericType::Color:
+            return "color";
         }
         return "unknown";
     }
@@ -317,6 +323,7 @@ namespace VL::Editor::Persistence
         if (type == "vec2") return MaterialInstanceNumericType::Vec2;
         if (type == "vec3") return MaterialInstanceNumericType::Vec3;
         if (type == "vec4") return MaterialInstanceNumericType::Vec4;
+        if (type == "color") return MaterialInstanceNumericType::Color;
         throw MaterialInstancePersistenceError(
             "Unsupported material instance parameter type: " + std::string(type));
     }
@@ -341,6 +348,8 @@ namespace VL::Editor::Persistence
             return std::array<float, 3>{components[0], components[1], components[2]};
         case MaterialInstanceNumericType::Vec4:
             return components;
+        case MaterialInstanceNumericType::Color:
+            return MaterialInstanceColor{components};
         case MaterialInstanceNumericType::Float:
             break;
         }
@@ -357,6 +366,11 @@ namespace VL::Editor::Persistence
                 if constexpr (std::is_same_v<ValueType, float>)
                 {
                     return SerializeFloat(typedValue);
+                }
+                else if constexpr (std::is_same_v<ValueType, MaterialInstanceColor>)
+                {
+                    return SerializeMaterialInstanceNumericValue(
+                        MaterialInstanceNumericValue{typedValue.components});
                 }
                 else
                 {
@@ -384,7 +398,12 @@ namespace VL::Editor::Persistence
             {
                 using LeftType = std::decay_t<decltype(leftValue)>;
                 using RightType = std::decay_t<decltype(rightValue)>;
-                if constexpr (std::is_same_v<LeftType, RightType>)
+                if constexpr (std::is_same_v<LeftType, RightType> &&
+                    std::is_same_v<LeftType, MaterialInstanceColor>)
+                {
+                    return leftValue.components == rightValue.components;
+                }
+                else if constexpr (std::is_same_v<LeftType, RightType>)
                 {
                     return leftValue == rightValue;
                 }

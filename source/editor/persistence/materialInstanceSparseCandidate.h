@@ -29,13 +29,24 @@ namespace VL::Editor::Persistence
         Vec2,
         Vec3,
         Vec4,
+        Color,
+    };
+
+    struct MaterialInstanceColor
+    {
+        std::array<float, 4> components{};
+        bool operator==(const MaterialInstanceColor& other) const noexcept
+        {
+            return components == other.components;
+        }
     };
 
     using MaterialInstanceNumericValue = std::variant<
         float,
         std::array<float, 2>,
         std::array<float, 3>,
-        std::array<float, 4>>;
+        std::array<float, 4>,
+        MaterialInstanceColor>;
 
     using MaterialInstanceParameterMap =
         std::map<std::string, MaterialInstanceNumericValue>;

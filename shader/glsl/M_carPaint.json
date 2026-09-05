@@ -27,7 +27,7 @@
             "default": 0.5
         },
         "u_tintColor": {
-            "type": "vec4",
+            "type": "color",
             "default": [0.0, 0.3099, 1.0, 1.0]
         },
         "u_pbrFactors": {

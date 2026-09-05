@@ -334,6 +334,7 @@ EditorMaterialParameterType GetEditorMaterialParameterType(const EditorMaterialP
         if constexpr (std::is_same_v<T, float>) return EditorMaterialParameterType::Float;
         if constexpr (std::is_same_v<T, EditorVec2>) return EditorMaterialParameterType::Vec2;
         if constexpr (std::is_same_v<T, EditorVec3>) return EditorMaterialParameterType::Vec3;
+        if constexpr (std::is_same_v<T, EditorColor>) return EditorMaterialParameterType::Color;
         return EditorMaterialParameterType::Vec4;
     }, value);
 }
@@ -344,6 +345,8 @@ bool IsFiniteEditorMaterialParameterValue(const EditorMaterialParameterValue& va
         using T = std::decay_t<decltype(item)>;
         if constexpr (std::is_same_v<T, float>)
             return std::isfinite(item);
+        else if constexpr (std::is_same_v<T, EditorColor>)
+            return FiniteArray(item.components);
         else
             return FiniteArray(item);
     }, value);

@@ -16,7 +16,7 @@
     "macros": {},
     "parameters": {
         "u_reloadBatchColor": {
-            "type": "vec4",
+            "type": "color",
             "default": [0.15, 0.7, 0.35, 1.0]
         }
     },

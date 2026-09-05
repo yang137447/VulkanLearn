@@ -39,7 +39,7 @@ ParameterTypeLayout GetParameterTypeLayout(std::string_view type)
     {
         return {12u, 16u};
     }
-    if (type == "vec4")
+    if (type == "vec4" || type == "color")
     {
         return {16u, 16u};
     }
@@ -48,7 +48,7 @@ ParameterTypeLayout GetParameterTypeLayout(std::string_view type)
 
 uint32_t ParameterTypeRank(std::string_view type)
 {
-    if (type == "vec4") return 0;
+    if (type == "vec4" || type == "color") return 0;
     if (type == "vec3") return 1;
     if (type == "vec2") return 2;
     return 3;
@@ -105,6 +105,11 @@ MaterialDescriptorSchema MaterialDescriptorSchema::Build(
         MaterialParameterSchemaEntry entry;
         entry.name = name;
         entry.glslType = parameterJson.at("type").get<std::string>();
+        if (entry.glslType == "color")
+        {
+            // color 仅是 authoring 语义，GPU ABI 继续复用 vec4。
+            entry.glslType = "vec4";
+        }
         if (parameterJson.contains("channels"))
         {
             static constexpr std::array<std::string_view, 4> componentNames = {

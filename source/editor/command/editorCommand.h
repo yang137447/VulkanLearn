@@ -158,14 +158,23 @@ enum class EditorMaterialParameterType
     Float,
     Vec2,
     Vec3,
-    Vec4
+    Vec4,
+    Color
 };
 
 using EditorVec2 = std::array<float, 2>;
 using EditorVec3 = std::array<float, 3>;
 using EditorVec4 = std::array<float, 4>;
+struct EditorColor
+{
+    std::array<float, 4> components{};
+    bool operator==(const EditorColor& other) const noexcept
+    {
+        return components == other.components;
+    }
+};
 using EditorMaterialParameterValue =
-    std::variant<float, EditorVec2, EditorVec3, EditorVec4>;
+    std::variant<float, EditorVec2, EditorVec3, EditorVec4, EditorColor>;
 
 struct EditorNoPayload
 {

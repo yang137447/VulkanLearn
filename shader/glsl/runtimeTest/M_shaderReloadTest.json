@@ -18,7 +18,7 @@
     },
     "parameters": {
         "u_reloadTestColor": {
-            "type": "vec4",
+            "type": "color",
             "default": [0.2, 0.5, 0.9, 1.0]
         },
         "u_alphaClipThreshold": {

@@ -435,9 +435,14 @@ reflection 决定各 Pass 的 active 使用子集。
 - 自动生成整套 pipeline state
 - 复杂材质编辑器
 
-第一版参数类型只支持 `float`、`vec2`、`vec3`、`vec4`，贴图只支持
+参数类型支持 `float`、`vec2`、`vec3`、`vec4`、`color`，贴图只支持
 `sampler2D`。更多 descriptor 类型、Bindless Material Table 与动态数组不在
 当前合同内。
+
+`color` 是编辑器 authoring 语义，不是新的 GLSL 类型：它在 JSON、编辑器和
+持久化层保持独立类型，但 GPU UBO 与 shader 侧映射为 `vec4`。RGB 运行时和 MI
+存储使用 Linear，ImGui 调色板以 sRGB 显示和编辑；Alpha 不做色彩空间转换。
+普通 `vec4` 不受影响，仍保持原始数值语义。
 
 ## 一句话结论
 

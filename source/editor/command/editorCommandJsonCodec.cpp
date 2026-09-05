@@ -375,6 +375,7 @@ EditorMaterialParameterType DecodeParameterType(
     if (name == "vec2") return EditorMaterialParameterType::Vec2;
     if (name == "vec3") return EditorMaterialParameterType::Vec3;
     if (name == "vec4") return EditorMaterialParameterType::Vec4;
+    if (name == "color") return EditorMaterialParameterType::Color;
     ThrowCodecError(
         EditorErrorCode::InvalidPayload,
         "material.set_parameter.type",
@@ -505,6 +506,18 @@ Json EncodeParameterValue(
                     "value must be finite");
                 result.push_back(item);
             }
+            else if constexpr (std::is_same_v<ValueType, EditorColor>)
+            {
+                for (const float component : item.components)
+                {
+                    Require(
+                        std::isfinite(component),
+                        EditorErrorCode::InvalidPayload,
+                        context,
+                        "value components must be finite");
+                    result.push_back(component);
+                }
+            }
             else
             {
                 for (const float component : item)
@@ -567,6 +580,12 @@ EditorMaterialParameterValue DecodeParameterValue(
             components[1],
             components[2],
             components[3]};
+    case EditorMaterialParameterType::Color:
+        return EditorColor{{
+            components[0],
+            components[1],
+            components[2],
+            components[3]}};
     }
     ThrowCodecError(
         EditorErrorCode::InvalidPayload,
@@ -935,7 +954,8 @@ Json EncodePayload(
                 ? "float"
                 : value->parameterType == EditorMaterialParameterType::Vec2
                     ? "vec2"
-                    : value->parameterType == EditorMaterialParameterType::Vec3 ? "vec3" : "vec4";
+                    : value->parameterType == EditorMaterialParameterType::Vec3 ? "vec3"
+                    : value->parameterType == EditorMaterialParameterType::Vec4 ? "vec4" : "color";
         return Json{
             {"assetPath", NormalizeRelativeAssetPath(value->assetPath, "material.set_parameter.assetPath")},
             {"parameter", value->parameter},

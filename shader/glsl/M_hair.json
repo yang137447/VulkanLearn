@@ -25,7 +25,7 @@
             "range": {"min": 0.0, "max": 1.0}
         },
         "u_tintColor": {
-            "type": "vec4",
+            "type": "color",
             "default": [
                 0.18,
                 0.04,

@@ -9,7 +9,7 @@
   "macros": {},
   "parameters": {
     "u_tintColor": {
-      "type": "vec4",
+      "type": "color",
       "default": [
         1.0,
         1.0,

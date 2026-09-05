@@ -391,6 +391,8 @@ MaterialInstanceDocumentService::ToEditorParameterType(
         return EditorMaterialParameterType::Vec3;
     case PersistenceNumericType::Vec4:
         return EditorMaterialParameterType::Vec4;
+    case PersistenceNumericType::Color:
+        return EditorMaterialParameterType::Color;
     }
     return EditorMaterialParameterType::Float;
 }
@@ -409,6 +411,8 @@ MaterialInstanceDocumentService::ToPersistenceParameterType(
         return PersistenceNumericType::Vec3;
     case EditorMaterialParameterType::Vec4:
         return PersistenceNumericType::Vec4;
+    case EditorMaterialParameterType::Color:
+        return PersistenceNumericType::Color;
     }
     return PersistenceNumericType::Float;
 }
@@ -420,7 +424,15 @@ MaterialInstanceDocumentService::ToEditorValue(
     return std::visit(
         [](const auto& typedValue) -> EditorMaterialParameterValue
         {
-            return typedValue;
+            using ValueType = std::decay_t<decltype(typedValue)>;
+            if constexpr (std::is_same_v<ValueType, Persistence::MaterialInstanceColor>)
+            {
+                return EditorColor{typedValue.components};
+            }
+            else
+            {
+                return typedValue;
+            }
         },
         value);
 }
@@ -432,7 +444,15 @@ MaterialInstanceDocumentService::ToPersistenceValue(
     return std::visit(
         [](const auto& typedValue) -> PersistenceNumericValue
         {
-            return typedValue;
+            using ValueType = std::decay_t<decltype(typedValue)>;
+            if constexpr (std::is_same_v<ValueType, EditorColor>)
+            {
+                return Persistence::MaterialInstanceColor{typedValue.components};
+            }
+            else
+            {
+                return typedValue;
+            }
         },
         value);
 }
@@ -1480,7 +1500,16 @@ void ValidateEditorParameterRange(
                 [](const auto& typedValue)
                     -> Persistence::MaterialInstanceNumericValue
                 {
-                    return typedValue;
+                    using ValueType = std::decay_t<decltype(typedValue)>;
+                    if constexpr (std::is_same_v<ValueType, EditorColor>)
+                    {
+                        return Persistence::MaterialInstanceColor{
+                            typedValue.components};
+                    }
+                    else
+                    {
+                        return typedValue;
+                    }
                 },
                 value));
 

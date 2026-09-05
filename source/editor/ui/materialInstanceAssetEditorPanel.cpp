@@ -14,7 +14,16 @@ namespace VL::EditorUi
 
 uint32_t EditorParameterValue::ComponentCount() const
 {
-    return static_cast<uint32_t>(type) + 1u;
+    switch (type)
+    {
+    case EditorParameterType::Float: return 1;
+    case EditorParameterType::Vec2: return 2;
+    case EditorParameterType::Vec3: return 3;
+    case EditorParameterType::Vec4:
+    case EditorParameterType::Color:
+        return 4;
+    }
+    return 1;
 }
 
 namespace
@@ -27,6 +36,7 @@ const char* TypeName(EditorParameterType type)
     case EditorParameterType::Vec2: return "vec2";
     case EditorParameterType::Vec3: return "vec3";
     case EditorParameterType::Vec4: return "vec4";
+    case EditorParameterType::Color: return "color";
     }
     return "unknown";
 }
@@ -39,6 +49,7 @@ uint32_t ParameterComponentCount(EditorParameterType type)
     case EditorParameterType::Vec2: return 2;
     case EditorParameterType::Vec3: return 3;
     case EditorParameterType::Vec4: return 4;
+    case EditorParameterType::Color: return 4;
     }
     return 1;
 }
@@ -54,6 +65,26 @@ struct SliderRange
     float minValue = -1.0f;
     float maxValue = 1.0f;
 };
+
+float LinearToSrgb(float value)
+{
+    // 调色板面向 sRGB 显示；扩展公式保留 HDR 线性值，避免编辑 emissive 时截断。
+    return value <= 0.0031308f
+        ? value * 12.92f
+        : 1.055f * std::pow(value, 1.0f / 2.4f) - 0.055f;
+}
+
+float SrgbToLinear(float value)
+{
+    return value <= 0.04045f
+        ? value / 12.92f
+        : std::pow((value + 0.055f) / 1.055f, 2.4f);
+}
+
+unsigned int ToSrgbHexByte(float value)
+{
+    return static_cast<unsigned int>(std::round(std::clamp(value, 0.0f, 1.0f) * 255.0f));
+}
 
 SliderRange ResolveSliderRange(
     const EditorParameterSnapshot& parameter,
@@ -168,6 +199,7 @@ VL::EditorMaterialParameterType ToCommandType(EditorParameterType type)
     case EditorParameterType::Vec2: return VL::EditorMaterialParameterType::Vec2;
     case EditorParameterType::Vec3: return VL::EditorMaterialParameterType::Vec3;
     case EditorParameterType::Vec4: return VL::EditorMaterialParameterType::Vec4;
+    case EditorParameterType::Color: return VL::EditorMaterialParameterType::Color;
     }
     return VL::EditorMaterialParameterType::Float;
 }
@@ -184,6 +216,8 @@ VL::EditorMaterialParameterValue ToCommandValue(const EditorParameterValue& valu
         return VL::EditorVec3{value.values[0], value.values[1], value.values[2]};
     case EditorParameterType::Vec4:
         return VL::EditorVec4{value.values[0], value.values[1], value.values[2], value.values[3]};
+    case EditorParameterType::Color:
+        return VL::EditorColor{{value.values[0], value.values[1], value.values[2], value.values[3]}};
     }
     return 0.0f;
 }
@@ -907,6 +941,103 @@ void MaterialInstanceAssetEditorPanel::RenderParameter(
     bool editFinished = false;
 
     const uint32_t componentCount = ParameterComponentCount(parameter.type);
+    if (parameter.type == EditorParameterType::Color)
+    {
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::TextUnformatted(parameter.name.c_str());
+        if (!parameter.active)
+        {
+            ImGui::SameLine();
+            ImGui::TextDisabled("(inactive)");
+        }
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+        {
+            ImGui::SetTooltip(
+                "Type: color (linear storage, sRGB editor)\nSource: %s\n%s",
+                overridden ? "MI override" : "M_ default",
+                parameter.description.c_str());
+        }
+        ImGui::TableSetColumnIndex(1);
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        float srgbColor[4] = {0.0f, 0.0f, 0.0f, edited.values[3]};
+        for (int componentIndex = 0; componentIndex < 3; ++componentIndex)
+        {
+            srgbColor[componentIndex] = LinearToSrgb(edited.values[componentIndex]);
+        }
+        const ImVec4 previewColor(
+            srgbColor[0], srgbColor[1], srgbColor[2], srgbColor[3]);
+        const float swatchSize = ImGui::GetFrameHeight();
+        const float colorColumnStartX = ImGui::GetCursorPosX();
+        const float colorColumnWidth = ImGui::GetContentRegionAvail().x;
+        ImGui::Text(
+            "#%02X%02X%02X%02X",
+            ToSrgbHexByte(srgbColor[0]),
+            ToSrgbHexByte(srgbColor[1]),
+            ToSrgbHexByte(srgbColor[2]),
+            ToSrgbHexByte(srgbColor[3]));
+        ImGui::SameLine();
+        ImGui::SetCursorPosX(colorColumnStartX + colorColumnWidth - swatchSize);
+        if (ImGui::ColorButton(
+                "##color_swatch",
+                previewColor,
+                ImGuiColorEditFlags_AlphaPreviewHalf | ImGuiColorEditFlags_NoTooltip,
+                ImVec2(swatchSize, swatchSize)))
+        {
+            ImGui::OpenPopup("ColorPicker");
+        }
+        if (ImGui::BeginPopup("ColorPicker"))
+        {
+            if (ImGui::ColorPicker4(
+                    "##color_picker",
+                    srgbColor,
+                    ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR |
+                        ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_DisplayRGB))
+            {
+                for (int componentIndex = 0; componentIndex < 3; ++componentIndex)
+                {
+                    edited.values[componentIndex] = SrgbToLinear(srgbColor[componentIndex]);
+                }
+                edited.values[3] = srgbColor[3];
+                changed = true;
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit())
+            {
+                editFinished = true;
+            }
+            ImGui::EndPopup();
+        }
+
+        ImGui::TableSetColumnIndex(2);
+        ImGui::BeginDisabled(!overridden);
+        if (overridden)
+        {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_Header));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_HeaderHovered));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImGui::GetStyleColorVec4(ImGuiCol_HeaderActive));
+        }
+        if (DrawCompactResetButton())
+        {
+            Submit(MakeClearParameterCommand(document, parameter.name));
+        }
+        if (overridden) ImGui::PopStyleColor(3);
+        ImGui::EndDisabled();
+        if (changed)
+        {
+            pendingParameterEditAssetPath = document.assetPath;
+            pendingParameterEditRevision = document.revision;
+            pendingParameterEdits[parameter.name] = edited;
+        }
+        const auto pending = pendingParameterEdits.find(parameter.name);
+        if (editFinished && (changed || pending != pendingParameterEdits.end()) &&
+            std::all_of(edited.values.begin(), edited.values.begin() + edited.ComponentCount(),
+                [](float value) { return std::isfinite(value); }))
+        {
+            Submit(MakeSetParameterCommand(document, parameter, edited));
+        }
+        ImGui::PopID();
+        return;
+    }
     if (componentCount > 1)
     {
         ImGui::TableNextRow();

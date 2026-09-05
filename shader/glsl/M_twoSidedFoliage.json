@@ -21,12 +21,12 @@
             "range": {"min": 0.0, "max": 1.0}
         },
         "u_tintColor": {
-            "type": "vec4",
+            "type": "color",
             "default": [1.0, 1.0, 1.0, 1.0]
         },
         "u_subsurfaceColor": {
-            "type": "vec3",
-            "default": [0.5, 0.8, 0.35]
+            "type": "color",
+            "default": [0.5, 0.8, 0.35, 1.0]
         },
         "u_pbrFactors": {
             "type": "vec4",

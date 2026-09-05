@@ -159,6 +159,33 @@ void TestChannelsValidation()
         "scalar channels metadata was accepted");
 }
 
+void TestColorUsesVec4Layout()
+{
+    nlohmann::json materialJson = BuildMaterialDefinition();
+    materialJson["parameters"]["u_color"] = {
+        {"type", "color"},
+        {"default", {0.25, 0.5, 0.75, 1.0}}};
+
+    MaterialAssetValidator::ValidateDefinition(
+        materialJson,
+        "shader/glsl/M_schemaTest.json");
+    const VL::MaterialDescriptorSchema schema =
+        VL::MaterialDescriptorSchema::Build(
+            materialJson,
+            "shader/glsl/M_schemaTest.json");
+
+    const auto colorIt = std::find_if(
+        schema.GetParameters().begin(),
+        schema.GetParameters().end(),
+        [](const VL::MaterialParameterSchemaEntry& entry) {
+            return entry.name == "u_color";
+        });
+    Require(colorIt != schema.GetParameters().end(), "color parameter was not retained");
+    Require(
+        colorIt->glslType == "vec4" && colorIt->size == 16u,
+        "color parameter did not reuse the vec4 GPU layout");
+}
+
 } // namespace
 
 TEST(MaterialSchema, ChannelsRetention)
@@ -169,4 +196,9 @@ TEST(MaterialSchema, ChannelsRetention)
 TEST(MaterialSchema, ChannelsValidation)
 {
     TestChannelsValidation();
+}
+
+TEST(MaterialSchema, ColorUsesVec4Layout)
+{
+    TestColorUsesVec4Layout();
 }

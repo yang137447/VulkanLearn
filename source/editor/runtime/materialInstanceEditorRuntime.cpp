@@ -1526,6 +1526,8 @@ EditorUi::EditorParameterType MaterialInstanceEditorRuntime::ConvertParameterTyp
         return EditorUi::EditorParameterType::Vec3;
     case EditorMaterialParameterType::Vec4:
         return EditorUi::EditorParameterType::Vec4;
+    case EditorMaterialParameterType::Color:
+        return EditorUi::EditorParameterType::Color;
     }
     return EditorUi::EditorParameterType::Float;
 }
@@ -1552,6 +1554,14 @@ EditorUi::EditorParameterValue MaterialInstanceEditorRuntime::ConvertParameterVa
             {
                 result.type = EditorUi::EditorParameterType::Vec3;
                 std::copy(sourceValue.begin(), sourceValue.end(), result.values.begin());
+            }
+            else if constexpr (std::is_same_v<ValueType, EditorColor>)
+            {
+                result.type = EditorUi::EditorParameterType::Color;
+                std::copy(
+                    sourceValue.components.begin(),
+                    sourceValue.components.end(),
+                    result.values.begin());
             }
             else
             {
