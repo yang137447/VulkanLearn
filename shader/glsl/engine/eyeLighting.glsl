@@ -260,7 +260,8 @@ EyeLightingResult ShadeEyeSurface(in MaterialSurface surface)
         uboVP.cameraPosition,
         vec3(0.0),
         surface.roughness,
-        0.0);
+        0.0,
+        0.5);
     float f0Scale = EyeDielectricF0(eye.corneaIor) / 0.04;
     result.corneaSpecular = corneaLobes.specular * f0Scale *
         result.shadowCornea;
@@ -276,14 +277,16 @@ EyeLightingResult ShadeEyeSurface(in MaterialSurface surface)
         uboVP.cameraPosition,
         irisResponseColor,
         0.8,
-        0.0);
+        0.0,
+        0.5);
     LightingLobes scleraLobes = CalculateDirectLightingLobes(
         irisPlaneNormal,
         intersection.point,
         uboVP.cameraPosition,
         scleraColor,
         0.9,
-        0.0);
+        0.0,
+        0.5);
     scleraLobes.diffuse = ApplyEyeScleraDiffuseApproximation(
         scleraLobes.diffuse,
         irisPlaneNormal,

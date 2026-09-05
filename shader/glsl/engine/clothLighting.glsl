@@ -216,6 +216,7 @@ ClothDirectLighting AccumulateClothLight(
         surface.baseColor,
         surface.roughness,
         0.0,
+        0.5,
         L,
         radiance);
     float sheenResponse = anisotropy == 0.0
@@ -399,7 +400,8 @@ ClothLightingResult ShadeClothSurface(
         viewDir,
         surface.baseColor,
         surface.roughness,
-        0.0) * result.baseEnergyScale;
+        0.0,
+        0.5) * result.baseEnergyScale;
     // sheenIblVersion=0：明确标记的低频 fallback，不复用 GGX split-sum sheen。
     result.indirectSheen = CalculateDiffuseIbl(
         normal,

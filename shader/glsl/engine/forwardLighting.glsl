@@ -30,6 +30,7 @@ struct ForwardLightingResult
     vec3 directLighting;
     vec3 directDiffuse;
     vec3 directSpecular;
+    vec3 transmissionLighting;
     float shadow;
     float shadowCascadeIndex;
     vec3 indirectDiffuse;
@@ -97,6 +98,7 @@ ForwardLightingResult CreateDefaultForwardLightingResult()
     result.directLighting = vec3(0.0);
     result.directDiffuse = vec3(0.0);
     result.directSpecular = vec3(0.0);
+    result.transmissionLighting = vec3(0.0);
     result.shadow = 1.0;
     result.shadowCascadeIndex = 0.0;
     result.indirectDiffuse = vec3(0.0);
@@ -168,7 +170,8 @@ ForwardLightingResult ShadeDefaultLitForwardSurface(in MaterialSurface surface)
         uboVP.cameraPosition,
         surface.baseColor,
         surface.roughness,
-        surface.metallic);
+        surface.metallic,
+        0.5);
     #if defined(VL_FORWARD_DECLARE_SHADOWMAP_INPUT)
         int cascadeIndex = 0;
         result.shadow = CalculateCsmShadow(
@@ -191,7 +194,8 @@ ForwardLightingResult ShadeDefaultLitForwardSurface(in MaterialSurface surface)
         viewDir,
         surface.baseColor,
         surface.roughness,
-        surface.metallic);
+        surface.metallic,
+        0.5);
     result.indirectLighting = result.indirectDiffuse + result.indirectSpecular;
     result.finalColor = surface.emissiveColor + result.directLighting + result.indirectLighting * surface.ambientOcclusion;
     return result;
@@ -212,7 +216,8 @@ ForwardLightingResult ShadeThinTranslucentForwardSurface(
         uboVP.cameraPosition,
         surface.baseColor,
         surface.roughness,
-        surface.metallic);
+        surface.metallic,
+        0.5);
     #if defined(VL_FORWARD_DECLARE_SHADOWMAP_INPUT)
         int cascadeIndex = 0;
         result.shadow = CalculateCsmShadow(
@@ -239,7 +244,8 @@ ForwardLightingResult ShadeThinTranslucentForwardSurface(
         viewDir,
         surface.baseColor,
         surface.roughness,
-        surface.metallic);
+        surface.metallic,
+        0.5);
     result.indirectLighting =
         result.indirectDiffuse + result.indirectSpecular;
     result.finalColor =
@@ -396,10 +402,13 @@ ForwardLightingResult ShadeTwoSidedFoliageForwardSurface(
 #else
     result.shadow = 1.0;
 #endif
-    result.directDiffuse =
-        (foliage.baseLighting.diffuse + foliage.backlitDirect) * result.shadow;
+    result.directDiffuse = foliage.baseLighting.diffuse * result.shadow;
     result.directSpecular = foliage.baseLighting.specular * result.shadow;
-    result.directLighting = result.directDiffuse + result.directSpecular;
+    result.transmissionLighting = foliage.backlitDirect * result.shadow;
+    result.directLighting =
+        result.directDiffuse +
+        result.directSpecular +
+        result.transmissionLighting;
     result.indirectDiffuse = foliage.indirectDiffuse;
     result.indirectSpecular = foliage.indirectSpecular;
     result.foliageBacklitDirect = foliage.backlitDirect * result.shadow;

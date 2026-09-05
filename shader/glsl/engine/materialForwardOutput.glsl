@@ -126,10 +126,8 @@ vec4 BuildMaterialForwardOutput(in MaterialSurface surface)
             lighting.foliageBacklitDirect,
             lighting.foliageBacklightFactor,
             lighting.shadow,
-            surface.foliageFrontFacing,
             surface.opacityMask,
-            1.0,
-            TWO_SIDED_FOLIAGE_DEBUG_GBUFFER_VERSION);
+            1.0);
     }
     return ResolveMaterialDebugView(surface, debugLighting, color);
 }

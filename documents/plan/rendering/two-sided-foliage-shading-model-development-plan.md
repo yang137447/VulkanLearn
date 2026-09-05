@@ -4,17 +4,17 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 状态 | 待实施；当前仅完成 ID 注册和通用双面材质能力 |
+| 状态 | 已实现 MVP 与逐像素 Subsurface/Opacity authoring；WPO/PDO、SpeedTree/厚度/透明透光仍待后续 |
 | 目标 | 将 UE5.8 Legacy `TwoSidedFoliage` 以 VulkanLearn 的 Material / GBuffer / Pass 合同接入 |
 | Shading Model | `TwoSidedFoliage` / ID `6` |
 | 计划建立日期 | 2026-09-03 |
 | 当前合同基线 | `documents/rendering/shader-structure-and-material-function.md` |
 | 相关现状 | `documents/plan/rendering/foliage-speedtree-sss-wind-roadmap.html`、`documents/plan/rendering/speedtree-sdk-data-probe.md` |
 | 首阶段执行域 | Opaque + OpaqueClip；Forward + Deferred；自动 ShadowDepth |
-| 实现目标 | UE5.8 Legacy 的语义对齐和可解释的实时近似，不声称复制 UE 私有 shader 的逐行实现 |
+| 实现目标 | 核心直接光 Transmission closure 的公式、常量、输入和分量归属严格对齐 UE5.8 Legacy；外围资源载体遵守 VulkanLearn 合同 |
 
-本文是未来实现计划，不是当前实现合同。实现完成后，应将冻结后的字段、编码、公式和已知限制迁移到
-`documents/rendering/two-sided-foliage-shading-model.md`，并在本文保留阶段记录和验收证据。
+当前实现合同已迁移到 `documents/rendering/two-sided-foliage-shading-model.md`；本文保留阶段记录、
+验证证据和后续扩展路线，不再作为运行时字段和 GBuffer 语义的唯一来源。
 
 ## 1. 目标与非目标
 
@@ -50,6 +50,9 @@ TwoSidedFoliage MI
 - 透光响应是独立于普通 PBR `Base Color` 的 foliage lobe，不把 `Base Color` 改写成透光色；
 - 背面法线翻转只解决几何可见性和局部表面方向，不能代替 foliage lighting；
 - `Opacity Mask` 仍由 MeshPass Template 统一执行，主 Pass 和 ShadowDepth 使用同一覆盖率来源；
+  foliage 可选独立 `opacityMaskMap.r`，未绑定时回退到 BaseColor A；
+- `Subsurface Color` 可由 `subsurfaceColorMap.rgb * u_subsurfaceColor.rgb` 逐像素生成；该组合
+  属于 Material Function authoring，不改变 Legacy evaluator；
 - `AO`、阴影、灯光颜色/强度和 emissive 的职责沿用当前引擎合同；
 - SpeedTree 风场、WPO、pivot 和顶点数据解码属于 Vertex / Material Function 层，不属于该 Shading Model；
 - 首阶段不把普通 `Subsurface` ID `2` 当作 `TwoSidedFoliage` 的 fallback，也不把模型静默降级为 `DefaultLit`。
@@ -102,7 +105,8 @@ struct TwoSidedFoliageMaterialInputs
 
 - `subsurfaceColor` 为线性空间 RGB；颜色来源可以是常量或贴图，但通道转换必须在资产/Material Function 层完成；
 - `subsurfaceColor` 不是 `baseColor` 的替代品，也不是普通 `SubsurfaceMaterialInputs.color` 的别名；
-- 首阶段不新增 `thickness`、`transmissionWeight`、`wrapWidth`、`profileId` 等非 Legacy 输入；
+
+- 首阶段不新增 `thickness`、`transmissionWeight`、`profileId` 等非 Legacy 输入；
 - 若实现验证表明确实需要额外参数，必须先更新正式合同并说明它是 UE 语义映射、VulkanLearn 运行时控制，还是调试专用参数；
 - 默认值必须由 `M_*.json` 声明，不能在 MF、Shading Model 或 Pass 中隐含第二份业务默认值；
 - Material Function 只负责填充 `MaterialInputs`，不读取灯光、Shadow Map 或写最终颜色。
@@ -136,7 +140,7 @@ L_foliage = L_default_lit(baseColor, roughness, specular, N, V, L)
 实现前必须通过 UE 5.8 Legacy 参考行为、现有 VulkanLearn 光照约定和数值 probe 冻结以下内容：
 
 - 背光项使用的法线方向（几何法线、材质法线或双面修正法线）；
-- `N·L`、`N·V` 和 `N·H` 的取值域与是否使用 wrap/half-vector 修正；
+- `WrapNoL` 使用 `-N·L`，scatter 使用 `-V·L`，不引入 `N·H` 或可调 wrap 分支；
 - 前表面与背表面的贡献如何组合；
 - `subsurfaceColor` 是否只染背光项，以及是否需要与 `baseColor` 做能量分配；
 - directional light、point light、spot light、环境光和阴影对 foliage lobe 的作用；
@@ -144,19 +148,20 @@ L_foliage = L_default_lit(baseColor, roughness, specular, N, V, L)
 - emissive 是否完全独立于 foliage lobe；
 - 非法或超范围输入由资产校验拒绝，不在 shader 中重复做防御性截断。
 
-计划冻结的 MVP 参考 closure 是：
+最终冻结的 UE Legacy 对齐 closure 是：
 
 ```text
 frontBase   = DefaultLit diffuse/specular response
-backLight   = lightRadiance * shadowVisibility * foliageVisibility
-              * max(dot(-N, L), 0)
+backLight   = lightRadiance * shadowVisibility
+              * saturate((-N·L + 0.5) / (1 + 0.5)^2)
+              * D_GGX(0.6^2, saturate(-V·L))
               * subsurfaceColor
 foliage     = frontBase + backLight
 ```
 
-上式是实现和白炉验证的起始参考，不得在没有数值对照的情况下宣称与 UE 逐项等价。若 UE 参考行为需要
-额外的 view term、wrap 或能量补偿，应提升 `foliageModelVersion`，在合同中记录公式和有意差异，并同步
-更新 Forward/Deferred 共用 evaluator。
+`Wrap=0.5` 与 scatter roughness `0.6` 固定在 Shading Model evaluator 中，不暴露为作者参数。
+`D_GGX` 自身包含 `1/PI`；Masked Alpha 只控制 coverage/discard，不重复缩放 transmission。
+该迁移保持 Forward/Deferred 共用 evaluator，不新增 foliage 专用 GBuffer 版本号。
 
 ### 3.4 GBuffer 合同
 
@@ -169,7 +174,7 @@ GBufferB.a   = packed ShadingModelID + SelectiveOutputMask
 GBufferC.rgb = baseColor
 GBufferC.a   = ambientOcclusion
 GBufferD.rgb = foliage subsurfaceColor
-GBufferD.a   = 0，保留为版本/权重扩展槽
+GBufferD.a   = 0（保留槽，不承载 foliage 作者参数）
 GBufferE     = precomputed shadow / existing model contract
 GBufferF     = existing tangent / anisotropy contract
 ```
@@ -181,7 +186,7 @@ GBufferF     = existing tangent / anisotropy contract
 - 不复用 Subsurface、PreintegratedSkin、Hair、Cloth 或 Eye 的 custom data 解释；
 - Forward 不应从 Material UBO 直接读取 Deferred 才有的字段；两条路径都消费同一份 `MaterialSurface` 语义；
 - 增加 round-trip 测试，确认颜色误差、默认值和未知 flags 的行为；
-- 如果后续加入 thickness/weight，必须新增 `foliageGBufferVersion` 或明确字段版本，不得悄悄改写 D.a。
+- 如果后续加入 thickness/weight，必须明确新增字段和 GBuffer 语义，不得悄悄改写 D.a。
 
 ### 3.5 ShadowDepth 与覆盖率
 
@@ -224,7 +229,6 @@ GBufferF     = existing tangent / anisotropy contract
 ```text
 foliageModelVersion
 foliageLightingClosureVersion
-foliageGBufferVersion
 foliageSubsurfaceColorSpaceVersion
 foliageShadowCoverageVersion
 ```
@@ -547,7 +551,7 @@ documents/rendering/two-sided-foliage-shading-model.md
 
 | 风险 | 处理方式 |
 | --- | --- |
-| UE Legacy 私有实现细节不可公开复刻 | 以公开语义和黑盒 probe 建立等价目标，记录有意差异，不声称逐行 parity |
+| UE 平台专用载体与优化无法直接复用 | 核心 closure 公式与固定常量严格对齐；灯光存储、GBuffer、CSM/IBL 等外围差异单独记录 |
 | 双面 normal 翻转与 foliage backlight 使用不同方向 | 在 `MaterialSurface` 中明确保存正面判断和最终 shading normal，禁止 evaluator 隐式猜测 |
 | `subsurfaceColor` 与 BaseColor 能量重复 | P0 冻结能量预算；用白炉和颜色 sweep 验证，必要时提升 closure version |
 | GBufferD 未来被其它模型占用 | 通过 shading-model 显式分支、flags 和版本字段保护，不共享模糊 customData |
@@ -558,7 +562,7 @@ documents/rendering/two-sided-foliage-shading-model.md
 后续可独立规划：
 
 - 厚度贴图和叶片局部 transmission control；
-- 更完整的 wrap / multiple scattering 近似；
+- 非 Legacy 的 multiple scattering 扩展；必须建立新版本，不能调节 Legacy 固定 Wrap；
 - 环境光 foliage transmission；
 - 透明/排序/OIT 和透光阴影；
 - 叶脉、风场、LOD、impostor 和 SpeedTree 资产 authoring；
@@ -570,7 +574,7 @@ documents/rendering/two-sided-foliage-shading-model.md
 实现任务开始时按以下顺序落地：
 
 1. 先完成 P0 的 UE 语义和公式审计，不直接写 shader；
-2. 新增 foliage MaterialInputs/MF 和最小 M_/MI fixture；
+2. 新增 foliage MaterialInputs/MF、逐像素 Subsurface/Opacity 接口和最小 M_/MI fixture；
 3. 先接入 Forward，建立正面/背光数值 probe；
 4. 再接入 GBuffer 与 Deferred，完成 round-trip 和双路径对照；
 5. 最后接入 ShadowDepth、SpeedTree 组合、Debug View、场景和测试；

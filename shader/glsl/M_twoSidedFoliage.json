@@ -13,7 +13,13 @@
         "renderMode": "OpaqueClip",
         "cullMode": "None"
     },
-    "macros": {},
+    "macros": {
+        "USE_ALBEDO_MAP": 0,
+        "USE_NORMAL_MAP": 0,
+        "USE_ROUGHNESS_MAP": 0,
+        "USE_SUBSURFACE_COLOR_MAP": 0,
+        "USE_OPACITY_MASK_MAP": 0
+    },
     "parameters": {
         "u_alphaClipThreshold": {
             "type": "float",
@@ -38,5 +44,11 @@
             "range": {"min": 0.0, "max": 1.0}
         }
     },
-    "textures": {}
+    "textures": {
+        "albedoMap": {"type": "sampler2D", "default": null},
+        "normalMap": {"type": "sampler2D", "default": null},
+        "roughnessMap": {"type": "sampler2D", "default": null},
+        "subsurfaceColorMap": {"type": "sampler2D", "default": null},
+        "opacityMaskMap": {"type": "sampler2D", "default": null}
+    }
 }

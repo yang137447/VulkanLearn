@@ -142,12 +142,8 @@ void main()
             lighting.foliageBacklitDirect,
             lighting.foliageBacklightFactor,
             lighting.shadow,
-            surface.foliageFrontFacing,
             surface.opacityMask,
-            foliageCustomDataValid ? 1.0 : 0.0,
-            foliageCustomDataValid
-                ? TWO_SIDED_FOLIAGE_DEBUG_GBUFFER_VERSION
-                : 0.0);
+            foliageCustomDataValid ? 1.0 : 0.0);
     }
     debugLighting.localSubsurfaceLighting =
         lighting.localSubsurfaceLighting;

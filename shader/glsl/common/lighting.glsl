@@ -299,9 +299,11 @@ vec3 CalculateSpecularIbl(
     in vec3 viewDir_WS,
     in vec3 baseColor,
     in float roughness,
-    in float metallic)
+    in float metallic,
+    in float specular)
 {
-    vec3 F0 = mix(vec3(0.04), baseColor, metallic);
+    vec3 dielectricF0 = vec3(0.08 * specular);
+    vec3 F0 = mix(dielectricF0, baseColor, metallic);
     return CalculateSpecularIblWithF0(
         normal_WS,
         viewDir_WS,
@@ -386,7 +388,8 @@ vec3 CalculateClearCoatSpecularIbl(
         viewDir_WS,
         baseColor,
         roughness,
-        metallic);
+        metallic,
+        0.5);
 
     float coatRoughness = GetUeClearCoatRoughness(clearCoatRoughness);
 
@@ -565,11 +568,11 @@ LightingLobes EvaluateDefaultPbrLightLobes(
     in vec3 baseColor,
     in float roughness,
     in float metallic,
+    in float specular,
     in vec3 lightDirection_WS,
     in vec3 radiance)
 {
-    // 这是当前 renderer 的 Default Lit 基准 BRDF。DefaultLit、ClearCoat 底漆和
-    // Thin Translucent 表面反射都必须从这里取值，避免三条路径逐渐产生数值漂移。
+    // Default Lit 的介电 F0 约定为 0.08 * Specular；Specular=0.5 时保持原有 0.04。
     vec3 N = normalize(normal_WS);
     vec3 L = normalize(lightDirection_WS);
     vec3 V = normalize(cameraPos_WS - pixelPos_WS);
@@ -577,7 +580,8 @@ LightingLobes EvaluateDefaultPbrLightLobes(
 
     float NdotL = max(dot(N, L), 0.0);
     float NdotV = max(dot(N, V), 0.0);
-    vec3 F0 = mix(vec3(0.04), baseColor, metallic);
+    vec3 dielectricF0 = vec3(0.08 * specular);
+    vec3 F0 = mix(dielectricF0, baseColor, metallic);
     vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
     vec3 diffuseWeight = (vec3(1.0) - F) * (1.0 - metallic);
     float distribution = DistributionGGX(N, H, roughness);
@@ -742,6 +746,7 @@ vec3 EvaluateClearCoatLight(
             baseColor,
             roughness,
             metallic,
+            0.5,
             lightDirection,
             radiance);
     vec3 defaultBottomLayer =
@@ -777,6 +782,7 @@ LightingLobes CalculateDirectionalLightLobes(
     in vec3 baseColor,
     in float roughness,
     in float metallic,
+    in float specular,
     in Light directionalLight)
 {
     vec3 radiance =
@@ -789,6 +795,7 @@ LightingLobes CalculateDirectionalLightLobes(
         baseColor,
         roughness,
         metallic,
+        specular,
         normalize(-directionalLight.directionPad.xyz),
         radiance);
 }
@@ -829,6 +836,7 @@ LightingLobes CalculatePointLightLobes(
     in vec3 baseColor,
     in float roughness,
     in float metallic,
+    in float specular,
     in Light pointLight)
 {
     vec3 lightOffset = pointLight.positionRadius.xyz - pixelPos_WS;
@@ -845,6 +853,7 @@ LightingLobes CalculatePointLightLobes(
         baseColor,
         roughness,
         metallic,
+        specular,
         normalize(lightOffset),
         radiance);
 }
@@ -934,6 +943,7 @@ LightingLobes CalculateSpotLightLobes(
     in vec3 baseColor,
     in float roughness,
     in float metallic,
+    in float specular,
     in Light spotLight)
 {
     vec3 lightOffset = spotLight.positionRadius.xyz - pixelPos_WS;
@@ -962,6 +972,7 @@ LightingLobes CalculateSpotLightLobes(
         baseColor,
         roughness,
         metallic,
+        specular,
         lightDirectionToSurface_WS,
         radiance);
 }
@@ -972,7 +983,8 @@ LightingLobes CalculateDirectLightingLobes(
     in vec3 cameraPos_WS,
     in vec3 baseColor,
     in float roughness,
-    in float metallic)
+    in float metallic,
+    in float specular)
 {
     // 所有显式光源统一累积到同一组 lobe，DefaultLit 可直接相加，Thin 则保留分量。
     LightingLobes lighting = CreateLightingLobes();
@@ -988,6 +1000,7 @@ LightingLobes CalculateDirectLightingLobes(
                 baseColor,
                 roughness,
                 metallic,
+                specular,
                 uboLight.lights[i]);
         lighting.diffuse += lightLobes.diffuse;
         lighting.specular += lightLobes.specular;
@@ -1005,6 +1018,7 @@ LightingLobes CalculateDirectLightingLobes(
                 baseColor,
                 roughness,
                 metallic,
+                specular,
                 uboLight.lights[i]);
         lighting.diffuse += lightLobes.diffuse;
         lighting.specular += lightLobes.specular;
@@ -1022,6 +1036,7 @@ LightingLobes CalculateDirectLightingLobes(
                 baseColor,
                 roughness,
                 metallic,
+                specular,
                 uboLight.lights[i]);
         lighting.diffuse += lightLobes.diffuse;
         lighting.specular += lightLobes.specular;
@@ -1035,7 +1050,8 @@ vec3 CalculateDirectLighting(
     in vec3 cameraPos_WS,
     in vec3 baseColor,
     in float roughness,
-    in float metallic
+    in float metallic,
+    in float specular
 )
 {
     // 直接光总入口：只聚合显式光源，不承担任何 IBL 或其他间接光职责。
@@ -1045,7 +1061,8 @@ vec3 CalculateDirectLighting(
         cameraPos_WS,
         baseColor,
         roughness,
-        metallic);
+        metallic,
+        specular);
     return lobes.diffuse + lobes.specular;
 }
 

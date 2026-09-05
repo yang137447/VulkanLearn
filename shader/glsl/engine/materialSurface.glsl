@@ -16,7 +16,7 @@ struct MaterialSurface
 {
     vec3 worldPosition;
     vec2 texCoord;
-    // worldNormal 是顶层法线；Skin bottom normal 只属于 Skin LUT 漫反射输入，
+    // worldNormal 是顶层着色法线；Skin bottom normal 只属于 Skin LUT 漫反射输入，
     // Clear Coat bottom normal 仍保持独立，不能互相借用。
     vec3 worldNormal;
     vec3 clearCoatBottomNormal;
@@ -40,8 +40,6 @@ struct MaterialSurface
     uint selectiveOutputMask;
     // customData 只属于 GBuffer 编码层，不是 Material Function 的公共输入接口。
     vec4 customData;
-    // 双面 foliage 的面向状态在 Base 阶段捕获，并随 GBuffer 一起进入 Deferred。
-    float foliageFrontFacing;
     vec4 precomputedShadowFactors;
     vec4 worldTangent;
     float anisotropy;
@@ -70,7 +68,6 @@ MaterialSurface CreateDefaultMaterialSurface()
     surface.shadingModel = SHADING_MODEL_DEFAULT_LIT;
     surface.selectiveOutputMask = 0u;
     surface.customData = vec4(0.0);
-    surface.foliageFrontFacing = 1.0;
     surface.precomputedShadowFactors = vec4(1.0);
     surface.worldTangent = vec4(1.0, 0.0, 0.0, 1.0);
     surface.anisotropy = 0.0;
@@ -106,7 +103,6 @@ MaterialSurface ResolveMaterialSurface(
     surface.surfaceCoverage =
         inputs.modelInputs.thinTranslucent.surfaceCoverage;
     surface.modelInputs = inputs.modelInputs;
-    surface.foliageFrontFacing = inputs.modelInputs.twoSidedFoliage.frontFacing;
     surface.shadingModel = MATERIAL_SHADING_MODEL;
     surface.precomputedShadowFactors = vec4(1.0);
     surface.anisotropy = surface.shadingModel == SHADING_MODEL_CLOTH
@@ -131,7 +127,8 @@ MaterialSurface ResolveMaterialSurface(
     }
     else if (surface.shadingModel == SHADING_MODEL_TWOSIDED_FOLIAGE)
     {
-        // ID 6 独占 GBufferD.rgb；不借用普通 Subsurface 的 weight 或其它模型字段。
+        // ID 6 独占 GBufferD.rgb 保存 subsurfaceColor；D.a 是保留槽，不承载作者参数。
+        // 不借用普通 Subsurface 的 weight 或其它模型字段。
         surface.customData = vec4(
             inputs.modelInputs.twoSidedFoliage.subsurfaceColor,
             0.0);

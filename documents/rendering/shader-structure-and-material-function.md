@@ -139,11 +139,11 @@ Shading Model 消费 MaterialInputs，负责 UE 对齐的光照响应。Shading 
 | Hair | 已实现（VulkanLearn MVP） | 已补齐 HairMaterialInputs、Forward/Deferred evaluator、Hair GBuffer、Card coverage、ShadowDepth 和 Debug View 21–41；runtime validation 入口已接入但仍要求正式 authoring LUT，不声称 UE 私有 shader 逐行 parity。 |
 | Eye | 待专项 | ID 已注册，虹膜、角膜和眼部 IBL 尚无独立实现。 |
 | Cloth | 待专项 | ID 已注册，布料专用高光尚无独立实现。 |
-| TwoSidedFoliage | 待专项 | ID 已注册，双面叶片/透光响应尚无独立实现。 |
+| TwoSidedFoliage | 已实现（MVP） | ID 6；Forward/Deferred 共用 UE Legacy foliage Transmission evaluator，支持 Opaque/OpaqueClip、独立 Opacity/Subsurface authoring（BaseColor A 回退）和统一 worldNormal 语义；WPO/PDO、厚度与透明透光仍是后续路线。 |
 | Iridescence | 待定义 | 当前没有独立的 Shading Model ID 和 GBuffer 合同。 |
 
-对仍标记为“待专项”的模型，“已注册 ID”只表示资产校验和 GBuffer 编码可以识别该名称；Hair 是已完成专项实现的例外，
-已补齐 Forward/Deferred 分发、MaterialInputs、GBuffer/customData 合同和 Debug View；runtime validation 入口已接入，但正式 authoring LUT 缺失时必须失败。其他专项仍需在各自合同中明确 BRDF、光照 Lobe、Pass 和验收边界。
+对仍标记为“待专项”的模型，“已注册 ID”只表示资产校验和 GBuffer 编码可以识别该名称；Hair 和 TwoSidedFoliage 是已完成专项实现的例外，
+已补齐各自的 Forward/Deferred 分发、MaterialInputs、GBuffer/customData 合同和 Debug View。其他专项仍需在各自合同中明确 BRDF、光照 Lobe、Pass 和验收边界。
 
 ### MeshPass
 

@@ -219,7 +219,8 @@ DeferredLightingResult ShadeDefaultLitDeferredSurfaceDetailed(
         uboVP.cameraPosition,
         surface.baseColor,
         surface.roughness,
-        surface.metallic);
+        surface.metallic,
+        0.5);
 
     int cascadeIndex = 0;
     result.shadow = CalculateCsmShadow(
@@ -242,7 +243,8 @@ DeferredLightingResult ShadeDefaultLitDeferredSurfaceDetailed(
         viewDir,
         surface.baseColor,
         surface.roughness,
-        surface.metallic);
+        surface.metallic,
+        0.5);
     ResolveDeferredLightingComposition(surface, result);
     result.defaultDiffuseLighting = result.diffuseLighting;
     return result;
@@ -571,9 +573,10 @@ DeferredLightingResult ShadeTwoSidedFoliageDeferredSurfaceDetailed(
         cascadeIndex);
     result.shadow *= surface.precomputedShadowFactors.r;
     result.shadowCascadeIndex = ShadowCascadeDebugValue(cascadeIndex);
-    result.directDiffuse =
-        (foliage.baseLighting.diffuse + foliage.backlitDirect) * result.shadow;
+    result.directDiffuse = foliage.baseLighting.diffuse * result.shadow;
     result.directSpecular = foliage.baseLighting.specular * result.shadow;
+    // UE Legacy 将 TwoSidedFoliage 的附加项归入 Transmission，不能并入 diffuse。
+    result.transmissionLighting = foliage.backlitDirect * result.shadow;
     result.indirectDiffuse = foliage.indirectDiffuse;
     result.indirectSpecular = foliage.indirectSpecular;
     result.foliageBacklitDirect = foliage.backlitDirect * result.shadow;

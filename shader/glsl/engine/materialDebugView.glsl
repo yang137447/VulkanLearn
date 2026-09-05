@@ -4,8 +4,6 @@
 #include "../common/commonUbo.glsl"
 #include "materialSurface.glsl"
 
-const float TWO_SIDED_FOLIAGE_DEBUG_GBUFFER_VERSION = 1.0;
-
 struct MaterialDebugLightingData
 {
     float shadow;
@@ -77,10 +75,8 @@ struct MaterialDebugLightingData
     vec3 foliageBacklitDirect;
     float foliageBacklightFactor;
     float foliageShadowVisibility;
-    float foliageFrontFacing;
     float foliageAlphaMask;
     float foliageGBufferCustomData;
-    float foliageGBufferVersion;
 };
 
 MaterialDebugLightingData CreateMaterialDebugLightingData(
@@ -160,10 +156,8 @@ MaterialDebugLightingData CreateMaterialDebugLightingData(
     data.foliageBacklitDirect = vec3(0.0);
     data.foliageBacklightFactor = 0.0;
     data.foliageShadowVisibility = 1.0;
-    data.foliageFrontFacing = 1.0;
     data.foliageAlphaMask = 1.0;
     data.foliageGBufferCustomData = 0.0;
-    data.foliageGBufferVersion = 0.0;
     return data;
 }
 
@@ -303,20 +297,16 @@ void SetMaterialDebugFoliageData(
     vec3 backlitDirect,
     float backlightFactor,
     float shadowVisibility,
-    float frontFacing,
     float alphaMask,
-    float gbufferCustomData,
-    float gbufferVersion)
+    float gbufferCustomData)
 {
     data.foliageSubsurfaceColor = subsurfaceColor;
     data.foliageResolvedNormal = resolvedNormal;
     data.foliageBacklitDirect = backlitDirect;
     data.foliageBacklightFactor = backlightFactor;
     data.foliageShadowVisibility = shadowVisibility;
-    data.foliageFrontFacing = frontFacing;
     data.foliageAlphaMask = alphaMask;
     data.foliageGBufferCustomData = gbufferCustomData;
-    data.foliageGBufferVersion = gbufferVersion;
 }
 
 float MaterialDebugViewModeMask(int mode)
@@ -421,14 +411,12 @@ vec4 ResolveMaterialDebugView(
     float skinVirtualLightMask = MaterialDebugViewModeMask(79);
     float foliageModelMask = MaterialDebugViewModeMask(90);
     float foliageSubsurfaceColorMask = MaterialDebugViewModeMask(91);
-    float foliageFrontFacingMask = MaterialDebugViewModeMask(92);
     float foliageNormalMask = MaterialDebugViewModeMask(93);
     float foliageBacklightFactorMask = MaterialDebugViewModeMask(94);
     float foliageShadowMask = MaterialDebugViewModeMask(95);
     float foliageLobeMask = MaterialDebugViewModeMask(96);
     float foliageAlphaMask = MaterialDebugViewModeMask(97);
     float foliageCustomDataMask = MaterialDebugViewModeMask(98);
-    float foliageGBufferVersionMask = MaterialDebugViewModeMask(99);
 
     float subsurfaceAssetId = 0.0;
     if (surface.shadingModel == SHADING_MODEL_PREINTEGRATED_SKIN)
@@ -531,14 +519,12 @@ vec4 ResolveMaterialDebugView(
          skinVirtualLightMask +
          foliageModelMask +
          foliageSubsurfaceColorMask +
-         foliageFrontFacingMask +
          foliageNormalMask +
          foliageBacklightFactorMask +
          foliageShadowMask +
          foliageLobeMask +
          foliageAlphaMask +
-         foliageCustomDataMask +
-         foliageGBufferVersionMask,
+         foliageCustomDataMask,
         1.0);
 
     float clothModel = surface.shadingModel == SHADING_MODEL_CLOTH ? 1.0 : 0.0;
@@ -570,14 +556,12 @@ vec4 ResolveMaterialDebugView(
         + skinVirtualLightMask * vec4(lighting.skinVirtualLight, 1.0)
         + foliageModelMask * vec4(vec3(foliageModel), 1.0)
         + foliageSubsurfaceColorMask * vec4(lighting.foliageSubsurfaceColor, 1.0)
-        + foliageFrontFacingMask * vec4(vec3(lighting.foliageFrontFacing), 1.0)
         + foliageNormalMask * vec4(lighting.foliageResolvedNormal * 0.5 + 0.5, 1.0)
         + foliageBacklightFactorMask * vec4(vec3(lighting.foliageBacklightFactor), 1.0)
         + foliageShadowMask * vec4(vec3(lighting.foliageShadowVisibility), 1.0)
         + foliageLobeMask * vec4(lighting.foliageBacklitDirect, 1.0)
         + foliageAlphaMask * vec4(vec3(lighting.foliageAlphaMask), 1.0)
         + foliageCustomDataMask * vec4(vec3(lighting.foliageGBufferCustomData), 1.0)
-        + foliageGBufferVersionMask * vec4(vec3(lighting.foliageGBufferVersion), 1.0)
         + hairFrameMask * vec4(lighting.hairBitangent * 0.5 + 0.5, 1.0)
         + hairTangentMask * vec4(lighting.hairTangent * 0.5 + 0.5, 1.0)
         + hairThetaMask * vec4(vec3(

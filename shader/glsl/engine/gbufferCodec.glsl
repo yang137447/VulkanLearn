@@ -299,8 +299,7 @@ GBufferData EncodeGBuffer(in MaterialSurface surface, in GBufferPixelData pixelD
             surface.precomputedShadowFactors.r,
             surface.modelInputs.hair.characterLighting.yzw)
         : surface.precomputedShadowFactors;
-    // ID 6 在 Velocity.w 保存面向快照；Velocity.xy 仍保持运动矢量，z 仍由
-    // Base 模板复用为 selection 标记，避免占用 GBufferD.a 保留槽。
+    // Velocity.xy 保存运动矢量，z/w 保留给 Base 模板和后续扩展。
     data.gbufferVelocity = surface.shadingModel == SHADING_MODEL_EYE
         ? vec4(
             pixelData.velocity,
@@ -308,8 +307,6 @@ GBufferData EncodeGBuffer(in MaterialSurface surface, in GBufferPixelData pixelD
                 surface.modelInputs.eye.irisRadius,
             surface.modelInputs.eye.limbusWidth /
                 surface.modelInputs.eye.irisRadius)
-        : surface.shadingModel == SHADING_MODEL_TWOSIDED_FOLIAGE
-        ? vec4(pixelData.velocity, 0.0, surface.foliageFrontFacing)
         : vec4(pixelData.velocity, 0.0, 0.0);
     data.gbufferF = surface.shadingModel == SHADING_MODEL_EYE
         ? vec4(
@@ -386,8 +383,6 @@ MaterialSurface DecodeGBufferSurface(in GBufferData data)
             (surface.selectiveOutputMask & GBUFFER_HAS_CUSTOM_DATA_MASK) != 0u;
         surface.modelInputs.twoSidedFoliage.subsurfaceColor =
             validFoliageData ? data.gbufferD.rgb : vec3(0.0);
-        surface.foliageFrontFacing =
-            validFoliageData ? data.gbufferVelocity.w : 1.0;
     }
     if (surface.shadingModel == SHADING_MODEL_CLEAR_COAT)
     {

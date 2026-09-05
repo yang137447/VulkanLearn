@@ -2127,14 +2127,12 @@ std::string UiSubsystem::GetDebugViewName(int mode) const
     case 89: return Localize("debug.cloth_v2_ibl_fallback");
     case 90: return Localize("debug.foliage_model");
     case 91: return Localize("debug.foliage_subsurface_color");
-    case 92: return Localize("debug.foliage_front_facing");
     case 93: return Localize("debug.foliage_resolved_normal");
     case 94: return Localize("debug.foliage_backlight_factor");
     case 95: return Localize("debug.foliage_shadow_visibility");
     case 96: return Localize("debug.foliage_lobe");
     case 97: return Localize("debug.foliage_alpha_mask");
     case 98: return Localize("debug.foliage_gbuffer_custom_data");
-    case 99: return Localize("debug.foliage_gbuffer_version");
     default: return Localize("debug.unknown");
     }
 }

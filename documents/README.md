@@ -86,6 +86,8 @@ Documentation in this repository is split by responsibility:
   - implemented Eye contract covering ForwardOpaque single-shell, Deferred GBuffer V1 fallback, dual-shell inner/cornea passes, Compute-only caustic LUT, local SSS composition, authoring/LOD fields, runtime validation, and transactional Compute reload
 - `rendering/cloth-shading-model.md`
   - current Cloth v2 contract covering v1-compatible and anisotropic Charlie direct lighting, dual Compute-only directional-albedo LUTs, versioned GBuffer tangent/anisotropy ownership, Forward/Deferred shared evaluator, energy compensation, reload, and explicit diffuse IBL fallback
+- `rendering/two-sided-foliage-shading-model.md`
+  - current TwoSidedFoliage ID 6 contract covering UE Legacy Transmission closure, independent Opacity/Subsurface authoring with BaseColor A fallback, Forward/Deferred shared evaluator, unified worldNormal semantics, and ShadowDepth boundaries
 
 ## Plans
 
