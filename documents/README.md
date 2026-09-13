@@ -66,28 +66,12 @@ Documentation in this repository is split by responsibility:
   - implemented Material Evaluation, Base/ShadowDepth templates, Composer identity, and Shadow routing contract
 - `rendering/shader-structure-and-material-function.md`
   - current Shader Structure, UE-style Material Inputs, Material Function composition, Shading Model boundaries, and MF/Pass validation rules
-- `rendering/car-paint-shading-model.md`
-  - implemented ClearCoat-based car paint contract, custom data packing, and authoring parameters
-- `rendering/thin-translucent-shading-model.md`
-  - implemented UE 5.8 Legacy Thin Translucent closure, dual-source blend path, scalar fallback, sorting, and lamp-cover authoring contract
-- `rendering/neox-character-alignment-contract-v1.md`
-  - NeoX 角色从 MTG/源 Shader/纹理/glTF 到 VulkanLearn Material、RenderState、Pass 和验证的当前对齐合同
-- `rendering/subsurface-shading-models.md`
-  - implemented Subsurface, PreintegratedSkin, and SubsurfaceProfile contracts, including Compute-only lookup generation, GBuffer packing, lighting-lobe composition, profile filtering, and validation
-- `rendering/neox-skin-effect-alignment-contract-v1.md`
-  - NeoX `pbr_skin` 到现有 `PreintegratedSkin` 的输入、MF、能量、RenderState 和验证规则；不新增 Shading Model
 - `rendering/shader-build-cache.md`
   - implemented BLAKE3-256 shader identities, versioned build-cache manifest, batch-wide publication preflight, stale cache-hit rejection, atomic artifact commit, and startup failure semantics
 - `rendering/shader-hot-reload.md`
   - implemented source-epoch/digest staleness protocol, pending source union, frozen compilation snapshots, Material/Compute/UI transactions, M_*.json live-state migration, World/Graph staging, and GPU-epoch retirement
 - `rendering/texture-asset-json-v1.md`
   - texture asset JSON V1 fields, defaults, material instance references, and loader behavior
-- `rendering/eye-shading-model.md`
-  - implemented Eye contract covering ForwardOpaque single-shell, Deferred GBuffer V1 fallback, dual-shell inner/cornea passes, Compute-only caustic LUT, local SSS composition, authoring/LOD fields, runtime validation, and transactional Compute reload
-- `rendering/cloth-shading-model.md`
-  - current Cloth v2 contract covering v1-compatible and anisotropic Charlie direct lighting, dual Compute-only directional-albedo LUTs, versioned GBuffer tangent/anisotropy ownership, Forward/Deferred shared evaluator, energy compensation, reload, and explicit diffuse IBL fallback
-- `rendering/two-sided-foliage-shading-model.md`
-  - current TwoSidedFoliage ID 6 contract covering UE Legacy Transmission closure, independent Opacity/Subsurface authoring with BaseColor A fallback, Forward/Deferred shared evaluator, unified worldNormal semantics, and ShadowDepth boundaries
 
 ## Plans
 
@@ -116,36 +100,17 @@ Rendering plans:
   - four-phase cascaded shadow route: Basic CSM, screen-space shadow mask, stability/seam control, and custom filtering
 - `plan/rendering/deferred-gbuffer-ue-aligned-plan.html`
   - deferred GBuffer, UE legacy slot alignment, M_/MI_ material layering, and forward/deferred shader structure plan
-- `plan/rendering/foliage-speedtree-sss-wind-roadmap.md`
-  - markdown route for SpeedTree, foliage SSS, wind, and multi-pivot work
-- `plan/rendering/two-sided-foliage-shading-model-development-plan.md`
-  - UE5.8 Legacy TwoSidedFoliage Shading Model 接入路线、GBuffer/Pass 合同、验证矩阵和后续边界
-- plan/rendering/neox-b-f-3725-skin-p0-baseline-v1.md
-  - _f_3725 Skin P0 源槽位、目标 MI、纹理通道、指纹和运行时 smoke 基线
-- `plan/rendering/neox-b-f-3725-skin-effect-alignment-plan.md`
-  - `b_f_3725` 身体/脸部 Skin 的分阶段对齐计划、阶段门和验证矩阵
 - `plan/rendering/foliage-speedtree-sss-wind-roadmap.html`
   - HTML reading version of the foliage / SpeedTree route
-- `plan/rendering/subsurface-shading-models-development-plan.md`
-  - completed 2026-08-22 implementation record for Subsurface, PreintegratedSkin, and SubsurfaceProfile; the current contract lives in `rendering/subsurface-shading-models.md`
-- `plan/rendering/cloth-shading-model-development-plan.md`
-  - completed 2026-08-23 Cloth MVP implementation record; the current contract lives in `rendering/cloth-shading-model.md`, while Charlie-specific IBL prefilter remains a documented target extension
-- `plan/rendering/cloth-shading-model-v2-anisotropy-upgrade-handoff.md`
-  - executed 2026-09-01 handoff for upgrading Cloth ID 8 with NeoX Silk/Cloth anisotropy while preserving the existing Shading Model identity; anisotropic IBL remains an explicit follow-up
-- `plan/rendering/hair-shading-model-development-plan.md`
-  - executable Hair Shading Model route from contract freeze and CPU Reference through versioned LUT, Forward/Deferred evaluator, Card coverage/shadow, Hair IBL, and multiple scattering
-- `plan/rendering/shading-model-validation-plan.md`
-  - shading model 具象验证案例、资产授权、场景构图、分阶段落地和验收矩阵
-- `plan/rendering/eye-shading-model-development-plan.md`
-  - completed 2026-08-23 Eye implementation record; the current Forward/Deferred/dual-shell, Compute LUT, local SSS, reload, validation, and performance contracts live in `rendering/eye-shading-model.md`
+- `plan/rendering/shading-model-alignment-plan.md`
+  - **paper-based shading model implementation and validation plan** (premise changed 2026-09-12): the old per-model implementations were deleted, each shading model is rebuilt from its paper, and the interface plus GBuffer stay UE-aligned. Each model chapter carries a case list whose every row cites a paper figure / book section / engine doc, an algorithm-provenance table, and an explicit ⛔ state for models whose material parameter surface cannot reproduce the cited paper quantity
+  - shared infrastructure landed 2026-09-12 via cases `M-07` / `M-08`: texCoord V direction and camera fov convention pinned by measurement, the `M_brdfPlot` vertical mirror fixed, the probe plot given a mathematical coordinate system (frame, ticks, tick values, axis titles, caption row with a computed conclusion, legend), and `tool/validation/` (BMP reader, curve/UV measurement, screenshot harness, console injection) in place
+- `plan/rendering/shading-model-case-records.md`
+  - evidence archive for the alignment plan: one section per finished case with the fixed seven fields (ID / source / target / form / implementation anchor / verdict / attribution), the reproduction commands, and the paths of the archived screenshots and logs; conclusions live here because `artifacts/` is gitignored
+- `plan/rendering/archive/README.md`
+  - archived old per-model contracts and development plans (ClearCoat / Cloth / Eye / Hair / Subsurface / ThinTranslucent / TwoSidedFoliage / NeoX character alignment); their implementations were deleted on 2026-09-12 and every shading model is being rebuilt from its paper while the interface and GBuffer stay UE-aligned. The file also records exactly what was deleted.
 - `plan/rendering/material-module-system.md`
   - future material module boundary, public/private semantics, and dependency ordering
-- `plan/rendering/neox-character-shader-feature-inventory.md`
-  - NeoX b_f_3725 material-family inventory, verified source-channel contracts, landed 35-slot migration status, and remaining visual calibration scope
-- `plan/rendering/neox-b-f-3725-character-restoration-handoff.md`
-  - 2026-08-24 b_f_3725 restoration handoff covering frozen constraints, source assets, 35-slot mapping, regeneration commands, procedural-sky scene, validation, intentional differences, and external resource transfer requirements
-- `plan/rendering/neox-b-f-3725-hair-effect-alignment-plan.md`
-  - executable b_f_3725 Hair effect alignment plan that freezes the shared UE-aligned Hair Shading Model and confines NeoX texture, TBN, coverage, variation, and authoring semantics to Material Functions and assets
 - `plan/rendering/material-multipass-pass-tag-plan.md`
   - future Material Multi-Pass asset model, PassTag matching, common RG hooks, render-state JSON draft, and draw-list execution plan
 - `plan/rendering/material-shader-variant-and-debugview-options.md`
@@ -158,8 +123,6 @@ Rendering plans:
   - executable migration plan that limits environment-type branching to cubemap generation and unifies SH/prefilter through one GPU IBL baker
 - `plan/rendering/uds-replication-roadmap.md`
   - UDS / UDW runtime feature scope, staged implementation plan, estimates, risks, and acceptance criteria
-- `plan/rendering/sky-pass-environment-roadmap.md`
-  - independent Sky Pass, procedural sky, dynamic environment IBL, and frame-spread update route
 - `plan/rendering/sky-pass-environment-roadmap.html`
   - HTML reading version of the Sky Pass route
 - `plan/rendering/shadow-mode-material-pass-plan.html`
@@ -192,6 +155,9 @@ Use these rules when adding or moving documents:
 - Current implemented contracts go under `architecture/` or `rendering/`.
 - Future work, partially implemented routes, migration plans, and deprecated design options go under `plan/`; completed decisions may remain there only as history, while the implementation contract moves to `architecture/` or `rendering/`.
 - Tutorials and background study material go under `reference/`.
+- **`plan/rendering/archive/` holds documents whose subject no longer exists in the repository** (for example per-model contracts whose implementation was deliberately deleted before a paper-based rebuild). They are explicitly *not* contracts; the folder's `README.md` must state why each file is there and what was deleted with it.
 - Historical notes that no longer guide implementation should be deleted or folded into a current document instead of staying as live guidance.
 
-Completed or obsolete implementation notes should not stay here as active docs. Git history is the archive.
+Completed or obsolete implementation notes should not stay here as active docs. Git history is the archive for
+ordinary churn; `plan/rendering/archive/` is the exception, used only when a deliberate deletion removes the
+subject of a document and the record of that deletion is worth keeping in-tree.

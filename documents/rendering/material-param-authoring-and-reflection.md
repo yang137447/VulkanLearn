@@ -66,33 +66,35 @@ variant，SPIR-V reflection 负责描述该 Pass/variant 实际使用的资源�
 
 ### Packed Vector 通道说明
 
-`vec2`、`vec3`、`vec4` 参数可以在 `M_*.json` 中声明可选的
-`channels`，把打包向量的名称、语义和范围固定在参数真相源旁边：
+每个参数都必须在 `M_*.json` 中声明参数级 `description`，说明该参数的用途。
+`vec2`、`vec3`、`vec4` 和 `color` 参数还必须声明完整的 `channels`，把打包向量的名称、
+语义和范围固定在参数真相源旁边：
 
 ```json
-"u_hairCharacterLighting": {
+"u_pbrFactors": {
     "type": "vec4",
-    "default": [1.0, 1.0, 1.0, 0.0],
+    "description": "fallback surface factors used when texture maps do not provide them",
+    "default": [0.5, 0.0, 1.0, 0.0],
     "channels": {
         "x": {
-            "name": "environmentLightingMultiplier",
-            "description": "environment lighting multiplier",
-            "range": {"min": 0.0, "max": 4.0}
+            "name": "roughness",
+            "description": "perceptual roughness when no PBR map is used",
+            "range": {"min": 0.0, "max": 1.0}
         },
         "y": {
-            "name": "directionalLightingMultiplier",
-            "description": "directional lighting multiplier",
-            "range": {"min": 0.0, "max": 4.0}
+            "name": "metallic",
+            "description": "metallic when no PBR map is used",
+            "range": {"min": 0.0, "max": 1.0}
         },
         "z": {
-            "name": "localLightingMultiplier",
-            "description": "local lighting multiplier",
-            "range": {"min": 0.0, "max": 4.0}
+            "name": "ambientOcclusion",
+            "description": "ambient occlusion when no PBR map is used",
+            "range": {"min": 0.0, "max": 1.0}
         },
         "w": {
-                    "name": "virtualLightIntensity",
-                    "description": "achromatic Virtual Light intensity",
-            "range": {"min": 0.0, "max": 4.0}
+            "name": "reserved",
+            "description": "reserved channel; must stay at the declared default",
+            "range": {"min": 0.0, "max": 0.0}
         }
     }
 }
@@ -100,7 +102,8 @@ variant，SPIR-V reflection 负责描述该 Pass/variant 实际使用的资源�
 
 合同规则：
 
-- 字段可省略，以兼容尚未补齐说明的旧 `M_`；
+- 所有参数必须有非空 `description`；标量参数的范围仍可按需要通过 `range` 声明；
+- 向量和颜色参数必须有完整 `channels`，不能省略或只声明部分分量；
 - 一旦声明，就必须是对象，并完整且仅包含对应 GLSL 分量：
   `vec2=x/y`、`vec3=x/y/z`、`vec4=x/y/z/w`；
 - 每个通道必须包含非空的稳定 `name`、人类可读的 `description` 和
@@ -111,7 +114,7 @@ variant，SPIR-V reflection 负责描述该 Pass/variant 实际使用的资源�
 - 使用 `x/y/z/w` 而不是 `r/g/b/a`，因为该字段描述的是参数分量合同；
   颜色参数可在 `name` 或 `description` 中明确对应 red/green/blue/alpha；
 - `MaterialAssetValidator` 在资产入口校验完整性，`MaterialDescriptorSchema` 按
-  `x/y/z/w` 顺序保留通道元数据，范围同时用于 M_ 默认值和 MI 有效值校验，
+  `x/y/z/w` 顺序保留参数和通道元数据，范围同时用于 M_ 默认值和 MI 有效值校验，
   供编辑器、调试 UI 和迁移工具读取；
 - 该元数据不参与 UBO 排列、descriptor layout、shader ABI 或生成 GLSL；
   它只约束 authoring 数据，不在 shader 中增加运行时 `clamp()`。

@@ -52,6 +52,22 @@ Current implemented areas include:
 - Shader hot reload: manual/FileMonitor triggers, compile worker, ABI-compatible Material/Compute/UI replacement, M_*.json schema rebuild, GPU-epoch retirement
 - Tracy and NVTX profiling markers
 
+Shading model state (2026-09-12): the per-model implementations were deleted on purpose — ClearCoat, Cloth,
+Eye, Hair, Subsurface ×3, ThinTranslucent and TwoSidedFoliage — together with their case assets. Each model is
+rebuilt **from its paper**, one at a time, following `documents/plan/rendering/shading-model-alignment-plan.md`
+§0.6. The interface surface is deliberately kept because it stays UE-aligned and is currently unconsumed:
+`engine/materialInputs.glsl` model structs, `engine/materialSurface.glsl` fields, `engine/gbufferCodec.glsl`
+layout, the `ShadingModelID` table, debug-view data plumbing and the renderMode/output macros. Re-adding a
+model means adding its evaluator **and** its dispatch case (`engine/forwardLighting.glsl`,
+`engine/deferredLighting.glsl`), its `customData` encoding and its material validation in the same change —
+a ShadingModelID without a dispatch case silently falls back to DefaultLit. Infrastructure that existed only
+to serve those models went with them: the four LUT-generator compute shaders (`clothLookupTables`,
+`eyeCausticLut`, `hairAzimuthalLut`, `subsurfaceLookupTables`), their C++ generators/loaders, the SSS blur and
+composition passes, and set 3 bindings 10..13. `deferredLighting` therefore writes `sceneColor` directly
+again (single output, `loadOp=clear`) and `VL_MATERIAL_OUTPUT_THIN_TRANSLUCENT` is now a compile-time
+`#error`. Re-adding a model that needs a LUT means adding the graph `input`, the pass material texture slot
+and the shader sampler declaration together, keeping binding order equal to the graph input order.
+
 The codebase mixes engine experimentation and learning-oriented iteration. Prefer small, explicit, reversible changes.
 
 ## Read Order
@@ -77,7 +93,12 @@ Design references currently live under `documents/`:
 - `documents/rendering/descriptor-imageinfo-management.md`
 - `documents/rendering/shader-build-cache.md`
 - `documents/rendering/shader-hot-reload.md`
-- `documents/plan/rendering/sky-pass-environment-roadmap.md`
+- `documents/plan/rendering/sky-pass-environment-roadmap.html`
+- `documents/plan/rendering/shading-model-alignment-plan.md`
+- `documents/plan/rendering/shading-model-case-records.md`
+  - per-case evidence archive for the alignment plan (paper-curve pixel measurements, conventions pinned by measurement); `artifacts/` is gitignored, so conclusions live in this record
+- `documents/plan/rendering/archive/`
+  - **not contracts**: documents whose subject no longer exists in the repository. The per-model shading model implementations (ClearCoat / Cloth / Eye / Hair / Subsurface ×3 / ThinTranslucent / TwoSidedFoliage) and their case assets were deliberately deleted on 2026-09-12; each model is now rebuilt from its paper while the MaterialInputs interface, ShadingModelID table and GBuffer layout stay UE-aligned. `archive/README.md` records why each file is archived and exactly what was deleted
 - `documents/reference/rendering/tone-mapping-tutorial.html`
 
 Current implementation contracts stay in `architecture/` and `rendering/`. Unimplemented or partially implemented roadmaps stay in `plan/`. Historical implementation notes are intentionally not kept as live docs.
@@ -163,6 +184,7 @@ If a change affects boot behavior, verify it against this order.
 - `shader/spv/`: compiled shader output and debug reflection artifacts
 - `extern/`: third-party dependencies
 - `tool/`: profiling tools bundled in repo
+- `tool/validation/`: offline paper-case validation harness (`bmp_reader.py`, `measure_plot_curve.py`, `run_paper_case.ps1`, `console_inject.ps1`); pixel-level curve/UV measurement for `documents/plan/rendering/shading-model-alignment-plan.md`. These are offline scripts, **not** runtime test commands; outputs go to the gitignored `artifacts/`
 - `documents/`: active architecture and planning documents
 
 ## Data Model Conventions
@@ -286,6 +308,9 @@ complete test policy. The non-negotiable repository rules are:
   agreement and a documented reason that a module test is insufficient.
 - Runtime tests share `shader/spv/` and must run serially. They are final
   end-to-end validation, not a substitute for module coverage.
+- Paper-case pixel/energy validation is **not** a runtime test: it runs outside
+  the engine through `tool/validation/` (see the shading-model alignment plan
+  §1.5.3) and must not be wired into ctest or the runtime test flags.
 
 ## Common Task Map
 

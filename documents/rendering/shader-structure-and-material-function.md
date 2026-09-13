@@ -130,20 +130,29 @@ Shading Model 消费 MaterialInputs，负责 UE 对齐的光照响应。Shading 
 
 | Shading Model | 当前状态 | 说明 |
 |---|---|---|
-| DefaultLit | 已实现 | Deferred 和 Forward 基础 PBR 路径。 |
-| Unlit | 已实现 | Deferred 和 Forward 非光照路径。 |
-| ClearCoat | 已实现 | Deferred 和 Forward，使用 GBufferD/customData 的双层法线与清漆输入。 |
-| ThinTranslucent | 已实现 | Forward 专用；依赖 ThinTranslucent RenderMode，不等同于普通 AlphaBlend。 |
-| PreintegratedSkin | 部分实现（Deferred MVP） | 已接入 Skin MaterialInputs、GBuffer/customData 和 Deferred evaluator；当前 M_neoxSkin 为 Opaque 路径，Forward 仍回退到 DefaultLit。 |
-| Subsurface / SubsurfaceProfile | 待专项 | ID 已注册，但仍需独立完成光照闭包、GBuffer 和 Pass 合同。 |
-| Hair | 已实现（VulkanLearn MVP） | 已补齐 HairMaterialInputs、Forward/Deferred evaluator、Hair GBuffer、Card coverage、ShadowDepth 和 Debug View 21–41；runtime validation 入口已接入但仍要求正式 authoring LUT，不声称 UE 私有 shader 逐行 parity。 |
-| Eye | 待专项 | ID 已注册，虹膜、角膜和眼部 IBL 尚无独立实现。 |
-| Cloth | 待专项 | ID 已注册，布料专用高光尚无独立实现。 |
-| TwoSidedFoliage | 已实现（MVP） | ID 6；Forward/Deferred 共用 UE Legacy foliage Transmission evaluator，支持 Opaque/OpaqueClip、独立 Opacity/Subsurface authoring（BaseColor A 回退）和统一 worldNormal 语义；WPO/PDO、厚度与透明透光仍是后续路线。 |
+| DefaultLit | 已实现 | Deferred 和 Forward 基础 PBR 路径（`M_pbr`）。 |
+| Unlit | 已实现 | Deferred 和 Forward 非光照路径（`M_unlit` / `M_vertexColor` / `M_brdfPlot` / `M_measureGrid`）。 |
+| ClearCoat | **实现已删除** | 接口（MaterialInputs / GBuffer 槽位 / renderMode）保留；按论文重做后重新接入。 |
+| ThinTranslucent | **实现已删除** | 同上；重建时必须重新设计 RenderMode 与双源输出路径——`passTemplate/base.frag.glsl` 里该分支现在是编译期错误。 |
+| PreintegratedSkin | **实现已删除** | 同上。 |
+| Subsurface / SubsurfaceProfile | **实现已删除** | 同上；SSS 屏幕空间 pass 与 LUT 生成器已一并删除。 |
+| Hair | **实现已删除** | 同上；Hair LUT 生成器、Card coverage 与 Debug View 21–41 的数据供给链路已删除，接口结构保留。 |
+| Eye | **实现已删除** | 同上；四个 Eye 母材质与 dual-shell pass 已删除。 |
+| Cloth | **实现已删除** | 同上；两张 directional-albedo LUT 与各向异性路径已删除。 |
+| TwoSidedFoliage | **实现已删除** | 同上；重建前先决定背光常量是否参数化。 |
 | Iridescence | 待定义 | 当前没有独立的 Shading Model ID 和 GBuffer 合同。 |
 
-对仍标记为“待专项”的模型，“已注册 ID”只表示资产校验和 GBuffer 编码可以识别该名称；Hair 和 TwoSidedFoliage 是已完成专项实现的例外，
-已补齐各自的 Forward/Deferred 分发、MaterialInputs、GBuffer/customData 合同和 Debug View。其他专项仍需在各自合同中明确 BRDF、光照 Lobe、Pass 和验收边界。
+> **2026-09-12 清理**：除 DefaultLit / Unlit 外的逐模型实现（母材质、engine 求值器、分发 case、
+> customData 编码、LUT 生成器、SSS pass、逐模型校验与绘制分支）与只服务它们的案例资产被整体删除，
+> 每个模型改为**按论文逐个重做**（计划见 `documents/plan/rendering/shading-model-alignment-plan.md`
+> §0.6）。**保留的是接口面**：`MaterialModelInputs` 的模型结构体、`MaterialSurface` 字段、
+> GBuffer 布局与槽位、`ShadingModelID` 表、Debug View 数据结构与 setter、各 renderMode / 输出宏。
+> 它们现在没有实现去消费，这是刻意的——重做某个模型时先按 UE 语义确认接口，再写求值器，
+> 并**同批补上分发 case 与材质校验**（只有 ID 没有 case 会静默落到 DefaultLit）。
+> 删除清单与归档文档见 `documents/plan/rendering/archive/README.md`。
+
+对仍标记为“待专项”的模型，“已注册 ID”只表示资产校验和 GBuffer 编码可以识别该名称。
+其他专项仍需在各自合同中明确 BRDF、光照 Lobe、Pass 和验收边界。
 
 ### MeshPass
 
@@ -244,20 +253,24 @@ MaterialShaderComposer
 
 MF 的参数和纹理仍必须进入当前 Material Schema 合同。MF 不应绕过 M_/MI_ 的参数生成、descriptor 分配和反射校验机制。
 
-当前 NeoX Default/Silk/Pearl/Crystal 静态材质是该边界的落地示例：
+当前 MF 结构的落地示例（2026-09-12 旧实现清理后的真实状态）：
 
-- `M_neoxDefault.surface.glsl` 与 `M_neoxSilk.surface.glsl` 只选择各自的输入 MF；
-- `mf_neoxPackedSurfaceTextures.glsl` 统一采样 Default/Silk 的标准化纹理，
-  `mf_neoxPackedSurface.glsl` 解释共享表面语义，DefaultLit/Cloth MF 再补专用字段；
-- `M_neoxPearl.surface.glsl` 只选择 Pearl 组合 MF；`mf_neoxPearlTextures.glsl` 负责图集/噪声采样，
-  `mf_neoxPearlInputs.glsl` 负责 Pearl、Emission 和 Subsurface 的最终拼装；
-- `mf_pearlescentInputs.glsl` 生成 Pearl 颜色、假球法线、覆盖率和 PBR 输入；
-- `mf_emission.glsl` 负责 Base/Emission 能量拆分；
-- `mf_subsurfaceInputs.glsl` 只返回 `SubsurfaceMaterialInputs`，不修改整份 `MaterialInputs`；
-- `M_neoxCrystal.surface.glsl` 只选择 Crystal 输入 MF；`mf_neoxCrystalTextures.glsl` 负责贴图采样，
-  `mf_neoxCrystalInputs.glsl` 负责 ThinTranslucent、Emission、coverage 和双面法线组装；
+- `M_pbr.surface.glsl` 只选择 `materialFunction/mf_pbrInputs.glsl`，纹理采样与 PBR 输入生成都在该 MF 内；
+- `M_speedtree.surface.glsl` → `mf_speedtreeInputs.glsl`（内部再 include `mf_normal.glsl`）；
+  `M_speedtree.vertex.glsl` → `mf_speedtreeVertex.glsl` → `mf_speedtreeDeformation.glsl`，
+  是顶点阶段嵌套组合的例子；
+- `M_unlit.surface.glsl` → `mf_normal.glsl`（只借用共享法线解析）；
+- `M_measureGrid.surface.glsl` → `mf_measureGrid.glsl`；`M_pbr` / `M_measureGrid` / `M_brdfPlot`
+  的顶点入口 → `mf_defaultVertex.glsl`；
+- Pass 级裁剪也走 MF：`engine/passTemplate/base.frag.glsl` 与
+  `engine/passTemplate/shadowDepth.frag.glsl` 都 include `mf_alphaClip.glsl`，由 Pass 决定裁剪时机；
 - Alpha Clip 和 Cull 仍分别由 MeshPass 与 M_ Render State 负责；
 - Billboard 几何展开不属于片元 MF，当前 Pose 版本在离线 glTF 中烘焙。
+
+> 本节原先以 NeoX Default/Silk/Pearl/Crystal 静态材质为例。那些母材质与它们的
+> `mf_neox*`、`mf_emission.glsl`、`mf_pearlescentInputs.glsl`、`mf_subsurfaceInputs.glsl`
+> 已随 NeoX 角色线整体删除（文档见 `documents/plan/rendering/archive/`），不再是本仓库的示例。
+
 
 M_ 的参数 include 必须先于 `materialSurface.glsl` 和 `M_*.surface.glsl` 进入 Fragment translation unit，
 以便 `MATERIAL_SHADING_MODEL` 在 Engine 默认值生效前完成定义；这一顺序由

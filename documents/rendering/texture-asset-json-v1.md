@@ -235,23 +235,11 @@ instead of leaving the channel black or undefined. Material macros must not
 reinterpret or bypass individual packed channels; asset conversion owns channel
 packing correctness.
 
-## Preintegrated Skin Auxiliary Contract
-
-`PreintegratedSkin` 的 NeoX 脸部和身体资源不能把源 `ParamMap` 伪装成通用
-`pbrParamMap`。Skin MI 使用独立的 texture slots：
-
-```text
-skinParamMap  R=roughness, G=metallic, B=skinColorMask, A=ambientOcclusion
-skinAuxMap    R=curvature, G=detailNormalMask, B/A=reserved
-skinDetailMap RGB=离线重建的 detail normal XYZ, A=poreModulation
-```
-
-`skinParamMap`、`skinAuxMap` 与 `skinDetailMap` 是线性数据；Skin BaseColor/Normal 使用
-`clamp` 地址模式，Detail 使用 `repeat`，与 NeoX 源 sampler 合同一致。身体 P0 的
-`nb_f_2023002a/m/n` 与脸部资源共享这一套 slot 合同，纹理尺寸可以不同，运行时按各自
-UV 独立采样，不要求离线重采样到统一分辨率。
-这些 slots 只由 `M_preintegratedSkin` 的 `USE_SKIN_*_MAP` 变体消费，不能
-改变通用 `pbrParamMap` 的 R/G/B/A 解释。
+> **2026-09-12**：原 `Preintegrated Skin Auxiliary Contract`（`skinParamMap` / `skinAuxMap` /
+> `skinDetailMap` 三个 NeoX 皮肤 slot 及其采样合同）随 `M_preintegratedSkin` 的删除一并移除。
+> 该模型按论文重做时，纹理 slot 合同要**重新设计**并写回本节，不要照搬旧的三槽方案
+> ——旧方案是为 NeoX 源资产通道布局定制的，不是论文量。归档记录见
+> `documents/plan/rendering/archive/README.md`。
 
 ## File Layout
 
