@@ -22,7 +22,8 @@ namespace MaterialAssetUtils
         std::string_view shaderDefine;
     };
 
-    // ID 会写入 GBuffer/MaterialSurface，并与 GLSL 的 UE Legacy 常量一一对应。
+    // ID 会写入 GBuffer/MaterialSurface，并与 GLSL 的 SHADING_MODEL_* 槽位常量一一对应。
+    // 槽位编号照抄 UE 5.8 的表，不得重排。
     // SingleLayerWater/Strata 当前没有实现，不加入可 authoring 的材质列表，但保留其 ID 槽位。
     inline constexpr std::array<ShadingModelDesc, 11> kShadingModels = {{
         {"Unlit", 0u, "SHADING_MODEL_UNLIT"},

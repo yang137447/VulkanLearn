@@ -58,8 +58,8 @@ GraphicsPipelineLayoutDesc BuildMaterialSurfacePipelineLayout(
         descriptorSchema.GetSetBindings();
 
     // Set 3 的物理布局由 RenderGraph 输入集合决定，而不是由当前 shader
-    // 反射出的“实际使用子集”决定。这样 ThinTranslucent 等非 Hair variant
-    // 也能与同一个 forwardTransparent descriptor set 兼容。
+    // 反射出的“实际使用子集”决定。这样同一个 pass 下不同 renderMode /
+    // macro 组合的材质变体都能复用该 pass 的 descriptor set，而不必各自一套布局。
     layoutDesc.overrideSets[PassSetIndex] = true;
     for (const CompiledRenderGraphPassInputDescriptor& inputDescriptor :
          renderPass.inputDescriptorPlan)

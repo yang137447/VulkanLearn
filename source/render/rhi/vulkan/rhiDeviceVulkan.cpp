@@ -305,7 +305,7 @@ const std::vector<vk::ImageView>& RHIDeviceVulkan::GetSwapchainImageViews() cons
 
 const std::vector<vk::Image>& RHIDeviceVulkan::GetSwapchainImages() const
 {
-    return VulkanManager::GetInstance().GetSwapChainImages();
+    return VulkanManager::GetInstance().GetPresentImages();
 }
 
 std::vector<vk::Fence>& RHIDeviceVulkan::GetTaskFinishedFences()

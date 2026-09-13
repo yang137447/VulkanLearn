@@ -243,7 +243,7 @@ public:
     MaterialEditorServiceResult ResolveSceneMaterialAsset(
         const ResolveSceneMaterialAssetPayload& payload);
 
-    // Batch 在同一份临时 working 状态上验证；失败时不改变当前文档。
+    // Batch 在隔离的草稿 working 状态上验证；失败时不改变当前文档。
     MaterialEditorServiceResult ExecuteBatch(
         const ExecuteEditorCommandBatchPayload& batch,
         std::optional<EditorDocumentRevision> expectedRevision);

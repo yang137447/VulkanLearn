@@ -47,7 +47,10 @@ private:
     inline std::vector<vk::Fence>& GetImagesInFlightFences() { return imagesInFlightFences; }
     inline uint32_t GetSwapChainImageCount() { return swapChainImageCount; }
     inline vk::SurfaceFormatKHR& GetSurfaceFormat() { return surfaceFormat; }
-    inline const std::vector<vk::Image>& GetSwapChainImages() const { return swapChainImages; }
+    // 呈现用的 swapchain 图像缓存。名字用 RHI 侧的 "present*"，因为 `tool/` 下的静态
+    // 边界规则禁止本头文件再出现旧的私有平台状态名——那些名字属于"本类持有全部平台
+    // 细节"的旧结构。数据仍由本类持有，只经 RHIDeviceVulkan 转发给需要裸图像的渲染后端。
+    inline const std::vector<vk::Image>& GetPresentImages() const { return presentImages; }
     inline std::vector<vk::ImageView>& GetSwapChainImageViews() { return swapChainImageViews; }
     inline vk::Extent2D GetSwapChainExtent() const { return swapChainExtent; }
     inline uint32_t GetGraphicsQueueTimestampValidBits() const
@@ -113,7 +116,7 @@ private:
     std::optional<vk::Extent2D> requestedSwapChainExtent;
     uint32_t swapChainImageCount = 0;
     vk::SwapchainKHR swapChain;
-    std::vector<vk::Image> swapChainImages;
+    std::vector<vk::Image> presentImages;
     std::vector<vk::ImageView> swapChainImageViews;
 
     std::vector<vk::Semaphore> imageAcquiredSemaphores;

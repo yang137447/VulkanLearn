@@ -28,7 +28,7 @@ struct ComputeDescriptorReplacement
     vk::DescriptorPool descriptorPool;
     std::vector<vk::DescriptorSet> descriptorSets;
     // 某些 Compute owner 不只持有 descriptor package，还需要把候选的
-    // GPU product（例如 Eye LUT）与 pipeline 一起原子发布。这里使用
+    // GPU product（例如 compute 生成的 LUT 资源）与 pipeline 一起原子发布。这里使用
     // type-erased shared ownership，具体 owner 在 CommitReplacement 中
     // 恢复自己的 payload 类型；worker 阶段仍不会触碰 Vulkan 对象。
     std::shared_ptr<void> replacementPayload;

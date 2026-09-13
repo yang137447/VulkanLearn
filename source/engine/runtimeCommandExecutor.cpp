@@ -713,7 +713,7 @@ void RuntimeCommandExecutor::ApplySaveCsmSettingsToScene(
         nlohmann::ordered_json sceneJson;
         {
             // Windows 无法原子替换仍被当前进程的 ifstream 占用的文件。
-            // 读取作用域必须在临时文件落盘和替换目标文件之前结束。
+            // 读取作用域必须在暂存文件落盘并替换目标文件之前结束。
             std::ifstream sceneFile(scenePath);
             if (!sceneFile.is_open())
             {

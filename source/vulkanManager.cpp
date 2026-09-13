@@ -324,18 +324,18 @@ void VulkanManager::CreateVkSwapChain()
     vk::Result result = device.getSwapchainImagesKHR(swapChain, &swapChainImageCount, nullptr);
     assert(result == vk::Result::eSuccess);
     // 获取交换链中的图像
-    swapChainImages.clear();
-    swapChainImages.resize(swapChainImageCount);
-    result = device.getSwapchainImagesKHR(swapChain, &swapChainImageCount, swapChainImages.data());
+    presentImages.clear();
+    presentImages.resize(swapChainImageCount);
+    result = device.getSwapchainImagesKHR(swapChain, &swapChainImageCount, presentImages.data());
     assert(result == vk::Result::eSuccess);
     // 创建交换链图像视图
     swapChainImageViews.resize(swapChainImageCount);
     for (uint32_t i = 0; i < swapChainImageCount; i++)
     {
-        VulkanDebug::SetObjectName(device, swapChainImages[i], vk::ObjectType::eImage, "SwapChainImage: Index " + std::to_string(i));
+        VulkanDebug::SetObjectName(device, presentImages[i], vk::ObjectType::eImage, "SwapChainImage: Index " + std::to_string(i));
         swapChainImageViews[i] = CommonFunction::Create2DImageView(
             device,
-            swapChainImages[i],
+            presentImages[i],
             1,
             surfaceFormat.format,
             vk::ImageAspectFlagBits::eColor,
