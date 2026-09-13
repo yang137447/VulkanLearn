@@ -93,14 +93,20 @@ namespace
         std::string_view type,
         std::string_view materialPath)
     {
-        if (!parameterJson.contains("channels"))
-        {
-            return;
-        }
         if (type == "float")
         {
+            if (parameterJson.contains("channels"))
+            {
+                throw std::runtime_error(
+                    "Scalar material parameter cannot declare channels: " +
+                    std::string(parameterName) + " in " + std::string(materialPath));
+            }
+            return;
+        }
+        if (!parameterJson.contains("channels"))
+        {
             throw std::runtime_error(
-                "Scalar material parameter cannot declare channels: " +
+                "Vector or color material parameter requires complete channel metadata: " +
                 std::string(parameterName) + " in " + std::string(materialPath));
         }
 
@@ -214,118 +220,6 @@ namespace
     {
         return value.is_number() && std::isfinite(value.get<double>());
     }
-
-    void RequireClothParameter(
-        const nlohmann::json& parameters,
-        std::string_view name,
-        std::string_view type,
-        std::string_view materialPath)
-    {
-        if (!parameters.contains(std::string(name)) ||
-            !parameters.at(std::string(name)).is_object() ||
-            parameters.at(std::string(name)).value("type", std::string()) != type)
-        {
-            throw std::runtime_error(
-                "Cloth material requires " + std::string(name) + " as " +
-                std::string(type) + ": " + std::string(materialPath));
-        }
-    }
-
-    void ValidateClothDefinition(
-        const nlohmann::json& materialJson,
-        std::string_view materialPath)
-    {
-        const auto& parameters = materialJson.at("parameters");
-        RequireClothParameter(parameters, "u_clothSheenColor", "color", materialPath);
-        RequireClothParameter(parameters, "u_clothSheenRoughness", "float", materialPath);
-        RequireClothParameter(parameters, "u_clothAnisotropy", "float", materialPath);
-        RequireClothParameter(parameters, "u_clothAnisotropyCross", "float", materialPath);
-        RequireClothParameter(parameters, "u_pbrFactors", "vec4", materialPath);
-
-        const auto& sheenColor = parameters.at("u_clothSheenColor").at("default");
-        if (!sheenColor.is_array() || sheenColor.size() != 4)
-        {
-            throw std::runtime_error(
-                "Cloth sheen color default must be a four-component linear RGBA value: " +
-                std::string(materialPath));
-        }
-        for (const auto& component : sheenColor)
-        {
-            if (!IsFiniteNumber(component) || component.get<double>() < 0.0 ||
-                component.get<double>() > 1.0)
-            {
-                throw std::runtime_error(
-                    "Cloth sheen color default must be finite and within [0, 1]: " +
-                    std::string(materialPath));
-            }
-        }
-        if (sheenColor[3].get<double>() != 1.0)
-        {
-            throw std::runtime_error(
-                "Cloth sheen color alpha is reserved and must remain 1: " +
-                std::string(materialPath));
-        }
-
-        const auto& sheenRoughness =
-            parameters.at("u_clothSheenRoughness").at("default");
-        if (!IsFiniteNumber(sheenRoughness) ||
-            sheenRoughness.get<double>() < 0.02 ||
-            sheenRoughness.get<double>() > 1.0)
-        {
-            throw std::runtime_error(
-                "Cloth sheen roughness default must be within [0.02, 1]: " +
-                std::string(materialPath));
-        }
-
-        const auto& anisotropy =
-            parameters.at("u_clothAnisotropy").at("default");
-        if (!IsFiniteNumber(anisotropy) ||
-            anisotropy.get<double>() < -1.0 ||
-            anisotropy.get<double>() > 1.0)
-        {
-            throw std::runtime_error(
-                "Cloth anisotropy default must be within [-1, 1]: " +
-                std::string(materialPath));
-        }
-
-        const auto& anisotropyCross =
-            parameters.at("u_clothAnisotropyCross").at("default");
-        if (!IsFiniteNumber(anisotropyCross) ||
-            anisotropyCross.get<double>() < 0.0 ||
-            anisotropyCross.get<double>() > 1.0)
-        {
-            throw std::runtime_error(
-                "Cloth anisotropy cross default must be within [0, 1]: " +
-                std::string(materialPath));
-        }
-
-        const auto& pbrFactors = parameters.at("u_pbrFactors").at("default");
-        if (!pbrFactors.is_array() || pbrFactors.size() != 4)
-        {
-            throw std::runtime_error(
-                "Cloth u_pbrFactors default must be a four-component value: " +
-                std::string(materialPath));
-        }
-        for (const auto& component : pbrFactors)
-        {
-            if (!IsFiniteNumber(component))
-            {
-                throw std::runtime_error(
-                    "Cloth u_pbrFactors default must be finite: " +
-                    std::string(materialPath));
-            }
-        }
-        if (pbrFactors[0].get<double>() < 0.02 ||
-            pbrFactors[0].get<double>() > 1.0 ||
-            pbrFactors[1].get<double>() != 0.0 ||
-            pbrFactors[2].get<double>() < 0.0 ||
-            pbrFactors[2].get<double>() > 1.0)
-        {
-            throw std::runtime_error(
-                "Cloth base PBR defaults require roughness [0.02, 1], metallic 0 and AO [0, 1]: " +
-                std::string(materialPath));
-        }
-    }
 }
 void MaterialAssetValidator::ValidateDefinition(
     const nlohmann::json& materialJson,
@@ -358,10 +252,6 @@ void MaterialAssetValidator::ValidateDefinition(
         renderStates.value("renderMode", std::string("Opaque")),
         renderStates.value("cullMode", std::string("Back")),
         materialPath);
-    if (materialJson["shadingModel"].get<std::string>() == "Cloth")
-    {
-        ValidateClothDefinition(materialJson, materialPath);
-    }
 
     if (materialJson.contains("features"))
     {
@@ -418,7 +308,15 @@ void MaterialAssetValidator::ValidateDefinition(
                 "Material parameter type/default mismatch: " + parameterName +
                 " in " + std::string(materialPath));
         }
-        // 通道说明只服务作者与工具；完整性在资产入口校验，不能改变 UBO 或 shader ABI。
+        if (!parameterJson.contains("description") ||
+            !parameterJson.at("description").is_string() ||
+            MaterialAssetUtils::Trim(parameterJson.at("description").get<std::string>()).empty())
+        {
+            throw std::runtime_error(
+                "Material parameter requires non-empty usage description: " +
+                parameterName + " in " + std::string(materialPath));
+        }
+        // M_ 元数据只约束作者输入和工具展示，不改变 UBO 或 shader ABI。
         ValidateParameterChannels(
             parameterJson,
             parameterName,
@@ -691,12 +589,10 @@ void MaterialAssetValidator::ValidateRenderStateCombination(
     }
     MaterialAssetUtils::ShadingModelToId(shadingModel);
 
-    static constexpr std::array<std::string_view, 9> renderModes = {
+    static constexpr std::array<std::string_view, 7> renderModes = {
         "Opaque",
         "OpaqueClip",
         "ForwardOpaque",
-        "ForwardEyeInner",
-        "ForwardEyeCornea",
         "TransparentAlphaBlend",
         "TransparentAlphaBlendWriteDepth",
         "TransparentAdditive",
@@ -713,22 +609,17 @@ void MaterialAssetValidator::ValidateRenderStateCombination(
         shadingModel == "ThinTranslucent";
     const bool usesEyeShadingModel = shadingModel == "Eye";
     const bool usesForwardOpaqueRenderMode = renderMode == "ForwardOpaque";
-    const bool usesEyeLayerRenderMode =
-        renderMode == "ForwardEyeInner" ||
-        renderMode == "ForwardEyeCornea";
     const bool usesDeferredOpaqueRenderMode = renderMode == "Opaque";
 
     if (usesEyeShadingModel &&
         !usesForwardOpaqueRenderMode &&
-        !usesEyeLayerRenderMode &&
         !usesDeferredOpaqueRenderMode)
     {
         throw std::runtime_error(
             "Eye shadingModel requires an explicit Eye render path: " +
             std::string(materialInstancePath));
     }
-    if (!usesEyeShadingModel &&
-        (usesForwardOpaqueRenderMode || usesEyeLayerRenderMode))
+    if (!usesEyeShadingModel && usesForwardOpaqueRenderMode)
     {
         throw std::runtime_error(
             "Only Eye shadingModel may use an Eye forward render path: " +

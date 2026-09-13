@@ -17,11 +17,7 @@ bool RendererResourceCache::WorldLocalResourcePackage::Empty() const noexcept
         materials.empty() &&
         materialInstances.empty() &&
         objectResources.empty() &&
-        textures.empty() &&
-        !subsurfaceResources &&
-        !hairResources &&
-        !eyeResources &&
-        !clothResources;
+        textures.empty();
 }
 
 RendererResourceCache::RendererResourceCache()
@@ -417,135 +413,6 @@ const std::shared_ptr<Texture>* RendererResourceCache::GetTexture(std::string_vi
     }
 
     return nullptr;
-}
-
-// SSS lookup 只写入当前 candidate package；commit 前 active World 看不到半成品资源。
-void RendererResourceCache::BindSubsurfaceResources(
-    std::shared_ptr<const SubsurfaceResourceSet> resources)
-{
-    GetMutableWorldLocalResources().subsurfaceResources =
-        std::move(resources);
-}
-
-const std::shared_ptr<const SubsurfaceResourceSet>&
-RendererResourceCache::GetSubsurfaceResources() const noexcept
-{
-    return worldLocalResources->subsurfaceResources;
-}
-
-// Hair LUT 与 SSS 使用相同的 candidate ownership 边界，避免 World reload 中途暴露半成品。
-void RendererResourceCache::BindHairResources(
-    std::shared_ptr<const HairResourceSet> resources)
-{
-    GetMutableWorldLocalResources().hairResources = std::move(resources);
-}
-
-const std::shared_ptr<const HairResourceSet>&
-RendererResourceCache::GetHairResources() const noexcept
-{
-    return worldLocalResources->hairResources;
-}
-
-// Eye 资源与 profile ID 一起发布，避免材质在 candidate 阶段看到另一代 LUT。
-void RendererResourceCache::BindEyeResources(
-    std::shared_ptr<const EyeResourceSet> resources)
-{
-    GetMutableWorldLocalResources().eyeResources = std::move(resources);
-}
-
-const std::shared_ptr<const EyeResourceSet>&
-RendererResourceCache::GetEyeResources() const noexcept
-{
-    return worldLocalResources->eyeResources;
-}
-
-void RendererResourceCache::BindClothResources(
-    std::shared_ptr<const ClothResourceSet> resources)
-{
-    GetMutableWorldLocalResources().clothResources = std::move(resources);
-}
-
-const std::shared_ptr<const ClothResourceSet>&
-RendererResourceCache::GetClothResources() const noexcept
-{
-    return worldLocalResources->clothResources;
-}
-
-RendererResourceCache::PreparedEyeResourceReplacement
-RendererResourceCache::PrepareEyeResourceReplacement(
-    std::shared_ptr<const EyeResourceSet> resources,
-    std::shared_ptr<Texture> causticLutTexture) const
-{
-    if (!resources || !causticLutTexture)
-    {
-        throw std::runtime_error(
-            "Eye resource replacement requires a complete resource set and LUT texture");
-    }
-
-    PreparedEyeResourceReplacement replacement;
-    replacement.previousPackage = worldLocalResources;
-    replacement.replacementPackage =
-        std::make_shared<WorldLocalResourcePackage>(*worldLocalResources);
-    replacement.replacementPackage->eyeResources = std::move(resources);
-    replacement.replacementPackage->worldTextures["eyeCausticLut"] =
-        std::move(causticLutTexture);
-    return replacement;
-}
-
-RendererResourceCache::WorldLocalResourcePackageHandle
-RendererResourceCache::CommitPreparedEyeResourceReplacement(
-    PreparedEyeResourceReplacement&& replacement) noexcept
-{
-    if (!replacement.replacementPackage)
-    {
-        return {};
-    }
-
-    WorldLocalResourcePackageHandle retired =
-        std::move(worldLocalResources);
-    worldLocalResources = std::move(replacement.replacementPackage);
-    return retired;
-}
-RendererResourceCache::PreparedClothResourceReplacement
-RendererResourceCache::PrepareClothResourceReplacement(
-    std::shared_ptr<const ClothResourceSet> resources,
-    std::shared_ptr<Texture> directionalAlbedoLutTexture,
-    std::shared_ptr<Texture> anisotropicDirectionalAlbedoLutTexture) const
-{
-    if (!resources || !directionalAlbedoLutTexture ||
-        !anisotropicDirectionalAlbedoLutTexture)
-    {
-        throw std::runtime_error(
-            "Cloth resource replacement requires a complete resource set and LUT texture");
-    }
-
-    PreparedClothResourceReplacement replacement;
-    replacement.previousPackage = worldLocalResources;
-    replacement.replacementPackage =
-        std::make_shared<WorldLocalResourcePackage>(*worldLocalResources);
-    replacement.replacementPackage->clothResources = std::move(resources);
-    replacement.replacementPackage->worldTextures[
-        "clothDirectionalAlbedoLut"] =
-        std::move(directionalAlbedoLutTexture);
-    replacement.replacementPackage->worldTextures[
-        "clothAnisotropicDirectionalAlbedoLut"] =
-        std::move(anisotropicDirectionalAlbedoLutTexture);
-    return replacement;
-}
-
-RendererResourceCache::WorldLocalResourcePackageHandle
-RendererResourceCache::CommitPreparedClothResourceReplacement(
-    PreparedClothResourceReplacement&& replacement) noexcept
-{
-    if (!replacement.replacementPackage)
-    {
-        return {};
-    }
-
-    WorldLocalResourcePackageHandle retired =
-        std::move(worldLocalResources);
-    worldLocalResources = std::move(replacement.replacementPackage);
-    return retired;
 }
 
 

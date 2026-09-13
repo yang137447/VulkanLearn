@@ -116,8 +116,6 @@ namespace VL::Editor::Persistence
                 return value == "Opaque" ||
                     value == "OpaqueClip" ||
                     value == "ForwardOpaque" ||
-                    value == "ForwardEyeInner" ||
-                    value == "ForwardEyeCornea" ||
                     value == "TransparentAlphaBlend" ||
                     value == "TransparentAlphaBlendWriteDepth" ||
                     value == "TransparentAdditive" ||

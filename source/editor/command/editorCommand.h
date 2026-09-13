@@ -118,8 +118,6 @@ enum class EditorMaterialRenderMode
     Opaque,
     OpaqueClip,
     ForwardOpaque,
-    ForwardEyeInner,
-    ForwardEyeCornea,
     TransparentAlphaBlend,
     TransparentAlphaBlendWriteDepth,
     TransparentAdditive,

@@ -692,53 +692,10 @@ Test-FilePatternsAbsent `
 
 Test-RuntimeValidationAdapterBoundary -Failures $failures
 
-Test-PathsAbsent `
-    -Failures $failures `
-    -RelativePaths @(
-        "source/render/hair/hairReference.h",
-        "source/render/hair/hairReference.cpp",
-        "source/render/hair/hairGBufferCodec.h",
-        "source/render/hair/hairGBufferCodec.cpp"
-    ) `
-    -RuleName "Hair test oracle production boundary"
-
-Test-FilePatternsAbsent `
-    -Failures $failures `
-    -RelativePaths @("source/CMakeLists.txt") `
-    -Patterns @(
-        'hairReference',
-        'hairGBufferCodec'
-    ) `
-    -RuleName "Hair test oracle production target boundary"
-
-Test-FilePatternsPresent `
-    -Failures $failures `
-    -RelativePath "tool/hair-tests/CMakeLists.txt" `
-    -Patterns @(
-        'support/hairReference.cpp',
-        'support/hairGBufferCodec.cpp'
-    ) `
-    -RuleName "Hair test oracle support boundary"
-
-Test-FilePatternsAbsent `
-    -Failures $failures `
-    -RelativePaths @("source/render/hair/hairAssets.cpp") `
-    -Patterns @(
-        'TryLoadHairAzimuthalLutAsset',
-        'ResolveMetadataPath',
-        'Generated/Runtime/hairAzimuthalLut.json'
-    ) `
-    -RuleName "Hair authoring metadata loader boundary"
-
-Test-FilePatternsAbsent `
-    -Failures $failures `
-    -RelativePaths @("source/render/hair/hairLutBaker.cpp") `
-    -Patterns @(
-        'default-neutral-hair-lut',
-        'CommitGeneratedMetadata',
-        'WriteFileBatchAtomically'
-    ) `
-    -RuleName "Hair candidate metadata publication boundary"
+# Hair 的 4 条 test-oracle / authoring-metadata 规则随 Hair 旧实现（2026-09-12 清理）删除：
+# 它们断言的对象（source/render/hair/hairReference.*、hairGBufferCodec.*、hairAssets.cpp、
+# hairLutBaker.cpp、tool/hair-tests/CMakeLists.txt）已不存在，其中 "Hair test oracle support
+# boundary" 会在文件缺失时直接失败。重建 Hair 时如需恢复边界断言，按新实现重新写规则。
 
 # RHIDeviceVulkan is the concrete Vulkan device-facing boundary. The old abstract
 # RHIDevice interface was removed because Vulkan is the only graphics API and a

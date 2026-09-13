@@ -50,17 +50,9 @@ if(VULKANLEARN_BUILD_TESTS)
 
     add_subdirectory(tool/shader-build-core-tests)
     add_subdirectory(tool/shader-build-integration-tests)
-    add_subdirectory(tool/thin-translucent-tests)
-    add_subdirectory(tool/subsurface-tests)
-    add_subdirectory(tool/hair-tests)
-    add_subdirectory(tool/cloth-tests)
     add_subdirectory(tool/material-schema-tests)
     add_subdirectory(tool/texture-asset-tests)
     add_subdirectory(tool/material-instance-editor-tests)
-
-    add_subdirectory(tool/hair-lut-generator)
-    add_subdirectory(tool/eye-tests)
-    add_subdirectory(tool/eye-authoring-adapter)
 endif()
 
 option(VULKANLEARN_BUILD_SPEEDTREE_WIND_VALIDATION

@@ -801,12 +801,10 @@ void MaterialInstanceAssetEditorPanel::RenderRenderState(
     bool changed = false;
     if (state.name == "renderMode")
     {
-        static constexpr std::array<VL::EditorMaterialRenderMode, 9> options = {{
+        static constexpr std::array<VL::EditorMaterialRenderMode, 7> options = {{
             VL::EditorMaterialRenderMode::Opaque,
             VL::EditorMaterialRenderMode::OpaqueClip,
             VL::EditorMaterialRenderMode::ForwardOpaque,
-            VL::EditorMaterialRenderMode::ForwardEyeInner,
-            VL::EditorMaterialRenderMode::ForwardEyeCornea,
             VL::EditorMaterialRenderMode::TransparentAlphaBlend,
             VL::EditorMaterialRenderMode::TransparentAlphaBlendWriteDepth,
             VL::EditorMaterialRenderMode::TransparentAdditive,
@@ -954,9 +952,13 @@ void MaterialInstanceAssetEditorPanel::RenderParameter(
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
         {
             ImGui::SetTooltip(
-                "Type: color (linear storage, sRGB editor)\nSource: %s\n%s",
+                "Type: color (linear storage, sRGB editor)\nSource: %s\nParameter usage: %s",
                 overridden ? "MI override" : "M_ default",
                 parameter.description.c_str());
+        }
+        if (!parameter.description.empty())
+        {
+            ImGui::TextDisabled("%s", parameter.description.c_str());
         }
         ImGui::TableSetColumnIndex(1);
         ImGui::SetNextItemWidth(-FLT_MIN);
@@ -1051,10 +1053,14 @@ void MaterialInstanceAssetEditorPanel::RenderParameter(
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
         {
             ImGui::SetTooltip(
-                "Type: %s\nSource: %s\n%s",
+                "Type: %s\nSource: %s\nParameter usage: %s",
                 TypeName(parameter.type),
                 overridden ? "MI override" : "M_ default",
                 parameter.description.c_str());
+        }
+        if (!parameter.description.empty())
+        {
+            ImGui::TextDisabled("%s", parameter.description.c_str());
         }
         ImGui::TableSetColumnIndex(2);
         ImGui::BeginDisabled(!overridden);
@@ -1096,10 +1102,14 @@ void MaterialInstanceAssetEditorPanel::RenderParameter(
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
             {
                 ImGui::SetTooltip(
-                    "Type: %s\nSource: %s\n%s",
+                    "Type: %s\nSource: %s\nParameter usage: %s",
                     TypeName(parameter.type),
                     overridden ? "MI override" : "M_ default",
                     parameter.description.c_str());
+            }
+            if (!parameter.description.empty())
+            {
+                ImGui::TextDisabled("%s", parameter.description.c_str());
             }
         }
         else
@@ -1154,7 +1164,13 @@ void MaterialInstanceAssetEditorPanel::RenderParameter(
             const char* description = channel.description.empty()
                 ? parameter.description.c_str()
                 : channel.description.c_str();
-            if (*description != '\0') ImGui::SetTooltip("%s", description);
+            if (*description != '\0')
+            {
+                ImGui::SetTooltip(
+                    "Parameter usage: %s\nChannel usage: %s",
+                    parameter.description.c_str(),
+                    description);
+            }
         }
         ImGui::PopID();
 

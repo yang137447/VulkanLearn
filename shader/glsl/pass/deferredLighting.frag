@@ -6,10 +6,11 @@
 #include "../engine/materialDebugView.glsl"
 
 layout(location = 0) in vec2 inUV;
-layout(location = 0) out vec4 outDiffuseLighting;
-layout(location = 1) out vec4 outNonDiffuseLighting;
-layout(location = 2) out vec4 outTransmissionLighting;
-layout(location = 3) out vec4 outSssSource;
+// 单输出：旧 SSS 流程曾把结果拆成 diffuse / nonDiffuse / transmission / sssSource 四路，
+// 由 sssComposition 负责合成。SSS 系列实现于 2026-09-12 清理后无人消费那份拆分，
+// 因此这里回到直接写 sceneColor；将来重建 SSS / ThinTranslucent 时，由该模型自带合成 pass，
+// 不要重新让所有模型都为它多写一路输出。
+layout(location = 0) out vec4 outSceneColor;
 
 // Set 3 是 RenderGraph 为“当前 pass 输入”预留的 descriptor set。
 // 这里的 binding 顺序必须和 config/renderGraphConfig.json 中 deferredLighting.input 完全一致。
@@ -46,9 +47,7 @@ void main()
 
     DeferredLightingResult lighting = ShadeDeferredSurfaceDetailed(
         surface,
-        shadowMap,
-        subsurfaceProfileTable,
-        preintegratedSkinLutTable);
+        shadowMap);
     vec4 finalColor = vec4(lighting.finalColor, surface.opacity);
     MaterialDebugLightingData debugLighting = CreateMaterialDebugLightingData(
         lighting.shadow,
@@ -56,133 +55,8 @@ void main()
         lighting.directLighting,
         lighting.indirectDiffuse,
         lighting.indirectSpecular);
-    if (surface.shadingModel == SHADING_MODEL_PREINTEGRATED_SKIN)
-    {
-        SetMaterialDebugSkinData(
-            debugLighting,
-            lighting.skinDirectDiffuse,
-            lighting.skinTransmission,
-            lighting.skinShadowVisibility,
-            lighting.skinIblDiffuse,
-            lighting.skinIblSpecular,
-            lighting.skinVirtualLight);
-    }
-    if (surface.shadingModel == SHADING_MODEL_EYE)
-    {
-        SetMaterialDebugEyeData(
-            debugLighting,
-            lighting.eyeCorneaSpecular,
-            lighting.eyeIrisDirect,
-            lighting.eyeScleraDirect,
-            lighting.eyeInnerIbl,
-            lighting.eyeRefractedViewDirection,
-            lighting.eyeShadowCornea,
-            lighting.eyeShadowInner,
-            lighting.eyeCorneaFresnel,
-            lighting.eyeTransmissionIn,
-            lighting.eyeTransmissionOut,
-            lighting.eyeIrisHitDistance,
-            lighting.eyeIrisUv,
-            lighting.eyeValidIrisHit,
-            lighting.eyeIrisMask,
-            lighting.eyePupilMask,
-            lighting.eyeLimbusMask,
-            lighting.eyeCausticGain);
-    }
-    if (surface.shadingModel == SHADING_MODEL_HAIR)
-    {
-        SetMaterialDebugHairData(
-            debugLighting,
-            lighting.hairRPath,
-            lighting.hairTTPath,
-            lighting.hairTRTPath,
-            lighting.hairPathLength,
-            lighting.hairAbsorption,
-            lighting.hairLutCoordinates,
-            lighting.hairIblFallback,
-            lighting.hairMultipleScatteringFallback,
-            lighting.hairTangent,
-            lighting.hairBitangent,
-            lighting.hairThetaI,
-            lighting.hairThetaO,
-            lighting.hairThetaH,
-            lighting.hairThetaD,
-            lighting.hairDeltaPhi,
-            lighting.hairCoverage,
-            lighting.hairDensity,
-            lighting.hairShadowTransmittance);
-    }
-    if (surface.shadingModel == SHADING_MODEL_CLOTH)
-    {
-        SetMaterialDebugClothData(
-            debugLighting,
-            lighting.clothSheenColor,
-            lighting.clothSheenRoughness,
-            lighting.clothCharlieD,
-            lighting.clothVisibility,
-            lighting.clothModelVersion,
-            lighting.clothWorldTangent,
-            lighting.clothAnisotropy,
-            lighting.clothAnisotropyCross,
-            lighting.clothRoughnessAxes,
-            lighting.clothDirectionalAlbedo,
-            lighting.clothBaseEnergyScale,
-            lighting.clothDirectSheen,
-            lighting.clothIndirectSheen,
-            lighting.clothIblFallback);
-    }
-    if (surface.shadingModel == SHADING_MODEL_TWOSIDED_FOLIAGE)
-    {
-        bool foliageCustomDataValid =
-            (surface.selectiveOutputMask & GBUFFER_HAS_CUSTOM_DATA_MASK) != 0u;
-        SetMaterialDebugFoliageData(
-            debugLighting,
-            surface.modelInputs.twoSidedFoliage.subsurfaceColor,
-            surface.worldNormal,
-            lighting.foliageBacklitDirect,
-            lighting.foliageBacklightFactor,
-            lighting.shadow,
-            surface.opacityMask,
-            foliageCustomDataValid ? 1.0 : 0.0);
-    }
-    debugLighting.localSubsurfaceLighting =
-        lighting.localSubsurfaceLighting;
-    debugLighting.diffuseBeforeSubsurface =
-        lighting.defaultDiffuseLighting;
-    debugLighting.subsurfaceWeight = lighting.subsurfaceWeight;
-    debugLighting.transmissionWeight = lighting.transmissionWeight;
-    vec4 resolvedColor = ResolveMaterialDebugView(
+    outSceneColor = ResolveMaterialDebugView(
         surface,
         debugLighting,
         finalColor);
-
-    if ((uboVP.debugViewMode >= 1 &&
-         uboVP.debugViewMode <= 17) ||
-        (uboVP.debugViewMode >= 21 &&
-         uboVP.debugViewMode <= 41) ||
-        (uboVP.debugViewMode >= 64 &&
-         uboVP.debugViewMode <= 99))
-    {
-        outDiffuseLighting = resolvedColor;
-        outNonDiffuseLighting = vec4(0.0);
-        outTransmissionLighting = vec4(0.0);
-        outSssSource = vec4(0.0);
-        return;
-    }
-
-    outDiffuseLighting = vec4(lighting.diffuseLighting, surface.opacity);
-    outNonDiffuseLighting = vec4(lighting.nonDiffuseLighting, 0.0);
-    outTransmissionLighting = vec4(lighting.transmissionLighting, 0.0);
-    vec3 sssSource = vec3(0.0);
-    if (surface.shadingModel == SHADING_MODEL_SUBSURFACE_PROFILE)
-    {
-        sssSource = lighting.diffuseLighting;
-    }
-    else if (surface.shadingModel == SHADING_MODEL_EYE)
-    {
-        sssSource = lighting.eyeScleraDirect +
-            lighting.eyeInnerIbl *
-                (1.0 - lighting.eyeIrisMask);
-    }
-    outSssSource = vec4(sssSource, 1.0);
 }

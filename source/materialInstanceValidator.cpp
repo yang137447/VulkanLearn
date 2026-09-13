@@ -95,10 +95,7 @@ namespace
         case RenderMode::Opaque:
         case RenderMode::OpaqueClip:
         case RenderMode::ForwardOpaque:
-        case RenderMode::ForwardEyeInner:
             return GraphicsPipelineBlendMode::Opaque;
-        case RenderMode::ForwardEyeCornea:
-            return GraphicsPipelineBlendMode::Additive;
         case RenderMode::TransparentAlphaBlend:
         case RenderMode::TransparentAlphaBlendWriteDepth:
             return GraphicsPipelineBlendMode::AlphaBlend;
@@ -321,14 +318,6 @@ RenderMode MaterialInstanceValidator::ResolveRenderMode(
     if (renderMode == "ForwardOpaque")
     {
         return RenderMode::ForwardOpaque;
-    }
-    if (renderMode == "ForwardEyeInner")
-    {
-        return RenderMode::ForwardEyeInner;
-    }
-    if (renderMode == "ForwardEyeCornea")
-    {
-        return RenderMode::ForwardEyeCornea;
     }
     if (renderMode == "TransparentAlphaBlend")
     {

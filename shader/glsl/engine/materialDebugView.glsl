@@ -583,7 +583,7 @@ vec4 ResolveMaterialDebugView(
             lighting.hairLutCoordinates, 0.0), 1.0)
         + hairPrimaryMask * vec4(lighting.hairRPath, 1.0)
         + hairSecondaryMask * vec4(lighting.hairTTPath + lighting.hairTRTPath, 1.0)
-        + hairScatterMask * vec4(vec3(surface.modelInputs.hair.scatter), 1.0)
+        + hairScatterMask * vec4(vec3(surface.metallic), 1.0)
         + hairBacklitMask * vec4(vec3(surface.modelInputs.hair.backlit), 1.0)
         + hairRPathColorMask * vec4(lighting.hairRPath, 1.0)
         + hairTTPathColorMask * vec4(lighting.hairTTPath, 1.0)

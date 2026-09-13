@@ -185,6 +185,11 @@ void EngineLoop::SetExitAfterRuntimeTests(bool enabled)
     exitAfterRuntimeTests = enabled;
 }
 
+void EngineLoop::QueueLaunchConsoleCommands(const std::vector<std::string>& lines, int delayFrames)
+{
+    GetSubsystems().GetConsoleSubsystem().QueueLaunchCommands(lines, delayFrames);
+}
+
 uint64_t EngineLoop::GetShaderReloadWorldGeneration() const noexcept
 {
     return GetSubsystems()
@@ -348,11 +353,6 @@ RuntimeResult<void> EngineLoop::LoadInitialWorldAndRenderer(
 
     RenderSystem& renderSystem = RenderSystem::GetInstance();
     renderSystem.InitializeWorldTransactionResources();
-    RendererResourceLoadCoordinator::GetInstance()
-        .SetEyeComputeReloadParticipant(
-            &renderSystem.GetEyeComputeReloadParticipant());    RendererResourceLoadCoordinator::GetInstance()
-        .SetClothComputeReloadParticipant(
-            &renderSystem.GetClothComputeReloadParticipant());
 
     // Startup uses the same isolated candidate package and transaction
     // publication path as runtime World replacement. The only difference is

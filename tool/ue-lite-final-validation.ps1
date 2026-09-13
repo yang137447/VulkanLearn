@@ -76,34 +76,11 @@ function Invoke-ValidationStep {
     }
 }
 
-function Get-HairAuthoringMetadataPath {
-    param([string]$Root)
-
-    $configPath = Join-Path $Root "config/config.json"
-    if (!(Test-Path -LiteralPath $configPath)) {
-        throw "Missing runtime config: $configPath"
-    }
-
-    $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
-    $resourcePath = [string]$config.resourcePath
-    if ([string]::IsNullOrWhiteSpace($resourcePath)) {
-        throw "config/config.json does not define resourcePath."
-    }
-
-    if (![System.IO.Path]::IsPathRooted($resourcePath)) {
-        $resourcePath = Join-Path $Root $resourcePath
-    }
-
-    return [System.IO.Path]::GetFullPath(
-        (Join-Path $resourcePath "Common/Profiles/Hair/hairAzimuthalLut.json"))
-}
-
 Push-Location -LiteralPath $RepoRoot
 try {
-    $hairAuthoringMetadataPath = Get-HairAuthoringMetadataPath -Root $RepoRoot
-    if (!(Test-Path -LiteralPath $hairAuthoringMetadataPath -PathType Leaf)) {
-        throw "Runtime validation requires the authored Hair LUT metadata asset: $hairAuthoringMetadataPath. The generated-only LUT is not a substitute."
-    }
+    # 旧实现清理（2026-09-12）前，这里要求作者提供的
+    # Common/Profiles/Hair/hairAzimuthalLut.json 存在；Hair 实现与它的 profile 目录都已删除，
+    # 该前置检查随之移除（它只是 preflight，不参与任何 test step）。
 
     $logDirectory = New-ValidationLogDirectory -Root $RepoRoot
     $mainExe = Join-Path $RepoRoot (Join-Path $BuildDirectory "bin/main.exe")

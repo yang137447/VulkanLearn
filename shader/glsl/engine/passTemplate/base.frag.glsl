@@ -23,10 +23,11 @@ layout(location = 4) out vec4 outGBufferE;
 layout(location = 5) out vec4 outGBufferVelocity;
 layout(location = 6) out vec4 outGBufferF;
 layout(location = 7) out vec4 outSceneColorBase;
-#elif VL_MATERIAL_OUTPUT_THIN_TRANSLUCENT && VL_THIN_TRANSLUCENT_DUAL_SOURCE
-// 双源输出共享 location=0，通过 index=0/1 分别表示 Add 和 Multiplier。
-layout(location = 0, index = 0) out vec4 outThinTranslucentAdd;
-layout(location = 0, index = 1) out vec4 outThinTranslucentMultiplier;
+#elif VL_MATERIAL_OUTPUT_THIN_TRANSLUCENT
+// ThinTranslucent 的输出路径随旧实现于 2026-09-12 清理：双源 Add/Mul 输出、混合状态与
+// 对应的 build 函数都已删除。这里显式报错而不是留一条空分支，避免 macro 被重新打开后
+// 静默产出错误画面；按论文重建该模型时，要连 renderMode 与混合状态一起重新设计。
+#error "VL_MATERIAL_OUTPUT_THIN_TRANSLUCENT was removed with the ThinTranslucent implementation (2026-09-12)"
 #else
 layout(location = 0) out vec4 outSceneColor;
 layout(location = 1) out vec4 outSelectionMask;
@@ -40,8 +41,8 @@ void main()
 
     // Coverage 是 Pass 行為：所有需要 Alpha Clip 的 pass 都在消費 Surface 後統一執行。
 #if MATERIAL_USES_OPACITY_MASK
-    // UE/NeoX Hair mode 8 用原始 Tex0 alpha 做 clip；coverage 是 Hair closure
-    // 的可见率，不得再次乘进几何裁剪，否则 Core/Fringe 会产生双重稀释。
+    // clip 用的是作者的原始 opacity mask，不是 closure 的 coverage。若模型把 coverage
+    // 再乘进几何裁剪，同一张卡会被稀释两次（Hair 的 Core/Fringe 分层就踩过这个坑）。
     ApplyAlphaClip(inputs.opacityMask, u_alphaClipThreshold);
 #endif
 
@@ -59,19 +60,6 @@ void main()
         outGBufferVelocity.z = uboM.selectionData.x;
     outGBufferF = gbuffer.gbufferF;
     outSceneColorBase = gbuffer.sceneColorBase;
-#elif VL_MATERIAL_OUTPUT_THIN_TRANSLUCENT
-    // 先构造统一的 Add/Mul 结果，再按平台能力选择双源输出或标量 alpha 降级。
-    ThinTranslucentOutput thinOutput =
-        BuildThinTranslucentForwardOutput(surface);
-    #if VL_THIN_TRANSLUCENT_DUAL_SOURCE
-        outThinTranslucentAdd = thinOutput.add;
-        outThinTranslucentMultiplier = thinOutput.multiplier;
-        // Vulkan 双源混合要求所有 fragment output 都位于 dual-source location 0；
-        // 因此该变体不能额外写 selectionMask，透明双源材质暂不参与轮廓描边。
-    #else
-        outSceneColor = BuildThinTranslucentFallbackOutput(thinOutput);
-        outSelectionMask = vec4(uboM.selectionData.x * step(0.001, inputs.opacity));
-    #endif
 #else
     outSceneColor = BuildMaterialForwardOutput(surface);
     outSelectionMask = vec4(uboM.selectionData.x * step(0.001, inputs.opacity));

@@ -31,12 +31,6 @@ public:
     virtual void UploadLightsForPass(
         uint32_t swapChainImageIndex,
         const std::vector<LightSnapshot>& lights) = 0;
-
-    virtual void RecordEyeDescriptorBind() {}
-    virtual void RecordEyeDraw(size_t lutSampleCount)
-    {
-        (void)lutSampleCount;
-    }
 };
 
 struct RendererDrawContext
@@ -57,17 +51,13 @@ public:
     void DrawShadowScene(const PipelineBase& commonOpaquePipeline, RendererDrawContext& context) const;
     void DrawGeometryScene(RendererDrawContext& context) const;
     void DrawForwardOpaqueScene(RendererDrawContext& context) const;
-    void DrawForwardEyeInnerScene(RendererDrawContext& context) const;
-    void DrawForwardEyeCorneaScene(RendererDrawContext& context) const;
     void DrawForwardTransparentScene(RendererDrawContext& context) const;
 
 private:
     enum class SurfaceDrawDomain
     {
         Geometry,
-        ForwardOpaque,
-        ForwardEyeInner,
-        ForwardEyeCornea
+        ForwardOpaque
     };
 
     void DrawSurfaceScene(

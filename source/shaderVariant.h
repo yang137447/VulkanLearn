@@ -16,8 +16,6 @@ enum class RenderMode
     OpaqueClip,
     // Eye 使用独立 Forward Opaque pass，避免占用普通 GBuffer。
     ForwardOpaque,
-    ForwardEyeInner,
-    ForwardEyeCornea,
     TransparentAlphaBlend,
     // NeoX ALPHA_RW_Z：保持连续 Alpha 混合，同时写入场景深度。
     TransparentAlphaBlendWriteDepth,
@@ -34,12 +32,6 @@ inline constexpr std::string_view kThinTranslucentDualSourceMacro =
 inline bool IsForwardOpaqueRenderMode(RenderMode renderMode)
 {
     return renderMode == RenderMode::ForwardOpaque;
-}
-
-inline bool IsForwardEyeLayerRenderMode(RenderMode renderMode)
-{
-    return renderMode == RenderMode::ForwardEyeInner ||
-        renderMode == RenderMode::ForwardEyeCornea;
 }
 
 inline bool IsGeometryRenderMode(RenderMode renderMode)
@@ -71,10 +63,6 @@ inline std::string RenderModeToString(RenderMode renderMode)
         return "OpaqueClip";
     case RenderMode::ForwardOpaque:
         return "ForwardOpaque";
-    case RenderMode::ForwardEyeInner:
-        return "ForwardEyeInner";
-    case RenderMode::ForwardEyeCornea:
-        return "ForwardEyeCornea";
     case RenderMode::TransparentAlphaBlend:
         return "TransparentAlphaBlend";
     case RenderMode::TransparentAlphaBlendWriteDepth:

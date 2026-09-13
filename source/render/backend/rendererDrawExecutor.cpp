@@ -2,7 +2,6 @@
 
 #include "commonFunction.h"
 #include "material.h"
-#include "Profiler.h"
 #include "pipeline/pipelineBase.h"
 #include "renderGraph.h"
 #include "render/backend/rendererObjectResourceRegistry.h"
@@ -295,32 +294,6 @@ void RendererDrawExecutor::DrawForwardOpaqueScene(
     DrawSurfaceScene("ForwardOpaque", SurfaceDrawDomain::ForwardOpaque, context);
 }
 
-void RendererDrawExecutor::DrawForwardEyeInnerScene(
-    RendererDrawContext& context) const
-{
-    PROFILE_SCOPE("Eye/ForwardEyeInner");
-    context.services.UploadLightsForPass(
-        context.swapChainImageIndex,
-        context.renderScene.lights);
-    DrawSurfaceScene(
-        "ForwardEyeInner",
-        SurfaceDrawDomain::ForwardEyeInner,
-        context);
-}
-
-void RendererDrawExecutor::DrawForwardEyeCorneaScene(
-    RendererDrawContext& context) const
-{
-    PROFILE_SCOPE("Eye/ForwardEyeCornea");
-    context.services.UploadLightsForPass(
-        context.swapChainImageIndex,
-        context.renderScene.lights);
-    DrawSurfaceScene(
-        "ForwardEyeCornea",
-        SurfaceDrawDomain::ForwardEyeCornea,
-        context);
-}
-
 void RendererDrawExecutor::DrawForwardTransparentScene(
     RendererDrawContext& context) const
 {
@@ -426,11 +399,7 @@ void RendererDrawExecutor::DrawSurfaceScene(
         const bool matchesDomain =
             domain == SurfaceDrawDomain::Geometry
                 ? IsGeometryRenderMode(renderMode)
-                : domain == SurfaceDrawDomain::ForwardOpaque
-                    ? renderMode == RenderMode::ForwardOpaque
-                    : domain == SurfaceDrawDomain::ForwardEyeInner
-                        ? renderMode == RenderMode::ForwardEyeInner
-                        : renderMode == RenderMode::ForwardEyeCornea;
+                : renderMode == RenderMode::ForwardOpaque;
         if (!matchesDomain)
         {
             continue;
@@ -454,11 +423,6 @@ void RendererDrawExecutor::DrawSurfaceScene(
                 renderPass.GetDescriptorSets()[context.swapChainImageIndex][PassSetIndex],
                 nullptr);
         }
-        if (materialGroup.material->GetShaderVariantKey().shadingModelMacro ==
-            "SHADING_MODEL_EYE")
-        {
-            context.services.RecordEyeDescriptorBind();
-        }
 
         for (const ResolvedMaterialInstanceGroup& materialInstanceGroup : materialGroup.materialInstances)
         {
@@ -481,13 +445,6 @@ void RendererDrawExecutor::DrawSurfaceScene(
                     objectResources.descriptorSets[context.swapChainImageIndex],
                     nullptr);
 
-                if (materialGroup.material->GetShaderVariantKey().shadingModelMacro ==
-                    "SHADING_MODEL_EYE")
-                {
-                    // Geometry/Forward 的 Eye evaluator 至少消费一次 caustic LUT；
-                    // 该值是 CPU-side draw-domain estimate，不把 debug readback 当 steady-state。
-                    context.services.RecordEyeDraw(1);
-                }
                 context.services.UpdateObjectUBOForPass(objectResources, drawPacket);
                 drawResources.renderableObject->Draw(commandBuffer);
             }

@@ -6,15 +6,10 @@
 #include <nlohmann/json.hpp>
 
 #include "render/resource/rendererEnvironmentLoader.h"
-#include "render/eye/eyeResourceLoader.h"
 #include "render/resource/rendererMaterialLoader.h"
 #include "render/resource/rendererMeshLoader.h"
 #include "render/resource/rendererResourceCache.h"
 #include "render/resource/rendererResourceLoadContext.h"
-#include "render/subsurface/subsurfaceResourceLoader.h"
-#include "render/hair/hairLutBaker.h"
-#include "render/cloth/clothResourceLoader.h"
-#include "render/cloth/clothComputeReloadParticipant.h"
 #include "renderGraph.h"
 #include "world/loading/worldLoader.h"
 
@@ -35,17 +30,6 @@ void RendererResourceLoadCoordinator::SetRendererBackend(RendererBackendVulkan* 
     this->rendererBackend = rendererBackend;
 }
 
-void RendererResourceLoadCoordinator::SetEyeComputeReloadParticipant(
-    EyeComputeReloadParticipant* participant)
-{
-    eyeComputeReloadParticipant = participant;
-}
-void RendererResourceLoadCoordinator::SetClothComputeReloadParticipant(
-    ClothComputeReloadParticipant* participant)
-{
-    clothComputeReloadParticipant = participant;
-}
-
 RendererWorldResourceLoadResult
 RendererResourceLoadCoordinator::LoadRendererResources(
     const WorldBuildPlan& worldBuildPlan,
@@ -64,24 +48,6 @@ RendererResourceLoadCoordinator::LoadRendererResources(
         *pipelineFactory,
         *rendererBackend,
         loadContext);
-    SubsurfaceResourceLoader subsurfaceResourceLoader(
-        *pipelineFactory,
-        *rendererBackend,
-        loadContext);
-    HairResourceLoader hairResourceLoader(
-        *pipelineFactory,
-        *rendererBackend,
-        loadContext);
-    ClothResourceLoader clothResourceLoader(
-        *pipelineFactory,
-        *rendererBackend,
-        loadContext,
-        clothComputeReloadParticipant);
-    EyeResourceLoader eyeResourceLoader(
-        *pipelineFactory,
-        *rendererBackend,
-        loadContext,
-        eyeComputeReloadParticipant);
     RendererMaterialLoader materialLoader(
         *pipelineFactory,
         *rendererBackend,
@@ -93,14 +59,6 @@ RendererResourceLoadCoordinator::LoadRendererResources(
     RendererWorldResourceLoadResult loadResult;
 
     environmentLoader.LoadGlobalResources();
-    // lookup texture 和 path->stable ID 必须先进入 candidate cache，材质加载才能只消费同一 World generation。
-    subsurfaceResourceLoader.Load();
-    // Hair pass 的外部 LUT descriptor 必须在材质和 candidate graph 初始化前就绪.
-    hairResourceLoader.Load();
-    // Cloth directional-albedo LUT 必须在所有 Cloth MI 解析前进入 candidate cache。
-    clothResourceLoader.Load();
-    // Eye profile 与 caustic LUT 必须在所有 Eye MI 解析前进入 candidate cache。
-    eyeResourceLoader.Load();
 
     // Load pass materials before scene meshes so descriptor setup can reference
     // render graph pass material instances.

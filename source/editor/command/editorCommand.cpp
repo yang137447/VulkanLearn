@@ -219,8 +219,6 @@ std::string_view GetEditorMaterialRenderModeName(
     case EditorMaterialRenderMode::Opaque: return "Opaque";
     case EditorMaterialRenderMode::OpaqueClip: return "OpaqueClip";
     case EditorMaterialRenderMode::ForwardOpaque: return "ForwardOpaque";
-    case EditorMaterialRenderMode::ForwardEyeInner: return "ForwardEyeInner";
-    case EditorMaterialRenderMode::ForwardEyeCornea: return "ForwardEyeCornea";
     case EditorMaterialRenderMode::TransparentAlphaBlend: return "TransparentAlphaBlend";
     case EditorMaterialRenderMode::TransparentAlphaBlendWriteDepth: return "TransparentAlphaBlendWriteDepth";
     case EditorMaterialRenderMode::TransparentAdditive: return "TransparentAdditive";

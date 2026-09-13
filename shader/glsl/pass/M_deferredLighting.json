@@ -8,14 +8,5 @@
     },
     "macros": {},
     "parameters": {},
-    "textures": {
-        "subsurfaceProfileTable": {
-            "type": "sampler2D",
-            "default": null
-        },
-        "preintegratedSkinLutTable": {
-            "type": "sampler2D",
-            "default": null
-        }
-    }
+    "textures": {}
 }

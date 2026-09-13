@@ -11,8 +11,6 @@ namespace VL
 {
 class RendererBackendVulkan;
 struct RendererResourceLoadContext;
-class EyeComputeReloadParticipant;
-class ClothComputeReloadParticipant;
 struct WorldBuildPlan;
 
 struct RendererWorldResourceLoadResult
@@ -36,10 +34,6 @@ public:
 
     void SetPipelineFactory(PipelineFactory* pipelineFactory);
     void SetRendererBackend(RendererBackendVulkan* rendererBackend);
-    void SetEyeComputeReloadParticipant(
-        EyeComputeReloadParticipant* participant);
-    void SetClothComputeReloadParticipant(
-        ClothComputeReloadParticipant* participant);
     RendererWorldResourceLoadResult LoadRendererResources(
         const WorldBuildPlan& worldBuildPlan,
         RendererResourceLoadContext& loadContext);
@@ -49,8 +43,6 @@ private:
 
     PipelineFactory* pipelineFactory = nullptr;
     RendererBackendVulkan* rendererBackend = nullptr;
-    EyeComputeReloadParticipant* eyeComputeReloadParticipant = nullptr;
-    ClothComputeReloadParticipant* clothComputeReloadParticipant = nullptr;
 };
 
 } // namespace VL

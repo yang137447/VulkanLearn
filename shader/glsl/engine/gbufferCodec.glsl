@@ -223,7 +223,8 @@ GBufferData EncodeGBuffer(in MaterialSurface surface, in GBufferPixelData pixelD
         EncodeGBufferDirection(normalize(surface.worldNormal)),
         0.0);
     // Eye metallic/specular 不参与 evaluator；沿用原有扩展合同，把 IOR 与 caustic
-    // strength 放在 B.rg。Hair 的 B.r 继续保存角色环境光倍率。
+    // strength 放在 B.rg。Hair 的 B.r 仍复用 Metallic ABI 槽位，但其 M_ 语义是
+    // hairScatter；B.g/B.b 分别保存 Hair Specular/Roughness。
     data.gbufferB = surface.shadingModel == SHADING_MODEL_EYE
         ? vec4(
             surface.modelInputs.eye.corneaIor,
@@ -234,7 +235,7 @@ GBufferData EncodeGBuffer(in MaterialSurface surface, in GBufferPixelData pixelD
                 surface.selectiveOutputMask))
         : surface.shadingModel == SHADING_MODEL_HAIR
         ? vec4(
-            surface.modelInputs.hair.characterLighting.x,
+            surface.metallic,
             surface.specular,
             surface.roughness,
             EncodeGBufferPacked(
@@ -277,6 +278,12 @@ GBufferData EncodeGBuffer(in MaterialSurface surface, in GBufferPixelData pixelD
                 surface.modelInputs.eye.validIrisHit),
             surface.modelInputs.eye.irisMask)
         : surface.customData;
+    if (surface.shadingModel == SHADING_MODEL_HAIR)
+    {
+        // 与 UE ShadingModelsMaterial.ush 一致：Hair CustomData.xy 是材质法线
+        // 的八面体快照，z 才是母材质 CustomData0 对应的 Backlit。
+        data.gbufferD.xy = UnitVectorToOctahedron(surface.worldNormal) * 0.5 + 0.5;
+    }
     if (surface.shadingModel == SHADING_MODEL_CLEAR_COAT)
     {
         vec2 encodedBottomNormal = EncodeClearCoatBottomNormal(
@@ -294,10 +301,6 @@ GBufferData EncodeGBuffer(in MaterialSurface surface, in GBufferPixelData pixelD
             surface.modelInputs.eye.irisRadius)
         : surface.shadingModel == SHADING_MODEL_PREINTEGRATED_SKIN
         ? surface.modelInputs.preintegratedSkin.characterLighting
-        : surface.shadingModel == SHADING_MODEL_HAIR
-        ? vec4(
-            surface.precomputedShadowFactors.r,
-            surface.modelInputs.hair.characterLighting.yzw)
         : surface.precomputedShadowFactors;
     // Velocity.xy 保存运动矢量，z/w 保留给 Base 模板和后续扩展。
     data.gbufferVelocity = surface.shadingModel == SHADING_MODEL_EYE
@@ -511,29 +514,11 @@ MaterialSurface DecodeGBufferSurface(in GBufferData data)
     }
     else if (surface.shadingModel == SHADING_MODEL_HAIR)
     {
-        // Deferred V1 只从 GBuffer 恢复已冻结的 Hair 子集；IOR/radius 使用
-        // LUT 合同的固定默认值，不能把普通通道偷偷解释成新的资产字段。
+        // Deferred Hair 保留 UE Legacy CustomData.xy 的 WorldNormal 快照与 z 的
+        // Backlit；Hair evaluator 当前仍以 GBufferA 的主法线为 shading normal。
         surface.hairAbsorption = DecodeHairAbsorptionFromBaseColor(data.gbufferC.rgb);
         surface.modelInputs.hair.absorption = surface.hairAbsorption;
-        surface.modelInputs.hair.scatter = surface.customData.r;
-        surface.modelInputs.hair.backlit = surface.customData.g;
-        surface.modelInputs.hair.cuticleTilt = surface.customData.b;
-        surface.modelInputs.hair.multipleScatteringWeight = surface.customData.a;
-        surface.modelInputs.hair.ior = 1.55;
-        surface.modelInputs.hair.fiberRadius = 0.00005;
-        surface.modelInputs.hair.coverage = 1.0;
-        // Hair 独占 B.r 与 E.gba，冻结环境/方向/局部/虚拟光四个标量；E.r
-        // 继续保存预计算阴影，Forward 与 Deferred 因而消费同一角色光照合同。
-        surface.modelInputs.hair.characterLighting = vec4(
-            data.gbufferB.r,
-            surface.precomputedShadowFactors.gba);
-        surface.metallic = 0.0;
-        // NeoX pbr_hair_transparent 的 roughness 直接进入 Hair lobe；Deferred
-        // 不能把源默认 0.3 再压成 0.16，否则 Core Pass 会比透明探针更干、更尖。
-        // RDI.B 的 strandId 只存在 Base Pass，Deferred 这里只恢复源基线。
-        surface.modelInputs.hair.longitudinalRoughness =
-            max(surface.roughness, 0.02);
-        surface.modelInputs.hair.azimuthalRoughness = 0.25;
+        surface.modelInputs.hair.backlit = surface.customData.b;
     }
     else if (surface.shadingModel == SHADING_MODEL_CLOTH)
     {

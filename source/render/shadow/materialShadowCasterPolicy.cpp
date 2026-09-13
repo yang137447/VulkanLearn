@@ -18,8 +18,6 @@ MaterialShadowCasterDecision ResolveMaterialShadowCaster(const Material& materia
     {
     case RenderMode::Opaque:
     case RenderMode::ForwardOpaque:
-    case RenderMode::ForwardEyeInner:
-    case RenderMode::ForwardEyeCornea:
         return {MaterialShadowCasterKind::CommonOpaque};
     case RenderMode::OpaqueClip:
         throw std::runtime_error(

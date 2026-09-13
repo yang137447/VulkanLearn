@@ -394,13 +394,13 @@ void TestMaterialSchemaAndAssetValidation()
 
     MaterialAssetValidator::ValidateRenderStateCombination(
         "Eye",
-        "ForwardEyeInner",
+        "ForwardOpaque",
         "materials/MI_editor_test.json");
     RequireThrows(
         []() {
             MaterialAssetValidator::ValidateRenderStateCombination(
                 "DefaultLit",
-                "ForwardEyeInner",
+                "ForwardOpaque",
                 "materials/MI_editor_test.json");
         },
         "material validator accepted a non-Eye forward render path");

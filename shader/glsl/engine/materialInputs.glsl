@@ -57,19 +57,8 @@ struct SubsurfaceProfileMaterialInputs
 
 struct HairMaterialInputs
 {
-    float scatter;
     float backlit;
-    float cuticleTilt;
-    float longitudinalRoughness;
-    float azimuthalRoughness;
-    float ior;
     vec3 absorption;
-    float fiberRadius;
-    float multipleScatteringWeight;
-    float coverage;
-    float density;
-    // x/y/z/w 分别是角色环境光、方向光、局部光倍率和相机虚拟光强度。
-    vec4 characterLighting;
 };
 
 struct ClothMaterialInputs
@@ -190,18 +179,8 @@ MaterialInputs CreateDefaultMaterialInputs()
     inputs.modelInputs.subsurfaceProfile.weight = 0.0;
     inputs.modelInputs.subsurfaceProfile.thickness = 0.01;
     inputs.modelInputs.subsurfaceProfile.transmissionWeight = 0.0;
-    inputs.modelInputs.hair.scatter = 0.0;
     inputs.modelInputs.hair.backlit = 0.0;
-    inputs.modelInputs.hair.cuticleTilt = 0.0;
-    inputs.modelInputs.hair.longitudinalRoughness = 0.22;
-    inputs.modelInputs.hair.azimuthalRoughness = 0.25;
-    inputs.modelInputs.hair.ior = 1.55;
     inputs.modelInputs.hair.absorption = vec3(1.0);
-    inputs.modelInputs.hair.fiberRadius = 0.00005;
-    inputs.modelInputs.hair.multipleScatteringWeight = 0.0;
-    inputs.modelInputs.hair.coverage = 1.0;
-    inputs.modelInputs.hair.density = 1.0;
-    inputs.modelInputs.hair.characterLighting = vec4(1.0, 1.0, 1.0, 0.0);
     inputs.modelInputs.cloth.sheenColor = vec3(0.0);
     inputs.modelInputs.cloth.sheenRoughness = 0.5;
     inputs.modelInputs.cloth.anisotropy = 0.0;

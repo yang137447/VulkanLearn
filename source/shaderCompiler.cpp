@@ -92,10 +92,6 @@ std::vector<std::string> BuildRenderModeMacros(RenderMode renderMode)
         return {"RENDER_MODE_OPAQUE_CLIP"};
     case RenderMode::ForwardOpaque:
         return {"RENDER_MODE_FORWARD_OPAQUE"};
-    case RenderMode::ForwardEyeInner:
-        return {"RENDER_MODE_FORWARD_EYE_INNER"};
-    case RenderMode::ForwardEyeCornea:
-        return {"RENDER_MODE_FORWARD_EYE_CORNEA"};
     case RenderMode::TransparentAlphaBlend:
         return {"RENDER_MODE_TRANSPARENT_ALPHA_BLEND"};
     case RenderMode::TransparentAlphaBlendWriteDepth:
@@ -116,12 +112,10 @@ std::vector<std::string> BuildGraphicsVariantMacros(
         BuildRenderModeMacros(shaderVariantKey.renderMode);
     macros.push_back(
         "MATERIAL_SHADING_MODEL=" + shaderVariantKey.shadingModelMacro);
-    // GLSL 的 shading model 常量是 const uint，不能用于预处理器 #if；
-    // 额外注入数值宏供材质专用资源声明选择，避免 Eye binding 污染其他 Forward pass。
-    macros.push_back(
-        shaderVariantKey.shadingModelMacro == "SHADING_MODEL_EYE"
-            ? "MATERIAL_IS_EYE=1"
-            : "MATERIAL_IS_EYE=0");
+    // 旧实现清理（2026-09-12）删掉了这里注入的 MATERIAL_IS_EYE：它只服务 Eye 的
+    // 材质专用资源声明，Eye 求值器删除后没有任何 shader 消费它。重建需要"按 shading model
+    // 选择资源声明"的模型时，在这里重新引入同类的数值宏（GLSL 的 shading model 常量是
+    // const uint，不能用于预处理器 #if）。
     macros.insert(
         macros.end(),
         shaderVariantKey.macros.begin(),

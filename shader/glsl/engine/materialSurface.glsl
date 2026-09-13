@@ -105,86 +105,13 @@ MaterialSurface ResolveMaterialSurface(
     surface.modelInputs = inputs.modelInputs;
     surface.shadingModel = MATERIAL_SHADING_MODEL;
     surface.precomputedShadowFactors = vec4(1.0);
-    surface.anisotropy = surface.shadingModel == SHADING_MODEL_CLOTH
-        ? inputs.modelInputs.cloth.anisotropy
-        : inputs.modelInputs.anisotropy;
+    surface.anisotropy = inputs.modelInputs.anisotropy;
 
-    // 这里把模型专用输入一次性编码到 GBuffer customData；后续 pass 不再读取 MaterialInputs。
-    if (surface.shadingModel == SHADING_MODEL_CLEAR_COAT)
-    {
-        // Clear Coat 的模型专用输入只在这里转换为 GBuffer 内部编码。
-        surface.customData.xy = vec2(
-            inputs.modelInputs.clearCoat.weight,
-            inputs.modelInputs.clearCoat.roughness);
-        surface.selectiveOutputMask |= GBUFFER_HAS_CUSTOM_DATA_MASK;
-    }
-    else if (surface.shadingModel == SHADING_MODEL_SUBSURFACE)
-    {
-        surface.customData = vec4(
-            inputs.modelInputs.subsurface.color,
-            inputs.modelInputs.subsurface.weight);
-        surface.selectiveOutputMask |= GBUFFER_HAS_CUSTOM_DATA_MASK;
-    }
-    else if (surface.shadingModel == SHADING_MODEL_TWOSIDED_FOLIAGE)
-    {
-        // ID 6 独占 GBufferD.rgb 保存 subsurfaceColor；D.a 是保留槽，不承载作者参数。
-        // 不借用普通 Subsurface 的 weight 或其它模型字段。
-        surface.customData = vec4(
-            inputs.modelInputs.twoSidedFoliage.subsurfaceColor,
-            0.0);
-        surface.selectiveOutputMask |= GBUFFER_HAS_CUSTOM_DATA_MASK;
-    }
-    else if (surface.shadingModel == SHADING_MODEL_PREINTEGRATED_SKIN)
-    {
-        surface.customData = vec4(
-            inputs.modelInputs.preintegratedSkin.skinLutId,
-            inputs.modelInputs.preintegratedSkin.thickness,
-            inputs.modelInputs.preintegratedSkin.thicknessScale,
-            inputs.modelInputs.preintegratedSkin.weight);
-        surface.selectiveOutputMask |= GBUFFER_HAS_CUSTOM_DATA_MASK;
-    }
-    else if (surface.shadingModel == SHADING_MODEL_SUBSURFACE_PROFILE)
-    {
-        surface.customData = vec4(
-            inputs.modelInputs.subsurfaceProfile.profileId,
-            inputs.modelInputs.subsurfaceProfile.weight,
-            inputs.modelInputs.subsurfaceProfile.thickness,
-            inputs.modelInputs.subsurfaceProfile.transmissionWeight);
-        surface.selectiveOutputMask |= GBUFFER_HAS_CUSTOM_DATA_MASK;
-    }
-    else if (surface.shadingModel == SHADING_MODEL_EYE)
-    {
-        // Eye 的 GBuffer V1 由独立 codec 编码；这里仅声明模型专用字段存在，
-        // 不把 iris/sclera 语义借用给普通 customData。
-        surface.customData = vec4(
-            inputs.modelInputs.eye.irisMask,
-            inputs.modelInputs.eye.validIrisHit,
-            inputs.modelInputs.eye.causticProfileId,
-            inputs.modelInputs.eye.scleraProfileId);
-        surface.selectiveOutputMask |= GBUFFER_HAS_CUSTOM_DATA_MASK;
-    }
-    else if (surface.shadingModel == SHADING_MODEL_HAIR)
-    {
-        // Hair 的模型字段进入稳定的 Surface snapshot，lighting pass 不再读取母材质参数 UBO。
-        surface.customData = vec4(
-            inputs.modelInputs.hair.scatter,
-            inputs.modelInputs.hair.backlit,
-            inputs.modelInputs.hair.cuticleTilt,
-            inputs.modelInputs.hair.multipleScatteringWeight);
-        surface.selectiveOutputMask |= GBUFFER_HAS_CUSTOM_DATA_MASK;
-    }
-    else if (surface.shadingModel == SHADING_MODEL_CLOTH)
-    {
-        // Cloth 的 GBufferD 是版本化的 sheenColor/sheenRoughness 快照，
-        // 不与其它模型共享 customData 解释。
-        surface.customData = vec4(
-            inputs.modelInputs.cloth.sheenColor,
-            inputs.modelInputs.cloth.sheenRoughness);
-        surface.selectiveOutputMask |= GBUFFER_HAS_CUSTOM_DATA_MASK;
-        // Cloth v2 的方向与双轴参数由 GBufferF 独占；flags 用来阻止旧
-        // GBuffer 像素被当成 v2 packed anisotropy 解码。
-        surface.selectiveOutputMask |= GBUFFER_HAS_ANISOTROPY_MASK;
-    }
+    // 这里原本是"把模型专用输入编码进 GBuffer customData"的分发链（Clear Coat / Subsurface /
+    // TwoSidedFoliage / PreintegratedSkin / SubsurfaceProfile / Eye / Hair / Cloth）。
+    // 2026-09-12 的旧实现清理把这些模型整体删除，因此分发链一并删除；MaterialSurface 的字段、
+    // MaterialInputs 的模型结构体与 GBuffer 槽位**保留**，它们是 UE 对齐的接口面，
+    // 按论文重建每个模型时在这里接回自己的编码分支。
 
     return surface;
 }

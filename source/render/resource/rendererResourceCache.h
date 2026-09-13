@@ -16,10 +16,6 @@ namespace VL
 {
 
 class RendererObjectResourceEntry;
-class SubsurfaceResourceSet;
-class HairResourceSet;
-class EyeResourceSet;
-class ClothResourceSet;
 
 // Renderer-side CPU resource cache. Global resources survive world reloads;
 // world-local resources are prepared in isolated candidate packages and retired
@@ -36,14 +32,6 @@ public:
         std::unordered_map<std::string, std::shared_ptr<MaterialInstance>> materialInstances;
         std::unordered_map<std::string, std::shared_ptr<RendererObjectResourceEntry>> objectResources;
         std::unordered_map<std::string, std::shared_ptr<Texture>> textures;
-        // lookup texture 与 stable ID 只属于当前 World；发布后通过 const 句柄消费。
-        std::shared_ptr<const SubsurfaceResourceSet> subsurfaceResources;
-        // Hair LUT 与 metadata 属于同一 World-local generation，不能跨 candidate 猜测。
-        std::shared_ptr<const HairResourceSet> hairResources;
-        // Eye profile、caustic LUT 与 stable ID 必须跟随同一 World generation。
-        std::shared_ptr<const EyeResourceSet> eyeResources;
-        // Cloth directional-albedo LUT 与版本 digest 属于同一 World generation。
-        std::shared_ptr<const ClothResourceSet> clothResources;
 
         bool Empty() const noexcept;
     };
@@ -57,18 +45,6 @@ public:
     {
         uint64_t ownerGeneration = 0;
         std::shared_ptr<MaterialInstance> materialInstance;
-    };
-
-    struct PreparedEyeResourceReplacement
-    {
-        WorldLocalResourcePackageHandle replacementPackage;
-        ImmutableWorldLocalResourceRefs previousPackage;
-    };
-
-    struct PreparedClothResourceReplacement
-    {
-        WorldLocalResourcePackageHandle replacementPackage;
-        ImmutableWorldLocalResourceRefs previousPackage;
     };
 
     static RendererResourceCache& GetInstance()
@@ -143,39 +119,6 @@ public:
 
     void BindTexture(std::string textureKey, std::shared_ptr<Texture> texture);
     const std::shared_ptr<Texture>* GetTexture(std::string_view textureKey) const;
-    // 只绑定已完成的 candidate resource set，不允许 material loader 修改其内容。
-    void BindSubsurfaceResources(
-        std::shared_ptr<const SubsurfaceResourceSet> resources);
-    const std::shared_ptr<const SubsurfaceResourceSet>&
-    GetSubsurfaceResources() const noexcept;
-    void BindHairResources(
-        std::shared_ptr<const HairResourceSet> resources);
-    const std::shared_ptr<const HairResourceSet>&
-    GetHairResources() const noexcept;
-    void BindEyeResources(
-        std::shared_ptr<const EyeResourceSet> resources);
-    const std::shared_ptr<const EyeResourceSet>&
-    GetEyeResources() const noexcept;
-    void BindClothResources(
-        std::shared_ptr<const ClothResourceSet> resources);
-    const std::shared_ptr<const ClothResourceSet>&
-    GetClothResources() const noexcept;
-
-    // Candidate 阶段完整复制当前 World package 并只替换 Eye LUT/metadata；
-    // commit 阶段只交换 shared_ptr，避免在 noexcept ownership swap 中触发
-    // map 分配或 descriptor 资源创建。
-    PreparedEyeResourceReplacement PrepareEyeResourceReplacement(
-        std::shared_ptr<const EyeResourceSet> resources,
-        std::shared_ptr<Texture> causticLutTexture) const;
-    WorldLocalResourcePackageHandle CommitPreparedEyeResourceReplacement(
-        PreparedEyeResourceReplacement&& replacement) noexcept;
-
-    PreparedClothResourceReplacement PrepareClothResourceReplacement(
-        std::shared_ptr<const ClothResourceSet> resources,
-        std::shared_ptr<Texture> directionalAlbedoLutTexture,
-        std::shared_ptr<Texture> anisotropicDirectionalAlbedoLutTexture) const;
-    WorldLocalResourcePackageHandle CommitPreparedClothResourceReplacement(
-        PreparedClothResourceReplacement&& replacement) noexcept;
 
 private:
     RendererResourceCache();

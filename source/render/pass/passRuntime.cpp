@@ -59,12 +59,6 @@ void PassRuntime::RecordPass(const std::string& passName, PassRuntimeContext& co
     case RenderGraphPassType::ForwardOpaque:
         RecordForwardOpaquePass(context);
         return;
-    case RenderGraphPassType::ForwardEyeInner:
-        RecordForwardEyeInnerPass(context);
-        return;
-    case RenderGraphPassType::ForwardEyeCornea:
-        RecordForwardEyeCorneaPass(context);
-        return;
     case RenderGraphPassType::ForwardTransparent:
         RecordForwardTransparentPass(context);
         return;
@@ -211,44 +205,6 @@ void PassRuntime::RecordForwardOpaquePass(
     };
     drawExecutor.DrawForwardOpaqueScene(drawContext);
 
-    commandBuffer.endRenderPass();
-}
-
-void PassRuntime::RecordForwardEyeInnerPass(
-    PassRuntimeContext& context) const
-{
-    const Renderpass& renderPass = context.renderPass;
-    vk::CommandBuffer& commandBuffer = context.commandBuffer;
-    UpdateSceneGlobalUBO(context);
-    BeginConfiguredRenderPass(context);
-    RendererDrawContext drawContext{
-        commandBuffer,
-        renderPass,
-        context.swapChainImageIndex,
-        context.renderScene,
-        context.resolvedRenderScene,
-        context.services
-    };
-    drawExecutor.DrawForwardEyeInnerScene(drawContext);
-    commandBuffer.endRenderPass();
-}
-
-void PassRuntime::RecordForwardEyeCorneaPass(
-    PassRuntimeContext& context) const
-{
-    const Renderpass& renderPass = context.renderPass;
-    vk::CommandBuffer& commandBuffer = context.commandBuffer;
-    UpdateSceneGlobalUBO(context);
-    BeginConfiguredRenderPass(context);
-    RendererDrawContext drawContext{
-        commandBuffer,
-        renderPass,
-        context.swapChainImageIndex,
-        context.renderScene,
-        context.resolvedRenderScene,
-        context.services
-    };
-    drawExecutor.DrawForwardEyeCorneaScene(drawContext);
     commandBuffer.endRenderPass();
 }
 
