@@ -2,6 +2,7 @@
 #define VL_COMMON_LIGHTING_GLSL
 
 #include "defines.glsl"
+#include "microfacetDistribution.glsl"
 #include "shadowFiltering.glsl"
 
 struct Light{
@@ -421,30 +422,9 @@ vec3 CalculateIndirectLighting(
     return CalculateDiffuseIbl(normal_WS, baseColor, metallic);
 }
 
-float DistributionGGX(vec3 N, vec3 H, float roughness)
-{
-    float a      = roughness*roughness;
-    float a2     = a*a;
-    float NdotH  = max(dot(N, H), 0.0);
-    float NdotH2 = NdotH*NdotH;
-	
-    float num   = a2;
-    float denom = (NdotH2 * (a2 - 1.0) + 1.0);
-    denom = PI * denom * denom;
-	
-    return num / denom;
-}
+// DistributionGGX 已移到 common/microfacetDistribution.glsl，以便 Material Surface
+// 阶段（没有 uboVP 声明）复用同一份实现。这里不再重复定义。
 
-float GeometrySchlickGGX(float cosTheta, float roughness)
-{
-    float r = (roughness + 1.0);
-    float k = (r*r) / 8.0;
-
-    float num   = cosTheta;
-    float denom = cosTheta * (1.0 - k) + k;
-	
-    return num / denom;
-}
 
 // 几何遮蔽函数：Smith 联合遮蔽模型（GGX 版本）
 // 同时考虑视线方向 V 与光源方向 L 的遮蔽，避免微面元被自身几何遮挡
