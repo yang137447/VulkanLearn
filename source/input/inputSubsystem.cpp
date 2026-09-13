@@ -17,7 +17,9 @@ RuntimeResult<void> InputSubsystem::Initialize(PlatformWindow& window)
     }
 
     this->window = &window;
-    relativeMouseModeRequested = true;
+    // 启动默认释放鼠标捕获：光标留在桌面，避免鼠标划动意外旋转/平移视窗。
+    // Esc 仍然是显式开关（ToggleRelativeMouseModeRequest），需要自由视角时再开启。
+    relativeMouseModeRequested = false;
     relativeMouseModeAllowed = false;
     relativeMouseModeEnabled = false;
     gameKeyboardEnabled = true;

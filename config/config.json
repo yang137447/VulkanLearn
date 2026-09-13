@@ -1,27 +1,60 @@
 {
-    "projectPath": "D:\\YYBWorkSpace\\GitHub\\VulkanLearn",
-    "resourcePath": "D:\\YYBWorkSpace\\GitHub\\VukanLearnResources",
-    "windowSize": [1280, 720],
-    "initScene": "Maps/SC_sifi_head/SC_sifi_head.json",
-    "msaa": 2,
+  "projectPath": "D:\\YYBWorkSpace\\GitHub\\VulkanLearn",
+  "resourcePath": "D:\\YYBWorkSpace\\GitHub\\VukanLearnResources",
+  "windowSize": [
+    1280,
+    720
+  ],
+  "initScene": "Maps/SC_sphere_array/SC_sphere_array.json",
+  "msaa": 2,
   "workerThreadCount": 2,
-    "ui": {
-        "enabled": true,
-        "hotReload": true,
-        "assetRoot": "ui",
-        "document": "runtime-control.rml",
-        "localization": "localization.json",
-        "defaultLocale": "en-US",
-        "fontFaces": [],
-        "developerUiEnabled": true,
-        "developerUiVisible": false
-    },
-    "renderStateDebugColors": {
-        "ePass": [0.0, 1.0, 0.0, 1.0],
-        "eObject": [0.0, 0.0, 1.0, 1.0],
-        "ePipeline": [1.0, 1.0, 0.0, 1.0],
-        "eResource": [0.0, 1.0, 1.0, 1.0],
-        "eWait": [1.0, 0.0, 0.0, 1.0],
-        "eDefault": [1.0, 1.0, 1.0, 1.0]
-    }
+  "ui": {
+    "enabled": true,
+    "hotReload": true,
+    "assetRoot": "ui",
+    "document": "runtime-control.rml",
+    "localization": "localization.json",
+    "defaultLocale": "en-US",
+    "fontFaces": [],
+    "developerUiEnabled": true,
+    "developerUiVisible": false
+  },
+  "renderStateDebugColors": {
+    "ePass": [
+      0.0,
+      1.0,
+      0.0,
+      1.0
+    ],
+    "eObject": [
+      0.0,
+      0.0,
+      1.0,
+      1.0
+    ],
+    "ePipeline": [
+      1.0,
+      1.0,
+      0.0,
+      1.0
+    ],
+    "eResource": [
+      0.0,
+      1.0,
+      1.0,
+      1.0
+    ],
+    "eWait": [
+      1.0,
+      0.0,
+      0.0,
+      1.0
+    ],
+    "eDefault": [
+      1.0,
+      1.0,
+      1.0,
+      1.0
+    ]
+  }
 }

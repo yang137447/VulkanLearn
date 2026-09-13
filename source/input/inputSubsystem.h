@@ -44,7 +44,9 @@ private:
     PlatformWindow* window = nullptr;
     InputActionState actionState;
     // UI visibility may suspend capture without overwriting the player's Esc preference.
-    bool relativeMouseModeRequested = true;
+    // 默认不请求捕获：启动后光标保持自由，鼠标移动不会带动渲染视窗。
+    // 需要相机环绕/飞行时按 Esc 显式开启捕获。
+    bool relativeMouseModeRequested = false;
     bool relativeMouseModeAllowed = false;
     bool relativeMouseModeEnabled = false;
     bool gameKeyboardEnabled = true;

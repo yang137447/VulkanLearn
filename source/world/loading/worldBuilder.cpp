@@ -112,8 +112,11 @@ std::shared_ptr<SpotLight> BuildSpotLight(const nlohmann::json& node)
     Eigen::Vector3f color = JsonParser::ParseValue<Eigen::Vector3f>(node["color"]);
     const float intensity = JsonParser::ParseValue<float>(node["intensity"]);
     const float radius = node.value("radius", 0.0f);
-    const float coneAngleOuter = JsonParser::ParseValue<float>(node["cone_angle_outer"]);
-    const float coneAngleInner = JsonParser::ParseValue<float>(node["cone_angle_inner"]);
+    // 场景 JSON 使用角度制；GPU 的 acos 与锥角比较使用弧度制。
+    const float coneAngleOuter =
+        JsonParser::ParseValue<float>(node["cone_angle_outer"]) * M_PI / 180.0f;
+    const float coneAngleInner =
+        JsonParser::ParseValue<float>(node["cone_angle_inner"]) * M_PI / 180.0f;
 
     std::shared_ptr<SpotLight> light = std::make_shared<SpotLight>();
     light->SetName(name);

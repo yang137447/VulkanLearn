@@ -29,6 +29,19 @@ void DebugConsole::Update()
     }
 }
 
+// 启动脚本入口：直接走 ProcessCommand，避开 _kbhit/_getch 交互输入路径。
+// 这里刻意不做任何额外解析或校验，脚本命令与手输命令必须完全同构。
+void DebugConsole::SubmitCommandLine(const std::string& line)
+{
+    if (line.empty())
+    {
+        return;
+    }
+
+    std::cout << line << std::endl;
+    ProcessCommand(line);
+}
+
 void DebugConsole::HandleInput(int ch)
 {
     if (ch == 0 || ch == 224)

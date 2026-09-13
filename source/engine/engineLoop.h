@@ -55,6 +55,11 @@ public:
     int GetExitCode() const noexcept { return exitCode; }
     void QueueRuntimeCommand(RuntimeCommand command);
     void SetExitAfterRuntimeTests(bool enabled);
+    // 启动期控制台脚本入口：转发给 ConsoleSubsystem，延迟若干帧后提交，
+    // 让 showcase / debug 截图可以脚本化复现。
+    void QueueLaunchConsoleCommands(
+        const std::vector<std::string>& lines,
+        int delayFrames);
 
 private:
     friend class RuntimeValidationServices;

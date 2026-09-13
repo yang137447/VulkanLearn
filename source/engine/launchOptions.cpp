@@ -247,6 +247,39 @@ LaunchOptions ParseLaunchOptions(int argc, char** argv)
             continue;
         }
 
+        if (argument == "--console-command")
+        {
+            if (i + 1 >= argc || IsOptionToken(argv[i + 1]))
+            {
+                options.errorMessage =
+                    "--console-command requires a console command line.";
+                return options;
+            }
+            options.consoleCommands.emplace_back(argv[++i]);
+            continue;
+        }
+
+        if (argument == "--console-command-delay")
+        {
+            if (i + 1 >= argc || IsOptionToken(argv[i + 1]))
+            {
+                options.errorMessage =
+                    "--console-command-delay requires a positive frame count.";
+                return options;
+            }
+
+            int delayFrames = 0;
+            const std::string delayText = argv[++i];
+            if (!TryParsePositiveInt(delayText, delayFrames))
+            {
+                options.errorMessage =
+                    "--console-command-delay frame count must be a positive integer.";
+                return options;
+            }
+            options.consoleCommandDelayFrames = delayFrames;
+            continue;
+        }
+
         options.errorMessage = "Unknown launch option: " + argument;
         return options;
     }
@@ -268,12 +301,15 @@ void PrintLaunchUsage()
         << "       main.exe [--shader-force-rebuild]\n"
         << "       main.exe [--initial-scene <scene-path>]\n"
         << "       main.exe [--worker-thread-count <1|2>]\n"
+        << "       main.exe [--initial-scene <scene-path>] [--console-command \"<cmd>\"]...\n"
         << "  --shader-force-rebuild              Recompile and republish every startup shader artifact.\n"
         << "  --shader-reload-test                Run the graphics shader hot-reload rollback matrix.\n"
         << "  --shader-compute-reload-test        Run the compute pipeline reload participant matrix.\n"
         << "  --world-graph-transaction-test      Run deterministic World/RenderGraph transaction rollback faults.\n"
         << "  --initial-scene <scene-path>        Override config initScene for this process.\n"
         << "  --worker-thread-count <1|2>         Override config worker mode for this process.\n"
+        << "  --console-command <line>            Queue one debug console command at startup. Repeatable.\n"
+        << "  --console-command-delay <frames>    Frames to wait before submitting queued console commands (default 60).\n"
         << "  --dev-ui                            Enable Dear ImGui developer tools for this launch.\n"
         << "  --no-dev-ui                         Disable Dear ImGui developer tools for this launch.\n"
         << "  --exit-after-tests                  Exit with 0 on success or 2 on test failure.\n";
@@ -312,6 +348,15 @@ void QueueLaunchCommands(EngineLoop& engineLoop, const LaunchOptions& options)
         engineLoop.SetExitAfterRuntimeTests(
             options.exitAfterTests);
         return;
+    }
+
+    // 普通启动路径下才排队控制台脚本；runtime test 分支已经提前返回，
+    // 避免脚本命令和测试矩阵互相干扰。
+    if (!options.consoleCommands.empty())
+    {
+        engineLoop.QueueLaunchConsoleCommands(
+            options.consoleCommands,
+            options.consoleCommandDelayFrames);
     }
 
 }
