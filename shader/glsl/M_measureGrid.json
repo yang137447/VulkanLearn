@@ -1,26 +1,61 @@
 {
-  "name": "M_measureGrid",
-  "type": "material",
-  "shadingModel": "DefaultLit",
-  "renderStates": {
-    "renderMode": "Opaque",
-    "cullMode": "Back"
-  },
-  "macros": {},
-  "parameters": {
-    "u_tintColor": {
-      "type": "color",
-      "default": [
-        1.0,
-        1.0,
-        1.0,
-        1.0
-      ]
+    "name": "M_measureGrid",
+    "type": "material",
+    "shadingModel": "DefaultLit",
+    "renderStates": {
+        "renderMode": "Opaque",
+        "cullMode": "Back"
+    },
+    "macros": {},
+    "parameters": {
+        "u_tintColor": {
+            "type": "color",
+            "default": [
+                1,
+                1,
+                1,
+                1
+            ],
+            "description": "linear base-color and opacity multiplier",
+            "channels": {
+                "x": {
+                    "name": "red",
+                    "description": "red color channel",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                },
+                "y": {
+                    "name": "green",
+                    "description": "green color channel",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                },
+                "z": {
+                    "name": "blue",
+                    "description": "blue color channel",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                },
+                "w": {
+                    "name": "opacity",
+                    "description": "opacity channel",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                }
+            }
+        }
+    },
+    "textures": {},
+    "shaderEvaluation": {
+        "vertex": "M_measureGrid.vertex.glsl",
+        "surface": "M_measureGrid.surface.glsl"
     }
-  },
-  "textures": {},
-  "shaderEvaluation": {
-    "vertex": "M_measureGrid.vertex.glsl",
-    "surface": "M_measureGrid.surface.glsl"
-  }
 }

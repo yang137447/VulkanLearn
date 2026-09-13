@@ -1,31 +1,68 @@
 {
-  "name": "M_unlit",
-  "type": "material",
-  "shadingModel": "Unlit",
-  "renderStates": {
-    "renderMode": "Opaque",
-    "cullMode": "Back"
-  },
-  "macros": {},
-  "parameters": {
-    "u_tintColor": {
-      "type": "color",
-      "default": [
-        1.0,
-        1.0,
-        1.0,
-        1.0
-      ]
+    "name": "M_unlit",
+    "type": "material",
+    "shadingModel": "Unlit",
+    "renderStates": {
+        "renderMode": "Opaque",
+        "cullMode": "Back"
+    },
+    "macros": {
+        "USE_VERTEX_COLOR": 1
+    },
+    "parameters": {
+        "u_tintColor": {
+            "type": "color",
+            "default": [
+                1,
+                1,
+                1,
+                1
+            ],
+            "description": "linear base-color and opacity multiplier",
+            "channels": {
+                "x": {
+                    "name": "red",
+                    "description": "red color channel",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                },
+                "y": {
+                    "name": "green",
+                    "description": "green color channel",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                },
+                "z": {
+                    "name": "blue",
+                    "description": "blue color channel",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                },
+                "w": {
+                    "name": "opacity",
+                    "description": "opacity channel",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                }
+            }
+        }
+    },
+    "textures": {
+        "albedoMap": {
+            "type": "sampler2D",
+            "default": null
+        }
+    },
+    "shaderEvaluation": {
+        "vertex": "M_unlit.vertex.glsl",
+        "surface": "M_unlit.surface.glsl"
     }
-  },
-  "textures": {
-    "albedoMap": {
-      "type": "sampler2D",
-      "default": null
-    }
-  },
-  "shaderEvaluation": {
-    "vertex": "M_unlit.vertex.glsl",
-    "surface": "M_unlit.surface.glsl"
-  }
 }

@@ -13,7 +13,10 @@ MaterialInputs EvaluateMaterialInputs(in MaterialFunctionContext context)
     #else
         vec4 albedo = vec4(1.0);
     #endif
-    vec4 color = albedo * u_tintColor * vec4(context.vertexColor.rgb, 1.0);
+    vec4 color = albedo * u_tintColor;
+    #if USE_VERTEX_COLOR
+        color *= vec4(context.vertexColor.rgb, 1.0);
+    #endif
     inputs.baseColor = color.rgb;
     inputs.opacity = color.a;
     inputs.opacityMask = color.a;

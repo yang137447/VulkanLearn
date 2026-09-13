@@ -17,38 +17,115 @@
         "USE_ALBEDO_MAP": 0,
         "USE_NORMAL_MAP": 0,
         "USE_PBR_MAP": 0,
-        "USE_EMISSION_MAP": 0
+        "USE_EMISSION_MAP": 0,
+        "USE_ALPHA_MAP": 0
     },
     "parameters": {
         "u_alphaClipThreshold": {
             "type": "float",
             "default": 0.5,
-            "range": {"min": 0.0, "max": 1.0}
+            "range": {
+                "min": 0,
+                "max": 1
+            },
+            "description": "alpha test threshold for masked material coverage"
         },
         "u_tintColor": {
             "type": "color",
-            "default": [1.0, 1.0, 1.0, 1.0],
+            "default": [
+                1,
+                1,
+                1,
+                1
+            ],
             "channels": {
-                "x": {"name": "red", "description": "red channel", "range": {"min": 0.0, "max": 1.0}},
-                "y": {"name": "green", "description": "green channel", "range": {"min": 0.0, "max": 1.0}},
-                "z": {"name": "blue", "description": "blue channel", "range": {"min": 0.0, "max": 1.0}},
-                "w": {"name": "opacity", "description": "opacity channel", "range": {"min": 0.0, "max": 1.0}}
-            }
+                "x": {
+                    "name": "red",
+                    "description": "red channel",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                },
+                "y": {
+                    "name": "green",
+                    "description": "green channel",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                },
+                "z": {
+                    "name": "blue",
+                    "description": "blue channel",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                },
+                "w": {
+                    "name": "opacity",
+                    "description": "opacity channel",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                }
+            },
+            "description": "linear base-color and opacity multiplier"
         },
         "u_pbrFactors": {
             "type": "vec4",
-            "default": [0.5, 0.0, 1.0, 0.0],
+            "default": [
+                0.5,
+                0,
+                1,
+                0
+            ],
             "channels": {
-                "x": {"name": "roughness", "description": "roughness channel", "range": {"min": 0.0, "max": 1.0}},
-                "y": {"name": "metallic", "description": "metallic channel", "range": {"min": 0.0, "max": 1.0}},
-                "z": {"name": "ambientOcclusion", "description": "ambient occlusion channel", "range": {"min": 0.0, "max": 1.0}},
-                "w": {"name": "reserved", "description": "reserved channel", "range": {"min": 0.0, "max": 0.0}}
-            }
+                "x": {
+                    "name": "roughness",
+                    "description": "roughness channel",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                },
+                "y": {
+                    "name": "metallic",
+                    "description": "metallic channel",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                },
+                "z": {
+                    "name": "ambientOcclusion",
+                    "description": "ambient occlusion channel",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                },
+                "w": {
+                    "name": "reserved",
+                    "description": "reserved channel",
+                    "range": {
+                        "min": 0,
+                        "max": 0
+                    }
+                }
+            },
+            "description": "fallback surface factors used when the corresponding texture map is unavailable"
         },
         "u_emissiveStrength": {
             "type": "float",
-            "default": 1.0,
-            "range": {"min": 0.0, "max": 4.0}
+            "default": 1,
+            "range": {
+                "min": 0,
+                "max": 4
+            },
+            "description": "emissive contribution multiplier"
         }
     },
     "textures": {
@@ -65,6 +142,10 @@
             "default": null
         },
         "emissionMap": {
+            "type": "sampler2D",
+            "default": null
+        },
+        "alphaMap": {
             "type": "sampler2D",
             "default": null
         }

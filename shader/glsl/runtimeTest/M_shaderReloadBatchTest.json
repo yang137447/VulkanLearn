@@ -17,7 +17,47 @@
     "parameters": {
         "u_reloadBatchColor": {
             "type": "color",
-            "default": [0.15, 0.7, 0.35, 1.0]
+            "default": [
+                0.15,
+                0.7,
+                0.35,
+                1
+            ],
+            "description": "shader reload batch test output color",
+            "channels": {
+                "x": {
+                    "name": "red",
+                    "description": "test red color",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                },
+                "y": {
+                    "name": "green",
+                    "description": "test green color",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                },
+                "z": {
+                    "name": "blue",
+                    "description": "test blue color",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                },
+                "w": {
+                    "name": "opacity",
+                    "description": "test opacity",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                }
+            }
         }
     },
     "textures": {}

@@ -10,7 +10,47 @@
     "parameters": {
         "u_bloomPrefilterParams": {
             "type": "vec4",
-            "default": [1.0, 0.5, 12.0, 0.0]
+            "default": [
+                1,
+                0.5,
+                12,
+                0
+            ],
+            "description": "bloom prefilter threshold, knee, and firefly clamp",
+            "channels": {
+                "x": {
+                    "name": "threshold",
+                    "description": "bloom luminance threshold",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                },
+                "y": {
+                    "name": "knee",
+                    "description": "bloom soft-knee width",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                },
+                "z": {
+                    "name": "firefliesClamp",
+                    "description": "bright-pixel clamp",
+                    "range": {
+                        "min": 0,
+                        "max": 12
+                    }
+                },
+                "w": {
+                    "name": "reserved",
+                    "description": "reserved channel",
+                    "range": {
+                        "min": 0,
+                        "max": 0
+                    }
+                }
+            }
         }
     },
     "textures": {}

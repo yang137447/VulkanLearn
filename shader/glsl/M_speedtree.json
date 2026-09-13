@@ -21,15 +21,96 @@
     "parameters": {
         "u_alphaClipThreshold": {
             "type": "float",
-            "default": 0.5
+            "default": 0.5,
+            "description": "alpha test threshold for masked material coverage"
         },
         "u_tintColor": {
             "type": "color",
-            "default": [1.0, 1.0, 1.0, 1.0]
+            "default": [
+                1,
+                1,
+                1,
+                1
+            ],
+            "description": "linear base-color and opacity multiplier",
+            "channels": {
+                "x": {
+                    "name": "red",
+                    "description": "red color channel",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                },
+                "y": {
+                    "name": "green",
+                    "description": "green color channel",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                },
+                "z": {
+                    "name": "blue",
+                    "description": "blue color channel",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                },
+                "w": {
+                    "name": "opacity",
+                    "description": "opacity channel",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                }
+            }
         },
         "u_pbrFactors": {
             "type": "vec4",
-            "default": [0.5, 0.0, 1.0, 0.0]
+            "default": [
+                0.5,
+                0,
+                1,
+                0
+            ],
+            "description": "fallback surface factors used when the corresponding texture map is unavailable",
+            "channels": {
+                "x": {
+                    "name": "roughness",
+                    "description": "surface roughness",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                },
+                "y": {
+                    "name": "metallic",
+                    "description": "metallic response",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                },
+                "z": {
+                    "name": "ambientOcclusion",
+                    "description": "ambient occlusion",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                },
+                "w": {
+                    "name": "reserved",
+                    "description": "reserved channel",
+                    "range": {
+                        "min": 0,
+                        "max": 0
+                    }
+                }
+            }
         }
     },
     "textures": {

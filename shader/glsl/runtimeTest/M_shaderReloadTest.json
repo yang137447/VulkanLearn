@@ -19,15 +19,57 @@
     "parameters": {
         "u_reloadTestColor": {
             "type": "color",
-            "default": [0.2, 0.5, 0.9, 1.0]
+            "default": [
+                0.2,
+                0.5,
+                0.9,
+                1
+            ],
+            "description": "shader reload test output color",
+            "channels": {
+                "x": {
+                    "name": "red",
+                    "description": "test red color",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                },
+                "y": {
+                    "name": "green",
+                    "description": "test green color",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                },
+                "z": {
+                    "name": "blue",
+                    "description": "test blue color",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                },
+                "w": {
+                    "name": "opacity",
+                    "description": "test opacity",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                }
+            }
         },
         "u_alphaClipThreshold": {
             "type": "float",
-            "default": 0.25
+            "default": 0.25,
+            "description": "alpha test threshold for masked material coverage"
         },
         "u_reloadRuntimeScalar": {
             "type": "float",
-            "default": 0.125
+            "default": 0.125,
+            "description": "shader reload runtime scalar test value"
         }
     },
     "textures": {
