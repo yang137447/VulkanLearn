@@ -1,0 +1,181 @@
+{
+    "name": "M_brdfPlot",
+    "type": "material",
+    "shadingModel": "Unlit",
+    "renderStates": {
+        "renderMode": "Opaque",
+        "cullMode": "None"
+    },
+    "macros": {},
+    "parameters": {
+        "u_tintColor": {
+            "type": "color",
+            "default": [
+                1,
+                1,
+                1,
+                1
+            ],
+            "description": "plot output multiplier",
+            "channels": {
+                "x": {
+                    "name": "red",
+                    "description": "red color channel",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                },
+                "y": {
+                    "name": "green",
+                    "description": "green color channel",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                },
+                "z": {
+                    "name": "blue",
+                    "description": "blue color channel",
+                    "range": {
+                        "min": 0,
+                        "max": 1
+                    }
+                },
+                "w": {
+                    "name": "reserved",
+                    "description": "reserved channel",
+                    "range": {
+                        "min": 1,
+                        "max": 1
+                    }
+                }
+            }
+        },
+        "u_plotRoughness": {
+            "type": "float",
+            "default": 0.5,
+            "range": {
+                "min": 0.02,
+                "max": 1
+            },
+            "description": "roughness used by both plotted distributions"
+        },
+        "u_plotMode": {
+            "type": "float",
+            "default": 0,
+            "range": {
+                "min": 0,
+                "max": 3
+            },
+            "description": "plot mode: 0 = GGX vs Charlie distribution, 1 = hair R/TT/TRT longitudinal scattering, 2 = Schlick vs exact Smith G1, 3 = UV probe"
+        },
+        "u_plotThetaV": {
+            "type": "float",
+            "default": 0.5,
+            "range": {
+                "min": -1.4,
+                "max": 1.4
+            },
+            "description": "hair plot only: fixed view angle along the strand, in radians"
+        },
+        "u_plotRectPixels": {
+            "type": "vec4",
+            "default": [
+                92,
+                52,
+                18,
+                85
+            ],
+            "channels": {
+                "x": {
+                    "name": "left",
+                    "description": "plot frame inset from the panel left edge, in pixels",
+                    "range": {
+                        "min": 0,
+                        "max": 256
+                    }
+                },
+                "y": {
+                    "name": "bottom",
+                    "description": "plot frame inset from the panel bottom edge, in pixels; must fit the tick labels and the x axis title",
+                    "range": {
+                        "min": 0,
+                        "max": 256
+                    }
+                },
+                "z": {
+                    "name": "right",
+                    "description": "plot frame inset from the panel right edge, in pixels",
+                    "range": {
+                        "min": 0,
+                        "max": 256
+                    }
+                },
+                "w": {
+                    "name": "top",
+                    "description": "plot frame inset from the panel top edge, in pixels; must fit the caption row and the stacked legend rows",
+                    "range": {
+                        "min": 0,
+                        "max": 256
+                    }
+                }
+            },
+            "description": "plot frame rectangle: the box border IS the coordinate axis; measurement scripts must reuse these exact values to convert pixels back to axis values"
+        },
+        "u_plotTextPixels": {
+            "type": "vec4",
+            "default": [
+                2,
+                8,
+                1.2,
+                5
+            ],
+            "channels": {
+                "x": {
+                    "name": "fontCell",
+                    "description": "bitmap font cell size in pixels; glyph is 5x7 cells, advance is 6 cells",
+                    "range": {
+                        "min": 1,
+                        "max": 8
+                    }
+                },
+                "y": {
+                    "name": "tickLength",
+                    "description": "major tick length in pixels (minor ticks use 60%)",
+                    "range": {
+                        "min": 1,
+                        "max": 32
+                    }
+                },
+                "z": {
+                    "name": "stroke",
+                    "description": "axis / tick stroke half width in pixels",
+                    "range": {
+                        "min": 0.5,
+                        "max": 8
+                    }
+                },
+                "w": {
+                    "name": "gap",
+                    "description": "gap between the axis frame and its labels / titles, in pixels",
+                    "range": {
+                        "min": 0,
+                        "max": 32
+                    }
+                }
+            },
+            "description": "axis annotation metrics, in pixels: all sizes are resolved against fwidth(uv) so the same values hold for every probe scene"
+        }
+    },
+    "textures": {
+        "albedoMap": {
+            "type": "sampler2D",
+            "default": null
+        }
+    },
+    "shaderEvaluation": {
+        "vertex": "M_brdfPlot.vertex.glsl",
+        "surface": "M_brdfPlot.surface.glsl"
+    }
+}

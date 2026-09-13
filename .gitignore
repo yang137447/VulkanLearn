@@ -19,6 +19,10 @@
 /output/playwright
 /imgui.ini
 __pycache__/
+# 论文 PDF 的抽取文本（tmp/pdftext/）：按需重新生成，不入库。
+# 生成命令见 documents/plan/rendering/shading-model-alignment-plan.md §1.4.1。
+/tmp/pdftext/
+/tmp/sheen-paper.txt
 /extern/FreeType/freetype/
 /extern/ImGui/imgui/
 /extern/RmlUi/RmlUi/
