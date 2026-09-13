@@ -7,25 +7,30 @@
   "parameters": {
     "u_tint": {
       "type": "vec3",
-      "default": [0.2, 0.4, 0.6],
+      "default": [
+        0.2,
+        0.4,
+        0.6
+      ],
       "channels": {
         "x": {
           "name": "red",
           "description": "Red tint channel",
           "range": {
-            "min": 0.0,
-            "max": 1.0
+            "min": 0,
+            "max": 1
           }
         },
         "y": {
           "name": "green",
           "description": "Green tint channel",
           "range": {
-            "min": 0.0,
-            "max": 1.0
+            "min": 0,
+            "max": 1
           }
         }
-      }
+      },
+      "description": "u_tint editor test parameter usage"
     }
   },
   "textures": {}

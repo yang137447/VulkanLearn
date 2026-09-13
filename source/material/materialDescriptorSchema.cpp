@@ -104,6 +104,7 @@ MaterialDescriptorSchema MaterialDescriptorSchema::Build(
     {
         MaterialParameterSchemaEntry entry;
         entry.name = name;
+        entry.description = parameterJson.at("description").get<std::string>();
         entry.glslType = parameterJson.at("type").get<std::string>();
         if (entry.glslType == "color")
         {

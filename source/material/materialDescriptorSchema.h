@@ -33,6 +33,8 @@ struct MaterialParameterSchemaEntry
 {
     std::string name;
     std::string glslType;
+    // 参数级 authoring 用途，供编辑器和迁移工具保留显示语义。
+    std::string description;
     // 按 x/y/z/w 顺序保留 M_ 通道元数据；为空表示资产未声明。
     std::vector<MaterialParameterChannelSchemaEntry> channels;
     uint32_t size = 0;

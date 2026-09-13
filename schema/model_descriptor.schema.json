@@ -18,6 +18,24 @@
             "type": "string",
             "description": "原始模型数据文件相对路径，例如 'models/datas/my_mesh.obj'。"
         },
+        "importOptions": {
+            "type": "object",
+            "description": "导入阶段选项；可限制普通模型只导入指定几何 section。",
+            "properties": {
+                "generateSmoothNormals": {
+                    "type": "boolean"
+                },
+                "includedSectionNames": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                        "type": "string",
+                        "minLength": 1
+                    }
+                }
+            },
+            "additionalProperties": false
+        },
         "materialSlots": {
             "type": "array",
             "description": "按源模型材质槽顺序排列的材质实例绑定。单材质模型也使用一个数组元素。",

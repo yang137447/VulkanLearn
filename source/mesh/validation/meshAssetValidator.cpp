@@ -149,6 +149,26 @@ namespace
             }
             importOptions.generateSmoothNormals = optionsJson["generateSmoothNormals"].get<bool>();
         }
+        if (optionsJson.contains("includedSectionNames"))
+        {
+            if (!optionsJson["includedSectionNames"].is_array() ||
+                optionsJson["includedSectionNames"].empty())
+            {
+                throw std::runtime_error(
+                    "Mesh asset importOptions.includedSectionNames must be a non-empty array of strings: " +
+                    std::string(meshAssetPath) + " model=" + std::string(modelDataPath));
+            }
+            for (const auto& sectionName : optionsJson["includedSectionNames"])
+            {
+                if (!sectionName.is_string() || sectionName.get<std::string>().empty())
+                {
+                    throw std::runtime_error(
+                        "Mesh asset importOptions.includedSectionNames must contain non-empty strings: " +
+                        std::string(meshAssetPath) + " model=" + std::string(modelDataPath));
+                }
+                importOptions.includedSectionNames.push_back(sectionName.get<std::string>());
+            }
+        }
         return importOptions;
     }
 
@@ -229,6 +249,10 @@ MeshAssetBuildPlan MeshAssetValidator::BuildLoadPlan(
     if (loadPlan.importOptions.generateSmoothNormals)
     {
         loadPlan.modelCacheKey += "|generateSmoothNormals";
+    }
+    for (const std::string& sectionName : loadPlan.importOptions.includedSectionNames)
+    {
+        loadPlan.modelCacheKey += "|section=" + sectionName;
     }
     return loadPlan;
 }

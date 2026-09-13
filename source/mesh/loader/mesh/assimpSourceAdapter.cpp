@@ -68,7 +68,8 @@ ModelResource AssimpSourceAdapter::ReadSource(
     ValidateSource(sourcePath, modelDataPath);
 
     Assimp::Importer importer;
-    unsigned int postProcessFlags = aiProcess_Triangulate;
+    // Assimp 的 FBX fileScale 负责把厘米等源单位转换到米；显式启用 GlobalScale，避免厘米资产原样进入世界空间。
+    unsigned int postProcessFlags = aiProcess_Triangulate | aiProcess_GlobalScale;
     if (importOptions.generateSmoothNormals)
     {
         postProcessFlags |= aiProcess_GenSmoothNormals;
@@ -81,33 +82,48 @@ ModelResource AssimpSourceAdapter::ReadSource(
     }
 
     ModelResource modelResource;
-    ProcessNode(scene->mRootNode, scene, modelResource);
+    ProcessNode(scene->mRootNode, scene, importOptions, modelResource);
 
     std::vector<std::string> sourceSlots;
-    for (const MeshSection& section : modelResource.sections)
+    for (unsigned int meshIndex = 0; meshIndex < scene->mNumMeshes; ++meshIndex)
     {
-        const auto it = std::find(sourceSlots.begin(), sourceSlots.end(), section.materialSlotName);
+        const std::string materialSlotName = ReadMaterialSlotName(
+            scene->mMeshes[meshIndex],
+            scene);
+        const auto it = std::find(sourceSlots.begin(), sourceSlots.end(), materialSlotName);
         if (it == sourceSlots.end())
         {
-            sourceSlots.push_back(section.materialSlotName);
+            sourceSlots.push_back(materialSlotName);
         }
     }
     modelResource.sourceMaterialSlotNames = std::move(sourceSlots);
     return modelResource;
 }
 
-void AssimpSourceAdapter::ProcessNode(aiNode* node, const aiScene* scene, ModelResource& outModelResource) const
+void AssimpSourceAdapter::ProcessNode(
+    aiNode* node,
+    const aiScene* scene,
+    const MeshImportOptions& importOptions,
+    ModelResource& outModelResource) const
 {
     // process all the node's meshes (if any)
     for (unsigned int i = 0; i < node->mNumMeshes; i++)
     {
         aiMesh* mesh = scene->mMeshes[node->mMeshes[i]];
-        outModelResource.sections.push_back(ProcessMesh(mesh, scene));
+        if (importOptions.includedSectionNames.empty() ||
+            std::find(
+                importOptions.includedSectionNames.begin(),
+                importOptions.includedSectionNames.end(),
+                ReadSectionName(mesh, ReadMaterialSlotName(mesh, scene))) !=
+                importOptions.includedSectionNames.end())
+        {
+            outModelResource.sections.push_back(ProcessMesh(mesh, scene));
+        }
     }
     // then do the same for each of its children
     for (unsigned int i = 0; i < node->mNumChildren; i++)
     {
-        ProcessNode(node->mChildren[i], scene, outModelResource);
+        ProcessNode(node->mChildren[i], scene, importOptions, outModelResource);
     }
 }
 

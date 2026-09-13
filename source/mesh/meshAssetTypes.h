@@ -27,6 +27,7 @@ struct MeshMaterialSlot
 struct MeshImportOptions
 {
     bool generateSmoothNormals = false;
+    std::vector<std::string> includedSectionNames;
 };
 
 // Runtime SDK 10 keeps the Games 9 wind authoring model. Curves are sampled

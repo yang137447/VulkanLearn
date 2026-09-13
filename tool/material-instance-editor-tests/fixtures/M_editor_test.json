@@ -13,81 +13,115 @@
       "type": "float",
       "default": 0.5,
       "range": {
-        "min": 0.0,
-        "max": 1.0
-      }
+        "min": 0,
+        "max": 1
+      },
+      "description": "u_scalar editor test parameter usage"
     },
     "u_uvScale": {
       "type": "vec2",
-      "default": [1.0, 1.0]
+      "default": [
+        1,
+        1
+      ],
+      "description": "u_uvScale editor test parameter usage",
+      "channels": {
+        "x": {
+          "name": "scaleX",
+          "description": "U texture scale",
+          "range": {
+            "min": 0,
+            "max": 4
+          }
+        },
+        "y": {
+          "name": "scaleY",
+          "description": "V texture scale",
+          "range": {
+            "min": 0,
+            "max": 4
+          }
+        }
+      }
     },
     "u_tint": {
       "type": "vec3",
-      "default": [0.2, 0.4, 0.6],
+      "default": [
+        0.2,
+        0.4,
+        0.6
+      ],
       "channels": {
         "x": {
           "name": "red",
           "description": "Red tint channel",
           "range": {
-            "min": 0.0,
-            "max": 1.0
+            "min": 0,
+            "max": 1
           }
         },
         "y": {
           "name": "green",
           "description": "Green tint channel",
           "range": {
-            "min": 0.0,
-            "max": 1.0
+            "min": 0,
+            "max": 1
           }
         },
         "z": {
           "name": "blue",
           "description": "Blue tint channel",
           "range": {
-            "min": 0.0,
-            "max": 1.0
+            "min": 0,
+            "max": 1
           }
         }
-      }
+      },
+      "description": "u_tint editor test parameter usage"
     },
     "u_packed": {
       "type": "vec4",
-      "default": [0.1, 0.2, 0.3, 0.4],
+      "default": [
+        0.1,
+        0.2,
+        0.3,
+        0.4
+      ],
       "channels": {
         "x": {
           "name": "first",
           "description": "First packed value",
           "range": {
-            "min": 0.0,
-            "max": 1.0
+            "min": 0,
+            "max": 1
           }
         },
         "y": {
           "name": "second",
           "description": "Second packed value",
           "range": {
-            "min": 0.0,
-            "max": 1.0
+            "min": 0,
+            "max": 1
           }
         },
         "z": {
           "name": "third",
           "description": "Third packed value",
           "range": {
-            "min": 0.0,
-            "max": 1.0
+            "min": 0,
+            "max": 1
           }
         },
         "w": {
           "name": "fourth",
           "description": "Fourth packed value",
           "range": {
-            "min": 0.0,
-            "max": 1.0
+            "min": 0,
+            "max": 1
           }
         }
-      }
+      },
+      "description": "u_packed editor test parameter usage"
     }
   },
   "textures": {

@@ -20,6 +20,10 @@ public:
         const MeshImportOptions& importOptions) const;
 
 private:
-    void ProcessNode(aiNode* node, const aiScene* scene, ModelResource& outModelResource) const;
+    void ProcessNode(
+        aiNode* node,
+        const aiScene* scene,
+        const MeshImportOptions& importOptions,
+        ModelResource& outModelResource) const;
     MeshSection ProcessMesh(aiMesh* mesh, const aiScene* scene) const;
 };

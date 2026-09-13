@@ -49,6 +49,7 @@ nlohmann::json BuildMaterialDefinition()
         {"parameters", {
             {"u_packed", {
                 {"type", "vec4"},
+                {"description", "packed authoring values"},
                 {"default", {1.0, 2.0, 3.0, 4.0}},
                 {"channels", {
                     {"x", {{"name", "first"}, {"description", "first value"}, {"range", {{"min", 0.0}, {"max", 1.0}}}}},
@@ -57,6 +58,7 @@ nlohmann::json BuildMaterialDefinition()
                     {"w", {{"name", "fourth"}, {"description", "fourth value"}, {"range", {{"min", 0.0}, {"max", 4.0}}}}}}}}},
             {"u_scalar", {
                 {"type", "float"},
+                {"description", "scalar authoring value"},
                 {"default", 1.0}}}}},
         {"textures", nlohmann::json::object()}};
 }
@@ -81,6 +83,9 @@ void TestChannelsRetention()
             return entry.name == "u_packed";
         });
     Require(packedIt != parameters.end(), "packed parameter was not retained");
+    Require(
+        packedIt->description == "packed authoring values",
+        "parameter description was not retained");
     Require(
         packedIt->channels.size() == 4,
         "channel metadata was not retained in x/y/z/w order");
@@ -159,12 +164,41 @@ void TestChannelsValidation()
         "scalar channels metadata was accepted");
 }
 
+void TestParameterMetadataValidation()
+{
+    nlohmann::json materialJson = BuildMaterialDefinition();
+    materialJson["parameters"]["u_scalar"].erase("description");
+    RequireThrows(
+        [&materialJson]() {
+            MaterialAssetValidator::ValidateDefinition(
+                materialJson,
+                "shader/glsl/M_schemaTest.json");
+        },
+        "missing scalar parameter description was accepted");
+
+    materialJson = BuildMaterialDefinition();
+    materialJson["parameters"]["u_packed"].erase("channels");
+    RequireThrows(
+        [&materialJson]() {
+            MaterialAssetValidator::ValidateDefinition(
+                materialJson,
+                "shader/glsl/M_schemaTest.json");
+        },
+        "missing vector channel metadata was accepted");
+}
+
 void TestColorUsesVec4Layout()
 {
     nlohmann::json materialJson = BuildMaterialDefinition();
     materialJson["parameters"]["u_color"] = {
         {"type", "color"},
+        {"description", "color authoring value"},
         {"default", {0.25, 0.5, 0.75, 1.0}}};
+    materialJson["parameters"]["u_color"]["channels"] = {
+        {"x", {{"name", "red"}, {"description", "red color channel"}, {"range", {{"min", 0.0}, {"max", 1.0}}}}},
+        {"y", {{"name", "green"}, {"description", "green color channel"}, {"range", {{"min", 0.0}, {"max", 1.0}}}}},
+        {"z", {{"name", "blue"}, {"description", "blue color channel"}, {"range", {{"min", 0.0}, {"max", 1.0}}}}},
+        {"w", {{"name", "alpha"}, {"description", "alpha channel"}, {"range", {{"min", 0.0}, {"max", 1.0}}}}}};
 
     MaterialAssetValidator::ValidateDefinition(
         materialJson,
@@ -201,4 +235,9 @@ TEST(MaterialSchema, ChannelsValidation)
 TEST(MaterialSchema, ColorUsesVec4Layout)
 {
     TestColorUsesVec4Layout();
+}
+
+TEST(MaterialSchema, ParameterMetadataValidation)
+{
+    TestParameterMetadataValidation();
 }
