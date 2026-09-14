@@ -28,9 +28,11 @@ vec2 Hammersley(uint i, uint n)
 
 vec3 ImportanceSampleGGX(vec2 xi, vec3 normalWS, float roughness)
 {
-    float a = roughness * roughness;
+    // α = roughness²（论文写法；变量名与论文一致，不要退回 `a`）
+    float alpha = roughness * roughness;
+    float alphaSquared = alpha * alpha;
     float phi = 2.0 * PI * xi.x;
-    float cosTheta = sqrt((1.0 - xi.y) / (1.0 + (a * a - 1.0) * xi.y));
+    float cosTheta = sqrt((1.0 - xi.y) / (1.0 + (alphaSquared - 1.0) * xi.y));
     float sinTheta = sqrt(max(1.0 - cosTheta * cosTheta, 0.0));
 
     vec3 halfVectorTS;
@@ -46,15 +48,20 @@ vec3 ImportanceSampleGGX(vec2 xi, vec3 normalWS, float roughness)
     return normalize(halfVectorWS);
 }
 
+// GGX 法线分布（α = roughness²，变量名与论文一致）。
+//
+// 注意：这里**故意没有**改成 include common/microfacetDistribution.glsl 的那一份——
+// 两支的公式相同，但这一支在分母上多了 `max(denom, 1e-4)` 的保护（roughness→0 时
+// denom→0），是刻意的数值保护。要合并必须先决定这个保护留在哪一侧，不能顺手替换。
 float DistributionGGX(vec3 N, vec3 H, float roughness)
 {
-    float a = roughness * roughness;
-    float a2 = a * a;
+    float alpha = roughness * roughness;
+    float alphaSquared = alpha * alpha;
     float NdotH = max(dot(N, H), 0.0);
     float NdotH2 = NdotH * NdotH;
 
-    float num = a2;
-    float denom = (NdotH2 * (a2 - 1.0) + 1.0);
+    float num = alphaSquared;
+    float denom = (NdotH2 * (alphaSquared - 1.0) + 1.0);
     denom = PI * denom * denom;
     return num / max(denom, 1e-4);
 }

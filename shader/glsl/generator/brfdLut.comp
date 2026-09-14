@@ -1,5 +1,8 @@
 #version 450
 #include "../common/defines.glsl"
+// Schlick-GGX G1 的 IBL 变体（k = α/2）已移到 common/microfacetDistribution.glsl，
+// 与曲线探针共用同一份定义——这里不再保留副本，避免"引擎用的那支"和"图上画的那支"漂移。
+#include "../common/microfacetDistribution.glsl"
 
 // gl_WorkGroupID          // 当前是第几个工作组
 // gl_LocalInvocationID    // 当前线程在工作组内部的位置，范围是 0~7, 0~7, 0
@@ -37,12 +40,13 @@ vec2 Hammersley(uint i, uint n)
 // 在以 n 为法线的半球上按 GGX 分布进行重要性采样，返回半角向量 h。
 vec3 ImportanceSampleGGX(vec2 xi, vec3 n, float roughness)
 {
-    // 将粗糙度映射为 GGX 分布参数 a
-    float a = roughness*roughness;
+    // 将粗糙度映射为 GGX 分布参数 α（论文写法 α = roughness²；变量名与论文一致）
+    float alpha = roughness * roughness;
+    float alphaSquared = alpha * alpha;
 
     // 将二维样本映射为球坐标角度
     float phi = 2.0 * PI * xi.x;
-    float cosTheta = sqrt(max((1.0 - xi.y)/(1.0 + (a * a - 1.0) * xi.y), 0.0));
+    float cosTheta = sqrt(max((1.0 - xi.y)/(1.0 + (alphaSquared - 1.0) * xi.y), 0.0));
     float sinTheta = sqrt(max(1.0 - cosTheta * cosTheta, 0.0));
 
     // 先在局部空间(切线空间)计算半角向量 h
@@ -61,19 +65,10 @@ vec3 ImportanceSampleGGX(vec2 xi, vec3 n, float roughness)
     return H;
 }
 
-// Schlick-GGX 几何项的 IBL 近似形式
-// 用于估计微表面自遮蔽带来的能量衰减
-float GeometrySchlickGGXIBL(float NDotV, float roughness)
-{
-    float a = roughness;
-    float k = (a * a) * 0.5;
-    return NDotV / (NDotV * (1.0 - k) + k);
-}
-
 // smith 联合几何项：分别计算视线方向和光线方向的遮蔽，再相乘。
 float GeometrySmithIBL(float nDotV, float nDotL, float roughness)
 {
-    return GeometrySchlickGGXIBL(nDotV, roughness) * GeometrySchlickGGXIBL(nDotL, roughness);
+    return GeometrySchlickGGXIbl(nDotV, roughness) * GeometrySchlickGGXIbl(nDotL, roughness);
 }
 
 vec2 IntegrateBRDF(float NDotV, float roughness)
