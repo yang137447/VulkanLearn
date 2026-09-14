@@ -5,7 +5,8 @@
 | 项目 | 内容 |
 | --- | --- |
 | 类型 | Shading Model 的**按论文实现 + 验证**计划（未来工作） |
-| 状态 | 共享设施已就绪（`M-07` / `M-08` + 四个工具）；**旧实现已整体删除**（2026-09-12），逐模型按论文重做尚未开始（见 §3 进度表） |
+| 状态 | 共享设施已就绪（`M-07` / `M-08` + 十个工具）；DefaultLit 的几何项审计已收口（`D-20` / `D-21`，2026-09-13）；**旧实现已整体删除**（2026-09-12），逐模型按论文重做尚未开始（见 §3 进度表） |
+| 修订 | 2026-09-13 第 6 版：**`D-20` / `D-21` 收口**——两条审计项经论文原文（Karis 2013 §Specular G 两段+式(4)）核对，判定为**审计标注错误，实现与论文一致**：LUT 的 `k` 就是论文的 `k=α/2`（计划书写的"`α²/2`"是把局部变量 `a` 当成了 α），`GeometrySmith`（`k=(r+1)²/8`）只有 analytic 直接光调用点。同时新增 mode 4 曲线探针（两支 Schlick 变体 vs 精确 Smith，逐列误差 ≤0.474 px）、两支工具（`verify_geometry_term.py` / `read_plot_text.py`），并把 §2.x ① 的状态与已删资产的引用改成与仓库一致（见 §1.4.2 / §1.5.2 / §1.5.3 / §2.1 / §3.2 / §5） |
 | 修订 | 2026-09-12 第 5 版：**前提变更**——旧的逐模型实现（ClearCoat / Cloth / Eye / Hair / Subsurface ×3 / ThinTranslucent / TwoSidedFoliage）与其案例资产整体删除，本计划从"验证已有实现"改为"**按论文实现，再验证**"；接口与 GBuffer 继续参考 UE（见 §0.6） |
 | 修订 | 2026-09-12 第 4 版：`M-08` 完成——探针图升级为数学规范坐标系（轴框 / 主次刻度 / 刻度数值 / 轴名 / 图头说明与图例），
 曲线描边改为**等宽屏幕宽度**，探针场景 scale 统一为"精确填满画面"；四条曲线的逐列误差全部 ≤0.49 px |
@@ -44,7 +45,7 @@
   `common/shadingModel.glsl` 的 ShadingModelID 表、Debug View 的数据结构与 setter、各 renderMode / 输出宏。
   它们现在**没有实现去消费**，这是刻意的：重做某个模型时，先按 UE 语义确认它的接口与槽位，再写求值器；
 - **保留的是测量设施**：`M_brdfPlot` 及其依赖（`common/clothBrdf.glsl`、`common/hairPathScattering.glsl`、
-  `common/microfacetDistribution.glsl`）、四个探针场景、`tool/validation/*`、`SC_sphere_array` 球阵基线；
+  `common/microfacetDistribution.glsl`）、五个探针场景、`tool/validation/*`、`SC_sphere_array` 球阵基线；
 - 旧实现文档（逐模型合同 + 旧开发计划 + NeoX 角色对齐线）归档在
   `documents/plan/rendering/archive/`，**不再是合同**；那里同时记录了本次删除的完整清单与理由。
 
@@ -187,14 +188,14 @@ case 就是"抄对了没有"的验证。三类来源的效力如下：
 
 下面的量是所有模型的共用底座，它们的验证属于**共享 case**，不重复计入单个模型。
 
-| 共享 ID | 来源 | 验证目标 | 形式 |
-| --- | --- | --- | --- |
-| `M-01` | [数学与物理基础](../../../../yyb-knowledge-book/src/content/docs/rendering/materials/shading-models/mathematical-foundations/index.mdx)｜Rendering Equation 与 BSDF 定义 | 确认引擎的 `f_r * NdotL` 组合与渲染方程的被积函数一致，没有漏项或重复乘 `PI` | 架构核对 |
-| `M-02` | [PBRT 4ed｜Reflection Models → Roughness Using Microfacet Theory](https://pbr-book.org/4ed/Reflection_Models/Roughness_Using_Microfacet_Theory)｜NDF 投影面积归一化 | NDF 的归一化测度正确：`∫ D(h)(n·h) dω_h = 1`，验证 `DistributionGGX` 的 `a` 参数约定 | 数值积分（离线脚本） |
-| `M-03` | [Heitz 2014 JCGT｜Understanding the Masking-Shadowing Function](https://jcgt.org/published/0003/02/03/)｜§3–§5 | 遮蔽项满足 `0 ≤ G1 ≤ 1`、`G1(c→1)=1`、互易性 `D·G/(4|n·l||n·v|)` 对称 | 曲线 + 端点 |
-| `M-04` | [PBRT 4ed｜Reflection Models](https://pbr-book.org/4ed/Reflection_Models)｜White furnace test | 各 lobe 的半球积分 ≤ 1（单次散射下必须 ≤ 1，不允许凭空造能量） | 数值积分（离线脚本） |
-| `M-05` | [Hoffman 2013｜Background: Physics and Math of Shading](https://blog.selfshadow.com/publications/s2013-shading-course/hoffman/s2013_pbs_physics_math_slides.pdf)｜全文 | 引擎的 public parameterization 与物理量对应关系正确（albedo 上限、F0 语义、roughness 感知映射） | 架构核对 |
-| `M-06` | UE 官方 [Shading Models](https://dev.epicgames.com/documentation/en-us/unreal-engine/shading-models-in-unreal-engine) + UE 5.8 Legacy 源码定义 | Shading Model ID 表与 UE 5.8 Legacy 槽位一一对应，未实现模型保留原始槽位 | 架构核对 |
+| 共享 ID | 来源 | 验证目标 | 形式 | 状态 |
+| --- | --- | --- | --- | --- |
+| `M-01` | [数学与物理基础](../../../../yyb-knowledge-book/src/content/docs/rendering/materials/shading-models/mathematical-foundations/index.mdx)｜Rendering Equation 与 BSDF 定义 | 确认引擎的 `f_r * NdotL` 组合与渲染方程的被积函数一致，没有漏项或重复乘 `PI` | 架构核对 | ☐ |
+| `M-02` | [PBRT 4ed｜Reflection Models → Roughness Using Microfacet Theory](https://pbr-book.org/4ed/Reflection_Models/Roughness_Using_Microfacet_Theory)｜NDF 投影面积归一化 | NDF 的归一化测度正确：`∫ D(h)(n·h) dω_h = 1`，验证 `DistributionGGX` 的 α 参数约定 | 数值积分（离线脚本） | ✅ **2026-09-14 通过**（`verify_brdf_integrals.py`：6 个 roughness 上归一化偏差 ≤1.6e-9；峰值恒等式 `D(n)=1/(πα²)` 相对偏差 ≤4.7e-12。**注意：归一化对任何 α 都成立，钉约定要靠峰值**） |
+| `M-03` | [Heitz 2014 JCGT｜Understanding the Masking-Shadowing Function](https://jcgt.org/published/0003/02/03/)｜§3–§5 | 遮蔽项满足 `0 ≤ G1 ≤ 1`、`G1(c→1)=1`、互易性 `D·G/(4|n·l||n·v|)` 对称 | 曲线 + 端点 | ✅ **2026-09-14 通过**（三种 G 变体：值域越界 0、非单调 0、`|G1(1)-1|` 0；互易性最大差 2.2e-16） |
+| `M-04` | [PBRT 4ed｜Reflection Models](https://pbr-book.org/4ed/Reflection_Models)｜White furnace test | 各 lobe 的半球积分 ≤ 1（单次散射下必须 ≤ 1，不允许凭空造能量） | 数值积分（离线脚本） | ✅ **2026-09-14 通过**（镜面 lobe 在 conductor/dielectric/半金属共 9 组配置上最大 1.0000；**组合项另见 `D-07` 的越界发现**） |
+| `M-05` | [Hoffman 2013｜Background: Physics and Math of Shading](https://blog.selfshadow.com/publications/s2013-shading-course/hoffman/s2013_pbs_physics_math_slides.pdf)｜全文 | 引擎的 public parameterization 与物理量对应关系正确（albedo 上限、F0 语义、roughness 感知映射） | 架构核对 | ☐ |
+| `M-06` | UE 官方 [Shading Models](https://dev.epicgames.com/documentation/en-us/unreal-engine/shading-models-in-unreal-engine) + UE 5.8 Legacy 源码定义 | Shading Model ID 表与 UE 5.8 Legacy 槽位一一对应，未实现模型保留原始槽位 | 架构核对 | ☐ |
 | `M-07` | 本仓库探针工件（**必须先做**） | **texCoord V 方向与相机 fov 约定要在同一次进程、同一次 `tonemap 0` 会话里重新探明**。现有工件互相矛盾（见 §1.3），在被重新钉死之前，任何模式的"预期行位置 vs 实测行位置"都还没有确定的竖直朝向，1 像素误差目标不可达 | 探针（单次会话四连拍） | ✅ **2026-09-12 完成**（结论见 §1.3，记录见 `shading-model-case-records.md#m-07`） |
 | `M-08` | 本仓库探针工件 + 数学制图规范 | 探针图必须自带**坐标轴识别与刻度数值**：矩形轴框、朝内主 / 次刻度、由刻度值格式化出的数值标签、轴名（y 轴名竖排）、参数注记。这样"图上读到的值"与"曲线定义域"同源，判定不依赖外部脚本或口头解释；同时把绘图区矩形变成材质参数，测量脚本用同一组值换算并**从图上核对轴框位置** | 架构核对 + 像素对照 | ✅ **2026-09-12 完成**（§1.5.2 / §1.7.2.1，记录见 `shading-model-case-records.md#m-08`） |
 
@@ -290,7 +291,10 @@ for p in sorted(glob.glob(os.path.join(src, '*.pdf'))):
 
 > **两条必须注意的坑**：① 抽取文本里希腊字母常丢失（`k = /2` 实际是 `k = α/2`），
 > 判定公式**必须结合上下文**，不能只看单行；② 2 页的短文（如 Estévez & Kulla）内容远少于
-> 标题给人的预期，**不要假设论文覆盖了它没写的东西**。
+> 标题给人的预期，**不要假设论文覆盖了它没写的东西**；
+> ③（`D-21` 之后补的）**不要把代码里的变量名当论文符号**：论文的 α 在旧代码里叫 `a`，
+> 而同一个文件里 `a` 还表示感知粗糙度，于是"论文里没有 `α²/2`"这条结论就是这么来的。
+> 现在代码统一把 α 写成 `alpha`（§1.4.5 第 5 条），审计时也应先看**赋值右侧**再谈式号。
 
 ### 1.4.1b 决策树（每个模型的"可选做法 × 我们做不做"）
 
@@ -333,13 +337,13 @@ yyb-knowledge-book/src/content/docs/rendering/materials/shading-models/
 
 | # | 公式 | 代码位置 | 论文核对结果 | 状态 |
 | --- | --- | --- | --- | --- |
-| D-a | `k = (Roughness+1)²/8` 的 Schlick G1 | `common/microfacetDistribution.glsl:31` | [Karis 2013](#karis-ue4) §Specular G 式(4)，原文：*"we chose to use the Schlick model, but with k = α/2 … We also chose to use Disney's modification … remapping roughness using (Roughness+1)/2 before squaring. **It's important to note that this adjustment is only used for analytic light sources**; if applied to image-based lighting, the results at glancing angles will be much too dark."* | ✅ |
-| D-b | 该 G1 被 `GeometrySmith` 用于间接光 / IBL 路径 | `common/lighting.glsl:431` `GeometrySmith()`，调用点 `:568` `:614` | 论文**明确禁止**这套 k 用于 IBL | ⚠️ **用法与论文相悖**（见 `D-20`） |
+| D-a | `k = (Roughness+1)²/8` 的 Schlick G1 | `common/microfacetDistribution.glsl:35` | [Karis 2013](#karis-ue4) §Specular G 式(4)，原文：*"we chose to use the Schlick model, but with k = α/2 … We also chose to use Disney's modification … remapping roughness using (Roughness+1)/2 before squaring. **It's important to note that this adjustment is only used for analytic light sources**; if applied to image-based lighting, the results at glancing angles will be much too dark."* | ✅ |
+| D-b | 该 G1 的调用路径（direct / IBL） | `common/lighting.glsl:431` `GeometrySmith()`，调用点 `:568` `:614` | 论文要求这套 k **只用于 analytic light source** | ✅ **2026-09-13 核对：调用路径与论文一致**——`GeometrySmith` 全仓库只有 `:568`（`EvaluateDefaultPbrLightLobes`，analytic 直接光）与 `:614`（`EvaluateNeoXSkinDualSpecularLight`，同属直接光、当前无调用者）两个调用点；IBL 走 `SampleEnvironmentBrdf()` → `brdfLut`。原判"用于间接光 / IBL"来自把 `GeometrySchlickGGX` 误标成 "IBL 变体"，见 `D-20` |
 | D-c | `D_GGX`，`α = roughness²` | `common/microfacetDistribution.glsl:14` | [Karis 2013](#karis-ue4) 式(3) + 正文 *"Disney's reparameterization of α = Roughness²"* | ✅ |
 | D-d | Lambert `c_diff/π` | `common/lighting.glsl:255` | [Karis 2013](#karis-ue4) 式(1)：`f = c_diff/π`，原文说明为什么不用 Burley diffuse | ✅ |
 | D-e | SH 辐照度 band 权重 `(π, 2π/3 ×3, π/4 ×5)` | `common/lighting.glsl:227` | Ramamoorthi & Hanrahan 2001 的 9 项辐照度重构系数（Karis 引用 [12] 的同一套） | ✅ |
-| D-f | LUT 里的 `k = α²/2` | `generator/brfdLut.comp:66` `GeometrySchlickGGXIBL()` | **Karis 2013 全文没有 `α²/2`**；论文只给 `k=α/2`（direct 拟合）与 `k=(r+1)²/8`（analytic 调整），**IBL 域的 G 未指定** | ❌ 论文无此式（见 `D-21`） |
-| D-g | `SmithG1Ggx` 精确参考曲线 | `common/microfacetDistribution.glsl:49` | 与 [Neubelt & Pettineo 2013](#neubelt-order-1886) 式(5) 数学恒等：两边同乘 `c+√(α²+(1-α²)c²)` 即得 `2c/(c+√(…))`。等价于 [Heitz 2014](#heitz-masking-shadowing) 式(86) `Λ = (−1+√(1+1/a²))/2`，`a = 1/(α_o tanθ_o)`，再取 `G1 = 1/(1+Λ)` | ✅ **之前标"来源待查"是标注错误，已改正** |
+| D-f | LUT 里的 `k` | `common/microfacetDistribution.glsl:56` `GeometrySchlickGGXIbl()`（2026-09-13 从 `generator/brfdLut.comp` 搬到共享头，数值未改；`brfdLut.comp` 改为 include） | 论文 §Specular G 的两支：`k=α/2`（基础拟合，**IBL 用这支**）与 `k=(r+1)²/8`（analytic 专用，Disney 重映射）。实现写作 `float alpha = roughness * roughness; float k = alpha * 0.5;`，即 `k = α/2`，**与论文同式** | ✅ **2026-09-13 改正**：原文写的 `k = α²/2` 是把当时的局部变量 `a`（感知粗糙度，不是 α）当成 α 读错的结果，论文里确实没有 `α²/2`，但仓库里也没有——见 `D-21`。该变量同日改名为 `alpha`（§1.4.5 第 5 条） |
+| D-g | `SmithG1Ggx` 精确参考曲线 | `common/microfacetDistribution.glsl:76` | 与 [Neubelt & Pettineo 2013](#neubelt-order-1886) 式(5) 数学恒等：两边同乘 `c+√(α²+(1-α²)c²)` 即得 `2c/(c+√(…))`。等价于 [Heitz 2014](#heitz-masking-shadowing) 式(86) `Λ = (−1+√(1+1/a²))/2`，`a = 1/(α_o tanθ_o)`，再取 `G1 = 1/(1+Λ)` | ✅ **之前标"来源待查"是标注错误，已改正** |
 
 **Cloth / Sheen**
 
@@ -461,9 +465,9 @@ A 与 B 并排，差异可归因到"切线是否进入公式"这一条。这正�
 
 | 状态 | 模型 | 含义 |
 | --- | --- | --- |
-| ❌ **论文里没有** | **Cloth / Sheen**（S-d / S-e / S-f / S-g / S-h） | 实现在论文之外；必须按 §0.3.1 阶梯清算。**这是当前唯一被确认的自创公式区** |
-| ⚠️ **用法与论文相悖** | DefaultLit（D-b / D-f） | 公式本身有出处，但被用在了论文明确禁止的路径上 |
-| 🔎 **待核对** | Hair、Subsurface、Foliage、Eye、ThinTranslucent | 基准已知，但尚未逐条抽文本对式号 |
+| ❌ **论文里没有** | **Cloth / Sheen**（S-d / S-e / S-f / S-g / S-h，**旧实现已删除**） | 旧实现在论文之外；重建时必须按 §0.3.1 阶梯清算。**这是当前唯一被确认的自创公式区** |
+| ✅ **已核对（2026-09-13）** | DefaultLit（D-b / D-f） | 两条都改判为**审计标注错误**：`GeometrySmith` 只被 analytic 直接光调用（与论文一致），LUT 的 `k` 就是论文的 `α/2`。证据与判定见 `D-20` / `D-21` |
+| 🔎 **待核对** | Hair、Subsurface、Foliage、Eye、ThinTranslucent（**旧实现均已删除**） | 基准已知，但尚未逐条抽文本对式号——重建时"审计表"读作检查清单（§1.4 开头） |
 
 **不算审计项的两类**（它们不改变着色结果）：
 
@@ -475,7 +479,13 @@ A 与 B 并排，差异可归因到"切线是否进入公式"这一条。这正�
 1. 每条都必须有明确的清算方式，不允许写"先留着"；
 2. 新增实现时，如果某条公式在论文里找不到出处，**先记账、不要先写代码**；
 3. 每个模型转为 ☑ 的前置条件是该模型相关的审计项全部为 ✅ 或已按阶梯处理（含"声明做不了"）；
-4. **审计结论必须写式号**。只写"和论文一致"不算——式号是可复核的最小单位。
+4. **审计结论必须写式号**。只写"和论文一致"不算——式号是可复核的最小单位；
+5. **变量名必须与论文符号一致**：论文的 α（= roughness²）在代码里一律写 `alpha`，不要用 `a` / `a2`。
+   这条是被 `D-21` 逼出来的：当时 `a` 在同一个文件里两处含义不同（一处是 α、一处是感知粗糙度），
+   审计时被读成 `k = α²/2`，凭空造出一条"论文里没有的公式"，整条闭环多花了一轮。
+   反过来，**论文自己就用 `a`..`e` 定义符号的地方保持原样**（如 `pass/toneMapping.frag` 的 ACES
+   拟合系数），规则是"跟来源的符号一致"，不是"不许用字母 a"。契约文本写在 `AGENTS.md` 的
+   Editing Guidance 里。
 
 ## 1.5 共享 A｜求值与测量设施
 
@@ -498,8 +508,10 @@ A 与 B 并排，差异可归因到"切线是否进入公式"这一条。这正�
 | --- | --- | --- | --- | --- |
 | 0 | θh，0..90°，主刻度 15°、次刻度 7.5° | GGX / Charlie 各按峰值归一化后的 **log10 轴**（1e-3..1，主刻度为四个十倍程，次刻度为 2× / 5×） | `GGX` / `Charlie` | Neubelt & Pettineo 2013 Fig 6 左 |
 | 1 | sinθl，-1..1，主刻度 0.5、次刻度 0.25 | R / TT / TRT 各自的 log10 轴（同上） | `R` / `TT` / `TRT` | Marschner 2003 Fig 5、pbrt Fig 9 |
-| 2 | cosθ，左端 1、右端 0，主刻度 0.25、次刻度 0.125 | G1 线性轴 0..1，主刻度 0.25、次刻度 0.125 | `Schlick (engine)` / `Smith (exact)` | Karis 2013 Fig 2；红线 = 引擎实际用的 `GeometrySchlickGGX`，绿线 = 精确 Smith |
+| 2 | cosθ，左端 1、右端 0，主刻度 0.25、次刻度 0.125 | G1 线性轴 0..1，主刻度 0.25、次刻度 0.125 | `Schlick (engine)` / `Smith (exact)` | Karis 2013 Fig 2；红线 = 论文式(4) 的 **analytic 变体** `k=(r+1)²/8`（引擎直接光路径用的那支）。图例名保持 `(engine)` 不动：它摄于 `M-08` 且已归档，改名会让旧证据与图对不上 |
 | 3 | —— | —— | —— | UV 诊断：`baseColor = (uv.x, uv.y, 0)`，**不画任何标注**（叠加会污染 uv 读数） |
+| 4 | 与 mode 2 **同轴**（cosθ，左端 1） | 与 mode 2 同轴（G1 线性 0..1） | `Schlick (direct) k=(r+1)^2/8` / `Schlick (ibl) k=alpha/2` / `Smith (exact)` | **2026-09-13 新增**（`D-03`）：把引擎实际使用的**两支** Schlick 变体与精确 Smith 画在同一坐标系里。三支都直接调用共享头里的真实实现；轴与 mode 2 完全一致，两张图可以叠着读 |
+| 5 | 与 mode 0 **同轴**（θh，0..90°，主刻度 15°） | 两条分布**各自按峰值归一化**后的 log10 轴，但加深到 **6 个数量级**（1e-6..1，主刻度隔一个数量级标一次） | `GGX (TR)` / `Beckmann` | **2026-09-14 新增**（`D-06`）：同一 α 下对照 GGX/Trowbridge-Reitz 与 Beckmann-Spizzichino 的形状与**尾部**，判据是 PBRT 4ed §9.6.1 / Fig 9.23 的 *"Trowbridge–Reitz has higher tails at larger values of θ"*。加深到 6 个数量级是必须的：3 个数量级的轴看不到尾部（见 §1.5.2 末的说明） |
 
 **图头（说明行 + 图例）在绘图区上方、外面**，自上而下是：
 
@@ -517,6 +529,27 @@ A 与 B 并排，差异可归因到"切线是否进入公式"这一条。这正�
 | 0 | `GGX vs Charlie: normalized peak ratio <GGX 峰值/Charlie 峰值>` | `GGX` / `Charlie` |
 | 1 | `Hair R, TT, TRT: normalized log10 Mp` | `R` / `TT` / `TRT` |
 | 2 | `Schlick vs Smith: max G1 deviation <定义域最大偏差>` | `Schlick (engine)` / `Smith (exact)` |
+| 4 | `G1 max dev vs Smith: direct <analytic 变体偏差> ibl <IBL 变体偏差>` | `Schlick (direct) k=(r+1)^2/8` / `Schlick (ibl) k=alpha/2` / `Smith (exact)` |
+| 5 | `at beckmann tail 1e-3: ggx/beckmann <在 Beckmann 尾角处 GGX 高多少倍>` | `GGX (TR)` / `Beckmann` |
+| 6 | `albedo at 75deg: Smith - no G = <75° 处两支方向反照率之差>` | `Schlick (direct) k=(r+1)^2/8` / `Schlick (ibl) k=alpha/2` / `Smith (exact)` / `no G (D*F/4)` |
+| 7 | `max rel err (F0=1, tv=60deg): <全表最大相对误差>` | `constant` / `cosine` / `sun` / `bistro 4k` |
+
+> mode 4 的图例把 `k` 的表达式直接写在图上：这张图存在的理由就是"两支变体不是同一条曲线"，
+> 名字里不带 `k` 的话，读者还是得回文档才知道哪支属于哪条路径。为此字体表新增了
+> `+` `/` `^` `b` 四个字形（两个字体表必须同步改，见 §1.5.2 的字体说明与 case 记录）。
+> mode 6 沿用 mode 4 的四个臂名（同名同色 = 同一个函数），只多一条 `no G (D*F/4)`；
+> 为 `no G (D*F/4)` 与 mode 7 的 `sun` 又各加了一个字形（`*`、`u`）。
+>
+> mode 5 的结论数字**换过一次**，两次都记在 case 记录里：第一版报"各自的尾角（掉到峰值 1e-3 的
+> 角度）"，图上读出来是 `ggx 90.0`——因为 **GGX 在掠射极限非零**（D(90°) = α²/π，归一化后是 α⁴），
+> 它永远不会掉到 1e-3，函数只能返回 90 这个哨兵值。现在报"在 Beckmann 的尾角处 GGX 高多少倍"，
+> 数字有界（α = 0.5 时 116.5）且直接对应论文那句 tail 结论。
+>
+> **mode 6 / 7 与 mode 0–5 的取数方式不同**：这两张图的曲线值不来自 shader 现算，而来自
+> 离线脚本生成并 `#include` 进来的表（`validationAlbedoTable.glsl` / `validationSplitSumTable.glsl`）。
+> 理由是逐像素做半球积分在 shader 里做不到；而表一旦生成，**图上的曲线与记录里的结论就是同一份数**。
+> 代价必须写清楚：像素测量这一路只能回答"图有没有把表画对"（插值 / 轴映射 / 颜色身份），
+> "表算得对不对"由生成它的离线脚本独立负责。表里 `-1` = 该配置不可判定，曲线在那里**断开**。
 
 两条设计约束：
 
@@ -526,9 +559,12 @@ A 与 B 并排，差异可归因到"切线是否进入公式"这一条。这正�
    既不需要保留区参数，也不需要底板与边框；
 2. **结论里的数字必须现算**，不能写死在文案里：mode 0 写的是两条分布的峰值比（正好解释
    "为什么纵轴要用 log10"），mode 2 写的是引擎近似与精确参考在定义域上的最大偏差
-   （`PlotMaxG1Deviation()`）。图上写的数要与曲线同源，否则改一个 roughness 就会留下过期结论。
-   `M-08` 里这两条结论都用独立的 python 复算核对过（`13.1` / `0.226`），并用"解出点阵字体、
-   反向识别渲染结果"验证过图上文字与预期字符串逐字一致（case 记录里有方法）。
+   （`PlotMaxG1Deviation()`），mode 4 写的是**两支变体各自**对该参考的偏差。
+   图上写的数要与曲线同源，否则改一个 roughness 就会留下过期结论。
+   `M-08` 里 mode 0 / 2 的结论都用独立的 python 复算核对过（`13.1` / `0.226`），并用"解出点阵字体、
+   反向识别渲染结果"验证过图上文字与预期字符串逐字一致；`D-03` 里 mode 4 的两个数
+   （`0.226` / `0.089`）同样复算核对过，且这一步已做成工具 `tool/validation/read_plot_text.py`
+   （见 §1.5.3）。
 
 `u_plotRectPixels.w`（上留白）必须容纳「1 行说明 + 最多 3 行图例」；下留白只需容纳
 x 刻度值与 x 轴名。图例仍画在**曲线之前**：曲线始终压在最上层，
@@ -574,29 +610,37 @@ x 刻度值与 x 轴名。图例仍画在**曲线之前**：曲线始终压在�
 
 求值来源：
 
-- `DistributionGGX`、`GeometrySchlickGGX`、`SmithG1Ggx` —— `common/microfacetDistribution.glsl`
+- `DistributionGGX`、`GeometrySchlickGGX`、`GeometrySchlickGGXIbl`、`SmithG1Ggx` —— `common/microfacetDistribution.glsl`
+  （`GeometrySchlickGGXIbl` 是 2026-09-13 从 `generator/brfdLut.comp` 搬进共享头的 IBL 变体，
+  `brfdLut.comp` 改为 include 它：探针画的就是 LUT 生成时用的同一份定义）
 - `ClothCharlieDistribution`、`ClothSheenRoughnessToAlpha` —— `common/clothBrdf.glsl`
   （注意：探针**没有**调用 `ClothSheenUnitResponse`；那个函数原本只被已删除的 Cloth LUT 生成器与
   `engine/clothLighting.glsl` 使用，重建 Cloth 时再决定是否接回）
 - `EvaluateHairUeR / TT / TRT`、`BuildHairUeScatteringContext` —— `common/hairPathScattering.glsl`
 
 mode 0 / 1 的纵轴按 log10 压缩 3 个数量级（GGX 低粗糙度峰值可达 `1/(π a²)`，与 Charlie 相差十几倍，
-论文本身也是对数轴）。mode 2 两条曲线都在 `[0,1]`，用线性纵轴。
+论文本身也是对数轴）。mode 2 / 4 的曲线都在 `[0,1]`，用线性纵轴。
 
 几何用 `Common/Source/Models/plot_quad.obj`（顶点为 ±1，即两单位宽，+Z 法线，`vt.y = 1` 在 +Y 顶点）。
 因此面板的 UV 是 `uv = 0.5 + worldXY/(2·scale)`——`M-07` 实测核对过（§1.3）。
 
-### 1.5.3 共享测量工具（✅ 2026-09-12 已交付）
+### 1.5.3 共享测量工具（✅ 2026-09-12 交付四个，2026-09-13 补两个）
 
 原先的缺口是：`tool/` 下没有任何 BMP 解析 / 曲线测量代码，已有曲线结论来自仓库外的临时脚本、
-无法复现。**`M-07` 一并把这两个工具做出来了**：
+无法复现。**`M-07` 一并把前四个工具做出来了**（后续 case 又陆续加了六个，见下表）：
 
 | 工具 | 位置 | 职责 |
 | --- | --- | --- |
-| `measure_plot_curve.py` | `tool/validation/` | `uv-map`：实测 mode 3 的 `uv ↔ 像素` 映射、逐点核对相机模型、检查"面板精确铺满"约定；`curve`：按列取曲线**亮核平台**中心，与解析期望行位置比对，输出平均 / 最大误差、"直立 / 镜像"两种假设的对照，并做**轴框位置交叉核对**；`panel`：§1.7.2.1 的四角 / 铺满检查 |
+| `measure_plot_curve.py` | `tool/validation/` | `uv-map`：实测 mode 3 的 `uv ↔ 像素` 映射、逐点核对相机模型、检查"面板精确铺满"约定；`curve`：按列取曲线**亮核平台**中心，与解析期望行位置比对，输出平均 / 最大误差、"直立 / 镜像"两种假设的对照，并做**轴框位置交叉核对**（`--mode` 支持 mode0/2/4/5/6/7；mode 6/7 的期望值同样读离线表，其中 mode 7 的"不可判定"点取 NaN 并跳过该列该曲线）；`panel`：§1.7.2.1 的四角 / 铺满检查 |
 | `run_paper_case.ps1` | `tool/validation/` | 启动 `main.exe`（排队 `tonemap 0` / `bloom strength 0`）、按 `-Shots`/`-Scenes` 配对采图、等产物、跑四角检查、把日志与截图归档到 `artifacts/<name>/<timestamp>/`，任一步失败即非零退出 |
 | `bmp_reader.py` | `tool/validation/` | 24bpp BMP 读取（负高度 top-down、行 4 字节对齐、BGR 通道序）统一成屏幕坐标，并提供 sRGB 编解码 |
 | `console_inject.ps1` | `tool/validation/` | 往运行中进程的控制台注入命令行；**一个进程内切场景多拍**靠它（原因见 §1.5.4） |
+| `read_plot_text.py` | `tool/validation/` | **反向识别图上的文字**（说明行 / 参数注记 / 图例第 1..N 条）：字体表从 shader 解析、位置按材质版式算出、逐字模单元回读位图，与 `--expect` 逐字比对。`--legend-count` 必须与图上的图例条数一致（≥4 条时 shader 会收紧行距，工具按同一条规则算基线）；`--row annotation` 读右对齐的参数注记。被运行时 UI 压住的字模标成 `?` 并按通配判定 |
+| `check_plot_font.py` | `tool/validation/` | **探针字体表的结构 + 形状核对**：数量 / 行数 / code 升序唯一 / 无空字形 / 无重复字形 / 每行不超 5 位，并把每个字形打成 5x7 ASCII art 供人眼扫（字形互换这类错误回读工具抓不到，见 `D-06` 归因②） |
+| `verify_geometry_term.py` | `tool/validation/` | 几何项 `k` 变体的**离线参考**（`D-04`）：三支 `k` 的 `(roughness, cosθ)` 扫描 + Karis `IntegrateBRDF` 的独立重算，输出"换一支 `k` 会让 split-sum LUT 的 A/B 偏多少" |
+| `verify_brdf_integrals.py` | `tool/validation/` | **公式级**离线积分（共享 `M-02` / `M-03` / `M-04` + `D-01` / `D-07` / `D-08`）：NDF 归一化与峰值恒等式、G1 值域 / 端点 / 互易性、白炉（镜面 lobe 与 diffuse+specular 组合分开报）、参数化边界；并把 LUT 的 `A+B` 与白炉积分互证。`--emit-glsl` 另外生成 mode 6 的方向反照率表 |
+| `measure_sphere_array.py` | `tool/validation/` | 球阵标尺的数值判定（`D-10`）：按相机模型投影 121 个球、取圆盘平均线性亮度，检查端点与两条单调性回归，并把"`metallic=1` 沿 roughness 不单调"作为观测报出 |
+| `verify_split_sum.py` | `tool/validation/` | **split-sum 误差的离线量化**（`D-09`）：解码真实 Radiance HDRI（bistro 4k）+ 镜像 `prefilterEnvMap.comp` 与 `brfdLut.comp` 的两半，与逐样本参考对照；用四个解析环境把"误差随环境频率怎么变"框出来。判定带**两条门限**（相对 `--meaningful-fraction` + 绝对 `--prefilter-floor-fraction`，缺后者会把两个趋零的数相除当成结论）；`--emit-glsl` 生成 mode 7 的误差表 |
 
 结构与 `tool/ue-lite-final-validation.ps1` 一致（串行、日志落 `artifacts/<name>/<timestamp>/`、非零退出即中止）。
 
@@ -607,7 +651,12 @@ mode 0 / 1 的纵轴按 log10 压缩 3 个数量级（GGX 低粗糙度峰值可�
 - **贴边 / 平台过薄（按曲线各自丢弃）**：曲线贴到绘图区上下边界（带子被裁一半）或亮核厚度
   明显低于该列应有的厚度（被运行时 UI 叠加、残余交叉光晕啃掉）时，只丢这一条曲线的这一列，
   不牵连另一条——mode 0 的两条曲线长期各贴一边，整列丢弃会丢掉八成数据；
-- "应有厚度"由等宽描边按该列斜率折算：`2·halfWidth·sqrt(1+slope²)`（§1.5.2 的等宽描边）。
+- "应有厚度"由等宽描边按该列斜率折算：`2·halfWidth·sqrt(1+slope²)`（§1.5.2 的等宽描边）；
+- **曲线身份判定（2026-09-13 补）**：找曲线不能只判"该像素在本曲线色方向上的投影 ≥ 阈值"——
+  投影是**单向**的，青色 `(0.30,0.80,0.92)` 在绿色 `(0.28,0.85,0.36)` 方向上的投影是 **1.13 > 0.98**，
+  于是整条青线会被当成绿线。实测在 mode 4（三支曲线）上让 smith 平均误差从 0.18 px 涨到 **15.07 px**。
+  现在每条曲线还要满足"到本曲线的距离是同一张图所有曲线里最近的"。这条对 mode 0 / mode 2
+  是纯收紧：复测数值与 `M-08` 记录逐项一致。
 
 实测：这几条规则把 mode 0 的 GGX 假误差从 7 列 1.7~5.1 px 压到 0 列，最大误差 0.550 px。
 **图例不在剔除清单里**：它在绘图区外面（§1.5.2），扫描范围根本到不了它，
@@ -723,13 +772,17 @@ screenshot [file.bmp]
 场景与材质实例是**多对一**复用的：`Common/Meshes/SM_plot_quad*.json` 决定面板用哪个 MI，
 场景只负责把面板摆到画面里的位置与大小。
 
-**四个探针场景的机位与 scale 现已统一**：相机 `[0,0,6]`、`fov=45`、
+**探针场景的机位与 scale 现已统一**：相机 `[0,0,6]`、`fov=45`、
 mesh scale `[2.485281, 1.397971, 1.0]`（= 该机位下的 `halfWidth` / `halfHeight`，
 即面板精确填满画面，见 §1.7.2.1）。新增探针场景必须照这条来，否则坐标轴版式会整体偏移。
 
 | 场景 | 面板 mesh | MI（实际模式） | 用途 |
 | --- | --- | --- | --- |
 | `SC_paper_case_brdf_plot_g1` | `SM_plot_quad_g1` | `MI_plot_smith_schlick`（mode 2） | **mode 2 像素测量用这个** |
+| `SC_paper_case_plot_g1_variants` | `SM_plot_quad_g1_variants` | `MI_plot_g1_variants`（mode 4） | **mode 4 像素测量用这个**（2026-09-13 新增，`D-03`；与 mode 2 同轴、同 roughness 0.6，两张图可叠着读） |
+| `SC_paper_case_plot_beckmann` | `SM_plot_quad_beckmann` | `MI_plot_ggx_beckmann`（mode 5） | **mode 5 像素测量用这个**（2026-09-14 新增，`D-06`） |
+| `SC_paper_case_plot_albedo` | `SM_plot_quad_albedo` | `MI_plot_albedo`（mode 6，α = 0.02） | **mode 6 像素测量用这个**（2026-09-14 新增，`D-05`；曲线值来自 `validationAlbedoTable.glsl`） |
+| `SC_paper_case_plot_split_sum` | `SM_plot_quad_split_sum` | `MI_plot_split_sum`（mode 7） | **mode 7 像素测量用这个**（2026-09-14 新增，`D-09`；曲线值来自 `validationSplitSumTable.glsl`） |
 | `SC_paper_case_plot_cloth_solo` | `SM_plot_quad` | `MI_plot_ggx_charlie`（mode 0） | **mode 0 像素测量用这个** |
 | `SC_paper_case_plot_hair_solo` | `SM_plot_quad_hair` | `MI_plot_hair_paths`（mode 1） | **mode 1 像素测量用这个**（数值对照仍缺期望值模型，见 `H-20`） |
 | `SC_paper_case_brdf_plot_uv` | `SM_plot_quad_uv` | `MI_plot_uv_probe`（mode 3） | UV 探针，确定 texCoord 与屏幕方向的对应；**不画坐标轴** |
@@ -740,7 +793,8 @@ mesh scale `[2.485281, 1.397971, 1.0]`（= 该机位下的 `halfWidth` / `halfHe
 >
 > 另外注意 `MI_plot_uv_probe` 归属在 `SC_paper_case_brdf_plot_g1/Materials/` 下，而
 > `SC_paper_case_brdf_plot_uv/` 目录里只有场景 JSON、没有 `Materials/`——新增面板时不要把
-> MI 放到同名场景目录下猜路径。
+> MI 放到同名场景目录下猜路径。探针 MI 统一放在 `SC_paper_case_brdf_plot/Materials/`
+> （`MI_plot_g1_variants` 照此办理），场景目录只放场景 JSON。
 
 ## 1.6 共享 B｜架构一致性设施
 
@@ -765,6 +819,7 @@ mesh scale `[2.485281, 1.397971, 1.0]`（= 该机位下的 `halfWidth` / `halfHe
 | 事实 | 位置 | 影响 |
 | --- | --- | --- |
 | 两条路径都只有 Unlit + DefaultLit 有 evaluator | `engine/forwardLighting.glsl`、`engine/deferredLighting.glsl` | 其余 ShadingModelID 一律落到 `default:` = DefaultLit，无 assert、无警告、无校验。**重建一个模型 = evaluator + 两条路径的 case + customData 编码 + 材质校验，必须同一次改完**（`A-07`） |
+| `common/lighting.glsl` 里仍留着已删模型的求值器，且**无任何调用者** | `common/lighting.glsl:343` `CalculateClearCoatDiffuseIbl`、`:370` `CalculateClearCoatSpecularIbl`、`:583` `EvaluateNeoXSkinDualSpecularLight`、`:627` `CalculateNeoXSkinDualSpecularIbl`、`:656` `EvaluateClearCoatLight`、`:783/:841/:874` 三个 `CalculateClearCoat*Light` 包装、`:1049` `CalculateClearCoatDirectLighting` | 上一条"没有 evaluator"只在**dispatch case** 这层成立：这一簇函数在文件内部自闭环（`CalculateClearCoatDirectLighting` 调用三个包装、包装调用 `EvaluateClearCoatLight`），全仓库没有外部调用者，属于删除遗留。重建对应模型时可作为公式参考，但**不要**把它们读成"ClearCoat 已实现"；`§2.2③` 引用的"实现锚点"行号仍在，正是这些死代码 |
 | 只有 `deferredLighting` / `forwardOpaque` / `sky` / `forwardTransparent` 写 `sceneColor` | `config/renderGraphConfig.json` | 旧的 3 路光照拆分（diffuse / nonDiffuse / transmission）+ sssSource + 两次 SSS 模糊 + sssComposition 随 SSS 实现删除；`deferredLighting` 回到单输出 `sceneColor`（`loadOp=clear`）。将来重建 SSS / ThinTranslucent 时由该模型自带合成 pass，**不要**再让所有模型为它多写一路输出 |
 | `VL_MATERIAL_OUTPUT_THIN_TRANSLUCENT` 现在是编译期 `#error` | `engine/passTemplate/base.frag.glsl` | 打开该 macro 会明确报错，而不是静默产出错误画面；重建 ThinTranslucent 要连 renderMode / 混合状态一起设计 |
 | `GBUFFER_HAS_PRECOMPUTED_SHADOW_MASK`（0x20）never written / never read | `common/shadingModel.glsl:31` | 声明存在但语义为空，不要把它当成可用证据 |
@@ -825,7 +880,7 @@ mesh scale `[2.485281, 1.397971, 1.0]`（= 该机位下的 `halfWidth` / `halfHe
 ```text
 相机 z=6、fov=45（水平）、16:9 时：
   halfWidth  = 6 * tan(22.5°) = 2.485281        halfHeight = halfWidth / (16/9) = 1.397971
-  四个探针场景的 mesh scale 都是 [2.485281, 1.397971, 1.0]
+  五个探针场景的 mesh scale 都是 [2.485281, 1.397971, 1.0]
   ⇒ uv 0..1 正好覆盖整幅画面：uv.x = (x+0.5)/W，uv.y = 1 - (y+0.5)/H
 ```
 
@@ -871,8 +926,14 @@ scale/fov/aspect 反推可见范围（虽然它仍会核对）；② `M_brdfPlot
 
 ### 1.7.5 可复用场景索引（现状盘点）
 
-2026-09-12 清理后，`<resourcePath>/Maps/` 下是 **15 个场景、268 个对象**（mesh 219 / camera 15 /
-environment 14 / directionalLight 14 / pointLight 3 / spotLight 2 / sunLight 1）。
+**每个场景 JSON 自带 `description`**（2026-09-13 起，见 `AGENTS.md` 的"Scene JSON top-level fields"）：
+用途、以及它对应用来验证哪篇文章 / 书本的哪个知识点都写在场景文件里，`SceneAssetValidator` 会拒绝
+没有该字段的场景。本节表格是**更细的盘点**（结构与 case 关联），两者不重复：改场景时先改场景文件里的
+`description`，再回到这里更新结构 / case 列。
+
+2026-09-14 盘点（旧实现与案例资产的清理发生在 2026-09-12）：`<resourcePath>/Maps/` 下是
+**19 个场景、284 个对象**（mesh 223 / camera 19 / environment 18 / directionalLight 18 /
+pointLight 3 / spotLight 2 / sunLight 1）。
 **没有任何 `terrain` 对象，也没有 `Terrains/` 目录。** 环境只有两种：`hdri`
 （`Common/Environments/sunset.exr`，cube 512）与 `proceduralSky`（cube 128）。
 删掉的 9 个案例场景（`SC_hair_showcase*`、`SC_simple_character`、`SC_marble_bust_01`、
@@ -884,7 +945,7 @@ environment 14 / directionalLight 14 / pointLight 3 / spotLight 2 / sunLight 1�
 | 场景 | 结构（实测参数） | 覆盖的模型 | 服务于哪些 case |
 | --- | --- | --- | --- |
 | `SC_sphere_array` | 11×11 = 121 球 + `SM_axis`；相机 `[0,0,16]` `fov=80`；dir 光 int1 + point 光 int250；121 个 `M_pbr` 参数阵 | DefaultLit | `D-08` `D-10` |
-| `SC_paper_case_brdf_plot` / `_g1` / `_uv` / `_plot_cloth_solo` / `_plot_hair_solo` | 曲线探针面板（面板材质由 `SM_plot_quad*.json` 直接给出，不经 MI） | 全部曲线类 | §1.5.5 |
+| `SC_paper_case_brdf_plot` / `_g1` / `_uv` / `_plot_cloth_solo` / `_plot_hair_solo` / `_plot_g1_variants` / `_plot_beckmann` / `_plot_albedo` / `_plot_split_sum` | 曲线探针面板（面板材质由 `SM_plot_quad*.json` 直接给出，不经 MI） | 全部曲线类 | §1.5.5 |
 | `SC_car_showcase` | 6 mesh（车身 8 槽 + 4 轮 + 地面），**12 个 MI 现在全部指向 `M_pbr`**；相机 `[7.4,4.884,8.584]` `fov=24` | DefaultLit（原 ClearCoat + ThinTranslucent） | 重建 ClearCoat 后由 `C-12` 重新 author 车漆：**当前车漆没有清漆层**，灯罩也不是 ThinTranslucent |
 | `SC_speedtree` | Oak（6 槽，`.stsdk`）+ 50×50 地面；树用 `M_speedtree`（DefaultLit），非树皮槽用 `OpaqueClip` + `u_alphaClipThreshold=0.1`；7 个 MI = `M_speedtree`×6 + `M_pbr`×1 | DefaultLit + WPO | 不在本计划范围（风场另有专项计划） |
 | `SC_bistro_exterior_modular` | 街景 kit，68 个摆放 / 472 个材质槽，**111 个 MI 全是 `M_pbr`** | DefaultLit | 只作 Large-scene 压力场景 |
@@ -928,6 +989,9 @@ environment 14 / directionalLight 14 / pointLight 3 / spotLight 2 / sunLight 1�
 
 资产入库必须完成：
 
+- **场景 JSON 必须带 `description`**（必填，非空）：写清这个场景干什么用、以及它验证的是哪篇文章 /
+  书本的哪个知识点（探针场景写到节号或图号，纯学习场景写明"不参与论文 case"）。缺字段的场景
+  `SceneAssetValidator` 会直接拒绝加载（`AGENTS.md` 的"Scene JSON top-level fields"是这条契约的出处）；
 - 网格对象与材质槽拆分符合主材质 / 辅助材质边界；
 - UV、Normal、Tangent 与 `tangent.w` 语义稳定；
 - 贴图颜色空间与通道含义写入纹理描述或材质合同；
@@ -1019,17 +1083,17 @@ environment 14 / directionalLight 14 / pointLight 3 / spotLight 2 / sunLight 1�
 
 | 项 | 内容 |
 | --- | --- |
-| 状态 | ◐ 进行中 |
+| 状态 | ◐ 进行中（**公式 / 曲线类 case 已全部执行完毕**：`D-01`…`D-10` + `D-20` / `D-21`；剩下的不是"还没做"，而是三类明确挂在表上的尾部项——`D-07` 的组合能量越界、`D-12` 的 `inputs.specular` 无作者入口、以及需要真实场景 / 校验设施的 `D-11` `D-15` `D-16` `D-17` `D-19` / 等 Cloth 重建的 `D-18`） |
 | 实现锚点 | `M_pbr`；`common/lighting.glsl` `CalculateDirectLightingLobes()` / `CalculateSpecularIbl()`；`common/microfacetDistribution.glsl` |
-| 已完成 | 球阵基线；**mode 2 曲线逐列像素对照通过**（2026-09-12，Schlick 161 列最大 0.484 px、Smith 23 列最大 0.418 px，画的是引擎自己的 IBL 变体，不是论文的 `k=α/2`） |
-| 未完成 | `D-03`（`k=α/2` direct 变体的新 mode）、split-sum 误差边界、几何项端点 |
-| 阻塞 | 无：`M-07` 与 §1.5.3 的测量脚本都已就绪（§1.3 / §1.5.3） |
+| 已完成 | 球阵基线；**mode 2 曲线逐列像素对照通过**（2026-09-12，复测 252 / 248 列最大 0.474 / 0.472 px；画的是引擎直接光路径用的 analytic 变体 `k=(r+1)²/8`）；**`D-03` mode 4 通过**（2026-09-13：两支 Schlick 变体 + 精确 Smith，191 列最大 0.474 / 0.456 / 0.457 px）；**`D-20` / `D-21` 收口**（同日：两条审计项均为标注错误，实现无改动需求）；`D-04` 离线量化完成；**`D-01` / `D-05` / `D-08` / `D-10` 与白炉（`D-07`）离线执行完毕**（2026-09-14，`verify_brdf_integrals.py` / `measure_sphere_array.py`）；**`D-06` mode 5、`D-05` mode 6、`D-09` mode 7 三张探针图落地**（2026-09-14：0.469 / 0.481 / 0.476 px 量级，图头文字逐字回读，且 mode 5 / 6 与改动前逐像素相同） |
+| 未完成 | ① **`D-07` 的组合能量越界**（镜面 lobe 9 组配置最大 1.0000 通过；但 **diffuse+specular 组合在掠射下 > 1**：F0=0.04 时直接光 1.06 / 1.53 / 1.55、**间接光 1.5927**——根因是"论文没规定的那一步"所用的漫反射平衡方案 `(1-F(v·h))`（出处 Neubelt & Pettineo 2013 式(15)）在掠射补偿不足，不是 D/G/F 写错；**2026-09-14 决定：维持现状，按已知受限登记**，候选与离线试算结果见 case 记录，等重建 DefaultLit 时再定）；② `D-12`（`inputs.specular` 恒 0.5、无作者入口 → 独立 F0 / specular tint 类论文量无法 author）；③ `D-15`（预积分误差在真实几何上的可见边界）、`D-16`（几何项错误造成的掠射黑边）、`D-17`（生产参数化观感端点）——三条都需要新场景，不是公式问题；④ `D-11` / `D-19`（`u_plotMode` range 已同步到 `[0,7]`，编辑器与"场景 / MI 引用校验"侧仍未核对）；⑤ `D-18`（DefaultLit × Cloth 逐球对照，等 Cloth 重建） |
+| 阻塞 | `D-18` 阻塞于 Cloth 重建；其余无阻塞（`M-07`、§1.5.3 的测量脚本、mode 2–7 与两张离线表都已就绪） |
 
 ### ② 论文来源
 
 | 来源 | 负责什么 | 链接 |
 | --- | --- | --- |
-| Karis 2013, *Real Shading in Unreal Engine 4* | GGX 选择、`k=α/2` 直接光几何项、`k=(r+1)²/8` IBL 变体、split-sum 近似 | [书库 `#karis-ue4`](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#karis-ue4) · [PDF](https://blog.selfshadow.com/publications/s2013-shading-course/karis/s2013_pbs_epic_notes_v2.pdf) |
+| Karis 2013, *Real Shading in Unreal Engine 4* | GGX 选择、§Specular G 的**两支** Schlick 变体（`k=α/2` 基础拟合用于 IBL、`k=(r+1)²/8` 的 Disney 重映射只用于 analytic light source）、split-sum 近似 | [书库 `#karis-ue4`](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#karis-ue4) · [PDF](https://blog.selfshadow.com/publications/s2013-shading-course/karis/s2013_pbs_epic_notes_v2.pdf) |
 | Burley 2012, *Physically Based Shading at Disney* | Principled 参数化、directional albedo、G 函数对比 | [书库 `#burley-disney`](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#burley-disney) · [PDF](https://blog.selfshadow.com/publications/s2012-shading-course/burley/s2012_pbs_disney_brdf_notes_v3.pdf) |
 | Heitz 2014 JCGT, *Understanding the Masking-Shadowing Function* | Smith 可见性、微表面归一化 | [书库 `#heitz-masking-shadowing`](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#heitz-masking-shadowing) · [JCGT](https://jcgt.org/published/0003/02/03/) |
 | Hoffman 2013, *Background: Physics and Math of Shading* | 公共物理与数学、参数化边界 | [书库 `#hoffman-physics-math`](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#hoffman-physics-math) |
@@ -1040,12 +1104,14 @@ environment 14 / directionalLight 14 / pointLight 3 / spotLight 2 / sunLight 1�
 
 | 实现 | 位置 | 论文 / 书本来源 | 备注 |
 | --- | --- | --- | --- |
-| `DistributionGGX` | `common/microfacetDistribution.glsl:14` | [Karis 2013](#karis-ue4) §3 式(2)；[PBRT 4ed｜Microfacet Distributions](https://pbr-book.org/4ed/Reflection_Models/Microfacet_Distributions) | 入参是 perceptual roughness，函数内做 `a = roughness²` |
-| `GeometrySchlickGGX` | `common/microfacetDistribution.glsl:31` | [Karis 2013](#karis-ue4) §3 式(5) 的 **IBL 变体** `k=(r+1)²/8` | 与论文 direct 变体 `k=α/2` 不是同一条曲线，已在 mode 2 中显式标注 |
-| `SmithG1Ggx`（参考曲线，不参与着色） | `common/microfacetDistribution.glsl:49` | Smith 高度场闭合解，见 [Heitz 2014](#heitz-masking-shadowing) §4 | 只为量化近似误差而存在 |
+| `DistributionGGX` | `common/microfacetDistribution.glsl:14` | [Karis 2013](#karis-ue4) §3 式(2)；[PBRT 4ed｜§9.6 Roughness Using Microfacet Theory](https://pbr-book.org/4ed/Reflection_Models/Roughness_Using_Microfacet_Theory) 式(9.16) | 入参是 perceptual roughness，函数内做 `alpha = roughness²`（变量名与论文一致，见 §1.4.5 第 5 条） |
+| `GeometrySchlickGGX` | `common/microfacetDistribution.glsl:35` | [Karis 2013](#karis-ue4) §Specular G 式(4) 的 **analytic light source 变体** `k=(r+1)²/8` | 论文明确限定：Disney 的粗糙度重映射**只用于 analytic 光源**。调用点只有直接光的两处（`D-20`）；与 IBL 变体 `k=α/2` 不是同一条曲线，mode 2 / mode 4 都画了这个对照 |
+| `GeometrySchlickGGXIbl` | `common/microfacetDistribution.glsl:61` | [Karis 2013](#karis-ue4) §Specular G 的**基础拟合** `k=α/2`（IBL 域用这支） | 2026-09-13 从 `generator/brfdLut.comp` 搬到共享头（只搬不改，数值不变），`brfdLut.comp` 改为 include；mode 4 画的就是它 |
+| `SmithG1Ggx`（参考曲线，不参与着色） | `common/microfacetDistribution.glsl:76` | Smith 高度场闭合解，见 [Heitz 2014](#heitz-masking-shadowing) §4 | 只为量化两支近似各自的误差而存在 |
 | split-sum IBL | `common/lighting.glsl:278` `CalculateSpecularIblWithF0()` | [Karis 2013](#karis-ue4) §5 式(9) | LUT 由 `generator/brfdLut.comp` 用 Hammersley/GGX 重要性采样生成 |
-| LUT 内几何项 | `generator/brfdLut.comp:66` `GeometrySchlickGGXIBL()` | [Karis 2013](#karis-ue4) §5 式(7) `k = α²/2` | **与 `common/lighting.glsl` 中 direct 路径的 `k=(r+1)²/8` 不是同一表达式**；需在 `D-04` 中量化两者差异 |
+| LUT 内几何项 | `generator/brfdLut.comp` `GeometrySmithIBL()` → `GeometrySchlickGGXIbl()` | [Karis 2013](#karis-ue4) §Specular G：`k = α/2`（IBL 域的基础拟合） | 与直接光的 `k=(r+1)²/8` **不是同一表达式，也不应该是**（论文的分工）；差异已由 `D-04` 量化（LUT 的 A/B 最大偏 0.384 / 0.627） |
 | Diffuse（Lambert） | `common/lighting.glsl` | [Hoffman 2013](#hoffman-physics-math)｜Lambert 与 `1/π` 约定 | —— |
+| **漫反射 / 镜面的能量分配** `diffuseWeight = (1-F(v·h))(1-metallic)` | `common/lighting.glsl` `EvaluateDefaultPbrLightLobes()` | **[Neubelt & Pettineo 2013](#neubelt-order-1886) §Diffuse BRDF 式(15)**（*"the diffuse term is balanced using the inverse of the Fresnel term from the specular component **Shirley [1991]**"*）→ 原始来源 **P. S. Shirley 1991 博士论文** | **Karis 2013 与 Burley 2012 都没有规定这一步**（前者 diffuse 是裸 Lambertian，后者 `(1-F)` 出现 0 次）。出处自己声明该平衡法**破坏 Helmholtz 互易性**，并给出保互易替代方案（Shirley et al. 1997, PG '97）。实测代价：掠射组合反照率 > 1，见 `D-07` |
 | Principled 参数化 | `M_pbr` `u_pbrFactors` | [Burley 2012](#burley-disney) §3 | 只采用 Principled 的参数语义，未实装 Burley diffuse |
 
 ### ④ Case 列表
@@ -1058,21 +1124,21 @@ environment 14 / directionalLight 14 / pointLight 3 / spotLight 2 / sunLight 1�
 
 | ID | 案例（来源） | 验证目标 | 形式 | 状态 |
 | --- | --- | --- | --- | --- |
-| `D-01` | [Heitz 2014](#heitz-masking-shadowing) §3–§5 · NDF / G1 归一化 | `∫ D(h)(n·h)dω_h = 1`；`G1(c→1)=1`；`0 ≤ G1 ≤ 1` | 数值积分（离线） | ☐ |
-| `D-02` | [Karis 2013](#karis-ue4) Fig 2 · Schlick vs 精确 Smith G1 | 两条曲线逐列量化；引擎用的是 `k=(r+1)²/8` | 曲线（mode 2） | ✅ **2026-09-12 通过**（`m07_mode2_g1`：Schlick 161 列最大 0.484 px、Smith 23 列最大 0.418 px；镜像假设 ~700 px，见 case 记录） |
-| `D-03` | [Karis 2013](#karis-ue4) Fig 2 + §3 | **补一个画 `k=α/2` direct 变体的 mode**，与 `D-02` 并排，确认引擎选的到底是哪条 | 曲线（新增 mode） | ☐ 不再被 `D-11` 阻塞（range 已核对为 `[0,3]`），只等新 mode |
-| `D-04` | [Karis 2013](#karis-ue4) §5 式(7) vs §3 式(5) | 量化 `brfdLut.comp` 的 `k=α²/2` 与 `lighting.glsl` 的 `k=(r+1)²/8` 在 `[0,1]²` 上的最大偏差 | 数值积分（离线） | ☐ |
-| `D-05` | [Burley 2012](#burley-disney) Fig 12 · directional albedo | 各 G 函数（Smith / GGX / Schlick 变体）的方向反照率曲线对比 | 数值积分（离线） | ☐ |
-| `D-06` | [PBRT 4ed｜Microfacet Distributions](https://pbr-book.org/4ed/Reflection_Models/Microfacet_Distributions) | Beckmann 与 GGX 在相同 α 下的分布形状；确认 GGX 长尾的正确朝向 | 曲线（新增 mode） | ☐ |
-| `D-07` | [PBRT 4ed｜Reflection Models](https://pbr-book.org/4ed/Reflection_Models)｜White furnace | conductor 与 dielectric 单次散射半球积分 ≤ 1 | 数值积分（离线） | ☐ |
-| `D-08` | [Hoffman 2013](#hoffman-physics-math)｜参数化边界 | metallic = 1 时可见 diffuse 为 0；albedo 上限不被突破 | 球阵 | ☐ |
-| `D-09` | [Karis 2013](#karis-ue4) §4–§5 | split-sum 近似 vs 逐样本参考的环境预积分误差 | 球阵（离线参考对照） | ☐ |
-| `D-10` | 球阵基线 `SC_sphere_array` | roughness × metallic 端点与单调性回归，作为其它模型标尺 | 球阵 | ◐ 已建，**缺数值判定** |
-| `D-11` | 工具链缺陷（`M_brdfPlot.json`） | `u_plotMode` 的 schema `range` 是 `[0,1]`，而 shader 实现 4 个模式（`M_brdfPlot.surface.glsl` 的 `<0.5 / <1.5 / <2.5 / else`）。**运行时不 clamp、不报错**（直接比较原始值），但编辑器与任何 schema 校验都不认 mode 2 / 3。已把 range 扩到 `[0,3]` 并补全描述 | 架构核对 | ◐ **range 已核对为 `[0,3]`（2026-09-12）；编辑器 / 校验侧仍未核对** |
-| `D-19` | 一致性验收（本仓库） | 如果 §4.1 引入"场景 / MI 引用校验"，它会打在既有文件 `MI_plot_smith_schlick` / `MI_plot_uv_probe` 上（它们在 range 修正前用的是越界的 mode 2 / 3）。校验规则必须按**改后的** range 判断 | 架构核对 | ☐ |
+| `D-01` | [Heitz 2014](#heitz-masking-shadowing) §3–§5 · NDF / G1 归一化 | `∫ D(h)(n·h)dω_h = 1`；`G1(c→1)=1`；`0 ≤ G1 ≤ 1` | 数值积分（离线） | ✅ **2026-09-14 通过**（= 共享 `M-02` / `M-03` 的 DefaultLit 复述；脚本 `verify_brdf_integrals.py`，归一化 ≤1.6e-9、峰值恒等式 ≤4.7e-12、互易性 2.2e-16） |
+| `D-02` | [Karis 2013](#karis-ue4) Fig 2 · Schlick vs 精确 Smith G1 | 两条曲线逐列量化；引擎**直接光**用的是 analytic 变体 `k=(r+1)²/8` | 曲线（mode 2） | ✅ **通过**（2026-09-12 首测；2026-09-13 复测 252 / 248 列平均 0.179 / 0.182 px、最大 0.474 / 0.472 px，镜像假设 ~300–400 px。见 case 记录） |
+| `D-03` | [Karis 2013](#karis-ue4) Fig 2 + §Specular G | **新增 mode 4**：把引擎实际使用的**两支** Schlick 变体（analytic `k=(r+1)²/8` 与 IBL `k=α/2`）与精确 Smith 画在同一坐标系里，确认"引擎选的到底是哪条" | 曲线（mode 4） | ✅ **2026-09-13 通过**（`SC_paper_case_plot_g1_variants` / `MI_plot_g1_variants`，roughness 0.6：三支 191 列最大 0.474 / 0.456 / 0.457 px，丢弃交叉列 96；图头文字回读 `direct 0.226 ibl 0.089` 与独立复算一致。见 case 记录） |
+| `D-04` | [Karis 2013](#karis-ue4) §Specular G（两支变体） | 量化 IBL 的 `k=α/2` 与直接光的 `k=(r+1)²/8` 在 `(roughness, cosθ)` 上的差异，并把被误读的 `α²/2` 一起列出 | 数值积分（离线：`tool/validation/verify_geometry_term.py`） | ✅ **2026-09-13 通过**（字面写法 ≡ `α/2` 偏差 `0.0e+00`；`G1` 最大差 0.883 / 0.159 / 0.892；LUT 的 `max|ΔA|` / `max|ΔB|` = 0.384 / 0.627） |
+| `D-05` | [Burley 2012](#burley-disney) Fig 12 · directional albedo | 各 G 函数（Smith / GGX / Schlick 变体）的方向反照率曲线对比 | 数值积分（离线）+ **曲线（mode 6）** | ✅ **2026-09-14 通过**（`verify_brdf_integrals.py` ⑤：α = 0.02 / 0.5 两档各查 4 条 G；全表最大反照率 **0.9996** ≤ 1；75° 处 Smith−noG = **+0.93**（平滑）/ **+0.52**（粗糙），与论文"省略 G 会明显偏暗"一致。VL 侧新增 mode 6（`SC_paper_case_plot_albedo`，α = 0.02，表驱动）：四条臂 68/68/31/68 列最大 **0.481 / 0.455 / 0.439 / 0.408 px**，图头回读 `albedo at 75deg: Smith - no G = 0.927` = 离线结论 0.9275 的三位小数） |
+| `D-06` | [PBRT 4ed｜§9.6.1 + Fig 9.23](https://pbr-book.org/4ed/Reflection_Models/Roughness_Using_Microfacet_Theory)（Beckmann 公式见 PBRT 3ed §8.4.1 式(8.10)） | Beckmann 与 GGX 在相同 α 下的分布形状；确认 GGX 长尾的正确朝向 | 曲线（mode 5） | ✅ **2026-09-14 通过**（`SC_paper_case_plot_beckmann`：GGX 153 列最大 **0.469 px**、Beckmann 69 列最大 **0.451 px**；图头解出 `at beckmann tail 1e-3: ggx/beckmann 116.5`，与独立复算逐位一致） |
+| `D-07` | [PBRT 4ed｜Reflection Models](https://pbr-book.org/4ed/Reflection_Models)｜White furnace | conductor 与 dielectric 单次散射半球积分 ≤ 1 | 数值积分（离线） | ✅ **2026-09-14 执行完毕，判为"镜面通过 / 组合越界"**：镜面 lobe 在 9 组配置上最大 **1.0000**（通过）；但 **diffuse+specular 组合在掠射下超过 1**——F0=0.04 时 1.06（analytic）/ 1.53（IBL）/ 1.55（精确 Smith），见 §2.1⑤ 与 `D-07` 归因 |
+| `D-08` | [Hoffman 2013](#hoffman-physics-math)｜参数化边界 | metallic = 1 时可见 diffuse 为 0；albedo 上限不被突破 | 球阵 | ✅ **2026-09-14 通过**（离线：`metallic=1` 的漫反射反照率恒为 `0.00e+00`、`F0` 映射偏差 0；球阵：每个 roughness 上 `metallic=1` 列比 `metallic=0` 列暗 **≥0.443**） |
+| `D-09` | [Karis 2013](#karis-ue4) §4–§5 | split-sum 近似 vs 逐样本参考的环境预积分误差 | 数值积分（离线，真实 HDRI）+ **曲线（mode 7）** | ✅ **2026-09-14 通过（误差已量化）**：恒定环境对照组 0.05%（镜像自检）；真实 bistro 4k HDRI 上最大相对误差 **23.3%（conductor）/ 21.5%（dielectric）**，低频环境 0.05% / 高频环境 67%（`verify_split_sum.py`）。VL 侧新增 mode 7（`SC_paper_case_plot_split_sum`，F0=1、θv=60°、9 档 roughness、表驱动）：四条曲线 209/147/217/217 列最大 **0.476 px**，图头回读 `max rel err (F0=1, tv=60deg): 0.721` = 表中最大误差 0.72052。**图面化过程改掉了一条判定门限**：判定原先只比"参考 / 本配置信号量级"，而镜面瓣指向环境暗处时两者同时趋零、比值照样通过——已补绝对下限 `--prefilter-floor-fraction`（预过滤亮度 ≥ 环境平均亮度的 5%），并据此把 cosine 在 r ≤ 0.25 的三档标为不可判定（图上断开） |
+| `D-10` | 球阵基线 `SC_sphere_array` | roughness × metallic 端点与单调性回归，作为其它模型标尺 | 球阵 | ✅ **2026-09-14 通过**（`measure_sphere_array.py`，121 球圆盘平均亮度：端点差 ≥0.443；沿 metallic 递减最小步长 0.016；`metallic=0` 沿 roughness 递增最小步长 0.006。**`metallic=1` 沿 roughness 不单调**（峰值在 r≈0.43），如实记为观测） |
+| `D-11` | 工具链缺陷（`M_brdfPlot.json`） | `u_plotMode` 的 schema `range` 曾小于 shader 实际实现的模式数，**运行时不 clamp、不报错**（直接比较原始值），但编辑器与任何 schema 校验都会拒绝合法 mode | 架构核对 | ◐ **range 已随每次新增 mode 同步扩到 `[0,7]` 并补全描述（2026-09-14，mode 6/7 落地时同步改的）；编辑器 / 校验侧仍未核对** |
+| `D-19` | 一致性验收（本仓库） | 如果 §4.1 引入"场景 / MI 引用校验"，它会打在既有文件 `MI_plot_smith_schlick` / `MI_plot_uv_probe` / `MI_plot_g1_variants` 上（前两个在 range 修正前用的是越界的 mode 2 / 3）。校验规则必须按**当前** range `[0,7]` 判断 | 架构核对 | ☐ |
 | `D-12` | 参数面审计（本仓库） | 记录 `inputs.specular` 无作者入口（恒 0.5）这一缺口，并列出它影响的论文量（独立 F0 / specular tint） | 架构核对 | ☐ |
-| `D-20` | [Karis 2013](#karis-ue4) §Specular G 正文 | **用法与论文相悖**：论文明确写 *"this adjustment is only used for analytic light sources; if applied to image-based lighting, the results at glancing angles will be much too dark."*，而 `GeometrySmith()`（`common/lighting.glsl:431`）用的是 `k=(r+1)²/8`，被 `:568`（direct）与 `:614`（ClearCoat）共用。逐项确认调用方是否都属于"analytic light source"；属于 IBL 的必须改用论文允许的形式 | 架构核对 + 对照 | ☐ **审计发现** |
-| `D-21` | 🔎 [Karis 2013](#karis-ue4) 全文 | `generator/brfdLut.comp:66` 的 `k = α²/2` **在论文里不存在**：论文只给 `k=α/2`（direct 拟合）与 `k=(r+1)²/8`（analytic 调整），**IBL 域的 G 没有指定**。决定：换用论文的 `k=α/2`、换用 Neubelt 式(5) 的精确 Smith G1，还是按 §0.3 登记为"论文未指定" | 公式溯源 | ☐ **审计发现** |
+| `D-20` | [Karis 2013](#karis-ue4) §Specular G 正文 | 逐项确认 `GeometrySmith()`（`k=(r+1)²/8`）的调用方是否都属于"analytic light source" | 架构核对 + 离线对照 | ✅ **2026-09-13 通过（审计标注错误）**：调用点只有 `common/lighting.glsl:568`（`EvaluateDefaultPbrLightLobes`，analytic 直接光）与 `:614`（`EvaluateNeoXSkinDualSpecularLight`，同属直接光、无调用者），IBL 不经过它 → 与论文一致，**无需改代码**。原判"用于 IBL"来自把 `GeometrySchlickGGX` 错标成 "IBL 变体"，该错误标签已在三处改正 |
+| `D-21` | [Karis 2013](#karis-ue4) §Specular G | `generator/brfdLut.comp` 的 IBL 几何项 `k` 有没有论文出处 | 公式溯源 + 数值积分（离线） | ✅ **2026-09-13 通过（审计标注错误）**：当时的实现 `float a = roughness; k=(a*a)*0.5` 就是论文的 `k=α/2`（α = roughness²），与"`α/2` 写法"逐点偏差 `0.0e+00`。计划书写的 `α²/2` 是把局部变量 `a` 当成 α 的误读；论文里确实没有 `α²/2`，仓库里也没有。附带改动：① 把这支搬进 `common/microfacetDistribution.glsl` 并命名为 `GeometrySchlickGGXIbl`；② 按 §1.4.5 第 5 条把变量名改成 `alpha`（`alpha = roughness²; k = alpha*0.5`），让代码与论文符号直接对上——两处改动都不改数值 |
 
 **论文 case**（模型在真实几何上是否仍成立）
 
@@ -1081,13 +1147,49 @@ environment 14 / directionalLight 14 / pointLight 3 / spotLight 2 / sunLight 1�
 | `D-15` | [Karis 2013](#karis-ue4) Fig 4 / Fig 5 · split-sum 参考 vs 近似 | 环境预积分近似的误差在真实几何上的可见边界 | 球阵即可 | ☐ |
 | `D-16` | [Neubelt & Pettineo 2013](#neubelt-order-1886) Fig 1 · conditional G 归零 artifacts | 几何项实现错误造成的掠射黑边 | 球阵即可 | ☐ |
 | `D-17` | [Karis 2013](#karis-ue4) Fig 3 · 金属 / 电介质粗糙度对照 | 生产参数化的观感端点 | 球阵即可 | ☐ |
-| `D-18` | `SC_paper_case_cloth_sheen` 下半行 | 该场景第 2 行是 **DefaultLit(GGX) 与 Cloth(Charlie) 逐球同参数对照**（roughness 0.2 / 0.5 / 0.8）：既是 DefaultLit 的分布对照 case，也是 `S-12` 的共享基线。两个模型共享同一批截图，**不要各拍一套** | 球阵（已有） | ◐ 资产已有，**缺数值判定与共享记录** |
+| `D-18` | ~~`SC_paper_case_cloth_sheen` 下半行~~ | ~~DefaultLit(GGX) 与 Cloth(Charlie) 逐球同参数对照~~ | ⛔ **资产已删** | ☐ **需重新设计**：该场景随 2026-09-12 清理删除（§1.7.5），重建 Cloth 时连对照行一起重做；不要试图找回旧场景 |
 
 ### ⑤ 专属约定
 
 - `SC_sphere_array` 是本模型的稳定基线，**同时作为其它模型的参数标尺**；
 - metallic / roughness 的端点语义（conductor 的可见 diffuse 为 0）不得为了好看而放宽；
-- `D-03` 是本模型的关键 case：**在把「和论文一致」写进结论之前，必须先确认引擎选的是哪个变体**。
+- **两支 Schlick 变体的分工是结论的前提**（`D-03` / `D-20` / `D-21`）：直接光 `k=(r+1)²/8`、
+  IBL `k=α/2`，它们**不能互换**（论文对前者有明确限定）。任何"几何项和论文一致"的结论都必须
+  说清是**哪条路径上**的哪一支；mode 2 / mode 4 两张探针图就是为这件事存在的。
+- ⚠️ **已知能量越界（`D-07` 实测，重建 DefaultLit 时要处理）**：**先说判据本身的出处**——白炉测的是
+  "定住 V、对 L 半球积分的总反照率"，这正是 Frostbite 课程笔记 §3.1.3 的
+  "hemispherical-directional reflectance"（其式 6 明确写 **diffuse + specular 合起来** ≤ 1，并用 ρhd 图验证），
+  所以这条判据不是我们自定的，是业界在用的做法（Hoffman 式(3) 是另一处出处）。引擎的漫反射权重是
+  `(1 - F(v·h))(1 - metallic)`——**这一项 Karis 2013 与 Burley 2012 都没有**（2026-09-14 逐字核对
+  PDF：前者 diffuse 就是裸 Lambertian、全文 `(1-F)` 只在 split-sum 代码里；后者 `(1-F)` 出现 0 次），
+  它的**真实出处是 Neubelt & Pettineo 2013 式(15)**（The Order: 1886 笔记，本计划的既有来源），
+  其原始来源是 Shirley 1991 博士论文；**该出处自己就写明这个平衡法破坏 Helmholtz 互易性**，
+  并给出保互易的替代方案（Shirley et al. 1997 PG '97 的 coupled model：可分离乘积
+  `kR_m(λ)[1−R_f(θ)][1−R_f(θ')]`，作者自称"首个同时互易且能量守恒"的 matte/specular 耦合模型；
+  **PG'97 还逐字写下了我们这种半角阻尼的失效**：*"this form does not conserve energy for all incident
+  angles"*）。
+  掠射视角下 `v·h` 仍接近法线（实测 cosθv=0.1 时 `v·h≈0.74`），Fresnel 的上升**没有传导到
+  漫反射项**，于是白色电介质的总方向反照率可达 **1.55**（F0=0.04、roughness 0.05、cosθv=0.1：
+  diffuse 0.94 + specular 0.61）。镜面 lobe 本身 ≤1 ✓，所以这不是"某个 lobe 写错"。
+  **越界大小的排序就是指纹**：analytic 变体 1.06 → IBL 1.53 → 精确 Smith 1.55，G 越"对"
+  越界越大，缺口在漫反射侧的平衡方案。顺带量化：**把这一项去掉会更糟**——裸 Lambert 在同一配置下
+  组合 = 0.6059 + 1.00 = **1.61**（余弦加权积分恒等于 albedo），所以这一步是把越界从 1.61 压到 1.55，
+  **有帮助但远不够**；Filament 的 lit 模型就是不做这一步的那一派（其文档承认 fr+fd 问题但留成 TODO，
+  见 case 记录）。按 §0.3 **不得自创补偿**：候选已按"改动大小"排好，并且**离线试算已经做过**
+  （2026-09-14，`verify_brdf_integrals.py` ③c，只动验证脚本）——**PG'97 的可分离 matte 把越界
+  从 1.5458 压到 1.0005**（其解析塌缩就是"镜面拿走 `R_f(θ_v)`、漫反射拿走剩下的"），而
+  "全按出处"（镜面 Fresnel 也改成入射角）残余 **1.0233**：**残余越界在镜面侧，不在 matte 侧**。
+  采纳与否要显式决定（"只换 matte"是在该模型适用条件内的用法，但仍是偏离原样）；
+  **而且必须改两条路径**：`CalculateDiffuseIbl` 是**裸 Lambert**、不走 `diffuseWeight`，
+  它的组合反照率实测 **1.5927（F0=0.04）/ 1.6087（F0=0.08）——比直接光那条更差**，
+  同一个 matte 项把它也压回 1.0000（IBL 侧是标量近似，真实环境下需要加权 irradiance，见 case 记录）；
+  **更主流的改法（three.js dev 就这么写）是间接光直接用 LUT 给 diffuse 让路**：
+  `diffuse *= 1 − (F0·A + B)`（那张 `brdfLut` 我们已经有，均匀环境下精确守恒），
+  注释原话 *"Energy reflected by the specular lobe is not available to the diffuse layer"*；
+  **换模型一侧引用最扎实的是 `Kelemen & Szirmay-Kalos 2001`**（Burley 2012 与 PBRT 4ed 的 Further
+  Reading 两个独立来源都点名它，后者还写明"简单的 diffuse 修正一般不够，因为能量损失同时依赖
+  roughness 与入射角"——与我们的病根逐字对应）；**任何一条都会改动着色结果并要求重新标定
+  球阵基线（`D-08` / `D-10`）**。这条同时是 `M-04` 的后续（各 lobe 已通过，组合另算）。
 
 ## 2.2 ClearCoat
 
@@ -1095,11 +1197,11 @@ environment 14 / directionalLight 14 / pointLight 3 / spotLight 2 / sunLight 1�
 
 | 项 | 内容 |
 | --- | --- |
-| 状态 | ⛔ 受限（影响面可验证，膜厚 / 吸收做不了） |
-| 实现锚点 | `M_carPaint`；`documents/plan/rendering/archive/car-paint-shading-model.md`；UE 5.8 Legacy Clear Coat |
-| 已完成 | impact-face 粗糙度 / 权重扫描（`SC_paper_case_clearcoat_sweep`）；`SC_car_showcase` 基线 |
-| 未完成 | 分层能量核对、法线耦合边界、Fresnel 方向性 |
-| 阻塞 | `M_carPaint` 参数面只有 `u_clearCoat`（权重）与 `u_clearCoatRoughness`，**没有膜厚与吸收项** |
+| 状态 | ☐ **待按论文实现**（旧实现 2026-09-12 已删除，见 §0.6） |
+| 实现锚点 | 旧：`M_carPaint`（已删；公式出处见 `archive/car-paint-shading-model.md`）。**重建后这里必须重新填写新文件**；死代码参考 `common/lighting.glsl` 的 ClearCoat 一簇（§1.6.1） |
+| 已完成 | `SC_car_showcase` 场景仍在（12 个 MI 现全部指向 `M_pbr`，即当前车漆没有清漆层）；`C-13` 参数面审计的部分结论（coat IOR 固定 1.5 / F0 0.04）来自旧实现，重建时重新核对 |
+| 未完成 | 求值器 + 两条路径 dispatch case + customData 编码 + 材质校验（**必须同批完成**，§0.6）；分层能量核对、法线耦合边界、Fresnel 方向性 |
+| 阻塞 | 重建前先定参数面语义：UE Clear Coat 本身没有膜厚 / 吸收项，是否新增属功能性决定（§4.2），在定下来之前 `C-10` / `C-11` 仍是 ⛔；`SC_paper_case_clearcoat_sweep` 已随清理删除，`C-04` / `C-05` 的扫描场景要重做 |
 
 ### ② 论文来源
 
@@ -1122,13 +1224,16 @@ environment 14 / directionalLight 14 / pointLight 3 / spotLight 2 / sunLight 1�
 | coat lobe `D_GGX` + `Vis_SmithJointApprox` | `documents/plan/rendering/archive/car-paint-shading-model.md`；`common/lighting.glsl:387` | UE 5.8 Legacy Clear Coat 闭包（实时参考实现）；分布本体见 [Karis 2013](#karis-ue4) | 顶层固定 IOR 1.5 / F0 0.04 |
 | 固定 Eta 折射点积近似 | 同上 | UE 5.8 Legacy | 属于参考实现，需同时标注其物理出处 |
 | coat 顶层 Fresnel | `common/lighting.glsl:387` 区域 | [Hoffman 2013](#hoffman-physics-math)｜Fresnel 与 F0；[PBRT 4ed｜Dielectric BSDF](https://pbr-book.org/4ed/Reflection_Models/Dielectric_BSDF) | 方向性必须满足 `F(0°)=F0`、`F(90°)=1` |
-| 底层法线八面体偏移编码 | `shadingModel.glsl:19`；`gbufferCodec.glsl:175` | 自定编码（本项目）；语义参考 UE Legacy 的 clear coat bottom normal | 编码必须无损到可分辨的精度 |
+| 底层法线八面体偏移编码 | `common/shadingModel.glsl:19`；`common/gbufferCodec.glsl:175` | **编码约定**（不参与数值），登记在 §0.3.2；语义参考 UE Legacy 的 clear coat bottom normal | 编码必须无损到可分辨的精度（`A-06` 给了量化上限） |
 | base 能量衰减 | `M_carPaint` surface 路径 | [Jakob 2015｜adding equations](#jakob-layerlab)；[Filament｜base attenuation](#filament) | 当前只做 UE Legacy 特化，未启用 GGX energy conservation |
 | 膜厚 / 吸收 | **不存在** | [Weidlich & Wilkie 2007](#weidlich-wilkie) §3–§4 需要膜厚与吸收系数 | ⛔ 缺口，登记在 §2.2⑤ |
 
 ### ④ Case 列表
 
 **基础 case**
+
+> `M_carPaint` 已随旧实现删除（§0.6），下面这份参数面是**历史记录**：重建时要先按 UE 语义重新冻结
+> 接口，再据此重定义扫描变量与门限。
 
 `M_carPaint` 参数面：`u_tintColor`、`u_pbrFactors`、`u_clearCoat`（权重 → `CustomData.x`）、
 `u_clearCoatRoughness`（→ `CustomData.y`）、`u_clearCoatBottomNormalTiling` /
@@ -1140,8 +1245,8 @@ coat IOR 固定 1.5 / F0 0.04，不可作者化。
 | `C-01` | [Hoffman 2013](#hoffman-physics-math) + [PBRT 4ed｜Dielectric BSDF](https://pbr-book.org/4ed/Reflection_Models/Dielectric_BSDF) | coat 界面 Fresnel 曲线：`F(0°)=0.04`、`F(90°)=1`、单调、无符号翻转 | 曲线（新增 mode） | ☐ |
 | `C-02` | [Jakob 2015｜adding equations](#jakob-layerlab) | coat 权重 `w∈[0,1]` 时底层漫反射能量 = `1-w`，与解析值逐点比对 | 数值积分（离线） | ☐ |
 | `C-03` | [Jakob 2015](#jakob-layerlab) §3｜层间多次反射 | 当前实现忽略多层反射，量化由此损失的能量上界 | 数值积分（离线） | ☐ |
-| `C-04` | `SC_paper_case_clearcoat_sweep` | coat 粗糙度扫描：峰值展宽单调、能量单调递减 | 单变量扫描 | ◐ 已建，**是影响面不是膜厚，缺数值判定** |
-| `C-05` | `SC_paper_case_clearcoat_sweep` | coat 权重扫描：`w=0` 严格退化为顶层无涂层；`w=1` 底层反射被完全压制 | 单变量扫描 | ☐ |
+| `C-04` | ~~`SC_paper_case_clearcoat_sweep`~~ → **待新场景** | coat 粗糙度扫描：峰值展宽单调、能量单调递减 | 单变量扫描 | ☐ **场景随清理删除**（§1.7.5），重建时连扫描场景一起重做；旧结论是"影响面不是膜厚"，且已无现场资产 |
+| `C-05` | ~~`SC_paper_case_clearcoat_sweep`~~ → **待新场景** | coat 权重扫描：`w=0` 严格退化为顶层无涂层；`w=1` 底层反射被完全压制 | 单变量扫描 | ☐ **同上** |
 | `C-06` | [PBRT 4ed｜Reflection Models](https://pbr-book.org/4ed/Reflection_Models)｜White furnace | 分层模型整体半球积分 ≤ 1 | 数值积分（离线） | ☐ |
 | `C-07` | `gbufferCodec.glsl:175` + `shadingModel.glsl:19` | 底层法线八面体偏移编解码往返误差，**按倾角区间分档给数**（见 §1.5.2） | 架构核对 + 数值 | ☐ |
 | `C-08` | [Filament｜base attenuation](#filament) | 底层法线独立于顶层时，底层光照不泄漏到 coat 高光之外 | 单变量扫描 | ☐ |
@@ -1170,11 +1275,11 @@ coat IOR 固定 1.5 / F0 0.04，不可作者化。
 
 | 项 | 内容 |
 | --- | --- |
-| 状态 | ⚠️ **待整改**（v2 各向异性经审计确认含 **5 项论文里没有的公式**，见 §1.4.2「Cloth / Sheen」）；v1 各向同性路径的两项公式已核对有出处 |
-| 实现锚点 | `M_cloth`；`common/clothBrdf.glsl`；`engine/clothLighting.glsl`；`generator/clothLookupTables.comp` |
-| 已完成 | `SC_paper_case_cloth_sheen` 球阵；Charlie D / visibility debug 截图；方向反照率 LUT 烘焙；**§1.4.2 的公式溯源审计（已抽出论文式号）**；**mode 0 曲线逐列像素对照通过**（2026-09-12，GGX 最大 0.486 px、Charlie 最大 0.447 px，见 `S-01`） |
-| 未完成 | directional albedo 数值对照（`S-03`）、v1 端点退化（`S-05` `S-06`）；`S-26` / `S-27` 两项映射与分层因子的决策 |
-| 阻塞 | **整改路线未定**：`S-23`（方案 A，各向同性）/ `S-29`（方案 B，microcylinder）/ `S-31`（方案 C，两套并存）；B 与 C 都牵动 `S-27` 与两张 directional-albedo LUT。论文 case 的双色天鹅绒圆柱与服装需要新资产 |
+| 状态 | ☐ **待按论文实现**（旧实现含 5 项论文里没有的公式，2026-09-12 整体删除，见 §0.6 / §1.4.2） |
+| 实现锚点 | 旧：`M_cloth`、`engine/clothLighting.glsl`、`generator/clothLookupTables.comp`（均已删除）；仍在仓库的是 `common/clothBrdf.glsl` 与 `SC_paper_case_plot_cloth_solo` 探针链路 |
+| 已完成 | **§1.4.2 的公式溯源审计（式号已抽出）**；`§1.4.3` 的文献补查（各向异性有出处的路线）；**mode 0 曲线逐列像素对照通过**（2026-09-12，GGX 最大 0.486 px、Charlie 最大 0.447 px；2026-09-13 复测 0.476 / 0.492 px，见 `S-01`）；三面板场景仍在（仅供浏览） |
+| 未完成 | 求值器 + 两条路径 dispatch case + customData 编码 + 材质校验（同批完成）；directional albedo 数值对照（`S-03`）、端点退化（`S-05` `S-06`） |
+| 阻塞 | **重建路线未定**：`S-23`（方案 A，各向同性）/ `S-29`（方案 B，microcylinder）/ `S-31`（方案 C，两套并存）。B 与 C 都牵动 `S-27` 与两张 directional-albedo LUT；旧球阵场景 `SC_paper_case_cloth_sheen` 已删除（`D-18` 需重做），论文 case 的双色天鹅绒圆柱与服装需要新资产 |
 
 ### ② 论文来源
 
@@ -1275,11 +1380,11 @@ coat IOR 固定 1.5 / F0 0.04，不可作者化。
 
 | 项 | 内容 |
 | --- | --- |
-| 状态 | ◐ 进行中（实现齐备，数值验证缺失） |
-| 实现锚点 | `M_hair` / `M_hairProbe`；`common/hairPathScattering.glsl`；`engine/hairScattering.glsl`；`generator/hairAzimuthalLut.comp` |
-| 已完成 | `SC_hair_showcase_6125` 场景；R / TT / TRT 与 scatter / coverage 的 debug 截图；**mode 1 曲线已采图**（`m07_mode1_hair.bmp`，单会话四连拍之一） |
-| 未完成 | mode 1 曲线的**数值对照**（测量工具的期望值模型需要整条 UE Legacy 路径的 python 复刻，而这正是 `H-20` 待定的基准问题）、方位角 LUT 自洽、Kajiya-Kay scatter 定位 |
-| 阻塞 | Hair tangent 需要离线生成并固定；`M_hairProbe` 的参照系需要先核对 |
+| 状态 | ☐ **待按论文实现**（旧实现 2026-09-12 已删除，见 §0.6） |
+| 实现锚点 | 旧：`M_hair` / `M_hairProbe`、`engine/hairScattering.glsl`、`generator/hairAzimuthalLut.comp`（均已删除）；仍在仓库的是 `common/hairPathScattering.glsl` 与 `SC_paper_case_plot_hair_solo` 探针链路 |
+| 已完成 | mode 1 探针图能出图（坐标轴 + 图头渲染正确，`M-08` 归档），但**无数值对照**；`H-20` 的基准争论已定位到论文式号 |
+| 未完成 | 求值器 + 两条路径 dispatch case + customData 编码 + 材质校验（同批完成）；mode 1 的**数值对照**（测量工具的期望值模型 = 整条 UE Legacy 路径的 python 复刻，取决于 `H-20` 的基准选择）；方位角 LUT 自洽、Kajiya-Kay scatter 定位 |
+| 阻塞 | **`H-20` 必须先定**（论文 `T^p` 路径长 vs UE Legacy 经验式），否则后面的 case 没有对照对象；Hair tangent 需要离线生成并固定；旧 showcase 场景已删除 |
 
 ### ② 论文来源
 
@@ -1358,11 +1463,11 @@ coat IOR 固定 1.5 / F0 0.04，不可作者化。
 
 | 项 | 内容 |
 | --- | --- |
-| 状态 | ◐ 进行中（三套入口齐备，传播核未做数值验证） |
-| 实现锚点 | `M_subsurface` / `M_preintegratedSkin` / `M_subsurfaceProfile`；`engine/subsurfaceLighting.glsl`、`engine/preintegratedSkinLighting.glsl`、`engine/subsurfaceProfileLighting.glsl`、`engine/subsurfaceProfileFilter.glsl`、`generator/subsurfaceLookupTables.comp` |
-| 已完成 | `SC_paper_case_subsurface_models` 三行 × 五列对照；三套入口的材质合同 |
-| 未完成 | 扩散 profile 数值验证、屏幕空间 filter 守恒、背光 case 的机位与灯光 |
-| 阻塞 | 皮肤头模资产授权（纸面资产 `SC_marble_bust_01` 已有） |
+| 状态 | ☐ **待按论文实现**（三套入口的旧实现 2026-09-12 已删除，见 §0.6） |
+| 实现锚点 | 旧：`M_subsurface` / `M_preintegratedSkin` / `M_subsurfaceProfile`、`engine/subsurface*Lighting.glsl`、`engine/subsurfaceProfileFilter.glsl`、`generator/subsurfaceLookupTables.comp`（均已删除，清单见 `archive/README.md`） |
+| 已完成 | `§1.4.2` 定位到 `U-b` 的论文式（Neubelt & Pettineo 2013 式(16)(17)）；`A-13`…即"三套入口参数来自三个不同地方"这条设计问题已记录 |
+| 未完成 | 求值器 + 两条路径 dispatch case + customData 编码 + 材质校验（同批完成）；profile / LUT 资产按论文重新设计并入库（旧 `Common/Profiles/` 与 `Generated/Runtime/*.json` **没有备份**）；扩散 profile 数值验证、背光 case 的机位与灯光 |
+| 阻塞 | 重建前先定参数面（`U-15` / `U-16` 需按新实现重新推导）；皮肤头模授权；旧对照场景 `SC_paper_case_subsurface_models` 已删除 |
 
 ### ② 论文来源
 
@@ -1434,11 +1539,11 @@ coat IOR 固定 1.5 / F0 0.04，不可作者化。
 
 | 项 | 内容 |
 | --- | --- |
-| 状态 | ◐ 进行中（闭包已实现，曲线与守恒未验证） |
-| 实现锚点 | `M_twoSidedFoliage`；`engine/twoSidedFoliageLighting.glsl`；`materialFunction/mf_twoSidedFoliageInputs.glsl` |
-| 已完成 | `SC_foliage_potted_plant_02` 顺逆光对照截图 |
-| 未完成 | 透射因子曲线、能量守恒、双面翻转对称性 |
-| 阻塞 | 无专门论文基准图（只有官方文档与书本章节） |
+| 状态 | ☐ **待按论文实现**（旧实现 2026-09-12 已删除，见 §0.6） |
+| 实现锚点 | 旧：`M_twoSidedFoliage`、`engine/twoSidedFoliageLighting.glsl`、`materialFunction/mf_twoSidedFoliageInputs.glsl`（均已删除）；接口面（`materialInputs.glsl` / `gbufferCodec.glsl` 的双面分支）仍在 |
+| 已完成 | 背光常量与 forward 可达性这类判据问题已在 `F-12` / `F-13` 记录下来，重建时直接照它定参数面 |
+| 未完成 | 求值器 + 两条路径 dispatch case + customData 编码 + 材质校验（同批完成）；透射因子曲线、能量守恒、双面翻转对称性 |
+| 阻塞 | 无专门论文基准图（只有官方文档与书本章节）；旧对照场景 `SC_foliage_potted_plant_02` 已删除，需重新设计 |
 
 ### ② 论文来源
 
@@ -1500,11 +1605,11 @@ coat IOR 固定 1.5 / F0 0.04，不可作者化。
 
 | 项 | 内容 |
 | --- | --- |
-| 状态 | ◐ 进行中（实现齐备，缺数值基准） |
-| 实现锚点 | `M_eye` / `M_eyeCornea` / `M_eyeInner` / `M_eyeDeferred`；`engine/eyeLighting.glsl`、`engine/eyeGeometry.glsl`；`generator/eyeCausticLut.comp` |
-| 已完成 | 分层几何、角膜 / 虹膜 / 巩膜材质分区、Forward/Deferred/dual-shell 路径、LUT |
-| 未完成 | Fresnel 曲线、折射视差解析对照、LUT 自洽、闭包能量审计 |
-| 阻塞 | UE 官方明确 Eye 对 shader、材质、几何与 **UV 布局**有强依赖；无专门论文基准图 |
+| 状态 | ☐ **待按论文实现**（四个母材质与 dual-shell 旧实现 2026-09-12 已删除，见 §0.6） |
+| 实现锚点 | 旧：`M_eye` / `M_eyeCornea` / `M_eyeInner` / `M_eyeDeferred`、`engine/eyeLighting.glsl`、`engine/eyeGeometry.glsl`、`generator/eyeCausticLut.comp`（均已删除；角膜 / 虹膜 / 巩膜的分层几何与 LUT 都没有备份） |
+| 已完成 | `E-12` / `E-14` / `E-15` 三条判据问题已记录（层号契约、宏与贴图槽、Debug 模式是否 raw），重建时直接照它定接口 |
+| 未完成 | 求值器 + 两条路径 dispatch case + customData 编码 + 材质校验（同批完成）；**几何 / UV 契约必须先设计**；Fresnel 曲线、折射视差解析对照、LUT 自洽、闭包能量审计 |
+| 阻塞 | 依赖新增资产最多（眼球几何 + UV 布局契约）；UE 官方明确 Eye 对 shader / 材质 / 几何 / UV 有强依赖；无专门论文基准图 |
 
 ### ② 论文来源
 
@@ -1570,10 +1675,10 @@ coat IOR 固定 1.5 / F0 0.04，不可作者化。
 
 | 项 | 内容 |
 | --- | --- |
-| 状态 | ◐ 进行中（语义扫描已做，折射 / 守恒未验证） |
-| 实现锚点 | `M_thinTranslucent`；`engine/materialForwardOutput.glsl:218` `BuildThinTranslucentFallbackOutput()`；`documents/plan/rendering/archive/thin-translucent-shading-model.md` |
-| 已完成 | `SC_paper_case_thin_translucent` 网格背景 + 透射色 / 粗糙度扫描 |
-| 未完成 | Fresnel 与介质反射、内部往返、能量部分、路径一致性 |
+| 状态 | ☐ **待按论文实现**（旧实现 2026-09-12 已删除，见 §0.6） |
+| 实现锚点 | 旧：`M_thinTranslucent`（已删；`engine/materialForwardOutput.glsl` 里现在只剩 74-79 行的空壳保护，`base.frag.glsl` 的 `VL_MATERIAL_OUTPUT_THIN_TRANSLUCENT` 是编译期 `#error`） |
+| 已完成 | `T-15` / `T-16` 两条判据问题已记录（Forward-only 边界、specular 语义），重建时直接照它定适用范围；旧的透射色 / 粗糙度扫描场景 `SC_paper_case_thin_translucent` 已删除 |
+| 未完成 | 求值器 + 两条路径 dispatch case + customData 编码 + 材质校验（同批完成）；**renderMode / 混合状态与双源输出路径要一起重新设计**（不能再让所有模型为它多写一路输出）；Fresnel 与介质反射、内部往返、能量部分、路径一致性 |
 | 阻塞 | 玻璃球 / 马 / 多层透明资产缺失 |
 
 ### ② 论文来源
@@ -1684,7 +1789,7 @@ DefaultLit  ->  Cloth / Sheen  ->  Hair  ->  Subsurface  ->  TwoSidedFoliage  ->
 
 | Shading Model | 章节 | 基础 case | 论文 case | 状态 | 主要阻塞 |
 | --- | --- | --- | --- | --- | --- |
-| DefaultLit | §2.1 | 15 | 4 | ◐ | ✅ `M-07` / `M-08` 探针与测量工具已就绪（§1.3 / §1.5.3）；**`D-20` / `D-21` 审计发现待处理**（IBL 域的 G 用法与来源），`D-19` 未做 |
+| DefaultLit | §2.1 | 15 | 4 | ◐ | ✅ 探针 / 测量工具 / **几何项两条审计（`D-20` / `D-21`，2026-09-13）** / **公式级积分与球阵回归（`M-02` `M-03` `M-04` + `D-01` `D-05` `D-06` `D-07` `D-08` `D-09` `D-10`，2026-09-14）**都已就绪；剩 `D-11` `D-12` `D-15`～`D-19` 与 `D-07` 的组合越界项（见 §2.1⑤） |
 | ClearCoat | §2.2 | 9 | 4（其中 2 项 ⛔） | ☐ **待按论文实现** | 旧实现（`M_carPaint`）已删除；重建时先按 UE 冻结接口，再处理膜厚 / 吸收的参数缺口；缺 Jakob Fig 4 资产 |
 | Cloth / Sheen | §2.3 | 27 | 3 | ☐ **待按论文实现** | 旧实现（含 5 项无出处公式）已删除；重建前先定路线（`S-23` A / `S-29` B / `S-31` C，见 §1.4.3）；缺双色天鹅绒圆柱与服装资产 |
 | Hair | §2.4 | 16 | 4 | ☐ **待按论文实现** | 旧实现已删除；重建前先定 `H-20` 基准（论文 `T^p` 路径长 vs UE Legacy 经验式）；Hair tangent 需离线生成 |
@@ -1701,6 +1806,9 @@ DefaultLit  ->  Cloth / Sheen  ->  Hair  ->  Subsurface  ->  TwoSidedFoliage  ->
 > **已完成**：`M-07`（2026-09-12，含 `measure_plot_curve.py` / `run_paper_case.ps1` / `bmp_reader.py` /
 > `console_inject.ps1` 四个工具）与 `M-08`（同日，探针坐标轴化 + 图头说明与图例 + 探针场景 scale 约定），
 > 见 `shading-model-case-records.md`。
+> **2026-09-13 追加**：DefaultLit 的 `D-20` / `D-21` 收口（两条均为审计标注错误，实现无改动需求）、
+> `D-04` 离线量化、`D-03` 新增 mode 4 探针（逐列误差 ≤0.474 px），
+> 并补两支工具 `verify_geometry_term.py` / `read_plot_text.py`；证据见 `shading-model-case-records.md`。
 > **删除**：ClearCoat / Cloth / Eye / Hair / Subsurface ×3 / ThinTranslucent / TwoSidedFoliage 的旧实现与案例资产
 > （2026-09-12，清单见 `archive/README.md`）。
 
@@ -1715,18 +1823,23 @@ DefaultLit  ->  Cloth / Sheen  ->  Hair  ->  Subsurface  ->  TwoSidedFoliage  ->
    "测量前先 `tonemap 0` + 关 Bloom"的流程与两个共享工具同时落地（§1.3 / §1.5.3，
    记录见 `shading-model-case-records.md#m-07`）。**§2.1 / §2.3 / §2.4 的 mode 0 / 1 / 2 曲线 case
    自此可以做绝对的逐列像素判定**（已实测 ≤0.5 px）；
-2. **Cloth 整改路线定案（`S-23` A / `S-29` B / `S-31` C）** —— §1.4.2 审计确认 v2 各向异性路径含 **5 项论文里没有的公式**（`S-10` `S-11` `S-12` + `aspect=2^anisotropy` + 分层因子）；§1.4.3 补查已找到有出处的替代路线（microcylinder），且已确认 A / B 是**两种不同外观**。按 §0.3 这是**唯一被确认的自创公式区**，属最高优先级：实现本身不等于论文时，任何对齐结论都无效；
-3. **DefaultLit 的 `D-20` / `D-21`** —— IBL 域的几何项用法与来源（Karis 明确禁止把 analytic
-   调整用于 IBL；`k=α²/2` 在论文里不存在）。这两项会同时影响其它所有用到 `GeometrySmith` 的模型。
+2. ⏳ **Cloth 重建路线定案（`S-23` A / `S-29` B / `S-31` C）** —— §1.4.2 审计确认旧 v2 各向异性路径含 **5 项论文里没有的公式**（`S-10` `S-11` `S-12` + `aspect=2^anisotropy` + 分层因子），该实现已删除，**现在这一步读作"重建前先定路线"**；§1.4.3 补查已找到有出处的替代路线（microcylinder），且已确认 A / B 是**两种不同外观**。按 §0.3 这是**唯一被确认的自创公式区**，属最高优先级：实现本身不等于论文时，任何对齐结论都无效；
+3. ✅ **DefaultLit 的 `D-20` / `D-21`**（2026-09-13 收口）—— 两条都判定为**审计标注错误**：
+   IBL 域用的是论文的 `k=α/2`（计划书写的 `α²/2` 是把当时的局部变量 `a` 当成 α 的误读；
+   该变量同日按 §1.4.5 第 5 条改名为 `alpha`），
+   而 `GeometrySmith`（`k=(r+1)²/8`）只有 analytic 直接光调用点，与论文分工一致。
+   数值证据：`D-04`（`tool/validation/verify_geometry_term.py`）与 `D-03`（mode 4 探针）。
+   **结论：不需要改代码**；要改的是文档标签与变量名（都已改）。
 
-> `M-07` 完成后，**下一步就是第 2 件**（Cloth 整改路线定案），第 3 件与 `DefaultLit` 的曲线 case
-> 可以并行推进——它们现在有可用的测量链路了。
+> `M-07` 与第 3 件都已完成，**下一步就是第 2 件**（Cloth 路线定案）；与此同时 DefaultLit 剩下的
+> 基础 case（`D-01` / `D-05` / `D-06` / `D-07` / `D-08` / `D-09` / `D-10` / `D-15`）都可以直接做——
+> 测量链路与新的 mode 4 都已就绪。
 
 **读法（2026-09-12 清理后）**：下表里"先做 case"的**含义变了**。原先它们的目的是"在已有实现上先弄清
 判据"，现在对应模型没有实现，所以它们读作**重建该模型前必须先定下的设计决策**：
 
-- 仍然有效且仍然必须先做：`S-23` / `S-29` / `S-31`（三条外观路线选一条）与 `S-24..S-27`、
-  `D-20` / `D-21`（DefaultLit 仍在，且影响所有用 `GeometrySmith` 的模型）；
+- 仍然有效且仍然必须先做：`S-23` / `S-29` / `S-31`（三条外观路线选一条）与 `S-24..S-27`；
+- ✅ **已做完**：`D-20` / `D-21`（2026-09-13，两条都是审计标注错误，实现无需改动）；
 - **需要重新推导**：凡是把**已删产物**当作前提的行——`H-16` / `H-19`（"用 `M_hair` 还是 `M_hairProbe`
   做基准"，两者都已删除）、`C-13`、`U-15` / `U-16`、`E-12` / `E-14` / `E-15`、`F-12` / `F-13`、
   `T-15` / `T-16`。重建这些模型时要先在论文里确定判据与参数面，再据此定义新的探针材质与 case 锚点。
@@ -1734,11 +1847,11 @@ DefaultLit  ->  Cloth / Sheen  ->  Hair  ->  Subsurface  ->  TwoSidedFoliage  ->
 | 模型 | 先做 case | 为什么要先做 |
 | --- | --- | --- |
 | ~~**全部**~~ | ~~**`M-07`**~~ | ✅ 已完成（§1.3）：V 方向与 `fov` 约定已定，曲线类像素判定可用 |
-| **Cloth** | **`S-23` / `S-29` / `S-31` 定一条**、`S-24` `S-25` `S-26` `S-27` | 整改路线未定 + 两项映射/分层因子决策；未完成前 Cloth 无法离开 ⚠️（**当前第一优先**） |
-| **DefaultLit** | **`D-20` `D-21`** | IBL 几何项会影响所有走 `GeometrySmith` 的模型（含 ClearCoat） |
-| DefaultLit | `D-11` `D-19` | `M_brdfPlot.json` 的 `u_plotMode` range 已扩到 `[0,3]`（已核对生效）；`D-19` 的校验规则要按改后的 range 判，**仍未做** |
-| DefaultLit | `D-02` `D-03` | 测量链路已就绪，可直接重测；`D-03` 需要新增"`k=α/2` direct 变体"的 mode |
-| ClearCoat | `C-13` | 先记录哪些 coat 参数真正进入 shader，否则 `C-04` / `C-05` 的扫描变量可能根本没生效 |
+| **Cloth** | **`S-23` / `S-29` / `S-31` 定一条**、`S-24` `S-25` `S-26` `S-27` | 重建路线未定 + 两项映射/分层因子决策（**当前第一优先**） |
+| ~~DefaultLit~~ | ~~**`D-20` `D-21`**~~ | ✅ 已完成（2026-09-13）：两条都是审计标注错误，不需要改代码；证据见 case 记录 |
+| DefaultLit | `D-11` `D-19` | `M_brdfPlot.json` 的 `u_plotMode` range 已扩到 `[0,7]`（每次新增 mode 时同步改）；`D-19` 的校验规则要按当前 range 判，**仍未做** |
+| ~~DefaultLit~~ | ~~`D-02` `D-03`~~ | ✅ 已完成：mode 2 复测与新增 mode 4 均通过（≤0.474 px）；`D-04` 的离线量化也已完成 |
+| ClearCoat | `C-13` | 先记录哪些 coat 参数真正进入 shader，否则 `C-04` / `C-05` 的扫描变量可能根本没生效（`C-13` 要按重建后的实现重写） |
 | Hair | **`H-20`** | 基准选择（论文 `T^p` vs UE Legacy 经验式）决定后面所有 case 的对照对象 |
 | Hair | `H-16` `H-19` | 先确定用 `M_hair` 而不是 `M_hairProbe` 作为论文基准，并决定要不要为探针补场景 |
 | Subsurface | `U-15` `U-16` | 三套入口的参数来自三个不同地方，不先理清就无从设计扫描 |
@@ -1778,6 +1891,7 @@ DefaultLit  ->  Cloth / Sheen  ->  Hair  ->  Subsurface  ->  TwoSidedFoliage  ->
 ## 4.1 每个 Case 的通用验收
 
 - [ ] 场景可以从 `config/config.json -> resourcePath` 正确解析全部资源。
+- [ ] 场景 JSON 带非空 `description`（用途 + 验证的论文知识点），缺字段会被 `SceneAssetValidator` 拒绝。
 - [ ] 所有 `SM_*.json`、`MI_*.json` 与纹理引用无悬挂路径。
 - [ ] 主模型使用计划指定的 `M_*.json` 与 Shading Model ID。
 - [ ] 辅助几何使用明确的 `DefaultLit` / `Unlit` 材质，不污染主案例结论。
@@ -1810,6 +1924,7 @@ DefaultLit  ->  Cloth / Sheen  ->  Hair  ->  Subsurface  ->  TwoSidedFoliage  ->
 | 自创公式被当成"论文实现" | 结论无法追溯到任何外部基准 | 算法本体只认论文 / 书本 / 官方规范；不参与数值的约定才进 §0.3.2 登记表 |
 | 论文没给的形式自行补全 | 得到一个"看起来对"的中间式，无法验证 | §0.3.1 阶梯：换论文写了的东西 → 引用其它已发布来源 → 登记工程约定 → 声明做不了 |
 | 把自定近似混进"已验证" | 后续无法判断该不该改 | §1.4 审计表 + ⚠️ 待整改状态；审计项不清零不得转 ☑ |
+| **把参考实现的能量近似当成能量守恒** | 掠射角度凭空多出能量，观感与物理都不对 | `M-04` / `D-07`：**镜面 lobe 已通过，但 diffuse+specular 组合在掠射下可达 1.55**（权重 `(1-F(v·h))` 出自 **Neubelt & Pettineo 2013 式(15)**、Karis/Burley 都没规定这一步；且 analytic 1.06 → 精确 Smith 1.55，**G 越对越界越大**）。重建 DefaultLit 时必须先决定：换成已发布的耦合模型（候选见 `D-07` 一节）还是登记为受限，**不得自创补偿** |
 | 把"资产渲染得好看"当成模型对齐 | 论文 case 结论不可信 | 论文 case 必须绑定对应论文图与特征 |
 | 跳过基础 case 直接做论文 case | 资产上的差异无法归因 | §0.5 流程：来源冻结 → 基础 → 论文 |
 | 用被后处理过的 Debug 通道做判定 | 读到的不是 evaluator 原始输出 | 先确认该模式是否 raw（§1.6.1）与 `IsRawDebugView` 名单 |
@@ -1831,8 +1946,12 @@ DefaultLit  ->  Cloth / Sheen  ->  Hair  ->  Subsurface  ->  TwoSidedFoliage  ->
 - [x] `M-08` 已完成：探针图带完整坐标系（轴名 + 主次刻度 + 由刻度值格式化出的数值标签 + 绘图区参数），
       曲线是**等宽屏幕宽度**的描边，测量脚本会从图上核对轴框位置；探针场景 scale 统一为精确填满画面
       （§1.5.2 / §1.7.2.1）。
-- [ ] **`D-20` / `D-21` 已处理**：IBL 域的几何项要么改用论文允许的形式，要么按 §0.3.1 登记为
-      "论文未指定"；不存在"用了论文明确禁止的变体却没记录"的情况。
+- [x] **`D-20` / `D-21` 已处理**（2026-09-13）：两条经论文原文核对均为**审计标注错误**——
+      `GeometrySmith`（`k=(r+1)²/8`）只有 analytic 直接光调用点，IBL 走 split-sum LUT；
+      LUT 里的 `k` 就是论文的 `k=α/2`（计划书写的 `α²/2` 是把当时的局部变量 `a` 当成 α 的误读，
+      该变量已按 §1.4.5 第 5 条改名为 `alpha`）。
+      数值证据：`D-04`（离线脚本）+ `D-03`（mode 4 探针，逐列误差 ≤0.474 px）；
+      文档标签与变量名已改正，**数值无需改动**。
 - [ ] **Cloth 整改路线已执行（`S-23` / `S-29` / `S-31` 之一）**：`anisotropy ≠ 0` 路径不再含任何论文里没有的公式；若选方案 C，另需满足"两个 variant、指定生产臂与对照臂、两套能量不交叉"三条硬约束。
 - [ ] **`H-20` 已定**：Hair 的基准（Marschner 论文式 vs UE Legacy 经验式）已明确声明，且记录里不混称。
 - [ ] §3.2 中 8 个正式模型的每一行都是 ☑ 或 ⛔，没有 ☐ / ◐ / ⚠️ 残留。

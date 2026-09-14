@@ -6,7 +6,7 @@
              并与相机模型（quad scale + fov + aspect 反推）逐点比对。
              它是 M-07 的判定工具：V 方向与 fov 约定必须由它给出，不能靠读代码猜。
 
-  curve   —— 读 mode 0 / 2 的曲线面板截图，按列取曲线行位置，
+  curve   —— 读 mode 0 / 2 / 4 的曲线面板截图，按列取曲线行位置，
              与"用同一份 shader 公式在脚本里独立算出的解析期望行位置"逐列比对，
              输出最大 / 均方误差（像素）。同时给出"当前 shader 约定"与"竖直翻转后"
              两种假设的误差，用来判定探针图是否被镜像。
@@ -30,6 +30,11 @@
    mode 0  x = θh = axisX·90°（deg），y = 归一化分布 D 的 log10 刻度（1e-3..1）
    mode 1  x = sinθl = -1 + 2·axisX，y = Mp 的 log10 刻度（1e-3..1）
    mode 2  x = cosθ = 1 - axisX，y = G1 线性 0..1
+   mode 4  与 mode 2 同轴；三支曲线 = Schlick(analytic k=(r+1)^2/8) / Schlick(IBL k=α/2) / Smith
+   mode 5  x = θh 同 mode 0，y = 各自按峰值归一化的 log10 刻度（1e-6..1）
+   mode 6  x = θv = axisX·90°（deg），y = 方向反照率线性 0..1（四条 G 臂，离线表驱动）
+   mode 7  x = roughness = axisX，y = split-sum 相对误差的 log10 刻度（1e-6..1，离线表驱动）；
+           表里 -1 = 该配置不可判定，曲线断开，本工具的期望值取 NaN 并跳过该列该曲线
 6. tonemap 0 + bloom 0 时，swapchain 写出的是 sRGB 编码值：
    pixel8 = 255·sRGB_encode(clamp(shaderLinear))，读数必须先 sRGB 解码；
 7. 运行时 UI（RmlUi）即使 `--no-dev-ui` 也会在画面左上角画一条约 186x14 的控件
@@ -45,6 +50,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 import statistics
 import sys
 from dataclasses import dataclass
@@ -67,6 +73,19 @@ PLOT_CURVE_COLORS = {
     ("mode1", "trt"): (0.90, 0.40, 0.85),
     ("mode2", "schlick"): (0.95, 0.32, 0.28),
     ("mode2", "smith"): (0.28, 0.85, 0.36),
+    ("mode4", "direct"): (0.95, 0.32, 0.28),
+    ("mode4", "ibl"): (0.30, 0.80, 0.92),
+    ("mode4", "smith"): (0.28, 0.85, 0.36),
+    ("mode5", "ggx"): (0.28, 0.85, 0.36),
+    ("mode5", "beckmann"): (0.95, 0.32, 0.28),
+    ("mode6", "direct"): (0.95, 0.32, 0.28),
+    ("mode6", "ibl"): (0.30, 0.80, 0.92),
+    ("mode6", "smith"): (0.28, 0.85, 0.36),
+    ("mode6", "nog"): (0.90, 0.40, 0.85),
+    ("mode7", "constant"): (0.28, 0.85, 0.36),
+    ("mode7", "cosine"): (0.95, 0.32, 0.28),
+    ("mode7", "sun"): (0.95, 0.72, 0.25),
+    ("mode7", "bistro4k"): (0.90, 0.40, 0.85),
 }
 
 # 运行时 UI 叠加层实测包围盒（1280x720）。测量时按这个盒子跳过像素。
@@ -75,9 +94,22 @@ PLOT_CURVE_COLORS = {
 UI_OVERLAY_BBOX = (31, 32, 216, 45)
 UI_OVERLAY_MARGIN = 12
 
+# 是否跳过 UI 包围盒。默认开：截图上确实有控件。
+# 需要读**图头文字**时可以把运行时 UI 关掉（config.json 的 `ui.enabled`）再截一张，
+# 然后用 `set_ui_overlay_enabled(False)` / `--no-ui-overlay` 让工具别再跳过那块像素——
+# 否则短图例（如 mode 5 的 `GGX (TR)` / `Beckmann`，只有 8 个字符）会整行落在盒子里，
+# 解码结果全是 `?`，等于"图例文字永远验证不了"。
+_ui_overlay_enabled = True
+
+
+def set_ui_overlay_enabled(enabled: bool) -> None:
+    global _ui_overlay_enabled
+    _ui_overlay_enabled = bool(enabled)
+
 # 材质 u_plotRectPixels 的默认值（左、下、右、上，像素）；运行时优先从材质 JSON 读，
-# 这里只是读不到 JSON 时的兜底。
-DEFAULT_PLOT_RECT = (92.0, 52.0, 18.0, 20.0)
+# 这里只是读不到 JSON 时的兜底。上留白必须与材质一致（M-08 起是 85：容纳 1 行说明 +
+# 最多 3 行图例），写小了会让剔除门限悄悄放宽。
+DEFAULT_PLOT_RECT = (92.0, 52.0, 18.0, 85.0)
 
 # 版式常量：必须与 M_brdfPlot.surface.glsl 里的同名常量一致。
 #   网格线半宽 = GRID_STROKE_SCALE · u_plotTextPixels.z
@@ -88,7 +120,7 @@ CURVE_WIDTH_IN_GRID_LINES = 2.0
 # 材质定义：plot rect / 文字度量 / 描边宽度都从它读，避免脚本里再抄一份默认值。
 MATERIAL_JSON_PATH = Path(__file__).resolve().parents[2] / "shader" / "glsl" / "M_brdfPlot.json"
 
-PLOT_MODE_NAMES = {0: "mode0", 1: "mode1", 2: "mode2", 3: "mode3"}
+PLOT_MODE_NAMES = {0: "mode0", 1: "mode1", 2: "mode2", 3: "mode3", 4: "mode4", 5: "mode5"}
 
 
 def read_plot_material_defaults(
@@ -251,9 +283,29 @@ def distribution_ggx(cos_theta_h: float, roughness: float) -> float:
 
 
 def geometry_schlick_ggx(cos_theta: float, roughness: float) -> float:
-    """common/microfacetDistribution.glsl: GeometrySchlickGGX（k=(r+1)^2/8 的 IBL 变体）。"""
+    """common/microfacetDistribution.glsl: GeometrySchlickGGX。
+
+    Karis 2013 式(4) 的 **analytic light source 变体** `k=(r+1)^2/8`：论文只把它用于
+    直接光（dir / point / spot）。引擎的直接光路径用的就是这一支。
+    """
     r = roughness + 1.0
     k = (r * r) / 8.0
+    cos_theta = max(cos_theta, 0.0)
+    return cos_theta / (cos_theta * (1.0 - k) + k)
+
+
+def geometry_schlick_ggx_ibl(cos_theta: float, roughness: float) -> float:
+    """common/microfacetDistribution.glsl: GeometrySchlickGGXIbl。
+
+    Karis 2013 §Specular G 的基础拟合 `k = α/2`（α = roughness²）：论文把 Disney 的
+    粗糙度重映射 (Roughness+1)/2 限定给 analytic light source，所以 IBL 域剩下的是这一支。
+    `generator/brfdLut.comp` 生成 split-sum LUT 时调用的也是它（同一份共享定义）。
+
+    写法与 shader 一致：α = roughness² 直接用 `alpha` 表示，所以 `k = alpha * 0.5`。
+    别再退回旧写法 `a = roughness; k = (a*a)*0.5`——那正是 D-21 被误读成 α²/2 的原因。
+    """
+    alpha = roughness * roughness
+    k = alpha * 0.5
     cos_theta = max(cos_theta, 0.0)
     return cos_theta / (cos_theta * (1.0 - k) + k)
 
@@ -270,6 +322,32 @@ def smith_g1_ggx(cos_theta: float, roughness: float) -> float:
 def cloth_sheen_roughness_to_alpha(sheen_roughness: float) -> float:
     """common/clothBrdf.glsl: ClothSheenRoughnessToAlpha（alpha = r^2）。"""
     return sheen_roughness * sheen_roughness
+
+
+def distribution_beckmann(cos_theta_h: float, roughness: float) -> float:
+    """common/microfacetDistribution.glsl: DistributionBeckmann（参考曲线，不参与着色）。
+
+    PBRT 3ed §8.4.1 式(8.10) 的等向形式（αx = αy）：
+        D(ωh) = exp(-tan²θh / α²) / (π α² cos⁴θh)，α = roughness²（与 GGX 同一约定）
+    两条分布的**峰值相同**：θh=0 处 GGX 给 α²/(π·α⁴)、Beckmann 给 1/(πα²)，都是 1/(πα²)，
+    所以"各自按峰值归一化"与"用同一个分母归一化"等价，两条曲线可以直接比高低。
+    """
+    cos_theta_h = min(max(cos_theta_h, 0.0), 1.0)
+    if cos_theta_h <= 0.0:
+        return 0.0
+    alpha = roughness * roughness
+    alpha_squared = alpha * alpha
+    cos_squared = cos_theta_h * cos_theta_h
+    tan_squared = (1.0 - cos_squared) / cos_squared
+    cos_fourth = cos_squared * cos_squared
+    return math.exp(-tan_squared / alpha_squared) / (math.pi * alpha_squared * cos_fourth)
+
+
+def plot_log_y_range(normalized_value: float, decades: float) -> float:
+    """M_brdfPlot.surface.glsl: PlotLogYRange（mode 5 用 6 个数量级，mode 0/1 用 3 个）。"""
+    floor_value = 10.0 ** (-decades)
+    safe_value = max(normalized_value, floor_value * 0.1)
+    return min(max((math.log2(safe_value) / math.log2(10.0) + decades) / decades, 0.0), 1.0)
 
 
 def cloth_charlie_distribution(alpha: float, cos_theta_h: float) -> float:
@@ -289,11 +367,188 @@ def plot_log_y(normalized_value: float) -> float:
 
 PLOT_SAMPLE_COUNT = 256
 
+# ---------------------------------------------------------------------------
+# mode 6：方向反照率表 / mode 7：split-sum 误差表（都是离线生成，shader 只做插值）
+# ---------------------------------------------------------------------------
+
+ALBEDO_TABLE_PATH = (
+    Path(__file__).resolve().parents[2] / "shader" / "glsl" / "validationAlbedoTable.glsl"
+)
+
+# 臂顺序必须与 validationAlbedoTable.glsl 的 [arm] 维、以及 shader 里
+# PLOT_ALBEDO_ARM_* 常量、图例文案一致：Schlick direct / Schlick ibl / Smith exact / no G。
+ALBEDO_ARMS = ("direct", "ibl", "smith", "nog")
+
+_albedo_table: tuple[list[float], list[float], list[list[list[float]]]] | None = None
+
+
+def load_albedo_table(
+    path: Path = ALBEDO_TABLE_PATH,
+) -> tuple[list[float], list[float], list[list[list[float]]]]:
+    """解析 shader 侧的 D-05 反照率表，返回 (alphas, angles, table[alpha][arm][angle])。
+
+    这里**故意读同一张表**，而不是在脚本里重新积分：shader 的 mode 6 只做双线性插值，
+    所以本工具这一路要回答的是"图有没有把表画对"（插值 / 轴映射 / 颜色身份），
+    不是"表算得对不对"。表的内容由 verify_brdf_integrals.py 用独立的重要性采样积分校验，
+    两条链路分工明确；在这里再实现一遍积分只会造出第二个"真值"。
+    """
+    global _albedo_table
+    if _albedo_table is not None:
+        return _albedo_table
+
+    source = path.read_text(encoding="utf-8")
+
+    def floats(pattern: str) -> list[float]:
+        match = re.search(pattern, source, re.S)
+        if match is None:
+            raise RuntimeError(f"反照率表没解析出来（{path.name} 结构变了？）: {pattern}")
+        return [float(token) for token in match.group(1).replace("\n", " ").split(",")]
+
+    alphas = floats(r"PLOT_ALBEDO_ALPHAS\[\d+\]\s*=\s*float\[\]\((.*?)\);")
+    angles = floats(r"PLOT_ALBEDO_ANGLES\[\d+\]\s*=\s*float\[\]\((.*?)\);")
+
+    table_match = re.search(r"PLOT_ALBEDO_TABLE\[\d+\]\s*=\s*float\[\]\((.*?)\n\);", source, re.S)
+    if table_match is None:
+        raise RuntimeError(f"反照率表没解析出来（{path.name} 结构变了？）")
+
+    arm_count = len(ALBEDO_ARMS)
+    # 按行解析（生成脚本一行一个 [alpha][arm] 组）并校验行列结构：跨行按错误步长取值时
+    # 前后两半会自洽地错，逐列像素测量抓不住，只有结构校验能。
+    lines = [
+        [float(token) for token in line.replace(",", " ").split()]
+        for line in table_match.group(1).splitlines()
+        if line.strip()
+    ]
+    if len(lines) != len(alphas) * arm_count:
+        raise RuntimeError(
+            f"反照率表有 {len(lines)} 行，但期望 {len(alphas)} α x {arm_count} 臂 "
+            f"= {len(alphas) * arm_count} 行"
+        )
+    for index, line in enumerate(lines):
+        if len(line) != len(angles):
+            raise RuntimeError(
+                f"反照率表第 {index} 行（α={alphas[index // arm_count]} / "
+                f"{ALBEDO_ARMS[index % arm_count]}）有 {len(line)} 个值，"
+                f"但角度档位有 {len(angles)} 个"
+            )
+
+    table = [
+        lines[alpha_index * arm_count:(alpha_index + 1) * arm_count]
+        for alpha_index in range(len(alphas))
+    ]
+    _albedo_table = (alphas, angles, table)
+    return _albedo_table
+
+
+def _bracket(nodes: list[float], value: float) -> tuple[int, int, float]:
+    """shader 那套下标搜索的镜像：返回 (低档, 高档, 混合系数)。"""
+    clamped = min(max(value, nodes[0]), nodes[-1])
+    low = 0
+    for index in range(1, len(nodes)):
+        if clamped >= nodes[index]:
+            low = index
+    high = min(low + 1, len(nodes) - 1)
+    span = max(nodes[high] - nodes[low], 1.0e-6)
+    blend = min(max((clamped - nodes[low]) / span, 0.0), 1.0)
+    return low, high, blend
+
+
+def albedo_table_value(arm: str, alpha: float, theta_deg: float) -> float:
+    """双线性插值读表——与 M_brdfPlot.surface.glsl 的 PlotAlbedoTable 逐行对应。"""
+    alphas, angles, table = load_albedo_table()
+    arm_index = ALBEDO_ARMS.index(arm)
+
+    alpha_low, alpha_high, alpha_blend = _bracket(alphas, alpha)
+    angle_low, angle_high, angle_blend = _bracket(angles, theta_deg)
+
+    low = table[alpha_low][arm_index]
+    high = table[alpha_high][arm_index]
+    low_value = low[angle_low] + (low[angle_high] - low[angle_low]) * angle_blend
+    high_value = high[angle_low] + (high[angle_high] - high[angle_low]) * angle_blend
+    return low_value + (high_value - low_value) * alpha_blend
+
+
+# --- mode 7：split-sum 相对误差表 -------------------------------------------------
+
+SPLIT_SUM_TABLE_PATH = (
+    Path(__file__).resolve().parents[2] / "shader" / "glsl" / "validationSplitSumTable.glsl"
+)
+
+# 臂名与 validationSplitSumTable.glsl 里 `// arm N = ...` 的短名、以及 shader 图例逐字一致。
+SPLIT_SUM_ARMS = ("constant", "cosine", "sun", "bistro4k")
+
+_split_sum_table: tuple[list[float], list[list[float]]] | None = None
+
+
+def load_split_sum_table(
+    path: Path = SPLIT_SUM_TABLE_PATH,
+) -> tuple[list[float], list[list[float]]]:
+    """解析 mode 7 的误差表，返回 (roughness 档位, table[arm][roughness])。
+
+    与 mode 6 同样的分工：表本身由 verify_split_sum.py 用独立积分算出（含两条判定门限），
+    本工具这一路只回答"图有没有把表画对"。
+
+    这里**按行解析**（生成脚本一行写一个环境），并且校验"行数 == arm 数、
+    每行长度 == roughness 档位数"。曾经踩过的坑：表是 [env][roughness]，
+    而读取按 [roughness][env] 跨行取——两边自洽地错，逐列像素测量**照样通过**，
+    只有"行数/行长"这类结构校验才抓得住。
+    """
+    global _split_sum_table
+    if _split_sum_table is not None:
+        return _split_sum_table
+
+    source = path.read_text(encoding="utf-8")
+    roughness_match = re.search(
+        r"PLOT_SPLITSUM_ROUGHNESS\[\d+\]\s*=\s*float\[\]\((.*?)\);", source, re.S
+    )
+    table_match = re.search(
+        r"PLOT_SPLITSUM_TABLE\[\d+\]\s*=\s*float\[\]\((.*?)\n\);", source, re.S
+    )
+    if roughness_match is None or table_match is None:
+        raise RuntimeError(f"split-sum 表没解析出来（{path.name} 结构变了？）")
+
+    roughness = [float(token) for token in roughness_match.group(1).split(",")]
+    rows = [
+        [float(token) for token in line.replace(",", " ").split()]
+        for line in table_match.group(1).splitlines()
+        if line.strip()
+    ]
+    if len(rows) != len(SPLIT_SUM_ARMS):
+        raise RuntimeError(
+            f"split-sum 表有 {len(rows)} 行，但臂名列表有 {len(SPLIT_SUM_ARMS)} 个：{SPLIT_SUM_ARMS}"
+        )
+    for index, row in enumerate(rows):
+        if len(row) != len(roughness):
+            raise RuntimeError(
+                f"split-sum 表第 {index} 行（{SPLIT_SUM_ARMS[index]}）有 {len(row)} 个值，"
+                f"但 roughness 档位有 {len(roughness)} 个"
+            )
+
+    _split_sum_table = (roughness, rows)
+    return _split_sum_table
+
+
+def split_sum_table_value(arm: str, roughness: float) -> float:
+    """roughness 方向线性插值——与 M_brdfPlot.surface.glsl 的 PlotSplitSumTable 逐行对应。
+
+    返回 -1 表示该配置不可判定（表里的哨兵），由调用方决定怎么处理。
+    """
+    nodes, table = load_split_sum_table()
+    row = table[SPLIT_SUM_ARMS.index(arm)]
+    low, high, blend = _bracket(nodes, roughness)
+    low_value = row[low]
+    high_value = row[high]
+    if low_value < 0.0 or high_value < 0.0:
+        return -1.0
+    return low_value + (high_value - low_value) * blend
+
 
 def plot_curve_value(mode: str, curve: str, axis_x: float, roughness: float) -> float:
-    """给定绘图区横轴坐标 axis_x ∈ [0,1]，算出该曲线被画出的纵轴值（axis 空间 0..1）。"""
-    axis_x = min(max(axis_x, 0.0), 1.0)
+    """给定绘图区横轴坐标 axis_x ∈ [0,1]，算出该曲线被画出的纵轴值（axis 空间 0..1）。
 
+    mode 7 在"该配置不可判定"处返回 NaN（曲线断开），调用方必须显式处理。
+    """
+    axis_x = min(max(axis_x, 0.0), 1.0)
     if mode == "mode0":
         theta_h = axis_x * (math.pi * 0.5)
         if curve == "ggx":
@@ -317,6 +572,37 @@ def plot_curve_value(mode: str, curve: str, axis_x: float, roughness: float) -> 
             return min(max(geometry_schlick_ggx(cos_theta, roughness), 0.0), 1.0)
         return min(max(smith_g1_ggx(cos_theta, roughness), 0.0), 1.0)
 
+    if mode == "mode4":
+        # 与 mode 2 共用坐标轴：三支 G1 曲线画在同一个 cosθ / 线性纵轴上。
+        cos_theta = 1.0 - axis_x
+        if curve == "direct":
+            return min(max(geometry_schlick_ggx(cos_theta, roughness), 0.0), 1.0)
+        if curve == "ibl":
+            return min(max(geometry_schlick_ggx_ibl(cos_theta, roughness), 0.0), 1.0)
+        return min(max(smith_g1_ggx(cos_theta, roughness), 0.0), 1.0)
+
+    if mode == "mode5":
+        # x = θh（0..90°），y = 各自按峰值归一化后的 log10 轴（6 个数量级）。
+        theta_h = axis_x * (math.pi * 0.5)
+        if curve == "ggx":
+            peak = distribution_ggx(1.0, roughness)
+            return plot_log_y_range(distribution_ggx(math.cos(theta_h), roughness) / peak, 6.0)
+        peak = distribution_beckmann(1.0, roughness)
+        return plot_log_y_range(distribution_beckmann(math.cos(theta_h), roughness) / peak, 6.0)
+
+    if mode == "mode6":
+        # x = θv（0..90°），y = 线性 0..1 的方向反照率；α = r²，与 shader 同一约定。
+        return min(max(albedo_table_value(curve, roughness * roughness, axis_x * 90.0), 0.0), 1.0)
+
+    if mode == "mode7":
+        # x = roughness（0..1，不再是参数），y = 相对误差的 6 数量级 log10 轴。
+        # 表中 -1 = 该配置不可判定；曲线在那里是断开的，所以这里返回 NaN，
+        # 由 cmd_curve 把该列该曲线跳过——**不能**返回 0.0，那会变成"这里误差为零"的假期望。
+        value = split_sum_table_value(curve, axis_x)
+        if value < 0.0:
+            return float("nan")
+        return plot_log_y_range(value, 6.0)
+
     raise ValueError(f"mode {mode} curve prediction is not implemented yet")
 
 
@@ -326,6 +612,8 @@ def plot_curve_value(mode: str, curve: str, axis_x: float, roughness: float) -> 
 
 
 def is_ui_overlay_pixel(x: int, y: int) -> bool:
+    if not _ui_overlay_enabled:
+        return False
     left, top, right, bottom = UI_OVERLAY_BBOX
     return (
         left - UI_OVERLAY_MARGIN <= x <= right + UI_OVERLAY_MARGIN
@@ -451,6 +739,14 @@ def is_chromatic(linear_pixel: tuple[float, float, float], minimum_spread: float
     return max(linear_pixel) - min(linear_pixel) >= minimum_spread
 
 
+def color_distance(
+    linear_pixel: tuple[float, float, float],
+    color: tuple[float, float, float],
+) -> float:
+    """两个线性 RGB 颜色的欧氏距离，用作"这根像素更像哪条曲线"的身份判定。"""
+    return math.sqrt(sum((linear_pixel[i] - color[i]) ** 2 for i in range(3)))
+
+
 def find_curve_band(
     image: BmpImage,
     x: int,
@@ -459,6 +755,7 @@ def find_curve_band(
     edge_margin: int,
     chromatic_threshold: float,
     layout: PlotLayout,
+    other_curve_colors: list[tuple[float, float, float]] | None = None,
 ) -> tuple[float, int] | None:
     """在绘图区内的一列里找该颜色曲线的**亮核平台**，返回 (中心行, 平台厚度)。
 
@@ -466,9 +763,17 @@ def find_curve_band(
     |value - axisY| <= width 处输出恒为 1，形成一条固定厚度的亮核平台，平台中心
     才是曲线值本身；靠近绘图区上下边界时平台会被截断，此时返回 None 让调用方丢列，
     避免把截断重心当成曲线位置（实测会带来 6 px 量级的假偏移）。
+
+    `other_curve_colors` 是**同一张图里其它曲线的颜色**，用于"这根像素属于哪条曲线"的
+    身份判定。没有它时只用 `curve_score`（在 base->本曲线色 这条线段上的投影 ≥ 阈值），
+    而投影是**单向**的：mode 4 的青色 (0.30,0.80,0.92) 在绿色 (0.28,0.85,0.36) 方向上的
+    投影是 1.13，> 0.98，于是整条青线会被当成绿线——实测让 smith 的平均误差从 0.2 px
+    涨到 15 px。加上"到本曲线的距离必须是所有候选里最近的"这条身份判定即可分开，
+    同时不影响"覆盖率"判定（半覆盖像素的投影只有 ~0.5，仍然被阈值挡掉）。
     """
     y_from = int(math.ceil(image.height - layout.frame_top)) + edge_margin
     y_to = int(math.floor(image.height - layout.frame_bottom)) - edge_margin
+    competitors = other_curve_colors or []
     rows = []
     for y in range(max(y_from, 0), min(y_to, image.height - 1) + 1):
         if is_ui_overlay_pixel(x, y):
@@ -476,8 +781,12 @@ def find_curve_band(
         linear_pixel = image.linear_rgb(x, y)
         if not is_chromatic(linear_pixel, chromatic_threshold):
             continue
-        if curve_score(linear_pixel, curve_color) >= plateau_threshold:
-            rows.append(y)
+        if curve_score(linear_pixel, curve_color) < plateau_threshold:
+            continue
+        here = color_distance(linear_pixel, curve_color)
+        if any(color_distance(linear_pixel, other) < here for other in competitors):
+            continue
+        rows.append(y)
     if not rows:
         return None
 
@@ -717,18 +1026,31 @@ def cmd_curve(args: argparse.Namespace) -> int:
         axis_x = layout.screen_to_axis(x, 0)[0]
         if not (args.axis_x_min <= axis_x <= args.axis_x_max):
             continue
-        expected_rows = {
-            name: layout.axis_to_screen_y(
-                plot_curve_value(args.mode, name, axis_x, args.roughness)
-            )
-            for name in args.curves
-        }
+        # mode 7 的表里存在"不可判定"的配置（曲线在那里断开）：返回 NaN 的曲线在本列
+        # 既不参与交叉判定，也不参与测量——没有期望值就没法判误差。
+        undefined: set[str] = set()
+        expected_rows: dict[str, float] = {}
+        for name in args.curves:
+            value = plot_curve_value(args.mode, name, axis_x, args.roughness)
+            if math.isnan(value):
+                undefined.add(name)
+                continue
+            expected_rows[name] = layout.axis_to_screen_y(value)
         column_rows: dict[str, tuple[float, int, float]] = {}
         for name in args.curves:
+            if name in undefined:
+                continue
             color = PLOT_CURVE_COLORS[(args.mode, name)]
+            # 同一张图里其它曲线的颜色：用于"这根像素属于哪条曲线"的身份判定，
+            # 否则投影判定会把落在本曲线方向更远处的曲线色（如青色之于绿色）误收进来。
+            competing = [
+                PLOT_CURVE_COLORS[(args.mode, other)]
+                for other in args.curves
+                if other != name
+            ]
             found = find_curve_band(
                 image, x, color, args.plateau_threshold, args.edge_margin,
-                args.chromatic_threshold, layout,
+                args.chromatic_threshold, layout, competing,
             )
             if found is None:
                 continue
@@ -772,7 +1094,7 @@ def cmd_curve(args: argparse.Namespace) -> int:
             if expected_rows[name] < top_limit or expected_rows[name] > bottom_limit:
                 edge_skipped[name] += 1
                 continue
-            if thickness < max(3.0, args.min_thickness_ratio * expectation):
+            if thickness < max(3.0, args.min_thickness_ratio * expectation) or math.isnan(thickness):
                 thin_skipped[name] += 1
                 continue
 
@@ -876,8 +1198,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     curve_parser = subparsers.add_parser("curve", help="曲线面板的逐列像素级比对")
     curve_parser.add_argument("bmp")
-    curve_parser.add_argument("--mode", choices=["mode0", "mode2"], required=True)
-    curve_parser.add_argument("--roughness", type=float, required=True)
+    curve_parser.add_argument(
+        "--mode", choices=["mode0", "mode2", "mode4", "mode5", "mode6", "mode7"], required=True)
+    curve_parser.add_argument(
+        "--roughness", type=float, required=True,
+        help="mode 0/2/4/5/6 的曲线参数；mode 7 的横轴本身就是 roughness（表自带档位），此项被忽略",
+    )
     curve_parser.add_argument("--curves", nargs="+", required=True)
     curve_parser.add_argument("--scale", type=float, nargs=2, default=[2.485281, 1.397971])
     curve_parser.add_argument("--distance", type=float, default=6.0)
@@ -920,6 +1246,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str]) -> int:
+    # 必须在 build_parser() **之前**：说明文字里有 `↔` 这类非 GBK 字符，
+    # Windows 控制台默认编码下连 `--help` 都会 UnicodeEncodeError 退出 1。
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="replace")
     parser = build_parser()
     args = parser.parse_args(argv)
     return args.func(args)

@@ -66,9 +66,9 @@
             "default": 0,
             "range": {
                 "min": 0,
-                "max": 3
+                "max": 7
             },
-            "description": "plot mode: 0 = GGX vs Charlie distribution, 1 = hair R/TT/TRT longitudinal scattering, 2 = Schlick vs exact Smith G1, 3 = UV probe"
+            "description": "plot mode: 0 = GGX vs Charlie distribution, 1 = hair R/TT/TRT longitudinal scattering, 2 = Schlick analytic variant (k=(r+1)^2/8) vs exact Smith G1, 3 = UV probe, 4 = both Schlick G1 variants (analytic k=(r+1)^2/8, IBL k=alpha/2) vs exact Smith, 5 = GGX (Trowbridge-Reitz) vs Beckmann-Spizzichino distribution shape with a 6-decade log10 tail axis, 6 = directional albedo (0..1 linear) of the four G arms, read from the offline-generated table validationAlbedoTable.glsl, 7 = split-sum relative error vs roughness for four environments on a 6-decade log10 axis, read from the offline-generated table validationSplitSumTable.glsl"
         },
         "u_plotThetaV": {
             "type": "float",

@@ -78,7 +78,7 @@ When onboarding to the repo, read in this order:
 2. `source/main.cpp`
 3. `source/commonFunction.h`
 4. `source/renderGraph.h` and `source/renderGraph.cpp`
-5. `source/sceneLoader.h` and `source/sceneLoader.cpp`
+5. `source/scene/validation/sceneAssetValidator.*`, `source/world/loading/worldLoader.*` and `source/world/loading/worldBuilder.*` (scene asset validation and world build; the old monolithic `source/sceneLoader.cpp` no longer exists)
 6. `source/renderSystem.h` and `source/renderSystem.cpp`
 7. `config/config.json`
 8. `config/renderGraphConfig.json`
@@ -184,7 +184,15 @@ If a change affects boot behavior, verify it against this order.
 - `shader/spv/`: compiled shader output and debug reflection artifacts
 - `extern/`: third-party dependencies
 - `tool/`: profiling tools bundled in repo
-- `tool/validation/`: offline paper-case validation harness (`bmp_reader.py`, `measure_plot_curve.py`, `run_paper_case.ps1`, `console_inject.ps1`); pixel-level curve/UV measurement for `documents/plan/rendering/shading-model-alignment-plan.md`. These are offline scripts, **not** runtime test commands; outputs go to the gitignored `artifacts/`
+- `tool/validation/`: offline paper-case validation harness (`bmp_reader.py`, `measure_plot_curve.py`, `read_plot_text.py`, `check_plot_font.py`, `verify_geometry_term.py`, `verify_brdf_integrals.py`, `verify_split_sum.py`, `measure_sphere_array.py`, `run_paper_case.ps1`, `console_inject.ps1`); pixel-level curve/UV measurement, on-figure text readback, offline geometry-term / BRDF-integral / split-sum checks, and the sphere-array parameter-yardstick regression for `documents/plan/rendering/shading-model-alignment-plan.md`. These are offline scripts, **not** runtime test commands; outputs go to the gitignored `artifacts/`
+  - `read_plot_text.py` skips the runtime-UI bounding box by default. Short figure legends sit entirely inside
+    that box, so to verify their text: capture once with `config.json -> ui.enabled = false` and read that
+    image with `--no-ui-overlay` (the config edit is temporary; restore it afterwards). `--legend-count` must
+    match the figure's legend rows (the shader tightens the row step at 4+ rows) and `--row annotation` reads
+    the right-aligned parameter note.
+  - `check_plot_font.py` guards `M_brdfPlot.surface.glsl`'s bitmap font: structure checks plus ASCII art of every
+    glyph. Glyph mix-ups (a `B` row block inserted at `C`) decode consistently and therefore pass readback —
+    only the art (human eyes) and the pixel regression catch them.
 - `documents/`: active architecture and planning documents
 
 ## Data Model Conventions
@@ -211,6 +219,19 @@ This project is heavily data-driven. Many runtime objects are created from JSON.
 - `MI_*.json`: material instance files
 - `scene*.json`: scene definitions
 
+### Scene JSON top-level fields
+
+`SC_*.json` (and any other asset with `"type": "scene"`) carries four top-level fields:
+
+- `name`: display label (the UI scene selector uses it as the list label)
+- `type`: must be `"scene"`
+- `description`: **required, non-empty** — what the scene is for and which paper / book knowledge point
+  it validates. Probe scenes must name the paper plus section or figure (e.g. `Karis 2013 §Specular G 式(4)`),
+  and learning-only scenes must say they are not validation scenes. `SceneAssetValidator` rejects a scene
+  without it, so a new scene cannot silently ship undocumented; runtime-test fixtures that build a scene
+  in code must write one too. Written in Chinese, same as the planning documents.
+- `objects`: array of scene objects (see below)
+
 ### Current scene object types
 
 Scene JSON currently supports these `type` values:
@@ -224,6 +245,8 @@ Scene JSON currently supports these `type` values:
 - `environment`
 
 If adding a new type, update both loader logic and documentation.
+(`SC_scene01` still uses a legacy `sunLight` object; it is the only one, the validator rejects it and the
+UI scene selector skips it — keep it as a historical reference, do not copy it into new scenes.)
 
 ## Key Runtime Couplings
 
@@ -249,8 +272,8 @@ Be careful when changing these files or systems:
   - contains path resolution, config loading, math helpers, Vulkan utility helpers, and other mixed responsibilities
 - `source/renderGraph.cpp`
   - render pass attachment ordering, MSAA resolve behavior, framebuffer construction
-- `source/sceneLoader.cpp`
-  - JSON parsing, material loading, texture loading, shader binding validation
+- `source/scene/validation/sceneAssetValidator.cpp` and `source/world/loading/worldLoader.cpp` / `worldBuilder.cpp`
+  - scene JSON contract, per-object field validation, world build plan (the scene-data contract lives here)
 - `source/renderSystem.cpp`
   - frame rendering flow and descriptor usage
 - `source/shaderCompiler.cpp` and `source/shader/build/*`
@@ -291,6 +314,12 @@ When making changes:
 - Add concise Chinese comments for non-obvious engine, rendering, and shader code, especially around data ownership, frozen snapshots, dirty state, Vulkan synchronization, resource lifetime, coordinate spaces, texture-channel semantics, mathematical approximations, and intentional performance tradeoffs. Comments should explain design intent rather than restate the code; ordinary API/type names may remain in English, but new or modified code must not leave important design boundaries undocumented.
 - Shader/code migration must begin by reading and understanding the source implementation's comments together with the surrounding behavior. Preserve the original comments' useful intent in concise Chinese comments near the migrated code, including formula meaning, coordinate/UV conventions, branch rationale, source limitations, and deliberately retained quirks. Do not silently discard meaningful source comments merely because names or structure changed.
 - Do not mechanically translate or copy stale source comments. Verify each comment against the migrated behavior, rewrite it for VulkanLearn's ownership boundaries, and explicitly document intentional differences from the source implementation. Obvious syntax does not need comments, but non-obvious migration decisions do.
+- **Name shader math variables the way the source paper names them.** In particular the microfacet parameter
+  is always `alpha` (`float alpha = roughness * roughness;` — the paper's α = Roughness²), never `a`/`a2`:
+  a bare `a` meant α in one place and perceptual roughness in another, which produced a phantom
+  "formula that is not in the paper" during the `D-21` audit. Keep symbols that the source itself defines as
+  `a`..`e` (e.g. the Narkowicz ACES fit coefficients in `pass/toneMapping.frag`) unchanged — the rule is
+  "match the source symbol", not "never use the letter a".
 
 ## Test Governance
 
@@ -318,14 +347,16 @@ If asked to add or change a scene:
 
 - check `config/config.json`
 - inspect `<resourcePath>/Maps/SC_<scene-name>/*.json`
-- inspect `source/sceneLoader.cpp`
+- inspect `source/scene/validation/sceneAssetValidator.cpp` (required fields, including `description`)
+- remember every scene JSON must carry a non-empty `description` saying what it is for and which paper /
+  book knowledge point it validates
 
 If asked to add or change a terrain:
 
 - inspect `<resourcePath>/Maps/SC_<scene-name>/*.json`
 - inspect `<resourcePath>/Maps/SC_<scene-name>/Terrains/TR_*.json`
 - inspect `source/terrain.h` and `source/terrain.cpp`
-- inspect `source/sceneLoader.cpp`
+- inspect `source/scene/validation/sceneAssetValidator.cpp`
 - keep World Creator surface textures in material / texture asset JSON unless the task explicitly adds terrain layer blending
 
 If asked to add or change a render pass:

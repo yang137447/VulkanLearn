@@ -563,6 +563,19 @@ LightingLobes EvaluateDefaultPbrLightLobes(
     vec3 dielectricF0 = vec3(0.08 * specular);
     vec3 F0 = mix(dielectricF0, baseColor, metallic);
     vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
+    // 漫反射权重 (1 - F(v·h))：**有出处**——Neubelt & Pettineo 2013（The Order: 1886 课程笔记）
+    // §Diffuse BRDF 式(15)：*"the diffuse term is balanced using the inverse of the Fresnel term
+    // from the specular component Shirley [1991]"*，原始来源是 P. S. Shirley 1991 的博士论文
+    // （Physically based lighting calculations for computer graphics）。
+    // 注意 Karis 2013 与 Burley 2012 **都没有**这一项（前者 diffuse 就是裸 Lambertian、后者
+    // 全文 (1-F) 出现 0 次），所以这不是"我们的实现偏离论文"，而是"论文没规定的那一步我们
+    // 采用了 Neubelt 的写法"。
+    // 代价有实测边界（离线白炉，见 D-07）：掠射下 `v·h` 在多数 L 方向上仍接近法线，F 停在 F0，
+    // 漫反射几乎不衰减，而镜面 lobe 的方向反照率在掠射本来就接近 1，于是"diffuse + specular"
+    // 可以超过 1（F0=0.04 时实测 1.06 analytic / 1.55 精确 Smith；**G 越正确越界越大**，
+    // 说明缺口在这一项）。出处本身也承认这个平衡法有缺陷：它破坏 Helmholtz 互易性，
+    // Shirley et al. 1997（PG '97）给了一个保互易的替代方案。
+    // 改这一项等于换模型（§0.3 要求先定出处），并且会让球阵基线（D-08 / D-10）需要重新标定。
     vec3 diffuseWeight = (vec3(1.0) - F) * (1.0 - metallic);
     float distribution = DistributionGGX(N, H, roughness);
     float geometry = GeometrySmith(N, V, L, roughness);
