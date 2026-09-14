@@ -75,7 +75,12 @@ bool RuntimeTestHooks::BeginWorldGraphTransactionTest(
         candidateJson["parameters"][
             "u_worldGraphTransactionCandidate"] = {
                 {"type", "float"},
-                {"default", 0.8125}};
+                {"default", 0.8125},
+                // 材质参数必须带非空 usage description（materialAssetValidator 的契约）；
+                // 运行时测试自己注入的参数同样要写，否则候选材质在验证阶段就被拒绝。
+                {"description",
+                 "world/graph transaction fixture: parameter injected at runtime to "
+                 "force a candidate material variant"}};
         worldGraphTransactionTestCandidateSource =
             candidateJson.dump(2) + "\n";
         worldGraphTransactionTestScenePath =

@@ -438,6 +438,11 @@ std::filesystem::path CreateShaderReloadTestScene(
         "{\n"
         "  \"name\": \"Shader Reload Runtime Test Scene\",\n"
         "  \"type\": \"scene\",\n"
+        // 场景描述是场景资产的必填字段（SceneAssetValidator）；运行时测试自己造的
+        // 临时场景同样要写，否则测试会因为数据契约而失败。
+        "  \"description\": \"Runtime-generated fixture for --shader-reload-test / "
+        "--shader-compute-reload-test: two axis meshes whose materials get reloaded in "
+        "place; not a shading-model case scene.\",\n"
         "  \"objects\": [\n"
         "    {\n"
         "      \"name\": \"ShaderReloadAxis_001\",\n"

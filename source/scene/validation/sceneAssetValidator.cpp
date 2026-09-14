@@ -179,6 +179,20 @@ SceneAssetBuildPlan SceneAssetValidator::BuildLoadPlan(
         throw std::runtime_error("Scene is missing objects array: " + std::string(scenePath));
     }
 
+    // 场景必须自带说明：name 只是标签，读的人（和 agent）要在不打开文档的情况下知道
+    // "这个场景是干什么的 / 用来验证哪篇文章或书本的哪个知识点"。探针场景要写到论文的
+    // 节号或图号，普通学习场景也要写清它不是验证用的。缺失或空串直接拒绝加载——
+    // 这条约定一旦不强制，新场景就会悄悄少写，说明与资产又会脱节。
+    if (!sceneJson.contains("description") ||
+        !sceneJson["description"].is_string() ||
+        sceneJson["description"].get<std::string>().empty())
+    {
+        throw std::runtime_error(
+            "Scene is missing non-empty string field \"description\" (state what the "
+            "scene is for, and which paper/book knowledge point it validates): " +
+            std::string(scenePath));
+    }
+
     SceneAssetBuildPlan sceneBuildPlan;
     sceneBuildPlan.scenePath = std::string(scenePath);
 

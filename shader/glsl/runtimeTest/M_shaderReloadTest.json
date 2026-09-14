@@ -75,15 +75,15 @@
     "textures": {
         "u_reloadTexture": {
             "type": "sampler2D",
-            "default": "textures/T_Texture.json"
+            "default": "Common/Textures/T_Texture.json"
         },
         "u_reloadAlternateTexture": {
             "type": "sampler2D",
-            "default": "textures/T_UV_Checker.json"
+            "default": "Common/Textures/T_UV_Checker.json"
         },
         "u_zReloadRetiredTexture": {
             "type": "sampler2D",
-            "default": "textures/T_Viking_Room.json"
+            "default": "Common/Textures/T_Viking_Room.json"
         }
     }
 }
