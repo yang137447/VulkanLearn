@@ -39,6 +39,9 @@ Documentation in this repository is split by responsibility:
 
 ## Formal Architecture
 
+- `architecture/vl-offline-rendering.md`
+  - current VL offline core ownership, frozen input and worker boundaries,
+    Vulkan display, export identity, bounded capabilities, and test paths
 - `architecture/asset-organization.md`
   - runtime resource repository standard: `Common/`, `Maps/SC_<scene-name>/`,
     type subdirectories, ownership rules, and generated-output boundaries
@@ -90,6 +93,11 @@ Architecture plans:
 
 Rendering plans:
 
+- `plan/rendering/offline-renderer-vl-integration-plan.md`
+  - historical staged development record for integrating the CPU offline core into VL:
+    shared assets and material drafts, frozen CPU scene ownership, offline-only model
+    loading, progressive sessions, Vulkan presentation, and acceptance gates;
+    the former CLI is retired, with current contracts in `architecture/vl-offline-rendering.md`
 - `plan/rendering/material-instance-imgui-editor-plan.md`
   - planned command-only UE-style MI Asset Editor: scenes reveal referenced assets, documents own numeric/texture configuration and atomic save, runtime preview is an optional bridge, and ImGui/Console/tests/AI share one versioned command protocol
 - `plan/rendering/lightweight-material-shadow-caster-plan.md`

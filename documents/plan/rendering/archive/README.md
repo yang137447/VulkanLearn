@@ -1,7 +1,9 @@
 # 归档：旧 shading model 合同与计划（2026-09-12）
 
-这里放的是**被取代的旧实现文档**。归档原因只有一个：这些文档描述的实现在 2026-09-12 的清理中
-被整体删除，随后每个 shading model 都**按论文重做**，接口与 GBuffer 继续参考 UE。
+这里放的是**被取代的旧实现文档**。多数文档描述的 shading model 实现在
+2026-09-12 的清理中被删除，随后每个模型按论文重做；独立论文成图 CLI
+则在 2026-09-29 退役，其纯 CPU 核心继续服务 VL。接口与 GBuffer
+继续参考 UE。
 
 **这些文档不再是合同，不要按它们写新代码。** 它们保留的价值是：
 
@@ -12,6 +14,7 @@
 
 | 归档文件 | 原位置 | 被取代的原因 |
 | --- | --- | --- |
+| `offline-paper-renderer-standalone.md` | `documents/architecture/offline-paper-renderer.md` | 独立 CLI 与固定案例退役；当前 VL 离线合同见 `architecture/vl-offline-rendering.md` |
 | `car-paint-shading-model.md` | `documents/rendering/` | ClearCoat 实现删除，改按论文重做 |
 | `cloth-shading-model.md` | `documents/rendering/` | Cloth 实现删除（v2 各向异性含 5 项无出处公式） |
 | `eye-shading-model.md` | `documents/rendering/` | Eye 实现删除，改按论文重做 |

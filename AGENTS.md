@@ -184,6 +184,9 @@ If a change affects boot behavior, verify it against this order.
 - `shader/spv/`: compiled shader output and debug reflection artifacts
 - `extern/`: third-party dependencies
 - `tool/`: profiling tools bundled in repo
+- `source/render/offline/core/`: pure CPU `vl_offline_core` shared by VL's offline session and root GoogleTest suites. The former independent paper-image CLI and its fixed-case loader are retired; do not rebuild a second scene/material authoring path. See `documents/architecture/vl-offline-rendering.md`.
+- Offline B-arm correctness: Eq. 3 dye multiplies the entire volume term. Eq. 15 Q uses coverage-weighted per-family mean projection plus uncovered-area NoV, not the old unweighted sum or Lambert pore fill. Keep Eval/Sample/Pdf on the same curve discretization, groom and yarn rotation settings. The former CLI's Table II presets and fixed images are historical evidence, not active VL defaults; see the archived `documents/plan/rendering/archive/offline-paper-renderer-standalone.md`. Root GTest owns the current numerical regression.
+- `tool/offline-core-tests/` and `tool/offline-integration-tests/`: root GoogleTest module suites; `tool/validation/offline/` contains external VL stress/export checks and the groom fixture generator, not engine runtime test flags.
 - `tool/validation/`: offline paper-case validation harness (`bmp_reader.py`, `measure_plot_curve.py`, `read_plot_text.py`, `check_plot_font.py`, `verify_geometry_term.py`, `verify_brdf_integrals.py`, `verify_split_sum.py`, `measure_sphere_array.py`, `run_paper_case.ps1`, `console_inject.ps1`); pixel-level curve/UV measurement, on-figure text readback, offline geometry-term / BRDF-integral / split-sum checks, and the sphere-array parameter-yardstick regression for `documents/plan/rendering/shading-model-alignment-plan.md`. These are offline scripts, **not** runtime test commands; outputs go to the gitignored `artifacts/`
   - `read_plot_text.py` skips the runtime-UI bounding box by default. Short figure legends sit entirely inside
     that box, so to verify their text: capture once with `config.json -> ui.enabled = false` and read that
@@ -194,6 +197,13 @@ If a change affects boot behavior, verify it against this order.
     glyph. Glyph mix-ups (a `B` row block inserted at `C`) decode consistently and therefore pass readback —
     only the art (human eyes) and the pixel regression catch them.
 - `documents/`: active architecture and planning documents
+
+Offline B-arm area lighting uses a one-sided square emitter with power-heuristic
+MIS between area and material-direction samples. Use the yarn radiance kernel,
+never the A-arm BRDF or an additional macro cosine. Both direct estimators run
+at each vertex; continuation emitter hits terminate without adding emission
+again. Current VL scene fixtures author the placement, size, strength and
+camera; none are recovered paper-scene metadata.
 
 ## Data Model Conventions
 
@@ -241,6 +251,7 @@ Scene JSON currently supports these `type` values:
 - `directionalLight`
 - `pointLight`
 - `spotLight`
+- `squareAreaLight` (one-sided emitted radiance; the current realtime path rejects it)
 - `camera`
 - `environment`
 

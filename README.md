@@ -91,6 +91,55 @@ build/bin/main.exe --no-dev-ui
 RML/RCSS/本地化文件在开发模式下支持候选解析、校验、提交式热重载；失败候选
 不会替换最后一个有效页面。实现契约见 `documents/architecture/game-ui-stack.md`。
 
+### VL 离线渲染
+
+VL 是离线渲染的唯一出图入口；纯 CPU `vl_offline_core` 由根工程构建，
+数值测试不需要 Vulkan 窗口。当前架构边界见
+`documents/architecture/vl-offline-rendering.md`。VL 已接入冻结的
+World/MI/mesh/纹理输入、渐进会话和 Vulkan 离线显示；支持范围只限
+Lambert、ClothSheen、ClothFiber 的已验证配置，遇到不支持的环境、光源、
+动画或材质时会在准备阶段拒绝，不回退到 DefaultLit。资源仓库中的
+`Maps/SC_offline_shared/SC_offline_shared.json` 是共用实时/离线路径的
+Lambert 受控场景，启动不修改全局 `initScene`：
+
+```powershell
+build/bin/main.exe --initial-scene Maps/SC_offline_shared/SC_offline_shared.json --dev-ui
+build/bin/main.exe --offline --initial-scene Maps/SC_offline_shared/SC_offline_shared.json --dev-ui
+```
+
+离线-only 的 A/B 双片案例在
+`Maps/SC_offline_cloth/SC_offline_cloth.json`（方向光）和
+`Maps/SC_offline_cloth/SC_offline_cloth_area.json`（单面方形面光）；
+`SC_offline_cloth_texture.json` 验证 sRGB UV checker，
+`SC_offline_cloth_groom.json` 验证 B 臂 signed-RG PFM；
+它们使用资源仓库内的 Linen profile，实时模式会明确拒绝面光和 CPU-only
+模型。这些是 UV 平片的能力探针，不是论文原图复刻。
+
+开发者 UI 的 Offline Renderer 面板可切换模式、设置 spp/反弹/seed、
+暂停、继续、停止、重启，查看 Combined/Direct/Indirect 并导出。
+使用 `--dev-ui` 启用后，可在运行时按 F10，进入 System 页点击
+`Toggle F1 diagnostics` 打开面板；无需依赖可能被其它程序占用的 F1。
+控制台也可输入 `offline on|off|samples N|bounces N|seed N|lightSamples N|aov MODE|exposure X|pause|resume|stop|restart|export`。
+离线相机移动时以 1 spp 多核预览并放大显示：默认半宽、半高，准备与
+等待超过 30 ms 时按每轴 1/2、1/4、1/8、1/16 逐级降档；低档预览
+连续三张低于 5 ms 才升一级，给约四倍像素量留出余量，避免频繁跳档。
+上一张预览尚未完成时合并后续
+相机请求，完成后再取最新视角。最后一次
+相机变化后 200 ms 无新变化，恢复原分辨率与面板或命令设置的目标
+spp，并重新累积。移动预览与全尺寸导出是不同输入版本，不能混用
+像素或宣称复用预览样本。移动预览还带约 30 ms 的软截止：按分散
+8×8 tile 计算，截止后不再领取新 tile，已领取 tile 安全完成后发布
+有效像素掩码；显示端只用同一预览的有效像素补洞，零有效像素时保留
+上一张图。部分预览不进入正式 film、spp 累积或导出，超时期间仍可能
+因单条光路或正在执行的 tile 出现软超时；新图未就绪时视口继续显示
+上一张已发布结果。
+导出位于配置 `resourcePath/Generated/OfflineRenderer/`，包含线性 PFM、
+展示 PPM 与 JSON 清单；`--offline` 是进程启动模式，不改变场景资产。
+边界、回归与未完成的人工交互验收见
+`documents/plan/rendering/offline-renderer-vl-integration-plan.md`。
+模块测试由根 CTest 运行；VL 场景导出和压力检查在
+`tool/validation/offline/`，不另建独立渲染程序或第二份场景/材质配置。
+
 ### SpeedTree 风数值验证
 
 本机安装 `C:\Software\SpeedTree_10.2.0_extracted\{app}` 时，默认构建额外的
