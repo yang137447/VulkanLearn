@@ -44,6 +44,12 @@ public:
         return pendingOperation.has_value();
     }
 
+    // Failed 状态仍可持有 renderer session；自动重连应按所有权而非展示状态判断。
+    bool HasLiveConnection() const noexcept
+    {
+        return liveConnectionEstablished;
+    }
+
     std::optional<PreviewOperationId> GetPendingOperationId() const noexcept;
 
 private:

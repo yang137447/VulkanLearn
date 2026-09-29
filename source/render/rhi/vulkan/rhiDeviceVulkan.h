@@ -10,6 +10,7 @@
 #include <vulkan/vulkan.hpp>
 
 #include "baseStructs.h"
+#include "render/backend/swapchainFrameResult.h"
 #include "render/rhi/rhiResourceHandles.h"
 
 struct SDL_Window;
@@ -94,11 +95,11 @@ public:
     void RecreateSwapchain(int width, int height);
     void WaitForFence(vk::Fence fence);
     void ResetFence(vk::Fence fence);
-    void AcquireNextSwapchainImage(
+    SwapchainFrameResult AcquireNextSwapchainImage(
         vk::Semaphore imageAcquiredSemaphore,
         uint32_t& swapchainImageIndex);
     void SubmitToGraphicsQueue(const vk::SubmitInfo& submitInfo, vk::Fence signalFence);
-    void PresentSwapchainImage(
+    SwapchainFrameResult PresentSwapchainImage(
         vk::Semaphore renderFinishedSemaphore,
         uint32_t swapchainImageIndex);
 

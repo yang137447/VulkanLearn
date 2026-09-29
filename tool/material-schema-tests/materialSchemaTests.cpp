@@ -10,6 +10,7 @@
 #include <nlohmann/json.hpp>
 
 #include "material/materialDescriptorSchema.h"
+#include "material/loader/materialInstanceResolver.h"
 #include "material/validation/materialAssetValidator.h"
 
 namespace
@@ -61,6 +62,52 @@ nlohmann::json BuildMaterialDefinition()
                 {"description", "scalar authoring value"},
                 {"default", 1.0}}}}},
         {"textures", nlohmann::json::object()}};
+}
+
+TEST(MaterialSchema, PreviewUsesFrozenDefinitionDefaults)
+{
+    nlohmann::json frozen = BuildMaterialDefinition();
+    frozen["parameters"]["u_scalar"]["default"] = 0.25;
+    frozen["modelProfile"] = "Common/Profiles/frozen.json";
+    const nlohmann::json draft{
+        {"type", "materialInstance"}, {"name", "MI_schemaTest"},
+        {"material", "shader/glsl/M_schemaTest.json"}};
+    const auto resolved = MaterialInstanceResolver::ResolveWithDefinition(
+        "MI_schemaTest.json", draft, frozen);
+    EXPECT_EQ(resolved.effectiveMaterialInstanceJson["parameters"]["u_scalar"], 0.25);
+    EXPECT_EQ(resolved.effectiveMaterialInstanceJson["modelProfile"],
+              "Common/Profiles/frozen.json");
+    EXPECT_EQ(resolved.materialJson, frozen);
+}
+
+TEST(MaterialSchema, PreviewSparseOverrideKeepsFrozenDefaults)
+{
+    const auto frozen = BuildMaterialDefinition();
+    const nlohmann::json draft{
+        {"type", "materialInstance"},
+        {"material", "shader/glsl/M_schemaTest.json"},
+        {"parameters", {{"u_scalar", 0.5}}}};
+    const auto resolved = MaterialInstanceResolver::ResolveWithDefinition(
+        "MI_schemaTest.json", draft, frozen);
+    EXPECT_EQ(resolved.effectiveMaterialInstanceJson["parameters"]["u_scalar"], 0.5);
+    EXPECT_EQ(resolved.effectiveMaterialInstanceJson["parameters"]["u_packed"],
+              frozen["parameters"]["u_packed"]["default"]);
+}
+
+TEST(MaterialSchema, InvalidDraftResolutionLeavesPreviousValuesUntouched)
+{
+    const auto frozen = BuildMaterialDefinition();
+    nlohmann::json source{
+        {"type", "materialInstance"},
+        {"material", "shader/glsl/M_schemaTest.json"},
+        {"parameters", {{"u_scalar", 0.5}}}};
+    const auto active = MaterialInstanceResolver::ResolveWithDefinition(
+        "MI_schemaTest.json", source, frozen).effectiveMaterialInstanceJson;
+    source["parameters"]["unknown"] = 2.0;
+    EXPECT_THROW(MaterialInstanceResolver::ResolveWithDefinition(
+        "MI_schemaTest.json", source, frozen), std::runtime_error);
+    EXPECT_EQ(active["parameters"]["u_scalar"], 0.5);
+    EXPECT_FALSE(active["parameters"].contains("unknown"));
 }
 
 void TestChannelsRetention()
@@ -240,4 +287,34 @@ TEST(MaterialSchema, ColorUsesVec4Layout)
 TEST(MaterialSchema, ParameterMetadataValidation)
 {
     TestParameterMetadataValidation();
+}
+
+TEST(MaterialSchema, OfflineModelIdentityIsExplicit)
+{
+    auto material = BuildMaterialDefinition();
+    material["offlineModel"] = "ClothFiber";
+    EXPECT_NO_THROW(MaterialAssetValidator::ValidateDefinition(
+        material, "shader/glsl/M_schemaTest.json"));
+    material["offlineModel"] = "DefaultLit";
+    EXPECT_THROW(MaterialAssetValidator::ValidateDefinition(
+        material, "shader/glsl/M_schemaTest.json"), std::runtime_error);
+}
+
+TEST(MaterialSchema, ModelProfileIsSparseAssetReference)
+{
+    auto material = BuildMaterialDefinition();
+    material["modelProfile"] = "Common/Profiles/cloth.json";
+    MaterialAssetValidator::ValidateDefinition(
+        material, "shader/glsl/M_schemaTest.json");
+    nlohmann::json instance = {
+        {"type", "materialInstance"},
+        {"material", "shader/glsl/M_schemaTest.json"},
+        {"modelProfile", "Common/Profiles/cloth-variant.json"}};
+    EXPECT_NO_THROW(MaterialAssetValidator::ValidateInstanceHeader(
+        instance, "MI_test.json"));
+    EXPECT_NO_THROW(MaterialAssetValidator::ValidateInstanceOverrides(
+        material, instance, "MI_test.json"));
+    instance["modelProfile"] = material["modelProfile"];
+    EXPECT_THROW(MaterialAssetValidator::ValidateInstanceOverrides(
+        material, instance, "MI_test.json"), std::runtime_error);
 }

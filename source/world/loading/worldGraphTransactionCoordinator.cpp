@@ -14,6 +14,8 @@
 #include "material/generator/materialDefinitionReloadBatch.h"
 #include "pipeline/pipelineFactory.h"
 #include "render/backend/rendererBackendVulkan.h"
+#include "render/offline/offlineWorldAssets.h"
+#include "render/offline/offlineGroomAsset.h"
 #include "render/renderThread.h"
 #include "render/rendergraph/preparedRenderGraphState.h"
 #include "render/resource/rendererResourceCache.h"
@@ -108,6 +110,20 @@ void ValidateMaterialDefinitionSourcesStillCurrent(
                 "Material definition source changed before commit: " +
                 identity);
         }
+    }
+}
+
+void ValidateOfflineProfilesStillCurrent(
+    const OfflineWorldAssets& assets)
+{
+    for (const auto& [reference, captured] :
+         assets.modelProfileDigests)
+    {
+        const auto& path = assets.modelProfilePaths.at(reference);
+        if (!std::filesystem::is_regular_file(path) ||
+            ContentHasher::HashFile(path).ToHex() != captured)
+            throw std::runtime_error(
+                "modelProfile changed before World commit: " + reference);
     }
 }
 
@@ -210,7 +226,9 @@ WorldGraphTransactionCoordinator::Execute(
             RenderSystem::GetInstance().PrepareRuntimeBinding(
                 preparedWorld.world,
                 *preparedWorld.resourceCache,
-                candidateGraph->GetGraph());
+                candidateGraph->GetGraph(),
+                preparedWorld.offlineWorldAssets,
+                RenderSystem::GetInstance().IsOfflineMode());
         if (faultInjection.failAfterRuntimeBindingPrepared)
         {
             throw std::runtime_error(
@@ -251,6 +269,9 @@ WorldGraphTransactionCoordinator::Execute(
         ValidateMaterialDefinitionSourcesStillCurrent(
             materialDefinitionReload,
             shaderCompiler.GetShaderRoot());
+        // 与 shader source 一样，profile 字节身份不是路径或时间戳。
+        ValidateOfflineProfilesStillCurrent(*preparedWorld.offlineWorldAssets);
+        ValidateOfflineTexturesStillCurrent(*preparedWorld.offlineWorldAssets);
         std::vector<AtomicFileWrite> additionalPublicationWrites =
             BuildGeneratedIncludeWrites(materialDefinitionReload);
         AppendPendingGeneratedResourceWrites(
@@ -294,6 +315,8 @@ WorldGraphTransactionCoordinator::Execute(
         ValidateMaterialDefinitionSourcesStillCurrent(
             materialDefinitionReload,
             shaderCompiler.GetShaderRoot());
+        ValidateOfflineProfilesStillCurrent(*preparedWorld.offlineWorldAssets);
+        ValidateOfflineTexturesStillCurrent(*preparedWorld.offlineWorldAssets);
         if (faultInjection.failBeforeCommit)
         {
             throw std::runtime_error(

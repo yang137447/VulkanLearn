@@ -1,0 +1,29 @@
+{
+  "name": "M_sharedLambert",
+  "type": "material",
+  "shadingModel": "DefaultLit",
+  "offlineModel": "Lambert",
+  "shaderEvaluation": {
+    "vertex": "M_sharedLambert.vertex.glsl",
+    "surface": "M_sharedLambert.surface.glsl"
+  },
+  "renderStates": {
+    "renderMode": "Opaque",
+    "cullMode": "None"
+  },
+  "macros": {},
+  "parameters": {
+    "u_baseColor": {
+      "type": "color",
+      "default": [0.75, 0.24, 0.16, 1.0],
+      "channels": {
+        "x": {"name": "red", "description": "线性红色反射率", "range": {"min": 0, "max": 1}},
+        "y": {"name": "green", "description": "线性绿色反射率", "range": {"min": 0, "max": 1}},
+        "z": {"name": "blue", "description": "线性蓝色反射率", "range": {"min": 0, "max": 1}},
+        "w": {"name": "opacity", "description": "保持不透明", "range": {"min": 1, "max": 1}}
+      },
+      "description": "实时和离线共用的作者线性反射率"
+    }
+  },
+  "textures": {}
+}

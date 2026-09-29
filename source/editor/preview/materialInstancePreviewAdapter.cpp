@@ -310,7 +310,11 @@ RendererOwnedMaterialInstancePreviewAdapter::ExecuteLiveUpdate(
     {
         result = connection->session->Apply(*command.draft);
     }
-    if (result.status == PreviewAdapterOperationStatus::Completed)
+    // 资源替换只有同时提交 live swap 且给出代际才算成功；
+    // 与 controller 的发布门禁一致，失败候选不能推进连接 revision。
+    if (result.status == PreviewAdapterOperationStatus::Completed &&
+        (!result.replacesLiveResource ||
+         (result.liveSwapCommitted && result.runtimeResourceGeneration != 0)))
     {
         connection->documentRevision = command.draft->documentRevision;
         if (result.replacesLiveResource)

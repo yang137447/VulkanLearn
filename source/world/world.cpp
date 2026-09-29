@@ -67,4 +67,9 @@ void World::AddSpotLight(std::string name, std::shared_ptr<SpotLight> light)
     spotLights[std::move(name)] = std::move(light);
 }
 
+void World::AddSquareAreaLight(std::string name, WorldSquareAreaLight light)
+{
+    squareAreaLights[std::move(name)] = std::move(light);
+}
+
 } // namespace VL

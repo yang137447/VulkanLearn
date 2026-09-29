@@ -1,5 +1,7 @@
 #include "sceneAssetValidator.h"
 
+#include <cmath>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -110,6 +112,42 @@ namespace
         RequireNumberField(objectJson, "intensity", context);
         RequireNumberField(objectJson, "cone_angle_outer", context);
         RequireNumberField(objectJson, "cone_angle_inner", context);
+    }
+
+    void ValidateSquareAreaLightObject(const nlohmann::json& objectJson,
+                                       std::string_view context)
+    {
+        RequireVector3Field(objectJson, "position", context);
+        RequireVector3Field(objectJson, "normal", context);
+        RequireVector3Field(objectJson, "color", context);
+        RequireNumberField(objectJson, "size", context);
+        RequireNumberField(objectJson, "intensity", context);
+        const auto& normal = objectJson["normal"];
+        double lengthSquared = 0.0;
+        for (const auto& component : normal)
+        {
+            const double value = component.get<double>();
+            if (!std::isfinite(value))
+                throw std::runtime_error("Area light normal must be finite: " +
+                                         std::string(context));
+            lengthSquared += value * value;
+        }
+        if (!std::isfinite(lengthSquared) || lengthSquared <= 1.0e-12 ||
+            !std::isfinite(objectJson["size"].get<double>()) ||
+            objectJson["size"].get<double>() <= 0 ||
+            objectJson["size"].get<double>() > std::numeric_limits<float>::max() ||
+            !std::isfinite(objectJson["intensity"].get<double>()) ||
+            objectJson["intensity"].get<double>() < 0 ||
+            objectJson["intensity"].get<double>() > std::numeric_limits<float>::max())
+            throw std::runtime_error("Invalid area light normal/size/radiance: " +
+                                     std::string(context));
+        for (const char* field : {"position", "color"})
+            for (const auto& component : objectJson[field])
+                if (!std::isfinite(component.get<double>()) ||
+                    (std::string_view(field) == "color" && component.get<double>() < 0))
+                    throw std::runtime_error("Invalid area light " +
+                                             std::string(field) + ": " +
+                                             std::string(context));
     }
 
     void ValidateCameraObject(const nlohmann::json& objectJson, std::string_view context)
@@ -247,6 +285,10 @@ SceneAssetBuildPlan SceneAssetValidator::BuildLoadPlan(
         else if (objectType == "spotLight")
         {
             ValidateSpotLightObject(objectJson, objectContext);
+        }
+        else if (objectType == "squareAreaLight")
+        {
+            ValidateSquareAreaLightObject(objectJson, objectContext);
         }
         else if (objectType == "environment")
         {

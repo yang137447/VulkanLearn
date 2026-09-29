@@ -179,6 +179,69 @@ void DebugConsole::ProcessCommand(const std::string& line)
         return;
     }
 
+    if (command == "offline")
+    {
+        std::string action;
+        commandStream >> action;
+        VL::RuntimeCommand runtimeCommand;
+        if (action == "on" || action == "off")
+        {
+            runtimeCommand.type = VL::RuntimeCommandType::SetOfflineMode;
+            runtimeCommand.intValue = action == "on" ? 1 : 0;
+        }
+        else if (action == "samples" || action == "bounces" ||
+                 action == "seed" || action == "lightSamples")
+        {
+            if (!(commandStream >> runtimeCommand.intValue))
+            {
+                std::cout << "Usage: offline " << action << " <integer>" << std::endl;
+                return;
+            }
+            runtimeCommand.type = VL::RuntimeCommandType::SetOfflineSetting;
+            runtimeCommand.stringValue = action;
+        }
+        else if (action == "aov")
+        {
+            std::string value;
+            commandStream >> value;
+            if (value != "combined" && value != "direct" && value != "indirect")
+            {
+                std::cout << "Usage: offline aov <combined|direct|indirect>" << std::endl;
+                return;
+            }
+            runtimeCommand.type = VL::RuntimeCommandType::SetOfflineAov;
+            runtimeCommand.intValue = value == "combined" ? 0 : value == "direct" ? 1 : 2;
+        }
+        else if (action == "exposure")
+        {
+            if (!(commandStream >> runtimeCommand.floatValue))
+            {
+                std::cout << "Usage: offline exposure <positive-float>" << std::endl;
+                return;
+            }
+            runtimeCommand.type = VL::RuntimeCommandType::SetOfflineExposure;
+        }
+        else if (action == "pause" || action == "resume" ||
+                 action == "stop" || action == "restart")
+        {
+            runtimeCommand.type = VL::RuntimeCommandType::ControlOfflineSession;
+            runtimeCommand.intValue = action == "pause" ? 0 : action == "resume" ? 1 :
+                action == "stop" ? 2 : 3;
+        }
+        else if (action == "export")
+            runtimeCommand.type = VL::RuntimeCommandType::ExportOffline;
+        else
+        {
+            std::cout << "Usage: offline <on|off|samples|bounces|seed|lightSamples|"
+                         "aov|exposure|pause|resume|stop|restart|export>" << std::endl;
+            return;
+        }
+        // 控制台和开发 UI 共用命令执行边界，不直接读取活动 World/film。
+        runtimeCommand.sourceText = line;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
     if (command == "loadworld" || command == "loadscene")
     {
         std::string scenePath;
@@ -469,6 +532,7 @@ void DebugConsole::PrintHelp() const
     std::cout << "  bloom knee <value> - set bloom soft knee\n";
     std::cout << "  bloom clamp <value> - set bloom fireflies clamp\n";
     std::cout << "  loadworld <scene-path> - request scene load through WorldTransitionCoordinator\n";
+    std::cout << "  offline <on|off|samples N|bounces N|seed N|lightSamples N|aov MODE|exposure X|pause|resume|stop|restart|export>\n";
     std::cout << "  environment <value> - set unified sky and IBL intensity\n";
     std::cout << "  windgust <on|off|once> - toggle or trigger one SpeedTree gust\n";
     std::cout << "  windstrength <0..1> - set the SpeedTree base strength target\n";

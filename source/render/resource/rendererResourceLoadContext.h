@@ -21,6 +21,7 @@ namespace VL
 {
 
 struct MaterialDefinitionReloadBatch;
+struct OfflineWorldAssets;
 
 struct PendingGeneratedResourceFile
 {
@@ -48,6 +49,10 @@ struct RendererResourceLoadContext
         passMaterialBindings = nullptr;
     // candidate 阶段只收集生成文件；只有 World transaction 的正式发布批次才能落盘。
     std::vector<PendingGeneratedResourceFile> pendingGeneratedFiles;
+    // 仅 World 候选提供；预览候选不直接更改当前已应用的离线版本。
+    OfflineWorldAssets* offlineWorldAssets = nullptr;
+    bool offlineOnly = false;
+    bool useFrozenMaterials = false;
 
     void QueueGeneratedFile(
         std::filesystem::path path,

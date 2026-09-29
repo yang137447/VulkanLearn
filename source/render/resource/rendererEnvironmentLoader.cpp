@@ -43,6 +43,11 @@ void RendererEnvironmentLoader::LoadEnvironmentObject(const nlohmann::basic_json
     const nlohmann::json& config = node["environment"];
     EnvironmentType type = ParseEnvironmentType(config["type"].get<std::string>());
 
+    if (type == EnvironmentType::None)
+    {
+        // None 不产生 IBL；实时 descriptor 仍绑定既有资源，但照明强度为零且跳过 sky。
+        return;
+    }
     if (type == EnvironmentType::ProceduralSky)
     {
         return;

@@ -18,6 +18,7 @@ namespace VL
 {
 
 class RendererResourceLoadCoordinator;
+struct OfflineWorldAssets;
 struct MaterialDefinitionReloadBatch;
 
 enum class WorldTransitionState
@@ -47,6 +48,7 @@ struct PreparedWorldTransition
     std::vector<PendingGeneratedResourceFile> pendingGeneratedFiles;
     PipelineFactory::GraphicsCandidateState
         graphicsCandidateState;
+    std::shared_ptr<OfflineWorldAssets> offlineWorldAssets;
 };
 
 // Coordinates the world-load transaction boundary. Renderer resource loaders

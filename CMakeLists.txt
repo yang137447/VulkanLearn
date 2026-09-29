@@ -20,6 +20,7 @@ option(VULKANLEARN_ENABLE_DEVELOPER_UI
     ON)
 
 add_subdirectory(extern)
+add_subdirectory(source/render/offline/core)
 add_subdirectory(source)
 
 if(VULKANLEARN_BUILD_TESTS)
@@ -42,9 +43,10 @@ if(VULKANLEARN_BUILD_TESTS)
         target_link_libraries(${target} PRIVATE GTest::gtest_main)
         if(VL_GTEST_WORKING_DIRECTORY)
             gtest_discover_tests(${target}
-                WORKING_DIRECTORY "${VL_GTEST_WORKING_DIRECTORY}")
+                WORKING_DIRECTORY "${VL_GTEST_WORKING_DIRECTORY}"
+                DISCOVERY_TIMEOUT 30)
         else()
-            gtest_discover_tests(${target})
+            gtest_discover_tests(${target} DISCOVERY_TIMEOUT 30)
         endif()
     endfunction()
 
@@ -53,6 +55,9 @@ if(VULKANLEARN_BUILD_TESTS)
     add_subdirectory(tool/material-schema-tests)
     add_subdirectory(tool/texture-asset-tests)
     add_subdirectory(tool/material-instance-editor-tests)
+    add_subdirectory(tool/offline-core-tests)
+    add_subdirectory(tool/offline-integration-tests)
+    add_subdirectory(tool/renderer-backend-tests)
 endif()
 
 option(VULKANLEARN_BUILD_SPEEDTREE_WIND_VALIDATION

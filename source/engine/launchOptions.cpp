@@ -148,6 +148,11 @@ LaunchOptions ParseLaunchOptions(int argc, char** argv)
             options.developerUiMode = DeveloperUiLaunchMode::Enabled;
             continue;
         }
+        if (argument == "--offline")
+        {
+            options.offlineRender = true;
+            continue;
+        }
 
         if (argument == "--no-dev-ui")
         {

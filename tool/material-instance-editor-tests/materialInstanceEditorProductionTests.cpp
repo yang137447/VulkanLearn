@@ -435,7 +435,21 @@ void TestProductionRenderStatePreviewBoundary()
                 testCase.valueName,
             "runtime preview draft lost the edited render-state value");
 
-        ConnectRuntimePreview(runtime, nextCommandId++, revisionAfterEdit);
+        const std::size_t commandCountAfterFailure =
+            fakeAdapter.executeCommands.size();
+        SubmitRuntimeCommand(
+            runtime,
+            nextCommandId++,
+            EditorCommandType::GetMaterialInstanceDocument,
+            EditorCommandPayload{MaterialInstanceAssetPathPayload{
+                kMaterialInstancePath}});
+        Require(
+            fakeAdapter.executeCommands.size() == commandCountAfterFailure &&
+                RequireUiDocument(runtime).preview == EditorUi::EditorPreviewStatus::Failed,
+            "successful document read reconnected a failed but live preview session");
+
+        const std::size_t commandCountBeforeRestore =
+            fakeAdapter.executeCommands.size();
         SubmitRuntimeCommand(
             runtime,
             nextCommandId++,
@@ -450,7 +464,7 @@ void TestProductionRenderStatePreviewBoundary()
                 restored.status == EditorUi::EditorDocumentStatus::Dirty,
             "preview baseline restore changed the render-state asset draft");
         Require(
-            !fakeAdapter.executeCommands.empty() &&
+            fakeAdapter.executeCommands.size() == commandCountBeforeRestore + 1 &&
                 fakeAdapter.executeCommands.back().type ==
                     VL::Editor::Preview::MaterialInstancePreviewCommandType::
                         RestoreMaterialInstancePreviewBaseline &&

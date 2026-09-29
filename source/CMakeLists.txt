@@ -1,6 +1,13 @@
 file(GLOB_RECURSE sources CONFIGURE_DEPENDS "*.h" "*.cpp")
+# 纯 CPU 离线核心由独立静态库拥有，不能随递归源文件再次编进 main。
+list(FILTER sources EXCLUDE REGEX "/render/offline/core/")
 
 add_executable(main ${sources})
+
+# renderSystem 的候选事务和显示路径在 MinGW Debug 下超过 COFF 旧 section 上限。
+if(MINGW)
+    set_source_files_properties(renderSystem.cpp PROPERTIES COMPILE_OPTIONS "-Wa,-mbig-obj")
+endif()
 
 if(TARGET copy_shaderc_dll)
     add_dependencies(main copy_shaderc_dll)
@@ -27,6 +34,7 @@ PRIVATE
     OpenEXR::OpenEXR
     RmlUi::Core
     Threads::Threads
+    vl_offline_core
     ws2_32 dbghelp advapi32 user32 secur32
     )
 

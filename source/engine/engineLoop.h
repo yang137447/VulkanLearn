@@ -68,7 +68,9 @@ private:
     void PumpPlatformEvents();
     void ApplyQueuedUiActions();
     void UpdateUiInputPolicy();
-    void UpdateUiViewModel(float deltaTime);
+    void UpdateUiViewModel(
+        float deltaTime,
+        const RuntimeCommandExecutionResult& commandResult);
     const RuntimeConfig& GetRuntimeConfig() const;
     SubsystemCollection& GetSubsystems();
     const SubsystemCollection& GetSubsystems() const;

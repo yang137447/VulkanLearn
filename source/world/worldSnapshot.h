@@ -66,7 +66,8 @@ enum class LightSnapshotType
 {
     Directional,
     Point,
-    Spot
+    Spot,
+    SquareArea
 };
 
 struct LightSnapshot
@@ -81,6 +82,7 @@ struct LightSnapshot
     Eigen::Matrix3f worldToLight = Eigen::Matrix3f::Identity();
     float coneAngleOuter = 0.0f;
     float coneAngleInner = 0.0f;
+    float squareSize = 0.0f;
 };
 
 struct EnvironmentSnapshot

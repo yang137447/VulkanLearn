@@ -172,6 +172,22 @@ LightSnapshot BuildSpotLightSnapshot(
     return snapshot;
 }
 
+LightSnapshot BuildSquareAreaLightSnapshot(
+    const World& world,
+    const std::string& lightName,
+    const WorldSquareAreaLight& light)
+{
+    LightSnapshot snapshot;
+    snapshot.lightId = StableRuntimeId(BuildLightRuntimeKey(world, lightName));
+    snapshot.type = LightSnapshotType::SquareArea;
+    snapshot.color = light.color;
+    snapshot.intensity = light.intensity;
+    snapshot.position = light.position;
+    snapshot.direction = light.normal;
+    snapshot.squareSize = light.size;
+    return snapshot;
+}
+
 EnvironmentSnapshot BuildEnvironmentSnapshot(
     const World& world,
     const WorldSnapshotBuildDesc& desc)
@@ -180,7 +196,8 @@ EnvironmentSnapshot BuildEnvironmentSnapshot(
     const WorldEnvironment& environment = world.GetEnvironment();
 
     snapshot.type = environment.type;
-    snapshot.intensity = environment.intensity * desc.environmentIntensity;
+    snapshot.intensity = environment.type == EnvironmentType::None
+        ? 0.0f : environment.intensity * desc.environmentIntensity;
     snapshot.skyParameters = environment.skyParameters;
 
     if (environment.type == EnvironmentType::Hdri && !environment.hdrPath.empty())
@@ -271,7 +288,8 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
     const size_t lightCount =
         world.GetDirectionalLights().size() +
         world.GetPointLights().size() +
-        world.GetSpotLights().size();
+        world.GetSpotLights().size() +
+        world.GetSquareAreaLights().size();
     snapshot.lights.reserve(lightCount);
 
     for (const auto& [lightName, light] : world.GetDirectionalLights())
@@ -285,6 +303,10 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
     for (const auto& [lightName, light] : world.GetSpotLights())
     {
         snapshot.lights.push_back(BuildSpotLightSnapshot(world, lightName, *light));
+    }
+    for (const auto& [lightName, light] : world.GetSquareAreaLights())
+    {
+        snapshot.lights.push_back(BuildSquareAreaLightSnapshot(world, lightName, light));
     }
 
     snapshot.environment = BuildEnvironmentSnapshot(world, desc);

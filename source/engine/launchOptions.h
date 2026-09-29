@@ -25,6 +25,7 @@ struct LaunchOptions
     bool runShaderComputeReloadTest = false;
     bool runWorldGraphTransactionTest = false;
     bool forceShaderRebuild = false;
+    bool offlineRender = false;
     bool exitAfterTests = false;
     DeveloperUiLaunchMode developerUiMode = DeveloperUiLaunchMode::UseConfig;
     std::optional<int> workerThreadCountOverride;

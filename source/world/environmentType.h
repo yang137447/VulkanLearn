@@ -8,12 +8,17 @@ namespace VL
 {
 enum class EnvironmentType
 {
+    None,
     Hdri,
     ProceduralSky
 };
 
 inline EnvironmentType ParseEnvironmentType(std::string_view value)
 {
+    if (value == "none")
+    {
+        return EnvironmentType::None;
+    }
     if (value == "hdri")
     {
         return EnvironmentType::Hdri;

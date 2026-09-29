@@ -1376,6 +1376,230 @@ void TestLandedPreviewProtocolBoundaries()
         "World generation change did not cancel the pending preview operation");
 }
 
+void TestFailedPreviewCandidatePreservesEffectiveRevision()
+{
+    using material_instance_editor_test::FakeMaterialInstancePreviewAdapter;
+    FakeMaterialInstancePreviewAdapter adapter;
+    MaterialInstancePreviewController controller(adapter);
+    const MaterialInstancePreviewWorldIdentity world{
+        4, "scenes/scene_editor.json"};
+    const std::string path = "materials/MI_editor_test.json";
+    controller.NotifyActiveWorldChanged(world);
+
+    MaterialInstancePreviewCommand command;
+    command.commandId = 800;
+    command.type = MaterialInstancePreviewCommandType::ConnectMaterialInstancePreview;
+    command.expectedDocumentRevision = 9;
+    command.payload = ConnectMaterialInstancePreviewPayload{world, path, 9};
+    Require(
+        controller.Execute(command).status == MaterialInstancePreviewCommandStatus::Succeeded,
+        "preview connection failed");
+
+    command.commandId = 801;
+    command.type = MaterialInstancePreviewCommandType::ApplyMaterialInstancePreview;
+    command.payload = VL::Editor::Preview::ApplyMaterialInstancePreviewPayload{
+        MaterialInstancePreviewDraft{path, 9, "{\"parameters\":{\"u_scalar\":0.5}}"}};
+    Require(
+        controller.Execute(command).payload.appliedDocumentRevision == 9,
+        "initial effective revision was not published");
+    const uint64_t generation = controller.GetStatus().liveGeneration;
+
+    MaterialInstancePreviewAdapterResult failure;
+    failure.status = PreviewAdapterOperationStatus::Failed;
+    failure.failureStage = PreviewAdapterFailureStage::Prepare;
+    failure.message = "candidate prepare failed";
+    adapter.QueueExecuteResult(failure);
+    command.commandId = 802;
+    command.expectedDocumentRevision = 10;
+    command.expectedPreviewGeneration = generation;
+    command.payload = VL::Editor::Preview::ApplyMaterialInstancePreviewPayload{
+        MaterialInstancePreviewDraft{path, 10, "{\"parameters\":{\"u_scalar\":0.8}}"}};
+    const auto failed = controller.Execute(command);
+    Require(
+        failed.status == MaterialInstancePreviewCommandStatus::Failed &&
+            failed.errorCode == MaterialInstancePreviewErrorCode::PreviewPrepareFailed &&
+            failed.documentRevision == 10 &&
+            failed.payload.appliedDocumentRevision == 9 &&
+            failed.payload.previewStatus.appliedDocumentRevision == 9 &&
+            failed.payload.previewStatus.liveGeneration == generation &&
+            !failed.payload.liveSwapCommitted,
+        "failed candidate published a new effective revision or generation");
+
+    command.commandId = 803;
+    command.type =
+        MaterialInstancePreviewCommandType::RestoreMaterialInstancePreviewBaseline;
+    command.payload = RestoreMaterialInstancePreviewBaselinePayload{
+        path, 10,
+        MaterialInstancePreviewDraft{path, 10, "{\"parameters\":{\"u_scalar\":0.5}}"}};
+    const auto restored = controller.Execute(command);
+    Require(
+        restored.status == MaterialInstancePreviewCommandStatus::Succeeded &&
+            restored.payload.appliedDocumentRevision == 10 &&
+            restored.payload.previewStatus.liveGeneration == generation &&
+            adapter.executeCommands.back().draft->serializedWorkingDraft ==
+                "{\"parameters\":{\"u_scalar\":0.5}}",
+        "Restore did not use the baseline on the surviving connection");
+
+    command.commandId = 804;
+    command.type = MaterialInstancePreviewCommandType::ApplyMaterialInstancePreview;
+    command.payload = VL::Editor::Preview::ApplyMaterialInstancePreviewPayload{
+        MaterialInstancePreviewDraft{path, 10, "{\"parameters\":{\"u_scalar\":0.7}}"}};
+    Require(
+        controller.Execute(command).status == MaterialInstancePreviewCommandStatus::Succeeded,
+        "corrected draft could not Apply after failed candidate and Restore");
+}
+
+void TestIncompleteResourceSwapDoesNotAdvanceAdapterRevision()
+{
+    class Session final : public IRendererMaterialInstancePreviewSession
+    {
+    public:
+        MaterialInstancePreviewAdapterResult Apply(
+            const MaterialInstancePreviewDraft&) override
+        {
+            MaterialInstancePreviewAdapterResult result;
+            result.status = PreviewAdapterOperationStatus::Completed;
+            result.replacesLiveResource = true;
+            result.runtimeResourceGeneration = 2;
+            return result;
+        }
+
+        MaterialInstancePreviewAdapterResult RestoreBaseline(
+            const MaterialInstancePreviewDraft&) override
+        {
+            MaterialInstancePreviewAdapterResult result;
+            result.status = PreviewAdapterOperationStatus::Completed;
+            result.liveSwapCommitted = true;
+            return result;
+        }
+    };
+    class Owner final : public IRendererMaterialInstancePreviewOwner
+    {
+    public:
+        std::optional<MaterialInstancePreviewWorldIdentity>
+        GetActiveWorldIdentity() const override
+        {
+            return MaterialInstancePreviewWorldIdentity{4, "scenes/scene_editor.json"};
+        }
+
+        MaterialInstancePreviewAdapterResult CommitMaterialInstancePreviewDraft(
+            const MaterialInstancePreviewWorldIdentity&,
+            const NormalizedMaterialInstancePath&,
+            const MaterialInstancePreviewDraft&) override
+        {
+            return {};
+        }
+
+        MaterialInstancePreviewAdapterResult CaptureMaterialInstancePreviewSession(
+            const MaterialInstancePreviewAdapterCommand&,
+            std::shared_ptr<IRendererMaterialInstancePreviewSession>& outSession) override
+        {
+            outSession = std::make_shared<Session>();
+            MaterialInstancePreviewAdapterResult result;
+            result.status = PreviewAdapterOperationStatus::Completed;
+            result.runtimeResourceGeneration = 1;
+            return result;
+        }
+    };
+
+    Owner owner;
+    RendererOwnedMaterialInstancePreviewAdapter adapter(owner);
+    MaterialInstancePreviewController controller(adapter);
+    const auto world = *owner.GetActiveWorldIdentity();
+    const std::string path = "materials/MI_editor_test.json";
+    controller.NotifyActiveWorldChanged(world);
+    MaterialInstancePreviewCommand command;
+    command.commandId = 810;
+    command.type = MaterialInstancePreviewCommandType::ConnectMaterialInstancePreview;
+    command.expectedDocumentRevision = 9;
+    command.payload = ConnectMaterialInstancePreviewPayload{world, path, 9};
+    Require(
+        controller.Execute(command).status == MaterialInstancePreviewCommandStatus::Succeeded,
+        "renderer-owned adapter did not connect");
+
+    command.commandId = 811;
+    command.type = MaterialInstancePreviewCommandType::ApplyMaterialInstancePreview;
+    command.expectedDocumentRevision = 10;
+    command.payload = VL::Editor::Preview::ApplyMaterialInstancePreviewPayload{
+        MaterialInstancePreviewDraft{path, 10, "{}"}};
+    const auto failed = controller.Execute(command);
+    Require(
+        failed.errorCode == MaterialInstancePreviewErrorCode::PreviewCommitFailed &&
+            !failed.payload.appliedDocumentRevision.has_value(),
+        "incomplete live swap was published");
+
+    command.commandId = 812;
+    command.type =
+        MaterialInstancePreviewCommandType::RestoreMaterialInstancePreviewBaseline;
+    command.expectedDocumentRevision = 9;
+    command.payload = RestoreMaterialInstancePreviewBaselinePayload{
+        path, 9, MaterialInstancePreviewDraft{path, 9, "{\"baseline\":true}"}};
+    Require(
+        controller.Execute(command).status == MaterialInstancePreviewCommandStatus::Succeeded,
+        "incomplete resource swap advanced the adapter revision or bridge generation");
+}
+
+void TestFailedRestorePreservesEffectiveRevision()
+{
+    using material_instance_editor_test::FakeMaterialInstancePreviewAdapter;
+    FakeMaterialInstancePreviewAdapter adapter;
+    MaterialInstancePreviewController controller(adapter);
+    const MaterialInstancePreviewWorldIdentity world{
+        4, "scenes/scene_editor.json"};
+    const std::string path = "materials/MI_editor_test.json";
+    controller.NotifyActiveWorldChanged(world);
+
+    MaterialInstancePreviewCommand command;
+    command.commandId = 820;
+    command.type = MaterialInstancePreviewCommandType::ConnectMaterialInstancePreview;
+    command.expectedDocumentRevision = 9;
+    command.payload = ConnectMaterialInstancePreviewPayload{world, path, 9};
+    Require(
+        controller.Execute(command).status == MaterialInstancePreviewCommandStatus::Succeeded,
+        "preview connection failed before Restore coverage");
+
+    command.commandId = 821;
+    command.type = MaterialInstancePreviewCommandType::ApplyMaterialInstancePreview;
+    command.expectedDocumentRevision = 10;
+    command.payload = VL::Editor::Preview::ApplyMaterialInstancePreviewPayload{
+        MaterialInstancePreviewDraft{path, 10, "{\"working\":true}"}};
+    Require(
+        controller.Execute(command).payload.appliedDocumentRevision == 10,
+        "working draft was not effective before Restore");
+    const uint64_t generation = controller.GetStatus().liveGeneration;
+
+    MaterialInstancePreviewAdapterResult failure;
+    failure.status = PreviewAdapterOperationStatus::Failed;
+    failure.failureStage = PreviewAdapterFailureStage::Prepare;
+    failure.message = "baseline candidate failed";
+    adapter.QueueExecuteResult(failure);
+    command.commandId = 822;
+    command.type =
+        MaterialInstancePreviewCommandType::RestoreMaterialInstancePreviewBaseline;
+    command.expectedDocumentRevision = 11;
+    command.expectedPreviewGeneration = generation;
+    command.payload = RestoreMaterialInstancePreviewBaselinePayload{
+        path, 11, MaterialInstancePreviewDraft{path, 11, "{\"baseline\":true}"}};
+    const auto failed = controller.Execute(command);
+    Require(
+        failed.status == MaterialInstancePreviewCommandStatus::Failed &&
+            failed.errorCode == MaterialInstancePreviewErrorCode::PreviewPrepareFailed &&
+            failed.documentRevision == 11 &&
+            failed.payload.appliedDocumentRevision == 10 &&
+            failed.payload.previewStatus.appliedDocumentRevision == 10 &&
+            failed.payload.previewStatus.liveGeneration == generation,
+        "failed Restore replaced the effective working revision");
+
+    command.commandId = 823;
+    const auto restored = controller.Execute(command);
+    Require(
+        restored.status == MaterialInstancePreviewCommandStatus::Succeeded &&
+            restored.payload.appliedDocumentRevision == 11 &&
+            adapter.executeCommands.back().draft->serializedWorkingDraft ==
+                "{\"baseline\":true}",
+        "baseline could not be restored on the surviving connection");
+}
+
 } // namespace
 
 TEST(MaterialInstanceEditorLanded, CommandSchema)
@@ -1411,4 +1635,19 @@ TEST(MaterialInstanceEditorLanded, PreviewTypes)
 TEST(MaterialInstanceEditorLanded, PreviewProtocolBoundaries)
 {
     TestLandedPreviewProtocolBoundaries();
+}
+
+TEST(MaterialInstanceEditorLanded, FailedPreviewCandidatePreservesEffectiveRevision)
+{
+    TestFailedPreviewCandidatePreservesEffectiveRevision();
+}
+
+TEST(MaterialInstanceEditorLanded, IncompleteResourceSwapDoesNotAdvanceAdapterRevision)
+{
+    TestIncompleteResourceSwapDoesNotAdvanceAdapterRevision();
+}
+
+TEST(MaterialInstanceEditorLanded, FailedRestorePreservesEffectiveRevision)
+{
+    TestFailedRestorePreservesEffectiveRevision();
 }

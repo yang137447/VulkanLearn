@@ -1,6 +1,7 @@
 #include "renderableObject.h"
 #include "vertexDataStruct.h"
 #include "render/backend/rendererBackendVulkan.h"
+#include "mesh/loader/common/meshAssetLoader.h"
 
 #include <cstring>
 
@@ -22,6 +23,35 @@ RenderableObject::RenderableObject(
     // 创建索引缓冲区
     CreateIndexBuffer();
 }
+RenderableObject::RenderableObject(
+    std::shared_ptr<const MeshAssetImportResult> importedResource,
+    size_t sectionIndex,
+    VL::RendererBackendVulkan& backend,
+    const std::string& objectName)
+    : imported(std::move(importedResource))
+    , importedSectionIndex(sectionIndex)
+{
+    if (!imported || sectionIndex >= imported->modelResource.sections.size())
+        throw std::invalid_argument("Invalid imported mesh section");
+    rendererBackend = &backend;
+    name = objectName;
+    UpdateLocalBounds();
+    CreateVertexBuffer();
+    CreateIndexBuffer();
+}
+
+const std::vector<Vertex>& RenderableObject::GetVertices() const
+{
+    return imported ? imported->modelResource.sections[importedSectionIndex].vertices
+                    : vertices;
+}
+
+const std::vector<uint32_t>& RenderableObject::GetIndices() const
+{
+    return imported ? imported->modelResource.sections[importedSectionIndex].indices
+                    : indices;
+}
+
 RenderableObject::~RenderableObject()
 {
     // 销毁索引缓冲区
@@ -37,12 +67,13 @@ void RenderableObject::Draw(vk::CommandBuffer &commandBuffer)
     // 视口覆盖回整张资源。
     commandBuffer.bindVertexBuffers(0, 1, &vertexBuffer, &vertexBufferInfo.offset);
     commandBuffer.bindIndexBuffer(indexBuffer, 0, vk::IndexType::eUint32);
-    commandBuffer.drawIndexed(indices.size(), 1, 0, 0, 0);
+    commandBuffer.drawIndexed(GetIndices().size(), 1, 0, 0, 0);
 }
 
 void RenderableObject::CreateVertexBuffer()
 {
-    vk::DeviceSize bufferSize = vertices.size() * sizeof(Vertex);
+    const auto& sourceVertices = GetVertices();
+    vk::DeviceSize bufferSize = sourceVertices.size() * sizeof(Vertex);
     vk::Buffer stagingBuffer;
     vk::DeviceMemory stagingBufferMemory;
     vk::BufferUsageFlags usage = vk::BufferUsageFlagBits::eTransferSrc;
@@ -54,7 +85,7 @@ void RenderableObject::CreateVertexBuffer()
         "StagingBuffer: Vertex (" + name + ")");
 
     void *data = rendererBackend->MapMemory(stagingBufferMemory, bufferSize);
-    std::memcpy(data, vertices.data(), static_cast<size_t>(bufferSize));
+    std::memcpy(data, sourceVertices.data(), static_cast<size_t>(bufferSize));
     rendererBackend->UnmapMemory(stagingBufferMemory);
 
     vk::BufferUsageFlags vertexBufferUsage = vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst;
@@ -71,7 +102,7 @@ void RenderableObject::CreateVertexBuffer()
     vertexBufferInfo
         .setBuffer(vertexBuffer)
         .setOffset(0)
-        .setRange(vertices.size() * sizeof(Vertex));
+        .setRange(sourceVertices.size() * sizeof(Vertex));
 }
 
 void RenderableObject::DestroyVertexBuffer()
@@ -86,7 +117,8 @@ void RenderableObject::DestroyVertexBuffer()
 
 void RenderableObject::CreateIndexBuffer()
 {
-    vk::DeviceSize bufferSize = indices.size() * sizeof(uint32_t);
+    const auto& sourceIndices = GetIndices();
+    vk::DeviceSize bufferSize = sourceIndices.size() * sizeof(uint32_t);
     vk::Buffer stagingBuffer;
     vk::DeviceMemory stagingBufferMemory;
     vk::BufferUsageFlags usage = vk::BufferUsageFlagBits::eTransferSrc;
@@ -98,7 +130,7 @@ void RenderableObject::CreateIndexBuffer()
         "StagingBuffer: Index (" + name + ")");
 
     void *data = rendererBackend->MapMemory(stagingBufferMemory, bufferSize);
-    std::memcpy(data, indices.data(), static_cast<size_t>(bufferSize));
+    std::memcpy(data, sourceIndices.data(), static_cast<size_t>(bufferSize));
     rendererBackend->UnmapMemory(stagingBufferMemory);
 
     vk::BufferUsageFlags indexBufferUsage = vk::BufferUsageFlagBits::eIndexBuffer | vk::BufferUsageFlagBits::eTransferDst;
@@ -115,7 +147,7 @@ void RenderableObject::CreateIndexBuffer()
     indexBufferInfo
         .setBuffer(indexBuffer)
         .setOffset(0)
-        .setRange(indices.size() * sizeof(indices[0]));
+        .setRange(sourceIndices.size() * sizeof(uint32_t));
 }
 
 void RenderableObject::DestroyIndexBuffer()
@@ -129,16 +161,17 @@ void RenderableObject::DestroyIndexBuffer()
 }
 void RenderableObject::UpdateLocalBounds()
 {
-    if (vertices.empty())
+    const auto& sourceVertices = GetVertices();
+    if (sourceVertices.empty())
     {
         boundsMin = Eigen::Vector3f(0.0f, 0.0f, 0.0f);
         boundsMax = Eigen::Vector3f(0.0f, 0.0f, 0.0f);
         return;
     }
 
-    boundsMin = vertices[0].position;
-    boundsMax = vertices[0].position;
-    for (const auto& vertex : vertices)
+    boundsMin = sourceVertices[0].position;
+    boundsMax = sourceVertices[0].position;
+    for (const auto& vertex : sourceVertices)
     {
         boundsMin = boundsMin.cwiseMin(vertex.position);
         boundsMax = boundsMax.cwiseMax(vertex.position);

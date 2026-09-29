@@ -25,11 +25,13 @@
 
 #include "engine/diagnosticsSubsystem.h"
 #include "engine/runtimeCommand.h"
+#include "core/renderSession.h"
 #include "editor/selection/materialInstanceSelection.h"
 #include "editor/runtime/materialInstanceEditorRuntime.h"
 #include "editor/ui/materialInstanceAssetEditorPanel.h"
 #include "platform/platformEvent.h"
 #include "platform/platformWindow.h"
+#include "ui/sceneObjectTypeSupport.h"
 
 namespace VL
 {
@@ -43,8 +45,15 @@ constexpr float GamepadNavigationThreshold = 0.55f;
 constexpr const char* DeveloperDockSpaceName = "VulkanLearnDeveloperDockSpace";
 constexpr const char* MaterialInstanceNavigationWindowName = "Material Instance Navigation";
 constexpr const char* MaterialInstanceInspectorWindowName = "Material Instance Inspector";
-constexpr float NavigationDockWidthFraction = 0.18f;
+constexpr const char* OfflineRendererWindowName = "Offline Renderer";
+constexpr float NavigationDockWidthFraction = 0.28f;
+constexpr float NavigationDockHeightFraction = 0.35f;
 constexpr float InspectorDockWidthFraction = 0.30f;
+// InputInt 内部禁用 EnterReturnsTrue；数值变化时仍按原值域校验后提交。
+constexpr ImGuiInputTextFlags OfflineInputIntFlags = ImGuiInputTextFlags_None;
+static_assert(
+    (OfflineInputIntFlags & ImGuiInputTextFlags_EnterReturnsTrue) == 0,
+    "Offline InputInt must not use EnterReturnsTrue");
 
 void BuildDefaultDeveloperDockLayout(
     ImGuiID dockspaceId,
@@ -74,7 +83,18 @@ void BuildDefaultDeveloperDockLayout(
         &rightNode,
         &centerNode);
 
-    ImGui::DockBuilderDockWindow(MaterialInstanceNavigationWindowName, leftNode);
+    ImGuiID navigationNode = 0;
+    ImGuiID offlineNode = 0;
+    // 左栏上下分区让离线控件和反馈有固定空间，不再以浮窗遮住导航；
+    // 中央节点仍不放 ImGui 窗口，保留真实 Vulkan 视口。
+    ImGui::DockBuilderSplitNode(
+        leftNode,
+        ImGuiDir_Up,
+        NavigationDockHeightFraction,
+        &navigationNode,
+        &offlineNode);
+    ImGui::DockBuilderDockWindow(MaterialInstanceNavigationWindowName, navigationNode);
+    ImGui::DockBuilderDockWindow(OfflineRendererWindowName, offlineNode);
     ImGui::DockBuilderDockWindow(MaterialInstanceInspectorWindowName, rightNode);
     // 中央 Dock 保持为空，让真实 SDL3/Vulkan framebuffer 贯穿窗口，不再被
     // 一个仅用于占位的 ImGui 3D Viewport 窗口覆盖或改变输入区域。
@@ -140,33 +160,6 @@ bool IsSceneOptionLess(const UiSceneOption& left, const UiSceneOption& right)
         return left.label < right.label;
     }
     return left.path < right.path;
-}
-
-bool IsSupportedSceneObjectType(std::string_view type)
-{
-    return type == "mesh" ||
-        type == "terrain" ||
-        type == "directionalLight" ||
-        type == "pointLight" ||
-        type == "spotLight" ||
-        type == "camera" ||
-        type == "environment";
-}
-
-bool HasSupportedSceneObjectTypes(const nlohmann::json& sceneJson)
-{
-    for (const nlohmann::json& objectJson : sceneJson["objects"])
-    {
-        if (!objectJson.is_object() ||
-            !objectJson.contains("type") ||
-            !objectJson["type"].is_string() ||
-            !IsSupportedSceneObjectType(
-                objectJson["type"].get<std::string>()))
-        {
-            return false;
-        }
-    }
-    return true;
 }
 
 Rml::Input::KeyIdentifier ToRmlKey(PlatformKey key)
@@ -594,7 +587,9 @@ void UiSubsystem::Update(const UiViewModelSnapshot& viewModelSnapshot)
         return;
     }
 
+    UiViewModelSnapshot previous = std::move(lastViewModel);
     lastViewModel = viewModelSnapshot;
+    ReconcileOfflineModeFeedback(lastViewModel, previous);
     lastViewModel.runtimePageVisible = runtimePageVisible;
     lastViewModel.developerUiVisible = developerUiVisible;
     lastViewModel.locale = currentLocale;
@@ -2291,6 +2286,189 @@ void UiSubsystem::BuildDeveloperPanels()
         dockspaceId,
         mainViewport,
         ImGuiDockNodeFlags_PassthruCentralNode);
+
+    if (ImGui::Begin(OfflineRendererWindowName))
+    {
+        int mode = lastViewModel.offlineMode ? 1 : 0;
+        if (ImGui::RadioButton("Realtime", mode == 0))
+        {
+            lastViewModel.offlineRequestedMode = 0;
+            lastViewModel.offlineUiNotice.clear();
+            UiAction action;
+            action.type = UiActionType::SetOfflineMode;
+            action.intValue = 0;
+            QueueAction(std::move(action));
+        }
+        ImGui::SameLine();
+        if (ImGui::RadioButton("Offline", mode == 1))
+        {
+            lastViewModel.offlineRequestedMode = 1;
+            lastViewModel.offlineUiNotice.clear();
+            UiAction action;
+            action.type = UiActionType::SetOfflineMode;
+            action.intValue = 1;
+            QueueAction(std::move(action));
+        }
+        // 拒绝原因紧邻模式选择；底部控件需要滚动时仍可直接看到失败反馈。
+        if (!lastViewModel.offlineUiNotice.empty())
+        {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.65f, 0.35f, 1.0f));
+            ImGui::TextWrapped("%s", lastViewModel.offlineUiNotice.c_str());
+            ImGui::PopStyleColor();
+        }
+        if (!lastViewModel.offlineError.empty())
+        {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.45f, 0.45f, 1.0f));
+            ImGui::TextWrapped("%s", lastViewModel.offlineError.c_str());
+            ImGui::PopStyleColor();
+        }
+        ImGui::Separator();
+        int samples = lastViewModel.offlineSamples;
+        if (ImGui::InputInt("Samples", &samples, 1, 100, OfflineInputIntFlags))
+        {
+            if (const char* error = OfflineSettingValidationError("samples", samples))
+                lastViewModel.offlineUiNotice = error;
+            else
+            {
+                lastViewModel.offlineUiNotice.clear();
+                UiAction action;
+                action.type = UiActionType::SetOfflineSetting;
+                action.stringValue = "samples";
+                action.intValue = samples;
+                QueueAction(std::move(action));
+            }
+        }
+        int bounces = lastViewModel.offlineBounces;
+        if (ImGui::InputInt("Bounces", &bounces, 1, 10, OfflineInputIntFlags))
+        {
+            if (const char* error = OfflineSettingValidationError("bounces", bounces))
+                lastViewModel.offlineUiNotice = error;
+            else
+            {
+                lastViewModel.offlineUiNotice.clear();
+                UiAction action;
+                action.type = UiActionType::SetOfflineSetting;
+                action.stringValue = "bounces";
+                action.intValue = bounces;
+                QueueAction(std::move(action));
+            }
+        }
+        int lightSamples = lastViewModel.offlineLightSamples;
+        if (ImGui::InputInt("Light samples", &lightSamples, 1, 10, OfflineInputIntFlags))
+        {
+            if (const char* error = OfflineSettingValidationError("lightSamples", lightSamples))
+                lastViewModel.offlineUiNotice = error;
+            else
+            {
+                lastViewModel.offlineUiNotice.clear();
+                UiAction action;
+                action.type = UiActionType::SetOfflineSetting;
+                action.stringValue = "lightSamples";
+                action.intValue = lightSamples;
+                QueueAction(std::move(action));
+            }
+        }
+        int seed = lastViewModel.offlineSeed;
+        if (ImGui::InputInt("Seed", &seed, 1, 100, OfflineInputIntFlags))
+        {
+            if (const char* error = OfflineSettingValidationError("seed", seed))
+                lastViewModel.offlineUiNotice = error;
+            else
+            {
+                lastViewModel.offlineUiNotice.clear();
+                UiAction action;
+                action.type = UiActionType::SetOfflineSetting;
+                action.stringValue = "seed";
+                action.intValue = seed;
+                QueueAction(std::move(action));
+            }
+        }
+        const char* aovs[] = {"Combined", "Direct", "Indirect"};
+        int aov = lastViewModel.offlineAov;
+        if (ImGui::Combo("AOV", &aov, aovs, 3))
+        {
+            UiAction action;
+            action.type = UiActionType::SetOfflineAov;
+            action.intValue = aov;
+            QueueAction(std::move(action));
+        }
+        float exposure = lastViewModel.offlineExposure;
+        if (ImGui::SliderFloat("Exposure", &exposure, 0.05f, 8.0f))
+        {
+            UiAction action;
+            action.type = UiActionType::SetOfflineExposure;
+            action.floatValue = exposure;
+            QueueAction(std::move(action));
+        }
+        ImGui::Text("%d / %d spp", lastViewModel.offlineCompletedSamples,
+            lastViewModel.offlineSamples);
+        const auto state = static_cast<Offline::SessionState>(lastViewModel.offlineState);
+        const char* stateName = "Unknown";
+        switch (state)
+        {
+        case Offline::SessionState::Idle: stateName = "Idle"; break;
+        case Offline::SessionState::Preparing: stateName = "Preparing"; break;
+        case Offline::SessionState::Rendering: stateName = "Rendering"; break;
+        case Offline::SessionState::Paused: stateName = "Paused"; break;
+        case Offline::SessionState::Completed: stateName = "Completed"; break;
+        case Offline::SessionState::Canceled: stateName = "Stopped"; break;
+        case Offline::SessionState::Failed: stateName = "Failed"; break;
+        }
+        ImGui::Text("Session: %s", lastViewModel.offlineMode ? stateName : "Inactive");
+        const bool canPause = lastViewModel.offlineMode &&
+            (state == Offline::SessionState::Preparing ||
+             state == Offline::SessionState::Rendering);
+        const bool canResume = lastViewModel.offlineMode && state == Offline::SessionState::Paused;
+        ImGui::BeginDisabled(!canPause);
+        if (ImGui::Button("Pause"))
+        {
+            UiAction action;
+            action.type = UiActionType::ControlOfflineSession;
+            action.intValue = 0;
+            QueueAction(std::move(action));
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!canResume);
+        if (ImGui::Button("Resume"))
+        {
+            UiAction action;
+            action.type = UiActionType::ControlOfflineSession;
+            action.intValue = 1;
+            QueueAction(std::move(action));
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!canPause && !canResume);
+        if (ImGui::Button("Stop"))
+        {
+            UiAction action;
+            action.type = UiActionType::ControlOfflineSession;
+            action.intValue = 2;
+            QueueAction(std::move(action));
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!lastViewModel.offlineMode);
+        if (ImGui::Button("Restart"))
+        {
+            UiAction action;
+            action.type = UiActionType::ControlOfflineSession;
+            action.intValue = 3;
+            QueueAction(std::move(action));
+        }
+        ImGui::EndDisabled();
+        ImGui::BeginDisabled(!lastViewModel.offlineMode ||
+            lastViewModel.offlineCompletedSamples == 0);
+        if (ImGui::Button("Export"))
+        {
+            UiAction action;
+            action.type = UiActionType::ExportOffline;
+            QueueAction(std::move(action));
+        }
+        ImGui::EndDisabled();
+    }
+    ImGui::End();
 
     // 同一帧只冻结一次编辑器快照，左右 Dock 窗口共享完全相同的数据视图。
     if (materialInstanceEditorPanel != nullptr &&

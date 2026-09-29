@@ -629,6 +629,7 @@ void RenderGraph::SwapState(RenderGraph& other) noexcept
     compiledFrameGraph.resourceUsagePlans.swap(
         other.compiledFrameGraph.resourceUsagePlans);
     descriptorPlanCache.Swap(other.descriptorPlanCache);
+    sourceJson.swap(other.sourceJson);
 }
 
 bool RenderGraph::HasState() const noexcept
@@ -698,6 +699,7 @@ void RenderGraph::LoadRenderGraph(
         }
         compiledFrameGraph =
             std::move(compileResult.Value());
+        sourceJson = renderGraphJson;
         descriptorPlanCache.Clear();
 
         uint32_t swapChainImageCount =

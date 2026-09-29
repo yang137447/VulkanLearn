@@ -6,9 +6,11 @@
 #include <utility>
 
 #include "render/resource/rendererResourceLoadCoordinator.h"
+#include "render/offline/offlineWorldAssets.h"
 #include "render/resource/rendererResourceLoadContext.h"
 #include "render/resource/rendererResourceCache.h"
 #include "renderGraph.h"
+#include "renderSystem.h"
 #include "sceneNode.h"
 #include "world/loading/worldBuilder.h"
 #include "world/loading/worldLoader.h"
@@ -128,6 +130,10 @@ WorldTransitionCoordinator::PrepareWorldLoad(
             RendererResourceCache::GetInstance();
 
         PreparedWorldTransition prepared;
+        prepared.offlineWorldAssets = std::make_shared<OfflineWorldAssets>();
+        prepared.offlineWorldAssets->worldGeneration = worldGeneration;
+        prepared.offlineWorldAssets->scenePath = scenePath;
+        prepared.offlineWorldAssets->sceneJson = worldBuildPlan.sceneJson;
         prepared.resourceCache =
             std::make_shared<RendererResourceCache>(
                 activeCache.BeginCandidate(worldGeneration));
@@ -142,6 +148,10 @@ WorldTransitionCoordinator::PrepareWorldLoad(
             materialDefinitionReload;
         loadContext.passMaterialBindings =
             &prepared.passMaterialBindings;
+        loadContext.offlineWorldAssets =
+            prepared.offlineWorldAssets.get();
+        loadContext.offlineOnly = RenderSystem::GetInstance().IsOfflineMode();
+        prepared.offlineWorldAssets->realtimePrepared = !loadContext.offlineOnly;
 
         RendererWorldResourceLoadResult resourceLoadResult =
             resourceLoadCoordinator.LoadRendererResources(

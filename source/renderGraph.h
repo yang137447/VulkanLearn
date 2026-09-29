@@ -176,6 +176,7 @@ public:
     // 时返回 nullptr。调用方不得跨 RenderGraph shutdown/reload 保存该指针。
     Renderpass* FindCanonicalShadowPass();
     const VL::CompiledRenderGraph& GetCompiledRenderGraph() const { return compiledFrameGraph; }
+    const nlohmann::json& GetSourceJson() const noexcept { return sourceJson; }
     const std::unordered_map<std::string, std::vector<RenderResource>>& GetResourcesMsaa() const { return resourcesMsaa; }
     const std::unordered_map<std::string, std::vector<RenderResource>>& GetResourcesResolve() const { return resourcesResolve; }
     // Initial render-graph setup creates pass-owned descriptors. Runtime
@@ -243,6 +244,7 @@ private:
     std::unordered_map<std::string, Renderpass> renderpasses;
     std::string canonicalShadowPassName;
     VL::CompiledRenderGraph compiledFrameGraph;
+    nlohmann::json sourceJson;
     VL::RendererDescriptorPlanCache descriptorPlanCache;
     uint64_t ownerGeneration = 0;
     TestFaultInjection testFaultInjection;

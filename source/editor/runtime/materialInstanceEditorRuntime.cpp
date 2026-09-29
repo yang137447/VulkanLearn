@@ -1140,7 +1140,7 @@ void MaterialInstanceEditorRuntime::QueueAutomaticPreviewConnection()
         previewController->GetStatus();
     if (previewStatus.materialInstancePath.has_value() &&
         previewStatus.materialInstancePath.value() == pathResult.path.value() &&
-        previewStatus.IsConnected())
+        previewController->HasLiveConnection())
     {
         return;
     }
@@ -1191,7 +1191,7 @@ void MaterialInstanceEditorRuntime::SubmitQueuedAutomaticPreviewConnection()
         previewController->GetStatus();
     if (previewStatus.materialInstancePath.has_value() &&
         previewStatus.materialInstancePath.value() == pathResult.path.value() &&
-        previewStatus.IsConnected())
+        previewController->HasLiveConnection())
     {
         queuedAutomaticPreviewConnectionAssetPath.reset();
         return;

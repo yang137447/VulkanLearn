@@ -130,6 +130,17 @@ std::shared_ptr<SpotLight> BuildSpotLight(const nlohmann::json& node)
     return light;
 }
 
+WorldSquareAreaLight BuildSquareAreaLight(const nlohmann::json& node)
+{
+    WorldSquareAreaLight light;
+    light.position = JsonParser::ParseValue<Eigen::Vector3f>(node["position"]);
+    light.normal = JsonParser::ParseValue<Eigen::Vector3f>(node["normal"]).normalized();
+    light.color = JsonParser::ParseValue<Eigen::Vector3f>(node["color"]);
+    light.size = node["size"].get<float>();
+    light.intensity = node["intensity"].get<float>();
+    return light;
+}
+
 WorldEnvironment BuildEnvironment(const nlohmann::json& node)
 {
     const nlohmann::json& config = node["environment"];
@@ -247,6 +258,11 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
             {
                 AddSpotLightIfFirst(*world, BuildSpotLight(objectJson));
             }
+            else if (type == "squareAreaLight")
+            {
+                world->AddSquareAreaLight(objectPlan.objectName,
+                                          BuildSquareAreaLight(objectJson));
+            }
             else if (type == "environment")
             {
                 environment = BuildEnvironment(objectJson);
@@ -261,7 +277,8 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
                 worldBuildPlan.scenePath));
         }
 
-        SyncEnvironmentWithPrimaryDirectionalLight(environment, *primaryDirectionalLight);
+        if (primaryDirectionalLight)
+            SyncEnvironmentWithPrimaryDirectionalLight(environment, *primaryDirectionalLight);
 
         world->SetEnvironment(environment);
         world->SetCsmSettings(std::move(csmSettings));

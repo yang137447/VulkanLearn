@@ -1,0 +1,19 @@
+{
+  "name": "M_offlineClothFiber",
+  "type": "material",
+  "shadingModel": "DefaultLit",
+  "realtimeSupported": false,
+  "offlineModel": "ClothFiber",
+  "modelProfile": "Generated/OfflineRenderer/Validation/P_linen.json",
+  "renderStates": {"renderMode": "Opaque", "cullMode": "None"},
+  "macros": {},
+  "parameters": {
+    "u_yarnRotationDegrees": {
+      "type": "float", "default": 0,
+      "description": "在 UV 纱线方向或 groom 方向上追加旋转角度"
+    }
+  },
+  "textures": {
+    "groomMap": {"type": "sampler2D", "default": null}
+  }
+}

@@ -408,7 +408,11 @@ RendererBackendVulkan::CaptureImageResourceDebugNames() const
 void RendererBackendVulkan::RecreateSwapchain(int width, int height)
 {
     rhiDevice->RecreateSwapchain(width, height);
+    // RHI 重建前已等待 device idle；旧 fence 对应的提交和退休 epoch 均已完成。
+    ResourceRetireQueue::GetInstance().CollectCompletedEpoch(
+        ResourceRetireQueue::GetInstance().GetLastSubmittedEpoch());
     frameFenceEpochs.assign(rhiDevice->GetFrameFenceCount(), 0);
+    swapchainRecreateRequired.store(false, std::memory_order_release);
 }
 
 std::unique_ptr<PipelineFactory> RendererBackendVulkan::CreatePipelineFactory()
@@ -1714,6 +1718,10 @@ RendererFrameContext RendererBackendVulkan::BeginFrame(uint32_t currentFrame)
     }
 
     RendererFrameContext frameContext;
+    if (NeedsSwapchainRecreate())
+    {
+        return frameContext;
+    }
     frameContext.swapchainImageCount = rhiDevice->GetSwapchainImageCount();
     const uint32_t frameFenceCount = rhiDevice->GetFrameFenceCount();
     if (frameFenceCount == 0)
@@ -1740,9 +1748,18 @@ RendererFrameContext RendererBackendVulkan::BeginFrame(uint32_t currentFrame)
 
     {
         PROFILE_SCOPE("Render:AcquireImage");
-        rhiDevice->AcquireNextSwapchainImage(
+        const SwapchainFrameResult acquireResult = rhiDevice->AcquireNextSwapchainImage(
             frameSync.imageAcquiredSemaphore,
             frameContext.swapchainImageIndex);
+        if (RequiresSwapchainRecreate(acquireResult))
+        {
+            swapchainRecreateRequired.store(true, std::memory_order_release);
+        }
+        if (!HasAcquiredSwapchainImage(acquireResult))
+        {
+            // 未取得 image 时不重置 fence，也不消费 acquire semaphore。
+            return frameContext;
+        }
     }
 
     const vk::Fence imageInFlightFence =
@@ -1765,6 +1782,7 @@ RendererFrameContext RendererBackendVulkan::BeginFrame(uint32_t currentFrame)
     vk::CommandBufferBeginInfo beginInfo;
     beginInfo.setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
     frameContext.commandBuffer.begin(beginInfo);
+    frameContext.ready = true;
     return frameContext;
 }
 
@@ -1851,9 +1869,14 @@ void RendererBackendVulkan::SubmitFrame(
 
     {
         PROFILE_SCOPE("Render:Present");
-        rhiDevice->PresentSwapchainImage(
+        const SwapchainFrameResult presentResult = rhiDevice->PresentSwapchainImage(
             submitPlan.renderFinishedSemaphore,
             submitPlan.swapchainImageIndex);
+        if (RequiresSwapchainRecreate(presentResult))
+        {
+            // 提交和 epoch 已登记；即使 present 失效也必须等 GT 的安全边界重建。
+            swapchainRecreateRequired.store(true, std::memory_order_release);
+        }
     }
 }
 

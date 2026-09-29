@@ -38,6 +38,19 @@ namespace
         return normalized.begin() == normalized.end() || *normalized.begin() != "..";
     }
 
+    bool IsModelProfileReference(const nlohmann::json& value)
+    {
+        if (!value.is_string() || value.get<std::string>().empty())
+            return false;
+        const std::filesystem::path path(value.get<std::string>());
+        if (path.is_absolute() || path.has_root_name())
+            return false;
+        for (const auto& component : path.lexically_normal())
+            if (component == "..")
+                return false;
+        return true;
+    }
+
     void ValidateMaterialEvaluationPaths(
         const nlohmann::json& evaluation,
         std::string_view materialPath)
@@ -246,6 +259,26 @@ void MaterialAssetValidator::ValidateDefinition(
     RequireObjectField(materialJson, "parameters", materialPath);
     RequireObjectField(materialJson, "textures", materialPath);
     MaterialAssetUtils::ShadingModelToId(materialJson["shadingModel"].get<std::string>());
+    if (materialJson.contains("realtimeSupported") &&
+        !materialJson["realtimeSupported"].is_boolean())
+        throw std::runtime_error("realtimeSupported must be boolean: " + std::string(materialPath));
+    if (!materialJson.value("realtimeSupported", true) &&
+        !materialJson.contains("offlineModel"))
+        throw std::runtime_error("Offline-only definition requires offlineModel: " + std::string(materialPath));
+    if (materialJson.contains("offlineModel"))
+    {
+        if (!materialJson["offlineModel"].is_string() ||
+            (materialJson["offlineModel"] != "Lambert" &&
+             materialJson["offlineModel"] != "ClothSheen" &&
+             materialJson["offlineModel"] != "ClothFiber"))
+            throw std::runtime_error("Unknown offlineModel in material definition: " +
+                                     std::string(materialPath));
+    }
+
+    if (materialJson.contains("modelProfile") &&
+        !IsModelProfileReference(materialJson["modelProfile"]))
+        throw std::runtime_error("modelProfile must be a non-empty asset path: " +
+                                 std::string(materialPath));
     const auto& renderStates = materialJson["renderStates"];
     ValidateRenderStateCombination(
         materialJson["shadingModel"].get<std::string>(),
@@ -357,7 +390,8 @@ void MaterialAssetValidator::ValidateInstanceHeader(
         "textures",
         "subsurfaceProfile",
         "skinLut",
-        "eyeProfile"
+        "eyeProfile",
+        "modelProfile"
     };
     for (const auto& [field, value] : materialInstanceJson.items())
     {
@@ -415,6 +449,10 @@ void MaterialAssetValidator::ValidateInstanceHeader(
             "eyeProfile must be a non-empty asset path string: " +
             std::string(materialInstancePath));
     }
+    if (materialInstanceJson.contains("modelProfile") &&
+        !IsModelProfileReference(materialInstanceJson["modelProfile"]))
+        throw std::runtime_error("modelProfile must be a non-empty asset path: " +
+                                 std::string(materialInstancePath));
 }
 
 void MaterialAssetValidator::ValidateInstanceOverrides(
@@ -422,6 +460,12 @@ void MaterialAssetValidator::ValidateInstanceOverrides(
     const nlohmann::json& materialInstanceJson,
     std::string_view materialInstancePath)
 {
+    if (materialInstanceJson.contains("modelProfile") &&
+        (!materialJson.contains("modelProfile") ||
+         materialInstanceJson["modelProfile"] == materialJson["modelProfile"]))
+        throw std::runtime_error(
+            "modelProfile override requires a different M_ default: " +
+            std::string(materialInstancePath));
     const nlohmann::json emptyObject = nlohmann::json::object();
     const auto& macroOverrides = materialInstanceJson.value("macros", emptyObject);
     const auto& parameterOverrides = materialInstanceJson.value("parameters", emptyObject);

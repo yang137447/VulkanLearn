@@ -19,4 +19,10 @@ public:
     static MaterialInstanceResolveResult Resolve(
         std::string_view materialInstancePath,
         const nlohmann::json& materialInstanceJson);
+
+    // 预览沿用 World 提交时冻结的 M_，避免磁盘默认值在中途变化造成双路径分叉。
+    static MaterialInstanceResolveResult ResolveWithDefinition(
+        std::string_view materialInstancePath,
+        const nlohmann::json& materialInstanceJson,
+        const nlohmann::json& materialDefinitionJson);
 };

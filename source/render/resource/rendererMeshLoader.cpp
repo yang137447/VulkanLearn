@@ -6,9 +6,11 @@
 
 #include "commonFunction.h"
 #include "material.h"
+#include "material/materialAssetUtils.h"
 #include "materialInstance.h"
 #include "mesh/loader/common/meshAssetLoader.h"
 #include "pipeline/pipelineFactory.h"
+#include "render/offline/offlineWorldAssets.h"
 #include "render/backend/rendererBackendVulkan.h"
 #include "render/resource/rendererMaterialLoader.h"
 #include "render/resource/rendererResourceCache.h"
@@ -62,7 +64,26 @@ RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
     const nlohmann::basic_json<>& node,
     const MeshAssetLoadRequest& meshLoadRequest) const
 {
-    MeshAssetImportResult importResult = MeshAssetLoader::ImportSections(meshLoadRequest);
+    std::shared_ptr<const MeshAssetImportResult> imported;
+    if (loadContext.offlineWorldAssets != nullptr)
+    {
+        auto& imports = loadContext.offlineWorldAssets->meshImports;
+        const auto found = imports.find(meshLoadRequest.buildPlan.meshAssetPath);
+        if (found != imports.end())
+            imported = found->second;
+        else
+        {
+            imported = std::make_shared<const MeshAssetImportResult>(
+                MeshAssetLoader::ImportSections(meshLoadRequest));
+            imports.emplace(meshLoadRequest.buildPlan.meshAssetPath, imported);
+        }
+    }
+    else
+    {
+        imported = std::make_shared<const MeshAssetImportResult>(
+            MeshAssetLoader::ImportSections(meshLoadRequest));
+    }
+    const MeshAssetImportResult& importResult = *imported;
     const MeshAssetBuildPlan& buildPlan = importResult.buildPlan;
     const ModelResource& modelResource = importResult.modelResource;
     const std::vector<MeshSectionLoadPlan>& sectionPlans = importResult.sectionPlans;
@@ -100,8 +121,16 @@ RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
         const MeshSectionLoadPlan& sectionPlan = sectionPlans[sectionIndex];
         std::string renderableObjectKey =
             buildPlan.modelCacheKey + "|" + std::to_string(sectionIndex) + "|" + section.sectionName;
+        if (loadContext.offlineWorldAssets != nullptr)
+        {
+            loadContext.offlineWorldAssets->sections.emplace(
+                renderableObjectKey,
+                OfflineWorldAssets::Section{imported, sectionIndex});
+        }
 
         std::shared_ptr<RenderableObject> renderableObject;
+        if (!loadContext.offlineOnly)
+        {
         const std::shared_ptr<RenderableObject>* cachedRenderableObject =
             resourceCache.GetRenderableObject(renderableObjectKey);
         if(cachedRenderableObject != nullptr && *cachedRenderableObject != nullptr)
@@ -111,11 +140,12 @@ RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
         else
         {
             renderableObject = std::make_shared<RenderableObject>(
-                section.vertices,
-                section.indices,
+                imported,
+                sectionIndex,
                 rendererBackend,
                 renderableObjectKey);
             resourceCache.BindRenderableObject(renderableObjectKey, renderableObject);
+        }
         }
 
         std::shared_ptr<MaterialInstance> materialInstance =
@@ -140,11 +170,28 @@ RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
         meshObjectPlan.materialSlotName = sectionPlan.materialSlotName;
         meshObjectPlan.debugName = meshObjectName;
         meshObjectPlan.model = BuildModelMatrix(position, rotation, scale);
-        meshObjectPlan.localBoundsMin = renderableObject->GetBoundsMin();
-        meshObjectPlan.localBoundsMax = renderableObject->GetBoundsMax();
-        meshObjectPlan.meshKey = renderableObject->GetName();
-        meshObjectPlan.materialKey = materialInstance->GetBaseMaterial().lock()->GetMaterialKey();
-        meshObjectPlan.materialInstanceKey = materialInstance->GetName();
+        meshObjectPlan.localBoundsMin = section.vertices.front().position;
+        meshObjectPlan.localBoundsMax = section.vertices.front().position;
+        for (const auto& vertex : section.vertices)
+        {
+            meshObjectPlan.localBoundsMin = meshObjectPlan.localBoundsMin.cwiseMin(vertex.position);
+            meshObjectPlan.localBoundsMax = meshObjectPlan.localBoundsMax.cwiseMax(vertex.position);
+        }
+        meshObjectPlan.meshKey = renderableObjectKey;
+        if (materialInstance)
+        {
+            meshObjectPlan.materialKey = materialInstance->GetBaseMaterial().lock()->GetMaterialKey();
+            meshObjectPlan.materialInstanceKey = materialInstance->GetName();
+        }
+        else
+        {
+            // 逻辑身份不代表 GPU Material；离线路径不会 resolve GPU groups。
+            meshObjectPlan.materialInstanceKey =
+                MaterialAssetUtils::NormalizeAssetPath(sectionPlan.materialInstancePath);
+            meshObjectPlan.materialKey =
+                loadContext.offlineWorldAssets->effectiveMaterialInstances.at(
+                    meshObjectPlan.materialInstanceKey).at("material").get<std::string>();
+        }
         if (result.speedTreeWindProfile.has_value())
         {
             meshObjectPlan.speedTreeWindProfileKey = result.speedTreeWindProfile->key;

@@ -84,19 +84,22 @@ void RHIDeviceVulkan::ResetFence(vk::Fence fence)
     GetDevice().resetFences(fence);
 }
 
-void RHIDeviceVulkan::AcquireNextSwapchainImage(
+SwapchainFrameResult RHIDeviceVulkan::AcquireNextSwapchainImage(
     vk::Semaphore imageAcquiredSemaphore,
     uint32_t& swapchainImageIndex)
 {
-    const vk::Result result = GetDevice().acquireNextImageKHR(
-        GetSwapchain(),
-        UINT64_MAX,
-        imageAcquiredSemaphore,
-        nullptr,
-        &swapchainImageIndex);
-    if (result != vk::Result::eSuccess)
+    try
     {
-        throw std::runtime_error("Failed to acquire next image");
+        return ClassifySwapchainFrameResult(GetDevice().acquireNextImageKHR(
+            GetSwapchain(),
+            UINT64_MAX,
+            imageAcquiredSemaphore,
+            nullptr,
+            &swapchainImageIndex));
+    }
+    catch (const vk::OutOfDateKHRError&)
+    {
+        return SwapchainFrameResult::OutOfDate;
     }
 }
 
@@ -107,7 +110,7 @@ void RHIDeviceVulkan::SubmitToGraphicsQueue(
     GetGraphicsQueue().submit(submitInfo, signalFence);
 }
 
-void RHIDeviceVulkan::PresentSwapchainImage(
+SwapchainFrameResult RHIDeviceVulkan::PresentSwapchainImage(
     vk::Semaphore renderFinishedSemaphore,
     uint32_t swapchainImageIndex)
 {
@@ -118,11 +121,13 @@ void RHIDeviceVulkan::PresentSwapchainImage(
         .setImageIndices(swapchainImageIndex)
         .setWaitSemaphores(renderFinishedSemaphore);
 
-    vk::Result result = GetGraphicsQueue().presentKHR(presentInfo);
-    if (result != vk::Result::eSuccess)
+    try
     {
-        throw std::runtime_error(
-            "Failed to present swapchain image: " + vk::to_string(result));
+        return ClassifySwapchainFrameResult(GetGraphicsQueue().presentKHR(presentInfo));
+    }
+    catch (const vk::OutOfDateKHRError&)
+    {
+        return SwapchainFrameResult::OutOfDate;
     }
 }
 

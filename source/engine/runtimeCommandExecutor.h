@@ -7,6 +7,7 @@
 #include "core/runtimeResult.h"
 #include "engine/runtimeCommand.h"
 #include "engine/testing/runtimeValidationServices.h"
+#include "ui/uiRenderSnapshot.h"
 #include "world/worldManager.h"
 
 class RenderSystem;
@@ -42,6 +43,7 @@ struct RuntimeCommandExecutionResult
     RuntimeShaderReloadScope shaderReloadScope =
         RuntimeShaderReloadScope::Changed;
     bool shaderCacheStatisticsRequested = false;
+    std::optional<OfflineModeCommandFeedback> offlineUiModeFeedback;
 };
 
 RuntimeRendererResourceFingerprint

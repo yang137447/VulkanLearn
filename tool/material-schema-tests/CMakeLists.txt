@@ -1,6 +1,7 @@
 add_executable(material_schema_tests
     materialSchemaTests.cpp
     ${PROJECT_SOURCE_DIR}/source/material/materialDescriptorSchema.cpp
+    ${PROJECT_SOURCE_DIR}/source/material/loader/materialInstanceResolver.cpp
     ${PROJECT_SOURCE_DIR}/source/material/validation/materialAssetValidator.cpp
 )
 

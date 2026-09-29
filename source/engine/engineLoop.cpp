@@ -6,6 +6,7 @@
 #include <string>
 #include <utility>
 
+#include "SDL3/SDL.h"
 #include "controller.h"
 #include "engine/gameInstance.h"
 #include "engine/runtimeCommandExecutor.h"
@@ -101,6 +102,7 @@ RuntimeResult<void> EngineLoop::Init(
         return runtimeResult;
     }
 
+    RenderSystem::GetInstance().SetInitialOfflineMode(launchOptions.offlineRender);
     auto worldResult = LoadInitialWorldAndRenderer(
         launchOptions.initialSceneOverride);
     if (worldResult.IsFailure())
@@ -506,6 +508,36 @@ void EngineLoop::Tick()
     {
         return;
     }
+    if (rendererBackend->NeedsSwapchainRecreate())
+    {
+        int drawableWidth = 0;
+        int drawableHeight = 0;
+        if (!SDL_GetWindowSizeInPixels(
+                window->GetNativeHandle(), &drawableWidth, &drawableHeight))
+        {
+            GetSubsystems().GetDiagnosticsSubsystem().ReportError(
+                std::string("Cannot query drawable size after swapchain out-of-date: ") +
+                SDL_GetError());
+            exitCode = 2;
+            shouldClose = true;
+            return;
+        }
+        if (drawableWidth > 0 && drawableHeight > 0)
+        {
+            // RT 已在上一帧归还所有权；SDL resize 事件可晚于 present 的失效结果。
+            auto resizeResult = RecreateRendererForWindowResize(
+                static_cast<uint32_t>(drawableWidth),
+                static_cast<uint32_t>(drawableHeight));
+            if (resizeResult.IsFailure())
+            {
+                GetSubsystems().GetDiagnosticsSubsystem().ReportRuntimeError(
+                    "Swapchain out-of-date recovery failed", resizeResult.Error());
+                exitCode = 2;
+                shouldClose = true;
+                return;
+            }
+        }
+    }
     UpdateUiInputPolicy();
 
     runtimeTests.UpdateEngineLoopTests(
@@ -528,7 +560,7 @@ void EngineLoop::Tick()
         // 先在 GT 稳定帧边界处理 editor/preview，再生成 UI 与 World snapshot。
         uiSubsystem->TickMaterialInstanceEditor();
     }
-    UpdateUiViewModel(deltaTime);
+    UpdateUiViewModel(deltaTime, commandResult);
 
     {
         PROFILE_SCOPE("RenderLoop");
@@ -606,6 +638,30 @@ void EngineLoop::ApplyQueuedUiActions()
         case UiActionType::SetToneMappingMode:
             command.type = RuntimeCommandType::SetToneMappingMode;
             command.intValue = action.intValue;
+            break;
+        case UiActionType::SetOfflineMode:
+            command.type = RuntimeCommandType::SetOfflineMode;
+            command.intValue = action.intValue;
+            break;
+        case UiActionType::SetOfflineSetting:
+            command.type = RuntimeCommandType::SetOfflineSetting;
+            command.stringValue = action.stringValue;
+            command.intValue = action.intValue;
+            break;
+        case UiActionType::SetOfflineAov:
+            command.type = RuntimeCommandType::SetOfflineAov;
+            command.intValue = action.intValue;
+            break;
+        case UiActionType::SetOfflineExposure:
+            command.type = RuntimeCommandType::SetOfflineExposure;
+            command.floatValue = action.floatValue;
+            break;
+        case UiActionType::ControlOfflineSession:
+            command.type = RuntimeCommandType::ControlOfflineSession;
+            command.intValue = action.intValue;
+            break;
+        case UiActionType::ExportOffline:
+            command.type = RuntimeCommandType::ExportOffline;
             break;
         case UiActionType::SetBloomStrength:
             command.type = RuntimeCommandType::SetBloomParameter;
@@ -736,7 +792,9 @@ void EngineLoop::UpdateUiInputPolicy()
         uiSubsystem->ShouldUseRelativeMouseModeForGame());
 }
 
-void EngineLoop::UpdateUiViewModel(float deltaTime)
+void EngineLoop::UpdateUiViewModel(
+    float deltaTime,
+    const RuntimeCommandExecutionResult& commandResult)
 {
     if (uiSubsystem == nullptr || !uiSubsystem->IsInitialized())
     {
@@ -751,6 +809,18 @@ void EngineLoop::UpdateUiViewModel(float deltaTime)
     const RenderSystem& renderSystem = RenderSystem::GetInstance();
     snapshot.debugViewMode = renderSystem.GetDebugViewMode();
     snapshot.toneMappingMode = renderSystem.GetToneMappingMode();
+    snapshot.offlineMode = renderSystem.IsOfflineMode();
+    snapshot.offlineState = static_cast<int>(renderSystem.GetOfflineState());
+    snapshot.offlineSamples = renderSystem.GetOfflineSettings().samples;
+    snapshot.offlineBounces = renderSystem.GetOfflineSettings().bounces;
+    snapshot.offlineLightSamples = renderSystem.GetOfflineSettings().lightSamples;
+    snapshot.offlineSeed = renderSystem.GetOfflineSettings().seed;
+    snapshot.offlineAov = static_cast<int>(renderSystem.GetOfflineAov());
+    snapshot.offlineExposure = renderSystem.GetOfflineExposure();
+    snapshot.offlineError = renderSystem.GetOfflineError();
+    snapshot.offlineModeFeedback = commandResult.offlineUiModeFeedback;
+    if (const auto result = renderSystem.CaptureOfflineResult())
+        snapshot.offlineCompletedSamples = result->film->completedSamples;
     snapshot.bloomStrength = renderSystem.GetBloomStrength();
     snapshot.bloomThreshold = renderSystem.GetBloomThreshold();
     snapshot.bloomKnee = renderSystem.GetBloomKnee();

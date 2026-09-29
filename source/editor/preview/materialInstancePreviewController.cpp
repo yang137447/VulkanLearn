@@ -378,7 +378,9 @@ MaterialInstancePreviewController::NormalizeCommand(
         return normalized;
     case MaterialInstancePreviewCommandType::ApplyMaterialInstancePreview:
     {
-        if (!status.IsConnected() || !status.world.has_value() ||
+        // Failed 表示上次候选失败，不表示 renderer session 已断开；
+        // 保留旧有效版本时仍允许同一连接继续 Apply 或 Restore。
+        if (!liveConnectionEstablished || !status.world.has_value() ||
             !status.materialInstancePath.has_value() || !activeWorld.has_value() ||
             *status.world != *activeWorld)
         {
@@ -436,7 +438,7 @@ MaterialInstancePreviewController::NormalizeCommand(
     }
     case MaterialInstancePreviewCommandType::RestoreMaterialInstancePreviewBaseline:
     {
-        if (!status.IsConnected() || !status.world.has_value() ||
+        if (!liveConnectionEstablished || !status.world.has_value() ||
             !status.materialInstancePath.has_value() || !activeWorld.has_value() ||
             *status.world != *activeWorld)
         {

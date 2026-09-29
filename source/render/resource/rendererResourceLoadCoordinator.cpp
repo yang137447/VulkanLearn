@@ -94,7 +94,8 @@ RendererResourceLoadCoordinator::LoadRendererResources(
         }
         else if (type == "environment")
         {
-            environmentLoader.LoadEnvironmentObject(obj);
+            if (!loadContext.offlineOnly)
+                environmentLoader.LoadEnvironmentObject(obj);
         }
         else if (type == "directionalLight" ||
                  type == "pointLight" ||
@@ -105,6 +106,14 @@ RendererResourceLoadCoordinator::LoadRendererResources(
             // validated WorldBuildPlan. Renderer loaders only create resources
             // consumed by the Vulkan draw path.
             continue;
+        }
+        else if (type == "squareAreaLight")
+        {
+            if (loadContext.offlineOnly) continue;
+            // 当前实时渲染无面光源实现；不能静默丢弃或降级成点光。
+            throw std::runtime_error(
+                "Realtime path does not support squareAreaLight: " +
+                worldBuildPlan.scenePath + " object=" + objectPlan.objectName);
         }
         else
         {

@@ -1,9 +1,13 @@
 #include "renderSystem.h"
+#include "render/offline/offlineWorldAssets.h"
+#include "render/offline/offlineGroomAsset.h"
+#include "shader/build/contentHash.h"
 #include "shader/reload/shaderReloadCoordinator.h"
 #include <cmath>
 #include <limits>
 #include <algorithm>
 #include <array>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -20,8 +24,10 @@
 #include "render/backend/rendererObjectResourceRegistry.h"
 #include "render/resource/rendererResourceCache.h"
 #include "render/resource/rendererMaterialLoader.h"
+#include "render/resource/rendererMeshLoader.h"
 #include "render/resource/rendererResourceLoadContext.h"
 #include "render/resource/resourceRetireQueue.h"
+#include "render/rendergraph/preparedRenderGraphState.h"
 #include "material/materialAssetUtils.h"
 #include "material/loader/materialInstanceResolver.h"
 #include "render/backend/rendererBackendVulkan.h"
@@ -30,6 +36,7 @@
 #include "ui/uiRenderSnapshot.h"
 #include "vulkanDebug.h"
 #include "world/world.h"
+#include "scene/sceneAssetTypes.h"
 
 namespace
 {
@@ -200,7 +207,8 @@ void RebuildRenderSceneMaterialGroupsImpl(VL::RenderScene& renderScene)
 NumericPreviewDraftParseResult ParseNumericPreviewDraft(
     const VL::Editor::Preview::MaterialInstancePreviewDraft& draft,
     const VL::Editor::Preview::NormalizedMaterialInstancePath& expectedPath,
-    const MaterialInstanceStateSnapshot::TextureMap& activeTextures)
+    const MaterialInstanceStateSnapshot::TextureMap& activeTextures,
+    const nlohmann::json& frozenDefinition)
 {
     NumericPreviewDraftParseResult result;
     const VL::Editor::Preview::MaterialInstancePreviewPathNormalizationResult
@@ -274,9 +282,9 @@ NumericPreviewDraftParseResult ParseNumericPreviewDraft(
         }
 
         const MaterialInstanceResolveResult resolved =
-            MaterialInstanceResolver::Resolve(
+            MaterialInstanceResolver::ResolveWithDefinition(
                 expectedPath.value,
-                materialInstanceJson);
+                materialInstanceJson, frozenDefinition);
         PreviewRenderStateValues renderStates =
             BuildPreviewRenderStateValues(
                 resolved.effectiveMaterialInstanceJson);
@@ -423,11 +431,27 @@ private:
         const VL::Editor::Preview::MaterialInstancePreviewDraft& draft,
         bool restoreBaseline)
     {
+        if (owner.offlineMode)
+            return owner.CommitMaterialInstancePreviewDraft(world, materialInstancePath, draft);
+        const auto activeWorld = owner.GetActiveWorldIdentity();
+        if (!activeWorld || *activeWorld != world ||
+            !owner.activeOfflineWorldAssets ||
+            !owner.activeOfflineWorldAssets->materialDefinitions.count(
+                materialInstancePath.value))
+        {
+            VL::Editor::Preview::MaterialInstancePreviewAdapterResult result;
+            result.status = VL::Editor::Preview::PreviewAdapterOperationStatus::Failed;
+            result.failureStage = VL::Editor::Preview::PreviewAdapterFailureStage::Prepare;
+            result.message = "Material instance preview lost its frozen World definition.";
+            return result;
+        }
         NumericPreviewDraftParseResult parsed =
         ParseNumericPreviewDraft(
                 draft,
                 materialInstancePath,
-                baselineTextures);
+                baselineTextures,
+                owner.activeOfflineWorldAssets->materialDefinitions.at(
+                    materialInstancePath.value));
         if (!parsed.values.has_value())
         {
             VL::Editor::Preview::MaterialInstancePreviewAdapterResult result;
@@ -441,32 +465,6 @@ private:
 
         const bool renderStateChanged =
             parsed.renderStates != activeRenderStates;
-
-        const std::optional<
-            VL::Editor::Preview::MaterialInstancePreviewWorldIdentity>
-            activeWorld = owner.GetActiveWorldIdentity();
-        if (!activeWorld.has_value())
-        {
-            VL::Editor::Preview::MaterialInstancePreviewAdapterResult result;
-            result.status =
-                VL::Editor::Preview::PreviewAdapterOperationStatus::Unavailable;
-            result.failureStage =
-                VL::Editor::Preview::PreviewAdapterFailureStage::Prepare;
-            result.message =
-                "Renderer-owned material instance preview lost its active World.";
-            return result;
-        }
-        if (*activeWorld != world)
-        {
-            VL::Editor::Preview::MaterialInstancePreviewAdapterResult result;
-            result.status =
-                VL::Editor::Preview::PreviewAdapterOperationStatus::Failed;
-            result.failureStage =
-                VL::Editor::Preview::PreviewAdapterFailureStage::Prepare;
-            result.message =
-                "Material instance preview World generation changed before commit.";
-            return result;
-        }
 
         const std::optional<
             VL::RendererResourceCache::WorldLocalMaterialInstanceCapture>
@@ -526,8 +524,39 @@ private:
             return result;
         }
 
+        std::shared_ptr<const VL::OfflineWorldAssets> preparedOfflineAssets;
         try
         {
+            preparedOfflineAssets = owner.PrepareOfflineMaterialPreview(
+                materialInstancePath.value, *parsed.serializedJson);
+        }
+        catch (const std::exception& exception)
+        {
+            VL::Editor::Preview::MaterialInstancePreviewAdapterResult result;
+            result.status =
+                VL::Editor::Preview::PreviewAdapterOperationStatus::Failed;
+            result.failureStage =
+                VL::Editor::Preview::PreviewAdapterFailureStage::Prepare;
+            result.message =
+                std::string("Offline material preview prepare failed: ") +
+                exception.what();
+            return result;
+        }
+        try
+        {
+            // 外部 profile 可能在准备与数值提交之间变化；先复核字节身份，
+            // 否则 GPU 草稿与冻结 CPU 参数会指向不同版本。
+            for (const auto& [reference, captured] :
+                 preparedOfflineAssets->modelProfileDigests)
+            {
+                const auto& path =
+                    preparedOfflineAssets->modelProfilePaths.at(reference);
+                if (!std::filesystem::is_regular_file(path) ||
+                    VL::ContentHasher::HashFile(path).ToHex() != captured)
+                    throw std::runtime_error(
+                        "modelProfile changed before preview commit: " + reference);
+            }
+            VL::ValidateOfflineTexturesStillCurrent(*preparedOfflineAssets);
             materialInstance->CommitNumericParameterValues(
                 restoreBaseline ? baselineParameters : *parsed.values);
         }
@@ -543,6 +572,7 @@ private:
                 exception.what();
             return result;
         }
+        owner.activeOfflineWorldAssets.swap(preparedOfflineAssets);
 
         VL::Editor::Preview::MaterialInstancePreviewAdapterResult result;
         result.status =
@@ -566,6 +596,35 @@ private:
     PreviewRenderStateValues baselineRenderStates;
     PreviewRenderStateValues activeRenderStates;
     VL::Editor::Preview::MaterialInstancePreviewDraft baselineDraft;
+};
+
+class RenderSystem::OfflineMaterialInstancePreviewSession final
+    : public VL::Editor::Preview::IRendererMaterialInstancePreviewSession
+{
+public:
+    OfflineMaterialInstancePreviewSession(RenderSystem& owner,
+        VL::Editor::Preview::MaterialInstancePreviewWorldIdentity world,
+        VL::Editor::Preview::NormalizedMaterialInstancePath path,
+        VL::Editor::Preview::MaterialInstancePreviewDraft baseline)
+        : owner(owner), world(std::move(world)), path(std::move(path)),
+          baseline(std::move(baseline)) {}
+    VL::Editor::Preview::MaterialInstancePreviewAdapterResult Apply(
+        const VL::Editor::Preview::MaterialInstancePreviewDraft& draft) override
+    {
+        return owner.CommitMaterialInstancePreviewDraft(world, path, draft);
+    }
+    VL::Editor::Preview::MaterialInstancePreviewAdapterResult RestoreBaseline(
+        const VL::Editor::Preview::MaterialInstancePreviewDraft& draft) override
+    {
+        auto restored = baseline;
+        restored.documentRevision = draft.documentRevision;
+        return owner.CommitMaterialInstancePreviewDraft(world, path, restored);
+    }
+private:
+    RenderSystem& owner;
+    VL::Editor::Preview::MaterialInstancePreviewWorldIdentity world;
+    VL::Editor::Preview::NormalizedMaterialInstancePath path;
+    VL::Editor::Preview::MaterialInstancePreviewDraft baseline;
 };
 
 RenderSystem::~RenderSystem()
@@ -773,6 +832,9 @@ void RenderSystem::SetActiveWorld(std::shared_ptr<const VL::World> world)
     // package 的生命周期；新的连接必须重新按 generation/path 捕获目标。
     materialInstancePreviewAdapter.Reset();
     activeWorld = std::move(world);
+    // 显式清空/关闭 World 时，CPU 包也不再由 RenderSystem 留存。
+    activeOfflineWorldAssets.reset();
+    offlineCameraMotionPolicy.Reset();
     worldSnapshotQueue.Clear();
     worldSnapshotBuilder.Reset();
     currentRenderScene = VL::RenderScene();
@@ -922,9 +984,179 @@ void RenderSystem::InitializeWorldTransactionResources()
     RenderInitialize();
 }
 
+bool RenderSystem::SetOfflineMode(bool enabled, std::string& message)
+{
+    if (enabled == offlineMode) return true;
+    try
+    {
+        if (!activeWorld || !activeOfflineWorldAssets)
+            throw std::runtime_error("No active frozen World");
+        if (enabled)
+        {
+            VL::WorldSnapshotBuilder builder;
+            VL::WorldSnapshotBuildDesc desc;
+            desc.worldGeneration = activeWorld->GetGeneration();
+            const auto snapshot = builder.Build(*activeWorld, desc);
+            if (snapshot.IsFailure())
+                throw std::runtime_error(VL::FormatRuntimeError(snapshot.Error()));
+            auto settings = offlineSettings;
+            settings.width = rendererBackend->GetSwapchainExtent().width;
+            settings.height = rendererBackend->GetSwapchainExtent().height;
+            const auto candidate = VL::PreflightOfflineRenderInput(
+                snapshot.Value(), *activeOfflineWorldAssets, settings);
+            if (candidate.IsFailure())
+                throw std::runtime_error(VL::FormatRuntimeError(candidate.Error()));
+            offlineMode = true;
+            offlineCoordinator->Restart();
+            offlineCameraMotionPolicy.Reset();
+            message = "Offline mode";
+            return true;
+        }
+        if (!activeWorld->GetSquareAreaLights().empty())
+            throw std::runtime_error("Realtime does not support squareAreaLight");
+        for (const auto& [path, definition] : activeOfflineWorldAssets->materialDefinitions)
+            if (!definition.value("realtimeSupported", true))
+                throw std::runtime_error("Realtime implementation unavailable: " + path);
+        if (!activeOfflineWorldAssets->realtimePrepared)
+        {
+            // 在新图/缓存候选中准备全部 GPU 资源；失败不写 active cache/World。
+            auto assets = std::make_shared<VL::OfflineWorldAssets>(*activeOfflineWorldAssets);
+            auto graph = std::make_shared<VL::PreparedRenderGraphState>(*rendererBackend);
+            graph->Load(RenderGraph::GetInstance().GetSourceJson());
+            auto cache = VL::RendererResourceCache::GetInstance().BeginCandidate(
+                activeWorld->GetGeneration());
+            PipelineFactory::GraphicsCandidateState graphics;
+            VL::RendererResourceLoadContext context{cache, graph->GetGraph()};
+            context.graphicsCandidateState = &graphics;
+            context.offlineWorldAssets = assets.get();
+            VL::RendererMaterialLoader materialLoader(*pipelineFactory, *rendererBackend, context);
+            // pass MI 按图合同复用；冻结的仅是场景 MI。相同 shadow MI 被四个 pass
+            // 共用，逐 pass 重建会使前几个 Renderpass 的 weak_ptr 立即过期。
+            materialLoader.LoadPassMaterials();
+            context.useFrozenMaterials = true;
+            VL::RendererMeshLoader meshLoader(*pipelineFactory, *rendererBackend, context);
+            for (const auto& object : assets->sceneJson.at("objects"))
+            {
+                if (object.at("type") != "mesh") continue;
+                const auto imported = assets->meshImports.at(object.at("modelPath").get<std::string>());
+                MeshAssetLoadRequest request;
+                request.buildPlan = imported->buildPlan;
+                meshLoader.LoadMeshObject(object, request);
+            }
+            auto runtime = PrepareRuntimeBinding(activeWorld, cache, graph->GetGraph(), assets, false);
+            auto pipeline = pipelineFactory->PrepareCandidateCommit(graphics);
+            // runtime 持有同一个候选包；下面的 no-throw swap 会一并发布此能力位。
+            // 准备失败时 activeOfflineWorldAssets 仍保留旧值和离线模式。
+            assets->realtimePrepared = true;
+            auto& retireQueue = VL::ResourceRetireQueue::GetInstance();
+            auto retirements = retireQueue.PrepareRetirements({
+                {"OfflineMode:Resources", activeWorld->GetGeneration(), retireQueue.GetLastSubmittedEpoch(), {}},
+                {"OfflineMode:Graph", activeWorld->GetGeneration(), retireQueue.GetLastSubmittedEpoch(), {}},
+                {"OfflineMode:LightBuffer", activeWorld->GetGeneration(), retireQueue.GetLastSubmittedEpoch(), {}}});
+            pipelineFactory->CommitPreparedCandidate(std::move(pipeline));
+            auto oldCache = VL::RendererResourceCache::GetInstance().CommitCandidate(std::move(cache));
+            RenderGraph::GetInstance().SwapState(graph->GetGraph());
+            auto oldLight = CommitPreparedRuntimeBinding(std::move(runtime));
+            retirements.GetAdditionalResource(0).resource = std::static_pointer_cast<void>(oldCache);
+            retirements.GetAdditionalResource(1).resource = std::static_pointer_cast<void>(graph);
+            retirements.GetAdditionalResource(2).resource = std::move(oldLight);
+            retireQueue.CommitPreparedRetirements(std::move(retirements));
+        }
+        offlineMode = false;
+        offlineCoordinator->Stop();
+        offlineCameraMotionPolicy.Reset();
+        message = "Realtime mode";
+        return true;
+    }
+    catch (const std::exception& exception)
+    {
+        message = exception.what();
+        return false;
+    }
+}
+
+bool RenderSystem::SetOfflineSetting(const std::string& name, int value, std::string& message)
+{
+    if ((name == "samples" && value > 0 && value <= 1000000) ||
+        (name == "bounces" && value >= 0 && value <= 64) ||
+        (name == "seed" && value >= 0) ||
+        (name == "lightSamples" && value > 0 && value <= 64))
+    {
+        if (name == "samples")
+        {
+            if (value < offlineSettings.samples && offlineCoordinator)
+                offlineCoordinator->Restart();
+            offlineSettings.samples = value;
+        }
+        else if (name == "bounces") offlineSettings.bounces = value;
+        else if (name == "seed") offlineSettings.seed = static_cast<uint32_t>(value);
+        else offlineSettings.lightSamples = value;
+        return true;
+    }
+    message = "Invalid offline setting: " + name;
+    return false;
+}
+
+bool RenderSystem::SetOfflineExposure(float exposure, std::string& message)
+{
+    if (!std::isfinite(exposure) || exposure <= 0)
+    {
+        message = "Offline exposure must be finite and positive";
+        return false;
+    }
+    offlineExposure = exposure;
+    return true;
+}
+
+void RenderSystem::ControlOfflineSession(int command)
+{
+    if (!offlineCoordinator) return;
+    if (command == 0) offlineCoordinator->Pause();
+    else if (command == 1) offlineCoordinator->Resume();
+    else if (command == 2) offlineCoordinator->Stop();
+    else if (command == 3)
+    {
+        offlineCoordinator->Restart();
+        offlineCameraMotionPolicy.Reset();
+    }
+}
+
+VL::Offline::SessionState RenderSystem::GetOfflineState() const
+{
+    return offlineCoordinator ? offlineCoordinator->State() : VL::Offline::SessionState::Idle;
+}
+
+std::string RenderSystem::GetOfflineError() const
+{
+    return offlineCoordinator ? offlineCoordinator->Error() : std::string();
+}
+
+std::shared_ptr<const VL::OfflinePublishedResult> RenderSystem::CaptureOfflineResult() const
+{
+    return offlineCoordinator ? offlineCoordinator->Capture() : nullptr;
+}
+
+bool RenderSystem::ExportOffline(const VL::OfflinePublishedResult& result,
+    const std::filesystem::path& directory, std::string& message) const
+{
+    try
+    {
+        VL::ExportOfflineResult(result, directory, offlineExposure);
+        message = "Offline output: " + directory.string();
+        return true;
+    }
+    catch (const std::exception& exception)
+    {
+        message = exception.what();
+        return false;
+    }
+}
+
 void RenderSystem::FinalizeInitialRenderObjectInitialization()
 {
     PROFILE_FUNCTION();
+    offlineDisplay.Initialize(*rendererBackend);
+    offlineCoordinator = std::make_unique<VL::OfflineRenderCoordinator>();
     if (uiRenderSnapshotQueue != nullptr && !uiVertexShaderPath.empty() && !uiFragmentShaderPath.empty())
     {
         uiOverlayRenderer.Initialize(
@@ -960,6 +1192,8 @@ void RenderSystem::RequestScreenshot(std::string path)
 
 void RenderSystem::ReleaseSwapchainDependentResources()
 {
+    if (offlineCoordinator) offlineCoordinator->Stop();
+    offlineDisplay.Shutdown();
     uiOverlayRenderer.ReleaseSwapchainDependentResources();
     VL::RendererResourceCache::GetInstance().ShutdownSwapchainDependentWorldResources();
     ShutdownFrameResources();
@@ -971,12 +1205,18 @@ void RenderSystem::RebuildSwapchainDependentResources()
     RenderGraph& renderGraph = RenderGraph::GetInstance();
 
     RefreshRenderSceneFromActiveWorld();
-    BuildResolvedRenderScene();
+    if (!offlineMode) BuildResolvedRenderScene();
     RenderInitialize();
 
     VL::RendererDescriptorContext descriptorContext = BuildRendererDescriptorContext();
-    renderGraph.RenderInitialize(*rendererBackend, descriptorContext);
-    InitializeCurrentRenderSceneResources();
+    if (!offlineMode)
+    {
+        renderGraph.RenderInitialize(*rendererBackend, descriptorContext);
+        InitializeCurrentRenderSceneResources();
+    }
+    offlineDisplay.Initialize(*rendererBackend);
+    if (offlineCoordinator) offlineCoordinator->Restart();
+    offlineCameraMotionPolicy.Reset();
     if (uiOverlayRenderer.IsInitialized())
     {
         uiOverlayRenderer.RebuildSwapchainDependentResources();
@@ -1003,7 +1243,7 @@ void RenderSystem::RebuildRenderGraphDependentResources()
 
 void RenderSystem::RefreshResolvedSceneAfterShaderReload()
 {
-    if (hasRenderScene)
+    if (hasRenderScene && !offlineMode)
     {
         BuildResolvedRenderScene();
     }
@@ -1012,7 +1252,9 @@ void RenderSystem::RefreshResolvedSceneAfterShaderReload()
 VL::PreparedRuntimeBinding RenderSystem::PrepareRuntimeBinding(
     std::shared_ptr<const VL::World> world,
     VL::RendererResourceCache& candidateCache,
-    RenderGraph& candidateGraph)
+    RenderGraph& candidateGraph,
+    std::shared_ptr<const VL::OfflineWorldAssets> offlineWorldAssets,
+    bool prepareOffline)
 {
     if (!world)
     {
@@ -1027,6 +1269,10 @@ VL::PreparedRuntimeBinding RenderSystem::PrepareRuntimeBinding(
 
     VL::PreparedRuntimeBinding prepared;
     prepared.world = std::move(world);
+    if (!offlineWorldAssets ||
+        offlineWorldAssets->worldGeneration != prepared.world->GetGeneration())
+        throw std::runtime_error("Offline CPU package generation mismatch");
+    prepared.offlineWorldAssets = std::move(offlineWorldAssets);
     prepared.csmSettings =
         prepared.world->GetCsmSettings();
 
@@ -1065,6 +1311,28 @@ VL::PreparedRuntimeBinding RenderSystem::PrepareRuntimeBinding(
     }
     prepared.renderScene =
         std::move(renderSceneResult.Value());
+    if (prepareOffline)
+    {
+        VL::OfflineRenderSettings settings = offlineSettings;
+        settings.width = rendererBackend->GetSwapchainExtent().width;
+        settings.height = rendererBackend->GetSwapchainExtent().height;
+        auto offlineInput = VL::PreflightOfflineRenderInput(
+            snapshotResult.Value(), *prepared.offlineWorldAssets, settings);
+        if (offlineInput.IsFailure())
+            throw std::runtime_error(VL::FormatRuntimeError(offlineInput.Error()));
+        prepared.lightCapacity = frameResources.PrepareLightCapacity(0, *rendererBackend);
+        prepared.nextSnapshotFrameIndex = nextSnapshotFrameIndex + 1;
+        return prepared;
+    }
+    // 离线加载的 World 持有逻辑 M_ key；实时准备仅在渲染视图中绑定真正 GPU key，
+    // 不重建 World 或改相机/对象作者状态。
+    for (auto& draw : prepared.renderScene.drawPackets)
+    {
+        const auto* instance = candidateCache.GetMaterialInstance(draw.materialInstance.key);
+        if (instance && *instance)
+            draw.material.key = (*instance)->GetBaseMaterial().lock()->GetMaterialKey();
+    }
+    RebuildRenderSceneMaterialGroups(prepared.renderScene);
 
     auto resolvedSceneResult =
         resolvedRenderSceneBuilder.Build(
@@ -1126,6 +1394,7 @@ RenderSystem::CommitPreparedRuntimeBinding(
     VL::PreparedRuntimeBinding prepared) noexcept
 {
     activeWorld.swap(prepared.world);
+    activeOfflineWorldAssets.swap(prepared.offlineWorldAssets);
     worldSnapshotBuilder.Swap(
         prepared.snapshotBuilder);
 
@@ -1428,6 +1697,33 @@ RenderSystem::CaptureMaterialInstancePreviewSession(
             "Renderer owner rejected a preview target from an obsolete World generation.";
         return result;
     }
+    if (offlineMode)
+    {
+        if (!activeOfflineWorldAssets)
+        {
+            result.status = PreviewAdapterOperationStatus::Failed;
+            result.message = "Frozen offline World assets are missing";
+            return result;
+        }
+        const auto found = activeOfflineWorldAssets->materialInstanceSources.find(
+            command.materialInstancePath.value);
+        if (found == activeOfflineWorldAssets->materialInstanceSources.end())
+        {
+            result.status = PreviewAdapterOperationStatus::Failed;
+            result.message = "Frozen offline MI is missing";
+            return result;
+        }
+        MaterialInstancePreviewDraft baseline;
+        baseline.materialInstancePath = command.materialInstancePath.value;
+        baseline.documentRevision = command.documentRevision.value_or(0);
+        baseline.serializedWorkingDraft = found->second.dump();
+        outSession = std::make_shared<OfflineMaterialInstancePreviewSession>(
+            *this, command.world, command.materialInstancePath, std::move(baseline));
+        result.status = PreviewAdapterOperationStatus::Completed;
+        result.runtimeResourceGeneration = command.world.generation;
+        result.message = "Frozen offline material preview connected";
+        return result;
+    }
 
     const std::optional<
         VL::RendererResourceCache::WorldLocalMaterialInstanceCapture>
@@ -1448,21 +1744,24 @@ RenderSystem::CaptureMaterialInstancePreviewSession(
     {
         const MaterialInstanceStateSnapshot snapshot =
             capture->materialInstance->CaptureStateSnapshot();
-        std::ifstream materialInstanceFile(
-            CommonFunction::Path(command.materialInstancePath.value));
-        if (!materialInstanceFile.is_open())
+        if (!activeOfflineWorldAssets)
         {
             result.status = PreviewAdapterOperationStatus::Failed;
             result.message =
-                "Renderer owner failed to read the connected MI source.";
+                "Renderer owner has no frozen material assets.";
             return result;
         }
-        nlohmann::json materialInstanceJson;
-        materialInstanceFile >> materialInstanceJson;
+        // Connect 的 baseline 与 World 提交时冻结的源一致；磁盘上后来的
+        // MI/M_ 改动不能在 Restore 时悄悄混入当前有效版本。
+        const nlohmann::json& materialInstanceJson =
+            activeOfflineWorldAssets->materialInstanceSources.at(
+                command.materialInstancePath.value);
         const MaterialInstanceResolveResult resolved =
-            MaterialInstanceResolver::Resolve(
+            MaterialInstanceResolver::ResolveWithDefinition(
                 command.materialInstancePath.value,
-                materialInstanceJson);
+                materialInstanceJson,
+                activeOfflineWorldAssets->materialDefinitions.at(
+                    command.materialInstancePath.value));
         const PreviewRenderStateValues baselineRenderStates =
             BuildPreviewRenderStateValues(
                 resolved.effectiveMaterialInstanceJson);
@@ -1502,6 +1801,68 @@ RenderSystem::CaptureMaterialInstancePreviewSession(
     return result;
 }
 
+std::shared_ptr<const VL::OfflineWorldAssets>
+RenderSystem::PrepareOfflineMaterialPreview(
+    const std::string& materialInstancePath,
+    const nlohmann::json& materialInstanceJson) const
+{
+    if (!activeOfflineWorldAssets)
+        throw std::runtime_error("Active World has no frozen offline assets");
+
+    const std::string key =
+        MaterialAssetUtils::NormalizeAssetPath(materialInstancePath);
+    if (activeOfflineWorldAssets->effectiveMaterialInstances.find(key) ==
+        activeOfflineWorldAssets->effectiveMaterialInstances.end())
+        throw std::runtime_error("Preview MI is absent from the frozen World: " + key);
+    // MI 可以覆盖参数，却不能在旧 World 的几何/材质槽下改绑另一份 M_。
+    // 这种改绑须经过 World 事务，避免 CPU 与 GPU 候选解释不同的定义。
+    const std::string frozenMaterial =
+        activeOfflineWorldAssets->materialInstanceSources.at(key)
+            .at("material").get<std::string>();
+    if (!materialInstanceJson.is_object() ||
+        !materialInstanceJson.contains("material") ||
+        !materialInstanceJson["material"].is_string() ||
+        MaterialAssetUtils::NormalizeAssetPath(
+            materialInstanceJson["material"].get<std::string>()) !=
+            MaterialAssetUtils::NormalizeAssetPath(frozenMaterial))
+        throw std::runtime_error("Preview MI cannot change its frozen material definition: " + key);
+
+    const MaterialInstanceResolveResult resolved =
+        MaterialInstanceResolver::ResolveWithDefinition(
+            key, materialInstanceJson,
+            activeOfflineWorldAssets->materialDefinitions.at(key));
+    // 候选只替换一个 MI 的有效值；旧包和正在运行的 CPU 任务始终只读旧版本。
+    auto candidate = std::make_shared<VL::OfflineWorldAssets>(
+        *activeOfflineWorldAssets);
+    candidate->effectiveMaterialInstances.insert_or_assign(
+        key, resolved.effectiveMaterialInstanceJson);
+    candidate->materialDefinitions.insert_or_assign(key, resolved.materialJson);
+    candidate->materialInstanceSources.insert_or_assign(key, materialInstanceJson);
+    VL::FreezeOfflineMaterialTextures(*candidate, resolved.effectiveMaterialInstanceJson);
+
+    if (resolved.effectiveMaterialInstanceJson.contains("modelProfile"))
+    {
+        const std::string reference =
+            resolved.effectiveMaterialInstanceJson["modelProfile"].get<std::string>();
+        const std::filesystem::path physical = CommonFunction::Path(reference);
+        std::ifstream file(physical, std::ios::binary);
+        if (!file)
+            throw std::runtime_error("Cannot open modelProfile: " + reference);
+        const std::string bytes(
+            std::istreambuf_iterator<char>(file),
+            std::istreambuf_iterator<char>{});
+        if (file.bad())
+            throw std::runtime_error("Cannot read modelProfile: " + reference);
+        candidate->modelProfiles.insert_or_assign(
+            reference, nlohmann::json::parse(bytes));
+        candidate->modelProfilePaths.insert_or_assign(reference, physical);
+        candidate->modelProfileDigests.insert_or_assign(
+            reference, VL::ContentHasher::HashString(bytes).ToHex());
+    }
+    VL::PruneUnusedOfflineMaterialAssets(*candidate);
+    return candidate;
+}
+
 VL::Editor::Preview::MaterialInstancePreviewAdapterResult
 RenderSystem::CommitMaterialInstancePreviewDraft(
     const VL::Editor::Preview::MaterialInstancePreviewWorldIdentity& world,
@@ -1512,6 +1873,51 @@ RenderSystem::CommitMaterialInstancePreviewDraft(
 
     MaterialInstancePreviewAdapterResult result;
     result.failureStage = PreviewAdapterFailureStage::Prepare;
+    if (offlineMode)
+    {
+        try
+        {
+            const auto draftPath = NormalizeMaterialInstancePath(draft.materialInstancePath);
+            if (!world.IsValid() || !materialInstancePath.IsValid() ||
+                GetActiveWorldIdentity() != world || !activeOfflineWorldAssets ||
+                !draftPath.Succeeded() ||
+                *draftPath.path != materialInstancePath)
+                throw std::runtime_error("Offline preview targets an obsolete World or MI");
+            const auto source = nlohmann::json::parse(draft.serializedWorkingDraft);
+            auto candidate = PrepareOfflineMaterialPreview(materialInstancePath.value, source);
+            VL::WorldSnapshotBuilder builder;
+            VL::WorldSnapshotBuildDesc desc;
+            desc.worldGeneration = world.generation;
+            auto snapshot = builder.Build(*activeWorld, desc);
+            if (snapshot.IsFailure())
+                throw std::runtime_error(VL::FormatRuntimeError(snapshot.Error()));
+            auto settings = offlineSettings;
+            settings.width = rendererBackend->GetSwapchainExtent().width;
+            settings.height = rendererBackend->GetSwapchainExtent().height;
+            const auto input = VL::PreflightOfflineRenderInput(snapshot.Value(), *candidate, settings);
+            if (input.IsFailure())
+                throw std::runtime_error(VL::FormatRuntimeError(input.Error()));
+            for (const auto& [reference, digest] : candidate->modelProfileDigests)
+                if (VL::ContentHasher::HashFile(candidate->modelProfilePaths.at(reference)).ToHex() != digest)
+                    throw std::runtime_error("modelProfile changed before preview commit: " + reference);
+            VL::ValidateOfflineTexturesStillCurrent(*candidate);
+            auto published = std::make_shared<VL::OfflineWorldAssets>(*candidate);
+            // GPU 仍是旧版本；回切实时必须按此成功 Apply 的冻结值重建。
+            published->realtimePrepared = false;
+            activeOfflineWorldAssets = std::move(published);
+            result.status = PreviewAdapterOperationStatus::Completed;
+            result.failureStage = PreviewAdapterFailureStage::None;
+            result.runtimeResourceGeneration = world.generation;
+            result.liveSwapCommitted = true;
+            result.message = "Offline effective preview committed; realtime pending synchronization";
+        }
+        catch (const std::exception& exception)
+        {
+            result.status = PreviewAdapterOperationStatus::Failed;
+            result.message = exception.what();
+        }
+        return result;
+    }
     if (!world.IsValid() || !materialInstancePath.IsValid())
     {
         result.status = PreviewAdapterOperationStatus::Failed;
@@ -1554,7 +1960,9 @@ RenderSystem::CommitMaterialInstancePreviewDraft(
         ParseNumericPreviewDraft(
             draft,
             materialInstancePath,
-            activeCapture->materialInstance->CaptureStateSnapshot().textures);
+            activeCapture->materialInstance->CaptureStateSnapshot().textures,
+            activeOfflineWorldAssets->materialDefinitions.at(
+                materialInstancePath.value));
     if (!parsed.serializedJson.has_value())
     {
         result.status = PreviewAdapterOperationStatus::Failed;
@@ -1580,6 +1988,9 @@ RenderSystem::CommitMaterialInstancePreviewDraft(
 
     try
     {
+        std::shared_ptr<const VL::OfflineWorldAssets> preparedOfflineAssets =
+            PrepareOfflineMaterialPreview(
+                materialInstancePath.value, *parsed.serializedJson);
         VL::RendererResourceCache candidateCache =
             activeCache.BeginActiveWorldCandidate(world.generation);
         RenderGraph& renderGraph = RenderGraph::GetInstance();
@@ -1588,8 +1999,11 @@ RenderSystem::CommitMaterialInstancePreviewDraft(
             candidateCache,
             renderGraph};
         loadContext.graphicsCandidateState = &graphicsCandidateState;
-        loadContext.materialInstanceOverridePath = materialInstancePath.value;
-        loadContext.materialInstanceOverrideJson = *parsed.serializedJson;
+        // GPU 候选与离线候选消费同一份冻结定义和有效覆写，不能再读磁盘 M_。
+        auto frozenGpuAssets = std::make_shared<VL::OfflineWorldAssets>(
+            *preparedOfflineAssets);
+        loadContext.offlineWorldAssets = frozenGpuAssets.get();
+        loadContext.useFrozenMaterials = true;
 
         VL::RendererMaterialLoader materialLoader(
             *pipelineFactory,
@@ -1667,6 +2081,17 @@ RenderSystem::CommitMaterialInstancePreviewDraft(
         VL::PreparedResourceRetirements preparedRetirements =
             retireQueue.PrepareRetirements(std::move(retirementResources));
 
+        for (const auto& [reference, captured] :
+             preparedOfflineAssets->modelProfileDigests)
+        {
+            const auto& path =
+                preparedOfflineAssets->modelProfilePaths.at(reference);
+            if (!std::filesystem::is_regular_file(path) ||
+                VL::ContentHasher::HashFile(path).ToHex() != captured)
+                throw std::runtime_error(
+                    "modelProfile changed before preview commit: " + reference);
+        }
+        VL::ValidateOfflineTexturesStillCurrent(*preparedOfflineAssets);
         pipelineFactory->CommitPreparedCandidate(
             std::move(preparedPipelineCommit));
         VL::RendererResourceCache::WorldLocalResourcePackageHandle retiredPackage =
@@ -1674,6 +2099,7 @@ RenderSystem::CommitMaterialInstancePreviewDraft(
         std::swap(currentRenderScene, candidateRenderScene);
         std::swap(currentResolvedRenderScene, candidateResolvedRenderScene);
         std::swap(pickingRenderScene, candidatePickingRenderScene);
+        activeOfflineWorldAssets.swap(preparedOfflineAssets);
 
         hasMaterialInstancePreviewMaterialOverride = true;
         materialInstancePreviewOverridePath.swap(replacementPath);
@@ -2418,6 +2844,20 @@ void RenderSystem::PublishSnapshotFromActiveWorld()
     }
 
     VL::WorldSnapshot snapshot = std::move(snapshotResult.Value());
+    currentOfflineSnapshot = std::make_shared<const VL::WorldSnapshot>(snapshot);
+    if (offlineMode && offlineCoordinator)
+    {
+        offlineSettings.width = rendererBackend->GetSwapchainExtent().width;
+        offlineSettings.height = rendererBackend->GetSwapchainExtent().height;
+        const auto target = offlineCameraMotionPolicy.Decide(
+            snapshot.camera, snapshot.worldGeneration,
+            activeOfflineWorldAssets.get(), offlineSettings,
+            offlineCoordinator->State(),
+            VL::OfflineCameraMotionPolicy::Clock::now());
+        if (target)
+            offlineCoordinator->Observe(currentOfflineSnapshot,
+                activeOfflineWorldAssets, *target);
+    }
     auto pickingRenderSceneResult = rendererFrontend.BuildRenderScene(snapshot);
     if (pickingRenderSceneResult.IsFailure())
     {
@@ -2463,8 +2903,8 @@ void RenderSystem::RenderLatestSnapshotOrLastGood()
     const bool consumedSnapshot = ConsumeLatestSnapshotIntoRenderScene();
     if (consumedSnapshot)
     {
-        BuildResolvedRenderScene();
-        if (currentRenderScene.worldGeneration != initializedRenderWorldGeneration)
+        if (!offlineMode) BuildResolvedRenderScene();
+        if (!offlineMode && currentRenderScene.worldGeneration != initializedRenderWorldGeneration)
         {
             InitializeCurrentRenderSceneResources();
         }
@@ -2480,6 +2920,13 @@ void RenderSystem::RenderLatestSnapshotOrLastGood()
 void RenderSystem::BuildResolvedRenderScene()
 {
     const auto& resourceCache = VL::RendererResourceCache::GetInstance();
+    for (auto& draw : currentRenderScene.drawPackets)
+    {
+        const auto* instance = resourceCache.GetMaterialInstance(draw.materialInstance.key);
+        if (instance && *instance)
+            draw.material.key = (*instance)->GetBaseMaterial().lock()->GetMaterialKey();
+    }
+    RebuildRenderSceneMaterialGroups(currentRenderScene);
     auto resolvedSceneResult = resolvedRenderSceneBuilder.Build(currentRenderScene, resourceCache);
     if (resolvedSceneResult.IsFailure())
     {
@@ -2533,6 +2980,11 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
     // Backend owns swapchain frame synchronization. RenderSystem only records
     // pass work into the command buffer it receives for this image.
     VL::RendererFrameContext frameContext = rendererBackend->BeginFrame(currentFrame);
+    if (!frameContext.ready)
+    {
+        // acquire 失败没有提交；保留帧号和截图请求，等待 GT 重建 swapchain。
+        return;
+    }
     uiOverlayRenderer.CollectRetiredTextures();
     uint32_t frameIndex = frameContext.frameIndex;
     swapChainImageIndex = frameContext.swapchainImageIndex;
@@ -2546,6 +2998,17 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
 
         // Tick every tree species once so shadow and geometry consume the same
         // per-object wind state for the complete frame.
+        if (offlineMode)
+        {
+            const auto result = CaptureOfflineResult();
+            const auto preview = offlineCoordinator
+                ? offlineCoordinator->CapturePreview() : nullptr;
+            // RT 只消费冻结的完整 film 或视口专用部分预览；导出接口不见预览。
+            offlineDisplay.Record(commandBuffer, swapChainImageIndex,
+                result ? result->film : nullptr, preview, offlineAov, offlineExposure);
+        }
+        else
+        {
         AdvanceSpeedTreeWindProfiles();
         // Procedural sky IBL needs the latest camera and sky parameters in global UBO,
         // but environmentSH is GPU-owned and must not be overwritten by this upload.
@@ -2561,6 +3024,13 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
             std::string renderPassScopeName = "RenderPass:" + renderPassName;
             PROFILE_SCOPE(renderPassScopeName.c_str());
             const auto& renderPass = renderGraph.GetRenderpasses().at(renderPassName);
+            if (currentRenderScene.environment.type == VL::EnvironmentType::None)
+            {
+                const auto instance = renderPass.materialInstance.lock();
+                const auto material = instance ? instance->GetBaseMaterial().lock() : nullptr;
+                if (material && material->GetShaderVariantKey().shaderName == "pass/sky")
+                    continue;
+            }
 
             VulkanDebug::ScopedRegion passRegion(
                 commandBuffer,
@@ -2578,6 +3048,7 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
                 *this
             };
             passRuntime.RecordPass(renderPassName, passContext);
+        }
         }
 
         if (uiOverlayRenderer.IsInitialized() && currentUiRenderSnapshot != nullptr)
@@ -2683,6 +3154,8 @@ void RenderSystem::AdvanceSpeedTreeWindProfiles()
 
 void RenderSystem::ShutdownRenderObject()
 {
+    offlineCoordinator.reset();
+    offlineDisplay.Shutdown();
     materialInstancePreviewAdapter.Reset();
     if (shaderReloadCoordinator != nullptr)
     {
@@ -2936,6 +3409,10 @@ std::shared_ptr<Texture> RenderSystem::GetEnvironmentCube(
 {
     switch(renderScene.environment.type)
     {
+        case VL::EnvironmentType::None:
+            // 只为保持实时 descriptor 合同而绑定已有 cubemap；强度为零，
+            // 不进行 IBL 更新且跳过 sky，不能将其视为环境补光。
+            return proceduralSkyCubeGenerator.GetActiveEnvironmentCube();
         case VL::EnvironmentType::ProceduralSky:
             return proceduralSkyCubeGenerator.GetActiveEnvironmentCube();
         case VL::EnvironmentType::Hdri:
@@ -2982,6 +3459,7 @@ void RenderSystem::PrepareEnvironmentResources(
 
 void RenderSystem::RecordEnvironmentIbl(vk::CommandBuffer commandBuffer, uint32_t swapchainImageIndex)
 {
+    if (currentRenderScene.environment.type == VL::EnvironmentType::None) return;
     PROFILE_SCOPE("EnvironmentIbl");
     environmentGpuTimer.BeginFrame(commandBuffer, swapchainImageIndex);
 

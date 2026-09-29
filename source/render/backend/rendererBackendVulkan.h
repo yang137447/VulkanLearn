@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -72,6 +73,7 @@ struct RendererFrameContext
     uint32_t swapchainImageIndex = 0;
     uint32_t swapchainImageCount = 0;
     vk::CommandBuffer commandBuffer;
+    bool ready = false;
 };
 
 // Vulkan backend facade. It owns frame policy and delegates low-level
@@ -90,6 +92,10 @@ public:
     RendererBackendImageResourceDebugNames
         CaptureImageResourceDebugNames() const;
     void RecreateSwapchain(int width, int height);
+    bool NeedsSwapchainRecreate() const noexcept
+    {
+        return swapchainRecreateRequired.load(std::memory_order_acquire);
+    }
     std::unique_ptr<PipelineFactory> CreatePipelineFactory();
     vk::ShaderModule CreateShaderModule(
         const vk::ShaderModuleCreateInfo& createInfo,
@@ -305,6 +311,7 @@ private:
     std::unique_ptr<RHIDeviceVulkan> rhiDevice;
     bool initialized = false;
     std::vector<uint64_t> frameFenceEpochs;
+    std::atomic<bool> swapchainRecreateRequired{false};
     std::unordered_map<VkBuffer, RHIBufferHandle> bufferHandlesByBuffer;
     std::unordered_map<VkDeviceMemory, RHIBufferHandle> bufferHandlesByMemory;
     std::unordered_map<VkImage, RHIImageHandle> imageHandlesByImage;

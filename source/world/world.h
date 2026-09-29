@@ -31,6 +31,16 @@ struct WorldEnvironment
     SkyParametersGPU skyParameters;
 };
 
+struct WorldSquareAreaLight
+{
+    Eigen::Vector3f position = Eigen::Vector3f::Zero();
+    Eigen::Vector3f normal = Eigen::Vector3f::UnitY();
+    Eigen::Vector3f color = Eigen::Vector3f::Ones();
+    float size = 1.0f;
+    // 线性 emitted radiance，不与方向光 irradiance 混用。
+    float intensity = 1.0f;
+};
+
 struct WorldMeshObject
 {
     std::string debugName;
@@ -76,6 +86,7 @@ public:
     void AddDirectionalLight(std::string name, std::shared_ptr<DirectionalLight> light);
     void AddPointLight(std::string name, std::shared_ptr<PointLight> light);
     void AddSpotLight(std::string name, std::shared_ptr<SpotLight> light);
+    void AddSquareAreaLight(std::string name, WorldSquareAreaLight light);
 
     const std::unordered_map<std::string, WorldMeshObject>& GetMeshObjects() const { return meshObjects; }
     const std::unordered_map<std::string, SpeedTreeWindProfile>& GetSpeedTreeWindProfiles() const { return speedTreeWindProfiles; }
@@ -83,6 +94,7 @@ public:
     const std::shared_ptr<DirectionalLight>& GetPrimaryDirectionalLight() const;
     const std::unordered_map<std::string, std::shared_ptr<PointLight>>& GetPointLights() const { return pointLights; }
     const std::unordered_map<std::string, std::shared_ptr<SpotLight>>& GetSpotLights() const { return spotLights; }
+    const std::unordered_map<std::string, WorldSquareAreaLight>& GetSquareAreaLights() const { return squareAreaLights; }
 
 private:
     uint64_t generation = 0;
@@ -97,6 +109,7 @@ private:
     std::string primaryDirectionalLightName;
     std::unordered_map<std::string, std::shared_ptr<PointLight>> pointLights;
     std::unordered_map<std::string, std::shared_ptr<SpotLight>> spotLights;
+    std::unordered_map<std::string, WorldSquareAreaLight> squareAreaLights;
 };
 
 } // namespace VL

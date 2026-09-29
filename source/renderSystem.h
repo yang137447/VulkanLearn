@@ -12,6 +12,7 @@
 #include <unordered_map>
 #include <string>
 #include <utility>
+#include <nlohmann/json.hpp>
 #include "baseStructs.h"
 #include "render/backend/rendererDescriptorContext.h"
 #include "render/backend/rendererFrameResources.h"
@@ -26,6 +27,9 @@
 #include "render/environment/proceduralSkyCubeGenerator.h"
 #include "render/frontend/renderScene.h"
 #include "render/frontend/rendererFrontend.h"
+#include "render/offline/offlineCameraMotionPolicy.h"
+#include "render/offline/offlineDisplayVulkan.h"
+#include "render/offline/offlineRenderCoordinator.h"
 #include "editor/selection/materialInstanceSelection.h"
 #include "render/pass/passRuntime.h"
 #include "render/foliage/speedTreeWindSystem.h"
@@ -43,6 +47,7 @@ class PipelineFactory;
 namespace VL
 {
 class World;
+struct OfflineWorldAssets;
 class RendererBackendVulkan;
 class ShaderReloadCoordinator;
 }
@@ -53,6 +58,7 @@ namespace VL
 struct PreparedRuntimeBinding
 {
     std::shared_ptr<const World> world;
+    std::shared_ptr<const OfflineWorldAssets> offlineWorldAssets;
     WorldSnapshotBuilder snapshotBuilder;
     RenderScene renderScene;
     ResolvedRenderScene resolvedRenderScene;
@@ -142,7 +148,26 @@ public:
     VL::PreparedRuntimeBinding PrepareRuntimeBinding(
         std::shared_ptr<const VL::World> world,
         VL::RendererResourceCache& candidateCache,
-        RenderGraph& candidateGraph);
+        RenderGraph& candidateGraph,
+        std::shared_ptr<const VL::OfflineWorldAssets> offlineWorldAssets = {},
+        bool prepareOffline = false);
+    std::shared_ptr<const VL::OfflineWorldAssets>
+    CaptureOfflineWorldAssets() const noexcept { return activeOfflineWorldAssets; }
+    bool IsOfflineMode() const noexcept { return offlineMode; }
+    void SetInitialOfflineMode(bool enabled) noexcept { offlineMode = enabled; }
+    bool SetOfflineMode(bool enabled, std::string& message);
+    bool SetOfflineSetting(const std::string& name, int value, std::string& message);
+    void SetOfflineAov(VL::OfflineAov aov) noexcept { offlineAov = aov; }
+    bool SetOfflineExposure(float exposure, std::string& message);
+    void ControlOfflineSession(int command);
+    const VL::OfflineRenderSettings& GetOfflineSettings() const noexcept { return offlineSettings; }
+    VL::OfflineAov GetOfflineAov() const noexcept { return offlineAov; }
+    float GetOfflineExposure() const noexcept { return offlineExposure; }
+    VL::Offline::SessionState GetOfflineState() const;
+    std::string GetOfflineError() const;
+    std::shared_ptr<const VL::OfflinePublishedResult> CaptureOfflineResult() const;
+    bool ExportOffline(const VL::OfflinePublishedResult& result,
+        const std::filesystem::path& directory, std::string& message) const;
     std::shared_ptr<void> CommitPreparedRuntimeBinding(
         VL::PreparedRuntimeBinding prepared) noexcept;
     void ClearPendingWorldSnapshots() noexcept;
@@ -216,6 +241,7 @@ public:
     }
 private:
     class MaterialInstancePreviewSession;
+    class OfflineMaterialInstancePreviewSession;
 
     RenderSystem()
         : materialInstancePreviewAdapter(*this)
@@ -234,6 +260,10 @@ private:
         const VL::Editor::Preview::MaterialInstancePreviewWorldIdentity& world,
         const VL::Editor::Preview::NormalizedMaterialInstancePath& materialInstancePath,
         const VL::Editor::Preview::MaterialInstancePreviewDraft& draft) override;
+    std::shared_ptr<const VL::OfflineWorldAssets>
+    PrepareOfflineMaterialPreview(
+        const std::string& materialInstancePath,
+        const nlohmann::json& materialInstanceJson) const;
     void ApplyMaterialInstancePreviewMaterialOverride(
         VL::RenderScene& renderScene) const;
     void RebuildRenderSceneMaterialGroups(
@@ -391,6 +421,15 @@ private:
     VL::RenderScene pickingRenderScene;
     bool hasPickingRenderScene = false;
     std::shared_ptr<const VL::World> activeWorld;
+    std::shared_ptr<const VL::OfflineWorldAssets> activeOfflineWorldAssets;
+    bool offlineMode = false;
+    VL::OfflineRenderSettings offlineSettings{0, 0, 32, 2, 1, 0};
+    VL::OfflineAov offlineAov = VL::OfflineAov::Combined;
+    float offlineExposure = 1.0f;
+    std::unique_ptr<VL::OfflineRenderCoordinator> offlineCoordinator;
+    VL::OfflineDisplayVulkan offlineDisplay;
+    VL::WorldSnapshotPtr currentOfflineSnapshot;
+    VL::OfflineCameraMotionPolicy offlineCameraMotionPolicy;
     VL::Editor::Preview::RendererOwnedMaterialInstancePreviewAdapter
         materialInstancePreviewAdapter;
     VL::RendererBackendVulkan* rendererBackend = nullptr;

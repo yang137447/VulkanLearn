@@ -1,7 +1,12 @@
 #pragma once
+#include <memory>
+#include <vector>
+#include <cstdint>
 #include <vulkan/vulkan.hpp>
 #include <Eigen/Dense>
 
+struct MeshAssetImportResult;
+struct Vertex;
 namespace VL
 {
 class RendererBackendVulkan;
@@ -15,6 +20,11 @@ public:
         std::vector<uint32_t> indices,
         VL::RendererBackendVulkan& rendererBackend,
         const std::string& name = "");
+    RenderableObject(
+        std::shared_ptr<const MeshAssetImportResult> imported,
+        size_t sectionIndex,
+        VL::RendererBackendVulkan& rendererBackend,
+        const std::string& name = "");
     ~RenderableObject();
 
     void Draw(vk::CommandBuffer& commandBuffer);
@@ -24,6 +34,8 @@ public:
 
 private:
     void UpdateLocalBounds();
+    const std::vector<Vertex>& GetVertices() const;
+    const std::vector<uint32_t>& GetIndices() const;
 
     void CreateVertexBuffer();
     void DestroyVertexBuffer();
@@ -36,6 +48,9 @@ private:
 
     std::vector<struct Vertex> vertices;
     std::vector<uint32_t> indices;
+    // World 导入后和离线候选包共享 section；上传不再复制大块 CPU 顶点。
+    std::shared_ptr<const MeshAssetImportResult> imported;
+    size_t importedSectionIndex = 0;
     Eigen::Vector3f boundsMin;
     Eigen::Vector3f boundsMax;
     vk::Buffer vertexBuffer = nullptr;

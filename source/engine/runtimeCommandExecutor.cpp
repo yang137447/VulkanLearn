@@ -250,6 +250,111 @@ void RuntimeCommandExecutor::ExecuteCommand(
         renderSystem.SetDebugViewMode(command.intValue);
         diagnostics.ReportInfo("Debug view mode set to " + std::to_string(command.intValue));
         break;
+    case RuntimeCommandType::SetOfflineMode:
+    {
+        const bool fromUi = command.sourceText == "ui";
+        OfflineModeCommandFeedback feedback;
+        feedback.requestedMode = command.intValue;
+        if (command.intValue != 0 && command.intValue != 1)
+        {
+            feedback.rejectionReason = "Offline mode must be 0 or 1";
+            diagnostics.ReportWarning(feedback.rejectionReason);
+            if (fromUi) executionResult.offlineUiModeFeedback = std::move(feedback);
+            break;
+        }
+        if (renderSystem.IsOfflineMode() == (command.intValue == 1))
+        {
+            if (fromUi) executionResult.offlineUiModeFeedback = std::move(feedback);
+            break;
+        }
+        std::string message;
+        if (renderSystem.SetOfflineMode(command.intValue != 0, message))
+            diagnostics.ReportInfo(message);
+        else
+        {
+            feedback.rejectionReason = message;
+            diagnostics.ReportWarning("Offline mode: " + message);
+        }
+        // 失败不改 renderer 的模式/有效版本，只把拒绝诊断带回 UI 快照。
+        if (fromUi) executionResult.offlineUiModeFeedback = std::move(feedback);
+        break;
+    }
+    case RuntimeCommandType::SetOfflineSetting:
+    {
+        if (const char* error = OfflineSettingValidationError(
+                command.stringValue, command.intValue))
+        {
+            diagnostics.ReportWarning(error);
+            break;
+        }
+        std::string message;
+        if (!renderSystem.SetOfflineSetting(command.stringValue, command.intValue, message))
+            diagnostics.ReportWarning(message);
+        break;
+    }
+    case RuntimeCommandType::SetOfflineAov:
+        if (command.intValue >= 0 && command.intValue <= 2)
+            renderSystem.SetOfflineAov(static_cast<OfflineAov>(command.intValue));
+        else diagnostics.ReportWarning("Invalid offline AOV");
+        break;
+    case RuntimeCommandType::SetOfflineExposure:
+    {
+        std::string message;
+        if (!renderSystem.SetOfflineExposure(command.floatValue, message))
+            diagnostics.ReportWarning(message);
+        break;
+    }
+    case RuntimeCommandType::ControlOfflineSession:
+    {
+        if (!renderSystem.IsOfflineMode() ||
+            command.intValue < 0 || command.intValue > 3)
+        {
+            diagnostics.ReportWarning("Offline session command requires offline mode and a valid action");
+            break;
+        }
+        const auto state = renderSystem.GetOfflineState();
+        const bool canPause = state == Offline::SessionState::Preparing ||
+            state == Offline::SessionState::Rendering;
+        const bool canResume = state == Offline::SessionState::Paused;
+        const bool canStop = canPause || canResume;
+        if ((command.intValue == 0 && !canPause) ||
+            (command.intValue == 1 && !canResume) ||
+            (command.intValue == 2 && !canStop))
+        {
+            diagnostics.ReportWarning("Offline session action is unavailable in the current state");
+            break;
+        }
+        renderSystem.ControlOfflineSession(command.intValue);
+        break;
+    }
+    case RuntimeCommandType::ExportOffline:
+    {
+        const auto result = renderSystem.CaptureOfflineResult();
+        if (!result)
+        {
+            diagnostics.ReportWarning("No published offline result to export");
+            break;
+        }
+        const auto root = std::filesystem::path(runtimeConfig.GetResourcePath()) /
+            "Generated" / "OfflineRenderer";
+        const std::string scene = std::filesystem::path(
+            result->manifest.value("scene", std::string("scene"))).stem().string();
+        const std::string digest = result->manifest.value("inputDigest", std::string());
+        const std::string base = scene + "-" + digest.substr(0, 12) + "-" +
+            std::to_string(result->film->completedSamples);
+        std::filesystem::path directory = root / base;
+        // 单次结果仍只 Capture 一回；重复导出分配新目录，既不覆盖旧 manifest，
+        // 也不把不同进程碰巧相同的 task counter 当作全局唯一身份。
+        for (unsigned sequence = 2;
+             std::filesystem::exists(directory) ||
+             std::filesystem::exists(directory.string() + ".partial");
+             ++sequence)
+            directory = root / (base + "-" + std::to_string(sequence));
+        std::string message;
+        if (renderSystem.ExportOffline(*result, directory, message)) diagnostics.ReportInfo(message);
+        else diagnostics.ReportWarning(message);
+        break;
+    }
     case RuntimeCommandType::CaptureScreenshot:
     {
         const std::string screenshotPath =

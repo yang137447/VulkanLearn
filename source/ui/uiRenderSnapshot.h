@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -41,6 +42,12 @@ struct UiInputOwnershipSnapshot
     UiInputOwner textInputOwner = UiInputOwner::None;
 };
 
+struct OfflineModeCommandFeedback
+{
+    int requestedMode = -1;
+    std::string rejectionReason;
+};
+
 // Carries immutable game-thread state into the UI update step.
 // It is assembled by EngineLoop and does not expose live renderer objects.
 struct UiViewModelSnapshot
@@ -50,6 +57,20 @@ struct UiViewModelSnapshot
     float framesPerSecond = 0.0f;
     int debugViewMode = 0;
     int toneMappingMode = 0;
+    bool offlineMode = false;
+    int offlineState = 0;
+    int offlineSamples = 32;
+    int offlineCompletedSamples = 0;
+    int offlineBounces = 2;
+    int offlineLightSamples = 1;
+    int offlineSeed = 0;
+    int offlineAov = 0;
+    float offlineExposure = 1.0f;
+    std::string offlineError;
+    std::optional<OfflineModeCommandFeedback> offlineModeFeedback;
+    // 以下两项仅由 UI 维护，用下一帧的引擎快照确认异步投递的模式请求。
+    int offlineRequestedMode = -1;
+    std::string offlineUiNotice;
     float bloomStrength = 0.0f;
     float bloomThreshold = 0.0f;
     float bloomKnee = 0.0f;
@@ -88,6 +109,27 @@ struct UiViewModelSnapshot
     std::string activeWorldPath;
     std::string locale;
 };
+
+inline void ReconcileOfflineModeFeedback(
+    UiViewModelSnapshot& next,
+    const UiViewModelSnapshot& previous)
+{
+    next.offlineRequestedMode = previous.offlineRequestedMode;
+    next.offlineUiNotice = previous.offlineUiNotice;
+    if (next.offlineMode != previous.offlineMode)
+    {
+        next.offlineRequestedMode = -1;
+        next.offlineUiNotice.clear();
+    }
+    if (previous.offlineRequestedMode != -1 &&
+        next.offlineModeFeedback &&
+        next.offlineModeFeedback->requestedMode == previous.offlineRequestedMode)
+    {
+        // 只消费本次 UI 请求的执行结果；模式与有效内容始终来自引擎快照。
+        next.offlineRequestedMode = -1;
+        next.offlineUiNotice = next.offlineModeFeedback->rejectionReason;
+    }
+}
 
 struct UiVertex
 {

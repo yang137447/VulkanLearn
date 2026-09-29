@@ -189,10 +189,21 @@ MaterialInstanceResolveResult MaterialInstanceResolver::Resolve(
     const nlohmann::json& materialInstanceJson)
 {
     MaterialAssetValidator::ValidateInstanceHeader(materialInstanceJson, materialInstancePath);
+    const std::string materialPath = materialInstanceJson["material"].get<std::string>();
+    return ResolveWithDefinition(materialInstancePath, materialInstanceJson,
+                                 LoadDefinition(materialPath));
+}
 
+MaterialInstanceResolveResult MaterialInstanceResolver::ResolveWithDefinition(
+    std::string_view materialInstancePath,
+    const nlohmann::json& materialInstanceJson,
+    const nlohmann::json& materialDefinitionJson)
+{
+    MaterialAssetValidator::ValidateInstanceHeader(materialInstanceJson, materialInstancePath);
     MaterialInstanceResolveResult result;
     result.materialPath = materialInstanceJson["material"].get<std::string>();
-    result.materialJson = LoadDefinition(result.materialPath);
+    MaterialAssetValidator::ValidateDefinition(materialDefinitionJson, result.materialPath);
+    result.materialJson = materialDefinitionJson;
     MaterialAssetValidator::ValidateInstanceOverrides(
         result.materialJson,
         materialInstanceJson,
@@ -209,5 +220,11 @@ MaterialInstanceResolveResult MaterialInstanceResolver::Resolve(
     result.effectiveMaterialInstanceJson["macros"] = BuildEffectiveMacros(result.materialJson, materialInstanceJson, materialInstancePath);
     result.effectiveMaterialInstanceJson["parameters"] = BuildEffectiveParameters(result.materialJson, materialInstanceJson, materialInstancePath);
     result.effectiveMaterialInstanceJson["textures"] = BuildEffectiveTextures(result.materialJson, materialInstanceJson, materialInstancePath);
+    if (result.materialJson.contains("offlineModel"))
+        result.effectiveMaterialInstanceJson["offlineModel"] = result.materialJson["offlineModel"];
+    if (materialInstanceJson.contains("modelProfile"))
+        result.effectiveMaterialInstanceJson["modelProfile"] = materialInstanceJson["modelProfile"];
+    else if (result.materialJson.contains("modelProfile"))
+        result.effectiveMaterialInstanceJson["modelProfile"] = result.materialJson["modelProfile"];
     return result;
 }

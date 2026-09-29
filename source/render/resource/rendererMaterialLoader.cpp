@@ -16,6 +16,9 @@
 #include "materialInstanceValidator.h"
 #include "pipeline/pipelineBase.h"
 #include "pipeline/pipelineFactory.h"
+#include "render/offline/offlineWorldAssets.h"
+#include "render/offline/offlineGroomAsset.h"
+#include "shader/build/contentHash.h"
 #include "render/backend/rendererBackendVulkan.h"
 #include "render/resource/rendererResourceCache.h"
 #include "render/resource/rendererResourceLoadContext.h"
@@ -29,6 +32,25 @@ namespace VL
 namespace
 {
 
+MaterialInstanceResolveResult ResolveSceneMaterial(
+    const RendererResourceLoadContext& context,
+    std::string_view path, const nlohmann::json& source)
+{
+    const std::string key = MaterialAssetUtils::NormalizeAssetPath(path);
+    if (context.useFrozenMaterials && context.offlineWorldAssets &&
+        context.offlineWorldAssets->effectiveMaterialInstances.count(key))
+    {
+        MaterialInstanceResolveResult result;
+        result.effectiveMaterialInstanceJson =
+            context.offlineWorldAssets->effectiveMaterialInstances.at(key);
+        result.materialPath = result.effectiveMaterialInstanceJson.at("material");
+        result.materialJson = context.offlineWorldAssets->materialDefinitions.at(key);
+        result.shaderName = result.effectiveMaterialInstanceJson.at("shaderName");
+        return result;
+    }
+    return MaterialInstanceResolver::Resolve(path, source);
+}
+
 nlohmann::json LoadMaterialInstanceJson(
     const RendererResourceLoadContext& loadContext,
     std::string_view materialInstancePath)
@@ -40,6 +62,9 @@ nlohmann::json LoadMaterialInstanceJson(
     {
         return *loadContext.materialInstanceOverrideJson;
     }
+    if (loadContext.useFrozenMaterials && loadContext.offlineWorldAssets &&
+        loadContext.offlineWorldAssets->materialInstanceSources.count(normalizedPath))
+        return loadContext.offlineWorldAssets->materialInstanceSources.at(normalizedPath);
 
     std::ifstream materialInstanceFile(
         CommonFunction::Path(std::string(materialInstancePath)));
@@ -265,25 +290,58 @@ RendererMaterialLoader::LoadSceneMaterialInstance(
     const nlohmann::json materialInstanceJson =
         LoadMaterialInstanceJson(loadContext, materialInstancePath);
     const MaterialInstanceResolveResult resolveResult =
-        MaterialInstanceResolver::Resolve(
+        ResolveSceneMaterial(loadContext,
             materialInstancePath,
             materialInstanceJson);
-    const RenderMode renderMode =
-        MaterialInstanceValidator::ResolveRenderMode(
+    if (loadContext.offlineWorldAssets != nullptr)
+    {
+        // 复制的是 M_ 默认值与 MI 覆写后的有效 JSON，worker 不会碰 live MI。
+        const std::string key =
+            MaterialAssetUtils::NormalizeAssetPath(materialInstancePath);
+        loadContext.offlineWorldAssets->effectiveMaterialInstances.emplace(
+            key, resolveResult.effectiveMaterialInstanceJson);
+        loadContext.offlineWorldAssets->materialDefinitions.emplace(
+            key, resolveResult.materialJson);
+        loadContext.offlineWorldAssets->materialInstanceSources.emplace(
+            key, materialInstanceJson);
+        FreezeOfflineMaterialTextures(*loadContext.offlineWorldAssets,
             resolveResult.effectiveMaterialInstanceJson);
-
-    // Surface 材质按强类型 Pass 行为选择管线合同，不能依赖 config 中可变的
-    // pass name。透明材质也不能复用 Geometry 的 8 MRT 管线，否则 fragment
-    // output 和 Set 3 阴影描述符都不兼容。
+        if (resolveResult.effectiveMaterialInstanceJson.contains("modelProfile"))
+        {
+            const std::string reference =
+                resolveResult.effectiveMaterialInstanceJson["modelProfile"]
+                    .get<std::string>();
+            auto& profiles = loadContext.offlineWorldAssets->modelProfiles;
+            if (profiles.find(reference) == profiles.end())
+            {
+                const std::filesystem::path physical = CommonFunction::Path(reference);
+                std::ifstream file(physical, std::ios::binary);
+                if (!file)
+                    throw std::runtime_error("Cannot open modelProfile: " + reference);
+                const std::string bytes(
+                    std::istreambuf_iterator<char>(file),
+                    std::istreambuf_iterator<char>{});
+                const nlohmann::json profile = nlohmann::json::parse(bytes);
+                profiles.emplace(reference, profile);
+                loadContext.offlineWorldAssets->modelProfilePaths.emplace(
+                    reference, physical);
+                loadContext.offlineWorldAssets->modelProfileDigests.emplace(
+                    reference, ContentHasher::HashString(bytes).ToHex());
+            }
+        }
+    }
+    if (loadContext.offlineOnly) return {};
+    if (!resolveResult.materialJson.value("realtimeSupported", true))
+        throw std::runtime_error("Material has no realtime implementation: " +
+                                 std::string(materialInstancePath));
+    const RenderMode renderMode =
+        MaterialInstanceValidator::ResolveRenderMode(resolveResult.effectiveMaterialInstanceJson);
+    // 实时才按 Pass 合同准备 pipeline；CPU-only 材质不要求虚构的 Surface shader。
     const RenderGraphPassType surfacePassType =
-        renderMode == RenderMode::ForwardOpaque
-        ? RenderGraphPassType::ForwardOpaque
-        : IsTransparentRenderMode(renderMode)
-            ? RenderGraphPassType::ForwardTransparent
-            : RenderGraphPassType::Geometry;
-    Renderpass& renderPass =
-        loadContext.renderGraph.RequireUniquePass(
-            surfacePassType);
+        renderMode == RenderMode::ForwardOpaque ? RenderGraphPassType::ForwardOpaque
+        : IsTransparentRenderMode(renderMode) ? RenderGraphPassType::ForwardTransparent
+        : RenderGraphPassType::Geometry;
+    Renderpass& renderPass = loadContext.renderGraph.RequireUniquePass(surfacePassType);
     return LoadMaterialInstance(materialInstancePath, renderPass);
 }
 
@@ -300,7 +358,7 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
     const nlohmann::json materialInstanceJson =
         LoadMaterialInstanceJson(loadContext, materialInstancePath);
     MaterialInstanceResolveResult materialInstanceResolveResult =
-        MaterialInstanceResolver::Resolve(materialInstancePath, materialInstanceJson);
+        ResolveSceneMaterial(loadContext, materialInstancePath, materialInstanceJson);
     nlohmann::json& effectiveMaterialInstanceJson =
         materialInstanceResolveResult.effectiveMaterialInstanceJson;
     const RenderMode effectiveRenderMode =
@@ -314,7 +372,7 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
     const bool isOverriddenMaterialInstance =
         loadContext.materialInstanceOverrideJson.has_value() &&
         loadContext.materialInstanceOverridePath == materialInstanceKey;
-    if (!isOverriddenMaterialInstance &&
+    if (!isOverriddenMaterialInstance && !loadContext.useFrozenMaterials &&
         cachedMaterialInstance != nullptr && *cachedMaterialInstance != nullptr)
     {
         std::shared_ptr<Material> cachedBaseMaterial =
