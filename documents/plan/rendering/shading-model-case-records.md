@@ -947,5 +947,224 @@ py -3 tool\validation\check_plot_font.py            # 字体表结构 + 字形 a
 `--world-graph-transaction-test`（含 World/Graph 回滚、M_ 提交、retirement drain）。
 **结论**：`description` 契约没有破坏运行期测试；反而是在确认这件事的过程中把两条陈旧 fixture 修好了。
 
+---
 
+## S-32 / S-03 / S-04 / S-10 / S-27 — A 臂 sheen 的公式读法与 `E_s` 表口径（2026-09-22）
+
+A 臂（`Cloth` = 8，Estévez & Kulla 2017）在实现之前把"剩下要推的部分"一次核完：
+**式(3)(4) 怎么读**、**`E_s` 表怎么烘**、**怎么判定它对**。全部结论都由新增的离线参考实现产出。
+
+### 工具
+
+`tool/validation/verify_cloth_sheen_albedo.py`（纯 stdlib，20 项断言；`--converge` 做 `N→2N` 自检、
+`--quick` 快速回归、`--json` 落结果）。它把论文式(1)–(4) 独立实现一遍，是**将来 GPU LUT generator
+的口径合同**：换分布、换轴参数化、换采样规则都要先改它。运行：
+
+```powershell
+py -3 tool\validation\verify_cloth_sheen_albedo.py --quick          # 快速回归
+py -3 tool\validation\verify_cloth_sheen_albedo.py --n-theta 192 --n-phi 96 --json artifacts/cloth_sheen_albedo.json
+py -3 tool\validation\verify_cloth_sheen_albedo.py --converge       # 求积收敛自检
+```
+
+现场证据：`artifacts/cloth_sheen_albedo.json`（本次全量结果，20/20 通过）。
+
+### 1. 三处读法错误（`S-32`）——每一处都会改变亮度
+
+| # | 论文原文 | 旧读法 | 数值后果（实测） |
+| --- | --- | --- | --- |
+| 1 | `L(x) = a/(1 + b·x^c) + d·x + e`（指数在**分母**的 `x` 上，p2 式(3) 下方） | 写成 `a/(1+b·x) + d·x^c + e` | `r=0`、`x=0.25`：$\Lambda$ 5.997 → **2868**；`G(NoL=0.5,NoV=1,r=0.5)` 0.515 → **0.134**（3.8 倍） |
+| 2 | $\Lambda(\theta)=e^{L}$（式(3) 的两个分支都带 `exp`） | 把 `L` 当 $\Lambda$ 返回；软化写成 `pow(L,k)` | 直接算出 **`G = −0.087`**（负值，物理上不可能） |
+| 3 | `P=(1−r)²P₀+(1−(1−r)²)P₁`（p2 Table 1 上方） | GLSL 写 `mix(P₀,P₁,t)` | 整套系数按 `r` 镜像：`r=0` 用到 `r=1` 的拟合（见 `A2.5` 的警告） |
+
+旁证（第三方实现，只作交叉核对）：Marmoset Toolbag 的 Unity 移植写的是
+`g.a*rcp(1.0 + g.b*pow(x, g.c)) + g.d*x + g.e`、`G1 = exp(L)`、软化 `pow(dL, 1+2f)`，
+与"按论文排版逐字读"完全一致（`G2 = rcp(1 + dL + dV)`，与式(3)(4) 同构）。
+
+### 2. `E_s` 表的离线口径（`S-03`）
+
+`E_s(NoV,r) = ∫_{Ω+} f_sheen·NoL dω_l = (1/(4·NoV))·∫_{Ω+} G·D dω_l`（`NoL` 与积分权重约掉一个）。
+
+| 项 | 取值 | 依据 |
+| --- | --- | --- |
+| 采样 | **均匀半球**（离线等立体角分层中点法，GPU 侧 Hammersley） | 论文 §2 自己给的结论：*"plain uniform sampling of the upper hemisphere to be more effective"* |
+| `G` 版本 | **未软化的互易核** | 表只有一个自变量轴、直光两端共用；软化破坏互易且只做在受光侧。实测软化/未软化 = `0.911 ~ 0.927` ⇒ 用未软化口径**不会低估**扣除量 |
+| 分辨率 / 轴 | **16×16**；`x` 轴在 $[\cos 80^\circ, 1]$ 内**按余弦均分**（限域必须作用到轴样本上）；`y` 轴按 **$\sqrt r$** 均分 | 24 组轴参数化扫描后**唯一同时满足"域内 $E_s\le1$ 且 $\lvert\Delta E\rvert\le0.02$"**的组合：`cos`(限域)+`√r` → **0.0120**（32×32 只到 0.0039）；对比：按角度均分 0.041、线性 `r` 轴 0.129~0.192、不限域余弦轴三档 $\theta_{\max}$ 全部烘进 $E_s>1$ 的格子 |
+| 颜色 | 不进表；分层时扣 `c_s·E` | 表是 2D（角度 × 粗糙度），颜色放不进去；漏乘 `c_s` 的反例见下 |
+
+求积自检：$\int D(n\cdot h)\,d\omega_h$ 在 `r∈{0.1,0.3,0.5,1}` 上偏差 $\le 1.5\times10^{-4}$；
+`N→2N` 收敛：`E_s` 的变化从 `1e-5` 量级降到 `1e-6` 量级（`--converge`）。
+
+### 3. 白炉与分层口径（`S-04` / `S-10` / `S-27`）
+
+| 判据 | 实测 |
+| --- | --- |
+| `0 < E_s ≤ 1` | 最大 **0.827322**（`NoV≈0.1`、`r=0.05`）、最小 `2.6e-5` |
+| 直光 `base·min(1−c_sE(NoL),1−c_sE(NoV)) + sheen ≤ 1` | **1.000000000**（超 1 的量 `+0.00e+0`） |
+| IBL `base·(1−c_sE(NoV)) + sheen ≡ 1` | 偏差 `0` |
+| 漏乘颜色（写成 `1−E`），`c_s=0.2` | 总和 **0.905627**（凭空暗 0.094）——反例 |
+| 误写 `min(E)`（`NoL=0.4`、`NoV=0.9`、`r=0.5`，`E=0.3435/0.1180`） | base 只剩 **0.1180**（正确口径 0.6565，被吃掉 82%）——反例 |
+| 直光误用单端 `1−c_sE(NoV)` | 给 base **0.8820**，与两端取小（0.6565）互斥，口径不自洽——反例 |
+| 表重建误差（16×16、限域余弦轴 + `√r` 轴） | 最大 $\lvert\Delta E\rvert$ **0.0120**（32×32 为 0.0039） |
+
+### 4. 顺带发现的模型瑕疵（登记，不在实现里"修"）
+
+深掠射角上论文的 $\Lambda$ **拟合**会让 $E_s$ 超过 1：`r=0.01` 需要 `NoV ≥ 0.087` 才回落、
+`r=0.001` 需要 `NoV ≥ 0.05`，而 `r ≥ 0.05` 时到 `NoV = 1e-4` 都还 $\le 1$。
+这不是积分口径的问题（同一次运行的 D 投影面积归一化误差 $\le 1.5\times10^{-4}$），
+而是式(3) 的拟合在深掠射端与真值失配。处理：**轴域避开**（$\theta_v\le80^\circ$）+ 在知识库与计划里登记；
+注意"限域"必须作用到**轴样本**上——不限域的余弦轴（`NoV = t`）无论 $\theta_{\max}$ 设多少，
+烘出来的表里都有 $E_s>1$ 的格子（扫描里三档全是"域无效"），那种表会让分层因子 $1-c_sE$ 变负。
+
+轴域外（$\theta_v>80^\circ$）的查询按 clamp-to-edge 取 $80^\circ$ 那一行，代价实测：
+
+| $r$ | $\Delta E$（$\theta_v=85^\circ$） | $\Delta E$（$\theta_v=89^\circ$） |
+| --- | --- | --- |
+| 0.02 | +0.3560 | +1.0670（真值 $\approx1.24>1$，属"封顶"） |
+| 0.05 | +0.2489 | +0.6535 |
+| 0.3 | +0.1353 | +0.3178 |
+| 0.9 | +0.1333 | +0.3163 |
+
+将来若确实需要那一小段掠射 sheen，再决定是夹 lobe（把 `f_sheen` 的结果封顶）还是换 $\Lambda$ 的解析形式。
+
+### 同步位置
+
+- 知识库 `cloth-sheen` 页：`A2.3`（`L(x)` 形式 + 跨实现旁证）、`A2.4`（$\Lambda=e^{L}$ 与两条边界性质）、
+  `A2.5`（插值权重方向警告）、`A2.7`（软化的作用层 + 两个坑）、`A5.2/A5.4/A5.5`（`1−c_sE`）、
+  `A6.1/A6.3`（积分口径与规格表 + 已知瑕疵）、`A7.5/A7.7`（$\mu=c_sE_s$）、`A8.2`（白炉清单表）、
+  A 臂伪代码（`CharlieLambda` / `Lcurve` / `SheenAlbedo` / `ClothSheenIbl`）；
+- 决策树：`Estévez 式3 的 G`、新增 `✘ Λ 当 L 用 / 指数抄到 d·x^c`、`albedo scaling min(αi,αo)`、
+  `环境项按 lobe 单独给`；
+- 计划：§2.3③（LUT 行 + 新增"离线参考实现"行）、§2.3④（`S-03`/`S-04`/`S-10` 收口 + 新增 `S-32`）、
+  §2.3⑦ 第 9 条、§2.3⑩（本轮总结）。
+
+## S-35 — B 臂环境项的积分域：$\Omega^+$（2026-09-22）
+
+| 字段 | 内容 |
+| --- | --- |
+| **ID** | `S-35` |
+| **来源** | [Marschner et al. 2003](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#marschner-2003) **式(1) 正下方原文**（书库 PDF p3，§2）；[Sadeghi et al. 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#sadeghi-microcylinder) §4.3（PDF p5）与其式(1)(6)(10) 的排版；`shader/glsl/common/lighting.glsl:209-245`（`EvaluateIrradianceSH`）；`shader/glsl/generator/skySHGenerate.comp:5-11` |
+| **验证目标** | B 臂（`ClothFiber`=13）的**环境项**积分域该取全域 $S^2$ 还是宏观上半球 $\Omega^+$。核的域由论文决定，环境项由引擎唯一能给的光源口径决定，两者必须同域 |
+| **形式** | 公式溯源（PDF 原文抽取）+ 数值积分（离线，核代理） |
+| **实现锚点** | 计划 §2.3④ `S-35`、§2.3③⑤⑦（第 10 条）⑪⑫；知识库 `cloth-sheen` B0.5 / B7.1 / B7.5 / **B7.7（新增）** / B8.1 / B9.1 / B9.3 与汇总表、伪代码；`artifacts/cloth_review/domain_split_estimate.py`（当次现场证据） |
+| **判定** | **通过：定案 $\Omega^+$**。核保留论文的全域口径（有原文直证），环境项取 $\Omega^+$。地平线以下（$\Omega^-$）占比实测 **6.49%~27.18%**；丢掉的方向是**偏暗**，无增益风险 |
+| **差异归因** | 与论文的差异**有意且已量化**：论文的积分域来自"孤立圆柱在自由空间里可以被任意方向照到"（1D 曲线没有法线、没有半球可言），织物级则是不透明表面；论文本身没有环境项，"环境项用什么域"不在论文结论范围内。不取 $\Omega^+$ 的代价是把 $\Omega^-$ 那一份按**上半球平均亮度**白送（偏亮）——引擎拿不出全域平均 radiance（SH 只投了天空，没有地面回弹） |
+
+### 1. 论文原文（本次从书库 PDF 抽出核对）
+
+Marschner 2003 式(1) 正下方（PDF p3，§2）：
+
+> "Given this definition, the scattering integral is written as $\bar L_r(\omega_r)=D\int S(\omega_i,\omega_r)L_i(\omega_i)\cos\theta_i\,d\omega_i$ (1)
+> **Note that, unlike a surface where the integral extends over the upper hemisphere, this integral extends over the entire sphere.**"
+
+Sadeghi 2013 §4.3（PDF p5）：*"To establish radiometric notation for our cylinder based model we **use the curve radiance integral from [Marschner et al. 2003]**"* —— 原样继承。
+用 pypdf 的 layout 模式逐式核过：他的式(1)(6)(10) 排版上都是**裸 `∫`、没有 $\Omega$ / $S^2$ 之类的限域字形**
+（`t∈Cj` 那种下标都能抽出，域标记没有）。
+
+**所以"按论文"的答案是全域 $S^2$；要改的不是核，而是环境项的域。** 上一轮"$S^2$ 是知识库自己补的"这个说法据此更正：
+它是从 Marschner 继承的，只是没有原文页码可查。
+
+### 2. 为什么环境项不能跟着用 $S^2$
+
+三条（完整版见计划 §2.3⑫ 与知识库 B7.7）：
+
+1. 织物级是不透明表面，$\Omega^-$ 的方向在材料内部；论文的核里**没有任何宏观法线因子**（$n$ 只通过倾斜后的 $n_k$ 与 $(\theta_v,\varphi_v)$ 坐标架进入），这既是论文自己的近似，也与它把"不同方向纱线之间的遮挡"列为 future work 同源；
+2. 引擎唯一的环境输入是 `EvaluateIrradianceSH(n)/π`（宏观法线的**上半球余弦加权**平均 radiance）；表按 $S^2$ 烘、$L$ 只有上半球 ⇒ 白送；
+3. 孔隙项用的是宏观 $n\cdot l$；纤维核走 $S^2$ 会让同一材质内部出现两套入射域。
+
+### 3. 量级（离线）
+
+$M$ 与 $P$ 都在 $l\cdot n_k\le0$ 时同时归零（${M=\max(\cos\varphi,0)}$，${P=\max(\cos\psi,0)}$ 而
+$\cos\psi=(\omega\cdot n_k)/\lVert\omega-(\omega\cdot b_k)b_k\rVert$，分子就是 $\cos\varphi$），
+所以域差异完全由**倾斜局部法线的朝向**决定。用核代理（$f_s\equiv1$，保留 $M$/$P$/$\cos\theta_i$ 与式(13) 跨族分母）
+积分整个球面，统计 $\Omega^-$ 占比：
+
+| 织物（Table 2/3 参数） | $\theta_v=20^\circ$ | $\theta_v=45^\circ$ | $\theta_v=75^\circ$ |
+| --- | --- | --- | --- |
+| Satin 正面（Table 3 flat 曲线，最大倾角 $\pm32^\circ$，$a=0.9/0.1$） | 7.99% | 8.97% | 16.30% |
+| 平纹（$\sigma_t=8^\circ$） | 6.49% | 7.80% | 20.09% |
+| 中等倾斜（$\sigma_t=20^\circ$） | 10.29% | 12.79% | 27.18% |
+| Velvet Dir 2（Table 3 `-90,-55,55,90`） | 16.87% | 18.35% | 19.03% |
+
+### 4. 落地口径（写死）
+
+- 间接光表：$E_{\mathrm{fabric}}(v)=\int_{\Omega^+}K(v,l)\,d\omega_l$，$K$ 与直接光**同一个核**（含跨族 $P$ 分母），只换积分域；
+- **直接光不改**：按实际光源方向逐项求值，核里不做 $n\cdot l$ 截断（光源落在布面下方时论文模型本来也会散射它）——这是有意保留的差异，不是实现缺漏；
+- 验收：知识库 B9.1 的"表和核一致"必须同域；`S-34` 的误差门限连带记录域；
+- 已知误差：丢掉核在 $\Omega^-$ 上的 6.5%~27.2%，方向偏暗。
+
+### 5. 顺带抽出、实现时要用的论文数据
+
+**Table 2（PDF p9）**：`γ` 参数单位为度。
+
+| 织物 | $\eta$ | Thread | $A$ | $k_d$ | $\gamma_s$ | $\gamma_v$ |
+| --- | --- | --- | --- | --- | --- | --- |
+| Linen Plain | 1.46 | Both | (0.2, 0.8, 1) × 0.3 | 0.3 | 12 | 24 |
+| Silk Crepe de Chine | 1.345 | Flat | (1, 0.95, 0.05) × 0.12 | 0.2 | 5 | 10 |
+| Silk Crepe de Chine | 1.345 | Twisted | (1, 0.95, 0.05) × 0.16 | 0.3 | 18 | 32 |
+| Polyester Satin Charmeuse | 1.539 | Flat | (1, 0.37, 0.3) × 0.035 | 0.1 | 2.5 | 5 |
+| Polyester Satin Charmeuse | 1.539 | Twisted | (1, 0.37, 0.3) × 0.2 | 0.7 | 30 | 60 |
+| Silk Shot Fabric | 1.345 | Dir 1 | (0.1, 1, 0.4) × 0.2 | 0.1 | 4 | 8 |
+| Silk Shot Fabric | 1.345 | Dir 2 | (1, 0, 0.1) × 0.6 | 0.1 | 5 | 10 |
+| Velvet | 1.46 | Both | (0.05, 0.02, 0) × 0.3 | 0.1 | 6 | 12 |
+
+**Table 3（PDF p11，Appendix A "Tangent Distribution Curves"）**：$n$ 个控制点配 $n-1$ 个段长（曲线闭合、末段不计权）。
+
+| 织物 | Thread | $a$ | Tangent Offsets (deg) | Tangent Lengths |
+| --- | --- | --- | --- | --- |
+| (a) Linen Plain | Both | 0.33 | 25, 25 | 1 |
+| (b) Silk Crepe de Chine | Flat | 0.75 | -35, -35, 35, 35 | 1, 1, 1 |
+| (b) Silk Crepe de Chine | Twisted | 0.25 | 0, 0 | 1 |
+| (c) Satin 正面 | Flat | 0.9 | -32, -32, -18, 0, 0, 18, 32, 32 | 1.33, 0.66, 2, 2, 2, 0.66, 1.33 |
+| (c) Satin 正面 | Twisted | 0.1 | 0, 0 | 1 |
+| (d) Satin 背面 | Flat | 0.67 | -30, -30, 30, 30, -5, -5, 5, 5 | 1.33, 1.33, 1.33, 0.67, 0.67, 0.67 |
+| (d) Satin 背面 | Twisted | 0.33 | 0, 0 | 3 |
+| (e) Silk Shot | Dir 1 | 0.86 | -25, -25, 25, 25 | 1.33, 2.67, 1.33 |
+| (e) Silk Shot | Dir 2 | 0.14 | 0, 0 | 1 |
+| (f) Velvet | Dir 1 | 0.5 | -90, -50 | 1 |
+| (f) Velvet | Dir 2 | 0.5 | -90, -55, 55, 90 | 0.5, 0, 0.5 |
+
+注：`T=8` 的槽数上限来自 (c) flat 的 8 个控制点；`(d)` flat 也是 8 个，(f) Dir 2 的 4 个用 `q=0` 补到 8。
+`(a)` Linen 两族覆盖率各 0.33（$a_1+a_2=0.66$，缺 34%）——孔隙项的数据来源即此。
+
+### 6. 复现方式
+
+```powershell
+# 论文原文与页码核对（书库离线 PDF）
+py -3 artifacts/cloth_review/extract_paper.py "over the sphere" "hemisphere" "integral"
+py -3 artifacts/cloth_review/check_integral_domain.py both
+# Ω⁻ 占比
+py -3 artifacts/cloth_review/domain_split_estimate.py
+# 书库侧自检
+cd <yyb-knowledge-book>; npm run citation:check; npm run citation:pages; npm run mindmap:check -- src/content/docs/rendering/materials/shading-models/cloth-sheen.mindmap
+```
+
+### 7. 同步位置
+
+- 计划：§2.3④（新增 `S-35`）、§2.3③（`ShadeClothFiber` 行）、§2.3⑤（B 臂范围）、§2.3⑦ 第 10 条、§2.3⑪（表）、§2.3⑫（新增）；
+- 知识库 `cloth-sheen` 页：B0.5、B7.1、B7.5、B7.6、**B7.7（新增）**、B8.1、B9.1、B9.3、统一口径汇总表、伪代码 `ClothFiberIbl`、VulkanLearn 落地约束表；
+- 知识库决策树：新增 `环境项积分域 Ω⁺` 叶子；同时把 `Fresnel 透射能量项` 缺的 `marschner-2003 p7` 出处补进 `citations.json`（该引用此前只存在于生成的 `.mindmap` 里，属已存在的漂移）；
+- `documents/rendering/gbuffer-channel-ownership.md` §7 的 `E_fabric` 行。
+
+
+
+## S-02 — Estévez & Kulla 2017 Fig. 2 交互曲面（2026-09-29）
+
+| 字段 | 内容 |
+| --- | --- |
+| **ID** | `S-02` |
+| **来源** | Estévez & Kulla 2017 Fig. 2、式(2) |
+| **验证目标** | `D(θ,r)=(2+1/r)sin(θ)^(1/r)/(2π)` 随 `θ∈[0,π/2]` 和论文 `r∈(0,1]` 的形状；`r→0` 时峰值集中于掠射角 |
+| **形式** | 独立 Three.js 实时曲面、线框、正交轨道相机和可调 `r` 截线；悬停读取 `θ,r,D` |
+| **实现锚点** | 知识库 `src/content/docs/rendering/materials/papers/estevez-kulla-2017/resource/interactive/estevez-fig2/main.js` 直接求值式(2)，由同一解析函数生成曲面、网格、截线和读数；页面嵌在论文的 `fig2.mdx`，Cloth 总览索引该案例，薄路由仍为 `/interactive/estevez-fig2/` |
+| **判定** | **部分完成**：桌面/移动浏览器交互与几何闭式锚点已核对；尚未进行论文图的坐标投影标定与曲面像素/采样误差验收 |
+| **差异归因** | `r=0` 不在定义域内，页面取 `r_min=0.05`；论文图面机位、网格密度和配色未作为定量约束，本地构图只用于检查函数形状，不能把外观近似当作逐像素复现 |
+
+闭式锚点：`D(π/2,1)=3/(2π)=0.477465`，
+`D(π/2,0.25)=3/π=0.954930`，
+`D(π/2,0.05)=22/(2π)=3.501409`。
+旧 `M_brdfPlot` 的 `ClothSheenRoughnessToAlpha(r)=r²` 属于不同
+参数化，**不得**用于此页面。知识库根目录运行 `npm run dev` 后，
+访问 `/rendering/materials/papers/estevez-kulla-2017/fig2/`；
+Cloth 总览 `/rendering/materials/shading-models/cloth-sheen/` 保留案例入口。
+`S-02` 状态保持 ◐。
 

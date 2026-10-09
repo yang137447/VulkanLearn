@@ -18,6 +18,8 @@
 !/resources/README.md
 /output/playwright
 /imgui.ini
+# Fig. 2 的源文件已迁入知识库；旧本地 Vite 构建产物不入库。
+/tool/visualization/estevez-fig2/
 __pycache__/
 # 论文 PDF 的抽取文本（tmp/pdftext/）：按需重新生成，不入库。
 # 生成命令见 documents/plan/rendering/shading-model-alignment-plan.md §1.4.1。

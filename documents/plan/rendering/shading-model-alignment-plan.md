@@ -375,14 +375,14 @@ yyb-knowledge-book/src/content/docs/rendering/materials/shading-models/
 
 | # | 公式 | 代码位置 | 论文核对结果 | 状态 |
 | --- | --- | --- | --- | --- |
-| S-a | `ClothCharlieDistribution` = `(2 + 1/α) sin^(1/α)θ_h / (2π)` | `common/clothBrdf.glsl:32` | [Estévez & Kulla 2017](#estevez-sheen) 式(2)：`D(m) = (2 + 1/r) sin^(1/r)θ / 2π`，**逐项一致** | ✅ |
-| S-b | `ClothSheenRoughnessToAlpha` = `r²` | `common/clothBrdf.glsl:15` | 论文的分布参数 `r` 直接是 `sin` 的指数（`(0,1]`），**没有 `r → α` 的映射**；代码的 `α = r²` 是 [Karis 2013](#karis-ue4) 的 Disney 约定被**平移**到 Charlie 上 | 🔎 待定（见 `S-24`） |
-| S-c | `ClothNeubeltVisibility` = `1/(4(N·L+N·V−N·L·N·V))` | `common/clothBrdf.glsl:44` | [Neubelt & Pettineo 2013](#neubelt-order-1886) 式(23) 的分母 **逐字一致**。但原文语境是：*"we dropped the geometry term"* —— 它是**最终 BRDF 里替换传统 microfacet 分母的那一项**，不是独立的 visibility 函数。函数取名 `…Visibility` 属本项目命名 | ✅ 公式有出处（命名待改） |
-| S-d | 各向异性 visibility 的掠射衰减 `4(1-α)(1-warpNoL)(1-warpNoV)` | `common/clothBrdf.glsl:135` | Estévez & Kulla 全文**无各向异性内容**（论文仅 2 页）；Neubelt 只给 GGX 的各向异性代入。**补查后**：有出处的各向异性布料模型走的是另一条路线，见 §1.4.3 | ❌ **论文无此式** |
-| S-e | `aspect = 2^anisotropy` | `common/clothBrdf.glsl:61` | 两篇论文都没有 anisotropy→轴比的映射。**有出处的替代**：Neubelt 式(12)(13) `α_t=α`、`α_b=lerp(0,α,1−anisotropy)`（但是给 GGX 的）；microcylinder 路线则完全不同（§1.4.3） | ❌ **论文无此式**（存在有出处的替代） |
-| S-f | 椭圆切平面 Charlie `D_iso·(α_T α_B sin²θ_h)/denom` | `common/clothBrdf.glsl:97` | Estévez & Kulla 不提供各向异性 Charlie；把 Neubelt 的椭圆代入套到 Charlie 上**没有任何论文给出这个联合形式** | ❌ 论文无此式 |
-| S-g | cross 两瓣混合 `mix(primary, 0.5(primary+cross), cross)` | `common/clothBrdf.glsl:184` | 两篇论文都没有 cross / 双轴纤维瓣；microcylinder 路线用 thread tangent 表达各向异性，也没有 cross 参数 | ❌ 论文无此式 |
-| S-h | `T_b = 1 − c_s·E_s(NoV, α_s)` 分层 | `engine/clothLighting.glsl` | Estévez & Kulla §5 用 Kelemen–Szirmay-Kalos albedo scaling，**缩放因子是 `min(α_i, α_o)`**（入射与出射方向各一个 albedo 取较小者），不是 `1 − E_s(NoV)` | ❌ 与论文式不同（见 `S-27`） |
+| S-a | `ClothCharlieDistribution` = `(2 + 1/α) sin^(1/α)θ_h / (2π)` | `common/clothBrdf.glsl:34` | [Estévez & Kulla 2017](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#estevez-sheen) 式(2)：`D(m) = (2 + 1/r) sin^(1/r)θ / 2π`，**逐项一致** | ✅ |
+| S-b | `ClothSheenRoughnessToAlpha` = `r²` | `common/clothBrdf.glsl:27` | 论文的分布参数 `r` 直接是 `sin` 的指数（`(0,1]`），**没有 `r → α` 的映射**；代码的 `α = r²` 是 [Karis 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#karis-ue4) 的 Disney 约定被**平移**到 Charlie 上 | 🔎 待定（见 `S-26`） |
+| S-c | `ClothNeubeltVisibility` = `1/(4(N·L+N·V−N·L·N·V))` | `common/clothBrdf.glsl:54` | [Neubelt & Pettineo 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#neubelt-order-1886) 式(23) 的分母 **逐字一致**。但原文语境是：*"we dropped the geometry term"* —— 它是**最终 BRDF 里替换传统 microfacet 分母的那一项**，不是独立的 visibility 函数。函数取名 `…Visibility` 属本项目命名 | ✅ 公式有出处（命名待改，见 `S-24`） |
+| S-d | 各向异性 visibility 的掠射衰减 `4(1-α)(1-warpNoL)(1-warpNoV)` | ~~`common/clothBrdf.glsl:135`~~ | Estévez & Kulla 全文**无各向异性内容**（论文仅 2 页）；Neubelt 只给 GGX 的各向异性代入 | ✅ **已清算：2026-09-17 随路线定案（方案 C）删除**，不再存在于仓库 |
+| S-e | `aspect = 2^anisotropy` | ~~`common/clothBrdf.glsl:61`~~ | 两篇论文都没有 anisotropy→轴比的映射。有出处的替代：Neubelt 式(12)(13)（但是给 GGX 的）；microcylinder 路线完全不同（§1.4.3） | ✅ **已清算：2026-09-17 删除**；各向异性改由 B 臂 `ClothFiber`（thread tangent）承担 |
+| S-f | 椭圆切平面 Charlie `D_iso·(α_T α_B sin²θ_h)/denom` | ~~`common/clothBrdf.glsl:97`~~ | Estévez & Kulla 不提供各向异性 Charlie；把 Neubelt 的椭圆代入套到 Charlie 上**没有任何论文给出这个联合形式** | ✅ **已清算：2026-09-17 删除** |
+| S-g | cross 两瓣混合 `mix(primary, 0.5(primary+cross), cross)` | ~~`common/clothBrdf.glsl:184`~~ | 两篇论文都没有 cross / 双轴纤维瓣；microcylinder 路线用 thread tangent 表达各向异性，也没有 cross 参数 | ✅ **已清算：2026-09-17 删除** |
+| S-h | `T_b = 1 − c_s·E_s(NoV, α_s)` 分层 | `engine/clothLighting.glsl` | Estévez & Kulla §5 的 Kelemen–Szirmay-Kalos albedo scaling，讲义把它写全了：被嵌套层乘 **`min{(1−E(ωo)), (1−E(ωi))}`**（[讲义 p105](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#imageworks-s2017-slides)，即"按拿走更多的那侧扣"），**不是单端 `1 − E_s(NoV)`**、更不是把 base 乘 `min(E)` | ❌ 与论文式不同（见 `S-27`）；文件随旧实现于 2026-09-12 删除，重建 A 臂时按 ⑧ 的结论写 |
 
 **Hair**
 
@@ -456,7 +456,7 @@ f_s(t,ωi,ωr)   = ( f_r,s + f_r,v ) / cos²θd                             (4) 
 
 | | 路线 A：sheen / Charlie 系 | 路线 B：microcylinder 系 |
 | --- | --- | --- |
-| 出处 | [Estévez & Kulla 2017](#estevez-sheen) 式(2) + [Neubelt & Pettineo 2013](#neubelt-order-1886) 式(23) | [Sadeghi et al. 2013](#sadeghi-microcylinder) 式(2)(3)(4) |
+| 出处 | [书库 `#estevez-sheen`](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#estevez-sheen) 式(2)（p1） + [书库 `#neubelt-order-1886`](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#neubelt-order-1886) 式(23)（p9） | [书库 `#sadeghi-microcylinder`](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#sadeghi-microcylinder) 式(2)(3)(4)（p5） |
 | 各向异性 | **没有**。Charlie 只吃 `N·H`，切线不进入公式 → 整块布料外观均匀，转向不变 | **有**。thread tangent `t` 定义反射锥，`γ_s` / `γ_v` 沿切线方向展宽 → 高光呈条纹状并随织纹方向转向 |
 | 控制量 | 只有 sheen roughness | **`γ_s` 与 `γ_v` 两个宽度参数** |
 | 典型观感 | 正对偏暗、掠射出现柔软亮边的"毛绒 / 天鹅绒" | 绸缎、斜纹布那种**有方向性的高光条纹** |
@@ -475,9 +475,29 @@ surface 项自然接近镜面，volume 项仍沿切线展宽）。B 在外观表
 | **B**（`S-29`） | 只留 microcylinder 模型 | 中（能量项与两张 LUT 重做） | 要织纹方向，且只维护一套公式 |
 | **C**（`S-31`） | **两条都保留**：A 作为"论文各向同性 sheen"对照臂，B 作为生产臂；两臂在**不同材质**下各跑 case，不混进同一个 BRDF | 最大（两套公式 + 两套能量账本） | 学习型项目：把"哪种近似丢了什么"直接变成可对照的证据 |
 
+**这三条路线直接对应知识库决策树上的叶子**（`yyb-knowledge-book` 的
+[Cloth 与 Sheen 布料](../../../../yyb-knowledge-book/src/content/docs/rendering/materials/shading-models/cloth-sheen.mdx)
+及其 `cloth-sheen.mindmap`）。知识库的树已经把这三种做法连同**已核对出处**一起摊开，并且它**反向引用了本计划的 `S-27`**——
+也就是说这条链路本来就是双向的，本计划要做的只是把路线定案**用同一套语言**写回去：
+
+| 本计划方案 | 知识库决策树叶子（含知识库自己标的出处） | 知识库当前标记 | 定案后该叶子应变成 |
+| --- | --- | --- | --- |
+| **A**（`S-23`） | `sheen lobe + base（Charlie 路线）`　`Estévez 式2 + Neubelt 式23·p1` | **⚠ 待整改** | **✔ 已实现**（前提：清掉无出处的各向异性输入）；并同步把未采纳的那些叶子标 `✘` 并写放弃理由 |
+| **B**（`S-29`） | `microcylinder（切线路线）`　`Sadeghi 2013 式2-4·p5` | **▢ 计划做** | **✔ 已实现**；Charlie 路线转 `✘ 不做·未采纳`（备注写"评估后放弃"的理由） |
+| **C**（`S-31`） | **两条叶子同时保留**（A 对照臂 / B 生产臂） | ⚠ + ▢ | 两条各自要有一份 ✅ 结论与 case 证据，且按 §1.4.3 的三条硬约束不得共用能量账本 |
+
+与该 case 直接相关的另外两条叶子：`▢ albedo scaling min(αi,αo)　Estévez §5 / S-27`（**本计划的 `S-27`**）与
+`▢ Fresnel 透射能量项　microcylinder 路线用·p5`——**选 B/C 时后者取代前者**，这正是"两张 LUT 与 `S-27` 必须重做"在知识库那边的对应叶子。
+标记词义沿用知识库的图例：`✔ 已实现 ｜ ▢ 计划做 ｜ ✘ 不做·未采纳 ｜ ⚠ 待整改 ｜ ◐ 部分·受限`。
+知识库还有一处 `VL 效果展示` 占位（sheen 权重矩阵、正对/掠射对照、base/sheen 能量互补前后对比），
+Cloth 重建完成后正好用它承载渲染证据——**这是本 case 与知识库之间唯一还空着的方向**。
+
 **方案 C 的教学价值**：它把"分布族的选择如何改变外观"变成可测量的对照——同一场景、同一光照，
 A 与 B 并排，差异可归因到"切线是否进入公式"这一条。这正是
-[Neubelt & Pettineo 2013](#neubelt-order-1886) Fig 6 左（GGX vs Charlie 分布对比）想要但没有做到的那组对照。
+[Neubelt & Pettineo 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#neubelt-order-1886)
+Fig 6 左想要的对照——**注意该图的左半是 GGX vs velvet 倒高斯（式21/22），不是 Charlie**；
+我们要画的那条 Charlie 来自 Estévez 式(2)（知识库决策树里那条 `✔ Charlie 指数化正弦　Estévez 式2 逐项一致`），
+两者同族但不是同一个式子，引用时不要混（见下"待修"）。
 
 **方案 C 的三条硬约束**（否则会退化成"两个都能用所以随便选"）：
 
@@ -491,7 +511,7 @@ A 与 B 并排，差异可归因到"切线是否进入公式"这一条。这正�
 
 | 状态 | 模型 | 含义 |
 | --- | --- | --- |
-| ❌ **论文里没有** | **Cloth / Sheen**（S-d / S-e / S-f / S-g / S-h，**旧实现已删除**） | 旧实现在论文之外；重建时必须按 §0.3.1 阶梯清算。**这是当前唯一被确认的自创公式区** |
+| ✅ **已清算（2026-09-17）** | **Cloth / Sheen**（S-d / S-e / S-f / S-g） | 四项自创公式已按 §0.3.1 从代码中删除：`common/clothBrdf.glsl` 现在只剩式(2) 的 Charlie 分布、式(23) 分母和两者的各向同性组合；各向异性改由 B 臂 `ClothFiber`（Sadeghi microcylinder，式 2-4）承担。`S-h`（`T_b = 1 − c_s·E_s` 分层）随旧实现一起删除，重建 A 臂时按论文 §5 的 `min(α_i, α_o)` 写。**仍然没有任何求值器**，所以结论暂不能写成"与论文一致" |
 | ✅ **已核对（2026-09-13）** | DefaultLit（D-b / D-f） | 两条都改判为**审计标注错误**：`GeometrySmith` 只被 analytic 直接光调用（与论文一致），LUT 的 `k` 就是论文的 `α/2`。证据与判定见 `D-20` / `D-21` |
 | 🔎 **待核对** | Hair、Subsurface、Foliage、Eye、ThinTranslucent（**旧实现均已删除**） | 基准已知，但尚未逐条抽文本对式号——重建时"审计表"读作检查清单（§1.4 开头） |
 
@@ -532,7 +552,7 @@ A 与 B 并排，差异可归因到"切线是否进入公式"这一条。这正�
 
 | mode | x 轴 | y 轴 | 图例（曲线身份） | 备注 |
 | --- | --- | --- | --- | --- |
-| 0 | θh，0..90°，主刻度 15°、次刻度 7.5° | GGX / Charlie 各按峰值归一化后的 **log10 轴**（1e-3..1，主刻度为四个十倍程，次刻度为 2× / 5×） | `GGX` / `Charlie` | Neubelt & Pettineo 2013 Fig 6 左 |
+| 0 | θh，0..90°，主刻度 15°、次刻度 7.5° | GGX / Charlie 各按峰值归一化后的 **log10 轴**（1e-3..1，主刻度为四个十倍程，次刻度为 2× / 5×） | `GGX` / `Charlie` | 对照结构取自 [Neubelt & Pettineo 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#neubelt-order-1886) Fig 6 左（**该图画的是 GGX vs 倒高斯 velvet**）；我们画的 Charlie 取自 [Estévez & Kulla 2017](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#estevez-sheen) 式(2)——**同族但不是同一个式子**，引用时不要混 |
 | 1 | sinθl，-1..1，主刻度 0.5、次刻度 0.25 | R / TT / TRT 各自的 log10 轴（同上） | `R` / `TT` / `TRT` | Marschner 2003 Fig 5、pbrt Fig 9 |
 | 2 | cosθ，左端 1、右端 0，主刻度 0.25、次刻度 0.125 | G1 线性轴 0..1，主刻度 0.25、次刻度 0.125 | `Schlick (engine)` / `Smith (exact)` | Karis 2013 Fig 2；红线 = 论文式(4) 的 **analytic 变体** `k=(r+1)²/8`（引擎直接光路径用的那支）。图例名保持 `(engine)` 不动：它摄于 `M-08` 且已归档，改名会让旧证据与图对不上 |
 | 3 | —— | —— | —— | UV 诊断：`baseColor = (uv.x, uv.y, 0)`，**不画任何标注**（叠加会污染 uv 读数） |
@@ -1302,23 +1322,33 @@ coat IOR 固定 1.5 / F0 0.04，不可作者化。
 
 ## 2.3 Cloth / Sheen
 
+> **研究成图路线更新（2026-09-29）**：独立 CPU 论文成图 CLI 已退役；
+> `source/render/offline/core/` 的纯 CPU 积分器通过 VL 场景、材质与视口
+> 出图。旧 `cloth-a-roughness` 球阵和自建面积光只是历史受控外观对照，
+> 不是论文 Fig. 1 场景复刻；旧证据记于
+> `documents/plan/rendering/archive/offline-paper-renderer-standalone.md`。
+> 数值真值仍由 `tool/validation/verify_cloth_sheen_albedo.py` 独立负责。
+> 下面关于 `Cloth=8`、`ClothFiber=13`、第二趟 geometry pass 的条目是
+> 实时模型路线，不是现有离线能力的前置条件。
+
 ### ① 对齐状态
 
 | 项 | 内容 |
 | --- | --- |
-| 状态 | ☐ **待按论文实现**（旧实现含 5 项论文里没有的公式，2026-09-12 整体删除，见 §0.6 / §1.4.2） |
+| 状态 | ☐ **待按论文实现**（旧实现含 5 项论文里没有的公式，2026-09-12 整体删除，见 §0.6 / §1.4.2）；**路线 2026-09-16 定案 = 方案 C，落地为两个独立 `ShadingModelID`：`Cloth`=8（A 臂，对照）/ `ClothFiber`=13（B 臂，生产；VulkanLearn 本地扩展），见 §2.3⑤** |
 | 实现锚点 | 旧：`M_cloth`、`engine/clothLighting.glsl`、`generator/clothLookupTables.comp`（均已删除）；仍在仓库的是 `common/clothBrdf.glsl` 与 `SC_paper_case_plot_cloth_solo` 探针链路 |
 | 已完成 | **§1.4.2 的公式溯源审计（式号已抽出）**；`§1.4.3` 的文献补查（各向异性有出处的路线）；**mode 0 曲线逐列像素对照通过**（2026-09-12，GGX 最大 0.486 px、Charlie 最大 0.447 px；2026-09-13 复测 0.476 / 0.492 px，见 `S-01`）；三面板场景仍在（仅供浏览） |
 | 未完成 | 求值器 + 两条路径 dispatch case + customData 编码 + 材质校验（同批完成）；directional albedo 数值对照（`S-03`）、端点退化（`S-05` `S-06`） |
-| 阻塞 | **重建路线未定**：`S-23`（方案 A，各向同性）/ `S-29`（方案 B，microcylinder）/ `S-31`（方案 C，两套并存）。B 与 C 都牵动 `S-27` 与两张 directional-albedo LUT；旧球阵场景 `SC_paper_case_cloth_sheen` 已删除（`D-18` 需重做），论文 case 的双色天鹅绒圆柱与服装需要新资产 |
+| 阻塞 | ~~重建路线未定~~ → **已定案：2026-09-16 路线（方案 C，两个 ID）+ 2026-09-17 范围（两臂都按论文完整还原）**，见 §2.3⑤。剩余阻塞：① **A 臂**要重建方向反照率 LUT（generator + graph `input` + pass 材质 texture 槽 + set 3 binding，顺序与 graph 一致），它服务 §5 分层的 `min(α_i, α_o)`——**离线口径与规格已于 2026-09-22 钉死**（§2.3⑩：16×16、`√r` 轴、$\theta_v\le80^\circ$、未软化核、扣 `c_s·E`，参考实现在 `tool/validation/verify_cloth_sheen_albedo.py`），表要做成两通道（R 未软化 `E_s`，G 为软化后的 `E†`）并接线；shader 运行时把 R 积成 `S`，间接光乘 `EvaluateIrradianceSH/π`，不建 Charlie 预滤波（§2.3⑪）；② **B 臂**的 §5 fabric payload 已登记为 `T=8`、约 15 通道，第一趟借用 12 个再加第二趟 1 张 payload（见 `documents/rendering/gbuffer-channel-ownership.md` §7），并确定 tangent curve 的数据来源（材质侧计算或贴图，论文数据在 Table 3）与前向路径是否扩展 `MaterialInputs`；③ B 臂需要**带切线的织纹网格**——`worldTangent` 在此之前对所有模型都不敏感，没有切线时 B 臂会退化成"全场同一方向"，`S-31` 的切线敏感性判定也就测不出来；④ 旧球阵场景 `SC_paper_case_cloth_sheen` 已删除（`D-18` 需重做），论文 case 的双色天鹅绒圆柱（`S-15`）与 ⑥ 资产/集成 case 的服装（`S-17`）需要新资产 |
 
 ### ② 论文来源
 
 | 来源 | 负责什么 | 链接 |
 | --- | --- | --- |
 | Estevez & Kulla 2017, *Production Friendly Microfacet Sheen BRDF* | Charlie 分布、sheen visibility、生产级布料外观 | [书库 `#estevez-sheen`](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#estevez-sheen) · [PDF](https://blog.selfshadow.com/publications/s2017-shading-course/imageworks/s2017_pbs_imageworks_sheen.pdf) |
+| **Kulla & Conty 2017**, *Revisiting Physically Based Shading at Imageworks*（同一次课程的正文讲义，139 页） | **2 页 note 的完整口径**：`E_s` 表规格（16×16、`(roughness, 入射角)`）、分层因子 `min{(1−E(ωo)),(1−E(ωi))}`、softening 只作用于受光侧、**以及"sheen 不考虑 Fresnel"** | [书库 `#imageworks-s2017-slides`](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#imageworks-s2017-slides) · [课程页](https://blog.selfshadow.com/publications/s2017-shading-course/)（关键结论在 slide 60 = PDF p105，见 §2.3⑧） |
 | Neubelt & Pettineo 2013 | GGX vs Charlie 分布对比、grazing / fuzz 观感、式(23) 的布料分母 | [书库 `#neubelt-order-1886`](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#neubelt-order-1886) |
-| **Sadeghi, Bisker, De Deken, Jensen 2013**, *A practical microcylinder appearance model for cloth rendering*, ACM TOG 32(2) | **各向异性布料散射的完整模型**：以 thread tangent 为坐标架，式(2)(3)(4) | ✅ 开放获取：[eScholarship PDF](https://escholarship.org/content/qt6v11p5b0/qt6v11p5b0.pdf)（书库暂无此条，见 `S-30`） |
+| **Sadeghi, Bisker, De Deken, Jensen 2013**, *A practical microcylinder appearance model for cloth rendering*, ACM TOG 32(2) | **各向异性布料散射的完整模型**：以 thread tangent 为坐标架，式(2)(3)(4) + §5 织物级（式 5-13）；**Appendix A Table 3（p11）**给 6 种织物的切线控制点偏移角与段长、Table 2（p9）给 `η/A/kd/γs/γv`，都是**论文生成数据**，复现论文 case 时直接取用（见 §2.3⑨） | ✅ 开放获取：[eScholarship PDF](https://escholarship.org/content/qt6v11p5b0/qt6v11p5b0.pdf)；书库条目已收录（`#sadeghi-microcylinder`，含离线 PDF，`S-30` 已完成） |
 | Irawan & Marschner 2012, *Specular Reflection from Woven Cloth*, ACM TOG 31(1) | 编织布程序化散射模型、经/纬 thread 方向 | [Cornell 摘要页](https://www.cs.cornell.edu/~srm/publications/TOG12-cloth.html)（正文需 ACM） |
 | Burley 2012 | sheen 的生产语义与 Principled 参数化 | [书库 `#burley-disney`](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#burley-disney) |
 | Real-Time Rendering 4th, Ch 9 §9.10 | 布料 / 绒毛的实时近似与材质混合 | [书库 `#real-time-rendering`](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#real-time-rendering) |
@@ -1330,17 +1360,20 @@ coat IOR 固定 1.5 / F0 0.04，不可作者化。
 
 | 实现 | 位置 | 论文 / 书本来源 | 备注 |
 | --- | --- | --- | --- |
-| `ClothSheenRoughnessToAlpha` | `common/clothBrdf.glsl:15` | 🔎 论文的分布参数 `r` 直接是 `sin` 指数，**无 `r→α` 映射** | `α = r²` 是 Disney 约定被平移到 Charlie 上；按 `S-26` 决定保留并溯源还是取消 |
-| `ClothCharlieDistribution` | `common/clothBrdf.glsl:20` | ✅ [Estévez & Kulla 2017](#estevez-sheen) **式(2)** | 与 `D(m) = (2+1/r)sin^(1/r)θ/2π` 逐项一致 |
-| `ClothNeubeltVisibility` | `common/clothBrdf.glsl:37` | ✅ [Neubelt & Pettineo 2013](#neubelt-order-1886) **式(23)** 分母 | 原文语境是"drop 掉 geometry 项后替换传统 microfacet 分母的那一项"；函数命名 `…Visibility` 待改（`S-24`） |
-| `ClothAnisotropyToAspect` | `common/clothBrdf.glsl:61` | ❌ **论文无此式** | 两篇论文都没有 anisotropy→轴比映射；Neubelt 式(12)(13) 给的是有出处的替代式（`S-23`） |
-| `ClothAnisotropicCharlieDistribution` | `common/clothBrdf.glsl:68` | ❌ **论文无此式** | Estévez & Kulla 无各向异性 Charlie；椭圆代入套到 Charlie 上是本项目推的（`S-23`） |
-| `ClothAnisotropicVisibility` | `common/clothBrdf.glsl:114` | ❌ **论文无此式** | 掠射连续衰减项两篇论文都没有（`S-23`） |
-| `ClothAnisotropicSheenUnitResponse` | `common/clothBrdf.glsl:165` | ❌ **论文无此式** | cross 双轴纤维瓣两篇论文都没有（`S-23`） |
-| `T_b = 1 − c_s·E_s(NoV, α_s)` 分层 | `engine/clothLighting.glsl` | ❌ 与论文式不同 | Estévez & Kulla §5 用 `min(α_i, α_o)`（Kelemen–Szirmay-Kalos albedo scaling），不是 `1 − E_s(NoV)`（`S-27`） |
-| 方向反照率 LUT 积分 | `generator/clothLookupTables.comp:41` | [Estevez & Kulla 2017](#estevez-sheen)｜directional albedo 定义；采样见 [Veach 1997](#veach-thesis) 的 QMC | 均匀半球 + 128 Hammersley；`LUT.y = alpha`，不是 perceptual roughness |
-| 各向异性 LUT 33 层手工插值 | `engine/clothLighting.glsl:98` | 采样实现（编码约定，不改数值定义） | 避免驱动对 `sampler2DArray` 层坐标的离散取整；LUT 的**定义**仍取自论文 |
-| base / sheen 能量互补 | `engine/clothLighting.glsl` | [Estevez & Kulla 2017](#estevez-sheen)｜`1 - directionalAlbedo` | 必须与 LUT 值一致 |
+| `ClothSheenRoughnessToAlpha` | `common/clothBrdf.glsl:27` | 🔎 论文的分布参数 `r` 直接是 `sin` 指数，**无 `r→α` 映射** | `α = r²` 是 Disney 约定被平移到 Charlie 上；按 `S-26` 决定保留并溯源还是取消 |
+| `ClothCharlieDistribution` | `common/clothBrdf.glsl:34` | ✅ [Estévez & Kulla 2017](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#estevez-sheen) **式(2)** | 与 `D(m) = (2+1/r)sin^(1/r)θ/2π` 逐项一致 |
+| `ClothNeubeltVisibility` | `common/clothBrdf.glsl:54` | ✅ [Neubelt & Pettineo 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#neubelt-order-1886) **式(23)** 分母 | 原文语境是"drop 掉 geometry 项后替换传统 microfacet 分母的那一项"；函数命名 `…Visibility` 待改（`S-24`） |
+| `ClothSheenUnitResponse` | `common/clothBrdf.glsl:66` | ✅ 式(2) × 式(23) 分母 | 计划 `S-25` 要核对"各向同性时严格等于这两项之积" |
+| ~~`ClothAnisotropyToAspect`~~ | ~~`common/clothBrdf.glsl`~~ | ❌ **论文无此式 → 2026-09-17 删除** | 五项自创公式已按 §0.3.1 清算；各向异性由 B 臂 `ClothFiber` 承担 |
+| ~~`ClothAnisotropicCharlieDistribution`~~ | ~~`common/clothBrdf.glsl`~~ | ❌ **论文无此式 → 2026-09-17 删除** | 同上 |
+| ~~`ClothAnisotropicVisibility`~~ | ~~`common/clothBrdf.glsl`~~ | ❌ **论文无此式 → 2026-09-17 删除** | 同上 |
+| ~~`ClothAnisotropicSheenUnitResponse`~~ | ~~`common/clothBrdf.glsl`~~ | ❌ **论文无此式 → 2026-09-17 删除** | 同上 |
+| `T_b = 1 − c_s·E_s(NoV, α_s)` 分层 | `engine/clothLighting.glsl` | ❌ 与论文式不同 | 讲义给出的形式是 **`min{(1−E(ωo)), (1−E(ωi))}`**（[讲义 p105](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#imageworks-s2017-slides)，Kelemen–Szirmay-Kalos albedo scaling），既不是单端 `1 − E_s(NoV)`、也不是把 base 乘 `min(E)`（`S-27` 已定案，见 §2.3⑧）；文件随旧实现已删除，重建时按此写 |
+| 方向反照率 LUT 积分 | `generator/clothLookupTables.comp:41` | [Estevez & Kulla 2017](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#estevez-sheen)｜directional albedo 定义；讲义 p105 给规格（16×16、`(roughness, 入射角)`）；采样见 [Veach 1997](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#veach-thesis) 的 QMC | 均匀半球 + Hammersley（**论文自己给的采样结论**：*"plain uniform sampling of the upper hemisphere to be more effective"*）；轴用**论文的 `r`**（不是旧实现的 `alpha`），表里**只含几何项**（无颜色、无 Fresnel）。**2026-09-22 离线钉死规格**：16×16；`x` 轴在 $[\cos80^\circ,1]$ 内**按余弦均分**（限域必须作用到轴样本上，否则会烘进 $E_s>1$ 的格子）、查询 clamp-to-edge；`y` 轴按 **$\sqrt r$** 均分；未软化互易核 —— 重建误差实测 **0.0120**（按 `r` 均分 0.129~0.192、按角度均分 0.041），见 §2.3⑩ |
+| **A 臂离线参考实现** | `tool/validation/verify_cloth_sheen_albedo.py`（新增） | ✅ [Estevez & Kulla 2017](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#estevez-sheen) 式(1)-(4) + §5 | 纯 stdlib 的公式镜像，20 项断言（D 归一化 / Λ 端点 / 式(4) 作用层 / `E_s` 值域 / 两条路径的白炉 / `S-27` 口径对照 / 颜色因子 / 旧读法差异 / 轴参数化扫描 / 适用域）。**它就是将来 GPU LUT generator 的口径合同**：GPU 侧换分布或换轴参数化，都要先在这里改并跑过 |
+| 各向异性 LUT 33 层手工插值 | `engine/clothLighting.glsl:98` | 采样实现（编码约定，不改数值定义） | 随 v2 各向异性路径一起删除；A 臂只用 `min(1−c_sE)` 的分层，不需要各向异性 LUT |
+| base / sheen 能量互补 | `engine/clothLighting.glsl` | [Estevez & Kulla 2017](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#estevez-sheen)｜`1 - directionalAlbedo` | 必须与 LUT 值一致；**且必须乘 sheen color**：表里是几何反照率，扣的是 lobe 反照率 `c_s·E`（漏乘在 `c_s=0.2` 时实测暗 0.094，见 §2.3⑩） |
+| `ShadeClothFiber`（**待实现**，B 臂） | `engine/clothFiberLighting.glsl`（计划） | ✅ [Sadeghi et al. 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#sadeghi-microcylinder) **式(2)(3)(4) + 式(5)(6)(9)(10)(12)(13)** | 2026-09-22 逐条核对（见 §2.3⑨）后的实现注意：式(4) 的 `1/cos²θ_d` 作用于**整个** `f_s`；式(11) 的 `cos ψ` 分子必须是有符号点积、分母去掉的是**副法线**分量；逐样本 `q` 只定样本形状，归一化用式(13) 的**跨族**分母 `Σ_{k∈C}P(k)`；式(3) 第二次透射用 `η′=1/η`（登记约定）；切线数据取论文 Table 3。**间接光的域是宏观上半球 $\Omega^+$**（§2.3⑫）。伪代码与 helper 见知识库 `cloth-sheen` 页 |
 
 ### ④ Case 列表
 
@@ -1348,62 +1381,292 @@ coat IOR 固定 1.5 / F0 0.04，不可作者化。
 
 | ID | 案例（来源） | 验证目标 | 形式 | 状态 |
 | --- | --- | --- | --- | --- |
-| `S-01` | [Neubelt & Pettineo 2013](#neubelt-order-1886) Fig 6 左 · GGX vs Charlie 分布 | 两条分布的形状与峰值位置逐列比对（对数纵轴） | 曲线（mode 0） | ✅ **2026-09-12 通过**（`m07_mode0_cloth`，roughness 0.35：GGX 129 列最大 0.486 px、Charlie 171 列最大 0.447 px，另丢弃 3 列交叉列；此前"测量脚本有 bug"的结论已在 `M-07` 中定位为**探针图竖直镜像**并修正） |
-| `S-02` | [Estevez & Kulla 2017](#estevez-sheen) Fig 2 · Charlie 分布随 `θh` 与 roughness | `alpha` 增大时分布展宽、峰值高度下降的形状族 | 曲线（mode 0 多 roughness） | ☐ |
-| `S-03` | [Estevez & Kulla 2017](#estevez-sheen)｜directional albedo 定义 | 球阵 LUT 与离线 Monte Carlo 积分逐点比对（`N·V × alpha` 全网格） | 数值积分（离线） | ☐ |
-| `S-04` | [Estevez & Kulla 2017](#estevez-sheen)｜能量互补 | `baseScale = 1 - directionalAlbedo` 在整张 LUT 上落在 `[0,1]` 且单调 | 数值核对 | ☐ |
+| `S-01` | [Neubelt & Pettineo 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#neubelt-order-1886) Fig 6 左（**GGX vs 倒高斯 velvet** 的分布对比）+ [Estévez & Kulla 2017](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#estevez-sheen) 式(2)（我们画的 Charlie） | 两条分布的形状与峰值位置逐列比对（对数纵轴） | 曲线（mode 0） | ✅ **2026-09-12 通过**（`m07_mode0_cloth`，roughness 0.35：GGX 129 列最大 0.486 px、Charlie 171 列最大 0.447 px，另丢弃 3 列交叉列；此前"测量脚本有 bug"的结论已在 `M-07` 中定位为**探针图竖直镜像**并修正） |
+| `S-02` | [Estevez & Kulla 2017](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#estevez-sheen) Fig 2 · Charlie 分布随 `θh` 与论文 `r` | `r` 增大时分布展宽、峰值高度下降的形状族；论文式(2)直接用 `r`，不能沿用 mode 0 的 `r²` | [知识库 Cloth / Sheen 页](../../../../yyb-knowledge-book/src/content/docs/rendering/materials/shading-models/cloth-sheen.mdx)内嵌 Three.js 曲面（`/interactive/estevez-fig2/`） | ◐ 解析曲面、网格、截线与读数已建，`r≥0.05`；待论文图面坐标/采样测量验收 |
+| `S-03` | [Estevez & Kulla 2017](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#estevez-sheen)｜directional albedo 定义 + [讲义 slide 60](https://blog.selfshadow.com/publications/s2017-shading-course/)（16×16、`(roughness, 入射角)` 索引） | 离线积分与 LUT 重建逐点比对（`N·V × r` 网格），并判定 **16×16 起步规格 + 轴参数化**是否够 | 数值积分（离线） | ✅ **2026-09-22 通过**（`tool/validation/verify_cloth_sheen_albedo.py`：24 组轴参数化扫描后取**唯一同时满足"域内 $E_s\le1$ 且 $\lvert\Delta E\rvert\le0.02$"**的组合——`x` 轴在 $[\cos80^\circ,1]$ 内按余弦均分 + `y` 轴 $\sqrt r$ → **0.0120**（32×32 只到 0.0039）；不限域的余弦轴三档 $\theta_{\max}$ 都会烘进 $E_s>1$ 的格子、按角度均分是 0.041、线性 `r` 轴是 0.129~0.192；求积自检 $\int D(n\cdot h)d\omega$ 偏差 $\le1.5\times10^{-4}$，`N→2N` 收敛 1e-5→1e-6） |
+| `S-04` | [Estevez & Kulla 2017](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#estevez-sheen)｜能量互补 | `baseScale = 1 − c_s·E_s` 落在 `[0,1]`；直光按 `min(1−c_sE(NoL),1−c_sE(NoV))`。间接光不按单端扣，见 `S-33` | 数值核对 | ✅ **2026-09-22 通过分层与值域**（`E_s` 轴域内 ≤1；漏乘颜色 `c_s=0.2` 时总和 **0.905623**）。当时把 IBL 单端代理 ≡1 也算通过；**2026-09-22 晚些时候改判**：那个恒等式不是直接光 BRDF 的半球积分，间接光改走 `S-33` |
 | `S-05` | `common/clothBrdf.glsl:20` · 端点 | Charlie 分布的端点：`θh=0` 时最小值、`θh→90°` 时峰值、`alpha→0` 不发散到 NaN | 曲线 + 端点 | ☐ |
-| `S-06` | [Neubelt & Pettineo 2013](#neubelt-order-1886) sheen visibility | `N·L` 或 `N·V` → 0 时 `V → 0`（不是无穷）；`N·L=N·V=1` 时 `V = 1/4` | 曲线 + 端点 | ☐ |
-| `S-07` | ✅ 已核：[Neubelt & Pettineo 2013](#neubelt-order-1886) **式(12)(13)** | 确认 `α_t = α`、`α_b = lerp(0, α, 1−anisotropy)` 是论文给的映射；它的配套 **式(14) `D_aniso` 是给 GGX 的椭圆形式**，论文没有把代入套到 Charlie 上 | 公式溯源 | ✅ 审计完成 |
-| `S-08` | ✅ 已核：[Estévez & Kulla 2017](#estevez-sheen) 全文 | 论文只有 **2 页**（Overview / Microfacet Distribution / Shadowing Term / Terminator Softening / Layering），**没有各向异性、没有 visibility 的 per-direction 形式** | 公式溯源 | ✅ 审计完成 |
+| `S-06` | [Neubelt & Pettineo 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#neubelt-order-1886) sheen visibility | `N·L` 或 `N·V` → 0 时 `V → 0`（不是无穷）；`N·L=N·V=1` 时 `V = 1/4` | 曲线 + 端点 | ☐ |
+| `S-07` | ✅ 已核：[Neubelt & Pettineo 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#neubelt-order-1886) **式(12)(13)** | 确认 `α_t = α`、`α_b = lerp(0, α, 1−anisotropy)` 是论文给的映射；它的配套 **式(14) `D_aniso` 是给 GGX 的椭圆形式**，论文没有把代入套到 Charlie 上 | 公式溯源 | ✅ 审计完成 |
+| `S-08` | ✅ 已核：[Estévez & Kulla 2017](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#estevez-sheen) 全文 | 论文只有 **2 页**（Overview / Microfacet Distribution / Shadowing Term / Terminator Softening / Layering），**没有各向异性、没有 visibility 的 per-direction 形式** | 公式溯源 | ✅ 审计完成 |
 | `S-09` | ✅ 已核：两篇论文全文 | 没有 cross / 双轴纤维瓣的任何形式 | 公式溯源 | ✅ 审计完成 |
-| `S-10` | [PBRT 4ed｜White furnace](https://pbr-book.org/4ed/Reflection_Models) | cloth lobe 半球积分 ≤ 1；sheen 与 base 之和不超 1 | 数值积分（离线） | ☐ |
-| `S-11` | [Estevez & Kulla 2017](#estevez-sheen) Fig 1 · sheen 叠在红色 diffuse | sheen roughness 递增时 grazing 亮边展宽、红色 diffuse 不被吃掉 | 单变量扫描（`SC_paper_case_cloth_sheen` 上行） | ◐ 已建，**缺数值判定** |
-| `S-12` | [Neubelt & Pettineo 2013](#neubelt-order-1886) Fig 6 右 · GGX 球 vs 天鹅绒球 | 同一粗糙度下 GGX 与 Charlie 球的观感差异可解释到分布差异 | 单变量扫描（`SC_paper_case_cloth_sheen` 下半行，与 `D-18` 共享截图） | ◐ 已建，**缺归因记录** |
+| `S-10` | [PBRT 4ed｜White furnace](https://pbr-book.org/4ed/Reflection_Models) | cloth lobe 半球积分 ≤ 1；sheen 与 base 之和不超 1 | 数值积分（离线） | ◐ 未软化 $E_s\le1$、软化只减不增已判定（§2.3⑩）。均匀环境的闭合改由 `S-33` 负责：积分是 `S+cE†`，不是单端代理。场景级白炉仍等求值器落地 |
+| `S-32` | ✅ [Estévez & Kulla 2017](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#estevez-sheen) 式(3)(4) + §5 | **A 臂的公式读法与离线口径核对**：$\Lambda=e^{L(x)}$、$L(x)=a/(1+bx^c)+dx+e$（指数在分母）、插值权重方向、软化在对数域乘系数、表用未软化核、分层乘 $c_s$ | 公式溯源 + 离线数值 | ✅ **2026-09-22 完成**（旧读法实测：$\Lambda$ 从 5.997 变 2868、$G$ 从 0.515 掉到 0.134；软化写成 `pow(L,k)` 会给出 $G=-0.087$ 直接判废；`mix` 参数顺序写反会把整套系数按 `r` 镜像） |
+| `S-33` | 本页 §2.3⑪ + 知识库 `cloth-sheen` A7 | 间接光等于直接光 BRDF 的均匀环境积分：`S + c·E†`，再乘 `E_irr/π`。旧单端代理在 `c=1` 时精确为 1，不能当验收 | 数值积分（离线） | ✅ **2026-09-22**（`verify_cloth_sheen_albedo.py` 第 11 节，求积 96×48，`NoV=0.9`、`r=0.5`：`c=1` 积分 **0.8808**，旧代理 1，差额 **0.1192** = 多扣 0.1095 + 少加 0.0097；`c=0.2` 积分 **0.9762**） |
+| `S-34` | 知识库 `cloth-sheen` B7–B8 | B 臂 `E_fabric(θv, φv)` 与式(13) 核的均匀环境积分一致；孔隙两条路径各一次。分辨率定为 32×64（极角 × 方位）。**积分域 = 宏观上半球 $\Omega^+$**（`S-35`），表和积分的域必须相同。误差门限还没测，不预填 | 数值积分（离线） | ☐ 分辨率已登记，表还没有，误差未测 |
+| `S-35` | [Marschner et al. 2003](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#marschner-2003) **式(1) 下方原文**（PDF p3，§2）+ [Sadeghi et al. 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#sadeghi-microcylinder) §4.3（PDF p5） | **B 臂环境项的积分域**：核按论文继承 Marschner 定义在**全域 $S^2$**（原文 *"Note that, unlike a surface where the integral extends over the upper hemisphere, this integral extends over the entire sphere."*；Sadeghi 式(1)(6)(10) 排版为裸 `∫`、无域标记），但**环境项**（论文没有，属 §2.3⑦ 第 3 条的工程推导）取**宏观上半球 $\Omega^+$**，与 `EvaluateIrradianceSH/π` 配对；**直接光保留全域口径**。量化 Ω⁻（地平线以下）占比 | 公式溯源 + 数值积分（离线） | ✅ **2026-09-22 定案 $\Omega^+$**（Ω⁻ 占比实测 **6.5%~27.2%**：平纹 $\theta_v{=}20^\circ$ 6.49% → $\theta_v{=}75^\circ$ 20.09%；$\sigma_t{=}20^\circ$ 10.29%~27.18%；Velvet Dir 2 16.87%~19.03%）。判定与证据见 `shading-model-case-records.md` |
+| `S-11` | [Estevez & Kulla 2017](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#estevez-sheen) Fig 1 · sheen 叠在红色 diffuse | sheen roughness 递增时 grazing 亮边展宽、红色 diffuse 不被吃掉 | 单变量扫描（`SC_paper_case_cloth_sheen` 上行） | ◐ 已建，**缺数值判定** |
+| `S-12` | [Neubelt & Pettineo 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#neubelt-order-1886) Fig 6 中/右（左栏是分布曲线，中栏 GGX 球、右栏天鹅绒球；该图没有 Charlie 球） | 同一粗糙度下 GGX 与 Charlie 球的观感差异可解释到分布差异 | 单变量扫描（`SC_paper_case_cloth_sheen` 下半行，与 `D-18` 共享截图） | ◐ 已建，**缺归因记录** |
 | `S-13` | `engine/materialDebugView.glsl`｜`clothCharlieD` / `clothNeubeltVisibility` | Debug 视图输出与离线解析值一致（不是只看形状对不对） | Debug 对照 | ◐ 已有截图，**无数值对照** |
-| `S-14` | [Estévez & Kulla 2017](#estevez-sheen)｜各向异性参数行为 | anisotropy 扫描：在 `S-22` 确定映射之后，确认轴向语义稳定、正负号含义来自所选外部来源；`anisotropyCross` 单独扫描不改变 `sheenColor` 能量语义 | 单变量扫描 | ⚠️ 待 `S-22` |
+| `S-14` | [Estévez & Kulla 2017](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#estevez-sheen)｜各向异性参数行为 | anisotropy 扫描：在 `S-22` 确定映射之后，确认轴向语义稳定、正负号含义来自所选外部来源；`anisotropyCross` 单独扫描不改变 `sheenColor` 能量语义 | 单变量扫描 | ⚠️ 待 `S-22` |
 | `S-18` | 工具链缺陷（`M_cloth.json`） | 宏表声明了 `USE_PBR_MAP`，但**没有 `pbrParamMap` 贴图槽**（`M_clothParamter.glsl` 只生成 albedo/emission/normal 三个 sampler）：MI 打开该宏无槽可绑；先记录，再决定是补槽还是删宏 | 架构核对 | ☐ **阻塞项** |
-| `S-19` | 参数面审计（本仓库） | 记录两条缺口：**无 anisotropy mask 贴图**（源资产用 `ParamMap.B`，见 `documents/plan/rendering/archive/cloth-shading-model.md`）、**`sheenIblVersion = 0`**（IBL 仍是标记为 `clothIblFallback` 的 irradiance fallback，没有 Charlie 专用预滤波） | 架构核对 | ☐ |
+| `S-19` | 参数面审计（本仓库） | anisotropy mask 随各向异性标量退役。环境项不再等待 Charlie 预滤波：§2.3⑪ 改为辐照度 `/π`，角向误差登记在 A8.5 / B9.3 | 架构核对 | ☐ |
 | `S-20` | `gbufferCodec.glsl:529` | Deferred 路径 decode 强制 `metallic = 0`：确认 Cloth 的 deferred 结果本就与材质 metallic 无关，不得当成偏差 | 架构核对 | ☐ |
-| `S-21` | [Estevez & Kulla 2017](#estevez-sheen)｜环境 sheen | 在 `S-19` 的 fallback 前提下，量化环境光照下 sheen 与 base 的能量分配与论文期望的差距；`sheenIblVersion=0` 时**不得宣称复现了 Estevez 的环境 sheen 图** | 数值对照 | ☐ |
-| `S-22` | ✅ 已核：[Estévez & Kulla 2017](#estevez-sheen) **式(2)** | `ClothCharlieDistribution` 与 `D(m) = (2+1/r) sin^(1/r)θ / 2π` **逐项一致**，审计通过 | 公式溯源 | ✅ 审计完成 |
-| `S-26` | 🔎 [Karis 2013](#karis-ue4) + [Estévez & Kulla 2017](#estevez-sheen) | `α = r²` 这个映射：Karis 的 `α = Roughness²` 是给 GGX 的；Estévez & Kulla 的 `r` 直接是指数。**决定**：沿用 `r²`（须写明它是 Disney 约定平移）还是直接用 `r`（照论文）。两者会给出不同的 sheen 展宽 | 公式溯源 + 数值对照 | ☐ |
-| `S-27` | 🔎 [Estévez & Kulla 2017](#estevez-sheen) §5 | 分层因子：论文用 `min(α_i, α_o)`（入射/出射 albedo 取小），代码用 `1 − c_s·E_s(NoV, α_s)`。量化两者差异并决定是否改为论文式 | 公式溯源 + 数值对照 | ☐ |
+| `S-21` | [Estevez & Kulla 2017](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#estevez-sheen)｜环境 sheen | 环境项按 `S-33` / §2.3⑪ 验收均匀 radiance 积分。Estevez 的 note 没有环境 sheen 图，不得把这条写成复现了论文的 IBL 图 | 数值对照 | ☐ |
+| `S-22` | ✅ 已核：[Estévez & Kulla 2017](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#estevez-sheen) **式(2)** | `ClothCharlieDistribution` 与 `D(m) = (2+1/r) sin^(1/r)θ / 2π` **逐项一致**，审计通过 | 公式溯源 | ✅ 审计完成 |
+| `S-26` | 🔎 [Karis 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#karis-ue4) + [Estévez & Kulla 2017](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#estevez-sheen) | `α = r²` 这个映射：Karis 的 `α = Roughness²` 是给 GGX 的；Estévez & Kulla 的 `r` 直接是指数。**决定**：沿用 `r²`（须写明它是 Disney 约定平移）还是直接用 `r`（照论文）。两者会给出不同的 sheen 展宽 | 公式溯源 + 数值对照 | ✅ **求值器按 §2.3⑤ 用论文的 `r`，不平方**。`ClothSheenRoughnessToAlpha` 只留在 `M_brdfPlot`，不进 Cloth 求值器 |
+| `S-27` | 🔎 [Estévez & Kulla 2017](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#estevez-sheen) §5 + [讲义 slide 60](https://blog.selfshadow.com/publications/s2017-shading-course/) | 分层因子：旧代码用单端 `1 − c_s·E_s(NoV, α_s)`；讲义给了**确定形式 `min{(1−E(ωo)), (1−E(ωi))}`**（= 按拿走更多的那侧扣），且只损失"一点"能量 | 公式溯源 + 数值对照 | ✅ **直光两端取小仍按讲义**，扣 `c_s·E`。`NoL=0.4/NoV=0.9/r=0.5` 时 base 留 `0.6565`，误写 `min(E)` 留 `0.1180`，直光误用单端留 `0.8820`。间接光不沿用这个单端，见 `S-33` |
 | `S-30` | 知识库维护（书库索引页） | 把 **Sadeghi et al. 2013**（开放获取）加进书库条目并分配锚点 `#sadeghi-microcylinder`（含离线 PDF 与署名），让 §2.3 的引用与其它模型统一走锚点格式。**这是书库仓库的改动**，需在其 `books/index.mdx` 与 `resource/pdfs/` 下完成 | 知识库维护 | ☐ |
-| `S-31` | [Neubelt & Pettineo 2013](#neubelt-order-1886) Fig 6 左 + [Sadeghi et al. 2013](#sadeghi-microcylinder)｜**方案 C** | **两条都保留时的对照实验**：A 臂（各向同性 Charlie）与 B 臂（microcylinder）并排同场景同光照。(1) 确认 A 臂在旋转织纹 / 改变 tangent 时**外观完全不变**，B 臂**随切线方向转向**——这是"切线是否进入公式"的直接证据；(2) 两臂各自的能量账本分别闭合，**不允许交叉补偿**；(3) A 臂与 B 臂必须是两个 variant，产物里不得同时出现两套公式。三条约束见 §1.4.3 | 对照实验 | ☐ 方案 C |
-| `S-23` | [Neubelt & Pettineo 2013](#neubelt-order-1886)｜**方案 A** | **只留论文各向同性 sheen**：`anisotropy ≠ 0` 路径整体退回论文形式 —— 去掉 `S-10` / `S-11` / `S-12` 三项论文里没有的公式，改用论文的各向同性 Charlie（式 2）+ 式(23) 分母；`anisotropy` / `anisotropyCross` 输入随之取消，或明确标注为"论文无对应量"。**代价：失去织纹方向外观** | 整改 | ☐ 方案 A |
-| `S-29` | [Sadeghi et al. 2013](#sadeghi-microcylinder)｜**方案 B** | **只留 microcylinder**：各向异性由 **thread tangent** 表达，不再需要椭圆轴比 / warp visibility / cross 三个自创量。代价：`T_b = 1 − c_s·E_s` 与两张 directional-albedo LUT（`S-27`）要改为论文的 Fresnel/`kd`/`A` 能量项，属**独立整改** | 模型替换 | ☐ 方案 B |
-| `S-24` | ✅ 已核：[Neubelt & Pettineo 2013](#neubelt-order-1886) **式(23)** + 正文 | `ClothNeubeltVisibility` 的分母与式(23) **逐字一致**，但原文语境是 *"we dropped the geometry term"* 后"替换传统 microfacet 分母"的那一项。决定函数名与注释是否改为 `ClothNeubeltDenominator` 之类，避免被误读成独立的 visibility 模型 | 命名与注释整改 | ☐ |
-| `S-25` | [Neubelt & Pettineo 2013](#neubelt-order-1886)｜各向同性行为 | `ClothSheenUnitResponse` 在 `anisotropy = 0` 时的行为：确认它等于 `D_Charlie(θ_h) · 1/(4(N·L+N·V−N·L·N·V))`，且这就是论文式(2)+式(23) 分母的组合（不含任何额外项） | 数值核对 | ☐ |
+| `S-31` | [Neubelt & Pettineo 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#neubelt-order-1886) Fig 6 左（GGX vs velvet，见 `S-01` 的说明）+ [Sadeghi et al. 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#sadeghi-microcylinder)｜**方案 C** | **两条都保留时的对照实验**：A 臂（各向同性 Charlie）与 B 臂（microcylinder）并排同场景同光照。(1) 确认 A 臂在旋转织纹 / 改变 tangent 时**外观完全不变**，B 臂**随切线方向转向**——这是"切线是否进入公式"的直接证据；(2) 两臂各自的能量账本分别闭合，**不允许交叉补偿**；(3) A 臂与 B 臂必须是两个 variant，产物里不得同时出现两套公式。三条约束见 §1.4.3。(4) **判定口径（2026-09-16 定案时写明）：不期望 A ≈ B** —— B 不存在"各向同性档"（瓣的坐标架固定在 thread tangent 上，调大 `γ_s`/`γ_v` 只把条纹变宽），且两族分布形式（Charlie 幂律 vs Gaussian 宽度）与能量账本都不同。要量化差距，必须先在**同一参考配置下把瓣宽对齐**再比残差，这一步可以先用 `tool/validation/` 离线做。落地形态：`Cloth` = 8（A 臂）/ `ClothFiber` = 13（B 臂，本地扩展），见 §2.3⑤ | 对照实验 | ◐ 路线已定案（2026-09-16），待实现 |
+| `S-23` | [Neubelt & Pettineo 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#neubelt-order-1886)｜**方案 A** | **只留论文各向同性 sheen**：`anisotropy ≠ 0` 路径整体退回论文形式 —— 去掉 `S-10` / `S-11` / `S-12` 三项论文里没有的公式，改用论文的各向同性 Charlie（式 2）+ 式(23) 分母；`anisotropy` / `anisotropyCross` 输入随之取消，或明确标注为"论文无对应量"。**代价：失去织纹方向外观** | 整改 | ◐ 2026-09-16 采纳为 C 的 A 臂（`Cloth` = 8，对照），待实现 |
+| `S-29` | [Sadeghi et al. 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#sadeghi-microcylinder)｜**方案 B** | **只留 microcylinder**：各向异性由 **thread tangent** 表达，不再需要椭圆轴比 / warp visibility / cross 三个自创量。代价：`T_b = 1 − c_s·E_s` 与两张 directional-albedo LUT（`S-27`）要改为论文的 Fresnel/`kd`/`A` 能量项，属**独立整改** | 模型替换 | ◐ 2026-09-16 采纳为 C 的 B 臂（`ClothFiber` = 13，生产），待实现 |
+| `S-24` | ✅ 已核：[Neubelt & Pettineo 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#neubelt-order-1886) **式(23)** + 正文 | `ClothNeubeltVisibility` 的分母与式(23) **逐字一致**，但原文语境是 *"we dropped the geometry term"* 后"替换传统 microfacet 分母"的那一项。决定函数名与注释是否改为 `ClothNeubeltDenominator` 之类，避免被误读成独立的 visibility 模型 | 命名与注释整改 | ☐ |
+| `S-25` | [Neubelt & Pettineo 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#neubelt-order-1886)｜各向同性行为 | `ClothSheenUnitResponse` 在 `anisotropy = 0` 时的行为：确认它等于 `D_Charlie(θ_h) · 1/(4(N·L+N·V−N·L·N·V))`，且这就是论文式(2)+式(23) 分母的组合（不含任何额外项） | 数值核对 | ☐ |
 
 **论文 case**
 
 | ID | 案例（论文图） | 展示什么 | 资产 | 状态 |
 | --- | --- | --- | --- | --- |
-| `S-15` | [Neubelt & Pettineo 2013](#neubelt-order-1886) Fig 5 · 双色天鹅绒包裹圆柱 | Charlie 分布的掠射亮边与双色 sheen | 缺圆柱资产 | ☐ |
-| `S-16` | [Estevez & Kulla 2017](#estevez-sheen) Fig 3 / Fig 4 · Ashikhmin-Shirley 对比、terminator softening | 分布选型与阴影过渡 | 球阵 + 圆柱 | ☐ |
-| `S-17` | 展示型人模 + 独立服装 | 织物褶皱、切线方向与接触关系 | 需 MD/CLO 导出 | ☐ |
+| `S-15` | [Neubelt & Pettineo 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#neubelt-order-1886) p5–p6「cloth needed a handful of properties」+ **Fig 6 中/右（论文渲染的 GGX / velvet 球）**；~~Fig 5~~ 实物照片按 §0.3.3 只作**需求来源**，不作靶子 | 我们自己的 sheen/velvet 渲染是否具备论文列出的四条性质（软而平滑的大衰减高光、边缘绒毛的前向/后向散射、正视也有可见高光、部分织物双色 specular）；**Fig 5 里的高光不对称论文自己声明不复现**（p6），不得作为验收目标 | 自建圆柱 + 两个 MI（双色）；球阵可复用 | ☐ |
+| `S-16` | [Estevez & Kulla 2017](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#estevez-sheen) Fig 3 / Fig 4 · Ashikhmin-Shirley 对比、terminator softening | 分布选型与阴影过渡 | 球阵 + 圆柱 | ☐ |
+
+论文 case 到此为 **2 项**（`S-15` `S-16`）。原本列在这里的 `S-17`（展示型人模 + 独立服装）**没有论文图**
+—— 三篇论文都不用"人模 + 独立服装"做展示，它是本项目自己的观察约定，按 §0.4「来源」字段的要求
+移到 ⑥，不再计入论文 case。
 
 ### ⑤ 专属约定
 
-- **一个时间点只扫一个变量**：sheen roughness、sheen 权重、各向异性分别做，不要混在一个场景里；
-- 论文 case 使用**展示型人模 + 独立服装**，不使用悬空布片或布料球；服装需静态 Pose 与贴身褶皱；
-  MD/CLO 只用于离线模拟与导出，运行时不执行布料模拟；
-- **本模型当前是 ⚠️ 待整改状态**：§1.4.2 审计确认 v2 各向异性路径含 5 项论文里没有的公式
-  （`S-10` `S-11` `S-12` = 椭圆 Charlie / warp visibility / cross 混合，`S-e` = `aspect=2^anisotropy`，
-  `S-27` = 分层因子）。整改完成前，Cloth 的任何结论都不能写成"与论文一致"；
-- **整改有三条都符合 §0.3 的路线**（外观差异与约束见 §1.4.3）：
+- **一个时间点只扫一个变量**：A 臂扫 sheen roughness / sheen 权重，B 臂扫 `γ_s` / `γ_v` / `kd`，
+  两臂不要混在一个场景里（`S-31` 的并排对照除外，它是唯一的双材质场景）；
+- **资产 / 集成展示（`S-17`，非论文要求）**使用展示型人模 + 独立服装，不使用悬空布片或布料球；
+  服装需静态 Pose 与贴身褶皱；MD/CLO（或用 Blender 布料模拟替代）只用于离线模拟与导出，
+  运行时不执行布料模拟。这条是**本项目对"模型在真实几何上是否仍成立"的观察约定**（§1.1 问题 2），
+  三篇论文都没有这种展示，因此它写在 §2.3⑥，不计入论文 case；
+- **自创公式已清除（2026-09-17）**：§1.4.2 确认的 5 项论文里没有的公式
+  （`S-d` `S-e` `S-f` `S-g` = warp visibility / `aspect=2^anisotropy` / 椭圆 Charlie / cross 混合，
+  `S-h` = `1 − c_s·E_s` 分层）现已全部不在代码里，`common/clothBrdf.glsl` 只剩式(2) 与式(23) 分母。
+  **重建时不要复活它们**；但模型本身仍是"待实现"，所以在两条臂的求值器落地并跑完 case 之前，
+  Cloth 的任何结论都不能写成"与论文一致"；
+- **2026-09-16 路线定案 = 方案 C，且落地为两个独立的 `ShadingModelID`**（不是同一个 ID 加内部开关，
+  理由见 `documents/rendering/gbuffer-channel-ownership.md` §7）：
+  - `Cloth` = **8**（UE 对齐槽位）→ **A 臂**，身份是**对照臂**，不得作为交付外观；
+  - `ClothFiber` = **13**（VulkanLearn 本地扩展，UE 5.8 表内没有这个槽位）→ **B 臂**，身份是**生产臂**；
+- **2026-09-17 范围定案：两条臂都"按论文还原"，不做简化档**（依据：论文 A 是 2 页的完整模型，
+  论文 B 的 §4.3 只是纱线级、其渲染图都在 §5 织物级）。具体口径：
+  - **A 臂 = Estévez & Kulla 2017 的完整模型**：`f = G·D/(4|ωo·N||ωi·N|)` —— **式(1) 的 `F` 取 1**，
+    因为作者在同一次课程的完整讲义里明确 *"since we don't take Fresnel into account"*（slide 60，见 §2.3⑧）；
+    `D` = 式(2) 的 Charlie，`G = 1/(1+Λ(ωo)+Λ(wi))` 用式(3) 的拟合（Table 1 两组 `a..e`，
+    按 `(1−r)²` 插值），受光侧加式(4) 的 terminator softening。
+    **分层按讲义写全的形式**：被嵌套的 base 乘 `1−c_s·E_s`、两端取小（直光 `min(1−c_s·E_s(NoL),1−c_s·E_s(NoV))`；
+    环境项不是单端 `1−c_s·E_s(NoV)`，也不是 GGX 预滤波：它是这个 `min` 的余弦加权平均 `S`，sheen 用受光侧软化后的方向反照率 `E†`，两者乘 `EvaluateIrradianceSH/π`，见 §2.3⑪）。`E_s` 表**只含几何项**（不含颜色与 Fresnel），R 通道未软化、G 通道是 `E†`。轴的细化（`[cos80°,1]` 内余弦均分、`√r`、16×16）见 §2.3⑩，不在这里另写一套。
+    **`r` 直接用论文符号**（不用 `α = r²`；`S-26` 的结论按此执行），因为它同时是 `D` 的指数和
+    式(3) 拟合的插值参数。sheen 的颜色入口（论文的 `specint`）直接乘在 lobe 上，不承担 `F0` 的角色；
+  - **B 臂 = Sadeghi et al. 2013 的完整模型（§4.3 + §5）**：`f_s` 用式(2)(3)(4)（**式(4) 的 `1/cos²θ_d`
+    作用于整个 `f_s`**；式(3) 的 `F = Ft(η,wi)·Ft(η′,w′r)` 是两次透射 Fresnel 的乘积），织物级用式(5)
+    两个正交族的覆盖率加权 `Lr = a1·Lr,1 + a2·Lr,2`、式(6) 沿 **tangent curve** 取 `T` 个样本求和
+    （权重是**均匀的 `1/2T`**）、式(7)(8)(9) 的 masking/shadowing、式(11)(12) 的 reweighting，
+    最终合成是**式(13)**——归一化分母 `Σ_{k∈C}P(k)` **跨两族**（`C = C1∪C2`，2T 个样本），
+    它同时取代了式(6) 的 `1/2T`。切线曲线与纱线参数直接取论文数据：Table 3（p11）给控制点偏移角与段长、
+    Table 2（p9）给 `η/A/kd/γs/γv`。论文自己把"不同方向纱线之间的 masking"列为 future work，
+    我们也**不做**（本轮修正见 §2.3⑨）。**间接光的积分域见 §2.3⑫**：核是全域 $S^2$（论文口径），
+    但环境项取**宏观上半球 $\Omega^+$**；直接光不改，仍按全域核逐光源求值；
+  - 两个 ID 的 GBuffer 通道语义各自独立：
+    - A 臂：`gbufferD` = `(sheenColor.rgb, sheenRoughness)`，`gbufferF.w` 不再需要 5+5 bit 打包；
+      `r`（感知粗糙度）直接进式(2) 与式(3)，**不再经过平方映射**；
+    - B 臂：`T=8`（两族各 8 个倾角，短族 `q=0`）约 15 通道。第一趟借用 12 个，再加第二趟 1 张 payload，
+      见 `documents/rendering/gbuffer-channel-ownership.md` §7；
+  - **`anisotropy` / `anisotropyCross` 两个输入随之退役**：A 臂论文里没有这个量，B 臂的各向异性由
+    thread tangent 表达 —— 两个模型都不再有 anisotropy 标量，材质参数面与校验要按臂重写
+    （现状 `source/materialInstanceValidator.cpp` 仍强制要求这两个参数）；
+  - **A 臂的分层依赖方向反照率**（`S-03` / `S-04`）：这是两臂都绕不开的基础 case，
+    需要重建 LUT generator、graph `input`、pass 材质 texture 槽与 set 3 binding（顺序与 graph 一致）；
+- **不存在"B 的各向同性档"，A 与 B 也不可能等价**：B 的散射瓣坐标架**永远**绑在 thread tangent 上，
+  把 `γ_s`/`γ_v` 调大只是把条纹变宽，不会变成 A 的外观；即使撇开方向性，A 是 `sin^(1/r)` 幂律分布、
+  B 是 Gaussian 宽度分布，**函数族不同**（B 另有 `cos(φ_d/2)` 与 `1/cos²θ_d` 而 A 没有），
+  加上能量账本不同（A：directional albedo 缩放；B：两次透射 Fresnel + `kd` + `A`），两者不可能逐点相等。
+  所以 `S-31` 的判定口径是"切线是否进入公式 + 差距有多大、差在哪段角度"，**不是 A ≈ B**；想量化两族的
+  差距，要在**同一参考配置下先把瓣宽对齐**再比残差，并且这件事可以先用 `tool/validation/` 离线算，
+  不必等实现；
+- **三条路线都符合 §0.3；2026-09-16 已选 C**（外观差异与约束见 §1.4.3）：
   - **方案 A（`S-23`）**：只留论文各向同性 Charlie（式 2）+ Neubelt 式(23) 分母。改动最小，
-    但**失去织纹方向外观**；
+    但**失去织纹方向外观** —— ☑ 采纳为 C 的**对照臂**（ID 8）；
   - **方案 B（`S-29`）**：只留 **Sadeghi et al. 2013 microcylinder 模型**。各向异性由 thread tangent
-    表达，天然有出处；必须同时重做能量项（`S-27`）与两张 directional-albedo LUT；
+    表达，天然有出处；必须同时重做能量项（`S-27`）与两张 directional-albedo LUT ——
+    ☑ 采纳为 C 的**生产臂**（ID 13 `ClothFiber`）；
   - **方案 C（`S-31`）**：**两套都保留**——B 为生产臂，A 为对照臂，作为"切线是否进入公式"的
-    可测量对照。必须满足三条硬约束：两个 variant（不是一个 `if` 开关）、指定生产臂与对照臂、
-    两套能量账本各自闭合且不交叉补偿；
-- **A 与 B 是两种不同外观，不是同一模型的两个参数档**：A 只吃 `N·H`（转向不变），
-  B 由切线定义反射锥（高光条纹随织纹转向）。因此"都要"只能是**两个独立闭包**，不能做成一个开关；
+    可测量对照。三条硬约束（两个独立 variant、指定生产臂与对照臂、两套能量账本不交叉补偿）
+    在"两个 `ShadingModelID`"的落地下是**结构性成立**的，不需要额外的开关纪律 ——
+    **这是本次定案采纳 C 的形式**；
+- **两个闭包各自独立**：A 只吃 `N·H`（转向不变），B 的瓣由切线定义（高光条纹随织纹转向），
+  两者不共享闭包代码、不互相补偿能量。C 的三条硬约束对应的检查仍在 `S-31` 里执行；
 - v1 各向同性路径的两项公式**已核对有出处**（`S-22` 式(2)、`S-24` 式(23)），它们是本模型可信的部分；
   整改时不要动它们；
+
+### ⑥ 资产 / 集成 case（非论文图，不计入论文 case）
+
+`S-17` 原先列在 ④ 的论文 case 表里，但它的"来源"是**本项目约定**而非任何论文图：三篇论文都不用
+"人模 + 独立服装"做展示（Neubelt 的布料出现在 Fig 3 的游戏内夹克与 Fig 5 的实物照片上，Estévez 与
+Sadeghi 用的是球 / 圆柱 / 平板）。按 §0.4「来源必须绑定图号 / 式号 / 节号」的要求，它不属于论文 case，
+移到本节，**Cloth 的论文 case 由 3 项改为 2 项**。
+
+| ID | 目标 | 形式 | 资产 | 状态 |
+| --- | --- | --- | --- | --- |
+| `S-17` | **模型在真实几何 / 资产上是否仍成立**（§1.1 的**问题 2**，不是"抄对了没有"）：衣物褶皱处的 `worldTangent` 方向是否正确（B 臂完全依赖它）、布料与身体的接触关系表现、真实几何下 GBuffer 通道语义没有被破坏 | 观感 + 切线方向数值核对（可与解析期望比对） | 自建人模（CC0，如 Blender Human Base Meshes）+ 自建或离线模拟的服装 | ☐ |
+
+判定纪律：这条 case **没有论文靶子**，所以结论只能来自"我们自己的期望"（切线方向、接触关系、
+通道语义），**不得写成"复现了某张论文图"**；差异归因照样要写（§0.4）。
+
+### ⑦ 接口与范围决定登记（2026-09-17）
+
+| # | 决定 | 落成的口径 |
+| --- | --- | --- |
+| 1 | **A 臂的 `F`：论文不考虑 Fresnel → 取 1**（2026-09-21 依据讲义改判） | 论文式(1) 有 `F` 但正文没有定义它，参考文献里也没有 Fresnel / Schlick 来源；**同一次课程、同一作者的完整讲义**（slide 60，见 ⑧）明确写 *"since we don't take Fresnel into account"*；Filament 的布料模型同样写 *"we removed the Fresnel component from this BRDF"*。→ **采纳 ①-A：`F` 取 1，sheen 颜色直接乘在 lobe 上**，不从外部引 Schlick；原 ①-B（Schlick + `F0 = specularTint`）**作废**，任何地方都不得再乘 Fresnel |
+| 2 | **要有 specular 接口** | 论文的 `specint` = **sheen 的反射率/颜色入口**（材质参数 `sheenColor`），直接乘在 lobe 上；它**不承担 `F0` 的角色**，也不参与 `E_s` 表烘焙。B 臂的对应量仍是 `η`（逐族 Fresnel，只在纱线级 BSDF 内部） |
+| 3 | **间接光属于工程化，自己推导** | 记为**本项目工程推导**（知识库 A7/B7，不混进论文公式编号）：A 臂把直接光 BRDF 对半球积分：base 得到 `S`，sheen 得到 `c_s·E†`，再乘 `EvaluateIrradianceSH/π`。B 臂把式(13) 的同一个核积成每材质的 `E_fabric(θv, φv)`，孔隙 Lambert 在直接光和间接光各出现一次，也乘这同一个辐照度 `/π`。不采样 `reflect(-V,N)`，不复用 GGX prefiltered cubemap。均匀环境下的验收是这个积分，不是单端代数代理。见 §2.3⑪ |
+| 4 | **`E_s` 表的轴向与规格** | 轴必须是论文的 `r`（式(3) 的插值参数），色深/分辨率按讲义起步：**16×16、索引 `(roughness, 入射角)`**，且表里**只含几何项**（不含颜色与 Fresnel，换 sheen 颜色不必重烘）；实验结果若显示 `r→0` 附近重建误差超限，再升到 32×32（`S-03` 的判定对象） |
+| 5 | **运行时 `T = 8`**（2026-09-22 改判） | `T` 是编译期常量，与 GBuffer 编码版本和 `E_fabric` 表版本绑定。Table 3 最长是 Satin flat 的 8 个控制点，两族都用这 8 个槽，短族 `q=0`。早先的 `T=4` 只是第一趟借用槽的宽度，装不下这些控制点，分裂高光会被抹平，作废。第一趟不加第九张颜色附件；差下的 3 个通道走路线 2 |
+| 6 | **ClothFiber 要新增 1 张 payload** | 第一趟 8 张颜色附件是设备上限（`base.frag.glsl` location 0–7），不能再加输出。借用槽 12 个，`T=8` 约 15 个通道，差 3 个。**路线 2 因此现在就要做**：第二趟 geometry pass，只画 `ClothFiber`（`depthCompareOp: equal`），写 1 张专属 payload，deferred 同时读两套。代价是 graph 新 pass、按 ShadingModelID 过滤绘制，以及多一次光栅化 |
+| 7 | **接受 `MaterialInputs` 的 ABI 扩展** | 给 `ClothFiberMaterialInputs` 加 fabric 字段（切线倾角 / 两族参数 / 覆盖率），按仓库规矩 bump `abi=`；前向路径靠 `surface.modelInputs = inputs.modelInputs` 自动生效，deferred 侧把同批值打包进 GBuffer |
+| 8 | **debug view 重新划分** | **A 臂 `Cloth`=8 → 64–73**，**B 臂 `ClothFiber`=13 → 80–89**（两段都整段重定义，旧的 `cloth_v2_*` 键改写为 B 臂语义）；74–79 与 92 继续留空，99 起留给将来的对照臂。空号清单与名称表在 `source/ui/uiSubsystem.cpp` |
+| 9 | **B 臂的权重口径：按式(13) 跨族 `P` 归一化**（2026-09-22 依论文改判） | 论文式(6) 是**均匀**的 `1/2T`（没有逐样本权重），式(13) 把 `1/2T` 换成按投影长度归一化、且分母**跨两族**（`Σ_{k∈C}P(k)`，`C=C1∪C2`）。→ 落地口径：`q`（段长或 `σ_t` 高斯）是曲线上的 quadrature，**每族归一到和为 1**，分子和跨族分母使用同一套 `q·P`。`q` 全部相等时约掉，回到 `Σ P`。`a_k` 在这之后乘一次。**禁止**逐族各自归一再乘覆盖率当作第二套能量。间接光的分母留在积分里，见 §2.3⑪ |
+| 10 | **B 臂环境项的积分域 = 宏观上半球 $\Omega^+$**（2026-09-22 定案；**核仍是全域 $S^2$**） | 核继承 Marschner 的全域口径（原文直证见 §2.3⑫），Sadeghi 原样采用，**不改**；但环境项是工程推导，而我们唯一的环境输入 `EvaluateIrradianceSH(n)/π` 是**上半球余弦加权平均 radiance**，表与 L 必须同域。→ $E_{\mathrm{fabric}}=\int_{\Omega^+}K\,d\omega$；**直接光不改**（按实际光源方向逐项求值，核里没有 $n\cdot l$ 截断）。Ω⁻ 占比实测 6.5%~27.2%，登记为已知误差（方向偏暗、无增益风险）。判定见 `S-35`，证据见 case 记录 |
+
+### ⑧ 讲义补充与两处修正（2026-09-21）
+
+**新增来源**：Estévez & Kulla 那篇 2 页 note 只是**补充材料**；同一次 SIGGRAPH 2017 课程里、同一作者的
+正文讲义（Christopher Kulla & Alejandro Conty, *Revisiting Physically Based Shading at Imageworks*,
+139 页）才是完整口径。它已作为书库条目 `#imageworks-s2017-slides` 登记（含离线 PDF），
+本计划引用它时给出 slide 号与 PDF 页码（slide 60 = PDF 第 105 页）；知识库页内的引用写作
+`[cite: imageworks-s2017-slides#p105]`。
+
+讲义带来三条**确定性结论**（此前只能靠推断）：
+
+| # | 结论（讲义原话） | 对本计划的影响 |
+| --- | --- | --- |
+| 1 | *“we store the albedo of the sheen lobe in a 16×16 2D table indexed by roughness and incident angle, **since we don't take Fresnel into account**.”* | **A 臂 `F` 取 1**（⑦ 的 A1 由 ①-B 改判为 ①-A）；`E_s` 表只含几何项，颜色不参与烘焙 |
+| 2 | *“With our `min{(1−E(ωo)), (1−E(ωi))}` scaling we avoid energy gain and suffer only **subtle** energy loss.”* | **分层因子是被嵌套层乘 `1−E`、两端取小**（= `1 − max(E)`）。2 页 note 的 `min(α_i, α_o)` 里 α 是**剩余反照率**，不是 `E` —— `S-27` 按此定案；把 base 乘 `min(E)` 是误写 |
+| 3 | 同一页还给出 softening 的作用域：整体套用 *“Reciprocal but too dark”*（会杀掉边缘高光），最终**只用于 shadowing 侧** | 与我们已实现的"只作用于受光侧"一致，并拿到了"为什么"；案例记录里据此写归因 |
+
+**同步状态**：知识库 `cloth-sheen` 页（A0/A3/A4/A5/A6/A7/A8、汇总表与伪代码）与决策树
+（新增 `✘ 乘 Fresnel（论文未采纳）` 叶子，`albedo scaling` 口径改为 `min(1−E)`）已按上面改完，
+并通过 `citation:check` / `citation:pages`（46 个出处×页码位置，0 待确认）/ `mindmap:check` / `npm run build`
+（183 页、PDF 深链 133 处）。后续又补进一条讲义数据：**slide 58（PDF p98）**给出 `min` 分层的来源——
+通用 coat 形式 `(1−E(ωo))·(1−E(ωi))`，因为 `Eavg` 未知、无法重归一化才改成 `min`
+（*"which is still reciprocal and less darkening"*），见 §2.3⑨。
+
+### ⑨ B 臂公式核对与五处修正（2026-09-22）
+
+按 §2.3⑤ 的范围定案，把 B 臂（知识库页 `B0`–`B9`）逐条对着论文原文核了一遍。**修正五处**（一律以论文原文为准）：
+
+| # | 位置 | 原写法（错 / 无出处） | 改为（论文依据） |
+| --- | --- | --- | --- |
+| 1 | 式(4) 的除法作用域 | `f_s = f_{r,s} + f_{r,v}/cos²θ_d`（只除体积项） | `f_s = ( f_{r,s} + f_{r,v} ) / cos²θ_d`（p6 式(4) 的括号）。漏括号会让表面项在掠射时少除一次 `cos²θ_d`，两条通路的比例整段错 |
+| 2 | 式(11) 的 `cos ψ` | `cos ψ = ‖ω − (ω·t)t‖ / ‖ω‖`（模长、投影到**法**平面） | `cos ψ = (ω·n_k) / ‖ω − (ω·b_k)b_k‖`，`b_k = t_k × n_k`（p8 §5.3：`ψi` 是局部法线与 `ωi` 在 `(t,n)` 平面上投影的夹角）。原写法是**模长**，`max(cos ψ,0)` 永远取不到 0，p7 的"余弦为负即自遮挡"整句失效；分母也投错平面（去切线分量得到的是 masking 的 `cos φ`） |
+| 3 | 式(6) 的权重归属 | 把 `1/2T` 折算进逐族权重 `q`，并声称 `q` 出自式(6) | 式(6) 是**均匀权重**的 `1/2T`（p7 原文 *"We are dividing by 2T since there are T tangent samples for each direction of threads."*），既没有 `M/P` 也没有 `q`；`q`（段长 / `σ_t` 高斯）**是我们的重建**，登记为实现约定 |
+| 4 | 式(13) 的归一化 | 逐族归一 × 覆盖率 `a_k` | 分母 `Σ_{k∈C}P(k)` **跨两族**（`C=C1∪C2`，2T 个样本）；它取代了式(6) 的 `1/2T`（`P≡1` 时正好退化回去），`a_k` 在之后乘一次。落成 ⑦ 第 9 条 |
+| 5 | 式(3) 的透射项 | `Ft(η,w_i)·Ft(η,w_r)`（无撇） | 论文是 `F = Ft(η,w⃗_i)·Ft(η′,w⃗′_r)`（p6：*"the product of two transmission Fresnel terms"*）——出射界面带撇，论文**没给闭式**（折射后的方向与出射面 IOR）；同一余弦上的 `η′=1/η` 已作废。Marschner 2003 §4.3 的 TT（`p=1`）把两次透射收成 `(1−Fr(η,γi))²`。`η=1.46`、余弦 `0.5` 时同角度乘积为 0，互易式为 0.8419。角度用 `cosθd cos(φd/2)`，不用 `nk·ωi`。见知识库 B2.4 |
+
+**同时补进知识库的三处论文数据 / 口径**（此前只有推断，没有出处）：
+
+- **Table 3（p11）**：6 种织物的切线控制点**偏移角 + 段长**（如 (c) Polyester Satin Charmeuse 正面 flat 族
+  `-32,-32,-18,0,0,18,32,32` / `1.33,0.66,2,2,2,0.66,1.33`，`a=0.9`）。这是**论文生成数据**，
+  复现论文 case 时直接取用；结构上 `n` 个控制点只给 `n−1` 个段长——曲线闭合、末段不计权
+  （(f) Velvet 的 Dir 2 有 `0` 段长，`Σw>0` 要显式保护）。Table 2（p9）同批复核：`η/A/kd/γs/γv` 六种织物齐全。
+- **孔隙缺口有数据支撑**：(a) Linen Plain 两族覆盖率**各 0.33**（`a1+a2=0.66`，缺 34%），其余织物相加为 1。
+  论文只写 *"If the weaving pattern has no empty spaces, these two numbers add up to one."*，
+  **没有定义缺口怎么着色**——所以"孔隙色 + 孔隙 SH"是我们的工程推导，登记并配白炉检查。
+- **讲义 slide 58（PDF p98）**：`min` 分层的来源是**通用 coat** 形式 `(1−E(ωo))·(1−E(ωi))`；
+  作者说明因为 `Eavg` 未知、无法重归一化，才改成 `min`（*"which is still reciprocal and less darkening"*）。
+  sheen 用的是同一支（slide 60 = p105），A 臂 `S-27` 的两端取小据此有直接出处。
+
+**同步状态**：知识库 `cloth-sheen` 页（B1/B2/B3/B4/B5/B6/B7/B8/B9、两处汇总表、伪代码，
+以及新增的 `ThreadPsi` / `ThreadReweight` helper）与决策树已按上面改完；
+`citation:check` 8/8、`citation:pages` **48 个出处×页码位置、0 待确认**（新增 Sadeghi p11 与讲义 p98 两个出处）、
+`mindmap:check`（53 节点，无越界 / 无重叠）、`npm run build` 通过。
+
+### ⑩ A 臂离线推导、`E_s` 表口径与白炉清单（2026-09-22）
+
+A 臂剩下来的"待推导"只有两件：**`E_s` 表怎么烘**、**怎么判定它是对的**。这一轮把它们钉成了可执行的
+合同，顺带核出三处会改变亮度的读法错误（登记为 `S-32`）。
+
+**新增离线参考实现**：`tool/validation/verify_cloth_sheen_albedo.py`（纯 stdlib，20 项断言，
+`S-03` / `S-04` / `S-10` / `S-27` / `S-32` 的判据都在里面；`--converge` 做 `N→2N` 自检、`--quick` 快速回归）。
+它是**将来 GPU LUT generator 的口径合同**：换分布、换轴参数化、换采样规则，都要先改它并跑过。
+
+**钉死的 `E_s` 表口径**（知识库 `cloth-sheen` 页 A6.3 有同一张表）：
+
+| 项 | 取值 | 理由 / 实测 |
+| --- | --- | --- |
+| 被积函数 | `G·D/(4·NoV)`（`NoL` 与 `dω` 约掉一个） | `E_s(NoV,r)=∫f_sheen·NoL dω` |
+| 采样 | 均匀半球（离线等立体角分层中点法 / GPU 侧 Hammersley） | 论文 §2 自己的结论：*"plain uniform sampling of the upper hemisphere to be more effective"* |
+| `G` 版本 | **未软化的互易核** | 表只有一个自变量轴、直光两端共用；软化只减不增（实测比值 0.911~0.927） |
+| 分辨率 / 轴 | **16×16**；`x` 轴在 $[\cos80^\circ,1]$ 内**按余弦均分**（限域要作用到轴样本上）；`y` 轴按 **$\sqrt r$** 均分 | 重建误差：线性 `r` 轴 0.129~0.192、按角度均分 0.041 → 本组合 **0.0120**；不限域的余弦轴三档 $\theta_{\max}$ 都会烘进 $E_s>1$ 的格子 |
+| 颜色 | 不进表；分层时扣 `c_s·E` | 漏乘 `c_s` 在 `c_s=0.2` 时白炉总和 0.905627（暗 0.094） |
+
+**白炉清单与实测**（求积 192×96，20 项断言全通过）：
+
+| # | 判据 | 实测 |
+| --- | --- | --- |
+| 1 | `∫D(n·h)dω_h = 1`（求积器自检） | 偏差 ≤ 1.5e-4 |
+| 2 | `0 < E_s ≤ 1` | 最大 0.827322、最小 2.6e-5 |
+| 3 | 直光 `base·min(1−c_sE(NoL),1−c_sE(NoV)) + sheen ≤ 1` | 1.000000000（超 1 的量 0） |
+| 4 | IBL `base·(1−c_sE(NoV)) + sheen ≡ 1` | 偏差 0 |
+| 5 | 表重建误差（16×16、域内余弦均分 + `√r` 轴） | 最大 0.0120（32×32 为 0.0039） |
+| 6 | 软化只减不增 | 软化/未软化 0.911~0.927 |
+
+**三处读法错误（`S-32`，都会改变亮度）**：
+
+1. **`L(x)` 的指数位置**：论文是 `a/(1+b·x^c)+d·x+e`（指数在**分母**的 `x` 上），旧读法写成 `d·x^c`；
+   `r=0`、`x=0.25` 时 $\Lambda$ 从 5.997 变 2868，`G` 从 0.515 掉到 0.134（3.8 倍）。
+   旁证：Marmoset Toolbag 的 Unity 移植实现写的是 `g.a*rcp(1.0+g.b*pow(x,g.c))+g.d*x+g.e`。
+2. **`Λ` 是 `L` 的指数**：`G` 里用的是 $\Lambda=e^{L}$；把 `L` 当 $\Lambda$ 返回、再叠上
+   `pow(L,k)` 的软化会算出 **`G=-0.087`**（负值，物理上不可能，直接判废）。
+3. **插值权重方向**：`P=(1−r)²P₀+(1−(1−r)²)P₁`，`r=0` 取 `P₀`；GLSL 要写 `mix(P₁,P₀,t)`，
+   写成 `mix(P₀,P₁,t)` 会把整套系数按 `r` 镜像（`r=0` 用到 `r=1` 的拟合）。
+
+**登记的一处模型瑕疵（不修）**：深掠射角上论文的 $\Lambda$ **拟合**会让 `E_s` 超过 1
+（`r=0.01` 要到 `NoV≥0.087` 才回落、`r=0.001` 要 `NoV≥0.05`；`r≥0.05` 时到 `NoV=1e-4` 都正常）。
+这不是积分口径的问题（同一次运行的 D 投影面积归一化误差 ≤1.5e-4），做法是**让表轴域避开**并登记——
+注意"限域"必须作用到**轴样本**上：不限域的余弦轴无论怎么设 $\theta_{\max}$ 都会烘进 $E_s>1$ 的格子。
+轴域外（$\theta_v>80^\circ$）查询按 clamp-to-edge 取 $80^\circ$ 行，代价实测 $\Delta E=+0.13$（`r=0.9`）
+到 $+1.07$（`r=0.02`、$\theta_v=89^\circ$；那里真值本身已 $\approx1.24>1$，属"封顶"）。
+将来若确实需要那一小段掠射 sheen，再决定是夹 lobe 还是换 $\Lambda$ 的解析形式。
+
+**同步状态**：知识库 `cloth-sheen` 页（A2.3/A2.4/A2.5/A2.7 的读法修正、A5.2/A5.4/A5.5 的颜色因子、
+A6.1/A6.3 的表口径、A7.5/A7.7 的 $\mu=c_sE_s$、A8 的验收清单、A 臂伪代码四段）与决策树已改完；
+`citation:check` 8/8、`citation:pages` 48 个位置 0 待确认、`mindmap:check`（55 节点，无越界 / 无重叠）、
+`npm run build` 通过。
+
+### ⑪ 间接光与直接光合成同一个积分（2026-09-22）
+
+上一版把 A 臂环境项收成单端 `1−c_sE(NoV)` 再乘宏观反射方向上的预滤波 radiance，把 B 臂收成逐族 `(NoV, θt)` 表乘同一个方向。两处都不是对应直接光 BRDF 的半球积分：常值环境下单端代理精确等于 1，所以旧白炉测不到差额。知识库 `cloth-sheen` 页 A7–A8、B7–B9 已按下面的口径改完，离线探针在 `tool/validation/verify_cloth_sheen_albedo.py` 第 11 节。
+
+| 路径 | 直接光 | 间接光 |
+| --- | --- | --- |
+| A 臂 base | `(ρ/π)·min(1−c_sE(NoL), 1−c_sE(NoV))·NoL·L` | `ρ·S·E_irr/π`。`S = 2∫ min(1−c_sE(μ), 1−c_sE(NoV)) μ dμ`，`μ<cos80°` 的尾巴用 `μmin²` |
+| A 臂 sheen | 解析的软化 Charlie | `c_s·E†·E_irr/π`。`E†` 是软化瓣的方向反照率，表的 G 通道 |
+| B 臂纤维 | 式(13)，逐样本重建 `n_k`，`φ_d` 不夹到 `[0, π/2]` | `E_fabric(θv, φv)·E_irr/π`。`E_fabric = ∫_{Ω⁺} K dω`（**域 = 宏观上半球**，见 §2.3⑫），`K` 就是直接光的核，分母留在积分里 |
+| B 臂孔隙 | `(1−a1−a2)·(ρ_pore/π)·NoL·L` | `(1−a1−a2)·ρ_pore·E_irr/π` |
+
+`E_irr` 是 `EvaluateIrradianceSH`：常值 radiance 1 时约等于 `π`，并且已经乘过 `environmentIntensity`。不要再乘一次，也不要走 `CalculateDiffuseIbl` / `CalculateSpecularIbl`。
+
+均匀 radiance、`NoV=0.9`、`r=0.5`、求积 `96×48`：`c_s=1` 时 `S+E†=0.8808`，旧代理 `1.0000`，差额 `0.1192`（入射侧 `min` 多扣 `0.1095`，软化少加 `0.0097`）。`c_s=0.2` 时积分 `0.9762`。`Kt` 透射不在 A 臂里。
+
+还没测完、不能填成数字的只有 B 臂 `E_fabric` 的重建误差（`S-34`）。分辨率本身已经定为 32×64，运行时 `T` 已经定为 8（Table 3 的最长控制点列；第一趟装不下，所以第二趟加 1 张 payload），不再叫未冻结。`σ_u` 也不是 15°–25° 的扫描：Ashikhmin 2000 把相关宽度收成定值 15°（原文写的是 width，不是标准差）；Sadeghi 把同一区间叫成 standard deviation。我们按 Sadeghi 的词把标准差定在 20°，单位高度高斯，不是材质参数。A 臂的间接光公式本身可以落地。决策树和推导链图已改到同一口径，不再写 IBL 单端或 `(NoV, θt)` 逐族表。
+
+### ⑫ B 臂环境项的积分域定案：$\Omega^+$（2026-09-22）
+
+B 臂的核按论文定义在**全域 $S^2$** 上，这一点有原文直证，**不改**；但**环境项**（论文没有环境项，属 ⑦ 第 3 条的工程推导）取**宏观上半球 $\Omega^+$**（$l\cdot n>0$，$n$ 为宏观法线）。两条路径分开写死：
+
+| 路径 | 域 | 依据 |
+| --- | --- | --- |
+| 直接光（式 13） | **$S^2$（论文口径，不改）** | 按实际光源方向逐项求值即可，核里没有 $n\cdot l$ 截断；光源落在布面下方时论文模型本来也会散射它 |
+| 间接光 / $E_{\mathrm{fabric}}$ 表 | **$\Omega^+$** | 见下三条理由与量级 |
+
+**① 论文层面确实是全域。** Marschner et al. 2003 式(1) 正下方原文：*"Note that, unlike a surface where the integral extends over the upper hemisphere, this integral extends over the entire sphere."*（PDF p3，§2）；Sadeghi §4.3 写 *"we use the curve radiance integral from [Marschner et al. 2003]"*，其式(1)(6)(10) 的排版是**裸 `∫`、没有域标记**。所以这是"孤立圆柱在自由空间里可以被任意方向照到"的口径——1D 曲线没有法线、没有半球可言（论文 Figure 7 caption：*"When the thread is not part of a fabric n can be any arbitrary direction within the normal plane."*）。
+
+**② 但织物级是不透明表面，而引擎给不出全域辐照度。** 论文把同一个积分原样搬到织物级，核里**没有任何宏观法线因子**（$n$ 只通过倾斜后的 $n_k$ 与 $(\theta_v,\varphi_v)$ 坐标架进入）；这既是论文自己的近似，也和它把"不同方向纱线之间的遮挡"列为 future work 同源。我们唯一的环境输入是 `EvaluateIrradianceSH(n)/π`（`shader/glsl/common/lighting.glsl:209-245`：宏观法线的**上半球余弦加权**平均 radiance，且已含 `environmentIntensity`），而 SH 只投了天空（`shader/glsl/generator/skySHGenerate.comp:5-11`，没有地面回弹）。**表按 $S^2$ 烘、L 只有上半球 ⇒ 把地平线以下那份按上半球平均亮度白送**。另外孔隙项是我们加的 Lambert，用的是宏观 $n\cdot l$；纤维核若走 $S^2$，同一材质内部就有两套入射域。
+
+**③ 量级不小，不能当舍入误差。** `artifacts/cloth_review/domain_split_estimate.py`（核代理 $f_s\equiv1$，保留 $M$/$P$/$\cos\theta_i$ 与式(13) 跨族分母）实测：**$M$ 与 $P$ 都在 $l\cdot n_k\le0$ 时同时归零**（$M=\max(\cos\varphi,0)$，$P=\max(\cos\psi,0)$ 而 $\cos\psi=(\omega\cdot n_k)/\|\omega-(\omega\cdot b_k)b_k\|$，分子就是 $\cos\varphi$），所以域差异完全由倾斜局部法线的朝向决定：
+
+| 织物（Table 2/3 参数） | $\theta_v=20^\circ$ | $\theta_v=45^\circ$ | $\theta_v=75^\circ$ |
+| --- | --- | --- | --- |
+| Satin 正面（Table 3 flat 曲线，最大倾角 $\pm32^\circ$，$a=0.9/0.1$） | 7.99% | 8.97% | 16.30% |
+| 平纹（$\sigma_t=8^\circ$） | 6.49% | 7.80% | 20.09% |
+| 中等倾斜（$\sigma_t=20^\circ$） | 10.29% | 12.79% | 27.18% |
+| Velvet Dir 2（Table 3 `-90,-55,55,90`） | 16.87% | 18.35% | 19.03% |
+
+**登记为已知误差**（补进知识库 `cloth-sheen` 页 B9.3）：丢掉论文核在地平线以下的 6.5%~27.2%，方向**偏暗、无增益风险**；换来的是表与 L 同域、与孔隙项同域。`S-34` 的误差门限必须连带记录域，B9.1 的验收写成"表 $=\int_{\Omega^+}K$"。Table 2/Table 3 已从 PDF 全文抽出（现场证据见 case 记录），复现论文 case 时直接取用。
 
 ## 2.4 Hair
 
@@ -1822,17 +2085,18 @@ DefaultLit  ->  Cloth / Sheen  ->  Hair  ->  Subsurface  ->  TwoSidedFoliage  ->
 | --- | --- | --- | --- | --- | --- |
 | DefaultLit | §2.1 | 15 | 4 | ◐ | ✅ 探针 / 测量工具 / **几何项两条审计（`D-20` / `D-21`，2026-09-13）** / **公式级积分与球阵回归（`M-02` `M-03` `M-04` + `D-01` `D-05` `D-06` `D-07` `D-08` `D-09` `D-10`，2026-09-14）**都已就绪；剩 `D-11` `D-12` `D-15`～`D-19` 与 `D-07` 的组合越界项（见 §2.1⑤） |
 | ClearCoat | §2.2 | 9 | 4（其中 2 项 ⛔） | ☐ **待按论文实现** | 旧实现（`M_carPaint`）已删除；重建时先按 UE 冻结接口，再处理膜厚 / 吸收的参数缺口；缺 Jakob Fig 4 资产 |
-| Cloth / Sheen | §2.3 | 27 | 3 | ☐ **待按论文实现** | 旧实现（含 5 项无出处公式）已删除；重建前先定路线（`S-23` A / `S-29` B / `S-31` C，见 §1.4.3）；缺双色天鹅绒圆柱与服装资产 |
+| Cloth / Sheen | §2.3 | 27 | 2（+1 资产/集成 `S-17`） | ☐ **待按论文实现**（**路线 2026-09-16 定案 = 方案 C；2026-09-17 范围定案 = 两臂都按论文完整还原**） | 自创公式已清除；A 臂 = Estévez 式(1)(2)(3)(4)+§5（需方向反照率 LUT）；B 臂 = Sadeghi §4.3+§5（`T=8`，第二趟 1 张 payload）；缺带切线的织纹网格、双色天鹅绒圆柱；`S-17` 的服装属 ⑥ 资产/集成 case |
 | Hair | §2.4 | 16 | 4 | ☐ **待按论文实现** | 旧实现已删除；重建前先定 `H-20` 基准（论文 `T^p` 路径长 vs UE Legacy 经验式）；Hair tangent 需离线生成 |
 | Subsurface | §2.5 | 14 | 3 | ☐ **待按论文实现** | 旧实现（三套入口）已删除；重建时按论文定 profile / LUT 参数面；皮肤头模授权 |
 | TwoSidedFoliage | §2.6 | 11 | 2 | ☐ **待按论文实现** | 旧实现已删除；重建前先决定背光常量是否参数化；无专门论文基准图 |
 | Eye | §2.7 | 12 | 2 | ☐ **待按论文实现** | 旧实现（含四个母材质与 dual-shell）已删除；重建时必须连几何 / UV 契约一起设计 |
 | ThinTranslucent | §2.8 | 12 | 5 | ☐ **待按论文实现** | 旧实现已删除；重建时必须重新设计 renderMode 与双源输出路径（`base.frag.glsl` 里该分支现为编译期错误）；缺玻璃球 / 马 / 多层透明资产 |
 | Unlit | §2.9 | —— | —— | —— | 辅助材质，不作 case |
-| **合计** | | **114** | **27** | | |
+| **合计** | | **114** | **26** | | |
 
 > 另有**共享 case** 15 项（`M-01..M-08` 数学基础、探针与坐标系规范、`A-01..A-07` 架构一致性），不归属于任何
-> 单个模型，但每个模型落地时都要回到它们核对一次。全文档 case 总数为 **159**；
+> 单个模型，但每个模型落地时都要回到它们核对一次。全文档 case 总数为 **158**
+> （原 159 减去从论文 case 降级为 §2.3⑥ 资产/集成 case 的 `S-17`；论文 case 合计由 27 降为 26）；
 > 其中 `S-23` / `S-29` / `S-31` 是 Cloth 的**三条可选路线**（各向同性 / microcylinder / 两套并存），执行其一；`S-30` 是知识库侧的条目维护。
 > **已完成**：`M-07`（2026-09-12，含 `measure_plot_curve.py` / `run_paper_case.ps1` / `bmp_reader.py` /
 > `console_inject.ps1` 四个工具）与 `M-08`（同日，探针坐标轴化 + 图头说明与图例 + 探针场景 scale 约定），
@@ -1854,7 +2118,7 @@ DefaultLit  ->  Cloth / Sheen  ->  Hair  ->  Subsurface  ->  TwoSidedFoliage  ->
    "测量前先 `tonemap 0` + 关 Bloom"的流程与两个共享工具同时落地（§1.3 / §1.5.3，
    记录见 `shading-model-case-records.md#m-07`）。**§2.1 / §2.3 / §2.4 的 mode 0 / 1 / 2 曲线 case
    自此可以做绝对的逐列像素判定**（已实测 ≤0.5 px）；
-2. ⏳ **Cloth 重建路线定案（`S-23` A / `S-29` B / `S-31` C）** —— §1.4.2 审计确认旧 v2 各向异性路径含 **5 项论文里没有的公式**（`S-10` `S-11` `S-12` + `aspect=2^anisotropy` + 分层因子），该实现已删除，**现在这一步读作"重建前先定路线"**；§1.4.3 补查已找到有出处的替代路线（microcylinder），且已确认 A / B 是**两种不同外观**。按 §0.3 这是**唯一被确认的自创公式区**，属最高优先级：实现本身不等于论文时，任何对齐结论都无效；
+2. ✅ **Cloth 重建路线定案（2026-09-16 完成）** —— §1.4.2 审计确认旧 v2 各向异性路径含 **5 项论文里没有的公式**（`S-10` `S-11` `S-12` + `aspect=2^anisotropy` + 分层因子），该实现已删除；§1.4.3 补查找到了有出处的替代路线（microcylinder），并确认 A / B 是**两种不同外观、不可能等价**（B 没有各向同性档）。**定案：方案 C，落地为两个独立 `ShadingModelID`** —— `Cloth` = 8（A 臂，Estévez 各向同性 Charlie，对照）/ `ClothFiber` = 13（B 臂，Sadeghi microcylinder，生产，本地扩展）；`anisotropy` / `anisotropyCross` 两个输入退役；通道预算见 `documents/rendering/gbuffer-channel-ownership.md` §7，完整约定见 §2.3⑤。按 §0.3 这是**唯一被确认的自创公式区**，所以 C 的两条臂都必须只含论文式；
 3. ✅ **DefaultLit 的 `D-20` / `D-21`**（2026-09-13 收口）—— 两条都判定为**审计标注错误**：
    IBL 域用的是论文的 `k=α/2`（计划书写的 `α²/2` 是把当时的局部变量 `a` 当成 α 的误读；
    该变量同日按 §1.4.5 第 5 条改名为 `alpha`），
@@ -1862,14 +2126,16 @@ DefaultLit  ->  Cloth / Sheen  ->  Hair  ->  Subsurface  ->  TwoSidedFoliage  ->
    数值证据：`D-04`（`tool/validation/verify_geometry_term.py`）与 `D-03`（mode 4 探针）。
    **结论：不需要改代码**；要改的是文档标签与变量名（都已改）。
 
-> `M-07` 与第 3 件都已完成，**下一步就是第 2 件**（Cloth 路线定案）；与此同时 DefaultLit 剩下的
+> 三个全局前置**都已完成**：`M-07`、`D-20`/`D-21`，以及 **Cloth 路线定案（2026-09-16，方案 C / 两个 ID）**。
+> 下一步是 Cloth 的两条臂落地（先 B 臂：它不需要 directional-albedo LUT），与此同时 DefaultLit 剩下的
 > 基础 case（`D-01` / `D-05` / `D-06` / `D-07` / `D-08` / `D-09` / `D-10` / `D-15`）都可以直接做——
 > 测量链路与新的 mode 4 都已就绪。
 
 **读法（2026-09-12 清理后）**：下表里"先做 case"的**含义变了**。原先它们的目的是"在已有实现上先弄清
 判据"，现在对应模型没有实现，所以它们读作**重建该模型前必须先定下的设计决策**：
 
-- 仍然有效且仍然必须先做：`S-23` / `S-29` / `S-31`（三条外观路线选一条）与 `S-24..S-27`；
+- ✅ **路线类已定案**：`S-23` / `S-29` / `S-31`（2026-09-16 选 C，两个 ID，见 §2.3⑤）；
+  仍待做的是 `S-24..S-27` 四项映射/分层因子决策；
 - ✅ **已做完**：`D-20` / `D-21`（2026-09-13，两条都是审计标注错误，实现无需改动）；
 - **需要重新推导**：凡是把**已删产物**当作前提的行——`H-16` / `H-19`（"用 `M_hair` 还是 `M_hairProbe`
   做基准"，两者都已删除）、`C-13`、`U-15` / `U-16`、`E-12` / `E-14` / `E-15`、`F-12` / `F-13`、
@@ -1878,7 +2144,7 @@ DefaultLit  ->  Cloth / Sheen  ->  Hair  ->  Subsurface  ->  TwoSidedFoliage  ->
 | 模型 | 先做 case | 为什么要先做 |
 | --- | --- | --- |
 | ~~**全部**~~ | ~~**`M-07`**~~ | ✅ 已完成（§1.3）：V 方向与 `fov` 约定已定，曲线类像素判定可用 |
-| **Cloth** | **`S-23` / `S-29` / `S-31` 定一条**、`S-24` `S-25` `S-26` `S-27` | 重建路线未定 + 两项映射/分层因子决策（**当前第一优先**） |
+| ~~**Cloth**~~ | ~~**`S-23` / `S-29` / `S-31` 定一条**~~、`S-24` `S-25` `S-26` `S-27` | ✅ 路线 2026-09-16 定案（方案 C，两个 ID）；剩下的 `S-24..S-27` 是映射与分层因子决策，按臂分别做 |
 | ~~DefaultLit~~ | ~~**`D-20` `D-21`**~~ | ✅ 已完成（2026-09-13）：两条都是审计标注错误，不需要改代码；证据见 case 记录 |
 | DefaultLit | `D-11` `D-19` | `M_brdfPlot.json` 的 `u_plotMode` range 已扩到 `[0,7]`（每次新增 mode 时同步改）；`D-19` 的校验规则要按当前 range 判，**仍未做** |
 | ~~DefaultLit~~ | ~~`D-02` `D-03`~~ | ✅ 已完成：mode 2 复测与新增 mode 4 均通过（≤0.474 px）；`D-04` 的离线量化也已完成 |
@@ -1983,7 +2249,14 @@ DefaultLit  ->  Cloth / Sheen  ->  Hair  ->  Subsurface  ->  TwoSidedFoliage  ->
       该变量已按 §1.4.5 第 5 条改名为 `alpha`）。
       数值证据：`D-04`（离线脚本）+ `D-03`（mode 4 探针，逐列误差 ≤0.474 px）；
       文档标签与变量名已改正，**数值无需改动**。
-- [ ] **Cloth 整改路线已执行（`S-23` / `S-29` / `S-31` 之一）**：`anisotropy ≠ 0` 路径不再含任何论文里没有的公式；若选方案 C，另需满足"两个 variant、指定生产臂与对照臂、两套能量不交叉"三条硬约束。
+- [ ] **Cloth 两条臂按论文实现（路线 2026-09-16 定案 = 方案 C）**：`Cloth` = 8（A 臂：Estévez 式(2) +
+  Neubelt 式(23) 分母）/ `ClothFiber` = 13（B 臂：Sadeghi 式(2)(3)(4)，生产臂）；两臂各自的求值器与
+  两条 dispatch、`customData` 编码、材质校验同批完成；**任何一条臂都不得再出现论文里没有的公式**
+  （旧 v2 的 `aspect=2^anisotropy`、椭圆 Charlie、warp visibility、cross 混合、`1 − c_s·E_s` 分层因子
+  全部不得复活），两臂能量账本各自闭合且不交叉补偿。
+- [ ] **论文 case 的靶子资格已按 §0.3.3 审过一遍**：每一行引用的都是论文**自己生成的结果**
+  （解析图 / 渲染图 / 工具产物），实物照片、显微镜照片、第三方照片、实测数据只被写成
+  "需求来源 / 对照数据"。已定位待改：`H-12`；其余模型行未系统排查。
 - [ ] **`H-20` 已定**：Hair 的基准（Marschner 论文式 vs UE Legacy 经验式）已明确声明，且记录里不混称。
 - [ ] §3.2 中 8 个正式模型的每一行都是 ☑ 或 ⛔，没有 ☐ / ◐ / ⚠️ 残留。
 - [ ] 所有曲线 / 分布类 case 都有像素级对照记录，误差在 1 像素量级，且由 §1.5.3 的脚本产出。

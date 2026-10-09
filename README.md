@@ -114,6 +114,27 @@ build/bin/main.exe --offline --initial-scene Maps/SC_offline_shared/SC_offline_s
 `SC_offline_cloth_groom.json` 验证 B 臂 signed-RG PFM；
 它们使用资源仓库内的 Linen profile，实时模式会明确拒绝面光和 CPU-only
 模型。这些是 UV 平片的能力探针，不是论文原图复刻。
+同一资源目录的 `SC_offline_cloth_drape.json` 让 A/B 共用一片带褶皱和
+有效 UV 的 FBX 布面，观察真实几何下的两种离线散射响应：
+
+```powershell
+build/bin/main.exe --offline --initial-scene Maps/SC_offline_cloth/SC_offline_cloth_drape.json --dev-ui
+```
+
+这仍是自建几何对照，不是带人模服装的 S-17 验收或论文原图复刻。
+FBX 随附的 normal/AO 等烘焙图尚未进入离线材质适配，不参与此场景。
+
+单面方形面光的背面虽不发光，光源几何仍会遮挡相机主射线；调灯位或
+尺寸时要避免让它进入主视线。
+Estévez 与 Kulla 2017 Fig. 1 的 A 臂红布粗糙度扫描使用独立论文场景，
+五块同源布面从左到右取 `r=0.15/0.25/0.40/0.65/1.0`：
+
+```powershell
+build/bin/main.exe --offline --initial-scene Maps/SC_paper_case_estevez_kulla_2017_sheen_roughness/SC_paper_case_estevez_kulla_2017_sheen_roughness.json --dev-ui
+```
+
+论文没有给出 Fig. 1 的完整相机、灯光和颜色数值；这里的平行光与灰色
+舞台是受控对照所选配置，不是对原图灯型的断言。
 
 开发者 UI 的 Offline Renderer 面板可切换模式、设置 spp/反弹/seed、
 暂停、继续、停止、重启，查看 Combined/Direct/Indirect 并导出。

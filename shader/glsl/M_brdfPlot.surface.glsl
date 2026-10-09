@@ -167,8 +167,11 @@ float PlotLogYRange(float normalizedValue, float decades)
 }
 
 // 纵轴按 log10 压缩，覆盖 3 个数量级（1e-3 .. 1.0）。
-// 论文（Neubelt & Pettineo 2013 Fig 6 左）本身就画在对数轴上：GGX 低粗糙度的峰值
-// 可以达到 1/(π a^2)，和 Charlie 差了十几倍，线性轴会把其中一条压成贴着底边的直线。
+// 依据是可算的、不依赖论文排版：GGX 低粗糙度的峰值可达 1/(π α²)（本材质按各自峰值归一化，
+// 所以峰值都是 1，差的是**尾部**），两条曲线的峰值比在 13 倍量级（图上现算的那个数字），
+// 线性轴会把其中一条压成贴着底边的直线。
+// 注意：**不要**再写"论文 Fig 6 左 本身就画在对数轴上"——那张图只标了一个纵轴刻度 "1"，
+// 从图注与图面都无法判定它对不对数轴（2026-09-14 抠图核过），属于不可验证的说法。
 float PlotLogY(float normalizedValue)
 {
     return PlotLogYRange(normalizedValue, 3.0);
@@ -1883,7 +1886,11 @@ MaterialInputs EvaluateMaterialInputs(in MaterialFunctionContext context)
         // 与 uv 解耦：绘图区留白只改变版式，不改变曲线定义域。
         if (mode == PLOT_MODE_GGX_CHARLIE)
         {
-            // --- mode 0：GGX vs Charlie 分布（Neubelt & Pettineo 2013 Fig 6 左） ---
+            // --- mode 0：GGX vs Charlie 分布 ---
+            // 对照结构取自 Neubelt & Pettineo 2013 Fig 6 左——**该图画的是 GGX vs 倒高斯 velvet
+            // （式21/22），不是 Charlie**；我们画的这条 Charlie 取自 Estévez & Kulla 2017 式(2)
+            // （`ClothCharlieDistribution`）。两者同族（峰值都在掠射方向）但不是同一个式子，
+            // 引用时不要混：结构引 Neubelt，公式引 Estévez。
             // 横轴 θh = 0..90°，纵轴两条曲线各自按峰值归一化后取 log10 刻度。
             float thetaH = axisX * (PI * 0.5);
             float ggxPeak = PlotSamplePeak(false, u_plotRoughness);
