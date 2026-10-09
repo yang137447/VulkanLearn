@@ -63,6 +63,8 @@ Documentation in this repository is split by responsibility:
   - implemented environment dirty generations, face/mip budgets, active/pending commit, SH swapchain broadcast, Vulkan barriers, and GPU timestamp diagnostics
 - `rendering/csm-shadow-map-m1.md`
   - implemented Basic CSM contract for shadowMap array resources, per-layer framebuffer views, runtime CSM settings, shader UBO fields, and debug views
+- `rendering/gbuffer-channel-ownership.md`
+  - current GBuffer attachment set, formats, per-ShadingModelID channel ownership, the 4+4 bit ID/flag ledger, packing precision limits (R16F ≤ 11 bit per channel), versioned-flag fallback rules, and the checklist for allocating a slot to a new shading model
 - `rendering/material-param-authoring-and-reflection.md`
   - material parameter include generation, Set 1 schema ownership, and per-pass reflection validation
 - `rendering/material-mesh-pass-composition.md`

@@ -16,6 +16,14 @@ task generations reject superseded results. The Vulkan display branch uploads
 versioned linear films per swapchain image and composites the existing UI.
 No offline model consumes a `ShadingModelID` or a fabricated realtime shader.
 
+Paper reproduction starts here, with numerical and paper-scene evidence. A
+successful offline case does not automatically become a runtime model or claim
+a `ShadingModelID`. Runtime promotion is decided separately: only designated
+core models support deferred rendering; other promoted paper models use
+forward rendering. A forward-only model must not silently enter the geometry /
+deferred path. Deferred promotion additionally requires the GBuffer allocation
+and both-path contracts in `documents/rendering/gbuffer-channel-ownership.md`.
+
 The active World/graph transaction preflights the selected path before
 publishing its CPU package. Failed candidates and failed preview Apply leave
 the old World and effective material version intact. Realtime switching

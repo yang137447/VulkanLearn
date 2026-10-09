@@ -43,23 +43,28 @@
 - **保留的是接口面**（按用户要求继续对齐 UE）：`engine/materialInputs.glsl` 里各模型的 MaterialInputs 结构体、
   `engine/materialSurface.glsl` 的字段、`engine/gbufferCodec.glsl` 的 GBuffer 布局与槽位、
   `common/shadingModel.glsl` 的 ShadingModelID 表、Debug View 的数据结构与 setter、各 renderMode / 输出宏。
-  它们现在**没有实现去消费**，这是刻意的：重做某个模型时，先按 UE 语义确认它的接口与槽位，再写求值器；
+  它们现在**没有实现去消费**，这是刻意的：离线 case 先行；晋升 runtime 时按选定路径确认
+  接口与 UE 语义，仅核心 deferred 模型需要落实 GBuffer 槽位；
 - **保留的是测量设施**：`M_brdfPlot` 及其依赖（`common/clothBrdf.glsl`、`common/hairPathScattering.glsl`、
   `common/microfacetDistribution.glsl`）、五个探针场景、`tool/validation/*`、`SC_sphere_array` 球阵基线；
 - 旧实现文档（逐模型合同 + 旧开发计划 + NeoX 角色对齐线）归档在
   `documents/plan/rendering/archive/`，**不再是合同**；那里同时记录了本次删除的完整清单与理由。
 
-**重做一个模型时的入口顺序**（与 §0.5 配合，前者是"接口"，后者是"验证"）：
+**重做一个论文模型时的入口顺序**（与 §0.5 的 case 归档配合）：
 
 ```text
-1. 接口冻结  按 UE 语义确认该模型的 MaterialInputs 字段、ShadingModelID、GBuffer 槽位与 renderMode
-2. 论文冻结  从书库取论文，定位每条公式与图号（§2.x ② 已经写好，可直接用）
-3. 写实现    求值器 + 分发 case + customData 编码 + 调试数据；不得引入论文之外的公式（§0.3）
-4. 验实现    按 §0.5 走基础 case → 论文 case → 差异归因 → 归档
+1. 论文冻结  从书库取论文，定位完整闭包的公式、参数与图号
+2. 离线复刻  走 VL 的 World/MI/vl_offline_core；基础数值 case → 论文场景 → 差异归因与归档
+3. 路径决策  决定是否进入 runtime；只有选为核心的模型才支持 deferred，其他运行时模型走 forward
+4. 接口与实现  独立闭包各有身份；按选定路径冻结输入和 renderMode，同批补求值器、对应分发、
+              材质校验与 case。核心模型另做 GBuffer 分配、编解码及 forward/deferred 双路径
 ```
 
-> ⚠️ 第 3 步写完前，该模型的 ShadingModelID 会落到 `default:`（= DefaultLit）——这正是 §1.6 的 `A-07`
-> 记录的风险。所以**补 case 与补材质校验必须与实现同批完成**，不能只写求值器。
+**2026-09-29 路径决定：** 离线模型不占 `ShadingModelID`；runtime 路径与核心资格必须逐模型
+明确，不能因论文提出新闭包就默认新增 GBuffer 开销。Forward-only 模型的材质/绘制路由
+必须拒绝 deferred。任何运行时 ID 若缺对应路径的 dispatch，会落到 `default:`（= DefaultLit），
+见 §1.6 的 `A-07`，因此 case、分发和材质校验必须同批完成。下文历史待办里的“双路径”
+与 GBuffer 预算都须先经过核心资格复核，不是新增论文模型的默认要求。
 
 ### 0.1 一个模型走完再走下一个
 
@@ -143,6 +148,27 @@ case 就是"抄对了没有"的验证。三类来源的效力如下：
 
 **判定标准**：登记表里出现任何"公式""分布""visibility""衰减""近似"字样，就说明它其实是算法，
 必须移出登记表，改为在论文里找来源或声明做不了。
+
+### 0.3.3 靶子资格：只复现论文**自己生成的结果**
+
+**实物照片、显微镜照片、第三方照片、实测数据集都不是 case 靶子。** 它们最多是"需求来源"（论文从它
+归纳出了哪些性质）或"对照数据"。理由是判定可行性：我们的渲染无法与一张真实照片逐像素对齐，
+硬追会把拍摄条件、样本个体差异、标定误差当成模型误差，最后只能写"观感接近"——而 §0.4 明文禁止
+用观感结案。
+
+| 图的性质 | 例子 | 靶子资格 |
+| --- | --- | --- |
+| 论文生成的**解析图 / 曲线** | Estévez Fig 2（式(2) 密度函数曲面）；Neubelt Fig 6 左（GGX vs 倒高斯 velvet 分布） | ✅ **首选**，可做逐列像素判定 |
+| 论文**渲染的结果** | Estévez Fig 1 / Fig 3 / Fig 4；Sadeghi Fig 1 / Fig 16、Fig 8 下排（模型拟合）；Neubelt Fig 6 中/右球 | ✅ 可做观感/数值对照，但**必须是我们实现的那条闭包**（Neubelt 的球是倒高斯 velvet，既不是 Charlie 也不是 microcylinder） |
+| 论文**工具/产物可视化** | Neubelt Fig 7（扫描 albedo/normal）、Fig 19（极坐标图） | ✅ 可做实现核对，不是观感靶子 |
+| **实物 / 显微镜照片** | Neubelt Fig 4 / **Fig 5**；Sadeghi Fig 2 | ❌ 只做需求来源 |
+| **实测**数据（BRDF 曲线、参数表） | Sadeghi Fig 3 / 4 / 5、Fig 8 上排、Table 2 | ◐ 作对照数据（用来判断我们的结果是否落在实测范围内），不作为"复现"对象 |
+| **第三方**照片 | Sadeghi Fig 15 上排（Pont & Koenderink 2003） | ❌ 既非本论文生成，也不做靶子 |
+
+**已按此改写的行**：`S-15`（原引用 Neubelt Fig 5 实物照片 → 改为核对论文列出的性质 + 用论文**渲染**的
+Fig 6 球做观感对照，照片降级为需求来源）。
+**已定位待改**：`H-12`（Marschner Fig 12 的"真实照片"那一栏不是靶子，只有"本模型"栏是）。
+**未系统排查**：其余模型的论文 case 行可能还有同类引用，需要一次全文审计（登记在 §3.2.1 之后的待办里）。
 
 ### 0.4 一个 Case 的固定形状
 
@@ -337,13 +363,13 @@ yyb-knowledge-book/src/content/docs/rendering/materials/shading-models/
 
 | # | 公式 | 代码位置 | 论文核对结果 | 状态 |
 | --- | --- | --- | --- | --- |
-| D-a | `k = (Roughness+1)²/8` 的 Schlick G1 | `common/microfacetDistribution.glsl:35` | [Karis 2013](#karis-ue4) §Specular G 式(4)，原文：*"we chose to use the Schlick model, but with k = α/2 … We also chose to use Disney's modification … remapping roughness using (Roughness+1)/2 before squaring. **It's important to note that this adjustment is only used for analytic light sources**; if applied to image-based lighting, the results at glancing angles will be much too dark."* | ✅ |
+| D-a | `k = (Roughness+1)²/8` 的 Schlick G1 | `common/microfacetDistribution.glsl:35` | [Karis 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#karis-ue4) §Specular G 式(4)，原文：*"we chose to use the Schlick model, but with k = α/2 … We also chose to use Disney's modification … remapping roughness using (Roughness+1)/2 before squaring. **It's important to note that this adjustment is only used for analytic light sources**; if applied to image-based lighting, the results at glancing angles will be much too dark."* | ✅ |
 | D-b | 该 G1 的调用路径（direct / IBL） | `common/lighting.glsl:431` `GeometrySmith()`，调用点 `:568` `:614` | 论文要求这套 k **只用于 analytic light source** | ✅ **2026-09-13 核对：调用路径与论文一致**——`GeometrySmith` 全仓库只有 `:568`（`EvaluateDefaultPbrLightLobes`，analytic 直接光）与 `:614`（`EvaluateNeoXSkinDualSpecularLight`，同属直接光、当前无调用者）两个调用点；IBL 走 `SampleEnvironmentBrdf()` → `brdfLut`。原判"用于间接光 / IBL"来自把 `GeometrySchlickGGX` 误标成 "IBL 变体"，见 `D-20` |
-| D-c | `D_GGX`，`α = roughness²` | `common/microfacetDistribution.glsl:14` | [Karis 2013](#karis-ue4) 式(3) + 正文 *"Disney's reparameterization of α = Roughness²"* | ✅ |
-| D-d | Lambert `c_diff/π` | `common/lighting.glsl:255` | [Karis 2013](#karis-ue4) 式(1)：`f = c_diff/π`，原文说明为什么不用 Burley diffuse | ✅ |
+| D-c | `D_GGX`，`α = roughness²` | `common/microfacetDistribution.glsl:14` | [Karis 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#karis-ue4) 式(3) + 正文 *"Disney's reparameterization of α = Roughness²"* | ✅ |
+| D-d | Lambert `c_diff/π` | `common/lighting.glsl:255` | [Karis 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#karis-ue4) 式(1)：`f = c_diff/π`，原文说明为什么不用 Burley diffuse | ✅ |
 | D-e | SH 辐照度 band 权重 `(π, 2π/3 ×3, π/4 ×5)` | `common/lighting.glsl:227` | Ramamoorthi & Hanrahan 2001 的 9 项辐照度重构系数（Karis 引用 [12] 的同一套） | ✅ |
 | D-f | LUT 里的 `k` | `common/microfacetDistribution.glsl:56` `GeometrySchlickGGXIbl()`（2026-09-13 从 `generator/brfdLut.comp` 搬到共享头，数值未改；`brfdLut.comp` 改为 include） | 论文 §Specular G 的两支：`k=α/2`（基础拟合，**IBL 用这支**）与 `k=(r+1)²/8`（analytic 专用，Disney 重映射）。实现写作 `float alpha = roughness * roughness; float k = alpha * 0.5;`，即 `k = α/2`，**与论文同式** | ✅ **2026-09-13 改正**：原文写的 `k = α²/2` 是把当时的局部变量 `a`（感知粗糙度，不是 α）当成 α 读错的结果，论文里确实没有 `α²/2`，但仓库里也没有——见 `D-21`。该变量同日改名为 `alpha`（§1.4.5 第 5 条） |
-| D-g | `SmithG1Ggx` 精确参考曲线 | `common/microfacetDistribution.glsl:76` | 与 [Neubelt & Pettineo 2013](#neubelt-order-1886) 式(5) 数学恒等：两边同乘 `c+√(α²+(1-α²)c²)` 即得 `2c/(c+√(…))`。等价于 [Heitz 2014](#heitz-masking-shadowing) 式(86) `Λ = (−1+√(1+1/a²))/2`，`a = 1/(α_o tanθ_o)`，再取 `G1 = 1/(1+Λ)` | ✅ **之前标"来源待查"是标注错误，已改正** |
+| D-g | `SmithG1Ggx` 精确参考曲线 | `common/microfacetDistribution.glsl:76` | 与 [Neubelt & Pettineo 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#neubelt-order-1886) 式(5) 数学恒等：两边同乘 `c+√(α²+(1-α²)c²)` 即得 `2c/(c+√(…))`。等价于 [Heitz 2014](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#heitz-masking-shadowing) 式(86) `Λ = (−1+√(1+1/a²))/2`，`a = 1/(α_o tanθ_o)`，再取 `G1 = 1/(1+Λ)` | ✅ **之前标"来源待查"是标注错误，已改正** |
 
 **Cloth / Sheen**
 
@@ -362,7 +388,7 @@ yyb-knowledge-book/src/content/docs/rendering/materials/shading-models/
 
 | # | 公式 | 代码位置 | 论文核对结果 | 状态 |
 | --- | --- | --- | --- | --- |
-| H-a | 路径吸收 `T = exp(−2σ_a(1+cos2γ_t))` 每段 | `materialFunction/mf_hairAbsorption.glsl`、`common/hairPathScattering.glsl` | [Marschner 2003](#marschner-2003) §4.3：内部路径长 = `2 + 2cos(2γ_t)` 倍半径，每段贡献 `T(σ_a,h) = exp(−2σ_a(1+cos2γ_t))` | 🔎 待逐项核对代码是否用了同一路径长 |
+| H-a | 路径吸收 `T = exp(−2σ_a(1+cos2γ_t))` 每段 | `materialFunction/mf_hairAbsorption.glsl`、`common/hairPathScattering.glsl` | [Marschner 2003](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#marschner-2003) §4.3：内部路径长 = `2 + 2cos(2γ_t)` 倍半径，每段贡献 `T(σ_a,h) = exp(−2σ_a(1+cos2γ_t))` | 🔎 待逐项核对代码是否用了同一路径长 |
 | H-b | TT/TRT 的路径长比 `0.5·√(1−(h/n′)²)/cosθ_d`、`0.8/cosθ_d` | `common/hairPathScattering.glsl:134` `:164` | 这是 UE Legacy 的经验形式；Marschner 给的是 `T(σ_a,h)^p`（`p` 为内部段数） | 🔎 待定（见 `H-20`） |
 | H-c | 纵向高斯 + `Shift=0.035`、`n′ = 1.19/cosθ_d + 0.36cosθ_d` | `common/hairPathScattering.glsl:53` `:122` | 属 UE Legacy 参数化，不是 Marschner 的 `M(θ_i,θ_r)` 形式 | 🔎 待定（见 `H-20`） |
 
@@ -370,8 +396,8 @@ yyb-knowledge-book/src/content/docs/rendering/materials/shading-models/
 
 | # | 公式 | 代码位置 | 论文核对结果 | 状态 |
 | --- | --- | --- | --- | --- |
-| U-a | 扩散 profile / dipole | `engine/subsurfaceProfileLighting.glsl` | [Jensen 2001](#jensen-bssrdf) §3 式(7)–(9) 需逐项对照 | 🔎 待核对 |
-| U-b | 预积分皮肤传输函数 | `generator/subsurfaceLookupTables.comp` | [Neubelt & Pettineo 2013](#neubelt-order-1886) 式(16)(17) 给了精确形式：`D(θ,r) = ∫cos(θ+x)R(2r sin(x/2))dx / ∫R(2r sin(x/2))dx`，按 `cos(θ)` 索引；并说明了 SH 环境下的接法 | ✅ **已定位论文式**，待与 LUT 生成器逐项对照 |
+| U-a | 扩散 profile / dipole | `engine/subsurfaceProfileLighting.glsl` | [Jensen 2001](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#jensen-bssrdf) §3 式(7)–(9) 需逐项对照 | 🔎 待核对 |
+| U-b | 预积分皮肤传输函数 | `generator/subsurfaceLookupTables.comp` | [Neubelt & Pettineo 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#neubelt-order-1886) 式(16)(17) 给了精确形式：`D(θ,r) = ∫cos(θ+x)R(2r sin(x/2))dx / ∫R(2r sin(x/2))dx`，按 `cos(θ)` 索引；并说明了 SH 环境下的接法 | ✅ **已定位论文式**，待与 LUT 生成器逐项对照 |
 
 **公式齐全但尚未逐条核对的模型**：TwoSidedFoliage、Eye、ThinTranslucent —— 它们各自的基准已写明
 （UE Legacy 闭包 / UE 官方文档），但没有做上面这种"抽文本对式号"的核对，作为 ⚠️ 待完成的审计项。
@@ -833,6 +859,10 @@ mesh scale `[2.485281, 1.397971, 1.0]`（= 该机位下的 `halfWidth` / `halfHe
 
 ### 1.6.2 GBuffer 往返精度上限（决定 case 的判定门限）
 
+> 附件清单、按 ID 的通道所有权、4+4 bit ID/flag 账本与打包规则已独立成当前合同：
+> `documents/rendering/gbuffer-channel-ownership.md`。本节只保留影响 case 判定门限的部分；
+> 新增模型时的通道分配要走那份文档的检查清单。
+
 | 量 | 存储 | 精度上限 | 对 case 的影响 |
 | --- | --- | --- | --- |
 | 法线 | `gbufferA` = `A2B10G10R10_UNORM`，`dir*0.5+0.5` | 每通道 10 bit，解码后 ≥ ~1e-3 绝对误差 + 非零角度误差 | 法线相关 case 不能要求 1e-4 级一致 |
@@ -840,6 +870,7 @@ mesh scale `[2.485281, 1.397971, 1.0]`（= 该机位下的 `halfWidth` / `halfHe
 | Cloth 各向异性 / cross | `gbufferF.w` 5+5 bit 打包 | 每轴 1/31 ≈ 0.0323 | `S-07` / `S-14` 的判定门限只能按 0.03 量级给 |
 | ClearCoat 底层法线偏移 | `gbufferD` 编码，偏置 `128/255`，范围 ±0.5 | 顶层与底层法线偏离越大，角分辨率越差 | `C-07` 必须分倾角区间给误差 |
 | Eye profile pair | `EncodeEyeProfilePair` 返回整数 0..1023 | fp16 下无损 | Eye profile 相关 case 不受量化限制 |
+| 任意单通道整数打包 | `R16F` 单通道（`k/(2^n-1)` 归一化） | fp16 在 1.0 附近步长 `4.88e-4` → **每通道 ≤ 11 bit** | 两个 8 bit 塞不进一个通道；Cloth 的 5+5 与 Eye 的 1+8+9 都是按这条上限设计的 |
 | Cloth 反射率（deferred decode 强制 `metallic = 0`） | `gbufferCodec.glsl:529` | —— | Cloth 的 deferred 结果与材质 metallic 无关，这是设计而非偏差 |
 | Subsurface(2) 的 opacity 被覆盖为 1.0 | `gbufferCodec.glsl:433-435` | —— | ID 2 的透明度不往返，不要用它验证 alpha |
 
@@ -1104,15 +1135,15 @@ pointLight 3 / spotLight 2 / sunLight 1）。
 
 | 实现 | 位置 | 论文 / 书本来源 | 备注 |
 | --- | --- | --- | --- |
-| `DistributionGGX` | `common/microfacetDistribution.glsl:14` | [Karis 2013](#karis-ue4) §3 式(2)；[PBRT 4ed｜§9.6 Roughness Using Microfacet Theory](https://pbr-book.org/4ed/Reflection_Models/Roughness_Using_Microfacet_Theory) 式(9.16) | 入参是 perceptual roughness，函数内做 `alpha = roughness²`（变量名与论文一致，见 §1.4.5 第 5 条） |
-| `GeometrySchlickGGX` | `common/microfacetDistribution.glsl:35` | [Karis 2013](#karis-ue4) §Specular G 式(4) 的 **analytic light source 变体** `k=(r+1)²/8` | 论文明确限定：Disney 的粗糙度重映射**只用于 analytic 光源**。调用点只有直接光的两处（`D-20`）；与 IBL 变体 `k=α/2` 不是同一条曲线，mode 2 / mode 4 都画了这个对照 |
-| `GeometrySchlickGGXIbl` | `common/microfacetDistribution.glsl:61` | [Karis 2013](#karis-ue4) §Specular G 的**基础拟合** `k=α/2`（IBL 域用这支） | 2026-09-13 从 `generator/brfdLut.comp` 搬到共享头（只搬不改，数值不变），`brfdLut.comp` 改为 include；mode 4 画的就是它 |
-| `SmithG1Ggx`（参考曲线，不参与着色） | `common/microfacetDistribution.glsl:76` | Smith 高度场闭合解，见 [Heitz 2014](#heitz-masking-shadowing) §4 | 只为量化两支近似各自的误差而存在 |
-| split-sum IBL | `common/lighting.glsl:278` `CalculateSpecularIblWithF0()` | [Karis 2013](#karis-ue4) §5 式(9) | LUT 由 `generator/brfdLut.comp` 用 Hammersley/GGX 重要性采样生成 |
-| LUT 内几何项 | `generator/brfdLut.comp` `GeometrySmithIBL()` → `GeometrySchlickGGXIbl()` | [Karis 2013](#karis-ue4) §Specular G：`k = α/2`（IBL 域的基础拟合） | 与直接光的 `k=(r+1)²/8` **不是同一表达式，也不应该是**（论文的分工）；差异已由 `D-04` 量化（LUT 的 A/B 最大偏 0.384 / 0.627） |
-| Diffuse（Lambert） | `common/lighting.glsl` | [Hoffman 2013](#hoffman-physics-math)｜Lambert 与 `1/π` 约定 | —— |
-| **漫反射 / 镜面的能量分配** `diffuseWeight = (1-F(v·h))(1-metallic)` | `common/lighting.glsl` `EvaluateDefaultPbrLightLobes()` | **[Neubelt & Pettineo 2013](#neubelt-order-1886) §Diffuse BRDF 式(15)**（*"the diffuse term is balanced using the inverse of the Fresnel term from the specular component **Shirley [1991]**"*）→ 原始来源 **P. S. Shirley 1991 博士论文** | **Karis 2013 与 Burley 2012 都没有规定这一步**（前者 diffuse 是裸 Lambertian，后者 `(1-F)` 出现 0 次）。出处自己声明该平衡法**破坏 Helmholtz 互易性**，并给出保互易替代方案（Shirley et al. 1997, PG '97）。实测代价：掠射组合反照率 > 1，见 `D-07` |
-| Principled 参数化 | `M_pbr` `u_pbrFactors` | [Burley 2012](#burley-disney) §3 | 只采用 Principled 的参数语义，未实装 Burley diffuse |
+| `DistributionGGX` | `common/microfacetDistribution.glsl:14` | [Karis 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#karis-ue4) §3 式(2)；[PBRT 4ed｜§9.6 Roughness Using Microfacet Theory](https://pbr-book.org/4ed/Reflection_Models/Roughness_Using_Microfacet_Theory) 式(9.16) | 入参是 perceptual roughness，函数内做 `alpha = roughness²`（变量名与论文一致，见 §1.4.5 第 5 条） |
+| `GeometrySchlickGGX` | `common/microfacetDistribution.glsl:35` | [Karis 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#karis-ue4) §Specular G 式(4) 的 **analytic light source 变体** `k=(r+1)²/8` | 论文明确限定：Disney 的粗糙度重映射**只用于 analytic 光源**。调用点只有直接光的两处（`D-20`）；与 IBL 变体 `k=α/2` 不是同一条曲线，mode 2 / mode 4 都画了这个对照 |
+| `GeometrySchlickGGXIbl` | `common/microfacetDistribution.glsl:61` | [Karis 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#karis-ue4) §Specular G 的**基础拟合** `k=α/2`（IBL 域用这支） | 2026-09-13 从 `generator/brfdLut.comp` 搬到共享头（只搬不改，数值不变），`brfdLut.comp` 改为 include；mode 4 画的就是它 |
+| `SmithG1Ggx`（参考曲线，不参与着色） | `common/microfacetDistribution.glsl:76` | Smith 高度场闭合解，见 [Heitz 2014](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#heitz-masking-shadowing) §4 | 只为量化两支近似各自的误差而存在 |
+| split-sum IBL | `common/lighting.glsl:278` `CalculateSpecularIblWithF0()` | [Karis 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#karis-ue4) §5 式(9) | LUT 由 `generator/brfdLut.comp` 用 Hammersley/GGX 重要性采样生成 |
+| LUT 内几何项 | `generator/brfdLut.comp` `GeometrySmithIBL()` → `GeometrySchlickGGXIbl()` | [Karis 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#karis-ue4) §Specular G：`k = α/2`（IBL 域的基础拟合） | 与直接光的 `k=(r+1)²/8` **不是同一表达式，也不应该是**（论文的分工）；差异已由 `D-04` 量化（LUT 的 A/B 最大偏 0.384 / 0.627） |
+| Diffuse（Lambert） | `common/lighting.glsl` | [Hoffman 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#hoffman-physics-math)｜Lambert 与 `1/π` 约定 | —— |
+| **漫反射 / 镜面的能量分配** `diffuseWeight = (1-F(v·h))(1-metallic)` | `common/lighting.glsl` `EvaluateDefaultPbrLightLobes()` | **[Neubelt & Pettineo 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#neubelt-order-1886) §Diffuse BRDF 式(15)**（*"the diffuse term is balanced using the inverse of the Fresnel term from the specular component **Shirley [1991]**"*）→ 原始来源 **P. S. Shirley 1991 博士论文** | **Karis 2013 与 Burley 2012 都没有规定这一步**（前者 diffuse 是裸 Lambertian，后者 `(1-F)` 出现 0 次）。出处自己声明该平衡法**破坏 Helmholtz 互易性**，并给出保互易替代方案（Shirley et al. 1997, PG '97）。实测代价：掠射组合反照率 > 1，见 `D-07` |
+| Principled 参数化 | `M_pbr` `u_pbrFactors` | [Burley 2012](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#burley-disney) §3 | 只采用 Principled 的参数语义，未实装 Burley diffuse |
 
 ### ④ Case 列表
 
@@ -1124,29 +1155,29 @@ pointLight 3 / spotLight 2 / sunLight 1）。
 
 | ID | 案例（来源） | 验证目标 | 形式 | 状态 |
 | --- | --- | --- | --- | --- |
-| `D-01` | [Heitz 2014](#heitz-masking-shadowing) §3–§5 · NDF / G1 归一化 | `∫ D(h)(n·h)dω_h = 1`；`G1(c→1)=1`；`0 ≤ G1 ≤ 1` | 数值积分（离线） | ✅ **2026-09-14 通过**（= 共享 `M-02` / `M-03` 的 DefaultLit 复述；脚本 `verify_brdf_integrals.py`，归一化 ≤1.6e-9、峰值恒等式 ≤4.7e-12、互易性 2.2e-16） |
-| `D-02` | [Karis 2013](#karis-ue4) Fig 2 · Schlick vs 精确 Smith G1 | 两条曲线逐列量化；引擎**直接光**用的是 analytic 变体 `k=(r+1)²/8` | 曲线（mode 2） | ✅ **通过**（2026-09-12 首测；2026-09-13 复测 252 / 248 列平均 0.179 / 0.182 px、最大 0.474 / 0.472 px，镜像假设 ~300–400 px。见 case 记录） |
-| `D-03` | [Karis 2013](#karis-ue4) Fig 2 + §Specular G | **新增 mode 4**：把引擎实际使用的**两支** Schlick 变体（analytic `k=(r+1)²/8` 与 IBL `k=α/2`）与精确 Smith 画在同一坐标系里，确认"引擎选的到底是哪条" | 曲线（mode 4） | ✅ **2026-09-13 通过**（`SC_paper_case_plot_g1_variants` / `MI_plot_g1_variants`，roughness 0.6：三支 191 列最大 0.474 / 0.456 / 0.457 px，丢弃交叉列 96；图头文字回读 `direct 0.226 ibl 0.089` 与独立复算一致。见 case 记录） |
-| `D-04` | [Karis 2013](#karis-ue4) §Specular G（两支变体） | 量化 IBL 的 `k=α/2` 与直接光的 `k=(r+1)²/8` 在 `(roughness, cosθ)` 上的差异，并把被误读的 `α²/2` 一起列出 | 数值积分（离线：`tool/validation/verify_geometry_term.py`） | ✅ **2026-09-13 通过**（字面写法 ≡ `α/2` 偏差 `0.0e+00`；`G1` 最大差 0.883 / 0.159 / 0.892；LUT 的 `max|ΔA|` / `max|ΔB|` = 0.384 / 0.627） |
-| `D-05` | [Burley 2012](#burley-disney) Fig 12 · directional albedo | 各 G 函数（Smith / GGX / Schlick 变体）的方向反照率曲线对比 | 数值积分（离线）+ **曲线（mode 6）** | ✅ **2026-09-14 通过**（`verify_brdf_integrals.py` ⑤：α = 0.02 / 0.5 两档各查 4 条 G；全表最大反照率 **0.9996** ≤ 1；75° 处 Smith−noG = **+0.93**（平滑）/ **+0.52**（粗糙），与论文"省略 G 会明显偏暗"一致。VL 侧新增 mode 6（`SC_paper_case_plot_albedo`，α = 0.02，表驱动）：四条臂 68/68/31/68 列最大 **0.481 / 0.455 / 0.439 / 0.408 px**，图头回读 `albedo at 75deg: Smith - no G = 0.927` = 离线结论 0.9275 的三位小数） |
+| `D-01` | [Heitz 2014](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#heitz-masking-shadowing) §3–§5 · NDF / G1 归一化 | `∫ D(h)(n·h)dω_h = 1`；`G1(c→1)=1`；`0 ≤ G1 ≤ 1` | 数值积分（离线） | ✅ **2026-09-14 通过**（= 共享 `M-02` / `M-03` 的 DefaultLit 复述；脚本 `verify_brdf_integrals.py`，归一化 ≤1.6e-9、峰值恒等式 ≤4.7e-12、互易性 2.2e-16） |
+| `D-02` | [Karis 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#karis-ue4) Fig 2 · Schlick vs 精确 Smith G1 | 两条曲线逐列量化；引擎**直接光**用的是 analytic 变体 `k=(r+1)²/8` | 曲线（mode 2） | ✅ **通过**（2026-09-12 首测；2026-09-13 复测 252 / 248 列平均 0.179 / 0.182 px、最大 0.474 / 0.472 px，镜像假设 ~300–400 px。见 case 记录） |
+| `D-03` | [Karis 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#karis-ue4) Fig 2 + §Specular G | **新增 mode 4**：把引擎实际使用的**两支** Schlick 变体（analytic `k=(r+1)²/8` 与 IBL `k=α/2`）与精确 Smith 画在同一坐标系里，确认"引擎选的到底是哪条" | 曲线（mode 4） | ✅ **2026-09-13 通过**（`SC_paper_case_plot_g1_variants` / `MI_plot_g1_variants`，roughness 0.6：三支 191 列最大 0.474 / 0.456 / 0.457 px，丢弃交叉列 96；图头文字回读 `direct 0.226 ibl 0.089` 与独立复算一致。见 case 记录） |
+| `D-04` | [Karis 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#karis-ue4) §Specular G（两支变体） | 量化 IBL 的 `k=α/2` 与直接光的 `k=(r+1)²/8` 在 `(roughness, cosθ)` 上的差异，并把被误读的 `α²/2` 一起列出 | 数值积分（离线：`tool/validation/verify_geometry_term.py`） | ✅ **2026-09-13 通过**（字面写法 ≡ `α/2` 偏差 `0.0e+00`；`G1` 最大差 0.883 / 0.159 / 0.892；LUT 的 `max|ΔA|` / `max|ΔB|` = 0.384 / 0.627） |
+| `D-05` | [Burley 2012](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#burley-disney) Fig 12 · directional albedo | 各 G 函数（Smith / GGX / Schlick 变体）的方向反照率曲线对比 | 数值积分（离线）+ **曲线（mode 6）** | ✅ **2026-09-14 通过**（`verify_brdf_integrals.py` ⑤：α = 0.02 / 0.5 两档各查 4 条 G；全表最大反照率 **0.9996** ≤ 1；75° 处 Smith−noG = **+0.93**（平滑）/ **+0.52**（粗糙），与论文"省略 G 会明显偏暗"一致。VL 侧新增 mode 6（`SC_paper_case_plot_albedo`，α = 0.02，表驱动）：四条臂 68/68/31/68 列最大 **0.481 / 0.455 / 0.439 / 0.408 px**，图头回读 `albedo at 75deg: Smith - no G = 0.927` = 离线结论 0.9275 的三位小数） |
 | `D-06` | [PBRT 4ed｜§9.6.1 + Fig 9.23](https://pbr-book.org/4ed/Reflection_Models/Roughness_Using_Microfacet_Theory)（Beckmann 公式见 PBRT 3ed §8.4.1 式(8.10)） | Beckmann 与 GGX 在相同 α 下的分布形状；确认 GGX 长尾的正确朝向 | 曲线（mode 5） | ✅ **2026-09-14 通过**（`SC_paper_case_plot_beckmann`：GGX 153 列最大 **0.469 px**、Beckmann 69 列最大 **0.451 px**；图头解出 `at beckmann tail 1e-3: ggx/beckmann 116.5`，与独立复算逐位一致） |
 | `D-07` | [PBRT 4ed｜Reflection Models](https://pbr-book.org/4ed/Reflection_Models)｜White furnace | conductor 与 dielectric 单次散射半球积分 ≤ 1 | 数值积分（离线） | ✅ **2026-09-14 执行完毕，判为"镜面通过 / 组合越界"**：镜面 lobe 在 9 组配置上最大 **1.0000**（通过）；但 **diffuse+specular 组合在掠射下超过 1**——F0=0.04 时 1.06（analytic）/ 1.53（IBL）/ 1.55（精确 Smith），见 §2.1⑤ 与 `D-07` 归因 |
-| `D-08` | [Hoffman 2013](#hoffman-physics-math)｜参数化边界 | metallic = 1 时可见 diffuse 为 0；albedo 上限不被突破 | 球阵 | ✅ **2026-09-14 通过**（离线：`metallic=1` 的漫反射反照率恒为 `0.00e+00`、`F0` 映射偏差 0；球阵：每个 roughness 上 `metallic=1` 列比 `metallic=0` 列暗 **≥0.443**） |
-| `D-09` | [Karis 2013](#karis-ue4) §4–§5 | split-sum 近似 vs 逐样本参考的环境预积分误差 | 数值积分（离线，真实 HDRI）+ **曲线（mode 7）** | ✅ **2026-09-14 通过（误差已量化）**：恒定环境对照组 0.05%（镜像自检）；真实 bistro 4k HDRI 上最大相对误差 **23.3%（conductor）/ 21.5%（dielectric）**，低频环境 0.05% / 高频环境 67%（`verify_split_sum.py`）。VL 侧新增 mode 7（`SC_paper_case_plot_split_sum`，F0=1、θv=60°、9 档 roughness、表驱动）：四条曲线 209/147/217/217 列最大 **0.476 px**，图头回读 `max rel err (F0=1, tv=60deg): 0.721` = 表中最大误差 0.72052。**图面化过程改掉了一条判定门限**：判定原先只比"参考 / 本配置信号量级"，而镜面瓣指向环境暗处时两者同时趋零、比值照样通过——已补绝对下限 `--prefilter-floor-fraction`（预过滤亮度 ≥ 环境平均亮度的 5%），并据此把 cosine 在 r ≤ 0.25 的三档标为不可判定（图上断开） |
+| `D-08` | [Hoffman 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#hoffman-physics-math)｜参数化边界 | metallic = 1 时可见 diffuse 为 0；albedo 上限不被突破 | 球阵 | ✅ **2026-09-14 通过**（离线：`metallic=1` 的漫反射反照率恒为 `0.00e+00`、`F0` 映射偏差 0；球阵：每个 roughness 上 `metallic=1` 列比 `metallic=0` 列暗 **≥0.443**） |
+| `D-09` | [Karis 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#karis-ue4) §4–§5 | split-sum 近似 vs 逐样本参考的环境预积分误差 | 数值积分（离线，真实 HDRI）+ **曲线（mode 7）** | ✅ **2026-09-14 通过（误差已量化）**：恒定环境对照组 0.05%（镜像自检）；真实 bistro 4k HDRI 上最大相对误差 **23.3%（conductor）/ 21.5%（dielectric）**，低频环境 0.05% / 高频环境 67%（`verify_split_sum.py`）。VL 侧新增 mode 7（`SC_paper_case_plot_split_sum`，F0=1、θv=60°、9 档 roughness、表驱动）：四条曲线 209/147/217/217 列最大 **0.476 px**，图头回读 `max rel err (F0=1, tv=60deg): 0.721` = 表中最大误差 0.72052。**图面化过程改掉了一条判定门限**：判定原先只比"参考 / 本配置信号量级"，而镜面瓣指向环境暗处时两者同时趋零、比值照样通过——已补绝对下限 `--prefilter-floor-fraction`（预过滤亮度 ≥ 环境平均亮度的 5%），并据此把 cosine 在 r ≤ 0.25 的三档标为不可判定（图上断开） |
 | `D-10` | 球阵基线 `SC_sphere_array` | roughness × metallic 端点与单调性回归，作为其它模型标尺 | 球阵 | ✅ **2026-09-14 通过**（`measure_sphere_array.py`，121 球圆盘平均亮度：端点差 ≥0.443；沿 metallic 递减最小步长 0.016；`metallic=0` 沿 roughness 递增最小步长 0.006。**`metallic=1` 沿 roughness 不单调**（峰值在 r≈0.43），如实记为观测） |
 | `D-11` | 工具链缺陷（`M_brdfPlot.json`） | `u_plotMode` 的 schema `range` 曾小于 shader 实际实现的模式数，**运行时不 clamp、不报错**（直接比较原始值），但编辑器与任何 schema 校验都会拒绝合法 mode | 架构核对 | ◐ **range 已随每次新增 mode 同步扩到 `[0,7]` 并补全描述（2026-09-14，mode 6/7 落地时同步改的）；编辑器 / 校验侧仍未核对** |
 | `D-19` | 一致性验收（本仓库） | 如果 §4.1 引入"场景 / MI 引用校验"，它会打在既有文件 `MI_plot_smith_schlick` / `MI_plot_uv_probe` / `MI_plot_g1_variants` 上（前两个在 range 修正前用的是越界的 mode 2 / 3）。校验规则必须按**当前** range `[0,7]` 判断 | 架构核对 | ☐ |
 | `D-12` | 参数面审计（本仓库） | 记录 `inputs.specular` 无作者入口（恒 0.5）这一缺口，并列出它影响的论文量（独立 F0 / specular tint） | 架构核对 | ☐ |
-| `D-20` | [Karis 2013](#karis-ue4) §Specular G 正文 | 逐项确认 `GeometrySmith()`（`k=(r+1)²/8`）的调用方是否都属于"analytic light source" | 架构核对 + 离线对照 | ✅ **2026-09-13 通过（审计标注错误）**：调用点只有 `common/lighting.glsl:568`（`EvaluateDefaultPbrLightLobes`，analytic 直接光）与 `:614`（`EvaluateNeoXSkinDualSpecularLight`，同属直接光、无调用者），IBL 不经过它 → 与论文一致，**无需改代码**。原判"用于 IBL"来自把 `GeometrySchlickGGX` 错标成 "IBL 变体"，该错误标签已在三处改正 |
-| `D-21` | [Karis 2013](#karis-ue4) §Specular G | `generator/brfdLut.comp` 的 IBL 几何项 `k` 有没有论文出处 | 公式溯源 + 数值积分（离线） | ✅ **2026-09-13 通过（审计标注错误）**：当时的实现 `float a = roughness; k=(a*a)*0.5` 就是论文的 `k=α/2`（α = roughness²），与"`α/2` 写法"逐点偏差 `0.0e+00`。计划书写的 `α²/2` 是把局部变量 `a` 当成 α 的误读；论文里确实没有 `α²/2`，仓库里也没有。附带改动：① 把这支搬进 `common/microfacetDistribution.glsl` 并命名为 `GeometrySchlickGGXIbl`；② 按 §1.4.5 第 5 条把变量名改成 `alpha`（`alpha = roughness²; k = alpha*0.5`），让代码与论文符号直接对上——两处改动都不改数值 |
+| `D-20` | [Karis 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#karis-ue4) §Specular G 正文 | 逐项确认 `GeometrySmith()`（`k=(r+1)²/8`）的调用方是否都属于"analytic light source" | 架构核对 + 离线对照 | ✅ **2026-09-13 通过（审计标注错误）**：调用点只有 `common/lighting.glsl:568`（`EvaluateDefaultPbrLightLobes`，analytic 直接光）与 `:614`（`EvaluateNeoXSkinDualSpecularLight`，同属直接光、无调用者），IBL 不经过它 → 与论文一致，**无需改代码**。原判"用于 IBL"来自把 `GeometrySchlickGGX` 错标成 "IBL 变体"，该错误标签已在三处改正 |
+| `D-21` | [Karis 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#karis-ue4) §Specular G | `generator/brfdLut.comp` 的 IBL 几何项 `k` 有没有论文出处 | 公式溯源 + 数值积分（离线） | ✅ **2026-09-13 通过（审计标注错误）**：当时的实现 `float a = roughness; k=(a*a)*0.5` 就是论文的 `k=α/2`（α = roughness²），与"`α/2` 写法"逐点偏差 `0.0e+00`。计划书写的 `α²/2` 是把局部变量 `a` 当成 α 的误读；论文里确实没有 `α²/2`，仓库里也没有。附带改动：① 把这支搬进 `common/microfacetDistribution.glsl` 并命名为 `GeometrySchlickGGXIbl`；② 按 §1.4.5 第 5 条把变量名改成 `alpha`（`alpha = roughness²; k = alpha*0.5`），让代码与论文符号直接对上——两处改动都不改数值 |
 
 **论文 case**（模型在真实几何上是否仍成立）
 
 | ID | 案例（论文图） | 展示什么 | 资产 | 状态 |
 | --- | --- | --- | --- | --- |
-| `D-15` | [Karis 2013](#karis-ue4) Fig 4 / Fig 5 · split-sum 参考 vs 近似 | 环境预积分近似的误差在真实几何上的可见边界 | 球阵即可 | ☐ |
-| `D-16` | [Neubelt & Pettineo 2013](#neubelt-order-1886) Fig 1 · conditional G 归零 artifacts | 几何项实现错误造成的掠射黑边 | 球阵即可 | ☐ |
-| `D-17` | [Karis 2013](#karis-ue4) Fig 3 · 金属 / 电介质粗糙度对照 | 生产参数化的观感端点 | 球阵即可 | ☐ |
+| `D-15` | [Karis 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#karis-ue4) Fig 4 / Fig 5 · split-sum 参考 vs 近似 | 环境预积分近似的误差在真实几何上的可见边界 | 球阵即可 | ☐ |
+| `D-16` | [Neubelt & Pettineo 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#neubelt-order-1886) Fig 1 · conditional G 归零 artifacts | 几何项实现错误造成的掠射黑边 | 球阵即可 | ☐ |
+| `D-17` | [Karis 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#karis-ue4) Fig 3 · 金属 / 电介质粗糙度对照 | 生产参数化的观感端点 | 球阵即可 | ☐ |
 | `D-18` | ~~`SC_paper_case_cloth_sheen` 下半行~~ | ~~DefaultLit(GGX) 与 Cloth(Charlie) 逐球同参数对照~~ | ⛔ **资产已删** | ☐ **需重新设计**：该场景随 2026-09-12 清理删除（§1.7.5），重建 Cloth 时连对照行一起重做；不要试图找回旧场景 |
 
 ### ⑤ 专属约定
@@ -1221,12 +1252,12 @@ pointLight 3 / spotLight 2 / sunLight 1）。
 
 | 实现 | 位置 | 论文 / 书本来源 | 备注 |
 | --- | --- | --- | --- |
-| coat lobe `D_GGX` + `Vis_SmithJointApprox` | `documents/plan/rendering/archive/car-paint-shading-model.md`；`common/lighting.glsl:387` | UE 5.8 Legacy Clear Coat 闭包（实时参考实现）；分布本体见 [Karis 2013](#karis-ue4) | 顶层固定 IOR 1.5 / F0 0.04 |
+| coat lobe `D_GGX` + `Vis_SmithJointApprox` | `documents/plan/rendering/archive/car-paint-shading-model.md`；`common/lighting.glsl:387` | UE 5.8 Legacy Clear Coat 闭包（实时参考实现）；分布本体见 [Karis 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#karis-ue4) | 顶层固定 IOR 1.5 / F0 0.04 |
 | 固定 Eta 折射点积近似 | 同上 | UE 5.8 Legacy | 属于参考实现，需同时标注其物理出处 |
-| coat 顶层 Fresnel | `common/lighting.glsl:387` 区域 | [Hoffman 2013](#hoffman-physics-math)｜Fresnel 与 F0；[PBRT 4ed｜Dielectric BSDF](https://pbr-book.org/4ed/Reflection_Models/Dielectric_BSDF) | 方向性必须满足 `F(0°)=F0`、`F(90°)=1` |
+| coat 顶层 Fresnel | `common/lighting.glsl:387` 区域 | [Hoffman 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#hoffman-physics-math)｜Fresnel 与 F0；[PBRT 4ed｜Dielectric BSDF](https://pbr-book.org/4ed/Reflection_Models/Dielectric_BSDF) | 方向性必须满足 `F(0°)=F0`、`F(90°)=1` |
 | 底层法线八面体偏移编码 | `common/shadingModel.glsl:19`；`common/gbufferCodec.glsl:175` | **编码约定**（不参与数值），登记在 §0.3.2；语义参考 UE Legacy 的 clear coat bottom normal | 编码必须无损到可分辨的精度（`A-06` 给了量化上限） |
-| base 能量衰减 | `M_carPaint` surface 路径 | [Jakob 2015｜adding equations](#jakob-layerlab)；[Filament｜base attenuation](#filament) | 当前只做 UE Legacy 特化，未启用 GGX energy conservation |
-| 膜厚 / 吸收 | **不存在** | [Weidlich & Wilkie 2007](#weidlich-wilkie) §3–§4 需要膜厚与吸收系数 | ⛔ 缺口，登记在 §2.2⑤ |
+| base 能量衰减 | `M_carPaint` surface 路径 | [Jakob 2015｜adding equations](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#jakob-layerlab)；[Filament｜base attenuation](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#filament) | 当前只做 UE Legacy 特化，未启用 GGX energy conservation |
+| 膜厚 / 吸收 | **不存在** | [Weidlich & Wilkie 2007](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#weidlich-wilkie) §3–§4 需要膜厚与吸收系数 | ⛔ 缺口，登记在 §2.2⑤ |
 
 ### ④ Case 列表
 
@@ -1242,23 +1273,23 @@ coat IOR 固定 1.5 / F0 0.04，不可作者化。
 
 | ID | 案例（来源） | 验证目标 | 形式 | 状态 |
 | --- | --- | --- | --- | --- |
-| `C-01` | [Hoffman 2013](#hoffman-physics-math) + [PBRT 4ed｜Dielectric BSDF](https://pbr-book.org/4ed/Reflection_Models/Dielectric_BSDF) | coat 界面 Fresnel 曲线：`F(0°)=0.04`、`F(90°)=1`、单调、无符号翻转 | 曲线（新增 mode） | ☐ |
-| `C-02` | [Jakob 2015｜adding equations](#jakob-layerlab) | coat 权重 `w∈[0,1]` 时底层漫反射能量 = `1-w`，与解析值逐点比对 | 数值积分（离线） | ☐ |
-| `C-03` | [Jakob 2015](#jakob-layerlab) §3｜层间多次反射 | 当前实现忽略多层反射，量化由此损失的能量上界 | 数值积分（离线） | ☐ |
+| `C-01` | [Hoffman 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#hoffman-physics-math) + [PBRT 4ed｜Dielectric BSDF](https://pbr-book.org/4ed/Reflection_Models/Dielectric_BSDF) | coat 界面 Fresnel 曲线：`F(0°)=0.04`、`F(90°)=1`、单调、无符号翻转 | 曲线（新增 mode） | ☐ |
+| `C-02` | [Jakob 2015｜adding equations](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#jakob-layerlab) | coat 权重 `w∈[0,1]` 时底层漫反射能量 = `1-w`，与解析值逐点比对 | 数值积分（离线） | ☐ |
+| `C-03` | [Jakob 2015](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#jakob-layerlab) §3｜层间多次反射 | 当前实现忽略多层反射，量化由此损失的能量上界 | 数值积分（离线） | ☐ |
 | `C-04` | ~~`SC_paper_case_clearcoat_sweep`~~ → **待新场景** | coat 粗糙度扫描：峰值展宽单调、能量单调递减 | 单变量扫描 | ☐ **场景随清理删除**（§1.7.5），重建时连扫描场景一起重做；旧结论是"影响面不是膜厚"，且已无现场资产 |
 | `C-05` | ~~`SC_paper_case_clearcoat_sweep`~~ → **待新场景** | coat 权重扫描：`w=0` 严格退化为顶层无涂层；`w=1` 底层反射被完全压制 | 单变量扫描 | ☐ **同上** |
 | `C-06` | [PBRT 4ed｜Reflection Models](https://pbr-book.org/4ed/Reflection_Models)｜White furnace | 分层模型整体半球积分 ≤ 1 | 数值积分（离线） | ☐ |
 | `C-07` | `gbufferCodec.glsl:175` + `shadingModel.glsl:19` | 底层法线八面体偏移编解码往返误差，**按倾角区间分档给数**（见 §1.5.2） | 架构核对 + 数值 | ☐ |
-| `C-08` | [Filament｜base attenuation](#filament) | 底层法线独立于顶层时，底层光照不泄漏到 coat 高光之外 | 单变量扫描 | ☐ |
+| `C-08` | [Filament｜base attenuation](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#filament) | 底层法线独立于顶层时，底层光照不泄漏到 coat 高光之外 | 单变量扫描 | ☐ |
 | `C-13` | 参数面审计（本仓库） | 记录 coat IOR 固定 1.5 / F0 0.04 无作者入口，以及 `Tiling` / `Strength` 在默认宏下不生效这两条边界 | 架构核对 | ☐ |
 
 **论文 case**
 
 | ID | 案例（论文图） | 展示什么 | 资产 | 状态 |
 | --- | --- | --- | --- | --- |
-| `C-09` | [Jakob 2015](#jakob-layerlab) Fig 4 · 金龙 + 清漆 | 底材与涂层粗糙度组合下的分层传输、coat 独立高光 | 缺 | ☐ |
-| `C-10` | [Weidlich & Wilkie 2007](#weidlich-wilkie) Fig 5 · 白球 + 黄清漆**厚度** 0.0→15.0 | 膜厚驱动的吸收与颜色加深 | 球阵即可 | ⛔ 无膜厚 / 吸收项 |
-| `C-11` | [Weidlich & Wilkie 2007](#weidlich-wilkie) Fig 3 · 清漆有 / 无吸收 | 层吸收对颜色的影响 | 球阵即可 | ⛔ 同上 |
+| `C-09` | [Jakob 2015](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#jakob-layerlab) Fig 4 · 金龙 + 清漆 | 底材与涂层粗糙度组合下的分层传输、coat 独立高光 | 缺 | ☐ |
+| `C-10` | [Weidlich & Wilkie 2007](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#weidlich-wilkie) Fig 5 · 白球 + 黄清漆**厚度** 0.0→15.0 | 膜厚驱动的吸收与颜色加深 | 球阵即可 | ⛔ 无膜厚 / 吸收项 |
+| `C-11` | [Weidlich & Wilkie 2007](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#weidlich-wilkie) Fig 3 · 清漆有 / 无吸收 | 层吸收对颜色的影响 | 球阵即可 | ⛔ 同上 |
 | `C-12` | `SC_car_showcase` | 车漆综合观感基线 | 已有 | ◐ 基线存在，**未绑定论文图** |
 
 ### ⑤ 专属约定
@@ -1266,7 +1297,7 @@ coat IOR 固定 1.5 / F0 0.04，不可作者化。
 - `M_carPaint` 当前参数面只有 `u_clearCoat` 与 `u_clearCoatRoughness`，**没有膜厚 / 吸收项**；
 - 因此本模型在论文 case 上只能做"影响面"层面的近似复现，**不得宣称复现了 Weidlich Fig 5 / Fig 3**；
 - 是否增加膜厚 / 吸收项属于功能性新增，需要先决定语义：UE Clear Coat 本身没有该参数，
-  真做必须参考 [Weidlich & Wilkie 2007](#weidlich-wilkie) 的层吸收模型并建立独立版本；
+  真做必须参考 [Weidlich & Wilkie 2007](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#weidlich-wilkie) 的层吸收模型并建立独立版本；
 - 顶层直接光保留 UE Legacy 的固定 Eta 折射点积近似，`C-01` 是唯一能判断该近似代价的 case。
 
 ## 2.3 Cloth / Sheen
@@ -1401,15 +1432,15 @@ coat IOR 固定 1.5 / F0 0.04，不可作者化。
 
 | 实现 | 位置 | 论文 / 书本来源 | 备注 |
 | --- | --- | --- | --- |
-| `BuildHairUeScatteringContext` | `common/hairPathScattering.glsl:28` | [Marschner 2003](#marschner-2003) §4｜`θh=(θi+θo)/2`、`θd=(θo-θi)/2`、`φ` 定义 | 方向均从交点指向外部 |
-| `EvaluateHairUeGaussian` | `common/hairPathScattering.glsl:53` | [Marschner 2003](#marschner-2003) §4｜纵向高斯 `M_p` | 只钳制归一化分母，不钳制指数，低粗糙度保留原始高光形状 |
-| `EvaluateHairUeFresnel` | `common/hairPathScattering.glsl:62` | [Marschner 2003](#marschner-2003)｜Fresnel 与 `h` 项；Schlick 近似形式见 [Hoffman 2013](#hoffman-physics-math) | 固定 IOR 1.55 |
-| `EvaluateHairUeR` | `common/hairPathScattering.glsl:71` | [Marschner 2003](#marschner-2003)｜R 路径；cuticle tilt `Shift=0.035` 与 UE Legacy 常量 | `alpha=-2*Shift`，方位角项 `0.25*cos(φ/2)` |
-| `EvaluateHairUeTT` | `common/hairPathScattering.glsl:108` | [Marschner 2003](#marschner-2003)｜TT 路径；`n' = 1.19/cosθd + 0.36 cosθd`、方位角 `exp(-3.65 cosφ - 3.98)` | 路径吸收 `|baseColor|^(0.5·sqrt(1-(h/n')²)/cosθd)` |
-| `EvaluateHairUeTRT` | `common/hairPathScattering.glsl:146` | [Marschner 2003](#marschner-2003)｜TRT 路径；方位角 `exp(17 cosφ - 16.78)` | 界面权重 `(1-F)²·F` |
-| Kajiya-Kay 多重散射（`hairScatter`） | `engine/hairScattering.glsl`；`M_hair` `u_pbrFactors.y` | [GPU Gems 2 Ch 23](#gpu-gems-2)｜Kajiya-Kay 类发丝着色 | 复用 `MaterialInputs.metallic` 槽位但语义不同，不是金属开关 |
-| 方位角 LUT | `generator/hairAzimuthalLut.comp`；`engine/hairScattering.glsl` `SampleHairAzimuthalLut()` | 自定预积分；方位角散射结构见 [Marschner 2003](#marschner-2003) §5 | 生产路径当前**不**由它驱动能量（`documents/plan/rendering/archive/hair-shading-model.md`），必须验证其自洽 |
-| 吸收 `sigma_a` | `materialFunction/mf_hairAbsorption.glsl` | [Marschner 2003](#marschner-2003)｜`exp(-σa·pathLength)` | 单位 `1/m` |
+| `BuildHairUeScatteringContext` | `common/hairPathScattering.glsl:28` | [Marschner 2003](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#marschner-2003) §4｜`θh=(θi+θo)/2`、`θd=(θo-θi)/2`、`φ` 定义 | 方向均从交点指向外部 |
+| `EvaluateHairUeGaussian` | `common/hairPathScattering.glsl:53` | [Marschner 2003](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#marschner-2003) §4｜纵向高斯 `M_p` | 只钳制归一化分母，不钳制指数，低粗糙度保留原始高光形状 |
+| `EvaluateHairUeFresnel` | `common/hairPathScattering.glsl:62` | [Marschner 2003](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#marschner-2003)｜Fresnel 与 `h` 项；Schlick 近似形式见 [Hoffman 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#hoffman-physics-math) | 固定 IOR 1.55 |
+| `EvaluateHairUeR` | `common/hairPathScattering.glsl:71` | [Marschner 2003](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#marschner-2003)｜R 路径；cuticle tilt `Shift=0.035` 与 UE Legacy 常量 | `alpha=-2*Shift`，方位角项 `0.25*cos(φ/2)` |
+| `EvaluateHairUeTT` | `common/hairPathScattering.glsl:108` | [Marschner 2003](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#marschner-2003)｜TT 路径；`n' = 1.19/cosθd + 0.36 cosθd`、方位角 `exp(-3.65 cosφ - 3.98)` | 路径吸收 `|baseColor|^(0.5·sqrt(1-(h/n')²)/cosθd)` |
+| `EvaluateHairUeTRT` | `common/hairPathScattering.glsl:146` | [Marschner 2003](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#marschner-2003)｜TRT 路径；方位角 `exp(17 cosφ - 16.78)` | 界面权重 `(1-F)²·F` |
+| Kajiya-Kay 多重散射（`hairScatter`） | `engine/hairScattering.glsl`；`M_hair` `u_pbrFactors.y` | [GPU Gems 2 Ch 23](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#gpu-gems-2)｜Kajiya-Kay 类发丝着色 | 复用 `MaterialInputs.metallic` 槽位但语义不同，不是金属开关 |
+| 方位角 LUT | `generator/hairAzimuthalLut.comp`；`engine/hairScattering.glsl` `SampleHairAzimuthalLut()` | 自定预积分；方位角散射结构见 [Marschner 2003](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#marschner-2003) §5 | 生产路径当前**不**由它驱动能量（`documents/plan/rendering/archive/hair-shading-model.md`），必须验证其自洽 |
+| 吸收 `sigma_a` | `materialFunction/mf_hairAbsorption.glsl` | [Marschner 2003](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#marschner-2003)｜`exp(-σa·pathLength)` | 单位 `1/m` |
 
 > ⚠️ **历史遗留的表述错误**：曲线探针 mode 1 的注释与旧文档把它写成
 > "复现 pbrt Fig 9 / Marschner Fig 5 的 pbrt 实现"。实际上 `M_brdfPlot` mode 1 调用的是
@@ -1422,31 +1453,31 @@ coat IOR 固定 1.5 / F0 0.04，不可作者化。
 
 | ID | 案例（来源） | 验证目标 | 形式 | 状态 |
 | --- | --- | --- | --- | --- |
-| `H-01` | [Marschner 2003](#marschner-2003) Fig 5 · 散射随 `θh`（R / TT / TRT 峰位） | 三条路径的纵向高斯峰被各自 Shift 错开；峰位与论文一致 | 曲线（mode 1，`SC_paper_case_plot_hair_solo`） | ☐ **从未测量**；已有 `plot_hair_solo.bmp` 只在左半幅能测到 R 路径，**需先重拍并确认三色齐备** |
-| `H-02` | [Marschner 2003](#marschner-2003) §4 纵向函数 vs [pbrt `M_p`](#pbrt-hair) | 用同一 `(θi, θo, β)` 分别求值引擎实现与 pbrt 参考式，量化差异并归因到参数化 | 离线数值对照 | ☐ |
-| `H-03` | [d'Eon 2011](#deon-2011) Fig 4 · 能量守恒纵向函数形状 | 引擎纵向函数在白炉条件下的半球积分行为；量化为达到守恒还缺什么 | 数值积分（离线） | ☐ |
-| `H-04` | [Marschner 2003](#marschner-2003)｜方位角散射 | 方位角 LUT 与引擎解析方位角项逐点比对，误差 ≤ LUT 量化精度 | 数值对照 | ☐ |
+| `H-01` | [Marschner 2003](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#marschner-2003) Fig 5 · 散射随 `θh`（R / TT / TRT 峰位） | 三条路径的纵向高斯峰被各自 Shift 错开；峰位与论文一致 | 曲线（mode 1，`SC_paper_case_plot_hair_solo`） | ☐ **从未测量**；已有 `plot_hair_solo.bmp` 只在左半幅能测到 R 路径，**需先重拍并确认三色齐备** |
+| `H-02` | [Marschner 2003](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#marschner-2003) §4 纵向函数 vs [pbrt `M_p`](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#pbrt-hair) | 用同一 `(θi, θo, β)` 分别求值引擎实现与 pbrt 参考式，量化差异并归因到参数化 | 离线数值对照 | ☐ |
+| `H-03` | [d'Eon 2011](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#deon-2011) Fig 4 · 能量守恒纵向函数形状 | 引擎纵向函数在白炉条件下的半球积分行为；量化为达到守恒还缺什么 | 数值积分（离线） | ☐ |
+| `H-04` | [Marschner 2003](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#marschner-2003)｜方位角散射 | 方位角 LUT 与引擎解析方位角项逐点比对，误差 ≤ LUT 量化精度 | 数值对照 | ☐ |
 | `H-05` | `common/hairPathScattering.glsl`｜端点 | `sinθl = ±1`、`cosθd → 0`、`cosφ = ±1` 等退化点上有限且连续，无 NaN | 端点扫描 | ☐ |
-| `H-06` | [Marschner 2003](#marschner-2003)｜cuticle tilt | `Shift = 0.035` 在 R / TT / TRT 上的作用方向与论文一致（R 向一侧、TT 向另一侧、TRT 更远） | 曲线 | ☐ |
-| `H-07` | [GPU Gems 2 Ch 23](#gpu-gems-2)｜Kajiya-Kay 多重散射 | `hairScatter ∈ [0,2]` 的端点与单调性；`=0` 时退化到单次散射 | 曲线 + 端点 | ☐ |
-| `H-08` | [d'Eon 2011](#deon-2011)｜纵向能量 | `<cosθi>` 加权后的纵向函数积分有界，随 `β` 单调 | 数值积分（离线） | ☐ |
+| `H-06` | [Marschner 2003](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#marschner-2003)｜cuticle tilt | `Shift = 0.035` 在 R / TT / TRT 上的作用方向与论文一致（R 向一侧、TT 向另一侧、TRT 更远） | 曲线 | ☐ |
+| `H-07` | [GPU Gems 2 Ch 23](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#gpu-gems-2)｜Kajiya-Kay 多重散射 | `hairScatter ∈ [0,2]` 的端点与单调性；`=0` 时退化到单次散射 | 曲线 + 端点 | ☐ |
+| `H-08` | [d'Eon 2011](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#deon-2011)｜纵向能量 | `<cosθi>` 加权后的纵向函数积分有界，随 `β` 单调 | 数值积分（离线） | ☐ |
 | `H-09` | UE Hair tangent 约定 + `documents/plan/rendering/archive/hair-shading-model.md` | rootward 方向与 `tangent.w` handedness 正确；镜像 UV 不造成吸色翻转 | Debug 视图 | ◐ 已有 debug 截图，**缺数值判定** |
 | `H-10` | `engine/materialDebugView.glsl`｜`hair_r` / `hair_tt` / `hair_trt` | 三条路径的 Debug 输出之和 = 主着色结果（无漏项、无重复计入） | Debug 对照 | ◐ 已有截图，**无加和核对** |
-| `H-11` | [Marschner 2003](#marschner-2003)｜路径身份 | R 不乘吸收、TT / TRT 乘 `exp(-σa·L)`；同一 `σa` 下 TRT 比 TT 更暗 | 单变量扫描 | ☐ |
+| `H-11` | [Marschner 2003](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#marschner-2003)｜路径身份 | R 不乘吸收、TT / TRT 乘 `exp(-σa·L)`；同一 `σa` 下 TRT 比 TT 更暗 | 单变量扫描 | ☐ |
 | `H-16` | 参数面审计（本仓库） | `M_hair`（OpaqueClip → deferred）与 `M_hairProbe`（TransparentAlphaBlend → forward）**不是同一数值路径**；且 `M_hairProbe` 的 `hairScatter` 上界被压到 `[0,1]`，无法表达 6125 实测的 `Scatter ≈ 1.2074`。做论文 case 必须用 `M_hair` | 架构核对 | ☐ **阻塞项** |
 | `H-17` | 参数面审计（本仓库） | `u_hairFringeRange` 在 Surface 阶段**无任何引用**，唯一消费点是 `base.frag.glsl` 的 `USE_HAIR_FRINGE_RANGE` 分支（`M_hair.json` 默认为 0）：确认 coverage 不被重复裁剪，且该参数当前对像素无影响 | 架构核对 + Debug | ☐ |
 | `H-18` | `engine/hairLighting.glsl:121-133` | Debug 模式 28 / 32 是**唯一**采样方位角 LUT 的模式；其余模式下 `pathLength` / `lutCoordinates` 读 0 属预期，不得当作 bug | Debug 对照 | ☐ |
 | `H-19` | 设施审查（本仓库） | `M_hairProbe` 是 `M_hair.surface.glsl` 的一行包装，但**全资源库没有任何场景 / MI 引用它**，唯一引用是孤儿 fixture `tool/hair-tests/fixtures_MI_hair_probe.json`（也无测试加载）：要么为它建 scene + MI + mesh，要么把扫描类 case 改用 `M_hair` | 架构核对 | ☐ |
-| `H-20` | 🔎 [Marschner 2003](#marschner-2003) §4.3（**式号需补**） | **基准选择 + 逐项溯源**：论文给的路径吸收是 `T(σ_a,h) = exp(−2σ_a(1+cos2γ_t))`，内部段长 = `2 + 2cos(2γ_t)` 倍半径，总权重 `A(p,h) = (1−F)²F^(p−1)T^p`；代码用的是 UE Legacy 的 `0.5·√(1−(h/n′)²)/cosθ_d`（TT）与 `0.8/cosθ_d`（TRT）。逐项列出差异，并**明确声明基准是哪一个**（论文式 / UE Legacy），不得混称 | 公式溯源 | ☐ **审计发现** |
+| `H-20` | 🔎 [Marschner 2003](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#marschner-2003) §4.3（**式号需补**） | **基准选择 + 逐项溯源**：论文给的路径吸收是 `T(σ_a,h) = exp(−2σ_a(1+cos2γ_t))`，内部段长 = `2 + 2cos(2γ_t)` 倍半径，总权重 `A(p,h) = (1−F)²F^(p−1)T^p`；代码用的是 UE Legacy 的 `0.5·√(1−(h/n′)²)/cosθ_d`（TT）与 `0.8/cosθ_d`（TRT）。逐项列出差异，并**明确声明基准是哪一个**（论文式 / UE Legacy），不得混称 | 公式溯源 | ☐ **审计发现** |
 
 **论文 case**
 
 | ID | 案例（论文图） | 展示什么 | 资产 | 状态 |
 | --- | --- | --- | --- | --- |
-| `H-12` | [Marschner 2003](#marschner-2003) Fig 12 · Kajiya-Kay / 本模型 / 真实照片三联 | R / TT / TRT 路径身份与次高光 | `SC_hair_showcase_6125` 已有 | ◐ 资产已有，**缺机位与灯光设计** |
-| `H-13` | [Marschner 2003](#marschner-2003) Fig 13 · 62K 纤维 + 复杂光照 | 复杂光照下的稳定性 | 同上 | ☐ |
-| `H-14` | [d'Eon 2011](#deon-2011) Fig 12 · 各种自然发色 + dual scattering | 吸收色与 glints | 缺多发型资产 | ☐ |
-| `H-15` | [Chiang 2016](#chiang-2016) Fig 2 / Fig 7 · 物种差异化、毛球方位粗糙度 | 方位粗糙度的表现 | 缺 | ☐ |
+| `H-12` | [Marschner 2003](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#marschner-2003) Fig 12 · Kajiya-Kay / 本模型 / 真实照片三联 —— **按 §0.3.3，只有"本模型"那一栏是靶子**（Kajiya-Kay 栏可作参考实现对照，真实照片栏只作需求来源） | R / TT / TRT 路径身份与次高光 | `SC_hair_showcase_6125` 已有 | ◐ 资产已有，**缺机位与灯光设计**；靶子口径待按 §0.3.3 改写 |
+| `H-13` | [Marschner 2003](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#marschner-2003) Fig 13 · 62K 纤维 + 复杂光照 | 复杂光照下的稳定性 | 同上 | ☐ |
+| `H-14` | [d'Eon 2011](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#deon-2011) Fig 12 · 各种自然发色 + dual scattering | 吸收色与 glints | 缺多发型资产 | ☐ |
+| `H-15` | [Chiang 2016](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#chiang-2016) Fig 2 / Fig 7 · 物种差异化、毛球方位粗糙度 | 方位粗糙度的表现 | 缺 | ☐ |
 
 ### ⑤ 专属约定
 
@@ -1485,12 +1516,12 @@ coat IOR 固定 1.5 / F0 0.04，不可作者化。
 
 | 实现 | 位置 | 论文 / 书本来源 | 备注 |
 | --- | --- | --- | --- |
-| 扩散 profile / `SSP_*.json` 参数化 | `Common/Profiles/` 数据 + `engine/subsurfaceProfileLighting.glsl:7` | [Jensen 2001](#jensen-bssrdf) §3–§4｜dipole 扩散 profile | profile 参数语义必须与论文的 `σs'` / `σa` 一致 |
-| profile 透射评价 | `engine/subsurfaceProfileLighting.glsl:14` | [Jensen 2001](#jensen-bssrdf)｜`R_d(r)` | 径向衰减必须单调递减且积分有限 |
-| 屏幕空间 filter（水平 / 垂直分离） | `engine/subsurfaceProfileFilter.glsl:22`、`shader/glsl/pass/sssHorizontal.frag`、`sssVertical.frag` | UE Subsurface Profile 屏幕空间卷积；离线依据见 [Jensen 2001](#jensen-bssrdf) | 必须验证分离卷积不引入额外能量 |
+| 扩散 profile / `SSP_*.json` 参数化 | `Common/Profiles/` 数据 + `engine/subsurfaceProfileLighting.glsl:7` | [Jensen 2001](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#jensen-bssrdf) §3–§4｜dipole 扩散 profile | profile 参数语义必须与论文的 `σs'` / `σa` 一致 |
+| profile 透射评价 | `engine/subsurfaceProfileLighting.glsl:14` | [Jensen 2001](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#jensen-bssrdf)｜`R_d(r)` | 径向衰减必须单调递减且积分有限 |
+| 屏幕空间 filter（水平 / 垂直分离） | `engine/subsurfaceProfileFilter.glsl:22`、`shader/glsl/pass/sssHorizontal.frag`、`sssVertical.frag` | UE Subsurface Profile 屏幕空间卷积；离线依据见 [Jensen 2001](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#jensen-bssrdf) | 必须验证分离卷积不引入额外能量 |
 | 像素半径 → 屏幕空间核宽 | `engine/subsurfaceProfileFilter.glsl:22` | UE Legacy 参考实现 | 需要验证透视缩放正确 |
-| Preintegrated Skin LUT | `generator/subsurfaceLookupTables.comp`；`engine/preintegratedSkinLighting.glsl:45` | [GPU Gems 3 Ch 14](#gpu-gems-3)｜预积分皮肤；归一化扩散见 [Burley 2012](#burley-disney) | 与离线积分比对 |
-| Legacy `Subsurface` 局部 wrap / backscatter | `engine/subsurfaceLighting.glsl:21` | 实时近似，见 [GPU Gems 1 Ch 16](#gpu-gems-1) | 局部模型，**不做跨位置输运** |
+| Preintegrated Skin LUT | `generator/subsurfaceLookupTables.comp`；`engine/preintegratedSkinLighting.glsl:45` | [GPU Gems 3 Ch 14](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#gpu-gems-3)｜预积分皮肤；归一化扩散见 [Burley 2012](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#burley-disney) | 与离线积分比对 |
+| Legacy `Subsurface` 局部 wrap / backscatter | `engine/subsurfaceLighting.glsl:21` | 实时近似，见 [GPU Gems 1 Ch 16](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#gpu-gems-1) | 局部模型，**不做跨位置输运** |
 | 局部间接漫反射 | `engine/subsurfaceLighting.glsl:124`、`engine/preintegratedSkinLighting.glsl:240` | 各入口自身的 IBL 形式 | 与 direct 路径的一致性必须核对 |
 
 ### ④ Case 列表
@@ -1499,14 +1530,14 @@ coat IOR 固定 1.5 / F0 0.04，不可作者化。
 
 | ID | 案例（来源） | 验证目标 | 形式 | 状态 |
 | --- | --- | --- | --- | --- |
-| `U-01` | [Jensen 2001](#jensen-bssrdf) §3 式(7)–(9) · dipole `R_d(r)` | 引擎扩散 profile 与论文解析式在 `r ∈ [0, 8σs'⁻¹]` 上逐点比对 | 曲线 + 数值 | ☐ |
-| `U-02` | [Jensen 2001](#jensen-bssrdf)｜吸收 / 散射系数 | `σs'`、`σa` 与 `SSP_*.json` / `skinLut` 参数单位一致（`1/m`），量级落在皮肤合理范围 | 架构核对 + 数值 | ☐ |
-| `U-03` | [GPU Gems 3 Ch 14](#gpu-gems-3)｜预积分皮肤 | `subsurfaceLookupTables.comp` 的 LUT 与离线 Monte Carlo 积分逐点比对 | 数值积分（离线） | ☐ |
-| `U-04` | [Burley 2012](#burley-disney)｜normalized diffusion | 预积分 LUT 在不同 `curvature` 下的单调性与端点 | 数值核对 | ☐ |
+| `U-01` | [Jensen 2001](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#jensen-bssrdf) §3 式(7)–(9) · dipole `R_d(r)` | 引擎扩散 profile 与论文解析式在 `r ∈ [0, 8σs'⁻¹]` 上逐点比对 | 曲线 + 数值 | ☐ |
+| `U-02` | [Jensen 2001](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#jensen-bssrdf)｜吸收 / 散射系数 | `σs'`、`σa` 与 `SSP_*.json` / `skinLut` 参数单位一致（`1/m`），量级落在皮肤合理范围 | 架构核对 + 数值 | ☐ |
+| `U-03` | [GPU Gems 3 Ch 14](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#gpu-gems-3)｜预积分皮肤 | `subsurfaceLookupTables.comp` 的 LUT 与离线 Monte Carlo 积分逐点比对 | 数值积分（离线） | ☐ |
+| `U-04` | [Burley 2012](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#burley-disney)｜normalized diffusion | 预积分 LUT 在不同 `curvature` 下的单调性与端点 | 数值核对 | ☐ |
 | `U-05` | UE [Subsurface Profile](https://dev.epicgames.com/documentation/en-us/unreal-engine/subsurface-profile-shading-model-in-unreal-engine) | 背光强度随 `N·L` / `N·V` 的单调区间与论文一致：正对背面光源 + 正对观察者时最强 | 曲线 + 端点 | ☐ |
-| `U-06` | [Jensen 2001](#jensen-bssrdf)｜能量 | 屏幕空间 filter 前后总能量差 ≤ 设定阈值（分离卷积不造能量） | 数值积分（离线） | ☐ |
+| `U-06` | [Jensen 2001](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#jensen-bssrdf)｜能量 | 屏幕空间 filter 前后总能量差 ≤ 设定阈值（分离卷积不造能量） | 数值积分（离线） | ☐ |
 | `U-07` | `engine/subsurfaceProfileFilter.glsl:22` | 像素半径随距离 / FOV 的缩放正确：相同世界半径在近远机位下屏幕半径符合透视关系 | 数值核对 | ☐ |
-| `U-08` | [GPU Gems 1 Ch 16](#gpu-gems-1)｜wrap 近似 | Legacy `Subsurface` 的 wrap / backscatter 端点：`wrap=0` 退化为 Lambert；掠射不产生负值 | 曲线 + 端点 | ☐ |
+| `U-08` | [GPU Gems 1 Ch 16](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#gpu-gems-1)｜wrap 近似 | Legacy `Subsurface` 的 wrap / backscatter 端点：`wrap=0` 退化为 Lambert；掠射不产生负值 | 曲线 + 端点 | ☐ |
 | `U-09` | 三套入口的语义边界（§2.5⑤） | 同一参数下三套入口结果**不同**，且各自与其论文 / 文档定义自洽（不许"看起来差不多"） | 单变量扫描 | ◐ 场景已建，**缺差异归因** |
 | `U-10` | `SC_paper_case_subsurface_models` | 无 SSS → 三套 SSS 的结构对照：protrusion 处变亮、阴影边界变软 | 单变量扫描 | ◐ 已建，**缺数值判定** |
 | `U-11` | 三套入口的间接漫反射 | direct 与 indirect 用同一 profile 参数，不出现"直接光软、间接光硬"的割裂 | 场景对照 | ☐ |
@@ -1518,8 +1549,8 @@ coat IOR 固定 1.5 / F0 0.04，不可作者化。
 
 | ID | 案例（论文图） | 展示什么 | 资产 | 状态 |
 | --- | --- | --- | --- | --- |
-| `U-12` | [Jensen 2001](#jensen-bssrdf) Fig 9 · 大理石半身像**背面打光** | 扩散 profile 的邻域输运、通体透亮 | `SC_marble_bust_01` 已有 | ◐ 资产已有，**缺机位与灯光设计**；场景已经把同一胸像并排放 4 份（DefaultLit / Subsurface / PreintegratedSkin / SubsurfaceProfile），环境强度为 0——先把这个布置当成四联基线用起来 |
-| `U-13` | [Jensen 2001](#jensen-bssrdf) Fig 10 · 牛奶 | 高散射介质的体积感 | 缺 | ☐ |
+| `U-12` | [Jensen 2001](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#jensen-bssrdf) Fig 9 · 大理石半身像**背面打光** | 扩散 profile 的邻域输运、通体透亮 | `SC_marble_bust_01` 已有 | ◐ 资产已有，**缺机位与灯光设计**；场景已经把同一胸像并排放 4 份（DefaultLit / Subsurface / PreintegratedSkin / SubsurfaceProfile），环境强度为 0——先把这个布置当成四联基线用起来 |
+| `U-13` | [Jensen 2001](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#jensen-bssrdf) Fig 10 · 牛奶 | 高散射介质的体积感 | 缺 | ☐ |
 | `U-14` | 皮肤头模三变体（preintegrated / subsurface / profile） | 三套 SSS 路径的差异可解释 | 需头模资产 | ☐ |
 
 ### ⑤ 专属约定
@@ -1559,11 +1590,11 @@ coat IOR 固定 1.5 / F0 0.04，不可作者化。
 
 | 实现 | 位置 | 论文 / 书本来源 | 备注 |
 | --- | --- | --- | --- |
-| `EvaluateTwoSidedFoliageTransmissionFactor` | `engine/twoSidedFoliageLighting.glsl:26` | UE 5.8 Legacy `TwoSidedBxDF`（实时参考实现）；物理背景见 [GPU Gems 3 Ch 16](#gpu-gems-3) | 固定 `wrap=0.5`；wrap 项 `(-N·L + w)/(1+w)²` |
-| scatter 项（GGX `D`） | 同上 | [Karis 2013](#karis-ue4) 式(2) `D_GGX`，固定 `roughness=0.6` | `D` 内部已含 `1/π`，**不得再乘一次** |
-| `EvaluateTwoSidedFoliageBacklight` | `engine/twoSidedFoliageLighting.glsl:55` | UE 5.8 Legacy；透射色语义见 [UE 文档](#ue-two-sided-foliage) | `radiance × transmission × subsurfaceColor` |
+| `EvaluateTwoSidedFoliageTransmissionFactor` | `engine/twoSidedFoliageLighting.glsl:26` | UE 5.8 Legacy `TwoSidedBxDF`（实时参考实现）；物理背景见 [GPU Gems 3 Ch 16](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#gpu-gems-3) | 固定 `wrap=0.5`；wrap 项 `(-N·L + w)/(1+w)²` |
+| scatter 项（GGX `D`） | 同上 | [Karis 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#karis-ue4) 式(2) `D_GGX`，固定 `roughness=0.6` | `D` 内部已含 `1/π`，**不得再乘一次** |
+| `EvaluateTwoSidedFoliageBacklight` | `engine/twoSidedFoliageLighting.glsl:55` | UE 5.8 Legacy；透射色语义见 [UE 文档](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#ue-two-sided-foliage) | `radiance × transmission × subsurfaceColor` |
 | 双面法线翻转基准 | `engine/twoSidedFoliageLighting.glsl:75` | UE 双面透光表现；几何法线翻转的取舍已在该处注释 | 刻意以 camera-facing 法线为基准，正反面响应才对称 |
-| 相位函数 | **未实装** | [Henyey & Greenstein 1941](#henyey-greenstein) | 当前用 GGX scatter 近似前向散射 |
+| 相位函数 | **未实装** | [Henyey & Greenstein 1941](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#henyey-greenstein) | 当前用 GGX scatter 近似前向散射 |
 
 ### ④ Case 列表
 
@@ -1571,15 +1602,15 @@ coat IOR 固定 1.5 / F0 0.04，不可作者化。
 
 | ID | 案例（来源） | 验证目标 | 形式 | 状态 |
 | --- | --- | --- | --- | --- |
-| `F-01` | UE [Two Sided Foliage](#ue-two-sided-foliage) + UE 5.8 Legacy `TwoSidedBxDF` | 透射因子 `T(N·L, V·L)` 与参考式逐点一致（含 `wrap=0.5`、`α=0.6`） | 曲线（新增 mode） | ☐ |
+| `F-01` | UE [Two Sided Foliage](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#ue-two-sided-foliage) + UE 5.8 Legacy `TwoSidedBxDF` | 透射因子 `T(N·L, V·L)` 与参考式逐点一致（含 `wrap=0.5`、`α=0.6`） | 曲线（新增 mode） | ☐ |
 | `F-02` | 同上 · 端点 | `N·L = -1`（光从背面正射）且 `V = -L` 时透射最大；`N·L = +1` 时透射 → 0 | 端点 | ☐ |
-| `F-03` | UE [Two Sided Foliage](#ue-two-sided-foliage)｜Double Sided | 正反面翻转时透射响应严格对称，不出现背面发黑 | 场景对照（旋转 180°） | ☐ |
+| `F-03` | UE [Two Sided Foliage](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#ue-two-sided-foliage)｜Double Sided | 正反面翻转时透射响应严格对称，不出现背面发黑 | 场景对照（旋转 180°） | ☐ |
 | `F-04` | [PBRT 4ed｜White furnace](https://pbr-book.org/4ed/Reflection_Models) | `反射 lobe + 透射项` 的半球积分 ≤ 1；当前实现是否超能量需给数 | 数值积分（离线） | ☐ |
 | `F-05` | `engine/twoSidedFoliageLighting.glsl:26` · `1/π` 约定 | 确认 scatter 项里的 `1/π` 只出现一次（`D_GGX` 已含） | 数值核对 | ☐ |
-| `F-06` | UE [Two Sided Foliage](#ue-two-sided-foliage) + 阴影合同 | Alpha Clip 掩码在主 pass 与 shadow pass 一致，叶片阴影形状与视觉轮廓吻合 | Debug + 场景对照 | ☐ |
-| `F-07` | UE [Two Sided Foliage](#ue-two-sided-foliage) | `subsurfaceColor` 的作用是染色而非增益：`= 0` 时透射为 0、`= 1` 时为满透射 | 单变量扫描 | ☐ |
+| `F-06` | UE [Two Sided Foliage](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#ue-two-sided-foliage) + 阴影合同 | Alpha Clip 掩码在主 pass 与 shadow pass 一致，叶片阴影形状与视觉轮廓吻合 | Debug + 场景对照 | ☐ |
+| `F-07` | UE [Two Sided Foliage](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#ue-two-sided-foliage) | `subsurfaceColor` 的作用是染色而非增益：`= 0` 时透射为 0、`= 1` 时为满透射 | 单变量扫描 | ☐ |
 | `F-08` | `SC_foliage_potted_plant_02` | 顺光 / 逆光：DefaultLit 叶片 vs TwoSidedFoliage 叶片 | 场景对照 | ◐ 已有截图，**缺数值判定**；场景本身就是 A-B 对（同一 mesh 两份 MI：`MI_..._leaves_pbr` → `M_pbr`、`MI_..._leaves` → `M_twoSidedFoliage`，`u_subsurfaceColor=[0.18,0.55,0.12]`），一帧可同时拍到两盆，**不要为 A/B 各拍一张** |
-| `F-09` | UE [Two Sided Foliage](#ue-two-sided-foliage) | `Leaves → TwoSidedFoliage`，`Pot / Soil → DefaultLit`；材质槽边界正确 | 架构核对 | ◐ 已有，**缺记录** |
+| `F-09` | UE [Two Sided Foliage](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#ue-two-sided-foliage) | `Leaves → TwoSidedFoliage`，`Pot / Soil → DefaultLit`；材质槽边界正确 | 架构核对 | ◐ 已有，**缺记录** |
 | `F-12` | 参数面审计（本仓库） | 背光 lobe 的两个核心量是**硬编码常量**：`WrapNoL` 的 `0.5` 与 scatter 的 `roughness = 0.6` 写死在 `engine/twoSidedFoliageLighting.glsl:26-52`，材质无法扫。这直接限定了 `F-01` / `F-10` 的可扫范围，必须先记录再判结论 | 架构核对 | ☐ **先做** |
 | `F-13` | 架构核对（§1.5.1） | `materialAssetValidator.cpp:759-772` 把 TwoSidedFoliage 限制为 `Opaque` / `OpaqueClip` + `cullMode = None`，因此 `ShadeTwoSidedFoliageForwardSurface`（`forwardLighting.glsl:387-419`）**当前无可达调用者**。任何"forward 下的 Foliage"结论都无效 | 架构核对 | ☐ **先做** |
 
@@ -1587,8 +1618,8 @@ coat IOR 固定 1.5 / F0 0.04，不可作者化。
 
 | ID | 案例（基准） | 展示什么 | 资产 | 状态 |
 | --- | --- | --- | --- | --- |
-| `F-10` | [GPU Gems 3 Ch 16](#gpu-gems-3)｜叶片透光着色 | 程序化风 + 透光着色下的植被观感 | `SC_foliage_potted_plant_02` | ☐ |
-| `F-11` | [Henyey & Greenstein 1941](#henyey-greenstein)｜相位函数 | 若未来引入相位函数，用于对照当前 GGX scatter 的方向分布差异 | —— | ☐ 仅在前向散射方向性成为问题时做 |
+| `F-10` | [GPU Gems 3 Ch 16](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#gpu-gems-3)｜叶片透光着色 | 程序化风 + 透光着色下的植被观感 | `SC_foliage_potted_plant_02` | ☐ |
+| `F-11` | [Henyey & Greenstein 1941](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#henyey-greenstein)｜相位函数 | 若未来引入相位函数，用于对照当前 GGX scatter 的方向分布差异 | —— | ☐ 仅在前向散射方向性成为问题时做 |
 
 ### ⑤ 专属约定
 
@@ -1626,12 +1657,12 @@ coat IOR 固定 1.5 / F0 0.04，不可作者化。
 
 | 实现 | 位置 | 论文 / 书本来源 | 备注 |
 | --- | --- | --- | --- |
-| `EyeFresnel` | `engine/eyeLighting.glsl:48` | [Hoffman 2013](#hoffman-physics-math)｜Fresnel 与 F0；[PBRT 4ed｜Dielectric BSDF](https://pbr-book.org/4ed/Reflection_Models/Dielectric_BSDF) | 必须检查 Schlick 近似的方向极点 |
-| 虹膜折射 / 视差 | `engine/eyeGeometry.glsl`；`SampleEyeIrisColor/Normal/Mask` | [UE Digital Humans](#ue-digital-humans)｜iris refraction；[PBRT 4ed｜Dielectric BSDF](https://pbr-book.org/4ed/Reflection_Models/Dielectric_BSDF)｜Snell 折射 | 依赖 UV 布局，属于 shading contract |
-| 巩膜漫反射近似 | `engine/eyeLighting.glsl:124` `ApplyEyeScleraDiffuseApproximation()` | [Jensen 2001](#jensen-bssrdf)｜次表面 | 是**近似**，需要单独量化 |
-| 焦散 LUT / 角膜透射 | `generator/eyeCausticLut.comp`；`SampleEyeCaustic()` | 自定预积分（本项目）；物理依据见 [UE Digital Humans](#ue-digital-humans)｜caustic | 生产路径是否使用需核对；LUT 自洽必须验证 |
+| `EyeFresnel` | `engine/eyeLighting.glsl:48` | [Hoffman 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#hoffman-physics-math)｜Fresnel 与 F0；[PBRT 4ed｜Dielectric BSDF](https://pbr-book.org/4ed/Reflection_Models/Dielectric_BSDF) | 必须检查 Schlick 近似的方向极点 |
+| 虹膜折射 / 视差 | `engine/eyeGeometry.glsl`；`SampleEyeIrisColor/Normal/Mask` | [UE Digital Humans](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#ue-digital-humans)｜iris refraction；[PBRT 4ed｜Dielectric BSDF](https://pbr-book.org/4ed/Reflection_Models/Dielectric_BSDF)｜Snell 折射 | 依赖 UV 布局，属于 shading contract |
+| 巩膜漫反射近似 | `engine/eyeLighting.glsl:124` `ApplyEyeScleraDiffuseApproximation()` | [Jensen 2001](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#jensen-bssrdf)｜次表面 | 是**近似**，需要单独量化 |
+| 焦散 LUT / 角膜透射 | `generator/eyeCausticLut.comp`；`SampleEyeCaustic()` | 自定预积分（本项目）；物理依据见 [UE Digital Humans](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#ue-digital-humans)｜caustic | 生产路径是否使用需核对；LUT 自洽必须验证 |
 | profile 对编码 | `engine/gbufferCodec.glsl:192` `EncodeEyeProfilePair()` | 自定编码（本项目） | 编解码往返与版本位校验 |
-| 分层几何契约 | `engine/eyeGeometry.glsl`；`documents/plan/rendering/archive/eye-shading-model.md` | [UE Digital Humans](#ue-digital-humans)｜几何与 UV | 几何与 UV 属于 shading contract，不能只换 ShadingModelId |
+| 分层几何契约 | `engine/eyeGeometry.glsl`；`documents/plan/rendering/archive/eye-shading-model.md` | [UE Digital Humans](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#ue-digital-humans)｜几何与 UV | 几何与 UV 属于 shading contract，不能只换 ShadingModelId |
 
 ### ④ Case 列表
 
@@ -1639,14 +1670,14 @@ coat IOR 固定 1.5 / F0 0.04，不可作者化。
 
 | ID | 案例（来源） | 验证目标 | 形式 | 状态 |
 | --- | --- | --- | --- | --- |
-| `E-01` | [PBRT 4ed｜Dielectric BSDF](https://pbr-book.org/4ed/Reflection_Models/Dielectric_BSDF)；[Hoffman 2013](#hoffman-physics-math) | `EyeFresnel` 随入射角曲线：`F(0°)=F0(IOR)`、`F(90°)=1`、单调；与精确 Fresnel 的最大偏差 | 曲线（新增 mode） | ☐ |
-| `E-02` | [UE Digital Humans](#ue-digital-humans)｜iris refraction | 边缘光线聚焦的后焦距与解析 `f = R/(n-1)` 的偏差；视差随视角变化方向正确 | 数值 + 场景对照 | ☐ |
+| `E-01` | [PBRT 4ed｜Dielectric BSDF](https://pbr-book.org/4ed/Reflection_Models/Dielectric_BSDF)；[Hoffman 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#hoffman-physics-math) | `EyeFresnel` 随入射角曲线：`F(0°)=F0(IOR)`、`F(90°)=1`、单调；与精确 Fresnel 的最大偏差 | 曲线（新增 mode） | ☐ |
+| `E-02` | [UE Digital Humans](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#ue-digital-humans)｜iris refraction | 边缘光线聚焦的后焦距与解析 `f = R/(n-1)` 的偏差；视差随视角变化方向正确 | 数值 + 场景对照 | ☐ |
 | `E-03` | `generator/eyeCausticLut.comp` | 焦散 LUT 与离线路径追踪参考图逐像素比对 | 离线对照 | ☐ |
-| `E-04` | [Jensen 2001](#jensen-bssrdf)｜巩膜散射 | 巩膜近似随半径单调衰减、能量有界 | 数值 | ☐ |
+| `E-04` | [Jensen 2001](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#jensen-bssrdf)｜巩膜散射 | 巩膜近似随半径单调衰减、能量有界 | 数值 | ☐ |
 | `E-05` | `engine/gbufferCodec.glsl:192` | `EncodeEyeProfilePair` 编解码往返误差；非法版本位被拒绝 | 数值 | ☐ |
 | `E-06` | 本仓库 Eye 合同 · 闭包审计 | 逐项列出 `ShadeEyeSurface()` 的每个能量项，检查无重复计入、无漏项（沿用 Legacy / Substrate 收敛后的同一 evaluator） | 架构核对 | ☐ |
 | `E-07` | [PBRT 4ed｜Dielectric BSDF](https://pbr-book.org/4ed/Reflection_Models/Dielectric_BSDF)｜Snell | 进入角膜 / 离开角膜的折射方向与解析 Snell 解一致（含全内反射分支） | 数值对照 | ☐ |
-| `E-08` | [UE Digital Humans](#ue-digital-humans)｜UV 布局 | 角膜 / 虹膜 / 巩膜 / 眼睑的 UV 分区与几何分层映射正确（不靠目视判断） | Debug + 数值 | ☐ |
+| `E-08` | [UE Digital Humans](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#ue-digital-humans)｜UV 布局 | 角膜 / 虹膜 / 巩膜 / 眼睑的 UV 分区与几何分层映射正确（不靠目视判断） | Debug + 数值 | ☐ |
 | `E-09` | `documents/plan/rendering/archive/eye-shading-model.md`｜路径矩阵 | Forward / Deferred / dual-shell 三条路径下同一机位结果一致；差异归因到路径本身 | 场景对照 | ☐ |
 | `E-12` | 参数面审计（本仓库） | 四个 Eye 材质参数面**完全相同**，差异只在 `renderMode` 与 `u_eyeLayer` 默认值：`M_eye`=0 / `M_eyeInner`=1 / `M_eyeCornea`=2，且 `eyeMaterialContract.cpp:230-243` 强制校验该层号与 render mode 匹配 | 架构核对 | ☐ **先做** |
 | `E-13` | 参数面审计（本仓库） | 登记三个**声明但不驱动着色**的参数：`u_pbrFactors`（被 `M_eye.surface.glsl` 覆盖为 Eye 语义）、`u_eyePupilDilation`、`u_eyeGaze`（只写入 `MaterialInputs`，无 evaluator 读取）。它们不得被当作"已支持瞳孔 / 视线控制" | 架构核对 | ☐ |
@@ -1657,8 +1688,8 @@ coat IOR 固定 1.5 / F0 0.04，不可作者化。
 
 | ID | 案例（基准） | 展示什么 | 资产 | 状态 |
 | --- | --- | --- | --- | --- |
-| `E-10` | [UE Digital Humans](#ue-digital-humans) + [PBRT 4ed｜Dielectric BSDF](https://pbr-book.org/4ed/Reflection_Models/Dielectric_BSDF)｜解析复现 | 角膜 Fresnel + 虹膜视差（无专门论文图，基准是官方文档 + 解析解） | `SC_simple_character` 已有 | ☐ 需定位眼球 |
-| `E-11` | [Jensen 2001](#jensen-bssrdf)｜眼睑次表面 | 眼睑与眼窝的次表面输运 | 缺 | ☐ |
+| `E-10` | [UE Digital Humans](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#ue-digital-humans) + [PBRT 4ed｜Dielectric BSDF](https://pbr-book.org/4ed/Reflection_Models/Dielectric_BSDF)｜解析复现 | 角膜 Fresnel + 虹膜视差（无专门论文图，基准是官方文档 + 解析解） | `SC_simple_character` 已有 | ☐ 需定位眼球 |
+| `E-11` | [Jensen 2001](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#jensen-bssrdf)｜眼睑次表面 | 眼睑与眼窝的次表面输运 | 缺 | ☐ |
 
 ### ⑤ 专属约定
 
@@ -1678,7 +1709,7 @@ coat IOR 固定 1.5 / F0 0.04，不可作者化。
 | 状态 | ☐ **待按论文实现**（旧实现 2026-09-12 已删除，见 §0.6） |
 | 实现锚点 | 旧：`M_thinTranslucent`（已删；`engine/materialForwardOutput.glsl` 里现在只剩 74-79 行的空壳保护，`base.frag.glsl` 的 `VL_MATERIAL_OUTPUT_THIN_TRANSLUCENT` 是编译期 `#error`） |
 | 已完成 | `T-15` / `T-16` 两条判据问题已记录（Forward-only 边界、specular 语义），重建时直接照它定适用范围；旧的透射色 / 粗糙度扫描场景 `SC_paper_case_thin_translucent` 已删除 |
-| 未完成 | 求值器 + 两条路径 dispatch case + customData 编码 + 材质校验（同批完成）；**renderMode / 混合状态与双源输出路径要一起重新设计**（不能再让所有模型为它多写一路输出）；Fresnel 与介质反射、内部往返、能量部分、路径一致性 |
+| 未完成 | Forward 求值器 + dispatch + 材质校验与拒绝 deferred 的路由（同批完成）；**renderMode / 混合状态与双源输出路径要一起重新设计**（不能再让所有模型为它多写一路输出）；Fresnel 与介质反射、内部往返、能量部分、forward 路径一致性 |
 | 阻塞 | 玻璃球 / 马 / 多层透明资产缺失 |
 
 ### ② 论文来源
@@ -1698,12 +1729,12 @@ coat IOR 固定 1.5 / F0 0.04，不可作者化。
 
 | 实现 | 位置 | 论文 / 书本来源 | 备注 |
 | --- | --- | --- | --- |
-| 表面反射（与 DefaultLit 相同的 BRDF） | `engine/materialForwardOutput.glsl:218` | [UE Lit Translucency](#ue-lit-translucency)｜Legacy 闭包与 Default Lit 反射一致 | `Specular` 不参与这条路径 |
+| 表面反射（与 DefaultLit 相同的 BRDF） | `engine/materialForwardOutput.glsl:218` | [UE Lit Translucency](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#ue-lit-translucency)｜Legacy 闭包与 Default Lit 反射一致 | `Specular` 不参与这条路径 |
 | 透射分支：零次内部往返 | 同上 | UE 5.8 Legacy Thin Translucent 闭包 | Legacy 结果 `0.9216`；无限内部往返为 `12/13 ≈ 0.923077` |
-| 薄板 Fresnel / 界面 | 同上 | [Porter & Duff 1984](#porter-duff)｜合成代数；界面物理见 [Walter 2007](#walter-microfacet-refraction) | `Transmittance ≠ Refraction` |
-| Transmittance Color | `M_thinTranslucent` 输入 | [UE Thin Translucent Material Output](#ue-lit-translucency) | 是颜色 / 吸收，不是几何偏移 |
-| Surface Coverage | `M_thinTranslucent` 输入 | [UE Thin Translucent Material Output](#ue-lit-translucency) | 与 Transmittance Color **不能合并** |
-| 屏幕空间折射 | **未实装** | [Wyman 2005](#wyman-refraction)；[McGuire & Bavoil 2013](#mcguire-oit) | 登记为未实装项 |
+| 薄板 Fresnel / 界面 | 同上 | [Porter & Duff 1984](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#porter-duff)｜合成代数；界面物理见 [Walter 2007](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#walter-microfacet-refraction) | `Transmittance ≠ Refraction` |
+| Transmittance Color | `M_thinTranslucent` 输入 | [UE Thin Translucent Material Output](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#ue-lit-translucency) | 是颜色 / 吸收，不是几何偏移 |
+| Surface Coverage | `M_thinTranslucent` 输入 | [UE Thin Translucent Material Output](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#ue-lit-translucency) | 与 Transmittance Color **不能合并** |
+| 屏幕空间折射 | **未实装** | [Wyman 2005](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#wyman-refraction)；[McGuire & Bavoil 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#mcguire-oit) | 登记为未实装项 |
 | Legacy blend state | `engine/materialForwardOutput.glsl:218` 区域 | UE 5.8 Legacy translucent base-pass blend-state | 透明排序限制必须记录 |
 
 ### ④ Case 列表
@@ -1712,15 +1743,15 @@ coat IOR 固定 1.5 / F0 0.04，不可作者化。
 
 | ID | 案例（来源） | 验证目标 | 形式 | 状态 |
 | --- | --- | --- | --- | --- |
-| `T-01` | [Walter 2007](#walter-microfacet-refraction)｜电介质界面 | 薄板 Fresnel 曲线：`F(0°)=F0`、`F(90°)=1`、单调；与精确 Fresnel 比对 | 曲线（新增 mode） | ☐ |
-| `T-02` | UE [Lit Translucency](#ue-lit-translucency)｜Legacy 零次往返 | 确认内部往返截断在 `0.9216`，与无限级数 `12/13` 的偏差 ≤ 0.0015 并记录 | 数值核对 | ☐ |
-| `T-03` | [Porter & Duff 1984](#porter-duff)｜合成代数 | 反射部分 + 透射部分 = 1（无能量漏项 / 重复计入） | 数值积分（离线） | ☐ |
-| `T-04` | [Walter 2007](#walter-microfacet-refraction)｜rough dielectric BTDF | 若粗糙透射接入，BTDF 归一化与 Jacobian 满足论文式(17)–(20) | 数值积分（离线） | ☐ 仅在校准折射时做 |
-| `T-05` | UE [Thin Translucent Material Output](#ue-lit-translucency) | Transmittance Color 扫描：只改变颜色 / 吸收，不产生几何偏移 | 单变量扫描 | ◐ 已建，**缺数值判定** |
-| `T-06` | UE [Thin Translucent Material Output](#ue-lit-translucency) | Surface Coverage 与 Transmittance Color 独立作用：改变其一不影响另一条的语义 | 单变量扫描 | ☐ |
+| `T-01` | [Walter 2007](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#walter-microfacet-refraction)｜电介质界面 | 薄板 Fresnel 曲线：`F(0°)=F0`、`F(90°)=1`、单调；与精确 Fresnel 比对 | 曲线（新增 mode） | ☐ |
+| `T-02` | UE [Lit Translucency](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#ue-lit-translucency)｜Legacy 零次往返 | 确认内部往返截断在 `0.9216`，与无限级数 `12/13` 的偏差 ≤ 0.0015 并记录 | 数值核对 | ☐ |
+| `T-03` | [Porter & Duff 1984](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#porter-duff)｜合成代数 | 反射部分 + 透射部分 = 1（无能量漏项 / 重复计入） | 数值积分（离线） | ☐ |
+| `T-04` | [Walter 2007](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#walter-microfacet-refraction)｜rough dielectric BTDF | 若粗糙透射接入，BTDF 归一化与 Jacobian 满足论文式(17)–(20) | 数值积分（离线） | ☐ 仅在校准折射时做 |
+| `T-05` | UE [Thin Translucent Material Output](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#ue-lit-translucency) | Transmittance Color 扫描：只改变颜色 / 吸收，不产生几何偏移 | 单变量扫描 | ◐ 已建，**缺数值判定** |
+| `T-06` | UE [Thin Translucent Material Output](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#ue-lit-translucency) | Surface Coverage 与 Transmittance Color 独立作用：改变其一不影响另一条的语义 | 单变量扫描 | ☐ |
 | `T-07` | `SC_paper_case_thin_translucent` | 表面粗糙度扫描：反射高光展宽，透射色不随粗糙度变化 | 单变量扫描 | ◐ 已建，**缺数值判定** |
-| `T-08` | UE [Lit Translucency](#ue-lit-translucency)｜Surface ForwardShading | 同一 MI 在 Forward / Deferred 路径下结果可比；差异归因到路径本身 | 场景对照 | ☐ |
-| `T-09` | [McGuire & Bavoil 2013](#mcguire-oit)｜排序 | 透明排序 / 混合下的边界行为已记录；不得把路径差异当成公式差异 | 场景对照 | ☐ |
+| `T-08` | UE [Lit Translucency](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#ue-lit-translucency)｜Surface ForwardShading | 同一 MI 只能走 Forward；尝试 Deferred 时材质/绘制路由明确拒绝，不得静默落回 DefaultLit | 路由核对 | ☐ |
+| `T-09` | [McGuire & Bavoil 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#mcguire-oit)｜排序 | 透明排序 / 混合下的边界行为已记录；不得把路径差异当成公式差异 | 场景对照 | ☐ |
 | `T-15` | 架构核对（§1.5.1） | **本模型是 Forward-only**：Deferred 路径没有 case，GBuffer 也从未编码 `transmittanceColor` / `surfaceCoverage`。任何"Deferred 下的 ThinTranslucent"结论都无效 | 架构核对 | ☐ **先做** |
 | `T-16` | 参数面审计（本仓库） | `u_surfaceFactors.z`（specular）**不参与表面反射**（表面走 Default Lit 的 `F0 = lerp(0.04, BaseColor, Metallic)`），只进入透射 Fresnel；`u_surfaceFactors.x`（roughness）不产生透射模糊。两条都要写进结论，避免误判成实现错误 | 架构核对 | ☐ |
 | `T-17` | 参数面审计（本仓库） | 吸收用 `TransmittanceColor^(1/NoV)`，**没有单位厚度入口**：无法用材质参数扫"厚度 → 吸收"关系。Walter 的 thickness 类量在本模型不可复现 | 架构核对 | ☐ |
@@ -1729,10 +1760,10 @@ coat IOR 固定 1.5 / F0 0.04，不可作者化。
 
 | ID | 案例（论文图） | 展示什么 | 资产 | 状态 |
 | --- | --- | --- | --- | --- |
-| `T-10` | [Walter 2007](#walter-microfacet-refraction) Fig 1 · 蚀刻世界地图的玻璃球 | rough dielectric 折射与能量分配 | 缺 | ☐ |
-| `T-11` | [Walter 2007](#walter-microfacet-refraction) Fig 10 / 11 · 毛玻璃 / 磨砂样品的 BTDF 拟合 | 粗糙透射的方向分布 | 缺 | ☐ |
-| `T-12` | [Wyman 2005](#wyman-refraction) Fig 5 · 马（ray traced 参考 vs 近似） | 屏幕空间折射的误差边界 | 缺 | ☐ |
-| `T-13` | [McGuire & Bavoil 2013](#mcguire-oit) Fig 4 / 5 · San Miguel 多层透明 | 顺序无关透明的近似结构 | 缺 | ☐ |
+| `T-10` | [Walter 2007](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#walter-microfacet-refraction) Fig 1 · 蚀刻世界地图的玻璃球 | rough dielectric 折射与能量分配 | 缺 | ☐ |
+| `T-11` | [Walter 2007](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#walter-microfacet-refraction) Fig 10 / 11 · 毛玻璃 / 磨砂样品的 BTDF 拟合 | 粗糙透射的方向分布 | 缺 | ☐ |
+| `T-12` | [Wyman 2005](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#wyman-refraction) Fig 5 · 马（ray traced 参考 vs 近似） | 屏幕空间折射的误差边界 | 缺 | ☐ |
+| `T-13` | [McGuire & Bavoil 2013](../../../../yyb-knowledge-book/src/content/docs/tools-resources/books/index.mdx#mcguire-oit) Fig 4 / 5 · San Miguel 多层透明 | 顺序无关透明的近似结构 | 缺 | ☐ |
 | `T-14` | 孔明灯纸罩（薄介质反射、透射色与背光轮廓） | 薄层介质在真实资产上的观感 | 待授权或自制替代 | ☐ |
 
 ### ⑤ 专属约定

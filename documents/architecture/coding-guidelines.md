@@ -3,6 +3,18 @@
 This document records general coding conventions that should apply across engine modules.
 Feature-specific documents may add narrower rules, but should not redefine these base rules.
 
+## Paper-Case Scene Names
+
+New paper-specific scene assets use `SC_<category>_<paper>_<content>` for both
+the `Maps/` directory and its scene JSON basename. Use lowercase snake_case
+slugs; `paper_case` is the existing category for rendering-paper probes, the
+paper slug identifies authors and year, and the content slug names the variable
+or figure being tested. For example:
+`Maps/SC_paper_case_estevez_kulla_2017_sheen_roughness/SC_paper_case_estevez_kulla_2017_sheen_roughness.json`.
+Keep the scene's Chinese `description` explicit about the paper figure, the
+controlled variable, and any locally chosen geometry, camera, or lighting.
+Historical scene names do not need a mechanical migration.
+
 ## Header Comments
 
 New C++ headers that introduce a public class or shared data structure should include a short responsibility comment near the `class` or `struct` declaration.

@@ -57,16 +57,18 @@ Eye, Hair, Subsurface ×3, ThinTranslucent and TwoSidedFoliage — together with
 rebuilt **from its paper**, one at a time, following `documents/plan/rendering/shading-model-alignment-plan.md`
 §0.6. The interface surface is deliberately kept because it stays UE-aligned and is currently unconsumed:
 `engine/materialInputs.glsl` model structs, `engine/materialSurface.glsl` fields, `engine/gbufferCodec.glsl`
-layout, the `ShadingModelID` table, debug-view data plumbing and the renderMode/output macros. Re-adding a
-model means adding its evaluator **and** its dispatch case (`engine/forwardLighting.glsl`,
-`engine/deferredLighting.glsl`), its `customData` encoding and its material validation in the same change —
-a ShadingModelID without a dispatch case silently falls back to DefaultLit. Infrastructure that existed only
+layout, the `ShadingModelID` table, debug-view data plumbing and the renderMode/output macros. Paper models
+are reproduced through VL offline first. Runtime promotion is a separate decision: only core models receive
+deferred support; other promoted models are forward-only and must reject deferred authoring. Add the evaluator,
+the enabled path's dispatch and material validation together; a ShadingModelID without a dispatch case silently
+falls back to DefaultLit. Deferred models additionally need GBuffer encode/decode and customData in that change.
+Infrastructure that existed only
 to serve those models went with them: the four LUT-generator compute shaders (`clothLookupTables`,
 `eyeCausticLut`, `hairAzimuthalLut`, `subsurfaceLookupTables`), their C++ generators/loaders, the SSS blur and
 composition passes, and set 3 bindings 10..13. `deferredLighting` therefore writes `sceneColor` directly
 again (single output, `loadOp=clear`) and `VL_MATERIAL_OUTPUT_THIN_TRANSLUCENT` is now a compile-time
-`#error`. Re-adding a model that needs a LUT means adding the graph `input`, the pass material texture slot
-and the shader sampler declaration together, keeping binding order equal to the graph input order.
+`#error`. Re-adding a deferred model that needs a LUT means adding the graph `input`, the pass material
+texture slot and the shader sampler declaration together, keeping binding order equal to the graph input order.
 
 The codebase mixes engine experimentation and learning-oriented iteration. Prefer small, explicit, reversible changes.
 
@@ -91,6 +93,8 @@ Design references currently live under `documents/`:
 - `documents/rendering/texture-asset-json-v1.md`
 - `documents/rendering/material-param-authoring-and-reflection.md`
 - `documents/rendering/descriptor-imageinfo-management.md`
+- `documents/rendering/gbuffer-channel-ownership.md`
+  - current GBuffer attachment set, per-`ShadingModelID` channel ownership, the 4+4 bit ID/flag ledger, packing precision limits, and the deferred-allocation checklist. Forward-only models do not claim GBuffer channels; every enabled path needs its own dispatch case and material validation, or the ID can silently fall back to DefaultLit
 - `documents/rendering/shader-build-cache.md`
 - `documents/rendering/shader-hot-reload.md`
 - `documents/plan/rendering/sky-pass-environment-roadmap.html`
