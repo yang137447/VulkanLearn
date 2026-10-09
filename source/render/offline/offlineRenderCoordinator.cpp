@@ -147,7 +147,7 @@ nlohmann::json OfflineRenderCoordinator::DescribeInput(
         {"profileDigests", assets.modelProfileDigests},
         {"replay", "External source assets at the captured versions are required"},
         {"sampling", "LOD0; CPU model direction kernels; Reinhard viewport only"},
-        {"modelImplementation", "VL.Offline.ClothSheen.ClothFiber.Lambert.AshikhminVelvet.AshikhminSatin.v2"},
+        {"modelImplementation", "VL.Offline.ClothSheen.ClothFiber.Lambert.AshikhminVelvet.AshikhminSatin.AshikhminSlantedVelvet.v3"},
         {"environment", static_cast<int>(snapshot.environment.type)}};
     result["groomAssets"] = nlohmann::json::object();
     for (const auto& [reference, groom] : assets.groomAssets)

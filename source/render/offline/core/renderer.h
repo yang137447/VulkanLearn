@@ -128,8 +128,33 @@ double satinDensity(const SatinMaterial& material, Vec3 h);
 double satinProjectedArea(const SatinMaterial& material, Vec3 direction);
 double satinSpecular(const SatinMaterial& material, Vec3 v, Vec3 l);
 Vec3 satinBrdf(const SatinMaterial& material, Vec3 v, Vec3 l);
+constexpr int kSlantedVelvetMuSize = 65;
+constexpr int kSlantedVelvetPhiSize = 65;
+// §6.4 / Fig. 13 的倾斜圆柱高斯。表格保留 x 的正负方位，
+// 只利用 y 翻转对称；不能沿用 Satin 的第一象限折叠。
+struct SlantedVelvetMaterial
+{
+    double sigma = 0.5;
+    double slantDegrees = 40.0;
+    double f0 = 0.05;
+    Vec3 diffuse{};
+    double normalization = 0.0;
+    double normalMean = 0.0;
+    double diffuseScale = 0.0;
+    std::array<double, kSlantedVelvetMuSize * kSlantedVelvetPhiSize> g{};
+    std::array<double, kSlantedVelvetMuSize * kSlantedVelvetPhiSize> reflectance{};
+};
+SlantedVelvetMaterial makeSlantedVelvetMaterial(
+    double sigma, double slantDegrees, double f0, Vec3 diffuse);
+double slantedVelvetDensity(const SlantedVelvetMaterial& material, Vec3 h);
+double slantedVelvetProjectedArea(const SlantedVelvetMaterial& material,
+                                  Vec3 direction);
+double slantedVelvetSpecular(const SlantedVelvetMaterial& material,
+                             Vec3 v, Vec3 l);
+Vec3 slantedVelvetBrdf(const SlantedVelvetMaterial& material, Vec3 v, Vec3 l);
 enum class SurfaceModel {
-    ClothSheen, ClothFiber, Lambert, AshikhminVelvet, AshikhminSatin
+    ClothSheen, ClothFiber, Lambert, AshikhminVelvet, AshikhminSatin,
+    AshikhminSlantedVelvet
 };
 struct MeshInstance
 {
@@ -145,6 +170,7 @@ struct MeshInstance
     const FabricMaterial* fabric = nullptr;
     const VelvetMaterial* velvet = nullptr;
     const SatinMaterial* satin = nullptr;
+    const SlantedVelvetMaterial* slantedVelvet = nullptr;
     const GroomMap* groom = nullptr;
     const ColorMap* baseColorMap = nullptr;
     const ColorMap* sheenColorMap = nullptr;
@@ -160,6 +186,8 @@ struct Hit
     const MeshInstance* instance = nullptr;
 };
 Vec3 evaluateSatin(const SatinMaterial& material, const Hit& hit, Vec3 v, Vec3 l);
+Vec3 evaluateSlantedVelvet(const SlantedVelvetMaterial& material,
+                           const Hit& hit, Vec3 v, Vec3 l);
 struct GroomMap
 {
     int width = 0, height = 0;

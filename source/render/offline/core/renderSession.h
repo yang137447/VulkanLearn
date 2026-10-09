@@ -22,6 +22,7 @@ struct RenderInput
     std::vector<std::shared_ptr<const FabricMaterial>> instanceFabrics;
     std::vector<std::shared_ptr<const VelvetMaterial>> instanceVelvets;
     std::vector<std::shared_ptr<const SatinMaterial>> instanceSatins;
+    std::vector<std::shared_ptr<const SlantedVelvetMaterial>> instanceSlantedVelvets;
     std::vector<std::shared_ptr<const GroomMap>> instanceGrooms;
     std::vector<std::shared_ptr<const ColorMap>> instanceColorMaps;
     int width = 0;

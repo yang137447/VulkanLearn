@@ -210,6 +210,9 @@ std::uint64_t RenderSession::Start(RenderInput input)
             (instance.model == SurfaceModel::AshikhminSatin &&
              (!IsOwned(instance.satin, input.instanceSatins) ||
               !instance.mesh->hasValidUvFrames)) ||
+            (instance.model == SurfaceModel::AshikhminSlantedVelvet &&
+             (!IsOwned(instance.slantedVelvet, input.instanceSlantedVelvets) ||
+              !instance.mesh->hasValidUvFrames)) ||
             (instance.groom && !IsOwned(instance.groom, input.instanceGrooms)) ||
             (instance.baseColorMap &&
              !IsOwned(instance.baseColorMap, input.instanceColorMaps)) ||

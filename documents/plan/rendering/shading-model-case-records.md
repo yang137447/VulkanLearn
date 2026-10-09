@@ -1242,3 +1242,18 @@ Cloth 总览 `/rendering/materials/shading-models/cloth-sheen/` 保留案例入�
   32 spp 的 Combined PFM 每通道恰为原值的 `0.5`，两臂最大绝对误差均为 `0`。
   该结果只验证此轮变化来自共享光强，没有证明论文灯光强度就是 5。
 
+## AS-03 — Ashikhmin、Premože 与 Shirley 2000 §6.4 / Fig. 13 Slanted Velvet（2026-09-30）
+
+| 字段 | 内容 |
+| --- | --- |
+| **范围** | Fig. 13 黑色/红色倾斜纤维 Velvet；独立 `AshikhminSlantedVelvet` 离线闭包，不改变 `AS-01` 各向同性 Velvet 或 `AS-02` Satin，不增加 runtime `ShadingModelID`、forward/deferred dispatch 或 GBuffer |
+| **论文分布** | §6.4 与 Fig. 12：纤维束轴相对布面法线约 40°，侧面微法线的平均方向相应偏离法线 50°。使用倾斜圆柱高斯 `sigma_x=0.5, sigma_y=∞`，束侧参与镜面散射；束顶只通过带符号 `<h·n>` 的加倍近似参与。不是直接将高光整体加倍，也不是把平均法线改成 `2*g(n)` |
+| **闭包与坐标** | 圆柱高斯在未倾斜局部坐标归一化后绕 y 旋转 `slant−90°`，完整保留旋转后宏观下半球内的法线；局部 x 为 UV0 U 投影到 shading-normal 切平面的束轴方位，y 为 `n×x`。式(18) 求完整分布的正投影 g；式(14) 15° 方位相关遮蔽、Schlick `f0=0.05`、式(29)/(30) R 与互易漫反射补偿均与求值器共用同一核 |
+| **数值实现** | `source/render/offline/core/models/ashikhminSlantedVelvet.cpp`；256 点 `tan(beta)=sigma*t, t∈[-10,10]` 求积、横向 s 解析积分。g/R 冻结为 65×65 的余弦/方位表，方位域 `[0,π]` 只折叠 y 翻转，保留 x 正负差异；R 使用 64×256 半球求积。支持 `sigma∈[0.35,1]`、束轴倾角 `[30°,80°]`，更窄/更直立的组合会让弱方向投影落在有限积分网格外，因此在 authoring/preflight 拒绝，不能在 BRDF 分母塞 epsilon 修饰 |
+| **非物理边界** | 论文明确此分布不是 height field，平均法线不朝向几何法线；`f0=1` 不保证能量守恒。本地回归保留并检出 `max R>1`，不夹 R 或更换分布。`sigma=0.5 / slant=40 / f0=0.05` 的表格 R 均小于 1，3 个天顶角×3 个方位的白炉在 2.5% 容差内通过；不把该结论推广至所有可编写参数 |
+| **case 资产** | `Maps/SC_paper_case_ashikhmin_premoze_shirley_2000_fig13_slanted_velvet_black/` 与对应 `_red/`，SC_/SM_/MI_ 均使用规范化命名；复用已有 Cloth.fbx 和 plot_quad 背景源，不重复导入或改名历史资源。M_ 默认值提供论文宽度/倾角/Fresnel，MI 只记录稀疏差异；两臂共用束轴方位 180°，黑色 `rho_d=[0.002,0.002,0.002]`、红色 `[0.16,0.008,0.06]` 为本地染色 |
+| **场景条件** | 相机 `[0,2,8]` 看向 `[0,0.55,0]`、水平 FOV 31°；平行光旋转 `[-10.3,0,0]`、强度 5、无环境、0 bounces、exposure=1。无地面，正常受光背景位于 `[0,0,-40]`。相机/光照轴几乎平行，但不是恢复的原论文元数据；初始 0° UV 方位把亮区放在右边，最终共用 180° 使左亮右暗，不改变宽度或高光倍率 |
+| **模块验证** | 新增 15 项 Slanted Velvet core GTest：整分布归一化与下半球支撑、束轴/侧法线角度区分、带符号均值、独立全球 g 积分（0.5% 相对误差加 1e-5）、互易性、非对称回射、式(14)、默认参数白炉、带符号方位旋转、PDF、非法输入、支持域端点有限性、`f0=1` 超能量、求值分派及会话所有权。adapter 新增 4 项冻结/非法参数/未知参数/退化 UV；schema 接受显式离线身份。core/adapter/coordinator/schema 共 196 项通过 |
+| **导出验证工具** | `tool/validation/offline/verify_ashikhmin_fig13.py BLACK_EXPORT RED_EXPORT`：复用 `verify_vl_export` 检查 PFM/AOV/非空出图，比较冻结 manifest 的相机、光、几何、变换、背景、积分与显示设置；去掉染色后材质必须相同。零反弹白光下，红黑每通道差值除以各自 `Δrho_d` 必须恢复同一 diffuse kernel（误差 `<1e-4`），防止偷偷改变高光或曝光；验证背景带无投影及黑布左侧平均显示亮度高于右侧，并输出同裁切、无调色 PNG/JSON |
+| **最终导出证据** | 两臂均为 1280×720 / 32 spp / 0 bounces / exposure=1；黑色 `Generated/OfflineRenderer/SC_paper_case_ashikhmin_premoze_shirley_2000_fig13_slanted_velvet_black-596e178d0f57-32/`，红色对应 `_red-c09ff63c2dde-32/`，实际 World 加载及正常关闭通过。验证工具完整通过：相机/主光轴夹角 `0.02667°`，线性 diffuse kernel 最大通道误差 `9.68e-6`，黑布左/右平均显示亮度 `42.16/14.86`，背景边带无残留投影。对照图与 JSON：`Generated/OfflineRenderer/Comparisons/ashikhmin2000_fig13_slanted_velvet_black_red.*`；统一裁切 `[420,170,860,690]`，未调色。这些只证明本地左右方向性与同条件染色，不代表论文原图像素标定 |
+| **差异与状态** | ◐ 数值闭包与本地黑/红场景已实现；球顶布面与论文平桌几何不同，颜色、UV 方位、机位、灯位和显示映射是本地选择，不宣称 Fig. 13 像素级复刻。保留论文简单漫反射近似，未模拟纤维间多次反弹染色，不人为把红布右侧涂黑；也没有添加专用各向异性重要性采样或恢复原论文资产 |

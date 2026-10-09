@@ -60,6 +60,8 @@ Offline::SurfaceModel ParseModel(const nlohmann::json& material)
     if (model == "ClothFiber") return Offline::SurfaceModel::ClothFiber;
     if (model == "AshikhminVelvet") return Offline::SurfaceModel::AshikhminVelvet;
     if (model == "AshikhminSatin") return Offline::SurfaceModel::AshikhminSatin;
+    if (model == "AshikhminSlantedVelvet")
+        return Offline::SurfaceModel::AshikhminSlantedVelvet;
     throw std::runtime_error("Unknown offlineModel: " + model);
 }
 
@@ -171,6 +173,32 @@ void ApplyMaterial(const nlohmann::json& material,
                 Offline::makeSatinMaterial(sigmaFlat, sigmaEnds, flatWeight, f0, diffuse));
             instance.satin = satin.get();
             input.instanceSatins.push_back(std::move(satin));
+        }
+    }
+    else if (instance.model == Offline::SurfaceModel::AshikhminSlantedVelvet)
+    {
+        RequireExactKeys(params, {"u_sigma", "u_slantDegrees", "u_f0",
+                                  "u_baseColor", "u_fiberRotationDegrees"},
+                         "AshikhminSlantedVelvet parameters");
+        const double sigma = FiniteNumber(params.at("u_sigma"), "u_sigma");
+        const double slant = FiniteNumber(params.at("u_slantDegrees"), "u_slantDegrees");
+        const double f0 = FiniteNumber(params.at("u_f0"), "u_f0");
+        const Offline::Vec3 diffuse = Color(params.at("u_baseColor"), "u_baseColor");
+        instance.fiberRotationDegrees = FiniteNumber(
+            params.at("u_fiberRotationDegrees"), "u_fiberRotationDegrees");
+        if (sigma < 0.35 || sigma > 1 || slant < 30 || slant > 80 ||
+            f0 < 0 || f0 > 1 || diffuse.x > 1 || diffuse.y > 1 || diffuse.z > 1 ||
+            std::abs(instance.fiberRotationDegrees) > 360)
+            throw std::runtime_error("Invalid AshikhminSlantedVelvet parameter range");
+        if (!instance.mesh->hasValidUvFrames)
+            throw std::runtime_error("AshikhminSlantedVelvet requires non-degenerate UV axes");
+        if (prepareGeometry)
+        {
+            // 束轴方向和积分表随 MI 一起冻结；worker 不访问活动材质。
+            auto velvet = std::make_shared<const Offline::SlantedVelvetMaterial>(
+                Offline::makeSlantedVelvetMaterial(sigma, slant, f0, diffuse));
+            instance.slantedVelvet = velvet.get();
+            input.instanceSlantedVelvets.push_back(std::move(velvet));
         }
     }
     else

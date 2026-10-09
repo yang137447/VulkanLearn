@@ -47,7 +47,7 @@ The root `vl_offline_core_tests` and `vl_offline_adapter_tests` /
 checks live under `tool/validation/offline/`; they are external validation
 scripts, not engine runtime-test flags. Supported inputs remain bounded to
 static meshes, explicit no-environment scenes,
-Lambert/ClothSheen/ClothFiber/AshikhminVelvet/AshikhminSatin
+Lambert/ClothSheen/ClothFiber/AshikhminVelvet/AshikhminSatin/AshikhminSlantedVelvet
 configurations, directional or one-sided square area lighting, and the
 documented texture/groom formats. Unsupported features fail preflight rather
 than silently falling back to DefaultLit. Large-texture synchronous preflight
@@ -78,3 +78,32 @@ quadrature-accuracy contract first. UV0 U defines the local fiber x axis,
 projected onto the shading tangent plane; y is `n x x`. Rotation is around
 the shading normal. Degenerate UVs fail World/MI preflight. No Satin texture,
 runtime shader, GBuffer allocation or `ShadingModelID` dispatch is added.
+
+`AshikhminSlantedVelvet` is a separate section 6.4 / Fig. 12-13 closure.
+The bundle axis, not the side-normal mean, is slanted by 40 degrees relative
+to the cloth normal. With UV0 U defining the bundle's horizontal direction,
+the cylindrical Gaussian is rotated about local y by `slant - 90` degrees.
+Its full rotated support is retained, including normals below the macroscopic
+hemisphere; specular evaluation still requires view/light above the cloth.
+Only the sides enter density and `g`; the signed mean `<h dot n>` is doubled
+to approximate the tops exactly where the paper specifies it. In particular,
+that mean is not `2*g(n)`, which uses a positive projection.
+
+The frozen `g`/`R` tables use 65 cosine samples and 65 azimuth samples from
+0 to pi. Only y-sign symmetry is folded; x-sign asymmetry is essential.
+Projected-area integration uses a 256-point slope quadrature and the analytic
+transverse integral of the whole rotated distribution. `R` integrates the same
+15-degree Eq. (14) correlated specular kernel with 64 x 256 hemisphere samples,
+and Eq. (30) gives the reciprocal diffuse completion.
+
+Slanted Velvet authoring supports `u_sigma` in `[0.35,1]`,
+`u_slantDegrees` in `[30,80]`, `u_f0` in `[0,1]`, constant linear
+`u_baseColor` in `[0,1]`, and `u_fiberRotationDegrees` in `[-360,360]`.
+These width/slant limits keep the weak-direction projection represented by
+the finite slope grid, rather than patching zero denominators in the kernel.
+Default-paper energy validation applies to sigma=0.5 / slant=40 / f0=0.05;
+it is not a claim over all supported parameters. The non-height-field model
+can exceed unit reflectance for f0=1, as the paper warns; do not clamp `R` or
+silently replace its distribution to make that case pass a white furnace.
+Degenerate UVs fail preflight and sessions own immutable material tables.
+No textured slanted Velvet, runtime ID, shader or GBuffer allocation is added.

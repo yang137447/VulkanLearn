@@ -241,6 +241,68 @@ TEST(OfflineSceneAdapter, AshikhminSatinRejectsDegenerateUvBeforePublication)
     EXPECT_NE(result.Error().message.find("non-degenerate UV"), std::string::npos);
 }
 
+VL::OfflineWorldAssets MakeSlantedVelvetAssets()
+{
+    auto assets = MakeAssets();
+    auto& material = assets.effectiveMaterialInstances.begin()->second;
+    material["offlineModel"] = "AshikhminSlantedVelvet";
+    material["parameters"] = {
+        {"u_sigma", 0.5}, {"u_slantDegrees", 40}, {"u_f0", 0.05},
+        {"u_baseColor", {0.3, 0.015, 0.06, 1}}, {"u_fiberRotationDegrees", 180}};
+    return assets;
+}
+
+TEST(OfflineSceneAdapter, SlantedVelvetFreezesMaterialAndSignedFiberDirection)
+{
+    auto assets = MakeSlantedVelvetAssets();
+    ASSERT_TRUE(VL::PreflightOfflineRenderInput(
+        MakeSnapshot(), assets, Settings()).IsSuccess());
+    const auto result = VL::BuildOfflineRenderInput(MakeSnapshot(), assets, Settings());
+    ASSERT_TRUE(result.IsSuccess()) << result.Error().message;
+    const auto& input = result.Value();
+    ASSERT_EQ(input.instanceSlantedVelvets.size(), 1u);
+    EXPECT_EQ(input.scene.instances[0].model, VL::Offline::SurfaceModel::AshikhminSlantedVelvet);
+    EXPECT_EQ(input.scene.instances[0].slantedVelvet, input.instanceSlantedVelvets[0].get());
+    EXPECT_DOUBLE_EQ(input.scene.instances[0].fiberRotationDegrees, 180);
+    assets.effectiveMaterialInstances.begin()->second["parameters"]["u_slantDegrees"] = 20;
+    EXPECT_DOUBLE_EQ(input.instanceSlantedVelvets[0]->slantDegrees, 40);
+}
+
+TEST(OfflineSceneAdapter, SlantedVelvetRejectsInvalidParametersInPreflight)
+{
+    for (const auto& [name, value] : {
+         std::pair{"u_sigma", 0.2}, std::pair{"u_slantDegrees", 20.0},
+         std::pair{"u_f0", 1.1}, std::pair{"u_fiberRotationDegrees", 361.0}})
+    {
+        auto assets = MakeSlantedVelvetAssets();
+        assets.effectiveMaterialInstances.begin()->second["parameters"][name] = value;
+        EXPECT_TRUE(VL::PreflightOfflineRenderInput(
+            MakeSnapshot(), assets, Settings()).IsFailure()) << name;
+    }
+}
+
+TEST(OfflineSceneAdapter, SlantedVelvetPreflightRejectsUnknownParameters)
+{
+    auto assets = MakeSlantedVelvetAssets();
+    assets.effectiveMaterialInstances.begin()->second["parameters"]["u_roughness"] = 0.5;
+    const auto result = VL::PreflightOfflineRenderInput(MakeSnapshot(), assets, Settings());
+    ASSERT_TRUE(result.IsFailure());
+    EXPECT_NE(result.Error().message.find("unsupported input"), std::string::npos);
+}
+
+TEST(OfflineSceneAdapter, SlantedVelvetRejectsDegenerateUvBeforePublication)
+{
+    auto assets = MakeSlantedVelvetAssets();
+    auto imported = std::make_shared<MeshAssetImportResult>(
+        *assets.meshImports.begin()->second);
+    for (Vertex& vertex : imported->modelResource.sections[0].vertices)
+        vertex.texCoord = Eigen::Vector2f::Zero();
+    assets.sections.begin()->second.imported = imported;
+    const auto result = VL::PreflightOfflineRenderInput(MakeSnapshot(), assets, Settings());
+    ASSERT_TRUE(result.IsFailure());
+    EXPECT_NE(result.Error().message.find("non-degenerate UV"), std::string::npos);
+}
+
 TEST(OfflineSceneAdapter, SquareEmitterKeepsWorldNormalAndRadiance)
 {
     auto snapshot = MakeSnapshot();

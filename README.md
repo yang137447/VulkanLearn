@@ -97,7 +97,8 @@ VL 是离线渲染的唯一出图入口；纯 CPU `vl_offline_core` 由根工程
 数值测试不需要 Vulkan 窗口。当前架构边界见
 `documents/architecture/vl-offline-rendering.md`。VL 已接入冻结的
 World/MI/mesh/纹理输入、渐进会话和 Vulkan 离线显示；支持范围只限
-Lambert、ClothSheen、ClothFiber、AshikhminVelvet、AshikhminSatin 的已验证配置，遇到不支持的环境、光源、
+Lambert、ClothSheen、ClothFiber、AshikhminVelvet、AshikhminSatin、
+AshikhminSlantedVelvet 的已验证配置，遇到不支持的环境、光源、
 动画或材质时会在准备阶段拒绝，不回退到 DefaultLit。资源仓库中的
 `Maps/SC_offline_shared/SC_offline_shared.json` 是共用实时/离线路径的
 Lambert 受控场景，启动不修改全局 `initScene`：
@@ -139,6 +140,21 @@ Satin 的纤维方向取 UV0 U，MI 可通过 `u_fiberRotationDegrees` 旋转；
 两臂的染色、灯位和机位是本地选择，不是恢复的原场景元数据。
 验证结果与差异见 `documents/plan/rendering/shading-model-case-records.md`
 的 `AS-01` / `AS-02`。两者实时模式均明确拒绝。
+
+Fig. 13 的黑色与红色倾斜纤维 Velvet 使用独立离线模型
+`AshikhminSlantedVelvet`，不是修改 Fig. 11 的各向同性 Velvet。
+两个场景仅改变染色，共用近观察方向的平行光和无地面背景：
+
+```powershell
+build/bin/main.exe --offline --initial-scene Maps/SC_paper_case_ashikhmin_premoze_shirley_2000_fig13_slanted_velvet_black/SC_paper_case_ashikhmin_premoze_shirley_2000_fig13_slanted_velvet_black.json --console-command "offline bounces 0"
+build/bin/main.exe --offline --initial-scene Maps/SC_paper_case_ashikhmin_premoze_shirley_2000_fig13_slanted_velvet_red/SC_paper_case_ashikhmin_premoze_shirley_2000_fig13_slanted_velvet_red.json --console-command "offline bounces 0"
+```
+
+束轴与法线夹角为论文的 40°，侧面微法线平均方向相应倾斜 50°；
+`sigma_x=0.5`、`sigma_y=∞`、`f0=0.05`。UV 束轴方位、染色、
+灯位与机位为本地选择，不增加 runtime ID 或 forward/deferred 支持。
+该分布不是物理 height field，不保证 `f0=1` 时能量守恒。
+模型边界与数值证据见 `AS-03`。
 
 单面方形面光的背面虽不发光，光源几何仍会遮挡相机主射线；调灯位或
 尺寸时要避免让它进入主视线。

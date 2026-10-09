@@ -272,7 +272,8 @@ void MaterialAssetValidator::ValidateDefinition(
              materialJson["offlineModel"] != "ClothSheen" &&
              materialJson["offlineModel"] != "ClothFiber" &&
              materialJson["offlineModel"] != "AshikhminVelvet" &&
-             materialJson["offlineModel"] != "AshikhminSatin"))
+             materialJson["offlineModel"] != "AshikhminSatin" &&
+             materialJson["offlineModel"] != "AshikhminSlantedVelvet"))
             throw std::runtime_error("Unknown offlineModel in material definition: " +
                                      std::string(materialPath));
     }

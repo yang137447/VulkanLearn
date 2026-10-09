@@ -301,6 +301,9 @@ TEST(MaterialSchema, OfflineModelIdentityIsExplicit)
     material["offlineModel"] = "AshikhminSatin";
     EXPECT_NO_THROW(MaterialAssetValidator::ValidateDefinition(
         material, "shader/glsl/M_schemaTest.json"));
+    material["offlineModel"] = "AshikhminSlantedVelvet";
+    EXPECT_NO_THROW(MaterialAssetValidator::ValidateDefinition(
+        material, "shader/glsl/M_schemaTest.json"));
     material["offlineModel"] = "DefaultLit";
     EXPECT_THROW(MaterialAssetValidator::ValidateDefinition(
         material, "shader/glsl/M_schemaTest.json"), std::runtime_error);

@@ -1,0 +1,42 @@
+{
+  "name": "M_offlineAshikhminSlantedVelvet",
+  "type": "material",
+  "shadingModel": "DefaultLit",
+  "realtimeSupported": false,
+  "offlineModel": "AshikhminSlantedVelvet",
+  "renderStates": {"renderMode": "Opaque", "cullMode": "None"},
+  "macros": {},
+  "parameters": {
+    "u_sigma": {
+      "type": "float", "default": 0.5,
+      "description": "§6.4 倾斜圆柱高斯 sigma_x；sigma_y=∞，支持范围由数值求积限制",
+      "range": {"min": 0.35, "max": 1}
+    },
+    "u_slantDegrees": {
+      "type": "float", "default": 40,
+      "description": "Fig. 12 纤维束轴与布面法线的夹角；侧面平均微法线倾角为 90° 减此值",
+      "range": {"min": 30, "max": 80}
+    },
+    "u_f0": {
+      "type": "float", "default": 0.05,
+      "description": "Schlick 正入射反射率；论文不保证该非物理分布在 f0=1 时能量守恒",
+      "range": {"min": 0, "max": 1}
+    },
+    "u_fiberRotationDegrees": {
+      "type": "float", "default": 0,
+      "description": "VL 本地束轴方位，从 UV0 U 绕布面法线旋转；不是恢复的论文 UV 元数据",
+      "range": {"min": -360, "max": 360}
+    },
+    "u_baseColor": {
+      "type": "color", "default": [0.002, 0.002, 0.002, 1],
+      "description": "式(30) 的常量线性漫反射率；不模拟纤维内部多次散射染色",
+      "channels": {
+        "x": {"name": "red", "description": "线性红色反射率", "range": {"min": 0, "max": 1}},
+        "y": {"name": "green", "description": "线性绿色反射率", "range": {"min": 0, "max": 1}},
+        "z": {"name": "blue", "description": "线性蓝色反射率", "range": {"min": 0, "max": 1}},
+        "w": {"name": "opacity", "description": "固定不透明", "range": {"min": 1, "max": 1}}
+      }
+    }
+  },
+  "textures": {}
+}
