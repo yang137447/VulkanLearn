@@ -153,6 +153,27 @@ TEST(OfflineSceneAdapter, UnknownMaterialReportsObjectAndAsset)
     EXPECT_EQ(result.Error().sourceNode, "cloth::section");
 }
 
+TEST(OfflineSceneAdapter, AshikhminVelvetFreezesProfileAndRejectsInvalidSigma)
+{
+    auto assets = MakeAssets();
+    auto& material = assets.effectiveMaterialInstances.begin()->second;
+    material["offlineModel"] = "AshikhminVelvet";
+    material["parameters"] = {
+        {"u_sigma", 0.5}, {"u_f0", 0.05},
+        {"u_baseColor", {0.35, 0.015, 0.025, 1.0}}};
+    ASSERT_TRUE(VL::PreflightOfflineRenderInput(
+        MakeSnapshot(), assets, Settings()).IsSuccess());
+    auto result = VL::BuildOfflineRenderInput(MakeSnapshot(), assets, Settings());
+    ASSERT_TRUE(result.IsSuccess()) << result.Error().message;
+    ASSERT_EQ(result.Value().instanceVelvets.size(), 1u);
+    EXPECT_EQ(result.Value().scene.instances[0].velvet,
+              result.Value().instanceVelvets[0].get());
+    material["parameters"]["u_sigma"] = 0.0;
+    result = VL::BuildOfflineRenderInput(MakeSnapshot(), assets, Settings());
+    ASSERT_TRUE(result.IsFailure());
+    EXPECT_EQ(result.Error().code, "Offline.PreflightFailed");
+}
+
 TEST(OfflineSceneAdapter, ActiveEnvironmentIsRejectedBeforeGeometry)
 {
     auto snapshot = MakeSnapshot();

@@ -205,6 +205,8 @@ std::uint64_t RenderSession::Start(RenderInput input)
             (instance.model == SurfaceModel::ClothFiber &&
              (!IsOwned(instance.fabric, input.instanceFabrics) ||
               !instance.mesh->hasValidUvFrames)) ||
+            (instance.model == SurfaceModel::AshikhminVelvet &&
+             !IsOwned(instance.velvet, input.instanceVelvets)) ||
             (instance.groom && !IsOwned(instance.groom, input.instanceGrooms)) ||
             (instance.baseColorMap &&
              !IsOwned(instance.baseColorMap, input.instanceColorMaps)) ||

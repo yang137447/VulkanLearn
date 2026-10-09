@@ -1,0 +1,24 @@
+{
+  "name": "M_offlineAshikhminVelvet",
+  "type": "material",
+  "shadingModel": "DefaultLit",
+  "realtimeSupported": false,
+  "offlineModel": "AshikhminVelvet",
+  "renderStates": {"renderMode": "Opaque", "cullMode": "None"},
+  "macros": {},
+  "parameters": {
+    "u_sigma": {"type": "float", "default": 0.5, "description": "Ashikhmin 2000 Eq. (35) inverse Gaussian sigma"},
+    "u_f0": {"type": "float", "default": 0.05, "description": "Ashikhmin 2000 Sec. 6 dielectric normal reflectance"},
+    "u_baseColor": {
+      "type": "color", "default": [0.018, 0.018, 0.018, 1],
+      "description": "Eq. (30) diffuse reflectance rho_d; no runtime material path",
+      "channels": {
+        "x": {"name": "red", "description": "线性红色反射率", "range": {"min": 0, "max": 1}},
+        "y": {"name": "green", "description": "线性绿色反射率", "range": {"min": 0, "max": 1}},
+        "z": {"name": "blue", "description": "线性蓝色反射率", "range": {"min": 0, "max": 1}},
+        "w": {"name": "opacity", "description": "固定不透明", "range": {"min": 1, "max": 1}}
+      }
+    }
+  },
+  "textures": {}
+}

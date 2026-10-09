@@ -1168,3 +1168,15 @@ cd <yyb-knowledge-book>; npm run citation:check; npm run citation:pages; npm run
 Cloth 总览 `/rendering/materials/shading-models/cloth-sheen/` 保留案例入口。
 `S-02` 状态保持 ◐。
 
+## AS-01 — Ashikhmin、Premože 与 Shirley 2000 §6.4 / Fig. 11 Velvet（2026-09-30）
+
+| 字段 | 内容 |
+| --- | --- |
+| **范围** | 本 case 复现 Fig. 11 右图的**各向同性** Velvet；不等同于 Fig. 13 的倾斜纤维/非物理分布 |
+| **论文闭包** | 式(35) `p(h) ∝ exp(-cot²θ/σ²)`，图示 `σ=0.5`；式(18) `g(k)=∫max(h·k,0)p(h)dω`，式(25) 单方向可见性，式(14) 方位角相关遮蔽（15° 高斯宽度），式(11) 镜面 BRDF；§5.2 的 Schlick Fresnel、非金属 `f0=0.05`；式(29)/(30) 的 `R(k)` 与互易漫反射补偿 |
+| **实现** | `source/render/offline/core/models/ashikhminVelvet.cpp`：`p` 归一化与 `<h·n>`、`g` 和 `R` 在冻结材质时确定性求积；方向采样采用已有的半球余弦/均匀混合，面积光 MIS 和续射复用同一 PDF；World/MI 的 `AshikhminVelvet` 只走离线 core，不消费 `ShadingModelID` |
+| **case 资产** | `Maps/SC_Cloth_Ashikhmin2000_Fig11Velvet/SC_Cloth_Ashikhmin2000_Fig11Velvet.json`；与既有 Cloth case 共用原 FBX，当前无地面，背景改用 `SM_ashikhmin_fig11_background` 竖直板；`sigma=0.5`、`f0=0.05` 源于论文；`MI_ashikhmin_fig11_velvet.json` 显式取近黑色 `ρd=0.002`，为本地选择，不修改 M_ 的通用默认值 |
+| **证据** | core GTest：`g(n)=<h·n>`、互易性、相关遮蔽增强回射、方向采样 PDF、白炉 3 角度 × 2 Fresnel 参数；adapter GTest：材质冻结与非法 `σ`；material-schema GTest：离线身份校验。实际 World 加载、32 spp 导出见资源仓库 `Generated/OfflineRenderer/SC_Cloth_Ashikhmin2000_Fig11Velvet-*/` 的 PFM/PPM/manifest |
+| **差异** | 原图使用相同几何对照 Satin/Velvet，但论文没有发布网格、机位、灯位和漫反射色值；本地场景不能作逐像素比较。论文明确用单个远处小光源且无间接光，导出时需 `offline bounces 0`；场景默认渲染器设置并不能从 scene JSON 固定反弹数。`g`/`R` 为有限分辨率确定性积分，近法线的方位投影退化在实现中取无关遮蔽极限。 |
+| **状态** | ◐ 离线闭包和32 spp 成图已完成；尚无原图像素标定及 Velvet 的独立论文参考积分，不能宣称 Fig. 11 完整对齐 |
+

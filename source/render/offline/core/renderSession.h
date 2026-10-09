@@ -20,6 +20,7 @@ struct RenderInput
     Scene scene;
     std::vector<std::shared_ptr<const Mesh>> instanceMeshes;
     std::vector<std::shared_ptr<const FabricMaterial>> instanceFabrics;
+    std::vector<std::shared_ptr<const VelvetMaterial>> instanceVelvets;
     std::vector<std::shared_ptr<const GroomMap>> instanceGrooms;
     std::vector<std::shared_ptr<const ColorMap>> instanceColorMaps;
     int width = 0;

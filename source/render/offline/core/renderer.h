@@ -95,7 +95,23 @@ struct Mesh
 };
 struct GroomMap;
 struct ColorMap;
-enum class SurfaceModel { ClothSheen, ClothFiber, Lambert };
+constexpr int kVelvetTableSize = 65;
+struct VelvetMaterial
+{
+    double sigma = 0.5;
+    double f0 = 0.05;
+    Vec3 diffuse{0.018, 0.018, 0.018};
+    double normalMean = 0.0;
+    double normalization = 0.0;
+    double diffuseScale = 0.0;
+    std::array<double, kVelvetTableSize> g{}, reflectance{};
+};
+VelvetMaterial makeVelvetMaterial(double sigma, double f0, Vec3 diffuse);
+double velvetSpecular(const VelvetMaterial& material, Vec3 n, Vec3 v, Vec3 l);
+Vec3 velvetBrdf(const VelvetMaterial& material, Vec3 n, Vec3 v, Vec3 l);
+enum class SurfaceModel {
+    ClothSheen, ClothFiber, Lambert, AshikhminVelvet
+};
 struct MeshInstance
 {
     const Mesh* mesh = nullptr;
@@ -108,6 +124,7 @@ struct MeshInstance
     Vec3 sheenColor{0.95, 0.75, 0.65};
     double roughness = 0.4;
     const FabricMaterial* fabric = nullptr;
+    const VelvetMaterial* velvet = nullptr;
     const GroomMap* groom = nullptr;
     const ColorMap* baseColorMap = nullptr;
     const ColorMap* sheenColorMap = nullptr;
@@ -243,6 +260,7 @@ double microcylinderDirectionPdf(const Hit& hit, Vec3 view, Vec3 direction,
 DirectionSample sampleMicrocylinderDirection(const Hit& hit, Vec3 view,
                                               const FabricMaterial& material, Random& rng);
 DirectionSample sampleDirection(Hit hit, Random& rng);
+double directionPdf(Hit hit, Vec3 direction);
 double powerWeight(double a, double b);
 Vec3 directFabricAreaLight(const Scene& scene, const AlbedoTable& albedo,
                            Hit hit, Vec3 view, int lightSamples, Random& rng);

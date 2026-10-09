@@ -46,8 +46,17 @@ The root `vl_offline_core_tests` and `vl_offline_adapter_tests` /
 `vl_offline_coordinator_tests` are GoogleTest suites. VL-only stress and export
 checks live under `tool/validation/offline/`; they are external validation
 scripts, not engine runtime-test flags. Supported inputs remain bounded to
-static meshes, explicit no-environment scenes, Lambert/ClothSheen/ClothFiber
+static meshes, explicit no-environment scenes,
+Lambert/ClothSheen/ClothFiber/AshikhminVelvet
 configurations, directional or one-sided square area lighting, and the
 documented texture/groom formats. Unsupported features fail preflight rather
 than silently falling back to DefaultLit. Large-texture synchronous preflight
 latency and cross-GPU/driver behavior are not yet characterized.
+
+The paper-specific `AshikhminVelvet` closure is offline-only. It owns a
+per-effective-material numerical table for the paper's inverse-Gaussian
+normal distribution, projected-area function `g`, and directional
+specular reflectance `R`; the table is frozen with the session input.
+It does not share ClothSheen's Charlie distribution or its albedo LUT.
+Its current MI accepts scalar `sigma`, scalar `f0`, and constant linear
+diffuse reflectance only; no velvet texture or runtime dispatch exists.

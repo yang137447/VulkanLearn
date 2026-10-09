@@ -58,6 +58,7 @@ Offline::SurfaceModel ParseModel(const nlohmann::json& material)
     if (model == "Lambert") return Offline::SurfaceModel::Lambert;
     if (model == "ClothSheen") return Offline::SurfaceModel::ClothSheen;
     if (model == "ClothFiber") return Offline::SurfaceModel::ClothFiber;
+    if (model == "AshikhminVelvet") return Offline::SurfaceModel::AshikhminVelvet;
     throw std::runtime_error("Unknown offlineModel: " + model);
 }
 
@@ -124,6 +125,24 @@ void ApplyMaterial(const nlohmann::json& material,
         instance.roughness = FiniteNumber(params.at("u_roughness"), "u_roughness");
         if (instance.roughness <= 0 || instance.roughness > 1)
             throw std::runtime_error("u_roughness must be in (0,1]");
+    }
+    else if (instance.model == Offline::SurfaceModel::AshikhminVelvet)
+    {
+        RequireExactKeys(params, {"u_sigma", "u_f0", "u_baseColor"},
+                         "AshikhminVelvet parameters");
+        const double sigma = FiniteNumber(params.at("u_sigma"), "u_sigma");
+        const double f0 = FiniteNumber(params.at("u_f0"), "u_f0");
+        const Offline::Vec3 diffuse = Color(params.at("u_baseColor"), "u_baseColor");
+        if (sigma <= 0 || sigma > 1 || f0 < 0 || f0 > 1 ||
+            diffuse.x > 1 || diffuse.y > 1 || diffuse.z > 1)
+            throw std::runtime_error("Invalid AshikhminVelvet parameter range");
+        if (prepareGeometry)
+        {
+            auto velvet = std::make_shared<const Offline::VelvetMaterial>(
+                Offline::makeVelvetMaterial(sigma, f0, diffuse));
+            instance.velvet = velvet.get();
+            input.instanceVelvets.push_back(std::move(velvet));
+        }
     }
     else
     {

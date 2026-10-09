@@ -97,7 +97,7 @@ VL 是离线渲染的唯一出图入口；纯 CPU `vl_offline_core` 由根工程
 数值测试不需要 Vulkan 窗口。当前架构边界见
 `documents/architecture/vl-offline-rendering.md`。VL 已接入冻结的
 World/MI/mesh/纹理输入、渐进会话和 Vulkan 离线显示；支持范围只限
-Lambert、ClothSheen、ClothFiber 的已验证配置，遇到不支持的环境、光源、
+Lambert、ClothSheen、ClothFiber、AshikhminVelvet 的已验证配置，遇到不支持的环境、光源、
 动画或材质时会在准备阶段拒绝，不回退到 DefaultLit。资源仓库中的
 `Maps/SC_offline_shared/SC_offline_shared.json` 是共用实时/离线路径的
 Lambert 受控场景，启动不修改全局 `initScene`：
@@ -135,6 +135,18 @@ build/bin/main.exe --offline --initial-scene Maps/SC_paper_case_estevez_kulla_20
 
 论文没有给出 Fig. 1 的完整相机、灯光和颜色数值；这里的平行光与灰色
 舞台是受控对照所选配置，不是对原图灯型的断言。
+
+Ashikhmin、Premože 与 Shirley 2000 §6.4 / Fig. 11 右图的 Velvet
+独立离线 case 使用倒高斯微法线分布 `sigma=0.5` 和相关遮蔽。
+场景沿用 VL 布料 FBX，近黑色、背景板、平行光和相机均为本地选择。
+论文明确使用单个远处小光源且不包含间接光；在离线控制台执行
+`offline bounces 0` 后再观察和导出：
+
+```powershell
+build/bin/main.exe --offline --initial-scene Maps/SC_Cloth_Ashikhmin2000_Fig11Velvet/SC_Cloth_Ashikhmin2000_Fig11Velvet.json --dev-ui
+```
+
+此 case 验证材质响应，不是 Fig. 11 的像素级复刻，也不增加 runtime `ShadingModelID`。
 
 开发者 UI 的 Offline Renderer 面板可切换模式、设置 spp/反弹/seed、
 暂停、继续、停止、重启，查看 Combined/Direct/Indirect 并导出。

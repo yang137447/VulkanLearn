@@ -290,6 +290,8 @@ Vec3 evaluateBsdf(const AlbedoTable& albedo, Hit hit, Vec3 view, Vec3 light)
     if (dot(hit.normal, view) <= 0.0 || dot(hit.normal, light) <= 0.0) return {};
     if (instance.model == SurfaceModel::Lambert)
         return sampledBase / kPi;
+    if (instance.model == SurfaceModel::AshikhminVelvet)
+        return velvetBrdf(*instance.velvet, hit.normal, view, light);
     const double eV = albedo.sample(dot(hit.normal, view), hit.roughness);
     const double eL = albedo.sample(dot(hit.normal, light), hit.roughness);
     const double removed = std::max(eV, eL);
@@ -343,11 +345,18 @@ DirectionSample sampleDirection(Hit hit, Random& rng)
     const Vec3 bitangent = cross(hit.normal, tangent);
     const Vec3 direction = tangent * (sinTheta * std::cos(phi)) +
                            bitangent * (sinTheta * std::sin(phi)) + hit.normal * noL;
-    const double pdf = cosineWeight * std::max(noL, 0.0) / kPi +
-                       (1.0 - cosineWeight) / (2.0 * kPi);
-    return {direction, pdf};
+    return {direction, directionPdf(hit, direction)};
 }
 
+double directionPdf(Hit hit, Vec3 direction)
+{
+    const double noL = dot(hit.normal, direction);
+    if (noL <= 0.0) return 0.0;
+    const double cosineWeight =
+        hit.instance->model == SurfaceModel::Lambert ? 1.0 : 0.5;
+    return cosineWeight * noL / kPi +
+           (1.0 - cosineWeight) / (2.0 * kPi);
+}
 
 double powerWeight(double a, double b)
 {
@@ -368,10 +377,7 @@ Vec3 directFabricAreaLight(const Scene& scene, const AlbedoTable& albedo,
     };
     const auto pdf = [&](Vec3 l) {
         return yarn ? microcylinderDirectionPdf(hit, view, l, *fabric)
-                    : (hit.instance->model == SurfaceModel::Lambert)
-                        ? std::max(0.0, dot(hit.normal, l)) / kPi
-                        : (0.5 * std::max(0.0, dot(hit.normal, l)) / kPi +
-                           0.5 / (2.0 * kPi));
+                    : directionPdf(hit, l);
     };
     const auto visible = [&](Vec3 l, double distance) {
         const double side = dot(hit.geometricNormal, l);
