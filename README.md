@@ -97,7 +97,7 @@ VL 是离线渲染的唯一出图入口；纯 CPU `vl_offline_core` 由根工程
 数值测试不需要 Vulkan 窗口。当前架构边界见
 `documents/architecture/vl-offline-rendering.md`。VL 已接入冻结的
 World/MI/mesh/纹理输入、渐进会话和 Vulkan 离线显示；支持范围只限
-Lambert、ClothSheen、ClothFiber、AshikhminVelvet 的已验证配置，遇到不支持的环境、光源、
+Lambert、ClothSheen、ClothFiber、AshikhminVelvet、AshikhminSatin 的已验证配置，遇到不支持的环境、光源、
 动画或材质时会在准备阶段拒绝，不回退到 DefaultLit。资源仓库中的
 `Maps/SC_offline_shared/SC_offline_shared.json` 是共用实时/离线路径的
 Lambert 受控场景，启动不修改全局 `initScene`：
@@ -123,6 +123,22 @@ build/bin/main.exe --offline --initial-scene Maps/SC_offline_cloth/SC_offline_cl
 
 这仍是自建几何对照，不是带人模服装的 S-17 验收或论文原图复刻。
 FBX 随附的 normal/AO 等烘焙图尚未进入离线材质适配，不参与此场景。
+
+Ashikhmin、Premože 与 Shirley 2000 Fig. 11 的 Satin / Velvet 是两种独立
+离线模型，不是同一材质的粗糙度变体。以下两场景共用同一 FBX、物体变换、
+无地面的远处竖直背景板、相机与平行光；主光旋转 `[-25,-5,0]`、
+强度 `5`。背景板正常受光，投影落在画面外，不通过关闭阴影修饰布料。
+启动后设 `offline bounces 0`：
+
+```powershell
+build/bin/main.exe --offline --initial-scene Maps/SC_paper_case_ashikhmin_premoze_shirley_2000_fig11_satin/SC_paper_case_ashikhmin_premoze_shirley_2000_fig11_satin.json
+build/bin/main.exe --offline --initial-scene Maps/SC_Cloth_Ashikhmin2000_Fig11Velvet/SC_Cloth_Ashikhmin2000_Fig11Velvet.json
+```
+
+Satin 的纤维方向取 UV0 U，MI 可通过 `u_fiberRotationDegrees` 旋转；
+两臂的染色、灯位和机位是本地选择，不是恢复的原场景元数据。
+验证结果与差异见 `documents/plan/rendering/shading-model-case-records.md`
+的 `AS-01` / `AS-02`。两者实时模式均明确拒绝。
 
 单面方形面光的背面虽不发光，光源几何仍会遮挡相机主射线；调灯位或
 尺寸时要避免让它进入主视线。

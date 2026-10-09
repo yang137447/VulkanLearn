@@ -59,6 +59,7 @@ Offline::SurfaceModel ParseModel(const nlohmann::json& material)
     if (model == "ClothSheen") return Offline::SurfaceModel::ClothSheen;
     if (model == "ClothFiber") return Offline::SurfaceModel::ClothFiber;
     if (model == "AshikhminVelvet") return Offline::SurfaceModel::AshikhminVelvet;
+    if (model == "AshikhminSatin") return Offline::SurfaceModel::AshikhminSatin;
     throw std::runtime_error("Unknown offlineModel: " + model);
 }
 
@@ -142,6 +143,34 @@ void ApplyMaterial(const nlohmann::json& material,
                 Offline::makeVelvetMaterial(sigma, f0, diffuse));
             instance.velvet = velvet.get();
             input.instanceVelvets.push_back(std::move(velvet));
+        }
+    }
+    else if (instance.model == Offline::SurfaceModel::AshikhminSatin)
+    {
+        RequireExactKeys(params, {"u_sigmaFlat", "u_sigmaEnds", "u_flatWeight",
+                                  "u_f0", "u_baseColor", "u_fiberRotationDegrees"},
+                         "AshikhminSatin parameters");
+        const double sigmaFlat = FiniteNumber(params.at("u_sigmaFlat"), "u_sigmaFlat");
+        const double sigmaEnds = FiniteNumber(params.at("u_sigmaEnds"), "u_sigmaEnds");
+        const double flatWeight = FiniteNumber(params.at("u_flatWeight"), "u_flatWeight");
+        const double f0 = FiniteNumber(params.at("u_f0"), "u_f0");
+        const Offline::Vec3 diffuse = Color(params.at("u_baseColor"), "u_baseColor");
+        instance.fiberRotationDegrees = FiniteNumber(
+            params.at("u_fiberRotationDegrees"), "u_fiberRotationDegrees");
+        if (sigmaFlat < 0.05 || sigmaFlat > 1 || sigmaEnds < 0.05 || sigmaEnds > 1 ||
+            flatWeight < 0 || flatWeight > 1 || f0 < 0 || f0 > 1 ||
+            diffuse.x > 1 || diffuse.y > 1 || diffuse.z > 1 ||
+            std::abs(instance.fiberRotationDegrees) > 360)
+            throw std::runtime_error("Invalid AshikhminSatin parameter range");
+        if (!instance.mesh->hasValidUvFrames)
+            throw std::runtime_error("AshikhminSatin requires non-degenerate UV axes");
+        if (prepareGeometry)
+        {
+            // worker 只读冻结表与方向；MI 变化不会修改旧会话持有的材质。
+            auto satin = std::make_shared<const Offline::SatinMaterial>(
+                Offline::makeSatinMaterial(sigmaFlat, sigmaEnds, flatWeight, f0, diffuse));
+            instance.satin = satin.get();
+            input.instanceSatins.push_back(std::move(satin));
         }
     }
     else

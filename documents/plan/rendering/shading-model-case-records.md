@@ -1172,11 +1172,73 @@ Cloth 总览 `/rendering/materials/shading-models/cloth-sheen/` 保留案例入�
 
 | 字段 | 内容 |
 | --- | --- |
-| **范围** | 本 case 复现 Fig. 11 右图的**各向同性** Velvet；不等同于 Fig. 13 的倾斜纤维/非物理分布 |
+| **范围** | 本 case 复现 Fig. 11 右图的**各向同性** Velvet；不等同于 Fig. 13 的倾斜纤维/非物理分布；左图 Satin 由 `AS-02` 独立实现 |
 | **论文闭包** | 式(35) `p(h) ∝ exp(-cot²θ/σ²)`，图示 `σ=0.5`；式(18) `g(k)=∫max(h·k,0)p(h)dω`，式(25) 单方向可见性，式(14) 方位角相关遮蔽（15° 高斯宽度），式(11) 镜面 BRDF；§5.2 的 Schlick Fresnel、非金属 `f0=0.05`；式(29)/(30) 的 `R(k)` 与互易漫反射补偿 |
 | **实现** | `source/render/offline/core/models/ashikhminVelvet.cpp`：`p` 归一化与 `<h·n>`、`g` 和 `R` 在冻结材质时确定性求积；方向采样采用已有的半球余弦/均匀混合，面积光 MIS 和续射复用同一 PDF；World/MI 的 `AshikhminVelvet` 只走离线 core，不消费 `ShadingModelID` |
 | **case 资产** | `Maps/SC_Cloth_Ashikhmin2000_Fig11Velvet/SC_Cloth_Ashikhmin2000_Fig11Velvet.json`；与既有 Cloth case 共用原 FBX，当前无地面，背景改用 `SM_ashikhmin_fig11_background` 竖直板；`sigma=0.5`、`f0=0.05` 源于论文；`MI_ashikhmin_fig11_velvet.json` 显式取近黑色 `ρd=0.002`，为本地选择，不修改 M_ 的通用默认值 |
 | **证据** | core GTest：`g(n)=<h·n>`、互易性、相关遮蔽增强回射、方向采样 PDF、白炉 3 角度 × 2 Fresnel 参数；adapter GTest：材质冻结与非法 `σ`；material-schema GTest：离线身份校验。实际 World 加载、32 spp 导出见资源仓库 `Generated/OfflineRenderer/SC_Cloth_Ashikhmin2000_Fig11Velvet-*/` 的 PFM/PPM/manifest |
 | **差异** | 原图使用相同几何对照 Satin/Velvet，但论文没有发布网格、机位、灯位和漫反射色值；本地场景不能作逐像素比较。论文明确用单个远处小光源且无间接光，导出时需 `offline bounces 0`；场景默认渲染器设置并不能从 scene JSON 固定反弹数。`g`/`R` 为有限分辨率确定性积分，近法线的方位投影退化在实现中取无关遮蔽极限。 |
-| **状态** | ◐ 离线闭包和32 spp 成图已完成；尚无原图像素标定及 Velvet 的独立论文参考积分，不能宣称 Fig. 11 完整对齐 |
+| **同条件对照** | 当前 32 spp 导出 `SC_Cloth_Ashikhmin2000_Fig11Velvet-a97485626a6b-32`，与 `AS-02` 的 Satin 共用相机、灯光、网格及变换、背景与曝光；主光 `rotation=[-25,-5,0] / intensity=5`，两臂 `ρd=0.002`，均为本地选择。取消地面后单独调光，不修改 `σ` 来冒充 Satin 亮带；此前 `aeb4223823c3-32` 是无地面/光强 10，`8733e62b9952-32` 是 `[-50,-5,0]` / L 背板，两份均保留为历史证据 |
+| **状态** | ◐ 离线闭包、32 spp 成图和 Satin 同条件对照已完成；尚无原图像素标定及 Velvet 的独立论文参考积分，不能宣称 Fig. 11 完整对齐 |
+
+## AS-02 — Ashikhmin、Premože 与 Shirley 2000 §6.3 / Fig. 11 Satin
+
+| 字段 | 内容 |
+| --- | --- |
+| **范围** | Fig. 11 左侧 Satin；与 `AS-01` 的 Velvet 是不同法线分布，不是 GGX 的 roughness 变体；两者仅支持 VL 离线 |
+| **论文闭包** | 式(34) 的圆柱高斯 `p(h)=c exp[-(hx/hz)²/σx²]`，`σy=∞`；§6.3 取 `0.7 p_flat + 0.3 p_ends`，`σx=0.1/0.3`，每个 p 独立归一化后按面积混合；统一用式(18)/(26) 的 g 和无关遮蔽、§5.2 的 Schlick `f0=0.05`、式(29)/(30) 的 R 与互易漫反射补偿。没有给 Satin 加 Velvet 的 15° 回射相关项，也没有相加两个完整 BRDF |
+| **数值实现** | `source/render/offline/core/models/ashikhminSatin.cpp`。令 `hy=s`、`hx=sqrt(1-s²)sinβ`、`hz=sqrt(1-s²)cosβ`，`dω=ds dβ`；`tanβ=σx t` 的 192 点确定性积分覆盖 `t∈[-8,8]`，s 的正投影解析积分。g/R 冻结为第一象限 65×33 表；R 使用 64×256 半球积分；`σx∈[0.05,1]` 是当前数值支持范围，不将更窄宽度静默夹到下限 |
+| **方向契约** | `UV0 U` 投影到 shading-normal 切平面定义局部 x 纤维轴，y 为 `n×x`；`u_fiberRotationDegrees` 绕 shading normal 旋转。镜像和双面符号由分布的 x/y 对称性处理；退化 UV 在 preflight 拒绝。原论文没有发布本地网格的 UV 方向，当前 0° 是 VL 选择 |
+| **case 资产** | `Maps/SC_paper_case_ashikhmin_premoze_shirley_2000_fig11_satin/SC_paper_case_ashikhmin_premoze_shirley_2000_fig11_satin.json`；`SM_ashikhmin_fig11_satin.json` 引用 Velvet 同一个 FBX，材质 `M_offlineAshikhminSatin` / `MI_ashikhmin_fig11_satin`。网格、布面变换、背景、相机、平行光、`ρd=0.002` 与 Velvet 对齐，只切换材质；新场景遵循小写 `SC_<category>_<paper>_<content>` |
+| **模块证据** | Satin 10 项 core GTest：归一化、面积权重、独立 256×1024 半球 g 参考（0.3% 相对误差容差加 1e-5）、互易性、方向高光、纤维旋转、3 个天顶角×3 个方位角白炉（1.5% 容差）、PDF 一致性、非法数值与未拥有材质拒绝。adapter 3 项 Satin 测试验证冻结参数、边界拒绝及退化 UV；材质 schema 接受显式离线身份。全部 core/adapter/coordinator/schema 共 177 项测试通过 |
+| **导出证据** | 当前 1280×720 / 32 spp / 0 bounces / exposure=1 完整导出：`Generated/OfflineRenderer/SC_paper_case_ashikhmin_premoze_shirley_2000_fig11_satin-b11b261dfb6c-32/`；与 Velvet 的 `a97485626a6b-32` 均通过 `verify_vl_export.py`。相机、灯光、mesh digests、物体变换、背景及显示参数由 manifest 对比确认一致；近景拼图保留完整布面，两臂同范围裁切且没有调亮。此前 `40b2f43d561a-32` 是无地面/光强 10，`25f5b0defab0-32` 是高位光与 L 背板，两份均保留为历史证据 |
+| **差异与边界** | 本地球顶布面与论文平桌几何不同，灯位、染色、UV 轴与显示映射不是恢复的论文元数据；当前集中亮带与 Velvet 柔暗反射可区分，但顶部亮区和原图褶皱布局未对齐。采样复用余弦/均匀混合，未加入专用各向异性重要性采样；数值表与 MI 仅冻结在 CPU session，不占 `ShadingModelID`、forward/deferred dispatch 或 GBuffer |
+| **状态** | ◐ 两臂离线效果与同条件对照已完成；原图像素复刻、更多参数的高精度积分扫描及 runtime 升级仍未完成 |
+
+### Fig. 11 光照与无地面背景迭代
+
+- 此轮只改两场景的背景网格/背景 MI 和方向光旋转；布料参数、FBX 及变换、
+  相机、光强 `10`、反弹 `0`、曝光 `1` 均不变，冻结 manifest 已与上一轮核对。
+- 两臂移除 `RoundedStage`，共享 `Common/Source/Models/plot_quad.obj`：
+  背景位置 `[0,0,-40]`、旋转 `[0,0,0]`、缩放 `[100,100,1]`，
+  Lambert 色值 `[0.45,0.43,0.43,1]`。它是正常受光的竖直背景几何，
+  不是环境光、无光照材质或关闭遮挡的假背景；本轮不引入新的背景 authoring 通道。
+- 此轮主光 `rotation=[-25,-5,0]`，约 25° 仰角、5° 水平偏角，强度 `10`；
+  `position` 不决定平行光方向。20° / 10° 候选在完整画面底边仍出现投影；
+  20° / 35° 侧向候选则削弱 Velvet 的柔和高光并出现较硬褶皱明暗，均未保留。
+  最终背景投影在画面外，不为消除地面硬影而牺牲材质方向响应。
+- 此轮对照 `Generated/OfflineRenderer/Comparisons/ashikhmin2000_fig11_satin_velvet_background.png`
+  及同名 JSON 指向两份完整导出；裁切范围 `[420,170,860,690]`，
+  保留布面下缘。完整导出的上/下/左/右背景带逐通道极值均等于背景像素，
+  没有残留承影地面或边缘投影。这是本地构图验证，不能据此断言已恢复论文灯位。
+- 本轮未修改引擎或材质 evaluator，因此不重复模块构建；两场景的实际
+  World 加载、完整导出、PFM 有限性和 Combined=Direct+Indirect 检查均通过。
+
+### Fig. 11 Satin 显示空间亮度迭代
+
+- 固定论文参数 `sigmaFlat=0.1`、`sigmaEnds=0.3`、`flatWeight=0.7`、
+  `f0=0.05`，同时固定本地染色 `rho_d=0.002`，仅试纤维旋转 `0/30/60/90°`。
+  8 spp 的相同 mask 下，灰度 P95/P99 分别为 `130/167`、`132/165`、
+  `139/159`、`143/161`，灰度不低于 128 的面积占比约 `5.34/5.67/9.51/13.52%`。
+  0° 的亮区面积最小，90° 会把更大面积抬亮，因此最终保持 UV0 U 的 `0°`，
+  从 MI 移除临时旋转覆盖，恢复 M_ 默认值，没有用旋转规避 BRDF 峰值。
+- 固定 0° 后试方向光强度 `10/5/3`。相同几何和 Reinhard+sRGB 显示下，
+  10 的 Satin 高光明显偏强，3 又使背景和布面整体过暗；5 是论文观感与背景
+  明度之间的折中。该扫描是显示空间外观诊断，不是论文曝光或辐射量标定。
+- 最终 32 spp / 1280×720、固定 mask 的 Satin 灰度 P95/P99：
+  `126/157 → 96/124`，灰度不低于 128 的面积占比 `4.82% → 0.84%`；
+  Velvet 最终为 `49/90`。论文图裁切的 Satin 是 `75/135`，但几何、分辨率、
+  mask 和显示映射不同，这些读数仅辅助判断亮区强弱，不能作为 BRDF 正确性验收。
+  本轮没有调整背景色、灯光方向、曝光或 tone mapping，更没有单独降低 Satin
+  镜面强度。前一版没有饱和到白色，准确说是亮带偏强，不是传感器或显示裁切过曝。
+- 诊断图与数据：`artifacts/velvet/appearance-scan/rotation.png`、
+  `artifacts/velvet/appearance-scan/intensity.png`、
+  `artifacts/velvet/appearance-scan/final.png`。最终 32 spp 对照：
+  `Generated/OfflineRenderer/Comparisons/ashikhmin2000_fig11_satin_velvet_light5.png`；
+  Satin/Velvet 的完整导出分别为 `SC_paper_case_ashikhmin_premoze_shirley_2000_fig11_satin-b11b261dfb6c-32`
+  和 `SC_Cloth_Ashikhmin2000_Fig11Velvet-a97485626a6b-32`。
+- 两臂的实际 World 加载与完整导出检查均通过。冻结 manifest 证明与光强 10
+  基线相比，材质、灯光方向、相机、几何、背景和显示映射未变；相同 seed /
+  32 spp 的 Combined PFM 每通道恰为原值的 `0.5`，两臂最大绝对误差均为 `0`。
+  该结果只验证此轮变化来自共享光强，没有证明论文灯光强度就是 5。
 

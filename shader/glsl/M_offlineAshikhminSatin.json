@@ -1,0 +1,47 @@
+{
+  "name": "M_offlineAshikhminSatin",
+  "type": "material",
+  "shadingModel": "DefaultLit",
+  "realtimeSupported": false,
+  "offlineModel": "AshikhminSatin",
+  "renderStates": {"renderMode": "Opaque", "cullMode": "None"},
+  "macros": {},
+  "parameters": {
+    "u_sigmaFlat": {
+      "type": "float", "default": 0.1,
+      "description": "Ashikhmin 2000 Sec. 6.3 flat fiber normal width sigma_x; sigma_y is infinite",
+      "range": {"min": 0.05, "max": 1}
+    },
+    "u_sigmaEnds": {
+      "type": "float", "default": 0.3,
+      "description": "Ashikhmin 2000 Sec. 6.3 bent fiber normal width sigma_x",
+      "range": {"min": 0.05, "max": 1}
+    },
+    "u_flatWeight": {
+      "type": "float", "default": 0.7,
+      "description": "Sec. 6.3 normalized distribution area fraction; ends fraction is one minus this",
+      "range": {"min": 0, "max": 1}
+    },
+    "u_f0": {
+      "type": "float", "default": 0.05,
+      "description": "Sec. 6 dielectric normal reflectance",
+      "range": {"min": 0, "max": 1}
+    },
+    "u_fiberRotationDegrees": {
+      "type": "float", "default": 0,
+      "description": "VL authored fiber axis rotation from UV0 U around the shading normal",
+      "range": {"min": -360, "max": 360}
+    },
+    "u_baseColor": {
+      "type": "color", "default": [0.018, 0.018, 0.018, 1],
+      "description": "Eq. (30) diffuse reflectance rho_d; not a specular tint",
+      "channels": {
+        "x": {"name": "red", "description": "线性红色反射率", "range": {"min": 0, "max": 1}},
+        "y": {"name": "green", "description": "线性绿色反射率", "range": {"min": 0, "max": 1}},
+        "z": {"name": "blue", "description": "线性蓝色反射率", "range": {"min": 0, "max": 1}},
+        "w": {"name": "opacity", "description": "固定不透明", "range": {"min": 1, "max": 1}}
+      }
+    }
+  },
+  "textures": {}
+}

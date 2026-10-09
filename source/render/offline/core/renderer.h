@@ -109,8 +109,27 @@ struct VelvetMaterial
 VelvetMaterial makeVelvetMaterial(double sigma, double f0, Vec3 diffuse);
 double velvetSpecular(const VelvetMaterial& material, Vec3 n, Vec3 v, Vec3 l);
 Vec3 velvetBrdf(const VelvetMaterial& material, Vec3 n, Vec3 v, Vec3 l);
+constexpr int kSatinMuSize = 65;
+constexpr int kSatinPhiSize = 33;
+// 冻结材质持有 §6.3 混合分布的 g/R；局部 x 为 UV0 的 U 纤维方向，
+// y 为 n×x。只服务离线求值，不占 runtime ID 或 GBuffer。
+struct SatinMaterial
+{
+    double sigmaFlat = 0.1, sigmaEnds = 0.3, flatWeight = 0.7;
+    double f0 = 0.05;
+    Vec3 diffuse{};
+    double normalizationFlat = 0.0, normalizationEnds = 0.0;
+    double normalMean = 0.0, diffuseScale = 0.0;
+    std::array<double, kSatinMuSize * kSatinPhiSize> g{}, reflectance{};
+};
+SatinMaterial makeSatinMaterial(double sigmaFlat, double sigmaEnds,
+                               double flatWeight, double f0, Vec3 diffuse);
+double satinDensity(const SatinMaterial& material, Vec3 h);
+double satinProjectedArea(const SatinMaterial& material, Vec3 direction);
+double satinSpecular(const SatinMaterial& material, Vec3 v, Vec3 l);
+Vec3 satinBrdf(const SatinMaterial& material, Vec3 v, Vec3 l);
 enum class SurfaceModel {
-    ClothSheen, ClothFiber, Lambert, AshikhminVelvet
+    ClothSheen, ClothFiber, Lambert, AshikhminVelvet, AshikhminSatin
 };
 struct MeshInstance
 {
@@ -125,10 +144,12 @@ struct MeshInstance
     double roughness = 0.4;
     const FabricMaterial* fabric = nullptr;
     const VelvetMaterial* velvet = nullptr;
+    const SatinMaterial* satin = nullptr;
     const GroomMap* groom = nullptr;
     const ColorMap* baseColorMap = nullptr;
     const ColorMap* sheenColorMap = nullptr;
     double yarnRotationDegrees = 0.0;
+    double fiberRotationDegrees = 0.0;
 };
 struct Hit
 {
@@ -138,6 +159,7 @@ struct Hit
     double roughness = 0.0;
     const MeshInstance* instance = nullptr;
 };
+Vec3 evaluateSatin(const SatinMaterial& material, const Hit& hit, Vec3 v, Vec3 l);
 struct GroomMap
 {
     int width = 0, height = 0;

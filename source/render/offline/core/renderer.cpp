@@ -292,6 +292,8 @@ Vec3 evaluateBsdf(const AlbedoTable& albedo, Hit hit, Vec3 view, Vec3 light)
         return sampledBase / kPi;
     if (instance.model == SurfaceModel::AshikhminVelvet)
         return velvetBrdf(*instance.velvet, hit.normal, view, light);
+    if (instance.model == SurfaceModel::AshikhminSatin)
+        return evaluateSatin(*instance.satin, hit, view, light);
     const double eV = albedo.sample(dot(hit.normal, view), hit.roughness);
     const double eL = albedo.sample(dot(hit.normal, light), hit.roughness);
     const double removed = std::max(eV, eL);

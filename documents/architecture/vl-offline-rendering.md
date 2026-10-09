@@ -47,7 +47,7 @@ The root `vl_offline_core_tests` and `vl_offline_adapter_tests` /
 checks live under `tool/validation/offline/`; they are external validation
 scripts, not engine runtime-test flags. Supported inputs remain bounded to
 static meshes, explicit no-environment scenes,
-Lambert/ClothSheen/ClothFiber/AshikhminVelvet
+Lambert/ClothSheen/ClothFiber/AshikhminVelvet/AshikhminSatin
 configurations, directional or one-sided square area lighting, and the
 documented texture/groom formats. Unsupported features fail preflight rather
 than silently falling back to DefaultLit. Large-texture synchronous preflight
@@ -60,3 +60,21 @@ specular reflectance `R`; the table is frozen with the session input.
 It does not share ClothSheen's Charlie distribution or its albedo LUT.
 Its current MI accepts scalar `sigma`, scalar `f0`, and constant linear
 diffuse reflectance only; no velvet texture or runtime dispatch exists.
+
+`AshikhminSatin` independently reproduces section 6.3 / Fig. 11's left arm:
+the individually normalized cylindrical normal distributions are mixed by
+area before computing a single `g`, normal mean and `R`. It uses Eq. (26)'s
+uncorrelated visibility, not Velvet's Eq. (14) correlation or a sum of
+separately compensated BRDFs. Its frozen `g`/`R` tables use 65 cosine samples
+and 33 azimuth samples over a symmetry-folded quadrant. Projected-area
+integration uses the cylindrical distribution's analytic transverse integral;
+`R` uses 64 x 256 hemisphere quadrature of the same mixed specular kernel.
+
+Satin authoring accepts `u_sigmaFlat` / `u_sigmaEnds` in `[0.05,1]`,
+`u_flatWeight` / `u_f0` in `[0,1]`, constant linear `u_baseColor` in `[0,1]`,
+and `u_fiberRotationDegrees` in `[-360,360]`. `sigma_y` is fixed at infinity,
+not approximated by an arbitrary large number; narrower widths need a new
+quadrature-accuracy contract first. UV0 U defines the local fiber x axis,
+projected onto the shading tangent plane; y is `n x x`. Rotation is around
+the shading normal. Degenerate UVs fail World/MI preflight. No Satin texture,
+runtime shader, GBuffer allocation or `ShadingModelID` dispatch is added.

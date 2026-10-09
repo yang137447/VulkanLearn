@@ -5,7 +5,8 @@ add_library(vl_offline_core STATIC
     colorMap.cpp
     models/clothSheen.cpp
     models/clothFiber.cpp
-    models/ashikhminVelvet.cpp)
+    models/ashikhminVelvet.cpp
+    models/ashikhminSatin.cpp)
 
 target_compile_features(vl_offline_core PUBLIC cxx_std_17)
 # 保留现有 core/renderer.h 等接口路径，且不依赖 tool/ 中的旧 CLI。

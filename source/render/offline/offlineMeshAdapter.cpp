@@ -68,7 +68,7 @@ std::shared_ptr<const Offline::Mesh> BuildOfflineMesh(const MeshSection& section
         else
         {
             // 退化 UV 不参与纱线方向推导；A/Lambert 仍可使用几何，但
-            // B 模型的 preflight 必须在入会话前拒绝没有有效 UV 轴的 section。
+            // B/Satin 的 preflight 必须在入会话前拒绝没有有效 UV 轴的 section。
             mesh->hasValidUvFrames = false;
             triangle.dpdu = edge1;
             triangle.dpdv = edge2;
