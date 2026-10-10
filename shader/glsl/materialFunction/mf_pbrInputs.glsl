@@ -12,11 +12,16 @@ MaterialInputs EvaluateMFPbrInputs(in MaterialFunctionContext context)
 
     // 第一版 PBR 复用一张 albedo 贴图，BaseColor = 贴图 * Tint * 顶点色。
     #if USE_ALBEDO_MAP
-        vec4 albedoColor = texture(albedoMap, context.texCoord) * u_tintColor;
+        vec2 albedoTexCoord = context.texCoord;
+        vec4 albedoColor = texture(albedoMap, albedoTexCoord) * u_tintColor;
     #else
         vec4 albedoColor = u_tintColor;
     #endif
-    vec4 baseColor = albedoColor * vec4(context.vertexColor.rgb, 1.0);
+    #if USE_VERTEX_COLOR
+        vec4 baseColor = albedoColor * vec4(context.vertexColor.rgb, 1.0);
+    #else
+        vec4 baseColor = albedoColor;
+    #endif
     inputs.baseColor = baseColor.rgb;
     inputs.opacity = baseColor.a;
     inputs.opacityMask = baseColor.a;
@@ -45,7 +50,7 @@ MaterialInputs EvaluateMFPbrInputs(in MaterialFunctionContext context)
     #if USE_NORMAL_MAP
         vec3 normalTS =
             texture(normalMap, context.texCoord).xyz * 2.0 - 1.0;
-        // 保留顶点阶段传来的 T/B/N 方向，避免与烘焙端切线空间产生额外偏差。
+        // 保留插值后的 MikkTSpace 基和烘焙端 handedness，不额外正交化或翻转 G。
         inputs.normal = TransformMaterialNormalToWorld(context, normalTS);
     #endif
     inputs.tangent = OrthonormalizeMaterialTangent(

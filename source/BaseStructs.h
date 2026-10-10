@@ -146,6 +146,8 @@ struct alignas(4) LightSSBOHeader
 
 struct alignas(16) LightGPU
 {
+    // xyz 为线性 RGB tint；w 为方向光 lux，或点光/聚光 cd * 100^2。
+    // 仅 GPU 打包吸收厘米距离平方因子，不能作为规范光强回写 World。
     Eigen::Vector4f colorIntensity;
     Eigen::Vector4f positionRadius;
     Eigen::Vector4f directionPad;

@@ -41,13 +41,15 @@ void main()
         uboVP.previousViewProjection * uboM.previousModel * vec4(vertex.localPosition, 1.0);
     outputVertex.worldPosition =
         (modelMatrix * vec4(vertex.localPosition, 1.0)).xyz;
+    // 在插值前去除模型缩放的长度因子；否则 scale=100 时 N 长度变为 0.01，
+    // T 长度变为 100，MikkTSpace 片元解码会被错误的相对长度扭曲。
     outputVertex.worldNormal =
-        GetNormal_WS_Unnormalized(modelMatrix, vertex.localNormal);
+        GetNormal_WS(modelMatrix, vertex.localNormal);
     outputVertex.vertexColor = vertex.vertexColor;
     outputVertex.texCoord = vertex.texCoord;
     outputVertex.texCoord1 = vertex.texCoord1;
     outputVertex.worldTangent = vec4(
-        GetDirection_WS_Unnormalized(modelMatrix, vertex.localTangent.xyz),
+        GetDirection_WS(modelMatrix, vertex.localTangent.xyz),
         vertex.localTangent.w);
 
     gl_Position = outputVertex.clipPosition;

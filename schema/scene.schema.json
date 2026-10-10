@@ -12,6 +12,15 @@
             "type": "string",
             "const": "scene"
         },
+        "description": {
+            "type": "string",
+            "minLength": 1
+        },
+        "worldUnit": {
+            "type": "string",
+            "const": "cm",
+            "description": "场景位置、尺寸、裁剪面和导入后的世界长度均使用厘米。"
+        },
         "objects": {
             "type": "array",
             "items": {
@@ -20,6 +29,7 @@
                     { "$ref": "#/$defs/directionalLightObject" },
                     { "$ref": "#/$defs/pointLightObject" },
                     { "$ref": "#/$defs/spotLightObject" },
+                    { "$ref": "#/$defs/squareAreaLightObject" },
                     { "$ref": "#/$defs/cameraObject" },
                     { "$ref": "#/$defs/environmentObject" }
                 ]
@@ -29,6 +39,8 @@
     "required": [
         "name",
         "type",
+        "description",
+        "worldUnit",
         "objects"
     ],
     "additionalProperties": false,
@@ -40,6 +52,87 @@
             },
             "minItems": 3,
             "maxItems": 3
+        },
+        "lightColor": {
+            "$ref": "#/$defs/vec3",
+            "description": "线性 RGB 光色，范围由运行时校验限制为 [0,1]。"
+        },
+        "directionalShadow": {
+            "type": "object",
+            "properties": {
+                "castShadows": { "type": "boolean" },
+                "dynamicShadowDistance": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "description": "厘米制阴影距离。Bias 与各类 fraction 仍为无量纲参数。"
+                },
+                "dynamicShadowCascades": { "type": "integer", "minimum": 1, "maximum": 4 },
+                "cascadeDistributionExponent": { "type": "number", "minimum": 1, "maximum": 10 },
+                "cascadeTransitionFraction": { "type": "number", "minimum": 0, "maximum": 1 },
+                "shadowDistanceFadeoutFraction": { "type": "number", "minimum": 0, "maximum": 1 },
+                "shadowBias": { "type": "number", "minimum": 0, "maximum": 1 },
+                "shadowSlopeBias": { "type": "number", "minimum": 0, "maximum": 1 },
+                "shadowCascadeBiasDistribution": { "type": "number", "minimum": 0, "maximum": 1 }
+            },
+            "additionalProperties": false
+        },
+        "exposure": {
+            "type": "object",
+            "properties": {
+                "mode": {
+                    "enum": [
+                        "ev100",
+                        "physical",
+                        "auto"
+                    ]
+                },
+                "ev100": {
+                    "type": "number"
+                },
+                "aperture": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                },
+                "shutterSeconds": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                },
+                "iso": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                },
+                "compensation": {
+                    "type": "number"
+                },
+                "autoMinEv100": {
+                    "type": "number"
+                },
+                "autoMaxEv100": {
+                    "type": "number"
+                },
+                "autoSpeedUp": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                },
+                "autoSpeedDown": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                },
+                "autoTargetGray": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "maximum": 1
+                }
+            },
+            "required": [
+                "mode",
+                "ev100",
+                "aperture",
+                "shutterSeconds",
+                "iso",
+                "compensation"
+            ],
+            "additionalProperties": false
         },
         "meshObject": {
             "type": "object",
@@ -92,10 +185,17 @@
                     "$ref": "#/$defs/vec3"
                 },
                 "color": {
-                    "$ref": "#/$defs/vec3"
+                    "$ref": "#/$defs/lightColor"
                 },
                 "intensity": {
-                    "type": "number"
+                    "type": "number",
+                    "minimum": 0
+                },
+                "intensityUnit": {
+                    "const": "lux"
+                },
+                "shadow": {
+                    "$ref": "#/$defs/directionalShadow"
                 }
             },
             "required": [
@@ -104,7 +204,8 @@
                 "position",
                 "rotation",
                 "color",
-                "intensity"
+                "intensity",
+                "intensityUnit"
             ],
             "additionalProperties": false
         },
@@ -125,14 +226,22 @@
                     "$ref": "#/$defs/vec3"
                 },
                 "color": {
-                    "$ref": "#/$defs/vec3"
+                    "$ref": "#/$defs/lightColor"
                 },
                 "intensity": {
-                    "type": "number"
+                    "type": "number",
+                    "minimum": 0
+                },
+                "intensityUnit": {
+                    "enum": [
+                        "cd",
+                        "lm"
+                    ]
                 },
                 "radius": {
                     "type": "number",
-                    "description": "当前 loader 未使用，但现有场景文件中仍有保留。"
+                    "minimum": 0,
+                    "description": "旧字段，当前实时光照不消费；后续应迁移为有明确单位的光源几何参数。"
                 }
             },
             "required": [
@@ -141,7 +250,8 @@
                 "position",
                 "rotation",
                 "color",
-                "intensity"
+                "intensity",
+                "intensityUnit"
             ],
             "additionalProperties": false
         },
@@ -162,20 +272,32 @@
                     "$ref": "#/$defs/vec3"
                 },
                 "color": {
-                    "$ref": "#/$defs/vec3"
+                    "$ref": "#/$defs/lightColor"
                 },
                 "intensity": {
-                    "type": "number"
+                    "type": "number",
+                    "minimum": 0
+                },
+                "intensityUnit": {
+                    "enum": [
+                        "cd",
+                        "lm"
+                    ]
                 },
                 "radius": {
                     "type": "number",
-                    "description": "当前 loader 未使用，但现有场景文件中仍有保留。"
+                    "minimum": 0,
+                    "description": "旧字段，当前实时光照不消费；后续应迁移为有明确单位的光源几何参数。"
                 },
                 "cone_angle_outer": {
-                    "type": "number"
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "exclusiveMaximum": 90
                 },
                 "cone_angle_inner": {
-                    "type": "number"
+                    "type": "number",
+                    "minimum": 0,
+                    "exclusiveMaximum": 90
                 }
             },
             "required": [
@@ -185,8 +307,55 @@
                 "rotation",
                 "color",
                 "intensity",
+                "intensityUnit",
                 "cone_angle_outer",
                 "cone_angle_inner"
+            ],
+            "additionalProperties": false
+        },
+        "squareAreaLightObject": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string",
+                    "const": "squareAreaLight"
+                },
+                "position": {
+                    "$ref": "#/$defs/vec3"
+                },
+                "normal": {
+                    "$ref": "#/$defs/vec3"
+                },
+                "color": {
+                    "$ref": "#/$defs/lightColor"
+                },
+                "size": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                },
+                "intensity": {
+                    "type": "number",
+                    "minimum": 0
+                },
+                "intensityUnit": {
+                    "enum": [
+                        "cd",
+                        "lm"
+                    ]
+                }
+            },
+            "required": [
+                "name",
+                "type",
+                "position",
+                "normal",
+                "color",
+                "size",
+                "intensity",
+                "intensityUnit"
             ],
             "additionalProperties": false
         },
@@ -217,6 +386,12 @@
                 },
                 "scale": {
                     "$ref": "#/$defs/vec3"
+                },
+                "look_at": {
+                    "$ref": "#/$defs/vec3"
+                },
+                "exposure": {
+                    "$ref": "#/$defs/exposure"
                 }
             },
             "required": [
@@ -227,7 +402,8 @@
                 "far_clip",
                 "position",
                 "rotation",
-                "scale"
+                "scale",
+                "exposure"
             ],
             "additionalProperties": false
         },
@@ -240,6 +416,36 @@
                 "type": {
                     "type": "string",
                     "const": "environment"
+                },
+                "environment": {
+                    "type": "object",
+                    "properties": {
+                        "type": {
+                            "enum": [
+                                "none",
+                                "hdri",
+                                "proceduralSky"
+                            ]
+                        },
+                        "hdrPath": {
+                            "type": "string"
+                        },
+                        "cubeSize": {
+                            "type": "integer",
+                            "minimum": 1
+                        },
+                        "intensity": {
+                            "type": "number",
+                            "minimum": 0
+                        },
+                        "skyParameters": {
+                            "type": "object"
+                        }
+                    },
+                    "required": [
+                        "type"
+                    ],
+                    "additionalProperties": false
                 },
                 "hdrPath": {
                     "type": "string"

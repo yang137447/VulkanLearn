@@ -91,6 +91,39 @@ build/bin/main.exe --no-dev-ui
 RML/RCSS/本地化文件在开发模式下支持候选解析、校验、提交式热重载；失败候选
 不会替换最后一个有效页面。实现契约见 `documents/architecture/game-ui-stack.md`。
 
+### Lookdev 资产审阅场景
+
+`Maps/SC_lookdev/SC_lookdev.json` 是独立的中性审阅场景：镜面球、
+18% 漫反射灰球、24 色参考卡和连续灰阶。它不改变默认启动场景，不启用
+TAA/FSR。首次使用先用 Python 3 生成场景与本地派生资产，然后启动：
+
+```powershell
+py -3 tool/lookdev/build_scene.py
+.\tool\lookdev\run_lookdev.ps1
+```
+
+生成器只依赖 Python 3 标准库。启动脚本固定 EV0 场景、
+ACES fitted 显示曲线和零 Bloom；不要仅从其他场景继承未记录的后处理状态。
+生成器会重建它拥有的 `Maps/SC_lookdev/` JSON，派生 HDR/OBJ/PNG 位于
+`resourcePath/Generated/Lookdev/`。材质测量、截图命令与限制见
+`documents/rendering/lookdev-scene.md`。
+
+UE `AssetsPreview.zip` 中的文章 HDRI 可以通过 UE 5.7 导出，再用于文章构图
+还原场景。该流程不直接解析 `.uasset`，也不覆盖正式 `SC_lookdev` 基线：
+
+```powershell
+.\tool\lookdev\convert_assets_preview.ps1 `
+  -ZipPath 'C:\Users\pb.adcycyys001\Downloads\AssetsPreview.zip' `
+  -UnrealEditor 'D:\sofeware\Epic Games\UE_5.7\Engine\Binaries\Win64\UnrealEditor.exe'
+```
+
+导出的 HDRI 位于 `resourcePath/Maps/SC_lookdev/Source/UE_AssetsPreview/`，
+文章还原场景位于 `resourcePath/Generated/Lookdev/SC_lookdev_article.json`。
+该场景使用 ZIP 中的 `HDRI/EpicQuadPanorama_Gray.uasset`，经 UE 5.7
+导出为 HDR 后作为唯一环境光和反射源。这是一条几何、材质槽、参考纹理与
+HDRI 的文章构图还原链路，不是 UE 材质资产或显示变换的逐项等价迁移；
+当前也不包含 TAA/FSR。
+
 ### VL 离线渲染
 
 VL 是离线渲染的唯一出图入口；纯 CPU `vl_offline_core` 由根工程构建，

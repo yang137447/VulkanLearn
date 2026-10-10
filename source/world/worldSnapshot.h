@@ -13,6 +13,7 @@
 
 #include "baseStructs.h"
 #include "environmentType.h"
+#include "render/camera/cameraExposure.h"
 
 namespace VL
 {
@@ -31,6 +32,7 @@ struct ResourceHandle
 
 struct CameraSnapshot
 {
+    CameraExposure exposure;
     Eigen::Matrix4f view = Eigen::Matrix4f::Identity();
     Eigen::Matrix4f projection = Eigen::Matrix4f::Identity();
     Eigen::Matrix4f viewProjection = Eigen::Matrix4f::Identity();
@@ -75,6 +77,8 @@ struct LightSnapshot
     RuntimeId lightId = 0;
     LightSnapshotType type = LightSnapshotType::Point;
     Eigen::Vector3f color = Eigen::Vector3f::Ones();
+    // 按 type 固定为 Directional: lux，Point/Spot: cd，SquareArea: cd/m^2。
+    // 所有 position/size/clip 统一为 cm；颜色为线性 RGB tint。
     float intensity = 1.0f;
     Eigen::Vector3f position = Eigen::Vector3f::Zero();
     float radius = 0.0f;

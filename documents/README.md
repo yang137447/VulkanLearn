@@ -55,6 +55,11 @@ Documentation in this repository is split by responsibility:
 
 ## Current Rendering Contracts
 
+- `rendering/lookdev-scene.md`
+  - neutral lookdev scene, fixed exposure/display preset, diffuse calibration,
+    generated asset ownership, and screenshot measurement
+- `rendering/physical-lighting-and-exposure.md`
+  - centimeter world lengths, explicit light units, camera EV100 and legacy resource migration
 - `rendering/descriptor-imageinfo-management.md`
   - texture `vk::DescriptorImageInfo` ownership and descriptor write lifetime rules
 - `rendering/debug-runtime-commands.md`

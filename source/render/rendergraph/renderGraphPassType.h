@@ -16,7 +16,8 @@ enum class RenderGraphPassType
     Geometry,
     ForwardOpaque,
     ForwardTransparent,
-    PostProcess
+    PostProcess,
+    AutoExposure
 };
 
 struct RenderGraphPassTypeName
@@ -25,13 +26,14 @@ struct RenderGraphPassTypeName
     std::string_view name;
 };
 
-inline constexpr std::array<RenderGraphPassTypeName, 5>
+inline constexpr std::array<RenderGraphPassTypeName, 6>
     RenderGraphPassTypeNames = {{
         {RenderGraphPassType::Shadow, "shadow"},
         {RenderGraphPassType::Geometry, "geometry"},
         {RenderGraphPassType::ForwardOpaque, "forwardOpaque"},
         {RenderGraphPassType::ForwardTransparent, "forwardTransparent"},
-        {RenderGraphPassType::PostProcess, "postProcess"}
+        {RenderGraphPassType::PostProcess, "postProcess"},
+        {RenderGraphPassType::AutoExposure, "autoExposure"}
     }};
 
 inline std::optional<RenderGraphPassType> ParseRenderGraphPassType(

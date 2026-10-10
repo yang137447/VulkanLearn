@@ -131,7 +131,7 @@ high 4 bits = SelectiveOutputMask     (DecodeGBufferFlags,        gbufferCodec.g
 | ID / 模型 | A | B | C | D (customData) | E | Velocity | F | sceneColorBase |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 0 `Unlit` | normal, a=0 | metallic, 0.5, roughness | baseColor, AO | 通用 `customData` | `precomputedShadowFactors` | xy=velocity | tangent.xyz, a=anisotropy | emissive, opacity |
-| 1 `DefaultLit` | normal, a=0 | metallic, **0.5**, roughness | baseColor, AO | 通用 `customData` | `precomputedShadowFactors` | xy=velocity | tangent.xyz, a=anisotropy | emissive, opacity |
+| 1 `DefaultLit` | normal, a=0 | metallic, **specular**, roughness | baseColor, AO | 通用 `customData` | `precomputedShadowFactors` | xy=velocity | tangent.xyz, a=anisotropy | emissive, opacity |
 | 2 `Subsurface` | normal, a=0 | metallic, 0.5, roughness | baseColor, AO | color.rgb, weight.a | `precomputedShadowFactors` | xy=velocity | wrapWidth, backscatterPower, backscatterWeight, thickness | emissive, **transmissionWeight** |
 | 3 `PreintegratedSkin` | normal, a=0 | metallic, specular, roughness | baseColor, AO | skinLutId, thickness, thicknessScale, weight | **characterLighting** | xy=velocity | curvature, transmissionWeight, oct(bottomNormal) | emissive, opacity |
 | 4 `ClearCoat` | normal, a=0 | metallic, 0.5, roughness | baseColor, AO | weight, roughness, oct.y, oct.x（**z/w 顺序与 UE Legacy 一致**） | `precomputedShadowFactors` | xy=velocity | tangent.xyz, a=anisotropy | emissive, opacity |
@@ -145,8 +145,10 @@ high 4 bits = SelectiveOutputMask     (DecodeGBufferFlags,        gbufferCodec.g
 
 - `gbufferA.a` 是 UE Legacy 的 `PerObjectGBufferData` 槽位，当前无生产者，固定写 0
   （`gbufferCodec.glsl:221-224`）。它**不是空闲通道**：UE 对齐语义要求它留给 per-object data。
-- `gbufferB.g` 的 `0.5` 是 V1 固定介电高光合同；只有 Eye / Hair / TwoSidedFoliage /
-  PreintegratedSkin 走模型专用 B 语义（`gbufferCodec.glsl:228-267`）。
+- `DefaultLit` 的 `gbufferB.g` 保存作者 `specular`，默认仍为 `0.5`；
+  forward/deferred 的直接光和 IBL 均消费它。非金属 `specular=0` 明确关闭镜面
+  lobe，供 lookdev 灰板测光使用；不会关闭金属反射。其余旧模型保留 V1 的
+  `0.5` 或既有模型专用 B 语义，不新增附件或更改通道布局。
 - **ID 2 `Subsurface` 的 opacity 不往返**：decode 把 `surface.opacity` 强制回 1.0
   （`gbufferCodec.glsl:433-435`），它的 `sceneColorBase.a` 已被 `transmissionWeight` 占用，
   不要用 ID 2 验证 alpha。

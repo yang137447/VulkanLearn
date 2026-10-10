@@ -6,6 +6,7 @@
 #include "render/resource/rendererResourceCache.h"
 #include "sceneNode.h"
 #include "world/loading/worldLoader.h"
+#include "render/lighting/physicalLighting.h"
 
 namespace VL
 {
@@ -49,6 +50,7 @@ std::shared_ptr<Camera> BuildCamera(const nlohmann::json& node)
     camera->SetName(name);
     camera->SetHFOV(fov);
     camera->SetClip(nearClip, farClip);
+    camera->SetExposure(ReadCameraExposure(node));
     if (node.contains("look_at"))
     {
         const Eigen::Vector3f lookAt =
@@ -74,7 +76,7 @@ std::shared_ptr<DirectionalLight> BuildDirectionalLight(const nlohmann::json& no
     Eigen::Vector3f position = JsonParser::ParseValue<Eigen::Vector3f>(node["position"]);
     Eigen::Vector3f rotation = JsonParser::ParseValue<Eigen::Vector3f>(node["rotation"]);
     Eigen::Vector3f color = JsonParser::ParseValue<Eigen::Vector3f>(node["color"]);
-    const float intensity = JsonParser::ParseValue<float>(node["intensity"]);
+    const float intensity = ReadCanonicalLightIntensity(node);
 
     std::shared_ptr<DirectionalLight> light = std::make_shared<DirectionalLight>();
     light->SetName(name);
@@ -91,7 +93,7 @@ std::shared_ptr<PointLight> BuildPointLight(const nlohmann::json& node)
     Eigen::Vector3f position = JsonParser::ParseValue<Eigen::Vector3f>(node["position"]);
     Eigen::Vector3f rotation = JsonParser::ParseValue<Eigen::Vector3f>(node["rotation"]);
     Eigen::Vector3f color = JsonParser::ParseValue<Eigen::Vector3f>(node["color"]);
-    const float intensity = JsonParser::ParseValue<float>(node["intensity"]);
+    const float intensity = ReadCanonicalLightIntensity(node);
     const float radius = node.value("radius", 0.0f);
 
     std::shared_ptr<PointLight> light = std::make_shared<PointLight>();
@@ -110,7 +112,7 @@ std::shared_ptr<SpotLight> BuildSpotLight(const nlohmann::json& node)
     Eigen::Vector3f position = JsonParser::ParseValue<Eigen::Vector3f>(node["position"]);
     Eigen::Vector3f rotation = JsonParser::ParseValue<Eigen::Vector3f>(node["rotation"]);
     Eigen::Vector3f color = JsonParser::ParseValue<Eigen::Vector3f>(node["color"]);
-    const float intensity = JsonParser::ParseValue<float>(node["intensity"]);
+    const float intensity = ReadCanonicalLightIntensity(node);
     const float radius = node.value("radius", 0.0f);
     // 场景 JSON 使用角度制；GPU 的 acos 与锥角比较使用弧度制。
     const float coneAngleOuter =
@@ -137,7 +139,7 @@ WorldSquareAreaLight BuildSquareAreaLight(const nlohmann::json& node)
     light.normal = JsonParser::ParseValue<Eigen::Vector3f>(node["normal"]).normalized();
     light.color = JsonParser::ParseValue<Eigen::Vector3f>(node["color"]);
     light.size = node["size"].get<float>();
-    light.intensity = node["intensity"].get<float>();
+    light.intensity = ReadCanonicalLightIntensity(node);
     return light;
 }
 

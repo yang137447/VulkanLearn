@@ -1,0 +1,32 @@
+#version 450
+#include "autoExposureContract.glsl"
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+layout(set = 0, binding = 1) uniform sampler2D sceneColor;
+
+shared uint localBins[64];
+
+void main()
+{
+    uint lane = gl_LocalInvocationIndex;
+    if (lane < kExposureBinCount)
+        localBins[lane] = 0u;
+    barrier();
+
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 extent = textureSize(sceneColor, 0);
+    if (all(lessThan(pixel, extent)))
+    {
+        // 完整 sceneColor 像素取样，不再以 32x18 稀疏点近似；负值/黑色只在 log 定义域钳制。
+        float luminance = max(dot(texelFetch(sceneColor, pixel, 0).rgb,
+            vec3(0.2126, 0.7152, 0.0722)), 1e-4);
+        float normalizedLog = (log2(luminance) - kMinLogLuminance) /
+            (kMaxLogLuminance - kMinLogLuminance);
+        uint bin = uint(clamp(floor(normalizedLog * 64.0), 0.0, 63.0));
+        atomicAdd(localBins[bin], 1u);
+    }
+    // 边缘越界线程仍需参与 barrier，避免非完整 workgroup 死锁。
+    barrier();
+    if (lane < kExposureBinCount)
+        atomicAdd(histogram.bins[lane], localBins[lane]);
+}

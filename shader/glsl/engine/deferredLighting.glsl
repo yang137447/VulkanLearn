@@ -95,7 +95,7 @@ DeferredLightingResult ShadeDefaultLitDeferredSurfaceDetailed(
         surface.baseColor,
         surface.roughness,
         surface.metallic,
-        0.5);
+        surface.specular);
 
     int cascadeIndex = 0;
     result.shadow = CalculateCsmShadow(
@@ -119,7 +119,7 @@ DeferredLightingResult ShadeDefaultLitDeferredSurfaceDetailed(
         surface.baseColor,
         surface.roughness,
         surface.metallic,
-        0.5);
+        surface.specular);
     ResolveDeferredLightingComposition(surface, result);
     return result;
 }
@@ -131,7 +131,7 @@ DeferredLightingResult ShadeUnlitDeferredSurfaceDetailed(
         CreateDefaultDeferredLightingResult();
     result.shadow = 1.0;
     result.nonDiffuseLighting =
-        surface.baseColor + surface.emissiveColor;
+        surface.emissiveColor;
     result.finalColor = result.nonDiffuseLighting;
     return result;
 }

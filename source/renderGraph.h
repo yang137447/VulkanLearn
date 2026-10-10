@@ -44,9 +44,11 @@ struct RenderResource
 };
 
 class MaterialInstance;
+class PipelineFactory;
 namespace VL
 {
 class RendererBackendVulkan;
+class AutoExposureCompute;
 
 enum class RenderGraphReleaseMode
 {
@@ -177,6 +179,8 @@ public:
     Renderpass* FindCanonicalShadowPass();
     const VL::CompiledRenderGraph& GetCompiledRenderGraph() const { return compiledFrameGraph; }
     const nlohmann::json& GetSourceJson() const noexcept { return sourceJson; }
+    void InitializeAutoExposure(PipelineFactory& factory, VL::RendererBackendVulkan& backend);
+    const std::shared_ptr<VL::AutoExposureCompute>& GetAutoExposure() const noexcept { return autoExposure; }
     const std::unordered_map<std::string, std::vector<RenderResource>>& GetResourcesMsaa() const { return resourcesMsaa; }
     const std::unordered_map<std::string, std::vector<RenderResource>>& GetResourcesResolve() const { return resourcesResolve; }
     // Initial render-graph setup creates pass-owned descriptors. Runtime
@@ -238,6 +242,7 @@ private:
     void MaybeFailDescriptorCreation();
 private:
     std::unordered_map<std::string, std::vector<RenderResource>> resourcesMsaa;
+    std::shared_ptr<VL::AutoExposureCompute> autoExposure;
     std::unordered_map<std::string, std::vector<RenderResource>> resourcesResolve;
 
     std::vector<std::string> renderpassesOrdered;

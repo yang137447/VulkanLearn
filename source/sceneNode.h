@@ -3,6 +3,7 @@
 #include <string>
 
 #include <Eigen/Dense>
+#include "render/camera/cameraExposure.h"
 
 class SceneNode
 {
@@ -87,6 +88,9 @@ private:
 class Camera: public SceneNode {
 public:
   Camera();
+  const VL::CameraExposure& GetExposure() const { return exposure; }
+  // 调用方在 JSON/命令边界完成校验；快照发布前只在 GT 修改。
+  void SetExposure(const VL::CameraExposure& value) { exposure = value; }
   void SetHFOV(float fov);
   void SetClip(float near, float far);
   inline float GetHFOV() const { return hFov; }
@@ -103,6 +107,7 @@ public:
 
 private:
   void UpdateViewMatrix();
+  VL::CameraExposure exposure;
 
   float hFov = 90.0f;
   float clipNear = 0.1f;

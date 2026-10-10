@@ -60,7 +60,7 @@ ForwardLightingResult ShadeDefaultLitForwardSurface(in MaterialSurface surface)
         surface.baseColor,
         surface.roughness,
         surface.metallic,
-        0.5);
+        surface.specular);
     #if defined(VL_FORWARD_DECLARE_SHADOWMAP_INPUT)
         int cascadeIndex = 0;
         result.shadow = CalculateCsmShadow(
@@ -84,7 +84,7 @@ ForwardLightingResult ShadeDefaultLitForwardSurface(in MaterialSurface surface)
         surface.baseColor,
         surface.roughness,
         surface.metallic,
-        0.5);
+        surface.specular);
     result.indirectLighting = result.indirectDiffuse + result.indirectSpecular;
     result.finalColor = surface.emissiveColor + result.directLighting + result.indirectLighting * surface.ambientOcclusion;
     return result;
@@ -92,7 +92,7 @@ ForwardLightingResult ShadeDefaultLitForwardSurface(in MaterialSurface surface)
 ForwardLightingResult ShadeUnlitForwardSurface(in MaterialSurface surface)
 {
     ForwardLightingResult result = CreateDefaultForwardLightingResult();
-    result.finalColor = surface.baseColor + surface.emissiveColor;
+    result.finalColor = surface.emissiveColor;
     return result;
 }
 

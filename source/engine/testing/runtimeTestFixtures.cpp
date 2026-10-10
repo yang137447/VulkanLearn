@@ -327,19 +327,20 @@ CreateWorldGraphTransactionHighLightScene(
                 std::max<size_t>(
                     pointLightCount,
                     1));
+        // 夹具也使用厘米和显式 cd；沿用旧的 6 m 环形布灯，不让单位迁移改变测试布局。
         objects.push_back({
             {"name",
              "WorldGraph_PointLight_" +
                  std::to_string(lightIndex)},
             {"type", "pointLight"},
             {"position",
-             {std::cos(angle) * 6.0,
-              2.5,
-              std::sin(angle) * 6.0}},
+             {std::cos(angle) * 600.0,
+              250.0,
+              std::sin(angle) * 600.0}},
             {"rotation", {0, 0, 0}},
             {"color", {1.0, 0.85, 0.65}},
-            {"intensity", 0.25},
-            {"radius", 5.0}});
+            {"intensityUnit", "cd"},
+            {"intensity", 250.0}});
     }
 
     const std::filesystem::path scenePath =
@@ -439,10 +440,12 @@ std::filesystem::path CreateShaderReloadTestScene(
         "  \"name\": \"Shader Reload Runtime Test Scene\",\n"
         "  \"type\": \"scene\",\n"
         // 场景描述是场景资产的必填字段（SceneAssetValidator）；运行时测试自己造的
-        // 临时场景同样要写，否则测试会因为数据契约而失败。
+        // 临时场景同样要写，否则测试会因为数据契约而失败。原始模型不改写，
+        // 以实例 scale 完成米到厘米转换；灯光单位与相机曝光不得依赖默认值。
         "  \"description\": \"Runtime-generated fixture for --shader-reload-test / "
         "--shader-compute-reload-test: two axis meshes whose materials get reloaded in "
         "place; not a shading-model case scene.\",\n"
+        "  \"worldUnit\": \"cm\",\n"
         "  \"objects\": [\n"
         "    {\n"
         "      \"name\": \"ShaderReloadAxis_001\",\n"
@@ -451,7 +454,7 @@ std::filesystem::path CreateShaderReloadTestScene(
             meshAssetPath.generic_string() +
             "\",\n"
         "      \"position\": [0, 0, 0],\n"
-        "      \"scale\": [1, 1, 1],\n"
+        "      \"scale\": [100, 100, 100],\n"
         "      \"rotation\": [0, 0, 0]\n"
         "    },\n"
         "    {\n"
@@ -460,27 +463,37 @@ std::filesystem::path CreateShaderReloadTestScene(
         "      \"modelPath\": \"" +
             batchMeshAssetPath.generic_string() +
             "\",\n"
-        "      \"position\": [2, 0, 0],\n"
-        "      \"scale\": [1, 1, 1],\n"
+        "      \"position\": [200, 0, 0],\n"
+        "      \"scale\": [100, 100, 100],\n"
         "      \"rotation\": [0, 0, 0]\n"
         "    },\n"
         "    {\n"
         "      \"name\": \"Sun_Light\",\n"
         "      \"type\": \"directionalLight\",\n"
-        "      \"position\": [0, 1, 0],\n"
+        "      \"position\": [0, 100, 0],\n"
         "      \"rotation\": [0, 45, 0],\n"
         "      \"color\": [1, 1, 1],\n"
-        "      \"intensity\": 1.0\n"
+        "      \"intensity\": 1000.0,\n"
+        "      \"intensityUnit\": \"lux\",\n"
+        "      \"shadow\": {\"dynamicShadowDistance\": 30000.0}\n"
         "    },\n"
         "    {\n"
         "      \"name\": \"Camera_01\",\n"
         "      \"type\": \"camera\",\n"
         "      \"fov\": 90,\n"
-        "      \"near_clip\": 0.1,\n"
-        "      \"far_clip\": 2000,\n"
-        "      \"position\": [0, 2, 6],\n"
+        "      \"near_clip\": 10.0,\n"
+        "      \"far_clip\": 200000.0,\n"
+        "      \"position\": [0, 200, 600],\n"
         "      \"rotation\": [0, 0, 0],\n"
-        "      \"scale\": [1, 1, 1]\n"
+        "      \"scale\": [1, 1, 1],\n"
+        "      \"exposure\": {\n"
+        "        \"mode\": \"ev100\",\n"
+        "        \"ev100\": 9.0,\n"
+        "        \"aperture\": 4.0,\n"
+        "        \"shutterSeconds\": 0.008,\n"
+        "        \"iso\": 100.0,\n"
+        "        \"compensation\": 0.0\n"
+        "      }\n"
         "    },\n"
         "    {\n"
         "      \"name\": \"Environment_01\",\n"
@@ -714,4 +727,3 @@ void CleanupGeneratedRuntimeFixtureIfNeeded(
 
 } // namespace RuntimeTestFixtures
 } // namespace VL
-

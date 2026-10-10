@@ -261,8 +261,9 @@ Scene JSON currently supports these `type` values:
 - `environment`
 
 If adding a new type, update both loader logic and documentation.
-(`SC_scene01` still uses a legacy `sunLight` object; it is the only one, the validator rejects it and the
-UI scene selector skips it — keep it as a historical reference, do not copy it into new scenes.)
+The historical `SC_scene01` `sunLight` object was migrated to
+`directionalLight` with `intensityUnit: "lux"`; new scenes must not author
+the rejected legacy `sunLight` type.
 
 ## Key Runtime Couplings
 

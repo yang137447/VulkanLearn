@@ -83,6 +83,30 @@ are applied to `UiSubsystem`, `UiActionType::Quit` is handled directly by
 `EngineLoop`, and render, post-process, environment, SpeedTree, and material-
 instance editor actions use their respective engine-owned command paths.
 
+RmlUi range inputs also emit `change` during programmatic binding updates,
+including value rounding and clamping. `UiBindingUpdateScope` suppresses float
+actions while loading, committing, or refreshing runtime documents. Read-only
+snapshots must never be changed by this UI feedback. Sun controls use lux and
+dynamic shadow distance controls use centimeters; their ranges are not asset
+validation limits.
+Camera movement speed uses cm/s: the default is 1000 cm/s, and the slider
+range is 50..10000 cm/s with a 50 cm/s step. These are the former movement
+values multiplied by 100; mouse rotation sensitivity is unchanged.
+
+The Post Process page exposes two exposure choices (Manual and Auto),
+manual EV100, compensation, and automatic min/max EV100.
+Exposure controls are populated from the active Camera through the read-only
+view model. Each edit queues one named field through `UiAction` and
+`RuntimeCommand`; the game thread validates the complete candidate against the
+current Camera before publishing it. Binding refresh never submits edits.
+Manual EV100 is shown only in manual mode; automatic mode shows its EV bounds.
+An authored physical-camera exposure is grouped under Manual and shows its
+derived EV100 read-only. Clicking Manual explicitly selects direct EV100 input;
+there is no separate Physical mode button. Loading or refreshing the UI does
+not convert physical-camera scene data.
+Compensation applies in every mode. These are session edits, not writes to the
+scene JSON; reloading a scene restores its authored values.
+
 ## Threading And Ownership
 
 The game thread owns `UiSubsystem`, the live RmlUi context, the ImGui context,

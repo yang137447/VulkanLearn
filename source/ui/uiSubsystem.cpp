@@ -32,6 +32,7 @@
 #include "platform/platformEvent.h"
 #include "platform/platformWindow.h"
 #include "ui/sceneObjectTypeSupport.h"
+#include "ui/uiBindingUpdateScope.h"
 
 namespace VL
 {
@@ -594,6 +595,7 @@ void UiSubsystem::Update(const UiViewModelSnapshot& viewModelSnapshot)
     lastViewModel.developerUiVisible = developerUiVisible;
     lastViewModel.locale = currentLocale;
 
+    UiBindingUpdateScope bindingUpdate(updatingRuntimeBindings);
     TryHotReload();
     SyncBindingData();
     dataModelHandle.DirtyAllVariables();
@@ -1109,6 +1111,24 @@ RuntimeResult<void> UiSubsystem::InitializeDataModel()
     bound = constructor.Bind("tone_reinhard_label", &bindingData.toneReinhardLabel) && bound;
     bound = constructor.Bind("tone_hable_label", &bindingData.toneHableLabel) && bound;
     bound = constructor.Bind("tone_aces_label", &bindingData.toneAcesLabel) && bound;
+    bound = constructor.Bind("has_camera", &bindingData.hasCamera) && bound;
+    bound = constructor.Bind("exposure_mode", &bindingData.exposureMode) && bound;
+    bound = constructor.Bind("exposure_mode_label", &bindingData.exposureModeLabel) && bound;
+    bound = constructor.Bind("exposure_manual_label", &bindingData.exposureManualLabel) && bound;
+    bound = constructor.Bind("exposure_physical_ev_label", &bindingData.exposurePhysicalEvLabel) && bound;
+    bound = constructor.Bind("exposure_auto_label", &bindingData.exposureAutoLabel) && bound;
+    bound = constructor.Bind("exposure_ev_label", &bindingData.exposureEvLabel) && bound;
+    bound = constructor.Bind("exposure_ev_value", &bindingData.exposureEvValue) && bound;
+    bound = constructor.Bind("exposure_ev", &bindingData.exposureEv) && bound;
+    bound = constructor.Bind("exposure_compensation_label", &bindingData.exposureCompensationLabel) && bound;
+    bound = constructor.Bind("exposure_compensation_value", &bindingData.exposureCompensationValue) && bound;
+    bound = constructor.Bind("exposure_compensation", &bindingData.exposureCompensation) && bound;
+    bound = constructor.Bind("exposure_min_ev_label", &bindingData.exposureMinEvLabel) && bound;
+    bound = constructor.Bind("exposure_min_ev_value", &bindingData.exposureMinEvValue) && bound;
+    bound = constructor.Bind("exposure_min_ev", &bindingData.exposureMinEv) && bound;
+    bound = constructor.Bind("exposure_max_ev_label", &bindingData.exposureMaxEvLabel) && bound;
+    bound = constructor.Bind("exposure_max_ev_value", &bindingData.exposureMaxEvValue) && bound;
+    bound = constructor.Bind("exposure_max_ev", &bindingData.exposureMaxEv) && bound;
     bound = constructor.Bind("bloom_strength_label", &bindingData.bloomStrengthLabel) && bound;
     bound = constructor.Bind("bloom_strength_value", &bindingData.bloomStrengthValue) && bound;
     bound = constructor.Bind("bloom_strength", &bindingData.bloomStrength) && bound;
@@ -1186,6 +1206,8 @@ RuntimeResult<void> UiSubsystem::InitializeDataModel()
     bound = constructor.BindEventCallback("tone_reinhard", &UiSubsystem::OnToneMappingReinhard, this) && bound;
     bound = constructor.BindEventCallback("tone_hable", &UiSubsystem::OnToneMappingHable, this) && bound;
     bound = constructor.BindEventCallback("tone_aces", &UiSubsystem::OnToneMappingAces, this) && bound;
+    bound = constructor.BindEventCallback("set_exposure_mode", &UiSubsystem::OnExposureModeSelected, this) && bound;
+    bound = constructor.BindEventCallback("exposure_value_changed", &UiSubsystem::OnExposureValueChanged, this) && bound;
     bound = constructor.BindEventCallback("bloom_strength_changed", &UiSubsystem::OnBloomStrengthChanged, this) && bound;
     bound = constructor.BindEventCallback("bloom_threshold_changed", &UiSubsystem::OnBloomThresholdChanged, this) && bound;
     bound = constructor.BindEventCallback("bloom_knee_changed", &UiSubsystem::OnBloomKneeChanged, this) && bound;
@@ -1520,6 +1542,7 @@ RuntimeResult<UiSubsystem::LocalizationDatabase> UiSubsystem::LoadLocalizationCa
 
 RuntimeResult<Rml::ElementDocument*> UiSubsystem::LoadDocumentCandidate()
 {
+    UiBindingUpdateScope bindingUpdate(updatingRuntimeBindings);
     Rml::Factory::ClearStyleSheetCache();
     Rml::Factory::ClearTemplateCache();
 
@@ -1578,6 +1601,7 @@ void UiSubsystem::CommitDocumentCandidate(
     Rml::ElementDocument& candidate,
     LocalizationDatabase localizationCandidate)
 {
+    UiBindingUpdateScope bindingUpdate(updatingRuntimeBindings);
     CapturePersistentDocumentState();
     ResetRuntimeInputState();
     Rml::ElementDocument* previousDocument = runtimeDocument;
@@ -1896,6 +1920,28 @@ void UiSubsystem::SyncBindingData()
     bindingData.toneReinhardLabel = Localize("tone.reinhard");
     bindingData.toneHableLabel = Localize("tone.hable");
     bindingData.toneAcesLabel = Localize("tone.aces");
+    bindingData.hasCamera = lastViewModel.hasCamera;
+    const CameraExposure& exposure = lastViewModel.cameraExposure;
+    bindingData.exposureMode = exposure.mode == ExposureMode::Auto ? 2 :
+        exposure.mode == ExposureMode::PhysicalCamera ? 1 : 0;
+    bindingData.exposureModeLabel = Localize("control.exposure_mode");
+    bindingData.exposureManualLabel = Localize("exposure.manual");
+    bindingData.exposurePhysicalEvLabel = Localize("control.exposure_physical_ev");
+    bindingData.exposureAutoLabel = Localize("exposure.auto");
+    bindingData.exposureEvLabel = Localize("control.exposure_ev");
+    bindingData.exposureEv = static_cast<float>(exposure.ev100);
+    // physical 配置属于固定曝光，UI 归到 Manual；只读显示相机推导的 EV，
+    // 不把未生效的作者 ev100 误当作当前曝光。显式选择 Manual 才切回 ev100 输入。
+    bindingData.exposureEvValue = FormatFloat(static_cast<float>(EffectiveEv100(exposure)));
+    bindingData.exposureCompensationLabel = Localize("control.exposure_compensation");
+    bindingData.exposureCompensation = static_cast<float>(exposure.compensation);
+    bindingData.exposureCompensationValue = FormatFloat(bindingData.exposureCompensation);
+    bindingData.exposureMinEvLabel = Localize("control.exposure_min_ev");
+    bindingData.exposureMinEv = static_cast<float>(exposure.autoMinEv100);
+    bindingData.exposureMinEvValue = FormatFloat(bindingData.exposureMinEv);
+    bindingData.exposureMaxEvLabel = Localize("control.exposure_max_ev");
+    bindingData.exposureMaxEv = static_cast<float>(exposure.autoMaxEv100);
+    bindingData.exposureMaxEvValue = FormatFloat(bindingData.exposureMaxEv);
     bindingData.bloomStrengthLabel = Localize("control.bloom_strength");
     bindingData.bloomStrength = lastViewModel.bloomStrength;
     bindingData.bloomStrengthValue = FormatFloat(lastViewModel.bloomStrength);
@@ -3025,6 +3071,11 @@ void UiSubsystem::QueueFloatAction(UiActionType type, float value)
 
 void UiSubsystem::QueueChangedFloatAction(UiActionType type, float value, float currentValue)
 {
+    // 快照 -> 控件只允许显示，不把滑条量化/截断结果伪装成人工调参。
+    if (updatingRuntimeBindings)
+    {
+        return;
+    }
     if (std::abs(value - currentValue) <= 0.0001f)
     {
         return;
@@ -3133,6 +3184,48 @@ void UiSubsystem::OnToneMappingAces(Rml::DataModelHandle, Rml::Event&, const Rml
     action.type = UiActionType::SetToneMappingMode;
     action.intValue = 3;
     QueueAction(std::move(action));
+}
+
+void UiSubsystem::QueueCameraExposureEdit(const std::string& field, float value)
+{
+    if (updatingRuntimeBindings || !lastViewModel.hasCamera)
+        return;
+    try
+    {
+        const CameraExposure candidate = EditCameraExposure(
+            lastViewModel.cameraExposure, field, value);
+        const CameraExposure& current = lastViewModel.cameraExposure;
+        if (candidate.mode == current.mode && candidate.ev100 == current.ev100 &&
+            candidate.compensation == current.compensation &&
+            candidate.autoMinEv100 == current.autoMinEv100 &&
+            candidate.autoMaxEv100 == current.autoMaxEv100)
+            return;
+    }
+    catch (const std::invalid_argument&)
+    {
+        // 无效输入不提交；下一次快照刷新恢复作者值，尤其是 min EV >= max EV。
+        return;
+    }
+    UiAction action;
+    action.type = UiActionType::SetCameraExposure;
+    action.stringValue = field;
+    action.floatValue = value;
+    QueueAction(std::move(action));
+}
+
+void UiSubsystem::OnExposureModeSelected(
+    Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& arguments)
+{
+    QueueCameraExposureEdit(
+        "mode",
+        static_cast<float>(arguments[0].Get<int>()));
+}
+
+void UiSubsystem::OnExposureValueChanged(
+    Rml::DataModelHandle, Rml::Event& event, const Rml::VariantList& arguments)
+{
+    QueueCameraExposureEdit(
+        arguments[0].Get<Rml::String>(), event.GetParameter<float>("value", 0.0f));
 }
 
 void UiSubsystem::OnBloomStrengthChanged(Rml::DataModelHandle, Rml::Event& event, const Rml::VariantList&)

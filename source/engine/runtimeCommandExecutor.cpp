@@ -363,6 +363,31 @@ void RuntimeCommandExecutor::ExecuteCommand(
         diagnostics.ReportInfo("Screenshot queued: " + screenshotPath);
         break;
     }
+    case RuntimeCommandType::SetCameraExposure:
+    {
+        const std::shared_ptr<World>& activeWorld = worldManager.GetActiveWorld();
+        if (!activeWorld || !activeWorld->GetCamera())
+        {
+            diagnostics.ReportWarning("Exposure command ignored because no active camera exists.");
+            break;
+        }
+        const std::shared_ptr<Camera>& camera = activeWorld->GetCamera();
+        try
+        {
+            // 按执行时的 Camera 状态只改一个字段；完整候选校验成功才写回，
+            // 避免连续 UI 命令覆盖彼此，或无效 EV 范围污染下一帧快照。
+            const CameraExposure candidate = EditCameraExposure(
+                camera->GetExposure(), command.stringValue, command.floatValue);
+            camera->SetExposure(candidate);
+            diagnostics.ReportInfo("Camera exposure " + command.stringValue +
+                " set to " + std::to_string(command.floatValue));
+        }
+        catch (const std::invalid_argument& error)
+        {
+            diagnostics.ReportWarning(error.what());
+        }
+        break;
+    }
     case RuntimeCommandType::SetCameraPosition:
     case RuntimeCommandType::SetCameraLookAt:
     case RuntimeCommandType::SetCameraPose:

@@ -40,6 +40,12 @@ void PassBarrier::ApplyCompiledBarrierPlan(
             // 如果资源刚被某个 pass 采样过，并且当前 pass 又要 load 它继续写/测，就需要在 beginRenderPass 前显式转回。
             TransitionShaderReadToAttachment(commandBuffer, renderGraph, barrier.resource, swapChainImageIndex);
         }
+        else if (barrier.type == VL::CompiledRenderGraphBarrierType::ShaderReadToStorage ||
+            barrier.type == VL::CompiledRenderGraphBarrierType::StorageToShaderRead)
+        {
+            TransitionStorage(commandBuffer, renderGraph, barrier.resource, swapChainImageIndex,
+                barrier.type == VL::CompiledRenderGraphBarrierType::ShaderReadToStorage);
+        }
     }
 }
 
@@ -68,10 +74,14 @@ void PassBarrier::TransitionAttachmentToShaderRead(
     vk::ImageMemoryBarrier imageBarrier;
     imageBarrier
         .setImage(resource.image)
+        .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+        .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
         .setSubresourceRange(vk::ImageSubresourceRange(aspectMask, 0, 1, 0, resource.arrayLayers));
 
     vk::PipelineStageFlags srcStage;
-    vk::PipelineStageFlags dstStage = vk::PipelineStageFlagBits::eFragmentShader;
+    // 图内 sceneColor 既可供 fragment 后处理，也可供 histogram compute 采样。
+    vk::PipelineStageFlags dstStage = vk::PipelineStageFlagBits::eFragmentShader |
+        vk::PipelineStageFlagBits::eComputeShader;
 
     if(bIsDepth)
     {
@@ -97,7 +107,7 @@ void PassBarrier::TransitionAttachmentToShaderRead(
     commandBuffer.pipelineBarrier(
         srcStage,
         dstStage,
-        vk::DependencyFlagBits::eByRegion,
+        vk::DependencyFlags(),
         0, nullptr,
         0, nullptr,
         1, &imageBarrier);
@@ -146,10 +156,30 @@ void PassBarrier::TransitionShaderReadToAttachment(
     }
 
     commandBuffer.pipelineBarrier(
-        vk::PipelineStageFlagBits::eFragmentShader,
+        vk::PipelineStageFlagBits::eFragmentShader | vk::PipelineStageFlagBits::eComputeShader,
         dstStage,
         vk::DependencyFlagBits::eByRegion,
         0, nullptr,
         0, nullptr,
         1, &imageBarrier);
+}
+
+void PassBarrier::TransitionStorage(vk::CommandBuffer& commandBuffer,
+    const RenderGraph& graph, const std::string& resourceName, uint32_t imageIndex, bool toStorage)
+{
+    const auto& resource = graph.GetResourcesResolve().at(resourceName).at(imageIndex);
+    vk::ImageMemoryBarrier barrier;
+    barrier.setImage(resource.image)
+        .setSubresourceRange(vk::ImageSubresourceRange(vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1))
+        .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED).setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+        .setOldLayout(toStorage ? vk::ImageLayout::eShaderReadOnlyOptimal : vk::ImageLayout::eGeneral)
+        .setNewLayout(toStorage ? vk::ImageLayout::eGeneral : vk::ImageLayout::eShaderReadOnlyOptimal)
+        .setSrcAccessMask(toStorage ? vk::AccessFlagBits::eShaderRead : vk::AccessFlagBits::eShaderWrite)
+        .setDstAccessMask(toStorage ? vk::AccessFlagBits::eShaderWrite : vk::AccessFlagBits::eShaderRead);
+    // 输出每 image 独立，但前次 Bloom/ToneMapping 读取仍须排在再次覆盖前。
+    // 归约后全图可读，禁止以 framebuffer-local/byRegion 依赖替代 compute -> fragment 可见性。
+    commandBuffer.pipelineBarrier(
+        toStorage ? vk::PipelineStageFlagBits::eFragmentShader : vk::PipelineStageFlagBits::eComputeShader,
+        toStorage ? vk::PipelineStageFlagBits::eComputeShader : vk::PipelineStageFlagBits::eFragmentShader,
+        {}, nullptr, nullptr, barrier);
 }

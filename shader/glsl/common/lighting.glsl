@@ -6,6 +6,7 @@
 #include "shadowFiltering.glsl"
 
 struct Light{
+    // CPU 上传时已将点光/聚光强度乘 100^2；方向光仍为 lux。
     vec4 colorIntensity;
     vec4 positionRadius;
     vec4 directionPad;
@@ -303,6 +304,12 @@ vec3 CalculateSpecularIbl(
     in float metallic,
     in float specular)
 {
+    // 非金属 Specular=0 是显式关闭镜面 lobe 的作者语义。仅令 F0=0
+    // 仍会保留 split-sum 的 B 项，污染灰板测光；金属不受此开关影响。
+    if (metallic == 0.0 && specular == 0.0)
+    {
+        return vec3(0.0);
+    }
     vec3 dielectricF0 = vec3(0.08 * specular);
     vec3 F0 = mix(dielectricF0, baseColor, metallic);
     return CalculateSpecularIblWithF0(
@@ -560,6 +567,14 @@ LightingLobes EvaluateDefaultPbrLightLobes(
 
     float NdotL = max(dot(N, L), 0.0);
     float NdotV = max(dot(N, V), 0.0);
+    // 与 IBL 的零高光语义一致：测光材质保留完整 Lambert 漫反射，
+    // 不让 F0=0 时 Schlick 的掠射项残留；默认 0.5 路径保持原模型。
+    if (metallic == 0.0 && specular == 0.0)
+    {
+        LightingLobes diffuseOnly = CreateLightingLobes();
+        diffuseOnly.diffuse = baseColor / PI * radiance * NdotL;
+        return diffuseOnly;
+    }
     vec3 dielectricF0 = vec3(0.08 * specular);
     vec3 F0 = mix(dielectricF0, baseColor, metallic);
     vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
@@ -833,8 +848,9 @@ LightingLobes CalculatePointLightLobes(
     in Light pointLight)
 {
     vec3 lightOffset = pointLight.positionRadius.xyz - pixelPos_WS;
-    float distance = length(lightOffset);
-    float attenuation = 1.0 / (distance * distance + 1e-4);
+    // 距离平方直接使用 cm^2；1 cm^2 等价于原先的 1e-4 m^2 近场软化项。
+    float distanceCm = length(lightOffset);
+    float attenuation = 1.0 / (distanceCm * distanceCm + 1.0);
     vec3 radiance =
         attenuation *
         pointLight.colorIntensity.w *
@@ -864,8 +880,8 @@ vec3 CalculateClearCoatPointLight(
     in Light pointLight)
 {
     vec3 lightOffset = pointLight.positionRadius.xyz - pixelPos_WS;
-    float distance = length(lightOffset);
-    float attenuation = 1.0 / (distance * distance + 1e-4);
+    float distanceCm = length(lightOffset);
+    float attenuation = 1.0 / (distanceCm * distanceCm + 1.0);
     vec3 radiance =
         attenuation *
         pointLight.colorIntensity.w *
@@ -901,16 +917,12 @@ vec3 CalculateClearCoatSpotLight(
     float spotLightAngle = acos(dot(
         lightDirectionToSurface_WS,
         -spotLight.directionPad.xyz));
-    float angleRange =
-        spotLight.coneAngleOuterInnerPadPad.y -
-        spotLight.coneAngleOuterInnerPadPad.x;
-    float angleIntensity = clamp(
-        (spotLightAngle - spotLight.coneAngleOuterInnerPadPad.x) /
-            angleRange,
-        0.0,
-        1.0);
-    float distance = length(lightOffset);
-    float attenuation = 1.0 / (distance * distance + 1e-4);
+    float angleIntensity = 1.0 - smoothstep(
+        spotLight.coneAngleOuterInnerPadPad.y,
+        spotLight.coneAngleOuterInnerPadPad.x,
+        spotLightAngle);
+    float distanceCm = length(lightOffset);
+    float attenuation = 1.0 / (distanceCm * distanceCm + 1.0);
     vec3 radiance =
         attenuation * angleIntensity *
         spotLight.colorIntensity.w *
@@ -944,16 +956,12 @@ LightingLobes CalculateSpotLightLobes(
     float spotLightAngle = acos(dot(
         lightDirectionToSurface_WS,
         -spotLight.directionPad.xyz));
-    float angleRange =
-        spotLight.coneAngleOuterInnerPadPad.y -
-        spotLight.coneAngleOuterInnerPadPad.x;
-    float angleIntensity = clamp(
-        (spotLightAngle - spotLight.coneAngleOuterInnerPadPad.x) /
-            angleRange,
-        0.0,
-        1.0);
-    float distance = length(lightOffset);
-    float attenuation = 1.0 / (distance * distance + 1e-4);
+    float angleIntensity = 1.0 - smoothstep(
+        spotLight.coneAngleOuterInnerPadPad.y,
+        spotLight.coneAngleOuterInnerPadPad.x,
+        spotLightAngle);
+    float distanceCm = length(lightOffset);
+    float attenuation = 1.0 / (distanceCm * distanceCm + 1.0);
     vec3 radiance =
         attenuation * angleIntensity *
         spotLight.colorIntensity.w *

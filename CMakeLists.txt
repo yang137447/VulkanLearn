@@ -58,6 +58,8 @@ if(VULKANLEARN_BUILD_TESTS)
     add_subdirectory(tool/offline-core-tests)
     add_subdirectory(tool/offline-integration-tests)
     add_subdirectory(tool/renderer-backend-tests)
+    add_subdirectory(tool/ui-control-tests)
+    add_subdirectory(tool/controller-tests)
 endif()
 
 option(VULKANLEARN_BUILD_SPEEDTREE_WIND_VALIDATION

@@ -182,6 +182,54 @@
                         <div class="section-page" data-if="active_section == 2">
                             <h2>{{tab_post_process_label}}</h2>
 
+                            <div data-if="has_camera">
+                                <div class="control-row">
+                                    <div class="control-topline">
+                                        <div class="control-label">{{exposure_mode_label}}</div>
+                                    </div>
+                                    <div class="control-buttons exposure-buttons">
+                                        <button id="exposure-manual" data-class-selected="exposure_mode != 2" data-event-click="set_exposure_mode(0)">{{exposure_manual_label}}</button>
+                                        <button id="exposure-auto" data-class-selected="exposure_mode == 2" data-event-click="set_exposure_mode(2)">{{exposure_auto_label}}</button>
+                                    </div>
+                                </div>
+                                <div class="control-row slider-row" data-if="exposure_mode == 0">
+                                    <div class="control-topline">
+                                        <div class="control-label">{{exposure_ev_label}}</div>
+                                        <div class="control-value">{{exposure_ev_value}}</div>
+                                    </div>
+                                    <input id="exposure-ev-slider" class="control-slider" type="range" min="-24" max="32" step="0.1" data-value="exposure_ev" data-event-change="exposure_value_changed('ev100')" />
+                                </div>
+                                <div class="control-row" data-if="exposure_mode == 1">
+                                    <div class="control-topline">
+                                        <div class="control-label">{{exposure_physical_ev_label}}</div>
+                                        <div class="control-value">{{exposure_ev_value}}</div>
+                                    </div>
+                                </div>
+                                <div class="control-row slider-row">
+                                    <div class="control-topline">
+                                        <div class="control-label">{{exposure_compensation_label}}</div>
+                                        <div class="control-value">{{exposure_compensation_value}}</div>
+                                    </div>
+                                    <input id="exposure-compensation-slider" class="control-slider" type="range" min="-24" max="24" step="0.1" data-value="exposure_compensation" data-event-change="exposure_value_changed('compensation')" />
+                                </div>
+                                <div data-if="exposure_mode == 2">
+                                    <div class="control-row slider-row">
+                                        <div class="control-topline">
+                                            <div class="control-label">{{exposure_min_ev_label}}</div>
+                                            <div class="control-value">{{exposure_min_ev_value}}</div>
+                                        </div>
+                                        <input id="exposure-min-ev-slider" class="control-slider" type="range" min="-24" max="32" step="0.1" data-value="exposure_min_ev" data-event-change="exposure_value_changed('autoMinEv100')" />
+                                    </div>
+                                    <div class="control-row slider-row">
+                                        <div class="control-topline">
+                                            <div class="control-label">{{exposure_max_ev_label}}</div>
+                                            <div class="control-value">{{exposure_max_ev_value}}</div>
+                                        </div>
+                                        <input id="exposure-max-ev-slider" class="control-slider" type="range" min="-24" max="32" step="0.1" data-value="exposure_max_ev" data-event-change="exposure_value_changed('autoMaxEv100')" />
+                                    </div>
+                                </div>
+                            </div>
+
                             <div class="control-row tone-row">
                                 <div class="control-topline">
                                     <div class="control-label">{{tone_mapping_label}}</div>
@@ -240,7 +288,7 @@
                                     <div class="control-label">{{sun_label}}</div>
                                     <div class="control-value">{{sun_value}}</div>
                                 </div>
-                                <input id="sun-intensity-slider" class="control-slider" type="range" min="0" max="10" step="0.01" data-value="sun_intensity" data-event-change="sun_intensity_changed" />
+                                <input id="sun-intensity-slider" class="control-slider" type="range" min="0" max="150000" step="1" data-value="sun_intensity" data-event-change="sun_intensity_changed" />
                             </div>
 
                             <h2>{{vegetation_heading}}</h2>
@@ -289,7 +337,7 @@
                                         <div class="control-label">{{shadow_dynamic_distance_label}}</div>
                                         <div class="control-value">{{shadow_dynamic_distance_value}}</div>
                                     </div>
-                                    <input id="shadow-dynamic-distance-slider" class="control-slider" type="range" min="5" max="1000" step="1" data-value="csm_dynamic_shadow_distance" data-event-change="csm_dynamic_shadow_distance_changed" />
+                                    <input id="shadow-dynamic-distance-slider" class="control-slider" type="range" min="500" max="100000" step="100" data-value="csm_dynamic_shadow_distance" data-event-change="csm_dynamic_shadow_distance_changed" />
                                 </div>
 
                                 <div class="control-row cascade-selector-row">
@@ -389,7 +437,7 @@
                                     <div class="control-label">{{camera_move_speed_label}}</div>
                                     <div class="control-value">{{camera_move_speed_value}}</div>
                                 </div>
-                                <input id="camera-move-speed-slider" class="control-slider" type="range" min="0.5" max="100" step="0.5" data-value="camera_move_speed" data-event-change="camera_move_speed_changed" />
+                                <input id="camera-move-speed-slider" class="control-slider" type="range" min="50" max="10000" step="50" data-value="camera_move_speed" data-event-change="camera_move_speed_changed" />
                             </div>
                             <div class="status-card">
                                 <div class="status-row">

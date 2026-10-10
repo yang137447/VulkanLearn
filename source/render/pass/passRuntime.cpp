@@ -66,6 +66,7 @@ void PassRuntime::RecordPass(const std::string& passName, PassRuntimeContext& co
         RecordPostProcessPass(context);
         return;
     case RenderGraphPassType::Unknown:
+    case RenderGraphPassType::AutoExposure:
         break;
     }
 

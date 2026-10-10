@@ -1,0 +1,74 @@
+#version 450
+#include "autoExposureContract.glsl"
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+layout(set = 0, binding = 0, std140) uniform ExposureParams {
+    vec4 range;
+    vec4 adaptation;
+    uvec4 control;
+    vec4 manual;
+} params;
+layout(set = 0, binding = 3, std430) buffer ExposureHistory {
+    float exposure[2];
+} history;
+layout(set = 0, binding = 4, r32f) uniform writeonly image2D finalExposure;
+
+shared uint prefix[64];
+shared float weightedLog[64];
+shared float weights[64];
+
+void main()
+{
+    uint lane = gl_LocalInvocationIndex;
+    if (params.control.x == 0u)
+    {
+        // 手动/物理相机不 dispatch histogram，也不读取旧 histogram 或未初始化历史。
+        if (lane == 0u)
+            imageStore(finalExposure, ivec2(0), vec4(params.manual.x, 0, 0, 1));
+        return;
+    }
+    prefix[lane] = histogram.bins[lane];
+    barrier();
+    // 64 lane 包含并行 prefix scan 与归约；只由 lane 0 完成一次跨帧适应。
+    for (uint offset = 1u; offset < 64u; offset <<= 1u)
+    {
+        uint previous = lane >= offset ? prefix[lane - offset] : 0u;
+        barrier();
+        prefix[lane] += previous;
+        barrier();
+    }
+    float sampleCount = float(prefix[63]);
+    float binEnd = float(prefix[lane]);
+    float binStart = binEnd - float(histogram.bins[lane]);
+    float weight = max(min(binEnd, sampleCount * kHighPercentile) -
+        max(binStart, sampleCount * kLowPercentile), 0.0);
+    float center = kMinLogLuminance + (float(lane) + 0.5) / 64.0 *
+        (kMaxLogLuminance - kMinLogLuminance);
+    weights[lane] = weight;
+    weightedLog[lane] = weight * center;
+    barrier();
+    for (uint stride = 32u; stride > 0u; stride >>= 1u)
+    {
+        if (lane < stride)
+        {
+            weights[lane] += weights[lane + stride];
+            weightedLog[lane] += weightedLog[lane + stride];
+        }
+        barrier();
+    }
+    if (lane == 0u)
+    {
+        float desired = params.range.x / exp2(weightedLog[0] / weights[0]);
+        desired = clamp(desired * exp2(params.range.w), params.range.y, params.range.z);
+        float exposure = desired;
+        if (params.control.y != 0u)
+        {
+            float previous = history.exposure[params.control.z];
+            float speed = desired > previous ? params.adaptation.x : params.adaptation.y;
+            // 保留 VL 的 1/s 指数适应，不宣称实现 UE 全套 EV-space 适应算法。
+            exposure = mix(previous, desired, 1.0 - exp(-speed * params.adaptation.z));
+        }
+        history.exposure[params.control.w] = exposure;
+        imageStore(finalExposure, ivec2(0), vec4(exposure, 0, 0, 1));
+    }
+}

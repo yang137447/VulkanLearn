@@ -18,6 +18,7 @@
 #include "render/backend/rendererObjectGpuResources.h"
 #include "render/foliage/speedTreeWindTransform.h"
 #include "render/frontend/renderScene.h"
+#include "render/lighting/physicalLighting.h"
 #include "render/resource/resourceRetireQueue.h"
 #include "shaderReflect.h"
 
@@ -140,12 +141,17 @@ void RetireFrameBufferSet(
 
 LightGPU BuildLightGPU(const LightSnapshot& light)
 {
+    // 只有点光/聚光使用厘米距离平方衰减；方向光的 lux 不乘长度因子。
+    const float gpuIntensity =
+        light.type == LightSnapshotType::Point || light.type == LightSnapshotType::Spot
+            ? CandelaToCentimeterDistanceIntensity(light.intensity)
+            : light.intensity;
     LightGPU gpuLight{};
     gpuLight.colorIntensity = Eigen::Vector4f(
         light.color.x(),
         light.color.y(),
         light.color.z(),
-        light.intensity);
+        gpuIntensity);
     gpuLight.positionRadius = Eigen::Vector4f(
         light.position.x(),
         light.position.y(),

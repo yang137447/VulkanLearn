@@ -310,6 +310,7 @@ h2 {
     border-radius: 7dp;
 }
 
+
 .debug-group {
     display: block;
     width: 100%;
@@ -411,6 +412,14 @@ h2 {
 
 .gust-row {
     min-height: 76dp;
+}
+
+.exposure-buttons button {
+    width: 160dp;
+    min-width: 0;
+    margin-right: 4dp;
+    padding-left: 4dp;
+    padding-right: 4dp;
 }
 
 .shadow-toggle-row,

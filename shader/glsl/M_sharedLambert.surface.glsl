@@ -12,7 +12,8 @@ MaterialInputs EvaluateMaterialInputs(in MaterialFunctionContext context)
     inputs.roughness = 1.0;
     inputs.normal = normalize(context.worldNormal);
     inputs.tangent = context.worldTangent;
-    // 实时 DefaultLit 仅作粗糙漫反射近似；论文离线积分仍由 CPU Lambert evaluator 拥有。
+    // 非金属 Specular=0 在实时直接光和 IBL 中关闭镜面 lobe，得到 Lambert；
+    // 实时可见性仍用 CSM/SH，论文离线积分与光线可见性由 CPU evaluator 拥有。
     return inputs;
 }
 

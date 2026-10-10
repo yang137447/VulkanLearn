@@ -12,15 +12,16 @@ MaterialInputs EvaluateMaterialInputs(in MaterialFunctionContext context)
     const vec4 gridColor = vec4(0.0, 0.0, 0.0, 1.0);
     const vec4 subGridColor = vec4(0.2, 0.2, 0.2, 1.0);
 
+    // 世界坐标已迁到厘米；保留原来的 20 cm 子网格和 1 m 主网格，不改变像素线宽。
     float subGridMask = CalculateMeasureGridMask(
         context.worldPosition,
         context.worldNormal,
-        0.2);
+        20.0);
     vec4 albedo = mix(baseColor, subGridColor, subGridMask);
     float gridMask = CalculateMeasureGridMask(
         context.worldPosition,
         context.worldNormal,
-        1.0);
+        100.0);
     albedo = mix(albedo, gridColor, gridMask);
 
     inputs.baseColor = albedo.rgb;

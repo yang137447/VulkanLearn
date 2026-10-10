@@ -41,13 +41,14 @@ void main()
     outputVertex.clipPosition = gl_Position;
     outputVertex.previousClipPosition = gl_Position;
     outputVertex.worldPosition = worldPosition.xyz;
+    // Alpha Clip 的 MF 上下文与 Base 一致：先去除模型缩放，片元保留原始插值基。
     outputVertex.worldNormal =
-        GetNormal_WS_Unnormalized(modelMatrix, vertex.localNormal);
+        GetNormal_WS(modelMatrix, vertex.localNormal);
     outputVertex.vertexColor = vertex.vertexColor;
     outputVertex.texCoord = vertex.texCoord;
     outputVertex.texCoord1 = vertex.texCoord1;
     outputVertex.worldTangent = vec4(
-        GetDirection_WS_Unnormalized(modelMatrix, vertex.localTangent.xyz),
+        GetDirection_WS(modelMatrix, vertex.localTangent.xyz),
         vertex.localTangent.w);
     v2f = CreateMaterialVaryings(outputVertex);
 #endif

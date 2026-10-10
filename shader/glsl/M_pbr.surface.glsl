@@ -8,6 +8,8 @@
 MaterialInputs EvaluateMaterialInputs(in MaterialFunctionContext context)
 {
     MaterialInputs inputs = EvaluateMFPbrInputs(context);
+    // 只在 M_pbr 公开此参数，不向其他复用 MF 的母材质隐式增加 uniform。
+    inputs.specular = u_specular;
 #if USE_ALPHA_MAP
     // 发片 alpha 与颜色贴图分离时，PBR 对比项也必须使用同一 coverage 来源。
     float alpha = texture(alphaMap, context.texCoord).r * u_tintColor.a;

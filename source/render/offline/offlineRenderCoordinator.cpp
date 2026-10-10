@@ -45,6 +45,21 @@ bool EqualVector(const Eigen::Vector3f& left, const Eigen::Vector3f& right)
     return left.x() == right.x() && left.y() == right.y() && left.z() == right.z();
 }
 
+bool EqualExposure(const CameraExposure& left, const CameraExposure& right)
+{
+    return left.mode == right.mode &&
+        left.ev100 == right.ev100 &&
+        left.aperture == right.aperture &&
+        left.shutterSeconds == right.shutterSeconds &&
+        left.iso == right.iso &&
+        left.compensation == right.compensation &&
+        left.autoMinEv100 == right.autoMinEv100 &&
+        left.autoMaxEv100 == right.autoMaxEv100 &&
+        left.autoSpeedUp == right.autoSpeedUp &&
+        left.autoSpeedDown == right.autoSpeedDown &&
+        left.autoTargetGray == right.autoTargetGray;
+}
+
 bool EqualMatrix(const Eigen::Matrix4f& left, const Eigen::Matrix4f& right)
 {
     for (int row = 0; row < 4; ++row)
@@ -57,6 +72,7 @@ bool EqualInputSnapshot(const WorldSnapshot& left, const WorldSnapshot& right)
 {
     if (left.worldGeneration != right.worldGeneration ||
         left.environment.type != right.environment.type ||
+        !EqualExposure(left.camera.exposure, right.camera.exposure) ||
         !EqualVector(left.camera.position, right.camera.position) ||
         !EqualVector(left.camera.right, right.camera.right) ||
         !EqualVector(left.camera.up, right.camera.up) ||
@@ -138,7 +154,9 @@ nlohmann::json OfflineRenderCoordinator::DescribeInput(
                     {"forward", Vector(snapshot.camera.forward)},
                     {"horizontalFov", snapshot.camera.horizontalFovDegrees},
                     {"clipNear", snapshot.camera.clipNear},
-                    {"clipFar", snapshot.camera.clipFar}}},
+                    {"clipFar", snapshot.camera.clipFar},
+                    {"exposure", DescribeCameraExposure(snapshot.camera.exposure)},
+                    {"exposureScale", ExposureScale(snapshot.camera.exposure)}}},
         {"integrator", {{"width", settings.width}, {"height", settings.height},
                         {"seed", settings.seed}, {"bounces", settings.bounces},
                         {"lightSamples", settings.lightSamples}}},

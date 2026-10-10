@@ -21,7 +21,9 @@ enum class CompiledRenderGraphAccessType
 enum class CompiledRenderGraphBarrierType
 {
     AttachmentToShaderRead,
-    ShaderReadToAttachment
+    ShaderReadToAttachment,
+    ShaderReadToStorage,
+    StorageToShaderRead
 };
 
 struct CompiledRenderGraphBarrier
@@ -51,6 +53,7 @@ struct CompiledRenderGraphResource
     bool hasFixedHeight = false;
     float heightValue = 1.0f;
     uint32_t arrayLayers = 1;
+    bool initializeShaderRead = false;
     bool isSwapchain = false;
 };
 
