@@ -1,9 +1,15 @@
 """Visual regression check for the editor chrome: menus, tabs and the product name.
 
-The pixel probes in this directory prove that *something* is drawn at a coordinate.
-They cannot read what the text says, and they reported a 94px selected tab as
-"present" while it rendered completely blank. A vision model closes that gap: it
-reports the labels it actually sees.
+**On-demand diagnostic, not a routine step.** It runs a vision model, so it costs far
+more than any command in the verification table. Reach for it only when the *rendered
+text* is the disputed thing -- a reported missing label, a panel title that does not
+match, or a change to the tab/menu bar layout or CSS. Do not wire it into the fixed
+validation flow and do not run it after every change.
+
+The pixel probes this sits beside prove that *something* is drawn at a coordinate. They
+cannot read what the text says, and they once reported a 94px selected tab as "present"
+while it rendered completely blank. This closes that gap by having a vision model report
+the labels it actually sees.
 
 Two invariants are checked, and neither expectation is hand-written into this file --
 both are extracted from their source of truth so they cannot drift:
@@ -20,8 +26,8 @@ Usage, in three steps because the vision model lives behind the harness:
     <run that prompt against deepseek-v4-flash-vision-exp, save its JSON reply>
     py -3 tool/check_ui_visual_regression.py check --reply <file>
 
-The middle step is documented in `documents/contracts/testing.md`. `check` exits
-non-zero on any mismatch, so it can gate.
+The middle step is documented in `documents/contracts/testing.md`, along with when this
+is worth its cost. `check` exits non-zero on any mismatch.
 """
 import argparse
 import json
