@@ -468,6 +468,34 @@ GT 文档只使用 `vl://scene-viewport` 逻辑纹理 token 和 framebuffer 像�
 Lit/Unlit 都不高亮，工具条不声明自己没有设置过的模式。
 `IsSceneViewportElement` 排除工具条，否则点击按钮会同时驱动相机与拾取。
 
+### 角落坐标轴指示器
+
+`#viewport-axis-indicator` 是**纯 UI 叠层**，不参与场景渲染图、不参与深度、不进 RenderGraph。
+它放右下角以避开左上的视口工具条，并设 `pointer-events: none` —— 它是读数不是控件，
+点它不应该抢走视口的场景输入。
+
+它回答的是"**相机现在朝哪**"，因此与场景里世界原点处的真实三轴是**两件不同的东西**，
+不是同一个功能的两种呈现：原点三轴是场景几何，会被物体遮挡、远看投影只剩约 1px；
+这里的三根固定 20px 长、始终可见。两者并存是刻意的。
+
+朝向来自**已冻结的大纲快照**：`EditorSceneCameraActor.forward/right/up` 由
+`editorSceneActorBuilder` 从活动 World 的相机填充，因此这里**没有新增快照字段**，
+面板也依然不访问 renderer。
+
+投影数学在 `source/editor/ui/editorViewportAxisIndicator.h`，**刻意不依赖 RmlUi**，
+所以能脱离 UI 框架做模块测试（`editor_viewport_tests` 的 `EditorViewportAxisIndicator` 套件）。
+三条约定值得记住，它们都是"写反了画面未必立刻看出来"的类型：
+
+- 屏幕 y 向下，因此 `screenY = -dot(axis, up)`；世界 +Y 必须投到**负**的屏幕 y。
+- `depth = dot(axis, forward)`，`forward` 指向屏幕内，所以**越小越靠近观察者**；
+  面板按 depth 降序绘制，让朝向观察者的轴盖住背向的轴。
+- 与视线近乎平行的轴**退化**：屏幕长度趋零、方向角没有意义。此时杆收成零宽，
+  **标签一并隐藏**并把偏移归零 —— 只收杆不藏标签会让它落到锚点上，与另外两轴的字母
+  叠成一团（实测三个字母挤在 6x8 px 内，无法辨认）。
+
+角度的量化只用于**值缓存**：签名（角度/偏移取整 + 退化标志）不变就不写 DOM，
+因此相机静止时指示器不产生属性写入，与本文件其它控件同一策略。
+
 视口工具条分组底色使用不透明 `#242428`，这是可读性选择而不是管线限制：
 半透明底色可用，但必须写成 `#RRGGBBAA`（原因见下方 RCSS 颜色格式约定）。
 
@@ -591,7 +619,7 @@ RmlUi 指针事件覆盖，但从 `PlatformEvent` 到 RmlUi 这一段只有构�
 
 ```powershell
 cmake --build build --target editor_ui_tests editor_viewport_tests main -j4
-ctest --test-dir build -R "^(UiColorTransform|UiWidgetTest|UiWidgetRefresh|EditorUiTest|ContentBrowserTest|DockWorkspaceTest|DockPersistenceTest|DockRmlTest|EditorViewportGeometry|EditorViewportGridGeometry|EditorJsonAssetParsing|EditorJsonAssetPaths|EditorJsonAssetTypes|JsonAssetLibraryTest|ResourceEditorController|LargeCatalog/ContentBrowserPerformanceTest)\." --output-on-failure
+ctest --test-dir build -R "^(UiColorTransform|UiWidgetTest|UiWidgetRefresh|EditorUiTest|ContentBrowserTest|DockWorkspaceTest|DockPersistenceTest|DockRmlTest|EditorViewportGeometry|EditorViewportGridGeometry|EditorViewportAxisIndicator|EditorJsonAssetParsing|EditorJsonAssetPaths|EditorJsonAssetTypes|JsonAssetLibraryTest|ResourceEditorController|LargeCatalog/ContentBrowserPerformanceTest)\." --output-on-failure
 ```
 
 `EditorViewportGridGeometry` 必须留在选择集里：它住在 `editor_viewport_tests` 而不是

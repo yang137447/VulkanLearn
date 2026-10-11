@@ -35,10 +35,11 @@
 `editor_ui_tests` 里 14 个套件；`ctest` 用套件前缀选择：
 
 ```powershell
-# 编辑器 UI 全套（当前 307 项通过，含 ctest 展开的用例）
-# 注意 EditorViewportGridGeometry 来自 editor_viewport_tests 目标，不是 editor_ui_tests：
+# 编辑器 UI 全套（当前 313 项通过，含 ctest 展开的用例）
+# 注意 EditorViewportGridGeometry 与 EditorViewportAxisIndicator 来自 editor_viewport_tests 目标，
+# 不是 editor_ui_tests：
 # 它必须显式列入，否则改坏编辑器网格不会被这条选择集拦住（2026-10-12 发现并补上）。
-ctest --test-dir build -R "^(UiColorTransform|UiWidgetTest|UiWidgetRefresh|EditorUiTest|ContentBrowserTest|DockWorkspaceTest|DockPersistenceTest|DockRmlTest|EditorViewportGeometry|EditorViewportGridGeometry|EditorJsonAssetParsing|EditorJsonAssetPaths|EditorJsonAssetTypes|JsonAssetLibraryTest|ResourceEditorController|LargeCatalog/ContentBrowserPerformanceTest)\." --output-on-failure
+ctest --test-dir build -R "^(UiColorTransform|UiWidgetTest|UiWidgetRefresh|EditorUiTest|ContentBrowserTest|DockWorkspaceTest|DockPersistenceTest|DockRmlTest|EditorViewportGeometry|EditorViewportGridGeometry|EditorViewportAxisIndicator|EditorJsonAssetParsing|EditorJsonAssetPaths|EditorJsonAssetTypes|JsonAssetLibraryTest|ResourceEditorController|LargeCatalog/ContentBrowserPerformanceTest)\." --output-on-failure
 
 # 材质实例编辑器全套（当前 22 项通过）
 ctest --test-dir build -R "MaterialInstanceEditor" --output-on-failure
