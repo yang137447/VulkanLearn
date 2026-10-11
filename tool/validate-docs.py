@@ -16,6 +16,7 @@ to, so an unrouted contract is visible rather than silently orphaned.
 
 import argparse
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -24,8 +25,8 @@ CONTRACTS = "documents/contracts"
 AUDIT_SCRIPT = "tool/ue-lite-boundary-audit.ps1"
 
 RULE_NAME = re.compile(r'-RuleName\s+"([^"]+)"')
-# A routing table cell holding a backticked document path.
-DOC_REF = re.compile(r"`((?:contracts|rationale)/[^`]+\.(?:md|html))`")
+# A routing table cell holding a backticked document or diagram-IR path.
+DOC_REF = re.compile(r"`((?:contracts|rationale)/[^`]+\.(?:md|html|json))`")
 # A routing table cell holding a source glob or path.
 PATH_GLOB = re.compile(r"`((?:source|shader|schema|tool|config|extern|ui|documents)/[^`]+)`")
 # Table rows only: skip prose and headings.
@@ -144,19 +145,67 @@ def check_routing(root, failures, notes):
     return routed
 
 
+def check_diagrams(root, routed, failures, notes):
+    """Architecture diagrams are contracts too: their IR is the topology source.
+
+    Two checks keep them honest. Every diagram must be reachable from the routing
+    table, and every diagram must pin the repository revision it was authored
+    against -- a diagram describing an older revision is a drifted contract.
+    """
+    diagrams = root / CONTRACTS / "diagrams"
+    if not diagrams.is_dir():
+        return
+    import json
+
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root,
+                          capture_output=True, text=True)
+    head_revision = head.stdout.strip() if head.returncode == 0 else ""
+
+    count = 0
+    for path in sorted(diagrams.glob("*.json")):
+        if path.name.endswith((".finalize.json", ".delivery.json", ".finalize-summary.json",
+                               ".browser-check.json")):
+            continue
+        count += 1
+        relative = path.relative_to(root).as_posix()
+        registered = "contracts/diagrams/" + path.name
+        if registered not in routed:
+            failures.append("orphan diagram, routed from no source path or topic: %s" % relative)
+        try:
+            data = json.loads(read(path))
+        except (ValueError, OSError) as error:
+            failures.append("%s: not valid JSON: %s" % (relative, error))
+            continue
+        revision = (data.get("meta", {}).get("repository", {}) or {}).get("revision", "")
+        if not revision:
+            failures.append("%s: diagram pins no meta.repository.revision" % relative)
+        elif head_revision and revision != head_revision:
+            failures.append(
+                "%s: diagram pinned to %s but HEAD is %s -- re-author or accept it as drifted"
+                % (relative, revision[:12], head_revision[:12]))
+    if count:
+        notes.append("architecture diagrams checked: %d" % count)
+
+
 def check_contracts(root, routed, failures, notes):
     contracts = root / CONTRACTS
     if not contracts.is_dir():
         failures.append("%s: missing" % CONTRACTS)
         return
 
+    # A generated diagram HTML is owned by its IR, not by the contract rules: it has no
+    # status line and must not be hand-edited. Its IR in diagrams/ is what gets routed
+    # and checked by check_diagrams.
+    generated_diagrams = {"contracts/" + path.name for path in (contracts / "diagrams").glob("*.html")}
     present = {"contracts/" + path.name for path in contracts.rglob("*")
-               if path.suffix in (".md", ".html")}
+               if path.suffix in (".md", ".html")} - generated_diagrams
     # An orphaned contract is exactly what this layering exists to surface, so it is a
     # failure rather than a note: the routing table must account for every contract.
     for document in sorted(present):
         if document not in routed:
             failures.append("orphan contract, routed from no source path or topic: %s" % document)
+
+    check_diagrams(root, routed, failures, notes)
 
     for path in sorted(contracts.rglob("*.md")):
         relative = path.relative_to(root).as_posix()
@@ -176,7 +225,10 @@ def check_contracts(root, routed, failures, notes):
             if in_fence:
                 continue
             match = FUTURE_ASSERTION.search(line)
-            if match:
+            # A contract may need to quote the banned phrasing in order to define the
+            # rule. That requires an explicit, reviewable marker on the line itself
+            # rather than a blanket exemption, so a real assertion cannot hide.
+            if match and "validate-docs: allow-future-assertion" not in line:
                 failures.append(
                     "%s:%d: contract asserts future behaviour (%r): %s"
                     % (relative, number, match.group(), line.strip()[:90]))

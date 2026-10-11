@@ -26,3 +26,8 @@ __pycache__/
 /tmp/sheen-paper.txt
 /extern/FreeType/freetype/
 /extern/RmlUi/RmlUi/
+# 架构图的证据收据：HTML 与 IR 入库，大体积中间收据按需重新生成
+# （finalize.json 内嵌绝对路径，browser-check.json 是浏览器证据快照）。
+# 重新生成：见 documents/contracts/diagrams/README.md。
+/documents/contracts/diagrams/*.finalize.json
+/documents/contracts/diagrams/*.browser-check.json

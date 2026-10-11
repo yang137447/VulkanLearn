@@ -53,6 +53,21 @@
 | `contracts/material-mesh-pass-composition.md` | 改材质求值、Base/ShadowDepth 模板、Composer 身份或 Shadow 路由时 |
 | `contracts/shader-structure-and-material-function.md` | 改 Shader Structure、Material Inputs/Function 组合或 Shading Model 边界时 |
 | `contracts/testing.md` | 改测试入口、测试目标或新增测试时 |
+| `contracts/README.md` | 想知道契约层的写作与校验约定时 |
+| `contracts/diagrams/README.md` | 改架构图、或改图所描述的那条链路时 |
+
+## 架构图
+
+图源是**契约**：IR 里的组件、边界与有向连接是拓扑真相，逐节点 `sources` 钉在某个 40 位 revision
+上（由 archify 的 `finalize` 校验文件存在与行号范围）。产物 HTML 由 IR 生成，**不要手工编辑产物**。
+
+| 源码路径 | 必读图源 | 图说明什么 |
+| --- | --- | --- |
+| `source/engine/engineLoop.cpp`、`source/ui/uiSubsystem.cpp` | `contracts/diagrams/editor-frame-sequence.json` | 一帧内从平台事件到上屏的顺序：UI 输入独占、GT 稳定帧边界、快照发布、可见性收口 |
+| `source/world/loading/world*.cpp`、`source/world/loading/worldGraphTransactionCoordinator.cpp` | `contracts/diagrams/world-graph-transaction-lifecycle.json` | World/RenderGraph 事务：隔离准备、提交前校验、无抛提交、GPU epoch 退休 |
+
+`py -3 tool/validate-docs.py` 会检查每张图都能从本表到达，且其 pinned revision 与当前 `HEAD`
+一致 —— 图与代码漂移时门禁失败，而不是让人以为图还是对的。
 
 ## 改动类型 → 必读
 

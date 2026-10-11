@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "4fd34de0-40f5-47ac-a97c-38db898e6135",
+  "status": "current",
+  "command": "deliver",
+  "type": "sequence",
+  "input": "C:\\Users\\pb.adcycyys001\\.codex\\worktrees\\rmlui-editor\\VulkanLearn\\documents\\contracts\\diagrams\\editor-frame-sequence.json",
+  "output": "C:\\Users\\pb.adcycyys001\\.codex\\worktrees\\rmlui-editor\\VulkanLearn\\documents\\contracts\\diagrams\\editor-frame-sequence.html",
+  "specification": {
+    "sha256": "f0ece7fe89403d5ffb535a409fb45b13a8b22d13974beac1906904a2bb8aef41",
+    "bytes": 5378
+  },
+  "artifact": {
+    "sha256": "75028f065a3b2ee5a902573f1785040ef8141317511bf6e72aa1ada00eab58ce",
+    "bytes": 762898
+  }
+}
