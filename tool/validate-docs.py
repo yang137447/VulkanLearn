@@ -6,7 +6,7 @@ of silent drift. It checks four things the layering promises:
 1. every document referenced from documents/routing.md exists;
 2. every source glob in routing.md's first column matches at least one real file;
 3. every gate rule named in routing.md exists verbatim as a `-RuleName` in
-   tool/ue-lite-boundary-audit.ps1 -- rules are never paraphrased in docs;
+   tool/architecture-boundary-audit.ps1 -- rules are never paraphrased in docs;
 4. documents/contracts/** contains no future-tense assertion, because a contract
    that talks about future behaviour is how roadmaps got mistaken for reality here.
 
@@ -22,7 +22,7 @@ from pathlib import Path
 
 ROUTING = "documents/routing.md"
 CONTRACTS = "documents/contracts"
-AUDIT_SCRIPT = "tool/ue-lite-boundary-audit.ps1"
+AUDIT_SCRIPT = "tool/architecture-boundary-audit.ps1"
 
 RULE_NAME = re.compile(r'-RuleName\s+"([^"]+)"')
 # A routing table cell holding a backticked document or diagram-IR path.

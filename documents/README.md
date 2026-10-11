@@ -41,7 +41,7 @@ py -3 tool\validate-docs.py
 ```
 
 它检查：路由引用的文档存在、路由里的源码 glob 匹配到真实文件、路由声明的门禁规则名**逐字存在**于
-`tool/ue-lite-boundary-audit.ps1`、每个契约带状态行、契约不含未来时断言、全树相对链接有效。
+`tool/architecture-boundary-audit.ps1`、每个契约带状态行、契约不含未来时断言、全树相对链接有效。
 
 文档腐坏因此是**门禁失败**，不是静默漂移。
 
@@ -58,10 +58,10 @@ architecture 模式下一个为云 region 写死的枚举。因此：
 | 约束类型 | 归属 |
 | --- | --- |
 | 组件/边界/连接等**拓扑事实**、owner、源码证据 | archify IR |
-| 禁止词与措辞（由门禁脚本维护的禁用标识符表） | `tool/ue-lite-boundary-audit.ps1` |
-| 要求某符号出现在某文件 | `tool/ue-lite-boundary-audit.ps1` |
-| 文件必须存在 / 必须不存在（cutover） | `tool/ue-lite-boundary-audit.ps1` |
-| 模块间的**允许/禁止调用方向** | `tool/ue-lite-boundary-audit.ps1` |
+| 禁止词与措辞（由门禁脚本维护的禁用标识符表） | `tool/architecture-boundary-audit.ps1` |
+| 要求某符号出现在某文件 | `tool/architecture-boundary-audit.ps1` |
+| 文件必须存在 / 必须不存在（cutover） | `tool/architecture-boundary-audit.ps1` |
+| 模块间的**允许/禁止调用方向** | `tool/architecture-boundary-audit.ps1` |
 
 **"改图就能改门禁"不成立。** 改图影响工程走两条路：拓扑变更产生 `compare` 漂移收据，人依收据改代码；
 而禁止词与内容约束仍然改门禁脚本。这条边界写在这里，是为了避免留下错误的期待。

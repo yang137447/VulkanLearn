@@ -1,15 +1,16 @@
 # 架构边界规则索引（生成物，请勿手工编辑）
 
-> 状态：**当前契约**（实现已落地）。本文件由 `tool/generate_boundary_rule_index.py` 从 `tool/ue-lite-boundary-audit.ps1` 生成；`tool/validate-docs.py` 会在生成物过期时判失败。改规则请改脚本再重新生成，不要编辑本文件。
+> 状态：**当前契约**（实现已落地）。本文件由 `tool/generate_boundary_rule_index.py` 从 `tool/architecture-boundary-audit.ps1` 生成；`tool/validate-docs.py` 会在生成物过期时判失败。改规则请改脚本再重新生成，不要编辑本文件。
 
 脚本是**可执行的架构契约**：它定义代码不得违反什么。规则正文以脚本为唯一真相，本表只是索引——
 它说明每条规则的名字、它做什么检查、以及它作用于哪些路径。
 
-生成源 revision：`97366972facb74262b13cf3c372743e9222aa3e5`
+生成源 revision：`48970c01c95860722de2d28700bb6911768ad4f9`
 
 | 规则名 | 检查类型 | 作用对象 |
 | --- | --- | --- |
 | Vulkan-native architecture wording | pattern must not match in a file | `documents/README.md`, `documents/contracts/vulkanlearn-architecture.html`, `documents/contracts/descriptor-imageinfo-management.md`, `documents/plan/architecture/ue-lite-completion-plan.md` |
+| VL namespace naming in documents | pattern must not match in a file | `documents/README.md`, `documents/contracts/descriptor-imageinfo-management.md` |
 | Removed scene/light singleton cutover | path must not exist | `source/sceneLoader.h`, `source/sceneLoader.cpp`, `source/lightManager.h`, `source/lightManager.cpp` |
 | Removed scene/light singleton references | pattern must not match anywhere in source | `（全仓库源码树）` |
 | Removed tutorial render path cutover | path must not exist | `source/render.h`, `source/render.cpp`, `source/renderProcess.h`, `source/renderProcess.cpp`, `source/swapchain.h`, `source/swapchain.cpp` 等 12 项 |
@@ -72,6 +73,6 @@
 | Pipeline Vulkan creation diagnostics | pattern must not match in a file | `source/pipeline/computePipeline.cpp`, `source/pipeline/graphicsPipeline.cpp`, `source/pipeline/graphicsPipelineBuilder.cpp`, `source/pipeline/pipelineLayoutBuilder.cpp` |
 | Pipeline Vulkan creation diagnostic context | pattern must match in a file | `（路径由脚本内条件生成）` |
 | World graph retire queue validation | pattern must match in a file | `（路径由脚本内条件生成）` |
-| UE-Lite final validation script contract | pattern must match in a file | `（路径由脚本内条件生成）` |
+| Architecture final validation script contract | pattern must match in a file | `（路径由脚本内条件生成）` |
 
-共 64 条规则。
+共 65 条规则。

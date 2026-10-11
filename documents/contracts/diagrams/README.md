@@ -1,6 +1,6 @@
 # 架构图
 
-> 状态：**当前契约**（实现已落地）。本文件描述系统**现在是什么**，每条可核对到源码、测试或`tool/ue-lite-boundary-audit.ps1` 的门禁规则；不含对未来行为的承诺——那些在 `documents/rationale/`。
+> 状态：**当前契约**（实现已落地）。本文件描述系统**现在是什么**，每条可核对到源码、测试或`tool/architecture-boundary-audit.ps1` 的门禁规则；不含对未来行为的承诺——那些在 `documents/rationale/`。
 
 这里的 `.json` 是**图源**，`.html` 是它的产物。**图源是契约，产物不是。**
 改架构请改 JSON 再重新生成 HTML；直接编辑 HTML 会在下次生成时被覆盖。
@@ -9,7 +9,7 @@
 
 archify 的 IR 拥有**拓扑事实**：组件身份、类型、owner、有向连接（仅正向）、
 逐节点源码证据（钉 40 位 revision 的文件与行号）。它**不治理**禁止词、内容约束、
-文件存在性与调用方向 —— 那些留在 `tool/ue-lite-boundary-audit.ps1`。
+文件存在性与调用方向 —— 那些留在 `tool/architecture-boundary-audit.ps1`。
 完整边界见 `documents/README.md`。
 
 ## 现有图

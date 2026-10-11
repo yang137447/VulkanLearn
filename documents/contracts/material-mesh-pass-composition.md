@@ -1,6 +1,6 @@
 # Material Evaluation 与 Mesh Pass 组合合同
 
-> 状态：**当前契约**（实现已落地）。本文件描述系统**现在是什么**，每条可核对到源码、测试或`tool/ue-lite-boundary-audit.ps1` 的门禁规则；不含对未来行为的承诺——那些在 `documents/rationale/`。
+> 状态：**当前契约**（实现已落地）。本文件描述系统**现在是什么**，每条可核对到源码、测试或`tool/architecture-boundary-audit.ps1` 的门禁规则；不含对未来行为的承诺——那些在 `documents/rationale/`。
 
 本文记录 VulkanLearn 当前已经实现的轻量材质 Pass 组合架构。它只覆盖
 `Base` 与 `ShadowDepth`，不表示已经实现 Material Graph、DepthOnly、Velocity

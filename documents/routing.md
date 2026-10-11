@@ -4,7 +4,7 @@
 命中的 `rationale/` 条目只解释意图，技术描述可能已过时。
 
 本表的引用完整性由 `py -3 tool/validate-docs.py` 校验：文档必须存在、路径 glob 必须匹配到真实文件、
-本表列出的门禁规则名必须**逐字**存在于 `tool/ue-lite-boundary-audit.ps1`。
+本表列出的门禁规则名必须**逐字**存在于 `tool/architecture-boundary-audit.ps1`。
 
 ## 精确规则
 
@@ -34,7 +34,7 @@
 | `source/commonFunction.h` | `contracts/coding-guidelines.md` | CommonFunction depth helper cleanup、Source comment clarity |
 | `source/engine/**` | `contracts/vulkanlearn-architecture.html` | Runtime test hook command boundary、Launch runtime tests use CommandBus、Runtime test state stays out of EngineLoop、LoadWorld path resolve runtime error contract |
 | `schema/*.schema.json` | `contracts/texture-asset-json-v1.md` | — |
-| `tool/ue-lite-boundary-audit.ps1`、`tool/ue-lite-final-validation.ps1` | `contracts/vulkanlearn-architecture.html` | UE-Lite final validation script contract |
+| `tool/architecture-boundary-audit.ps1`、`tool/architecture-final-validation.ps1` | `contracts/vulkanlearn-architecture.html` | Architecture final validation script contract |
 | `documents/**` | `README.md`（分层规则） | Vulkan-native architecture wording |
 
 `extern/**` 是第三方依赖，除 `extern/BLAKE3` 的锁定说明外不在本表覆盖范围（见"未覆盖路径"）。
@@ -72,8 +72,8 @@
 
 ## 门禁规则
 
-`tool/ue-lite-boundary-audit.ps1` 定义代码**不得违反什么**：64 条命名规则，由
-`tool/ue-lite-final-validation.ps1` 调用。
+`tool/architecture-boundary-audit.ps1` 定义代码**不得违反什么**：64 条命名规则，由
+`tool/architecture-final-validation.ps1` 调用。
 
 - **规则清单不在本文件里。** 它是生成物：
   `documents/contracts/boundary-rules.generated.md`，由

@@ -1,6 +1,6 @@
 # 契约层
 
-> 状态：**当前契约**（实现已落地）。本文件描述系统**现在是什么**，每条可核对到源码、测试或`tool/ue-lite-boundary-audit.ps1` 的门禁规则；不含对未来行为的承诺——那些在 `documents/rationale/`。
+> 状态：**当前契约**（实现已落地）。本文件描述系统**现在是什么**，每条可核对到源码、测试或`tool/architecture-boundary-audit.ps1` 的门禁规则；不含对未来行为的承诺——那些在 `documents/rationale/`。
 
 这一层回答"现在的系统**是什么**"。它的可信度来自三条可执行的约定，而不是写作风格。
 
@@ -20,11 +20,11 @@
 ## 与源码矛盾时怎么办
 
 **以源码为准，并立刻修正契约。** 这是缺陷，不是"文档略旧"。修完之后用
-`py -3 tool/validate-docs.py` 与 `pwsh -File tool/ue-lite-boundary-audit.ps1` 复验。
+`py -3 tool/validate-docs.py` 与 `pwsh -File tool/architecture-boundary-audit.ps1` 复验。
 
 ## 门禁规则怎么引用
 
-`tool/ue-lite-boundary-audit.ps1`（64 条命名规则）是**可执行的架构契约**。
+`tool/architecture-boundary-audit.ps1`（64 条命名规则）是**可执行的架构契约**。
 在契约或路由里引用规则时，写脚本里 `-RuleName` 的**字面值**，不要写概括或别名 ——
 `tool/validate-docs.py` 会逐字核对，概括会失败。规则正文不要抄进文档，那是会漂移的东西。
 

@@ -17,7 +17,7 @@ import re
 import sys
 from pathlib import Path
 
-SCRIPT = "tool/ue-lite-boundary-audit.ps1"
+SCRIPT = "tool/architecture-boundary-audit.ps1"
 OUTPUT = "documents/contracts/boundary-rules.generated.md"
 
 # `Test-Foo ` at the start of a line begins an invocation; its argument list runs
@@ -81,7 +81,7 @@ def render(invocations, revision):
         "# 架构边界规则索引（生成物，请勿手工编辑）",
         "",
         "> 状态：**当前契约**（实现已落地）。本文件由 `tool/generate_boundary_rule_index.py` 从 "
-        "`tool/ue-lite-boundary-audit.ps1` 生成；`tool/validate-docs.py` 会在生成物过期时判失败。"
+        "`tool/architecture-boundary-audit.ps1` 生成；`tool/validate-docs.py` 会在生成物过期时判失败。"
         "改规则请改脚本再重新生成，不要编辑本文件。",
         "",
         "脚本是**可执行的架构契约**：它定义代码不得违反什么。规则正文以脚本为唯一真相，本表只是索引——",

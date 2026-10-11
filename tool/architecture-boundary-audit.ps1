@@ -349,6 +349,28 @@ Test-FilePatternsAbsent `
     ) `
     -RuleName "Vulkan-native architecture wording"
 
+# '\bUE-Lite\b' / '\bUE_LITE\b' are banned in source/** by "Source comment clarity",
+# but that rule never looks at documentation, so the legacy route name could be
+# reintroduced into living docs unchallenged. Two documents are deliberately excluded
+# because they must be able to name the thing they describe:
+#   - the architecture HTML *defines* the deprecation ("UE-Lite is only the earlier
+#     architecture route name; new C++ engine code uses the VL namespace");
+#   - ue-lite-completion-plan.md is the historical record of that route and mentions
+#     it 29 times as its subject matter.
+# Excluding them keeps this rule from failing permanently, because a gate that is
+# always red is a gate people learn to ignore -- which is worse than the coverage gap.
+Test-FilePatternsAbsent `
+    -Failures $failures `
+    -RelativePaths @(
+        "documents/README.md",
+        "documents/contracts/descriptor-imageinfo-management.md"
+    ) `
+    -Patterns @(
+        '\bUE-Lite\b',
+        '\bUE_LITE\b'
+    ) `
+    -RuleName "VL namespace naming in documents"
+
 Test-PathsAbsent `
     -Failures $failures `
     -RelativePaths @(
@@ -1184,15 +1206,15 @@ Test-FilePatternsPresent `
 
 Test-FilePatternsPresent `
     -Failures $failures `
-    -RelativePath "tool/ue-lite-final-validation.ps1" `
+    -RelativePath "tool/architecture-final-validation.ps1" `
     -Patterns @(
         'ctest',
         '--shader-reload-test',
         '--shader-compute-reload-test',
         '--world-graph-transaction-test',
-        'artifacts/ue-lite-validation'
+        'artifacts/architecture-validation'
     ) `
-    -RuleName "UE-Lite final validation script contract"
+    -RuleName "Architecture final validation script contract"
 
 Test-VulkanManagerBoundary -Failures $failures
 Test-RendererBackendRawGetterBoundary -Failures $failures
@@ -1201,11 +1223,11 @@ Test-RHIDeviceVulkanPublicRawGetterBoundary -Failures $failures
 Test-VulkanManagerPublicBoundary -Failures $failures
 
 if ($failures.Count -gt 0) {
-    Write-Host "UE-Lite boundary audit failed:" -ForegroundColor Red
+    Write-Host "Architecture boundary audit failed:" -ForegroundColor Red
     foreach ($failure in $failures) {
         Write-Host "  - $failure" -ForegroundColor Red
     }
     exit 1
 }
 
-Write-Host "UE-Lite boundary audit passed." -ForegroundColor Green
+Write-Host "Architecture boundary audit passed." -ForegroundColor Green

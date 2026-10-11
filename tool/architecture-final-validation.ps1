@@ -9,7 +9,7 @@ function New-ValidationLogDirectory {
     param([string]$Root)
 
     $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
-    $directory = Join-Path $Root "artifacts/ue-lite-validation/$timestamp"
+    $directory = Join-Path $Root "artifacts/architecture-validation/$timestamp"
     New-Item -ItemType Directory -Force -Path $directory | Out-Null
     return $directory
 }
@@ -84,7 +84,7 @@ try {
 
     $logDirectory = New-ValidationLogDirectory -Root $RepoRoot
     $mainExe = Join-Path $RepoRoot (Join-Path $BuildDirectory "bin/main.exe")
-    $boundaryAudit = Join-Path $RepoRoot "tool/ue-lite-boundary-audit.ps1"
+    $boundaryAudit = Join-Path $RepoRoot "tool/architecture-boundary-audit.ps1"
 
     $commonRuntimePatterns = @(
         '\[Diagnostics\]\[(Info|Error|Warning)\]',
@@ -109,7 +109,7 @@ try {
         -FilePath "powershell" `
         -Arguments @("-ExecutionPolicy", "Bypass", "-File", $boundaryAudit) `
         -LogPath (Join-Path $logDirectory "01-boundary-audit.log") `
-        -SummaryPatterns @('UE-Lite boundary audit passed', 'UE-Lite boundary audit failed')
+        -SummaryPatterns @('Architecture boundary audit passed', 'Architecture boundary audit failed')
 
     Invoke-ValidationStep `
         -Name "CTest" `
@@ -139,7 +139,7 @@ try {
         -LogPath (Join-Path $logDirectory "09-world-graph-transaction.log") `
         -SummaryPatterns $commonRuntimePatterns
 
-    Write-Host "UE-Lite final validation passed."
+    Write-Host "Architecture final validation passed."
     Write-Host "Logs: $logDirectory"
 }
 finally {

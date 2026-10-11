@@ -68,7 +68,7 @@
 - 适用场景：写或改 `documents/**`、`README.md` 时
 - 失败表现：门禁报 `Vulkan-native architecture wording: 'documents/xxx.md:NN' matches forbidden pattern ...`，
   即使这句话是在**说明这条规则本身**
-- 根因：`tool/ue-lite-boundary-audit.ps1` 的 `Vulkan-native architecture wording` 规则扫描的是
+- 根因：`tool/architecture-boundary-audit.ps1` 的 `Vulkan-native architecture wording` 规则扫描的是
   **整批文档路径**（`README.md`、`documents/` 全部 markdown、契约与计划文档），
   不区分"禁用词的使用"与"对禁用词的引用"
 - 规避动作：在文档里描述禁用标识符时**不要写出字面量**，改为描述性的说法
