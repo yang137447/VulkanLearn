@@ -1,6 +1,7 @@
 #include "editor/ui/materialInstanceAssetEditorPanel.h"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cmath>
 #include <filesystem>
@@ -17,6 +18,7 @@
 #include "core/renderSession.h"
 #include "editor/ui/editorSceneActorTree.h"
 #include "editor/ui/editorTextMatch.h"
+#include "editor/ui/editorViewportAxisIndicator.h"
 #include "ui/widgets/input/inputWidgets.h"
 #include "ui/widgets/layout/layoutWidgets.h"
 #include "ui/widgets/navigation/tabWidgets.h"
@@ -394,7 +396,10 @@ bool MaterialInstanceAssetEditorPanel::ValidateDocument(Rml::ElementDocument& ca
         "outliner-search", "outliner-type", "outliner-sort", "outliner-count", "outliner-empty",
         "viewport-toolbar", "viewport-tool-select", "viewport-tool-move", "viewport-tool-rotate",
         "viewport-tool-scale", "viewport-space-world", "viewport-space-local",
-        "viewport-view-lit", "viewport-view-unlit", "viewport-view-wireframe"})
+        "viewport-view-lit", "viewport-view-unlit", "viewport-view-wireframe",
+        "viewport-axis-indicator", "viewport-axis-bar-x", "viewport-axis-bar-y",
+        "viewport-axis-bar-z", "viewport-axis-label-x", "viewport-axis-label-y",
+        "viewport-axis-label-z"})
     {
         if (candidate.GetElementById(id) == nullptr)
         {
@@ -700,6 +705,97 @@ void MaterialInstanceAssetEditorPanel::RefreshViewportToolbar()
     // 工具栏不声明自己没有设置过的调试视图，因此其他调试模式在这三个按钮上都没有高亮。
     SetViewportToolbarClass("viewport-view-lit", runtimeView.debugViewMode == 0);
     SetViewportToolbarClass("viewport-view-unlit", runtimeView.debugViewMode == 1);
+    RefreshViewportAxisIndicator();
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshViewportAxisIndicator()
+{
+    if (document == nullptr) return;
+
+    // 相机朝向来自冻结的大纲快照（EditorSceneCameraActor 带 forward/right/up），
+    // 因此这里不需要新增快照字段，也不访问 renderer。
+    const EditorSceneActorSnapshot* camera = nullptr;
+    for (const EditorSceneActorSnapshot& actor : OutlinerActors())
+    {
+        if (actor.type == EditorSceneActorType::Camera)
+        {
+            camera = &actor;
+            break;
+        }
+    }
+    if (camera == nullptr) return;
+
+    const Eigen::Vector3f forward = camera->camera.forward.normalized();
+    const Eigen::Vector3f right = camera->camera.right.normalized();
+    const Eigen::Vector3f up = camera->camera.up.normalized();
+    const auto triad = EditorUi::ProjectAxisIndicatorTriad(right, up, forward);
+
+    // 先算量化后的形态签名：相机静止时它不变，于是不写 DOM。
+    // 量化到 1 度 / 1 像素，避免浮点末位噪声让"静止帧"也一直重写属性。
+    std::ostringstream signature;
+    for (const EditorUi::AxisIndicatorProjection& projection : triad)
+    {
+        float offsetX = 0.0f;
+        float offsetY = 0.0f;
+        EditorUi::AxisIndicatorLabelOffset(projection, offsetX, offsetY);
+        signature << (projection.degenerate ? 'D' : 'A')
+                  << std::lround(EditorUi::AxisIndicatorRotationDegrees(projection)) << ','
+                  << std::lround(offsetX) << ',' << std::lround(offsetY) << ';';
+    }
+    const std::string wanted = signature.str();
+    if (wanted == axisIndicatorSignature) return;
+    axisIndicatorSignature = wanted;
+
+    static const char* kBarIds[3] = {
+        "viewport-axis-bar-x", "viewport-axis-bar-y", "viewport-axis-bar-z"};
+    static const char* kLabelIds[3] = {
+        "viewport-axis-label-x", "viewport-axis-label-y", "viewport-axis-label-z"};
+
+    // 远的先画、近的后画，让朝向观察者的轴盖住背向的轴。depth 越小越靠近观察者，
+    // 因此按 depth 降序排列。
+    std::array<size_t, 3> order = {0, 1, 2};
+    std::sort(order.begin(), order.end(), [&triad](size_t lhs, size_t rhs)
+    {
+        return triad[lhs].depth > triad[rhs].depth;
+    });
+
+    for (size_t rank = 0; rank < order.size(); ++rank)
+    {
+        const size_t index = order[rank];
+        const EditorUi::AxisIndicatorProjection& projection = triad[index];
+        const std::string barId = kBarIds[index];
+        const std::string labelId = kLabelIds[index];
+
+        // 先摆好层序，再写形态：index 是稳定的轴身份，rank 是绘制顺序。
+        widgetDocument.SetProperty(barId, "z-index", std::to_string(rank + 1));
+        widgetDocument.SetProperty(labelId, "z-index",
+            std::to_string(order.size() + rank + 1));
+
+        if (projection.degenerate)
+        {
+            // 与视线近乎平行的轴在屏幕上没有方向可言：杆收成零宽，**标签一并隐藏**。
+            // 只收杆不藏标签会让它落在锚点上，与另外两个轴本就在锚点附近的字母叠成一团
+            // （实测三个字母挤在 6x8 px 内，无法辨认）。位置也归零，避免隐藏期间留下旧偏移。
+            widgetDocument.SetProperty(barId, "width", Pixels(0.0f));
+            widgetDocument.SetProperty(labelId, "display", "none");
+            widgetDocument.SetProperty(labelId, "margin-left", Pixels(-5.0f));
+            widgetDocument.SetProperty(labelId, "margin-top", Pixels(-6.0f));
+            continue;
+        }
+
+        float offsetX = 0.0f;
+        float offsetY = 0.0f;
+        EditorUi::AxisIndicatorLabelOffset(projection, offsetX, offsetY);
+        widgetDocument.SetProperty(labelId, "display", "block");
+        widgetDocument.SetProperty(labelId, "margin-left", Pixels(offsetX - 5.0f));
+        widgetDocument.SetProperty(labelId, "margin-top", Pixels(offsetY - 6.0f));
+
+        const float length = EditorUi::kAxisIndicatorRadiusPx;
+        widgetDocument.SetProperty(barId, "width", Pixels(length));
+        widgetDocument.SetProperty(barId, "transform",
+            std::string("rotate(") +
+                std::to_string(EditorUi::AxisIndicatorRotationDegrees(projection)) + "deg)");
+    }
 }
 
 // 工具条激活态只在真正变化时写一次 class；静止帧不重复触碰 RmlUi 样式，也不重建 markup。

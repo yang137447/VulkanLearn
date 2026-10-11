@@ -120,6 +120,7 @@ private:
     void RefreshMenus();
     void RefreshLevelMenu();
     void RefreshViewportToolbar();
+    void RefreshViewportAxisIndicator();
     void SetViewportToolbarClass(const std::string& id, bool active);
     std::string WindowMenuMarkup() const;
     void ToggleMenu(const std::string& menu);
@@ -186,6 +187,9 @@ private:
     std::shared_ptr<const EditorJsonAssetCatalogSnapshot> menuCatalog;
     uint64_t menuCatalogRevision = 0;
     bool menuCatalogReady = false;
+    // 角落坐标轴指示器的已挂载形态签名（量化后的角度与标签偏移 + 退化标志）。
+    // 相机静止时签名不变，因此静止帧不写 DOM —— 与本文件其它"值缓存决定是否写"的做法一致。
+    std::string axisIndicatorSignature;
     // 折叠的分组键（缺省即展开）；切换文档不清空，和模型树展开一样是面板本地状态。
     std::unordered_set<std::string> collapsedSections;
     // 大纲的展开与折叠同样是面板本地会话状态：折叠的分组键 + 展开的 actor 稳定身份。

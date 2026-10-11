@@ -75,6 +75,19 @@
                 </button>
                 <div id="editor-viewport-surface">
                     <img id="editor-viewport-image" src="vl://scene-viewport"/>
+                    <!-- 角落坐标轴指示器：纯 UI 叠层，不参与场景渲染图，也不参与深度。
+                         它表达的是**相机当前朝向**（三根杆由相机正交基投影而来），
+                         因此与场景里世界原点处的真实三轴是两件不同的东西：
+                         那三根会被场景几何遮挡、远看只有约 1px 宽；
+                         这里的三根固定大小、始终可见。放右下角是为了避开左上的视口工具条。 -->
+                    <div id="viewport-axis-indicator">
+                        <div class="viewport-axis-bar" id="viewport-axis-bar-x"></div>
+                        <div class="viewport-axis-bar" id="viewport-axis-bar-y"></div>
+                        <div class="viewport-axis-bar" id="viewport-axis-bar-z"></div>
+                        <span class="viewport-axis-label" id="viewport-axis-label-x">X</span>
+                        <span class="viewport-axis-label" id="viewport-axis-label-y">Y</span>
+                        <span class="viewport-axis-label" id="viewport-axis-label-z">Z</span>
+                    </div>
                     <div id="viewport-toolbar">
                         <div class="viewport-tool-group" id="viewport-transform-tools">
                             <button class="viewport-tool" id="viewport-tool-select" data-action="viewport-tool" data-tool="select" title="Select tool - presentation only, no gizmo or transform editing backend">Select</button>
