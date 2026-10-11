@@ -118,6 +118,20 @@
 - 证据：2026-10-12 在编辑器网格与右键菜单两项上各踩一次，均由"数一遍列表"发现而非失败报警
 - owner / status / last_verified：仓库维护者 / 已确认 / 2026-10-12
 
+### [header-inline-constexpr-not-rebuilt] 改头文件的 `inline constexpr` 可能不触发测试目标重编译
+
+- 适用场景：改 `inline constexpr` 常量或 `inline constexpr` 函数，而消费方在另一个目标里
+- 失败表现：源码明明改了，测试读到的仍是旧值。本分支在修编辑器网格顶点数时被它拖了数轮：
+  同一个断言先后报 1200/612/204，每次数字都"证明"了一个不同的结论，而**那些数字来自不同年代的
+  目标文件**。最刺眼的一次是探针打印出 `perQuad=6 actual=1224`，而同一份头文件里 `PushQuad`
+  已经在出双份绕序 —— 探针读的是旧 obj。
+- 根因：MinGW Makefiles 对这个头文件的依赖没有被完整跟踪；`cmake --build` 认为目标是最新的
+- 规避动作：改这类常量后**显式删掉目标 obj 再构建**，或直接触碰 `.cpp`：
+  `Remove-Item build\<target>\CMakeFiles\<target>.dir\**\*.obj -Recurse -Force` 后重新构建。
+  更省事的判据：**如果同一个断言连续两次给出不同的数字，先怀疑目标文件，不要先怀疑代码。**
+- 证据：2026-10-12 编辑器网格；清 obj 后同一份代码一次通过
+- owner / status / last_verified：仓库维护者 / 已确认 / 2026-10-12
+
 ### [headless-verification-model] 无图像输入的模型必须用像素回读证明渲染
 
 - 适用场景：由无法查看图片的 agent 验证 UI 或渲染改动

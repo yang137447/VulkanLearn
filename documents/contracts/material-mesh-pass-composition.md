@@ -79,6 +79,12 @@ MaterialInputs EvaluateMaterialInputs(in MaterialFunctionContext context);
   由 `EngineLoop::SynchronizeSceneViewport` 按视口 rect 设好，跟着场景走就自动正确。
 - **它画在 `forwardTransparent` 之后**，`depthWriteEnable: false`、`depthCompareOp: lessOrEqual`，
   所以共面时网格胜出、且它不写深度去影响后续 pass。
+- **每个四边形输出正反两份绕序，这是必需的不是冗余。** 材质是 `cullMode: Back`
+  （改成 TwoSided 会被要求生成材质资产无法提供的 ShadowDepth 组合），而地面条带的可见朝向
+  随相机方位变化：只出一份绕序时，编辑器默认的俯视视角下整个地面网格都是背面、被整族剔除。
+  2026-10-12 实测：开/关该 pass 只差 **66 px**；只把 `cullMode` 临时改成 `Front`，同一测量变成
+  **40343 px**（611 倍）。所以这里的双绕序是"让可见性由深度测试决定，而不是由相机方向决定"。
+  顶点数因此是逻辑四边形数 × 2（绕序）× 6：`EditorGridExpectedVertexCount()` 与其测试共用这一口径。
 - **顶点流复用共享 `Vertex`**（`source/VertexDataStruct.h`：position=0、normal=1、color=2）。
   网格 shader 只消费 0 与 2，**跳过 normal** —— normal 的取值只为满足共享布局，不表达光照信息。
 - 几何在 XZ 地面上抬升 `kGroundLift`，避免与场景自身的 y=0 地面在共面像素上随机归属；
