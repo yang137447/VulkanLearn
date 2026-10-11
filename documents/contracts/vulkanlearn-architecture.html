@@ -2686,7 +2686,7 @@ build\bin\main.exe --world-graph-transaction-test --exit-after-tests
 
 
             <h3>Shader 增量构建与热重载线程/数据流</h3>
-            <p class="rule">正式合同见 <code>documents/rendering/shader-build-cache.md</code> 与 <code>documents/rendering/shader-hot-reload.md</code>；本节只记录与本架构文档相关的线程归属与资源生命周期。</p>
+            <p class="rule">正式合同见 <code>documents/contracts/shader-build-cache.md</code> 与 <code>documents/contracts/shader-hot-reload.md</code>；本节只记录与本架构文档相关的线程归属与资源生命周期。</p>
             <pre><code>GT (EngineLoop -> ShaderReloadRuntime)
   -> ShaderFileMonitor::Poll（observed source epoch + debounce stable event）
   -> stable source identity 合并进 pending union

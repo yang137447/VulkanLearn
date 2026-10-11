@@ -1,5 +1,7 @@
 # Shader Structure 与 Material Function 规范
 
+> 状态：**当前契约**（实现已落地）。本文件描述系统**现在是什么**，每条可核对到源码、测试或`tool/ue-lite-boundary-audit.ps1` 的门禁规则；不含对未来行为的承诺——那些在 `documents/rationale/`。
+
 ## 状态
 
 本文是 VulkanLearn 当前 Shader Structure 的正式渲染规范。

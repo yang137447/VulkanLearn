@@ -850,7 +850,7 @@ mesh scale `[2.485281, 1.397971, 1.0]`（= 该机位下的 `halfWidth` / `halfHe
 | --- | --- | --- | --- |
 | `A-01` | UE 官方 [Shading Models](https://dev.epicgames.com/documentation/en-us/unreal-engine/shading-models-in-unreal-engine)｜各模型输入表 | 每个模型的 Material Inputs 与 UE 同名输入的语义一致（不是数值一致，是**语义**一致） | 架构核对 |
 | `A-02` | UE 5.8 Legacy GBuffer 布局 + 本仓库 `documents/plan/rendering/deferred-gbuffer-ue-aligned-plan.html` | ShadingModelID、SelectiveOutputMask、customData 的位分配与解码自洽；每个模型只消费自己声明的位 | 架构核对 |
-| `A-03` | 本仓库 `documents/rendering/shader-structure-and-material-function.md` | Forward / Deferred 两条路径下同一模型的着色结果在有定义处一致；差异必须能归因到路径本身 | 场景对照 |
+| `A-03` | 本仓库 `documents/contracts/shader-structure-and-material-function.md` | Forward / Deferred 两条路径下同一模型的着色结果在有定义处一致；差异必须能归因到路径本身 | 场景对照 |
 | `A-04` | UE 官方文档 + `documents/rendering/*.md` 各合同 | 每个模型的 Debug View 能单独输出该模型的关键中间量（`D` / `visibility` / path 分量 / profile），用于把误差定位到公式而不是资产 | Debug 截图 |
 | `A-05` | 本仓库阴影合同（`documents/plan/rendering/*shadow*`） | Shadow Caster 路由正确：每个模型在 shadow pass 用与主 pass 一致的 alpha / 双面 / 位移语义 | 架构核对 |
 | `A-06` | 本仓库 GBuffer 编码（`engine/gbufferCodec.glsl`） | **GBuffer 往返精度上限**：每个模型的 customData / 法线 / 各向异性编码精度足够支撑该模型 case 的判定门限（见 §1.5.2） | 数值 | 
@@ -880,7 +880,7 @@ mesh scale `[2.485281, 1.397971, 1.0]`（= 该机位下的 `halfWidth` / `halfHe
 ### 1.6.2 GBuffer 往返精度上限（决定 case 的判定门限）
 
 > 附件清单、按 ID 的通道所有权、4+4 bit ID/flag 账本与打包规则已独立成当前合同：
-> `documents/rendering/gbuffer-channel-ownership.md`。本节只保留影响 case 判定门限的部分；
+> `documents/contracts/gbuffer-channel-ownership.md`。本节只保留影响 case 判定门限的部分；
 > 新增模型时的通道分配要走那份文档的检查清单。
 
 | 量 | 存储 | 精度上限 | 对 case 的影响 |
@@ -1339,7 +1339,7 @@ coat IOR 固定 1.5 / F0 0.04，不可作者化。
 | 实现锚点 | 旧：`M_cloth`、`engine/clothLighting.glsl`、`generator/clothLookupTables.comp`（均已删除）；仍在仓库的是 `common/clothBrdf.glsl` 与 `SC_paper_case_plot_cloth_solo` 探针链路 |
 | 已完成 | **§1.4.2 的公式溯源审计（式号已抽出）**；`§1.4.3` 的文献补查（各向异性有出处的路线）；**mode 0 曲线逐列像素对照通过**（2026-09-12，GGX 最大 0.486 px、Charlie 最大 0.447 px；2026-09-13 复测 0.476 / 0.492 px，见 `S-01`）；三面板场景仍在（仅供浏览） |
 | 未完成 | 求值器 + 两条路径 dispatch case + customData 编码 + 材质校验（同批完成）；directional albedo 数值对照（`S-03`）、端点退化（`S-05` `S-06`） |
-| 阻塞 | ~~重建路线未定~~ → **已定案：2026-09-16 路线（方案 C，两个 ID）+ 2026-09-17 范围（两臂都按论文完整还原）**，见 §2.3⑤。剩余阻塞：① **A 臂**要重建方向反照率 LUT（generator + graph `input` + pass 材质 texture 槽 + set 3 binding，顺序与 graph 一致），它服务 §5 分层的 `min(α_i, α_o)`——**离线口径与规格已于 2026-09-22 钉死**（§2.3⑩：16×16、`√r` 轴、$\theta_v\le80^\circ$、未软化核、扣 `c_s·E`，参考实现在 `tool/validation/verify_cloth_sheen_albedo.py`），表要做成两通道（R 未软化 `E_s`，G 为软化后的 `E†`）并接线；shader 运行时把 R 积成 `S`，间接光乘 `EvaluateIrradianceSH/π`，不建 Charlie 预滤波（§2.3⑪）；② **B 臂**的 §5 fabric payload 已登记为 `T=8`、约 15 通道，第一趟借用 12 个再加第二趟 1 张 payload（见 `documents/rendering/gbuffer-channel-ownership.md` §7），并确定 tangent curve 的数据来源（材质侧计算或贴图，论文数据在 Table 3）与前向路径是否扩展 `MaterialInputs`；③ B 臂需要**带切线的织纹网格**——`worldTangent` 在此之前对所有模型都不敏感，没有切线时 B 臂会退化成"全场同一方向"，`S-31` 的切线敏感性判定也就测不出来；④ 旧球阵场景 `SC_paper_case_cloth_sheen` 已删除（`D-18` 需重做），论文 case 的双色天鹅绒圆柱（`S-15`）与 ⑥ 资产/集成 case 的服装（`S-17`）需要新资产 |
+| 阻塞 | ~~重建路线未定~~ → **已定案：2026-09-16 路线（方案 C，两个 ID）+ 2026-09-17 范围（两臂都按论文完整还原）**，见 §2.3⑤。剩余阻塞：① **A 臂**要重建方向反照率 LUT（generator + graph `input` + pass 材质 texture 槽 + set 3 binding，顺序与 graph 一致），它服务 §5 分层的 `min(α_i, α_o)`——**离线口径与规格已于 2026-09-22 钉死**（§2.3⑩：16×16、`√r` 轴、$\theta_v\le80^\circ$、未软化核、扣 `c_s·E`，参考实现在 `tool/validation/verify_cloth_sheen_albedo.py`），表要做成两通道（R 未软化 `E_s`，G 为软化后的 `E†`）并接线；shader 运行时把 R 积成 `S`，间接光乘 `EvaluateIrradianceSH/π`，不建 Charlie 预滤波（§2.3⑪）；② **B 臂**的 §5 fabric payload 已登记为 `T=8`、约 15 通道，第一趟借用 12 个再加第二趟 1 张 payload（见 `documents/contracts/gbuffer-channel-ownership.md` §7），并确定 tangent curve 的数据来源（材质侧计算或贴图，论文数据在 Table 3）与前向路径是否扩展 `MaterialInputs`；③ B 臂需要**带切线的织纹网格**——`worldTangent` 在此之前对所有模型都不敏感，没有切线时 B 臂会退化成"全场同一方向"，`S-31` 的切线敏感性判定也就测不出来；④ 旧球阵场景 `SC_paper_case_cloth_sheen` 已删除（`D-18` 需重做），论文 case 的双色天鹅绒圆柱（`S-15`）与 ⑥ 资产/集成 case 的服装（`S-17`）需要新资产 |
 
 ### ② 论文来源
 
@@ -1438,7 +1438,7 @@ coat IOR 固定 1.5 / F0 0.04，不可作者化。
   **重建时不要复活它们**；但模型本身仍是"待实现"，所以在两条臂的求值器落地并跑完 case 之前，
   Cloth 的任何结论都不能写成"与论文一致"；
 - **2026-09-16 路线定案 = 方案 C，且落地为两个独立的 `ShadingModelID`**（不是同一个 ID 加内部开关，
-  理由见 `documents/rendering/gbuffer-channel-ownership.md` §7）：
+  理由见 `documents/contracts/gbuffer-channel-ownership.md` §7）：
   - `Cloth` = **8**（UE 对齐槽位）→ **A 臂**，身份是**对照臂**，不得作为交付外观；
   - `ClothFiber` = **13**（VulkanLearn 本地扩展，UE 5.8 表内没有这个槽位）→ **B 臂**，身份是**生产臂**；
 - **2026-09-17 范围定案：两条臂都"按论文还原"，不做简化档**（依据：论文 A 是 2 页的完整模型，
@@ -1464,7 +1464,7 @@ coat IOR 固定 1.5 / F0 0.04，不可作者化。
     - A 臂：`gbufferD` = `(sheenColor.rgb, sheenRoughness)`，`gbufferF.w` 不再需要 5+5 bit 打包；
       `r`（感知粗糙度）直接进式(2) 与式(3)，**不再经过平方映射**；
     - B 臂：`T=8`（两族各 8 个倾角，短族 `q=0`）约 15 通道。第一趟借用 12 个，再加第二趟 1 张 payload，
-      见 `documents/rendering/gbuffer-channel-ownership.md` §7；
+      见 `documents/contracts/gbuffer-channel-ownership.md` §7；
   - **`anisotropy` / `anisotropyCross` 两个输入随之退役**：A 臂论文里没有这个量，B 臂的各向异性由
     thread tangent 表达 —— 两个模型都不再有 anisotropy 标量，材质参数面与校验要按臂重写
     （现状 `source/materialInstanceValidator.cpp` 仍强制要求这两个参数）；
@@ -2118,7 +2118,7 @@ DefaultLit  ->  Cloth / Sheen  ->  Hair  ->  Subsurface  ->  TwoSidedFoliage  ->
    "测量前先 `tonemap 0` + 关 Bloom"的流程与两个共享工具同时落地（§1.3 / §1.5.3，
    记录见 `shading-model-case-records.md#m-07`）。**§2.1 / §2.3 / §2.4 的 mode 0 / 1 / 2 曲线 case
    自此可以做绝对的逐列像素判定**（已实测 ≤0.5 px）；
-2. ✅ **Cloth 重建路线定案（2026-09-16 完成）** —— §1.4.2 审计确认旧 v2 各向异性路径含 **5 项论文里没有的公式**（`S-10` `S-11` `S-12` + `aspect=2^anisotropy` + 分层因子），该实现已删除；§1.4.3 补查找到了有出处的替代路线（microcylinder），并确认 A / B 是**两种不同外观、不可能等价**（B 没有各向同性档）。**定案：方案 C，落地为两个独立 `ShadingModelID`** —— `Cloth` = 8（A 臂，Estévez 各向同性 Charlie，对照）/ `ClothFiber` = 13（B 臂，Sadeghi microcylinder，生产，本地扩展）；`anisotropy` / `anisotropyCross` 两个输入退役；通道预算见 `documents/rendering/gbuffer-channel-ownership.md` §7，完整约定见 §2.3⑤。按 §0.3 这是**唯一被确认的自创公式区**，所以 C 的两条臂都必须只含论文式；
+2. ✅ **Cloth 重建路线定案（2026-09-16 完成）** —— §1.4.2 审计确认旧 v2 各向异性路径含 **5 项论文里没有的公式**（`S-10` `S-11` `S-12` + `aspect=2^anisotropy` + 分层因子），该实现已删除；§1.4.3 补查找到了有出处的替代路线（microcylinder），并确认 A / B 是**两种不同外观、不可能等价**（B 没有各向同性档）。**定案：方案 C，落地为两个独立 `ShadingModelID`** —— `Cloth` = 8（A 臂，Estévez 各向同性 Charlie，对照）/ `ClothFiber` = 13（B 臂，Sadeghi microcylinder，生产，本地扩展）；`anisotropy` / `anisotropyCross` 两个输入退役；通道预算见 `documents/contracts/gbuffer-channel-ownership.md` §7，完整约定见 §2.3⑤。按 §0.3 这是**唯一被确认的自创公式区**，所以 C 的两条臂都必须只含论文式；
 3. ✅ **DefaultLit 的 `D-20` / `D-21`**（2026-09-13 收口）—— 两条都判定为**审计标注错误**：
    IBL 域用的是论文的 `k=α/2`（计划书写的 `α²/2` 是把当时的局部变量 `a` 当成 α 的误读；
    该变量同日按 §1.4.5 第 5 条改名为 `alpha`），

@@ -8,7 +8,7 @@
 - 模块之间的顺序依赖如何表达
 - 如何借鉴 C++ 的组织方式，让系统可控而不是“任意拼接代码”
 
-这份文档是对 [material-param-authoring-and-reflection.md](../../rendering/material-param-authoring-and-reflection.md) 的补充。前者解决参数声明和反射职责，这里专门讨论材质功能模块。
+这份文档是对 [material-param-authoring-and-reflection.md](../../contracts/material-param-authoring-and-reflection.md) 的补充。前者解决参数声明和反射职责，这里专门讨论材质功能模块。
 
 ## 核心定位
 

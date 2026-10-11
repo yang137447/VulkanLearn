@@ -4,7 +4,7 @@
 
 - 类型：已完成专项计划历史
 - 日期：2026-08-11
-- 状态：已实现（P1-P4）；2026-08-13 R1-R4 完成审核已关闭；稳定合同已迁入 `documents/rendering/shader-build-cache.md` 与 `documents/rendering/shader-hot-reload.md`
+- 状态：已实现（P1-P4）；2026-08-13 R1-R4 完成审核已关闭；稳定合同已迁入 `documents/contracts/shader-build-cache.md` 与 `documents/contracts/shader-hot-reload.md`
 - 范围：GLSL 源码、生成材质 include、shaderc 编译、SPIR-V 缓存、反射、Graphics/Compute Pipeline 更新与安全退休
 - 第一目标：启动阶段只编译缺失或过期的 Shader 产物
 - 第二目标：运行时支持不改变 Shader ABI 的 Graphics Shader 安全热重载
@@ -14,15 +14,15 @@
 > pending source 丢失、M_ live 状态迁移、World/RenderGraph 半提交、publication
 > preflight 和 shutdown-in-flight 缺口。审核过程与证据保留在
 > `shader-incremental-compile-and-hot-reload-completion-fix-plan.md`；当前行为只以
-> `documents/rendering/shader-build-cache.md`、`documents/rendering/shader-hot-reload.md`
+> `documents/contracts/shader-build-cache.md`、`documents/contracts/shader-hot-reload.md`
 > 和架构文档为准。下文保留为原始实施背景，不应覆盖这些稳定合同。
 
 本文档是 VulkanLearn 的项目专项实施计划，不替代以下当前合同：
 
-- `documents/rendering/material-param-authoring-and-reflection.md`
-- `documents/rendering/material-mesh-pass-composition.md`
-- `documents/rendering/descriptor-imageinfo-management.md`
-- `documents/architecture/vulkanlearn-architecture.html`
+- `documents/contracts/material-param-authoring-and-reflection.md`
+- `documents/contracts/material-mesh-pass-composition.md`
+- `documents/contracts/descriptor-imageinfo-management.md`
+- `documents/contracts/vulkanlearn-architecture.html`
 
 如果后续阶段完成实现，应把稳定下来的行为迁入 `documents/rendering/` 或
 `documents/architecture/`，本文保留实施过程、阶段边界和历史决策。
@@ -1076,13 +1076,13 @@ Shader reload 不负责修改 attachment、sample count、color output count 或
 
 P1 实现完成后：
 
-- 新增 `documents/rendering/shader-build-cache.md`，记录正式缓存 key、manifest schema 和失败语义。
+- 新增 `documents/contracts/shader-build-cache.md`，记录正式缓存 key、manifest schema 和失败语义。
 - 更新 `README.md` 的启动说明，注明 clean/miss 与 warm/hit 行为。
 
 P2/P3 实现完成后：
 
-- 新增 `documents/rendering/shader-hot-reload.md`，记录正式运行时命令、ABI 边界和安全提交合同。
-- 更新 `documents/architecture/vulkanlearn-architecture.html` 的线程/数据流和资源生命周期。
+- 新增 `documents/contracts/shader-hot-reload.md`，记录正式运行时命令、ABI 边界和安全提交合同。
+- 更新 `documents/contracts/vulkanlearn-architecture.html` 的线程/数据流和资源生命周期。
 - 更新 `AGENTS.md`，说明 Shader 修改后的增量编译、热重载和生成产物规则。
 
 ## 一句话结论
@@ -1107,8 +1107,8 @@ P2/P3 实现完成后：
 P1-P4 已全部落地并通过 Debug/Release、单线程/`workerThreadCount=2` 验证矩阵。
 本文保留阶段边界、核心决策与历史取舍；当前实现合同已迁入：
 
-- `documents/rendering/shader-build-cache.md`
-- `documents/rendering/shader-hot-reload.md`
+- `documents/contracts/shader-build-cache.md`
+- `documents/contracts/shader-hot-reload.md`
 
 相对本文原 P4 非目标范围的扩展：按最终需求，P4 额外纳入了 Compute owner、
 UI Overlay 与 `M_*.json` schema 重建热更新。实现取舍如下，供后续演进参考：

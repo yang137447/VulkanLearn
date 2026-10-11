@@ -1,5 +1,7 @@
 # 贴图 DescriptorImageInfo 管理方案总结
 
+> 状态：**当前契约**（实现已落地）。本文件描述系统**现在是什么**，每条可核对到源码、测试或`tool/ue-lite-boundary-audit.ps1` 的门禁规则；不含对未来行为的承诺——那些在 `documents/rationale/`。
+
 ## 背景
 
 当前仓库在材质贴图、pass 输入贴图和全局渲染贴图上统一采用“资源持有默认描述，descriptor 写入阶段只引用稳定描述”的方式：

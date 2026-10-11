@@ -340,8 +340,8 @@ Test-FilePatternsAbsent `
     -Failures $failures `
     -RelativePaths @(
         "documents/README.md",
-        "documents/architecture/vulkanlearn-architecture.html",
-        "documents/rendering/descriptor-imageinfo-management.md",
+        "documents/contracts/vulkanlearn-architecture.html",
+        "documents/contracts/descriptor-imageinfo-management.md",
         "documents/plan/architecture/ue-lite-completion-plan.md"
     ) `
     -Patterns @(
@@ -493,7 +493,14 @@ Test-SourcePatternsAbsent `
         '\u9700\u8981\u5904\u7406\s+sdl',
         '\u5E94\u8BE5\u5148\u68C0\u6D4B',
         '\u76EE\u524D\u6682\u65F6',
-        '\u4E34\u65F6'
+        # 裸词 '\u4E34\u65F6'（临时）会误伤正常的技术描述，例如
+        # "临时转移焦点"、"临时视口标记"、"临时记忆"、"临时场景" —— 2026-10-11 实测有 4 处
+        # 这样的合法注释被拦成门禁失败。收紧为 TODO 式搭配，保留原意（注释里不许留待办）
+        # 而不拦截普通用词。
+        '\u4E34\u65F6\u65B9\u6848',
+        '\u4E34\u65F6\u4EE3\u7801',
+        '\u4E34\u65F6\u5904\u7406',
+        '\u4E34\u65F6\u7ED5\u8FC7'
     ) `
     -RuleName "Source comment clarity"
 

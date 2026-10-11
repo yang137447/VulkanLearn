@@ -3,7 +3,7 @@
 This is the archived record of the retired standalone paper-image CLI and its
 fixed-case studies. Its paths, commands, baselines and outputs are historical
 evidence, not current build or implementation instructions. The active VL
-contract is `documents/architecture/vl-offline-rendering.md`.
+contract is `documents/contracts/vl-offline-rendering.md`.
 
 At the time of the archived implementation, `tool/offline-renderer/` held a
 standalone C++17/CMake CLI inside the VulkanLearn repository.

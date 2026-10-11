@@ -7,11 +7,11 @@
 - Completed: 2026-08-14
 - State: completed; retained as implementation history
 - Current architecture contract:
-  - `documents/architecture/vulkanlearn-architecture.html`
+  - `documents/contracts/vulkanlearn-architecture.html`
   - `documents/plan/architecture/ue-lite-completion-plan.md`
 - Related rendering contracts:
-  - `documents/rendering/shader-build-cache.md`
-  - `documents/rendering/shader-hot-reload.md`
+  - `documents/contracts/shader-build-cache.md`
+  - `documents/contracts/shader-hot-reload.md`
 - Deferred R6 follow-up:
   - `documents/plan/architecture/renderer-cohesive-runtime-extraction-plan.md`
 
@@ -139,10 +139,10 @@ Never reset, revert, or overwrite unrelated user work.
 Read in this order before editing:
 
 1. `AGENTS.md`
-2. `documents/architecture/vulkanlearn-architecture.html`
+2. `documents/contracts/vulkanlearn-architecture.html`
 3. `documents/plan/architecture/ue-lite-completion-plan.md`
-4. `documents/rendering/shader-build-cache.md`
-5. `documents/rendering/shader-hot-reload.md`
+4. `documents/contracts/shader-build-cache.md`
+5. `documents/contracts/shader-hot-reload.md`
 6. `tool/ue-lite-boundary-audit.ps1`
 7. `tool/ue-lite-final-validation.ps1`
 8. `source/engine/engineLoop.*`

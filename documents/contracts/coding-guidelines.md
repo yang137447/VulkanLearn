@@ -1,5 +1,7 @@
 # Coding Guidelines
 
+> 状态：**当前契约**（实现已落地）。本文件描述系统**现在是什么**，每条可核对到源码、测试或`tool/ue-lite-boundary-audit.ps1` 的门禁规则；不含对未来行为的承诺——那些在 `documents/rationale/`。
+
 This document records general coding conventions that should apply across engine modules.
 Feature-specific documents may add narrower rules, but should not redefine these base rules.
 

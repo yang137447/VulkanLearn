@@ -4,7 +4,7 @@
 
 这份文档是**工作审计**，不是设计契约。它记录"哪些能力在 ImGui→RmlUi 迁移中丢失了"、
 每一轮的验收证据、以及尚未达成一致的判断。正式契约仍在
-`documents/architecture/ui-component-system.md`，路线图仍在
+`documents/contracts/ui-component-system.md`，路线图仍在
 `documents/plan/ui/rmlui-editor-plan.md`。
 
 ## 为什么需要这份文档

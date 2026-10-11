@@ -1,6 +1,10 @@
 # Shading Model 验证 Case 记录
 
-本文件是 [`shading-model-alignment-plan.md`](shading-model-alignment-plan.md) 的**证据归档**。
+> 状态：**证据归档，不是契约**。这里记录已完成 case 的实测证据（像素/能量判据、复现命令、
+> 存档截图与日志路径）。其中的技术描述可能随实现演进而过时；当前契约以
+> `documents/contracts/` 为准。保留它的原因是 `artifacts/` 被 gitignore，结论只在这里持久化。
+
+本文件是 [`shading-model-alignment-plan.md`](../plan/rendering/shading-model-alignment-plan.md) 的**证据归档**。
 
 - 每个 case 结束时在这里追加一节，字段固定为 plan §0.4 的七项：
   **ID / 来源 / 验证目标 / 形式 / 实现锚点 / 判定 / 差异归因**（归因不能写"无"）；
@@ -1143,7 +1147,7 @@ cd <yyb-knowledge-book>; npm run citation:check; npm run citation:pages; npm run
 - 计划：§2.3④（新增 `S-35`）、§2.3③（`ShadeClothFiber` 行）、§2.3⑤（B 臂范围）、§2.3⑦ 第 10 条、§2.3⑪（表）、§2.3⑫（新增）；
 - 知识库 `cloth-sheen` 页：B0.5、B7.1、B7.5、B7.6、**B7.7（新增）**、B8.1、B9.1、B9.3、统一口径汇总表、伪代码 `ClothFiberIbl`、VulkanLearn 落地约束表；
 - 知识库决策树：新增 `环境项积分域 Ω⁺` 叶子；同时把 `Fresnel 透射能量项` 缺的 `marschner-2003 p7` 出处补进 `citations.json`（该引用此前只存在于生成的 `.mindmap` 里，属已存在的漂移）；
-- `documents/rendering/gbuffer-channel-ownership.md` §7 的 `E_fabric` 行。
+- `documents/contracts/gbuffer-channel-ownership.md` §7 的 `E_fabric` 行。
 
 
 

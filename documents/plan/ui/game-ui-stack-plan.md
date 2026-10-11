@@ -2,12 +2,12 @@
 
 > Historical adoption record. The original two-library UI choice is superseded
 > by `rmlui-editor-plan.md` (2026-10-10). Current behavior is defined by
-> `../../architecture/game-ui-stack.md`; this record does not authorize restoring ImGui.
+> `../../contracts/game-ui-stack.md`; this record does not authorize restoring ImGui.
 
 ## Status
 
 Implemented for the Windows-first Vulkan runtime. The current implementation
-contract lives in `documents/architecture/game-ui-stack.md`; this file remains
+contract lives in `documents/contracts/game-ui-stack.md`; this file remains
 the decision record and adoption checklist that led to that implementation.
 
 ## Decision

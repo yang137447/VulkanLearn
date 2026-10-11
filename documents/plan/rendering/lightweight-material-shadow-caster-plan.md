@@ -7,8 +7,8 @@
 - 范围：公共 Opaque ShadowCaster、可选材质专用 ShadowCaster、CSM draw 路由
 - 替代方向：不再实现 Common Masked ShadowCaster
 - 非目标：自动生成 Shadow shader、完整 Material Multi-Pass、Shader Graph、Shadow MI
-- 正式运行时合同：`documents/rendering/csm-shadow-map-m1.md`
-- 材质/descriptor 合同：`documents/rendering/material-param-authoring-and-reflection.md`
+- 正式运行时合同：`documents/contracts/csm-shadow-map-m1.md`
+- 材质/descriptor 合同：`documents/contracts/material-param-authoring-and-reflection.md`
 
 本文保留已审核的实现边界与验收矩阵；后续行为变更应优先更新上述正式合同。
 
@@ -622,7 +622,7 @@ OpaqueClip + 没有任何 .shadow stage
 
 文档：
 
-- 更新 `documents/rendering/csm-shadow-map-m1.md` 为实现后的正式合同。
+- 更新 `documents/contracts/csm-shadow-map-m1.md` 为实现后的正式合同。
 - 将 `common-masked-shadow-caster-plan.md` 标记为已回退历史方案。
 - 更新 `material-multipass-pass-tag-plan.md`，说明完整 Multi-Pass 仍是长期方向。
 

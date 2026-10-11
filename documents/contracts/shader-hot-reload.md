@@ -1,11 +1,13 @@
 # Shader Hot Reload Contract
 
+> 状态：**当前契约**（实现已落地）。本文件描述系统**现在是什么**，每条可核对到源码、测试或`tool/ue-lite-boundary-audit.ps1` 的门禁规则；不含对未来行为的承诺——那些在 `documents/rationale/`。
+
 ## Status
 
 - 类型：当前渲染契约
 - 落地状态：已实现（P2/P3/P4，R1-R4 完成审核已关闭）
 - 上游规划：`documents/plan/rendering/shader-incremental-compile-and-hot-reload-plan.md`
-- 关联：`documents/rendering/shader-build-cache.md`
+- 关联：`documents/contracts/shader-build-cache.md`
 
 本文描述运行时 Shader 热重载的 ABI 边界、事务提交、异步编译、参与者和资源退休。
 

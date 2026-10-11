@@ -735,7 +735,7 @@ strength is live weather/runtime state rather than part of the immutable
 base-tree profile.
 
 Runtime wind controls follow the input-boundary rule defined in
-`documents/architecture/coding-guidelines.md`. The `windstrength` command
+`documents/contracts/coding-guidelines.md`. The `windstrength` command
 validates finite `[0, 1]` input before publishing a runtime command; the
 downstream wind profile and simulation code trust that contract and do not
 repeat the same range check.

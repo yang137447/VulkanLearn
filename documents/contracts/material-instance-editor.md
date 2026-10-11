@@ -1,5 +1,7 @@
 # Material Instance Asset Editor
 
+> 状态：**当前契约**（实现已落地）。本文件描述系统**现在是什么**，每条可核对到源码、测试或`tool/ue-lite-boundary-audit.ps1` 的门禁规则；不含对未来行为的承诺——那些在 `documents/rationale/`。
+
 ## Status
 
 **Current status (2026-10-10): RmlUi workspace, renderer-independent editor baseline, the
@@ -107,7 +109,7 @@ Gates** below.
 ## UI Boundary
 
 The editor is part of the runtime-toggleable RmlUi workspace described by
-`documents/architecture/game-ui-stack.md`. It must follow the same ownership
+`documents/contracts/game-ui-stack.md`. It must follow the same ownership
 rules:
 
 ```text
@@ -326,7 +328,7 @@ must not claim a complete project-wide reverse-dependency index.
 ## Asset Schema And Authoring
 
 The M_ asset remains the schema authority described by
-`documents/rendering/material-param-authoring-and-reflection.md`:
+`documents/contracts/material-param-authoring-and-reflection.md`:
 
 - parameter names, types, defaults, and optional channel metadata come from
   `M_*.json`;

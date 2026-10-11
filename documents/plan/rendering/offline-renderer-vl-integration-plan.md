@@ -10,7 +10,7 @@
 > 是实施时的历史决策，不再是当前合同。独立论文成图程序已退役；
 > 当前唯一出图入口是 VL，纯 CPU 核心迁入 `source/render/offline/core/`，
 > 模块测试归根 GoogleTest。现行边界见
-> `documents/architecture/vl-offline-rendering.md`。
+> `documents/contracts/vl-offline-rendering.md`。
 
 ## 1. 目标与范围
 
@@ -67,14 +67,14 @@ VL 作为完整论文模型与实时近似模型的研究平台：
 | 主题 | 必读文件 |
 | --- | --- |
 | 当前离线算法与证据 | `documents/architecture/offline-paper-renderer.md`、`tool/offline-renderer/README.md`、`main.cpp`、四个 `*_test.cpp`、`verify_outputs.py` |
-| 引擎与线程 | `documents/architecture/vulkanlearn-architecture.html`、`source/main.cpp`、`source/engine/engineLoop.*` |
+| 引擎与线程 | `documents/contracts/vulkanlearn-architecture.html`、`source/main.cpp`、`source/engine/engineLoop.*` |
 | World 加载事务 | `source/world/loading/worldLoader.*`、`worldBuilder.*`、`worldGraphTransactionCoordinator.*` |
 | 快照与渲染 | `source/world/worldSnapshot*`、`source/render/frontend/renderScene.*`、`source/renderSystem.*`、`source/renderGraph.*` |
 | 资源 | `source/mesh/loader/common/meshAssetLoader.*`、`source/render/resource/rendererMeshLoader.*`、`rendererResourceCache.*`、`source/renderableObject.*` |
-| 纹理 | `documents/rendering/texture-asset-json-v1.md`、`source/textureAssetLoader.*`、`source/resource/image/textureIO.*`、`hostImage.*` |
-| 材质与编辑 | `documents/rendering/material-param-authoring-and-reflection.md`、`source/material/loader/materialInstanceResolver.*`、`source/editor/preview/*`、`source/editor/runtime/materialInstanceEditorRuntime.*` |
-| 显示与 UI | `documents/architecture/game-ui-stack.md`、`source/ui/uiOverlayRendererVulkan.*`、`config/renderGraphConfig.json` |
-| 测试规则 | `documents/architecture/coding-guidelines.md#test-governance`、根 `CMakeLists.txt` |
+| 纹理 | `documents/contracts/texture-asset-json-v1.md`、`source/textureAssetLoader.*`、`source/resource/image/textureIO.*`、`hostImage.*` |
+| 材质与编辑 | `documents/contracts/material-param-authoring-and-reflection.md`、`source/material/loader/materialInstanceResolver.*`、`source/editor/preview/*`、`source/editor/runtime/materialInstanceEditorRuntime.*` |
+| 显示与 UI | `documents/contracts/game-ui-stack.md`、`source/ui/uiOverlayRendererVulkan.*`、`config/renderGraphConfig.json` |
+| 测试规则 | `documents/contracts/coding-guidelines.md#test-governance`、根 `CMakeLists.txt` |
 
 2026-09-28 开工前的代码观察（历史基线，不可误读为当前实现）：
 

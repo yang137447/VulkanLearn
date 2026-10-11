@@ -85,7 +85,7 @@ JSON 输入边界来自 `source/editor/assets/editorJsonAssetLibrary.h`：
 ## 后续阶段
 
 组件分类、已实现范围和依赖边界以
-`documents/architecture/ui-component-system.md` 为当前契约。
+`documents/contracts/ui-component-system.md` 为当前契约。
 首批共享控件由 `vl_ui_widgets` 拥有，业务面板不再自行定义通用 RML/DOM 刷新逻辑。
 后续按 Text / Input / Layout / Views / Navigation / Workspace / Property
 逐类发展，不一次性创建无消费者的 Slate 同名占位类。
@@ -265,7 +265,7 @@ Window 菜单驱动的面板隐藏/恢复与可见性持久化、Viewport 左上
 ### 2026-10-11 Details 面板恢复迁移能力验证
 
 ImGui→RmlUi 迁移丢了 Details 面板的三项能力，本批把它们补回（组件契约见
-`documents/architecture/ui-component-system.md` 的“本次恢复的迁移能力”）：
+`documents/contracts/ui-component-system.md` 的“本次恢复的迁移能力”）：
 数值范围滑条（含 `ResolveSliderRange` 的通道 > 参数 > 按默认值推导的兜底语义）、
 Color 参数的 sRGB 色板与 `#RRGGBBAA` 读数、General / Render States / Parameters /
 Texture Bindings 四个可折叠分组（默认全展开）。
@@ -316,7 +316,7 @@ SDL3 的 `SDL_dialog.h` 没有颜色对话框 API，本轮不做，也没有用�
 本批把 Scene Outliner 换成真实 World actor 树（网格 / 四类灯 / 相机 / 环境 / 风剖面，
 固定分组顺序、可折叠、类型图标、搜索与类型过滤），并让选中 actor 驱动 Details：
 只读类型化参数 + 主方向光的 Intensity 与 CSM Cast Shadows 两个可编辑控件。
-契约见 `documents/architecture/ui-component-system.md` 的“世界 actor 树契约”，
+契约见 `documents/contracts/ui-component-system.md` 的“世界 actor 树契约”，
 发现与未做项见 `ue-parity-audit.md` 第 4 轮。
 
 - MinGW 构建：`cmake --build build --target editor_ui_tests editor_viewport_tests main
@@ -359,7 +359,7 @@ SDL3 的 `SDL_dialog.h` 没有颜色对话框 API，本轮不做，也没有用�
 本批把 Scene Outliner 的行集合改成受限可见窗口（预算 `SceneActorMaxMountedRows = 192`、
 两行预取、两个 spacer 补齐滚动范围），把组内排序控件加进过滤栏，
 并把分组顺序改成低基数类型在前。契约见
-`documents/architecture/ui-component-system.md` 的“世界 actor 树契约”，
+`documents/contracts/ui-component-system.md` 的“世界 actor 树契约”，
 发现与未做项见 `ue-parity-audit.md` 第 5 轮。
 
 - MinGW 构建：`cmake --build build --target editor_ui_tests editor_viewport_tests main
@@ -414,7 +414,7 @@ SDL3 的 `SDL_dialog.h` 没有颜色对话框 API，本轮不做，也没有用�
 `UiActionType::SetActorVisible` → `RuntimeCommandType::SetActorVisible` →
 `RuntimeCommandExecutor` 的命令路径（身份在执行边界解析并校验），
 以及大纲 actor 行的行尾眼睛开关（`icons/eye.png` / `icons/eye-off.png`）。
-契约见 `documents/architecture/ui-component-system.md` 的"世界 actor 树契约"，
+契约见 `documents/contracts/ui-component-system.md` 的"世界 actor 树契约"，
 发现、未做项与像素证据见 `ue-parity-audit.md` 第 6 轮。
 
 - MinGW 构建：`cmake --build build --target editor_ui_tests editor_viewport_tests main

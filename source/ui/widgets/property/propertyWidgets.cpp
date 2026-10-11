@@ -90,8 +90,10 @@ ColorReadout MakeColorReadout(const std::array<float, 4>& linearRgba)
     const unsigned int alpha = VL::UiSrgbHexByte(linearRgba[3]);
     ColorReadout readout;
     readout.hex = "#" + HexByte(red) + HexByte(green) + HexByte(blue) + HexByte(alpha);
-    // 色块使用不透明 rgb()：当前 UI overlay 不合成半透明背景（见 ui-component-system.md），
-    // 带 alpha 的底色会被画成错误颜色，alpha 只在十六进制读数里表达。
+    // 色块用不透明 rgb()：色块本身不需要半透明，而 RmlUi 6.2 的 rgba() 小数 alpha
+    // 会被 PropertyParserColour 的整数路径截断为 0（静默变全透明）。alpha 只由十六进制
+    // 读数表达，避免色块与读数不一致。详见 documents/contracts/ui-component-system.md
+    // 的 RCSS 颜色格式约定，以及 documents/rationale/pitfalls.md 的 [rcss-alpha] 条。
     readout.rgb = "rgb(" + std::to_string(red) + "," + std::to_string(green) + "," +
         std::to_string(blue) + ")";
     return readout;

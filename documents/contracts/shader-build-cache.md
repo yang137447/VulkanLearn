@@ -1,11 +1,13 @@
 # Shader Build Cache Contract
 
+> 状态：**当前契约**（实现已落地）。本文件描述系统**现在是什么**，每条可核对到源码、测试或`tool/ue-lite-boundary-audit.ps1` 的门禁规则；不含对未来行为的承诺——那些在 `documents/rationale/`。
+
 ## Status
 
 - 类型：当前渲染契约
 - 落地状态：已实现
 - 上游规划：`documents/plan/rendering/shader-incremental-compile-and-hot-reload-plan.md`（P1 稳定后迁入本文）
-- 关联：`documents/rendering/shader-hot-reload.md`
+- 关联：`documents/contracts/shader-hot-reload.md`
 
 本文描述跨启动 Shader 增量编译的身份、缓存 manifest、提交语义和失败语义。运行
 时热重载复用同一套身份与 manifest，但提交语义见 `shader-hot-reload.md`。

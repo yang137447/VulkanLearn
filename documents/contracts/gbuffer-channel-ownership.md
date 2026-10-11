@@ -1,5 +1,7 @@
 # GBuffer 附件与通道所有权
 
+> 状态：**当前契约**（实现已落地）。本文件描述系统**现在是什么**，每条可核对到源码、测试或`tool/ue-lite-boundary-audit.ps1` 的门禁规则；不含对未来行为的承诺——那些在 `documents/rationale/`。
+
 ## 状态
 
 本文是 VulkanLearn 当前 GBuffer 布局、通道所有权、以及 `ShadingModelID` / flag 位域分配的正式渲染合同。
@@ -26,7 +28,7 @@ ID 与 flag 表来自 `shader/glsl/common/shadingModel.glsl` 与 `source/materia
 
 - `plan/rendering/deferred-gbuffer-ue-aligned-plan.html`：本布局的来源计划（UE Legacy 槽位对齐、M_/MI_ 分层）。
 - `plan/rendering/shading-model-alignment-plan.md` §0.6 / §3.2：逐模型"按论文重建"的状态与 case 归属。
-- `rendering/shader-structure-and-material-function.md`：MaterialInputs / Shading Model 边界的上游规范。
+- `contracts/shader-structure-and-material-function.md`：MaterialInputs / Shading Model 边界的上游规范。
 
 ## 1. 硬约束：8 个颜色附件已经占满
 

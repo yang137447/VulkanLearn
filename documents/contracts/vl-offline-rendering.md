@@ -1,5 +1,7 @@
 # VL Offline Rendering
 
+> 状态：**当前契约**（实现已落地）。本文件描述系统**现在是什么**，每条可核对到源码、测试或`tool/ue-lite-boundary-audit.ps1` 的门禁规则；不含对未来行为的承诺——那些在 `documents/rationale/`。
+
 VL is the only offline-rendering application and scene authoring entry point.
 The former standalone paper-image CLI and its fixed-case asset loader were
 retired after the World/MI integration. Their historical study record is
@@ -22,7 +24,7 @@ a `ShadingModelID`. Runtime promotion is decided separately: only designated
 core models support deferred rendering; other promoted paper models use
 forward rendering. A forward-only model must not silently enter the geometry /
 deferred path. Deferred promotion additionally requires the GBuffer allocation
-and both-path contracts in `documents/rendering/gbuffer-channel-ownership.md`.
+and both-path contracts in `documents/contracts/gbuffer-channel-ownership.md`.
 
 The active World/graph transaction preflights the selected path before
 publishing its CPU package. Failed candidates and failed preview Apply leave

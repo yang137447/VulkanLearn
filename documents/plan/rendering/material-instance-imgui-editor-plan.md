@@ -1,6 +1,6 @@
 # Material Instance Asset Editor 开发计划
 
-> **历史计划（2026-10-10）**：`codex/rmlui-editor` 分支已移除 ImGui，编辑器宿主改为 RmlUi。本文件保留历史设计，不再作为 UI 实施入口；当前组件契约见 `documents/architecture/ui-component-system.md`，迁移路线见 `documents/plan/ui/rmlui-editor-plan.md`。
+> **历史计划（2026-10-10）**：`codex/rmlui-editor` 分支已移除 ImGui，编辑器宿主改为 RmlUi。本文件保留历史设计，不再作为 UI 实施入口；当前组件契约见 `documents/contracts/ui-component-system.md`，迁移路线见 `documents/plan/ui/rmlui-editor-plan.md`。
 
 > **当前实施状态（2026-08-29）**：renderer-independent 的 MI 资产编辑基线已经落地，`renderMode`/`shadingModel`/`cullMode` 三项 render-state override 已接入命令、service、UI 快照和稀疏保存；renderer-owned preview 已支持这三项状态的隔离候选加载、variant/pass/material/pipeline 与对象 descriptor 重建、原子 live swap 和 GPU epoch 退休，数值 live preview 继续走 MaterialInstance 原地更新。纹理 live preview 尚未完成，`texture.open`、事件流和少数 runtime 路由仍有缺口。
 >
@@ -12,10 +12,10 @@
 - 当前状态：部分落地；renderer-independent 资产编辑链、三项 render-state override 编辑、renderer-owned 数值 live preview 和三项状态的事务化 live preview 已具备；纹理 live preview 和少数 runtime 路由仍未完成
 - 目标：在 Dear ImGui 开发者 UI 中提供 UE 风格的 MI 资产配置编辑器；场景只用于定位资产，资产文档负责编辑和保存，运行时 World 只提供可选预览。
 - 首版范围：`float`、`vec2`、`vec3`、`vec4` 参数、MI texture slot 对已有 `T_*.json` 纹理资产的引用配置，以及 `renderMode`、`shadingModel`、`cullMode` 三项 MI render-state override；这些编辑均已有 renderer-free 代码路径。
-- 当前契约：稳定的 UI/线程边界已迁移到 `documents/architecture/material-instance-editor.md`；本文保留原始设计、阶段目标和验收矩阵，并在文末记录实际落地状态。
+- 当前契约：稳定的 UI/线程边界已迁移到 `documents/contracts/material-instance-editor.md`；本文保留原始设计、阶段目标和验收矩阵，并在文末记录实际落地状态。
 
-正式合同现位于 `documents/architecture/material-instance-editor.md`，并继续遵循
-`documents/architecture/game-ui-stack.md` 与 `documents/rendering/material-param-authoring-and-reflection.md`
+正式合同现位于 `documents/contracts/material-instance-editor.md`，并继续遵循
+`documents/contracts/game-ui-stack.md` 与 `documents/contracts/material-param-authoring-and-reflection.md`
 中的宿主 UI、线程和参数真相源约束。
 
 ## 背景与基础
@@ -661,7 +661,7 @@ P0 完成时，所有业务操作均通过统一 EditorCommand；场景对象只
 - **校验边界**：当前 service 已覆盖文档级类型、有限值、channel range、override key、三项 render-state 枚举和值、有效 `renderMode`/`shadingModel` 组合以及 `T_*.json` source 检查；pass-specific 路由、`MaterialDescriptorSchema`/shader reflection 和 pipeline 合同校验仍属于 renderer/live preview 接入阶段。
 - **ImGui 与宿主 UI**：`source/editor/ui/materialInstanceAssetEditorPanel.*` 已接通资产浏览、参数/纹理/render-state 编辑、单项 Reset、Reset All、Revert、Validate、Save 和 `Ctrl+S` 命令生产；`source/editor/runtime/materialInstanceEditorRuntime.*` 已接入 `UiSubsystem` 的初始化、每帧 drain/tick、snapshot 更新和 World 变化诊断，World 变化不会关闭文档。
 - **Preview 边界**：`source/editor/preview/` 已提供值语义类型、World/代际检查的 controller 和显式 `Unavailable` adapter；renderer-owned numeric adapter 已接入稳定帧路径，三项 render-state 变化会进入隔离资源候选事务，完成 Material/variant/pass/graphics pipeline、对象 descriptor、RenderScene 分组的原子替换，并将旧 World-local package 按 GPU epoch 退休。纹理变更仍需要独立的 descriptor replacement 事务。
-- **测试与正式合同**：`tool/material-instance-editor-tests/` 已包含 fixture contract tests 与 landed-interface tests，并由根 `CMakeLists.txt` 注册；正式合同已迁移到 `documents/architecture/material-instance-editor.md`。
+- **测试与正式合同**：`tool/material-instance-editor-tests/` 已包含 fixture contract tests 与 landed-interface tests，并由根 `CMakeLists.txt` 注册；正式合同已迁移到 `documents/contracts/material-instance-editor.md`。
 
 ### P0 阶段状态
 
@@ -691,7 +691,7 @@ P0 完成时，所有业务操作均通过统一 EditorCommand；场景对象只
 
 ### 文档与测试使用方式
 
-- 当前正式架构合同：`documents/architecture/material-instance-editor.md`；
+- 当前正式架构合同：`documents/contracts/material-instance-editor.md`；
 - focused test 说明与覆盖范围：`tool/material-instance-editor-tests/README.md`；
 - 根构建下可运行：`cmake --build build -j2 --target material_instance_editor_tests material_instance_editor_landed_tests material_instance_editor_production_tests`，随后执行 `ctest --test-dir build -R "^material_instance_editor_(contract|landed|production)$" --output-on-failure`；本轮三个 target 均已执行并通过；
 - fixture standalone 构建仍可使用 `tool/material-instance-editor-tests/CMakeLists.txt`，用于不依赖完整主程序的协议、持久化和预览值语义回归。

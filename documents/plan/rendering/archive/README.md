@@ -14,7 +14,7 @@
 
 | 归档文件 | 原位置 | 被取代的原因 |
 | --- | --- | --- |
-| `offline-paper-renderer-standalone.md` | `documents/architecture/offline-paper-renderer.md` | 独立 CLI 与固定案例退役；当前 VL 离线合同见 `architecture/vl-offline-rendering.md` |
+| `offline-paper-renderer-standalone.md` | `documents/architecture/`（该位置的 `offline-paper-renderer.md` 从未存在；退役主体即本归档文件） | 独立 CLI 与固定案例退役；当前 VL 离线合同见 `contracts/vl-offline-rendering.md` |
 | `car-paint-shading-model.md` | `documents/rendering/` | ClearCoat 实现删除，改按论文重做 |
 | `cloth-shading-model.md` | `documents/rendering/` | Cloth 实现删除（v2 各向异性含 5 项无出处公式） |
 | `eye-shading-model.md` | `documents/rendering/` | Eye 实现删除，改按论文重做 |
@@ -155,7 +155,7 @@ shader/glsl/pass/generate/M_gbufferDebugParamter.glsl——已删 pass 的残留
 
 **文档侧同步修正**（只改与事实不符的地方，不做措辞润色）：
 
-- `documents/rendering/shader-structure-and-material-function.md`：原先用 NeoX Default/Silk/Pearl/Crystal
+- `documents/contracts/shader-structure-and-material-function.md`：原先用 NeoX Default/Silk/Pearl/Crystal
   当"当前落地示例"，那些母材质与 MF 早已不存在；改为按现存结构写（`M_pbr`→`mf_pbrInputs`、
   SpeedTree 的顶点嵌套、`M_unlit`→`mf_normal`、Pass 级 `mf_alphaClip`），并注明 NeoX 线已归档；
 - `documents/plan/rendering/shading-model-alignment-plan.md`：§1.7.5 场景索引按清理后的 **15 个场景 /

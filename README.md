@@ -16,17 +16,17 @@
   - 负责说明阅读顺序、修改约定、高风险区域、隐式耦合和工作方式
   - 不负责替代架构设计文档
 - `documents/README.md`
-  - 面向所有协作者的正式文档目录
-  - 负责说明文档分类、每类文档的职责和收录规则
-- `documents/architecture/`
-  - 存放正式架构、线程模型、系统边界、数据流与通用编码约定
-  - 这里描述当前认可的架构边界和落地状态
-- `documents/rendering/`
-  - 存放当前已经落地或正在被代码使用的渲染契约
-  - 例如材质参数生成、贴图资产 JSON、descriptor image info 管理
-- `documents/plan/`
-  - 存放未实现、部分实现或长期路线型文档；已落地方案可以保留决策记录
-  - 当前实现契约必须迁移到 `documents/architecture/` 或 `documents/rendering/`
+  - 面向所有协作者的文档分层说明
+  - 说明三层各自能信到什么程度，以及"契约层不得写未来"这条硬纪律
+- `documents/routing.md`
+  - 源码路径 → 必读契约 → 守护门禁规则的映射
+  - 改任何源码前先读它，按路径匹配全部适用规则
+- `documents/contracts/`
+  - 当前契约：系统**现在是什么**，每条可核对到源码、测试或门禁规则
+  - 与源码矛盾时以源码为准，并修正契约
+- `documents/rationale/` 与 `documents/plan/`
+  - **非契约**：决策、证据归档、被否决的方案、退役实现、以及打算做什么
+  - 可以任意写未来，但不能当事实引用
 - `documents/reference/`
   - 存放教程、课程和背景学习资料
 
@@ -34,11 +34,11 @@
 
 - `AGENTS.md`
 - `documents/README.md`
-- `documents/architecture/vulkanlearn-architecture.html`
-- `documents/architecture/game-ui-stack.md`
-- `documents/rendering/texture-asset-json-v1.md`
-- `documents/rendering/material-param-authoring-and-reflection.md`
-- `documents/rendering/descriptor-imageinfo-management.md`
+- `documents/contracts/vulkanlearn-architecture.html`
+- `documents/contracts/game-ui-stack.md`
+- `documents/contracts/texture-asset-json-v1.md`
+- `documents/contracts/material-param-authoring-and-reflection.md`
+- `documents/contracts/descriptor-imageinfo-management.md`
 
 ## 环境要求
 - Windows 10/11
@@ -105,9 +105,9 @@ build/bin/main.exe --no-dev-ui
 ```
 
 RML/RCSS/本地化文件在开发模式下支持候选解析、校验、提交式热重载；失败候选
-不会替换最后一个有效页面。实现契约见 `documents/architecture/game-ui-stack.md`。
+不会替换最后一个有效页面。实现契约见 `documents/contracts/game-ui-stack.md`。
 编辑器后续阶段见 `documents/plan/ui/rmlui-editor-plan.md`。
-组件分类与当前覆盖见 `documents/architecture/ui-component-system.md`；
+组件分类与当前覆盖见 `documents/contracts/ui-component-system.md`；
 首批组件模块位于 `source/ui/widgets/`，共享样式位于 `ui/widgets/`。
 
 从本工作目录根启动；默认资源目录为相邻的 `../VukanLearnResources`。
@@ -117,7 +117,7 @@ RML/RCSS/本地化文件在开发模式下支持候选解析、校验、提交�
 
 VL 是离线渲染的唯一出图入口；纯 CPU `vl_offline_core` 由根工程构建，
 数值测试不需要 Vulkan 窗口。当前架构边界见
-`documents/architecture/vl-offline-rendering.md`。VL 已接入冻结的
+`documents/contracts/vl-offline-rendering.md`。VL 已接入冻结的
 World/MI/mesh/纹理输入、渐进会话和 Vulkan 离线显示；支持范围只限
 Lambert、ClothSheen、ClothFiber、AshikhminVelvet、AshikhminSatin、
 AshikhminSlantedVelvet 的已验证配置，遇到不支持的环境、光源、
@@ -160,7 +160,7 @@ build/bin/main.exe --offline --initial-scene Maps/SC_Cloth_Ashikhmin2000_Fig11Ve
 
 Satin 的纤维方向取 UV0 U，MI 可通过 `u_fiberRotationDegrees` 旋转；
 两臂的染色、灯位和机位是本地选择，不是恢复的原场景元数据。
-验证结果与差异见 `documents/plan/rendering/shading-model-case-records.md`
+验证结果与差异见 `documents/contracts/shading-model-case-records.md`
 的 `AS-01` / `AS-02`。两者实时模式均明确拒绝。
 
 Fig. 13 的黑色与红色倾斜纤维 Velvet 使用独立离线模型
@@ -281,7 +281,7 @@ shaderc=29, failed=0, elapsedMs=2043.1
 ```
 
 第二次无修改启动应看到 `compiled=0, shaderc=0`。缓存身份、manifest schema 和
-失败语义见 `documents/rendering/shader-build-cache.md`。
+失败语义见 `documents/contracts/shader-build-cache.md`。
 
 运行时支持以下调试命令：
 
@@ -294,7 +294,7 @@ shadercache stats      输出启动构建统计与 manifest artifact 数
 `shader/glsl` 下的 `.vert/.frag/.comp/.glsl` 与 `M_*.json` 会被自动监听：
 CPU 编译在独立 worker 完成，EngineLoop 在 Render Thread 安全点创建 Vulkan
 对象并事务提交，旧 Pipeline/descriptor 经 GPU frame epoch 延迟退休。热重载
-的 ABI 边界、参与者和事务语义见 `documents/rendering/shader-hot-reload.md`。
+的 ABI 边界、参与者和事务语义见 `documents/contracts/shader-hot-reload.md`。
 连续保存会按 stable source identity 求并集；source epoch 用于快速拒绝旧任务，正式
 提交前仍复核 primary/include digest。`M_*.json` schema 更新会在候选 World/Graph
 中迁移兼容的 live 参数和贴图，失败时 active runtime 与正式 artifact 整包保持。

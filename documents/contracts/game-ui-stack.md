@@ -1,5 +1,7 @@
 # Game UI Stack
 
+> 状态：**当前契约**（实现已落地）。本文件描述系统**现在是什么**，每条可核对到源码、测试或`tool/ue-lite-boundary-audit.ps1` 的门禁规则；不含对未来行为的承诺——那些在 `documents/rationale/`。
+
 ## Status
 
 Current contract, 2026-10-10: RmlUi serves both runtime controls and the
@@ -39,7 +41,7 @@ texture token and a framebuffer-pixel layout rectangle, never image handles.
 
 The reusable `vl_ui_widgets` module and `ui/widgets/editor-widgets.rcss`
 own common controls, row/tab composition and DOM refresh behavior.
-`documents/architecture/ui-component-system.md` defines categories and ownership.
+`documents/contracts/ui-component-system.md` defines categories and ownership.
 
 `MaterialInstanceAssetEditorPanel` borrows a document and consumes immutable
 editor views. The model tree expands into material-slot children through the
