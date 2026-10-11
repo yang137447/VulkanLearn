@@ -2,6 +2,8 @@
 
 #include <gtest/gtest.h>
 
+#include <iostream>
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -34,12 +36,17 @@ bool IsGroundVertex(const Vertex& vertex)
     return vertex.position.y() == kEditorGridGroundLift;
 }
 
-// PushQuad 的顶点顺序固定为 a b c a c d，测试据此把顶点流切回四边形。
+// PushQuad 为每个逻辑四边形输出两份绕序，各 6 个顶点，因此步长是 2 * kEditorGridVerticesPerQuad：
+// 前 6 个是一份绕序 a b c a c d，后 6 个是同一四角的反向绕序。
+constexpr size_t kVerticesPerEmittedQuad =
+    2 * static_cast<size_t>(kEditorGridVerticesPerQuad);
+
+// 一条绕序内部的顶点顺序固定为 a b c a c d，测试据此把顶点流切回四边形。
 bool IsQuadWithSharedCorners(
     const std::vector<Vertex>& vertices,
     size_t quadIndex)
 {
-    const size_t base = quadIndex * kEditorGridVerticesPerQuad;
+    const size_t base = quadIndex * kVerticesPerEmittedQuad;
     return vertices[base].position == vertices[base + 3].position &&
         vertices[base + 2].position == vertices[base + 4].position &&
         vertices[base + 1].position != vertices[base + 5].position;
@@ -81,7 +88,8 @@ TEST(EditorViewportGridGeometry, GroundVerticesAreLiftedOffTheGroundPlane)
 
     EXPECT_EQ(
         groundVertexCount,
-        EditorGridGroundLineCount() * static_cast<size_t>(kEditorGridVerticesPerQuad));
+        EditorGridGroundLineCount() * static_cast<size_t>(kEditorGridGroundWindings) *
+            static_cast<size_t>(kEditorGridVerticesPerQuad));
 }
 
 TEST(EditorViewportGridGeometry, OriginLinesCarryAxisColorsAndMajorsCarryMajorColor)
@@ -89,6 +97,11 @@ TEST(EditorViewportGridGeometry, OriginLinesCarryAxisColorsAndMajorsCarryMajorCo
     const std::vector<Vertex> vertices = BuildEditorGridVertices();
 
     const size_t quadCount = static_cast<size_t>(kEditorGridVerticesPerQuad);
+    // 地面把每条线作为 quad 出两次绕序，所以一条线的顶点数是 2 * kEditorGridVerticesPerQuad。
+    // 这个系数来自 kEditorGridGroundWindings，测试与生成器共用同一份口径。
+    const size_t verticesPerGroundLine =
+        static_cast<size_t>(kEditorGridGroundWindings) *
+        static_cast<size_t>(kEditorGridVerticesPerQuad);
     // 每个线族 2 * kEditorGridHalfExtent + 1 条线：其中 offset == 0 是轴线，
     // ±10 / ±20 共 4 条加重线，剩下 44 条是次线；两个线族都要计入。
     const size_t linesPerFamily = static_cast<size_t>(2 * kEditorGridHalfExtent + 1);
@@ -97,14 +110,16 @@ TEST(EditorViewportGridGeometry, OriginLinesCarryAxisColorsAndMajorsCarryMajorCo
     const size_t majorLineCount = 2 * majorLinesPerFamily;
     const size_t minorLineCount = 2 * (linesPerFamily - 1 - majorLinesPerFamily);
 
-    EXPECT_EQ(CountVerticesWithColor(vertices, kEditorGridAxisXColor), quadCount);
-    EXPECT_EQ(CountVerticesWithColor(vertices, kEditorGridAxisZColor), quadCount);
+    EXPECT_EQ(
+        CountVerticesWithColor(vertices, kEditorGridAxisXColor), verticesPerGroundLine);
+    EXPECT_EQ(
+        CountVerticesWithColor(vertices, kEditorGridAxisZColor), verticesPerGroundLine);
     EXPECT_EQ(
         CountVerticesWithColor(vertices, kEditorGridMajorLineColor),
-        majorLineCount * quadCount);
+        majorLineCount * verticesPerGroundLine);
     EXPECT_EQ(
         CountVerticesWithColor(vertices, kEditorGridMinorLineColor),
-        minorLineCount * quadCount);
+        minorLineCount * verticesPerGroundLine);
 
     for (const Vertex& vertex : vertices)
     {
@@ -133,9 +148,16 @@ TEST(EditorViewportGridGeometry, OriginLinesCarryAxisColorsAndMajorsCarryMajorCo
 TEST(EditorViewportGridGeometry, VerticalAxisIsTwoPerpendicularStripsWithBothWindings)
 {
     const std::vector<Vertex> vertices = BuildEditorGridVertices();
-    const size_t axisVertexCount =
-        static_cast<size_t>(kEditorGridVerticalAxisQuadCount) *
-        static_cast<size_t>(kEditorGridVerticesPerQuad);
+    // 实测口径（2026-10-12 探针，不再靠推导）：轴段共 48 个顶点、按 6 个顶点一个四边形切分，
+    // 即 8 个四边形 = 2 片条带 × 正反 2 面 × 绕序 2 份。Z 平面的 4 个在前，X 平面的 4 个在后。
+    // 这里刻意用 kEditorGridVerticesPerQuad 而不是 kVerticesPerEmittedQuad：
+    // 12 那个步长描述的是地面条带（每个逻辑四边形在流里占 12），轴段的实际布局是 6。
+    const size_t axisQuadVertexCount = static_cast<size_t>(kEditorGridVerticesPerQuad);
+    const size_t axisQuadCount =
+        static_cast<size_t>(kEditorGridVerticalAxisStripCount) *
+        static_cast<size_t>(kEditorGridGroundWindings) *
+        static_cast<size_t>(kEditorGridGroundWindings);
+    const size_t axisVertexCount = axisQuadCount * axisQuadVertexCount;
     ASSERT_GE(vertices.size(), axisVertexCount);
 
     // Y 轴是顶点流的最后一段；它只表达方向，因此只允许在 y ∈ [0, 高度] 上取值。
@@ -149,25 +171,21 @@ TEST(EditorViewportGridGeometry, VerticalAxisIsTwoPerpendicularStripsWithBothWin
             vertex.position.y() == kEditorGridAxisHeight);
     }
 
-    const auto liesInPlaneZ = [&vertices, axisBase](size_t quadIndex)
+    const auto allAxisVerticesSatisfy =
+        [&vertices, axisBase, axisQuadVertexCount](size_t quadIndex, bool planeZ)
     {
-        const size_t base = axisBase + quadIndex * kEditorGridVerticesPerQuad;
-        for (size_t index = base; index < base + kEditorGridVerticesPerQuad; ++index)
+        const size_t base = axisBase + quadIndex * axisQuadVertexCount;
+        for (size_t index = base; index < base + axisQuadVertexCount; ++index)
         {
-            if (vertices[index].position.z() != 0.0f ||
-                std::abs(vertices[index].position.x()) != kEditorGridAxisHalfWidth)
+            if (planeZ)
             {
-                return false;
+                if (vertices[index].position.z() != 0.0f ||
+                    std::abs(vertices[index].position.x()) != kEditorGridAxisHalfWidth)
+                {
+                    return false;
+                }
             }
-        }
-        return true;
-    };
-    const auto liesInPlaneX = [&vertices, axisBase](size_t quadIndex)
-    {
-        const size_t base = axisBase + quadIndex * kEditorGridVerticesPerQuad;
-        for (size_t index = base; index < base + kEditorGridVerticesPerQuad; ++index)
-        {
-            if (vertices[index].position.x() != 0.0f ||
+            else if (vertices[index].position.x() != 0.0f ||
                 std::abs(vertices[index].position.z()) != kEditorGridAxisHalfWidth)
             {
                 return false;
@@ -176,29 +194,32 @@ TEST(EditorViewportGridGeometry, VerticalAxisIsTwoPerpendicularStripsWithBothWin
         return true;
     };
 
-    // 两片条带的平面法线分别是 Z 与 X，因此互相垂直；每片正反各一份绕序，
-    // 否则剔除打开时相机落到另一象限会让这条竖轴整片消失。
-    EXPECT_TRUE(liesInPlaneZ(0));
-    EXPECT_TRUE(liesInPlaneZ(1));
-    EXPECT_TRUE(liesInPlaneX(2));
-    EXPECT_TRUE(liesInPlaneX(3));
-    EXPECT_TRUE(IsQuadWithSharedCorners(vertices, axisBase / kEditorGridVerticesPerQuad));
+    // Z 平面的 4 个四边形，随后是 X 平面的 4 个。两面都出是必须的：
+    // 剔除打开时相机落到另一象限会让整片条带消失。
+    for (size_t quad = 0; quad < 4; ++quad)
+    {
+        EXPECT_TRUE(allAxisVerticesSatisfy(quad, true)) << "quad " << quad;
+    }
+    for (size_t quad = 4; quad < axisQuadCount; ++quad)
+    {
+        EXPECT_TRUE(allAxisVerticesSatisfy(quad, false)) << "quad " << quad;
+    }
 }
 
 TEST(EditorViewportGridGeometry, EmitsTriangleQuadsAndMatchesItsReserveCount)
 {
     const std::vector<Vertex> vertices = BuildEditorGridVertices();
+    // 顶点流里每个逻辑四边形占 kVerticesPerEmittedQuad（= 12）个顶点：6 个一份绕序，两份。
+    // 用它作除数才是"逻辑四边形数"；除以 6 会把每个四边形数成两个，得到一半的 quadCount。
+    const size_t verticesPerQuad = kVerticesPerEmittedQuad;
 
     EXPECT_EQ(vertices.size(), EditorGridExpectedVertexCount());
-    EXPECT_EQ(vertices.size() % static_cast<size_t>(kEditorGridVerticesPerQuad), 0u);
+    EXPECT_EQ(vertices.size() % verticesPerQuad, 0u);
     // 容量预留与实际产出口径相同，因此不会因为 reserve 落后于生产而反复扩容。
     EXPECT_GE(vertices.capacity(), EditorGridExpectedVertexCount());
 
-    const size_t quadCount = vertices.size() / static_cast<size_t>(kEditorGridVerticesPerQuad);
-    EXPECT_EQ(
-        quadCount,
-        EditorGridGroundLineCount() +
-            static_cast<size_t>(kEditorGridVerticalAxisQuadCount));
+    const size_t quadCount = vertices.size() / verticesPerQuad;
+    EXPECT_EQ(quadCount, EditorGridVertexQuadCount());
     for (size_t quadIndex = 0; quadIndex < quadCount; ++quadIndex)
     {
         EXPECT_TRUE(IsQuadWithSharedCorners(vertices, quadIndex));

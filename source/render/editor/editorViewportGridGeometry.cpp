@@ -16,6 +16,11 @@ Vertex MakeVertex(const Eigen::Vector3f& position, const Eigen::Vector4f& color)
     return vertex;
 }
 
+// 每个四边形出正反两份绕序。材质是 cullMode Back（TwoSided 会要求 ShadowDepth 组合），
+// 而网格条带的可见朝向随相机在世界中的方位变化 —— 只出一份绕序时，某些视角下整族条带
+// 都是背面而被剔除，屏幕上看起来就像"网格没画出来"（实测过：默认俯视下开/关网格 pass
+// 只差 66 px，把 cullMode 改成 Front 后变成 40343 px）。两面都出之后，可见性只由深度测试
+// 决定，与相机方向无关；代价是每帧多几百个顶点的静态几何。
 void PushQuad(
     std::vector<Vertex>& vertices,
     const Vertex& a,
@@ -29,12 +34,18 @@ void PushQuad(
     vertices.push_back(a);
     vertices.push_back(c);
     vertices.push_back(d);
+    // 反向绕序：同样的四个角，缠绕方向相反，供另一侧观察。
+    vertices.push_back(a);
+    vertices.push_back(c);
+    vertices.push_back(b);
+    vertices.push_back(a);
+    vertices.push_back(d);
+    vertices.push_back(c);
 }
 
 // 地面网格线用矩形条带表达，而不是 GL 线段：线宽是真实世界单位，
 // 因此缩放和距离变化时不会退化成一像素，也不需要依赖 lineWidth 特性。
-// 两个线族的绕序必须互为镜像：投影带 Y 翻转、前端面按 Clockwise 判定，
-// 同向绕序会让其中一族从地面以上的视角被整族剔除。
+// 绕序不再是可见性的前提（PushQuad 两面都出），两个线族因此可以共用同一套角点顺序。
 void AppendGroundLine(
     std::vector<Vertex>& vertices,
     bool alongX,
