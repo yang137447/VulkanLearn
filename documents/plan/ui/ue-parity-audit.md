@@ -34,6 +34,7 @@ git show HEAD:source/editor/ui/materialInstanceAssetEditorPanel.cpp
 | 纹理选择弹窗 | `BeginPopup("MITexturePicker")` | `<select>` 下拉 | 不恢复：下拉覆盖同一需求 |
 | 场景对象树 | 无（只有 MI 模型列表） | 无 | 第 4 轮新增真实 World actor 树；第 5 轮行窗口化 + 组内排序 |
 | 大纲逐 actor 可见性 | 无 | 无 | 第 6 轮新增：World 可见性状态 + 快照过滤 + 眼睛开关（仅运行时） |
+| 多 section actor 的整 actor 隐藏 | 不适用 | 第 6 轮只对单 section 生效 | 第 7 轮修正：按 `sceneObjectIdentity` 一次写全所有 section |
 | 大纲多选 / 拖放 | 无 | 无 | 未排期，属于场景文档阶段 |
 | gizmo / 变换编辑 | 无 | 无 | 未排期，需先改场景数据模型 |
 | Undo / Redo | 无 | 无 | 未排期；Edit 菜单已留禁用占位 |
@@ -360,6 +361,91 @@ viewport 区域 `x∈[8,860) y∈[110,500)` 的 332280 个采样点上
   （`vis-baseline`、`vis-control`、`vis-sun-hidden`、`vis-sun-shown`、
   `vis-mesh-rows`、`vis-mesh-control`、`vis-mesh-hidden`）。
 
+## 第 7 轮：多 section 网格的整 actor 可见性
+
+第 6 轮把"逐 actor 可见性"当成已完成，但写入端与大纲用的不是同一个键：
+
+- 大纲把所有共享 `sceneObjectIdentity` 的 `WorldMeshObject` 聚合成**一行**
+  （`CollectMeshGroups`，`source/editor/scene/editorSceneActorBuilder.cpp`）；
+- 读取端也确实是整 actor 语义（`actor.visible = std::any_of(sections, visible)`）；
+- 而写入端走的是 `World::SetMeshObjectVisible(name, visible)`，即
+  `meshObjects.find(name)`。**多 section 模型的实现名是
+  `<场景对象名>::<section 名>`**（`rendererMeshLoader.cpp` 在 section 数 > 1 时加后缀），
+  身份（场景对象名）根本不是 `meshObjects` 里的键。
+
+于是对多 section 网格点眼睛：`find` 失败 → 执行端打印
+`Actor visibility rejected because the actor is not in the active World`
+→ 画面毫无变化。默认球阵场景（`SC_sphere_array`）与当时所有 fixture 都是单 section
+（单 section 时身份 == 对象名），因此这条路径在单元测试与第 6 轮像素证据里都没被走到——
+**这是第 6 轮"已知未完成边界"从风险变成真实缺陷的那一步**。
+
+修正（三个生产改动点，都不新增命令、不改场景 schema/validator）：
+
+- **身份推导抽成一份**：新增 `source/world/meshSceneObjectIdentity.{h,cpp}` 的
+  `MeshSceneObjectIdentity(object, objectName)`。读取端（actor 行聚合、
+  `MeshDrawSnapshot::sceneObjectIdentity`）与写入端共用它，
+  避免"大纲认得的名字 World 不认得"再次出现。
+- **写入端按身份写全所有 section**：`World::SetMeshSceneObjectVisible(identity, visible)`
+  对每个匹配身份的 section 施加同一操作，返回是否至少命中一个（没命中时执行端照旧诊断拒绝）。
+  单 section 网格的身份等于对象名，行为与逐对象写入完全一致。
+- **读取端不变**：`any_of` 仍是"任一 section 可见即整行可见"。
+  点击写入的是**该行显示状态的反面**，因此从任何起始状态点一次之后所有 section 必然一致，
+  行状态与渲染状态严格吻合。不一致 section 的规则由此写死：可见 → 全部隐藏，
+  全部不可见 → 全部显示；不存在"点一次只收敛一半"。
+
+### 验证（2026-10-11，第七轮）
+
+```powershell
+cmake --build build --target editor_ui_tests editor_viewport_tests main material_instance_editor_production_tests -j8
+ctest --test-dir build -R "^(UiColorTransform|UiWidgetTest|UiWidgetRefresh|EditorUiTest|ContentBrowserTest|DockWorkspaceTest|DockPersistenceTest|DockRmlTest|EditorViewportGeometry|EditorJsonAssetParsing|EditorJsonAssetPaths|EditorJsonAssetTypes|JsonAssetLibraryTest|ResourceEditorController|LargeCatalog/ContentBrowserPerformanceTest)\." --output-on-failure
+ctest --test-dir build -R "MaterialInstanceEditor" --output-on-failure
+```
+
+- 四个目标全部构建成功（唯一告警是既有 MinGW `<ciso646>` deprecation）。
+- 编辑器 UI 选择 **287/287 通过**（基线 283/283，净增 4 项，全在
+  `editorUiTests.cpp`），**同一选择连跑两次都是 287/287**；
+  `MaterialInstanceEditor` **22/22 通过**，与基线一致。
+- 新增 4 项断言真实 World + 真实 `WorldSnapshotBuilder` + 真实 actor builder：
+  多 section（3 个 section 共享一个身份）按身份隐藏/显示时所有 section 一起变、
+  快照同时省略/恢复全部 section、actor 行状态与逐 section 事实一致；
+  不一致 section 从两个方向收敛；单 section 身份仍等于对象名；
+  身份确实不在 World（含把 section 键当身份）仍然被拒绝。
+- 断言与对象名形态取自真实数据：`SC_car_showcase` 的车轮是 3 个材质槽、
+  车身是 8 个材质槽（`SM_car_wheel_bl.json` / `SM_car_main.json`），
+  测试用 `<场景对象名>::<section 名>` 这一实现命名，不另造一套。
+
+### 像素证据：多 section actor 真的整件从画面里消失（1280×720，`--dev-ui`）
+
+探针 `artifacts/rmlui-editor/multisection_visibility_probe.py`（gitignored）。
+默认场景全是单 section，因此探针用**既有** `SC_car_showcase` 地图
+（通过调试控制台 `loadworld`，资源目录零改动）。
+
+| 观察点 | 读数 | 结论 |
+| --- | --- | --- |
+| 世界提交 | `World/graph transaction committed: generation=2, scene=...SC_car_showcase.json` | 测的是真实多 section 地图 |
+| 稳定性对照（无命令，两张连续截图） | `changed=0 strong=0 max_delta=0`（滚动后再测一次也是 `0`） | 后续差分不可能来自场景漂移 |
+| 目标行身份 | 日志 `Actor SM_car_wheel_bl hidden.`，**没有任何 rejection 行** | 修复前这一行就是拒绝诊断，且画面不变 |
+| 车辆腿隐藏 | `changed=6544`、`strong=5895/332280`、`max_delta=608`，强变化 bbox `x=[365,737] y=[119,337]`；最强像素 `(711,209) rgb(3,3,2) → rgb(196,203,217)` | 整件（三个 section 一起）离屏；`rgb(3,3,2)` 是车轮轮胎像素 |
+| 变化范围 | 变化 bbox 之外 `changed=1 / strong=0`（`max_delta=33`） | 隐藏是局部事件，不是整幅重画 |
+| 行尾眼睛 | eye bbox 描边像素 56 → 69 | 行自己的状态也切换了（第二信号） |
+| 再点一次 | 日志 `Actor SM_car_wheel_bl shown.`；`changed=5 strong=4 max_delta=261`（该腿漂移对照 `≤10`） | 可见性可逆 |
+| 单 section 回归腿（同一探针 `--single-section`，默认球阵场景） | 隐藏 `SphereArray_X02_Y00`：`changed=342 strong=328`，bbox `x=[341,360] y=[396,415]`（一个球格），最强像素 `(354,405) rgb(236,232,231) → rgb(116,116,128)`；恢复 `changed=0`（**逐字节相同**） | 第 6 轮已验证的单 section 行为未回归 |
+
+- 该车辆腿的场景自身每两张连续截图有 **0–5 个像素**抖动（程序化天空 + CSM），
+  因此那条腿的稳定性判据是"抖动 ≤ 10 像素"并把实测抖动当对照报出来；
+  球阵腿仍是严格的 `changed=0`。隐藏一个车轮改变 6544 个像素，量级不可能混淆。
+- **像素证据的边界**："整个 actor 的三个 section 都被写到了"由单元测试断言
+  （`EditorUiTest.MultiSectionMeshVisibilityAppliesToEverySectionAtOnce`），
+  像素只能证明"车**轮**这件物体从画面里消失了、别的没动"。
+  探针选中的行身份（`SM_car_wheel_bl`）与地图里已知的多 section 场景对象匹配，
+  这是探针能给出的最强身份约束。
+- 未验证：spotLight / squareAreaLight / 风剖面的眼睛（场景没有这三类对象）；
+  整车轮的**逐 section 半隐藏**中间态不可达（写入端总是整 actor 写），
+  因此没有对应的像素观察点。
+- 该进程由探针强制终止，**这是渲染证据，不是 teardown 证据**。产物：
+  日志 `artifacts/rmlui-editor/visibility-multi-134407.log`（stderr 0 字节）、
+  截图 `Generated/Screenshots/ms-multi-*.bmp`、`ms-single-*.bmp`。
+
 ## 待处置项
 
 ### `resource-json-close` 死分支：已删除
@@ -460,7 +546,7 @@ RmlUi 6.2 的 `PropertyParserColour` 在 RGBA 分支对每个分量统一走整�
    最后发现是 `UiSubsystem` 在 developer UI 可见时把 `#hud` 显式设为
    `display: none`——元素本身按设计不显示，与颜色格式无关。
 
-## 尚未实现能力清单（2026-10-11 核对，第六轮后）
+## 尚未实现能力清单（2026-10-11 核对，第七轮后）
 
 以下在 HEAD 与当前分支中都不存在，属于新增而非回归：
 
@@ -481,3 +567,7 @@ RmlUi 6.2 的 `PropertyParserColour` 在 RGBA 分支对每个分量统一走整�
 而是真实 World actor 树（网格 / 四类灯 / 相机 / 环境 / 风剖面，分组、图标、搜索、类型过滤）。
 第 6 轮消掉的一条：逐 actor 可见性——它是**运行时**能力（World 状态 + 快照过滤 + 眼睛开关），
 不是场景 schema 迁移，因此没有触碰场景 JSON、validator 或 World 保存路径。
+第 7 轮补齐了它的多 section 边界：第 6 轮"已知未完成边界"（写入端按 section 键找对象）
+已确认为真实缺陷并修掉，现在**没有遗留的多 section 可见性边界**；
+仍未验证的只有场景里不存在的那几类对象的眼睛（spotLight / squareAreaLight / 风剖面，
+与第 4、5、6 轮同一限制）。

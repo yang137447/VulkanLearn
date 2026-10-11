@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -112,12 +113,27 @@ public:
     // UI 回调不持有 World。名字不存在时返回 false，由调用方给出诊断而不是静默忽略。
     // 这里的四个入口就是"哪些 World 内容可被隐藏"的唯一清单；新增可隐藏内容时
     // 必须同时补上这里、runtimeCommandExecutor 的路由和渲染快照的过滤。
-    bool SetMeshObjectVisible(const std::string& name, bool visible);
+    //
+    // 网格按场景对象身份（MeshSceneObjectIdentity）写入，不是按 section 键：
+    // 多 section 模型在 meshObjects 里是多个条目，identity 本身不是任何一个条目的键，
+    // 因此"一个 actor 一个可见性"要求这里一次写全该 identity 的所有 section。
+    bool SetMeshSceneObjectVisible(const std::string& sceneObjectIdentity, bool visible);
     bool SetLightVisible(const std::string& name, bool visible);
     // 方形面光在 World 里按值保存（不是 shared_ptr），因此单独一个入口。
     bool SetSquareAreaLightVisible(const std::string& name, bool visible);
 
+    // 读取端：与 scene/editorSceneActorBuilder 的 actor 行同一条规则——
+    // 只要还有可见 section 就算可见。两个入口共用同一份 identity 推导，
+    // 因此"行显示什么"与"点击会写什么"不会漂移。
+    bool IsMeshSceneObjectVisible(const std::string& sceneObjectIdentity) const;
+
 private:
+    // 对属于同一个场景对象身份的每个 mesh section 施加同一操作，返回是否至少命中一个。
+    // 身份推导只有 MeshSceneObjectIdentity() 一份，读写两端共用，避免"大纲认得的名字
+    // World 不认得"这类静默失配。
+    template <typename ApplyFn>
+    bool ForEachMeshObjectInSceneObject(const std::string& sceneObjectIdentity, ApplyFn&& apply);
+
     uint64_t generation = 0;
     std::string scenePath;
     std::weak_ptr<SceneNode> viewTarget;

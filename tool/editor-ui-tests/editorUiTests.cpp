@@ -21,6 +21,7 @@
 #include "editor/ui/editorSceneActorTree.h"
 #include "editor/scene/editorSceneActorBuilder.h"
 #include "sceneNode.h"
+#include "world/meshSceneObjectIdentity.h"
 #include "world/world.h"
 #include "world/worldSnapshotBuilder.h"
 
@@ -2193,7 +2194,7 @@ TEST_F(EditorUiTest, WorldVisibilitySettersRejectNamesThatAreNotInTheActiveWorld
     for (const auto& entry : world.GetMeshObjects()) EXPECT_TRUE(entry.second.visible);
     EXPECT_TRUE(world.GetPrimaryDirectionalLight()->IsVisible());
 
-    EXPECT_TRUE(world.SetMeshObjectVisible("Sphere_A", false));
+    EXPECT_TRUE(world.SetMeshSceneObjectVisible("Sphere_A", false));
     EXPECT_FALSE(world.GetMeshObjects().at("Sphere_A").visible);
     EXPECT_TRUE(world.GetMeshObjects().at("Sphere_B").visible);
 
@@ -2205,7 +2206,7 @@ TEST_F(EditorUiTest, WorldVisibilitySettersRejectNamesThatAreNotInTheActiveWorld
     EXPECT_FALSE(world.GetSquareAreaLights().at("Area_Light").visible);
 
     // 陈旧或伪造身份必须报告失败，而不是静默改不到东西或套用到别的对象上。
-    EXPECT_FALSE(world.SetMeshObjectVisible("Sphere_Gone", false));
+    EXPECT_FALSE(world.SetMeshSceneObjectVisible("Sphere_Gone", false));
     EXPECT_FALSE(world.SetLightVisible("Sphere_A", false));
     EXPECT_FALSE(world.SetSquareAreaLightVisible("Key_Light", false));
 }
@@ -2221,7 +2222,7 @@ TEST_F(EditorUiTest, SnapshotBuilderOmitsInvisibleMeshesAndLights)
     // 方形面光同样按可见性过滤：实时路径目前不接受它，但快照语义要一致。
     EXPECT_EQ(CountLightSnapshots(visible, LightSnapshotType::SquareArea), 1u);
 
-    ASSERT_TRUE(world.SetMeshObjectVisible("Sphere_A", false));
+    ASSERT_TRUE(world.SetMeshSceneObjectVisible("Sphere_A", false));
     ASSERT_TRUE(world.SetLightVisible("Sun_Light", false));
     ASSERT_TRUE(world.SetSquareAreaLightVisible("Area_Light", false));
 
@@ -2236,7 +2237,7 @@ TEST_F(EditorUiTest, SnapshotBuilderOmitsInvisibleMeshesAndLights)
     EXPECT_EQ(CountLightSnapshots(hidden, LightSnapshotType::SquareArea), 0u);
 
     // 重新显示必须回到与最初一致的数量与身份。
-    ASSERT_TRUE(world.SetMeshObjectVisible("Sphere_A", true));
+    ASSERT_TRUE(world.SetMeshSceneObjectVisible("Sphere_A", true));
     ASSERT_TRUE(world.SetLightVisible("Sun_Light", true));
     ASSERT_TRUE(world.SetSquareAreaLightVisible("Area_Light", true));
     const WorldSnapshot restored = BuildVisibilityTestSnapshot(world);
@@ -2249,7 +2250,7 @@ TEST_F(EditorUiTest, SnapshotBuilderOmitsInvisibleMeshesAndLights)
 TEST_F(EditorUiTest, SceneActorSnapshotPublishesTheWorldVisibilityFlag)
 {
     World world = MakeVisibilityTestWorld();
-    ASSERT_TRUE(world.SetMeshObjectVisible("Sphere_A", false));
+    ASSERT_TRUE(world.SetMeshSceneObjectVisible("Sphere_A", false));
     ASSERT_TRUE(world.SetLightVisible("Sun_Light", false));
 
     const std::vector<EditorSceneActorSnapshot> actors = BuildEditorSceneActors(world);
@@ -2421,6 +2422,217 @@ TEST_F(EditorUiTest, HiddenActorRowShowsEyeOffAndStillRoutesDetailsAndSelection)
     EXPECT_EQ(TrailingIcon(OutlinerVisibilityToggle("Sphere_01")), "icons/eye.png");
     ASSERT_NE(OutlinerRowElement("Sphere_01"), nullptr);
     EXPECT_FALSE(OutlinerRowElement("Sphere_01")->IsClassSet("hidden-row"));
+}
+
+// ---------------------------------------------------------------------------
+// 多 section 网格的整 actor 可见性：大纲的一行代表整个场景网格对象，
+// 写入端必须按 sceneObjectIdentity 一次写全它的所有 section。
+// 这里仍然用真实 World + 真实 WorldSnapshotBuilder + 真实 actor builder：
+// 本次修的是"大纲身份"与"World 键"的失配，只有真实两端才能证明它们对齐。
+// ---------------------------------------------------------------------------
+
+// 一个 section 的 WorldMeshObject：对象名是 meshObjects 的键，场景对象身份是
+// 大纲聚合 actor 用的键；单 section 对象两者相同，多 section 对象共享身份。
+WorldMeshObject VisibilitySection(
+    const std::string& objectName,
+    const std::string& sceneObjectIdentity,
+    uint32_t materialSlotIndex,
+    bool visible = true)
+{
+    WorldMeshObject object = VisibilityTestMesh(objectName);
+    object.sceneObjectIdentity = sceneObjectIdentity;
+    object.materialSlotIndex = materialSlotIndex;
+    object.visible = visible;
+    return object;
+}
+
+// 真实多 section 模型的命名形态（rendererMeshLoader 的规则）：section 对象名是
+// "<场景对象名>::<section 名>"，身份则是场景对象名本身。车轮是 3 个材质槽的网格。
+World MakeMultiSectionVisibilityTestWorld()
+{
+    World world = MakeVisibilityTestWorld();
+    world.AddMeshObject("SM_car_wheel_bl::M_Wheel_Tread",
+        VisibilitySection("SM_car_wheel_bl::M_Wheel_Tread", "SM_car_wheel_bl", 0));
+    world.AddMeshObject("SM_car_wheel_bl::M_Wheel_Brake",
+        VisibilitySection("SM_car_wheel_bl::M_Wheel_Brake", "SM_car_wheel_bl", 1));
+    world.AddMeshObject("SM_car_wheel_bl::M_Wheel_Hub",
+        VisibilitySection("SM_car_wheel_bl::M_Wheel_Hub", "SM_car_wheel_bl", 2));
+    return world;
+}
+
+size_t CountMeshDrawsBySceneObjectIdentity(const WorldSnapshot& snapshot, const std::string& identity)
+{
+    size_t count = 0;
+    for (const MeshDrawSnapshot& draw : snapshot.meshDraws)
+        if (draw.sceneObjectIdentity == identity) ++count;
+    return count;
+}
+
+std::vector<const EditorSceneActorSnapshot*> FindActorSnapshot(
+    const std::vector<EditorSceneActorSnapshot>& actors, const std::string& sceneObjectIdentity)
+{
+    std::vector<const EditorSceneActorSnapshot*> matches;
+    for (const EditorSceneActorSnapshot& actor : actors)
+        if (actor.type == EditorSceneActorType::Mesh && actor.sceneObjectIdentity == sceneObjectIdentity)
+            matches.push_back(&actor);
+    return matches;
+}
+
+TEST_F(EditorUiTest, MultiSectionMeshVisibilityAppliesToEverySectionAtOnce)
+{
+    World world = MakeMultiSectionVisibilityTestWorld();
+    const std::string identity = "SM_car_wheel_bl";
+
+    // 前提：这个 actor 确实由三个 section 组成，且它的身份不是任何一个 section 的键。
+    ASSERT_EQ(world.GetMeshObjects().count(identity), 0u);
+    ASSERT_EQ(world.GetMeshObjects().count("SM_car_wheel_bl::M_Wheel_Hub"), 1u);
+
+    std::vector<EditorSceneActorSnapshot> actors = BuildEditorSceneActors(world);
+    std::vector<const EditorSceneActorSnapshot*> actorMatches = FindActorSnapshot(actors, identity);
+    ASSERT_EQ(actorMatches.size(), 1u);
+    const EditorSceneActorSnapshot* actor = actorMatches.front();
+    EXPECT_EQ(actor->identity, "mesh|SM_car_wheel_bl");
+    EXPECT_EQ(actor->sections.size(), 3u);
+    EXPECT_TRUE(actor->visible);
+    ASSERT_TRUE(world.SetLightVisible("Sun_Light", false));
+
+    // 按身份隐藏：三个 section 必须一起改变可见性。修复前这里返回 false，
+    // meshObjects 里根本没有以身份为键的条目。
+    ASSERT_TRUE(world.SetMeshSceneObjectVisible(identity, false));
+    EXPECT_FALSE(world.GetMeshObjects().at("SM_car_wheel_bl::M_Wheel_Tread").visible);
+    EXPECT_FALSE(world.GetMeshObjects().at("SM_car_wheel_bl::M_Wheel_Brake").visible);
+    EXPECT_FALSE(world.GetMeshObjects().at("SM_car_wheel_bl::M_Wheel_Hub").visible);
+    // 另一个 actor 不受影响。
+    EXPECT_TRUE(world.GetMeshObjects().at("Sphere_A").visible);
+
+    // 快照必须同时省略全部三个 section；灯光过滤同帧生效，证明这一帧真的重新构建过。
+    const WorldSnapshot hidden = BuildVisibilityTestSnapshot(world);
+    EXPECT_EQ(CountMeshDrawsBySceneObjectIdentity(hidden, identity), 0u);
+    EXPECT_EQ(CountMeshDraws(hidden, "SM_car_wheel_bl::M_Wheel_Tread"), 0u);
+    EXPECT_EQ(CountMeshDraws(hidden, "SM_car_wheel_bl::M_Wheel_Brake"), 0u);
+    EXPECT_EQ(CountMeshDraws(hidden, "SM_car_wheel_bl::M_Wheel_Hub"), 0u);
+    EXPECT_EQ(CountLightSnapshots(hidden, LightSnapshotType::Directional), 0u);
+    EXPECT_EQ(CountMeshDraws(hidden, "Sphere_A"), 1u);
+
+    // actor 快照读的是冻结的 World：整行隐藏，且"任一 section 可见"的读数与
+    // 逐 section 事实一致（点击之后两侧必然一致，不存在半隐藏的行）。
+    actors = BuildEditorSceneActors(world);
+    actorMatches = FindActorSnapshot(actors, identity);
+    ASSERT_EQ(actorMatches.size(), 1u);
+    EXPECT_FALSE(actorMatches.front()->visible);
+    EXPECT_FALSE(world.IsMeshSceneObjectVisible(identity));
+    for (const EditorSceneMeshSectionSnapshot& section : actorMatches.front()->sections)
+        EXPECT_FALSE(world.GetMeshObjects().at(section.objectName).visible);
+
+    // 重新显示同样一次写全：三个 section 全部回到可见，快照恢复三份 draw。
+    ASSERT_TRUE(world.SetMeshSceneObjectVisible(identity, true));
+    EXPECT_TRUE(world.GetMeshObjects().at("SM_car_wheel_bl::M_Wheel_Tread").visible);
+    EXPECT_TRUE(world.GetMeshObjects().at("SM_car_wheel_bl::M_Wheel_Brake").visible);
+    EXPECT_TRUE(world.GetMeshObjects().at("SM_car_wheel_bl::M_Wheel_Hub").visible);
+    EXPECT_TRUE(world.IsMeshSceneObjectVisible(identity));
+    actors = BuildEditorSceneActors(world);
+    actorMatches = FindActorSnapshot(actors, identity);
+    ASSERT_EQ(actorMatches.size(), 1u);
+    EXPECT_TRUE(actorMatches.front()->visible);
+
+    const WorldSnapshot shown = BuildVisibilityTestSnapshot(world);
+    EXPECT_EQ(CountMeshDrawsBySceneObjectIdentity(shown, identity), 3u);
+}
+
+TEST_F(EditorUiTest, InconsistentSectionsToggleToAllHiddenWhenAnySectionIsVisible)
+{
+    World world = MakeVisibilityTestWorld();
+    const std::string identity = "Sphere_A";
+
+    // 先造出不一致状态。写入端总是整 actor 写，所以这个状态本轮不可达，
+    // 但字段默认可见、上一版构建可能留下混合状态，因此规则必须确定：
+    // 行按"任一 section 可见"显示为可见，眼睛发出的就是这一读数的反面，
+    // 即第一次点击的目标态是"全部隐藏"，一次点击后所有 section 必然一致。
+    world.AddMeshObject("Sphere_A::Section_Body",
+        VisibilitySection("Sphere_A::Section_Body", identity, 0));
+    world.AddMeshObject("Sphere_A::Section_Glass",
+        VisibilitySection("Sphere_A::Section_Glass", identity, 1, false));
+
+    std::vector<EditorSceneActorSnapshot> actors = BuildEditorSceneActors(world);
+    std::vector<const EditorSceneActorSnapshot*> matches = FindActorSnapshot(actors, identity);
+    ASSERT_EQ(matches.size(), 1u);
+    EXPECT_TRUE(matches.front()->visible);
+    EXPECT_EQ(matches.front()->sections.size(), 3u);
+    EXPECT_TRUE(world.IsMeshSceneObjectVisible(identity));
+    // 行状态取自与建造相同的 World 状态，不是另一条规则。
+    EXPECT_EQ(matches.front()->visible, world.IsMeshSceneObjectVisible(identity));
+
+    // 不一致状态下按身份写入 = 全部隐藏（与行上眼睛发出的 0 一致）。
+    ASSERT_TRUE(world.SetMeshSceneObjectVisible(identity, false));
+    EXPECT_FALSE(world.GetMeshObjects().at("Sphere_A").visible);
+    EXPECT_FALSE(world.GetMeshObjects().at("Sphere_A::Section_Body").visible);
+    EXPECT_FALSE(world.GetMeshObjects().at("Sphere_A::Section_Glass").visible);
+    actors = BuildEditorSceneActors(world);
+    matches = FindActorSnapshot(actors, identity);
+    ASSERT_EQ(matches.size(), 1u);
+    EXPECT_FALSE(matches.front()->visible);
+    const WorldSnapshot hidden = BuildVisibilityTestSnapshot(world);
+    EXPECT_EQ(CountMeshDrawsBySceneObjectIdentity(hidden, identity), 0u);
+    EXPECT_EQ(CountMeshDraws(hidden, "Sphere_A::Section_Body"), 0u);
+    EXPECT_EQ(CountMeshDraws(hidden, "Sphere_A::Section_Glass"), 0u);
+
+    // 第二次点击必然写"全部可见"：收敛后两个方向都不再留下混合状态。
+    ASSERT_TRUE(world.SetMeshSceneObjectVisible(identity, true));
+    EXPECT_TRUE(world.GetMeshObjects().at("Sphere_A").visible);
+    EXPECT_TRUE(world.GetMeshObjects().at("Sphere_A::Section_Body").visible);
+    EXPECT_TRUE(world.GetMeshObjects().at("Sphere_A::Section_Glass").visible);
+    actors = BuildEditorSceneActors(world);
+    matches = FindActorSnapshot(actors, identity);
+    ASSERT_EQ(matches.size(), 1u);
+    EXPECT_TRUE(matches.front()->visible);
+    const WorldSnapshot shown = BuildVisibilityTestSnapshot(world);
+    EXPECT_EQ(CountMeshDrawsBySceneObjectIdentity(shown, identity), 3u);
+}
+
+TEST_F(EditorUiTest, MeshActorIdentityResolutionMatchesTheWritePathForSingleAndMultiSection)
+{
+    World world = MakeMultiSectionVisibilityTestWorld();
+
+    // 单 section actor 的身份 == 对象名：行为与修复前完全一致。
+    const WorldMeshObject& single = world.GetMeshObjects().at("Sphere_A");
+    EXPECT_EQ(MeshSceneObjectIdentity(single, "Sphere_A"), "Sphere_A");
+
+    // 多 section actor：身份来自 sceneObjectIdentity，不等于任何 section 键。
+    const WorldMeshObject& multi = world.GetMeshObjects().at("SM_car_wheel_bl::M_Wheel_Hub");
+    EXPECT_EQ(MeshSceneObjectIdentity(multi, "SM_car_wheel_bl::M_Wheel_Hub"), "SM_car_wheel_bl");
+    // 空身份的兜底（跨旧数据/直接构造的 WorldMeshObject）也必须两边一致。
+    WorldMeshObject unnamed;
+    EXPECT_EQ(MeshSceneObjectIdentity(unnamed, "Sphere_A"), "Sphere_A");
+
+    // 真实 actor builder 发布的 mesh 稳定身份必须是写入端认得的那一个字符串。
+    const std::vector<EditorSceneActorSnapshot> actors = BuildEditorSceneActors(world);
+    std::vector<const EditorSceneActorSnapshot*> matches =
+        FindActorSnapshot(actors, MeshSceneObjectIdentity(multi, "SM_car_wheel_bl::M_Wheel_Hub"));
+    ASSERT_EQ(matches.size(), 1u);
+    EXPECT_EQ(matches.front()->sceneObjectIdentity, "SM_car_wheel_bl");
+    EditorSceneActorIdentity parsed;
+    ASSERT_TRUE(ParseSceneActorIdentity(matches.front()->identity, parsed));
+    EXPECT_EQ(parsed.type, EditorSceneActorType::Mesh);
+    EXPECT_EQ(parsed.name, matches.front()->sceneObjectIdentity);
+    EXPECT_TRUE(world.SetMeshSceneObjectVisible(parsed.name, false));
+    EXPECT_FALSE(world.IsMeshSceneObjectVisible("SM_car_wheel_bl"));
+}
+
+TEST_F(EditorUiTest, MissingMeshIdentityIsStillRejectedInAMultiSectionWorld)
+{
+    World world = MakeMultiSectionVisibilityTestWorld();
+
+    // 多 section actor 必须不再被拒绝……
+    EXPECT_TRUE(world.SetMeshSceneObjectVisible("SM_car_wheel_bl", false));
+    // ……但身份确实不在当前 World 时仍然拒绝（旧场景、已改名、伪造身份），
+    // 并且 section 键永远不是 actor 身份：缺陷期的失败写法下发到这里必须仍然返回 false，
+    // 不能被当成"改到了这个 actor"。
+    EXPECT_FALSE(world.SetMeshSceneObjectVisible("SM_car_wheel_bl::M_Wheel_Hub", false));
+    EXPECT_FALSE(world.SetMeshSceneObjectVisible("SM_car_wheel_bl::M_Wheel_Missing", false));
+    EXPECT_FALSE(world.SetMeshSceneObjectVisible("Wheel_From_Another_Scene", false));
+    // 被拒绝的写入不得产生任何副作用：只有显式下发的那一个 actor 被改了。
+    EXPECT_FALSE(world.IsMeshSceneObjectVisible("SM_car_wheel_bl"));
+    EXPECT_TRUE(world.GetMeshObjects().at("Sphere_A").visible);
 }
 
 } // namespace

@@ -63,7 +63,9 @@ bool ApplyActorVisibility(
     switch (identity.type)
     {
     case EditorSceneActorType::Mesh:
-        return world.SetMeshObjectVisible(identity.name, visible);
+        // 网格 actor 的身份就是 sceneObjectIdentity（大纲按它聚合 section），
+        // 因此这里一次写全该 actor 的所有 section，而不是找同名的单个渲染对象。
+        return world.SetMeshSceneObjectVisible(identity.name, visible);
     case EditorSceneActorType::DirectionalLight:
     case EditorSceneActorType::PointLight:
     case EditorSceneActorType::SpotLight:

@@ -108,7 +108,7 @@ JSON 输入边界来自 `source/editor/assets/editorJsonAssetLibrary.h`：
 
 各阶段单独定义验收和模块测试，再进入下一阶段；不以更换控件库替代数据所有权设计。
 
-### 尚未实现的能力清单（2026-10-11 核对，第六批后）
+### 尚未实现的能力清单（2026-10-11 核对，第七批后）
 
 以下能力在当前分支确认缺席，后续阶段直接以此为准，不要重新推导：
 
@@ -118,6 +118,7 @@ JSON 输入边界来自 `source/editor/assets/editorJsonAssetLibrary.h`：
 - 逐 actor 可见性只有运行时语义：开关不写场景 JSON、`SceneAssetValidator` 不认识、
   没有 `SaveVisibilityToScene`；重载场景一律全部可见。
   持久化属于场景文档阶段，和 transform 编辑同一批。
+  第 7 批已修正它的多 section 边界（整 actor 写入，见下节），语义本身未变。
 - 没有地形节点：`World` 没有 terrain 访问器，仓库里也没有 terrain 运行时。
 - 大纲行窗口化只覆盖世界 actor 树；通用 `TreeRow` 组件、模型树与 Sources 树仍整棵挂载。
   改名、拖放、重父级、多选都不存在。
@@ -451,3 +452,30 @@ SDL3 的 `SDL_dialog.h` 没有颜色对话框 API，本轮不做，也没有用�
   隐藏对象的材质实例文档与拾取行为只有单元测试覆盖（拾取来自 `meshDraws`，
   因此隐藏网格不可拾取，与画面一致）；
   可见性不持久化——重载场景一律全部可见。
+
+### 2026-10-11 多 section 网格的整 actor 可见性修正
+
+第 6 批留下一处"已知未完成边界"：大纲按 `sceneObjectIdentity` 把多个
+`WorldMeshObject` 聚合成一行，但写入端 `World::SetMeshObjectVisible` 只按
+`meshObjects` 的键查找，而多 section 模型的实现名是 `<场景对象名>::<section 名>`，
+身份不是键。用户看到的是"点了眼睛没反应"，日志里是一条
+`Actor visibility rejected because the actor is not in the active World`。
+默认场景与当时所有 fixture 都是单 section（身份 == 对象名），因此这个边界没有被走到，
+现在确认是真实缺陷并修掉：
+
+- 身份推导抽成一份 `MeshSceneObjectIdentity()`（`source/world/meshSceneObjectIdentity.{h,cpp}`），
+  读取端（actor 行聚合、`MeshDrawSnapshot::sceneObjectIdentity`）与写入端共用；
+- 写入端改为 `World::SetMeshSceneObjectVisible(identity, visible)`，一次写全该 actor 的所有
+  section；单 section 行为不变，未知身份仍然拒绝；
+- 读取端语义不变（任一 section 可见即整行可见），因此不一致 section 的点击规则写死为
+  "可见 → 全部隐藏，全部不可见 → 全部显示"，点一次必然收敛为一致状态；
+- 没有新增 `UiActionType`、没有改场景 schema / `SceneAssetValidator`、没有可见性持久化，
+  `DockWorkspace::Panels()` 未改。
+
+验证与像素证据见 `ue-parity-audit.md` 第 7 轮：编辑器 UI 选择 **287/287**（两次）、
+`MaterialInstanceEditor` **22/22**；探针用**既有** `SC_car_showcase` 地图
+（控制台 `loadworld`，资源目录零改动）隐藏 3 个 section 的车轮
+`SM_car_wheel_bl`：日志无拒绝、视野 `changed=6544 strong=5895 max_delta=608`、
+变化包围盒之外 `changed=1 strong=0`、再点一次恢复；
+同一探针的单 section 腿在默认球阵场景复测：隐藏一个球 `changed=342 strong=328`
+（一个球格），恢复 `changed=0`（逐字节相同）。

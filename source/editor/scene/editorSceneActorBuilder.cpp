@@ -8,6 +8,7 @@
 
 #include "editor/ui/editorSceneActorTree.h"
 #include "sceneNode.h"
+#include "world/meshSceneObjectIdentity.h"
 #include "world/world.h"
 #include "world/worldSnapshotBuilder.h"
 
@@ -29,7 +30,7 @@ struct MeshActorGroup
 
 std::string SceneObjectIdentity(const WorldMeshObject& object, const std::string& objectName)
 {
-    return object.sceneObjectIdentity.empty() ? objectName : object.sceneObjectIdentity;
+    return MeshSceneObjectIdentity(object, objectName);
 }
 
 std::vector<MeshActorGroup> CollectMeshGroups(const World& world)
@@ -78,8 +79,10 @@ EditorSceneActorSnapshot BuildMeshActor(const World& world, const MeshActorGroup
         section.windProfileKey = object.speedTreeWindProfileKey;
         actor.sections.push_back(std::move(section));
     }
-    // 多 section 网格在 World 里是多个对象，逐对象可见性可能暂时不一致；
-    // 只要还有可见 section 就按可见显示，与渲染快照仍画出这些 section 的事实一致。
+    // 多 section 网格在 World 里是多个对象；只要还有可见 section 就按可见显示，
+    // 与渲染快照仍画出这些 section 的事实一致。写入端
+    // （World::SetMeshSceneObjectVisible）按同一身份一次写全所有 section，
+    // 因此这个"任一可见"的读数在点击之后与整行状态必然一致。
     actor.visible = std::any_of(group.sections.begin(), group.sections.end(),
         [](const auto& entry) { return entry.second->visible; });
     // 模型级 id 取排序后的第一个 section：选择时整模型高亮走的是同一个 RuntimeId。

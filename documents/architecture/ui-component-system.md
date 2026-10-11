@@ -198,7 +198,8 @@ Scene Outliner（`#editor-navigation`，仍是 `DockWorkspace::Panels()` 里的 
   没有 World、SceneNode、MaterialInstance 或 Vulkan 句柄。列表以
   `shared_ptr<const std::vector<...>>` 进入面板快照（与资产目录同一约定），
   逐帧不深拷贝 actor 数组。
-- **覆盖范围**：网格（按 `sceneObjectIdentity` 聚合 section，逐 section 带
+- **覆盖范围**：网格（按 `MeshSceneObjectIdentity()` 给出的 `sceneObjectIdentity`
+  聚合 section，逐 section 带
   mesh/material/MI 路径/槽名/风剖面 key）、directionalLight / pointLight /
   spotLight / squareAreaLight、相机、环境、SpeedTree 风剖面。
   灯光参数复用 `WorldSnapshotBuilder` 的同一份 World→`LightSnapshot` 映射
@@ -244,7 +245,7 @@ Scene Outliner（`#editor-navigation`，仍是 `DockWorkspace::Panels()` 里的 
   （Intensity 与 Cast Shadows），两者都只用既有 `UiActionType::SetSunIntensity` /
   `SetCsmCastShadows`，没有第三条 UI→renderer 路径，也不新增命令。
   MI 文档分组不变，actor 分组在它之前。
-- **逐 actor 可见性（本轮新增）**：网格与四类灯的 actor 行在行尾有一个眼睛开关
+- **逐 actor 可见性（第 6 轮新增，第 7 轮修正为整 actor 语义）**：网格与四类灯的 actor 行在行尾有一个眼睛开关
   （`data-action="outliner-visible"`），点击只提交一条
   `UiActionType::SetActorVisible`（`stringValue` = 稳定身份，`intValue` = 0/1），
   经 EngineLoop → `RuntimeCommandType::SetActorVisible` →
@@ -253,13 +254,29 @@ Scene Outliner（`#editor-navigation`，仍是 `DockWorkspace::Panels()` 里的 
   （`SceneActorHasVisibilityToggle()`）。
   - **状态归属与渲染过滤**：可见性是 World 拥有的运行时游戏状态
     （`WorldMeshObject::visible`、`SceneNode::visible`、
-    `WorldSquareAreaLight::visible`），由 `World::SetMeshObjectVisible` /
+    `WorldSquareAreaLight::visible`），由 `World::SetMeshSceneObjectVisible` /
     `SetLightVisible` / `SetSquareAreaLightVisible` 写入；对象不在当前 World 时
     返回 false，执行端给出人类可读诊断而不是静默忽略。
     过滤发生在 `WorldSnapshotBuilder::Build()`——不可见的网格与灯光**不进入**
     `snapshot.meshDraws` / `snapshot.lights`。`meshDraws` 同时是出图、拾取、
     MaterialInstance 上下文与阴影 pass 的唯一来源，因此"不可见"在构造处生效
     就等于对整条渲染路径生效，渲染器里没有第二处可见性分支。
+  - **一行 = 一个场景网格对象（整 actor 语义）**：网格的写入端按
+    `sceneObjectIdentity` 寻址，一次写全该身份下的**所有** section，而不是按
+    section 键（`<场景对象>::<section 名>`，`rendererMeshLoader` 的命名）只改一个渲染对象。
+    多 section 模型的身份不是 `World::meshObjects` 里的任何一个键，这就是"眼睛点了没反应"
+    的成因：执行端会以"actor is not in the active World"拒绝。
+    身份推导只有 `MeshSceneObjectIdentity()`（`source/world/meshSceneObjectIdentity.h`）一份，
+    读取端（actor 行聚合、`MeshDrawSnapshot::sceneObjectIdentity`）与写入端共用，
+    防止两边再次漂移。单 section 网格的身份等于自己的对象名，行为与之前的逐对象写入完全一致。
+  - **不一致 section 的点击规则**：字段默认可见，上一版构建也可能留下
+    "部分 section 隐藏"的混合状态，因此行状态与查询都取
+    **任一 section 可见即为可见**（`std::any_of`），点击写入的是该行显示状态的反面：
+    可见 → 全部隐藏，隐藏（即全部不可见）→ 全部显示。
+    于是从**任何**起始状态点击一次后所有 section 必然一致，行的显示状态与渲染状态严格吻合；
+    不存在"点一次只收敛一半"或"行说隐藏、画面还有一半"的中间态。
+    多 section actor 不再被拒绝；未知分组键、无渲染侧可见性的类型、
+    身份确实不在当前 World（含旧场景/已改名的身份，以及把 section 键当身份下发）仍然拒绝。
   - **没有快照缓存需要失效**：`RenderSystem::Render()`（单线程）与
     EngineLoop 的 `PublishSnapshotFromActiveWorld()`（双线程）**每帧**都从 active
     World 重新构建快照，`currentRenderScene` 也随之逐帧重建，因此可见性翻转在下一帧

@@ -15,11 +15,14 @@ add_executable(editor_ui_tests
     "${PROJECT_SOURCE_DIR}/source/editor/assets/editorJsonAssetTypes.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/materialInstanceAssetEditorPanel.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/command/editorCommand.cpp"
-    # 逐 actor 可见性的 World/快照回归（worldVisibilityTests.cpp）：渲染侧过滤发生在
+    # 逐 actor 可见性的 World/快照回归（editorUiTests.cpp）：渲染侧过滤发生在
     # WorldSnapshotBuilder，因此这里要编进真实的 World 与快照构建器，
     # 而不是用测试替身证明"标志位被读到了"。
+    # meshSceneObjectIdentity.cpp 也编进来：读写两端共用同一份身份推导，
+    # 测试必须证明"大纲身份"就是 World 认得的那个键。
     "${PROJECT_SOURCE_DIR}/source/core/runtimeResult.cpp"
     "${PROJECT_SOURCE_DIR}/source/world/world.cpp"
+    "${PROJECT_SOURCE_DIR}/source/world/meshSceneObjectIdentity.cpp"
     "${PROJECT_SOURCE_DIR}/source/world/worldSnapshotBuilder.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/scene/editorSceneActorBuilder.cpp"
     "${PROJECT_SOURCE_DIR}/source/sceneNode.cpp")
