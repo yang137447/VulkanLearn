@@ -556,12 +556,19 @@ RmlUi 6.2 的 `PropertyParserColour` 在 RGBA 分支对每个分量统一走整�
   但开关不写场景 JSON、`SceneAssetValidator` 不认识、也没有保存命令；
   重新加载场景一律全部可见。要走持久化得连 transform 编辑一起做场景文档阶段。
 - 地形节点（`World` 没有 terrain 访问器，仓库里也没有 terrain 运行时）
-- 大纲虚拟化（每帧重建 markup 后由值缓存决定是否写 DOM）
+- 大纲多选、重命名、父级/文件夹层级、actor 增删
 - 资产缩略图、模型几何预览、纹理像素查看
+- 视口参考网格 / 地面 / 坐标轴显示（`shader/glsl` 里的 `measureGrid` 是 BRDF 测量探针的，
+  不是编辑器参考系）
 - 原生多窗口、IME 输入
 - 视口按 dock 分辨率渲染（场景仍按完整 swapchain extent 出图，UI 用完整 UV 采样）
 - 材质实例纹理 override 的 live 生效（保存 JSON 后才生效）
 - HSV 取色器
+- 编辑器偏好 / 项目设置面板；可配置快捷键
+- 右键上下文菜单（全仓库无实现，`platformApplication.cpp` 里的命中只是鼠标按键分发）
+
+**已从本清单消掉的**：大纲虚拟化在第 5 轮完成（受限挂载窗口 + spacer），
+本条此前误留在"未实现"里，2026-10-11 核对时删除。
 
 第 4 轮已经消掉的一条：Scene Outliner 不再只列出带有效 MI 的网格，
 而是真实 World actor 树（网格 / 四类灯 / 相机 / 环境 / 风剖面，分组、图标、搜索、类型过滤）。
