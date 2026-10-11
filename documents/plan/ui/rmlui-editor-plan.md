@@ -51,6 +51,11 @@
   与工具栏按钮共用同一份可用性，Window 勾选直接查询停靠视图的可见性，
   File→Open Level 复用 Content Browser 双击关卡的 `LoadWorld` 请求。
   Edit→Undo/Redo 常驻禁用：仓库没有 undo/redo 系统，这是占位而不是可用命令。
+- Scene Outliner 是真实 World actor 树：数据由 EngineLoop 在稳定帧边界从 active World
+  拍成不可变 actor 列表（网格 / 四类灯 / 相机 / 环境 / SpeedTree 风剖面），
+  分组可折叠、带类型图标、搜索（ASCII 大小写折叠、保留 UTF-8 名称）与类型过滤；
+  选中 actor 由 Details 展示类型化只读参数，主方向光额外提供 Intensity 与
+  CSM Cast Shadows 两个可编辑控件，两者都复用既有 UiAction 命令。
 - 面板可以通过 Window 菜单隐藏/恢复，隐藏集合随工作区文件持久化；
   隐藏面板保留布局树位置，整组隐藏时折叠出几何。
 - Viewport 左上角叠加工具条：只有 view mode 接到既有 debug view（Lit=0、Unlit=1），
@@ -82,8 +87,8 @@ JSON 输入边界来自 `source/editor/assets/editorJsonAssetLibrary.h`：
    原生多窗口仍是后续能力。
 3. 独立视口：本批完成 renderer-owned 场景纹理、相机 aspect、拾取坐标、
    离线显示和既有 resize 生命周期；自适应 backing 分辨率仍是后续能力。
-4. 场景文档：对象树覆盖灯光、相机、环境和模型；通过命令增删对象、
-   编辑 Transform，并用 gizmo 驱动同一事务。
+4. 场景文档：本轮已完成只读的 World actor 树与 actor Details（含两条既有运行时命令）；
+   通过命令增删对象、编辑 Transform，并用 gizmo 驱动同一事务仍是后续。
 5. Undo/Redo：以文档命令为单位，覆盖多字段 batch、脏状态和预览恢复；
    不从 UI 回调直接修改 World。
 6. 资产工作流：本批已完成五类 JSON 目录、Mesh/Texture/Terrain 资源标签和非 MI 只读查看；
@@ -92,15 +97,17 @@ JSON 输入边界来自 `source/editor/assets/editorJsonAssetLibrary.h`：
 
 各阶段单独定义验收和模块测试，再进入下一阶段；不以更换控件库替代数据所有权设计。
 
-### 尚未实现的能力清单（2026-10-11 核对）
+### 尚未实现的能力清单（2026-10-11 核对，第四批后）
 
 以下能力在当前分支确认缺席，后续阶段直接以此为准，不要重新推导：
 
 - 没有 gizmo、没有 transform 编辑，也没有场景对象的增/删/复制/改名；
   场景文档阶段（第 4 项）要连命令、Transform 编辑和 gizmo 一起做。
 - 完全没有 Undo/Redo（第 5 项）；`Edit` 菜单里的 Undo/Redo 只是常驻禁用的占位。
-- Scene Outliner 只列出带有效材质实例的 Mesh，不是真正的 World 大纲：
-  没有灯光、相机、地形、环境，没有层级、可见性开关和改名。
+- 没有逐 actor 可见性/隐藏开关：`World`、`WorldSnapshot` 与渲染图都没有逐对象
+  可见性状态，加它需要同时改场景 schema、validator、World 构建与渲染路径。
+- 没有地形节点：`World` 没有 terrain 访问器，仓库里也没有 terrain 运行时。
+- 大纲没有虚拟化；改名、拖放、重父级都不存在。
 - 没有资产缩略图、没有模型几何预览、没有纹理像素查看器。
 - 没有原生多窗口，没有 IME。
 - 场景仍按 swapchain 全尺寸渲染，UI 以完整 UV 采样；视口不是按停靠尺寸渲染。
@@ -289,3 +296,46 @@ SDL3 的 `SDL_dialog.h` 没有颜色对话框 API，本轮不做，也没有用�
   （色板按不透明 `rgb()` 画，alpha 只在读数里）、滚动条拖动、
   以及折叠状态在重启后是否保留（它是会话状态，本来就不持久化）。
   折叠与滑条的行为断言由真实 RmlUi DOM 测试覆盖，但仍是合成输入。
+
+### 2026-10-11 世界 actor 树与 actor Details 验证
+
+本批把 Scene Outliner 换成真实 World actor 树（网格 / 四类灯 / 相机 / 环境 / 风剖面，
+固定分组顺序、可折叠、类型图标、搜索与类型过滤），并让选中 actor 驱动 Details：
+只读类型化参数 + 主方向光的 Intensity 与 CSM Cast Shadows 两个可编辑控件。
+契约见 `documents/architecture/ui-component-system.md` 的“世界 actor 树契约”，
+发现与未做项见 `ue-parity-audit.md` 第 4 轮。
+
+- MinGW 构建：`cmake --build build --target editor_ui_tests editor_viewport_tests main
+  material_instance_editor_production_tests -j8` 四个目标全部成功。
+- `ctest --test-dir build -R "^(UiColorTransform|UiWidgetTest|UiWidgetRefresh|EditorUiTest|ContentBrowserTest|DockWorkspaceTest|DockPersistenceTest|DockRmlTest|EditorViewportGeometry|EditorJsonAssetParsing|EditorJsonAssetPaths|EditorJsonAssetTypes|JsonAssetLibraryTest|ResourceEditorController|LargeCatalog/ContentBrowserPerformanceTest)\." --output-on-failure`
+  **262/262 通过**（基线 245/245，本批净增 17 项；4 项既有符号链接用例按原条件跳过）。
+  **同一选择连跑两次都是 262/262**，没有出现间歇失败。
+- `ctest --test-dir build -R "MaterialInstanceEditor" --output-on-failure`
+  **22/22 通过**，与基线一致；材质槽 → MI 文档流程与视口拾取描边未回归
+  （mesh actor 与材质槽仍走原来的 `RequestModelSelection` / `RequestMaterialSelection`）。
+- 出图：从仓库根用 `--dev-ui` 启动 `main.exe` 后，由
+  `artifacts/rmlui-editor/outliner_probe.py`（gitignored）用 `SendInput` 驱动真实窗口、
+  经 `tool/validation/console_inject.ps1` 注入 `screenshot`，再用
+  `bmp_probe.py` 读数；每张截图载荷都是 2764800 B（完整 BMP）。
+  默认球阵场景实测有 122 mesh + 1 directionalLight + 1 pointLight + 1 camera +
+  1 environment，没有 spotLight / squareAreaLight / 风剖面。像素结论：
+  大纲过滤栏 `#252528` 在行 74–107、树在 109–226、计数栏 227–247；
+  折叠 Meshes 后网格图标像素归零、暖色灯光图标 40 像素出现在 (920,180)-(931,191)；
+  点击 `Sun_Light` 后 Details 出现 `#C8C8CF` 滑条块恰好 120 像素（10×12）、
+  Enabled/Disabled 两个按钮底色长段各 13 行、分组标题色 `#A6C6BA` 出现在 y=444；
+  点击 CSM 按钮后选中段互换且日志记录 `CSM disabled.`；
+  键入 5 后日志恰好一条 `Sun intensity set to 5.000000`，滑条块从 x=933 移到 x=1077
+  （轨道 895..1269，占 48.7%，与 0..10 区间的 5 一致）。
+- 本轮像素探针先于单元测试发现两个真实缺陷并已修复：折叠只改 ± 标记而没有隐藏子行
+  （现在由 `OutlinerGroupCollapseHidesItsActorsAndKeepsTheFilterCount` 守住）、
+  flex 布局让裸文本的组标题整行不可见（改为块级/行内默认布局 + `vertical-align`）。
+  另外 Details 强度控件最初允许任意有限值，实测被运行时页隐藏的 0..10 sun 滑条
+  截断并回写（13/10 来回命令），现在按同区间校验并提示，
+  由 `ActorIntensitySliderRangeMatchesTheRuntimeSunSlider` 守卫区间不漂移。
+- 该进程由探针强制终止，**这是渲染证据，不是 teardown 证据**。
+- 产物：日志 `artifacts/rmlui-editor/outliner-121423.log`（stderr 0 字节），
+  截图在隔离资源目录 `Generated/Screenshots/`（`outliner-baseline/collapsed/sun/csm/intensity.bmp`）。
+- 本次没有验证：spotLight / squareAreaLight / SpeedTree 风剖面在屏幕上的行
+  （默认场景没有，本轮没有为此改场景资产）、真实鼠标的搜索键入与下拉选择手感
+  （合成点击只验证了搜索框获得焦点边框）、以及真实拖动滑条
+  （合成拖动不改变 range 控件，与第三批记录的限制相同）。

@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <chrono>
 #include <iostream>
 #include <limits>
@@ -17,11 +18,83 @@
 #include <RmlUi/Core/SystemInterface.h>
 
 #include "editor/ui/materialInstanceAssetEditorPanel.h"
+#include "editor/ui/editorSceneActorTree.h"
 
 namespace
 {
 using namespace VL;
 using namespace VL::EditorUi;
+
+// 单 section、带有效材质实例的 mesh actor；字段组合与 World→快照的映射保持一致。
+EditorSceneActorSnapshot MeshActor(const std::string& name, uint64_t generation,
+    RuntimeId objectId = 11)
+{
+    EditorSceneActorSnapshot actor;
+    actor.type = EditorSceneActorType::Mesh;
+    actor.worldGeneration = generation;
+    actor.scenePath = "Maps/SC_test/SC_test.json";
+    actor.identity = SceneActorIdentity(EditorSceneActorType::Mesh, name);
+    actor.displayName = name;
+    actor.sceneObjectIdentity = name;
+    actor.meshObjectId = objectId;
+    EditorSceneMeshSectionSnapshot section;
+    section.objectName = name;
+    section.objectId = objectId;
+    section.meshKey = "SM_test|0|Body";
+    section.materialKey = "M_test";
+    section.materialInstancePath = "Maps/SC_test/Materials/MI_test.json";
+    section.materialSlotIndex = 0;
+    section.materialSlotName = "Surface";
+    actor.sections.push_back(std::move(section));
+    return actor;
+}
+
+EditorSceneActorSnapshot SunActor(float intensity, bool primary)
+{
+    EditorSceneActorSnapshot actor;
+    actor.type = EditorSceneActorType::DirectionalLight;
+    actor.worldGeneration = 1;
+    actor.scenePath = "Maps/SC_test/SC_test.json";
+    actor.displayName = "Sun_Light";
+    actor.identity = SceneActorIdentity(EditorSceneActorType::DirectionalLight, actor.displayName);
+    actor.light.type = LightSnapshotType::Directional;
+    actor.light.color = Eigen::Vector3f(1.0f, 1.0f, 1.0f);
+    actor.light.intensity = intensity;
+    actor.primaryDirectionalLight = primary;
+    return actor;
+}
+
+EditorSceneActorSnapshot PointLightActor(const std::string& name, float intensity, float radius)
+{
+    EditorSceneActorSnapshot actor;
+    actor.type = EditorSceneActorType::PointLight;
+    actor.worldGeneration = 1;
+    actor.scenePath = "Maps/SC_test/SC_test.json";
+    actor.displayName = name;
+    actor.identity = SceneActorIdentity(EditorSceneActorType::PointLight, name);
+    actor.light.type = LightSnapshotType::Point;
+    actor.light.color = Eigen::Vector3f(1.0f, 0.5f, 0.25f);
+    actor.light.intensity = intensity;
+    actor.light.position = Eigen::Vector3f(-3.5f, 3.5f, 6.0f);
+    actor.light.radius = radius;
+    return actor;
+}
+
+EditorSceneActorSnapshot CameraActor(const std::string& name)
+{
+    EditorSceneActorSnapshot actor;
+    actor.type = EditorSceneActorType::Camera;
+    actor.worldGeneration = 1;
+    actor.scenePath = "Maps/SC_test/SC_test.json";
+    actor.displayName = name;
+    actor.identity = SceneActorIdentity(EditorSceneActorType::Camera, name);
+    actor.camera.position = Eigen::Vector3f(0.0f, 0.0f, 16.0f);
+    actor.camera.forward = Eigen::Vector3f(0.0f, 0.0f, -1.0f);
+    actor.camera.horizontalFovDegrees = 80.0f;
+    actor.camera.clipNear = 0.1f;
+    actor.camera.clipFar = 100.0f;
+    return actor;
+}
 
 class TestSystem final : public Rml::SystemInterface
 {
@@ -95,8 +168,14 @@ public:
         selectedMaterial = material;
         return true;
     }
+    bool RequestActorSelection(const std::string& actorIdentity) override
+    {
+        selectedActorIdentity = actorIdentity;
+        return true;
+    }
     std::optional<Editor::Selection::MaterialInstanceModelContext> selectedModel;
     std::optional<Editor::Selection::MaterialInstanceSelection> selectedMaterial;
+    std::string selectedActorIdentity;
 };
 
 class EditorUiTest : public testing::Test
@@ -170,11 +249,63 @@ protected:
         control->SetValue(value);
         control->DispatchEvent("change", {});
     }
+    // select 的 SetValue 已经通过 WidgetDropDown::OnValueChange 派发 change；
+    // 再手动派发一次会重复提交同一条命令，因此这里只写控件值。
+    void SelectOption(const std::string& id, const std::string& value)
+    {
+        auto* control = Control(id);
+        ASSERT_NE(control, nullptr);
+        control->SetValue(value);
+    }
     void Click(const std::string& selector)
     {
         auto* element = document->QuerySelector(selector);
         ASSERT_NE(element, nullptr);
         element->DispatchEvent("click", {});
+    }
+    // 大纲行的文本：actor 行把名称放在图标后的 span 里，分组行直接是文本。
+    static std::string RowLabel(Rml::Element* element)
+    {
+        auto* span = element->QuerySelector("span");
+        return span == nullptr ? element->GetInnerRML() : span->GetInnerRML();
+    }
+    std::vector<std::string> OutlinerLabels(const char* action) const
+    {
+        Rml::ElementList elements;
+        document->GetElementById("scene-models")
+            ->QuerySelectorAll(elements, "[data-action=" + std::string(action) + "]");
+        std::vector<std::string> labels;
+        for (auto* element : elements)
+        {
+            // 分组行的折叠按钮与标题行共用同一个动作；标签只取标题行。
+            if (element->IsClassSet("list-item")) labels.push_back(RowLabel(element));
+        }
+        return labels;
+    }
+    std::string OutlinerCount() const
+    {
+        auto* count = document->GetElementById("outliner-count");
+        return count == nullptr ? std::string() : count->GetInnerRML();
+    }
+    void SelectActorInOutliner(EditorSceneActorSnapshot actor)
+    {
+        const std::string identity = actor.identity;
+        AddActor(std::move(actor));
+        panel->Build(snapshot);
+        snapshot.selectedActorIdentity = identity;
+        panel->Build(snapshot);
+        context->Update();
+    }
+    // 面板快照按 shared_ptr<const ...> 借用大纲列表，测试同样只发布不可变副本。
+    void PublishActors()
+    {
+        snapshot.sceneActors =
+            std::make_shared<const std::vector<EditorSceneActorSnapshot>>(actors);
+    }
+    void AddActor(EditorSceneActorSnapshot actor)
+    {
+        actors.push_back(std::move(actor));
+        PublishActors();
     }
     Rml::ElementFormControl* Control(const std::string& id)
     {
@@ -211,6 +342,7 @@ protected:
     Rml::ElementDocument* document = nullptr;
     std::unique_ptr<MaterialInstanceAssetEditorPanel> panel;
     MaterialInstanceEditorSnapshot snapshot;
+    std::vector<EditorSceneActorSnapshot> actors;
 };
 
 TEST_F(EditorUiTest, WorkspaceParsesAndRendersWithoutWarnings)
@@ -598,42 +730,52 @@ TEST_F(EditorUiTest, OverflowingBrowserGridKeepsColumnsForEveryTileSize)
     EXPECT_TRUE(system.errors.empty()) << Errors();
 }
 
-TEST_F(EditorUiTest, ExpandedModelTreeRoutesChildSelectionThroughTheExistingSink)
+TEST_F(EditorUiTest, ExpandedOutlinerMeshRoutesChildSelectionThroughTheExistingSink)
 {
-    MaterialInstanceModelSnapshot model;
-    model.worldGeneration = 1;
-    model.objectId = 11;
-    model.objectIdentity = "object-one";
-    model.scenePath = "Maps/SC_test/SC_test.json";
-    model.displayName = "Model";
-    model.materials.push_back({11, 3, "Surface", snapshot.activeDocument->assetPath});
-    snapshot.sceneModels.push_back(model);
+    AddActor(MeshActor("Sphere_01", 1));
     panel->Build(snapshot);
-    Click("[data-action=model-expand]");
+    ASSERT_NE(document->QuerySelector("[data-action=outliner-actor]"), nullptr);
+    EXPECT_EQ(document->QuerySelector("[data-action=outliner-slot]"), nullptr);
+    Click("[data-action=outliner-expand]");
     panel->Build(snapshot);
-    ASSERT_NE(document->QuerySelector("[data-action=model-slot]"), nullptr);
-    Click("[data-action=model-slot]");
+    ASSERT_NE(document->QuerySelector("[data-action=outliner-slot]"), nullptr);
+    Click("[data-action=outliner-slot]");
     ASSERT_TRUE(selectionSink.selectedMaterial);
     EXPECT_EQ(selectionSink.selectedMaterial->worldGeneration, 1u);
     EXPECT_EQ(selectionSink.selectedMaterial->objectId, 11u);
-    EXPECT_EQ(selectionSink.selectedMaterial->materialSlotIndex, 3u);
-    EXPECT_EQ(selectionSink.selectedMaterial->materialInstancePath, snapshot.activeDocument->assetPath);
+    EXPECT_EQ(selectionSink.selectedMaterial->materialSlotIndex, 0u);
+    EXPECT_EQ(selectionSink.selectedMaterial->materialInstancePath,
+        snapshot.activeDocument->assetPath);
+    // 槽位选中仍走迁移前的 RequestMaterialSelection，没有第二条打开文档的路径。
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, OutlinerMeshSelectionKeepsThePreviousModelRouting)
+{
+    AddActor(MeshActor("Sphere_01", 1));
+    panel->Build(snapshot);
+    Click("[data-action=outliner-actor]");
+    ASSERT_TRUE(selectionSink.selectedModel);
+    EXPECT_EQ(selectionSink.selectedModel->objectId, 11u);
+    EXPECT_EQ(selectionSink.selectedModel->objectIdentity, "Sphere_01");
+    EXPECT_EQ(selectionSink.selectedModel->materials.size(), 1u);
+    // 非网格 actor 的选择路径不能被网格行借用。
+    EXPECT_TRUE(selectionSink.selectedActorIdentity.empty());
 }
 
 TEST_F(EditorUiTest, WorldReplacementClearsTreeExpansionEvenWhenObjectNamesMatch)
 {
-    MaterialInstanceModelSnapshot model;
-    model.worldGeneration = 1;
-    model.objectIdentity = "same-name";
-    model.materials.push_back({11, 0, "Surface", snapshot.activeDocument->assetPath});
-    snapshot.sceneModels.push_back(model);
+    AddActor(MeshActor("Same_Name", 1));
     panel->Build(snapshot);
-    Click("[data-action=model-expand]");
+    Click("[data-action=outliner-expand]");
     panel->Build(snapshot);
-    ASSERT_NE(document->QuerySelector("[data-action=model-slot]"), nullptr);
-    snapshot.sceneModels[0].worldGeneration = 2;
+    ASSERT_NE(document->QuerySelector("[data-action=outliner-slot]"), nullptr);
+    // 同一个名字出现在新 World 里时，展开状态必须被清掉，不能沿用旧身份。
+    actors[0].worldGeneration = 2;
+    for (auto& section : actors[0].sections) section.objectId = 21;
+    PublishActors();
     panel->Build(snapshot);
-    EXPECT_EQ(document->QuerySelector("[data-action=model-slot]"), nullptr);
+    EXPECT_EQ(document->QuerySelector("[data-action=outliner-slot]"), nullptr);
 }
 
 TEST_F(EditorUiTest, SnapshotRefreshDoesNotSubmitEdits)
@@ -831,6 +973,318 @@ TEST_F(EditorUiTest, OnlyColorParametersGetAnSrgbSwatchAndHexReadout)
     context->Update();
     EXPECT_EQ(document->GetElementById("color-hex-1")->GetInnerRML(), "#FF000080");
     EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, OutlinerGroupsActorsByTypeWithStableOrderAndCount)
+{
+    AddActor(MeshActor("Zeta", 1));
+    AddActor(MeshActor("alpha", 1, 12));
+    AddActor(PointLightActor("Key_Light", 250.0f, 20.0f));
+    AddActor(CameraActor("Camera_01"));
+    panel->Build(snapshot);
+    context->Update();
+
+    // 分组顺序固定，组内按 ASCII 大小写不敏感排序（alpha 在 Zeta 之前）。
+    EXPECT_EQ(OutlinerLabels("outliner-group"),
+        (std::vector<std::string>{"Meshes (2)", "Point Lights (1)", "Cameras (1)"}));
+    EXPECT_EQ(OutlinerLabels("outliner-actor"),
+        (std::vector<std::string>{"alpha", "Zeta", "Key_Light", "Camera_01"}));
+    EXPECT_EQ(OutlinerCount(), "4 actors");
+    EXPECT_FALSE(document->GetElementById("outliner-empty")->IsVisible());
+    // 每次选择都要有类型图标：4 个 actor 行各一个。
+    Rml::ElementList icons;
+    document->GetElementById("scene-models")->QuerySelectorAll(icons, "img.row-icon");
+    EXPECT_EQ(icons.size(), 4u);
+    EXPECT_TRUE(sink.commands.empty());
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, OutlinerSearchAndTypeFilterOnlyChangeVisibility)
+{
+    AddActor(MeshActor("Sphere_01", 1));
+    AddActor(MeshActor("球体体_01", 1, 13));
+    AddActor(PointLightActor("Key_Light", 250.0f, 20.0f));
+    panel->Build(snapshot);
+    context->Update();
+    EXPECT_EQ(OutlinerCount(), "3 actors");
+
+    // ASCII 大小写折叠：查询 "SPHERE" 命中 "Sphere_01"，但不命中多字节名称。
+    SetValue("outliner-search", "SPHERE");
+    panel->Build(snapshot);
+    EXPECT_EQ(OutlinerLabels("outliner-actor"), (std::vector<std::string>{"Sphere_01"}));
+    EXPECT_EQ(OutlinerCount(), "1 / 3 actors");
+    // UTF-8 多字节名称保持原样参与匹配。
+    SetValue("outliner-search", "球体");
+    panel->Build(snapshot);
+    EXPECT_EQ(OutlinerLabels("outliner-actor"), (std::vector<std::string>{"球体体_01"}));
+
+    SetValue("outliner-search", "");
+    SelectOption("outliner-type", "pointLight");
+    panel->Build(snapshot);
+    EXPECT_EQ(OutlinerLabels("outliner-actor"), (std::vector<std::string>{"Key_Light"}));
+    EXPECT_EQ(OutlinerLabels("outliner-group"), (std::vector<std::string>{"Point Lights (1)"}));
+
+    // 未知过滤值按 "全部" 处理，不产生静默空结果。
+    SelectOption("outliner-type", "not-a-type");
+    panel->Build(snapshot);
+    EXPECT_EQ(OutlinerCount(), "3 actors");
+
+    // 搜索与过滤是纯浏览状态：不提交资产命令，也不请求运行时动作。
+    EXPECT_TRUE(sink.commands.empty());
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, OutlinerTypeFilterOptionsMatchTheGroupSpecs)
+{
+    // RmlUi 把 option 移进 select 的内部 widget，只能通过控件 API 读取选项。
+    auto* select = dynamic_cast<Rml::ElementFormControlSelect*>(
+        document->GetElementById("outliner-type"));
+    ASSERT_NE(select, nullptr);
+    std::vector<std::string> values;
+    for (int index = 0; index < select->GetNumOptions(); ++index)
+        values.push_back(select->GetOption(index)->GetAttribute<std::string>("value", ""));
+    std::vector<std::string> expected = {"all"};
+    for (const EditorSceneActorGroupSpec& spec : SceneActorGroupSpecs())
+        expected.push_back(spec.key);
+    // 过滤器取值与类型清单同源，避免 RML 与分组规范各自漂移。
+    EXPECT_EQ(values, expected);
+    for (const EditorSceneActorGroupSpec& spec : SceneActorGroupSpecs())
+    {
+        EXPECT_NE(std::string(spec.icon).find("icons/"), std::string::npos) << spec.key;
+        EXPECT_STRNE(SceneActorGroupTitle(spec.type), "") << spec.key;
+    }
+}
+
+TEST_F(EditorUiTest, OutlinerEmptyStateDistinguishesNoWorldFromNoMatch)
+{
+    panel->Build(snapshot);
+    context->Update();
+    EXPECT_EQ(OutlinerCount(), "0 actors");
+    EXPECT_EQ(document->GetElementById("outliner-empty")->GetInnerRML(),
+        "No actors in the active world.");
+    EXPECT_TRUE(document->GetElementById("outliner-empty")->IsVisible(true));
+    EXPECT_FALSE(document->GetElementById("scene-models")->IsVisible(true));
+
+    // World 换代（0 → 1）会清掉搜索与折叠状态：先发布 actor 列表再输入查询。
+    AddActor(MeshActor("Sphere_01", 1));
+    panel->Build(snapshot);
+    context->Update();
+    SetValue("outliner-search", "no-such-actor");
+    panel->Build(snapshot);
+    EXPECT_EQ(document->GetElementById("outliner-empty")->GetInnerRML(),
+        "No actors match the current filter.");
+    EXPECT_EQ(OutlinerCount(), "0 / 1 actor");
+}
+
+TEST_F(EditorUiTest, OutlinerGroupCollapseHidesItsActorsAndKeepsTheFilterCount)
+{
+    AddActor(MeshActor("Sphere_01", 1));
+    AddActor(MeshActor("Sphere_02", 1, 12));
+    AddActor(PointLightActor("Key_Light", 250.0f, 20.0f));
+    panel->Build(snapshot);
+    context->Update();
+    ASSERT_EQ(OutlinerLabels("outliner-actor").size(), 3u);
+    // 折叠 Meshes：该组的 actor 行不再挂进 DOM，其他组不受影响。
+    Click("[data-action=outliner-group]");
+    panel->Build(snapshot);
+    context->Update();
+    EXPECT_EQ(OutlinerLabels("outliner-actor"), (std::vector<std::string>{"Key_Light"}));
+    EXPECT_EQ(OutlinerCount(), "3 actors");
+    // 展开回去：折叠状态只影响可见性，不改变筛选集合或 actor 身份。
+    Click("[data-action=outliner-group]");
+    panel->Build(snapshot);
+    context->Update();
+    EXPECT_EQ(OutlinerLabels("outliner-actor"),
+        (std::vector<std::string>{"Sphere_01", "Sphere_02", "Key_Light"}));
+    EXPECT_TRUE(sink.commands.empty());
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, OutlinerNonMeshSelectionRoutesToTheActorSinkAndFillsDetails)
+{
+    SelectActorInOutliner(PointLightActor("Key_Point_Light", 250.0f, 12.5f));
+    Click("[data-action=outliner-actor]");
+    EXPECT_EQ(selectionSink.selectedActorIdentity, "pointLight|Key_Point_Light");
+    // 非网格 actor 不借用网格的 MI 选择路径。
+    EXPECT_FALSE(selectionSink.selectedModel.has_value());
+    EXPECT_TRUE(sink.commands.empty());
+    EXPECT_TRUE(runtimeSink.actions.empty());
+
+    // 冻结快照里的选中身份驱动 Details：typed 参数由同一份 actor 数据渲染。
+    auto* section = document->GetElementById("details-section-actor-pointLight");
+    ASSERT_NE(section, nullptr);
+    EXPECT_FALSE(section->IsClassSet("collapsed"));
+    EXPECT_EQ(document->GetElementById("actor-field-intensity")->GetInnerRML(), "250");
+    EXPECT_EQ(document->GetElementById("actor-field-radius")->GetInnerRML(), "12.5");
+    EXPECT_EQ(document->GetElementById("actor-field-position")->GetInnerRML(),
+        "-3.5, 3.5, 6");
+    // 点光没有方向与锥角字段。
+    EXPECT_EQ(document->GetElementById("actor-field-direction"), nullptr);
+    EXPECT_EQ(document->GetElementById("actor-field-cone-outer"), nullptr);
+}
+
+TEST_F(EditorUiTest, DetailsShowsTheSelectedActorWhenNoDocumentIsOpen)
+{
+    snapshot.activeDocument.reset();
+    snapshot.selectedDocumentPath.clear();
+    SelectActorInOutliner(CameraActor("Camera_01"));
+
+    // 没有打开的 MI 文档时 Details 不再为空：actor 分组承载相机参数。
+    EXPECT_EQ(document->GetElementById("details-section-general"), nullptr);
+    auto* section = document->GetElementById("details-section-actor-camera");
+    ASSERT_NE(section, nullptr);
+    EXPECT_EQ(document->GetElementById("actor-field-hfov")->GetInnerRML(), "80");
+    EXPECT_EQ(document->GetElementById("actor-field-clip-far")->GetInnerRML(), "100");
+    EXPECT_EQ(document->GetElementById("actor-field-position")->GetInnerRML(), "0, 0, 16");
+    EXPECT_EQ(document->GetElementById("actor-field-forward")->GetInnerRML(), "0, 0, -1");
+    EXPECT_EQ(document->GetElementById("actor-field-name")->GetInnerRML(), "Camera_01");
+}
+
+TEST_F(EditorUiTest, DetailsActorFieldsFollowTheFrozenSnapshot)
+{
+    EditorSceneActorSnapshot light = PointLightActor("Key_Point_Light", 250.0f, 12.5f);
+    const std::string identity = light.identity;
+    AddActor(light);
+    PublishActors();
+    snapshot.selectedActorIdentity = identity;
+    snapshot.activeDocument.reset();
+    panel->Build(snapshot);
+    context->Update();
+    auto* radius = document->GetElementById("actor-field-radius");
+    ASSERT_NE(radius, nullptr);
+    EXPECT_EQ(radius->GetInnerRML(), "12.5");
+
+    // 值变化只刷新这一行，不重建分组 DOM（节点身份保持）。
+    actors[0].light.radius = 30.0f;
+    actors[0].light.position = Eigen::Vector3f(1.0f, 2.0f, 3.0f);
+    PublishActors();
+    panel->Build(snapshot);
+    context->Update();
+    EXPECT_EQ(document->GetElementById("actor-field-radius"), radius);
+    EXPECT_EQ(radius->GetInnerRML(), "30");
+    EXPECT_EQ(document->GetElementById("actor-field-position")->GetInnerRML(), "1, 2, 3");
+}
+
+TEST_F(EditorUiTest, PrimaryDirectionalLightExposesTheTwoExistingRuntimeCommands)
+{
+    snapshot.activeDocument.reset();
+    SelectActorInOutliner(SunActor(2.5f, true));
+
+    auto* intensity = Control("actor-sun-intensity");
+    ASSERT_NE(intensity, nullptr);
+    EXPECT_EQ(intensity->GetValue(), "2.5");
+    auto* slider = Control("actor-sun-intensity-slider");
+    ASSERT_NE(slider, nullptr);
+    EXPECT_EQ(slider->GetAttribute<std::string>("type", ""), "range");
+    EXPECT_FLOAT_EQ(slider->GetAttribute<float>("min", -1.0f), 0.0f);
+    EXPECT_FLOAT_EQ(slider->GetAttribute<float>("max", -1.0f), 10.0f);
+    // 可编辑字段不出现在只读行里，同一值不会有两行。
+    EXPECT_EQ(document->GetElementById("actor-field-intensity"), nullptr);
+
+    SetValue("actor-sun-intensity", "3.5");
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions[0].type, UiActionType::SetSunIntensity);
+    EXPECT_FLOAT_EQ(runtimeSink.actions[0].floatValue, 3.5f);
+    // 滑条与文本输入共用同一个 action 地址，但快照只刷新文本输入：把超范围值写进
+    // 范围控件会让 RmlUi 截断它并自己派发一次 change，覆盖用户的精确输入。
+    for (int frame = 0; frame < 3; ++frame)
+    {
+        panel->Build(snapshot);
+        context->Update();
+    }
+    EXPECT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(slider->GetAttribute<float>("value", 0.0f), 2.5f);
+
+    // 与运行时页一致：同值不发命令，非完整有限数只给出提示。
+    SetValue("actor-sun-intensity", "2.5");
+    EXPECT_EQ(runtimeSink.actions.size(), 1u);
+    SetValue("actor-sun-intensity", "abc");
+    Refresh();
+    EXPECT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_NE(Notice().find("finite number"), std::string::npos);
+    // 超出运行时页 sun 滑条的区间：明确拒绝，不提交一个会被那个隐藏控件截断的值。
+    SetValue("actor-sun-intensity", "13");
+    Refresh();
+    EXPECT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_NE(Notice().find("between 0 and 10"), std::string::npos);
+
+    // CSM 开关沿用运行时页的 Enabled/Disabled 按钮：一次点击只提交一条命令。
+    auto* enable = document->GetElementById("actor-csm-enable");
+    auto* disable = document->GetElementById("actor-csm-disable");
+    ASSERT_NE(enable, nullptr);
+    ASSERT_NE(disable, nullptr);
+    EXPECT_TRUE(disable->IsClassSet("selected"));
+    EXPECT_FALSE(enable->IsClassSet("selected"));
+    Click("#actor-csm-enable");
+    ASSERT_EQ(runtimeSink.actions.size(), 2u);
+    EXPECT_EQ(runtimeSink.actions[1].type, UiActionType::SetCsmCastShadows);
+    EXPECT_EQ(runtimeSink.actions[1].intValue, 1);
+    // 已经是关闭状态：重复点击不产生第二条命令。
+    Click("#actor-csm-disable");
+    EXPECT_EQ(runtimeSink.actions.size(), 2u);
+    // 编辑只走既有 UiAction 路由，不产生资产文档命令。
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, ActorIntensitySliderRangeMatchesTheRuntimeSunSlider)
+{
+    // 两个控件共用 SetSunIntensity：范围不一致时，运行时页那个隐藏滑条的 data binding
+    // 会把 Details 里的超范围输入截断后回写一条新命令（渲染验证时实测到的 13→10 抖动）。
+    std::ifstream runtimePage(std::string(VL_EDITOR_ASSET_ROOT) + "/runtime-control.rml");
+    ASSERT_TRUE(runtimePage.is_open());
+    const std::string rml((std::istreambuf_iterator<char>(runtimePage)),
+        std::istreambuf_iterator<char>());
+    const size_t id = rml.find("id=\"sun-intensity-slider\"");
+    ASSERT_NE(id, std::string::npos);
+    const size_t elementEnd = rml.find('>', id);
+    ASSERT_NE(elementEnd, std::string::npos);
+    const std::string element = rml.substr(id, elementEnd - id);
+    const auto attribute = [&element](const std::string& name)
+    {
+        const size_t at = element.find(name + "=\"");
+        EXPECT_NE(at, std::string::npos) << name;
+        const size_t begin = at + name.size() + 2;
+        return std::stof(element.substr(begin, element.find('"', begin) - begin));
+    };
+
+    snapshot.activeDocument.reset();
+    SelectActorInOutliner(SunActor(1.0f, true));
+    auto* slider = Control("actor-sun-intensity-slider");
+    ASSERT_NE(slider, nullptr);
+    EXPECT_FLOAT_EQ(slider->GetAttribute<float>("min", -1.0f), attribute("min"));
+    EXPECT_FLOAT_EQ(slider->GetAttribute<float>("max", -1.0f), attribute("max"));
+}
+
+TEST_F(EditorUiTest, NonPrimaryDirectionalLightKeepsItsIntensityReadOnly)
+{
+    snapshot.activeDocument.reset();
+    SelectActorInOutliner(SunActor(4.0f, false));
+    EXPECT_EQ(document->GetElementById("actor-field-intensity")->GetInnerRML(), "4");
+    EXPECT_EQ(Control("actor-sun-intensity"), nullptr);
+    EXPECT_EQ(document->GetElementById("actor-csm-enable"), nullptr);
+    EXPECT_EQ(document->GetElementById("actor-csm-disable"), nullptr);
+}
+
+TEST_F(EditorUiTest, OutlinerStaticFramesKeepActorFieldsAndCountCached)
+{
+    SelectActorInOutliner(PointLightActor("Key_Point_Light", 250.0f, 12.5f));
+    auto* radius = document->GetElementById("actor-field-radius");
+    ASSERT_NE(radius, nullptr);
+    for (int frame = 0; frame < 3; ++frame)
+    {
+        panel->Build(snapshot);
+        context->Update();
+    }
+    const size_t writes = panel->PanelPropertyWriteCount();
+    for (int frame = 0; frame < 100; ++frame)
+    {
+        panel->Build(snapshot);
+        context->Update();
+    }
+    // 大纲 markup、计数与只读字段都走值缓存：静止帧写 0 次属性，也不重建节点。
+    EXPECT_EQ(panel->PanelPropertyWriteCount(), writes);
+    EXPECT_EQ(document->GetElementById("actor-field-radius"), radius);
+    EXPECT_EQ(OutlinerCount(), "1 actor");
 }
 
 TEST_F(EditorUiTest, DetailsSectionsCollapseWithoutRebuildingTheGroupDom)

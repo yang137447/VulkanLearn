@@ -87,8 +87,16 @@ private:
     void QueueEdit(std::string key, EditorCommandBatchItem item);
     void FlushPendingEdits(bool save = false);
     void RefreshLists();
+    void RefreshOutliner();
     void RefreshDetails();
     void RefreshControls();
+    void RefreshActorValues(const EditorSceneActorSnapshot* actor);
+    std::string ActorSectionMarkup(const EditorSceneActorSnapshot& actor);
+    std::string PrimaryDirectionalLightControls(const EditorSceneActorSnapshot& actor) const;
+    const std::vector<EditorSceneActorSnapshot>& OutlinerActors() const;
+    const EditorSceneActorSnapshot* SelectedActor() const;
+    void SelectOutlinerActor(const EditorSceneActorSnapshot& actor);
+    void ToggleOutlinerGroup(size_t groupIndex);
     void RefreshWorkspace();
     void RefreshMenus();
     void RefreshLevelMenu();
@@ -142,9 +150,14 @@ private:
     std::shared_ptr<const EditorJsonAssetCatalogSnapshot> menuCatalog;
     uint64_t menuCatalogRevision = 0;
     bool menuCatalogReady = false;
-    std::unordered_set<std::string> expandedModels;
     // 折叠的分组键（缺省即展开）；切换文档不清空，和模型树展开一样是面板本地状态。
     std::unordered_set<std::string> collapsedSections;
+    // 大纲的展开与折叠同样是面板本地会话状态：折叠的分组键 + 展开的 actor 稳定身份。
+    std::unordered_set<std::string> collapsedOutlinerGroups;
+    std::unordered_set<std::string> expandedActors;
+    // 大纲搜索与类型过滤只影响可见性；ASCII 大小写折叠复用 Content Browser 的规则。
+    std::string outlinerQuery;
+    std::string outlinerTypeFilter = "all";
     uint64_t treeWorldGeneration = 0;
     std::unordered_map<std::string, EditorParameterValue> pendingValues;
     std::vector<PendingEdit> pendingEdits;

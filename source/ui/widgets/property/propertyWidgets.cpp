@@ -26,6 +26,12 @@ std::string PropertyRow(const std::string& label, const std::string& controlRml,
         controlRml + Button(resetId, reset, "Reset") + "</div>";
 }
 
+std::string PropertyControlRow(const std::string& label, const std::string& controlRml)
+{
+    return "<div class=\"property-row\"><label>" + Text(label) + "</label>" +
+        controlRml + "</div>";
+}
+
 std::string PropertyGroup(const std::string& label, const std::string& controlsRml,
     const std::string& resetId, const WidgetAction& reset, const std::string& description)
 {
@@ -34,10 +40,12 @@ std::string PropertyGroup(const std::string& label, const std::string& controlsR
         Description(description) + "</div>";
 }
 
-std::string PropertyInfo(const std::string& label, const std::string& value)
+std::string PropertyInfo(const std::string& label, const std::string& value,
+    const std::string& valueId)
 {
-    return "<div class=\"property-info\"><label>" + Text(label) + "</label><span>" +
-        Text(value) + "</span></div>";
+    const std::string identity = valueId.empty() ? std::string() : " id=\"" + Text(valueId) + "\"";
+    return "<div class=\"property-info\"><label>" + Text(label) + "</label><span" + identity +
+        ">" + Text(value) + "</span></div>";
 }
 
 std::string CollapsibleSection(const std::string& id, const std::string& key,

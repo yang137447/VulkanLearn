@@ -166,6 +166,42 @@ body {
     overflow: hidden;
 }
 #editor-navigation { background-color: #2d2d31; }
+/* 大纲过滤栏与统计栏与 Content Browser 用同一套尺寸约定，不引入第二套工具条样式。 */
+.outliner-filterbar {
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
+    box-sizing: border-box;
+    min-height: 31px;
+    padding: 2px 5px;
+    background-color: #252528;
+    border-bottom-width: 1px;
+    border-bottom-color: #39393e;
+}
+#outliner-type { width: 42%; flex-shrink: 0; }
+#outliner-empty { display: none; padding: 7px 9px; }
+.outliner-footer {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    box-sizing: border-box;
+    height: 22px;
+    padding: 3px 9px;
+    font-size: 10px;
+    color: #cacacf;
+    border-top-width: 1px;
+    border-top-color: #39393e;
+}
+/* 树行的图标与文本同属 list-item 按钮，点击靶面保持一个。
+   这里保持 list-item 的块级/行内默认布局（而不是 flex）：分组行只有纯文本，
+   RmlUi 的 flex 布局不会给裸文本子节点排版，分组标题会整行不可见。 */
+.tree-row .list-item img.row-icon {
+    width: 14px;
+    height: 14px;
+    margin-right: 6px;
+    vertical-align: middle;
+}
+.tree-row.group-row .list-item { color: #a6c6ba; font-weight: bold; }
 #scene-models { flex: 1; min-height: 0; padding: 4px 7px; overflow: auto; }
 #material-slots { max-height: 90px; overflow: auto; }
 .inspector-body { flex: 1; min-height: 0; overflow: auto; padding: 0 10px 10px; }

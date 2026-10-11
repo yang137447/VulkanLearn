@@ -62,6 +62,14 @@ async function main() {
   await icon("Map", "scene.png", 128, "#81aee9", "#293a52");
   await icon("Image", "texture.png", 128, "#d38ba8", "#442f38");
   await icon("Mountain", "terrain.png", 128, "#cfb875", "#403b29");
+  // Scene Outliner actor type icons: one per World actor type, 32px like the toolbar icons.
+  await icon("Sun", "light-directional.png", 32, "#e5c17b");
+  await icon("Lightbulb", "light-point.png", 32, "#e5c17b");
+  await icon("Flashlight", "light-spot.png", 32, "#e5c17b");
+  await icon("Square", "light-area.png", 32, "#e5c17b");
+  await icon("Camera", "camera.png", 32, "#b79ae6");
+  await icon("CloudSun", "environment.png", 32, "#81aee9");
+  await icon("Wind", "wind.png", 32, "#9fd0a8");
   await materialTypeIcon();
   await fs.copyFile(path.join(packageRoot, "lucide/LICENSE"),
     path.join(output, "LUCIDE-LICENSE.txt"));

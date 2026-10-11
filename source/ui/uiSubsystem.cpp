@@ -27,6 +27,7 @@
 #include "editor/runtime/materialInstanceEditorRuntime.h"
 #include "editor/assets/editorJsonAssetLibrary.h"
 #include "editor/ui/materialInstanceAssetEditorPanel.h"
+#include "editor/ui/editorSceneActorTree.h"
 #include "platform/platformEvent.h"
 #include "platform/platformWindow.h"
 #include "ui/sceneObjectTypeSupport.h"
@@ -531,6 +532,10 @@ void UiSubsystem::NotifyWorldChanged(
     selectedModelMaterials.reset();
     selectedMaterialSlotIndex.reset();
     sceneModels.clear();
+    // 大纲行名可能在新 World 里重名，身份不做跨代复用。
+    sceneActors.reset();
+    selectedActorIdentity.clear();
+    pendingSceneSelectionClear = false;
     pendingMaterialInstanceModelSelection.reset();
     pendingMaterialInstanceSelection.reset();
     if (materialInstanceEditorRuntime != nullptr)
@@ -600,6 +605,10 @@ bool UiSubsystem::OpenMaterialInstanceFromSelection(
     }
     selectedModelMaterials = std::move(modelSnapshot);
     selectedMaterialSlotIndex = selection.materialSlotIndex;
+    // 视口拾取与大纲行共用同一份选中态：拾取到的网格在大纲里也要高亮。
+    selectedActorIdentity = EditorUi::SceneActorIdentity(
+        EditorUi::EditorSceneActorType::Mesh, selection.objectIdentity);
+    pendingSceneSelectionClear = false;
     return true;
 }
 
@@ -653,6 +662,28 @@ void UiSubsystem::SetMaterialInstanceSceneModels(
     selectedModelMaterials = *selected;
 }
 
+// 大纲快照逐帧替换：只保存不可变数组的共享指针，选择态按稳定身份保留，
+// 身份消失时清空，防止把旧 World 的选择静默套到同名新对象上。
+void UiSubsystem::SetSceneActors(std::vector<EditorUi::EditorSceneActorSnapshot> actors)
+{
+    sceneActors = std::make_shared<const std::vector<EditorUi::EditorSceneActorSnapshot>>(
+        std::move(actors));
+    if (selectedActorIdentity.empty()) return;
+
+    const auto& list = *sceneActors;
+    const bool stillPresent = std::any_of(
+        list.begin(),
+        list.end(),
+        [this](const EditorUi::EditorSceneActorSnapshot& actor)
+        {
+            return actor.identity == selectedActorIdentity;
+        });
+    if (stillPresent) return;
+    selectedActorIdentity.clear();
+    selectedModelMaterials.reset();
+    selectedMaterialSlotIndex.reset();
+}
+
 std::optional<Editor::Selection::MaterialInstanceModelContext>
 UiSubsystem::ConsumeMaterialInstanceModelSelectionRequest()
 {
@@ -671,10 +702,20 @@ UiSubsystem::ConsumeMaterialInstanceSelectionRequest()
     return result;
 }
 
+bool UiSubsystem::ConsumeSceneSelectionClearRequest()
+{
+    // 与 selection 请求同帧消费一次：EngineLoop 据此清掉渲染端描边。
+    const bool pending = pendingSceneSelectionClear;
+    pendingSceneSelectionClear = false;
+    return pending;
+}
+
 void UiSubsystem::ClearMaterialInstanceSceneSelection() noexcept
 {
     selectedModelMaterials.reset();
     selectedMaterialSlotIndex.reset();
+    selectedActorIdentity.clear();
+    pendingSceneSelectionClear = false;
     pendingMaterialInstanceModelSelection.reset();
     pendingMaterialInstanceSelection.reset();
 }
@@ -708,6 +749,9 @@ bool UiSubsystem::RequestModelSelection(
     selectedMaterialSlotIndex.reset();
     pendingMaterialInstanceSelection.reset();
     pendingMaterialInstanceModelSelection = model;
+    selectedActorIdentity = EditorUi::SceneActorIdentity(
+        EditorUi::EditorSceneActorType::Mesh, model.objectIdentity);
+    pendingSceneSelectionClear = false;
     return true;
 }
 
@@ -724,6 +768,27 @@ bool UiSubsystem::RequestMaterialSelection(
     selectedMaterialSlotIndex = selection.materialSlotIndex;
     pendingMaterialInstanceModelSelection.reset();
     pendingMaterialInstanceSelection = selection;
+    selectedActorIdentity = EditorUi::SceneActorIdentity(
+        EditorUi::EditorSceneActorType::Mesh, selection.objectIdentity);
+    pendingSceneSelectionClear = false;
+    return true;
+}
+
+bool UiSubsystem::RequestActorSelection(const std::string& actorIdentity)
+{
+    if (!developerUiEnabled || actorIdentity.empty())
+    {
+        return false;
+    }
+
+    // 非网格 actor 没有 MI 文档：清掉编辑器侧的材质槽选择，并要求 EngineLoop
+    // 清掉渲染端的 mesh 描边，让大纲高亮与视口描边保持同一个选中对象。
+    selectedModelMaterials.reset();
+    selectedMaterialSlotIndex.reset();
+    pendingMaterialInstanceModelSelection.reset();
+    pendingMaterialInstanceSelection.reset();
+    selectedActorIdentity = actorIdentity;
+    pendingSceneSelectionClear = true;
     return true;
 }
 
@@ -2037,6 +2102,8 @@ void UiSubsystem::BuildDeveloperPanels()
         snapshot.jsonDocumentLoading = jsonAssetLibrary->IsDocumentLoading();
     }
     snapshot.sceneModels = sceneModels;
+    snapshot.sceneActors = sceneActors;
+    snapshot.selectedActorIdentity = selectedActorIdentity;
     snapshot.selectedModel = selectedModelMaterials;
     snapshot.selectedMaterialSlotIndex = selectedMaterialSlotIndex;
     materialInstanceEditorPanel->Build(snapshot);

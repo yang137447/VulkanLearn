@@ -95,7 +95,22 @@
                     </div>
                 </div>
             <div id="editor-navigation" class="dock-panel">
+                <div class="outliner-filterbar">
+                    <div class="browser-search">
+                        <img src="icons/search.png"/>
+                        <input id="outliner-search" type="text" data-action="outliner-search" value="" placeholder="Search actors"/>
+                    </div>
+                    <select id="outliner-type" data-action="outliner-type">
+                        <option value="all">All Actors</option><option value="mesh">Meshes</option>
+                        <option value="directionalLight">Directional Lights</option><option value="pointLight">Point Lights</option>
+                        <option value="spotLight">Spot Lights</option><option value="squareAreaLight">Square Area Lights</option>
+                        <option value="camera">Cameras</option><option value="environment">Environments</option>
+                        <option value="windProfile">SpeedTree Wind Profiles</option>
+                    </select>
+                </div>
                 <div id="scene-models" class="scroll-box"></div>
+                <div id="outliner-empty" class="muted">No actors in the active world.</div>
+                <div class="outliner-footer"><div id="outliner-count"></div></div>
             </div>
             <div id="editor-inspector" class="dock-panel">
                 <div class="inspector-body">

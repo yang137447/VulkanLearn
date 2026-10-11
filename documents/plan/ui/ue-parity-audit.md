@@ -32,12 +32,13 @@ git show HEAD:source/editor/ui/materialInstanceAssetEditorPanel.cpp
 | 折叠分类 | `CollapsingHeader`：General / Render States / Parameters / Texture Bindings | 三个平铺 Heading | 第 3 轮恢复 |
 | 资源编辑器返回按钮 | 不适用 | `resource-json-close` 分支存在但无触发控件 | 已删除（见下） |
 | 纹理选择弹窗 | `BeginPopup("MITexturePicker")` | `<select>` 下拉 | 不恢复：下拉覆盖同一需求 |
-| 场景对象树 | 无（只有 MI 模型列表） | 无 | 未排期 |
+| 场景对象树 | 无（只有 MI 模型列表） | 无 | 第 4 轮新增真实 World actor 树 |
 | gizmo / 变换编辑 | 无 | 无 | 未排期，需先改场景数据模型 |
 | Undo / Redo | 无 | 无 | 未排期；Edit 菜单已留禁用占位 |
 
 **HEAD 也没有**的东西不要记成迁移损失：菜单栏、视口工具条、面板显隐、场景树、
 gizmo、Undo/Redo 在迁移前同样不存在。它们属于"向 UE 对齐"的新增工作，不是回归。
+第 4 轮把其中的"场景对象树"做成了真实 World actor 树（见下文），它仍然不是迁移损失。
 
 ## 第 1 轮：菜单栏、面板显隐、视口工具条
 
@@ -72,6 +73,126 @@ gizmo、Undo/Redo 在迁移前同样不存在。它们属于"向 UE 对齐"的�
 
 滑块（含 `ResolveSliderRange` 语义：通道范围 > 参数范围 > 由当前值推导的固定兜底）、
 sRGB 色块与十六进制、可折叠分类。色块为只读；HSV 取色器不在本轮范围，原因见上表。
+
+## 第 4 轮：真实 World actor 树 + 选择驱动 Details
+
+`#editor-navigation > #scene-models` 以前由 `MaterialInstanceEditorSnapshot::sceneModels`
+构建，只包含携带有效材质实例的网格（`RenderSystem::GetMaterialInstanceModelContexts`
+要求 `materialInstance.IsValid()`）。本轮换成真实大纲：
+
+- **数据源**：`EngineLoop::UpdateUiViewModel` 在设置 `snapshot.activeWorldPath` 的同一处
+  用 active World 调 `BuildEditorSceneActors(world)`，经
+  `UiSubsystem::SetSceneActors(...)` 发布，位置与 `SetMaterialInstanceSceneModels` 并排、
+  在 `uiSubsystem->Update(snapshot)` 之前。列表是
+  `shared_ptr<const std::vector<EditorSceneActorSnapshot>>`，逐帧不深拷贝。
+- **内容**：网格（按 `sceneObjectIdentity` 聚合 section，逐 section 带
+  mesh/material/MI 路径/槽名/风剖面 key 与"是否带材质实例"）、
+  directionalLight / pointLight / spotLight / squareAreaLight（参数与渲染快照同源：
+  复用 `WorldSnapshotBuilder` 的 `BuildWorld*LightSnapshot`）、相机七个字段、
+  环境（type/intensity/cubeSize/hdrPath/对象名）、SpeedTree 风剖面
+  （key、source bounds、common 标量与 do* 开关）。
+- **树形状**：`SceneActorGroupSpecs()` 固定分组顺序（Meshes / Directional Lights /
+  Point Lights / Spot Lights / Square Area Lights / Cameras / Environments /
+  SpeedTree Wind Profiles），组内按显示名做 ASCII 大小写不敏感比较、再按稳定身份打破平局；
+  分组可折叠，折叠只影响行是否挂进 DOM，不改筛选计数。每行一个类型图标。
+- **搜索与过滤**：搜索复用 Content Browser 的 `FoldAsciiCase`（现已提取到
+  `source/editor/ui/editorTextMatch.h`，两处共用一份），只折叠 ASCII 大小写、
+  保留 UTF-8 多字节名称；类型过滤取值就是分组键；底部计数显示筛选结果
+  （`N / M actors`）。三者都不提交资产或运行时命令。
+- **选择**：mesh actor → 既有 `RequestModelSelection`；材质槽 → 既有
+  `RequestMaterialSelection`（MI 文档与 Material Slots 行为不变）；
+  非网格 actor → 新 `RequestActorSelection(稳定身份)`，并要求 EngineLoop
+  清掉渲染端 mesh 描边，避免大纲与视口各留一个选中对象。
+- **Details**：`#details-content` 里新增一个以类型命名的可折叠分组
+  （键 `actor-<分组键>`，与 General/Render States/Parameters/Texture Bindings 并列），
+  只读字段按行带 id，值变化只刷新该行（节点身份不重建）；
+  没有打开的 MI 文档时 Details 不再为空。
+- **两条真实写入路径**（都复用既有命令，不新增 UI→renderer 路径）：
+  主方向光的 Intensity（文本输入 + 与运行时页同区间的 0..10 滑条）与
+  CSM Cast Shadows（运行时页同款 Enabled/Disabled 按钮），分别提交
+  `UiActionType::SetSunIntensity` 与 `UiActionType::SetCsmCastShadows`。
+  `SaveCsmSettingsToScene` 没有放进 Details：本轮只surface 两条，保存仍走运行时页。
+
+### 本轮刻意不做
+
+- **没有逐 actor 可见性/隐藏开关**。`WorldMeshObject`（`source/world/world.h`）
+  没有可见性字段，`MeshDrawSnapshot`（`source/world/worldSnapshot.h`）与渲染图也都不读
+  任何逐对象可见性状态；加它要同时改场景 JSON schema、`SceneAssetValidator`、
+  World 加载/构建与渲染路径，属于单独一轮。放一个点了没有效果的隐藏按钮
+  正是这个分支一直在删的东西。
+- **没有地形节点**：`World` 没有 terrain 访问器，仓库里也没有 terrain 运行时
+  （`source/terrain.h`/`terrain.cpp` 在本 worktree 中不存在，尽管 `AGENTS.md` 仍引用它们）；
+  场景选择器只把 `"terrain"` 列进受支持类型（`source/ui/sceneObjectTypeSupport.h`），
+  资产浏览器只有 Terrain JSON 元数据。因此大纲不凭空造地形行。
+- 没有 transform 编辑、gizmo、增/删/改名、Undo/Redo、拖放；大纲没有虚拟化
+  （每帧重建 markup 字符串后由值缓存决定是否写 DOM，与迁移前的模型树同一策略）。
+- 环境对象名来自新增的 `WorldEnvironment::name`（由 `worldBuilder` 从场景 JSON 写入）；
+  场景没有 environment 对象时回退到固定标签 `Environment`。
+
+### 渲染验证发现的两个真实缺陷（已修）
+
+1. **分组折叠只改了 ± 标记，没有隐藏子行**：`RefreshOutliner` 把每组所有 actor 行都
+   挂进了 DOM。单元测试当时没覆盖"折叠后子行消失"，是像素探针（折叠 Meshes 后
+   网格图标像素没有减少）先发现的；现在由
+   `EditorUiTest.OutlinerGroupCollapseHidesItsActorsAndKeepsTheFilterCount` 守住。
+2. **组标题整行不可见**：`.tree-row .list-item` 曾用 `display: flex`，
+   而 RmlUi 不会给 flex 容器里的裸文本子节点排版；分组行没有图标，标签就是裸文本，
+   于是标题一个字都不画（像素实测：分组行在 113–142 行区间内只有 3 个 `-` 像素）。
+   改为保持 `list-item` 的块级/行内默认布局、只给 `img.row-icon` 加
+   `vertical-align: middle`。
+3. **Details 强度控件的区间耦合**：最初允许键入任意有限值；像素探针实测到
+   键入 13 后运行时页那个**隐藏**的 sun 滑条（`ui/runtime-control.rml` 的
+   `#sun-intensity-slider`，0..10 双向 data binding）把它截断成 10 并回写一条
+   `SetSunIntensity(10)`，日志出现 13/10/13/10 的来回命令。
+   现在按同一区间校验并给出人类可读提示，不做无声改写；
+   `EditorUiTest.ActorIntensitySliderRangeMatchesTheRuntimeSunSlider`
+   直接把 Details 滑条的 min/max 与运行时页 RML 里的值对比，防止再次漂移。
+
+## 第 4 轮验证（2026-10-11）
+
+```powershell
+cmake --build build --target editor_ui_tests editor_viewport_tests main material_instance_editor_production_tests -j8
+ctest --test-dir build -R "^(UiColorTransform|UiWidgetTest|UiWidgetRefresh|EditorUiTest|ContentBrowserTest|DockWorkspaceTest|DockPersistenceTest|DockRmlTest|EditorViewportGeometry|EditorJsonAssetParsing|EditorJsonAssetPaths|EditorJsonAssetTypes|JsonAssetLibraryTest|ResourceEditorController|LargeCatalog/ContentBrowserPerformanceTest)\." --output-on-failure
+ctest --test-dir build -R "MaterialInstanceEditor" --output-on-failure
+```
+
+- 四个目标全部构建成功（唯一告警是 MinGW 对 `<ciso646>` 的既有 deprecation 告警）。
+- 编辑器 UI 选择 **262/262 通过**（基线 245/245，本批净增 17 项：
+  `widgetTests.cpp` 4 项、`editorUiTests.cpp` 13 项；另有 1 项原模型树用例
+  改写成 actor 树版本）。**两次运行都是 262/262**，
+  含 4 项既有 `JsonAssetLibraryTest` 符号链接用例按原条件跳过。
+- `MaterialInstanceEditor` **22/22 通过**，与基线一致。
+
+### 像素证据（1280×720，`--dev-ui`，默认球阵场景）
+
+探针 `artifacts/rmlui-editor/outliner_probe.py`（gitignored 的 `artifacts/` 下）驱动真实窗口，
+截图经 `bmp_probe.py` 校验载荷后逐点读数。默认场景（`config/config.json -> initScene`
+= `Maps/SC_sphere_array/SC_sphere_array.json`）实测含 **122 个 mesh、1 个 directionalLight
+（`Sun_Light`）、1 个 pointLight（`Key_Point_Light`）、1 个 camera（`Camera_01`）、
+1 个 environment（`Environment_01`，hdri）**，没有 spotLight / squareAreaLight / 风剖面。
+
+| 观察点 | 读数 | 结论 |
+| --- | --- | --- |
+| 右列顶部 `#252528` | 行 74–107 | 新的大纲过滤栏（搜索 + 类型过滤）已渲染 |
+| 大纲面板底色 `#2d2d31` | 行 109–247（树 109–226、计数栏 227–247） | 树与计数栏都在；计数文字像素在 235–241 |
+| 折叠 Meshes 前网格图标色像素 | 286（其中 178 是 dock 活动标签下划线 `#62A58D`，分类器与网格图标同色系） | 树里只有网格行可见，灯光在可视区之外 |
+| 折叠 Meshes 后 | 网格图标 0（只剩 178 下划线像素），暖色灯光图标 40 像素，bbox (920,180)-(931,191) | 灯光行确实挂进了树 |
+| 点击 `Sun_Light` 行后 Details | `#C8C8CF` 滑条块 **恰好 120 像素**（10×12）于 (933,599)-(942,610)；选中/未选中按钮长段各 13 行，x=1160..1209 / 1216..1268；分组标题色 `#A6C6BA` 出现在 y=444 | actor 分组与两个可编辑控件都渲染了 |
+| 点击 CSM 按钮 | 选中段与未选中段互换，日志 `[Diagnostics][Info] CSM disabled.` | UI → UiAction → RuntimeCommand → RenderSystem → 冻结快照 全链路生效 |
+| 键入 5 后 | 日志恰好一条 `Sun intensity set to 5.000000`；滑条块从 x=933 移到 x=1077（轨道 895..1269，占 48.7% ≈ 0..10 的 50%） | 强度写路径生效且控件跟随真实值 |
+| 每张截图载荷 | 2764800 B（完整，无半截） | 读数可信 |
+
+- 该进程由探针强制终止，**这是渲染证据，不是 teardown 证据**。
+- 产物：日志 `artifacts/rmlui-editor/outliner-121423.log`（stderr 0 字节）；
+  截图在隔离资源目录 `Generated/Screenshots/`：
+  `outliner-baseline.bmp`、`outliner-collapsed.bmp`、`outliner-sun.bmp`、
+  `outliner-csm.bmp`、`outliner-intensity.bmp`；探针与地图脚本
+  `artifacts/rmlui-editor/outliner_probe.py`、`outliner_map.py`、`click_check.py`。
+- 未能上屏观察的 actor 类型：spotLight、squareAreaLight、SpeedTree 风剖面
+  （默认场景没有；换场景需改资产，本轮没有为此改动场景资产）。
+  这三类的行渲染由 `SceneActorGroupSpecs()` 与单元测试覆盖，没有像素证据。
+- 未验证：真实鼠标的搜索键入与下拉选择手感（合成点击只验证了搜索框获得焦点边框
+  `#62A58D`）、真实拖动滑条（合成拖动不改变 range 控件，与第三轮记录的限制相同）。
 
 ## 待处置项
 
@@ -179,10 +300,15 @@ RmlUi 6.2 的 `PropertyParserColour` 在 RGBA 分支对每个分量统一走整�
 
 - gizmo、变换编辑、场景对象增删改 / 重命名 / 重父级
 - Undo / Redo（Edit 菜单为禁用占位）
-- 真正的世界大纲：模型树只列出携带有效 MI 的网格，无灯光 / 相机 / 地形 / 环境，
-  无层级、无眼睛图标、无搜索、无重命名
+- 逐 actor 可见性 / 隐藏开关（`World`、`WorldSnapshot` 与渲染图都没有逐对象可见性状态；
+  见第 4 轮的"刻意不做"）
+- 地形节点（`World` 没有 terrain 访问器，仓库里也没有 terrain 运行时）
+- 大纲虚拟化（每帧重建 markup 后由值缓存决定是否写 DOM）
 - 资产缩略图、模型几何预览、纹理像素查看
 - 原生多窗口、IME 输入
 - 视口按 dock 分辨率渲染（场景仍按完整 swapchain extent 出图，UI 用完整 UV 采样）
 - 材质实例纹理 override 的 live 生效（保存 JSON 后才生效）
 - HSV 取色器
+
+第 4 轮已经消掉的一条：Scene Outliner 不再只列出带有效 MI 的网格，
+而是真实 World actor 树（网格 / 四类灯 / 相机 / 环境 / 风剖面，分组、图标、搜索、类型过滤）。

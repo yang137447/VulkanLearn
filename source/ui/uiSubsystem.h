@@ -116,16 +116,23 @@ public:
         const Editor::Selection::MaterialInstanceSelection& selection);
     void SetMaterialInstanceSceneModels(
         const std::vector<Editor::Selection::MaterialInstanceModelContext>& models);
+    // 世界大纲的冻结 actor 列表：EngineLoop 在稳定帧边界从 active World 拍出，
+    // 与 SetMaterialInstanceSceneModels 同一位置发布，UI 只接收值语义副本。
+    void SetSceneActors(std::vector<EditorUi::EditorSceneActorSnapshot> actors);
     std::optional<Editor::Selection::MaterialInstanceModelContext>
         ConsumeMaterialInstanceModelSelectionRequest();
     std::optional<Editor::Selection::MaterialInstanceSelection>
         ConsumeMaterialInstanceSelectionRequest();
+    // 大纲选中非网格 actor 时要求清掉渲染端的 mesh 选中描边，避免出现
+    // "大纲高亮灯光、视口还描着上一个网格" 的双选中态。
+    bool ConsumeSceneSelectionClearRequest();
     void ClearMaterialInstanceSceneSelection() noexcept;
 
     bool RequestModelSelection(
         const Editor::Selection::MaterialInstanceModelContext& model) override;
     bool RequestMaterialSelection(
         const Editor::Selection::MaterialInstanceSelection& selection) override;
+    bool RequestActorSelection(const std::string& actorIdentity) override;
     void RequestRuntimeAction(UiAction action) override;
     void RequestOpenJsonAsset(const std::string& assetPath) override;
     void RequestRefreshAssetCatalog() override;
@@ -462,6 +469,11 @@ private:
         selectedModelMaterials;
     std::optional<uint32_t> selectedMaterialSlotIndex;
     std::vector<EditorUi::MaterialInstanceModelSnapshot> sceneModels;
+    // 大纲列表是逐帧替换的不可变数组：面板只借用同一个 shared_ptr，不做深拷贝。
+    std::shared_ptr<const std::vector<EditorUi::EditorSceneActorSnapshot>> sceneActors;
+    // 大纲选中态是稳定身份（"mesh|…"、"pointLight|…"），World 换代时清空。
+    std::string selectedActorIdentity;
+    bool pendingSceneSelectionClear = false;
     std::optional<Editor::Selection::MaterialInstanceModelContext>
         pendingMaterialInstanceModelSelection;
     std::optional<Editor::Selection::MaterialInstanceSelection>

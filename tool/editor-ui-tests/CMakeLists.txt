@@ -10,6 +10,7 @@ add_executable(editor_ui_tests
     "${PROJECT_SOURCE_DIR}/source/editor/ui/editorDockingController.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/editorJsonInspectorController.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/editorResourceEditorController.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/ui/editorSceneActorTree.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/assets/editorJsonAssetLibrary.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/assets/editorJsonAssetTypes.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/materialInstanceAssetEditorPanel.cpp"

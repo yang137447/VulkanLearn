@@ -9,6 +9,7 @@
 #include "editor/command/editorCommand.h"
 #include "editor/selection/materialInstanceSelection.h"
 #include "editor/assets/editorJsonAssetTypes.h"
+#include "editor/ui/editorSceneActorTypes.h"
 
 namespace VL::EditorUi
 {
@@ -53,6 +54,9 @@ public:
         const VL::Editor::Selection::MaterialInstanceModelContext& model) = 0;
     virtual bool RequestMaterialSelection(
         const VL::Editor::Selection::MaterialInstanceSelection& selection) = 0;
+    // 大纲里的非网格 actor（灯光/相机/环境/风剖面）没有 MI 文档，也没有渲染端选中态。
+    // 这里只登记稳定身份，Details 从冻结快照派生，面板不保存第二份选择状态。
+    virtual bool RequestActorSelection(const std::string& actorIdentity) = 0;
 };
 
 enum class EditorDocumentStatus : uint8_t { Clean, Dirty, Saving, SaveFailed, SourceChanged };
@@ -158,6 +162,13 @@ struct MaterialInstanceEditorSnapshot
     std::vector<MaterialInstanceAssetEntry> documentTabs;
     std::vector<EditorTextureAssetSnapshot> textureAssets;
     std::vector<MaterialInstanceModelSnapshot> sceneModels;
+    // 世界大纲的冻结 actor 列表（EngineLoop 在稳定帧边界从 active World 拍出）。
+    // 与 sceneModels 并列而不是替换：sceneModels 仍是 MI 文档侧的值语义视图。
+    // shared_ptr<const ...> 与资产目录同一约定：逐帧不深拷贝 actor 字段数组。
+    std::shared_ptr<const std::vector<EditorSceneActorSnapshot>> sceneActors;
+    // 大纲选中态。mesh actor 的选择同时写 selectedModel/selectedMaterialSlotIndex，
+    // 其余类型（灯光/相机/环境/风）只记录这个稳定身份。
+    std::string selectedActorIdentity;
     std::optional<MaterialInstanceDocumentSnapshot> activeDocument;
     std::optional<MaterialInstanceModelSnapshot> selectedModel;
     std::optional<uint32_t> selectedMaterialSlotIndex;

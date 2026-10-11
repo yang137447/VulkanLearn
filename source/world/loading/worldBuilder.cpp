@@ -146,6 +146,7 @@ WorldEnvironment BuildEnvironment(const nlohmann::json& node)
     const nlohmann::json& config = node["environment"];
 
     WorldEnvironment environment;
+    environment.name = node.value("name", std::string());
     environment.type = ParseEnvironmentType(config["type"].get<std::string>());
     environment.cubeSize = config.value("cubeSize", 128u);
     environment.intensity = config.value("intensity", 1.0f);

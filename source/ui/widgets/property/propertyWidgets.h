@@ -9,10 +9,16 @@ namespace VL::UiWidgets
 // 通用属性组件只接收标签、控件内容与 Reset 意图，不认识 MI schema 或 override。
 std::string PropertyRow(const std::string& label, const std::string& controlRml,
     const std::string& resetId, const WidgetAction& reset);
+// 没有 Reset 语义的属性行：用于由运行时命令直接生效的字段，避免出现点了没有效果的
+// Reset 按钮。label 仍由组件转义，controlRml 只允许由其他叶控件生成。
+std::string PropertyControlRow(const std::string& label, const std::string& controlRml);
 std::string PropertyGroup(const std::string& label, const std::string& controlsRml,
     const std::string& resetId, const WidgetAction& reset, const std::string& description = {});
 // 只读属性行：没有控件也没有 Reset，只展示业务已经算好的文本（同样经过转义）。
-std::string PropertyInfo(const std::string& label, const std::string& value);
+// valueId 非空时写进数值 <span> 的 id，宿主可以逐帧只刷新这一项（例如相机位置），
+// 而不必重建整个分组 DOM。
+std::string PropertyInfo(const std::string& label, const std::string& value,
+    const std::string& valueId = {});
 
 // 折叠分组的展开状态属于宿主（会话 UI 状态，不是文档状态）；组件只生成当前状态的 RML
 // 和切换地址。切换由宿主在既有元素上改 class，不重建分组 DOM，否则会丢焦点与滚动位置。

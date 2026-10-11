@@ -1,7 +1,7 @@
 # UI 组件体系
 
-状态：2026-10-11，`codex/rmlui-editor` 分支第三批实现（Details 面板恢复 ImGui 迁移丢失的
-数值滑条、sRGB 色板与折叠分组）。
+状态：2026-10-11，`codex/rmlui-editor` 分支第四批实现（Scene Outliner 变成真实 World actor 树，
+选中驱动 Details，并接入两条既有运行时命令）。
 
 ## 工作区布局
 
@@ -10,6 +10,9 @@
 中央/左侧独立 Viewport，底部 Content Browser / Renderer 标签页，最底部状态栏。
 Material Slots 放在 Details 中。面板可四边停靠、合并标签、在主窗口内浮动后重新停靠，
 分隔条支持拖动并受子树最小尺寸约束；标签切换不提交资产或运行时命令。
+Scene Outliner 现在渲染真实 World actor 树（网格 / 四类灯 / 相机 / 环境 / 风剖面，
+分组可折叠，带类型图标、搜索与类型过滤），选中 actor 由 Details 展示其类型化参数；
+无打开的 MI 文档时 Details 不再为空。契约见“世界 actor 树契约”。
 面板可以通过 Window 菜单隐藏和恢复，隐藏状态随布局一起保存。
 布局保存至用户目录，支持跨启动恢复和 Reset Layout；不支持独立操作系统窗口。
 资源编辑器是 DockWorkspace 的正式 `Asset Editor` 面板，默认与 Viewport
@@ -50,11 +53,11 @@ GPU backing 保持原生窗口尺寸；相机 aspect、拾取和离线 film 尺�
 | Text / 展示 | Text、Heading、Description | 已实现转义和文本组合 | Image、Icon、Tooltip |
 | Input / 输入 | Button、Input、Slider、Option、Select | 已实现交互地址和样式状态；`Slider` 是 `input type="range"`，与文本输入共用同一个 action/index/component 地址 | CheckBox、SpinBox、ColorPicker |
 | Layout / 容器 | HorizontalBox、VerticalBox、ScrollBox、Splitter | RML/RCSS 组合与受最小尺寸约束的可调分区 | Grid |
-| Views / 数据视图 | ListRow、TreeRow | 已实现行、缩进、展开符号、选择状态 | 虚拟化 ListView/TreeView、TableView、筛选 |
+| Views / 数据视图 | ListRow、TreeRow | 已实现行、缩进、展开符号、选择状态、行首类型图标与行样式 class | 虚拟化 ListView/TreeView、TableView、筛选 |
 | Navigation / 导航 | DocumentTab、MenuItem | 已实现激活与关闭分离、菜单项勾选/禁用与条目索引寻址 | 菜单快捷键、Breadcrumb、子菜单键盘导航 |
 | Workspace / 工作区 | DockWorkspace、DockTab、面板可见性、脏关闭弹窗 | 四边停靠、标签合并、窗口内浮动、布局持久化与重置、面板隐藏/恢复 | 原生多窗口、通用 Modal |
-| Property / 属性 | PropertyRow、PropertyGroup、PropertyInfo、CollapsibleSection、NumericComponents、ColorPreview | 已实现属性组合、Reset 地址、向量分量、可选范围滑条、折叠分组、sRGB 色板与十六进制读数 | 多对象混合值、属性适配器、可编辑调色板 |
-| Editor / 业务 | 顶部菜单栏、模型树、JSON Content Browser、MI Details、资源编辑器、离线控制、Viewport、视口工具条 | 已接入组件、受限浏览窗口/分页、资源标签、renderer-owned 离屏视口、视口工具条中只有 view mode 有真实后端 | 真实模型/纹理预览、完整场景树、资产导入、gizmo |
+| Property / 属性 | PropertyRow、PropertyGroup、PropertyInfo、PropertyControlRow、CollapsibleSection、NumericComponents、ColorPreview | 已实现属性组合、Reset 地址、向量分量、可选范围滑条、折叠分组、sRGB 色板与十六进制读数、无 Reset 的只读/可编辑行、可寻址数值 span | 多对象混合值、属性适配器、可编辑调色板 |
+| Editor / 业务 | 顶部菜单栏、世界 actor 树、JSON Content Browser、MI Details、actor Details、资源编辑器、离线控制、Viewport、视口工具条 | 已接入组件、受限浏览窗口/分页、资源标签、renderer-owned 离屏视口、World actor 树与 actor 详情（含两条既有运行时命令）、视口工具条中只有 view mode 有真实后端 | 真实模型/纹理预览、场景对象增删改、gizmo |
 
 “已实现”只表示上表的窄组件，不表示已经具备 Slate 同名控件的全部行为。
 通用 ListRow/TreeRow、模型树和 Sources 树尚未虚拟化；
@@ -101,8 +104,13 @@ ImGui→RmlUi 迁移丢了三项 Details 面板能力，本批把它们补回，
 
 - 没有 gizmo、没有 transform 编辑，也没有场景对象的增/删/复制/改名。
 - 完全没有 Undo/Redo 系统；`Edit` 菜单里的 Undo/Redo 是常驻禁用的占位。
-- Scene Outliner 只列出带有效材质实例的 Mesh，不是真正的 World 大纲：
-  没有灯光、相机、地形、环境，没有层级、可见性开关和改名。
+- 没有逐 actor 的可见性/隐藏开关：`WorldMeshObject`、`MeshDrawSnapshot` 与渲染图
+  都没有逐对象可见性状态，加它要同时改场景 JSON schema、`SceneAssetValidator`、
+  World 构建与渲染路径，属于单独一轮；因此大纲里不放一个点了没有效果的隐藏按钮。
+- 没有地形节点：`World` 没有 terrain 访问器，仓库里也没有 terrain 运行时
+  （场景选择器只把 `"terrain"` 列入受支持类型，资产浏览器只有 Terrain JSON 元数据）。
+- 大纲不做虚拟化：每帧重建 markup 字符串再由值缓存决定是否写 DOM，
+  与迁移前的模型树同一策略。
 - 没有资产缩略图、没有模型几何预览、没有纹理像素查看器。
 - 没有可编辑调色板（含 HSV 面板），也没有步进控件：Details 目前只有
   范围滑条、文本输入和 sRGB 色板读数。
@@ -139,8 +147,8 @@ main 排除递归收集的 widget 源文件，链接独立库，避免重复编�
 `WidgetAction` 只包含 action 名称、条目索引和分量索引。
 组件不解释它的业务含义；宿主统一解析事件并提交现有命令。
 条目索引只在当前快照中有效，不能作为跨 World 的对象身份。
-模型树宿主按稳定 objectIdentity 记录展开，World generation 变化时清空；
-子材质节点与现有 Material Slots 走同一个选择 sink。
+大纲宿主按稳定 actor 身份记录展开/折叠，World generation 变化时清空展开、折叠、
+搜索与过滤；子材质节点与现有 Material Slots 走同一个选择 sink。
 树组件不会打开文件或持有 scene object 指针。
 
 用户/资产提供的标签、id、action、option 值均通过 Text() 转义。
@@ -169,6 +177,47 @@ main 排除递归收集的 widget 源文件，链接独立库，避免重复编�
 
 文档的生命周期、业务事件监听、revision、batch、保存、关闭决策和预览仍由业务宿主负责。
 RT 只消费 UiRenderSnapshot，不访问组件、document、selection sink 或 asset session。
+
+## 世界 actor 树契约
+
+Scene Outliner（`#editor-navigation`，仍是 `DockWorkspace::Panels()` 里的 `outliner`）
+渲染 active World 的真实 actor 列表。
+
+- **数据源在 EngineLoop 的稳定帧边界**：`EngineLoop::UpdateUiViewModel` 用
+  `GetSubsystems().GetWorldManager().GetActiveWorld()`（与设置
+  `snapshot.activeWorldPath` 同一处）调
+  `BuildEditorSceneActors(world)`，再经 `UiSubsystem::SetSceneActors(...)`
+  发布，位置与 `SetMaterialInstanceSceneModels` 并排，且都在
+  `uiSubsystem->Update(snapshot)` 之前。UI 回调不访问 World。
+- **冻结快照是纯值**：`EditorSceneActorSnapshot` 只含字符串、`RuntimeId`、
+  `LightSnapshot`（与渲染快照同结构）、相机七个展示字段、环境与环境/风剖面标量；
+  没有 World、SceneNode、MaterialInstance 或 Vulkan 句柄。列表以
+  `shared_ptr<const std::vector<...>>` 进入面板快照（与资产目录同一约定），
+  逐帧不深拷贝 actor 数组。
+- **覆盖范围**：网格（按 `sceneObjectIdentity` 聚合 section，逐 section 带
+  mesh/material/MI 路径/槽名/风剖面 key）、directionalLight / pointLight /
+  spotLight / squareAreaLight、相机、环境、SpeedTree 风剖面。
+  灯光参数复用 `WorldSnapshotBuilder` 的同一份 World→`LightSnapshot` 映射
+  （`BuildWorld*LightSnapshot`），对象 `RuntimeId` 复用 `WorldObjectRuntimeId`，
+  避免第二份身份规则与选择描边漂移。
+- **分组与顺序**：`SceneActorGroupSpecs()` 是唯一分组清单（类型、过滤键、标题、图标），
+  顺序固定；组内按显示名做 ASCII 大小写不敏感比较，再按稳定身份打破平局，
+  不依赖 `unordered_map` 遍历顺序。分组可折叠，折叠只影响行是否挂进 DOM。
+- **搜索与过滤**：搜索复用 Content Browser 的 `FoldAsciiCase`
+  （`editor/editorTextMatch.h`），只折叠 ASCII 大小写、保留 UTF-8 多字节名称；
+  类型过滤取值就是分组键。两者都只改变可见性，不提交任何命令。
+  计数显示的是筛选结果（`N / M actors`），与 Content Browser 的计数同一语义。
+- **选择路由**：mesh actor 继续走 `RequestModelSelection`，材质槽继续走
+  `RequestMaterialSelection`（MI 文档、Material Slots 与视口描边行为不变）；
+  非网格 actor 走新的 `RequestActorSelection(稳定身份)`，同时要求 EngineLoop 清掉
+  渲染端 mesh 描边，保证大纲高亮与视口描边不会同时指向两个对象。
+- **Details**：选中 actor 在 `#details-content` 里得到一个以类型命名的可折叠分组
+  （键 `actor-<分组键>`），只读字段由 `SceneActorFields()` 按类型生成，
+  每行带 id，值变化时只刷新这一行；主方向光额外得到两个可编辑控件
+  （Intensity 与 Cast Shadows），两者都只用既有 `UiActionType::SetSunIntensity` /
+  `SetCsmCastShadows`，没有第三条 UI→renderer 路径，也不新增命令。
+  MI 文档分组不变，actor 分组在它之前。
+- **无可见性开关**：见“当前确认缺席的能力”；大纲不放没有后端的控件。
 
 ## Content Browser
 
@@ -350,12 +399,22 @@ RGBA 分支的整数分量路径）。该分支只接受 `0`–`255` 整数或�
 `MakeColorReadout` 的线性→sRGB→十六进制（0/1/中灰/alpha）、
 折叠分组只靠 class 切换并保留子节点身份与焦点，
 以及 `UiLinearToSrgb` / `UiSrgbHexByte` 在 `UiColorTransform` 套件里的曲线与 HDR 边界。
+第四批新增：`TreeRow` 的行首图标与行样式 class 只进入选择按钮内部（点击靶面不变）、
+图标路径与标签同样转义、`PropertyControlRow` 不生成 Reset 按钮、
+`PropertyInfo` 可带可寻址数值 span。
 业务回归放在 `editorUiTests.cpp`，验证组件组合后的命令、保存与选择行为。
 本批新增行为用例：通道/参数/默认值三层范围解析、旧 M_ 无范围时的
 `max(1, |defaultValue| * 2)` 兜底（且不跟随正在编辑的值）、
 非有限或反向区间仍给出有限有序的滑条、拖动与键入产生同一种 batch item、
 拖动不触发有限数校验、只有 Color 参数有 sRGB 色板与十六进制读数、
 折叠切换不重建分组 DOM、展开状态跨 Build 与文档切换保留、静止帧写 0 次属性。
+第四批新增 actor 树用例：分组顺序与组内排序、组折叠隐藏子行但不改变筛选计数、
+搜索的 ASCII 折叠与 UTF-8 多字节名称、类型过滤取值与 `SceneActorGroupSpecs()` 同源、
+空状态区分“没有 World”与“没有匹配”、
+mesh actor 与材质槽仍走既有 MI 选择路径、非网格 actor 走 `RequestActorSelection`、
+无 MI 文档时 Details 展示选中 actor、只读字段按行刷新且节点身份稳定、
+主方向光的两个可编辑控件（含同值不发命令、非有限数与非区间值拒绝）、
+以及 Details 强度控件区间与运行时页 `#sun-intensity-slider` 一致的漂移守卫。
 工作区测试验证 960×540、1280×720、1920×1080 的分区边界，
 以及 Viewport 命中穿透、标签切换和重载后的标签保持。
 `dockingTests.cpp` 覆盖纯布局树、真实 RmlUi 指针拖动、分隔条、浮动/重新停靠、

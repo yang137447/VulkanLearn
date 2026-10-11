@@ -8,6 +8,7 @@
 #include <RmlUi/Core/Elements/ElementFormControl.h>
 #include <RmlUi/Core/Event.h>
 
+#include "editor/ui/editorTextMatch.h"
 #include "editor/ui/materialInstanceEditorView.h"
 #include "ui/widgets/text/textWidgets.h"
 
@@ -27,10 +28,8 @@ const char* const RequiredIds[] = {
 
 std::string FoldCase(std::string text)
 {
-    // 目录路径为 UTF-8；只折叠 ASCII 大小写，不破坏多字节名称。
-    for (char& character : text)
-        if (character >= 'A' && character <= 'Z') character += 'a' - 'A';
-    return text;
+    // 折叠规则由 editorTextMatch.h 拥有，大纲搜索复用同一份实现。
+    return FoldAsciiCase(std::move(text));
 }
 
 std::string LogicalPath(std::string path)

@@ -13,6 +13,7 @@
 #include "engine/runtimeTestHooks.h"
 #include "engine/subsystemCollection.h"
 #include "engine/testing/runtimeValidationServices.h"
+#include "editor/scene/editorSceneActorBuilder.h"
 #include "editor/selection/materialInstanceSelection.h"
 #include "material/generator/materialParameterIncludeGenerator.h"
 #include "material/generator/materialDefinitionReloadBatch.h"
@@ -776,6 +777,13 @@ void EngineLoop::ApplyQueuedUiActions()
             RenderSystem::GetInstance().SetSelectedMaterialInstance(
                 materialSelection.value());
         }
+
+        // 选中灯光/相机/环境等非网格 actor 时清掉渲染端描边：编辑器里同一时刻
+        // 只能有一个选中对象，不能让大纲与视口各留一个。
+        if (uiSubsystem->ConsumeSceneSelectionClearRequest())
+        {
+            RenderSystem::GetInstance().ClearSelectedMaterialInstance();
+        }
     }
 }
 
@@ -903,6 +911,11 @@ void EngineLoop::UpdateUiViewModel(
     snapshot.activeWorldPath = activeWorld.scenePath;
     uiSubsystem->SetMaterialInstanceSceneModels(
         renderSystem.GetMaterialInstanceModelContexts());
+    // 世界大纲的数据源是 active World 本身，而不是只含带 MI 网格的 RenderScene 子集。
+    // 在同一个稳定帧边界拍出值语义副本，UI 回调里不再访问 World。
+    uiSubsystem->SetSceneActors(uiActiveWorld != nullptr
+        ? BuildEditorSceneActors(*uiActiveWorld)
+        : std::vector<EditorUi::EditorSceneActorSnapshot>{});
     uiSubsystem->Update(snapshot);
 }
 

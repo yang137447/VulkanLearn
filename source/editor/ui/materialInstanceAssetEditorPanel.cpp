@@ -1,5 +1,6 @@
 #include "editor/ui/materialInstanceAssetEditorPanel.h"
 
+#include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <filesystem>
@@ -14,6 +15,8 @@
 #include <RmlUi/Core/Event.h>
 
 #include "core/renderSession.h"
+#include "editor/ui/editorSceneActorTree.h"
+#include "editor/ui/editorTextMatch.h"
 #include "ui/widgets/input/inputWidgets.h"
 #include "ui/widgets/layout/layoutWidgets.h"
 #include "ui/widgets/navigation/tabWidgets.h"
@@ -100,9 +103,82 @@ SliderRange ResolveSliderRange(const EditorParameterSnapshot& parameter,
 // 键同时是 DOM id 后缀，切换只改既有分组元素的 class，不重建 DOM。
 constexpr const char* DetailsSectionKeys[] = {"general", "render-states", "parameters", "textures"};
 
-std::string DetailsSectionId(const char* key)
+std::string DetailsSectionId(const std::string& key)
 {
     return std::string("details-section-") + key;
+}
+
+// 大纲选中 actor 的详情分组：每个类型一个分组，键由 SceneActorGroupSpecs() 派生，
+// 不在这里维护第二份类型清单。
+std::string ActorSectionKey(const std::string& groupKey)
+{
+    return "actor-" + groupKey;
+}
+
+// 运行时命令驱动的数值只在真正变化时提交，与运行时页 QueueChangedFloatAction 的语义一致。
+bool ChangedFloat(float value, float currentValue)
+{
+    return std::abs(value - currentValue) > 0.0001f;
+}
+
+// 运行时页 sun 滑条的范围（ui/runtime-control.rml 的 #sun-intensity-slider）。
+// Details 的强度控件与它共用同一条 SetSunIntensity 命令，必须同区间：那一页即使被隐藏，
+// 它的 0..10 双向 data binding 仍会把超范围值截断后回写一条新命令。
+constexpr float SunIntensityMin = 0.0f;
+constexpr float SunIntensityMax = 10.0f;
+
+bool MeshActorHasOpenableSlot(const EditorSceneActorSnapshot& actor)
+{
+    for (const EditorSceneMeshSectionSnapshot& section : actor.sections)
+        if (!section.materialInstancePath.empty()) return true;
+    return false;
+}
+
+std::string ActorCountLabel(size_t count)
+{
+    return std::to_string(count) + (count == 1 ? " actor" : " actors");
+}
+
+// 树行只携带展示数据与动作地址；动作索引是 sceneActors 的下标，过滤只改变可见性。
+UiWidgets::TreeRowData OutlinerGroupRow(
+    const EditorSceneActorGroupSpec& spec, size_t groupIndex, size_t actorCount, bool expanded)
+{
+    UiWidgets::TreeRowData row;
+    row.label = std::string(spec.title) + " (" + std::to_string(actorCount) + ")";
+    row.select = {"outliner-group", groupIndex};
+    row.toggle = {"outliner-group", groupIndex};
+    row.hasChildren = true;
+    row.expanded = expanded;
+    row.rowClass = "group-row";
+    return row;
+}
+
+UiWidgets::TreeRowData OutlinerActorRow(size_t actorIndex, const EditorSceneActorSnapshot& actor,
+    bool selected, bool expanded, bool hasChildren)
+{
+    UiWidgets::TreeRowData row;
+    row.label = actor.displayName;
+    row.select = {"outliner-actor", actorIndex};
+    row.toggle = {"outliner-expand", actorIndex};
+    row.selected = selected;
+    row.hasChildren = hasChildren;
+    row.expanded = expanded;
+    row.icon = SceneActorGroupIcon(actor.type);
+    row.rowClass = "actor-row";
+    return row;
+}
+
+UiWidgets::TreeRowData OutlinerSlotRow(size_t actorIndex, size_t slotIndex,
+    const std::string& label, bool selected)
+{
+    UiWidgets::TreeRowData row;
+    row.label = label;
+    row.select = {"outliner-slot", actorIndex, static_cast<uint32_t>(slotIndex)};
+    row.depth = 1;
+    row.selected = selected;
+    row.icon = "icons/material-instance.png";
+    row.rowClass = "slot-row";
+    return row;
 }
 
 const char* DocumentStatus(EditorDocumentStatus status)
@@ -296,6 +372,7 @@ bool MaterialInstanceAssetEditorPanel::ValidateDocument(Rml::ElementDocument& ca
         "menu-edit-reset", "menu-edit-validate", "menu-edit-undo", "menu-edit-redo",
         "menu-window-reset", "menu-window-restore",
         "about-dialog", "about-close",
+        "outliner-search", "outliner-type", "outliner-count", "outliner-empty",
         "viewport-toolbar", "viewport-tool-select", "viewport-tool-move", "viewport-tool-rotate",
         "viewport-tool-scale", "viewport-space-world", "viewport-space-local",
         "viewport-view-lit", "viewport-view-unlit", "viewport-view-wireframe"})
@@ -635,34 +712,7 @@ bool MaterialInstanceAssetEditorPanel::IsInsideMenuBar(const Rml::Element* eleme
 void MaterialInstanceAssetEditorPanel::RefreshLists()
 {
     WidgetRefreshScope refresh(refreshingControls);
-    const uint64_t generation = snapshot.sceneModels.empty() ? 0 : snapshot.sceneModels.front().worldGeneration;
-    if (treeWorldGeneration != generation)
-    {
-        expandedModels.clear();
-        treeWorldGeneration = generation;
-    }
-    std::string models;
-    for (size_t index = 0; index < snapshot.sceneModels.size(); ++index)
-    {
-        const auto& model = snapshot.sceneModels[index];
-        const bool selected = snapshot.selectedModel &&
-            snapshot.selectedModel->objectIdentity == model.objectIdentity;
-        const bool expanded = expandedModels.count(model.objectIdentity) != 0;
-        models += UiWidgets::TreeRow({model.displayName, {"model", index}, {"model-expand", index},
-            0, selected, !model.materials.empty(), expanded});
-        if (expanded)
-        {
-            for (size_t slotIndex = 0; slotIndex < model.materials.size(); ++slotIndex)
-            {
-                const auto& slot = model.materials[slotIndex];
-                const std::string label = slot.materialSlotName.empty()
-                    ? std::filesystem::path(slot.materialInstancePath).filename().string() : slot.materialSlotName;
-                models += UiWidgets::TreeRow({label, {"model-slot", index, static_cast<uint32_t>(slotIndex)}, {},
-                    1, selected && snapshot.selectedMaterialSlotIndex == slot.materialSlotIndex});
-            }
-        }
-    }
-    SetMarkup("scene-models", std::move(models));
+    RefreshOutliner();
     std::string slots;
     if (snapshot.selectedModel)
     {
@@ -688,6 +738,117 @@ void MaterialInstanceAssetEditorPanel::RefreshLists()
     SetMarkup("document-tabs", std::move(tabs));
 }
 
+void MaterialInstanceAssetEditorPanel::RefreshOutliner()
+{
+    const std::vector<EditorSceneActorSnapshot>& actors = OutlinerActors();
+    // World 换代时展开集合、搜索与选中态都不再指向同一个对象，统一回到初始状态。
+    const uint64_t generation = actors.empty() ? 0 : actors.front().worldGeneration;
+    if (treeWorldGeneration != generation)
+    {
+        expandedActors.clear();
+        collapsedOutlinerGroups.clear();
+        outlinerQuery.clear();
+        outlinerTypeFilter = "all";
+        treeWorldGeneration = generation;
+        SetControlValue("outliner-search", std::string());
+        SetControlValue("outliner-type", outlinerTypeFilter);
+    }
+
+    const std::vector<EditorSceneActorRow> rows = BuildSceneActorRows(
+        actors, outlinerQuery, outlinerTypeFilter);
+    const auto& specs = SceneActorGroupSpecs();
+    std::string markup;
+    size_t visibleActors = 0;
+    // 折叠只影响行是否挂进 DOM；计数始终是筛选结果（与 Content Browser 的计数同一语义）。
+    bool groupExpanded = true;
+    for (const EditorSceneActorRow& row : rows)
+    {
+        if (row.isGroup)
+        {
+            // 分组事件按规范表下标寻址；分组行的类型 -> 下标为此处的唯一下标来源。
+            const size_t groupIndex = SceneActorGroupIndex(row.type);
+            const EditorSceneActorGroupSpec* spec = FindSceneActorGroupSpec(row.type);
+            if (spec == nullptr || groupIndex >= specs.size()) continue;
+            groupExpanded = collapsedOutlinerGroups.count(spec->key) == 0;
+            markup += UiWidgets::TreeRow(
+                OutlinerGroupRow(*spec, groupIndex, row.actorCount, groupExpanded));
+            continue;
+        }
+        ++visibleActors;
+        if (!groupExpanded) continue;
+        const EditorSceneActorSnapshot& actor = actors[row.actorIndex];
+        const bool selected = actor.identity == snapshot.selectedActorIdentity;
+        const bool hasSlots = actor.type == EditorSceneActorType::Mesh &&
+            MeshActorHasOpenableSlot(actor);
+        const bool expanded = expandedActors.count(actor.identity) != 0;
+        markup += UiWidgets::TreeRow(OutlinerActorRow(row.actorIndex, actor, selected,
+            expanded && hasSlots, hasSlots));
+        if (!hasSlots || !expanded) continue;
+        // 槽行与 MeshSceneActorModel 的 materials 同序：动作分量索引可以直接交给
+        // 既有的 SelectModelMaterial，不需要第二份槽位表。
+        const MaterialInstanceModelSnapshot model = MeshSceneActorModel(actor);
+        for (size_t slotIndex = 0; slotIndex < model.materials.size(); ++slotIndex)
+        {
+            const MaterialInstanceModelMaterialSnapshot& slot = model.materials[slotIndex];
+            const std::string label = slot.materialSlotName.empty()
+                ? std::filesystem::path(slot.materialInstancePath).filename().string()
+                : slot.materialSlotName;
+            markup += UiWidgets::TreeRow(OutlinerSlotRow(row.actorIndex, slotIndex, label,
+                selected && snapshot.selectedMaterialSlotIndex == slot.materialSlotIndex));
+        }
+    }
+    SetMarkup("scene-models", std::move(markup));
+
+    const size_t total = actors.size();
+    SetMarkup("outliner-count", Text(visibleActors == total
+        ? ActorCountLabel(total)
+        : std::to_string(visibleActors) + " / " + ActorCountLabel(total)));
+    const std::string emptyMessage = rows.empty()
+        ? (total == 0 ? "No actors in the active world."
+                      : "No actors match the current filter.")
+        : std::string();
+    SetMarkup("outliner-empty", Text(emptyMessage));
+    // 空状态时收起树容器：flex:1 的空容器会把提示文字顶到面板底部。
+    widgetDocument.SetProperty("outliner-empty", "display",
+        emptyMessage.empty() ? "none" : "block");
+    widgetDocument.SetProperty("scene-models", "display",
+        emptyMessage.empty() ? "block" : "none");
+}
+
+const std::vector<EditorSceneActorSnapshot>& MaterialInstanceAssetEditorPanel::OutlinerActors() const
+{
+    return SceneActorList(snapshot.sceneActors);
+}
+
+const EditorSceneActorSnapshot* MaterialInstanceAssetEditorPanel::SelectedActor() const
+{
+    if (snapshot.selectedActorIdentity.empty()) return nullptr;
+    for (const EditorSceneActorSnapshot& actor : OutlinerActors())
+        if (actor.identity == snapshot.selectedActorIdentity) return &actor;
+    return nullptr;
+}
+
+void MaterialInstanceAssetEditorPanel::SelectOutlinerActor(const EditorSceneActorSnapshot& actor)
+{
+    if (sceneSelectionSink == nullptr) return;
+    FlushPendingEdits();
+    if (actor.type == EditorSceneActorType::Mesh)
+    {
+        // mesh actor 仍走迁移前的 MI 导航路由：整模型选择 + 视口描边完全一致。
+        sceneSelectionSink->RequestModelSelection(SelectionModel(MeshSceneActorModel(actor)));
+        return;
+    }
+    sceneSelectionSink->RequestActorSelection(actor.identity);
+}
+
+void MaterialInstanceAssetEditorPanel::ToggleOutlinerGroup(size_t groupIndex)
+{
+    const auto& specs = SceneActorGroupSpecs();
+    if (groupIndex >= specs.size()) return;
+    const std::string key = specs[groupIndex].key;
+    if (collapsedOutlinerGroups.erase(key) == 0) collapsedOutlinerGroups.insert(key);
+}
+
 void MaterialInstanceAssetEditorPanel::RefreshDetails()
 {
     WidgetRefreshScope refresh(refreshingControls);
@@ -698,12 +859,21 @@ void MaterialInstanceAssetEditorPanel::RefreshDetails()
         SetMarkup("editor-notice", Text(localStatus));
         return;
     }
-    const std::string identity = snapshot.activeDocument
-        ? snapshot.activeDocument->assetPath + "|" + snapshot.activeDocument->schemaDigest : "closed";
+    const EditorSceneActorSnapshot* actor = SelectedActor();
+    const EditorSceneActorGroupSpec* actorSpec =
+        actor == nullptr ? nullptr : FindSceneActorGroupSpec(actor->type);
+    // 身份同时包含选中 actor 与打开文档：任一变化都要重建分组结构。
+    const std::string identity = std::string(actor == nullptr || actorSpec == nullptr
+        ? "no-actor" : actor->identity + "|" + actorSpec->key) + "\n" +
+        (snapshot.activeDocument
+            ? snapshot.activeDocument->assetPath + "|" + snapshot.activeDocument->schemaDigest
+            : "closed");
     if (identity != detailsIdentity)
     {
         detailsIdentity = identity;
         std::string markup;
+        // actor 分组在前：选中对象是本轮的详情来源，MI 文档分组沿用迁移前的结构。
+        if (actor != nullptr) markup += ActorSectionMarkup(*actor);
         if (snapshot.activeDocument)
         {
             const auto& asset = *snapshot.activeDocument;
@@ -796,7 +966,71 @@ void MaterialInstanceAssetEditorPanel::RefreshDetails()
         }
     }
     ApplySectionState();
+    RefreshActorValues(actor);
     RefreshControls();
+}
+
+std::string MaterialInstanceAssetEditorPanel::ActorSectionMarkup(
+    const EditorSceneActorSnapshot& actor)
+{
+    const EditorSceneActorGroupSpec* spec = FindSceneActorGroupSpec(actor.type);
+    if (spec == nullptr) return std::string();
+    // 只读字段每个值都带 id：值随 World、相机或运行时命令变化时只刷新这一项，
+    // 不重建分组 DOM（重建会丢焦点与滚动位置）。
+    std::string body;
+    for (const EditorSceneActorField& field : SceneActorFields(actor))
+        body += UiWidgets::PropertyInfo(field.label, field.value, field.id);
+    if (actor.primaryDirectionalLight) body += PrimaryDirectionalLightControls(actor);
+    const std::string key = ActorSectionKey(spec->key);
+    return UiWidgets::CollapsibleSection(DetailsSectionId(key), key, spec->title, body,
+        {"section"}, IsSectionExpanded(key));
+}
+
+std::string MaterialInstanceAssetEditorPanel::PrimaryDirectionalLightControls(
+    const EditorSceneActorSnapshot& actor) const
+{
+    // 仓库里已经存在的两条运行时命令：SetSunIntensity 与 SetCsmCastShadows。
+    // 它们只作用于主方向光（WorldBuilder 约定：场景里第一个 directionalLight），
+    // 因此这两个控件只在这一行出现，并且不在只读字段里重复同一个值。
+    std::vector<UiWidgets::NumericComponent> components;
+    UiWidgets::NumericComponent intensity;
+    intensity.id = "actor-sun-intensity";
+    intensity.label = "Intensity";
+    intensity.value = SceneActorNumber(actor.light.intensity);
+    intensity.change = {"actor-sun-intensity", 0};
+    // 范围与运行时页的 sun 滑条一致（0..10）；滑条只影响拖动粒度，文本输入仍是精确值。
+    intensity.hasRange = true;
+    intensity.minValue = SunIntensityMin;
+    intensity.maxValue = SunIntensityMax;
+    components.push_back(std::move(intensity));
+
+    std::string markup = UiWidgets::NumericComponents(components);
+    // CSM 开关沿用运行时页的两个按钮而不是下拉：RmlUi 的 select 在程序化写值时会
+    // 自己派发 change，同一帧可能提交两次；点击只产生一个事件，语义与运行时页一致。
+    markup += UiWidgets::PropertyControlRow("Cast Shadows (CSM)",
+        UiWidgets::Button("actor-csm-enable", {"actor-csm-enable", 0}, "Enabled",
+            UiWidgets::ButtonStyle::Command, runtimeView.csmCastShadows) +
+        UiWidgets::Button("actor-csm-disable", {"actor-csm-disable", 0}, "Disabled",
+            UiWidgets::ButtonStyle::Command, !runtimeView.csmCastShadows));
+    return markup;
+}
+
+// 只读字段与两个可编辑控件都跟随冻结快照；焦点控件（正在拖动/输入）不会被回写。
+void MaterialInstanceAssetEditorPanel::RefreshActorValues(const EditorSceneActorSnapshot* actor)
+{
+    if (actor == nullptr) return;
+    for (const EditorSceneActorField& field : SceneActorFields(*actor))
+        SetMarkup(field.id, Text(field.value));
+    if (!actor->primaryDirectionalLight) return;
+    // 文本输入承载精确值；滑条只承载 0..10 的显示区间，越界值在这里按显示区间截断
+    // （只影响滑条位置，不改变存储值）。拖动中的滑条是焦点元素，SetControlValue 不回写。
+    const float intensity = actor->light.intensity;
+    SetControlValue("actor-sun-intensity", SceneActorNumber(intensity));
+    SetControlValue("actor-sun-intensity-slider",
+        SceneActorNumber(std::min(std::max(intensity, SunIntensityMin), SunIntensityMax)));
+    // CSM 是高亮来自冻结的运行时快照，不是面板自己的第二份状态。
+    widgetDocument.SetClass("actor-csm-enable", "selected", runtimeView.csmCastShadows);
+    widgetDocument.SetClass("actor-csm-disable", "selected", !runtimeView.csmCastShadows);
 }
 
 void MaterialInstanceAssetEditorPanel::ApplySectionState()
@@ -805,6 +1039,11 @@ void MaterialInstanceAssetEditorPanel::ApplySectionState()
     // 而面板每帧都从冻结快照刷新，静止帧必须写 0 次属性（SetClass 自带值缓存）。
     for (const char* key : DetailsSectionKeys)
         widgetDocument.SetClass(DetailsSectionId(key), "collapsed", !IsSectionExpanded(key));
+    for (const EditorSceneActorGroupSpec& spec : SceneActorGroupSpecs())
+    {
+        const std::string key = ActorSectionKey(spec.key);
+        widgetDocument.SetClass(DetailsSectionId(key), "collapsed", !IsSectionExpanded(key));
+    }
 }
 
 void MaterialInstanceAssetEditorPanel::ToggleSection(const std::string& key)
@@ -1065,6 +1304,16 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
         viewportTransformSpace = element.GetAttribute<std::string>("data-space", "world");
         RefreshViewportToolbar();
     }
+    else if (action == "actor-csm-enable" || action == "actor-csm-disable")
+    {
+        if (runtimeActionSink == nullptr) return;
+        const bool enabled = action == "actor-csm-enable";
+        if (enabled == runtimeView.csmCastShadows) return;
+        UiAction request;
+        request.type = UiActionType::SetCsmCastShadows;
+        request.intValue = enabled ? 1 : 0;
+        runtimeActionSink->RequestRuntimeAction(std::move(request));
+    }
     else if (action == "revert")
     {
         pendingEdits.clear();
@@ -1192,19 +1441,21 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
         saveThenClose = true;
         saveCloseSubmitted = false;
     }
-    else if (action == "model-expand" && index < snapshot.sceneModels.size())
+    else if (action == "outliner-group") ToggleOutlinerGroup(index);
+    else if (action == "outliner-expand" && index < OutlinerActors().size())
     {
-        const auto& identity = snapshot.sceneModels[index].objectIdentity;
-        if (expandedModels.erase(identity) == 0) expandedModels.insert(identity);
+        const std::string& identity = OutlinerActors()[index].identity;
+        if (expandedActors.erase(identity) == 0) expandedActors.insert(identity);
     }
-    else if (action == "model-slot" && index < snapshot.sceneModels.size())
+    else if (action == "outliner-actor" && index < OutlinerActors().size())
     {
-        SelectModelMaterial(snapshot.sceneModels[index],
+        SelectOutlinerActor(OutlinerActors()[index]);
+    }
+    else if (action == "outliner-slot" && index < OutlinerActors().size())
+    {
+        const EditorSceneActorSnapshot& actor = OutlinerActors()[index];
+        SelectModelMaterial(MeshSceneActorModel(actor),
             element.GetAttribute<uint32_t>("data-component", 0));
-    }
-    else if (action == "model" && sceneSelectionSink != nullptr && index < snapshot.sceneModels.size())
-    {
-        sceneSelectionSink->RequestModelSelection(SelectionModel(snapshot.sceneModels[index]));
     }
     else if (action == "slot" && sceneSelectionSink != nullptr && snapshot.selectedModel &&
         index < snapshot.selectedModel->materials.size())
@@ -1244,7 +1495,42 @@ void MaterialInstanceAssetEditorPanel::HandleChange(Rml::Element& element, const
     const size_t index = element.GetAttribute<size_t>("data-index", 0);
     const std::string value = ControlValue(element);
     localStatus.clear();
-    if (action == "parameter" && snapshot.activeDocument &&
+    if (action == "outliner-search")
+    {
+        // 搜索只改变可见性，不提交业务命令；折叠规则与 Content Browser 共用。
+        outlinerQuery = value;
+    }
+    else if (action == "outliner-type")
+    {
+        outlinerTypeFilter = value.empty() ? "all" : value;
+    }
+    else if (action == "actor-sun-intensity" && runtimeActionSink != nullptr)
+    {
+
+        // 与运行时页共用同一条 UiAction 路由，不新增 UI→renderer 的第二条路径。
+        float number = 0.0f;
+        if (!ParseNumber(value, number))
+        {
+            localStatus = "A complete finite number is required.";
+            return;
+        }
+        // 运行时页的 sun 滑条是 0..10 的双向 data binding；即使编辑器可见时那一页被隐藏，
+        // 超范围值仍会被它截断并回写 SetSunIntensity。这里按同一区间校验并明确提示，
+        // 而不是无声地提交一个随后被第三个控件改写的值。
+        if (number < SunIntensityMin || number > SunIntensityMax)
+        {
+            localStatus = "Sun intensity must be between " + SceneActorNumber(SunIntensityMin) +
+                " and " + SceneActorNumber(SunIntensityMax) + ".";
+            return;
+        }
+        const EditorSceneActorSnapshot* actor = SelectedActor();
+        if (actor != nullptr && !ChangedFloat(number, actor->light.intensity)) return;
+        UiAction request;
+        request.type = UiActionType::SetSunIntensity;
+        request.floatValue = number;
+        runtimeActionSink->RequestRuntimeAction(std::move(request));
+    }
+    else if (action == "parameter" && snapshot.activeDocument &&
         index < snapshot.activeDocument->parameters.size())
     {
         const auto& parameter = snapshot.activeDocument->parameters[index];

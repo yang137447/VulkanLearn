@@ -24,6 +24,9 @@ namespace VL
 
 struct WorldEnvironment
 {
+    // 场景 JSON 里的环境对象名。渲染路径不读它，编辑器大纲用它给出与场景
+    // 一致的行名；场景没有 environment 对象时保持为空，由 UI 回退到固定标签。
+    std::string name;
     EnvironmentType type = EnvironmentType::ProceduralSky;
     uint32_t cubeSize = 128;
     float intensity = 1.0f;

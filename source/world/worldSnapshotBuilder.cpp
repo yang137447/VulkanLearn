@@ -214,6 +214,35 @@ EnvironmentSnapshot BuildEnvironmentSnapshot(
 
 } // namespace
 
+RuntimeId WorldObjectRuntimeId(const World& world, const std::string& objectName)
+{
+    return StableRuntimeId(BuildObjectRuntimeKey(world, objectName));
+}
+
+LightSnapshot BuildWorldDirectionalLightSnapshot(
+    const World& world, const std::string& lightName, const DirectionalLight& light)
+{
+    return BuildDirectionalLightSnapshot(world, lightName, light);
+}
+
+LightSnapshot BuildWorldPointLightSnapshot(
+    const World& world, const std::string& lightName, const PointLight& light)
+{
+    return BuildPointLightSnapshot(world, lightName, light);
+}
+
+LightSnapshot BuildWorldSpotLightSnapshot(
+    const World& world, const std::string& lightName, const SpotLight& light)
+{
+    return BuildSpotLightSnapshot(world, lightName, light);
+}
+
+LightSnapshot BuildWorldSquareAreaLightSnapshot(
+    const World& world, const std::string& lightName, const WorldSquareAreaLight& light)
+{
+    return BuildSquareAreaLightSnapshot(world, lightName, light);
+}
+
 RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
     const World& world,
     const WorldSnapshotBuildDesc& desc)

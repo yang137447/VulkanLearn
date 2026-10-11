@@ -27,7 +27,13 @@ std::string SliderStep(float minValue, float maxValue)
     if (!std::isfinite(span) || span <= 0.0f) return std::string();
     return " step=\"" + Number(span / SliderStepDivisions) + "\"";
 }
+// 行首图标与文本同属按钮内容，点击靶面保持一个；图标尺寸与对齐由 RCSS 决定。
+std::string RowContent(const std::string& icon, const std::string& label)
+{
+    if (icon.empty()) return Text(label);
+    return "<img class=\"row-icon\" src=\"" + Text(icon) + "\"/><span>" + Text(label) + "</span>";
 }
+} // namespace
 
 std::string ActionAttributes(const WidgetAction& action)
 {
@@ -36,7 +42,7 @@ std::string ActionAttributes(const WidgetAction& action)
 }
 
 std::string Button(const std::string& id, const WidgetAction& action,
-    const std::string& label, ButtonStyle style, bool selected)
+    const std::string& label, ButtonStyle style, bool selected, const std::string& icon)
 {
     const char* styleClass = "";
     switch (style)
@@ -48,7 +54,7 @@ std::string Button(const std::string& id, const WidgetAction& action,
     }
     const std::string identity = id.empty() ? std::string() : " id=\"" + Text(id) + "\"";
     return "<button" + identity + ActionAttributes(action) + " class=\"" +
-        styleClass + (selected ? " selected" : "") + "\">" + Text(label) + "</button>";
+        styleClass + (selected ? " selected" : "") + "\">" + RowContent(icon, label) + "</button>";
 }
 
 std::string Input(const std::string& id, const WidgetAction& action, const std::string& value)

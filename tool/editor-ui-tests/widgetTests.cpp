@@ -450,6 +450,76 @@ TEST_F(UiWidgetTest, DocumentTabSeparatesActivationFromClosing)
     EXPECT_NE(document->QuerySelector(".tab-close[data-action=close]"), nullptr);
 }
 
+TEST_F(UiWidgetTest, TreeRowIconAndRowClassStayInsideTheSelectionButton)
+{
+    TreeRowData group;
+    group.label = "Meshes";
+    group.select = {"group", 0};
+    group.toggle = {"group", 0};
+    group.hasChildren = true;
+    group.expanded = true;
+    group.rowClass = "group-row";
+    TreeRowData actor;
+    actor.label = "Sphere_01";
+    actor.select = {"actor", 3};
+    actor.toggle = {"expand", 3};
+    actor.hasChildren = true;
+    actor.icon = "icons/mesh.png";
+    actor.rowClass = "actor-row";
+    Show(TreeRow(group) + TreeRow(actor));
+
+    auto* row = document->QuerySelector(".tree-row.group-row");
+    ASSERT_NE(row, nullptr);
+    auto* actorRow = document->QuerySelector(".tree-row.actor-row");
+    ASSERT_NE(actorRow, nullptr);
+    // 图标是按钮内容的一部分：点击靶面仍是一个 list-item，而不是多出一个控件。
+    auto* icon = actorRow->QuerySelector("img.row-icon");
+    ASSERT_NE(icon, nullptr);
+    EXPECT_EQ(icon->GetAttribute<std::string>("src", ""), "icons/mesh.png");
+    auto* button = actorRow->QuerySelector("[data-action=actor]");
+    ASSERT_NE(button, nullptr);
+    EXPECT_NE(button->QuerySelector("img.row-icon"), nullptr);
+    EXPECT_EQ(button->QuerySelector("span")->GetInnerRML(), "Sphere_01");
+    EXPECT_EQ(actorRow->QuerySelector("[data-action=expand]")->GetAttribute<int>("data-index", -1), 3);
+    // 没有图标的行不生成 img。
+    EXPECT_EQ(row->QuerySelector("img.row-icon"), nullptr);
+}
+
+TEST_F(UiWidgetTest, TreeRowEscapesLabelAndKeepsIconPath)
+{
+    Show(TreeRow({"<b>x</b>", {"select", 0}, {}, 0, false, false, false, "icons/mesh.png"}));
+    // 标签只作为文本进入行；图标路径写入 src 属性，不产生额外元素。
+    EXPECT_EQ(document->QuerySelector("b"), nullptr);
+    auto* icon = document->QuerySelector("img.row-icon");
+    ASSERT_NE(icon, nullptr);
+    EXPECT_EQ(icon->GetAttribute<std::string>("src", ""), "icons/mesh.png");
+}
+
+TEST_F(UiWidgetTest, PropertyControlRowHasNoResetButton)
+{
+    Show(PropertyControlRow("<b>Intensity</b>", Input("value", {"change", 0}, "1")));
+    auto* row = document->QuerySelector(".property-row");
+    ASSERT_NE(row, nullptr);
+    // 没有 Reset 语义就不生成 Reset 按钮，避免出现点了没有效果的控件。
+    EXPECT_EQ(row->QuerySelector("button"), nullptr);
+    EXPECT_EQ(row->QuerySelector("label")->GetInnerRML(), "&lt;b&gt;Intensity&lt;/b&gt;");
+    EXPECT_NE(row->QuerySelector("[data-action=change]"), nullptr);
+}
+
+TEST_F(UiWidgetTest, PropertyInfoCanCarryAnAddressableValueSpan)
+{
+    Show(PropertyInfo("Position", "1, 2, 3", "actor-field-position") +
+        PropertyInfo("Plain", "value"));
+    const auto* value = document->GetElementById("actor-field-position");
+    ASSERT_NE(value, nullptr);
+    EXPECT_EQ(value->GetInnerRML(), "1, 2, 3");
+    // 不给 id 的行保持原有结构，不产生第二个可寻址节点。
+    Rml::ElementList rows;
+    document->QuerySelectorAll(rows, ".property-info");
+    ASSERT_EQ(rows.size(), 2u);
+    EXPECT_EQ(rows[1]->QuerySelector("span")->GetAttribute<std::string>("id", ""), "");
+}
+
 TEST_F(UiWidgetTest, ScrollBoxAndVerticalLayoutComposeWithoutParserWarnings)
 {
     Show(ScrollBox("scroll", VerticalBox(ListRow({"select", 1}, "Item one") +
