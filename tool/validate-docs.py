@@ -233,6 +233,28 @@ def update_revisions(root):
     return 0
 
 
+def check_generated_index(root, routed, failures, notes):
+    """The rule index is generated from the audit script, so it must not be stale.
+
+    Keeping a second, hand-maintained copy of the 64 rule names was the original
+    drift source; generating it removes the copy, and this check removes the chance
+    of the generated copy going stale unnoticed.
+    """
+    index = root / CONTRACTS / "boundary-rules.generated.md"
+    registered = "contracts/boundary-rules.generated.md"
+    if registered not in routed:
+        failures.append("generated rule index is routed from nowhere: %s" % registered)
+    completed = subprocess.run(
+        [sys.executable, str(root / "tool" / "generate_boundary_rule_index.py"), str(root), "--check"],
+        capture_output=True, text=True)
+    if completed.returncode != 0:
+        message = (completed.stdout + completed.stderr).strip().splitlines()
+        failures.append("generated rule index check failed: %s"
+                        % (message[-1] if message else "unknown error"))
+    else:
+        notes.append(completed.stdout.strip() or "rule index OK")
+
+
 def check_contracts(root, routed, failures, notes):
     contracts = root / CONTRACTS
     if not contracts.is_dir():
@@ -252,6 +274,7 @@ def check_contracts(root, routed, failures, notes):
             failures.append("orphan contract, routed from no source path or topic: %s" % document)
 
     check_diagrams(root, routed, failures, notes)
+    check_generated_index(root, routed, failures, notes)
 
     for path in sorted(contracts.rglob("*.md")):
         relative = path.relative_to(root).as_posix()

@@ -53,6 +53,7 @@
 | `contracts/material-mesh-pass-composition.md` | 改材质求值、Base/ShadowDepth 模板、Composer 身份或 Shadow 路由时 |
 | `contracts/shader-structure-and-material-function.md` | 改 Shader Structure、Material Inputs/Function 组合或 Shading Model 边界时 |
 | `contracts/testing.md` | 改测试入口、测试目标或新增测试时 |
+| `contracts/boundary-rules.generated.md` | 想知道 64 条边界规则各是什么、作用于哪些路径时（**生成物，勿手工编辑**） |
 | `contracts/README.md` | 想知道契约层的写作与校验约定时 |
 | `contracts/diagrams/README.md` | 改架构图、或改图所描述的那条链路时 |
 
@@ -66,8 +67,21 @@
 | `source/engine/engineLoop.cpp`、`source/ui/uiSubsystem.cpp` | `contracts/diagrams/editor-frame-sequence.json` | 一帧内从平台事件到上屏的顺序：UI 输入独占、GT 稳定帧边界、快照发布、可见性收口 |
 | `source/world/loading/world*.cpp`、`source/world/loading/worldGraphTransactionCoordinator.cpp` | `contracts/diagrams/world-graph-transaction-lifecycle.json` | World/RenderGraph 事务：隔离准备、提交前校验、无抛提交、GPU epoch 退休 |
 
-`py -3 tool/validate-docs.py` 会检查每张图都能从本表到达，且其 pinned revision 与当前 `HEAD`
-一致 —— 图与代码漂移时门禁失败，而不是让人以为图还是对的。
+`py -3 tool/validate-docs.py` 会检查每张图都能从本表到达，且它引用的源码证据仍然成立
+（路径存在、行号在文件范围内）—— 图与代码漂移时门禁失败，而不是让人以为图还是对的。
+
+## 门禁规则
+
+`tool/ue-lite-boundary-audit.ps1` 定义代码**不得违反什么**：64 条命名规则，由
+`tool/ue-lite-final-validation.ps1` 调用。
+
+- **规则清单不在本文件里。** 它是生成物：
+  `documents/contracts/boundary-rules.generated.md`，由
+  `tool/generate_boundary_rule_index.py` 从脚本生成，`tool/validate-docs.py` 会在生成物过期时判失败。
+  改规则请改脚本再重新生成 —— 手工维护第二份清单正是会漂移的东西。
+- 规则**正文**以脚本为唯一真相。不要把它抄进任何文档。
+- 上表的"守护门禁"列写的是脚本里 `-RuleName` 的**字面值**（不是概括、不是别名），
+  由 `tool/validate-docs.py` 逐字核对。
 
 ## 改动类型 → 必读
 
