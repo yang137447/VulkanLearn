@@ -554,11 +554,12 @@ body {
     width: 100%;
     height: 100%;
 }
-/* 角落坐标轴指示器：右下角，固定尺寸。锚点是这个盒子的中心，三根杆从中心向外画。
+/* 角落坐标轴指示器：左下角，固定尺寸。锚点是这个盒子的中心，三根杆从中心向外画。
+   与左上的视口工具条同一侧但不同端（工具条 top:6px，这里 bottom:10px），因此不重叠。
    pointer-events 关掉：它是读数不是控件，点它不应该抢走视口的场景输入。 */
 #viewport-axis-indicator {
     position: absolute;
-    right: 10px;
+    left: 10px;
     bottom: 10px;
     width: 72px;
     height: 72px;

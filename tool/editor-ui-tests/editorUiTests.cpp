@@ -2037,6 +2037,101 @@ TEST_F(EditorUiTest, ToolbarDoesNotRestateTheDocumentMenuCommands)
 
 // 空标签没有意义，而且用户实际看到过 —— 选中标签 94px 宽、整条高度内既无文字也无图标。
 // 成因是 resource 文档面板在 resourceTabs 里找不到自己时整段跳过 inner RML 写入。
+// `#document-tabs`（Details 区 Material Instance 标题下那排标签）此前**没有任何测试**，
+// 因此它的形态问题能一直存在。这里用真实的 Bistro 资产名推入多个文档，钉住两件事：
+// 每个标签都必须渲染出来，且每个标签的文字必须只占一行 —— 标签是一行文字，不是磁贴。
+TEST_F(EditorUiTest, DocumentTabRowKeepsEveryOpenDocumentOnOneLine)
+{
+    // 名字长度接近真实资产（Bistro 的 MI 名就是这个量级），足以暴露换行与截断。
+    const std::vector<std::string> paths = {
+        "Maps/SC_bistro_exterior_modular/Materials/MI_Bistro_Modular_Antenna_Metal.json",
+        "Maps/SC_bistro_exterior_modular/Materials/MI_Bistro_Modular_Ashtray.json",
+        "Maps/SC_bistro_exterior_modular/Materials/MI_Bistro_Awning_Fabric_Cv.json",
+    };
+    snapshot.documentTabs.clear();
+    for (const std::string& path : paths)
+        snapshot.documentTabs.push_back({path, false});
+    snapshot.selectedDocumentPath = paths[1];
+    Refresh();
+
+    auto* strip = document->GetElementById("document-tabs");
+    ASSERT_NE(strip, nullptr);
+
+    // 每个打开的文档都要有一个标签；漏掉一个就等于"多开"丢文档。
+    const int children = strip->GetNumChildren();
+    EXPECT_EQ(children, static_cast<int>(paths.size()))
+        << "expected one tab per open document, inner RML: " << strip->GetInnerRML();
+
+    // 标签文字必须在一行内。`#document-tabs` 是 display:flex 且 max-height:65px，一旦标签
+    // 内容自动换行，标签就会长成两三行高、把整排撑到限高并开始裁剪 —— 这正是"多开以后
+    // Details 那块很奇怪"的样子。这里用元素高度钉住：单个标签不得高于一排文字。
+    int index = 0;
+    for (int childIndex = 0; childIndex < children; ++childIndex)
+    {
+        Rml::Element* tab = strip->GetChild(childIndex);
+        ASSERT_NE(tab, nullptr);
+        const float height = tab->GetBox().GetSize().y;
+        EXPECT_GT(height, 0.0f) << "tab " << childIndex << " has no height";
+        EXPECT_LE(height, 30.0f)
+            << "document tab " << childIndex << " is " << height
+            << "px tall; a one-line tab should not wrap. Inner RML: " << tab->GetInnerRML();
+        ++index;
+    }
+    EXPECT_EQ(index, static_cast<int>(paths.size()));
+}
+
+// 多开资产时，两处"标签"必须各自正确：
+//   (a) `#document-tabs` —— Details 区打开的 MI 文档标签；
+//   (b) `#resource-editor` —— 从 Content Browser 打开非 MI 资产时出现的资源页。
+// 之前 (a) 完全没有测试，这个用例补上，并且专门检查**多个**文档下的行为。
+TEST_F(EditorUiTest, OpeningSeveralDocumentsFillsTheDetailsTabRowWithReadableTabs)
+{
+    const std::vector<std::string> paths = {
+        "Maps/SC_bistro/Materials/MI_Antenna_Metal.json",
+        "Maps/SC_bistro/Materials/MI_Ashtray.json",
+        "Maps/SC_bistro/Materials/MI_Awning_Fabric.json",
+    };
+    snapshot.documentTabs.clear();
+    for (const std::string& path : paths)
+        snapshot.documentTabs.push_back({path, false});
+    snapshot.selectedDocumentPath = paths[0];
+    // details 面板必须在场：viewingJson / resourceEditorVisible 都会把整块藏掉。
+    snapshot.jsonDocument.reset();
+    Refresh();
+
+    auto* strip = document->GetElementById("document-tabs");
+    ASSERT_NE(strip, nullptr);
+    ASSERT_EQ(strip->GetNumChildren(), static_cast<int>(paths.size()))
+        << "one tab per open document; inner RML: " << strip->GetInnerRML();
+
+    // 每个标签都要有非空可见文字，并且文字是它自己的文件名而不是别人的。
+    for (size_t index = 0; index < paths.size(); ++index)
+    {
+        Rml::Element* tab = strip->GetChild(static_cast<int>(index));
+        ASSERT_NE(tab, nullptr);
+        const std::string markup = tab->GetInnerRML();
+        const std::string filename =
+            std::filesystem::path(paths[index]).filename().string();
+        EXPECT_NE(markup.find(filename), std::string::npos)
+            << "tab " << index << " should carry its own filename " << filename
+            << ", markup: " << markup;
+    }
+
+    // 点第 3 个标签必须选中第 3 个文档。标签提交的是 SelectMaterialInstanceDocument
+    // （切换已打开的文档），不是 OpenMaterialInstanceAsset（那是从资产磁贴新开一个）。
+    // 注意：动作挂在标签**内部**的 list-item 按钮上，外层只是 .document-tab 容器，
+    // 所以必须点内层按钮；点容器不会派发任何东西。
+    auto* thirdTab = strip->GetChild(2)->QuerySelector("[data-action=tab]");
+    ASSERT_NE(thirdTab, nullptr);
+    thirdTab->DispatchEvent("click", {});
+    ASSERT_FALSE(sink.commands.empty());
+    EXPECT_EQ(sink.commands.back().type, EditorCommandType::SelectMaterialInstanceDocument);
+    const auto& selected =
+        std::get<MaterialInstanceAssetPathPayload>(sink.commands.back().payload);
+    EXPECT_EQ(selected.assetPath, paths[2])
+        << "clicking the third tab must select the third document, not the first";
+}
+
 TEST_F(EditorUiTest, EveryDockTabCarriesAVisibleLabel)
 {
     for (const char* panel : {"viewport", "outliner", "details", "content", "renderer", "resource"})

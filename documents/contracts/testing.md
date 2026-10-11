@@ -35,7 +35,7 @@
 `editor_ui_tests` 里 14 个套件；`ctest` 用套件前缀选择：
 
 ```powershell
-# 编辑器 UI 全套（当前 313 项通过，含 ctest 展开的用例）
+# 编辑器 UI 全套（当前 315 项通过，含 ctest 展开的用例）
 # 注意 EditorViewportGridGeometry 与 EditorViewportAxisIndicator 来自 editor_viewport_tests 目标，
 # 不是 editor_ui_tests：
 # 它必须显式列入，否则改坏编辑器网格不会被这条选择集拦住（2026-10-12 发现并补上）。
