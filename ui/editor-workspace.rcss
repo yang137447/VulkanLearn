@@ -179,6 +179,10 @@ body {
     border-bottom-color: #39393e;
 }
 #outliner-type { width: 42%; flex-shrink: 0; }
+/* 排序控件与 Content Browser 的 #browser-sort 同一套尺寸；过滤栏不换行，
+   因此这里把搜索框的最小宽度收紧，保证三个控件在窄的右列里也不会被裁掉。 */
+#outliner-sort { width: 86px; height: 24px; box-sizing: border-box; font-size: 11px; margin-left: 6px; flex-shrink: 0; }
+.outliner-filterbar .browser-search { min-width: 84px; }
 #outliner-empty { display: none; padding: 7px 9px; }
 .outliner-footer {
     display: flex;
@@ -202,7 +206,19 @@ body {
     vertical-align: middle;
 }
 .tree-row.group-row .list-item { color: #a6c6ba; font-weight: bold; }
+/* 虚拟化要求树行等高：显式行高 + 不换行把分组行（粗体，自然行高更矮）、actor 行与
+   缩进的槽行拉成同一个高度；长名称按省略号裁剪，而不是把一行撑成两行。
+   行高一变，spacer 高度就与真实内容不符，滚动位置会在滚动/排序后漂移。 */
+#scene-models .tree-row { height: 30px; }
+#scene-models .tree-row .list-item {
+    line-height: 16px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
 #scene-models { flex: 1; min-height: 0; padding: 4px 7px; overflow: auto; }
+/* 未挂载行的高度补偿：只占高度，不接收指针，也不参与树的点击寻址。 */
+.outliner-spacer { display: block; width: 100%; pointer-events: none; }
 #material-slots { max-height: 90px; overflow: auto; }
 .inspector-body { flex: 1; min-height: 0; overflow: auto; padding: 0 10px 10px; }
 #document-title { white-space: normal; margin-bottom: 8px; }

@@ -127,13 +127,6 @@ bool ChangedFloat(float value, float currentValue)
 constexpr float SunIntensityMin = 0.0f;
 constexpr float SunIntensityMax = 10.0f;
 
-bool MeshActorHasOpenableSlot(const EditorSceneActorSnapshot& actor)
-{
-    for (const EditorSceneMeshSectionSnapshot& section : actor.sections)
-        if (!section.materialInstancePath.empty()) return true;
-    return false;
-}
-
 std::string ActorCountLabel(size_t count)
 {
     return std::to_string(count) + (count == 1 ? " actor" : " actors");
@@ -372,7 +365,7 @@ bool MaterialInstanceAssetEditorPanel::ValidateDocument(Rml::ElementDocument& ca
         "menu-edit-reset", "menu-edit-validate", "menu-edit-undo", "menu-edit-redo",
         "menu-window-reset", "menu-window-restore",
         "about-dialog", "about-close",
-        "outliner-search", "outliner-type", "outliner-count", "outliner-empty",
+        "outliner-search", "outliner-type", "outliner-sort", "outliner-count", "outliner-empty",
         "viewport-toolbar", "viewport-tool-select", "viewport-tool-move", "viewport-tool-rotate",
         "viewport-tool-scale", "viewport-space-world", "viewport-space-local",
         "viewport-view-lit", "viewport-view-unlit", "viewport-view-wireframe"})
@@ -443,6 +436,8 @@ void MaterialInstanceAssetEditorPanel::Detach()
         document = nullptr;
     }
     widgetDocument.Detach();
+    // 重新 Attach 时 DOM 是新的：让大纲第一帧无条件重挂一次。
+    outlinerMounted = false;
 }
 
 void MaterialInstanceAssetEditorPanel::SetSceneSelectionSink(IMaterialInstanceSceneSelectionSink* sink)
@@ -740,70 +735,59 @@ void MaterialInstanceAssetEditorPanel::RefreshLists()
 
 void MaterialInstanceAssetEditorPanel::RefreshOutliner()
 {
+    // 面板可能在 RML 热重载里处于 Detach 状态，而 UiSubsystem 仍逐帧 Build：
+    // 这里必须先确认文档存在，窗口计算会直接读元素几何。
+    if (document == nullptr) return;
     const std::vector<EditorSceneActorSnapshot>& actors = OutlinerActors();
     // World 换代时展开集合、搜索与选中态都不再指向同一个对象，统一回到初始状态。
+    // 排序是面板偏好，与 Content Browser 的排序键一样跨目录/换代保留。
     const uint64_t generation = actors.empty() ? 0 : actors.front().worldGeneration;
     if (treeWorldGeneration != generation)
     {
-        expandedActors.clear();
-        collapsedOutlinerGroups.clear();
+        outlinerExpansion.collapsedGroups.clear();
+        outlinerExpansion.expandedActors.clear();
         outlinerQuery.clear();
         outlinerTypeFilter = "all";
         treeWorldGeneration = generation;
         SetControlValue("outliner-search", std::string());
         SetControlValue("outliner-type", outlinerTypeFilter);
     }
+    SetControlValue("outliner-sort", SceneActorSortOrderKey(outlinerSortOrder));
 
-    const std::vector<EditorSceneActorRow> rows = BuildSceneActorRows(
-        actors, outlinerQuery, outlinerTypeFilter);
-    const auto& specs = SceneActorGroupSpecs();
-    std::string markup;
-    size_t visibleActors = 0;
-    // 折叠只影响行是否挂进 DOM；计数始终是筛选结果（与 Content Browser 的计数同一语义）。
-    bool groupExpanded = true;
-    for (const EditorSceneActorRow& row : rows)
+    // 行集合只在真正变化时重建：actor 内容签名 + 搜索/过滤/排序/展开折叠状态。
+    // 静止帧因此不重新排序，也不重新分配行标签。
+    if (OutlinerRowsNeedRebuild(actors)) RebuildOutlinerRows(actors);
+
+    // 行高先按上一帧已挂载的行实测（首帧读不到布局时保持 RCSS 兜底），
+    // 再由滚动偏移与可视高度算出本帧窗口，与 Content Browser 的 VisibleWindow 同序。
+    MeasureOutlinerRowHeight();
+    const EditorSceneActorWindow window = OutlinerWindow();
+    // 选择态只改已挂载行的 class/文本，不改变行集合，但对 markup 是可见变化，
+    // 因此与窗口一起参与"是否需要重挂 DOM"的判断。
+    const std::string selection = snapshot.selectedActorIdentity + "\n" +
+        (snapshot.selectedMaterialSlotIndex
+            ? std::to_string(*snapshot.selectedMaterialSlotIndex) : std::string());
+    if (!outlinerMounted ||
+        outlinerMountedRevision != outlinerRowsRevision ||
+        !SameSceneActorWindow(outlinerMountedWindow, window) ||
+        outlinerMountedSelection != selection)
     {
-        if (row.isGroup)
-        {
-            // 分组事件按规范表下标寻址；分组行的类型 -> 下标为此处的唯一下标来源。
-            const size_t groupIndex = SceneActorGroupIndex(row.type);
-            const EditorSceneActorGroupSpec* spec = FindSceneActorGroupSpec(row.type);
-            if (spec == nullptr || groupIndex >= specs.size()) continue;
-            groupExpanded = collapsedOutlinerGroups.count(spec->key) == 0;
-            markup += UiWidgets::TreeRow(
-                OutlinerGroupRow(*spec, groupIndex, row.actorCount, groupExpanded));
-            continue;
-        }
-        ++visibleActors;
-        if (!groupExpanded) continue;
-        const EditorSceneActorSnapshot& actor = actors[row.actorIndex];
-        const bool selected = actor.identity == snapshot.selectedActorIdentity;
-        const bool hasSlots = actor.type == EditorSceneActorType::Mesh &&
-            MeshActorHasOpenableSlot(actor);
-        const bool expanded = expandedActors.count(actor.identity) != 0;
-        markup += UiWidgets::TreeRow(OutlinerActorRow(row.actorIndex, actor, selected,
-            expanded && hasSlots, hasSlots));
-        if (!hasSlots || !expanded) continue;
-        // 槽行与 MeshSceneActorModel 的 materials 同序：动作分量索引可以直接交给
-        // 既有的 SelectModelMaterial，不需要第二份槽位表。
-        const MaterialInstanceModelSnapshot model = MeshSceneActorModel(actor);
-        for (size_t slotIndex = 0; slotIndex < model.materials.size(); ++slotIndex)
-        {
-            const MaterialInstanceModelMaterialSnapshot& slot = model.materials[slotIndex];
-            const std::string label = slot.materialSlotName.empty()
-                ? std::filesystem::path(slot.materialInstancePath).filename().string()
-                : slot.materialSlotName;
-            markup += UiWidgets::TreeRow(OutlinerSlotRow(row.actorIndex, slotIndex, label,
-                selected && snapshot.selectedMaterialSlotIndex == slot.materialSlotIndex));
-        }
+        SetMarkup("scene-models", OutlinerRowsMarkup(window));
+        outlinerMounted = true;
+        outlinerMountedRevision = outlinerRowsRevision;
+        outlinerMountedWindow = window;
+        outlinerMountedSelection = selection;
     }
-    SetMarkup("scene-models", std::move(markup));
 
+    // 计数始终是筛选结果（分组行的 actorCount 之和），与折叠状态和挂载窗口都无关。
+    size_t visibleActors = 0;
+    for (const EditorSceneActorRow& row : outlinerRows)
+        if (row.isGroup) visibleActors += row.actorCount;
     const size_t total = actors.size();
     SetMarkup("outliner-count", Text(visibleActors == total
         ? ActorCountLabel(total)
         : std::to_string(visibleActors) + " / " + ActorCountLabel(total)));
-    const std::string emptyMessage = rows.empty()
+    const std::string emptyMessage = outlinerRows.empty()
         ? (total == 0 ? "No actors in the active world."
                       : "No actors match the current filter.")
         : std::string();
@@ -813,6 +797,101 @@ void MaterialInstanceAssetEditorPanel::RefreshOutliner()
         emptyMessage.empty() ? "none" : "block");
     widgetDocument.SetProperty("scene-models", "display",
         emptyMessage.empty() ? "block" : "none");
+}
+
+bool MaterialInstanceAssetEditorPanel::OutlinerRowsNeedRebuild(
+    const std::vector<EditorSceneActorSnapshot>& actors) const
+{
+    return SceneActorRowsSignature(actors) != outlinerRowSignature ||
+        outlinerQuery != outlinerBuiltQuery ||
+        outlinerTypeFilter != outlinerBuiltTypeFilter ||
+        outlinerSortOrder != outlinerBuiltSortOrder ||
+        !SameSceneActorExpansion(outlinerExpansion, outlinerBuiltExpansion);
+}
+
+void MaterialInstanceAssetEditorPanel::RebuildOutlinerRows(
+    const std::vector<EditorSceneActorSnapshot>& actors)
+{
+    outlinerRows = BuildSceneActorRows(
+        actors, outlinerQuery, outlinerTypeFilter, outlinerSortOrder, outlinerExpansion);
+    outlinerRowSignature = SceneActorRowsSignature(actors);
+    outlinerBuiltQuery = outlinerQuery;
+    outlinerBuiltTypeFilter = outlinerTypeFilter;
+    outlinerBuiltSortOrder = outlinerSortOrder;
+    outlinerBuiltExpansion = outlinerExpansion;
+    ++outlinerRowsRevision;
+}
+
+EditorSceneActorWindow MaterialInstanceAssetEditorPanel::OutlinerWindow() const
+{
+    auto* list = document->GetElementById("scene-models");
+    const auto& box = list->GetBox();
+    const float paddingY = box.GetEdge(Rml::BoxArea::Padding, Rml::BoxEdge::Top) +
+        box.GetEdge(Rml::BoxArea::Padding, Rml::BoxEdge::Bottom);
+    const float clientHeight = list->GetClientHeight() - paddingY;
+    const float scroll = list->GetScrollTop() -
+        box.GetEdge(Rml::BoxArea::Padding, Rml::BoxEdge::Top);
+    return ComputeSceneActorWindow(
+        outlinerRows.size(), clientHeight, scroll, outlinerRowHeight);
+}
+
+// 树行高度由 RCSS 统一决定（.tree-row 的内容是 .tree-toggle 与 .list-item），
+// 这里读已挂载行的 margin box 校正兜底值——正如 Content Browser 读首个可见条目。
+// 首帧或刚替换的 DOM 还没有布局，读到 0 时保持上一次的值。
+void MaterialInstanceAssetEditorPanel::MeasureOutlinerRowHeight()
+{
+    if (document == nullptr) return;
+    auto* list = document->GetElementById("scene-models");
+    for (int index = 0; index < list->GetNumChildren(); ++index)
+    {
+        Rml::Element* child = list->GetChild(index);
+        if (!child->IsClassSet("tree-row")) continue;
+        const auto measured = child->GetBox().GetSize(Rml::BoxArea::Margin);
+        if (measured.y > 0.0f) outlinerRowHeight = measured.y;
+        return;
+    }
+}
+
+// 只把窗口内的行挂进 DOM，上下各一个 spacer 保留未挂载行的高度：
+// 滚动范围因此与整棵树一致，"窗口化"不等于"截断到前 N 行"。
+std::string MaterialInstanceAssetEditorPanel::OutlinerRowsMarkup(
+    const EditorSceneActorWindow& window) const
+{
+    const std::vector<EditorSceneActorSnapshot>& actors = OutlinerActors();
+    const auto& specs = SceneActorGroupSpecs();
+    std::string markup;
+    if (window.top > 0.0f)
+        markup += "<div class=\"outliner-spacer\" style=\"height: " +
+            std::to_string(window.top) + "px;\"></div>";
+    for (size_t index = window.begin; index < window.end && index < outlinerRows.size(); ++index)
+    {
+        const EditorSceneActorRow& row = outlinerRows[index];
+        if (row.isGroup)
+        {
+            // 分组事件按规范表下标寻址；分组行的类型 -> 下标为此处的唯一下标来源。
+            const size_t groupIndex = SceneActorGroupIndex(row.type);
+            const EditorSceneActorGroupSpec* spec = FindSceneActorGroupSpec(row.type);
+            if (spec == nullptr || groupIndex >= specs.size()) continue;
+            markup += UiWidgets::TreeRow(
+                OutlinerGroupRow(*spec, groupIndex, row.actorCount, row.expanded));
+            continue;
+        }
+        if (row.actorIndex >= actors.size()) continue;
+        const EditorSceneActorSnapshot& actor = actors[row.actorIndex];
+        const bool selected = actor.identity == snapshot.selectedActorIdentity;
+        if (row.isSlot)
+        {
+            markup += UiWidgets::TreeRow(OutlinerSlotRow(row.actorIndex, row.slotIndex, row.label,
+                selected && snapshot.selectedMaterialSlotIndex == row.materialSlotIndex));
+            continue;
+        }
+        markup += UiWidgets::TreeRow(OutlinerActorRow(row.actorIndex, actor, selected,
+            row.expanded, row.hasChildren));
+    }
+    if (window.bottom > 0.0f)
+        markup += "<div class=\"outliner-spacer\" style=\"height: " +
+            std::to_string(window.bottom) + "px;\"></div>";
+    return markup;
 }
 
 const std::vector<EditorSceneActorSnapshot>& MaterialInstanceAssetEditorPanel::OutlinerActors() const
@@ -846,7 +925,8 @@ void MaterialInstanceAssetEditorPanel::ToggleOutlinerGroup(size_t groupIndex)
     const auto& specs = SceneActorGroupSpecs();
     if (groupIndex >= specs.size()) return;
     const std::string key = specs[groupIndex].key;
-    if (collapsedOutlinerGroups.erase(key) == 0) collapsedOutlinerGroups.insert(key);
+    if (outlinerExpansion.collapsedGroups.erase(key) == 0)
+        outlinerExpansion.collapsedGroups.insert(key);
 }
 
 void MaterialInstanceAssetEditorPanel::RefreshDetails()
@@ -1445,7 +1525,8 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
     else if (action == "outliner-expand" && index < OutlinerActors().size())
     {
         const std::string& identity = OutlinerActors()[index].identity;
-        if (expandedActors.erase(identity) == 0) expandedActors.insert(identity);
+        if (outlinerExpansion.expandedActors.erase(identity) == 0)
+            outlinerExpansion.expandedActors.insert(identity);
     }
     else if (action == "outliner-actor" && index < OutlinerActors().size())
     {
@@ -1503,6 +1584,12 @@ void MaterialInstanceAssetEditorPanel::HandleChange(Rml::Element& element, const
     else if (action == "outliner-type")
     {
         outlinerTypeFilter = value.empty() ? "all" : value;
+    }
+    else if (action == "outliner-sort")
+    {
+        // 排序只改变组内顺序；分组顺序、选中态与展开集合都不参与，因此也不被重排。
+        SceneActorSortOrder order = outlinerSortOrder;
+        if (ParseSceneActorSortOrder(value, order)) outlinerSortOrder = order;
     }
     else if (action == "actor-sun-intensity" && runtimeActionSink != nullptr)
     {

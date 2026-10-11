@@ -14,6 +14,7 @@
 #include "editor/ui/editorContentBrowserController.h"
 #include "editor/ui/editorJsonInspectorController.h"
 #include "editor/ui/editorResourceEditorController.h"
+#include "editor/ui/editorSceneActorTree.h"
 #include "ui/uiAction.h"
 #include "ui/uiRenderSnapshot.h"
 #include "ui/widgets/widgetDocument.h"
@@ -88,6 +89,11 @@ private:
     void FlushPendingEdits(bool save = false);
     void RefreshLists();
     void RefreshOutliner();
+    void RebuildOutlinerRows(const std::vector<EditorSceneActorSnapshot>& actors);
+    bool OutlinerRowsNeedRebuild(const std::vector<EditorSceneActorSnapshot>& actors) const;
+    EditorSceneActorWindow OutlinerWindow() const;
+    void MeasureOutlinerRowHeight();
+    std::string OutlinerRowsMarkup(const EditorSceneActorWindow& window) const;
     void RefreshDetails();
     void RefreshControls();
     void RefreshActorValues(const EditorSceneActorSnapshot* actor);
@@ -153,11 +159,30 @@ private:
     // 折叠的分组键（缺省即展开）；切换文档不清空，和模型树展开一样是面板本地状态。
     std::unordered_set<std::string> collapsedSections;
     // 大纲的展开与折叠同样是面板本地会话状态：折叠的分组键 + 展开的 actor 稳定身份。
-    std::unordered_set<std::string> collapsedOutlinerGroups;
-    std::unordered_set<std::string> expandedActors;
+    // 两者合并进 EditorSceneActorTreeExpansion，因为它就是行集合构建的入参。
+    EditorSceneActorTreeExpansion outlinerExpansion;
     // 大纲搜索与类型过滤只影响可见性；ASCII 大小写折叠复用 Content Browser 的规则。
     std::string outlinerQuery;
     std::string outlinerTypeFilter = "all";
+    // 组内排序是面板偏好（与 Content Browser 的排序一样），不随 World 换代重置。
+    SceneActorSortOrder outlinerSortOrder = SceneActorSortOrder::NameAscending;
+    // 行集合的已构建副本：只有内容签名或筛选/排序/展开状态变化时才重建，
+    // 静止帧不重新排序、不重新分配行标签。
+    std::vector<EditorSceneActorRow> outlinerRows;
+    SceneActorSortOrder outlinerBuiltSortOrder = SceneActorSortOrder::NameAscending;
+    EditorSceneActorTreeExpansion outlinerBuiltExpansion;
+    std::string outlinerBuiltQuery;
+    std::string outlinerBuiltTypeFilter = "all";
+    uint64_t outlinerRowSignature = 0;
+    uint64_t outlinerRowsRevision = 0;
+    // 已挂载的窗口与选择态：用来判断是否需要重挂 DOM（而不是逐帧重写 markup）。
+    // outlinerMounted 让 Detach 之后重新 Attach 的第一帧一定重挂一次。
+    EditorSceneActorWindow outlinerMountedWindow;
+    bool outlinerMounted = false;
+    uint64_t outlinerMountedRevision = 0;
+    std::string outlinerMountedSelection;
+    // 行高由已挂载行的 margin box 实测；首帧保持 RCSS 兜底值。
+    float outlinerRowHeight = SceneActorRowHeightFallback;
     uint64_t treeWorldGeneration = 0;
     std::unordered_map<std::string, EditorParameterValue> pendingValues;
     std::vector<PendingEdit> pendingEdits;

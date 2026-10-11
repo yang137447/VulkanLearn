@@ -101,11 +101,15 @@
                         <input id="outliner-search" type="text" data-action="outliner-search" value="" placeholder="Search actors"/>
                     </div>
                     <select id="outliner-type" data-action="outliner-type">
-                        <option value="all">All Actors</option><option value="mesh">Meshes</option>
-                        <option value="directionalLight">Directional Lights</option><option value="pointLight">Point Lights</option>
+                        <option value="all">All Actors</option><option value="directionalLight">Directional Lights</option>
+                        <option value="pointLight">Point Lights</option>
                         <option value="spotLight">Spot Lights</option><option value="squareAreaLight">Square Area Lights</option>
                         <option value="camera">Cameras</option><option value="environment">Environments</option>
                         <option value="windProfile">SpeedTree Wind Profiles</option>
+                        <option value="mesh">Meshes</option>
+                    </select>
+                    <select id="outliner-sort" data-action="outliner-sort">
+                        <option value="name-asc">Name A-Z</option><option value="name-desc">Name Z-A</option>
                     </select>
                 </div>
                 <div id="scene-models" class="scroll-box"></div>

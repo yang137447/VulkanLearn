@@ -32,13 +32,19 @@ git show HEAD:source/editor/ui/materialInstanceAssetEditorPanel.cpp
 | 折叠分类 | `CollapsingHeader`：General / Render States / Parameters / Texture Bindings | 三个平铺 Heading | 第 3 轮恢复 |
 | 资源编辑器返回按钮 | 不适用 | `resource-json-close` 分支存在但无触发控件 | 已删除（见下） |
 | 纹理选择弹窗 | `BeginPopup("MITexturePicker")` | `<select>` 下拉 | 不恢复：下拉覆盖同一需求 |
-| 场景对象树 | 无（只有 MI 模型列表） | 无 | 第 4 轮新增真实 World actor 树 |
+| 场景对象树 | 无（只有 MI 模型列表） | 无 | 第 4 轮新增真实 World actor 树；第 5 轮行窗口化 + 组内排序 |
+| 大纲逐 actor 可见性 | 无 | 无 | 未排期，需先给 World/渲染路径加逐对象可见性 |
+| 大纲多选 / 拖放 | 无 | 无 | 未排期，属于场景文档阶段 |
 | gizmo / 变换编辑 | 无 | 无 | 未排期，需先改场景数据模型 |
 | Undo / Redo | 无 | 无 | 未排期；Edit 菜单已留禁用占位 |
 
 **HEAD 也没有**的东西不要记成迁移损失：菜单栏、视口工具条、面板显隐、场景树、
 gizmo、Undo/Redo 在迁移前同样不存在。它们属于"向 UE 对齐"的新增工作，不是回归。
 第 4 轮把其中的"场景对象树"做成了真实 World actor 树（见下文），它仍然不是迁移损失。
+第 5 轮修掉了第 4 轮留下的两个短板：行窗口化（不再逐帧拼整棵树的 markup）
+与低基数分组前置（灯光/相机/环境不再被 122 行网格挤出首屏），并补了组内排序控件。
+第 4 轮的像素证据表里"树里只有网格行可见，灯光在可视区之外"一行，
+读的就是本轮改掉的症状；那张 `outliner-baseline.bmp` 现在作为 before 基线被重新测量。
 
 ## 第 1 轮：菜单栏、面板显隐、视口工具条
 
@@ -193,6 +199,71 @@ ctest --test-dir build -R "MaterialInstanceEditor" --output-on-failure
   这三类的行渲染由 `SceneActorGroupSpecs()` 与单元测试覆盖，没有像素证据。
 - 未验证：真实鼠标的搜索键入与下拉选择手感（合成点击只验证了搜索框获得焦点边框
   `#62A58D`）、真实拖动滑条（合成拖动不改变 range 控件，与第三轮记录的限制相同）。
+
+## 第 5 轮：大纲行窗口化、组内排序、低基数分组前置
+
+第 4 轮留下两个具体短板：整棵树每帧拼成一个 markup 字符串交给
+`WidgetDocument::SetMarkup`（实测 122 mesh 场景约 40 KB/帧），
+以及默认视图里灯光/相机/环境被 122 行网格挤出可视区（折叠前灯光图标像素为 0）。
+本轮不加功能面，只解决这两点：
+
+- **行窗口化**：复用 Content Browser 的窗口化做法（读实时可视高度与滚动偏移，
+  算有限行窗口 + 上下各两行预取，用两个 spacer 保留未挂载行的高度）。
+  预算常量 `SceneActorMaxMountedRows = 192` 与 `SceneActorOverscanRows = 2` 与
+  Content Browser 的 `MaxVisibleItems` 同量级，位于纯模块
+  `source/editor/ui/editorSceneActorTree.{h,cpp}`；
+  窗口数学、行集合构建（含折叠/展开/排序/槽行）与行内容签名都在这个模块里，
+  因此可以不建 RmlUi 文档直接测。
+- **折叠仍然只贡献表头**：折叠的分组不进入行集合，也就不占窗口槽位、不产生 spacer；
+  整棵折叠后的树必须一次装进窗口（纯测试覆盖）。
+- **行高实测**：宿主逐帧从已挂载行的 margin box 读行高（首帧用 RCSS 兜底 30），
+  并要求树行等高。实测发现原 RCSS 下分组行（粗体）28.4px、actor/槽行 29.7px **不等高**，
+  于是把行高在 RCSS 里显式固定为 30px（`.list-item` 行高 16px、不换行、省略号裁剪），
+  再由 `EditorUiTest.OutlinerRowHeightsAreUniformAcrossRowKinds` 量三种行形态守这条假设。
+- **组内排序**：过滤栏新增 `#outliner-sort`，取值与 Content Browser 的 `#browser-sort`
+  同一套键（`name-asc` / `name-desc`）。排序只作用于组内，分组顺序不变；
+  选中身份、展开集合与滚动偏移都不受影响。没有第三种排序：组内所有行类型相同，
+  按类型名排序在组内恒为平局，因此没有为凑数加一个没有可见效果的选项。
+- **低基数分组前置**（最小改法）：只改 `SceneActorGroupSpecs()` 的顺序
+  （灯光 → 相机 → 环境 → 风剖面 → Meshes），默认展开状态不变。
+  没有默认折叠 Meshes：Meshes 现在排在最后，折叠它不会改变首屏可见内容，
+  只会让最常用的选择目标多一次点击；排序控件也不参与分组排列。
+
+### 验证（2026-10-11）
+
+```powershell
+cmake --build build --target editor_ui_tests editor_viewport_tests main material_instance_editor_production_tests -j8
+ctest --test-dir build -R "^(UiColorTransform|UiWidgetTest|UiWidgetRefresh|EditorUiTest|ContentBrowserTest|DockWorkspaceTest|DockPersistenceTest|DockRmlTest|EditorViewportGeometry|EditorJsonAssetParsing|EditorJsonAssetPaths|EditorJsonAssetTypes|JsonAssetLibraryTest|ResourceEditorController|LargeCatalog/ContentBrowserPerformanceTest)\." --output-on-failure
+ctest --test-dir build -R "MaterialInstanceEditor" --output-on-failure
+```
+
+- 四个目标全部构建成功；编辑器 UI 选择 **275/275 通过**（基线 262/262，净增 13 项：`widgetTests.cpp` 7 项纯窗口/排序、`editorUiTests.cpp` 6 项面板与布局），
+  **两次运行都是 275/275**；`MaterialInstanceEditor` **22/22 通过**，与基线一致。
+
+| 观察点（探针 `artifacts/rmlui-editor/outliner_window_probe.py`） | 第 4 轮构建 | 本轮 |
+| --- | --- | --- |
+| 首屏（scroll 0、什么都不折叠）图标色 census | mesh 108，light 0，camera 0，environment 0 | light 73，mesh 0（灯光行在首屏，网格行在折叠线下） |
+| 相机 / 环境行可达所需滚动 | 122 行网格之后 | 2–3 个滚轮刻度（每刻度 80px = 2.67 行；RmlUi 平滑滚动让刻度到行号有浮动） |
+| 可视行数 vs 树行数 | 4 行可见，整棵树 130 行都在 DOM 里 | 3–4 行可见，挂载行数为窗口大小（≤192 预算由单元测试按真实 DOM 节点数守） |
+| 滚动 | — | 滚动换一批挂载行；滚回顶部三行指纹与首屏完全一致；滚动条滑块 24px（min-height 下限）说明滚动范围是整棵树 |
+| Z-A 排序 | 无该控件 | 非网格行三行指纹距离 0.0（排序不动它们），计数栏文字距离 0.0；`A→Z` 第一行网格 == `Z→A` 最后一行（距离 0.0），`A→Z` 最后一行 == `Z→A` 第一行网格（距离 0.0），且 `A→Z` 与 `Z→A` 的第一行网格不同 |
+| 截图载荷 | 2764800 B | 2764800 B（完整） |
+
+- 排序的像素比较用"行带墨迹指纹"（按行内相对坐标 + 量化颜色的列剖面），
+  因此与滚动相位无关；行类型用从 `ui/icons/*.png` 现算的描边色（色相规则）判定，
+  不写死颜色。
+- 未验证 / 像素方法的边界：探针数不到被裁剪但已挂载的 DOM 节点，
+  因此"≤192 挂载行"由单元测试断言真实节点数，像素只证明"上屏行数不随树增长"；
+  文字没有回读，行身份靠指纹比较（同名行会被判为同一行）；
+  spotLight / squareAreaLight / 风剖面仍无像素证据（默认场景没有这三类对象）。
+- 该进程由探针强制终止，**这是渲染证据，不是 teardown 证据**。
+
+### 本轮之后仍然缺席（与第 4 轮清单一致，未新增）
+
+- 逐 actor 可见性/隐藏开关：`World`/`WorldSnapshot`/渲染图都没有逐对象可见性状态。
+- 多选、拖放/重父级、改名：大纲一次只有一个选中身份，挂载行与事件地址一对一。
+- transform 编辑与 gizmo：没有渲染后端，也没有命令。
+- 通用虚拟化：窗口化只在世界 actor 树上实现，通用 `TreeRow`、模型树与 Sources 树未变。
 
 ## 待处置项
 

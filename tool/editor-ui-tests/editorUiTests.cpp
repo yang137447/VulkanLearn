@@ -287,6 +287,59 @@ protected:
         auto* count = document->GetElementById("outliner-count");
         return count == nullptr ? std::string() : count->GetInnerRML();
     }
+    // 大纲已挂载的行（分组/actor/槽行三种形态共用 .tree-row）。
+    std::vector<Rml::Element*> MountedRows() const
+    {
+        std::vector<Rml::Element*> rows;
+        auto* tree = document->GetElementById("scene-models");
+        for (int index = 0; index < tree->GetNumChildren(); ++index)
+        {
+            Rml::Element* child = tree->GetChild(index);
+            if (child->IsClassSet("tree-row")) rows.push_back(child);
+        }
+        return rows;
+    }
+    std::vector<Rml::Element*> OutlinerSpacers() const
+    {
+        std::vector<Rml::Element*> spacers;
+        auto* tree = document->GetElementById("scene-models");
+        for (int index = 0; index < tree->GetNumChildren(); ++index)
+        {
+            Rml::Element* child = tree->GetChild(index);
+            if (child->IsClassSet("outliner-spacer")) spacers.push_back(child);
+        }
+        return spacers;
+    }
+    // 按标签找行元素（事件寻址用的 data-index 不适合写死在测试里）。
+    Rml::Element* OutlinerRow(const std::string& action, const std::string& label) const
+    {
+        Rml::ElementList elements;
+        document->GetElementById("scene-models")
+            ->QuerySelectorAll(elements, "[data-action=" + action + "]");
+        for (auto* element : elements)
+            if (element->IsClassSet("list-item") && RowLabel(element) == label) return element;
+        return nullptr;
+    }
+    // 行的展开按钮：动作在 .tree-toggle 上，标签在同一个 .tree-row 的标题按钮上。
+    Rml::Element* OutlinerToggle(const std::string& label) const
+    {
+        for (auto* row : MountedRows())
+        {
+            auto* item = row->QuerySelector(".list-item");
+            if (item == nullptr || RowLabel(item) != label) continue;
+            return row->QuerySelector(".tree-toggle");
+        }
+        return nullptr;
+    }
+    float OutlinerRowHeight() const
+    {
+        const auto rows = MountedRows();
+        return rows.empty() ? 0.0f : rows.front()->GetBox().GetSize(Rml::BoxArea::Margin).y;
+    }
+    void SettleOutliner(int frames = 4)
+    {
+        for (int frame = 0; frame < frames; ++frame) Refresh();
+    }
     void SelectActorInOutliner(EditorSceneActorSnapshot actor)
     {
         const std::string identity = actor.identity;
@@ -984,11 +1037,12 @@ TEST_F(EditorUiTest, OutlinerGroupsActorsByTypeWithStableOrderAndCount)
     panel->Build(snapshot);
     context->Update();
 
-    // 分组顺序固定，组内按 ASCII 大小写不敏感排序（alpha 在 Zeta 之前）。
+    // 分组顺序固定（低基数类型在前，Meshes 最后），组内按 ASCII 大小写不敏感排序
+    // （alpha 在 Zeta 之前）。
     EXPECT_EQ(OutlinerLabels("outliner-group"),
-        (std::vector<std::string>{"Meshes (2)", "Point Lights (1)", "Cameras (1)"}));
+        (std::vector<std::string>{"Point Lights (1)", "Cameras (1)", "Meshes (2)"}));
     EXPECT_EQ(OutlinerLabels("outliner-actor"),
-        (std::vector<std::string>{"alpha", "Zeta", "Key_Light", "Camera_01"}));
+        (std::vector<std::string>{"Key_Light", "Camera_01", "alpha", "Zeta"}));
     EXPECT_EQ(OutlinerCount(), "4 actors");
     EXPECT_FALSE(document->GetElementById("outliner-empty")->IsVisible());
     // 每次选择都要有类型图标：4 个 actor 行各一个。
@@ -1085,17 +1139,17 @@ TEST_F(EditorUiTest, OutlinerGroupCollapseHidesItsActorsAndKeepsTheFilterCount)
     context->Update();
     ASSERT_EQ(OutlinerLabels("outliner-actor").size(), 3u);
     // 折叠 Meshes：该组的 actor 行不再挂进 DOM，其他组不受影响。
-    Click("[data-action=outliner-group]");
+    OutlinerRow("outliner-group", "Meshes (2)")->DispatchEvent("click", {});
     panel->Build(snapshot);
     context->Update();
     EXPECT_EQ(OutlinerLabels("outliner-actor"), (std::vector<std::string>{"Key_Light"}));
     EXPECT_EQ(OutlinerCount(), "3 actors");
     // 展开回去：折叠状态只影响可见性，不改变筛选集合或 actor 身份。
-    Click("[data-action=outliner-group]");
+    OutlinerRow("outliner-group", "Meshes (2)")->DispatchEvent("click", {});
     panel->Build(snapshot);
     context->Update();
     EXPECT_EQ(OutlinerLabels("outliner-actor"),
-        (std::vector<std::string>{"Sphere_01", "Sphere_02", "Key_Light"}));
+        (std::vector<std::string>{"Key_Light", "Sphere_01", "Sphere_02"}));
     EXPECT_TRUE(sink.commands.empty());
     EXPECT_TRUE(runtimeSink.actions.empty());
 }
@@ -1285,6 +1339,245 @@ TEST_F(EditorUiTest, OutlinerStaticFramesKeepActorFieldsAndCountCached)
     EXPECT_EQ(panel->PanelPropertyWriteCount(), writes);
     EXPECT_EQ(document->GetElementById("actor-field-radius"), radius);
     EXPECT_EQ(OutlinerCount(), "1 actor");
+}
+
+// 窗口化的行高假设：分组行/actor 行/槽行必须同高。
+// 这里量真实 RmlUi 布局的 margin box（不是从 RCSS 推导），因为 indentation 只改
+// padding-left，而 .tree-toggle/.tree-spacer 是同一个 26px 盒子。
+TEST_F(EditorUiTest, OutlinerRemountsAfterDetachAndReattach)
+{
+    AddActor(MeshActor("Sphere_01", 1));
+    SettleOutliner();
+    ASSERT_NE(OutlinerRow("outliner-actor", "Sphere_01"), nullptr);
+
+    // RML 热重载会在同一个调用里 Detach + Attach，而 UiSubsystem 仍逐帧 Build：
+    // Detach 期间的 Build 不能触碰文档，也不能把"已挂载"记成真。
+    panel->Detach();
+    panel->Build(snapshot);
+    std::string error;
+    ASSERT_TRUE(panel->Attach(*document, error)) << error;
+    SettleOutliner();
+    EXPECT_NE(OutlinerRow("outliner-actor", "Sphere_01"), nullptr);
+    EXPECT_EQ(OutlinerCount(), "1 actor");
+    // 重新 Attach 后行高仍从已挂载行实测：spacer 只出现在内容真正的尾部。
+    EXPECT_GT(OutlinerRowHeight(), 0.0f);
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, OutlinerRowHeightsAreUniformAcrossRowKinds)
+{
+    AddActor(MeshActor("Sphere_01", 1));
+    AddActor(PointLightActor("Key_Light", 250.0f, 20.0f));
+    SettleOutliner();
+    panel->Build(snapshot);
+    // 展开 mesh actor：槽行（depth 1）是唯一可能因缩进而变高的行形态。
+    auto* toggle = OutlinerToggle("Sphere_01");
+    ASSERT_NE(toggle, nullptr);
+    toggle->DispatchEvent("click", {});
+    SettleOutliner();
+
+    float groupHeight = 0.0f;
+    float actorHeight = 0.0f;
+    float slotHeight = 0.0f;
+    for (auto* element : MountedRows())
+    {
+        const float height = element->GetBox().GetSize(Rml::BoxArea::Margin).y;
+        ASSERT_GT(height, 0.0f);
+        if (element->IsClassSet("group-row")) groupHeight = height;
+        else if (element->IsClassSet("slot-row")) slotHeight = height;
+        else actorHeight = height;
+    }
+    EXPECT_GT(groupHeight, 0.0f);
+    EXPECT_GT(actorHeight, 0.0f);
+    EXPECT_GT(slotHeight, 0.0f);
+    EXPECT_FLOAT_EQ(groupHeight, actorHeight);
+    EXPECT_FLOAT_EQ(actorHeight, slotHeight);
+    // 实测行高就是窗口用的行高：顶部 spacer 必须是"整行高 × 被跳过行数"。
+    EXPECT_FLOAT_EQ(OutlinerRowHeight(), actorHeight);
+}
+
+TEST_F(EditorUiTest, OutlinerMountsABoundedWindowAndKeepsTheRestReachable)
+{
+    // 与默认球阵同一量级的场景：122 mesh + 低基数类型。
+    for (int index = 0; index < 122; ++index)
+        AddActor(MeshActor("Sphere_" + std::to_string(100 + index), 1,
+            static_cast<RuntimeId>(100 + index)));
+    AddActor(SunActor(1.0f, true));
+    AddActor(PointLightActor("Key_Light", 250.0f, 20.0f));
+    AddActor(CameraActor("Camera_01"));
+    SettleOutliner();
+
+    const auto rows = MountedRows();
+    ASSERT_FALSE(rows.empty());
+    EXPECT_LE(rows.size(), SceneActorMaxMountedRows);
+    EXPECT_LT(rows.size(), 122u);
+    auto* tree = document->GetElementById("scene-models");
+    EXPECT_LE(static_cast<size_t>(tree->GetNumChildren()), SceneActorMaxMountedRows + 2);
+    // 计数始终是筛选结果，不是挂载行数。
+    EXPECT_EQ(OutlinerCount(), "125 actors");
+    // 低基数分组在默认展开状态下就在窗口里：不需要手工折叠 Meshes 才能看到灯/相机/环境。
+    EXPECT_NE(OutlinerRow("outliner-actor", "Sun_Light"), nullptr);
+    EXPECT_NE(OutlinerRow("outliner-actor", "Key_Light"), nullptr);
+    EXPECT_NE(OutlinerRow("outliner-actor", "Camera_01"), nullptr);
+
+    // 未挂载行留在 spacer 里：滚动范围是整棵树，而不是挂载的那一段。
+    // 停在顶部时只有尾部 spacer（头部没有可跳过的行），两者高度之和补齐整棵树。
+    const auto spacers = OutlinerSpacers();
+    ASSERT_EQ(spacers.size(), 1u);
+    const float rowHeight = OutlinerRowHeight();
+    ASSERT_GT(rowHeight, 0.0f);
+    const auto& box = tree->GetBox();
+    const float paddingY = box.GetEdge(Rml::BoxArea::Padding, Rml::BoxEdge::Top) +
+        box.GetEdge(Rml::BoxArea::Padding, Rml::BoxEdge::Bottom);
+    EXPECT_NEAR(spacers.front()->GetBox().GetSize(Rml::BoxArea::Content).y,
+        static_cast<float>(129 - rows.size()) * rowHeight, 1.0f);
+    // 4 个分组行 + 125 个 actor 行：整棵树的滚动范围必须完整保留。
+    EXPECT_NEAR(tree->GetScrollHeight(), 129.0f * rowHeight + paddingY, rowHeight);
+
+    // 静止帧不重挂 DOM：行节点指针保持同一批。
+    const auto nodes = rows;
+    SettleOutliner(30);
+    EXPECT_EQ(MountedRows(), nodes);
+}
+
+TEST_F(EditorUiTest, OutlinerScrollMountsAnotherWindowAndReachesTheLastActor)
+{
+    for (int index = 0; index < 120; ++index)
+        AddActor(MeshActor("Sphere_" + std::to_string(100 + index), 1,
+            static_cast<RuntimeId>(100 + index)));
+    SettleOutliner();
+    auto* tree = document->GetElementById("scene-models");
+    const auto firstWindow = OutlinerLabels("outliner-actor");
+    ASSERT_FALSE(firstWindow.empty());
+    ASSERT_LT(firstWindow.size(), 120u);
+    const float rowHeight = OutlinerRowHeight();
+    ASSERT_GT(rowHeight, 0.0f);
+    EXPECT_FLOAT_EQ(OutlinerRowHeight(), tree->QuerySelector(".tree-row")
+        ->GetBox().GetSize(Rml::BoxArea::Margin).y);
+
+    // 滚动后窗口必须换一批行：首个挂载行已经不是第一行，顶部 spacer 补上被跳过的行高。
+    tree->SetScrollTop(6.0f * rowHeight);
+    SettleOutliner();
+    const auto scrolled = OutlinerLabels("outliner-actor");
+    ASSERT_FALSE(scrolled.empty());
+    EXPECT_NE(scrolled.front(), firstWindow.front());
+    const auto spacers = OutlinerSpacers();
+    ASSERT_EQ(spacers.size(), 2u);
+    EXPECT_GT(spacers.front()->GetBox().GetSize(Rml::BoxArea::Content).y, 0.0f);
+
+    // 滚到底：最后一行必须挂载，尾部 spacer 消失——尾页可达，不是截断到前 N 行。
+    tree->SetScrollTop(tree->GetScrollHeight());
+    SettleOutliner();
+    EXPECT_EQ(OutlinerLabels("outliner-actor").back(), "Sphere_219");
+    EXPECT_NE(OutlinerRow("outliner-actor", "Sphere_219"), nullptr);
+    const auto tailSpacers = OutlinerSpacers();
+    ASSERT_EQ(tailSpacers.size(), 1u);
+    // 唯一剩下的 spacer 在头部，且等于被跳过的行高之和。
+    EXPECT_GT(tailSpacers.front()->GetBox().GetSize(Rml::BoxArea::Content).y, 0.0f);
+    EXPECT_TRUE(MountedRows().back()->IsClassSet("actor-row"));
+}
+
+TEST_F(EditorUiTest, OutlinerCollapsedTreeFitsWithoutSpacersAndKeepsTheCount)
+{
+    for (int index = 0; index < 122; ++index)
+        AddActor(MeshActor("Sphere_" + std::to_string(100 + index), 1,
+            static_cast<RuntimeId>(100 + index)));
+    AddActor(PointLightActor("Key_Light", 250.0f, 20.0f));
+    SettleOutliner();
+    ASSERT_LT(OutlinerLabels("outliner-actor").size(), 123u);
+
+    // 折叠 Meshes：122 个子行既不挂 DOM 也不占窗口槽位，因此不再需要 spacer。
+    auto* group = OutlinerRow("outliner-group", "Meshes (122)");
+    ASSERT_NE(group, nullptr);
+    group->DispatchEvent("click", {});
+    SettleOutliner();
+    EXPECT_TRUE(OutlinerSpacers().empty());
+    EXPECT_EQ(OutlinerLabels("outliner-actor"), (std::vector<std::string>{"Key_Light"}));
+    // 折叠只影响挂载，不影响计数语义。
+    EXPECT_EQ(OutlinerCount(), "123 actors");
+    // 展开回来：子行重新进入窗口，spacer 也回来。
+    OutlinerRow("outliner-group", "Meshes (122)")->DispatchEvent("click", {});
+    SettleOutliner();
+    EXPECT_EQ(OutlinerSpacers().size(), 1u);
+    EXPECT_EQ(OutlinerCount(), "123 actors");
+}
+
+TEST_F(EditorUiTest, OutlinerSortReordersInsideGroupsAndKeepsGroupOrderAndState)
+{
+    for (int index = 0; index < 40; ++index)
+        AddActor(MeshActor("Mesh_" + std::to_string(10 + index), 1,
+            static_cast<RuntimeId>(10 + index)));
+    AddActor(PointLightActor("Key_Light", 250.0f, 20.0f));
+    AddActor(PointLightActor("A_Light", 250.0f, 20.0f));
+    SettleOutliner();
+    EXPECT_EQ(OutlinerLabels("outliner-group"),
+        (std::vector<std::string>{"Point Lights (2)", "Meshes (40)"}));
+    EXPECT_EQ(OutlinerLabels("outliner-actor").front(), "A_Light");
+
+    // 排序控件只提供两种顺序，取值与 Content Browser 的 sort 控件同一套键。
+    auto* select = dynamic_cast<Rml::ElementFormControlSelect*>(
+        document->GetElementById("outliner-sort"));
+    ASSERT_NE(select, nullptr);
+    ASSERT_EQ(select->GetNumOptions(), 2);
+    EXPECT_EQ(select->GetOption(0)->GetAttribute<std::string>("value", ""), "name-asc");
+    EXPECT_EQ(select->GetOption(1)->GetAttribute<std::string>("value", ""), "name-desc");
+    // 过滤栏不换行：排序控件必须完整落在过滤栏矩形内，不能被裁掉。
+    auto* bar = document->QuerySelector(".outliner-filterbar");
+    ASSERT_NE(bar, nullptr);
+    const auto barOrigin = bar->GetAbsoluteOffset(Rml::BoxArea::Border);
+    const auto barSize = bar->GetBox().GetSize(Rml::BoxArea::Border);
+    const auto sortOrigin = select->GetAbsoluteOffset(Rml::BoxArea::Border);
+    const auto sortSize = select->GetBox().GetSize(Rml::BoxArea::Border);
+    EXPECT_GT(sortSize.x, 0.0f);
+    EXPECT_GE(sortOrigin.x, barOrigin.x - 1.0f);
+    EXPECT_LE(sortOrigin.x + sortSize.x, barOrigin.x + barSize.x + 1.0f);
+
+    // 组内降序：分组顺序（稳定契约）不动，Meshes 组内从 Mesh_49 开始。
+    SelectOption("outliner-sort", "name-desc");
+    SettleOutliner();
+    EXPECT_EQ(OutlinerLabels("outliner-group"),
+        (std::vector<std::string>{"Point Lights (2)", "Meshes (40)"}));
+    EXPECT_EQ(OutlinerLabels("outliner-actor").front(), "Key_Light");
+    EXPECT_NE(OutlinerRow("outliner-actor", "Mesh_49"), nullptr);
+    // 窗口化之后降序末尾的行不在窗口里，这是窗口语义而不是排序丢失。
+    EXPECT_EQ(OutlinerRow("outliner-actor", "Mesh_10"), nullptr);
+    SelectOption("outliner-sort", "name-asc");
+    SettleOutliner();
+    EXPECT_EQ(OutlinerLabels("outliner-actor").front(), "A_Light");
+    EXPECT_NE(OutlinerRow("outliner-actor", "Mesh_10"), nullptr);
+
+    // 选中身份与展开身份都不参与排序：排序往返后选中行与槽行必须原样还在。
+    snapshot.selectedActorIdentity = SceneActorIdentity(EditorSceneActorType::Mesh, "Mesh_10");
+    Refresh();
+    auto* expand = OutlinerToggle("Mesh_10");
+    ASSERT_NE(expand, nullptr);
+    expand->DispatchEvent("click", {});
+    SettleOutliner();
+    ASSERT_NE(document->QuerySelector("[data-action=outliner-slot]"), nullptr);
+    auto* tree = document->GetElementById("scene-models");
+    const float rowHeight = OutlinerRowHeight();
+    ASSERT_GT(rowHeight, 0.0f);
+    tree->SetScrollTop(5.0f * rowHeight);
+    SettleOutliner();
+    const float scrollTop = tree->GetScrollTop();
+    ASSERT_GT(scrollTop, 0.0f);
+
+    // 滚动位置保持原样：排序只重排组内顺序，不回到顶部。
+    SelectOption("outliner-sort", "name-desc");
+    SettleOutliner();
+    EXPECT_FLOAT_EQ(tree->GetScrollTop(), scrollTop);
+    EXPECT_EQ(OutlinerCount(), "42 actors");
+    SelectOption("outliner-sort", "name-asc");
+    SettleOutliner();
+    // 回到升序仍停在原滚动位置：窗口里是 Mesh_10 附近的同一批行，不是列表顶部。
+    EXPECT_FLOAT_EQ(tree->GetScrollTop(), scrollTop);
+    ASSERT_NE(OutlinerRow("outliner-actor", "Mesh_10"), nullptr);
+    EXPECT_TRUE(OutlinerRow("outliner-actor", "Mesh_10")->IsClassSet("selected"));
+    ASSERT_NE(document->QuerySelector("[data-action=outliner-slot]"), nullptr);
+    EXPECT_EQ(OutlinerCount(), "42 actors");
+    // 排序是纯浏览状态：不提交资产命令，也不请求运行时动作。
+    EXPECT_TRUE(sink.commands.empty());
+    EXPECT_TRUE(runtimeSink.actions.empty());
 }
 
 TEST_F(EditorUiTest, DetailsSectionsCollapseWithoutRebuildingTheGroupDom)

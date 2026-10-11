@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
+#include <filesystem>
 #include <iomanip>
 #include <sstream>
 
@@ -14,8 +16,10 @@ namespace
 {
 
 // 固定分组顺序：与 SceneActorGroupSpecs() 的顺序一致，跨帧不重排。
+// 低基数类型在前、Mesh 在后是刻意的：默认场景有 122 个网格，把 Meshes 放最前会把
+// 灯光/相机/环境整组挤出可视区（第四轮实测症状）。顺序本身仍是固定契约，
+// 排序控件只作用于组内，不参与这里的排列。
 const std::vector<EditorSceneActorGroupSpec> GroupSpecs = {
-    {EditorSceneActorType::Mesh, "mesh", "Meshes", "icons/mesh.png"},
     {EditorSceneActorType::DirectionalLight, "directionalLight", "Directional Lights",
         "icons/light-directional.png"},
     {EditorSceneActorType::PointLight, "pointLight", "Point Lights", "icons/light-point.png"},
@@ -26,6 +30,7 @@ const std::vector<EditorSceneActorGroupSpec> GroupSpecs = {
     {EditorSceneActorType::Environment, "environment", "Environments", "icons/environment.png"},
     {EditorSceneActorType::WindProfile, "windProfile", "SpeedTree Wind Profiles",
         "icons/wind.png"},
+    {EditorSceneActorType::Mesh, "mesh", "Meshes", "icons/mesh.png"},
 };
 
 const char* EnvironmentTypeName(EnvironmentType type)
@@ -85,6 +90,48 @@ void AddVectorField(std::vector<EditorSceneActorField>& fields, const std::strin
 std::string EmptyFallback(const std::string& value)
 {
     return value.empty() ? "(none)" : value;
+}
+
+// 只有携带有效材质实例的 section 才是可打开的槽；没有 MI 的 section 仍然
+// 出现在只读字段里，但不会在树里生成一个点了没有反应的子行。
+bool MeshActorHasOpenableSlot(const EditorSceneActorSnapshot& actor)
+{
+    for (const EditorSceneMeshSectionSnapshot& section : actor.sections)
+        if (!section.materialInstancePath.empty()) return true;
+    return false;
+}
+
+// 槽行标签与迁移前一致：优先用槽名，没有槽名时退回 MI 文件名。
+std::string SlotLabel(const MaterialInstanceModelMaterialSnapshot& slot)
+{
+    return slot.materialSlotName.empty()
+        ? std::filesystem::path(slot.materialInstancePath).filename().string()
+        : slot.materialSlotName;
+}
+
+// 行内容签名用的 FNV-1a 混合：不追求密码学强度，只要求"内容变了几乎必然变号"。
+constexpr uint64_t SignatureOffset = 1469598103934665603ull;
+constexpr uint64_t SignaturePrime = 1099511628211ull;
+
+void MixSignature(uint64_t& hash, const std::string& value)
+{
+    for (const unsigned char byte : value)
+    {
+        hash ^= byte;
+        hash *= SignaturePrime;
+    }
+    // 分隔符让 ("ab","") 与 ("a","b") 不产生同一个签名。
+    hash ^= 0xffu;
+    hash *= SignaturePrime;
+}
+
+void MixSignature(uint64_t& hash, uint64_t value)
+{
+    for (int shift = 0; shift < 64; shift += 8)
+    {
+        hash ^= (value >> shift) & 0xffu;
+        hash *= SignaturePrime;
+    }
 }
 
 } // namespace
@@ -161,10 +208,26 @@ bool SceneActorMatchesTypeFilter(const EditorSceneActorSnapshot& actor, const st
     return actor.type == spec->type;
 }
 
+bool SceneActorOrderLess(const EditorSceneActorSnapshot& left,
+    const EditorSceneActorSnapshot& right, SceneActorSortOrder order)
+{
+    return order == SceneActorSortOrder::NameDescending
+        ? SceneActorNameLess(right, left) : SceneActorNameLess(left, right);
+}
+
+bool SameSceneActorExpansion(
+    const EditorSceneActorTreeExpansion& left, const EditorSceneActorTreeExpansion& right)
+{
+    return left.collapsedGroups == right.collapsedGroups &&
+        left.expandedActors == right.expandedActors;
+}
+
 std::vector<EditorSceneActorRow> BuildSceneActorRows(
     const std::vector<EditorSceneActorSnapshot>& actors,
     const std::string& query,
-    const std::string& typeFilter)
+    const std::string& typeFilter,
+    SceneActorSortOrder order,
+    const EditorSceneActorTreeExpansion& expansion)
 {
     const std::string foldedQuery = FoldAsciiCase(query);
     std::vector<EditorSceneActorRow> rows;
@@ -182,9 +245,9 @@ std::vector<EditorSceneActorRow> BuildSceneActorRows(
         }
         if (groupIndices.empty()) continue;
         std::sort(groupIndices.begin(), groupIndices.end(),
-            [&actors](size_t left, size_t right)
+            [&actors, order](size_t left, size_t right)
             {
-                return SceneActorNameLess(actors[left], actors[right]);
+                return SceneActorOrderLess(actors[left], actors[right], order);
             });
 
         EditorSceneActorRow group;
@@ -192,17 +255,118 @@ std::vector<EditorSceneActorRow> BuildSceneActorRows(
         group.type = spec.type;
         group.label = spec.title;
         group.actorCount = groupIndices.size();
+        group.hasChildren = true;
+        group.expanded = expansion.collapsedGroups.count(spec.key) == 0;
         rows.push_back(std::move(group));
+        // 折叠的分组只留表头：子行不进入行集合，因此既不挂 DOM，也不占窗口槽位，
+        // 也不产生 spacer 高度——整棵折叠后的树必须能一次装进窗口。
+        if (!group.expanded) continue;
+
         for (const size_t index : groupIndices)
         {
+            const EditorSceneActorSnapshot& actor = actors[index];
+            const bool hasSlots = actor.type == EditorSceneActorType::Mesh &&
+                MeshActorHasOpenableSlot(actor);
+            const bool actorExpanded =
+                hasSlots && expansion.expandedActors.count(actor.identity) != 0;
             EditorSceneActorRow row;
             row.type = spec.type;
             row.actorIndex = index;
-            row.label = actors[index].displayName;
+            row.label = actor.displayName;
+            row.hasChildren = hasSlots;
+            row.expanded = actorExpanded;
             rows.push_back(std::move(row));
+            if (!actorExpanded) continue;
+            // 槽行与 MeshSceneActorModel 的 materials 同序：动作分量索引可以直接交给
+            // 既有的 SelectModelMaterial，不需要第二份槽位表。
+            const MaterialInstanceModelSnapshot model = MeshSceneActorModel(actor);
+            for (size_t slotIndex = 0; slotIndex < model.materials.size(); ++slotIndex)
+            {
+                const MaterialInstanceModelMaterialSnapshot& slot = model.materials[slotIndex];
+                EditorSceneActorRow slotRow;
+                slotRow.isSlot = true;
+                slotRow.type = spec.type;
+                slotRow.actorIndex = index;
+                slotRow.slotIndex = slotIndex;
+                slotRow.materialSlotIndex = slot.materialSlotIndex;
+                slotRow.label = SlotLabel(slot);
+                rows.push_back(std::move(slotRow));
+            }
         }
     }
     return rows;
+}
+
+uint64_t SceneActorRowsSignature(const std::vector<EditorSceneActorSnapshot>& actors)
+{
+    uint64_t hash = SignatureOffset;
+    MixSignature(hash, static_cast<uint64_t>(actors.size()));
+    if (!actors.empty()) MixSignature(hash, actors.front().worldGeneration);
+    for (const EditorSceneActorSnapshot& actor : actors)
+    {
+        MixSignature(hash, static_cast<uint64_t>(actor.type));
+        MixSignature(hash, actor.displayName);
+        MixSignature(hash, actor.identity);
+        MixSignature(hash, static_cast<uint64_t>(actor.sections.size()));
+        for (const EditorSceneMeshSectionSnapshot& section : actor.sections)
+        {
+            MixSignature(hash, section.materialInstancePath);
+            MixSignature(hash, section.materialSlotName);
+        }
+    }
+    return hash;
+}
+
+const char* SceneActorSortOrderKey(SceneActorSortOrder order)
+{
+    return order == SceneActorSortOrder::NameDescending ? "name-desc" : "name-asc";
+}
+
+bool ParseSceneActorSortOrder(const std::string& key, SceneActorSortOrder& order)
+{
+    if (key == "name-asc")
+    {
+        order = SceneActorSortOrder::NameAscending;
+        return true;
+    }
+    if (key == "name-desc")
+    {
+        order = SceneActorSortOrder::NameDescending;
+        return true;
+    }
+    return false;
+}
+
+bool SameSceneActorWindow(const EditorSceneActorWindow& left, const EditorSceneActorWindow& right)
+{
+    return left.begin == right.begin && left.end == right.end &&
+        left.rowHeight == right.rowHeight && left.top == right.top && left.bottom == right.bottom;
+}
+
+EditorSceneActorWindow ComputeSceneActorWindow(
+    size_t rowCount, float clientHeight, float scrollOffset, float rowHeight)
+{
+    EditorSceneActorWindow window;
+    if (!(rowHeight > 0.0f)) rowHeight = SceneActorRowHeightFallback;
+    window.rowHeight = rowHeight;
+    if (rowCount == 0) return window;
+    // 可视行数 +1 覆盖半行，再由 SceneActorOverscanRows 提供上下预取；总挂载量受预算限制。
+    const size_t visibleRows = clientHeight > 0.0f
+        ? static_cast<size_t>(std::ceil(clientHeight / rowHeight)) + 1
+        : SceneActorOverscanRows + 1;
+    const size_t windowRows = std::min(
+        visibleRows + 2 * SceneActorOverscanRows, SceneActorMaxMountedRows);
+    // rowCount - 1 是最后一行：滚动到内容底部时窗口必须能覆盖尾页。
+    const size_t scrollRow = std::min(
+        static_cast<size_t>(std::max(0.0f, scrollOffset) / rowHeight), rowCount - 1);
+    size_t firstRow = scrollRow > SceneActorOverscanRows ? scrollRow - SceneActorOverscanRows : 0;
+    firstRow = std::min(firstRow, rowCount > windowRows ? rowCount - windowRows : 0);
+    const size_t endRow = std::min(rowCount, firstRow + windowRows);
+    window.begin = firstRow;
+    window.end = endRow;
+    window.top = static_cast<float>(firstRow) * rowHeight;
+    window.bottom = static_cast<float>(rowCount - endRow) * rowHeight;
+    return window;
 }
 
 std::vector<EditorSceneActorField> SceneActorFields(const EditorSceneActorSnapshot& actor)

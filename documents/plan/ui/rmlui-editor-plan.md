@@ -54,6 +54,11 @@
 - Scene Outliner 是真实 World actor 树：数据由 EngineLoop 在稳定帧边界从 active World
   拍成不可变 actor 列表（网格 / 四类灯 / 相机 / 环境 / SpeedTree 风剖面），
   分组可折叠、带类型图标、搜索（ASCII 大小写折叠、保留 UTF-8 名称）与类型过滤；
+  分组顺序固定为低基数类型在前（灯光 → 相机 → 环境 → 风剖面 → Meshes），
+  组内可选 Name A-Z / Z-A，并沿用 Content Browser 的可见窗口策略：
+  `#scene-models` 任一时刻挂载的行节点不超过 `SceneActorMaxMountedRows = 192`
+  （另加最多两个 spacer 保留未挂载行的高度），窗口随滚动、筛选、排序与折叠重算；
+  树行等高由 RCSS 显式固定（30px，超长名称省略号裁剪），行高逐帧从已挂载行实测；
   选中 actor 由 Details 展示类型化只读参数，主方向光额外提供 Intensity 与
   CSM Cast Shadows 两个可编辑控件，两者都复用既有 UiAction 命令。
 - 面板可以通过 Window 菜单隐藏/恢复，隐藏集合随工作区文件持久化；
@@ -97,7 +102,7 @@ JSON 输入边界来自 `source/editor/assets/editorJsonAssetLibrary.h`：
 
 各阶段单独定义验收和模块测试，再进入下一阶段；不以更换控件库替代数据所有权设计。
 
-### 尚未实现的能力清单（2026-10-11 核对，第四批后）
+### 尚未实现的能力清单（2026-10-11 核对，第五批后）
 
 以下能力在当前分支确认缺席，后续阶段直接以此为准，不要重新推导：
 
@@ -107,7 +112,8 @@ JSON 输入边界来自 `source/editor/assets/editorJsonAssetLibrary.h`：
 - 没有逐 actor 可见性/隐藏开关：`World`、`WorldSnapshot` 与渲染图都没有逐对象
   可见性状态，加它需要同时改场景 schema、validator、World 构建与渲染路径。
 - 没有地形节点：`World` 没有 terrain 访问器，仓库里也没有 terrain 运行时。
-- 大纲没有虚拟化；改名、拖放、重父级都不存在。
+- 大纲行窗口化只覆盖世界 actor 树；通用 `TreeRow` 组件、模型树与 Sources 树仍整棵挂载。
+  改名、拖放、重父级、多选都不存在。
 - 没有资产缩略图、没有模型几何预览、没有纹理像素查看器。
 - 没有原生多窗口，没有 IME。
 - 场景仍按 swapchain 全尺寸渲染，UI 以完整 UV 采样；视口不是按停靠尺寸渲染。
@@ -339,3 +345,55 @@ SDL3 的 `SDL_dialog.h` 没有颜色对话框 API，本轮不做，也没有用�
   （默认场景没有，本轮没有为此改场景资产）、真实鼠标的搜索键入与下拉选择手感
   （合成点击只验证了搜索框获得焦点边框）、以及真实拖动滑条
   （合成拖动不改变 range 控件，与第三批记录的限制相同）。
+
+### 2026-10-11 大纲行窗口化与组内排序验证
+
+本批把 Scene Outliner 的行集合改成受限可见窗口（预算 `SceneActorMaxMountedRows = 192`、
+两行预取、两个 spacer 补齐滚动范围），把组内排序控件加进过滤栏，
+并把分组顺序改成低基数类型在前。契约见
+`documents/architecture/ui-component-system.md` 的“世界 actor 树契约”，
+发现与未做项见 `ue-parity-audit.md` 第 5 轮。
+
+- MinGW 构建：`cmake --build build --target editor_ui_tests editor_viewport_tests main
+  material_instance_editor_production_tests -j8` 四个目标全部成功。
+- `ctest --test-dir build -R "^(UiColorTransform|UiWidgetTest|UiWidgetRefresh|EditorUiTest|ContentBrowserTest|DockWorkspaceTest|DockPersistenceTest|DockRmlTest|EditorViewportGeometry|EditorJsonAssetParsing|EditorJsonAssetPaths|EditorJsonAssetTypes|JsonAssetLibraryTest|ResourceEditorController|LargeCatalog/ContentBrowserPerformanceTest)\." --output-on-failure`
+  **275/275 通过**（基线 262/262，本批净增 13 项；4 项既有符号链接用例按原条件跳过）。
+  **同一选择连跑两次都是 275/275**，没有出现间歇失败。
+- `ctest --test-dir build -R "MaterialInstanceEditor" --output-on-failure`
+  **22/22 通过**，与基线一致；mesh actor → 材质槽 → MI 文档流程、非网格选择清描边、
+  搜索、类型过滤与计数语义都未回归。
+- 出图：`artifacts/rmlui-editor/outliner_window_probe.py`（gitignored）用
+  `SendInput` 驱动真实窗口、经 `tool/validation/console_inject.ps1` 注入 `screenshot`，
+  用 `bmp_probe.py` 读数；每张截图载荷 2764800 B（完整 BMP）。
+  探测区域实测：过滤栏行 74–107、树 109–225（117px）、计数栏边框 226。
+  由 `ui/icons/*.png` 现算行首图标描边色（light `#E5C17B`、camera `#B79AE6`、
+  environment `#81AEE9`、mesh `#74C2D1`），再按色相规则统计树区域：
+  - **首屏（scroll 0，什么都不折叠）**：3 行文字行 = 分组标题、`Sun_Light`（暖色图标 40 像素）、
+    分组标题；census light 73。同一测量跑在第 4 轮的 `outliner-baseline.bmp` 上得到
+    mesh 108 / light 0 —— 这就是本批修掉的症状。
+  - **可达性**：滚轮 1 刻度 = 80px = 2.67 行；2–3 个刻度内灯光、相机与环境行都出现过
+    （相机第 1–2 刻度、环境第 2–3 刻度；RmlUi 平滑滚动让刻度到行号的映射有浮动），
+    第 3–4 刻度起进入 Meshes 组。全程没有折叠任何分组。
+  - **窗口化**：滚动会换一批挂载行，滚回顶部后三行的墨迹指纹与首屏完全一致；
+    树区域始终只有 3–4 行文字行（挂载行数为窗口大小），而树本身有 130 行；
+    滚动条滑块 24px（`min-height` 下限）说明滚动范围是整棵树，不是窗口内的那一段。
+  - **排序**：点击 `#outliner-sort`（过滤栏最后一组 `#202023`，span 1190–1273）打开下拉，
+    选中 `Name Z-A` 后：非网格三行的指纹距离都是 0.0（排序不动它们）、
+    计数栏文字指纹距离 0.0；`A→Z` 首屏第一条网格行 == `Z→A` 列表最后一行（距离 0.0），
+    `A→Z` 最后一行 == `Z→A` 第一条网格行（距离 0.0），
+    两个方向的"第一条网格行"不同 —— 即 Z-A 是 Mesh 组的严格逆序。
+- 本轮像素探针先于测试确认了一个真实缺陷：树行**并不等高** ——
+  原 RCSS 下分组行（粗体）margin box 28.4px、actor/槽行 29.7px，
+  而窗口按"首个已挂载行"实测行高，于是行种类变化时窗口与真实内容差半行到一行。
+  现在行高在 RCSS 里显式固定 30px（`.list-item` 行高 16px、不换行、`text-overflow: ellipsis`），
+  由 `EditorUiTest.OutlinerRowHeightsAreUniformAcrossRowKinds` 量三种行形态守住。
+- 该进程由探针强制终止，**这是渲染证据，不是 teardown 证据**。
+- 产物：日志 `artifacts/rmlui-editor/outliner-window-125826.log`（stderr 0 字节），
+  截图在隔离资源目录 `Generated/Screenshots/`（`ow-asc-top`、`ow-asc-reach-*`、
+  `ow-asc-meshtop-*`、`ow-asc-bottom`、`ow-asc-backtop`、`ow-sort-open`、`ow-sort-picked`、
+  `ow-desc-top`、`ow-desc-meshtop-*`、`ow-desc-bottom`）。
+- 本次没有验证：探针数不到"已挂载但被裁剪"的 DOM 节点，
+  因此 ≤192 预算由单元测试断言真实节点数（`tree->GetNumChildren() <= 预算 + 2`），
+  像素只证明上屏行数不随树增长；文字没有回读，行身份靠墨迹指纹比较（同名行会被判为同一行）；
+  spotLight / squareAreaLight / SpeedTree 风剖面仍无像素证据（默认场景没有这三类对象）；
+  多选、拖放、逐 actor 可见性开关仍不存在。

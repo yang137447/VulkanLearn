@@ -17,6 +17,7 @@
 #include "ui/widgets/text/textWidgets.h"
 #include "ui/widgets/views/viewWidgets.h"
 #include "ui/widgets/widgetDocument.h"
+#include "editor/ui/editorSceneActorTree.h"
 #include "editor/ui/materialInstanceAssetEditorPanel.h"
 #include "ui/uiColorTransform.h"
 
@@ -542,5 +543,249 @@ TEST(UiWidgetRefresh, NestedRefreshRestoresThePreviousSuppressionState)
     }
     EXPECT_FALSE(refreshing);
 }
+
+// 大纲窗口的纯数学：这里不需要 RmlUi 文档，与 Content Browser 的窗口化分开覆盖。
+namespace SceneActorTreeTests
+{
+using namespace VL::EditorUi;
+
+EditorSceneActorSnapshot TreeActor(EditorSceneActorType type, const std::string& name)
+{
+    EditorSceneActorSnapshot actor;
+    actor.type = type;
+    actor.worldGeneration = 1;
+    actor.displayName = name;
+    actor.identity = SceneActorIdentity(type, name);
+    return actor;
+}
+
+// 带一个可打开材质槽的 mesh actor：槽行只由 section 的 MI 路径产生。
+EditorSceneActorSnapshot TreeMeshActor(const std::string& name, const std::string& slotName)
+{
+    EditorSceneActorSnapshot actor = TreeActor(EditorSceneActorType::Mesh, name);
+    EditorSceneMeshSectionSnapshot section;
+    section.objectName = name;
+    section.materialInstancePath = "Maps/SC_test/Materials/MI_test.json";
+    section.materialSlotName = slotName;
+    actor.sections.push_back(std::move(section));
+    return actor;
+}
+
+TEST_F(UiWidgetTest, SceneActorWindowMountsABoundedSliceAndKeepsTheRemainingRange)
+{
+    const float rowHeight = 28.0f;
+    const float clientHeight = 118.0f;
+    const size_t rowCount = 130;
+    const auto top = ComputeSceneActorWindow(rowCount, clientHeight, 0.0f, rowHeight);
+    EXPECT_EQ(top.begin, 0u);
+    EXPECT_GT(top.end, 0u);
+    EXPECT_LE(top.end - top.begin, SceneActorMaxMountedRows);
+    EXPECT_FLOAT_EQ(top.top, 0.0f);
+    // 未挂载行的总高度必须留在 spacer 里，否则滚动范围会被窗口截短。
+    EXPECT_FLOAT_EQ(top.bottom, static_cast<float>(rowCount - top.end) * rowHeight);
+
+    // 窗口始终覆盖滚动偏移处的那一行：这是"滚动后挂载另一批行"的纯数学前提。
+    for (const float fraction : {0.0f, 0.25f, 0.5f, 0.75f, 1.0f})
+    {
+        const float scroll = fraction * static_cast<float>(rowCount) * rowHeight;
+        const auto window = ComputeSceneActorWindow(rowCount, clientHeight, scroll, rowHeight);
+        const size_t scrollRow = std::min(
+            static_cast<size_t>(scroll / rowHeight), rowCount - 1);
+        EXPECT_GE(scrollRow, window.begin);
+        EXPECT_LT(scrollRow, window.end);
+        EXPECT_FLOAT_EQ(window.top, static_cast<float>(window.begin) * rowHeight);
+        EXPECT_FLOAT_EQ(window.bottom, static_cast<float>(rowCount - window.end) * rowHeight);
+    }
+
+    // 滚到底必须能挂到真正的最后一行，而不是停在第一个窗口。
+    const auto bottom = ComputeSceneActorWindow(
+        rowCount, clientHeight, static_cast<float>(rowCount) * rowHeight, rowHeight);
+    EXPECT_EQ(bottom.end, rowCount);
+    EXPECT_FLOAT_EQ(bottom.bottom, 0.0f);
+}
+
+TEST_F(UiWidgetTest, SceneActorWindowStaysWithinTheMountedRowBudget)
+{
+    for (const size_t rowCount : {size_t{1}, size_t{200}, size_t{5000}, size_t{50000}})
+    {
+        for (const float clientHeight : {1.0f, 118.0f, 20000.0f})
+        {
+            for (const float fraction : {0.0f, 0.5f, 1.0f})
+            {
+                const float rowHeight = 28.0f;
+                const float scroll = fraction * static_cast<float>(rowCount) * rowHeight;
+                const auto window = ComputeSceneActorWindow(
+                    rowCount, clientHeight, scroll, rowHeight);
+                EXPECT_LE(window.end - window.begin, SceneActorMaxMountedRows) << rowCount;
+                EXPECT_LE(window.end, rowCount);
+                EXPECT_GE(window.top, 0.0f);
+                EXPECT_GE(window.bottom, 0.0f);
+                // 挂载量与 spacer 高度之和仍是整棵树：窗口化不改变滚动范围。
+                EXPECT_FLOAT_EQ(window.top + window.bottom +
+                    static_cast<float>(window.end - window.begin) * rowHeight,
+                    static_cast<float>(rowCount) * rowHeight);
+            }
+        }
+    }
+    // 退化输入不产生越界窗口：首帧没有实测行高时用 RCSS 兜底值。
+    const auto empty = ComputeSceneActorWindow(0, 118.0f, 0.0f, 0.0f);
+    EXPECT_EQ(empty.begin, 0u);
+    EXPECT_EQ(empty.end, 0u);
+    EXPECT_FLOAT_EQ(empty.rowHeight, SceneActorRowHeightFallback);
+    EXPECT_FLOAT_EQ(empty.top, 0.0f);
+    EXPECT_FLOAT_EQ(empty.bottom, 0.0f);
+}
+
+TEST_F(UiWidgetTest, CollapsedSceneActorGroupsContributeOnlyTheirHeader)
+{
+    std::vector<EditorSceneActorSnapshot> actors;
+    for (int index = 0; index < 40; ++index)
+        actors.push_back(TreeMeshActor("Mesh_" + std::to_string(index), "Surface"));
+    actors.push_back(TreeActor(EditorSceneActorType::PointLight, "Key_Light"));
+
+    EditorSceneActorTreeExpansion collapsed;
+    collapsed.collapsedGroups.insert("mesh");
+    const auto rows = BuildSceneActorRows(
+        actors, "", "all", SceneActorSortOrder::NameAscending, collapsed);
+    // 折叠组只留表头：子行不进入行集合，因此不占窗口槽位、也不产生 spacer 高度。
+    ASSERT_EQ(rows.size(), 3u);
+    EXPECT_TRUE(rows[0].isGroup);
+    EXPECT_EQ(rows[0].label, "Point Lights");
+    EXPECT_TRUE(rows[0].expanded);
+    EXPECT_EQ(rows[0].actorCount, 1u);
+    EXPECT_EQ(rows[1].label, "Key_Light");
+    EXPECT_EQ(rows[2].label, "Meshes");
+    EXPECT_FALSE(rows[2].expanded);
+    EXPECT_EQ(rows[2].actorCount, 40u);
+    const auto window = ComputeSceneActorWindow(rows.size(), 118.0f, 0.0f, 28.0f);
+    EXPECT_EQ(window.begin, 0u);
+    EXPECT_EQ(window.end, rows.size());
+    EXPECT_FLOAT_EQ(window.top, 0.0f);
+    EXPECT_FLOAT_EQ(window.bottom, 0.0f);
+
+    // 展开后同样的输入必须把 40 个子行放回行集合，并且重新需要窗口。
+    const auto expanded = BuildSceneActorRows(actors, "", "all",
+        SceneActorSortOrder::NameAscending, EditorSceneActorTreeExpansion{});
+    EXPECT_EQ(expanded.size(), 43u);
+    const auto scrolled = ComputeSceneActorWindow(expanded.size(), 118.0f, 0.0f, 28.0f);
+    EXPECT_LT(scrolled.end - scrolled.begin, expanded.size());
+    EXPECT_GT(scrolled.bottom, 0.0f);
+}
+
+TEST_F(UiWidgetTest, FullyCollapsedTreeOfEveryGroupFitsWithoutSpacers)
+{
+    std::vector<EditorSceneActorSnapshot> actors;
+    EditorSceneActorTreeExpansion collapsed;
+    for (const EditorSceneActorGroupSpec& spec : SceneActorGroupSpecs())
+    {
+        actors.push_back(TreeActor(spec.type, std::string(spec.title) + "_01"));
+        collapsed.collapsedGroups.insert(spec.key);
+    }
+    const auto rows = BuildSceneActorRows(
+        actors, "", "all", SceneActorSortOrder::NameAscending, collapsed);
+    // 每个分组只剩表头：行数 == 分组数，子行不参与行集合。
+    ASSERT_EQ(rows.size(), SceneActorGroupSpecs().size());
+    for (const EditorSceneActorRow& row : rows)
+    {
+        EXPECT_TRUE(row.isGroup);
+        EXPECT_FALSE(row.expanded);
+        EXPECT_EQ(row.actorCount, 1u);
+    }
+    const auto window = ComputeSceneActorWindow(
+        rows.size(), 118.0f, 0.0f, SceneActorRowHeightFallback);
+    EXPECT_EQ(window.begin, 0u);
+    EXPECT_EQ(window.end, rows.size());
+    EXPECT_FLOAT_EQ(window.top, 0.0f);
+    EXPECT_FLOAT_EQ(window.bottom, 0.0f);
+}
+
+TEST_F(UiWidgetTest, ExpandedMeshActorAddsSlotRowsInModelOrder)
+{
+    std::vector<EditorSceneActorSnapshot> actors;
+    actors.push_back(TreeMeshActor("Sphere_01", "Surface"));
+    actors.push_back(TreeMeshActor("Sphere_02", "Body"));
+    EditorSceneActorTreeExpansion expansion;
+    expansion.expandedActors.insert(actors[1].identity);
+    const auto rows = BuildSceneActorRows(
+        actors, "", "all", SceneActorSortOrder::NameAscending, expansion);
+    ASSERT_EQ(rows.size(), 4u);
+    EXPECT_TRUE(rows[0].isGroup);
+    EXPECT_EQ(rows[0].actorCount, 2u);
+    EXPECT_FALSE(rows[1].isSlot);
+    EXPECT_TRUE(rows[1].hasChildren);       // 有可打开的槽，但没有展开：不产生槽行
+    EXPECT_FALSE(rows[1].expanded);         // 展开状态按稳定身份记录，不跟着行下标走
+    EXPECT_FALSE(rows[2].isSlot);
+    EXPECT_TRUE(rows[2].hasChildren);
+    EXPECT_TRUE(rows[2].expanded);
+    EXPECT_EQ(rows[2].label, "Sphere_02");
+    EXPECT_TRUE(rows[3].isSlot);
+    EXPECT_EQ(rows[3].label, "Body");
+    EXPECT_EQ(rows[3].actorIndex, 1u);
+    EXPECT_EQ(rows[3].slotIndex, 0u);
+}
+
+TEST_F(UiWidgetTest, SceneActorSortReordersInsideGroupsAndLeavesGroupOrderFixed)
+{
+    std::vector<EditorSceneActorSnapshot> actors{
+        TreeActor(EditorSceneActorType::Mesh, "Zeta"),
+        TreeActor(EditorSceneActorType::Mesh, "alpha"),
+        TreeActor(EditorSceneActorType::PointLight, "Key_Light"),
+        TreeActor(EditorSceneActorType::PointLight, "A_Light"),
+        TreeActor(EditorSceneActorType::Camera, "Camera_01")
+    };
+    const auto ascending = BuildSceneActorRows(actors, "", "all",
+        SceneActorSortOrder::NameAscending, EditorSceneActorTreeExpansion{});
+    const auto descending = BuildSceneActorRows(actors, "", "all",
+        SceneActorSortOrder::NameDescending, EditorSceneActorTreeExpansion{});
+    ASSERT_EQ(ascending.size(), descending.size());
+    // 分组顺序由 SceneActorGroupSpecs() 固定：排序只翻转组内顺序，不重排分组。
+    for (size_t index = 0; index < ascending.size(); ++index)
+        EXPECT_EQ(ascending[index].isGroup, descending[index].isGroup) << index;
+    std::vector<std::string> ascendingLabels;
+    std::vector<std::string> descendingLabels;
+    for (const auto& row : ascending) ascendingLabels.push_back(row.label);
+    for (const auto& row : descending) descendingLabels.push_back(row.label);
+    EXPECT_EQ(ascendingLabels, (std::vector<std::string>{"Point Lights", "A_Light", "Key_Light",
+        "Cameras", "Camera_01", "Meshes", "alpha", "Zeta"}));
+    EXPECT_EQ(descendingLabels, (std::vector<std::string>{"Point Lights", "Key_Light", "A_Light",
+        "Cameras", "Camera_01", "Meshes", "Zeta", "alpha"}));
+
+    // 排序键与 Content Browser 的 sort 控件同一套取值；未知值不被接受。
+    SceneActorSortOrder parsed = SceneActorSortOrder::NameAscending;
+    EXPECT_TRUE(ParseSceneActorSortOrder("name-desc", parsed));
+    EXPECT_EQ(parsed, SceneActorSortOrder::NameDescending);
+    EXPECT_FALSE(ParseSceneActorSortOrder("size", parsed));
+    EXPECT_EQ(parsed, SceneActorSortOrder::NameDescending);
+    EXPECT_STREQ(SceneActorSortOrderKey(SceneActorSortOrder::NameAscending), "name-asc");
+    EXPECT_STREQ(SceneActorSortOrderKey(SceneActorSortOrder::NameDescending), "name-desc");
+}
+
+TEST_F(UiWidgetTest, SceneActorRowsSignatureFollowsRowFieldsOnly)
+{
+    std::vector<EditorSceneActorSnapshot> actors;
+    actors.push_back(TreeMeshActor("Sphere_01", "Surface"));
+    actors.push_back(TreeActor(EditorSceneActorType::DirectionalLight, "Sun_Light"));
+    const uint64_t signature = SceneActorRowsSignature(actors);
+    // 只影响 Details 的字段（灯光强度/相机位姿）不能让树重建。
+    std::vector<EditorSceneActorSnapshot> numeric = actors;
+    numeric[1].light.intensity = 7.5f;
+    numeric[0].meshObjectId = 4242;
+    EXPECT_EQ(SceneActorRowsSignature(numeric), signature);
+    // 行集合/行文本字段必须改变签名。
+    std::vector<EditorSceneActorSnapshot> renamed = actors;
+    renamed[0].displayName = "Sphere_02";
+    EXPECT_NE(SceneActorRowsSignature(renamed), signature);
+    std::vector<EditorSceneActorSnapshot> retyped = actors;
+    retyped[0].type = EditorSceneActorType::PointLight;
+    EXPECT_NE(SceneActorRowsSignature(retyped), signature);
+    std::vector<EditorSceneActorSnapshot> slotChanged = actors;
+    slotChanged[0].sections[0].materialInstancePath.clear();
+    EXPECT_NE(SceneActorRowsSignature(slotChanged), signature);
+    std::vector<EditorSceneActorSnapshot> regenerated = actors;
+    regenerated[0].worldGeneration = 2;
+    regenerated[1].worldGeneration = 2;
+    EXPECT_NE(SceneActorRowsSignature(regenerated), signature);
+}
+} // namespace SceneActorTreeTests
 
 } // namespace

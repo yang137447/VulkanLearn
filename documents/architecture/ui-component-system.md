@@ -1,7 +1,7 @@
 # UI 组件体系
 
-状态：2026-10-11，`codex/rmlui-editor` 分支第四批实现（Scene Outliner 变成真实 World actor 树，
-选中驱动 Details，并接入两条既有运行时命令）。
+状态：2026-10-11，`codex/rmlui-editor` 分支第五批实现（Scene Outliner 行窗口化到固定预算、
+组内排序控件，低基数 actor 分组前置，灯/相机/环境行无需手工折叠即可到达）。
 
 ## 工作区布局
 
@@ -11,7 +11,8 @@
 Material Slots 放在 Details 中。面板可四边停靠、合并标签、在主窗口内浮动后重新停靠，
 分隔条支持拖动并受子树最小尺寸约束；标签切换不提交资产或运行时命令。
 Scene Outliner 现在渲染真实 World actor 树（网格 / 四类灯 / 相机 / 环境 / 风剖面，
-分组可折叠，带类型图标、搜索与类型过滤），选中 actor 由 Details 展示其类型化参数；
+分组可折叠，带类型图标、搜索、类型过滤与组内排序），行集合按滚动位置窗口化，
+低基数分组排在 Meshes 之前；选中 actor 由 Details 展示其类型化参数；
 无打开的 MI 文档时 Details 不再为空。契约见“世界 actor 树契约”。
 面板可以通过 Window 菜单隐藏和恢复，隐藏状态随布局一起保存。
 布局保存至用户目录，支持跨启动恢复和 Reset Layout；不支持独立操作系统窗口。
@@ -53,7 +54,7 @@ GPU backing 保持原生窗口尺寸；相机 aspect、拾取和离线 film 尺�
 | Text / 展示 | Text、Heading、Description | 已实现转义和文本组合 | Image、Icon、Tooltip |
 | Input / 输入 | Button、Input、Slider、Option、Select | 已实现交互地址和样式状态；`Slider` 是 `input type="range"`，与文本输入共用同一个 action/index/component 地址 | CheckBox、SpinBox、ColorPicker |
 | Layout / 容器 | HorizontalBox、VerticalBox、ScrollBox、Splitter | RML/RCSS 组合与受最小尺寸约束的可调分区 | Grid |
-| Views / 数据视图 | ListRow、TreeRow | 已实现行、缩进、展开符号、选择状态、行首类型图标与行样式 class | 虚拟化 ListView/TreeView、TableView、筛选 |
+| Views / 数据视图 | ListRow、TreeRow | 已实现行、缩进、展开符号、选择状态、行首类型图标与行样式 class；世界 actor 树在此之上按行预算挂载可见窗口 | 通用虚拟化 ListView/TreeView、TableView、通用筛选 |
 | Navigation / 导航 | DocumentTab、MenuItem | 已实现激活与关闭分离、菜单项勾选/禁用与条目索引寻址 | 菜单快捷键、Breadcrumb、子菜单键盘导航 |
 | Workspace / 工作区 | DockWorkspace、DockTab、面板可见性、脏关闭弹窗 | 四边停靠、标签合并、窗口内浮动、布局持久化与重置、面板隐藏/恢复 | 原生多窗口、通用 Modal |
 | Property / 属性 | PropertyRow、PropertyGroup、PropertyInfo、PropertyControlRow、CollapsibleSection、NumericComponents、ColorPreview | 已实现属性组合、Reset 地址、向量分量、可选范围滑条、折叠分组、sRGB 色板与十六进制读数、无 Reset 的只读/可编辑行、可寻址数值 span | 多对象混合值、属性适配器、可编辑调色板 |
@@ -61,8 +62,8 @@ GPU backing 保持原生窗口尺寸；相机 aspect、拾取和离线 film 尺�
 
 “已实现”只表示上表的窄组件，不表示已经具备 Slate 同名控件的全部行为。
 通用 ListRow/TreeRow、模型树和 Sources 树尚未虚拟化；
-Content Browser 业务网格/列表已有受限可见窗口，JSON inspector 使用分页，
-不等同于通用 ListView/TreeView 已完成。
+Content Browser 业务网格/列表与 Scene Outliner 世界 actor 树已有受限可见窗口，
+JSON inspector 使用分页，不等同于通用 ListView/TreeView 已完成。
 数值组件是文本输入加可选范围滑条：滑条只做范围语义下的快速调整，
 精确输入仍由同一行的文本输入负责，两者共用同一个 action/index/component 地址。
 分组折叠只改既有分组元素上的 class，不重建 DOM；
@@ -109,8 +110,9 @@ ImGui→RmlUi 迁移丢了三项 Details 面板能力，本批把它们补回，
   World 构建与渲染路径，属于单独一轮；因此大纲里不放一个点了没有效果的隐藏按钮。
 - 没有地形节点：`World` 没有 terrain 访问器，仓库里也没有 terrain 运行时
   （场景选择器只把 `"terrain"` 列入受支持类型，资产浏览器只有 Terrain JSON 元数据）。
-- 大纲不做虚拟化：每帧重建 markup 字符串再由值缓存决定是否写 DOM，
-  与迁移前的模型树同一策略。
+- 大纲行窗口化只覆盖世界 actor 树：通用 `TreeRow` 组件本身仍不虚拟化，
+  模型树与 Sources 树也仍整棵挂载。
+- 大纲仍是单选：没有多选、没有拖放/重父级，也没有改名（改名同样属于场景文档阶段）。
 - 没有资产缩略图、没有模型几何预览、没有纹理像素查看器。
 - 没有可编辑调色板（含 HSV 面板），也没有步进控件：Details 目前只有
   范围滑条、文本输入和 sRGB 色板读数。
@@ -148,7 +150,8 @@ main 排除递归收集的 widget 源文件，链接独立库，避免重复编�
 组件不解释它的业务含义；宿主统一解析事件并提交现有命令。
 条目索引只在当前快照中有效，不能作为跨 World 的对象身份。
 大纲宿主按稳定 actor 身份记录展开/折叠，World generation 变化时清空展开、折叠、
-搜索与过滤；子材质节点与现有 Material Slots 走同一个选择 sink。
+搜索与过滤（排序是面板偏好，与 Content Browser 的排序键一样跨换代保留）；
+子材质节点与现有 Material Slots 走同一个选择 sink。
 树组件不会打开文件或持有 scene object 指针。
 
 用户/资产提供的标签、id、action、option 值均通过 Text() 转义。
@@ -201,12 +204,35 @@ Scene Outliner（`#editor-navigation`，仍是 `DockWorkspace::Panels()` 里的 
   （`BuildWorld*LightSnapshot`），对象 `RuntimeId` 复用 `WorldObjectRuntimeId`，
   避免第二份身份规则与选择描边漂移。
 - **分组与顺序**：`SceneActorGroupSpecs()` 是唯一分组清单（类型、过滤键、标题、图标），
-  顺序固定；组内按显示名做 ASCII 大小写不敏感比较，再按稳定身份打破平局，
-  不依赖 `unordered_map` 遍历顺序。分组可折叠，折叠只影响行是否挂进 DOM。
-- **搜索与过滤**：搜索复用 Content Browser 的 `FoldAsciiCase`
+  顺序固定且**低基数类型在前、Meshes 最后**（灯光 → 相机 → 环境 → 风剖面 → 网格）。
+  这个顺序是契约而不是排序控件的输出：默认场景有 122 个网格，Meshes 在前会把
+  灯/相机/环境整组挤出可视区（第四轮实测症状）。组内按显示名做 ASCII 大小写不敏感
+  比较，再按稳定身份打破平局，不依赖 `unordered_map` 遍历顺序。
+- **行窗口预算**：`SceneActorMaxMountedRows = 192`、`SceneActorOverscanRows = 2`
+  位于 `source/editor/ui/editorSceneActorTree.h`（与 Content Browser 的
+  `MaxVisibleItems` 同一量级）。`#scene-models` 任一时刻挂载的行节点不超过该预算，
+  另加最多两个 `.outliner-spacer`；spacer 用"整行高 × 未挂载行数"补齐滚动范围，
+  因此完整树（默认场景 130 行）仍可整段滚动到达，不是截断前 192 行。
+  窗口由 `ComputeSceneActorWindow(行数, 可视高度, 滚动偏移, 行高)` 纯计算得出，
+  宿主按"行集合 revision + 窗口恒等 + 选中态"决定是否重挂 DOM。
+- **行高假设**：树行等高是窗口化的前提，由 RCSS 显式固定
+  （`#scene-models .tree-row { height: 30px; }` + `.list-item { line-height: 16px;
+  white-space: nowrap; text-overflow: ellipsis; }`）。分组行（粗体）、actor 行与
+  缩进的槽行因此同高；长名称按省略号裁剪而不是把一行撑成两行。
+  宿主逐帧从已挂载行的 margin box 实测行高（首帧用
+  `SceneActorRowHeightFallback = 30`），因为行高一变 spacer 高度就会与真实内容不符、
+  滚动位置随之漂移。`EditorUiTest.OutlinerRowHeightsAreUniformAcrossRowKinds`
+  用真实 RmlUi 布局量三种行形态的 margin box 来守这条假设。
+- **折叠与窗口**：折叠的分组只输出表头，子行不进入行集合，因此既不挂 DOM、
+  也不占窗口槽位、也不产生 spacer 高度；全部折叠后的树必须一次装进窗口。
+- **搜索、过滤与排序**：搜索复用 Content Browser 的 `FoldAsciiCase`
   （`editor/editorTextMatch.h`），只折叠 ASCII 大小写、保留 UTF-8 多字节名称；
-  类型过滤取值就是分组键。两者都只改变可见性，不提交任何命令。
-  计数显示的是筛选结果（`N / M actors`），与 Content Browser 的计数同一语义。
+  类型过滤取值就是分组键。`#outliner-sort` 与 `#browser-sort` 同键
+  （`name-asc` / `name-desc`），只重排**组内**顺序，不重排分组，
+  也不改变选中身份、展开集合与滚动偏移。三者都只改可见性/顺序，不提交任何命令。
+  计数显示的是筛选结果（`N / M actors`，等于各分组行 `actorCount` 之和），
+  与 Content Browser 的计数同一语义，与折叠状态和挂载窗口无关。
+  没有第三种排序：组内所有行的类型相同，按类型名排序在组内恒为平局。
 - **选择路由**：mesh actor 继续走 `RequestModelSelection`，材质槽继续走
   `RequestMaterialSelection`（MI 文档、Material Slots 与视口描边行为不变）；
   非网格 actor 走新的 `RequestActorSelection(稳定身份)`，同时要求 EngineLoop 清掉
@@ -218,6 +244,9 @@ Scene Outliner（`#editor-navigation`，仍是 `DockWorkspace::Panels()` 里的 
   `SetCsmCastShadows`，没有第三条 UI→renderer 路径，也不新增命令。
   MI 文档分组不变，actor 分组在它之前。
 - **无可见性开关**：见“当前确认缺席的能力”；大纲不放没有后端的控件。
+- **仍是单选、没有拖放**：大纲一次只有一个选中身份（`snapshot.selectedActorIdentity`
+  加可选的材质槽号），没有多选、没有拖放/重父级，也没有改名；
+  窗口化不改变这一点——挂载的行节点与事件地址仍是一对一。
 
 ## Content Browser
 
@@ -292,7 +321,9 @@ JSON 文件字节仍在 worker 读取，内嵌 `data` 仍做语法、字节数�
 快照、请求路径、loading、展开、搜索或页码变化才刷新，静止帧不重建字段 markup。
 它无资产写入或运行时激活入口，MI 编辑仍由现有文档命令与 revision/batch 契约负责。
 浏览窗口常量 `MaxVisibleItems = 192`、`OverscanRows = 2` 位于
-`source/editor/ui/editorContentBrowserController.cpp`。
+`source/editor/ui/editorContentBrowserController.cpp`；世界 actor 树的同类常量
+`SceneActorMaxMountedRows = 192`、`SceneActorOverscanRows = 2`、
+`SceneActorRowHeightFallback = 30` 位于 `source/editor/ui/editorSceneActorTree.h`。
 
 绘制侧仍每帧冻结 UI draw snapshot，但 CPU 数组按上一帧数量预留容量；
 `UiOverlayRendererVulkan` 的 per-image 动态缓冲不足时才扩容，
@@ -415,6 +446,15 @@ mesh actor 与材质槽仍走既有 MI 选择路径、非网格 actor 走 `Reque
 无 MI 文档时 Details 展示选中 actor、只读字段按行刷新且节点身份稳定、
 主方向光的两个可编辑控件（含同值不发命令、非有限数与非区间值拒绝）、
 以及 Details 强度控件区间与运行时页 `#sun-intensity-slider` 一致的漂移守卫。
+第五批新增窗口/排序用例：纯数学放在 `widgetTests.cpp`（窗口挂载区间上界、
+spacer 高度之和等于整棵树、滚动到底必须挂到真正的最后一行、50000 行仍受 192 预算约束、
+折叠分组只贡献表头且整棵折叠后不需要 spacer、展开 mesh actor 按模型顺序追加槽行、
+组内排序只翻转组内顺序且分组顺序不变、排序键解析拒绝未知值、
+行内容签名只跟随行级字段），面板侧放在 `editorUiTests.cpp`
+（三种行形态的 margin box 等高实测、122 mesh 场景挂载行数受预算约束且计数是筛选总数、
+滚动换一批挂载行并能到达最后一行、折叠后无 spacer 且计数不变、
+排序在保持分组顺序/选中/展开/滚动偏移的同时真正重排、排序控件落在过滤栏矩形内、
+Detach 期间 Build 不触碰文档且重新 Attach 后重挂一次）。
 工作区测试验证 960×540、1280×720、1920×1080 的分区边界，
 以及 Viewport 命中穿透、标签切换和重载后的标签保持。
 `dockingTests.cpp` 覆盖纯布局树、真实 RmlUi 指针拖动、分隔条、浮动/重新停靠、
