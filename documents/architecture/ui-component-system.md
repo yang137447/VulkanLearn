@@ -1,7 +1,7 @@
 # UI 组件体系
 
-状态：2026-10-11，`codex/rmlui-editor` 分支第五批实现（Scene Outliner 行窗口化到固定预算、
-组内排序控件，低基数 actor 分组前置，灯/相机/环境行无需手工折叠即可到达）。
+状态：2026-10-11，`codex/rmlui-editor` 分支第六批实现（逐 actor 可见性：World/快照
+过滤、`SetActorVisible` 命令、大纲行尾眼睛开关，运行时状态不持久化）。
 
 ## 工作区布局
 
@@ -12,7 +12,8 @@ Material Slots 放在 Details 中。面板可四边停靠、合并标签、在�
 分隔条支持拖动并受子树最小尺寸约束；标签切换不提交资产或运行时命令。
 Scene Outliner 现在渲染真实 World actor 树（网格 / 四类灯 / 相机 / 环境 / 风剖面，
 分组可折叠，带类型图标、搜索、类型过滤与组内排序），行集合按滚动位置窗口化，
-低基数分组排在 Meshes 之前；选中 actor 由 Details 展示其类型化参数；
+每个可渲染 actor 行带一个可见性开关（行尾眼睛），低基数分组排在 Meshes 之前；
+选中 actor 由 Details 展示其类型化参数；
 无打开的 MI 文档时 Details 不再为空。契约见“世界 actor 树契约”。
 面板可以通过 Window 菜单隐藏和恢复，隐藏状态随布局一起保存。
 布局保存至用户目录，支持跨启动恢复和 Reset Layout；不支持独立操作系统窗口。
@@ -54,11 +55,11 @@ GPU backing 保持原生窗口尺寸；相机 aspect、拾取和离线 film 尺�
 | Text / 展示 | Text、Heading、Description | 已实现转义和文本组合 | Image、Icon、Tooltip |
 | Input / 输入 | Button、Input、Slider、Option、Select | 已实现交互地址和样式状态；`Slider` 是 `input type="range"`，与文本输入共用同一个 action/index/component 地址 | CheckBox、SpinBox、ColorPicker |
 | Layout / 容器 | HorizontalBox、VerticalBox、ScrollBox、Splitter | RML/RCSS 组合与受最小尺寸约束的可调分区 | Grid |
-| Views / 数据视图 | ListRow、TreeRow | 已实现行、缩进、展开符号、选择状态、行首类型图标与行样式 class；世界 actor 树在此之上按行预算挂载可见窗口 | 通用虚拟化 ListView/TreeView、TableView、通用筛选 |
+| Views / 数据视图 | ListRow、TreeRow | 已实现行、缩进、展开符号、选择状态、行首类型图标、行尾附加控件（逐 actor 可见性）与行样式 class；世界 actor 树在此之上按行预算挂载可见窗口 | 通用虚拟化 ListView/TreeView、TableView、通用筛选 |
 | Navigation / 导航 | DocumentTab、MenuItem | 已实现激活与关闭分离、菜单项勾选/禁用与条目索引寻址 | 菜单快捷键、Breadcrumb、子菜单键盘导航 |
 | Workspace / 工作区 | DockWorkspace、DockTab、面板可见性、脏关闭弹窗 | 四边停靠、标签合并、窗口内浮动、布局持久化与重置、面板隐藏/恢复 | 原生多窗口、通用 Modal |
 | Property / 属性 | PropertyRow、PropertyGroup、PropertyInfo、PropertyControlRow、CollapsibleSection、NumericComponents、ColorPreview | 已实现属性组合、Reset 地址、向量分量、可选范围滑条、折叠分组、sRGB 色板与十六进制读数、无 Reset 的只读/可编辑行、可寻址数值 span | 多对象混合值、属性适配器、可编辑调色板 |
-| Editor / 业务 | 顶部菜单栏、世界 actor 树、JSON Content Browser、MI Details、actor Details、资源编辑器、离线控制、Viewport、视口工具条 | 已接入组件、受限浏览窗口/分页、资源标签、renderer-owned 离屏视口、World actor 树与 actor 详情（含两条既有运行时命令）、视口工具条中只有 view mode 有真实后端 | 真实模型/纹理预览、场景对象增删改、gizmo |
+| Editor / 业务 | 顶部菜单栏、世界 actor 树、JSON Content Browser、MI Details、actor Details、资源编辑器、离线控制、Viewport、视口工具条 | 已接入组件、受限浏览窗口/分页、资源标签、renderer-owned 离屏视口、World actor 树与 actor 详情（三条既有运行时命令，含逐 actor 可见性）、视口工具条中只有 view mode 有真实后端 | 真实模型/纹理预览、场景对象增删改、gizmo |
 
 “已实现”只表示上表的窄组件，不表示已经具备 Slate 同名控件的全部行为。
 通用 ListRow/TreeRow、模型树和 Sources 树尚未虚拟化；
@@ -105,9 +106,9 @@ ImGui→RmlUi 迁移丢了三项 Details 面板能力，本批把它们补回，
 
 - 没有 gizmo、没有 transform 编辑，也没有场景对象的增/删/复制/改名。
 - 完全没有 Undo/Redo 系统；`Edit` 菜单里的 Undo/Redo 是常驻禁用的占位。
-- 没有逐 actor 的可见性/隐藏开关：`WorldMeshObject`、`MeshDrawSnapshot` 与渲染图
-  都没有逐对象可见性状态，加它要同时改场景 JSON schema、`SceneAssetValidator`、
-  World 构建与渲染路径，属于单独一轮；因此大纲里不放一个点了没有效果的隐藏按钮。
+- 逐 actor 可见性只有**运行时**语义：开关不写进场景 JSON，`SceneAssetValidator`
+  不认识它，也没有 `SaveVisibilityToScene` 之类的动作；重新加载场景后所有 actor
+  都是可见的。持久化可见性属于场景文档阶段（与 transform 编辑同一批）。
 - 没有地形节点：`World` 没有 terrain 访问器，仓库里也没有 terrain 运行时
   （场景选择器只把 `"terrain"` 列入受支持类型，资产浏览器只有 Terrain JSON 元数据）。
 - 大纲行窗口化只覆盖世界 actor 树：通用 `TreeRow` 组件本身仍不虚拟化，
@@ -243,7 +244,37 @@ Scene Outliner（`#editor-navigation`，仍是 `DockWorkspace::Panels()` 里的 
   （Intensity 与 Cast Shadows），两者都只用既有 `UiActionType::SetSunIntensity` /
   `SetCsmCastShadows`，没有第三条 UI→renderer 路径，也不新增命令。
   MI 文档分组不变，actor 分组在它之前。
-- **无可见性开关**：见“当前确认缺席的能力”；大纲不放没有后端的控件。
+- **逐 actor 可见性（本轮新增）**：网格与四类灯的 actor 行在行尾有一个眼睛开关
+  （`data-action="outliner-visible"`），点击只提交一条
+  `UiActionType::SetActorVisible`（`stringValue` = 稳定身份，`intValue` = 0/1），
+  经 EngineLoop → `RuntimeCommandType::SetActorVisible` →
+  `RuntimeCommandExecutor` 落到 World；没有第三条路径，UI 回调不访问 World。
+  相机 / 环境 / 风剖面没有渲染侧可见性状态，因此**不显示**眼睛
+  （`SceneActorHasVisibilityToggle()`）。
+  - **状态归属与渲染过滤**：可见性是 World 拥有的运行时游戏状态
+    （`WorldMeshObject::visible`、`SceneNode::visible`、
+    `WorldSquareAreaLight::visible`），由 `World::SetMeshObjectVisible` /
+    `SetLightVisible` / `SetSquareAreaLightVisible` 写入；对象不在当前 World 时
+    返回 false，执行端给出人类可读诊断而不是静默忽略。
+    过滤发生在 `WorldSnapshotBuilder::Build()`——不可见的网格与灯光**不进入**
+    `snapshot.meshDraws` / `snapshot.lights`。`meshDraws` 同时是出图、拾取、
+    MaterialInstance 上下文与阴影 pass 的唯一来源，因此"不可见"在构造处生效
+    就等于对整条渲染路径生效，渲染器里没有第二处可见性分支。
+  - **没有快照缓存需要失效**：`RenderSystem::Render()`（单线程）与
+    EngineLoop 的 `PublishSnapshotFromActiveWorld()`（双线程）**每帧**都从 active
+    World 重新构建快照，`currentRenderScene` 也随之逐帧重建，因此可见性翻转在下一帧
+    直接上屏，不需要 World 换代，也不触发 `device.waitIdle()`。
+  - **行表现**：可见时 `icons/eye.png`、隐藏时 `icons/eye-off.png`，
+    隐藏行同时得到 class `hidden-row`（标签色 `#7c7c85`、行首图标 opacity 0.45），
+    因此"这一行代表不可见对象"有两个像素可回读的信号。
+    眼睛是行的 flex 兄弟节点（与 `document-tab` 的关闭按钮同一做法），
+    行高仍由 RCSS 固定为 30px；点击眼睛不改变选择、展开、滚动偏移与行窗口。
+  - **隐藏不改选择与文档**：隐藏的 actor 仍可选中、仍驱动 Details，
+    它的材质实例文档与槽行都不受影响（可见性不参与 MI 导航）。
+    视口拾取来自 `meshDraws`，因此隐藏的网格**不可拾取**，
+    与"隐藏等于从场景里看不见"一致；重新显示后自动恢复可拾取。
+  - **不持久化**：可见性不是场景 JSON 字段，`SceneAssetValidator` 不认识它，
+    也没有保存命令；重新加载场景一律从"全部可见"开始。
 - **仍是单选、没有拖放**：大纲一次只有一个选中身份（`snapshot.selectedActorIdentity`
   加可选的材质槽号），没有多选、没有拖放/重父级，也没有改名；
   窗口化不改变这一点——挂载的行节点与事件地址仍是一对一。
@@ -425,6 +456,10 @@ RGBA 分支的整数分量路径）。该分支只接受 `0`–`255` 整数或�
 模块测试放在 `tool/editor-ui-tests/widgetTests.cpp`，使用真实 RmlUi，
 经根 `vulkanlearn_add_gtest` 注册到 editor_ui_tests：
 转义、选项替换、焦点保留、缓存、禁用状态、布局、树行和标签事件地址。
+`editor_ui_tests` 也编入 `source/world/world.cpp`、`source/world/worldSnapshotBuilder.cpp`、
+`source/editor/scene/editorSceneActorBuilder.cpp` 与 `source/sceneNode.cpp`，
+因此逐 actor 可见性的 World/快照回归跑的是真实 World 与真实快照构建器，
+而不是测试替身。
 本批新增纯组件与颜色用例：范围分量生成滑条并与文本输入共用同一地址、
 退化区间不写 `step`、范围控件在重复快照推送下不回写 `value`、
 `MakeColorReadout` 的线性→sRGB→十六进制（0/1/中灰/alpha）、
@@ -455,6 +490,16 @@ spacer 高度之和等于整棵树、滚动到底必须挂到真正的最后一�
 滚动换一批挂载行并能到达最后一行、折叠后无 spacer 且计数不变、
 排序在保持分组顺序/选中/展开/滚动偏移的同时真正重排、排序控件落在过滤栏矩形内、
 Detach 期间 Build 不触碰文档且重新 Attach 后重挂一次）。
+第六批新增可见性用例：`widgetTests.cpp` 覆盖 `TreeRow` 行尾控件是选择按钮之外的
+独立动作地址、`hiddenRow` 是固定 class 而不是宿主可控文本、
+`SceneActorIdentity` ↔ `ParseSceneActorIdentity` 往返（含名字自带 `|`、
+未知分组键、空名字被拒绝），以及只有网格与四类灯提供开关；
+`editorUiTests.cpp` 覆盖真实 World 的三条可见性写入端（未知名字返回 false）、
+快照构建器真的**省略**不可见网格与灯光（含恢复后数量与身份回到初始）、
+`BuildEditorSceneActors` 把 World 可见性发布到冻结快照（相机/环境恒为可见）、
+点眼睛只提交一条 `SetActorVisible` 且不动选择/展开/滚动/行高/行数，
+以及隐藏态的 eye-off 图标、`hidden-row` class、仍可选中并驱动 Details、
+眼睛几何落在树的可视矩形内、图标盒恒为 14px。
 工作区测试验证 960×540、1280×720、1920×1080 的分区边界，
 以及 Viewport 命中穿透、标签切换和重载后的标签保持。
 `dockingTests.cpp` 覆盖纯布局树、真实 RmlUi 指针拖动、分隔条、浮动/重新停靠、

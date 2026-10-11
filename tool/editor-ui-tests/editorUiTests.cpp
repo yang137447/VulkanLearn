@@ -19,6 +19,10 @@
 
 #include "editor/ui/materialInstanceAssetEditorPanel.h"
 #include "editor/ui/editorSceneActorTree.h"
+#include "editor/scene/editorSceneActorBuilder.h"
+#include "sceneNode.h"
+#include "world/world.h"
+#include "world/worldSnapshotBuilder.h"
 
 namespace
 {
@@ -330,6 +334,32 @@ protected:
             return row->QuerySelector(".tree-toggle");
         }
         return nullptr;
+    }
+    // 行的可见性开关：与 OutlinerToggle 同一套定位方式，动作在 .tree-trailing 上。
+    Rml::Element* OutlinerVisibilityToggle(const std::string& label) const
+    {
+        for (auto* row : MountedRows())
+        {
+            auto* item = row->QuerySelector(".list-item");
+            if (item == nullptr || RowLabel(item) != label) continue;
+            return row->QuerySelector(".tree-trailing");
+        }
+        return nullptr;
+    }
+    Rml::Element* OutlinerRowElement(const std::string& label) const
+    {
+        for (auto* row : MountedRows())
+        {
+            auto* item = row->QuerySelector(".list-item");
+            if (item != nullptr && RowLabel(item) == label) return row;
+        }
+        return nullptr;
+    }
+    // 眼睛按钮里的图标路径：用来断言"可见 = eye.png / 隐藏 = eye-off.png"。
+    static std::string TrailingIcon(Rml::Element* toggle)
+    {
+        auto* image = toggle == nullptr ? nullptr : toggle->QuerySelector("img");
+        return image == nullptr ? std::string() : image->GetAttribute<std::string>("src", "");
     }
     float OutlinerRowHeight() const
     {
@@ -1045,9 +1075,10 @@ TEST_F(EditorUiTest, OutlinerGroupsActorsByTypeWithStableOrderAndCount)
         (std::vector<std::string>{"Key_Light", "Camera_01", "alpha", "Zeta"}));
     EXPECT_EQ(OutlinerCount(), "4 actors");
     EXPECT_FALSE(document->GetElementById("outliner-empty")->IsVisible());
-    // 每次选择都要有类型图标：4 个 actor 行各一个。
+    // 每次选择都要有类型图标：4 个 actor 行各一个（行尾眼睛不在 .list-item 里，
+    // 由下面专门断言可见性开关的用例覆盖）。
     Rml::ElementList icons;
-    document->GetElementById("scene-models")->QuerySelectorAll(icons, "img.row-icon");
+    document->GetElementById("scene-models")->QuerySelectorAll(icons, ".list-item img.row-icon");
     EXPECT_EQ(icons.size(), 4u);
     EXPECT_TRUE(sink.commands.empty());
     EXPECT_TRUE(runtimeSink.actions.empty());
@@ -2091,6 +2122,305 @@ TEST_F(EditorUiTest, ViewportToolbarOverlayIsNotASceneHit)
     // 图像内部但避开工具条的位置仍然是场景命中。
     EXPECT_TRUE(panel->IsSceneViewportElement(
         context->GetElementAtPoint({imageOrigin.x + 40.0f, imageOrigin.y + 140.0f})));
+}
+
+// ---------------------------------------------------------------------------
+// 逐 actor 可见性：World / 快照侧回归。
+// 这里刻意用真实 World + 真实 WorldSnapshotBuilder（两个源文件编进 editor_ui_tests）：
+// 过滤发生在快照构建处、渲染器不再做第二次判断，因此"隐藏 = 不可见"必须在快照这一层
+// 被证明，而不是只证明大纲那一行的图标变了。
+// ---------------------------------------------------------------------------
+
+WorldMeshObject VisibilityTestMesh(const std::string& name)
+{
+    WorldMeshObject object;
+    object.debugName = name;
+    object.sceneObjectIdentity = name;
+    object.meshKey = "SM_test|0|Body";
+    object.materialKey = "M_test";
+    object.materialInstanceKey = "Maps/SC_test/Materials/MI_test.json";
+    object.localBoundsMin = Eigen::Vector3f(-1.0f, -1.0f, -1.0f);
+    object.localBoundsMax = Eigen::Vector3f(1.0f, 1.0f, 1.0f);
+    return object;
+}
+
+World MakeVisibilityTestWorld()
+{
+    World world(7, "Maps/SC_test/SC_test.json");
+    auto camera = std::make_shared<Camera>();
+    // 不走 Camera 默认构造里的窗口尺寸读取：测试不依赖 config/ 的当前工作目录。
+    camera->SetProjection(60.0f, 16.0f / 9.0f, 0.1f, 100.0f);
+    world.SetCamera(std::move(camera));
+    world.AddMeshObject("Sphere_A", VisibilityTestMesh("Sphere_A"));
+    world.AddMeshObject("Sphere_B", VisibilityTestMesh("Sphere_B"));
+    world.AddDirectionalLight("Sun_Light", std::make_shared<DirectionalLight>());
+    world.AddPointLight("Key_Light", std::make_shared<PointLight>());
+    world.AddSquareAreaLight("Area_Light", WorldSquareAreaLight{});
+    return world;
+}
+
+WorldSnapshot BuildVisibilityTestSnapshot(const World& world)
+{
+    WorldSnapshotBuilder builder;
+    WorldSnapshotBuildDesc desc;
+    desc.worldGeneration = world.GetGeneration();
+    auto result = builder.Build(world, desc);
+    EXPECT_FALSE(result.IsFailure());
+    return result.IsFailure() ? WorldSnapshot{} : std::move(result.Value());
+}
+
+size_t CountLightSnapshots(const WorldSnapshot& snapshot, LightSnapshotType type)
+{
+    size_t count = 0;
+    for (const LightSnapshot& light : snapshot.lights)
+        if (light.type == type) ++count;
+    return count;
+}
+
+size_t CountMeshDraws(const WorldSnapshot& snapshot, const std::string& debugName)
+{
+    size_t count = 0;
+    for (const MeshDrawSnapshot& draw : snapshot.meshDraws)
+        if (draw.debugName == debugName) ++count;
+    return count;
+}
+
+TEST_F(EditorUiTest, WorldVisibilitySettersRejectNamesThatAreNotInTheActiveWorld)
+{
+    World world = MakeVisibilityTestWorld();
+
+    // 默认全部可见：可见性是运行时状态，重载场景一律从"全部可见"开始。
+    for (const auto& entry : world.GetMeshObjects()) EXPECT_TRUE(entry.second.visible);
+    EXPECT_TRUE(world.GetPrimaryDirectionalLight()->IsVisible());
+
+    EXPECT_TRUE(world.SetMeshObjectVisible("Sphere_A", false));
+    EXPECT_FALSE(world.GetMeshObjects().at("Sphere_A").visible);
+    EXPECT_TRUE(world.GetMeshObjects().at("Sphere_B").visible);
+
+    EXPECT_TRUE(world.SetLightVisible("Sun_Light", false));
+    EXPECT_FALSE(world.GetPrimaryDirectionalLight()->IsVisible());
+    EXPECT_TRUE(world.GetPointLights().at("Key_Light")->IsVisible());
+
+    EXPECT_TRUE(world.SetSquareAreaLightVisible("Area_Light", false));
+    EXPECT_FALSE(world.GetSquareAreaLights().at("Area_Light").visible);
+
+    // 陈旧或伪造身份必须报告失败，而不是静默改不到东西或套用到别的对象上。
+    EXPECT_FALSE(world.SetMeshObjectVisible("Sphere_Gone", false));
+    EXPECT_FALSE(world.SetLightVisible("Sphere_A", false));
+    EXPECT_FALSE(world.SetSquareAreaLightVisible("Key_Light", false));
+}
+
+TEST_F(EditorUiTest, SnapshotBuilderOmitsInvisibleMeshesAndLights)
+{
+    World world = MakeVisibilityTestWorld();
+
+    const WorldSnapshot visible = BuildVisibilityTestSnapshot(world);
+    ASSERT_EQ(visible.meshDraws.size(), 2u);
+    EXPECT_EQ(CountLightSnapshots(visible, LightSnapshotType::Directional), 1u);
+    EXPECT_EQ(CountLightSnapshots(visible, LightSnapshotType::Point), 1u);
+    // 方形面光同样按可见性过滤：实时路径目前不接受它，但快照语义要一致。
+    EXPECT_EQ(CountLightSnapshots(visible, LightSnapshotType::SquareArea), 1u);
+
+    ASSERT_TRUE(world.SetMeshObjectVisible("Sphere_A", false));
+    ASSERT_TRUE(world.SetLightVisible("Sun_Light", false));
+    ASSERT_TRUE(world.SetSquareAreaLightVisible("Area_Light", false));
+
+    const WorldSnapshot hidden = BuildVisibilityTestSnapshot(world);
+    // meshDraws 同时是出图、拾取、MaterialInstance 上下文与阴影 pass 的唯一来源，
+    // 因此"不可见"在这一处生效就等于对整条渲染路径生效。
+    ASSERT_EQ(hidden.meshDraws.size(), 1u);
+    EXPECT_EQ(CountMeshDraws(hidden, "Sphere_A"), 0u);
+    EXPECT_EQ(CountMeshDraws(hidden, "Sphere_B"), 1u);
+    EXPECT_EQ(CountLightSnapshots(hidden, LightSnapshotType::Directional), 0u);
+    EXPECT_EQ(CountLightSnapshots(hidden, LightSnapshotType::Point), 1u);
+    EXPECT_EQ(CountLightSnapshots(hidden, LightSnapshotType::SquareArea), 0u);
+
+    // 重新显示必须回到与最初一致的数量与身份。
+    ASSERT_TRUE(world.SetMeshObjectVisible("Sphere_A", true));
+    ASSERT_TRUE(world.SetLightVisible("Sun_Light", true));
+    ASSERT_TRUE(world.SetSquareAreaLightVisible("Area_Light", true));
+    const WorldSnapshot restored = BuildVisibilityTestSnapshot(world);
+    EXPECT_EQ(restored.meshDraws.size(), visible.meshDraws.size());
+    EXPECT_EQ(restored.lights.size(), visible.lights.size());
+    EXPECT_EQ(CountMeshDraws(restored, "Sphere_A"), 1u);
+    EXPECT_EQ(CountLightSnapshots(restored, LightSnapshotType::Directional), 1u);
+}
+
+TEST_F(EditorUiTest, SceneActorSnapshotPublishesTheWorldVisibilityFlag)
+{
+    World world = MakeVisibilityTestWorld();
+    ASSERT_TRUE(world.SetMeshObjectVisible("Sphere_A", false));
+    ASSERT_TRUE(world.SetLightVisible("Sun_Light", false));
+
+    const std::vector<EditorSceneActorSnapshot> actors = BuildEditorSceneActors(world);
+    ASSERT_FALSE(actors.empty());
+
+    bool sawHiddenMesh = false;
+    bool sawVisibleMesh = false;
+    bool sawHiddenSun = false;
+    bool sawVisiblePointLight = false;
+    for (const EditorSceneActorSnapshot& actor : actors)
+    {
+        if (actor.identity == "mesh|Sphere_A")
+        {
+            sawHiddenMesh = true;
+            EXPECT_FALSE(actor.visible);
+        }
+        if (actor.identity == "mesh|Sphere_B")
+        {
+            sawVisibleMesh = true;
+            EXPECT_TRUE(actor.visible);
+        }
+        if (actor.identity == "directionalLight|Sun_Light")
+        {
+            sawHiddenSun = true;
+            EXPECT_FALSE(actor.visible);
+        }
+        if (actor.identity == "pointLight|Key_Light")
+        {
+            sawVisiblePointLight = true;
+            EXPECT_TRUE(actor.visible);
+        }
+        // 相机/环境/风剖面没有渲染侧可见性，因此恒为可见，也不显示眼睛。
+        if (actor.type == EditorSceneActorType::Camera ||
+            actor.type == EditorSceneActorType::Environment)
+        {
+            EXPECT_TRUE(actor.visible);
+        }
+    }
+    EXPECT_TRUE(sawHiddenMesh);
+    EXPECT_TRUE(sawVisibleMesh);
+    EXPECT_TRUE(sawHiddenSun);
+    EXPECT_TRUE(sawVisiblePointLight);
+
+    // 大纲眼睛的可寻址身份必须就是这里发布的稳定身份，否则执行端会拒绝命令。
+    EditorSceneActorIdentity parsed;
+    ASSERT_TRUE(ParseSceneActorIdentity("directionalLight|Sun_Light", parsed));
+    EXPECT_EQ(parsed.type, EditorSceneActorType::DirectionalLight);
+    EXPECT_EQ(parsed.name, "Sun_Light");
+}
+
+TEST_F(EditorUiTest, OutlinerVisibilityToggleQueuesOneCommandAndDisturbsNothingElse)
+{
+    AddActor(MeshActor("Sphere_01", 1));
+    AddActor(SunActor(1.0f, true));
+    AddActor(CameraActor("Camera_01"));
+    SettleOutliner();
+
+    // 只有真正有渲染侧可见性状态的对象才有眼睛；相机没有，因此不为它摆一个假控件。
+    ASSERT_NE(OutlinerVisibilityToggle("Sphere_01"), nullptr);
+    ASSERT_NE(OutlinerVisibilityToggle("Sun_Light"), nullptr);
+    EXPECT_EQ(OutlinerVisibilityToggle("Camera_01"), nullptr);
+
+    // 挂载前记录会被"点眼睛"影响的一切：行高、展开标记、计数、选中态与滚动偏移。
+    const float rowHeight = OutlinerRowHeight();
+    const size_t rowCount = MountedRows().size();
+    auto* tree = document->GetElementById("scene-models");
+    const float scrollBefore = tree->GetScrollTop();
+    auto* expandToggle = OutlinerToggle("Sphere_01");
+    ASSERT_NE(expandToggle, nullptr);
+    const std::string expandBefore = expandToggle->GetInnerRML();
+
+    auto* eye = OutlinerVisibilityToggle("Sphere_01");
+    ASSERT_NE(eye, nullptr);
+    eye->DispatchEvent("click", {});
+
+    // 恰好一条运行时命令，走既有 UiAction 路由；不提交任何资产命令，也不改选择。
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions.front().type, UiActionType::SetActorVisible);
+    EXPECT_EQ(runtimeSink.actions.front().stringValue, "mesh|Sphere_01");
+    EXPECT_EQ(runtimeSink.actions.front().intValue, 0);
+    EXPECT_TRUE(sink.commands.empty());
+    EXPECT_TRUE(selectionSink.selectedActorIdentity.empty());
+    EXPECT_TRUE(selectionSink.selectedModel.has_value() == false);
+    EXPECT_TRUE(selectionSink.selectedMaterial.has_value() == false);
+
+    // 行几何、展开状态、计数与滚动位置都不受影响：点的不是行本身。
+    EXPECT_FLOAT_EQ(OutlinerRowHeight(), rowHeight);
+    EXPECT_EQ(MountedRows().size(), rowCount);
+    EXPECT_FLOAT_EQ(tree->GetScrollTop(), scrollBefore);
+    ASSERT_NE(OutlinerToggle("Sphere_01"), nullptr);
+    EXPECT_EQ(OutlinerToggle("Sphere_01")->GetInnerRML(), expandBefore);
+
+    // 眼睛必须真的落在树的可视矩形内：它曾经是绝对定位 + 未约束尺寸的 32px 图标，
+    // 布局上存在、像素上完全不可见，合成点击仍然"通过"。这条断言把几何钉住。
+    auto* eyeRow = OutlinerRowElement("Sphere_01");
+    ASSERT_NE(eyeRow, nullptr);
+    auto* eyeAfter = OutlinerVisibilityToggle("Sphere_01");
+    ASSERT_NE(eyeAfter, nullptr);
+    const auto eyeOrigin = eyeAfter->GetAbsoluteOffset(Rml::BoxArea::Border);
+    const auto eyeSize = eyeAfter->GetBox().GetSize(Rml::BoxArea::Border);
+    const auto treeOrigin = tree->GetAbsoluteOffset(Rml::BoxArea::Border);
+    const auto treeSize = tree->GetBox().GetSize(Rml::BoxArea::Border);
+    EXPECT_GT(eyeSize.x, 0.0f);
+    EXPECT_GT(eyeSize.y, 0.0f);
+    EXPECT_GE(eyeOrigin.x, treeOrigin.x);
+    EXPECT_LE(eyeOrigin.x + eyeSize.x, treeOrigin.x + treeSize.x + 0.5f);
+    // 图标本身也必须真的有 14px 的非零盒，否则按钮在、像素不在。
+    auto* eyeImage = eyeAfter->QuerySelector("img");
+    ASSERT_NE(eyeImage, nullptr);
+    const auto imageSize = eyeImage->GetBox().GetSize(Rml::BoxArea::Border);
+    EXPECT_FLOAT_EQ(imageSize.x, 14.0f);
+    EXPECT_FLOAT_EQ(imageSize.y, 14.0f);
+    // 行高仍然由 RCSS 固定为 30px：眼睛不能把行撑高。
+    EXPECT_FLOAT_EQ(eyeRow->GetBox().GetSize(Rml::BoxArea::Margin).y, rowHeight);
+}
+
+TEST_F(EditorUiTest, HiddenActorRowShowsEyeOffAndStillRoutesDetailsAndSelection)
+{
+    AddActor(MeshActor("Sphere_01", 1));
+    AddActor(SunActor(1.0f, true));
+    SettleOutliner();
+
+    EXPECT_EQ(TrailingIcon(OutlinerVisibilityToggle("Sphere_01")), "icons/eye.png");
+    ASSERT_NE(OutlinerRowElement("Sphere_01"), nullptr);
+    EXPECT_FALSE(OutlinerRowElement("Sphere_01")->IsClassSet("hidden-row"));
+
+    // 运行时把该 actor 置为隐藏；面板只消费冻结快照，不访问 World。
+    actors[0].visible = false;
+    PublishActors();
+    SettleOutliner();
+
+    // 隐藏必须有两个可测信号：图标换成 eye-off，行得到 hidden-row class。
+    EXPECT_EQ(TrailingIcon(OutlinerVisibilityToggle("Sphere_01")), "icons/eye-off.png");
+    ASSERT_NE(OutlinerRowElement("Sphere_01"), nullptr);
+    EXPECT_TRUE(OutlinerRowElement("Sphere_01")->IsClassSet("hidden-row"));
+    // 相邻 actor 与筛选计数不受影响：隐藏不改变行集合，也不改变"有哪些对象"。
+    EXPECT_EQ(TrailingIcon(OutlinerVisibilityToggle("Sun_Light")), "icons/eye.png");
+    EXPECT_EQ(OutlinerCount(), "2 actors");
+
+    // 隐藏的行仍然可选中、仍驱动 Details：隐藏不是"从大纲里移除"，
+    // 也不关闭它的材质实例文档（mesh actor 的槽行与 MI 路由都不看 visible）。
+    snapshot.activeDocument.reset();
+    snapshot.selectedDocumentPath.clear();
+    panel->Build(snapshot);
+    snapshot.selectedActorIdentity = "mesh|Sphere_01";
+    panel->Build(snapshot);
+    context->Update();
+    EXPECT_NE(document->GetElementById("details-section-actor-mesh"), nullptr);
+    EXPECT_NE(OutlinerRow("outliner-actor", "Sphere_01"), nullptr);
+    // 点击隐藏行仍然走原来的 mesh actor 选择路由。
+    OutlinerRow("outliner-actor", "Sphere_01")->DispatchEvent("click", {});
+    EXPECT_EQ(selectionSink.selectedModel.has_value(), true);
+    // 但"点眼睛"本身不产生选择：清空后单独点眼睛，选择 sink 必须保持不变。
+    selectionSink.selectedModel.reset();
+    auto* eye = OutlinerVisibilityToggle("Sphere_01");
+    ASSERT_NE(eye, nullptr);
+    eye->DispatchEvent("click", {});
+    EXPECT_FALSE(selectionSink.selectedModel.has_value());
+    // 眼睛再次点击发的是"显示"而非"隐藏"，且身份仍是稳定字符串。
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions.front().type, UiActionType::SetActorVisible);
+    EXPECT_EQ(runtimeSink.actions.front().stringValue, "mesh|Sphere_01");
+    EXPECT_EQ(runtimeSink.actions.front().intValue, 1);
+
+    // 恢复可见后回到初始态：眼睛图标与行 class 都必须还原。
+    actors[0].visible = true;
+    PublishActors();
+    SettleOutliner();
+    EXPECT_EQ(TrailingIcon(OutlinerVisibilityToggle("Sphere_01")), "icons/eye.png");
+    ASSERT_NE(OutlinerRowElement("Sphere_01"), nullptr);
+    EXPECT_FALSE(OutlinerRowElement("Sphere_01")->IsClassSet("hidden-row"));
 }
 
 } // namespace

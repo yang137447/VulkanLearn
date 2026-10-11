@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "engine/diagnosticsSubsystem.h"
+#include "editor/ui/editorSceneActorTree.h"
 #include "engine/runtimeConfig.h"
 #include "engine/runtimeTestHooks.h"
 #include "materialInstance.h"
@@ -49,6 +50,34 @@ std::string FormatVector3(const Eigen::Vector3f& value)
     return "(" + std::to_string(value.x()) + ", " +
         std::to_string(value.y()) + ", " +
         std::to_string(value.z()) + ")";
+}
+
+// 可见性写入端：把"大纲身份 → World 对象"这一步收在一个地方，
+// 让命令分支只说类型语义，不重复 World 的表结构。返回 false 表示对象不在当前 World。
+bool ApplyActorVisibility(
+    World& world,
+    const EditorUi::EditorSceneActorIdentity& identity,
+    bool visible)
+{
+    using EditorUi::EditorSceneActorType;
+    switch (identity.type)
+    {
+    case EditorSceneActorType::Mesh:
+        return world.SetMeshObjectVisible(identity.name, visible);
+    case EditorSceneActorType::DirectionalLight:
+    case EditorSceneActorType::PointLight:
+    case EditorSceneActorType::SpotLight:
+        return world.SetLightVisible(identity.name, visible);
+    case EditorSceneActorType::SquareAreaLight:
+        return world.SetSquareAreaLightVisible(identity.name, visible);
+    // 相机 / 环境 / 风剖面没有渲染侧可见性；调用方已用
+    // SceneActorHasVisibilityToggle() 挡住，这里不提供任何默认成功路径。
+    case EditorSceneActorType::Camera:
+    case EditorSceneActorType::Environment:
+    case EditorSceneActorType::WindProfile:
+        return false;
+    }
+    return false;
 }
 
 std::string ResolveScreenshotPath(
@@ -440,6 +469,48 @@ void RuntimeCommandExecutor::ExecuteCommand(
             command.floatValue);
         diagnostics.ReportInfo(
             "Sun intensity set to " + std::to_string(command.floatValue));
+        break;
+    }
+    case RuntimeCommandType::SetActorVisible:
+    {
+        const std::shared_ptr<World>& activeWorld =
+            worldManager.GetActiveWorld();
+        if (!activeWorld)
+        {
+            diagnostics.ReportWarning(
+                "Actor visibility ignored because no active World exists.");
+            break;
+        }
+
+        // 命令跨越 GT→执行边界只带稳定身份字符串，因此这里解析并核对对象是否仍在
+        // 当前 World 里：旧场景 / 已改名 / 伪造身份都必须被拒绝并给出诊断，
+        // 而不是静默改不到东西或套用到同名的新对象上。
+        EditorUi::EditorSceneActorIdentity identity;
+        if (!EditorUi::ParseSceneActorIdentity(command.stringValue, identity))
+        {
+            diagnostics.ReportWarning(
+                "Actor visibility rejected because the identity is not a known actor: " +
+                command.stringValue);
+            break;
+        }
+        if (!EditorUi::SceneActorHasVisibilityToggle(identity.type))
+        {
+            diagnostics.ReportWarning(
+                "Actor visibility rejected because this actor type has no visibility state: " +
+                command.stringValue);
+            break;
+        }
+        if (!ApplyActorVisibility(*activeWorld, identity, command.intValue != 0))
+        {
+            diagnostics.ReportWarning(
+                "Actor visibility rejected because the actor is not in the active World: " +
+                command.stringValue);
+            break;
+        }
+
+        diagnostics.ReportInfo(
+            std::string("Actor ") + identity.name + " " +
+            (command.intValue != 0 ? "shown." : "hidden."));
         break;
     }
     case RuntimeCommandType::SetProceduralSkyParameters:

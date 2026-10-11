@@ -70,6 +70,9 @@ async function main() {
   await icon("Camera", "camera.png", 32, "#b79ae6");
   await icon("CloudSun", "environment.png", 32, "#81aee9");
   await icon("Wind", "wind.png", 32, "#9fd0a8");
+  // Scene Outliner per-actor visibility toggle: eye = visible, eye-off = hidden.
+  await icon("Eye", "eye.png");
+  await icon("EyeOff", "eye-off.png");
   await materialTypeIcon();
   await fs.copyFile(path.join(packageRoot, "lucide/LICENSE"),
     path.join(output, "LUCIDE-LICENSE.txt"));

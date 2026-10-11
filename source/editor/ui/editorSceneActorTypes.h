@@ -101,6 +101,9 @@ struct EditorSceneActorSnapshot
     // 展开状态的键，不是 DOM 索引，也不能当作 GPU 资源身份。
     std::string identity;
     std::string displayName;
+    // 逐 actor 可见性（World 侧运行时状态，非场景 JSON 字段）。只有网格与四类灯
+    // 真正有渲染侧可见性；相机/环境/风剖面固定为 true，也不显示眼睛控件。
+    bool visible = true;
     // 只有 Mesh 使用；其余类型为空。
     std::vector<EditorSceneMeshSectionSnapshot> sections;
     // Mesh：场景 JSON 里的对象名（多 section 共享）与模型级 RuntimeId。

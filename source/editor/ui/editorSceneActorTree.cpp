@@ -186,6 +186,38 @@ std::string SceneActorIdentity(EditorSceneActorType type, const std::string& nam
     return std::string(spec == nullptr ? "actor" : spec->key) + "|" + name;
 }
 
+bool ParseSceneActorIdentity(const std::string& identity, EditorSceneActorIdentity& parsed)
+{
+    const size_t separator = identity.find('|');
+    if (separator == std::string::npos) return false;
+    const EditorSceneActorGroupSpec* spec =
+        FindSceneActorGroupSpecByKey(identity.substr(0, separator));
+    if (spec == nullptr) return false;
+    parsed.type = spec->type;
+    parsed.name = identity.substr(separator + 1);
+    // 与 SceneActorIdentity() 对称：空名字不可能由 World 构建出来，解析端不接受它，
+    // 否则会拿空名字去查表并报一条误导性的"对象不存在"。
+    return !parsed.name.empty();
+}
+
+bool SceneActorHasVisibilityToggle(EditorSceneActorType type)
+{
+    switch (type)
+    {
+    case EditorSceneActorType::Mesh:
+    case EditorSceneActorType::DirectionalLight:
+    case EditorSceneActorType::PointLight:
+    case EditorSceneActorType::SpotLight:
+    case EditorSceneActorType::SquareAreaLight:
+        return true;
+    case EditorSceneActorType::Camera:
+    case EditorSceneActorType::Environment:
+    case EditorSceneActorType::WindProfile:
+        return false;
+    }
+    return false;
+}
+
 bool SceneActorNameLess(const EditorSceneActorSnapshot& left, const EditorSceneActorSnapshot& right)
 {
     const std::string leftName = FoldAsciiCase(left.displayName);

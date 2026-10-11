@@ -33,7 +33,7 @@ git show HEAD:source/editor/ui/materialInstanceAssetEditorPanel.cpp
 | 资源编辑器返回按钮 | 不适用 | `resource-json-close` 分支存在但无触发控件 | 已删除（见下） |
 | 纹理选择弹窗 | `BeginPopup("MITexturePicker")` | `<select>` 下拉 | 不恢复：下拉覆盖同一需求 |
 | 场景对象树 | 无（只有 MI 模型列表） | 无 | 第 4 轮新增真实 World actor 树；第 5 轮行窗口化 + 组内排序 |
-| 大纲逐 actor 可见性 | 无 | 无 | 未排期，需先给 World/渲染路径加逐对象可见性 |
+| 大纲逐 actor 可见性 | 无 | 无 | 第 6 轮新增：World 可见性状态 + 快照过滤 + 眼睛开关（仅运行时） |
 | 大纲多选 / 拖放 | 无 | 无 | 未排期，属于场景文档阶段 |
 | gizmo / 变换编辑 | 无 | 无 | 未排期，需先改场景数据模型 |
 | Undo / Redo | 无 | 无 | 未排期；Edit 菜单已留禁用占位 |
@@ -43,8 +43,8 @@ gizmo、Undo/Redo 在迁移前同样不存在。它们属于"向 UE 对齐"的�
 第 4 轮把其中的"场景对象树"做成了真实 World actor 树（见下文），它仍然不是迁移损失。
 第 5 轮修掉了第 4 轮留下的两个短板：行窗口化（不再逐帧拼整棵树的 markup）
 与低基数分组前置（灯光/相机/环境不再被 122 行网格挤出首屏），并补了组内排序控件。
-第 4 轮的像素证据表里"树里只有网格行可见，灯光在可视区之外"一行，
-读的就是本轮改掉的症状；那张 `outliner-baseline.bmp` 现在作为 before 基线被重新测量。
+第 5 轮的像素证据表里"树里只有网格行可见，灯光在可视区之外"一行，
+读的就是第 5 轮改掉的症状；那张 `outliner-baseline.bmp` 现在作为 before 基线被重新测量。
 
 ## 第 1 轮：菜单栏、面板显隐、视口工具条
 
@@ -126,6 +126,8 @@ sRGB 色块与十六进制、可折叠分类。色块为只读；HSV 取色器�
   任何逐对象可见性状态；加它要同时改场景 JSON schema、`SceneAssetValidator`、
   World 加载/构建与渲染路径，属于单独一轮。放一个点了没有效果的隐藏按钮
   正是这个分支一直在删的东西。
+  **（第 6 轮已落地，且证明"必须改场景 schema/validator"这一半是错的：
+  可见性做成 World 侧运行时状态即可，见下文第 6 轮。）**
 - **没有地形节点**：`World` 没有 terrain 访问器，仓库里也没有 terrain 运行时
   （`source/terrain.h`/`terrain.cpp` 在本 worktree 中不存在，尽管 `AGENTS.md` 仍引用它们）；
   场景选择器只把 `"terrain"` 列进受支持类型（`source/ui/sceneObjectTypeSupport.h`），
@@ -260,10 +262,103 @@ ctest --test-dir build -R "MaterialInstanceEditor" --output-on-failure
 
 ### 本轮之后仍然缺席（与第 4 轮清单一致，未新增）
 
-- 逐 actor 可见性/隐藏开关：`World`/`WorldSnapshot`/渲染图都没有逐对象可见性状态。
+- 逐 actor 可见性的**持久化**：第 6 轮加了运行时开关，但它不写场景 JSON、
+  `SceneAssetValidator` 不认识、也没有保存命令；重载场景后全部可见。
 - 多选、拖放/重父级、改名：大纲一次只有一个选中身份，挂载行与事件地址一对一。
 - transform 编辑与 gizmo：没有渲染后端，也没有命令。
 - 通用虚拟化：窗口化只在世界 actor 树上实现，通用 `TreeRow`、模型树与 Sources 树未变。
+
+## 第 6 轮：逐 actor 可见性（World / 快照 / 大纲）
+
+第 4、5 轮都把"逐 actor 可见性"记为缺席，理由是"渲染路径没有逐对象可见性状态"。
+本轮把它补上，并且刻意**越出 UI 层**改 World 与渲染快照：
+
+- **状态归属**：可见性落在 World 拥有的对象上——`WorldMeshObject::visible`（网格按值存储）、
+  `SceneNode::visible`（三类以 `shared_ptr` 持有的灯共用）、
+  `WorldSquareAreaLight::visible`（按值存储的门面光）。
+  没有引入"World 拥有的可见性集合"这第二套所有权；三个
+  `World::Set*Visible(name, visible)` 是唯一写入端，名字不存在时返回 false。
+- **渲染过滤点在快照构建处**：`WorldSnapshotBuilder::Build()` 跳过不可见对象，
+  它们不进入 `snapshot.meshDraws` / `snapshot.lights`。`meshDraws` 同时是出图、拾取、
+  MaterialInstance 上下文与阴影 pass 的唯一来源，所以在构造处过滤等于一次覆盖全部消费者；
+  渲染器里没有第二处可见性分支（否则会写出"画不出来但仍能拾取"这类不一致）。
+- **没有快照缓存需要失效（对任务书里的一项更正）**：任务书假设 `RenderSystem` 会缓存
+  快照、需要额外的失效触发。实测不是这样：`RenderSystem::Render()`（单线程路径）
+  与 EngineLoop 的 `PublishSnapshotFromActiveWorld()`（双线程路径）**每帧**都从 active
+  World 重新 `Build()` 一份快照，`ConsumeLatestSnapshotIntoRenderScene()` 再逐帧重建
+  `currentRenderScene`。因此可见性翻转下一帧就上屏，既不需要 World 换代，
+  也不需要用整世界事务或 `device.waitIdle()` 去伪造即时性。
+- **命令路径**：`UiActionType::SetActorVisible` → EngineLoop → `RuntimeCommandType::SetActorVisible`
+  → `RuntimeCommandExecutor`。身份以稳定字符串跨越 GT→执行边界
+  （`"mesh|Sphere_01"`、`"directionalLight|Sun_Light"`…），在执行边界经
+  `ParseSceneActorIdentity()` 还原成类型 + 名字；未知分组键、空名字、
+  类型没有可见性状态、对象不在当前 World，四种情况都给出诊断并拒绝，
+  不静默忽略、也不套用到同名新对象上。
+- **眼睛控件**：`icons/eye.png` / `icons/eye-off.png` 由既有
+  `tool/editor-ui-assets/generate-content-browser.cjs` 生成（没有手绘 PNG、
+  没有图标字体、没有运行时 SVG 解码）；`LUCIDE-LICENSE.txt` 保持一致。
+  隐藏行另外得到 `hidden-row` class（标签 `#7c7c85`、行首图标 opacity 0.45）。
+  开关是行的 flex 兄弟节点而不是绝对定位，行高仍由 RCSS 固定 30px，
+  点击不改变选择、展开、滚动偏移与行窗口。
+
+### 本轮像素探针发现的缺陷（已修）
+
+**眼睛"布局上存在、像素上一个都没有"**：最初把 `.tree-trailing` 写成
+`position: absolute; right: 5px`，而 14px 的图标尺寸规则
+（`#scene-models .tree-row .list-item img.row-icon`）只作用于 `.list-item` 内的图标，
+行尾按钮里的 `<img>` 保持 PNG 原生 32px。结果是按钮盒 18×18 存在、
+合成点击测试**通过**，但真实窗口里该区域读回的行底色 `#2d2d31` 一个像素都没变
+（`py -3 artifacts/rmlui-editor/bmp_probe.py` 在 x=1255..1269, y=152..171 全是 `#2d2d31`）。
+改成 flex 兄弟节点 + 显式 14px 图标尺寸后，行尾出现 56 个中性灰描边像素、
+包围盒 `(1246,153)-(1257,162)`。
+`EditorUiTest.OutlinerVisibilityToggleQueuesOneCommandAndDisturbsNothingElse`
+现在断言眼睛盒子落在 `#scene-models` 的可视矩形内、图标盒恒为 14px、行高不变——
+只断言"点击后命令发出了"会让这类缺陷原样通过。
+
+### 验证（2026-10-11，第六轮）
+
+- MinGW 构建：`cmake --build build --target editor_ui_tests editor_viewport_tests main
+  material_instance_editor_production_tests -j8` 四个目标全部成功。
+- `ctest --test-dir build -R "^(UiColorTransform|UiWidgetTest|UiWidgetRefresh|EditorUiTest|ContentBrowserTest|DockWorkspaceTest|DockPersistenceTest|DockRmlTest|EditorViewportGeometry|EditorJsonAssetParsing|EditorJsonAssetPaths|EditorJsonAssetTypes|JsonAssetLibraryTest|ResourceEditorController|LargeCatalog/ContentBrowserPerformanceTest)\." --output-on-failure`
+  **283/283 通过**（基线 275/275，本批净增 8 项：`widgetTests.cpp` 3 项、
+  `editorUiTests.cpp` 5 项；4 项既有符号链接用例按原条件跳过）。
+  **同一选择连跑两次都是 283/283**。
+- `ctest --test-dir build -R "MaterialInstanceEditor" --output-on-failure`
+  **22/22 通过**，与基线一致：材质槽 → MI 文档流程、非网格选择清描边、
+  两条既有写入路径（Intensity / CSM Cast Shadows）都未回归。
+
+### 像素证据：隐藏真的把 actor 从画面里拿掉（1280×720，`--dev-ui`，默认球阵场景）
+
+探针 `artifacts/rmlui-editor/visibility_probe.py`（gitignored）驱动真实窗口：
+`SendInput` 点行尾眼睛，经 `console_inject.ps1` 注入 `screenshot`，
+再用 `bmp_probe.py` 的读像素函数逐点比较。每张截图载荷 2764800 B（完整 BMP，脚本会拒绝半截文件）。
+
+探针第一步是**稳定性对照**：两条连续截图（中间不发任何命令）在
+viewport 区域 `x∈[8,860) y∈[110,500)` 的 332280 个采样点上
+`changed=0 strong=0 max_delta=0`。因此后面的差异只可能来自可见性命令。
+
+| 观察点 | 读数 | 结论 |
+| --- | --- | --- |
+| 首屏行带 | `[(124,135) 分组标题, (153,164) Sun_Light, (184,195) 分组标题, (212,225) Key_Point_Light, …]` | 分组标题行 `eye-bbox=None`，两个 actor 行 `eye-bbox=(1246,153)-(1257,162)`（56 像素） | 眼睛只在 actor 行上 |
+| 点 `Sun_Light` 眼睛 | 日志 `Actor Sun_Light hidden.` | UI → UiAction → RuntimeCommand → World 全链路生效 |
+| 隐藏太阳后整帧 | 平均亮度 134.361 → 133.923；`changed=16729`、`strong=3390/332280`、`max_delta=349`，强变化像素 bbox `x=[282,596] y=[110,415]`（跨整幅画面） | 方向光是全局光：不是"某一行变了"，是画面本身变了 |
+| 最强单像素（太阳） | `(587,348) rgb(235,234,234) → rgb(121,113,120)`（Δ=349）；`(588,378) rgb(222,221,221) → rgb(121,113,114)`；`(587,378) rgb(185,183,185) → rgb(91,84,90)` | 高光被拿掉、球面变暗 |
+| 隐藏行状态 | 行尾眼睛 bbox `(1246,152)-(1257,163)`（描边像素 56 → 69），`#7c7c85` 暗标签像素 10 → 73 | 图标与行样式都切换了 |
+| 再点一次恢复 | 日志 `Actor Sun_Light shown.`；平均亮度回到 134.361；`changed=0 strong=0 max_delta=0` | **与基线逐字节相同**，可见性可逆、无残留 |
+| 滚到 Meshes 后（50 刻度滚轮 + 2s 静置） | 稳定性对照再次 `changed=0 strong=0 max_delta=0` | 滚动后画面仍然静止，网格测量可信 |
+| 点某网格行眼睛 | 日志 `Actor SphereArray_X10_Y07 hidden.`；`strong=317`，bbox `x=[577,597] y=[189,209]`（约一个球格） | 隐藏网格只拿掉它自己那一格 |
+| 最强单像素（网格） | `(588,207) rgb(81,79,84) → rgb(215,218,225)`（Δ=414） | 球体像素 → 球后背景像素：物体真的从画面里消失 |
+| 另一条网格行所在水平条带 | `changed=0 strong=0 max_delta=1` | 隐藏是局部的，不是整幅重画 |
+
+- 像素方法边界：`max_delta` 与 `strong` 是差分统计，不区分"被拿走"和"被遮挡"；
+  但恢复后 `changed=0` 说明这不是相机漂移或累积副作用。
+- 未验证：spotLight / squareAreaLight / 风剖面的行内眼睛（默认场景没有这三类对象）；
+  真实鼠标拖选、隐藏对象的材质实例文档行为只由单元测试覆盖。
+- 该进程由探针强制终止，**这是渲染证据，不是 teardown 证据**。
+  产物：日志 `artifacts/rmlui-editor/visibility-132450.log`（stderr 0 字节），
+  截图在隔离资源目录 `Generated/Screenshots/`
+  （`vis-baseline`、`vis-control`、`vis-sun-hidden`、`vis-sun-shown`、
+  `vis-mesh-rows`、`vis-mesh-control`、`vis-mesh-hidden`）。
 
 ## 待处置项
 
@@ -365,14 +460,15 @@ RmlUi 6.2 的 `PropertyParserColour` 在 RGBA 分支对每个分量统一走整�
    最后发现是 `UiSubsystem` 在 developer UI 可见时把 `#hud` 显式设为
    `display: none`——元素本身按设计不显示，与颜色格式无关。
 
-## 尚未实现能力清单（2026-10-11 核对）
+## 尚未实现能力清单（2026-10-11 核对，第六轮后）
 
 以下在 HEAD 与当前分支中都不存在，属于新增而非回归：
 
 - gizmo、变换编辑、场景对象增删改 / 重命名 / 重父级
 - Undo / Redo（Edit 菜单为禁用占位）
-- 逐 actor 可见性 / 隐藏开关（`World`、`WorldSnapshot` 与渲染图都没有逐对象可见性状态；
-  见第 4 轮的"刻意不做"）
+- 逐 actor 可见性的持久化：第 6 轮加了运行时 World 状态、快照过滤与大纲眼睛，
+  但开关不写场景 JSON、`SceneAssetValidator` 不认识、也没有保存命令；
+  重新加载场景一律全部可见。要走持久化得连 transform 编辑一起做场景文档阶段。
 - 地形节点（`World` 没有 terrain 访问器，仓库里也没有 terrain 运行时）
 - 大纲虚拟化（每帧重建 markup 后由值缓存决定是否写 DOM）
 - 资产缩略图、模型几何预览、纹理像素查看
@@ -383,3 +479,5 @@ RmlUi 6.2 的 `PropertyParserColour` 在 RGBA 分支对每个分量统一走整�
 
 第 4 轮已经消掉的一条：Scene Outliner 不再只列出带有效 MI 的网格，
 而是真实 World actor 树（网格 / 四类灯 / 相机 / 环境 / 风剖面，分组、图标、搜索、类型过滤）。
+第 6 轮消掉的一条：逐 actor 可见性——它是**运行时**能力（World 状态 + 快照过滤 + 眼睛开关），
+不是场景 schema 迁移，因此没有触碰场景 JSON、validator 或 World 保存路径。

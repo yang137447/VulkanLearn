@@ -28,12 +28,19 @@ public:
     void UpdateModelMatrix();
     inline const Eigen::Matrix4f& GetModelMatrix() const { return modelMatrix; }
 
+    // 逐对象可见性。灯光是 World 唯一以 shared_ptr 保存的 actor，把标志放在节点上
+    // 让三类灯光共用一份实现；网格没有 SceneNode，可见性在 WorldMeshObject 上。
+    // 快照构建处读取它，渲染器不做第二次判断。
+    inline void SetVisible(bool value) { visible = value; }
+    inline bool IsVisible() const { return visible; }
+
 protected:
     Eigen::Vector3f position = Eigen::Vector3f::Zero();
     Eigen::Vector3f rotation = Eigen::Vector3f::Zero();
     Eigen::Quaternionf quaternion = Eigen::Quaternionf::Identity();
     Eigen::Vector3f scale = Eigen::Vector3f::Ones();
     std::string name;
+    bool visible = true;
 
     Eigen::Matrix4f modelMatrix = Eigen::Matrix4f::Identity();
 };

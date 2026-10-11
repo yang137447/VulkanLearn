@@ -23,6 +23,10 @@ enum class RuntimeCommandType
     GetCameraState,
     SetEnvironmentIntensity,
     SetSunIntensity,
+    // 逐 actor 可见性：stringValue 是大纲的稳定身份（"mesh|Sphere_01"、
+    // "directionalLight|Sun_Light"），intValue 是 0/1。身份在执行端解析并核对，
+    // 未知/陈旧身份必须被拒绝并给诊断。可见性是 World 的运行时状态，不持久化。
+    SetActorVisible,
     SetProceduralSkyParameters,
     SetSpeedTreeStrength,
     SetSpeedTreeGustingEnabled,

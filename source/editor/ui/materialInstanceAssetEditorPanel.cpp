@@ -158,6 +158,17 @@ UiWidgets::TreeRowData OutlinerActorRow(size_t actorIndex, const EditorSceneActo
     row.expanded = expanded;
     row.icon = SceneActorGroupIcon(actor.type);
     row.rowClass = "actor-row";
+    // 眼睛只出现在真正有渲染侧可见性状态的对象上；隐藏时行同时得到 hidden-row class，
+    // 让"这一行代表不可见对象"在图标之外还有第二个可测信号。
+    if (SceneActorHasVisibilityToggle(actor.type))
+    {
+        row.hiddenRow = !actor.visible;
+        row.hasTrailing = true;
+        row.trailing = {"outliner-visible", actorIndex};
+        row.trailingIcon = actor.visible ? "icons/eye.png" : "icons/eye-off.png";
+        row.trailingLabel = actor.visible ? "Hide in viewport" : "Show in viewport";
+        row.trailingAlternate = !actor.visible;
+    }
     return row;
 }
 
@@ -733,6 +744,27 @@ void MaterialInstanceAssetEditorPanel::RefreshLists()
     SetMarkup("document-tabs", std::move(tabs));
 }
 
+// 选择态与"已挂载 actor 的可见性"合成一个重挂签名：两者都只改已挂载行的
+// class/文本/眼睛图标，不改变行集合，但对 markup 是可见变化。
+// 可见性按稳定身份生成，因此名字相同但换了对象（World 换代）时签名仍然变化。
+std::string MaterialInstanceAssetEditorPanel::OutlinerMountedVisuals() const
+{
+    const std::vector<EditorSceneActorSnapshot>& actors = OutlinerActors();
+    std::string visuals = snapshot.selectedActorIdentity + "\n" +
+        (snapshot.selectedMaterialSlotIndex
+            ? std::to_string(*snapshot.selectedMaterialSlotIndex) : std::string());
+    for (size_t index = outlinerMountedWindow.begin; index < outlinerMountedWindow.end; ++index)
+    {
+        if (index >= outlinerRows.size()) break;
+        const EditorSceneActorRow& row = outlinerRows[index];
+        if (row.isGroup || row.isSlot || row.actorIndex >= actors.size()) continue;
+        const EditorSceneActorSnapshot& actor = actors[row.actorIndex];
+        if (!SceneActorHasVisibilityToggle(actor.type)) continue;
+        visuals += "\n" + actor.identity + (actor.visible ? "=1" : "=0");
+    }
+    return visuals;
+}
+
 void MaterialInstanceAssetEditorPanel::RefreshOutliner()
 {
     // 面板可能在 RML 热重载里处于 Detach 状态，而 UiSubsystem 仍逐帧 Build：
@@ -762,21 +794,19 @@ void MaterialInstanceAssetEditorPanel::RefreshOutliner()
     // 再由滚动偏移与可视高度算出本帧窗口，与 Content Browser 的 VisibleWindow 同序。
     MeasureOutlinerRowHeight();
     const EditorSceneActorWindow window = OutlinerWindow();
-    // 选择态只改已挂载行的 class/文本，不改变行集合，但对 markup 是可见变化，
-    // 因此与窗口一起参与"是否需要重挂 DOM"的判断。
-    const std::string selection = snapshot.selectedActorIdentity + "\n" +
-        (snapshot.selectedMaterialSlotIndex
-            ? std::to_string(*snapshot.selectedMaterialSlotIndex) : std::string());
+    // 选择态与可见性只改已挂载行的 class/文本/眼睛图标，不改变行集合，但对 markup
+    // 是可见变化，因此与窗口一起参与"是否需要重挂 DOM"的判断。
+    const std::string visuals = OutlinerMountedVisuals();
     if (!outlinerMounted ||
         outlinerMountedRevision != outlinerRowsRevision ||
         !SameSceneActorWindow(outlinerMountedWindow, window) ||
-        outlinerMountedSelection != selection)
+        outlinerMountedVisuals != visuals)
     {
         SetMarkup("scene-models", OutlinerRowsMarkup(window));
         outlinerMounted = true;
         outlinerMountedRevision = outlinerRowsRevision;
         outlinerMountedWindow = window;
-        outlinerMountedSelection = selection;
+        outlinerMountedVisuals = visuals;
     }
 
     // 计数始终是筛选结果（分组行的 actorCount 之和），与折叠状态和挂载窗口都无关。
@@ -823,8 +853,7 @@ void MaterialInstanceAssetEditorPanel::RebuildOutlinerRows(
 }
 
 EditorSceneActorWindow MaterialInstanceAssetEditorPanel::OutlinerWindow() const
-{
-    auto* list = document->GetElementById("scene-models");
+{    auto* list = document->GetElementById("scene-models");
     const auto& box = list->GetBox();
     const float paddingY = box.GetEdge(Rml::BoxArea::Padding, Rml::BoxEdge::Top) +
         box.GetEdge(Rml::BoxArea::Padding, Rml::BoxEdge::Bottom);
@@ -838,8 +867,7 @@ EditorSceneActorWindow MaterialInstanceAssetEditorPanel::OutlinerWindow() const
 // 树行高度由 RCSS 统一决定（.tree-row 的内容是 .tree-toggle 与 .list-item），
 // 这里读已挂载行的 margin box 校正兜底值——正如 Content Browser 读首个可见条目。
 // 首帧或刚替换的 DOM 还没有布局，读到 0 时保持上一次的值。
-void MaterialInstanceAssetEditorPanel::MeasureOutlinerRowHeight()
-{
+void MaterialInstanceAssetEditorPanel::MeasureOutlinerRowHeight(){
     if (document == nullptr) return;
     auto* list = document->GetElementById("scene-models");
     for (int index = 0; index < list->GetNumChildren(); ++index)
@@ -1531,6 +1559,18 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
     else if (action == "outliner-actor" && index < OutlinerActors().size())
     {
         SelectOutlinerActor(OutlinerActors()[index]);
+    }
+    else if (action == "outliner-visible" && index < OutlinerActors().size())
+    {
+        // 眼睛不改选择、不改展开、不改滚动：它只发一条运行时命令，且身份用冻结快照里的
+        // 稳定字符串，不用 DOM 上的数据或 sceneActors 下标。
+        const EditorSceneActorSnapshot& actor = OutlinerActors()[index];
+        if (runtimeActionSink == nullptr || !SceneActorHasVisibilityToggle(actor.type)) return;
+        UiAction request;
+        request.type = UiActionType::SetActorVisible;
+        request.stringValue = actor.identity;
+        request.intValue = actor.visible ? 0 : 1;
+        runtimeActionSink->RequestRuntimeAction(std::move(request));
     }
     else if (action == "outliner-slot" && index < OutlinerActors().size())
     {

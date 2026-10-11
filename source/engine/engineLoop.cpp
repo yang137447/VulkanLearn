@@ -739,6 +739,12 @@ void EngineLoop::ApplyQueuedUiActions()
             command.type = RuntimeCommandType::SetSunIntensity;
             command.floatValue = action.floatValue;
             break;
+        case UiActionType::SetActorVisible:
+            // 身份字符串与 0/1 原样跨越 GT→执行边界；World 查找与校验只在执行端做。
+            command.type = RuntimeCommandType::SetActorVisible;
+            command.stringValue = action.stringValue;
+            command.intValue = action.intValue;
+            break;
         case UiActionType::SetSpeedTreeStrength:
             command.type = RuntimeCommandType::SetSpeedTreeStrength;
             command.floatValue = action.floatValue;

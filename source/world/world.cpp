@@ -2,6 +2,8 @@
 
 #include <utility>
 
+#include "sceneNode.h"
+
 namespace VL
 {
 
@@ -70,6 +72,46 @@ void World::AddSpotLight(std::string name, std::shared_ptr<SpotLight> light)
 void World::AddSquareAreaLight(std::string name, WorldSquareAreaLight light)
 {
     squareAreaLights[std::move(name)] = std::move(light);
+}
+
+bool World::SetMeshObjectVisible(const std::string& name, bool visible)
+{
+    const auto objectIt = meshObjects.find(name);
+    if (objectIt == meshObjects.end()) return false;
+    objectIt->second.visible = visible;
+    return true;
+}
+
+bool World::SetLightVisible(const std::string& name, bool visible)
+{
+    // 三类灯光各有独立表；同名对象只会出现在其中一张表里，因此顺序查找即可。
+    const auto directionalIt = directionalLights.find(name);
+    if (directionalIt != directionalLights.end())
+    {
+        directionalIt->second->SetVisible(visible);
+        return true;
+    }
+    const auto pointIt = pointLights.find(name);
+    if (pointIt != pointLights.end())
+    {
+        pointIt->second->SetVisible(visible);
+        return true;
+    }
+    const auto spotIt = spotLights.find(name);
+    if (spotIt != spotLights.end())
+    {
+        spotIt->second->SetVisible(visible);
+        return true;
+    }
+    return false;
+}
+
+bool World::SetSquareAreaLightVisible(const std::string& name, bool visible)
+{
+    const auto lightIt = squareAreaLights.find(name);
+    if (lightIt == squareAreaLights.end()) return false;
+    lightIt->second.visible = visible;
+    return true;
 }
 
 } // namespace VL

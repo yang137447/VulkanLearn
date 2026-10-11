@@ -216,6 +216,36 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
 }
+/* 逐 actor 可见性开关（行尾眼睛）。它是行的 flex 兄弟节点而不是绝对定位：
+   与 document-tab 的关闭按钮同一做法，既能被指针命中，也因为行高由 RCSS 固定
+   为 30px 而不会把行撑高（spacer 高度依赖这条 30px）。
+   图标必须显式给宽高：14px 的 .row-icon 规则只作用于 .list-item 里的图标，
+   flex 子项若不给尺寸会按 PNG 原生 32px 参与布局并被按钮裁掉。 */
+.tree-row .tree-trailing {
+    display: block;
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    box-sizing: border-box;
+    padding: 0;
+    margin-left: 4px;
+    min-height: 0;
+    border-width: 0;
+    background-color: transparent;
+    opacity: 0.55;
+}
+.tree-row .tree-trailing img {
+    display: block;
+    width: 14px;
+    height: 14px;
+    margin: 2px auto 0;
+}
+.tree-row .tree-trailing:hover { opacity: 1; }
+/* 隐藏态用"暗图标 + 暗标签"双重表达：只靠 14px 的图标形状区分在窄行里不够明显，
+   而颜色与不透明度都是像素可回读的，能被验证据此断言。 */
+.tree-row.hidden-row .tree-trailing { opacity: 0.9; }
+.tree-row.hidden-row .list-item { color: #7c7c85; }
+.tree-row.hidden-row .list-item img.row-icon { opacity: 0.45; }
 #scene-models { flex: 1; min-height: 0; padding: 4px 7px; overflow: auto; }
 /* 未挂载行的高度补偿：只占高度，不接收指针，也不参与树的点击寻址。 */
 .outliner-spacer { display: block; width: 100%; pointer-events: none; }

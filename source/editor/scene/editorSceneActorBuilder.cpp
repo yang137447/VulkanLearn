@@ -78,6 +78,10 @@ EditorSceneActorSnapshot BuildMeshActor(const World& world, const MeshActorGroup
         section.windProfileKey = object.speedTreeWindProfileKey;
         actor.sections.push_back(std::move(section));
     }
+    // 多 section 网格在 World 里是多个对象，逐对象可见性可能暂时不一致；
+    // 只要还有可见 section 就按可见显示，与渲染快照仍画出这些 section 的事实一致。
+    actor.visible = std::any_of(group.sections.begin(), group.sections.end(),
+        [](const auto& entry) { return entry.second->visible; });
     // 模型级 id 取排序后的第一个 section：选择时整模型高亮走的是同一个 RuntimeId。
     actor.meshObjectId = actor.sections.empty() ? 0 : actor.sections.front().objectId;
     return actor;
@@ -85,7 +89,7 @@ EditorSceneActorSnapshot BuildMeshActor(const World& world, const MeshActorGroup
 
 EditorSceneActorSnapshot BuildLightActor(
     const World& world, EditorSceneActorType type, const std::string& name,
-    const LightSnapshot& light, bool primary)
+    const LightSnapshot& light, bool primary, bool visible)
 {
     EditorSceneActorSnapshot actor;
     actor.type = type;
@@ -93,6 +97,7 @@ EditorSceneActorSnapshot BuildLightActor(
     actor.scenePath = world.GetScenePath();
     actor.identity = EditorUi::SceneActorIdentity(type, name);
     actor.displayName = name;
+    actor.visible = visible;
     actor.light = light;
     actor.primaryDirectionalLight = primary;
     return actor;
@@ -179,22 +184,25 @@ std::vector<EditorUi::EditorSceneActorSnapshot> BuildEditorSceneActors(const Wor
     {
         actors.push_back(BuildLightActor(world, EditorSceneActorType::DirectionalLight, entry.first,
             BuildWorldDirectionalLightSnapshot(world, entry.first, *entry.second),
-            primary != nullptr && entry.second == primary));
+            primary != nullptr && entry.second == primary, entry.second->IsVisible()));
     }
     for (const auto& entry : world.GetPointLights())
     {
         actors.push_back(BuildLightActor(world, EditorSceneActorType::PointLight, entry.first,
-            BuildWorldPointLightSnapshot(world, entry.first, *entry.second), false));
+            BuildWorldPointLightSnapshot(world, entry.first, *entry.second), false,
+            entry.second->IsVisible()));
     }
     for (const auto& entry : world.GetSpotLights())
     {
         actors.push_back(BuildLightActor(world, EditorSceneActorType::SpotLight, entry.first,
-            BuildWorldSpotLightSnapshot(world, entry.first, *entry.second), false));
+            BuildWorldSpotLightSnapshot(world, entry.first, *entry.second), false,
+            entry.second->IsVisible()));
     }
     for (const auto& entry : world.GetSquareAreaLights())
     {
         actors.push_back(BuildLightActor(world, EditorSceneActorType::SquareAreaLight, entry.first,
-            BuildWorldSquareAreaLightSnapshot(world, entry.first, entry.second), false));
+            BuildWorldSquareAreaLightSnapshot(world, entry.first, entry.second), false,
+            entry.second.visible));
     }
 
     if (world.GetCamera() != nullptr)

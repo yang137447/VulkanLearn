@@ -54,6 +54,12 @@
 - Scene Outliner 是真实 World actor 树：数据由 EngineLoop 在稳定帧边界从 active World
   拍成不可变 actor 列表（网格 / 四类灯 / 相机 / 环境 / SpeedTree 风剖面），
   分组可折叠、带类型图标、搜索（ASCII 大小写折叠、保留 UTF-8 名称）与类型过滤；
+  网格与四类灯的 actor 行带逐 actor 可见性开关（行尾眼睛，隐藏时 eye-off +
+  `hidden-row` class），可见性是 **World 侧运行时状态**（`WorldMeshObject::visible`、
+  `SceneNode::visible`、`WorldSquareAreaLight::visible`），由
+  `WorldSnapshotBuilder::Build()` 在构造快照时过滤，经
+  `UiActionType::SetActorVisible` → `RuntimeCommandExecutor` 单一路径写入；
+  不写场景 JSON、不持久化，重载场景后全部可见；
   分组顺序固定为低基数类型在前（灯光 → 相机 → 环境 → 风剖面 → Meshes），
   组内可选 Name A-Z / Z-A，并沿用 Content Browser 的可见窗口策略：
   `#scene-models` 任一时刻挂载的行节点不超过 `SceneActorMaxMountedRows = 192`
@@ -102,15 +108,16 @@ JSON 输入边界来自 `source/editor/assets/editorJsonAssetLibrary.h`：
 
 各阶段单独定义验收和模块测试，再进入下一阶段；不以更换控件库替代数据所有权设计。
 
-### 尚未实现的能力清单（2026-10-11 核对，第五批后）
+### 尚未实现的能力清单（2026-10-11 核对，第六批后）
 
 以下能力在当前分支确认缺席，后续阶段直接以此为准，不要重新推导：
 
 - 没有 gizmo、没有 transform 编辑，也没有场景对象的增/删/复制/改名；
   场景文档阶段（第 4 项）要连命令、Transform 编辑和 gizmo 一起做。
 - 完全没有 Undo/Redo（第 5 项）；`Edit` 菜单里的 Undo/Redo 只是常驻禁用的占位。
-- 没有逐 actor 可见性/隐藏开关：`World`、`WorldSnapshot` 与渲染图都没有逐对象
-  可见性状态，加它需要同时改场景 schema、validator、World 构建与渲染路径。
+- 逐 actor 可见性只有运行时语义：开关不写场景 JSON、`SceneAssetValidator` 不认识、
+  没有 `SaveVisibilityToScene`；重载场景一律全部可见。
+  持久化属于场景文档阶段，和 transform 编辑同一批。
 - 没有地形节点：`World` 没有 terrain 访问器，仓库里也没有 terrain 运行时。
 - 大纲行窗口化只覆盖世界 actor 树；通用 `TreeRow` 组件、模型树与 Sources 树仍整棵挂载。
   改名、拖放、重父级、多选都不存在。
@@ -396,4 +403,51 @@ SDL3 的 `SDL_dialog.h` 没有颜色对话框 API，本轮不做，也没有用�
   因此 ≤192 预算由单元测试断言真实节点数（`tree->GetNumChildren() <= 预算 + 2`），
   像素只证明上屏行数不随树增长；文字没有回读，行身份靠墨迹指纹比较（同名行会被判为同一行）；
   spotLight / squareAreaLight / SpeedTree 风剖面仍无像素证据（默认场景没有这三类对象）；
-  多选、拖放、逐 actor 可见性开关仍不存在。
+  多选、拖放、逐 actor 可见性开关在本批仍不存在（可见性在第 6 批加入，见下节）。
+
+### 2026-10-11 逐 actor 可见性验证
+
+本批新增逐 actor 可见性：World 侧运行时状态（`WorldMeshObject::visible`、
+`SceneNode::visible`、`WorldSquareAreaLight::visible` + 三个 `World::Set*Visible`）、
+`WorldSnapshotBuilder` 在构造快照时省略不可见网格与灯光、
+`UiActionType::SetActorVisible` → `RuntimeCommandType::SetActorVisible` →
+`RuntimeCommandExecutor` 的命令路径（身份在执行边界解析并校验），
+以及大纲 actor 行的行尾眼睛开关（`icons/eye.png` / `icons/eye-off.png`）。
+契约见 `documents/architecture/ui-component-system.md` 的"世界 actor 树契约"，
+发现、未做项与像素证据见 `ue-parity-audit.md` 第 6 轮。
+
+- MinGW 构建：`cmake --build build --target editor_ui_tests editor_viewport_tests main
+  material_instance_editor_production_tests -j8` 四个目标全部成功
+  （唯一告警是既有 MinGW `<ciso646>` deprecation）。
+- `ctest --test-dir build -R "^(UiColorTransform|UiWidgetTest|UiWidgetRefresh|EditorUiTest|ContentBrowserTest|DockWorkspaceTest|DockPersistenceTest|DockRmlTest|EditorViewportGeometry|EditorJsonAssetParsing|EditorJsonAssetPaths|EditorJsonAssetTypes|JsonAssetLibraryTest|ResourceEditorController|LargeCatalog/ContentBrowserPerformanceTest)\." --output-on-failure`
+  **283/283 通过**（基线 275/275，本批净增 8 项；4 项既有符号链接用例按原条件跳过）。
+  **同一选择连跑两次都是 283/283**。
+- `ctest --test-dir build -R "MaterialInstanceEditor" --output-on-failure`
+  **22/22 通过**，与基线一致；材质槽 → MI 文档流程与两条既有方向光写入路径未回归。
+- `editor_ui_tests` 目标新增 `source/world/world.cpp`、
+  `source/world/worldSnapshotBuilder.cpp`、`source/editor/scene/editorSceneActorBuilder.cpp`、
+  `source/sceneNode.cpp`、`source/core/runtimeResult.cpp`，
+  因此快照省略逻辑是对真实 World 与真实构建器断言的，不是测试替身。
+- **对任务书里"快照缓存需要失效触发"的更正**：这里没有快照缓存。
+  `RenderSystem::Render()` 与 EngineLoop 的 `PublishSnapshotFromActiveWorld()`
+  每帧都重建快照，`currentRenderScene` 也随之逐帧重建，所以可见性翻转下一帧就上屏，
+  既不需要 World 换代，也不需要 `device.waitIdle()` 或逐帧兜底重建。
+- 像素证据：`artifacts/rmlui-editor/visibility_probe.py`（gitignored）驱动真实窗口，
+  先用两条连续截图证明 viewport 区域 `changed=0`（稳定性对照），再点行尾眼睛。
+  隐藏太阳：平均亮度 134.361 → 133.923，`strong=3390/332280`、`max_delta=349`，
+  最强像素 `(587,348) rgb(235,234,234) → rgb(121,113,120)`；恢复后与基线
+  **逐字节相同**（`changed=0`）。隐藏一个网格：`strong=317`，
+  包围盒 `x=[577,597] y=[189,209]`（一个球格），最强像素
+  `(588,207) rgb(81,79,84) → rgb(215,218,225)`（球体 → 球后背景），
+  另一条网格行所在条带 `changed=0`。每张截图载荷 2764800 B。
+- 该次进程由探针强制终止，**这是渲染证据，不是 teardown 证据**。
+- 探针先于测试发现一个真实缺陷并已修复：行尾眼睛最初是
+  `position: absolute` + 未约束尺寸的 32px 图标（14px 规则只作用于 `.list-item` 内的图标），
+  布局上存在、合成点击通过，但真实窗口里该区域一个像素都没画出来。
+  现在眼睛是行的 flex 兄弟节点、图标显式 14px，
+  `EditorUiTest.OutlinerVisibilityToggleQueuesOneCommandAndDisturbsNothingElse`
+  断言眼睛落在 `#scene-models` 可视矩形内且图标盒为 14px、行高不变。
+- 本次没有验证：spotLight / squareAreaLight / 风剖面的眼睛（默认场景没有这三类对象）；
+  隐藏对象的材质实例文档与拾取行为只有单元测试覆盖（拾取来自 `meshDraws`，
+  因此隐藏网格不可拾取，与画面一致）；
+  可见性不持久化——重载场景一律全部可见。

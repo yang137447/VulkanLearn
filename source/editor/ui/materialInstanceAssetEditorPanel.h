@@ -93,6 +93,7 @@ private:
     bool OutlinerRowsNeedRebuild(const std::vector<EditorSceneActorSnapshot>& actors) const;
     EditorSceneActorWindow OutlinerWindow() const;
     void MeasureOutlinerRowHeight();
+    std::string OutlinerMountedVisuals() const;
     std::string OutlinerRowsMarkup(const EditorSceneActorWindow& window) const;
     void RefreshDetails();
     void RefreshControls();
@@ -175,12 +176,13 @@ private:
     std::string outlinerBuiltTypeFilter = "all";
     uint64_t outlinerRowSignature = 0;
     uint64_t outlinerRowsRevision = 0;
-    // 已挂载的窗口与选择态：用来判断是否需要重挂 DOM（而不是逐帧重写 markup）。
-    // outlinerMounted 让 Detach 之后重新 Attach 的第一帧一定重挂一次。
+    // 已挂载的窗口与"已挂载行的 (选择, 可见性)"签名：用来判断是否需要重挂 DOM
+    // （而不是逐帧重写 markup）。outlinerMounted 让 Detach 之后重新 Attach 的第一帧
+    // 一定重挂一次。
     EditorSceneActorWindow outlinerMountedWindow;
     bool outlinerMounted = false;
     uint64_t outlinerMountedRevision = 0;
-    std::string outlinerMountedSelection;
+    std::string outlinerMountedVisuals;
     // 行高由已挂载行的 margin box 实测；首帧保持 RCSS 兜底值。
     float outlinerRowHeight = SceneActorRowHeightFallback;
     uint64_t treeWorldGeneration = 0;

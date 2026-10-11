@@ -38,6 +38,9 @@ enum class UiActionType
     SaveCsmSettingsToScene,
     SetEnvironmentIntensity,
     SetSunIntensity,
+    // 逐 actor 可见性：stringValue 携带大纲的稳定身份（"pointLight|Key_Point_Light"），
+    // intValue 是 0/1。身份在执行边界解析并校验，UI 回调不接触 World。
+    SetActorVisible,
     SetSpeedTreeStrength,
     SetSpeedTreeGustingEnabled,
     ForceSpeedTreeGust,

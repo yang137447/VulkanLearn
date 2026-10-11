@@ -486,6 +486,53 @@ TEST_F(UiWidgetTest, TreeRowIconAndRowClassStayInsideTheSelectionButton)
     EXPECT_EQ(row->QuerySelector("img.row-icon"), nullptr);
 }
 
+TEST_F(UiWidgetTest, TreeRowTrailingControlSitsOutsideTheSelectionButton)
+{
+    TreeRowData actor;
+    actor.label = "Sphere_01";
+    actor.select = {"actor", 3};
+    actor.toggle = {"expand", 3};
+    actor.hasChildren = true;
+    actor.icon = "icons/mesh.png";
+    actor.rowClass = "actor-row";
+    actor.hiddenRow = true;
+    actor.hasTrailing = true;
+    actor.trailing = {"visible", 3};
+    actor.trailingIcon = "icons/eye-off.png";
+    actor.trailingLabel = "Show in viewport";
+    actor.trailingAlternate = true;
+    // 没有行尾控件的行（分组行）不产生第二个按钮。
+    TreeRowData plain;
+    plain.label = "Meshes";
+    plain.select = {"group", 0};
+    plain.rowClass = "group-row";
+    Show(TreeRow(plain) + TreeRow(actor));
+
+    auto* row = document->QuerySelector(".tree-row.actor-row");
+    ASSERT_NE(row, nullptr);
+    // hiddenRow 是固定 class，不是宿主可控文本。
+    EXPECT_TRUE(row->IsClassSet("hidden-row"));
+    EXPECT_FALSE(document->QuerySelector(".tree-row.group-row")->IsClassSet("hidden-row"));
+
+    auto* trailing = row->QuerySelector(".tree-trailing");
+    ASSERT_NE(trailing, nullptr);
+    // 行尾控件是独立的动作地址：点击它不会走上行选中动作。
+    EXPECT_EQ(trailing->GetAttribute<std::string>("data-action", ""), "visible");
+    EXPECT_EQ(trailing->GetAttribute<int>("data-index", -1), 3);
+    EXPECT_EQ(trailing->GetAttribute<std::string>("aria-label", ""), "Show in viewport");
+    EXPECT_TRUE(trailing->IsClassSet("alternate"));
+    auto* icon = trailing->QuerySelector("img");
+    ASSERT_NE(icon, nullptr);
+    EXPECT_EQ(icon->GetAttribute<std::string>("src", ""), "icons/eye-off.png");
+    // 选择按钮里仍然只有行首类型图标一个 img，行尾控件不是它的子节点。
+    auto* select = row->QuerySelector("[data-action=actor]");
+    ASSERT_NE(select, nullptr);
+    EXPECT_EQ(select->QuerySelector(".tree-trailing"), nullptr);
+    EXPECT_EQ(select->QuerySelector("img.row-icon")->GetAttribute<std::string>("src", ""),
+        "icons/mesh.png");
+    EXPECT_EQ(document->QuerySelector(".tree-row.group-row .tree-trailing"), nullptr);
+}
+
 TEST_F(UiWidgetTest, TreeRowEscapesLabelAndKeepsIconPath)
 {
     Show(TreeRow({"<b>x</b>", {"select", 0}, {}, 0, false, false, false, "icons/mesh.png"}));
@@ -785,6 +832,46 @@ TEST_F(UiWidgetTest, SceneActorRowsSignatureFollowsRowFieldsOnly)
     regenerated[0].worldGeneration = 2;
     regenerated[1].worldGeneration = 2;
     EXPECT_NE(SceneActorRowsSignature(regenerated), signature);
+}
+
+TEST_F(UiWidgetTest, SceneActorIdentityRoundTripsThroughItsParsedForm)
+{
+    // 身份是跨 GT→执行边界的唯一对象引用，因此必须与 SceneActorIdentity() 对称。
+    for (const EditorSceneActorType type : {EditorSceneActorType::Mesh,
+             EditorSceneActorType::DirectionalLight, EditorSceneActorType::PointLight,
+             EditorSceneActorType::SpotLight, EditorSceneActorType::SquareAreaLight})
+    {
+        EditorSceneActorIdentity parsed;
+        ASSERT_TRUE(ParseSceneActorIdentity(SceneActorIdentity(type, "Object_01"), parsed)) <<
+            SceneActorGroupTitle(type);
+        EXPECT_EQ(parsed.type, type);
+        EXPECT_EQ(parsed.name, "Object_01");
+    }
+
+    // 对象名本身可以含分隔符：只按第一个分隔符切分，名字里的 '|' 必须原样保留。
+    EditorSceneActorIdentity parsed;
+    ASSERT_TRUE(ParseSceneActorIdentity("mesh|Weird|Name", parsed));
+    EXPECT_EQ(parsed.type, EditorSceneActorType::Mesh);
+    EXPECT_EQ(parsed.name, "Weird|Name");
+
+    // 没有分隔符、未知分组键、空名字都必须在解析阶段被拒绝；
+    // 空名字若放行，执行端只会给出误导性的"对象不在当前 World"。
+    EXPECT_FALSE(ParseSceneActorIdentity("Sphere_01", parsed));
+    EXPECT_FALSE(ParseSceneActorIdentity("noSuchGroup|Sphere_01", parsed));
+    EXPECT_FALSE(ParseSceneActorIdentity("mesh|", parsed));
+}
+
+TEST_F(UiWidgetTest, OnlyRenderableActorTypesOfferAVisibilityToggle)
+{
+    EXPECT_TRUE(SceneActorHasVisibilityToggle(EditorSceneActorType::Mesh));
+    EXPECT_TRUE(SceneActorHasVisibilityToggle(EditorSceneActorType::DirectionalLight));
+    EXPECT_TRUE(SceneActorHasVisibilityToggle(EditorSceneActorType::PointLight));
+    EXPECT_TRUE(SceneActorHasVisibilityToggle(EditorSceneActorType::SpotLight));
+    EXPECT_TRUE(SceneActorHasVisibilityToggle(EditorSceneActorType::SquareAreaLight));
+    // 相机/环境/风剖面没有渲染侧可见性状态：不摆一个点了没有效果的控件。
+    EXPECT_FALSE(SceneActorHasVisibilityToggle(EditorSceneActorType::Camera));
+    EXPECT_FALSE(SceneActorHasVisibilityToggle(EditorSceneActorType::Environment));
+    EXPECT_FALSE(SceneActorHasVisibilityToggle(EditorSceneActorType::WindProfile));
 }
 } // namespace SceneActorTreeTests
 

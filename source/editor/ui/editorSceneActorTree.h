@@ -41,6 +41,21 @@ const EditorSceneActorList& SceneActorList(const std::shared_ptr<const EditorSce
 // 稳定 actor 身份：mesh 用场景对象名，其余类型用各自的 World 名字（灯光名、风剖面 key）。
 std::string SceneActorIdentity(EditorSceneActorType type, const std::string& name);
 
+// 稳定身份的逆解析：分隔符之前是分组键（= 场景对象 type），之后是对象名。
+// 执行边界用它把 UI 传来的身份还原成类型与名字，再交给 World 的可见性写入端；
+// 名字本身可以含 '|'，因此只按第一个分隔符切分。
+struct EditorSceneActorIdentity
+{
+    EditorSceneActorType type = EditorSceneActorType::Mesh;
+    std::string name;
+};
+
+bool ParseSceneActorIdentity(const std::string& identity, EditorSceneActorIdentity& parsed);
+
+// 可见性开关只覆盖渲染路径真正持有的对象：网格与四类灯。相机、环境与风剖面
+// 没有渲染侧可见性状态，因此不为它们显示一个点了没有效果的眼睛。
+bool SceneActorHasVisibilityToggle(EditorSceneActorType type);
+
 // 树行：三种行共用一套结构，因此窗口化只需要一个行下标空间。
 // 分组行只带标题与该组当前可见数量；actor 行带 sceneActors 里的下标；
 // 槽行（展开的 mesh actor 的材质槽）带动作分量下标与选中比较用的 World 槽号。
