@@ -7,15 +7,24 @@
     "repository": {
       "url": "https://github.com/yang137447/VulkanLearn.git",
       "provider": "github",
-      "revision": "2ede6289fd9e62fa5147b192902049ece04a5d7c"
+      "revision": "48089dba6b5f79152944a8029b28ddc379ab35aa"
     },
     "locale": "zh-CN",
     "quality_profile": "showcase"
   },
   "lanes": [
-    { "id": "main", "label": "隔离准备（不触碰 live 状态）" },
-    { "id": "commit", "label": "提交" },
-    { "id": "terminal", "label": "终态" }
+    {
+      "id": "main",
+      "label": "隔离准备（不触碰 live 状态）"
+    },
+    {
+      "id": "commit",
+      "label": "提交"
+    },
+    {
+      "id": "terminal",
+      "label": "终态"
+    }
   ],
   "states": [
     {
@@ -27,7 +36,14 @@
       "col": 4,
       "step": "00",
       "tag": "current",
-      "sources": [{ "path": "source/world/loading/worldGraphTransactionCoordinator.h", "line": 57, "end_line": 59, "label": "Execute 入口" }]
+      "sources": [
+        {
+          "path": "source/world/loading/worldGraphTransactionCoordinator.h",
+          "line": 57,
+          "end_line": 59,
+          "label": "Execute 入口"
+        }
+      ]
     },
     {
       "id": "graph-ready",
@@ -38,7 +54,14 @@
       "col": 0,
       "step": "01",
       "tag": "isolated",
-      "sources": [{ "path": "source/world/loading/worldGraphTransactionCoordinator.cpp", "line": 185, "end_line": 189, "label": "候选图加载" }]
+      "sources": [
+        {
+          "path": "source/world/loading/worldGraphTransactionCoordinator.cpp",
+          "line": 185,
+          "end_line": 189,
+          "label": "候选图加载"
+        }
+      ]
     },
     {
       "id": "world-ready",
@@ -49,7 +72,14 @@
       "col": 1,
       "step": "02",
       "tag": "isolated",
-      "sources": [{ "path": "source/world/loading/worldGraphTransactionCoordinator.cpp", "line": 191, "end_line": 200, "label": "World 准备失败即返回" }]
+      "sources": [
+        {
+          "path": "source/world/loading/worldGraphTransactionCoordinator.cpp",
+          "line": 191,
+          "end_line": 200,
+          "label": "World 准备失败即返回"
+        }
+      ]
     },
     {
       "id": "binding-ready",
@@ -60,7 +90,14 @@
       "col": 2,
       "step": "03",
       "tag": "isolated",
-      "sources": [{ "path": "source/world/loading/worldGraphTransactionCoordinator.cpp", "line": 225, "end_line": 232, "label": "运行时绑定准备" }]
+      "sources": [
+        {
+          "path": "source/world/loading/worldGraphTransactionCoordinator.cpp",
+          "line": 225,
+          "end_line": 232,
+          "label": "运行时绑定准备"
+        }
+      ]
     },
     {
       "id": "commit-prepped",
@@ -71,7 +108,14 @@
       "col": 3,
       "step": "04",
       "tag": "gate",
-      "sources": [{ "path": "source/world/loading/worldGraphTransactionCoordinator.cpp", "line": 272, "end_line": 274, "label": "离线产物身份校验" }]
+      "sources": [
+        {
+          "path": "source/world/loading/worldGraphTransactionCoordinator.cpp",
+          "line": 272,
+          "end_line": 274,
+          "label": "离线产物身份校验"
+        }
+      ]
     },
     {
       "id": "commit",
@@ -82,7 +126,14 @@
       "col": 4,
       "step": "05",
       "tag": "atomic",
-      "sources": [{ "path": "source/world/loading/worldGraphTransactionCoordinator.cpp", "line": 373, "end_line": 390, "label": "提交序列" }]
+      "sources": [
+        {
+          "path": "source/world/loading/worldGraphTransactionCoordinator.cpp",
+          "line": 373,
+          "end_line": 390,
+          "label": "提交序列"
+        }
+      ]
     },
     {
       "id": "commit-failed",
@@ -92,7 +143,14 @@
       "lane": "terminal",
       "col": 3,
       "tag": "terminal",
-      "sources": [{ "path": "source/world/loading/worldGraphTransactionCoordinator.cpp", "line": 196, "end_line": 200, "label": "失败返回" }]
+      "sources": [
+        {
+          "path": "source/world/loading/worldGraphTransactionCoordinator.cpp",
+          "line": 196,
+          "end_line": 200,
+          "label": "失败返回"
+        }
+      ]
     },
     {
       "id": "committed",
@@ -103,20 +161,68 @@
       "col": 4,
       "step": "06",
       "tag": "terminal",
-      "sources": [{ "path": "source/world/loading/worldGraphTransactionCoordinator.cpp", "line": 419, "label": "成功返回" }]
+      "sources": [
+        {
+          "path": "source/world/loading/worldGraphTransactionCoordinator.cpp",
+          "line": 419,
+          "label": "成功返回"
+        }
+      ]
     }
   ],
   "transitions": [
-    { "from": "idle", "to": "graph-ready", "label": "请求切换" },
-    { "from": "graph-ready", "to": "world-ready" },
-    { "from": "world-ready", "to": "binding-ready" },
-    { "from": "binding-ready", "to": "commit-prepped" },
-    { "from": "commit-prepped", "to": "commit", "label": "校验通过" },
-    { "from": "commit-prepped", "to": "commit-failed", "variant": "security", "label": "身份已过期" },
-    { "from": "world-ready", "to": "commit-failed", "variant": "security", "label": "准备失败" },
-    { "from": "commit", "to": "committed", "variant": "emphasis", "label": "提交成功" },
-    { "from": "commit-failed", "to": "idle", "variant": "dashed", "label": "仍渲染旧 World" },
-    { "from": "committed", "to": "idle", "variant": "dashed", "label": "下一帧继续" }
+    {
+      "from": "idle",
+      "to": "graph-ready",
+      "label": "请求切换"
+    },
+    {
+      "from": "graph-ready",
+      "to": "world-ready"
+    },
+    {
+      "from": "world-ready",
+      "to": "binding-ready"
+    },
+    {
+      "from": "binding-ready",
+      "to": "commit-prepped"
+    },
+    {
+      "from": "commit-prepped",
+      "to": "commit",
+      "label": "校验通过"
+    },
+    {
+      "from": "commit-prepped",
+      "to": "commit-failed",
+      "variant": "security",
+      "label": "身份已过期"
+    },
+    {
+      "from": "world-ready",
+      "to": "commit-failed",
+      "variant": "security",
+      "label": "准备失败"
+    },
+    {
+      "from": "commit",
+      "to": "committed",
+      "variant": "emphasis",
+      "label": "提交成功"
+    },
+    {
+      "from": "commit-failed",
+      "to": "idle",
+      "variant": "dashed",
+      "label": "仍渲染旧 World"
+    },
+    {
+      "from": "committed",
+      "to": "idle",
+      "variant": "dashed",
+      "label": "下一帧继续"
+    }
   ],
   "cards": [
     {

@@ -7,12 +7,12 @@
   "quality": "showcase",
   "specification": {
     "path": "C:\\Users\\pb.adcycyys001\\.codex\\worktrees\\rmlui-editor\\VulkanLearn\\documents\\contracts\\diagrams\\world-graph-transaction-lifecycle.json",
-    "sha256": "a49e694eadc37722806a4572071d091f2be36c785c3ef5dcb6f4a921ff1c2f94",
-    "bytes": 6160
+    "sha256": "5b55d6abc40f36b9790498d36f57131a9e1258ee5d93355d4ba19d616cff3cda",
+    "bytes": 6942
   },
   "artifact": {
     "path": "C:\\Users\\pb.adcycyys001\\.codex\\worktrees\\rmlui-editor\\VulkanLearn\\documents\\contracts\\diagrams\\world-graph-transaction-lifecycle.html",
-    "sha256": "1839cbb36cca2208ba8dc075fb250183039ff3e24ce039aa9b78d4395d83103b",
+    "sha256": "1fd5cdeb9144e4e3996594ef8f89a640781abcf34c97f699061e28adb8b03266",
     "bytes": 766570
   },
   "gates": {
@@ -43,7 +43,7 @@
     "noticeText": null
   },
   "visualReview": "not-requested",
-  "durationMs": 3579,
+  "durationMs": 4499,
   "visualReviewRecommendation": {
     "action": "inspect-route-readability",
     "signals": {

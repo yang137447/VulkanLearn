@@ -27,6 +27,31 @@ Validate model descriptors from the configured resource root:
 py -3 tool/validate_model_descriptors.py
 ```
 
+Validate that every real scene satisfies `scene.schema.json` (this also guards the
+direction that matters most — a schema stricter than `SceneAssetValidator` would
+reject scenes the engine loads):
+
+```powershell
+py -3 tool/validate_scene_schema.py
+```
+
+`scene.schema.json` is rebuilt from `source/scene/validation/sceneAssetValidator.cpp`
+and `source/world/loading/worldBuilder.cpp`, not from the previous schema. Two
+policies in it are deliberate and easy to get wrong:
+
+- **Object variants are self-contained.** Composing `allOf[nameAndType, …]` does not
+  work while both halves declare `additionalProperties: false` — each half then
+  rejects the other's fields and no object matches any branch. Keep `name` and `type`
+  listed directly in each variant.
+- **Scene objects allow unknown fields.** The validator reads the fields it knows and
+  never rejects an extra key (`SC_car_showcase` carries a `shadow` key on its
+  directional light and loads fine), so the schema must not be stricter.
+
+`SC_scene01` is a documented, intentional exception: it keeps a legacy `sunLight`
+object whose type the validator rejects, and the scene's own `description` says so.
+`tool/validate_scene_schema.py` lists it in `INTENTIONAL_EXCEPTIONS` rather than
+silently skipping it.
+
 Override the resource root when needed:
 
 ```powershell

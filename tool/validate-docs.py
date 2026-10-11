@@ -148,18 +148,17 @@ def check_routing(root, failures, notes):
 def check_diagrams(root, routed, failures, notes):
     """Architecture diagrams are contracts too: their IR is the topology source.
 
-    Two checks keep them honest. Every diagram must be reachable from the routing
-    table, and every diagram must pin the repository revision it was authored
-    against -- a diagram describing an older revision is a drifted contract.
+    The check that matters is whether the *evidence still holds*: a diagram pins a
+    revision and cites file/line ranges, so it has drifted when a cited path no
+    longer exists or its line range no longer fits the file. Comparing the pinned
+    SHA against HEAD would be worse than useless -- every commit to unrelated files
+    (including documentation) would fail the gate and train people to ignore it.
+    Use --update-revisions to advance the pins once the references still resolve.
     """
     diagrams = root / CONTRACTS / "diagrams"
     if not diagrams.is_dir():
         return
     import json
-
-    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root,
-                          capture_output=True, text=True)
-    head_revision = head.stdout.strip() if head.returncode == 0 else ""
 
     count = 0
     for path in sorted(diagrams.glob("*.json")):
@@ -179,12 +178,59 @@ def check_diagrams(root, routed, failures, notes):
         revision = (data.get("meta", {}).get("repository", {}) or {}).get("revision", "")
         if not revision:
             failures.append("%s: diagram pins no meta.repository.revision" % relative)
-        elif head_revision and revision != head_revision:
-            failures.append(
-                "%s: diagram pinned to %s but HEAD is %s -- re-author or accept it as drifted"
-                % (relative, revision[:12], head_revision[:12]))
-    if count:
-        notes.append("architecture diagrams checked: %d" % count)
+
+        references = 0
+        for node in data.get("components", []) + data.get("nodes", []) + \
+                data.get("participants", []) + data.get("states", []):
+            for source in node.get("sources", []) or []:
+                references += 1
+                cited = source.get("path", "")
+                target = root / cited
+                if not cited or not target.is_file():
+                    failures.append("%s: node %r cites a missing path: %s"
+                                    % (relative, node.get("id"), cited or "(empty)"))
+                    continue
+                if "line" not in source:
+                    continue
+                line_count = len(read(target).splitlines())
+                end = source.get("end_line", source["line"])
+                if not (1 <= source["line"] <= line_count) or not (1 <= end <= line_count):
+                    failures.append(
+                        "%s: node %r cites %s:%s-%s but the file has %d lines"
+                        % (relative, node.get("id"), cited, source["line"], end, line_count))
+        notes.append("%s: %d source reference(s) resolve" % (relative, references))
+
+
+def update_revisions(root):
+    """Advance each diagram's pinned revision to HEAD, for use after the cited
+    references have been re-verified. Writes only the revision field."""
+    import json
+    import subprocess as sp
+
+    head = sp.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True)
+    if head.returncode != 0:
+        print("cannot read HEAD")
+        return 1
+    revision = head.stdout.strip()
+    diagrams = root / CONTRACTS / "diagrams"
+    for path in sorted(diagrams.glob("*.json")):
+        if path.name.endswith((".finalize.json", ".delivery.json", ".finalize-summary.json",
+                               ".browser-check.json")):
+            continue
+        data = json.loads(read(path))
+        repository = data.get("meta", {}).get("repository")
+        if not repository:
+            continue
+        if repository.get("revision") == revision:
+            print("%s: already at %s" % (path.name, revision[:12]))
+            continue
+        repository["revision"] = revision
+        with open(path, "w", encoding="utf-8", newline="") as handle:
+            json.dump(data, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+        print("%s: revision -> %s" % (path.name, revision[:12]))
+    print("\nregenerate the HTML with archify finalize after this")
+    return 0
 
 
 def check_contracts(root, routed, failures, notes):
@@ -289,8 +335,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("repo", nargs="?", default=".", type=Path)
     parser.add_argument("--quiet-notes", action="store_true")
+    parser.add_argument("--update-revisions", action="store_true",
+                        help="advance each diagram's pinned revision to HEAD, after the "
+                             "cited references have been re-verified")
     args = parser.parse_args()
     root = args.repo.resolve()
+
+    if args.update_revisions:
+        return update_revisions(root)
 
     failures = []
     notes = []

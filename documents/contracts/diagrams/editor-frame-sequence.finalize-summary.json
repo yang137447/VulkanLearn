@@ -7,12 +7,12 @@
   "quality": "showcase",
   "specification": {
     "path": "C:\\Users\\pb.adcycyys001\\.codex\\worktrees\\rmlui-editor\\VulkanLearn\\documents\\contracts\\diagrams\\editor-frame-sequence.json",
-    "sha256": "f0ece7fe89403d5ffb535a409fb45b13a8b22d13974beac1906904a2bb8aef41",
-    "bytes": 5378
+    "sha256": "a04f0a8324cb813407c8b089096c11abcc57b0e599d2200f789311235b53c0f2",
+    "bytes": 6432
   },
   "artifact": {
     "path": "C:\\Users\\pb.adcycyys001\\.codex\\worktrees\\rmlui-editor\\VulkanLearn\\documents\\contracts\\diagrams\\editor-frame-sequence.html",
-    "sha256": "75028f065a3b2ee5a902573f1785040ef8141317511bf6e72aa1ada00eab58ce",
+    "sha256": "6a8c51bcd07ce94736e592b5d674f79860b5e1f41943d2008cf4437ed8366c76",
     "bytes": 762898
   },
   "gates": {
@@ -43,5 +43,5 @@
     "noticeText": null
   },
   "visualReview": "not-requested",
-  "durationMs": 4236
+  "durationMs": 4489
 }
