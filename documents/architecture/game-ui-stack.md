@@ -2,309 +2,299 @@
 
 ## Status
 
-This document is the current implementation contract for the VulkanLearn UI
-stack. The two-layer UI plan is implemented for the Windows-first Vulkan
-runtime:
+Current contract, 2026-10-10: RmlUi serves both runtime controls and the
+runtime-toggleable editor workspace. ImGui and its CMake option are removed.
+SDL3 remains the event/text-input boundary; VulkanLearn records the final
+overlay on the render thread.
 
-- RmlUi owns player-facing runtime content.
-- Dear ImGui owns optional developer tools.
-- SDL3 remains the platform event and text-input boundary.
-- VulkanLearn records the final overlay on the render thread.
-
-The original adoption plan is retained at
-`documents/plan/ui/game-ui-stack-plan.md` as the decision history and checklist.
-This document is the source of truth for the implemented behavior.
+`documents/plan/ui/game-ui-stack-plan.md` is historical adoption context.
+`documents/plan/ui/rmlui-editor-plan.md` separates the current migration baseline
+from future scene authoring and richer asset workflows.
 
 ## Responsibilities
 
-### Runtime UI
+`ui/runtime-control.rml`, `.rcss` and `localization.json` define the runtime HUD
+and control page: scene selection, frame status, debug views, tone mapping,
+bloom, CSM, camera speed, environment, vegetation, locale and visibility.
+The runtime page temporarily hides the editor and owns all input.
+Destructive validation workflows remain console/launch operations, not buttons.
 
-RmlUi documents and styles under `ui/` are game-content assets. The current
-runtime page is `ui/runtime-control.rml` with `ui/runtime-control.rcss` and
-`ui/localization.json`. It provides:
+`ui/editor-workspace.rml` and `.rcss` define the default workspace:
 
-- a compact HUD that shows only the active scene name
-- a right-side runtime debug page split into Overview, Views, Post FX, World,
-  and System tabs
-- frame, FPS, scene, input ownership, wind-profile, and hot-reload status
-- all 12 renderer debug-view modes
-- tone mapping plus bloom strength, threshold, knee, and clamp controls
-- environment intensity plus SpeedTree wind strength and gust controls
-- locale switching, developer-UI visibility, close, and quit actions
-- camera movement speed control on the System tab
-- development-time hot reload with last-valid-document rollback
+- Top: command toolbar.
+- Right 31%, upper: Scene Outliner and expandable model/material tree.
+- Right 31%, lower: Details, material slots, MI tabs, parameters, render states,
+  texture bindings and status, or a generic read-only JSON inspector.
+- Bottom left/center: Content Browser (MI/Mesh/Scene/Texture/Terrain JSON sources
+  tree, breadcrumbs, search, type filter, tiles/list, sorting, size and explicit
+  refresh controls) / Renderer
+  (offline controls) tabs; switching only changes presentation.
+- Left/center: a scene Viewport image and game input.
+- Bottom edge: status bar.
+- Dirty-close modal: explicit Save/Discard/Cancel.
 
-RmlUi does not receive direct access to `RenderGraph`, `MaterialInstance`, the
-Vulkan device, or swapchain objects. Destructive validation commands such as
-scene reload stress, resize stress, render-graph reload stress, and rollback
-failure tests remain console or launch-option workflows and are intentionally
-not exposed as clickable runtime controls.
+This remains a material workspace, not a full scene-authoring tool.
+Scene display uses a graph-owned offscreen image. GT owns only a logical
+texture token and a framebuffer-pixel layout rectangle, never image handles.
 
-### Developer UI
+The reusable `vl_ui_widgets` module and `ui/widgets/editor-widgets.rcss`
+own common controls, row/tab composition and DOM refresh behavior.
+`documents/architecture/ui-component-system.md` defines categories and ownership.
 
-Dear ImGui is compiled only when `VULKANLEARN_ENABLE_DEVELOPER_UI=ON` and is
-runtime-toggleable with `F1`. It is a material-instance tuning surface: the
-selected model's material-instance navigation occupies the left 18% and the
-material inspector occupies the right 30%. The center area is only a dock
-layout and input region; the scene remains displayed directly by the SDL3/Vulkan
-render path. Dear ImGui must not display the scene through `ImGui::Image`, bind
-a RenderGraph-owned scene texture, or introduce a scene texture ID into the UI
-snapshot. The editor is mutable through the typed editor-command boundary;
-Dear ImGui remains code-defined and is not part of RML/RCSS asset reload.
+`MaterialInstanceAssetEditorPanel` borrows a document and consumes immutable
+editor views. The model tree expands into material-slot children through the
+same selection sink as the material-slot list. Its callbacks emit typed editor commands, scene selection
+requests, or runtime actions; they do not invoke the document service,
+mutate World, write assets, or touch Vulkan. `materialInstanceEditorView.h`
+keeps the view types and command sink independent of any UI library.
 
-### Platform and renderer
+Same-frame edits coalesce into an ordered revision-gated atomic batch.
+Save and Validate include pending edits. Dirty close waits for a clean
+authoritative snapshot; failed saves keep the document and dialog open.
+Focused partial input is not overwritten by snapshots. Labels are RML-escaped.
+Color is currently edited as Linear RGBA numbers, without an sRGB palette.
+Texture edits can be saved; texture live-preview descriptor replacement remains
+unavailable. Numeric/render-state preview retains the existing renderer adapter.
+Content Browser selection is separate from the open document. A single click
+selects an item; a double click on MI emits the existing editable-document open
+command. Scene double-click reuses the existing `UiActionType::LoadWorld` transaction.
+Mesh/Texture/Terrain double-click opens a separate resource-editor tab with a
+type placeholder and read-only JSON Details. It does not load models, pixels,
+or referenced `data`; tabs are deduplicated and can return to World.
+Browser paths/filter/view/history are local presentation state.
+Type icons and material spheres are placeholders, not real thumbnails or model
+previews. The inspector does not replace MI editing or the scene Viewport.
 
-`PlatformApplication` and `PlatformWindow` translate SDL3 events into the
-engine-owned `PlatformEvent` type. `UiSubsystem` arbitrates those events and
-updates the active UI layer. `RenderSystem` records the immutable UI snapshot
-through `UiOverlayRendererVulkan` after all configured render-graph passes and
-before frame submission/presentation.
+### JSON Metadata Browsing
 
-## Typed Runtime Boundary
+`EditorJsonAssetLibrary` owns a dedicated catalog/document read worker. It scans
+the resource root once at initialization and again only on explicit Refresh;
+open requests read the selected JSON. Each-frame GT `Poll()` only tries the
+completion mailbox, with no per-frame catalog scan or asset-JSON I/O.
+Pending requests coalesce, opens take priority (also between scan files), and
+both worker delivery and GT publication reject superseded generations.
+This is separate from UI-document hot-reload fingerprinting.
 
-The UI boundary has three explicit data types:
+SAX parsing keeps top-level classification/name/description and bounded,
+preorder field rows, not a full JSON DOM. Every `data` field and its subtree at
+any depth (ASCII case-insensitive) is omitted from presentation and snapshots.
+The containing JSON bytes are still read and syntax-checked, including omitted
+subtrees; referenced payload files are never followed. Scans exclude `.git`,
+`Generated` and `data` directories, do not recurse through directory symlinks,
+and validate relative/canonical paths within the resource root.
 
-- `UiAction` is the only UI-to-engine mutation request. It carries an action
-  type plus typed integer, floating-point, and string payloads.
-- `UiViewModelSnapshot` is the game-thread read-only state published to the UI
-  update step. It contains frame timing, active world, debug view, tone mapping,
-  bloom, environment, SpeedTree wind, locale, and visibility state.
-- `UiRenderSnapshot` is immutable draw data consumed by the renderer. It owns
-  vertices, indices, clip rectangles, blend modes, generation-tagged RGBA8
-  UI texture snapshots, and the pixel-space `sceneViewportRect` used as layout
-  and picking metadata for the SDL3/Vulkan scene view. It does not own or
-  reference a scene image.
+Supported top-level types take precedence over filename prefixes; `speedtree`
+is classified as Mesh. Recognizable malformed candidates retain diagnostics,
+not partial field trees; unsupported explicit types are excluded.
+`EditorJsonAssetLimits` in `source/editor/assets/editorJsonAssetLibrary.h` pins
+4 MiB/file, 100000 source lines, depth/path-depth constraints of 64,
+4096 displayed fields, 1024-byte display-text truncation budgets (plus `...`),
+4096-byte JSON Pointers, 20000 catalog assets and 100000 visited scan entries.
+Field truncation still validates remaining syntax. These are metadata input
+limits, not runtime asset-loader contracts.
 
-RmlUi callbacks queue `UiAction` objects into `CommandBus`. ImGui material-
-instance edits use the typed editor-command boundary and never mutate live
-renderer state from a widget callback. `EngineLoop::ApplyQueuedUiActions()`
-drains the queue at the stable beginning of a frame. UI visibility and locale
-are applied to `UiSubsystem`, `UiActionType::Quit` is handled directly by
-`EngineLoop`, and render, post-process, environment, SpeedTree, and material-
-instance editor actions use their respective engine-owned command paths.
+Catalog and document views are shared immutable snapshots. Browser indices
+rebuild only on catalog identity/revision changes; filtering/sorting and markup
+are dirty-driven, and hidden browsers defer that work. Grid/list windows mount
+at most 192 item root nodes, including two overscan rows on each side within
+that cap, plus at most two height spacers. This does not bound item descendants
+or the Sources tree, and does not truncate the searchable/scrollable catalog.
+Selection/dirty markers update in place; double clicks validate path, DOM
+generation and scroll position. `EditorJsonInspectorController` provides
+expand/search and at most 64 field rows per page, refreshing only when its
+snapshot or presentation state changes. Constants and detailed contracts are
+recorded in `ui-component-system.md`.
+
+## Typed Boundaries
+
+- `UiAction`: typed runtime-control mutation requests into `CommandBus`.
+- `EditorCommandEnvelope`: asset-document mutation requests into `EditorCommandBus`.
+- `UiViewModelSnapshot` and `MaterialInstanceEditorSnapshot`: GT read-only presentation state.
+- `IEditorJsonAssetRequestSink`: read-only open/refresh intents to the GT facade.
+  `MaterialInstanceEditorSnapshot.assetCatalog` and `.jsonDocument` retain
+  `shared_ptr<const ...>` results without per-frame deep copies of assets/fields.
+- `UiRenderSnapshot`: immutable vertices, indices, clip rectangles, blend modes,
+  generation-tagged RGBA8 textures and `sceneViewportRect` layout/picking metadata.
+  `sceneViewportEnabled` selects offscreen presentation. A reserved
+  `SceneViewportTextureId` references the current renderer-owned output
+  logically; it carries no pixels, Vulkan handles or GPU ownership.
+
+`EngineLoop::ApplyQueuedUiActions()` drains runtime requests at the stable
+frame boundary. The MI runtime drains editor commands separately, validates
+document revisions and performs renderer-owned preview preparation.
+There is no second UI-to-renderer mutation route.
 
 ## Threading And Ownership
 
-The game thread owns `UiSubsystem`, the live RmlUi context, the ImGui context,
-input arbitration, asset reload, and view-model updates. The render thread
-never traverses live RmlUi documents or a live ImGui context.
+GT owns `UiSubsystem`, the RmlUi context, both documents, input arbitration,
+reload and view updates. At the end of Update it publishes one immutable
+snapshot through `UiRenderSnapshotQueue`, which retains only the newest.
+RT consumes that snapshot and may retain the last one when no new one exists.
+RT never traverses live documents or asset sessions.
+The JSON worker performs only bounded filesystem/parse work, never RmlUi,
+World mutation or Vulkan access. GT alone publishes its completed snapshots;
+shutdown joins the worker before releasing the library's snapshots.
 
-At the end of `UiSubsystem::Update()`, the subsystem builds one immutable
-`UiRenderSnapshot` and publishes it through `UiRenderSnapshotQueue`. The queue
-keeps only the newest snapshot. `RenderSystem` consumes the latest snapshot on
-the render thread and retains the last consumed snapshot when no newer one is
-available. The current V1 render loop waits for the render thread before the
-next engine-owned renderer mutation, which keeps the GT/RT lifetime contract
-deterministic while preserving the immutable boundary.
+The V1 loop waits for RT before the next engine-owned renderer mutation.
+Shutdown clears the queue after stopping RT and waiting for renderer idle,
+then destroys UI and renderer resources through their existing owners.
 
-The queue is cleared before UI shutdown. UI shutdown occurs after the render
-thread is stopped and the renderer has waited idle; renderer UI resources are
-then destroyed with the rest of the render-system resources.
+## Input
 
-## Input Arbitration
+Priority is global shortcuts, runtime page, editor workspace, then game.
+The runtime page uses `UiOnly`. The editor uses `GameAndUi` with a visible
+cursor; RmlUi hit testing, keyboard focus, drag capture and modal state claim
+panel input. The Viewport image passes through to the game, and clicking it blurs
+editor focus. A dirty-close modal claims the window. No visible UI restores
+the player's requested relative mouse mode.
 
-`UiInputMode` and `UiInputOwner` are explicit in `UiInputOwnershipSnapshot`.
-The implemented priority is:
+`InputSubsystem` drains SDL relative deltas each frame but publishes them only
+when pointer ownership is Game and relative mouse mode is actually enabled.
+Releasing capture cannot keep rotating the camera.
 
-1. global UI shortcuts
-2. the visible RmlUi runtime page
-3. the visible Dear ImGui developer UI
-4. remaining game input
+F10/gamepad Start toggle runtime controls, F1 toggles the editor, Esc toggles
+requested mouse capture, and gamepad East closes the runtime page.
+Ctrl+S saves the active MI when no close modal is open.
+RmlUi keyboard/D-pad/analog navigation uses reference-counted press state.
+Focus loss clears keys, pointer capture, controller and composition state;
+device removal clears controller state. Resize updates RmlUi dimensions and
+continues through the engine's swapchain lifecycle.
+SDL TEXT_EDITING updates composition; UTF-8 TEXT_INPUT commits once.
+Touch, accessibility semantics and safe-area policy remain future work.
 
-The runtime page uses `UiOnly` ownership for keyboard, pointer, controller,
-and text input. With only the developer UI visible, the mode is `GameAndUi`:
-relative mouse mode is disabled so the pointer remains visible, ImGui claims
-only events covered by its `WantCapture*` or navigation state, and
-`InputSubsystem` still drains SDL relative deltas every frame but publishes them
-to the game only while the pointer owner is `Game` and relative mouse mode is
-actually enabled. Releasing capture therefore exposes a free cursor without
-continuing to rotate the game camera. The pass-through center dock region keeps
-the directly rendered SDL3/Vulkan scene eligible for game camera input. Scene
-picking converts window coordinates into that layout rectangle and uses the
-same aspect ratio as rendering, so clicking a model continues to select the
-correct material instance after docking. With no UI modal or developer panel
-visible, the game owns input and the player's requested relative mouse mode is
-restored.
+## RmlUi And Reload
 
-`PlatformApplication` initializes SDL's gamepad subsystem, opens and closes
-connected gamepads, and publishes connection lifecycle events. The lifecycle
-updates `ImGuiBackendFlags_HasGamepad`; RmlUi D-pad and analog navigation use
-reference-counted key state so every direction press has a matching release,
-including axis recenter, focus loss, page close, and device removal. `F10` and
-gamepad `Start` toggle the runtime page; `Esc` toggles the player's requested
-mouse capture state; `F1` toggles developer UI;
-gamepad `East` closes an open runtime page.
+`RmlUiSystemInterface` handles time, diagnostics, clipboard and platform text
+activation. `RmlUiTextInputHandler` borrows the active TextInputContext and
+translates composition, selection, commit/cancel and focus loss.
+`RmlUiRenderInterface` captures scissor/transform data, premultiplied colors
+and generated/loaded textures into CPU snapshots with texture generations.
+There is no separate font atlas, input bridge or draw-data converter.
 
-SDL focus events are forwarded to ImGui with `AddFocusEvent()` and clear RmlUi
-pressed-key, pointer, controller, and composition state on focus loss. SDL
-`TEXT_EDITING` updates the active RmlUi `TextInputContext` composition range;
-the following UTF-8 `TEXT_INPUT` commits that composition without duplicating
-text. Resize events update the UI context and continue to the engine resize path.
+RmlUi colors are authored and premultiplied in sRGB. When the native surface
+uses an sRGB attachment, compiled geometry unassociates, linearizes and
+repremultiplies vertex RGB once; floating-point vertex colors avoid dark-color
+byte quantization. Loaded straight RGBA and generated premultiplied RGBA are
+converted once at their registration boundaries into linear premultiplied
+UNORM pixels. Alpha is not gamma-corrected. Ordinary UNORM surfaces retain the
+previous encoded-color path; the surface format is fixed for the UI context.
+This intentionally uses Vulkan's linear-space compositing rather than the
+nonlinear compositing in RmlUi's GL3 reference backend. The reserved scene-image
+token bypasses CPU texture conversion, so scene display is not linearized twice.
+Shader locations and reload descriptor ABI stay unchanged.
 
-Touch, accessibility semantics, and safe-area policy remain explicit follow-up
-capabilities rather than hidden assumptions.
+RML/RCSS must use the property set shipped in `extern/RmlUi`, not assume
+browser CSS shorthand support. Font configuration tries explicit faces first,
+then Windows fallback faces including Segoe UI and Microsoft YaHei.
+The editor stylesheet currently selects Segoe UI.
+Document source URLs use forward slashes (`path.generic_string()`), including
+on Windows, so relative RCSS/image URLs resolve from the document directory.
+Shared editor scrollbars declare explicit dimensions; an auto-width RmlUi
+vertical scrollbar can otherwise consume the content width and collapse a
+wrapped asset grid into a single column.
 
-## RmlUi Integration
+`WidgetDocument` caches markup and `(element id, property, value)` writes,
+avoiding repeated RmlUi DirtyProperty invalidation on unchanged layout/display
+values. Attach/Detach clear caches; subtree replacement invalidates only
+destroyed descendants, preserving unrelated layout caches during text refresh.
+Dock placement and panel visibility use the same property cache.
 
-`RmlUiSystemInterface` owns elapsed time, diagnostics routing, clipboard access,
-and platform text-input activation. `RmlUiTextInputHandler` retains only the
-currently active `TextInputContext` and translates SDL composition updates into
-RmlUi selection, composition, commit, cancel, and focus-loss operations.
-Candidate document validation captures RmlUi errors and warnings while parsing
-and converts them into a runtime error without replacing the active document.
+UI asset fingerprints drive candidate reload. Localization, runtime document
+and enabled editor document must all parse and pass required-control validation
+before replacement; errors or warnings reject the candidate. Failure retains
+the last valid documents. Runtime page, visibility, locale and runtime scroll
+state live outside replaceable documents. MI state remains in its runtime,
+not the RML document. Editor focus/scroll may reset on successful reload.
 
-`RmlUiRenderInterface` converts RmlUi geometry into the CPU-side render
-snapshot. It preserves scissor rectangles and transforms, packs premultiplied
-vertex colors, captures generated or loaded textures, and assigns a generation
-to every texture record. The renderer can therefore synchronize texture
-content without exposing RmlUi handles to Vulkan code.
+Published CPU texture data is retained by shared ownership. RT independently
+retires replaced GPU texture generations by completed frame epoch.
 
-The content contract follows the RmlUi property set shipped in `extern/RmlUi`.
-For example, font-family is a single registered family name and borders use
-RmlUi-supported width/color declarations; authored CSS must not assume browser
-CSS shorthand coverage.
+## Vulkan Overlay
 
-## Dear ImGui Integration
+`UiOverlayRendererVulkan` initializes after the renderer backend and owns its
+texture descriptor layout/pool, load-preserve and clear-present render passes,
+framebuffers, blend variants, per-image dynamic buffers, white fallback,
+GPU texture generations and retirements. Existing straight/premultiplied
+pipeline pairs remain transactional shader-reload participants; removing a UI
+producer does not change their ABI or retirement policy.
 
-When compiled in, `UiSubsystem` creates a docking-enabled ImGui context with
-keyboard and gamepad navigation enabled. The subsystem owns `NewFrame()`, panel
-construction, draw-data conversion, and shutdown. ImGui draw lists contain
-developer panels only and are appended to the same `UiRenderSnapshot` as RmlUi
-geometry, but the two widget models do not share state or callbacks. The
-center dock is not an ImGui scene-image surface: it does not emit an
-`ImGui::Image` command or consume a RenderGraph external texture.
+RenderSystem records configured scene passes first. Ordinary game frames overlay
+RmlUi onto the same swapchain image; editor frames sample the graph-owned scene
+output while composing the workspace into swapchain. The overlay borrows the
+scene view/sampler but never owns the image. RendererBackendVulkan retains
+submission/present ownership. Resize rebuilds framebuffers, pipelines and dynamic buffers. Texture retirement
+uses last-submitted/completed epochs; shutdown and resize wait for idle before
+forced release.
 
-The material editor runtime snapshot is built once per frame and shared by two
-docked content surfaces. The left navigation lists only material slots from the
-currently selected model; the right inspector owns document actions, tabs,
-parameters, texture bindings, and status. Parameter or texture edits create
-sparse overrides directly, while highlighted `Reset` actions restore the base
-material value without a separate override checkbox.
+Per-image vertex/index buffers reuse sufficient capacity and grow geometrically
+only when needed: 256 KiB vertex / 128 KiB index bases, doubled until sufficient
+(`NextBufferCapacity` in `source/ui/uiOverlayRendererVulkan.cpp`).
+CPU snapshot vectors reserve previous-frame vertex/index/draw counts.
+Draw snapshots are still produced each frame; these are allocation/layout
+optimizations, not a zero-work or measured-FPS guarantee.
 
-The ImGui font atlas is copied into the RmlUi texture bridge and is rendered
-through the same Vulkan texture-generation path. The UI overlay supports both
-straight-alpha and premultiplied-alpha draw commands so the RmlUi and ImGui
-outputs retain their intended blend behavior.
+### Independent Scene Viewport
 
-## Vulkan Overlay Contract
+RenderGraph owns one sampled single-sample color image per acquired swapchain
+image, plus pipeline-compatible alternate render passes/framebuffers for
+present-output passes. Editor frames render the final scene into that image,
+not into swapchain and not by screenshot/cropping. RT transitions color writes
+to shader-readable layout before the UI image samples it. UiOverlay owns
+per-image descriptors and updates only the slot whose fence BeginFrame has
+waited for. A compatible clear-present pass composes the workspace into
+swapchain; ordinary game frames keep the original present path.
 
-`UiOverlayRendererVulkan` is initialized after the renderer backend exists and
-uses the generated `uiOverlay_vert.spv` and `uiOverlay_frag.spv` shaders. It
-owns:
+Graph candidates, no-throw state swaps and immediate/epoch retirement include
+the added targets and alternate passes. The UI does not cache a graph pointer
+or import the target into its CPU texture map. Offline display borrows the
+current output and retires replaced framebuffers through the same epoch queue.
+Straight/premultiplied UI pipeline reload remains unchanged.
 
-- a descriptor set layout and pool for UI textures
-- a load-preserve swapchain render pass and per-image framebuffers
-- straight-alpha and premultiplied-alpha graphics pipelines
-- host-visible, per-swapchain-image dynamic vertex/index buffers
-- white-texture fallback for untextured geometry
-- texture generations and retired GPU textures
+The GPU backing resolution follows native-window/swapchain extent. Splitter
+movement changes logical viewport size and camera projection, but does not
+reallocate the graph on every pointer move or add a GPU idle wait.
+The UI samples the full image UV range. EngineLoop updates camera projection
+before freezing the World snapshot; CSM derives aspect from that snapshot.
+Picking subtracts the viewport origin and uses its logical dimensions.
+Offline film/preview uses logical viewport size; display validation uses that
+size and resamples to the backing image before UI presentation.
 
-`RenderSystem::RecordAndSubmitCurrentRenderScene()` records the configured
-SDL3/Vulkan render path first, then records the UI overlay into the same
-swapchain image. The scene is therefore displayed by Vulkan directly; the
-overlay only draws RmlUi and ImGui panels over it. `UiOverlayRendererVulkan`
-does not own, sample, or import the scene image, and leaves queue submission
-and present synchronization to `RendererBackendVulkan`.
+Present-output passes must be single-sample; the first viewport writer cannot
+LOAD uninitialized contents and the final writer must STORE its result.
+These are graph-source validation boundaries, not per-frame shader fixes.
+Native multi-window rendering and adaptive GPU backing resolution are not
+part of this implementation.
 
-Swapchain-dependent framebuffers, pipelines, and dynamic buffers are released
-and rebuilt through the renderer resize lifecycle. Replaced or removed GPU
-textures record `ResourceRetireQueue::GetLastSubmittedEpoch()` and are destroyed
-only after `RendererBackendVulkan::BeginFrame()` advances the completed epoch
-past their last use. Shutdown and resize wait for renderer idle before forcing
-any remaining overlay retirement records to release.
+## Configuration
 
-## Asset And Hot-Reload Contract
+`config/config.json -> ui` retains `enabled`, `hotReload`, `developerUiEnabled`,
+`developerUiVisible`, `assetRoot`, `document`, `localization`, `defaultLocale`
+and `fontFaces`. The developer names now select the RmlUi editor, not a library.
+`--dev-ui` enables it; `--no-dev-ui` skips editor initialization while retaining
+runtime controls. `ui.enabled=false` disables the complete UI subsystem.
+There is no developer-UI CMake switch.
 
-`config/config.json` contains the `ui` object. Its fields are:
+`workerThreadCount=1` renders synchronously; `2` consumes snapshots on RT.
+The normal shader build path produces overlay SPIR-V from `shader/glsl/`.
 
-- `enabled`
-- `hotReload`
-- `developerUiEnabled`
-- `developerUiVisible`
-- `assetRoot`
-- `document`
-- `localization`
-- `defaultLocale`
-- `fontFaces`
+## Verification
 
-Relative UI paths are resolved through `RuntimeConfig`, while the UI assets
-remain repository-local under `ui/`. Configured font paths are tried first;
-Windows platform fallback candidates are then attempted, including Segoe UI,
-Noto Sans SC, Microsoft YaHei, and Arial when available.
+Root-registered GoogleTest target `editor_ui_tests` loads real RML/RCSS with
+CPU fake sinks and covers parsing, refresh, focused input, edit batching,
+revision preservation, save/dirty close, escaping and typed offline actions.
+Existing MI suites retain document/codec/service and fake-preview coverage.
+Neither suite proves Vulkan preview replacement or interactive IME behavior.
+JSON-library suites cover nested data omission, classification, input/path
+limits, stale worker results, immutable publication and idle polling without
+rescans. Inspector tests cover read-only routing, escaping and 64-row pages.
+Browser performance tests use synthetic 10000/50000-item snapshots for bounded
+DOM, warm-frame caching, whole-row spacers and scroll/double-click identity;
+the worker's real catalog cap remains 20000. Widget/dock tests cover property
+cache invalidation and idle layout writes. CPU fake-GPU checks are not actual
+GPU/FPS acceptance.
 
-Hot reload fingerprints the document, linked stylesheets, and localization
-file. A changed candidate is parsed and validated before commit. If parsing,
-required-element validation, or localization validation fails, the previous
-valid document and localization table remain active and the failure is exposed
-in diagnostics and the developer panel. The active page, visibility, locale,
-and scroll position live outside the replaceable document and are restored on
-successful commit. RmlUi texture records are erased once the current CPU
-snapshot has captured them; published snapshots retain pixel data through
-`shared_ptr`, while the render thread independently retires the matching GPU
-resources by completed frame epoch.
-
-## Configuration And Launch Controls
-
-The build option `VULKANLEARN_ENABLE_DEVELOPER_UI` removes the Dear ImGui
-compile-time dependency and code path when disabled. Runtime UI can be disabled
-with `ui.enabled=false`; developer UI can be overridden at launch with:
-
-```text
-build/bin/main.exe --dev-ui
-build/bin/main.exe --no-dev-ui
-```
-
-The normal startup path exercises UI initialization when it is enabled. Shader
-reload runtime validation remains available through the retained shader test
-entries documented in `documents/rendering/shader-hot-reload.md`.
-
-`workerThreadCount=1` uses the synchronous render path. `workerThreadCount=2`
-keeps UI updates on the game thread and consumes the immutable snapshot on the
-render thread.
-
-## Source Of Truth
-
-- `source/ui/uiAction.h`: typed UI commands
-- `source/ui/uiRenderSnapshot.h`: view-model, ownership, and draw-data types
-- `source/ui/uiRenderSnapshotQueue.*`: game-thread/render-thread handoff
-- `source/ui/uiSubsystem.*`: RmlUi, ImGui, input, localization, and reload
-- `source/ui/rmlUiInterfaces.*`: RmlUi platform/render adapters
-- `source/ui/uiOverlayRendererVulkan.*`: Vulkan overlay resources and recording
-- `source/engine/engineLoop.*`: lifecycle, input priority, snapshots, actions
-- `source/renderSystem.*`: final-pass overlay recording and renderer view model
-- `source/platform/platformEvent.h`: platform-neutral event vocabulary
-- `config/config.json`: runtime UI switches and asset paths
-- `ui/`: versioned runtime UI content
-- `shader/glsl/uiOverlay.*`: UI shader source
-
-Generated SPIR-V under `shader/spv/` is produced by the normal startup shader
-compile path and is not the shader authoring source.
-
-## Verification Matrix
-
-The implemented stack is considered healthy when all of the following hold:
-
-1. CMake configures and the target links with the developer UI enabled.
-2. A short frame smoke initializes RmlUi, loads a platform font, initializes
-   the UI subsystem, starts the configured render-thread mode, and exits with
-   code zero.
-3. The smoke log contains no `RmlUi error`, `RmlUi warning`,
-   `DocumentParseFailed`, or render thread failure entries.
-4. A build configured with `VULKANLEARN_ENABLE_DEVELOPER_UI=OFF` omits Dear
-   ImGui, while `--no-dev-ui` on an ImGui-enabled build skips its runtime
-   initialization for that launch.
-5. A resize rebuilds the UI swapchain resources without destroying the active
-   document; direct SDL3/Vulkan scene display continues after the rebuild.
-6. Repeated valid and malformed hot reloads keep the last valid document,
-   release obsolete CPU texture records, and drain retired GPU textures after
-   their completed frame epochs.
-7. Focus loss, keyboard navigation, D-pad navigation, analog recenter, gamepad
-   removal, UTF-8 input, and IME composition leave no stuck input state.
-8. `Esc` releases mouse capture without publishing free-cursor motion to the
-   game camera; UI ownership may suspend capture without overwriting the
-   player's requested capture state.
-
-The first three checks are automated by the repository's existing configure,
-build, and frame-smoke commands. Interactive resize, hot reload, and visual
-focus checks remain manual acceptance checks when a desktop session is
-available.
+Application acceptance requires normal startup with editor enabled/disabled,
+one-/two-thread smoke without UI/Vulkan errors, actual window output, scene
+picking, resize, focus/IME/gamepad behavior and valid/invalid reload checks.
+Use existing launch/console capabilities; do not add runtime-test flags.
+Unperformed interactive checks must remain explicit verification gaps.

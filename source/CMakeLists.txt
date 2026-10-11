@@ -1,6 +1,9 @@
 file(GLOB_RECURSE sources CONFIGURE_DEPENDS "*.h" "*.cpp")
 # 纯 CPU 离线核心由独立静态库拥有，不能随递归源文件再次编进 main。
 list(FILTER sources EXCLUDE REGEX "/render/offline/core/")
+# 可复用 UI 控件只依赖 RmlUi，不经 main 的递归收集重复编译。
+list(FILTER sources EXCLUDE REGEX "/ui/widgets/")
+add_subdirectory(ui/widgets)
 
 add_executable(main ${sources})
 
@@ -33,15 +36,11 @@ PRIVATE
     BLAKE3::blake3
     OpenEXR::OpenEXR
     RmlUi::Core
+    vl_ui_widgets
     Threads::Threads
     vl_offline_core
     ws2_32 dbghelp advapi32 user32 secur32
     )
-
-if(VULKANLEARN_ENABLE_DEVELOPER_UI)
-    target_compile_definitions(main PRIVATE VULKANLEARN_ENABLE_DEVELOPER_UI)
-    target_link_libraries(main PRIVATE ImGui::ImGui)
-endif()
 
 if(VULKANLEARN_ENABLE_TRACY)
     target_compile_definitions(main PRIVATE TRACY_ENABLE)

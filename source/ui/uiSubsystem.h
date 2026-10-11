@@ -21,6 +21,7 @@
 #include "ui/uiAction.h"
 #include "ui/uiRenderSnapshot.h"
 #include "ui/uiRenderSnapshotQueue.h"
+#include "ui/viewport/editorViewportGeometry.h"
 
 namespace Rml
 {
@@ -39,6 +40,7 @@ class PlatformWindow;
 namespace Editor
 {
     class MaterialInstanceEditorRuntime;
+    class EditorJsonAssetLibrary;
 namespace Selection
 {
 struct MaterialInstanceSelection;
@@ -59,6 +61,7 @@ struct UiSubsystemDesc
 {
     uint32_t viewportWidth = 0;
     uint32_t viewportHeight = 0;
+    bool srgbFramebuffer = true;
     std::filesystem::path assetRoot;
     std::filesystem::path documentPath;
     std::filesystem::path localizationPath;
@@ -80,9 +83,11 @@ struct UiSceneOption
     std::string normalizedPhysicalPath;
 };
 
-// Owns game-thread RmlUi and optional Dear ImGui contexts, input arbitration, and hot reload.
+// GT 拥有运行时与编辑器 RML 文档；RT 只消费冻结的 draw snapshot。
 // It publishes typed actions and immutable snapshots, but does not mutate renderer internals.
-class UiSubsystem : public EditorUi::IMaterialInstanceSceneSelectionSink
+class UiSubsystem : public EditorUi::IMaterialInstanceSceneSelectionSink,
+    public EditorUi::IEditorRuntimeActionSink,
+    public EditorUi::IEditorJsonAssetRequestSink
 {
 public:
     UiSubsystem();
@@ -121,6 +126,9 @@ public:
         const Editor::Selection::MaterialInstanceModelContext& model) override;
     bool RequestMaterialSelection(
         const Editor::Selection::MaterialInstanceSelection& selection) override;
+    void RequestRuntimeAction(UiAction action) override;
+    void RequestOpenJsonAsset(const std::string& assetPath) override;
+    void RequestRefreshAssetCatalog() override;
 
     bool IsInitialized() const { return initialized; }
     bool IsRuntimePageVisible() const { return runtimePageVisible; }
@@ -129,6 +137,16 @@ public:
     uint32_t GetViewportWidth() const { return desc.viewportWidth; }
     uint32_t GetViewportHeight() const { return desc.viewportHeight; }
     const UiViewportRect& GetSceneViewportRect() const { return sceneViewportRect; }
+    bool IsSceneViewportEnabled() const
+    {
+        return developerUiVisible && !runtimePageVisible &&
+            (materialInstanceEditorPanel == nullptr ||
+                !materialInstanceEditorPanel->IsResourceEditorVisible());
+    }
+    std::optional<UiViewportPoint> GetSceneViewportPoint(float x, float y) const
+    {
+        return MapViewportPoint(sceneViewportRect, x, y);
+    }
     bool IsScenePickTarget(float mouseX, float mouseY) const;
     bool ShouldUseRelativeMouseModeForGame() const;
     bool ShouldGameReceiveKeyboard() const;
@@ -359,6 +377,7 @@ private:
     void LoadSceneOptions();
     RuntimeResult<LocalizationDatabase> LoadLocalizationCandidate() const;
     RuntimeResult<Rml::ElementDocument*> LoadDocumentCandidate();
+    RuntimeResult<Rml::ElementDocument*> LoadEditorDocumentCandidate();
     RuntimeResult<void> CommitInitialAssets();
     void CommitDocumentCandidate(
         Rml::ElementDocument& candidate,
@@ -378,7 +397,6 @@ private:
     std::string GetToneMappingName(int mode) const;
     std::string GetInputModeName(UiInputMode mode) const;
     void BuildAndPublishRenderSnapshot();
-    void AppendDeveloperDrawData(UiRenderSnapshot& snapshot);
     void BuildDeveloperPanels();
     void UpdateInputOwnership();
 
@@ -393,9 +411,6 @@ private:
     bool ProcessRmlGamepadAxisEvent(const PlatformEvent& event);
     void ResetRuntimeInputState();
     void ResetRmlGamepadInputState();
-    void ResetDeveloperInputState();
-    void ResetDeveloperGamepadInputState();
-    void UpdateDeveloperGamepadCapability();
     bool HandleGlobalShortcut(const PlatformEvent& event);
     void QueueAction(UiAction action);
     void QueueIntAction(UiActionType type, int value);
@@ -442,6 +457,7 @@ private:
         materialInstanceEditorRuntime;
     std::unique_ptr<EditorUi::MaterialInstanceAssetEditorPanel>
         materialInstanceEditorPanel;
+    std::unique_ptr<Editor::EditorJsonAssetLibrary> jsonAssetLibrary;
     std::optional<EditorUi::MaterialInstanceModelSnapshot>
         selectedModelMaterials;
     std::optional<uint32_t> selectedMaterialSlotIndex;
@@ -452,6 +468,7 @@ private:
         pendingMaterialInstanceSelection;
     Rml::Context* rmlContext = nullptr;
     Rml::ElementDocument* runtimeDocument = nullptr;
+    Rml::ElementDocument* editorDocument = nullptr;
     RmlUiSystemInterface rmlSystemInterface;
     RmlUiTextInputHandler rmlTextInputHandler;
     RmlUiRenderInterface rmlRenderInterface;
@@ -468,18 +485,23 @@ private:
     std::unordered_set<PlatformGamepadButton> rmlPressedGamepadButtons;
     std::chrono::steady_clock::time_point nextHotReloadCheck;
     uint64_t uiFrameIndex = 0;
+    size_t previousUiVertexCount = 0;
+    size_t previousUiIndexCount = 0;
+    size_t previousUiDrawCount = 0;
     float persistentScrollTop = 0.0f;
     std::string currentLocale;
     std::string hotReloadStatus;
-    UiTextureId imguiFontTextureId = 0;
     UiViewportRect sceneViewportRect;
     bool initialized = false;
     bool rmlInitialized = false;
     bool runtimePageVisible = false;
     bool developerUiEnabled = false;
     bool developerUiVisible = false;
-    bool imguiInitialized = false;
-    bool developerDockLayoutBuilt = false;
+    float pointerX = 0.0f;
+    float pointerY = 0.0f;
+    bool editorPointerCaptured = false;
+    // Viewport 捕获后不再用绝对光标位置决定输入归属，避免相对鼠标移出时误释放。
+    bool sceneViewportInputActive = false;
     bool gamepadConnected = false;
     bool rmlAxisLeftDown = false;
     bool rmlAxisRightDown = false;

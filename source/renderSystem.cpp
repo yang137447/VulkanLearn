@@ -1000,8 +1000,8 @@ bool RenderSystem::SetOfflineMode(bool enabled, std::string& message)
             if (snapshot.IsFailure())
                 throw std::runtime_error(VL::FormatRuntimeError(snapshot.Error()));
             auto settings = offlineSettings;
-            settings.width = rendererBackend->GetSwapchainExtent().width;
-            settings.height = rendererBackend->GetSwapchainExtent().height;
+            settings.width = GetSceneRenderExtent().width;
+            settings.height = GetSceneRenderExtent().height;
             const auto candidate = VL::PreflightOfflineRenderInput(
                 snapshot.Value(), *activeOfflineWorldAssets, settings);
             if (candidate.IsFailure())
@@ -1190,6 +1190,20 @@ void RenderSystem::RequestScreenshot(std::string path)
     pendingScreenshotPath = std::move(path);
 }
 
+void RenderSystem::SetSceneViewport(const VL::UiViewportRect& rect, bool enabled)
+{
+    // GT 已等上一帧 RT 归还所有权；隐藏视口时保留最后有效尺寸，不触发离线重启。
+    sceneViewportRequested = enabled;
+    if (rect.width != 0 && rect.height != 0) requestedSceneViewport = rect;
+}
+
+vk::Extent2D RenderSystem::GetSceneRenderExtent() const
+{
+    if (sceneViewportRequested && requestedSceneViewport.width != 0 && requestedSceneViewport.height != 0)
+        return {requestedSceneViewport.width, requestedSceneViewport.height};
+    return rendererBackend->GetSwapchainExtent();
+}
+
 void RenderSystem::ReleaseSwapchainDependentResources()
 {
     if (offlineCoordinator) offlineCoordinator->Stop();
@@ -1314,8 +1328,8 @@ VL::PreparedRuntimeBinding RenderSystem::PrepareRuntimeBinding(
     if (prepareOffline)
     {
         VL::OfflineRenderSettings settings = offlineSettings;
-        settings.width = rendererBackend->GetSwapchainExtent().width;
-        settings.height = rendererBackend->GetSwapchainExtent().height;
+        settings.width = GetSceneRenderExtent().width;
+        settings.height = GetSceneRenderExtent().height;
         auto offlineInput = VL::PreflightOfflineRenderInput(
             snapshotResult.Value(), *prepared.offlineWorldAssets, settings);
         if (offlineInput.IsFailure())
@@ -1892,8 +1906,8 @@ RenderSystem::CommitMaterialInstancePreviewDraft(
             if (snapshot.IsFailure())
                 throw std::runtime_error(VL::FormatRuntimeError(snapshot.Error()));
             auto settings = offlineSettings;
-            settings.width = rendererBackend->GetSwapchainExtent().width;
-            settings.height = rendererBackend->GetSwapchainExtent().height;
+            settings.width = GetSceneRenderExtent().width;
+            settings.height = GetSceneRenderExtent().height;
             const auto input = VL::PreflightOfflineRenderInput(snapshot.Value(), *candidate, settings);
             if (input.IsFailure())
                 throw std::runtime_error(VL::FormatRuntimeError(input.Error()));
@@ -2452,7 +2466,8 @@ RenderSystem::ShadowProjectionParams RenderSystem::CalculateShadowMatrixForCamer
     Eigen::Vector3f cameraRight = camera.right;
     Eigen::Vector3f cameraUp = camera.up;
     float cameraHFov = camera.horizontalFovDegrees;
-    float aspect = static_cast<float>(CommonFunction::GetWindowSize().x()) / static_cast<float>(CommonFunction::GetWindowSize().y());
+    // 阴影视锥必须与冻结相机投影一致；停靠视口不再采用整窗口宽高比。
+    float aspect = std::abs(camera.projection(1, 1) / camera.projection(0, 0));
     float cameraHFovRad = cameraHFov * static_cast<float>(M_PI) / 180.0f;
 
     float tanHalfFov = std::tan(cameraHFovRad * 0.5f);
@@ -2847,8 +2862,8 @@ void RenderSystem::PublishSnapshotFromActiveWorld()
     currentOfflineSnapshot = std::make_shared<const VL::WorldSnapshot>(snapshot);
     if (offlineMode && offlineCoordinator)
     {
-        offlineSettings.width = rendererBackend->GetSwapchainExtent().width;
-        offlineSettings.height = rendererBackend->GetSwapchainExtent().height;
+        offlineSettings.width = GetSceneRenderExtent().width;
+        offlineSettings.height = GetSceneRenderExtent().height;
         const auto target = offlineCameraMotionPolicy.Decide(
             snapshot.camera, snapshot.worldGeneration,
             activeOfflineWorldAssets.get(), offlineSettings,
@@ -2989,6 +3004,11 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
     uint32_t frameIndex = frameContext.frameIndex;
     swapChainImageIndex = frameContext.swapchainImageIndex;
     vk::CommandBuffer commandBuffer = frameContext.commandBuffer;
+    const bool renderToViewport = currentUiRenderSnapshot && currentUiRenderSnapshot->sceneViewportEnabled;
+    const RenderResource* viewportOutput = renderToViewport
+        ? renderGraph.GetSceneViewportOutput(swapChainImageIndex) : nullptr;
+    if (renderToViewport && viewportOutput == nullptr)
+        throw std::runtime_error("Editor scene viewport has no graph-owned output target.");
 
     {
         VulkanDebug::ScopedRegion frameRegion(
@@ -3005,7 +3025,8 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
                 ? offlineCoordinator->CapturePreview() : nullptr;
             // RT 只消费冻结的完整 film 或视口专用部分预览；导出接口不见预览。
             offlineDisplay.Record(commandBuffer, swapChainImageIndex,
-                result ? result->film : nullptr, preview, offlineAov, offlineExposure);
+                result ? result->film : nullptr, preview, offlineAov, offlineExposure,
+                viewportOutput, renderGraph.GetOwnerGeneration(), GetSceneRenderExtent());
         }
         else
         {
@@ -3045,7 +3066,8 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
                 swapChainImageIndex,
                 currentRenderScene,
                 currentResolvedRenderScene,
-                *this
+                *this,
+                renderToViewport
             };
             passRuntime.RecordPass(renderPassName, passContext);
         }
@@ -3053,6 +3075,21 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
 
         if (uiOverlayRenderer.IsInitialized() && currentUiRenderSnapshot != nullptr)
         {
+            if (viewportOutput != nullptr)
+            {
+                // 场景 attachment 写入先完成，RmlUi 图像再采样；布局和句柄只在 RT 消费。
+                vk::ImageMemoryBarrier barrier;
+                barrier.setImage(viewportOutput->image)
+                    .setSubresourceRange({vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1})
+                    .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                    .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+                    .setOldLayout(vk::ImageLayout::eColorAttachmentOptimal)
+                    .setNewLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+                    .setSrcAccessMask(vk::AccessFlagBits::eColorAttachmentWrite)
+                    .setDstAccessMask(vk::AccessFlagBits::eShaderRead);
+                commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eColorAttachmentOutput,
+                    vk::PipelineStageFlagBits::eFragmentShader, {}, {}, {}, barrier);
+            }
             VulkanDebug::ScopedRegion uiRegion(
                 commandBuffer,
                 "UI Overlay",
@@ -3060,7 +3097,9 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
             uiOverlayRenderer.Record(
                 commandBuffer,
                 swapChainImageIndex,
-                *currentUiRenderSnapshot);
+                *currentUiRenderSnapshot,
+                viewportOutput ? viewportOutput->imageView : vk::ImageView{},
+                viewportOutput ? viewportOutput->sampler : vk::Sampler{});
         }
     }
 

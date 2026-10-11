@@ -27,8 +27,8 @@ PassViewportState BuildPassViewportState(const PassRuntimeContext& context)
     const uint32_t passWidth = renderPass.width;
     const uint32_t passHeight = renderPass.height;
     PassViewportState state;
-    // SDL3/Vulkan 始终渲染完整 framebuffer，ImGui 只在最终阶段覆盖编辑器
-    // 面板；不能把 Dock 矩形传到这里，否则 fullscreen pass 的 UV 会失配。
+    // 游戏和独立 Viewport 都渲染完整 backing framebuffer；Dock 矩形只用于
+    // 最终 UI 采样，不能改变 fullscreen pass 的 UV 覆盖范围。
     state.viewport
         .setX(0.0f)
         .setY(0.0f)
@@ -94,8 +94,24 @@ void PassRuntime::BeginConfiguredRenderPass(PassRuntimeContext& context) const
     const PassViewportState viewportState = BuildPassViewportState(context);
 
     vk::RenderPassBeginInfo renderPassBeginInfo;
-    renderPassBeginInfo.setRenderPass(renderPass.renderPass);
-    renderPassBeginInfo.setFramebuffer(renderPass.framebuffers[context.swapChainImageIndex]);
+    const bool useViewport = context.renderToViewport &&
+        renderPass.outputLoadOps.find("swapChain") != renderPass.outputLoadOps.end();
+    if (useViewport)
+    {
+        if (!renderPass.sceneViewportRenderPass)
+        {
+            throw std::runtime_error(
+                "Scene viewport output is unavailable for pass: " + renderPass.name);
+        }
+        renderPassBeginInfo.setRenderPass(renderPass.sceneViewportRenderPass);
+        renderPassBeginInfo.setFramebuffer(
+            renderPass.sceneViewportFramebuffers.at(context.swapChainImageIndex));
+    }
+    else
+    {
+        renderPassBeginInfo.setRenderPass(renderPass.renderPass);
+        renderPassBeginInfo.setFramebuffer(renderPass.framebuffers.at(context.swapChainImageIndex));
+    }
     renderPassBeginInfo.setRenderArea(vk::Rect2D(
         vk::Offset2D(0, 0),
         vk::Extent2D(renderPass.width, renderPass.height)));

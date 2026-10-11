@@ -18,7 +18,7 @@ using EditorDocumentRevision = uint64_t;
 
 enum class EditorCommandSource
 {
-    ImGui,
+    RmlUi,
     Console,
     AI,
     RuntimeTest
@@ -343,13 +343,13 @@ using EditorCommandPayload = std::variant<
     ListEditorEventsPayload,
     ExecuteEditorCommandBatchPayload>;
 
-// 可跨 ImGui、Console、AI 和测试传递的稳定命令包；不携带指针、callback 或 Vulkan 对象。
+// 可跨 RmlUi、Console、AI 和测试传递的稳定命令包；不携带指针、callback 或 Vulkan 对象。
 struct EditorCommandEnvelope
 {
     uint32_t protocolVersion = kEditorCommandProtocolVersion;
     EditorCommandId commandId = 0;
     std::optional<EditorCorrelationId> correlationId;
-    EditorCommandSource source = EditorCommandSource::ImGui;
+    EditorCommandSource source = EditorCommandSource::RmlUi;
     EditorCommandType type = EditorCommandType::GetMaterialInstanceDocument;
     std::optional<EditorDocumentRevision> expectedDocumentRevision;
     EditorCommandPayload payload = EditorNoPayload{};

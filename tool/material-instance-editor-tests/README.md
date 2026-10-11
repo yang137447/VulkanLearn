@@ -29,7 +29,7 @@ not renderer ownership, descriptor replacement, or GPU synchronization. The
 actual renderer-owned numeric and render-state paths are implemented in the
 main application; these focused targets remain CPU-only and therefore do not
 prove Vulkan pipeline rebuilding, descriptor replacement, or GPU synchronization.
-Manual interactive ImGui acceptance remains outside this focused test target.
+Manual interactive RmlUi acceptance remains outside this focused test target.
 
 ## Build
 
@@ -90,7 +90,7 @@ that renderer-owned live pipeline rebuilding, texture live preview,
 `texture.open`, the event stream, or Vulkan frame synchronization is complete.
 Single-thread and double-thread application smoke tests passed on
 2026-08-27 for both workerThreadCount=1 and workerThreadCount=2, with developer
-UI disabled and enabled. Manual interactive ImGui acceptance remains
+UI disabled and enabled. Manual interactive RmlUi acceptance remains
 outstanding.
 
 ## Renderer Owner/Session Design

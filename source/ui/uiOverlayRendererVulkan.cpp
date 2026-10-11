@@ -199,10 +199,19 @@ void UiOverlayRendererVulkan::Initialize(
     backend = &rendererBackend;
     vertexShaderPath = std::move(initializeVertexShaderPath);
     fragmentShaderPath = std::move(initializeFragmentShaderPath);
-    CreateDescriptorResources();
-    CreateSwapchainResources();
-    EnsureWhiteTexture();
-    initialized = true;
+    try
+    {
+        CreateDescriptorResources();
+        CreateSwapchainResources();
+        EnsureWhiteTexture();
+        initialized = true;
+    }
+    catch (...)
+    {
+        // 新增的 present 变体与 viewport descriptor 也必须覆盖部分创建失败。
+        Shutdown();
+        throw;
+    }
 }
 
 void UiOverlayRendererVulkan::Shutdown()
@@ -317,11 +326,24 @@ void UiOverlayRendererVulkan::CollectRetiredTextures()
 void UiOverlayRendererVulkan::Record(
     vk::CommandBuffer commandBuffer,
     uint32_t swapchainImageIndex,
-    const UiRenderSnapshot& snapshot)
+    const UiRenderSnapshot& snapshot,
+    vk::ImageView sceneViewportView,
+    vk::Sampler sceneViewportSampler)
 {
     if (!initialized || snapshot.drawCommands.empty())
     {
         return;
+    }
+
+    if (sceneViewportView && sceneViewportSampler)
+    {
+        // BeginFrame 已等待当前 image fence；仅更新该 slot，不覆盖其他在途帧的绑定。
+        const vk::DescriptorImageInfo imageInfo(
+            sceneViewportSampler, sceneViewportView, vk::ImageLayout::eShaderReadOnlyOptimal);
+        vk::WriteDescriptorSet write;
+        write.setDstSet(sceneViewportDescriptors.at(swapchainImageIndex)).setDstBinding(0)
+            .setDescriptorType(vk::DescriptorType::eCombinedImageSampler).setImageInfo(imageInfo);
+        backend->UpdateDescriptorSets({write});
     }
 
     FrameBuffers& buffers = frameBuffers.at(swapchainImageIndex);
@@ -353,9 +375,11 @@ void UiOverlayRendererVulkan::Record(
 
     vk::RenderPassBeginInfo renderPassBeginInfo;
     renderPassBeginInfo
-        .setRenderPass(renderPass)
+        .setRenderPass(snapshot.sceneViewportEnabled ? editorPresentRenderPass : renderPass)
         .setFramebuffer(framebuffers.at(swapchainImageIndex))
         .setRenderArea(vk::Rect2D({0, 0}, backend->GetSwapchainExtent()));
+    const vk::ClearValue background(vk::ClearColorValue(std::array<float, 4>{0.012f, 0.012f, 0.014f, 1.0f}));
+    if (snapshot.sceneViewportEnabled) renderPassBeginInfo.setClearValues(background);
     commandBuffer.beginRenderPass(renderPassBeginInfo, vk::SubpassContents::eInline);
 
     const vk::Viewport viewport(
@@ -373,7 +397,8 @@ void UiOverlayRendererVulkan::Record(
     bool pipelineBound = false;
     for (const UiDrawCommand& drawCommand : snapshot.drawCommands)
     {
-        if (drawCommand.clipRect.width == 0 || drawCommand.clipRect.height == 0)
+        if (drawCommand.clipRect.width == 0 || drawCommand.clipRect.height == 0 ||
+            (drawCommand.textureId == SceneViewportTextureId && !sceneViewportView))
         {
             continue;
         }
@@ -392,7 +417,7 @@ void UiOverlayRendererVulkan::Record(
             vk::Extent2D(drawCommand.clipRect.width, drawCommand.clipRect.height));
         commandBuffer.setScissor(0, scissor);
 
-        const vk::DescriptorSet descriptorSet = ResolveTextureDescriptor(drawCommand.textureId);
+        const vk::DescriptorSet descriptorSet = ResolveTextureDescriptor(drawCommand.textureId, swapchainImageIndex);
         commandBuffer.bindDescriptorSets(
             vk::PipelineBindPoint::eGraphics,
             pipelineLayout,
@@ -459,10 +484,18 @@ void UiOverlayRendererVulkan::CreateSwapchainResources()
     CreateRenderPassAndFramebuffers();
     CreatePipelines();
     CreateFrameBuffers();
+    const std::vector<vk::DescriptorSetLayout> layouts(backend->GetSwapchainImageCount(), descriptorSetLayout);
+    sceneViewportDescriptors.resize(layouts.size());
+    vk::DescriptorSetAllocateInfo allocateInfo;
+    allocateInfo.setDescriptorPool(descriptorPool).setSetLayouts(layouts);
+    backend->AllocateDescriptorSets(allocateInfo, sceneViewportDescriptors);
 }
 
 void UiOverlayRendererVulkan::DestroySwapchainResources()
 {
+    for (auto& descriptor : sceneViewportDescriptors)
+        backend->FreeDescriptorSet(descriptorPool, descriptor);
+    sceneViewportDescriptors.clear();
     DestroyFrameBuffers();
     DestroyPipelines();
     DestroyRenderPassAndFramebuffers();
@@ -508,6 +541,9 @@ void UiOverlayRendererVulkan::CreateRenderPassAndFramebuffers()
         .setSubpasses(subpass)
         .setDependencies(dependency);
     renderPass = backend->CreateRenderPass(renderPassCreateInfo, "UI Overlay Render Pass");
+    // 编辑器的场景不再写 swapchain；兼容的 clear 变体建立整窗口背景后合成离屏纹理。
+    colorAttachment.setLoadOp(vk::AttachmentLoadOp::eClear).setInitialLayout(vk::ImageLayout::eUndefined);
+    editorPresentRenderPass = backend->CreateRenderPass(renderPassCreateInfo, "Editor Present Render Pass");
 
     const vk::Extent2D extent = backend->GetSwapchainExtent();
     const std::vector<vk::ImageView>& imageViews = backend->GetSwapchainImageViews();
@@ -536,6 +572,7 @@ void UiOverlayRendererVulkan::DestroyRenderPassAndFramebuffers()
     {
         backend->DestroyRenderPass(renderPass);
     }
+    if (editorPresentRenderPass) backend->DestroyRenderPass(editorPresentRenderPass);
 }
 
 void UiOverlayRendererVulkan::CreatePipelines()
@@ -598,7 +635,7 @@ UiOverlayRendererVulkan::BuildUiOverlayPipelinePair(
     std::vector<vk::VertexInputAttributeDescription> attributes;
     attributes.emplace_back(0, 0, vk::Format::eR32G32Sfloat, offsetof(UiVertex, position));
     attributes.emplace_back(1, 0, vk::Format::eR32G32Sfloat, offsetof(UiVertex, texCoord));
-    attributes.emplace_back(2, 0, vk::Format::eR8G8B8A8Unorm, offsetof(UiVertex, color));
+    attributes.emplace_back(2, 0, vk::Format::eR32G32B32A32Sfloat, offsetof(UiVertex, color));
 
     GraphicsPipelineStateDesc state;
     state.bUseVertexInput = true;
@@ -971,8 +1008,9 @@ void UiOverlayRendererVulkan::FlushRetiredTextures()
     retiredTextures.clear();
 }
 
-vk::DescriptorSet UiOverlayRendererVulkan::ResolveTextureDescriptor(UiTextureId textureId) const
+vk::DescriptorSet UiOverlayRendererVulkan::ResolveTextureDescriptor(UiTextureId textureId, uint32_t imageIndex) const
 {
+    if (textureId == SceneViewportTextureId) return sceneViewportDescriptors.at(imageIndex);
     auto textureIt = textures.find(textureId);
     if (textureIt == textures.end())
     {

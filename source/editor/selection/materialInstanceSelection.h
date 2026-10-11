@@ -74,7 +74,7 @@ std::optional<MaterialInstanceSelection> BuildSelectionFromModelMaterial(
     float distance = 0.0f);
 
 // 将平台鼠标事件转换为视口拾取请求。调用者应先让 UI 处理事件，只有未被
-// UI 消费的左键事件才应交给这个函数，避免点击 ImGui/RmlUi 控件误选场景。
+// UI 消费的左键事件才应交给这个函数，避免点击编辑器或运行时控件误选场景。
 std::optional<ScenePickRequest> BuildScenePickRequest(
     const PlatformEvent& event,
     uint32_t viewportWidth,

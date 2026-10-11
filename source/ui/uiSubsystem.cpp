@@ -16,18 +16,16 @@
 #include <RmlUi/Core/ElementDocument.h>
 #include <RmlUi/Core/Factory.h>
 #include <RmlUi/Core/Input.h>
+#include <RmlUi/Core/Elements/ElementFormControl.h>
 #include <nlohmann/json.hpp>
 
-#ifdef VULKANLEARN_ENABLE_DEVELOPER_UI
-#include <imgui.h>
-#include <imgui_internal.h>
-#endif
 
 #include "engine/diagnosticsSubsystem.h"
 #include "engine/runtimeCommand.h"
 #include "core/renderSession.h"
 #include "editor/selection/materialInstanceSelection.h"
 #include "editor/runtime/materialInstanceEditorRuntime.h"
+#include "editor/assets/editorJsonAssetLibrary.h"
 #include "editor/ui/materialInstanceAssetEditorPanel.h"
 #include "platform/platformEvent.h"
 #include "platform/platformWindow.h"
@@ -41,78 +39,6 @@ namespace
 
 constexpr float GamepadNavigationThreshold = 0.55f;
 
-#ifdef VULKANLEARN_ENABLE_DEVELOPER_UI
-constexpr const char* DeveloperDockSpaceName = "VulkanLearnDeveloperDockSpace";
-constexpr const char* MaterialInstanceNavigationWindowName = "Material Instance Navigation";
-constexpr const char* MaterialInstanceInspectorWindowName = "Material Instance Inspector";
-constexpr const char* OfflineRendererWindowName = "Offline Renderer";
-constexpr float NavigationDockWidthFraction = 0.28f;
-constexpr float NavigationDockHeightFraction = 0.35f;
-constexpr float InspectorDockWidthFraction = 0.30f;
-// InputInt 内部禁用 EnterReturnsTrue；数值变化时仍按原值域校验后提交。
-constexpr ImGuiInputTextFlags OfflineInputIntFlags = ImGuiInputTextFlags_None;
-static_assert(
-    (OfflineInputIntFlags & ImGuiInputTextFlags_EnterReturnsTrue) == 0,
-    "Offline InputInt must not use EnterReturnsTrue");
-
-void BuildDefaultDeveloperDockLayout(
-    ImGuiID dockspaceId,
-    const ImGuiViewport& mainViewport)
-{
-    ImGui::DockBuilderRemoveNode(dockspaceId);
-    ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
-    ImGui::DockBuilderSetNodePos(dockspaceId, mainViewport.WorkPos);
-    ImGui::DockBuilderSetNodeSize(dockspaceId, mainViewport.WorkSize);
-
-    ImGuiID centerNode = dockspaceId;
-    ImGuiID leftNode = 0;
-    ImGuiID rightNode = 0;
-    ImGui::DockBuilderSplitNode(
-        centerNode,
-        ImGuiDir_Left,
-        NavigationDockWidthFraction,
-        &leftNode,
-        &centerNode);
-    // 第二次 split 面向扣除左栏后的剩余区域，换算后仍让右栏约占主视口 30%。
-    const float inspectorFractionOfRemaining =
-        InspectorDockWidthFraction / (1.0f - NavigationDockWidthFraction);
-    ImGui::DockBuilderSplitNode(
-        centerNode,
-        ImGuiDir_Right,
-        inspectorFractionOfRemaining,
-        &rightNode,
-        &centerNode);
-
-    ImGuiID navigationNode = 0;
-    ImGuiID offlineNode = 0;
-    // 左栏上下分区让离线控件和反馈有固定空间，不再以浮窗遮住导航；
-    // 中央节点仍不放 ImGui 窗口，保留真实 Vulkan 视口。
-    ImGui::DockBuilderSplitNode(
-        leftNode,
-        ImGuiDir_Up,
-        NavigationDockHeightFraction,
-        &navigationNode,
-        &offlineNode);
-    ImGui::DockBuilderDockWindow(MaterialInstanceNavigationWindowName, navigationNode);
-    ImGui::DockBuilderDockWindow(OfflineRendererWindowName, offlineNode);
-    ImGui::DockBuilderDockWindow(MaterialInstanceInspectorWindowName, rightNode);
-    // 中央 Dock 保持为空，让真实 SDL3/Vulkan framebuffer 贯穿窗口，不再被
-    // 一个仅用于占位的 ImGui 3D Viewport 窗口覆盖或改变输入区域。
-    ImGui::DockBuilderFinish(dockspaceId);
-}
-
-bool IsPointInsideActiveDeveloperWindow(
-    const ImGuiWindow* window,
-    float mouseX,
-    float mouseY)
-{
-    if (window == nullptr || !window->WasActive)
-    {
-        return false;
-    }
-    return window->OuterRectClipped.Contains(ImVec2(mouseX, mouseY));
-}
-#endif
 
 std::string NormalizePathForComparison(const std::filesystem::path& path)
 {
@@ -182,6 +108,7 @@ Rml::Input::KeyIdentifier ToRmlKey(PlatformKey key)
     case PlatformKey::Enter: return Rml::Input::KI_RETURN;
     case PlatformKey::Escape: return Rml::Input::KI_ESCAPE;
     case PlatformKey::A: return Rml::Input::KI_A;
+    case PlatformKey::S: return Rml::Input::KI_S;
     case PlatformKey::C: return Rml::Input::KI_C;
     case PlatformKey::V: return Rml::Input::KI_V;
     case PlatformKey::X: return Rml::Input::KI_X;
@@ -240,79 +167,6 @@ Rml::Input::KeyIdentifier ToRmlGamepadKey(PlatformGamepadButton button)
     }
 }
 
-#ifdef VULKANLEARN_ENABLE_DEVELOPER_UI
-constexpr float ImGuiGamepadDeadZone = 0.20f;
-
-float NormalizeImGuiGamepadAxis(float magnitude)
-{
-    if (magnitude <= ImGuiGamepadDeadZone)
-    {
-        return 0.0f;
-    }
-    return (magnitude - ImGuiGamepadDeadZone) / (1.0f - ImGuiGamepadDeadZone);
-}
-
-ImGuiKey ToImGuiKey(PlatformKey key)
-{
-    switch (key)
-    {
-    case PlatformKey::Tab: return ImGuiKey_Tab;
-    case PlatformKey::Left: return ImGuiKey_LeftArrow;
-    case PlatformKey::Right: return ImGuiKey_RightArrow;
-    case PlatformKey::Up: return ImGuiKey_UpArrow;
-    case PlatformKey::Down: return ImGuiKey_DownArrow;
-    case PlatformKey::PageUp: return ImGuiKey_PageUp;
-    case PlatformKey::PageDown: return ImGuiKey_PageDown;
-    case PlatformKey::Home: return ImGuiKey_Home;
-    case PlatformKey::End: return ImGuiKey_End;
-    case PlatformKey::Insert: return ImGuiKey_Insert;
-    case PlatformKey::Delete: return ImGuiKey_Delete;
-    case PlatformKey::Backspace: return ImGuiKey_Backspace;
-    case PlatformKey::Space: return ImGuiKey_Space;
-    case PlatformKey::Enter: return ImGuiKey_Enter;
-    case PlatformKey::Escape: return ImGuiKey_Escape;
-    case PlatformKey::A: return ImGuiKey_A;
-    case PlatformKey::C: return ImGuiKey_C;
-    case PlatformKey::V: return ImGuiKey_V;
-    case PlatformKey::X: return ImGuiKey_X;
-    case PlatformKey::Y: return ImGuiKey_Y;
-    case PlatformKey::Z: return ImGuiKey_Z;
-    case PlatformKey::F1: return ImGuiKey_F1;
-    case PlatformKey::F10: return ImGuiKey_F10;
-    case PlatformKey::Num0: return ImGuiKey_0;
-    case PlatformKey::Num1: return ImGuiKey_1;
-    case PlatformKey::Num2: return ImGuiKey_2;
-    case PlatformKey::Num3: return ImGuiKey_3;
-    case PlatformKey::Num4: return ImGuiKey_4;
-    case PlatformKey::Num5: return ImGuiKey_5;
-    case PlatformKey::Num6: return ImGuiKey_6;
-    case PlatformKey::Num7: return ImGuiKey_7;
-    case PlatformKey::Num8: return ImGuiKey_8;
-    case PlatformKey::Num9: return ImGuiKey_9;
-    default: return ImGuiKey_None;
-    }
-}
-
-ImGuiKey ToImGuiGamepadButton(PlatformGamepadButton button)
-{
-    switch (button)
-    {
-    case PlatformGamepadButton::South: return ImGuiKey_GamepadFaceDown;
-    case PlatformGamepadButton::East: return ImGuiKey_GamepadFaceRight;
-    case PlatformGamepadButton::West: return ImGuiKey_GamepadFaceLeft;
-    case PlatformGamepadButton::North: return ImGuiKey_GamepadFaceUp;
-    case PlatformGamepadButton::Back: return ImGuiKey_GamepadBack;
-    case PlatformGamepadButton::Start: return ImGuiKey_GamepadStart;
-    case PlatformGamepadButton::LeftShoulder: return ImGuiKey_GamepadL1;
-    case PlatformGamepadButton::RightShoulder: return ImGuiKey_GamepadR1;
-    case PlatformGamepadButton::DpadUp: return ImGuiKey_GamepadDpadUp;
-    case PlatformGamepadButton::DpadDown: return ImGuiKey_GamepadDpadDown;
-    case PlatformGamepadButton::DpadLeft: return ImGuiKey_GamepadDpadLeft;
-    case PlatformGamepadButton::DpadRight: return ImGuiKey_GamepadDpadRight;
-    default: return ImGuiKey_None;
-    }
-}
-#endif
 
 std::vector<std::filesystem::path> BuildPlatformFontCandidates()
 {
@@ -370,6 +224,7 @@ RuntimeResult<void> UiSubsystem::Initialize(
     }
 
     desc = initializeDesc;
+    rmlRenderInterface.SetLinearColorOutput(desc.srgbFramebuffer);
     sceneViewportRect = {
         0,
         0,
@@ -443,22 +298,16 @@ void UiSubsystem::Shutdown()
         ResetRuntimeInputState();
     }
 
-#ifdef VULKANLEARN_ENABLE_DEVELOPER_UI
-    if (imguiInitialized)
-    {
-        if (imguiFontTextureId != 0)
-        {
-            rmlRenderInterface.ReleaseTexture(static_cast<Rml::TextureHandle>(imguiFontTextureId));
-            imguiFontTextureId = 0;
-        }
-        ImGui::DestroyContext();
-        imguiInitialized = false;
-    }
-#endif
 
     materialInstanceEditorPanel.reset();
+    jsonAssetLibrary.reset();
     materialInstanceEditorRuntime.reset();
 
+    if (rmlContext != nullptr && editorDocument != nullptr)
+    {
+        rmlContext->UnloadDocument(editorDocument);
+        editorDocument = nullptr;
+    }
     if (rmlContext != nullptr && runtimeDocument != nullptr)
     {
         rmlContext->UnloadDocument(runtimeDocument);
@@ -490,7 +339,7 @@ void UiSubsystem::Shutdown()
     runtimePageVisible = false;
     developerUiVisible = false;
     developerUiEnabled = false;
-    developerDockLayoutBuilt = false;
+    editorPointerCaptured = false;
     hotReloadStatus.clear();
     rmlKeyPressCounts.clear();
     rmlPressedKeyboardKeys.clear();
@@ -522,10 +371,8 @@ bool UiSubsystem::HandlePlatformEvent(const PlatformEvent& event)
         if (event.type == PlatformEventType::GamepadDisconnected)
         {
             ResetRmlGamepadInputState();
-            ResetDeveloperGamepadInputState();
         }
         gamepadConnected = event.gamepadConnected;
-        UpdateDeveloperGamepadCapability();
         UpdateInputOwnership();
         return false;
     }
@@ -534,7 +381,6 @@ bool UiSubsystem::HandlePlatformEvent(const PlatformEvent& event)
         event.type == PlatformEventType::WindowFocusLost)
     {
         ProcessRuntimeUiEvent(event);
-        ProcessDeveloperUiEvent(event);
         UpdateInputOwnership();
         return false;
     }
@@ -597,6 +443,7 @@ void UiSubsystem::Update(const UiViewModelSnapshot& viewModelSnapshot)
     TryHotReload();
     SyncBindingData();
     dataModelHandle.DirtyAllVariables();
+    BuildDeveloperPanels();
     rmlContext->Update();
     BuildAndPublishRenderSnapshot();
     UpdateInputOwnership();
@@ -620,43 +467,17 @@ void UiSubsystem::Resize(uint32_t width, uint32_t height)
 
 bool UiSubsystem::IsScenePickTarget(float mouseX, float mouseY) const
 {
-#ifdef VULKANLEARN_ENABLE_DEVELOPER_UI
-    if (!developerUiVisible || runtimePageVisible || !imguiInitialized ||
-        !std::isfinite(mouseX) || !std::isfinite(mouseY))
+    if (!developerUiVisible || runtimePageVisible || editorDocument == nullptr ||
+        !std::isfinite(mouseX) || !std::isfinite(mouseY) ||
+        mouseX < 0 || mouseY < 0 || mouseX >= desc.viewportWidth || mouseY >= desc.viewportHeight ||
+        materialInstanceEditorPanel == nullptr || materialInstanceEditorPanel->HasModal() ||
+        materialInstanceEditorPanel->IsWorkspaceDragging() ||
+        !ContainsViewportPoint(sceneViewportRect, mouseX, mouseY))
     {
         return false;
     }
-
-    if (mouseX < static_cast<float>(sceneViewportRect.x) ||
-        mouseY < static_cast<float>(sceneViewportRect.y) ||
-        mouseX >= static_cast<float>(
-            sceneViewportRect.x + static_cast<int32_t>(sceneViewportRect.width)) ||
-        mouseY >= static_cast<float>(
-            sceneViewportRect.y + static_cast<int32_t>(sceneViewportRect.height)))
-    {
-        return false;
-    }
-
-    const ImGuiWindow* navigationWindow =
-        ImGui::FindWindowByName(MaterialInstanceNavigationWindowName);
-    if (IsPointInsideActiveDeveloperWindow(navigationWindow, mouseX, mouseY))
-    {
-        return false;
-    }
-
-    const ImGuiWindow* inspectorWindow =
-        ImGui::FindWindowByName(MaterialInstanceInspectorWindowName);
-    if (IsPointInsideActiveDeveloperWindow(inspectorWindow, mouseX, mouseY))
-    {
-        return false;
-    }
-
-    return true;
-#else
-    static_cast<void>(mouseX);
-    static_cast<void>(mouseY);
-    return false;
-#endif
+    const Rml::Element* hit = rmlContext->GetElementAtPoint(Rml::Vector2f(mouseX, mouseY));
+    return materialInstanceEditorPanel->IsSceneViewportElement(hit);
 }
 
 void UiSubsystem::ApplyAction(const UiAction& action)
@@ -664,6 +485,7 @@ void UiSubsystem::ApplyAction(const UiAction& action)
     switch (action.type)
     {
     case UiActionType::ToggleRuntimePage:
+        ResetRuntimeInputState();
         runtimePageVisible = !runtimePageVisible;
         if (!runtimePageVisible)
         {
@@ -682,9 +504,11 @@ void UiSubsystem::ApplyAction(const UiAction& action)
             developerUiVisible = !developerUiVisible;
             if (!developerUiVisible)
             {
-                ResetDeveloperInputState();
+                ResetRuntimeInputState();
+                editorPointerCaptured = false;
             }
         }
+        ApplyDocumentState();
         break;
     case UiActionType::SetLocale:
         if (localizations.find(action.stringValue) != localizations.end())
@@ -734,6 +558,7 @@ void UiSubsystem::TickMaterialInstanceEditor()
         return;
     }
     materialInstanceEditorRuntime->Tick();
+    if (jsonAssetLibrary != nullptr) jsonAssetLibrary->Poll();
 }
 
 bool UiSubsystem::OpenMaterialInstanceFromSelection(
@@ -751,10 +576,9 @@ bool UiSubsystem::OpenMaterialInstanceFromSelection(
         return false;
     }
 
-    if (materialInstanceEditorPanel != nullptr)
-    {
-        materialInstanceEditorPanel->SetVisible(true);
-    }
+    developerUiVisible = true;
+    if (materialInstanceEditorPanel != nullptr) materialInstanceEditorPanel->ShowMaterialDetails();
+    ApplyDocumentState();
 
     EditorUi::MaterialInstanceModelSnapshot modelSnapshot;
     modelSnapshot.worldGeneration = selection.modelContext.worldGeneration;
@@ -905,7 +729,13 @@ bool UiSubsystem::RequestMaterialSelection(
 
 bool UiSubsystem::ShouldUseRelativeMouseModeForGame() const
 {
-    return initialized && !runtimePageVisible && !developerUiVisible;
+    if (!initialized || runtimePageVisible) return false;
+    if (materialInstanceEditorPanel != nullptr &&
+        materialInstanceEditorPanel->IsResourceEditorVisible())
+        return false;
+    // 捕获由 Viewport 点击建立，不能再用绝对光标位置反向取消；
+    // 相对鼠标移动期间 SDL 的绝对坐标可能落在 Viewport 外。
+    return !developerUiVisible || sceneViewportInputActive;
 }
 
 bool UiSubsystem::ShouldGameReceiveKeyboard() const
@@ -1223,61 +1053,11 @@ RuntimeResult<void> UiSubsystem::InitializeDataModel()
 
 RuntimeResult<void> UiSubsystem::InitializeDeveloperUi()
 {
-#ifdef VULKANLEARN_ENABLE_DEVELOPER_UI
-    if (!developerUiEnabled)
-    {
-        return RuntimeResult<void>::Success();
-    }
-
-    IMGUI_CHECKVERSION();
-    ImGuiContext* context = ImGui::CreateContext();
-    if (context == nullptr)
-    {
-        return RuntimeResult<void>::Failure(MakeRuntimeError(
-            "UiSubsystem.ImGuiContextFailed",
-            "Dear ImGui failed to create the developer UI context."));
-    }
-
-    ImGuiIO& io = ImGui::GetIO();
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
-    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-    io.IniFilename = nullptr;
-    ImGui::StyleColorsDark();
-
-    unsigned char* fontPixels = nullptr;
-    int fontWidth = 0;
-    int fontHeight = 0;
-    io.Fonts->GetTexDataAsRGBA32(&fontPixels, &fontWidth, &fontHeight);
-    if (fontPixels == nullptr || fontWidth <= 0 || fontHeight <= 0)
-    {
-        ImGui::DestroyContext(context);
-        return RuntimeResult<void>::Failure(MakeRuntimeError(
-            "UiSubsystem.ImGuiFontAtlasFailed",
-            "Dear ImGui failed to build its font atlas."));
-    }
-
-    const size_t fontByteCount =
-        static_cast<size_t>(fontWidth) * static_cast<size_t>(fontHeight) * 4u;
-    const Rml::TextureHandle fontTexture = rmlRenderInterface.GenerateTexture(
-        {reinterpret_cast<const Rml::byte*>(fontPixels), fontByteCount},
-        Rml::Vector2i(fontWidth, fontHeight));
-    if (fontTexture == 0)
-    {
-        ImGui::DestroyContext(context);
-        return RuntimeResult<void>::Failure(MakeRuntimeError(
-            "UiSubsystem.ImGuiFontTextureFailed",
-            "Dear ImGui failed to register its font texture."));
-    }
-
-    imguiFontTextureId = static_cast<UiTextureId>(fontTexture);
-    io.Fonts->SetTexID(static_cast<ImTextureID>(imguiFontTextureId));
-    imguiInitialized = true;
-    UpdateDeveloperGamepadCapability();
-#else
-    developerUiEnabled = false;
-    developerUiVisible = false;
-#endif
+    if (!developerUiEnabled) return RuntimeResult<void>::Success();
+    auto candidate = LoadEditorDocumentCandidate();
+    if (candidate.IsFailure()) return RuntimeResult<void>::Failure(candidate.Error());
+    editorDocument = candidate.Value();
+    ApplyDocumentState();
     return RuntimeResult<void>::Success();
 }
 
@@ -1285,6 +1065,7 @@ RuntimeResult<void> UiSubsystem::InitializeMaterialInstanceEditor()
 {
     materialInstanceEditorPanel.reset();
     materialInstanceEditorRuntime.reset();
+    jsonAssetLibrary.reset();
 
     if (!developerUiEnabled)
     {
@@ -1320,8 +1101,35 @@ RuntimeResult<void> UiSubsystem::InitializeMaterialInstanceEditor()
         std::make_unique<EditorUi::MaterialInstanceAssetEditorPanel>(
             materialInstanceEditorRuntime.get());
     materialInstanceEditorPanel->SetSceneSelectionSink(this);
-    materialInstanceEditorPanel->SetVisible(true);
+    materialInstanceEditorPanel->SetRuntimeActionSink(this);
+    std::string error;
+    jsonAssetLibrary = std::make_unique<Editor::EditorJsonAssetLibrary>();
+    if (!jsonAssetLibrary->Initialize(desc.sceneRoot.parent_path(), error))
+        return RuntimeResult<void>::Failure(MakeRuntimeError("UiSubsystem.AssetLibraryInvalid", error));
+    materialInstanceEditorPanel->SetJsonAssetRequestSink(this);
+    if (!materialInstanceEditorPanel->Attach(*editorDocument, error))
+        return RuntimeResult<void>::Failure(MakeRuntimeError("UiSubsystem.EditorDocumentInvalid", error));
     return RuntimeResult<void>::Success();
+}
+
+RuntimeResult<Rml::ElementDocument*> UiSubsystem::LoadEditorDocumentCandidate()
+{
+    const auto path = desc.assetRoot / "editor-workspace.rml";
+    rmlSystemInterface.BeginCandidateValidation();
+    // RmlUi 的 URL 基路径解析要求正斜杠；原生 Windows 路径会丢失 img 的相对目录。
+    Rml::ElementDocument* candidate = rmlContext->LoadDocument(path.generic_string());
+    std::string error;
+    const bool parsed = rmlSystemInterface.EndCandidateValidation(error);
+    const bool valid = candidate != nullptr && parsed &&
+        EditorUi::MaterialInstanceAssetEditorPanel::ValidateDocument(*candidate, error);
+    if (!valid)
+    {
+        if (candidate != nullptr) rmlContext->UnloadDocument(candidate);
+        return RuntimeResult<Rml::ElementDocument*>::Failure(MakeRuntimeError(
+            "UiSubsystem.EditorDocumentInvalid",
+            error.empty() ? "Editor workspace could not be loaded." : error, path.string()));
+    }
+    return RuntimeResult<Rml::ElementDocument*>::Success(candidate);
 }
 
 RuntimeResult<void> UiSubsystem::LoadFonts()
@@ -1524,7 +1332,7 @@ RuntimeResult<Rml::ElementDocument*> UiSubsystem::LoadDocumentCandidate()
     Rml::Factory::ClearTemplateCache();
 
     rmlSystemInterface.BeginCandidateValidation();
-    Rml::ElementDocument* candidate = rmlContext->LoadDocument(desc.documentPath.string());
+    Rml::ElementDocument* candidate = rmlContext->LoadDocument(desc.documentPath.generic_string());
     std::string parseError;
     const bool parseValid = rmlSystemInterface.EndCandidateValidation(parseError);
     if (candidate == nullptr || !parseValid)
@@ -1642,6 +1450,14 @@ void UiSubsystem::ApplyDocumentState()
     {
         panel->SetProperty("display", runtimePageVisible ? "block" : "none");
     }
+    if (Rml::Element* hud = runtimeDocument->GetElementById("hud"))
+        hud->SetProperty("display", developerUiVisible ? "none" : "block");
+    if (editorDocument != nullptr)
+    {
+        if (developerUiVisible && !runtimePageVisible)
+            editorDocument->Show(Rml::ModalFlag::None, Rml::FocusFlag::None);
+        else editorDocument->Hide();
+    }
 
     if (runtimePageVisible)
     {
@@ -1708,6 +1524,30 @@ void UiSubsystem::TryHotReload()
         return;
     }
 
+    Rml::ElementDocument* editorCandidate = nullptr;
+    if (developerUiEnabled)
+    {
+        auto editorResult = LoadEditorDocumentCandidate();
+        if (editorResult.IsFailure())
+        {
+            rmlContext->UnloadDocument(documentResult.Value());
+            hotReloadStatus = "hot reload rollback: editor invalid";
+            diagnostics->ReportRuntimeError("UI hot reload rejected", editorResult.Error());
+            return;
+        }
+        editorCandidate = editorResult.Value();
+    }
+    // 两个文档都通过解析与结构校验才替换；失败候选不改变最后有效工作区。
+    if (editorCandidate != nullptr)
+    {
+        ResetRuntimeInputState();
+        if (materialInstanceEditorPanel != nullptr) materialInstanceEditorPanel->Detach();
+        rmlContext->UnloadDocument(editorDocument);
+        editorDocument = editorCandidate;
+        std::string error;
+        if (materialInstanceEditorPanel != nullptr)
+            materialInstanceEditorPanel->Attach(*editorDocument, error);
+    }
     CommitDocumentCandidate(*documentResult.Value(), std::move(localizationResult.Value()));
     assetFingerprint = std::move(candidateFingerprint);
     hotReloadStatus = "hot reload: committed";
@@ -2158,10 +1998,17 @@ std::string UiSubsystem::GetInputModeName(UiInputMode mode) const
 void UiSubsystem::BuildAndPublishRenderSnapshot()
 {
     std::shared_ptr<UiRenderSnapshot> snapshot = std::make_shared<UiRenderSnapshot>();
+    // 冻结快照不能跨 GT/RT 重用；仅借用上一帧容量估计，避免每个 draw 都重新分配。
+    snapshot->vertices.reserve(previousUiVertexCount);
+    snapshot->indices.reserve(previousUiIndexCount);
+    snapshot->drawCommands.reserve(previousUiDrawCount);
     snapshot->frameIndex = uiFrameIndex++;
     snapshot->viewportWidth = desc.viewportWidth;
     snapshot->viewportHeight = desc.viewportHeight;
-    snapshot->sceneViewportRect = {
+    snapshot->sceneViewportEnabled = IsSceneViewportEnabled();
+    snapshot->sceneViewportRect = snapshot->sceneViewportEnabled && materialInstanceEditorPanel != nullptr
+        ? ClipViewportRect(materialInstanceEditorPanel->GetSceneViewportRect(), desc.viewportWidth, desc.viewportHeight)
+        : UiViewportRect{
         0,
         0,
         desc.viewportWidth,
@@ -2170,340 +2017,30 @@ void UiSubsystem::BuildAndPublishRenderSnapshot()
 
     rmlRenderInterface.BeginFrame(*snapshot);
     rmlContext->Render();
-    AppendDeveloperDrawData(*snapshot);
     rmlRenderInterface.AppendTextureSnapshots(snapshot->textures);
     rmlRenderInterface.EndFrame();
+    previousUiVertexCount = snapshot->vertices.size();
+    previousUiIndexCount = snapshot->indices.size();
+    previousUiDrawCount = snapshot->drawCommands.size();
     renderSnapshotQueue.Publish(std::move(snapshot));
-}
-
-void UiSubsystem::AppendDeveloperDrawData(UiRenderSnapshot& snapshot)
-{
-#ifdef VULKANLEARN_ENABLE_DEVELOPER_UI
-    if (!imguiInitialized)
-    {
-        return;
-    }
-
-    ImGuiIO& io = ImGui::GetIO();
-    const bool developerUiWasVisible = developerUiVisible;
-    io.DisplaySize = ImVec2(
-        static_cast<float>(desc.viewportWidth),
-        static_cast<float>(desc.viewportHeight));
-    io.DeltaTime = lastViewModel.deltaTimeSeconds > 0.0f ? lastViewModel.deltaTimeSeconds : 1.0f / 60.0f;
-    ImGui::NewFrame();
-    BuildDeveloperPanels();
-    ImGui::Render();
-    if (developerUiWasVisible && !developerUiVisible)
-    {
-        ResetDeveloperInputState();
-    }
-
-    const ImDrawData* drawData = ImGui::GetDrawData();
-    if (drawData == nullptr)
-    {
-        return;
-    }
-
-    for (int listIndex = 0; listIndex < drawData->CmdListsCount; ++listIndex)
-    {
-        const ImDrawList* drawList = drawData->CmdLists[listIndex];
-        const uint32_t baseVertex = static_cast<uint32_t>(snapshot.vertices.size());
-        const uint32_t baseIndex = static_cast<uint32_t>(snapshot.indices.size());
-
-        snapshot.vertices.reserve(snapshot.vertices.size() + static_cast<size_t>(drawList->VtxBuffer.Size));
-        for (const ImDrawVert& sourceVertex : drawList->VtxBuffer)
-        {
-            UiVertex vertex;
-            vertex.position[0] = sourceVertex.pos.x;
-            vertex.position[1] = sourceVertex.pos.y;
-            vertex.texCoord[0] = sourceVertex.uv.x;
-            vertex.texCoord[1] = sourceVertex.uv.y;
-            vertex.color = sourceVertex.col;
-            snapshot.vertices.push_back(vertex);
-        }
-
-        snapshot.indices.reserve(snapshot.indices.size() + static_cast<size_t>(drawList->IdxBuffer.Size));
-        for (ImDrawIdx sourceIndex : drawList->IdxBuffer)
-        {
-            snapshot.indices.push_back(baseVertex + static_cast<uint32_t>(sourceIndex));
-        }
-
-        for (const ImDrawCmd& sourceCommand : drawList->CmdBuffer)
-        {
-            if (sourceCommand.UserCallback != nullptr)
-            {
-                continue;
-            }
-
-            const float clipLeft = (sourceCommand.ClipRect.x - drawData->DisplayPos.x) * drawData->FramebufferScale.x;
-            const float clipTop = (sourceCommand.ClipRect.y - drawData->DisplayPos.y) * drawData->FramebufferScale.y;
-            const float clipRight = (sourceCommand.ClipRect.z - drawData->DisplayPos.x) * drawData->FramebufferScale.x;
-            const float clipBottom = (sourceCommand.ClipRect.w - drawData->DisplayPos.y) * drawData->FramebufferScale.y;
-            const int left = std::max(0, static_cast<int>(std::floor(clipLeft)));
-            const int top = std::max(0, static_cast<int>(std::floor(clipTop)));
-            const int right = std::min(static_cast<int>(snapshot.viewportWidth), static_cast<int>(std::ceil(clipRight)));
-            const int bottom = std::min(static_cast<int>(snapshot.viewportHeight), static_cast<int>(std::ceil(clipBottom)));
-            if (right <= left || bottom <= top)
-            {
-                continue;
-            }
-
-            UiDrawCommand command;
-            command.firstIndex = baseIndex + sourceCommand.IdxOffset;
-            command.indexCount = sourceCommand.ElemCount;
-            command.textureId = static_cast<UiTextureId>(sourceCommand.GetTexID());
-            command.clipRect.x = left;
-            command.clipRect.y = top;
-            command.clipRect.width = static_cast<uint32_t>(right - left);
-            command.clipRect.height = static_cast<uint32_t>(bottom - top);
-            command.blendMode = UiBlendMode::StraightAlpha;
-            snapshot.drawCommands.push_back(command);
-        }
-    }
-#else
-    static_cast<void>(snapshot);
-#endif
 }
 
 void UiSubsystem::BuildDeveloperPanels()
 {
-#ifdef VULKANLEARN_ENABLE_DEVELOPER_UI
-    // KeepAliveOnly 仍会生成覆盖主视口的 ImGui 宿主窗口；隐藏编辑器时
-    // 必须完全跳过 DockSpace，避免其 WindowBg 作为灰色遮罩写入最终 framebuffer。
-    if (!developerUiVisible)
+    if (materialInstanceEditorPanel == nullptr || materialInstanceEditorRuntime == nullptr) return;
+    EditorUi::MaterialInstanceEditorSnapshot snapshot = materialInstanceEditorRuntime->GetSnapshot();
+    if (jsonAssetLibrary != nullptr)
     {
-        return;
+        snapshot.assetCatalog = jsonAssetLibrary->GetCatalog();
+        snapshot.jsonDocument = jsonAssetLibrary->GetDocument();
+        snapshot.assetCatalogLoading = jsonAssetLibrary->IsCatalogLoading();
+        snapshot.jsonDocumentLoading = jsonAssetLibrary->IsDocumentLoading();
     }
-
-    const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
-    const ImGuiID dockspaceId = ImGui::GetID(DeveloperDockSpaceName);
-    if (!developerDockLayoutBuilt)
-    {
-        BuildDefaultDeveloperDockLayout(dockspaceId, *mainViewport);
-        developerDockLayoutBuilt = true;
-    }
-    ImGui::DockSpaceOverViewport(
-        dockspaceId,
-        mainViewport,
-        ImGuiDockNodeFlags_PassthruCentralNode);
-
-    if (ImGui::Begin(OfflineRendererWindowName))
-    {
-        int mode = lastViewModel.offlineMode ? 1 : 0;
-        if (ImGui::RadioButton("Realtime", mode == 0))
-        {
-            lastViewModel.offlineRequestedMode = 0;
-            lastViewModel.offlineUiNotice.clear();
-            UiAction action;
-            action.type = UiActionType::SetOfflineMode;
-            action.intValue = 0;
-            QueueAction(std::move(action));
-        }
-        ImGui::SameLine();
-        if (ImGui::RadioButton("Offline", mode == 1))
-        {
-            lastViewModel.offlineRequestedMode = 1;
-            lastViewModel.offlineUiNotice.clear();
-            UiAction action;
-            action.type = UiActionType::SetOfflineMode;
-            action.intValue = 1;
-            QueueAction(std::move(action));
-        }
-        // 拒绝原因紧邻模式选择；底部控件需要滚动时仍可直接看到失败反馈。
-        if (!lastViewModel.offlineUiNotice.empty())
-        {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.65f, 0.35f, 1.0f));
-            ImGui::TextWrapped("%s", lastViewModel.offlineUiNotice.c_str());
-            ImGui::PopStyleColor();
-        }
-        if (!lastViewModel.offlineError.empty())
-        {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.45f, 0.45f, 1.0f));
-            ImGui::TextWrapped("%s", lastViewModel.offlineError.c_str());
-            ImGui::PopStyleColor();
-        }
-        ImGui::Separator();
-        int samples = lastViewModel.offlineSamples;
-        if (ImGui::InputInt("Samples", &samples, 1, 100, OfflineInputIntFlags))
-        {
-            if (const char* error = OfflineSettingValidationError("samples", samples))
-                lastViewModel.offlineUiNotice = error;
-            else
-            {
-                lastViewModel.offlineUiNotice.clear();
-                UiAction action;
-                action.type = UiActionType::SetOfflineSetting;
-                action.stringValue = "samples";
-                action.intValue = samples;
-                QueueAction(std::move(action));
-            }
-        }
-        int bounces = lastViewModel.offlineBounces;
-        if (ImGui::InputInt("Bounces", &bounces, 1, 10, OfflineInputIntFlags))
-        {
-            if (const char* error = OfflineSettingValidationError("bounces", bounces))
-                lastViewModel.offlineUiNotice = error;
-            else
-            {
-                lastViewModel.offlineUiNotice.clear();
-                UiAction action;
-                action.type = UiActionType::SetOfflineSetting;
-                action.stringValue = "bounces";
-                action.intValue = bounces;
-                QueueAction(std::move(action));
-            }
-        }
-        int lightSamples = lastViewModel.offlineLightSamples;
-        if (ImGui::InputInt("Light samples", &lightSamples, 1, 10, OfflineInputIntFlags))
-        {
-            if (const char* error = OfflineSettingValidationError("lightSamples", lightSamples))
-                lastViewModel.offlineUiNotice = error;
-            else
-            {
-                lastViewModel.offlineUiNotice.clear();
-                UiAction action;
-                action.type = UiActionType::SetOfflineSetting;
-                action.stringValue = "lightSamples";
-                action.intValue = lightSamples;
-                QueueAction(std::move(action));
-            }
-        }
-        int seed = lastViewModel.offlineSeed;
-        if (ImGui::InputInt("Seed", &seed, 1, 100, OfflineInputIntFlags))
-        {
-            if (const char* error = OfflineSettingValidationError("seed", seed))
-                lastViewModel.offlineUiNotice = error;
-            else
-            {
-                lastViewModel.offlineUiNotice.clear();
-                UiAction action;
-                action.type = UiActionType::SetOfflineSetting;
-                action.stringValue = "seed";
-                action.intValue = seed;
-                QueueAction(std::move(action));
-            }
-        }
-        const char* aovs[] = {"Combined", "Direct", "Indirect"};
-        int aov = lastViewModel.offlineAov;
-        if (ImGui::Combo("AOV", &aov, aovs, 3))
-        {
-            UiAction action;
-            action.type = UiActionType::SetOfflineAov;
-            action.intValue = aov;
-            QueueAction(std::move(action));
-        }
-        float exposure = lastViewModel.offlineExposure;
-        if (ImGui::SliderFloat("Exposure", &exposure, 0.05f, 8.0f))
-        {
-            UiAction action;
-            action.type = UiActionType::SetOfflineExposure;
-            action.floatValue = exposure;
-            QueueAction(std::move(action));
-        }
-        ImGui::Text("%d / %d spp", lastViewModel.offlineCompletedSamples,
-            lastViewModel.offlineSamples);
-        const auto state = static_cast<Offline::SessionState>(lastViewModel.offlineState);
-        const char* stateName = "Unknown";
-        switch (state)
-        {
-        case Offline::SessionState::Idle: stateName = "Idle"; break;
-        case Offline::SessionState::Preparing: stateName = "Preparing"; break;
-        case Offline::SessionState::Rendering: stateName = "Rendering"; break;
-        case Offline::SessionState::Paused: stateName = "Paused"; break;
-        case Offline::SessionState::Completed: stateName = "Completed"; break;
-        case Offline::SessionState::Canceled: stateName = "Stopped"; break;
-        case Offline::SessionState::Failed: stateName = "Failed"; break;
-        }
-        ImGui::Text("Session: %s", lastViewModel.offlineMode ? stateName : "Inactive");
-        const bool canPause = lastViewModel.offlineMode &&
-            (state == Offline::SessionState::Preparing ||
-             state == Offline::SessionState::Rendering);
-        const bool canResume = lastViewModel.offlineMode && state == Offline::SessionState::Paused;
-        ImGui::BeginDisabled(!canPause);
-        if (ImGui::Button("Pause"))
-        {
-            UiAction action;
-            action.type = UiActionType::ControlOfflineSession;
-            action.intValue = 0;
-            QueueAction(std::move(action));
-        }
-        ImGui::EndDisabled();
-        ImGui::SameLine();
-        ImGui::BeginDisabled(!canResume);
-        if (ImGui::Button("Resume"))
-        {
-            UiAction action;
-            action.type = UiActionType::ControlOfflineSession;
-            action.intValue = 1;
-            QueueAction(std::move(action));
-        }
-        ImGui::EndDisabled();
-        ImGui::SameLine();
-        ImGui::BeginDisabled(!canPause && !canResume);
-        if (ImGui::Button("Stop"))
-        {
-            UiAction action;
-            action.type = UiActionType::ControlOfflineSession;
-            action.intValue = 2;
-            QueueAction(std::move(action));
-        }
-        ImGui::EndDisabled();
-        ImGui::SameLine();
-        ImGui::BeginDisabled(!lastViewModel.offlineMode);
-        if (ImGui::Button("Restart"))
-        {
-            UiAction action;
-            action.type = UiActionType::ControlOfflineSession;
-            action.intValue = 3;
-            QueueAction(std::move(action));
-        }
-        ImGui::EndDisabled();
-        ImGui::BeginDisabled(!lastViewModel.offlineMode ||
-            lastViewModel.offlineCompletedSamples == 0);
-        if (ImGui::Button("Export"))
-        {
-            UiAction action;
-            action.type = UiActionType::ExportOffline;
-            QueueAction(std::move(action));
-        }
-        ImGui::EndDisabled();
-    }
-    ImGui::End();
-
-    // 同一帧只冻结一次编辑器快照，左右 Dock 窗口共享完全相同的数据视图。
-    if (materialInstanceEditorPanel != nullptr &&
-        materialInstanceEditorRuntime != nullptr)
-    {
-        EditorUi::MaterialInstanceEditorSnapshot editorSnapshot =
-            materialInstanceEditorRuntime->GetSnapshot();
-        editorSnapshot.sceneModels = sceneModels;
-        editorSnapshot.selectedModel = selectedModelMaterials;
-        editorSnapshot.selectedMaterialSlotIndex = selectedMaterialSlotIndex;
-        materialInstanceEditorPanel->Build(editorSnapshot);
-
-        if (materialInstanceEditorPanel->IsVisible())
-        {
-            if (ImGui::Begin(
-                    MaterialInstanceNavigationWindowName,
-                    nullptr,
-                    ImGuiWindowFlags_NoCollapse))
-            {
-                materialInstanceEditorPanel->RenderNavigationContents();
-            }
-            ImGui::End();
-
-            if (ImGui::Begin(
-                    MaterialInstanceInspectorWindowName,
-                    nullptr,
-                    ImGuiWindowFlags_NoCollapse))
-            {
-                materialInstanceEditorPanel->RenderInspectorContents();
-            }
-            ImGui::End();
-        }
-    }
-
-#endif
+    snapshot.sceneModels = sceneModels;
+    snapshot.selectedModel = selectedModelMaterials;
+    snapshot.selectedMaterialSlotIndex = selectedMaterialSlotIndex;
+    materialInstanceEditorPanel->Build(snapshot);
+    materialInstanceEditorPanel->UpdateRuntimeView(lastViewModel);
 }
 
 void UiSubsystem::UpdateInputOwnership()
@@ -2524,28 +2061,31 @@ void UiSubsystem::UpdateInputOwnership()
     inputOwnership.controllerOwner = UiInputOwner::Game;
     inputOwnership.textInputOwner = UiInputOwner::None;
 
-#ifdef VULKANLEARN_ENABLE_DEVELOPER_UI
-    if (developerUiVisible && imguiInitialized)
+    if (developerUiVisible && editorDocument != nullptr)
     {
-        const ImGuiIO& io = ImGui::GetIO();
-        if (io.WantCaptureKeyboard)
+        const bool resourceEditor = materialInstanceEditorPanel != nullptr &&
+            materialInstanceEditorPanel->IsResourceEditorVisible();
+        if (resourceEditor) sceneViewportInputActive = false;
+        const auto* hit = rmlContext->GetElementAtPoint(Rml::Vector2f(pointerX, pointerY));
+        const auto* focus = rmlContext->GetFocusElement();
+        const bool modal = materialInstanceEditorPanel != nullptr && materialInstanceEditorPanel->HasModal();
+        const bool editorFocus = focus != nullptr && focus->GetOwnerDocument() == editorDocument;
+        const bool sceneHit = materialInstanceEditorPanel != nullptr &&
+            materialInstanceEditorPanel->IsSceneViewportElement(hit);
+        const bool dragging = materialInstanceEditorPanel != nullptr &&
+            materialInstanceEditorPanel->IsWorkspaceDragging();
+        if (!sceneViewportInputActive && (modal || dragging || editorPointerCaptured ||
+            (hit != nullptr && hit->GetOwnerDocument() == editorDocument && !sceneHit))
+            )
+            inputOwnership.pointerOwner = UiInputOwner::DeveloperUi;
+        if (modal || (!sceneViewportInputActive && editorFocus))
         {
             inputOwnership.keyboardOwner = UiInputOwner::DeveloperUi;
+            if (gamepadConnected) inputOwnership.controllerOwner = UiInputOwner::DeveloperUi;
         }
-        if (io.WantCaptureMouse)
-        {
-            inputOwnership.pointerOwner = UiInputOwner::DeveloperUi;
-        }
-        if (io.WantTextInput)
-        {
+        if (editorFocus && dynamic_cast<const Rml::ElementFormControl*>(focus) != nullptr)
             inputOwnership.textInputOwner = UiInputOwner::DeveloperUi;
-        }
-        if (gamepadConnected && io.NavActive)
-        {
-            inputOwnership.controllerOwner = UiInputOwner::DeveloperUi;
-        }
     }
-#endif
 }
 
 bool UiSubsystem::PressRmlKey(Rml::Input::KeyIdentifier key, bool repeat, int modifiers)
@@ -2637,6 +2177,7 @@ bool UiSubsystem::ProcessRmlGamepadAxisEvent(const PlatformEvent& event)
 
 void UiSubsystem::ResetRuntimeInputState()
 {
+    if (materialInstanceEditorPanel != nullptr) materialInstanceEditorPanel->CancelWorkspaceDrag();
     if (rmlContext != nullptr)
     {
         for (const auto& keyEntry : rmlKeyPressCounts)
@@ -2663,6 +2204,8 @@ void UiSubsystem::ResetRuntimeInputState()
     rmlAxisRightDown = false;
     rmlAxisUpDown = false;
     rmlAxisDownDown = false;
+    editorPointerCaptured = false;
+    sceneViewportInputActive = false;
 }
 
 void UiSubsystem::ResetRmlGamepadInputState()
@@ -2676,73 +2219,6 @@ void UiSubsystem::ResetRmlGamepadInputState()
     SetRmlAxisDirection(false, rmlAxisRightDown, Rml::Input::KI_RIGHT);
     SetRmlAxisDirection(false, rmlAxisUpDown, Rml::Input::KI_UP);
     SetRmlAxisDirection(false, rmlAxisDownDown, Rml::Input::KI_DOWN);
-}
-
-void UiSubsystem::ResetDeveloperInputState()
-{
-#ifdef VULKANLEARN_ENABLE_DEVELOPER_UI
-    if (!imguiInitialized)
-    {
-        return;
-    }
-
-    ImGuiIO& io = ImGui::GetIO();
-    io.ClearInputKeys();
-    io.ClearInputMouse();
-#endif
-}
-void UiSubsystem::ResetDeveloperGamepadInputState()
-{
-#ifdef VULKANLEARN_ENABLE_DEVELOPER_UI
-    if (!imguiInitialized)
-    {
-        return;
-    }
-
-    ImGuiIO& io = ImGui::GetIO();
-    const ImGuiKey gamepadKeys[] = {
-        ImGuiKey_GamepadFaceDown,
-        ImGuiKey_GamepadFaceRight,
-        ImGuiKey_GamepadFaceLeft,
-        ImGuiKey_GamepadFaceUp,
-        ImGuiKey_GamepadBack,
-        ImGuiKey_GamepadStart,
-        ImGuiKey_GamepadL1,
-        ImGuiKey_GamepadR1,
-        ImGuiKey_GamepadDpadUp,
-        ImGuiKey_GamepadDpadDown,
-        ImGuiKey_GamepadDpadLeft,
-        ImGuiKey_GamepadDpadRight
-    };
-    for (ImGuiKey key : gamepadKeys)
-    {
-        io.AddKeyEvent(key, false);
-    }
-    io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickLeft, false, 0.0f);
-    io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickRight, false, 0.0f);
-    io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickUp, false, 0.0f);
-    io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickDown, false, 0.0f);
-#endif
-}
-
-void UiSubsystem::UpdateDeveloperGamepadCapability()
-{
-#ifdef VULKANLEARN_ENABLE_DEVELOPER_UI
-    if (!imguiInitialized)
-    {
-        return;
-    }
-
-    ImGuiIO& io = ImGui::GetIO();
-    if (gamepadConnected)
-    {
-        io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
-    }
-    else
-    {
-        io.BackendFlags &= ~ImGuiBackendFlags_HasGamepad;
-    }
-#endif
 }
 
 bool UiSubsystem::ProcessRuntimeUiEvent(const PlatformEvent& event)
@@ -2872,95 +2348,108 @@ bool UiSubsystem::ProcessRuntimeUiEvent(const PlatformEvent& event)
 
 bool UiSubsystem::ProcessDeveloperUiEvent(const PlatformEvent& event)
 {
-#ifdef VULKANLEARN_ENABLE_DEVELOPER_UI
-    if (!imguiInitialized)
-    {
-        return false;
-    }
-
-    ImGuiIO& io = ImGui::GetIO();
+    if (editorDocument == nullptr) return false;
+    const bool modal = materialInstanceEditorPanel != nullptr && materialInstanceEditorPanel->HasModal();
+    const bool resourceEditor = materialInstanceEditorPanel != nullptr &&
+        materialInstanceEditorPanel->IsResourceEditorVisible();
+    if (resourceEditor) sceneViewportInputActive = false;
+    const Rml::Element* focus = rmlContext->GetFocusElement();
+    bool editorFocus = focus != nullptr && focus->GetOwnerDocument() == editorDocument;
     switch (event.type)
     {
-    case PlatformEventType::KeyDown:
-    case PlatformEventType::KeyUp:
-    {
-        io.AddKeyEvent(ImGuiMod_Ctrl, event.control);
-        io.AddKeyEvent(ImGuiMod_Shift, event.shift);
-        io.AddKeyEvent(ImGuiMod_Alt, event.alt);
-        io.AddKeyEvent(ImGuiMod_Super, event.super);
-        const ImGuiKey key = ToImGuiKey(event.key);
-        if (key != ImGuiKey_None)
-        {
-            io.AddKeyEvent(key, event.type == PlatformEventType::KeyDown);
-        }
-        return io.WantCaptureKeyboard;
-    }
-    case PlatformEventType::TextInput:
-        io.AddInputCharactersUTF8(event.text.c_str());
-        return io.WantTextInput || io.WantCaptureKeyboard;
-    case PlatformEventType::TextEditing:
-        return io.WantTextInput;
     case PlatformEventType::MouseMove:
-        io.AddMousePosEvent(event.mouseX, event.mouseY);
-        return io.WantCaptureMouse;
     case PlatformEventType::MouseButtonDown:
     case PlatformEventType::MouseButtonUp:
-    {
-        const int button = ToRmlMouseButton(event.mouseButton);
-        if (button >= 0 && button < 5)
-        {
-            io.AddMouseButtonEvent(button, event.type == PlatformEventType::MouseButtonDown);
-        }
-        return io.WantCaptureMouse;
-    }
     case PlatformEventType::MouseWheel:
-        io.AddMouseWheelEvent(event.wheelX, event.wheelY);
-        return io.WantCaptureMouse;
-    case PlatformEventType::MouseLeave:
-        io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
-        return io.WantCaptureMouse;
-    case PlatformEventType::GamepadButtonDown:
-    case PlatformEventType::GamepadButtonUp:
     {
-        const ImGuiKey key = ToImGuiGamepadButton(event.gamepadButton);
-        if (key != ImGuiKey_None)
+        pointerX = event.mouseX;
+        pointerY = event.mouseY;
+        const auto* hit = rmlContext->GetElementAtPoint(Rml::Vector2f(pointerX, pointerY));
+        const bool sceneHit = materialInstanceEditorPanel != nullptr &&
+            materialInstanceEditorPanel->IsSceneViewportElement(hit);
+        const bool editorHit = hit != nullptr && hit->GetOwnerDocument() == editorDocument && !sceneHit;
+        const bool captured = editorPointerCaptured ||
+            (materialInstanceEditorPanel != nullptr && materialInstanceEditorPanel->IsWorkspaceDragging());
+        if ((sceneHit || (sceneViewportInputActive && !resourceEditor)) && !captured && !modal)
         {
-            io.AddKeyEvent(key, event.type == PlatformEventType::GamepadButtonDown);
+            // 图像属于 editor DOM，但内部场景输入归游戏；不让点击把焦点交给文档根节点。
+            if (event.type == PlatformEventType::MouseButtonDown)
+            {
+                sceneViewportInputActive = true;
+                if (editorFocus) rmlContext->GetFocusElement()->Blur();
+            }
+            if (event.type == PlatformEventType::MouseMove) ProcessRuntimeUiEvent(event);
+            return false;
         }
-        return io.NavActive;
+        if (event.type == PlatformEventType::MouseButtonDown)
+        {
+            sceneViewportInputActive = false;
+            editorPointerCaptured = captured || editorHit || modal;
+            if (!editorHit && !modal && editorFocus)
+                rmlContext->GetFocusElement()->Blur();
+        }
+        const bool consumed = ProcessRuntimeUiEvent(event);
+        if (event.type == PlatformEventType::MouseButtonUp && rmlPressedMouseButtons.empty())
+            editorPointerCaptured = false;
+        return consumed || editorHit || captured || modal;
     }
-    case PlatformEventType::GamepadAxisMotion:
-        if (event.gamepadAxis == PlatformGamepadAxis::LeftX)
-        {
-            const float left = NormalizeImGuiGamepadAxis(std::max(0.0f, -event.gamepadAxisValue));
-            const float right = NormalizeImGuiGamepadAxis(std::max(0.0f, event.gamepadAxisValue));
-            io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickLeft, left > 0.0f, left);
-            io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickRight, right > 0.0f, right);
-        }
-        else if (event.gamepadAxis == PlatformGamepadAxis::LeftY)
-        {
-            const float up = NormalizeImGuiGamepadAxis(std::max(0.0f, -event.gamepadAxisValue));
-            const float down = NormalizeImGuiGamepadAxis(std::max(0.0f, event.gamepadAxisValue));
-            io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickUp, up > 0.0f, up);
-            io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickDown, down > 0.0f, down);
-        }
-        return io.NavActive;
-    case PlatformEventType::WindowFocusGained:
-    case PlatformEventType::WindowFocusLost:
-        io.AddFocusEvent(event.type == PlatformEventType::WindowFocusGained);
+    case PlatformEventType::MouseLeave:
+        return ProcessRuntimeUiEvent(event) || editorPointerCaptured;
+    case PlatformEventType::KeyUp:
+        if (rmlPressedKeyboardKeys.count(event.key) != 0)
+            return ProcessRuntimeUiEvent(event) || editorFocus || modal;
         return false;
     default:
-        break;
+        if (editorFocus || modal)
+        {
+            ProcessRuntimeUiEvent(event);
+            return true;
+        }
+        return false;
     }
-#else
-    static_cast<void>(event);
-#endif
-    return false;
+}
+
+void UiSubsystem::RequestOpenJsonAsset(const std::string& path)
+{
+    if (jsonAssetLibrary != nullptr) jsonAssetLibrary->RequestOpen(path);
+}
+
+void UiSubsystem::RequestRefreshAssetCatalog()
+{
+    if (jsonAssetLibrary != nullptr) jsonAssetLibrary->RequestRefresh();
+}
+
+void UiSubsystem::RequestRuntimeAction(UiAction action)
+{
+    if (action.type == UiActionType::LoadWorld)
+    {
+        const bool knownScene = std::any_of(
+            bindingData.sceneOptions.begin(),
+            bindingData.sceneOptions.end(),
+            [&action](const UiSceneOption& option) { return option.path == action.stringValue; });
+        if (!knownScene || bindingData.sceneLoading)
+            return;
+        bindingData.sceneLoading = true;
+        dataModelHandle.DirtyVariable("scene_loading");
+    }
+    if (action.type == UiActionType::SetOfflineMode)
+    {
+        lastViewModel.offlineRequestedMode = action.intValue;
+        lastViewModel.offlineUiNotice.clear();
+    }
+    QueueAction(std::move(action));
 }
 bool UiSubsystem::HandleGlobalShortcut(const PlatformEvent& event)
 {
     if (event.type == PlatformEventType::KeyDown && !event.repeat)
     {
+        if (event.control && event.key == PlatformKey::S && developerUiVisible &&
+            !runtimePageVisible && materialInstanceEditorPanel != nullptr &&
+            !materialInstanceEditorPanel->HasModal())
+        {
+            materialInstanceEditorPanel->RequestSave();
+            return true;
+        }
         if (event.key == PlatformKey::F10)
         {
             UiAction action;

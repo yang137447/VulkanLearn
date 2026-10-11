@@ -105,6 +105,8 @@ public:
     void RequestScreenshot(std::string path);
     void SetRendererBackend(VL::RendererBackendVulkan* backend) { rendererBackend = backend; }
     void SetUiRenderSnapshotQueue(VL::UiRenderSnapshotQueue* queue) { uiRenderSnapshotQueue = queue; }
+    void SetSceneViewport(const VL::UiViewportRect& rect, bool enabled);
+    vk::Extent2D GetSceneRenderExtent() const;
     void SetUiOverlayShaderPaths(std::string vertexPath, std::string fragmentPath);
     void SetCsmSettings(const VL::CsmSettings& settings);
     const VL::CsmSettings& GetCsmSettings() const noexcept { return csmSettings; }
@@ -448,6 +450,8 @@ private:
     mutable std::mutex environmentDiagnosticsMutex;
     VL::EnvironmentUpdateDiagnostics environmentDiagnostics;
     VL::UiOverlayRendererVulkan uiOverlayRenderer;
+    VL::UiViewportRect requestedSceneViewport;
+    bool sceneViewportRequested = false;
     VL::UiRenderSnapshotQueue* uiRenderSnapshotQueue = nullptr;
     std::shared_ptr<const VL::UiRenderSnapshot> currentUiRenderSnapshot;
     std::string uiVertexShaderPath;

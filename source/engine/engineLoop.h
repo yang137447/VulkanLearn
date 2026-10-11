@@ -71,6 +71,7 @@ private:
     void UpdateUiViewModel(
         float deltaTime,
         const RuntimeCommandExecutionResult& commandResult);
+    void SynchronizeSceneViewport();
     const RuntimeConfig& GetRuntimeConfig() const;
     SubsystemCollection& GetSubsystems();
     const SubsystemCollection& GetSubsystems() const;

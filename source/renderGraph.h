@@ -85,6 +85,12 @@ struct Renderpass
     std::vector<vk::ClearValue> clearValues;
     std::vector<VL::RHIFramebufferHandle> framebufferHandles;
     std::vector<vk::Framebuffer> framebuffers;
+    // 与游戏 render pass 管线兼容，仅替换 swapChain 附件；离屏输出最终停在
+    // ColorAttachmentOptimal，RT 在 UI 采样前负责转换为 ShaderReadOnlyOptimal。
+    VL::RHIRenderPassHandle sceneViewportRenderPassHandle;
+    vk::RenderPass sceneViewportRenderPass;
+    std::vector<VL::RHIFramebufferHandle> sceneViewportFramebufferHandles;
+    std::vector<vk::Framebuffer> sceneViewportFramebuffers;
     uint32_t width;
     uint32_t height;
     PassPipelineContractKey pipelineContractKey;
@@ -179,6 +185,9 @@ public:
     const nlohmann::json& GetSourceJson() const noexcept { return sourceJson; }
     const std::unordered_map<std::string, std::vector<RenderResource>>& GetResourcesMsaa() const { return resourcesMsaa; }
     const std::unordered_map<std::string, std::vector<RenderResource>>& GetResourcesResolve() const { return resourcesResolve; }
+    // 每个 acquired image 独占一张完整 backing extent 的单采样输出，生命周期
+    // 与 graph state 相同；不得跨 shutdown/reload 缓存返回指针。
+    const RenderResource* GetSceneViewportOutput(uint32_t imageIndex) const noexcept;
     // Initial render-graph setup creates pass-owned descriptors. Runtime
     // refreshes reuse the compiled graph but update descriptors after a world
     // reload changes scene resources, lights, or pass material instances.
@@ -198,7 +207,9 @@ private:
     RenderResource CreateRenderResource(
         const VL::CompiledRenderGraphResource& resourceDesc,
         VL::RendererBackendVulkan& rendererBackend,
-        bool bIsMsaaSource = false);
+        bool bIsMsaaSource = false,
+        vk::Format formatOverride = vk::Format::eUndefined);
+    void CreateSceneViewportOutputs(VL::RendererBackendVulkan& rendererBackend);
     void DestroyRenderResource(
         RenderResource& resource,
         VL::RendererBackendVulkan& rendererBackend,
@@ -216,13 +227,15 @@ private:
     vk::RenderPass CreateVkRenderPass(
         Renderpass& renderpass,
         VL::RendererBackendVulkan& rendererBackend,
-        bool bUseMsaa);
+        bool bUseMsaa,
+        bool renderToViewport = false);
 
     std::vector<vk::Framebuffer> CreateVkFrameBuffers(
         const Renderpass& renderpass,
         const std::vector<std::string>& outputResources,
         VL::RendererBackendVulkan& rendererBackend,
-        bool bUseMsaa);
+        bool bUseMsaa,
+        bool renderToViewport = false);
 
     vk::Format GetFormat(const std::string& formatStr);
     vk::ImageUsageFlags GetImageUsage(const std::vector<std::string>& usageStr);
@@ -239,6 +252,7 @@ private:
 private:
     std::unordered_map<std::string, std::vector<RenderResource>> resourcesMsaa;
     std::unordered_map<std::string, std::vector<RenderResource>> resourcesResolve;
+    std::vector<RenderResource> sceneViewportOutputs;
 
     std::vector<std::string> renderpassesOrdered;
     std::unordered_map<std::string, Renderpass> renderpasses;

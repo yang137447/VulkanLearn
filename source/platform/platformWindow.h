@@ -36,6 +36,8 @@ public:
     void SetTitle(const std::string& title);
     void SetSize(int width, int height);
     void SetRelativeMouseMode(bool enabled);
+    void SetMouseConstraint(int x, int y, int width, int height);
+    void ClearMouseConstraint();
     void SetTextInputEnabled(bool enabled);
     void SetTextInputArea(int x, int y, int width, int height);
 
@@ -47,6 +49,11 @@ private:
     SDL_Window* window = nullptr;
     std::string currentTitle;
     bool textInputEnabled = false;
+    bool mouseConstraintSet = false;
+    int mouseConstraintX = 0;
+    int mouseConstraintY = 0;
+    int mouseConstraintWidth = 0;
+    int mouseConstraintHeight = 0;
 };
 
 } // namespace VL

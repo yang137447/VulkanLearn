@@ -17,7 +17,7 @@ using PreviewOperationId = uint64_t;
 enum class PreviewCommandSource
 {
     Unknown,
-    ImGui,
+    RmlUi,
     Console,
     AI,
     RuntimeTest,

@@ -7,6 +7,8 @@
 #include <vulkan/vulkan.hpp>
 #include "core/renderSession.h"
 
+struct RenderResource;
+
 namespace VL
 {
 class RendererBackendVulkan;
@@ -212,18 +214,39 @@ class OfflineDisplayVulkan
 public:
     void Initialize(RendererBackendVulkan& backend);
     void Shutdown();
+    // nullptr 保持游戏显示；非空目标借自 graph，必须单采样且与 backing extent/
+    // format 相同。logicalExtent 只校验 film/preview，空值回退 backing extent；
+    // 上传仍重采样到整张 backing 图像。结束布局由 RT 转换后才能供 UI 采样。
     void Record(vk::CommandBuffer commandBuffer, uint32_t imageIndex,
                 std::shared_ptr<const Offline::FilmSnapshot> film,
                 std::shared_ptr<const Offline::PreviewSnapshot> preview,
-                OfflineAov aov, float exposure);
+                OfflineAov aov, float exposure,
+                const RenderResource* viewportOutput = nullptr,
+                uint64_t viewportOwnerGeneration = 0,
+                vk::Extent2D logicalExtent = {});
     void Record(vk::CommandBuffer commandBuffer, uint32_t imageIndex,
                 std::shared_ptr<const Offline::FilmSnapshot> film,
-                OfflineAov aov, float exposure)
+                OfflineAov aov, float exposure,
+                const RenderResource* viewportOutput = nullptr,
+                uint64_t viewportOwnerGeneration = 0,
+                vk::Extent2D logicalExtent = {})
     {
-        Record(commandBuffer, imageIndex, std::move(film), {}, aov, exposure);
+        Record(commandBuffer, imageIndex, std::move(film), {}, aov, exposure,
+            viewportOutput, viewportOwnerGeneration, logicalExtent);
     }
 
 private:
+    // 缓存只拥有 framebuffer，不拥有 graph 图像；view 身份/代际变化时先建立
+    // 新 framebuffer，再把旧对象交给 epoch 队列，不能在 Record 内立即销毁。
+    struct ViewportTarget
+    {
+        ~ViewportTarget();
+        RendererBackendVulkan* backend = nullptr;
+        std::vector<vk::Framebuffer> framebuffers;
+        vk::ImageView imageView;
+        uint64_t imageViewHandleId = 0;
+        uint64_t ownerGeneration = 0;
+    };
     struct Frame
     {
         vk::Buffer staging;
@@ -237,6 +260,8 @@ private:
         OfflineDisplayUploadState uploaded;
     };
     void CreatePipeline();
+    vk::Framebuffer PrepareViewportFramebuffer(uint32_t imageIndex,
+        const RenderResource& output, uint64_t ownerGeneration);
     RendererBackendVulkan* backend = nullptr;
     vk::DescriptorSetLayout descriptorLayout;
     vk::DescriptorPool descriptorPool;
@@ -244,7 +269,9 @@ private:
     vk::Pipeline pipeline;
     vk::PipelineCache pipelineCache;
     vk::RenderPass renderPass;
+    vk::RenderPass viewportRenderPass;
     std::vector<vk::Framebuffer> framebuffers;
+    std::vector<std::shared_ptr<ViewportTarget>> viewportTargets;
     std::vector<Frame> frames;
     OfflineDisplaySource retainedSource;
     std::vector<size_t> previewNearest;

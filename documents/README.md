@@ -101,7 +101,7 @@ Rendering plans:
     loading, progressive sessions, Vulkan presentation, and acceptance gates;
     the former CLI is retired, with current contracts in `architecture/vl-offline-rendering.md`
 - `plan/rendering/material-instance-imgui-editor-plan.md`
-  - planned command-only UE-style MI Asset Editor: scenes reveal referenced assets, documents own numeric/texture configuration and atomic save, runtime preview is an optional bridge, and ImGui/Console/tests/AI share one versioned command protocol
+  - historical MI editor adoption plan; its UI-library choice is superseded by the RmlUi editor plan, while the current command/document/preview contracts live in `architecture/material-instance-editor.md`
 - `plan/rendering/lightweight-material-shadow-caster-plan.md`
   - superseded first-stage execution record for explicit ShadowCaster variants; current behavior is defined by the CSM and Material Mesh Pass contracts
 - `plan/rendering/common-masked-shadow-caster-plan.md`
@@ -146,10 +146,14 @@ Rendering plans:
 
 UI documents:
 
+- `architecture/ui-component-system.md`
+  - Slate-inspired categories, implemented reusable RmlUi controls, dependency boundaries and staged component coverage
 - `architecture/game-ui-stack.md`
-  - current implementation contract for the RmlUi runtime layer, optional Dear ImGui developer layer, SDL3 input arbitration, immutable UI snapshots, hot reload, and Vulkan overlay recording
+  - current RmlUi-only runtime/editor UI contract: SDL3 input arbitration, immutable snapshots, candidate hot reload, and Vulkan overlay recording
 - `plan/ui/game-ui-stack-plan.md`
-  - implemented decision record and adoption checklist for the two-layer UI stack
+  - historical two-library adoption record, superseded for editor UI by the RmlUi-only migration
+- `plan/ui/rmlui-editor-plan.md`
+  - RmlUi migration baseline and future UE-like editor stages: docking, independent viewport, scene authoring, and Undo/Redo
 
 ## References
 

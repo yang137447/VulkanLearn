@@ -315,8 +315,8 @@ void PrintLaunchUsage()
         << "  --worker-thread-count <1|2>         Override config worker mode for this process.\n"
         << "  --console-command <line>            Queue one debug console command at startup. Repeatable.\n"
         << "  --console-command-delay <frames>    Frames to wait before submitting queued console commands (default 60).\n"
-        << "  --dev-ui                            Enable Dear ImGui developer tools for this launch.\n"
-        << "  --no-dev-ui                         Disable Dear ImGui developer tools for this launch.\n"
+        << "  --dev-ui                            Enable the RmlUi editor workspace for this launch.\n"
+        << "  --no-dev-ui                         Disable the RmlUi editor workspace for this launch.\n"
         << "  --exit-after-tests                  Exit with 0 on success or 2 on test failure.\n";
 }
 

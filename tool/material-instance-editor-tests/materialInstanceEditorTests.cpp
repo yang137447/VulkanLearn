@@ -209,7 +209,7 @@ void TestCommandCodecAndSchema()
             Json({
                 {"protocolVersion", 1},
                 {"commandId", 1005},
-                {"source", "imgui"},
+                {"source", "rmlui"},
                 {"command", "material.set_render_state"},
                 {"expectedDocumentRevision", 8},
                 {"payload", {
@@ -276,7 +276,7 @@ void TestCommandCodecAndSchema()
         Json({
             {"protocolVersion", 1},
             {"commandId", 1002},
-            {"source", "imgui"},
+            {"source", "rmlui"},
             {"command", "material.close"},
             {"payload", {
                 {"assetPath", "materials/MI_editor_test.json"},

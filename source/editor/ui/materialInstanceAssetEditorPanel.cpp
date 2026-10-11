@@ -1,95 +1,81 @@
 #include "editor/ui/materialInstanceAssetEditorPanel.h"
 
-#include <algorithm>
-#include <cfloat>
+#include <charconv>
 #include <cmath>
+#include <filesystem>
+#include <iomanip>
+#include <sstream>
 #include <utility>
 
-#ifdef VULKANLEARN_ENABLE_DEVELOPER_UI
-#include <imgui.h>
-#endif
+#include <RmlUi/Core/Context.h>
+#include <RmlUi/Core/ElementDocument.h>
+#include <RmlUi/Core/Elements/ElementFormControl.h>
+#include <RmlUi/Core/Elements/ElementFormControlInput.h>
+#include <RmlUi/Core/Event.h>
+
+#include "core/renderSession.h"
+#include "ui/widgets/input/inputWidgets.h"
+#include "ui/widgets/layout/layoutWidgets.h"
+#include "ui/widgets/navigation/tabWidgets.h"
+#include "ui/widgets/property/propertyWidgets.h"
+#include "ui/widgets/text/textWidgets.h"
+#include "ui/widgets/views/viewWidgets.h"
 
 namespace VL::EditorUi
 {
-
-uint32_t EditorParameterValue::ComponentCount() const
-{
-    switch (type)
-    {
-    case EditorParameterType::Float: return 1;
-    case EditorParameterType::Vec2: return 2;
-    case EditorParameterType::Vec3: return 3;
-    case EditorParameterType::Vec4:
-    case EditorParameterType::Color:
-        return 4;
-    }
-    return 1;
-}
-
 namespace
 {
-const char* TypeName(EditorParameterType type)
+
+using UiWidgets::Text;
+using UiWidgets::Option;
+using UiWidgets::WidgetAction;
+using UiWidgets::WidgetRefreshScope;
+
+// 文档命令的可用性同时作用于工具栏按钮和 File/Edit 菜单项，避免出现两套互相矛盾的启用状态。
+constexpr const char* DocumentCommandIds[] = {
+    "save-asset", "revert-asset", "reset-asset", "validate-asset", "reload-asset",
+    "menu-file-save", "menu-file-revert", "menu-file-reload",
+    "menu-edit-reset", "menu-edit-validate"};
+
+std::string Number(float value)
 {
-    switch (type)
-    {
-    case EditorParameterType::Float: return "float";
-    case EditorParameterType::Vec2: return "vec2";
-    case EditorParameterType::Vec3: return "vec3";
-    case EditorParameterType::Vec4: return "vec4";
-    case EditorParameterType::Color: return "color";
-    }
-    return "unknown";
+    std::ostringstream stream;
+    stream << std::setprecision(9) << value;
+    return stream.str();
 }
 
-uint32_t ParameterComponentCount(EditorParameterType type)
+template<class T>
+bool ParseNumber(const std::string& text, T& value)
 {
-    switch (type)
-    {
-    case EditorParameterType::Float: return 1;
-    case EditorParameterType::Vec2: return 2;
-    case EditorParameterType::Vec3: return 3;
-    case EditorParameterType::Vec4: return 4;
-    case EditorParameterType::Color: return 4;
-    }
-    return 1;
+    const auto result = std::from_chars(text.data(), text.data() + text.size(), value);
+    return !text.empty() && result.ec == std::errc() &&
+        result.ptr == text.data() + text.size() && std::isfinite(static_cast<double>(value));
 }
 
-const char* DefaultComponentName(uint32_t componentIndex)
+// 文本输入与范围控件都是 ElementFormControl，但取值路径不同：
+// 范围控件的 GetValue() 走 RmlUi WidgetSlider 的 "%f" 序列化（6 位小数），
+// 小于 1e-6 的拖动结果会被截成 0；精确值只保存在 value 属性里。
+// 这里对范围控件直接读 value 属性，让两类控件都返回可解析的有限数，
+// 也保证拖动不会落进 HandleChange 的 "A complete finite number is required." 分支。
+std::string ControlValue(Rml::Element& element)
 {
-    static constexpr std::array<const char*, 4> names = {"x", "y", "z", "w"};
-    return componentIndex < names.size() ? names[componentIndex] : "value";
+    auto* control = dynamic_cast<Rml::ElementFormControl*>(&element);
+    if (control == nullptr) return std::string();
+    auto* input = dynamic_cast<Rml::ElementFormControlInput*>(&element);
+    if (input != nullptr && input->GetAttribute<Rml::String>("type", "") == "range")
+        return Number(input->GetAttribute<float>("value", 0.0f));
+    return control->GetValue();
 }
 
+// HEAD(ImGui) 的范围解析语义，迁移后必须保持一致：通道范围 > 参数范围 > 按当前值推导的固定兜底。
 struct SliderRange
 {
     float minValue = -1.0f;
     float maxValue = 1.0f;
 };
 
-float LinearToSrgb(float value)
-{
-    // 调色板面向 sRGB 显示；扩展公式保留 HDR 线性值，避免编辑 emissive 时截断。
-    return value <= 0.0031308f
-        ? value * 12.92f
-        : 1.055f * std::pow(value, 1.0f / 2.4f) - 0.055f;
-}
-
-float SrgbToLinear(float value)
-{
-    return value <= 0.04045f
-        ? value / 12.92f
-        : std::pow((value + 0.055f) / 1.055f, 2.4f);
-}
-
-unsigned int ToSrgbHexByte(float value)
-{
-    return static_cast<unsigned int>(std::round(std::clamp(value, 0.0f, 1.0f) * 255.0f));
-}
-
-SliderRange ResolveSliderRange(
-    const EditorParameterSnapshot& parameter,
-    const EditorParameterChannel& channel,
-    float currentValue)
+SliderRange ResolveSliderRange(const EditorParameterSnapshot& parameter,
+    const EditorParameterChannel& channel, float currentValue)
 {
     if (channel.hasRange && std::isfinite(channel.minValue) &&
         std::isfinite(channel.maxValue) && channel.minValue <= channel.maxValue)
@@ -103,34 +89,33 @@ SliderRange ResolveSliderRange(
     }
 
     // 旧 M_ 文件没有范围时按默认值生成固定兜底，避免错误输入继续扩大可调区间。
+    // 基准是 defaultValue 而不是正在编辑的值：拖动过程中区间不能跟着漂移。
     const float magnitude = std::abs(currentValue);
     float extent = std::max(1.0f, magnitude * 2.0f);
     if (!std::isfinite(extent)) extent = 1.0f;
     return {-extent, extent};
 }
 
-const char* DocStatus(EditorDocumentStatus status)
+// HEAD 的折叠分组名与默认展开状态：General / Render States / Parameters / Texture Bindings。
+// 键同时是 DOM id 后缀，切换只改既有分组元素的 class，不重建 DOM。
+constexpr const char* DetailsSectionKeys[] = {"general", "render-states", "parameters", "textures"};
+
+std::string DetailsSectionId(const char* key)
+{
+    return std::string("details-section-") + key;
+}
+
+const char* DocumentStatus(EditorDocumentStatus status)
 {
     switch (status)
     {
-    case EditorDocumentStatus::Clean: return "Clean";
+    case EditorDocumentStatus::Clean: return "Saved";
     case EditorDocumentStatus::Dirty: return "Modified";
     case EditorDocumentStatus::Saving: return "Saving";
     case EditorDocumentStatus::SaveFailed: return "Save failed";
     case EditorDocumentStatus::SourceChanged: return "Source changed";
     }
-    return "Closed";
-}
-
-const char* ValidationStatus(EditorValidationStatus status)
-{
-    switch (status)
-    {
-    case EditorValidationStatus::Valid: return "Valid";
-    case EditorValidationStatus::Invalid: return "Invalid";
-    case EditorValidationStatus::Running: return "Checking";
-    }
-    return "Unknown";
+    return "";
 }
 
 const char* PreviewStatus(EditorPreviewStatus status)
@@ -141,194 +126,126 @@ const char* PreviewStatus(EditorPreviewStatus status)
     case EditorPreviewStatus::Applying: return "Applying";
     case EditorPreviewStatus::Unavailable: return "Unavailable";
     case EditorPreviewStatus::Failed: return "Failed";
+    case EditorPreviewStatus::Disconnected: return "Disconnected";
     }
-    return "Disconnected";
+    return "";
 }
 
-bool Matches(const std::string& text, const char* filter)
+// Window 菜单沿用停靠标签的显示名；面板集合本身仍由 DockWorkspace::Panels() 定义。
+const char* PanelLabel(const std::string& panel)
 {
-    return filter == nullptr || *filter == '\0' || text.find(filter) != std::string::npos;
+    if (panel == "viewport") return "Viewport";
+    if (panel == "outliner") return "Scene Outliner";
+    if (panel == "details") return "Details";
+    if (panel == "content") return "Content Browser";
+    if (panel == "renderer") return "Renderer";
+    return "Asset Editor";
 }
 
-VL::Editor::Selection::MaterialInstanceModelContext ToSelectionModel(
+std::string ResourcePanelId(const std::string& path)
+{
+    // 资源标签的身份在当前会话内必须稳定，关闭前一个标签时不能重命名仍停靠在其他区域的标签。
+    uint64_t hash = 1469598103934665603ull;
+    for (const unsigned char value : path)
+    {
+        hash ^= value;
+        hash *= 1099511628211ull;
+    }
+    std::ostringstream stream;
+    stream << "resource:" << std::hex << hash;
+    return stream.str();
+}
+
+std::string RenderStateOptions(const std::string& name)
+{
+    std::string result;
+    if (name == "renderMode")
+    {
+        for (EditorMaterialRenderMode mode : {
+            EditorMaterialRenderMode::Opaque, EditorMaterialRenderMode::OpaqueClip,
+            EditorMaterialRenderMode::ForwardOpaque,
+            EditorMaterialRenderMode::TransparentAlphaBlend,
+            EditorMaterialRenderMode::TransparentAlphaBlendWriteDepth,
+            EditorMaterialRenderMode::TransparentAdditive,
+            EditorMaterialRenderMode::ThinTranslucent})
+        {
+            const std::string value(GetEditorMaterialRenderModeName(mode));
+            result += Option(value, value);
+        }
+    }
+    else if (name == "cullMode")
+    {
+        for (EditorMaterialCullMode mode : {
+            EditorMaterialCullMode::Back, EditorMaterialCullMode::Front,
+            EditorMaterialCullMode::None})
+        {
+            const std::string value(GetEditorMaterialCullModeName(mode));
+            result += Option(value, value);
+        }
+    }
+    else if (name == "shadingModel")
+    {
+        for (EditorMaterialShadingModel model : {
+            EditorMaterialShadingModel::DefaultLit, EditorMaterialShadingModel::Unlit,
+            EditorMaterialShadingModel::Subsurface, EditorMaterialShadingModel::PreintegratedSkin,
+            EditorMaterialShadingModel::ClearCoat, EditorMaterialShadingModel::SubsurfaceProfile,
+            EditorMaterialShadingModel::TwoSidedFoliage, EditorMaterialShadingModel::Hair,
+            EditorMaterialShadingModel::Cloth, EditorMaterialShadingModel::Eye,
+            EditorMaterialShadingModel::ThinTranslucent})
+        {
+            const std::string value(GetEditorMaterialShadingModelName(model));
+            result += Option(value, value);
+        }
+    }
+    return result;
+}
+
+EditorMaterialParameterValue CommandValue(const EditorParameterValue& value)
+{
+    switch (value.type)
+    {
+    case EditorParameterType::Float: return value.values[0];
+    case EditorParameterType::Vec2: return EditorVec2{value.values[0], value.values[1]};
+    case EditorParameterType::Vec3: return EditorVec3{value.values[0], value.values[1], value.values[2]};
+    case EditorParameterType::Vec4: return EditorVec4{value.values[0], value.values[1], value.values[2], value.values[3]};
+    case EditorParameterType::Color: return EditorColor{value.values};
+    }
+    return 0.0f;
+}
+
+EditorMaterialParameterType CommandType(EditorParameterType type)
+{
+    switch (type)
+    {
+    case EditorParameterType::Float: return EditorMaterialParameterType::Float;
+    case EditorParameterType::Vec2: return EditorMaterialParameterType::Vec2;
+    case EditorParameterType::Vec3: return EditorMaterialParameterType::Vec3;
+    case EditorParameterType::Vec4: return EditorMaterialParameterType::Vec4;
+    case EditorParameterType::Color: return EditorMaterialParameterType::Color;
+    }
+    return EditorMaterialParameterType::Float;
+}
+
+Editor::Selection::MaterialInstanceModelContext SelectionModel(
     const MaterialInstanceModelSnapshot& model)
 {
-    VL::Editor::Selection::MaterialInstanceModelContext result;
+    Editor::Selection::MaterialInstanceModelContext result;
     result.worldGeneration = model.worldGeneration;
     result.scenePath = model.scenePath;
     result.objectId = model.objectId;
     result.displayName = model.displayName;
     result.objectIdentity = model.objectIdentity;
-    result.materials.reserve(model.materials.size());
-    for (const MaterialInstanceModelMaterialSnapshot& material : model.materials)
+    for (const auto& material : model.materials)
     {
-        VL::Editor::Selection::MaterialInstanceModelMaterial selectionMaterial;
-        selectionMaterial.objectId = material.objectId == 0
-            ? model.objectId
-            : material.objectId;
-        selectionMaterial.materialSlotIndex = material.materialSlotIndex;
-        selectionMaterial.materialSlotName = material.materialSlotName;
-        selectionMaterial.materialInstancePath = material.materialInstancePath;
-        selectionMaterial.displayName = material.materialSlotName;
-        result.materials.push_back(std::move(selectionMaterial));
+        Editor::Selection::MaterialInstanceModelMaterial item;
+        item.objectId = material.objectId == 0 ? model.objectId : material.objectId;
+        item.materialSlotIndex = material.materialSlotIndex;
+        item.materialSlotName = material.materialSlotName;
+        item.materialInstancePath = material.materialInstancePath;
+        item.displayName = material.materialSlotName;
+        result.materials.push_back(std::move(item));
     }
     return result;
-}
-
-VL::Editor::Selection::MaterialInstanceSelection ToSelection(
-    const MaterialInstanceModelSnapshot& model,
-    const MaterialInstanceModelMaterialSnapshot& material)
-{
-    VL::Editor::Selection::MaterialInstanceSelection result;
-    result.worldGeneration = model.worldGeneration;
-    result.scenePath = model.scenePath;
-    result.objectId = material.objectId == 0 ? model.objectId : material.objectId;
-    result.objectIdentity = model.objectIdentity;
-    result.materialSlotIndex = material.materialSlotIndex;
-    result.materialSlotName = material.materialSlotName;
-    result.materialInstancePath = material.materialInstancePath;
-    result.modelContext = ToSelectionModel(model);
-    return result;
-}
-
-VL::EditorMaterialParameterType ToCommandType(EditorParameterType type)
-{
-    switch (type)
-    {
-    case EditorParameterType::Float: return VL::EditorMaterialParameterType::Float;
-    case EditorParameterType::Vec2: return VL::EditorMaterialParameterType::Vec2;
-    case EditorParameterType::Vec3: return VL::EditorMaterialParameterType::Vec3;
-    case EditorParameterType::Vec4: return VL::EditorMaterialParameterType::Vec4;
-    case EditorParameterType::Color: return VL::EditorMaterialParameterType::Color;
-    }
-    return VL::EditorMaterialParameterType::Float;
-}
-
-VL::EditorMaterialParameterValue ToCommandValue(const EditorParameterValue& value)
-{
-    switch (value.type)
-    {
-    case EditorParameterType::Float:
-        return value.values[0];
-    case EditorParameterType::Vec2:
-        return VL::EditorVec2{value.values[0], value.values[1]};
-    case EditorParameterType::Vec3:
-        return VL::EditorVec3{value.values[0], value.values[1], value.values[2]};
-    case EditorParameterType::Vec4:
-        return VL::EditorVec4{value.values[0], value.values[1], value.values[2], value.values[3]};
-    case EditorParameterType::Color:
-        return VL::EditorColor{{value.values[0], value.values[1], value.values[2], value.values[3]}};
-    }
-    return 0.0f;
-}
-
-EditorCommandEnvelope MakePathCommand(
-    VL::EditorCommandType type,
-    const std::string& assetPath,
-    std::optional<uint64_t> revision = std::nullopt)
-{
-    EditorCommandEnvelope command;
-    command.type = type;
-    command.expectedDocumentRevision = revision;
-    command.payload = VL::MaterialInstanceAssetPathPayload{assetPath};
-    if (type == VL::EditorCommandType::ResetMaterialInstanceOverrides)
-    {
-        command.payload = VL::ResetMaterialInstanceOverridesPayload{
-            assetPath,
-            VL::EditorResetScope::All};
-    }
-    else if (type == VL::EditorCommandType::CloseMaterialInstanceAsset)
-    {
-        command.payload = VL::CloseMaterialInstanceAssetPayload{
-            assetPath,
-            VL::EditorDirtyDocumentPolicy::DiscardChanges};
-    }
-    return command;
-}
-
-EditorCommandEnvelope MakeSetParameterCommand(
-    const MaterialInstanceDocumentSnapshot& document,
-    const EditorParameterSnapshot& parameter,
-    const EditorParameterValue& value)
-{
-    EditorCommandEnvelope command;
-    command.type = VL::EditorCommandType::SetMaterialParameterOverride;
-    command.expectedDocumentRevision = document.revision;
-    command.payload = VL::SetMaterialParameterOverridePayload{
-        document.assetPath,
-        parameter.name,
-        ToCommandType(value.type),
-        ToCommandValue(value)};
-    return command;
-}
-
-EditorCommandEnvelope MakeClearParameterCommand(
-    const MaterialInstanceDocumentSnapshot& document,
-    const std::string& parameter)
-{
-    EditorCommandEnvelope command;
-    command.type = VL::EditorCommandType::ClearMaterialParameterOverride;
-    command.expectedDocumentRevision = document.revision;
-    command.payload = VL::ClearMaterialParameterOverridePayload{
-        document.assetPath,
-        parameter};
-    return command;
-}
-
-EditorCommandEnvelope MakeSetTextureCommand(
-    const MaterialInstanceDocumentSnapshot& document,
-    const std::string& slot,
-    const std::string& textureAssetPath)
-{
-    EditorCommandEnvelope command;
-    command.type = VL::EditorCommandType::SetMaterialTextureOverride;
-    command.expectedDocumentRevision = document.revision;
-    command.payload = VL::SetMaterialTextureOverridePayload{
-        document.assetPath,
-        slot,
-        textureAssetPath};
-    return command;
-}
-
-EditorCommandEnvelope MakeClearTextureCommand(
-    const MaterialInstanceDocumentSnapshot& document,
-    const std::string& slot)
-{
-    EditorCommandEnvelope command;
-    command.type = VL::EditorCommandType::ClearMaterialTextureOverride;
-    command.expectedDocumentRevision = document.revision;
-    command.payload = VL::ClearMaterialTextureOverridePayload{
-        document.assetPath,
-        slot};
-    return command;
-}
-
-EditorCommandEnvelope MakeSetRenderStateCommand(
-    const MaterialInstanceDocumentSnapshot& document,
-    VL::EditorMaterialRenderStateField field,
-    VL::EditorMaterialRenderStateValue value)
-{
-    EditorCommandEnvelope command;
-    command.type = VL::EditorCommandType::SetMaterialRenderStateOverride;
-    command.expectedDocumentRevision = document.revision;
-    command.payload = VL::SetMaterialRenderStateOverridePayload{
-        document.assetPath,
-        field,
-        std::move(value)};
-    return command;
-}
-
-EditorCommandEnvelope MakeClearRenderStateCommand(
-    const MaterialInstanceDocumentSnapshot& document,
-    VL::EditorMaterialRenderStateField field)
-{
-    EditorCommandEnvelope command;
-    command.type = VL::EditorCommandType::ClearMaterialRenderStateOverride;
-    command.expectedDocumentRevision = document.revision;
-    command.payload = VL::ClearMaterialRenderStateOverridePayload{
-        document.assetPath,
-        field};
-    return command;
 }
 
 } // namespace
@@ -338,970 +255,1187 @@ MaterialInstanceAssetEditorPanel::MaterialInstanceAssetEditorPanel(IEditorComman
 {
 }
 
-void MaterialInstanceAssetEditorPanel::SetCommandSink(IEditorCommandSink* sink)
+MaterialInstanceAssetEditorPanel::~MaterialInstanceAssetEditorPanel()
 {
-    commandSink = sink;
+    Detach();
 }
 
-void MaterialInstanceAssetEditorPanel::SetSceneSelectionSink(
-    IMaterialInstanceSceneSelectionSink* sink)
+bool MaterialInstanceAssetEditorPanel::ValidateDocument(Rml::ElementDocument& candidate, std::string& error)
+{
+    for (const char* id : {
+        "scene-models", "material-slots", "asset-list", "document-tabs",
+        "document-title", "document-status", "editor-notice", "details-content",
+        "offline-status", "offline-notice", "close-dialog", "close-document-name",
+        "mode-realtime", "mode-offline", "save-asset", "revert-asset", "reset-asset",
+        "validate-asset", "reload-asset", "apply-preview", "restore-preview",
+        "offline-samples", "offline-bounces", "offline-lightSamples", "offline-seed",
+        "offline-aov", "offline-exposure", "offline-pause", "offline-resume",
+        "offline-stop", "offline-restart", "offline-export", "asset-search",
+        "close-document-status", "close-save", "editor-navigation",
+        "editor-inspector", "editor-content", "workspace-content-tab", "workspace-renderer-tab",
+        "content-browser-page", "renderer-page", "editor-viewport-surface", "editor-viewport-image",
+        "workspace-viewport-tab", "workspace-outliner-tab", "workspace-details-tab",
+        "workspace-resource-tab", "workspace-resource-icon", "workspace-resource-label",
+        "resource-editor", "resource-editor-toolbar", "resource-reload", "resource-close", "resource-preview-panel",
+        "resource-preview-title", "resource-preview-kind", "resource-preview-surface",
+        "resource-preview-icon", "resource-preview-status", "resource-preview-path",
+        "resource-details-panel", "resource-json-inspector", "resource-json-title",
+        "resource-json-kind", "resource-json-path", "resource-json-description",
+        "resource-json-status", "resource-json-fields", "resource-json-search",
+        "resource-json-page", "resource-json-prev", "resource-json-next",
+        "dock-parking", "dock-dynamic-tabs", "dock-shell", "dock-preview", "dock-drag-shield", "workspace-reset",
+        "asset-sources", "asset-breadcrumbs", "asset-count", "asset-empty", "browser-selection",
+        "browser-back", "browser-forward", "browser-up", "browser-sources-toggle",
+        "browser-grid", "browser-list", "browser-recursive", "browser-sort", "browser-size",
+        "browser-sources-panel", "browser-type", "browser-refresh",
+        "material-instance-details", "json-inspector", "json-title", "json-kind", "json-path",
+        "json-description", "json-status", "json-fields", "json-search", "json-page", "json-prev", "json-next",
+        "editor-menubar", "menu-file", "menu-edit", "menu-window", "menu-help",
+        "menu-file-popup", "menu-window-popup", "menu-window-panels", "menu-file-levels",
+        "menu-file-save", "menu-file-revert", "menu-file-reload",
+        "menu-edit-reset", "menu-edit-validate", "menu-edit-undo", "menu-edit-redo",
+        "menu-window-reset", "menu-window-restore",
+        "about-dialog", "about-close",
+        "viewport-toolbar", "viewport-tool-select", "viewport-tool-move", "viewport-tool-rotate",
+        "viewport-tool-scale", "viewport-space-world", "viewport-space-local",
+        "viewport-view-lit", "viewport-view-unlit", "viewport-view-wireframe"})
+    {
+        if (candidate.GetElementById(id) == nullptr)
+        {
+            error = std::string("Editor workspace is missing element: ") + id;
+            return false;
+        }
+    }
+    return true;
+}
+
+bool MaterialInstanceAssetEditorPanel::Attach(Rml::ElementDocument& candidate, std::string& error)
+{
+    if (!ValidateDocument(candidate, error)) return false;
+    Detach();
+    document = &candidate;
+    document->AddEventListener("click", this);
+    document->AddEventListener("change", this);
+    document->AddEventListener("dblclick", this);
+    document->AddEventListener("mousedown", this, true);
+    document->AddEventListener("mousemove", this, true);
+    document->AddEventListener("mouseup", this, true);
+    if (!docking.Attach(candidate, error))
+    {
+        Detach();
+        return false;
+    }
+    widgetDocument.Attach(candidate);
+    if (!contentBrowser.Attach(candidate, error))
+    {
+        Detach();
+        return false;
+    }
+    if (!jsonInspector.Attach(candidate, error))
+    {
+        Detach();
+        return false;
+    }
+    if (!resourceJsonInspector.Attach(candidate, error, "resource-json"))
+    {
+        Detach();
+        return false;
+    }
+    detailsIdentity.clear();
+    RefreshWorkspace();
+    RefreshLists();
+    RefreshDetails();
+    UpdateRuntimeView(runtimeView);
+    return true;
+}
+
+void MaterialInstanceAssetEditorPanel::Detach()
+{
+    if (document != nullptr)
+    {
+        document->RemoveEventListener("click", this);
+        document->RemoveEventListener("change", this);
+        document->RemoveEventListener("dblclick", this);
+        document->RemoveEventListener("mousedown", this, true);
+        document->RemoveEventListener("mousemove", this, true);
+        document->RemoveEventListener("mouseup", this, true);
+        contentBrowser.Detach();
+        jsonInspector.Detach();
+        resourceJsonInspector.Detach();
+        docking.Detach();
+        document = nullptr;
+    }
+    widgetDocument.Detach();
+}
+
+void MaterialInstanceAssetEditorPanel::SetSceneSelectionSink(IMaterialInstanceSceneSelectionSink* sink)
 {
     sceneSelectionSink = sink;
 }
 
-void MaterialInstanceAssetEditorPanel::SetSnapshot(const MaterialInstanceEditorSnapshot& value)
+void MaterialInstanceAssetEditorPanel::SetRuntimeActionSink(IEditorRuntimeActionSink* sink)
 {
-    snapshot = value;
-    // selectedDocumentPath 是异步服务快照，不能反向驱动 ImGui 选中状态；
-    // 否则旧快照返回时会把用户刚点开的页签抢回去。
-    if (snapshot.selectedDocumentPath == submittedTabSelection)
-        submittedTabSelection.clear();
-    if (!snapshot.activeDocument ||
-        snapshot.activeDocument->assetPath != pendingParameterEditAssetPath ||
-        snapshot.activeDocument->revision != pendingParameterEditRevision)
-    {
-        pendingParameterEditAssetPath.clear();
-        pendingParameterEditRevision = 0;
-        pendingParameterEdits.clear();
-    }
-    if (!snapshot.activeDocument)
-    {
-        openTexturePicker = false;
-        pickerSlot.clear();
-    }
-    for (auto iterator = pendingTabClosures.begin();
-         iterator != pendingTabClosures.end();)
-    {
-        const bool stillOpen = std::find_if(
-            snapshot.documentTabs.begin(),
-            snapshot.documentTabs.end(),
-            [path = *iterator](const MaterialInstanceAssetEntry& tab)
-            {
-                return tab.assetPath == path;
-            }) != snapshot.documentTabs.end();
-        if (!stillOpen)
-        {
-            iterator = pendingTabClosures.erase(iterator);
-        }
-        else
-        {
-            ++iterator;
-        }
-    }
-}
-
-void MaterialInstanceAssetEditorPanel::SetVisible(bool value)
-{
-    visible = value;
-}
-
-void MaterialInstanceAssetEditorPanel::Build(const MaterialInstanceEditorSnapshot& value)
-{
-    SetSnapshot(value);
+    runtimeActionSink = sink;
 }
 
 void MaterialInstanceAssetEditorPanel::Submit(EditorCommandEnvelope command)
 {
-    if (command.commandId == 0) command.commandId = nextCommandId++;
     if (commandSink == nullptr)
     {
-        localStatus = "Command sink is not connected; no business state was changed.";
+        localStatus = "Editor command service is unavailable.";
         return;
     }
-    localStatus = "Submitted command #" + std::to_string(command.commandId);
+    // 0 由 CommandBus 分配全局唯一 ID，避免与运行时导航/预览生产者的编号冲突。
+    command.commandId = 0;
+    command.source = EditorCommandSource::RmlUi;
     commandSink->Submit(std::move(command));
 }
 
-#ifdef VULKANLEARN_ENABLE_DEVELOPER_UI
-
-bool DrawCompactResetButton()
+void MaterialInstanceAssetEditorPanel::SubmitPathCommand(EditorCommandType type)
 {
-    const bool clicked = ImGui::SmallButton("\xE2\x86\xB6");
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+    if (!snapshot.activeDocument) return;
+    EditorCommandEnvelope command;
+    command.type = type;
+    command.expectedDocumentRevision = snapshot.activeDocument->revision;
+    command.payload = MaterialInstanceAssetPathPayload{snapshot.activeDocument->assetPath};
+    if (type == EditorCommandType::ApplyMaterialInstancePreview)
     {
-        ImGui::SetTooltip("Reset to M_ default");
+        command.payload = ApplyMaterialInstancePreviewPayload{
+            snapshot.activeDocument->assetPath, snapshot.activeDocument->revision};
     }
-    return clicked;
+    Submit(std::move(command));
 }
 
-void MaterialInstanceAssetEditorPanel::Render()
+void MaterialInstanceAssetEditorPanel::QueueEdit(std::string key, EditorCommandBatchItem item)
 {
-    if (!visible) return;
-    if (!ImGui::Begin("Material Instance Asset Editor", &visible))
+    if (!snapshot.activeDocument) return;
+    if (pendingEdits.empty())
     {
-        ImGui::End();
-        return;
+        pendingAssetPath = snapshot.activeDocument->assetPath;
+        pendingRevision = snapshot.activeDocument->revision;
     }
-    RenderContents();
-    ImGui::End();
-}
-
-void MaterialInstanceAssetEditorPanel::RenderContents()
-{
-    if (!visible) return;
-    if (ImGui::BeginTable("MIEditorLayout", 2,
-        ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp))
+    // 同一字段一帧内多次 change 合并成最终值；不同字段仍按用户操作顺序组成原子 batch。
+    for (auto it = pendingEdits.begin(); it != pendingEdits.end(); ++it)
     {
-        ImGui::TableSetupColumn("Asset Navigation", ImGuiTableColumnFlags_WidthFixed, 300.0f);
-        ImGui::TableSetupColumn("Asset Details", ImGuiTableColumnFlags_WidthStretch);
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0); RenderNavigationContents();
-        ImGui::TableSetColumnIndex(1); RenderInspectorContents();
-        ImGui::EndTable();
-    }
-}
-
-void MaterialInstanceAssetEditorPanel::RenderNavigationContents()
-{
-    RenderSceneModels();
-    ImGui::Separator();
-    RenderSelectedModelMaterials();
-}
-
-void MaterialInstanceAssetEditorPanel::RenderSceneModels()
-{
-    ImGui::SeparatorText("Scene Models");
-    if (snapshot.sceneModels.empty())
-    {
-        ImGui::TextDisabled("No mesh models in the active scene.");
-        return;
-    }
-
-    ImGui::BeginChild("MISceneModelList", ImVec2(0.0f, 180.0f), ImGuiChildFlags_Borders);
-    for (const MaterialInstanceModelSnapshot& model : snapshot.sceneModels)
-    {
-        const bool selected = snapshot.selectedModel.has_value() &&
-            snapshot.selectedModel->objectId == model.objectId &&
-            model.objectId != 0;
-        const std::string label = (model.displayName.empty()
-            ? model.objectIdentity
-            : model.displayName) + "###scene_model_" +
-            std::to_string(model.objectId);
-        if (ImGui::Selectable(label.c_str(), selected))
+        if (it->key == key)
         {
-            if (sceneSelectionSink != nullptr)
-            {
-                sceneSelectionSink->RequestModelSelection(ToSelectionModel(model));
-            }
-            // 选中模型后立即打开该模型的首个材质，避免右侧 Inspector 继续停留在旧对象。
-            if (!model.materials.empty())
-            {
-                const MaterialInstanceModelMaterialSnapshot& material = model.materials.front();
-                pendingTabSelection = material.materialInstancePath;
-                submittedTabSelection.clear();
-                EditorCommandEnvelope command;
-                command.type = VL::EditorCommandType::OpenMaterialInstanceAsset;
-                command.payload = VL::OpenMaterialInstanceAssetPayload{
-                    material.materialInstancePath,
-                    EditorNavigationOrigin{
-                        model.scenePath,
-                        model.objectIdentity,
-                        material.materialSlotIndex,
-                        material.materialSlotName}};
-                Submit(std::move(command));
-            }
-        }
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
-        {
-            ImGui::SetTooltip("%s\n%s", model.displayName.c_str(), model.objectIdentity.c_str());
+            pendingEdits.erase(it);
+            break;
         }
     }
-    ImGui::EndChild();
+    pendingEdits.push_back({std::move(key), std::move(item)});
 }
 
-void MaterialInstanceAssetEditorPanel::RenderInspectorContents()
+void MaterialInstanceAssetEditorPanel::FlushPendingEdits(bool save)
 {
-    // 检查器 Dock 复用 Build 阶段冻结的快照，避免多窗口重复拉取运行时状态。
-    RenderToolbar();
-    ImGui::Separator();
-    RenderTabs();
-    RenderDetails();
-    RenderStatusBar();
-}
-
-void MaterialInstanceAssetEditorPanel::RenderStatusBar()
-{
-    ImGui::Separator();
-    if (!localStatus.empty()) ImGui::TextWrapped("%s", localStatus.c_str());
-    if (!snapshot.statusMessage.empty()) ImGui::TextWrapped("%s", snapshot.statusMessage.c_str());
-    if (snapshot.activeDocument)
+    if (pendingEdits.empty())
     {
-        const auto& document = *snapshot.activeDocument;
-        ImGui::Text("Document: %s | Validation: %s | Preview: %s",
-            DocStatus(document.status), ValidationStatus(document.validation), PreviewStatus(document.preview));
-    }
-}
-
-void MaterialInstanceAssetEditorPanel::RenderToolbar()
-{
-    if (!snapshot.activeDocument.has_value())
-    {
-        ImGui::TextDisabled("No document");
+        if (save) SubmitPathCommand(EditorCommandType::SaveMaterialInstanceDocument);
         return;
     }
-
-    const MaterialInstanceDocumentSnapshot& document =
-        snapshot.activeDocument.value();
-    // 窄 Inspector 中按操作阶段分行，避免按钮依赖窗口宽度硬挤在一行。
-    if (ImGui::Button("Save") || ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_S, ImGuiInputFlags_RouteFocused))
-        Submit(MakePathCommand(
-            VL::EditorCommandType::SaveMaterialInstanceDocument,
-            document.assetPath,
-            document.revision));
-    ImGui::SameLine();
-    if (ImGui::Button("Revert"))
-        Submit(MakePathCommand(
-            VL::EditorCommandType::RevertMaterialInstanceDocument,
-            document.assetPath,
-            document.revision));
-    ImGui::SameLine();
-    if (ImGui::Button("Reset All"))
-        Submit(MakePathCommand(
-            VL::EditorCommandType::ResetMaterialInstanceOverrides,
-            document.assetPath,
-            document.revision));
-
-    if (ImGui::Button("Validate"))
-        Submit(MakePathCommand(
-            VL::EditorCommandType::ValidateMaterialInstanceDocument,
-            document.assetPath));
-
-    const bool previewConnected =
-        document.preview == EditorPreviewStatus::Connected ||
-        document.preview == EditorPreviewStatus::Applying;
-    ImGui::BeginDisabled(!previewConnected);
-    if (ImGui::Button("Apply Preview"))
+    EditorCommandEnvelope command;
+    command.type = EditorCommandType::ExecuteEditorCommandBatch;
+    command.expectedDocumentRevision = pendingRevision;
+    ExecuteEditorCommandBatchPayload payload;
+    for (auto& edit : pendingEdits) payload.commands.push_back(std::move(edit.item));
+    if (save)
     {
-        EditorCommandEnvelope command;
-        command.type = VL::EditorCommandType::ApplyMaterialInstancePreview;
-        command.expectedDocumentRevision = document.revision;
-        command.payload = VL::ApplyMaterialInstancePreviewPayload{
-            document.assetPath,
-            document.revision};
-        Submit(std::move(command));
+        payload.commands.push_back({EditorCommandType::SaveMaterialInstanceDocument,
+            MaterialInstanceAssetPathPayload{pendingAssetPath}});
     }
-    ImGui::SameLine();
-    if (ImGui::Button("Restore Baseline"))
-        Submit(MakePathCommand(
-            VL::EditorCommandType::RestoreMaterialInstancePreviewBaseline,
-            document.assetPath,
-            document.revision));
-    ImGui::EndDisabled();
-    ImGui::TextDisabled("Preview connects automatically | Status: %s", DocStatus(document.status));
+    command.payload = std::move(payload);
+    Submit(std::move(command));
+    pendingEdits.clear();
+    pendingValues.clear();
+    pendingAssetPath.clear();
 }
 
-void MaterialInstanceAssetEditorPanel::RenderSelectedModelMaterials()
+void MaterialInstanceAssetEditorPanel::RequestSave()
 {
-    ImGui::SeparatorText("Selected Model Materials");
-    if (!snapshot.selectedModel.has_value())
-    {
-        ImGui::TextWrapped("Click a model in the 3D viewport to inspect its material instances.");
-        return;
-    }
+    if (viewingJson || resourceEditorVisible) return;
+    FlushPendingEdits(true);
+}
 
-    const MaterialInstanceModelSnapshot& model = snapshot.selectedModel.value();
-    ImGui::TextWrapped("Object: %s", model.displayName.empty()
-        ? model.objectIdentity.c_str()
-        : model.displayName.c_str());
-    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-    ImGui::TextWrapped("Scene: %s", model.scenePath.c_str());
-    ImGui::PopStyleColor();
-    ImGui::BeginChild("MIAssetList", ImVec2(0.0f, 0.0f), ImGuiChildFlags_Borders);
-    for (std::size_t index = 0; index < model.materials.size(); ++index)
+void MaterialInstanceAssetEditorPanel::Build(const MaterialInstanceEditorSnapshot& value)
+{
+    // 不把旧 UI 修改静默重定位到新文档或新 revision；CommandBus 负责拒绝过期 batch。
+    FlushPendingEdits();
+    snapshot = value;
+    RefreshWorkspace();
+    if (saveThenClose && !saveCloseSubmitted && snapshot.activeDocument &&
+        snapshot.activeDocument->assetPath == pendingClosePath)
     {
-        const MaterialInstanceModelMaterialSnapshot& material = model.materials[index];
-        bool dirty = false;
-        for (const MaterialInstanceAssetEntry& tab : snapshot.documentTabs)
+        SubmitPathCommand(EditorCommandType::SaveMaterialInstanceDocument);
+        saveCloseSubmitted = true;
+    }
+    else if (saveThenClose && saveCloseSubmitted)
+    {
+        if (snapshot.activeDocument && snapshot.activeDocument->assetPath == pendingClosePath &&
+            (snapshot.activeDocument->status == EditorDocumentStatus::SaveFailed ||
+             snapshot.activeDocument->status == EditorDocumentStatus::SourceChanged))
         {
-            if (tab.assetPath == material.materialInstancePath)
+            saveThenClose = false;
+            saveCloseSubmitted = false;
+        }
+        for (const auto& tab : snapshot.documentTabs)
+        {
+            if (saveThenClose && tab.assetPath == pendingClosePath && !tab.dirty)
             {
-                dirty = tab.dirty;
+                CloseDocument(pendingClosePath, EditorDirtyDocumentPolicy::RequireClean);
+                pendingClosePath.clear();
+                saveThenClose = false;
+                saveCloseSubmitted = false;
                 break;
             }
         }
-
-        const std::string slotLabel = material.materialSlotName.empty()
-            ? "Slot " + std::to_string(material.materialSlotIndex)
-            : material.materialSlotName;
-        const std::string label = slotLabel + (dirty ? " *" : "") +
-            "###selected_model_material_" + std::to_string(index);
-        ImGui::PushID(static_cast<int>(index));
-        const bool selected = snapshot.selectedMaterialSlotIndex.has_value() &&
-            snapshot.selectedModel.has_value() &&
-            snapshot.selectedModel->objectId == model.objectId &&
-            snapshot.selectedMaterialSlotIndex.value() == material.materialSlotIndex;
-        const bool documentSelected = !snapshot.selectedMaterialSlotIndex.has_value() &&
-            material.materialInstancePath == snapshot.selectedDocumentPath;
-        if (ImGui::Selectable(
-                label.c_str(),
-                selected || documentSelected))
-        {
-            if (sceneSelectionSink != nullptr)
-            {
-                sceneSelectionSink->RequestMaterialSelection(ToSelection(model, material));
-            }
-            pendingTabSelection = material.materialInstancePath;
-            submittedTabSelection.clear();
-            EditorCommandEnvelope command;
-            command.type = VL::EditorCommandType::OpenMaterialInstanceAsset;
-            command.payload = VL::OpenMaterialInstanceAssetPayload{
-                material.materialInstancePath,
-                EditorNavigationOrigin{
-                    model.scenePath,
-                    model.objectIdentity,
-                    material.materialSlotIndex,
-                    material.materialSlotName}};
-            Submit(std::move(command));
-        }
-        ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-        ImGui::TextWrapped("%s", material.materialInstancePath.c_str());
-        ImGui::PopStyleColor();
-        ImGui::PopID();
     }
-    if (model.materials.empty()) ImGui::TextDisabled("Selected model has no material instance bindings.");
-    ImGui::EndChild();
-}
-
-void MaterialInstanceAssetEditorPanel::RenderTabs()
-{
-    ImGui::SeparatorText("Documents");
-    if (!ImGui::BeginTabBar("MIAssetDocuments")) return;
-    for (const auto& tab : snapshot.documentTabs)
+    RefreshLists();
+    RefreshDetails();
+    if (document != nullptr)
     {
-        if (pendingTabClosures.find(tab.assetPath) != pendingTabClosures.end())
+        widgetDocument.SetProperty("close-dialog", "display",
+            pendingClosePath.empty() ? "none" : "block");
+        widgetDocument.SetProperty("material-instance-details", "display", viewingJson ? "none" : "block");
+        widgetDocument.SetProperty("json-inspector", "display", viewingJson ? "block" : "none");
+        if (viewingJson)
+            jsonInspector.Build(snapshot.jsonDocument, requestedJsonPath, snapshot.jsonDocumentLoading);
+        if (const auto* active = resourceEditor.ActiveTab(); active != nullptr &&
+            snapshot.jsonDocument != nullptr && snapshot.jsonDocument->assetPath == active->path)
+            resourceEditor.SetDocument(snapshot.jsonDocument, snapshot.jsonDocumentLoading);
+        RefreshResourceEditor();
+        SetMarkup("close-document-name", Text(pendingClosePath));
+        SetMarkup("close-document-status", Text(snapshot.statusMessage));
+        SetDisabled("close-save", saveThenClose);
+    }
+}
+
+void MaterialInstanceAssetEditorPanel::SetMarkup(const std::string& id, std::string markup)
+{
+    widgetDocument.SetMarkup(id, std::move(markup));
+}
+
+void MaterialInstanceAssetEditorPanel::SetControlValue(const std::string& id, const std::string& value)
+{
+    widgetDocument.SetControlValue(id, value);
+}
+
+void MaterialInstanceAssetEditorPanel::SetDisabled(const std::string& id, bool disabled)
+{
+    widgetDocument.SetDisabled(id, disabled);
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshWorkspace()
+{
+    if (document == nullptr) return;
+    WidgetRefreshScope refresh(refreshingControls);
+    docking.Sync();
+    RefreshMenus();
+    RefreshViewportToolbar();
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshMenus()
+{
+    RefreshLevelMenu();
+    SetMarkup("menu-window-panels", WindowMenuMarkup());
+    // 菜单栏之外的状态写入同样走缓存：静止帧不重复设置 class 与 display。
+    widgetDocument.SetProperty("about-dialog", "display", aboutVisible ? "block" : "none");
+}
+
+// Open Level 子菜单来自冻结的只读资产目录；目录代次不变时不重建条目和索引表。
+void MaterialInstanceAssetEditorPanel::RefreshLevelMenu()
+{
+    const auto* catalog = snapshot.assetCatalog.get();
+    const uint64_t revision = catalog == nullptr ? 0 : catalog->revision;
+    if (menuCatalogReady && menuCatalog.get() == catalog && menuCatalogRevision == revision) return;
+    menuCatalog = snapshot.assetCatalog;
+    menuCatalogRevision = revision;
+    menuCatalogReady = true;
+    menuLevelPaths.clear();
+    std::string markup;
+    if (catalog != nullptr)
+    {
+        for (const auto& asset : catalog->assets)
         {
-            continue;
+            if (asset.kind != EditorAssetKind::Scene) continue;
+            const size_t index = menuLevelPaths.size();
+            menuLevelPaths.push_back(asset.assetPath);
+            const std::string label = asset.name.empty()
+                ? std::filesystem::path(asset.assetPath).filename().string() : asset.name;
+            markup += UiWidgets::MenuItem("menu-level-" + std::to_string(index),
+                {"menu-level", index}, label, false, false);
         }
-        const std::size_t separator = tab.assetPath.find_last_of("/\\");
-        const std::string fileName = separator == std::string::npos
-            ? tab.assetPath
-            : tab.assetPath.substr(separator + 1);
-        std::string label = fileName + (tab.dirty ? " *" : "") + "###" + tab.assetPath;
-        const bool selectRequested = tab.assetPath == pendingTabSelection;
-        const ImGuiTabItemFlags flags = selectRequested
-            ? ImGuiTabItemFlags_SetSelected
-            : ImGuiTabItemFlags_None;
-        bool tabOpen = true;
-        const bool tabVisible = ImGui::BeginTabItem(label.c_str(), &tabOpen, flags);
-        const bool tabActivated = ImGui::IsItemActivated();
-        if (tabActivated && !selectRequested)
+    }
+    if (markup.empty())
+        markup = UiWidgets::MenuItem("menu-level-empty", {"menu-level-empty", 0},
+            "No levels in the asset catalog", false, true);
+    SetMarkup("menu-file-levels", std::move(markup));
+}
+
+std::string MaterialInstanceAssetEditorPanel::WindowMenuMarkup() const
+{
+    std::string markup;
+    const auto& panels = UiWidgets::DockWorkspace::Panels();
+    for (size_t index = 0; index < panels.size(); ++index)
+    {
+        markup += UiWidgets::MenuItem("menu-window-" + panels[index], {"menu-window", index},
+            PanelLabel(panels[index]), docking.IsPanelVisible(panels[index]), false);
+    }
+    return markup;
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshViewportToolbar()
+{
+    if (document == nullptr) return;
+    SetViewportToolbarClass("viewport-tool-select", viewportTransformTool == "select");
+    SetViewportToolbarClass("viewport-tool-move", viewportTransformTool == "move");
+    SetViewportToolbarClass("viewport-tool-rotate", viewportTransformTool == "rotate");
+    SetViewportToolbarClass("viewport-tool-scale", viewportTransformTool == "scale");
+    SetViewportToolbarClass("viewport-space-world", viewportTransformSpace == "world");
+    SetViewportToolbarClass("viewport-space-local", viewportTransformSpace == "local");
+    // view mode 直接映射运行时 debug view：0 是完整画面，1 是基础色。
+    // 工具栏不声明自己没有设置过的调试视图，因此其他调试模式在这三个按钮上都没有高亮。
+    SetViewportToolbarClass("viewport-view-lit", runtimeView.debugViewMode == 0);
+    SetViewportToolbarClass("viewport-view-unlit", runtimeView.debugViewMode == 1);
+}
+
+// 工具条激活态只在真正变化时写一次 class；静止帧不重复触碰 RmlUi 样式，也不重建 markup。
+void MaterialInstanceAssetEditorPanel::SetViewportToolbarClass(const std::string& id, bool active)
+{
+    widgetDocument.SetClass(id, "active", active);
+}
+
+void MaterialInstanceAssetEditorPanel::ToggleMenu(const std::string& menu)
+{
+    openMenu = openMenu == menu ? std::string() : menu;
+    ApplyMenuState();
+}
+
+void MaterialInstanceAssetEditorPanel::CloseMenus()
+{
+    openMenu.clear();
+    ApplyMenuState();
+}
+
+void MaterialInstanceAssetEditorPanel::ApplyMenuState()
+{
+    for (const char* menu : {"file", "edit", "window", "help"})
+        widgetDocument.SetClass("menu-" + std::string(menu), "open", openMenu == menu);
+}
+
+bool MaterialInstanceAssetEditorPanel::IsInsideMenuBar(const Rml::Element* element) const
+{
+    if (document == nullptr) return false;
+    const auto* menuBar = document->GetElementById("editor-menubar");
+    for (const auto* current = element; current != nullptr && current != document;
+        current = current->GetParentNode())
+        if (current == menuBar) return true;
+    return false;
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshLists()
+{
+    WidgetRefreshScope refresh(refreshingControls);
+    const uint64_t generation = snapshot.sceneModels.empty() ? 0 : snapshot.sceneModels.front().worldGeneration;
+    if (treeWorldGeneration != generation)
+    {
+        expandedModels.clear();
+        treeWorldGeneration = generation;
+    }
+    std::string models;
+    for (size_t index = 0; index < snapshot.sceneModels.size(); ++index)
+    {
+        const auto& model = snapshot.sceneModels[index];
+        const bool selected = snapshot.selectedModel &&
+            snapshot.selectedModel->objectIdentity == model.objectIdentity;
+        const bool expanded = expandedModels.count(model.objectIdentity) != 0;
+        models += UiWidgets::TreeRow({model.displayName, {"model", index}, {"model-expand", index},
+            0, selected, !model.materials.empty(), expanded});
+        if (expanded)
         {
-            pendingTabSelection.clear();
-            if (tab.assetPath != snapshot.selectedDocumentPath &&
-                tab.assetPath != submittedTabSelection)
+            for (size_t slotIndex = 0; slotIndex < model.materials.size(); ++slotIndex)
             {
-                Submit(MakePathCommand(
-                    VL::EditorCommandType::SelectMaterialInstanceDocument,
-                    tab.assetPath));
-                submittedTabSelection = tab.assetPath;
-            }
-        }
-        if (tabVisible)
-        {
-            ImGui::EndTabItem();
-        }
-        if (selectRequested && tabOpen) pendingTabSelection.clear();
-        if (!tabOpen)
-        {
-            if (pendingTabClosures.insert(tab.assetPath).second)
-            {
-                Submit(MakePathCommand(
-                    VL::EditorCommandType::CloseMaterialInstanceAsset,
-                    tab.assetPath));
+                const auto& slot = model.materials[slotIndex];
+                const std::string label = slot.materialSlotName.empty()
+                    ? std::filesystem::path(slot.materialInstancePath).filename().string() : slot.materialSlotName;
+                models += UiWidgets::TreeRow({label, {"model-slot", index, static_cast<uint32_t>(slotIndex)}, {},
+                    1, selected && snapshot.selectedMaterialSlotIndex == slot.materialSlotIndex});
             }
         }
     }
-    ImGui::EndTabBar();
+    SetMarkup("scene-models", std::move(models));
+    std::string slots;
+    if (snapshot.selectedModel)
+    {
+        for (size_t index = 0; index < snapshot.selectedModel->materials.size(); ++index)
+        {
+            const auto& slot = snapshot.selectedModel->materials[index];
+            slots += UiWidgets::ListRow({"slot", index}, slot.materialSlotName.empty()
+                ? std::filesystem::path(slot.materialInstancePath).filename().string()
+                : slot.materialSlotName,
+                snapshot.selectedMaterialSlotIndex == slot.materialSlotIndex);
+        }
+    }
+    SetMarkup("material-slots", std::move(slots));
+    contentBrowser.Build(snapshot);
+    std::string tabs;
+    for (size_t index = 0; index < snapshot.documentTabs.size(); ++index)
+    {
+        const auto& tab = snapshot.documentTabs[index];
+        tabs += UiWidgets::DocumentTab(
+            std::filesystem::path(tab.assetPath).filename().string() + (tab.dirty ? " *" : ""),
+            {"tab", index}, {"close", index}, tab.assetPath == snapshot.selectedDocumentPath);
+    }
+    SetMarkup("document-tabs", std::move(tabs));
 }
 
-void MaterialInstanceAssetEditorPanel::RenderDetails()
+void MaterialInstanceAssetEditorPanel::RefreshDetails()
 {
+    WidgetRefreshScope refresh(refreshingControls);
+    if (viewingJson || resourceEditorVisible)
+    {
+        for (const char* id : DocumentCommandIds)
+            SetDisabled(id, true);
+        SetMarkup("editor-notice", Text(localStatus));
+        return;
+    }
+    const std::string identity = snapshot.activeDocument
+        ? snapshot.activeDocument->assetPath + "|" + snapshot.activeDocument->schemaDigest : "closed";
+    if (identity != detailsIdentity)
+    {
+        detailsIdentity = identity;
+        std::string markup;
+        if (snapshot.activeDocument)
+        {
+            const auto& asset = *snapshot.activeDocument;
+            // General 承载当前面板没有单独展示的文档身份：MI 路径、M_ schema、摘要与 revision。
+            std::string general;
+            general += UiWidgets::PropertyInfo("MI Asset", asset.assetPath);
+            general += UiWidgets::PropertyInfo("M_ schema", asset.baseMaterialPath);
+            general += UiWidgets::PropertyInfo("Schema digest", asset.schemaDigest);
+            general += UiWidgets::PropertyInfo("Revision", std::to_string(asset.revision));
+            markup += UiWidgets::CollapsibleSection(DetailsSectionId("general"), "general",
+                "General", general, {"section"}, IsSectionExpanded("general"));
+
+            std::string renderStates;
+            for (size_t index = 0; index < asset.renderStates.size(); ++index)
+            {
+                const auto& state = asset.renderStates[index];
+                renderStates += UiWidgets::PropertyRow(state.name,
+                    UiWidgets::Select("state-" + std::to_string(index), {"state", index},
+                        RenderStateOptions(state.name)),
+                    "reset-state-" + std::to_string(index), {"reset-state", index});
+            }
+            markup += UiWidgets::CollapsibleSection(DetailsSectionId("render-states"), "render-states",
+                "Render States", renderStates, {"section"}, IsSectionExpanded("render-states"));
+
+            std::string parameters;
+            for (size_t index = 0; index < asset.parameters.size(); ++index)
+            {
+                const auto& parameter = asset.parameters[index];
+                std::vector<UiWidgets::NumericComponent> components;
+                const bool color = parameter.type == EditorParameterType::Color;
+                for (uint32_t component = 0; component < parameter.effectiveValue.ComponentCount(); ++component)
+                {
+                    static const char* names[] = {"X", "Y", "Z", "W"};
+                    const auto& channel = parameter.channels[component];
+                    UiWidgets::NumericComponent entry;
+                    entry.id = "parameter-" + std::to_string(index) + "-" + std::to_string(component);
+                    entry.label = channel.name.empty() ? names[component] : channel.name;
+                    entry.value = Number(parameter.effectiveValue.values[component]);
+                    entry.change = {"parameter", index, component};
+                    // HEAD 对 Color 分量不使用滑条（它走 ColorPicker4），这里保持同一分工：
+                    // 线性 RGBA 分量仍是文本输入，颜色只多一个 sRGB 读数与色块。
+                    if (!color)
+                    {
+                        const SliderRange range = ResolveSliderRange(parameter, channel,
+                            parameter.defaultValue.values[component]);
+                        entry.hasRange = true;
+                        entry.minValue = range.minValue;
+                        entry.maxValue = range.maxValue;
+                    }
+                    components.push_back(std::move(entry));
+                }
+                std::string controls;
+                if (color)
+                {
+                    controls += UiWidgets::ColorPreview("color-swatch-" + std::to_string(index),
+                        "color-hex-" + std::to_string(index),
+                        UiWidgets::MakeColorReadout(parameter.effectiveValue.values));
+                }
+                controls += UiWidgets::NumericComponents(components);
+                parameters += UiWidgets::PropertyGroup(parameter.name, controls,
+                    "reset-parameter-" + std::to_string(index), {"reset-parameter", index},
+                    parameter.description);
+            }
+            markup += UiWidgets::CollapsibleSection(DetailsSectionId("parameters"), "parameters",
+                "Parameters", parameters, {"section"}, IsSectionExpanded("parameters"));
+
+            std::string textures;
+            for (size_t index = 0; index < asset.textures.size(); ++index)
+            {
+                const auto& texture = asset.textures[index];
+                std::string options = Option(texture.effectiveAssetPath, texture.effectiveAssetPath);
+                for (const auto& candidate : snapshot.textureAssets)
+                {
+                    if (candidate.valid && candidate.assetPath != texture.effectiveAssetPath)
+                        options += Option(candidate.assetPath, candidate.assetPath);
+                }
+                textures += UiWidgets::PropertyGroup(texture.slotName,
+                    UiWidgets::Select("texture-" + std::to_string(index), {"texture", index}, options),
+                    "reset-texture-" + std::to_string(index), {"reset-texture", index}, texture.description);
+            }
+            markup += UiWidgets::CollapsibleSection(DetailsSectionId("textures"), "textures",
+                "Texture Bindings", textures, {"section"}, IsSectionExpanded("textures"));
+        }
+        SetMarkup("details-content", UiWidgets::VerticalBox(markup));
+        // 新 DOM 不复用旧选择器的 markup 缓存。
+        if (snapshot.activeDocument)
+        {
+            for (size_t index = 0; index < snapshot.activeDocument->textures.size(); ++index)
+                widgetDocument.ForgetMarkup("texture-" + std::to_string(index));
+        }
+    }
+    ApplySectionState();
+    RefreshControls();
+}
+
+void MaterialInstanceAssetEditorPanel::ApplySectionState()
+{
+    // 展开状态只落在既有分组元素的 class 上：重建 DOM 会丢焦点和滚动位置，
+    // 而面板每帧都从冻结快照刷新，静止帧必须写 0 次属性（SetClass 自带值缓存）。
+    for (const char* key : DetailsSectionKeys)
+        widgetDocument.SetClass(DetailsSectionId(key), "collapsed", !IsSectionExpanded(key));
+}
+
+void MaterialInstanceAssetEditorPanel::ToggleSection(const std::string& key)
+{
+    if (key.empty()) return;
+    if (collapsedSections.erase(key) == 0) collapsedSections.insert(key);
+    ApplySectionState();
+}
+
+void MaterialInstanceAssetEditorPanel::OpenResourceAsset(
+    const std::string& path, EditorAssetKind kind)
+{
+    bool alreadyOpen = false;
+    for (const auto& tab : resourceEditor.Tabs())
+        if (tab.path == path) { alreadyOpen = true; break; }
+    if (!resourceEditor.Open(path, kind))
+    {
+        localStatus = "Too many resource editors are open.";
+        return;
+    }
+    viewingJson = false;
+    resourceEditorVisible = true;
+    localStatus.clear();
+    if (!alreadyOpen && jsonAssetRequestSink != nullptr)
+        jsonAssetRequestSink->RequestOpenJsonAsset(path);
+    RefreshResourceEditor();
+}
+
+void MaterialInstanceAssetEditorPanel::CloseActiveResource()
+{
+    const auto* active = resourceEditor.ActiveTab();
+    if (active == nullptr) return;
+    resourceEditor.Close(active->path);
+    resourceEditorVisible = resourceEditor.ActiveTab() != nullptr;
+    if (!resourceEditorVisible) docking.Activate("viewport");
+    if (!resourceEditorVisible) localStatus.clear();
+    RefreshResourceEditor();
+}
+
+void MaterialInstanceAssetEditorPanel::RequestResourceReload()
+{
+    resourceEditor.RequestReload();
+    const std::string path = resourceEditor.ConsumeReloadRequest();
+    if (path.empty()) return;
+    if (jsonAssetRequestSink != nullptr)
+        jsonAssetRequestSink->RequestOpenJsonAsset(path);
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshResourceEditor()
+{
+    if (document == nullptr) return;
+    const auto* active = resourceEditor.ActiveTab();
+    if (active == nullptr)
+    {
+        docking.SetResourceTabs({}, {});
+        SetDisabled("resource-reload", true);
+        SetMarkup("resource-preview-title", "Asset Editor");
+        SetMarkup("resource-preview-kind", "");
+        SetMarkup("resource-preview-status", "Open a Mesh or Texture from Content Browser.");
+        SetMarkup("resource-preview-path", "");
+        auto* previewIcon = document->GetElementById("resource-preview-icon");
+        if (previewIcon->GetAttribute<std::string>("src", "") != "icons/mesh.png")
+            previewIcon->SetAttribute("src", "icons/mesh.png");
+        resourceJsonInspector.Build(nullptr, {}, false);
+        return;
+    }
+
+    std::vector<EditorDockResourceTab> tabs;
+    tabs.reserve(resourceEditor.Tabs().size());
+    for (const auto& tab : resourceEditor.Tabs())
+    {
+        tabs.push_back({
+            ResourcePanelId(tab.path),
+            tab.path,
+            std::filesystem::path(tab.path).filename().string(),
+            EditorAssetKindIcon(tab.kind)});
+    }
+    docking.SetResourceTabs(tabs, active->path);
+    SetDisabled("resource-reload", active->loading);
+    SetMarkup("resource-preview-title", Text(active->snapshot != nullptr &&
+        !active->snapshot->name.empty() ? active->snapshot->name :
+        std::filesystem::path(active->path).filename().string()));
+    SetMarkup("resource-preview-kind", Text(EditorAssetKindName(active->kind)));
+    SetMarkup("resource-preview-path", Text(active->path));
+    SetMarkup("resource-preview-status", active->loading
+        ? "Reading JSON metadata..."
+        : "Preview unavailable: referenced data is not loaded.");
+    auto* previewIcon = document->GetElementById("resource-preview-icon");
+    const std::string icon = EditorAssetKindIcon(active->kind);
+    if (previewIcon->GetAttribute<std::string>("src", "") != icon)
+        previewIcon->SetAttribute("src", icon);
+    resourceJsonInspector.Build(active->snapshot, active->path, active->loading);
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshControls()
+{
+    // File/Edit 菜单项与工具栏按钮共用同一份文档命令可用性。
+    for (const char* id : DocumentCommandIds)
+        SetDisabled(id, !snapshot.activeDocument);
+    SetMarkup("editor-notice", Text(!docking.Notice().empty() ? docking.Notice() :
+        localStatus.empty() ? snapshot.statusMessage : localStatus));
     if (!snapshot.activeDocument)
     {
-        ImGui::TextDisabled("Open an MI asset to view Details.");
+        SetMarkup("document-title", "Material Instance");
+        SetMarkup("document-status", "");
+        SetDisabled("apply-preview", true);
+        SetDisabled("restore-preview", true);
         return;
     }
-    const auto& document = *snapshot.activeDocument;
-    ImGui::Text("MI Asset: %s", document.assetPath.c_str());
-    if (ImGui::CollapsingHeader("General", ImGuiTreeNodeFlags_DefaultOpen))
+    const auto& asset = *snapshot.activeDocument;
+    SetMarkup("document-title", Text(std::filesystem::path(asset.assetPath).filename().string()));
+    SetMarkup("document-status", Text(std::string(DocumentStatus(asset.status)) +
+        " | Preview: " + PreviewStatus(asset.preview) + " | " + asset.validationMessage +
+        (asset.previewMessage.empty() ? "" : " | " + asset.previewMessage)));
+    const bool connected = asset.preview == EditorPreviewStatus::Connected;
+    SetDisabled("apply-preview", !connected);
+    SetDisabled("restore-preview", !connected);
+    for (size_t index = 0; index < asset.renderStates.size(); ++index)
     {
-        ImGui::Text("M_ schema: %s", document.baseMaterialPath.c_str());
-        ImGui::Text("Schema digest: %s", document.schemaDigest.c_str());
-        ImGui::Text("Revision: %llu", static_cast<unsigned long long>(document.revision));
+        SetControlValue("state-" + std::to_string(index), asset.renderStates[index].effectiveValue);
+        SetDisabled("reset-state-" + std::to_string(index), !asset.renderStates[index].overrideValue);
     }
-    if (ImGui::CollapsingHeader("Render States", ImGuiTreeNodeFlags_DefaultOpen))
+    for (size_t index = 0; index < asset.parameters.size(); ++index)
     {
-        ImGui::TextDisabled(
-            "These overrides can change shader variants, passes, and pipeline state.");
-        if (ImGui::BeginTable("MIRenderStates", 3,
-            ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp))
+        const auto& parameter = asset.parameters[index];
+        for (uint32_t component = 0; component < parameter.effectiveValue.ComponentCount(); ++component)
+            SetControlValue("parameter-" + std::to_string(index) + "-" + std::to_string(component),
+                Number(parameter.effectiveValue.values[component]));
+        // 色块与十六进制读数逐帧跟随有效线性值；两者都走既有缓存，静止帧不重复写。
+        if (parameter.type == EditorParameterType::Color)
         {
-            ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, 140.0f);
-            ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn("Reset", ImGuiTableColumnFlags_WidthFixed, 34.0f);
-            ImGui::TableHeadersRow();
-            for (const auto& renderState : document.renderStates)
-            {
-                RenderRenderState(document, renderState);
-            }
-            ImGui::EndTable();
+            const auto readout = UiWidgets::MakeColorReadout(parameter.effectiveValue.values);
+            widgetDocument.SetProperty("color-swatch-" + std::to_string(index), "background-color", readout.rgb);
+            SetMarkup("color-hex-" + std::to_string(index), Text(readout.hex));
         }
+        SetDisabled("reset-parameter-" + std::to_string(index), !parameter.overrideValue);
     }
-    if (ImGui::CollapsingHeader("Parameters", ImGuiTreeNodeFlags_DefaultOpen))
+    for (size_t index = 0; index < asset.textures.size(); ++index)
     {
-        ImGui::Checkbox("Show only active parameters", &showOnlyActive);
-        ImGui::SameLine();
-        ImGui::TextDisabled(
-            "Edit directly; highlighted Reset restores the M_ default.");
-        if (ImGui::BeginTable("MIParameters", 3,
-            ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp))
+        const auto& texture = asset.textures[index];
+        std::string options = Option(texture.effectiveAssetPath, texture.effectiveAssetPath);
+        for (const auto& candidate : snapshot.textureAssets)
         {
-            ImGui::TableSetupColumn("Parameter", ImGuiTableColumnFlags_WidthFixed, 150.0f);
-            ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn("Reset", ImGuiTableColumnFlags_WidthFixed, 34.0f);
-            ImGui::TableHeadersRow();
-            for (const auto& parameter : document.parameters)
-                if (!showOnlyActive || parameter.active) RenderParameter(document, parameter);
-            ImGui::EndTable();
+            if (candidate.valid && candidate.assetPath != texture.effectiveAssetPath)
+                options += Option(candidate.assetPath, candidate.assetPath);
         }
-    }
-    if (ImGui::CollapsingHeader("Texture Bindings", ImGuiTreeNodeFlags_DefaultOpen))
-    {
-        if (ImGui::BeginTable("MITextures", 3,
-            ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_SizingStretchProp))
-        {
-            ImGui::TableSetupColumn("Slot", ImGuiTableColumnFlags_WidthFixed, 120.0f);
-            ImGui::TableSetupColumn("T_ asset", ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn("Actions", ImGuiTableColumnFlags_WidthFixed, 92.0f);
-            ImGui::TableHeadersRow();
-            for (const auto& texture : document.textures) RenderTexture(document, texture);
-            ImGui::EndTable();
-        }
+        SetMarkup("texture-" + std::to_string(index), std::move(options));
+        SetControlValue("texture-" + std::to_string(index), asset.textures[index].effectiveAssetPath);
+        SetDisabled("reset-texture-" + std::to_string(index), !asset.textures[index].overrideAssetPath);
     }
 }
 
-void MaterialInstanceAssetEditorPanel::RenderRenderState(
-    const MaterialInstanceDocumentSnapshot& document,
-    const EditorRenderStateSnapshot& state)
+void MaterialInstanceAssetEditorPanel::UpdateRuntimeView(const UiViewModelSnapshot& view)
 {
-    ImGui::PushID(state.name.c_str());
-    ImGui::TableNextRow();
-    ImGui::TableSetColumnIndex(0);
-    ImGui::TextUnformatted(state.name.c_str());
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+    runtimeView = view;
+    WidgetRefreshScope refresh(refreshingControls);
+    SetMarkup("editor-frame-metrics", std::to_string(std::lround(view.framesPerSecond)) + " FPS");
+    SetControlValue("offline-samples", std::to_string(view.offlineSamples));
+    SetControlValue("offline-bounces", std::to_string(view.offlineBounces));
+    SetControlValue("offline-lightSamples", std::to_string(view.offlineLightSamples));
+    SetControlValue("offline-seed", std::to_string(view.offlineSeed));
+    SetControlValue("offline-aov", std::to_string(view.offlineAov));
+    SetControlValue("offline-exposure", Number(view.offlineExposure));
+    SetMarkup("offline-status", std::to_string(view.offlineCompletedSamples) + " / " +
+        std::to_string(view.offlineSamples) + " spp");
+    SetMarkup("offline-notice", Text(view.offlineUiNotice.empty()
+        ? view.offlineError : view.offlineUiNotice));
+    const auto state = static_cast<Offline::SessionState>(view.offlineState);
+    const bool active = view.offlineMode && (state == Offline::SessionState::Preparing ||
+        state == Offline::SessionState::Rendering);
+    SetDisabled("offline-pause", !active);
+    SetDisabled("offline-resume", !view.offlineMode || state != Offline::SessionState::Paused);
+    SetDisabled("offline-stop", !active && (!view.offlineMode || state != Offline::SessionState::Paused));
+    SetDisabled("offline-restart", !view.offlineMode);
+    SetDisabled("offline-export", !view.offlineMode || view.offlineCompletedSamples == 0);
+    if (document != nullptr)
     {
-        ImGui::SetTooltip(
-            "Default: %s\n%s",
-            state.defaultValue.c_str(),
-            state.overrideValue.has_value() ? "MI override" : "M_ default");
+        document->GetElementById("mode-realtime")->SetClass("selected", !view.offlineMode);
+        document->GetElementById("mode-offline")->SetClass("selected", view.offlineMode);
     }
-
-    ImGui::TableSetColumnIndex(1);
-    ImGui::SetNextItemWidth(-FLT_MIN);
-    bool changed = false;
-    if (state.name == "renderMode")
-    {
-        static constexpr std::array<VL::EditorMaterialRenderMode, 7> options = {{
-            VL::EditorMaterialRenderMode::Opaque,
-            VL::EditorMaterialRenderMode::OpaqueClip,
-            VL::EditorMaterialRenderMode::ForwardOpaque,
-            VL::EditorMaterialRenderMode::TransparentAlphaBlend,
-            VL::EditorMaterialRenderMode::TransparentAlphaBlendWriteDepth,
-            VL::EditorMaterialRenderMode::TransparentAdditive,
-            VL::EditorMaterialRenderMode::ThinTranslucent}};
-        if (ImGui::BeginCombo("##render_state", state.effectiveValue.c_str()))
-        {
-            for (const auto option : options)
-            {
-                const std::string optionName =
-                    std::string(VL::GetEditorMaterialRenderModeName(option));
-                const bool selected = optionName == state.effectiveValue;
-                if (ImGui::Selectable(optionName.c_str(), selected))
-                {
-                    Submit(MakeSetRenderStateCommand(
-                        document,
-                        VL::EditorMaterialRenderStateField::RenderMode,
-                        option));
-                    changed = true;
-                }
-                if (selected) ImGui::SetItemDefaultFocus();
-            }
-            ImGui::EndCombo();
-        }
-    }
-    else if (state.name == "cullMode")
-    {
-        static constexpr std::array<VL::EditorMaterialCullMode, 3> options = {{
-            VL::EditorMaterialCullMode::Back,
-            VL::EditorMaterialCullMode::Front,
-            VL::EditorMaterialCullMode::None}};
-        if (ImGui::BeginCombo("##render_state", state.effectiveValue.c_str()))
-        {
-            for (const auto option : options)
-            {
-                const std::string optionName =
-                    std::string(VL::GetEditorMaterialCullModeName(option));
-                const bool selected = optionName == state.effectiveValue;
-                if (ImGui::Selectable(optionName.c_str(), selected))
-                {
-                    Submit(MakeSetRenderStateCommand(
-                        document,
-                        VL::EditorMaterialRenderStateField::CullMode,
-                        option));
-                    changed = true;
-                }
-                if (selected) ImGui::SetItemDefaultFocus();
-            }
-            ImGui::EndCombo();
-        }
-    }
-    else if (state.name == "shadingModel")
-    {
-        static constexpr std::array<VL::EditorMaterialShadingModel, 11> options = {{
-            VL::EditorMaterialShadingModel::DefaultLit,
-            VL::EditorMaterialShadingModel::Unlit,
-            VL::EditorMaterialShadingModel::Subsurface,
-            VL::EditorMaterialShadingModel::PreintegratedSkin,
-            VL::EditorMaterialShadingModel::ClearCoat,
-            VL::EditorMaterialShadingModel::SubsurfaceProfile,
-            VL::EditorMaterialShadingModel::TwoSidedFoliage,
-            VL::EditorMaterialShadingModel::Hair,
-            VL::EditorMaterialShadingModel::Cloth,
-            VL::EditorMaterialShadingModel::Eye,
-            VL::EditorMaterialShadingModel::ThinTranslucent}};
-        if (ImGui::BeginCombo("##render_state", state.effectiveValue.c_str()))
-        {
-            for (const auto option : options)
-            {
-                const std::string optionName =
-                    std::string(VL::GetEditorMaterialShadingModelName(option));
-                const bool selected = optionName == state.effectiveValue;
-                if (ImGui::Selectable(optionName.c_str(), selected))
-                {
-                    Submit(MakeSetRenderStateCommand(
-                        document,
-                        VL::EditorMaterialRenderStateField::ShadingModel,
-                        option));
-                    changed = true;
-                }
-                if (selected) ImGui::SetItemDefaultFocus();
-            }
-            ImGui::EndCombo();
-        }
-    }
-    (void)changed;
-
-    ImGui::TableSetColumnIndex(2);
-    const bool overridden = state.overrideValue.has_value();
-    ImGui::BeginDisabled(!overridden);
-    if (overridden)
-    {
-        ImGui::PushStyleColor(
-            ImGuiCol_Button,
-            ImGui::GetStyleColorVec4(ImGuiCol_Header));
-        ImGui::PushStyleColor(
-            ImGuiCol_ButtonHovered,
-            ImGui::GetStyleColorVec4(ImGuiCol_HeaderHovered));
-        ImGui::PushStyleColor(
-            ImGuiCol_ButtonActive,
-            ImGui::GetStyleColorVec4(ImGuiCol_HeaderActive));
-    }
-    if (DrawCompactResetButton())
-    {
-        const auto field = state.name == "renderMode"
-            ? VL::EditorMaterialRenderStateField::RenderMode
-            : state.name == "cullMode"
-                ? VL::EditorMaterialRenderStateField::CullMode
-                : VL::EditorMaterialRenderStateField::ShadingModel;
-        Submit(MakeClearRenderStateCommand(document, field));
-    }
-    if (overridden) ImGui::PopStyleColor(3);
-    ImGui::EndDisabled();
-    ImGui::PopID();
+    RefreshViewportToolbar();
 }
 
-void MaterialInstanceAssetEditorPanel::RenderParameter(
-    const MaterialInstanceDocumentSnapshot& document, const EditorParameterSnapshot& parameter)
+void MaterialInstanceAssetEditorPanel::CloseDocument(
+    const std::string& path, EditorDirtyDocumentPolicy policy)
 {
-    ImGui::PushID(parameter.name.c_str());
-    const bool overridden = parameter.overrideValue.has_value();
-    EditorParameterValue edited = parameter.effectiveValue;
-    if (pendingParameterEditAssetPath == document.assetPath &&
-        pendingParameterEditRevision == document.revision)
-    {
-        const auto pending = pendingParameterEdits.find(parameter.name);
-        if (pending != pendingParameterEdits.end())
-        {
-            edited = pending->second;
-        }
-    }
-    bool changed = false;
-    bool editFinished = false;
-
-    const uint32_t componentCount = ParameterComponentCount(parameter.type);
-    if (parameter.type == EditorParameterType::Color)
-    {
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        ImGui::TextUnformatted(parameter.name.c_str());
-        if (!parameter.active)
-        {
-            ImGui::SameLine();
-            ImGui::TextDisabled("(inactive)");
-        }
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
-        {
-            ImGui::SetTooltip(
-                "Type: color (linear storage, sRGB editor)\nSource: %s\nParameter usage: %s",
-                overridden ? "MI override" : "M_ default",
-                parameter.description.c_str());
-        }
-        if (!parameter.description.empty())
-        {
-            ImGui::TextDisabled("%s", parameter.description.c_str());
-        }
-        ImGui::TableSetColumnIndex(1);
-        ImGui::SetNextItemWidth(-FLT_MIN);
-        float srgbColor[4] = {0.0f, 0.0f, 0.0f, edited.values[3]};
-        for (int componentIndex = 0; componentIndex < 3; ++componentIndex)
-        {
-            srgbColor[componentIndex] = LinearToSrgb(edited.values[componentIndex]);
-        }
-        const ImVec4 previewColor(
-            srgbColor[0], srgbColor[1], srgbColor[2], srgbColor[3]);
-        const float swatchSize = ImGui::GetFrameHeight();
-        const float colorColumnStartX = ImGui::GetCursorPosX();
-        const float colorColumnWidth = ImGui::GetContentRegionAvail().x;
-        ImGui::Text(
-            "#%02X%02X%02X%02X",
-            ToSrgbHexByte(srgbColor[0]),
-            ToSrgbHexByte(srgbColor[1]),
-            ToSrgbHexByte(srgbColor[2]),
-            ToSrgbHexByte(srgbColor[3]));
-        ImGui::SameLine();
-        ImGui::SetCursorPosX(colorColumnStartX + colorColumnWidth - swatchSize);
-        if (ImGui::ColorButton(
-                "##color_swatch",
-                previewColor,
-                ImGuiColorEditFlags_AlphaPreviewHalf | ImGuiColorEditFlags_NoTooltip,
-                ImVec2(swatchSize, swatchSize)))
-        {
-            ImGui::OpenPopup("ColorPicker");
-        }
-        if (ImGui::BeginPopup("ColorPicker"))
-        {
-            if (ImGui::ColorPicker4(
-                    "##color_picker",
-                    srgbColor,
-                    ImGuiColorEditFlags_Float | ImGuiColorEditFlags_HDR |
-                        ImGuiColorEditFlags_AlphaBar | ImGuiColorEditFlags_DisplayRGB))
-            {
-                for (int componentIndex = 0; componentIndex < 3; ++componentIndex)
-                {
-                    edited.values[componentIndex] = SrgbToLinear(srgbColor[componentIndex]);
-                }
-                edited.values[3] = srgbColor[3];
-                changed = true;
-            }
-            if (ImGui::IsItemDeactivatedAfterEdit())
-            {
-                editFinished = true;
-            }
-            ImGui::EndPopup();
-        }
-
-        ImGui::TableSetColumnIndex(2);
-        ImGui::BeginDisabled(!overridden);
-        if (overridden)
-        {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_Header));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyleColorVec4(ImGuiCol_HeaderHovered));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImGui::GetStyleColorVec4(ImGuiCol_HeaderActive));
-        }
-        if (DrawCompactResetButton())
-        {
-            Submit(MakeClearParameterCommand(document, parameter.name));
-        }
-        if (overridden) ImGui::PopStyleColor(3);
-        ImGui::EndDisabled();
-        if (changed)
-        {
-            pendingParameterEditAssetPath = document.assetPath;
-            pendingParameterEditRevision = document.revision;
-            pendingParameterEdits[parameter.name] = edited;
-        }
-        const auto pending = pendingParameterEdits.find(parameter.name);
-        if (editFinished && (changed || pending != pendingParameterEdits.end()) &&
-            std::all_of(edited.values.begin(), edited.values.begin() + edited.ComponentCount(),
-                [](float value) { return std::isfinite(value); }))
-        {
-            Submit(MakeSetParameterCommand(document, parameter, edited));
-        }
-        ImGui::PopID();
-        return;
-    }
-    if (componentCount > 1)
-    {
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        ImGui::TextUnformatted(parameter.name.c_str());
-        if (!parameter.active)
-        {
-            ImGui::SameLine();
-            ImGui::TextDisabled("(inactive)");
-        }
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
-        {
-            ImGui::SetTooltip(
-                "Type: %s\nSource: %s\nParameter usage: %s",
-                TypeName(parameter.type),
-                overridden ? "MI override" : "M_ default",
-                parameter.description.c_str());
-        }
-        if (!parameter.description.empty())
-        {
-            ImGui::TextDisabled("%s", parameter.description.c_str());
-        }
-        ImGui::TableSetColumnIndex(2);
-        ImGui::BeginDisabled(!overridden);
-        if (overridden)
-        {
-            ImGui::PushStyleColor(
-                ImGuiCol_Button,
-                ImGui::GetStyleColorVec4(ImGuiCol_Header));
-            ImGui::PushStyleColor(
-                ImGuiCol_ButtonHovered,
-                ImGui::GetStyleColorVec4(ImGuiCol_HeaderHovered));
-            ImGui::PushStyleColor(
-                ImGuiCol_ButtonActive,
-                ImGui::GetStyleColorVec4(ImGuiCol_HeaderActive));
-        }
-        if (DrawCompactResetButton())
-        {
-            Submit(MakeClearParameterCommand(document, parameter.name));
-        }
-        if (overridden)
-        {
-            ImGui::PopStyleColor(3);
-        }
-        ImGui::EndDisabled();
-    }
-
-    for (uint32_t componentIndex = 0; componentIndex < componentCount; ++componentIndex)
-    {
-        ImGui::TableNextRow();
-        ImGui::TableSetColumnIndex(0);
-        if (componentCount == 1)
-        {
-            ImGui::TextUnformatted(parameter.name.c_str());
-            if (!parameter.active)
-            {
-                ImGui::SameLine();
-                ImGui::TextDisabled("(inactive)");
-            }
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
-            {
-                ImGui::SetTooltip(
-                    "Type: %s\nSource: %s\nParameter usage: %s",
-                    TypeName(parameter.type),
-                    overridden ? "MI override" : "M_ default",
-                    parameter.description.c_str());
-            }
-            if (!parameter.description.empty())
-            {
-                ImGui::TextDisabled("%s", parameter.description.c_str());
-            }
-        }
-        else
-        {
-            const EditorParameterChannel& channel = parameter.channels[componentIndex];
-            const char* componentName = channel.name.empty()
-                ? DefaultComponentName(componentIndex)
-                : channel.name.c_str();
-            ImGui::Indent(ImGui::GetStyle().IndentSpacing);
-            ImGui::TextDisabled("%s", componentName);
-            ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
-        }
-
-        ImGui::TableSetColumnIndex(1);
-        const EditorParameterChannel& channel = parameter.channels[componentIndex];
-        ImGui::SetNextItemWidth(-FLT_MIN);
-        ImGui::PushID(static_cast<int>(componentIndex));
-        const SliderRange range = ResolveSliderRange(
-            parameter,
-            channel,
-            parameter.defaultValue.values[componentIndex]);
-        const float boundedValue = std::isfinite(edited.values[componentIndex])
-            ? std::clamp(
-                edited.values[componentIndex],
-                range.minValue,
-                range.maxValue)
-            : std::clamp(
-                parameter.defaultValue.values[componentIndex],
-                range.minValue,
-                range.maxValue);
-        if (edited.values[componentIndex] != boundedValue)
-        {
-            edited.values[componentIndex] = boundedValue;
-            changed = true;
-        }
-        if (ImGui::SliderFloat(
-                "##value",
-                &edited.values[componentIndex],
-                range.minValue,
-                range.maxValue,
-                "%.3f",
-                ImGuiSliderFlags_AlwaysClamp))
-        {
-            changed = true;
-        }
-        if (ImGui::IsItemDeactivatedAfterEdit())
-        {
-            editFinished = true;
-        }
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
-        {
-            const char* description = channel.description.empty()
-                ? parameter.description.c_str()
-                : channel.description.c_str();
-            if (*description != '\0')
-            {
-                ImGui::SetTooltip(
-                    "Parameter usage: %s\nChannel usage: %s",
-                    parameter.description.c_str(),
-                    description);
-            }
-        }
-        ImGui::PopID();
-
-        ImGui::TableSetColumnIndex(2);
-        if (componentCount == 1)
-        {
-            ImGui::BeginDisabled(!overridden);
-            if (overridden)
-            {
-                ImGui::PushStyleColor(
-                    ImGuiCol_Button,
-                    ImGui::GetStyleColorVec4(ImGuiCol_Header));
-                ImGui::PushStyleColor(
-                    ImGuiCol_ButtonHovered,
-                    ImGui::GetStyleColorVec4(ImGuiCol_HeaderHovered));
-                ImGui::PushStyleColor(
-                    ImGuiCol_ButtonActive,
-                    ImGui::GetStyleColorVec4(ImGuiCol_HeaderActive));
-            }
-            if (DrawCompactResetButton())
-                Submit(MakeClearParameterCommand(document, parameter.name));
-            if (overridden)
-            {
-                ImGui::PopStyleColor(3);
-            }
-            ImGui::EndDisabled();
-        }
-    }
-
-    if (changed)
-    {
-        pendingParameterEditAssetPath = document.assetPath;
-        pendingParameterEditRevision = document.revision;
-        pendingParameterEdits[parameter.name] = edited;
-    }
-
-    const auto pending = pendingParameterEdits.find(parameter.name);
-    if (editFinished && (changed || pending != pendingParameterEdits.end()) &&
-        std::all_of(edited.values.begin(), edited.values.begin() + edited.ComponentCount(),
-            [](float value) { return std::isfinite(value); }))
-    {
-        Submit(MakeSetParameterCommand(document, parameter, edited));
-    }
-    ImGui::PopID();
+    EditorCommandEnvelope command;
+    command.type = EditorCommandType::CloseMaterialInstanceAsset;
+    command.payload = CloseMaterialInstanceAssetPayload{path, policy};
+    Submit(std::move(command));
 }
 
-void MaterialInstanceAssetEditorPanel::RenderTexture(
-    const MaterialInstanceDocumentSnapshot& document, const EditorTextureBindingSnapshot& texture)
+void MaterialInstanceAssetEditorPanel::SelectModelMaterial(
+    const MaterialInstanceModelSnapshot& modelSnapshot, size_t index)
 {
-    ImGui::PushID(texture.slotName.c_str()); ImGui::TableNextRow(); ImGui::TableSetColumnIndex(0);
-    const bool overridden = texture.overrideAssetPath.has_value();
-    ImGui::TextWrapped("%s", texture.slotName.c_str());
-    if (!texture.active) { ImGui::SameLine(); ImGui::TextDisabled("(inactive)"); }
-    ImGui::TableSetColumnIndex(1);
-    ImGui::TextWrapped("%s",
-        texture.effectiveAssetPath.empty() ? "<unbound>" : texture.effectiveAssetPath.c_str());
-    ImGui::TableSetColumnIndex(2);
-    if (ImGui::SmallButton("Browse"))
+    ShowMaterialDetails();
+    if (sceneSelectionSink == nullptr || index >= modelSnapshot.materials.size()) return;
+    FlushPendingEdits();
+    const auto model = SelectionModel(modelSnapshot);
+    const auto& slot = model.materials[index];
+    Editor::Selection::MaterialInstanceSelection selection;
+    selection.worldGeneration = model.worldGeneration;
+    selection.scenePath = model.scenePath;
+    selection.objectId = slot.objectId;
+    selection.objectIdentity = model.objectIdentity;
+    selection.materialSlotIndex = slot.materialSlotIndex;
+    selection.materialSlotName = slot.materialSlotName;
+    selection.materialInstancePath = slot.materialInstancePath;
+    selection.modelContext = model;
+    sceneSelectionSink->RequestMaterialSelection(selection);
+}
+
+void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const std::string& action)
+{
+    const size_t index = element.GetAttribute<size_t>("data-index", 0);
+    if (action == "json-close") ShowMaterialDetails();
+    else if (action == "resource-close") CloseActiveResource();
+    else if (action == "resource-reload") RequestResourceReload();
+    else if (action == "browser-refresh")
     {
-        // 选择 T_ 资产直接提交 Set 命令，由文档服务建立 sparse override。
-        pickerSlot = texture.slotName;
-        openTexturePicker = true;
-        ImGui::OpenPopup("MITexturePicker");
+        if (jsonAssetRequestSink != nullptr) jsonAssetRequestSink->RequestRefreshAssetCatalog();
     }
-    ImGui::BeginDisabled(texture.effectiveAssetPath.empty());
-    if (ImGui::SmallButton("Open"))
+    else if (action == "workspace-content" || action == "workspace-renderer")
     {
+        docking.Activate(action == "workspace-renderer" ? "renderer" : "content");
+    }
+    else if (action == "save") RequestSave();
+    else if (action == "menu-open") ToggleMenu(element.GetAttribute<std::string>("data-menu", ""));
+    else if (action == "menu-window")
+    {
+        // 面板可见性由停靠视图裁决；被拒绝时 docking 会给出人类可读的 notice。
+        const auto& panels = UiWidgets::DockWorkspace::Panels();
+        if (index < panels.size())
+            docking.SetPanelVisible(panels[index], !docking.IsPanelVisible(panels[index]));
+    }
+    else if (action == "menu-level" && index < menuLevelPaths.size())
+    {
+        // 与 Content Browser 双击关卡走同一条 LoadWorld 事务；UI 不直接触碰 World。
+        OpenBrowserAsset(menuLevelPaths[index]);
+    }
+    else if (action == "menu-reset-layout") docking.Reset();
+    else if (action == "menu-restore-layout")
+    {
+        docking.RestoreSavedLayout();
+    }
+    else if (action == "about-open") aboutVisible = true;
+    else if (action == "about-close") aboutVisible = false;
+    else if (action == "viewport-tool")
+    {
+        // 只切换本地高亮：这个仓库没有 gizmo，也没有 transform 编辑后端。
+        // 这里刻意不产生任何 UiAction/资产命令，避免用假开关冒充已实现的编辑能力。
+        viewportTransformTool = element.GetAttribute<std::string>("data-tool", "select");
+        RefreshViewportToolbar();
+    }
+    else if (action == "viewport-space")
+    {
+        // 同上：World/Local 只是呈现状态，渲染器和相机不读取它。
+        viewportTransformSpace = element.GetAttribute<std::string>("data-space", "world");
+        RefreshViewportToolbar();
+    }
+    else if (action == "revert")
+    {
+        pendingEdits.clear();
+        pendingValues.clear();
+        SubmitPathCommand(EditorCommandType::RevertMaterialInstanceDocument);
+    }
+    else if (action == "validate")
+    {
+        if (!pendingEdits.empty())
+        {
+            QueueEdit("validate", {EditorCommandType::ValidateMaterialInstanceDocument,
+                MaterialInstanceAssetPathPayload{pendingAssetPath}});
+            FlushPendingEdits();
+        }
+        else SubmitPathCommand(EditorCommandType::ValidateMaterialInstanceDocument);
+    }
+    else if (action == "apply-preview")
+    {
+        // 修改 batch 已触发自动预览；不能再用旧 revision 紧跟着请求一次 Apply。
+        if (!pendingEdits.empty()) FlushPendingEdits();
+        else SubmitPathCommand(EditorCommandType::ApplyMaterialInstancePreview);
+    }
+    else if (action == "restore-preview")
+    {
+        // batch 的自动 Apply 在命令队列尾部；同帧 Restore 会被它覆盖，必须等权威快照。
+        if (!pendingEdits.empty())
+        {
+            FlushPendingEdits();
+            localStatus = "Edits submitted. Restore baseline after preview completes.";
+        }
+        else SubmitPathCommand(EditorCommandType::RestoreMaterialInstancePreviewBaseline);
+    }
+    else if (action == "reload" && snapshot.activeDocument)
+    {
+        if (!pendingEdits.empty())
+        {
+            localStatus = "Save or revert pending edits before reloading.";
+            return;
+        }
         EditorCommandEnvelope command;
-        command.type = VL::EditorCommandType::OpenTextureAsset;
-        command.payload = VL::OpenTextureAssetPayload{
-            document.assetPath,
-            texture.effectiveAssetPath};
+        command.type = EditorCommandType::ReloadMaterialInstanceDocument;
+        command.expectedDocumentRevision = snapshot.activeDocument->revision;
+        command.payload = ReloadMaterialInstanceDocumentPayload{
+            snapshot.activeDocument->assetPath, EditorDirtyDocumentPolicy::RequireClean};
         Submit(std::move(command));
     }
-    ImGui::EndDisabled();
-    ImGui::BeginDisabled(!overridden);
-    if (overridden)
+    else if (action == "reset-all" && snapshot.activeDocument)
     {
-        ImGui::PushStyleColor(
-            ImGuiCol_Button,
-            ImGui::GetStyleColorVec4(ImGuiCol_Header));
-        ImGui::PushStyleColor(
-            ImGuiCol_ButtonHovered,
-            ImGui::GetStyleColorVec4(ImGuiCol_HeaderHovered));
-        ImGui::PushStyleColor(
-            ImGuiCol_ButtonActive,
-            ImGui::GetStyleColorVec4(ImGuiCol_HeaderActive));
+        pendingEdits.clear();
+        pendingValues.clear();
+        for (const auto& parameter : snapshot.activeDocument->parameters)
+            pendingValues[parameter.name] = parameter.defaultValue;
+        QueueEdit("all", {EditorCommandType::ResetMaterialInstanceOverrides,
+            ResetMaterialInstanceOverridesPayload{snapshot.activeDocument->assetPath, EditorResetScope::All}});
     }
-    if (DrawCompactResetButton())
-        Submit(MakeClearTextureCommand(document, texture.slotName));
-    if (overridden) ImGui::PopStyleColor(3);
-    ImGui::EndDisabled();
-    if (openTexturePicker && ImGui::BeginPopup("MITexturePicker"))
+    else if (action == "reset-parameter" && snapshot.activeDocument && index < snapshot.activeDocument->parameters.size())
     {
-        ImGui::Text("Choose validated T_ asset for %s", pickerSlot.c_str());
-        ImGui::InputTextWithHint("##texture_search", "Search T_*.json", textureSearch.data(), textureSearch.size());
-        for (const auto& asset : snapshot.textureAssets)
+        const auto& parameter = snapshot.activeDocument->parameters[index];
+        pendingValues[parameter.name] = parameter.defaultValue;
+        QueueEdit("parameter:" + parameter.name, {EditorCommandType::ClearMaterialParameterOverride,
+            ClearMaterialParameterOverridePayload{snapshot.activeDocument->assetPath, parameter.name}});
+    }
+    else if (action == "reset-state" && snapshot.activeDocument && index < snapshot.activeDocument->renderStates.size())
+    {
+        const auto& state = snapshot.activeDocument->renderStates[index];
+        QueueEdit("state:" + state.name, {EditorCommandType::ClearMaterialRenderStateOverride,
+            ClearMaterialRenderStateOverridePayload{snapshot.activeDocument->assetPath,
+                ParseEditorMaterialRenderStateField(state.name)}});
+    }
+    else if (action == "reset-texture" && snapshot.activeDocument && index < snapshot.activeDocument->textures.size())
+    {
+        const auto& texture = snapshot.activeDocument->textures[index];
+        QueueEdit("texture:" + texture.slotName, {EditorCommandType::ClearMaterialTextureOverride,
+            ClearMaterialTextureOverridePayload{snapshot.activeDocument->assetPath, texture.slotName}});
+    }
+    else if (action == "section")
+    {
+        // 展开状态只在面板里，切换不提交业务命令，也不写资产或停靠布局。
+        ToggleSection(element.GetAttribute<std::string>("data-section", ""));
+    }
+    else if (action == "tab" && index < snapshot.documentTabs.size())
+    {
+        ShowMaterialDetails();
+        FlushPendingEdits();
+        EditorCommandEnvelope command;
+        command.type = EditorCommandType::SelectMaterialInstanceDocument;
+        command.payload = MaterialInstanceAssetPathPayload{snapshot.documentTabs[index].assetPath};
+        Submit(std::move(command));
+    }
+    else if (action == "close" && index < snapshot.documentTabs.size())
+    {
+        const auto& tab = snapshot.documentTabs[index];
+        if (tab.dirty || (!pendingEdits.empty() && pendingAssetPath == tab.assetPath))
         {
-            if (!asset.valid || !Matches(asset.assetPath, textureSearch.data())) continue;
-            if (ImGui::Selectable(asset.assetPath.c_str()))
-            {
-                Submit(MakeSetTextureCommand(
-                    document,
-                    pickerSlot,
-                    asset.assetPath));
-                openTexturePicker = false; ImGui::CloseCurrentPopup();
-            }
+            FlushPendingEdits();
+            pendingClosePath = tab.assetPath;
+            saveThenClose = false;
+            saveCloseSubmitted = false;
         }
-        ImGui::EndPopup();
+        else CloseDocument(tab.assetPath, EditorDirtyDocumentPolicy::RequireClean);
     }
-    ImGui::PopID();
+    else if (action == "close-cancel")
+    {
+        pendingClosePath.clear();
+        saveThenClose = false;
+        saveCloseSubmitted = false;
+    }
+    else if (action == "close-discard")
+    {
+        CloseDocument(pendingClosePath, EditorDirtyDocumentPolicy::DiscardChanges);
+        pendingClosePath.clear();
+        saveThenClose = false;
+        saveCloseSubmitted = false;
+    }
+    else if (action == "close-save")
+    {
+        // 非活动页先选中以获得权威 revision；保存失败时不能关闭文档。
+        if (!snapshot.activeDocument || snapshot.activeDocument->assetPath != pendingClosePath)
+        {
+            EditorCommandEnvelope command;
+            command.type = EditorCommandType::SelectMaterialInstanceDocument;
+            command.payload = MaterialInstanceAssetPathPayload{pendingClosePath};
+            Submit(std::move(command));
+        }
+        saveThenClose = true;
+        saveCloseSubmitted = false;
+    }
+    else if (action == "model-expand" && index < snapshot.sceneModels.size())
+    {
+        const auto& identity = snapshot.sceneModels[index].objectIdentity;
+        if (expandedModels.erase(identity) == 0) expandedModels.insert(identity);
+    }
+    else if (action == "model-slot" && index < snapshot.sceneModels.size())
+    {
+        SelectModelMaterial(snapshot.sceneModels[index],
+            element.GetAttribute<uint32_t>("data-component", 0));
+    }
+    else if (action == "model" && sceneSelectionSink != nullptr && index < snapshot.sceneModels.size())
+    {
+        sceneSelectionSink->RequestModelSelection(SelectionModel(snapshot.sceneModels[index]));
+    }
+    else if (action == "slot" && sceneSelectionSink != nullptr && snapshot.selectedModel &&
+        index < snapshot.selectedModel->materials.size())
+    {
+        SelectModelMaterial(*snapshot.selectedModel, index);
+    }
+    else if (runtimeActionSink != nullptr)
+    {
+        UiAction request;
+        if (action == "runtime-page") request.type = UiActionType::ToggleRuntimePage;
+        else if (action == "hide-editor") request.type = UiActionType::ToggleDeveloperUi;
+        else if (action == "exit-editor") request.type = UiActionType::Quit;
+        else if (action == "viewport-view-mode")
+        {
+            // 视口工具条里只有 view mode 有真实后端：Lit=0 完整画面，Unlit=1 基础色。
+            request.type = UiActionType::SetDebugViewMode;
+            request.intValue = element.GetAttribute<int>("data-mode", 0);
+        }
+        else if (action == "offline-mode")
+        {
+            request.type = UiActionType::SetOfflineMode;
+            request.intValue = element.GetAttribute<int>("data-value", 0);
+        }
+        else if (action == "offline-control")
+        {
+            request.type = UiActionType::ControlOfflineSession;
+            request.intValue = element.GetAttribute<int>("data-value", 0);
+        }
+        else if (action == "offline-export") request.type = UiActionType::ExportOffline;
+        else return;
+        runtimeActionSink->RequestRuntimeAction(std::move(request));
+    }
 }
 
-#else
-
-void MaterialInstanceAssetEditorPanel::Render()
+void MaterialInstanceAssetEditorPanel::HandleChange(Rml::Element& element, const std::string& action)
 {
+    const size_t index = element.GetAttribute<size_t>("data-index", 0);
+    const std::string value = ControlValue(element);
+    localStatus.clear();
+    if (action == "parameter" && snapshot.activeDocument &&
+        index < snapshot.activeDocument->parameters.size())
+    {
+        const auto& parameter = snapshot.activeDocument->parameters[index];
+        const uint32_t component = element.GetAttribute<uint32_t>("data-component", 0);
+        float number = 0.0f;
+        if (component >= parameter.effectiveValue.ComponentCount() || !ParseNumber(value, number))
+        {
+            localStatus = "A complete finite number is required.";
+            return;
+        }
+        const auto previous = pendingValues.find(parameter.name);
+        EditorParameterValue candidate = previous == pendingValues.end()
+            ? parameter.effectiveValue : previous->second;
+        candidate.values[component] = number;
+        pendingValues[parameter.name] = candidate;
+        QueueEdit("parameter:" + parameter.name, {EditorCommandType::SetMaterialParameterOverride,
+            SetMaterialParameterOverridePayload{snapshot.activeDocument->assetPath,
+                parameter.name, CommandType(candidate.type), CommandValue(candidate)}});
+    }
+    else if (action == "state" && snapshot.activeDocument && index < snapshot.activeDocument->renderStates.size())
+    {
+        const auto& state = snapshot.activeDocument->renderStates[index];
+        const auto field = ParseEditorMaterialRenderStateField(state.name);
+        EditorMaterialRenderStateValue candidate;
+        switch (field)
+        {
+        case EditorMaterialRenderStateField::RenderMode: candidate = ParseEditorMaterialRenderMode(value); break;
+        case EditorMaterialRenderStateField::CullMode: candidate = ParseEditorMaterialCullMode(value); break;
+        case EditorMaterialRenderStateField::ShadingModel: candidate = ParseEditorMaterialShadingModel(value); break;
+        }
+        QueueEdit("state:" + state.name, {EditorCommandType::SetMaterialRenderStateOverride,
+            SetMaterialRenderStateOverridePayload{snapshot.activeDocument->assetPath, field, candidate}});
+    }
+    else if (action == "texture" && snapshot.activeDocument && index < snapshot.activeDocument->textures.size())
+    {
+        const auto& texture = snapshot.activeDocument->textures[index];
+        QueueEdit("texture:" + texture.slotName, {EditorCommandType::SetMaterialTextureOverride,
+            SetMaterialTextureOverridePayload{snapshot.activeDocument->assetPath, texture.slotName, value}});
+    }
+    else if (runtimeActionSink != nullptr)
+    {
+        UiAction request;
+        if (action == "offline-setting")
+        {
+            int number = 0;
+            const std::string field = element.GetAttribute<std::string>("data-field", "");
+            if (!ParseNumber(value, number))
+            {
+                localStatus = "A complete integer is required.";
+                return;
+            }
+            if (const char* error = OfflineSettingValidationError(field, number))
+            {
+                localStatus = error;
+                return;
+            }
+            request.type = UiActionType::SetOfflineSetting;
+            request.stringValue = field;
+            request.intValue = number;
+        }
+        else if (action == "offline-aov")
+        {
+            int mode = 0;
+            if (!ParseNumber(value, mode) || mode < 0 || mode > 2) return;
+            request.type = UiActionType::SetOfflineAov;
+            request.intValue = mode;
+        }
+        else if (action == "offline-exposure")
+        {
+            float exposure = 0.0f;
+            if (!ParseNumber(value, exposure) || exposure <= 0.0f)
+            {
+                localStatus = "Exposure must be a positive finite number.";
+                return;
+            }
+            request.type = UiActionType::SetOfflineExposure;
+            request.floatValue = exposure;
+        }
+        else return;
+        runtimeActionSink->RequestRuntimeAction(std::move(request));
+    }
 }
 
-void MaterialInstanceAssetEditorPanel::RenderContents()
+void MaterialInstanceAssetEditorPanel::OpenBrowserAsset(const std::string& path)
 {
+    EditorAssetKind kind = EditorAssetKind::MaterialInstance;
+    if (snapshot.assetCatalog != nullptr)
+    {
+        bool found = false;
+        for (const auto& asset : snapshot.assetCatalog->assets)
+        {
+            if (asset.assetPath != path) continue;
+            kind = asset.kind;
+            found = true;
+            break;
+        }
+        if (!found) return;
+    }
+    FlushPendingEdits();
+    if (kind == EditorAssetKind::MaterialInstance)
+    {
+        ShowMaterialDetails();
+        docking.Activate("details");
+        EditorCommandEnvelope command;
+        command.type = EditorCommandType::OpenMaterialInstanceAsset;
+        command.payload = OpenMaterialInstanceAssetPayload{path, std::nullopt};
+        Submit(std::move(command));
+    }
+    else if (kind == EditorAssetKind::Mesh || kind == EditorAssetKind::Texture ||
+        kind == EditorAssetKind::Terrain)
+    {
+        OpenResourceAsset(path, kind);
+    }
+    else
+    {
+        resourceEditorVisible = false;
+        docking.Activate("details");
+        if (kind == EditorAssetKind::Scene && runtimeActionSink != nullptr)
+        {
+            // 关卡双击复用运行时场景选择器的 LoadWorld 事务；UI 不直接触碰 World，
+            // 同时继续请求 JSON inspector，让用户能查看本次切换目标的元数据。
+            UiAction request;
+            request.type = UiActionType::LoadWorld;
+            request.stringValue = path;
+            runtimeActionSink->RequestRuntimeAction(std::move(request));
+        }
+        // 非关卡 JSON 只读查看，不导入模型或贴图；MI 文档事务保持独立。
+        if (jsonAssetRequestSink == nullptr) return;
+        viewingJson = true;
+        requestedJsonPath = path;
+        localStatus.clear();
+        jsonAssetRequestSink->RequestOpenJsonAsset(path);
+        docking.Activate("details");
+    }
 }
 
-void MaterialInstanceAssetEditorPanel::RenderNavigationContents()
+void MaterialInstanceAssetEditorPanel::ProcessEvent(Rml::Event& event)
 {
+    if (refreshingControls || document == nullptr) return;
+    // 点击菜单栏以外的任何位置都收起已展开的菜单；菜单项自身的收起在下面按 action 处理。
+    if (event.GetType() == "click" && !openMenu.empty() && !IsInsideMenuBar(event.GetTargetElement()))
+        CloseMenus();
+    if (docking.ProcessEvent(event, HasModal()))
+    {
+        const std::string activatedPanel = docking.ConsumeActivatedPanel();
+        const std::string path = docking.ResourcePathForPanel(activatedPanel);
+        if (!path.empty() && resourceEditor.Activate(path))
+        {
+            resourceEditorVisible = true;
+            RefreshResourceEditor();
+        }
+        event.StopPropagation();
+        return;
+    }
+    // 捕获阶段只处理工作区拖动；普通控件的鼠标默认行为必须继续到目标节点。
+    if (event.GetType() != "click" && event.GetType() != "change" && event.GetType() != "dblclick") return;
+    Rml::Element* element = event.GetTargetElement();
+    while (element != nullptr && element != document && !element->HasAttribute("data-action"))
+        element = element->GetParentNode();
+    if (element == nullptr || element == document || element->HasAttribute("disabled")) return;
+    const std::string action = element->GetAttribute<std::string>("data-action", "");
+    if (HasModal() && action != "close-save" && action != "close-discard" &&
+        action != "close-cancel" && action != "about-close")
+        return;
+    // 选中菜单条目后收起菜单；标题自己决定展开还是收起，不能在这里先清空。
+    if (action != "menu-open" && IsInsideMenuBar(element)) CloseMenus();
+    try
+    {
+        std::optional<std::string> openAssetPath;
+        if (resourceJsonInspector.ProcessEvent(event))
+        {
+            event.StopPropagation();
+            return;
+        }
+        if (jsonInspector.ProcessEvent(event))
+        {
+            event.StopPropagation();
+            return;
+        }
+        if (contentBrowser.ProcessEvent(event, openAssetPath))
+        {
+            if (openAssetPath) OpenBrowserAsset(*openAssetPath);
+        }
+        else if (event.GetType() == "click") HandleClick(*element, action);
+        else if (event.GetType() == "change") HandleChange(*element, action);
+    }
+    catch (const std::exception& error)
+    {
+        localStatus = error.what();
+    }
+    event.StopPropagation();
 }
-
-void MaterialInstanceAssetEditorPanel::RenderInspectorContents()
-{
-}
-
-#endif
 
 } // namespace VL::EditorUi

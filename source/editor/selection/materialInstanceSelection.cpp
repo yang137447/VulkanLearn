@@ -409,7 +409,7 @@ bool MaterialInstanceEditorRuntimeSelectionTarget::OpenMaterialInstance(
     }
 
     EditorCommandEnvelope command;
-    command.source = EditorCommandSource::ImGui;
+    command.source = EditorCommandSource::RmlUi;
     command.type = EditorCommandType::OpenMaterialInstanceAsset;
     command.payload = OpenMaterialInstanceAssetPayload{
         selection.materialInstancePath,

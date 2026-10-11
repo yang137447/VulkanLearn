@@ -73,6 +73,8 @@ private:
 class RmlUiRenderInterface final : public Rml::RenderInterface
 {
 public:
+    // 必须在创建 RmlUi context/geometry 前设置；同一 swapchain surface 保持格式。
+    void SetLinearColorOutput(bool value) { linearColorOutput = value; }
     RmlUiRenderInterface() = default;
     ~RmlUiRenderInterface() override;
 
@@ -120,10 +122,9 @@ private:
         std::string source,
         std::shared_ptr<const std::vector<uint8_t>> pixels);
     UiClipRect BuildClipRect() const;
-    static uint32_t PackColor(const Rml::ColourbPremultiplied& color);
-    static void PremultiplyAlpha(std::vector<uint8_t>& pixels);
 
     UiRenderSnapshot* currentSnapshot = nullptr;
+    bool linearColorOutput = true;
     bool scissorEnabled = false;
     Rml::Rectanglei scissorRegion;
     bool transformEnabled = false;

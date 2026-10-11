@@ -1,7 +1,7 @@
 {
   "protocolVersion": 1,
   "commandId": 1002,
-  "source": "imgui",
+  "source": "rmlui",
   "command": "material.set_texture",
   "expectedDocumentRevision": 8,
   "payload": {

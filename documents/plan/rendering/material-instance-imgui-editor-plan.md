@@ -1,5 +1,7 @@
 # Material Instance Asset Editor 开发计划
 
+> **历史计划（2026-10-10）**：`codex/rmlui-editor` 分支已移除 ImGui，编辑器宿主改为 RmlUi。本文件保留历史设计，不再作为 UI 实施入口；当前组件契约见 `documents/architecture/ui-component-system.md`，迁移路线见 `documents/plan/ui/rmlui-editor-plan.md`。
+
 > **当前实施状态（2026-08-29）**：renderer-independent 的 MI 资产编辑基线已经落地，`renderMode`/`shadingModel`/`cullMode` 三项 render-state override 已接入命令、service、UI 快照和稀疏保存；renderer-owned preview 已支持这三项状态的隔离候选加载、variant/pass/material/pipeline 与对象 descriptor 重建、原子 live swap 和 GPU epoch 退休，数值 live preview 继续走 MaterialInstance 原地更新。纹理 live preview 尚未完成，`texture.open`、事件流和少数 runtime 路由仍有缺口。
 >
 > 本文件以下正文保留计划编写时的原始内容，不以删除或改写历史计划的方式更新状态。当前实现事实、已完成阶段和剩余门槛以文末“实施收尾记录”为准。

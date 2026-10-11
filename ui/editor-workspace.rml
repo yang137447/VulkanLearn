@@ -1,0 +1,294 @@
+<rml>
+    <head>
+        <title>VulkanLearn Editor</title>
+        <link type="text/rcss" href="widgets/editor-widgets.rcss"/>
+        <link type="text/rcss" href="editor-workspace.rcss"/>
+    </head>
+    <body>
+        <div id="editor-toolbar">
+            <div id="editor-menubar">
+                <div class="menu-root" id="menu-file">
+                    <button class="menu-title" id="menu-file-title" data-action="menu-open" data-menu="file">File</button>
+                    <div class="menu-popup" id="menu-file-popup">
+                        <button class="menu-item" id="menu-file-save" data-action="save"><span class="menu-check"></span><span class="menu-label">Save</span></button>
+                        <button class="menu-item" id="menu-file-revert" data-action="revert"><span class="menu-check"></span><span class="menu-label">Revert</span></button>
+                        <button class="menu-item" id="menu-file-reload" data-action="reload"><span class="menu-check"></span><span class="menu-label">Reload</span></button>
+                        <div class="menu-separator"></div>
+                        <div class="menu-entry" id="menu-file-open-level">
+                            <button class="menu-item" id="menu-file-open-level-title"><span class="menu-check"></span><span class="menu-label">Open Level</span><span class="menu-arrow">&#9656;</span></button>
+                            <div class="menu-popup menu-submenu" id="menu-file-levels"></div>
+                        </div>
+                        <div class="menu-separator"></div>
+                        <button class="menu-item" id="menu-file-exit" data-action="exit-editor"><span class="menu-check"></span><span class="menu-label">Exit</span></button>
+                    </div>
+                </div>
+                <div class="menu-root" id="menu-edit">
+                    <button class="menu-title" id="menu-edit-title" data-action="menu-open" data-menu="edit">Edit</button>
+                    <div class="menu-popup" id="menu-edit-popup">
+                        <button class="menu-item" id="menu-edit-reset" data-action="reset-all"><span class="menu-check"></span><span class="menu-label">Reset All</span></button>
+                        <button class="menu-item" id="menu-edit-validate" data-action="validate"><span class="menu-check"></span><span class="menu-label">Validate</span></button>
+                        <div class="menu-separator"></div>
+                        <button class="menu-item disabled" id="menu-edit-undo" disabled="disabled"><span class="menu-check"></span><span class="menu-label">Undo</span></button>
+                        <button class="menu-item disabled" id="menu-edit-redo" disabled="disabled"><span class="menu-check"></span><span class="menu-label">Redo</span></button>
+                    </div>
+                </div>
+                <div class="menu-root" id="menu-window">
+                    <button class="menu-title" id="menu-window-title" data-action="menu-open" data-menu="window">Window</button>
+                    <div class="menu-popup" id="menu-window-popup">
+                        <div id="menu-window-panels"></div>
+                        <div class="menu-separator"></div>
+                        <button class="menu-item" id="menu-window-reset" data-action="menu-reset-layout"><span class="menu-check"></span><span class="menu-label">Reset Layout</span></button>
+                        <button class="menu-item" id="menu-window-restore" data-action="menu-restore-layout"><span class="menu-check"></span><span class="menu-label">Restore Saved Layout</span></button>
+                    </div>
+                </div>
+                <div class="menu-root" id="menu-help">
+                    <button class="menu-title" id="menu-help-title" data-action="menu-open" data-menu="help">Help</button>
+                    <div class="menu-popup" id="menu-help-popup">
+                        <button class="menu-item" id="menu-help-about" data-action="about-open"><span class="menu-check"></span><span class="menu-label">About</span></button>
+                    </div>
+                </div>
+            </div>
+            <h1>VulkanLearn</h1>
+            <button id="save-asset" data-action="save">Save</button>
+            <button id="revert-asset" data-action="revert">Revert</button>
+            <button id="reset-asset" data-action="reset-all">Reset All</button>
+            <button id="validate-asset" data-action="validate">Validate</button>
+            <button id="reload-asset" data-action="reload">Reload</button>
+            <div class="toolbar-spacer"></div>
+            <button id="workspace-reset" data-action="workspace-reset">Reset Layout</button>
+            <button data-action="runtime-page">Settings</button>
+            <button data-action="hide-editor">Close Editor</button>
+        </div>
+
+        <div id="editor-content">
+            <div id="dock-shell"></div>
+            <div id="dock-preview"></div>
+            <div id="dock-parking">
+                <div id="dock-dynamic-tabs"></div>
+                <button id="workspace-viewport-tab" data-workspace-panel="viewport">Viewport</button>
+                <button id="workspace-outliner-tab" data-workspace-panel="outliner">Scene Outliner</button>
+                <button id="workspace-details-tab" data-workspace-panel="details">Details</button>
+                <button id="workspace-content-tab" data-workspace-panel="content" data-action="workspace-content">Content Browser</button>
+                <button id="workspace-renderer-tab" data-workspace-panel="renderer" data-action="workspace-renderer">Renderer</button>
+                <button id="workspace-resource-tab" data-workspace-panel="resource" title="Asset Editor">
+                    <img id="workspace-resource-icon" src="icons/file-box.png"/>
+                    <span id="workspace-resource-label">Asset Editor</span>
+                </button>
+                <div id="editor-viewport-surface">
+                    <img id="editor-viewport-image" src="vl://scene-viewport"/>
+                    <div id="viewport-toolbar">
+                        <div class="viewport-tool-group" id="viewport-transform-tools">
+                            <button class="viewport-tool" id="viewport-tool-select" data-action="viewport-tool" data-tool="select" title="Select tool - presentation only, no gizmo or transform editing backend">Select</button>
+                            <button class="viewport-tool" id="viewport-tool-move" data-action="viewport-tool" data-tool="move" title="Move tool - presentation only, no gizmo or transform editing backend">Move</button>
+                            <button class="viewport-tool" id="viewport-tool-rotate" data-action="viewport-tool" data-tool="rotate" title="Rotate tool - presentation only, no gizmo or transform editing backend">Rotate</button>
+                            <button class="viewport-tool" id="viewport-tool-scale" data-action="viewport-tool" data-tool="scale" title="Scale tool - presentation only, no gizmo or transform editing backend">Scale</button>
+                        </div>
+                        <div class="viewport-tool-group" id="viewport-transform-space">
+                            <button class="viewport-tool" id="viewport-space-world" data-action="viewport-space" data-space="world" title="World space - presentation only, the renderer does not read it">World</button>
+                            <button class="viewport-tool" id="viewport-space-local" data-action="viewport-space" data-space="local" title="Local space - presentation only, the renderer does not read it">Local</button>
+                        </div>
+                        <div class="viewport-tool-group" id="viewport-view-mode">
+                            <button class="viewport-tool" id="viewport-view-lit" data-action="viewport-view-mode" data-mode="0" title="Lit: full shading (debug view 0)">Lit</button>
+                            <button class="viewport-tool" id="viewport-view-unlit" data-action="viewport-view-mode" data-mode="1" title="Unlit: base color debug view (debug view 1)">Unlit</button>
+                            <button class="viewport-tool disabled" id="viewport-view-wireframe" disabled="disabled" title="Wireframe is not implemented: this renderer has no wireframe raster mode and no wireframe debug view.">Wireframe</button>
+                        </div>
+                    </div>
+                </div>
+            <div id="editor-navigation" class="dock-panel">
+                <div id="scene-models" class="scroll-box"></div>
+            </div>
+            <div id="editor-inspector" class="dock-panel">
+                <div class="inspector-body">
+                    <div id="material-instance-details">
+                    <h3>Material Slots</h3>
+                    <div id="material-slots" class="scroll-box"></div>
+                    <h3 id="document-title">Material Instance</h3>
+                    <div id="document-tabs"></div>
+                    <div class="command-row preview-commands">
+                        <button id="apply-preview" data-action="apply-preview">Apply Preview</button>
+                        <button id="restore-preview" data-action="restore-preview">Restore Baseline</button>
+                    </div>
+                    <p id="document-status" class="muted"></p>
+                    <div id="details-content"></div>
+                    </div>
+                    <div id="json-inspector">
+                        <div class="json-header">
+                            <h3 id="json-title"></h3><span class="json-readonly">Read Only</span>
+                            <button class="browser-icon" data-action="json-close" title="Material Details"><img src="icons/arrow-left.png"/></button>
+                        </div>
+                        <p id="json-kind"></p>
+                        <p id="json-path"></p>
+                        <p id="json-description"></p>
+                        <p id="json-status" class="notice"></p>
+                        <input id="json-search" type="text" data-action="json-search" value=""/>
+                        <div id="json-fields"></div>
+                        <div class="json-pager">
+                            <button id="json-prev" class="browser-icon" data-action="json-prev" title="Previous Fields"><img src="icons/arrow-left.png"/></button>
+                            <span id="json-page"></span>
+                            <button id="json-next" class="browser-icon" data-action="json-next" title="Next Fields"><img src="icons/arrow-right.png"/></button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div id="content-browser-page" class="dock-panel">
+                <div class="browser-toolbar">
+                    <button id="browser-sources-toggle" class="browser-icon" data-action="browser-sources-toggle" title="Sources">
+                        <img src="icons/panel-left.png"/><span class="browser-tooltip">Sources</span>
+                    </button>
+                    <button id="browser-back" class="browser-icon" data-action="browser-back" title="Back">
+                        <img src="icons/arrow-left.png"/><span class="browser-tooltip">Back</span>
+                    </button>
+                    <button id="browser-forward" class="browser-icon" data-action="browser-forward" title="Forward">
+                        <img src="icons/arrow-right.png"/><span class="browser-tooltip">Forward</span>
+                    </button>
+                    <button id="browser-up" class="browser-icon" data-action="browser-up" title="Parent Folder">
+                        <img src="icons/arrow-up.png"/><span class="browser-tooltip">Parent Folder</span>
+                    </button>
+                    <button id="browser-refresh" class="browser-icon" data-action="browser-refresh" title="Refresh Assets">
+                        <img src="icons/refresh.png"/><span class="browser-tooltip">Refresh Assets</span>
+                    </button>
+                    <div id="asset-breadcrumbs"></div>
+                    <button id="browser-grid" class="browser-icon" data-action="browser-grid" title="Tiles">
+                        <img src="icons/layout-grid.png"/><span class="browser-tooltip">Tiles</span>
+                    </button>
+                    <button id="browser-list" class="browser-icon" data-action="browser-list" title="List">
+                        <img src="icons/list.png"/><span class="browser-tooltip">List</span>
+                    </button>
+                </div>
+                <div class="browser-filterbar">
+                    <div class="browser-search">
+                        <img src="icons/search.png"/>
+                        <input id="asset-search" type="text" data-action="asset-search" value="" placeholder="Search assets"/>
+                    </div>
+                    <select id="browser-type" data-action="browser-type">
+                        <option value="all">All Assets</option><option value="material">Materials</option>
+                        <option value="mesh">Meshes</option><option value="scene">Levels</option>
+                        <option value="texture">Textures</option><option value="terrain">Terrains</option>
+                    </select>
+                    <label class="browser-recursive-label"><input id="browser-recursive" type="checkbox" data-action="browser-recursive" checked="checked"/><span>Subfolders</span></label>
+                    <select id="browser-sort" data-action="browser-sort">
+                        <option value="name-asc">Name A-Z</option><option value="name-desc">Name Z-A</option>
+                    </select>
+                    <select id="browser-size" data-action="browser-size">
+                        <option value="small">Small</option><option value="medium">Medium</option><option value="large">Large</option>
+                    </select>
+                </div>
+                <div class="browser-body">
+                    <div id="browser-sources-panel">
+                        <div class="browser-source-heading">Sources</div>
+                        <div id="asset-sources"></div>
+                    </div>
+                    <div class="browser-assets">
+                        <div id="asset-list"></div>
+                        <div id="asset-empty"></div>
+                    </div>
+                </div>
+                <div class="browser-footer">
+                    <div id="asset-count"></div>
+                    <div id="browser-selection"></div>
+                </div>
+            </div>
+            <div id="renderer-page" class="dock-panel">
+                <div class="renderer-settings">
+                    <div class="renderer-settings-column">
+                        <div class="segmented">
+                            <button id="mode-realtime" data-action="offline-mode" data-value="0">Realtime</button>
+                            <button id="mode-offline" data-action="offline-mode" data-value="1">Offline</button>
+                        </div>
+                        <div class="property-row"><label>Samples</label><input id="offline-samples" type="text" data-action="offline-setting" data-field="samples" value="32"/></div>
+                        <div class="property-row"><label>Bounces</label><input id="offline-bounces" type="text" data-action="offline-setting" data-field="bounces" value="2"/></div>
+                        <div class="property-row"><label>Light Samples</label><input id="offline-lightSamples" type="text" data-action="offline-setting" data-field="lightSamples" value="1"/></div>
+                        <div class="property-row"><label>Seed</label><input id="offline-seed" type="text" data-action="offline-setting" data-field="seed" value="0"/></div>
+                    </div>
+                    <div class="renderer-settings-column">
+                        <div class="property-row"><label>AOV</label><select id="offline-aov" data-action="offline-aov"><option value="0">Combined</option><option value="1">Direct</option><option value="2">Indirect</option></select></div>
+                        <div class="property-row"><label>Exposure</label><input id="offline-exposure" type="text" data-action="offline-exposure" value="1"/></div>
+                        <div class="command-row">
+                            <button id="offline-pause" data-action="offline-control" data-value="0">Pause</button>
+                            <button id="offline-resume" data-action="offline-control" data-value="1">Resume</button>
+                            <button id="offline-stop" data-action="offline-control" data-value="2">Stop</button>
+                        </div>
+                        <div class="command-row">
+                            <button id="offline-restart" data-action="offline-control" data-value="3">Restart</button>
+                            <button id="offline-export" data-action="offline-export">Export</button>
+                        </div>
+                        <p id="offline-status"></p>
+                        <p id="offline-notice" class="notice"></p>
+                    </div>
+                </div>
+            </div>
+            <div id="resource-editor">
+                <div id="resource-editor-toolbar">
+                    <div class="toolbar-spacer"></div>
+                    <button id="resource-reload" class="browser-icon" data-action="resource-reload" title="Reload JSON">
+                        <img src="icons/refresh.png"/><span class="browser-tooltip">Reload JSON</span>
+                    </button>
+                    <button id="resource-close" class="browser-icon" data-action="resource-close" title="Close Asset">
+                        <img src="icons/arrow-left.png"/><span class="browser-tooltip">Close Asset</span>
+                    </button>
+                </div>
+                <div id="resource-editor-body">
+                    <div id="resource-preview-panel">
+                        <div class="resource-panel-heading">
+                            <h2 id="resource-preview-title"></h2>
+                            <span id="resource-preview-kind"></span>
+                        </div>
+                        <div id="resource-preview-surface">
+                            <img id="resource-preview-icon" src="icons/mesh.png"/>
+                            <h3 id="resource-preview-status"></h3>
+                            <p id="resource-preview-path"></p>
+                        </div>
+                    </div>
+                    <div id="resource-details-panel">
+                        <div class="inspector-body">
+                            <div id="resource-json-inspector">
+                                <div class="json-header">
+                                    <h3 id="resource-json-title"></h3><span class="json-readonly">Read Only</span>
+                                </div>
+                                <p id="resource-json-kind"></p>
+                                <p id="resource-json-path"></p>
+                                <p id="resource-json-description"></p>
+                                <p id="resource-json-status" class="notice"></p>
+                                <input id="resource-json-search" type="text" data-action="resource-json-search" value=""/>
+                                <div id="resource-json-fields"></div>
+                                <div class="json-pager">
+                                    <button id="resource-json-prev" class="browser-icon" data-action="resource-json-prev" title="Previous Fields"><img src="icons/arrow-left.png"/></button>
+                                    <span id="resource-json-page"></span>
+                                    <button id="resource-json-next" class="browser-icon" data-action="resource-json-next" title="Next Fields"><img src="icons/arrow-right.png"/></button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            </div>
+        </div>
+        <div id="dock-drag-shield"></div>
+        <div id="editor-status"><p id="editor-notice"></p><span id="editor-frame-metrics"></span></div>
+
+        <div id="close-dialog">
+            <div class="dialog">
+                <h2>Unsaved Changes</h2>
+                <p id="close-document-name"></p>
+                <p id="close-document-status" class="notice"></p>
+                <div class="command-row">
+                    <button id="close-save" data-action="close-save">Save</button>
+                    <button data-action="close-discard">Discard</button>
+                    <button data-action="close-cancel">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="about-dialog">
+            <div class="dialog about-dialog">
+                <h2>VulkanLearn Editor</h2>
+                <p>The editor workspace is rendered by RmlUi: layout, input, focus and painting all go through the RmlUi document, not a second UI toolkit.</p>
+                <p>Workspace layout (dock tree, split ratios, floating panels and hidden panels) is stored at:</p>
+                <p id="about-layout-path">%LOCALAPPDATA%/VulkanLearn/Editor/workspace-v1.json</p>
+                <div class="command-row">
+                    <button id="about-close" data-action="about-close">Close</button>
+                </div>
+            </div>
+        </div>
+    </body>
+</rml>

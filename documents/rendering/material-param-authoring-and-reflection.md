@@ -444,7 +444,9 @@ reflection 决定各 Pass 的 active 使用子集。
 
 `color` 是编辑器 authoring 语义，不是新的 GLSL 类型：它在 JSON、编辑器和
 持久化层保持独立类型，但 GPU UBO 与 shader 侧映射为 `vec4`。RGB 运行时和 MI
-存储使用 Linear，ImGui 调色板以 sRGB 显示和编辑；Alpha 不做色彩空间转换。
+存储使用 Linear；当前 RmlUi 编辑器直接输入 Linear RGBA 数值，
+不提供旧的 sRGB 调色板，也不隐式转换输入。未来增加 sRGB 调色板时必须显式转换 RGB，
+Alpha 不做色彩空间转换。
 普通 `vec4` 不受影响，仍保持原始数值语义。
 
 ## 一句话结论

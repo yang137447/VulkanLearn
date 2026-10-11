@@ -29,9 +29,9 @@ h2 {
 
 .hud-card {
     padding: 8dp 12dp;
-    background-color: rgba(12, 18, 34, 0.76);
+    background-color: #0c1222c2;
     border-width: 1dp;
-    border-color: rgba(127, 166, 255, 0.45);
+    border-color: #7fa6ff73;
     border-radius: 6dp;
 }
 
@@ -61,7 +61,7 @@ h2 {
     width: 100%;
     height: 100%;
     z-index: 10;
-    background-color: rgba(0, 0, 0, 0);
+    background-color: transparent;
 }
 
 #control-panel {
@@ -258,7 +258,7 @@ h2 {
     width: 338dp;
     min-height: 30dp;
     border-width: 0 0 1dp 0;
-    border-color: rgba(73, 105, 157, 0.45);
+    border-color: #49699d73;
 }
 
 .status-row-multiline {
@@ -320,7 +320,7 @@ h2 {
     margin-top: 8dp;
     padding-top: 10dp;
     border-width: 1dp 0 0 0;
-    border-color: rgba(92, 126, 184, 0.7);
+    border-color: #5c7eb8b3;
 }
 
 .debug-group-title {
@@ -453,7 +453,7 @@ h2 {
     width: 338dp;
     height: 20dp;
     margin-top: 5dp;
-    background-color: rgba(0, 0, 0, 0);
+    background-color: transparent;
 }
 
 input.range slidertrack {

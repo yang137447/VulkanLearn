@@ -15,10 +15,6 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 find_package(Threads REQUIRED)
 
-option(VULKANLEARN_ENABLE_DEVELOPER_UI
-    "Build the Dear ImGui developer UI layer."
-    ON)
-
 add_subdirectory(extern)
 add_subdirectory(source/render/offline/core)
 add_subdirectory(source)
@@ -55,6 +51,8 @@ if(VULKANLEARN_BUILD_TESTS)
     add_subdirectory(tool/material-schema-tests)
     add_subdirectory(tool/texture-asset-tests)
     add_subdirectory(tool/material-instance-editor-tests)
+    add_subdirectory(tool/editor-ui-tests)
+    add_subdirectory(tool/editor-viewport-tests)
     add_subdirectory(tool/offline-core-tests)
     add_subdirectory(tool/offline-integration-tests)
     add_subdirectory(tool/renderer-backend-tests)

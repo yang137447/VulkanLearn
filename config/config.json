@@ -1,6 +1,5 @@
 {
-  "projectPath": "D:\\YYBWorkSpace\\GitHub\\VulkanLearn",
-  "resourcePath": "D:\\YYBWorkSpace\\GitHub\\VukanLearnResources",
+  "resourcePath": "../VukanLearnResources",
   "windowSize": [
     1280,
     720
@@ -17,7 +16,7 @@
     "defaultLocale": "en-US",
     "fontFaces": [],
     "developerUiEnabled": true,
-    "developerUiVisible": false
+    "developerUiVisible": true
   },
   "renderStateDebugColors": {
     "ePass": [

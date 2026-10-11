@@ -29,6 +29,7 @@ PlatformKey TranslateKey(SDL_Scancode scancode)
     case SDL_SCANCODE_RETURN: return PlatformKey::Enter;
     case SDL_SCANCODE_ESCAPE: return PlatformKey::Escape;
     case SDL_SCANCODE_A: return PlatformKey::A;
+    case SDL_SCANCODE_S: return PlatformKey::S;
     case SDL_SCANCODE_C: return PlatformKey::C;
     case SDL_SCANCODE_V: return PlatformKey::V;
     case SDL_SCANCODE_X: return PlatformKey::X;

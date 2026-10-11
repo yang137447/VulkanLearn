@@ -48,6 +48,7 @@ enum class PlatformKey
     Enter,
     Escape,
     A,
+    S,
     C,
     V,
     X,

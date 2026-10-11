@@ -17,7 +17,6 @@
 /resources/*
 !/resources/README.md
 /output/playwright
-/imgui.ini
 # Fig. 2 的源文件已迁入知识库；旧本地 Vite 构建产物不入库。
 /tool/visualization/estevez-fig2/
 __pycache__/
@@ -26,5 +25,4 @@ __pycache__/
 /tmp/pdftext/
 /tmp/sheen-paper.txt
 /extern/FreeType/freetype/
-/extern/ImGui/imgui/
 /extern/RmlUi/RmlUi/

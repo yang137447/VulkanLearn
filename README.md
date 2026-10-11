@@ -70,13 +70,29 @@ cmake --build build -j
 
 ### UI 构建与运行
 
-默认构建包含 RmlUi 运行时 UI 和 Dear ImGui 开发者 UI。只需要运行时 UI
-时，可以在配置阶段关闭开发者层：
-
-```bash
-cmake -S . -B build -G "MinGW Makefiles" -DVULKANLEARN_ENABLE_DEVELOPER_UI=OFF
-cmake --build build -j
-```
+运行时控制页和编辑器工作区统一使用 RmlUi，构建不再依赖 ImGui，
+也不再提供 `VULKANLEARN_ENABLE_DEVELOPER_UI` 编译开关。
+`ui/editor-workspace.rml` 和 `.rcss` 定义模型列表、材质槽、
+JSON 资产浏览器、属性面板与离线控制。布局采用顶部命令栏、右上 Outliner、
+右下 Details、底部 Content Browser / Renderer 标签页，中央/左侧透出 Vulkan 场景。
+当前材质工作区支持自由停靠、标签合并、可拖分隔条、窗口内浮动及布局保存/重置；
+Asset Editor 是正式 DockPanel，默认与 Viewport 合并为中央标签组，也可拖到其他区域或浮动，
+并通过 renderer-owned 离屏纹理显示独立 Viewport；尚不支持原生多窗口、场景增删或 Undo/Redo。
+Content Browser 使用目录树、路径导航、搜索、类型筛选和资产网格/列表，
+索引 MI、Mesh、Scene、Texture、Terrain JSON。单击选中；双击 MI 仍进入可编辑文档，
+双击 Scene 会复用现有 World/RenderGraph 事务切换关卡，并同步打开只读 JSON inspector；
+双击 Mesh/Texture/Terrain 进入独立资源编辑器标签，包含类型预览占位和只读 JSON Details；
+支持标签切换、关闭、返回 World、重复打开去重和重新读取 JSON。Scene 仍进入主工作区
+只读 JSON inspector 并请求 World 切换。查看 Mesh/Texture 不加载模型或贴图；
+任意层级的 `data` 字段及子树均不展示、不保留，也不读取 JSON 引用的数据文件。
+内嵌 `data` 仍受 JSON 语法与输入上限校验，并非跳过文件字节读取。
+目录由独立 worker 在初始化及显式 Refresh 时扫描，打开 JSON 也在 worker 完成；
+逐帧仅轮询结果并共享不可变快照，不逐帧扫描或读取资产 JSON。
+浏览器网格/列表最多挂载 192 个可见条目节点（含预取）及两个高度占位节点，
+静止状态复用目录、筛选和 markup；属性值缓存避免重复触发布局 dirty，
+Vulkan UI 顶点/索引缓冲按容量倍增复用。具体输入上限见组件契约。
+类型图标和材质球均为占位图，不是实际缩略图或模型预览。
+Color 参数目前通过 Linear RGBA 数值编辑，不提供旧的 sRGB 调色板。
 
 运行时 UI 资产位于仓库内的 `ui/`，由 `config/config.json -> ui` 配置块选择。
 `F10` 或手柄 `Start` 打开/关闭运行时控制页，`Esc` 切换鼠标捕获，
@@ -90,6 +106,12 @@ build/bin/main.exe --no-dev-ui
 
 RML/RCSS/本地化文件在开发模式下支持候选解析、校验、提交式热重载；失败候选
 不会替换最后一个有效页面。实现契约见 `documents/architecture/game-ui-stack.md`。
+编辑器后续阶段见 `documents/plan/ui/rmlui-editor-plan.md`。
+组件分类与当前覆盖见 `documents/architecture/ui-component-system.md`；
+首批组件模块位于 `source/ui/widgets/`，共享样式位于 `ui/widgets/`。
+
+从本工作目录根启动；默认资源目录为相邻的 `../VukanLearnResources`。
+分支验证使用独立资源 worktree，保存 MI 或离线输出不会写入原开发资源目录。
 
 ### VL 离线渲染
 

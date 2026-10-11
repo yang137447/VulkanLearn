@@ -34,7 +34,9 @@ public:
     void Record(
         vk::CommandBuffer commandBuffer,
         uint32_t swapchainImageIndex,
-        const UiRenderSnapshot& snapshot);
+        const UiRenderSnapshot& snapshot,
+        vk::ImageView sceneViewportView = {},
+        vk::Sampler sceneViewportSampler = {});
 
     bool IsInitialized() const { return initialized; }
 
@@ -109,7 +111,7 @@ private:
     void DestroyTexture(GpuTexture& texture);
     void RetireTexture(GpuTexture& texture);
     void FlushRetiredTextures();
-    vk::DescriptorSet ResolveTextureDescriptor(UiTextureId textureId) const;
+    vk::DescriptorSet ResolveTextureDescriptor(UiTextureId textureId, uint32_t imageIndex) const;
     void EnsureWhiteTexture();
 
     RendererBackendVulkan* backend = nullptr;
@@ -119,8 +121,10 @@ private:
     vk::DescriptorPool descriptorPool;
     vk::PipelineLayout pipelineLayout;
     vk::RenderPass renderPass;
+    vk::RenderPass editorPresentRenderPass;
     std::vector<vk::Framebuffer> framebuffers;
     std::vector<FrameBuffers> frameBuffers;
+    std::vector<vk::DescriptorSet> sceneViewportDescriptors;
     vk::PipelineCache straightAlphaPipelineCache;
     vk::Pipeline straightAlphaPipeline;
     vk::PipelineCache premultipliedAlphaPipelineCache;

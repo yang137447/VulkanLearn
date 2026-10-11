@@ -55,6 +55,9 @@ struct PassRuntimeContext
     const RenderScene& renderScene;
     const ResolvedRenderScene& resolvedRenderScene;
     PassRuntimeServices& services;
+    // 仅重定向输出 swapChain 的 pass，其他图资源和完整 backing extent 不变。
+    // LOAD 前调用方必须保证目标已有有效内容并处于 ColorAttachmentOptimal。
+    bool renderToViewport = false;
 };
 
 // Records one compiled Renderpass using render-domain data. FrameGraph and

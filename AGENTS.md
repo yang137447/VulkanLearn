@@ -90,6 +90,12 @@ Design references currently live under `documents/`:
 - `documents/README.md`
 - `documents/architecture/vulkanlearn-architecture.html`
 - `documents/architecture/coding-guidelines.md`
+- `documents/architecture/game-ui-stack.md`
+  - RmlUi-only runtime/editor UI, producer-only callbacks, SDL input arbitration and immutable GT/RT snapshots
+- `documents/architecture/ui-component-system.md`
+  - Slate-inspired reusable RmlUi controls; widgets must not depend on World, asset commands or Vulkan
+- `documents/plan/ui/rmlui-editor-plan.md`
+  - completed RmlUi migration/docking/independent viewport versus future scene documents and asset workflows
 - `documents/rendering/texture-asset-json-v1.md`
 - `documents/rendering/material-param-authoring-and-reflection.md`
 - `documents/rendering/descriptor-imageinfo-management.md`
@@ -305,7 +311,7 @@ Be careful when changing these files or systems:
 
 The following issues are already present in the codebase and should be treated as existing constraints unless you are explicitly fixing them:
 
-- `config/config.json` currently contains an absolute `projectPath`.
+- `config/config.json` uses a sibling resource directory; launch from the checkout root and isolate resource writes when testing branches.
 - Path resolution is partly inferred from current working directory.
 - Some naming is inconsistent, for example `Viking/Vilking` and some include capitalization.
 - `shader/spv/` contains generated artifacts, but the repo also relies on them for reflection/debug workflows.

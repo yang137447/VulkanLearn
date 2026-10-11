@@ -3,44 +3,35 @@
 # HDR and EXR environment maps (usually largest files)
 *.hdr filter=lfs diff=lfs merge=lfs -text
 *.exr filter=lfs diff=lfs merge=lfs -text
-
 # 3D model formats
 *.fbx filter=lfs diff=lfs merge=lfs -text
 *.obj filter=lfs diff=lfs merge=lfs -text
 *.dae filter=lfs diff=lfs merge=lfs -text
 *.gltf filter=lfs diff=lfs merge=lfs -text
 *.glb filter=lfs diff=lfs merge=lfs -text
-
 # Texture formats
 *.tga filter=lfs diff=lfs merge=lfs -text
 *.psd filter=lfs diff=lfs merge=lfs -text
 *.tif filter=lfs diff=lfs merge=lfs -text
 *.tiff filter=lfs diff=lfs merge=lfs -text
-
 # High resolution textures (threshold > 1MB)
 *.png filter=lfs diff=lfs merge=lfs -text
 *.jpg filter=lfs diff=lfs merge=lfs -text
 *.jpeg filter=lfs diff=lfs merge=lfs -text
-
 # Binary mesh data
 *.mesh filter=lfs diff=lfs merge=lfs -text
 *.geom filter=lfs diff=lfs merge=lfs -text
-
 # Animation data
 *.anim filter=lfs diff=lfs merge=lfs -text
 *.skeleton filter=lfs diff=lfs merge=lfs -text
-
 # Audio files (if any)
 *.wav filter=lfs diff=lfs merge=lfs -text
 *.mp3 filter=lfs diff=lfs merge=lfs -text
 *.ogg filter=lfs diff=lfs merge=lfs -text
-
 # Art configuration files in resources directory - all go to LFS
 resources/**/*.json filter=lfs diff=lfs merge=lfs -text
-
 # SPIR-V shader files - treat as binary to reduce diff noise
 shader/spv/*.spv -diff -merge -text
-
 # Documentation and configs (keep in regular Git)
 *.md -filter=lfs merge text
 # Preserve this legacy CRLF document until line-ending normalization is handled separately.
@@ -50,9 +41,7 @@ documents/rendering/material-param-authoring-and-reflection.md -filter=lfs merge
 *.html -filter=lfs diff merge text
 *.yml -filter=lfs diff merge text
 *.yaml -filter=lfs diff merge text
-
 # JSON files outside resources stay in regular Git
 *.json -filter=lfs diff merge text
-
 # Re-apply resource JSON LFS rule after the generic JSON rule.
-resources/**/*.json filter=lfs diff=lfs merge=lfs -text
+ui/icons/*.png !text !filter !merge !diff

@@ -2,13 +2,13 @@
 
 ## Status
 
-**Current status (2026-08-29): renderer-independent editor baseline, the
+**Current status (2026-10-10): RmlUi workspace, renderer-independent editor baseline, the
 `renderMode`/`shadingModel`/`cullMode` MI editing path, renderer-owned numeric
 live preview, and renderer-owned render-state live replacement are connected.
 Texture live preview is not connected yet.**
 
 This document is the formal contract for the Material Instance Asset Editor
-in VulkanLearn's Dear ImGui developer layer. It migrates the stable P0
+in VulkanLearn's RmlUi editor layer. It migrates the stable P0
 boundaries from
 `documents/plan/rendering/material-instance-imgui-editor-plan.md`; the plan
 remains the execution record and should not be used as a second runtime
@@ -30,7 +30,7 @@ The following implementation pieces are now present:
   construction, BLAKE3 conflict detection, and atomic save;
 - `source/editor/runtime/materialInstanceEditorRuntime.*` and
   `source/editor/ui/materialInstanceAssetEditorPanel.*` provide the current
-  game-thread facade and ImGui panel, including parameter, texture, and
+  game-thread facade and RmlUi panel, including parameter, texture, and
   supported render-state controls, wired into `UiSubsystem` initialization,
   ticking, snapshot publication, and `Ctrl+S`;
 - `source/editor/preview/` contains the value-semantic preview types,
@@ -39,7 +39,8 @@ The following implementation pieces are now present:
 - `tool/material-instance-editor-tests/` contains fixture contract tests and
   direct landed-interface tests, and is registered by the root CMake test graph.
 
-The current runtime facade routes the document/list/select/read/edit/reset/
+The current runtime facade routes the document/list/select/read/edit
+(parameters, textures, and render-state Set/Clear)/reset/
 revert/reload/validate/save commands and the numeric
 `material.preview.connect`/`apply`/`restore_baseline` path. `EngineLoop` injects
 the renderer-owned preview adapter, which captures the active World-local MI
@@ -53,16 +54,18 @@ routes remain integration gaps.
 
 When an active World and an open MI document are available, the runtime queues
 the same preview connection automatically, and reconnects after an MI or World
-switch. The ImGui panel therefore does not require a separate `Connect Preview`
+switch. The RmlUi panel therefore does not require a separate `Connect Preview`
 action; the explicit command remains available for protocol clients and tests.
 
-The renderer-independent document service and ImGui command producer already
-define typed `renderMode`, `shadingModel`, and `cullMode` edits. Direct
-runtime-facade routing for those Set/Clear commands must remain an explicit
-integration check; a test must not treat an unsupported facade command as a
-successful owner/session preview. The current focused production test uses
-the supported batch service route to create the draft, then exercises the
-public preview adapter boundary.
+The renderer-independent document service and RmlUi command producer already
+define typed `renderMode`, `shadingModel`, and `cullMode` edits. The runtime
+facade routes `material.set_render_state` and `material.clear_render_state`
+directly to the same document-service methods that `editor.execute_batch` calls
+per item, so a direct submission and a one-item batch produce the same draft,
+revision bump, and automatic preview refresh. The focused production
+`DirectRenderStateRouting` test pins that direct route, while
+`RenderStatePreviewBoundary` keeps creating its draft through the batch route
+and then exercises the public preview adapter boundary.
 
 The focused production runtime test drives the same public adapter seam with
 each of `renderMode`, `shadingModel`, and `cullMode`. It verifies that the
@@ -87,7 +90,7 @@ P0 supports:
 - sparse JSON generation, source-digest conflict detection, and atomic replace;
 - an optional typed preview bridge to a same-path live `MaterialInstance`;
 - automatic preview connection for the active MI document when a World is ready;
-- one versioned command and result protocol shared by ImGui, Console, AI, and
+- one versioned command and result protocol shared by RmlUi, Console, AI, and
   runtime tests.
 
 P0 does not edit texture import settings, raw image paths, material macros,
@@ -103,12 +106,12 @@ Gates** below.
 
 ## UI Boundary
 
-The editor is part of the optional Dear ImGui developer layer described by
+The editor is part of the runtime-toggleable RmlUi workspace described by
 `documents/architecture/game-ui-stack.md`. It must follow the same ownership
 rules:
 
 ```text
-ImGui / Console / AI / Runtime Test
+RmlUi / Console / AI / Runtime Test
     -> EditorCommandEnvelope
     -> EditorCommandBus
     -> MaterialInstanceEditorRuntime (game-thread drain)
@@ -117,7 +120,7 @@ ImGui / Console / AI / Runtime Test
     -> optional Preview adapter
 ```
 
-ImGui callbacks are producers only. They may keep presentation state such as
+RmlUi callbacks are producers only. They may keep presentation state such as
 search text, folded sections, hover state, and window layout, but they may not
 modify an asset document, call a live `MaterialInstance`, write a file, or
 touch Vulkan objects. The panel currently submits through the runtime facade;
@@ -135,6 +138,20 @@ The panel should expose three conceptual areas:
   preview connection, and the last structured result.
 
 ## Command Contract
+
+The current RML adapter is `ui/editor-workspace.rml` plus
+`source/editor/ui/materialInstanceAssetEditorPanel.*`. It consumes the
+UI-library-independent types in `materialInstanceEditorView.h`.
+Same-frame changes coalesce into one ordered `ExecuteEditorCommandBatch` with
+the revision at authoring time; save and validate include pending edits.
+Dirty close offers Save/Discard/Cancel and waits for an authoritative clean
+snapshot before closing. Failed saves keep the document and dialog open.
+Numeric Color controls edit Linear RGBA directly. Color parameters also show a
+read-only sRGB preview swatch and `#RRGGBBAA` readout, restored from the Dear
+ImGui panel; the value fields themselves still edit linear components, and no
+colour picker exists yet.
+The protocol producer token is now `rmlui` (version 1 audit metadata);
+the removed producer token is not accepted as an alias.
 
 ### Envelope
 
@@ -297,9 +314,9 @@ scene*.json object
 
 The document service can produce a normalized breadcrumb for
 `material.resolve_scene_reference`, containing the scene, object identity/type,
-mesh or terrain asset, section/slot selector, and MI path. The current runtime
-facade has not routed that command yet, so Scene Outliner reveal remains an
-integration gate. `material.open` accepts an optional navigation origin; origins
+mesh or terrain asset, section/slot selector, and MI path. The runtime facade
+routes that command; a Scene Outliner reveal built on its result is a separate
+UI integration gate. `material.open` accepts an optional navigation origin; origins
 are diagnostic context and do not participate in document identity. An MI
 opened from the browser remains usable when no current World references it.
 
@@ -520,7 +537,7 @@ preview work before live resources are destroyed.
 
 ## Threading And Ownership
 
-The game thread owns the ImGui context, command execution boundary, asset
+The game thread owns the RmlUi context, command execution boundary, asset
 documents, validation, and preview request preparation. The current document
 service runs synchronously at that boundary; no editor worker owns live state.
 Future compile/IO workers may parse and prepare immutable data but may not touch
@@ -529,14 +546,19 @@ document ownership. Only the stable EngineLoop frame boundary may commit a
 prepared preview swap.
 
 The render thread consumes immutable UI/render snapshots and never traverses a
-live ImGui context or asset document. This extends the existing two-layer UI
+live RmlUi context or asset document. This extends the existing runtime/editor UI
 contract rather than creating a third UI-to-renderer path.
 
 ## Verification Contract
 
+`tool/editor-ui-tests/` adds a root-registered `editor_ui_tests` target for
+real RML parsing, command production, focused input preservation, typed runtime
+actions, and dirty close behavior. Run `ctest --test-dir build -R "^EditorUiTest\\." --output-on-failure`.
+This CPU suite does not establish GPU preview replacement or interactive IME correctness.
+
 The focused suite is `tool/material-instance-editor-tests/`. The root CMake
-registers it when `VULKANLEARN_BUILD_TESTS=ON`, and the directory can also be
-configured independently. Its three targets exercise:
+registers it through `vulkanlearn_add_gtest` when `VULKANLEARN_BUILD_TESTS=ON`.
+Configure and run it through the repository root. Its three targets exercise:
 
 - `material_instance_editor_tests`: fixture contract harness for wire/schema,
   navigation, document-session, sparse-save, conflict, and preview-result
@@ -589,30 +611,26 @@ The production and landed focused tests were executed with the repository's
 MinGW toolchain on 2026-08-29 and passed, including the three render-state
 preview draft cases. Single-thread and double-thread application
 frame smoke also passed on 2026-08-27 with workerThreadCount=1 and workerThreadCount=2,
-both with developer UI disabled and enabled. Manual interactive ImGui acceptance was not performed.
+both with developer UI disabled and enabled. These pre-migration checks are
+historical backend evidence, not acceptance of the current RmlUi frontend.
 
 From the repository root, the registered targets can be built and run with:
 
 ```powershell
 cmake --build build -j2 --target material_instance_editor_tests material_instance_editor_landed_tests material_instance_editor_production_tests
-ctest --test-dir build -R "^material_instance_editor_(contract|landed|production)$" --output-on-failure
+ctest --test-dir build -R "^MaterialInstanceEditor(Landed|Production)?\\." --output-on-failure
 ```
 
-The directory can also be configured independently with:
-
-```powershell
-cmake -S tool/material-instance-editor-tests -B build/material-instance-editor-tests -G "MinGW Makefiles" -DCMAKE_C_COMPILER=C:/Software/mingw64/bin/gcc.exe -DCMAKE_CXX_COMPILER=C:/Software/mingw64/bin/g++.exe
-cmake --build build/material-instance-editor-tests -j
-ctest --test-dir build/material-instance-editor-tests --output-on-failure
-```
+Use the root test graph: these targets require its `vulkanlearn_add_gtest` helper.
 
 ## Integration Gates
 
 The following are the remaining handoff items for the production integration:
 
-1. Wire the existing scene-reference resolver, batch service, and direct
-   render-state Set/Clear methods through `MaterialInstanceEditorRuntime`, and
-   decide the host behavior for `texture.open` and `editor.list_events`.
+1. Decide the host behavior for `texture.open` and `editor.list_events`. The
+   scene-reference resolver, the batch service route, and the direct
+   render-state Set/Clear routes are wired through
+   `MaterialInstanceEditorRuntime` and covered by the focused tests.
 2. Renderer-owned render-state live preview is implemented. The stable-frame
    owner path transactionally rebuilds the affected shader variant,
    pass/material selection, descriptor layout, graphics pipeline, object
@@ -625,7 +643,7 @@ The following are the remaining handoff items for the production integration:
    affected descriptor packages transactionally, perform a no-throw swap, and
    retire replaced resources by GPU epoch. It must not use a global
    `device.waitIdle()`. The numeric live-preview path is already connected.
-4. Complete manual ImGui verification. The focused production and landed
+4. Complete interactive RmlUi verification. The focused production and landed
    black-box tests, baseline regression, public fake-adapter runtime checks,
    protocol-boundary checks, and application frame smoke are already present;
    focused tests must remain serial because they share fixtures and generated state.

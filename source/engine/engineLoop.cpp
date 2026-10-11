@@ -284,6 +284,9 @@ RuntimeResult<void> EngineLoop::InitializeRuntimeSystems(
         UiSubsystemDesc uiDesc;
         uiDesc.viewportWidth = static_cast<uint32_t>(GetRuntimeConfig().GetWindowSize().x());
         uiDesc.viewportHeight = static_cast<uint32_t>(GetRuntimeConfig().GetWindowSize().y());
+        const vk::Format uiFormat = rendererBackend->GetSwapchainImageFormat();
+        uiDesc.srgbFramebuffer = uiFormat == vk::Format::eB8G8R8A8Srgb ||
+            uiFormat == vk::Format::eR8G8B8A8Srgb;
         uiDesc.assetRoot = GetRuntimeConfig().ResolvePath(uiSettings.assetRoot);
         uiDesc.documentPath = GetRuntimeConfig().ResolvePath(
             (std::filesystem::path(uiSettings.assetRoot) / uiSettings.document).generic_string());
@@ -561,6 +564,7 @@ void EngineLoop::Tick()
         uiSubsystem->TickMaterialInstanceEditor();
     }
     UpdateUiViewModel(deltaTime, commandResult);
+    SynchronizeSceneViewport();
 
     {
         PROFILE_SCOPE("RenderLoop");
@@ -751,7 +755,7 @@ void EngineLoop::ApplyQueuedUiActions()
         GetSubsystems().GetCommandBus().Queue(std::move(command));
     }
 
-    // ImGui 场景列表只提交值语义 selection 请求；在这里统一落到 renderer，
+    // RmlUi 场景列表只提交值语义 selection 请求；在这里统一落到 renderer，
     // 确保选择描边与常规视口拾取走同一个稳定帧边界。
     if (uiSubsystem != nullptr)
     {
@@ -782,14 +786,32 @@ void EngineLoop::UpdateUiInputPolicy()
     {
         inputSubsystem.SetGameKeyboardEnabled(true);
         inputSubsystem.SetGamePointerEnabled(true);
+        window->ClearMouseConstraint();
         inputSubsystem.SetRelativeMouseModeAllowed(true);
         return;
     }
 
+    const bool relativeAllowed = uiSubsystem->ShouldUseRelativeMouseModeForGame();
+    const bool constrainToViewport =
+        inputSubsystem.IsRelativeMouseModeRequested() &&
+        uiSubsystem->IsDeveloperUiVisible() &&
+        relativeAllowed;
+    if (constrainToViewport)
+    {
+        const UiViewportRect& viewport = uiSubsystem->GetSceneViewportRect();
+        window->SetMouseConstraint(
+            static_cast<int>(viewport.x),
+            static_cast<int>(viewport.y),
+            static_cast<int>(viewport.width),
+            static_cast<int>(viewport.height));
+    }
+    else
+    {
+        window->ClearMouseConstraint();
+    }
     inputSubsystem.SetGameKeyboardEnabled(uiSubsystem->ShouldGameReceiveKeyboard());
     inputSubsystem.SetGamePointerEnabled(uiSubsystem->ShouldGameReceivePointer());
-    inputSubsystem.SetRelativeMouseModeAllowed(
-        uiSubsystem->ShouldUseRelativeMouseModeForGame());
+    inputSubsystem.SetRelativeMouseModeAllowed(relativeAllowed);
 }
 
 void EngineLoop::UpdateUiViewModel(
@@ -884,6 +906,22 @@ void EngineLoop::UpdateUiViewModel(
     uiSubsystem->Update(snapshot);
 }
 
+void EngineLoop::SynchronizeSceneViewport()
+{
+    if (uiSubsystem == nullptr) return;
+    const auto& rect = uiSubsystem->GetSceneViewportRect();
+    const auto aspect = ViewportAspect(rect);
+    auto& renderSystem = RenderSystem::GetInstance();
+    renderSystem.SetSceneViewport(rect, uiSubsystem->IsSceneViewportEnabled());
+    const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
+    if (aspect && world && world->GetCamera())
+    {
+        // 在 World snapshot 冻结前更新投影；渲染、阴影视锥、离线相机与拾取共享同一相机。
+        auto& camera = *world->GetCamera();
+        camera.SetProjection(camera.GetHFOV(), *aspect, camera.GetClipNear(), camera.GetClipFar());
+    }
+}
+
 void EngineLoop::PumpPlatformEvents()
 {
     PROFILE_SCOPE("Events");
@@ -932,12 +970,14 @@ void EngineLoop::PumpPlatformEvents()
                     uiSubsystem->GetViewportHeight());
             if (pickRequest.has_value())
             {
+                const auto point = uiSubsystem->GetSceneViewportPoint(pickRequest->mouseX, pickRequest->mouseY);
+                if (!point) continue;
                 const std::optional<Editor::Selection::MaterialInstanceSelection>
                     selection = RenderSystem::GetInstance().PickMaterialInstanceAt(
-                        pickRequest->mouseX,
-                        pickRequest->mouseY,
-                        pickRequest->viewportWidth,
-                        pickRequest->viewportHeight);
+                        point->x,
+                        point->y,
+                        point->renderWidth,
+                        point->renderHeight);
                 if (selection.has_value())
                 {
                     // 高亮是视口选择反馈，不依赖 MI 面板是否成功打开；

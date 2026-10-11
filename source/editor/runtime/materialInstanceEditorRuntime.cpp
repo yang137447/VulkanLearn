@@ -6,6 +6,7 @@
 #include <array>
 #include <exception>
 #include <fstream>
+#include <limits>
 #include <type_traits>
 #include <utility>
 
@@ -58,8 +59,8 @@ Preview::PreviewCommandSource ToPreviewCommandSource(
 {
     switch (source)
     {
-    case EditorCommandSource::ImGui:
-        return Preview::PreviewCommandSource::ImGui;
+    case EditorCommandSource::RmlUi:
+        return Preview::PreviewCommandSource::RmlUi;
     case EditorCommandSource::Console:
         return Preview::PreviewCommandSource::Console;
     case EditorCommandSource::AI:
@@ -180,9 +181,11 @@ RuntimeResult<void> MaterialInstanceEditorRuntime::Initialize(Config configValue
 
         // 初始资产列表也走同一条命令链，避免初始化阶段产生旁路 service 调用。
         EditorCommandEnvelope listCommand;
-        listCommand.source = EditorCommandSource::ImGui;
+        listCommand.source = EditorCommandSource::RmlUi;
         listCommand.type = EditorCommandType::ListMaterialInstanceAssets;
-        listCommand.payload = ListMaterialInstanceAssetsPayload{};
+        // 浏览器在只读快照上本地筛选，初始目录不能被命令协议的默认分页截断。
+        listCommand.payload = ListMaterialInstanceAssetsPayload{
+            {}, 0, std::numeric_limits<uint32_t>::max()};
         SubmitInternal(std::move(listCommand));
         Tick();
 
@@ -353,7 +356,7 @@ bool MaterialInstanceEditorRuntime::SubmitSaveActiveDocument()
     }
 
     EditorCommandEnvelope command;
-    command.source = EditorCommandSource::ImGui;
+    command.source = EditorCommandSource::RmlUi;
     command.type = EditorCommandType::SaveMaterialInstanceDocument;
     command.expectedDocumentRevision = snapshot.activeDocument->revision;
     command.payload = MaterialInstanceAssetPathPayload{
@@ -543,6 +546,30 @@ EditorCommandResult MaterialInstanceEditorRuntime::ExecuteCommand(
                 payload.assetPath,
                 payload.slot));
     }
+    case EditorCommandType::SetMaterialRenderStateOverride:
+    {
+        // 直接提交必须和 ExecuteEditorCommandBatch 落到同一 service 实现：batch 只在
+        // 隔离草稿上循环调用这些方法，facade 不再复制一份逻辑，否则 JSON codec /
+        // Console / AI 客户端单独发这条命令只会拿到 InvalidCommandType。
+        const auto& payload = std::get<SetMaterialRenderStateOverridePayload>(
+            command.payload);
+        return FinishServiceResult(
+            command,
+            service->SetMaterialRenderStateOverride(
+                payload.assetPath,
+                payload.field,
+                payload.value));
+    }
+    case EditorCommandType::ClearMaterialRenderStateOverride:
+    {
+        const auto& payload = std::get<ClearMaterialRenderStateOverridePayload>(
+            command.payload);
+        return FinishServiceResult(
+            command,
+            service->ClearMaterialRenderStateOverride(
+                payload.assetPath,
+                payload.field));
+    }
     case EditorCommandType::ResetMaterialInstanceOverrides:
     {
         const auto& payload = std::get<ResetMaterialInstanceOverridesPayload>(
@@ -671,9 +698,14 @@ EditorCommandResult MaterialInstanceEditorRuntime::FinishServiceResult(
         QueueAutomaticPreviewConnection();
     }
 
+    // render state 与数值参数一样属于 draft 编辑：直接提交时也要刷新 live preview，
+    // 否则 batch 路径会刷新而直接路径不会，两条路径的可见结果就不一致。
     if (serviceResult.succeeded && serviceResult.document.has_value() &&
         (command.type == EditorCommandType::SetMaterialParameterOverride ||
-         command.type == EditorCommandType::ClearMaterialParameterOverride))
+         command.type == EditorCommandType::ClearMaterialParameterOverride ||
+         command.type == EditorCommandType::SetMaterialRenderStateOverride ||
+         command.type == EditorCommandType::ClearMaterialRenderStateOverride ||
+         command.type == EditorCommandType::ExecuteEditorCommandBatch))
     {
         QueueAutomaticPreviewApply(serviceResult.document->assetPath);
     }
@@ -1162,7 +1194,7 @@ void MaterialInstanceEditorRuntime::SubmitQueuedAutomaticPreviewDisconnect()
         queuedAutomaticPreviewDisconnectAssetPath.value();
     queuedAutomaticPreviewDisconnectAssetPath.reset();
     EditorCommandEnvelope command;
-    command.source = EditorCommandSource::ImGui;
+    command.source = EditorCommandSource::RmlUi;
     command.type = EditorCommandType::DisconnectMaterialInstancePreview;
     command.payload = MaterialInstanceAssetPathPayload{assetPath};
     SubmitAutomaticPreviewCommand(std::move(command));
@@ -1199,7 +1231,7 @@ void MaterialInstanceEditorRuntime::SubmitQueuedAutomaticPreviewConnection()
 
     queuedAutomaticPreviewConnectionAssetPath.reset();
     EditorCommandEnvelope command;
-    command.source = EditorCommandSource::ImGui;
+    command.source = EditorCommandSource::RmlUi;
     command.type = EditorCommandType::ConnectMaterialInstancePreview;
     command.expectedDocumentRevision = snapshot.activeDocument->revision;
     command.payload = MaterialInstanceAssetPathPayload{
@@ -1254,7 +1286,7 @@ void MaterialInstanceEditorRuntime::SubmitQueuedAutomaticPreviewApply()
 
     queuedAutomaticPreviewApplyAssetPath.reset();
     EditorCommandEnvelope command;
-    command.source = EditorCommandSource::ImGui;
+    command.source = EditorCommandSource::RmlUi;
     command.type = EditorCommandType::ApplyMaterialInstancePreview;
     command.expectedDocumentRevision = document.revision;
     command.payload = ApplyMaterialInstancePreviewPayload{

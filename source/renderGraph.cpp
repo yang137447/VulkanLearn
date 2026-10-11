@@ -8,6 +8,7 @@
 #include "render/backend/rendererBackendVulkan.h"
 #include "render/backend/rendererDescriptorWriter.h"
 #include "render/rendergraph/renderGraphCompiler.h"
+#include "render/rendergraph/sceneViewportOutputValidation.h"
 #include "render/resource/resourceRetireQueue.h"
 #include "render/resource/rendererResourceCache.h"
 #include "texture.h"
@@ -15,6 +16,7 @@
 #include <memory>
 #include <stdint.h>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 #include <unordered_set>
 #include "profiler.h"
@@ -37,6 +39,9 @@ vk::ImageView RenderResource::GetFramebufferAttachmentView(uint32_t layer) const
 
 namespace
 {
+
+static_assert(std::is_nothrow_move_assignable_v<Renderpass>);
+static_assert(std::is_nothrow_move_constructible_v<RenderResource>);
 
 void AddDescriptorPoolBinding(
     std::vector<vk::DescriptorPoolSize>& descriptorPoolSizes,
@@ -188,6 +193,10 @@ struct RetiredRenderGraphPassResource
     vk::DescriptorPool descriptorPool;
     VL::RHIRenderPassHandle renderPassHandle;
     vk::RenderPass renderPass;
+    std::vector<VL::RHIFramebufferHandle> sceneViewportFramebufferHandles;
+    std::vector<vk::Framebuffer> sceneViewportFramebuffers;
+    VL::RHIRenderPassHandle sceneViewportRenderPassHandle;
+    vk::RenderPass sceneViewportRenderPass;
 
     ~RetiredRenderGraphPassResource()
     {
@@ -204,6 +213,15 @@ struct RetiredRenderGraphPassResource
         else
         {
             rendererBackend->DestroyFramebuffers(framebuffers);
+        }
+        if (!sceneViewportFramebufferHandles.empty())
+        {
+            rendererBackend->DestroyFramebuffers(sceneViewportFramebufferHandles);
+            sceneViewportFramebuffers.clear();
+        }
+        else
+        {
+            rendererBackend->DestroyFramebuffers(sceneViewportFramebuffers);
         }
 
         if (descriptorSetLayoutHandle.IsValid())
@@ -245,12 +263,25 @@ struct RetiredRenderGraphPassResource
         {
             rendererBackend->DestroyRenderPass(renderPass);
         }
+        if (sceneViewportRenderPassHandle.IsValid())
+        {
+            rendererBackend->DestroyRenderPass(sceneViewportRenderPassHandle);
+            sceneViewportRenderPass = nullptr;
+        }
+        else
+        {
+            rendererBackend->DestroyRenderPass(sceneViewportRenderPass);
+        }
     }
 };
 
 bool HasRenderpassHandles(const Renderpass& renderpass)
 {
     return renderpass.renderPassHandle.IsValid() ||
+        renderpass.sceneViewportRenderPassHandle.IsValid() ||
+        !renderpass.sceneViewportFramebufferHandles.empty() ||
+        !renderpass.sceneViewportFramebuffers.empty() ||
+        renderpass.sceneViewportRenderPass ||
         !renderpass.framebufferHandles.empty() ||
         renderpass.descriptorSetLayoutHandle.IsValid() ||
         renderpass.emptyDescriptorSetLayoutHandle.IsValid() ||
@@ -268,6 +299,10 @@ void ClearRenderpassResourceFields(Renderpass& renderpass)
     renderpass.renderPass = nullptr;
     renderpass.framebufferHandles.clear();
     renderpass.framebuffers.clear();
+    renderpass.sceneViewportRenderPassHandle = VL::RHIRenderPassHandle();
+    renderpass.sceneViewportRenderPass = nullptr;
+    renderpass.sceneViewportFramebufferHandles.clear();
+    renderpass.sceneViewportFramebuffers.clear();
     renderpass.descriptorSetLayoutHandle = VL::RHIDescriptorSetLayoutHandle();
     renderpass.descriptorSetLayout = nullptr;
     renderpass.emptyDescriptorSetLayoutHandle = VL::RHIDescriptorSetLayoutHandle();
@@ -297,6 +332,12 @@ std::shared_ptr<RetiredRenderGraphPassResource> TakeRenderpassResource(
     retiredPass->descriptorPool = renderpass.descriptorPool;
     retiredPass->renderPassHandle = renderpass.renderPassHandle;
     retiredPass->renderPass = renderpass.renderPass;
+    retiredPass->sceneViewportFramebufferHandles =
+        std::move(renderpass.sceneViewportFramebufferHandles);
+    retiredPass->sceneViewportFramebuffers =
+        std::move(renderpass.sceneViewportFramebuffers);
+    retiredPass->sceneViewportRenderPassHandle = renderpass.sceneViewportRenderPassHandle;
+    retiredPass->sceneViewportRenderPass = renderpass.sceneViewportRenderPass;
 
     ClearRenderpassResourceFields(renderpass);
     return retiredPass;
@@ -615,6 +656,7 @@ void RenderGraph::SwapState(RenderGraph& other) noexcept
 {
     resourcesMsaa.swap(other.resourcesMsaa);
     resourcesResolve.swap(other.resourcesResolve);
+    sceneViewportOutputs.swap(other.sceneViewportOutputs);
     renderpassesOrdered.swap(other.renderpassesOrdered);
     renderpasses.swap(other.renderpasses);
     canonicalShadowPassName.swap(other.canonicalShadowPassName);
@@ -636,6 +678,7 @@ bool RenderGraph::HasState() const noexcept
 {
     return !resourcesMsaa.empty() ||
         !resourcesResolve.empty() ||
+        !sceneViewportOutputs.empty() ||
         !renderpasses.empty() ||
         !renderpassesOrdered.empty();
 }
@@ -673,9 +716,16 @@ void RenderGraph::Shutdown(
             DestroyRenderResource(resource, rendererBackend, releaseMode);
         }
     }
+    // framebuffer 先退休/释放，再处理它引用的 Viewport 图像；候选失败走
+    // Immediate，已提交的旧 graph 走同一 GPU epoch 退休路径。
+    for (RenderResource& resource : sceneViewportOutputs)
+    {
+        DestroyRenderResource(resource, rendererBackend, releaseMode);
+    }
 
     resourcesMsaa.clear();
     resourcesResolve.clear();
+    sceneViewportOutputs.clear();
     renderpasses.clear();
     renderpassesOrdered.clear();
     canonicalShadowPassName.clear();
@@ -745,18 +795,16 @@ void RenderGraph::LoadRenderGraph(
                     std::move(resourceResolve));
             }
         }
+        CreateSceneViewportOutputs(rendererBackend);
         for (const VL::CompiledRenderGraphPass& passDesc :
              compiledFrameGraph.passes)
         {
             std::string passName = passDesc.name;
             renderpassesOrdered.push_back(passName);
-            Renderpass renderpass =
-                CreateRenderpass(
-                    passDesc,
-                    rendererBackend);
-            renderpasses.emplace(
-                passName,
-                std::move(renderpass));
+            // map 分配先于 GPU 创建；否则 emplace 分配失败会遗失局部 pass
+            // 的裸 Vulkan 所有权。创建成功后仅以 noexcept move 接收状态。
+            Renderpass& renderpass = renderpasses.try_emplace(passName).first->second;
+            renderpass = CreateRenderpass(passDesc, rendererBackend);
         }
         ValidateAndResolveCanonicalShadowPass();
     }
@@ -766,6 +814,31 @@ void RenderGraph::LoadRenderGraph(
             rendererBackend,
             VL::RenderGraphReleaseMode::Immediate);
         throw;
+    }
+}
+
+const RenderResource* RenderGraph::GetSceneViewportOutput(uint32_t imageIndex) const noexcept
+{
+    return imageIndex < sceneViewportOutputs.size()
+        ? &sceneViewportOutputs[imageIndex] : nullptr;
+}
+
+void RenderGraph::CreateSceneViewportOutputs(VL::RendererBackendVulkan& rendererBackend)
+{
+    if (!VL::ValidateSceneViewportOutputs(compiledFrameGraph)) return;
+
+    // backing extent 与 swapchain 一致，UI 使用完整 UV 而非拷贝/裁剪屏幕。
+    // 非 JSON 资源名只用于调试；格式必须来自实际 swapchain，不能假定 RGBA。
+    VL::CompiledRenderGraphResource description;
+    description.name = "sceneViewportOutput";
+    description.usage = {"colorAttachment", "sampled"};
+    const uint32_t imageCount = rendererBackend.GetSwapchainImageCount();
+    sceneViewportOutputs.reserve(imageCount);
+    for (uint32_t imageIndex = 0; imageIndex < imageCount; ++imageIndex)
+    {
+        description.name = "sceneViewportOutput_" + std::to_string(imageIndex);
+        sceneViewportOutputs.push_back(CreateRenderResource(
+            description, rendererBackend, false, rendererBackend.GetSwapchainImageFormat()));
     }
 }
 
@@ -1009,7 +1082,8 @@ void RenderGraph::RestorePassMaterialInstances(
 RenderResource RenderGraph::CreateRenderResource(
     const VL::CompiledRenderGraphResource& resourceDesc,
     VL::RendererBackendVulkan& rendererBackend,
-    bool bIsMsaaSource)
+    bool bIsMsaaSource,
+    vk::Format formatOverride)
 {
     MaybeFailResourceCreation();
     RenderResource resource;
@@ -1019,8 +1093,8 @@ RenderResource RenderGraph::CreateRenderResource(
         resource.type = resourceDesc.type;
         resource.arrayLayers =
             resourceDesc.arrayLayers;
-        resource.format =
-            GetFormat(resourceDesc.format);
+        resource.format = formatOverride == vk::Format::eUndefined
+            ? GetFormat(resourceDesc.format) : formatOverride;
 
         bool bIsDepthFormat =
             CommonFunction::IsDepthFormat(
@@ -1250,6 +1324,13 @@ Renderpass RenderGraph::CreateRenderpass(
                 renderpass.shadowCascadeIndex = output.layer;
             }
         }
+        // 当前游戏图没有 swapChain 的 MSAA 源附件，不能把单采样 Viewport
+        // 误绑为多采样附件。保持现有支持边界，并在任何 Vulkan 创建前报错。
+        if (passDesc.outputsSwapchain && bUseMsaa)
+        {
+            throw std::runtime_error(
+                "Swapchain-output passes require single-sample attachments: " + renderpass.name);
+        }
 
         MaybeFailRenderPassCreation();
         renderpass.renderPass =
@@ -1261,7 +1342,7 @@ Renderpass RenderGraph::CreateRenderpass(
             rendererBackend.GetRenderPassHandle(
                 renderpass.renderPass);
 
-        if (renderpass.outputResources[0] == "swapChain")
+        if (passDesc.outputsSwapchain)
         {
             const auto extent =
                 rendererBackend.GetSwapchainExtent();
@@ -1309,6 +1390,23 @@ Renderpass RenderGraph::CreateRenderpass(
         }
         renderpass.framebufferHandles =
             std::move(framebufferHandles);
+        if (passDesc.outputsSwapchain)
+        {
+            MaybeFailRenderPassCreation();
+            renderpass.sceneViewportRenderPass =
+                CreateVkRenderPass(renderpass, rendererBackend, bUseMsaa, true);
+            renderpass.sceneViewportRenderPassHandle =
+                rendererBackend.GetRenderPassHandle(renderpass.sceneViewportRenderPass);
+            renderpass.sceneViewportFramebuffers = CreateVkFrameBuffers(
+                renderpass, renderpass.outputResources, rendererBackend, bUseMsaa, true);
+            std::vector<VL::RHIFramebufferHandle> viewportHandles;
+            viewportHandles.reserve(renderpass.sceneViewportFramebuffers.size());
+            for (vk::Framebuffer framebuffer : renderpass.sceneViewportFramebuffers)
+            {
+                viewportHandles.push_back(rendererBackend.GetFramebufferHandle(framebuffer));
+            }
+            renderpass.sceneViewportFramebufferHandles = std::move(viewportHandles);
+        }
         return renderpass;
     }
     catch (...)
@@ -1355,6 +1453,15 @@ void RenderGraph::DestroyRenderpass(
     {
         rendererBackend.DestroyFramebuffers(renderpass.framebuffers);
     }
+    if (!renderpass.sceneViewportFramebufferHandles.empty())
+    {
+        rendererBackend.DestroyFramebuffers(renderpass.sceneViewportFramebufferHandles);
+        renderpass.sceneViewportFramebuffers.clear();
+    }
+    else
+    {
+        rendererBackend.DestroyFramebuffers(renderpass.sceneViewportFramebuffers);
+    }
 
     if (renderpass.descriptorSetLayoutHandle.IsValid())
     {
@@ -1395,6 +1502,15 @@ void RenderGraph::DestroyRenderpass(
     {
         rendererBackend.DestroyRenderPass(renderpass.renderPass);
     }
+    if (renderpass.sceneViewportRenderPassHandle.IsValid())
+    {
+        rendererBackend.DestroyRenderPass(renderpass.sceneViewportRenderPassHandle);
+        renderpass.sceneViewportRenderPass = nullptr;
+    }
+    else
+    {
+        rendererBackend.DestroyRenderPass(renderpass.sceneViewportRenderPass);
+    }
 
     renderpass.descriptorSetHandles.clear();
     renderpass.descriptorSets.clear();
@@ -1404,7 +1520,8 @@ void RenderGraph::DestroyRenderpass(
 vk::RenderPass RenderGraph::CreateVkRenderPass(
     Renderpass& renderpass,
     VL::RendererBackendVulkan& rendererBackend,
-    bool bUseMsaa)
+    bool bUseMsaa,
+    bool renderToViewport)
 {
     vk::SampleCountFlagBits sampleCount = bUseMsaa ? CommonFunction::GetMsaaSampleCount() : vk::SampleCountFlagBits::e1;
     const std::vector<std::string>& outputResources = renderpass.outputResources;
@@ -1434,7 +1551,7 @@ vk::RenderPass RenderGraph::CreateVkRenderPass(
 
         vk::AttachmentDescription2 colorAttachmentDescription;
         vk::Format format = vk::Format::eUndefined;
-        if (resourceName == "swapChain") 
+        if (resourceName == "swapChain")
         {
             format = rendererBackend.GetSwapchainImageFormat();
         }
@@ -1455,7 +1572,7 @@ vk::RenderPass RenderGraph::CreateVkRenderPass(
             .setInitialLayout(loadOp == vk::AttachmentLoadOp::eLoad ? vk::ImageLayout::eColorAttachmentOptimal : vk::ImageLayout::eUndefined)
             .setFinalLayout(vk::ImageLayout::eColorAttachmentOptimal);
 
-        if (resourceName == "swapChain")
+        if (resourceName == "swapChain" && !renderToViewport)
         {
             colorAttachmentDescription.setFinalLayout(vk::ImageLayout::ePresentSrcKHR);
         }
@@ -1494,7 +1611,7 @@ vk::RenderPass RenderGraph::CreateVkRenderPass(
                 .setInitialLayout(vk::ImageLayout::eUndefined)
                 .setFinalLayout(vk::ImageLayout::eColorAttachmentOptimal);
 
-            if (resourceName == "swapChain") 
+            if (resourceName == "swapChain" && !renderToViewport)
             {
                 resolveAttachmentDescription.setFinalLayout(vk::ImageLayout::ePresentSrcKHR);
             }
@@ -1609,11 +1726,31 @@ vk::RenderPass RenderGraph::CreateVkRenderPass(
         .setDstAccessMask(vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eDepthStencilAttachmentWrite)
         .setDependencyFlags(vk::DependencyFlagBits::eByRegion);
 
+    std::vector<vk::SubpassDependency2> dependencies{ subpassDependency };
+    if (renderpass.outputLoadOps.find("swapChain") != renderpass.outputLoadOps.end())
+    {
+        // 游戏/Viewport 使用相同依赖，不能因重定向改变 render-pass 兼容性。
+        // LOAD 保留前一 writer 内容；首个 LOAD 不能读取未初始化目标，跨帧
+        // ShaderRead -> ColorAttachment 的布局转换仍由 RT 调用方负责。
+        vk::SubpassDependency2 viewportDependency;
+        viewportDependency
+            .setSrcSubpass(VK_SUBPASS_EXTERNAL)
+            .setDstSubpass(0)
+            .setSrcStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput |
+                vk::PipelineStageFlagBits::eFragmentShader)
+            .setDstStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput)
+            .setSrcAccessMask(vk::AccessFlagBits::eColorAttachmentWrite |
+                vk::AccessFlagBits::eShaderRead)
+            .setDstAccessMask(vk::AccessFlagBits::eColorAttachmentRead |
+                vk::AccessFlagBits::eColorAttachmentWrite)
+            .setDependencyFlags(vk::DependencyFlagBits::eByRegion);
+        dependencies.push_back(viewportDependency);
+    }
     vk::RenderPassCreateInfo2 renderPassCreateInfo;
     renderPassCreateInfo
         .setAttachments(attachmentDescriptions)
         .setSubpasses(subpassDescription)
-        .setDependencies(subpassDependency);
+        .setDependencies(dependencies);
 
     // 构建 RenderPass 兼容性键，用于在 PipelineFactory 中跨兼容的 render pass 复用 graphics pipeline。
     // 仅记录 Vulkan render-pass 兼容性规则关心的字段（format / samples / attachment 索引），
@@ -1644,16 +1781,26 @@ vk::RenderPass RenderGraph::CreateVkRenderPass(
     {
         compatibilityKey.depthResolveAttachment = depthResolveAttachmentReference.attachment;
     }
-    renderpass.pipelineContractKey.renderPassCompatibilityKey = std::move(compatibilityKey);
+    if (!renderToViewport)
+    {
+        renderpass.pipelineContractKey.renderPassCompatibilityKey = std::move(compatibilityKey);
+    }
+    else if (!(renderpass.pipelineContractKey.renderPassCompatibilityKey == compatibilityKey))
+    {
+        throw std::runtime_error(
+            "Scene viewport render pass is not pipeline-compatible: " + renderpass.name);
+    }
 
-    return rendererBackend.CreateRenderPass(renderPassCreateInfo, renderpass.name);
+    return rendererBackend.CreateRenderPass(renderPassCreateInfo,
+        renderpass.name + (renderToViewport ? ":SceneViewport" : ""));
 }
 
 std::vector<vk::Framebuffer> RenderGraph::CreateVkFrameBuffers(
     const Renderpass& renderpass,
     const std::vector<std::string>& outputResources,
     VL::RendererBackendVulkan& rendererBackend,
-    bool bUseMsaa)
+    bool bUseMsaa,
+    bool renderToViewport)
 {
     uint32_t swapChainImageCount = rendererBackend.GetSwapchainImageCount();
     
@@ -1693,7 +1840,9 @@ std::vector<vk::Framebuffer> RenderGraph::CreateVkFrameBuffers(
             
             if (outputResource == "swapChain")
             {
-                attachments.push_back(rendererBackend.GetSwapchainImageViews()[i]);
+                attachments.push_back(renderToViewport
+                    ? sceneViewportOutputs.at(i).GetFramebufferAttachmentView()
+                    : rendererBackend.GetSwapchainImageViews()[i]);
             }
             else{
                 const uint32_t layer = renderpass.outputLayers.at(outputResource);
@@ -1728,7 +1877,8 @@ std::vector<vk::Framebuffer> RenderGraph::CreateVkFrameBuffers(
 
         vk::FramebufferCreateInfo framebufferCreateInfo;
         framebufferCreateInfo
-            .setRenderPass(renderpass.renderPass)
+            .setRenderPass(renderToViewport
+                ? renderpass.sceneViewportRenderPass : renderpass.renderPass)
             .setAttachments(attachments)
             .setWidth(renderpass.width)
             .setHeight(renderpass.height)
@@ -1739,6 +1889,7 @@ std::vector<vk::Framebuffer> RenderGraph::CreateVkFrameBuffers(
                     framebufferCreateInfo,
                     "Framebuffer: " +
                         renderpass.name +
+                        (renderToViewport ? ":SceneViewport" : "") +
                         " (SwapchainIndex " +
                         std::to_string(i) +
                         ")"));
