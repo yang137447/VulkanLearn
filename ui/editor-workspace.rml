@@ -271,7 +271,13 @@
                         </div>
                     </div>
                     <div id="resource-details-panel">
+                        <!-- 资产编辑器的右侧正文按资产类型二选一：只读 JSON 元数据（Mesh / Texture /
+                             Scene / Terrain），或可编辑的材质实例参数。两者互斥，由面板决定谁可见。
+                             这是 UE 的"资产编辑器标签栏统一、正文随类型分派"在单层面板里的落地。 -->
                         <div class="inspector-body">
+                            <div id="material-instance-editor-body">
+                                <div id="material-instance-editor-content" class="scroll-box"></div>
+                            </div>
                             <div id="resource-json-inspector">
                                 <div class="json-header">
                                     <h3 id="resource-json-title"></h3><span class="json-readonly">Read Only</span>

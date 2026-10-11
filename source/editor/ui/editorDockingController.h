@@ -25,6 +25,9 @@ struct EditorDockResourceTab
     std::string path;
     std::string label;
     std::string icon;
+    // 正文标识：谁渲染这个标签的内容，由宿主决定（当前是 resource-json / material-instance）。
+    // 停靠模型只原样带回，不解释它 —— 资产语义不进布局层。
+    std::string body;
 };
 
 bool ReadWorkspaceLayout(const std::filesystem::path& path,

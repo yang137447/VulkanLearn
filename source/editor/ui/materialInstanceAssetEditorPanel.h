@@ -108,6 +108,11 @@ private:
     std::string OutlinerMountedVisuals() const;
     std::string OutlinerRowsMarkup(const EditorSceneActorWindow& window) const;
     void RefreshDetails();
+    // 资产编辑器正文（材质实例文档）：与 actor 检视分开，正文标识为 material-instance 的标签才走它。
+    // showEditable 由调用方按**当前活动标签**解析，可见性必须跟着活动标签而不是"有没有文档"。
+    void RefreshMaterialInstanceEditor(bool showEditable);
+    // 资产编辑器的空状态：清掉两份正文与预览，避免关闭文档后残留上一个文档的参数。
+    void ShowEmptyAssetEditor();
     void RefreshControls();
     void RefreshActorValues(const EditorSceneActorSnapshot* actor);
     std::string ActorSectionMarkup(const EditorSceneActorSnapshot& actor);
@@ -224,6 +229,8 @@ private:
     std::string pendingAssetPath;
     uint64_t pendingRevision = 0;
     std::string detailsIdentity;
+    // 资产编辑器正文的已挂载文档身份（资产路径 | schema 摘要）：只有它变化才重建参数 DOM。
+    std::string materialInstanceEditorIdentity;
     std::string localStatus;
     std::string pendingClosePath;
     bool saveThenClose = false;

@@ -556,13 +556,20 @@ TEST_F(EditorUiTest, ContentDockLeavesAnIndependentSceneViewport)
         EXPECT_NEAR(origin.x + size.x + 6.0f, sidebar->GetAbsoluteOffset(Rml::BoxArea::Border).x, 1.0f);
         EXPECT_NEAR(origin.y + size.y, dimensions.y - 25.0f, 1.0f);
         EXPECT_GT(origin.y, 250.0f);
-        // 视口内部但避开左上角的工具条覆盖层：工具条属于编辑器，非场景命中。
-        const auto* sceneHit = context->GetElementAtPoint({50.0f, 200.0f});
-        EXPECT_TRUE(panel->IsSceneViewportElement(sceneHit));
+        // 打开材质实例后，资产编辑器标签成为前台：它和视口同属左列标签栈，因此视口让位。
+        // 这是 UE 的模型 —— 资产编辑器是一个标签，不是浮在视口上的面板，打开它就该看到它。
+        // 因此这里断言的不再是"能命中场景"（那要求视口在最前），而是"资产编辑器已经在最前"，
+        // 以及"视口确实被收起了"，两者互为因果，比单纯断言视口尺寸更能钉住行为。
+        const auto* assetEditorHit = context->GetElementAtPoint({50.0f, 200.0f});
+        ASSERT_NE(assetEditorHit, nullptr);
+        EXPECT_FALSE(panel->IsSceneViewportElement(assetEditorHit))
+            << "the open material instance editor should be frontmost, not the scene viewport";
+        EXPECT_TRUE(document->GetElementById("material-instance-editor-body")->IsVisible(true))
+            << "the asset editor body should be the visible one while its tab is active";
+        // 视口此时不在前台，尺寸收敛为 0 是正确结果而不是缺陷。
         const auto viewport = panel->GetSceneViewportRect();
-        EXPECT_GT(viewport.width, 0u);
-        EXPECT_GT(viewport.height, 0u);
-        EXPECT_GE(viewport.y, 73);
+        EXPECT_EQ(viewport.width, 0u);
+        EXPECT_EQ(viewport.height, 0u);
     }
 }
 
