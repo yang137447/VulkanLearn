@@ -101,6 +101,23 @@
 - 证据：该 segfault 由连跑发现，用 gdb 定位后修复，随后 12/12 与 30/30 连跑干净
 - owner / status / last_verified：仓库维护者 / 已确认 / 2026-10-11
 
+### [gtest-filter-blindspot] 名字不含关键字的测试会被过滤器静默跳过
+
+- 适用场景：用 `--gtest_filter` 或 `ctest -R` 按名字模式挑选测试
+- 失败表现：过滤器报"全部通过"，但**少跑了一个**；本分支实测两次：
+  (a) 一个右键菜单测试原名 `BrowserAssetRightClickOpensTheMenuAndItsOpenItemUsesTheExistingCommand`
+  不含 `ContextMenu`，`--gtest_filter="*ContextMenu*"` 报 12 个通过而实际有 13 个；
+  (b) 新增的 5 个网格几何测试住在 `editor_viewport_tests` 目标、套件名
+  `EditorViewportGridGeometry`，而编辑器 UI 的 ctest 选择集里没有这个前缀，
+  于是它**从未进入那条门禁** —— 该选择集报 302/302 时并不包含它们。
+- 根因：模式匹配是"包含"语义，不是"属于这个特性"；测试住在哪个目标与选择集写没写它
+  是两件独立的事
+- 规避动作：同一特性的测试**命名统一带同一个关键字**；新增测试目标时**立刻**把它加进
+  `documents/contracts/testing.md` 的选择集并实测计数变化（302 → 307 就是加法证据）；
+  选择集有两份副本（`testing.md` 与 `ui-component-system.md`），改一处要改两处
+- 证据：2026-10-12 在编辑器网格与右键菜单两项上各踩一次，均由"数一遍列表"发现而非失败报警
+- owner / status / last_verified：仓库维护者 / 已确认 / 2026-10-12
+
 ### [headless-verification-model] 无图像输入的模型必须用像素回读证明渲染
 
 - 适用场景：由无法查看图片的 agent 验证 UI 或渲染改动

@@ -23,9 +23,9 @@
 
 | 可执行文件 | 测试数 | 覆盖 |
 | --- | --- | --- |
-| `editor_ui_tests` | 261 | 编辑器 UI：组件、停靠、布局持久化、内容浏览器、JSON 资产库、actor 树、可见性、颜色转换 |
+| `editor_ui_tests` | 276 | 编辑器 UI：组件、停靠、布局持久化、内容浏览器、JSON 资产库、actor 树、可见性、颜色转换、右键菜单 |
 | `vl_offline_adapter_tests` | 101 | 离线场景/网格/显示/相机适配 |
-| `editor_viewport_tests` | 29 | 视口几何、命中、坐标映射、aspect |
+| `editor_viewport_tests` | 34 | 视口几何、命中、坐标映射、aspect，以及编辑器网格的几何生成 |
 | `vl_offline_coordinator_tests` | 13 | 离线会话协调 |
 | `vl_renderer_backend_tests` | 12 | 离屏显示输出契约、swapchain 帧结果 |
 | `material_instance_editor_landed_tests` | 10 | MI 已落地接口 |
@@ -35,8 +35,10 @@
 `editor_ui_tests` 里 14 个套件；`ctest` 用套件前缀选择：
 
 ```powershell
-# 编辑器 UI 全套（当前 287 项通过，含 ctest 展开的用例）
-ctest --test-dir build -R "^(UiColorTransform|UiWidgetTest|UiWidgetRefresh|EditorUiTest|ContentBrowserTest|DockWorkspaceTest|DockPersistenceTest|DockRmlTest|EditorViewportGeometry|EditorJsonAssetParsing|EditorJsonAssetPaths|EditorJsonAssetTypes|JsonAssetLibraryTest|ResourceEditorController|LargeCatalog/ContentBrowserPerformanceTest)\." --output-on-failure
+# 编辑器 UI 全套（当前 307 项通过，含 ctest 展开的用例）
+# 注意 EditorViewportGridGeometry 来自 editor_viewport_tests 目标，不是 editor_ui_tests：
+# 它必须显式列入，否则改坏编辑器网格不会被这条选择集拦住（2026-10-12 发现并补上）。
+ctest --test-dir build -R "^(UiColorTransform|UiWidgetTest|UiWidgetRefresh|EditorUiTest|ContentBrowserTest|DockWorkspaceTest|DockPersistenceTest|DockRmlTest|EditorViewportGeometry|EditorViewportGridGeometry|EditorJsonAssetParsing|EditorJsonAssetPaths|EditorJsonAssetTypes|JsonAssetLibraryTest|ResourceEditorController|LargeCatalog/ContentBrowserPerformanceTest)\." --output-on-failure
 
 # 材质实例编辑器全套（当前 22 项通过）
 ctest --test-dir build -R "MaterialInstanceEditor" --output-on-failure
