@@ -561,7 +561,11 @@ RmlUi 6.2 的 `PropertyParserColour` 在 RGBA 分支对每个分量统一走整�
 - 视口参考网格 / 地面 / 坐标轴显示（`shader/glsl` 里的 `measureGrid` 是 BRDF 测量探针的，
   不是编辑器参考系）
 - 原生多窗口、IME 输入
-- 视口按 dock 分辨率渲染（场景仍按完整 swapchain extent 出图，UI 用完整 UV 采样）
+- 视口渲染成本仍按完整 swapchain 尺寸（**注意这不是"投影错误"**：相机 aspect 已按视口
+  rect 设置，见 `EngineLoop::SynchronizeSceneViewport`，画面比例是对的；`sceneViewportOutput`
+  的 backing extent 也与 swapchain 一致，`renderGraph.cpp` 的注释把它写成刻意设计
+  ——「UI 使用完整 UV 而非拷贝/裁剪屏幕」。所以缺的只是"按视口尺寸渲染以省算力"这一项优化，
+  不是画面不正确。2026-10-12 核对时纠正了本条原先"按 dock 分辨率渲染"的措辞，那读起来像缺陷）
 - 材质实例纹理 override 的 live 生效（保存 JSON 后才生效）
 - HSV 取色器
 - 编辑器偏好 / 项目设置面板；可配置快捷键
