@@ -13,8 +13,7 @@
 | --- | --- | --- | --- |
 | `py -3 tool/validate-docs.py` | 无 | 文档分层：路由引用的文档存在、源码 glob 匹配到真实文件、路由里的门禁规则名逐字存在于审计脚本、契约层无未来时断言、全树相对链接有效；另含图源证据、生成物过期与孤儿契约检查 | 改任何 `documents/**` 或 `tool/architecture-boundary-audit.ps1` 后 |
 | `py -3 tool/generate_boundary_rule_index.py` | 无 | 从审计脚本重新生成 64 条规则索引（生成物入库，`--check` 只校验不写） | 改 `tool/architecture-boundary-audit.ps1` 的规则后 |
-| `py -3 tool/validate_scene_schema.py` | 资源工作树可访问 | 每个真实场景都能被 `schema/scene.schema.json` 接受；**schema 不能比 `SceneAssetValidator` 更严**，否则会拒绝引擎实际接受的场景 | 改 `schema/scene.schema.json`、场景 JSON 或 `sceneAssetValidator.cpp` 后 |
-| `pwsh -File tool/architecture-boundary-audit.ps1` | 无 | 64 条命名架构边界规则（禁止词、cutover、所有权、生命周期句柄采用等） | 改 `source/**` 后 |
+| `py -3 tool/validate_scene_schema.py` | 资源工作树可访问 | 每个真实场景都能被 `schema/scene.schema.json` 接受；**schema 不能比 `SceneAssetValidator` 更严**，否则会拒绝引擎实际接受的场景 | 改 `schema/scene.schema.json`、场景 JSON 或 `sceneAssetValidator.cpp` 后 || `pwsh -File tool/architecture-boundary-audit.ps1` | 无 | 65 条命名架构边界规则（禁止词、cutover、所有权、生命周期句柄采用等） | 改 `source/**` 后 |
 | `pwsh -File tool/architecture-final-validation.ps1` | 已构建 | 边界审计 + 最终验证矩阵（它调用上面的审计脚本） | 提交前 |
 | `cmake --build build --target <target> -j8` | 已 configure | 编译该目标 | 改任何被它编译的源码后 |
 | `ctest --test-dir build -R <regex> --output-on-failure` | 已构建对应目标 | 模块测试 | 见下"改动 → 验证" |
@@ -96,6 +95,41 @@ Python `subprocess`（列表形式）**不要**加引号，否则引号会作为
 截断像素报错）。`artifacts/` 被 gitignore，因此**结论必须写进文档**才能持久化。
 
 **强制终止的进程不构成正常 teardown 的证据**，报告时必须区分"渲染证据"与"关闭流程证据"。
+
+### 视觉回归检查（读得出字，不只是"有色块"）
+
+像素探针只能证明**某个坐标画了东西**：它曾把一个渲染完全空白的 94px 选中标签报成"存在"。
+`tool/check_ui_visual_regression.py` 补上另一半——让视觉模型读出**实际渲染出来的字**，再与
+`ui/editor-workspace.rml` 里 author 的标签比对。
+
+**期望值不写死在脚本里**，全部从 RML 提取（菜单标题、工作区标签、产品名），所以改 markup 后
+不需要同步第二份清单。它检查两件事：
+
+1. RML 里声明的每个菜单标题与标签都能在帧里读到；
+2. 模型报出的**每个标签都必须有文字** —— 这正是"空标签"缺陷的判定条件。
+
+三歩流程（视觉模型在 harness 后面，所以不能直接接进 ctest）：
+
+```powershell
+# 1. 打印要交给模型的提示词（含截图路径与回复 schema）
+py -3 tool\check_ui_visual_regression.py prompt
+
+# 2. 把该提示词交给 deepseek-v4-flash-vision-exp（见 deepseek-vision skill），
+#    把它的 JSON 回复存成文件
+
+# 3. 校验回复（不匹配则非零退出，可作门禁）
+py -3 tool\check_ui_visual_regression.py check --reply artifacts\rmlui-editor\visual-reply.json
+```
+
+提示词**不告诉模型期望答案**，所以它能发现"界面变了"，而不只是"界面符合我的预期"。
+
+**这个检查器的有效性是被注入测试证明过的**，不是只跑过一次绿灯：
+`py -3 artifacts\rmlui-editor\test_visual_checker.py` 会依次注入 5 种缺陷（空标签、标签被改名、
+工具条重复菜单命令、菜单没渲染出来、多出一个未声明的菜单），逐一确认非零退出，并确认健康回复通过。
+
+**边界（不要混淆）**：视觉检查证明"我 author 的东西看得见"，**不构成"应该出现的东西都出现了"的证明**。
+两者都不能单独成立：RML 里有标签但视觉读不到 → 可能是 CSS/布局没渲染；视觉读得到但 RML 里没有
+→ 可能是运行期生成的（`Asset Editor` 就是这种，来源是 `BaseTabMarkup`）。
 
 ## 测试不稳定时的处置
 
