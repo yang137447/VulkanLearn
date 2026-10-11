@@ -188,7 +188,7 @@ If a change affects boot behavior, verify it against this order.
 - `config/`: top-level runtime config and render graph config
 - `<resourcePath>/Maps/SC_<scene-name>/`: scene JSON files
 - `<resourcePath>/Maps/SC_<scene-name>/Meshes/`: mesh description JSON and source model data
-- `<resourcePath>/Maps/SC_<scene-name>/Terrains/`: terrain description JSON files
+- `<resourcePath>/Maps/SC_<scene-name>/Terrains/`: terrain descriptor JSON, **editor asset layer only** — no runtime terrain support exists
 - `<resourcePath>/Maps/SC_<scene-name>/Materials/`: material instance JSON files
 - `shader/glsl/`: shader source of truth
 - `shader/spv/`: compiled shader output and debug reflection artifacts
@@ -236,7 +236,7 @@ This project is heavily data-driven. Many runtime objects are created from JSON.
 ### Resource naming patterns
 
 - `SM_*.json`: mesh descriptor files
-- `TR_*.json`: terrain descriptor files
+- `TR_*.json`: terrain descriptor files (**editor asset layer only**; no runtime terrain support)
 - `MI_*.json`: material instance files
 - `scene*.json`: scene definitions
 
@@ -258,13 +258,22 @@ This project is heavily data-driven. Many runtime objects are created from JSON.
 Scene JSON currently supports these `type` values:
 
 - `mesh`
-- `terrain`
 - `directionalLight`
 - `pointLight`
 - `spotLight`
 - `squareAreaLight` (one-sided emitted radiance; the current realtime path rejects it)
 - `camera`
 - `environment`
+
+`terrain` is **not** a runtime scene object type: `SceneAssetValidator` does not
+accept it, the world loader/builder has no terrain path, and no terrain runtime
+code exists anywhere in `source/`. Terrain survives only in the editor's asset
+layer, where `Terrains/TR_*.json` is recognized as an `EditorAssetKind` and
+`objectType == "terrain"` participates in material-instance navigation
+resolution. Do not author a `terrain` scene object and do not reference
+`source/terrain.h` / `source/terrain.cpp` — those files never existed in this
+repository. Any task that appears to require terrain runtime support is a
+feature request, not a fix.
 
 If adding a new type, update both loader logic and documentation.
 (`SC_scene01` still uses a legacy `sunLight` object; it is the only one, the validator rejects it and the
@@ -375,11 +384,21 @@ If asked to add or change a scene:
 
 If asked to add or change a terrain:
 
-- inspect `<resourcePath>/Maps/SC_<scene-name>/*.json`
-- inspect `<resourcePath>/Maps/SC_<scene-name>/Terrains/TR_*.json`
-- inspect `source/terrain.h` and `source/terrain.cpp`
-- inspect `source/scene/validation/sceneAssetValidator.cpp`
-- keep World Creator surface textures in material / texture asset JSON unless the task explicitly adds terrain layer blending
+Terrain has **no runtime implementation** in this repository. Do not look for
+`source/terrain.h` / `source/terrain.cpp`; they never existed here, and
+`SceneAssetValidator` rejects a `terrain` scene object. Only the editor asset
+layer knows about terrain:
+
+- inspect `<resourcePath>/Maps/SC_<scene-name>/Terrains/TR_*.json` (descriptor JSON,
+  recognized as `EditorAssetKind::Terrain` by `source/editor/assets/editorJsonAssetLibrary.cpp`)
+- inspect `source/editor/assets/editorJsonAssetTypes.{h,cpp}` and
+  `source/editor/service/materialInstanceDocumentService.cpp` for the
+  `objectType == "terrain"` navigation-resolution path
+- inspect `source/scene/validation/sceneAssetValidator.cpp` to confirm what the
+  runtime actually accepts before promising anything
+
+A request to render, load, or edit terrain geometry is a feature request, not a
+fix; scope it as such and say so rather than treating the missing files as a bug.
 
 If asked to add or change a render pass:
 
