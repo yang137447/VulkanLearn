@@ -416,6 +416,40 @@ File→Open Level 从冻结的 `snapshot.assetCatalog` 筛出 `EditorAssetKind::
 `UiActionType::LoadWorld` 请求；菜单自己不认识 World。
 Help→About 显示编辑器名称、RmlUi 说明和布局文件路径，打开期间作为模态阻止工作区命令。
 
+### 右键上下文菜单
+
+全工作区只有一个弹层 `#editor-context-menu`，位于根节点（与 `#close-dialog`、`#about-dialog`
+同级），**不在 `#editor-toolbar` 内**，也不在 `#editor-content` 内：前者会让浮层改变工具条的
+按钮统计，后者的 `overflow` 会裁掉靠近边缘的菜单。它自身不保存目标；标题与条目在每次打开时
+由面板写入，条目复用 `.menu-item` 叶控件但**不复用 `.menu-popup`** —— 后者的显示依赖
+`.menu-root.open` 祖先，本弹层没有菜单栏父节点。
+
+**触发方式是 `mouseup` 且 `button == 1`**，不是 `contextmenu`：RmlUi 6.2 没有 `contextmenu`
+事件标识。按钮号来自 `ToRmlMouseButton`（`source/ui/uiSubsystem.cpp`），
+`PlatformMouseButton::Right → 1`，与 RmlUi 官方 SDL 后端一致。面板在捕获阶段监听
+`mouseup`，而 `EditorDockingController` 只在 `button == 0` 时开始拖动，因此右键不会干扰停靠。
+
+**目标在打开时就解析为稳定地址**（actor 用 `actor.identity`，资产用 DOM 的 `data-path`），
+菜单随后只用这个地址寻址，**绝不回退到"当前选中"**。原因是菜单条目在之后的点击里才执行，
+而快照下标只对当帧有效；目标身份已不在 World 里时，菜单**拒绝执行并给出 notice**，
+而不是拿面板当前选中顶上 —— 那个回退正是"右键 A、命令作用到 B"的静默错误目标缺陷。
+回归由 `EditorUiTest.ContextMenuVisibilityToggleTargetsTheRightClickedActorNotTheSelection`
+钉住（选中一个 actor、右键另一个、断言命令携带被右键者的身份）。
+
+**"菜单打开"蕴含"至少有一个真实条目"**：条目列表单独构建，构建后为空则不开菜单。
+没有 actor 级动作的对象（相机、环境、SpeedTree 风剖面）与只读目录节点因此不会开出空弹窗。
+
+大纲 actor 行的四个点击靶面（`outliner-actor`、`outliner-expand`、`outliner-visible`、
+`outliner-slot`）携带同一个 actor 下标，所以在行内任意位置右键都指向同一个 actor；
+右键眼睛打开的是 actor 菜单而不是眼睛专属动作 —— 菜单里的"显示/隐藏"与眼睛提交的是
+同一条命令，标题又写着 actor 名，因此不存在寻址歧义。
+
+视口右键原来在场景命中时被提前返回、根本到不了 RmlUi；现在只把
+`PlatformMouseButton::Right` 放行给 RmlUi，左键保持原样（拾取是左键专属，相机朝向走
+相对鼠标增量而非按键手势）。视口没有拾取能力，因此它的菜单**只含视口级命令**
+（view mode 复用 `UiActionType::SetDebugViewMode`、CSM 保存复用既有运行时命令），
+不放任何逐对象动作，也不为了撑菜单而虚构拾取。
+
 GT 文档只使用 `vl://scene-viewport` 逻辑纹理 token 和 framebuffer 像素矩形。
 图像、兼容 render pass、framebuffer 和 GPU epoch 退休属于 renderer；
 不得将裸 Vulkan handle 放入组件或 GT 文档。视口命中使用半开边界，
@@ -540,6 +574,20 @@ widget/docking 测试另覆盖属性缓存失效和静止帧不重写布局属�
 工作量断言不作为实际 FPS 或 GPU 性能结论。
 CPU 测试里的菜单展开、子菜单悬停和面板隐藏都用真实 RmlUi 事件与指针坐标驱动，
 但不等于桌面人工操作验收。
+
+第六批新增右键菜单用例（13 个，全部在 `editorUiTests.cpp`，名字都含 `ContextMenu`）：
+右键大纲行打开该 actor 的菜单、**可见性项作用于被右键的 actor 而不是当前选中**、
+可见性项跟随并反转 actor 状态、没有 actor 级动作的对象不提供菜单、选中条幕后关闭、
+点击菜单外关闭、材质槽条目复用既有槽选择路由、右键资产打开既有打开命令、
+右键文件夹不提供菜单、视口菜单只含视口级命令、视口 view mode 的勾选来自运行时快照
+并复用 `SetDebugViewMode`、无活动 World 时 CSM 保存禁用、有条目时走既有 CSM 保存命令。
+命名一律带 `ContextMenu` 是刻意的：早先有一个用例叫 `BrowserAssetRightClick...`，
+`--gtest_filter="*ContextMenu*"` 会**静默跳过它**，运行数看起来是绿的却少一个。
+
+**未覆盖的边界**：`uiSubsystem.cpp` 里把右键放行给编辑器文档的那 8 行没有自动化测试 ——
+`editor_ui_tests` 不编译 `UiSubsystem`（需要 Vulkan），面板侧由 `ViewportContextMenu*` 用真实
+RmlUi 指针事件覆盖，但从 `PlatformEvent` 到 RmlUi 这一段只有构建与人工核对。
+弹层也**没有做窗口边界钳制**：在右下角右键可能让它部分移出窗口。
 
 ```powershell
 cmake --build build --target editor_ui_tests editor_viewport_tests main -j4

@@ -2220,6 +2220,16 @@ bool RenderSystem::IsShadowCascadeActive(
         cascadeIndex < csmSettings.cascadeCount;
 }
 
+void RenderSystem::DrawEditorGridGeometry(
+    vk::CommandBuffer& commandBuffer)
+{
+    // 管线与描述符集由 pass 流程绑定，这里只提交几何；网格顶点缓冲是静态
+    // 世界几何，首次绘制时创建，之后每帧复用同一份数据。
+    editorViewportGrid.EnsureCreated(*rendererBackend);
+    editorViewportGrid.Bind(commandBuffer);
+    editorViewportGrid.Draw(commandBuffer);
+}
+
 void RenderSystem::UpdateUBOGlobal(vk::CommandBuffer& commandBuffer)
 {
     UpdateUBOGlobalWithProjectionTransform(
@@ -3053,6 +3063,14 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
                     continue;
             }
 
+            // 参考网格是编辑器视口的显示辅助：视口不可见（运行页面、无 UI、资源编辑器
+            // 全屏）时整个 pass 不录制，运行时画面与截图保持与接入前一致。
+            if (renderPass.type == VL::RenderGraphPassType::EditorGrid &&
+                !renderToViewport)
+            {
+                continue;
+            }
+
             VulkanDebug::ScopedRegion passRegion(
                 commandBuffer,
                 renderPassName,
@@ -3218,6 +3236,7 @@ void RenderSystem::InitializeFrameResources()
 
     frameResources.Initialize(*rendererBackend);
     frameResources.EnsureLightCapacity(currentRenderScene.lights.size(), *rendererBackend);
+    editorViewportGrid.EnsureCreated(*rendererBackend);
     proceduralSkyCubeGenerator.Initialize(
         *pipelineFactory,
         *rendererBackend);
@@ -3260,6 +3279,7 @@ void RenderSystem::ShutdownFrameResources()
     environmentUpdateSourceCube.reset();
     
     frameResources.Shutdown(*rendererBackend);
+    editorViewportGrid.Shutdown(*rendererBackend);
 }
 
 void RenderSystem::ValidateFrameResourceDescriptors()

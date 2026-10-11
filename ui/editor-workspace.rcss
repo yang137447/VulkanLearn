@@ -76,6 +76,34 @@ body {
 .menu-separator { display: block; height: 1px; margin: 3px 0; background-color: #49494f; }
 .menu-submenu { top: -4px; left: 100%; }
 .menu-entry:hover > .menu-popup { display: block; }
+/* 右键上下文菜单：left/top 由面板按右键坐标写入，条目复用 .menu-item 样式。
+   显示不依赖 .menu-root.open（本弹层没有菜单栏父节点），因此用自身 class 控制。
+   根节点的 body 是 pointer-events: none，所以这里必须显式收回指针事件。 */
+#editor-context-menu {
+    display: none;
+    position: absolute;
+    left: 0;
+    top: 0;
+    min-width: 190px;
+    padding: 3px 0;
+    box-sizing: border-box;
+    background-color: #28282c;
+    border-width: 1px;
+    border-color: #6e6e76;
+    pointer-events: auto;
+    /* 盖住停靠壳与浏览器 tooltip（45），仍低于脏关闭与 About 弹窗（50）。 */
+    z-index: 46;
+}
+#editor-context-menu.open { display: block; }
+.context-menu-title {
+    padding: 4px 10px;
+    margin-bottom: 3px;
+    color: #b0b0b8;
+    white-space: nowrap;
+    overflow: hidden;
+    border-bottom-width: 1px;
+    border-bottom-color: #49494f;
+}
 #about-dialog {
     display: none;
     position: absolute;

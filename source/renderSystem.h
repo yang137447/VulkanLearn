@@ -32,6 +32,7 @@
 #include "render/offline/offlineRenderCoordinator.h"
 #include "editor/selection/materialInstanceSelection.h"
 #include "render/pass/passRuntime.h"
+#include "render/editor/editorViewportGrid.h"
 #include "render/foliage/speedTreeWindSystem.h"
 #include "render/shadow/csmSettings.h"
 #include "ui/uiOverlayRendererVulkan.h"
@@ -317,6 +318,7 @@ private:
         const std::vector<VL::LightSnapshot>& lights) override;
     bool IsCsmEnabled() const override;
     bool IsShadowCascadeActive(uint32_t cascadeIndex) const override;
+    void DrawEditorGridGeometry(vk::CommandBuffer& commandBuffer) override;
 
     void InitializeFrameResources();
     void ShutdownFrameResources();
@@ -416,6 +418,8 @@ private:
     VL::RendererFrontend rendererFrontend;
     VL::ResolvedRenderSceneBuilder resolvedRenderSceneBuilder;
     VL::PassRuntime passRuntime;
+    // 编辑器参考网格几何：只由 editorGrid pass 消费，随帧资源一起创建/释放。
+    VL::EditorViewportGrid editorViewportGrid;
     VL::RenderScene currentRenderScene;
     VL::ResolvedRenderScene currentResolvedRenderScene;
     // 拾取只读 GT 发布快照时生成的副本，避免 worker render thread 更新

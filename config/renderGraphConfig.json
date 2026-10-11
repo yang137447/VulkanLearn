@@ -41,7 +41,7 @@
             "depthCompareOp": "深度比较函数，取值见 depthCompareOpSupport。"
         },
         "pass": {
-            "type": "必填 pass 行为类型。当前支持 shadow、geometry、forwardOpaque、forwardTransparent、postProcess；name 只作为唯一身份、缓存 key 和调试标签。"
+            "type": "必填 pass 行为类型。当前支持 shadow、geometry、forwardOpaque、forwardTransparent、postProcess、editorGrid；name 只作为唯一身份、缓存 key 和调试标签。"
         },
         "resource": {
             "type": "可选资源类型。默认 texture2D；CSM shadowMap 使用 texture2DArray。",
@@ -538,6 +538,31 @@
                 },
                 {
                     "resource": "selectionMask",
+                    "loadOp": "load",
+                    "storeOp": "store"
+                },
+                {
+                    "resource": "sceneDepth",
+                    "loadOp": "load",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
+            "name": "editorGrid",
+            "type": "editorGrid",
+            "needCreateMaterial": true,
+            "materialInstancePath": "Common/Materials/Pass/MI_editorGrid.json",
+            "pipelineState": {
+                "useVertexInput": true,
+                "depthTestEnable": true,
+                "depthWriteEnable": false,
+                "depthCompareOp": "lessOrEqual"
+            },
+            "input": [],
+            "output": [
+                {
+                    "resource": "sceneColor",
                     "loadOp": "load",
                     "storeOp": "store"
                 },

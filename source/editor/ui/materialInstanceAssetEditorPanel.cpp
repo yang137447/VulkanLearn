@@ -48,6 +48,18 @@ std::string Number(float value)
     return stream.str();
 }
 
+// 弹层位置按整像素写入：RmlUi 的 left/top 会参与布局缓存比较，抖动的小数会让静止帧反复失效。
+std::string Pixels(float value)
+{
+    return std::to_string(std::lround(value)) + "px";
+}
+
+// 右键菜单的标题行与材质槽条目都只用资产文件名兜底，不把完整路径当标签。
+std::string FileLabel(const std::string& path)
+{
+    return std::filesystem::path(path).filename().string();
+}
+
 template<class T>
 bool ParseNumber(const std::string& text, T& value)
 {
@@ -378,6 +390,7 @@ bool MaterialInstanceAssetEditorPanel::ValidateDocument(Rml::ElementDocument& ca
         "menu-edit-reset", "menu-edit-validate", "menu-edit-undo", "menu-edit-redo",
         "menu-window-reset", "menu-window-restore",
         "about-dialog", "about-close",
+        "editor-context-menu", "editor-context-menu-title", "editor-context-menu-items",
         "outliner-search", "outliner-type", "outliner-sort", "outliner-count", "outliner-empty",
         "viewport-toolbar", "viewport-tool-select", "viewport-tool-move", "viewport-tool-rotate",
         "viewport-tool-scale", "viewport-space-world", "viewport-space-local",
@@ -451,6 +464,9 @@ void MaterialInstanceAssetEditorPanel::Detach()
     widgetDocument.Detach();
     // 重新 Attach 时 DOM 是新的：让大纲第一帧无条件重挂一次。
     outlinerMounted = false;
+    // 右键菜单的目标属于旧文档的 DOM，重新接上后必须先回到"没有菜单"。
+    contextMenuKind = ContextMenuKind::None;
+    contextMenuTarget.clear();
 }
 
 void MaterialInstanceAssetEditorPanel::SetSceneSelectionSink(IMaterialInstanceSceneSelectionSink* sink)
@@ -624,6 +640,9 @@ void MaterialInstanceAssetEditorPanel::RefreshMenus()
     SetMarkup("menu-window-panels", WindowMenuMarkup());
     // 菜单栏之外的状态写入同样走缓存：静止帧不重复设置 class 与 display。
     widgetDocument.SetProperty("about-dialog", "display", aboutVisible ? "block" : "none");
+    // 模态弹窗打开时上下文菜单必须收起：模态期间工作区命令都不可用，
+    // 留一个点不动的弹层会让人以为命令失效。
+    if (HasModal() && IsContextMenuOpen()) CloseContextMenu();
 }
 
 // Open Level 子菜单来自冻结的只读资产目录；目录代次不变时不重建条目和索引表。
@@ -717,6 +736,242 @@ bool MaterialInstanceAssetEditorPanel::IsInsideMenuBar(const Rml::Element* eleme
     return false;
 }
 
+bool MaterialInstanceAssetEditorPanel::IsInsideContextMenu(const Rml::Element* element) const
+{
+    if (document == nullptr) return false;
+    const auto* menu = document->GetElementById("editor-context-menu");
+    for (const auto* current = element; current != nullptr && current != document;
+        current = current->GetParentNode())
+        if (current == menu) return true;
+    return false;
+}
+
+// RmlUi 6.2 没有 contextmenu 事件：右键只表现为带 button=1 的 mousedown/mouseup。
+// 这里在右键抬起时打开菜单，一是抬起不会打断将来可能出现的右键拖动，
+// 二是抬起时的指针位置就是用户指向的位置。目标在这一刻解析成稳定地址。
+void MaterialInstanceAssetEditorPanel::OpenContextMenu(Rml::Event& event)
+{
+    if (document == nullptr) return;
+    ContextMenuKind kind = ContextMenuKind::None;
+    std::string target;
+    std::string title;
+    Rml::Element* element = event.GetTargetElement();
+    if (element != nullptr && docking.IsSceneViewportElement(element))
+    {
+        // 视口没有拾取后端，因此菜单里只有视口级动作，不含任何逐对象条目。
+        kind = ContextMenuKind::Viewport;
+        title = "Viewport";
+    }
+    else
+    {
+        for (Rml::Element* current = element; current != nullptr && current != document;
+            current = current->GetParentNode())
+        {
+            // 树行是 flex 容器：折叠符、标题与行尾眼睛是三个并列靶面，行内空白不属于任何一个。
+            // 命中 .tree-row 时统一改读行标题按钮的地址，因此整行右键都指向同一行。
+            Rml::Element* addressed = current->IsClassSet("tree-row")
+                ? current->QuerySelector(".list-item") : current;
+            const std::string action = addressed == nullptr ? std::string()
+                : addressed->GetAttribute<std::string>("data-action", "");
+            // 大纲 actor 行的三个点击靶面（行标题、折叠符、行尾眼睛）携带同一个 actor 下标，
+            // 因此在行的任何位置右键都指向同一个 actor；分组行没有真实动作，不提供菜单。
+            if (action == "outliner-actor" || action == "outliner-expand" ||
+                action == "outliner-visible" || action == "outliner-slot")
+            {
+                const size_t index = addressed->GetAttribute<size_t>("data-index", 0);
+                if (index >= OutlinerActors().size()) break;
+                const EditorSceneActorSnapshot& actor = OutlinerActors()[index];
+                kind = ContextMenuKind::Actor;
+                target = actor.identity;
+                title = actor.displayName;
+                break;
+            }
+            if (action == "browser-item")
+            {
+                // DOM 上的 data-path 是当前挂载节点的完整资产地址（不是虚拟窗口下标）。
+                const std::string path = addressed->GetAttribute<std::string>("data-path", "");
+                EditorAssetKind assetKind = EditorAssetKind::MaterialInstance;
+                std::string name;
+                // 目录节点在只读目录里没有条目：目录没有真实可执行动作，因此不给菜单。
+                if (path.empty() || !FindCatalogAssetKind(path, assetKind, name)) break;
+                kind = ContextMenuKind::BrowserAsset;
+                target = path;
+                title = name;
+                break;
+            }
+        }
+    }
+    contextMenuKind = kind;
+    contextMenuTarget = target;
+    if (kind == ContextMenuKind::None)
+    {
+        CloseContextMenu();
+        return;
+    }
+    // 目标有稳定地址不等于它有可执行动作（例如相机只有逐对象动作之外的空集合）：
+    // 空菜单一律不打开，避免出现一个"什么都没有"的弹层。
+    std::string items = ContextMenuItemsMarkup();
+    if (items.empty())
+    {
+        CloseContextMenu();
+        return;
+    }
+    const Rml::Vector2f point = event.GetUnprojectedMouseScreenPos();
+    contextMenuX = point.x;
+    contextMenuY = point.y;
+    SetMarkup("editor-context-menu-title", Text(title));
+    SetMarkup("editor-context-menu-items", std::move(items));
+    ApplyContextMenuState();
+}
+
+void MaterialInstanceAssetEditorPanel::CloseContextMenu()
+{
+    contextMenuKind = ContextMenuKind::None;
+    contextMenuTarget.clear();
+    ApplyContextMenuState();
+}
+
+void MaterialInstanceAssetEditorPanel::ApplyContextMenuState()
+{
+    widgetDocument.SetClass("editor-context-menu", "open", IsContextMenuOpen());
+    widgetDocument.SetProperty("editor-context-menu", "left", Pixels(contextMenuX));
+    widgetDocument.SetProperty("editor-context-menu", "top", Pixels(contextMenuY));
+}
+
+// 条目在打开时生成一次：菜单存活期间快照可能换代，因此动作执行时一律按稳定地址
+// 重新查目标，查不到就给出诊断，而不是退回面板的当前选择。
+std::string MaterialInstanceAssetEditorPanel::ContextMenuItemsMarkup() const
+{
+    std::string markup;
+    if (contextMenuKind == ContextMenuKind::Actor)
+    {
+        const EditorSceneActorSnapshot* actor = ContextMenuActor();
+        if (actor == nullptr) return markup;
+        // 可见性开关只对真正持有渲染侧可见性状态的对象给出命令；相机/环境/风剖面没有这一
+        // 状态，因此与大纲行尾的眼睛同一规则：不显示条目，也不放一个点了没有反应的假条目。
+        if (SceneActorHasVisibilityToggle(actor->type))
+        {
+            markup += UiWidgets::MenuItem("context-outliner-visible",
+                {"context-outliner-visible", 0},
+                actor->visible ? "Hide in Viewport" : "Show in Viewport", false, false);
+        }
+        // mesh 的材质槽走与点击槽行完全相同的选择路由（打开 MI 文档并同步视口描边）。
+        const MaterialInstanceModelSnapshot model = MeshSceneActorModel(*actor);
+        for (size_t index = 0; index < model.materials.size(); ++index)
+        {
+            const auto& material = model.materials[index];
+            markup += UiWidgets::MenuItem("context-actor-material-" + std::to_string(index),
+                {"context-actor-material", index},
+                "Open " + (material.materialSlotName.empty()
+                    ? FileLabel(material.materialInstancePath) : material.materialSlotName),
+                false, false);
+        }
+    }
+    else if (contextMenuKind == ContextMenuKind::BrowserAsset)
+    {
+        markup += UiWidgets::MenuItem("context-browser-open", {"context-browser-open", 0},
+            "Open", false, false);
+    }
+    else if (contextMenuKind == ContextMenuKind::Viewport)
+    {
+        // 与视口工具条共用 SetDebugViewMode：菜单只多给出勾选状态，没有第二条 UI→renderer 路径。
+        // 条目下标就是 debug view 取值（工具条的 view mode 也这样寻址）。
+        markup += UiWidgets::MenuItem("context-view-lit", {"context-view-mode", 0},
+            "Lit", runtimeView.debugViewMode == 0, false);
+        markup += UiWidgets::MenuItem("context-view-unlit", {"context-view-mode", 1},
+            "Unlit", runtimeView.debugViewMode == 1, false);
+        markup += "<div class=\"menu-separator\"></div>";
+        // CSM 设置要写进活动场景文件：没有活动 World 就没有写入目标，此时明确禁用，
+        // 而不是提交一条注定失败的运行时命令（禁用表现与 Edit 的 Undo/Redo 同一规则）。
+        const bool hasWorld = !runtimeView.activeWorldPath.empty();
+        markup += UiWidgets::MenuItem("context-save-csm", {"context-save-csm", 0},
+            "Save CSM Settings to Scene", false, !hasWorld);
+    }
+    return markup;
+}
+
+const EditorSceneActorSnapshot* MaterialInstanceAssetEditorPanel::ContextMenuActor() const
+{
+    if (contextMenuTarget.empty()) return nullptr;
+    for (const EditorSceneActorSnapshot& actor : OutlinerActors())
+        if (actor.identity == contextMenuTarget) return &actor;
+    return nullptr;
+}
+
+// 只读目录（缺目录时退回旧 MI 资产列表）里查路径：既是"资产还是目录"的判据，
+// 也是菜单标题的名字来源。打开动作仍复用 OpenBrowserAsset 的既有命令路由。
+bool MaterialInstanceAssetEditorPanel::FindCatalogAssetKind(const std::string& path,
+    EditorAssetKind& kind, std::string& name) const
+{
+    if (snapshot.assetCatalog != nullptr)
+    {
+        for (const auto& asset : snapshot.assetCatalog->assets)
+        {
+            if (asset.assetPath != path) continue;
+            kind = asset.kind;
+            name = asset.name.empty() ? FileLabel(path) : asset.name;
+            return true;
+        }
+        return false;
+    }
+    for (const auto& asset : snapshot.assets)
+    {
+        if (asset.assetPath != path) continue;
+        kind = EditorAssetKind::MaterialInstance;
+        name = FileLabel(path);
+        return true;
+    }
+    return false;
+}
+
+void MaterialInstanceAssetEditorPanel::ToggleContextActorVisibility()
+{
+    if (runtimeActionSink == nullptr) return;
+    const EditorSceneActorSnapshot* actor = ContextMenuActor();
+    if (actor == nullptr)
+    {
+        // 目标只在打开菜单时存在过（World 换代、对象改名）：拒绝执行并说明原因，
+        // 不退回面板的当前选择，否则会悄悄改到另一个对象。
+        localStatus = "The context menu target is no longer in the active world.";
+        return;
+    }
+    UiAction request;
+    request.type = UiActionType::SetActorVisible;
+    request.stringValue = actor->identity;
+    request.intValue = actor->visible ? 0 : 1;
+    runtimeActionSink->RequestRuntimeAction(std::move(request));
+}
+
+void MaterialInstanceAssetEditorPanel::OpenContextActorMaterial(size_t slotIndex)
+{
+    const EditorSceneActorSnapshot* actor = ContextMenuActor();
+    if (actor == nullptr)
+    {
+        localStatus = "The context menu target is no longer in the active world.";
+        return;
+    }
+    const MaterialInstanceModelSnapshot model = MeshSceneActorModel(*actor);
+    if (slotIndex >= model.materials.size())
+    {
+        localStatus = "The context menu target no longer has that material slot.";
+        return;
+    }
+    SelectModelMaterial(model, slotIndex);
+}
+
+void MaterialInstanceAssetEditorPanel::OpenContextBrowserAsset()
+{
+    const std::string path = contextMenuTarget;
+    EditorAssetKind kind = EditorAssetKind::MaterialInstance;
+    std::string name;
+    if (path.empty() || !FindCatalogAssetKind(path, kind, name))
+    {
+        localStatus = "The context menu target is no longer in the asset catalog.";
+        return;
+    }
+    OpenBrowserAsset(path);
+}
+
 void MaterialInstanceAssetEditorPanel::RefreshLists()
 {
     WidgetRefreshScope refresh(refreshingControls);
@@ -783,6 +1038,8 @@ void MaterialInstanceAssetEditorPanel::RefreshOutliner()
         outlinerQuery.clear();
         outlinerTypeFilter = "all";
         treeWorldGeneration = generation;
+        // 换代后旧的稳定身份不再指向任何对象：已打开的右键菜单连同它的目标一起收起。
+        CloseContextMenu();
         SetControlValue("outliner-search", std::string());
         SetControlValue("outliner-type", outlinerTypeFilter);
     }
@@ -1585,6 +1842,26 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
     {
         SelectModelMaterial(*snapshot.selectedModel, index);
     }
+    // 上下文菜单条目：目标一律取打开菜单时记下的稳定地址，不读面板的当前选择，
+    // 否则"右键 B、菜单却改 A"就会静默发生。
+    else if (action == "context-outliner-visible") ToggleContextActorVisibility();
+    else if (action == "context-actor-material") OpenContextActorMaterial(index);
+    else if (action == "context-browser-open") OpenContextBrowserAsset();
+    else if (action == "context-view-mode" && runtimeActionSink != nullptr)
+    {
+        UiAction request;
+        request.type = UiActionType::SetDebugViewMode;
+        request.intValue = static_cast<int>(index);
+        runtimeActionSink->RequestRuntimeAction(std::move(request));
+    }
+    else if (action == "context-save-csm" && runtimeActionSink != nullptr &&
+        !runtimeView.activeWorldPath.empty())
+    {
+        // 与运行时页的 save_csm_to_scene 是同一条 UiAction，不新增场景写入路径。
+        UiAction request;
+        request.type = UiActionType::SaveCsmSettingsToScene;
+        runtimeActionSink->RequestRuntimeAction(std::move(request));
+    }
     else if (runtimeActionSink != nullptr)
     {
         UiAction request;
@@ -1802,6 +2079,10 @@ void MaterialInstanceAssetEditorPanel::ProcessEvent(Rml::Event& event)
     // 点击菜单栏以外的任何位置都收起已展开的菜单；菜单项自身的收起在下面按 action 处理。
     if (event.GetType() == "click" && !openMenu.empty() && !IsInsideMenuBar(event.GetTargetElement()))
         CloseMenus();
+    // 上下文菜单同一规则：点弹层以外收起，条目自身的收起在动作派发之后。
+    if (event.GetType() == "click" && IsContextMenuOpen() &&
+        !IsInsideContextMenu(event.GetTargetElement()))
+        CloseContextMenu();
     if (docking.ProcessEvent(event, HasModal()))
     {
         const std::string activatedPanel = docking.ConsumeActivatedPanel();
@@ -1811,6 +2092,15 @@ void MaterialInstanceAssetEditorPanel::ProcessEvent(Rml::Event& event)
             resourceEditorVisible = true;
             RefreshResourceEditor();
         }
+        event.StopPropagation();
+        return;
+    }
+    // 右键抬起在 RmlUi 里只是带 button=1 的 mouseup（没有 contextmenu 事件），
+    // 因此必须在这里拦下来：下面的分支只处理 click/change/dblclick，右键会直接掉出去。
+    if (event.GetType() == "mouseup" && event.GetParameter<int>("button", 0) == 1)
+    {
+        // 有模态弹窗时不打开菜单：About 与脏关闭弹窗存在期间工作区命令一律不可用。
+        if (!HasModal()) OpenContextMenu(event);
         event.StopPropagation();
         return;
     }
@@ -1845,6 +2135,9 @@ void MaterialInstanceAssetEditorPanel::ProcessEvent(Rml::Event& event)
         }
         else if (event.GetType() == "click") HandleClick(*element, action);
         else if (event.GetType() == "change") HandleChange(*element, action);
+        // 条目派发完成后才收起菜单：动作本身不读取"菜单是否打开"这个状态。
+        // 禁用条目在上面就已返回，因此菜单保持打开（与菜单栏的禁用条目一致）。
+        if (event.GetType() == "click" && IsInsideContextMenu(element)) CloseContextMenu();
     }
     catch (const std::exception& error)
     {

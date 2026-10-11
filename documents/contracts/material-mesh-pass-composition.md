@@ -64,6 +64,29 @@ MaterialInputs EvaluateMaterialInputs(in MaterialFunctionContext context);
 第一版固定 `vertexFactoryKey = StaticMesh`，对应当前固定顶点输入 locations。
 这个 key 已进入 shader identity，但尚未提供可插拔 Vertex Factory 实现。
 
+## 编辑器网格 pass：材质组合的显式例外
+
+`config/renderGraphConfig.json` 里的 `editorGrid` pass（`type: "editorGrid"`）**不参与**
+上面这条材质组合链：它的 shader 直接输出顶点色，没有 `shaderEvaluation`、没有
+`MaterialInputs`、不接 Material Function、也不进 GBuffer / 阴影 / IBL。它仍然声明
+`needCreateMaterial: true` 与 `materialInstancePath`，只是为了走既有的 pass 材质所有权与
+热重载事务路径，不是因为需要材质求值。
+
+它存在的理由与边界：
+
+- **它是场景几何，不是 UI 叠层。** 画在 `sceneColor` / `sceneDepth` 上、`loadOp: load`，
+  因此深度测试能正确遮挡它。做成 UI 叠层反而要手工复现相机投影 —— 而相机的 aspect 已经
+  由 `EngineLoop::SynchronizeSceneViewport` 按视口 rect 设好，跟着场景走就自动正确。
+- **它画在 `forwardTransparent` 之后**，`depthWriteEnable: false`、`depthCompareOp: lessOrEqual`，
+  所以共面时网格胜出、且它不写深度去影响后续 pass。
+- **顶点流复用共享 `Vertex`**（`source/VertexDataStruct.h`：position=0、normal=1、color=2）。
+  网格 shader 只消费 0 与 2，**跳过 normal** —— normal 的取值只为满足共享布局，不表达光照信息。
+- 几何在 XZ 地面上抬升 `kGroundLift`，避免与场景自身的 y=0 地面在共面像素上随机归属；
+  颜色是 tone mapping 前的线性值且全部低于 bloom 阈值，因此后处理不会把网格线当成高光。
+
+几何所有权在 `source/render/editor/editorViewportGrid.*`（只管"网格长什么样"），
+pass 状态与深度策略在配置与 `shader/glsl/pass/editorGrid.*`（管"怎么被画出来"）。
+
 ## Set 1 合同
 
 M_ 的 `parameters` 和 `textures` 生成完整 `MaterialDescriptorSchema`：

@@ -546,7 +546,7 @@ RmlUi 6.2 的 `PropertyParserColour` 在 RGBA 分支对每个分量统一走整�
    最后发现是 `UiSubsystem` 在 developer UI 可见时把 `#hud` 显式设为
    `display: none`——元素本身按设计不显示，与颜色格式无关。
 
-## 尚未实现能力清单（2026-10-11 核对，第七轮后）
+## 尚未实现能力清单（2026-10-12 核对，第八轮后）
 
 以下在 HEAD 与当前分支中都不存在，属于新增而非回归：
 
@@ -558,8 +558,6 @@ RmlUi 6.2 的 `PropertyParserColour` 在 RGBA 分支对每个分量统一走整�
 - 地形节点（`World` 没有 terrain 访问器，仓库里也没有 terrain 运行时）
 - 大纲多选、重命名、父级/文件夹层级、actor 增删
 - 资产缩略图、模型几何预览、纹理像素查看
-- 视口参考网格 / 地面 / 坐标轴显示（`shader/glsl` 里的 `measureGrid` 是 BRDF 测量探针的，
-  不是编辑器参考系）
 - 原生多窗口、IME 输入
 - 视口渲染成本仍按完整 swapchain 尺寸（**注意这不是"投影错误"**：相机 aspect 已按视口
   rect 设置，见 `EngineLoop::SynchronizeSceneViewport`，画面比例是对的；`sceneViewportOutput`
@@ -569,7 +567,24 @@ RmlUi 6.2 的 `PropertyParserColour` 在 RGBA 分支对每个分量统一走整�
 - 材质实例纹理 override 的 live 生效（保存 JSON 后才生效）
 - HSV 取色器
 - 编辑器偏好 / 项目设置面板；可配置快捷键
-- 右键上下文菜单（全仓库无实现，`platformApplication.cpp` 里的命中只是鼠标按键分发）
+- 右键菜单里那些**没有后端**的条目：重命名、复制、删除、移动、重新导入、
+  在资源管理器中显示、重定向器修复、聚焦/框选、父级挂接 —— 菜单本身已实现（见下），
+  这些条目是因为仓库里没有对应命令而**刻意不放**，不是遗漏
+
+**第八轮消掉的两条**（2026-10-12）：
+
+- **右键上下文菜单**：全工作区一个根级弹层 `#editor-context-menu`，覆盖大纲 actor 行、
+  Content Browser 资产磁贴与视口三处。目标在打开时解析为稳定地址（actor 身份 / 资产
+  `data-path`），**不回退到当前选中** —— 这正是"右键 A、命令作用到 B"的静默错误目标缺陷，
+  由 `ContextMenuVisibilityToggleTargetsTheRightClickedActorNotTheSelection` 钉住。
+  契约见 `contracts/ui-component-system.md` 的「右键上下文菜单」节。
+- **视口参考网格与坐标轴**：新增 `editorGrid` 渲染 pass（画在 `forwardTransparent` 之后、
+  写 `sceneColor`/`sceneDepth` 且 `depthWriteEnable: false`），几何为 XZ 地面网格条带
+  加原点三轴。它是**场景几何**而不是 UI 叠层，因此深度遮挡天然正确。
+  契约见 `contracts/material-mesh-pass-composition.md` 的「编辑器网格 pass」节。
+  注意：在默认场景（`SC_sphere_array`，球阵位于 z=0 平面、相机正对 +z）里，XZ 地面网格
+  是**正侧视**，因此默认视角下几乎不可见 —— 这是几何必然，不是渲染缺陷。
+  （`shader/glsl` 里的 `measureGrid` 是 BRDF 测量探针的，与编辑器参考系无关，别复用。）
 
 **已从本清单消掉的**：大纲虚拟化在第 5 轮完成（受限挂载窗口 + spacer），
 本条此前误留在"未实现"里，2026-10-11 核对时删除。

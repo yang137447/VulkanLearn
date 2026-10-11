@@ -2439,6 +2439,14 @@ bool UiSubsystem::ProcessDeveloperUiEvent(const PlatformEvent& event)
             (materialInstanceEditorPanel != nullptr && materialInstanceEditorPanel->IsWorkspaceDragging());
         if ((sceneHit || (sceneViewportInputActive && !resourceEditor)) && !captured && !modal)
         {
+            // 右键在运行时输入里没有任何绑定：相机看的是相对鼠标增量，拾取只认左键。
+            // 视口命中的右键因此交给编辑器文档，右键上下文菜单才有 RmlUi 事件与坐标；
+            // 返回 true 表示这次右键已被编辑器消费，同一事件不再走场景输入。
+            if (event.mouseButton == PlatformMouseButton::Right)
+            {
+                ProcessRuntimeUiEvent(event);
+                return true;
+            }
             // 图像属于 editor DOM，但内部场景输入归游戏；不让点击把焦点交给文档根节点。
             if (event.type == PlatformEventType::MouseButtonDown)
             {

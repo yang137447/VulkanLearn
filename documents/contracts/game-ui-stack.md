@@ -154,6 +154,15 @@ the player's requested relative mouse mode.
 when pointer ownership is Game and relative mouse mode is actually enabled.
 Releasing capture cannot keep rotating the camera.
 
+**A scene-viewport hit splits by button.** The **left** button keeps the existing path:
+it is the picking button (`materialInstanceSelection.cpp`), it blurs editor focus, and it
+passes through to the game. The **right** button is consumed by the editor document
+instead, so the workspace's context menu can open over the viewport. That is a deliberate
+asymmetry with a reason: the right button has no runtime binding to break — camera look
+comes from SDL relative deltas rather than a button gesture — while the left button does.
+Everything else on a scene-viewport hit still returns before RmlUi, so a stray event
+cannot leak into the editor DOM.
+
 F10/gamepad Start toggle runtime controls, F1 toggles the editor, Esc toggles
 requested mouse capture, and gamepad East closes the runtime page.
 Ctrl+S saves the active MI when no close modal is open.

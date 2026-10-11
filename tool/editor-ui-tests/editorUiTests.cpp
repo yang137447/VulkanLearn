@@ -416,6 +416,70 @@ protected:
         auto* notice = document->GetElementById("editor-notice");
         return notice == nullptr ? std::string() : notice->GetInnerRML();
     }
+    // 右键上下文菜单在 mouseup 打开：RmlUi 6.2 没有 contextmenu 事件，右键只表现为带
+    // button=1 的 mousedown/mouseup。坐标必须真实经过 RmlUi 的 hover 链，否则面板拿到的
+    // 目标元素不是被点的那一行。
+    void RightClick(Rml::Element* element)
+    {
+        ASSERT_NE(element, nullptr);
+        RightClickAt(element->GetAbsoluteOffset(Rml::BoxArea::Border) + Rml::Vector2f(4.0f, 4.0f));
+    }
+    void RightClickAt(Rml::Vector2f point)
+    {
+        context->ProcessMouseMove(static_cast<int>(std::lround(point.x)),
+            static_cast<int>(std::lround(point.y)), 0);
+        context->ProcessMouseButtonDown(1, 0);
+        context->ProcessMouseButtonUp(1, 0);
+        context->Update();
+    }
+    void ClickContextItem(const std::string& action)
+    {
+        auto* item = ContextMenuItem(action);
+        ASSERT_NE(item, nullptr) << action;
+        item->DispatchEvent("click", {});
+        context->Update();
+    }
+    Rml::Element* ContextMenu() const { return document->GetElementById("editor-context-menu"); }
+    Rml::Element* ContextMenuItem(const std::string& action) const
+    {
+        auto* menu = ContextMenu();
+        return menu == nullptr ? nullptr
+            : menu->QuerySelector("[data-action=" + action + "]");
+    }
+    // view mode 的条目共用 context-view-mode 动作，用 data-index（debug view 取值）区分。
+    Rml::Element* ContextViewModeItem(int mode) const
+    {
+        auto* menu = ContextMenu();
+        if (menu == nullptr) return nullptr;
+        Rml::ElementList matches;
+        menu->QuerySelectorAll(matches, "[data-action=context-view-mode]");
+        for (auto* item : matches)
+            if (item->GetAttribute<int>("data-index", -1) == mode) return item;
+        return nullptr;
+    }
+    std::vector<Rml::Element*> ContextMenuItems() const
+    {
+        std::vector<Rml::Element*> items;
+        auto* menu = ContextMenu();
+        if (menu == nullptr) return items;
+        Rml::ElementList matches;
+        menu->QuerySelectorAll(matches, ".menu-item");
+        for (auto* item : matches) items.push_back(item);
+        return items;
+    }
+    std::string ContextMenuTitle() const
+    {
+        auto* title = document->GetElementById("editor-context-menu-title");
+        return title == nullptr ? std::string() : title->GetInnerRML();
+    }
+    Rml::Element* BrowserItem(const std::string& path) const
+    {
+        Rml::ElementList items;
+        document->GetElementById("asset-list")->QuerySelectorAll(items, "[data-action=browser-item]");
+        for (auto* item : items)
+            if (item->GetAttribute<std::string>("data-path", "") == path) return item;
+        return nullptr;
+    }
     TestSystem system;
     TestRenderer renderer;
     CommandSink sink;
@@ -2716,6 +2780,277 @@ TEST_F(EditorUiTest, MissingMeshIdentityIsStillRejectedInAMultiSectionWorld)
     // 被拒绝的写入不得产生任何副作用：只有显式下发的那一个 actor 被改了。
     EXPECT_FALSE(world.IsMeshSceneObjectVisible("SM_car_wheel_bl"));
     EXPECT_TRUE(world.GetMeshObjects().at("Sphere_A").visible);
+}
+
+TEST_F(EditorUiTest, OutlinerRowRightClickOpensAContextMenuForThatActor)
+{
+    AddActor(SunActor(3.0f, true));
+    SettleOutliner();
+    ASSERT_FALSE(panel->IsContextMenuOpen());
+
+    auto* row = OutlinerRowElement("Sun_Light");
+    ASSERT_NE(row, nullptr);
+    const Rml::Vector2f point =
+        row->GetAbsoluteOffset(Rml::BoxArea::Border) + Rml::Vector2f(4.0f, 4.0f);
+    RightClickAt(point);
+
+    EXPECT_TRUE(panel->IsContextMenuOpen());
+    EXPECT_TRUE(ContextMenu()->IsVisible());
+    // 标题行给出目标名：菜单指向的对象与被右键的那一行是同一个。
+    EXPECT_NE(ContextMenuTitle().find("Sun_Light"), std::string::npos);
+    EXPECT_NE(ContextMenuItem("context-outliner-visible"), nullptr);
+    // 位置由每次调用的右键坐标决定，不是固定位置也不是上一次的位置。
+    const auto offset = ContextMenu()->GetAbsoluteOffset(Rml::BoxArea::Border);
+    EXPECT_NEAR(offset.x, point.x, 1.5f);
+    EXPECT_NEAR(offset.y, point.y, 1.5f);
+}
+
+// 菜单目标必须是"被右键的那一行"，不是面板的当前选择：右键 B 而选中 A 时，
+// 可见性开关只能改 B。这条断言就是目标解析的判据。
+TEST_F(EditorUiTest, ContextMenuVisibilityToggleTargetsTheRightClickedActorNotTheSelection)
+{
+    EditorSceneActorSnapshot mesh = MeshActor("Body_A", 1);
+    EditorSceneActorSnapshot light = PointLightActor("Key_Point_Light", 4.0f, 12.0f);
+    const std::string meshIdentity = mesh.identity;
+    const std::string lightIdentity = light.identity;
+    AddActor(std::move(mesh));
+    AddActor(std::move(light));
+    snapshot.selectedActorIdentity = meshIdentity;
+    SettleOutliner();
+    ASSERT_NE(meshIdentity, lightIdentity);
+
+    RightClick(OutlinerRowElement("Key_Point_Light"));
+    ASSERT_TRUE(panel->IsContextMenuOpen());
+    EXPECT_EQ(panel->ContextMenuTarget(), lightIdentity);
+    ClickContextItem("context-outliner-visible");
+
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::SetActorVisible);
+    EXPECT_EQ(runtimeSink.actions.back().stringValue, lightIdentity);
+    EXPECT_EQ(runtimeSink.actions.back().intValue, 0);
+}
+
+TEST_F(EditorUiTest, ContextMenuVisibilityItemFollowsAndInvertsTheActorState)
+{
+    EditorSceneActorSnapshot light = PointLightActor("Key_Point_Light", 4.0f, 12.0f);
+    light.visible = false;
+    const std::string identity = light.identity;
+    AddActor(std::move(light));
+    SettleOutliner();
+
+    RightClick(OutlinerRowElement("Key_Point_Light"));
+    ASSERT_TRUE(panel->IsContextMenuOpen());
+    auto* item = ContextMenuItem("context-outliner-visible");
+    ASSERT_NE(item, nullptr);
+    // 条目文案来自冻结的可见性；命令发出的是它的反面，与行尾眼睛同一语义。
+    EXPECT_NE(item->GetInnerRML().find("Show in Viewport"), std::string::npos);
+    ClickContextItem("context-outliner-visible");
+
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions.back().stringValue, identity);
+    EXPECT_EQ(runtimeSink.actions.back().intValue, 1);
+}
+
+// 相机没有渲染侧可见性状态，也没有别的逐对象动作：与其放一个点了没有反应的条目，
+// 不如不提供菜单（与大纲行尾不显示眼睛是同一条规则）。
+TEST_F(EditorUiTest, ContextMenuIsNotOfferedForAnActorWithoutAnActorScopedAction)
+{
+    AddActor(CameraActor("ShotCam_A"));
+    SettleOutliner();
+
+    RightClick(OutlinerRowElement("ShotCam_A"));
+    EXPECT_FALSE(panel->IsContextMenuOpen());
+    EXPECT_FALSE(ContextMenu()->IsVisible());
+    EXPECT_TRUE(ContextMenuItems().empty());
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, ContextMenuClosesAfterAnItemIsChosen)
+{
+    AddActor(SunActor(3.0f, true));
+    SettleOutliner();
+    RightClick(OutlinerRowElement("Sun_Light"));
+    ASSERT_TRUE(panel->IsContextMenuOpen());
+    ASSERT_TRUE(ContextMenu()->IsVisible());
+
+    ClickContextItem("context-outliner-visible");
+
+    EXPECT_FALSE(panel->IsContextMenuOpen());
+    EXPECT_FALSE(ContextMenu()->IsVisible());
+    EXPECT_EQ(runtimeSink.actions.size(), 1u);
+}
+
+TEST_F(EditorUiTest, ContextMenuClosesWhenClickingOutsideIt)
+{
+    AddActor(SunActor(3.0f, true));
+    SettleOutliner();
+    RightClick(OutlinerRowElement("Sun_Light"));
+    ASSERT_TRUE(panel->IsContextMenuOpen());
+
+    // 菜单栏标题在工具条里，既不在弹层内部也不是任何菜单条目。
+    Click("#menu-edit-title");
+    context->Update();
+
+    EXPECT_FALSE(panel->IsContextMenuOpen());
+    EXPECT_FALSE(ContextMenu()->IsVisible());
+}
+
+// mesh 的材质槽条目走与点击槽行完全相同的选择路由：同一个 sink、同一份槽身份。
+TEST_F(EditorUiTest, ContextMenuMaterialItemUsesTheExistingSlotSelectionRoute)
+{
+    AddActor(MeshActor("SM_A", 1));
+    SettleOutliner();
+    RightClick(OutlinerRowElement("SM_A"));
+    ASSERT_TRUE(panel->IsContextMenuOpen());
+
+    ClickContextItem("context-actor-material");
+
+    ASSERT_TRUE(selectionSink.selectedMaterial.has_value());
+    EXPECT_EQ(selectionSink.selectedMaterial->materialInstancePath,
+        "Maps/SC_test/Materials/MI_test.json");
+    EXPECT_EQ(selectionSink.selectedMaterial->materialSlotName, "Surface");
+    EXPECT_TRUE(selectionSink.selectedActorIdentity.empty());
+}
+
+TEST_F(EditorUiTest, BrowserAssetContextMenuOpensTheAssetThroughTheExistingOpenCommand)
+{
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+    catalog->revision = 2;
+    catalog->assets = {
+        {"Maps/SC_test/Materials/MI_test.json", EditorAssetKind::MaterialInstance, "Test Material"},
+        {"Meshes/SM_test.json", EditorAssetKind::Mesh, "Test Mesh"}};
+    snapshot.assetCatalog = catalog;
+    Refresh();
+
+    auto* tile = BrowserItem("Maps/SC_test/Materials/MI_test.json");
+    ASSERT_NE(tile, nullptr);
+    RightClick(tile);
+    ASSERT_TRUE(panel->IsContextMenuOpen());
+    EXPECT_NE(ContextMenuTitle().find("Test Material"), std::string::npos);
+    ASSERT_NE(ContextMenuItem("context-browser-open"), nullptr);
+
+    ClickContextItem("context-browser-open");
+
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands.back().type, EditorCommandType::OpenMaterialInstanceAsset);
+    EXPECT_FALSE(panel->IsContextMenuOpen());
+}
+
+// 目录节点在只读目录里没有条目，也没有真实可执行的目录级动作：不提供菜单，
+// 而不是拿"打开目录"这类与双击重复的条目把菜单填满。
+TEST_F(EditorUiTest, BrowserFolderRightClickDoesNotOpenAContextMenu)
+{
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+    catalog->assets = {
+        {"Maps/SC_alpha/MI_a.json", EditorAssetKind::MaterialInstance, "A"}};
+    snapshot.assetCatalog = catalog;
+    Refresh();
+    // 只在非递归视图里才出现目录条目（递归视图只列资产）。
+    Click("#browser-recursive");
+    Refresh();
+
+    auto* folder = BrowserItem("Maps");
+    ASSERT_NE(folder, nullptr);
+    RightClick(folder);
+    EXPECT_FALSE(panel->IsContextMenuOpen());
+    EXPECT_TRUE(ContextMenuItems().empty());
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+// 视口没有拾取后端，因此菜单只放视口级动作：Lit / Unlit 与 CSM 设置持久化，
+// 不含任何需要"鼠标下是哪个对象"的条目。
+TEST_F(EditorUiTest, ViewportContextMenuOffersOnlyViewportWideCommands)
+{
+    Click("#workspace-viewport-tab");
+    Refresh();
+    auto* image = document->GetElementById("editor-viewport-image");
+    ASSERT_NE(image, nullptr);
+    const auto box = image->GetBox().GetSize(Rml::BoxArea::Border);
+    ASSERT_GT(box.x, 0.0f);
+    ASSERT_GT(box.y, 0.0f);
+
+    RightClickAt(image->GetAbsoluteOffset(Rml::BoxArea::Border) + box * 0.5f);
+
+    ASSERT_TRUE(panel->IsContextMenuOpen());
+    EXPECT_EQ(ContextMenuTitle(), "Viewport");
+    EXPECT_EQ(ContextMenuItems().size(), 3u);
+    EXPECT_NE(ContextViewModeItem(0), nullptr);
+    EXPECT_NE(ContextViewModeItem(1), nullptr);
+    EXPECT_NE(ContextMenuItem("context-save-csm"), nullptr);
+}
+
+TEST_F(EditorUiTest, ViewportContextMenuViewModeChecksTheRuntimeModeAndReusesTheDebugViewCommand)
+{
+    UiViewModelSnapshot view;
+    view.debugViewMode = 1;
+    panel->UpdateRuntimeView(view);
+    Click("#workspace-viewport-tab");
+    Refresh();
+    auto* image = document->GetElementById("editor-viewport-image");
+    ASSERT_NE(image, nullptr);
+    const auto box = image->GetBox().GetSize(Rml::BoxArea::Border);
+    ASSERT_GT(box.y, 0.0f);
+    RightClickAt(image->GetAbsoluteOffset(Rml::BoxArea::Border) + box * 0.5f);
+
+    ASSERT_TRUE(panel->IsContextMenuOpen());
+    // 勾选来自冻结的运行时快照，不是面板的第二份状态。
+    auto* lit = ContextViewModeItem(0);
+    auto* unlit = ContextViewModeItem(1);
+    ASSERT_NE(lit, nullptr);
+    ASSERT_NE(unlit, nullptr);
+    EXPECT_TRUE(lit->QuerySelector(".menu-check")->GetInnerRML().empty());
+    EXPECT_FALSE(unlit->QuerySelector(".menu-check")->GetInnerRML().empty());
+
+    lit->DispatchEvent("click", {});
+    context->Update();
+
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::SetDebugViewMode);
+    EXPECT_EQ(runtimeSink.actions.back().intValue, 0);
+}
+
+// CSM 设置要写进活动场景文件：没有活动 World 时条目明确禁用，点了不产生命令，
+// 而不是提交一条注定被拒绝的运行时命令（与 Edit 的 Undo/Redo 同一表现规则）。
+TEST_F(EditorUiTest, ViewportContextMenuDisablesCsmSaveWithoutAnActiveWorld)
+{
+    Click("#workspace-viewport-tab");
+    Refresh();
+    UiViewModelSnapshot view;
+    panel->UpdateRuntimeView(view);
+    auto* image = document->GetElementById("editor-viewport-image");
+    ASSERT_NE(image, nullptr);
+    const auto box = image->GetBox().GetSize(Rml::BoxArea::Border);
+    ASSERT_GT(box.y, 0.0f);
+    RightClickAt(image->GetAbsoluteOffset(Rml::BoxArea::Border) + box * 0.5f);
+
+    auto* save = ContextMenuItem("context-save-csm");
+    ASSERT_NE(save, nullptr);
+    EXPECT_TRUE(save->HasAttribute("disabled"));
+    ClickContextItem("context-save-csm");
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, ViewportContextMenuSavesCsmSettingsThroughTheExistingRuntimeCommand)
+{
+    UiViewModelSnapshot view;
+    view.activeWorldPath = "Maps/SC_test/SC_test.json";
+    panel->UpdateRuntimeView(view);
+    Click("#workspace-viewport-tab");
+    Refresh();
+    auto* image = document->GetElementById("editor-viewport-image");
+    ASSERT_NE(image, nullptr);
+    const auto box = image->GetBox().GetSize(Rml::BoxArea::Border);
+    ASSERT_GT(box.y, 0.0f);
+    RightClickAt(image->GetAbsoluteOffset(Rml::BoxArea::Border) + box * 0.5f);
+
+    auto* save = ContextMenuItem("context-save-csm");
+    ASSERT_NE(save, nullptr);
+    EXPECT_FALSE(save->HasAttribute("disabled"));
+    ClickContextItem("context-save-csm");
+
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::SaveCsmSettingsToScene);
 }
 
 } // namespace

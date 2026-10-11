@@ -297,6 +297,17 @@
             </div>
         </div>
 
+        <!-- 鼠标右键上下文菜单：全工作区只有这一个弹层，位置与条目在每次调用时由面板写入，
+             它自己不保存目标。放在根节点（与 #close-dialog / #about-dialog 同级）而不是
+             #editor-toolbar 内部：工具条是动作条，它的按钮统计不该被一个浮层改变；
+             也不放在 #editor-content 里，那里的 overflow 会裁掉靠近边缘的菜单。
+             条目复用 .menu-item 叶控件，容器不复用 .menu-popup：后者的显示依赖
+             .menu-root.open 祖先，本弹层没有菜单栏父节点。 -->
+        <div id="editor-context-menu">
+            <div class="context-menu-title" id="editor-context-menu-title"></div>
+            <div id="editor-context-menu-items"></div>
+        </div>
+
         <div id="about-dialog">
             <div class="dialog about-dialog">
                 <h2>VulkanLearn Editor</h2>

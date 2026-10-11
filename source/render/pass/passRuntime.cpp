@@ -65,6 +65,9 @@ void PassRuntime::RecordPass(const std::string& passName, PassRuntimeContext& co
     case RenderGraphPassType::PostProcess:
         RecordPostProcessPass(context);
         return;
+    case RenderGraphPassType::EditorGrid:
+        RecordEditorGridPass(context);
+        return;
     case RenderGraphPassType::Unknown:
         break;
     }
@@ -250,20 +253,45 @@ void PassRuntime::RecordForwardTransparentPass(
 
 void PassRuntime::RecordPostProcessPass(PassRuntimeContext& context) const
 {
+    if (!BindPassMaterialPipeline(context))
+    {
+        return;
+    }
+
+    context.renderPass.Draw(context.commandBuffer);
+    context.commandBuffer.endRenderPass();
+}
+
+void PassRuntime::RecordEditorGridPass(PassRuntimeContext& context) const
+{
+    // 参考网格与 sky 同构：只向 sceneColor 合成。区别在深度状态由 pass 决定 ——
+    // 网格按世界空间投影，depthTestEnable 让它被场景几何正确遮挡，depthWriteEnable
+    // 关闭使它不改变后续 pass 看到的深度。
+    if (!BindPassMaterialPipeline(context))
+    {
+        return;
+    }
+
+    context.services.DrawEditorGridGeometry(context.commandBuffer);
+    context.commandBuffer.endRenderPass();
+}
+
+bool PassRuntime::BindPassMaterialPipeline(PassRuntimeContext& context) const
+{
     const Renderpass& renderPass = context.renderPass;
     vk::CommandBuffer& commandBuffer = context.commandBuffer;
 
     std::shared_ptr<MaterialInstance> passMaterialInstance = renderPass.materialInstance.lock();
     if (!passMaterialInstance)
     {
-        return;
+        return false;
     }
 
     context.services.UpdateMaterialInstanceUBOForPass(passMaterialInstance);
     std::shared_ptr<Material> baseMaterial = passMaterialInstance->GetBaseMaterial().lock();
     if (!baseMaterial)
     {
-        return;
+        return false;
     }
 
     const PipelineBase& renderPipeline = *baseMaterial->GetRenderPipeline();
@@ -290,8 +318,7 @@ void PassRuntime::RecordPostProcessPass(PassRuntimeContext& context) const
             nullptr);
     }
 
-    renderPass.Draw(commandBuffer);
-    commandBuffer.endRenderPass();
+    return true;
 }
 
 } // namespace VL

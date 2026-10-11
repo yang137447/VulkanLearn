@@ -59,6 +59,9 @@ public:
     bool IsPanelVisible(const std::string& panel) const { return docking.IsPanelVisible(panel); }
     bool SetPanelVisible(const std::string& panel, bool visible) { return docking.SetPanelVisible(panel, visible); }
     bool IsMenuOpen(const std::string& menu) const { return openMenu == menu; }
+    // 右键上下文菜单只有一份状态；目标见 ContextMenuTarget（稳定地址，不是快照下标）。
+    bool IsContextMenuOpen() const { return contextMenuKind != ContextMenuKind::None; }
+    const std::string& ContextMenuTarget() const { return contextMenuTarget; }
     bool IsAboutVisible() const { return aboutVisible; }
     // 分组展开状态是会话 UI 状态：不进入资产文档，也不随停靠布局保存。
     bool IsSectionExpanded(const std::string& key) const { return collapsedSections.count(key) == 0; }
@@ -78,6 +81,15 @@ public:
     void ProcessEvent(Rml::Event& event) override;
 
 private:
+    // 上下文菜单的目标类别。目标只用稳定地址表达（actor 稳定身份 / 资产完整路径）：
+    // 菜单条目要到下一次点击才执行，而快照下标只在当帧有效，用下标会指到另一个对象。
+    enum class ContextMenuKind
+    {
+        None,
+        Actor,
+        BrowserAsset,
+        Viewport
+    };
     struct PendingEdit
     {
         std::string key;
@@ -114,6 +126,17 @@ private:
     void CloseMenus();
     void ApplyMenuState();
     bool IsInsideMenuBar(const Rml::Element* element) const;
+    void OpenContextMenu(Rml::Event& event);
+    void CloseContextMenu();
+    void ApplyContextMenuState();
+    std::string ContextMenuItemsMarkup() const;
+    bool IsInsideContextMenu(const Rml::Element* element) const;
+    const EditorSceneActorSnapshot* ContextMenuActor() const;
+    bool FindCatalogAssetKind(const std::string& path, EditorAssetKind& kind,
+        std::string& name) const;
+    void ToggleContextActorVisibility();
+    void OpenContextActorMaterial(size_t slotIndex);
+    void OpenContextBrowserAsset();
     void SetMarkup(const std::string& id, std::string markup);
     void SetControlValue(const std::string& id, const std::string& value);
     void SetDisabled(const std::string& id, bool disabled);
@@ -147,6 +170,12 @@ private:
     std::string requestedJsonPath;
     // 顶部菜单的展开状态是本地面板状态：它不进入资产文档、停靠布局文件或运行时快照。
     std::string openMenu;
+    // 右键上下文菜单：目标在打开那一刻解析成稳定地址，条目点击不再读面板的当前选择。
+    // 位置是右键坐标（文档坐标），只用于放置根节点上的弹层。
+    ContextMenuKind contextMenuKind = ContextMenuKind::None;
+    std::string contextMenuTarget;
+    float contextMenuX = 0.0f;
+    float contextMenuY = 0.0f;
     bool aboutVisible = false;
     // 视口工具条的变换工具与坐标系只驱动高亮；文件里没有 gizmo，也没有 transform 编辑后端，
     // 切换它们不提交 UiAction 或资产命令（见 ViewportToolbar 相关注释与文档）。
