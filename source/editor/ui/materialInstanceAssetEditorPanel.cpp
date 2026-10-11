@@ -34,9 +34,10 @@ using UiWidgets::Option;
 using UiWidgets::WidgetAction;
 using UiWidgets::WidgetRefreshScope;
 
-// 文档命令的可用性同时作用于工具栏按钮和 File/Edit 菜单项，避免出现两套互相矛盾的启用状态。
+// 文档命令的可用性统一作用在所有发出该命令的控件上，避免出现两套互相矛盾的启用状态。
+// 工具条不再重复排列这些命令（见 editor-workspace.rml 的注释），所以只剩菜单项；
+// 这里保留数组形式，将来再加其它发布点时只需追加 id。
 constexpr const char* DocumentCommandIds[] = {
-    "save-asset", "revert-asset", "reset-asset", "validate-asset", "reload-asset",
     "menu-file-save", "menu-file-revert", "menu-file-reload",
     "menu-edit-reset", "menu-edit-validate"};
 
@@ -346,8 +347,9 @@ bool MaterialInstanceAssetEditorPanel::ValidateDocument(Rml::ElementDocument& ca
         "scene-models", "material-slots", "asset-list", "document-tabs",
         "document-title", "document-status", "editor-notice", "details-content",
         "offline-status", "offline-notice", "close-dialog", "close-document-name",
-        "mode-realtime", "mode-offline", "save-asset", "revert-asset", "reset-asset",
-        "validate-asset", "reload-asset", "apply-preview", "restore-preview",
+        "mode-realtime", "mode-offline", "menu-file-save", "menu-file-revert",
+        "menu-file-reload", "menu-edit-reset", "menu-edit-validate",
+        "apply-preview", "restore-preview",
         "offline-samples", "offline-bounces", "offline-lightSamples", "offline-seed",
         "offline-aov", "offline-exposure", "offline-pause", "offline-resume",
         "offline-stop", "offline-restart", "offline-export", "asset-search",

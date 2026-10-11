@@ -49,11 +49,10 @@
                 </div>
             </div>
             <h1>VulkanLearn</h1>
-            <button id="save-asset" data-action="save">Save</button>
-            <button id="revert-asset" data-action="revert">Revert</button>
-            <button id="reset-asset" data-action="reset-all">Reset All</button>
-            <button id="validate-asset" data-action="validate">Validate</button>
-            <button id="reload-asset" data-action="reload">Reload</button>
+            <!-- 工具条是动作条，不是菜单项的第二次罗列：Save / Revert / Reset All / Validate /
+                 Reload 只在 File 与 Edit 菜单里出现。此前这里另排了同样五个文字按钮，
+                 与菜单重复且把工具条挤成一条按钮带。Reset Layout 保留在这里，因为它是
+                 工作区操作而不是文档命令。 -->
             <div class="toolbar-spacer"></div>
             <button id="workspace-reset" data-action="workspace-reset">Reset Layout</button>
             <button data-action="runtime-page">Settings</button>

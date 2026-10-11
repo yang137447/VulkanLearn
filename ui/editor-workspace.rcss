@@ -142,6 +142,18 @@ body {
 #workspace-resource-icon { flex-shrink: 0; width: 16px; height: 16px; margin-right: 6px; }
 #workspace-resource-tab img { flex-shrink: 0; width: 16px; height: 16px; margin-right: 6px; }
 #dock-dynamic-tabs img { flex-shrink: 0; width: 16px; height: 16px; margin-right: 6px; }
+/* 标签栏里每个标签的图标与文字：图标不能压缩，文字按可用宽度省略号截断。
+   注意 #workspace-resource-icon / #workspace-resource-label 是**资源文档标签在标签栏里**的
+   图标与文字（editor-workspace.rml 的 #workspace-resource-tab 带着它们，
+   ValidateDocument 要求这两个 id 存在），resource-editor 正文里另有一对同名元素。
+   所以上面的 id 规则同时服务标签栏和正文两处，不是死规则。 */
+.workspace-tabs button img { flex-shrink: 0; width: 16px; height: 16px; margin-right: 6px; }
+.workspace-tabs button span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 #workspace-resource-label {
     min-width: 0;
     overflow: hidden;

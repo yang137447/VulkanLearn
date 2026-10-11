@@ -647,7 +647,7 @@ TEST_F(EditorUiTest, MeshLevelAndTextureOpenReadOnlyJsonAndSceneRequestsWorldLoa
         snapshot.jsonDocument = json;
         panel->Build(snapshot);
         context->Update();
-        EXPECT_TRUE(document->GetElementById("save-asset")->HasAttribute("disabled"));
+        EXPECT_TRUE(document->GetElementById("menu-file-save")->HasAttribute("disabled"));
         if (asset.kind == EditorAssetKind::Mesh || asset.kind == EditorAssetKind::Texture)
         {
             EXPECT_TRUE(document->GetElementById("resource-editor")->IsVisible());
@@ -1889,7 +1889,9 @@ TEST_F(EditorUiTest, MenuBarClosesWhenClickingOutsideIt)
     Click("#menu-window-title");
     context->Update();
     ASSERT_TRUE(panel->IsMenuOpen("window"));
-    Click("#save-asset");
+    // 点工具条上的任意位置都会让菜单关闭；这里点标题栏空白处，因为工具条上已不再重复
+    // 排列文档命令按钮（它们只在 File/Edit 菜单里）。
+    Click("#editor-toolbar h1");
     context->Update();
     EXPECT_FALSE(panel->IsMenuOpen("window"));
     EXPECT_FALSE(document->GetElementById("menu-window-popup")->IsVisible());
@@ -1912,9 +1914,91 @@ TEST_F(EditorUiTest, EditUndoRedoArePresentButDisabled)
     EXPECT_TRUE(runtimeSink.actions.empty());
 }
 
+// 工具条是动作条，不是菜单项的第二次罗列。把文档命令按钮重新排回工具条会让顶栏变成一条
+// 与 File/Edit 重复的按钮带（用户报的"顶部几个 save 按钮很不协调"），所以这里把它钉住。
+TEST_F(EditorUiTest, ToolbarDoesNotRestateTheDocumentMenuCommands)
+{
+    const char* forbidden[] = {"save-asset", "revert-asset", "reset-asset",
+                               "validate-asset", "reload-asset"};
+    for (const char* id : forbidden)
+        EXPECT_EQ(document->GetElementById(id), nullptr)
+            << id << " duplicates a File/Edit menu command in the toolbar";
+
+    // 每个文档命令在工具条里出现零次，在菜单里恰好一次。
+    // 注意 #editor-menubar 本身就在 #editor-toolbar 内部，所以不能直接断言
+    // "#editor-toolbar button[data-action=save] 为空" —— 那会把菜单项算成工具条按钮
+    // （实测过：选择器返回的是 menu-file-save）。这里逐个排除 menubar 子树。
+    const char* commands[] = {"save", "revert", "reload", "reset-all", "validate"};
+    auto* toolbar = document->GetElementById("editor-toolbar");
+    auto* menubar = document->GetElementById("editor-menubar");
+    ASSERT_NE(toolbar, nullptr);
+    ASSERT_NE(menubar, nullptr);
+    for (const char* command : commands)
+    {
+        const std::string selector = std::string("[data-action=") + command + "]";
+        Rml::ElementList matches;
+        toolbar->QuerySelectorAll(matches, selector);
+        int outsideMenu = 0;
+        for (Rml::Element* element : matches)
+        {
+            bool insideMenu = false;
+            for (Rml::Element* ancestor = element; ancestor != nullptr;
+                 ancestor = ancestor->GetParentNode())
+                if (ancestor == menubar) { insideMenu = true; break; }
+            if (!insideMenu) ++outsideMenu;
+        }
+        EXPECT_EQ(outsideMenu, 0)
+            << "toolbar restates the document command outside the menu: " << command;
+        EXPECT_EQ(static_cast<int>(matches.size()), 1)
+            << "document command must exist exactly once, in the menu: " << command;
+    }
+
+    // 防止上面的断言空洞通过：工具条在 menubar 之外确实还有按钮，
+    // 断言必须建立在真正遍历到这些按钮的基础上。
+    Rml::ElementList toolbarButtons;
+    toolbar->QuerySelectorAll(toolbarButtons, "button");
+    int outside = 0;
+    for (Rml::Element* element : toolbarButtons)
+    {
+        bool insideMenu = false;
+        for (Rml::Element* ancestor = element; ancestor != nullptr;
+             ancestor = ancestor->GetParentNode())
+            if (ancestor == menubar) { insideMenu = true; break; }
+        if (!insideMenu) ++outside;
+    }
+    EXPECT_EQ(outside, 3) << "expected exactly Reset Layout / Settings / Close Editor; "
+                             "if this changed, re-check the assertions above are not vacuous";
+    EXPECT_NE(toolbar->QuerySelector("[data-action=workspace-reset]"), nullptr);
+}
+
+// 空标签没有意义，而且用户实际看到过 —— 选中标签 94px 宽、整条高度内既无文字也无图标。
+// 成因是 resource 文档面板在 resourceTabs 里找不到自己时整段跳过 inner RML 写入。
+TEST_F(EditorUiTest, EveryDockTabCarriesAVisibleLabel)
+{
+    for (const char* panel : {"viewport", "outliner", "details", "content", "renderer", "resource"})
+    {
+        auto* tab = document->GetElementById(std::string("workspace-") + panel + "-tab");
+        ASSERT_NE(tab, nullptr) << panel;
+        const std::string markup = tab->GetInnerRML();
+        EXPECT_FALSE(markup.empty()) << panel << " tab has no inner RML at all";
+        // 去掉标签后必须还有可见文字，否则标签只剩一个图标。
+        std::string text = markup;
+        for (std::string::size_type tag = text.find('<'); tag != std::string::npos;
+             tag = text.find('<', tag))
+        {
+            const auto close = text.find('>', tag);
+            if (close == std::string::npos) break;
+            text.erase(tag, close - tag + 1);
+        }
+        while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front())))
+            text.erase(text.begin());
+        EXPECT_FALSE(text.empty()) << panel << " tab renders no label text: " << markup;
+    }
+}
+
 TEST_F(EditorUiTest, FileMenuDocumentCommandsShareTheToolbarAvailability)
 {
-    // 有活动 MI 文档时 File/Edit 的文档命令与工具栏按钮同样可用。
+    // 有活动 MI 文档时 File/Edit 的文档命令可用（工具条不再重复这些命令）。
     EXPECT_FALSE(document->GetElementById("menu-file-save")->HasAttribute("disabled"));
     EXPECT_FALSE(document->GetElementById("menu-edit-reset")->HasAttribute("disabled"));
 
@@ -1937,7 +2021,6 @@ TEST_F(EditorUiTest, FileMenuDocumentCommandsShareTheToolbarAvailability)
     ASSERT_NE(list->GetChild(0), nullptr);
     list->GetChild(0)->DispatchEvent("dblclick", {});
     Refresh();
-    EXPECT_TRUE(document->GetElementById("save-asset")->HasAttribute("disabled"));
     EXPECT_TRUE(document->GetElementById("menu-file-save")->HasAttribute("disabled"));
     EXPECT_TRUE(document->GetElementById("menu-edit-validate")->HasAttribute("disabled"));
 }

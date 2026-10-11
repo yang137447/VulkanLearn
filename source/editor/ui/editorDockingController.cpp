@@ -49,20 +49,46 @@ std::string TabId(const std::string& panel)
     return "workspace-renderer-tab";
 }
 
+// 资源文档标签的图标/文字 id 是**契约元素**，不能省：RebuildShell 会用 SetInnerRML 覆盖
+// #workspace-resource-tab 的内容，没有打开的资产时走这里的回退分支，而
+// ValidateDocument 要求 #workspace-resource-icon 与 #workspace-resource-label 存在，
+// editor-workspace.rcss 也按这两个 id 定义图标尺寸与省略号截断。
+// 删掉它们会让 Attach 直接失败（"Editor workspace is missing element"）。
 std::string BaseTabMarkup(const std::string& panel)
 {
-    if (panel == "viewport") return "Viewport";
-    if (panel == "outliner") return "Scene Outliner";
-    if (panel == "details") return "Details";
-    if (panel == "content") return "Content Browser";
-    if (panel == "renderer") return "Renderer";
+    if (panel == "viewport") return "<span>Viewport</span>";
+    if (panel == "outliner") return "<span>Scene Outliner</span>";
+    if (panel == "details") return "<span>Details</span>";
+    if (panel == "content") return "<span>Content Browser</span>";
+    if (panel == "renderer") return "<span>Renderer</span>";
     return "<img id=\"workspace-resource-icon\" src=\"icons/file-box.png\"/>"
         "<span id=\"workspace-resource-label\">Asset Editor</span>";
 }
 
+// 资源文档标签的图标/文字 id 是**契约元素**：ui/editor-workspace.rml 里的
+// #workspace-resource-tab 带着它们，ValidateDocument 要求这两个 id 存在，
+// editor-workspace.rcss 也按这两个 id 定义图标尺寸与省略号截断。不要把它们去掉。
 std::string ResourceTabMarkup(const EditorDockResourceTab& tab)
 {
-    return "<img src=\"" + Text(tab.icon) + "\"/><span>" + Text(tab.label) + "</span>";
+    const std::string label = tab.label.empty()
+        ? std::filesystem::path(tab.path).filename().string()
+        : tab.label;
+    return "<img id=\"workspace-resource-icon\" src=\"" + Text(tab.icon) +
+        "\"/><span id=\"workspace-resource-label\">" + Text(label) + "</span>";
+}
+
+// 每个标签的内容都在这里生成，且**永不产出空标签**：resource 文档面板若在 resourceTabs
+// 里找不到自己（关闭中、刚失效、布局里残留），以前会整段跳过 inner RML 写入，留下一个
+// 只有底色的空标签 —— 实测在 1280×720 下选中标签 94px 宽、y44..70 无任何文字或图标像素。
+// 现在回退到基础标签，空白标签在结构上不可能出现。
+std::string TabContentMarkup(const std::string& panel,
+    const std::vector<EditorDockResourceTab>& resourceTabs)
+{
+    if (DockWorkspace::IsResourceDocumentPanel(panel))
+        for (const auto& resourceTab : resourceTabs)
+            if (resourceTab.panel == panel)
+                return ResourceTabMarkup(resourceTab);
+    return BaseTabMarkup(panel);
 }
 
 void NormalizeResourcePanels(DockLayoutState& state)
@@ -564,19 +590,8 @@ void EditorDockingController::RebuildShell()
                 *document->GetElementById("dock-header-" + std::to_string(node.id)));
             // RmlUi 在 display:none 容器中创建的文本子节点被重新挂到可见标题栏后，
             // 部分版本不会重新触发文字布局；重写 inner RML 让标题和图标在首次绘制时稳定出现。
-            if (DockWorkspace::IsResourceDocumentPanel(panel))
-            {
-                for (const auto& resourceTab : resourceTabs)
-                    if (resourceTab.panel == panel)
-                    {
-                        tab->SetInnerRML(ResourceTabMarkup(resourceTab));
-                        break;
-                    }
-            }
-            else
-            {
-                tab->SetInnerRML(BaseTabMarkup(panel));
-            }
+            // 单一路径写入，找不到 resource 条目时回退到基础标签（见 TabContentMarkup）。
+            tab->SetInnerRML(TabContentMarkup(panel, resourceTabs));
             const std::string bodyId = BodyId(panel);
             if (movedBodies.insert(bodyId).second)
                 MoveElement(*document->GetElementById(bodyId),
