@@ -376,8 +376,16 @@ void PlatformApplication::PollEvents(std::vector<PlatformEvent>& outEvents)
         {
             PlatformEvent platformEvent;
             platformEvent.type = PlatformEventType::WindowResized;
+            // data1/data2 是逻辑尺寸；绘制表面需要物理像素，因此在这里一并取到。
+            // 两者在 100% 缩放下相等，但 swapchain 必须用像素尺寸，不能依赖它们相等。
             platformEvent.width = static_cast<uint32_t>(event.window.data1);
             platformEvent.height = static_cast<uint32_t>(event.window.data2);
+            int pixelWidth = 0;
+            int pixelHeight = 0;
+            SDL_GetWindowSizeInPixels(SDL_GetWindowFromID(event.window.windowID),
+                &pixelWidth, &pixelHeight);
+            platformEvent.pixelWidth = static_cast<uint32_t>(pixelWidth > 0 ? pixelWidth : 0);
+            platformEvent.pixelHeight = static_cast<uint32_t>(pixelHeight > 0 ? pixelHeight : 0);
             outEvents.push_back(platformEvent);
             continue;
         }

@@ -120,6 +120,18 @@ void PlatformWindow::SetSize(int width, int height)
     SDL_SetWindowSize(window, width, height);
 }
 
+// 逻辑尺寸与像素尺寸是**两个不同的量**，不是同一个数的两种写法：
+// SDL 的窗口尺寸是逻辑点（受系统缩放影响），而 Vulkan 的 swapchain extent 必须用物理像素。
+// 在 100% 缩放下两者相等，所以这个区别在开发机上不可见 —— 正因为不可见，才必须显式暴露，
+// 否则一旦运行在缩放显示器上，swapchain 会被建成逻辑尺寸，画面被拉伸/模糊。
+void PlatformWindow::GetSizeInPixels(int& outWidth, int& outHeight) const
+{
+    outWidth = 0;
+    outHeight = 0;
+    if (window == nullptr) return;
+    SDL_GetWindowSizeInPixels(window, &outWidth, &outHeight);
+}
+
 void PlatformWindow::SetRelativeMouseMode(bool enabled)
 {
     SDL_SetWindowRelativeMouseMode(window, enabled);

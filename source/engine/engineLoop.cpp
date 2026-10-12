@@ -516,8 +516,10 @@ void EngineLoop::Tick()
     {
         int drawableWidth = 0;
         int drawableHeight = 0;
-        if (!SDL_GetWindowSizeInPixels(
-                window->GetNativeHandle(), &drawableWidth, &drawableHeight))
+        // 经平台层查询，而不是在这里直接碰 SDL：绘制尺寸的含义属于平台层，
+        // 而且多窗口时"哪个窗口"必须是一个可传入的身份，不能靠一个隐含的全局窗口。
+        window->GetSizeInPixels(drawableWidth, drawableHeight);
+        if (drawableWidth <= 0 || drawableHeight <= 0)
         {
             GetSubsystems().GetDiagnosticsSubsystem().ReportError(
                 std::string("Cannot query drawable size after swapchain out-of-date: ") +
@@ -1033,12 +1035,33 @@ void EngineLoop::PumpPlatformEvents()
 
         if (event.type == PlatformEventType::WindowResized)
         {
+            // 两种尺寸在这里分流，且必须分流：Vulkan 的 swapchain 要**物理像素**，
+            // 而 UI 布局要**逻辑尺寸**。此前两者都拿逻辑尺寸，于是 swapchain 在系统缩放下
+            // 会被建成逻辑尺寸 —— 在 100% 缩放上看不出来，所以这条只能在代码里保证。
+            uint32_t drawableWidth = event.pixelWidth;
+            uint32_t drawableHeight = event.pixelHeight;
+            if (drawableWidth == 0 || drawableHeight == 0)
+            {
+                // 事件没带像素尺寸时（例如合成器未及时更新），回退到像素查询而不是逻辑尺寸，
+                // 因为"用错尺寸"比"尺寸略旧"严重得多。
+                int queriedWidth = 0;
+                int queriedHeight = 0;
+                window->GetSizeInPixels(queriedWidth, queriedHeight);
+                drawableWidth = static_cast<uint32_t>(queriedWidth > 0 ? queriedWidth : 0);
+                drawableHeight = static_cast<uint32_t>(queriedHeight > 0 ? queriedHeight : 0);
+            }
             GetSubsystems().GetDiagnosticsSubsystem().ReportInfo(
                 "Window resized to " +
                 std::to_string(event.width) +
                 "x" +
-                std::to_string(event.height));
-            auto resizeResult = RecreateRendererForWindowResize(event.width, event.height);
+                std::to_string(event.height) +
+                " (drawable " +
+                std::to_string(drawableWidth) +
+                "x" +
+                std::to_string(drawableHeight) +
+                ")");
+            auto resizeResult = RecreateRendererForWindowResize(
+                static_cast<int>(drawableWidth), static_cast<int>(drawableHeight));
             if (resizeResult.IsFailure())
             {
                 GetSubsystems().GetDiagnosticsSubsystem().ReportRuntimeError(
