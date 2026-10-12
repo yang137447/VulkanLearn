@@ -98,7 +98,8 @@ RuntimeResult<PreparedWorldTransition>
 WorldTransitionCoordinator::PrepareWorldLoad(
     const std::string& scenePath,
     RenderGraph& pipelineContractGraph,
-    const MaterialDefinitionReloadBatch* materialDefinitionReload)
+    const MaterialDefinitionReloadBatch* materialDefinitionReload,
+    const nlohmann::json& extraSceneObjects)
 {
     if (scenePath.empty())
     {
@@ -111,7 +112,7 @@ WorldTransitionCoordinator::PrepareWorldLoad(
 
     state = WorldTransitionState::Validating;
     WorldLoader worldLoader;
-    auto worldBuildPlanResult = worldLoader.Load(scenePath);
+    auto worldBuildPlanResult = worldLoader.Load(scenePath, extraSceneObjects);
     if (worldBuildPlanResult.IsFailure())
     {
         state = WorldTransitionState::Failed;

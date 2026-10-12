@@ -259,6 +259,43 @@ void DebugConsole::ProcessCommand(const std::string& line)
         return;
     }
 
+    // previewmodel <scene> <model>：把模型并入场景后加载。
+    // 这是"模型编辑器"要用的加载机制，先用命令暴露出来，因为它可以在不变 UI 的情况下
+    // 被独立验证（`--console-command` + 截图），而 UI 建在未验证的加载路径上会很贵。
+    if (command == "previewmodel")
+    {
+        std::string scenePath;
+        std::string modelPath;
+        if (!(commandStream >> scenePath >> modelPath))
+        {
+            std::cout << "Usage: previewmodel <scene-path> <model-path>" << std::endl;
+            std::cout << "  Loads the scene with the model injected as one extra scene object."
+                      << std::endl;
+            return;
+        }
+
+        // 注入对象必须自带 name 与 type：校验器按这两个字段分派对象类型，
+        // 缺任意一个都会在校验阶段报错（而不是被静默忽略）。
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type = VL::RuntimeCommandType::LoadWorld;
+        runtimeCommand.stringValue = scenePath;
+        runtimeCommand.extraSceneObjects = nlohmann::json::array({
+            {
+                {"name", "preview_model"},
+                {"type", "mesh"},
+                {"modelPath", modelPath},
+                {"position", {0.0, 0.0, 0.0}},
+                {"rotation", {0.0, 0.0, 0.0}},
+                // 单位网格在预览相机（约 630 cm 外）下只有 1 cm 大，几乎不可见。
+                // 用 SC_lookdev 放置同一个单位球时的尺度作为默认，保证注入即有可见结果。
+                {"scale", {43.0, 43.0, 43.0}},
+            },
+        });
+        runtimeCommand.sourceText = line;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
     if (command == "environment")
     {
         float value = 0.0f;

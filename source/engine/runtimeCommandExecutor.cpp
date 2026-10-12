@@ -743,6 +743,7 @@ void RuntimeCommandExecutor::ApplyLoadWorld(
     executionResult.loadWorldSucceeded = false;
     executionResult.loadWorldCommandPath = command.stringValue;
     executionResult.loadWorldResolvedPath.clear();
+    executionResult.loadWorldExtraSceneObjects = command.extraSceneObjects;
     executionResult.rendererResourcesBeforeLoad = CaptureRuntimeRendererResourceFingerprint();
 
     if (command.stringValue.empty())

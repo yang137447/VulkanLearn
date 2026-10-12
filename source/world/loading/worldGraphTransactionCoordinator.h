@@ -3,6 +3,8 @@
 #include <set>
 #include <string>
 
+#include <nlohmann/json.hpp>
+
 #include "core/runtimeResult.h"
 
 class Controller;
@@ -56,7 +58,10 @@ public:
 
     RuntimeResult<WorldHandle> Execute(
         const std::string& scenePath,
-        const MaterialDefinitionReloadBatch* materialDefinitionReload = nullptr);
+        const MaterialDefinitionReloadBatch* materialDefinitionReload = nullptr,
+        // 本次加载附加的场景对象（JSON 对象数组，可为空）。模型编辑器靠它把打开的模型
+        // 放进中性预览环境，而不必生成临时场景文件。
+        const nlohmann::json& extraSceneObjects = nlohmann::json::array());
 
     void SetFaultInjection(
         WorldGraphTransactionTestFaultInjection injection) noexcept;

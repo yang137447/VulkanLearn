@@ -5,6 +5,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include <nlohmann/json.hpp>
+
 #include "core/runtimeResult.h"
 #include "pipeline/pipelineFactory.h"
 #include "render/resource/rendererResourceCache.h"
@@ -63,10 +65,14 @@ public:
         float initialCameraAspectRatio,
         uint32_t shadowCascadeCount);
 
+    // `extraSceneObjects` 是并入本次加载的场景对象（JSON 对象数组，可为空）。
+    // 模型编辑器用它把"当前打开的模型"放进固定的中性预览环境，而不必生成临时场景文件。
+    // 放在末尾并给默认值，是为了让不关心注入的既有调用点保持原样。
     RuntimeResult<PreparedWorldTransition> PrepareWorldLoad(
         const std::string& scenePath,
         RenderGraph& pipelineContractGraph,
-        const MaterialDefinitionReloadBatch* materialDefinitionReload = nullptr);
+        const MaterialDefinitionReloadBatch* materialDefinitionReload = nullptr,
+        const nlohmann::json& extraSceneObjects = nlohmann::json::array());
 
 private:
     WorldManager& worldManager;

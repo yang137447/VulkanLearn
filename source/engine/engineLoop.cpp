@@ -1148,7 +1148,8 @@ RuntimeResult<WorldHandle>
 EngineLoop::ExecuteWorldGraphTransaction(
     const std::string& scenePath,
     const MaterialDefinitionReloadBatch*
-        materialDefinitionReload)
+        materialDefinitionReload,
+    const nlohmann::json& extraSceneObjects)
 {
     if (!rendererBackend || !rendererBackendInitialized)
     {
@@ -1169,7 +1170,8 @@ EngineLoop::ExecuteWorldGraphTransaction(
 
     return worldGraphTransactionCoordinator->Execute(
         scenePath,
-        materialDefinitionReload);
+        materialDefinitionReload,
+        extraSceneObjects);
 }
 
 RuntimeResult<WorldHandle>
@@ -1210,7 +1212,9 @@ void EngineLoop::ProcessRequestedWorldTransition(
     auto transactionResult =
         ExecuteWorldGraphTransaction(
             commandResult
-                .loadWorldResolvedPath);
+                .loadWorldResolvedPath,
+            nullptr,
+            commandResult.loadWorldExtraSceneObjects);
     if (transactionResult.IsFailure())
     {
         commandResult.loadWorldError =
