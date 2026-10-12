@@ -99,6 +99,7 @@
 | 改编辑器命令协议 | `contracts/material-instance-editor.md` |
 | 加/改渲染 pass 或 RenderGraph 资源 | `contracts/vulkanlearn-architecture.html`、`config/renderGraphConfig.json` |
 | 改 UI 组件或停靠布局 | `contracts/ui-component-system.md` |
+| `source/ui/widgets/workspace/**`、`source/editor/ui/editorDockingController.*`（面板集合、默认布局、标签组归属、布局持久化格式） | `contracts/ui-component-system.md` 的「面板与标签组」节 | — |
 | 改场景对象校验/加载 | `contracts/vulkanlearn-architecture.html`、`schema/scene.schema.json` |
 | 改测试入口或新增测试目标 | `contracts/testing.md` |
 | 移动/新建/删除文档 | `README.md`（分层与硬纪律）、本表 |
