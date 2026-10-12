@@ -24,7 +24,9 @@ void VulkanManager::Init(std::vector<const char *> &extensions, SDL_Window *wind
     CreateVkSurface(defaultTarget(), window);
     CreateVkDevice();
     CreateVkSwapChain(defaultTarget());
-    CreateVkCommandBuffer();
+    // 池是共享的，先建一次；随后各目标从它分配自己的每图像缓冲。
+    CreateCommandPool();
+    CreateTargetCommandBuffers(defaultTarget());
     CreateSyncObjects();
 }
 
@@ -32,9 +34,12 @@ VulkanManager::~VulkanManager()
 {
     device.waitIdle(); //等待设备空闲
     DestroySyncObjects();
-    DestroyVkCommandBuffer();
     for (VL::PresentTarget &target : presentTargets)
+    {
+        DestroyTargetCommandBuffers(target);
         DestroyVkSwapChain(target);
+    }
+    DestroyCommandPool();
     DestroyVkDevice();
     for (VL::PresentTarget &target : presentTargets)
         DestroyVkSurface(target);
@@ -56,12 +61,15 @@ void VulkanManager::ReCreateSwapChain(int newWidth, int newHeight)
         static_cast<uint32_t>(newHeight)
     };
 
+    // 只动这个目标：共享命令池**不重建**，否则会连带毁掉别的窗口的缓冲
+    // 与正在进行的一次性命令。同步对象目前仍是全局的（见路线图阶段 1 第三片说明），
+    // 因此这里仍会重建它们 —— 那是下一步要按目标拆开的部分。
     DestroySyncObjects();
-    DestroyVkCommandBuffer();
+    DestroyTargetCommandBuffers(target);
     DestroyVkSwapChain(target);
 
     CreateVkSwapChain(target);
-    CreateVkCommandBuffer();
+    CreateTargetCommandBuffers(target);
     CreateSyncObjects();
 }
 
@@ -370,7 +378,7 @@ void VulkanManager::DestroyVkSwapChain(VL::PresentTarget &target)
     target.imageCount = 0;
 }
 
-void VulkanManager::CreateVkCommandBuffer()
+void VulkanManager::CreateCommandPool()
 {
     vk::CommandPoolCreateInfo commandPoolCreateInfo;
     commandPoolCreateInfo
@@ -379,35 +387,52 @@ void VulkanManager::CreateVkCommandBuffer()
     commandPool = device.createCommandPool(commandPoolCreateInfo);
     assert(commandPool);
     VulkanDebug::SetObjectName(device, commandPool, vk::ObjectType::eCommandPool, "CommandPool: Main");
+}
 
-    commandBuffers.resize(defaultTarget().imageCount);
+void VulkanManager::DestroyCommandPool()
+{
+    if (!commandPool)
+    {
+        return;
+    }
+    // 池的销毁会连带释放从它分配出去的命令缓冲，因此调用方必须先确保
+    // 各目标的命令缓冲已经不再被引用（本函数只在设备级关闭路径上被调用）。
+    device.destroyCommandPool(commandPool);
+    commandPool = nullptr;
+}
+
+void VulkanManager::CreateTargetCommandBuffers(VL::PresentTarget &target)
+{
+    // 从**共享**池分配，但缓冲数量随该目标的 swapchain 图像数变化，因此归目标所有。
+    target.commandBuffers.resize(target.imageCount);
 
     vk::CommandBufferAllocateInfo commandBufferAllocateInfo;
     commandBufferAllocateInfo
         .setCommandPool(commandPool)
         .setLevel(vk::CommandBufferLevel::ePrimary)
-        .setCommandBufferCount(commandBuffers.size());
-    vk::Result result = device.allocateCommandBuffers(&commandBufferAllocateInfo, commandBuffers.data());
+        .setCommandBufferCount(static_cast<uint32_t>(target.commandBuffers.size()));
+    vk::Result result = device.allocateCommandBuffers(
+        &commandBufferAllocateInfo, target.commandBuffers.data());
+    assert(result == vk::Result::eSuccess);
 
-    for (size_t i = 0; i < commandBuffers.size(); i++)
+    for (size_t i = 0; i < target.commandBuffers.size(); i++)
     {
-        VulkanDebug::SetObjectName(device, commandBuffers[i], vk::ObjectType::eCommandBuffer, "CommandBuffer: SwapchainIndex " + std::to_string(i));
+        VulkanDebug::SetObjectName(device, target.commandBuffers[i], vk::ObjectType::eCommandBuffer,
+            "CommandBuffer: SwapchainIndex " + std::to_string(i));
     }
-
 }
 
-void VulkanManager::DestroyVkCommandBuffer()
+void VulkanManager::DestroyTargetCommandBuffers(VL::PresentTarget &target)
 {
-    if (commandPool)
+    // 只释放缓冲，**不销毁池**：池是共享的，销毁它会连带影响别的窗口与一次性命令。
+    if (!commandPool || target.commandBuffers.empty())
     {
-        if (!commandBuffers.empty())
-        {
-            device.freeCommandBuffers(commandPool, commandBuffers.size(), commandBuffers.data());
-        }
-        device.destroyCommandPool(commandPool);
-        commandPool = nullptr;
+        target.commandBuffers.clear();
+        return;
     }
-    commandBuffers.clear();
+    device.freeCommandBuffers(commandPool,
+        static_cast<uint32_t>(target.commandBuffers.size()), target.commandBuffers.data());
+    target.commandBuffers.clear();
 }
 
 void VulkanManager::CreateSyncObjects()

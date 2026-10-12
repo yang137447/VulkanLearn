@@ -52,11 +52,9 @@ private:
     // 帧级的 acquire 信号量：按 MAX_FRAMES_IN_FLIGHT 分配，跨目标共享，因此不随呈现目标走。
     inline std::vector<vk::Semaphore>& GetImageAcquiredSemaphores() { return imageAcquiredSemaphores; }
 
-    // 呈现状态住在 PresentTarget 里，且**没有隐式默认目标**：本类不再提供
-    // "取那个 swapchain"之类的无参访问器，因为那正是多窗口要消除的东西
-    // （一个全局单例装作是唯一目标）。需要呈现状态的调用点必须经 GetPresentTarget(身份) 取。
-    // 设备级状态仍直接提供，因为它们本来就跨目标共享。
-    inline std::vector<vk::CommandBuffer>& GetCommandBuffers() { return commandBuffers; }
+    // 命令缓冲已移入 PresentTarget（按图像数）。这里不再提供全局命令缓冲访问器，
+    // 因为它曾经让"哪个目标的缓冲"无从表达。
+    // 共享命令池仍由本类持有，见上面的 CreateCommandPool / DestroyCommandPool。
     inline uint32_t GetGraphicsQueueTimestampValidBits() const
     {
         return graphicsQueueTimestampValidBits;
@@ -81,8 +79,15 @@ private:
     void CreateVkSwapChain(VL::PresentTarget &target);
     void DestroyVkSwapChain(VL::PresentTarget &target);
 
-    void CreateVkCommandBuffer();
-    void DestroyVkCommandBuffer();
+    // 共享命令池：生命周期与设备一致，**不随 swapchain 重建**。
+    // 一次性命令（BeginSingleTimeCommands）与着色器热重载校验都在用它，
+    // 所以任何窗口重建 swapchain 都不该把池销毁掉。
+    void CreateCommandPool();
+    void DestroyCommandPool();
+
+    // 每目标的每图像主命令缓冲：从共享池分配，随该目标的 swapchain 图像数变化。
+    void CreateTargetCommandBuffers(VL::PresentTarget &target);
+    void DestroyTargetCommandBuffers(VL::PresentTarget &target);
 
     void CreateSyncObjects();
     void DestroySyncObjects();
@@ -114,11 +119,10 @@ private:
 
     vk::Device device;
 
-    // commandPool 与命令缓冲目前仍由本类持有：池是共享的（BeginSingleTimeCommands 也在用），
-    // 而命令缓冲按图像数分配、应当每目标。这一步先不改，留到"每目标命令缓冲"那一步，
-    // 否则会同时动到共享池的销毁语义。
+    // commandPool 是**共享**的：BeginSingleTimeCommands 与着色器热重载校验都在用，
+    // 因此它的生命周期与设备一致，不随任何窗口的 swapchain 重建而销毁。
+    // 每图像的主命令缓冲不在这里，而在各自的 PresentTarget 里。
     vk::CommandPool commandPool;
-    std::vector<vk::CommandBuffer> commandBuffers;
 
     // 每窗口一套呈现状态。多窗口接入前只有目标 0；`Init` 创建它。
     std::vector<VL::PresentTarget> presentTargets;

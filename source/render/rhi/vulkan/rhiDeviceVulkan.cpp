@@ -241,11 +241,6 @@ VL::PresentTarget& RHIDeviceVulkan::GetPresentTarget()
     return VulkanManager::GetInstance().GetPresentTarget(0);
 }
 
-std::vector<vk::CommandBuffer>& RHIDeviceVulkan::GetCommandBuffers()
-{
-    return VulkanManager::GetInstance().GetCommandBuffers();
-}
-
 uint32_t RHIDeviceVulkan::GetFrameFenceCount() const
 {
     return static_cast<uint32_t>(VulkanManager::GetInstance().GetTaskFinishedFences().size());
@@ -268,16 +263,14 @@ VulkanFrameSyncResources RHIDeviceVulkan::GetFrameSyncResources(uint32_t frameIn
 VulkanSwapchainImageSyncResources RHIDeviceVulkan::GetSwapchainImageSyncResources(
     const VL::PresentTarget& target, uint32_t swapchainImageIndex) const
 {
-    // 命令缓冲仍属共享层（与共享命令池的销毁语义绑定），而 renderFinished 信号量随目标走。
-    auto& commandBuffers = VulkanManager::GetInstance().GetCommandBuffers();
-    const auto& renderFinishedSemaphores = target.renderFinishedSemaphores;
-
-    RequireFrameSyncIndex("commandBuffers", swapchainImageIndex, commandBuffers.size());
-    RequireFrameSyncIndex("renderFinishedSemaphores", swapchainImageIndex, renderFinishedSemaphores.size());
+    // 两个索引都按**该目标**的图像数校验：命令缓冲与 renderFinished 信号量都随目标走。
+    RequireFrameSyncIndex("commandBuffers", swapchainImageIndex, target.commandBuffers.size());
+    RequireFrameSyncIndex("renderFinishedSemaphores", swapchainImageIndex,
+        target.renderFinishedSemaphores.size());
 
     VulkanSwapchainImageSyncResources resources;
-    resources.commandBuffer = commandBuffers[swapchainImageIndex];
-    resources.renderFinishedSemaphore = renderFinishedSemaphores[swapchainImageIndex];
+    resources.commandBuffer = target.commandBuffers[swapchainImageIndex];
+    resources.renderFinishedSemaphore = target.renderFinishedSemaphores[swapchainImageIndex];
     return resources;
 }
 

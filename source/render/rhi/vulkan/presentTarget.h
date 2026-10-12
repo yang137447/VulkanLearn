@@ -43,12 +43,13 @@ struct PresentTarget
     std::vector<vk::ImageView> imageViews;
 
     // 按图像数分配，因此每目标一份。
-    // 注意这里**没有** commandBuffers：命令缓冲目前仍由 `VulkanManager` 持有并按图像数分配，
-    // 而它与命令池的销毁语义绑在一起（`DestroyVkCommandBuffer` 会销毁共享池，
-    // `BeginSingleTimeCommands` 也在用那个池），所以不能单独搬过来。
-    // 曾经在本结构里留过一个空的 commandBuffers 字段，无人写入 —— 已删除，避免出现第二个"真相"。
     std::vector<vk::Semaphore> renderFinishedSemaphores;
     std::vector<vk::Fence> imagesInFlightFences;
+    // 每图像一个主命令缓冲。它从**共享**命令池分配（池的所有权在 VulkanManager，
+    // 因为 BeginSingleTimeCommands 等一次性用法也在吃那个池），但缓冲本身随 swapchain
+    // 图像数变化，所以属于目标。这纠正了此前"销毁缓冲顺带销毁池"的连带销毁：
+    // 共享池不该因为某个窗口重建 swapchain 而消失。
+    std::vector<vk::CommandBuffer> commandBuffers;
 
     // 呈现队列族可能与其他目标不同：每个 surface 各自解析（当前只对目标 0 解析过）。
     std::optional<uint32_t> presentQueueFamilyIndex;

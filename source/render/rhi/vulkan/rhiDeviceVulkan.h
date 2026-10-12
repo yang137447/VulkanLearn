@@ -289,7 +289,6 @@ private:
     // 而是"这个后端负责的呈现目标"，后者才带得动第二个窗口。
     // 目标 0 之外的接线尚未完成，因此这里暂时只返回主窗口的目标。
     VL::PresentTarget& GetPresentTarget();
-    std::vector<vk::CommandBuffer>& GetCommandBuffers();
     std::vector<vk::Fence>& GetTaskFinishedFences();
     std::vector<vk::Semaphore>& GetImageAcquiredSemaphores();
 
