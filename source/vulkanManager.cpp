@@ -14,13 +14,16 @@ void VulkanManager::Init(std::vector<const char *> &extensions, SDL_Window *wind
 #if defined(VULKANLEARN_ENABLE_VULKAN_VALIDATION)
     instanceExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
 #endif
-    sdlWindow = window;
+
+    // 目标 0 = 主窗口。多窗口时这里会有第二个目标，且设备只创建一次。
+    presentTargets.emplace_back();
+    presentTargets.front().window = window;
 
     CreateVkInstance();
     EnumeratePhysicalDevices();
-    CreateVkSurface();
+    CreateVkSurface(presentTargets.front(), window);
     CreateVkDevice();
-    CreateVkSwapChain();
+    CreateVkSwapChain(presentTargets.front());
     CreateVkCommandBuffer();
     CreateSyncObjects();
 }
@@ -30,9 +33,11 @@ VulkanManager::~VulkanManager()
     device.waitIdle(); //等待设备空闲
     DestroySyncObjects();
     DestroyVkCommandBuffer();
-    DestroyVkSwapChain();
+    for (VL::PresentTarget &target : presentTargets)
+        DestroyVkSwapChain(target);
     DestroyVkDevice();
-    DestroyVkSurface();
+    for (VL::PresentTarget &target : presentTargets)
+        DestroyVkSurface(target);
     DestroyVkInstance();
 }
 
@@ -45,16 +50,17 @@ void VulkanManager::ReCreateSwapChain(int newWidth, int newHeight)
 
     device.waitIdle(); //等待设备空闲
 
-    requestedSwapChainExtent = vk::Extent2D{
+    VL::PresentTarget &target = presentTargets.front();
+    target.requestedExtent = vk::Extent2D{
         static_cast<uint32_t>(newWidth),
         static_cast<uint32_t>(newHeight)
     };
 
     DestroySyncObjects();
     DestroyVkCommandBuffer();
-    DestroyVkSwapChain();
+    DestroyVkSwapChain(target);
 
-    CreateVkSwapChain();
+    CreateVkSwapChain(target);
     CreateVkCommandBuffer();
     CreateSyncObjects();
 }
@@ -97,18 +103,19 @@ void VulkanManager::EnumeratePhysicalDevices()
     gpuMemoryProperties = physicalDevice.getMemoryProperties();
 }
 
-void VulkanManager::CreateVkSurface()
+void VulkanManager::CreateVkSurface(VL::PresentTarget &target, SDL_Window *window)
 {
-    bool result = SDL_Vulkan_CreateSurface(sdlWindow, instance, nullptr,&surface);
+    bool result = SDL_Vulkan_CreateSurface(window, instance, nullptr, &target.surface);
     if(result == false)
     {
         throw std::runtime_error("Failed to create Vulkan surface.");
     }
 }
 
-void VulkanManager::DestroyVkSurface()
+void VulkanManager::DestroyVkSurface(VL::PresentTarget &target)
 {
-    instance.destroySurfaceKHR(surface);
+    instance.destroySurfaceKHR(target.surface);
+    target.surface = VK_NULL_HANDLE;
 }
 
 void VulkanManager::CreateVkDevice()
@@ -130,7 +137,7 @@ void VulkanManager::CreateVkDevice()
         {
             graphicQueueFamilyIndices.push_back(i);
         }
-        if (physicalDevices[kGpuIndex].getSurfaceSupportKHR(i, surface))
+        if (physicalDevices[kGpuIndex].getSurfaceSupportKHR(i, presentTargets.front().surface))
         {
             presentQueueFamilyIndices.push_back(i);
         }
@@ -155,7 +162,7 @@ void VulkanManager::CreateVkDevice()
             if (graphicQueueFamilyIndices[i] == presentQueueFamilyIndices[j])
             {
                 graphicsQueueFamilyIndex = graphicQueueFamilyIndices[i];
-                presentQueueFamilyIndex = presentQueueFamilyIndices[j];
+                presentTargets.front().presentQueueFamilyIndex = presentQueueFamilyIndices[j];
                 break;
             }
         }
@@ -164,7 +171,7 @@ void VulkanManager::CreateVkDevice()
     if (!graphicsQueueFamilyIndex.has_value())
     {
         graphicsQueueFamilyIndex = graphicQueueFamilyIndices[0];
-        presentQueueFamilyIndex = presentQueueFamilyIndices[0];
+        presentTargets.front().presentQueueFamilyIndex = presentQueueFamilyIndices[0];
     }
     graphicsQueueTimestampValidBits =
         queueFamilyProperties[graphicsQueueFamilyIndex.value()].timestampValidBits;
@@ -211,23 +218,23 @@ void VulkanManager::DestroyVkDevice()
     device.destroy();
 }
 
-void VulkanManager::CreateVkSwapChain()
+void VulkanManager::CreateVkSwapChain(VL::PresentTarget &target)
 {
     // 获取支持的表面格式
-    std::vector<vk::SurfaceFormatKHR> surfaceFormats = physicalDevices[kGpuIndex].getSurfaceFormatsKHR(surface);
+    std::vector<vk::SurfaceFormatKHR> surfaceFormats = physicalDevices[kGpuIndex].getSurfaceFormatsKHR(target.surface);
     assert(!surfaceFormats.empty());
     for(const auto &availableFormat : surfaceFormats)
     {
         if(availableFormat.format == vk::Format::eR8G8B8A8Srgb && availableFormat.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear)
         {
-            surfaceFormat = availableFormat;
+            target.surfaceFormat = availableFormat;
             break;
         }
     }
     // 获取KHR表面能力
-    vk::SurfaceCapabilitiesKHR surfaceCapabilities = physicalDevices[kGpuIndex].getSurfaceCapabilitiesKHR(surface);
+    vk::SurfaceCapabilitiesKHR surfaceCapabilities = physicalDevices[kGpuIndex].getSurfaceCapabilitiesKHR(target.surface);
     //获取支持的显示模式数量
-    std::vector<vk::PresentModeKHR> presentModes = physicalDevices[kGpuIndex].getSurfacePresentModesKHR(surface);
+    std::vector<vk::PresentModeKHR> presentModes = physicalDevices[kGpuIndex].getSurfacePresentModesKHR(target.surface);
     assert(!presentModes.empty());
     // 确定一下显示模式
     vk::PresentModeKHR presentMode = vk::PresentModeKHR::eFifo;
@@ -250,28 +257,28 @@ void VulkanManager::CreateVkSwapChain()
     if(surfaceCapabilities.currentExtent.width == 0xFFFFFFFF)
     {
         //如果surface能力中的尺寸没有定义（宽度为0xFFFFFFFF表示没定义）
-        const uint32_t requestedWidth = requestedSwapChainExtent.has_value()
-            ? requestedSwapChainExtent->width
+        const uint32_t requestedWidth = target.requestedExtent.has_value()
+            ? target.requestedExtent->width
             : static_cast<uint32_t>(CommonFunction::GetWindowSize().x());
-        const uint32_t requestedHeight = requestedSwapChainExtent.has_value()
-            ? requestedSwapChainExtent->height
+        const uint32_t requestedHeight = target.requestedExtent.has_value()
+            ? target.requestedExtent->height
             : static_cast<uint32_t>(CommonFunction::GetWindowSize().y());
-        swapChainExtent.width = std::clamp(requestedWidth,
+        target.extent.width = std::clamp(requestedWidth,
             surfaceCapabilities.minImageExtent.width, 
             surfaceCapabilities.maxImageExtent.width);
-        swapChainExtent.height = std::clamp(requestedHeight,
+        target.extent.height = std::clamp(requestedHeight,
             surfaceCapabilities.minImageExtent.height, 
             surfaceCapabilities.maxImageExtent.height);
     }
     else
     {
-        swapChainExtent = surfaceCapabilities.currentExtent;
+        target.extent = surfaceCapabilities.currentExtent;
     }
     //确定交换链的图像数量
-    swapChainImageCount = surfaceCapabilities.minImageCount + 1;
-    if (surfaceCapabilities.maxImageCount > 0 && swapChainImageCount > surfaceCapabilities.maxImageCount)
+    target.imageCount = surfaceCapabilities.minImageCount + 1;
+    if (surfaceCapabilities.maxImageCount > 0 && target.imageCount > surfaceCapabilities.maxImageCount)
     {
-        swapChainImageCount = surfaceCapabilities.maxImageCount;
+        target.imageCount = surfaceCapabilities.maxImageCount;
     }
     //KHR表面变换标志
     vk::SurfaceTransformFlagBitsKHR preTransform = surfaceCapabilities.currentTransform;
@@ -287,11 +294,11 @@ void VulkanManager::CreateVkSwapChain()
     // 创建交换链
     vk::SwapchainCreateInfoKHR swapChainCreateInfo;
     swapChainCreateInfo
-        .setSurface(surface)
-        .setMinImageCount(swapChainImageCount)
-        .setImageFormat(surfaceFormat.format)
-        .setImageColorSpace(surfaceFormat.colorSpace)
-        .setImageExtent(swapChainExtent)
+        .setSurface(target.surface)
+        .setMinImageCount(target.imageCount)
+        .setImageFormat(target.surfaceFormat.format)
+        .setImageColorSpace(target.surfaceFormat.colorSpace)
+        .setImageExtent(target.extent)
         .setImageArrayLayers(1)
         .setImageUsage(
             vk::ImageUsageFlagBits::eColorAttachment |
@@ -307,60 +314,60 @@ void VulkanManager::CreateVkSwapChain()
         // one. If we move to Vulkan oldSwapchain handoff, this becomes the
         // previous handle and ownership must be updated in DestroyVkSwapChain.
         .setOldSwapchain(nullptr);
-    if(graphicsQueueFamilyIndex.value() != presentQueueFamilyIndex.value())
+    if(graphicsQueueFamilyIndex.value() != target.presentQueueFamilyIndex.value())
     {
         //如果图形队列和呈现队列不是同一个队列族
         //则需要设置共享模式
-        uint32_t queueFamilyIndices[] = { graphicsQueueFamilyIndex.value(), presentQueueFamilyIndex.value() };
+        uint32_t queueFamilyIndices[] = { graphicsQueueFamilyIndex.value(), target.presentQueueFamilyIndex.value() };
         swapChainCreateInfo
             .setImageSharingMode(vk::SharingMode::eConcurrent)
             .setQueueFamilyIndexCount(2)
             .setPQueueFamilyIndices(queueFamilyIndices);
     }
-    swapChain = device.createSwapchainKHR(swapChainCreateInfo);
-    assert(swapChain);
+    target.swapChain = device.createSwapchainKHR(swapChainCreateInfo);
+    assert(target.swapChain);
 
     // 获取交换链中的图像数量
-    vk::Result result = device.getSwapchainImagesKHR(swapChain, &swapChainImageCount, nullptr);
+    vk::Result result = device.getSwapchainImagesKHR(target.swapChain, &target.imageCount, nullptr);
     assert(result == vk::Result::eSuccess);
     // 获取交换链中的图像
-    presentImages.clear();
-    presentImages.resize(swapChainImageCount);
-    result = device.getSwapchainImagesKHR(swapChain, &swapChainImageCount, presentImages.data());
+    target.images.clear();
+    target.images.resize(target.imageCount);
+    result = device.getSwapchainImagesKHR(target.swapChain, &target.imageCount, target.images.data());
     assert(result == vk::Result::eSuccess);
     // 创建交换链图像视图
-    swapChainImageViews.resize(swapChainImageCount);
-    for (uint32_t i = 0; i < swapChainImageCount; i++)
+    target.imageViews.resize(target.imageCount);
+    for (uint32_t i = 0; i < target.imageCount; i++)
     {
-        VulkanDebug::SetObjectName(device, presentImages[i], vk::ObjectType::eImage, "SwapChainImage: Index " + std::to_string(i));
-        swapChainImageViews[i] = CommonFunction::Create2DImageView(
+        VulkanDebug::SetObjectName(device, target.images[i], vk::ObjectType::eImage, "SwapChainImage: Index " + std::to_string(i));
+        target.imageViews[i] = CommonFunction::Create2DImageView(
             device,
-            presentImages[i],
+            target.images[i],
             1,
-            surfaceFormat.format,
+            target.surfaceFormat.format,
             vk::ImageAspectFlagBits::eColor,
             "SwapChainImageView_Index_" + std::to_string(i));
-        assert(swapChainImageViews[i]);
+        assert(target.imageViews[i]);
     }
 }
 
-void VulkanManager::DestroyVkSwapChain()
+void VulkanManager::DestroyVkSwapChain(VL::PresentTarget &target)
 {
-    for(vk::ImageView& imageView : swapChainImageViews)
+    for(vk::ImageView& imageView : target.imageViews)
     {
         if (imageView)
         {
             device.destroyImageView(imageView);
         }
     }
-    swapChainImageViews.clear();
+    target.imageViews.clear();
 
-    if (swapChain)
+    if (target.swapChain)
     {
-        device.destroySwapchainKHR(swapChain);
-        swapChain = nullptr;
+        device.destroySwapchainKHR(target.swapChain);
+        target.swapChain = nullptr;
     }
-    swapChainImageCount = 0;
+    target.imageCount = 0;
 }
 
 void VulkanManager::CreateVkCommandBuffer()
@@ -373,7 +380,7 @@ void VulkanManager::CreateVkCommandBuffer()
     assert(commandPool);
     VulkanDebug::SetObjectName(device, commandPool, vk::ObjectType::eCommandPool, "CommandPool: Main");
 
-    commandBuffers.resize(swapChainImageCount);
+    commandBuffers.resize(presentTargets.front().imageCount);
 
     vk::CommandBufferAllocateInfo commandBufferAllocateInfo;
     commandBufferAllocateInfo
@@ -407,7 +414,7 @@ void VulkanManager::CreateSyncObjects()
 {
     //创建 Semaphore
     imageAcquiredSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
-    renderFinishedSemaphores.resize(swapChainImageCount);
+    presentTargets.front().renderFinishedSemaphores.resize(presentTargets.front().imageCount);
 
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
     {
@@ -416,12 +423,12 @@ void VulkanManager::CreateSyncObjects()
         assert(imageAcquiredSemaphores[i]);
         VulkanDebug::SetObjectName(device, imageAcquiredSemaphores[i], vk::ObjectType::eSemaphore, "Semaphore: ImageAcquired (Frame " + std::to_string(i) + ")");
     }
-    for (size_t i = 0; i < swapChainImageCount; i++)
+    for (size_t i = 0; i < presentTargets.front().imageCount; i++)
     {
         vk::SemaphoreCreateInfo renderFinishedSemaphoreCreateInfo;
-        renderFinishedSemaphores[i] = device.createSemaphore(renderFinishedSemaphoreCreateInfo);
-        assert(renderFinishedSemaphores[i]);
-        VulkanDebug::SetObjectName(device, renderFinishedSemaphores[i], vk::ObjectType::eSemaphore, "Semaphore_RenderFinished_" + std::to_string(i));
+        presentTargets.front().renderFinishedSemaphores[i] = device.createSemaphore(renderFinishedSemaphoreCreateInfo);
+        assert(presentTargets.front().renderFinishedSemaphores[i]);
+        VulkanDebug::SetObjectName(device, presentTargets.front().renderFinishedSemaphores[i], vk::ObjectType::eSemaphore, "Semaphore_RenderFinished_" + std::to_string(i));
     }
     //创建 Fence
     vk::FenceCreateInfo fenceCreateInfo;
@@ -436,7 +443,7 @@ void VulkanManager::CreateSyncObjects()
         VulkanDebug::SetObjectName(device, taskFinishedFences[i], vk::ObjectType::eFence, "Fence: TaskFinished (FrameIndex " + std::to_string(i) + ")");
     }
 
-    imagesInFlightFences.resize(swapChainImageCount, nullptr);
+    presentTargets.front().imagesInFlightFences.resize(presentTargets.front().imageCount, nullptr);
 }
 
 void VulkanManager::DestroySyncObjects()
@@ -450,14 +457,14 @@ void VulkanManager::DestroySyncObjects()
     }
     imageAcquiredSemaphores.clear();
 
-    for (vk::Semaphore& semaphore : renderFinishedSemaphores)
+    for (vk::Semaphore& semaphore : presentTargets.front().renderFinishedSemaphores)
     {
         if (semaphore)
         {
             device.destroySemaphore(semaphore);
         }
     }
-    renderFinishedSemaphores.clear();
+    presentTargets.front().renderFinishedSemaphores.clear();
     
     for (vk::Fence& fence : taskFinishedFences)
     {
@@ -468,5 +475,5 @@ void VulkanManager::DestroySyncObjects()
     }
     taskFinishedFences.clear();
 
-    imagesInFlightFences.clear();
+    presentTargets.front().imagesInFlightFences.clear();
 }
