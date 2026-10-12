@@ -39,27 +39,43 @@ Vulkan 没有 GL 的隐式 context sharing，因此每窗口必须有**显式**�
 
 ## 耦合面（实测，不是估计）
 
-引用 swapchain 访问器（`GetSwapChain()`、`GetSwapChainImageCount()`、`GetSurfaceFormat()`、
-`GetSwapChainImageViews()`、`ReCreateSwapChain()`）的处数：
+> 修订记录：本节初版用的是 `source/render/…` 迁移**之前**的旧路径，且"54"统计的是访问器
+> **出现次数**。下面的数字来自逐调用点的可达性测绘，取代初版。
 
-| 文件 | 处数 |
-| --- | --- |
-| `source/rhiDeviceVulkan.cpp` | 11 |
-| `source/rendererBackendVulkan.cpp` | 8 |
-| `source/renderGraph.cpp` | 7 |
-| `source/VulkanManager.h` | 5 |
-| `source/rendererObjectResourceManager.cpp` | 4 |
-| `source/rhiDeviceVulkan.h` | 4 |
-| `source/rendererBackendVulkan.h` | 3 |
-| `source/ui/uiOverlayRendererVulkan.cpp` | 3 |
-| `source/offlineDisplayVulkan.cpp` | 2 |
-| `source/proceduralSkyCubeGenerator.cpp` | 2 |
-| `source/vulkanManager.cpp` | 2 |
-| 其余 4 个文件各 1 处 | 4 |
-| **合计** | **54** |
+**唯一漏斗**：`VulkanManager` 是 Meyers 单例（`source/VulkanManager.h:18-22`），第 24 行之后
+**整个 API 都是 private**，唯一 friend 是 `VL::RHIDeviceVulkan`（`VulkanManager.h:25`）。
+裸的 `vk::SwapchainKHR` / `vk::SurfaceKHR` / `PresentInfoKHR` / `acquireNextImage` / `presentKHR`
+只出现在 `VulkanManager.h:44,113,118`、`source/render/rhi/vulkan/rhiDeviceVulkan.h:282`、
+`rhiDeviceVulkan.cpp:93,117-126,238`。
 
-主要战场是 **RHI 设备层**（`rhiDeviceVulkan` 共 15 处），这一点符合预期：
-换窗口呈现对上层应当是"换一个 RHI 目标"，而不是让 render graph 自己关心窗口。
+**结论是好消息**：这不是面条代码，问题是**这个漏斗没有"哪个目标"的键**。
+
+真正的成本不是"改多少处引用"，而是**多少处需要知道目标身份**：
+
+| 类别 | 处数 | 说明 |
+| --- | --- | --- |
+| 帧路径入口（每帧都要带目标句柄） | **8** | `BeginFrame` / `SubmitFrame` / `RecreateSwapchain` / 4 个 getter / 截图 |
+| 初始化期消费者（只在创建时知道一次） | **24** | RenderGraph 8、UI overlay 6、offline display 3、frame resources 5、object resource manager 1、环境 3 |
+| 编织/编排点 | **6** | `RecordAndSubmitCurrentRenderScene`、`GetSceneRenderExtent`、Release/Rebuild、`RecreateRendererForWindowResize`、out-of-date 块、验证服务快照 |
+| RHI + backend 的签名变更 | **21** | RHI 11 + backend 10 |
+
+**若采用 Blender 形态（目标对象自己持有 swapchain / 视图 / 每图像同步 / 命令缓冲，
+由 backend 创建并按句柄传递），逐帧只有 8 个入口需要句柄，其余约 43 处只在 Initialize 时取一次。**
+这是选定的形态。
+
+### 共享 vs 每目标
+
+| 对象 | 归属 | 依据 |
+| --- | --- | --- |
+| `instance` / `device` / `graphicsQueue` / `commandPool` | **共享** | 设备只创建一次；窗口 2 复用 `graphicsQueueFamilyIndex`，只对新 surface 做 `getSurfaceSupportKHR` |
+| `imageAcquiredSemaphores` | **共享**（`MAX_FRAMES_IN_FLIGHT` = 2，`commonFunction.h:18`） | 帧级，不是图像级 |
+| `taskFinishedFences` | **共享**（同上） | 帧级 |
+| `surface` / `surfaceFormat` / `swapChainExtent` / `swapChainImageCount` / `swapChain` / `presentImages` / `swapChainImageViews` | **每目标** | `VulkanManager.h:113-120` |
+| `renderFinishedSemaphores` / `imagesInFlightFences` / `commandBuffers` | **每目标**，按 `swapChainImageCount` 分配 | `vulkanManager.cpp:410,439,376` |
+| `presentQueueFamilyIndex` | **每目标**（对各自 surface 解析） | `vulkanManager.cpp:133` 目前只对窗口 0 的 surface 解析 |
+
+两套索引的纪律记录在 `source/render/backend/rendererBackendVulkan.cpp:1803-1832`，
+由 `rhiDeviceVulkan.cpp:27-41` 的 `RequireFrameSyncIndex` 强制。
 
 ## 阶段划分
 
@@ -127,11 +143,53 @@ Vulkan 没有 GL 的隐式 context sharing，因此每窗口必须有**显式**�
 - `plan/ui/editor-tab-responsibility-design.md` 记录了职责层面的差距分析（哪个面板承载什么），
   本文件只负责**实现路径**。
 
-## 尚未回答、需要实测的问题
+## 已经查清的问题（取代初版的"待实测"清单）
 
-- 场景渲染图有多少资源是 extent 耦合的、多少是尺寸无关的（决定阶段 3 的大小）。
-- UI overlay 是否假定占满 swapchain extent（决定阶段 2 能否只渲染 UI）。
-- 主循环当前是否有"每帧只处理一个窗口"的隐含假设。
-- 事件队列的消费方式是否天然支持多窗口，还是需要一个窗口 id 的分派层。
+- **场景渲染图基本全是 extent 耦合的。** `renderGraph.cpp` 的每个资源宽度都来自
+  `swapchainExtent`（`CreateRenderResource`），只有带 `hasFixedWidth/Height` 的资源与
+  `shadowMap` 例外。所以阶段 3 比预想大：不是"补几个尺寸来源"，而是"把 extent 从单例概念
+  改成按目标传入"。**阶段 2 之所以能便宜，正是因为完全不碰它。**
+- **UI overlay 确实假定占满 swapchain extent**（`uiOverlayRendererVulkan.cpp:380` 的
+  `setRenderArea` 用 swapchain extent），但它的 pass 是**自足的**：自己的 render pass、
+  自己的 framebuffer、自己的每图像顶点/索引缓冲与描述符集。而且它**已经有一个 `loadOp=eClear`、
+  `initialLayout=eUndefined` 的变体**（`uiOverlayRendererVulkan.cpp:545-546`），
+  正是"只渲染 UI 的第二窗口"需要的东西。**阶段 2 可以完全不碰 `renderGraph.cpp` /
+  `passRuntime.cpp` / `passBarrier.cpp`。**
+- **主循环确实假设只有一个窗口。** 每帧入口是 `RenderSystem::RecordAndSubmitCurrentRenderScene`
+  （`renderSystem.cpp:2990`），它同时做 acquire、录制、提交、present；
+  `PlatformEvent`（`source/platform/platformEvent.h:109-134`）**没有窗口 id 字段**，
+  事件泵（`platformApplication.cpp:232-392`）对窗口不区分。所以需要一个窗口 id 分派层。
+- **同步对象的归属已明确**（见上表）：`imageAcquiredSemaphores` 与 `taskFinishedFences` 是帧级、
+  可共享；`renderFinishedSemaphores` / `imagesInFlightFences` / `commandBuffers` 是按图像数分配、
+  必须每目标。
 
-这些问题由 `VulkanManager` / RHI 层的耦合面测绘回答，测绘结论应补进本文件。
+## 测绘发现的既有缺陷（多窗口会放大它们）
+
+这几条**现在就存在**，不是多窗口引入的；但阶段 1/2 会让它们变成真实故障，所以先记录：
+
+1. **`surfaceFormat` 可能保持默认构造。** `CreateVkSwapChain` 只在
+   `R8G8B8A8Srgb` + `eSrgbNonlinear` 被提供时才赋值（`vulkanManager.cpp:219-226`），
+   **没有回退到 `surfaceFormats[0]`**，而 `:292-293` 无条件使用它。第二个 surface 的可用格式
+   一旦不同，这条就会暴露。
+2. **共享 `commandPool` 是被低估的多窗口隐患。** `DestroyVkCommandBuffer`
+   （`vulkanManager.cpp:392-404`）会销毁 `commandPool`，而同一个池还服务所有
+   `BeginSingleTimeCommands`（`rhiDeviceVulkan.cpp:727-749`）与 shader 热重载校验路径。
+   为窗口 A 重建会连带影响窗口 B 的单次命令。
+3. **RmlUi 在本仓库是进程级单例。** `Rml::Initialise`/`Rml::Shutdown`
+   （`uiSubsystem.cpp:823,325`）是全局的，且 context 名硬编码为 `"vulkanlearn"`（`:832`）。
+   两个 `UiSubsystem` 不能按现状共存：第二个的 Shutdown 会拆掉第一个，`CreateContext` 同名会失败。
+   但 `CreateContext` 接受**每 context 的 render interface**（`:836`），所以渲染接口本身不是障碍。
+4. **逻辑尺寸与像素尺寸可能已经不一致。** `WindowResized` 带的是逻辑尺寸
+   （`platformApplication.cpp:379-380`）并直接喂给 `RecreateRendererForWindowResize`
+   （`engineLoop.cpp:1041`），而 out-of-date 路径用 `SDL_GetWindowSizeInPixels`（`:519`）。
+   在 DPI 缩放下这两者会不同 —— 也就是说 **UI context 与 swapchain 可能今天就来自不同的数字**。
+   值得在做多窗口**之前**先测一次，否则会把错误前提当地基。
+5. **`RendererFrameContext` 是裸句柄值类型**（`rendererBackendVulkan.h:67-77`），跨 record 与
+   submit 持有，**只带索引、不带目标身份** —— 这正是"跨窗口重建会悬垂"的原因。
+   阶段 1 之后它必须能表达"属于哪个目标"。
+6. **重建的作用域目前是全局的。** `ReCreateSwapChain` 先 `device.waitIdle()`
+   （`vulkanManager.cpp:46`，设备级，会顺带排空窗口 B 的工作），再销毁**所有**窗口共用的
+   同步对象与命令缓冲。上层 `RecreateRendererForWindowResize`（`engineLoop.cpp:1251`）更狠：
+   拆掉整个 extent 耦合世界（render graph、UI overlay、offline display、资源缓存）。
+   多窗口需要一条规则：**只在帧边界、要么全目标一起、要么都不做**。
+
