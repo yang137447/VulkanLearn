@@ -108,9 +108,16 @@ Vulkan 没有 GL 的隐式 context sharing，因此每窗口必须有**显式**�
   也就是**每次窗口 resize 都会毁掉别的用途正在用的池**，只因销毁与重建在同一函数里紧挨着才没炸。
   验证覆盖了这条路径本身：启动后**真实 resize 两次**（1536x879 → 1136x669 → 1536x879），
   进程与窗口存活、渲染继续（截图 1520x840，非背景采样点 141366）。
-- ⬜ 第四片：**同步对象按目标拆开**。`CreateSyncObjects` / `DestroySyncObjects` 目前仍是全局的
-  （`imageAcquiredSemaphores` / `taskFinishedFences` 为所有目标共享），因此重建时仍会重建它们。
-  `ReCreateSwapChain` 里已留注释标明这一处耦合，避免它变成隐含假设。
+- ✅ **第四片（`9d929f8`）**：同步对象按分配尺寸拆开。
+  帧级（`imageAcquiredSemaphores` / `taskFinishedFences`，按 `MAX_FRAMES_IN_FLIGHT`）
+  生命周期与设备一致；每目标（`renderFinishedSemaphores` / `imagesInFlightFences`，按图像数）
+  随该目标重建。**重建路径现在只调用六个目标作用域函数，不碰任何全局对象** ——
+  这正是阶段 2 需要的性质：窗口 A 的 resize 不得扰动窗口 B。
+  验证：真实 resize 两次，进程存活、渲染继续、**日志无 validation 报错或 VUID**
+  （同步对象改错的表现通常是校验层报错而不是崩溃，所以这一条比平时更重要）。
+
+**阶段 1 完成后的目标形态**：`ReCreateSwapChain` 的全部调用都在单个目标上，
+共享的只剩设备、队列、命令池与帧级同步对象 —— 它们按设备生命周期分配，与窗口无关。
 
 判据：跑通全量测试，且渲染截图与搬移前逐像素一致（允许状态栏 FPS 文本变化）。
 
