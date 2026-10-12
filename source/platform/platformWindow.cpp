@@ -132,6 +132,12 @@ void PlatformWindow::GetSizeInPixels(int& outWidth, int& outHeight) const
     SDL_GetWindowSizeInPixels(window, &outWidth, &outHeight);
 }
 
+uint32_t PlatformWindow::GetId() const
+{
+    if (window == nullptr) return 0;
+    return static_cast<uint32_t>(SDL_GetWindowID(window));
+}
+
 void PlatformWindow::SetRelativeMouseMode(bool enabled)
 {
     SDL_SetWindowRelativeMouseMode(window, enabled);

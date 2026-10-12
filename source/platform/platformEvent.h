@@ -109,6 +109,11 @@ enum class PlatformGamepadAxis
 struct PlatformEvent
 {
     PlatformEventType type = PlatformEventType::Unknown;
+    // 事件来源窗口（SDL 的窗口 id，与 `PlatformWindow::GetId()` 同一身份）。
+    // 0 表示"不属于任何窗口"：手柄等设备来源的事件不带它。
+    // 多窗口下这是"输入该给谁"的唯一依据；此前没有这个字段，于是所有窗口的事件无法区分，
+    // 键盘与文本输入实际上被当成进程全局。
+    uint32_t windowId = 0;
     PlatformKey key = PlatformKey::Unknown;
     PlatformMouseButton mouseButton = PlatformMouseButton::Unknown;
     PlatformGamepadButton gamepadButton = PlatformGamepadButton::Unknown;

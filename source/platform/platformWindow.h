@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 
 #include "core/runtimeResult.h"
@@ -46,6 +47,9 @@ public:
     void SetTextInputArea(int x, int y, int width, int height);
 
     SDL_Window* GetNativeHandle() const { return window; }
+    // SDL 的窗口 id。事件带的就是这个值，因此它是"事件属于哪个窗口"的权威身份；
+    // 窗口序号只在注册表内部使用，两者靠本函数对应。
+    uint32_t GetId() const;
     bool IsValid() const { return window != nullptr; }
     bool IsTextInputEnabled() const { return textInputEnabled; }
 
