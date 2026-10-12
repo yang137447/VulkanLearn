@@ -322,7 +322,8 @@ void UiSubsystem::Shutdown()
     }
     if (rmlInitialized)
     {
-        Rml::Shutdown();
+        // 只释放自己那一份；进程级关闭由 RmlUiRuntime 在计数归零时执行。
+        VL::Ui::RmlUiRuntime::Release();
         rmlInitialized = false;
     }
 
@@ -819,17 +820,26 @@ RuntimeResult<void> UiSubsystem::InitializeRmlUi()
 {
     rmlSystemInterface.Initialize(*window, *diagnostics);
     Rml::SetSystemInterface(&rmlSystemInterface);
+    // 全局渲染接口只是兜底；真正的每窗口接口在 CreateContext 时传入（RmlUi 支持每 context 接口），
+    // 这正是多窗口能共用一套 RmlUi 全局状态的原因。
     Rml::SetRenderInterface(&rmlRenderInterface);
-    if (!Rml::Initialise())
+    // 进程级初始化由 RmlUiRuntime 持有（引用计数），而不是由这个"每窗口一份"的对象持有：
+    // 否则第二个窗口的 Shutdown 会把 RmlUi 从第一个底下抽走。
+    try
+    {
+        VL::Ui::RmlUiRuntime::Acquire();
+    }
+    catch (const std::exception& error)
     {
         return RuntimeResult<void>::Failure(MakeRuntimeError(
-            "UiSubsystem.RmlInitializeFailed",
-            "RmlUi failed to initialize."));
+            "UiSubsystem.RmlInitializeFailed", error.what()));
     }
     rmlInitialized = true;
 
+    // context 名必须唯一；窗口身份是唯一稳定的区分依据（此前硬编码 "vulkanlearn"，
+    // 第二个窗口会直接撞名并拿到 nullptr）。
     rmlContext = Rml::CreateContext(
-        "vulkanlearn",
+        VL::Ui::RmlUiRuntime::ContextNameFor(windowIndex),
         Rml::Vector2i(
             static_cast<int>(desc.viewportWidth),
             static_cast<int>(desc.viewportHeight)),

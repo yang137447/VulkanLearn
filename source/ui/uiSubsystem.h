@@ -18,6 +18,7 @@
 #include "editor/ui/materialInstanceAssetEditorPanel.h"
 #include "platform/platformEvent.h"
 #include "ui/rmlUiInterfaces.h"
+#include "ui/rmlUiRuntime.h"
 #include "ui/uiAction.h"
 #include "ui/uiRenderSnapshot.h"
 #include "ui/uiRenderSnapshotQueue.h"
@@ -481,6 +482,10 @@ private:
     Rml::Context* rmlContext = nullptr;
     Rml::ElementDocument* runtimeDocument = nullptr;
     Rml::ElementDocument* editorDocument = nullptr;
+    // 本子系统服务的窗口序号。它唯一的用途是给 RmlUi context 起唯一名字
+    // （`Rml::CreateContext` 要求名字唯一），因此必须是稳定身份而不是指针值。
+    // 多窗口接线时由创建方按窗口注册表填入。
+    size_t windowIndex = 0;
     RmlUiSystemInterface rmlSystemInterface;
     RmlUiTextInputHandler rmlTextInputHandler;
     RmlUiRenderInterface rmlRenderInterface;
