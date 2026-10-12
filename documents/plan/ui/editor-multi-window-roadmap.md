@@ -100,9 +100,17 @@ Vulkan 没有 GL 的隐式 context sharing，因此每窗口必须有**显式**�
   默认目标只剩一处（`VulkanManager::defaultTarget()`），让"多窗口尚未接线"这个事实可被 grep。
   **仍未做到**：backend 的 `BeginFrame`/`SubmitFrame` 与 `RenderGraph` 依然隐含主窗口 ——
   这一片消除的是"当初不可能"的原因，不是把第二窗口打通。
-- ⬜ 第三片：每目标命令缓冲与 `presentQueueFamilyIndex`。**必须与命令池归属一起做** ——
-  `DestroyVkCommandBuffer` 现在会销毁共享的 `commandPool`，而 `BeginSingleTimeCommands`
-  也在用它（见下"既有缺陷"第 2 条）。
+- ✅ **第三片（`a183bbf`）**：命令池与命令缓冲拆成两个生命周期。
+  共享池只在 `Init` 建一次、析构销毁一次，**重建路径完全不碰它**；
+  每图像主命令缓冲移入 `PresentTarget`（与同样按图像数分配的信号量/fence 并列）。
+  这同时**修掉一个真实缺陷**：`DestroyVkCommandBuffer` 以前会销毁共享池，而
+  `BeginSingleTimeCommands` 与着色器热重载校验的 8 个调用点都在吃那个池 ——
+  也就是**每次窗口 resize 都会毁掉别的用途正在用的池**，只因销毁与重建在同一函数里紧挨着才没炸。
+  验证覆盖了这条路径本身：启动后**真实 resize 两次**（1536x879 → 1136x669 → 1536x879），
+  进程与窗口存活、渲染继续（截图 1520x840，非背景采样点 141366）。
+- ⬜ 第四片：**同步对象按目标拆开**。`CreateSyncObjects` / `DestroySyncObjects` 目前仍是全局的
+  （`imageAcquiredSemaphores` / `taskFinishedFences` 为所有目标共享），因此重建时仍会重建它们。
+  `ReCreateSwapChain` 里已留注释标明这一处耦合，避免它变成隐含假设。
 
 判据：跑通全量测试，且渲染截图与搬移前逐像素一致（允许状态栏 FPS 文本变化）。
 
