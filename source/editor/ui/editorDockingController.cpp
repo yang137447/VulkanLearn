@@ -609,12 +609,11 @@ void EditorDockingController::RebuildShell()
         // 而不是解引用空元素 —— 缺元素应当是"跳过并重建"，不是崩溃。
         auto* resourceBody = document->GetElementById(BodyId("resource"));
         if (resourceBody != nullptr) MoveElement(*resourceBody, *parking);
-        for (const auto& tab : resourceTabs)
-        {
-            auto* element = document->GetElementById(TabId(tab.panel));
-            if (element != nullptr) MoveElement(*element, *parking);
-        }
     }
+    // 动态标签将按当前列表重建，不能同时把旧标签停放并生成同 ID 的副本。
+    Rml::ElementList oldResourceTabs;
+    document->QuerySelectorAll(oldResourceTabs, ".workspace-resource-tab");
+    for (auto* tab : oldResourceTabs) tab->GetParentNode()->RemoveChild(tab);
     std::string resourceMarkup;
     for (const auto& tab : resourceTabs)
     {
@@ -771,7 +770,7 @@ void EditorDockingController::Save()
 }
 
 void EditorDockingController::SetResourceTabs(
-    const std::vector<EditorDockResourceTab>& tabs, const std::string& activePath)
+    const std::vector<EditorDockResourceTab>& tabs)
 {
     bool changed = tabs.size() != resourceTabs.size();
     if (!changed)
@@ -804,15 +803,7 @@ void EditorDockingController::SetResourceTabs(
         savePending = true;
     }
 
-    for (const auto& tab : resourceTabs)
-    {
-        if (tab.path == activePath)
-        {
-            // 隐藏的资源标签不能被激活，否则同组的可见标签会失去正文。
-            if (IsPanelVisible(tab.panel)) workspace.Activate(tab.panel);
-            break;
-        }
-    }
+    // 同步文档列表不能抢走当前页面；激活只由打开、切换和关闭动作驱动。
     if (document != nullptr)
     {
         if (changed) Sync();
@@ -849,6 +840,9 @@ void EditorDockingController::Reset()
 {
     CancelDrag();
     workspace.Reset();
+    std::vector<std::string> panels;
+    for (const auto& tab : resourceTabs) panels.push_back(tab.panel);
+    workspace.ReplaceResourcePanels(panels);
     // Reset Layout 恢复默认布局，同时把全部面板重新显示出来。
     hiddenPanels.clear();
     structureDirty = true;
@@ -979,8 +973,7 @@ bool EditorDockingController::ProcessEvent(Rml::Event& event, bool modal)
         if (!panel.empty())
         {
             Activate(panel);
-            if (DockWorkspace::IsResourceDocumentPanel(panel))
-                activatedPanel = panel;
+            activatedPanel = panel;
         }
         else if (element->GetAttribute<std::string>("data-action", "") == "workspace-reset") Reset();
         else return false;
@@ -1013,9 +1006,14 @@ bool EditorDockingController::ProcessEvent(Rml::Event& event, bool modal)
 UiViewportRect EditorDockingController::GetSceneViewportRect() const
 {
     if (document == nullptr || !document->IsVisible()) return {};
-    const uint32_t stack = workspace.FindStack("viewport");
-    if (workspace.State().nodes.at(stack).active != "viewport") return {};
-    auto* image = document->GetElementById("editor-viewport-image");
+    // 模型标签的预览与关卡视口共享当前 World 输出，优先取可见模型预览的矩形。
+    auto* image = document->GetElementById("resource-preview-image");
+    if (image == nullptr || !image->IsVisible(true))
+    {
+        const uint32_t stack = workspace.FindStack("viewport");
+        if (stack == 0 || workspace.State().nodes.at(stack).active != "viewport") return {};
+        image = document->GetElementById("editor-viewport-image");
+    }
     if (image == nullptr || !image->IsVisible(true)) return {};
     const auto offset = image->GetAbsoluteOffset(Rml::BoxArea::Content);
     const auto size = image->GetBox().GetSize(Rml::BoxArea::Content);

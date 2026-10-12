@@ -45,8 +45,7 @@ public:
     void Sync();
     bool ProcessEvent(Rml::Event& event, bool modal);
     void CancelDrag();
-    void SetResourceTabs(const std::vector<EditorDockResourceTab>& tabs,
-        const std::string& activePath);
+    void SetResourceTabs(const std::vector<EditorDockResourceTab>& tabs);
     std::string ConsumeActivatedPanel();
     bool IsDragging() const { return !dragPanel.empty() || dragSplit != 0; }
     bool IsPanelActive(const std::string& panel) const

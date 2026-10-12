@@ -60,9 +60,24 @@ unavailable. Numeric/render-state preview retains the existing renderer adapter.
 Content Browser selection is separate from the open document. A single click
 selects an item; a double click on MI emits the existing editable-document open
 command. Scene double-click reuses the existing `UiActionType::LoadWorld` transaction.
-Mesh/Texture/Terrain double-click opens a separate resource-editor tab with a
-type placeholder and read-only JSON Details. It does not load models, pixels,
-or referenced `data`; tabs are deduplicated and can return to World.
+Mesh double-click opens a resource-editor tab beside the level tab in the same stack, requests the typed
+`UiActionType::PreviewModel` route, and loads the model into the neutral
+`SC_model_preview` World through `LoadWorld.extraSceneObjects`; its JSON Details
+remain read-only. Texture/Terrain double-click only opens their metadata tabs:
+they do not load pixels or referenced `data`. Resource tabs are deduplicated and
+can return to World.
+Mesh tabs display the renderer-owned `vl://scene-viewport` output in
+`resource-preview-image`. The visible model image supplies the viewport rectangle;
+resource-editor visibility no longer disables offscreen output. Publication waits
+for a newer World snapshot containing `preview_model` in `SC_model_preview`, so
+metadata completion alone does not expose the previous scene as a model preview.
+Refreshing snapshots preserves the selected page; only explicit open/switch/close
+actions activate another document. Returning to the level requests its remembered
+scene path through LoadWorld; this reloads the scene rather than preserving
+unsaved runtime actor changes or camera movement.
+Changing model tabs and reloading request the selected model again. This still
+uses the single active World, fixed preview scale and camera, not an independent
+World per tab or automatic bounds framing. Model-image input remains UI-owned.
 Browser paths/filter/view/history are local presentation state.
 Type icons and material spheres are placeholders, not real thumbnails or model
 previews. The inspector does not replace MI editing or the scene Viewport.
@@ -154,6 +169,17 @@ the player's requested relative mouse mode.
 when pointer ownership is Game and relative mouse mode is actually enabled.
 Releasing capture cannot keep rotating the camera.
 
+Panel mouse-wheel and button-down events release stale scene-viewport input
+ownership before dispatch to RmlUi, including after returning from immersive
+mode. Mouse motion and button-up alone preserve capture so relative camera
+movement and an in-progress scene gesture are not interrupted.
+
+Restoring the editor also explicitly pulls its document to the front without
+claiming keyboard focus. Hiding it transfers focus and stacking order to the
+runtime document; `Show(FocusFlag::None)` alone leaves that transparent document
+above the editor, blocking panel mouse input. This applies to both immersive
+mode and runtime-control-page return paths.
+
 **A scene-viewport hit splits by button.** The **left** button keeps the existing path:
 it is the picking button (`materialInstanceSelection.cpp`), it blurs editor focus, and it
 passes through to the game. The **right** button is consumed by the editor document
@@ -163,7 +189,13 @@ comes from SDL relative deltas rather than a button gesture — while the left b
 Everything else on a scene-viewport hit still returns before RmlUi, so a stray event
 cannot leak into the editor DOM.
 
-F10/gamepad Start toggle runtime controls, F1 toggles the editor, Esc toggles
+F10/gamepad Start toggle runtime controls, F11 toggles immersive mode (F1 remains
+a compatibility alias). Immersive mode hides the editor and HUD in the existing
+window; it does not create a window, change OS fullscreen, or quit. From a model
+tab it first restores the remembered level through LoadWorld and waits for the
+matching committed World snapshot. Rejection or failure leaves the editor visible;
+another toggle while waiting cancels entry. Returning restores the workspace layout.
+The toolbar uses "Immersive Mode"; File / Exit remains Quit. Esc toggles
 requested mouse capture, and gamepad East closes the runtime page.
 Ctrl+S saves the active MI when no close modal is open.
 RmlUi keyboard/D-pad/analog navigation uses reference-counted press state.

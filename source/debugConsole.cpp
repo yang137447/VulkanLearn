@@ -1,4 +1,5 @@
 #include "debugConsole.h"
+#include "engine/modelPreviewRequest.h"
 
 #include <conio.h>
 #include <cctype>
@@ -279,18 +280,7 @@ void DebugConsole::ProcessCommand(const std::string& line)
         VL::RuntimeCommand runtimeCommand;
         runtimeCommand.type = VL::RuntimeCommandType::LoadWorld;
         runtimeCommand.stringValue = scenePath;
-        runtimeCommand.extraSceneObjects = nlohmann::json::array({
-            {
-                {"name", "preview_model"},
-                {"type", "mesh"},
-                {"modelPath", modelPath},
-                {"position", {0.0, 0.0, 0.0}},
-                {"rotation", {0.0, 0.0, 0.0}},
-                // 单位网格在预览相机（约 630 cm 外）下只有 1 cm 大，几乎不可见。
-                // 用 SC_lookdev 放置同一个单位球时的尺度作为默认，保证注入即有可见结果。
-                {"scale", {43.0, 43.0, 43.0}},
-            },
-        });
+        runtimeCommand.extraSceneObjects = VL::BuildModelPreviewObjects(modelPath);
         runtimeCommand.sourceText = line;
         commandBus.Queue(std::move(runtimeCommand));
         return;

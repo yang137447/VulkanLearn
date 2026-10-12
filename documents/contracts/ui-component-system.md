@@ -9,7 +9,8 @@
 标题右侧保留原有命令按钮，右上 Scene Outliner，右下 Details，
 中央/左侧独立 Viewport，底部 Content Browser / Renderer 标签页，最底部状态栏。
 Material Slots 放在 Details 中。面板可四边停靠、合并标签、在主窗口内浮动后重新停靠，
-分隔条支持拖动并受子树最小尺寸约束；标签切换不提交资产或运行时命令。
+分隔条支持拖动并受子树最小尺寸约束；普通面板切换只改变呈现。
+模型/关卡页面切换通过既有加载事务选择单活动 World，不提交资产修改。
 Scene Outliner 现在渲染真实 World actor 树（网格 / 四类灯 / 相机 / 环境 / 风剖面，
 分组可折叠，带类型图标、搜索、类型过滤与组内排序），行集合按滚动位置窗口化，
 每个可渲染 actor 行带一个可见性开关（行尾眼睛），低基数分组排在 Meshes 之前；
@@ -17,18 +18,20 @@ Scene Outliner 现在渲染真实 World actor 树（网格 / 四类灯 / 相机 
 无打开的 MI 文档时 Details 不再为空。契约见“世界 actor 树契约”。
 面板可以通过 Window 菜单隐藏和恢复，隐藏状态随布局一起保存。
 布局保存至用户目录，支持跨启动恢复和 Reset Layout；不支持独立操作系统窗口。
-资产编辑器是 DockWorkspace 里的**独立标签组**，与 Viewport 所在的关卡编辑器标签组**平级**，
-不并入它；也可独立拖到四边、浮动和重新停靠；面板内再管理资产文档标签。
+工具条的 Immersive Mode 与 F11 切换窗口内沉浸模式（F1 兼容）：隐藏编辑器与 HUD，
+不退出程序、不新建窗口、不改变系统全屏。模型页进入时先恢复记住的关卡，
+事务失败或无可返回关卡时保持编辑器可见；退出沉浸模式恢复原停靠布局。
+资产文档标签默认加入 Viewport 所在的关卡标签组，紧邻关卡标签；
+同组只显示选中页面，普通快照刷新不改变当前标签。手动停靠位置仍可调整。
 它**不在常驻面板集合**（`DockWorkspace::Panels()`）里，而是按需创建：
 没有打开任何资产时，标签栏里**不存在**资产编辑器标签，默认布局也不含它的位置
-（对齐 UE：资产编辑器是资产被打开时才出现的标签）。第一次打开资产时新建标签组，
-位置取根节点的第一个孩子，因此它与关卡编辑器**并排**而不是覆盖它。
+第一次及后续打开资产均向关卡所在栈追加标签，不创建新的并排分栏。
 布局校验因此只要求常驻面板齐备，**不要求**存在资产编辑器面板。
 资产编辑器标签是**会话内**状态：写盘时被丢弃（写出的布局里不含它们），
 留下的空栈会被剪掉，重启后不恢复打开的资产。
 当前 Content Browser 浏览 MI、Mesh、Scene、Texture、Terrain JSON 元数据，
-Mesh、Texture、Terrain 双击后进入独立资源标签页：左侧为类型预览占位，
-右侧为只读 JSON Details；当前只读元数据，不加载 `data` 引用或 GPU 资源。
+Mesh、Texture、Terrain 双击后进入资源标签页，右侧为只读 JSON Details。
+Mesh 通过预览 World 显示真实模型；Texture/Terrain 仍为类型预览占位，不加载引用数据。
 它不再使用平铺文件名列表：左侧目录树由 worker 发布的只读 JSON 目录派生，
 上方提供前进/后退、父目录、面包屑与搜索，资产区支持网格/列表、
 名称排序、类型筛选、尺寸档位、子目录开关与显式 Refresh，底部显示数量和完整选中路径。
@@ -66,7 +69,7 @@ GPU backing 保持原生窗口尺寸；相机 aspect、拾取和离线 film 尺�
 | Navigation / 导航 | DocumentTab、MenuItem | 已实现激活与关闭分离、菜单项勾选/禁用与条目索引寻址 | 菜单快捷键、Breadcrumb、子菜单键盘导航 |
 | Workspace / 工作区 | DockWorkspace、DockTab、面板可见性、脏关闭弹窗 | 四边停靠、标签合并、窗口内浮动、布局持久化与重置、面板隐藏/恢复 | 原生多窗口、通用 Modal |
 | Property / 属性 | PropertyRow、PropertyGroup、PropertyInfo、PropertyControlRow、CollapsibleSection、NumericComponents、ColorPreview | 已实现属性组合、Reset 地址、向量分量、可选范围滑条、折叠分组、sRGB 色板与十六进制读数、无 Reset 的只读/可编辑行、可寻址数值 span | 多对象混合值、属性适配器、可编辑调色板 |
-| Editor / 业务 | 顶部菜单栏、世界 actor 树、JSON Content Browser、MI Details、actor Details、资源编辑器、离线控制、Viewport、视口工具条 | 已接入组件、受限浏览窗口/分页、资源标签、renderer-owned 离屏视口、World actor 树与 actor 详情（三条既有运行时命令，含逐 actor 可见性）、视口工具条中只有 view mode 有真实后端 | 真实模型/纹理预览、场景对象增删改、gizmo |
+| Editor / 业务 | 顶部菜单栏、世界 actor 树、JSON Content Browser、MI Details、actor Details、资源编辑器、离线控制、Viewport、视口工具条 | 已接入组件、受限浏览窗口/分页、资源标签、Mesh 双击经 `PreviewModel` 注入 `SC_model_preview`、Mesh 专属会话工具条与模型信息 Details、renderer-owned 离屏视口、World actor 树与 actor 详情（三条既有运行时命令，含逐 actor 可见性）、视口工具条中只有 view mode 有真实后端 | 真实纹理预览、场景对象增删改、gizmo |
 
 “已实现”只表示上表的窄组件，不表示已经具备 Slate 同名控件的全部行为。
 通用 ListRow/TreeRow、模型树和 Sources 树尚未虚拟化；
@@ -77,7 +80,7 @@ JSON inspector 使用分页，不等同于通用 ListView/TreeView 已完成。
 分组折叠只改既有分组元素上的 class，不重建 DOM；
 滑条的 min/max 属于分组 markup，随 identity（assetPath + schemaDigest）重建。
 Color 仍按线性 RGBA 存储，编辑器只多出面向 sRGB 的色板与 `#RRGGBBAA` 读数，
-没有可编辑调色板；真实资产缩略图、模型几何预览、纹理像素查看、
+没有可编辑调色板；真实资产缩略图、纹理像素查看、
 资产拖放、Undo/Redo 尚未实现。
 `MenuItem` 只生成“动作名 + 条目索引 + 勾选/禁用”这一种行，
 菜单的展开状态、勾选含义和命令语义全部属于业务宿主。
@@ -121,7 +124,10 @@ ImGui→RmlUi 迁移丢了三项 Details 面板能力，本批把它们补回，
 - 大纲行窗口化只覆盖世界 actor 树：通用 `TreeRow` 组件本身仍不虚拟化，
   模型树与 Sources 树也仍整棵挂载。
 - 大纲仍是单选：没有多选、没有拖放/重父级，也没有改名（改名同样属于场景文档阶段）。
-- 没有资产缩略图、没有模型几何预览、没有纹理像素查看器。
+- 没有资产缩略图、没有纹理像素查看器；Mesh 预览目前复用中性场景视口，
+  模型标签通过 `resource-preview-image` 显示当前 renderer-owned 离屏图像。
+  工具条变换按钮目前仅切换本地状态，不提供 gizmo；模型信息 Details 中
+  `Metadata ready` 仅表示 JSON 已读取，不表示模型渲染成功。预览采用固定取景。
 - 没有可编辑调色板（含 HSV 面板），也没有步进控件：Details 目前只有
   范围滑条、文本输入和 sRGB 色板读数。
 - 没有原生多窗口，没有 IME。

@@ -3,7 +3,7 @@
         "hud.title": "VulkanLearn",
         "hud.fps": "FPS",
         "hud.world": "World",
-        "hud.open_hint": "F10 / Start: runtime controls    Esc: mouse capture    F1: developer tools",
+        "hud.open_hint": "F10 / Start: runtime controls    Esc: mouse capture    F11: immersive mode",
         "panel.title": "Runtime Debug",
         "panel.subtitle": "Safe runtime diagnostics and tuning.",
         "tab.overview": "Overview",
@@ -175,7 +175,7 @@
         "action.enable": "Enable",
         "action.disable": "Disable",
         "action.save_to_scene": "Save to Scene",
-        "action.developer_ui": "Toggle F1 diagnostics",
+        "action.developer_ui": "Toggle Immersive Mode",
         "action.close": "Close",
         "action.quit": "Quit"
     },
@@ -183,7 +183,7 @@
         "hud.title": "VulkanLearn",
         "hud.fps": "帧率",
         "hud.world": "场景",
-        "hud.open_hint": "F10 / Start：运行时控制    Esc：鼠标捕获    F1：开发者工具",
+        "hud.open_hint": "F10 / Start：运行时控制    Esc：鼠标捕获    F11：沉浸模式",
         "panel.title": "运行时调试",
         "panel.subtitle": "集中查看状态并安全调节运行时参数。",
         "tab.overview": "状态",
@@ -355,7 +355,7 @@
         "action.enable": "启用",
         "action.disable": "禁用",
         "action.save_to_scene": "保存到场景",
-        "action.developer_ui": "切换 F1 诊断面板",
+        "action.developer_ui": "切换沉浸模式",
         "action.close": "关闭",
         "action.quit": "退出"
     }

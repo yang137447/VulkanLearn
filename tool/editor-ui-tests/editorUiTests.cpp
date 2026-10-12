@@ -692,6 +692,8 @@ TEST_F(EditorUiTest, MeshLevelAndTextureOpenReadOnlyJsonAndSceneRequestsWorldLoa
     context->Update();
     for (const auto& asset : catalog->assets)
     {
+        if (asset.kind == EditorAssetKind::Scene)
+            ASSERT_TRUE(panel->SetPanelVisible("viewport", false));
         Rml::Element* tile = nullptr;
         auto* list = document->GetElementById("asset-list");
         for (int index = 0; index < list->GetNumChildren(); ++index)
@@ -699,6 +701,13 @@ TEST_F(EditorUiTest, MeshLevelAndTextureOpenReadOnlyJsonAndSceneRequestsWorldLoa
                 tile = list->GetChild(index);
         ASSERT_NE(tile, nullptr);
         tile->DispatchEvent("dblclick", {});
+        if (asset.kind == EditorAssetKind::Scene)
+        {
+            context->Update();
+            EXPECT_TRUE(panel->IsPanelVisible("viewport"));
+            EXPECT_TRUE(document->GetElementById("workspace-viewport-tab")->IsVisible());
+            EXPECT_GT(panel->GetSceneViewportRect().width, 0u);
+        }
         ASSERT_FALSE(jsonAssetSink.opened.empty());
         EXPECT_EQ(jsonAssetSink.opened.back(), asset.assetPath);
         auto json = std::make_shared<EditorJsonDocumentSnapshot>();
@@ -734,9 +743,11 @@ TEST_F(EditorUiTest, MeshLevelAndTextureOpenReadOnlyJsonAndSceneRequestsWorldLoa
         panel->RequestSave();
     }
     EXPECT_TRUE(sink.commands.empty());
-    ASSERT_EQ(runtimeSink.actions.size(), 1u);
-    EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::LoadWorld);
-    EXPECT_EQ(runtimeSink.actions.back().stringValue, "Maps/SC_test.json");
+    ASSERT_EQ(runtimeSink.actions.size(), 2u);
+    EXPECT_EQ(runtimeSink.actions[0].type, UiActionType::PreviewModel);
+    EXPECT_EQ(runtimeSink.actions[0].stringValue, "Meshes/SM_test.json");
+    EXPECT_EQ(runtimeSink.actions[1].type, UiActionType::LoadWorld);
+    EXPECT_EQ(runtimeSink.actions[1].stringValue, "Maps/SC_test.json");
 }
 
 TEST_F(EditorUiTest, ResourceEditorDeduplicatesTabsAndReturnsToWorld)
@@ -770,12 +781,14 @@ TEST_F(EditorUiTest, ResourceEditorDeduplicatesTabsAndReturnsToWorld)
     EXPECT_EQ(jsonAssetSink.opened.size(), requests);
     EXPECT_NE(document->QuerySelector(".workspace-resource-tab"), nullptr);
 
-    // 资产编辑器与关卡编辑器是**两个平级标签组**，因此切回关卡视口**不会**隐藏资产编辑器 ——
-    // 这正是分开的目的。两个标签组并排：资产编辑器在左、视口在右，所以断言必须落在
-    // **视口自己的矩形内**，而不是窗口左边缘 —— 左边缘现在属于资产编辑器。
-    // （旧断言 `EXPECT_FALSE(resource-editor->IsVisible())` 依赖两者同栈，那个前提已废除。）
+    EXPECT_EQ(resourceTab->GetParentNode(),
+        document->GetElementById("workspace-viewport-tab")->GetParentNode());
+    // 普通刷新不得把页面从关卡抢回仍打开的资产。
     Click("#workspace-viewport-tab");
+    panel->Build(snapshot);
     context->Update();
+    EXPECT_FALSE(document->GetElementById("resource-editor")->IsVisible());
+    EXPECT_FALSE(panel->IsResourceEditorVisible());
     const auto shot = panel->GetSceneViewportRect();
     ASSERT_GT(shot.width, 0u);
     ASSERT_GT(shot.height, 0u);
@@ -785,8 +798,169 @@ TEST_F(EditorUiTest, ResourceEditorDeduplicatesTabsAndReturnsToWorld)
     ASSERT_NE(viewportHit, nullptr);
     EXPECT_TRUE(panel->IsSceneViewportElement(viewportHit))
         << "视口矩形中心应当命中场景；实际命中 " << viewportHit->GetId();
-    // 资产编辑器仍在屏幕上，只是不再与视口共享标签组。
     EXPECT_TRUE(document->GetElementById("dock-shell")->IsVisible());
+    Click(".workspace-resource-tab");
+    panel->Build(snapshot);
+    context->Update();
+    EXPECT_TRUE(document->GetElementById("resource-editor")->IsVisible());
+    EXPECT_TRUE(panel->IsResourceEditorVisible());
+    EXPECT_FALSE(document->GetElementById("editor-viewport-image")->IsVisible(true));
+}
+
+TEST_F(EditorUiTest, ModelPreviewWaitsForWorldPublicationAndProvidesAnImageRect)
+{
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+    catalog->revision = 1;
+    catalog->assets.push_back({"Meshes/SM_test.json", EditorAssetKind::Mesh, "Model"});
+    snapshot.assetCatalog = catalog;
+    panel->Build(snapshot);
+    context->Update();
+    document->QuerySelector("#asset-list button")->DispatchEvent("dblclick", {});
+    panel->Build(snapshot);
+    context->Update();
+    auto* image = document->GetElementById("resource-preview-image");
+    ASSERT_NE(image, nullptr);
+    EXPECT_FALSE(image->IsVisible(true));
+
+    auto actors = std::make_shared<std::vector<EditorSceneActorSnapshot>>();
+    EditorSceneActorSnapshot actor;
+    actor.worldGeneration = 100;
+    actor.scenePath = "Maps/SC_model_preview/SC_model_preview.json";
+    actor.identity = "mesh|preview_model";
+    actor.sceneObjectIdentity = "preview_model";
+    actor.displayName = "preview_model";
+    actors->push_back(actor);
+    snapshot.sceneActors = actors;
+    panel->Build(snapshot);
+    context->Update();
+    EXPECT_TRUE(image->IsVisible(true));
+    EXPECT_EQ(image->GetAttribute<std::string>("src", ""), "vl://scene-viewport");
+    EXPECT_FALSE(document->GetElementById("resource-preview-icon")->IsVisible(true));
+    EXPECT_GT(panel->GetSceneViewportRect().width, 0u);
+    EXPECT_GT(panel->GetSceneViewportRect().height, 0u);
+
+    // 重载期间不能把上一代 GPU 画面当作新请求成功。
+    document->GetElementById("resource-reload")->RemoveAttribute("disabled");
+    document->GetElementById("resource-reload")->DispatchEvent("click", {});
+    panel->Build(snapshot);
+    context->Update();
+    EXPECT_FALSE(image->IsVisible(true));
+}
+
+TEST_F(EditorUiTest, ModelAndLevelTabsRequestTheirOwnWorldAndKeepSelection)
+{
+    UiViewModelSnapshot view;
+    view.activeWorldPath = "Maps/SC_test/SC_test.json";
+    panel->UpdateRuntimeView(view);
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+    catalog->revision = 1;
+    catalog->assets.push_back({"SM_first.json", EditorAssetKind::Mesh, "First"});
+    catalog->assets.push_back({"SM_second.json", EditorAssetKind::Mesh, "Second"});
+    snapshot.assetCatalog = catalog;
+    panel->Build(snapshot);
+    context->Update();
+    for (const char* path : {"SM_first.json", "SM_second.json"})
+    {
+        auto* tile = document->QuerySelector(std::string("#asset-list [data-path='") + path + "']");
+        ASSERT_NE(tile, nullptr);
+        tile->DispatchEvent("dblclick", {});
+        panel->Build(snapshot);
+        context->Update();
+    }
+    Rml::ElementList tabs;
+    document->QuerySelectorAll(tabs, ".workspace-resource-tab");
+    ASSERT_EQ(tabs.size(), 2u);
+    EXPECT_EQ(tabs[0]->GetParentNode(), tabs[1]->GetParentNode());
+    tabs[0]->DispatchEvent("click", {});
+    EXPECT_EQ(runtimeSink.actions.back().stringValue, "SM_first.json");
+    panel->Build(snapshot);
+    context->Update();
+    EXPECT_NE(document->GetElementById("resource-preview-path")->GetInnerRML().find("SM_first.json"),
+        std::string::npos);
+    Click("#workspace-viewport-tab");
+    ASSERT_EQ(runtimeSink.actions.back().type, UiActionType::LoadWorld);
+    EXPECT_EQ(runtimeSink.actions.back().stringValue, view.activeWorldPath);
+    const size_t count = runtimeSink.actions.size();
+    for (int frame = 0; frame < 3; ++frame) panel->Build(snapshot);
+    context->Update();
+    EXPECT_EQ(runtimeSink.actions.size(), count);
+    EXPECT_FALSE(panel->IsResourceEditorVisible());
+    EXPECT_FALSE(document->GetElementById("resource-editor")->IsVisible(true));
+    Click(".workspace-resource-tab");
+    EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::PreviewModel);
+    EXPECT_EQ(runtimeSink.actions.back().stringValue, "SM_first.json");
+    Click("#resource-close");
+    EXPECT_EQ(runtimeSink.actions.back().stringValue, "SM_second.json");
+    panel->Build(snapshot);
+    context->Update();
+    EXPECT_TRUE(panel->IsResourceEditorVisible());
+    Click("#resource-close");
+    EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::LoadWorld);
+    EXPECT_EQ(runtimeSink.actions.back().stringValue, view.activeWorldPath);
+    panel->Build(snapshot);
+    context->Update();
+    EXPECT_FALSE(panel->IsResourceEditorVisible());
+    EXPECT_EQ(document->QuerySelector(".workspace-resource-tab"), nullptr);
+}
+
+TEST_F(EditorUiTest, ImmersiveButtonRequestsPresentationToggleNotQuit)
+{
+    auto* button = document->QuerySelector("[data-action=immersive-view]");
+    ASSERT_NE(button, nullptr);
+    EXPECT_EQ(button->GetInnerRML(), "Immersive Mode");
+    EXPECT_EQ(document->QuerySelector("[data-action=hide-editor]"), nullptr);
+    button->DispatchEvent("click", {});
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::ToggleDeveloperUi);
+}
+
+TEST_F(EditorUiTest, ImmersivePreparationKeepsCurrentLevelWithoutLoading)
+{
+    UiViewModelSnapshot view;
+    view.activeWorldPath = "Maps/SC_test/SC_test.json";
+    panel->UpdateRuntimeView(view);
+    std::string requested;
+    EXPECT_TRUE(panel->PrepareImmersiveView(requested));
+    EXPECT_TRUE(requested.empty());
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, ImmersivePreparationReturnsRememberedLevelInsteadOfPreviewWorld)
+{
+    UiViewModelSnapshot view;
+    view.activeWorldPath = "Maps/SC_test/SC_test.json";
+    panel->UpdateRuntimeView(view);
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+    catalog->revision = 1;
+    catalog->assets.push_back({"SM_test.json", EditorAssetKind::Mesh, "Model"});
+    snapshot.assetCatalog = catalog;
+    panel->Build(snapshot);
+    context->Update();
+    document->QuerySelector("#asset-list button")->DispatchEvent("dblclick", {});
+    view.activeWorldPath = "Maps/SC_model_preview/SC_model_preview.json";
+    panel->UpdateRuntimeView(view);
+    std::string requested;
+    ASSERT_TRUE(panel->PrepareImmersiveView(requested));
+    EXPECT_EQ(requested, "Maps/SC_test/SC_test.json");
+    EXPECT_FALSE(panel->IsResourceEditorVisible());
+    EXPECT_TRUE(document->GetElementById("workspace-viewport-tab")->IsClassSet("selected"));
+    // 宿主负责事务与 UI 隐藏时机；准备阶段不能额外切换 UI。
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::PreviewModel);
+    // 加载失败时仍可重试，不能把仍活动的预览误判为关卡。
+    ASSERT_TRUE(panel->PrepareImmersiveView(requested));
+    EXPECT_EQ(requested, "Maps/SC_test/SC_test.json");
+}
+
+TEST_F(EditorUiTest, ImmersivePreparationRejectsPreviewWithoutReturnLevel)
+{
+    UiViewModelSnapshot view;
+    view.activeWorldPath = "Maps/SC_model_preview/SC_model_preview.json";
+    panel->UpdateRuntimeView(view);
+    std::string requested;
+    EXPECT_FALSE(panel->PrepareImmersiveView(requested));
+    EXPECT_TRUE(requested.empty());
+    EXPECT_TRUE(runtimeSink.actions.empty());
 }
 
 TEST_F(EditorUiTest, RefreshAssetsRequestsOneWorkerRefreshWithoutMiCommands)
@@ -2050,7 +2224,7 @@ TEST_F(EditorUiTest, ToolbarDoesNotRestateTheDocumentMenuCommands)
             if (ancestor == menubar) { insideMenu = true; break; }
         if (!insideMenu) ++outside;
     }
-    EXPECT_EQ(outside, 3) << "expected exactly Reset Layout / Settings / Close Editor; "
+    EXPECT_EQ(outside, 3) << "expected exactly Reset Layout / Settings / Immersive Mode; "
                              "if this changed, re-check the assertions above are not vacuous";
     EXPECT_NE(toolbar->QuerySelector("[data-action=workspace-reset]"), nullptr);
 }

@@ -18,10 +18,28 @@
 #include "editor/ui/editorContentBrowserController.h"
 #include "editor/ui/editorDockingController.h"
 #include "editor/ui/materialInstanceEditorView.h"
+#include "ui/editorPointerPolicy.h"
 
 namespace
 {
 using namespace VL::EditorUi;
+
+TEST(EditorPointerPolicy, EditorWheelReleasesSceneCapture)
+{
+    EXPECT_TRUE(VL::ShouldReleaseScenePointerForEditor(VL::PlatformEventType::MouseWheel, true));
+    EXPECT_FALSE(VL::ShouldReleaseScenePointerForEditor(VL::PlatformEventType::MouseWheel, false));
+}
+
+TEST(EditorPointerPolicy, EditorClickReleasesSceneCapture)
+{
+    EXPECT_TRUE(VL::ShouldReleaseScenePointerForEditor(VL::PlatformEventType::MouseButtonDown, true));
+}
+
+TEST(EditorPointerPolicy, RelativeMotionAndButtonReleasePreserveSceneCapture)
+{
+    EXPECT_FALSE(VL::ShouldReleaseScenePointerForEditor(VL::PlatformEventType::MouseMove, true));
+    EXPECT_FALSE(VL::ShouldReleaseScenePointerForEditor(VL::PlatformEventType::MouseButtonUp, true));
+}
 
 class BrowserTestSystem final : public Rml::SystemInterface
 {
@@ -581,6 +599,49 @@ TEST_F(ContentBrowserTest, RefreshClickIsDelegatedWithoutOpenOrLocalRebuild)
     Refresh();
     EXPECT_EQ(browser.GetStats().catalogRebuilds, before.catalogRebuilds);
     EXPECT_EQ(browser.GetStats().entryRebuilds, before.entryRebuilds);
+}
+
+TEST_F(ContentBrowserTest, MouseWheelScrollsGridAfterDocumentHideAndShow)
+{
+    // 运行时文档始终存在；隐藏编辑器会把焦点和文档层级交给它。
+    auto* runtime = context->LoadDocumentFromMemory(
+        "<rml><head><style>body { width: 100%; height: 100%; }</style></head>"
+        "<body id='runtime-root'></body></rml>");
+    ASSERT_NE(runtime, nullptr);
+    runtime->Show();
+    document->Show();
+    snapshot.assets.clear();
+    for (int index = 0; index < 828; ++index)
+        snapshot.assets.push_back({"Common/MI_scroll_" + std::to_string(index) + ".json", false});
+    for (int frame = 0; frame < 3; ++frame) Refresh();
+    auto* list = document->GetElementById("asset-list");
+    ASSERT_GT(list->GetScrollHeight(), list->GetClientHeight());
+    for (int cycle = 0; cycle < 3; ++cycle)
+    {
+        if (cycle != 0)
+        {
+            context->ProcessMouseLeave();
+            document->Hide();
+            Refresh();
+            document->Show(Rml::ModalFlag::None, Rml::FocusFlag::None);
+            document->PullToFront();
+            Refresh();
+        }
+        const auto origin = list->GetAbsoluteOffset(Rml::BoxArea::Content);
+        context->ProcessMouseMove(static_cast<int>(origin.x + 40), static_cast<int>(origin.y + 40), 0);
+        auto* hit = context->GetHoverElement();
+        ASSERT_NE(hit, nullptr);
+        ASSERT_EQ(hit->GetOwnerDocument(), document) << "hide/show cycle " << cycle;
+        EXPECT_EQ(hit->GetClosestScrollableContainer(), list);
+        const float before = list->GetScrollTop();
+        context->ProcessMouseWheel(Rml::Vector2f(0, 4), 0);
+        for (int frame = 0; frame < 60; ++frame)
+        {
+            system.time += 1.0 / 60.0;
+            Refresh();
+        }
+        EXPECT_GT(list->GetScrollTop(), before) << "hide/show cycle " << cycle;
+    }
 }
 
 TEST_F(ContentBrowserTest, UnchangedSnapshotAndSelectionRefreshPreserveListScroll)

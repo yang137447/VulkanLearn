@@ -56,6 +56,7 @@ enum class PlatformKey
     Z,
     F1,
     F10,
+    F11,
     Num0,
     Num1,
     Num2,

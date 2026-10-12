@@ -147,9 +147,8 @@ public:
     const UiViewportRect& GetSceneViewportRect() const { return sceneViewportRect; }
     bool IsSceneViewportEnabled() const
     {
-        return developerUiVisible && !runtimePageVisible &&
-            (materialInstanceEditorPanel == nullptr ||
-                !materialInstanceEditorPanel->IsResourceEditorVisible());
+        // 资源标签同样消费 renderer-owned 离屏图像；不能因资产编辑器可见而关闭输出。
+        return developerUiVisible && !runtimePageVisible;
     }
     std::optional<UiViewportPoint> GetSceneViewportPoint(float x, float y) const
     {
@@ -163,6 +162,7 @@ public:
     UiRenderSnapshotQueue& GetRenderSnapshotQueue() { return renderSnapshotQueue; }
 
 private:
+    void SetImmersiveView(bool enabled);
     using LocalizationTable = std::unordered_map<std::string, std::string>;
     using LocalizationDatabase = std::unordered_map<std::string, LocalizationTable>;
     using AssetFingerprint = std::unordered_map<std::string, uint64_t>;
@@ -536,6 +536,9 @@ private:
     bool runtimePageVisible = false;
     bool developerUiEnabled = false;
     bool developerUiVisible = false;
+    bool immersiveView = false;
+    std::string immersiveLevelPath;
+    bool immersiveLoadCompleted = false;
     float pointerX = 0.0f;
     float pointerY = 0.0f;
     bool editorPointerCaptured = false;

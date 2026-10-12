@@ -1,8 +1,8 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('beauty', 'linear', 'specular', 'basecolor', 'normal', 'direct')]
+    [ValidateSet('beauty', 'linear', 'specular', 'basecolor', 'normal')]
     [string]$View = 'beauty',
-    [string]$Scene = 'Maps/SC_lookdev/SC_lookdev.json',
+    [string]$Scene = 'Maps/SC_lookdev_article/SC_lookdev_article.json',
     [int]$TimeoutSeconds = 90
 )
 
@@ -16,7 +16,6 @@ $name = "lookdev-$View-$stamp"
 $image = Join-Path $config.resourcePath "Generated/Screenshots/$name.bmp"
 $toneMap = if ($View -eq 'linear') { 0 } else { 3 }
 $scene = $Scene
-if ($View -eq 'direct') { $scene = 'Generated/Lookdev/SC_lookdev_direct.json' }
 $arguments = "--initial-scene $scene --no-dev-ui --console-command `"tonemap $toneMap`" --console-command `"bloom strength 0`" --console-command `"screenshot $name.bmp`" --console-command-delay 240"
 if ($View -eq 'specular') { $arguments += ' --console-command "debugview 10"' }
 if ($View -eq 'basecolor') { $arguments += ' --console-command "debugview 1"' }

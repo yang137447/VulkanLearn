@@ -50,7 +50,7 @@
 | 契约 | 何时必读 |
 | --- | --- |
 | `contracts/asset-organization.md` | 新增/移动资源目录，或改 `resourcePath` 布局时 |
-| `contracts/lookdev-scene.md` | 改中性审阅场景（`SC_lookdev`）、其固定曝光/显示预设、漫反射标定或截图测量时 |
+| `contracts/lookdev-scene.md` | 改文章资产审阅场景（`SC_lookdev_article`）、UE 资源导入、固定曝光/显示预设或截图时 |
 | `contracts/physical-lighting-and-exposure.md` | 改厘米世界长度、光源物理单位（lux/candela）、相机 EV100 或曝光模式时 |
 | `contracts/csm-shadow-map-m1.md` | 改 CSM 阴影贴图资源、分层 framebuffer、级联设置或相关 debug view 时 |
 | `contracts/debug-runtime-commands.md` | 新增/修改控制台调试命令（含相机控制与截图）时 |

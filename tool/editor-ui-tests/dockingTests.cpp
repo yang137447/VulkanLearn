@@ -55,6 +55,8 @@ TEST(DockWorkspaceTest, ResourceDocumentsUseTheWorkspaceTabStack)
     ASSERT_TRUE(workspace.ReplaceResourcePanels({"resource:0", "resource:1"}));
     const auto stack = workspace.FindStack("resource:0");
     ASSERT_NE(stack, 0u);
+    EXPECT_EQ(stack, workspace.FindStack("viewport"));
+    EXPECT_EQ(workspace.State().nodes.size(), 7u);
     EXPECT_EQ(workspace.FindStack("resource:1"), stack);
     const auto& tabs = workspace.State().nodes.at(stack).tabs;
     EXPECT_EQ(std::find(tabs.begin(), tabs.end(), "resource"), tabs.end());
@@ -66,6 +68,11 @@ TEST(DockWorkspaceTest, ResourceDocumentsUseTheWorkspaceTabStack)
     EXPECT_EQ(workspace.FindStack("resource:0"), 0u);
     EXPECT_NE(workspace.FindStack("resource:1"), 0u);
     EXPECT_TRUE(DockWorkspace::Validate(workspace.State(), error)) << error;
+    ASSERT_TRUE(workspace.ReplaceResourcePanels({"resource:1", "resource:2"}));
+    EXPECT_EQ(workspace.FindStack("resource:2"), workspace.FindStack("viewport"));
+    EXPECT_EQ(workspace.State().nodes.size(), 7u);
+    ASSERT_TRUE(workspace.ReplaceResourcePanels({}));
+    EXPECT_EQ(workspace.State().nodes.at(workspace.FindStack("viewport")).tabs.size(), 1u);
 }
 
 TEST(DockWorkspaceTest, EveryEdgeCreatesAnIndependentSplit)

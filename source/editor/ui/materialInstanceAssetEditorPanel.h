@@ -52,6 +52,7 @@ public:
     void Build(const MaterialInstanceEditorSnapshot& snapshot);
     void UpdateRuntimeView(const UiViewModelSnapshot& view);
     void RequestSave();
+    bool PrepareImmersiveView(std::string& levelToLoad);
     void SetWorkspaceLayoutPath(std::filesystem::path path) { docking.SetPersistencePath(std::move(path)); }
     UiViewportRect GetSceneViewportRect() const { return docking.GetSceneViewportRect(); }
     bool IsSceneViewportElement(const Rml::Element* element) const { return docking.IsSceneViewportElement(element); }
@@ -69,10 +70,7 @@ public:
     const std::string& ViewportTransformTool() const { return viewportTransformTool; }
     const std::string& ViewportTransformSpace() const { return viewportTransformSpace; }
     const std::vector<std::string>& MenuLevelPaths() const { return menuLevelPaths; }
-    bool IsResourceEditorVisible() const
-    {
-        return resourceEditorVisible || docking.IsPanelActive("resource");
-    }
+    bool IsResourceEditorVisible() const;
     bool IsWorkspaceDragging() const { return docking.IsDragging(); }
     size_t WorkspacePropertyWriteCount() const { return docking.PropertyWriteCount(); }
     size_t PanelPropertyWriteCount() const { return widgetDocument.PropertyWriteCount(); }
@@ -152,6 +150,12 @@ private:
     void OpenResourceAsset(const std::string& path, EditorAssetKind kind);
     void CloseActiveResource();
     void RequestResourceReload();
+    void RequestModelPreview(const std::string& path);
+    void ReturnToLevel();
+    bool HasCurrentModelPreview() const;
+    std::string requestedPreviewPath;
+    std::string levelWorldPath;
+    uint64_t requestedPreviewGeneration = 0;
 
     IEditorCommandSink* commandSink = nullptr;
     IMaterialInstanceSceneSelectionSink* sceneSelectionSink = nullptr;
@@ -182,6 +186,8 @@ private:
     // 切换它们不提交 UiAction 或资产命令（见 ViewportToolbar 相关注释与文档）。
     std::string viewportTransformTool = "select";
     std::string viewportTransformSpace = "world";
+    std::string resourceTransformTool = "select";
+    std::string resourceTransformSpace = "world";
     // File→Open Level 的条目地址按索引寻址，与 markup 同代重建，避免把资产路径写进 DOM 属性。
     std::vector<std::string> menuLevelPaths;
     std::shared_ptr<const EditorJsonAssetCatalogSnapshot> menuCatalog;

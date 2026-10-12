@@ -1,4 +1,5 @@
 #include "ui/uiSubsystem.h"
+#include "ui/editorPointerPolicy.h"
 
 #include <algorithm>
 #include <cctype>
@@ -118,6 +119,7 @@ Rml::Input::KeyIdentifier ToRmlKey(PlatformKey key)
     case PlatformKey::Z: return Rml::Input::KI_Z;
     case PlatformKey::F1: return Rml::Input::KI_F1;
     case PlatformKey::F10: return Rml::Input::KI_F10;
+    case PlatformKey::F11: return Rml::Input::KI_F11;
     case PlatformKey::Num0: return Rml::Input::KI_0;
     case PlatformKey::Num1: return Rml::Input::KI_1;
     case PlatformKey::Num2: return Rml::Input::KI_2;
@@ -438,6 +440,16 @@ void UiSubsystem::Update(const UiViewModelSnapshot& viewModelSnapshot)
 
     UiViewModelSnapshot previous = std::move(lastViewModel);
     lastViewModel = viewModelSnapshot;
+    if (!immersiveLevelPath.empty() && immersiveLoadCompleted)
+    {
+        // 完成通知本身不代表成功；必须核对事务发布后的 World，禁止放大仍存活的模型预览。
+        const bool restored = NormalizePathForComparison(lastViewModel.activeWorldPath) ==
+            NormalizePathForComparison(immersiveLevelPath);
+        immersiveLevelPath.clear();
+        immersiveLoadCompleted = false;
+        if (restored) SetImmersiveView(true);
+        else diagnostics->ReportWarning("Immersive mode cancelled: the level was not restored.");
+    }
     ReconcileOfflineModeFeedback(lastViewModel, previous);
     lastViewModel.runtimePageVisible = runtimePageVisible;
     lastViewModel.developerUiVisible = developerUiVisible;
@@ -505,11 +517,24 @@ void UiSubsystem::ApplyAction(const UiAction& action)
     case UiActionType::ToggleDeveloperUi:
         if (developerUiEnabled)
         {
-            developerUiVisible = !developerUiVisible;
-            if (!developerUiVisible)
+            if (!immersiveLevelPath.empty())
             {
-                ResetRuntimeInputState();
-                editorPointerCaptured = false;
+                immersiveLevelPath.clear();
+                immersiveLoadCompleted = false;
+            }
+            else if (!developerUiVisible) SetImmersiveView(false);
+            else if (materialInstanceEditorPanel != nullptr &&
+                materialInstanceEditorPanel->PrepareImmersiveView(immersiveLevelPath))
+            {
+                if (immersiveLevelPath.empty()) SetImmersiveView(true);
+                else
+                {
+                    immersiveLoadCompleted = false;
+                    UiAction load;
+                    load.type = UiActionType::LoadWorld;
+                    load.stringValue = immersiveLevelPath;
+                    RequestRuntimeAction(std::move(load));
+                }
             }
         }
         ApplyDocumentState();
@@ -526,6 +551,16 @@ void UiSubsystem::ApplyAction(const UiAction& action)
         break;
     }
     UpdateInputOwnership();
+}
+
+void UiSubsystem::SetImmersiveView(bool enabled)
+{
+    immersiveView = enabled;
+    developerUiVisible = !enabled;
+    runtimePageVisible = false;
+    ResetRuntimeInputState();
+    editorPointerCaptured = false;
+    ApplyDocumentState();
 }
 
 void UiSubsystem::NotifyWorldChanged(
@@ -551,6 +586,7 @@ void UiSubsystem::NotifyWorldChanged(
 
 void UiSubsystem::NotifyWorldLoadCompleted()
 {
+    if (!immersiveLevelPath.empty()) immersiveLoadCompleted = true;
     if (!bindingData.sceneLoading)
     {
         return;
@@ -1550,11 +1586,16 @@ void UiSubsystem::ApplyDocumentState()
         panel->SetProperty("display", runtimePageVisible ? "block" : "none");
     }
     if (Rml::Element* hud = runtimeDocument->GetElementById("hud"))
-        hud->SetProperty("display", developerUiVisible ? "none" : "block");
+        hud->SetProperty("display", developerUiVisible || immersiveView ? "none" : "block");
     if (editorDocument != nullptr)
     {
         if (developerUiVisible && !runtimePageVisible)
+        {
             editorDocument->Show(Rml::ModalFlag::None, Rml::FocusFlag::None);
+            // Hide 会将焦点交还运行时文档并将其置顶；无焦点 Show 不恢复层级。
+            // 显式置顶才能避免透明运行时根节点挡住鼠标，同时不抢走游戏键盘焦点。
+            editorDocument->PullToFront();
+        }
         else editorDocument->Hide();
     }
 
@@ -2491,6 +2532,8 @@ bool UiSubsystem::ProcessDeveloperUiEvent(const PlatformEvent& event)
         const bool sceneHit = materialInstanceEditorPanel != nullptr &&
             materialInstanceEditorPanel->IsSceneViewportElement(hit);
         const bool editorHit = hit != nullptr && hit->GetOwnerDocument() == editorDocument && !sceneHit;
+        if (ShouldReleaseScenePointerForEditor(event.type, editorHit))
+            sceneViewportInputActive = false;
         const bool captured = editorPointerCaptured ||
             (materialInstanceEditorPanel != nullptr && materialInstanceEditorPanel->IsWorkspaceDragging());
         if ((sceneHit || (sceneViewportInputActive && !resourceEditor)) && !captured && !modal)
@@ -2554,12 +2597,28 @@ void UiSubsystem::RequestRuntimeAction(UiAction action)
 {
     if (action.type == UiActionType::LoadWorld)
     {
-        const bool knownScene = std::any_of(
-            bindingData.sceneOptions.begin(),
-            bindingData.sceneOptions.end(),
-            [&action](const UiSceneOption& option) { return option.path == action.stringValue; });
+        // 冻结 World 快照保存物理绝对路径，目录条目使用资源相对路径。
+        // 返回关卡仍须命中已知场景，再统一提交目录路径，不能因两种表示不同而静默丢弃。
+        const std::string requestedPath = NormalizePathForComparison(action.stringValue);
+        const bool immersiveRequest = !immersiveLevelPath.empty() &&
+            action.stringValue == immersiveLevelPath;
+        if (!immersiveRequest) immersiveLevelPath.clear();
+        bool knownScene = false;
+        for (const UiSceneOption& option : bindingData.sceneOptions)
+        {
+            if (option.path != action.stringValue && option.normalizedPhysicalPath != requestedPath)
+                continue;
+            if (immersiveRequest) immersiveLevelPath = option.normalizedPhysicalPath;
+            action.stringValue = option.path;
+            knownScene = true;
+            break;
+        }
         if (!knownScene || bindingData.sceneLoading)
+        {
+            immersiveLevelPath.clear();
+            immersiveLoadCompleted = false;
             return;
+        }
         bindingData.sceneLoading = true;
         dataModelHandle.DirtyVariable("scene_loading");
     }
@@ -2590,7 +2649,7 @@ bool UiSubsystem::HandleGlobalShortcut(const PlatformEvent& event)
             QueueAction(std::move(action));
             return true;
         }
-        if (event.key == PlatformKey::F1 && developerUiEnabled)
+        if ((event.key == PlatformKey::F11 || event.key == PlatformKey::F1) && developerUiEnabled)
         {
             UiAction action;
             action.type = UiActionType::ToggleDeveloperUi;

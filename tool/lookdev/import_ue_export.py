@@ -16,7 +16,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SCENE = "Maps/SC_lookdev"
+SCENE = "Maps/SC_lookdev_article"
 
 
 def write_json(path: Path, value: object) -> None:
@@ -51,6 +51,10 @@ def main() -> None:
         if not source.is_file():
             continue
         target = source_root / name
+        # 模型编辑器与文章场景共享同一环境源，不在场景目录各复制一份。
+        if name == "EpicQuadPanorama_Gray.hdr":
+            target = resource_root / "Common/Environments/UE_AssetsPreview" / name
+            target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
         copied.append(str(target.relative_to(resource_root)).replace("\\", "/"))
 
@@ -195,7 +199,7 @@ def main() -> None:
         ],
         "limitations": [
             "UE material graphs are rebuilt explicitly as VL material instances; the verified FBX slot order is preserved.",
-            "The ColorChecker texture is retained as source evidence; the calibrated VL chart remains the validation reference.",
+            "The ColorChecker texture is retained from UE; this is an appearance reference, not a numerical calibration.",
         ],
     })
 

@@ -13,6 +13,8 @@ enum class UiActionType
     ToggleDeveloperUi,
     SetLocale,
     LoadWorld,
+    // stringValue 是资源根相对模型路径；GT 将其转为中性场景的 LoadWorld 注入请求。
+    PreviewModel,
     SetCameraMoveSpeed,
     SetDebugViewMode,
     SetToneMappingMode,

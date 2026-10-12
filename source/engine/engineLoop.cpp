@@ -9,6 +9,7 @@
 #include "SDL3/SDL.h"
 #include "controller.h"
 #include "engine/gameInstance.h"
+#include "engine/modelPreviewRequest.h"
 #include "engine/runtimeCommandExecutor.h"
 #include "engine/runtimeTestHooks.h"
 #include "engine/subsystemCollection.h"
@@ -633,6 +634,11 @@ void EngineLoop::ApplyQueuedUiActions()
         command.sourceText = "ui";
         switch (action.type)
         {
+        case UiActionType::PreviewModel:
+            command.type = RuntimeCommandType::LoadWorld;
+            command.stringValue = ModelPreviewScenePath;
+            command.extraSceneObjects = BuildModelPreviewObjects(action.stringValue);
+            break;
         case UiActionType::LoadWorld:
             command.type = RuntimeCommandType::LoadWorld;
             command.stringValue = action.stringValue;

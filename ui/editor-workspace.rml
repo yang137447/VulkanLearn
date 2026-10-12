@@ -56,7 +56,7 @@
             <div class="toolbar-spacer"></div>
             <button id="workspace-reset" data-action="workspace-reset">Reset Layout</button>
             <button data-action="runtime-page">Settings</button>
-            <button data-action="hide-editor">Close Editor</button>
+            <button data-action="immersive-view" title="Immersive Mode">Immersive Mode</button>
         </div>
 
         <div id="editor-content">
@@ -250,6 +250,14 @@
             </div>
             <div id="resource-editor">
                 <div id="resource-editor-toolbar">
+                    <div id="resource-model-tools" class="resource-model-tools">
+                        <button id="resource-tool-select" class="viewport-tool" data-action="resource-tool" data-tool="select" title="Select model tool">Select</button>
+                        <button id="resource-tool-move" class="viewport-tool" data-action="resource-tool" data-tool="move" title="Move model tool">Move</button>
+                        <button id="resource-tool-rotate" class="viewport-tool" data-action="resource-tool" data-tool="rotate" title="Rotate model tool">Rotate</button>
+                        <button id="resource-tool-scale" class="viewport-tool" data-action="resource-tool" data-tool="scale" title="Scale model tool">Scale</button>
+                        <button id="resource-space-world" class="viewport-tool" data-action="resource-space" data-space="world" title="World space">World</button>
+                        <button id="resource-space-local" class="viewport-tool" data-action="resource-space" data-space="local" title="Local space">Local</button>
+                    </div>
                     <div class="toolbar-spacer"></div>
                     <button id="resource-reload" class="browser-icon" data-action="resource-reload" title="Reload JSON">
                         <img src="icons/refresh.png"/><span class="browser-tooltip">Reload JSON</span>
@@ -265,6 +273,7 @@
                             <span id="resource-preview-kind"></span>
                         </div>
                         <div id="resource-preview-surface">
+                            <img id="resource-preview-image" src="vl://scene-viewport"/>
                             <img id="resource-preview-icon" src="icons/mesh.png"/>
                             <h3 id="resource-preview-status"></h3>
                             <p id="resource-preview-path"></p>
@@ -272,6 +281,14 @@
                     </div>
                     <div id="resource-details-panel">
                         <div class="inspector-body">
+                            <div id="resource-model-info">
+                                <h3>Model Information</h3>
+                                <p id="resource-model-name"></p>
+                                <p id="resource-model-path"></p>
+                                <p id="resource-model-status"></p>
+                                <p id="resource-model-fields"></p>
+                                <p id="resource-model-description"></p>
+                            </div>
                             <div id="resource-json-inspector">
                                 <div class="json-header">
                                     <h3 id="resource-json-title"></h3><span class="json-readonly">Read Only</span>

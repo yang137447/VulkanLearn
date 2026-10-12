@@ -380,6 +380,11 @@ bool MaterialInstanceAssetEditorPanel::ValidateDocument(Rml::ElementDocument& ca
         "resource-editor", "resource-editor-toolbar", "resource-reload", "resource-close", "resource-preview-panel",
         "resource-preview-title", "resource-preview-kind", "resource-preview-surface",
         "resource-preview-icon", "resource-preview-status", "resource-preview-path",
+        "resource-preview-image",
+        "resource-model-tools", "resource-tool-select", "resource-tool-move", "resource-tool-rotate",
+        "resource-tool-scale", "resource-space-world", "resource-space-local", "resource-model-info",
+        "resource-model-name", "resource-model-path", "resource-model-status", "resource-model-fields",
+        "resource-model-description",
         "resource-details-panel", "resource-json-inspector", "resource-json-title",
         "resource-json-kind", "resource-json-path", "resource-json-description",
         "resource-json-status", "resource-json-fields", "resource-json-search",
@@ -431,6 +436,10 @@ bool MaterialInstanceAssetEditorPanel::Attach(Rml::ElementDocument& candidate, s
         Detach();
         return false;
     }
+    // 编辑器启动必须有一个可见的关卡编辑入口；停靠布局可能记住了 Content/Details 标签，
+    // 但不能让默认启动场景变成“只有资产浏览器没有视口”。
+    docking.SetPanelVisible("viewport", true);
+    docking.Activate("viewport");
     widgetDocument.Attach(candidate);
     if (!contentBrowser.Attach(candidate, error))
     {
@@ -573,6 +582,7 @@ void MaterialInstanceAssetEditorPanel::Build(const MaterialInstanceEditorSnapsho
     FlushPendingEdits();
     snapshot = value;
     RefreshWorkspace();
+    resourceEditorVisible = IsResourceEditorVisible();
     if (saveThenClose && !saveCloseSubmitted && snapshot.activeDocument &&
         snapshot.activeDocument->assetPath == pendingClosePath)
     {
@@ -1537,7 +1547,15 @@ void MaterialInstanceAssetEditorPanel::OpenResourceAsset(
     localStatus.clear();
     if (!alreadyOpen && jsonAssetRequestSink != nullptr)
         jsonAssetRequestSink->RequestOpenJsonAsset(path);
+    if (kind == EditorAssetKind::Mesh && runtimeActionSink != nullptr)
+    {
+        // 回调只投递路径；GT 复用 previewmodel 的 LoadWorld 事务，不在 UI 内加载资产。
+        // 即使标签已打开也重新请求，保证切过关卡后再次双击仍能回到该模型。
+        RequestModelPreview(path);
+    }
     RefreshResourceEditor();
+    docking.SetPanelVisible(ResourcePanelId(path), true);
+    docking.Activate(ResourcePanelId(path));
 }
 
 void MaterialInstanceAssetEditorPanel::CloseActiveResource()
@@ -1546,9 +1564,16 @@ void MaterialInstanceAssetEditorPanel::CloseActiveResource()
     if (active == nullptr) return;
     resourceEditor.Close(active->path);
     resourceEditorVisible = resourceEditor.ActiveTab() != nullptr;
-    if (!resourceEditorVisible) docking.Activate("viewport");
+    if (!resourceEditorVisible) ReturnToLevel();
     if (!resourceEditorVisible) localStatus.clear();
     RefreshResourceEditor();
+    const auto* next = resourceEditor.ActiveTab();
+    if (next != nullptr)
+    {
+        docking.Activate(ResourcePanelId(next->path));
+        if (next->kind == EditorAssetKind::Mesh && !HasCurrentModelPreview())
+            RequestModelPreview(next->path);
+    }
 }
 
 void MaterialInstanceAssetEditorPanel::RequestResourceReload()
@@ -1558,15 +1583,102 @@ void MaterialInstanceAssetEditorPanel::RequestResourceReload()
     if (path.empty()) return;
     if (jsonAssetRequestSink != nullptr)
         jsonAssetRequestSink->RequestOpenJsonAsset(path);
+    const auto* active = resourceEditor.ActiveTab();
+    if (active != nullptr && active->kind == EditorAssetKind::Mesh) RequestModelPreview(path);
+}
+
+void MaterialInstanceAssetEditorPanel::RequestModelPreview(const std::string& path)
+{
+    if (runtimeActionSink == nullptr) return;
+    if (requestedPreviewPath.empty() && !runtimeView.activeWorldPath.empty() &&
+        std::filesystem::path(runtimeView.activeWorldPath).filename() != "SC_model_preview.json")
+        levelWorldPath = runtimeView.activeWorldPath;
+    requestedPreviewPath = path;
+    requestedPreviewGeneration = 0;
+    for (const auto& actor : OutlinerActors())
+        requestedPreviewGeneration = std::max(requestedPreviewGeneration, actor.worldGeneration);
+    UiAction request;
+    request.type = UiActionType::PreviewModel;
+    request.stringValue = path;
+    runtimeActionSink->RequestRuntimeAction(std::move(request));
+}
+
+bool MaterialInstanceAssetEditorPanel::IsResourceEditorVisible() const
+{
+    for (const auto& tab : resourceEditor.Tabs())
+        if (docking.IsPanelActive(ResourcePanelId(tab.path))) return true;
+    return false;
+}
+
+bool MaterialInstanceAssetEditorPanel::PrepareImmersiveView(std::string& levelToLoad)
+{
+    levelToLoad.clear();
+    if (HasModal()) return false;
+    const bool previewWorld = !requestedPreviewPath.empty() ||
+        std::filesystem::path(runtimeView.activeWorldPath).filename() == "SC_model_preview.json";
+    if (previewWorld)
+    {
+        if (levelWorldPath.empty())
+        {
+            localStatus = "Open a level before entering immersive mode.";
+            return false;
+        }
+        levelToLoad = levelWorldPath;
+        requestedPreviewPath.clear();
+    }
+    // 这里只选择目标页面；宿主等关卡事务完成后隐藏 UI，失败时仍保留可操作的工作区。
+    resourceEditorVisible = false;
+    docking.SetPanelVisible("viewport", true);
+    docking.Activate("viewport");
+    return true;
+}
+
+void MaterialInstanceAssetEditorPanel::ReturnToLevel()
+{
+    resourceEditorVisible = false;
+    docking.Activate("viewport");
+    // 当前只有一个活动 World；返回关卡须重新走加载事务，不能把模型 World 冒充关卡。
+    if (!requestedPreviewPath.empty() && !levelWorldPath.empty() && runtimeActionSink != nullptr)
+    {
+        UiAction request;
+        request.type = UiActionType::LoadWorld;
+        request.stringValue = levelWorldPath;
+        runtimeActionSink->RequestRuntimeAction(std::move(request));
+        requestedPreviewPath.clear();
+    }
+}
+
+bool MaterialInstanceAssetEditorPanel::HasCurrentModelPreview() const
+{
+    const auto* active = resourceEditor.ActiveTab();
+    if (active == nullptr || active->kind != EditorAssetKind::Mesh ||
+        active->path != requestedPreviewPath) return false;
+    // JSON 读取完成不能证明 GPU 模型已加载；只在新预览 World 的冻结快照发布后展示。
+    for (const auto& actor : OutlinerActors())
+        if (actor.worldGeneration > requestedPreviewGeneration &&
+            actor.sceneObjectIdentity == "preview_model" &&
+            std::filesystem::path(actor.scenePath).filename() == "SC_model_preview.json")
+            return true;
+    return false;
 }
 
 void MaterialInstanceAssetEditorPanel::RefreshResourceEditor()
 {
     if (document == nullptr) return;
     const auto* active = resourceEditor.ActiveTab();
+    const bool isMesh = active != nullptr && active->kind == EditorAssetKind::Mesh;
+    const bool previewReady = HasCurrentModelPreview();
+    widgetDocument.SetProperty("resource-preview-image", "display", previewReady ? "block" : "none");
+    for (const char* id : {"resource-preview-icon", "resource-preview-status", "resource-preview-path"})
+        widgetDocument.SetProperty(id, "display", previewReady ? "none" : "block");
+    widgetDocument.SetClass("resource-model-tools", "visible", isMesh);
+    widgetDocument.SetClass("resource-model-info", "visible", isMesh);
+    for (const char* id : {"resource-tool-select", "resource-tool-move", "resource-tool-rotate", "resource-tool-scale",
+                           "resource-space-world", "resource-space-local"})
+        SetDisabled(id, !isMesh);
     if (active == nullptr)
     {
-        docking.SetResourceTabs({}, {});
+        docking.SetResourceTabs({});
         SetDisabled("resource-reload", true);
         SetMarkup("resource-preview-title", "Asset Editor");
         SetMarkup("resource-preview-kind", "");
@@ -1589,7 +1701,7 @@ void MaterialInstanceAssetEditorPanel::RefreshResourceEditor()
             std::filesystem::path(tab.path).filename().string(),
             EditorAssetKindIcon(tab.kind)});
     }
-    docking.SetResourceTabs(tabs, active->path);
+    docking.SetResourceTabs(tabs);
     SetDisabled("resource-reload", active->loading);
     SetMarkup("resource-preview-title", Text(active->snapshot != nullptr &&
         !active->snapshot->name.empty() ? active->snapshot->name :
@@ -1598,12 +1710,35 @@ void MaterialInstanceAssetEditorPanel::RefreshResourceEditor()
     SetMarkup("resource-preview-path", Text(active->path));
     SetMarkup("resource-preview-status", active->loading
         ? "Reading JSON metadata..."
-        : "Preview unavailable: referenced data is not loaded.");
+        : isMesh ? "Waiting for model preview" : "Preview unavailable: referenced data is not loaded.");
     auto* previewIcon = document->GetElementById("resource-preview-icon");
     const std::string icon = EditorAssetKindIcon(active->kind);
     if (previewIcon->GetAttribute<std::string>("src", "") != icon)
         previewIcon->SetAttribute("src", icon);
     resourceJsonInspector.Build(active->snapshot, active->path, active->loading);
+    if (isMesh)
+    {
+        for (const auto& pair : {std::pair<const char*, const char*>("resource-tool-select", "select"),
+                                 {"resource-tool-move", "move"}, {"resource-tool-rotate", "rotate"},
+                                 {"resource-tool-scale", "scale"}})
+            widgetDocument.SetClass(pair.first, "active", resourceTransformTool == pair.second);
+        widgetDocument.SetClass("resource-space-world", "active", resourceTransformSpace == "world");
+        widgetDocument.SetClass("resource-space-local", "active", resourceTransformSpace == "local");
+    }
+    if (isMesh)
+    {
+        const std::string name = active->snapshot != nullptr && !active->snapshot->name.empty()
+            ? active->snapshot->name : std::filesystem::path(active->path).filename().string();
+        SetMarkup("resource-model-name", Text("Name: " + name));
+        SetMarkup("resource-model-path", Text("Path: " + active->path));
+        SetMarkup("resource-model-status", Text("Status: " +
+            std::string(active->loading ? "Reading metadata" :
+                active->snapshot != nullptr && active->snapshot->diagnostic.empty() ? "Metadata ready" : "Diagnostic")));
+        SetMarkup("resource-model-fields", Text("Metadata fields: " + std::to_string(
+            active->snapshot != nullptr ? active->snapshot->fields.size() : 0)));
+        SetMarkup("resource-model-description", Text(active->snapshot != nullptr
+            ? active->snapshot->description : std::string{}));
+    }
 }
 
 void MaterialInstanceAssetEditorPanel::RefreshControls()
@@ -1730,6 +1865,16 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
     if (action == "json-close") ShowMaterialDetails();
     else if (action == "resource-close") CloseActiveResource();
     else if (action == "resource-reload") RequestResourceReload();
+    else if (action == "resource-tool")
+    {
+        resourceTransformTool = element.GetAttribute<std::string>("data-tool", "select");
+        RefreshResourceEditor();
+    }
+    else if (action == "resource-space")
+    {
+        resourceTransformSpace = element.GetAttribute<std::string>("data-space", "world");
+        RefreshResourceEditor();
+    }
     else if (action == "browser-refresh")
     {
         if (jsonAssetRequestSink != nullptr) jsonAssetRequestSink->RequestRefreshAssetCatalog();
@@ -1967,7 +2112,7 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
     {
         UiAction request;
         if (action == "runtime-page") request.type = UiActionType::ToggleRuntimePage;
-        else if (action == "hide-editor") request.type = UiActionType::ToggleDeveloperUi;
+        else if (action == "immersive-view") request.type = UiActionType::ToggleDeveloperUi;
         else if (action == "exit-editor") request.type = UiActionType::Quit;
         else if (action == "viewport-view-mode")
         {
@@ -2154,7 +2299,6 @@ void MaterialInstanceAssetEditorPanel::OpenBrowserAsset(const std::string& path)
     else
     {
         resourceEditorVisible = false;
-        docking.Activate("details");
         if (kind == EditorAssetKind::Scene && runtimeActionSink != nullptr)
         {
             // 关卡双击复用运行时场景选择器的 LoadWorld 事务；UI 不直接触碰 World，
@@ -2162,7 +2306,12 @@ void MaterialInstanceAssetEditorPanel::OpenBrowserAsset(const std::string& path)
             UiAction request;
             request.type = UiActionType::LoadWorld;
             request.stringValue = path;
+            levelWorldPath = path;
+            requestedPreviewPath.clear();
             runtimeActionSink->RequestRuntimeAction(std::move(request));
+            // 场景双击切换 World 后，关卡编辑标签是当前主工作区；Details 只保留资产元数据。
+            docking.SetPanelVisible("viewport", true);
+            docking.Activate("viewport");
         }
         // 非关卡 JSON 只读查看，不导入模型或贴图；MI 文档事务保持独立。
         if (jsonAssetRequestSink == nullptr) return;
@@ -2170,7 +2319,7 @@ void MaterialInstanceAssetEditorPanel::OpenBrowserAsset(const std::string& path)
         requestedJsonPath = path;
         localStatus.clear();
         jsonAssetRequestSink->RequestOpenJsonAsset(path);
-        docking.Activate("details");
+        if (kind != EditorAssetKind::Scene) docking.Activate("details");
     }
 }
 
@@ -2187,10 +2336,14 @@ void MaterialInstanceAssetEditorPanel::ProcessEvent(Rml::Event& event)
     if (docking.ProcessEvent(event, HasModal()))
     {
         const std::string activatedPanel = docking.ConsumeActivatedPanel();
+        if (activatedPanel == "viewport") ReturnToLevel();
         const std::string path = docking.ResourcePathForPanel(activatedPanel);
         if (!path.empty() && resourceEditor.Activate(path))
         {
             resourceEditorVisible = true;
+            const auto* active = resourceEditor.ActiveTab();
+            if (active != nullptr && active->kind == EditorAssetKind::Mesh && !HasCurrentModelPreview())
+                RequestModelPreview(path);
             RefreshResourceEditor();
         }
         event.StopPropagation();
