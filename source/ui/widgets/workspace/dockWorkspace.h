@@ -76,6 +76,10 @@ public:
     bool Restore(DockLayoutState candidate, std::string& error);
     static bool Validate(const DockLayoutState& candidate, std::string& error);
     static bool IsResourceDocumentPanel(const std::string& panel);
+    // 整个资产编辑器面板族：占位名 `resource` 与全部文档面板（`resource:<hash>`）。
+    // 它们**不属于常驻面板集合**，按需创建 —— 没有打开资产时不该占标签位。
+    // 布局校验用它把"可有可无"与"必须齐备"分开。
+    static bool IsAssetEditorPanel(const std::string& panel);
     uint32_t FindStack(const std::string& panel) const;
     bool Activate(const std::string& panel);
     bool ReplaceResourcePanels(const std::vector<std::string>& panels);

@@ -714,7 +714,12 @@ TEST_F(EditorUiTest, MeshLevelAndTextureOpenReadOnlyJsonAndSceneRequestsWorldLoa
         EXPECT_TRUE(document->GetElementById("menu-file-save")->HasAttribute("disabled"));
         if (asset.kind == EditorAssetKind::Mesh || asset.kind == EditorAssetKind::Texture)
         {
-            EXPECT_TRUE(document->GetElementById("resource-editor")->IsVisible());
+            // 先取元素再断言：直接解引用 QuerySelector/GetElementById 的结果会在元素缺失时崩溃，
+            // 而"元素缺失"与"元素不可见"是完全不同的问题，崩溃会把后者掩盖掉。
+            auto* resourceBody = document->GetElementById("resource-editor");
+            ASSERT_NE(resourceBody, nullptr)
+                << "资产编辑器正文元素不存在；它应当是常驻 DOM（只是可能不可见）";
+            EXPECT_TRUE(resourceBody->IsVisible());
             EXPECT_TRUE(document->GetElementById("resource-json-inspector")->IsVisible());
             EXPECT_NE(document->GetElementById("resource-json-fields")->GetInnerRML().find(asset.name),
                 std::string::npos);
@@ -765,9 +770,22 @@ TEST_F(EditorUiTest, ResourceEditorDeduplicatesTabsAndReturnsToWorld)
     EXPECT_EQ(jsonAssetSink.opened.size(), requests);
     EXPECT_NE(document->QuerySelector(".workspace-resource-tab"), nullptr);
 
+    // 资产编辑器与关卡编辑器是**两个平级标签组**，因此切回关卡视口**不会**隐藏资产编辑器 ——
+    // 这正是分开的目的。两个标签组并排：资产编辑器在左、视口在右，所以断言必须落在
+    // **视口自己的矩形内**，而不是窗口左边缘 —— 左边缘现在属于资产编辑器。
+    // （旧断言 `EXPECT_FALSE(resource-editor->IsVisible())` 依赖两者同栈，那个前提已废除。）
     Click("#workspace-viewport-tab");
     context->Update();
-    EXPECT_FALSE(document->GetElementById("resource-editor")->IsVisible());
+    const auto shot = panel->GetSceneViewportRect();
+    ASSERT_GT(shot.width, 0u);
+    ASSERT_GT(shot.height, 0u);
+    const auto* viewportHit = context->GetElementAtPoint({
+        static_cast<float>(shot.x) + shot.width * 0.5f,
+        static_cast<float>(shot.y) + shot.height * 0.5f});
+    ASSERT_NE(viewportHit, nullptr);
+    EXPECT_TRUE(panel->IsSceneViewportElement(viewportHit))
+        << "视口矩形中心应当命中场景；实际命中 " << viewportHit->GetId();
+    // 资产编辑器仍在屏幕上，只是不再与视口共享标签组。
     EXPECT_TRUE(document->GetElementById("dock-shell")->IsVisible());
 }
 

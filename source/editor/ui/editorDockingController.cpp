@@ -93,41 +93,92 @@ std::string TabContentMarkup(const std::string& panel,
 
 void NormalizeResourcePanels(DockLayoutState& state)
 {
+    // 资产编辑器（`resource` 与 `resource:<hash>`）是**会话内**状态，写盘时整个丢弃。
+    //
+    // 以前这里是"把多个文档标签折叠成一个 `resource` 占位"，因为当时 `resource` 是常驻面板、
+    // 占位名合法。现在资产编辑器按需创建、不在常驻集合里，折叠出来的 `resource` 会让写下的
+    // 布局自己读不回来（校验会以"未知面板"拒绝）。直接丢弃既对了语义，也让读回一致。
+    //
+    // 被丢弃的直接后果：重启后不恢复打开的资产 —— 这本来就是既有行为
+    // （文档集合由文档服务拥有，不随布局持久化）。
     for (auto& item : state.nodes)
     {
         auto& node = item.second;
         if (node.IsSplit()) continue;
-        bool hasResource = false;
         std::vector<std::string> tabs;
         for (const auto& panel : node.tabs)
         {
-            if (DockWorkspace::IsResourceDocumentPanel(panel))
+            if (!DockWorkspace::IsAssetEditorPanel(panel))
             {
-                if (!hasResource)
-                {
-                    tabs.push_back("resource");
-                    hasResource = true;
-                }
+                tabs.push_back(panel);
+            }
+        }
+        // 活动标签若被丢弃，落到剩下的第一个；剩下的可能为空（该栈只装了资产编辑器），
+        // 那种栈由调用方在写盘前清理。
+        if (!tabs.empty() &&
+            std::find(tabs.begin(), tabs.end(), node.active) == tabs.end())
+        {
+            node.active = tabs.front();
+        }
+        node.tabs = std::move(tabs);
+    }
+
+    // 丢弃资产编辑器标签后，可能留下**只装过它的空栈**。空栈是非法的（布局校验要求每个叶子
+    // 至少有一个标签），所以必须剪掉：把只剩空叶子的分裂节点收缩成它的另一个孩子。
+    const auto isEmptiedLeaf = [&state](uint32_t child) {
+        const auto found = state.nodes.find(child);
+        return found != state.nodes.end() && !found->second.IsSplit() &&
+            found->second.tabs.empty();
+    };
+    bool pruned = true;
+    while (pruned)
+    {
+        pruned = false;
+        for (auto& item : state.nodes)
+        {
+            auto& node = item.second;
+            if (!node.IsSplit()) continue;
+            if (!isEmptiedLeaf(node.first) && !isEmptiedLeaf(node.second)) continue;
+
+            const bool firstEmptied = isEmptiedLeaf(node.first);
+            const uint32_t survivor = firstEmptied ? node.second : node.first;
+            const uint32_t absorbed = firstEmptied ? node.first : node.second;
+            auto survivorIt = state.nodes.find(survivor);
+            if (survivorIt == state.nodes.end())
+            {
+                // 两个孩子都不可用：这个分裂节点本身没有意义，直接收缩成空叶子，
+                // 交给外层继续处理。正常布局走不到这里，但剪枝不能假设输入完好。
+                node.first = 0;
+                node.second = 0;
+                node.tabs.clear();
+                node.active.clear();
+                state.nodes.erase(absorbed);
+                pruned = true;
+                break;
+            }
+
+            if (survivorIt->second.IsSplit())
+            {
+                // 存活的孩子是分裂节点：把它提升，接替被剪节点的位置。
+                node.first = survivorIt->second.first;
+                node.second = survivorIt->second.second;
+                node.axis = survivorIt->second.axis;
+                node.ratio = survivorIt->second.ratio;
+                state.nodes.erase(survivorIt);
             }
             else
             {
-                if (panel == "resource")
-                {
-                    if (!hasResource)
-                    {
-                        tabs.push_back(panel);
-                        hasResource = true;
-                    }
-                }
-                else
-                {
-                    tabs.push_back(panel);
-                }
+                // 存活的孩子是叶子：把被剪节点本身变成那个叶子。
+                node.first = 0;
+                node.second = 0;
+                node.tabs = survivorIt->second.tabs;
+                node.active = survivorIt->second.active;
+                state.nodes.erase(survivorIt);
             }
+            state.nodes.erase(absorbed);
+            pruned = true;
+            break;
         }
-        if (hasResource && DockWorkspace::IsResourceDocumentPanel(node.active))
-            node.active = "resource";
-        node.tabs = std::move(tabs);
     }
 }
 
@@ -543,15 +594,26 @@ void EditorDockingController::RebuildShell()
     // 壳元素会销毁，只有保留下来的业务子树指针才能跨越重排。
     if (!businessFocus) restoreFocus = nullptr;
     auto* parking = document->GetElementById("dock-parking");
-    for (const auto& panel : DockWorkspace::Panels())
+    if (parking != nullptr)
     {
-        MoveElement(*document->GetElementById(BodyId(panel)), *parking);
-        MoveElement(*document->GetElementById(TabId(panel)), *parking);
-    }
-    for (const auto& tab : resourceTabs)
-    {
-        auto* element = document->GetElementById(TabId(tab.panel));
-        if (element != nullptr) MoveElement(*element, *parking);
+        // 常驻面板：正文与标签都是静态 DOM。
+        for (const auto& panel : DockWorkspace::Panels())
+        {
+            auto* body = document->GetElementById(BodyId(panel));
+            auto* tab = document->GetElementById(TabId(panel));
+            if (body != nullptr) MoveElement(*body, *parking);
+            if (tab != nullptr) MoveElement(*tab, *parking);
+        }
+        // 资产编辑器：标签是**动态创建**的（每个打开的资产一个），正文是共享的静态 DOM。
+        // 它不属于常驻面板集合，所以不能靠上面的循环搬到；标签若已不存在（资产被关闭）就跳过，
+        // 而不是解引用空元素 —— 缺元素应当是"跳过并重建"，不是崩溃。
+        auto* resourceBody = document->GetElementById(BodyId("resource"));
+        if (resourceBody != nullptr) MoveElement(*resourceBody, *parking);
+        for (const auto& tab : resourceTabs)
+        {
+            auto* element = document->GetElementById(TabId(tab.panel));
+            if (element != nullptr) MoveElement(*element, *parking);
+        }
     }
     std::string resourceMarkup;
     for (const auto& tab : resourceTabs)
@@ -583,19 +645,26 @@ void EditorDockingController::RebuildShell()
         const auto& node = item.second;
         if (node.IsSplit()) continue;
         std::unordered_set<std::string> movedBodies;
+        auto* header = document->GetElementById("dock-header-" + std::to_string(node.id));
+        auto* bodyHost = document->GetElementById("dock-body-" + std::to_string(node.id));
         for (const auto& panel : node.tabs)
         {
+            // 每个元素都单独判空：资产编辑器的标签是动态创建的，布局树里可能出现还没有对应
+            // DOM 的面板（打开/关闭资产的瞬间）。缺元素应当跳过并让这一轮重排结束，
+            // 而不是解引用空指针 —— 后者的表现是崩溃，会把真正缺的是哪个元素掩盖掉。
             auto* tab = document->GetElementById(TabId(panel));
-            MoveElement(*tab,
-                *document->GetElementById("dock-header-" + std::to_string(node.id)));
+            if (tab == nullptr || header == nullptr) continue;
+            MoveElement(*tab, *header);
             // RmlUi 在 display:none 容器中创建的文本子节点被重新挂到可见标题栏后，
             // 部分版本不会重新触发文字布局；重写 inner RML 让标题和图标在首次绘制时稳定出现。
             // 单一路径写入，找不到 resource 条目时回退到基础标签（见 TabContentMarkup）。
             tab->SetInnerRML(TabContentMarkup(panel, resourceTabs));
             const std::string bodyId = BodyId(panel);
-            if (movedBodies.insert(bodyId).second)
-                MoveElement(*document->GetElementById(bodyId),
-                    *document->GetElementById("dock-body-" + std::to_string(node.id)));
+            if (movedBodies.insert(bodyId).second && bodyHost != nullptr)
+            {
+                auto* body = document->GetElementById(bodyId);
+                if (body != nullptr) MoveElement(*body, *bodyHost);
+            }
         }
     }
     structureDirty = false;
@@ -623,6 +692,13 @@ void EditorDockingController::ApplyGeometry()
     for (const auto& splitter : geometry.splitters)
     {
         auto* element = document->GetElementById("dock-split-" + std::to_string(splitter.node));
+        // 判空是必需的：布局树可以在不重建壳的情况下变化（例如资产编辑器标签组按需创建），
+        // 此时几何里可能出现还没有对应 DOM 的节点。直接解引用会让"缺一个元素"表现为崩溃，
+        // 而崩溃会把真正的原因（哪个节点缺元素）掩盖掉。
+        if (element == nullptr)
+        {
+            continue;
+        }
         Place(*element, splitter.rect);
         element->SetClass("horizontal", splitter.axis == DockAxis::Horizontal);
         element->SetClass("vertical", splitter.axis == DockAxis::Vertical);

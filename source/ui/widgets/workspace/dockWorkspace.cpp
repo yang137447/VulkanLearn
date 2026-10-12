@@ -91,14 +91,22 @@ bool DockRect::Contains(float px, float py) const
 
 const std::vector<std::string>& DockWorkspace::Panels()
 {
+    // 资产编辑器（"resource" 与 "resource:<hash>"）**不在常驻面板集合里**：
+    // 它按需创建 —— 没有打开资产时不该占一个标签位。UE 同样如此。
     static const std::vector<std::string> panels{
-        "viewport", "outliner", "details", "content", "renderer", "resource"};
+        "viewport", "outliner", "details", "content", "renderer"};
     return panels;
 }
 
 bool DockWorkspace::IsResourceDocumentPanel(const std::string& panel)
 {
     return panel.size() > 9 && panel.compare(0, 9, "resource:") == 0;
+}
+
+bool DockWorkspace::IsAssetEditorPanel(const std::string& panel)
+{
+    // 占位名与全部文档面板同属一族：它们在布局里都是按需出现、可有可无的。
+    return panel == "resource" || IsResourceDocumentPanel(panel);
 }
 
 DockWorkspace::DockWorkspace() { Reset(); }
@@ -109,7 +117,10 @@ uint32_t DockWorkspace::AddStack(std::vector<std::string> tabs)
     DockNode node;
     node.id = id;
     node.tabs = std::move(tabs);
-    node.active = node.tabs.front();
+    // 空标签栈是不合法的（布局校验要求每个叶子至少有一个标签），而且对空 vector 取 front()
+    // 是未定义行为 —— 这里曾经如此。显式留空 active，让非法输入变成可读的失败而不是崩溃；
+    // 调用方仍必须在写盘或校验前保证栈非空。
+    node.active = node.tabs.empty() ? std::string{} : node.tabs.front();
     state.nodes.emplace(id, std::move(node));
     return id;
 }
@@ -131,7 +142,7 @@ void DockWorkspace::Reset()
 {
     state = {};
     nextId = 1;
-    const uint32_t viewport = AddStack({"viewport", "resource"});
+    const uint32_t viewport = AddStack({"viewport"});
     const uint32_t outliner = AddStack({"outliner"});
     const uint32_t details = AddStack({"details"});
     const uint32_t content = AddStack({"content", "renderer"});
@@ -165,16 +176,16 @@ bool DockWorkspace::Validate(const DockLayoutState& candidate, std::string& erro
         }
         if (!VisitNode(candidate, item.node, seen, panels, error)) return false;
     }
+    // 基础面板（常驻工具面板）必须恰好齐备。
+    // **不再要求存在资产编辑器面板**：它是按需创建的 —— 没有打开资产时不该有它的位置。
+    // UE 里同样如此：没有资产被打开时，标签栏里不存在资产编辑器。
     size_t basePanelCount = 0;
-    size_t resourcePanelCount = 0;
     for (const auto& panel : panels)
     {
-        if (panel == "resource" || IsResourceDocumentPanel(panel)) ++resourcePanelCount;
-        else ++basePanelCount;
+        if (!DockWorkspace::IsAssetEditorPanel(panel)) ++basePanelCount;
     }
     if (seen.size() != candidate.nodes.size() ||
-        basePanelCount != Panels().size() - 1 ||
-        resourcePanelCount == 0)
+        basePanelCount != Panels().size())
     {
         error = "Workspace has unreachable nodes or missing panels.";
         return false;
@@ -202,39 +213,73 @@ bool DockWorkspace::ReplaceResourcePanels(const std::vector<std::string>& panels
         if (desired.find(panel) == desired.end()) RemovePanel(panel);
     }
 
+    // 资产编辑器**不在常驻面板集合里**，所以没有"它的位置"可以先占。
+    // 第一次打开资产时给它**新建一个标签组**，而不是并进别的栈 ——
+    // 并进视口栈会让关卡编辑器里出现资入编辑器标签（UE 不是这样：两者是平级标签组）。
+    // 新建的栈插在根的第一个子节点位置：那里通常是视口所在的整列，
+    // 于是资产编辑器与它并列，既独立又不遮挡。
     uint32_t stackId = FindStack("resource");
     if (panels.empty())
     {
-        if (stackId == 0)
-        {
-            stackId = FindStack("viewport");
-            if (stackId == 0) return false;
-            state.nodes.at(stackId).tabs.push_back("resource");
-        }
+        // 没有打开的资产：资产编辑器不该占位。占位名若存在就移除它。
+        if (stackId != 0) RemovePanel("resource");
         return true;
     }
 
-    if (stackId != 0)
+    // 资产编辑器的标签组：优先沿用已存在的那个栈；否则找一个当前**未被占用**的目标面板
+    // 新建标签组。
+    //
+    // 这里必须区分"面板已经在工作区里"与"面板还没有位置"：早先的写法在两者混淆时
+    // 会把这个面板既放进新栈、又被后面的循环单独建栈，于是同一个面板出现两次。
+    // 那会让整个布局被校验拒绝（面板必须唯一），而现象是"移除一个标签后整个布局失效"。
+    if (stackId == 0)
     {
-        auto& stack = state.nodes.at(stackId);
-        const std::string previousActive = stack.active;
-        stack.tabs.erase(std::remove(stack.tabs.begin(), stack.tabs.end(), "resource"),
-            stack.tabs.end());
+        std::string seed;
         for (const auto& panel : panels)
-            if (FindStack(panel) == 0) stack.tabs.push_back(panel);
-        if (std::find(stack.tabs.begin(), stack.tabs.end(), previousActive) != stack.tabs.end())
-            stack.active = previousActive;
+        {
+            if (FindStack(panel) == 0)
+            {
+                seed = panel;
+                break;
+            }
+        }
+        if (seed.empty())
+        {
+            // 所有目标面板都已经在某个栈里：无需新建，直接沿用第一个所在的栈。
+            stackId = FindStack(panels.front());
+            if (stackId == 0) return false;
+        }
         else
-            stack.active = panels.front();
-        return true;
+        {
+            const uint32_t newStack = AddStack({seed});
+            if (state.root == 0 ||
+                state.nodes.find(state.root) == state.nodes.end() ||
+                !state.nodes.at(state.root).IsSplit())
+            {
+                // 根不是分裂节点时无处可插：把新栈作为根的一半与旧的根并列。
+                const uint32_t previousRoot = state.root;
+                state.root = AddSplit(newStack, previousRoot, DockAxis::Horizontal, 0.62f);
+            }
+            else
+            {
+                // 与根的第一个孩子并列：把根的第一个孩子换成"新栈 + 原孩子"的分裂。
+                const uint32_t previousFirst = state.nodes.at(state.root).first;
+                state.nodes.at(state.root).first = AddSplit(
+                    newStack, previousFirst, DockAxis::Horizontal, 0.5f);
+            }
+            stackId = newStack;
+        }
     }
 
-    stackId = FindStack(panels.front());
-    if (stackId == 0) stackId = FindStack("viewport");
-    if (stackId == 0) return false;
+    // 把所有目标面板放进这一个栈（已经存在于别处的保持原位），并激活第一个。
     auto& stack = state.nodes.at(stackId);
     for (const auto& panel : panels)
         if (FindStack(panel) == 0) stack.tabs.push_back(panel);
+    if (!stack.tabs.empty() &&
+        std::find(stack.tabs.begin(), stack.tabs.end(), stack.active) == stack.tabs.end())
+    {
+        stack.active = stack.tabs.front();
+    }
     return true;
 }
 

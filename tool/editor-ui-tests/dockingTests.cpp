@@ -170,7 +170,8 @@ TEST(DockWorkspaceTest, EdgeDockIntoFloatingStackReturnsItToTheRootTree)
 TEST(DockWorkspaceTest, LastRootTabCannotFloatOrDisappearIntoFloatingStack)
 {
     DockWorkspace workspace;
-    for (const char* panel : {"outliner", "details", "content", "renderer", "resource"})
+    // resource 已不在常驻面板集合里（资产编辑器按需创建），因此这里只遍历常驻的那四个。
+    for (const char* panel : {"outliner", "details", "content", "renderer"})
         ASSERT_TRUE(workspace.Float(panel, {0.2f, 0.2f, 0.4f, 0.5f}));
     EXPECT_FALSE(workspace.Float("viewport", {0, 0, 0.5f, 0.5f}));
     EXPECT_FALSE(workspace.Dock("viewport", workspace.FindStack("details"), DockEdge::Center));
@@ -234,7 +235,8 @@ TEST_F(DockPersistenceTest, InvalidJsonNeverReplacesOutputState)
 void HideAllButViewport(EditorDockingController& docking)
 {
     docking.SetPersistencePath({});
-    for (const char* panel : {"outliner", "details", "content", "renderer", "resource"})
+    // resource 已不在常驻面板集合里（资产编辑器按需创建），因此这里只遍历常驻的那四个。
+    for (const char* panel : {"outliner", "details", "content", "renderer"})
         EXPECT_TRUE(docking.SetPanelVisible(panel, false)) << panel;
 }
 
@@ -271,7 +273,8 @@ TEST(DockWorkspaceTest, RefusesToHideTheLastVisiblePanelAndExplainsWhy)
     EXPECT_FALSE(docking.SetPanelVisible("viewport", false));
     EXPECT_TRUE(docking.IsPanelVisible("viewport"));
     EXPECT_FALSE(docking.Notice().empty());
-    EXPECT_EQ(docking.HiddenPanels().size(), 5u);
+    // 常驻面板现在是五个减一个：resource 已移出常驻集合（资产编辑器按需创建）。
+    EXPECT_EQ(docking.HiddenPanels().size(), 4u);
 }
 
 TEST(DockWorkspaceTest, UnknownPanelsAreRejectedInsteadOfSilentlyIgnored)
