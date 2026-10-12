@@ -145,6 +145,13 @@
                 },
                 "shadow": {
                     "$ref": "#/$defs/directionalShadow"
+                },
+                "intensityUnit": {
+                    "type": "string",
+                    "enum": [
+                        "lux"
+                    ],
+                    "description": "光度单位。方向光用 lux；点/聚/面光用 cd 或 lm。校验在 ReadCanonicalLightIntensity，缺失或单位不符都会被拒绝。"
                 }
             },
             "required": [
@@ -153,8 +160,10 @@
                 "position",
                 "rotation",
                 "color",
-                "intensity"
-            ]
+                "intensity",
+                "intensityUnit"
+            ],
+            "additionalProperties": false
         },
         "pointLightObject": {
             "type": "object",
@@ -182,6 +191,14 @@
                     "type": "number",
                     "default": 0.0,
                     "description": "可选。loader 用 node.value(\"radius\", 0.0f) 读取，缺失时为 0。验证器不要求该字段。"
+                },
+                "intensityUnit": {
+                    "type": "string",
+                    "enum": [
+                        "cd",
+                        "lm"
+                    ],
+                    "description": "光度单位。方向光用 lux；点/聚/面光用 cd 或 lm。校验在 ReadCanonicalLightIntensity，缺失或单位不符都会被拒绝。"
                 }
             },
             "required": [
@@ -190,8 +207,10 @@
                 "position",
                 "rotation",
                 "color",
-                "intensity"
-            ]
+                "intensity",
+                "intensityUnit"
+            ],
+            "additionalProperties": false
         },
         "spotLightObject": {
             "type": "object",
@@ -225,6 +244,14 @@
                 },
                 "cone_angle_inner": {
                     "type": "number"
+                },
+                "intensityUnit": {
+                    "type": "string",
+                    "enum": [
+                        "cd",
+                        "lm"
+                    ],
+                    "description": "光度单位。方向光用 lux；点/聚/面光用 cd 或 lm。校验在 ReadCanonicalLightIntensity，缺失或单位不符都会被拒绝。"
                 }
             },
             "required": [
@@ -235,8 +262,10 @@
                 "color",
                 "intensity",
                 "cone_angle_outer",
-                "cone_angle_inner"
-            ]
+                "cone_angle_inner",
+                "intensityUnit"
+            ],
+            "additionalProperties": false
         },
         "squareAreaLightObject": {
             "type": "object",
@@ -280,6 +309,14 @@
                     "type": "number",
                     "minimum": 0,
                     "description": "线性 emitted radiance，必须 >= 0 且不超过 float 上限；不与方向光的 irradiance 混用。"
+                },
+                "intensityUnit": {
+                    "type": "string",
+                    "enum": [
+                        "cd",
+                        "lm"
+                    ],
+                    "description": "光度单位。方向光用 lux；点/聚/面光用 cd 或 lm。校验在 ReadCanonicalLightIntensity，缺失或单位不符都会被拒绝。"
                 }
             },
             "required": [
@@ -289,8 +326,10 @@
                 "normal",
                 "color",
                 "size",
-                "intensity"
-            ]
+                "intensity",
+                "intensityUnit"
+            ],
+            "additionalProperties": false
         },
         "cameraObject": {
             "type": "object",

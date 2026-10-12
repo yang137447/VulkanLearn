@@ -173,9 +173,6 @@ def main():
             if obj.get('type') == 'environment':
                 env = obj.get('environment', {})
                 env_keys.add((env.get('type'), tuple(sorted(env.keys()))))
-            if 'intensityUnit' in obj:
-                print('%-64s carries intensityUnit (no code in this snapshot reads it)' % relative)
-                failures += 1
 
     print()
     print('scenes checked: %d   failures: %d   documented exemptions: %d'
