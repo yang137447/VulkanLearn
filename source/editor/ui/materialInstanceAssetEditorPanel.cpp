@@ -375,8 +375,7 @@ bool MaterialInstanceAssetEditorPanel::ValidateDocument(Rml::ElementDocument& ca
         "resource-editor", "resource-editor-toolbar", "resource-reload", "resource-close", "resource-preview-panel",
         "resource-preview-title", "resource-preview-kind", "resource-preview-surface",
         "resource-preview-icon", "resource-preview-status", "resource-preview-path",
-        "resource-details-panel", "material-instance-editor-body",
-        "material-instance-editor-content", "resource-json-inspector", "resource-json-title",
+        "resource-details-panel", "resource-json-inspector", "resource-json-title",
         "resource-json-kind", "resource-json-path", "resource-json-description",
         "resource-json-status", "resource-json-fields", "resource-json-search",
         "resource-json-page", "resource-json-prev", "resource-json-next",
@@ -1327,137 +1326,111 @@ void MaterialInstanceAssetEditorPanel::RefreshDetails()
     const EditorSceneActorGroupSpec* actorSpec =
         actor == nullptr ? nullptr : FindSceneActorGroupSpec(actor->type);
     // 身份同时包含选中 actor 与打开文档：任一变化都要重建分组结构。
-    // 签名只包含选中 actor 与它的分组键：Details 不再承载文档，因此文档变化不该重建它。
-    // 文档那部分曾经并进这个签名，是"一个面板干两件事"的残留。
-    const std::string identity = actor == nullptr || actorSpec == nullptr
-        ? "no-actor" : actor->identity + "|" + actorSpec->key;
+    const std::string identity = std::string(actor == nullptr || actorSpec == nullptr
+        ? "no-actor" : actor->identity + "|" + actorSpec->key) + "\n" +
+        (snapshot.activeDocument
+            ? snapshot.activeDocument->assetPath + "|" + snapshot.activeDocument->schemaDigest
+            : "closed");
     if (identity != detailsIdentity)
     {
         detailsIdentity = identity;
-        // Details 只描述"当前选择"。这里曾经把材质实例文档的四个分组也拼进来，于是同一个面板
-        // 既当 actor 检视器又当资产参数编辑器 —— 面板名与实际内容不符，打开多个文档后
-        // "已打开文档"也只能挤在这个面板里。UE 的分工是：Details 描述当前选择，
-        // 资产参数住在该资产的编辑器标签里。文档分组因此移到
-        // RefreshMaterialInstanceEditor()，写进资产编辑器面板的正文。
-        SetMarkup("details-content", UiWidgets::VerticalBox(
-            actor == nullptr ? std::string() : ActorSectionMarkup(*actor)));
+        std::string markup;
+        // actor 分组在前：选中对象是本轮的详情来源，MI 文档分组沿用迁移前的结构。
+        if (actor != nullptr) markup += ActorSectionMarkup(*actor);
+        if (snapshot.activeDocument)
+        {
+            const auto& asset = *snapshot.activeDocument;
+            // General 承载当前面板没有单独展示的文档身份：MI 路径、M_ schema、摘要与 revision。
+            std::string general;
+            general += UiWidgets::PropertyInfo("MI Asset", asset.assetPath);
+            general += UiWidgets::PropertyInfo("M_ schema", asset.baseMaterialPath);
+            general += UiWidgets::PropertyInfo("Schema digest", asset.schemaDigest);
+            general += UiWidgets::PropertyInfo("Revision", std::to_string(asset.revision));
+            markup += UiWidgets::CollapsibleSection(DetailsSectionId("general"), "general",
+                "General", general, {"section"}, IsSectionExpanded("general"));
+
+            std::string renderStates;
+            for (size_t index = 0; index < asset.renderStates.size(); ++index)
+            {
+                const auto& state = asset.renderStates[index];
+                renderStates += UiWidgets::PropertyRow(state.name,
+                    UiWidgets::Select("state-" + std::to_string(index), {"state", index},
+                        RenderStateOptions(state.name)),
+                    "reset-state-" + std::to_string(index), {"reset-state", index});
+            }
+            markup += UiWidgets::CollapsibleSection(DetailsSectionId("render-states"), "render-states",
+                "Render States", renderStates, {"section"}, IsSectionExpanded("render-states"));
+
+            std::string parameters;
+            for (size_t index = 0; index < asset.parameters.size(); ++index)
+            {
+                const auto& parameter = asset.parameters[index];
+                std::vector<UiWidgets::NumericComponent> components;
+                const bool color = parameter.type == EditorParameterType::Color;
+                for (uint32_t component = 0; component < parameter.effectiveValue.ComponentCount(); ++component)
+                {
+                    static const char* names[] = {"X", "Y", "Z", "W"};
+                    const auto& channel = parameter.channels[component];
+                    UiWidgets::NumericComponent entry;
+                    entry.id = "parameter-" + std::to_string(index) + "-" + std::to_string(component);
+                    entry.label = channel.name.empty() ? names[component] : channel.name;
+                    entry.value = Number(parameter.effectiveValue.values[component]);
+                    entry.change = {"parameter", index, component};
+                    // HEAD 对 Color 分量不使用滑条（它走 ColorPicker4），这里保持同一分工：
+                    // 线性 RGBA 分量仍是文本输入，颜色只多一个 sRGB 读数与色块。
+                    if (!color)
+                    {
+                        const SliderRange range = ResolveSliderRange(parameter, channel,
+                            parameter.defaultValue.values[component]);
+                        entry.hasRange = true;
+                        entry.minValue = range.minValue;
+                        entry.maxValue = range.maxValue;
+                    }
+                    components.push_back(std::move(entry));
+                }
+                std::string controls;
+                if (color)
+                {
+                    controls += UiWidgets::ColorPreview("color-swatch-" + std::to_string(index),
+                        "color-hex-" + std::to_string(index),
+                        UiWidgets::MakeColorReadout(parameter.effectiveValue.values));
+                }
+                controls += UiWidgets::NumericComponents(components);
+                parameters += UiWidgets::PropertyGroup(parameter.name, controls,
+                    "reset-parameter-" + std::to_string(index), {"reset-parameter", index},
+                    parameter.description);
+            }
+            markup += UiWidgets::CollapsibleSection(DetailsSectionId("parameters"), "parameters",
+                "Parameters", parameters, {"section"}, IsSectionExpanded("parameters"));
+
+            std::string textures;
+            for (size_t index = 0; index < asset.textures.size(); ++index)
+            {
+                const auto& texture = asset.textures[index];
+                std::string options = Option(texture.effectiveAssetPath, texture.effectiveAssetPath);
+                for (const auto& candidate : snapshot.textureAssets)
+                {
+                    if (candidate.valid && candidate.assetPath != texture.effectiveAssetPath)
+                        options += Option(candidate.assetPath, candidate.assetPath);
+                }
+                textures += UiWidgets::PropertyGroup(texture.slotName,
+                    UiWidgets::Select("texture-" + std::to_string(index), {"texture", index}, options),
+                    "reset-texture-" + std::to_string(index), {"reset-texture", index}, texture.description);
+            }
+            markup += UiWidgets::CollapsibleSection(DetailsSectionId("textures"), "textures",
+                "Texture Bindings", textures, {"section"}, IsSectionExpanded("textures"));
+        }
+        SetMarkup("details-content", UiWidgets::VerticalBox(markup));
+        // 新 DOM 不复用旧选择器的 markup 缓存。
+        if (snapshot.activeDocument)
+        {
+            for (size_t index = 0; index < snapshot.activeDocument->textures.size(); ++index)
+                widgetDocument.ForgetMarkup("texture-" + std::to_string(index));
+        }
     }
     ApplySectionState();
     RefreshActorValues(actor);
     RefreshControls();
-}
-
-// 资产编辑器正文里那一份"材质实例文档"。它原来拼在 Details 里，搬到资产编辑器面板后
-// 与 actor 检视彻底分开：Details 描述当前选择，这里描述被打开的资产。
-// 正文标识为 material-instance 的资产标签才走这条路径；只读资源标签走 JSON 检查器。
-// `showEditable` 由调用方解析出的**当前活动标签**决定：容器可见性必须跟着活动标签走，
-// 否则打开纹理时这里会继续显示上一个材质实例的参数（陈旧正文）。
-void MaterialInstanceAssetEditorPanel::RefreshMaterialInstanceEditor(bool showEditable)
-{
-    if (document == nullptr) return;
-
-    const bool editable = showEditable && snapshot.activeDocument.has_value();
-    widgetDocument.SetProperty("material-instance-editor-body", "display",
-        editable ? "block" : "none");
-    widgetDocument.SetProperty("resource-json-inspector", "display",
-        editable ? "none" : "block");
-    if (!editable)
-    {
-        materialInstanceEditorIdentity.clear();
-        return;
-    }
-
-    const auto& asset = *snapshot.activeDocument;
-    // 文档身份决定是否重建：schema 变了意味着参数集合变了，必须重建 DOM。
-    const std::string identity = asset.assetPath + "|" + asset.schemaDigest;
-    if (identity == materialInstanceEditorIdentity) return;
-    materialInstanceEditorIdentity = identity;
-
-    std::string markup;
-    {
-        // General 承载面板其它区域没有单独展示的文档身份：MI 路径、M_ schema、摘要与 revision。
-        std::string general;
-        general += UiWidgets::PropertyInfo("MI Asset", asset.assetPath);
-        general += UiWidgets::PropertyInfo("M_ schema", asset.baseMaterialPath);
-        general += UiWidgets::PropertyInfo("Schema digest", asset.schemaDigest);
-        general += UiWidgets::PropertyInfo("Revision", std::to_string(asset.revision));
-        markup += UiWidgets::CollapsibleSection(DetailsSectionId("general"), "general",
-            "General", general, {"section"}, IsSectionExpanded("general"));
-
-        std::string renderStates;
-        for (size_t index = 0; index < asset.renderStates.size(); ++index)
-        {
-            const auto& state = asset.renderStates[index];
-            renderStates += UiWidgets::PropertyRow(state.name,
-                UiWidgets::Select("state-" + std::to_string(index), {"state", index},
-                    RenderStateOptions(state.name)),
-                "reset-state-" + std::to_string(index), {"reset-state", index});
-        }
-        markup += UiWidgets::CollapsibleSection(DetailsSectionId("render-states"), "render-states",
-            "Render States", renderStates, {"section"}, IsSectionExpanded("render-states"));
-
-        std::string parameters;
-        for (size_t index = 0; index < asset.parameters.size(); ++index)
-        {
-            const auto& parameter = asset.parameters[index];
-            std::vector<UiWidgets::NumericComponent> components;
-            const bool color = parameter.type == EditorParameterType::Color;
-            for (uint32_t component = 0; component < parameter.effectiveValue.ComponentCount(); ++component)
-            {
-                static const char* names[] = {"X", "Y", "Z", "W"};
-                const auto& channel = parameter.channels[component];
-                UiWidgets::NumericComponent entry;
-                entry.id = "parameter-" + std::to_string(index) + "-" + std::to_string(component);
-                entry.label = channel.name.empty() ? names[component] : channel.name;
-                entry.value = Number(parameter.effectiveValue.values[component]);
-                entry.change = {"parameter", index, component};
-                // Color 分量不使用滑条（它走色块与 sRGB 读数）：线性 RGBA 分量仍是文本输入。
-                if (!color)
-                {
-                    const SliderRange range = ResolveSliderRange(parameter, channel,
-                        parameter.defaultValue.values[component]);
-                    entry.hasRange = true;
-                    entry.minValue = range.minValue;
-                    entry.maxValue = range.maxValue;
-                }
-                components.push_back(std::move(entry));
-            }
-            std::string controls;
-            if (color)
-            {
-                controls += UiWidgets::ColorPreview("color-swatch-" + std::to_string(index),
-                    "color-hex-" + std::to_string(index),
-                    UiWidgets::MakeColorReadout(parameter.effectiveValue.values));
-            }
-            controls += UiWidgets::NumericComponents(components);
-            parameters += UiWidgets::PropertyGroup(parameter.name, controls,
-                "reset-parameter-" + std::to_string(index), {"reset-parameter", index},
-                parameter.description);
-        }
-        markup += UiWidgets::CollapsibleSection(DetailsSectionId("parameters"), "parameters",
-            "Parameters", parameters, {"section"}, IsSectionExpanded("parameters"));
-
-        std::string textures;
-        for (size_t index = 0; index < asset.textures.size(); ++index)
-        {
-            const auto& texture = asset.textures[index];
-            std::string options = Option(texture.effectiveAssetPath, texture.effectiveAssetPath);
-            for (const auto& candidate : snapshot.textureAssets)
-            {
-                if (candidate.valid && candidate.assetPath != texture.effectiveAssetPath)
-                    options += Option(candidate.assetPath, candidate.assetPath);
-            }
-            textures += UiWidgets::PropertyGroup(texture.slotName,
-                UiWidgets::Select("texture-" + std::to_string(index), {"texture", index}, options),
-                "reset-texture-" + std::to_string(index), {"reset-texture", index}, texture.description);
-        }
-        markup += UiWidgets::CollapsibleSection(DetailsSectionId("textures"), "textures",
-            "Texture Bindings", textures, {"section"}, IsSectionExpanded("textures"));
-    }
-    SetMarkup("material-instance-editor-content", UiWidgets::VerticalBox(markup));
-    // 新 DOM 不复用旧选择器的 markup 缓存。
-    for (size_t index = 0; index < asset.textures.size(); ++index)
-        widgetDocument.ForgetMarkup("texture-" + std::to_string(index));
 }
 
 std::string MaterialInstanceAssetEditorPanel::ActorSectionMarkup(
@@ -1582,96 +1555,36 @@ void MaterialInstanceAssetEditorPanel::RequestResourceReload()
         jsonAssetRequestSink->RequestOpenJsonAsset(path);
 }
 
-// 资产编辑器面板的"空"状态：没有可编辑文档、也没有活动的只读资源标签。
-// 它必须把两份正文都清掉，否则关闭文档后上一个文档的参数会留在屏幕上 ——
-// 这也是 RefreshResourceEditor 先无条件调用 RefreshMaterialInstanceEditor 的原因。
-void MaterialInstanceAssetEditorPanel::ShowEmptyAssetEditor()
-{
-    docking.SetResourceTabs({}, {});
-    SetDisabled("resource-reload", true);
-    SetMarkup("resource-preview-title", "Asset Editor");
-    SetMarkup("resource-preview-kind", "");
-    SetMarkup("resource-preview-status",
-        "Open a Mesh, Texture or Material Instance from Content Browser.");
-    SetMarkup("resource-preview-path", "");
-    auto* previewIcon = document->GetElementById("resource-preview-icon");
-    if (previewIcon->GetAttribute<std::string>("src", "") != "icons/mesh.png")
-        previewIcon->SetAttribute("src", "icons/mesh.png");
-    resourceJsonInspector.Build(nullptr, {}, false);
-}
-
 void MaterialInstanceAssetEditorPanel::RefreshResourceEditor()
 {
     if (document == nullptr) return;
-
-    // 正文归属：只有当存在**活动的只读资源标签**时才有竞争关系 —— 那时 JSON 正文占位。
-    // 没有活动的资源标签时，材质实例正文就是这份正文，**不能再去问面板是否激活**：
-    // 面板激活态是停靠层的视图状态，把它当成正文渲染的前置条件会让正文在不满足时整体消失
-    // （测试环境里资产编辑器从不被激活，参数控件就会全部不可见）。
-    const std::string materialPanel = snapshot.activeDocument
-        ? ResourcePanelId(snapshot.activeDocument->assetPath) : std::string();
-    const EditorResourceEditorTab* active = resourceEditor.ActiveTab();
-    const bool readOnlyActive = active != nullptr && !docking.IsPanelActive(materialPanel);
-
-    // 无条件刷新正文可见性：任何提前 return 都必须先经过它，否则关闭文档后旧参数会留在屏幕上。
-    RefreshMaterialInstanceEditor(!readOnlyActive);
-
-    if (active == nullptr && !snapshot.activeDocument)
+    const auto* active = resourceEditor.ActiveTab();
+    if (active == nullptr)
     {
-        ShowEmptyAssetEditor();
+        docking.SetResourceTabs({}, {});
+        SetDisabled("resource-reload", true);
+        SetMarkup("resource-preview-title", "Asset Editor");
+        SetMarkup("resource-preview-kind", "");
+        SetMarkup("resource-preview-status", "Open a Mesh or Texture from Content Browser.");
+        SetMarkup("resource-preview-path", "");
+        auto* previewIcon = document->GetElementById("resource-preview-icon");
+        if (previewIcon->GetAttribute<std::string>("src", "") != "icons/mesh.png")
+            previewIcon->SetAttribute("src", "icons/mesh.png");
+        resourceJsonInspector.Build(nullptr, {}, false);
         return;
     }
 
     std::vector<EditorDockResourceTab> tabs;
-    tabs.reserve(resourceEditor.Tabs().size() + 1);
+    tabs.reserve(resourceEditor.Tabs().size());
     for (const auto& tab : resourceEditor.Tabs())
     {
         tabs.push_back({
             ResourcePanelId(tab.path),
             tab.path,
             std::filesystem::path(tab.path).filename().string(),
-            EditorAssetKindIcon(tab.kind),
-            "resource-json"});
+            EditorAssetKindIcon(tab.kind)});
     }
-    if (snapshot.activeDocument)
-    {
-        const std::string& path = snapshot.activeDocument->assetPath;
-        tabs.push_back({
-            ResourcePanelId(path),
-            path,
-            std::filesystem::path(path).filename().string(),
-            EditorAssetKindIcon(EditorAssetKind::MaterialInstance),
-            "material-instance"});
-    }
-    docking.SetResourceTabs(tabs, !readOnlyActive ? snapshot.activeDocument->assetPath
-        : (active != nullptr ? active->path
-            : (snapshot.activeDocument ? snapshot.activeDocument->assetPath : std::string())));
-
-    if (!readOnlyActive)
-    {
-        // 材质实例正文：参数编辑走既有命令；工具条沿用资产编辑器的还原能力。
-        const auto& asset = *snapshot.activeDocument;
-        SetDisabled("resource-reload", false);
-        SetMarkup("resource-preview-title", Text(std::filesystem::path(asset.assetPath)
-            .filename().string()));
-        SetMarkup("resource-preview-kind", "Material Instance");
-        SetMarkup("resource-preview-path", Text(asset.assetPath));
-        SetMarkup("resource-preview-status", asset.status == EditorDocumentStatus::Dirty
-            ? "Unsaved changes." : "Editable material instance.");
-        auto* previewIcon = document->GetElementById("resource-preview-icon");
-        const std::string wanted = EditorAssetKindIcon(EditorAssetKind::MaterialInstance);
-        if (previewIcon->GetAttribute<std::string>("src", "") != wanted)
-            previewIcon->SetAttribute("src", wanted);
-        return;
-    }
-
-    // 只读资源标签：可能已关闭（标签被激活但文档没了），此时按空正文处理而不是留着旧内容。
-    if (active == nullptr)
-    {
-        ShowEmptyAssetEditor();
-        return;
-    }
-
+    docking.SetResourceTabs(tabs, active->path);
     SetDisabled("resource-reload", active->loading);
     SetMarkup("resource-preview-title", Text(active->snapshot != nullptr &&
         !active->snapshot->name.empty() ? active->snapshot->name :
