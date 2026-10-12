@@ -150,6 +150,7 @@ private:
     void OpenResourceAsset(const std::string& path, EditorAssetKind kind);
     void CloseActiveResource();
     void RequestResourceReload();
+    void RequestActiveResourceMetadata();
     void RequestModelPreview(const std::string& path);
     void ReturnToLevel();
     bool HasCurrentModelPreview() const;

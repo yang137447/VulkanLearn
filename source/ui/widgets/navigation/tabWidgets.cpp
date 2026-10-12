@@ -8,7 +8,7 @@ namespace VL::UiWidgets
 std::string DocumentTab(const std::string& label, const WidgetAction& activate,
     const WidgetAction& close, bool selected)
 {
-    return "<div class=\"document-tab\">" + ListRow(activate, label, selected) +
+    return "<div class=\"document-tab\" title=\"" + Text(label) + "\">" + ListRow(activate, label, selected) +
         "<button class=\"tab-close\"" + ActionAttributes(close) + ">&#215;</button></div>";
 }
 

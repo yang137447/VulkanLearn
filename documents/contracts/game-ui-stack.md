@@ -79,6 +79,9 @@ Changing model tabs and reloading request the selected model again. This still
 uses the single active World, fixed preview scale and camera, not an independent
 World per tab or automatic bounds framing. Model-image input remains UI-owned.
 Browser paths/filter/view/history are local presentation state.
+Resource tabs retain their completed JSON snapshots. Activating, reopening, or
+closing onto an unfinished tab reissues its metadata request because the shared
+reader keeps only the latest request; frame refresh never retries it repeatedly.
 Type icons and material spheres are placeholders, not real thumbnails or model
 previews. The inspector does not replace MI editing or the scene Viewport.
 

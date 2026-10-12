@@ -86,9 +86,13 @@ sliderarrowdec, sliderarrowinc { display: none; }
     flex-shrink: 0;
 }
 .tree-toggle { padding: 3px; min-height: 0; border-width: 0; background-color: transparent; }
-.document-tab { display: flex; flex-shrink: 0; max-width: 220px; }
-.document-tab .list-item { width: auto; flex: 1; max-width: 180px; }
-.tab-close { background-color: transparent; border-width: 0; padding: 4px 6px; }
+/* 外层宽度不能依赖 flex:1 子节点的固有尺寸，否则标签正文会被布局成零宽。 */
+.document-tab { display: flex; flex-shrink: 0; width: 200px; height: 28px; }
+.document-tab .list-item {
+    width: auto; flex: 1; min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.tab-close { flex-shrink: 0; width: 24px; box-sizing: border-box; background-color: transparent; border-width: 0; padding: 4px 6px; }
 .segmented, .command-row { display: flex; margin: 5px 0; }
 .segmented button { flex: 1; min-width: 0; }
 .command-row button { flex: 1; min-width: 0; margin-right: 4px; }

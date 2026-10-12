@@ -1534,9 +1534,6 @@ void MaterialInstanceAssetEditorPanel::ToggleSection(const std::string& key)
 void MaterialInstanceAssetEditorPanel::OpenResourceAsset(
     const std::string& path, EditorAssetKind kind)
 {
-    bool alreadyOpen = false;
-    for (const auto& tab : resourceEditor.Tabs())
-        if (tab.path == path) { alreadyOpen = true; break; }
     if (!resourceEditor.Open(path, kind))
     {
         localStatus = "Too many resource editors are open.";
@@ -1545,8 +1542,7 @@ void MaterialInstanceAssetEditorPanel::OpenResourceAsset(
     viewingJson = false;
     resourceEditorVisible = true;
     localStatus.clear();
-    if (!alreadyOpen && jsonAssetRequestSink != nullptr)
-        jsonAssetRequestSink->RequestOpenJsonAsset(path);
+    RequestActiveResourceMetadata();
     if (kind == EditorAssetKind::Mesh && runtimeActionSink != nullptr)
     {
         // 回调只投递路径；GT 复用 previewmodel 的 LoadWorld 事务，不在 UI 内加载资产。
@@ -1570,10 +1566,20 @@ void MaterialInstanceAssetEditorPanel::CloseActiveResource()
     const auto* next = resourceEditor.ActiveTab();
     if (next != nullptr)
     {
+        RequestActiveResourceMetadata();
         docking.Activate(ResourcePanelId(next->path));
         if (next->kind == EditorAssetKind::Mesh && !HasCurrentModelPreview())
             RequestModelPreview(next->path);
     }
+}
+
+void MaterialInstanceAssetEditorPanel::RequestActiveResourceMetadata()
+{
+    const auto* active = resourceEditor.ActiveTab();
+    // 读取器只保留最新请求；切回未完成的标签须补读，已缓存的标签不重复 IO。
+    if (active != nullptr && (active->snapshot == nullptr || active->loading) &&
+        jsonAssetRequestSink != nullptr)
+        jsonAssetRequestSink->RequestOpenJsonAsset(active->path);
 }
 
 void MaterialInstanceAssetEditorPanel::RequestResourceReload()
@@ -2340,6 +2346,7 @@ void MaterialInstanceAssetEditorPanel::ProcessEvent(Rml::Event& event)
         const std::string path = docking.ResourcePathForPanel(activatedPanel);
         if (!path.empty() && resourceEditor.Activate(path))
         {
+            RequestActiveResourceMetadata();
             resourceEditorVisible = true;
             const auto* active = resourceEditor.ActiveTab();
             if (active != nullptr && active->kind == EditorAssetKind::Mesh && !HasCurrentModelPreview())

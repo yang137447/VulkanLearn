@@ -847,6 +847,40 @@ TEST_F(EditorUiTest, ModelPreviewWaitsForWorldPublicationAndProvidesAnImageRect)
     EXPECT_FALSE(image->IsVisible(true));
 }
 
+TEST_F(EditorUiTest, SwitchingBackToUnloadedResourceRetriesSupersededMetadata)
+{
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+    catalog->revision = 1;
+    catalog->assets = {{"Textures/T_first.json", EditorAssetKind::Texture, "First"},
+        {"Textures/T_second.json", EditorAssetKind::Texture, "Second"}};
+    snapshot.assetCatalog = catalog;
+    Refresh();
+    for (const auto& asset : catalog->assets)
+    {
+        auto* tile = document->QuerySelector("#asset-list [data-path='" + asset.assetPath + "']");
+        ASSERT_NE(tile, nullptr);
+        tile->DispatchEvent("dblclick", {});
+        Refresh();
+    }
+    // 读取器只发布最新请求；第一个标签没有收到结果，切回时必须补读。
+    auto json = std::make_shared<EditorJsonDocumentSnapshot>();
+    json->assetPath = catalog->assets[1].assetPath;
+    json->name = "Second";
+    snapshot.jsonDocument = json;
+    Refresh();
+    const size_t requests = jsonAssetSink.opened.size();
+    Click(".workspace-resource-tab");
+    ASSERT_EQ(jsonAssetSink.opened.size(), requests + 1);
+    EXPECT_EQ(jsonAssetSink.opened.back(), catalog->assets[0].assetPath);
+    json = std::make_shared<EditorJsonDocumentSnapshot>();
+    json->assetPath = catalog->assets[0].assetPath;
+    json->name = "First";
+    snapshot.jsonDocument = json;
+    Refresh();
+    EXPECT_EQ(document->GetElementById("resource-preview-title")->GetInnerRML(), "First");
+    EXPECT_FALSE(document->GetElementById("resource-reload")->HasAttribute("disabled"));
+}
+
 TEST_F(EditorUiTest, ModelAndLevelTabsRequestTheirOwnWorldAndKeepSelection)
 {
     UiViewModelSnapshot view;
@@ -2269,6 +2303,14 @@ TEST_F(EditorUiTest, DocumentTabRowKeepsEveryOpenDocumentOnOneLine)
         EXPECT_LE(height, 30.0f)
             << "document tab " << childIndex << " is " << height
             << "px tall; a one-line tab should not wrap. Inner RML: " << tab->GetInnerRML();
+        auto* label = tab->QuerySelector(".list-item");
+        auto* close = tab->QuerySelector(".tab-close");
+        ASSERT_NE(label, nullptr);
+        ASSERT_NE(close, nullptr);
+        EXPECT_GT(label->GetBox().GetSize(Rml::BoxArea::Content).x, 60.0f);
+        EXPECT_LE(label->GetAbsoluteOffset(Rml::BoxArea::Border).x +
+            label->GetBox().GetSize(Rml::BoxArea::Border).x,
+            close->GetAbsoluteOffset(Rml::BoxArea::Border).x + 0.5f);
         ++index;
     }
     EXPECT_EQ(index, static_cast<int>(paths.size()));
