@@ -192,10 +192,12 @@ Vulkan 没有 GL 的隐式 context sharing，因此每窗口必须有**显式**�
    `R8G8B8A8Srgb` + `eSrgbNonlinear` 被提供时才赋值（`vulkanManager.cpp:219-226`），
    **没有回退到 `surfaceFormats[0]`**，而 `:292-293` 无条件使用它。第二个 surface 的可用格式
    一旦不同，这条就会暴露。
-2. **共享 `commandPool` 是被低估的多窗口隐患。** `DestroyVkCommandBuffer`
-   （`vulkanManager.cpp:392-404`）会销毁 `commandPool`，而同一个池还服务所有
-   `BeginSingleTimeCommands`（`rhiDeviceVulkan.cpp:727-749`）与 shader 热重载校验路径。
-   为窗口 A 重建会连带影响窗口 B 的单次命令。
+2. ✅ **已修（`a183bbf`）** —— **共享 `commandPool` 曾被重建路径销毁。** `DestroyVkCommandBuffer`
+   会销毁 `commandPool`，而同一个池还服务所有 `BeginSingleTimeCommands`
+   （`rhiDeviceVulkan.cpp:727-749`）与 shader 热重载校验路径，于是**每次窗口 resize 都会毁掉
+   别的用途正在用的池** —— 只因销毁与重建在同一函数里紧挨着才没炸。
+   现在池的生命周期与设备一致（`Init` 建一次、析构销毁一次），每图像命令缓冲移入
+   `PresentTarget`，重建只动自己的目标。已在**真实 resize** 下验证（见阶段 1 第三片）。
 3. **RmlUi 在本仓库是进程级单例。** `Rml::Initialise`/`Rml::Shutdown`
    （`uiSubsystem.cpp:823,325`）是全局的，且 context 名硬编码为 `"vulkanlearn"`（`:832`）。
    两个 `UiSubsystem` 不能按现状共存：第二个的 Shutdown 会拆掉第一个，`CreateContext` 同名会失败。
