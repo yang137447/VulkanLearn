@@ -86,12 +86,21 @@ Vulkan 没有 GL 的隐式 context sharing，因此每窗口必须有**显式**�
 目标：把"surface + swapchain + 图像/视图 + extent + per-window 同步对象"收进一个
 **呈现目标对象**，`VulkanManager` 从"持有那一个"变成"持有一个集合"。
 
-- 新建呈现目标类型，把 `VulkanManager` 里的 surface/swapchain/图像/视图/extent/同步对象搬进去
-- `VulkanManager` 保留 device 与资源池的所有权，新增按窗口索引的目标
-- 现有单窗口路径改为"注册第一个窗口" —— **行为必须完全不变**
-- 验证：现有全部测试与渲染结果不变（这是纯搬移，任何画面变化都说明搬错了）
+**进度：**
 
-判据：跑通全量测试，且渲染截图与搬移前逐像素一致。
+- ✅ **第一片（`8c52b07`）**：新增 `VL::PresentTarget`（`source/render/rhi/vulkan/presentTarget.h`），
+  surface / swapchain / 图像 / 视图 / extent / 图像数 / 每图像同步对象搬进去；
+  `VulkanManager` 持有 `std::vector<PresentTarget>`。**现有访问器签名不变，委托给目标 0**，
+  因此约 54 处调用点一行未改 —— 这一片因此可证行为中性。
+  验证：搬移前后同场景 1280x720 截图逐像素比对，差异 **37 像素且全部落在
+  `x1238..1243, y705..712`（状态栏 FPS 计数）**，区域外 **0** 差异。
+- ⬜ 第二片：把访问器改为接受目标身份；`rhiDeviceVulkan` 的 11 个函数与 `rendererBackendVulkan`
+  的 10 个函数带目标；`swapchainRecreateRequired` 变每目标。**到此为止不动场景代码。**
+- ⬜ 第三片：每目标命令缓冲与 `presentQueueFamilyIndex`。**必须与命令池归属一起做** ——
+  `DestroyVkCommandBuffer` 现在会销毁共享的 `commandPool`，而 `BeginSingleTimeCommands`
+  也在用它（见下"既有缺陷"第 2 条）。
+
+判据：跑通全量测试，且渲染截图与搬移前逐像素一致（允许状态栏 FPS 文本变化）。
 
 ### 阶段 2：第二个窗口能开出来并呈现
 
