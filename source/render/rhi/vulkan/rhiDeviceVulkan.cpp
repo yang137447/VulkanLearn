@@ -60,13 +60,15 @@ void RHIDeviceVulkan::WaitIdle()
     GetDevice().waitIdle();
 }
 
-void RHIDeviceVulkan::RecreateSwapchain(int width, int height)
+void RHIDeviceVulkan::RecreateSwapchain(VL::PresentTarget& target, int width, int height)
 {
     if (!initialized)
     {
         return;
     }
 
+    // 目标 0 之外的呈现目标尚未接入：目前只有主窗口。
+    (void)target;
     VulkanManager::GetInstance().ReCreateSwapChain(width, height);
 }
 
@@ -85,13 +87,14 @@ void RHIDeviceVulkan::ResetFence(vk::Fence fence)
 }
 
 SwapchainFrameResult RHIDeviceVulkan::AcquireNextSwapchainImage(
+    VL::PresentTarget& target,
     vk::Semaphore imageAcquiredSemaphore,
     uint32_t& swapchainImageIndex)
 {
     try
     {
         return ClassifySwapchainFrameResult(GetDevice().acquireNextImageKHR(
-            GetSwapchain(),
+            target.swapChain,
             UINT64_MAX,
             imageAcquiredSemaphore,
             nullptr,
@@ -111,10 +114,11 @@ void RHIDeviceVulkan::SubmitToGraphicsQueue(
 }
 
 SwapchainFrameResult RHIDeviceVulkan::PresentSwapchainImage(
+    VL::PresentTarget& target,
     vk::Semaphore renderFinishedSemaphore,
     uint32_t swapchainImageIndex)
 {
-    vk::SwapchainKHR swapchain = GetSwapchain();
+    vk::SwapchainKHR swapchain = target.swapChain;
     vk::PresentInfoKHR presentInfo;
     presentInfo
         .setSwapchains(swapchain)
@@ -230,14 +234,16 @@ vk::CommandPool& RHIDeviceVulkan::GetCommandPool()
     return VulkanManager::GetInstance().GetCommandPool();
 }
 
+// 目标 0 = 主窗口。多窗口接线时这里改为按后端所属窗口解析，而调用点无需再变 ——
+// 这正是把"无参的 GetSwapchain"换成"带身份的目标访问"的目的。
+VL::PresentTarget& RHIDeviceVulkan::GetPresentTarget()
+{
+    return VulkanManager::GetInstance().GetPresentTarget(0);
+}
+
 std::vector<vk::CommandBuffer>& RHIDeviceVulkan::GetCommandBuffers()
 {
     return VulkanManager::GetInstance().GetCommandBuffers();
-}
-
-vk::SwapchainKHR& RHIDeviceVulkan::GetSwapchain()
-{
-    return VulkanManager::GetInstance().GetSwapChain();
 }
 
 uint32_t RHIDeviceVulkan::GetFrameFenceCount() const
@@ -260,10 +266,11 @@ VulkanFrameSyncResources RHIDeviceVulkan::GetFrameSyncResources(uint32_t frameIn
 }
 
 VulkanSwapchainImageSyncResources RHIDeviceVulkan::GetSwapchainImageSyncResources(
-    uint32_t swapchainImageIndex) const
+    const VL::PresentTarget& target, uint32_t swapchainImageIndex) const
 {
+    // 命令缓冲仍属共享层（与共享命令池的销毁语义绑定），而 renderFinished 信号量随目标走。
     auto& commandBuffers = VulkanManager::GetInstance().GetCommandBuffers();
-    auto& renderFinishedSemaphores = VulkanManager::GetInstance().GetRenderFinishedSemaphores();
+    const auto& renderFinishedSemaphores = target.renderFinishedSemaphores;
 
     RequireFrameSyncIndex("commandBuffers", swapchainImageIndex, commandBuffers.size());
     RequireFrameSyncIndex("renderFinishedSemaphores", swapchainImageIndex, renderFinishedSemaphores.size());
@@ -274,43 +281,47 @@ VulkanSwapchainImageSyncResources RHIDeviceVulkan::GetSwapchainImageSyncResource
     return resources;
 }
 
-vk::Fence RHIDeviceVulkan::GetImageInFlightFence(uint32_t swapchainImageIndex) const
+vk::Fence RHIDeviceVulkan::GetImageInFlightFence(
+    const VL::PresentTarget& target, uint32_t swapchainImageIndex) const
 {
-    auto& imagesInFlightFences = VulkanManager::GetInstance().GetImagesInFlightFences();
+    const auto& imagesInFlightFences = target.imagesInFlightFences;
     RequireFrameSyncIndex("imagesInFlightFences", swapchainImageIndex, imagesInFlightFences.size());
     return imagesInFlightFences[swapchainImageIndex];
 }
 
-void RHIDeviceVulkan::SetImageInFlightFence(uint32_t swapchainImageIndex, vk::Fence fence)
+void RHIDeviceVulkan::SetImageInFlightFence(
+    VL::PresentTarget& target, uint32_t swapchainImageIndex, vk::Fence fence)
 {
-    auto& imagesInFlightFences = VulkanManager::GetInstance().GetImagesInFlightFences();
+    auto& imagesInFlightFences = target.imagesInFlightFences;
     RequireFrameSyncIndex("imagesInFlightFences", swapchainImageIndex, imagesInFlightFences.size());
     imagesInFlightFences[swapchainImageIndex] = fence;
 }
 
-uint32_t RHIDeviceVulkan::GetSwapchainImageCount() const
+uint32_t RHIDeviceVulkan::GetSwapchainImageCount(const VL::PresentTarget& target) const
 {
-    return VulkanManager::GetInstance().GetSwapChainImageCount();
+    return target.imageCount;
 }
 
-vk::Extent2D RHIDeviceVulkan::GetSwapchainExtent() const
+vk::Extent2D RHIDeviceVulkan::GetSwapchainExtent(const VL::PresentTarget& target) const
 {
-    return VulkanManager::GetInstance().GetSwapChainExtent();
+    return target.extent;
 }
 
-vk::Format RHIDeviceVulkan::GetSwapchainImageFormat() const
+vk::Format RHIDeviceVulkan::GetSwapchainImageFormat(const VL::PresentTarget& target) const
 {
-    return VulkanManager::GetInstance().GetSurfaceFormat().format;
+    return target.surfaceFormat.format;
 }
 
-const std::vector<vk::ImageView>& RHIDeviceVulkan::GetSwapchainImageViews() const
+const std::vector<vk::ImageView>& RHIDeviceVulkan::GetSwapchainImageViews(
+    const VL::PresentTarget& target) const
 {
-    return VulkanManager::GetInstance().GetSwapChainImageViews();
+    return target.imageViews;
 }
 
-const std::vector<vk::Image>& RHIDeviceVulkan::GetSwapchainImages() const
+const std::vector<vk::Image>& RHIDeviceVulkan::GetSwapchainImages(
+    const VL::PresentTarget& target) const
 {
-    return VulkanManager::GetInstance().GetPresentImages();
+    return target.images;
 }
 
 std::vector<vk::Fence>& RHIDeviceVulkan::GetTaskFinishedFences()
@@ -321,16 +332,6 @@ std::vector<vk::Fence>& RHIDeviceVulkan::GetTaskFinishedFences()
 std::vector<vk::Semaphore>& RHIDeviceVulkan::GetImageAcquiredSemaphores()
 {
     return VulkanManager::GetInstance().GetImageAcquiredSemaphores();
-}
-
-std::vector<vk::Semaphore>& RHIDeviceVulkan::GetRenderFinishedSemaphores()
-{
-    return VulkanManager::GetInstance().GetRenderFinishedSemaphores();
-}
-
-std::vector<vk::Fence>& RHIDeviceVulkan::GetImagesInFlightFences()
-{
-    return VulkanManager::GetInstance().GetImagesInFlightFences();
 }
 
 RHIBufferHandle RHIDeviceVulkan::CreateBuffer(

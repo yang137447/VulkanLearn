@@ -31,6 +31,13 @@ private:
 
     void Init(std::vector<const char *> &extensions, SDL_Window *window);
 
+    // 呈现目标的身份。用**引用**而不是索引：调用点需要的是"哪个目标"，而不是"容器的第几项"，
+    // 索引会把容器形状泄漏到每个使用处。容器仍由本类独占拥有，且只在启动时增长，
+    // 因此这里的引用在目标生命周期内稳定。
+    VL::PresentTarget& GetPresentTarget(size_t index) { return presentTargets.at(index); }
+    const VL::PresentTarget& GetPresentTarget(size_t index) const { return presentTargets.at(index); }
+    size_t PresentTargetCount() const { return presentTargets.size(); }
+
     // Swapchain recreate entry owned by RendererBackendVulkan through the
     // Vulkan device boundary. The engine-level resize path passes the target drawable size in, so
     // callers should not infer it from stale SDL or swapchain extents here.
@@ -45,19 +52,10 @@ private:
     // 帧级的 acquire 信号量：按 MAX_FRAMES_IN_FLIGHT 分配，跨目标共享，因此不随呈现目标走。
     inline std::vector<vk::Semaphore>& GetImageAcquiredSemaphores() { return imageAcquiredSemaphores; }
 
-    // 呈现状态现在住在 PresentTarget 里。下面的访问器**签名不变**，委托给当前目标，
-    // 因此调用点无需改动；多窗口接入时改为接受目标身份即可。
-    inline vk::SwapchainKHR& GetSwapChain() { return presentTarget().swapChain; }
-    inline std::vector<vk::Semaphore>& GetRenderFinishedSemaphores() { return presentTarget().renderFinishedSemaphores; }
-    inline std::vector<vk::Fence>& GetImagesInFlightFences() { return presentTarget().imagesInFlightFences; }
-    inline uint32_t GetSwapChainImageCount() { return presentTarget().imageCount; }
-    inline vk::SurfaceFormatKHR& GetSurfaceFormat() { return presentTarget().surfaceFormat; }
-    // 呈现用的 swapchain 图像缓存。名字用 RHI 侧的 "present*"，因为 `tool/` 下的静态
-    // 边界规则禁止本头文件再出现旧的私有平台状态名——那些名字属于"本类持有全部平台
-    // 细节"的旧结构。数据仍由本类持有，只经 RHIDeviceVulkan 转发给需要裸图像的渲染后端。
-    inline const std::vector<vk::Image>& GetPresentImages() const { return presentTarget().images; }
-    inline std::vector<vk::ImageView>& GetSwapChainImageViews() { return presentTarget().imageViews; }
-    inline vk::Extent2D GetSwapChainExtent() const { return presentTarget().extent; }
+    // 呈现状态住在 PresentTarget 里，且**没有隐式默认目标**：本类不再提供
+    // "取那个 swapchain"之类的无参访问器，因为那正是多窗口要消除的东西
+    // （一个全局单例装作是唯一目标）。需要呈现状态的调用点必须经 GetPresentTarget(身份) 取。
+    // 设备级状态仍直接提供，因为它们本来就跨目标共享。
     inline std::vector<vk::CommandBuffer>& GetCommandBuffers() { return commandBuffers; }
     inline uint32_t GetGraphicsQueueTimestampValidBits() const
     {
@@ -90,9 +88,9 @@ private:
     void DestroySyncObjects();
 
 private:
-    // 当前目标（多窗口接入前恒为目标 0）。多窗口时这两处改接受目标身份。
-    VL::PresentTarget& presentTarget() { return presentTargets.front(); }
-    const VL::PresentTarget& presentTarget() const { return presentTargets.front(); }
+    // 目标 0 是主窗口。它的存在是"多窗口尚未接线"这一事实，所以只在这里出现一次，
+    // 而不是像以前那样藏在每个访问器里。多窗口接线后，这一处改为按窗口解析。
+    VL::PresentTarget& defaultTarget() { return presentTargets.front(); }
 
     vk::Instance instance;
     std::vector<const char *> instanceLayers = {

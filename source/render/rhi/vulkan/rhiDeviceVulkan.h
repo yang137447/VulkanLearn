@@ -10,6 +10,7 @@
 #include <vulkan/vulkan.hpp>
 
 #include "baseStructs.h"
+#include "presentTarget.h"
 #include "render/backend/swapchainFrameResult.h"
 #include "render/rhi/rhiResourceHandles.h"
 
@@ -92,27 +93,32 @@ public:
     bool IsInitialized() const { return initialized; }
 
     void WaitIdle();
-    void RecreateSwapchain(int width, int height);
+    // 呈现函数接受目标：“哪个窗口”是显式参数，而不是藏在单例里的隐式默认目标。
+    // Initialize 不在此列：它是引导入口，负责创建设备与目标 0。
+    void RecreateSwapchain(VL::PresentTarget& target, int width, int height);
     void WaitForFence(vk::Fence fence);
     void ResetFence(vk::Fence fence);
     SwapchainFrameResult AcquireNextSwapchainImage(
+        VL::PresentTarget& target,
         vk::Semaphore imageAcquiredSemaphore,
         uint32_t& swapchainImageIndex);
     void SubmitToGraphicsQueue(const vk::SubmitInfo& submitInfo, vk::Fence signalFence);
     SwapchainFrameResult PresentSwapchainImage(
+        VL::PresentTarget& target,
         vk::Semaphore renderFinishedSemaphore,
         uint32_t swapchainImageIndex);
 
     uint32_t GetFrameFenceCount() const;
     VulkanFrameSyncResources GetFrameSyncResources(uint32_t frameIndex) const;
-    VulkanSwapchainImageSyncResources GetSwapchainImageSyncResources(uint32_t swapchainImageIndex) const;
-    vk::Fence GetImageInFlightFence(uint32_t swapchainImageIndex) const;
-    void SetImageInFlightFence(uint32_t swapchainImageIndex, vk::Fence fence);
-    uint32_t GetSwapchainImageCount() const;
-    vk::Extent2D GetSwapchainExtent() const;
-    vk::Format GetSwapchainImageFormat() const;
-    const std::vector<vk::ImageView>& GetSwapchainImageViews() const;
-    const std::vector<vk::Image>& GetSwapchainImages() const;
+    VulkanSwapchainImageSyncResources GetSwapchainImageSyncResources(
+        const VL::PresentTarget& target, uint32_t swapchainImageIndex) const;
+    vk::Fence GetImageInFlightFence(const VL::PresentTarget& target, uint32_t swapchainImageIndex) const;
+    void SetImageInFlightFence(VL::PresentTarget& target, uint32_t swapchainImageIndex, vk::Fence fence);
+    uint32_t GetSwapchainImageCount(const VL::PresentTarget& target) const;
+    vk::Extent2D GetSwapchainExtent(const VL::PresentTarget& target) const;
+    vk::Format GetSwapchainImageFormat(const VL::PresentTarget& target) const;
+    const std::vector<vk::ImageView>& GetSwapchainImageViews(const VL::PresentTarget& target) const;
+    const std::vector<vk::Image>& GetSwapchainImages(const VL::PresentTarget& target) const;
 
     RHIBufferHandle CreateBuffer(
         vk::DeviceSize size,
@@ -279,12 +285,13 @@ private:
     vk::PhysicalDeviceMemoryProperties& GetGpuMemoryProperties();
     vk::CommandPool& GetCommandPool();
     vk::Queue& GetGraphicsQueue();
-    vk::SwapchainKHR& GetSwapchain();
+    // 呈现目标的入口。取代原来的无参 GetSwapchain()：后端要的不是"那个 swapchain"，
+    // 而是"这个后端负责的呈现目标"，后者才带得动第二个窗口。
+    // 目标 0 之外的接线尚未完成，因此这里暂时只返回主窗口的目标。
+    VL::PresentTarget& GetPresentTarget();
     std::vector<vk::CommandBuffer>& GetCommandBuffers();
     std::vector<vk::Fence>& GetTaskFinishedFences();
     std::vector<vk::Semaphore>& GetImageAcquiredSemaphores();
-    std::vector<vk::Semaphore>& GetRenderFinishedSemaphores();
-    std::vector<vk::Fence>& GetImagesInFlightFences();
 
     const VulkanBufferResource& RequireBufferResource(RHIBufferHandle bufferHandle) const;
     const VulkanImageResource& RequireImageResource(RHIImageHandle imageHandle) const;

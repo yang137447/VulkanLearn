@@ -17,13 +17,13 @@ void VulkanManager::Init(std::vector<const char *> &extensions, SDL_Window *wind
 
     // 目标 0 = 主窗口。多窗口时这里会有第二个目标，且设备只创建一次。
     presentTargets.emplace_back();
-    presentTargets.front().window = window;
+    defaultTarget().window = window;
 
     CreateVkInstance();
     EnumeratePhysicalDevices();
-    CreateVkSurface(presentTargets.front(), window);
+    CreateVkSurface(defaultTarget(), window);
     CreateVkDevice();
-    CreateVkSwapChain(presentTargets.front());
+    CreateVkSwapChain(defaultTarget());
     CreateVkCommandBuffer();
     CreateSyncObjects();
 }
@@ -50,7 +50,7 @@ void VulkanManager::ReCreateSwapChain(int newWidth, int newHeight)
 
     device.waitIdle(); //等待设备空闲
 
-    VL::PresentTarget &target = presentTargets.front();
+    VL::PresentTarget &target = defaultTarget();
     target.requestedExtent = vk::Extent2D{
         static_cast<uint32_t>(newWidth),
         static_cast<uint32_t>(newHeight)
@@ -137,7 +137,7 @@ void VulkanManager::CreateVkDevice()
         {
             graphicQueueFamilyIndices.push_back(i);
         }
-        if (physicalDevices[kGpuIndex].getSurfaceSupportKHR(i, presentTargets.front().surface))
+        if (physicalDevices[kGpuIndex].getSurfaceSupportKHR(i, defaultTarget().surface))
         {
             presentQueueFamilyIndices.push_back(i);
         }
@@ -162,7 +162,7 @@ void VulkanManager::CreateVkDevice()
             if (graphicQueueFamilyIndices[i] == presentQueueFamilyIndices[j])
             {
                 graphicsQueueFamilyIndex = graphicQueueFamilyIndices[i];
-                presentTargets.front().presentQueueFamilyIndex = presentQueueFamilyIndices[j];
+                defaultTarget().presentQueueFamilyIndex = presentQueueFamilyIndices[j];
                 break;
             }
         }
@@ -171,7 +171,7 @@ void VulkanManager::CreateVkDevice()
     if (!graphicsQueueFamilyIndex.has_value())
     {
         graphicsQueueFamilyIndex = graphicQueueFamilyIndices[0];
-        presentTargets.front().presentQueueFamilyIndex = presentQueueFamilyIndices[0];
+        defaultTarget().presentQueueFamilyIndex = presentQueueFamilyIndices[0];
     }
     graphicsQueueTimestampValidBits =
         queueFamilyProperties[graphicsQueueFamilyIndex.value()].timestampValidBits;
@@ -380,7 +380,7 @@ void VulkanManager::CreateVkCommandBuffer()
     assert(commandPool);
     VulkanDebug::SetObjectName(device, commandPool, vk::ObjectType::eCommandPool, "CommandPool: Main");
 
-    commandBuffers.resize(presentTargets.front().imageCount);
+    commandBuffers.resize(defaultTarget().imageCount);
 
     vk::CommandBufferAllocateInfo commandBufferAllocateInfo;
     commandBufferAllocateInfo
@@ -414,7 +414,7 @@ void VulkanManager::CreateSyncObjects()
 {
     //创建 Semaphore
     imageAcquiredSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
-    presentTargets.front().renderFinishedSemaphores.resize(presentTargets.front().imageCount);
+    defaultTarget().renderFinishedSemaphores.resize(defaultTarget().imageCount);
 
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
     {
@@ -423,12 +423,12 @@ void VulkanManager::CreateSyncObjects()
         assert(imageAcquiredSemaphores[i]);
         VulkanDebug::SetObjectName(device, imageAcquiredSemaphores[i], vk::ObjectType::eSemaphore, "Semaphore: ImageAcquired (Frame " + std::to_string(i) + ")");
     }
-    for (size_t i = 0; i < presentTargets.front().imageCount; i++)
+    for (size_t i = 0; i < defaultTarget().imageCount; i++)
     {
         vk::SemaphoreCreateInfo renderFinishedSemaphoreCreateInfo;
-        presentTargets.front().renderFinishedSemaphores[i] = device.createSemaphore(renderFinishedSemaphoreCreateInfo);
-        assert(presentTargets.front().renderFinishedSemaphores[i]);
-        VulkanDebug::SetObjectName(device, presentTargets.front().renderFinishedSemaphores[i], vk::ObjectType::eSemaphore, "Semaphore_RenderFinished_" + std::to_string(i));
+        defaultTarget().renderFinishedSemaphores[i] = device.createSemaphore(renderFinishedSemaphoreCreateInfo);
+        assert(defaultTarget().renderFinishedSemaphores[i]);
+        VulkanDebug::SetObjectName(device, defaultTarget().renderFinishedSemaphores[i], vk::ObjectType::eSemaphore, "Semaphore_RenderFinished_" + std::to_string(i));
     }
     //创建 Fence
     vk::FenceCreateInfo fenceCreateInfo;
@@ -443,7 +443,7 @@ void VulkanManager::CreateSyncObjects()
         VulkanDebug::SetObjectName(device, taskFinishedFences[i], vk::ObjectType::eFence, "Fence: TaskFinished (FrameIndex " + std::to_string(i) + ")");
     }
 
-    presentTargets.front().imagesInFlightFences.resize(presentTargets.front().imageCount, nullptr);
+    defaultTarget().imagesInFlightFences.resize(defaultTarget().imageCount, nullptr);
 }
 
 void VulkanManager::DestroySyncObjects()
@@ -457,14 +457,14 @@ void VulkanManager::DestroySyncObjects()
     }
     imageAcquiredSemaphores.clear();
 
-    for (vk::Semaphore& semaphore : presentTargets.front().renderFinishedSemaphores)
+    for (vk::Semaphore& semaphore : defaultTarget().renderFinishedSemaphores)
     {
         if (semaphore)
         {
             device.destroySemaphore(semaphore);
         }
     }
-    presentTargets.front().renderFinishedSemaphores.clear();
+    defaultTarget().renderFinishedSemaphores.clear();
     
     for (vk::Fence& fence : taskFinishedFences)
     {
@@ -475,5 +475,5 @@ void VulkanManager::DestroySyncObjects()
     }
     taskFinishedFences.clear();
 
-    presentTargets.front().imagesInFlightFences.clear();
+    defaultTarget().imagesInFlightFences.clear();
 }
