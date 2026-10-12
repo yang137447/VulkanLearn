@@ -971,7 +971,7 @@ scale/fov/aspect 反推可见范围（虽然它仍会核对）；② `M_brdfPlot
 
 ### 1.7.4 辅助材质
 
-`M_unlit`、`M_vertexColor`、`M_measureGrid`、`M_shadow` 作为**辅助或调试材质**：用于底座、展示台、
+`M_unlit`、`M_measureGrid`、`M_shadow` 作为**辅助或调试材质**：用于底座、展示台、
 背景、发光源、曲线探针本体与测量网格。它们必须在记录中明确标注，**不得与主案例结论混在一起**，
 也不为其建立独立的论文 case。
 
@@ -1009,8 +1009,8 @@ pointLight 3 / spotLight 2 / sunLight 1）。
 - `SC_sifi_head`：两个头模放在**完全相同的 transform `[1,0,1]`** 上互相重叠，且是 `M_pbr` +
   `u_emissiveStrength=20`，不适合做任何对照 case；
 - `SC_scene02` / `SC_scene03` / `SC_sculpture` / `SC_sifi_head` 的 `name` 字段都还是过期的 `"Scene 01"`；
-- `SC_scene01` 用了场景类型 `sunLight`——**全仓库唯一一处，且不在 `AGENTS.md` 记录的类型列表里**；
-  启动期 UI 场景选择器会跳过它（日志有 `skipped an unsupported scene asset`），实际不可加载；
+- `SC_scene01` 原先使用的历史 `sunLight` 已迁移为 `directionalLight`，并补齐厘米制单位、
+  `lux` 光强和 EV100 曝光字段；2026-10-09 已通过新 scene schema 校验，旧类型不再阻止加载；
 - `Common/Meshes/SM_axis.json` 的内部 `name` 是 `"Vilking Room"`（仅命名不一致，不影响加载）。
 
 

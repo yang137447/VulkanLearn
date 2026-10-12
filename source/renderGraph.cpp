@@ -11,6 +11,7 @@
 #include "render/rendergraph/sceneViewportOutputValidation.h"
 #include "render/resource/resourceRetireQueue.h"
 #include "render/resource/rendererResourceCache.h"
+#include "render/camera/autoExposureCompute.h"
 #include "texture.h"
 #include <algorithm>
 #include <memory>
@@ -655,6 +656,7 @@ RenderGraph::~RenderGraph()
 void RenderGraph::SwapState(RenderGraph& other) noexcept
 {
     resourcesMsaa.swap(other.resourcesMsaa);
+    autoExposure.swap(other.autoExposure);
     resourcesResolve.swap(other.resourcesResolve);
     sceneViewportOutputs.swap(other.sceneViewportOutputs);
     renderpassesOrdered.swap(other.renderpassesOrdered);
@@ -697,6 +699,13 @@ void RenderGraph::Shutdown(
     VL::RendererBackendVulkan& rendererBackend,
     VL::RenderGraphReleaseMode releaseMode)
 {
+    if (autoExposure && releaseMode == VL::RenderGraphReleaseMode::Retire)
+    {
+        auto& retireQueue = VL::ResourceRetireQueue::GetInstance();
+        retireQueue.RetireShared("AutoExposure:Graph", ownerGeneration,
+            retireQueue.GetLastSubmittedEpoch(), std::move(autoExposure));
+    }
+    autoExposure.reset();
     for(auto& [name, renderpass] : renderpasses)
     {
         DestroyRenderpass(renderpass, rendererBackend, releaseMode);
@@ -763,7 +772,8 @@ void RenderGraph::LoadRenderGraph(
             if(name == "swapChain") continue;
 
             // 先建立msaa资源
-            if (name != "shadowMap")
+            if (name != "shadowMap" &&
+                std::find(resourceDesc.usage.begin(), resourceDesc.usage.end(), "storage") == resourceDesc.usage.end())
             {
                 std::vector<RenderResource>& msaaResources =
                     resourcesMsaa.try_emplace(name).first->second;
@@ -936,6 +946,20 @@ void RenderGraph::ValidateAndResolveCanonicalShadowPass()
     }
 }
 
+void RenderGraph::InitializeAutoExposure(PipelineFactory& factory,
+    VL::RendererBackendVulkan& backend)
+{
+    if (autoExposure) return;
+    for (const auto& pass : compiledFrameGraph.passes)
+    {
+        if (pass.type != VL::RenderGraphPassType::AutoExposure) continue;
+        auto candidate = std::make_shared<VL::AutoExposureCompute>();
+        candidate->Initialize(factory, backend, *this);
+        autoExposure = std::move(candidate);
+        return;
+    }
+}
+
 void RenderGraph::RenderInitialize(
     VL::RendererBackendVulkan& rendererBackend,
     const VL::RendererDescriptorContext& descriptorContext)
@@ -943,6 +967,7 @@ void RenderGraph::RenderInitialize(
     for (const std::string& passName : renderpassesOrdered)
     {
         Renderpass& renderpass = renderpasses.at(passName);
+        if (renderpass.type == VL::RenderGraphPassType::AutoExposure) continue;
         renderpass.CreateUniformBuffers();
         renderpass.SetupDescriptors(*this, rendererBackend, descriptorContext);
         if (auto passMaterialInstance = renderpass.materialInstance.lock())
@@ -982,6 +1007,7 @@ void RenderGraph::RefreshRuntimeDescriptors(
 {
     for (auto& [passName, renderpass] : renderpasses)
     {
+        if (renderpass.type == VL::RenderGraphPassType::AutoExposure) continue;
         // World-local 纹理替换会同时改变缓存的 image view/sampler 与写入计划。
         // 必须先重建 pass-input 快照，避免刷新时把待退休的 world-local 纹理写回活动 descriptor。
         renderpass.SetupDescriptors(*this, rendererBackend, descriptorContext);
@@ -1152,6 +1178,17 @@ RenderResource RenderGraph::CreateRenderResource(
                 imageCreateInfo,
                 memoryPropertyFlags,
                 "Image: " + resource.name);
+        if (resourceDesc.initializeShaderRead)
+        {
+            // 只初始化布局，不表示像素有效。曝光 CS 每帧写完输出才允许下游采样；
+            // 真正的跨帧历史在 owner 的 float32 buffer，不采样该纹理的旧像素。
+            rendererBackend.TransitionImageLayout(
+                resource.image,
+                1,
+                resource.format,
+                vk::ImageLayout::eUndefined,
+                vk::ImageLayout::eShaderReadOnlyOptimal);
+        }
         resource.imageHandle =
             rendererBackend.GetImageHandle(
                 resource.image);
@@ -1332,6 +1369,13 @@ Renderpass RenderGraph::CreateRenderpass(
                 "Swapchain-output passes require single-sample attachments: " + renderpass.name);
         }
 
+        // 专用曝光计算节点不创建 VkRenderPass/framebuffer 或 Material descriptors。
+        if (renderpass.type == VL::RenderGraphPassType::AutoExposure)
+        {
+            renderpass.width = 1;
+            renderpass.height = 1;
+            return renderpass;
+        }
         MaybeFailRenderPassCreation();
         renderpass.renderPass =
             CreateVkRenderPass(
@@ -1974,6 +2018,10 @@ vk::Format RenderGraph::GetFormat(const std::string& formatStr)
     {
         return vk::Format::eR16G16B16A16Sfloat;
     }
+    else if (formatStr == "R32_SFLOAT")
+    {
+        return vk::Format::eR32Sfloat;
+    }
     else
     {
         throw std::runtime_error("Unsupported format string");
@@ -2004,6 +2052,10 @@ vk::ImageUsageFlags RenderGraph::GetImageUsage(const std::vector<std::string>& u
         else if (usage == "transferDst")
         {
             imageUsage |= vk::ImageUsageFlagBits::eTransferDst;
+        }
+        else if (usage == "storage")
+        {
+            imageUsage |= vk::ImageUsageFlagBits::eStorage;
         }
     }
     return imageUsage;

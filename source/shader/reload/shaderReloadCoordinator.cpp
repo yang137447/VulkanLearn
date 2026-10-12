@@ -453,7 +453,7 @@ ShaderReloadPlan ShaderReloadCoordinator::CaptureGraphicsPlanInternal(
     for (ComputePipelineReloadParticipant* participant :
          computeParticipants)
     {
-        if (participant == nullptr)
+        if (participant == nullptr || !participant->GetActivePipeline())
         {
             continue;
         }

@@ -1327,7 +1327,7 @@ TEST_F(EditorUiTest, PrimaryDirectionalLightExposesTheTwoExistingRuntimeCommands
     ASSERT_NE(slider, nullptr);
     EXPECT_EQ(slider->GetAttribute<std::string>("type", ""), "range");
     EXPECT_FLOAT_EQ(slider->GetAttribute<float>("min", -1.0f), 0.0f);
-    EXPECT_FLOAT_EQ(slider->GetAttribute<float>("max", -1.0f), 10.0f);
+    EXPECT_FLOAT_EQ(slider->GetAttribute<float>("max", -1.0f), 150000.0f);
     // 可编辑字段不出现在只读行里，同一值不会有两行。
     EXPECT_EQ(document->GetElementById("actor-field-intensity"), nullptr);
 
@@ -1353,10 +1353,12 @@ TEST_F(EditorUiTest, PrimaryDirectionalLightExposesTheTwoExistingRuntimeCommands
     EXPECT_EQ(runtimeSink.actions.size(), 1u);
     EXPECT_NE(Notice().find("finite number"), std::string::npos);
     // 超出运行时页 sun 滑条的区间：明确拒绝，不提交一个会被那个隐藏控件截断的值。
-    SetValue("actor-sun-intensity", "13");
+    // 区间随物理光照迁到勒克斯（0..150000）后，原来用的 13 已经落在合法范围内，
+    // 因此这里必须用一个**真正超限**的值，否则这条断言会静默失去意义。
+    SetValue("actor-sun-intensity", "150001");
     Refresh();
     EXPECT_EQ(runtimeSink.actions.size(), 1u);
-    EXPECT_NE(Notice().find("between 0 and 10"), std::string::npos);
+    EXPECT_NE(Notice().find("between 0 and 150000"), std::string::npos);
 
     // CSM 开关沿用运行时页的 Enabled/Disabled 按钮：一次点击只提交一条命令。
     auto* enable = document->GetElementById("actor-csm-enable");

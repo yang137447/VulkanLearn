@@ -4,11 +4,14 @@ layout(location = 0) in vec2 inUV;
 layout(location = 0) out vec4 outColor;
 
 layout(set = 1, binding = 0) uniform UBOMIParamters {
-    // x = threshold, y = knee, z = firefliesClamp, w = reserved
+    // xyz 是曝光后空间的 threshold/knee/firefliesClamp，w 由活动相机写入。
     vec4 u_bloomPrefilterParams;
+    // x = 1 时从自动曝光 1x1 资源读取最终曝光。
+    vec4 u_exposureSettings;
 };
 
 layout(set = 3, binding = 0) uniform sampler2D inputColor;
+layout(set = 3, binding = 1) uniform sampler2D autoExposure;
 
 float Luminance(vec3 color)
 {
@@ -29,6 +32,14 @@ void main()
     float threshold = u_bloomPrefilterParams.x;
     float knee = u_bloomPrefilterParams.y;
     float firefliesClamp = u_bloomPrefilterParams.z;
+    float exposure = u_bloomPrefilterParams.w;
+    if (u_exposureSettings.x > 0.5)
+    {
+        exposure = texture(autoExposure, vec2(0.5)).r;
+    }
+
+    // 物理亮度先按相机曝光再提取亮部，避免旧的 12 上限截掉高 EV 下的全部光晕。
+    color *= exposure;
 
     float l = Luminance(color);
     if (l > firefliesClamp)
@@ -47,5 +58,7 @@ void main()
     float bloom = max(l - threshold, 0.0) + soft;
 
     vec3 result = (l > 1e-5) ? color * (bloom / l) : vec3(0.0);
+    // Bloom 金字塔保存曝光后的线性值；最终合成时只对 sceneColor 做曝光，
+    // 避免 Bloom 再次乘曝光，也让 threshold/clamp 与最终显示亮度处于同一空间。
     outColor = vec4(result, 1.0);
 }

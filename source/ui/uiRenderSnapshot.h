@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 
+#include "render/camera/cameraExposure.h"
+
 namespace VL
 {
 
@@ -61,6 +63,9 @@ struct UiViewModelSnapshot
     float framesPerSecond = 0.0f;
     int debugViewMode = 0;
     int toneMappingMode = 0;
+    bool hasCamera = false;
+    // UI 只持有曝光作者状态的副本，不读取 GPU 测光历史或活动 Camera。
+    CameraExposure cameraExposure;
     bool offlineMode = false;
     int offlineState = 0;
     int offlineSamples = 32;
@@ -109,7 +114,8 @@ struct UiViewModelSnapshot
     uint32_t speedTreeWindProfileCount = 0;
     bool runtimePageVisible = false;
     bool developerUiVisible = false;
-    float cameraMoveSpeed = 10.0f;
+    // 与 Controller 一致，快照中的移动速度以 cm/s 表示。
+    float cameraMoveSpeed = 1000.0f;
     std::string activeWorldPath;
     std::string locale;
 };

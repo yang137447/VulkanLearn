@@ -1,5 +1,6 @@
 #include "render/rendergraph/renderGraphCompiler.h"
 
+#include <algorithm>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -12,7 +13,8 @@ enum class ResourcePreviousUse
 {
     None,
     Sampled,
-    Attachment
+    Attachment,
+    Storage
 };
 
 RuntimeError MakeCompileError(
@@ -35,6 +37,7 @@ bool IsSupportedFormat(const std::string& format)
         "R8G8B8A8_SRGB",
         "R8G8B8A8_UNORM",
         "R16G16B16A16_SFLOAT",
+        "R32_SFLOAT",
         "D16_UNORM",
         "D32_SFLOAT",
         "D24_UNORM_S8_UINT"
@@ -62,7 +65,8 @@ bool IsSupportedUsage(const std::string& usage)
         "sampled",
         "present",
         "transferSrc",
-        "transferDst"
+        "transferDst",
+        "storage"
     };
     return kSupportedUsages.find(usage) != kSupportedUsages.end();
 }
@@ -602,6 +606,18 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
                 "Only texture2DArray resources may declare arrayLayers greater than 1.",
                 resource.name));
         }
+        if (resourceNode.contains("initialLayout"))
+        {
+            if (!resourceNode["initialLayout"].is_string() ||
+                resourceNode["initialLayout"].get<std::string>() != "shaderRead")
+            {
+                return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                    "RenderGraphCompiler.UnsupportedInitialLayout",
+                    "Only initialLayout=shaderRead is supported.",
+                    resource.name));
+            }
+            resource.initializeShaderRead = true;
+        }
         const std::string format = resourceNode["format"].get<std::string>();
         if (!IsSupportedFormat(format))
         {
@@ -696,6 +712,41 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
                 pass.name + ":" + passTypeName));
         }
         pass.type = *passType;
+        if (pass.type == RenderGraphPassType::AutoExposure)
+        {
+            // 专用曝光节点不是通用 Compute authoring：一张 sceneColor 输入，
+            // 一张初始化为 shaderRead 的 1x1 R32 输出；历史由节点 owner 私有持有。
+            const auto& outputs = outputResult.Value();
+            const auto& inputs = inputResult.Value();
+            if (inputs.size() != 1 || inputs[0].source != "renderGraph" ||
+                inputs[0].binding != 0 || outputs.size() != 1 ||
+                (outputs.size() == 1 && (outputs[0].layer != 0 ||
+                    outputs[0].loadOp != "clear" || outputs[0].storeOp != "store")) ||
+                passNode.value("needMsaa", false) || passNode.value("needCreateMaterial", false))
+                return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                    "RenderGraphCompiler.InvalidAutoExposure", "AutoExposure requires one graph input/output and no MSAA/material.", pass.name));
+            const CompiledRenderGraphResource* target = nullptr;
+            const CompiledRenderGraphResource* source = nullptr;
+            for (const auto& resource : compiledGraph.resources)
+            {
+                if (resource.name == outputs[0].resource) target = &resource;
+                if (resource.name == inputs[0].resource) source = &resource;
+            }
+            if (!target || !source || target == source ||
+                source->isSwapchain || IsDepthFormatString(source->format) ||
+                source->type != "texture2D" ||
+                target->format != "R32_SFLOAT" || target->type != "texture2D" ||
+                !target->initializeShaderRead || !target->hasFixedWidth || !target->hasFixedHeight ||
+                target->widthValue != 1 || target->heightValue != 1 ||
+                std::find(source->usage.begin(), source->usage.end(), "sampled") == source->usage.end() ||
+                std::find(target->usage.begin(), target->usage.end(), "storage") == target->usage.end() ||
+                std::find(target->usage.begin(), target->usage.end(), "sampled") == target->usage.end())
+                return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                    "RenderGraphCompiler.InvalidAutoExposure", "AutoExposure requires sampled scene color and initialized 1x1 R32 storage/sampled output.", pass.name));
+            if (previousResourceUses[inputs[0].resource] == ResourcePreviousUse::None)
+                return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                    "RenderGraphCompiler.InvalidAutoExposure", "AutoExposure scene color must be produced earlier in this graph.", pass.name));
+        }
         pass.needMsaa = passNode.value("needMsaa", false);
         pass.needCreateMaterial = passNode.value("needCreateMaterial", false);
         pass.materialInstancePath = passNode.value("materialInstancePath", std::string());
@@ -739,6 +790,8 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
                     inputResource,
                     CompiledRenderGraphBarrierType::AttachmentToShaderRead);
             }
+            else if (previousResourceUses[inputResource] == ResourcePreviousUse::Storage)
+                AddBarrier(pass, inputResource, CompiledRenderGraphBarrierType::StorageToShaderRead);
             AddResourceAccess(
                 compiledGraph.resourceUsagePlans.at(resourceUsagePlanIndices.at(inputResource)),
                 pass.name,
@@ -747,7 +800,9 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
         }
         for (const CompiledRenderGraphPassOutput& output : pass.outputResources)
         {
-            if (output.resource != "swapChain" &&
+            if (pass.type == RenderGraphPassType::AutoExposure)
+                AddBarrier(pass, output.resource, CompiledRenderGraphBarrierType::ShaderReadToStorage);
+            if (pass.type != RenderGraphPassType::AutoExposure && output.resource != "swapChain" &&
                 output.loadOp == "load" &&
                 previousResourceUses[output.resource] == ResourcePreviousUse::Sampled)
             {
@@ -778,13 +833,37 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
         }
         for (const CompiledRenderGraphPassOutput& output : pass.outputResources)
         {
-            previousResourceUses[output.resource] = ResourcePreviousUse::Attachment;
+            previousResourceUses[output.resource] = pass.type == RenderGraphPassType::AutoExposure
+                ? ResourcePreviousUse::Storage : ResourcePreviousUse::Attachment;
         }
 
         passNames.insert(pass.name);
         compiledGraph.passOrder.push_back(pass.name);
         compiledGraph.passes.push_back(std::move(pass));
         ++passIndex;
+    }
+
+    const CompiledRenderGraphPass* exposurePass = nullptr;
+    for (const auto& pass : compiledGraph.passes)
+    {
+        if (pass.type != RenderGraphPassType::AutoExposure) continue;
+        if (exposurePass)
+            return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                "RenderGraphCompiler.InvalidAutoExposure", "Only one AutoExposure update per graph is supported.", pass.name));
+        exposurePass = &pass;
+    }
+    if (exposurePass)
+    {
+        const auto& output = exposurePass->outputResources[0].resource;
+        const auto& uses = compiledGraph.resourceUsagePlans.at(resourceUsagePlanIndices.at(output));
+        if (uses.accesses.size() < 2 || uses.accesses.front().passName != exposurePass->name ||
+            uses.accesses.back().accessType != CompiledRenderGraphAccessType::Read)
+            return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                "RenderGraphCompiler.InvalidAutoExposure", "Exposure output must be written before sampling and end in shaderRead.", output));
+        for (const auto& use : uses.accesses)
+            if (use.accessType == CompiledRenderGraphAccessType::Write && use.passName != exposurePass->name)
+                return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
+                    "RenderGraphCompiler.InvalidAutoExposure", "Exposure output cannot have another writer.", output));
     }
 
     auto geometryPassResult = ValidateRequiredSingletonPassType(

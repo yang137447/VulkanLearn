@@ -115,7 +115,7 @@ Generated/Runtime/：eyeCausticLut.json  hairAzimuthalLut.json
 Generated/Import/：SC_marble_bust_01/  simple_character/
 ```
 
-**保留**：`M_pbr` / `M_unlit` / `M_vertexColor` / `M_measureGrid` / `M_shadow` / `M_speedtree` / `M_brdfPlot`
+**保留**：`M_pbr` / `M_unlit` / `M_measureGrid` / `M_shadow` / `M_speedtree` / `M_brdfPlot`
 与四个探针场景（`SM_plot_quad*`）、`SC_sphere_array` 球阵基线、`SC_car_showcase`、`SC_sifi_head`、
 `SC_speedtree`、其余普通学习场景。`M_brdfPlot` 依赖的 `common/clothBrdf.glsl`、
 `common/hairPathScattering.glsl`、`common/microfacetDistribution.glsl` 属于**测量设施**，同样保留。

@@ -18,9 +18,16 @@
         "USE_NORMAL_MAP": 0,
         "USE_PBR_MAP": 0,
         "USE_EMISSION_MAP": 0,
-        "USE_ALPHA_MAP": 0
+        "USE_ALPHA_MAP": 0,
+        "USE_VERTEX_COLOR": 0
     },
     "parameters": {
+        "u_specular": {
+            "type": "float",
+            "default": 0.5,
+            "range": { "min": 0, "max": 1 },
+            "description": "dielectric F0 = 0.08 * specular; zero disables the dielectric specular lobe for diffuse calibration"
+        },
         "u_alphaClipThreshold": {
             "type": "float",
             "default": 0.5,
@@ -123,9 +130,9 @@
             "default": 1,
             "range": {
                 "min": 0,
-                "max": 4
+                "max": 100000
             },
-            "description": "emissive contribution multiplier"
+            "description": "scene-linear emissive radiance multiplier before camera exposure"
         }
     },
     "textures": {

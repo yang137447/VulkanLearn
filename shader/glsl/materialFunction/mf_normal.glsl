@@ -8,6 +8,9 @@ vec3 TransformMaterialNormalToWorld(
     in MaterialFunctionContext context,
     in vec3 normalTS)
 {
+    // MikkTSpace 解码保留未归一化的插值基，只归一化最终法线；不能在此
+    // 独立归一化或正交化 N/T。模型缩放的长度因子在顶点变换阶段去除。
+    // 延续当前烘焙约定：片元阶段用 tangent.w 重建 B，不翻转贴图 G 通道。
     vec3 bitangent =
         cross(context.worldNormal, context.worldTangent.xyz) *
         context.worldTangent.w;

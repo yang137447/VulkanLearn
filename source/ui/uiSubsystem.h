@@ -193,7 +193,7 @@ private:
 
         Rml::String cameraMoveSpeedLabel;
         Rml::String cameraMoveSpeedValue;
-        float cameraMoveSpeed = 10.0f;
+        float cameraMoveSpeed = 1000.0f;
 
         Rml::String frameLabel;
         Rml::String frameValue;
@@ -307,6 +307,24 @@ private:
         Rml::String toneReinhardLabel;
         Rml::String toneHableLabel;
         Rml::String toneAcesLabel;
+        bool hasCamera = false;
+        int exposureMode = 0;
+        Rml::String exposureModeLabel;
+        Rml::String exposureManualLabel;
+        Rml::String exposurePhysicalEvLabel;
+        Rml::String exposureAutoLabel;
+        Rml::String exposureEvLabel;
+        Rml::String exposureEvValue;
+        float exposureEv = 9.0f;
+        Rml::String exposureCompensationLabel;
+        Rml::String exposureCompensationValue;
+        float exposureCompensation = 0.0f;
+        Rml::String exposureMinEvLabel;
+        Rml::String exposureMinEvValue;
+        float exposureMinEv = -10.0f;
+        Rml::String exposureMaxEvLabel;
+        Rml::String exposureMaxEvValue;
+        float exposureMaxEv = 16.0f;
         Rml::String bloomStrengthLabel;
         Rml::String bloomStrengthValue;
         float bloomStrength = 0.0f;
@@ -433,6 +451,9 @@ private:
     void OnToneMappingReinhard(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
     void OnToneMappingHable(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
     void OnToneMappingAces(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
+    void OnExposureModeSelected(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
+    void OnExposureValueChanged(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
+    void QueueCameraExposureEdit(const std::string& field, float value);
     void OnBloomStrengthChanged(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
     void OnBloomThresholdChanged(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
     void OnBloomKneeChanged(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
@@ -511,6 +532,7 @@ private:
     UiViewportRect sceneViewportRect;
     bool initialized = false;
     bool rmlInitialized = false;
+    bool updatingRuntimeBindings = false;
     bool runtimePageVisible = false;
     bool developerUiEnabled = false;
     bool developerUiVisible = false;

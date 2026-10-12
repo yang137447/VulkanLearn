@@ -16,6 +16,7 @@ enum class UiActionType
     SetCameraMoveSpeed,
     SetDebugViewMode,
     SetToneMappingMode,
+    SetCameraExposure,
     SetOfflineMode,
     SetOfflineSetting,
     SetOfflineAov,

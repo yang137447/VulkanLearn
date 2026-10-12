@@ -69,6 +69,7 @@ void PassRuntime::RecordPass(const std::string& passName, PassRuntimeContext& co
         RecordEditorGridPass(context);
         return;
     case RenderGraphPassType::Unknown:
+    case RenderGraphPassType::AutoExposure:
         break;
     }
 

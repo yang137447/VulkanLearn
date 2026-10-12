@@ -343,7 +343,6 @@ RuntimeResult<void> EngineLoop::LoadInitialWorldAndRenderer(
     const std::string& initialSceneOverride)
 {
     controller = std::make_unique<Controller>();
-    controller->SetMoveVelocity(10.0f);
     controller->SetRotationSpeed(0.1f);
     worldGraphTransactionCoordinator =
         std::make_unique<WorldGraphTransactionCoordinator>(
@@ -626,7 +625,7 @@ void EngineLoop::ApplyQueuedUiActions()
         {
             controller->SetMoveVelocity(action.floatValue);
             GetSubsystems().GetDiagnosticsSubsystem().ReportInfo(
-                "Camera move speed set to " + std::to_string(action.floatValue));
+                "Camera move speed set to " + std::to_string(action.floatValue) + " cm/s");
             continue;
         }
 
@@ -645,6 +644,11 @@ void EngineLoop::ApplyQueuedUiActions()
         case UiActionType::SetToneMappingMode:
             command.type = RuntimeCommandType::SetToneMappingMode;
             command.intValue = action.intValue;
+            break;
+        case UiActionType::SetCameraExposure:
+            command.type = RuntimeCommandType::SetCameraExposure;
+            command.stringValue = action.stringValue;
+            command.floatValue = action.floatValue;
             break;
         case UiActionType::SetOfflineMode:
             command.type = RuntimeCommandType::SetOfflineMode;
@@ -884,6 +888,11 @@ void EngineLoop::UpdateUiViewModel(
     snapshot.sunIntensity = 1.0f;
     const std::shared_ptr<World>& uiActiveWorld =
         GetSubsystems().GetWorldManager().GetActiveWorld();
+    if (uiActiveWorld && uiActiveWorld->GetCamera())
+    {
+        snapshot.hasCamera = true;
+        snapshot.cameraExposure = uiActiveWorld->GetCamera()->GetExposure();
+    }
     if (uiActiveWorld && uiActiveWorld->GetPrimaryDirectionalLight())
     {
         snapshot.sunIntensity =

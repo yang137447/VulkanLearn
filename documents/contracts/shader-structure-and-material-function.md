@@ -91,6 +91,16 @@ MF 不得直接负责：
 - 直接执行 discard；
 - 修改 Blend、Cull、Depth 等 Pipeline 状态。
 
+法线贴图沿用 MikkTSpace 合同：模型变换后的 N/T 在顶点阶段去除缩放长度，
+插值后不再独立归一化或 Gram-Schmidt 正交化；共享 `mf_normal.glsl` 按
+`tangent.w * cross(N, T)` 重建 B，只归一化组合得到的最终法线。
+副切线重建阶段必须与烘焙端一致，不能靠翻转贴图 G 通道修补模型缩放错误。
+
+2026-10-09 的外部 GPU 像素核对使用 Sifi Head 两个网格，`scale=1/100` 时
+相机、位置和 clip 长度同比变换，1280×720 的 Normal 视图保持同一投影。
+排除轮廓和 UI 后，43,410 个像素的平均 RGB 字节误差为 0.002058，
+超过 4 字节误差的像素为零。本次证据只覆盖正均匀缩放，不扩展到镜像或非均匀缩放。
+
 ### MaterialInputs
 
 MaterialInputs 使用 UE 风格的 Material Attributes 语义。字段按用途分为核心输入、覆盖率/几何输入和 Shading Model 扩展输入。
@@ -133,7 +143,7 @@ Shading Model 消费 MaterialInputs，负责 UE 对齐的光照响应。Shading 
 | Shading Model | 当前状态 | 说明 |
 |---|---|---|
 | DefaultLit | 已实现 | Deferred 和 Forward 基础 PBR 路径（`M_pbr`）。 |
-| Unlit | 已实现 | Deferred 和 Forward 非光照路径（`M_unlit` / `M_vertexColor` / `M_brdfPlot` / `M_measureGrid`）。 |
+| Unlit | 已实现 | Deferred 和 Forward 非光照路径（`M_unlit` 支持可选 `USE_VERTEX_COLOR` / `M_brdfPlot` / `M_measureGrid`）。 |
 | ClearCoat | **实现已删除** | 接口（MaterialInputs / GBuffer 槽位 / renderMode）保留；按论文重做后重新接入。 |
 | ThinTranslucent | **实现已删除** | 同上；重建时必须重新设计 RenderMode 与双源输出路径——`passTemplate/base.frag.glsl` 里该分支现在是编译期错误。 |
 | PreintegratedSkin | **实现已删除** | 同上。 |

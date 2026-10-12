@@ -84,16 +84,18 @@ ModelResource AssimpSourceAdapter::ReadSource(
     ModelResource modelResource;
     ProcessNode(scene->mRootNode, scene, importOptions, modelResource);
 
+    // 材质槽必须和实际导入的 section 保持一致；否则被 includedSectionNames
+    // 排除的 UCX 碰撞代理仍会参与槽位校验，并可能被错误绑定为可见几何。
     std::vector<std::string> sourceSlots;
-    for (unsigned int meshIndex = 0; meshIndex < scene->mNumMeshes; ++meshIndex)
+    for (const MeshSection& section : modelResource.sections)
     {
-        const std::string materialSlotName = ReadMaterialSlotName(
-            scene->mMeshes[meshIndex],
-            scene);
-        const auto it = std::find(sourceSlots.begin(), sourceSlots.end(), materialSlotName);
+        const auto it = std::find(
+            sourceSlots.begin(),
+            sourceSlots.end(),
+            section.materialSlotName);
         if (it == sourceSlots.end())
         {
-            sourceSlots.push_back(materialSlotName);
+            sourceSlots.push_back(section.materialSlotName);
         }
     }
     modelResource.sourceMaterialSlotNames = std::move(sourceSlots);

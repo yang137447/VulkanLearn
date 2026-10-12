@@ -1,4 +1,5 @@
 #include "renderSystem.h"
+#include "passBarrier.h"
 #include "render/offline/offlineWorldAssets.h"
 #include "render/offline/offlineGroomAsset.h"
 #include "shader/build/contentHash.h"
@@ -78,6 +79,45 @@ bool SetPassVectorComponent(
     params[componentIndex] = value;
     materialInstance->SetParameter(parameterName, params);
     return true;
+}
+
+bool SetPassVector(
+    const char* passName,
+    const char* parameterName,
+    const Eigen::Vector4f& value,
+    std::string& outMessage)
+{
+    std::shared_ptr<MaterialInstance> materialInstance = GetPassMaterialInstance(passName);
+    if (!materialInstance)
+    {
+        outMessage = std::string("Pass material instance is expired: ") + passName;
+        return false;
+    }
+    if (!materialInstance->HasParameter(parameterName))
+    {
+        outMessage = std::string("Parameter '") + parameterName +
+            "' not found in pass material.";
+        return false;
+    }
+    materialInstance->SetParameter(parameterName, value);
+    return true;
+}
+
+float ResolveOfflineDisplayExposure(
+    const VL::OfflinePublishedResult* result,
+    float manualExposure,
+    const VL::CameraSnapshot& fallbackCamera)
+{
+    if (result &&
+        result->manifest.contains("camera") &&
+        result->manifest["camera"].is_object() &&
+        result->manifest["camera"].contains("exposureScale") &&
+        result->manifest["camera"]["exposureScale"].is_number())
+    {
+        return manualExposure *
+            result->manifest["camera"]["exposureScale"].get<float>();
+    }
+    return manualExposure * VL::ExposureScale(fallbackCamera.exposure);
 }
 
 using PreviewRenderStateValues = std::map<std::string, std::string>;
@@ -807,6 +847,10 @@ VL::EnvironmentUpdateDiagnostics RenderSystem::GetEnvironmentUpdateDiagnostics()
 ComputeShaderArtifact RenderSystem::GetActiveComputeShaderArtifact(
     const std::string& shaderName) const
 {
+    if (shaderName == exposureHistogramReloadParticipant.GetShaderName())
+        return exposureHistogramReloadParticipant.GetActiveArtifact();
+    if (shaderName == exposureAdaptReloadParticipant.GetShaderName())
+        return exposureAdaptReloadParticipant.GetActiveArtifact();
     if (shaderName == "generator/skyToCubemap")
     {
         return proceduralSkyCubeGenerator.GetActiveArtifact();
@@ -1141,7 +1185,13 @@ bool RenderSystem::ExportOffline(const VL::OfflinePublishedResult& result,
 {
     try
     {
-        VL::ExportOfflineResult(result, directory, offlineExposure);
+        VL::ExportOfflineResult(
+            result,
+            directory,
+            ResolveOfflineDisplayExposure(
+                &result,
+                offlineExposure,
+                currentRenderScene.camera));
         message = "Offline output: " + directory.string();
         return true;
     }
@@ -1225,6 +1275,7 @@ void RenderSystem::RebuildSwapchainDependentResources()
     VL::RendererDescriptorContext descriptorContext = BuildRendererDescriptorContext();
     if (!offlineMode)
     {
+        renderGraph.InitializeAutoExposure(*pipelineFactory, *rendererBackend);
         renderGraph.RenderInitialize(*rendererBackend, descriptorContext);
         InitializeCurrentRenderSceneResources();
     }
@@ -1251,6 +1302,7 @@ void RenderSystem::RebuildRenderGraphDependentResources()
     RenderInitialize();
 
     VL::RendererDescriptorContext descriptorContext = BuildRendererDescriptorContext();
+    renderGraph.InitializeAutoExposure(*pipelineFactory, *rendererBackend);
     renderGraph.RenderInitialize(*rendererBackend, descriptorContext);
     InitializeCurrentRenderSceneResources();
 }
@@ -1379,6 +1431,7 @@ VL::PreparedRuntimeBinding RenderSystem::PrepareRuntimeBinding(
                 candidateCache,
                 candidateGraph,
                 candidateLightBufferInfos);
+    candidateGraph.InitializeAutoExposure(*pipelineFactory, *rendererBackend);
     candidateGraph.RenderInitialize(
         *rendererBackend,
         descriptorContext);
@@ -1481,6 +1534,7 @@ void RenderSystem::PrepareRenderGraphReload(
                 VL::RendererResourceCache::GetInstance(),
                 candidateGraph,
                 GetLightBufferInfo());
+    candidateGraph.InitializeAutoExposure(*pipelineFactory, *rendererBackend);
     candidateGraph.RenderInitialize(
         *rendererBackend,
         descriptorContext);
@@ -2315,7 +2369,55 @@ void RenderSystem::UpdateUBOGlobalWithProjectionTransform(
     ubo.environmentIntensity = currentRenderScene.environment.intensity;
     ubo.environmentType = currentRenderScene.environment.type == VL::EnvironmentType::ProceduralSky ? 1 : 0;
     ubo.skyParameters = currentRenderScene.environment.skyParameters;
+    const float cameraExposureScale = VL::ExposureScale(camera.exposure);
+    const bool autoExposureEnabled =
+        camera.exposure.mode == VL::ExposureMode::Auto;
+    std::string exposureMessage;
+    (void)SetPassVectorComponent(
+        "toneMapping",
+        "u_toneMappingParams",
+        0,
+        cameraExposureScale,
+        "Tone mapping pass material instance is expired.",
+        exposureMessage);
+    (void)SetPassVector(
+        "toneMapping",
+        "u_exposureSettings",
+        Eigen::Vector4f(autoExposureEnabled ? 1.0f : 0.0f, 0, 0, 0),
+        exposureMessage);
+    // Bloom 阈值属于曝光后空间，与最终合成共用同一冻结相机，输出仍保留场景线性单位。
+    (void)SetPassVectorComponent(
+        "bloomPrefilter",
+        "u_bloomPrefilterParams",
+        3,
+        cameraExposureScale,
+        "Bloom prefilter material instance is expired.",
+        exposureMessage);
+    (void)SetPassVector(
+        "bloomPrefilter",
+        "u_exposureSettings",
+        Eigen::Vector4f(autoExposureEnabled ? 1.0f : 0.0f, 0, 0, 0),
+        exposureMessage);
     frameResources.UpdateGlobalUniformBuffer(commandBuffer, swapChainImageIndex, ubo);
+}
+
+void RenderSystem::UpdateExposureFrameTiming()
+{
+    const auto now = std::chrono::steady_clock::now();
+    if (!exposureClockInitialized)
+    {
+        exposureLastFrameTime = now;
+        exposureClockInitialized = true;
+        exposureDeltaSeconds = 1.0f / 60.0f;
+        return;
+    }
+
+    const double elapsed = std::chrono::duration<double>(
+        now - exposureLastFrameTime).count();
+    exposureLastFrameTime = now;
+    // 眼适应不应因断点、窗口拖拽或首帧长暂停瞬间跳到目标值。
+    exposureDeltaSeconds = static_cast<float>(
+        std::clamp(elapsed, 1.0 / 240.0, 0.1));
 }
 
 void RenderSystem::UpdateUBOGlobalForShadow(
@@ -3019,6 +3121,8 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
         ? renderGraph.GetSceneViewportOutput(swapChainImageIndex) : nullptr;
     if (renderToViewport && viewportOutput == nullptr)
         throw std::runtime_error("Editor scene viewport has no graph-owned output target.");
+    // 自动曝光按帧推进：它读上一帧的直方图并产出本帧的 EV，因此必须在录制之前更新。
+    UpdateExposureFrameTiming();
 
     {
         VulkanDebug::ScopedRegion frameRegion(
@@ -3035,7 +3139,13 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
                 ? offlineCoordinator->CapturePreview() : nullptr;
             // RT 只消费冻结的完整 film 或视口专用部分预览；导出接口不见预览。
             offlineDisplay.Record(commandBuffer, swapChainImageIndex,
-                result ? result->film : nullptr, preview, offlineAov, offlineExposure,
+                result ? result->film : nullptr, preview, offlineAov,
+                // 曝光取 master 的解析结果（手动/Auto 两模式），视口三个参数保留我方的：
+                // 编辑器视口输出与 graph 代数是本分支引入的，master 侧没有。
+                ResolveOfflineDisplayExposure(
+                    result.get(),
+                    offlineExposure,
+                    currentRenderScene.camera),
                 viewportOutput, renderGraph.GetOwnerGeneration(), GetSceneRenderExtent());
         }
         else
@@ -3076,6 +3186,13 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
                 renderPassName,
                 VulkanDebug::DebugCategory::ePass);
 
+            if (renderPass.type == VL::RenderGraphPassType::AutoExposure)
+            {
+                PassBarrier::PrepareForPass(commandBuffer, renderGraph, passIndex, swapChainImageIndex);
+                renderGraph.GetAutoExposure()->Record(commandBuffer, swapChainImageIndex,
+                    currentRenderScene.camera.exposure, exposureDeltaSeconds);
+                continue;
+            }
             VL::PassRuntimeContext passContext{
                 commandBuffer,
                 renderPass,
@@ -3143,6 +3260,8 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
     // RenderSystem only records pass commands. Queue, semaphore, fence,
     // swapchain, present, and retire epoch details stay backend-owned.
     rendererBackend->SubmitFrame(frameContext, currentFrame);
+    if (!offlineMode && renderGraph.GetAutoExposure())
+        renderGraph.GetAutoExposure()->OnFrameSubmitted();
 
     if (screenshotRecorded)
     {
@@ -3252,6 +3371,8 @@ void RenderSystem::InitializeFrameResources()
             &skyShReloadParticipant);
         shaderReloadCoordinator->RegisterComputeParticipant(
             &prefilterReloadParticipant);
+        shaderReloadCoordinator->RegisterComputeParticipant(&exposureHistogramReloadParticipant);
+        shaderReloadCoordinator->RegisterComputeParticipant(&exposureAdaptReloadParticipant);
     }
     environmentGpuTimer.Initialize(*rendererBackend);
 }
@@ -3272,6 +3393,8 @@ void RenderSystem::ShutdownFrameResources()
             &skyShReloadParticipant);
         shaderReloadCoordinator->UnregisterComputeParticipant(
             &prefilterReloadParticipant);
+        shaderReloadCoordinator->UnregisterComputeParticipant(&exposureHistogramReloadParticipant);
+        shaderReloadCoordinator->UnregisterComputeParticipant(&exposureAdaptReloadParticipant);
     }
     environmentIblBaker.Shutdown(*rendererBackend);
     proceduralSkyCubeGenerator.Shutdown(*rendererBackend);

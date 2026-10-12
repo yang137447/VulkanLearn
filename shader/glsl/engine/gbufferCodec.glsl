@@ -259,8 +259,10 @@ GBufferData EncodeGBuffer(in MaterialSurface surface, in GBufferPixelData pixelD
                 surface.selectiveOutputMask))
         : vec4(
             surface.metallic,
-            // 其它旧模型继续保留 V1 固定 0.5 的介电高光合同。
-            0.5,
+            // DefaultLit 必须保留作者 Specular，包括灰板的零高光。
+            // 未启用的旧模型仍保留 V1 固定 0.5，不改变其预留通道合同。
+            surface.shadingModel == SHADING_MODEL_DEFAULT_LIT
+                ? surface.specular : 0.5,
             surface.roughness,
             EncodeGBufferPacked(
                 surface.shadingModel,

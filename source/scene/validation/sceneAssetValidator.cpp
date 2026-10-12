@@ -1,4 +1,6 @@
 #include "sceneAssetValidator.h"
+#include "render/lighting/physicalLighting.h"
+#include "render/camera/cameraExposure.h"
 
 #include <cmath>
 #include <limits>
@@ -152,6 +154,7 @@ namespace
 
     void ValidateCameraObject(const nlohmann::json& objectJson, std::string_view context)
     {
+        VL::ReadCameraExposure(objectJson);
         RequireNumberField(objectJson, "fov", context);
         RequireNumberField(objectJson, "near_clip", context);
         RequireNumberField(objectJson, "far_clip", context);
@@ -212,6 +215,7 @@ SceneAssetBuildPlan SceneAssetValidator::BuildLoadPlan(
     {
         throw std::runtime_error("Scene must be a JSON object: " + std::string(scenePath));
     }
+    VL::ValidateWorldUnit(sceneJson);
     if (!sceneJson.contains("objects") || !sceneJson["objects"].is_array())
     {
         throw std::runtime_error("Scene is missing objects array: " + std::string(scenePath));
@@ -257,6 +261,15 @@ SceneAssetBuildPlan SceneAssetValidator::BuildLoadPlan(
             std::string(scenePath) + " objectIndex=" + std::to_string(objectIndex) +
                 " object=" + objectName);
         const std::string objectContext = BuildObjectContext(scenePath, objectIndex, objectType);
+        if (objectType == "directionalLight" || objectType == "pointLight" ||
+            objectType == "spotLight" || objectType == "squareAreaLight")
+        {
+            try { VL::ReadCanonicalLightIntensity(objectJson); }
+            catch (const std::exception& error)
+            {
+                throw std::runtime_error(std::string(error.what()) + ": " + objectContext);
+            }
+        }
 
         SceneAssetObjectPlan objectPlan;
         objectPlan.objectIndex = objectIndex;

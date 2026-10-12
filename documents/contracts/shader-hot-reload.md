@@ -107,9 +107,15 @@ V1 策略：
 - 提供 shader name、active pipeline/artifact、ABI 校验、replacement pipeline
   创建、descriptor rebuild recipe、事务提交。
 - 已接入 `ProceduralSkyCubeGenerator`（skyToCubemap）与 `EnvironmentIblBaker`
-  （skySHGenerate、prefilterEnvMap），注册/注销随 RenderSystem 帧资源生命周期。
+  （skySHGenerate、prefilterEnvMap），以及自动曝光的两条管线
+  （pass/autoExposureHistogram、pass/autoExposureAdapt）。
+  注册/注销随 RenderSystem 帧资源生命周期。
 - descriptor package 的替换在新 pool/set 全部预分配成功后 swap；旧 pool/set 与
   旧 pipeline 统一进 GPU epoch 退休队列。
+- 自动曝光 participant 适配器地址保持稳定，实际 `AutoExposureCompute` owner
+  属于 prepared RenderGraph，随 World/graph 事务原子替换和退休。
+  兼容的 shader reload 只替换管线与 descriptor package，保留当前 GPU 历史；
+  新图 owner 则重新建立历史，不从旧图或 swapchain image index 推导适应序列。
 
 ## UI Overlay Reload Participant
 

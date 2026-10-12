@@ -90,6 +90,17 @@
             ]
         },
         {
+            "name": "autoExposure",
+            "format": "R32_SFLOAT",
+            "widthSize": 1,
+            "heightSize": 1,
+            "initialLayout": "shaderRead",
+            "usage": [
+                "storage",
+                "sampled"
+            ]
+        },
+        {
             "name": "gbufferA",
             "format": "A2B10G10R10_UNORM_PACK32",
             "widthScale": 1,
@@ -574,6 +585,23 @@
             ]
         },
         {
+            "name": "autoExposure",
+            "type": "autoExposure",
+            "input": [
+                {
+                    "resource": "sceneColor",
+                    "binding": 0
+                }
+            ],
+            "output": [
+                {
+                    "resource": "autoExposure",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                }
+            ]
+        },
+        {
             "name": "bloomPrefilter",
             "type": "postProcess",
             "needCreateMaterial": true,
@@ -586,7 +614,12 @@
             },
             "input": [
                 {
-                    "resource": "sceneColor"
+                    "resource": "sceneColor",
+                    "binding": 0
+                },
+                {
+                    "resource": "autoExposure",
+                    "binding": 1
                 }
             ],
             "output": [
@@ -772,7 +805,12 @@
                     "resource": "gbufferVelocity"
                 },
                 {
-                    "resource": "selectionMask"
+                    "resource": "selectionMask",
+                    "binding": 3
+                },
+                {
+                    "resource": "autoExposure",
+                    "binding": 4
                 }
             ],
             "output": [

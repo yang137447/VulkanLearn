@@ -138,9 +138,14 @@ bool ChangedFloat(float value, float currentValue)
 
 // 运行时页 sun 滑条的范围（ui/runtime-control.rml 的 #sun-intensity-slider）。
 // Details 的强度控件与它共用同一条 SetSunIntensity 命令，必须同区间：那一页即使被隐藏，
-// 它的 0..10 双向 data binding 仍会把超范围值截断后回写一条新命令。
+// 它的双向 data binding 仍会把超范围值截断后回写一条新命令（历史上实测到 13→10 的抖动）。
+//
+// 这里跟随物理光照改为**勒克斯**：master 把运行时滑条与太阳强度语义一起迁到 lux
+// （`documents/contracts/physical-lighting-and-exposure.md` 记录旧单位 × 1000 = lux），
+// 而本仓库的编辑器面板不在 master 上，所以那次迁移改不到这里 —— 合并时由测试
+// `ActorIntensitySliderRangeMatchesTheRuntimeSunSlider` 抓出来，正是它存在的目的。
 constexpr float SunIntensityMin = 0.0f;
-constexpr float SunIntensityMax = 10.0f;
+constexpr float SunIntensityMax = 150000.0f;
 
 std::string ActorCountLabel(size_t count)
 {
@@ -1461,7 +1466,7 @@ std::string MaterialInstanceAssetEditorPanel::PrimaryDirectionalLightControls(
     intensity.label = "Intensity";
     intensity.value = SceneActorNumber(actor.light.intensity);
     intensity.change = {"actor-sun-intensity", 0};
-    // 范围与运行时页的 sun 滑条一致（0..10）；滑条只影响拖动粒度，文本输入仍是精确值。
+    // 范围与运行时页的 sun 滑条一致（0..150000 lux）；滑条只影响拖动粒度，文本输入仍是精确值。
     intensity.hasRange = true;
     intensity.minValue = SunIntensityMin;
     intensity.maxValue = SunIntensityMax;

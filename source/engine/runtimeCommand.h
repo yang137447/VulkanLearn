@@ -32,6 +32,7 @@ enum class RuntimeCommandType
     SetSpeedTreeGustingEnabled,
     ForceSpeedTreeGust,
     SetToneMappingMode,
+    SetCameraExposure,
     SetOfflineMode,
     SetOfflineSetting,
     SetOfflineAov,

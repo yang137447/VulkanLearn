@@ -20,6 +20,7 @@
 #include "render/environment/environmentIblBaker.h"
 #include "render/environment/environmentComputeReloadParticipants.h"
 #include "shader/reload/computeShaderArtifact.h"
+#include "render/camera/autoExposureCompute.h"
 #include "render/environment/environmentGpuTimer.h"
 #include "render/environment/environmentUpdateScheduler.h"
 #include "render/environment/environmentUpdateState.h"
@@ -289,6 +290,7 @@ private:
     void InitializeCurrentRenderSceneResources();
     void RecordAndSubmitCurrentRenderScene();
     void AdvanceSpeedTreeWindProfiles();
+    void UpdateExposureFrameTiming();
     void RenderInitialize();
     VL::RendererDescriptorContext BuildRendererDescriptorContext() const;
     VL::RendererDescriptorContext BuildRendererDescriptorContext(
@@ -401,6 +403,9 @@ private:
     float bloomThreshold = 1.0f;
     float bloomKnee = 0.5f;
     float bloomClamp = 12.0f;
+    float exposureDeltaSeconds = 1.0f / 60.0f;
+    bool exposureClockInitialized = false;
+    std::chrono::steady_clock::time_point exposureLastFrameTime;
     float speedTreeStrength = 0.35f;
     bool speedTreeGustingEnabled = true;
     bool hasRenderScene = false;
@@ -440,6 +445,8 @@ private:
         materialInstancePreviewAdapter;
     VL::RendererBackendVulkan* rendererBackend = nullptr;
     PipelineFactory* pipelineFactory = nullptr;
+    VL::AutoExposureReloadParticipant exposureHistogramReloadParticipant{0};
+    VL::AutoExposureReloadParticipant exposureAdaptReloadParticipant{1};
     VL::ShaderReloadCoordinator* shaderReloadCoordinator = nullptr;
     VL::ProceduralSkyCubeGenerator proceduralSkyCubeGenerator;
     VL::EnvironmentIblBaker environmentIblBaker;

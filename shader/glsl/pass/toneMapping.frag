@@ -6,6 +6,8 @@ layout(location = 0) in vec2 inUV;
 layout(location = 0) out vec4 outColor;
 
 layout(set = 1, binding = 0) uniform UBOMIParamters {
+    // x = 1 时读取本帧 Compute 最终曝光，与 Bloom 共用同一结果。
+    vec4 u_exposureSettings;
     // x = exposure, y = bloomStrength, z = saturation, w = toneMappingMode
     vec4 u_toneMappingParams;
 };
@@ -14,6 +16,7 @@ layout(set = 3, binding = 0) uniform sampler2D sceneColor;
 layout(set = 3, binding = 1) uniform sampler2D bloomColor;
 layout(set = 3, binding = 2) uniform sampler2D gbufferVelocity;
 layout(set = 3, binding = 3) uniform sampler2D selectionMask;
+layout(set = 3, binding = 4) uniform sampler2D autoExposure;
 
 // Tone Mapping Functions
 
@@ -191,8 +194,13 @@ void main()
     }
     else
     {
-        vec3 hdr = scene + bloom * bloomStrength;
-        vec3 exposed = hdr * exposure;
+        // Bloom 预过滤阶段已经完成曝光；这里仅曝光原始 sceneColor，
+        // 再与曝光后的 Bloom 合成，避免 Bloom 被重复曝光。
+        if (u_exposureSettings.x > 0.5)
+        {
+            exposure = texture(autoExposure, vec2(0.5)).r;
+        }
+        vec3 exposed = scene * exposure + bloom * bloomStrength;
         color = ApplyToneMap(exposed, mode);
         color = ApplySaturation(color, saturation);
     }
