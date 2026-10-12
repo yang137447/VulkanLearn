@@ -89,8 +89,15 @@ private:
     void CreateTargetCommandBuffers(VL::PresentTarget &target);
     void DestroyTargetCommandBuffers(VL::PresentTarget &target);
 
-    void CreateSyncObjects();
-    void DestroySyncObjects();
+    // 帧级同步对象（imageAcquiredSemaphores / taskFinishedFences）：按 MAX_FRAMES_IN_FLIGHT
+    // 分配，与 swapchain 图像数无关，因此生命周期与设备一致，**不随重建销毁**。
+    void CreateFrameSyncObjects();
+    void DestroyFrameSyncObjects();
+
+    // 每目标同步对象（renderFinishedSemaphores / imagesInFlightFences）：按该目标图像数分配，
+    // 随该目标重建。
+    void CreateTargetSyncObjects(VL::PresentTarget &target);
+    void DestroyTargetSyncObjects(VL::PresentTarget &target);
 
 private:
     // 目标 0 是主窗口。它的存在是"多窗口尚未接线"这一事实，所以只在这里出现一次，

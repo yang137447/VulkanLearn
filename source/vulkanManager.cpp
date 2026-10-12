@@ -27,18 +27,20 @@ void VulkanManager::Init(std::vector<const char *> &extensions, SDL_Window *wind
     // 池是共享的，先建一次；随后各目标从它分配自己的每图像缓冲。
     CreateCommandPool();
     CreateTargetCommandBuffers(defaultTarget());
-    CreateSyncObjects();
+    CreateFrameSyncObjects();
+    CreateTargetSyncObjects(defaultTarget());
 }
 
 VulkanManager::~VulkanManager()
 {
     device.waitIdle(); //等待设备空闲
-    DestroySyncObjects();
     for (VL::PresentTarget &target : presentTargets)
     {
+        DestroyTargetSyncObjects(target);
         DestroyTargetCommandBuffers(target);
         DestroyVkSwapChain(target);
     }
+    DestroyFrameSyncObjects();
     DestroyCommandPool();
     DestroyVkDevice();
     for (VL::PresentTarget &target : presentTargets)
@@ -61,16 +63,16 @@ void VulkanManager::ReCreateSwapChain(int newWidth, int newHeight)
         static_cast<uint32_t>(newHeight)
     };
 
-    // 只动这个目标：共享命令池**不重建**，否则会连带毁掉别的窗口的缓冲
-    // 与正在进行的一次性命令。同步对象目前仍是全局的（见路线图阶段 1 第三片说明），
-    // 因此这里仍会重建它们 —— 那是下一步要按目标拆开的部分。
-    DestroySyncObjects();
+    // 只动这个目标。共享资源（命令池、帧级信号量与 fence）都不重建：
+    // 它们按 MAX_FRAMES_IN_FLIGHT 或设备生命周期分配，与这个窗口的图像数无关，
+    // 重建它们会连带影响别的窗口与正在进行的一次性命令。
+    DestroyTargetSyncObjects(target);
     DestroyTargetCommandBuffers(target);
     DestroyVkSwapChain(target);
 
     CreateVkSwapChain(target);
     CreateTargetCommandBuffers(target);
-    CreateSyncObjects();
+    CreateTargetSyncObjects(target);
 }
 
 void VulkanManager::CreateVkInstance()
@@ -435,12 +437,12 @@ void VulkanManager::DestroyTargetCommandBuffers(VL::PresentTarget &target)
     target.commandBuffers.clear();
 }
 
-void VulkanManager::CreateSyncObjects()
+void VulkanManager::CreateFrameSyncObjects()
 {
-    //创建 Semaphore
+    // 帧级同步对象：按 MAX_FRAMES_IN_FLIGHT 分配，**与 swapchain 图像数无关**，
+    // 因此生命周期与设备一致，不随任何窗口的重建而销毁。它与按目标的同步对象混在一个函数里
+    // 曾是"重建时把全局对象一起重建"的来源。
     imageAcquiredSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
-    defaultTarget().renderFinishedSemaphores.resize(defaultTarget().imageCount);
-
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
     {
         vk::SemaphoreCreateInfo imageAcquiredSemaphoreCreateInfo;
@@ -448,18 +450,12 @@ void VulkanManager::CreateSyncObjects()
         assert(imageAcquiredSemaphores[i]);
         VulkanDebug::SetObjectName(device, imageAcquiredSemaphores[i], vk::ObjectType::eSemaphore, "Semaphore: ImageAcquired (Frame " + std::to_string(i) + ")");
     }
-    for (size_t i = 0; i < defaultTarget().imageCount; i++)
-    {
-        vk::SemaphoreCreateInfo renderFinishedSemaphoreCreateInfo;
-        defaultTarget().renderFinishedSemaphores[i] = device.createSemaphore(renderFinishedSemaphoreCreateInfo);
-        assert(defaultTarget().renderFinishedSemaphores[i]);
-        VulkanDebug::SetObjectName(device, defaultTarget().renderFinishedSemaphores[i], vk::ObjectType::eSemaphore, "Semaphore_RenderFinished_" + std::to_string(i));
-    }
+
     //创建 Fence
     vk::FenceCreateInfo fenceCreateInfo;
     fenceCreateInfo
         .setFlags(vk::FenceCreateFlagBits::eSignaled); // 设置为signaled状态，表示初始状态为完成
-    
+
     taskFinishedFences.resize(MAX_FRAMES_IN_FLIGHT);
     for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
     {
@@ -467,11 +463,9 @@ void VulkanManager::CreateSyncObjects()
         assert(result == vk::Result::eSuccess);
         VulkanDebug::SetObjectName(device, taskFinishedFences[i], vk::ObjectType::eFence, "Fence: TaskFinished (FrameIndex " + std::to_string(i) + ")");
     }
-
-    defaultTarget().imagesInFlightFences.resize(defaultTarget().imageCount, nullptr);
 }
 
-void VulkanManager::DestroySyncObjects()
+void VulkanManager::DestroyFrameSyncObjects()
 {
     for (vk::Semaphore& semaphore : imageAcquiredSemaphores)
     {
@@ -482,15 +476,6 @@ void VulkanManager::DestroySyncObjects()
     }
     imageAcquiredSemaphores.clear();
 
-    for (vk::Semaphore& semaphore : defaultTarget().renderFinishedSemaphores)
-    {
-        if (semaphore)
-        {
-            device.destroySemaphore(semaphore);
-        }
-    }
-    defaultTarget().renderFinishedSemaphores.clear();
-    
     for (vk::Fence& fence : taskFinishedFences)
     {
         if (fence)
@@ -499,6 +484,34 @@ void VulkanManager::DestroySyncObjects()
         }
     }
     taskFinishedFences.clear();
-
-    defaultTarget().imagesInFlightFences.clear();
 }
+
+// 每目标同步对象：按该目标的 swapchain 图像数分配，因此随目标重建。
+void VulkanManager::CreateTargetSyncObjects(VL::PresentTarget &target)
+{
+    target.renderFinishedSemaphores.resize(target.imageCount);
+    for (size_t i = 0; i < target.imageCount; i++)
+    {
+        vk::SemaphoreCreateInfo renderFinishedSemaphoreCreateInfo;
+        target.renderFinishedSemaphores[i] = device.createSemaphore(renderFinishedSemaphoreCreateInfo);
+        assert(target.renderFinishedSemaphores[i]);
+        VulkanDebug::SetObjectName(device, target.renderFinishedSemaphores[i], vk::ObjectType::eSemaphore, "Semaphore_RenderFinished_" + std::to_string(i));
+    }
+
+    // 每图像一个 in-flight fence，初值 nullptr（表示该图像还没有在飞的提交）。
+    target.imagesInFlightFences.resize(target.imageCount, nullptr);
+}
+
+void VulkanManager::DestroyTargetSyncObjects(VL::PresentTarget &target)
+{
+    for (vk::Semaphore& semaphore : target.renderFinishedSemaphores)
+    {
+        if (semaphore)
+        {
+            device.destroySemaphore(semaphore);
+        }
+    }
+    target.renderFinishedSemaphores.clear();
+    target.imagesInFlightFences.clear();
+}
+
