@@ -94,8 +94,12 @@ Vulkan 没有 GL 的隐式 context sharing，因此每窗口必须有**显式**�
   因此约 54 处调用点一行未改 —— 这一片因此可证行为中性。
   验证：搬移前后同场景 1280x720 截图逐像素比对，差异 **37 像素且全部落在
   `x1238..1243, y705..712`（状态栏 FPS 计数）**，区域外 **0** 差异。
-- ⬜ 第二片：把访问器改为接受目标身份；`rhiDeviceVulkan` 的 11 个函数与 `rendererBackendVulkan`
-  的 10 个函数带目标；`swapchainRecreateRequired` 变每目标。**到此为止不动场景代码。**
+- ✅ **第二片（`ecc1834`）**：呈现函数改为接受 `VL::PresentTarget&`（RHI 10 个 + backend 帧路径），
+  并**删掉** `VulkanManager` 的 8 个按目标访问器与 RHI 的 `GetSwapchain()`。
+  身份用**引用**而不是索引：调用点要知道"哪个目标"，而不是"容器第几项"。
+  默认目标只剩一处（`VulkanManager::defaultTarget()`），让"多窗口尚未接线"这个事实可被 grep。
+  **仍未做到**：backend 的 `BeginFrame`/`SubmitFrame` 与 `RenderGraph` 依然隐含主窗口 ——
+  这一片消除的是"当初不可能"的原因，不是把第二窗口打通。
 - ⬜ 第三片：每目标命令缓冲与 `presentQueueFamilyIndex`。**必须与命令池归属一起做** ——
   `DestroyVkCommandBuffer` 现在会销毁共享的 `commandPool`，而 `BeginSingleTimeCommands`
   也在用它（见下"既有缺陷"第 2 条）。
