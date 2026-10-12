@@ -68,11 +68,11 @@ Vulkan 没有 GL 的隐式 context sharing，因此每窗口必须有**显式**�
 | 对象 | 归属 | 依据 |
 | --- | --- | --- |
 | `instance` / `device` / `graphicsQueue` / `commandPool` | **共享** | 设备只创建一次；窗口 2 复用 `graphicsQueueFamilyIndex`，只对新 surface 做 `getSurfaceSupportKHR` |
-| `imageAcquiredSemaphores` | **共享**（`MAX_FRAMES_IN_FLIGHT` = 2，`commonFunction.h:18`） | 帧级，不是图像级 |
-| `taskFinishedFences` | **共享**（同上） | 帧级 |
-| `surface` / `surfaceFormat` / `swapChainExtent` / `swapChainImageCount` / `swapChain` / `presentImages` / `swapChainImageViews` | **每目标** | `VulkanManager.h:113-120` |
-| `renderFinishedSemaphores` / `imagesInFlightFences` / `commandBuffers` | **每目标**，按 `swapChainImageCount` 分配 | `vulkanManager.cpp:410,439,376` |
-| `presentQueueFamilyIndex` | **每目标**（对各自 surface 解析） | `vulkanManager.cpp:133` 目前只对窗口 0 的 surface 解析 |
+| `imageAcquiredSemaphores` | **共享**（`MAX_FRAMES_IN_FLIGHT` = 2） | 帧级，不是图像级；✅ 已与设备同生命周期（`9d929f8`） |
+| `taskFinishedFences` | **共享**（同上） | 帧级；✅ 同上 |
+| `surface` / `surfaceFormat` / `swapChainExtent` / `swapChainImageCount` / `swapChain` / `presentImages` / `swapChainImageViews` | **每目标** | ✅ 已移入 `PresentTarget`（`8c52b07`） |
+| `renderFinishedSemaphores` / `imagesInFlightFences` / `commandBuffers` | **每目标**，按 `swapChainImageCount` 分配 | ✅ 均已移入 `PresentTarget`（`a183bbf` / `9d929f8`） |
+| `presentQueueFamilyIndex` | **每目标**（对各自 surface 解析） | ⬜ 已移入 `PresentTarget`，但解析仍只对目标 0 做（`vulkanManager.cpp:133`） |
 
 两套索引的纪律记录在 `source/render/backend/rendererBackendVulkan.cpp:1803-1832`，
 由 `rhiDeviceVulkan.cpp:27-41` 的 `RequireFrameSyncIndex` 强制。
