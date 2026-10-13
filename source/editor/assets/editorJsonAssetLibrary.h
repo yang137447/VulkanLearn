@@ -32,7 +32,7 @@ bool ParseEditorJsonAsset(std::string_view assetPath, std::string_view jsonText,
 // 仅检查相对路径的词法约束；实际文件的 canonical 越界检查另由 worker 在读取前执行。
 bool ValidateEditorJsonAssetPath(std::string_view assetPath, std::string& error);
 
-// GT facade 接收 UI 查看/刷新意图，独立 worker 只读取资源根内的 JSON 元数据。
+// GT facade 接收 UI 查看/刷新意图；worker 扫描 JSON，显式打开贴图另解码根内 source。
 // 所有公开方法由同一 GT 调用；只有 Poll 发布不可变快照，不加载 World/data/GPU、不写资产。
 class EditorJsonAssetLibrary
 {

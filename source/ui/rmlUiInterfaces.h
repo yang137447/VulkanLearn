@@ -1,4 +1,5 @@
 #pragma once
+#include "editor/assets/editorJsonAssetTypes.h"
 
 #include <chrono>
 #include <cstdint>
@@ -102,6 +103,8 @@ public:
     void BeginFrame(UiRenderSnapshot& renderSnapshot);
     void EndFrame();
     void AppendTextureSnapshots(std::vector<UiTextureSnapshot>& outTextures) const;
+    void PublishTexturePreview(const std::shared_ptr<const EditorUi::EditorJsonDocumentSnapshot>& document);
+    void PublishThumbnails(const std::shared_ptr<const EditorUi::EditorThumbnailSnapshot>& snapshot);
 
 private:
     struct CompiledGeometry;
@@ -133,6 +136,11 @@ private:
     uint64_t nextTextureGeneration = 1;
     std::unordered_map<UiTextureId, TextureRecord> textures;
     std::unordered_set<UiTextureId> pendingTextureReleases;
+    // 弱引用不延长已关闭标签的 CPU 像素寿命；Rml 纹理沿现有快照/GPU 退役路径释放。
+    std::unordered_map<std::string, std::weak_ptr<const EditorUi::EditorTexturePreview>> previewSources;
+    std::weak_ptr<const EditorUi::EditorJsonDocumentSnapshot> lastPreviewDocument;
+    std::weak_ptr<const EditorUi::EditorThumbnailSnapshot> lastThumbnails;
+    std::unordered_set<std::string> thumbnailSources;
 };
 
 } // namespace VL

@@ -32,6 +32,7 @@ std::string BodyId(const std::string& panel)
     if (panel == "outliner") return "editor-navigation";
     if (panel == "details") return "editor-inspector";
     if (panel == "content") return "content-browser-page";
+    if (panel.rfind("resource:material:", 0) == 0) return "material-editor";
     if (panel == "resource" || DockWorkspace::IsResourceDocumentPanel(panel))
         return "resource-editor";
     return "renderer-page";
@@ -65,16 +66,19 @@ std::string BaseTabMarkup(const std::string& panel)
         "<span id=\"workspace-resource-label\">Asset Editor</span>";
 }
 
-// 资源文档标签的图标/文字 id 是**契约元素**：ui/editor-workspace.rml 里的
-// #workspace-resource-tab 带着它们，ValidateDocument 要求这两个 id 存在，
-// editor-workspace.rcss 也按这两个 id 定义图标尺寸与省略号截断。不要把它们去掉。
+// 静态占位保留 ValidateDocument 要求的 id；动态多文档标签用 class，避免重复 id。
+// 标签文字必须重写以触发布局，关闭地址与文档快照同代更新。
 std::string ResourceTabMarkup(const EditorDockResourceTab& tab)
 {
     const std::string label = tab.label.empty()
         ? std::filesystem::path(tab.path).filename().string()
         : tab.label;
-    return "<img id=\"workspace-resource-icon\" src=\"" + Text(tab.icon) +
-        "\"/><span id=\"workspace-resource-label\">" + Text(label) + "</span>";
+    std::string markup = "<img class=\"resource-tab-icon\" src=\"" + Text(tab.icon) +
+        "\"/><span class=\"resource-tab-label\">" + Text(label) + "</span>";
+    if (tab.documentIndex >= 0)
+        markup += "<span class=\"tab-close\" data-action=\"close\" data-index=\"" +
+            std::to_string(tab.documentIndex) + "\" title=\"Close Material Instance\">x</span>";
+    return markup;
 }
 
 // 每个标签的内容都在这里生成，且**永不产出空标签**：resource 文档面板若在 resourceTabs
@@ -591,6 +595,12 @@ void EditorDockingController::RebuildShell()
         for (const auto* current = restoreFocus; current != nullptr; current = current->GetParentNode())
             if (current == body) businessFocus = true;
     }
+    for (const char* id : {"material-editor", "resource-editor"})
+    {
+        const auto* body = document->GetElementById(id);
+        for (const auto* current = restoreFocus; current != nullptr; current = current->GetParentNode())
+            if (current == body) businessFocus = true;
+    }
     // 壳元素会销毁，只有保留下来的业务子树指针才能跨越重排。
     if (!businessFocus) restoreFocus = nullptr;
     auto* parking = document->GetElementById("dock-parking");
@@ -609,17 +619,20 @@ void EditorDockingController::RebuildShell()
         // 而不是解引用空元素 —— 缺元素应当是"跳过并重建"，不是崩溃。
         auto* resourceBody = document->GetElementById(BodyId("resource"));
         if (resourceBody != nullptr) MoveElement(*resourceBody, *parking);
+        auto* materialBody = document->GetElementById("material-editor");
+        if (materialBody != nullptr) MoveElement(*materialBody, *parking);
     }
     // 动态标签将按当前列表重建，不能同时把旧标签停放并生成同 ID 的副本。
     Rml::ElementList oldResourceTabs;
-    document->QuerySelectorAll(oldResourceTabs, ".workspace-resource-tab");
+    document->QuerySelectorAll(oldResourceTabs, ".workspace-asset-tab");
     for (auto* tab : oldResourceTabs) tab->GetParentNode()->RemoveChild(tab);
     std::string resourceMarkup;
     for (const auto& tab : resourceTabs)
     {
         resourceMarkup += "<button id=\"" + TabId(tab.panel) +
             "\" data-workspace-panel=\"" + Text(tab.panel) +
-            "\" title=\"" + Text(tab.path) + "\" class=\"workspace-resource-tab\">";
+            "\" title=\"" + Text(tab.path) + "\" class=\"workspace-asset-tab " +
+            (tab.documentIndex >= 0 ? "workspace-material-tab" : "workspace-resource-tab") + "\">";
         resourceMarkup += "<img src=\"" + Text(tab.icon) +
             "\"/><span>" + Text(tab.label) + "</span></button>";
     }
@@ -745,7 +758,9 @@ void EditorDockingController::Sync()
     if (restoreFocus != nullptr)
     {
         // RemoveChild 会临时转移 RmlUi 焦点；只恢复仍然处于活动业务面板内的原控件。
-        for (const auto& panel : DockWorkspace::Panels())
+        auto panels = DockWorkspace::Panels();
+        for (const auto& tab : resourceTabs) panels.push_back(tab.panel);
+        for (const auto& panel : panels)
         {
             const uint32_t stack = workspace.FindStack(panel);
             if (stack == 0) continue;
@@ -780,7 +795,7 @@ void EditorDockingController::SetResourceTabs(
             const auto& lhs = tabs[index];
             const auto& rhs = resourceTabs[index];
             if (lhs.panel != rhs.panel || lhs.path != rhs.path || lhs.label != rhs.label ||
-                lhs.icon != rhs.icon)
+                lhs.icon != rhs.icon || lhs.documentIndex != rhs.documentIndex)
             {
                 changed = true;
                 break;
@@ -943,6 +958,9 @@ bool EditorDockingController::ProcessEvent(Rml::Event& event, bool modal)
         return false;
     }
     auto* element = event.GetTargetElement();
+    // 关闭按钮只交给文档宿主，不能顺带激活标签或开始停靠拖动。
+    for (auto* target = element; target != nullptr && target != document; target = target->GetParentNode())
+        if (target->GetAttribute<std::string>("data-action", "") == "close") return false;
     const std::string type = event.GetType();
     const auto point = event.GetUnprojectedMouseScreenPos();
     const float x = point.x, y = point.y - 41.0f;
@@ -1007,7 +1025,9 @@ UiViewportRect EditorDockingController::GetSceneViewportRect() const
 {
     if (document == nullptr || !document->IsVisible()) return {};
     // 模型标签的预览与关卡视口共享当前 World 输出，优先取可见模型预览的矩形。
-    auto* image = document->GetElementById("resource-preview-image");
+    auto* image = document->GetElementById("material-preview-image");
+    if (image == nullptr || !image->IsVisible(true))
+        image = document->GetElementById("resource-preview-image");
     if (image == nullptr || !image->IsVisible(true))
     {
         const uint32_t stack = workspace.FindStack("viewport");

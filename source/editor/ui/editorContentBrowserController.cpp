@@ -450,7 +450,11 @@ std::string EditorContentBrowserController::EntriesMarkup(const Window& window) 
             "\"><img class=\"asset-preview\" src=\"" + icon + "\"/><span class=\"asset-name\">" +
             UiWidgets::Text(entry.name) + "</span><span class=\"asset-kind\">" +
             (entry.folder ? "Folder" : EditorAssetKindName(entry.kind)) + "</span>";
-        if (!entry.folder) markup += "<span class=\"asset-dirty\" style=\"display: none;\">*</span>";
+        if (!entry.folder)
+        {
+            markup += "<span class=\"asset-dirty\" style=\"display: none;\">*</span>";
+            markup += "<img class=\"asset-type-badge\" src=\"" + std::string(icon) + "\"/>";
+        }
         markup += "</button>";
     }
     if (window.bottom > 0.0f)
@@ -584,12 +588,55 @@ void EditorContentBrowserController::Build(const MaterialInstanceEditorSnapshot&
     visibleWindow = window;
     presentationDirty = false;
     if (domChanged || catalogChanged || dirtyChanged || selectionDirty) SyncVisibleState();
+    SyncThumbnails(snapshot.thumbnails, domChanged || catalogChanged);
     widgets.SetMarkup("browser-selection", UiWidgets::Text(selectedPath.empty() ? "No selection" : selectedPath));
     selectionDirty = false;
     widgets.SetMarkup("asset-empty", (snapshot.browserLoading || snapshot.assetCatalogLoading) ? "Loading..." :
         (query.empty() && typeFilter == "all" ?
             (snapshot.assetCatalog ? "No assets found." : "No material instances found.") : "No matching assets."));
     widgets.SetProperty("asset-empty", "display", entries.empty() ? "block" : "none");
+}
+
+std::vector<std::string> EditorContentBrowserController::VisibleThumbnailPaths() const
+{
+    std::vector<std::string> paths;
+    if (document == nullptr || !document->GetElementById("asset-list")->IsVisible(true) || !grid) return paths;
+    for (const auto& node : visibleNodes)
+        if (!node.entry->folder && (node.entry->kind == EditorAssetKind::Texture ||
+            node.entry->kind == EditorAssetKind::Mesh || node.entry->kind == EditorAssetKind::MaterialInstance))
+            paths.push_back(node.entry->path);
+    return paths;
+}
+
+void EditorContentBrowserController::SyncThumbnails(
+    const std::shared_ptr<const EditorThumbnailSnapshot>& snapshot, bool force)
+{
+    if (!force && snapshot == thumbnails) return;
+    thumbnails = snapshot;
+    for (const auto& node : visibleNodes)
+    {
+        if (node.entry->folder) continue;
+        const auto& entry = *node.entry;
+        const EditorThumbnail* thumbnail = nullptr;
+        if (grid && snapshot)
+        {
+            const auto found = snapshot->entries.find(entry.path);
+            if (found != snapshot->entries.end()) thumbnail = &found->second;
+        }
+        auto* image = node.element->GetChild(0);
+        const bool ready = thumbnail && thumbnail->image;
+        const std::string source = ready ? thumbnail->source : EditorAssetKindIcon(entry.kind);
+        if (image->GetAttribute<std::string>("src", "") != source)
+        {
+            image->SetAttribute("src", source);
+            ++stats.thumbnailWrites;
+        }
+        node.element->SetClass("has-thumbnail", ready);
+        const std::string title = entry.name + "\n" + entry.path +
+            (thumbnail && !thumbnail->diagnostic.empty() ? "\n" + thumbnail->diagnostic : "");
+        if (node.element->GetAttribute<std::string>("title", "") != title)
+            node.element->SetAttribute("title", title);
+    }
 }
 
 bool EditorContentBrowserController::ProcessEvent(Rml::Event& event, std::optional<std::string>& openAssetPath)

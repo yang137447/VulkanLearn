@@ -74,6 +74,10 @@ MaterialInputs EvaluateMaterialInputs(in MaterialFunctionContext context);
 
 它存在的理由与边界：
 
+- **尺寸按 cm 定义**：小格 10 cm、每 10 格一条主线（1 m），XZ 各覆盖 -240 到 +240 cm。
+  线半宽为 0.12/0.2 cm（次线/主线），Y 轴高 40 cm，地面抬升 0.02 cm。
+  这是固定十进制参考网格，不是 UE 随视距自适应的完整实现，也不是 HDRI 自带的棋盘纹理。
+
 - **它是场景几何，不是 UI 叠层。** 画在 `sceneColor` / `sceneDepth` 上、`loadOp: load`，
   因此深度测试能正确遮挡它。做成 UI 叠层反而要手工复现相机投影 —— 而相机的 aspect 已经
   由 `EngineLoop::SynchronizeSceneViewport` 按视口 rect 设好，跟着场景走就自动正确。

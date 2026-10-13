@@ -54,6 +54,19 @@ bool IsQuadWithSharedCorners(
 
 } // namespace
 
+TEST(EditorViewportGridGeometry, ReferenceDimensionsUseCentimeters)
+{
+    // 固定物理尺寸，避免测试仅跟随实现常量变化而漏掉单位退化。
+    EXPECT_FLOAT_EQ(kEditorGridSpacing, 10.0f);
+    EXPECT_FLOAT_EQ(kEditorGridSpacing * kEditorGridMajorLineStep, 100.0f);
+    EXPECT_FLOAT_EQ(2.0f * kExtent, 480.0f);
+    const auto vertices = BuildEditorGridVertices();
+    float maxX = 0.0f;
+    for (const auto& vertex : vertices)
+        maxX = std::max(maxX, std::abs(vertex.position.x()));
+    EXPECT_NEAR(maxX, 240.12f, 0.001f);
+}
+
 TEST(EditorViewportGridGeometry, GroundVerticesAreLiftedOffTheGroundPlane)
 {
     const std::vector<Vertex> vertices = BuildEditorGridVertices();

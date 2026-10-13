@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <iomanip>
 #include <sstream>
+#include <tuple>
 #include <utility>
 
 #include <RmlUi/Core/Context.h>
@@ -36,12 +37,31 @@ using UiWidgets::Option;
 using UiWidgets::WidgetAction;
 using UiWidgets::WidgetRefreshScope;
 
+bool SameOfflineControls(const UiViewModelSnapshot& a, const UiViewModelSnapshot& b)
+{
+    return std::tie(a.offlineMode, a.offlineState, a.offlineSamples,
+        a.offlineCompletedSamples, a.offlineBounces, a.offlineLightSamples,
+        a.offlineSeed, a.offlineAov, a.offlineExposure, a.offlineError, a.offlineUiNotice) ==
+        std::tie(b.offlineMode, b.offlineState, b.offlineSamples,
+        b.offlineCompletedSamples, b.offlineBounces, b.offlineLightSamples,
+        b.offlineSeed, b.offlineAov, b.offlineExposure, b.offlineError, b.offlineUiNotice);
+}
+
+bool SameTextureOptions(const std::vector<EditorTextureAssetSnapshot>& a,
+    const std::vector<EditorTextureAssetSnapshot>& b)
+{
+    if (a.size() != b.size()) return false;
+    for (size_t index = 0; index < a.size(); ++index)
+        if (a[index].assetPath != b[index].assetPath || a[index].valid != b[index].valid)
+            return false;
+    return true;
+}
+
 // 文档命令的可用性统一作用在所有发出该命令的控件上，避免出现两套互相矛盾的启用状态。
-// 工具条不再重复排列这些命令（见 editor-workspace.rml 的注释），所以只剩菜单项；
-// 这里保留数组形式，将来再加其它发布点时只需追加 id。
+// 菜单和中央材质页使用同一份文档命令可用性。
 constexpr const char* DocumentCommandIds[] = {
     "menu-file-save", "menu-file-revert", "menu-file-reload",
-    "menu-edit-reset", "menu-edit-validate"};
+    "menu-edit-reset", "menu-edit-validate", "material-save"};
 
 std::string Number(float value)
 {
@@ -136,14 +156,7 @@ bool ChangedFloat(float value, float currentValue)
     return std::abs(value - currentValue) > 0.0001f;
 }
 
-// 运行时页 sun 滑条的范围（ui/runtime-control.rml 的 #sun-intensity-slider）。
-// Details 的强度控件与它共用同一条 SetSunIntensity 命令，必须同区间：那一页即使被隐藏，
-// 它的双向 data binding 仍会把超范围值截断后回写一条新命令（历史上实测到 13→10 的抖动）。
-//
-// 这里跟随物理光照改为**勒克斯**：master 把运行时滑条与太阳强度语义一起迁到 lux
-// （`documents/contracts/physical-lighting-and-exposure.md` 记录旧单位 × 1000 = lux），
-// 而本仓库的编辑器面板不在 master 上，所以那次迁移改不到这里 —— 合并时由测试
-// `ActorIntensitySliderRangeMatchesTheRuntimeSunSlider` 抓出来，正是它存在的目的。
+// Details 强度以 lux 表示，保留物理光照迁移后的作者范围；不再受旧调试页滑条约束。
 constexpr float SunIntensityMin = 0.0f;
 constexpr float SunIntensityMax = 150000.0f;
 
@@ -256,6 +269,11 @@ std::string ResourcePanelId(const std::string& path)
     return stream.str();
 }
 
+std::string MaterialPanelId(const std::string& path)
+{
+    return "resource:material:" + ResourcePanelId(path).substr(9);
+}
+
 std::string RenderStateOptions(const std::string& name)
 {
     std::string result;
@@ -363,7 +381,8 @@ MaterialInstanceAssetEditorPanel::~MaterialInstanceAssetEditorPanel()
 bool MaterialInstanceAssetEditorPanel::ValidateDocument(Rml::ElementDocument& candidate, std::string& error)
 {
     for (const char* id : {
-        "scene-models", "material-slots", "asset-list", "document-tabs",
+        "scene-models", "material-slots", "asset-list", "material-editor", "actor-details-content",
+        "material-preview-image", "material-preview-status", "material-frame",
         "document-title", "document-status", "editor-notice", "details-content",
         "offline-status", "offline-notice", "close-dialog", "close-document-name",
         "mode-realtime", "mode-offline", "menu-file-save", "menu-file-revert",
@@ -381,6 +400,9 @@ bool MaterialInstanceAssetEditorPanel::ValidateDocument(Rml::ElementDocument& ca
         "resource-preview-title", "resource-preview-kind", "resource-preview-surface",
         "resource-preview-icon", "resource-preview-status", "resource-preview-path",
         "resource-preview-image",
+        "resource-texture-image",
+        "resource-texture-fit",
+        "resource-frame",
         "resource-model-tools", "resource-tool-select", "resource-tool-move", "resource-tool-rotate",
         "resource-tool-scale", "resource-space-world", "resource-space-local", "resource-model-info",
         "resource-model-name", "resource-model-path", "resource-model-status", "resource-model-fields",
@@ -431,6 +453,7 @@ bool MaterialInstanceAssetEditorPanel::Attach(Rml::ElementDocument& candidate, s
     document->AddEventListener("mousedown", this, true);
     document->AddEventListener("mousemove", this, true);
     document->AddEventListener("mouseup", this, true);
+    document->AddEventListener("mousescroll", this, true);
     if (!docking.Attach(candidate, error))
     {
         Detach();
@@ -457,6 +480,7 @@ bool MaterialInstanceAssetEditorPanel::Attach(Rml::ElementDocument& candidate, s
         return false;
     }
     detailsIdentity.clear();
+    actorDetailsIdentity.clear();
     RefreshWorkspace();
     RefreshLists();
     RefreshDetails();
@@ -466,6 +490,12 @@ bool MaterialInstanceAssetEditorPanel::Attach(Rml::ElementDocument& candidate, s
 
 void MaterialInstanceAssetEditorPanel::Detach()
 {
+    textureViewSource.clear();
+    ResetTextureView();
+    previewDragButton = -1;
+    runtimeControlsCurrent = false;
+    textureOptionsDirty = true;
+    textureOptionSelections.clear();
     if (document != nullptr)
     {
         document->RemoveEventListener("click", this);
@@ -474,6 +504,7 @@ void MaterialInstanceAssetEditorPanel::Detach()
         document->RemoveEventListener("mousedown", this, true);
         document->RemoveEventListener("mousemove", this, true);
         document->RemoveEventListener("mouseup", this, true);
+        document->RemoveEventListener("mousescroll", this, true);
         contentBrowser.Detach();
         jsonInspector.Detach();
         resourceJsonInspector.Detach();
@@ -580,7 +611,19 @@ void MaterialInstanceAssetEditorPanel::Build(const MaterialInstanceEditorSnapsho
 {
     // 不把旧 UI 修改静默重定位到新文档或新 revision；CommandBus 负责拒绝过期 batch。
     FlushPendingEdits();
+    textureOptionsDirty = textureOptionsDirty || !SameTextureOptions(snapshot.textureAssets, value.textureAssets);
+    const std::string previousDocument = snapshot.selectedDocumentPath;
     snapshot = value;
+    // 文档集合由服务拥有，停靠标签只是投影；关卡/贴图页面不会被每帧刷新抢走。
+    RefreshDocumentTabs();
+    if ((activateMaterialDocument || previousDocument != snapshot.selectedDocumentPath) &&
+        !snapshot.selectedDocumentPath.empty())
+    {
+        docking.SetPanelVisible(MaterialPanelId(snapshot.selectedDocumentPath), true);
+        docking.Activate(MaterialPanelId(snapshot.selectedDocumentPath));
+        activateMaterialDocument = false;
+        viewingJson = false;
+    }
     RefreshWorkspace();
     resourceEditorVisible = IsResourceEditorVisible();
     if (saveThenClose && !saveCloseSubmitted && snapshot.activeDocument &&
@@ -624,6 +667,7 @@ void MaterialInstanceAssetEditorPanel::Build(const MaterialInstanceEditorSnapsho
             snapshot.jsonDocument != nullptr && snapshot.jsonDocument->assetPath == active->path)
             resourceEditor.SetDocument(snapshot.jsonDocument, snapshot.jsonDocumentLoading);
         RefreshResourceEditor();
+        RefreshMaterialPreview();
         SetMarkup("close-document-name", Text(pendingClosePath));
         SetMarkup("close-document-status", Text(snapshot.statusMessage));
         SetDisabled("close-save", saveThenClose);
@@ -720,6 +764,17 @@ void MaterialInstanceAssetEditorPanel::RefreshViewportToolbar()
     // 工具栏不声明自己没有设置过的调试视图，因此其他调试模式在这三个按钮上都没有高亮。
     SetViewportToolbarClass("viewport-view-lit", runtimeView.debugViewMode == 0);
     SetViewportToolbarClass("viewport-view-unlit", runtimeView.debugViewMode == 1);
+    // 菜单只映射已有 debug view，不复制渲染状态；勾选与标题以运行时快照为准。
+    const char* modes[] = {"Lit", "Base Color", "Emissive", "World Normal",
+        "Roughness", "Metallic", "Ambient Occlusion", "Shadow", "Direct Lighting",
+        "Indirect Diffuse", "Indirect Specular", "Shadow Cascade Index", "Shading Model"};
+    std::string markup;
+    for (size_t mode = 1; mode < sizeof(modes) / sizeof(modes[0]); ++mode)
+        markup += UiWidgets::MenuItem("viewport-buffer-" + std::to_string(mode),
+            {"context-view-mode", mode}, modes[mode], runtimeView.debugViewMode == static_cast<int>(mode), false);
+    SetMarkup("viewport-buffer-modes", markup);
+    const int mode = runtimeView.debugViewMode;
+    SetMarkup("viewport-view-title", std::string(mode >= 0 && mode < 13 ? modes[mode] : "Debug View") + " v");
     RefreshViewportAxisIndicator();
 }
 
@@ -745,6 +800,12 @@ void MaterialInstanceAssetEditorPanel::RefreshViewportAxisIndicator()
     const Eigen::Vector3f up = camera->camera.up.normalized();
     const auto triad = EditorUi::ProjectAxisIndicatorTriad(right, up, forward);
 
+    std::array<size_t, 3> order = {0, 1, 2};
+    std::sort(order.begin(), order.end(), [&triad](size_t lhs, size_t rhs)
+    {
+        return triad[lhs].depth > triad[rhs].depth;
+    });
+
     // 先算量化后的形态签名：相机静止时它不变，于是不写 DOM。
     // 量化到 1 度 / 1 像素，避免浮点末位噪声让"静止帧"也一直重写属性。
     std::ostringstream signature;
@@ -757,6 +818,7 @@ void MaterialInstanceAssetEditorPanel::RefreshViewportAxisIndicator()
                   << std::lround(EditorUi::AxisIndicatorRotationDegrees(projection)) << ','
                   << std::lround(offsetX) << ',' << std::lround(offsetY) << ';';
     }
+    for (size_t index : order) signature << index;
     const std::string wanted = signature.str();
     if (wanted == axisIndicatorSignature) return;
     axisIndicatorSignature = wanted;
@@ -768,12 +830,6 @@ void MaterialInstanceAssetEditorPanel::RefreshViewportAxisIndicator()
 
     // 远的先画、近的后画，让朝向观察者的轴盖住背向的轴。depth 越小越靠近观察者，
     // 因此按 depth 降序排列。
-    std::array<size_t, 3> order = {0, 1, 2};
-    std::sort(order.begin(), order.end(), [&triad](size_t lhs, size_t rhs)
-    {
-        return triad[lhs].depth > triad[rhs].depth;
-    });
-
     for (size_t rank = 0; rank < order.size(); ++rank)
     {
         const size_t index = order[rank];
@@ -786,27 +842,22 @@ void MaterialInstanceAssetEditorPanel::RefreshViewportAxisIndicator()
         widgetDocument.SetProperty(labelId, "z-index",
             std::to_string(order.size() + rank + 1));
 
+        // 固定盒尺寸，只改绘制变换和可见性；margin/display/width 会让转动相机触发整页布局。
+        const char* visibility = projection.degenerate ? "hidden" : "visible";
+        widgetDocument.SetProperty(barId, "visibility", visibility);
+        widgetDocument.SetProperty(labelId, "visibility", visibility);
         if (projection.degenerate)
         {
-            // 与视线近乎平行的轴在屏幕上没有方向可言：杆收成零宽，**标签一并隐藏**。
-            // 只收杆不藏标签会让它落在锚点上，与另外两个轴本就在锚点附近的字母叠成一团
-            // （实测三个字母挤在 6x8 px 内，无法辨认）。位置也归零，避免隐藏期间留下旧偏移。
-            widgetDocument.SetProperty(barId, "width", Pixels(0.0f));
-            widgetDocument.SetProperty(labelId, "display", "none");
-            widgetDocument.SetProperty(labelId, "margin-left", Pixels(-5.0f));
-            widgetDocument.SetProperty(labelId, "margin-top", Pixels(-6.0f));
+            // 平行于视线时杆和字母一起隐藏，避免三个字母在锚点重叠。
+            widgetDocument.SetProperty(labelId, "transform", "translate(0px, 0px)");
             continue;
         }
 
         float offsetX = 0.0f;
         float offsetY = 0.0f;
         EditorUi::AxisIndicatorLabelOffset(projection, offsetX, offsetY);
-        widgetDocument.SetProperty(labelId, "display", "block");
-        widgetDocument.SetProperty(labelId, "margin-left", Pixels(offsetX - 5.0f));
-        widgetDocument.SetProperty(labelId, "margin-top", Pixels(offsetY - 6.0f));
-
-        const float length = EditorUi::kAxisIndicatorRadiusPx;
-        widgetDocument.SetProperty(barId, "width", Pixels(length));
+        widgetDocument.SetProperty(labelId, "transform",
+            "translate(" + Pixels(offsetX) + ", " + Pixels(offsetY) + ")");
         widgetDocument.SetProperty(barId, "transform",
             std::string("rotate(") +
                 std::to_string(EditorUi::AxisIndicatorRotationDegrees(projection)) + "deg)");
@@ -833,7 +884,7 @@ void MaterialInstanceAssetEditorPanel::CloseMenus()
 
 void MaterialInstanceAssetEditorPanel::ApplyMenuState()
 {
-    for (const char* menu : {"file", "edit", "window", "help"})
+    for (const char* menu : {"file", "edit", "window", "help", "view"})
         widgetDocument.SetClass("menu-" + std::string(menu), "open", openMenu == menu);
 }
 
@@ -843,7 +894,7 @@ bool MaterialInstanceAssetEditorPanel::IsInsideMenuBar(const Rml::Element* eleme
     const auto* menuBar = document->GetElementById("editor-menubar");
     for (const auto* current = element; current != nullptr && current != document;
         current = current->GetParentNode())
-        if (current == menuBar) return true;
+        if (current == menuBar || current->GetId() == "menu-view") return true;
     return false;
 }
 
@@ -1101,15 +1152,6 @@ void MaterialInstanceAssetEditorPanel::RefreshLists()
     }
     SetMarkup("material-slots", std::move(slots));
     contentBrowser.Build(snapshot);
-    std::string tabs;
-    for (size_t index = 0; index < snapshot.documentTabs.size(); ++index)
-    {
-        const auto& tab = snapshot.documentTabs[index];
-        tabs += UiWidgets::DocumentTab(
-            std::filesystem::path(tab.assetPath).filename().string() + (tab.dirty ? " *" : ""),
-            {"tab", index}, {"close", index}, tab.assetPath == snapshot.selectedDocumentPath);
-    }
-    SetMarkup("document-tabs", std::move(tabs));
 }
 
 // 选择态与"已挂载 actor 的可见性"合成一个重挂签名：两者都只改已挂载行的
@@ -1330,6 +1372,17 @@ void MaterialInstanceAssetEditorPanel::ToggleOutlinerGroup(size_t groupIndex)
 void MaterialInstanceAssetEditorPanel::RefreshDetails()
 {
     WidgetRefreshScope refresh(refreshingControls);
+    const EditorSceneActorSnapshot* actor = SelectedActor();
+    const EditorSceneActorGroupSpec* actorSpec =
+        actor == nullptr ? nullptr : FindSceneActorGroupSpec(actor->type);
+    const std::string actorIdentity = actor == nullptr || actorSpec == nullptr
+        ? "no-actor" : actor->identity + "|" + actorSpec->key;
+    if (actorDetailsIdentity != actorIdentity)
+    {
+        actorDetailsIdentity = actorIdentity;
+        SetMarkup("actor-details-content", actor != nullptr ? ActorSectionMarkup(*actor) : "");
+    }
+    RefreshActorValues(actor);
     if (viewingJson || resourceEditorVisible)
     {
         for (const char* id : DocumentCommandIds)
@@ -1337,21 +1390,15 @@ void MaterialInstanceAssetEditorPanel::RefreshDetails()
         SetMarkup("editor-notice", Text(localStatus));
         return;
     }
-    const EditorSceneActorSnapshot* actor = SelectedActor();
-    const EditorSceneActorGroupSpec* actorSpec =
-        actor == nullptr ? nullptr : FindSceneActorGroupSpec(actor->type);
-    // 身份同时包含选中 actor 与打开文档：任一变化都要重建分组结构。
-    const std::string identity = std::string(actor == nullptr || actorSpec == nullptr
-        ? "no-actor" : actor->identity + "|" + actorSpec->key) + "\n" +
-        (snapshot.activeDocument
+    // 材质正文与 actor Details 分开缓存；选择对象不会重建材质输入控件。
+    const std::string identity = (snapshot.activeDocument
             ? snapshot.activeDocument->assetPath + "|" + snapshot.activeDocument->schemaDigest
             : "closed");
     if (identity != detailsIdentity)
     {
+        textureOptionsDirty = true;
         detailsIdentity = identity;
         std::string markup;
-        // actor 分组在前：选中对象是本轮的详情来源，MI 文档分组沿用迁移前的结构。
-        if (actor != nullptr) markup += ActorSectionMarkup(*actor);
         if (snapshot.activeDocument)
         {
             const auto& asset = *snapshot.activeDocument;
@@ -1444,7 +1491,6 @@ void MaterialInstanceAssetEditorPanel::RefreshDetails()
         }
     }
     ApplySectionState();
-    RefreshActorValues(actor);
     RefreshControls();
 }
 
@@ -1595,16 +1641,23 @@ void MaterialInstanceAssetEditorPanel::RequestResourceReload()
 
 void MaterialInstanceAssetEditorPanel::RequestModelPreview(const std::string& path)
 {
+    RequestAssetPreview(path, false);
+}
+
+void MaterialInstanceAssetEditorPanel::RequestAssetPreview(const std::string& path, bool material)
+{
+    previewDragButton = -1;
     if (runtimeActionSink == nullptr) return;
-    if (requestedPreviewPath.empty() && !runtimeView.activeWorldPath.empty() &&
+    if (!runtimeView.activeWorldPath.empty() &&
         std::filesystem::path(runtimeView.activeWorldPath).filename() != "SC_model_preview.json")
         levelWorldPath = runtimeView.activeWorldPath;
     requestedPreviewPath = path;
+    requestedPreviewMaterial = material;
     requestedPreviewGeneration = 0;
     for (const auto& actor : OutlinerActors())
         requestedPreviewGeneration = std::max(requestedPreviewGeneration, actor.worldGeneration);
     UiAction request;
-    request.type = UiActionType::PreviewModel;
+    request.type = material ? UiActionType::PreviewMaterial : UiActionType::PreviewModel;
     request.stringValue = path;
     runtimeActionSink->RequestRuntimeAction(std::move(request));
 }
@@ -1641,6 +1694,7 @@ bool MaterialInstanceAssetEditorPanel::PrepareImmersiveView(std::string& levelTo
 
 void MaterialInstanceAssetEditorPanel::ReturnToLevel()
 {
+    previewDragButton = -1;
     resourceEditorVisible = false;
     docking.Activate("viewport");
     // 当前只有一个活动 World；返回关卡须重新走加载事务，不能把模型 World 冒充关卡。
@@ -1656,27 +1710,253 @@ void MaterialInstanceAssetEditorPanel::ReturnToLevel()
 
 bool MaterialInstanceAssetEditorPanel::HasCurrentModelPreview() const
 {
+    return CurrentModelPreviewGeneration() != 0;
+}
+
+uint64_t MaterialInstanceAssetEditorPanel::CurrentModelPreviewGeneration() const
+{
+    if (requestedPreviewMaterial) return 0;
     const auto* active = resourceEditor.ActiveTab();
     if (active == nullptr || active->kind != EditorAssetKind::Mesh ||
-        active->path != requestedPreviewPath) return false;
+        active->path != requestedPreviewPath) return 0;
     // JSON 读取完成不能证明 GPU 模型已加载；只在新预览 World 的冻结快照发布后展示。
     for (const auto& actor : OutlinerActors())
         if (actor.worldGeneration > requestedPreviewGeneration &&
             actor.sceneObjectIdentity == "preview_model" &&
             std::filesystem::path(actor.scenePath).filename() == "SC_model_preview.json")
-            return true;
+            return actor.worldGeneration;
+    return 0;
+}
+
+bool MaterialInstanceAssetEditorPanel::IsMaterialEditorVisible() const
+{
+    return snapshot.activeDocument &&
+        docking.IsPanelActive(MaterialPanelId(snapshot.activeDocument->assetPath));
+}
+
+uint64_t MaterialInstanceAssetEditorPanel::CurrentMaterialPreviewGeneration() const
+{
+    if (!requestedPreviewMaterial || !snapshot.activeDocument ||
+        snapshot.activeDocument->assetPath != requestedPreviewPath) return 0;
+    // 只认已发布的新 World 和同路径材质槽，切标签时不能把上一颗球的画面当成新材质。
+    for (const auto& actor : OutlinerActors())
+        if (actor.worldGeneration > requestedPreviewGeneration &&
+            actor.sceneObjectIdentity == "preview_material" &&
+            std::filesystem::path(actor.scenePath).filename() == "SC_model_preview.json")
+            for (const auto& section : actor.sections)
+                if (section.materialInstancePath == requestedPreviewPath) return actor.worldGeneration;
+    return 0;
+}
+
+uint64_t MaterialInstanceAssetEditorPanel::CurrentPreviewCameraGeneration() const
+{
+    return IsMaterialEditorVisible() ? CurrentMaterialPreviewGeneration() :
+        IsResourceEditorVisible() ? CurrentModelPreviewGeneration() : 0;
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshMaterialPreview()
+{
+    if (IsMaterialEditorVisible() && (!requestedPreviewMaterial ||
+        requestedPreviewPath != snapshot.activeDocument->assetPath))
+        RequestAssetPreview(snapshot.activeDocument->assetPath, true);
+    // 最后一份材质关闭后，恢复记住的关卡；不能留下预览 World 冒充关卡。
+    if (requestedPreviewMaterial && snapshot.documentTabs.empty() && docking.IsPanelActive("viewport"))
+        ReturnToLevel();
+    const uint64_t generation = CurrentMaterialPreviewGeneration();
+    widgetDocument.SetProperty("material-preview-image", "display", generation ? "block" : "none");
+    widgetDocument.SetProperty("material-preview-status", "display", generation ? "none" : "block");
+    SetDisabled("material-frame", !generation);
+    SetMarkup("material-preview-status", Text(snapshot.activeDocument && !snapshot.activeDocument->previewMessage.empty()
+        ? snapshot.activeDocument->previewMessage : "Loading material preview..."));
+    // 新球从磁盘基线加载；重连成功后补一次未保存草稿，避免切回标签丢失预览效果。
+    if (generation && IsMaterialEditorVisible() && appliedMaterialPreviewGeneration != generation &&
+        snapshot.activeDocument->preview == EditorPreviewStatus::Connected)
+    {
+        appliedMaterialPreviewGeneration = generation;
+        if (snapshot.activeDocument->status == EditorDocumentStatus::Dirty)
+            SubmitPathCommand(EditorCommandType::ApplyMaterialInstancePreview);
+    }
+}
+
+void MaterialInstanceAssetEditorPanel::RequestPreviewCamera(ModelPreviewNavigation mode, float x, float y)
+{
+    const uint64_t generation = CurrentPreviewCameraGeneration();
+    if (!runtimeActionSink || !generation || HasModal()) return;
+    UiAction action;
+    action.type = UiActionType::NavigateModelPreview;
+    action.previewCamera = {mode, generation, x, y};
+    runtimeActionSink->RequestRuntimeAction(std::move(action));
+}
+
+bool MaterialInstanceAssetEditorPanel::ProcessModelPreviewInput(Rml::Event& event)
+{
+    const uint64_t generation = CurrentPreviewCameraGeneration();
+    if (!generation || HasModal() || docking.IsDragging())
+    {
+        previewDragButton = -1;
+        return false;
+    }
+    if (previewDragGeneration != generation) previewDragButton = -1;
+    const bool imageHit = event.GetTargetElement() == document->GetElementById(
+        IsMaterialEditorVisible() ? "material-preview-image" : "resource-preview-image");
+    const auto& type = event.GetType();
+    const float x = event.GetParameter<float>("mouse_x", 0);
+    const float y = event.GetParameter<float>("mouse_y", 0);
+    if (type == "mousedown" && imageHit)
+    {
+        const int button = event.GetParameter<int>("button", -1);
+        if (button < 0 || button > 2) return false;
+        CloseMenus();
+        CloseContextMenu();
+        previewDragButton = button;
+        previewDragGeneration = generation;
+        previewPointerX = x;
+        previewPointerY = y;
+        return true;
+    }
+    if (type == "mousemove" && previewDragButton >= 0)
+    {
+        // 手势归开始命中的图像所有；拖到 Details 上仍继续，到抬起/失焦才取消。
+        const float dx = x - previewPointerX;
+        const float dy = y - previewPointerY;
+        previewPointerX = x;
+        previewPointerY = y;
+        if (dx != 0 || dy != 0)
+            RequestPreviewCamera(previewDragButton == 2 ? ModelPreviewNavigation::Pan : ModelPreviewNavigation::Orbit, dx, dy);
+        return true;
+    }
+    if (type == "mouseup" && previewDragButton == event.GetParameter<int>("button", -2))
+    {
+        previewDragButton = -1;
+        return true;
+    }
+    if (type == "mousescroll" && imageHit)
+    {
+        RequestPreviewCamera(ModelPreviewNavigation::Zoom, 0, event.GetParameter<float>("wheel_delta_y", 0));
+        return true;
+    }
+    if (type == "dblclick" && imageHit)
+    {
+        RequestPreviewCamera(ModelPreviewNavigation::Frame);
+        return true;
+    }
     return false;
+}
+
+void MaterialInstanceAssetEditorPanel::ResetTextureView()
+{
+    textureZoom = 1.0f;
+    texturePan = {0, 0};
+    textureDragButton = -1;
+}
+
+bool MaterialInstanceAssetEditorPanel::ProcessTexturePreviewInput(Rml::Event& event)
+{
+    const auto* active = resourceEditor.ActiveTab();
+    if (!active || active->kind != EditorAssetKind::Texture || active->loading ||
+        !active->snapshot || !active->snapshot->texturePreview || !IsResourceEditorVisible() ||
+        HasModal() || docking.IsDragging() ||
+        textureViewSource != EditorTexturePreviewSource(active->snapshot->revision))
+    {
+        textureDragButton = -1;
+        return false;
+    }
+    auto* surface = document->GetElementById("resource-preview-surface");
+    bool hit = false;
+    for (auto* element = event.GetTargetElement(); element; element = element->GetParentNode())
+        if (element == surface) { hit = true; break; }
+    const auto& type = event.GetType();
+    const Rml::Vector2f pointer(event.GetParameter<float>("mouse_x", 0), event.GetParameter<float>("mouse_y", 0));
+    if (type == "mousedown" && hit)
+    {
+        const int button = event.GetParameter<int>("button", -1);
+        if (button < 0 || button > 2) return false;
+        CloseMenus();
+        CloseContextMenu();
+        textureDragButton = button;
+        texturePointer = pointer;
+        return true;
+    }
+    if (type == "mousemove" && textureDragButton >= 0)
+    {
+        texturePan += pointer - texturePointer;
+        texturePointer = pointer;
+    }
+    else if (type == "mouseup" && textureDragButton == event.GetParameter<int>("button", -2))
+    {
+        textureDragButton = -1;
+        return true;
+    }
+    else if (type == "mousescroll" && hit)
+    {
+        const float delta = event.GetParameter<float>("wheel_delta_y", 0);
+        const float nextZoom = std::clamp(textureZoom * std::exp(-delta * 0.15f), 0.1f, 32.0f);
+        const auto size = surface->GetBox().GetSize(Rml::BoxArea::Padding);
+        const auto anchor = pointer - surface->GetAbsoluteOffset(Rml::BoxArea::Padding) - size * 0.5f;
+        // 保持鼠标下的图片坐标不动；只改 UI 几何，不重新解码/上传像素。
+        texturePan = anchor - (anchor - texturePan) * (nextZoom / textureZoom);
+        textureZoom = nextZoom;
+    }
+    else if (type == "dblclick" && hit) ResetTextureView();
+    else return false;
+    RefreshResourceEditor();
+    return true;
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshDocumentTabs()
+{
+    std::vector<EditorDockResourceTab> tabs;
+    for (const auto& tab : resourceEditor.Tabs())
+        tabs.push_back({ResourcePanelId(tab.path), tab.path,
+            std::filesystem::path(tab.path).filename().string(), EditorAssetKindIcon(tab.kind)});
+    for (size_t index = 0; index < snapshot.documentTabs.size(); ++index)
+    {
+        const auto& tab = snapshot.documentTabs[index];
+        tabs.push_back({MaterialPanelId(tab.assetPath), tab.assetPath,
+            std::filesystem::path(tab.assetPath).filename().string() + (tab.dirty ? " *" : ""),
+            EditorAssetKindIcon(EditorAssetKind::MaterialInstance), static_cast<int>(index)});
+    }
+    docking.SetResourceTabs(tabs);
 }
 
 void MaterialInstanceAssetEditorPanel::RefreshResourceEditor()
 {
     if (document == nullptr) return;
+    RefreshDocumentTabs();
     const auto* active = resourceEditor.ActiveTab();
     const bool isMesh = active != nullptr && active->kind == EditorAssetKind::Mesh;
     const bool previewReady = HasCurrentModelPreview();
+    const auto* texture = active && !active->loading && active->snapshot
+        ? active->snapshot->texturePreview.get() : nullptr;
+    const bool textureReady = active && active->kind == EditorAssetKind::Texture && texture;
+    widgetDocument.SetProperty("resource-texture-image", "display", textureReady ? "block" : "none");
+    auto* textureImage = document->GetElementById("resource-texture-image");
+    const std::string textureSource = textureReady ? EditorTexturePreviewSource(active->snapshot->revision) : "";
+    if (textureViewSource != textureSource)
+    {
+        textureViewSource = textureSource;
+        ResetTextureView();
+    }
+    widgetDocument.SetClass("resource-texture-tools", "visible", active && active->kind == EditorAssetKind::Texture);
+    SetDisabled("resource-texture-fit", !textureReady);
+    if (textureImage->GetAttribute<std::string>("src", "") != textureSource)
+        textureImage->SetAttribute("src", textureSource);
+    if (textureReady)
+    {
+        // 按面板可用区域等比例取景，不能沿用场景图像的强制拉伸布局。
+        const auto size = document->GetElementById("resource-preview-surface")->GetBox().GetSize(Rml::BoxArea::Padding);
+        const float scale = std::min(std::max(1.0f, size.x - 16) / texture->width,
+            std::max(1.0f, size.y - 16) / texture->height);
+        const float width = texture->width * scale * textureZoom, height = texture->height * scale * textureZoom;
+        widgetDocument.SetProperty("resource-texture-image", "width", std::to_string(width) + "px");
+        widgetDocument.SetProperty("resource-texture-image", "height", std::to_string(height) + "px");
+        widgetDocument.SetProperty("resource-texture-image", "left", std::to_string((size.x - width) * 0.5f + texturePan.x) + "px");
+        widgetDocument.SetProperty("resource-texture-image", "top", std::to_string((size.y - height) * 0.5f + texturePan.y) + "px");
+    }
+    SetDisabled("resource-frame", !previewReady || !isMesh);
     widgetDocument.SetProperty("resource-preview-image", "display", previewReady ? "block" : "none");
     for (const char* id : {"resource-preview-icon", "resource-preview-status", "resource-preview-path"})
-        widgetDocument.SetProperty(id, "display", previewReady ? "none" : "block");
+        widgetDocument.SetProperty(id, "display", previewReady || textureReady ? "none" : "block");
     widgetDocument.SetClass("resource-model-tools", "visible", isMesh);
     widgetDocument.SetClass("resource-model-info", "visible", isMesh);
     for (const char* id : {"resource-tool-select", "resource-tool-move", "resource-tool-rotate", "resource-tool-scale",
@@ -1684,7 +1964,6 @@ void MaterialInstanceAssetEditorPanel::RefreshResourceEditor()
         SetDisabled(id, !isMesh);
     if (active == nullptr)
     {
-        docking.SetResourceTabs({});
         SetDisabled("resource-reload", true);
         SetMarkup("resource-preview-title", "Asset Editor");
         SetMarkup("resource-preview-kind", "");
@@ -1697,26 +1976,20 @@ void MaterialInstanceAssetEditorPanel::RefreshResourceEditor()
         return;
     }
 
-    std::vector<EditorDockResourceTab> tabs;
-    tabs.reserve(resourceEditor.Tabs().size());
-    for (const auto& tab : resourceEditor.Tabs())
-    {
-        tabs.push_back({
-            ResourcePanelId(tab.path),
-            tab.path,
-            std::filesystem::path(tab.path).filename().string(),
-            EditorAssetKindIcon(tab.kind)});
-    }
-    docking.SetResourceTabs(tabs);
     SetDisabled("resource-reload", active->loading);
     SetMarkup("resource-preview-title", Text(active->snapshot != nullptr &&
         !active->snapshot->name.empty() ? active->snapshot->name :
         std::filesystem::path(active->path).filename().string()));
     SetMarkup("resource-preview-kind", Text(EditorAssetKindName(active->kind)));
+    if (textureReady)
+        SetMarkup("resource-preview-kind", Text(std::to_string(texture->sourceWidth) + " x " +
+            std::to_string(texture->sourceHeight) + " | RGB | " + active->snapshot->textureColorSpace));
     SetMarkup("resource-preview-path", Text(active->path));
     SetMarkup("resource-preview-status", active->loading
-        ? "Reading JSON metadata..."
-        : isMesh ? "Waiting for model preview" : "Preview unavailable: referenced data is not loaded.");
+        ? (active->kind == EditorAssetKind::Texture ? "Loading texture preview..." : "Reading JSON metadata...")
+        : isMesh ? "Waiting for model preview" : active->snapshot && !active->snapshot->previewDiagnostic.empty()
+            ? Text(active->snapshot->previewDiagnostic)
+            : "Preview unavailable: referenced data is not loaded.");
     auto* previewIcon = document->GetElementById("resource-preview-icon");
     const std::string icon = EditorAssetKindIcon(active->kind);
     if (previewIcon->GetAttribute<std::string>("src", "") != icon)
@@ -1793,23 +2066,36 @@ void MaterialInstanceAssetEditorPanel::RefreshControls()
     for (size_t index = 0; index < asset.textures.size(); ++index)
     {
         const auto& texture = asset.textures[index];
-        std::string options = Option(texture.effectiveAssetPath, texture.effectiveAssetPath);
-        for (const auto& candidate : snapshot.textureAssets)
+        // 目录与有效绑定未变时，连选项字符串也不生成；不能只在写 DOM 时才判相等。
+        if (textureOptionsDirty || index >= textureOptionSelections.size() ||
+            textureOptionSelections[index] != texture.effectiveAssetPath)
         {
-            if (candidate.valid && candidate.assetPath != texture.effectiveAssetPath)
-                options += Option(candidate.assetPath, candidate.assetPath);
+            std::string options = Option(texture.effectiveAssetPath, texture.effectiveAssetPath);
+            for (const auto& candidate : snapshot.textureAssets)
+            {
+                if (candidate.valid && candidate.assetPath != texture.effectiveAssetPath)
+                    options += Option(candidate.assetPath, candidate.assetPath);
+            }
+            SetMarkup("texture-" + std::to_string(index), std::move(options));
         }
-        SetMarkup("texture-" + std::to_string(index), std::move(options));
         SetControlValue("texture-" + std::to_string(index), asset.textures[index].effectiveAssetPath);
         SetDisabled("reset-texture-" + std::to_string(index), !asset.textures[index].overrideAssetPath);
     }
+    if (textureOptionsDirty || textureOptionSelections.size() != asset.textures.size())
+        textureOptionSelections.resize(asset.textures.size());
+    for (size_t index = 0; index < asset.textures.size(); ++index)
+        textureOptionSelections[index] = asset.textures[index].effectiveAssetPath;
+    textureOptionsDirty = false;
 }
 
 void MaterialInstanceAssetEditorPanel::UpdateRuntimeView(const UiViewModelSnapshot& view)
 {
+    const bool refreshOffline = !runtimeControlsCurrent || !SameOfflineControls(runtimeView, view);
     runtimeView = view;
     WidgetRefreshScope refresh(refreshingControls);
-    SetMarkup("editor-frame-metrics", std::to_string(std::lround(view.framesPerSecond)) + " FPS");
+    // 相机和统计变化不触碰离线表单；视口工具条继续独立更新。
+    RefreshViewportToolbar();
+    if (!refreshOffline || document == nullptr) return;
     SetControlValue("offline-samples", std::to_string(view.offlineSamples));
     SetControlValue("offline-bounces", std::to_string(view.offlineBounces));
     SetControlValue("offline-lightSamples", std::to_string(view.offlineLightSamples));
@@ -1828,12 +2114,11 @@ void MaterialInstanceAssetEditorPanel::UpdateRuntimeView(const UiViewModelSnapsh
     SetDisabled("offline-stop", !active && (!view.offlineMode || state != Offline::SessionState::Paused));
     SetDisabled("offline-restart", !view.offlineMode);
     SetDisabled("offline-export", !view.offlineMode || view.offlineCompletedSamples == 0);
-    if (document != nullptr)
-    {
-        document->GetElementById("mode-realtime")->SetClass("selected", !view.offlineMode);
-        document->GetElementById("mode-offline")->SetClass("selected", view.offlineMode);
-    }
-    RefreshViewportToolbar();
+    widgetDocument.SetClass("mode-realtime", "selected", !view.offlineMode);
+    widgetDocument.SetClass("mode-offline", "selected", view.offlineMode);
+    const auto* focus = document->GetContext()->GetFocusElement();
+    // 聚焦输入保留用户的半成品；失焦后的第一帧仍需用权威快照校正被拒绝的值。
+    runtimeControlsCurrent = focus == nullptr || focus->GetId().find("offline-") != 0;
 }
 
 void MaterialInstanceAssetEditorPanel::CloseDocument(
@@ -1868,8 +2153,11 @@ void MaterialInstanceAssetEditorPanel::SelectModelMaterial(
 void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const std::string& action)
 {
     const size_t index = element.GetAttribute<size_t>("data-index", 0);
-    if (action == "json-close") ShowMaterialDetails();
+    if (action == "material-frame") RequestPreviewCamera(ModelPreviewNavigation::Frame);
+    else if (action == "json-close") ShowMaterialDetails();
     else if (action == "resource-close") CloseActiveResource();
+    else if (action == "resource-frame") RequestPreviewCamera(ModelPreviewNavigation::Frame);
+    else if (action == "resource-texture-fit") { ResetTextureView(); RefreshResourceEditor(); }
     else if (action == "resource-reload") RequestResourceReload();
     else if (action == "resource-tool")
     {
@@ -2117,8 +2405,7 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
     else if (runtimeActionSink != nullptr)
     {
         UiAction request;
-        if (action == "runtime-page") request.type = UiActionType::ToggleRuntimePage;
-        else if (action == "immersive-view") request.type = UiActionType::ToggleDeveloperUi;
+        if (action == "immersive-view") request.type = UiActionType::ToggleDeveloperUi;
         else if (action == "exit-editor") request.type = UiActionType::Quit;
         else if (action == "viewport-view-mode")
         {
@@ -2291,7 +2578,6 @@ void MaterialInstanceAssetEditorPanel::OpenBrowserAsset(const std::string& path)
     if (kind == EditorAssetKind::MaterialInstance)
     {
         ShowMaterialDetails();
-        docking.Activate("details");
         EditorCommandEnvelope command;
         command.type = EditorCommandType::OpenMaterialInstanceAsset;
         command.payload = OpenMaterialInstanceAssetPayload{path, std::nullopt};
@@ -2332,6 +2618,12 @@ void MaterialInstanceAssetEditorPanel::OpenBrowserAsset(const std::string& path)
 void MaterialInstanceAssetEditorPanel::ProcessEvent(Rml::Event& event)
 {
     if (refreshingControls || document == nullptr) return;
+    if (ProcessTexturePreviewInput(event) || ProcessModelPreviewInput(event))
+    {
+        event.StopPropagation();
+        return;
+    }
+    if (event.GetType() == "change") runtimeControlsCurrent = false;
     // 点击菜单栏以外的任何位置都收起已展开的菜单；菜单项自身的收起在下面按 action 处理。
     if (event.GetType() == "click" && !openMenu.empty() && !IsInsideMenuBar(event.GetTargetElement()))
         CloseMenus();
@@ -2344,7 +2636,17 @@ void MaterialInstanceAssetEditorPanel::ProcessEvent(Rml::Event& event)
         const std::string activatedPanel = docking.ConsumeActivatedPanel();
         if (activatedPanel == "viewport") ReturnToLevel();
         const std::string path = docking.ResourcePathForPanel(activatedPanel);
-        if (!path.empty() && resourceEditor.Activate(path))
+        if (activatedPanel.rfind("resource:material:", 0) == 0)
+        {
+            FlushPendingEdits();
+            viewingJson = false;
+            resourceEditorVisible = false;
+            EditorCommandEnvelope command;
+            command.type = EditorCommandType::SelectMaterialInstanceDocument;
+            command.payload = MaterialInstanceAssetPathPayload{path};
+            Submit(std::move(command));
+        }
+        else if (!path.empty() && resourceEditor.Activate(path))
         {
             RequestActiveResourceMetadata();
             resourceEditorVisible = true;

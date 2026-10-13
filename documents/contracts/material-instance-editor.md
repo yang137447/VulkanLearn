@@ -108,6 +108,27 @@ Gates** below.
 
 ## UI Boundary
 
+MI documents use individual central dock tabs beside Viewport, not a nested tab
+row in the right-hand Details panel. The central page owns the existing General,
+Render States, Parameters and Texture Bindings controls. Right-hand Details keeps
+actor properties and Material Slots. Tabs are projected from the document-service
+snapshot, carry dirty markers and close actions, and reuse the existing save,
+discard and cancel lifecycle. They are session-only, like other asset tabs.
+The central page includes a dedicated preview sphere beside the property controls.
+`PreviewMaterial` loads `Common/Meshes/SM_material_preview_ball.json` into
+`SC_model_preview` with an instance-only `materialOverride` pointing to the MI.
+It reuses the World-backed adapter and generation-guarded orbit/pan/zoom camera.
+The image waits for a newer World snapshot with the matching material slot;
+dirty numeric/render-state drafts are reapplied once after reconnection.
+This is still one active World, not one World per tab. Returning to the level
+reloads its remembered scene. Texture live-preview replacement is still unavailable.
+
+Scene mesh `materialOverride` is an optional, non-empty MI path applied to all
+sections of that object. The scene validator checks its shape; the normal
+renderer material loader validates and loads the referenced MI. Geometry import
+caches and the source SM slots remain unchanged, and offline material identity
+uses the same effective binding as the realtime path.
+
 The editor is part of the runtime-toggleable RmlUi workspace described by
 `documents/contracts/game-ui-stack.md`. It must follow the same ownership
 rules:

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <condition_variable>
+#include <cmath>
 #include <fstream>
 #include <iterator>
 #include <mutex>
@@ -11,6 +12,8 @@
 #include <vector>
 
 #include <nlohmann/json.hpp>
+#include <stb_image.h>
+#include "resource/image/textureIO.h"
 
 namespace VL::Editor
 {
@@ -192,6 +195,10 @@ private:
             document.name = BoundedText(value);
         else if (location.label == "description" && kind == ValueKind::String)
             document.description = BoundedText(value);
+        else if (location.label == "source" && includeFields && kind == ValueKind::String)
+            document.textureSource = value;
+        else if (location.label == "colorSpace" && includeFields && kind == ValueKind::String)
+            document.textureColorSpace = value;
     }
 
     int AddField(const Location& location, ValueKind kind, const std::string& value)
@@ -535,6 +542,115 @@ struct EditorJsonAssetLibrary::Impl
         return result;
     }
 
+    void LoadTexturePreview(Document& result)
+    {
+        // 只在显式打开贴图时读 source；目录扫描和普通 JSON inspector 不解码图片。
+        const auto relative = std::filesystem::u8path(NormalizeSeparators(result.textureSource));
+        if (relative.empty() || relative.is_absolute() || relative.has_root_name() ||
+            result.textureSource.find(':') != std::string::npos || result.textureSource.find('\0') != std::string::npos)
+        {
+            result.previewDiagnostic = "Invalid texture source path";
+            return;
+        }
+        for (const auto& part : relative)
+            if (part == "..")
+            {
+                result.previewDiagnostic = "Texture source escapes resource root";
+                return;
+            }
+        std::error_code ec;
+        const auto physical = std::filesystem::canonical(root / relative, ec);
+        if (ec || !PhysicalWithinRoot(root, physical) || !std::filesystem::is_regular_file(physical, ec))
+        {
+            result.previewDiagnostic = "Texture source is missing or outside the resource root";
+            return;
+        }
+        const auto extension = LowerAscii(physical.extension().u8string());
+        if (extension != ".png" && extension != ".jpg" && extension != ".jpeg" &&
+            extension != ".tga" && extension != ".bmp")
+        {
+            result.previewDiagnostic = "Preview supports PNG, JPEG, TGA and BMP; unsupported format: " + extension;
+            return;
+        }
+        if (result.textureColorSpace != "srgb" && result.textureColorSpace != "linear")
+        {
+            result.previewDiagnostic = "Texture colorSpace must be srgb or linear";
+            return;
+        }
+        constexpr size_t MaxBytes = 64 * 1024 * 1024;
+        const auto size = std::filesystem::file_size(physical, ec);
+        if (ec || size > MaxBytes)
+        {
+            result.previewDiagnostic = "Texture source exceeds preview input limit (64 MiB)";
+            return;
+        }
+        std::ifstream file(physical, std::ios::binary);
+        std::vector<uint8_t> bytes(static_cast<size_t>(size) + 1);
+        file.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        const auto count = static_cast<size_t>(file.gcount());
+        if (!file.eof() || count != size)
+        {
+            result.previewDiagnostic = "Texture source changed or cannot be read";
+            return;
+        }
+        int width = 0, height = 0, channels = 0;
+        // 在解码分配前检查尺寸；内存解码使用同一份字节，避免检查和加载之间文件被替换。
+        if (!stbi_info_from_memory(bytes.data(), static_cast<int>(count), &width, &height, &channels) ||
+            width <= 0 || height <= 0 || uint64_t(width) * uint64_t(height) > 32 * 1024 * 1024 ||
+            stbi_is_hdr_from_memory(bytes.data(), static_cast<int>(count)))
+        {
+            result.previewDiagnostic = "Invalid image or preview pixel limit exceeded (32 MP)";
+            return;
+        }
+        TextureIO::LoadOptions options;
+        options.forceChannels = 4;
+        auto decoded = TextureIO::LoadFromMemory(bytes.data(), count, options);
+        if (!decoded || decoded->format != HostImage::PixelFormat::RGBA8_UNORM)
+        {
+            result.previewDiagnostic = "Texture image decoding failed";
+            return;
+        }
+        auto preview = std::make_shared<EditorUi::EditorTexturePreview>();
+        preview->sourceWidth = decoded->width;
+        preview->sourceHeight = decoded->height;
+        const double scale = std::min(1.0, 1024.0 / std::max(width, height));
+        preview->width = std::max(1u, uint32_t(width * scale));
+        preview->height = std::max(1u, uint32_t(height * scale));
+        preview->pixels.resize(size_t(preview->width) * preview->height * 4);
+        float linearValues[256];
+        for (size_t index = 0; index < 256; ++index)
+        {
+            const float v = index / 255.0f;
+            linearValues[index] = result.textureColorSpace == "linear" ? v :
+                v <= 0.04045f ? v / 12.92f : std::pow((v + 0.055f) / 1.055f, 2.4f);
+        }
+        // 面积平均避免缩略图跳采样产生摩尔纹；先在线性域平均，再编码为 UI 使用的 sRGB。
+        for (uint32_t y = 0; y < preview->height; ++y)
+            for (uint32_t x = 0; x < preview->width; ++x)
+            {
+                const uint32_t x0 = uint64_t(x) * width / preview->width;
+                const uint32_t x1 = uint64_t(x + 1) * width / preview->width;
+                const uint32_t y0 = uint64_t(y) * height / preview->height;
+                const uint32_t y1 = uint64_t(y + 1) * height / preview->height;
+                float sum[3] = {};
+                for (uint32_t sy = y0; sy < y1; ++sy)
+                    for (uint32_t sx = x0; sx < x1; ++sx)
+                        for (size_t c = 0; c < 3; ++c)
+                        {
+                            sum[c] += linearValues[decoded->data[(size_t(sy) * width + sx) * 4 + c]];
+                        }
+                const size_t offset = (size_t(y) * preview->width + x) * 4;
+                for (size_t c = 0; c < 3; ++c)
+                {
+                    const float v = sum[c] / float((x1 - x0) * (y1 - y0));
+                    const float encoded = v <= 0.0031308f ? v * 12.92f : 1.055f * std::pow(v, 1.0f / 2.4f) - 0.055f;
+                    preview->pixels[offset + c] = uint8_t(std::clamp(std::lround(encoded * 255), 0l, 255l));
+                }
+                preview->pixels[offset + 3] = 255;
+            }
+        result.texturePreview = std::move(preview);
+    }
+
     void Open(uint64_t generation, const std::string& path)
     {
         auto result = std::make_shared<Document>();
@@ -547,6 +663,12 @@ struct EditorJsonAssetLibrary::Impl
             result->assetPath = path;
             result->fields.clear();
             result->diagnostic = "JSON document read/parse failed";
+        }
+        if (result->kind == Kind::Texture && result->diagnostic.empty() && CurrentDocument(generation))
+        {
+            // 图片失败不能清掉仍然有效的 JSON Details。
+            try { LoadTexturePreview(*result); }
+            catch (const std::exception&) { result->previewDiagnostic = "Texture preview decoding failed"; }
         }
         result->revision = generation;
         std::shared_ptr<const Document> discarded;

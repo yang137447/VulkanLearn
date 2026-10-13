@@ -47,6 +47,17 @@ ctest --test-dir build -R "MaterialInstanceEditor" --output-on-failure
 
 `JsonAssetLibraryTest` 有 4 项按设计 skip（符号链接用例，需要权限）。
 
+缩略图专项回归（注册在 `editor_ui_tests`，不需要 Vulkan）：
+
+```powershell
+ctest --test-dir build -R "^(ThumbnailLibraryTest|EditorThumbnailGraph)\." --output-on-failure
+```
+
+覆盖内容缓存、可见请求取消、Refresh/重初始化代际、暂停与单次领取，以及离屏图派生。
+模型/MI 实际出图另用 validation 构建核对真实资产；2026-10-13 已验证青/红遮阳布材质球、
+`SM_vilking_room`、窗口最大化后继续出图及 File → Exit 正常 teardown，无 Vulkan validation 错误。
+当轮 `editor_ui_tests` 全量连续两遍均为 347 项、343 通过、4 跳过。
+
 ## 改动 → 验证
 
 | 改动范围 | 最小验证 | 额外风险验证 |

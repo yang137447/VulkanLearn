@@ -1,0 +1,11 @@
+<rml>
+    <head>
+        <title>VulkanLearn HUD</title>
+        <link type="text/rcss" href="runtime-hud.rcss" />
+    </head>
+    <body data-model="game_ui">
+        <div id="ui-root">
+            <div id="hud">{{world_text}}</div>
+        </div>
+    </body>
+</rml>

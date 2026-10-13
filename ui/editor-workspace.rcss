@@ -170,11 +170,7 @@ body {
 #workspace-resource-icon { flex-shrink: 0; width: 16px; height: 16px; margin-right: 6px; }
 #workspace-resource-tab img { flex-shrink: 0; width: 16px; height: 16px; margin-right: 6px; }
 #dock-dynamic-tabs img { flex-shrink: 0; width: 16px; height: 16px; margin-right: 6px; }
-/* 标签栏里每个标签的图标与文字：图标不能压缩，文字按可用宽度省略号截断。
-   注意 #workspace-resource-icon / #workspace-resource-label 是**资源文档标签在标签栏里**的
-   图标与文字（editor-workspace.rml 的 #workspace-resource-tab 带着它们，
-   ValidateDocument 要求这两个 id 存在），resource-editor 正文里另有一对同名元素。
-   所以上面的 id 规则同时服务标签栏和正文两处，不是死规则。 */
+/* 静态占位保留校验用 id；动态资产标签使用 class。图标不压缩，文字单行截断。 */
 .workspace-tabs button img { flex-shrink: 0; width: 16px; height: 16px; margin-right: 6px; }
 .workspace-tabs button span {
     min-width: 0;
@@ -292,7 +288,20 @@ body {
 #material-slots { max-height: 90px; overflow: auto; }
 .inspector-body { flex: 1; min-height: 0; overflow: auto; padding: 0 10px 10px; }
 #document-title { white-space: normal; margin-bottom: 8px; }
-#document-tabs { display: flex; overflow: auto; max-height: 65px; }
+.workspace-asset-tab { width: 240px; max-width: 260px; }
+.resource-tab-icon { flex-shrink: 0; width: 16px; height: 16px; margin-right: 6px; }
+.resource-tab-label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.workspace-asset-tab .tab-close { width: 22px; padding: 0; margin-left: 5px; text-align: center; }
+.workspace-asset-tab .tab-close:hover { background-color: #56565c; }
+#material-editor { flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+#material-editor-body { display: flex; flex: 1; min-height: 0; min-width: 0; }
+#material-preview-surface { position: relative; flex: 1; min-width: 0; overflow: hidden; clip: always; background-color: #141416; }
+#material-preview-image { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
+#material-preview-status { margin: 16px; }
+#material-properties { flex: none; width: 46%; min-width: 260px; box-sizing: border-box; border-left: 1px #424247; }
+.material-editor-toolbar { display: flex; align-items: center; flex-wrap: wrap; flex-shrink: 0; padding: 6px 10px; border-bottom: 1px #424247; }
+.material-editor-toolbar #document-title { margin: 0 8px 0 0; }
+.material-editor-toolbar button { margin-left: 4px; }
 .preview-commands { margin: 8px 0; }
 #details-content .property-row select { width: 44%; }
 #details-content .property-row button { margin-left: 4px; padding: 2px 4px; }
@@ -457,11 +466,13 @@ body {
 .asset-tile:hover { border-color: #7d7d84; background-color: #38383d; }
 .asset-tile.selected { border-color: #6cbba1; background-color: #29493f; }
 .asset-preview { flex-shrink: 0; }
-.asset-tile .asset-preview { width: 69px; height: 69px; align-self: center; }
+.asset-tile .asset-preview { width: 60px; height: 60px; align-self: center; }
 .asset-name { display: block; min-width: 0; white-space: normal; overflow: hidden; word-break: break-all; }
-.asset-tile .asset-name { height: 28px; line-height: 13px; font-size: 11px; margin-top: 3px; }
+.asset-tile .asset-name { height: 28px; min-height: 28px; flex-shrink: 0; line-height: 13px; font-size: 11px; margin-top: 3px; text-decoration: none; }
 .asset-kind { display: block; color: #acacb4; font-size: 9px; white-space: nowrap; overflow: hidden; }
-.asset-tile .asset-kind { border-top-width: 2px; border-top-color: #65a594; line-height: 11px; }
+.asset-tile .asset-kind { flex-shrink: 0; height: 11px; border-top-width: 2px; border-top-color: #65a594; line-height: 11px; }
+.asset-type-badge { display: none; position: absolute; top: 5px; left: 5px; width: 15px; height: 15px; background-color: #262629; }
+.asset-tile.has-thumbnail .asset-type-badge { display: block; }
 .asset-kind-mesh .asset-kind, .asset-kind.asset-kind-mesh { border-top-color: #5cb8c6; }
 .asset-kind-scene .asset-kind, .asset-kind.asset-kind-scene { border-top-color: #659de3; }
 .asset-kind-texture .asset-kind, .asset-kind.asset-kind-texture { border-top-color: #cd7e9d; }
@@ -469,9 +480,9 @@ body {
 .browser-spacer { display: block; flex-basis: 100%; width: 100%; flex-shrink: 0; pointer-events: none; }
 .asset-dirty { position: absolute; top: 4px; right: 6px; font-size: 14px; color: #ebcb80; }
 .browser-size-medium .asset-tile { width: 116px; height: 142px; }
-.browser-size-medium .asset-tile .asset-preview { width: 94px; height: 94px; }
+.browser-size-medium .asset-tile .asset-preview { width: 84px; height: 84px; }
 .browser-size-large .asset-tile { width: 140px; height: 166px; }
-.browser-size-large .asset-tile .asset-preview { width: 118px; height: 118px; }
+.browser-size-large .asset-tile .asset-preview { width: 108px; height: 108px; }
 #asset-list.browser-list-view { display: block; }
 .asset-row {
     position: relative;
@@ -631,6 +642,8 @@ body {
 .viewport-tool:last-child { margin-right: 0; }
 .viewport-tool.active { background-color: #2a665b; color: #ffffff; }
 .viewport-tool.disabled { color: #85858b; background-color: transparent; }
+#viewport-view-mode > .viewport-tool { display: block; width: 100%; box-sizing: border-box; text-align: left; }
+#viewport-buffer-modes { top: -66px; max-height: 240px; overflow: auto; }
 #resource-editor {
     display: flex;
     flex: 1;
@@ -659,8 +672,8 @@ body {
     min-width: 0;
     min-height: 0;
 }
-#resource-model-tools { display: none; align-items: center; gap: 3px; }
-#resource-model-tools.visible { display: flex; }
+#resource-model-tools, #resource-texture-tools { display: none; align-items: center; gap: 3px; }
+#resource-model-tools.visible, #resource-texture-tools.visible { display: flex; }
 #resource-model-info { display: none; padding: 10px 12px; border-bottom-width: 1px; border-bottom-color: #49494f; }
 #resource-model-info.visible { display: block; }
 #resource-model-info h3 { margin: 0 0 7px; color: #e7e7e9; }
@@ -694,6 +707,8 @@ body {
 .resource-panel-heading h2 { flex: 1; min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .resource-panel-heading span { flex-shrink: 0; margin-left: 8px; color: #aeb7b2; }
 #resource-preview-surface {
+    overflow: hidden;
+    clip: always;
     position: relative;
     display: flex;
     flex: 1;
@@ -708,6 +723,7 @@ body {
     border-top-color: #29292d;
 }
 #resource-preview-image { display: none; position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
+#resource-texture-image { display: none; position: absolute; }
 #resource-preview-path { width: 100%; flex-shrink: 0; }
 #resource-preview-icon { width: 96px; height: 96px; margin-bottom: 18px; opacity: 0.8; }
 #resource-preview-status { margin: 0 0 6px; color: #e7e7e9; text-align: center; }
@@ -758,7 +774,6 @@ body {
     pointer-events: auto;
 }
 #editor-notice { flex: 1; min-width: 0; line-height: 23px; white-space: nowrap; overflow: hidden; font-size: 11px; }
-#editor-frame-metrics { flex-shrink: 0; width: 75px; text-align: right; font-size: 11px; color: #adb6b1; }
 #close-dialog {
     display: none;
     position: absolute;

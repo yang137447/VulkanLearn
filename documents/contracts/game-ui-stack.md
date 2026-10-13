@@ -4,7 +4,7 @@
 
 ## Status
 
-Current contract, 2026-10-10: RmlUi serves both runtime controls and the
+Current contract, 2026-10-12: RmlUi serves the minimal runtime HUD and the
 runtime-toggleable editor workspace. ImGui and its CMake option are removed.
 SDL3 remains the event/text-input boundary; VulkanLearn records the final
 overlay on the render thread.
@@ -15,18 +15,21 @@ from future scene authoring and richer asset workflows.
 
 ## Responsibilities
 
-`ui/runtime-control.rml`, `.rcss` and `localization.json` define the runtime HUD
-and control page: scene selection, frame status, debug views, tone mapping,
-bloom, CSM, camera speed, environment, vegetation, locale and visibility.
-The runtime page temporarily hides the editor and owns all input.
+`ui/runtime-hud.rml` and `.rcss` define a non-interactive scene-name HUD.
+The former Runtime Debug page, Settings button, F10/gamepad Start entry points
+and runtime-page binding callbacks are removed. Scene selection, actor settings,
+viewport modes and offline controls belong to the editor workspace; runtime
+commands remain available independently of the deleted page.
 Destructive validation workflows remain console/launch operations, not buttons.
 
 `ui/editor-workspace.rml` and `.rcss` define the default workspace:
 
 - Top: command toolbar.
 - Right 31%, upper: Scene Outliner and expandable model/material tree.
-- Right 31%, lower: Details, material slots, MI tabs, parameters, render states,
-  texture bindings and status, or a generic read-only JSON inspector.
+- Right 31%, lower: Details, actor properties and material slots, or a generic
+  read-only JSON inspector.
+- Central MI tabs: preview sphere with parameters, render states, texture bindings,
+  save/preview controls and document status.
 - Bottom left/center: Content Browser (MI/Mesh/Scene/Texture/Terrain JSON sources
   tree, breadcrumbs, search, type filter, tiles/list, sorting, size and explicit
   refresh controls) / Renderer
@@ -60,11 +63,17 @@ unavailable. Numeric/render-state preview retains the existing renderer adapter.
 Content Browser selection is separate from the open document. A single click
 selects an item; a double click on MI emits the existing editable-document open
 command. Scene double-click reuses the existing `UiActionType::LoadWorld` transaction.
+MI tabs request `PreviewMaterial`, using the formal preview ball with an instance-only
+material binding in `SC_model_preview`. The material image supplies the viewport rectangle
+and uses UI-owned, generation-guarded orbit/pan/zoom input, just like the model image.
+The image waits for the matching material slot in the new World; reconnecting reapplies
+dirty numeric/render-state drafts without saving. Texture live preview remains unsupported.
 Mesh double-click opens a resource-editor tab beside the level tab in the same stack, requests the typed
 `UiActionType::PreviewModel` route, and loads the model into the neutral
 `SC_model_preview` World through `LoadWorld.extraSceneObjects`; its JSON Details
-remain read-only. Texture/Terrain double-click only opens their metadata tabs:
-they do not load pixels or referenced `data`. Resource tabs are deduplicated and
+remain read-only. Texture double-click decodes its source image on the asset worker
+for a bounded RGB preview; Terrain only opens metadata. Neither reads embedded `data`.
+Resource tabs are deduplicated and
 can return to World.
 Mesh tabs display the renderer-owned `vl://scene-viewport` output in
 `resource-preview-image`. The visible model image supplies the viewport rectangle;
@@ -76,14 +85,28 @@ actions activate another document. Returning to the level requests its remembere
 scene path through LoadWorld; this reloads the scene rather than preserving
 unsaved runtime actor changes or camera movement.
 Changing model tabs and reloading request the selected model again. This still
-uses the single active World, fixed preview scale and camera, not an independent
-World per tab or automatic bounds framing. Model-image input remains UI-owned.
+uses the single active World and fixed injection scale, not an independent
+World per tab. The preview camera frames the transformed model bounds on publication.
+Model-image input remains UI-owned: left/right drag orbits, middle drag pans,
+wheel zooms, and double-click or the frame button resets framing. Typed navigation
+actions are applied on GT only for the matching World generation; focus loss cancels
+dragging. Switching/reloading tabs resets the camera, without modifying model assets.
 Browser paths/filter/view/history are local presentation state.
 Resource tabs retain their completed JSON snapshots. Activating, reopening, or
 closing onto an unfinished tab reissues its metadata request because the shared
 reader keeps only the latest request; frame refresh never retries it repeatedly.
-Type icons and material spheres are placeholders, not real thumbnails or model
-previews. The inspector does not replace MI editing or the scene Viewport.
+Texture grid tiles use asynchronous, bounded, disk-cached RGB thumbnails from a
+separate CPU worker. Only visible tiles (plus the existing two-row overscan) request
+images; completion updates image attributes without rebuilding the list. Scene input
+pauses new work/publication, and hidden tiles release UI textures. The cache uses
+BLAKE3 content keys and is revalidated on explicit Refresh. Mesh and realtime MI
+tiles use a separate offscreen render session with their real material shaders,
+the formal preview ball and neutral HDRI. GT advances preparation after 750 ms of
+input inactivity; graph, descriptors and IBL never replace the active World.
+Rendered thumbnails are session-only; import/pipeline preparation is still synchronous.
+Scene icons and unsupported offline-only materials remain placeholders.
+The inspector does not replace MI editing or
+the scene Viewport. See the UI component contract for format and cache limits.
 
 ### JSON Metadata Browsing
 
@@ -93,6 +116,14 @@ open requests read the selected JSON. Each-frame GT `Poll()` only tries the
 completion mailbox, with no per-frame catalog scan or asset-JSON I/O.
 Pending requests coalesce, opens take priority (also between scan files), and
 both worker delivery and GT publication reject superseded generations.
+Explicit Texture opens additionally decode PNG/JPEG/TGA/BMP source bytes through
+TextureIO, within the canonical resource root (64 MiB input, 32 MP decoded limit).
+The worker publishes an immutable sRGB display preview with a 1024-pixel longest
+edge; linear source RGB is display-encoded, alpha is ignored intentionally for
+normal/packed textures. The UI bridge weakly registers revision-keyed pixel sources;
+Rml textures use the existing immutable snapshot and GPU retirement path. Tabs retain
+their CPU previews; closing them releases ownership. Reload publishes a new revision.
+Unsupported formats and missing/corrupt sources show diagnostics, never a previous image.
 This is separate from UI-document hot-reload fingerprinting.
 
 SAX parsing keeps top-level classification/name/description and bounded,
@@ -124,6 +155,24 @@ generation and scroll position. `EditorJsonInspectorController` provides
 expand/search and at most 64 field rows per page, refreshing only when its
 snapshot or presentation state changes. Constants and detailed contracts are
 recorded in `ui-component-system.md`.
+
+## Change-Driven Refresh
+
+The HUD has only a world-name binding, dirtied only when its displayed name
+changes. The deleted debug page has no per-frame binding or formatting work.
+Editor FPS text refreshes at 250 ms intervals using a monotonic clock,
+independently of simulation time.
+
+The editor offline controls skip formatting and DOM lookup when their input
+snapshot is unchanged. User edits invalidate that cache; focused partial input
+remains untouched, and the first unfocused update reconciles the authoritative
+value. Document reattachment invalidates both controls and metrics caches.
+Viewport controls, RmlUi input processing and context updates remain per-frame,
+so camera indicators, hover, scrolling and animations are not throttled.
+
+This is binding/control invalidation, not dirty-rectangle rendering. GT still
+builds immutable draw snapshots and RT uploads/composites the overlay every frame;
+unchanged panel data does not yet imply reused GPU draw buffers.
 
 ## Typed Boundaries
 
@@ -161,8 +210,8 @@ then destroys UI and renderer resources through their existing owners.
 
 ## Input
 
-Priority is global shortcuts, runtime page, editor workspace, then game.
-The runtime page uses `UiOnly`. The editor uses `GameAndUi` with a visible
+Priority is global shortcuts, editor workspace, then game.
+The editor uses `GameAndUi` with a visible
 cursor; RmlUi hit testing, keyboard focus, drag capture and modal state claim
 panel input. The Viewport image passes through to the game, and clicking it blurs
 editor focus. A dirty-close modal claims the window. No visible UI restores
@@ -172,6 +221,13 @@ the player's requested relative mouse mode.
 when pointer ownership is Game and relative mouse mode is actually enabled.
 Releasing capture cannot keep rotating the camera.
 
+When relative mouse mode is actually enabled, EngineLoop coalesces consecutive
+motion events from the same window and modifier state before UI dispatch.
+It keeps the final absolute position and summed deltas; discrete events remain
+ordered barriers. Free-cursor UI dragging is not coalesced. Camera motion still
+uses SDL's per-frame accumulated relative state, so sensitivity is unchanged.
+Scene picking only performs DOM hit testing for left-button-down events.
+
 Panel mouse-wheel and button-down events release stale scene-viewport input
 ownership before dispatch to RmlUi, including after returning from immersive
 mode. Mouse motion and button-up alone preserve capture so relative camera
@@ -180,8 +236,7 @@ movement and an in-progress scene gesture are not interrupted.
 Restoring the editor also explicitly pulls its document to the front without
 claiming keyboard focus. Hiding it transfers focus and stacking order to the
 runtime document; `Show(FocusFlag::None)` alone leaves that transparent document
-above the editor, blocking panel mouse input. This applies to both immersive
-mode and runtime-control-page return paths.
+above the editor, blocking panel mouse input when returning from immersive mode.
 
 **A scene-viewport hit splits by button.** The **left** button keeps the existing path:
 it is the picking button (`materialInstanceSelection.cpp`), it blurs editor focus, and it
@@ -192,14 +247,14 @@ comes from SDL relative deltas rather than a button gesture — while the left b
 Everything else on a scene-viewport hit still returns before RmlUi, so a stray event
 cannot leak into the editor DOM.
 
-F10/gamepad Start toggle runtime controls, F11 toggles immersive mode (F1 remains
+F10/gamepad Start do not open a UI page. F11 toggles immersive mode (F1 remains
 a compatibility alias). Immersive mode hides the editor and HUD in the existing
 window; it does not create a window, change OS fullscreen, or quit. From a model
 tab it first restores the remembered level through LoadWorld and waits for the
 matching committed World snapshot. Rejection or failure leaves the editor visible;
 another toggle while waiting cancels entry. Returning restores the workspace layout.
 The toolbar uses "Immersive Mode"; File / Exit remains Quit. Esc toggles
-requested mouse capture, and gamepad East closes the runtime page.
+requested mouse capture.
 Ctrl+S saves the active MI when no close modal is open.
 RmlUi keyboard/D-pad/analog navigation uses reference-counted press state.
 Focus loss clears keys, pointer capture, controller and composition state;
@@ -243,7 +298,14 @@ wrapped asset grid into a single column.
 avoiding repeated RmlUi DirtyProperty invalidation on unchanged layout/display
 values. Attach/Detach clear caches; subtree replacement invalidates only
 destroyed descendants, preserving unrelated layout caches during text refresh.
+Invalidation walks the replaced subtree (including internal select children),
+with properties grouped by element id; it does not search the document once per
+cached property on every text replacement.
 Dock placement and panel visibility use the same property cache.
+
+FPS is displayed only in the native window title. The editor status bar has no
+duplicate FPS node or refresh cadence; frame-rate changes do not invalidate
+workspace layout. Ordinary variable-size labels still use normal document layout.
 
 UI asset fingerprints drive candidate reload. Localization, runtime document
 and enabled editor document must all parse and pass required-control validation
@@ -341,7 +403,7 @@ part of this implementation.
 `developerUiVisible`, `assetRoot`, `document`, `localization`, `defaultLocale`
 and `fontFaces`. The developer names now select the RmlUi editor, not a library.
 `--dev-ui` enables it; `--no-dev-ui` skips editor initialization while retaining
-runtime controls. `ui.enabled=false` disables the complete UI subsystem.
+the scene-name HUD. `ui.enabled=false` disables the complete UI subsystem.
 There is no developer-UI CMake switch.
 
 `workerThreadCount=1` renders synchronously; `2` consumes snapshots on RT.

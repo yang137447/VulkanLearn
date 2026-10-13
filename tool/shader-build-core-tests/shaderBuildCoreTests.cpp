@@ -342,3 +342,89 @@ TEST(ShaderBuildCore, ShaderFileMonitor)
 {
     TestShaderFileMonitor();
 }
+
+class ShaderFileMonitorPaths : public testing::Test
+{
+protected:
+    void SetUp() override
+    {
+        root = std::filesystem::temp_directory_path() /
+            ("vl-monitor-paths-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        std::filesystem::create_directories(root / "glsl" / "nested");
+    }
+    void TearDown() override
+    {
+        std::error_code error;
+        std::filesystem::remove_all(root, error);
+    }
+    std::filesystem::path root;
+};
+
+TEST_F(ShaderFileMonitorPaths, CanonicalRootKeepsNestedRegularFileIdentity)
+{
+    const auto file = root / "glsl" / "nested" / "shared.glsl";
+    VL::WriteTextFileAtomically(file, "original");
+    VL::ShaderFileMonitor monitor;
+    monitor.Initialize(root / "glsl" / "..", std::chrono::milliseconds(0), 1);
+    ASSERT_FALSE(monitor.Poll());
+    VL::WriteTextFileAtomically(file, "changed source");
+    const auto batch = monitor.Poll();
+    ASSERT_TRUE(batch);
+    EXPECT_EQ(batch->changedSources, (std::vector<std::string>{"nested/shared.glsl"}));
+}
+
+TEST_F(ShaderFileMonitorPaths, FileAliasKeepsPhysicalTargetIdentity)
+{
+    const auto file = root / "glsl" / "nested" / "shared.glsl";
+    VL::WriteTextFileAtomically(file, "original");
+    std::error_code error;
+    std::filesystem::create_symlink(file, root / "glsl" / "alias.glsl", error);
+    if (error) GTEST_SKIP() << "File symlinks unavailable: " << error.message();
+    VL::ShaderFileMonitor monitor;
+    monitor.Initialize(root, std::chrono::milliseconds(0), 1);
+    ASSERT_FALSE(monitor.Poll());
+    EXPECT_EQ(monitor.GetTrackedSourceCount(), 1u);
+    VL::WriteTextFileAtomically(file, "changed source");
+    const auto batch = monitor.Poll();
+    ASSERT_TRUE(batch);
+    EXPECT_EQ(batch->changedSources, (std::vector<std::string>{"nested/shared.glsl"}));
+}
+
+TEST_F(ShaderFileMonitorPaths, UnchangedHashesAreDistributedAcrossFourScans)
+{
+    for (int i = 0; i < 8; ++i)
+        VL::WriteTextFileAtomically(root / "glsl" / (std::to_string(i) + ".glsl"), "original");
+    VL::ShaderFileMonitor monitor;
+    monitor.Initialize(root, std::chrono::milliseconds(0), 1);
+    ASSERT_FALSE(monitor.Poll());
+    EXPECT_EQ(monitor.GetHashCount(), 8u);
+    for (int i = 0; i < 8; ++i)
+    {
+        const auto before = monitor.GetHashCount();
+        EXPECT_FALSE(monitor.Poll());
+        EXPECT_EQ(monitor.GetHashCount() - before, 2u);
+    }
+}
+
+TEST_F(ShaderFileMonitorPaths, RestoredTimestampEditDetectedDespiteCatalogChurn)
+{
+    const auto file = root / "glsl" / "target.glsl";
+    VL::WriteTextFileAtomically(file, "original");
+    VL::ShaderFileMonitor monitor;
+    monitor.Initialize(root, std::chrono::milliseconds(0), 1);
+    ASSERT_FALSE(monitor.Poll());
+    ASSERT_FALSE(monitor.Poll());
+    const auto timestamp = std::filesystem::last_write_time(file);
+    VL::WriteTextFileAtomically(file, "modified");
+    std::filesystem::last_write_time(file, timestamp);
+    bool detected = false;
+    for (int i = 0; i < 4; ++i)
+    {
+        VL::WriteTextFileAtomically(root / "glsl" / (std::to_string(i) + ".glsl"), "new");
+        const auto batch = monitor.Poll();
+        if (batch)
+            for (const auto& source : batch->changedSources)
+                if (source == "target.glsl") detected = true;
+    }
+    EXPECT_TRUE(detected);
+}

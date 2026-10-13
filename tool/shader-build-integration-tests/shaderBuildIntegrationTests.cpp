@@ -1,5 +1,6 @@
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -9,6 +10,7 @@
 #include <vector>
 
 #include <nlohmann/json.hpp>
+#include <shaderc/shaderc.hpp>
 
 #include "shader/build/atomicFile.h"
 #include "shader/build/contentHash.h"
@@ -16,6 +18,33 @@
 
 namespace
 {
+
+class MaterialDebugTestIncluder final : public shaderc::CompileOptions::IncluderInterface
+{
+    struct Include
+    {
+        std::string path;
+        std::string text;
+        shaderc_include_result result{};
+    };
+public:
+    shaderc_include_result* GetInclude(const char* requested, shaderc_include_type,
+        const char* requesting, size_t) override
+    {
+        auto* include = new Include;
+        include->path = (std::filesystem::path(requesting).parent_path() / requested).lexically_normal().generic_string();
+        std::ifstream file(include->path);
+        include->text.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+        if (!file) include->text = "#error Missing material debug test include\n";
+        include->result = {include->path.c_str(), include->path.size(),
+            include->text.c_str(), include->text.size(), include};
+        return &include->result;
+    }
+    void ReleaseInclude(shaderc_include_result* result) override
+    {
+        delete static_cast<Include*>(result->user_data);
+    }
+};
 
 void Require(bool condition, const std::string& message)
 {
@@ -570,6 +599,43 @@ void TestStaleCacheHitRejectedBeforePublication()
 TEST(ShaderBuildIntegration, WarmStartAndTargetedInvalidation)
 {
     TestWarmStartAndTargetedInvalidation();
+}
+
+TEST(ShaderBuildIntegration, OptimizedMaterialDebugViewsSurviveWithoutDebugMacro)
+{
+    // 直接编译正式 include，不复制调试函数；旧的宏裁剪会把本探针优化成常量白色。
+    const auto root = std::filesystem::path(__FILE__).parent_path().parent_path().parent_path();
+    const std::string path = (root / "shader/glsl/debugViewRegression.frag").generic_string();
+    const std::string source =
+        "#version 450\n"
+        "#include \"engine/materialDebugView.glsl\"\n"
+        "layout(location=0) out vec4 outColor;\n"
+        "void main() {\n"
+        "MaterialSurface s;\n"
+        "s.baseColor=vec3(0.2,0.4,0.6); s.emissiveColor=vec3(0.1);\n"
+        "s.worldNormal=vec3(0,1,0); s.roughness=0.3; s.metallic=0.7;\n"
+        "s.ambientOcclusion=0.8; s.shadingModel=1;\n"
+        "MaterialDebugLightingData l=CreateMaterialDebugLightingData(1.0,0.0,vec3(0.2),vec3(0.3),vec3(0.4));\n"
+        "outColor=ResolveMaterialDebugView(s,l,vec4(1)); }\n";
+    shaderc::Compiler compiler;
+    shaderc::CompileOptions options;
+    options.SetOptimizationLevel(shaderc_optimization_level_performance);
+    options.SetIncluder(std::make_unique<MaterialDebugTestIncluder>());
+    const auto result = compiler.CompileGlslToSpv(source, shaderc_fragment_shader, path.c_str(), options);
+    ASSERT_EQ(result.GetCompilationStatus(), shaderc_compilation_status_success) << result.GetErrorMessage();
+    const std::vector<uint32_t> words(result.cbegin(), result.cend());
+    bool hasRuntimeSelection = false;
+    for (size_t offset = 5; offset < words.size();)
+    {
+        const uint32_t count = words[offset] >> 16;
+        ASSERT_GT(count, 0u);
+        ASSERT_LE(offset + count, words.size());
+        // SPIR-V OpSwitch / OpBranchConditional：uniform 模式选择不能被宏裁剪成常量。
+        const uint32_t opcode = words[offset] & 0xffffu;
+        hasRuntimeSelection |= opcode == 251u || opcode == 250u;
+        offset += count;
+    }
+    EXPECT_TRUE(hasRuntimeSelection);
 }
 
 TEST(ShaderBuildIntegration, ManifestInvalidation)

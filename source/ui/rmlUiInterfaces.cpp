@@ -6,6 +6,7 @@
 #include <utility>
 
 #include <RmlUi/Core/Matrix4.h>
+#include <RmlUi/Core/Core.h>
 #include <RmlUi/Core/StringUtilities.h>
 #include <RmlUi/Core/TextInputContext.h>
 #include <RmlUi/Core/Vector4.h>
@@ -349,6 +350,22 @@ void RmlUiRenderInterface::ReleaseGeometry(Rml::CompiledGeometryHandle geometry)
     delete reinterpret_cast<CompiledGeometry*>(geometry);
 }
 
+void RmlUiRenderInterface::PublishTexturePreview(
+    const std::shared_ptr<const EditorUi::EditorJsonDocumentSnapshot>& document)
+{
+    for (auto it = previewSources.begin(); it != previewSources.end();)
+        if (it->second.expired())
+        {
+            Rml::ReleaseTexture(it->first, this);
+            it = previewSources.erase(it);
+        }
+        else ++it;
+    if (lastPreviewDocument.lock() == document) return;
+    lastPreviewDocument = document;
+    if (document && document->texturePreview)
+        previewSources[EditorUi::EditorTexturePreviewSource(document->revision)] = document->texturePreview;
+}
+
 Rml::TextureHandle RmlUiRenderInterface::LoadTexture(
     Rml::Vector2i& textureDimensions,
     const Rml::String& source)
@@ -358,6 +375,17 @@ Rml::TextureHandle RmlUiRenderInterface::LoadTexture(
         // 固定占位尺寸只供 RmlUi 布局；图像实际分辨率与所有权都留在 renderer。
         textureDimensions = {1, 1};
         return static_cast<Rml::TextureHandle>(SceneViewportTextureId);
+    }
+    if (source.compare(0, 21, "vl://texture-preview/") == 0 || source.compare(0, 15, "vl://thumbnail/") == 0)
+    {
+        const auto found = previewSources.find(source);
+        const auto preview = found == previewSources.end() ? nullptr : found->second.lock();
+        if (!preview) return 0;
+        auto pixels = preview->pixels;
+        if (linearColorOutput) ConvertUiPixelsToLinear(pixels, false);
+        textureDimensions = {int(preview->width), int(preview->height)};
+        return RegisterTexture(preview->width, preview->height, source,
+            std::make_shared<const std::vector<uint8_t>>(std::move(pixels)));
     }
     int width = 0;
     int height = 0;
@@ -390,6 +418,29 @@ Rml::TextureHandle RmlUiRenderInterface::LoadTexture(
         static_cast<uint32_t>(height),
         source,
         std::make_shared<const std::vector<uint8_t>>(std::move(pixels)));
+}
+
+void RmlUiRenderInterface::PublishThumbnails(
+    const std::shared_ptr<const EditorUi::EditorThumbnailSnapshot>& snapshot)
+{
+    if (lastThumbnails.lock() == snapshot) return;
+    lastThumbnails = snapshot;
+    std::unordered_set<std::string> next;
+    if (snapshot)
+        for (const auto& entry : snapshot->entries)
+            if (entry.second.image)
+            {
+                next.insert(entry.second.source);
+                previewSources[entry.second.source] = entry.second.image;
+            }
+    // 内存 LRU 仍可持有像素，但离开可见窗口的 Rml/GPU 纹理必须释放，不能随浏览全库累积。
+    for (const auto& source : thumbnailSources)
+        if (!next.count(source))
+        {
+            Rml::ReleaseTexture(source, this);
+            previewSources.erase(source);
+        }
+    thumbnailSources = std::move(next);
 }
 
 Rml::TextureHandle RmlUiRenderInterface::GenerateTexture(

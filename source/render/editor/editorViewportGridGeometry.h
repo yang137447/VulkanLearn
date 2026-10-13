@@ -17,17 +17,18 @@ namespace VL
 // 共享顶点属性布局，不表达光照信息。
 
 // 供几何生成与模块测试引用的网格口径，改动它们会改变网格外观与几何量。
-// 单位间距 1 世界单位、每 10 条线加重，与 UE 编辑器视口的默认参考网格一致。
+// 世界单位为 cm；采用十进制参考尺度：小格 10 cm、主格 1 m、总宽 4.8 m。
+// UE 网格间距可配置，这里不是复刻其视距自适应网格；不能把 1 cm 误当作 1 m。
 inline constexpr int kEditorGridHalfExtent = 24;
 inline constexpr int kEditorGridMajorLineStep = 10;
-inline constexpr float kEditorGridSpacing = 1.0f;
-inline constexpr float kEditorGridLineHalfWidth = 0.012f;
-inline constexpr float kEditorGridMajorLineHalfWidth = 0.02f;
-inline constexpr float kEditorGridAxisHalfWidth = 0.03f;
-inline constexpr float kEditorGridAxisHeight = 4.0f;
+inline constexpr float kEditorGridSpacing = 10.0f;
+inline constexpr float kEditorGridLineHalfWidth = 0.12f;
+inline constexpr float kEditorGridMajorLineHalfWidth = 0.2f;
+inline constexpr float kEditorGridAxisHalfWidth = 0.3f;
+inline constexpr float kEditorGridAxisHeight = 40.0f;
 // 地面几何与网格共面时深度值可能完全相等，抬升一个远小于单位间距的量，
 // 让 lessOrEqual 的遮挡结果稳定，而不是在共面像素上随机归属。
-inline constexpr float kEditorGridGroundLift = 0.002f;
+inline constexpr float kEditorGridGroundLift = 0.02f;
 // 管线拓扑固定为 TriangleList，每条线用四边形条带的两个三角形表达。
 inline constexpr int kEditorGridVerticesPerQuad = 6;
 // 竖直 Y 轴是**两片**互相垂直的条带（Z 平面一片、X 平面一片）。这里记的是条带数，
@@ -49,12 +50,9 @@ inline constexpr int kEditorGridGroundWindings = 2;
 // 颜色是 tone mapping 之前的线性值，全部低于 bloom 阈值 1.0，
 // 因此网格只表达参考系，不会让后处理把线当成高光。
 //
-// 亮度是**按实测场景地面定的**，不是凭感觉调的：默认场景的石板地面在 sRGB 下约
-// (112,110,117)，换算到线性约 0.16，而石板的高光缝可达 0.35。原先的欠线色
-// (0.30,0.30,0.33) 线性只有 0.07、主线和轴线也在 0.1~0.3 一带，整个落在石板自身的
-// 亮度区间里 —— 逐像素比对显示地面网格与背景**零可分辨像素**，看起来就是"网格没画"。
-// 因此地面线整体抬到明显亮于石板的区间：主线接近白，欠线也保持在 0.53 以上。
-inline const Eigen::Vector4f kEditorGridMinorLineColor(0.53f, 0.55f, 0.60f, 1.0f);
+// 10 cm 次线用中性灰弱化，1 m 主线保持高亮；不要同时压暗主线与坐标轴，
+// 否则在有纹理的地面上会丢失尺度参照。这里直接填写线性颜色，不再做 sRGB 解码。
+inline const Eigen::Vector4f kEditorGridMinorLineColor(0.25f, 0.25f, 0.25f, 1.0f);
 inline const Eigen::Vector4f kEditorGridMajorLineColor(0.78f, 0.80f, 0.86f, 1.0f);
 inline const Eigen::Vector4f kEditorGridAxisXColor(0.95f, 0.16f, 0.12f, 1.0f);
 inline const Eigen::Vector4f kEditorGridAxisYColor(0.20f, 0.88f, 0.24f, 1.0f);

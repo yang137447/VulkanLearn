@@ -18,10 +18,18 @@ inline nlohmann::json BuildModelPreviewObjects(const std::string& modelPath)
         {"modelPath", modelPath},
         {"position", {0.0, 0.0, 0.0}},
         {"rotation", {0.0, 0.0, 0.0}},
-        // 保留 previewmodel 已验证的尺度：单位球在约 630 cm 外的预览相机下可见。
-        // 这不是按任意模型包围盒自动取景；name/type 同样必须满足场景对象校验契约。
+        // 保留预览注入尺度；发布后相机按变换后的包围盒取景，不改资产 transform。
         {"scale", {43.0, 43.0, 43.0}}
     }});
+}
+
+// 复用正式球资产，只覆盖本次场景实例的材质；不生成临时 SM，也不写入 MI 草稿。
+inline nlohmann::json BuildMaterialPreviewObjects(const std::string& materialPath)
+{
+    auto objects = BuildModelPreviewObjects("Common/Meshes/SM_material_preview_ball.json");
+    objects[0]["name"] = "preview_material";
+    objects[0]["materialOverride"] = materialPath;
+    return objects;
 }
 
 } // namespace VL

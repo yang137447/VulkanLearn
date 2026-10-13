@@ -25,6 +25,7 @@ struct EditorDockResourceTab
     std::string path;
     std::string label;
     std::string icon;
+    int documentIndex = -1;
 };
 
 bool ReadWorkspaceLayout(const std::filesystem::path& path,

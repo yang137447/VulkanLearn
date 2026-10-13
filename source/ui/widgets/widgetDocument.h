@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <unordered_map>
 
-namespace Rml { class ElementDocument; }
+namespace Rml { class Element; class ElementDocument; }
 
 namespace VL::UiWidgets
 {
@@ -24,9 +24,10 @@ public:
     void ForgetMarkup(const std::string& id);
     size_t PropertyWriteCount() const { return propertyWriteCount; }
 private:
+    void InvalidateDescendants(Rml::Element& host);
     Rml::ElementDocument* document = nullptr;
     std::unordered_map<std::string, std::string> markupCache;
-    std::unordered_map<std::string, std::string> propertyCache;
+    std::unordered_map<std::string, std::unordered_map<std::string, std::string>> propertyCache;
     size_t propertyWriteCount = 0;
 };
 

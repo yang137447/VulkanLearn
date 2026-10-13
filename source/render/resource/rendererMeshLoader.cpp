@@ -119,6 +119,8 @@ RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
     {
         const MeshSection& section = modelResource.sections[sectionIndex];
         const MeshSectionLoadPlan& sectionPlan = sectionPlans[sectionIndex];
+        // 覆盖属于场景实例，不能修改按 SM 路径共享的导入缓存或源资产槽位。
+        const std::string materialPath = node.value("materialOverride", sectionPlan.materialInstancePath);
         std::string renderableObjectKey =
             buildPlan.modelCacheKey + "|" + std::to_string(sectionIndex) + "|" + section.sectionName;
         if (loadContext.offlineWorldAssets != nullptr)
@@ -150,7 +152,7 @@ RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
 
         std::shared_ptr<MaterialInstance> materialInstance =
             materialLoader.LoadSceneMaterialInstance(
-                sectionPlan.materialInstancePath);
+                materialPath);
 
         std::string meshObjectName = meshObjectBaseName;
         if (modelResource.sections.size() > 1)
@@ -187,7 +189,7 @@ RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
         {
             // 逻辑身份不代表 GPU Material；离线路径不会 resolve GPU groups。
             meshObjectPlan.materialInstanceKey =
-                MaterialAssetUtils::NormalizeAssetPath(sectionPlan.materialInstancePath);
+                MaterialAssetUtils::NormalizeAssetPath(materialPath);
             meshObjectPlan.materialKey =
                 loadContext.offlineWorldAssets->effectiveMaterialInstances.at(
                     meshObjectPlan.materialInstanceKey).at("material").get<std::string>();

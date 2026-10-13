@@ -27,12 +27,14 @@
 #include "editor/selection/materialInstanceSelection.h"
 #include "editor/runtime/materialInstanceEditorRuntime.h"
 #include "editor/assets/editorJsonAssetLibrary.h"
+#include "editor/assets/editorThumbnailLibrary.h"
 #include "editor/ui/materialInstanceAssetEditorPanel.h"
 #include "editor/ui/editorSceneActorTree.h"
 #include "platform/platformEvent.h"
 #include "platform/platformWindow.h"
 #include "ui/sceneObjectTypeSupport.h"
 #include "ui/uiBindingUpdateScope.h"
+#include "Profiler.h"
 
 namespace VL
 {
@@ -305,6 +307,7 @@ void UiSubsystem::Shutdown()
 
     materialInstanceEditorPanel.reset();
     jsonAssetLibrary.reset();
+    thumbnailLibrary.reset();
     materialInstanceEditorRuntime.reset();
 
     if (rmlContext != nullptr && editorDocument != nullptr)
@@ -341,7 +344,6 @@ void UiSubsystem::Shutdown()
     assetFingerprint.clear();
     dataModelHandle = Rml::DataModelHandle();
     initialized = false;
-    runtimePageVisible = false;
     developerUiVisible = false;
     developerUiEnabled = false;
     editorPointerCaptured = false;
@@ -396,32 +398,6 @@ bool UiSubsystem::HandlePlatformEvent(const PlatformEvent& event)
     }
 
     bool consumed = false;
-    if (runtimePageVisible)
-    {
-        consumed = ProcessRuntimeUiEvent(event);
-        if (!consumed)
-        {
-            switch (event.type)
-            {
-            case PlatformEventType::KeyDown:
-            case PlatformEventType::KeyUp:
-            case PlatformEventType::TextInput:
-            case PlatformEventType::TextEditing:
-            case PlatformEventType::MouseMove:
-            case PlatformEventType::MouseButtonDown:
-            case PlatformEventType::MouseButtonUp:
-            case PlatformEventType::MouseWheel:
-            case PlatformEventType::GamepadButtonDown:
-            case PlatformEventType::GamepadButtonUp:
-            case PlatformEventType::GamepadAxisMotion:
-                consumed = true;
-                break;
-            default:
-                break;
-            }
-        }
-    }
-
     if (!consumed && developerUiVisible)
     {
         consumed = ProcessDeveloperUiEvent(event);
@@ -433,6 +409,7 @@ bool UiSubsystem::HandlePlatformEvent(const PlatformEvent& event)
 
 void UiSubsystem::Update(const UiViewModelSnapshot& viewModelSnapshot)
 {
+    PROFILE_SCOPE("UI.Update");
     if (!initialized)
     {
         return;
@@ -451,16 +428,17 @@ void UiSubsystem::Update(const UiViewModelSnapshot& viewModelSnapshot)
         else diagnostics->ReportWarning("Immersive mode cancelled: the level was not restored.");
     }
     ReconcileOfflineModeFeedback(lastViewModel, previous);
-    lastViewModel.runtimePageVisible = runtimePageVisible;
     lastViewModel.developerUiVisible = developerUiVisible;
     lastViewModel.locale = currentLocale;
 
     UiBindingUpdateScope bindingUpdate(updatingRuntimeBindings);
     TryHotReload();
     SyncBindingData();
-    dataModelHandle.DirtyAllVariables();
     BuildDeveloperPanels();
-    rmlContext->Update();
+    {
+        PROFILE_SCOPE("UI.RmlUpdate");
+        rmlContext->Update();
+    }
     BuildAndPublishRenderSnapshot();
     UpdateInputOwnership();
 }
@@ -483,7 +461,7 @@ void UiSubsystem::Resize(uint32_t width, uint32_t height)
 
 bool UiSubsystem::IsScenePickTarget(float mouseX, float mouseY) const
 {
-    if (!developerUiVisible || runtimePageVisible || editorDocument == nullptr ||
+    if (!developerUiVisible || editorDocument == nullptr ||
         !std::isfinite(mouseX) || !std::isfinite(mouseY) ||
         mouseX < 0 || mouseY < 0 || mouseX >= desc.viewportWidth || mouseY >= desc.viewportHeight ||
         materialInstanceEditorPanel == nullptr || materialInstanceEditorPanel->HasModal() ||
@@ -500,20 +478,6 @@ void UiSubsystem::ApplyAction(const UiAction& action)
 {
     switch (action.type)
     {
-    case UiActionType::ToggleRuntimePage:
-        ResetRuntimeInputState();
-        runtimePageVisible = !runtimePageVisible;
-        if (!runtimePageVisible)
-        {
-            ResetRuntimeInputState();
-        }
-        ApplyDocumentState();
-        break;
-    case UiActionType::CloseRuntimePage:
-        ResetRuntimeInputState();
-        runtimePageVisible = false;
-        ApplyDocumentState();
-        break;
     case UiActionType::ToggleDeveloperUi:
         if (developerUiEnabled)
         {
@@ -557,7 +521,6 @@ void UiSubsystem::SetImmersiveView(bool enabled)
 {
     immersiveView = enabled;
     developerUiVisible = !enabled;
-    runtimePageVisible = false;
     ResetRuntimeInputState();
     editorPointerCaptured = false;
     ApplyDocumentState();
@@ -592,7 +555,6 @@ void UiSubsystem::NotifyWorldLoadCompleted()
         return;
     }
     bindingData.sceneLoading = false;
-    dataModelHandle.DirtyVariable("scene_loading");
 }
 
 void UiSubsystem::TickMaterialInstanceEditor()
@@ -605,7 +567,7 @@ void UiSubsystem::TickMaterialInstanceEditor()
     if (jsonAssetLibrary != nullptr) jsonAssetLibrary->Poll();
 }
 
-bool UiSubsystem::OpenMaterialInstanceFromSelection(
+bool UiSubsystem::SelectSceneObjectFromPick(
     const Editor::Selection::MaterialInstanceSelection& selection)
 {
     if (!developerUiEnabled || materialInstanceEditorRuntime == nullptr)
@@ -613,16 +575,11 @@ bool UiSubsystem::OpenMaterialInstanceFromSelection(
         return false;
     }
 
-    Editor::Selection::MaterialInstanceEditorRuntimeSelectionTarget target(
-        *materialInstanceEditorRuntime);
-    if (!target.OpenMaterialInstance(selection))
-    {
-        return false;
-    }
-
-    developerUiVisible = true;
-    if (materialInstanceEditorPanel != nullptr) materialInstanceEditorPanel->ShowMaterialDetails();
-    ApplyDocumentState();
+    // 关卡拾取只发布对象/槽位选择，不创建 MI 文档或请求预览 World。
+    // 打开材质必须来自材质槽或资产浏览器的显式操作。
+    if (materialInstanceEditorPanel != nullptr) materialInstanceEditorPanel->ShowSceneDetails();
+    pendingMaterialInstanceSelection.reset();
+    pendingMaterialInstanceModelSelection.reset();
 
     EditorUi::MaterialInstanceModelSnapshot modelSnapshot;
     modelSnapshot.worldGeneration = selection.modelContext.worldGeneration;
@@ -833,9 +790,9 @@ bool UiSubsystem::RequestActorSelection(const std::string& actorIdentity)
 
 bool UiSubsystem::ShouldUseRelativeMouseModeForGame() const
 {
-    if (!initialized || runtimePageVisible) return false;
+    if (!initialized) return false;
     if (materialInstanceEditorPanel != nullptr &&
-        materialInstanceEditorPanel->IsResourceEditorVisible())
+        materialInstanceEditorPanel->IsAssetEditorVisible())
         return false;
     // 捕获由 Viewport 点击建立，不能再用绝对光标位置反向取消；
     // 相对鼠标移动期间 SDL 的绝对坐标可能落在 Viewport 外。
@@ -902,282 +859,10 @@ RuntimeResult<void> UiSubsystem::InitializeDataModel()
             "RmlUi failed to create the game_ui data model."));
     }
 
-    bool bound = true;
-    if (auto sceneOptionHandle = constructor.RegisterStruct<UiSceneOption>())
-    {
-        bound = sceneOptionHandle.RegisterMember("label", &UiSceneOption::label) && bound;
-        bound = sceneOptionHandle.RegisterMember("path", &UiSceneOption::path) && bound;
-        bound = sceneOptionHandle.RegisterMember("active", &UiSceneOption::active) && bound;
-    }
-    else
-    {
-        bound = false;
-    }
-    bound = constructor.RegisterArray<decltype(bindingData.sceneOptions)>() && bound;
-
-    bound = constructor.Bind("active_section", &bindingData.activeSection) && bound;
-    bound = constructor.Bind("world_text", &bindingData.worldText) && bound;
-    bound = constructor.Bind("panel_title", &bindingData.panelTitle) && bound;
-    bound = constructor.Bind("panel_subtitle", &bindingData.panelSubtitle) && bound;
-    bound = constructor.Bind("close_label", &bindingData.closeLabel) && bound;
-    bound = constructor.Bind("quit_label", &bindingData.quitLabel) && bound;
-
-    bound = constructor.Bind("tab_overview_label", &bindingData.tabOverviewLabel) && bound;
-    bound = constructor.Bind("tab_visualization_label", &bindingData.tabVisualizationLabel) && bound;
-    bound = constructor.Bind("tab_post_process_label", &bindingData.tabPostProcessLabel) && bound;
-    bound = constructor.Bind("tab_environment_label", &bindingData.tabEnvironmentLabel) && bound;
-    bound = constructor.Bind("tab_shadows_label", &bindingData.tabShadowsLabel) && bound;
-    bound = constructor.Bind("tab_scenes_label", &bindingData.tabScenesLabel) && bound;
-    bound = constructor.Bind("tab_system_label", &bindingData.tabSystemLabel) && bound;
-
-    bound = constructor.Bind("scene_list_title", &bindingData.sceneListTitle) && bound;
-    bound = constructor.Bind("scene_list_hint", &bindingData.sceneListHint) && bound;
-    bound = constructor.Bind("scene_empty_label", &bindingData.sceneEmptyLabel) && bound;
-    bound = constructor.Bind("scene_loading_label", &bindingData.sceneLoadingLabel) && bound;
-    bound = constructor.Bind("scene_loading", &bindingData.sceneLoading) && bound;
-    bound = constructor.Bind("scene_options", &bindingData.sceneOptions) && bound;
-    bound = constructor.Bind("camera_move_speed_label", &bindingData.cameraMoveSpeedLabel) && bound;
-    bound = constructor.Bind("camera_move_speed_value", &bindingData.cameraMoveSpeedValue) && bound;
-    bound = constructor.Bind("camera_move_speed", &bindingData.cameraMoveSpeed) && bound;
-
-    bound = constructor.Bind("frame_label", &bindingData.frameLabel) && bound;
-    bound = constructor.Bind("frame_value", &bindingData.frameValue) && bound;
-    bound = constructor.Bind("fps_label", &bindingData.fpsLabel) && bound;
-    bound = constructor.Bind("fps_value", &bindingData.fpsValue) && bound;
-    bound = constructor.Bind("scene_label", &bindingData.sceneLabel) && bound;
-    bound = constructor.Bind("input_mode_label", &bindingData.inputModeLabel) && bound;
-    bound = constructor.Bind("input_mode_value", &bindingData.inputModeValue) && bound;
-    bound = constructor.Bind("wind_profiles_label", &bindingData.windProfilesLabel) && bound;
-    bound = constructor.Bind("wind_profiles_value", &bindingData.windProfilesValue) && bound;
-    bound = constructor.Bind("hot_reload_label", &bindingData.hotReloadLabel) && bound;
-    bound = constructor.Bind("hot_reload_status", &bindingData.hotReloadStatus) && bound;
-
-    bound = constructor.Bind("debug_view_label", &bindingData.debugViewLabel) && bound;
-    bound = constructor.Bind("debug_view_value", &bindingData.debugViewValue) && bound;
-    bound = constructor.Bind("debug_view_mode", &bindingData.debugViewMode) && bound;
-    bound = constructor.Bind("debug_material_group_label", &bindingData.debugMaterialGroupLabel) && bound;
-    bound = constructor.Bind("debug_sss_group_label", &bindingData.debugSssGroupLabel) && bound;
-    bound = constructor.Bind("debug_hair_group_label", &bindingData.debugHairGroupLabel) && bound;
-    bound = constructor.Bind("debug_eye_group_label", &bindingData.debugEyeGroupLabel) && bound;
-    bound = constructor.Bind("debug_cloth_group_label", &bindingData.debugClothGroupLabel) && bound;
-    bound = constructor.Bind("debug_full_label", &bindingData.debugFullLabel) && bound;
-    bound = constructor.Bind("debug_base_color_label", &bindingData.debugBaseColorLabel) && bound;
-    bound = constructor.Bind("debug_emissive_label", &bindingData.debugEmissiveLabel) && bound;
-    bound = constructor.Bind("debug_normal_label", &bindingData.debugNormalLabel) && bound;
-    bound = constructor.Bind("debug_roughness_label", &bindingData.debugRoughnessLabel) && bound;
-    bound = constructor.Bind("debug_metallic_label", &bindingData.debugMetallicLabel) && bound;
-    bound = constructor.Bind("debug_ao_label", &bindingData.debugAoLabel) && bound;
-    bound = constructor.Bind("debug_shadow_label", &bindingData.debugShadowLabel) && bound;
-    bound = constructor.Bind("debug_direct_lighting_label", &bindingData.debugDirectLightingLabel) && bound;
-    bound = constructor.Bind("debug_indirect_diffuse_label", &bindingData.debugIndirectDiffuseLabel) && bound;
-    bound = constructor.Bind("debug_indirect_specular_label", &bindingData.debugIndirectSpecularLabel) && bound;
-    bound = constructor.Bind("debug_shadow_cascade_label", &bindingData.debugShadowCascadeLabel) && bound;
-    bound = constructor.Bind("debug_shading_model_label", &bindingData.debugShadingModelLabel) && bound;
-    bound = constructor.Bind("debug_subsurface_weight_label", &bindingData.debugSubsurfaceWeightLabel) && bound;
-    bound = constructor.Bind("debug_transmission_weight_label", &bindingData.debugTransmissionWeightLabel) && bound;
-    bound = constructor.Bind("debug_subsurface_asset_id_label", &bindingData.debugSubsurfaceAssetIdLabel) && bound;
-    bound = constructor.Bind("debug_local_subsurface_label", &bindingData.debugLocalSubsurfaceLabel) && bound;
-    bound = constructor.Bind("debug_diffuse_before_sss_label", &bindingData.debugDiffuseBeforeSssLabel) && bound;
-    bound = constructor.Bind("debug_diffuse_after_sss_label", &bindingData.debugDiffuseAfterSssLabel) && bound;
-    bound = constructor.Bind("debug_sss_pixel_radius_label", &bindingData.debugSssPixelRadiusLabel) && bound;
-    bound = constructor.Bind("debug_sss_valid_weight_label", &bindingData.debugSssValidWeightLabel) && bound;
-    bound = constructor.Bind("debug_hair_world_tangent_label", &bindingData.debugHairWorldTangentLabel) && bound;
-    bound = constructor.Bind("debug_hair_tangent_rootward_label", &bindingData.debugHairTangentRootwardLabel) && bound;
-    bound = constructor.Bind("debug_hair_theta_io_label", &bindingData.debugHairThetaIoLabel) && bound;
-    bound = constructor.Bind("debug_hair_delta_phi_label", &bindingData.debugHairDeltaPhiLabel) && bound;
-    bound = constructor.Bind("debug_hair_r_label", &bindingData.debugHairRLabel) && bound;
-    bound = constructor.Bind("debug_hair_tt_label", &bindingData.debugHairTtLabel) && bound;
-    bound = constructor.Bind("debug_hair_trt_label", &bindingData.debugHairTrtLabel) && bound;
-    bound = constructor.Bind("debug_hair_path_length_label", &bindingData.debugHairPathLengthLabel) && bound;
-    bound = constructor.Bind("debug_hair_absorption_label", &bindingData.debugHairAbsorptionLabel) && bound;
-    bound = constructor.Bind("debug_hair_coverage_label", &bindingData.debugHairCoverageLabel) && bound;
-    bound = constructor.Bind("debug_hair_shadow_transmittance_label", &bindingData.debugHairShadowTransmittanceLabel) && bound;
-    bound = constructor.Bind("debug_hair_lut_coordinates_label", &bindingData.debugHairLutCoordinatesLabel) && bound;
-    bound = constructor.Bind("debug_hair_primary_highlight_label", &bindingData.debugHairPrimaryHighlightLabel) && bound;
-    bound = constructor.Bind("debug_hair_secondary_highlight_label", &bindingData.debugHairSecondaryHighlightLabel) && bound;
-    bound = constructor.Bind("debug_hair_scatter_label", &bindingData.debugHairScatterLabel) && bound;
-    bound = constructor.Bind("debug_hair_backlit_label", &bindingData.debugHairBacklitLabel) && bound;
-    bound = constructor.Bind("debug_hair_r_path_color_label", &bindingData.debugHairRPathColorLabel) && bound;
-    bound = constructor.Bind("debug_hair_tt_path_color_label", &bindingData.debugHairTtPathColorLabel) && bound;
-    bound = constructor.Bind("debug_hair_trt_path_color_label", &bindingData.debugHairTrtPathColorLabel) && bound;
-    bound = constructor.Bind("debug_hair_ibl_fallback_label", &bindingData.debugHairIblFallbackLabel) && bound;
-    bound = constructor.Bind("debug_hair_ms_fallback_label", &bindingData.debugHairMultipleScatteringFallbackLabel) && bound;
-    bound = constructor.Bind("debug_eye_frame_label", &bindingData.debugEyeFrameLabel) && bound;
-    bound = constructor.Bind("debug_eye_cornea_normal_label", &bindingData.debugEyeCorneaNormalLabel) && bound;
-    bound = constructor.Bind("debug_eye_iris_normal_label", &bindingData.debugEyeIrisNormalLabel) && bound;
-    bound = constructor.Bind("debug_eye_iris_plane_normal_label", &bindingData.debugEyeIrisPlaneNormalLabel) && bound;
-    bound = constructor.Bind("debug_eye_cornea_fresnel_label", &bindingData.debugEyeCorneaFresnelLabel) && bound;
-    bound = constructor.Bind("debug_eye_cornea_specular_label", &bindingData.debugEyeCorneaSpecularLabel) && bound;
-    bound = constructor.Bind("debug_eye_refracted_view_direction_label", &bindingData.debugEyeRefractedViewDirectionLabel) && bound;
-    bound = constructor.Bind("debug_eye_iris_hit_distance_label", &bindingData.debugEyeIrisHitDistanceLabel) && bound;
-    bound = constructor.Bind("debug_eye_iris_uv_label", &bindingData.debugEyeIrisUvLabel) && bound;
-    bound = constructor.Bind("debug_eye_valid_iris_hit_label", &bindingData.debugEyeValidIrisHitLabel) && bound;
-    bound = constructor.Bind("debug_eye_iris_mask_label", &bindingData.debugEyeIrisMaskLabel) && bound;
-    bound = constructor.Bind("debug_eye_pupil_mask_label", &bindingData.debugEyePupilMaskLabel) && bound;
-    bound = constructor.Bind("debug_eye_limbus_mask_label", &bindingData.debugEyeLimbusMaskLabel) && bound;
-    bound = constructor.Bind("debug_eye_light_transmission_in_label", &bindingData.debugEyeLightTransmissionInLabel) && bound;
-    bound = constructor.Bind("debug_eye_view_transmission_out_label", &bindingData.debugEyeViewTransmissionOutLabel) && bound;
-    bound = constructor.Bind("debug_eye_iris_direct_label", &bindingData.debugEyeIrisDirectLabel) && bound;
-    bound = constructor.Bind("debug_eye_sclera_direct_label", &bindingData.debugEyeScleraDirectLabel) && bound;
-    bound = constructor.Bind("debug_eye_inner_ibl_label", &bindingData.debugEyeInnerIblLabel) && bound;
-    bound = constructor.Bind("debug_eye_caustic_gain_label", &bindingData.debugEyeCausticGainLabel) && bound;
-    bound = constructor.Bind("debug_eye_inner_shadow_label", &bindingData.debugEyeInnerShadowLabel) && bound;
-    bound = constructor.Bind("debug_eye_cornea_shadow_label", &bindingData.debugEyeCorneaShadowLabel) && bound;
-    bound = constructor.Bind("debug_eye_profile_label", &bindingData.debugEyeProfileLabel) && bound;
-    bound = constructor.Bind("debug_cloth_model_label", &bindingData.debugClothModelLabel) && bound;
-    bound = constructor.Bind("debug_cloth_sheen_color_label", &bindingData.debugClothSheenColorLabel) && bound;
-    bound = constructor.Bind("debug_cloth_sheen_roughness_label", &bindingData.debugClothSheenRoughnessLabel) && bound;
-    bound = constructor.Bind("debug_cloth_charlie_d_label", &bindingData.debugClothCharlieDLabel) && bound;
-    bound = constructor.Bind("debug_cloth_neubelt_visibility_label", &bindingData.debugClothNeubeltVisibilityLabel) && bound;
-    bound = constructor.Bind("debug_cloth_directional_albedo_label", &bindingData.debugClothDirectionalAlbedoLabel) && bound;
-    bound = constructor.Bind("debug_cloth_base_energy_scale_label", &bindingData.debugClothBaseEnergyScaleLabel) && bound;
-    bound = constructor.Bind("debug_cloth_direct_sheen_label", &bindingData.debugClothDirectSheenLabel) && bound;
-    bound = constructor.Bind("debug_cloth_indirect_sheen_label", &bindingData.debugClothIndirectSheenLabel) && bound;
-    bound = constructor.Bind("debug_cloth_ibl_fallback_label", &bindingData.debugClothIblFallbackLabel) && bound;
-    bound = constructor.Bind("debug_cloth_v2_model_label", &bindingData.debugClothV2ModelLabel) && bound;
-    bound = constructor.Bind("debug_cloth_world_tangent_label", &bindingData.debugClothWorldTangentLabel) && bound;
-    bound = constructor.Bind("debug_cloth_anisotropy_label", &bindingData.debugClothAnisotropyLabel) && bound;
-    bound = constructor.Bind("debug_cloth_anisotropy_cross_label", &bindingData.debugClothAnisotropyCrossLabel) && bound;
-    bound = constructor.Bind("debug_cloth_roughness_axes_label", &bindingData.debugClothRoughnessAxesLabel) && bound;
-    bound = constructor.Bind("debug_cloth_anisotropic_charlie_d_label", &bindingData.debugClothAnisotropicCharlieDLabel) && bound;
-    bound = constructor.Bind("debug_cloth_visibility_label", &bindingData.debugClothVisibilityLabel) && bound;
-    bound = constructor.Bind("debug_cloth_v2_directional_albedo_label", &bindingData.debugClothV2DirectionalAlbedoLabel) && bound;
-    bound = constructor.Bind("debug_cloth_v2_base_energy_scale_label", &bindingData.debugClothV2BaseEnergyScaleLabel) && bound;
-    bound = constructor.Bind("debug_cloth_v2_ibl_fallback_label", &bindingData.debugClothV2IblFallbackLabel) && bound;
-
-    bound = constructor.Bind("tone_mapping_label", &bindingData.toneMappingLabel) && bound;
-    bound = constructor.Bind("tone_mapping_value", &bindingData.toneMappingValue) && bound;
-    bound = constructor.Bind("tone_mapping_mode", &bindingData.toneMappingMode) && bound;
-    bound = constructor.Bind("tone_none_label", &bindingData.toneNoneLabel) && bound;
-    bound = constructor.Bind("tone_reinhard_label", &bindingData.toneReinhardLabel) && bound;
-    bound = constructor.Bind("tone_hable_label", &bindingData.toneHableLabel) && bound;
-    bound = constructor.Bind("tone_aces_label", &bindingData.toneAcesLabel) && bound;
-    bound = constructor.Bind("has_camera", &bindingData.hasCamera) && bound;
-    bound = constructor.Bind("exposure_mode", &bindingData.exposureMode) && bound;
-    bound = constructor.Bind("exposure_mode_label", &bindingData.exposureModeLabel) && bound;
-    bound = constructor.Bind("exposure_manual_label", &bindingData.exposureManualLabel) && bound;
-    bound = constructor.Bind("exposure_physical_ev_label", &bindingData.exposurePhysicalEvLabel) && bound;
-    bound = constructor.Bind("exposure_auto_label", &bindingData.exposureAutoLabel) && bound;
-    bound = constructor.Bind("exposure_ev_label", &bindingData.exposureEvLabel) && bound;
-    bound = constructor.Bind("exposure_ev_value", &bindingData.exposureEvValue) && bound;
-    bound = constructor.Bind("exposure_ev", &bindingData.exposureEv) && bound;
-    bound = constructor.Bind("exposure_compensation_label", &bindingData.exposureCompensationLabel) && bound;
-    bound = constructor.Bind("exposure_compensation_value", &bindingData.exposureCompensationValue) && bound;
-    bound = constructor.Bind("exposure_compensation", &bindingData.exposureCompensation) && bound;
-    bound = constructor.Bind("exposure_min_ev_label", &bindingData.exposureMinEvLabel) && bound;
-    bound = constructor.Bind("exposure_min_ev_value", &bindingData.exposureMinEvValue) && bound;
-    bound = constructor.Bind("exposure_min_ev", &bindingData.exposureMinEv) && bound;
-    bound = constructor.Bind("exposure_max_ev_label", &bindingData.exposureMaxEvLabel) && bound;
-    bound = constructor.Bind("exposure_max_ev_value", &bindingData.exposureMaxEvValue) && bound;
-    bound = constructor.Bind("exposure_max_ev", &bindingData.exposureMaxEv) && bound;
-    bound = constructor.Bind("bloom_strength_label", &bindingData.bloomStrengthLabel) && bound;
-    bound = constructor.Bind("bloom_strength_value", &bindingData.bloomStrengthValue) && bound;
-    bound = constructor.Bind("bloom_strength", &bindingData.bloomStrength) && bound;
-    bound = constructor.Bind("bloom_threshold_label", &bindingData.bloomThresholdLabel) && bound;
-    bound = constructor.Bind("bloom_threshold_value", &bindingData.bloomThresholdValue) && bound;
-    bound = constructor.Bind("bloom_threshold", &bindingData.bloomThreshold) && bound;
-    bound = constructor.Bind("bloom_knee_label", &bindingData.bloomKneeLabel) && bound;
-    bound = constructor.Bind("bloom_knee_value", &bindingData.bloomKneeValue) && bound;
-    bound = constructor.Bind("bloom_knee", &bindingData.bloomKnee) && bound;
-    bound = constructor.Bind("bloom_clamp_label", &bindingData.bloomClampLabel) && bound;
-    bound = constructor.Bind("bloom_clamp_value", &bindingData.bloomClampValue) && bound;
-    bound = constructor.Bind("bloom_clamp", &bindingData.bloomClamp) && bound;
-
-    bound = constructor.Bind("shadow_cast_shadows_label", &bindingData.shadowCastShadowsLabel) && bound;
-    bound = constructor.Bind("shadow_cast_shadows_value", &bindingData.shadowCastShadowsValue) && bound;
-    bound = constructor.Bind("csm_cast_shadows", &bindingData.csmCastShadows) && bound;
-    bound = constructor.Bind("shadow_enable_label", &bindingData.shadowEnableLabel) && bound;
-    bound = constructor.Bind("shadow_disable_label", &bindingData.shadowDisableLabel) && bound;
-    bound = constructor.Bind("shadow_dynamic_distance_label", &bindingData.shadowDynamicDistanceLabel) && bound;
-    bound = constructor.Bind("shadow_dynamic_distance_value", &bindingData.shadowDynamicDistanceValue) && bound;
-    bound = constructor.Bind("csm_dynamic_shadow_distance", &bindingData.csmDynamicShadowDistance) && bound;
-    bound = constructor.Bind("shadow_dynamic_cascades_label", &bindingData.shadowDynamicCascadesLabel) && bound;
-    bound = constructor.Bind("csm_dynamic_shadow_cascades", &bindingData.csmDynamicShadowCascades) && bound;
-    bound = constructor.Bind("shadow_cascade_distribution_exponent_label", &bindingData.shadowCascadeDistributionExponentLabel) && bound;
-    bound = constructor.Bind("shadow_cascade_distribution_exponent_value", &bindingData.shadowCascadeDistributionExponentValue) && bound;
-    bound = constructor.Bind("csm_cascade_distribution_exponent", &bindingData.csmCascadeDistributionExponent) && bound;
-    bound = constructor.Bind("shadow_cascade_transition_fraction_label", &bindingData.shadowCascadeTransitionFractionLabel) && bound;
-    bound = constructor.Bind("shadow_cascade_transition_fraction_value", &bindingData.shadowCascadeTransitionFractionValue) && bound;
-    bound = constructor.Bind("csm_cascade_transition_fraction", &bindingData.csmCascadeTransitionFraction) && bound;
-    bound = constructor.Bind("shadow_distance_fadeout_fraction_label", &bindingData.shadowDistanceFadeoutFractionLabel) && bound;
-    bound = constructor.Bind("shadow_distance_fadeout_fraction_value", &bindingData.shadowDistanceFadeoutFractionValue) && bound;
-    bound = constructor.Bind("csm_shadow_distance_fadeout_fraction", &bindingData.csmShadowDistanceFadeoutFraction) && bound;
-    bound = constructor.Bind("shadow_bias_label", &bindingData.shadowBiasLabel) && bound;
-    bound = constructor.Bind("shadow_bias_value", &bindingData.shadowBiasValue) && bound;
-    bound = constructor.Bind("csm_shadow_bias", &bindingData.csmShadowBias) && bound;
-    bound = constructor.Bind("shadow_slope_bias_label", &bindingData.shadowSlopeBiasLabel) && bound;
-    bound = constructor.Bind("shadow_slope_bias_value", &bindingData.shadowSlopeBiasValue) && bound;
-    bound = constructor.Bind("csm_shadow_slope_bias", &bindingData.csmShadowSlopeBias) && bound;
-    bound = constructor.Bind("shadow_cascade_bias_distribution_label", &bindingData.shadowCascadeBiasDistributionLabel) && bound;
-    bound = constructor.Bind("shadow_cascade_bias_distribution_value", &bindingData.shadowCascadeBiasDistributionValue) && bound;
-    bound = constructor.Bind("csm_shadow_cascade_bias_distribution", &bindingData.csmShadowCascadeBiasDistribution) && bound;
-    bound = constructor.Bind("shadow_debug_label", &bindingData.shadowDebugLabel) && bound;
-    bound = constructor.Bind("shadow_debug_full_label", &bindingData.shadowDebugFullLabel) && bound;
-    bound = constructor.Bind("shadow_debug_cascades_label", &bindingData.shadowDebugCascadesLabel) && bound;
-    bound = constructor.Bind("shadow_save_label", &bindingData.shadowSaveLabel) && bound;
-
-    bound = constructor.Bind("environment_label", &bindingData.environmentLabel) && bound;
-    bound = constructor.Bind("environment_value", &bindingData.environmentValue) && bound;
-    bound = constructor.Bind("environment_intensity", &bindingData.environmentIntensity) && bound;
-    bound = constructor.Bind("sun_label", &bindingData.sunLabel) && bound;
-    bound = constructor.Bind("sun_value", &bindingData.sunValue) && bound;
-    bound = constructor.Bind("sun_intensity", &bindingData.sunIntensity) && bound;
-    bound = constructor.Bind("vegetation_heading", &bindingData.vegetationHeading) && bound;
-    bound = constructor.Bind("wind_strength_label", &bindingData.windStrengthLabel) && bound;
-    bound = constructor.Bind("wind_strength_value", &bindingData.windStrengthValue) && bound;
-    bound = constructor.Bind("speedtree_strength", &bindingData.speedTreeStrength) && bound;
-    bound = constructor.Bind("gusting_label", &bindingData.gustingLabel) && bound;
-    bound = constructor.Bind("gusting_value", &bindingData.gustingValue) && bound;
-    bound = constructor.Bind("speedtree_gusting_enabled", &bindingData.speedTreeGustingEnabled) && bound;
-    bound = constructor.Bind("gust_on_label", &bindingData.gustOnLabel) && bound;
-    bound = constructor.Bind("gust_off_label", &bindingData.gustOffLabel) && bound;
-    bound = constructor.Bind("gust_once_label", &bindingData.gustOnceLabel) && bound;
-
-    bound = constructor.Bind("locale_label", &bindingData.localeLabel) && bound;
-    bound = constructor.Bind("locale_value", &bindingData.localeValue) && bound;
-    bound = constructor.Bind("developer_ui_label", &bindingData.developerUiLabel) && bound;
-    bound = constructor.Bind("developer_ui_value", &bindingData.developerUiValue) && bound;
-    bound = constructor.Bind("developer_ui_toggle_label", &bindingData.developerUiToggleLabel) && bound;
-
-    bound = constructor.BindEventCallback("close_page", &UiSubsystem::OnClosePage, this) && bound;
-    bound = constructor.BindEventCallback("load_scene", &UiSubsystem::OnLoadScene, this) && bound;
-    bound = constructor.BindEventCallback("camera_move_speed_changed", &UiSubsystem::OnCameraMoveSpeedChanged, this) && bound;
-    bound = constructor.BindEventCallback("set_debug_view", &UiSubsystem::OnDebugViewSelected, this) && bound;
-    bound = constructor.BindEventCallback("tone_none", &UiSubsystem::OnToneMappingNone, this) && bound;
-    bound = constructor.BindEventCallback("tone_reinhard", &UiSubsystem::OnToneMappingReinhard, this) && bound;
-    bound = constructor.BindEventCallback("tone_hable", &UiSubsystem::OnToneMappingHable, this) && bound;
-    bound = constructor.BindEventCallback("tone_aces", &UiSubsystem::OnToneMappingAces, this) && bound;
-    bound = constructor.BindEventCallback("set_exposure_mode", &UiSubsystem::OnExposureModeSelected, this) && bound;
-    bound = constructor.BindEventCallback("exposure_value_changed", &UiSubsystem::OnExposureValueChanged, this) && bound;
-    bound = constructor.BindEventCallback("bloom_strength_changed", &UiSubsystem::OnBloomStrengthChanged, this) && bound;
-    bound = constructor.BindEventCallback("bloom_threshold_changed", &UiSubsystem::OnBloomThresholdChanged, this) && bound;
-    bound = constructor.BindEventCallback("bloom_knee_changed", &UiSubsystem::OnBloomKneeChanged, this) && bound;
-    bound = constructor.BindEventCallback("bloom_clamp_changed", &UiSubsystem::OnBloomClampChanged, this) && bound;
-    bound = constructor.BindEventCallback("set_csm_cast_shadows", &UiSubsystem::OnCsmCastShadowsSelected, this) && bound;
-    bound = constructor.BindEventCallback("csm_dynamic_shadow_distance_changed", &UiSubsystem::OnCsmDynamicShadowDistanceChanged, this) && bound;
-    bound = constructor.BindEventCallback("set_csm_dynamic_shadow_cascades", &UiSubsystem::OnCsmDynamicShadowCascadesSelected, this) && bound;
-    bound = constructor.BindEventCallback("csm_cascade_distribution_exponent_changed", &UiSubsystem::OnCsmCascadeDistributionExponentChanged, this) && bound;
-    bound = constructor.BindEventCallback("csm_cascade_transition_fraction_changed", &UiSubsystem::OnCsmCascadeTransitionFractionChanged, this) && bound;
-    bound = constructor.BindEventCallback("csm_shadow_distance_fadeout_fraction_changed", &UiSubsystem::OnCsmShadowDistanceFadeoutFractionChanged, this) && bound;
-    bound = constructor.BindEventCallback("csm_shadow_bias_changed", &UiSubsystem::OnCsmShadowBiasChanged, this) && bound;
-    bound = constructor.BindEventCallback("csm_shadow_slope_bias_changed", &UiSubsystem::OnCsmShadowSlopeBiasChanged, this) && bound;
-    bound = constructor.BindEventCallback("csm_shadow_cascade_bias_distribution_changed", &UiSubsystem::OnCsmShadowCascadeBiasDistributionChanged, this) && bound;
-    bound = constructor.BindEventCallback("save_csm_to_scene", &UiSubsystem::OnSaveCsmSettingsToScene, this) && bound;
-    bound = constructor.BindEventCallback("environment_intensity_changed", &UiSubsystem::OnEnvironmentIntensityChanged, this) && bound;
-    bound = constructor.BindEventCallback("sun_intensity_changed", &UiSubsystem::OnSunIntensityChanged, this) && bound;
-    bound = constructor.BindEventCallback("speedtree_strength_changed", &UiSubsystem::OnSpeedTreeStrengthChanged, this) && bound;
-    bound = constructor.BindEventCallback("set_speedtree_gusting", &UiSubsystem::OnSpeedTreeGustingSelected, this) && bound;
-    bound = constructor.BindEventCallback("force_speedtree_gust", &UiSubsystem::OnForceSpeedTreeGust, this) && bound;
-    bound = constructor.BindEventCallback("locale_en", &UiSubsystem::OnLocaleEnglish, this) && bound;
-    bound = constructor.BindEventCallback("locale_zh", &UiSubsystem::OnLocaleChinese, this) && bound;
-    bound = constructor.BindEventCallback("toggle_developer_ui", &UiSubsystem::OnToggleDeveloperUi, this) && bound;
-    bound = constructor.BindEventCallback("quit", &UiSubsystem::OnQuit, this) && bound;
-
-    if (!bound)
+    if (!constructor.Bind("world_text", &bindingData.worldText))
     {
         return RuntimeResult<void>::Failure(MakeRuntimeError(
-            "UiSubsystem.DataModelBindingFailed",
-            "One or more RmlUi game_ui data model bindings failed."));
+            "UiSubsystem.DataModelFailed", "Could not bind HUD world label."));
     }
 
     dataModelHandle = constructor.GetModelHandle();
@@ -1199,6 +884,7 @@ RuntimeResult<void> UiSubsystem::InitializeMaterialInstanceEditor()
     materialInstanceEditorPanel.reset();
     materialInstanceEditorRuntime.reset();
     jsonAssetLibrary.reset();
+    thumbnailLibrary.reset();
 
     if (!developerUiEnabled)
     {
@@ -1239,6 +925,10 @@ RuntimeResult<void> UiSubsystem::InitializeMaterialInstanceEditor()
     jsonAssetLibrary = std::make_unique<Editor::EditorJsonAssetLibrary>();
     if (!jsonAssetLibrary->Initialize(desc.sceneRoot.parent_path(), error))
         return RuntimeResult<void>::Failure(MakeRuntimeError("UiSubsystem.AssetLibraryInvalid", error));
+    thumbnailLibrary = std::make_unique<Editor::EditorThumbnailLibrary>();
+    if (!thumbnailLibrary->Initialize(desc.sceneRoot.parent_path(),
+        desc.assetRoot.parent_path() / ".cache" / "editor-thumbnails", error))
+        return RuntimeResult<void>::Failure(MakeRuntimeError("UiSubsystem.ThumbnailLibraryInvalid", error));
     materialInstanceEditorPanel->SetJsonAssetRequestSink(this);
     if (!materialInstanceEditorPanel->Attach(*editorDocument, error))
         return RuntimeResult<void>::Failure(MakeRuntimeError("UiSubsystem.EditorDocumentInvalid", error));
@@ -1521,7 +1211,6 @@ void UiSubsystem::CommitDocumentCandidate(
     LocalizationDatabase localizationCandidate)
 {
     UiBindingUpdateScope bindingUpdate(updatingRuntimeBindings);
-    CapturePersistentDocumentState();
     ResetRuntimeInputState();
     Rml::ElementDocument* previousDocument = runtimeDocument;
     runtimeDocument = &candidate;
@@ -1534,7 +1223,6 @@ void UiSubsystem::CommitDocumentCandidate(
     Rml::ReleaseTextures(&rmlRenderInterface);
     runtimeDocument->Show();
     ApplyDocumentState();
-    RestorePersistentDocumentState();
     SyncBindingData();
     dataModelHandle.DirtyAllVariables();
     rmlContext->Update();
@@ -1550,11 +1238,7 @@ bool UiSubsystem::ValidateDocument(Rml::ElementDocument& document, std::string& 
 {
     static const char* requiredIds[] = {
         "ui-root",
-        "hud",
-        "control-backdrop",
-        "control-panel",
-        "control-scroll",
-        "close-button"
+        "hud"
     };
     for (const char* requiredId : requiredIds)
     {
@@ -1575,21 +1259,11 @@ void UiSubsystem::ApplyDocumentState()
         return;
     }
 
-    Rml::Element* backdrop = runtimeDocument->GetElementById("control-backdrop");
-    Rml::Element* panel = runtimeDocument->GetElementById("control-panel");
-    if (backdrop != nullptr)
-    {
-        backdrop->SetProperty("display", runtimePageVisible ? "block" : "none");
-    }
-    if (panel != nullptr)
-    {
-        panel->SetProperty("display", runtimePageVisible ? "block" : "none");
-    }
     if (Rml::Element* hud = runtimeDocument->GetElementById("hud"))
         hud->SetProperty("display", developerUiVisible || immersiveView ? "none" : "block");
     if (editorDocument != nullptr)
     {
-        if (developerUiVisible && !runtimePageVisible)
+        if (developerUiVisible)
         {
             editorDocument->Show(Rml::ModalFlag::None, Rml::FocusFlag::None);
             // Hide 会将焦点交还运行时文档并将其置顶；无焦点 Show 不恢复层级。
@@ -1599,40 +1273,6 @@ void UiSubsystem::ApplyDocumentState()
         else editorDocument->Hide();
     }
 
-    if (runtimePageVisible)
-    {
-        Rml::Element* closeButton = runtimeDocument->GetElementById("close-button");
-        if (closeButton != nullptr)
-        {
-            closeButton->Focus(true);
-        }
-    }
-}
-
-void UiSubsystem::CapturePersistentDocumentState()
-{
-    if (runtimeDocument == nullptr)
-    {
-        return;
-    }
-    Rml::Element* scrollElement = runtimeDocument->GetElementById("control-scroll");
-    if (scrollElement != nullptr)
-    {
-        persistentScrollTop = scrollElement->GetScrollTop();
-    }
-}
-
-void UiSubsystem::RestorePersistentDocumentState()
-{
-    if (runtimeDocument == nullptr)
-    {
-        return;
-    }
-    Rml::Element* scrollElement = runtimeDocument->GetElementById("control-scroll");
-    if (scrollElement != nullptr)
-    {
-        scrollElement->SetScrollTop(persistentScrollTop);
-    }
 }
 
 void UiSubsystem::TryHotReload()
@@ -1642,6 +1282,7 @@ void UiSubsystem::TryHotReload()
         return;
     }
     nextHotReloadCheck = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+    PROFILE_SCOPE("UI.HotReloadScan");
 
     AssetFingerprint candidateFingerprint = BuildAssetFingerprint();
     if (!HasAssetFingerprintChanged(candidateFingerprint))
@@ -1734,431 +1375,15 @@ bool UiSubsystem::HasAssetFingerprintChanged(const AssetFingerprint& candidate) 
 
 void UiSubsystem::SyncBindingData()
 {
-    bindingData.worldText = std::filesystem::path(lastViewModel.activeWorldPath).stem().string();
-    bindingData.panelTitle = Localize("panel.title");
-    bindingData.panelSubtitle = Localize("panel.subtitle");
-    bindingData.closeLabel = Localize("action.close");
-    bindingData.quitLabel = Localize("action.quit");
-
-    bindingData.tabOverviewLabel = Localize("tab.overview");
-    bindingData.tabVisualizationLabel = Localize("tab.visualization");
-    bindingData.tabPostProcessLabel = Localize("tab.post_process");
-    bindingData.tabEnvironmentLabel = Localize("tab.environment");
-    bindingData.tabShadowsLabel = Localize("tab.shadows");
-    bindingData.tabScenesLabel = Localize("tab.scenes");
-    bindingData.tabSystemLabel = Localize("tab.system");
-
-    bindingData.sceneListTitle = Localize("scene.list_title");
-    bindingData.sceneListHint = Localize("scene.list_hint");
-    bindingData.sceneEmptyLabel = Localize("scene.empty");
-    bindingData.sceneLoadingLabel = Localize("scene.loading");
-    bindingData.cameraMoveSpeedLabel = Localize("control.camera_move_speed");
-    bindingData.cameraMoveSpeed = lastViewModel.cameraMoveSpeed;
-    bindingData.cameraMoveSpeedValue = FormatFloat(lastViewModel.cameraMoveSpeed);
-    const std::string activeWorldPath =
-        NormalizePathForComparison(lastViewModel.activeWorldPath);
-    for (UiSceneOption& option : bindingData.sceneOptions)
-    {
-        option.active =
-            !activeWorldPath.empty() &&
-            option.normalizedPhysicalPath == activeWorldPath;
-    }
-
-    bindingData.frameLabel = Localize("status.frame");
-    bindingData.frameValue = std::to_string(lastViewModel.frameIndex);
-    bindingData.fpsLabel = Localize("status.fps");
-    bindingData.fpsValue = FormatFloat(lastViewModel.framesPerSecond);
-    bindingData.sceneLabel = Localize("status.scene");
-    bindingData.inputModeLabel = Localize("status.input_mode");
-    bindingData.inputModeValue = GetInputModeName(inputOwnership.mode);
-    bindingData.windProfilesLabel = Localize("status.wind_profiles");
-    bindingData.windProfilesValue = std::to_string(lastViewModel.speedTreeWindProfileCount);
-    bindingData.hotReloadLabel = Localize("status.hot_reload");
-    bindingData.hotReloadStatus = hotReloadStatus;
-
-    bindingData.debugViewLabel = Localize("control.debug_view");
-    bindingData.debugViewMode = lastViewModel.debugViewMode;
-    bindingData.debugViewValue = GetDebugViewName(lastViewModel.debugViewMode);
-    bindingData.debugMaterialGroupLabel = Localize("debug.group.material");
-    bindingData.debugSssGroupLabel = Localize("debug.group.sss");
-    bindingData.debugHairGroupLabel = Localize("debug.group.hair");
-    bindingData.debugEyeGroupLabel = Localize("debug.group.eye");
-    bindingData.debugClothGroupLabel = Localize("debug.group.cloth");
-    bindingData.debugFullLabel = Localize("debug.full");
-    bindingData.debugBaseColorLabel = Localize("debug.base_color");
-    bindingData.debugEmissiveLabel = Localize("debug.emissive");
-    bindingData.debugNormalLabel = Localize("debug.normal");
-    bindingData.debugRoughnessLabel = Localize("debug.roughness");
-    bindingData.debugMetallicLabel = Localize("debug.metallic");
-    bindingData.debugAoLabel = Localize("debug.ao");
-    bindingData.debugShadowLabel = Localize("debug.shadow");
-    bindingData.debugDirectLightingLabel = Localize("debug.direct_lighting");
-    bindingData.debugIndirectDiffuseLabel = Localize("debug.indirect_diffuse");
-    bindingData.debugIndirectSpecularLabel = Localize("debug.indirect_specular");
-    bindingData.debugShadowCascadeLabel = Localize("debug.shadow_cascade");
-    bindingData.debugShadingModelLabel = Localize("debug.shading_model");
-    bindingData.debugSubsurfaceWeightLabel = Localize("debug.subsurface_weight");
-    bindingData.debugTransmissionWeightLabel = Localize("debug.transmission_weight");
-    bindingData.debugSubsurfaceAssetIdLabel = Localize("debug.subsurface_asset_id");
-    bindingData.debugLocalSubsurfaceLabel = Localize("debug.local_subsurface");
-    bindingData.debugDiffuseBeforeSssLabel = Localize("debug.diffuse_before_sss");
-    bindingData.debugDiffuseAfterSssLabel = Localize("debug.diffuse_after_sss");
-    bindingData.debugSssPixelRadiusLabel = Localize("debug.sss_pixel_radius");
-    bindingData.debugSssValidWeightLabel = Localize("debug.sss_valid_weight");
-    bindingData.debugHairWorldTangentLabel = Localize("debug.hair_world_tangent");
-    bindingData.debugHairTangentRootwardLabel = Localize("debug.hair_tangent_rootward");
-    bindingData.debugHairThetaIoLabel = Localize("debug.hair_theta_io");
-    bindingData.debugHairDeltaPhiLabel = Localize("debug.hair_delta_phi");
-    bindingData.debugHairRLabel = Localize("debug.hair_r");
-    bindingData.debugHairTtLabel = Localize("debug.hair_tt");
-    bindingData.debugHairTrtLabel = Localize("debug.hair_trt");
-    bindingData.debugHairPathLengthLabel = Localize("debug.hair_path_length");
-    bindingData.debugHairAbsorptionLabel = Localize("debug.hair_absorption");
-    bindingData.debugHairCoverageLabel = Localize("debug.hair_coverage");
-    bindingData.debugHairShadowTransmittanceLabel = Localize("debug.hair_shadow_transmittance");
-    bindingData.debugHairLutCoordinatesLabel = Localize("debug.hair_lut_coordinates");
-    bindingData.debugHairPrimaryHighlightLabel = Localize("debug.hair_primary_highlight");
-    bindingData.debugHairSecondaryHighlightLabel = Localize("debug.hair_secondary_highlight");
-    bindingData.debugHairScatterLabel = Localize("debug.hair_scatter");
-    bindingData.debugHairBacklitLabel = Localize("debug.hair_backlit");
-    bindingData.debugHairRPathColorLabel = Localize("debug.hair_r_path_color");
-    bindingData.debugHairTtPathColorLabel = Localize("debug.hair_tt_path_color");
-    bindingData.debugHairTrtPathColorLabel = Localize("debug.hair_trt_path_color");
-    bindingData.debugHairIblFallbackLabel = Localize("debug.hair_ibl_fallback");
-    bindingData.debugHairMultipleScatteringFallbackLabel = Localize("debug.hair_ms_fallback");
-    bindingData.debugEyeFrameLabel = Localize("debug.eye_frame");
-    bindingData.debugEyeCorneaNormalLabel = Localize("debug.eye_cornea_normal");
-    bindingData.debugEyeIrisNormalLabel = Localize("debug.eye_iris_normal");
-    bindingData.debugEyeIrisPlaneNormalLabel = Localize("debug.eye_iris_plane_normal");
-    bindingData.debugEyeCorneaFresnelLabel = Localize("debug.eye_cornea_fresnel");
-    bindingData.debugEyeCorneaSpecularLabel = Localize("debug.eye_cornea_specular");
-    bindingData.debugEyeRefractedViewDirectionLabel = Localize("debug.eye_refracted_view_direction");
-    bindingData.debugEyeIrisHitDistanceLabel = Localize("debug.eye_iris_hit_distance");
-    bindingData.debugEyeIrisUvLabel = Localize("debug.eye_iris_uv");
-    bindingData.debugEyeValidIrisHitLabel = Localize("debug.eye_valid_iris_hit");
-    bindingData.debugEyeIrisMaskLabel = Localize("debug.eye_iris_mask");
-    bindingData.debugEyePupilMaskLabel = Localize("debug.eye_pupil_mask");
-    bindingData.debugEyeLimbusMaskLabel = Localize("debug.eye_limbus_mask");
-    bindingData.debugEyeLightTransmissionInLabel = Localize("debug.eye_light_transmission_in");
-    bindingData.debugEyeViewTransmissionOutLabel = Localize("debug.eye_view_transmission_out");
-    bindingData.debugEyeIrisDirectLabel = Localize("debug.eye_iris_direct");
-    bindingData.debugEyeScleraDirectLabel = Localize("debug.eye_sclera_direct");
-    bindingData.debugEyeInnerIblLabel = Localize("debug.eye_inner_ibl");
-    bindingData.debugEyeCausticGainLabel = Localize("debug.eye_caustic_gain");
-    bindingData.debugEyeInnerShadowLabel = Localize("debug.eye_inner_shadow");
-    bindingData.debugEyeCorneaShadowLabel = Localize("debug.eye_cornea_shadow");
-    bindingData.debugEyeProfileLabel = Localize("debug.eye_profile");
-    bindingData.debugClothModelLabel = Localize("debug.cloth_model");
-    bindingData.debugClothSheenColorLabel = Localize("debug.cloth_sheen_color");
-    bindingData.debugClothSheenRoughnessLabel = Localize("debug.cloth_sheen_roughness");
-    bindingData.debugClothCharlieDLabel = Localize("debug.cloth_charlie_d");
-    bindingData.debugClothNeubeltVisibilityLabel = Localize("debug.cloth_neubelt_visibility");
-    bindingData.debugClothDirectionalAlbedoLabel = Localize("debug.cloth_directional_albedo");
-    bindingData.debugClothBaseEnergyScaleLabel = Localize("debug.cloth_base_energy_scale");
-    bindingData.debugClothDirectSheenLabel = Localize("debug.cloth_direct_sheen");
-    bindingData.debugClothIndirectSheenLabel = Localize("debug.cloth_indirect_sheen");
-    bindingData.debugClothIblFallbackLabel = Localize("debug.cloth_ibl_fallback");
-    bindingData.debugClothV2ModelLabel = Localize("debug.cloth_v2_model");
-    bindingData.debugClothWorldTangentLabel = Localize("debug.cloth_world_tangent");
-    bindingData.debugClothAnisotropyLabel = Localize("debug.cloth_anisotropy");
-    bindingData.debugClothAnisotropyCrossLabel = Localize("debug.cloth_anisotropy_cross");
-    bindingData.debugClothRoughnessAxesLabel = Localize("debug.cloth_roughness_axes");
-    bindingData.debugClothAnisotropicCharlieDLabel = Localize("debug.cloth_anisotropic_charlie_d");
-    bindingData.debugClothVisibilityLabel = Localize("debug.cloth_visibility");
-    bindingData.debugClothV2DirectionalAlbedoLabel = Localize("debug.cloth_v2_directional_albedo");
-    bindingData.debugClothV2BaseEnergyScaleLabel = Localize("debug.cloth_v2_base_energy_scale");
-    bindingData.debugClothV2IblFallbackLabel = Localize("debug.cloth_v2_ibl_fallback");
-
-    bindingData.toneMappingLabel = Localize("control.tone_mapping");
-    bindingData.toneMappingMode = lastViewModel.toneMappingMode;
-    bindingData.toneMappingValue = GetToneMappingName(lastViewModel.toneMappingMode);
-    bindingData.toneNoneLabel = Localize("tone.none");
-    bindingData.toneReinhardLabel = Localize("tone.reinhard");
-    bindingData.toneHableLabel = Localize("tone.hable");
-    bindingData.toneAcesLabel = Localize("tone.aces");
-    bindingData.hasCamera = lastViewModel.hasCamera;
-    const CameraExposure& exposure = lastViewModel.cameraExposure;
-    bindingData.exposureMode = exposure.mode == ExposureMode::Auto ? 2 :
-        exposure.mode == ExposureMode::PhysicalCamera ? 1 : 0;
-    bindingData.exposureModeLabel = Localize("control.exposure_mode");
-    bindingData.exposureManualLabel = Localize("exposure.manual");
-    bindingData.exposurePhysicalEvLabel = Localize("control.exposure_physical_ev");
-    bindingData.exposureAutoLabel = Localize("exposure.auto");
-    bindingData.exposureEvLabel = Localize("control.exposure_ev");
-    bindingData.exposureEv = static_cast<float>(exposure.ev100);
-    // physical 配置属于固定曝光，UI 归到 Manual；只读显示相机推导的 EV，
-    // 不把未生效的作者 ev100 误当作当前曝光。显式选择 Manual 才切回 ev100 输入。
-    bindingData.exposureEvValue = FormatFloat(static_cast<float>(EffectiveEv100(exposure)));
-    bindingData.exposureCompensationLabel = Localize("control.exposure_compensation");
-    bindingData.exposureCompensation = static_cast<float>(exposure.compensation);
-    bindingData.exposureCompensationValue = FormatFloat(bindingData.exposureCompensation);
-    bindingData.exposureMinEvLabel = Localize("control.exposure_min_ev");
-    bindingData.exposureMinEv = static_cast<float>(exposure.autoMinEv100);
-    bindingData.exposureMinEvValue = FormatFloat(bindingData.exposureMinEv);
-    bindingData.exposureMaxEvLabel = Localize("control.exposure_max_ev");
-    bindingData.exposureMaxEv = static_cast<float>(exposure.autoMaxEv100);
-    bindingData.exposureMaxEvValue = FormatFloat(bindingData.exposureMaxEv);
-    bindingData.bloomStrengthLabel = Localize("control.bloom_strength");
-    bindingData.bloomStrength = lastViewModel.bloomStrength;
-    bindingData.bloomStrengthValue = FormatFloat(lastViewModel.bloomStrength);
-    bindingData.bloomThresholdLabel = Localize("control.bloom_threshold");
-    bindingData.bloomThreshold = lastViewModel.bloomThreshold;
-    bindingData.bloomThresholdValue = FormatFloat(lastViewModel.bloomThreshold);
-    bindingData.bloomKneeLabel = Localize("control.bloom_knee");
-    bindingData.bloomKnee = lastViewModel.bloomKnee;
-    bindingData.bloomKneeValue = FormatFloat(lastViewModel.bloomKnee);
-    bindingData.bloomClampLabel = Localize("control.bloom_clamp");
-    bindingData.bloomClamp = lastViewModel.bloomClamp;
-    bindingData.bloomClampValue = FormatFloat(lastViewModel.bloomClamp);
-
-    bindingData.shadowCastShadowsLabel =
-        Localize("control.shadow_cast_shadows");
-    bindingData.csmCastShadows =
-        lastViewModel.csmCastShadows;
-    bindingData.shadowCastShadowsValue =
-        lastViewModel.csmCastShadows ?
-        Localize("status.enabled") : Localize("status.disabled");
-    bindingData.shadowEnableLabel = Localize("action.enable");
-    bindingData.shadowDisableLabel = Localize("action.disable");
-    bindingData.shadowDynamicDistanceLabel =
-        Localize("control.shadow_dynamic_distance");
-    bindingData.csmDynamicShadowDistance =
-        lastViewModel.csmDynamicShadowDistance;
-    bindingData.shadowDynamicDistanceValue =
-        FormatFloat(
-            lastViewModel.csmDynamicShadowDistance);
-    bindingData.shadowDynamicCascadesLabel =
-        Localize("control.shadow_dynamic_cascades");
-    bindingData.csmDynamicShadowCascades =
-        lastViewModel.csmDynamicShadowCascades;
-    bindingData.shadowCascadeDistributionExponentLabel =
-        Localize(
-            "control.shadow_cascade_distribution_exponent");
-    bindingData.csmCascadeDistributionExponent =
-        lastViewModel.csmCascadeDistributionExponent;
-    bindingData.shadowCascadeDistributionExponentValue =
-        FormatFloat(
-            lastViewModel.csmCascadeDistributionExponent);
-    bindingData.shadowCascadeTransitionFractionLabel =
-        Localize(
-            "control.shadow_cascade_transition_fraction");
-    bindingData.csmCascadeTransitionFraction =
-        lastViewModel.csmCascadeTransitionFraction;
-    bindingData.shadowCascadeTransitionFractionValue =
-        FormatFloat(
-            lastViewModel.csmCascadeTransitionFraction);
-    bindingData.shadowDistanceFadeoutFractionLabel =
-        Localize(
-            "control.shadow_distance_fadeout_fraction");
-    bindingData.csmShadowDistanceFadeoutFraction =
-        lastViewModel.csmShadowDistanceFadeoutFraction;
-    bindingData.shadowDistanceFadeoutFractionValue =
-        FormatFloat(
-            lastViewModel.csmShadowDistanceFadeoutFraction);
-    bindingData.shadowBiasLabel =
-        Localize("control.shadow_bias");
-    bindingData.csmShadowBias =
-        lastViewModel.csmShadowBias;
-    bindingData.shadowBiasValue =
-        FormatFloat(lastViewModel.csmShadowBias);
-    bindingData.shadowSlopeBiasLabel = Localize("control.shadow_slope_bias");
-    bindingData.csmShadowSlopeBias =
-        lastViewModel.csmShadowSlopeBias;
-    bindingData.shadowSlopeBiasValue =
-        FormatFloat(lastViewModel.csmShadowSlopeBias);
-    bindingData.shadowCascadeBiasDistributionLabel =
-        Localize(
-            "control.shadow_cascade_bias_distribution");
-    bindingData.csmShadowCascadeBiasDistribution =
-        lastViewModel.csmShadowCascadeBiasDistribution;
-    bindingData.shadowCascadeBiasDistributionValue =
-        FormatFloat(
-            lastViewModel.csmShadowCascadeBiasDistribution);
-    bindingData.shadowDebugLabel = Localize("control.shadow_debug");
-    bindingData.shadowDebugFullLabel = Localize("debug.full");
-    bindingData.shadowDebugCascadesLabel = Localize("debug.shadow_cascade");
-    bindingData.shadowSaveLabel = Localize("action.save_to_scene");
-    bindingData.environmentLabel = Localize("control.environment");
-    bindingData.environmentIntensity = lastViewModel.environmentIntensity;
-    bindingData.environmentValue = FormatFloat(lastViewModel.environmentIntensity);
-    bindingData.sunLabel = Localize("control.sun_intensity");
-    bindingData.sunIntensity = lastViewModel.sunIntensity;
-    bindingData.sunValue = FormatFloat(lastViewModel.sunIntensity);
-    bindingData.vegetationHeading = Localize("section.vegetation");
-    bindingData.windStrengthLabel = Localize("control.wind_strength");
-    bindingData.speedTreeStrength = lastViewModel.speedTreeStrength;
-    bindingData.windStrengthValue = FormatFloat(lastViewModel.speedTreeStrength);
-    bindingData.gustingLabel = Localize("control.gusting");
-    bindingData.speedTreeGustingEnabled = lastViewModel.speedTreeGustingEnabled;
-    bindingData.gustingValue = lastViewModel.speedTreeGustingEnabled ?
-        Localize("status.enabled") : Localize("status.disabled");
-    bindingData.gustOnLabel = Localize("action.gust_on");
-    bindingData.gustOffLabel = Localize("action.gust_off");
-    bindingData.gustOnceLabel = Localize("action.gust_once");
-
-    bindingData.localeLabel = Localize("status.locale");
-    bindingData.localeValue = currentLocale;
-    bindingData.developerUiLabel = Localize("status.developer_ui");
-    bindingData.developerUiValue = lastViewModel.developerUiVisible ?
-        Localize("status.visible") : Localize("status.hidden");
-    bindingData.developerUiToggleLabel = Localize("action.developer_ui");
-}
-
-std::string UiSubsystem::Localize(const std::string& key) const
-{
-    auto localeIt = localizations.find(currentLocale);
-    if (localeIt != localizations.end())
-    {
-        auto valueIt = localeIt->second.find(key);
-        if (valueIt != localeIt->second.end())
-        {
-            return valueIt->second;
-        }
-    }
-    auto fallbackIt = localizations.find(desc.defaultLocale);
-    if (fallbackIt != localizations.end())
-    {
-        auto valueIt = fallbackIt->second.find(key);
-        if (valueIt != fallbackIt->second.end())
-        {
-            return valueIt->second;
-        }
-    }
-    return key;
-}
-
-std::string UiSubsystem::FormatFloat(float value) const
-{
-    std::ostringstream stream;
-    stream << std::fixed << std::setprecision(2) << value;
-    return stream.str();
-}
-
-std::string UiSubsystem::GetDebugViewName(int mode) const
-{
-    switch (mode)
-    {
-    case 0: return Localize("debug.full");
-    case 1: return Localize("debug.base_color");
-    case 2: return Localize("debug.emissive");
-    case 3: return Localize("debug.normal");
-    case 4: return Localize("debug.roughness");
-    case 5: return Localize("debug.metallic");
-    case 6: return Localize("debug.ao");
-    case 7: return Localize("debug.shadow");
-    case 8: return Localize("debug.direct_lighting");
-    case 9: return Localize("debug.indirect_diffuse");
-    case 10: return Localize("debug.indirect_specular");
-    case 11: return Localize("debug.shadow_cascade");
-    case 12: return Localize("debug.shading_model");
-    case 13: return Localize("debug.subsurface_weight");
-    case 14: return Localize("debug.transmission_weight");
-    case 15: return Localize("debug.subsurface_asset_id");
-    case 16: return Localize("debug.local_subsurface");
-    case 17: return Localize("debug.diffuse_before_sss");
-    case 18: return Localize("debug.diffuse_after_sss");
-    case 19: return Localize("debug.sss_pixel_radius");
-    case 20: return Localize("debug.sss_valid_weight");
-    case 21: return Localize("debug.hair_world_tangent");
-    case 22: return Localize("debug.hair_tangent_rootward");
-    case 23: return Localize("debug.hair_theta_io");
-    case 24: return Localize("debug.hair_delta_phi");
-    case 25: return Localize("debug.hair_r");
-    case 26: return Localize("debug.hair_tt");
-    case 27: return Localize("debug.hair_trt");
-    case 28: return Localize("debug.hair_path_length");
-    case 29: return Localize("debug.hair_absorption");
-    case 30: return Localize("debug.hair_coverage");
-    case 31: return Localize("debug.hair_shadow_transmittance");
-    case 32: return Localize("debug.hair_lut_coordinates");
-    case 33: return Localize("debug.hair_primary_highlight");
-    case 34: return Localize("debug.hair_secondary_highlight");
-    case 35: return Localize("debug.hair_scatter");
-    case 36: return Localize("debug.hair_backlit");
-    case 37: return Localize("debug.hair_r_path_color");
-    case 38: return Localize("debug.hair_tt_path_color");
-    case 39: return Localize("debug.hair_trt_path_color");
-    case 40: return Localize("debug.hair_ibl_fallback");
-    case 41: return Localize("debug.hair_ms_fallback");
-    case 42: return Localize("debug.eye_frame");
-    case 43: return Localize("debug.eye_cornea_normal");
-    case 44: return Localize("debug.eye_iris_normal");
-    case 45: return Localize("debug.eye_iris_plane_normal");
-    case 46: return Localize("debug.eye_cornea_fresnel");
-    case 47: return Localize("debug.eye_cornea_specular");
-    case 48: return Localize("debug.eye_refracted_view_direction");
-    case 49: return Localize("debug.eye_iris_hit_distance");
-    case 50: return Localize("debug.eye_iris_uv");
-    case 51: return Localize("debug.eye_valid_iris_hit");
-    case 52: return Localize("debug.eye_iris_mask");
-    case 53: return Localize("debug.eye_pupil_mask");
-    case 54: return Localize("debug.eye_limbus_mask");
-    case 55: return Localize("debug.eye_light_transmission_in");
-    case 56: return Localize("debug.eye_view_transmission_out");
-    case 57: return Localize("debug.eye_iris_direct");
-    case 58: return Localize("debug.eye_sclera_direct");
-    case 59: return Localize("debug.eye_inner_ibl");
-    case 60: return Localize("debug.eye_caustic_gain");
-    case 61: return Localize("debug.eye_inner_shadow");
-    case 62: return Localize("debug.eye_cornea_shadow");
-    case 63: return Localize("debug.eye_profile");
-    case 64: return Localize("debug.cloth_model");
-    case 65: return Localize("debug.cloth_sheen_color");
-    case 66: return Localize("debug.cloth_sheen_roughness");
-    case 67: return Localize("debug.cloth_charlie_d");
-    case 68: return Localize("debug.cloth_neubelt_visibility");
-    case 69: return Localize("debug.cloth_directional_albedo");
-    case 70: return Localize("debug.cloth_base_energy_scale");
-    case 71: return Localize("debug.cloth_direct_sheen");
-    case 72: return Localize("debug.cloth_indirect_sheen");
-    case 73: return Localize("debug.cloth_ibl_fallback");
-    case 80: return Localize("debug.cloth_v2_model");
-    case 81: return Localize("debug.cloth_world_tangent");
-    case 82: return Localize("debug.cloth_anisotropy");
-    case 83: return Localize("debug.cloth_anisotropy_cross");
-    case 84: return Localize("debug.cloth_roughness_axes");
-    case 85: return Localize("debug.cloth_anisotropic_charlie_d");
-    case 86: return Localize("debug.cloth_visibility");
-    case 87: return Localize("debug.cloth_v2_directional_albedo");
-    case 88: return Localize("debug.cloth_v2_base_energy_scale");
-    case 89: return Localize("debug.cloth_v2_ibl_fallback");
-    case 90: return Localize("debug.foliage_model");
-    case 91: return Localize("debug.foliage_subsurface_color");
-    case 93: return Localize("debug.foliage_resolved_normal");
-    case 94: return Localize("debug.foliage_backlight_factor");
-    case 95: return Localize("debug.foliage_shadow_visibility");
-    case 96: return Localize("debug.foliage_lobe");
-    case 97: return Localize("debug.foliage_alpha_mask");
-    case 98: return Localize("debug.foliage_gbuffer_custom_data");
-    default: return Localize("debug.unknown");
-    }
-}
-
-std::string UiSubsystem::GetToneMappingName(int mode) const
-{
-    switch (mode)
-    {
-    case 0: return Localize("tone.none");
-    case 1: return Localize("tone.reinhard");
-    case 2: return Localize("tone.hable");
-    case 3: return Localize("tone.aces");
-    default: return Localize("tone.unknown");
-    }
-}
-
-std::string UiSubsystem::GetInputModeName(UiInputMode mode) const
-{
-    switch (mode)
-    {
-    case UiInputMode::GameOnly: return Localize("input.game_only");
-    case UiInputMode::UiOnly: return Localize("input.ui_only");
-    case UiInputMode::GameAndUi: return Localize("input.game_and_ui");
-    }
-    return Localize("status.unknown");
+    const std::string worldText = std::filesystem::path(lastViewModel.activeWorldPath).stem().string();
+    if (bindingData.worldText == worldText) return;
+    bindingData.worldText = worldText;
+    dataModelHandle.DirtyVariable("world_text");
 }
 
 void UiSubsystem::BuildAndPublishRenderSnapshot()
 {
+    PROFILE_SCOPE("UI.RenderSnapshot");
     std::shared_ptr<UiRenderSnapshot> snapshot = std::make_shared<UiRenderSnapshot>();
     // 冻结快照不能跨 GT/RT 重用；仅借用上一帧容量估计，避免每个 draw 都重新分配。
     snapshot->vertices.reserve(previousUiVertexCount);
@@ -2189,6 +1414,7 @@ void UiSubsystem::BuildAndPublishRenderSnapshot()
 
 void UiSubsystem::BuildDeveloperPanels()
 {
+    PROFILE_SCOPE("UI.BuildPanels");
     if (materialInstanceEditorPanel == nullptr || materialInstanceEditorRuntime == nullptr) return;
     EditorUi::MaterialInstanceEditorSnapshot snapshot = materialInstanceEditorRuntime->GetSnapshot();
     if (jsonAssetLibrary != nullptr)
@@ -2199,26 +1425,27 @@ void UiSubsystem::BuildDeveloperPanels()
         snapshot.jsonDocumentLoading = jsonAssetLibrary->IsDocumentLoading();
     }
     snapshot.sceneModels = sceneModels;
+    if (thumbnailLibrary != nullptr)
+    {
+        thumbnailLibrary->SetPaused(!developerUiVisible || sceneViewportInputActive || editorPointerCaptured);
+        thumbnailLibrary->Poll();
+        snapshot.thumbnails = thumbnailLibrary->GetSnapshot();
+    }
+    rmlRenderInterface.PublishThumbnails(snapshot.thumbnails);
+    rmlRenderInterface.PublishTexturePreview(snapshot.jsonDocument);
     snapshot.sceneActors = sceneActors;
     snapshot.selectedActorIdentity = selectedActorIdentity;
     snapshot.selectedModel = selectedModelMaterials;
     snapshot.selectedMaterialSlotIndex = selectedMaterialSlotIndex;
     materialInstanceEditorPanel->Build(snapshot);
     materialInstanceEditorPanel->UpdateRuntimeView(lastViewModel);
+    if (thumbnailLibrary != nullptr)
+        thumbnailLibrary->RequestVisible(developerUiVisible ?
+            materialInstanceEditorPanel->VisibleThumbnailPaths() : std::vector<std::string>{});
 }
 
 void UiSubsystem::UpdateInputOwnership()
 {
-    if (runtimePageVisible)
-    {
-        inputOwnership.mode = UiInputMode::UiOnly;
-        inputOwnership.keyboardOwner = UiInputOwner::RuntimeUi;
-        inputOwnership.pointerOwner = UiInputOwner::RuntimeUi;
-        inputOwnership.controllerOwner = UiInputOwner::RuntimeUi;
-        inputOwnership.textInputOwner = UiInputOwner::RuntimeUi;
-        return;
-    }
-
     inputOwnership.mode = developerUiVisible ? UiInputMode::GameAndUi : UiInputMode::GameOnly;
     inputOwnership.keyboardOwner = UiInputOwner::Game;
     inputOwnership.pointerOwner = UiInputOwner::Game;
@@ -2228,7 +1455,7 @@ void UiSubsystem::UpdateInputOwnership()
     if (developerUiVisible && editorDocument != nullptr)
     {
         const bool resourceEditor = materialInstanceEditorPanel != nullptr &&
-            materialInstanceEditorPanel->IsResourceEditorVisible();
+            materialInstanceEditorPanel->IsAssetEditorVisible();
         if (resourceEditor) sceneViewportInputActive = false;
         const auto* hit = rmlContext->GetElementAtPoint(Rml::Vector2f(pointerX, pointerY));
         const auto* focus = rmlContext->GetFocusElement();
@@ -2515,7 +1742,7 @@ bool UiSubsystem::ProcessDeveloperUiEvent(const PlatformEvent& event)
     if (editorDocument == nullptr) return false;
     const bool modal = materialInstanceEditorPanel != nullptr && materialInstanceEditorPanel->HasModal();
     const bool resourceEditor = materialInstanceEditorPanel != nullptr &&
-        materialInstanceEditorPanel->IsResourceEditorVisible();
+        materialInstanceEditorPanel->IsAssetEditorVisible();
     if (resourceEditor) sceneViewportInputActive = false;
     const Rml::Element* focus = rmlContext->GetFocusElement();
     bool editorFocus = focus != nullptr && focus->GetOwnerDocument() == editorDocument;
@@ -2568,6 +1795,7 @@ bool UiSubsystem::ProcessDeveloperUiEvent(const PlatformEvent& event)
         return consumed || editorHit || captured || modal;
     }
     case PlatformEventType::MouseLeave:
+        if (materialInstanceEditorPanel) materialInstanceEditorPanel->CancelModelPreviewDrag();
         return ProcessRuntimeUiEvent(event) || editorPointerCaptured;
     case PlatformEventType::KeyUp:
         if (rmlPressedKeyboardKeys.count(event.key) != 0)
@@ -2590,6 +1818,7 @@ void UiSubsystem::RequestOpenJsonAsset(const std::string& path)
 
 void UiSubsystem::RequestRefreshAssetCatalog()
 {
+    if (thumbnailLibrary != nullptr) thumbnailLibrary->Refresh();
     if (jsonAssetLibrary != nullptr) jsonAssetLibrary->RequestRefresh();
 }
 
@@ -2620,7 +1849,6 @@ void UiSubsystem::RequestRuntimeAction(UiAction action)
             return;
         }
         bindingData.sceneLoading = true;
-        dataModelHandle.DirtyVariable("scene_loading");
     }
     if (action.type == UiActionType::SetOfflineMode)
     {
@@ -2634,19 +1862,10 @@ bool UiSubsystem::HandleGlobalShortcut(const PlatformEvent& event)
     if (event.type == PlatformEventType::KeyDown && !event.repeat)
     {
         if (event.control && event.key == PlatformKey::S && developerUiVisible &&
-            !runtimePageVisible && materialInstanceEditorPanel != nullptr &&
+            materialInstanceEditorPanel != nullptr &&
             !materialInstanceEditorPanel->HasModal())
         {
             materialInstanceEditorPanel->RequestSave();
-            return true;
-        }
-        if (event.key == PlatformKey::F10)
-        {
-            UiAction action;
-            action.type = runtimePageVisible ?
-                UiActionType::CloseRuntimePage :
-                UiActionType::ToggleRuntimePage;
-            QueueAction(std::move(action));
             return true;
         }
         if ((event.key == PlatformKey::F11 || event.key == PlatformKey::F1) && developerUiEnabled)
@@ -2658,23 +1877,6 @@ bool UiSubsystem::HandleGlobalShortcut(const PlatformEvent& event)
         }
     }
 
-    if (event.type == PlatformEventType::GamepadButtonDown)
-    {
-        if (event.gamepadButton == PlatformGamepadButton::Start)
-        {
-            UiAction action;
-            action.type = runtimePageVisible ? UiActionType::CloseRuntimePage : UiActionType::ToggleRuntimePage;
-            QueueAction(std::move(action));
-            return true;
-        }
-        if (event.gamepadButton == PlatformGamepadButton::East && runtimePageVisible)
-        {
-            UiAction action;
-            action.type = UiActionType::CloseRuntimePage;
-            QueueAction(std::move(action));
-            return true;
-        }
-    }
     return false;
 }
 
@@ -2684,413 +1886,6 @@ void UiSubsystem::QueueAction(UiAction action)
     {
         commandBus->Queue(std::move(action));
     }
-}
-
-void UiSubsystem::QueueIntAction(UiActionType type, int value)
-{
-    UiAction action;
-    action.type = type;
-    action.intValue = value;
-    QueueAction(std::move(action));
-}
-
-void UiSubsystem::QueueFloatAction(UiActionType type, float value)
-{
-    UiAction action;
-    action.type = type;
-    action.floatValue = value;
-    QueueAction(std::move(action));
-}
-
-void UiSubsystem::QueueChangedFloatAction(UiActionType type, float value, float currentValue)
-{
-    // 快照 -> 控件只允许显示，不把滑条量化/截断结果伪装成人工调参。
-    if (updatingRuntimeBindings)
-    {
-        return;
-    }
-    if (std::abs(value - currentValue) <= 0.0001f)
-    {
-        return;
-    }
-    QueueFloatAction(type, value);
-}
-
-void UiSubsystem::OnClosePage(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&)
-{
-    UiAction action;
-    action.type = UiActionType::CloseRuntimePage;
-    QueueAction(std::move(action));
-}
-
-void UiSubsystem::OnLoadScene(
-    Rml::DataModelHandle,
-    Rml::Event&,
-    const Rml::VariantList& arguments)
-{
-    if (arguments.empty())
-    {
-        return;
-    }
-
-    const Rml::String requestedPath = arguments[0].Get<Rml::String>();
-    for (const UiSceneOption& option : bindingData.sceneOptions)
-    {
-        if (option.path != requestedPath)
-        {
-            continue;
-        }
-        if (option.active)
-        {
-            return;
-        }
-        if (bindingData.sceneLoading)
-        {
-            return;
-        }
-
-        // UI 只提交场景切换请求，World 与 RenderGraph 仍由既有事务链路统一换代。
-        // 本帧先发布加载提示，下一帧同步事务即使耗时较长，用户也能区分“正在准备”与死锁。
-        bindingData.sceneLoading = true;
-        dataModelHandle.DirtyVariable("scene_loading");
-        UiAction action;
-        action.type = UiActionType::LoadWorld;
-        action.stringValue = requestedPath;
-        QueueAction(std::move(action));
-        return;
-    }
-
-    diagnostics->ReportWarning(
-        "UI scene selector rejected an unknown scene path: " + requestedPath);
-}
-
-void UiSubsystem::OnCameraMoveSpeedChanged(
-    Rml::DataModelHandle,
-    Rml::Event& event,
-    const Rml::VariantList&)
-{
-    QueueChangedFloatAction(
-        UiActionType::SetCameraMoveSpeed,
-        event.GetParameter<float>("value", lastViewModel.cameraMoveSpeed),
-        lastViewModel.cameraMoveSpeed);
-}
-
-void UiSubsystem::OnDebugViewSelected(
-    Rml::DataModelHandle,
-    Rml::Event&,
-    const Rml::VariantList& arguments)
-{
-    const int mode = arguments[0].Get<int>();
-    if (mode != lastViewModel.debugViewMode)
-    {
-        QueueIntAction(UiActionType::SetDebugViewMode, mode);
-    }
-}
-
-void UiSubsystem::OnToneMappingNone(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&)
-{
-    UiAction action;
-    action.type = UiActionType::SetToneMappingMode;
-    action.intValue = 0;
-    QueueAction(std::move(action));
-}
-
-void UiSubsystem::OnToneMappingReinhard(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&)
-{
-    UiAction action;
-    action.type = UiActionType::SetToneMappingMode;
-    action.intValue = 1;
-    QueueAction(std::move(action));
-}
-
-void UiSubsystem::OnToneMappingHable(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&)
-{
-    UiAction action;
-    action.type = UiActionType::SetToneMappingMode;
-    action.intValue = 2;
-    QueueAction(std::move(action));
-}
-
-void UiSubsystem::OnToneMappingAces(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&)
-{
-    UiAction action;
-    action.type = UiActionType::SetToneMappingMode;
-    action.intValue = 3;
-    QueueAction(std::move(action));
-}
-
-void UiSubsystem::QueueCameraExposureEdit(const std::string& field, float value)
-{
-    if (updatingRuntimeBindings || !lastViewModel.hasCamera)
-        return;
-    try
-    {
-        const CameraExposure candidate = EditCameraExposure(
-            lastViewModel.cameraExposure, field, value);
-        const CameraExposure& current = lastViewModel.cameraExposure;
-        if (candidate.mode == current.mode && candidate.ev100 == current.ev100 &&
-            candidate.compensation == current.compensation &&
-            candidate.autoMinEv100 == current.autoMinEv100 &&
-            candidate.autoMaxEv100 == current.autoMaxEv100)
-            return;
-    }
-    catch (const std::invalid_argument&)
-    {
-        // 无效输入不提交；下一次快照刷新恢复作者值，尤其是 min EV >= max EV。
-        return;
-    }
-    UiAction action;
-    action.type = UiActionType::SetCameraExposure;
-    action.stringValue = field;
-    action.floatValue = value;
-    QueueAction(std::move(action));
-}
-
-void UiSubsystem::OnExposureModeSelected(
-    Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& arguments)
-{
-    QueueCameraExposureEdit(
-        "mode",
-        static_cast<float>(arguments[0].Get<int>()));
-}
-
-void UiSubsystem::OnExposureValueChanged(
-    Rml::DataModelHandle, Rml::Event& event, const Rml::VariantList& arguments)
-{
-    QueueCameraExposureEdit(
-        arguments[0].Get<Rml::String>(), event.GetParameter<float>("value", 0.0f));
-}
-
-void UiSubsystem::OnBloomStrengthChanged(Rml::DataModelHandle, Rml::Event& event, const Rml::VariantList&)
-{
-    QueueChangedFloatAction(UiActionType::SetBloomStrength, event.GetParameter<float>("value", lastViewModel.bloomStrength), lastViewModel.bloomStrength);
-}
-
-void UiSubsystem::OnBloomThresholdChanged(Rml::DataModelHandle, Rml::Event& event, const Rml::VariantList&)
-{
-    QueueChangedFloatAction(UiActionType::SetBloomThreshold, event.GetParameter<float>("value", lastViewModel.bloomThreshold), lastViewModel.bloomThreshold);
-}
-
-void UiSubsystem::OnBloomKneeChanged(Rml::DataModelHandle, Rml::Event& event, const Rml::VariantList&)
-{
-    QueueChangedFloatAction(UiActionType::SetBloomKnee, event.GetParameter<float>("value", lastViewModel.bloomKnee), lastViewModel.bloomKnee);
-}
-
-void UiSubsystem::OnBloomClampChanged(Rml::DataModelHandle, Rml::Event& event, const Rml::VariantList&)
-{
-    QueueChangedFloatAction(UiActionType::SetBloomClamp, event.GetParameter<float>("value", lastViewModel.bloomClamp), lastViewModel.bloomClamp);
-}
-
-void UiSubsystem::OnCsmCastShadowsSelected(
-    Rml::DataModelHandle,
-    Rml::Event&,
-    const Rml::VariantList& arguments)
-{
-    const bool enabled = arguments[0].Get<int>() != 0;
-    if (enabled != lastViewModel.csmCastShadows)
-    {
-        QueueIntAction(
-            UiActionType::SetCsmCastShadows,
-            enabled ? 1 : 0);
-    }
-}
-
-void UiSubsystem::OnCsmDynamicShadowDistanceChanged(
-    Rml::DataModelHandle,
-    Rml::Event& event,
-    const Rml::VariantList&)
-{
-    QueueChangedFloatAction(
-        UiActionType::SetCsmDynamicShadowDistance,
-        event.GetParameter<float>(
-            "value",
-            lastViewModel.csmDynamicShadowDistance),
-        lastViewModel.csmDynamicShadowDistance);
-}
-
-void UiSubsystem::OnCsmDynamicShadowCascadesSelected(
-    Rml::DataModelHandle,
-    Rml::Event&,
-    const Rml::VariantList& arguments)
-{
-    const int cascadeCount = arguments[0].Get<int>();
-    if (cascadeCount !=
-        static_cast<int>(
-            lastViewModel.csmDynamicShadowCascades))
-    {
-        QueueIntAction(
-            UiActionType::SetCsmDynamicShadowCascades,
-            cascadeCount);
-    }
-}
-
-void UiSubsystem::OnCsmCascadeDistributionExponentChanged(
-    Rml::DataModelHandle,
-    Rml::Event& event,
-    const Rml::VariantList&)
-{
-    QueueChangedFloatAction(
-        UiActionType::SetCsmCascadeDistributionExponent,
-        event.GetParameter<float>(
-            "value",
-            lastViewModel.csmCascadeDistributionExponent),
-        lastViewModel.csmCascadeDistributionExponent);
-}
-
-void UiSubsystem::OnCsmCascadeTransitionFractionChanged(
-    Rml::DataModelHandle,
-    Rml::Event& event,
-    const Rml::VariantList&)
-{
-    QueueChangedFloatAction(
-        UiActionType::SetCsmCascadeTransitionFraction,
-        event.GetParameter<float>(
-            "value",
-            lastViewModel.csmCascadeTransitionFraction),
-        lastViewModel.csmCascadeTransitionFraction);
-}
-
-void UiSubsystem::OnCsmShadowDistanceFadeoutFractionChanged(
-    Rml::DataModelHandle,
-    Rml::Event& event,
-    const Rml::VariantList&)
-{
-    QueueChangedFloatAction(
-        UiActionType::SetCsmShadowDistanceFadeoutFraction,
-        event.GetParameter<float>(
-            "value",
-            lastViewModel.csmShadowDistanceFadeoutFraction),
-        lastViewModel.csmShadowDistanceFadeoutFraction);
-}
-
-void UiSubsystem::OnCsmShadowBiasChanged(
-    Rml::DataModelHandle,
-    Rml::Event& event,
-    const Rml::VariantList&)
-{
-    QueueChangedFloatAction(
-        UiActionType::SetCsmShadowBias,
-        event.GetParameter<float>(
-            "value",
-            lastViewModel.csmShadowBias),
-        lastViewModel.csmShadowBias);
-}
-
-void UiSubsystem::OnCsmShadowSlopeBiasChanged(
-    Rml::DataModelHandle,
-    Rml::Event& event,
-    const Rml::VariantList&)
-{
-    QueueChangedFloatAction(
-        UiActionType::SetCsmShadowSlopeBias,
-        event.GetParameter<float>(
-            "value",
-            lastViewModel.csmShadowSlopeBias),
-        lastViewModel.csmShadowSlopeBias);
-}
-
-void UiSubsystem::OnCsmShadowCascadeBiasDistributionChanged(
-    Rml::DataModelHandle,
-    Rml::Event& event,
-    const Rml::VariantList&)
-{
-    QueueChangedFloatAction(
-        UiActionType::SetCsmShadowCascadeBiasDistribution,
-        event.GetParameter<float>(
-            "value",
-            lastViewModel.csmShadowCascadeBiasDistribution),
-        lastViewModel.csmShadowCascadeBiasDistribution);
-}
-
-void UiSubsystem::OnSaveCsmSettingsToScene(
-    Rml::DataModelHandle,
-    Rml::Event&,
-    const Rml::VariantList&)
-{
-    QueueAction(UiAction{
-        UiActionType::SaveCsmSettingsToScene});
-}
-
-void UiSubsystem::OnEnvironmentIntensityChanged(Rml::DataModelHandle, Rml::Event& event, const Rml::VariantList&)
-{
-    QueueChangedFloatAction(
-        UiActionType::SetEnvironmentIntensity,
-        event.GetParameter<float>("value", lastViewModel.environmentIntensity),
-        lastViewModel.environmentIntensity);
-}
-
-void UiSubsystem::OnSunIntensityChanged(
-    Rml::DataModelHandle,
-    Rml::Event& event,
-    const Rml::VariantList&)
-{
-    QueueChangedFloatAction(
-        UiActionType::SetSunIntensity,
-        event.GetParameter<float>("value", lastViewModel.sunIntensity),
-        lastViewModel.sunIntensity);
-}
-
-void UiSubsystem::OnSpeedTreeStrengthChanged(
-    Rml::DataModelHandle,
-    Rml::Event& event,
-    const Rml::VariantList&)
-{
-    QueueChangedFloatAction(
-        UiActionType::SetSpeedTreeStrength,
-        event.GetParameter<float>("value", lastViewModel.speedTreeStrength),
-        lastViewModel.speedTreeStrength);
-}
-
-void UiSubsystem::OnSpeedTreeGustingSelected(
-    Rml::DataModelHandle,
-    Rml::Event&,
-    const Rml::VariantList& arguments)
-{
-    const bool enabled = arguments[0].Get<int>() != 0;
-    if (enabled != lastViewModel.speedTreeGustingEnabled)
-    {
-        QueueIntAction(UiActionType::SetSpeedTreeGustingEnabled, enabled ? 1 : 0);
-    }
-}
-
-void UiSubsystem::OnForceSpeedTreeGust(
-    Rml::DataModelHandle,
-    Rml::Event&,
-    const Rml::VariantList&)
-{
-    UiAction action;
-    action.type = UiActionType::ForceSpeedTreeGust;
-    QueueAction(std::move(action));
-}
-
-void UiSubsystem::OnLocaleEnglish(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&)
-{
-    UiAction action;
-    action.type = UiActionType::SetLocale;
-    action.stringValue = "en-US";
-    QueueAction(std::move(action));
-}
-
-void UiSubsystem::OnLocaleChinese(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&)
-{
-    UiAction action;
-    action.type = UiActionType::SetLocale;
-    action.stringValue = "zh-CN";
-    QueueAction(std::move(action));
-}
-
-void UiSubsystem::OnToggleDeveloperUi(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&)
-{
-    UiAction action;
-    action.type = UiActionType::ToggleDeveloperUi;
-    QueueAction(std::move(action));
-}
-
-void UiSubsystem::OnQuit(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&)
-{
-    UiAction action;
-    action.type = UiActionType::Quit;
-    QueueAction(std::move(action));
 }
 
 } // namespace VL

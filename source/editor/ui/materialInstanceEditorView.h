@@ -153,6 +153,7 @@ struct MaterialInstanceEditorSnapshot
 {
     std::shared_ptr<const EditorJsonAssetCatalogSnapshot> assetCatalog;
     std::shared_ptr<const EditorJsonDocumentSnapshot> jsonDocument;
+    std::shared_ptr<const EditorThumbnailSnapshot> thumbnails;
     bool assetCatalogLoading = false;
     bool jsonDocumentLoading = false;
     std::string selectedDocumentPath;

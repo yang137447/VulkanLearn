@@ -48,9 +48,11 @@ public:
     void SetSceneSelectionSink(IMaterialInstanceSceneSelectionSink* sink);
     void SetRuntimeActionSink(IEditorRuntimeActionSink* sink);
     void SetJsonAssetRequestSink(IEditorJsonAssetRequestSink* sink) { jsonAssetRequestSink = sink; }
-    void ShowMaterialDetails() { viewingJson = false; resourceEditorVisible = false; requestedJsonPath.clear(); }
+    void ShowMaterialDetails() { viewingJson = false; resourceEditorVisible = false; requestedJsonPath.clear(); activateMaterialDocument = true; }
+    void ShowSceneDetails() { viewingJson = false; requestedJsonPath.clear(); activateMaterialDocument = false; }
     void Build(const MaterialInstanceEditorSnapshot& snapshot);
     void UpdateRuntimeView(const UiViewModelSnapshot& view);
+    std::vector<std::string> VisibleThumbnailPaths() const { return contentBrowser.VisibleThumbnailPaths(); }
     void RequestSave();
     bool PrepareImmersiveView(std::string& levelToLoad);
     void SetWorkspaceLayoutPath(std::filesystem::path path) { docking.SetPersistencePath(std::move(path)); }
@@ -71,10 +73,12 @@ public:
     const std::string& ViewportTransformSpace() const { return viewportTransformSpace; }
     const std::vector<std::string>& MenuLevelPaths() const { return menuLevelPaths; }
     bool IsResourceEditorVisible() const;
+    bool IsAssetEditorVisible() const { return IsResourceEditorVisible() || IsMaterialEditorVisible(); }
     bool IsWorkspaceDragging() const { return docking.IsDragging(); }
     size_t WorkspacePropertyWriteCount() const { return docking.PropertyWriteCount(); }
     size_t PanelPropertyWriteCount() const { return widgetDocument.PropertyWriteCount(); }
-    void CancelWorkspaceDrag() { docking.CancelDrag(); }
+    void CancelWorkspaceDrag() { docking.CancelDrag(); previewDragButton = textureDragButton = -1; }
+    void CancelModelPreviewDrag() { previewDragButton = textureDragButton = -1; }
     bool HasModal() const { return !pendingClosePath.empty() || aboutVisible; }
     void ProcessEvent(Rml::Event& event) override;
 
@@ -147,16 +151,38 @@ private:
     void SelectModelMaterial(const MaterialInstanceModelSnapshot& model, size_t index);
     void OpenBrowserAsset(const std::string& path);
     void RefreshResourceEditor();
+    void RefreshDocumentTabs();
     void OpenResourceAsset(const std::string& path, EditorAssetKind kind);
     void CloseActiveResource();
     void RequestResourceReload();
     void RequestActiveResourceMetadata();
     void RequestModelPreview(const std::string& path);
+    void RequestAssetPreview(const std::string& path, bool material);
+    void RefreshMaterialPreview();
+    bool IsMaterialEditorVisible() const;
+    uint64_t CurrentMaterialPreviewGeneration() const;
+    uint64_t CurrentPreviewCameraGeneration() const;
     void ReturnToLevel();
     bool HasCurrentModelPreview() const;
+    uint64_t CurrentModelPreviewGeneration() const;
+    bool ProcessModelPreviewInput(Rml::Event& event);
+    bool ProcessTexturePreviewInput(Rml::Event& event);
+    void ResetTextureView();
+    std::string textureViewSource;
+    float textureZoom = 1.0f;
+    Rml::Vector2f texturePan{0, 0};
+    Rml::Vector2f texturePointer{0, 0};
+    int textureDragButton = -1;
+    void RequestPreviewCamera(ModelPreviewNavigation mode, float x = 0, float y = 0);
+    int previewDragButton = -1;
+    float previewPointerX = 0;
+    float previewPointerY = 0;
+    uint64_t previewDragGeneration = 0;
     std::string requestedPreviewPath;
     std::string levelWorldPath;
     uint64_t requestedPreviewGeneration = 0;
+    bool requestedPreviewMaterial = false;
+    uint64_t appliedMaterialPreviewGeneration = 0;
 
     IEditorCommandSink* commandSink = nullptr;
     IMaterialInstanceSceneSelectionSink* sceneSelectionSink = nullptr;
@@ -165,6 +191,9 @@ private:
     Rml::ElementDocument* document = nullptr;
     MaterialInstanceEditorSnapshot snapshot;
     UiViewModelSnapshot runtimeView;
+    bool runtimeControlsCurrent = false;
+    bool textureOptionsDirty = true;
+    std::vector<std::string> textureOptionSelections;
     UiWidgets::WidgetDocument widgetDocument;
     EditorDockingController docking;
     EditorContentBrowserController contentBrowser;
@@ -231,6 +260,8 @@ private:
     std::string pendingAssetPath;
     uint64_t pendingRevision = 0;
     std::string detailsIdentity;
+    std::string actorDetailsIdentity;
+    bool activateMaterialDocument = false;
     std::string localStatus;
     std::string pendingClosePath;
     bool saveThenClose = false;

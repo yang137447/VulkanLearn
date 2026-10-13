@@ -100,6 +100,7 @@ void ShaderFileMonitor::Initialize(
     sources.clear();
     lastScanTime = {};
     scanCount = 0;
+    hashCount = 0;
     testScanSuspended = false;
     baselineSeeded = false;
     initialized = true;
@@ -122,17 +123,6 @@ std::optional<ShaderFileMonitor::ChangeBatch> ShaderFileMonitor::Poll()
         return std::nullopt;
     }
     lastScanTime = now;
-    ++pollsSinceFullHash;
-    const bool forceFullHash =
-        pollsSinceFullHash >= fullHashEveryNPolls;
-    if (forceFullHash)
-    {
-        // mtime/size is only a fast candidate gate. Periodic full re-hashing
-        // catches edits that preserve both fields (coarse timestamp
-        // granularity, tools that restore timestamps) so the BLAKE3-256
-        // digest remains the authoritative change signal over time.
-        pollsSinceFullHash = 0;
-    }
 
     std::map<std::string, TrackedSource> scannedSources;
     ++scanCount;
@@ -140,6 +130,7 @@ std::optional<ShaderFileMonitor::ChangeBatch> ShaderFileMonitor::Poll()
 
     ChangeBatch batch;
     const bool firstScan = !baselineSeeded;
+    size_t newSourceIndex = 0;
     for (auto& [identity, next] : scannedSources)
     {
         const auto existingIt = sources.find(identity);
@@ -148,6 +139,9 @@ std::optional<ShaderFileMonitor::ChangeBatch> ShaderFileMonitor::Poll()
             // New source discovered after the initial seed. Its digest must be
             // stable for the configured number of polls before it is reported.
             next.baselineDigest = HashSourceOrDefer(next.absolutePath);
+            // 未变文件的 BLAKE3 复核分摊到四轮，避免每秒集中读完所有文件阻塞 GT。
+            // 每项保存自己的截止轮次，目录增删不会让已有项被不断推迟。
+            next.nextFullHashScan = scanCount + 1 + newSourceIndex++ % fullHashEveryNPolls;
             if (firstScan)
             {
                 continue;
@@ -164,7 +158,8 @@ std::optional<ShaderFileMonitor::ChangeBatch> ShaderFileMonitor::Poll()
         }
 
         const TrackedSource& previous = existingIt->second;
-        if (!forceFullHash &&
+        // 时间戳和大小仅作快速筛选；限期复核内容，捕获恢复时间戳的等长修改。
+        if (scanCount < previous.nextFullHashScan &&
             next.size == previous.size &&
             next.lastWriteTime == previous.lastWriteTime &&
             !previous.baselineDigest.empty() &&
@@ -179,6 +174,7 @@ std::optional<ShaderFileMonitor::ChangeBatch> ShaderFileMonitor::Poll()
         next.baselineDigest = previous.baselineDigest;
         next.candidateDigest = previous.candidateDigest;
         next.stablePollCount = previous.stablePollCount;
+        next.nextFullHashScan = previous.nextFullHashScan;
 
         const std::string currentDigest =
             HashSourceOrDefer(next.absolutePath);
@@ -187,8 +183,10 @@ std::optional<ShaderFileMonitor::ChangeBatch> ShaderFileMonitor::Poll()
             // Transiently unreadable (still being written). Defer without
             // committing a half-written state and retry next poll.
             next.stablePollCount = 0;
+            next.nextFullHashScan = scanCount;
             continue;
         }
+        next.nextFullHashScan = scanCount + fullHashEveryNPolls;
         if (currentDigest == previous.baselineDigest)
         {
             // Content is unchanged or settled back to the baseline.
@@ -354,8 +352,12 @@ void ShaderFileMonitor::ScanSources(
         const std::filesystem::directory_entry& entry = *iterator;
         if (entry.is_regular_file(iterationError) && !iterationError)
         {
-            const std::filesystem::path relative =
-                std::filesystem::relative(
+            // 根目录已在 Initialize 规范化，迭代器不跟随目录符号链接。
+            // 普通文件直接减去根前缀，避免逐文件重复 weakly_canonical 的磁盘查询；
+            // 文件符号链接仍解析真实目标，保留原有 physical source identity。
+            std::filesystem::path relative = entry.path().lexically_relative(glslRoot);
+            if (entry.is_symlink(iterationError) && !iterationError)
+                relative = std::filesystem::relative(
                     entry.path(),
                     glslRoot,
                     iterationError);
@@ -385,6 +387,7 @@ void ShaderFileMonitor::ScanSources(
 std::string ShaderFileMonitor::HashSourceOrDefer(
     const std::filesystem::path& path) const
 {
+    ++hashCount;
     try
     {
         return ContentHasher::HashFile(path).ToHex();

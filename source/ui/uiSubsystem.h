@@ -42,6 +42,7 @@ namespace Editor
 {
     class MaterialInstanceEditorRuntime;
     class EditorJsonAssetLibrary;
+    class EditorThumbnailLibrary;
 namespace Selection
 {
 struct MaterialInstanceSelection;
@@ -82,6 +83,12 @@ struct UiSceneOption
     Rml::String path;
     bool active = false;
     std::string normalizedPhysicalPath;
+
+    bool operator==(const UiSceneOption& other) const
+    {
+        return label == other.label && path == other.path && active == other.active &&
+            normalizedPhysicalPath == other.normalizedPhysicalPath;
+    }
 };
 
 // GT 拥有运行时与编辑器 RML 文档；RT 只消费冻结的 draw snapshot。
@@ -112,8 +119,11 @@ public:
     void NotifyWorldLoadCompleted();
     // 只由 EngineLoop 在稳定帧边界调用，避免 UI 回调触碰 live MaterialInstance。
     void TickMaterialInstanceEditor();
+    Editor::EditorThumbnailLibrary* GetThumbnailLibrary() const { return thumbnailLibrary.get(); }
+    bool CanRenderThumbnails() const
+    { return developerUiVisible && !sceneViewportInputActive && !editorPointerCaptured; }
     // 视口拾取只负责打开文档并记录导航来源，实际编辑仍经由 EditorCommand。
-    bool OpenMaterialInstanceFromSelection(
+    bool SelectSceneObjectFromPick(
         const Editor::Selection::MaterialInstanceSelection& selection);
     void SetMaterialInstanceSceneModels(
         const std::vector<Editor::Selection::MaterialInstanceModelContext>& models);
@@ -139,7 +149,6 @@ public:
     void RequestRefreshAssetCatalog() override;
 
     bool IsInitialized() const { return initialized; }
-    bool IsRuntimePageVisible() const { return runtimePageVisible; }
     bool IsDeveloperUiVisible() const { return developerUiVisible; }
     bool IsDeveloperUiEnabled() const { return developerUiEnabled; }
     uint32_t GetViewportWidth() const { return desc.viewportWidth; }
@@ -148,7 +157,7 @@ public:
     bool IsSceneViewportEnabled() const
     {
         // 资源标签同样消费 renderer-owned 离屏图像；不能因资产编辑器可见而关闭输出。
-        return developerUiVisible && !runtimePageVisible;
+        return developerUiVisible;
     }
     std::optional<UiViewportPoint> GetSceneViewportPoint(float x, float y) const
     {
@@ -169,230 +178,9 @@ private:
 
     struct BindingData
     {
-        int activeSection = 0;
         Rml::String worldText;
-        Rml::String panelTitle;
-        Rml::String panelSubtitle;
-        Rml::String closeLabel;
-        Rml::String quitLabel;
-
-        Rml::String tabOverviewLabel;
-        Rml::String tabVisualizationLabel;
-        Rml::String tabPostProcessLabel;
-        Rml::String tabEnvironmentLabel;
-        Rml::String tabShadowsLabel;
-        Rml::String tabScenesLabel;
-        Rml::String tabSystemLabel;
-
-        Rml::String sceneListTitle;
-        Rml::String sceneListHint;
-        Rml::String sceneEmptyLabel;
-        Rml::String sceneLoadingLabel;
         bool sceneLoading = false;
         std::vector<UiSceneOption> sceneOptions;
-
-        Rml::String cameraMoveSpeedLabel;
-        Rml::String cameraMoveSpeedValue;
-        float cameraMoveSpeed = 1000.0f;
-
-        Rml::String frameLabel;
-        Rml::String frameValue;
-        Rml::String fpsLabel;
-        Rml::String fpsValue;
-        Rml::String sceneLabel;
-        Rml::String inputModeLabel;
-        Rml::String inputModeValue;
-        Rml::String windProfilesLabel;
-        Rml::String windProfilesValue;
-        Rml::String hotReloadLabel;
-        Rml::String hotReloadStatus;
-
-        Rml::String debugViewLabel;
-        Rml::String debugViewValue;
-        int debugViewMode = 0;
-        Rml::String debugMaterialGroupLabel;
-        Rml::String debugSssGroupLabel;
-        Rml::String debugHairGroupLabel;
-        Rml::String debugEyeGroupLabel;
-        Rml::String debugClothGroupLabel;
-        Rml::String debugFullLabel;
-        Rml::String debugBaseColorLabel;
-        Rml::String debugEmissiveLabel;
-        Rml::String debugNormalLabel;
-        Rml::String debugRoughnessLabel;
-        Rml::String debugMetallicLabel;
-        Rml::String debugAoLabel;
-        Rml::String debugShadowLabel;
-        Rml::String debugDirectLightingLabel;
-        Rml::String debugIndirectDiffuseLabel;
-        Rml::String debugIndirectSpecularLabel;
-        Rml::String debugShadowCascadeLabel;
-        Rml::String debugShadingModelLabel;
-        Rml::String debugSubsurfaceWeightLabel;
-        Rml::String debugTransmissionWeightLabel;
-        Rml::String debugSubsurfaceAssetIdLabel;
-        Rml::String debugLocalSubsurfaceLabel;
-        Rml::String debugDiffuseBeforeSssLabel;
-        Rml::String debugDiffuseAfterSssLabel;
-        Rml::String debugSssPixelRadiusLabel;
-        Rml::String debugSssValidWeightLabel;
-        Rml::String debugHairWorldTangentLabel;
-        Rml::String debugHairTangentRootwardLabel;
-        Rml::String debugHairThetaIoLabel;
-        Rml::String debugHairDeltaPhiLabel;
-        Rml::String debugHairRLabel;
-        Rml::String debugHairTtLabel;
-        Rml::String debugHairTrtLabel;
-        Rml::String debugHairPathLengthLabel;
-        Rml::String debugHairAbsorptionLabel;
-        Rml::String debugHairCoverageLabel;
-        Rml::String debugHairShadowTransmittanceLabel;
-        Rml::String debugHairLutCoordinatesLabel;
-        Rml::String debugHairPrimaryHighlightLabel;
-        Rml::String debugHairSecondaryHighlightLabel;
-        Rml::String debugHairScatterLabel;
-        Rml::String debugHairBacklitLabel;
-        Rml::String debugHairRPathColorLabel;
-        Rml::String debugHairTtPathColorLabel;
-        Rml::String debugHairTrtPathColorLabel;
-        Rml::String debugHairIblFallbackLabel;
-        Rml::String debugHairMultipleScatteringFallbackLabel;
-        Rml::String debugEyeFrameLabel;
-        Rml::String debugEyeCorneaNormalLabel;
-        Rml::String debugEyeIrisNormalLabel;
-        Rml::String debugEyeIrisPlaneNormalLabel;
-        Rml::String debugEyeCorneaFresnelLabel;
-        Rml::String debugEyeCorneaSpecularLabel;
-        Rml::String debugEyeRefractedViewDirectionLabel;
-        Rml::String debugEyeIrisHitDistanceLabel;
-        Rml::String debugEyeIrisUvLabel;
-        Rml::String debugEyeValidIrisHitLabel;
-        Rml::String debugEyeIrisMaskLabel;
-        Rml::String debugEyePupilMaskLabel;
-        Rml::String debugEyeLimbusMaskLabel;
-        Rml::String debugEyeLightTransmissionInLabel;
-        Rml::String debugEyeViewTransmissionOutLabel;
-        Rml::String debugEyeIrisDirectLabel;
-        Rml::String debugEyeScleraDirectLabel;
-        Rml::String debugEyeInnerIblLabel;
-        Rml::String debugEyeCausticGainLabel;
-        Rml::String debugEyeInnerShadowLabel;
-        Rml::String debugEyeCorneaShadowLabel;
-        Rml::String debugEyeProfileLabel;
-        Rml::String debugClothModelLabel;
-        Rml::String debugClothSheenColorLabel;
-        Rml::String debugClothSheenRoughnessLabel;
-        Rml::String debugClothCharlieDLabel;
-        Rml::String debugClothNeubeltVisibilityLabel;
-        Rml::String debugClothDirectionalAlbedoLabel;
-        Rml::String debugClothBaseEnergyScaleLabel;
-        Rml::String debugClothDirectSheenLabel;
-        Rml::String debugClothIndirectSheenLabel;
-        Rml::String debugClothIblFallbackLabel;
-        Rml::String debugClothV2ModelLabel;
-        Rml::String debugClothWorldTangentLabel;
-        Rml::String debugClothAnisotropyLabel;
-        Rml::String debugClothAnisotropyCrossLabel;
-        Rml::String debugClothRoughnessAxesLabel;
-        Rml::String debugClothAnisotropicCharlieDLabel;
-        Rml::String debugClothVisibilityLabel;
-        Rml::String debugClothV2DirectionalAlbedoLabel;
-        Rml::String debugClothV2BaseEnergyScaleLabel;
-        Rml::String debugClothV2IblFallbackLabel;
-
-        Rml::String toneMappingLabel;
-        Rml::String toneMappingValue;
-        int toneMappingMode = 0;
-        Rml::String toneNoneLabel;
-        Rml::String toneReinhardLabel;
-        Rml::String toneHableLabel;
-        Rml::String toneAcesLabel;
-        bool hasCamera = false;
-        int exposureMode = 0;
-        Rml::String exposureModeLabel;
-        Rml::String exposureManualLabel;
-        Rml::String exposurePhysicalEvLabel;
-        Rml::String exposureAutoLabel;
-        Rml::String exposureEvLabel;
-        Rml::String exposureEvValue;
-        float exposureEv = 9.0f;
-        Rml::String exposureCompensationLabel;
-        Rml::String exposureCompensationValue;
-        float exposureCompensation = 0.0f;
-        Rml::String exposureMinEvLabel;
-        Rml::String exposureMinEvValue;
-        float exposureMinEv = -10.0f;
-        Rml::String exposureMaxEvLabel;
-        Rml::String exposureMaxEvValue;
-        float exposureMaxEv = 16.0f;
-        Rml::String bloomStrengthLabel;
-        Rml::String bloomStrengthValue;
-        float bloomStrength = 0.0f;
-        Rml::String bloomThresholdLabel;
-        Rml::String bloomThresholdValue;
-        float bloomThreshold = 0.0f;
-        Rml::String bloomKneeLabel;
-        Rml::String bloomKneeValue;
-        float bloomKnee = 0.0f;
-        Rml::String bloomClampLabel;
-        Rml::String bloomClampValue;
-        float bloomClamp = 0.0f;
-
-        Rml::String shadowCastShadowsLabel;
-        Rml::String shadowCastShadowsValue;
-        bool csmCastShadows = false;
-        Rml::String shadowEnableLabel;
-        Rml::String shadowDisableLabel;
-        Rml::String shadowDynamicDistanceLabel;
-        Rml::String shadowDynamicDistanceValue;
-        float csmDynamicShadowDistance = 10.0f;
-        Rml::String shadowDynamicCascadesLabel;
-        uint32_t csmDynamicShadowCascades = 4;
-        Rml::String shadowCascadeDistributionExponentLabel;
-        Rml::String shadowCascadeDistributionExponentValue;
-        float csmCascadeDistributionExponent = 3.0f;
-        Rml::String shadowCascadeTransitionFractionLabel;
-        Rml::String shadowCascadeTransitionFractionValue;
-        float csmCascadeTransitionFraction = 0.1f;
-        Rml::String shadowDistanceFadeoutFractionLabel;
-        Rml::String shadowDistanceFadeoutFractionValue;
-        float csmShadowDistanceFadeoutFraction = 0.1f;
-        Rml::String shadowBiasLabel;
-        Rml::String shadowBiasValue;
-        float csmShadowBias = 0.5f;
-        Rml::String shadowSlopeBiasLabel;
-        Rml::String shadowSlopeBiasValue;
-        float csmShadowSlopeBias = 0.5f;
-        Rml::String shadowCascadeBiasDistributionLabel;
-        Rml::String shadowCascadeBiasDistributionValue;
-        float csmShadowCascadeBiasDistribution = 1.0f;
-        Rml::String shadowDebugLabel;
-        Rml::String shadowDebugFullLabel;
-        Rml::String shadowDebugCascadesLabel;
-        Rml::String shadowSaveLabel;
-
-        Rml::String environmentLabel;
-        Rml::String environmentValue;
-        float environmentIntensity = 1.0f;
-        Rml::String sunLabel;
-        Rml::String sunValue;
-        float sunIntensity = 1.0f;
-        Rml::String vegetationHeading;
-        Rml::String windStrengthLabel;
-        Rml::String windStrengthValue;
-        float speedTreeStrength = 0.35f;
-        Rml::String gustingLabel;
-        Rml::String gustingValue;
-        bool speedTreeGustingEnabled = true;
-        Rml::String gustOnLabel;
-        Rml::String gustOffLabel;
-        Rml::String gustOnceLabel;
-
-        Rml::String localeLabel;
-        Rml::String localeValue;
-        Rml::String developerUiLabel;
-        Rml::String developerUiValue;
-        Rml::String developerUiToggleLabel;
     };
 
     RuntimeResult<void> InitializeRmlUi();
@@ -410,18 +198,11 @@ private:
         LocalizationDatabase localizationCandidate);
     bool ValidateDocument(Rml::ElementDocument& document, std::string& outError) const;
     void ApplyDocumentState();
-    void CapturePersistentDocumentState();
-    void RestorePersistentDocumentState();
     void TryHotReload();
     AssetFingerprint BuildAssetFingerprint() const;
     bool HasAssetFingerprintChanged(const AssetFingerprint& candidate) const;
 
     void SyncBindingData();
-    std::string Localize(const std::string& key) const;
-    std::string FormatFloat(float value) const;
-    std::string GetDebugViewName(int mode) const;
-    std::string GetToneMappingName(int mode) const;
-    std::string GetInputModeName(UiInputMode mode) const;
     void BuildAndPublishRenderSnapshot();
     void BuildDeveloperPanels();
     void UpdateInputOwnership();
@@ -439,45 +220,6 @@ private:
     void ResetRmlGamepadInputState();
     bool HandleGlobalShortcut(const PlatformEvent& event);
     void QueueAction(UiAction action);
-    void QueueIntAction(UiActionType type, int value);
-    void QueueFloatAction(UiActionType type, float value);
-    void QueueChangedFloatAction(UiActionType type, float value, float currentValue);
-
-    void OnClosePage(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
-    void OnLoadScene(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
-    void OnCameraMoveSpeedChanged(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
-    void OnDebugViewSelected(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
-    void OnToneMappingNone(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
-    void OnToneMappingReinhard(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
-    void OnToneMappingHable(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
-    void OnToneMappingAces(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
-    void OnExposureModeSelected(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
-    void OnExposureValueChanged(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
-    void QueueCameraExposureEdit(const std::string& field, float value);
-    void OnBloomStrengthChanged(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
-    void OnBloomThresholdChanged(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
-    void OnBloomKneeChanged(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
-    void OnBloomClampChanged(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
-    void OnCsmCastShadowsSelected(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
-    void OnCsmDynamicShadowDistanceChanged(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
-    void OnCsmDynamicShadowCascadesSelected(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
-    void OnCsmCascadeDistributionExponentChanged(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
-    void OnCsmCascadeTransitionFractionChanged(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
-    void OnCsmShadowDistanceFadeoutFractionChanged(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
-    void OnCsmShadowBiasChanged(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
-    void OnCsmShadowSlopeBiasChanged(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
-    void OnCsmShadowCascadeBiasDistributionChanged(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
-    void OnSaveCsmSettingsToScene(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
-    void OnEnvironmentIntensityChanged(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
-    void OnSunIntensityChanged(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
-    void OnSpeedTreeStrengthChanged(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
-    void OnSpeedTreeGustingSelected(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
-    void OnForceSpeedTreeGust(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
-    void OnLocaleEnglish(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
-    void OnLocaleChinese(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
-    void OnToggleDeveloperUi(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
-    void OnQuit(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&);
-
     UiSubsystemDesc desc;
     PlatformWindow* window = nullptr;
     CommandBus* commandBus = nullptr;
@@ -487,6 +229,7 @@ private:
     std::unique_ptr<EditorUi::MaterialInstanceAssetEditorPanel>
         materialInstanceEditorPanel;
     std::unique_ptr<Editor::EditorJsonAssetLibrary> jsonAssetLibrary;
+    std::unique_ptr<Editor::EditorThumbnailLibrary> thumbnailLibrary;
     std::optional<EditorUi::MaterialInstanceModelSnapshot>
         selectedModelMaterials;
     std::optional<uint32_t> selectedMaterialSlotIndex;
@@ -526,14 +269,12 @@ private:
     size_t previousUiVertexCount = 0;
     size_t previousUiIndexCount = 0;
     size_t previousUiDrawCount = 0;
-    float persistentScrollTop = 0.0f;
     std::string currentLocale;
     std::string hotReloadStatus;
     UiViewportRect sceneViewportRect;
     bool initialized = false;
     bool rmlInitialized = false;
     bool updatingRuntimeBindings = false;
-    bool runtimePageVisible = false;
     bool developerUiEnabled = false;
     bool developerUiVisible = false;
     bool immersiveView = false;

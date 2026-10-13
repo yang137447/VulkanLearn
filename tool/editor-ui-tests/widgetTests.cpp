@@ -168,6 +168,10 @@ protected:
         panel->SetWorkspaceLayoutPath({});
         std::string error;
         ASSERT_TRUE(panel->Attach(*document, error)) << error;
+        // 叶控件测试挂在常驻 Details，材质正文现为按需创建的中央页面。
+        auto* content = document->GetElementById("details-content");
+        auto owned = content->GetParentNode()->RemoveChild(content);
+        document->GetElementById("actor-details-content")->AppendChild(std::move(owned));
         view.Attach(*document);
         document->Show();
         ASSERT_TRUE(system.errors.empty()) << system.errors;
@@ -214,6 +218,26 @@ TEST_F(UiWidgetTest, SelectReplacementRemovesPreviousInternalOptions)
     view.SetControlValue("choice", "second");
     EXPECT_EQ(selector->GetNumOptions(), 1);
     EXPECT_EQ(selector->GetValue(), "second");
+}
+
+TEST_F(UiWidgetTest, SelectReplacementInvalidatesInternalOptionCaches)
+{
+    Show("<select id=\"choice\"></select>");
+    auto* selector = dynamic_cast<Rml::ElementFormControlSelect*>(document->GetElementById("choice"));
+    ASSERT_NE(selector, nullptr);
+    view.SetMarkup("choice", "<option id=\"cached-option\" value=\"a\">First</option>");
+    view.SetClass("cached-option", "selected-test", true);
+    view.SetProperty("cached-option", "width", "100px");
+    ASSERT_EQ(view.PropertyWriteCount(), 2u);
+    // 先缓存 DOM 中的 option，再让 Update 将它移入内部 widget。
+    context->Update();
+    ASSERT_EQ(selector->GetNumOptions(), 1);
+    view.SetMarkup("choice", "<option id=\"cached-option\" value=\"b\">Second</option>");
+    view.SetClass("cached-option", "selected-test", true);
+    view.SetProperty("cached-option", "width", "100px");
+    EXPECT_EQ(view.PropertyWriteCount(), 4u);
+    ASSERT_EQ(selector->GetNumOptions(), 1);
+    EXPECT_TRUE(selector->GetOption(0)->IsClassSet("selected-test"));
 }
 
 TEST_F(UiWidgetTest, FocusedInputKeepsUnfinishedText)
@@ -546,7 +570,7 @@ TEST_F(UiWidgetTest, TreeRowEscapesLabelAndKeepsIconPath)
 TEST_F(UiWidgetTest, PropertyControlRowHasNoResetButton)
 {
     Show(PropertyControlRow("<b>Intensity</b>", Input("value", {"change", 0}, "1")));
-    auto* row = document->QuerySelector(".property-row");
+    auto* row = document->GetElementById("details-content")->QuerySelector(".property-row");
     ASSERT_NE(row, nullptr);
     // 没有 Reset 语义就不生成 Reset 按钮，避免出现点了没有效果的控件。
     EXPECT_EQ(row->QuerySelector("button"), nullptr);

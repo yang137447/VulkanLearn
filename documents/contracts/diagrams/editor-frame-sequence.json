@@ -36,7 +36,7 @@
       "sources": [
         {
           "path": "source/ui/uiSubsystem.cpp",
-          "line": 2416,
+          "line": 359,
           "label": "HandlePlatformEvent"
         }
       ]

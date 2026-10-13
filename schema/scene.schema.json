@@ -101,6 +101,11 @@
                     "type": "string",
                     "description": "网格描述文件路径，相对 resourcePath，例如 'Common/Meshes/SM_axis.json'。"
                 },
+                "materialOverride": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "可选的实例级 MI 路径，覆盖本对象全部 section 的材质，不修改 SM 槽位或导入缓存。"
+                },
                 "position": {
                     "$ref": "#/$defs/vec3"
                 },

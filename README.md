@@ -68,6 +68,22 @@ cmake --build build -j
 
 编译成功后，可执行文件 `main.exe` 将生成在 `build/bin` 目录下。
 
+### 性能对照构建
+
+编辑器性能应使用独立的优化构建测量，保留 `build/` 的 Debug/校验环境。
+以下配置使用 MinGW 的 `-O2 -g -DNDEBUG`，关闭 Vulkan validation；
+Shader 也会按现有 Release 策略生成，不是仅关闭校验的单变量对照。
+
+```powershell
+cmake -S . -B build-perf -G "MinGW Makefiles" -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=RelWithDebInfo -DVULKANLEARN_ENABLE_VULKAN_VALIDATION=OFF -DVULKANLEARN_BUILD_TESTS=OFF -DVULKANLEARN_BUILD_SPEEDTREE_WIND_VALIDATION=OFF
+cmake --build build-perf --target main -j4
+.\build-perf\bin\main.exe --initial-scene Maps/SC_sifi_head/SC_sifi_head.json
+```
+
+对照时固定场景、窗口尺寸、相机和 Details 选中状态，排除启动与编译期间数据。
+两种构建共享 `shader/spv/`，切换时由缓存的编译策略失效规则触发重建，不要同时启动。
+优化构建不替代 Debug 校验与模块测试；窗口 FPS 也不等于 GPU 执行耗时。
+
 ### UI 构建与运行
 
 运行时控制页和编辑器工作区统一使用 RmlUi，构建不再依赖 ImGui，
@@ -79,24 +95,33 @@ JSON 资产浏览器、属性面板与离线控制。布局采用顶部命令栏
 Asset Editor 是正式 DockPanel，默认与 Viewport 合并为中央标签组，也可拖到其他区域或浮动，
 并通过 renderer-owned 离屏纹理显示独立 Viewport；尚不支持原生多窗口、场景增删或 Undo/Redo。
 Content Browser 使用目录树、路径导航、搜索、类型筛选和资产网格/列表，
-索引 MI、Mesh、Scene、Texture、Terrain JSON。单击选中；双击 MI 仍进入可编辑文档，
+索引 MI、Mesh、Scene、Texture、Terrain JSON。单击选中；双击 MI 在关卡旁打开独立中央标签，
+参数编辑、保存和预览命令均在中央材质页，右侧 Details 保留场景对象信息；
+材质页左侧显示独立预览球，支持拖动环绕、中键平移、滚轮缩放和重新取景；
 双击 Scene 会复用现有 World/RenderGraph 事务切换关卡，并同步打开只读 JSON inspector；
-双击 Mesh/Texture/Terrain 进入独立资源编辑器标签，包含类型预览占位和只读 JSON Details；
+双击 Mesh 进入模型预览标签并自动取景：左/右键拖动旋转、滚轮缩放、中键平移，
+双击画面或点击相机按钮重新取景。切换/重载模型会重置相机，不修改模型资产。
+Texture 标签提供 PNG/JPEG/TGA/BMP 的等比例 RGB 预览；Terrain 仍为类型预览占位。
+贴图预览支持滚轮缩放、鼠标拖动平移，双击或 Fit Image 按钮复位；放大的是有界预览图。
+贴图预览按 colorSpace 显示，最长边限制为 1024，标题显示原图尺寸；资源标签包含只读 JSON Details；
 支持标签切换、关闭、返回 World、重复打开去重和重新读取 JSON。Scene 仍进入主工作区
-只读 JSON inspector 并请求 World 切换。查看 Mesh/Texture 不加载模型或贴图；
-任意层级的 `data` 字段及子树均不展示、不保留，也不读取 JSON 引用的数据文件。
+只读 JSON inspector 并请求 World 切换。Mesh 通过预览 World 加载模型，Texture 在后台解码 source，不切换 World；
+只读 JSON inspector 不展示、不保留任意层级的 `data` 字段及子树，也不读取 JSON 引用的数据文件。
 内嵌 `data` 仍受 JSON 语法与输入上限校验，并非跳过文件字节读取。
 目录由独立 worker 在初始化及显式 Refresh 时扫描，打开 JSON 也在 worker 完成；
 逐帧仅轮询结果并共享不可变快照，不逐帧扫描或读取资产 JSON。
 浏览器网格/列表最多挂载 192 个可见条目节点（含预取）及两个高度占位节点，
 静止状态复用目录、筛选和 markup；属性值缓存避免重复触发布局 dirty，
 Vulkan UI 顶点/索引缓冲按容量倍增复用。具体输入上限见组件契约。
-类型图标和材质球均为占位图，不是实际缩略图或模型预览。
+贴图网格按需显示后台生成的真实缩略图，结果缓存在 `.cache/editor-thumbnails/`；
+Refresh 重新校验源文件。模型与材质实例使用独立离屏渲染的真实缩略图，只做会话缓存；
+空闲 750 ms 后分阶段准备，复用中性 HDRI，不切换当前关卡。首次导入/管线创建仍有同步开销。
+场景截图缩略图尚未接入；离线专用材质保留类型图标并显示诊断。
 Color 参数目前通过 Linear RGBA 数值编辑，不提供旧的 sRGB 调色板。
 
 运行时 UI 资产位于仓库内的 `ui/`，由 `config/config.json -> ui` 配置块选择。
-`F10` 或手柄 `Start` 打开/关闭运行时控制页，`Esc` 切换鼠标捕获，
-`F1` 切换开发者工具。启动参数
+旧 Runtime Debug 页及 Settings/F10/手柄 Start 入口已移除。`Esc` 切换鼠标捕获，
+`F11` 切换编辑器沉浸模式（`F1` 兼容）。启动参数
 `--dev-ui` 和 `--no-dev-ui` 可以覆盖配置中的开发者 UI 开关：
 
 ```bash
@@ -237,8 +262,7 @@ build/bin/main.exe --offline --initial-scene Maps/SC_Cloth_Ashikhmin2000_Fig11Ve
 
 开发者 UI 的 Offline Renderer 面板可切换模式、设置 spp/反弹/seed、
 暂停、继续、停止、重启，查看 Combined/Direct/Indirect 并导出。
-使用 `--dev-ui` 启用后，可在运行时按 F10，进入 System 页点击
-`Toggle F1 diagnostics` 打开面板；无需依赖可能被其它程序占用的 F1。
+使用 `--dev-ui` 启用后，在编辑器底部选择 Renderer 标签即可打开面板。
 控制台也可输入 `offline on|off|samples N|bounces N|seed N|lightSamples N|aov MODE|exposure X|pause|resume|stop|restart|export`。
 离线相机移动时以 1 spp 多核预览并放大显示：默认半宽、半高，准备与
 等待超过 30 ms 时按每轴 1/2、1/4、1/8、1/16 逐级降档；低档预览

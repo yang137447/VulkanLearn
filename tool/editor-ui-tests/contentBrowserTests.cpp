@@ -63,7 +63,8 @@ public:
     Rml::TextureHandle LoadTexture(Rml::Vector2i& dimensions, const Rml::String& source) override
     {
         // 真实 RmlUi 负责布局与派发；栅格图标不需要物理窗口或 GPU。
-        if (source == "vl://scene-viewport" || std::filesystem::path(source).extension() == ".png")
+        if (source == "vl://scene-viewport" || source.rfind("vl://thumbnail/", 0) == 0 ||
+            std::filesystem::path(source).extension() == ".png")
         {
             dimensions = {64, 64};
             loadedSources.push_back(source);
@@ -244,6 +245,66 @@ TEST_F(ContentBrowserTest, RootDefaultsToAllCatalogAssetsAndNoFolderTiles)
     EXPECT_TRUE(document->GetElementById("browser-up")->HasAttribute("disabled"));
     for (const auto* item : Items())
         EXPECT_NE(item->GetInnerRML().find("Material Instance"), std::string::npos);
+}
+
+TEST_F(ContentBrowserTest, ThumbnailCompletionOnlyUpdatesImageWithoutRebuildingList)
+{
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+    catalog->revision = 1;
+    catalog->assets.push_back({"Common/T_image.json", EditorAssetKind::Texture, "Image"});
+    snapshot.assetCatalog = catalog;
+    Refresh();
+    Refresh();
+    EXPECT_EQ(browser.VisibleThumbnailPaths(), std::vector<std::string>{"Common/T_image.json"});
+    auto* item = Find("browser-item", "Common/T_image.json");
+    ASSERT_NE(item, nullptr);
+    const auto before = browser.GetStats();
+    auto thumbnails = std::make_shared<EditorThumbnailSnapshot>();
+    auto image = std::make_shared<EditorTexturePreview>();
+    image->width = image->height = 256;
+    thumbnails->entries["Common/T_image.json"] = {"vl://thumbnail/test", {}, image};
+    snapshot.thumbnails = thumbnails;
+    Refresh();
+    EXPECT_EQ(browser.GetStats().listDomRebuilds, before.listDomRebuilds);
+    EXPECT_EQ(browser.GetStats().thumbnailWrites, before.thumbnailWrites + 1);
+    EXPECT_EQ(Find("browser-item", "Common/T_image.json"), item);
+    EXPECT_EQ(item->GetChild(0)->GetAttribute<std::string>("src", ""), "vl://thumbnail/test");
+    EXPECT_TRUE(item->IsClassSet("has-thumbnail"));
+    const auto warm = browser.GetStats().thumbnailWrites;
+    for (int i = 0; i < 10; ++i) Refresh();
+    EXPECT_EQ(browser.GetStats().thumbnailWrites, warm);
+    snapshot.thumbnails.reset();
+    Refresh();
+    EXPECT_FALSE(item->IsClassSet("has-thumbnail"));
+    EXPECT_EQ(item->GetChild(0)->GetAttribute<std::string>("src", ""), "icons/texture.png");
+    Click("browser-list");
+    EXPECT_TRUE(browser.VisibleThumbnailPaths().empty());
+}
+
+TEST_F(ContentBrowserTest, ThumbnailRequestsAreWindowBoundedAndIncludeRenderableAssets)
+{
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+    catalog->revision = 1;
+    for (int i = 0; i < 1000; ++i)
+        catalog->assets.push_back({"Common/T_" + std::to_string(i) + ".json", EditorAssetKind::Texture, "Texture"});
+    catalog->assets.push_back({"Common/MI_material.json", EditorAssetKind::MaterialInstance, "Material"});
+    catalog->assets.push_back({"Common/SM_mesh.json", EditorAssetKind::Mesh, "Mesh"});
+    catalog->assets.push_back({"Common/SC_scene.json", EditorAssetKind::Scene, "Scene"});
+    catalog->assets.push_back({"Common/TR_terrain.json", EditorAssetKind::Terrain, "Terrain"});
+    snapshot.assetCatalog = catalog;
+    Refresh();
+    Refresh();
+    const auto requests = browser.VisibleThumbnailPaths();
+    EXPECT_FALSE(requests.empty());
+    EXPECT_LE(requests.size(), 192u);
+    EXPECT_LT(requests.size(), catalog->assets.size());
+    EXPECT_NE(std::find(requests.begin(), requests.end(), "Common/MI_material.json"), requests.end());
+    EXPECT_NE(std::find(requests.begin(), requests.end(), "Common/SM_mesh.json"), requests.end());
+    EXPECT_EQ(std::find(requests.begin(), requests.end(), "Common/SC_scene.json"), requests.end());
+    EXPECT_EQ(std::find(requests.begin(), requests.end(), "Common/TR_terrain.json"), requests.end());
+    EXPECT_TRUE(docking.SetPanelVisible("content", false));
+    Refresh();
+    EXPECT_TRUE(browser.VisibleThumbnailPaths().empty());
 }
 
 TEST_F(ContentBrowserTest, SourcesDeriveSortedAncestorsAndExpandWithoutNavigation)
@@ -461,7 +522,7 @@ TEST_F(ContentBrowserTest, NameDirtyMarkerAndAllPathAttributesAreEscaped)
     Refresh();
     auto* item = Find("browser-item", path);
     ASSERT_NE(item, nullptr);
-    EXPECT_EQ(item->GetAttribute<std::string>("title", ""), path);
+    EXPECT_EQ(item->GetAttribute<std::string>("title", ""), "MI_<injected>&\"long\n" + path);
     EXPECT_NE(item->QuerySelector(".asset-dirty"), nullptr);
     EXPECT_NE(item->QuerySelector(".asset-name")->GetInnerRML().find("&lt;injected&gt;"), std::string::npos);
     EXPECT_EQ(item->QuerySelector(".asset-name")->GetInnerRML().find(".json"), std::string::npos);

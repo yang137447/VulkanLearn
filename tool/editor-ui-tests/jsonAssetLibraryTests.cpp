@@ -392,6 +392,90 @@ protected:
     EditorJsonAssetLibrary library;
 };
 
+TEST_F(JsonAssetLibraryTest, TexturePreviewDecodesRgbWithTopLeftOrientation)
+{
+    std::string tga(18, '\0');
+    tga[2] = 2; tga[12] = 2; tga[14] = 1; tga[16] = 32; tga[17] = 40;
+    for (unsigned char byte : {0, 0, 255, 0, 0, 128, 0, 0}) tga += char(byte);
+    Write("source.tga", tga);
+    Write("T_test.json", R"({"type":"texture","source":"source.tga","colorSpace":"srgb"})");
+    Start();
+    library.RequestOpen("T_test.json");
+    ASSERT_TRUE(WaitDocument());
+    const auto doc = library.GetDocument();
+    ASSERT_TRUE(doc->texturePreview) << doc->previewDiagnostic;
+    EXPECT_EQ(doc->texturePreview->width, 2u);
+    EXPECT_EQ(doc->texturePreview->height, 1u);
+    EXPECT_EQ(doc->texturePreview->pixels, (std::vector<uint8_t>{255, 0, 0, 255, 0, 128, 0, 255}));
+}
+
+TEST_F(JsonAssetLibraryTest, LinearTexturePreviewEncodesDisplayRgb)
+{
+    std::string tga(18, '\0');
+    tga[2] = 2; tga[12] = 1; tga[14] = 1; tga[16] = 24; tga[17] = 32;
+    tga.append(3, char(128));
+    Write("source.tga", tga);
+    Write("T_test.json", R"({"type":"texture","source":"source.tga","colorSpace":"linear"})");
+    Start();
+    library.RequestOpen("T_test.json");
+    ASSERT_TRUE(WaitDocument());
+    ASSERT_TRUE(library.GetDocument()->texturePreview);
+    EXPECT_NEAR(library.GetDocument()->texturePreview->pixels[0], 188, 1);
+}
+
+TEST_F(JsonAssetLibraryTest, TexturePreviewRejectsOutsideRoot)
+{
+    Write("T_test.json", R"({"type":"texture","source":"../outside.tga","colorSpace":"srgb"})");
+    Start();
+    library.RequestOpen("T_test.json");
+    ASSERT_TRUE(WaitDocument());
+    EXPECT_FALSE(library.GetDocument()->texturePreview);
+    EXPECT_NE(library.GetDocument()->previewDiagnostic.find("escapes"), std::string::npos);
+}
+
+TEST_F(JsonAssetLibraryTest, TexturePreviewIsBoundedAndReloadDoesNotKeepOldPixels)
+{
+    std::string tga(18, '\0');
+    tga[2] = 2; tga[13] = 8; tga[14] = 1; tga[16] = 24; tga[17] = 32;
+    tga.append(2048 * 3, char(128));
+    Write("source.tga", tga);
+    Write("T_test.json", R"({"type":"texture","source":"source.tga","colorSpace":"srgb"})");
+    Start();
+    library.RequestOpen("T_test.json");
+    ASSERT_TRUE(WaitDocument());
+    ASSERT_TRUE(library.GetDocument()->texturePreview);
+    EXPECT_EQ(library.GetDocument()->texturePreview->sourceWidth, 2048u);
+    EXPECT_EQ(library.GetDocument()->texturePreview->width, 1024u);
+    const auto revision = library.GetDocument()->revision;
+    Write("source.tga", "corrupt");
+    library.RequestOpen("T_test.json");
+    ASSERT_TRUE(WaitDocument());
+    EXPECT_GT(library.GetDocument()->revision, revision);
+    EXPECT_FALSE(library.GetDocument()->texturePreview);
+    EXPECT_FALSE(library.GetDocument()->previewDiagnostic.empty());
+}
+
+TEST_F(JsonAssetLibraryTest, TexturePreviewReportsMissingSource)
+{
+    Write("T_test.json", R"({"type":"texture","source":"missing.png","colorSpace":"srgb"})");
+    Start();
+    library.RequestOpen("T_test.json");
+    ASSERT_TRUE(WaitDocument());
+    EXPECT_FALSE(library.GetDocument()->texturePreview);
+    EXPECT_NE(library.GetDocument()->previewDiagnostic.find("missing"), std::string::npos);
+}
+
+TEST_F(JsonAssetLibraryTest, TexturePreviewReportsUnsupportedFormat)
+{
+    Write("source.dds", "not decoded");
+    Write("T_test.json", R"({"type":"texture","source":"source.dds","colorSpace":"linear"})");
+    Start();
+    library.RequestOpen("T_test.json");
+    ASSERT_TRUE(WaitDocument());
+    EXPECT_FALSE(library.GetDocument()->texturePreview);
+    EXPECT_NE(library.GetDocument()->previewDiagnostic.find("unsupported format"), std::string::npos);
+}
+
 TEST_F(JsonAssetLibraryTest, PublishesCatalogOnlyThroughGtPoll)
 {
     static_assert(std::is_same_v<decltype(library.GetCatalog()),

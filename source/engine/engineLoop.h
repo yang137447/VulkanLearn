@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <chrono>
 #include <memory>
 #include <optional>
 #include <set>
@@ -13,6 +14,8 @@
 #include "platform/platformEvent.h"
 #include "engine/runtimeCommand.h"
 #include "engine/launchOptions.h"
+#include "engine/modelPreviewCamera.h"
+#include "editor/assets/editorThumbnailLibrary.h"
 #include "ui/uiSubsystem.h"
 #include "world/loading/worldGraphTransactionCoordinator.h"
 #include "shader/reload/shaderReloadRuntime.h"
@@ -25,6 +28,7 @@ namespace VL
 {
 
 class PlatformApplication;
+class EditorThumbnailRenderSession;
 class PlatformWindow;
 class GameInstance;
 class RendererBackendVulkan;
@@ -74,6 +78,7 @@ private:
         float deltaTime,
         const RuntimeCommandExecutionResult& commandResult);
     void SynchronizeSceneViewport();
+    void TickEditorThumbnails();
     const RuntimeConfig& GetRuntimeConfig() const;
     SubsystemCollection& GetSubsystems();
     const SubsystemCollection& GetSubsystems() const;
@@ -140,7 +145,12 @@ private:
     std::unique_ptr<WorldGraphTransactionCoordinator>
         worldGraphTransactionCoordinator;
     std::unique_ptr<Controller> controller;
+    ModelPreviewCamera modelPreviewCamera;
     std::unique_ptr<UiSubsystem> uiSubsystem;
+    std::unique_ptr<EditorThumbnailRenderSession> thumbnailSession;
+    std::optional<Editor::ThumbnailRenderRequest> thumbnailRequest;
+    uint64_t thumbnailSessionEpoch = 0;
+    std::chrono::steady_clock::time_point thumbnailIdleSince = std::chrono::steady_clock::now();
     uint64_t uiFrameIndex = 0;
     WorldGraphTransactionTestFaultInjection
         worldGraphTransactionTestFaultInjection;

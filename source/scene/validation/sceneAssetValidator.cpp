@@ -279,6 +279,8 @@ SceneAssetBuildPlan SceneAssetValidator::BuildLoadPlan(
         if (objectType == "mesh")
         {
             const std::string modelPath = ReadRequiredStringField(objectJson, "modelPath", objectContext);
+            if (objectJson.contains("materialOverride"))
+                ReadRequiredStringField(objectJson, "materialOverride", objectContext);
             RequireTransformFields(objectJson, objectContext);
             objectPlan.meshLoadRequest = MeshAssetLoader::Prepare(modelPath);
         }

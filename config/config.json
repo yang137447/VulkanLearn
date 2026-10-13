@@ -11,7 +11,7 @@
     "enabled": true,
     "hotReload": true,
     "assetRoot": "ui",
-    "document": "runtime-control.rml",
+    "document": "runtime-hud.rml",
     "localization": "localization.json",
     "defaultLocale": "en-US",
     "fontFaces": [],

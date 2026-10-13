@@ -8,7 +8,17 @@
 默认布局向 UE 编辑器靠拢：顶部标题行最左侧是 File / Edit / Window / Help 菜单栏，
 标题右侧保留原有命令按钮，右上 Scene Outliner，右下 Details，
 中央/左侧独立 Viewport，底部 Content Browser / Renderer 标签页，最底部状态栏。
-Material Slots 放在 Details 中。面板可四边停靠、合并标签、在主窗口内浮动后重新停靠，
+Material Slots 和 actor 参数放在 Details 中，MI 文档参数放在中央独立资产页。
+每个打开的 MI 对应一个紧邻 Viewport 的停靠标签，显示文件名、脏标记和关闭按钮；
+重复打开复用文档，关闭沿用保存/丢弃/取消确认，切回关卡后普通快照刷新不会抢回材质页。
+中央页保留 General、Render States、Parameters、Texture Bindings、保存及既有 World 预览命令；
+中央页左侧使用正式 `Common/Meshes/SM_material_preview_ball.json` 预览球，右侧为材质参数。
+`PreviewMaterial` 经 LoadWorld 事务在 `SC_model_preview` 注入 `preview_material`，
+实例级 `materialOverride` 绑定所选 MI，不写球模型或材质文件。新 World 与同路径槽位发布后才显示图像，
+重连后补一次未保存的数值/渲染状态草稿。左/右拖动环绕、中键平移、滚轮缩放、相机按钮重新取景。
+仍是单活动 World，不是每标签保留一份 World；返回关卡会重新加载记住的关卡路径。
+贴图草稿的 live descriptor 替换仍未实现。材质标签同样不随布局写盘。
+面板可四边停靠、合并标签、在主窗口内浮动后重新停靠，
 分隔条支持拖动并受子树最小尺寸约束；普通面板切换只改变呈现。
 模型/关卡页面切换通过既有加载事务选择单活动 World，不提交资产修改。
 Scene Outliner 现在渲染真实 World actor 树（网格 / 四类灯 / 相机 / 环境 / 风剖面，
@@ -31,19 +41,32 @@ Scene Outliner 现在渲染真实 World actor 树（网格 / 四类灯 / 相机 
 留下的空栈会被剪掉，重启后不恢复打开的资产。
 当前 Content Browser 浏览 MI、Mesh、Scene、Texture、Terrain JSON 元数据，
 Mesh、Texture、Terrain 双击后进入资源标签页，右侧为只读 JSON Details。
-Mesh 通过预览 World 显示真实模型；Texture/Terrain 仍为类型预览占位，不加载引用数据。
+Mesh 通过预览 World 显示真实模型；Texture 后台加载 PNG/JPEG/TGA/BMP 的 source 并等比例显示 RGB。
+贴图标题显示原尺寸及 colorSpace，最长预览边为 1024；忽略 alpha，不把参数图当透明图。
+预览区滚轮以鼠标位置为中心缩放（适应窗口倍率的 0.1 到 32 倍），左/中/右键拖动平移，
+双击图片区域或 Fit Image 按钮复位。切换/重载贴图重置视图，失焦取消拖动。
+缩放只改裁剪区域内的 UI 几何，不重新解码或上传图片；放大仍使用有界预览，不是原图 1:1 检视。
+缺失、损坏、越界或未支持格式显示诊断，不沿用旧图。Terrain 仍为类型预览占位。
 它不再使用平铺文件名列表：左侧目录树由 worker 发布的只读 JSON 目录派生，
 上方提供前进/后退、父目录、面包屑与搜索，资产区支持网格/列表、
 名称排序、类型筛选、尺寸档位、子目录开关与显式 Refresh，底部显示数量和完整选中路径。
-单击只改变浏览选择；双击 MI 提交原有打开命令，保持可编辑，
+单击只改变浏览选择；双击 MI 提交原有打开命令并激活中央材质文档页，保持可编辑，
 双击 Scene 复用 `UiActionType::LoadWorld` 请求切换 World，并同步打开只读 JSON inspector；
 Scene 仍请求 World 切换并使用主工作区 JSON inspector；Mesh、Texture、Terrain
 使用资源编辑器标签页。资源标签支持重复打开去重、切换、关闭、返回 World 和重新读取 JSON。
-目录与搜索不提交业务命令；类型图标和材质球不代表实际缩略图或模型预览。
+目录与搜索不提交业务命令；贴图、实时模型与材质实例网格有真实缩略图，场景仍是类型占位。
 Viewport 使用 RenderGraph 拥有的离屏场景纹理，完整 UV 显示，不拷贝或裁剪 swapchain。
 GPU backing 保持原生窗口尺寸；相机 aspect、拾取和离线 film 尺寸跟随面板逻辑尺寸。
+关卡左键拾取只更新对象描边、大纲选择与 Details，不创建或激活 MI 文档，不切换预览 World。
+鼠标相对捕获已请求或已启用时不执行左键拾取；材质文档由材质槽或资源浏览器显式打开。
 视口左上角叠加工具条；其中只有 view mode 有渲染后端，变换工具与坐标系只是呈现状态，
 详细边界见“停靠与视口契约”。
+视口左上视图模式下拉菜单提供 Lit、Unlit（既有 Base Color 调试映射）和禁用的 Wireframe。
+Buffer Visualization 子菜单恢复 Base Color、Emissive、World Normal、Roughness、Metallic、AO、
+Shadow、Direct Lighting、Indirect Diffuse/Specular、Shadow Cascade Index、Shading Model，
+统一发送既有 SetDebugViewMode；标题和选中状态以运行时快照回显，子菜单限高滚动。
+基础模式 0..12 的材质输出在优化运行时也保留，不依赖 ENABLE_DEBUG_VIEW；
+Lit 直接返回正常光照，避免只在最终合成切换而材质仍输出 HDR 导致参数视图饱和。
 
 ## 设计边界
 
@@ -78,9 +101,11 @@ JSON inspector 使用分页，不等同于通用 ListView/TreeView 已完成。
 数值组件是文本输入加可选范围滑条：滑条只做范围语义下的快速调整，
 精确输入仍由同一行的文本输入负责，两者共用同一个 action/index/component 地址。
 分组折叠只改既有分组元素上的 class，不重建 DOM；
+材质贴图下拉选项只在候选路径/有效性、当前有效绑定或 Details DOM 改变时重建，
+相机移动不重新拼装整份选项字符串；控件当前值仍逐帧同步并保留焦点输入。
 滑条的 min/max 属于分组 markup，随 identity（assetPath + schemaDigest）重建。
 Color 仍按线性 RGBA 存储，编辑器只多出面向 sRGB 的色板与 `#RRGGBBAA` 读数，
-没有可编辑调色板；真实资产缩略图、纹理像素查看、
+没有可编辑调色板；场景缩略图、纹理逐像素读数、
 资产拖放、Undo/Redo 尚未实现。
 `MenuItem` 只生成“动作名 + 条目索引 + 勾选/禁用”这一种行，
 菜单的展开状态、勾选含义和命令语义全部属于业务宿主。
@@ -124,10 +149,13 @@ ImGui→RmlUi 迁移丢了三项 Details 面板能力，本批把它们补回，
 - 大纲行窗口化只覆盖世界 actor 树：通用 `TreeRow` 组件本身仍不虚拟化，
   模型树与 Sources 树也仍整棵挂载。
 - 大纲仍是单选：没有多选、没有拖放/重父级，也没有改名（改名同样属于场景文档阶段）。
-- 没有资产缩略图、没有纹理像素查看器；Mesh 预览目前复用中性场景视口，
+- 贴图、实时模型与材质实例网格有缓存缩略图，场景没有真实缩略图，也没有纹理逐像素读数；Mesh 预览目前复用中性场景视口，
   模型标签通过 `resource-preview-image` 显示当前 renderer-owned 离屏图像。
   工具条变换按钮目前仅切换本地状态，不提供 gizmo；模型信息 Details 中
-  `Metadata ready` 仅表示 JSON 已读取，不表示模型渲染成功。预览采用固定取景。
+  `Metadata ready` 仅表示 JSON 已读取，不表示模型渲染成功。发布后按模型所有 section 的世界包围盒自动取景。
+  图像内左/右键拖动环绕、中键平移、滚轮缩放；双击图像或相机按钮重新取景。
+  导航只修改预览相机，不写资产；动作带 World generation，切换/重载模型重新取景，失焦取消拖动。
+  环绕预览隐藏场景的固定 `neutral_backdrop` 平面以免遮挡背面，保留原 HDRI 照明和背景；不写回场景文件。
 - 没有可编辑调色板（含 HSV 面板），也没有步进控件：Details 目前只有
   范围滑条、文本输入和 sRGB 色板读数。
 - 没有原生多窗口，没有 IME。
@@ -339,14 +367,57 @@ Scene Outliner（`#editor-navigation`，仍是 `DockWorkspace::Panels()` 里的 
 
 图标为 Lucide 的已提交 PNG，许可位于 `ui/icons/LUCIDE-LICENSE.txt`，
 没有运行时下载、SVG 解码或额外图标字体依赖。统一材质球及其他类型图标仅是类型图示，
-真实缩略图、模型预览、纹理像素查看和导入仍属后续能力。
+贴图网格异步替换为真实 RGB 缩略图；模型与材质实例在独立离屏渲染完成后替换类型图标。
+场景和不支持实时渲染的资产仍保留占位，不能把统一球图标视为真实资产内容。
 资产生成入口为 `tool/editor-ui-assets/generate-content-browser.cjs`，
 需要已安装的 `lucide` 与 `sharp` 模块目录作为参数，不参与引擎构建。
+
+### 贴图缩略图
+
+`EditorThumbnailLibrary` 是独立于 JSON 文档读取的 CPU worker，不加载 World，不调用 Vulkan。
+请求只来自网格的可见窗口（含前后两行，最多 192 项）；列表模式、隐藏面板不请求。
+窗口变化替换待办集合，离开窗口的旧任务不发布；失败结果有悬停诊断，显式 Refresh 才重试。
+刷新同时使内存缩略图失效，并重新读取描述文件和 source 内容，不依赖时间戳判断一致性。
+
+输出固定为 256×256 显示用 sRGB RGBA8，保持源图比例，空白处填深灰。
+PNG/JPEG/TGA/BMP 等 STB 支持的 LDR 图片在线性域面积平均；Radiance HDR 用固定
+Reinhard 映射，不自动曝光。EXR/DDS/KTX 暂不支持并保留图标和诊断。
+默认展示 RGB；仅 `channelsDescription.a` 精确为 `opacity` 或 `alpha` 时合成棋盘格，
+法线/参数图的打包 alpha 不作为透明度。输入先检查根内 canonical 路径、64 MiB 字节及 32 MP 像素上限。
+
+缓存位于项目 `.cache/editor-thumbnails/`，不写正式资产；键由版本、尺寸、描述文件和源图片
+完整内容的 BLAKE3-256 构成。固定尺寸像素载荷带独立摘要并原子写入，损坏缓存自动重建，
+写盘失败仍显示内存结果。磁盘最多 512 个条目，按写入时间淘汰；CPU LRU 最多 256 项。
+每帧最多发布两项新结果，场景视口输入或编辑器指针捕获期间暂停新任务/新图发布。
+Rml 回调只消费已发布像素，UI/GPU 纹理离开可见窗口便经既有退役路径释放。
+结果完成只更新原节点的 img src、角标和悬停提示，不替换卡片 DOM；静止帧不重复写图片属性。
+卡片名称和类型行固定高度且不参与 flex 压缩，完整名称与路径放在悬停提示中。
+
+### 模型与材质缩略图
+
+`EditorThumbnailLibrary` 通过单槽值语义邮箱交出 Mesh/MI 请求，CPU worker 不调用 Vulkan。
+`EngineLoop::TickEditorThumbnails` 在上一帧 RT 归还所有权后推进 `EditorThumbnailRenderSession`；
+输入结束 750 ms 后，每帧至多推进一个准备阶段或一个 IBL mip。离开可见集合或 Refresh 的
+迟到结果不能发布；隐藏编辑器、视口输入、指针捕获期间不推进。
+
+会话独占 RenderGraph、候选资源缓存、frame UBO、相机、环境烘焙和 readback buffer，
+不发布 WorldManager、不提交主图资源包，也不复用活动关卡的可变 UBO/材质参数。
+图从正式配置派生：固定 256 方形输出，保留 pass 输入/binding，去掉编辑器网格、自动曝光调度和 MSAA；
+缩略图禁用 CSM，保留 HDRI 的 SH/镜面 IBL、材质真实 shader 与固定曝光。
+使用 `SC_model_preview` 的 HDRI 与相机曝光，隐藏背板；模型按全部 section 包围盒取景。
+MI 使用正式 `SM_material_preview_ball`，通过实例级 materialOverride 绑定目标材质。
+
+同一批请求复用离屏图、pass 材质和 HDRI 烘焙，单个资产的模型/材质/descriptor 在本次 fence
+完成后释放，不累积 GPU 模型缓存。每次提交只等待专用 fence，不调用全局 waitIdle。
+窗口重建销毁会话，后续请求重新准备；Refresh 同时使会话环境和图缓存失效。
+结果复用上节有界 CPU LRU，但模型/MI **不写磁盘缓存**，没有跨启动恢复或自动依赖监听。
+首次导入、材质解析、管线创建仍是同步阶段，750 ms 是输入退避而非严格帧耗时预算。
+离线专用材质、无效资产显示类型图标和悬停诊断，不降级成近似着色。场景截图缩略图尚未接入。
 
 ## JSON 元数据与输入边界
 
 `source/editor/assets/editorJsonAssetLibrary.*` 提供 GT facade 与独立读取 worker。
-初始化请求一次目录扫描，后续仅显式 Refresh 重扫；打开请求只读取选定 JSON。
+初始化请求一次目录扫描，后续仅显式 Refresh 重扫；打开请求读取选定 JSON，贴图另读 source。
 GT 每帧 `Poll()` 使用非阻塞邮箱发布结果，不扫描目录、不读取资产 JSON。
 刷新/打开待办合并，打开优先且扫描在文件之间服务新打开请求；
 worker 投递和 GT 发布均核对代际，迟到结果不能覆盖最新选择。
@@ -361,7 +432,10 @@ worker 投递和 GT 发布均核对代际，迟到结果不能覆盖最新选择
 
 SAX 不构造完整 JSON DOM，只保留顶层分类/名称/说明及有界前序字段行。
 任意深度、ASCII 大小写不敏感的 `data` 字段及其整个子树不进入展示行或快照；
-引用路径仅作为普通元数据文本，不加载引用文件、World、模型、纹理像素或 GPU 资源。
+普通引用路径仅作为元数据；唯一像素例外是显式打开 Texture：worker 在 canonical 资源根内
+解码 source，输入最多 64 MiB、解码最多 32 MP，面积缩小到最长边 1024 后发布不可变快照。
+目录扫描不解码；worker 不接触 World/GPU。按 colorSpace 在线性域缩小后编码 sRGB 显示，
+UI 以 revision URL 注册像素并走已有纹理上传/退役路径；切换、重载不会串图。
 JSON 文件字节仍在 worker 读取，内嵌 `data` 仍做语法、字节数与深度校验，
 不能宣称跳过其词法解析或完全不读取内嵌 payload。
 
@@ -502,11 +576,13 @@ Lit/Unlit 都不高亮，工具条不声明自己没有设置过的模式。
 - 屏幕 y 向下，因此 `screenY = -dot(axis, up)`；世界 +Y 必须投到**负**的屏幕 y。
 - `depth = dot(axis, forward)`，`forward` 指向屏幕内，所以**越小越靠近观察者**；
   面板按 depth 降序绘制，让朝向观察者的轴盖住背向的轴。
-- 与视线近乎平行的轴**退化**：屏幕长度趋零、方向角没有意义。此时杆收成零宽，
+- 与视线近乎平行的轴**退化**：屏幕长度趋零、方向角没有意义。此时隐藏杆，
   **标签一并隐藏**并把偏移归零 —— 只收杆不藏标签会让它落到锚点上，与另外两轴的字母
   叠成一团（实测三个字母挤在 6x8 px 内，无法辨认）。
 
-角度的量化只用于**值缓存**：签名（角度/偏移取整 + 退化标志）不变就不写 DOM，
+杆和标签的布局盒保持固定尺寸：旋转/位移使用 `transform`，退化使用 `visibility`，
+不通过修改 margin、width 或 display 驱动逐帧布局。
+角度的量化只用于**值缓存**：签名（角度/偏移取整 + 退化标志 + 深度排序）不变就不写 DOM，
 因此相机静止时指示器不产生属性写入，与本文件其它控件同一策略。
 
 视口工具条分组底色使用不透明 `#242428`，这是可读性选择而不是管线限制：
@@ -572,7 +648,7 @@ RGBA 分支的整数分量路径）。该分支只接受 `0`–`255` 整数或�
 mesh actor 与材质槽仍走既有 MI 选择路径、非网格 actor 走 `RequestActorSelection`、
 无 MI 文档时 Details 展示选中 actor、只读字段按行刷新且节点身份稳定、
 主方向光的两个可编辑控件（含同值不发命令、非有限数与非区间值拒绝）、
-以及 Details 强度控件区间与运行时页 `#sun-intensity-slider` 一致的漂移守卫。
+以及 Details 强度控件使用 0..150000 lux 物理单位区间的回归守卫。
 第五批新增窗口/排序用例：纯数学放在 `widgetTests.cpp`（窗口挂载区间上界、
 spacer 高度之和等于整棵树、滚动到底必须挂到真正的最后一行、50000 行仍受 192 预算约束、
 折叠分组只贡献表头且整棵折叠后不需要 spacer、展开 mesh actor 按模型顺序追加槽行、

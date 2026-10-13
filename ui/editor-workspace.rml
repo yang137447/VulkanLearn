@@ -55,7 +55,6 @@
                  工作区操作而不是文档命令。 -->
             <div class="toolbar-spacer"></div>
             <button id="workspace-reset" data-action="workspace-reset">Reset Layout</button>
-            <button data-action="runtime-page">Settings</button>
             <button data-action="immersive-view" title="Immersive Mode">Immersive Mode</button>
         </div>
 
@@ -99,10 +98,18 @@
                             <button class="viewport-tool" id="viewport-space-world" data-action="viewport-space" data-space="world" title="World space - presentation only, the renderer does not read it">World</button>
                             <button class="viewport-tool" id="viewport-space-local" data-action="viewport-space" data-space="local" title="Local space - presentation only, the renderer does not read it">Local</button>
                         </div>
-                        <div class="viewport-tool-group" id="viewport-view-mode">
+                        <div class="viewport-tool-group menu-root" id="menu-view">
+                          <button class="menu-title" id="viewport-view-title" data-action="menu-open" data-menu="view">Lit v</button>
+                          <div class="menu-popup" id="viewport-view-mode">
                             <button class="viewport-tool" id="viewport-view-lit" data-action="viewport-view-mode" data-mode="0" title="Lit: full shading (debug view 0)">Lit</button>
                             <button class="viewport-tool" id="viewport-view-unlit" data-action="viewport-view-mode" data-mode="1" title="Unlit: base color debug view (debug view 1)">Unlit</button>
                             <button class="viewport-tool disabled" id="viewport-view-wireframe" disabled="disabled" title="Wireframe is not implemented: this renderer has no wireframe raster mode and no wireframe debug view.">Wireframe</button>
+                            <div class="menu-separator"></div>
+                            <div class="menu-entry">
+                              <button class="menu-item"><span class="menu-check"></span><span class="menu-label">Buffer Visualization</span><span class="menu-arrow">&gt;</span></button>
+                              <div class="menu-popup menu-submenu" id="viewport-buffer-modes"></div>
+                            </div>
+                          </div>
                         </div>
                     </div>
                 </div>
@@ -133,14 +140,7 @@
                     <div id="material-instance-details">
                     <h3>Material Slots</h3>
                     <div id="material-slots" class="scroll-box"></div>
-                    <h3 id="document-title">Material Instance</h3>
-                    <div id="document-tabs"></div>
-                    <div class="command-row preview-commands">
-                        <button id="apply-preview" data-action="apply-preview">Apply Preview</button>
-                        <button id="restore-preview" data-action="restore-preview">Restore Baseline</button>
-                    </div>
-                    <p id="document-status" class="muted"></p>
-                    <div id="details-content"></div>
+                    <div id="actor-details-content"></div>
                     </div>
                     <div id="json-inspector">
                         <div class="json-header">
@@ -248,9 +248,39 @@
                     </div>
                 </div>
             </div>
+            <div id="material-editor" class="dock-panel">
+                <div class="material-editor-toolbar">
+                    <button id="material-frame" class="browser-icon" data-action="material-frame" title="Frame Preview Ball">
+                        <img src="icons/camera.png"/><span class="browser-tooltip">Frame Preview Ball</span>
+                    </button>
+                    <h3 id="document-title">Material Instance</h3>
+                    <div class="toolbar-spacer"></div>
+                    <button id="material-save" data-action="save" title="Save Material Instance">Save</button>
+                    <button id="apply-preview" data-action="apply-preview">Apply Preview</button>
+                    <button id="restore-preview" data-action="restore-preview">Restore Baseline</button>
+                </div>
+                <div id="material-editor-body">
+                    <div id="material-preview-surface">
+                        <img id="material-preview-image" src="vl://scene-viewport"/>
+                        <p id="material-preview-status" class="muted"></p>
+                    </div>
+                    <div id="material-properties" class="inspector-body">
+                    <p id="document-status" class="muted"></p>
+                    <div id="details-content"></div>
+                    </div>
+                </div>
+            </div>
             <div id="resource-editor">
                 <div id="resource-editor-toolbar">
+                    <div id="resource-texture-tools" class="resource-model-tools">
+                        <button id="resource-texture-fit" class="browser-icon" data-action="resource-texture-fit" title="Fit Image">
+                            <img src="icons/camera.png"/><span class="browser-tooltip">Fit Image</span>
+                        </button>
+                    </div>
                     <div id="resource-model-tools" class="resource-model-tools">
+                        <button id="resource-frame" class="browser-icon" data-action="resource-frame" title="Frame Model">
+                            <img src="icons/camera.png"/><span class="browser-tooltip">Frame Model</span>
+                        </button>
                         <button id="resource-tool-select" class="viewport-tool" data-action="resource-tool" data-tool="select" title="Select model tool">Select</button>
                         <button id="resource-tool-move" class="viewport-tool" data-action="resource-tool" data-tool="move" title="Move model tool">Move</button>
                         <button id="resource-tool-rotate" class="viewport-tool" data-action="resource-tool" data-tool="rotate" title="Rotate model tool">Rotate</button>
@@ -274,6 +304,7 @@
                         </div>
                         <div id="resource-preview-surface">
                             <img id="resource-preview-image" src="vl://scene-viewport"/>
+                            <img id="resource-texture-image"/>
                             <img id="resource-preview-icon" src="icons/mesh.png"/>
                             <h3 id="resource-preview-status"></h3>
                             <p id="resource-preview-path"></p>
@@ -312,7 +343,7 @@
             </div>
         </div>
         <div id="dock-drag-shield"></div>
-        <div id="editor-status"><p id="editor-notice"></p><span id="editor-frame-metrics"></span></div>
+        <div id="editor-status"><p id="editor-notice"></p></div>
 
         <div id="close-dialog">
             <div class="dialog">

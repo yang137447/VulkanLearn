@@ -29,7 +29,6 @@ enum class UiInputOwner
 {
     None,
     Game,
-    RuntimeUi,
     DeveloperUi
 };
 
@@ -112,7 +111,6 @@ struct UiViewModelSnapshot
     float speedTreeStrength = 0.35f;
     bool speedTreeGustingEnabled = true;
     uint32_t speedTreeWindProfileCount = 0;
-    bool runtimePageVisible = false;
     bool developerUiVisible = false;
     // 与 Controller 一致，快照中的移动速度以 cm/s 表示。
     float cameraMoveSpeed = 1000.0f;

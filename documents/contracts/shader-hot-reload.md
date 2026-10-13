@@ -29,8 +29,11 @@ shadercache stats
 - `ShaderFileMonitor` 轮询 `shader/glsl` source-of-truth：
   `.vert/.frag/.comp/.glsl` 与 `M_*.json`。
 - 忽略 `**/generate/`、`shader/spv/`、临时/编辑器交换文件。
-- mtime/size 只做快速候选；BLAKE3-256 是最终变更判定。每 4 次扫描强制全量
-  重哈希，兜底时间戳粒度或时间戳被还原的编辑。
+- 根路径初始化时规范化；不跟随目录符号链接的扫描中，普通文件使用词法相对路径，
+  文件符号链接仍解析物理目标。逐帧轮询不为每个普通文件重复规范化根路径。
+- mtime/size 只做快速候选；BLAKE3-256 是最终变更判定。未变文件的重哈希分摊到
+  4 次扫描，每项最多 4 轮复核一次；元数据改变、未稳定或未成功读取的候选立即
+  哈希。分摊不改变同时间戳/同大小编辑的检测窗口，也不跳过提交前摘要校验。
 - debounce：同一路径必须连续稳定指定次数才提交事件；文件不可读时延迟到下一轮。
 - monitor 观察到内容过渡时推进 `latestObservedSourceEpoch`；只有通过 debounce 的
   stable event 才进入待处理集合。epoch 是过时结果的快速拒绝条件，不替代提交时

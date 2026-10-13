@@ -11,7 +11,10 @@
 
 #include <RmlUi/Core/Context.h>
 #include <RmlUi/Core/Core.h>
+#include <RmlUi/Core/DataModelHandle.h>
 #include <RmlUi/Core/ElementDocument.h>
+#include <RmlUi/Core/ElementUtilities.h>
+#include <RmlUi/Core/ElementInstancer.h>
 #include <RmlUi/Core/Elements/ElementFormControl.h>
 #include <RmlUi/Core/Elements/ElementFormControlSelect.h>
 #include <RmlUi/Core/RenderInterface.h>
@@ -20,6 +23,7 @@
 #include "editor/ui/materialInstanceAssetEditorPanel.h"
 #include "editor/ui/editorSceneActorTree.h"
 #include "editor/scene/editorSceneActorBuilder.h"
+#include "input/mouseMotionBatch.h"
 #include "sceneNode.h"
 #include "world/meshSceneObjectIdentity.h"
 #include "world/world.h"
@@ -110,6 +114,15 @@ public:
         return true;
     }
     std::vector<std::string> errors;
+};
+
+class LayoutCounterElement final : public Rml::Element
+{
+public:
+    explicit LayoutCounterElement(const Rml::String& tag) : Rml::Element(tag) {}
+    size_t layouts = 0;
+protected:
+    void OnLayout() override { ++layouts; }
 };
 
 class TestRenderer final : public Rml::RenderInterface
@@ -227,6 +240,7 @@ protected:
         panel->Build(snapshot);
         context->Update();
         ASSERT_TRUE(system.errors.empty()) << Errors();
+        runtimeSink.actions.clear();
     }
     void TearDown() override
     {
@@ -493,6 +507,61 @@ protected:
     std::vector<EditorSceneActorSnapshot> actors;
 };
 
+TEST_F(EditorUiTest, RetiredRuntimeDebugPageHasNoWorkspaceEntryOrDocument)
+{
+    EXPECT_EQ(document->QuerySelector("[data-action=runtime-page]"), nullptr);
+    EXPECT_FALSE(std::filesystem::exists(std::filesystem::path(VL_EDITOR_ASSET_ROOT) / "runtime-control.rml"));
+    Rml::String world = "SC_test";
+    auto model = context->CreateDataModel("game_ui");
+    ASSERT_TRUE(model.Bind("world_text", &world));
+    auto* hud = context->LoadDocument(std::string(VL_EDITOR_ASSET_ROOT) + "/runtime-hud.rml");
+    ASSERT_NE(hud, nullptr);
+    EXPECT_EQ(hud->GetElementById("control-panel"), nullptr);
+    context->UnloadDocument(hud);
+    context->Update();
+    EXPECT_TRUE(context->RemoveDataModel("game_ui"));
+}
+
+TEST_F(EditorUiTest, OfflineControlsRefreshChangesAndRestoreRejectedInputAfterBlur)
+{
+    UiViewModelSnapshot view;
+    view.offlineSamples = 48;
+    panel->UpdateRuntimeView(view);
+    EXPECT_EQ(Control("offline-samples")->GetValue(), "48");
+    Click("[data-action=workspace-renderer]");
+    Refresh();
+    ASSERT_TRUE(Control("offline-samples")->Focus());
+    SetValue("offline-samples", "-");
+    panel->UpdateRuntimeView(view);
+    EXPECT_EQ(Control("offline-samples")->GetValue(), "-");
+    Control("offline-samples")->Blur();
+    panel->UpdateRuntimeView(view);
+    EXPECT_EQ(Control("offline-samples")->GetValue(), "48");
+    view.offlineSamples = 64;
+    view.offlineCompletedSamples = 8;
+    panel->UpdateRuntimeView(view);
+    EXPECT_EQ(Control("offline-samples")->GetValue(), "64");
+    EXPECT_EQ(document->GetElementById("offline-status")->GetInnerRML(), "8 / 64 spp");
+    const auto writes = panel->PanelPropertyWriteCount();
+    view.framesPerSecond = 120.0f;
+    view.frameIndex = 500;
+    panel->UpdateRuntimeView(view);
+    EXPECT_EQ(panel->PanelPropertyWriteCount(), writes);
+}
+
+TEST_F(EditorUiTest, OfflineControlsReattachReceivesCurrentSnapshot)
+{
+    UiViewModelSnapshot view;
+    view.offlineSamples = 96;
+    view.offlineMode = true;
+    panel->UpdateRuntimeView(view);
+    panel->Detach();
+    std::string error;
+    ASSERT_TRUE(panel->Attach(*document, error)) << error;
+    EXPECT_EQ(Control("offline-samples")->GetValue(), "96");
+    EXPECT_TRUE(document->GetElementById("mode-offline")->IsClassSet("selected"));
+}
+
 TEST_F(EditorUiTest, WorkspaceParsesAndRendersWithoutWarnings)
 {
     context->Render();
@@ -543,6 +612,8 @@ TEST_F(EditorUiTest, OutlinerAndDetailsShareTheRightColumnWithoutOverlap)
 
 TEST_F(EditorUiTest, ContentDockLeavesAnIndependentSceneViewport)
 {
+    Click("#workspace-viewport-tab");
+    Refresh();
     for (const Rml::Vector2i dimensions : {Rml::Vector2i(960, 540), Rml::Vector2i(1280, 720)})
     {
         context->SetDimensions(dimensions);
@@ -847,6 +918,203 @@ TEST_F(EditorUiTest, ModelPreviewWaitsForWorldPublicationAndProvidesAnImageRect)
     EXPECT_FALSE(image->IsVisible(true));
 }
 
+TEST_F(EditorUiTest, TexturePreviewFitsAspectWithoutUsingSceneViewport)
+{
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+    catalog->revision = 1;
+    catalog->assets.push_back({"T_test.json", EditorAssetKind::Texture, "Texture"});
+    snapshot.assetCatalog = catalog;
+    Refresh();
+    document->QuerySelector("#asset-list button")->DispatchEvent("dblclick", {});
+    auto json = std::make_shared<EditorJsonDocumentSnapshot>();
+    json->assetPath = "T_test.json";
+    json->kind = EditorAssetKind::Texture;
+    json->revision = 17;
+    json->textureColorSpace = "srgb";
+    auto preview = std::make_shared<EditorTexturePreview>();
+    preview->width = preview->sourceWidth = 4;
+    preview->height = preview->sourceHeight = 2;
+    preview->pixels.assign(32, 255);
+    json->texturePreview = preview;
+    snapshot.jsonDocument = json;
+    Refresh();
+    Refresh();
+    auto* image = document->GetElementById("resource-texture-image");
+    EXPECT_TRUE(image->IsVisible(true));
+    EXPECT_FALSE(document->GetElementById("resource-preview-image")->IsVisible(true));
+    EXPECT_EQ(image->GetAttribute<std::string>("src", ""), "vl://texture-preview/17");
+    const auto size = image->GetBox().GetSize(Rml::BoxArea::Content);
+    EXPECT_GT(size.y, 0);
+    EXPECT_NEAR(size.x / size.y, 2.0f, 0.02f);
+    auto* surface = document->GetElementById("resource-preview-surface");
+    const auto surfaceSize = surface->GetBox().GetSize(Rml::BoxArea::Padding);
+    const auto imagePosition = image->GetAbsoluteOffset(Rml::BoxArea::Border);
+    const auto surfacePosition = surface->GetAbsoluteOffset(Rml::BoxArea::Padding);
+    EXPECT_NEAR(imagePosition.x + size.x / 2, surfacePosition.x + surfaceSize.x / 2, 1);
+    EXPECT_NEAR(imagePosition.y + size.y / 2, surfacePosition.y + surfaceSize.y / 2, 1);
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    json = std::make_shared<EditorJsonDocumentSnapshot>(*json);
+    json->texturePreview.reset();
+    json->previewDiagnostic = "Texture source is missing";
+    snapshot.jsonDocument = json;
+    Refresh();
+    EXPECT_FALSE(image->IsVisible(true));
+    EXPECT_EQ(image->GetAttribute<std::string>("src", ""), "");
+    EXPECT_NE(document->GetElementById("resource-preview-status")->GetInnerRML().find("missing"), std::string::npos);
+}
+
+TEST_F(EditorUiTest, TexturePreviewZoomPanAndFitStayInUi)
+{
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+    catalog->revision = 1;
+    catalog->assets.push_back({"T_test.json", EditorAssetKind::Texture, "Texture"});
+    snapshot.assetCatalog = catalog;
+    Refresh();
+    document->QuerySelector("#asset-list button")->DispatchEvent("dblclick", {});
+    auto json = std::make_shared<EditorJsonDocumentSnapshot>();
+    json->assetPath = "T_test.json";
+    json->kind = EditorAssetKind::Texture;
+    json->revision = 18;
+    auto preview = std::make_shared<EditorTexturePreview>();
+    preview->width = preview->height = 64;
+    preview->pixels.assign(64 * 64 * 4, 255);
+    json->texturePreview = preview;
+    snapshot.jsonDocument = json;
+    Refresh();
+    Refresh();
+    auto* image = document->GetElementById("resource-texture-image");
+    const auto fittedSize = image->GetBox().GetSize(Rml::BoxArea::Content);
+    const auto origin = image->GetAbsoluteOffset();
+    const auto center = origin + fittedSize * 0.5f;
+    context->ProcessMouseMove(int(center.x), int(center.y), 0);
+    context->ProcessMouseWheel(Rml::Vector2f(0, -2), 0);
+    Refresh();
+    const auto zoomSize = image->GetBox().GetSize(Rml::BoxArea::Content);
+    EXPECT_GT(zoomSize.x, fittedSize.x);
+    Rml::Rectanglei clip;
+    ASSERT_TRUE(Rml::ElementUtilities::GetClippingRegion(image, clip));
+    auto* surface = document->GetElementById("resource-preview-surface");
+    const auto surfacePosition = surface->GetAbsoluteOffset(Rml::BoxArea::Padding);
+    const auto surfaceSize = surface->GetBox().GetSize(Rml::BoxArea::Padding);
+    EXPECT_GE(clip.Top(), int(surfacePosition.y));
+    EXPECT_LE(clip.Right(), int(surfacePosition.x + surfaceSize.x + 1));
+    auto position = image->GetAbsoluteOffset();
+    EXPECT_NEAR(position.x + zoomSize.x / 2, center.x, 1);
+    context->ProcessMouseButtonDown(0, 0);
+    context->ProcessMouseMove(int(center.x + 30), int(center.y + 20), 0);
+    context->ProcessMouseButtonUp(0, 0);
+    Refresh();
+    const auto panned = image->GetAbsoluteOffset();
+    EXPECT_NEAR(panned.x - position.x, 30, 1);
+    EXPECT_NEAR(panned.y - position.y, 20, 1);
+    context->ProcessMouseMove(5, 5, 0);
+    context->ProcessMouseWheel(Rml::Vector2f(0, -2), 0);
+    Refresh();
+    EXPECT_EQ(image->GetBox().GetSize(Rml::BoxArea::Content), zoomSize);
+    document->GetElementById("resource-texture-fit")->DispatchEvent("click", {});
+    Refresh();
+    EXPECT_EQ(image->GetBox().GetSize(Rml::BoxArea::Content), fittedSize);
+    EXPECT_EQ(image->GetAbsoluteOffset(), origin);
+    context->ProcessMouseMove(int(center.x), int(center.y), 0);
+    context->ProcessMouseButtonDown(2, 0);
+    panel->CancelWorkspaceDrag();
+    context->ProcessMouseMove(int(center.x + 30), int(center.y + 20), 0);
+    context->ProcessMouseButtonUp(2, 0);
+    Refresh();
+    EXPECT_EQ(image->GetAbsoluteOffset(), origin);
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+class ModelPreviewInputTest : public EditorUiTest
+{
+protected:
+    void SetUp() override
+    {
+        EditorUiTest::SetUp();
+        auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+        catalog->revision = 1;
+        catalog->assets.push_back({"Meshes/SM_test.json", EditorAssetKind::Mesh, "Model"});
+        snapshot.assetCatalog = catalog;
+        Refresh();
+        document->QuerySelector("#asset-list button")->DispatchEvent("dblclick", {});
+        Refresh();
+        auto actors = std::make_shared<std::vector<EditorSceneActorSnapshot>>();
+        EditorSceneActorSnapshot actor;
+        actor.worldGeneration = 100;
+        actor.scenePath = "Maps/SC_model_preview/SC_model_preview.json";
+        actor.identity = "mesh|preview_model";
+        actor.sceneObjectIdentity = "preview_model";
+        actors->push_back(actor);
+        snapshot.sceneActors = actors;
+        Refresh();
+        const auto rect = panel->GetSceneViewportRect();
+        x = int(rect.x + rect.width / 2);
+        y = int(rect.y + rect.height / 2);
+        context->ProcessMouseMove(x, y, 0);
+        runtimeSink.actions.clear();
+    }
+    int x = 0, y = 0;
+};
+
+TEST_F(ModelPreviewInputTest, DragRoutesOrbitAndStopsOnRelease)
+{
+    context->ProcessMouseButtonDown(0, 0);
+    context->ProcessMouseMove(x + 20, y + 10, 0);
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    const auto& action = runtimeSink.actions.back();
+    EXPECT_EQ(action.type, UiActionType::NavigateModelPreview);
+    EXPECT_EQ(action.previewCamera.mode, ModelPreviewNavigation::Orbit);
+    EXPECT_EQ(action.previewCamera.worldGeneration, 100u);
+    EXPECT_FLOAT_EQ(action.previewCamera.x, 20);
+    EXPECT_FLOAT_EQ(action.previewCamera.y, 10);
+    context->ProcessMouseButtonUp(0, 0);
+    context->ProcessMouseMove(x + 40, y + 20, 0);
+    EXPECT_EQ(runtimeSink.actions.size(), 1u);
+}
+
+TEST_F(ModelPreviewInputTest, MiddleDragPansAndFocusResetCancelsGesture)
+{
+    context->ProcessMouseButtonDown(2, 0);
+    context->ProcessMouseMove(x + 20, y, 0);
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions.back().previewCamera.mode, ModelPreviewNavigation::Pan);
+    panel->CancelWorkspaceDrag();
+    context->ProcessMouseMove(x + 40, y, 0);
+    EXPECT_EQ(runtimeSink.actions.size(), 1u);
+    context->ProcessMouseButtonUp(2, 0);
+}
+
+TEST_F(ModelPreviewInputTest, WheelZoomOnlyTargetsPreviewImage)
+{
+    context->ProcessMouseWheel(Rml::Vector2f(0, -1), 0);
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions.back().previewCamera.mode, ModelPreviewNavigation::Zoom);
+    EXPECT_FLOAT_EQ(runtimeSink.actions.back().previewCamera.y, -1);
+    context->ProcessMouseMove(5, 5, 0);
+    context->ProcessMouseWheel(Rml::Vector2f(0, -1), 0);
+    EXPECT_EQ(runtimeSink.actions.size(), 1u);
+}
+
+TEST_F(ModelPreviewInputTest, FrameButtonRequestsCameraOnly)
+{
+    document->GetElementById("resource-frame")->DispatchEvent("click", {});
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions.back().previewCamera.mode, ModelPreviewNavigation::Frame);
+}
+
+TEST_F(ModelPreviewInputTest, ReloadCancelsNavigationUntilPublication)
+{
+    context->ProcessMouseButtonDown(0, 0);
+    document->GetElementById("resource-reload")->RemoveAttribute("disabled");
+    document->GetElementById("resource-reload")->DispatchEvent("click", {});
+    Refresh();
+    runtimeSink.actions.clear();
+    context->ProcessMouseMove(x + 20, y, 0);
+    context->ProcessMouseWheel(Rml::Vector2f(0, -1), 0);
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    context->ProcessMouseButtonUp(0, 0);
+}
+
 TEST_F(EditorUiTest, SwitchingBackToUnloadedResourceRetriesSupersededMetadata)
 {
     auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
@@ -950,6 +1218,13 @@ TEST_F(EditorUiTest, ImmersiveButtonRequestsPresentationToggleNotQuit)
 
 TEST_F(EditorUiTest, ImmersivePreparationKeepsCurrentLevelWithoutLoading)
 {
+    // 基础夹具现在会请求材质球；显式打开关卡，建立本用例要求的非预览状态。
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+    catalog->assets.push_back({"Maps/SC_test/SC_test.json", EditorAssetKind::Scene, "Level"});
+    snapshot.assetCatalog = catalog;
+    Refresh();
+    document->QuerySelector("#asset-list button")->DispatchEvent("dblclick", {});
+    runtimeSink.actions.clear();
     UiViewModelSnapshot view;
     view.activeWorldPath = "Maps/SC_test/SC_test.json";
     panel->UpdateRuntimeView(view);
@@ -1604,33 +1879,14 @@ TEST_F(EditorUiTest, PrimaryDirectionalLightExposesTheTwoExistingRuntimeCommands
     EXPECT_TRUE(sink.commands.empty());
 }
 
-TEST_F(EditorUiTest, ActorIntensitySliderRangeMatchesTheRuntimeSunSlider)
+TEST_F(EditorUiTest, ActorIntensitySliderUsesPhysicalLuxRange)
 {
-    // 两个控件共用 SetSunIntensity：范围不一致时，运行时页那个隐藏滑条的 data binding
-    // 会把 Details 里的超范围输入截断后回写一条新命令（渲染验证时实测到的 13→10 抖动）。
-    std::ifstream runtimePage(std::string(VL_EDITOR_ASSET_ROOT) + "/runtime-control.rml");
-    ASSERT_TRUE(runtimePage.is_open());
-    const std::string rml((std::istreambuf_iterator<char>(runtimePage)),
-        std::istreambuf_iterator<char>());
-    const size_t id = rml.find("id=\"sun-intensity-slider\"");
-    ASSERT_NE(id, std::string::npos);
-    const size_t elementEnd = rml.find('>', id);
-    ASSERT_NE(elementEnd, std::string::npos);
-    const std::string element = rml.substr(id, elementEnd - id);
-    const auto attribute = [&element](const std::string& name)
-    {
-        const size_t at = element.find(name + "=\"");
-        EXPECT_NE(at, std::string::npos) << name;
-        const size_t begin = at + name.size() + 2;
-        return std::stof(element.substr(begin, element.find('"', begin) - begin));
-    };
-
     snapshot.activeDocument.reset();
     SelectActorInOutliner(SunActor(1.0f, true));
     auto* slider = Control("actor-sun-intensity-slider");
     ASSERT_NE(slider, nullptr);
-    EXPECT_FLOAT_EQ(slider->GetAttribute<float>("min", -1.0f), attribute("min"));
-    EXPECT_FLOAT_EQ(slider->GetAttribute<float>("max", -1.0f), attribute("max"));
+    EXPECT_FLOAT_EQ(slider->GetAttribute<float>("min", -1.0f), 0.0f);
+    EXPECT_FLOAT_EQ(slider->GetAttribute<float>("max", -1.0f), 150000.0f);
 }
 
 TEST_F(EditorUiTest, NonPrimaryDirectionalLightKeepsItsIntensityReadOnly)
@@ -2116,6 +2372,41 @@ TEST_F(EditorUiTest, TextureOptionsTrackAssetRefreshWithoutSubmittingAnEdit)
     EXPECT_TRUE(sink.commands.empty());
 }
 
+TEST_F(EditorUiTest, TextureOptionCacheTracksValidityWithoutChangingCatalogSize)
+{
+    snapshot.activeDocument->schemaDigest = "texture-validity";
+    snapshot.activeDocument->textures.push_back({"albedo", "", "T_base.json", "T_base.json", std::nullopt});
+    snapshot.textureAssets.push_back({"T_optional.json", false});
+    Refresh();
+    auto* selector = dynamic_cast<Rml::ElementFormControlSelect*>(document->GetElementById("texture-0"));
+    ASSERT_NE(selector, nullptr);
+    ASSERT_EQ(selector->GetNumOptions(), 1);
+    snapshot.textureAssets[0].valid = true;
+    Refresh();
+    ASSERT_EQ(selector->GetNumOptions(), 2);
+    snapshot.textureAssets[0].valid = false;
+    Refresh();
+    EXPECT_EQ(selector->GetNumOptions(), 1);
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, TextureOptionCacheTracksBindingWithoutCatalogChanges)
+{
+    snapshot.activeDocument->schemaDigest = "texture-binding";
+    snapshot.activeDocument->textures.push_back({"albedo", "", "T_base.json", "T_base.json", std::nullopt});
+    snapshot.textureAssets = {{"T_base.json", true}, {"T_next.json", true}};
+    Refresh();
+    snapshot.activeDocument->textures[0].effectiveAssetPath = "T_next.json";
+    Refresh();
+    auto* selector = dynamic_cast<Rml::ElementFormControlSelect*>(document->GetElementById("texture-0"));
+    ASSERT_NE(selector, nullptr);
+    ASSERT_EQ(selector->GetNumOptions(), 2);
+    EXPECT_EQ(selector->GetValue(), "T_next.json");
+    EXPECT_EQ(selector->GetOption(0)->GetAttribute<std::string>("value", ""), "T_next.json");
+    EXPECT_EQ(selector->GetOption(1)->GetAttribute<std::string>("value", ""), "T_base.json");
+    EXPECT_TRUE(sink.commands.empty());
+}
+
 TEST_F(EditorUiTest, InvalidOfflineSettingDoesNotReachRuntime)
 {
     SetValue("offline-samples", "-1");
@@ -2258,16 +2549,169 @@ TEST_F(EditorUiTest, ToolbarDoesNotRestateTheDocumentMenuCommands)
             if (ancestor == menubar) { insideMenu = true; break; }
         if (!insideMenu) ++outside;
     }
-    EXPECT_EQ(outside, 3) << "expected exactly Reset Layout / Settings / Immersive Mode; "
+    EXPECT_EQ(outside, 2) << "expected exactly Reset Layout / Immersive Mode; "
                              "if this changed, re-check the assertions above are not vacuous";
     EXPECT_NE(toolbar->QuerySelector("[data-action=workspace-reset]"), nullptr);
 }
 
-// 空标签没有意义，而且用户实际看到过 —— 选中标签 94px 宽、整条高度内既无文字也无图标。
-// 成因是 resource 文档面板在 resourceTabs 里找不到自己时整段跳过 inner RML 写入。
-// `#document-tabs`（Details 区 Material Instance 标题下那排标签）此前**没有任何测试**，
-// 因此它的形态问题能一直存在。这里用真实的 Bistro 资产名推入多个文档，钉住两件事：
-// 每个标签都必须渲染出来，且每个标签的文字必须只占一行 —— 标签是一行文字，不是磁贴。
+TEST(EditorPointerPolicy, MotionBatchKeepsLatestPositionAndTotalDelta)
+{
+    std::vector<PlatformEvent> events(1000);
+    for (size_t index = 0; index < events.size(); ++index)
+    {
+        events[index].type = PlatformEventType::MouseMove;
+        events[index].windowId = 7;
+        events[index].mouseX = static_cast<float>(index);
+        events[index].mouseY = 42;
+        events[index].mouseDeltaX = 0.5f;
+        events[index].mouseDeltaY = -0.25f;
+    }
+    CoalesceRelativeMouseMotion(events);
+    ASSERT_EQ(events.size(), 1u);
+    EXPECT_EQ(events[0].windowId, 7u);
+    EXPECT_FLOAT_EQ(events[0].mouseX, 999);
+    EXPECT_FLOAT_EQ(events[0].mouseY, 42);
+    EXPECT_FLOAT_EQ(events[0].mouseDeltaX, 500);
+    EXPECT_FLOAT_EQ(events[0].mouseDeltaY, -250);
+}
+
+TEST(EditorPointerPolicy, MotionBatchPreservesDiscreteEventOrder)
+{
+    for (const auto type : {PlatformEventType::MouseButtonDown, PlatformEventType::MouseButtonUp,
+        PlatformEventType::MouseWheel, PlatformEventType::KeyDown, PlatformEventType::KeyUp,
+        PlatformEventType::WindowFocusLost, PlatformEventType::MouseLeave})
+    {
+        PlatformEvent move;
+        move.type = PlatformEventType::MouseMove;
+        PlatformEvent boundary;
+        boundary.type = type;
+        std::vector<PlatformEvent> events{move, move, boundary, move, move};
+        CoalesceRelativeMouseMotion(events);
+        ASSERT_EQ(events.size(), 3u);
+        EXPECT_EQ(events[0].type, PlatformEventType::MouseMove);
+        EXPECT_EQ(events[1].type, type);
+        EXPECT_EQ(events[2].type, PlatformEventType::MouseMove);
+    }
+}
+
+TEST(EditorPointerPolicy, MotionBatchPreservesWindowAndModifierBoundaries)
+{
+    PlatformEvent move;
+    move.type = PlatformEventType::MouseMove;
+    std::vector<PlatformEvent> events{move};
+    move.windowId = 2;
+    events.push_back(move);
+    move.shift = true;
+    events.push_back(move);
+    move.control = true;
+    events.push_back(move);
+    move.alt = true;
+    events.push_back(move);
+    move.super = true;
+    events.push_back(move);
+    CoalesceRelativeMouseMotion(events);
+    EXPECT_EQ(events.size(), 6u);
+    events.clear();
+    CoalesceRelativeMouseMotion(events);
+    EXPECT_TRUE(events.empty());
+}
+
+TEST_F(EditorUiTest, FrameRateChangesDoNotRelayoutWorkspaceOrDuplicateTitleReadout)
+{
+    EXPECT_EQ(document->GetElementById("editor-frame-metrics"), nullptr);
+    static Rml::ElementInstancerGeneric<LayoutCounterElement> instancer;
+    auto counter = instancer.InstanceElement(document, "div", {});
+    counter->SetInstancer(&instancer);
+    auto* observed = static_cast<LayoutCounterElement*>(counter.get());
+    counter->SetProperty("position", "absolute");
+    counter->SetProperty("width", "1px");
+    counter->SetProperty("height", "1px");
+    document->AppendChild(std::move(counter));
+    UiViewModelSnapshot view;
+    panel->UpdateRuntimeView(view);
+    context->Update();
+    ASSERT_GT(observed->layouts, 0u);
+    const auto layouts = observed->layouts;
+    for (float value : {9.0f, 120.0f, 1000.0f, 60.0f})
+    {
+        view.framesPerSecond = value;
+        panel->UpdateRuntimeView(view);
+        context->Update();
+        context->Render();
+        EXPECT_EQ(observed->layouts, layouts);
+    }
+    EXPECT_TRUE(system.errors.empty()) << Errors();
+}
+
+TEST_F(EditorUiTest, CameraAxisMotionPreservesLayoutBoxes)
+{
+    Click("#workspace-viewport-tab");
+    Refresh();
+    auto actors = std::make_shared<std::vector<EditorSceneActorSnapshot>>();
+    actors->push_back(CameraActor("Camera"));
+    snapshot.sceneActors = actors;
+    for (float angle : {0.0f, 0.5f, 1.0f, 0.0f})
+    {
+        (*actors)[0].camera.forward = Eigen::Vector3f(std::sin(angle), 0, -std::cos(angle));
+        (*actors)[0].camera.right = Eigen::Vector3f(std::cos(angle), 0, std::sin(angle));
+        (*actors)[0].camera.up = Eigen::Vector3f(0, 1, 0);
+        Refresh();
+        for (const char* axis : {"x", "y", "z"})
+        {
+            auto* bar = document->GetElementById(std::string("viewport-axis-bar-") + axis);
+            auto* label = document->GetElementById(std::string("viewport-axis-label-") + axis);
+            ASSERT_NE(bar, nullptr);
+            ASSERT_NE(label, nullptr);
+            EXPECT_EQ(label->GetLocalProperty("display"), nullptr);
+            EXPECT_FLOAT_EQ(label->GetProperty<float>("margin-left"), -5.0f);
+            EXPECT_FLOAT_EQ(label->GetProperty<float>("margin-top"), -6.0f);
+            EXPECT_FLOAT_EQ(bar->GetBox().GetSize().x, 20.0f);
+            EXPECT_EQ(bar->IsVisible(), label->IsVisible());
+            if (std::string(axis) == "z") EXPECT_EQ(label->IsVisible(), angle != 0.0f);
+            else EXPECT_TRUE(label->IsVisible());
+            ASSERT_NE(label->GetLocalProperty("transform"), nullptr);
+        }
+    }
+    EXPECT_TRUE(system.errors.empty()) << Errors();
+}
+
+TEST_F(EditorUiTest, CameraMotionUiWorkload)
+{
+    // 使用真实 RmlUi 文档比较输入工作量；耗时只报告，不作为依赖机器性能的门禁。
+    auto actors = std::make_shared<std::vector<EditorSceneActorSnapshot>>();
+    actors->push_back(CameraActor("Camera"));
+    snapshot.sceneActors = actors;
+    Refresh();
+    for (int moving = 0; moving < 4; ++moving)
+    {
+        const auto start = std::chrono::steady_clock::now();
+        for (int frame = 0; frame < 180; ++frame)
+        {
+            const float angle = moving ? frame * 0.025f : 0.0f;
+            (*actors)[0].camera.forward = Eigen::Vector3f(std::sin(angle), 0, -std::cos(angle));
+            (*actors)[0].camera.right = Eigen::Vector3f(std::cos(angle), 0, std::sin(angle));
+            (*actors)[0].camera.up = Eigen::Vector3f(0, 1, 0);
+            std::vector<PlatformEvent> events(moving < 2 ? 0 : 100);
+            for (auto& event : events) event.type = PlatformEventType::MouseMove;
+            if (moving == 3) CoalesceRelativeMouseMotion(events);
+            if (moving == 3) ASSERT_EQ(events.size(), 1u);
+            for (size_t event = 0; event < events.size(); ++event)
+            {
+                context->GetElementAtPoint({400.0f, 200.0f});
+                context->GetElementAtPoint({400.0f, 200.0f});
+                context->ProcessMouseMove(400, 200, 0);
+                context->GetElementAtPoint({400.0f, 200.0f});
+            }
+            Refresh();
+            context->Render();
+        }
+        const double ms = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - start).count() / 180;
+        const char* modes[] = {"stationary", "rotation", "100 motion events", "coalesced motion"};
+        std::cout << "UI " << modes[moving] << " ms/frame=" << ms << '\n';
+    }
+}
+
 TEST_F(EditorUiTest, DocumentTabRowKeepsEveryOpenDocumentOnOneLine)
 {
     // 名字长度接近真实资产（Bistro 的 MI 名就是这个量级），足以暴露换行与截断。
@@ -2282,28 +2726,23 @@ TEST_F(EditorUiTest, DocumentTabRowKeepsEveryOpenDocumentOnOneLine)
     snapshot.selectedDocumentPath = paths[1];
     Refresh();
 
-    auto* strip = document->GetElementById("document-tabs");
-    ASSERT_NE(strip, nullptr);
-
-    // 每个打开的文档都要有一个标签；漏掉一个就等于"多开"丢文档。
-    const int children = strip->GetNumChildren();
-    EXPECT_EQ(children, static_cast<int>(paths.size()))
-        << "expected one tab per open document, inner RML: " << strip->GetInnerRML();
-
-    // 标签文字必须在一行内。`#document-tabs` 是 display:flex 且 max-height:65px，一旦标签
-    // 内容自动换行，标签就会长成两三行高、把整排撑到限高并开始裁剪 —— 这正是"多开以后
-    // Details 那块很奇怪"的样子。这里用元素高度钉住：单个标签不得高于一排文字。
+    Rml::ElementList tabs;
+    document->QuerySelectorAll(tabs, ".workspace-material-tab");
+    const int children = static_cast<int>(tabs.size());
+    ASSERT_EQ(children, static_cast<int>(paths.size()));
+    // 每个文档直接占据中央停靠栏的一行标签，与关卡共用同一个标题栏。
     int index = 0;
     for (int childIndex = 0; childIndex < children; ++childIndex)
     {
-        Rml::Element* tab = strip->GetChild(childIndex);
+        Rml::Element* tab = tabs[childIndex];
         ASSERT_NE(tab, nullptr);
+        EXPECT_EQ(tab->GetParentNode(), document->GetElementById("workspace-viewport-tab")->GetParentNode());
         const float height = tab->GetBox().GetSize().y;
         EXPECT_GT(height, 0.0f) << "tab " << childIndex << " has no height";
-        EXPECT_LE(height, 30.0f)
+        EXPECT_LE(height, 33.0f)
             << "document tab " << childIndex << " is " << height
             << "px tall; a one-line tab should not wrap. Inner RML: " << tab->GetInnerRML();
-        auto* label = tab->QuerySelector(".list-item");
+        auto* label = tab->QuerySelector(".resource-tab-label");
         auto* close = tab->QuerySelector(".tab-close");
         ASSERT_NE(label, nullptr);
         ASSERT_NE(close, nullptr);
@@ -2316,11 +2755,7 @@ TEST_F(EditorUiTest, DocumentTabRowKeepsEveryOpenDocumentOnOneLine)
     EXPECT_EQ(index, static_cast<int>(paths.size()));
 }
 
-// 多开资产时，两处"标签"必须各自正确：
-//   (a) `#document-tabs` —— Details 区打开的 MI 文档标签；
-//   (b) `#resource-editor` —— 从 Content Browser 打开非 MI 资产时出现的资源页。
-// 之前 (a) 完全没有测试，这个用例补上，并且专门检查**多个**文档下的行为。
-TEST_F(EditorUiTest, OpeningSeveralDocumentsFillsTheDetailsTabRowWithReadableTabs)
+TEST_F(EditorUiTest, OpeningSeveralMaterialsCreatesCentralDocumentTabs)
 {
     const std::vector<std::string> paths = {
         "Maps/SC_bistro/Materials/MI_Antenna_Metal.json",
@@ -2331,19 +2766,19 @@ TEST_F(EditorUiTest, OpeningSeveralDocumentsFillsTheDetailsTabRowWithReadableTab
     for (const std::string& path : paths)
         snapshot.documentTabs.push_back({path, false});
     snapshot.selectedDocumentPath = paths[0];
-    // details 面板必须在场：viewingJson / resourceEditorVisible 都会把整块藏掉。
     snapshot.jsonDocument.reset();
     Refresh();
 
-    auto* strip = document->GetElementById("document-tabs");
-    ASSERT_NE(strip, nullptr);
-    ASSERT_EQ(strip->GetNumChildren(), static_cast<int>(paths.size()))
-        << "one tab per open document; inner RML: " << strip->GetInnerRML();
+    Rml::ElementList tabs;
+    document->QuerySelectorAll(tabs, ".workspace-material-tab");
+    ASSERT_EQ(tabs.size(), paths.size());
+    EXPECT_EQ(document->GetElementById("editor-inspector")->QuerySelector("#details-content"), nullptr);
+    EXPECT_NE(document->GetElementById("material-editor")->QuerySelector("#details-content"), nullptr);
 
     // 每个标签都要有非空可见文字，并且文字是它自己的文件名而不是别人的。
     for (size_t index = 0; index < paths.size(); ++index)
     {
-        Rml::Element* tab = strip->GetChild(static_cast<int>(index));
+        Rml::Element* tab = tabs[index];
         ASSERT_NE(tab, nullptr);
         const std::string markup = tab->GetInnerRML();
         const std::string filename =
@@ -2355,9 +2790,7 @@ TEST_F(EditorUiTest, OpeningSeveralDocumentsFillsTheDetailsTabRowWithReadableTab
 
     // 点第 3 个标签必须选中第 3 个文档。标签提交的是 SelectMaterialInstanceDocument
     // （切换已打开的文档），不是 OpenMaterialInstanceAsset（那是从资产磁贴新开一个）。
-    // 注意：动作挂在标签**内部**的 list-item 按钮上，外层只是 .document-tab 容器，
-    // 所以必须点内层按钮；点容器不会派发任何东西。
-    auto* thirdTab = strip->GetChild(2)->QuerySelector("[data-action=tab]");
+    auto* thirdTab = tabs[2];
     ASSERT_NE(thirdTab, nullptr);
     thirdTab->DispatchEvent("click", {});
     ASSERT_FALSE(sink.commands.empty());
@@ -2366,6 +2799,140 @@ TEST_F(EditorUiTest, OpeningSeveralDocumentsFillsTheDetailsTabRowWithReadableTab
         std::get<MaterialInstanceAssetPathPayload>(sink.commands.back().payload);
     EXPECT_EQ(selected.assetPath, paths[2])
         << "clicking the third tab must select the third document, not the first";
+}
+
+TEST_F(EditorUiTest, MaterialPageSwitchesWithLevelWithoutSnapshotStealingFocus)
+{
+    EXPECT_TRUE(document->GetElementById("material-editor")->IsVisible(true));
+    EXPECT_FALSE(document->GetElementById("editor-viewport-image")->IsVisible(true));
+    Click("#workspace-viewport-tab");
+    Refresh();
+    Refresh();
+    EXPECT_FALSE(document->GetElementById("material-editor")->IsVisible(true));
+    EXPECT_TRUE(document->GetElementById("editor-viewport-image")->IsVisible(true));
+    Click(".workspace-material-tab");
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("material-editor")->IsVisible(true));
+    EXPECT_FALSE(document->GetElementById("editor-viewport-image")->IsVisible(true));
+    EXPECT_EQ(sink.commands.back().type, EditorCommandType::SelectMaterialInstanceDocument);
+}
+
+TEST_F(EditorUiTest, SceneSelectionDoesNotActivateAnExistingMaterialDocument)
+{
+    Click("#workspace-viewport-tab");
+    Refresh();
+    sink.commands.clear();
+    runtimeSink.actions.clear();
+    Rml::ElementList before;
+    document->QuerySelectorAll(before, ".workspace-material-tab");
+    panel->ShowSceneDetails();
+    Refresh();
+    Refresh();
+    Rml::ElementList after;
+    document->QuerySelectorAll(after, ".workspace-material-tab");
+    EXPECT_EQ(after.size(), before.size());
+    EXPECT_TRUE(document->GetElementById("editor-viewport-image")->IsVisible(true));
+    EXPECT_FALSE(document->GetElementById("material-editor")->IsVisible(true));
+    EXPECT_TRUE(sink.commands.empty());
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, MaterialSphereRequestsOnceAndRejectsAnotherMaterialWorld)
+{
+    const std::string path = snapshot.activeDocument->assetPath;
+    Click("#workspace-viewport-tab");
+    Refresh();
+    UiViewModelSnapshot view;
+    view.activeWorldPath = "Maps/SC_level/SC_level.json";
+    panel->UpdateRuntimeView(view);
+    // 换到另一材质，等文档服务确认后才加载对应球体。
+    snapshot.activeDocument->assetPath = "Common/Materials/MI_other.json";
+    snapshot.selectedDocumentPath = snapshot.activeDocument->assetPath;
+    snapshot.documentTabs.push_back({snapshot.selectedDocumentPath, false});
+    Refresh();
+    ASSERT_FALSE(runtimeSink.actions.empty());
+    EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::PreviewMaterial);
+    EXPECT_EQ(runtimeSink.actions.back().stringValue, snapshot.selectedDocumentPath);
+    const auto count = runtimeSink.actions.size();
+    Refresh();
+    EXPECT_EQ(runtimeSink.actions.size(), count);
+    auto actors = std::make_shared<std::vector<EditorSceneActorSnapshot>>();
+    auto actor = MeshActor("preview_material", 100);
+    actor.scenePath = "Maps/SC_model_preview/SC_model_preview.json";
+    actor.sections[0].materialInstancePath = path;
+    actors->push_back(actor);
+    snapshot.sceneActors = actors;
+    Refresh();
+    auto* image = document->GetElementById("material-preview-image");
+    EXPECT_FALSE(image->IsVisible(true));
+    actors->at(0).sections[0].materialInstancePath = snapshot.selectedDocumentPath;
+    Refresh();
+    EXPECT_TRUE(image->IsVisible(true));
+    EXPECT_GT(panel->GetSceneViewportRect().width, 0u);
+    EXPECT_FALSE(panel->IsSceneViewportElement(image));
+    Click("#workspace-viewport-tab");
+    Refresh();
+    EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::LoadWorld);
+    EXPECT_EQ(runtimeSink.actions.back().stringValue, view.activeWorldPath);
+    EXPECT_FALSE(image->IsVisible(true));
+}
+
+TEST_F(EditorUiTest, MaterialSphereNavigatesAndReappliesDirtyDraftOncePerWorld)
+{
+    auto actors = std::make_shared<std::vector<EditorSceneActorSnapshot>>();
+    auto actor = MeshActor("preview_material", 100);
+    actor.scenePath = "Maps/SC_model_preview/SC_model_preview.json";
+    actor.sections[0].materialInstancePath = snapshot.activeDocument->assetPath;
+    actors->push_back(actor);
+    snapshot.sceneActors = actors;
+    snapshot.activeDocument->preview = EditorPreviewStatus::Connected;
+    sink.commands.clear();
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands.back().type, EditorCommandType::ApplyMaterialInstancePreview);
+    Refresh();
+    EXPECT_EQ(sink.commands.size(), 1u);
+    auto* image = document->GetElementById("material-preview-image");
+    const auto origin = image->GetAbsoluteOffset();
+    context->ProcessMouseMove(int(origin.x + 50), int(origin.y + 50), 0);
+    context->ProcessMouseWheel(Rml::Vector2f(0, -2), 0);
+    ASSERT_FALSE(runtimeSink.actions.empty());
+    EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::NavigateModelPreview);
+    EXPECT_EQ(runtimeSink.actions.back().previewCamera.worldGeneration, 100u);
+    EXPECT_EQ(runtimeSink.actions.back().previewCamera.mode, ModelPreviewNavigation::Zoom);
+    Click("#material-frame");
+    EXPECT_EQ(runtimeSink.actions.back().previewCamera.mode, ModelPreviewNavigation::Frame);
+}
+
+TEST_F(EditorUiTest, MaterialDirtyLabelRefreshPreservesFocusedInput)
+{
+    snapshot.documentTabs[0].dirty = false;
+    Refresh();
+    auto* input = document->GetElementById("parameter-0-0");
+    ASSERT_NE(input, nullptr);
+    input->Focus();
+    ASSERT_EQ(context->GetFocusElement(), input);
+    snapshot.documentTabs[0].dirty = true;
+    Refresh();
+    EXPECT_EQ(context->GetFocusElement(), input);
+    EXPECT_NE(document->QuerySelector(".workspace-material-tab")->GetInnerRML().find(" *"), std::string::npos);
+}
+
+TEST_F(EditorUiTest, ClosingBackgroundMaterialDoesNotSelectIt)
+{
+    snapshot.documentTabs.push_back({"Materials/MI_second.json", false});
+    Refresh();
+    Rml::ElementList tabs;
+    document->QuerySelectorAll(tabs, ".workspace-material-tab");
+    ASSERT_EQ(tabs.size(), 2u);
+    sink.commands.clear();
+    tabs[1]->QuerySelector(".tab-close")->DispatchEvent("click", {});
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands[0].type, EditorCommandType::CloseMaterialInstanceAsset);
+    EXPECT_EQ(std::get<CloseMaterialInstanceAssetPayload>(sink.commands[0].payload).assetPath,
+        "Materials/MI_second.json");
+    EXPECT_TRUE(tabs[0]->IsClassSet("selected"));
+    EXPECT_FALSE(tabs[1]->IsClassSet("selected"));
 }
 
 TEST_F(EditorUiTest, EveryDockTabCarriesAVisibleLabel)
@@ -2507,6 +3074,25 @@ TEST_F(EditorUiTest, AboutPanelShowsUiAndLayoutPathAndBlocksWorkspaceCommands)
     EXPECT_FALSE(panel->HasModal());
 }
 
+TEST_F(EditorUiTest, ViewportBufferMenuRoutesExistingDebugModes)
+{
+    Click("#viewport-view-title");
+    EXPECT_TRUE(document->GetElementById("menu-view")->IsClassSet("open"));
+    for (int mode = 1; mode <= 12; ++mode)
+    {
+        Click("#viewport-buffer-" + std::to_string(mode));
+        ASSERT_FALSE(runtimeSink.actions.empty());
+        EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::SetDebugViewMode);
+        EXPECT_EQ(runtimeSink.actions.back().intValue, mode);
+        EXPECT_FALSE(document->GetElementById("menu-view")->IsClassSet("open"));
+    }
+    UiViewModelSnapshot view;
+    view.debugViewMode = 4;
+    panel->UpdateRuntimeView(view);
+    context->Update();
+    EXPECT_NE(document->GetElementById("viewport-view-title")->GetInnerRML().find("Roughness"), std::string::npos);
+}
+
 TEST_F(EditorUiTest, ViewportToolbarKeepsOneActiveToolSpaceAndViewMode)
 {
     const std::vector<std::string> tools = {
@@ -2582,6 +3168,8 @@ TEST_F(EditorUiTest, TransformToolsChangeNoCommandAndStayCachedOnStaticFrames)
 
 TEST_F(EditorUiTest, ViewportToolbarOverlayIsNotASceneHit)
 {
+    Click("#workspace-viewport-tab");
+    Refresh();
     auto* toolbar = document->GetElementById("viewport-toolbar");
     ASSERT_NE(toolbar, nullptr);
     EXPECT_FALSE(panel->IsSceneViewportElement(toolbar));

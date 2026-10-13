@@ -38,6 +38,7 @@ public:
         size_t breadcrumbMarkupBuilds = 0;
         size_t matchedItems = 0;
         size_t visibleItems = 0;
+        size_t thumbnailWrites = 0;
     };
 
     bool Attach(Rml::ElementDocument& document, std::string& error);
@@ -45,6 +46,7 @@ public:
     void Build(const MaterialInstanceEditorSnapshot& snapshot);
     bool ProcessEvent(Rml::Event& event, std::optional<std::string>& openAssetPath);
     const Stats& GetStats() const { return stats; }
+    std::vector<std::string> VisibleThumbnailPaths() const;
 
 private:
     struct Entry
@@ -94,6 +96,7 @@ private:
     Window VisibleWindow() const;
     void BindVisibleNodes(bool newDom);
     void SyncVisibleState();
+    void SyncThumbnails(const std::shared_ptr<const EditorThumbnailSnapshot>& snapshot, bool force);
     std::string SourcesMarkup() const;
     std::string BreadcrumbMarkup();
     std::string EntriesMarkup(const Window& window) const;
@@ -142,5 +145,6 @@ private:
     size_t clickedDomGeneration = 0;
     float clickedScrollTop = 0.0f;
     Stats stats;
+    std::shared_ptr<const EditorThumbnailSnapshot> thumbnails;
 };
 } // namespace VL::EditorUi

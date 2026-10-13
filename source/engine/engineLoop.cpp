@@ -10,6 +10,7 @@
 #include "controller.h"
 #include "engine/gameInstance.h"
 #include "engine/modelPreviewRequest.h"
+#include "input/mouseMotionBatch.h"
 #include "engine/runtimeCommandExecutor.h"
 #include "engine/runtimeTestHooks.h"
 #include "engine/subsystemCollection.h"
@@ -19,6 +20,7 @@
 #include "material/generator/materialParameterIncludeGenerator.h"
 #include "material/generator/materialDefinitionReloadBatch.h"
 #include "pipeline/pipelineFactory.h"
+#include "engine/editorThumbnailRenderSession.h"
 #include "platform/platformApplication.h"
 #include "platform/platformWindow.h"
 #include "profiler.h"
@@ -155,6 +157,8 @@ void EngineLoop::Shutdown()
         }
 
         rendererBackend->WaitIdle();
+        thumbnailSession.reset();
+        thumbnailRequest.reset();
         if (uiSubsystem)
         {
             RenderSystem::GetInstance().SetUiRenderSnapshotQueue(nullptr);
@@ -450,6 +454,13 @@ void EngineLoop::Tick()
     commandResult.activeWorldBeforeCommand = activeWorldBeforeCommand;
 
     ProcessRequestedWorldTransition(commandResult);
+    if (const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld())
+    {
+        const auto rect = uiSubsystem ? uiSubsystem->GetSceneViewportRect() : UiViewportRect{};
+        const float aspect = rect.width && rect.height ? float(rect.width) / float(rect.height)
+            : GetRuntimeConfig().GetWindowAspectRatio();
+        modelPreviewCamera.Synchronize(*world, aspect);
+    }
     if (commandResult.loadWorldAttempted &&
         uiSubsystem != nullptr)
     {
@@ -568,6 +579,7 @@ void EngineLoop::Tick()
     }
     UpdateUiViewModel(deltaTime, commandResult);
     SynchronizeSceneViewport();
+    TickEditorThumbnails();
 
     {
         PROFILE_SCOPE("RenderLoop");
@@ -604,9 +616,7 @@ void EngineLoop::ApplyQueuedUiActions()
     std::vector<UiAction> actions = GetSubsystems().GetCommandBus().DrainUiActions();
     for (const UiAction& action : actions)
     {
-        if (action.type == UiActionType::ToggleRuntimePage ||
-            action.type == UiActionType::CloseRuntimePage ||
-            action.type == UiActionType::ToggleDeveloperUi ||
+        if (action.type == UiActionType::ToggleDeveloperUi ||
             action.type == UiActionType::SetLocale)
         {
             if (uiSubsystem != nullptr)
@@ -630,10 +640,25 @@ void EngineLoop::ApplyQueuedUiActions()
             continue;
         }
 
+        if (action.type == UiActionType::NavigateModelPreview)
+        {
+            const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
+            const auto rect = uiSubsystem ? uiSubsystem->GetSceneViewportRect() : UiViewportRect{};
+            if (world && rect.width && rect.height)
+                modelPreviewCamera.Apply(*world, action.previewCamera,
+                    float(rect.width) / float(rect.height), float(rect.width));
+            continue;
+        }
+
         RuntimeCommand command;
         command.sourceText = "ui";
         switch (action.type)
         {
+        case UiActionType::PreviewMaterial:
+            command.type = RuntimeCommandType::LoadWorld;
+            command.stringValue = ModelPreviewScenePath;
+            command.extraSceneObjects = BuildMaterialPreviewObjects(action.stringValue);
+            break;
         case UiActionType::PreviewModel:
             command.type = RuntimeCommandType::LoadWorld;
             command.stringValue = ModelPreviewScenePath;
@@ -958,11 +983,56 @@ void EngineLoop::SynchronizeSceneViewport()
     }
 }
 
+void EngineLoop::TickEditorThumbnails()
+{
+    if (!uiSubsystem) return;
+    auto* library = uiSubsystem->GetThumbnailLibrary();
+    if (!library) return;
+    if (thumbnailRequest && !library->IsRenderRequestCurrent(*thumbnailRequest))
+    {
+        thumbnailRequest.reset();
+    }
+    const auto now = std::chrono::steady_clock::now();
+    for (const auto& event : platformEvents)
+        if (event.type == PlatformEventType::MouseMove || event.type == PlatformEventType::MouseWheel ||
+            event.type == PlatformEventType::MouseButtonDown || event.type == PlatformEventType::MouseButtonUp ||
+            event.type == PlatformEventType::KeyDown || event.type == PlatformEventType::KeyUp ||
+            event.type == PlatformEventType::WindowResized) thumbnailIdleSince = now;
+    if (!uiSubsystem->CanRenderThumbnails()) thumbnailIdleSince = now;
+    if (now - thumbnailIdleSince < std::chrono::milliseconds(750)) return;
+    // 上一帧 RT 已归还所有权；这里不调用活动 World 的加载事务，也不重绑活动图。
+    if (!thumbnailRequest)
+    {
+        thumbnailRequest = library->TakeRenderRequest();
+        if (!thumbnailRequest) return;
+        if (thumbnailSessionEpoch != thumbnailRequest->epoch) thumbnailSession.reset();
+        thumbnailSessionEpoch = thumbnailRequest->epoch;
+        if (!thumbnailSession)
+            thumbnailSession = std::make_unique<EditorThumbnailRenderSession>(*rendererBackend, *pipelineFactory);
+        thumbnailSession->Begin(thumbnailRequest->path, thumbnailRequest->kind, GetRuntimeConfig().GetRenderGraphJson());
+        return;
+    }
+    if (!thumbnailSession)
+    {
+        thumbnailSession = std::make_unique<EditorThumbnailRenderSession>(*rendererBackend, *pipelineFactory);
+        thumbnailSession->Begin(thumbnailRequest->path, thumbnailRequest->kind, GetRuntimeConfig().GetRenderGraphJson());
+        return;
+    }
+    if (thumbnailSession->Step())
+    {
+        library->CompleteRenderRequest(*thumbnailRequest, thumbnailSession->Image(), thumbnailSession->Error());
+        thumbnailRequest.reset();
+    }
+}
+
 void EngineLoop::PumpPlatformEvents()
 {
     PROFILE_SCOPE("Events");
 
     platformApplication->PollEvents(platformEvents);
+    // 高回报率鼠标不能让相机移动重复触发整棵 UI 命中测试；普通 UI 拖动保留原事件。
+    if (GetSubsystems().GetInputSubsystem().IsRelativeMouseModeEnabled())
+        CoalesceRelativeMouseMotion(platformEvents);
     for (const PlatformEvent& event : platformEvents)
     {
         if ((event.type == PlatformEventType::KeyDown ||
@@ -996,7 +1066,10 @@ void EngineLoop::PumpPlatformEvents()
             continue;
         }
 
-        if (uiSubsystem != nullptr &&
+        if (event.type == PlatformEventType::MouseButtonDown &&
+            event.mouseButton == PlatformMouseButton::Left && uiSubsystem != nullptr &&
+            !GetSubsystems().GetInputSubsystem().IsRelativeMouseModeRequested() &&
+            !GetSubsystems().GetInputSubsystem().IsRelativeMouseModeEnabled() &&
             uiSubsystem->IsScenePickTarget(event.mouseX, event.mouseY))
         {
             const std::optional<Editor::Selection::ScenePickRequest> pickRequest =
@@ -1019,16 +1092,14 @@ void EngineLoop::PumpPlatformEvents()
                     // 高亮是视口选择反馈，不依赖 MI 面板是否成功打开；
                     // 这样即使编辑器文档暂时不可用，点击结果仍立即可见。
                     RenderSystem::GetInstance().SetSelectedMaterialInstance(*selection);
-                    const bool opened =
-                        uiSubsystem->OpenMaterialInstanceFromSelection(*selection);
+                    const bool selected =
+                        uiSubsystem->SelectSceneObjectFromPick(*selection);
                     GetSubsystems().GetDiagnosticsSubsystem().ReportInfo(
-                        opened
-                            ? "Selected Material Instance '" +
-                                selection->materialInstancePath + "' from '" +
-                                selection->objectIdentity + "'."
+                        selected
+                            ? "Selected scene object '" + selection->objectIdentity + "'."
                             : "Selected scene object '" +
                                 selection->objectIdentity +
-                                "' but the MI editor could not open its document.");
+                                "' but the editor could not update its selection.");
                 }
                 else
                 {
@@ -1325,6 +1396,7 @@ RuntimeResult<void> EngineLoop::RecreateRendererForWindowResize(uint32_t width, 
         auto passMaterialSnapshot = renderGraph.CapturePassMaterialInstances();
 
         liveResizeMutationStarted = true;
+        thumbnailSession.reset();
         renderGraph.Shutdown(*rendererBackend);
         RenderSystem::GetInstance().ReleaseSwapchainDependentResources();
         rendererBackend->RecreateSwapchain(
