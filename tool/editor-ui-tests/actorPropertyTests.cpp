@@ -143,6 +143,64 @@ TEST(EditorActorProperty, EditorNavigationDoesNotMoveTheSceneCamera)
     EXPECT_EQ(world.GetRenderCamera(), camera);
 }
 
+TEST(EditorActorProperty, CameraExposureEditsPreservePhysicalFieldsAndSequentialValues)
+{
+    World world(7, "scene.json");
+    auto camera = std::make_shared<Camera>();
+    camera->SetName("Shot");
+    CameraExposure exposure;
+    exposure.mode = ExposureMode::PhysicalCamera;
+    exposure.aperture = 2.8;
+    exposure.iso = 640;
+    camera->SetExposure(exposure);
+    world.SetCamera(camera);
+    std::string error;
+    ASSERT_TRUE(ApplyEditorActorProperty(world, Edit("camera|Shot", P::CameraExposureCompensation, 0, 2), error));
+    EXPECT_EQ(camera->GetExposure().mode, ExposureMode::PhysicalCamera);
+    EXPECT_DOUBLE_EQ(camera->GetExposure().aperture, 2.8);
+    EXPECT_DOUBLE_EQ(camera->GetExposure().iso, 640);
+    ASSERT_TRUE(ApplyEditorActorProperty(world, Edit("camera|Shot", P::CameraExposureMode, 0, 2), error));
+    ASSERT_TRUE(ApplyEditorActorProperty(world, Edit("camera|Shot", P::CameraAutoMinEv100, 0, -8), error));
+    ASSERT_TRUE(ApplyEditorActorProperty(world, Edit("camera|Shot", P::CameraAutoMaxEv100, 0, 20), error));
+    ASSERT_TRUE(ApplyEditorActorProperty(world, Edit("camera|Shot", P::CameraAutoSpeedUp, 0, 4), error));
+    ASSERT_TRUE(ApplyEditorActorProperty(world, Edit("camera|Shot", P::CameraAutoSpeedDown, 0, 2), error));
+    ASSERT_TRUE(ApplyEditorActorProperty(world, Edit("camera|Shot", P::CameraAutoTargetGray, 0, 0.25f), error));
+    ASSERT_TRUE(ApplyEditorActorProperty(world, Edit("camera|Shot", P::CameraEv100, 0, 11), error));
+    world.SetEditorViewEnabled(true);
+    const auto actors = BuildEditorSceneActors(world);
+    const auto& frozen = actors.front().camera.exposure;
+    EXPECT_EQ(frozen.mode, ExposureMode::Auto);
+    EXPECT_DOUBLE_EQ(frozen.compensation, 2);
+    EXPECT_DOUBLE_EQ(frozen.ev100, 11);
+    EXPECT_DOUBLE_EQ(frozen.autoMinEv100, -8);
+    EXPECT_DOUBLE_EQ(frozen.autoMaxEv100, 20);
+    EXPECT_DOUBLE_EQ(frozen.autoSpeedUp, 4);
+    EXPECT_DOUBLE_EQ(frozen.autoSpeedDown, 2);
+    EXPECT_DOUBLE_EQ(frozen.autoTargetGray, 0.25);
+    camera->SetExposure(CameraExposure{});
+    EXPECT_EQ(frozen.mode, ExposureMode::Auto);
+}
+
+TEST(EditorActorProperty, InvalidOrStaleCameraExposureEditsAreAtomic)
+{
+    World world(7, "scene.json");
+    auto camera = std::make_shared<Camera>();
+    camera->SetName("Shot");
+    world.SetCamera(camera);
+    std::string error;
+    EXPECT_FALSE(ApplyEditorActorProperty(world, Edit("camera|Shot", P::CameraExposureMode, 0, 3), error));
+    EXPECT_FALSE(ApplyEditorActorProperty(world, Edit("camera|Shot", P::CameraAutoMinEv100, 0, 20), error));
+    EXPECT_FALSE(ApplyEditorActorProperty(world, Edit("camera|Shot", P::CameraAutoMaxEv100, 0, -10), error));
+    EXPECT_FALSE(ApplyEditorActorProperty(world, Edit("camera|Shot", P::CameraAutoSpeedUp, 0, 0), error));
+    EXPECT_FALSE(ApplyEditorActorProperty(world, Edit("camera|Shot", P::CameraAutoTargetGray, 0, 1.1f), error));
+    EXPECT_FALSE(ApplyEditorActorProperty(world, Edit("camera|Shot", P::CameraEv100, 1, 10), error));
+    EXPECT_FALSE(ApplyEditorActorProperty(world, Edit("camera|Other", P::CameraEv100, 0, 10), error));
+    auto stale = Edit("camera|Shot", P::CameraEv100, 0, 10);
+    stale.worldGeneration = 6;
+    EXPECT_FALSE(ApplyEditorActorProperty(world, stale, error));
+    EXPECT_EQ(DescribeCameraExposure(camera->GetExposure()), DescribeCameraExposure(CameraExposure{}));
+}
+
 TEST(EditorActorVisualization, ProjectionUsesHorizontalFovAndDownwardScreenY)
 {
     EditorSceneCameraActor view;

@@ -41,8 +41,8 @@ struct EditorSceneMeshSectionSnapshot
     std::string windProfileKey;
 };
 
-// 相机发布 Details 与世界坐标辅助线需要的基向量/投影参数；
-// UI 不消费渲染矩阵，因此不把矩阵放进编辑器视图模型。
+// 相机发布 Details 的作者曝光与辅助线需要的基向量/投影参数；
+// UI 不消费渲染矩阵或 GPU 自动曝光历史，只接收冻结的作者值。
 struct EditorSceneCameraActor
 {
     Eigen::Vector3f position = Eigen::Vector3f::Zero();
@@ -52,6 +52,7 @@ struct EditorSceneCameraActor
     float horizontalFovDegrees = 60.0f;
     float clipNear = 0.1f;
     float clipFar = 1000.0f;
+    CameraExposure exposure;
 };
 
 // EnvironmentSnapshot 只携带 GPU 侧 resource handle，没有 cubeSize/hdrPath，

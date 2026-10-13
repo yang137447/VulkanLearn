@@ -20,7 +20,7 @@ struct CameraExposure
     double iso = 100.0;
     double compensation = 0.0;
     double autoMinEv100 = -10.0;
-    double autoMaxEv100 = 16.0;
+    double autoMaxEv100 = 20.0;
     double autoSpeedUp = 3.0;
     double autoSpeedDown = 1.0;
     double autoTargetGray = 0.18;

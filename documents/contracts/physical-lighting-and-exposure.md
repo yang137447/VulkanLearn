@@ -83,7 +83,9 @@ the UE-style eye-adaptation boundary used by this renderer:
 - the post-process graph measures scene-linear luminance into a persistent 1x1
   exposure resource;
 - the target is `autoTargetGray` (default `0.18`) with EV compensation applied;
-- `autoMinEv100` / `autoMaxEv100` bound the exposure scale;
+- `autoMinEv100` / `autoMaxEv100` bound the exposure scale, with defaults
+  `-10` / `20`. Formal scene cameras under `resourcePath/Maps` explicitly
+  author these bounds; exposure mode remains independently authored;
 - `autoSpeedUp` and `autoSpeedDown` are exponential adaptation rates in 1/s.
 - `autoExposureHistogram.comp` measures every scene-color pixel, using 16x16
   workgroups, shared-memory bins, and a 64-bin histogram over log2 luminance
@@ -118,16 +120,23 @@ eye-adaptation algorithm. In particular, temporal adaptation remains
 exponential interpolation of linear exposure with rates in 1/s, rather than
 an EV-space linear/exponential transition.
 
-The runtime Post Process page exposes Manual / Auto choices, manual EV100,
-exposure compensation, and automatic min/max EV100. Manual EV100 changes
+The selected Camera's Details contains an Exposure section, with no separate
+Post Process tab or viewport override. It exposes Manual / Auto choices, manual EV100,
+exposure compensation, automatic min/max EV100, adaptation up/down rates (1/s),
+and target gray (linear). Manual EV100 changes
 brightness only in `ev100` mode; automatic mode uses compensation and its
 EV bounds, while physical mode derives EV100 from the authored camera.
 Physical-camera scene configurations are categorized as Manual in the UI,
 with their derived EV100 shown read-only; selecting Manual explicitly switches
 to directly authored EV100. No scene-format or exposure-formula migration is
 performed by this UI simplification.
-The UI edits the active Camera through validated game-thread commands and
-does not write scene assets or read back the GPU's adapted EV.
+The UI publishes identity/generation-guarded `SetActorProperty` commands.
+The game thread validates each field against the current authored Camera's
+complete exposure state. Snapshot refresh does not submit edits or rebuild
+mode-dependent controls. Accepted edits enter the scene document draft and
+write only the edited exposure field after explicit Save Content confirmation;
+untouched physical fields, optional automatic defaults and original numeric
+precision are preserved. The UI does not read back the GPU's adapted EV.
 
 ## Migration Boundary
 

@@ -137,7 +137,34 @@ SliderRange ResolveSliderRange(const EditorParameterSnapshot& parameter,
 
 // HEAD 的折叠分组名与默认展开状态：General / Render States / Parameters / Texture Bindings。
 // 键同时是 DOM id 后缀，切换只改既有分组元素的 class，不重建 DOM。
-constexpr const char* DetailsSectionKeys[] = {"general", "render-states", "parameters", "textures"};
+constexpr const char* DetailsSectionKeys[] = {"general", "render-states", "parameters", "textures", "camera-exposure"};
+
+bool CameraExposureFieldEditable(EditorActorProperty property, ExposureMode mode)
+{
+    if (property == EditorActorProperty::CameraEv100) return mode == ExposureMode::Ev100;
+    if (property == EditorActorProperty::CameraExposureCompensation) return true;
+    return mode == ExposureMode::Auto;
+}
+
+std::string ActorPropertyRowMarkup(const EditorSceneActorEditableField& field)
+{
+    std::vector<UiWidgets::NumericComponent> components;
+    for (uint32_t component = 0; component < field.components; ++component)
+    {
+        UiWidgets::NumericComponent entry;
+        entry.id = SceneActorPropertyControlId(field.property, component);
+        static const char* axes[] = {"X", "Y", "Z"};
+        static const char* channels[] = {"R", "G", "B"};
+        entry.label = field.components == 1 ? "" :
+            (field.property == EditorActorProperty::Color ? channels[component] : axes[component]);
+        entry.value = SceneActorNumber(field.value[component]);
+        entry.change = {"actor-property", static_cast<size_t>(field.property), component};
+        components.push_back(std::move(entry));
+    }
+    return "<div class=\"actor-property-row\" id=\"" +
+        SceneActorPropertyControlId(field.property, 0) + "-row\">" +
+        UiWidgets::PropertyControlRow(field.label, UiWidgets::NumericComponents(components)) + "</div>";
+}
 
 std::string DetailsSectionId(const std::string& key)
 {
@@ -1698,28 +1725,32 @@ std::string MaterialInstanceAssetEditorPanel::ActorSectionMarkup(
     std::string body;
     for (const auto& field : SceneActorEditableFields(actor))
     {
-        std::vector<UiWidgets::NumericComponent> components;
-        for (uint32_t component = 0; component < field.components; ++component)
-        {
-            UiWidgets::NumericComponent entry;
-            entry.id = SceneActorPropertyControlId(field.property, component);
-            static const char* axes[] = {"X", "Y", "Z"};
-            static const char* channels[] = {"R", "G", "B"};
-            entry.label = field.components == 1 ? "" :
-                (field.property == EditorActorProperty::Color ? channels[component] : axes[component]);
-            entry.value = SceneActorNumber(field.value[component]);
-            entry.change = {"actor-property", static_cast<size_t>(field.property), component};
-            components.push_back(std::move(entry));
-        }
-        body += "<div class=\"actor-property-row\">" +
-            UiWidgets::PropertyControlRow(field.label, UiWidgets::NumericComponents(components)) + "</div>";
+        if (CameraExposureField(field.property) == nullptr)
+            body += ActorPropertyRowMarkup(field);
     }
     for (const EditorSceneActorField& field : SceneActorFields(actor))
         body += UiWidgets::PropertyInfo(field.label, field.value, field.id);
     if (actor.primaryDirectionalLight) body += PrimaryDirectionalLightControls(actor);
     const std::string key = ActorSectionKey(spec->key);
-    return UiWidgets::CollapsibleSection(DetailsSectionId(key), key, actor.displayName, body,
+    std::string markup = UiWidgets::CollapsibleSection(DetailsSectionId(key), key, actor.displayName, body,
         {"section"}, IsSectionExpanded(key));
+    if (actor.type == EditorSceneActorType::Camera)
+    {
+        std::string exposure = "<div class=\"actor-property-row\">" +
+            UiWidgets::PropertyControlRow("Exposure Mode",
+            "<div class=\"horizontal-box segmented\">" +
+            UiWidgets::Button("actor-exposure-manual", {"actor-exposure-manual"}, "Manual") +
+            UiWidgets::Button("actor-exposure-auto", {"actor-exposure-auto"}, "Auto") + "</div>") + "</div>";
+        exposure += "<div id=\"actor-exposure-physical-row\">" +
+            UiWidgets::PropertyInfo("Camera EV100 (physical)", "", "actor-exposure-physical-ev") + "</div>";
+        for (const auto& field : SceneActorEditableFields(actor))
+            if (CameraExposureField(field.property) != nullptr)
+                exposure += ActorPropertyRowMarkup(field);
+        markup += UiWidgets::CollapsibleSection(DetailsSectionId("camera-exposure"),
+            "camera-exposure", "Exposure", exposure, {"section"},
+            IsSectionExpanded("camera-exposure"));
+    }
+    return markup;
 }
 
 std::string MaterialInstanceAssetEditorPanel::PrimaryDirectionalLightControls(
@@ -1751,7 +1782,7 @@ std::string MaterialInstanceAssetEditorPanel::PrimaryDirectionalLightControls(
     return markup;
 }
 
-// 只读字段与两个可编辑控件都跟随冻结快照；焦点控件（正在拖动/输入）不会被回写。
+// 作者字段与模式高亮都跟随冻结快照；焦点控件（正在拖动/输入）不会被回写。
 void MaterialInstanceAssetEditorPanel::RefreshActorValues(const EditorSceneActorSnapshot* actor)
 {
     if (actor == nullptr) return;
@@ -1761,6 +1792,20 @@ void MaterialInstanceAssetEditorPanel::RefreshActorValues(const EditorSceneActor
         for (uint32_t component = 0; component < field.components; ++component)
             SetControlValue(SceneActorPropertyControlId(field.property, component),
                 SceneActorNumber(field.value[component]));
+    if (actor->type == EditorSceneActorType::Camera)
+    {
+        const auto& exposure = actor->camera.exposure;
+        // 模式来自作者快照；只切换行可见性，保留数值 DOM、焦点和原有 physical 配置。
+        widgetDocument.SetClass("actor-exposure-manual", "selected", exposure.mode != ExposureMode::Auto);
+        widgetDocument.SetClass("actor-exposure-auto", "selected", exposure.mode == ExposureMode::Auto);
+        widgetDocument.SetProperty("actor-exposure-physical-row", "display",
+            exposure.mode == ExposureMode::PhysicalCamera ? "block" : "none");
+        SetMarkup("actor-exposure-physical-ev", Text(Number(static_cast<float>(EffectiveEv100(exposure)))));
+        for (const auto& field : SceneActorEditableFields(*actor))
+            if (CameraExposureField(field.property) != nullptr)
+                widgetDocument.SetProperty(SceneActorPropertyControlId(field.property, 0) + "-row",
+                    "display", CameraExposureFieldEditable(field.property, exposure.mode) ? "block" : "none");
+    }
     if (!actor->primaryDirectionalLight) return;
     // 文本输入承载精确值；滑条只承载 0..10 的显示区间，越界值在这里按显示区间截断
     // （只影响滑条位置，不改变存储值）。拖动中的滑条是焦点元素，SetControlValue 不回写。
@@ -2440,6 +2485,18 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
         viewportTransformSpace = element.GetAttribute<std::string>("data-space", "world");
         RefreshViewportToolbar();
     }
+    else if (action == "actor-exposure-manual" || action == "actor-exposure-auto")
+    {
+        const auto* actor = SelectedActor();
+        if (runtimeActionSink == nullptr || actor == nullptr || actor->type != EditorSceneActorType::Camera) return;
+        const ExposureMode mode = action == "actor-exposure-auto" ? ExposureMode::Auto : ExposureMode::Ev100;
+        if (actor->camera.exposure.mode == mode) return;
+        UiAction request;
+        request.type = UiActionType::SetActorProperty;
+        request.actorProperty = {actor->worldGeneration, actor->identity,
+            EditorActorProperty::CameraExposureMode, 0, mode == ExposureMode::Auto ? 2.0f : 0.0f};
+        runtimeActionSink->RequestRuntimeAction(std::move(request));
+    }
     else if (action == "actor-csm-enable" || action == "actor-csm-disable")
     {
         if (runtimeActionSink == nullptr) return;
@@ -2702,6 +2759,20 @@ void MaterialInstanceAssetEditorPanel::HandleChange(Rml::Element& element, const
         for (const auto& field : SceneActorEditableFields(*actor))
         {
             if (field.property != property || component >= field.components) continue;
+            if (const char* exposureField = CameraExposureField(property))
+            {
+                if (!CameraExposureFieldEditable(property, actor->camera.exposure.mode)) return;
+                try
+                {
+                    // UI 给出即时错误；GT 仍按当时的完整作者状态校验，避免连续事件互相覆盖。
+                    EditCameraExposure(actor->camera.exposure, exposureField, number);
+                }
+                catch (const std::invalid_argument& error)
+                {
+                    localStatus = error.what();
+                    return;
+                }
+            }
             if (number == field.value[component]) return;
             UiAction request;
             request.type = UiActionType::SetActorProperty;

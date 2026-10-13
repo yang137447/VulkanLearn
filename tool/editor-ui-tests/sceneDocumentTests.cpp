@@ -59,6 +59,15 @@ protected:
         actor.light.intensity = ReadCanonicalLightIntensity(source["objects"][1]);
         return actor;
     }
+    EditorSceneActorSnapshot CameraActor() const
+    {
+        EditorSceneActorSnapshot actor;
+        actor.scenePath = path.string();
+        actor.identity = "camera|Camera";
+        actor.type = EditorSceneActorType::Camera;
+        actor.camera.exposure = ReadCameraExposure(source["objects"][0]);
+        return actor;
+    }
     void Record(EditorSceneActorSnapshot actor, EditorActorProperty property, float value,
         uint32_t component = 0)
     {
@@ -102,6 +111,60 @@ TEST_F(SceneDocumentTest, ReturningToParsedBaselineClearsDirtyWithoutWriting)
     Record(actor, EditorActorProperty::Position, 10);
     actor.position.x() = 0.1f;
     Record(actor, EditorActorProperty::Position, 0.1f);
+    EXPECT_TRUE(service->ModifiedDocuments().empty());
+    EXPECT_EQ(Read(), source);
+}
+
+TEST_F(SceneDocumentTest, ExposureSavePatchesOnlyEditedFieldsAndRetainsPhysicalParameters)
+{
+    source["objects"][0]["exposure"]["mode"] = "physical";
+    source["objects"][0]["exposure"]["aperture"] = 2.8123456789;
+    Write(source);
+    std::string error;
+    ASSERT_TRUE(service->Open(path.string(), error)) << error;
+    auto actor = CameraActor();
+    actor.camera.exposure.compensation = 2;
+    Record(actor, EditorActorProperty::CameraExposureCompensation, 2);
+    EXPECT_EQ(Read(), source);
+    ASSERT_EQ(service->Save(SaveCommand()).status, EditorCommandStatus::Succeeded);
+    auto expected = source;
+    expected["objects"][0]["exposure"]["compensation"] = 2;
+    EXPECT_EQ(Read(), expected);
+}
+
+TEST_F(SceneDocumentTest, ExposureModeAndValuesReplayIntoReplacementAuthoredCamera)
+{
+    auto actor = CameraActor();
+    actor.camera.exposure.mode = ExposureMode::Auto;
+    Record(actor, EditorActorProperty::CameraExposureMode, 2);
+    actor.camera.exposure.autoSpeedDown = 2;
+    Record(actor, EditorActorProperty::CameraAutoSpeedDown, 2);
+    World replacement(9, path.string());
+    auto camera = std::make_shared<Camera>();
+    camera->SetName("Camera");
+    replacement.SetCamera(camera);
+    replacement.SetEditorViewEnabled(true);
+    std::string error;
+    for (const auto& edit : service->ReplayEdits(path.string(), 9, error))
+        ASSERT_TRUE(ApplyEditorActorProperty(replacement, edit, error)) << error;
+    EXPECT_EQ(camera->GetExposure().mode, ExposureMode::Auto);
+    EXPECT_DOUBLE_EQ(camera->GetExposure().autoSpeedDown, 2);
+    ASSERT_EQ(service->Save(SaveCommand()).status, EditorCommandStatus::Succeeded);
+    EXPECT_EQ(Read()["objects"][0]["exposure"]["mode"], "auto");
+}
+
+TEST_F(SceneDocumentTest, ReturningToOmittedAutomaticDefaultClearsDirtyWithoutInsertingKeys)
+{
+    source["objects"][0]["exposure"].erase("autoTargetGray");
+    Write(source);
+    std::string error;
+    ASSERT_TRUE(service->Open(path.string(), error)) << error;
+    auto actor = CameraActor();
+    actor.camera.exposure.autoTargetGray = 0.25;
+    Record(actor, EditorActorProperty::CameraAutoTargetGray, 0.25f);
+    ASSERT_FALSE(service->ModifiedDocuments().empty());
+    actor.camera.exposure.autoTargetGray = 0.18f;
+    Record(actor, EditorActorProperty::CameraAutoTargetGray, 0.18f);
     EXPECT_TRUE(service->ModifiedDocuments().empty());
     EXPECT_EQ(Read(), source);
 }

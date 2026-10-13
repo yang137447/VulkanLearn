@@ -1818,6 +1818,138 @@ TEST_F(EditorUiTest, DetailsActorFieldsFollowTheFrozenSnapshot)
     EXPECT_EQ(Control("actor-property-0-2")->GetValue(), "3");
 }
 
+TEST_F(EditorUiTest, CameraDetailsExposureActionsCarryAuthoredIdentityAndMode)
+{
+    snapshot.activeDocument.reset();
+    SelectActorInOutliner(CameraActor("Shot"));
+    ASSERT_NE(document->GetElementById("details-section-camera-exposure"), nullptr);
+    Click("#actor-exposure-manual");
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    Click("#actor-exposure-auto");
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions.front().actorProperty.identity, "camera|Shot");
+    EXPECT_EQ(runtimeSink.actions.front().actorProperty.worldGeneration, 1u);
+    EXPECT_EQ(runtimeSink.actions.front().actorProperty.property, EditorActorProperty::CameraExposureMode);
+    EXPECT_FLOAT_EQ(runtimeSink.actions.front().actorProperty.value, 2);
+    SetValue(SceneActorPropertyControlId(EditorActorProperty::CameraEv100, 0), "12");
+    ASSERT_EQ(runtimeSink.actions.size(), 2u);
+    EXPECT_EQ(runtimeSink.actions.back().actorProperty.property, EditorActorProperty::CameraEv100);
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, ExposureModeRefreshKeepsNodesAndRejectsInactiveOrInvalidInputs)
+{
+    auto actor = CameraActor("Shot");
+    actor.camera.exposure.mode = ExposureMode::Auto;
+    SelectActorInOutliner(actor);
+    const auto evId = SceneActorPropertyControlId(EditorActorProperty::CameraEv100, 0);
+    const auto minId = SceneActorPropertyControlId(EditorActorProperty::CameraAutoMinEv100, 0);
+    auto* ev = Control(evId);
+    auto* minimum = Control(minId);
+    ASSERT_NE(ev, nullptr);
+    ASSERT_NE(minimum, nullptr);
+    // 模式隐藏的是属性行；RmlUi 默认只检查控件自身，必须连同祖先检查。
+    EXPECT_FALSE(ev->IsVisible(true));
+    EXPECT_TRUE(minimum->IsVisible(true));
+    SetValue(evId, "12");
+    SetValue(minId, "20");
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    SetValue(minId, "-8");
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions.front().actorProperty.property, EditorActorProperty::CameraAutoMinEv100);
+    actors[0].camera.exposure.mode = ExposureMode::Ev100;
+    PublishActors();
+    Refresh();
+    EXPECT_EQ(Control(evId), ev);
+    EXPECT_EQ(Control(minId), minimum);
+    EXPECT_TRUE(ev->IsVisible(true));
+    EXPECT_FALSE(minimum->IsVisible(true));
+    EXPECT_TRUE(document->GetElementById("actor-exposure-manual")->IsClassSet("selected"));
+    SetValue(minId, "-9");
+    EXPECT_EQ(runtimeSink.actions.size(), 1u);
+}
+
+TEST_F(EditorUiTest, PhysicalExposureBindingIsReadOnlyAndNeverConvertsTheCamera)
+{
+    auto actor = CameraActor("Shot");
+    actor.camera.exposure.mode = ExposureMode::PhysicalCamera;
+    actor.camera.exposure.aperture = 2.8;
+    SelectActorInOutliner(actor);
+    EXPECT_EQ(document->GetElementById("actor-exposure-physical-ev")->GetInnerRML(),
+        SceneActorNumber(static_cast<float>(EffectiveEv100(actor.camera.exposure))));
+    const auto id = SceneActorPropertyControlId(EditorActorProperty::CameraEv100, 0);
+    EXPECT_FALSE(Control(id)->IsVisible(true));
+    EXPECT_TRUE(document->GetElementById("actor-exposure-physical-ev")->IsVisible(true));
+    SetValue(id, "12");
+    for (int frame = 0; frame < 5; ++frame) Refresh();
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    Click("#actor-exposure-manual");
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_FLOAT_EQ(runtimeSink.actions.front().actorProperty.value, 0);
+}
+
+TEST_F(EditorUiTest, ExposureRefreshPreservesFocusedPartialInputAndHasNoIdleWrites)
+{
+    SelectActorInOutliner(CameraActor("Shot"));
+    const auto id = SceneActorPropertyControlId(EditorActorProperty::CameraExposureCompensation, 0);
+    auto* field = Control(id);
+    ASSERT_NE(field, nullptr);
+    field->Focus();
+    field->SetValue("-");
+    Refresh();
+    const size_t writes = panel->PanelPropertyWriteCount();
+    for (int frame = 0; frame < 5; ++frame) Refresh();
+    EXPECT_EQ(Control(id), field);
+    EXPECT_EQ(field->GetValue(), "-");
+    EXPECT_EQ(panel->PanelPropertyWriteCount(), writes);
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, NonCameraDetailsHaveNoExposureSection)
+{
+    SelectActorInOutliner(PointLightActor("Key", 250, 12.5f));
+    EXPECT_EQ(document->GetElementById("details-section-camera-exposure"), nullptr);
+    EXPECT_EQ(document->GetElementById("actor-exposure-auto"), nullptr);
+}
+
+TEST_F(EditorUiTest, ExposureModeButtonsFitTheDetailsControlAreaAtEveryWindowSize)
+{
+    snapshot.activeDocument.reset();
+    auto actor = CameraActor("Shot");
+    actor.camera.exposure.mode = ExposureMode::Auto;
+    SelectActorInOutliner(actor);
+    Click("#details-section-actor-camera-title");
+    for (const auto dimensions : {Rml::Vector2i(960, 540),
+        Rml::Vector2i(1280, 720), Rml::Vector2i(1920, 1080)})
+    {
+        context->SetDimensions(dimensions);
+        Refresh();
+        auto* section = document->GetElementById("details-section-camera-exposure");
+        const auto origin = section->GetAbsoluteOffset(Rml::BoxArea::Border);
+        const auto size = section->GetBox().GetSize(Rml::BoxArea::Border);
+        auto* manual = document->GetElementById("actor-exposure-manual");
+        auto* automatic = document->GetElementById("actor-exposure-auto");
+        const auto manualOrigin = manual->GetAbsoluteOffset(Rml::BoxArea::Border);
+        const auto autoOrigin = automatic->GetAbsoluteOffset(Rml::BoxArea::Border);
+        const auto manualSize = manual->GetBox().GetSize(Rml::BoxArea::Border);
+        const auto autoSize = automatic->GetBox().GetSize(Rml::BoxArea::Border);
+        EXPECT_GE(manualSize.x, 65.0f);
+        EXPECT_GE(autoSize.x, 65.0f);
+        EXPECT_NEAR(manualSize.x, autoSize.x, 1.0f);
+        EXPECT_LE(manualOrigin.x + manualSize.x, autoOrigin.x + 1);
+        EXPECT_LE(autoOrigin.x + autoSize.x, origin.x + size.x + 1);
+        const auto grayId = SceneActorPropertyControlId(EditorActorProperty::CameraAutoTargetGray, 0);
+        auto* gray = Control(grayId);
+        ASSERT_NE(gray, nullptr);
+        const auto grayOrigin = gray->GetAbsoluteOffset(Rml::BoxArea::Border);
+        EXPECT_LE(grayOrigin.x + gray->GetBox().GetSize(Rml::BoxArea::Border).x,
+            origin.x + size.x + 1);
+        context->Render();
+    }
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    EXPECT_TRUE(system.errors.empty()) << Errors();
+}
+
 TEST_F(EditorUiTest, PrimaryDirectionalLightExposesTheTwoExistingRuntimeCommands)
 {
     snapshot.activeDocument.reset();

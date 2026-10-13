@@ -328,27 +328,23 @@ not the RML document. Editor focus/scroll may reset on successful reload.
 
 ### 参数语义与编辑反馈
 
-> 来源：`master` 的 `2147af3`。本节描述的是当时 runtime 控制页的行为。
-> **本分支的编辑器 UI 尚未包含这些控件**，因此这里是"合入的既定语义"，
-> 不是"本分支已验证的行为" —— 等运行时控制页接入后再核对。
-
 RmlUi range 输入在**程序化绑定更新**时也会发出 `change`（含取值舍入与钳制）。
-`UiBindingUpdateScope` 在加载、提交、刷新运行时文档期间抑制浮点动作。
+编辑器的 `WidgetRefreshScope` 在绑定冻结快照期间抑制动作。
 **只读快照绝不能被这类 UI 反馈改写。**
 
-太阳控件用 lux，动态阴影距离控件用厘米；它们的**取值范围不是资产校验上限**。
-
-相机移动速度用 cm/s：默认 1000 cm/s，滑条范围 50..10000 cm/s，步长 50 cm/s。
-这些是原移动值乘以 100 的结果；鼠标旋转灵敏度不变。
-
-Post Process 页暴露两种曝光选择（Manual / Auto）、手动 EV100、补偿、以及自动的
-min/max EV100。曝光控件由活动 Camera 经**只读**视图模型填充。每次编辑经
-`UiAction` 与 `RuntimeCommand` 排队一个具名字段；游戏线程在发布前对**完整候选**
-与当前 Camera 做校验。绑定刷新永不提交编辑。手动 EV100 只在手动模式显示，
-自动模式显示其 EV 边界。作者写入的物理相机曝光归在 Manual 下并只读显示推导出的
+主方向光 Details 强度用 lux，作者 Camera Details 的 Exposure 分组承载
+Manual / Auto、手动 EV100、补偿，以及自动 min/max EV100、适应速率（1/s）与目标灰度（linear）。
+没有独立 Post Process 标签页或视口曝光覆盖。曝光值来自选中作者 Camera 的
+**只读** actor 快照；每次编辑经 `UiAction` 与 `RuntimeCommand` 的 `SetActorProperty`
+排队一个枚举字段、actor 稳定身份及 World generation。游戏线程对当前作者 Camera
+的**完整候选**校验后才写回，旧代数事件被拒绝。绑定刷新永不提交编辑。
+手动 EV100 只在 ev100 模式显示，自动模式显示自动参数。
+作者写入的物理相机曝光归在 Manual 下并只读显示推导出的
 EV100；点击 Manual 才显式选择直接输入 EV100，**没有单独的 Physical 模式按钮**。
 加载或刷新 UI 不会转换物理相机场景数据。补偿在所有模式下都生效。
-这些是**会话内编辑**，不写入场景 JSON；重新加载场景会恢复作者写入的值。
+接受的修改形成所属 Scene 草稿；Save Content 确认后按字段补丁写入场景 JSON，
+不覆盖未编辑的物理参数。未保存草稿在源摘要不变时可重放到替换 World。
+独立观察相机只保留自己的位姿，显示曝光仍跟随作者 Camera。
 
 Published CPU texture data is retained by shared ownership. RT independently
 retires replaced GPU texture generations by completed frame epoch.

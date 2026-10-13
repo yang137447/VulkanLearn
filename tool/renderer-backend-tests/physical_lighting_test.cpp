@@ -170,7 +170,7 @@ TEST(CameraExposure, ManualAutoRoundTripPreservesAuthoredEvAndBounds)
     EXPECT_EQ(exposure.mode, ExposureMode::Ev100);
     EXPECT_DOUBLE_EQ(exposure.ev100, 2.0);
     EXPECT_DOUBLE_EQ(exposure.autoMinEv100, -1.0);
-    EXPECT_DOUBLE_EQ(exposure.autoMaxEv100, 16.0);
+    EXPECT_DOUBLE_EQ(exposure.autoMaxEv100, 20.0);
 }
 
 TEST(CameraExposure, ManualEvEditChangesExposureByOneStop)
@@ -191,7 +191,7 @@ TEST(CameraExposure, RejectsInvertedAutoBoundsWithoutChangingOriginal)
         EditCameraExposure(exposure, "autoMaxEv100", exposure.autoMinEv100),
         std::invalid_argument);
     EXPECT_DOUBLE_EQ(exposure.autoMinEv100, -10.0);
-    EXPECT_DOUBLE_EQ(exposure.autoMaxEv100, 16.0);
+    EXPECT_DOUBLE_EQ(exposure.autoMaxEv100, 20.0);
 }
 
 TEST(CameraExposure, RejectsInvalidRuntimeFieldsAndNonFiniteValues)

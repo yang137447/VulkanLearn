@@ -502,6 +502,22 @@ std::vector<EditorSceneActorEditableField> SceneActorEditableFields(
             Eigen::Vector3f(actor.camera.clipNear, 0, 0), 1});
         fields.push_back({P::CameraFar, "Far Clip (cm)",
             Eigen::Vector3f(actor.camera.clipFar, 0, 0), 1});
+        // 字段集合不随曝光模式变化，切换只改显示；焦点与折叠状态不靠重建 DOM 维持。
+        const CameraExposure& exposure = actor.camera.exposure;
+        fields.push_back({P::CameraEv100, "Manual EV100",
+            Eigen::Vector3f(static_cast<float>(exposure.ev100), 0, 0), 1});
+        fields.push_back({P::CameraExposureCompensation, "Compensation (EV)",
+            Eigen::Vector3f(static_cast<float>(exposure.compensation), 0, 0), 1});
+        fields.push_back({P::CameraAutoMinEv100, "Min EV100",
+            Eigen::Vector3f(static_cast<float>(exposure.autoMinEv100), 0, 0), 1});
+        fields.push_back({P::CameraAutoMaxEv100, "Max EV100",
+            Eigen::Vector3f(static_cast<float>(exposure.autoMaxEv100), 0, 0), 1});
+        fields.push_back({P::CameraAutoSpeedUp, "Up Rate (1/s)",
+            Eigen::Vector3f(static_cast<float>(exposure.autoSpeedUp), 0, 0), 1});
+        fields.push_back({P::CameraAutoSpeedDown, "Down Rate (1/s)",
+            Eigen::Vector3f(static_cast<float>(exposure.autoSpeedDown), 0, 0), 1});
+        fields.push_back({P::CameraAutoTargetGray, "Target Gray (linear)",
+            Eigen::Vector3f(static_cast<float>(exposure.autoTargetGray), 0, 0), 1});
         return fields;
     }
     fields.push_back({P::Color, "Light Colour (linear RGB)", actor.light.color, 3});

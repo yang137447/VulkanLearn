@@ -178,7 +178,21 @@ void SceneDocumentService::RecordActorEdit(const EditorUi::EditorSceneActorSnaps
     auto& object = *FindActor(document.draft, actor.identity);
     const auto previous = document.draft;
     using P = EditorActorProperty;
-    switch (edit.property)
+    const auto* baselineActor = FindActor(document.baseline, actor.identity);
+    if (const char* field = CameraExposureField(edit.property))
+    {
+        // 只补丁已接受的字段，保留物理相机参数与未写入 JSON 的自动默认值。
+        auto& exposure = object["exposure"];
+        exposure[field] = DescribeCameraExposure(actor.camera.exposure).at(field);
+        if (baselineActor && !baselineActor->at("exposure").contains(field))
+        {
+            const auto baselineValue = DescribeCameraExposure(
+                ReadCameraExposure(*baselineActor)).at(field);
+            if (exposure[field].get<float>() == baselineValue.get<float>())
+                exposure.erase(field);
+        }
+    }
+    else switch (edit.property)
     {
     case P::Position: object["position"] = Vector(actor.position); break;
     case P::Rotation: object["rotation"] = Vector(actor.rotation); break;
@@ -202,6 +216,7 @@ void SceneDocumentService::RecordActorEdit(const EditorUi::EditorSceneActorSnaps
     case P::CameraNear: object["near_clip"] = actor.camera.clipNear; break;
     case P::CameraFar: object["far_clip"] = actor.camera.clipFar; break;
     case P::CastShadows: object["shadow"]["castShadows"] = actor.castShadows; break;
+    default: break; // 曝光字段已由上方具名映射处理。
     }
     if (actor.type == EditorUi::EditorSceneActorType::Camera &&
         (edit.property == P::Position || edit.property == P::Rotation))
@@ -210,7 +225,6 @@ void SceneDocumentService::RecordActorEdit(const EditorUi::EditorSceneActorSnaps
         object["rotation"] = Vector(actor.rotation);
         object.erase("look_at");
     }
-    const auto* baselineActor = FindActor(document.baseline, actor.identity);
     if (baselineActor) RestoreEquivalentNumbers(object, *baselineActor);
     if (edit.property == P::CastShadows && actor.castShadows && baselineActor &&
         (!baselineActor->contains("shadow") || !baselineActor->at("shadow").contains("castShadows")))

@@ -178,6 +178,23 @@ bool ApplyEditorActorProperty(World& world, const EditorActorPropertyEdit& edit,
         {
             if (edit.property == P::Position || edit.property == P::Rotation)
                 return SetNodeTransform(*camera, edit);
+            if (const char* field = CameraExposureField(edit.property))
+            {
+                try
+                {
+                    // 从作者 Camera 的当前状态改一个字段；完整校验成功才写回，
+                    // 连续命令互不覆盖，也不把编辑器观察相机当作曝光作者。
+                    const CameraExposure candidate = EditCameraExposure(
+                        camera->GetExposure(), field, edit.value);
+                    camera->SetExposure(candidate);
+                    return true;
+                }
+                catch (const std::invalid_argument& exception)
+                {
+                    error = exception.what();
+                    return false;
+                }
+            }
             const float fov = edit.property == P::CameraFov ? edit.value : camera->GetHFOV();
             const float nearClip = edit.property == P::CameraNear ? edit.value : camera->GetClipNear();
             const float farClip = edit.property == P::CameraFar ? edit.value : camera->GetClipFar();

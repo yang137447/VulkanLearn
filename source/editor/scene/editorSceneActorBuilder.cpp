@@ -131,6 +131,7 @@ EditorSceneActorSnapshot BuildCameraActor(const World& world, const Camera& came
     actor.camera.horizontalFovDegrees = camera.GetHFOV();
     actor.camera.clipNear = camera.GetClipNear();
     actor.camera.clipFar = camera.GetClipFar();
+    actor.camera.exposure = camera.GetExposure();
     if (world.GetRenderCamera())
     {
         const Camera& view = *world.GetRenderCamera();

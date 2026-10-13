@@ -235,7 +235,7 @@ Scene Outliner（`#editor-navigation`，仍是 `DockWorkspace::Panels()` 里的 
   发布，位置与 `SetMaterialInstanceSceneModels` 并排，且都在
   `uiSubsystem->Update(snapshot)` 之前。UI 回调不访问 World。
 - **冻结快照是纯值**：`EditorSceneActorSnapshot` 只含字符串、`RuntimeId`、
-  `LightSnapshot`（与渲染快照同结构）、相机七个展示字段、环境与环境/风剖面标量；
+  `LightSnapshot`（与渲染快照同结构）、相机展示字段与作者 `CameraExposure`、环境与环境/风剖面标量；
   没有 World、SceneNode、MaterialInstance 或 Vulkan 句柄。列表以
   `shared_ptr<const std::vector<...>>` 进入面板快照（与资产目录同一约定），
   逐帧不深拷贝 actor 数组。
@@ -281,6 +281,10 @@ Scene Outliner（`#editor-navigation`，仍是 `DockWorkspace::Panels()` 里的 
 - **Details**：`#actor-details-content` 中的可折叠分组以选中 actor 名称为标题。
   网格编辑根 Location/Rotation/Scale，节点灯光编辑 Location/Rotation/线性 RGB/强度；
   spot 编辑 inner/outer 半锥角，面光编辑位置/法线/边长/辐亮度；相机编辑位置/旋转/FOV/近远面。
+  Camera Details 的 Exposure 分组编辑 Manual/Auto、手动 EV100、补偿、自动 EV 边界、
+  上下适应速率（1/s）与目标灰度（linear）；只在选中 Camera 时出现，没有独立后处理标签页。
+  physical 配置显示只读推导 EV100，点击 Manual 才显式选择 ev100；刷新不转换模式。
+  参数行固定挂载，模式只改变可见性；隐藏参数不接受 UI 编辑，焦点输入与静止帧写缓存保留。
   环境和风剖面仍只读。Material Slots 仅在存在选中模型材质槽时显示，并位于 actor 参数之后。
   控件来自 `SceneActorEditableFields()`，值变化只刷新控件，不重建 DOM，保留焦点文本。
 - **对象编辑边界**：`SetActorProperty` 通过 EngineLoop → RuntimeCommandExecutor →
@@ -388,9 +392,10 @@ checkbox 的默认 click 必须到达目标节点；change 只同步选择，快
 不销毁焦点节点，程序刷新由 `WidgetRefreshScope` 抑制。
 
 `SceneDocumentService` 按资源根内规范路径保存 baseline/draft、BLAKE3 摘要及编辑历史；
-只补丁网格 TRS、灯光参数、作者 Camera 变换/投影与主光 castShadows，保留其它 JSON 字段。
+只补丁网格 TRS、灯光参数、作者 Camera 变换/投影/曝光与主光 castShadows，保留其它 JSON 字段。
 灯光保留作者 lux/cd/lm，spot 锥角及面光尺寸变化反算作者强度以保持当前规范亮度。
-Camera 变换后去掉会覆盖 rotation 的旧 look_at；曝光不改写。
+Camera 变换后去掉会覆盖 rotation 的旧 look_at；曝光编辑只改接受的具名字段，
+保留未触碰的 physical 参数和数字精度，省略的自动默认值在复位后仍省略。
 切换预览/关卡后，源摘要未变时将接受历史重放到新 World generation；
 外部变化拒绝重放与覆盖。未保存草稿仅存于当前进程，没有场景 Reload/Discard 界面。
 
