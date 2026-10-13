@@ -6,7 +6,7 @@
 - 验收状态：v1 已完成（2026-08-23）；v2 输入/GBuffer/direct 已实现（2026-09-01，构建与测试证据见文末）
 - Shading Model：`Cloth` / ID `8`
 - 知识库基线：`D:\YYBWorkSpace\GitHub\yyb-knowledge-book\src\content\docs\rendering\materials\shading-models\cloth-sheen.mdx`
-- VulkanLearn 当前合同基线：`documents/rendering/shader-structure-and-material-function.md`
+- VulkanLearn 当前合同基线：`documents/contracts/shader-structure-and-material-function.md`
 - 当前合同：`documents/rendering/cloth-shading-model.md`（已完成迁移）
 - 首阶段执行域：Opaque Forward + Opaque Deferred
 - v1 首阶段模型：各向同性 Charlie NDF + Neubelt visibility
@@ -537,7 +537,7 @@ CPU 只负责输入环境资源、序列化参数、调度 Compute 和管理生�
 
 - `source/render/eye/eyeComputeReloadParticipant.*`
 - `source/shader/reload/computePipelineReloadParticipant.*`
-- `documents/rendering/shader-hot-reload.md`
+- `documents/contracts/shader-hot-reload.md`
 
 新增 Cloth Compute reload participant，保证：
 

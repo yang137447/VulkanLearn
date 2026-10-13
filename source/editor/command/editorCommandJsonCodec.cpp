@@ -307,7 +307,7 @@ std::string_view RequireWireName(
 EditorCommandSource DecodeSource(
     std::string_view name)
 {
-    if (name == "imgui") return EditorCommandSource::ImGui;
+    if (name == "rmlui") return EditorCommandSource::RmlUi;
     if (name == "console") return EditorCommandSource::Console;
     if (name == "ai") return EditorCommandSource::AI;
     if (name == "runtime_test") return EditorCommandSource::RuntimeTest;
@@ -1524,7 +1524,7 @@ std::string_view GetEditorCommandJsonSourceName(
 {
     switch (source)
     {
-    case EditorCommandSource::ImGui: return "imgui";
+    case EditorCommandSource::RmlUi: return "rmlui";
     case EditorCommandSource::Console: return "console";
     case EditorCommandSource::AI: return "ai";
     case EditorCommandSource::RuntimeTest: return "runtime_test";

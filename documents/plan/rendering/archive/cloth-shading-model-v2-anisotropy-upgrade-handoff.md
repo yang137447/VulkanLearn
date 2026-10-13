@@ -39,7 +39,7 @@ MF 负责“输入从哪里来、如何标准化”；Cloth Shading Model 负责
 1. `documents/rendering/cloth-shading-model.md`
 2. `documents/plan/rendering/cloth-shading-model-development-plan.md`
 3. `documents/rendering/neox-character-alignment-contract-v1.md`
-4. `documents/rendering/shader-structure-and-material-function.md`
+4. `documents/contracts/shader-structure-and-material-function.md`
 5. `shader/glsl/engine/materialInputs.glsl`
 6. `shader/glsl/engine/materialSurface.glsl`
 7. `shader/glsl/engine/gbufferCodec.glsl`

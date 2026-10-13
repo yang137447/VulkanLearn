@@ -177,7 +177,8 @@ void WorldGraphTransactionCoordinator::SetFaultInjection(
 RuntimeResult<WorldHandle>
 WorldGraphTransactionCoordinator::Execute(
     const std::string& scenePath,
-    const MaterialDefinitionReloadBatch* materialDefinitionReload)
+    const MaterialDefinitionReloadBatch* materialDefinitionReload,
+    const nlohmann::json& extraSceneObjects)
 {
     try
     {
@@ -192,7 +193,8 @@ WorldGraphTransactionCoordinator::Execute(
             worldTransitionCoordinator.PrepareWorldLoad(
                 scenePath,
                 candidateGraph->GetGraph(),
-                materialDefinitionReload);
+                materialDefinitionReload,
+                extraSceneObjects);
         if (preparedWorldResult.IsFailure())
         {
             return RuntimeResult<WorldHandle>::Failure(

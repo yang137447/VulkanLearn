@@ -1,6 +1,5 @@
 {
-  "projectPath": "D:\\YYBWorkSpace\\GitHub\\VulkanLearn",
-  "resourcePath": "D:\\YYBWorkSpace\\GitHub\\VukanLearnResources",
+  "resourcePath": "../VukanLearnResources",
   "windowSize": [
     1280,
     720
@@ -12,12 +11,12 @@
     "enabled": true,
     "hotReload": true,
     "assetRoot": "ui",
-    "document": "runtime-control.rml",
+    "document": "runtime-hud.rml",
     "localization": "localization.json",
     "defaultLocale": "en-US",
     "fontFaces": [],
     "developerUiEnabled": true,
-    "developerUiVisible": false
+    "developerUiVisible": true
   },
   "renderStateDebugColors": {
     "ePass": [

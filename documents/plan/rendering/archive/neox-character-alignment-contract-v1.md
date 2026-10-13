@@ -12,8 +12,8 @@
 
 本文是当前 NeoX 角色迁移的正式渲染合同。角色迁移必须先满足资源和 RenderState 合同，再进入 Shader 效果对齐；不能用 Blender 画面、文件名相似度或 VulkanLearn 当前已有 MI 反推 NeoX 语义。
 
-NeoX 材质 Shader 必须同时遵守 `documents/rendering/shader-structure-and-material-function.md` 和
-`documents/rendering/material-mesh-pass-composition.md`。本文只补充 NeoX 的源语义、离线标准化和源到目标的映射，不得覆盖通用 Shader Structure、Material Function、MeshPass 或 Material Instance 合同。
+NeoX 材质 Shader 必须同时遵守 `documents/contracts/shader-structure-and-material-function.md` 和
+`documents/contracts/material-mesh-pass-composition.md`。本文只补充 NeoX 的源语义、离线标准化和源到目标的映射，不得覆盖通用 Shader Structure、Material Function、MeshPass 或 Material Instance 合同。
 
 ## 1. 对齐目标与原则
 
@@ -485,7 +485,7 @@ Hair `Backlit` 必须先经过 NeoX 输入层再进入 UE Hair Shading Model；�
 
 ### 5.1 纹理
 
-所有 Texture JSON 必须遵守 `documents/rendering/texture-asset-json-v1.md`，并补充 NeoX 来源审计：
+所有 Texture JSON 必须遵守 `documents/contracts/texture-asset-json-v1.md`，并补充 NeoX 来源审计：
 
 ```text
 sourcePath

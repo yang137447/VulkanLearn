@@ -47,6 +47,7 @@ public:
 
     size_t GetTrackedSourceCount() const;
     size_t GetScanCount() const { return scanCount; }
+    size_t GetHashCount() const { return hashCount; }
     bool HasUnstableSourceChanges() const;
     void SetTestPollInterval(std::chrono::milliseconds interval)
     {
@@ -78,6 +79,7 @@ private:
         // Debounce state for the current candidate transition.
         std::string candidateDigest;
         size_t stablePollCount = 0;
+        size_t nextFullHashScan = 0;
     };
 
     void ScanSources(
@@ -90,9 +92,9 @@ private:
     size_t requiredStablePolls = 2;
     std::chrono::steady_clock::time_point lastScanTime{};
     std::map<std::string, TrackedSource> sources;
-    size_t pollsSinceFullHash = 0;
     size_t fullHashEveryNPolls = 4;
     size_t scanCount = 0;
+    mutable size_t hashCount = 0;
     bool testScanSuspended = false;
     bool initialized = false;
     bool baselineSeeded = false;

@@ -9,14 +9,18 @@
 #include "SDL3/SDL.h"
 #include "controller.h"
 #include "engine/gameInstance.h"
+#include "engine/modelPreviewRequest.h"
+#include "input/mouseMotionBatch.h"
 #include "engine/runtimeCommandExecutor.h"
 #include "engine/runtimeTestHooks.h"
 #include "engine/subsystemCollection.h"
 #include "engine/testing/runtimeValidationServices.h"
+#include "editor/scene/editorSceneActorBuilder.h"
 #include "editor/selection/materialInstanceSelection.h"
 #include "material/generator/materialParameterIncludeGenerator.h"
 #include "material/generator/materialDefinitionReloadBatch.h"
 #include "pipeline/pipelineFactory.h"
+#include "engine/editorThumbnailRenderSession.h"
 #include "platform/platformApplication.h"
 #include "platform/platformWindow.h"
 #include "profiler.h"
@@ -153,6 +157,8 @@ void EngineLoop::Shutdown()
         }
 
         rendererBackend->WaitIdle();
+        thumbnailSession.reset();
+        thumbnailRequest.reset();
         if (uiSubsystem)
         {
             RenderSystem::GetInstance().SetUiRenderSnapshotQueue(nullptr);
@@ -284,6 +290,9 @@ RuntimeResult<void> EngineLoop::InitializeRuntimeSystems(
         UiSubsystemDesc uiDesc;
         uiDesc.viewportWidth = static_cast<uint32_t>(GetRuntimeConfig().GetWindowSize().x());
         uiDesc.viewportHeight = static_cast<uint32_t>(GetRuntimeConfig().GetWindowSize().y());
+        const vk::Format uiFormat = rendererBackend->GetSwapchainImageFormat();
+        uiDesc.srgbFramebuffer = uiFormat == vk::Format::eB8G8R8A8Srgb ||
+            uiFormat == vk::Format::eR8G8B8A8Srgb;
         uiDesc.assetRoot = GetRuntimeConfig().ResolvePath(uiSettings.assetRoot);
         uiDesc.documentPath = GetRuntimeConfig().ResolvePath(
             (std::filesystem::path(uiSettings.assetRoot) / uiSettings.document).generic_string());
@@ -445,6 +454,13 @@ void EngineLoop::Tick()
     commandResult.activeWorldBeforeCommand = activeWorldBeforeCommand;
 
     ProcessRequestedWorldTransition(commandResult);
+    if (const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld())
+    {
+        const auto rect = uiSubsystem ? uiSubsystem->GetSceneViewportRect() : UiViewportRect{};
+        const float aspect = rect.width && rect.height ? float(rect.width) / float(rect.height)
+            : GetRuntimeConfig().GetWindowAspectRatio();
+        modelPreviewCamera.Synchronize(*world, aspect);
+    }
     if (commandResult.loadWorldAttempted &&
         uiSubsystem != nullptr)
     {
@@ -511,8 +527,10 @@ void EngineLoop::Tick()
     {
         int drawableWidth = 0;
         int drawableHeight = 0;
-        if (!SDL_GetWindowSizeInPixels(
-                window->GetNativeHandle(), &drawableWidth, &drawableHeight))
+        // 经平台层查询，而不是在这里直接碰 SDL：绘制尺寸的含义属于平台层，
+        // 而且多窗口时"哪个窗口"必须是一个可传入的身份，不能靠一个隐含的全局窗口。
+        window->GetSizeInPixels(drawableWidth, drawableHeight);
+        if (drawableWidth <= 0 || drawableHeight <= 0)
         {
             GetSubsystems().GetDiagnosticsSubsystem().ReportError(
                 std::string("Cannot query drawable size after swapchain out-of-date: ") +
@@ -560,6 +578,8 @@ void EngineLoop::Tick()
         uiSubsystem->TickMaterialInstanceEditor();
     }
     UpdateUiViewModel(deltaTime, commandResult);
+    SynchronizeSceneViewport();
+    TickEditorThumbnails();
 
     {
         PROFILE_SCOPE("RenderLoop");
@@ -596,9 +616,7 @@ void EngineLoop::ApplyQueuedUiActions()
     std::vector<UiAction> actions = GetSubsystems().GetCommandBus().DrainUiActions();
     for (const UiAction& action : actions)
     {
-        if (action.type == UiActionType::ToggleRuntimePage ||
-            action.type == UiActionType::CloseRuntimePage ||
-            action.type == UiActionType::ToggleDeveloperUi ||
+        if (action.type == UiActionType::ToggleDeveloperUi ||
             action.type == UiActionType::SetLocale)
         {
             if (uiSubsystem != nullptr)
@@ -622,10 +640,30 @@ void EngineLoop::ApplyQueuedUiActions()
             continue;
         }
 
+        if (action.type == UiActionType::NavigateModelPreview)
+        {
+            const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
+            const auto rect = uiSubsystem ? uiSubsystem->GetSceneViewportRect() : UiViewportRect{};
+            if (world && rect.width && rect.height)
+                modelPreviewCamera.Apply(*world, action.previewCamera,
+                    float(rect.width) / float(rect.height), float(rect.width));
+            continue;
+        }
+
         RuntimeCommand command;
         command.sourceText = "ui";
         switch (action.type)
         {
+        case UiActionType::PreviewMaterial:
+            command.type = RuntimeCommandType::LoadWorld;
+            command.stringValue = ModelPreviewScenePath;
+            command.extraSceneObjects = BuildMaterialPreviewObjects(action.stringValue);
+            break;
+        case UiActionType::PreviewModel:
+            command.type = RuntimeCommandType::LoadWorld;
+            command.stringValue = ModelPreviewScenePath;
+            command.extraSceneObjects = BuildModelPreviewObjects(action.stringValue);
+            break;
         case UiActionType::LoadWorld:
             command.type = RuntimeCommandType::LoadWorld;
             command.stringValue = action.stringValue;
@@ -738,6 +776,12 @@ void EngineLoop::ApplyQueuedUiActions()
             command.type = RuntimeCommandType::SetSunIntensity;
             command.floatValue = action.floatValue;
             break;
+        case UiActionType::SetActorVisible:
+            // 身份字符串与 0/1 原样跨越 GT→执行边界；World 查找与校验只在执行端做。
+            command.type = RuntimeCommandType::SetActorVisible;
+            command.stringValue = action.stringValue;
+            command.intValue = action.intValue;
+            break;
         case UiActionType::SetSpeedTreeStrength:
             command.type = RuntimeCommandType::SetSpeedTreeStrength;
             command.floatValue = action.floatValue;
@@ -755,7 +799,7 @@ void EngineLoop::ApplyQueuedUiActions()
         GetSubsystems().GetCommandBus().Queue(std::move(command));
     }
 
-    // ImGui 场景列表只提交值语义 selection 请求；在这里统一落到 renderer，
+    // RmlUi 场景列表只提交值语义 selection 请求；在这里统一落到 renderer，
     // 确保选择描边与常规视口拾取走同一个稳定帧边界。
     if (uiSubsystem != nullptr)
     {
@@ -776,6 +820,13 @@ void EngineLoop::ApplyQueuedUiActions()
             RenderSystem::GetInstance().SetSelectedMaterialInstance(
                 materialSelection.value());
         }
+
+        // 选中灯光/相机/环境等非网格 actor 时清掉渲染端描边：编辑器里同一时刻
+        // 只能有一个选中对象，不能让大纲与视口各留一个。
+        if (uiSubsystem->ConsumeSceneSelectionClearRequest())
+        {
+            RenderSystem::GetInstance().ClearSelectedMaterialInstance();
+        }
     }
 }
 
@@ -786,14 +837,32 @@ void EngineLoop::UpdateUiInputPolicy()
     {
         inputSubsystem.SetGameKeyboardEnabled(true);
         inputSubsystem.SetGamePointerEnabled(true);
+        window->ClearMouseConstraint();
         inputSubsystem.SetRelativeMouseModeAllowed(true);
         return;
     }
 
+    const bool relativeAllowed = uiSubsystem->ShouldUseRelativeMouseModeForGame();
+    const bool constrainToViewport =
+        inputSubsystem.IsRelativeMouseModeRequested() &&
+        uiSubsystem->IsDeveloperUiVisible() &&
+        relativeAllowed;
+    if (constrainToViewport)
+    {
+        const UiViewportRect& viewport = uiSubsystem->GetSceneViewportRect();
+        window->SetMouseConstraint(
+            static_cast<int>(viewport.x),
+            static_cast<int>(viewport.y),
+            static_cast<int>(viewport.width),
+            static_cast<int>(viewport.height));
+    }
+    else
+    {
+        window->ClearMouseConstraint();
+    }
     inputSubsystem.SetGameKeyboardEnabled(uiSubsystem->ShouldGameReceiveKeyboard());
     inputSubsystem.SetGamePointerEnabled(uiSubsystem->ShouldGameReceivePointer());
-    inputSubsystem.SetRelativeMouseModeAllowed(
-        uiSubsystem->ShouldUseRelativeMouseModeForGame());
+    inputSubsystem.SetRelativeMouseModeAllowed(relativeAllowed);
 }
 
 void EngineLoop::UpdateUiViewModel(
@@ -890,7 +959,70 @@ void EngineLoop::UpdateUiViewModel(
     snapshot.activeWorldPath = activeWorld.scenePath;
     uiSubsystem->SetMaterialInstanceSceneModels(
         renderSystem.GetMaterialInstanceModelContexts());
+    // 世界大纲的数据源是 active World 本身，而不是只含带 MI 网格的 RenderScene 子集。
+    // 在同一个稳定帧边界拍出值语义副本，UI 回调里不再访问 World。
+    uiSubsystem->SetSceneActors(uiActiveWorld != nullptr
+        ? BuildEditorSceneActors(*uiActiveWorld)
+        : std::vector<EditorUi::EditorSceneActorSnapshot>{});
     uiSubsystem->Update(snapshot);
+}
+
+void EngineLoop::SynchronizeSceneViewport()
+{
+    if (uiSubsystem == nullptr) return;
+    const auto& rect = uiSubsystem->GetSceneViewportRect();
+    const auto aspect = ViewportAspect(rect);
+    auto& renderSystem = RenderSystem::GetInstance();
+    renderSystem.SetSceneViewport(rect, uiSubsystem->IsSceneViewportEnabled());
+    const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
+    if (aspect && world && world->GetCamera())
+    {
+        // 在 World snapshot 冻结前更新投影；渲染、阴影视锥、离线相机与拾取共享同一相机。
+        auto& camera = *world->GetCamera();
+        camera.SetProjection(camera.GetHFOV(), *aspect, camera.GetClipNear(), camera.GetClipFar());
+    }
+}
+
+void EngineLoop::TickEditorThumbnails()
+{
+    if (!uiSubsystem) return;
+    auto* library = uiSubsystem->GetThumbnailLibrary();
+    if (!library) return;
+    if (thumbnailRequest && !library->IsRenderRequestCurrent(*thumbnailRequest))
+    {
+        thumbnailRequest.reset();
+    }
+    const auto now = std::chrono::steady_clock::now();
+    for (const auto& event : platformEvents)
+        if (event.type == PlatformEventType::MouseMove || event.type == PlatformEventType::MouseWheel ||
+            event.type == PlatformEventType::MouseButtonDown || event.type == PlatformEventType::MouseButtonUp ||
+            event.type == PlatformEventType::KeyDown || event.type == PlatformEventType::KeyUp ||
+            event.type == PlatformEventType::WindowResized) thumbnailIdleSince = now;
+    if (!uiSubsystem->CanRenderThumbnails()) thumbnailIdleSince = now;
+    if (now - thumbnailIdleSince < std::chrono::milliseconds(750)) return;
+    // 上一帧 RT 已归还所有权；这里不调用活动 World 的加载事务，也不重绑活动图。
+    if (!thumbnailRequest)
+    {
+        thumbnailRequest = library->TakeRenderRequest();
+        if (!thumbnailRequest) return;
+        if (thumbnailSessionEpoch != thumbnailRequest->epoch) thumbnailSession.reset();
+        thumbnailSessionEpoch = thumbnailRequest->epoch;
+        if (!thumbnailSession)
+            thumbnailSession = std::make_unique<EditorThumbnailRenderSession>(*rendererBackend, *pipelineFactory);
+        thumbnailSession->Begin(thumbnailRequest->path, thumbnailRequest->kind, GetRuntimeConfig().GetRenderGraphJson());
+        return;
+    }
+    if (!thumbnailSession)
+    {
+        thumbnailSession = std::make_unique<EditorThumbnailRenderSession>(*rendererBackend, *pipelineFactory);
+        thumbnailSession->Begin(thumbnailRequest->path, thumbnailRequest->kind, GetRuntimeConfig().GetRenderGraphJson());
+        return;
+    }
+    if (thumbnailSession->Step())
+    {
+        library->CompleteRenderRequest(*thumbnailRequest, thumbnailSession->Image(), thumbnailSession->Error());
+        thumbnailRequest.reset();
+    }
 }
 
 void EngineLoop::PumpPlatformEvents()
@@ -898,6 +1030,9 @@ void EngineLoop::PumpPlatformEvents()
     PROFILE_SCOPE("Events");
 
     platformApplication->PollEvents(platformEvents);
+    // 高回报率鼠标不能让相机移动重复触发整棵 UI 命中测试；普通 UI 拖动保留原事件。
+    if (GetSubsystems().GetInputSubsystem().IsRelativeMouseModeEnabled())
+        CoalesceRelativeMouseMotion(platformEvents);
     for (const PlatformEvent& event : platformEvents)
     {
         if ((event.type == PlatformEventType::KeyDown ||
@@ -931,7 +1066,10 @@ void EngineLoop::PumpPlatformEvents()
             continue;
         }
 
-        if (uiSubsystem != nullptr &&
+        if (event.type == PlatformEventType::MouseButtonDown &&
+            event.mouseButton == PlatformMouseButton::Left && uiSubsystem != nullptr &&
+            !GetSubsystems().GetInputSubsystem().IsRelativeMouseModeRequested() &&
+            !GetSubsystems().GetInputSubsystem().IsRelativeMouseModeEnabled() &&
             uiSubsystem->IsScenePickTarget(event.mouseX, event.mouseY))
         {
             const std::optional<Editor::Selection::ScenePickRequest> pickRequest =
@@ -941,27 +1079,27 @@ void EngineLoop::PumpPlatformEvents()
                     uiSubsystem->GetViewportHeight());
             if (pickRequest.has_value())
             {
+                const auto point = uiSubsystem->GetSceneViewportPoint(pickRequest->mouseX, pickRequest->mouseY);
+                if (!point) continue;
                 const std::optional<Editor::Selection::MaterialInstanceSelection>
                     selection = RenderSystem::GetInstance().PickMaterialInstanceAt(
-                        pickRequest->mouseX,
-                        pickRequest->mouseY,
-                        pickRequest->viewportWidth,
-                        pickRequest->viewportHeight);
+                        point->x,
+                        point->y,
+                        point->renderWidth,
+                        point->renderHeight);
                 if (selection.has_value())
                 {
                     // 高亮是视口选择反馈，不依赖 MI 面板是否成功打开；
                     // 这样即使编辑器文档暂时不可用，点击结果仍立即可见。
                     RenderSystem::GetInstance().SetSelectedMaterialInstance(*selection);
-                    const bool opened =
-                        uiSubsystem->OpenMaterialInstanceFromSelection(*selection);
+                    const bool selected =
+                        uiSubsystem->SelectSceneObjectFromPick(*selection);
                     GetSubsystems().GetDiagnosticsSubsystem().ReportInfo(
-                        opened
-                            ? "Selected Material Instance '" +
-                                selection->materialInstancePath + "' from '" +
-                                selection->objectIdentity + "'."
+                        selected
+                            ? "Selected scene object '" + selection->objectIdentity + "'."
                             : "Selected scene object '" +
                                 selection->objectIdentity +
-                                "' but the MI editor could not open its document.");
+                                "' but the editor could not update its selection.");
                 }
                 else
                 {
@@ -983,12 +1121,33 @@ void EngineLoop::PumpPlatformEvents()
 
         if (event.type == PlatformEventType::WindowResized)
         {
+            // 两种尺寸在这里分流，且必须分流：Vulkan 的 swapchain 要**物理像素**，
+            // 而 UI 布局要**逻辑尺寸**。此前两者都拿逻辑尺寸，于是 swapchain 在系统缩放下
+            // 会被建成逻辑尺寸 —— 在 100% 缩放上看不出来，所以这条只能在代码里保证。
+            uint32_t drawableWidth = event.pixelWidth;
+            uint32_t drawableHeight = event.pixelHeight;
+            if (drawableWidth == 0 || drawableHeight == 0)
+            {
+                // 事件没带像素尺寸时（例如合成器未及时更新），回退到像素查询而不是逻辑尺寸，
+                // 因为"用错尺寸"比"尺寸略旧"严重得多。
+                int queriedWidth = 0;
+                int queriedHeight = 0;
+                window->GetSizeInPixels(queriedWidth, queriedHeight);
+                drawableWidth = static_cast<uint32_t>(queriedWidth > 0 ? queriedWidth : 0);
+                drawableHeight = static_cast<uint32_t>(queriedHeight > 0 ? queriedHeight : 0);
+            }
             GetSubsystems().GetDiagnosticsSubsystem().ReportInfo(
                 "Window resized to " +
                 std::to_string(event.width) +
                 "x" +
-                std::to_string(event.height));
-            auto resizeResult = RecreateRendererForWindowResize(event.width, event.height);
+                std::to_string(event.height) +
+                " (drawable " +
+                std::to_string(drawableWidth) +
+                "x" +
+                std::to_string(drawableHeight) +
+                ")");
+            auto resizeResult = RecreateRendererForWindowResize(
+                static_cast<int>(drawableWidth), static_cast<int>(drawableHeight));
             if (resizeResult.IsFailure())
             {
                 GetSubsystems().GetDiagnosticsSubsystem().ReportRuntimeError(
@@ -1066,7 +1225,8 @@ RuntimeResult<WorldHandle>
 EngineLoop::ExecuteWorldGraphTransaction(
     const std::string& scenePath,
     const MaterialDefinitionReloadBatch*
-        materialDefinitionReload)
+        materialDefinitionReload,
+    const nlohmann::json& extraSceneObjects)
 {
     if (!rendererBackend || !rendererBackendInitialized)
     {
@@ -1087,7 +1247,8 @@ EngineLoop::ExecuteWorldGraphTransaction(
 
     return worldGraphTransactionCoordinator->Execute(
         scenePath,
-        materialDefinitionReload);
+        materialDefinitionReload,
+        extraSceneObjects);
 }
 
 RuntimeResult<WorldHandle>
@@ -1128,7 +1289,9 @@ void EngineLoop::ProcessRequestedWorldTransition(
     auto transactionResult =
         ExecuteWorldGraphTransaction(
             commandResult
-                .loadWorldResolvedPath);
+                .loadWorldResolvedPath,
+            nullptr,
+            commandResult.loadWorldExtraSceneObjects);
     if (transactionResult.IsFailure())
     {
         commandResult.loadWorldError =
@@ -1233,6 +1396,7 @@ RuntimeResult<void> EngineLoop::RecreateRendererForWindowResize(uint32_t width, 
         auto passMaterialSnapshot = renderGraph.CapturePassMaterialInstances();
 
         liveResizeMutationStarted = true;
+        thumbnailSession.reset();
         renderGraph.Shutdown(*rendererBackend);
         RenderSystem::GetInstance().ReleaseSwapchainDependentResources();
         rendererBackend->RecreateSwapchain(

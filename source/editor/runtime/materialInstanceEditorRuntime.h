@@ -12,12 +12,12 @@
 #include "editor/command/editorCommandBus.h"
 #include "editor/preview/materialInstancePreviewController.h"
 #include "editor/service/materialInstanceDocumentService.h"
-#include "editor/ui/materialInstanceAssetEditorPanel.h"
+#include "editor/ui/materialInstanceEditorView.h"
 
 namespace VL::Editor
 {
 
-// 这是 ImGui 与 Asset Document 之间的 game-thread facade。
+// 这是 RmlUi 与 Asset Document 之间的 game-thread facade。
 // 面板只提交 EditorCommand，服务只在 Tick() 的 drain 阶段被调用。
 class MaterialInstanceEditorRuntime final :
     public EditorUi::IEditorCommandSink

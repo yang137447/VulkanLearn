@@ -2,17 +2,20 @@
 
 #include <string>
 #include <string_view>
+#include <cstdint>
 
 namespace VL
 {
 
 enum class UiActionType
 {
-    ToggleRuntimePage,
-    CloseRuntimePage,
     ToggleDeveloperUi,
     SetLocale,
     LoadWorld,
+    // stringValue 是资源根相对模型路径；GT 将其转为中性场景的 LoadWorld 注入请求。
+    PreviewModel,
+    PreviewMaterial,
+    NavigateModelPreview,
     SetCameraMoveSpeed,
     SetDebugViewMode,
     SetToneMappingMode,
@@ -39,6 +42,9 @@ enum class UiActionType
     SaveCsmSettingsToScene,
     SetEnvironmentIntensity,
     SetSunIntensity,
+    // 逐 actor 可见性：stringValue 携带大纲的稳定身份（"pointLight|Key_Point_Light"），
+    // intValue 是 0/1。身份在执行边界解析并校验，UI 回调不接触 World。
+    SetActorVisible,
     SetSpeedTreeStrength,
     SetSpeedTreeGustingEnabled,
     ForceSpeedTreeGust,
@@ -61,12 +67,24 @@ inline const char* OfflineSettingValidationError(std::string_view name, int valu
 
 // Carries typed UI-to-engine mutation requests for CommandBus and EngineLoop.
 // It does not mutate renderer or gameplay state itself.
+enum class ModelPreviewNavigation { Orbit, Pan, Zoom, Frame };
+
+// 预览输入绑定已发布的 World 代数；切标签后的旧鼠标事件不能修改新关卡。
+struct ModelPreviewCameraInput
+{
+    ModelPreviewNavigation mode = ModelPreviewNavigation::Orbit;
+    uint64_t worldGeneration = 0;
+    float x = 0.0f;
+    float y = 0.0f;
+};
+
 struct UiAction
 {
-    UiActionType type = UiActionType::ToggleRuntimePage;
+    UiActionType type = UiActionType::ToggleDeveloperUi;
     int intValue = 0;
     float floatValue = 0.0f;
     std::string stringValue;
+    ModelPreviewCameraInput previewCamera;
 };
 
 } // namespace VL

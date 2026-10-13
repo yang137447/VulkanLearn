@@ -191,7 +191,7 @@ std::string_view GetEditorCommandSourceName(EditorCommandSource source) noexcept
 {
     switch (source)
     {
-    case EditorCommandSource::ImGui: return "imgui";
+    case EditorCommandSource::RmlUi: return "rmlui";
     case EditorCommandSource::Console: return "console";
     case EditorCommandSource::AI: return "ai";
     case EditorCommandSource::RuntimeTest: return "runtime_test";
@@ -470,7 +470,7 @@ std::optional<EditorErrorCode> ValidateEditorCommandEnvelope(const EditorCommand
     if (command.commandId == 0) return EditorErrorCode::InvalidCommandId;
     switch (command.source)
     {
-    case EditorCommandSource::ImGui:
+    case EditorCommandSource::RmlUi:
     case EditorCommandSource::Console:
     case EditorCommandSource::AI:
     case EditorCommandSource::RuntimeTest:

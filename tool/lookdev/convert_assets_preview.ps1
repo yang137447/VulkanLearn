@@ -81,7 +81,7 @@ try {
 
     Write-Host ''
     Write-Host 'UE lookdev conversion complete.'
-    Write-Host "Article scene: $resource\Generated\Lookdev\SC_lookdev_article.json"
+    Write-Host "Article scene: $resource\Maps\SC_lookdev_article\SC_lookdev_article.json"
     Write-Host "Import manifest: $resource\Generated\Import\ue_assets_preview_import.json"
 }
 finally {

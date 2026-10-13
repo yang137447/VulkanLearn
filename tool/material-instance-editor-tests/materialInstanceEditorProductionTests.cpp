@@ -255,6 +255,20 @@ const EditorUi::EditorParameterSnapshot* FindUiParameter(
     return iterator == document.parameters.end() ? nullptr : &*iterator;
 }
 
+const EditorUi::EditorRenderStateSnapshot* FindUiRenderState(
+    const EditorUi::MaterialInstanceDocumentSnapshot& document,
+    std::string_view name)
+{
+    const auto iterator = std::find_if(
+        document.renderStates.begin(),
+        document.renderStates.end(),
+        [name](const EditorUi::EditorRenderStateSnapshot& state)
+        {
+            return state.name == name;
+        });
+    return iterator == document.renderStates.end() ? nullptr : &*iterator;
+}
+
 const EditorUi::MaterialInstanceDocumentSnapshot& RequireUiDocument(
     const MaterialInstanceEditorRuntime& runtime)
 {
@@ -262,6 +276,29 @@ const EditorUi::MaterialInstanceDocumentSnapshot& RequireUiDocument(
         runtime.GetSnapshot().activeDocument.has_value(),
         "production runtime did not publish an active document");
     return runtime.GetSnapshot().activeDocument.value();
+}
+
+void RequireUiRenderState(
+    const MaterialInstanceEditorRuntime& runtime,
+    std::string_view name,
+    std::string_view effectiveValue,
+    std::optional<std::string_view> overrideValue)
+{
+    const auto& document = RequireUiDocument(runtime);
+    const EditorUi::EditorRenderStateSnapshot* state =
+        FindUiRenderState(document, name);
+    Require(state != nullptr, "production runtime omitted a render state snapshot");
+    Require(
+        state->effectiveValue == effectiveValue &&
+            state->overrideValue.has_value() == overrideValue.has_value(),
+        "production runtime returned an unexpected render state snapshot");
+    if (overrideValue.has_value())
+    {
+        Require(
+            state->overrideValue.has_value() &&
+                state->overrideValue.value() == overrideValue.value(),
+            "production runtime returned an unexpected render state override");
+    }
 }
 
 void SubmitRuntimeCommand(
@@ -490,6 +527,78 @@ void TestProductionRenderStatePreviewBoundary()
                 EditorUi::EditorDocumentStatus::Clean,
             "render-state preview boundary test did not restore the document baseline");
     }
+
+    runtime.Shutdown();
+}
+
+// 直接提交的 render state 命令必须与 ExecuteEditorCommandBatch 落到同一 service 实现。
+// JSON codec / Console / AI 客户端不经过 batch 包装，这里锁定这条协议契约。
+void TestProductionDirectRenderStateRouting()
+{
+    ProductionFixture fixture;
+    MaterialInstanceEditorRuntime runtime;
+    const RuntimeResult<void> initialized = runtime.Initialize(
+        MaterialInstanceEditorRuntime::Config{
+            fixture.resourceRoot,
+            fixture.projectRoot,
+            64});
+    Require(
+        initialized.IsSuccess(),
+        "production runtime failed to initialize direct render-state coverage");
+
+    OpenMaterialInstanceAssetPayload openPayload;
+    openPayload.assetPath = kMaterialInstancePath;
+    openPayload.origin = EditorNavigationOrigin{
+        "scenes/scene_editor.json",
+        "mesh-car",
+        0,
+        "body"};
+    SubmitRuntimeCommand(
+        runtime,
+        13001,
+        EditorCommandType::OpenMaterialInstanceAsset,
+        EditorCommandPayload{std::move(openPayload)});
+    RequireUiRenderState(runtime, "renderMode", "Opaque", std::nullopt);
+
+    const EditorDocumentRevision revisionBeforeSet =
+        RequireUiDocument(runtime).revision;
+    SubmitRuntimeCommand(
+        runtime,
+        13002,
+        EditorCommandType::SetMaterialRenderStateOverride,
+        EditorCommandPayload{SetMaterialRenderStateOverridePayload{
+            kMaterialInstancePath,
+            EditorMaterialRenderStateField::RenderMode,
+            EditorMaterialRenderStateValue{
+                EditorMaterialRenderMode::TransparentAlphaBlend}}},
+        revisionBeforeSet);
+    Require(
+        RequireUiDocument(runtime).status == EditorUi::EditorDocumentStatus::Dirty &&
+            RequireUiDocument(runtime).revision == revisionBeforeSet + 1,
+        "direct render-state set did not reach the document service: " +
+            runtime.GetSnapshot().statusMessage);
+    RequireUiRenderState(
+        runtime,
+        "renderMode",
+        "TransparentAlphaBlend",
+        std::string_view("TransparentAlphaBlend"));
+
+    const EditorDocumentRevision revisionBeforeClear =
+        RequireUiDocument(runtime).revision;
+    SubmitRuntimeCommand(
+        runtime,
+        13003,
+        EditorCommandType::ClearMaterialRenderStateOverride,
+        EditorCommandPayload{ClearMaterialRenderStateOverridePayload{
+            kMaterialInstancePath,
+            EditorMaterialRenderStateField::RenderMode}},
+        revisionBeforeClear);
+    Require(
+        RequireUiDocument(runtime).status == EditorUi::EditorDocumentStatus::Clean &&
+            RequireUiDocument(runtime).revision == revisionBeforeClear + 1,
+        "direct render-state clear did not reach the document service: " +
+            runtime.GetSnapshot().statusMessage);
+    RequireUiRenderState(runtime, "renderMode", "Opaque", std::nullopt);
 
     runtime.Shutdown();
 }
@@ -1324,6 +1433,11 @@ TEST(MaterialInstanceEditorProduction, RenderStatePreviewBoundary)
     TestProductionRenderStatePreviewBoundary();
 }
 
+TEST(MaterialInstanceEditorProduction, DirectRenderStateRouting)
+{
+    TestProductionDirectRenderStateRouting();
+}
+
 TEST(MaterialInstanceEditorProduction, DocumentService)
 {
     TestProductionDocumentService();
@@ -1332,4 +1446,19 @@ TEST(MaterialInstanceEditorProduction, DocumentService)
 TEST(MaterialInstanceEditorProduction, Runtime)
 {
     TestProductionRuntime();
+}
+
+TEST(MaterialInstanceEditorProduction, StartupBrowserCatalogIsNotTruncatedToTheDefaultPage)
+{
+    ProductionFixture fixture;
+    for (uint32_t index = 0; index < 60; ++index)
+        CopyFixtureFile("MI_editor_test_original.json",
+            fixture.resourceRoot / "catalog" / ("MI_catalog_" + std::to_string(index) + ".json"));
+    MaterialInstanceEditorRuntime runtime;
+    const auto initialized = runtime.Initialize(
+        MaterialInstanceEditorRuntime::Config{fixture.resourceRoot, fixture.projectRoot});
+    ASSERT_TRUE(initialized.IsSuccess());
+    EXPECT_EQ(runtime.GetSnapshot().assets.size(), 61u);
+    EXPECT_TRUE(std::any_of(runtime.GetSnapshot().assets.begin(), runtime.GetSnapshot().assets.end(),
+        [](const auto& asset) { return asset.assetPath == "catalog/MI_catalog_59.json"; }));
 }

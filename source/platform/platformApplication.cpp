@@ -29,6 +29,7 @@ PlatformKey TranslateKey(SDL_Scancode scancode)
     case SDL_SCANCODE_RETURN: return PlatformKey::Enter;
     case SDL_SCANCODE_ESCAPE: return PlatformKey::Escape;
     case SDL_SCANCODE_A: return PlatformKey::A;
+    case SDL_SCANCODE_S: return PlatformKey::S;
     case SDL_SCANCODE_C: return PlatformKey::C;
     case SDL_SCANCODE_V: return PlatformKey::V;
     case SDL_SCANCODE_X: return PlatformKey::X;
@@ -36,6 +37,7 @@ PlatformKey TranslateKey(SDL_Scancode scancode)
     case SDL_SCANCODE_Z: return PlatformKey::Z;
     case SDL_SCANCODE_F1: return PlatformKey::F1;
     case SDL_SCANCODE_F10: return PlatformKey::F10;
+    case SDL_SCANCODE_F11: return PlatformKey::F11;
     case SDL_SCANCODE_0: return PlatformKey::Num0;
     case SDL_SCANCODE_1: return PlatformKey::Num1;
     case SDL_SCANCODE_2: return PlatformKey::Num2;
@@ -137,7 +139,9 @@ RuntimeResult<void> PlatformApplication::Initialize(const PlatformApplicationDes
     }
     vulkanLoaderLoaded = true;
 
-    auto windowResult = window.Create(
+    // 主窗口进入注册表并成为序号 0。`GetWindow()` 返回它，因此既有调用点语义不变。
+    windows.push_back(std::make_unique<PlatformWindow>());
+    auto windowResult = windows.front()->Create(
         desc.windowTitle.c_str(),
         desc.windowWidth,
         desc.windowHeight,
@@ -145,6 +149,7 @@ RuntimeResult<void> PlatformApplication::Initialize(const PlatformApplicationDes
         desc.resizableWindow);
     if (windowResult.IsFailure())
     {
+        windows.clear();
         return windowResult;
     }
 
@@ -170,7 +175,16 @@ void PlatformApplication::Shutdown()
 {
     vulkanExtensions.clear();
     CloseAllGamepads();
-    window.Destroy();
+    // 逆序销毁：后建的窗口可能引用了先建窗口所在的资源（例如共享的 UI 上下文），
+    // 逆序保证依赖方先消失。
+    for (auto it = windows.rbegin(); it != windows.rend(); ++it)
+    {
+        if (*it != nullptr)
+        {
+            (*it)->Destroy();
+        }
+    }
+    windows.clear();
 
     if (vulkanLoaderLoaded)
     {
@@ -183,6 +197,63 @@ void PlatformApplication::Shutdown()
         SDL_Quit();
         sdlInitialized = false;
     }
+}
+
+PlatformWindow* PlatformApplication::FindWindowById(uint32_t windowId)
+{
+    for (auto& candidate : windows)
+    {
+        if (candidate != nullptr && candidate->GetId() == windowId)
+        {
+            return candidate.get();
+        }
+    }
+    return nullptr;
+}
+
+RuntimeResult<size_t> PlatformApplication::OpenWindow(const WindowDesc& desc)
+{
+    if (!sdlInitialized)
+    {
+        return RuntimeResult<size_t>::Failure(MakeRuntimeError(
+            "PlatformApplication.OpenWindowBeforeInitialize",
+            "A window cannot be opened before platform initialization."));
+    }
+    if (desc.width <= 0 || desc.height <= 0)
+    {
+        return RuntimeResult<size_t>::Failure(MakeRuntimeError(
+            "PlatformApplication.OpenWindowInvalidSize",
+            "PlatformApplication requires a positive window size."));
+    }
+
+    auto candidate = std::make_unique<PlatformWindow>();
+    // Create 的 hidden 与 visible 语义相反：这里按"是否可见"传入，转换只在这一处发生。
+    auto result = candidate->Create(
+        desc.title.c_str(), desc.width, desc.height, !desc.visible, desc.resizable);
+    if (result.IsFailure())
+    {
+        return RuntimeResult<size_t>::Failure(result.Error());
+    }
+
+    // 新窗口必须有自己的 Vulkan surface。它不在这里创建：surface 属于呈现层，
+    // 平台层只负责窗口本身。调用方拿到序号后自行创建对应呈现目标。
+    windows.push_back(std::move(candidate));
+    return RuntimeResult<size_t>::Success(windows.size() - 1);
+}
+
+bool PlatformApplication::CloseWindow(size_t windowIndex)
+{
+    // 主窗口不在此关闭：它的关闭等于应用退出，必须走 Quit 路径而不是静默销毁。
+    if (windowIndex == 0 || windowIndex >= windows.size())
+    {
+        return false;
+    }
+    if (windows[windowIndex] != nullptr)
+    {
+        windows[windowIndex]->Destroy();
+    }
+    windows.erase(windows.begin() + static_cast<std::ptrdiff_t>(windowIndex));
+    return true;
 }
 
 bool PlatformApplication::OpenGamepad(uint32_t instanceId)
@@ -228,6 +299,18 @@ void PlatformApplication::CloseAllGamepads()
     }
     gamepads.clear();
 }
+namespace
+{
+// SDL 的事件里，窗口来源的事件都带一个 windowID；手柄等设备来源的事件没有。
+// 用这个模板统一盖章，而不是在每个分支里各写一次 —— 后者漏掉一个分支就是
+// "某个事件莫名属于主窗口"，而那种错误不会报错、只会表现为输入走错窗口。
+template <typename SDLEvent>
+void StampWindowId(PlatformEvent& out, const SDLEvent& source)
+{
+    out.windowId = static_cast<uint32_t>(source.windowID);
+}
+} // namespace
+
 void PlatformApplication::PollEvents(std::vector<PlatformEvent>& outEvents)
 {
     outEvents.clear();
@@ -243,6 +326,7 @@ void PlatformApplication::PollEvents(std::vector<PlatformEvent>& outEvents)
             platformEvent.key = TranslateKey(event.key.scancode);
             platformEvent.repeat = event.key.repeat;
             ApplyModifiers(platformEvent, event.key.mod);
+            StampWindowId(platformEvent, event.key);
             outEvents.push_back(platformEvent);
             continue;
         }
@@ -252,6 +336,7 @@ void PlatformApplication::PollEvents(std::vector<PlatformEvent>& outEvents)
             PlatformEvent platformEvent;
             platformEvent.type = PlatformEventType::TextInput;
             platformEvent.text = event.text.text != nullptr ? event.text.text : "";
+            StampWindowId(platformEvent, event.text);
             outEvents.push_back(std::move(platformEvent));
             continue;
         }
@@ -263,6 +348,7 @@ void PlatformApplication::PollEvents(std::vector<PlatformEvent>& outEvents)
             platformEvent.text = event.edit.text != nullptr ? event.edit.text : "";
             platformEvent.textEditingStart = event.edit.start;
             platformEvent.textEditingLength = event.edit.length;
+            StampWindowId(platformEvent, event.edit);
             outEvents.push_back(std::move(platformEvent));
             continue;
         }
@@ -276,6 +362,7 @@ void PlatformApplication::PollEvents(std::vector<PlatformEvent>& outEvents)
             platformEvent.mouseDeltaX = event.motion.xrel;
             platformEvent.mouseDeltaY = event.motion.yrel;
             ApplyModifiers(platformEvent, SDL_GetModState());
+            StampWindowId(platformEvent, event.motion);
             outEvents.push_back(platformEvent);
             continue;
         }
@@ -289,6 +376,7 @@ void PlatformApplication::PollEvents(std::vector<PlatformEvent>& outEvents)
             platformEvent.mouseX = event.button.x;
             platformEvent.mouseY = event.button.y;
             ApplyModifiers(platformEvent, SDL_GetModState());
+            StampWindowId(platformEvent, event.button);
             outEvents.push_back(platformEvent);
             continue;
         }
@@ -303,6 +391,7 @@ void PlatformApplication::PollEvents(std::vector<PlatformEvent>& outEvents)
             platformEvent.mouseX = event.wheel.mouse_x;
             platformEvent.mouseY = event.wheel.mouse_y;
             ApplyModifiers(platformEvent, SDL_GetModState());
+            StampWindowId(platformEvent, event.wheel);
             outEvents.push_back(platformEvent);
             continue;
         }
@@ -311,6 +400,7 @@ void PlatformApplication::PollEvents(std::vector<PlatformEvent>& outEvents)
         {
             PlatformEvent platformEvent;
             platformEvent.type = PlatformEventType::MouseLeave;
+            StampWindowId(platformEvent, event.window);
             outEvents.push_back(platformEvent);
             continue;
         }
@@ -367,6 +457,7 @@ void PlatformApplication::PollEvents(std::vector<PlatformEvent>& outEvents)
             PlatformEvent platformEvent;
             platformEvent.type = event.type == SDL_EVENT_WINDOW_FOCUS_GAINED ?
                 PlatformEventType::WindowFocusGained : PlatformEventType::WindowFocusLost;
+            StampWindowId(platformEvent, event.window);
             outEvents.push_back(platformEvent);
             continue;
         }
@@ -375,8 +466,17 @@ void PlatformApplication::PollEvents(std::vector<PlatformEvent>& outEvents)
         {
             PlatformEvent platformEvent;
             platformEvent.type = PlatformEventType::WindowResized;
+            // data1/data2 是逻辑尺寸；绘制表面需要物理像素，因此在这里一并取到。
+            // 两者在 100% 缩放下相等，但 swapchain 必须用像素尺寸，不能依赖它们相等。
             platformEvent.width = static_cast<uint32_t>(event.window.data1);
             platformEvent.height = static_cast<uint32_t>(event.window.data2);
+            int pixelWidth = 0;
+            int pixelHeight = 0;
+            SDL_GetWindowSizeInPixels(SDL_GetWindowFromID(event.window.windowID),
+                &pixelWidth, &pixelHeight);
+            platformEvent.pixelWidth = static_cast<uint32_t>(pixelWidth > 0 ? pixelWidth : 0);
+            platformEvent.pixelHeight = static_cast<uint32_t>(pixelHeight > 0 ? pixelHeight : 0);
+            StampWindowId(platformEvent, event.window);
             outEvents.push_back(platformEvent);
             continue;
         }

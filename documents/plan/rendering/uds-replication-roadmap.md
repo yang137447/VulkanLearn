@@ -71,7 +71,7 @@
 
 ### 2.3 必须优先处理的性能问题
 
-旧程序化环境路径曾在单帧内全量录制 cubemap、SH 和 prefilter。Phase 0 已将该路径改为按代际和预算分帧更新，当前契约见 `documents/rendering/environment-update-scheduler.md`。
+旧程序化环境路径曾在单帧内全量录制 cubemap、SH 和 prefilter。Phase 0 已将该路径改为按代际和预算分帧更新，当前契约见 `documents/contracts/environment-update-scheduler.md`。
 
 在接入 time-of-day 之前必须完成：
 
@@ -372,7 +372,7 @@ Phase 0 和最小状态结构完成后，再根据实际 GPU 时间决定先做 
   - 天气、雾、云、降水、湿润材质和 GI 的长期路线
 - `documents/plan/rendering/environment-cubemap-ibl-unification-plan.md`
   - HDRI、程序化天空、environment cubemap、SH 和 prefilter 的统一执行计划
-- `documents/rendering/descriptor-imageinfo-management.md`
+- `documents/contracts/descriptor-imageinfo-management.md`
   - 环境纹理和 descriptor image info 的生命周期约束
-- `documents/rendering/texture-asset-json-v1.md`
+- `documents/contracts/texture-asset-json-v1.md`
   - 后续 3D 噪声和天气纹理资源格式扩展时需要参考的纹理资产契约

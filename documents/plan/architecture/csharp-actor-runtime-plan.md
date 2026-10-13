@@ -689,9 +689,9 @@ location, fixed-step requirements, and the manual reload command.
 
 When Phase 2 becomes current behavior, update:
 
-- `documents/architecture/vulkanlearn-architecture.html` with Script/Gameplay
+- `documents/contracts/vulkanlearn-architecture.html` with Script/Gameplay
   ownership and thread rules;
-- `documents/architecture/coding-guidelines.md` with ABI and managed API rules;
+- `documents/contracts/coding-guidelines.md` with ABI and managed API rules;
 - `schema/scene.schema.json` and schema documentation;
 - `README.md` with C# SDK setup, build, run, and deployment instructions.
 

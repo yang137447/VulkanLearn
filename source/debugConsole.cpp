@@ -1,4 +1,5 @@
 #include "debugConsole.h"
+#include "engine/modelPreviewRequest.h"
 
 #include <conio.h>
 #include <cctype>
@@ -254,6 +255,32 @@ void DebugConsole::ProcessCommand(const std::string& line)
         VL::RuntimeCommand runtimeCommand;
         runtimeCommand.type = VL::RuntimeCommandType::LoadWorld;
         runtimeCommand.stringValue = scenePath;
+        runtimeCommand.sourceText = line;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
+    // previewmodel <scene> <model>：把模型并入场景后加载。
+    // 这是"模型编辑器"要用的加载机制，先用命令暴露出来，因为它可以在不变 UI 的情况下
+    // 被独立验证（`--console-command` + 截图），而 UI 建在未验证的加载路径上会很贵。
+    if (command == "previewmodel")
+    {
+        std::string scenePath;
+        std::string modelPath;
+        if (!(commandStream >> scenePath >> modelPath))
+        {
+            std::cout << "Usage: previewmodel <scene-path> <model-path>" << std::endl;
+            std::cout << "  Loads the scene with the model injected as one extra scene object."
+                      << std::endl;
+            return;
+        }
+
+        // 注入对象必须自带 name 与 type：校验器按这两个字段分派对象类型，
+        // 缺任意一个都会在校验阶段报错（而不是被静默忽略）。
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type = VL::RuntimeCommandType::LoadWorld;
+        runtimeCommand.stringValue = scenePath;
+        runtimeCommand.extraSceneObjects = VL::BuildModelPreviewObjects(modelPath);
         runtimeCommand.sourceText = line;
         commandBus.Queue(std::move(runtimeCommand));
         return;

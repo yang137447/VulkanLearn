@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -13,6 +14,9 @@ namespace VL
 {
 
 using UiTextureId = std::uintptr_t;
+// GT 只记录逻辑纹理 ID；对应离屏图像与 descriptor 由当前 RT 帧绑定。
+inline constexpr UiTextureId SceneViewportTextureId = std::numeric_limits<UiTextureId>::max();
+inline constexpr const char* SceneViewportTextureSource = "vl://scene-viewport";
 
 enum class UiInputMode
 {
@@ -25,7 +29,6 @@ enum class UiInputOwner
 {
     None,
     Game,
-    RuntimeUi,
     DeveloperUi
 };
 
@@ -108,7 +111,6 @@ struct UiViewModelSnapshot
     float speedTreeStrength = 0.35f;
     bool speedTreeGustingEnabled = true;
     uint32_t speedTreeWindProfileCount = 0;
-    bool runtimePageVisible = false;
     bool developerUiVisible = false;
     // 与 Controller 一致，快照中的移动速度以 cm/s 表示。
     float cameraMoveSpeed = 1000.0f;
@@ -141,7 +143,7 @@ struct UiVertex
 {
     float position[2] = {0.0f, 0.0f};
     float texCoord[2] = {0.0f, 0.0f};
-    uint32_t color = 0xffffffffu;
+    std::array<float, 4> color{1.0f, 1.0f, 1.0f, 1.0f};
 };
 
 struct UiClipRect
@@ -182,13 +184,14 @@ struct UiTextureSnapshot
 };
 
 // Owns immutable UI geometry and texture data consumed by the render thread.
-// It is produced by UiSubsystem and contains no live RmlUi or ImGui handles.
+// It is produced by UiSubsystem and contains no live UI element handles.
 struct UiRenderSnapshot
 {
     uint64_t frameIndex = 0;
     uint32_t viewportWidth = 0;
     uint32_t viewportHeight = 0;
     UiViewportRect sceneViewportRect;
+    bool sceneViewportEnabled = false;
     std::vector<UiVertex> vertices;
     std::vector<uint32_t> indices;
     std::vector<UiDrawCommand> drawCommands;

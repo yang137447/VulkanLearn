@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "b1ee740c-6ac8-4595-ac63-7deea40ad288",
+  "status": "current",
+  "command": "deliver",
+  "type": "lifecycle",
+  "input": "C:\\Users\\pb.adcycyys001\\.codex\\worktrees\\rmlui-editor\\VulkanLearn\\documents\\contracts\\diagrams\\world-graph-transaction-lifecycle.json",
+  "output": "C:\\Users\\pb.adcycyys001\\.codex\\worktrees\\rmlui-editor\\VulkanLearn\\documents\\contracts\\diagrams\\world-graph-transaction-lifecycle.html",
+  "specification": {
+    "sha256": "5b55d6abc40f36b9790498d36f57131a9e1258ee5d93355d4ba19d616cff3cda",
+    "bytes": 6942
+  },
+  "artifact": {
+    "sha256": "1fd5cdeb9144e4e3996594ef8f89a640781abcf34c97f699061e28adb8b03266",
+    "bytes": 766570
+  }
+}

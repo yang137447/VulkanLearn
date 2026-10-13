@@ -43,6 +43,9 @@ public:
         const std::vector<LightSnapshot>& lights) = 0;
     virtual bool IsCsmEnabled() const = 0;
     virtual bool IsShadowCascadeActive(uint32_t cascadeIndex) const = 0;
+    // 编辑器参考网格的几何与缓冲归 RenderSystem 所有；pass 流程只请求提交一次
+    // 网格绘制，因此网格顶点生命周期不会泄漏到 pass 层。
+    virtual void DrawEditorGridGeometry(vk::CommandBuffer& commandBuffer) = 0;
 };
 
 struct PassRuntimeContext
@@ -55,6 +58,9 @@ struct PassRuntimeContext
     const RenderScene& renderScene;
     const ResolvedRenderScene& resolvedRenderScene;
     PassRuntimeServices& services;
+    // 仅重定向输出 swapChain 的 pass，其他图资源和完整 backing extent 不变。
+    // LOAD 前调用方必须保证目标已有有效内容并处于 ColorAttachmentOptimal。
+    bool renderToViewport = false;
 };
 
 // Records one compiled Renderpass using render-domain data. FrameGraph and
@@ -70,9 +76,13 @@ private:
     void RecordForwardOpaquePass(PassRuntimeContext& context) const;
     void RecordForwardTransparentPass(PassRuntimeContext& context) const;
     void RecordPostProcessPass(PassRuntimeContext& context) const;
+    void RecordEditorGridPass(PassRuntimeContext& context) const;
 
     void PreparePassResources(PassRuntimeContext& context) const;
     void BeginConfiguredRenderPass(PassRuntimeContext& context) const;
+    // PostProcess 与 EditorGrid 都要"绑定 pass material 管线 + 描述符集"，
+    // 区别只在最后提交的几何；返回 false 表示该 pass 没有可用材质，不进入 render pass。
+    bool BindPassMaterialPipeline(PassRuntimeContext& context) const;
     void UpdateSceneGlobalUBO(PassRuntimeContext& context) const;
 
     RendererDrawExecutor drawExecutor;

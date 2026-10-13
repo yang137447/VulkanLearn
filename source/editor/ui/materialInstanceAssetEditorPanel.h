@@ -1,206 +1,272 @@
 #pragma once
 
-#include <array>
-#include <cstdint>
-#include <optional>
+#include <memory>
 #include <string>
+#include <utility>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
-#include "editor/command/editorCommand.h"
-#include "editor/selection/materialInstanceSelection.h"
+#include <RmlUi/Core/EventListener.h>
+
+#include "editor/ui/materialInstanceEditorView.h"
+#include "editor/ui/editorDockingController.h"
+#include "editor/ui/editorContentBrowserController.h"
+#include "editor/ui/editorJsonInspectorController.h"
+#include "editor/ui/editorResourceEditorController.h"
+#include "editor/ui/editorSceneActorTree.h"
+#include "ui/uiAction.h"
+#include "ui/uiRenderSnapshot.h"
+#include "ui/widgets/widgetDocument.h"
+
+namespace Rml
+{
+class Element;
+class ElementDocument;
+}
 
 namespace VL::EditorUi
 {
 
-enum class EditorParameterType : uint8_t { Float, Vec2, Vec3, Vec4, Color };
-
-struct EditorParameterValue
-{
-    EditorParameterType type = EditorParameterType::Float;
-    std::array<float, 4> values{};
-    uint32_t ComponentCount() const;
-};
-
-// 面板只生产中央协议的值语义命令，不保存文档、服务或 Vulkan 对象。
-using EditorCommandEnvelope = VL::EditorCommandEnvelope;
-
-class IEditorCommandSink
+// 运行时控制仍走 UiAction，与资产文档命令保持不同的所有权和保存语义。
+class IEditorRuntimeActionSink
 {
 public:
-    virtual ~IEditorCommandSink() = default;
-    virtual void Submit(VL::EditorCommandEnvelope command) = 0;
+    virtual ~IEditorRuntimeActionSink() = default;
+    virtual void RequestRuntimeAction(UiAction action) = 0;
 };
 
-// 面板只提交场景选择请求，具体的描边和 World 校验由 EngineLoop 在稳定帧
-// 边界统一处理，避免 ImGui 回调直接触碰 renderer-owned 状态。
-class IMaterialInstanceSceneSelectionSink
-{
-public:
-    virtual ~IMaterialInstanceSceneSelectionSink() = default;
-    virtual bool RequestModelSelection(
-        const VL::Editor::Selection::MaterialInstanceModelContext& model) = 0;
-    virtual bool RequestMaterialSelection(
-        const VL::Editor::Selection::MaterialInstanceSelection& selection) = 0;
-};
-
-enum class EditorDocumentStatus : uint8_t { Clean, Dirty, Saving, SaveFailed, SourceChanged };
-enum class EditorValidationStatus : uint8_t { Unknown, Valid, Invalid, Running };
-enum class EditorPreviewStatus : uint8_t { Disconnected, Connected, Applying, Unavailable, Failed };
-
-struct EditorParameterChannel
-{
-    std::string name;
-    std::string description;
-    bool hasRange = false;
-    float minValue = 0.0f;
-    float maxValue = 0.0f;
-};
-
-struct EditorParameterSnapshot
-{
-    std::string name;
-    std::string description;
-    EditorParameterType type = EditorParameterType::Float;
-    EditorParameterValue defaultValue;
-    EditorParameterValue effectiveValue;
-    std::optional<EditorParameterValue> overrideValue;
-    bool active = true;
-    bool hasRange = false;
-    float minValue = 0.0f;
-    float maxValue = 0.0f;
-    std::array<EditorParameterChannel, 4> channels;
-};
-
-struct EditorTextureBindingSnapshot
-{
-    std::string slotName;
-    std::string description;
-    std::string defaultAssetPath;
-    std::string effectiveAssetPath;
-    std::optional<std::string> overrideAssetPath;
-    bool active = true;
-};
-
-struct EditorRenderStateSnapshot
-{
-    std::string name;
-    std::string defaultValue;
-    std::string effectiveValue;
-    std::optional<std::string> overrideValue;
-};
-
-struct EditorTextureAssetSnapshot
-{
-    std::string assetPath;
-    bool valid = false;
-    std::string diagnostic;
-};
-
-struct MaterialInstanceDocumentSnapshot
-{
-    std::string assetPath;
-    std::string baseMaterialPath;
-    std::string schemaDigest;
-    uint64_t revision = 0;
-    EditorDocumentStatus status = EditorDocumentStatus::Clean;
-    EditorValidationStatus validation = EditorValidationStatus::Unknown;
-    EditorPreviewStatus preview = EditorPreviewStatus::Disconnected;
-    std::string validationMessage;
-    std::string previewMessage;
-    std::vector<EditorParameterSnapshot> parameters;
-    std::vector<EditorTextureBindingSnapshot> textures;
-    std::vector<EditorRenderStateSnapshot> renderStates;
-};
-
-struct MaterialInstanceAssetEntry { std::string assetPath; bool dirty = false; };
-
-struct MaterialInstanceModelMaterialSnapshot
-{
-    VL::RuntimeId objectId = 0;
-    uint32_t materialSlotIndex = 0;
-    std::string materialSlotName;
-    std::string materialInstancePath;
-};
-
-struct MaterialInstanceModelSnapshot
-{
-    uint64_t worldGeneration = 0;
-    std::string scenePath;
-    VL::RuntimeId objectId = 0;
-    std::string displayName;
-    std::string objectIdentity;
-    std::vector<MaterialInstanceModelMaterialSnapshot> materials;
-};
-
-struct MaterialInstanceEditorSnapshot
-{
-    std::string selectedDocumentPath;
-    std::string statusMessage;
-    bool browserLoading = false;
-    std::vector<MaterialInstanceAssetEntry> assets;
-    std::vector<MaterialInstanceAssetEntry> documentTabs;
-    std::vector<EditorTextureAssetSnapshot> textureAssets;
-    std::vector<MaterialInstanceModelSnapshot> sceneModels;
-    std::optional<MaterialInstanceDocumentSnapshot> activeDocument;
-    std::optional<MaterialInstanceModelSnapshot> selectedModel;
-    std::optional<uint32_t> selectedMaterialSlotIndex;
-};
-
-class MaterialInstanceAssetEditorPanel
+// RML 工作区的 GT 展示适配器；消费冻结快照，仅提交命令，不调用文档服务或 renderer。
+class MaterialInstanceAssetEditorPanel final : public Rml::EventListener
 {
 public:
     explicit MaterialInstanceAssetEditorPanel(IEditorCommandSink* commandSink = nullptr);
-    void SetCommandSink(IEditorCommandSink* commandSink);
-    void SetSceneSelectionSink(IMaterialInstanceSceneSelectionSink* selectionSink);
-    void SetSnapshot(const MaterialInstanceEditorSnapshot& snapshot);
-    void SetVisible(bool visible);
-    bool IsVisible() const { return visible; }
+    ~MaterialInstanceAssetEditorPanel() override;
+    static bool ValidateDocument(Rml::ElementDocument& document, std::string& error);
+    bool Attach(Rml::ElementDocument& document, std::string& error);
+    void Detach();
+    void SetSceneSelectionSink(IMaterialInstanceSceneSelectionSink* sink);
+    void SetRuntimeActionSink(IEditorRuntimeActionSink* sink);
+    void SetJsonAssetRequestSink(IEditorJsonAssetRequestSink* sink) { jsonAssetRequestSink = sink; }
+    void ShowMaterialDetails() { viewingJson = false; resourceEditorVisible = false; requestedJsonPath.clear(); activateMaterialDocument = true; }
+    void ShowSceneDetails() { viewingJson = false; requestedJsonPath.clear(); activateMaterialDocument = false; }
     void Build(const MaterialInstanceEditorSnapshot& snapshot);
-    // 上层每帧只 Build 一次，多个 Dock 内容入口共享同一份只读快照。
-    void RenderNavigationContents();
-    void RenderInspectorContents();
-    // 保留单窗口兼容入口；只组合内容，不重复 Build 或创建独立窗口。
-    void RenderContents();
-    void Render();
+    void UpdateRuntimeView(const UiViewModelSnapshot& view);
+    std::vector<std::string> VisibleThumbnailPaths() const { return contentBrowser.VisibleThumbnailPaths(); }
+    void RequestSave();
+    bool PrepareImmersiveView(std::string& levelToLoad);
+    void SetWorkspaceLayoutPath(std::filesystem::path path) { docking.SetPersistencePath(std::move(path)); }
+    UiViewportRect GetSceneViewportRect() const { return docking.GetSceneViewportRect(); }
+    bool IsSceneViewportElement(const Rml::Element* element) const { return docking.IsSceneViewportElement(element); }
+    // 面板可见性由停靠视图拥有；菜单、测试和 UiSubsystem 都经由这一层访问。
+    bool IsPanelVisible(const std::string& panel) const { return docking.IsPanelVisible(panel); }
+    bool SetPanelVisible(const std::string& panel, bool visible) { return docking.SetPanelVisible(panel, visible); }
+    bool IsMenuOpen(const std::string& menu) const { return openMenu == menu; }
+    // 右键上下文菜单只有一份状态；目标见 ContextMenuTarget（稳定地址，不是快照下标）。
+    bool IsContextMenuOpen() const { return contextMenuKind != ContextMenuKind::None; }
+    const std::string& ContextMenuTarget() const { return contextMenuTarget; }
+    bool IsAboutVisible() const { return aboutVisible; }
+    // 分组展开状态是会话 UI 状态：不进入资产文档，也不随停靠布局保存。
+    bool IsSectionExpanded(const std::string& key) const { return collapsedSections.count(key) == 0; }
+    // 变换工具与坐标系只是编辑器本地呈现状态，没有 gizmo 或 transform 编辑后端。
+    const std::string& ViewportTransformTool() const { return viewportTransformTool; }
+    const std::string& ViewportTransformSpace() const { return viewportTransformSpace; }
+    const std::vector<std::string>& MenuLevelPaths() const { return menuLevelPaths; }
+    bool IsResourceEditorVisible() const;
+    bool IsAssetEditorVisible() const { return IsResourceEditorVisible() || IsMaterialEditorVisible(); }
+    bool IsWorkspaceDragging() const { return docking.IsDragging(); }
+    size_t WorkspacePropertyWriteCount() const { return docking.PropertyWriteCount(); }
+    size_t PanelPropertyWriteCount() const { return widgetDocument.PropertyWriteCount(); }
+    void CancelWorkspaceDrag() { docking.CancelDrag(); previewDragButton = textureDragButton = -1; }
+    void CancelModelPreviewDrag() { previewDragButton = textureDragButton = -1; }
+    bool HasModal() const { return !pendingClosePath.empty() || aboutVisible; }
+    void ProcessEvent(Rml::Event& event) override;
 
 private:
+    // 上下文菜单的目标类别。目标只用稳定地址表达（actor 稳定身份 / 资产完整路径）：
+    // 菜单条目要到下一次点击才执行，而快照下标只在当帧有效，用下标会指到另一个对象。
+    enum class ContextMenuKind
+    {
+        None,
+        Actor,
+        BrowserAsset,
+        Viewport
+    };
+    struct PendingEdit
+    {
+        std::string key;
+        EditorCommandBatchItem item;
+    };
     void Submit(EditorCommandEnvelope command);
-    std::optional<uint64_t> ActiveRevision() const;
-#ifdef VULKANLEARN_ENABLE_DEVELOPER_UI
-    void RenderToolbar();
-    void RenderSceneModels();
-    void RenderSelectedModelMaterials();
-    void RenderTabs();
-    void RenderDetails();
-    void RenderGeneral(const MaterialInstanceDocumentSnapshot& document);
-    void RenderParameters(const MaterialInstanceDocumentSnapshot& document);
-    void RenderRenderStates(const MaterialInstanceDocumentSnapshot& document);
-    void RenderTextureBindings(const MaterialInstanceDocumentSnapshot& document);
-    void RenderParameter(const MaterialInstanceDocumentSnapshot& document, const EditorParameterSnapshot& parameter);
-    void RenderTexture(const MaterialInstanceDocumentSnapshot& document, const EditorTextureBindingSnapshot& texture);
-    void RenderRenderState(const MaterialInstanceDocumentSnapshot& document, const EditorRenderStateSnapshot& state);
-    void RenderStatusBar();
-    bool DrawValue(const EditorParameterSnapshot& parameter, EditorParameterValue& value) const;
-#endif
+    void SubmitPathCommand(EditorCommandType type);
+    void QueueEdit(std::string key, EditorCommandBatchItem item);
+    void FlushPendingEdits(bool save = false);
+    void RefreshLists();
+    void RefreshOutliner();
+    void RebuildOutlinerRows(const std::vector<EditorSceneActorSnapshot>& actors);
+    bool OutlinerRowsNeedRebuild(const std::vector<EditorSceneActorSnapshot>& actors) const;
+    EditorSceneActorWindow OutlinerWindow() const;
+    void MeasureOutlinerRowHeight();
+    std::string OutlinerMountedVisuals() const;
+    std::string OutlinerRowsMarkup(const EditorSceneActorWindow& window) const;
+    void RefreshDetails();
+    void RefreshControls();
+    void RefreshActorValues(const EditorSceneActorSnapshot* actor);
+    std::string ActorSectionMarkup(const EditorSceneActorSnapshot& actor);
+    std::string PrimaryDirectionalLightControls(const EditorSceneActorSnapshot& actor) const;
+    const std::vector<EditorSceneActorSnapshot>& OutlinerActors() const;
+    const EditorSceneActorSnapshot* SelectedActor() const;
+    void SelectOutlinerActor(const EditorSceneActorSnapshot& actor);
+    void ToggleOutlinerGroup(size_t groupIndex);
+    void RefreshWorkspace();
+    void RefreshMenus();
+    void RefreshLevelMenu();
+    void RefreshViewportToolbar();
+    void RefreshViewportAxisIndicator();
+    void SetViewportToolbarClass(const std::string& id, bool active);
+    std::string WindowMenuMarkup() const;
+    void ToggleMenu(const std::string& menu);
+    void CloseMenus();
+    void ApplyMenuState();
+    bool IsInsideMenuBar(const Rml::Element* element) const;
+    void OpenContextMenu(Rml::Event& event);
+    void CloseContextMenu();
+    void ApplyContextMenuState();
+    std::string ContextMenuItemsMarkup() const;
+    bool IsInsideContextMenu(const Rml::Element* element) const;
+    const EditorSceneActorSnapshot* ContextMenuActor() const;
+    bool FindCatalogAssetKind(const std::string& path, EditorAssetKind& kind,
+        std::string& name) const;
+    void ToggleContextActorVisibility();
+    void OpenContextActorMaterial(size_t slotIndex);
+    void OpenContextBrowserAsset();
+    void SetMarkup(const std::string& id, std::string markup);
+    void SetControlValue(const std::string& id, const std::string& value);
+    void SetDisabled(const std::string& id, bool disabled);
+    void ToggleSection(const std::string& key);
+    void ApplySectionState();
+    void HandleClick(Rml::Element& element, const std::string& action);
+    void HandleChange(Rml::Element& element, const std::string& action);
+    void CloseDocument(const std::string& path, EditorDirtyDocumentPolicy policy);
+    void SelectModelMaterial(const MaterialInstanceModelSnapshot& model, size_t index);
+    void OpenBrowserAsset(const std::string& path);
+    void RefreshResourceEditor();
+    void RefreshDocumentTabs();
+    void OpenResourceAsset(const std::string& path, EditorAssetKind kind);
+    void CloseActiveResource();
+    void RequestResourceReload();
+    void RequestActiveResourceMetadata();
+    void RequestModelPreview(const std::string& path);
+    void RequestAssetPreview(const std::string& path, bool material);
+    void RefreshMaterialPreview();
+    bool IsMaterialEditorVisible() const;
+    uint64_t CurrentMaterialPreviewGeneration() const;
+    uint64_t CurrentPreviewCameraGeneration() const;
+    void ReturnToLevel();
+    bool HasCurrentModelPreview() const;
+    uint64_t CurrentModelPreviewGeneration() const;
+    bool ProcessModelPreviewInput(Rml::Event& event);
+    bool ProcessTexturePreviewInput(Rml::Event& event);
+    void ResetTextureView();
+    std::string textureViewSource;
+    float textureZoom = 1.0f;
+    Rml::Vector2f texturePan{0, 0};
+    Rml::Vector2f texturePointer{0, 0};
+    int textureDragButton = -1;
+    void RequestPreviewCamera(ModelPreviewNavigation mode, float x = 0, float y = 0);
+    int previewDragButton = -1;
+    float previewPointerX = 0;
+    float previewPointerY = 0;
+    uint64_t previewDragGeneration = 0;
+    std::string requestedPreviewPath;
+    std::string levelWorldPath;
+    uint64_t requestedPreviewGeneration = 0;
+    bool requestedPreviewMaterial = false;
+    uint64_t appliedMaterialPreviewGeneration = 0;
+
     IEditorCommandSink* commandSink = nullptr;
     IMaterialInstanceSceneSelectionSink* sceneSelectionSink = nullptr;
+    IEditorRuntimeActionSink* runtimeActionSink = nullptr;
+    IEditorJsonAssetRequestSink* jsonAssetRequestSink = nullptr;
+    Rml::ElementDocument* document = nullptr;
     MaterialInstanceEditorSnapshot snapshot;
-    std::string pickerSlot;
+    UiViewModelSnapshot runtimeView;
+    bool runtimeControlsCurrent = false;
+    bool textureOptionsDirty = true;
+    std::vector<std::string> textureOptionSelections;
+    UiWidgets::WidgetDocument widgetDocument;
+    EditorDockingController docking;
+    EditorContentBrowserController contentBrowser;
+    EditorJsonInspectorController jsonInspector;
+    EditorJsonInspectorController resourceJsonInspector;
+    EditorResourceEditorController resourceEditor;
+    bool viewingJson = false;
+    bool resourceEditorVisible = false;
+    std::string requestedJsonPath;
+    // 顶部菜单的展开状态是本地面板状态：它不进入资产文档、停靠布局文件或运行时快照。
+    std::string openMenu;
+    // 右键上下文菜单：目标在打开那一刻解析成稳定地址，条目点击不再读面板的当前选择。
+    // 位置是右键坐标（文档坐标），只用于放置根节点上的弹层。
+    ContextMenuKind contextMenuKind = ContextMenuKind::None;
+    std::string contextMenuTarget;
+    float contextMenuX = 0.0f;
+    float contextMenuY = 0.0f;
+    bool aboutVisible = false;
+    // 视口工具条的变换工具与坐标系只驱动高亮；文件里没有 gizmo，也没有 transform 编辑后端，
+    // 切换它们不提交 UiAction 或资产命令（见 ViewportToolbar 相关注释与文档）。
+    std::string viewportTransformTool = "select";
+    std::string viewportTransformSpace = "world";
+    std::string resourceTransformTool = "select";
+    std::string resourceTransformSpace = "world";
+    // File→Open Level 的条目地址按索引寻址，与 markup 同代重建，避免把资产路径写进 DOM 属性。
+    std::vector<std::string> menuLevelPaths;
+    std::shared_ptr<const EditorJsonAssetCatalogSnapshot> menuCatalog;
+    uint64_t menuCatalogRevision = 0;
+    bool menuCatalogReady = false;
+    // 角落坐标轴指示器的已挂载形态签名（量化后的角度与标签偏移 + 退化标志）。
+    // 相机静止时签名不变，因此静止帧不写 DOM —— 与本文件其它"值缓存决定是否写"的做法一致。
+    std::string axisIndicatorSignature;
+    // 折叠的分组键（缺省即展开）；切换文档不清空，和模型树展开一样是面板本地状态。
+    std::unordered_set<std::string> collapsedSections;
+    // 大纲的展开与折叠同样是面板本地会话状态：折叠的分组键 + 展开的 actor 稳定身份。
+    // 两者合并进 EditorSceneActorTreeExpansion，因为它就是行集合构建的入参。
+    EditorSceneActorTreeExpansion outlinerExpansion;
+    // 大纲搜索与类型过滤只影响可见性；ASCII 大小写折叠复用 Content Browser 的规则。
+    std::string outlinerQuery;
+    std::string outlinerTypeFilter = "all";
+    // 组内排序是面板偏好（与 Content Browser 的排序一样），不随 World 换代重置。
+    SceneActorSortOrder outlinerSortOrder = SceneActorSortOrder::NameAscending;
+    // 行集合的已构建副本：只有内容签名或筛选/排序/展开状态变化时才重建，
+    // 静止帧不重新排序、不重新分配行标签。
+    std::vector<EditorSceneActorRow> outlinerRows;
+    SceneActorSortOrder outlinerBuiltSortOrder = SceneActorSortOrder::NameAscending;
+    EditorSceneActorTreeExpansion outlinerBuiltExpansion;
+    std::string outlinerBuiltQuery;
+    std::string outlinerBuiltTypeFilter = "all";
+    uint64_t outlinerRowSignature = 0;
+    uint64_t outlinerRowsRevision = 0;
+    // 已挂载的窗口与"已挂载行的 (选择, 可见性)"签名：用来判断是否需要重挂 DOM
+    // （而不是逐帧重写 markup）。outlinerMounted 让 Detach 之后重新 Attach 的第一帧
+    // 一定重挂一次。
+    EditorSceneActorWindow outlinerMountedWindow;
+    bool outlinerMounted = false;
+    uint64_t outlinerMountedRevision = 0;
+    std::string outlinerMountedVisuals;
+    // 行高由已挂载行的 margin box 实测；首帧保持 RCSS 兜底值。
+    float outlinerRowHeight = SceneActorRowHeightFallback;
+    uint64_t treeWorldGeneration = 0;
+    std::unordered_map<std::string, EditorParameterValue> pendingValues;
+    std::vector<PendingEdit> pendingEdits;
+    std::string pendingAssetPath;
+    uint64_t pendingRevision = 0;
+    std::string detailsIdentity;
+    std::string actorDetailsIdentity;
+    bool activateMaterialDocument = false;
     std::string localStatus;
-    uint64_t nextCommandId = 1;
-    bool visible = true;
-    bool showOnlyActive = false;
-    bool openTexturePicker = false;
-    std::array<char, 256> assetSearch{};
-    std::array<char, 256> textureSearch{};
-    std::string pendingParameterEditAssetPath;
-    uint64_t pendingParameterEditRevision = 0;
-    std::unordered_map<std::string, EditorParameterValue> pendingParameterEdits;
-    std::unordered_set<std::string> pendingTabClosures;
-    std::string pendingTabSelection;
-    std::string submittedTabSelection;
+    std::string pendingClosePath;
+    bool saveThenClose = false;
+    bool saveCloseSubmitted = false;
+    bool refreshingControls = false;
 };
 
 } // namespace VL::EditorUi

@@ -229,8 +229,8 @@ const char* ToString(PreviewCommandSource source) noexcept
 {
     switch (source)
     {
-    case PreviewCommandSource::ImGui:
-        return "imgui";
+    case PreviewCommandSource::RmlUi:
+        return "rmlui";
     case PreviewCommandSource::Console:
         return "console";
     case PreviewCommandSource::AI:

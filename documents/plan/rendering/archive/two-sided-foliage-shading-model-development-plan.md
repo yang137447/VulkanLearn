@@ -8,7 +8,7 @@
 | 目标 | 将 UE5.8 Legacy `TwoSidedFoliage` 以 VulkanLearn 的 Material / GBuffer / Pass 合同接入 |
 | Shading Model | `TwoSidedFoliage` / ID `6` |
 | 计划建立日期 | 2026-09-03 |
-| 当前合同基线 | `documents/rendering/shader-structure-and-material-function.md` |
+| 当前合同基线 | `documents/contracts/shader-structure-and-material-function.md` |
 | 相关现状 | `documents/plan/rendering/foliage-speedtree-sss-wind-roadmap.html`、`documents/plan/rendering/speedtree-sdk-data-probe.md` |
 | 首阶段执行域 | Opaque + OpaqueClip；Forward + Deferred；自动 ShadowDepth |
 | 实现目标 | 核心直接光 Transmission closure 的公式、常量、输入和分量归属严格对齐 UE5.8 Legacy；外围资源载体遵守 VulkanLearn 合同 |
@@ -441,7 +441,7 @@ Debug 输出必须使用未压缩或可解释的中间量，不能只显示最�
 
 ### 10.2 GoogleTest / 模块测试
 
-遵守 `documents/architecture/coding-guidelines.md` 的 test governance：
+遵守 `documents/contracts/coding-guidelines.md` 的 test governance：
 
 - 不添加 test-only `main()`；
 - 通过根目录 `vulkanlearn_add_gtest(...)` 注册；
@@ -515,9 +515,9 @@ documents/rendering/two-sided-foliage-shading-model.md
 
 同时更新：
 
-- `documents/rendering/shader-structure-and-material-function.md` 中的模型状态表；
+- `documents/contracts/shader-structure-and-material-function.md` 中的模型状态表；
 - `documents/README.md` 的正式合同和计划索引；
-- 如新增稳定参数，再更新 `documents/rendering/material-param-authoring-and-reflection.md`；
+- 如新增稳定参数，再更新 `documents/contracts/material-param-authoring-and-reflection.md`；
 - 如新增场景，补充资产来源、授权和运行时资源根说明。
 
 ## 12. 完成验收矩阵

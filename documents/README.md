@@ -1,178 +1,67 @@
-# Documents
+# 文档分层
 
-This folder contains repository-visible design documents that are still useful for current work.
+这个目录只有三种东西，它们的**可信度和寿命完全不同**。读之前先看清你在哪一层。
 
-## Responsibility Split
+| 层 | 回答什么问题 | 可信度 | 何时改 |
+| --- | --- | --- | --- |
+| `routing.md` | 我要改某个源码路径，必须读哪些文档、会触发哪些门禁规则 | 可机读校验，与源码同步 | 模块或规则变化时 |
+| `contracts/` | 现在的系统**是什么** | 每条都能核对到源码、测试或门禁规则 | 行为变化时（= 改契约） |
+| `rationale/` + `plan/` | **为什么**是这样：决策、证据、否决、退役、打算做什么 | 明确不是契约，是记录 | 只增不改 |
 
-Documentation in this repository is split by responsibility:
+## 唯一硬纪律
 
-- repository root `README.md`
-  - human-facing project entry point
-  - current build, run, and navigation guidance
-- repository root `AGENTS.md`
-  - working contract for AI coding agents
-  - read order, repo assumptions, editing constraints, and risk hints
-- `documents/README.md`
-  - top-level index for formal design documents
-  - explains document categories and what belongs in each one
+**`contracts/` 只描述现在。** 它不写"计划""未来将""下一步实现"，也不描述打算做什么。
 
-`documents/` should not duplicate the full content of `README.md` or `AGENTS.md`.
+这不是文风偏好，而是为了消灭这个仓库反复踩过的同一个坑：**把路线图当成现状**。
+已经有过实例——若干计划文档描述的功能在源码里搜索命中为 0（例如
+`plan/rendering/uds-replication-roadmap.md` 的 `\bUDS\b` 零命中、
+`plan/rendering/terrain-worldcreator-mvp.md` 的 terrain 运行时标识符零命中），
+但它们曾和真正的契约一起被索引，读者无法判断眼前这份能不能信。
 
-- If a document is about current setup and how to start, it belongs in `README.md`.
-- If a document is about how an AI agent should work in this repo, it belongs in `AGENTS.md`.
-- If a document is about architecture, rendering contracts, future work, or learning references, it belongs under `documents/`.
+想写未来的东西一律进 `rationale/` 或 `plan/`。那里可以任意写未来，因为它明确不承重。
 
-## Structure
+## 三条使用规则
 
-- `architecture/`
-  - current formal architecture and coding conventions
-  - system boundaries, ownership, thread/data flow, and accepted naming rules
-- `rendering/`
-  - current rendering contracts that are implemented or actively used by code
-  - data formats and ownership rules that contributors should follow now
-- `plan/`
-  - future or partially implemented work, plus completed decision records retained for context
-  - roadmaps, migration blueprints, long-term rendering plans, and deprecated design options; current contracts do not live here
-- `reference/`
-  - tutorials, courses, and study material
-  - useful background that is not itself a live implementation plan
+1. **改代码前先读 `routing.md`**，按源码路径匹配**全部**适用规则（不是首条命中）。
+2. **`contracts/` 里的话可以直接当事实用**。如果它和源码矛盾，以源码为准并立刻修正契约——
+   这是缺陷，不是"文档略旧"。
+3. **`rationale/` 与 `plan/` 里的话不能当事实用**。它们解释意图，但技术描述可能已经过时。
 
-## Formal Architecture
+## 其他入口
 
-- `architecture/vl-offline-rendering.md`
-  - current VL offline core ownership, frozen input and worker boundaries,
-    Vulkan display, export identity, bounded capabilities, and test paths
-- `architecture/asset-organization.md`
-  - runtime resource repository standard: `Common/`, `Maps/SC_<scene-name>/`,
-    type subdirectories, ownership rules, and generated-output boundaries
-- `architecture/vulkanlearn-architecture.html`
-  - VulkanLearn V1 formal architecture HTML
-  - covers Platform/Input, EngineLoop, World, Asset/Material/Shader, Renderer/Vulkan Backend/FrameGraph, Config/Debug/Test, design patterns, GT/RT data boundaries, WorldSnapshot publish/consume, resource lifetime, hard cutover status, acceptance checks, and risk records
-  - naming rule: `UE-Lite` is only the earlier architecture route name and validation-script context; new C++ engine code uses the `VL` namespace
-- `architecture/coding-guidelines.md`
-  - general C++ coding conventions
-  - currently records public header responsibility comment rules
+- 仓库根 `README.md`：面向人的项目入口（构建、运行、导航）
+- 仓库根 `AGENTS.md`：面向 AI 的协作契约（读取顺序、编辑约束、风险提示、测试治理）
+- `contracts/testing.md`：验证入口与"改动 → 验证"映射
+- `rationale/pitfalls.md`：反复踩到、无法从局部代码看出的约束
 
-## Current Rendering Contracts
+## 校验
 
-- `rendering/lookdev-scene.md`
-  - neutral lookdev scene, fixed exposure/display preset, diffuse calibration,
-    generated asset ownership, and screenshot measurement
-- `rendering/physical-lighting-and-exposure.md`
-  - centimeter world lengths, explicit light units, camera EV100 and legacy resource migration
-- `rendering/descriptor-imageinfo-management.md`
-  - texture `vk::DescriptorImageInfo` ownership and descriptor write lifetime rules
-- `rendering/debug-runtime-commands.md`
-  - background camera control and swapchain screenshot commands for renderer debugging
-- `rendering/environment-update-scheduler.md`
-  - implemented environment dirty generations, face/mip budgets, active/pending commit, SH swapchain broadcast, Vulkan barriers, and GPU timestamp diagnostics
-- `rendering/csm-shadow-map-m1.md`
-  - implemented Basic CSM contract for shadowMap array resources, per-layer framebuffer views, runtime CSM settings, shader UBO fields, and debug views
-- `rendering/gbuffer-channel-ownership.md`
-  - current GBuffer attachment set, formats, per-ShadingModelID channel ownership, the 4+4 bit ID/flag ledger, packing precision limits (R16F ≤ 11 bit per channel), versioned-flag fallback rules, and the checklist for allocating a slot to a new shading model
-- `rendering/material-param-authoring-and-reflection.md`
-  - material parameter include generation, Set 1 schema ownership, and per-pass reflection validation
-- `rendering/material-mesh-pass-composition.md`
-  - implemented Material Evaluation, Base/ShadowDepth templates, Composer identity, and Shadow routing contract
-- `rendering/shader-structure-and-material-function.md`
-  - current Shader Structure, UE-style Material Inputs, Material Function composition, Shading Model boundaries, and MF/Pass validation rules
-- `rendering/shader-build-cache.md`
-  - implemented BLAKE3-256 shader identities, versioned build-cache manifest, batch-wide publication preflight, stale cache-hit rejection, atomic artifact commit, and startup failure semantics
-- `rendering/shader-hot-reload.md`
-  - implemented source-epoch/digest staleness protocol, pending source union, frozen compilation snapshots, Material/Compute/UI transactions, M_*.json live-state migration, World/Graph staging, and GPU-epoch retirement
-- `rendering/texture-asset-json-v1.md`
-  - texture asset JSON V1 fields, defaults, material instance references, and loader behavior
+```powershell
+py -3 tool\validate-docs.py
+```
 
-## Plans
+它检查：路由引用的文档存在、路由里的源码 glob 匹配到真实文件、路由声明的门禁规则名**逐字存在**于
+`tool/architecture-boundary-audit.ps1`、每个契约带状态行、契约不含未来时断言、全树相对链接有效。
 
-Architecture plans:
+文档腐坏因此是**门禁失败**，不是静默漂移。
 
-- `plan/architecture/architecture-maintenance-recovery-plan.md`
-  - completed 2026-08-14 repair record for restoring Vulkan device/test boundaries, extracting Shader and World/Graph transaction ownership from EngineLoop, converging World loading paths, and rerunning the complete architecture validation matrix
-- `plan/architecture/renderer-cohesive-runtime-extraction-plan.md`
-  - deferred R6 follow-up for CSM frame data, post-process controls, environment orchestration, and RenderGraph Vulkan state-package ownership
-- `plan/architecture/csharp-actor-runtime-plan.md`
-  - planned in-process C# gameplay Actor runtime using `*.actor.cs` source files, explicit native/managed ABI, World/Component lifecycle, scene binding, services, reload, and validation phases
-- `plan/architecture/modern-engine-refactor-blueprint.html`
-  - earlier modern-engine refactor blueprint kept as planning context
-- `plan/architecture/ue-lite-completion-plan.md`
-  - completed UE-Lite/VulkanLearn V1 architecture baseline, hard boundary regression rules, and validation matrix context
+## 架构图与门禁的关系
 
-Rendering plans:
+架构拓扑以 archify 的 JSON IR 为准（`contracts/diagrams/`），它拥有：组件身份、类型、owner、
+边界归属、有向连接（**仅正向事实**）、逐节点源码证据（钉 40 位 commit 的文件与行号）、
+以及跨 revision 漂移（`archify compare` 收据）。
 
-- `plan/rendering/offline-renderer-vl-integration-plan.md`
-  - historical staged development record for integrating the CPU offline core into VL:
-    shared assets and material drafts, frozen CPU scene ownership, offline-only model
-    loading, progressive sessions, Vulkan presentation, and acceptance gates;
-    the former CLI is retired, with current contracts in `architecture/vl-offline-rendering.md`
-- `plan/rendering/material-instance-imgui-editor-plan.md`
-  - planned command-only UE-style MI Asset Editor: scenes reveal referenced assets, documents own numeric/texture configuration and atomic save, runtime preview is an optional bridge, and ImGui/Console/tests/AI share one versioned command protocol
-- `plan/rendering/lightweight-material-shadow-caster-plan.md`
-  - superseded first-stage execution record for explicit ShadowCaster variants; current behavior is defined by the CSM and Material Mesh Pass contracts
-- `plan/rendering/common-masked-shadow-caster-plan.md`
-  - superseded Common Opaque / Masked experiment retained as historical design context; the lightweight material ShadowCaster plan is the current direction
-- `plan/rendering/csm-shadow-map-roadmap.md`
-  - four-phase cascaded shadow route: Basic CSM, screen-space shadow mask, stability/seam control, and custom filtering
-- `plan/rendering/deferred-gbuffer-ue-aligned-plan.html`
-  - deferred GBuffer, UE legacy slot alignment, M_/MI_ material layering, and forward/deferred shader structure plan
-- `plan/rendering/foliage-speedtree-sss-wind-roadmap.html`
-  - HTML reading version of the foliage / SpeedTree route
-- `plan/rendering/shading-model-alignment-plan.md`
-  - **paper-based shading model implementation and validation plan** (premise changed 2026-09-12): the old per-model implementations were deleted, each shading model is rebuilt from its paper, and the interface plus GBuffer stay UE-aligned. Each model chapter carries a case list whose every row cites a paper figure / book section / engine doc, an algorithm-provenance table, and an explicit ⛔ state for models whose material parameter surface cannot reproduce the cited paper quantity
-  - shared infrastructure landed 2026-09-12 via cases `M-07` / `M-08`: texCoord V direction and camera fov convention pinned by measurement, the `M_brdfPlot` vertical mirror fixed, the probe plot given a mathematical coordinate system (frame, ticks, tick values, axis titles, caption row with a computed conclusion, legend), and `tool/validation/` (BMP reader, curve/UV measurement, screenshot harness, console injection) in place
-- `plan/rendering/shading-model-case-records.md`
-  - evidence archive for the alignment plan: one section per finished case with the fixed seven fields (ID / source / target / form / implementation anchor / verdict / attribution), the reproduction commands, and the paths of the archived screenshots and logs; conclusions live here because `artifacts/` is gitignored
-- `plan/rendering/archive/README.md`
-  - archived old per-model contracts and development plans (ClearCoat / Cloth / Eye / Hair / Subsurface / ThinTranslucent / TwoSidedFoliage / NeoX character alignment); their implementations were deleted on 2026-09-12 and every shading model is being rebuilt from its paper while the interface and GBuffer stay UE-aligned. The file also records exactly what was deleted.
-- `plan/rendering/material-module-system.md`
-  - future material module boundary, public/private semantics, and dependency ordering
-- `plan/rendering/material-multipass-pass-tag-plan.md`
-  - future Material Multi-Pass asset model, PassTag matching, common RG hooks, render-state JSON draft, and draw-list execution plan
-- `plan/rendering/material-shader-variant-and-debugview-options.md`
-  - deprecated shader variant options retained as context; use the deferred GBuffer plan for the current direction
-- `plan/rendering/shader-incremental-compile-and-hot-reload-plan.md`
-  - completed staged Shader build-cache and hot-reload plan; the stable P1-P4 contracts have migrated to `rendering/shader-build-cache.md` and `rendering/shader-hot-reload.md`
-- `plan/rendering/shader-incremental-compile-and-hot-reload-completion-fix-plan.md`
-  - completed 2026-08-13 R1-R4 audit history covering async staleness, M_ live-state migration, World/RenderGraph atomic commit, publication hardening, shutdown, and the final validation matrix
-- `plan/rendering/environment-cubemap-ibl-unification-plan.md`
-  - executable migration plan that limits environment-type branching to cubemap generation and unifies SH/prefilter through one GPU IBL baker
-- `plan/rendering/uds-replication-roadmap.md`
-  - UDS / UDW runtime feature scope, staged implementation plan, estimates, risks, and acceptance criteria
-- `plan/rendering/sky-pass-environment-roadmap.html`
-  - HTML reading version of the Sky Pass route
-- `plan/rendering/shadow-mode-material-pass-plan.html`
-  - superseded explicit `shadowMode` proposal retained as historical context; current Common ShadowCaster selection derives from `renderMode`
-- `plan/rendering/speedtree-sdk-data-probe.md`
-  - SDK-backed SpeedTree data probe before final runtime foliage format decisions
-- `plan/rendering/terrain-worldcreator-mvp.md`
-  - World Creator terrain intake MVP and future terrain boundaries
-- `plan/rendering/weather-gi-long-term-roadmap.html`
-  - long-term weather, reflection, GI, DDGI, and Lumen-like system route
+**但 archify 的 IR 不治理禁止词与内容约束。** 它的 schema 在每一层都是
+`additionalProperties: false`，没有正则、glob、内容匹配或任意元数据字段；它唯一的强制语义是
+architecture 模式下一个为云 region 写死的枚举。因此：
 
-UI documents:
+| 约束类型 | 归属 |
+| --- | --- |
+| 组件/边界/连接等**拓扑事实**、owner、源码证据 | archify IR |
+| 禁止词与措辞（由门禁脚本维护的禁用标识符表） | `tool/architecture-boundary-audit.ps1` |
+| 要求某符号出现在某文件 | `tool/architecture-boundary-audit.ps1` |
+| 文件必须存在 / 必须不存在（cutover） | `tool/architecture-boundary-audit.ps1` |
+| 模块间的**允许/禁止调用方向** | `tool/architecture-boundary-audit.ps1` |
 
-- `architecture/game-ui-stack.md`
-  - current implementation contract for the RmlUi runtime layer, optional Dear ImGui developer layer, SDL3 input arbitration, immutable UI snapshots, hot reload, and Vulkan overlay recording
-- `plan/ui/game-ui-stack-plan.md`
-  - implemented decision record and adoption checklist for the two-layer UI stack
-
-## References
-
-- `reference/architecture/rendering-engine-patterns-course.html`
-  - rendering-engine design pattern course and study map
-- `reference/rendering/tone-mapping-tutorial.html`
-  - tone mapping tutorial, exposure/curve/bloom responsibility notes, and VulkanLearn integration suggestions
-
-## Classification Rule
-
-Use these rules when adding or moving documents:
-
-- Current implemented contracts go under `architecture/` or `rendering/`.
-- Future work, partially implemented routes, migration plans, and deprecated design options go under `plan/`; completed decisions may remain there only as history, while the implementation contract moves to `architecture/` or `rendering/`.
-- Tutorials and background study material go under `reference/`.
-- **`plan/rendering/archive/` holds documents whose subject no longer exists in the repository** (for example per-model contracts whose implementation was deliberately deleted before a paper-based rebuild). They are explicitly *not* contracts; the folder's `README.md` must state why each file is there and what was deleted with it.
-- Historical notes that no longer guide implementation should be deleted or folded into a current document instead of staying as live guidance.
-
-Completed or obsolete implementation notes should not stay here as active docs. Git history is the archive for
-ordinary churn; `plan/rendering/archive/` is the exception, used only when a deliberate deletion removes the
-subject of a document and the record of that deletion is worth keeping in-tree.
+**"改图就能改门禁"不成立。** 改图影响工程走两条路：拓扑变更产生 `compare` 漂移收据，人依收据改代码；
+而禁止词与内容约束仍然改门禁脚本。这条边界写在这里，是为了避免留下错误的期待。

@@ -33,6 +33,10 @@ struct RuntimeCommandExecutionResult
     bool loadWorldSucceeded = false;
     std::string loadWorldCommandPath;
     std::string loadWorldResolvedPath;
+    // 本次加载要并入的场景对象（JSON 对象数组）。模型编辑器用它把打开的模型放进中性预览
+    // 环境；普通场景加载这里是空数组。命令只在执行器里**记录意图**，真正的加载发生在
+    // 游戏线程的 world/graph 事务里，因此这份数据必须随结果一起携带，而不是就地展开。
+    nlohmann::json loadWorldExtraSceneObjects = nlohmann::json::array();
     std::optional<RuntimeError> loadWorldError;
     WorldHandle loadedWorld;
     WorldHandle activeWorldBeforeCommand;

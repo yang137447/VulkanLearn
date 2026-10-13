@@ -2,11 +2,12 @@
     "$schema": "http://json-schema.org/draft-07/schema#",
     "$id": "https://vulkanlearn.local/schema/scene.schema.json",
     "title": "Scene",
-    "description": "VulkanLearn 场景配置",
+    "description": "VulkanLearn 场景资产。本文件按 source/scene/validation/sceneAssetValidator.cpp 与 source/world/loading/worldBuilder.cpp 的当前行为重建：required 列表对应验证器实际强制检查的字段，enum 与约束对应 loader 实际接受的值域。凡本文件与这两处源码不一致，以源码为准并修正本文件。 对象类型定义是自包含的（不用 allOf 组合共享 name/type）：两半各自声明 additionalProperties: false 会互判对方字段为额外字段。 场景对象的额外字段被允许，与 SceneAssetValidator 的行为一致；根级仍然 additionalProperties: false，因为顶层字段由 BuildLoadPlan 显式读取。",
     "type": "object",
     "properties": {
         "name": {
-            "type": "string"
+            "type": "string",
+            "description": "显示标签；UI 场景选择器用它作为列表项文字。"
         },
         "type": {
             "type": "string",
@@ -14,26 +15,42 @@
         },
         "description": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "description": "必填且非空。说明这个场景是干什么的、用来验证哪篇文章或书本的哪个知识点；探针场景要写到论文的节号或图号，纯学习场景要写明它不是验证用的。SceneAssetValidator 会拒绝缺失或空串。"
+        },
+        "objects": {
+            "type": "array",
+            "description": "场景对象数组。整场景必须至少包含一个 camera 对象，否则加载被拒绝。",
+            "items": {
+                "oneOf": [
+                    {
+                        "$ref": "#/$defs/meshObject"
+                    },
+                    {
+                        "$ref": "#/$defs/directionalLightObject"
+                    },
+                    {
+                        "$ref": "#/$defs/pointLightObject"
+                    },
+                    {
+                        "$ref": "#/$defs/spotLightObject"
+                    },
+                    {
+                        "$ref": "#/$defs/squareAreaLightObject"
+                    },
+                    {
+                        "$ref": "#/$defs/cameraObject"
+                    },
+                    {
+                        "$ref": "#/$defs/environmentObject"
+                    }
+                ]
+            }
         },
         "worldUnit": {
             "type": "string",
             "const": "cm",
             "description": "场景位置、尺寸、裁剪面和导入后的世界长度均使用厘米。"
-        },
-        "objects": {
-            "type": "array",
-            "items": {
-                "oneOf": [
-                    { "$ref": "#/$defs/meshObject" },
-                    { "$ref": "#/$defs/directionalLightObject" },
-                    { "$ref": "#/$defs/pointLightObject" },
-                    { "$ref": "#/$defs/spotLightObject" },
-                    { "$ref": "#/$defs/squareAreaLightObject" },
-                    { "$ref": "#/$defs/cameraObject" },
-                    { "$ref": "#/$defs/environmentObject" }
-                ]
-            }
         }
     },
     "required": [
@@ -47,32 +64,480 @@
     "$defs": {
         "vec3": {
             "type": "array",
+            "description": "长度为 3 的数值数组。验证器拒绝长度不为 3 或含非数值项的输入。",
             "items": {
                 "type": "number"
             },
             "minItems": 3,
             "maxItems": 3
         },
-        "lightColor": {
-            "$ref": "#/$defs/vec3",
-            "description": "线性 RGB 光色，范围由运行时校验限制为 [0,1]。"
+        "nameAndType": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                }
+            },
+            "required": [
+                "name",
+                "type"
+            ]
+        },
+        "meshObject": {
+            "type": "object",
+            "description": "网格实例。sceneObjectIdentity 在运行期用于把同一场景对象的多个 section 聚合成大纲的一行。  每个对象类型是自包含的：name 与 type 直接列出，additionalProperties: false 只出现一次。不要改成 allOf[nameAndType, ...] 的组合 —— 两半各自声明 additionalProperties: false 时会把对方的字段判为额外字段，导致没有任何对象能匹配任何分支（2026-10-11 实测过）。 验证器只读取已知字段、不拒绝额外字段（SceneAssetValidator 用 contains()/value() 读取），因此这里允许额外字段：schema 不能比代码更严，否则会拒绝引擎实际接受的场景。",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "type": {
+                    "const": "mesh"
+                },
+                "modelPath": {
+                    "type": "string",
+                    "description": "网格描述文件路径，相对 resourcePath，例如 'Common/Meshes/SM_axis.json'。"
+                },
+                "materialOverride": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "可选的实例级 MI 路径，覆盖本对象全部 section 的材质，不修改 SM 槽位或导入缓存。"
+                },
+                "position": {
+                    "$ref": "#/$defs/vec3"
+                },
+                "rotation": {
+                    "$ref": "#/$defs/vec3"
+                },
+                "scale": {
+                    "$ref": "#/$defs/vec3"
+                }
+            },
+            "required": [
+                "name",
+                "type",
+                "modelPath",
+                "position",
+                "rotation",
+                "scale"
+            ]
+        },
+        "directionalLightObject": {
+            "type": "object",
+            "description": "方向光。场景中第一个有效方向光成为主方向光，并被同步为程序化天空的太阳方向。  每个对象类型是自包含的：name 与 type 直接列出，additionalProperties: false 只出现一次。不要改成 allOf[nameAndType, ...] 的组合 —— 两半各自声明 additionalProperties: false 时会把对方的字段判为额外字段，导致没有任何对象能匹配任何分支（2026-10-11 实测过）。 验证器只读取已知字段、不拒绝额外字段（SceneAssetValidator 用 contains()/value() 读取），因此这里允许额外字段：schema 不能比代码更严，否则会拒绝引擎实际接受的场景。",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "type": {
+                    "const": "directionalLight"
+                },
+                "position": {
+                    "$ref": "#/$defs/vec3"
+                },
+                "rotation": {
+                    "$ref": "#/$defs/vec3"
+                },
+                "color": {
+                    "$ref": "#/$defs/vec3"
+                },
+                "intensity": {
+                    "type": "number",
+                    "description": "无量纲辐照度系数。场景文件中不存在单位字段：源码里没有 intensityUnit 这个概念（在 source/ 全树搜索零命中）。"
+                },
+                "shadow": {
+                    "$ref": "#/$defs/directionalShadow"
+                },
+                "intensityUnit": {
+                    "type": "string",
+                    "enum": [
+                        "lux"
+                    ],
+                    "description": "光度单位。方向光用 lux；点/聚/面光用 cd 或 lm。校验在 ReadCanonicalLightIntensity，缺失或单位不符都会被拒绝。"
+                }
+            },
+            "required": [
+                "name",
+                "type",
+                "position",
+                "rotation",
+                "color",
+                "intensity",
+                "intensityUnit"
+            ],
+            "additionalProperties": false
+        },
+        "pointLightObject": {
+            "type": "object",
+            "description": "每个对象类型是自包含的：name 与 type 直接列出，additionalProperties: false 只出现一次。不要改成 allOf[nameAndType, ...] 的组合 —— 两半各自声明 additionalProperties: false 时会把对方的字段判为额外字段，导致没有任何对象能匹配任何分支（2026-10-11 实测过）。 验证器只读取已知字段、不拒绝额外字段（SceneAssetValidator 用 contains()/value() 读取），因此这里允许额外字段：schema 不能比代码更严，否则会拒绝引擎实际接受的场景。",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "type": {
+                    "const": "pointLight"
+                },
+                "position": {
+                    "$ref": "#/$defs/vec3"
+                },
+                "rotation": {
+                    "$ref": "#/$defs/vec3"
+                },
+                "color": {
+                    "$ref": "#/$defs/vec3"
+                },
+                "intensity": {
+                    "type": "number"
+                },
+                "radius": {
+                    "type": "number",
+                    "default": 0.0,
+                    "description": "可选。loader 用 node.value(\"radius\", 0.0f) 读取，缺失时为 0。验证器不要求该字段。"
+                },
+                "intensityUnit": {
+                    "type": "string",
+                    "enum": [
+                        "cd",
+                        "lm"
+                    ],
+                    "description": "光度单位。方向光用 lux；点/聚/面光用 cd 或 lm。校验在 ReadCanonicalLightIntensity，缺失或单位不符都会被拒绝。"
+                }
+            },
+            "required": [
+                "name",
+                "type",
+                "position",
+                "rotation",
+                "color",
+                "intensity",
+                "intensityUnit"
+            ],
+            "additionalProperties": false
+        },
+        "spotLightObject": {
+            "type": "object",
+            "description": "每个对象类型是自包含的：name 与 type 直接列出，additionalProperties: false 只出现一次。不要改成 allOf[nameAndType, ...] 的组合 —— 两半各自声明 additionalProperties: false 时会把对方的字段判为额外字段，导致没有任何对象能匹配任何分支（2026-10-11 实测过）。 验证器只读取已知字段、不拒绝额外字段（SceneAssetValidator 用 contains()/value() 读取），因此这里允许额外字段：schema 不能比代码更严，否则会拒绝引擎实际接受的场景。",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "type": {
+                    "const": "spotLight"
+                },
+                "position": {
+                    "$ref": "#/$defs/vec3"
+                },
+                "rotation": {
+                    "$ref": "#/$defs/vec3"
+                },
+                "color": {
+                    "$ref": "#/$defs/vec3"
+                },
+                "intensity": {
+                    "type": "number"
+                },
+                "radius": {
+                    "type": "number",
+                    "default": 0.0,
+                    "description": "可选，同 pointLight。"
+                },
+                "cone_angle_outer": {
+                    "type": "number"
+                },
+                "cone_angle_inner": {
+                    "type": "number"
+                },
+                "intensityUnit": {
+                    "type": "string",
+                    "enum": [
+                        "cd",
+                        "lm"
+                    ],
+                    "description": "光度单位。方向光用 lux；点/聚/面光用 cd 或 lm。校验在 ReadCanonicalLightIntensity，缺失或单位不符都会被拒绝。"
+                }
+            },
+            "required": [
+                "name",
+                "type",
+                "position",
+                "rotation",
+                "color",
+                "intensity",
+                "cone_angle_outer",
+                "cone_angle_inner",
+                "intensityUnit"
+            ],
+            "additionalProperties": false
+        },
+        "squareAreaLightObject": {
+            "type": "object",
+            "description": "单面发光方形面光源，用 normal 而非 rotation 定向。实时路径当前拒绝该类型（只有离线渲染消费它）。  每个对象类型是自包含的：name 与 type 直接列出，additionalProperties: false 只出现一次。不要改成 allOf[nameAndType, ...] 的组合 —— 两半各自声明 additionalProperties: false 时会把对方的字段判为额外字段，导致没有任何对象能匹配任何分支（2026-10-11 实测过）。 验证器只读取已知字段、不拒绝额外字段（SceneAssetValidator 用 contains()/value() 读取），因此这里允许额外字段：schema 不能比代码更严，否则会拒绝引擎实际接受的场景。",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "type": {
+                    "const": "squareAreaLight"
+                },
+                "position": {
+                    "$ref": "#/$defs/vec3",
+                    "description": "各分量必须有限。"
+                },
+                "normal": {
+                    "type": "array",
+                    "description": "发光面法线。长度必须为 3、各分量有限，且平方长度大于 1e-12（不接受零向量）。",
+                    "items": {
+                        "type": "number"
+                    },
+                    "minItems": 3,
+                    "maxItems": 3
+                },
+                "color": {
+                    "type": "array",
+                    "description": "各分量必须有限且非负。",
+                    "items": {
+                        "type": "number",
+                        "minimum": 0
+                    },
+                    "minItems": 3,
+                    "maxItems": 3
+                },
+                "size": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "description": "发光面边长，必须 > 0 且不超过 float 上限。"
+                },
+                "intensity": {
+                    "type": "number",
+                    "minimum": 0,
+                    "description": "线性 emitted radiance，必须 >= 0 且不超过 float 上限；不与方向光的 irradiance 混用。"
+                },
+                "intensityUnit": {
+                    "type": "string",
+                    "enum": [
+                        "cd",
+                        "lm"
+                    ],
+                    "description": "光度单位。方向光用 lux；点/聚/面光用 cd 或 lm。校验在 ReadCanonicalLightIntensity，缺失或单位不符都会被拒绝。"
+                }
+            },
+            "required": [
+                "name",
+                "type",
+                "position",
+                "normal",
+                "color",
+                "size",
+                "intensity",
+                "intensityUnit"
+            ],
+            "additionalProperties": false
+        },
+        "cameraObject": {
+            "type": "object",
+            "description": "相机。fov 是水平视场角（loader 调用 SetHFOV）。look_at 与 rotation 二选一决定初始朝向：给了 look_at 就用它，否则用 rotation；给了 look_at 时它必须与 position 不同（平方距离 > 1e-8）。  每个对象类型是自包含的：name 与 type 直接列出，additionalProperties: false 只出现一次。不要改成 allOf[nameAndType, ...] 的组合 —— 两半各自声明 additionalProperties: false 时会把对方的字段判为额外字段，导致没有任何对象能匹配任何分支（2026-10-11 实测过）。 验证器只读取已知字段、不拒绝额外字段（SceneAssetValidator 用 contains()/value() 读取），因此这里允许额外字段：schema 不能比代码更严，否则会拒绝引擎实际接受的场景。",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "type": {
+                    "const": "camera"
+                },
+                "fov": {
+                    "type": "number",
+                    "description": "水平视场角，单位为度。"
+                },
+                "near_clip": {
+                    "type": "number"
+                },
+                "far_clip": {
+                    "type": "number"
+                },
+                "position": {
+                    "$ref": "#/$defs/vec3"
+                },
+                "rotation": {
+                    "$ref": "#/$defs/vec3"
+                },
+                "scale": {
+                    "$ref": "#/$defs/vec3",
+                    "description": "必须存在（验证器按 transform 字段强制要求），但 loader 当前不读取它。"
+                },
+                "look_at": {
+                    "$ref": "#/$defs/vec3",
+                    "description": "可选。给出时覆盖 rotation 决定初始朝向。"
+                },
+                "exposure": {
+                    "$ref": "#/$defs/exposure"
+                }
+            },
+            "required": [
+                "name",
+                "type",
+                "fov",
+                "near_clip",
+                "far_clip",
+                "position",
+                "rotation",
+                "scale",
+                "exposure"
+            ]
+        },
+        "environmentObject": {
+            "type": "object",
+            "description": "环境/IBL 配置。注意实际配置在嵌套的 environment 对象里，且 environment.type 是必填；外层只要求 name 与 type。  每个对象类型是自包含的：name 与 type 直接列出，additionalProperties: false 只出现一次。不要改成 allOf[nameAndType, ...] 的组合 —— 两半各自声明 additionalProperties: false 时会把对方的字段判为额外字段，导致没有任何对象能匹配任何分支（2026-10-11 实测过）。 验证器只读取已知字段、不拒绝额外字段（SceneAssetValidator 用 contains()/value() 读取），因此这里允许额外字段：schema 不能比代码更严，否则会拒绝引擎实际接受的场景。",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "type": {
+                    "const": "environment"
+                },
+                "environment": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "default": "",
+                            "description": "可选。loader 用 node.value(\"name\", \"\") 读取，用于大纲显示环境名。"
+                        },
+                        "type": {
+                            "type": "string",
+                            "enum": [
+                                "none",
+                                "proceduralSky",
+                                "hdri"
+                            ],
+                            "description": "none 不产生 IBL，实时 descriptor 仍绑定既有资源但照明强度为零且跳过天空；proceduralSky 用 skyParameters 程序化生成；hdri 从 hdrPath 加载。"
+                        },
+                        "hdrPath": {
+                            "type": "string",
+                            "description": "相对 resourcePath 的 HDR 文件路径。类型为 hdri 时 loader 用 config[\"hdrPath\"].get<std::string>() 读取，因此该类型下必须存在。"
+                        },
+                        "cubeSize": {
+                            "type": "integer",
+                            "default": 128,
+                            "description": "环境立方图边长。场景文件中实际出现 128 / 256 / 512；loader 默认 128，hdri 分支默认 512。"
+                        },
+                        "intensity": {
+                            "type": "number",
+                            "default": 1.0,
+                            "description": "统一 sky 与 IBL 强度。"
+                        },
+                        "skyParameters": {
+                            "$ref": "#/$defs/skyParameters"
+                        }
+                    },
+                    "required": [
+                        "type"
+                    ],
+                    "additionalProperties": false
+                }
+            },
+            "required": [
+                "name",
+                "type",
+                "environment"
+            ]
+        },
+        "skyParameters": {
+            "type": "object",
+            "description": "程序化天空参数。存在时必须提供全部字段，否则 loader 读取失败；这是它与其它可选块的区别。",
+            "properties": {
+                "sunColor": {
+                    "$ref": "#/$defs/vec3"
+                },
+                "zenithColor": {
+                    "$ref": "#/$defs/vec3"
+                },
+                "horizonColor": {
+                    "$ref": "#/$defs/vec3"
+                },
+                "groundColor": {
+                    "$ref": "#/$defs/vec3"
+                },
+                "sunIntensity": {
+                    "type": "number"
+                },
+                "sunAngularRadius": {
+                    "type": "number"
+                },
+                "skyGradientExponent": {
+                    "type": "number"
+                },
+                "groundGradientExponent": {
+                    "type": "number"
+                },
+                "sunHaloExponent": {
+                    "type": "number"
+                },
+                "sunHaloStrength": {
+                    "type": "number"
+                }
+            },
+            "required": [
+                "sunColor",
+                "zenithColor",
+                "horizonColor",
+                "groundColor",
+                "sunIntensity",
+                "sunAngularRadius",
+                "skyGradientExponent",
+                "groundGradientExponent",
+                "sunHaloExponent",
+                "sunHaloStrength"
+            ],
+            "additionalProperties": false
         },
         "directionalShadow": {
             "type": "object",
             "properties": {
-                "castShadows": { "type": "boolean" },
+                "castShadows": {
+                    "type": "boolean"
+                },
                 "dynamicShadowDistance": {
                     "type": "number",
                     "exclusiveMinimum": 0,
                     "description": "厘米制阴影距离。Bias 与各类 fraction 仍为无量纲参数。"
                 },
-                "dynamicShadowCascades": { "type": "integer", "minimum": 1, "maximum": 4 },
-                "cascadeDistributionExponent": { "type": "number", "minimum": 1, "maximum": 10 },
-                "cascadeTransitionFraction": { "type": "number", "minimum": 0, "maximum": 1 },
-                "shadowDistanceFadeoutFraction": { "type": "number", "minimum": 0, "maximum": 1 },
-                "shadowBias": { "type": "number", "minimum": 0, "maximum": 1 },
-                "shadowSlopeBias": { "type": "number", "minimum": 0, "maximum": 1 },
-                "shadowCascadeBiasDistribution": { "type": "number", "minimum": 0, "maximum": 1 }
+                "dynamicShadowCascades": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 4
+                },
+                "cascadeDistributionExponent": {
+                    "type": "number",
+                    "minimum": 1,
+                    "maximum": 10
+                },
+                "cascadeTransitionFraction": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                },
+                "shadowDistanceFadeoutFraction": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                },
+                "shadowBias": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                },
+                "shadowSlopeBias": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                },
+                "shadowCascadeBiasDistribution": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
+                }
             },
             "additionalProperties": false
         },
@@ -131,333 +596,6 @@
                 "shutterSeconds",
                 "iso",
                 "compensation"
-            ],
-            "additionalProperties": false
-        },
-        "meshObject": {
-            "type": "object",
-            "properties": {
-                "name": {
-                    "type": "string"
-                },
-                "type": {
-                    "type": "string",
-                    "const": "mesh"
-                },
-                "modelPath": {
-                    "type": "string",
-                    "description": "模型描述文件路径，例如 'models/SM_xxx.json'。"
-                },
-                "position": {
-                    "$ref": "#/$defs/vec3"
-                },
-                "rotation": {
-                    "$ref": "#/$defs/vec3"
-                },
-                "scale": {
-                    "$ref": "#/$defs/vec3"
-                }
-            },
-            "required": [
-                "name",
-                "type",
-                "modelPath",
-                "position",
-                "rotation",
-                "scale"
-            ],
-            "additionalProperties": false
-        },
-        "directionalLightObject": {
-            "type": "object",
-            "properties": {
-                "name": {
-                    "type": "string"
-                },
-                "type": {
-                    "type": "string",
-                    "const": "directionalLight"
-                },
-                "position": {
-                    "$ref": "#/$defs/vec3"
-                },
-                "rotation": {
-                    "$ref": "#/$defs/vec3"
-                },
-                "color": {
-                    "$ref": "#/$defs/lightColor"
-                },
-                "intensity": {
-                    "type": "number",
-                    "minimum": 0
-                },
-                "intensityUnit": {
-                    "const": "lux"
-                },
-                "shadow": {
-                    "$ref": "#/$defs/directionalShadow"
-                }
-            },
-            "required": [
-                "name",
-                "type",
-                "position",
-                "rotation",
-                "color",
-                "intensity",
-                "intensityUnit"
-            ],
-            "additionalProperties": false
-        },
-        "pointLightObject": {
-            "type": "object",
-            "properties": {
-                "name": {
-                    "type": "string"
-                },
-                "type": {
-                    "type": "string",
-                    "const": "pointLight"
-                },
-                "position": {
-                    "$ref": "#/$defs/vec3"
-                },
-                "rotation": {
-                    "$ref": "#/$defs/vec3"
-                },
-                "color": {
-                    "$ref": "#/$defs/lightColor"
-                },
-                "intensity": {
-                    "type": "number",
-                    "minimum": 0
-                },
-                "intensityUnit": {
-                    "enum": [
-                        "cd",
-                        "lm"
-                    ]
-                },
-                "radius": {
-                    "type": "number",
-                    "minimum": 0,
-                    "description": "旧字段，当前实时光照不消费；后续应迁移为有明确单位的光源几何参数。"
-                }
-            },
-            "required": [
-                "name",
-                "type",
-                "position",
-                "rotation",
-                "color",
-                "intensity",
-                "intensityUnit"
-            ],
-            "additionalProperties": false
-        },
-        "spotLightObject": {
-            "type": "object",
-            "properties": {
-                "name": {
-                    "type": "string"
-                },
-                "type": {
-                    "type": "string",
-                    "const": "spotLight"
-                },
-                "position": {
-                    "$ref": "#/$defs/vec3"
-                },
-                "rotation": {
-                    "$ref": "#/$defs/vec3"
-                },
-                "color": {
-                    "$ref": "#/$defs/lightColor"
-                },
-                "intensity": {
-                    "type": "number",
-                    "minimum": 0
-                },
-                "intensityUnit": {
-                    "enum": [
-                        "cd",
-                        "lm"
-                    ]
-                },
-                "radius": {
-                    "type": "number",
-                    "minimum": 0,
-                    "description": "旧字段，当前实时光照不消费；后续应迁移为有明确单位的光源几何参数。"
-                },
-                "cone_angle_outer": {
-                    "type": "number",
-                    "exclusiveMinimum": 0,
-                    "exclusiveMaximum": 90
-                },
-                "cone_angle_inner": {
-                    "type": "number",
-                    "minimum": 0,
-                    "exclusiveMaximum": 90
-                }
-            },
-            "required": [
-                "name",
-                "type",
-                "position",
-                "rotation",
-                "color",
-                "intensity",
-                "intensityUnit",
-                "cone_angle_outer",
-                "cone_angle_inner"
-            ],
-            "additionalProperties": false
-        },
-        "squareAreaLightObject": {
-            "type": "object",
-            "properties": {
-                "name": {
-                    "type": "string"
-                },
-                "type": {
-                    "type": "string",
-                    "const": "squareAreaLight"
-                },
-                "position": {
-                    "$ref": "#/$defs/vec3"
-                },
-                "normal": {
-                    "$ref": "#/$defs/vec3"
-                },
-                "color": {
-                    "$ref": "#/$defs/lightColor"
-                },
-                "size": {
-                    "type": "number",
-                    "exclusiveMinimum": 0
-                },
-                "intensity": {
-                    "type": "number",
-                    "minimum": 0
-                },
-                "intensityUnit": {
-                    "enum": [
-                        "cd",
-                        "lm"
-                    ]
-                }
-            },
-            "required": [
-                "name",
-                "type",
-                "position",
-                "normal",
-                "color",
-                "size",
-                "intensity",
-                "intensityUnit"
-            ],
-            "additionalProperties": false
-        },
-        "cameraObject": {
-            "type": "object",
-            "properties": {
-                "name": {
-                    "type": "string"
-                },
-                "type": {
-                    "type": "string",
-                    "const": "camera"
-                },
-                "fov": {
-                    "type": "number"
-                },
-                "near_clip": {
-                    "type": "number"
-                },
-                "far_clip": {
-                    "type": "number"
-                },
-                "position": {
-                    "$ref": "#/$defs/vec3"
-                },
-                "rotation": {
-                    "$ref": "#/$defs/vec3"
-                },
-                "scale": {
-                    "$ref": "#/$defs/vec3"
-                },
-                "look_at": {
-                    "$ref": "#/$defs/vec3"
-                },
-                "exposure": {
-                    "$ref": "#/$defs/exposure"
-                }
-            },
-            "required": [
-                "name",
-                "type",
-                "fov",
-                "near_clip",
-                "far_clip",
-                "position",
-                "rotation",
-                "scale",
-                "exposure"
-            ],
-            "additionalProperties": false
-        },
-        "environmentObject": {
-            "type": "object",
-            "properties": {
-                "name": {
-                    "type": "string"
-                },
-                "type": {
-                    "type": "string",
-                    "const": "environment"
-                },
-                "environment": {
-                    "type": "object",
-                    "properties": {
-                        "type": {
-                            "enum": [
-                                "none",
-                                "hdri",
-                                "proceduralSky"
-                            ]
-                        },
-                        "hdrPath": {
-                            "type": "string"
-                        },
-                        "cubeSize": {
-                            "type": "integer",
-                            "minimum": 1
-                        },
-                        "intensity": {
-                            "type": "number",
-                            "minimum": 0
-                        },
-                        "skyParameters": {
-                            "type": "object"
-                        }
-                    },
-                    "required": [
-                        "type"
-                    ],
-                    "additionalProperties": false
-                },
-                "hdrPath": {
-                    "type": "string"
-                },
-                "cubeSize": {
-                    "type": "integer",
-                    "minimum": 1
-                }
-            },
-            "required": [
-                "name",
-                "type"
             ],
             "additionalProperties": false
         }

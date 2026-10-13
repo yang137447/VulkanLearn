@@ -352,7 +352,7 @@ Emissive = independent additive output
 - [x] 建立参数 round-trip：`Scatter`、`Backlit`、`Specular`、`Roughness`、`Tangent` 逐项 sweep。
 - [x] 建立 geometry sweep：mirrored UV、skinning、LOD、flow map、card/strand 对照。
 - [x] 将 Hair 运行时验证接入现有 Runtime Validation/UE-lite validation 入口，使用显式 `-RunHairValidation` 开关；入口必须先检查正式 authoring metadata，不自动生成或覆盖作者资产，并保持共享 `shader/spv/` 的测试串行。
-- [x] 完成后把已稳定内容迁移到 `documents/rendering/hair-shading-model.md`，并更新 `documents/rendering/shader-structure-and-material-function.md` 的状态表。
+- [x] 完成后把已稳定内容迁移到 `documents/rendering/hair-shading-model.md`，并更新 `documents/contracts/shader-structure-and-material-function.md` 的状态表。
 
 ## 6. 文件落点矩阵
 

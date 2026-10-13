@@ -6,6 +6,7 @@
 #include <utility>
 
 #include <RmlUi/Core/Matrix4.h>
+#include <RmlUi/Core/Core.h>
 #include <RmlUi/Core/StringUtilities.h>
 #include <RmlUi/Core/TextInputContext.h>
 #include <RmlUi/Core/Vector4.h>
@@ -15,6 +16,7 @@
 
 #include "engine/diagnosticsSubsystem.h"
 #include "platform/platformWindow.h"
+#include "ui/uiColorTransform.h"
 
 namespace VL
 {
@@ -256,7 +258,7 @@ void RmlUiTextInputHandler::ClearCompositionState()
 }
 struct RmlUiRenderInterface::CompiledGeometry
 {
-    std::vector<Rml::Vertex> vertices;
+    std::vector<UiVertex> vertices;
     std::vector<int> indices;
 };
 
@@ -271,7 +273,22 @@ Rml::CompiledGeometryHandle RmlUiRenderInterface::CompileGeometry(
     Rml::Span<const int> indices)
 {
     std::unique_ptr<CompiledGeometry> geometry = std::make_unique<CompiledGeometry>();
-    geometry->vertices.assign(vertices.begin(), vertices.end());
+    geometry->vertices.reserve(vertices.size());
+    for (const Rml::Vertex& source : vertices)
+    {
+        UiVertex vertex;
+        vertex.position[0] = source.position.x;
+        vertex.position[1] = source.position.y;
+        vertex.texCoord[0] = source.tex_coord.x;
+        vertex.texCoord[1] = source.tex_coord.y;
+        // 编译静态几何时转换一次，不在每帧字形/资产网格快照中重复 gamma 计算。
+        const auto& color = source.colour;
+        vertex.color = linearColorOutput
+            ? UiPremultipliedSrgbToLinear(color.red, color.green, color.blue, color.alpha)
+            : std::array<float, 4>{color.red / 255.0f, color.green / 255.0f,
+                color.blue / 255.0f, color.alpha / 255.0f};
+        geometry->vertices.push_back(vertex);
+    }
     geometry->indices.assign(indices.begin(), indices.end());
     return reinterpret_cast<Rml::CompiledGeometryHandle>(geometry.release());
 }
@@ -290,12 +307,12 @@ void RmlUiRenderInterface::RenderGeometry(
     const uint32_t baseVertex = static_cast<uint32_t>(currentSnapshot->vertices.size());
     const uint32_t firstIndex = static_cast<uint32_t>(currentSnapshot->indices.size());
 
-    currentSnapshot->vertices.reserve(currentSnapshot->vertices.size() + geometry->vertices.size());
-    for (const Rml::Vertex& sourceVertex : geometry->vertices)
+    // vector 按几何级数扩容；按每个 draw 精确 reserve 会让整帧顶点被反复复制。
+    for (const UiVertex& sourceVertex : geometry->vertices)
     {
         Rml::Vector4f position(
-            sourceVertex.position.x + translation.x,
-            sourceVertex.position.y + translation.y,
+            sourceVertex.position[0] + translation.x,
+            sourceVertex.position[1] + translation.y,
             0.0f,
             1.0f);
         if (transformEnabled)
@@ -308,16 +325,12 @@ void RmlUiRenderInterface::RenderGeometry(
             }
         }
 
-        UiVertex vertex;
+        UiVertex vertex = sourceVertex;
         vertex.position[0] = position.x;
         vertex.position[1] = position.y;
-        vertex.texCoord[0] = sourceVertex.tex_coord.x;
-        vertex.texCoord[1] = sourceVertex.tex_coord.y;
-        vertex.color = PackColor(sourceVertex.colour);
         currentSnapshot->vertices.push_back(vertex);
     }
 
-    currentSnapshot->indices.reserve(currentSnapshot->indices.size() + geometry->indices.size());
     for (int sourceIndex : geometry->indices)
     {
         currentSnapshot->indices.push_back(baseVertex + static_cast<uint32_t>(sourceIndex));
@@ -337,10 +350,43 @@ void RmlUiRenderInterface::ReleaseGeometry(Rml::CompiledGeometryHandle geometry)
     delete reinterpret_cast<CompiledGeometry*>(geometry);
 }
 
+void RmlUiRenderInterface::PublishTexturePreview(
+    const std::shared_ptr<const EditorUi::EditorJsonDocumentSnapshot>& document)
+{
+    for (auto it = previewSources.begin(); it != previewSources.end();)
+        if (it->second.expired())
+        {
+            Rml::ReleaseTexture(it->first, this);
+            it = previewSources.erase(it);
+        }
+        else ++it;
+    if (lastPreviewDocument.lock() == document) return;
+    lastPreviewDocument = document;
+    if (document && document->texturePreview)
+        previewSources[EditorUi::EditorTexturePreviewSource(document->revision)] = document->texturePreview;
+}
+
 Rml::TextureHandle RmlUiRenderInterface::LoadTexture(
     Rml::Vector2i& textureDimensions,
     const Rml::String& source)
 {
+    if (source == SceneViewportTextureSource)
+    {
+        // 固定占位尺寸只供 RmlUi 布局；图像实际分辨率与所有权都留在 renderer。
+        textureDimensions = {1, 1};
+        return static_cast<Rml::TextureHandle>(SceneViewportTextureId);
+    }
+    if (source.compare(0, 21, "vl://texture-preview/") == 0 || source.compare(0, 15, "vl://thumbnail/") == 0)
+    {
+        const auto found = previewSources.find(source);
+        const auto preview = found == previewSources.end() ? nullptr : found->second.lock();
+        if (!preview) return 0;
+        auto pixels = preview->pixels;
+        if (linearColorOutput) ConvertUiPixelsToLinear(pixels, false);
+        textureDimensions = {int(preview->width), int(preview->height)};
+        return RegisterTexture(preview->width, preview->height, source,
+            std::make_shared<const std::vector<uint8_t>>(std::move(pixels)));
+    }
     int width = 0;
     int height = 0;
     int channels = 0;
@@ -357,7 +403,14 @@ Rml::TextureHandle RmlUiRenderInterface::LoadTexture(
     const size_t byteCount = static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
     std::vector<uint8_t> pixels(loadedPixels, loadedPixels + byteCount);
     stbi_image_free(loadedPixels);
-    PremultiplyAlpha(pixels);
+    if (linearColorOutput) ConvertUiPixelsToLinear(pixels, false);
+    else
+    {
+        for (size_t offset = 0; offset + 3 < pixels.size(); offset += 4)
+            for (size_t channel = 0; channel < 3; ++channel)
+                pixels[offset + channel] = static_cast<uint8_t>(
+                    (static_cast<uint32_t>(pixels[offset + channel]) * pixels[offset + 3] + 127u) / 255u);
+    }
 
     textureDimensions = Rml::Vector2i(width, height);
     return RegisterTexture(
@@ -365,6 +418,29 @@ Rml::TextureHandle RmlUiRenderInterface::LoadTexture(
         static_cast<uint32_t>(height),
         source,
         std::make_shared<const std::vector<uint8_t>>(std::move(pixels)));
+}
+
+void RmlUiRenderInterface::PublishThumbnails(
+    const std::shared_ptr<const EditorUi::EditorThumbnailSnapshot>& snapshot)
+{
+    if (lastThumbnails.lock() == snapshot) return;
+    lastThumbnails = snapshot;
+    std::unordered_set<std::string> next;
+    if (snapshot)
+        for (const auto& entry : snapshot->entries)
+            if (entry.second.image)
+            {
+                next.insert(entry.second.source);
+                previewSources[entry.second.source] = entry.second.image;
+            }
+    // 内存 LRU 仍可持有像素，但离开可见窗口的 Rml/GPU 纹理必须释放，不能随浏览全库累积。
+    for (const auto& source : thumbnailSources)
+        if (!next.count(source))
+        {
+            Rml::ReleaseTexture(source, this);
+            previewSources.erase(source);
+        }
+    thumbnailSources = std::move(next);
 }
 
 Rml::TextureHandle RmlUiRenderInterface::GenerateTexture(
@@ -377,6 +453,7 @@ Rml::TextureHandle RmlUiRenderInterface::GenerateTexture(
     }
 
     std::vector<uint8_t> pixels(source.begin(), source.end());
+    if (linearColorOutput) ConvertUiPixelsToLinear(pixels, true);
     return RegisterTexture(
         static_cast<uint32_t>(sourceDimensions.x),
         static_cast<uint32_t>(sourceDimensions.y),
@@ -499,25 +576,6 @@ UiClipRect RmlUiRenderInterface::BuildClipRect() const
     clipRect.width = right > left ? static_cast<uint32_t>(right - left) : 0;
     clipRect.height = bottom > top ? static_cast<uint32_t>(bottom - top) : 0;
     return clipRect;
-}
-
-uint32_t RmlUiRenderInterface::PackColor(const Rml::ColourbPremultiplied& color)
-{
-    return static_cast<uint32_t>(color.red) |
-        (static_cast<uint32_t>(color.green) << 8u) |
-        (static_cast<uint32_t>(color.blue) << 16u) |
-        (static_cast<uint32_t>(color.alpha) << 24u);
-}
-
-void RmlUiRenderInterface::PremultiplyAlpha(std::vector<uint8_t>& pixels)
-{
-    for (size_t offset = 0; offset + 3 < pixels.size(); offset += 4)
-    {
-        const uint32_t alpha = pixels[offset + 3];
-        pixels[offset + 0] = static_cast<uint8_t>((static_cast<uint32_t>(pixels[offset + 0]) * alpha + 127u) / 255u);
-        pixels[offset + 1] = static_cast<uint8_t>((static_cast<uint32_t>(pixels[offset + 1]) * alpha + 127u) / 255u);
-        pixels[offset + 2] = static_cast<uint8_t>((static_cast<uint32_t>(pixels[offset + 2]) * alpha + 127u) / 255u);
-    }
 }
 
 } // namespace VL

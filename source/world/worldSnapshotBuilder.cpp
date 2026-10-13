@@ -214,6 +214,35 @@ EnvironmentSnapshot BuildEnvironmentSnapshot(
 
 } // namespace
 
+RuntimeId WorldObjectRuntimeId(const World& world, const std::string& objectName)
+{
+    return StableRuntimeId(BuildObjectRuntimeKey(world, objectName));
+}
+
+LightSnapshot BuildWorldDirectionalLightSnapshot(
+    const World& world, const std::string& lightName, const DirectionalLight& light)
+{
+    return BuildDirectionalLightSnapshot(world, lightName, light);
+}
+
+LightSnapshot BuildWorldPointLightSnapshot(
+    const World& world, const std::string& lightName, const PointLight& light)
+{
+    return BuildPointLightSnapshot(world, lightName, light);
+}
+
+LightSnapshot BuildWorldSpotLightSnapshot(
+    const World& world, const std::string& lightName, const SpotLight& light)
+{
+    return BuildSpotLightSnapshot(world, lightName, light);
+}
+
+LightSnapshot BuildWorldSquareAreaLightSnapshot(
+    const World& world, const std::string& lightName, const WorldSquareAreaLight& light)
+{
+    return BuildSquareAreaLightSnapshot(world, lightName, light);
+}
+
 RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
     const World& world,
     const WorldSnapshotBuildDesc& desc)
@@ -261,11 +290,18 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
     snapshot.camera.clipNear = camera.GetClipNear();
     snapshot.camera.clipFar = camera.GetClipFar();
 
+    // 逐对象可见性在这里过滤，不在渲染器里再判一次：WorldSnapshot 是渲染侧
+    // 唯一的对象集合（meshDraws 既出图也供编辑器拾取、MaterialInstance 上下文和
+    // 阴影 pass 复用），在构造处丢弃不可见对象，渲染路径就不存在"忘了判断"的分支，
+    // 也不会出现"画出来了但仍可拾取"这类不一致。不可见对象同时不进入
+    // currentObjectModels，重新显示时该帧退回自身模型（没有速度向量），是刻意的。
     snapshot.meshDraws.reserve(world.GetMeshObjects().size());
     std::unordered_map<RuntimeId, Eigen::Matrix4f> currentObjectModels;
     currentObjectModels.reserve(world.GetMeshObjects().size());
     for (const auto& [objectName, meshObject] : world.GetMeshObjects())
     {
+        if (!meshObject.visible) continue;
+
         const RuntimeId objectId = StableRuntimeId(BuildObjectRuntimeKey(world, objectName));
 
         const auto previousModelIt = previousObjectModels.find(objectId);
@@ -295,18 +331,22 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
 
     for (const auto& [lightName, light] : world.GetDirectionalLights())
     {
+        if (!light->IsVisible()) continue;
         snapshot.lights.push_back(BuildDirectionalLightSnapshot(world, lightName, *light));
     }
     for (const auto& [lightName, light] : world.GetPointLights())
     {
+        if (!light->IsVisible()) continue;
         snapshot.lights.push_back(BuildPointLightSnapshot(world, lightName, *light));
     }
     for (const auto& [lightName, light] : world.GetSpotLights())
     {
+        if (!light->IsVisible()) continue;
         snapshot.lights.push_back(BuildSpotLightSnapshot(world, lightName, *light));
     }
     for (const auto& [lightName, light] : world.GetSquareAreaLights())
     {
+        if (!light.visible) continue;
         snapshot.lights.push_back(BuildSquareAreaLightSnapshot(world, lightName, light));
     }
 

@@ -16,17 +16,17 @@
   - 负责说明阅读顺序、修改约定、高风险区域、隐式耦合和工作方式
   - 不负责替代架构设计文档
 - `documents/README.md`
-  - 面向所有协作者的正式文档目录
-  - 负责说明文档分类、每类文档的职责和收录规则
-- `documents/architecture/`
-  - 存放正式架构、线程模型、系统边界、数据流与通用编码约定
-  - 这里描述当前认可的架构边界和落地状态
-- `documents/rendering/`
-  - 存放当前已经落地或正在被代码使用的渲染契约
-  - 例如材质参数生成、贴图资产 JSON、descriptor image info 管理
-- `documents/plan/`
-  - 存放未实现、部分实现或长期路线型文档；已落地方案可以保留决策记录
-  - 当前实现契约必须迁移到 `documents/architecture/` 或 `documents/rendering/`
+  - 面向所有协作者的文档分层说明
+  - 说明三层各自能信到什么程度，以及"契约层不得写未来"这条硬纪律
+- `documents/routing.md`
+  - 源码路径 → 必读契约 → 守护门禁规则的映射
+  - 改任何源码前先读它，按路径匹配全部适用规则
+- `documents/contracts/`
+  - 当前契约：系统**现在是什么**，每条可核对到源码、测试或门禁规则
+  - 与源码矛盾时以源码为准，并修正契约
+- `documents/rationale/` 与 `documents/plan/`
+  - **非契约**：决策、证据归档、被否决的方案、退役实现、以及打算做什么
+  - 可以任意写未来，但不能当事实引用
 - `documents/reference/`
   - 存放教程、课程和背景学习资料
 
@@ -34,11 +34,11 @@
 
 - `AGENTS.md`
 - `documents/README.md`
-- `documents/architecture/vulkanlearn-architecture.html`
-- `documents/architecture/game-ui-stack.md`
-- `documents/rendering/texture-asset-json-v1.md`
-- `documents/rendering/material-param-authoring-and-reflection.md`
-- `documents/rendering/descriptor-imageinfo-management.md`
+- `documents/contracts/vulkanlearn-architecture.html`
+- `documents/contracts/game-ui-stack.md`
+- `documents/contracts/texture-asset-json-v1.md`
+- `documents/contracts/material-param-authoring-and-reflection.md`
+- `documents/contracts/descriptor-imageinfo-management.md`
 
 ## 环境要求
 - Windows 10/11
@@ -68,19 +68,60 @@ cmake --build build -j
 
 编译成功后，可执行文件 `main.exe` 将生成在 `build/bin` 目录下。
 
-### UI 构建与运行
+### 性能对照构建
 
-默认构建包含 RmlUi 运行时 UI 和 Dear ImGui 开发者 UI。只需要运行时 UI
-时，可以在配置阶段关闭开发者层：
+编辑器性能应使用独立的优化构建测量，保留 `build/` 的 Debug/校验环境。
+以下配置使用 MinGW 的 `-O2 -g -DNDEBUG`，关闭 Vulkan validation；
+Shader 也会按现有 Release 策略生成，不是仅关闭校验的单变量对照。
 
-```bash
-cmake -S . -B build -G "MinGW Makefiles" -DVULKANLEARN_ENABLE_DEVELOPER_UI=OFF
-cmake --build build -j
+```powershell
+cmake -S . -B build-perf -G "MinGW Makefiles" -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=RelWithDebInfo -DVULKANLEARN_ENABLE_VULKAN_VALIDATION=OFF -DVULKANLEARN_BUILD_TESTS=OFF -DVULKANLEARN_BUILD_SPEEDTREE_WIND_VALIDATION=OFF
+cmake --build build-perf --target main -j4
+.\build-perf\bin\main.exe --initial-scene Maps/SC_sifi_head/SC_sifi_head.json
 ```
 
+对照时固定场景、窗口尺寸、相机和 Details 选中状态，排除启动与编译期间数据。
+两种构建共享 `shader/spv/`，切换时由缓存的编译策略失效规则触发重建，不要同时启动。
+优化构建不替代 Debug 校验与模块测试；窗口 FPS 也不等于 GPU 执行耗时。
+
+### UI 构建与运行
+
+运行时控制页和编辑器工作区统一使用 RmlUi，构建不再依赖 ImGui，
+也不再提供 `VULKANLEARN_ENABLE_DEVELOPER_UI` 编译开关。
+`ui/editor-workspace.rml` 和 `.rcss` 定义模型列表、材质槽、
+JSON 资产浏览器、属性面板与离线控制。布局采用顶部命令栏、右上 Outliner、
+右下 Details、底部 Content Browser / Renderer 标签页，中央/左侧透出 Vulkan 场景。
+当前材质工作区支持自由停靠、标签合并、可拖分隔条、窗口内浮动及布局保存/重置；
+Asset Editor 是正式 DockPanel，默认与 Viewport 合并为中央标签组，也可拖到其他区域或浮动，
+并通过 renderer-owned 离屏纹理显示独立 Viewport；尚不支持原生多窗口、场景增删或 Undo/Redo。
+Content Browser 使用目录树、路径导航、搜索、类型筛选和资产网格/列表，
+索引 MI、Mesh、Scene、Texture、Terrain JSON。单击选中；双击 MI 在关卡旁打开独立中央标签，
+参数编辑、保存和预览命令均在中央材质页，右侧 Details 保留场景对象信息；
+材质页左侧显示独立预览球，支持拖动环绕、中键平移、滚轮缩放和重新取景；
+双击 Scene 会复用现有 World/RenderGraph 事务切换关卡，并同步打开只读 JSON inspector；
+双击 Mesh 进入模型预览标签并自动取景：左/右键拖动旋转、滚轮缩放、中键平移，
+双击画面或点击相机按钮重新取景。切换/重载模型会重置相机，不修改模型资产。
+Texture 标签提供 PNG/JPEG/TGA/BMP 的等比例 RGB 预览；Terrain 仍为类型预览占位。
+贴图预览支持滚轮缩放、鼠标拖动平移，双击或 Fit Image 按钮复位；放大的是有界预览图。
+贴图预览按 colorSpace 显示，最长边限制为 1024，标题显示原图尺寸；资源标签包含只读 JSON Details；
+支持标签切换、关闭、返回 World、重复打开去重和重新读取 JSON。Scene 仍进入主工作区
+只读 JSON inspector 并请求 World 切换。Mesh 通过预览 World 加载模型，Texture 在后台解码 source，不切换 World；
+只读 JSON inspector 不展示、不保留任意层级的 `data` 字段及子树，也不读取 JSON 引用的数据文件。
+内嵌 `data` 仍受 JSON 语法与输入上限校验，并非跳过文件字节读取。
+目录由独立 worker 在初始化及显式 Refresh 时扫描，打开 JSON 也在 worker 完成；
+逐帧仅轮询结果并共享不可变快照，不逐帧扫描或读取资产 JSON。
+浏览器网格/列表最多挂载 192 个可见条目节点（含预取）及两个高度占位节点，
+静止状态复用目录、筛选和 markup；属性值缓存避免重复触发布局 dirty，
+Vulkan UI 顶点/索引缓冲按容量倍增复用。具体输入上限见组件契约。
+贴图网格按需显示后台生成的真实缩略图，结果缓存在 `.cache/editor-thumbnails/`；
+Refresh 重新校验源文件。模型与材质实例使用独立离屏渲染的真实缩略图，只做会话缓存；
+空闲 750 ms 后分阶段准备，复用中性 HDRI，不切换当前关卡。首次导入/管线创建仍有同步开销。
+场景截图缩略图尚未接入；离线专用材质保留类型图标并显示诊断。
+Color 参数目前通过 Linear RGBA 数值编辑，不提供旧的 sRGB 调色板。
+
 运行时 UI 资产位于仓库内的 `ui/`，由 `config/config.json -> ui` 配置块选择。
-`F10` 或手柄 `Start` 打开/关闭运行时控制页，`Esc` 切换鼠标捕获，
-`F1` 切换开发者工具。启动参数
+旧 Runtime Debug 页及 Settings/F10/手柄 Start 入口已移除。`Esc` 切换鼠标捕获，
+`F11` 切换编辑器沉浸模式（`F1` 兼容）。启动参数
 `--dev-ui` 和 `--no-dev-ui` 可以覆盖配置中的开发者 UI 开关：
 
 ```bash
@@ -89,7 +130,13 @@ build/bin/main.exe --no-dev-ui
 ```
 
 RML/RCSS/本地化文件在开发模式下支持候选解析、校验、提交式热重载；失败候选
-不会替换最后一个有效页面。实现契约见 `documents/architecture/game-ui-stack.md`。
+不会替换最后一个有效页面。实现契约见 `documents/contracts/game-ui-stack.md`。
+编辑器后续阶段见 `documents/plan/ui/rmlui-editor-plan.md`。
+组件分类与当前覆盖见 `documents/contracts/ui-component-system.md`；
+首批组件模块位于 `source/ui/widgets/`，共享样式位于 `ui/widgets/`。
+
+从本工作目录根启动；默认资源目录为相邻的 `../VukanLearnResources`。
+分支验证使用独立资源 worktree，保存 MI 或离线输出不会写入原开发资源目录。
 
 ### Lookdev 资产审阅场景
 
@@ -128,7 +175,7 @@ HDRI 的文章构图还原链路，不是 UE 材质资产或显示变换的逐�
 
 VL 是离线渲染的唯一出图入口；纯 CPU `vl_offline_core` 由根工程构建，
 数值测试不需要 Vulkan 窗口。当前架构边界见
-`documents/architecture/vl-offline-rendering.md`。VL 已接入冻结的
+`documents/contracts/vl-offline-rendering.md`。VL 已接入冻结的
 World/MI/mesh/纹理输入、渐进会话和 Vulkan 离线显示；支持范围只限
 Lambert、ClothSheen、ClothFiber、AshikhminVelvet、AshikhminSatin、
 AshikhminSlantedVelvet 的已验证配置，遇到不支持的环境、光源、
@@ -171,7 +218,7 @@ build/bin/main.exe --offline --initial-scene Maps/SC_Cloth_Ashikhmin2000_Fig11Ve
 
 Satin 的纤维方向取 UV0 U，MI 可通过 `u_fiberRotationDegrees` 旋转；
 两臂的染色、灯位和机位是本地选择，不是恢复的原场景元数据。
-验证结果与差异见 `documents/plan/rendering/shading-model-case-records.md`
+验证结果与差异见 `documents/contracts/shading-model-case-records.md`
 的 `AS-01` / `AS-02`。两者实时模式均明确拒绝。
 
 Fig. 13 的黑色与红色倾斜纤维 Velvet 使用独立离线模型
@@ -215,8 +262,7 @@ build/bin/main.exe --offline --initial-scene Maps/SC_Cloth_Ashikhmin2000_Fig11Ve
 
 开发者 UI 的 Offline Renderer 面板可切换模式、设置 spp/反弹/seed、
 暂停、继续、停止、重启，查看 Combined/Direct/Indirect 并导出。
-使用 `--dev-ui` 启用后，可在运行时按 F10，进入 System 页点击
-`Toggle F1 diagnostics` 打开面板；无需依赖可能被其它程序占用的 F1。
+使用 `--dev-ui` 启用后，在编辑器底部选择 Renderer 标签即可打开面板。
 控制台也可输入 `offline on|off|samples N|bounces N|seed N|lightSamples N|aov MODE|exposure X|pause|resume|stop|restart|export`。
 离线相机移动时以 1 spp 多核预览并放大显示：默认半宽、半高，准备与
 等待超过 30 ms 时按每轴 1/2、1/4、1/8、1/16 逐级降档；低档预览
@@ -292,7 +338,7 @@ shaderc=29, failed=0, elapsedMs=2043.1
 ```
 
 第二次无修改启动应看到 `compiled=0, shaderc=0`。缓存身份、manifest schema 和
-失败语义见 `documents/rendering/shader-build-cache.md`。
+失败语义见 `documents/contracts/shader-build-cache.md`。
 
 运行时支持以下调试命令：
 
@@ -305,7 +351,7 @@ shadercache stats      输出启动构建统计与 manifest artifact 数
 `shader/glsl` 下的 `.vert/.frag/.comp/.glsl` 与 `M_*.json` 会被自动监听：
 CPU 编译在独立 worker 完成，EngineLoop 在 Render Thread 安全点创建 Vulkan
 对象并事务提交，旧 Pipeline/descriptor 经 GPU frame epoch 延迟退休。热重载
-的 ABI 边界、参与者和事务语义见 `documents/rendering/shader-hot-reload.md`。
+的 ABI 边界、参与者和事务语义见 `documents/contracts/shader-hot-reload.md`。
 连续保存会按 stable source identity 求并集；source epoch 用于快速拒绝旧任务，正式
 提交前仍复核 primary/include digest。`M_*.json` schema 更新会在候选 World/Graph
 中迁移兼容的 live 参数和贴图，失败时 active runtime 与正式 artifact 整包保持。

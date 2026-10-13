@@ -8,31 +8,37 @@ User's personal knowledge base lives at `D:\YYBWorkSpace\GitHub\yyb-knowledge-bo
 
 ## Document Responsibilities
 
-Use repository documents according to their role:
+`documents/` is layered by **how much you can trust it**. Read `documents/README.md` for the full rule;
+the short version:
 
-- `README.md`
-  - human-facing project entry point
-  - current setup, build, run, and navigation information
-- `AGENTS.md`
-  - AI-facing collaboration contract
-  - repo reading order, hidden assumptions, risky areas, and editing guidance
-- `documents/README.md`
-  - top-level index for formal design documents
-  - explains document categories and what belongs in each one
-- `documents/architecture/*`
-  - current formal architecture and coding conventions
-  - use these when the task touches system boundaries, naming, ownership, or thread/data flow
-- `documents/rendering/*`
-  - current rendering contracts
-  - use these when the task touches implemented material, texture, descriptor, or shader-authoring rules
-- `documents/plan/*`
-  - future-facing or partially implemented plans
-  - use these when the task touches roadmap work that is not fully implemented yet
+- `README.md` (repository root)
+  - human-facing project entry point: setup, build, run, navigation
+- `AGENTS.md` (this file)
+  - AI-facing collaboration contract: reading order, hidden assumptions, risky areas, editing guidance
+- `documents/routing.md`
+  - **start here for any source change.** Maps source paths to the documents you must read and the
+    gate rules that guard them. Match **all** applicable rules, not the first hit
+- `documents/contracts/*`
+  - what the system **is now**. Every claim is checkable against source, tests, or a gate rule.
+    Safe to treat as fact; if it contradicts the source, the source wins and the contract is a defect
+- `documents/rationale/*` and `documents/plan/*`
+  - **why** things are the way they are: decisions, evidence archives, rejected options, retired
+    implementations, and what is planned. **Not contracts** — technical details there may be stale
 - `documents/reference/*`
-  - tutorials and study material
-  - use these for background learning context, not as implementation contracts
+  - tutorials and study material, not implementation contracts
 
-Do not mix these responsibilities casually. If a change affects one layer, update the right document instead of stuffing everything into `README.md` or `AGENTS.md`.
+**Hard rule:** `contracts/` never asserts future behaviour. Anything aspirational goes to
+`rationale/` or `plan/`. This exists because this repository repeatedly mistook roadmaps for current
+state; several plan documents here describe features with zero source hits. See `documents/README.md`.
+
+Documentation rot is a gate failure, not silent drift — run `py -3 tool\validate-docs.py` after touching
+`documents/**`.
+
+For verification entry points and the "change → validation" mapping, read
+`documents/contracts/testing.md` (this file does not duplicate that table).
+
+Do not mix these responsibilities casually. If a change affects one layer, update the right document
+instead of stuffing everything into `README.md` or `AGENTS.md`.
 
 ## Project Summary
 
@@ -85,27 +91,40 @@ When onboarding to the repo, read in this order:
 7. `config/config.json`
 8. `config/renderGraphConfig.json`
 
-Design references currently live under `documents/`:
+Start any source change from `documents/routing.md`. The design documents themselves:
 
 - `documents/README.md`
-- `documents/architecture/vulkanlearn-architecture.html`
-- `documents/architecture/coding-guidelines.md`
-- `documents/rendering/texture-asset-json-v1.md`
-- `documents/rendering/material-param-authoring-and-reflection.md`
-- `documents/rendering/descriptor-imageinfo-management.md`
-- `documents/rendering/gbuffer-channel-ownership.md`
+  - the layering rule: what is a contract, what is rationale, and the hard rule against future
+    assertions in `contracts/`
+- `documents/contracts/vulkanlearn-architecture.html`
+- `documents/contracts/coding-guidelines.md`
+- `documents/contracts/game-ui-stack.md`
+  - RmlUi-only runtime/editor UI, producer-only callbacks, SDL input arbitration and immutable GT/RT snapshots
+- `documents/contracts/ui-component-system.md`
+  - Slate-inspired reusable RmlUi controls; widgets must not depend on World, asset commands or Vulkan
+- `documents/plan/ui/rmlui-editor-plan.md`
+  - completed RmlUi migration/docking/independent viewport versus future scene documents and asset workflows
+- `documents/contracts/texture-asset-json-v1.md`
+- `documents/contracts/material-param-authoring-and-reflection.md`
+- `documents/contracts/descriptor-imageinfo-management.md`
+- `documents/contracts/gbuffer-channel-ownership.md`
   - current GBuffer attachment set, per-`ShadingModelID` channel ownership, the 4+4 bit ID/flag ledger, packing precision limits, and the deferred-allocation checklist. Forward-only models do not claim GBuffer channels; every enabled path needs its own dispatch case and material validation, or the ID can silently fall back to DefaultLit
-- `documents/rendering/shader-build-cache.md`
-- `documents/rendering/shader-hot-reload.md`
+- `documents/contracts/shader-build-cache.md`
+- `documents/contracts/shader-hot-reload.md`
 - `documents/plan/rendering/sky-pass-environment-roadmap.html`
 - `documents/plan/rendering/shading-model-alignment-plan.md`
-- `documents/plan/rendering/shading-model-case-records.md`
-  - per-case evidence archive for the alignment plan (paper-curve pixel measurements, conventions pinned by measurement); `artifacts/` is gitignored, so conclusions live in this record
+- `documents/rationale/shading-model-case-records.md`
+  - per-case evidence archive for the alignment plan (paper-curve pixel measurements, conventions pinned by measurement); `artifacts/` is gitignored, so conclusions live in this record. Rationale, not a contract
 - `documents/plan/rendering/archive/`
   - **not contracts**: documents whose subject no longer exists in the repository. The per-model shading model implementations (ClearCoat / Cloth / Eye / Hair / Subsurface ×3 / ThinTranslucent / TwoSidedFoliage) and their case assets were deliberately deleted on 2026-09-12; each model is now rebuilt from its paper while the MaterialInputs interface, ShadingModelID table and GBuffer layout stay UE-aligned. `archive/README.md` records why each file is archived and exactly what was deleted
+- `documents/rationale/pitfalls.md`
+  - reusable, evidence-backed constraints that are not visible from local code (RCSS colour format,
+    screenshot truncation, the missing quit path, console-command quoting)
 - `documents/reference/rendering/tone-mapping-tutorial.html`
 
-Current implementation contracts stay in `architecture/` and `rendering/`. Unimplemented or partially implemented roadmaps stay in `plan/`. Historical implementation notes are intentionally not kept as live docs.
+Current contracts live only in `documents/contracts/`. Everything under `documents/plan/` and
+`documents/rationale/` is explicitly non-binding: those describe intent, history, or plans, and must not
+be quoted as current behaviour.
 
 ## Build And Run
 
@@ -182,13 +201,13 @@ If a change affects boot behavior, verify it against this order.
 - `config/`: top-level runtime config and render graph config
 - `<resourcePath>/Maps/SC_<scene-name>/`: scene JSON files
 - `<resourcePath>/Maps/SC_<scene-name>/Meshes/`: mesh description JSON and source model data
-- `<resourcePath>/Maps/SC_<scene-name>/Terrains/`: terrain description JSON files
+- `<resourcePath>/Maps/SC_<scene-name>/Terrains/`: terrain descriptor JSON, **editor asset layer only** — no runtime terrain support exists
 - `<resourcePath>/Maps/SC_<scene-name>/Materials/`: material instance JSON files
 - `shader/glsl/`: shader source of truth
 - `shader/spv/`: compiled shader output and debug reflection artifacts
 - `extern/`: third-party dependencies
 - `tool/`: profiling tools bundled in repo
-- `source/render/offline/core/`: pure CPU `vl_offline_core` shared by VL's offline session and root GoogleTest suites. The former independent paper-image CLI and its fixed-case loader are retired; do not rebuild a second scene/material authoring path. See `documents/architecture/vl-offline-rendering.md`.
+- `source/render/offline/core/`: pure CPU `vl_offline_core` shared by VL's offline session and root GoogleTest suites. The former independent paper-image CLI and its fixed-case loader are retired; do not rebuild a second scene/material authoring path. See `documents/contracts/vl-offline-rendering.md`.
 - Offline B-arm correctness: Eq. 3 dye multiplies the entire volume term. Eq. 15 Q uses coverage-weighted per-family mean projection plus uncovered-area NoV, not the old unweighted sum or Lambert pore fill. Keep Eval/Sample/Pdf on the same curve discretization, groom and yarn rotation settings. The former CLI's Table II presets and fixed images are historical evidence, not active VL defaults; see the archived `documents/plan/rendering/archive/offline-paper-renderer-standalone.md`. Root GTest owns the current numerical regression.
 - `tool/offline-core-tests/` and `tool/offline-integration-tests/`: root GoogleTest module suites; `tool/validation/offline/` contains external VL stress/export checks and the groom fixture generator, not engine runtime test flags.
 - `tool/validation/`: offline paper-case validation harness (`bmp_reader.py`, `measure_plot_curve.py`, `read_plot_text.py`, `check_plot_font.py`, `verify_geometry_term.py`, `verify_brdf_integrals.py`, `verify_cloth_sheen_albedo.py`, `verify_split_sum.py`, `measure_sphere_array.py`, `run_paper_case.ps1`, `console_inject.ps1`); pixel-level curve/UV measurement, on-figure text readback, offline geometry-term / BRDF-integral / cloth-sheen-directional-albedo / split-sum checks, and the sphere-array parameter-yardstick regression for `documents/plan/rendering/shading-model-alignment-plan.md`. These are offline scripts, **not** runtime test commands; outputs go to the gitignored `artifacts/`
@@ -230,7 +249,7 @@ This project is heavily data-driven. Many runtime objects are created from JSON.
 ### Resource naming patterns
 
 - `SM_*.json`: mesh descriptor files
-- `TR_*.json`: terrain descriptor files
+- `TR_*.json`: terrain descriptor files (**editor asset layer only**; no runtime terrain support)
 - `MI_*.json`: material instance files
 - `scene*.json`: scene definitions
 
@@ -252,13 +271,22 @@ This project is heavily data-driven. Many runtime objects are created from JSON.
 Scene JSON currently supports these `type` values:
 
 - `mesh`
-- `terrain`
 - `directionalLight`
 - `pointLight`
 - `spotLight`
 - `squareAreaLight` (one-sided emitted radiance; the current realtime path rejects it)
 - `camera`
 - `environment`
+
+`terrain` is **not** a runtime scene object type: `SceneAssetValidator` does not
+accept it, the world loader/builder has no terrain path, and no terrain runtime
+code exists anywhere in `source/`. Terrain survives only in the editor's asset
+layer, where `Terrains/TR_*.json` is recognized as an `EditorAssetKind` and
+`objectType == "terrain"` participates in material-instance navigation
+resolution. Do not author a `terrain` scene object and do not reference
+`source/terrain.h` / `source/terrain.cpp` — those files never existed in this
+repository. Any task that appears to require terrain runtime support is a
+feature request, not a fix.
 
 If adding a new type, update both loader logic and documentation.
 The historical `SC_scene01` `sunLight` object was migrated to
@@ -306,7 +334,7 @@ Be careful when changing these files or systems:
 
 The following issues are already present in the codebase and should be treated as existing constraints unless you are explicitly fixing them:
 
-- `config/config.json` currently contains an absolute `projectPath`.
+- `config/config.json` uses a sibling resource directory; launch from the checkout root and isolate resource writes when testing branches.
 - Path resolution is partly inferred from current working directory.
 - Some naming is inconsistent, for example `Viking/Vilking` and some include capitalization.
 - `shader/spv/` contains generated artifacts, but the repo also relies on them for reflection/debug workflows.
@@ -340,7 +368,7 @@ When making changes:
 
 ## Test Governance
 
-Follow `documents/architecture/coding-guidelines.md#test-governance` for the
+Follow `documents/contracts/coding-guidelines.md#test-governance` for the
 complete test policy. The non-negotiable repository rules are:
 
 - Module and pure-logic tests must use GoogleTest and be registered through
@@ -370,11 +398,21 @@ If asked to add or change a scene:
 
 If asked to add or change a terrain:
 
-- inspect `<resourcePath>/Maps/SC_<scene-name>/*.json`
-- inspect `<resourcePath>/Maps/SC_<scene-name>/Terrains/TR_*.json`
-- inspect `source/terrain.h` and `source/terrain.cpp`
-- inspect `source/scene/validation/sceneAssetValidator.cpp`
-- keep World Creator surface textures in material / texture asset JSON unless the task explicitly adds terrain layer blending
+Terrain has **no runtime implementation** in this repository. Do not look for
+`source/terrain.h` / `source/terrain.cpp`; they never existed here, and
+`SceneAssetValidator` rejects a `terrain` scene object. Only the editor asset
+layer knows about terrain:
+
+- inspect `<resourcePath>/Maps/SC_<scene-name>/Terrains/TR_*.json` (descriptor JSON,
+  recognized as `EditorAssetKind::Terrain` by `source/editor/assets/editorJsonAssetLibrary.cpp`)
+- inspect `source/editor/assets/editorJsonAssetTypes.{h,cpp}` and
+  `source/editor/service/materialInstanceDocumentService.cpp` for the
+  `objectType == "terrain"` navigation-resolution path
+- inspect `source/scene/validation/sceneAssetValidator.cpp` to confirm what the
+  runtime actually accepts before promising anything
+
+A request to render, load, or edit terrain geometry is a feature request, not a
+fix; scope it as such and say so rather than treating the missing files as a bug.
 
 If asked to add or change a render pass:
 
@@ -399,7 +437,7 @@ If asked to debug startup failures:
 
 If asked to add or change shader build-cache/hot-reload behavior:
 
-- inspect `documents/rendering/shader-build-cache.md` and `shader-hot-reload.md`
+- inspect `documents/contracts/shader-build-cache.md` and `shader-hot-reload.md`
 - inspect `source/shaderCompiler.*`, `source/shader/build/*`, `source/shader/reload/*`
 - respect the GT/worker split: compile workers must not touch Vulkan or live Material/PipelineFactory caches
 - respect the staleness protocol: `latestObservedSourceEpoch` is a fast rejection signal, stable source identities are unioned while pending, and every candidate still requires commit-time primary/dependency digest validation; generation alone is not proof that source bytes are current

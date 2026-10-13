@@ -475,7 +475,7 @@
                             <li><code>MeshAssetResolver</code> 位于 <code>source/mesh/loader/</code>，对齐 material resolver。</li>
                             <li><code>MeshAssetValidator</code> 位于 <code>source/mesh/validation/</code>，提供 <code>BuildLoadPlan()</code> 和 <code>BuildSectionLoadPlans()</code>。</li>
                             <li><code>ModelLoader</code> 位于 <code>source/mesh/loader/</code>，只导入 FBX / GLB / OBJ 几何和材质槽名。</li>
-                            <li>新增 mesh 类头文件遵循 <code>documents/architecture/coding-guidelines.md</code> 的职责注释规则。</li>
+                            <li>新增 mesh 类头文件遵循 <code>documents/contracts/coding-guidelines.md</code> 的职责注释规则。</li>
                         </ul>
                     </article>
                     <article class="card">
@@ -489,7 +489,7 @@
   -> LoadMaterialInstance()</code></pre>
                     </article>
                 </div>
-                <p class="note"><strong>头文件注释：</strong>通用规则放在 <code>documents/architecture/coding-guidelines.md</code>。本模块里，<code>MeshAssetResolver</code> 说明 effective mesh asset JSON 的展开边界；<code>MeshAssetValidator</code> 说明 load plan 构建、格式验证和错误输出边界；<code>ModelLoader</code> 说明只导入 geometry sections 与 material slot 名，不认识 VulkanLearn material instance JSON。</p>
+                <p class="note"><strong>头文件注释：</strong>通用规则放在 <code>documents/contracts/coding-guidelines.md</code>。本模块里，<code>MeshAssetResolver</code> 说明 effective mesh asset JSON 的展开边界；<code>MeshAssetValidator</code> 说明 load plan 构建、格式验证和错误输出边界；<code>ModelLoader</code> 说明只导入 geometry sections 与 material slot 名，不认识 VulkanLearn material instance JSON。</p>
                 <p class="note"><strong>.stsdk 入口：</strong>SpeedTree <code>.stsdk</code> 仍然通过 <code>SM_xxx.json</code> 引入。scene object 只写 <code>modelPath</code>，mesh asset JSON 保持现有平铺风格，用 <code>type: "speedtree"</code> 和 <code>modelDataPath</code> 指向 <code>.stsdk</code>。第一版不写 <code>importCache</code>，数据都直接从 <code>.stsdk</code> 解析出来。</p>
                 <div class="grid">
                     <article class="card">

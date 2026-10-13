@@ -1,12 +1,20 @@
 #include "render/offline/offlineDisplayVulkan.h"
 
 #include <cstring>
+#include <stdexcept>
 #include "commonFunction.h"
 #include "pipeline/graphicsPipelineBuilder.h"
 #include "render/backend/rendererBackendVulkan.h"
+#include "render/resource/resourceRetireQueue.h"
+#include "renderGraph.h"
 
 namespace VL
 {
+OfflineDisplayVulkan::ViewportTarget::~ViewportTarget()
+{
+    if (backend) backend->DestroyFramebuffers(framebuffers);
+}
+
 void OfflineDisplayVulkan::Initialize(RendererBackendVulkan& rendererBackend)
 {
     if (backend) return;
@@ -51,6 +59,12 @@ void OfflineDisplayVulkan::Initialize(RendererBackendVulkan& rendererBackend)
         vk::RenderPassCreateInfo2 passInfo;
         passInfo.setAttachments(attachment).setSubpasses(subpass).setDependencies(dependency);
         renderPass = backend->CreateRenderPass(passInfo, "Offline display");
+        // format/sample/subpass 不变，与现有离线显示管线兼容；图像由 graph
+        // 持有，离线显示只将线性 film 实际绘制到该目标，不读取 swapchain。
+        attachment.setFinalLayout(vk::ImageLayout::eColorAttachmentOptimal);
+        passInfo.setAttachments(attachment);
+        viewportRenderPass = backend->CreateRenderPass(passInfo, "Offline viewport display");
+        framebuffers.reserve(count);
         for (const vk::ImageView view : backend->GetSwapchainImageViews())
         {
             vk::FramebufferCreateInfo info;
@@ -59,6 +73,7 @@ void OfflineDisplayVulkan::Initialize(RendererBackendVulkan& rendererBackend)
             framebuffers.push_back(backend->CreateFramebuffer(info, "Offline framebuffer"));
         }
         CreatePipeline();
+        viewportTargets.resize(count);
         frames.resize(count);
         std::vector<vk::DescriptorSetLayout> layouts(count, descriptorLayout);
         std::vector<vk::DescriptorSet> descriptors(count);
@@ -164,21 +179,83 @@ void OfflineDisplayVulkan::Shutdown()
     backend->DestroyPipelineLayout(pipelineLayout);
     backend->DestroyDescriptorSetLayout(descriptorLayout);
     backend->DestroyFramebuffers(framebuffers);
+    viewportTargets.clear();
     backend->DestroyRenderPass(renderPass);
+    backend->DestroyRenderPass(viewportRenderPass);
     retainedSource = {};
     previewNearest.clear();
     backend = nullptr;
 }
 
+vk::Framebuffer OfflineDisplayVulkan::PrepareViewportFramebuffer(
+    uint32_t imageIndex, const RenderResource& output, uint64_t ownerGeneration)
+{
+    auto& current = viewportTargets.at(imageIndex);
+    const vk::ImageView view = output.GetFramebufferAttachmentView();
+    if (current && current->imageView == view &&
+        current->imageViewHandleId == output.imageViewHandles.at(0).id &&
+        current->ownerGeneration == ownerGeneration)
+    {
+        return current->framebuffers.front();
+    }
+
+    // 只在新目标绑定边界校验；图源保证同代尺寸/格式不变，不做逐帧修正。
+    const auto extent = backend->GetSwapchainExtent();
+    if (output.width != extent.width || output.height != extent.height ||
+        output.format != backend->GetSwapchainImageFormat() ||
+        output.arrayLayers != 1 || !output.image || !output.imageView)
+    {
+        throw std::runtime_error(
+            "Offline viewport output must match the single-layer swapchain backing extent/format");
+    }
+    auto candidate = std::make_shared<ViewportTarget>();
+    candidate->backend = backend;
+    candidate->imageView = view;
+    candidate->imageViewHandleId = output.imageViewHandles.at(0).id;
+    candidate->ownerGeneration = ownerGeneration;
+    // 先预留容器再创建 Vulkan 对象，异常时 candidate 负责释放所有新句柄。
+    candidate->framebuffers.reserve(1);
+    vk::FramebufferCreateInfo info;
+    info.setRenderPass(viewportRenderPass).setAttachments(view)
+        .setWidth(extent.width).setHeight(extent.height).setLayers(1);
+    candidate->framebuffers.push_back(
+        backend->CreateFramebuffer(info, "Offline viewport framebuffer"));
+    if (current)
+    {
+        auto& retireQueue = ResourceRetireQueue::GetInstance();
+        std::vector<RetiredResource> retired;
+        retired.push_back({"OfflineViewportFramebuffer:" + std::to_string(imageIndex),
+            current->ownerGeneration, retireQueue.GetLastSubmittedEpoch(), current});
+        auto prepared = retireQueue.PrepareRetirements(std::move(retired));
+        // 队列扩容完成后才发布新引用；失败时旧缓存/在途 framebuffer 完整保留。
+        current = std::move(candidate);
+        retireQueue.CommitPreparedRetirements(std::move(prepared));
+    }
+    else
+    {
+        current = std::move(candidate);
+    }
+    return current->framebuffers.front();
+}
+
 void OfflineDisplayVulkan::Record(vk::CommandBuffer commandBuffer, uint32_t imageIndex,
     std::shared_ptr<const Offline::FilmSnapshot> film,
     std::shared_ptr<const Offline::PreviewSnapshot> preview,
-    OfflineAov aov, float exposure)
+    OfflineAov aov, float exposure,
+    const RenderResource* viewportOutput, uint64_t viewportOwnerGeneration,
+    vk::Extent2D logicalExtent)
 {
+    const vk::Framebuffer outputFramebuffer = viewportOutput
+        ? PrepareViewportFramebuffer(imageIndex, *viewportOutput, viewportOwnerGeneration)
+        : framebuffers.at(imageIndex);
     auto& frame = frames.at(imageIndex);
     const auto extent = backend->GetSwapchainExtent();
+    // film 使用 Dock 内逻辑视口的相机宽高比；backing 图像只决定上传尺寸。
+    // 显示时再由 UI 映射回逻辑矩形，两次缩放抵消，不裁剪 film 内容。
+    const vk::Extent2D sourceExtent = logicalExtent.width == 0 && logicalExtent.height == 0
+        ? extent : logicalExtent;
     auto selected = SelectOfflineDisplaySource(retainedSource,
-        std::move(film), std::move(preview), extent.width, extent.height);
+        std::move(film), std::move(preview), sourceExtent.width, sourceExtent.height);
     if (selected.preview != retainedSource.preview)
         previewNearest = selected.preview
             ? OfflinePreviewNearestValid(*selected.preview) : std::vector<size_t>{};
@@ -186,9 +263,9 @@ void OfflineDisplayVulkan::Record(vk::CommandBuffer commandBuffer, uint32_t imag
     // 同一份最新候选逐 slot 补传，不能随 swapchain image 轮转显示旧视角。
     const auto& source = retainedSource;
     const bool uploadFilm = source.film && NeedsOfflineFilmUpload(*source.film,
-        extent.width, extent.height, aov, source.Generation(), frame.uploaded);
+        sourceExtent.width, sourceExtent.height, aov, source.Generation(), frame.uploaded);
     const bool uploadPreview = source.preview && !previewNearest.empty() &&
-        NeedsOfflinePreviewUpload(*source.preview, extent.width, extent.height,
+        NeedsOfflinePreviewUpload(*source.preview, sourceExtent.width, sourceExtent.height,
             aov, frame.uploaded);
     if (uploadFilm || uploadPreview)
     {
@@ -250,7 +327,10 @@ void OfflineDisplayVulkan::Record(vk::CommandBuffer commandBuffer, uint32_t imag
     }
     vk::ClearValue clear(vk::ClearColorValue(std::array<float, 4>{0, 0, 0, 1}));
     vk::RenderPassBeginInfo pass;
-    pass.setRenderPass(renderPass).setFramebuffer(framebuffers.at(imageIndex))
+    // CLEAR 使用 Undefined 丢弃目标旧内容；采样前的 ColorAttachment -> ShaderRead
+    // 和复用时的同步由 RT 负责，离线显示不拥有 graph 的跨帧布局状态。
+    pass.setRenderPass(viewportOutput ? viewportRenderPass : renderPass)
+        .setFramebuffer(outputFramebuffer)
         .setRenderArea({{0, 0}, extent}).setClearValues(clear);
     commandBuffer.beginRenderPass(pass, vk::SubpassContents::eInline);
     if (frame.uploaded.initialized)

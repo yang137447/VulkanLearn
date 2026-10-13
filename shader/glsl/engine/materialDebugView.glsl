@@ -322,6 +322,25 @@ vec4 ResolveMaterialDebugView(
     in MaterialDebugLightingData lighting,
     in vec4 defaultColor)
 {
+    // 编辑器基础通道属于运行时功能，不能随 NDEBUG/ENABLE_DEBUG_VIEW 被裁掉。
+    // 否则最终合成已绕过曝光，而这里仍输出 HDR 光照，参数视图就会饱和成白色。
+    // 模式是整帧 uniform；Lit 直接返回，普通帧不计算下面的专项调试数据。
+    switch (uboVP.debugViewMode)
+    {
+        case 0: return defaultColor;
+        case 1: return vec4(surface.baseColor, 1.0);
+        case 2: return vec4(surface.emissiveColor, 1.0);
+        case 3: return vec4(surface.worldNormal * 0.5 + 0.5, 1.0);
+        case 4: return vec4(vec3(surface.roughness), 1.0);
+        case 5: return vec4(vec3(surface.metallic), 1.0);
+        case 6: return vec4(vec3(surface.ambientOcclusion), 1.0);
+        case 7: return vec4(vec3(lighting.shadow), 1.0);
+        case 8: return vec4(lighting.directLighting, 1.0);
+        case 9: return vec4(lighting.indirectDiffuse, 1.0);
+        case 10: return vec4(lighting.indirectSpecular, 1.0);
+        case 11: return vec4(vec3(lighting.shadowCascadeIndex), 1.0);
+        case 12: return vec4(vec3(float(surface.shadingModel) / 15.0), 1.0);
+    }
 #if defined(ENABLE_DEBUG_VIEW)
     float baseColorMask = MaterialDebugViewModeMask(1);
     float emissiveMask = MaterialDebugViewModeMask(2);

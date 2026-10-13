@@ -236,7 +236,7 @@ void TestLandedJsonCommandCodec()
 {
     // wire token 使用小写，避免 producer 之间出现大小写分叉。
     Require(
-        GetEditorCommandJsonSourceName(EditorCommandSource::ImGui) == "imgui" &&
+        GetEditorCommandJsonSourceName(EditorCommandSource::RmlUi) == "rmlui" &&
             GetEditorCommandJsonSourceName(EditorCommandSource::Console) == "console" &&
             GetEditorCommandJsonSourceName(EditorCommandSource::AI) == "ai" &&
             GetEditorCommandJsonSourceName(EditorCommandSource::RuntimeTest) == "runtime_test",
@@ -305,7 +305,7 @@ void TestLandedJsonCommandCodec()
 
     EditorCommandEnvelope open;
     open.commandId = 102;
-    open.source = EditorCommandSource::ImGui;
+    open.source = EditorCommandSource::RmlUi;
     open.type = EditorCommandType::OpenMaterialInstanceAsset;
     open.payload = OpenMaterialInstanceAssetPayload{
         "materials\\MI_editor_test.json",
@@ -318,7 +318,7 @@ void TestLandedJsonCommandCodec()
 
     EditorCommandEnvelope openTexture;
     openTexture.commandId = 103;
-    openTexture.source = EditorCommandSource::ImGui;
+    openTexture.source = EditorCommandSource::RmlUi;
     openTexture.type = EditorCommandType::OpenTextureAsset;
     openTexture.payload = OpenTextureAssetPayload{
         "materials/MI_editor_test.json",
@@ -394,7 +394,7 @@ void TestLandedJsonCommandCodec()
 
     EditorCommandEnvelope setTexture;
     setTexture.commandId = 113;
-    setTexture.source = EditorCommandSource::ImGui;
+    setTexture.source = EditorCommandSource::RmlUi;
     setTexture.type = EditorCommandType::SetMaterialTextureOverride;
     setTexture.expectedDocumentRevision = 7;
     setTexture.payload = SetMaterialTextureOverridePayload{
@@ -405,7 +405,7 @@ void TestLandedJsonCommandCodec()
 
     EditorCommandEnvelope clearTexture;
     clearTexture.commandId = 114;
-    clearTexture.source = EditorCommandSource::ImGui;
+    clearTexture.source = EditorCommandSource::RmlUi;
     clearTexture.type = EditorCommandType::ClearMaterialTextureOverride;
     clearTexture.expectedDocumentRevision = 7;
     clearTexture.payload = ClearMaterialTextureOverridePayload{
@@ -777,7 +777,7 @@ void TestLandedCommandSchema()
         "command asset-path extraction changed the normalized identity");
 
     for (const EditorCommandSource source : {
-             EditorCommandSource::ImGui,
+             EditorCommandSource::RmlUi,
              EditorCommandSource::Console,
              EditorCommandSource::AI,
              EditorCommandSource::RuntimeTest})

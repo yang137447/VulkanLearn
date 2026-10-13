@@ -20,7 +20,7 @@ struct UiSettings
     bool developerUiEnabled = true;
     bool developerUiVisible = false;
     std::string assetRoot = "ui";
-    std::string document = "runtime-control.rml";
+    std::string document = "runtime-hud.rml";
     std::string localization = "localization.json";
     std::string defaultLocale = "en-US";
     std::vector<std::string> fontFaces;

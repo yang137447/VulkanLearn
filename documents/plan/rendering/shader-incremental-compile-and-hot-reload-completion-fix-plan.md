@@ -7,8 +7,8 @@
 - 上游计划：
   `documents/plan/rendering/shader-incremental-compile-and-hot-reload-plan.md`
 - 当前正式合同：
-  - `documents/rendering/shader-build-cache.md`
-  - `documents/rendering/shader-hot-reload.md`
+  - `documents/contracts/shader-build-cache.md`
+  - `documents/contracts/shader-hot-reload.md`
 - 完成日期：2026-08-13
 - 当前结论：R1-R4 已全部实现并通过最终矩阵；本文保留原始 blocker、修复原则和
   验收要求作为审核历史，当前稳定合同以 `documents/rendering/` 与架构文档为准。
@@ -60,8 +60,8 @@
 
 1. `AGENTS.md`
 2. `documents/plan/rendering/shader-incremental-compile-and-hot-reload-plan.md`
-3. `documents/rendering/shader-build-cache.md`
-4. `documents/rendering/shader-hot-reload.md`
+3. `documents/contracts/shader-build-cache.md`
+4. `documents/contracts/shader-hot-reload.md`
 5. `source/engine/engineLoop.*`
 6. `source/engine/runtimeTestHooks.*`
 7. `source/shader/reload/*`
@@ -158,7 +158,7 @@ RenderGraph reload 先销毁当前 graph，再原地创建新 graph：
 
 这不满足正式合同：
 
-- `documents/rendering/shader-hot-reload.md:111-117`
+- `documents/contracts/shader-hot-reload.md:111-117`
 
 ### B4：必须一并关闭的事务加固问题
 
@@ -583,12 +583,12 @@ EngineLoop 内变成 succeeded。
 
 代码和测试全部通过后再更新：
 
-- `documents/rendering/shader-hot-reload.md`
-- `documents/rendering/shader-build-cache.md`
+- `documents/contracts/shader-hot-reload.md`
+- `documents/contracts/shader-build-cache.md`
 - `documents/plan/rendering/shader-incremental-compile-and-hot-reload-plan.md`
 - `README.md`
 - `AGENTS.md`
-- `documents/architecture/vulkanlearn-architecture.html`
+- `documents/contracts/vulkanlearn-architecture.html`
 - `documents/README.md`
 
 文档必须明确：

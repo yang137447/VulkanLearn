@@ -1,6 +1,8 @@
 #pragma once
 
 #include <string>
+
+#include <nlohmann/json.hpp>
 #include <vector>
 
 #include "baseStructs.h"
@@ -23,6 +25,10 @@ enum class RuntimeCommandType
     GetCameraState,
     SetEnvironmentIntensity,
     SetSunIntensity,
+    // 逐 actor 可见性：stringValue 是大纲的稳定身份（"mesh|Sphere_01"、
+    // "directionalLight|Sun_Light"），intValue 是 0/1。身份在执行端解析并核对，
+    // 未知/陈旧身份必须被拒绝并给诊断。可见性是 World 的运行时状态，不持久化。
+    SetActorVisible,
     SetProceduralSkyParameters,
     SetSpeedTreeStrength,
     SetSpeedTreeGustingEnabled,
@@ -80,6 +86,10 @@ struct RuntimeCommand
     Eigen::Vector3f cameraUpValue = Eigen::Vector3f(0.0f, 1.0f, 0.0f);
     std::string stringValue;
     std::string sourceText;
+    // LoadWorld 的附加场景对象（JSON 对象数组）。模型编辑器用它把"当前打开的模型"
+    // 并入中性预览环境，从而不必生成临时场景文件 —— 临时文件会在磁盘上留下第二份真相，
+    // 并且在异常退出时残留。普通场景加载这里是空数组。
+    nlohmann::json extraSceneObjects = nlohmann::json::array();
 };
 
 // Single-thread command queue for runtime console/debug requests. The console

@@ -1,4 +1,5 @@
 #include "ui/uiSubsystem.h"
+#include "ui/editorPointerPolicy.h"
 
 #include <algorithm>
 #include <cctype>
@@ -16,23 +17,24 @@
 #include <RmlUi/Core/ElementDocument.h>
 #include <RmlUi/Core/Factory.h>
 #include <RmlUi/Core/Input.h>
+#include <RmlUi/Core/Elements/ElementFormControl.h>
 #include <nlohmann/json.hpp>
 
-#ifdef VULKANLEARN_ENABLE_DEVELOPER_UI
-#include <imgui.h>
-#include <imgui_internal.h>
-#endif
 
 #include "engine/diagnosticsSubsystem.h"
 #include "engine/runtimeCommand.h"
 #include "core/renderSession.h"
 #include "editor/selection/materialInstanceSelection.h"
 #include "editor/runtime/materialInstanceEditorRuntime.h"
+#include "editor/assets/editorJsonAssetLibrary.h"
+#include "editor/assets/editorThumbnailLibrary.h"
 #include "editor/ui/materialInstanceAssetEditorPanel.h"
+#include "editor/ui/editorSceneActorTree.h"
 #include "platform/platformEvent.h"
 #include "platform/platformWindow.h"
 #include "ui/sceneObjectTypeSupport.h"
 #include "ui/uiBindingUpdateScope.h"
+#include "Profiler.h"
 
 namespace VL
 {
@@ -42,78 +44,6 @@ namespace
 
 constexpr float GamepadNavigationThreshold = 0.55f;
 
-#ifdef VULKANLEARN_ENABLE_DEVELOPER_UI
-constexpr const char* DeveloperDockSpaceName = "VulkanLearnDeveloperDockSpace";
-constexpr const char* MaterialInstanceNavigationWindowName = "Material Instance Navigation";
-constexpr const char* MaterialInstanceInspectorWindowName = "Material Instance Inspector";
-constexpr const char* OfflineRendererWindowName = "Offline Renderer";
-constexpr float NavigationDockWidthFraction = 0.28f;
-constexpr float NavigationDockHeightFraction = 0.35f;
-constexpr float InspectorDockWidthFraction = 0.30f;
-// InputInt 内部禁用 EnterReturnsTrue；数值变化时仍按原值域校验后提交。
-constexpr ImGuiInputTextFlags OfflineInputIntFlags = ImGuiInputTextFlags_None;
-static_assert(
-    (OfflineInputIntFlags & ImGuiInputTextFlags_EnterReturnsTrue) == 0,
-    "Offline InputInt must not use EnterReturnsTrue");
-
-void BuildDefaultDeveloperDockLayout(
-    ImGuiID dockspaceId,
-    const ImGuiViewport& mainViewport)
-{
-    ImGui::DockBuilderRemoveNode(dockspaceId);
-    ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
-    ImGui::DockBuilderSetNodePos(dockspaceId, mainViewport.WorkPos);
-    ImGui::DockBuilderSetNodeSize(dockspaceId, mainViewport.WorkSize);
-
-    ImGuiID centerNode = dockspaceId;
-    ImGuiID leftNode = 0;
-    ImGuiID rightNode = 0;
-    ImGui::DockBuilderSplitNode(
-        centerNode,
-        ImGuiDir_Left,
-        NavigationDockWidthFraction,
-        &leftNode,
-        &centerNode);
-    // 第二次 split 面向扣除左栏后的剩余区域，换算后仍让右栏约占主视口 30%。
-    const float inspectorFractionOfRemaining =
-        InspectorDockWidthFraction / (1.0f - NavigationDockWidthFraction);
-    ImGui::DockBuilderSplitNode(
-        centerNode,
-        ImGuiDir_Right,
-        inspectorFractionOfRemaining,
-        &rightNode,
-        &centerNode);
-
-    ImGuiID navigationNode = 0;
-    ImGuiID offlineNode = 0;
-    // 左栏上下分区让离线控件和反馈有固定空间，不再以浮窗遮住导航；
-    // 中央节点仍不放 ImGui 窗口，保留真实 Vulkan 视口。
-    ImGui::DockBuilderSplitNode(
-        leftNode,
-        ImGuiDir_Up,
-        NavigationDockHeightFraction,
-        &navigationNode,
-        &offlineNode);
-    ImGui::DockBuilderDockWindow(MaterialInstanceNavigationWindowName, navigationNode);
-    ImGui::DockBuilderDockWindow(OfflineRendererWindowName, offlineNode);
-    ImGui::DockBuilderDockWindow(MaterialInstanceInspectorWindowName, rightNode);
-    // 中央 Dock 保持为空，让真实 SDL3/Vulkan framebuffer 贯穿窗口，不再被
-    // 一个仅用于占位的 ImGui 3D Viewport 窗口覆盖或改变输入区域。
-    ImGui::DockBuilderFinish(dockspaceId);
-}
-
-bool IsPointInsideActiveDeveloperWindow(
-    const ImGuiWindow* window,
-    float mouseX,
-    float mouseY)
-{
-    if (window == nullptr || !window->WasActive)
-    {
-        return false;
-    }
-    return window->OuterRectClipped.Contains(ImVec2(mouseX, mouseY));
-}
-#endif
 
 std::string NormalizePathForComparison(const std::filesystem::path& path)
 {
@@ -183,6 +113,7 @@ Rml::Input::KeyIdentifier ToRmlKey(PlatformKey key)
     case PlatformKey::Enter: return Rml::Input::KI_RETURN;
     case PlatformKey::Escape: return Rml::Input::KI_ESCAPE;
     case PlatformKey::A: return Rml::Input::KI_A;
+    case PlatformKey::S: return Rml::Input::KI_S;
     case PlatformKey::C: return Rml::Input::KI_C;
     case PlatformKey::V: return Rml::Input::KI_V;
     case PlatformKey::X: return Rml::Input::KI_X;
@@ -190,6 +121,7 @@ Rml::Input::KeyIdentifier ToRmlKey(PlatformKey key)
     case PlatformKey::Z: return Rml::Input::KI_Z;
     case PlatformKey::F1: return Rml::Input::KI_F1;
     case PlatformKey::F10: return Rml::Input::KI_F10;
+    case PlatformKey::F11: return Rml::Input::KI_F11;
     case PlatformKey::Num0: return Rml::Input::KI_0;
     case PlatformKey::Num1: return Rml::Input::KI_1;
     case PlatformKey::Num2: return Rml::Input::KI_2;
@@ -241,79 +173,6 @@ Rml::Input::KeyIdentifier ToRmlGamepadKey(PlatformGamepadButton button)
     }
 }
 
-#ifdef VULKANLEARN_ENABLE_DEVELOPER_UI
-constexpr float ImGuiGamepadDeadZone = 0.20f;
-
-float NormalizeImGuiGamepadAxis(float magnitude)
-{
-    if (magnitude <= ImGuiGamepadDeadZone)
-    {
-        return 0.0f;
-    }
-    return (magnitude - ImGuiGamepadDeadZone) / (1.0f - ImGuiGamepadDeadZone);
-}
-
-ImGuiKey ToImGuiKey(PlatformKey key)
-{
-    switch (key)
-    {
-    case PlatformKey::Tab: return ImGuiKey_Tab;
-    case PlatformKey::Left: return ImGuiKey_LeftArrow;
-    case PlatformKey::Right: return ImGuiKey_RightArrow;
-    case PlatformKey::Up: return ImGuiKey_UpArrow;
-    case PlatformKey::Down: return ImGuiKey_DownArrow;
-    case PlatformKey::PageUp: return ImGuiKey_PageUp;
-    case PlatformKey::PageDown: return ImGuiKey_PageDown;
-    case PlatformKey::Home: return ImGuiKey_Home;
-    case PlatformKey::End: return ImGuiKey_End;
-    case PlatformKey::Insert: return ImGuiKey_Insert;
-    case PlatformKey::Delete: return ImGuiKey_Delete;
-    case PlatformKey::Backspace: return ImGuiKey_Backspace;
-    case PlatformKey::Space: return ImGuiKey_Space;
-    case PlatformKey::Enter: return ImGuiKey_Enter;
-    case PlatformKey::Escape: return ImGuiKey_Escape;
-    case PlatformKey::A: return ImGuiKey_A;
-    case PlatformKey::C: return ImGuiKey_C;
-    case PlatformKey::V: return ImGuiKey_V;
-    case PlatformKey::X: return ImGuiKey_X;
-    case PlatformKey::Y: return ImGuiKey_Y;
-    case PlatformKey::Z: return ImGuiKey_Z;
-    case PlatformKey::F1: return ImGuiKey_F1;
-    case PlatformKey::F10: return ImGuiKey_F10;
-    case PlatformKey::Num0: return ImGuiKey_0;
-    case PlatformKey::Num1: return ImGuiKey_1;
-    case PlatformKey::Num2: return ImGuiKey_2;
-    case PlatformKey::Num3: return ImGuiKey_3;
-    case PlatformKey::Num4: return ImGuiKey_4;
-    case PlatformKey::Num5: return ImGuiKey_5;
-    case PlatformKey::Num6: return ImGuiKey_6;
-    case PlatformKey::Num7: return ImGuiKey_7;
-    case PlatformKey::Num8: return ImGuiKey_8;
-    case PlatformKey::Num9: return ImGuiKey_9;
-    default: return ImGuiKey_None;
-    }
-}
-
-ImGuiKey ToImGuiGamepadButton(PlatformGamepadButton button)
-{
-    switch (button)
-    {
-    case PlatformGamepadButton::South: return ImGuiKey_GamepadFaceDown;
-    case PlatformGamepadButton::East: return ImGuiKey_GamepadFaceRight;
-    case PlatformGamepadButton::West: return ImGuiKey_GamepadFaceLeft;
-    case PlatformGamepadButton::North: return ImGuiKey_GamepadFaceUp;
-    case PlatformGamepadButton::Back: return ImGuiKey_GamepadBack;
-    case PlatformGamepadButton::Start: return ImGuiKey_GamepadStart;
-    case PlatformGamepadButton::LeftShoulder: return ImGuiKey_GamepadL1;
-    case PlatformGamepadButton::RightShoulder: return ImGuiKey_GamepadR1;
-    case PlatformGamepadButton::DpadUp: return ImGuiKey_GamepadDpadUp;
-    case PlatformGamepadButton::DpadDown: return ImGuiKey_GamepadDpadDown;
-    case PlatformGamepadButton::DpadLeft: return ImGuiKey_GamepadDpadLeft;
-    case PlatformGamepadButton::DpadRight: return ImGuiKey_GamepadDpadRight;
-    default: return ImGuiKey_None;
-    }
-}
-#endif
 
 std::vector<std::filesystem::path> BuildPlatformFontCandidates()
 {
@@ -371,6 +230,7 @@ RuntimeResult<void> UiSubsystem::Initialize(
     }
 
     desc = initializeDesc;
+    rmlRenderInterface.SetLinearColorOutput(desc.srgbFramebuffer);
     sceneViewportRect = {
         0,
         0,
@@ -444,22 +304,17 @@ void UiSubsystem::Shutdown()
         ResetRuntimeInputState();
     }
 
-#ifdef VULKANLEARN_ENABLE_DEVELOPER_UI
-    if (imguiInitialized)
-    {
-        if (imguiFontTextureId != 0)
-        {
-            rmlRenderInterface.ReleaseTexture(static_cast<Rml::TextureHandle>(imguiFontTextureId));
-            imguiFontTextureId = 0;
-        }
-        ImGui::DestroyContext();
-        imguiInitialized = false;
-    }
-#endif
 
     materialInstanceEditorPanel.reset();
+    jsonAssetLibrary.reset();
+    thumbnailLibrary.reset();
     materialInstanceEditorRuntime.reset();
 
+    if (rmlContext != nullptr && editorDocument != nullptr)
+    {
+        rmlContext->UnloadDocument(editorDocument);
+        editorDocument = nullptr;
+    }
     if (rmlContext != nullptr && runtimeDocument != nullptr)
     {
         rmlContext->UnloadDocument(runtimeDocument);
@@ -473,7 +328,8 @@ void UiSubsystem::Shutdown()
     }
     if (rmlInitialized)
     {
-        Rml::Shutdown();
+        // 只释放自己那一份；进程级关闭由 RmlUiRuntime 在计数归零时执行。
+        VL::Ui::RmlUiRuntime::Release();
         rmlInitialized = false;
     }
 
@@ -488,10 +344,9 @@ void UiSubsystem::Shutdown()
     assetFingerprint.clear();
     dataModelHandle = Rml::DataModelHandle();
     initialized = false;
-    runtimePageVisible = false;
     developerUiVisible = false;
     developerUiEnabled = false;
-    developerDockLayoutBuilt = false;
+    editorPointerCaptured = false;
     hotReloadStatus.clear();
     rmlKeyPressCounts.clear();
     rmlPressedKeyboardKeys.clear();
@@ -523,10 +378,8 @@ bool UiSubsystem::HandlePlatformEvent(const PlatformEvent& event)
         if (event.type == PlatformEventType::GamepadDisconnected)
         {
             ResetRmlGamepadInputState();
-            ResetDeveloperGamepadInputState();
         }
         gamepadConnected = event.gamepadConnected;
-        UpdateDeveloperGamepadCapability();
         UpdateInputOwnership();
         return false;
     }
@@ -535,7 +388,6 @@ bool UiSubsystem::HandlePlatformEvent(const PlatformEvent& event)
         event.type == PlatformEventType::WindowFocusLost)
     {
         ProcessRuntimeUiEvent(event);
-        ProcessDeveloperUiEvent(event);
         UpdateInputOwnership();
         return false;
     }
@@ -546,32 +398,6 @@ bool UiSubsystem::HandlePlatformEvent(const PlatformEvent& event)
     }
 
     bool consumed = false;
-    if (runtimePageVisible)
-    {
-        consumed = ProcessRuntimeUiEvent(event);
-        if (!consumed)
-        {
-            switch (event.type)
-            {
-            case PlatformEventType::KeyDown:
-            case PlatformEventType::KeyUp:
-            case PlatformEventType::TextInput:
-            case PlatformEventType::TextEditing:
-            case PlatformEventType::MouseMove:
-            case PlatformEventType::MouseButtonDown:
-            case PlatformEventType::MouseButtonUp:
-            case PlatformEventType::MouseWheel:
-            case PlatformEventType::GamepadButtonDown:
-            case PlatformEventType::GamepadButtonUp:
-            case PlatformEventType::GamepadAxisMotion:
-                consumed = true;
-                break;
-            default:
-                break;
-            }
-        }
-    }
-
     if (!consumed && developerUiVisible)
     {
         consumed = ProcessDeveloperUiEvent(event);
@@ -583,6 +409,7 @@ bool UiSubsystem::HandlePlatformEvent(const PlatformEvent& event)
 
 void UiSubsystem::Update(const UiViewModelSnapshot& viewModelSnapshot)
 {
+    PROFILE_SCOPE("UI.Update");
     if (!initialized)
     {
         return;
@@ -590,16 +417,28 @@ void UiSubsystem::Update(const UiViewModelSnapshot& viewModelSnapshot)
 
     UiViewModelSnapshot previous = std::move(lastViewModel);
     lastViewModel = viewModelSnapshot;
+    if (!immersiveLevelPath.empty() && immersiveLoadCompleted)
+    {
+        // 完成通知本身不代表成功；必须核对事务发布后的 World，禁止放大仍存活的模型预览。
+        const bool restored = NormalizePathForComparison(lastViewModel.activeWorldPath) ==
+            NormalizePathForComparison(immersiveLevelPath);
+        immersiveLevelPath.clear();
+        immersiveLoadCompleted = false;
+        if (restored) SetImmersiveView(true);
+        else diagnostics->ReportWarning("Immersive mode cancelled: the level was not restored.");
+    }
     ReconcileOfflineModeFeedback(lastViewModel, previous);
-    lastViewModel.runtimePageVisible = runtimePageVisible;
     lastViewModel.developerUiVisible = developerUiVisible;
     lastViewModel.locale = currentLocale;
 
     UiBindingUpdateScope bindingUpdate(updatingRuntimeBindings);
     TryHotReload();
     SyncBindingData();
-    dataModelHandle.DirtyAllVariables();
-    rmlContext->Update();
+    BuildDeveloperPanels();
+    {
+        PROFILE_SCOPE("UI.RmlUpdate");
+        rmlContext->Update();
+    }
     BuildAndPublishRenderSnapshot();
     UpdateInputOwnership();
 }
@@ -622,71 +461,47 @@ void UiSubsystem::Resize(uint32_t width, uint32_t height)
 
 bool UiSubsystem::IsScenePickTarget(float mouseX, float mouseY) const
 {
-#ifdef VULKANLEARN_ENABLE_DEVELOPER_UI
-    if (!developerUiVisible || runtimePageVisible || !imguiInitialized ||
-        !std::isfinite(mouseX) || !std::isfinite(mouseY))
+    if (!developerUiVisible || editorDocument == nullptr ||
+        !std::isfinite(mouseX) || !std::isfinite(mouseY) ||
+        mouseX < 0 || mouseY < 0 || mouseX >= desc.viewportWidth || mouseY >= desc.viewportHeight ||
+        materialInstanceEditorPanel == nullptr || materialInstanceEditorPanel->HasModal() ||
+        materialInstanceEditorPanel->IsWorkspaceDragging() ||
+        !ContainsViewportPoint(sceneViewportRect, mouseX, mouseY))
     {
         return false;
     }
-
-    if (mouseX < static_cast<float>(sceneViewportRect.x) ||
-        mouseY < static_cast<float>(sceneViewportRect.y) ||
-        mouseX >= static_cast<float>(
-            sceneViewportRect.x + static_cast<int32_t>(sceneViewportRect.width)) ||
-        mouseY >= static_cast<float>(
-            sceneViewportRect.y + static_cast<int32_t>(sceneViewportRect.height)))
-    {
-        return false;
-    }
-
-    const ImGuiWindow* navigationWindow =
-        ImGui::FindWindowByName(MaterialInstanceNavigationWindowName);
-    if (IsPointInsideActiveDeveloperWindow(navigationWindow, mouseX, mouseY))
-    {
-        return false;
-    }
-
-    const ImGuiWindow* inspectorWindow =
-        ImGui::FindWindowByName(MaterialInstanceInspectorWindowName);
-    if (IsPointInsideActiveDeveloperWindow(inspectorWindow, mouseX, mouseY))
-    {
-        return false;
-    }
-
-    return true;
-#else
-    static_cast<void>(mouseX);
-    static_cast<void>(mouseY);
-    return false;
-#endif
+    const Rml::Element* hit = rmlContext->GetElementAtPoint(Rml::Vector2f(mouseX, mouseY));
+    return materialInstanceEditorPanel->IsSceneViewportElement(hit);
 }
 
 void UiSubsystem::ApplyAction(const UiAction& action)
 {
     switch (action.type)
     {
-    case UiActionType::ToggleRuntimePage:
-        runtimePageVisible = !runtimePageVisible;
-        if (!runtimePageVisible)
-        {
-            ResetRuntimeInputState();
-        }
-        ApplyDocumentState();
-        break;
-    case UiActionType::CloseRuntimePage:
-        ResetRuntimeInputState();
-        runtimePageVisible = false;
-        ApplyDocumentState();
-        break;
     case UiActionType::ToggleDeveloperUi:
         if (developerUiEnabled)
         {
-            developerUiVisible = !developerUiVisible;
-            if (!developerUiVisible)
+            if (!immersiveLevelPath.empty())
             {
-                ResetDeveloperInputState();
+                immersiveLevelPath.clear();
+                immersiveLoadCompleted = false;
+            }
+            else if (!developerUiVisible) SetImmersiveView(false);
+            else if (materialInstanceEditorPanel != nullptr &&
+                materialInstanceEditorPanel->PrepareImmersiveView(immersiveLevelPath))
+            {
+                if (immersiveLevelPath.empty()) SetImmersiveView(true);
+                else
+                {
+                    immersiveLoadCompleted = false;
+                    UiAction load;
+                    load.type = UiActionType::LoadWorld;
+                    load.stringValue = immersiveLevelPath;
+                    RequestRuntimeAction(std::move(load));
+                }
             }
         }
+        ApplyDocumentState();
         break;
     case UiActionType::SetLocale:
         if (localizations.find(action.stringValue) != localizations.end())
@@ -702,6 +517,15 @@ void UiSubsystem::ApplyAction(const UiAction& action)
     UpdateInputOwnership();
 }
 
+void UiSubsystem::SetImmersiveView(bool enabled)
+{
+    immersiveView = enabled;
+    developerUiVisible = !enabled;
+    ResetRuntimeInputState();
+    editorPointerCaptured = false;
+    ApplyDocumentState();
+}
+
 void UiSubsystem::NotifyWorldChanged(
     const std::string& worldPath,
     uint64_t generation)
@@ -709,6 +533,10 @@ void UiSubsystem::NotifyWorldChanged(
     selectedModelMaterials.reset();
     selectedMaterialSlotIndex.reset();
     sceneModels.clear();
+    // 大纲行名可能在新 World 里重名，身份不做跨代复用。
+    sceneActors.reset();
+    selectedActorIdentity.clear();
+    pendingSceneSelectionClear = false;
     pendingMaterialInstanceModelSelection.reset();
     pendingMaterialInstanceSelection.reset();
     if (materialInstanceEditorRuntime != nullptr)
@@ -721,12 +549,12 @@ void UiSubsystem::NotifyWorldChanged(
 
 void UiSubsystem::NotifyWorldLoadCompleted()
 {
+    if (!immersiveLevelPath.empty()) immersiveLoadCompleted = true;
     if (!bindingData.sceneLoading)
     {
         return;
     }
     bindingData.sceneLoading = false;
-    dataModelHandle.DirtyVariable("scene_loading");
 }
 
 void UiSubsystem::TickMaterialInstanceEditor()
@@ -736,9 +564,10 @@ void UiSubsystem::TickMaterialInstanceEditor()
         return;
     }
     materialInstanceEditorRuntime->Tick();
+    if (jsonAssetLibrary != nullptr) jsonAssetLibrary->Poll();
 }
 
-bool UiSubsystem::OpenMaterialInstanceFromSelection(
+bool UiSubsystem::SelectSceneObjectFromPick(
     const Editor::Selection::MaterialInstanceSelection& selection)
 {
     if (!developerUiEnabled || materialInstanceEditorRuntime == nullptr)
@@ -746,17 +575,11 @@ bool UiSubsystem::OpenMaterialInstanceFromSelection(
         return false;
     }
 
-    Editor::Selection::MaterialInstanceEditorRuntimeSelectionTarget target(
-        *materialInstanceEditorRuntime);
-    if (!target.OpenMaterialInstance(selection))
-    {
-        return false;
-    }
-
-    if (materialInstanceEditorPanel != nullptr)
-    {
-        materialInstanceEditorPanel->SetVisible(true);
-    }
+    // 关卡拾取只发布对象/槽位选择，不创建 MI 文档或请求预览 World。
+    // 打开材质必须来自材质槽或资产浏览器的显式操作。
+    if (materialInstanceEditorPanel != nullptr) materialInstanceEditorPanel->ShowSceneDetails();
+    pendingMaterialInstanceSelection.reset();
+    pendingMaterialInstanceModelSelection.reset();
 
     EditorUi::MaterialInstanceModelSnapshot modelSnapshot;
     modelSnapshot.worldGeneration = selection.modelContext.worldGeneration;
@@ -778,6 +601,10 @@ bool UiSubsystem::OpenMaterialInstanceFromSelection(
     }
     selectedModelMaterials = std::move(modelSnapshot);
     selectedMaterialSlotIndex = selection.materialSlotIndex;
+    // 视口拾取与大纲行共用同一份选中态：拾取到的网格在大纲里也要高亮。
+    selectedActorIdentity = EditorUi::SceneActorIdentity(
+        EditorUi::EditorSceneActorType::Mesh, selection.objectIdentity);
+    pendingSceneSelectionClear = false;
     return true;
 }
 
@@ -831,6 +658,28 @@ void UiSubsystem::SetMaterialInstanceSceneModels(
     selectedModelMaterials = *selected;
 }
 
+// 大纲快照逐帧替换：只保存不可变数组的共享指针，选择态按稳定身份保留，
+// 身份消失时清空，防止把旧 World 的选择静默套到同名新对象上。
+void UiSubsystem::SetSceneActors(std::vector<EditorUi::EditorSceneActorSnapshot> actors)
+{
+    sceneActors = std::make_shared<const std::vector<EditorUi::EditorSceneActorSnapshot>>(
+        std::move(actors));
+    if (selectedActorIdentity.empty()) return;
+
+    const auto& list = *sceneActors;
+    const bool stillPresent = std::any_of(
+        list.begin(),
+        list.end(),
+        [this](const EditorUi::EditorSceneActorSnapshot& actor)
+        {
+            return actor.identity == selectedActorIdentity;
+        });
+    if (stillPresent) return;
+    selectedActorIdentity.clear();
+    selectedModelMaterials.reset();
+    selectedMaterialSlotIndex.reset();
+}
+
 std::optional<Editor::Selection::MaterialInstanceModelContext>
 UiSubsystem::ConsumeMaterialInstanceModelSelectionRequest()
 {
@@ -849,10 +698,20 @@ UiSubsystem::ConsumeMaterialInstanceSelectionRequest()
     return result;
 }
 
+bool UiSubsystem::ConsumeSceneSelectionClearRequest()
+{
+    // 与 selection 请求同帧消费一次：EngineLoop 据此清掉渲染端描边。
+    const bool pending = pendingSceneSelectionClear;
+    pendingSceneSelectionClear = false;
+    return pending;
+}
+
 void UiSubsystem::ClearMaterialInstanceSceneSelection() noexcept
 {
     selectedModelMaterials.reset();
     selectedMaterialSlotIndex.reset();
+    selectedActorIdentity.clear();
+    pendingSceneSelectionClear = false;
     pendingMaterialInstanceModelSelection.reset();
     pendingMaterialInstanceSelection.reset();
 }
@@ -886,6 +745,9 @@ bool UiSubsystem::RequestModelSelection(
     selectedMaterialSlotIndex.reset();
     pendingMaterialInstanceSelection.reset();
     pendingMaterialInstanceModelSelection = model;
+    selectedActorIdentity = EditorUi::SceneActorIdentity(
+        EditorUi::EditorSceneActorType::Mesh, model.objectIdentity);
+    pendingSceneSelectionClear = false;
     return true;
 }
 
@@ -902,12 +764,39 @@ bool UiSubsystem::RequestMaterialSelection(
     selectedMaterialSlotIndex = selection.materialSlotIndex;
     pendingMaterialInstanceModelSelection.reset();
     pendingMaterialInstanceSelection = selection;
+    selectedActorIdentity = EditorUi::SceneActorIdentity(
+        EditorUi::EditorSceneActorType::Mesh, selection.objectIdentity);
+    pendingSceneSelectionClear = false;
+    return true;
+}
+
+bool UiSubsystem::RequestActorSelection(const std::string& actorIdentity)
+{
+    if (!developerUiEnabled || actorIdentity.empty())
+    {
+        return false;
+    }
+
+    // 非网格 actor 没有 MI 文档：清掉编辑器侧的材质槽选择，并要求 EngineLoop
+    // 清掉渲染端的 mesh 描边，让大纲高亮与视口描边保持同一个选中对象。
+    selectedModelMaterials.reset();
+    selectedMaterialSlotIndex.reset();
+    pendingMaterialInstanceModelSelection.reset();
+    pendingMaterialInstanceSelection.reset();
+    selectedActorIdentity = actorIdentity;
+    pendingSceneSelectionClear = true;
     return true;
 }
 
 bool UiSubsystem::ShouldUseRelativeMouseModeForGame() const
 {
-    return initialized && !runtimePageVisible && !developerUiVisible;
+    if (!initialized) return false;
+    if (materialInstanceEditorPanel != nullptr &&
+        materialInstanceEditorPanel->IsAssetEditorVisible())
+        return false;
+    // 捕获由 Viewport 点击建立，不能再用绝对光标位置反向取消；
+    // 相对鼠标移动期间 SDL 的绝对坐标可能落在 Viewport 外。
+    return !developerUiVisible || sceneViewportInputActive;
 }
 
 bool UiSubsystem::ShouldGameReceiveKeyboard() const
@@ -926,17 +815,26 @@ RuntimeResult<void> UiSubsystem::InitializeRmlUi()
 {
     rmlSystemInterface.Initialize(*window, *diagnostics);
     Rml::SetSystemInterface(&rmlSystemInterface);
+    // 全局渲染接口只是兜底；真正的每窗口接口在 CreateContext 时传入（RmlUi 支持每 context 接口），
+    // 这正是多窗口能共用一套 RmlUi 全局状态的原因。
     Rml::SetRenderInterface(&rmlRenderInterface);
-    if (!Rml::Initialise())
+    // 进程级初始化由 RmlUiRuntime 持有（引用计数），而不是由这个"每窗口一份"的对象持有：
+    // 否则第二个窗口的 Shutdown 会把 RmlUi 从第一个底下抽走。
+    try
+    {
+        VL::Ui::RmlUiRuntime::Acquire();
+    }
+    catch (const std::exception& error)
     {
         return RuntimeResult<void>::Failure(MakeRuntimeError(
-            "UiSubsystem.RmlInitializeFailed",
-            "RmlUi failed to initialize."));
+            "UiSubsystem.RmlInitializeFailed", error.what()));
     }
     rmlInitialized = true;
 
+    // context 名必须唯一；窗口身份是唯一稳定的区分依据（此前硬编码 "vulkanlearn"，
+    // 第二个窗口会直接撞名并拿到 nullptr）。
     rmlContext = Rml::CreateContext(
-        "vulkanlearn",
+        VL::Ui::RmlUiRuntime::ContextNameFor(windowIndex),
         Rml::Vector2i(
             static_cast<int>(desc.viewportWidth),
             static_cast<int>(desc.viewportHeight)),
@@ -961,282 +859,10 @@ RuntimeResult<void> UiSubsystem::InitializeDataModel()
             "RmlUi failed to create the game_ui data model."));
     }
 
-    bool bound = true;
-    if (auto sceneOptionHandle = constructor.RegisterStruct<UiSceneOption>())
-    {
-        bound = sceneOptionHandle.RegisterMember("label", &UiSceneOption::label) && bound;
-        bound = sceneOptionHandle.RegisterMember("path", &UiSceneOption::path) && bound;
-        bound = sceneOptionHandle.RegisterMember("active", &UiSceneOption::active) && bound;
-    }
-    else
-    {
-        bound = false;
-    }
-    bound = constructor.RegisterArray<decltype(bindingData.sceneOptions)>() && bound;
-
-    bound = constructor.Bind("active_section", &bindingData.activeSection) && bound;
-    bound = constructor.Bind("world_text", &bindingData.worldText) && bound;
-    bound = constructor.Bind("panel_title", &bindingData.panelTitle) && bound;
-    bound = constructor.Bind("panel_subtitle", &bindingData.panelSubtitle) && bound;
-    bound = constructor.Bind("close_label", &bindingData.closeLabel) && bound;
-    bound = constructor.Bind("quit_label", &bindingData.quitLabel) && bound;
-
-    bound = constructor.Bind("tab_overview_label", &bindingData.tabOverviewLabel) && bound;
-    bound = constructor.Bind("tab_visualization_label", &bindingData.tabVisualizationLabel) && bound;
-    bound = constructor.Bind("tab_post_process_label", &bindingData.tabPostProcessLabel) && bound;
-    bound = constructor.Bind("tab_environment_label", &bindingData.tabEnvironmentLabel) && bound;
-    bound = constructor.Bind("tab_shadows_label", &bindingData.tabShadowsLabel) && bound;
-    bound = constructor.Bind("tab_scenes_label", &bindingData.tabScenesLabel) && bound;
-    bound = constructor.Bind("tab_system_label", &bindingData.tabSystemLabel) && bound;
-
-    bound = constructor.Bind("scene_list_title", &bindingData.sceneListTitle) && bound;
-    bound = constructor.Bind("scene_list_hint", &bindingData.sceneListHint) && bound;
-    bound = constructor.Bind("scene_empty_label", &bindingData.sceneEmptyLabel) && bound;
-    bound = constructor.Bind("scene_loading_label", &bindingData.sceneLoadingLabel) && bound;
-    bound = constructor.Bind("scene_loading", &bindingData.sceneLoading) && bound;
-    bound = constructor.Bind("scene_options", &bindingData.sceneOptions) && bound;
-    bound = constructor.Bind("camera_move_speed_label", &bindingData.cameraMoveSpeedLabel) && bound;
-    bound = constructor.Bind("camera_move_speed_value", &bindingData.cameraMoveSpeedValue) && bound;
-    bound = constructor.Bind("camera_move_speed", &bindingData.cameraMoveSpeed) && bound;
-
-    bound = constructor.Bind("frame_label", &bindingData.frameLabel) && bound;
-    bound = constructor.Bind("frame_value", &bindingData.frameValue) && bound;
-    bound = constructor.Bind("fps_label", &bindingData.fpsLabel) && bound;
-    bound = constructor.Bind("fps_value", &bindingData.fpsValue) && bound;
-    bound = constructor.Bind("scene_label", &bindingData.sceneLabel) && bound;
-    bound = constructor.Bind("input_mode_label", &bindingData.inputModeLabel) && bound;
-    bound = constructor.Bind("input_mode_value", &bindingData.inputModeValue) && bound;
-    bound = constructor.Bind("wind_profiles_label", &bindingData.windProfilesLabel) && bound;
-    bound = constructor.Bind("wind_profiles_value", &bindingData.windProfilesValue) && bound;
-    bound = constructor.Bind("hot_reload_label", &bindingData.hotReloadLabel) && bound;
-    bound = constructor.Bind("hot_reload_status", &bindingData.hotReloadStatus) && bound;
-
-    bound = constructor.Bind("debug_view_label", &bindingData.debugViewLabel) && bound;
-    bound = constructor.Bind("debug_view_value", &bindingData.debugViewValue) && bound;
-    bound = constructor.Bind("debug_view_mode", &bindingData.debugViewMode) && bound;
-    bound = constructor.Bind("debug_material_group_label", &bindingData.debugMaterialGroupLabel) && bound;
-    bound = constructor.Bind("debug_sss_group_label", &bindingData.debugSssGroupLabel) && bound;
-    bound = constructor.Bind("debug_hair_group_label", &bindingData.debugHairGroupLabel) && bound;
-    bound = constructor.Bind("debug_eye_group_label", &bindingData.debugEyeGroupLabel) && bound;
-    bound = constructor.Bind("debug_cloth_group_label", &bindingData.debugClothGroupLabel) && bound;
-    bound = constructor.Bind("debug_full_label", &bindingData.debugFullLabel) && bound;
-    bound = constructor.Bind("debug_base_color_label", &bindingData.debugBaseColorLabel) && bound;
-    bound = constructor.Bind("debug_emissive_label", &bindingData.debugEmissiveLabel) && bound;
-    bound = constructor.Bind("debug_normal_label", &bindingData.debugNormalLabel) && bound;
-    bound = constructor.Bind("debug_roughness_label", &bindingData.debugRoughnessLabel) && bound;
-    bound = constructor.Bind("debug_metallic_label", &bindingData.debugMetallicLabel) && bound;
-    bound = constructor.Bind("debug_ao_label", &bindingData.debugAoLabel) && bound;
-    bound = constructor.Bind("debug_shadow_label", &bindingData.debugShadowLabel) && bound;
-    bound = constructor.Bind("debug_direct_lighting_label", &bindingData.debugDirectLightingLabel) && bound;
-    bound = constructor.Bind("debug_indirect_diffuse_label", &bindingData.debugIndirectDiffuseLabel) && bound;
-    bound = constructor.Bind("debug_indirect_specular_label", &bindingData.debugIndirectSpecularLabel) && bound;
-    bound = constructor.Bind("debug_shadow_cascade_label", &bindingData.debugShadowCascadeLabel) && bound;
-    bound = constructor.Bind("debug_shading_model_label", &bindingData.debugShadingModelLabel) && bound;
-    bound = constructor.Bind("debug_subsurface_weight_label", &bindingData.debugSubsurfaceWeightLabel) && bound;
-    bound = constructor.Bind("debug_transmission_weight_label", &bindingData.debugTransmissionWeightLabel) && bound;
-    bound = constructor.Bind("debug_subsurface_asset_id_label", &bindingData.debugSubsurfaceAssetIdLabel) && bound;
-    bound = constructor.Bind("debug_local_subsurface_label", &bindingData.debugLocalSubsurfaceLabel) && bound;
-    bound = constructor.Bind("debug_diffuse_before_sss_label", &bindingData.debugDiffuseBeforeSssLabel) && bound;
-    bound = constructor.Bind("debug_diffuse_after_sss_label", &bindingData.debugDiffuseAfterSssLabel) && bound;
-    bound = constructor.Bind("debug_sss_pixel_radius_label", &bindingData.debugSssPixelRadiusLabel) && bound;
-    bound = constructor.Bind("debug_sss_valid_weight_label", &bindingData.debugSssValidWeightLabel) && bound;
-    bound = constructor.Bind("debug_hair_world_tangent_label", &bindingData.debugHairWorldTangentLabel) && bound;
-    bound = constructor.Bind("debug_hair_tangent_rootward_label", &bindingData.debugHairTangentRootwardLabel) && bound;
-    bound = constructor.Bind("debug_hair_theta_io_label", &bindingData.debugHairThetaIoLabel) && bound;
-    bound = constructor.Bind("debug_hair_delta_phi_label", &bindingData.debugHairDeltaPhiLabel) && bound;
-    bound = constructor.Bind("debug_hair_r_label", &bindingData.debugHairRLabel) && bound;
-    bound = constructor.Bind("debug_hair_tt_label", &bindingData.debugHairTtLabel) && bound;
-    bound = constructor.Bind("debug_hair_trt_label", &bindingData.debugHairTrtLabel) && bound;
-    bound = constructor.Bind("debug_hair_path_length_label", &bindingData.debugHairPathLengthLabel) && bound;
-    bound = constructor.Bind("debug_hair_absorption_label", &bindingData.debugHairAbsorptionLabel) && bound;
-    bound = constructor.Bind("debug_hair_coverage_label", &bindingData.debugHairCoverageLabel) && bound;
-    bound = constructor.Bind("debug_hair_shadow_transmittance_label", &bindingData.debugHairShadowTransmittanceLabel) && bound;
-    bound = constructor.Bind("debug_hair_lut_coordinates_label", &bindingData.debugHairLutCoordinatesLabel) && bound;
-    bound = constructor.Bind("debug_hair_primary_highlight_label", &bindingData.debugHairPrimaryHighlightLabel) && bound;
-    bound = constructor.Bind("debug_hair_secondary_highlight_label", &bindingData.debugHairSecondaryHighlightLabel) && bound;
-    bound = constructor.Bind("debug_hair_scatter_label", &bindingData.debugHairScatterLabel) && bound;
-    bound = constructor.Bind("debug_hair_backlit_label", &bindingData.debugHairBacklitLabel) && bound;
-    bound = constructor.Bind("debug_hair_r_path_color_label", &bindingData.debugHairRPathColorLabel) && bound;
-    bound = constructor.Bind("debug_hair_tt_path_color_label", &bindingData.debugHairTtPathColorLabel) && bound;
-    bound = constructor.Bind("debug_hair_trt_path_color_label", &bindingData.debugHairTrtPathColorLabel) && bound;
-    bound = constructor.Bind("debug_hair_ibl_fallback_label", &bindingData.debugHairIblFallbackLabel) && bound;
-    bound = constructor.Bind("debug_hair_ms_fallback_label", &bindingData.debugHairMultipleScatteringFallbackLabel) && bound;
-    bound = constructor.Bind("debug_eye_frame_label", &bindingData.debugEyeFrameLabel) && bound;
-    bound = constructor.Bind("debug_eye_cornea_normal_label", &bindingData.debugEyeCorneaNormalLabel) && bound;
-    bound = constructor.Bind("debug_eye_iris_normal_label", &bindingData.debugEyeIrisNormalLabel) && bound;
-    bound = constructor.Bind("debug_eye_iris_plane_normal_label", &bindingData.debugEyeIrisPlaneNormalLabel) && bound;
-    bound = constructor.Bind("debug_eye_cornea_fresnel_label", &bindingData.debugEyeCorneaFresnelLabel) && bound;
-    bound = constructor.Bind("debug_eye_cornea_specular_label", &bindingData.debugEyeCorneaSpecularLabel) && bound;
-    bound = constructor.Bind("debug_eye_refracted_view_direction_label", &bindingData.debugEyeRefractedViewDirectionLabel) && bound;
-    bound = constructor.Bind("debug_eye_iris_hit_distance_label", &bindingData.debugEyeIrisHitDistanceLabel) && bound;
-    bound = constructor.Bind("debug_eye_iris_uv_label", &bindingData.debugEyeIrisUvLabel) && bound;
-    bound = constructor.Bind("debug_eye_valid_iris_hit_label", &bindingData.debugEyeValidIrisHitLabel) && bound;
-    bound = constructor.Bind("debug_eye_iris_mask_label", &bindingData.debugEyeIrisMaskLabel) && bound;
-    bound = constructor.Bind("debug_eye_pupil_mask_label", &bindingData.debugEyePupilMaskLabel) && bound;
-    bound = constructor.Bind("debug_eye_limbus_mask_label", &bindingData.debugEyeLimbusMaskLabel) && bound;
-    bound = constructor.Bind("debug_eye_light_transmission_in_label", &bindingData.debugEyeLightTransmissionInLabel) && bound;
-    bound = constructor.Bind("debug_eye_view_transmission_out_label", &bindingData.debugEyeViewTransmissionOutLabel) && bound;
-    bound = constructor.Bind("debug_eye_iris_direct_label", &bindingData.debugEyeIrisDirectLabel) && bound;
-    bound = constructor.Bind("debug_eye_sclera_direct_label", &bindingData.debugEyeScleraDirectLabel) && bound;
-    bound = constructor.Bind("debug_eye_inner_ibl_label", &bindingData.debugEyeInnerIblLabel) && bound;
-    bound = constructor.Bind("debug_eye_caustic_gain_label", &bindingData.debugEyeCausticGainLabel) && bound;
-    bound = constructor.Bind("debug_eye_inner_shadow_label", &bindingData.debugEyeInnerShadowLabel) && bound;
-    bound = constructor.Bind("debug_eye_cornea_shadow_label", &bindingData.debugEyeCorneaShadowLabel) && bound;
-    bound = constructor.Bind("debug_eye_profile_label", &bindingData.debugEyeProfileLabel) && bound;
-    bound = constructor.Bind("debug_cloth_model_label", &bindingData.debugClothModelLabel) && bound;
-    bound = constructor.Bind("debug_cloth_sheen_color_label", &bindingData.debugClothSheenColorLabel) && bound;
-    bound = constructor.Bind("debug_cloth_sheen_roughness_label", &bindingData.debugClothSheenRoughnessLabel) && bound;
-    bound = constructor.Bind("debug_cloth_charlie_d_label", &bindingData.debugClothCharlieDLabel) && bound;
-    bound = constructor.Bind("debug_cloth_neubelt_visibility_label", &bindingData.debugClothNeubeltVisibilityLabel) && bound;
-    bound = constructor.Bind("debug_cloth_directional_albedo_label", &bindingData.debugClothDirectionalAlbedoLabel) && bound;
-    bound = constructor.Bind("debug_cloth_base_energy_scale_label", &bindingData.debugClothBaseEnergyScaleLabel) && bound;
-    bound = constructor.Bind("debug_cloth_direct_sheen_label", &bindingData.debugClothDirectSheenLabel) && bound;
-    bound = constructor.Bind("debug_cloth_indirect_sheen_label", &bindingData.debugClothIndirectSheenLabel) && bound;
-    bound = constructor.Bind("debug_cloth_ibl_fallback_label", &bindingData.debugClothIblFallbackLabel) && bound;
-    bound = constructor.Bind("debug_cloth_v2_model_label", &bindingData.debugClothV2ModelLabel) && bound;
-    bound = constructor.Bind("debug_cloth_world_tangent_label", &bindingData.debugClothWorldTangentLabel) && bound;
-    bound = constructor.Bind("debug_cloth_anisotropy_label", &bindingData.debugClothAnisotropyLabel) && bound;
-    bound = constructor.Bind("debug_cloth_anisotropy_cross_label", &bindingData.debugClothAnisotropyCrossLabel) && bound;
-    bound = constructor.Bind("debug_cloth_roughness_axes_label", &bindingData.debugClothRoughnessAxesLabel) && bound;
-    bound = constructor.Bind("debug_cloth_anisotropic_charlie_d_label", &bindingData.debugClothAnisotropicCharlieDLabel) && bound;
-    bound = constructor.Bind("debug_cloth_visibility_label", &bindingData.debugClothVisibilityLabel) && bound;
-    bound = constructor.Bind("debug_cloth_v2_directional_albedo_label", &bindingData.debugClothV2DirectionalAlbedoLabel) && bound;
-    bound = constructor.Bind("debug_cloth_v2_base_energy_scale_label", &bindingData.debugClothV2BaseEnergyScaleLabel) && bound;
-    bound = constructor.Bind("debug_cloth_v2_ibl_fallback_label", &bindingData.debugClothV2IblFallbackLabel) && bound;
-
-    bound = constructor.Bind("tone_mapping_label", &bindingData.toneMappingLabel) && bound;
-    bound = constructor.Bind("tone_mapping_value", &bindingData.toneMappingValue) && bound;
-    bound = constructor.Bind("tone_mapping_mode", &bindingData.toneMappingMode) && bound;
-    bound = constructor.Bind("tone_none_label", &bindingData.toneNoneLabel) && bound;
-    bound = constructor.Bind("tone_reinhard_label", &bindingData.toneReinhardLabel) && bound;
-    bound = constructor.Bind("tone_hable_label", &bindingData.toneHableLabel) && bound;
-    bound = constructor.Bind("tone_aces_label", &bindingData.toneAcesLabel) && bound;
-    bound = constructor.Bind("has_camera", &bindingData.hasCamera) && bound;
-    bound = constructor.Bind("exposure_mode", &bindingData.exposureMode) && bound;
-    bound = constructor.Bind("exposure_mode_label", &bindingData.exposureModeLabel) && bound;
-    bound = constructor.Bind("exposure_manual_label", &bindingData.exposureManualLabel) && bound;
-    bound = constructor.Bind("exposure_physical_ev_label", &bindingData.exposurePhysicalEvLabel) && bound;
-    bound = constructor.Bind("exposure_auto_label", &bindingData.exposureAutoLabel) && bound;
-    bound = constructor.Bind("exposure_ev_label", &bindingData.exposureEvLabel) && bound;
-    bound = constructor.Bind("exposure_ev_value", &bindingData.exposureEvValue) && bound;
-    bound = constructor.Bind("exposure_ev", &bindingData.exposureEv) && bound;
-    bound = constructor.Bind("exposure_compensation_label", &bindingData.exposureCompensationLabel) && bound;
-    bound = constructor.Bind("exposure_compensation_value", &bindingData.exposureCompensationValue) && bound;
-    bound = constructor.Bind("exposure_compensation", &bindingData.exposureCompensation) && bound;
-    bound = constructor.Bind("exposure_min_ev_label", &bindingData.exposureMinEvLabel) && bound;
-    bound = constructor.Bind("exposure_min_ev_value", &bindingData.exposureMinEvValue) && bound;
-    bound = constructor.Bind("exposure_min_ev", &bindingData.exposureMinEv) && bound;
-    bound = constructor.Bind("exposure_max_ev_label", &bindingData.exposureMaxEvLabel) && bound;
-    bound = constructor.Bind("exposure_max_ev_value", &bindingData.exposureMaxEvValue) && bound;
-    bound = constructor.Bind("exposure_max_ev", &bindingData.exposureMaxEv) && bound;
-    bound = constructor.Bind("bloom_strength_label", &bindingData.bloomStrengthLabel) && bound;
-    bound = constructor.Bind("bloom_strength_value", &bindingData.bloomStrengthValue) && bound;
-    bound = constructor.Bind("bloom_strength", &bindingData.bloomStrength) && bound;
-    bound = constructor.Bind("bloom_threshold_label", &bindingData.bloomThresholdLabel) && bound;
-    bound = constructor.Bind("bloom_threshold_value", &bindingData.bloomThresholdValue) && bound;
-    bound = constructor.Bind("bloom_threshold", &bindingData.bloomThreshold) && bound;
-    bound = constructor.Bind("bloom_knee_label", &bindingData.bloomKneeLabel) && bound;
-    bound = constructor.Bind("bloom_knee_value", &bindingData.bloomKneeValue) && bound;
-    bound = constructor.Bind("bloom_knee", &bindingData.bloomKnee) && bound;
-    bound = constructor.Bind("bloom_clamp_label", &bindingData.bloomClampLabel) && bound;
-    bound = constructor.Bind("bloom_clamp_value", &bindingData.bloomClampValue) && bound;
-    bound = constructor.Bind("bloom_clamp", &bindingData.bloomClamp) && bound;
-
-    bound = constructor.Bind("shadow_cast_shadows_label", &bindingData.shadowCastShadowsLabel) && bound;
-    bound = constructor.Bind("shadow_cast_shadows_value", &bindingData.shadowCastShadowsValue) && bound;
-    bound = constructor.Bind("csm_cast_shadows", &bindingData.csmCastShadows) && bound;
-    bound = constructor.Bind("shadow_enable_label", &bindingData.shadowEnableLabel) && bound;
-    bound = constructor.Bind("shadow_disable_label", &bindingData.shadowDisableLabel) && bound;
-    bound = constructor.Bind("shadow_dynamic_distance_label", &bindingData.shadowDynamicDistanceLabel) && bound;
-    bound = constructor.Bind("shadow_dynamic_distance_value", &bindingData.shadowDynamicDistanceValue) && bound;
-    bound = constructor.Bind("csm_dynamic_shadow_distance", &bindingData.csmDynamicShadowDistance) && bound;
-    bound = constructor.Bind("shadow_dynamic_cascades_label", &bindingData.shadowDynamicCascadesLabel) && bound;
-    bound = constructor.Bind("csm_dynamic_shadow_cascades", &bindingData.csmDynamicShadowCascades) && bound;
-    bound = constructor.Bind("shadow_cascade_distribution_exponent_label", &bindingData.shadowCascadeDistributionExponentLabel) && bound;
-    bound = constructor.Bind("shadow_cascade_distribution_exponent_value", &bindingData.shadowCascadeDistributionExponentValue) && bound;
-    bound = constructor.Bind("csm_cascade_distribution_exponent", &bindingData.csmCascadeDistributionExponent) && bound;
-    bound = constructor.Bind("shadow_cascade_transition_fraction_label", &bindingData.shadowCascadeTransitionFractionLabel) && bound;
-    bound = constructor.Bind("shadow_cascade_transition_fraction_value", &bindingData.shadowCascadeTransitionFractionValue) && bound;
-    bound = constructor.Bind("csm_cascade_transition_fraction", &bindingData.csmCascadeTransitionFraction) && bound;
-    bound = constructor.Bind("shadow_distance_fadeout_fraction_label", &bindingData.shadowDistanceFadeoutFractionLabel) && bound;
-    bound = constructor.Bind("shadow_distance_fadeout_fraction_value", &bindingData.shadowDistanceFadeoutFractionValue) && bound;
-    bound = constructor.Bind("csm_shadow_distance_fadeout_fraction", &bindingData.csmShadowDistanceFadeoutFraction) && bound;
-    bound = constructor.Bind("shadow_bias_label", &bindingData.shadowBiasLabel) && bound;
-    bound = constructor.Bind("shadow_bias_value", &bindingData.shadowBiasValue) && bound;
-    bound = constructor.Bind("csm_shadow_bias", &bindingData.csmShadowBias) && bound;
-    bound = constructor.Bind("shadow_slope_bias_label", &bindingData.shadowSlopeBiasLabel) && bound;
-    bound = constructor.Bind("shadow_slope_bias_value", &bindingData.shadowSlopeBiasValue) && bound;
-    bound = constructor.Bind("csm_shadow_slope_bias", &bindingData.csmShadowSlopeBias) && bound;
-    bound = constructor.Bind("shadow_cascade_bias_distribution_label", &bindingData.shadowCascadeBiasDistributionLabel) && bound;
-    bound = constructor.Bind("shadow_cascade_bias_distribution_value", &bindingData.shadowCascadeBiasDistributionValue) && bound;
-    bound = constructor.Bind("csm_shadow_cascade_bias_distribution", &bindingData.csmShadowCascadeBiasDistribution) && bound;
-    bound = constructor.Bind("shadow_debug_label", &bindingData.shadowDebugLabel) && bound;
-    bound = constructor.Bind("shadow_debug_full_label", &bindingData.shadowDebugFullLabel) && bound;
-    bound = constructor.Bind("shadow_debug_cascades_label", &bindingData.shadowDebugCascadesLabel) && bound;
-    bound = constructor.Bind("shadow_save_label", &bindingData.shadowSaveLabel) && bound;
-
-    bound = constructor.Bind("environment_label", &bindingData.environmentLabel) && bound;
-    bound = constructor.Bind("environment_value", &bindingData.environmentValue) && bound;
-    bound = constructor.Bind("environment_intensity", &bindingData.environmentIntensity) && bound;
-    bound = constructor.Bind("sun_label", &bindingData.sunLabel) && bound;
-    bound = constructor.Bind("sun_value", &bindingData.sunValue) && bound;
-    bound = constructor.Bind("sun_intensity", &bindingData.sunIntensity) && bound;
-    bound = constructor.Bind("vegetation_heading", &bindingData.vegetationHeading) && bound;
-    bound = constructor.Bind("wind_strength_label", &bindingData.windStrengthLabel) && bound;
-    bound = constructor.Bind("wind_strength_value", &bindingData.windStrengthValue) && bound;
-    bound = constructor.Bind("speedtree_strength", &bindingData.speedTreeStrength) && bound;
-    bound = constructor.Bind("gusting_label", &bindingData.gustingLabel) && bound;
-    bound = constructor.Bind("gusting_value", &bindingData.gustingValue) && bound;
-    bound = constructor.Bind("speedtree_gusting_enabled", &bindingData.speedTreeGustingEnabled) && bound;
-    bound = constructor.Bind("gust_on_label", &bindingData.gustOnLabel) && bound;
-    bound = constructor.Bind("gust_off_label", &bindingData.gustOffLabel) && bound;
-    bound = constructor.Bind("gust_once_label", &bindingData.gustOnceLabel) && bound;
-
-    bound = constructor.Bind("locale_label", &bindingData.localeLabel) && bound;
-    bound = constructor.Bind("locale_value", &bindingData.localeValue) && bound;
-    bound = constructor.Bind("developer_ui_label", &bindingData.developerUiLabel) && bound;
-    bound = constructor.Bind("developer_ui_value", &bindingData.developerUiValue) && bound;
-    bound = constructor.Bind("developer_ui_toggle_label", &bindingData.developerUiToggleLabel) && bound;
-
-    bound = constructor.BindEventCallback("close_page", &UiSubsystem::OnClosePage, this) && bound;
-    bound = constructor.BindEventCallback("load_scene", &UiSubsystem::OnLoadScene, this) && bound;
-    bound = constructor.BindEventCallback("camera_move_speed_changed", &UiSubsystem::OnCameraMoveSpeedChanged, this) && bound;
-    bound = constructor.BindEventCallback("set_debug_view", &UiSubsystem::OnDebugViewSelected, this) && bound;
-    bound = constructor.BindEventCallback("tone_none", &UiSubsystem::OnToneMappingNone, this) && bound;
-    bound = constructor.BindEventCallback("tone_reinhard", &UiSubsystem::OnToneMappingReinhard, this) && bound;
-    bound = constructor.BindEventCallback("tone_hable", &UiSubsystem::OnToneMappingHable, this) && bound;
-    bound = constructor.BindEventCallback("tone_aces", &UiSubsystem::OnToneMappingAces, this) && bound;
-    bound = constructor.BindEventCallback("set_exposure_mode", &UiSubsystem::OnExposureModeSelected, this) && bound;
-    bound = constructor.BindEventCallback("exposure_value_changed", &UiSubsystem::OnExposureValueChanged, this) && bound;
-    bound = constructor.BindEventCallback("bloom_strength_changed", &UiSubsystem::OnBloomStrengthChanged, this) && bound;
-    bound = constructor.BindEventCallback("bloom_threshold_changed", &UiSubsystem::OnBloomThresholdChanged, this) && bound;
-    bound = constructor.BindEventCallback("bloom_knee_changed", &UiSubsystem::OnBloomKneeChanged, this) && bound;
-    bound = constructor.BindEventCallback("bloom_clamp_changed", &UiSubsystem::OnBloomClampChanged, this) && bound;
-    bound = constructor.BindEventCallback("set_csm_cast_shadows", &UiSubsystem::OnCsmCastShadowsSelected, this) && bound;
-    bound = constructor.BindEventCallback("csm_dynamic_shadow_distance_changed", &UiSubsystem::OnCsmDynamicShadowDistanceChanged, this) && bound;
-    bound = constructor.BindEventCallback("set_csm_dynamic_shadow_cascades", &UiSubsystem::OnCsmDynamicShadowCascadesSelected, this) && bound;
-    bound = constructor.BindEventCallback("csm_cascade_distribution_exponent_changed", &UiSubsystem::OnCsmCascadeDistributionExponentChanged, this) && bound;
-    bound = constructor.BindEventCallback("csm_cascade_transition_fraction_changed", &UiSubsystem::OnCsmCascadeTransitionFractionChanged, this) && bound;
-    bound = constructor.BindEventCallback("csm_shadow_distance_fadeout_fraction_changed", &UiSubsystem::OnCsmShadowDistanceFadeoutFractionChanged, this) && bound;
-    bound = constructor.BindEventCallback("csm_shadow_bias_changed", &UiSubsystem::OnCsmShadowBiasChanged, this) && bound;
-    bound = constructor.BindEventCallback("csm_shadow_slope_bias_changed", &UiSubsystem::OnCsmShadowSlopeBiasChanged, this) && bound;
-    bound = constructor.BindEventCallback("csm_shadow_cascade_bias_distribution_changed", &UiSubsystem::OnCsmShadowCascadeBiasDistributionChanged, this) && bound;
-    bound = constructor.BindEventCallback("save_csm_to_scene", &UiSubsystem::OnSaveCsmSettingsToScene, this) && bound;
-    bound = constructor.BindEventCallback("environment_intensity_changed", &UiSubsystem::OnEnvironmentIntensityChanged, this) && bound;
-    bound = constructor.BindEventCallback("sun_intensity_changed", &UiSubsystem::OnSunIntensityChanged, this) && bound;
-    bound = constructor.BindEventCallback("speedtree_strength_changed", &UiSubsystem::OnSpeedTreeStrengthChanged, this) && bound;
-    bound = constructor.BindEventCallback("set_speedtree_gusting", &UiSubsystem::OnSpeedTreeGustingSelected, this) && bound;
-    bound = constructor.BindEventCallback("force_speedtree_gust", &UiSubsystem::OnForceSpeedTreeGust, this) && bound;
-    bound = constructor.BindEventCallback("locale_en", &UiSubsystem::OnLocaleEnglish, this) && bound;
-    bound = constructor.BindEventCallback("locale_zh", &UiSubsystem::OnLocaleChinese, this) && bound;
-    bound = constructor.BindEventCallback("toggle_developer_ui", &UiSubsystem::OnToggleDeveloperUi, this) && bound;
-    bound = constructor.BindEventCallback("quit", &UiSubsystem::OnQuit, this) && bound;
-
-    if (!bound)
+    if (!constructor.Bind("world_text", &bindingData.worldText))
     {
         return RuntimeResult<void>::Failure(MakeRuntimeError(
-            "UiSubsystem.DataModelBindingFailed",
-            "One or more RmlUi game_ui data model bindings failed."));
+            "UiSubsystem.DataModelFailed", "Could not bind HUD world label."));
     }
 
     dataModelHandle = constructor.GetModelHandle();
@@ -1245,61 +871,11 @@ RuntimeResult<void> UiSubsystem::InitializeDataModel()
 
 RuntimeResult<void> UiSubsystem::InitializeDeveloperUi()
 {
-#ifdef VULKANLEARN_ENABLE_DEVELOPER_UI
-    if (!developerUiEnabled)
-    {
-        return RuntimeResult<void>::Success();
-    }
-
-    IMGUI_CHECKVERSION();
-    ImGuiContext* context = ImGui::CreateContext();
-    if (context == nullptr)
-    {
-        return RuntimeResult<void>::Failure(MakeRuntimeError(
-            "UiSubsystem.ImGuiContextFailed",
-            "Dear ImGui failed to create the developer UI context."));
-    }
-
-    ImGuiIO& io = ImGui::GetIO();
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
-    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-    io.IniFilename = nullptr;
-    ImGui::StyleColorsDark();
-
-    unsigned char* fontPixels = nullptr;
-    int fontWidth = 0;
-    int fontHeight = 0;
-    io.Fonts->GetTexDataAsRGBA32(&fontPixels, &fontWidth, &fontHeight);
-    if (fontPixels == nullptr || fontWidth <= 0 || fontHeight <= 0)
-    {
-        ImGui::DestroyContext(context);
-        return RuntimeResult<void>::Failure(MakeRuntimeError(
-            "UiSubsystem.ImGuiFontAtlasFailed",
-            "Dear ImGui failed to build its font atlas."));
-    }
-
-    const size_t fontByteCount =
-        static_cast<size_t>(fontWidth) * static_cast<size_t>(fontHeight) * 4u;
-    const Rml::TextureHandle fontTexture = rmlRenderInterface.GenerateTexture(
-        {reinterpret_cast<const Rml::byte*>(fontPixels), fontByteCount},
-        Rml::Vector2i(fontWidth, fontHeight));
-    if (fontTexture == 0)
-    {
-        ImGui::DestroyContext(context);
-        return RuntimeResult<void>::Failure(MakeRuntimeError(
-            "UiSubsystem.ImGuiFontTextureFailed",
-            "Dear ImGui failed to register its font texture."));
-    }
-
-    imguiFontTextureId = static_cast<UiTextureId>(fontTexture);
-    io.Fonts->SetTexID(static_cast<ImTextureID>(imguiFontTextureId));
-    imguiInitialized = true;
-    UpdateDeveloperGamepadCapability();
-#else
-    developerUiEnabled = false;
-    developerUiVisible = false;
-#endif
+    if (!developerUiEnabled) return RuntimeResult<void>::Success();
+    auto candidate = LoadEditorDocumentCandidate();
+    if (candidate.IsFailure()) return RuntimeResult<void>::Failure(candidate.Error());
+    editorDocument = candidate.Value();
+    ApplyDocumentState();
     return RuntimeResult<void>::Success();
 }
 
@@ -1307,6 +883,8 @@ RuntimeResult<void> UiSubsystem::InitializeMaterialInstanceEditor()
 {
     materialInstanceEditorPanel.reset();
     materialInstanceEditorRuntime.reset();
+    jsonAssetLibrary.reset();
+    thumbnailLibrary.reset();
 
     if (!developerUiEnabled)
     {
@@ -1342,8 +920,39 @@ RuntimeResult<void> UiSubsystem::InitializeMaterialInstanceEditor()
         std::make_unique<EditorUi::MaterialInstanceAssetEditorPanel>(
             materialInstanceEditorRuntime.get());
     materialInstanceEditorPanel->SetSceneSelectionSink(this);
-    materialInstanceEditorPanel->SetVisible(true);
+    materialInstanceEditorPanel->SetRuntimeActionSink(this);
+    std::string error;
+    jsonAssetLibrary = std::make_unique<Editor::EditorJsonAssetLibrary>();
+    if (!jsonAssetLibrary->Initialize(desc.sceneRoot.parent_path(), error))
+        return RuntimeResult<void>::Failure(MakeRuntimeError("UiSubsystem.AssetLibraryInvalid", error));
+    thumbnailLibrary = std::make_unique<Editor::EditorThumbnailLibrary>();
+    if (!thumbnailLibrary->Initialize(desc.sceneRoot.parent_path(),
+        desc.assetRoot.parent_path() / ".cache" / "editor-thumbnails", error))
+        return RuntimeResult<void>::Failure(MakeRuntimeError("UiSubsystem.ThumbnailLibraryInvalid", error));
+    materialInstanceEditorPanel->SetJsonAssetRequestSink(this);
+    if (!materialInstanceEditorPanel->Attach(*editorDocument, error))
+        return RuntimeResult<void>::Failure(MakeRuntimeError("UiSubsystem.EditorDocumentInvalid", error));
     return RuntimeResult<void>::Success();
+}
+
+RuntimeResult<Rml::ElementDocument*> UiSubsystem::LoadEditorDocumentCandidate()
+{
+    const auto path = desc.assetRoot / "editor-workspace.rml";
+    rmlSystemInterface.BeginCandidateValidation();
+    // RmlUi 的 URL 基路径解析要求正斜杠；原生 Windows 路径会丢失 img 的相对目录。
+    Rml::ElementDocument* candidate = rmlContext->LoadDocument(path.generic_string());
+    std::string error;
+    const bool parsed = rmlSystemInterface.EndCandidateValidation(error);
+    const bool valid = candidate != nullptr && parsed &&
+        EditorUi::MaterialInstanceAssetEditorPanel::ValidateDocument(*candidate, error);
+    if (!valid)
+    {
+        if (candidate != nullptr) rmlContext->UnloadDocument(candidate);
+        return RuntimeResult<Rml::ElementDocument*>::Failure(MakeRuntimeError(
+            "UiSubsystem.EditorDocumentInvalid",
+            error.empty() ? "Editor workspace could not be loaded." : error, path.string()));
+    }
+    return RuntimeResult<Rml::ElementDocument*>::Success(candidate);
 }
 
 RuntimeResult<void> UiSubsystem::LoadFonts()
@@ -1547,7 +1156,7 @@ RuntimeResult<Rml::ElementDocument*> UiSubsystem::LoadDocumentCandidate()
     Rml::Factory::ClearTemplateCache();
 
     rmlSystemInterface.BeginCandidateValidation();
-    Rml::ElementDocument* candidate = rmlContext->LoadDocument(desc.documentPath.string());
+    Rml::ElementDocument* candidate = rmlContext->LoadDocument(desc.documentPath.generic_string());
     std::string parseError;
     const bool parseValid = rmlSystemInterface.EndCandidateValidation(parseError);
     if (candidate == nullptr || !parseValid)
@@ -1602,7 +1211,6 @@ void UiSubsystem::CommitDocumentCandidate(
     LocalizationDatabase localizationCandidate)
 {
     UiBindingUpdateScope bindingUpdate(updatingRuntimeBindings);
-    CapturePersistentDocumentState();
     ResetRuntimeInputState();
     Rml::ElementDocument* previousDocument = runtimeDocument;
     runtimeDocument = &candidate;
@@ -1615,7 +1223,6 @@ void UiSubsystem::CommitDocumentCandidate(
     Rml::ReleaseTextures(&rmlRenderInterface);
     runtimeDocument->Show();
     ApplyDocumentState();
-    RestorePersistentDocumentState();
     SyncBindingData();
     dataModelHandle.DirtyAllVariables();
     rmlContext->Update();
@@ -1631,11 +1238,7 @@ bool UiSubsystem::ValidateDocument(Rml::ElementDocument& document, std::string& 
 {
     static const char* requiredIds[] = {
         "ui-root",
-        "hud",
-        "control-backdrop",
-        "control-panel",
-        "control-scroll",
-        "close-button"
+        "hud"
     };
     for (const char* requiredId : requiredIds)
     {
@@ -1656,51 +1259,20 @@ void UiSubsystem::ApplyDocumentState()
         return;
     }
 
-    Rml::Element* backdrop = runtimeDocument->GetElementById("control-backdrop");
-    Rml::Element* panel = runtimeDocument->GetElementById("control-panel");
-    if (backdrop != nullptr)
+    if (Rml::Element* hud = runtimeDocument->GetElementById("hud"))
+        hud->SetProperty("display", developerUiVisible || immersiveView ? "none" : "block");
+    if (editorDocument != nullptr)
     {
-        backdrop->SetProperty("display", runtimePageVisible ? "block" : "none");
-    }
-    if (panel != nullptr)
-    {
-        panel->SetProperty("display", runtimePageVisible ? "block" : "none");
-    }
-
-    if (runtimePageVisible)
-    {
-        Rml::Element* closeButton = runtimeDocument->GetElementById("close-button");
-        if (closeButton != nullptr)
+        if (developerUiVisible)
         {
-            closeButton->Focus(true);
+            editorDocument->Show(Rml::ModalFlag::None, Rml::FocusFlag::None);
+            // Hide 会将焦点交还运行时文档并将其置顶；无焦点 Show 不恢复层级。
+            // 显式置顶才能避免透明运行时根节点挡住鼠标，同时不抢走游戏键盘焦点。
+            editorDocument->PullToFront();
         }
+        else editorDocument->Hide();
     }
-}
 
-void UiSubsystem::CapturePersistentDocumentState()
-{
-    if (runtimeDocument == nullptr)
-    {
-        return;
-    }
-    Rml::Element* scrollElement = runtimeDocument->GetElementById("control-scroll");
-    if (scrollElement != nullptr)
-    {
-        persistentScrollTop = scrollElement->GetScrollTop();
-    }
-}
-
-void UiSubsystem::RestorePersistentDocumentState()
-{
-    if (runtimeDocument == nullptr)
-    {
-        return;
-    }
-    Rml::Element* scrollElement = runtimeDocument->GetElementById("control-scroll");
-    if (scrollElement != nullptr)
-    {
-        scrollElement->SetScrollTop(persistentScrollTop);
-    }
 }
 
 void UiSubsystem::TryHotReload()
@@ -1710,6 +1282,7 @@ void UiSubsystem::TryHotReload()
         return;
     }
     nextHotReloadCheck = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+    PROFILE_SCOPE("UI.HotReloadScan");
 
     AssetFingerprint candidateFingerprint = BuildAssetFingerprint();
     if (!HasAssetFingerprintChanged(candidateFingerprint))
@@ -1732,6 +1305,30 @@ void UiSubsystem::TryHotReload()
         return;
     }
 
+    Rml::ElementDocument* editorCandidate = nullptr;
+    if (developerUiEnabled)
+    {
+        auto editorResult = LoadEditorDocumentCandidate();
+        if (editorResult.IsFailure())
+        {
+            rmlContext->UnloadDocument(documentResult.Value());
+            hotReloadStatus = "hot reload rollback: editor invalid";
+            diagnostics->ReportRuntimeError("UI hot reload rejected", editorResult.Error());
+            return;
+        }
+        editorCandidate = editorResult.Value();
+    }
+    // 两个文档都通过解析与结构校验才替换；失败候选不改变最后有效工作区。
+    if (editorCandidate != nullptr)
+    {
+        ResetRuntimeInputState();
+        if (materialInstanceEditorPanel != nullptr) materialInstanceEditorPanel->Detach();
+        rmlContext->UnloadDocument(editorDocument);
+        editorDocument = editorCandidate;
+        std::string error;
+        if (materialInstanceEditorPanel != nullptr)
+            materialInstanceEditorPanel->Attach(*editorDocument, error);
+    }
     CommitDocumentCandidate(*documentResult.Value(), std::move(localizationResult.Value()));
     assetFingerprint = std::move(candidateFingerprint);
     hotReloadStatus = "hot reload: committed";
@@ -1778,436 +1375,27 @@ bool UiSubsystem::HasAssetFingerprintChanged(const AssetFingerprint& candidate) 
 
 void UiSubsystem::SyncBindingData()
 {
-    bindingData.worldText = std::filesystem::path(lastViewModel.activeWorldPath).stem().string();
-    bindingData.panelTitle = Localize("panel.title");
-    bindingData.panelSubtitle = Localize("panel.subtitle");
-    bindingData.closeLabel = Localize("action.close");
-    bindingData.quitLabel = Localize("action.quit");
-
-    bindingData.tabOverviewLabel = Localize("tab.overview");
-    bindingData.tabVisualizationLabel = Localize("tab.visualization");
-    bindingData.tabPostProcessLabel = Localize("tab.post_process");
-    bindingData.tabEnvironmentLabel = Localize("tab.environment");
-    bindingData.tabShadowsLabel = Localize("tab.shadows");
-    bindingData.tabScenesLabel = Localize("tab.scenes");
-    bindingData.tabSystemLabel = Localize("tab.system");
-
-    bindingData.sceneListTitle = Localize("scene.list_title");
-    bindingData.sceneListHint = Localize("scene.list_hint");
-    bindingData.sceneEmptyLabel = Localize("scene.empty");
-    bindingData.sceneLoadingLabel = Localize("scene.loading");
-    bindingData.cameraMoveSpeedLabel = Localize("control.camera_move_speed");
-    bindingData.cameraMoveSpeed = lastViewModel.cameraMoveSpeed;
-    bindingData.cameraMoveSpeedValue = FormatFloat(lastViewModel.cameraMoveSpeed);
-    const std::string activeWorldPath =
-        NormalizePathForComparison(lastViewModel.activeWorldPath);
-    for (UiSceneOption& option : bindingData.sceneOptions)
-    {
-        option.active =
-            !activeWorldPath.empty() &&
-            option.normalizedPhysicalPath == activeWorldPath;
-    }
-
-    bindingData.frameLabel = Localize("status.frame");
-    bindingData.frameValue = std::to_string(lastViewModel.frameIndex);
-    bindingData.fpsLabel = Localize("status.fps");
-    bindingData.fpsValue = FormatFloat(lastViewModel.framesPerSecond);
-    bindingData.sceneLabel = Localize("status.scene");
-    bindingData.inputModeLabel = Localize("status.input_mode");
-    bindingData.inputModeValue = GetInputModeName(inputOwnership.mode);
-    bindingData.windProfilesLabel = Localize("status.wind_profiles");
-    bindingData.windProfilesValue = std::to_string(lastViewModel.speedTreeWindProfileCount);
-    bindingData.hotReloadLabel = Localize("status.hot_reload");
-    bindingData.hotReloadStatus = hotReloadStatus;
-
-    bindingData.debugViewLabel = Localize("control.debug_view");
-    bindingData.debugViewMode = lastViewModel.debugViewMode;
-    bindingData.debugViewValue = GetDebugViewName(lastViewModel.debugViewMode);
-    bindingData.debugMaterialGroupLabel = Localize("debug.group.material");
-    bindingData.debugSssGroupLabel = Localize("debug.group.sss");
-    bindingData.debugHairGroupLabel = Localize("debug.group.hair");
-    bindingData.debugEyeGroupLabel = Localize("debug.group.eye");
-    bindingData.debugClothGroupLabel = Localize("debug.group.cloth");
-    bindingData.debugFullLabel = Localize("debug.full");
-    bindingData.debugBaseColorLabel = Localize("debug.base_color");
-    bindingData.debugEmissiveLabel = Localize("debug.emissive");
-    bindingData.debugNormalLabel = Localize("debug.normal");
-    bindingData.debugRoughnessLabel = Localize("debug.roughness");
-    bindingData.debugMetallicLabel = Localize("debug.metallic");
-    bindingData.debugAoLabel = Localize("debug.ao");
-    bindingData.debugShadowLabel = Localize("debug.shadow");
-    bindingData.debugDirectLightingLabel = Localize("debug.direct_lighting");
-    bindingData.debugIndirectDiffuseLabel = Localize("debug.indirect_diffuse");
-    bindingData.debugIndirectSpecularLabel = Localize("debug.indirect_specular");
-    bindingData.debugShadowCascadeLabel = Localize("debug.shadow_cascade");
-    bindingData.debugShadingModelLabel = Localize("debug.shading_model");
-    bindingData.debugSubsurfaceWeightLabel = Localize("debug.subsurface_weight");
-    bindingData.debugTransmissionWeightLabel = Localize("debug.transmission_weight");
-    bindingData.debugSubsurfaceAssetIdLabel = Localize("debug.subsurface_asset_id");
-    bindingData.debugLocalSubsurfaceLabel = Localize("debug.local_subsurface");
-    bindingData.debugDiffuseBeforeSssLabel = Localize("debug.diffuse_before_sss");
-    bindingData.debugDiffuseAfterSssLabel = Localize("debug.diffuse_after_sss");
-    bindingData.debugSssPixelRadiusLabel = Localize("debug.sss_pixel_radius");
-    bindingData.debugSssValidWeightLabel = Localize("debug.sss_valid_weight");
-    bindingData.debugHairWorldTangentLabel = Localize("debug.hair_world_tangent");
-    bindingData.debugHairTangentRootwardLabel = Localize("debug.hair_tangent_rootward");
-    bindingData.debugHairThetaIoLabel = Localize("debug.hair_theta_io");
-    bindingData.debugHairDeltaPhiLabel = Localize("debug.hair_delta_phi");
-    bindingData.debugHairRLabel = Localize("debug.hair_r");
-    bindingData.debugHairTtLabel = Localize("debug.hair_tt");
-    bindingData.debugHairTrtLabel = Localize("debug.hair_trt");
-    bindingData.debugHairPathLengthLabel = Localize("debug.hair_path_length");
-    bindingData.debugHairAbsorptionLabel = Localize("debug.hair_absorption");
-    bindingData.debugHairCoverageLabel = Localize("debug.hair_coverage");
-    bindingData.debugHairShadowTransmittanceLabel = Localize("debug.hair_shadow_transmittance");
-    bindingData.debugHairLutCoordinatesLabel = Localize("debug.hair_lut_coordinates");
-    bindingData.debugHairPrimaryHighlightLabel = Localize("debug.hair_primary_highlight");
-    bindingData.debugHairSecondaryHighlightLabel = Localize("debug.hair_secondary_highlight");
-    bindingData.debugHairScatterLabel = Localize("debug.hair_scatter");
-    bindingData.debugHairBacklitLabel = Localize("debug.hair_backlit");
-    bindingData.debugHairRPathColorLabel = Localize("debug.hair_r_path_color");
-    bindingData.debugHairTtPathColorLabel = Localize("debug.hair_tt_path_color");
-    bindingData.debugHairTrtPathColorLabel = Localize("debug.hair_trt_path_color");
-    bindingData.debugHairIblFallbackLabel = Localize("debug.hair_ibl_fallback");
-    bindingData.debugHairMultipleScatteringFallbackLabel = Localize("debug.hair_ms_fallback");
-    bindingData.debugEyeFrameLabel = Localize("debug.eye_frame");
-    bindingData.debugEyeCorneaNormalLabel = Localize("debug.eye_cornea_normal");
-    bindingData.debugEyeIrisNormalLabel = Localize("debug.eye_iris_normal");
-    bindingData.debugEyeIrisPlaneNormalLabel = Localize("debug.eye_iris_plane_normal");
-    bindingData.debugEyeCorneaFresnelLabel = Localize("debug.eye_cornea_fresnel");
-    bindingData.debugEyeCorneaSpecularLabel = Localize("debug.eye_cornea_specular");
-    bindingData.debugEyeRefractedViewDirectionLabel = Localize("debug.eye_refracted_view_direction");
-    bindingData.debugEyeIrisHitDistanceLabel = Localize("debug.eye_iris_hit_distance");
-    bindingData.debugEyeIrisUvLabel = Localize("debug.eye_iris_uv");
-    bindingData.debugEyeValidIrisHitLabel = Localize("debug.eye_valid_iris_hit");
-    bindingData.debugEyeIrisMaskLabel = Localize("debug.eye_iris_mask");
-    bindingData.debugEyePupilMaskLabel = Localize("debug.eye_pupil_mask");
-    bindingData.debugEyeLimbusMaskLabel = Localize("debug.eye_limbus_mask");
-    bindingData.debugEyeLightTransmissionInLabel = Localize("debug.eye_light_transmission_in");
-    bindingData.debugEyeViewTransmissionOutLabel = Localize("debug.eye_view_transmission_out");
-    bindingData.debugEyeIrisDirectLabel = Localize("debug.eye_iris_direct");
-    bindingData.debugEyeScleraDirectLabel = Localize("debug.eye_sclera_direct");
-    bindingData.debugEyeInnerIblLabel = Localize("debug.eye_inner_ibl");
-    bindingData.debugEyeCausticGainLabel = Localize("debug.eye_caustic_gain");
-    bindingData.debugEyeInnerShadowLabel = Localize("debug.eye_inner_shadow");
-    bindingData.debugEyeCorneaShadowLabel = Localize("debug.eye_cornea_shadow");
-    bindingData.debugEyeProfileLabel = Localize("debug.eye_profile");
-    bindingData.debugClothModelLabel = Localize("debug.cloth_model");
-    bindingData.debugClothSheenColorLabel = Localize("debug.cloth_sheen_color");
-    bindingData.debugClothSheenRoughnessLabel = Localize("debug.cloth_sheen_roughness");
-    bindingData.debugClothCharlieDLabel = Localize("debug.cloth_charlie_d");
-    bindingData.debugClothNeubeltVisibilityLabel = Localize("debug.cloth_neubelt_visibility");
-    bindingData.debugClothDirectionalAlbedoLabel = Localize("debug.cloth_directional_albedo");
-    bindingData.debugClothBaseEnergyScaleLabel = Localize("debug.cloth_base_energy_scale");
-    bindingData.debugClothDirectSheenLabel = Localize("debug.cloth_direct_sheen");
-    bindingData.debugClothIndirectSheenLabel = Localize("debug.cloth_indirect_sheen");
-    bindingData.debugClothIblFallbackLabel = Localize("debug.cloth_ibl_fallback");
-    bindingData.debugClothV2ModelLabel = Localize("debug.cloth_v2_model");
-    bindingData.debugClothWorldTangentLabel = Localize("debug.cloth_world_tangent");
-    bindingData.debugClothAnisotropyLabel = Localize("debug.cloth_anisotropy");
-    bindingData.debugClothAnisotropyCrossLabel = Localize("debug.cloth_anisotropy_cross");
-    bindingData.debugClothRoughnessAxesLabel = Localize("debug.cloth_roughness_axes");
-    bindingData.debugClothAnisotropicCharlieDLabel = Localize("debug.cloth_anisotropic_charlie_d");
-    bindingData.debugClothVisibilityLabel = Localize("debug.cloth_visibility");
-    bindingData.debugClothV2DirectionalAlbedoLabel = Localize("debug.cloth_v2_directional_albedo");
-    bindingData.debugClothV2BaseEnergyScaleLabel = Localize("debug.cloth_v2_base_energy_scale");
-    bindingData.debugClothV2IblFallbackLabel = Localize("debug.cloth_v2_ibl_fallback");
-
-    bindingData.toneMappingLabel = Localize("control.tone_mapping");
-    bindingData.toneMappingMode = lastViewModel.toneMappingMode;
-    bindingData.toneMappingValue = GetToneMappingName(lastViewModel.toneMappingMode);
-    bindingData.toneNoneLabel = Localize("tone.none");
-    bindingData.toneReinhardLabel = Localize("tone.reinhard");
-    bindingData.toneHableLabel = Localize("tone.hable");
-    bindingData.toneAcesLabel = Localize("tone.aces");
-    bindingData.hasCamera = lastViewModel.hasCamera;
-    const CameraExposure& exposure = lastViewModel.cameraExposure;
-    bindingData.exposureMode = exposure.mode == ExposureMode::Auto ? 2 :
-        exposure.mode == ExposureMode::PhysicalCamera ? 1 : 0;
-    bindingData.exposureModeLabel = Localize("control.exposure_mode");
-    bindingData.exposureManualLabel = Localize("exposure.manual");
-    bindingData.exposurePhysicalEvLabel = Localize("control.exposure_physical_ev");
-    bindingData.exposureAutoLabel = Localize("exposure.auto");
-    bindingData.exposureEvLabel = Localize("control.exposure_ev");
-    bindingData.exposureEv = static_cast<float>(exposure.ev100);
-    // physical 配置属于固定曝光，UI 归到 Manual；只读显示相机推导的 EV，
-    // 不把未生效的作者 ev100 误当作当前曝光。显式选择 Manual 才切回 ev100 输入。
-    bindingData.exposureEvValue = FormatFloat(static_cast<float>(EffectiveEv100(exposure)));
-    bindingData.exposureCompensationLabel = Localize("control.exposure_compensation");
-    bindingData.exposureCompensation = static_cast<float>(exposure.compensation);
-    bindingData.exposureCompensationValue = FormatFloat(bindingData.exposureCompensation);
-    bindingData.exposureMinEvLabel = Localize("control.exposure_min_ev");
-    bindingData.exposureMinEv = static_cast<float>(exposure.autoMinEv100);
-    bindingData.exposureMinEvValue = FormatFloat(bindingData.exposureMinEv);
-    bindingData.exposureMaxEvLabel = Localize("control.exposure_max_ev");
-    bindingData.exposureMaxEv = static_cast<float>(exposure.autoMaxEv100);
-    bindingData.exposureMaxEvValue = FormatFloat(bindingData.exposureMaxEv);
-    bindingData.bloomStrengthLabel = Localize("control.bloom_strength");
-    bindingData.bloomStrength = lastViewModel.bloomStrength;
-    bindingData.bloomStrengthValue = FormatFloat(lastViewModel.bloomStrength);
-    bindingData.bloomThresholdLabel = Localize("control.bloom_threshold");
-    bindingData.bloomThreshold = lastViewModel.bloomThreshold;
-    bindingData.bloomThresholdValue = FormatFloat(lastViewModel.bloomThreshold);
-    bindingData.bloomKneeLabel = Localize("control.bloom_knee");
-    bindingData.bloomKnee = lastViewModel.bloomKnee;
-    bindingData.bloomKneeValue = FormatFloat(lastViewModel.bloomKnee);
-    bindingData.bloomClampLabel = Localize("control.bloom_clamp");
-    bindingData.bloomClamp = lastViewModel.bloomClamp;
-    bindingData.bloomClampValue = FormatFloat(lastViewModel.bloomClamp);
-
-    bindingData.shadowCastShadowsLabel =
-        Localize("control.shadow_cast_shadows");
-    bindingData.csmCastShadows =
-        lastViewModel.csmCastShadows;
-    bindingData.shadowCastShadowsValue =
-        lastViewModel.csmCastShadows ?
-        Localize("status.enabled") : Localize("status.disabled");
-    bindingData.shadowEnableLabel = Localize("action.enable");
-    bindingData.shadowDisableLabel = Localize("action.disable");
-    bindingData.shadowDynamicDistanceLabel =
-        Localize("control.shadow_dynamic_distance");
-    bindingData.csmDynamicShadowDistance =
-        lastViewModel.csmDynamicShadowDistance;
-    bindingData.shadowDynamicDistanceValue =
-        FormatFloat(
-            lastViewModel.csmDynamicShadowDistance);
-    bindingData.shadowDynamicCascadesLabel =
-        Localize("control.shadow_dynamic_cascades");
-    bindingData.csmDynamicShadowCascades =
-        lastViewModel.csmDynamicShadowCascades;
-    bindingData.shadowCascadeDistributionExponentLabel =
-        Localize(
-            "control.shadow_cascade_distribution_exponent");
-    bindingData.csmCascadeDistributionExponent =
-        lastViewModel.csmCascadeDistributionExponent;
-    bindingData.shadowCascadeDistributionExponentValue =
-        FormatFloat(
-            lastViewModel.csmCascadeDistributionExponent);
-    bindingData.shadowCascadeTransitionFractionLabel =
-        Localize(
-            "control.shadow_cascade_transition_fraction");
-    bindingData.csmCascadeTransitionFraction =
-        lastViewModel.csmCascadeTransitionFraction;
-    bindingData.shadowCascadeTransitionFractionValue =
-        FormatFloat(
-            lastViewModel.csmCascadeTransitionFraction);
-    bindingData.shadowDistanceFadeoutFractionLabel =
-        Localize(
-            "control.shadow_distance_fadeout_fraction");
-    bindingData.csmShadowDistanceFadeoutFraction =
-        lastViewModel.csmShadowDistanceFadeoutFraction;
-    bindingData.shadowDistanceFadeoutFractionValue =
-        FormatFloat(
-            lastViewModel.csmShadowDistanceFadeoutFraction);
-    bindingData.shadowBiasLabel =
-        Localize("control.shadow_bias");
-    bindingData.csmShadowBias =
-        lastViewModel.csmShadowBias;
-    bindingData.shadowBiasValue =
-        FormatFloat(lastViewModel.csmShadowBias);
-    bindingData.shadowSlopeBiasLabel = Localize("control.shadow_slope_bias");
-    bindingData.csmShadowSlopeBias =
-        lastViewModel.csmShadowSlopeBias;
-    bindingData.shadowSlopeBiasValue =
-        FormatFloat(lastViewModel.csmShadowSlopeBias);
-    bindingData.shadowCascadeBiasDistributionLabel =
-        Localize(
-            "control.shadow_cascade_bias_distribution");
-    bindingData.csmShadowCascadeBiasDistribution =
-        lastViewModel.csmShadowCascadeBiasDistribution;
-    bindingData.shadowCascadeBiasDistributionValue =
-        FormatFloat(
-            lastViewModel.csmShadowCascadeBiasDistribution);
-    bindingData.shadowDebugLabel = Localize("control.shadow_debug");
-    bindingData.shadowDebugFullLabel = Localize("debug.full");
-    bindingData.shadowDebugCascadesLabel = Localize("debug.shadow_cascade");
-    bindingData.shadowSaveLabel = Localize("action.save_to_scene");
-    bindingData.environmentLabel = Localize("control.environment");
-    bindingData.environmentIntensity = lastViewModel.environmentIntensity;
-    bindingData.environmentValue = FormatFloat(lastViewModel.environmentIntensity);
-    bindingData.sunLabel = Localize("control.sun_intensity");
-    bindingData.sunIntensity = lastViewModel.sunIntensity;
-    bindingData.sunValue = FormatFloat(lastViewModel.sunIntensity);
-    bindingData.vegetationHeading = Localize("section.vegetation");
-    bindingData.windStrengthLabel = Localize("control.wind_strength");
-    bindingData.speedTreeStrength = lastViewModel.speedTreeStrength;
-    bindingData.windStrengthValue = FormatFloat(lastViewModel.speedTreeStrength);
-    bindingData.gustingLabel = Localize("control.gusting");
-    bindingData.speedTreeGustingEnabled = lastViewModel.speedTreeGustingEnabled;
-    bindingData.gustingValue = lastViewModel.speedTreeGustingEnabled ?
-        Localize("status.enabled") : Localize("status.disabled");
-    bindingData.gustOnLabel = Localize("action.gust_on");
-    bindingData.gustOffLabel = Localize("action.gust_off");
-    bindingData.gustOnceLabel = Localize("action.gust_once");
-
-    bindingData.localeLabel = Localize("status.locale");
-    bindingData.localeValue = currentLocale;
-    bindingData.developerUiLabel = Localize("status.developer_ui");
-    bindingData.developerUiValue = lastViewModel.developerUiVisible ?
-        Localize("status.visible") : Localize("status.hidden");
-    bindingData.developerUiToggleLabel = Localize("action.developer_ui");
-}
-
-std::string UiSubsystem::Localize(const std::string& key) const
-{
-    auto localeIt = localizations.find(currentLocale);
-    if (localeIt != localizations.end())
-    {
-        auto valueIt = localeIt->second.find(key);
-        if (valueIt != localeIt->second.end())
-        {
-            return valueIt->second;
-        }
-    }
-    auto fallbackIt = localizations.find(desc.defaultLocale);
-    if (fallbackIt != localizations.end())
-    {
-        auto valueIt = fallbackIt->second.find(key);
-        if (valueIt != fallbackIt->second.end())
-        {
-            return valueIt->second;
-        }
-    }
-    return key;
-}
-
-std::string UiSubsystem::FormatFloat(float value) const
-{
-    std::ostringstream stream;
-    stream << std::fixed << std::setprecision(2) << value;
-    return stream.str();
-}
-
-std::string UiSubsystem::GetDebugViewName(int mode) const
-{
-    switch (mode)
-    {
-    case 0: return Localize("debug.full");
-    case 1: return Localize("debug.base_color");
-    case 2: return Localize("debug.emissive");
-    case 3: return Localize("debug.normal");
-    case 4: return Localize("debug.roughness");
-    case 5: return Localize("debug.metallic");
-    case 6: return Localize("debug.ao");
-    case 7: return Localize("debug.shadow");
-    case 8: return Localize("debug.direct_lighting");
-    case 9: return Localize("debug.indirect_diffuse");
-    case 10: return Localize("debug.indirect_specular");
-    case 11: return Localize("debug.shadow_cascade");
-    case 12: return Localize("debug.shading_model");
-    case 13: return Localize("debug.subsurface_weight");
-    case 14: return Localize("debug.transmission_weight");
-    case 15: return Localize("debug.subsurface_asset_id");
-    case 16: return Localize("debug.local_subsurface");
-    case 17: return Localize("debug.diffuse_before_sss");
-    case 18: return Localize("debug.diffuse_after_sss");
-    case 19: return Localize("debug.sss_pixel_radius");
-    case 20: return Localize("debug.sss_valid_weight");
-    case 21: return Localize("debug.hair_world_tangent");
-    case 22: return Localize("debug.hair_tangent_rootward");
-    case 23: return Localize("debug.hair_theta_io");
-    case 24: return Localize("debug.hair_delta_phi");
-    case 25: return Localize("debug.hair_r");
-    case 26: return Localize("debug.hair_tt");
-    case 27: return Localize("debug.hair_trt");
-    case 28: return Localize("debug.hair_path_length");
-    case 29: return Localize("debug.hair_absorption");
-    case 30: return Localize("debug.hair_coverage");
-    case 31: return Localize("debug.hair_shadow_transmittance");
-    case 32: return Localize("debug.hair_lut_coordinates");
-    case 33: return Localize("debug.hair_primary_highlight");
-    case 34: return Localize("debug.hair_secondary_highlight");
-    case 35: return Localize("debug.hair_scatter");
-    case 36: return Localize("debug.hair_backlit");
-    case 37: return Localize("debug.hair_r_path_color");
-    case 38: return Localize("debug.hair_tt_path_color");
-    case 39: return Localize("debug.hair_trt_path_color");
-    case 40: return Localize("debug.hair_ibl_fallback");
-    case 41: return Localize("debug.hair_ms_fallback");
-    case 42: return Localize("debug.eye_frame");
-    case 43: return Localize("debug.eye_cornea_normal");
-    case 44: return Localize("debug.eye_iris_normal");
-    case 45: return Localize("debug.eye_iris_plane_normal");
-    case 46: return Localize("debug.eye_cornea_fresnel");
-    case 47: return Localize("debug.eye_cornea_specular");
-    case 48: return Localize("debug.eye_refracted_view_direction");
-    case 49: return Localize("debug.eye_iris_hit_distance");
-    case 50: return Localize("debug.eye_iris_uv");
-    case 51: return Localize("debug.eye_valid_iris_hit");
-    case 52: return Localize("debug.eye_iris_mask");
-    case 53: return Localize("debug.eye_pupil_mask");
-    case 54: return Localize("debug.eye_limbus_mask");
-    case 55: return Localize("debug.eye_light_transmission_in");
-    case 56: return Localize("debug.eye_view_transmission_out");
-    case 57: return Localize("debug.eye_iris_direct");
-    case 58: return Localize("debug.eye_sclera_direct");
-    case 59: return Localize("debug.eye_inner_ibl");
-    case 60: return Localize("debug.eye_caustic_gain");
-    case 61: return Localize("debug.eye_inner_shadow");
-    case 62: return Localize("debug.eye_cornea_shadow");
-    case 63: return Localize("debug.eye_profile");
-    case 64: return Localize("debug.cloth_model");
-    case 65: return Localize("debug.cloth_sheen_color");
-    case 66: return Localize("debug.cloth_sheen_roughness");
-    case 67: return Localize("debug.cloth_charlie_d");
-    case 68: return Localize("debug.cloth_neubelt_visibility");
-    case 69: return Localize("debug.cloth_directional_albedo");
-    case 70: return Localize("debug.cloth_base_energy_scale");
-    case 71: return Localize("debug.cloth_direct_sheen");
-    case 72: return Localize("debug.cloth_indirect_sheen");
-    case 73: return Localize("debug.cloth_ibl_fallback");
-    case 80: return Localize("debug.cloth_v2_model");
-    case 81: return Localize("debug.cloth_world_tangent");
-    case 82: return Localize("debug.cloth_anisotropy");
-    case 83: return Localize("debug.cloth_anisotropy_cross");
-    case 84: return Localize("debug.cloth_roughness_axes");
-    case 85: return Localize("debug.cloth_anisotropic_charlie_d");
-    case 86: return Localize("debug.cloth_visibility");
-    case 87: return Localize("debug.cloth_v2_directional_albedo");
-    case 88: return Localize("debug.cloth_v2_base_energy_scale");
-    case 89: return Localize("debug.cloth_v2_ibl_fallback");
-    case 90: return Localize("debug.foliage_model");
-    case 91: return Localize("debug.foliage_subsurface_color");
-    case 93: return Localize("debug.foliage_resolved_normal");
-    case 94: return Localize("debug.foliage_backlight_factor");
-    case 95: return Localize("debug.foliage_shadow_visibility");
-    case 96: return Localize("debug.foliage_lobe");
-    case 97: return Localize("debug.foliage_alpha_mask");
-    case 98: return Localize("debug.foliage_gbuffer_custom_data");
-    default: return Localize("debug.unknown");
-    }
-}
-
-std::string UiSubsystem::GetToneMappingName(int mode) const
-{
-    switch (mode)
-    {
-    case 0: return Localize("tone.none");
-    case 1: return Localize("tone.reinhard");
-    case 2: return Localize("tone.hable");
-    case 3: return Localize("tone.aces");
-    default: return Localize("tone.unknown");
-    }
-}
-
-std::string UiSubsystem::GetInputModeName(UiInputMode mode) const
-{
-    switch (mode)
-    {
-    case UiInputMode::GameOnly: return Localize("input.game_only");
-    case UiInputMode::UiOnly: return Localize("input.ui_only");
-    case UiInputMode::GameAndUi: return Localize("input.game_and_ui");
-    }
-    return Localize("status.unknown");
+    const std::string worldText = std::filesystem::path(lastViewModel.activeWorldPath).stem().string();
+    if (bindingData.worldText == worldText) return;
+    bindingData.worldText = worldText;
+    dataModelHandle.DirtyVariable("world_text");
 }
 
 void UiSubsystem::BuildAndPublishRenderSnapshot()
 {
+    PROFILE_SCOPE("UI.RenderSnapshot");
     std::shared_ptr<UiRenderSnapshot> snapshot = std::make_shared<UiRenderSnapshot>();
+    // 冻结快照不能跨 GT/RT 重用；仅借用上一帧容量估计，避免每个 draw 都重新分配。
+    snapshot->vertices.reserve(previousUiVertexCount);
+    snapshot->indices.reserve(previousUiIndexCount);
+    snapshot->drawCommands.reserve(previousUiDrawCount);
     snapshot->frameIndex = uiFrameIndex++;
     snapshot->viewportWidth = desc.viewportWidth;
     snapshot->viewportHeight = desc.viewportHeight;
-    snapshot->sceneViewportRect = {
+    snapshot->sceneViewportEnabled = IsSceneViewportEnabled();
+    snapshot->sceneViewportRect = snapshot->sceneViewportEnabled && materialInstanceEditorPanel != nullptr
+        ? ClipViewportRect(materialInstanceEditorPanel->GetSceneViewportRect(), desc.viewportWidth, desc.viewportHeight)
+        : UiViewportRect{
         0,
         0,
         desc.viewportWidth,
@@ -2216,382 +1404,79 @@ void UiSubsystem::BuildAndPublishRenderSnapshot()
 
     rmlRenderInterface.BeginFrame(*snapshot);
     rmlContext->Render();
-    AppendDeveloperDrawData(*snapshot);
     rmlRenderInterface.AppendTextureSnapshots(snapshot->textures);
     rmlRenderInterface.EndFrame();
+    previousUiVertexCount = snapshot->vertices.size();
+    previousUiIndexCount = snapshot->indices.size();
+    previousUiDrawCount = snapshot->drawCommands.size();
     renderSnapshotQueue.Publish(std::move(snapshot));
-}
-
-void UiSubsystem::AppendDeveloperDrawData(UiRenderSnapshot& snapshot)
-{
-#ifdef VULKANLEARN_ENABLE_DEVELOPER_UI
-    if (!imguiInitialized)
-    {
-        return;
-    }
-
-    ImGuiIO& io = ImGui::GetIO();
-    const bool developerUiWasVisible = developerUiVisible;
-    io.DisplaySize = ImVec2(
-        static_cast<float>(desc.viewportWidth),
-        static_cast<float>(desc.viewportHeight));
-    io.DeltaTime = lastViewModel.deltaTimeSeconds > 0.0f ? lastViewModel.deltaTimeSeconds : 1.0f / 60.0f;
-    ImGui::NewFrame();
-    BuildDeveloperPanels();
-    ImGui::Render();
-    if (developerUiWasVisible && !developerUiVisible)
-    {
-        ResetDeveloperInputState();
-    }
-
-    const ImDrawData* drawData = ImGui::GetDrawData();
-    if (drawData == nullptr)
-    {
-        return;
-    }
-
-    for (int listIndex = 0; listIndex < drawData->CmdListsCount; ++listIndex)
-    {
-        const ImDrawList* drawList = drawData->CmdLists[listIndex];
-        const uint32_t baseVertex = static_cast<uint32_t>(snapshot.vertices.size());
-        const uint32_t baseIndex = static_cast<uint32_t>(snapshot.indices.size());
-
-        snapshot.vertices.reserve(snapshot.vertices.size() + static_cast<size_t>(drawList->VtxBuffer.Size));
-        for (const ImDrawVert& sourceVertex : drawList->VtxBuffer)
-        {
-            UiVertex vertex;
-            vertex.position[0] = sourceVertex.pos.x;
-            vertex.position[1] = sourceVertex.pos.y;
-            vertex.texCoord[0] = sourceVertex.uv.x;
-            vertex.texCoord[1] = sourceVertex.uv.y;
-            vertex.color = sourceVertex.col;
-            snapshot.vertices.push_back(vertex);
-        }
-
-        snapshot.indices.reserve(snapshot.indices.size() + static_cast<size_t>(drawList->IdxBuffer.Size));
-        for (ImDrawIdx sourceIndex : drawList->IdxBuffer)
-        {
-            snapshot.indices.push_back(baseVertex + static_cast<uint32_t>(sourceIndex));
-        }
-
-        for (const ImDrawCmd& sourceCommand : drawList->CmdBuffer)
-        {
-            if (sourceCommand.UserCallback != nullptr)
-            {
-                continue;
-            }
-
-            const float clipLeft = (sourceCommand.ClipRect.x - drawData->DisplayPos.x) * drawData->FramebufferScale.x;
-            const float clipTop = (sourceCommand.ClipRect.y - drawData->DisplayPos.y) * drawData->FramebufferScale.y;
-            const float clipRight = (sourceCommand.ClipRect.z - drawData->DisplayPos.x) * drawData->FramebufferScale.x;
-            const float clipBottom = (sourceCommand.ClipRect.w - drawData->DisplayPos.y) * drawData->FramebufferScale.y;
-            const int left = std::max(0, static_cast<int>(std::floor(clipLeft)));
-            const int top = std::max(0, static_cast<int>(std::floor(clipTop)));
-            const int right = std::min(static_cast<int>(snapshot.viewportWidth), static_cast<int>(std::ceil(clipRight)));
-            const int bottom = std::min(static_cast<int>(snapshot.viewportHeight), static_cast<int>(std::ceil(clipBottom)));
-            if (right <= left || bottom <= top)
-            {
-                continue;
-            }
-
-            UiDrawCommand command;
-            command.firstIndex = baseIndex + sourceCommand.IdxOffset;
-            command.indexCount = sourceCommand.ElemCount;
-            command.textureId = static_cast<UiTextureId>(sourceCommand.GetTexID());
-            command.clipRect.x = left;
-            command.clipRect.y = top;
-            command.clipRect.width = static_cast<uint32_t>(right - left);
-            command.clipRect.height = static_cast<uint32_t>(bottom - top);
-            command.blendMode = UiBlendMode::StraightAlpha;
-            snapshot.drawCommands.push_back(command);
-        }
-    }
-#else
-    static_cast<void>(snapshot);
-#endif
 }
 
 void UiSubsystem::BuildDeveloperPanels()
 {
-#ifdef VULKANLEARN_ENABLE_DEVELOPER_UI
-    // KeepAliveOnly 仍会生成覆盖主视口的 ImGui 宿主窗口；隐藏编辑器时
-    // 必须完全跳过 DockSpace，避免其 WindowBg 作为灰色遮罩写入最终 framebuffer。
-    if (!developerUiVisible)
+    PROFILE_SCOPE("UI.BuildPanels");
+    if (materialInstanceEditorPanel == nullptr || materialInstanceEditorRuntime == nullptr) return;
+    EditorUi::MaterialInstanceEditorSnapshot snapshot = materialInstanceEditorRuntime->GetSnapshot();
+    if (jsonAssetLibrary != nullptr)
     {
-        return;
+        snapshot.assetCatalog = jsonAssetLibrary->GetCatalog();
+        snapshot.jsonDocument = jsonAssetLibrary->GetDocument();
+        snapshot.assetCatalogLoading = jsonAssetLibrary->IsCatalogLoading();
+        snapshot.jsonDocumentLoading = jsonAssetLibrary->IsDocumentLoading();
     }
-
-    const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
-    const ImGuiID dockspaceId = ImGui::GetID(DeveloperDockSpaceName);
-    if (!developerDockLayoutBuilt)
+    snapshot.sceneModels = sceneModels;
+    if (thumbnailLibrary != nullptr)
     {
-        BuildDefaultDeveloperDockLayout(dockspaceId, *mainViewport);
-        developerDockLayoutBuilt = true;
+        thumbnailLibrary->SetPaused(!developerUiVisible || sceneViewportInputActive || editorPointerCaptured);
+        thumbnailLibrary->Poll();
+        snapshot.thumbnails = thumbnailLibrary->GetSnapshot();
     }
-    ImGui::DockSpaceOverViewport(
-        dockspaceId,
-        mainViewport,
-        ImGuiDockNodeFlags_PassthruCentralNode);
-
-    if (ImGui::Begin(OfflineRendererWindowName))
-    {
-        int mode = lastViewModel.offlineMode ? 1 : 0;
-        if (ImGui::RadioButton("Realtime", mode == 0))
-        {
-            lastViewModel.offlineRequestedMode = 0;
-            lastViewModel.offlineUiNotice.clear();
-            UiAction action;
-            action.type = UiActionType::SetOfflineMode;
-            action.intValue = 0;
-            QueueAction(std::move(action));
-        }
-        ImGui::SameLine();
-        if (ImGui::RadioButton("Offline", mode == 1))
-        {
-            lastViewModel.offlineRequestedMode = 1;
-            lastViewModel.offlineUiNotice.clear();
-            UiAction action;
-            action.type = UiActionType::SetOfflineMode;
-            action.intValue = 1;
-            QueueAction(std::move(action));
-        }
-        // 拒绝原因紧邻模式选择；底部控件需要滚动时仍可直接看到失败反馈。
-        if (!lastViewModel.offlineUiNotice.empty())
-        {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.65f, 0.35f, 1.0f));
-            ImGui::TextWrapped("%s", lastViewModel.offlineUiNotice.c_str());
-            ImGui::PopStyleColor();
-        }
-        if (!lastViewModel.offlineError.empty())
-        {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.45f, 0.45f, 1.0f));
-            ImGui::TextWrapped("%s", lastViewModel.offlineError.c_str());
-            ImGui::PopStyleColor();
-        }
-        ImGui::Separator();
-        int samples = lastViewModel.offlineSamples;
-        if (ImGui::InputInt("Samples", &samples, 1, 100, OfflineInputIntFlags))
-        {
-            if (const char* error = OfflineSettingValidationError("samples", samples))
-                lastViewModel.offlineUiNotice = error;
-            else
-            {
-                lastViewModel.offlineUiNotice.clear();
-                UiAction action;
-                action.type = UiActionType::SetOfflineSetting;
-                action.stringValue = "samples";
-                action.intValue = samples;
-                QueueAction(std::move(action));
-            }
-        }
-        int bounces = lastViewModel.offlineBounces;
-        if (ImGui::InputInt("Bounces", &bounces, 1, 10, OfflineInputIntFlags))
-        {
-            if (const char* error = OfflineSettingValidationError("bounces", bounces))
-                lastViewModel.offlineUiNotice = error;
-            else
-            {
-                lastViewModel.offlineUiNotice.clear();
-                UiAction action;
-                action.type = UiActionType::SetOfflineSetting;
-                action.stringValue = "bounces";
-                action.intValue = bounces;
-                QueueAction(std::move(action));
-            }
-        }
-        int lightSamples = lastViewModel.offlineLightSamples;
-        if (ImGui::InputInt("Light samples", &lightSamples, 1, 10, OfflineInputIntFlags))
-        {
-            if (const char* error = OfflineSettingValidationError("lightSamples", lightSamples))
-                lastViewModel.offlineUiNotice = error;
-            else
-            {
-                lastViewModel.offlineUiNotice.clear();
-                UiAction action;
-                action.type = UiActionType::SetOfflineSetting;
-                action.stringValue = "lightSamples";
-                action.intValue = lightSamples;
-                QueueAction(std::move(action));
-            }
-        }
-        int seed = lastViewModel.offlineSeed;
-        if (ImGui::InputInt("Seed", &seed, 1, 100, OfflineInputIntFlags))
-        {
-            if (const char* error = OfflineSettingValidationError("seed", seed))
-                lastViewModel.offlineUiNotice = error;
-            else
-            {
-                lastViewModel.offlineUiNotice.clear();
-                UiAction action;
-                action.type = UiActionType::SetOfflineSetting;
-                action.stringValue = "seed";
-                action.intValue = seed;
-                QueueAction(std::move(action));
-            }
-        }
-        const char* aovs[] = {"Combined", "Direct", "Indirect"};
-        int aov = lastViewModel.offlineAov;
-        if (ImGui::Combo("AOV", &aov, aovs, 3))
-        {
-            UiAction action;
-            action.type = UiActionType::SetOfflineAov;
-            action.intValue = aov;
-            QueueAction(std::move(action));
-        }
-        float exposure = lastViewModel.offlineExposure;
-        if (ImGui::SliderFloat("Exposure", &exposure, 0.05f, 8.0f))
-        {
-            UiAction action;
-            action.type = UiActionType::SetOfflineExposure;
-            action.floatValue = exposure;
-            QueueAction(std::move(action));
-        }
-        ImGui::Text("%d / %d spp", lastViewModel.offlineCompletedSamples,
-            lastViewModel.offlineSamples);
-        const auto state = static_cast<Offline::SessionState>(lastViewModel.offlineState);
-        const char* stateName = "Unknown";
-        switch (state)
-        {
-        case Offline::SessionState::Idle: stateName = "Idle"; break;
-        case Offline::SessionState::Preparing: stateName = "Preparing"; break;
-        case Offline::SessionState::Rendering: stateName = "Rendering"; break;
-        case Offline::SessionState::Paused: stateName = "Paused"; break;
-        case Offline::SessionState::Completed: stateName = "Completed"; break;
-        case Offline::SessionState::Canceled: stateName = "Stopped"; break;
-        case Offline::SessionState::Failed: stateName = "Failed"; break;
-        }
-        ImGui::Text("Session: %s", lastViewModel.offlineMode ? stateName : "Inactive");
-        const bool canPause = lastViewModel.offlineMode &&
-            (state == Offline::SessionState::Preparing ||
-             state == Offline::SessionState::Rendering);
-        const bool canResume = lastViewModel.offlineMode && state == Offline::SessionState::Paused;
-        ImGui::BeginDisabled(!canPause);
-        if (ImGui::Button("Pause"))
-        {
-            UiAction action;
-            action.type = UiActionType::ControlOfflineSession;
-            action.intValue = 0;
-            QueueAction(std::move(action));
-        }
-        ImGui::EndDisabled();
-        ImGui::SameLine();
-        ImGui::BeginDisabled(!canResume);
-        if (ImGui::Button("Resume"))
-        {
-            UiAction action;
-            action.type = UiActionType::ControlOfflineSession;
-            action.intValue = 1;
-            QueueAction(std::move(action));
-        }
-        ImGui::EndDisabled();
-        ImGui::SameLine();
-        ImGui::BeginDisabled(!canPause && !canResume);
-        if (ImGui::Button("Stop"))
-        {
-            UiAction action;
-            action.type = UiActionType::ControlOfflineSession;
-            action.intValue = 2;
-            QueueAction(std::move(action));
-        }
-        ImGui::EndDisabled();
-        ImGui::SameLine();
-        ImGui::BeginDisabled(!lastViewModel.offlineMode);
-        if (ImGui::Button("Restart"))
-        {
-            UiAction action;
-            action.type = UiActionType::ControlOfflineSession;
-            action.intValue = 3;
-            QueueAction(std::move(action));
-        }
-        ImGui::EndDisabled();
-        ImGui::BeginDisabled(!lastViewModel.offlineMode ||
-            lastViewModel.offlineCompletedSamples == 0);
-        if (ImGui::Button("Export"))
-        {
-            UiAction action;
-            action.type = UiActionType::ExportOffline;
-            QueueAction(std::move(action));
-        }
-        ImGui::EndDisabled();
-    }
-    ImGui::End();
-
-    // 同一帧只冻结一次编辑器快照，左右 Dock 窗口共享完全相同的数据视图。
-    if (materialInstanceEditorPanel != nullptr &&
-        materialInstanceEditorRuntime != nullptr)
-    {
-        EditorUi::MaterialInstanceEditorSnapshot editorSnapshot =
-            materialInstanceEditorRuntime->GetSnapshot();
-        editorSnapshot.sceneModels = sceneModels;
-        editorSnapshot.selectedModel = selectedModelMaterials;
-        editorSnapshot.selectedMaterialSlotIndex = selectedMaterialSlotIndex;
-        materialInstanceEditorPanel->Build(editorSnapshot);
-
-        if (materialInstanceEditorPanel->IsVisible())
-        {
-            if (ImGui::Begin(
-                    MaterialInstanceNavigationWindowName,
-                    nullptr,
-                    ImGuiWindowFlags_NoCollapse))
-            {
-                materialInstanceEditorPanel->RenderNavigationContents();
-            }
-            ImGui::End();
-
-            if (ImGui::Begin(
-                    MaterialInstanceInspectorWindowName,
-                    nullptr,
-                    ImGuiWindowFlags_NoCollapse))
-            {
-                materialInstanceEditorPanel->RenderInspectorContents();
-            }
-            ImGui::End();
-        }
-    }
-
-#endif
+    rmlRenderInterface.PublishThumbnails(snapshot.thumbnails);
+    rmlRenderInterface.PublishTexturePreview(snapshot.jsonDocument);
+    snapshot.sceneActors = sceneActors;
+    snapshot.selectedActorIdentity = selectedActorIdentity;
+    snapshot.selectedModel = selectedModelMaterials;
+    snapshot.selectedMaterialSlotIndex = selectedMaterialSlotIndex;
+    materialInstanceEditorPanel->Build(snapshot);
+    materialInstanceEditorPanel->UpdateRuntimeView(lastViewModel);
+    if (thumbnailLibrary != nullptr)
+        thumbnailLibrary->RequestVisible(developerUiVisible ?
+            materialInstanceEditorPanel->VisibleThumbnailPaths() : std::vector<std::string>{});
 }
 
 void UiSubsystem::UpdateInputOwnership()
 {
-    if (runtimePageVisible)
-    {
-        inputOwnership.mode = UiInputMode::UiOnly;
-        inputOwnership.keyboardOwner = UiInputOwner::RuntimeUi;
-        inputOwnership.pointerOwner = UiInputOwner::RuntimeUi;
-        inputOwnership.controllerOwner = UiInputOwner::RuntimeUi;
-        inputOwnership.textInputOwner = UiInputOwner::RuntimeUi;
-        return;
-    }
-
     inputOwnership.mode = developerUiVisible ? UiInputMode::GameAndUi : UiInputMode::GameOnly;
     inputOwnership.keyboardOwner = UiInputOwner::Game;
     inputOwnership.pointerOwner = UiInputOwner::Game;
     inputOwnership.controllerOwner = UiInputOwner::Game;
     inputOwnership.textInputOwner = UiInputOwner::None;
 
-#ifdef VULKANLEARN_ENABLE_DEVELOPER_UI
-    if (developerUiVisible && imguiInitialized)
+    if (developerUiVisible && editorDocument != nullptr)
     {
-        const ImGuiIO& io = ImGui::GetIO();
-        if (io.WantCaptureKeyboard)
+        const bool resourceEditor = materialInstanceEditorPanel != nullptr &&
+            materialInstanceEditorPanel->IsAssetEditorVisible();
+        if (resourceEditor) sceneViewportInputActive = false;
+        const auto* hit = rmlContext->GetElementAtPoint(Rml::Vector2f(pointerX, pointerY));
+        const auto* focus = rmlContext->GetFocusElement();
+        const bool modal = materialInstanceEditorPanel != nullptr && materialInstanceEditorPanel->HasModal();
+        const bool editorFocus = focus != nullptr && focus->GetOwnerDocument() == editorDocument;
+        const bool sceneHit = materialInstanceEditorPanel != nullptr &&
+            materialInstanceEditorPanel->IsSceneViewportElement(hit);
+        const bool dragging = materialInstanceEditorPanel != nullptr &&
+            materialInstanceEditorPanel->IsWorkspaceDragging();
+        if (!sceneViewportInputActive && (modal || dragging || editorPointerCaptured ||
+            (hit != nullptr && hit->GetOwnerDocument() == editorDocument && !sceneHit))
+            )
+            inputOwnership.pointerOwner = UiInputOwner::DeveloperUi;
+        if (modal || (!sceneViewportInputActive && editorFocus))
         {
             inputOwnership.keyboardOwner = UiInputOwner::DeveloperUi;
+            if (gamepadConnected) inputOwnership.controllerOwner = UiInputOwner::DeveloperUi;
         }
-        if (io.WantCaptureMouse)
-        {
-            inputOwnership.pointerOwner = UiInputOwner::DeveloperUi;
-        }
-        if (io.WantTextInput)
-        {
+        if (editorFocus && dynamic_cast<const Rml::ElementFormControl*>(focus) != nullptr)
             inputOwnership.textInputOwner = UiInputOwner::DeveloperUi;
-        }
-        if (gamepadConnected && io.NavActive)
-        {
-            inputOwnership.controllerOwner = UiInputOwner::DeveloperUi;
-        }
     }
-#endif
 }
 
 bool UiSubsystem::PressRmlKey(Rml::Input::KeyIdentifier key, bool repeat, int modifiers)
@@ -2683,6 +1568,7 @@ bool UiSubsystem::ProcessRmlGamepadAxisEvent(const PlatformEvent& event)
 
 void UiSubsystem::ResetRuntimeInputState()
 {
+    if (materialInstanceEditorPanel != nullptr) materialInstanceEditorPanel->CancelWorkspaceDrag();
     if (rmlContext != nullptr)
     {
         for (const auto& keyEntry : rmlKeyPressCounts)
@@ -2709,6 +1595,8 @@ void UiSubsystem::ResetRuntimeInputState()
     rmlAxisRightDown = false;
     rmlAxisUpDown = false;
     rmlAxisDownDown = false;
+    editorPointerCaptured = false;
+    sceneViewportInputActive = false;
 }
 
 void UiSubsystem::ResetRmlGamepadInputState()
@@ -2722,73 +1610,6 @@ void UiSubsystem::ResetRmlGamepadInputState()
     SetRmlAxisDirection(false, rmlAxisRightDown, Rml::Input::KI_RIGHT);
     SetRmlAxisDirection(false, rmlAxisUpDown, Rml::Input::KI_UP);
     SetRmlAxisDirection(false, rmlAxisDownDown, Rml::Input::KI_DOWN);
-}
-
-void UiSubsystem::ResetDeveloperInputState()
-{
-#ifdef VULKANLEARN_ENABLE_DEVELOPER_UI
-    if (!imguiInitialized)
-    {
-        return;
-    }
-
-    ImGuiIO& io = ImGui::GetIO();
-    io.ClearInputKeys();
-    io.ClearInputMouse();
-#endif
-}
-void UiSubsystem::ResetDeveloperGamepadInputState()
-{
-#ifdef VULKANLEARN_ENABLE_DEVELOPER_UI
-    if (!imguiInitialized)
-    {
-        return;
-    }
-
-    ImGuiIO& io = ImGui::GetIO();
-    const ImGuiKey gamepadKeys[] = {
-        ImGuiKey_GamepadFaceDown,
-        ImGuiKey_GamepadFaceRight,
-        ImGuiKey_GamepadFaceLeft,
-        ImGuiKey_GamepadFaceUp,
-        ImGuiKey_GamepadBack,
-        ImGuiKey_GamepadStart,
-        ImGuiKey_GamepadL1,
-        ImGuiKey_GamepadR1,
-        ImGuiKey_GamepadDpadUp,
-        ImGuiKey_GamepadDpadDown,
-        ImGuiKey_GamepadDpadLeft,
-        ImGuiKey_GamepadDpadRight
-    };
-    for (ImGuiKey key : gamepadKeys)
-    {
-        io.AddKeyEvent(key, false);
-    }
-    io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickLeft, false, 0.0f);
-    io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickRight, false, 0.0f);
-    io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickUp, false, 0.0f);
-    io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickDown, false, 0.0f);
-#endif
-}
-
-void UiSubsystem::UpdateDeveloperGamepadCapability()
-{
-#ifdef VULKANLEARN_ENABLE_DEVELOPER_UI
-    if (!imguiInitialized)
-    {
-        return;
-    }
-
-    ImGuiIO& io = ImGui::GetIO();
-    if (gamepadConnected)
-    {
-        io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
-    }
-    else
-    {
-        io.BackendFlags &= ~ImGuiBackendFlags_HasGamepad;
-    }
-#endif
 }
 
 bool UiSubsystem::ProcessRuntimeUiEvent(const PlatformEvent& event)
@@ -2918,105 +1739,136 @@ bool UiSubsystem::ProcessRuntimeUiEvent(const PlatformEvent& event)
 
 bool UiSubsystem::ProcessDeveloperUiEvent(const PlatformEvent& event)
 {
-#ifdef VULKANLEARN_ENABLE_DEVELOPER_UI
-    if (!imguiInitialized)
-    {
-        return false;
-    }
-
-    ImGuiIO& io = ImGui::GetIO();
+    if (editorDocument == nullptr) return false;
+    const bool modal = materialInstanceEditorPanel != nullptr && materialInstanceEditorPanel->HasModal();
+    const bool resourceEditor = materialInstanceEditorPanel != nullptr &&
+        materialInstanceEditorPanel->IsAssetEditorVisible();
+    if (resourceEditor) sceneViewportInputActive = false;
+    const Rml::Element* focus = rmlContext->GetFocusElement();
+    bool editorFocus = focus != nullptr && focus->GetOwnerDocument() == editorDocument;
     switch (event.type)
     {
-    case PlatformEventType::KeyDown:
-    case PlatformEventType::KeyUp:
-    {
-        io.AddKeyEvent(ImGuiMod_Ctrl, event.control);
-        io.AddKeyEvent(ImGuiMod_Shift, event.shift);
-        io.AddKeyEvent(ImGuiMod_Alt, event.alt);
-        io.AddKeyEvent(ImGuiMod_Super, event.super);
-        const ImGuiKey key = ToImGuiKey(event.key);
-        if (key != ImGuiKey_None)
-        {
-            io.AddKeyEvent(key, event.type == PlatformEventType::KeyDown);
-        }
-        return io.WantCaptureKeyboard;
-    }
-    case PlatformEventType::TextInput:
-        io.AddInputCharactersUTF8(event.text.c_str());
-        return io.WantTextInput || io.WantCaptureKeyboard;
-    case PlatformEventType::TextEditing:
-        return io.WantTextInput;
     case PlatformEventType::MouseMove:
-        io.AddMousePosEvent(event.mouseX, event.mouseY);
-        return io.WantCaptureMouse;
     case PlatformEventType::MouseButtonDown:
     case PlatformEventType::MouseButtonUp:
-    {
-        const int button = ToRmlMouseButton(event.mouseButton);
-        if (button >= 0 && button < 5)
-        {
-            io.AddMouseButtonEvent(button, event.type == PlatformEventType::MouseButtonDown);
-        }
-        return io.WantCaptureMouse;
-    }
     case PlatformEventType::MouseWheel:
-        io.AddMouseWheelEvent(event.wheelX, event.wheelY);
-        return io.WantCaptureMouse;
-    case PlatformEventType::MouseLeave:
-        io.AddMousePosEvent(-FLT_MAX, -FLT_MAX);
-        return io.WantCaptureMouse;
-    case PlatformEventType::GamepadButtonDown:
-    case PlatformEventType::GamepadButtonUp:
     {
-        const ImGuiKey key = ToImGuiGamepadButton(event.gamepadButton);
-        if (key != ImGuiKey_None)
+        pointerX = event.mouseX;
+        pointerY = event.mouseY;
+        const auto* hit = rmlContext->GetElementAtPoint(Rml::Vector2f(pointerX, pointerY));
+        const bool sceneHit = materialInstanceEditorPanel != nullptr &&
+            materialInstanceEditorPanel->IsSceneViewportElement(hit);
+        const bool editorHit = hit != nullptr && hit->GetOwnerDocument() == editorDocument && !sceneHit;
+        if (ShouldReleaseScenePointerForEditor(event.type, editorHit))
+            sceneViewportInputActive = false;
+        const bool captured = editorPointerCaptured ||
+            (materialInstanceEditorPanel != nullptr && materialInstanceEditorPanel->IsWorkspaceDragging());
+        if ((sceneHit || (sceneViewportInputActive && !resourceEditor)) && !captured && !modal)
         {
-            io.AddKeyEvent(key, event.type == PlatformEventType::GamepadButtonDown);
+            // 右键在运行时输入里没有任何绑定：相机看的是相对鼠标增量，拾取只认左键。
+            // 视口命中的右键因此交给编辑器文档，右键上下文菜单才有 RmlUi 事件与坐标；
+            // 返回 true 表示这次右键已被编辑器消费，同一事件不再走场景输入。
+            if (event.mouseButton == PlatformMouseButton::Right)
+            {
+                ProcessRuntimeUiEvent(event);
+                return true;
+            }
+            // 图像属于 editor DOM，但内部场景输入归游戏；不让点击把焦点交给文档根节点。
+            if (event.type == PlatformEventType::MouseButtonDown)
+            {
+                sceneViewportInputActive = true;
+                if (editorFocus) rmlContext->GetFocusElement()->Blur();
+            }
+            if (event.type == PlatformEventType::MouseMove) ProcessRuntimeUiEvent(event);
+            return false;
         }
-        return io.NavActive;
+        if (event.type == PlatformEventType::MouseButtonDown)
+        {
+            sceneViewportInputActive = false;
+            editorPointerCaptured = captured || editorHit || modal;
+            if (!editorHit && !modal && editorFocus)
+                rmlContext->GetFocusElement()->Blur();
+        }
+        const bool consumed = ProcessRuntimeUiEvent(event);
+        if (event.type == PlatformEventType::MouseButtonUp && rmlPressedMouseButtons.empty())
+            editorPointerCaptured = false;
+        return consumed || editorHit || captured || modal;
     }
-    case PlatformEventType::GamepadAxisMotion:
-        if (event.gamepadAxis == PlatformGamepadAxis::LeftX)
-        {
-            const float left = NormalizeImGuiGamepadAxis(std::max(0.0f, -event.gamepadAxisValue));
-            const float right = NormalizeImGuiGamepadAxis(std::max(0.0f, event.gamepadAxisValue));
-            io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickLeft, left > 0.0f, left);
-            io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickRight, right > 0.0f, right);
-        }
-        else if (event.gamepadAxis == PlatformGamepadAxis::LeftY)
-        {
-            const float up = NormalizeImGuiGamepadAxis(std::max(0.0f, -event.gamepadAxisValue));
-            const float down = NormalizeImGuiGamepadAxis(std::max(0.0f, event.gamepadAxisValue));
-            io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickUp, up > 0.0f, up);
-            io.AddKeyAnalogEvent(ImGuiKey_GamepadLStickDown, down > 0.0f, down);
-        }
-        return io.NavActive;
-    case PlatformEventType::WindowFocusGained:
-    case PlatformEventType::WindowFocusLost:
-        io.AddFocusEvent(event.type == PlatformEventType::WindowFocusGained);
+    case PlatformEventType::MouseLeave:
+        if (materialInstanceEditorPanel) materialInstanceEditorPanel->CancelModelPreviewDrag();
+        return ProcessRuntimeUiEvent(event) || editorPointerCaptured;
+    case PlatformEventType::KeyUp:
+        if (rmlPressedKeyboardKeys.count(event.key) != 0)
+            return ProcessRuntimeUiEvent(event) || editorFocus || modal;
         return false;
     default:
-        break;
+        if (editorFocus || modal)
+        {
+            ProcessRuntimeUiEvent(event);
+            return true;
+        }
+        return false;
     }
-#else
-    static_cast<void>(event);
-#endif
-    return false;
+}
+
+void UiSubsystem::RequestOpenJsonAsset(const std::string& path)
+{
+    if (jsonAssetLibrary != nullptr) jsonAssetLibrary->RequestOpen(path);
+}
+
+void UiSubsystem::RequestRefreshAssetCatalog()
+{
+    if (thumbnailLibrary != nullptr) thumbnailLibrary->Refresh();
+    if (jsonAssetLibrary != nullptr) jsonAssetLibrary->RequestRefresh();
+}
+
+void UiSubsystem::RequestRuntimeAction(UiAction action)
+{
+    if (action.type == UiActionType::LoadWorld)
+    {
+        // 冻结 World 快照保存物理绝对路径，目录条目使用资源相对路径。
+        // 返回关卡仍须命中已知场景，再统一提交目录路径，不能因两种表示不同而静默丢弃。
+        const std::string requestedPath = NormalizePathForComparison(action.stringValue);
+        const bool immersiveRequest = !immersiveLevelPath.empty() &&
+            action.stringValue == immersiveLevelPath;
+        if (!immersiveRequest) immersiveLevelPath.clear();
+        bool knownScene = false;
+        for (const UiSceneOption& option : bindingData.sceneOptions)
+        {
+            if (option.path != action.stringValue && option.normalizedPhysicalPath != requestedPath)
+                continue;
+            if (immersiveRequest) immersiveLevelPath = option.normalizedPhysicalPath;
+            action.stringValue = option.path;
+            knownScene = true;
+            break;
+        }
+        if (!knownScene || bindingData.sceneLoading)
+        {
+            immersiveLevelPath.clear();
+            immersiveLoadCompleted = false;
+            return;
+        }
+        bindingData.sceneLoading = true;
+    }
+    if (action.type == UiActionType::SetOfflineMode)
+    {
+        lastViewModel.offlineRequestedMode = action.intValue;
+        lastViewModel.offlineUiNotice.clear();
+    }
+    QueueAction(std::move(action));
 }
 bool UiSubsystem::HandleGlobalShortcut(const PlatformEvent& event)
 {
     if (event.type == PlatformEventType::KeyDown && !event.repeat)
     {
-        if (event.key == PlatformKey::F10)
+        if (event.control && event.key == PlatformKey::S && developerUiVisible &&
+            materialInstanceEditorPanel != nullptr &&
+            !materialInstanceEditorPanel->HasModal())
         {
-            UiAction action;
-            action.type = runtimePageVisible ?
-                UiActionType::CloseRuntimePage :
-                UiActionType::ToggleRuntimePage;
-            QueueAction(std::move(action));
+            materialInstanceEditorPanel->RequestSave();
             return true;
         }
-        if (event.key == PlatformKey::F1 && developerUiEnabled)
+        if ((event.key == PlatformKey::F11 || event.key == PlatformKey::F1) && developerUiEnabled)
         {
             UiAction action;
             action.type = UiActionType::ToggleDeveloperUi;
@@ -3025,23 +1877,6 @@ bool UiSubsystem::HandleGlobalShortcut(const PlatformEvent& event)
         }
     }
 
-    if (event.type == PlatformEventType::GamepadButtonDown)
-    {
-        if (event.gamepadButton == PlatformGamepadButton::Start)
-        {
-            UiAction action;
-            action.type = runtimePageVisible ? UiActionType::CloseRuntimePage : UiActionType::ToggleRuntimePage;
-            QueueAction(std::move(action));
-            return true;
-        }
-        if (event.gamepadButton == PlatformGamepadButton::East && runtimePageVisible)
-        {
-            UiAction action;
-            action.type = UiActionType::CloseRuntimePage;
-            QueueAction(std::move(action));
-            return true;
-        }
-    }
     return false;
 }
 
@@ -3051,413 +1886,6 @@ void UiSubsystem::QueueAction(UiAction action)
     {
         commandBus->Queue(std::move(action));
     }
-}
-
-void UiSubsystem::QueueIntAction(UiActionType type, int value)
-{
-    UiAction action;
-    action.type = type;
-    action.intValue = value;
-    QueueAction(std::move(action));
-}
-
-void UiSubsystem::QueueFloatAction(UiActionType type, float value)
-{
-    UiAction action;
-    action.type = type;
-    action.floatValue = value;
-    QueueAction(std::move(action));
-}
-
-void UiSubsystem::QueueChangedFloatAction(UiActionType type, float value, float currentValue)
-{
-    // 快照 -> 控件只允许显示，不把滑条量化/截断结果伪装成人工调参。
-    if (updatingRuntimeBindings)
-    {
-        return;
-    }
-    if (std::abs(value - currentValue) <= 0.0001f)
-    {
-        return;
-    }
-    QueueFloatAction(type, value);
-}
-
-void UiSubsystem::OnClosePage(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&)
-{
-    UiAction action;
-    action.type = UiActionType::CloseRuntimePage;
-    QueueAction(std::move(action));
-}
-
-void UiSubsystem::OnLoadScene(
-    Rml::DataModelHandle,
-    Rml::Event&,
-    const Rml::VariantList& arguments)
-{
-    if (arguments.empty())
-    {
-        return;
-    }
-
-    const Rml::String requestedPath = arguments[0].Get<Rml::String>();
-    for (const UiSceneOption& option : bindingData.sceneOptions)
-    {
-        if (option.path != requestedPath)
-        {
-            continue;
-        }
-        if (option.active)
-        {
-            return;
-        }
-        if (bindingData.sceneLoading)
-        {
-            return;
-        }
-
-        // UI 只提交场景切换请求，World 与 RenderGraph 仍由既有事务链路统一换代。
-        // 本帧先发布加载提示，下一帧同步事务即使耗时较长，用户也能区分“正在准备”与死锁。
-        bindingData.sceneLoading = true;
-        dataModelHandle.DirtyVariable("scene_loading");
-        UiAction action;
-        action.type = UiActionType::LoadWorld;
-        action.stringValue = requestedPath;
-        QueueAction(std::move(action));
-        return;
-    }
-
-    diagnostics->ReportWarning(
-        "UI scene selector rejected an unknown scene path: " + requestedPath);
-}
-
-void UiSubsystem::OnCameraMoveSpeedChanged(
-    Rml::DataModelHandle,
-    Rml::Event& event,
-    const Rml::VariantList&)
-{
-    QueueChangedFloatAction(
-        UiActionType::SetCameraMoveSpeed,
-        event.GetParameter<float>("value", lastViewModel.cameraMoveSpeed),
-        lastViewModel.cameraMoveSpeed);
-}
-
-void UiSubsystem::OnDebugViewSelected(
-    Rml::DataModelHandle,
-    Rml::Event&,
-    const Rml::VariantList& arguments)
-{
-    const int mode = arguments[0].Get<int>();
-    if (mode != lastViewModel.debugViewMode)
-    {
-        QueueIntAction(UiActionType::SetDebugViewMode, mode);
-    }
-}
-
-void UiSubsystem::OnToneMappingNone(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&)
-{
-    UiAction action;
-    action.type = UiActionType::SetToneMappingMode;
-    action.intValue = 0;
-    QueueAction(std::move(action));
-}
-
-void UiSubsystem::OnToneMappingReinhard(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&)
-{
-    UiAction action;
-    action.type = UiActionType::SetToneMappingMode;
-    action.intValue = 1;
-    QueueAction(std::move(action));
-}
-
-void UiSubsystem::OnToneMappingHable(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&)
-{
-    UiAction action;
-    action.type = UiActionType::SetToneMappingMode;
-    action.intValue = 2;
-    QueueAction(std::move(action));
-}
-
-void UiSubsystem::OnToneMappingAces(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&)
-{
-    UiAction action;
-    action.type = UiActionType::SetToneMappingMode;
-    action.intValue = 3;
-    QueueAction(std::move(action));
-}
-
-void UiSubsystem::QueueCameraExposureEdit(const std::string& field, float value)
-{
-    if (updatingRuntimeBindings || !lastViewModel.hasCamera)
-        return;
-    try
-    {
-        const CameraExposure candidate = EditCameraExposure(
-            lastViewModel.cameraExposure, field, value);
-        const CameraExposure& current = lastViewModel.cameraExposure;
-        if (candidate.mode == current.mode && candidate.ev100 == current.ev100 &&
-            candidate.compensation == current.compensation &&
-            candidate.autoMinEv100 == current.autoMinEv100 &&
-            candidate.autoMaxEv100 == current.autoMaxEv100)
-            return;
-    }
-    catch (const std::invalid_argument&)
-    {
-        // 无效输入不提交；下一次快照刷新恢复作者值，尤其是 min EV >= max EV。
-        return;
-    }
-    UiAction action;
-    action.type = UiActionType::SetCameraExposure;
-    action.stringValue = field;
-    action.floatValue = value;
-    QueueAction(std::move(action));
-}
-
-void UiSubsystem::OnExposureModeSelected(
-    Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& arguments)
-{
-    QueueCameraExposureEdit(
-        "mode",
-        static_cast<float>(arguments[0].Get<int>()));
-}
-
-void UiSubsystem::OnExposureValueChanged(
-    Rml::DataModelHandle, Rml::Event& event, const Rml::VariantList& arguments)
-{
-    QueueCameraExposureEdit(
-        arguments[0].Get<Rml::String>(), event.GetParameter<float>("value", 0.0f));
-}
-
-void UiSubsystem::OnBloomStrengthChanged(Rml::DataModelHandle, Rml::Event& event, const Rml::VariantList&)
-{
-    QueueChangedFloatAction(UiActionType::SetBloomStrength, event.GetParameter<float>("value", lastViewModel.bloomStrength), lastViewModel.bloomStrength);
-}
-
-void UiSubsystem::OnBloomThresholdChanged(Rml::DataModelHandle, Rml::Event& event, const Rml::VariantList&)
-{
-    QueueChangedFloatAction(UiActionType::SetBloomThreshold, event.GetParameter<float>("value", lastViewModel.bloomThreshold), lastViewModel.bloomThreshold);
-}
-
-void UiSubsystem::OnBloomKneeChanged(Rml::DataModelHandle, Rml::Event& event, const Rml::VariantList&)
-{
-    QueueChangedFloatAction(UiActionType::SetBloomKnee, event.GetParameter<float>("value", lastViewModel.bloomKnee), lastViewModel.bloomKnee);
-}
-
-void UiSubsystem::OnBloomClampChanged(Rml::DataModelHandle, Rml::Event& event, const Rml::VariantList&)
-{
-    QueueChangedFloatAction(UiActionType::SetBloomClamp, event.GetParameter<float>("value", lastViewModel.bloomClamp), lastViewModel.bloomClamp);
-}
-
-void UiSubsystem::OnCsmCastShadowsSelected(
-    Rml::DataModelHandle,
-    Rml::Event&,
-    const Rml::VariantList& arguments)
-{
-    const bool enabled = arguments[0].Get<int>() != 0;
-    if (enabled != lastViewModel.csmCastShadows)
-    {
-        QueueIntAction(
-            UiActionType::SetCsmCastShadows,
-            enabled ? 1 : 0);
-    }
-}
-
-void UiSubsystem::OnCsmDynamicShadowDistanceChanged(
-    Rml::DataModelHandle,
-    Rml::Event& event,
-    const Rml::VariantList&)
-{
-    QueueChangedFloatAction(
-        UiActionType::SetCsmDynamicShadowDistance,
-        event.GetParameter<float>(
-            "value",
-            lastViewModel.csmDynamicShadowDistance),
-        lastViewModel.csmDynamicShadowDistance);
-}
-
-void UiSubsystem::OnCsmDynamicShadowCascadesSelected(
-    Rml::DataModelHandle,
-    Rml::Event&,
-    const Rml::VariantList& arguments)
-{
-    const int cascadeCount = arguments[0].Get<int>();
-    if (cascadeCount !=
-        static_cast<int>(
-            lastViewModel.csmDynamicShadowCascades))
-    {
-        QueueIntAction(
-            UiActionType::SetCsmDynamicShadowCascades,
-            cascadeCount);
-    }
-}
-
-void UiSubsystem::OnCsmCascadeDistributionExponentChanged(
-    Rml::DataModelHandle,
-    Rml::Event& event,
-    const Rml::VariantList&)
-{
-    QueueChangedFloatAction(
-        UiActionType::SetCsmCascadeDistributionExponent,
-        event.GetParameter<float>(
-            "value",
-            lastViewModel.csmCascadeDistributionExponent),
-        lastViewModel.csmCascadeDistributionExponent);
-}
-
-void UiSubsystem::OnCsmCascadeTransitionFractionChanged(
-    Rml::DataModelHandle,
-    Rml::Event& event,
-    const Rml::VariantList&)
-{
-    QueueChangedFloatAction(
-        UiActionType::SetCsmCascadeTransitionFraction,
-        event.GetParameter<float>(
-            "value",
-            lastViewModel.csmCascadeTransitionFraction),
-        lastViewModel.csmCascadeTransitionFraction);
-}
-
-void UiSubsystem::OnCsmShadowDistanceFadeoutFractionChanged(
-    Rml::DataModelHandle,
-    Rml::Event& event,
-    const Rml::VariantList&)
-{
-    QueueChangedFloatAction(
-        UiActionType::SetCsmShadowDistanceFadeoutFraction,
-        event.GetParameter<float>(
-            "value",
-            lastViewModel.csmShadowDistanceFadeoutFraction),
-        lastViewModel.csmShadowDistanceFadeoutFraction);
-}
-
-void UiSubsystem::OnCsmShadowBiasChanged(
-    Rml::DataModelHandle,
-    Rml::Event& event,
-    const Rml::VariantList&)
-{
-    QueueChangedFloatAction(
-        UiActionType::SetCsmShadowBias,
-        event.GetParameter<float>(
-            "value",
-            lastViewModel.csmShadowBias),
-        lastViewModel.csmShadowBias);
-}
-
-void UiSubsystem::OnCsmShadowSlopeBiasChanged(
-    Rml::DataModelHandle,
-    Rml::Event& event,
-    const Rml::VariantList&)
-{
-    QueueChangedFloatAction(
-        UiActionType::SetCsmShadowSlopeBias,
-        event.GetParameter<float>(
-            "value",
-            lastViewModel.csmShadowSlopeBias),
-        lastViewModel.csmShadowSlopeBias);
-}
-
-void UiSubsystem::OnCsmShadowCascadeBiasDistributionChanged(
-    Rml::DataModelHandle,
-    Rml::Event& event,
-    const Rml::VariantList&)
-{
-    QueueChangedFloatAction(
-        UiActionType::SetCsmShadowCascadeBiasDistribution,
-        event.GetParameter<float>(
-            "value",
-            lastViewModel.csmShadowCascadeBiasDistribution),
-        lastViewModel.csmShadowCascadeBiasDistribution);
-}
-
-void UiSubsystem::OnSaveCsmSettingsToScene(
-    Rml::DataModelHandle,
-    Rml::Event&,
-    const Rml::VariantList&)
-{
-    QueueAction(UiAction{
-        UiActionType::SaveCsmSettingsToScene});
-}
-
-void UiSubsystem::OnEnvironmentIntensityChanged(Rml::DataModelHandle, Rml::Event& event, const Rml::VariantList&)
-{
-    QueueChangedFloatAction(
-        UiActionType::SetEnvironmentIntensity,
-        event.GetParameter<float>("value", lastViewModel.environmentIntensity),
-        lastViewModel.environmentIntensity);
-}
-
-void UiSubsystem::OnSunIntensityChanged(
-    Rml::DataModelHandle,
-    Rml::Event& event,
-    const Rml::VariantList&)
-{
-    QueueChangedFloatAction(
-        UiActionType::SetSunIntensity,
-        event.GetParameter<float>("value", lastViewModel.sunIntensity),
-        lastViewModel.sunIntensity);
-}
-
-void UiSubsystem::OnSpeedTreeStrengthChanged(
-    Rml::DataModelHandle,
-    Rml::Event& event,
-    const Rml::VariantList&)
-{
-    QueueChangedFloatAction(
-        UiActionType::SetSpeedTreeStrength,
-        event.GetParameter<float>("value", lastViewModel.speedTreeStrength),
-        lastViewModel.speedTreeStrength);
-}
-
-void UiSubsystem::OnSpeedTreeGustingSelected(
-    Rml::DataModelHandle,
-    Rml::Event&,
-    const Rml::VariantList& arguments)
-{
-    const bool enabled = arguments[0].Get<int>() != 0;
-    if (enabled != lastViewModel.speedTreeGustingEnabled)
-    {
-        QueueIntAction(UiActionType::SetSpeedTreeGustingEnabled, enabled ? 1 : 0);
-    }
-}
-
-void UiSubsystem::OnForceSpeedTreeGust(
-    Rml::DataModelHandle,
-    Rml::Event&,
-    const Rml::VariantList&)
-{
-    UiAction action;
-    action.type = UiActionType::ForceSpeedTreeGust;
-    QueueAction(std::move(action));
-}
-
-void UiSubsystem::OnLocaleEnglish(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&)
-{
-    UiAction action;
-    action.type = UiActionType::SetLocale;
-    action.stringValue = "en-US";
-    QueueAction(std::move(action));
-}
-
-void UiSubsystem::OnLocaleChinese(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&)
-{
-    UiAction action;
-    action.type = UiActionType::SetLocale;
-    action.stringValue = "zh-CN";
-    QueueAction(std::move(action));
-}
-
-void UiSubsystem::OnToggleDeveloperUi(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&)
-{
-    UiAction action;
-    action.type = UiActionType::ToggleDeveloperUi;
-    QueueAction(std::move(action));
-}
-
-void UiSubsystem::OnQuit(Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&)
-{
-    UiAction action;
-    action.type = UiActionType::Quit;
-    QueueAction(std::move(action));
 }
 
 } // namespace VL

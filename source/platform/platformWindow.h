@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 
 #include "core/runtimeResult.h"
@@ -35,11 +36,20 @@ public:
     void Show();
     void SetTitle(const std::string& title);
     void SetSize(int width, int height);
+    // 物理像素尺寸（受系统缩放影响），与 SDL 的逻辑窗口尺寸不是同一个量。
+    // Vulkan swapchain extent 必须用它；UI 布局用逻辑尺寸。选择用出参而不是返回结构，
+    // 是为了避免本头文件为了一个宽高对再引入一个类型。
+    void GetSizeInPixels(int& outWidth, int& outHeight) const;
     void SetRelativeMouseMode(bool enabled);
+    void SetMouseConstraint(int x, int y, int width, int height);
+    void ClearMouseConstraint();
     void SetTextInputEnabled(bool enabled);
     void SetTextInputArea(int x, int y, int width, int height);
 
     SDL_Window* GetNativeHandle() const { return window; }
+    // SDL 的窗口 id。事件带的就是这个值，因此它是"事件属于哪个窗口"的权威身份；
+    // 窗口序号只在注册表内部使用，两者靠本函数对应。
+    uint32_t GetId() const;
     bool IsValid() const { return window != nullptr; }
     bool IsTextInputEnabled() const { return textInputEnabled; }
 
@@ -47,6 +57,11 @@ private:
     SDL_Window* window = nullptr;
     std::string currentTitle;
     bool textInputEnabled = false;
+    bool mouseConstraintSet = false;
+    int mouseConstraintX = 0;
+    int mouseConstraintY = 0;
+    int mouseConstraintWidth = 0;
+    int mouseConstraintHeight = 0;
 };
 
 } // namespace VL

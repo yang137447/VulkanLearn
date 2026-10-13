@@ -219,9 +219,10 @@ bool RendererBackendVulkan::RecordSwapchainScreenshot(
         return false;
     }
 
-    const vk::Extent2D extent = rhiDevice->GetSwapchainExtent();
-    const vk::Format format = rhiDevice->GetSwapchainImageFormat();
-    const std::vector<vk::Image>& images = rhiDevice->GetSwapchainImages();
+    VL::PresentTarget& presentTarget = rhiDevice->GetPresentTarget();
+    const vk::Extent2D extent = presentTarget.extent;
+    const vk::Format format = presentTarget.surfaceFormat.format;
+    const std::vector<vk::Image>& images = presentTarget.images;
     if (frameContext.swapchainImageIndex >= images.size())
     {
         outError = "Swapchain image index is out of range: " +
@@ -407,7 +408,7 @@ RendererBackendVulkan::CaptureImageResourceDebugNames() const
 
 void RendererBackendVulkan::RecreateSwapchain(int width, int height)
 {
-    rhiDevice->RecreateSwapchain(width, height);
+    rhiDevice->RecreateSwapchain(rhiDevice->GetPresentTarget(), width, height);
     // RHI 重建前已等待 device idle；旧 fence 对应的提交和退休 epoch 均已完成。
     ResourceRetireQueue::GetInstance().CollectCompletedEpoch(
         ResourceRetireQueue::GetInstance().GetLastSubmittedEpoch());
@@ -501,22 +502,22 @@ void RendererBackendVulkan::DestroyPipelineCache(
 
 uint32_t RendererBackendVulkan::GetSwapchainImageCount() const
 {
-    return rhiDevice->GetSwapchainImageCount();
+    return rhiDevice->GetSwapchainImageCount(rhiDevice->GetPresentTarget());
 }
 
 vk::Extent2D RendererBackendVulkan::GetSwapchainExtent() const
 {
-    return rhiDevice->GetSwapchainExtent();
+    return rhiDevice->GetSwapchainExtent(rhiDevice->GetPresentTarget());
 }
 
 vk::Format RendererBackendVulkan::GetSwapchainImageFormat() const
 {
-    return rhiDevice->GetSwapchainImageFormat();
+    return rhiDevice->GetSwapchainImageFormat(rhiDevice->GetPresentTarget());
 }
 
 const std::vector<vk::ImageView>& RendererBackendVulkan::GetSwapchainImageViews() const
 {
-    return rhiDevice->GetSwapchainImageViews();
+    return rhiDevice->GetSwapchainImageViews(rhiDevice->GetPresentTarget());
 }
 
 float RendererBackendVulkan::GetTimestampPeriodNanoseconds()
@@ -1717,12 +1718,16 @@ RendererFrameContext RendererBackendVulkan::BeginFrame(uint32_t currentFrame)
         throw std::runtime_error("RendererBackendVulkan is not initialized");
     }
 
+    // 本帧作用于哪个呈现目标。目前只有主窗口，因此与 GetPresentTarget() 一致；
+    // 声明成局部引用是为了让本函数其余部分只依赖"目标"，不依赖"唯一那个目标"。
+    VL::PresentTarget& presentTarget = rhiDevice->GetPresentTarget();
+
     RendererFrameContext frameContext;
     if (NeedsSwapchainRecreate())
     {
         return frameContext;
     }
-    frameContext.swapchainImageCount = rhiDevice->GetSwapchainImageCount();
+    frameContext.swapchainImageCount = rhiDevice->GetSwapchainImageCount(presentTarget);
     const uint32_t frameFenceCount = rhiDevice->GetFrameFenceCount();
     if (frameFenceCount == 0)
     {
@@ -1749,6 +1754,7 @@ RendererFrameContext RendererBackendVulkan::BeginFrame(uint32_t currentFrame)
     {
         PROFILE_SCOPE("Render:AcquireImage");
         const SwapchainFrameResult acquireResult = rhiDevice->AcquireNextSwapchainImage(
+            presentTarget,
             frameSync.imageAcquiredSemaphore,
             frameContext.swapchainImageIndex);
         if (RequiresSwapchainRecreate(acquireResult))
@@ -1763,19 +1769,20 @@ RendererFrameContext RendererBackendVulkan::BeginFrame(uint32_t currentFrame)
     }
 
     const vk::Fence imageInFlightFence =
-        rhiDevice->GetImageInFlightFence(frameContext.swapchainImageIndex);
+        rhiDevice->GetImageInFlightFence(presentTarget, frameContext.swapchainImageIndex);
     if (imageInFlightFence)
     {
         rhiDevice->WaitForFence(imageInFlightFence);
     }
     rhiDevice->SetImageInFlightFence(
+        presentTarget,
         frameContext.swapchainImageIndex,
         frameSync.taskFinishedFence);
 
     rhiDevice->ResetFence(frameSync.taskFinishedFence);
 
     const VulkanSwapchainImageSyncResources imageSync =
-        rhiDevice->GetSwapchainImageSyncResources(frameContext.swapchainImageIndex);
+        rhiDevice->GetSwapchainImageSyncResources(presentTarget, frameContext.swapchainImageIndex);
     frameContext.commandBuffer = imageSync.commandBuffer;
     frameContext.commandBuffer.reset();
 
@@ -1794,6 +1801,10 @@ void RendererBackendVulkan::SubmitFrame(
     {
         throw std::runtime_error("RendererBackendVulkan is not initialized");
     }
+
+    // 与 BeginFrame 取同一个目标：帧的 acquire 与 present 必须落在同一个呈现目标上，
+    // 否则同步对象与图像索引会跨目标错配。
+    VL::PresentTarget& presentTarget = rhiDevice->GetPresentTarget();
 
     // Submit synchronization handles are backend-local details. RenderSystem
     // records commands into the frame context, then hands control back here so
@@ -1837,7 +1848,7 @@ void RendererBackendVulkan::SubmitFrame(
     const VulkanFrameSyncResources frameSync =
         rhiDevice->GetFrameSyncResources(frameContext.frameIndex);
     const VulkanSwapchainImageSyncResources imageSync =
-        rhiDevice->GetSwapchainImageSyncResources(frameContext.swapchainImageIndex);
+        rhiDevice->GetSwapchainImageSyncResources(presentTarget, frameContext.swapchainImageIndex);
     submitPlan.imageAcquiredSemaphore = frameSync.imageAcquiredSemaphore;
     submitPlan.renderFinishedSemaphore = imageSync.renderFinishedSemaphore;
     submitPlan.taskFinishedFence = frameSync.taskFinishedFence;
@@ -1870,6 +1881,7 @@ void RendererBackendVulkan::SubmitFrame(
     {
         PROFILE_SCOPE("Render:Present");
         const SwapchainFrameResult presentResult = rhiDevice->PresentSwapchainImage(
+            presentTarget,
             submitPlan.renderFinishedSemaphore,
             submitPlan.swapchainImageIndex);
         if (RequiresSwapchainRecreate(presentResult))

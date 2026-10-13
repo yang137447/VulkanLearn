@@ -23,7 +23,7 @@ inline float CandelaToCentimeterDistanceIntensity(float candela)
 inline void ValidateWorldUnit(const nlohmann::json& scene)
 {
     if (!scene.contains("worldUnit") || scene.at("worldUnit") != "cm")
-        throw std::invalid_argument("Scene requires worldUnit=\"cm\"; legacy units are unsupported");
+        throw std::invalid_argument("Scene requires worldUnit=\"cm\"; other units are unsupported");
 }
 
 inline double ReadPhysicalNumber(const nlohmann::json& node, const char* field,

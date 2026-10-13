@@ -1,6 +1,6 @@
 # UE-Lite 完成基线与后续门槛
 
-本文档记录 VulkanLearn 的 UE-Lite 架构收尾基线和后续门槛。`UE-Lite` 只表示早期架构路线名、历史规划语境和验收脚本名；新增 C++ 引擎代码继续使用 `VL` namespace。当前正式架构说明以 `documents/architecture/vulkanlearn-architecture.html` 为准。
+本文档记录 VulkanLearn 的 UE-Lite 架构收尾基线和后续门槛。`UE-Lite` 只表示早期架构路线名、历史规划语境和验收脚本名；新增 C++ 引擎代码继续使用 `VL` namespace。当前正式架构说明以 `documents/contracts/vulkanlearn-architecture.html` 为准。
 
 ## 基线目标
 
@@ -342,7 +342,7 @@ powershell -ExecutionPolicy Bypass -File tool/ue-lite-boundary-audit.ps1
 
 任务：
 
-- 更新 `documents/architecture/vulkanlearn-architecture.html`：只描述当前 V1 合同和已验证命令。
+- 更新 `documents/contracts/vulkanlearn-architecture.html`：只描述当前 V1 合同和已验证命令。
 - 如新增 world object/component 格式，更新 `documents/architecture/` 对应 ownership 和 snapshot 章节。
 - 如新增 asset JSON 格式，更新 `documents/rendering/` 或新建 asset contract 文档。
 - 更新 `documents/README.md`：已完成计划标记为 planning context，当前合同指向 architecture/rendering。

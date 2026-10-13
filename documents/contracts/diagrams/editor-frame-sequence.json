@@ -1,0 +1,280 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "VulkanLearn 编辑器一帧：输入到上屏",
+    "output": "documents/contracts/diagrams/editor-frame-sequence.html",
+    "repository": {
+      "url": "https://github.com/yang137447/VulkanLearn.git",
+      "provider": "github",
+      "revision": "48089dba6b5f79152944a8029b28ddc379ab35aa"
+    },
+    "locale": "zh-CN",
+    "column_fit": "spread",
+    "quality_profile": "showcase"
+  },
+  "participants": [
+    {
+      "id": "platform",
+      "type": "external",
+      "label": "平台事件",
+      "sublabel": "SDL3 轮询",
+      "sources": [
+        {
+          "path": "source/engine/engineLoop.cpp",
+          "line": 944,
+          "end_line": 949,
+          "label": "PollEvents"
+        }
+      ]
+    },
+    {
+      "id": "ui",
+      "type": "frontend",
+      "label": "UiSubsystem",
+      "sublabel": "RmlUi 上下文与覆盖层",
+      "sources": [
+        {
+          "path": "source/ui/uiSubsystem.cpp",
+          "line": 359,
+          "label": "HandlePlatformEvent"
+        }
+      ]
+    },
+    {
+      "id": "editor",
+      "type": "frontend",
+      "label": "编辑器面板",
+      "sublabel": "停靠 / 大纲 / Details",
+      "sources": [
+        {
+          "path": "source/editor/ui/materialInstanceAssetEditorPanel.cpp",
+          "line": 741,
+          "label": "RefreshOutliner"
+        }
+      ]
+    },
+    {
+      "id": "runtime",
+      "type": "backend",
+      "label": "编辑器运行时",
+      "sublabel": "命令 → 文档服务",
+      "sources": [
+        {
+          "path": "source/editor/runtime/materialInstanceEditorRuntime.cpp",
+          "line": 474,
+          "label": "命令分发"
+        }
+      ]
+    },
+    {
+      "id": "world",
+      "type": "database",
+      "label": "World",
+      "sublabel": "场景状态",
+      "sources": [
+        {
+          "path": "source/world/world.h",
+          "line": 117,
+          "end_line": 128,
+          "label": "可见性写入接口"
+        }
+      ]
+    },
+    {
+      "id": "render",
+      "type": "backend",
+      "label": "RenderSystem",
+      "sublabel": "快照 → 渲染场景",
+      "sources": [
+        {
+          "path": "source/renderSystem.cpp",
+          "line": 2835,
+          "end_line": 2839,
+          "label": "PublishSnapshotFromActiveWorld"
+        }
+      ]
+    },
+    {
+      "id": "present",
+      "type": "external",
+      "label": "交换链",
+      "sublabel": "UI + 场景输出",
+      "sources": [
+        {
+          "path": "source/ui/uiOverlayRendererVulkan.cpp",
+          "line": 378,
+          "label": "UI 覆盖层 render pass"
+        }
+      ]
+    }
+  ],
+  "segments": [
+    {
+      "from": 150,
+      "to": 255,
+      "label": "输入与 UI 独占"
+    },
+    {
+      "from": 270,
+      "to": 470,
+      "label": "GT 稳定帧边界：编辑器与快照"
+    },
+    {
+      "from": 490,
+      "to": 600,
+      "label": "发布与上屏"
+    }
+  ],
+  "messages": [
+    {
+      "id": "pump",
+      "from": "platform",
+      "to": "ui",
+      "y": 160,
+      "label": "平台事件",
+      "variant": "default"
+    },
+    {
+      "id": "ui-owns",
+      "from": "ui",
+      "to": "editor",
+      "y": 196,
+      "label": "UI 消费则游戏不接管",
+      "variant": "emphasis"
+    },
+    {
+      "id": "game-input",
+      "from": "ui",
+      "to": "render",
+      "y": 230,
+      "label": "未消费：相机输入",
+      "variant": "dashed"
+    },
+    {
+      "id": "tick",
+      "from": "ui",
+      "to": "runtime",
+      "y": 276,
+      "label": "TickMaterialInstanceEditor()",
+      "variant": "emphasis"
+    },
+    {
+      "id": "cmd",
+      "from": "runtime",
+      "to": "world",
+      "y": 312,
+      "label": "可见性 / 强度写入",
+      "variant": "default"
+    },
+    {
+      "id": "cmd-ack",
+      "from": "world",
+      "to": "runtime",
+      "y": 350,
+      "label": "接受或拒绝并诊断",
+      "variant": "return"
+    },
+    {
+      "id": "snapshot",
+      "from": "runtime",
+      "to": "ui",
+      "y": 388,
+      "label": "冻结快照",
+      "variant": "return"
+    },
+    {
+      "id": "publish",
+      "from": "ui",
+      "to": "render",
+      "y": 436,
+      "label": "PublishSnapshotFromActiveWorld()",
+      "variant": "emphasis"
+    },
+    {
+      "id": "filter",
+      "from": "render",
+      "to": "world",
+      "y": 474,
+      "label": "只取可见对象",
+      "variant": "dashed"
+    },
+    {
+      "id": "consume",
+      "from": "render",
+      "to": "present",
+      "y": 512,
+      "label": "ConsumeLatestSnapshotIntoRenderScene()",
+      "variant": "default"
+    },
+    {
+      "id": "present-output",
+      "from": "render",
+      "to": "present",
+      "y": 560,
+      "label": "记录并呈现",
+      "variant": "emphasis"
+    }
+  ],
+  "activations": [
+    {
+      "participant": "ui",
+      "from": 160,
+      "to": 444,
+      "type": "frontend"
+    },
+    {
+      "participant": "editor",
+      "from": 190,
+      "to": 240,
+      "type": "frontend"
+    },
+    {
+      "participant": "runtime",
+      "from": 272,
+      "to": 396,
+      "type": "backend"
+    },
+    {
+      "participant": "world",
+      "from": 306,
+      "to": 356,
+      "type": "database"
+    },
+    {
+      "participant": "render",
+      "from": 428,
+      "to": 572,
+      "type": "backend"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "UI 独占输入是有意设计",
+      "items": [
+        "事件先交给 UI；UI 消费则游戏不接管，避免点按钮同时驱动相机",
+        "视口命中判定排除视口工具条本身",
+        "见 source/ui/uiSubsystem.cpp 的 HandlePlatformEvent 与 IsScenePickTarget"
+      ]
+    },
+    {
+      "dot": "orange",
+      "title": "每帧重建快照，没有缓存",
+      "items": [
+        "两条路径都每帧发布快照：多线程走发布 + 提交帧，单线程直接 Render()",
+        "因此可见性开关下一帧即上屏，不需要 World 事务",
+        "见 source/engine/engineLoop.cpp:575 与 source/renderSystem.cpp:2835"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "可见性在快照构建处收口",
+      "items": [
+        "过滤发生在快照构建，不在渲染器分支",
+        "绘制、拾取、材质实例上下文、阴影共用同一份 meshDraws",
+        "见 source/world/worldSnapshotBuilder.cpp 的 mesh 与灯光循环"
+      ]
+    }
+  ]
+}

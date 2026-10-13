@@ -1,0 +1,264 @@
+{
+  "schema_version": 2,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "World / RenderGraph 事务：隔离准备与无抛提交",
+    "output": "documents/contracts/diagrams/world-graph-transaction-lifecycle.html",
+    "repository": {
+      "url": "https://github.com/yang137447/VulkanLearn.git",
+      "provider": "github",
+      "revision": "48089dba6b5f79152944a8029b28ddc379ab35aa"
+    },
+    "locale": "zh-CN",
+    "quality_profile": "showcase"
+  },
+  "lanes": [
+    {
+      "id": "main",
+      "label": "隔离准备（不触碰 live 状态）"
+    },
+    {
+      "id": "commit",
+      "label": "提交"
+    },
+    {
+      "id": "terminal",
+      "label": "终态"
+    }
+  ],
+  "states": [
+    {
+      "id": "idle",
+      "type": "start",
+      "label": "空闲",
+      "sublabel": "当前 World 正在渲染",
+      "lane": "main",
+      "col": 4,
+      "step": "00",
+      "tag": "current",
+      "sources": [
+        {
+          "path": "source/world/loading/worldGraphTransactionCoordinator.h",
+          "line": 57,
+          "end_line": 59,
+          "label": "Execute 入口"
+        }
+      ]
+    },
+    {
+      "id": "graph-ready",
+      "type": "active",
+      "label": "候选图已构建",
+      "sublabel": "PreparedRenderGraphState",
+      "lane": "main",
+      "col": 0,
+      "step": "01",
+      "tag": "isolated",
+      "sources": [
+        {
+          "path": "source/world/loading/worldGraphTransactionCoordinator.cpp",
+          "line": 185,
+          "end_line": 189,
+          "label": "候选图加载"
+        }
+      ]
+    },
+    {
+      "id": "world-ready",
+      "type": "active",
+      "label": "候选 World 已构建",
+      "sublabel": "PrepareWorldLoad",
+      "lane": "main",
+      "col": 1,
+      "step": "02",
+      "tag": "isolated",
+      "sources": [
+        {
+          "path": "source/world/loading/worldGraphTransactionCoordinator.cpp",
+          "line": 191,
+          "end_line": 200,
+          "label": "World 准备失败即返回"
+        }
+      ]
+    },
+    {
+      "id": "binding-ready",
+      "type": "active",
+      "label": "运行时绑定已准备",
+      "sublabel": "PrepareRuntimeBinding",
+      "lane": "main",
+      "col": 2,
+      "step": "03",
+      "tag": "isolated",
+      "sources": [
+        {
+          "path": "source/world/loading/worldGraphTransactionCoordinator.cpp",
+          "line": 225,
+          "end_line": 232,
+          "label": "运行时绑定准备"
+        }
+      ]
+    },
+    {
+      "id": "commit-prepped",
+      "type": "decision",
+      "label": "提交前校验",
+      "sublabel": "产物身份仍为当前",
+      "lane": "main",
+      "col": 3,
+      "step": "04",
+      "tag": "gate",
+      "sources": [
+        {
+          "path": "source/world/loading/worldGraphTransactionCoordinator.cpp",
+          "line": 272,
+          "end_line": 274,
+          "label": "离线产物身份校验"
+        }
+      ]
+    },
+    {
+      "id": "commit",
+      "type": "active",
+      "label": "无抛提交",
+      "sublabel": "World / 图 / 绑定 / 管线 / 制品",
+      "lane": "commit",
+      "col": 4,
+      "step": "05",
+      "tag": "atomic",
+      "sources": [
+        {
+          "path": "source/world/loading/worldGraphTransactionCoordinator.cpp",
+          "line": 373,
+          "end_line": 390,
+          "label": "提交序列"
+        }
+      ]
+    },
+    {
+      "id": "commit-failed",
+      "type": "failure",
+      "label": "准备失败",
+      "sublabel": "live 状态未被触碰",
+      "lane": "terminal",
+      "col": 3,
+      "tag": "terminal",
+      "sources": [
+        {
+          "path": "source/world/loading/worldGraphTransactionCoordinator.cpp",
+          "line": 196,
+          "end_line": 200,
+          "label": "失败返回"
+        }
+      ]
+    },
+    {
+      "id": "committed",
+      "type": "success",
+      "label": "已提交",
+      "sublabel": "新代际生效，旧资源待退休",
+      "lane": "terminal",
+      "col": 4,
+      "step": "06",
+      "tag": "terminal",
+      "sources": [
+        {
+          "path": "source/world/loading/worldGraphTransactionCoordinator.cpp",
+          "line": 419,
+          "label": "成功返回"
+        }
+      ]
+    }
+  ],
+  "transitions": [
+    {
+      "from": "idle",
+      "to": "graph-ready",
+      "label": "请求切换"
+    },
+    {
+      "from": "graph-ready",
+      "to": "world-ready"
+    },
+    {
+      "from": "world-ready",
+      "to": "binding-ready"
+    },
+    {
+      "from": "binding-ready",
+      "to": "commit-prepped"
+    },
+    {
+      "from": "commit-prepped",
+      "to": "commit",
+      "label": "校验通过"
+    },
+    {
+      "from": "commit-prepped",
+      "to": "commit-failed",
+      "variant": "security",
+      "label": "身份已过期"
+    },
+    {
+      "from": "world-ready",
+      "to": "commit-failed",
+      "variant": "security",
+      "label": "准备失败"
+    },
+    {
+      "from": "commit",
+      "to": "committed",
+      "variant": "emphasis",
+      "label": "提交成功"
+    },
+    {
+      "from": "commit-failed",
+      "to": "idle",
+      "variant": "dashed",
+      "label": "仍渲染旧 World"
+    },
+    {
+      "from": "committed",
+      "to": "idle",
+      "variant": "dashed",
+      "label": "下一帧继续"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "提交前一切都在隔离副本里",
+      "items": [
+        "候选图、候选 World、运行时绑定、管线候选提交与 shader 制品都在 live 状态之外准备",
+        "因此准备阶段的任何一种失败都不需要回滚：live 状态从未被触碰",
+        "见 source/world/loading/worldGraphTransactionCoordinator.cpp 的 185-274 行"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "提交是一段不可失败的字节拷贝序列",
+      "items": [
+        "提交顺序固定：shader 制品 → 管线候选 → World 激活 → 运行时绑定 → 资源缓存",
+        "提交点之后没有回滚路径，这是设计而非缺失：回滚要靠提前校验而不是事后撤销",
+        "见 373-408 行与文件头 38-42 行的所有权说明"
+      ]
+    },
+    {
+      "dot": "orange",
+      "title": "退休在提交之后才被激活",
+      "items": [
+        "旧 World / 图 / World-local 资源 / 帧灯光缓冲先登记为 prepared retirements",
+        "只在 live 引用完成交换后才随 GPU epoch 退休，避免渲染线程读到已释放资源",
+        "见 330-357 行的退休登记与 399-409 行的提交"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "可注入的故障点就是这套状态机的测试面",
+      "items": [
+        "WorldGraphTransactionTestFaultInjection 覆盖图资源、render pass、framebuffer、descriptor、pass 材质契约、候选 World 构建、view target 预检、运行时绑定与提交前",
+        "runtime test：main.exe --world-graph-transaction-test --exit-after-tests"
+      ]
+    }
+  ]
+}
