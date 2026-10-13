@@ -16,7 +16,10 @@
 | `source/ui/widgets/**` | `contracts/ui-component-system.md` | — |
 | `source/ui/**` | `contracts/ui-component-system.md`、`contracts/game-ui-stack.md` | — |
 | `source/editor/**` | `contracts/ui-component-system.md` | — |
-| `source/editor/service/**`、`source/editor/command/**` | `contracts/material-instance-editor.md`、`contracts/material-param-authoring-and-reflection.md` | — |
+| `source/editor/service/**`、`source/editor/command/**` | `contracts/asset-modify-api.md`、`contracts/material-instance-editor.md`、`contracts/material-param-authoring-and-reflection.md` | — |
+| `tool/asset-edit/**` | `contracts/asset-modify-api.md`、`contracts/testing.md` | — |
+| `source/resource/image/textureAssetValidation.h`、`source/textureAssetLoader.cpp` | `contracts/texture-asset-json-v1.md`、`contracts/asset-modify-api.md` | — |
+| `source/scene/validation/**` | `contracts/asset-modify-api.md`、`contracts/vulkanlearn-architecture.html` | — |
 | `source/render/offline/**` | `contracts/vl-offline-rendering.md` | — |
 | `source/world/**` | `contracts/vulkanlearn-architecture.html` | World mesh object cutover、Mesh object build plan contract、World build plan mesh object contract、WorldBuilder mesh object plan consumption、World loader runtime error code contract、World reload failure state machine validation |
 | `source/render/backend/**` | `contracts/vulkanlearn-architecture.html` | Redundant Vulkan device abstraction cutover、Vulkan device boundary concrete-only contract、RendererBackend device boundary escape hatch、RendererBackend hides concrete device boundary、RendererBackend device boundary forward declaration、Backend texture handle bridge contract、Swapchain resize production lifecycle |
@@ -97,6 +100,7 @@
 | 新增/修改 shader（任何 `shader/glsl/**`） | `contracts/material-param-authoring-and-reflection.md`、`contracts/gbuffer-channel-ownership.md` |
 | 改材质参数 schema 或 MI 格式 | `contracts/material-param-authoring-and-reflection.md`、`schema/README.md` |
 | 改编辑器命令协议 | `contracts/material-instance-editor.md` |
+| 修改 Scene/Mesh/Texture 标准修改接口 | `contracts/asset-modify-api.md`；设计背景见 `plan/ui/asset-modify-api-plan.md`（非契约） |
 | 加/改渲染 pass 或 RenderGraph 资源 | `contracts/vulkanlearn-architecture.html`、`config/renderGraphConfig.json` |
 | 改 UI 组件或停靠布局 | `contracts/ui-component-system.md` |
 | `source/ui/widgets/workspace/**`、`source/editor/ui/editorDockingController.*`（面板集合、默认布局、标签组归属、布局持久化格式） | `contracts/ui-component-system.md` 的「面板与标签组」节 | — |
@@ -111,7 +115,6 @@
 - `source/platform/**`（SDL 平台层与输入仲裁）
 - `source/engine/testing/**`（runtime validation services）
 - `source/core/**`
-- `source/scene/validation/**`（场景资产校验；契约暂在 `contracts/vulkanlearn-architecture.html` 的边界描述中，无独立文档）
 - `extern/**`（第三方依赖；除 `extern/BLAKE3` 的锁定说明外不写文档）
 - 地形：**不存在运行时实现**。只有编辑器资产层的 `EditorAssetKind::Terrain` 与
   `objectType == "terrain"` 的 MI 导航解析；`SceneAssetValidator` 不接受 `terrain` 场景对象。

@@ -388,6 +388,15 @@ complete test policy. The non-negotiable repository rules are:
 
 ## Common Task Map
 
+If asked to modify an existing Scene, Mesh or Texture descriptor:
+
+- read `documents/contracts/asset-modify-api.md`
+- use `build/bin/vl_asset_edit.exe` JSON Lines or the running Console `editor <JSON>` route
+- read get_document/get_capabilities first; modify with the returned revision, validate, then explicitly save
+- keep the lifecycle in one host session; separate processes do not share unsaved drafts
+- standard modify stages author data; runtime application goes through formal loading
+- retain direct source edits for changes outside the capability table, with the corresponding loader/schema review
+
 If asked to add or change a scene:
 
 - check `config/config.json`

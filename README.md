@@ -37,6 +37,7 @@
 - `documents/contracts/vulkanlearn-architecture.html`
 - `documents/contracts/game-ui-stack.md`
 - `documents/contracts/texture-asset-json-v1.md`
+- `documents/contracts/asset-modify-api.md`
 - `documents/contracts/material-param-authoring-and-reflection.md`
 - `documents/contracts/descriptor-imageinfo-management.md`
 
@@ -139,6 +140,15 @@ RML/RCSS/本地化文件在开发模式下支持候选解析、校验、提交�
 
 从本工作目录根启动；默认资源目录为相邻的 `../VukanLearnResources`。
 分支验证使用独立资源 worktree，保存 MI 或离线输出不会写入原开发资源目录。
+
+### 标准资产修改工具
+
+Scene、Mesh、Texture 提供统一的 get_document / get_capabilities / modify /
+validate / save / revert / reload。AI 与脚本使用 `build/bin/vl_asset_edit.exe` 的
+JSON Lines 接口；运行中的编辑器通过 Console `editor <JSON>` 调用同一协议。
+修改先暂存，明确 save 才写盘，随后经正式加载生效。
+命令示例、版本/冲突语义和能力边界见
+[资产标准修改接口](documents/contracts/asset-modify-api.md)。
 
 ### Lookdev 资产审阅场景
 

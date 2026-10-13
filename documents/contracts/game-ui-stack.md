@@ -60,9 +60,10 @@ keeps the view types and command sink independent of any UI library.
 Same-frame edits coalesce into an ordered revision-gated atomic batch.
 Validate includes pending edits. Save opens confirmation after flushing pending
 edits and waits for an authoritative revision before enabling confirmation.
-The shared Save Content list includes dirty scene and MI files, supports
+The shared Save Content list includes dirty Scene, Mesh, Texture and MI files, supports
 individual checkbox selection, and never writes merely by opening.
-Content Browser marks both types in place and offers a path-targeted Save action.
+Content Browser marks these types in place and offers a path-targeted Save action.
+Mesh/Texture drafts enter through the [standard asset API](asset-modify-api.md).
 Dirty close waits for a clean
 authoritative snapshot; failed saves keep the document and dialog open.
 Focused partial input is not overwritten by snapshots. Labels are RML-escaped.

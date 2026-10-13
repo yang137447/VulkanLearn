@@ -61,7 +61,8 @@ public:
         const MaterialDefinitionReloadBatch* materialDefinitionReload = nullptr,
         // 本次加载附加的场景对象（JSON 对象数组，可为空）。模型编辑器靠它把打开的模型
         // 放进中性预览环境，而不必生成临时场景文件。
-        const nlohmann::json& extraSceneObjects = nlohmann::json::array());
+        const nlohmann::json& extraSceneObjects = nlohmann::json::array(),
+        const nlohmann::json& sceneDocument = nullptr);
 
     void SetFaultInjection(
         WorldGraphTransactionTestFaultInjection injection) noexcept;

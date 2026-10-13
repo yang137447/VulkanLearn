@@ -30,6 +30,26 @@ constexpr EditorCommandSpec kSpecs[] = {
     {EditorCommandType::ValidateMaterialInstanceDocument, "material.validate", 1, false, false, true},
     {EditorCommandType::SaveMaterialInstanceDocument, "material.save", 1, true, true, true},
     {EditorCommandType::SaveSceneDocument, "scene.save", 1, true, true, false},
+    {EditorCommandType::GetSceneDocument, "scene.get_document", 1, false, false, false},
+    {EditorCommandType::GetSceneCapabilities, "scene.get_capabilities", 1, false, false, false},
+    {EditorCommandType::ModifySceneDocument, "scene.modify", 1, true, true, false},
+    {EditorCommandType::ValidateSceneDocument, "scene.validate", 1, false, false, false},
+    {EditorCommandType::RevertSceneDocument, "scene.revert", 1, true, true, false},
+    {EditorCommandType::ReloadSceneDocument, "scene.reload", 1, true, true, false},
+    {EditorCommandType::GetMeshDocument, "mesh.get_document", 1, false, false, false},
+    {EditorCommandType::GetMeshCapabilities, "mesh.get_capabilities", 1, false, false, false},
+    {EditorCommandType::ModifyMeshDocument, "mesh.modify", 1, true, true, false},
+    {EditorCommandType::ValidateMeshDocument, "mesh.validate", 1, false, false, false},
+    {EditorCommandType::SaveMeshDocument, "mesh.save", 1, true, true, false},
+    {EditorCommandType::RevertMeshDocument, "mesh.revert", 1, true, true, false},
+    {EditorCommandType::ReloadMeshDocument, "mesh.reload", 1, true, true, false},
+    {EditorCommandType::GetTextureDocument, "texture.get_document", 1, false, false, false},
+    {EditorCommandType::GetTextureCapabilities, "texture.get_capabilities", 1, false, false, false},
+    {EditorCommandType::ModifyTextureDocument, "texture.modify", 1, true, true, false},
+    {EditorCommandType::ValidateTextureDocument, "texture.validate", 1, false, false, false},
+    {EditorCommandType::SaveTextureDocument, "texture.save", 1, true, true, false},
+    {EditorCommandType::RevertTextureDocument, "texture.revert", 1, true, true, false},
+    {EditorCommandType::ReloadTextureDocument, "texture.reload", 1, true, true, false},
     {EditorCommandType::ConnectMaterialInstancePreview, "material.preview.connect", 1, false, false, true},
     {EditorCommandType::DisconnectMaterialInstancePreview, "material.preview.disconnect", 1, false, false, false},
     {EditorCommandType::ApplyMaterialInstancePreview, "material.preview.apply", 1, false, false, true},
@@ -353,6 +373,7 @@ bool IsFiniteEditorMaterialParameterValue(const EditorMaterialParameterValue& va
 
 std::optional<std::string> GetEditorCommandAssetPath(const EditorCommandEnvelope& command)
 {
+    if (const auto* value = std::get_if<ModifyAssetDocumentPayload>(&command.payload)) return value->assetPath;
     if (const auto* value = std::get_if<MaterialInstanceAssetPathPayload>(&command.payload)) return value->assetPath;
     if (const auto* value = std::get_if<OpenMaterialInstanceAssetPayload>(&command.payload)) return value->assetPath;
     if (const auto* value = std::get_if<OpenTextureAssetPayload>(&command.payload)) return value->assetPath;
@@ -375,6 +396,14 @@ std::optional<std::string> GetEditorCommandAssetPath(const EditorCommandEnvelope
 
 bool IsEditorCommandPayloadCompatible(const EditorCommandEnvelope& command) noexcept
 {
+    if (const auto operation = GetEditorAssetOperation(command.type))
+    {
+        if (*operation == EditorAssetOperation::Modify)
+            return std::holds_alternative<ModifyAssetDocumentPayload>(command.payload);
+        if (*operation == EditorAssetOperation::Reload)
+            return std::holds_alternative<ReloadMaterialInstanceDocumentPayload>(command.payload);
+        return std::holds_alternative<MaterialInstanceAssetPathPayload>(command.payload);
+    }
     switch (command.type)
     {
     case EditorCommandType::ResolveSceneMaterialAsset: return std::holds_alternative<ResolveSceneMaterialAssetPayload>(command.payload);
@@ -484,6 +513,9 @@ std::optional<EditorErrorCode> ValidateEditorCommandEnvelope(const EditorCommand
     if (spec == nullptr) return EditorErrorCode::InvalidCommandType;
     if (!IsEditorCommandPayloadCompatible(command)) return EditorErrorCode::InvalidPayload;
     if (spec->requiresExpectedRevision && !command.expectedDocumentRevision.has_value()) return EditorErrorCode::MissingExpectedDocumentRevision;
+    if (const auto* modify = std::get_if<ModifyAssetDocumentPayload>(&command.payload))
+        if (modify->assetPath.empty() || modify->changes.empty() || modify->changes.size() > 128)
+            return EditorErrorCode::InvalidPayload;
     if (command.type == EditorCommandType::ExecuteEditorCommandBatch)
         return ValidateEditorCommandBatch(std::get<ExecuteEditorCommandBatchPayload>(command.payload));
     if (command.type == EditorCommandType::SetMaterialParameterOverride)
@@ -524,6 +556,40 @@ std::optional<EditorErrorCode> ValidateEditorCommandEnvelope(const EditorCommand
         }
     }
     return std::nullopt;
+}
+
+std::optional<EditorAssetDocumentKind> GetEditorAssetDocumentKind(EditorCommandType type) noexcept
+{
+    if (type == EditorCommandType::SaveSceneDocument ||
+        (type >= EditorCommandType::GetSceneDocument && type <= EditorCommandType::ReloadSceneDocument))
+        return EditorAssetDocumentKind::Scene;
+    if (type >= EditorCommandType::GetMeshDocument && type <= EditorCommandType::ReloadMeshDocument)
+        return EditorAssetDocumentKind::Mesh;
+    if (type >= EditorCommandType::GetTextureDocument && type <= EditorCommandType::ReloadTextureDocument)
+        return EditorAssetDocumentKind::Texture;
+    return std::nullopt;
+}
+
+std::optional<EditorAssetOperation> GetEditorAssetOperation(EditorCommandType type) noexcept
+{
+    switch (type)
+    {
+    case EditorCommandType::GetSceneDocument: case EditorCommandType::GetMeshDocument:
+    case EditorCommandType::GetTextureDocument: return EditorAssetOperation::GetDocument;
+    case EditorCommandType::GetSceneCapabilities: case EditorCommandType::GetMeshCapabilities:
+    case EditorCommandType::GetTextureCapabilities: return EditorAssetOperation::GetCapabilities;
+    case EditorCommandType::ModifySceneDocument: case EditorCommandType::ModifyMeshDocument:
+    case EditorCommandType::ModifyTextureDocument: return EditorAssetOperation::Modify;
+    case EditorCommandType::ValidateSceneDocument: case EditorCommandType::ValidateMeshDocument:
+    case EditorCommandType::ValidateTextureDocument: return EditorAssetOperation::Validate;
+    case EditorCommandType::SaveSceneDocument: case EditorCommandType::SaveMeshDocument:
+    case EditorCommandType::SaveTextureDocument: return EditorAssetOperation::Save;
+    case EditorCommandType::RevertSceneDocument: case EditorCommandType::RevertMeshDocument:
+    case EditorCommandType::RevertTextureDocument: return EditorAssetOperation::Revert;
+    case EditorCommandType::ReloadSceneDocument: case EditorCommandType::ReloadMeshDocument:
+    case EditorCommandType::ReloadTextureDocument: return EditorAssetOperation::Reload;
+    default: return std::nullopt;
+    }
 }
 
 } // namespace VL

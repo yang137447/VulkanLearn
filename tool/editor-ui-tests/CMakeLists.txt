@@ -2,6 +2,7 @@ add_executable(editor_ui_tests
     editorUiTests.cpp
     actorPropertyTests.cpp
     sceneDocumentTests.cpp
+    assetDocumentTests.cpp
     modelPreviewCameraTests.cpp
     "${PROJECT_SOURCE_DIR}/source/engine/modelPreviewCamera.cpp"
     resourceEditorControllerTests.cpp
@@ -27,6 +28,12 @@ add_executable(editor_ui_tests
     "${PROJECT_SOURCE_DIR}/source/editor/command/editorCommand.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/command/editorCommandJsonCodec.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/service/sceneDocumentService.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/service/assetDocumentService.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/service/assetCommandExecutor.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/command/assetDocumentFields.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/command/editorCommandBus.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/command/assetJsonCommandHost.cpp"
+    "${PROJECT_SOURCE_DIR}/source/mesh/validation/meshAssetValidator.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/persistence/materialInstancePersistence.cpp"
     # 逐 actor 可见性的 World/快照回归（editorUiTests.cpp）：渲染侧过滤发生在
     # WorldSnapshotBuilder，因此这里要编进真实的 World 与快照构建器，

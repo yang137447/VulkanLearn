@@ -4,6 +4,10 @@
 
 ## Goal
 
+Texture authoring uses `texture.get_document/get_capabilities/modify/validate/save/revert/reload`
+from the [standard asset API](asset-modify-api.md).
+`ValidateTextureAssetJson` is shared by the file loader and isolated authoring candidates.
+
 This document defines the first version of texture asset JSON files.
 
 The goal is to move texture loading settings out of material instances, while keeping the format small and readable. A material instance should decide which texture is bound to which shader slot. A texture asset JSON should describe how a source image is loaded and sampled.

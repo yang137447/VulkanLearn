@@ -3,6 +3,9 @@
 > 状态：**当前契约**（实现已落地）。本文件描述系统**现在是什么**，每条可核对到源码、测试或`tool/architecture-boundary-audit.ps1` 的门禁规则；不含对未来行为的承诺——那些在 `documents/rationale/`。
 
 VulkanLearn 的 DebugConsole 通过 `CommandBus` 投递调试意图，EngineLoop 在稳定的 GT 命令点执行。Console 不直接持有 World、Camera 或 Vulkan 资源。
+`editor <JSON>` 借用编辑器 facade，通过独立的 `EditorCommandBus` 提交版本化资产命令，
+并在后续帧输出结构化终态；需要编辑器 runtime。协议与 headless 调用见
+[资产修改接口](asset-modify-api.md)。
 
 ## Camera
 

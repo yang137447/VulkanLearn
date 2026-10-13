@@ -405,7 +405,8 @@ RuntimeResult<void> EngineLoop::LoadInitialWorldAndRenderer(
             "Synchronous render mode (workerThreadCount=1)");
     }
 
-    auto consoleResult = GetSubsystems().GetConsoleSubsystem().Initialize(GetSubsystems().GetCommandBus());
+    auto consoleResult = GetSubsystems().GetConsoleSubsystem().Initialize(GetSubsystems().GetCommandBus(),
+        uiSubsystem ? uiSubsystem->GetEditorCommandRuntime() : nullptr);
     if (consoleResult.IsFailure())
     {
         return consoleResult;
@@ -1287,10 +1288,21 @@ EngineLoop::ExecuteWorldGraphTransaction(
                 scenePath));
     }
 
+    nlohmann::json sceneDocument;
+    if (uiSubsystem)
+        if (auto* documents = uiSubsystem->GetSceneDocuments())
+        {
+            std::string error;
+            sceneDocument = documents->DraftForWorldLoad(scenePath, error);
+            if (!error.empty())
+                return RuntimeResult<WorldHandle>::Failure(
+                    MakeRuntimeError("Scene.DraftSourceChanged", error, scenePath));
+        }
     return worldGraphTransactionCoordinator->Execute(
         scenePath,
         materialDefinitionReload,
-        extraSceneObjects);
+        extraSceneObjects,
+        sceneDocument);
 }
 
 RuntimeResult<WorldHandle>

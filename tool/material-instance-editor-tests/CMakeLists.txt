@@ -58,6 +58,7 @@ add_executable(material_instance_editor_tests
     "${VULKANLEARN_SOURCE_DIR}/source/shader/build/contentHash.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/editor/command/editorCommand.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/editor/command/editorCommandJsonCodec.cpp"
+    "${VULKANLEARN_SOURCE_DIR}/source/editor/command/assetDocumentFields.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/editor/command/editorCommandBus.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/editor/persistence/materialInstancePersistence.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/editor/persistence/materialInstanceSparseCandidate.cpp"
@@ -97,6 +98,7 @@ add_executable(material_instance_editor_landed_tests
     "${VULKANLEARN_SOURCE_DIR}/source/shader/build/contentHash.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/editor/command/editorCommand.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/editor/command/editorCommandJsonCodec.cpp"
+    "${VULKANLEARN_SOURCE_DIR}/source/editor/command/assetDocumentFields.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/editor/command/editorCommandBus.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/editor/persistence/materialInstancePersistence.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/editor/persistence/materialInstanceSparseCandidate.cpp"
@@ -146,6 +148,11 @@ add_executable(material_instance_editor_production_tests
     "${VULKANLEARN_SOURCE_DIR}/source/editor/preview/materialInstancePreviewController.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/editor/runtime/materialInstanceEditorRuntime.cpp")
 target_sources(material_instance_editor_production_tests PRIVATE
+    "${VULKANLEARN_SOURCE_DIR}/source/editor/command/editorCommandJsonCodec.cpp"
+    "${VULKANLEARN_SOURCE_DIR}/source/editor/command/assetDocumentFields.cpp"
+    "${VULKANLEARN_SOURCE_DIR}/source/editor/service/assetDocumentService.cpp"
+    "${VULKANLEARN_SOURCE_DIR}/source/editor/service/assetCommandExecutor.cpp"
+    "${VULKANLEARN_SOURCE_DIR}/source/mesh/validation/meshAssetValidator.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/editor/service/sceneDocumentService.cpp")
 
 target_include_directories(material_instance_editor_production_tests

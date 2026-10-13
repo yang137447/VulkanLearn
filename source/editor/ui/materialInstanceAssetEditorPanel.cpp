@@ -734,7 +734,9 @@ void MaterialInstanceAssetEditorPanel::ConfirmSave()
         if (saveChecked.count(row.assetPath) == 0) continue;
         EditorCommandEnvelope command;
         command.type = row.kind == EditorAssetKind::Scene
-            ? EditorCommandType::SaveSceneDocument : EditorCommandType::SaveMaterialInstanceDocument;
+            ? EditorCommandType::SaveSceneDocument : row.kind == EditorAssetKind::Mesh
+            ? EditorCommandType::SaveMeshDocument : row.kind == EditorAssetKind::Texture
+            ? EditorCommandType::SaveTextureDocument : EditorCommandType::SaveMaterialInstanceDocument;
         command.expectedDocumentRevision = row.revision;
         command.payload = MaterialInstanceAssetPathPayload{row.assetPath};
         saveWaiting.insert(row.assetPath);

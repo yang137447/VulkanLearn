@@ -43,7 +43,9 @@ public:
     // 与场景文件所在目录无关，因此注入别的目录下的模型无需改写路径。
     RuntimeResult<WorldBuildPlan> Load(
         const std::string& scenePath,
-        const nlohmann::json& extraObjects) const;
+        const nlohmann::json& extraObjects,
+        // 冻结的作者草稿；为空时读磁盘，同样进入完整场景/模型校验。
+        const nlohmann::json& sceneDocument = nullptr) const;
 };
 
 } // namespace VL

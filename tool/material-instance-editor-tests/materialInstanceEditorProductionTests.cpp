@@ -1517,3 +1517,45 @@ TEST(MaterialInstanceEditorProduction, SharedModifiedListSavesSceneAndInactiveMa
         runtime.GetSnapshot().saveFeedback.front().sequence);
     EXPECT_EQ(ReadJson(fixture.resourceRoot / scenePath)["objects"][0]["position"][0], 55);
 }
+
+TEST(MaterialInstanceEditorProduction, StandardAssetJsonUsesSharedSaveListAndFeedback)
+{
+    ProductionFixture fixture;
+    const std::string path = "textures/T_standard.json";
+    WriteJson(fixture.resourceRoot / path, {{"name", "Standard"}, {"type", "texture"},
+        {"source", "source.png"}, {"colorSpace", "srgb"}});
+    std::ofstream(fixture.resourceRoot / "source.png") << "document validation fixture";
+    MaterialInstanceEditorRuntime runtime;
+    ASSERT_TRUE(runtime.Initialize({fixture.resourceRoot, fixture.projectRoot}).IsSuccess());
+    const Json read{{"protocolVersion", 1}, {"commandId", 201}, {"source", "ai"},
+        {"command", "texture.get_document"}, {"payload", {{"assetPath", path}}}};
+    runtime.SubmitJson(read.dump());
+    runtime.Tick();
+    ASSERT_TRUE(runtime.GetCommandResult(201).has_value());
+    EXPECT_EQ(runtime.GetCommandResult(201)->status, EditorCommandStatus::Succeeded);
+    auto modify = read;
+    modify["commandId"] = 202;
+    modify["command"] = "texture.modify";
+    modify["expectedDocumentRevision"] = 1;
+    modify["payload"]["changes"] = Json::array({{{"field", "colorSpace"}, {"value", "linear"}}});
+    runtime.SubmitJson(modify.dump());
+    runtime.Tick();
+    ASSERT_EQ(runtime.GetSnapshot().modifiedDocuments.size(), 1u);
+    EXPECT_EQ(runtime.GetSnapshot().modifiedDocuments.front().kind, EditorUi::EditorAssetKind::Texture);
+    EXPECT_EQ(ReadJson(fixture.resourceRoot / path)["colorSpace"], "srgb");
+    modify["commandId"] = 203;
+    runtime.SubmitJson(modify.dump());
+    runtime.Tick();
+    EXPECT_EQ(runtime.GetCommandResult(203)->errorCode, EditorErrorCode::StaleDocumentRevision);
+    auto save = read;
+    save["commandId"] = 204;
+    save["command"] = "texture.save";
+    save["expectedDocumentRevision"] = 2;
+    runtime.SubmitJson(save.dump());
+    runtime.Tick();
+    EXPECT_EQ(runtime.GetCommandResult(204)->status, EditorCommandStatus::Succeeded);
+    EXPECT_EQ(ReadJson(fixture.resourceRoot / path)["colorSpace"], "linear");
+    EXPECT_TRUE(runtime.GetSnapshot().modifiedDocuments.empty());
+    ASSERT_EQ(runtime.GetSnapshot().saveFeedback.size(), 1u);
+    EXPECT_TRUE(runtime.GetSnapshot().saveFeedback.front().succeeded);
+}

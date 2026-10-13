@@ -18,6 +18,7 @@ find_package(Threads REQUIRED)
 add_subdirectory(extern)
 add_subdirectory(source/render/offline/core)
 add_subdirectory(source)
+add_subdirectory(tool/asset-edit)
 
 if(VULKANLEARN_BUILD_TESTS)
     enable_testing()

@@ -12,6 +12,7 @@ namespace VL
 {
 
 class CommandBus;
+namespace Editor { class MaterialInstanceEditorRuntime; }
 
 // Owns the interactive debug console as an engine subsystem. The console only
 // publishes commands; command execution is drained by EngineLoop.
@@ -21,7 +22,8 @@ public:
     ConsoleSubsystem();
     ~ConsoleSubsystem();
 
-    RuntimeResult<void> Initialize(CommandBus& commandBus);
+    RuntimeResult<void> Initialize(CommandBus& commandBus,
+        Editor::MaterialInstanceEditorRuntime* editorRuntime = nullptr);
     void Update();
 
     // 启动参数携带的控制台脚本。首帧时环境贴图、CLUT 与 swapchain 内容都还没稳定，

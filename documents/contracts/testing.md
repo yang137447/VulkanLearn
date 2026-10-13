@@ -23,25 +23,25 @@
 
 | 可执行文件 | 测试数 | 覆盖 |
 | --- | --- | --- |
-| `editor_ui_tests` | 418 | 编辑器 UI：组件、停靠、布局持久化、内容浏览器、JSON 资产库、actor 树、属性编辑、场景持久化、保存确认、可视化、颜色转换、右键菜单 |
+| `editor_ui_tests` | 450 | 编辑器 UI：组件、停靠、布局持久化、内容浏览器、JSON 资产库、标准资产修改、actor 树、属性编辑、场景持久化、保存确认、可视化、颜色转换、右键菜单 |
 | `vl_offline_adapter_tests` | 101 | 离线场景/网格/显示/相机适配 |
 | `editor_viewport_tests` | 41 | 视口几何、命中、坐标映射、aspect、坐标轴投影及编辑器网格 |
 | `vl_offline_coordinator_tests` | 13 | 离线会话协调 |
 | `vl_renderer_backend_tests` | 12 | 离屏显示输出契约、swapchain 帧结果 |
 | `material_instance_editor_landed_tests` | 10 | MI 已落地接口 |
 | `material_instance_editor_tests` | 7 | MI 命令/文档服务 |
-| `material_instance_editor_production_tests` | 6 | MI 生产路径（预览边界、直接 render-state 路由、场景/非活动 MI 独立保存） |
+| `material_instance_editor_production_tests` | 7 | MI 生产路径（预览边界、直接 render-state 路由、场景/非活动 MI 独立保存）及标准资产 JSON facade/Save Content 集成 |
 
-`editor_ui_tests` 里 24 个套件；`ctest` 用套件前缀选择：
+`editor_ui_tests` 里 25 个套件；`ctest` 用套件前缀选择：
 
 ```powershell
 # 编辑器 UI 选择集（缩略图、预览等另有专项套件；全量可直接运行 editor_ui_tests）
 # 注意 EditorViewportGridGeometry 与 EditorViewportAxisIndicator 来自 editor_viewport_tests 目标，
 # 不是 editor_ui_tests：
 # 它必须显式列入，否则改坏编辑器网格不会被这条选择集拦住（2026-10-12 发现并补上）。
-ctest --test-dir build -R "^(UiColorTransform|UiWidgetTest|UiWidgetRefresh|EditorUiTest|EditorActorProperty|EditorActorVisualization|SceneDocumentTest|ContentBrowserTest|DockWorkspaceTest|DockPersistenceTest|DockRmlTest|EditorViewportGeometry|EditorViewportGridGeometry|EditorViewportAxisIndicator|EditorJsonAssetParsing|EditorJsonAssetPaths|EditorJsonAssetTypes|JsonAssetLibraryTest|ResourceEditorController|LargeCatalog/ContentBrowserPerformanceTest)\." --output-on-failure
+ctest --test-dir build -R "^(UiColorTransform|UiWidgetTest|UiWidgetRefresh|EditorUiTest|EditorActorProperty|EditorActorVisualization|SceneDocumentTest|AssetDocumentTest|ContentBrowserTest|DockWorkspaceTest|DockPersistenceTest|DockRmlTest|EditorViewportGeometry|EditorViewportGridGeometry|EditorViewportAxisIndicator|EditorJsonAssetParsing|EditorJsonAssetPaths|EditorJsonAssetTypes|JsonAssetLibraryTest|ResourceEditorController|LargeCatalog/ContentBrowserPerformanceTest)\." --output-on-failure
 
-# 材质实例编辑器全套（当前 23 项）
+# 材质实例编辑器全套（当前 24 项）
 ctest --test-dir build -R "MaterialInstanceEditor" --output-on-failure
 ```
 
@@ -132,6 +132,27 @@ File→Exit 日志确认 teardown 完成，无 Vulkan validation 错误。该验
 脚本在 CTest 处停止，后续三个 Vulkan 事务测试未在此次提交前检查中执行。
 
 ## 改动 → 验证
+
+2026-10-13 [标准资产接口](asset-modify-api.md) 新增 `AssetDocumentTest` 31 项、
+生产 facade 1 项、Save Content 路由 1 项。覆盖三类协议/能力、完整候选与回滚、
+stale revision、外部冲突、Win32 文件锁导致原子替换失败及重试、别名、
+slot/actor 身份、嵌套环境校验、JSON 预算/重复键、共享 Scene 草稿和加载前 UI 编辑门禁。
+其中 symlink 例因当前 MinGW 文件链接功能不可用跳过，不能作为已验收的链接重定向证据。
+
+全部目标编译通过；`editor_ui_tests` 全量连续两遍均为 450 项、445 通过、5 跳过。
+全量 CTest 792 项中 780 通过、6 跳过，仍有上述 6 项 `RuntimeControlAssets`
+读取已删除页面失败。标准资产与相关模块没有新增失败。
+文档校验、32 个场景 schema 检查、架构审计通过。
+`--world-graph-transaction-test --exit-after-tests --no-dev-ui` 退出码 0，事务/退休检查通过；
+该结果仍不代替启用编辑器的交互验收。
+
+JSONL CLI 在隔离 Scene/SM/T 副本上执行读/改/校验/保存共 12 条命令，全部成功。
+computer-use 实窗验收使用 `Generated/AssetModifySmoke-20261013/` 副本：
+运行中 Console 六条 JSON 读/改命令成功；Save Content 同时列出 Scene/Mesh/Texture，
+确认后分别写入三个副本。随后场景 Camera FOV 80→55 只暂存，
+正式 `loadworld` 后 Details 显示 55、画面视角变化，而磁盘仍为 80；
+再次明确保存才写入 55。File→Exit 正常关闭，日志含 teardown complete，
+无 Vulkan validation 错误。正式资产未改，临时副本在验收后清理。
 
 | 改动范围 | 最小验证 | 额外风险验证 |
 | --- | --- | --- |

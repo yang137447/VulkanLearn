@@ -178,7 +178,8 @@ RuntimeResult<WorldHandle>
 WorldGraphTransactionCoordinator::Execute(
     const std::string& scenePath,
     const MaterialDefinitionReloadBatch* materialDefinitionReload,
-    const nlohmann::json& extraSceneObjects)
+    const nlohmann::json& extraSceneObjects,
+    const nlohmann::json& sceneDocument)
 {
     try
     {
@@ -194,7 +195,8 @@ WorldGraphTransactionCoordinator::Execute(
                 scenePath,
                 candidateGraph->GetGraph(),
                 materialDefinitionReload,
-                extraSceneObjects);
+                extraSceneObjects,
+                sceneDocument);
         if (preparedWorldResult.IsFailure())
         {
             return RuntimeResult<WorldHandle>::Failure(

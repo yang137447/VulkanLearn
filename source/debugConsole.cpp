@@ -9,9 +9,11 @@
 #include <utility>
 
 #include "engine/runtimeCommand.h"
+#include "editor/runtime/materialInstanceEditorRuntime.h"
+#include "editor/command/editorCommandJsonCodec.h"
 
-DebugConsole::DebugConsole(VL::CommandBus& commandBus)
-    : commandBus(commandBus)
+DebugConsole::DebugConsole(VL::CommandBus& commandBus, VL::Editor::MaterialInstanceEditorRuntime* runtime)
+    : commandBus(commandBus), editorRuntime(runtime)
 {
 }
 
@@ -23,6 +25,16 @@ void DebugConsole::Initialize()
 
 void DebugConsole::Update()
 {
+    for (auto iterator = pendingEditorResults.begin(); iterator != pendingEditorResults.end();)
+    {
+        const auto result = editorRuntime->GetCommandResult(*iterator);
+        if (result && VL::IsFinalEditorCommandStatus(result->status))
+        {
+            std::cout << VL::EditorCommandJsonCodec::EncodeResultText(*result) << std::endl;
+            iterator = pendingEditorResults.erase(iterator);
+        }
+        else ++iterator;
+    }
     while (_kbhit())
     {
         const int ch = _getch();
@@ -88,6 +100,26 @@ void DebugConsole::ProcessCommand(const std::string& line)
     std::istringstream commandStream(line);
     std::string command;
     commandStream >> command;
+
+    if (command == "editor")
+    {
+        if (!editorRuntime)
+        {
+            std::cout << "Editor document host unavailable; enable --dev-ui or use vl_asset_edit." << std::endl;
+            return;
+        }
+        std::string request;
+        std::getline(commandStream, request);
+        try
+        {
+            const auto submitted = editorRuntime->SubmitJson(request);
+            std::cout << VL::EditorCommandJsonCodec::EncodeResultText(submitted.result) << std::endl;
+            if (submitted.admission == VL::EditorCommandAdmission::Queued)
+                pendingEditorResults.push_back(submitted.commandId);
+        }
+        catch (const std::exception& error) { std::cout << "Editor request rejected: " << error.what() << std::endl; }
+        return;
+    }
 
     if (command == "debugview")
     {
@@ -511,6 +543,7 @@ void DebugConsole::ProcessCommand(const std::string& line)
 void DebugConsole::PrintHelp() const
 {
     std::cout << "Available commands:\n";
+    std::cout << "  editor <JSON> - submit an editor asset command and print its structured result\n";
     std::cout << "  debugview <mode> - set debug view mode\n";
     std::cout << "    0: Full\n";
     std::cout << "    1: BaseColor\n";

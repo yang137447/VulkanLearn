@@ -1,6 +1,9 @@
 #include "editor/command/editorCommandJsonCodec.h"
+#include "editor/command/assetDocumentFields.h"
+#include "editor/command/strictJson.h"
 
 #include <charconv>
+#include <cctype>
 #include <cmath>
 #include <filesystem>
 #include <limits>
@@ -260,8 +263,11 @@ std::string NormalizeRelativeAssetPath(
         pathErrorCode,
         context,
         "asset path must remain relative");
+    std::string extension = normalizedPath.extension().string();
+    for (char& character : extension)
+        character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
     Require(
-        normalizedPath.extension() == ".json",
+        extension == ".json",
         pathErrorCode,
         context,
         requireTextureAsset
@@ -873,6 +879,30 @@ Json EncodePayload(
     EditorCommandType type,
     const EditorCommandPayload& payload)
 {
+    if (const auto operation = GetEditorAssetOperation(type))
+    {
+        EditorCommandEnvelope command;
+        command.payload = payload;
+        const auto assetPath = GetEditorCommandAssetPath(command);
+        Require(assetPath.has_value(), EditorErrorCode::InvalidPayload, "asset command", "missing path");
+        Json result{{"assetPath", NormalizeRelativeAssetPath(*assetPath, "asset command.assetPath")}};
+        if (*operation == EditorAssetOperation::Modify)
+        {
+            try
+            {
+                result["changes"] = Editor::EncodeAssetChanges(
+                    std::get<ModifyAssetDocumentPayload>(payload).changes, *GetEditorAssetDocumentKind(type));
+            }
+            catch (const std::exception& error)
+            {
+                ThrowCodecError(EditorErrorCode::InvalidPayload, "asset.modify", error.what());
+            }
+        }
+        if (*operation == EditorAssetOperation::Reload)
+            result["dirtyPolicy"] = std::get<ReloadMaterialInstanceDocumentPayload>(payload).dirtyPolicy ==
+                EditorDirtyDocumentPolicy::DiscardChanges ? "discard_changes" : "require_clean";
+        return result;
+    }
     switch (type)
     {
     case EditorCommandType::ResolveSceneMaterialAsset:
@@ -1100,6 +1130,33 @@ EditorCommandPayload DecodePayload(
     EditorCommandType type,
     const Json& wire)
 {
+    if (const auto operation = GetEditorAssetOperation(type))
+    {
+        if (*operation == EditorAssetOperation::Modify)
+        {
+            RequireAllowedFields(wire, {"assetPath", "changes"}, {}, "asset.modify");
+            try
+            {
+                return ModifyAssetDocumentPayload{ReadAssetPath(wire, "assetPath", "asset.modify"),
+                    Editor::DecodeAssetChanges(wire.at("changes"), *GetEditorAssetDocumentKind(type))};
+            }
+            catch (const EditorCommandJsonCodecError&) { throw; }
+            catch (const std::exception& error)
+            {
+                ThrowCodecError(EditorErrorCode::InvalidPayload, "asset.modify", error.what());
+            }
+        }
+        if (*operation == EditorAssetOperation::Reload)
+        {
+            RequireAllowedFields(wire, {"assetPath"}, {"dirtyPolicy"}, "asset.reload");
+            return ReloadMaterialInstanceDocumentPayload{
+                ReadAssetPath(wire, "assetPath", "asset.reload"),
+                ContainsField(wire, "dirtyPolicy") ? DecodeDirtyPolicy(ReadString(wire, "dirtyPolicy", "asset.reload"))
+                    : EditorDirtyDocumentPolicy::RequireClean};
+        }
+        RequireAllowedFields(wire, {"assetPath"}, {}, "asset command");
+        return MaterialInstanceAssetPathPayload{ReadAssetPath(wire, "assetPath", "asset command")};
+    }
     switch (type)
     {
     case EditorCommandType::ResolveSceneMaterialAsset:
@@ -1465,6 +1522,12 @@ Json EncodeResultPayload(
             {"commandCount", batch->commandCount},
             {"documentRevision", batch->documentRevision}};
     }
+    if (const auto* asset = std::get_if<EditorAssetDocumentResultPayload>(&payload))
+        return Json{{"assetPath", asset->assetPath}, {"documentRevision", asset->documentRevision},
+            {"dirty", asset->dirty}, {"sourceDigest", asset->sourceDigest}, {"document", asset->document},
+            {"capabilities", asset->capabilities}, {"changedFields", asset->changedFields},
+            {"diagnostics", asset->diagnostics},
+            {"application", asset->application}, {"validationLevel", asset->validationLevel}};
     ThrowCodecError(
         EditorErrorCode::InvalidPayload,
         "EditorCommandResult.payload",
@@ -1480,6 +1543,31 @@ EditorCommandResultPayload DecodeResultPayload(
         return EditorNoPayload{};
     }
 
+    if (ContainsField(wire, "assetPath"))
+    {
+        RequireAllowedFields(wire, {"assetPath", "documentRevision", "dirty", "sourceDigest",
+            "document", "capabilities", "changedFields", "application", "validationLevel"}, {"diagnostics"},
+            "EditorAssetDocumentResultPayload");
+        EditorAssetDocumentResultPayload result;
+        result.assetPath = ReadAssetPath(wire, "assetPath", "asset result");
+        result.documentRevision = ReadUnsigned<uint64_t>(wire, "documentRevision", "asset result");
+        result.dirty = ReadBoolean(wire, "dirty", "asset result");
+        result.sourceDigest = ReadString(wire, "sourceDigest", "asset result");
+        RequireObject(wire.at("document"), "asset result.document");
+        RequireObject(wire.at("capabilities"), "asset result.capabilities");
+        Require(wire.at("changedFields").is_array(), EditorErrorCode::InvalidPayload, "asset result", "changedFields must be array");
+        result.document = wire.at("document");
+        result.capabilities = wire.at("capabilities");
+        result.changedFields = wire.at("changedFields");
+        if (wire.contains("diagnostics"))
+        {
+            Require(wire.at("diagnostics").is_array(), EditorErrorCode::InvalidPayload, "asset result", "diagnostics must be array");
+            result.diagnostics = wire.at("diagnostics");
+        }
+        result.application = ReadString(wire, "application", "asset result");
+        result.validationLevel = ReadString(wire, "validationLevel", "asset result");
+        return result;
+    }
     if (ContainsField(wire, "dirty"))
     {
         RequireAllowedFields(
@@ -1795,7 +1883,7 @@ EditorCommandEnvelope EditorCommandJsonCodec::DecodeCommandText(
 {
     try
     {
-        return DecodeCommand(Json::parse(text.begin(), text.end()));
+        return DecodeCommand(Editor::ParseStrictJson(text, 1024 * 1024));
     }
     catch (const EditorCommandJsonCodecError&)
     {

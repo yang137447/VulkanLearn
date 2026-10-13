@@ -13,6 +13,7 @@
 #include "editor/preview/materialInstancePreviewController.h"
 #include "editor/service/materialInstanceDocumentService.h"
 #include "editor/service/sceneDocumentService.h"
+#include "editor/service/assetCommandExecutor.h"
 #include "editor/ui/materialInstanceEditorView.h"
 
 namespace VL::Editor
@@ -52,6 +53,9 @@ public:
     void NotifyWorldChanged(std::string_view worldPath, uint64_t generation);
 
     void Submit(EditorCommandEnvelope command) override;
+    // Console/AI host 直接使用同一个 bus；结果含结构化文档数据，不解析 UI 文案。
+    EditorCommandSubmission SubmitJson(std::string_view text);
+    std::optional<EditorCommandResult> GetCommandResult(EditorCommandId id) const;
 
     // 给 UiSubsystem 的全局快捷键入口使用；实际保存仍经由中央 CommandBus。
     bool SubmitSaveActiveDocument();
@@ -141,6 +145,7 @@ private:
     std::unique_ptr<EditorCommandBus> commandBus;
     std::unique_ptr<MaterialInstanceDocumentService> service;
     std::unique_ptr<SceneDocumentService> sceneDocuments;
+    std::unique_ptr<AssetCommandExecutor> assetDocuments;
     EditorUi::MaterialInstanceEditorSnapshot snapshot;
     std::string worldPath;
     std::string diagnostic;

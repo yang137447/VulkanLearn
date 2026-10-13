@@ -4,6 +4,10 @@
 
 ## Status
 
+The facade also hosts Scene/Mesh/Texture document commands through the shared
+[asset modification API](asset-modify-api.md). Their drafts and Save Content
+entries have separate owners; MI parameters, bindings and preview remain owned here.
+
 **Current status (2026-10-10): RmlUi workspace, renderer-independent editor baseline, the
 `renderMode`/`shadingModel`/`cullMode` MI editing path, renderer-owned numeric
 live preview, and renderer-owned render-state live replacement are connected.

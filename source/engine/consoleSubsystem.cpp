@@ -11,9 +11,10 @@ namespace VL
 ConsoleSubsystem::ConsoleSubsystem() = default;
 ConsoleSubsystem::~ConsoleSubsystem() = default;
 
-RuntimeResult<void> ConsoleSubsystem::Initialize(CommandBus& commandBus)
+RuntimeResult<void> ConsoleSubsystem::Initialize(CommandBus& commandBus,
+    Editor::MaterialInstanceEditorRuntime* editorRuntime)
 {
-    debugConsole = std::make_unique<DebugConsole>(commandBus);
+    debugConsole = std::make_unique<DebugConsole>(commandBus, editorRuntime);
     debugConsole->Initialize();
     return RuntimeResult<void>::Success();
 }

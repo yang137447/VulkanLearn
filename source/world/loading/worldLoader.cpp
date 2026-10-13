@@ -70,13 +70,14 @@ RuntimeResult<WorldBuildPlan> WorldLoader::Load(const std::string& scenePath) co
 
 RuntimeResult<WorldBuildPlan> WorldLoader::Load(
     const std::string& scenePath,
-    const nlohmann::json& extraObjects) const
+    const nlohmann::json& extraObjects,
+    const nlohmann::json& sceneDocument) const
 {
     try
     {
         WorldBuildPlan buildPlan;
         buildPlan.scenePath = scenePath;
-        buildPlan.sceneJson = LoadSceneJson(scenePath);
+        buildPlan.sceneJson = sceneDocument.is_null() ? LoadSceneJson(scenePath) : sceneDocument;
 
         // 附加对象在**校验之前**并入 objects，因此它们走的是与场景作者写的对象
         // 完全相同的路径。这里刻意不做"部分容错"：形状不对就直接抛，

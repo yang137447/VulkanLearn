@@ -72,7 +72,8 @@ public:
         const std::string& scenePath,
         RenderGraph& pipelineContractGraph,
         const MaterialDefinitionReloadBatch* materialDefinitionReload = nullptr,
-        const nlohmann::json& extraSceneObjects = nlohmann::json::array());
+        const nlohmann::json& extraSceneObjects = nlohmann::json::array(),
+        const nlohmann::json& sceneDocument = nullptr);
 
 private:
     WorldManager& worldManager;

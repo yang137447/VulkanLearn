@@ -2664,6 +2664,22 @@ TEST_F(EditorUiTest, SaveAllListsSceneAndInactiveMaterialWithoutSavingOnOpen)
         "Common/MI_other.json");
 }
 
+TEST_F(EditorUiTest, SaveContentRoutesMeshAndTextureToTheirDocumentOwners)
+{
+    snapshot.modifiedDocuments = {
+        {"Common/SM_model.json", EditorAssetKind::Mesh, 4, EditorDocumentStatus::Dirty, {}},
+        {"Common/T_image.json", EditorAssetKind::Texture, 8, EditorDocumentStatus::Dirty, {}}};
+    Refresh();
+    panel->RequestSaveAll();
+    EXPECT_TRUE(sink.commands.empty());
+    Click("#save-confirm");
+    ASSERT_EQ(sink.commands.size(), 2u);
+    EXPECT_EQ(sink.commands[0].type, EditorCommandType::SaveMeshDocument);
+    EXPECT_EQ(sink.commands[0].expectedDocumentRevision, 4);
+    EXPECT_EQ(sink.commands[1].type, EditorCommandType::SaveTextureDocument);
+    EXPECT_EQ(sink.commands[1].expectedDocumentRevision, 8);
+}
+
 TEST_F(EditorUiTest, SaveDialogKeepsLongPathsAndConfirmationInsideSmallAndLargeWindows)
 {
     snapshot.modifiedDocuments.clear();

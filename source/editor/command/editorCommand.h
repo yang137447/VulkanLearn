@@ -3,10 +3,12 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <map>
 #include <string>
 #include <string_view>
 #include <variant>
 #include <vector>
+#include <nlohmann/json.hpp>
 
 namespace VL
 {
@@ -46,6 +48,12 @@ enum class EditorCommandType
     ValidateMaterialInstanceDocument,
     SaveMaterialInstanceDocument,
     SaveSceneDocument,
+    GetSceneDocument, GetSceneCapabilities, ModifySceneDocument,
+    ValidateSceneDocument, RevertSceneDocument, ReloadSceneDocument,
+    GetMeshDocument, GetMeshCapabilities, ModifyMeshDocument,
+    ValidateMeshDocument, SaveMeshDocument, RevertMeshDocument, ReloadMeshDocument,
+    GetTextureDocument, GetTextureCapabilities, ModifyTextureDocument,
+    ValidateTextureDocument, SaveTextureDocument, RevertTextureDocument, ReloadTextureDocument,
     ConnectMaterialInstancePreview,
     DisconnectMaterialInstancePreview,
     ApplyMaterialInstancePreview,
@@ -218,6 +226,28 @@ struct MaterialInstanceAssetPathPayload
     std::string assetPath;
 };
 
+enum class EditorAssetDocumentKind { Scene, Mesh, Texture };
+enum class EditorAssetOperation { GetDocument, GetCapabilities, Modify, Validate, Save, Revert, Reload };
+using EditorAssetFieldValue = std::variant<std::string, bool, double,
+    std::array<double, 3>, std::vector<std::string>, std::map<std::string, std::string>>;
+
+// producer 提交完整作者值；对象身份与槽序号独立于字段，禁止任意 JSON Pointer 写入。
+struct EditorAssetFieldChange
+{
+    std::string field;
+    std::optional<std::string> objectIdentity;
+    std::optional<uint32_t> slotIndex;
+    std::optional<std::string> expectedSlotName;
+    bool reset = false;
+    EditorAssetFieldValue value = std::string{};
+};
+
+struct ModifyAssetDocumentPayload
+{
+    std::string assetPath;
+    std::vector<EditorAssetFieldChange> changes;
+};
+
 struct CloseMaterialInstanceAssetPayload
 {
     std::string assetPath;
@@ -342,7 +372,8 @@ using EditorCommandPayload = std::variant<
     ApplyMaterialInstancePreviewPayload,
     GetEditorCommandResultPayload,
     ListEditorEventsPayload,
-    ExecuteEditorCommandBatchPayload>;
+    ExecuteEditorCommandBatchPayload,
+    ModifyAssetDocumentPayload>;
 
 // 可跨 RmlUi、Console、AI 和测试传递的稳定命令包；不携带指针、callback 或 Vulkan 对象。
 struct EditorCommandEnvelope
@@ -368,10 +399,26 @@ struct EditorBatchResultPayload
     EditorDocumentRevision documentRevision = 0;
 };
 
+// 资产协议返回无截断的可编辑投影与能力；不包含 data、World 或 GPU 身份。
+struct EditorAssetDocumentResultPayload
+{
+    std::string assetPath;
+    EditorDocumentRevision documentRevision = 0;
+    bool dirty = false;
+    std::string sourceDigest;
+    nlohmann::json document = nlohmann::json::object();
+    nlohmann::json capabilities = nlohmann::json::object();
+    nlohmann::json changedFields = nlohmann::json::array();
+    nlohmann::json diagnostics = nlohmann::json::array();
+    std::string application = "save_and_reload";
+    std::string validationLevel = "document_and_references";
+};
+
 using EditorCommandResultPayload = std::variant<
     EditorNoPayload,
     EditorDocumentResultPayload,
-    EditorBatchResultPayload>;
+    EditorBatchResultPayload,
+    EditorAssetDocumentResultPayload>;
 
 // 结果是所有 producer 共同消费的状态，不表达 executor 的内部对象。
 struct EditorCommandResult
@@ -430,5 +477,7 @@ std::optional<EditorErrorCode> ValidateEditorCommandEnvelope(
     const EditorCommandEnvelope& command);
 std::optional<EditorErrorCode> ValidateEditorCommandBatch(
     const ExecuteEditorCommandBatchPayload& batch);
+std::optional<EditorAssetDocumentKind> GetEditorAssetDocumentKind(EditorCommandType type) noexcept;
+std::optional<EditorAssetOperation> GetEditorAssetOperation(EditorCommandType type) noexcept;
 
 } // namespace VL

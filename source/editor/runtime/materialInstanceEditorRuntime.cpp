@@ -1,4 +1,5 @@
 #include "editor/runtime/materialInstanceEditorRuntime.h"
+#include "editor/command/editorCommandJsonCodec.h"
 
 #include "editor/service/materialInstanceDocumentService.h"
 
@@ -175,6 +176,7 @@ RuntimeResult<void> MaterialInstanceEditorRuntime::Initialize(Config configValue
                     true});
         }
         sceneDocuments = std::make_unique<SceneDocumentService>(service->GetResourceRoot());
+        assetDocuments = std::make_unique<AssetCommandExecutor>(service->GetResourceRoot(), *sceneDocuments);
         initialized = true;
         diagnostic.clear();
         snapshot = EditorUi::MaterialInstanceEditorSnapshot{};
@@ -223,6 +225,7 @@ void MaterialInstanceEditorRuntime::Shutdown() noexcept
     queuedAutomaticPreviewConnectionAssetPath.reset();
     queuedAutomaticPreviewApplyAssetPath.reset();
     service.reset();
+    assetDocuments.reset();
     sceneDocuments.reset();
     commandBus.reset();
     previewController.reset();
@@ -327,6 +330,7 @@ void MaterialInstanceEditorRuntime::NotifyWorldChanged(
     {
         std::string error;
         if (!sceneDocuments->Open(worldPath, error)) diagnostic = error;
+        else sceneDocuments->NotifyWorldLoaded(worldPath);
     }
     if (worldPath.empty() || worldGeneration == 0)
     {
@@ -356,6 +360,16 @@ void MaterialInstanceEditorRuntime::NotifyWorldChanged(
 void MaterialInstanceEditorRuntime::Submit(EditorCommandEnvelope command)
 {
     SubmitInternal(std::move(command));
+}
+
+EditorCommandSubmission MaterialInstanceEditorRuntime::SubmitJson(std::string_view text)
+{
+    return SubmitInternal(EditorCommandJsonCodec::DecodeCommandText(text));
+}
+
+std::optional<EditorCommandResult> MaterialInstanceEditorRuntime::GetCommandResult(EditorCommandId id) const
+{
+    return commandBus ? commandBus->GetResult(id) : std::nullopt;
 }
 
 bool MaterialInstanceEditorRuntime::SubmitSaveActiveDocument()
@@ -427,9 +441,11 @@ EditorCommandSubmission MaterialInstanceEditorRuntime::SubmitAutomaticPreviewCom
 EditorCommandResult MaterialInstanceEditorRuntime::ExecuteCommand(
     const EditorCommandEnvelope& command)
 {
-    if (command.type == EditorCommandType::SaveSceneDocument && sceneDocuments)
+    if (GetEditorAssetDocumentKind(command.type) && assetDocuments)
     {
-        auto result = sceneDocuments->Save(command);
+        auto result = assetDocuments->Execute(command);
+        if (const auto* asset = std::get_if<EditorAssetDocumentResultPayload>(&result.payload))
+            commandBus->SetDocumentRevision(asset->assetPath, asset->documentRevision);
         SetStatus(result.message);
         return result;
     }
@@ -1417,9 +1433,9 @@ void MaterialInstanceEditorRuntime::RefreshModifiedDocuments()
                 if (tab.assetPath == asset.assetPath) asset.dirty = tab.dirty;
         }
     }
-    if (sceneDocuments)
+    if (assetDocuments)
     {
-        const auto scenes = sceneDocuments->ModifiedDocuments();
+        const auto scenes = assetDocuments->ModifiedDocuments();
         snapshot.modifiedDocuments.insert(snapshot.modifiedDocuments.end(), scenes.begin(), scenes.end());
     }
 }
@@ -1428,6 +1444,8 @@ void MaterialInstanceEditorRuntime::RecordSaveFeedback(
     const EditorCommandEnvelope& command, const EditorCommandResult& result)
 {
     if (command.type != EditorCommandType::SaveSceneDocument &&
+        command.type != EditorCommandType::SaveMeshDocument &&
+        command.type != EditorCommandType::SaveTextureDocument &&
         command.type != EditorCommandType::SaveMaterialInstanceDocument) return;
     const auto path = GetEditorCommandAssetPath(command);
     if (!path) return;

@@ -121,6 +121,8 @@ public:
     // 只由 EngineLoop 在稳定帧边界调用，避免 UI 回调触碰 live MaterialInstance。
     void TickMaterialInstanceEditor();
     Editor::SceneDocumentService* GetSceneDocuments() const;
+    Editor::MaterialInstanceEditorRuntime* GetEditorCommandRuntime() const
+    { return materialInstanceEditorRuntime.get(); }
     Editor::EditorThumbnailLibrary* GetThumbnailLibrary() const { return thumbnailLibrary.get(); }
     bool CanRenderThumbnails() const
     { return developerUiVisible && !sceneViewportInputActive && !editorPointerCaptured; }

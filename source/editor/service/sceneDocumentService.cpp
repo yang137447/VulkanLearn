@@ -1,6 +1,7 @@
 #include "editor/service/sceneDocumentService.h"
 
 #include <fstream>
+#include <cctype>
 #include <stdexcept>
 #include "render/lighting/physicalLighting.h"
 #include "render/camera/cameraExposure.h"
@@ -9,31 +10,6 @@ namespace VL::Editor
 {
 namespace
 {
-void ValidateManagedFields(const nlohmann::json& scene)
-{
-    // 这里只复核编辑器管理的作者参数；模型引用未被编辑，不在保存时重新导入整个关卡。
-    ValidateWorldUnit(scene);
-    if (scene.value("type", "") != "scene" || scene.at("description").get<std::string>().empty() ||
-        !scene.at("objects").is_array())
-        throw std::runtime_error("Invalid scene document.");
-    for (const auto& object : scene.at("objects"))
-    {
-        const auto type = object.at("type").get<std::string>();
-        if (type == "directionalLight" || type == "pointLight" ||
-            type == "spotLight" || type == "squareAreaLight")
-            ReadCanonicalLightIntensity(object);
-        if (type == "camera")
-        {
-            ReadCameraExposure(object);
-            const double fov = object.at("fov"), nearClip = object.at("near_clip"),
-                farClip = object.at("far_clip");
-            if (!std::isfinite(fov) || !std::isfinite(nearClip) || !std::isfinite(farClip) ||
-                fov <= 0 || fov >= 179 || nearClip <= 0 || farClip <= nearClip)
-                throw std::runtime_error("Invalid camera projection.");
-        }
-    }
-}
-
 nlohmann::json Vector(const Eigen::Vector3f& value)
 {
     return nlohmann::json::array({value.x(), value.y(), value.z()});
@@ -77,30 +53,29 @@ void WriteIntensity(nlohmann::json& object, float canonical)
 } // namespace
 
 SceneDocumentService::SceneDocumentService(std::filesystem::path root)
-    : resourceRoot(std::filesystem::weakly_canonical(std::move(root)))
+    : AssetDocumentService(std::move(root), EditorAssetDocumentKind::Scene)
 {
 }
 
 bool SceneDocumentService::IsPreviewScene(const std::string& path)
 {
-    return std::filesystem::path(path).filename() == "SC_model_preview.json";
+    std::string filename = std::filesystem::path(path).filename().string();
+    for (char& character : filename)
+        character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+    return filename == "sc_model_preview.json";
 }
 
 std::string SceneDocumentService::Normalize(const std::string& path) const
 {
-    const auto absolute = std::filesystem::weakly_canonical(
-        std::filesystem::path(path).is_absolute() ? std::filesystem::path(path)
-        : resourceRoot / std::filesystem::path(path));
-    const auto relative = absolute.lexically_relative(resourceRoot);
-    if (relative.empty() || relative.is_absolute() || *relative.begin() == ".." ||
-        relative.extension() != ".json")
-        throw std::runtime_error("Scene path must remain inside the resource root.");
-    return relative.generic_string();
+    // 已加载 World 的内部地址是绝对路径；外部协议仍由基类只接受资源根相对路径。
+    const auto input = std::filesystem::path(path);
+    return AssetDocumentService::Normalize(input.is_absolute()
+        ? input.lexically_relative(resourceRoot).generic_string() : path);
 }
 
 std::filesystem::path SceneDocumentService::Resolve(const std::string& path) const
 {
-    return resourceRoot / Normalize(path);
+    return AssetDocumentService::Resolve(Normalize(path));
 }
 
 bool SceneDocumentService::Open(const std::string& path, std::string& error)
@@ -112,23 +87,17 @@ bool SceneDocumentService::Open(const std::string& path, std::string& error)
         const auto existing = documents.find(key);
         if (existing != documents.end() && existing->second.draft != existing->second.baseline)
             return true;
-        Document document;
-        document.absolutePath = Resolve(key);
-        const auto before = Persistence::MaterialInstancePersistence::ReadSnapshot(document.absolutePath);
-        if (!before.Succeeded()) throw std::runtime_error(before.errorMessage);
-        std::ifstream file(document.absolutePath);
-        document.baseline = nlohmann::json::parse(file);
-        if (document.baseline.value("type", "") != "scene")
-            throw std::runtime_error("The asset is not a scene document.");
-        ValidateManagedFields(document.baseline);
-        const auto after = Persistence::MaterialInstancePersistence::ReadSnapshot(document.absolutePath);
-        if (!after.Succeeded() || before.digest != after.digest)
-            throw std::runtime_error("Scene source changed while opening.");
-        document.digest = before.digest;
-        document.draft = document.baseline;
-        if (existing != documents.end()) document.revision = existing->second.revision + 1;
-        documents[key] = std::move(document);
-        return true;
+        if (existing == documents.end()) return AssetDocumentService::Open(key, error);
+        EditorCommandEnvelope reload;
+        reload.commandId = 1;
+        reload.type = EditorCommandType::ReloadSceneDocument;
+        reload.expectedDocumentRevision = existing->second.revision;
+        reload.payload = ReloadMaterialInstanceDocumentPayload{key, EditorDirtyDocumentPolicy::RequireClean};
+        const bool awaitingWorldLoad = existing->second.awaitingWorldLoad;
+        const auto result = Execute(reload);
+        if (result.status == EditorCommandStatus::Succeeded) documents.at(key).awaitingWorldLoad = awaitingWorldLoad;
+        if (result.status != EditorCommandStatus::Succeeded) error = result.message;
+        return result.status == EditorCommandStatus::Succeeded;
     }
     catch (const std::exception& exception)
     {
@@ -163,6 +132,11 @@ bool SceneDocumentService::PrepareActorEdit(const std::string& path,
         if (IsPreviewScene(path)) return true;
         const auto key = Normalize(path);
         if (documents.count(key) == 0 && !Open(path, error)) return false;
+        if (documents.at(key).awaitingWorldLoad)
+        {
+            error = "Scene asset edits are staged; reload the scene before editing its live actors.";
+            return false;
+        }
         if (FindActor(documents.at(key).draft, identity)) return true;
         error = "Scene actor identity is missing or ambiguous in the document.";
     }
@@ -176,7 +150,7 @@ void SceneDocumentService::RecordActorEdit(const EditorUi::EditorSceneActorSnaps
     if (IsPreviewScene(actor.scenePath)) return;
     auto& document = documents.at(Normalize(actor.scenePath));
     auto& object = *FindActor(document.draft, actor.identity);
-    const auto previous = document.draft;
+    auto previous = document.draft;
     using P = EditorActorProperty;
     const auto* baselineActor = FindActor(document.baseline, actor.identity);
     if (const char* field = CameraExposureField(edit.property))
@@ -232,82 +206,28 @@ void SceneDocumentService::RecordActorEdit(const EditorUi::EditorSceneActorSnaps
         object["shadow"].erase("castShadows");
         if (object["shadow"].empty()) object.erase("shadow");
     }
+    if (document.standardEdited)
+    {
+        // API 草稿可能尚未应用到 live World；UI 单分量编辑不能用旧 World 的其它分量覆盖它。
+        const char* field = edit.property == P::Position ? "position" : edit.property == P::Rotation ? "rotation"
+            : edit.property == P::Scale ? "scale" : edit.property == P::Color ? "color" : nullptr;
+        if (field)
+        {
+            const auto component = object.at(field).at(edit.component);
+            object[field] = FindActor(previous, actor.identity)->at(field);
+            object[field][edit.component] = component;
+        }
+    }
     if (document.draft == previous) return;
     document.edits.push_back(edit);
-    ++document.revision;
-    document.status = document.draft == document.baseline
-        ? EditorUi::EditorDocumentStatus::Clean : EditorUi::EditorDocumentStatus::Dirty;
-    document.message.clear();
-    if (document.status == EditorUi::EditorDocumentStatus::Clean) document.edits.clear();
+    auto candidate = std::move(document.draft);
+    document.draft = previous;
+    PublishDraft(document, std::move(candidate));
 }
 
 EditorCommandResult SceneDocumentService::Save(const EditorCommandEnvelope& command)
 {
-    EditorCommandResult result;
-    result.commandId = command.commandId;
-    result.status = EditorCommandStatus::Failed;
-    try
-    {
-        const auto path = std::get<MaterialInstanceAssetPathPayload>(command.payload).assetPath;
-        auto& document = documents.at(Normalize(path));
-        result.documentRevision = document.revision;
-        if (command.expectedDocumentRevision != document.revision)
-        {
-            result.status = EditorCommandStatus::Rejected;
-            result.errorCode = EditorErrorCode::StaleDocumentRevision;
-            result.message = "Scene changed after the save confirmation was opened.";
-            return result;
-        }
-        if (Resolve(path) != document.absolutePath)
-            throw std::runtime_error("Scene source path changed after opening.");
-        ValidateManagedFields(document.draft);
-        const auto saved = Persistence::MaterialInstancePersistence::SaveTextIfUnchanged(
-            document.absolutePath, document.digest, document.draft.dump(4) + "\n");
-        if (!saved.Succeeded())
-        {
-            document.status = saved.HasSourceConflict() ? EditorUi::EditorDocumentStatus::SourceChanged
-                : EditorUi::EditorDocumentStatus::SaveFailed;
-            document.message = saved.errorMessage;
-            result.errorCode = saved.HasSourceConflict() ? EditorErrorCode::SourceChanged
-                : EditorErrorCode::AtomicWriteFailed;
-            result.message = document.message;
-            return result;
-        }
-        document.baseline = document.draft;
-        document.digest = saved.newDigest;
-        document.edits.clear();
-        document.status = EditorUi::EditorDocumentStatus::Clean;
-        document.message.clear();
-        result.documentRevision = ++document.revision;
-        result.status = EditorCommandStatus::Succeeded;
-        result.message = "Saved " + path;
-    }
-    catch (const std::exception& exception)
-    {
-        result.errorCode = EditorErrorCode::ValidationFailed;
-        result.message = exception.what();
-        const auto path = GetEditorCommandAssetPath(command);
-        if (path)
-        {
-            auto found = documents.find(*path);
-            if (found != documents.end())
-            {
-                found->second.status = EditorUi::EditorDocumentStatus::SaveFailed;
-                found->second.message = result.message;
-            }
-        }
-    }
-    return result;
-}
-
-std::vector<EditorUi::EditorModifiedDocumentSnapshot> SceneDocumentService::ModifiedDocuments() const
-{
-    std::vector<EditorUi::EditorModifiedDocumentSnapshot> result;
-    for (const auto& entry : documents)
-        if (entry.second.draft != entry.second.baseline)
-            result.push_back({entry.first, EditorUi::EditorAssetKind::Scene, entry.second.revision,
-                entry.second.status, entry.second.message});
-    return result;
+    return Execute(command);
 }
 
 std::vector<EditorActorPropertyEdit> SceneDocumentService::ReplayEdits(
@@ -318,6 +238,7 @@ std::vector<EditorActorPropertyEdit> SceneDocumentService::ReplayEdits(
     {
         if (IsPreviewScene(path)) return {};
         const auto found = documents.find(Normalize(path));
+        if (found != documents.end() && found->second.replayViaDraft) return {};
         if (found == documents.end() || found->second.edits.empty()) return {};
         const auto source = Persistence::MaterialInstancePersistence::ReadSnapshot(found->second.absolutePath);
         if (!source.Succeeded() || source.digest != found->second.digest ||
@@ -335,5 +256,35 @@ std::vector<EditorActorPropertyEdit> SceneDocumentService::ReplayEdits(
     }
     catch (const std::exception& exception) { error = exception.what(); }
     return {};
+}
+
+nlohmann::json SceneDocumentService::DraftForWorldLoad(const std::string& path, std::string& error)
+{
+    error.clear();
+    if (IsPreviewScene(path)) return nullptr;
+    try
+    {
+        const auto key = Normalize(path);
+        const auto found = documents.find(key);
+        if (found == documents.end() || !found->second.replayViaDraft) return nullptr;
+        const auto source = Persistence::MaterialInstancePersistence::ReadSnapshot(found->second.absolutePath);
+        if (!source.Succeeded() || source.digest != found->second.digest ||
+            Resolve(key) != found->second.absolutePath)
+        {
+            found->second.status = EditorUi::EditorDocumentStatus::SourceChanged;
+            found->second.message = "Scene source changed; retained draft cannot be loaded";
+            error = found->second.message;
+            return nullptr;
+        }
+        return found->second.draft;
+    }
+    catch (const std::exception& exception) { error = exception.what(); return nullptr; }
+}
+
+void SceneDocumentService::NotifyWorldLoaded(const std::string& path)
+{
+    if (IsPreviewScene(path)) return;
+    const auto found = documents.find(Normalize(path));
+    if (found != documents.end()) found->second.awaitingWorldLoad = false;
 }
 } // namespace VL::Editor

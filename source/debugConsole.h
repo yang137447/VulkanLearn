@@ -1,15 +1,19 @@
 #pragma once
+#include <cstdint>
 #include <string>
+#include <vector>
 
 namespace VL
 {
 class CommandBus;
+namespace Editor { class MaterialInstanceEditorRuntime; }
 }
 
 class DebugConsole
 {
 public:
-    explicit DebugConsole(VL::CommandBus& commandBus);
+    explicit DebugConsole(VL::CommandBus& commandBus,
+        VL::Editor::MaterialInstanceEditorRuntime* editorRuntime = nullptr);
 
     void Initialize();
     void Update();
@@ -28,4 +32,7 @@ private:
 
     VL::CommandBus& commandBus;
     std::string currentLine;
+    // 仅借用 GT 文档 facade；Console 不执行资产服务，也不翻译为 RuntimeCommand。
+    VL::Editor::MaterialInstanceEditorRuntime* editorRuntime = nullptr;
+    std::vector<uint64_t> pendingEditorResults;
 };
