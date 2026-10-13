@@ -23,7 +23,7 @@
 
 | 可执行文件 | 测试数 | 覆盖 |
 | --- | --- | --- |
-| `editor_ui_tests` | 408 | 编辑器 UI：组件、停靠、布局持久化、内容浏览器、JSON 资产库、actor 树、属性编辑、场景持久化、保存确认、可视化、颜色转换、右键菜单 |
+| `editor_ui_tests` | 418 | 编辑器 UI：组件、停靠、布局持久化、内容浏览器、JSON 资产库、actor 树、属性编辑、场景持久化、保存确认、可视化、颜色转换、右键菜单 |
 | `vl_offline_adapter_tests` | 101 | 离线场景/网格/显示/相机适配 |
 | `editor_viewport_tests` | 41 | 视口几何、命中、坐标映射、aspect、坐标轴投影及编辑器网格 |
 | `vl_offline_coordinator_tests` | 13 | 离线会话协调 |
@@ -32,7 +32,7 @@
 | `material_instance_editor_tests` | 7 | MI 命令/文档服务 |
 | `material_instance_editor_production_tests` | 6 | MI 生产路径（预览边界、直接 render-state 路由、场景/非活动 MI 独立保存） |
 
-`editor_ui_tests` 里 23 个套件；`ctest` 用套件前缀选择：
+`editor_ui_tests` 里 24 个套件；`ctest` 用套件前缀选择：
 
 ```powershell
 # 编辑器 UI 选择集（缩略图、预览等另有专项套件；全量可直接运行 editor_ui_tests）
@@ -50,10 +50,12 @@ ctest --test-dir build -R "MaterialInstanceEditor" --output-on-failure
 缩略图专项回归（注册在 `editor_ui_tests`，不需要 Vulkan）：
 
 ```powershell
-ctest --test-dir build -R "^(ThumbnailLibraryTest|EditorThumbnailGraph)\." --output-on-failure
+ctest --test-dir build -R "^(ThumbnailJobTest|ThumbnailLibraryTest|EditorThumbnailGraph)\." --output-on-failure
 ```
 
 覆盖内容缓存、可见请求取消、Refresh/重初始化代际、暂停与单次领取，以及离屏图派生。
+`ThumbnailJobTest` 的 8 项验证非阻塞轮询、单次消费、陈旧结果/错误丢弃、
+当前错误传播、单槽并发上限、缓存重建转移任务与退出收口；该专项共 26 项。
 模型/MI 实际出图另用 validation 构建核对真实资产；2026-10-13 已验证青/红遮阳布材质球、
 `SM_vilking_room`、窗口最大化后继续出图及 File → Exit 正常 teardown，无 Vulkan validation 错误。
 当轮 `editor_ui_tests` 全量连续两遍均为 347 项、343 通过、4 跳过。
@@ -96,6 +98,38 @@ MI 三套共 23 项及 viewport 41 项通过。构建、文档校验、架构审
 自动曝光完整参数排版、窄 Details 滚动到目标灰度、所属 Scene 出现在 Save Content 列表、
 Cancel 与 File→Exit 正常 teardown。未将验收曝光写入正式场景；
 physical 作者配置保留与曝光写盘由模块测试覆盖，未做相应桌面保存操作。
+
+2026-10-13 Debug 缩略图性能修复：GDB 抓到 GT 在预览球导入/MikkTSpace、
+材质 shader 候选编译和 2048×2048 PNG 解码中阻塞。相同 `SC_sphere_array`、
+Debug 无优化、validation 开启、两线程配置，修复前编辑器开启为 1–6 FPS，
+`--no-dev-ui` 为 70–90 FPS；异步 CPU 准备后，从第 10 秒起 36 次每秒窗口标题采样
+为 30–66 FPS，平均 59.1，任务完成后为 64–66。该采样不是逐帧时间分位数，
+首次环境/GPU 准备及贴图上传/管线创建仍可有瞬时停顿。CPU 解码峰值 RSS 为
+1063 MB，完成后约 473 MB；未将任意 MI/模型贴图永久缓存在会话中。
+1280×720 截图载荷完整，场景与浏览器正常出图，无 Vulkan validation 错误，
+窗口关闭退出码为 0，日志确认 teardown 完成。
+
+最终 `editor_ui_tests` 全量连续两遍均为 416 项，412 通过、4 权限跳过；
+缩略图与纹理专项 30 项连续两遍通过，backend 42 项与 shader build integration
+8 项通过。全部目标编译、文档校验与架构边界审计通过。
+
+2026-10-13 移动观察相机的独立性能修复：内容浏览器只显示 Common/Maps 文件夹、
+选中网格时，启用相对鼠标并旋转可从约 65 FPS 降至持续 5 FPS，停止移动/释放捕获
+仍不恢复。GDB 两次采样落在工作区布局/文字测量，`DirtyLayout` 断点进一步钉住
+`RefreshActorVisualization → SetMarkup(viewport-actor-icons) → SetInnerRML`。
+投影坐标进入整段 markup，导致节点替换；浮点末位变化让刷新继续发生。
+修复后图标保留固定盒，线段保留未裁剪拓扑槽位，逐帧仅改 transform/visibility。
+相同 Debug、validation、双线程、1280×720 实窗多次旋转后保持约 64–65 FPS；
+包含捕获及旋转操作的 25 次每秒标题采样为 53–65，平均 60.84。
+这是标题采样，不能视为连续运动的逐帧耗时分位数。
+新增两项真实 RmlUi 回归覆盖观察移动的零布局/节点保持/变换命中，
+以及选中点光跨近面与出屏后的固定线段槽位。全量连续两遍均为 418 项、
+414 通过、4 权限跳过；既有真实指针双击回归也通过。
+实窗另核对移动后的图标选择、作者 Camera 双击取景/视锥和点光双击取景/位置圆；
+File→Exit 日志确认 teardown 完成，无 Vulkan validation 错误。该验收未保存场景修改。
+提交前最终验证脚本的构建/架构审计通过；全量 CTest 759 项中 748 通过、
+5 权限跳过，仍是上文记录的 6 项 `RuntimeControlAssets` 读取已删除页面失败。
+脚本在 CTest 处停止，后续三个 Vulkan 事务测试未在此次提交前检查中执行。
 
 ## 改动 → 验证
 

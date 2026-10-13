@@ -2109,14 +2109,22 @@ TEST_F(EditorUiTest, HelperPointerDoubleClickSurvivesSelectedLinesAppearing)
     AddActor(CameraActor("Shot"));
     Click("#workspace-viewport-tab");
     SettleOutliner();
+    // RmlUi 在 Render 更新 transform state；真实窗口在每次指针输入前已经画过上一帧。
+    context->Render();
     auto* icon = document->QuerySelector("#viewport-actor-overlay [data-action=viewport-actor]");
     ASSERT_NE(icon, nullptr);
-    const auto position = icon->GetAbsoluteOffset(Rml::BoxArea::Content);
-    context->ProcessMouseMove(int(position.x + 6), int(position.y + 6), 0);
+    // transform 不改变布局 offset；灯在观察方向中心，指针坐标取视口实际中心。
+    auto* surface = document->GetElementById("editor-viewport-surface");
+    const auto position = surface->GetAbsoluteOffset(Rml::BoxArea::Content);
+    const auto size = surface->GetBox().GetSize(Rml::BoxArea::Content);
+    context->ProcessMouseMove(int(position.x + size.x * 0.5f),
+        int(position.y + size.y * 0.5f), 0);
     context->ProcessMouseButtonDown(0, 0);
     context->ProcessMouseButtonUp(0, 0);
+    ASSERT_EQ(selectionSink.selectedActorIdentity, light.identity);
     snapshot.selectedActorIdentity = selectionSink.selectedActorIdentity;
     Refresh();
+    context->Render();
     ASSERT_EQ(document->QuerySelector("#viewport-actor-overlay [data-action=viewport-actor]"), icon);
     context->ProcessMouseButtonDown(0, 0);
     context->ProcessMouseButtonUp(0, 0);
@@ -2166,6 +2174,110 @@ TEST_F(EditorUiTest, LightHelperIconSelectsTheActorAndNeverClaimsScenePicking)
     Click("#viewport-actor-visuals");
     EXPECT_EQ(document->GetElementById("viewport-actor-icons")->GetNumChildren(), 0);
     EXPECT_EQ(document->GetElementById("viewport-actor-lines")->GetNumChildren(), 0);
+}
+
+TEST_F(EditorUiTest, ObserverMotionMovesHelperHitTargetWithoutRelayoutOrNodeReplacement)
+{
+    auto light = PointLightActor("Key", 250, 0);
+    light.position = light.light.position = Eigen::Vector3f(0, 0, -20);
+    AddActor(light);
+    auto camera = CameraActor("Shot");
+    camera.hasViewportCamera = true;
+    camera.viewportCamera = camera.camera;
+    AddActor(camera);
+    Click("#workspace-viewport-tab");
+    SettleOutliner();
+    auto* icon = document->QuerySelector("#viewport-actor-icons [data-index='0']");
+    ASSERT_NE(icon, nullptr);
+    const std::string originalTransform = icon->GetLocalProperty("transform")->ToString();
+    static Rml::ElementInstancerGeneric<LayoutCounterElement> instancer;
+    auto counter = instancer.InstanceElement(document, "div", {});
+    counter->SetInstancer(&instancer);
+    auto* observed = static_cast<LayoutCounterElement*>(counter.get());
+    counter->SetProperty("position", "absolute");
+    counter->SetProperty("width", "1px");
+    counter->SetProperty("height", "1px");
+    document->AppendChild(std::move(counter));
+    Refresh();
+    const auto layouts = observed->layouts;
+    ASSERT_GT(layouts, 0u);
+    for (int frame = 1; frame <= 20; ++frame)
+    {
+        actors[1].viewportCamera.position.x() = frame * 0.1f;
+        PublishActors();
+        Refresh();
+        context->Render();
+        EXPECT_EQ(document->QuerySelector("#viewport-actor-icons [data-index='0']"), icon);
+        EXPECT_EQ(observed->layouts, layouts);
+        EXPECT_FLOAT_EQ(icon->GetProperty<float>("left"), 0);
+        EXPECT_FLOAT_EQ(icon->GetProperty<float>("top"), 0);
+    }
+    EXPECT_NE(icon->GetLocalProperty("transform")->ToString(), originalTransform);
+    // 在移动后的实际屏幕坐标拾取图标：布局盒留在原点，但 RmlUi 命中必须跟随 transform。
+    auto* surface = document->GetElementById("editor-viewport-surface");
+    const auto origin = surface->GetAbsoluteOffset(Rml::BoxArea::Content);
+    const auto size = surface->GetBox().GetSize(Rml::BoxArea::Content);
+    const float focal = size.x * 0.5f / std::tan(80.0f * 0.008726646259971648f);
+    const int x = int(origin.x + size.x * 0.5f - 2.0f * focal / 36.0f);
+    const int y = int(origin.y + size.y * 0.5f);
+    context->ProcessMouseMove(x, y, 0);
+    context->ProcessMouseButtonDown(0, 0);
+    context->ProcessMouseButtonUp(0, 0);
+    EXPECT_EQ(selectionSink.selectedActorIdentity, light.identity);
+    EXPECT_TRUE(system.errors.empty()) << Errors();
+}
+
+TEST_F(EditorUiTest, SelectedHelperClippingPreservesLineSlotsAndWorkspaceLayout)
+{
+    auto light = PointLightActor("Key", 250, 0);
+    light.position = light.light.position = Eigen::Vector3f(0, 0, -20);
+    AddActor(light);
+    auto camera = CameraActor("Shot");
+    camera.hasViewportCamera = true;
+    camera.viewportCamera = camera.camera;
+    AddActor(camera);
+    snapshot.selectedActorIdentity = light.identity;
+    Click("#workspace-viewport-tab");
+    SettleOutliner();
+    auto* layer = document->GetElementById("viewport-actor-lines");
+    ASSERT_EQ(layer->GetNumChildren(), 72);
+    auto* firstLine = layer->GetChild(0);
+    auto* icon = document->QuerySelector("#viewport-actor-icons [data-index='0']");
+    ASSERT_NE(icon, nullptr);
+    static Rml::ElementInstancerGeneric<LayoutCounterElement> instancer;
+    auto counter = instancer.InstanceElement(document, "div", {});
+    counter->SetInstancer(&instancer);
+    auto* observed = static_cast<LayoutCounterElement*>(counter.get());
+    counter->SetProperty("position", "absolute");
+    counter->SetProperty("width", "1px");
+    counter->SetProperty("height", "1px");
+    document->AppendChild(std::move(counter));
+    Refresh();
+    const auto layouts = observed->layouts;
+    size_t initialVisible = 0;
+    for (int index = 0; index < layer->GetNumChildren(); ++index)
+        if (layer->GetChild(index)->IsVisible()) ++initialVisible;
+    EXPECT_GT(initialVisible, 0u);
+    // 让观察相机穿过图示再返回；近面裁剪与图标出屏不能改变 DOM 拓扑。
+    for (float z : {0.0f, -20.0f, -60.0f, 16.0f})
+    {
+        actors[1].viewportCamera.position.z() = z;
+        PublishActors();
+        Refresh();
+        context->Render();
+        EXPECT_EQ(layer->GetNumChildren(), 72);
+        EXPECT_EQ(layer->GetChild(0), firstLine);
+        EXPECT_EQ(document->QuerySelector("#viewport-actor-icons [data-index='0']"), icon);
+        EXPECT_EQ(observed->layouts, layouts);
+        if (z == -60.0f)
+        {
+            EXPECT_FALSE(icon->IsVisible());
+            for (int index = 0; index < layer->GetNumChildren(); ++index)
+                EXPECT_FALSE(layer->GetChild(index)->IsVisible());
+        }
+    }
+    EXPECT_TRUE(icon->IsVisible());
+    EXPECT_TRUE(system.errors.empty()) << Errors();
 }
 
 TEST_F(EditorUiTest, OutlinerStaticFramesKeepActorFieldsAndCountCached)

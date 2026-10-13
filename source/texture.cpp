@@ -37,28 +37,41 @@ Texture::Texture(
     const std::string& texturePath,
     const CreateDesc& createDesc)
 {
-    this->rendererBackend = &rendererBackend;
     const std::string debugName = createDesc.debugName.empty()
         ? CommonFunction::Path(texturePath)
         : createDesc.debugName;
 
-    TextureIO::LoadOptions loadOptions;
-    loadOptions.semantic = createDesc.semantic;
     // 文件型材质纹理统一恢复历史 V 方向合同；资产 JSON 不允许逐纹理覆盖该行为。
-    loadOptions.flipY = TextureIO::LoadOptions::FlipYMode::ForceOn;
-    loadOptions.transfer = createDesc.transfer;
-    loadOptions.forceChannels = 4;
+    const auto loadOptions = MaterialLoadOptions(createDesc);
     auto cpuImage = TextureIO::Load(CommonFunction::Path(texturePath), loadOptions);
     if (!cpuImage.has_value())
     {
         throw std::runtime_error("Failed to load texture: " + texturePath);
     }
 
+    CreateFromHostImage(rendererBackend, *cpuImage, createDesc, debugName);
+}
+
+Texture::Texture(
+    VL::RendererBackendVulkan& rendererBackend,
+    const HostImage& preparedImage,
+    const CreateDesc& createDesc)
+{
+    CreateFromHostImage(rendererBackend, preparedImage, createDesc, createDesc.debugName);
+}
+
+void Texture::CreateFromHostImage(
+    VL::RendererBackendVulkan& rendererBackend,
+    const HostImage& cpuImage,
+    const CreateDesc& createDesc,
+    const std::string& debugName)
+{
+    this->rendererBackend = &rendererBackend;
     DeviceTextureCreateOptions createOptions;
-    createOptions.semantic = cpuImage->semantic;
+    createOptions.semantic = cpuImage.semantic;
     createOptions.generateMipmapsOnDevice = createDesc.generateMipmaps;
     DeviceTextureResource textureResource =
-        DeviceTextureFactory::CreateResourceFromHostImage(rendererBackend, *cpuImage, debugName, createOptions);
+        DeviceTextureFactory::CreateResourceFromHostImage(rendererBackend, cpuImage, debugName, createOptions);
     imageHandle = textureResource.imageHandle;
     image = textureResource.image;
     imageMemory = textureResource.imageMemory;

@@ -113,7 +113,8 @@ BLAKE3 content keys and is revalidated on explicit Refresh. Mesh and realtime MI
 tiles use a separate offscreen render session with their real material shaders,
 the formal preview ball and neutral HDRI. GT advances preparation after 750 ms of
 input inactivity; graph, descriptors and IBL never replace the active World.
-Rendered thumbnails are session-only; import/pipeline preparation is still synchronous.
+Rendered thumbnails are session-only; CPU import/shader preparation/texture decode
+use a single asynchronous job, while GPU upload and pipeline creation remain on GT.
 Scene icons and unsupported offline-only materials remain placeholders.
 The inspector does not replace MI editing or
 the scene Viewport. See the UI component contract for format and cache limits.
@@ -179,6 +180,10 @@ remains untouched, and the first unfocused update reconciles the authoritative
 value. Document reattachment invalidates both controls and metrics caches.
 Viewport controls, RmlUi input processing and context updates remain per-frame,
 so camera indicators, hover, scrolling and animations are not throttled.
+Actor helper icons retain fixed layout boxes and update screen position through
+draw transforms. Selected helper lines retain slots for their unclipped topology;
+clipping changes transforms/visibility rather than replacing DOM. Camera motion
+therefore does not invalidate workspace layout through helper markup updates.
 
 This is binding/control invalidation, not dirty-rectangle rendering. GT still
 builds immutable draw snapshots and RT uploads/composites the overlay every frame;

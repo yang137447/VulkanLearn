@@ -62,10 +62,12 @@ RendererMeshLoader::RendererMeshLoader(
 
 RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
     const nlohmann::basic_json<>& node,
-    const MeshAssetLoadRequest& meshLoadRequest) const
+    const MeshAssetLoadRequest& meshLoadRequest,
+    std::shared_ptr<const MeshAssetImportResult> preparedImport) const
 {
-    std::shared_ptr<const MeshAssetImportResult> imported;
-    if (loadContext.offlineWorldAssets != nullptr)
+    // 缩略图可传入 worker 已完成的纯 CPU 导入；GPU 创建与材质绑定仍只由 GT 候选执行。
+    std::shared_ptr<const MeshAssetImportResult> imported = std::move(preparedImport);
+    if (!imported && loadContext.offlineWorldAssets != nullptr)
     {
         auto& imports = loadContext.offlineWorldAssets->meshImports;
         const auto found = imports.find(meshLoadRequest.buildPlan.meshAssetPath);
@@ -78,7 +80,7 @@ RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
             imports.emplace(meshLoadRequest.buildPlan.meshAssetPath, imported);
         }
     }
-    else
+    else if (!imported)
     {
         imported = std::make_shared<const MeshAssetImportResult>(
             MeshAssetLoader::ImportSections(meshLoadRequest));

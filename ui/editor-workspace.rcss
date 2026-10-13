@@ -295,11 +295,13 @@ body {
     pointer-events: none;
 }
 .actor-visual-line {
-    position: absolute; height: 1px; background-color: #f4d35e;
+    position: absolute; left: 0; top: 0; width: 1px; height: 1px;
+    visibility: hidden; background-color: #f4d35e;
     transform-origin: 0px 0px; pointer-events: none;
 }
 .actor-visual-icon {
-    position: absolute; width: 24px; height: 24px; padding: 3px;
+    position: absolute; left: 0; top: 0; width: 24px; height: 24px; padding: 3px;
+    visibility: hidden;
     box-sizing: border-box;
     border: 1px #8d8d92; background-color: #242428cc; pointer-events: auto;
 }

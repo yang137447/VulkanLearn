@@ -1046,7 +1046,8 @@ void EngineLoop::TickEditorThumbnails()
     {
         thumbnailRequest = library->TakeRenderRequest();
         if (!thumbnailRequest) return;
-        if (thumbnailSessionEpoch != thumbnailRequest->epoch) thumbnailSession.reset();
+        // Refresh 丢弃会话缓存，但不在 GT 等待旧的 CPU 导入/解码；Begin 会拒绝迟到结果。
+        if (thumbnailSession && thumbnailSessionEpoch != thumbnailRequest->epoch) thumbnailSession->Reset();
         thumbnailSessionEpoch = thumbnailRequest->epoch;
         if (!thumbnailSession)
             thumbnailSession = std::make_unique<EditorThumbnailRenderSession>(*rendererBackend, *pipelineFactory);

@@ -33,6 +33,20 @@ public:
         VL::RendererBackendVulkan& rendererBackend,
         const std::string& texturePath,
         const CreateDesc& createDesc);
+    // worker 已按材质纹理合同解码并翻转；这里仅创建 GPU 资源，不再次翻转。
+    Texture(
+        VL::RendererBackendVulkan& rendererBackend,
+        const HostImage& preparedImage,
+        const CreateDesc& createDesc);
+    static TextureIO::LoadOptions MaterialLoadOptions(const CreateDesc& createDesc)
+    {
+        TextureIO::LoadOptions options;
+        options.semantic = createDesc.semantic;
+        options.flipY = TextureIO::LoadOptions::FlipYMode::ForceOn;
+        options.transfer = createDesc.transfer;
+        options.forceChannels = 4;
+        return options;
+    }
     Texture(
         VL::RendererBackendVulkan& rendererBackend,
         vk::Image image,
@@ -54,6 +68,11 @@ public:
     inline const vk::DescriptorImageInfo& GetDescriptorInfo() const { return descriptorInfo; }
 private:
     Texture();
+    void CreateFromHostImage(
+        VL::RendererBackendVulkan& rendererBackend,
+        const HostImage& cpuImage,
+        const CreateDesc& createDesc,
+        const std::string& debugName);
     
     VL::RHIImageHandle imageHandle;
     VL::RHIImageViewHandle imageViewHandle;

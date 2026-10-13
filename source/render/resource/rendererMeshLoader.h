@@ -1,6 +1,7 @@
 #pragma once
 
 #include <optional>
+#include <memory>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -9,6 +10,7 @@
 
 class PipelineFactory;
 struct MeshAssetLoadRequest;
+struct MeshAssetImportResult;
 struct MeshObjectBuildPlan;
 
 namespace VL
@@ -35,7 +37,8 @@ public:
 
     RendererMeshLoadResult LoadMeshObject(
         const nlohmann::basic_json<>& node,
-        const MeshAssetLoadRequest& meshLoadRequest) const;
+        const MeshAssetLoadRequest& meshLoadRequest,
+        std::shared_ptr<const MeshAssetImportResult> preparedImport = {}) const;
 
 private:
     PipelineFactory& pipelineFactory;

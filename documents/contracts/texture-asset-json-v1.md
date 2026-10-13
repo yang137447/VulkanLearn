@@ -187,6 +187,9 @@ material textures use one engine-wide convention: `Texture` vertically flips dec
 image rows exactly once before GPU upload. This behavior is not asset data and cannot
 be overridden per `T_*.json`.
 
+缩略图 worker 与文件型 Texture 入口共用 `Texture::MaterialLoadOptions`。已解码
+HostImage 构造入口只创建 GPU 资源，不再翻转行；材质贴图在异步路径中也只翻转一次。
+
 `TextureIO` remains a general image decoder whose low-level default is `ForceOff`.
 Material texture creation explicitly selects `ForceOn`; non-material paths must state
 their own orientation contract. Environment HDRI loading explicitly selects

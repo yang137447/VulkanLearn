@@ -167,3 +167,22 @@ TEST_F(TextureAssetTest, VerticalFlip)
 {
     TestTextureIoVerticalFlip();
 }
+
+TEST_F(TextureAssetTest, MaterialDecoderKeepsFixedOrientationAndRgba)
+{
+    const auto options = Texture::MaterialLoadOptions({});
+    EXPECT_EQ(options.flipY, TextureIO::LoadOptions::FlipYMode::ForceOn);
+    EXPECT_EQ(options.forceChannels, 4);
+    EXPECT_FALSE(options.genMipmaps);
+}
+
+TEST_F(TextureAssetTest, MaterialDecoderPreservesTransferAndSemantic)
+{
+    Texture::CreateDesc description;
+    description.semantic = HostImage::TextureSemantic::Normal;
+    description.transfer = TextureIO::LoadOptions::Transfer::Linear;
+    const auto options = Texture::MaterialLoadOptions(description);
+    EXPECT_EQ(options.semantic, HostImage::TextureSemantic::Normal);
+    EXPECT_EQ(options.transfer, TextureIO::LoadOptions::Transfer::Linear);
+    EXPECT_EQ(Texture::MaterialLoadOptions({}).transfer, TextureIO::LoadOptions::Transfer::SRGB);
+}

@@ -1340,46 +1340,79 @@ void MaterialInstanceAssetEditorPanel::RefreshActorVisualization()
         }
     std::string linesMarkup;
     std::string iconsMarkup;
+    std::vector<EditorActorVisualLine> lines;
     if (showActorVisualization && view && size.x > 0 && size.y > 0)
     {
         // 图标是固定像素大小；只有选中对象才绘制辅助线，避免灯具多时淹没场景。
         for (size_t index = 0; index < actors.size(); ++index)
         {
             const auto& actor = actors[index];
-            if (!actor.visible || actor.type == EditorSceneActorType::Mesh ||
+            if (actor.type == EditorSceneActorType::Mesh ||
                 actor.type == EditorSceneActorType::Environment || actor.type == EditorSceneActorType::WindProfile)
                 continue;
             const bool selected = actor.identity == snapshot.selectedActorIdentity;
-            if (selected)
-                for (const auto& line : BuildActorVisualLines(actor, *view, size.x, size.y))
+            if (selected && actor.visible)
+            {
+                lines = BuildActorVisualLines(actor, *view, size.x, size.y);
+                // 按未裁剪的图示拓扑挂载固定槽位；跨近面/屏幕边界只隐藏槽位，不重新布局。
+                size_t capacity = 0;
+                switch (actor.type)
                 {
-                    const Eigen::Vector2f delta = line.end - line.begin;
-                    const float angle = std::atan2(delta.y(), delta.x()) * 180.0f / 3.14159265358979323846f;
-                    linesMarkup += "<div class=\"actor-visual-line\" style=\"left: " + Number(line.begin.x()) +
-                        "px; top: " + Number(line.begin.y()) + "px; width: " + Number(delta.norm()) +
-                        "px; transform: rotate(" + Number(angle) + "deg);\"></div>";
+                case EditorSceneActorType::PointLight: capacity = 3 * 24; break;
+                case EditorSceneActorType::SpotLight: capacity = 2 * (32 + 4); break;
+                case EditorSceneActorType::DirectionalLight: capacity = 3; break;
+                case EditorSceneActorType::Camera: capacity = 8; break;
+                case EditorSceneActorType::SquareAreaLight: capacity = 5; break;
+                default: break;
                 }
-            Eigen::Vector2f pixel;
-            const Eigen::Vector3f position = actor.type == EditorSceneActorType::Camera
-                ? actor.camera.position : actor.light.position;
-            if (!ProjectActorVisualPoint(*view, position, size.x, size.y, pixel)) continue;
-            iconsMarkup += "<button class=\"actor-visual-icon\" data-generation=\"" +
+                for (size_t line = 0; line < capacity; ++line)
+                    linesMarkup += "<div id=\"actor-visual-line-" + std::to_string(line) +
+                        "\" class=\"actor-visual-line\"></div>";
+            }
+            // 结构只含 actor 身份/事件地址；位置与屏幕内外状态绝不能进入 markup 缓存键。
+            iconsMarkup += "<button id=\"actor-visual-icon-" + std::to_string(index) +
+                "\" class=\"actor-visual-icon\" data-generation=\"" +
                 std::to_string(actor.worldGeneration) + "\" data-action=\"viewport-actor\" data-index=\"" + std::to_string(index) +
-                "\" title=\"" + Text(actor.displayName) + "\" style=\"left: " + Number(pixel.x() - 12) +
-                "px; top: " + Number(pixel.y() - 12) + "px;\"><img src=\"" +
+                "\" title=\"" + Text(actor.displayName) + "\"><img src=\"" +
                 Text(SceneActorGroupIcon(actor.type)) + "\"/></button>";
         }
     }
-    // 辅助线与图标分开缓存：第一次选中仅改图标 class，不销毁双击的目标节点。
+    // RmlUi 布局失效会遍历整份编辑器文档；固定盒只更新绘制 transform/visibility，
+    // 既避免相机移动触发整页文字测量，也保留图标的指针双击目标身份。
     SetMarkup("viewport-actor-lines", std::move(linesMarkup));
     SetMarkup("viewport-actor-icons", std::move(iconsMarkup));
+    auto* lineLayer = document->GetElementById("viewport-actor-lines");
+    for (int index = 0; index < lineLayer->GetNumChildren(); ++index)
+    {
+        const std::string id = "actor-visual-line-" + std::to_string(index);
+        const bool visible = static_cast<size_t>(index) < lines.size();
+        widgetDocument.SetProperty(id, "visibility", visible ? "visible" : "hidden");
+        if (!visible) continue;
+        const auto& line = lines[index];
+        const Eigen::Vector2f delta = line.end - line.begin;
+        const float angle = std::atan2(delta.y(), delta.x()) * 180.0f / 3.14159265358979323846f;
+        widgetDocument.SetProperty(id, "transform",
+            "translate(" + Number(line.begin.x()) + "px, " + Number(line.begin.y()) +
+            "px) rotate(" + Number(angle) + "deg) scaleX(" + Number(delta.norm()) + ")");
+    }
     Rml::ElementList icons;
     document->GetElementById("viewport-actor-icons")->QuerySelectorAll(icons, "[data-action=viewport-actor]");
     for (auto* icon : icons)
     {
         const size_t index = icon->GetAttribute<size_t>("data-index", actors.size());
         const bool selected = index < actors.size() && actors[index].identity == snapshot.selectedActorIdentity;
-        if (icon->IsClassSet("selected") != selected) icon->SetClass("selected", selected);
+        const std::string id = icon->GetId();
+        widgetDocument.SetClass(id, "selected", selected);
+        const auto& actor = actors[index];
+        Eigen::Vector2f pixel;
+        const Eigen::Vector3f position = actor.type == EditorSceneActorType::Camera
+            ? actor.camera.position : actor.light.position;
+        const bool visible = actor.visible && view &&
+            ProjectActorVisualPoint(*view, position, size.x, size.y, pixel);
+        widgetDocument.SetProperty(id, "visibility", visible ? "visible" : "hidden");
+        if (visible)
+            widgetDocument.SetProperty(id, "transform",
+                "translate(" + Number(pixel.x() - 12) + "px, " + Number(pixel.y() - 12) + "px)");
     }
 }
 

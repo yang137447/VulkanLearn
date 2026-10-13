@@ -9,12 +9,144 @@
 #include "editor/assets/editorThumbnailLibrary.h"
 #include "shader/build/atomicFile.h"
 #include "engine/editorThumbnailGraph.h"
+#include "engine/editorThumbnailJob.h"
 
 namespace
 {
 using namespace VL;
 using namespace VL::Editor;
 using namespace VL::EditorUi;
+
+struct ThumbnailJobGate
+{
+    std::promise<void> started;
+    std::promise<void> release;
+    std::atomic<bool> finished{false};
+    bool fail = false;
+};
+
+int RunThumbnailJob(std::shared_ptr<ThumbnailJobGate> gate)
+{
+    gate->started.set_value();
+    gate->release.get_future().wait();
+    gate->finished = true;
+    if (gate->fail) throw std::runtime_error("Import failed");
+    return 42;
+}
+
+class ThumbnailJobTest : public testing::Test
+{
+protected:
+    void Start(bool fail = false)
+    {
+        gate->fail = fail;
+        ASSERT_TRUE(job.Start(RunThumbnailJob, gate));
+        ASSERT_EQ(gate->started.get_future().wait_for(std::chrono::seconds(2)), std::future_status::ready);
+    }
+    void Release()
+    {
+        if (!released) { gate->release.set_value(); released = true; }
+    }
+    void TearDown() override
+    {
+        Release();
+        job.Wait();
+    }
+    std::optional<int> Take()
+    {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (job.HasTask() && std::chrono::steady_clock::now() < deadline)
+        {
+            auto result = job.Poll();
+            if (result) return result;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        return {};
+    }
+    std::shared_ptr<ThumbnailJobGate> gate = std::make_shared<ThumbnailJobGate>();
+    EditorThumbnailJob<int> job;
+    bool released = false;
+};
+
+TEST_F(ThumbnailJobTest, PendingPollDoesNotWaitForCpuWork)
+{
+    Start();
+    EXPECT_FALSE(job.Poll());
+    EXPECT_TRUE(job.HasTask());
+    EXPECT_FALSE(gate->finished);
+}
+
+TEST_F(ThumbnailJobTest, CompletedResultIsTakenOnce)
+{
+    Start();
+    Release();
+    EXPECT_EQ(Take(), 42);
+    EXPECT_FALSE(job.HasTask());
+    EXPECT_FALSE(job.Poll());
+}
+
+TEST_F(ThumbnailJobTest, InvalidationDiscardsLateResults)
+{
+    Start();
+    job.Invalidate();
+    EXPECT_FALSE(job.Poll());
+    EXPECT_TRUE(job.HasTask());
+    Release();
+    EXPECT_FALSE(Take());
+    EXPECT_FALSE(job.HasTask());
+}
+
+TEST_F(ThumbnailJobTest, StaleFailureDoesNotAffectLatestRequest)
+{
+    Start(true);
+    job.Invalidate();
+    Release();
+    EXPECT_NO_THROW(Take());
+    EXPECT_FALSE(job.HasTask());
+    gate = std::make_shared<ThumbnailJobGate>();
+    released = false;
+    Start();
+    Release();
+    EXPECT_EQ(Take(), 42);
+}
+
+TEST_F(ThumbnailJobTest, CurrentFailureReachesTheSession)
+{
+    Start(true);
+    Release();
+    EXPECT_THROW(Take(), std::runtime_error);
+    EXPECT_FALSE(job.HasTask());
+}
+
+TEST_F(ThumbnailJobTest, InFlightTaskPreventsAnotherWorker)
+{
+    Start();
+    auto other = std::make_shared<ThumbnailJobGate>();
+    EXPECT_FALSE(job.Start(RunThumbnailJob, other));
+    EXPECT_FALSE(other->finished);
+}
+
+TEST_F(ThumbnailJobTest, ShutdownJoinsWorker)
+{
+    Start();
+    Release();
+    job.Wait();
+    EXPECT_TRUE(gate->finished);
+}
+
+TEST_F(ThumbnailJobTest, CacheResetCanTransferPendingWorkWithoutWaiting)
+{
+    Start();
+    auto pending = std::move(job);
+    job = EditorThumbnailJob<int>{};
+    job = std::move(pending);
+    job.Invalidate();
+    EXPECT_FALSE(job.Poll());
+    EXPECT_TRUE(job.HasTask());
+    EXPECT_FALSE(gate->finished);
+    Release();
+    EXPECT_FALSE(Take());
+}
 
 class ThumbnailLibraryTest : public testing::Test
 {

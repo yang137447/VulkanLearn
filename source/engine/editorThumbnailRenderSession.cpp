@@ -4,13 +4,17 @@
 #include <stdexcept>
 #include "commonFunction.h"
 #include "engine/editorThumbnailGraph.h"
+#include "engine/editorThumbnailJob.h"
+#include "engine/editorThumbnailPreparation.h"
 #include "engine/modelPreviewCamera.h"
 #include "engine/modelPreviewRequest.h"
 #include "material.h"
 #include "materialInstance.h"
+#include "mesh/loader/common/meshAssetLoader.h"
 #include "sceneNode.h"
 #include "pipeline/pipelineFactory.h"
 #include "profiler.h"
+#include "shaderCompiler.h"
 #include "render/backend/rendererBackendVulkan.h"
 #include "render/backend/rendererFrameResources.h"
 #include "render/backend/rendererObjectResourceRegistry.h"
@@ -37,6 +41,7 @@ template<class T> T Require(RuntimeResult<T> result)
     if (result.IsFailure()) throw std::runtime_error(FormatRuntimeError(result.Error()));
     return std::move(result.Value());
 }
+
 }
 
 struct EditorThumbnailRenderSession::Impl : PassRuntimeServices
@@ -51,6 +56,11 @@ struct EditorThumbnailRenderSession::Impl : PassRuntimeServices
     RendererFrameResources frames;
     EnvironmentIblBaker ibl;
     WorldBuildPlan plan;
+    RendererMeshLoadResult materialPreviewMesh;
+    EditorThumbnailJob<EditorThumbnailPreparationResult> preparation;
+    std::optional<EditorThumbnailPreparationResult> preparedAsset;
+    size_t textureIndex = 0;
+    std::unordered_map<std::string, GraphicsShaderVariantArtifact> thumbnailShaders;
     RenderScene scene;
     ResolvedRenderScene resolved;
     std::shared_ptr<const EditorUi::EditorTexturePreview> image;
@@ -64,6 +74,8 @@ struct EditorThumbnailRenderSession::Impl : PassRuntimeServices
     Impl(RendererBackendVulkan& backend, PipelineFactory& factory) : backend(backend), factory(factory) {}
     ~Impl()
     {
+        // 退出先收口唯一 CPU worker，再销毁会话 GPU 资源。
+        preparation.Wait();
         // 每个提交都已等本任务的 fence；这些私有资源从未进入主帧，无需全局 waitIdle。
         resolved = {};
         cache.Clear();
@@ -79,8 +91,107 @@ struct EditorThumbnailRenderSession::Impl : PassRuntimeServices
         resolved = {};
         scene = {};
         plan = {};
+        preparedAsset.reset();
         cache = baseCache->BeginActiveWorldCandidate(0);
         graphics = baseGraphics;
+    }
+    bool LoadPreviewMesh(
+        const nlohmann::json& node, const MeshAssetLoadRequest& request,
+        RendererResourceLoadContext& context, RendererMeshLoadResult& loaded)
+    {
+        const bool materialPreview = node.at("name") == "preview_material";
+        if (!preparedAsset)
+        {
+            auto prepared = preparation.Poll();
+            if (prepared)
+            {
+                for (auto& shader : prepared->shaders)
+                {
+                    const auto current = factory.GetShaderCompiler().ValidateCandidateSourcesStillCurrent(
+                        shader.request, shader.artifact);
+                    if (!current.current) throw std::runtime_error("Thumbnail shader changed during preparation: " + current.reason);
+                    graphics.shaderVariants.insert_or_assign(shader.cacheKey, shader.graphicsArtifact);
+                    // 会话只保留有界 CPU shader 产物，不保留源码快照、MI、贴图或对象 descriptor。
+                    if (thumbnailShaders.size() < 64)
+                        thumbnailShaders.insert_or_assign(shader.cacheKey, std::move(shader.graphicsArtifact));
+                }
+                prepared->shaders.clear();
+                preparedAsset = std::move(prepared);
+                textureIndex = 0;
+                return false;
+            }
+            if (!preparation.HasTask())
+            {
+                EditorThumbnailPreparationRequest input;
+                input.meshRequest = request;
+                input.importMesh = !materialPreview || materialPreviewMesh.objectPlans.empty();
+                input.materialOverride = node.value("materialOverride", std::string{});
+                input.shaderRoot = factory.GetShaderCompiler().GetShaderRoot();
+                input.supportsDualSourceBlend = backend.SupportsDualSourceBlend();
+                for (const auto& pair : graph.GetRenderpasses())
+                {
+                    const auto& pass = pair.second;
+                    if (pass.type == RenderGraphPassType::Geometry)
+                    {
+                        input.surfaceContracts.emplace(RenderMode::Opaque, pass.pipelineContractKey);
+                        input.surfaceContracts.emplace(RenderMode::OpaqueClip, pass.pipelineContractKey);
+                    }
+                    else if (pass.type == RenderGraphPassType::ForwardOpaque)
+                        input.surfaceContracts.emplace(RenderMode::ForwardOpaque, pass.pipelineContractKey);
+                    else if (pass.type == RenderGraphPassType::ForwardTransparent)
+                    {
+                        input.surfaceContracts.emplace(RenderMode::TransparentAlphaBlend, pass.pipelineContractKey);
+                        input.surfaceContracts.emplace(RenderMode::TransparentAlphaBlendWriteDepth, pass.pipelineContractKey);
+                        input.surfaceContracts.emplace(RenderMode::TransparentAdditive, pass.pipelineContractKey);
+                        input.surfaceContracts.emplace(RenderMode::ThinTranslucent, pass.pipelineContractKey);
+                    }
+                }
+                for (const auto& pair : graphics.shaderVariants) input.preparedShaderKeys.insert(pair.first);
+                preparation.Start(PrepareEditorThumbnailAsset, std::move(input));
+            }
+            return false;
+        }
+        if (textureIndex < preparedAsset->textures.size())
+        {
+            auto& texture = preparedAsset->textures[textureIndex++];
+            if (!cache.GetTexture(texture.cacheKey))
+                cache.BindTexture(texture.cacheKey, std::make_shared<Texture>(
+                    backend, texture.image, ToTextureCreateDesc(texture.description)));
+            // 每帧至多上传一张；上传后立即释放 CPU 像素，不跨 MI 累积贴图。
+            texture.image = {};
+            return false;
+        }
+        // 分帧上传期间作者文件仍可能改变；最终材质绑定前再确认 CPU 准备所依据的版本。
+        for (const auto& pair : preparedAsset->materialDigests)
+            if (ContentHasher::HashFile(pair.first) != pair.second)
+                throw std::runtime_error("Thumbnail material changed during preparation: " + pair.first.string());
+        if (!materialPreview || materialPreviewMesh.objectPlans.empty())
+        {
+            loaded = RendererMeshLoader(factory, backend, context).LoadMeshObject(
+                node, request, std::move(preparedAsset->mesh));
+            if (materialPreview)
+            {
+                // 同一会话的材质缩略图只换 MI；固定球的导入、切线、包围盒与 GPU 几何只准备一次。
+                // 基底只保留不可变 renderable，不保留本次 MI、贴图或对象 descriptor。
+                for (const auto& object : loaded.objectPlans)
+                    baseCache->BindRenderableObject(object.meshKey, *cache.GetRenderableObject(object.meshKey));
+                materialPreviewMesh = loaded;
+            }
+            preparedAsset.reset();
+            return true;
+        }
+
+        loaded = materialPreviewMesh;
+        // 每次请求仍在自己的候选中加载材质；只替换计划的绑定，不改缓存球或上一次 descriptor。
+        const auto material = RendererMaterialLoader(factory, backend, context).LoadSceneMaterialInstance(
+            node.at("materialOverride").get<std::string>());
+        for (auto& object : loaded.objectPlans)
+        {
+            object.materialKey = material->GetBaseMaterial().lock()->GetMaterialKey();
+            object.materialInstanceKey = material->GetName();
+        }
+        preparedAsset.reset();
+        return true;
     }
     void UpdateGlobalUBOForPass(vk::CommandBuffer& command) override
     {
@@ -242,30 +353,34 @@ struct EditorThumbnailRenderSession::Impl : PassRuntimeServices
             {
                 if (mip == 0) ibl.RecordSphericalHarmonics(command, *cube, 0);
                 ibl.RecordPrefilterMip(command, *cube, 0, mip++);
-                if (mip == ibl.GetPrefilterMipCount()) { ibl.RecordCommit(command); ++stage; }
+                if (mip == ibl.GetPrefilterMipCount()) { ibl.RecordCommit(command); ++stage; objectIndex = 0; }
                 backend.EndSingleTimeCommands(command);
             }
             catch (...) { if (command) backend.AbortSingleTimeCommands(command); throw; }
             if (stage == 5)
             {
-                // 只保留环境与 pass 资源。每次资产请求从这份基底创建候选，
-                // 上一个模型/贴图/对象 descriptor 不累积，也不影响活动 World cache。
+                // 先固定环境与 pass 基底；材质请求首次加载后只追加固定球的不可变几何。
+                // 任意模型、MI、贴图与对象 descriptor 仍按请求释放，不影响活动 World cache。
                 baseCache = std::make_unique<RendererResourceCache>(cache.BeginActiveWorldCandidate(0));
                 baseGraphics = graphics;
             }
             break;
         }
         case 5:
-            for (const auto& object : plan.sceneAssetPlan.objectPlans)
+            if (objectIndex < plan.sceneAssetPlan.objectPlans.size())
             {
+                const auto& object = plan.sceneAssetPlan.objectPlans[objectIndex];
                 if (object.objectType != "mesh" ||
-                    (object.objectName != "preview_model" && object.objectName != "preview_material")) continue;
-                auto loaded = RendererMeshLoader(factory, backend, context).LoadMeshObject(
-                    plan.sceneJson.at("objects").at(object.objectIndex), *object.meshLoadRequest);
+                    (object.objectName != "preview_model" && object.objectName != "preview_material"))
+                { ++objectIndex; break; }
+                RendererMeshLoadResult loaded;
+                if (!LoadPreviewMesh(plan.sceneJson.at("objects").at(object.objectIndex),
+                    *object.meshLoadRequest, context, loaded)) break;
                 plan.meshObjectPlans.insert(plan.meshObjectPlans.end(), loaded.objectPlans.begin(), loaded.objectPlans.end());
                 if (loaded.speedTreeWindProfile) plan.speedTreeWindProfiles.push_back(*loaded.speedTreeWindProfile);
+                ++objectIndex;
             }
-            ++stage;
+            else ++stage;
             break;
         case 6: ConfigureScene(); ++stage; break;
         case 7: Render(); ++stage; return true;
@@ -278,10 +393,21 @@ struct EditorThumbnailRenderSession::Impl : PassRuntimeServices
 EditorThumbnailRenderSession::EditorThumbnailRenderSession(RendererBackendVulkan& backend, PipelineFactory& factory)
     : impl(std::make_unique<Impl>(backend, factory)) {}
 EditorThumbnailRenderSession::~EditorThumbnailRenderSession() = default;
+void EditorThumbnailRenderSession::Reset()
+{
+    // 图重建也保留唯一在途 CPU 任务；新 Impl 只丢弃其结果，不发起并行无界导入。
+    auto pendingPreparation = std::move(impl->preparation);
+    impl = std::make_unique<Impl>(impl->backend, impl->factory);
+    impl->preparation = std::move(pendingPreparation);
+    impl->preparation.Invalidate();
+}
 void EditorThumbnailRenderSession::Begin(const std::string& path, EditorUi::EditorAssetKind kind, const nlohmann::json& graph)
 {
     if (!impl->baseCache || impl->graphJson != BuildEditorThumbnailGraph(graph))
-        impl = std::make_unique<Impl>(impl->backend, impl->factory);
+        Reset();
+    impl->preparation.Invalidate();
+    impl->preparedAsset.reset();
+    impl->objectIndex = 0;
     impl->image.reset();
     impl->error.clear();
     impl->resolved = {};
@@ -290,6 +416,7 @@ void EditorThumbnailRenderSession::Begin(const std::string& path, EditorUi::Edit
     {
         impl->cache = impl->baseCache->BeginActiveWorldCandidate(0);
         impl->graphics = impl->baseGraphics;
+        impl->graphics.shaderVariants.insert(impl->thumbnailShaders.begin(), impl->thumbnailShaders.end());
         impl->stage = 5;
     }
     try
