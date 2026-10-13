@@ -219,21 +219,27 @@ bool EditorContentBrowserController::ReadCatalog(const MaterialInstanceEditorSna
 bool EditorContentBrowserController::ReadDirtyOverlay(
     const MaterialInstanceEditorSnapshot& snapshot, bool catalogChanged)
 {
-    bool unchanged = !catalogChanged && dirtyOverlay.size() == snapshot.assets.size();
-    for (size_t index = 0; unchanged && index < dirtyOverlay.size(); ++index)
+    const size_t size = snapshot.assets.size() + snapshot.modifiedDocuments.size();
+    bool unchanged = !catalogChanged && dirtyOverlay.size() == size;
+    for (size_t index = 0; unchanged && index < snapshot.assets.size(); ++index)
         unchanged = dirtyOverlay[index].first == snapshot.assets[index].assetPath &&
             dirtyOverlay[index].second == snapshot.assets[index].dirty;
+    for (size_t index = 0; unchanged && index < snapshot.modifiedDocuments.size(); ++index)
+        unchanged = dirtyOverlay[index + snapshot.assets.size()].first ==
+            snapshot.modifiedDocuments[index].assetPath;
     if (unchanged) return false;
     dirtyOverlay.clear();
-    dirtyOverlay.reserve(snapshot.assets.size());
+    dirtyOverlay.reserve(size);
+    for (const auto& asset : snapshot.assets) dirtyOverlay.emplace_back(asset.assetPath, asset.dirty);
+    for (const auto& asset : snapshot.modifiedDocuments) dirtyOverlay.emplace_back(asset.assetPath, true);
     dirtyPaths.clear();
-    for (const auto& asset : snapshot.assets)
+    for (const auto& asset : dirtyOverlay)
     {
-        dirtyOverlay.emplace_back(asset.assetPath, asset.dirty);
-        const auto found = catalog.find(asset.assetPath);
-        if (asset.dirty && found != catalog.end() &&
-            found->second.kind == EditorAssetKind::MaterialInstance)
-            dirtyPaths.insert(asset.assetPath);
+        const auto found = catalog.find(asset.first);
+        if (asset.second && found != catalog.end() &&
+            (found->second.kind == EditorAssetKind::MaterialInstance ||
+             found->second.kind == EditorAssetKind::Scene))
+            dirtyPaths.insert(asset.first);
     }
     return true;
 }

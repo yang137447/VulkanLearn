@@ -130,6 +130,23 @@ struct MaterialInstanceDocumentSnapshot
 
 struct MaterialInstanceAssetEntry { std::string assetPath; bool dirty = false; };
 
+// 保存弹窗消费冻结的路径/版本；不从当前标签推断要保存哪个文件。
+struct EditorModifiedDocumentSnapshot
+{
+    std::string assetPath;
+    EditorAssetKind kind = EditorAssetKind::MaterialInstance;
+    uint64_t revision = 0;
+    EditorDocumentStatus status = EditorDocumentStatus::Dirty;
+    std::string message;
+};
+
+struct EditorSaveFeedback
+{
+    uint64_t sequence = 0;
+    std::string assetPath;
+    bool succeeded = false;
+    std::string message;
+};
 struct MaterialInstanceModelMaterialSnapshot
 {
     VL::RuntimeId objectId = 0;
@@ -161,6 +178,8 @@ struct MaterialInstanceEditorSnapshot
     bool browserLoading = false;
     std::vector<MaterialInstanceAssetEntry> assets;
     std::vector<MaterialInstanceAssetEntry> documentTabs;
+    std::vector<EditorModifiedDocumentSnapshot> modifiedDocuments;
+    std::vector<EditorSaveFeedback> saveFeedback;
     std::vector<EditorTextureAssetSnapshot> textureAssets;
     std::vector<MaterialInstanceModelSnapshot> sceneModels;
     // 世界大纲的冻结 actor 列表（EngineLoop 在稳定帧边界从 active World 拍出）。

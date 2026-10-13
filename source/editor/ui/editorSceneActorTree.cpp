@@ -15,10 +15,7 @@ namespace VL::EditorUi
 namespace
 {
 
-// 固定分组顺序：与 SceneActorGroupSpecs() 的顺序一致，跨帧不重排。
-// 低基数类型在前、Mesh 在后是刻意的：默认场景有 122 个网格，把 Meshes 放最前会把
-// 灯光/相机/环境整组挤出可视区（第四轮实测症状）。顺序本身仍是固定契约，
-// 排序控件只作用于组内，不参与这里的排列。
+// 类型表只供身份解析、过滤器与图标使用；大纲不再按类型自动生成文件夹。
 const std::vector<EditorSceneActorGroupSpec> GroupSpecs = {
     {EditorSceneActorType::DirectionalLight, "directionalLight", "Directional Lights",
         "icons/light-directional.png"},
@@ -155,13 +152,6 @@ const EditorSceneActorGroupSpec* FindSceneActorGroupSpecByKey(const std::string&
     return nullptr;
 }
 
-size_t SceneActorGroupIndex(EditorSceneActorType type)
-{
-    for (size_t index = 0; index < GroupSpecs.size(); ++index)
-        if (GroupSpecs[index].type == type) return index;
-    return GroupSpecs.size();
-}
-
 const EditorSceneActorList& SceneActorList(const std::shared_ptr<const EditorSceneActorList>& actors)
 {
     static const EditorSceneActorList empty;
@@ -250,8 +240,7 @@ bool SceneActorOrderLess(const EditorSceneActorSnapshot& left,
 bool SameSceneActorExpansion(
     const EditorSceneActorTreeExpansion& left, const EditorSceneActorTreeExpansion& right)
 {
-    return left.collapsedGroups == right.collapsedGroups &&
-        left.expandedActors == right.expandedActors;
+    return left.expandedActors == right.expandedActors;
 }
 
 std::vector<EditorSceneActorRow> BuildSceneActorRows(
@@ -263,67 +252,48 @@ std::vector<EditorSceneActorRow> BuildSceneActorRows(
 {
     const std::string foldedQuery = FoldAsciiCase(query);
     std::vector<EditorSceneActorRow> rows;
-    std::vector<size_t> groupIndices;
-    for (const EditorSceneActorGroupSpec& spec : GroupSpecs)
+    std::vector<size_t> indices;
+    for (size_t index = 0; index < actors.size(); ++index)
     {
-        groupIndices.clear();
-        for (size_t index = 0; index < actors.size(); ++index)
+        if (SceneActorMatchesQuery(actors[index], foldedQuery) &&
+            SceneActorMatchesTypeFilter(actors[index], typeFilter))
+            indices.push_back(index);
+    }
+    // UE 风格的 Actor 列表：跨类型统一排序；材质槽仍紧随它所属的 actor。
+    std::sort(indices.begin(), indices.end(),
+        [&actors, order](size_t left, size_t right)
         {
-            const EditorSceneActorSnapshot& actor = actors[index];
-            if (actor.type != spec.type) continue;
-            if (!SceneActorMatchesQuery(actor, foldedQuery)) continue;
-            if (!SceneActorMatchesTypeFilter(actor, typeFilter)) continue;
-            groupIndices.push_back(index);
-        }
-        if (groupIndices.empty()) continue;
-        std::sort(groupIndices.begin(), groupIndices.end(),
-            [&actors, order](size_t left, size_t right)
-            {
-                return SceneActorOrderLess(actors[left], actors[right], order);
-            });
-
-        EditorSceneActorRow group;
-        group.isGroup = true;
-        group.type = spec.type;
-        group.label = spec.title;
-        group.actorCount = groupIndices.size();
-        group.hasChildren = true;
-        group.expanded = expansion.collapsedGroups.count(spec.key) == 0;
-        rows.push_back(std::move(group));
-        // 折叠的分组只留表头：子行不进入行集合，因此既不挂 DOM，也不占窗口槽位，
-        // 也不产生 spacer 高度——整棵折叠后的树必须能一次装进窗口。
-        if (!group.expanded) continue;
-
-        for (const size_t index : groupIndices)
+            return SceneActorOrderLess(actors[left], actors[right], order);
+        });
+    for (const size_t index : indices)
+    {
+        const EditorSceneActorSnapshot& actor = actors[index];
+        const bool hasSlots = actor.type == EditorSceneActorType::Mesh &&
+            MeshActorHasOpenableSlot(actor);
+        const bool actorExpanded =
+            hasSlots && expansion.expandedActors.count(actor.identity) != 0;
+        EditorSceneActorRow row;
+        row.type = actor.type;
+        row.actorIndex = index;
+        row.label = actor.displayName;
+        row.hasChildren = hasSlots;
+        row.expanded = actorExpanded;
+        rows.push_back(std::move(row));
+        if (!actorExpanded) continue;
+        // 槽行与 MeshSceneActorModel 的 materials 同序：动作分量索引可以直接交给
+        // 既有的 SelectModelMaterial，不需要第二份槽位表。
+        const MaterialInstanceModelSnapshot model = MeshSceneActorModel(actor);
+        for (size_t slotIndex = 0; slotIndex < model.materials.size(); ++slotIndex)
         {
-            const EditorSceneActorSnapshot& actor = actors[index];
-            const bool hasSlots = actor.type == EditorSceneActorType::Mesh &&
-                MeshActorHasOpenableSlot(actor);
-            const bool actorExpanded =
-                hasSlots && expansion.expandedActors.count(actor.identity) != 0;
-            EditorSceneActorRow row;
-            row.type = spec.type;
-            row.actorIndex = index;
-            row.label = actor.displayName;
-            row.hasChildren = hasSlots;
-            row.expanded = actorExpanded;
-            rows.push_back(std::move(row));
-            if (!actorExpanded) continue;
-            // 槽行与 MeshSceneActorModel 的 materials 同序：动作分量索引可以直接交给
-            // 既有的 SelectModelMaterial，不需要第二份槽位表。
-            const MaterialInstanceModelSnapshot model = MeshSceneActorModel(actor);
-            for (size_t slotIndex = 0; slotIndex < model.materials.size(); ++slotIndex)
-            {
-                const MaterialInstanceModelMaterialSnapshot& slot = model.materials[slotIndex];
-                EditorSceneActorRow slotRow;
-                slotRow.isSlot = true;
-                slotRow.type = spec.type;
-                slotRow.actorIndex = index;
-                slotRow.slotIndex = slotIndex;
-                slotRow.materialSlotIndex = slot.materialSlotIndex;
-                slotRow.label = SlotLabel(slot);
-                rows.push_back(std::move(slotRow));
-            }
+            const MaterialInstanceModelMaterialSnapshot& slot = model.materials[slotIndex];
+            EditorSceneActorRow slotRow;
+            slotRow.isSlot = true;
+            slotRow.type = actor.type;
+            slotRow.actorIndex = index;
+            slotRow.slotIndex = slotIndex;
+            slotRow.materialSlotIndex = slot.materialSlotIndex;
+            slotRow.label = SlotLabel(slot);
+            rows.push_back(std::move(slotRow));
         }
     }
     return rows;
@@ -440,41 +410,20 @@ std::vector<EditorSceneActorField> SceneActorFields(const EditorSceneActorSnapsh
         const LightSnapshot& light = actor.light;
         AddField(fields, "actor-field-light-type", "Light Type", LightTypeName(light.type));
         AddField(fields, "actor-field-color-hex", "Colour (sRGB)", ColorHex(light.color));
-        AddField(fields, "actor-field-color-linear", "Colour (linear)",
-            ColorLinear(light.color));
-        if (!actor.primaryDirectionalLight)
-            AddField(fields, "actor-field-intensity", "Intensity",
-                SceneActorNumber(light.intensity));
-        AddVectorField(fields, "actor-field-position", "Position", light.position);
         if (light.type == LightSnapshotType::Directional || light.type == LightSnapshotType::Spot)
             AddVectorField(fields, "actor-field-direction", "Direction", light.direction);
         if (light.type == LightSnapshotType::SquareArea)
             AddVectorField(fields, "actor-field-normal", "Normal", light.direction);
         if (light.type == LightSnapshotType::Point || light.type == LightSnapshotType::Spot)
             AddField(fields, "actor-field-radius", "Radius", SceneActorNumber(light.radius));
-        if (light.type == LightSnapshotType::Spot)
-        {
-            AddField(fields, "actor-field-cone-outer", "Cone Angle Outer (deg)",
-                SceneActorNumber(light.coneAngleOuter * 180.0f / 3.14159265358979323846f));
-            AddField(fields, "actor-field-cone-inner", "Cone Angle Inner (deg)",
-                SceneActorNumber(light.coneAngleInner * 180.0f / 3.14159265358979323846f));
-        }
-        if (light.type == LightSnapshotType::SquareArea)
-            AddField(fields, "actor-field-square-size", "Square Size",
-                SceneActorNumber(light.squareSize));
         break;
     }
     case EditorSceneActorType::Camera:
     {
         const EditorSceneCameraActor& camera = actor.camera;
-        AddVectorField(fields, "actor-field-position", "Position", camera.position);
         AddVectorField(fields, "actor-field-forward", "Forward", camera.forward);
         AddVectorField(fields, "actor-field-right", "Right", camera.right);
         AddVectorField(fields, "actor-field-up", "Up", camera.up);
-        AddField(fields, "actor-field-hfov", "Horizontal FOV (deg)",
-            SceneActorNumber(camera.horizontalFovDegrees));
-        AddField(fields, "actor-field-clip-near", "Clip Near", SceneActorNumber(camera.clipNear));
-        AddField(fields, "actor-field-clip-far", "Clip Far", SceneActorNumber(camera.clipFar));
         break;
     }
     case EditorSceneActorType::Environment:
@@ -528,6 +477,60 @@ std::vector<EditorSceneActorField> SceneActorFields(const EditorSceneActorSnapsh
     }
     }
     return fields;
+}
+
+std::vector<EditorSceneActorEditableField> SceneActorEditableFields(
+    const EditorSceneActorSnapshot& actor)
+{
+    using P = EditorActorProperty;
+    std::vector<EditorSceneActorEditableField> fields;
+    if (actor.type == EditorSceneActorType::Environment || actor.type == EditorSceneActorType::WindProfile)
+        return fields;
+    fields.push_back({P::Position, "Location (cm)", actor.position, 3});
+    if (actor.type != EditorSceneActorType::SquareAreaLight)
+        fields.push_back({P::Rotation, "Rotation (deg)", actor.rotation, 3});
+    if (actor.type == EditorSceneActorType::Mesh)
+    {
+        fields.push_back({P::Scale, "Scale", actor.scale, 3});
+        return fields;
+    }
+    if (actor.type == EditorSceneActorType::Camera)
+    {
+        fields.push_back({P::CameraFov, "Horizontal FOV (deg)",
+            Eigen::Vector3f(actor.camera.horizontalFovDegrees, 0, 0), 1});
+        fields.push_back({P::CameraNear, "Near Clip (cm)",
+            Eigen::Vector3f(actor.camera.clipNear, 0, 0), 1});
+        fields.push_back({P::CameraFar, "Far Clip (cm)",
+            Eigen::Vector3f(actor.camera.clipFar, 0, 0), 1});
+        return fields;
+    }
+    fields.push_back({P::Color, "Light Colour (linear RGB)", actor.light.color, 3});
+    // 主光的 lux 控件保留既有命令，其余灯光使用对象级命令与规范化物理单位。
+    if (!actor.primaryDirectionalLight)
+        fields.push_back({P::Intensity,
+            actor.type == EditorSceneActorType::DirectionalLight ? "Intensity (lux)" :
+            actor.type == EditorSceneActorType::SquareAreaLight ? "Radiance" : "Intensity (cd)",
+            Eigen::Vector3f(actor.light.intensity, 0, 0), 1});
+    if (actor.type == EditorSceneActorType::SpotLight)
+    {
+        fields.push_back({P::InnerCone, "Inner Half Angle (deg)",
+            Eigen::Vector3f(actor.light.coneAngleInner * 180.0f / 3.14159265358979323846f, 0, 0), 1});
+        fields.push_back({P::OuterCone, "Outer Half Angle (deg)",
+            Eigen::Vector3f(actor.light.coneAngleOuter * 180.0f / 3.14159265358979323846f, 0, 0), 1});
+    }
+    if (actor.type == EditorSceneActorType::SquareAreaLight)
+    {
+        fields.push_back({P::Normal, "Normal", actor.light.direction, 3});
+        fields.push_back({P::AreaSize, "Side Length (cm)",
+            Eigen::Vector3f(actor.light.squareSize, 0, 0), 1});
+    }
+    return fields;
+}
+
+std::string SceneActorPropertyControlId(EditorActorProperty property, uint32_t component)
+{
+    return "actor-property-" + std::to_string(static_cast<unsigned>(property)) +
+        "-" + std::to_string(component);
 }
 
 MaterialInstanceModelSnapshot MeshSceneActorModel(const EditorSceneActorSnapshot& actor)

@@ -1224,6 +1224,9 @@ MaterialInstanceDocumentService::ListOpenDocumentEntries() const
     {
         MaterialEditorAssetEntry entry;
         entry.assetPath = path;
+        entry.revision = document.revision;
+        entry.state = document.state;
+        entry.message = document.validationMessage;
         entry.dirty =
             document.state == MaterialEditorDocumentState::Dirty ||
             document.state == MaterialEditorDocumentState::SaveFailed ||

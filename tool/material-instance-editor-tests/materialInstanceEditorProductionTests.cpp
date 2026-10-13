@@ -1462,3 +1462,58 @@ TEST(MaterialInstanceEditorProduction, StartupBrowserCatalogIsNotTruncatedToTheD
     EXPECT_TRUE(std::any_of(runtime.GetSnapshot().assets.begin(), runtime.GetSnapshot().assets.end(),
         [](const auto& asset) { return asset.assetPath == "catalog/MI_catalog_59.json"; }));
 }
+
+TEST(MaterialInstanceEditorProduction, SharedModifiedListSavesSceneAndInactiveMaterialIndependently)
+{
+    ProductionFixture fixture;
+    const std::string scenePath = "scenes/SC_save.json";
+    const std::string otherMi = "materials/MI_other.json";
+    CopyFixtureFile("MI_editor_test_original.json", fixture.resourceRoot / otherMi);
+    WriteJson(fixture.resourceRoot / scenePath, {
+        {"name", "Save fixture"}, {"type", "scene"}, {"worldUnit", "cm"},
+        {"description", "Disposable save integration fixture"},
+        {"objects", Json::array({{{"name", "Key"}, {"type", "pointLight"},
+            {"position", {0, 0, 0}}, {"color", {1, 1, 1}},
+            {"intensity", 10}, {"intensityUnit", "cd"}}})}});
+    MaterialInstanceEditorRuntime runtime;
+    ASSERT_TRUE(runtime.Initialize(
+        MaterialInstanceEditorRuntime::Config{fixture.resourceRoot, fixture.projectRoot}).IsSuccess());
+    OpenMaterialInstanceAssetPayload open;
+    open.assetPath = kMaterialInstancePath;
+    SubmitRuntimeCommand(runtime, 101, EditorCommandType::OpenMaterialInstanceAsset, open);
+    SubmitRuntimeCommand(runtime, 102, EditorCommandType::SetMaterialParameterOverride,
+        SetMaterialParameterOverridePayload{kMaterialInstancePath, "u_scalar",
+            EditorMaterialParameterType::Float, 0.9f}, RequireUiDocument(runtime).revision);
+    open.assetPath = otherMi;
+    SubmitRuntimeCommand(runtime, 103, EditorCommandType::OpenMaterialInstanceAsset, open);
+    runtime.NotifyWorldChanged(scenePath, 7);
+    EditorUi::EditorSceneActorSnapshot actor;
+    actor.scenePath = scenePath;
+    actor.identity = "pointLight|Key";
+    actor.type = EditorUi::EditorSceneActorType::PointLight;
+    actor.position = Eigen::Vector3f(55, 0, 0);
+    std::string error;
+    ASSERT_TRUE(runtime.SceneDocuments()->PrepareActorEdit(scenePath, actor.identity, error));
+    runtime.SceneDocuments()->RecordActorEdit(actor,
+        {7, actor.identity, EditorActorProperty::Position, 0, 55});
+    runtime.Tick();
+    const auto modified = runtime.GetSnapshot().modifiedDocuments;
+    ASSERT_EQ(modified.size(), 2u);
+    EXPECT_EQ(modified[0].assetPath, kMaterialInstancePath);
+    EXPECT_EQ(modified[1].assetPath, scenePath);
+    SubmitRuntimeCommand(runtime, 104, EditorCommandType::SaveMaterialInstanceDocument,
+        MaterialInstanceAssetPathPayload{kMaterialInstancePath}, modified[0].revision);
+    EXPECT_EQ(RequireUiDocument(runtime).assetPath, otherMi);
+    ASSERT_EQ(runtime.GetSnapshot().modifiedDocuments.size(), 1u);
+    EXPECT_EQ(runtime.GetSnapshot().modifiedDocuments.front().assetPath, scenePath);
+    ASSERT_EQ(runtime.GetSnapshot().saveFeedback.size(), 1u);
+    EXPECT_TRUE(runtime.GetSnapshot().saveFeedback.front().succeeded);
+    SubmitRuntimeCommand(runtime, 105, EditorCommandType::SaveSceneDocument,
+        MaterialInstanceAssetPathPayload{scenePath}, modified[1].revision);
+    EXPECT_TRUE(runtime.GetSnapshot().modifiedDocuments.empty());
+    ASSERT_EQ(runtime.GetSnapshot().saveFeedback.size(), 2u);
+    EXPECT_TRUE(runtime.GetSnapshot().saveFeedback.back().succeeded);
+    EXPECT_GT(runtime.GetSnapshot().saveFeedback.back().sequence,
+        runtime.GetSnapshot().saveFeedback.front().sequence);
+    EXPECT_EQ(ReadJson(fixture.resourceRoot / scenePath)["objects"][0]["position"][0], 55);
+}

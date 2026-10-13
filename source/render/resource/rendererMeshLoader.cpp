@@ -172,6 +172,9 @@ RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
         meshObjectPlan.materialSlotName = sectionPlan.materialSlotName;
         meshObjectPlan.debugName = meshObjectName;
         meshObjectPlan.model = BuildModelMatrix(position, rotation, scale);
+        meshObjectPlan.scenePosition = position;
+        meshObjectPlan.sceneRotation = rotation;
+        meshObjectPlan.sceneScale = scale;
         meshObjectPlan.localBoundsMin = section.vertices.front().position;
         meshObjectPlan.localBoundsMax = section.vertices.front().position;
         for (const auto& vertex : section.vertices)

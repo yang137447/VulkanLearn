@@ -41,8 +41,8 @@ struct EditorSceneMeshSectionSnapshot
     std::string windProfileKey;
 };
 
-// 相机只发布 Details 需要的七个字段。世界快照里的 CameraSnapshot 还带 view/projection
-// 等渲染矩阵，UI 不消费它们，因此不把渲染矩阵放进编辑器视图模型。
+// 相机发布 Details 与世界坐标辅助线需要的基向量/投影参数；
+// UI 不消费渲染矩阵，因此不把矩阵放进编辑器视图模型。
 struct EditorSceneCameraActor
 {
     Eigen::Vector3f position = Eigen::Vector3f::Zero();
@@ -109,11 +109,19 @@ struct EditorSceneActorSnapshot
     // Mesh：场景 JSON 里的对象名（多 section 共享）与模型级 RuntimeId。
     std::string sceneObjectIdentity;
     RuntimeId meshObjectId = 0;
+    // 作者根 TRS：网格取 scene JSON 根，节点取 SceneNode；旋转沿用 VL 的度制 XYZ。
+    Eigen::Vector3f position = Eigen::Vector3f::Zero();
+    Eigen::Vector3f rotation = Eigen::Vector3f::Zero();
+    Eigen::Vector3f scale = Eigen::Vector3f::Ones();
     // 四类灯共用一个字段，type 由 light.type 区分（LightSnapshotType）。
     LightSnapshot light;
     // 主方向光 = World::GetPrimaryDirectionalLight()，SetSunIntensity 与 CSM 只作用于它。
     bool primaryDirectionalLight = false;
+    bool castShadows = true;
     EditorSceneCameraActor camera;
+    // 仅 Camera 行携带观察相机读数，供坐标轴与辅助线投影；不是第二个场景 actor。
+    EditorSceneCameraActor viewportCamera;
+    bool hasViewportCamera = false;
     EditorSceneEnvironmentActor environment;
     EditorSceneWindActor wind;
 };

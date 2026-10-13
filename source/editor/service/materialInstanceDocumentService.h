@@ -119,6 +119,9 @@ struct MaterialEditorAssetEntry
 {
     std::string assetPath;
     bool dirty = false;
+    uint64_t revision = 0;
+    MaterialEditorDocumentState state = MaterialEditorDocumentState::Clean;
+    std::string message;
 };
 
 struct MaterialEditorSnapshot
@@ -252,6 +255,7 @@ public:
     std::optional<MaterialEditorDocumentSnapshot> BuildDocumentSnapshot(
         std::string_view assetPath);
     bool IsDocumentOpen(std::string_view assetPath) const;
+    std::vector<MaterialEditorAssetEntry> OpenDocumentEntries() const { return ListOpenDocumentEntries(); }
     std::optional<EditorDocumentRevision> GetDocumentRevision(
         std::string_view assetPath) const;
 

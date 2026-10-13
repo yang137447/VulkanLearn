@@ -23,6 +23,20 @@ void World::SetViewTarget(std::shared_ptr<SceneNode> viewTarget)
 void World::SetCamera(std::shared_ptr<Camera> camera)
 {
     this->camera = std::move(camera);
+    editorCamera.reset();
+    editorViewEnabled = false;
+}
+
+void World::SetEditorViewEnabled(bool enabled)
+{
+    if (enabled && !editorCamera && camera)
+    {
+        editorCamera = std::make_shared<Camera>(*camera);
+        editorCamera->SetName("Editor View");
+    }
+    editorViewEnabled = enabled;
+    // 显示曝光仍来自场景 Camera；编辑器观察位姿和投影则独立保留。
+    if (editorCamera && camera) editorCamera->SetExposure(camera->GetExposure());
 }
 
 void World::SetEnvironment(WorldEnvironment environment)
@@ -138,6 +152,38 @@ bool World::SetSquareAreaLightVisible(const std::string& name, bool visible)
     if (lightIt == squareAreaLights.end()) return false;
     lightIt->second.visible = visible;
     return true;
+}
+
+bool World::SetSquareAreaLight(const std::string& name, const WorldSquareAreaLight& light)
+{
+    const auto it = squareAreaLights.find(name);
+    if (it == squareAreaLights.end()) return false;
+    it->second = light;
+    return true;
+}
+
+bool World::SetMeshSceneObjectTransform(const std::string& identity,
+    const Eigen::Vector3f& position, const Eigen::Vector3f& rotation,
+    const Eigen::Vector3f& scale)
+{
+    SceneNode nextRoot;
+    nextRoot.SetTransform(position, rotation, scale);
+    bool matched = false;
+    for (auto& entry : meshObjects)
+    {
+        WorldMeshObject& object = entry.second;
+        if (MeshSceneObjectIdentity(object, entry.first) != identity) continue;
+        SceneNode previousRoot;
+        previousRoot.SetTransform(object.scenePosition, object.sceneRotation, object.sceneScale);
+        // 不能用新根直接替换 model：section 的导入节点变换仍然属于该实例。
+        object.model = (nextRoot.GetModelMatrix() *
+            previousRoot.GetModelMatrix().inverse() * object.model).eval();
+        object.scenePosition = position;
+        object.sceneRotation = rotation;
+        object.sceneScale = scale;
+        matched = true;
+    }
+    return matched;
 }
 
 } // namespace VL

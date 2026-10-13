@@ -38,7 +38,11 @@ Destructive validation workflows remain console/launch operations, not buttons.
 - Bottom edge: status bar.
 - Dirty-close modal: explicit Save/Discard/Cancel.
 
-This remains a material workspace, not a full scene-authoring tool.
+The workspace supports actor property editing with GT-owned scene drafts and
+explicit conflict-aware scene saves; it has no undo system.
+Level editing navigates an independent World-owned editor camera. The authored
+scene Camera remains editable without following viewport movement; immersion
+returns to the scene camera. Model/material previews keep their existing camera.
 Scene display uses a graph-owned offscreen image. GT owns only a logical
 texture token and a framebuffer-pixel layout rectangle, never image handles.
 
@@ -54,7 +58,12 @@ mutate World, write assets, or touch Vulkan. `materialInstanceEditorView.h`
 keeps the view types and command sink independent of any UI library.
 
 Same-frame edits coalesce into an ordered revision-gated atomic batch.
-Save and Validate include pending edits. Dirty close waits for a clean
+Validate includes pending edits. Save opens confirmation after flushing pending
+edits and waits for an authoritative revision before enabling confirmation.
+The shared Save Content list includes dirty scene and MI files, supports
+individual checkbox selection, and never writes merely by opening.
+Content Browser marks both types in place and offers a path-targeted Save action.
+Dirty close waits for a clean
 authoritative snapshot; failed saves keep the document and dialog open.
 Focused partial input is not overwritten by snapshots. Labels are RML-escaped.
 Color is currently edited as Linear RGBA numbers, without an sRGB palette.
@@ -82,8 +91,9 @@ for a newer World snapshot containing `preview_model` in `SC_model_preview`, so
 metadata completion alone does not expose the previous scene as a model preview.
 Refreshing snapshots preserves the selected page; only explicit open/switch/close
 actions activate another document. Returning to the level requests its remembered
-scene path through LoadWorld; this reloads the scene rather than preserving
-unsaved runtime actor changes or camera movement.
+scene path through LoadWorld; accepted unsaved actor edits are replayed into the
+new generation only if the scene source digest still matches the draft baseline.
+Observer movement and temporary visibility are not scene-document edits.
 Changing model tabs and reloading request the selected model again. This still
 uses the single active World and fixed injection scale, not an independent
 World per tab. The preview camera frames the transformed model bounds on publication.
@@ -227,6 +237,7 @@ It keeps the final absolute position and summed deltas; discrete events remain
 ordered barriers. Free-cursor UI dragging is not coalesced. Camera motion still
 uses SDL's per-frame accumulated relative state, so sensitivity is unchanged.
 Scene picking only performs DOM hit testing for left-button-down events.
+Light/camera helper icons claim editor input and never also trigger mesh picking.
 
 Panel mouse-wheel and button-down events release stale scene-viewport input
 ownership before dispatch to RmlUi, including after returning from immersive
@@ -255,7 +266,8 @@ matching committed World snapshot. Rejection or failure leaves the editor visibl
 another toggle while waiting cancels entry. Returning restores the workspace layout.
 The toolbar uses "Immersive Mode"; File / Exit remains Quit. Esc toggles
 requested mouse capture.
-Ctrl+S saves the active MI when no close modal is open.
+Ctrl+S opens save confirmation for the active MI on a material page, or all
+modified files on other pages. Save, dirty-close and About modals claim input.
 RmlUi keyboard/D-pad/analog navigation uses reference-counted press state.
 Focus loss clears keys, pointer capture, controller and composition state;
 device removal clears controller state. Resize updates RmlUi dimensions and

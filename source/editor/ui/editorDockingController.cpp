@@ -1050,12 +1050,13 @@ bool EditorDockingController::IsSceneViewportElement(const Rml::Element* element
 {
     if (document == nullptr) return false;
     const auto* toolbar = document->GetElementById("viewport-toolbar");
+    const auto* actorOverlay = document->GetElementById("viewport-actor-overlay");
     const auto* surface = document->GetElementById("editor-viewport-surface");
     for (const auto* current = element; current != nullptr && current != document;
         current = current->GetParentNode())
     {
         // 视口工具条叠在场景图像上，但它的点击属于编辑器：不能同时驱动相机或场景拾取。
-        if (current == toolbar) return false;
+        if (current == toolbar || current == actorOverlay) return false;
         if (current == surface) return surface->IsVisible(true);
     }
     return false;

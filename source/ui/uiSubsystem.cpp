@@ -1444,6 +1444,11 @@ void UiSubsystem::BuildDeveloperPanels()
             materialInstanceEditorPanel->VisibleThumbnailPaths() : std::vector<std::string>{});
 }
 
+Editor::SceneDocumentService* UiSubsystem::GetSceneDocuments() const
+{
+    return materialInstanceEditorRuntime ? materialInstanceEditorRuntime->SceneDocuments() : nullptr;
+}
+
 void UiSubsystem::UpdateInputOwnership()
 {
     inputOwnership.mode = developerUiVisible ? UiInputMode::GameAndUi : UiInputMode::GameOnly;

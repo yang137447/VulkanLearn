@@ -20,6 +20,7 @@
 #include "editor/ui/editorSceneActorTree.h"
 #include "editor/ui/editorTextMatch.h"
 #include "editor/ui/editorViewportAxisIndicator.h"
+#include "editor/ui/editorActorVisualization.h"
 #include "ui/widgets/input/inputWidgets.h"
 #include "ui/widgets/layout/layoutWidgets.h"
 #include "ui/widgets/navigation/tabWidgets.h"
@@ -166,19 +167,6 @@ std::string ActorCountLabel(size_t count)
 }
 
 // 树行只携带展示数据与动作地址；动作索引是 sceneActors 的下标，过滤只改变可见性。
-UiWidgets::TreeRowData OutlinerGroupRow(
-    const EditorSceneActorGroupSpec& spec, size_t groupIndex, size_t actorCount, bool expanded)
-{
-    UiWidgets::TreeRowData row;
-    row.label = std::string(spec.title) + " (" + std::to_string(actorCount) + ")";
-    row.select = {"outliner-group", groupIndex};
-    row.toggle = {"outliner-group", groupIndex};
-    row.hasChildren = true;
-    row.expanded = expanded;
-    row.rowClass = "group-row";
-    return row;
-}
-
 UiWidgets::TreeRowData OutlinerActorRow(size_t actorIndex, const EditorSceneActorSnapshot& actor,
     bool selected, bool expanded, bool hasChildren)
 {
@@ -381,7 +369,8 @@ MaterialInstanceAssetEditorPanel::~MaterialInstanceAssetEditorPanel()
 bool MaterialInstanceAssetEditorPanel::ValidateDocument(Rml::ElementDocument& candidate, std::string& error)
 {
     for (const char* id : {
-        "scene-models", "material-slots", "asset-list", "material-editor", "actor-details-content",
+        "scene-models", "material-slots", "material-slots-section", "asset-list", "material-editor", "actor-details-content",
+        "viewport-actor-overlay", "viewport-actor-lines", "viewport-actor-icons", "viewport-actor-visuals",
         "material-preview-image", "material-preview-status", "material-frame",
         "document-title", "document-status", "editor-notice", "details-content",
         "offline-status", "offline-notice", "close-dialog", "close-document-name",
@@ -512,6 +501,7 @@ void MaterialInstanceAssetEditorPanel::Detach()
         document = nullptr;
     }
     widgetDocument.Detach();
+    axisIndicatorSignature.clear();
     // 重新 Attach 时 DOM 是新的：让大纲第一帧无条件重挂一次。
     outlinerMounted = false;
     // 右键菜单的目标属于旧文档的 DOM，重新接上后必须先回到"没有菜单"。
@@ -603,8 +593,127 @@ void MaterialInstanceAssetEditorPanel::FlushPendingEdits(bool save)
 
 void MaterialInstanceAssetEditorPanel::RequestSave()
 {
-    if (viewingJson || resourceEditorVisible) return;
-    FlushPendingEdits(true);
+    OpenSaveDialog(snapshot.activeDocument && IsMaterialEditorVisible()
+        ? snapshot.activeDocument->assetPath : std::string{});
+}
+
+void MaterialInstanceAssetEditorPanel::RequestSaveAll()
+{
+    OpenSaveDialog({});
+}
+
+void MaterialInstanceAssetEditorPanel::OpenSaveDialog(const std::string& path)
+{
+    if (HasModal()) return;
+    if (snapshot.modifiedDocuments.empty() && pendingEdits.empty() &&
+        (!snapshot.activeDocument || snapshot.activeDocument->status == EditorDocumentStatus::Clean))
+    {
+        localStatus = "No modified assets.";
+        return;
+    }
+    // 先提交未完成 batch，再从下一轮权威快照取得新 revision；弹窗打开本身不保存。
+    saveAwaitingSnapshot = !pendingEdits.empty();
+    FlushPendingEdits();
+    saveFilterPath = path;
+    saveDialogVisible = true;
+    saveChecked.clear();
+    saveKnownPaths.clear();
+    saveWaiting.clear();
+    saveHadFailure = false;
+    saveMessage.clear();
+    CloseMenus();
+    CloseContextMenu();
+    RefreshSaveDialog();
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshSaveDialog()
+{
+    if (!document) return;
+    WidgetRefreshScope refresh(refreshingControls);
+    if (saveDialogVisible && !saveWaiting.empty())
+    {
+        for (const auto& feedback : snapshot.saveFeedback)
+        {
+            if (feedback.sequence <= saveStartedSequence ||
+                saveWaiting.erase(feedback.assetPath) == 0) continue;
+            if (!feedback.succeeded)
+            {
+                saveHadFailure = true;
+                saveMessage += feedback.assetPath + ": " + feedback.message + "\n";
+            }
+        }
+        if (saveWaiting.empty() && !saveHadFailure)
+        {
+            saveDialogVisible = false;
+            if (jsonAssetRequestSink) jsonAssetRequestSink->RequestRefreshAssetCatalog();
+        }
+    }
+    widgetDocument.SetProperty("save-dialog", "display", saveDialogVisible ? "block" : "none");
+    if (!saveDialogVisible) return;
+    saveRows.clear();
+    for (const auto& asset : snapshot.modifiedDocuments)
+        if (saveFilterPath.empty() || saveFilterPath == asset.assetPath)
+            saveRows.push_back(asset);
+    // 兼容旧文档快照生产者；实际 Runtime 始终发布跨类型 modifiedDocuments。
+    if (saveRows.empty() && snapshot.modifiedDocuments.empty() && snapshot.activeDocument &&
+        snapshot.activeDocument->status != EditorDocumentStatus::Clean &&
+        (saveFilterPath.empty() || saveFilterPath == snapshot.activeDocument->assetPath))
+        saveRows.push_back({snapshot.activeDocument->assetPath, EditorAssetKind::MaterialInstance,
+            snapshot.activeDocument->revision, snapshot.activeDocument->status,
+            snapshot.activeDocument->validationMessage});
+    std::string markup;
+    for (size_t index = 0; index < saveRows.size(); ++index)
+    {
+        const auto& asset = saveRows[index];
+        if (saveKnownPaths.insert(asset.assetPath).second) saveChecked.insert(asset.assetPath);
+        markup += "<div class=\"save-row\"><input type=\"checkbox\" id=\"save-file-" +
+            std::to_string(index) + "\" data-action=\"save-file\" data-index=\"" + std::to_string(index) +
+            "\"/><label class=\"save-path\" for=\"save-file-" +
+            std::to_string(index) + "\">" + Text(asset.assetPath) + "</label><span class=\"save-state\">" +
+            Text(DocumentStatus(asset.status)) + "</span></div>";
+    }
+    if (markup.empty()) markup = "<p>No modified assets.</p>";
+    SetMarkup("save-document-list", std::move(markup));
+    // 勾选/等待态原地同步，点击 checkbox 不销毁焦点节点。
+    for (size_t index = 0; index < saveRows.size(); ++index)
+    {
+        const auto id = "save-file-" + std::to_string(index);
+        if (auto* input = document->GetElementById(id))
+        {
+            const bool checked = saveChecked.count(saveRows[index].assetPath) != 0;
+            if (checked && !input->HasAttribute("checked")) input->SetAttribute("checked", "checked");
+            else if (!checked && input->HasAttribute("checked")) input->RemoveAttribute("checked");
+        }
+        SetDisabled(id, !saveWaiting.empty());
+    }
+    SetMarkup("save-document-status", Text(saveMessage));
+    bool any = false;
+    for (const auto& row : saveRows) any = any || saveChecked.count(row.assetPath) != 0;
+    SetDisabled("save-confirm", !any || !saveWaiting.empty() || saveAwaitingSnapshot);
+    SetDisabled("save-cancel", !saveWaiting.empty());
+    SetDisabled("save-select-all", saveRows.empty() || !saveWaiting.empty());
+}
+
+void MaterialInstanceAssetEditorPanel::ConfirmSave()
+{
+    if (!saveWaiting.empty() || saveAwaitingSnapshot) return;
+    saveHadFailure = false;
+    saveMessage.clear();
+    saveStartedSequence = 0;
+    for (const auto& feedback : snapshot.saveFeedback)
+        saveStartedSequence = std::max(saveStartedSequence, feedback.sequence);
+    for (const auto& row : saveRows)
+    {
+        if (saveChecked.count(row.assetPath) == 0) continue;
+        EditorCommandEnvelope command;
+        command.type = row.kind == EditorAssetKind::Scene
+            ? EditorCommandType::SaveSceneDocument : EditorCommandType::SaveMaterialInstanceDocument;
+        command.expectedDocumentRevision = row.revision;
+        command.payload = MaterialInstanceAssetPathPayload{row.assetPath};
+        saveWaiting.insert(row.assetPath);
+        Submit(std::move(command));
+    }
+    RefreshSaveDialog();
 }
 
 void MaterialInstanceAssetEditorPanel::Build(const MaterialInstanceEditorSnapshot& value)
@@ -614,6 +723,7 @@ void MaterialInstanceAssetEditorPanel::Build(const MaterialInstanceEditorSnapsho
     textureOptionsDirty = textureOptionsDirty || !SameTextureOptions(snapshot.textureAssets, value.textureAssets);
     const std::string previousDocument = snapshot.selectedDocumentPath;
     snapshot = value;
+    saveAwaitingSnapshot = false;
     // 文档集合由服务拥有，停靠标签只是投影；关卡/贴图页面不会被每帧刷新抢走。
     RefreshDocumentTabs();
     if ((activateMaterialDocument || previousDocument != snapshot.selectedDocumentPath) &&
@@ -655,6 +765,12 @@ void MaterialInstanceAssetEditorPanel::Build(const MaterialInstanceEditorSnapsho
     }
     RefreshLists();
     RefreshDetails();
+    RefreshSaveDialog();
+    // 全局保存不受当前文档/只读资源页控制；单文件保存保留文档自身的可用性。
+    const bool modified = !snapshot.modifiedDocuments.empty() ||
+        (snapshot.activeDocument && snapshot.activeDocument->status != EditorDocumentStatus::Clean);
+    SetDisabled("menu-file-save", !modified);
+    SetDisabled("workspace-save", !modified);
     if (document != nullptr)
     {
         widgetDocument.SetProperty("close-dialog", "display",
@@ -776,6 +892,7 @@ void MaterialInstanceAssetEditorPanel::RefreshViewportToolbar()
     const int mode = runtimeView.debugViewMode;
     SetMarkup("viewport-view-title", std::string(mode >= 0 && mode < 13 ? modes[mode] : "Debug View") + " v");
     RefreshViewportAxisIndicator();
+    RefreshActorVisualization();
 }
 
 void MaterialInstanceAssetEditorPanel::RefreshViewportAxisIndicator()
@@ -795,9 +912,10 @@ void MaterialInstanceAssetEditorPanel::RefreshViewportAxisIndicator()
     }
     if (camera == nullptr) return;
 
-    const Eigen::Vector3f forward = camera->camera.forward.normalized();
-    const Eigen::Vector3f right = camera->camera.right.normalized();
-    const Eigen::Vector3f up = camera->camera.up.normalized();
+    const auto& view = camera->hasViewportCamera ? camera->viewportCamera : camera->camera;
+    const Eigen::Vector3f forward = view.forward.normalized();
+    const Eigen::Vector3f right = view.right.normalized();
+    const Eigen::Vector3f up = view.up.normalized();
     const auto triad = EditorUi::ProjectAxisIndicatorTriad(right, up, forward);
 
     std::array<size_t, 3> order = {0, 1, 2};
@@ -1033,6 +1151,10 @@ std::string MaterialInstanceAssetEditorPanel::ContextMenuItemsMarkup() const
     {
         markup += UiWidgets::MenuItem("context-browser-open", {"context-browser-open", 0},
             "Open", false, false);
+        for (const auto& asset : snapshot.modifiedDocuments)
+            if (asset.assetPath == contextMenuTarget)
+                markup += UiWidgets::MenuItem("context-browser-save", {"context-browser-save", 0},
+                    "Save...", false, false);
     }
     else if (contextMenuKind == ContextMenuKind::Viewport)
     {
@@ -1043,11 +1165,8 @@ std::string MaterialInstanceAssetEditorPanel::ContextMenuItemsMarkup() const
         markup += UiWidgets::MenuItem("context-view-unlit", {"context-view-mode", 1},
             "Unlit", runtimeView.debugViewMode == 1, false);
         markup += "<div class=\"menu-separator\"></div>";
-        // CSM 设置要写进活动场景文件：没有活动 World 就没有写入目标，此时明确禁用，
-        // 而不是提交一条注定失败的运行时命令（禁用表现与 Edit 的 Undo/Redo 同一规则）。
-        const bool hasWorld = !runtimeView.activeWorldPath.empty();
-        markup += UiWidgets::MenuItem("context-save-csm", {"context-save-csm", 0},
-            "Save CSM Settings to Scene", false, !hasWorld);
+        markup += UiWidgets::MenuItem("context-save-all", {"context-save-all", 0},
+            "Save Modified Assets...", false, snapshot.modifiedDocuments.empty());
     }
     return markup;
 }
@@ -1151,6 +1270,8 @@ void MaterialInstanceAssetEditorPanel::RefreshLists()
         }
     }
     SetMarkup("material-slots", std::move(slots));
+    widgetDocument.SetProperty("material-slots-section", "display",
+        snapshot.selectedModel && !snapshot.selectedModel->materials.empty() ? "block" : "none");
     contentBrowser.Build(snapshot);
 }
 
@@ -1167,12 +1288,72 @@ std::string MaterialInstanceAssetEditorPanel::OutlinerMountedVisuals() const
     {
         if (index >= outlinerRows.size()) break;
         const EditorSceneActorRow& row = outlinerRows[index];
-        if (row.isGroup || row.isSlot || row.actorIndex >= actors.size()) continue;
+        if (row.isSlot || row.actorIndex >= actors.size()) continue;
         const EditorSceneActorSnapshot& actor = actors[row.actorIndex];
         if (!SceneActorHasVisibilityToggle(actor.type)) continue;
         visuals += "\n" + actor.identity + (actor.visible ? "=1" : "=0");
     }
     return visuals;
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshActorVisualization()
+{
+    if (document == nullptr) return;
+    widgetDocument.SetClass("viewport-actor-visuals", "selected", showActorVisualization);
+    auto* surface = document->GetElementById("editor-viewport-surface");
+    if (surface == nullptr || !surface->IsVisible(true)) return;
+    const auto size = surface->GetBox().GetSize(Rml::BoxArea::Content);
+    const auto& actors = OutlinerActors();
+    const EditorSceneCameraActor* view = nullptr;
+    for (const auto& actor : actors)
+        if (actor.type == EditorSceneActorType::Camera)
+        {
+            view = actor.hasViewportCamera ? &actor.viewportCamera : &actor.camera;
+            break;
+        }
+    std::string linesMarkup;
+    std::string iconsMarkup;
+    if (showActorVisualization && view && size.x > 0 && size.y > 0)
+    {
+        // 图标是固定像素大小；只有选中对象才绘制辅助线，避免灯具多时淹没场景。
+        for (size_t index = 0; index < actors.size(); ++index)
+        {
+            const auto& actor = actors[index];
+            if (!actor.visible || actor.type == EditorSceneActorType::Mesh ||
+                actor.type == EditorSceneActorType::Environment || actor.type == EditorSceneActorType::WindProfile)
+                continue;
+            const bool selected = actor.identity == snapshot.selectedActorIdentity;
+            if (selected)
+                for (const auto& line : BuildActorVisualLines(actor, *view, size.x, size.y))
+                {
+                    const Eigen::Vector2f delta = line.end - line.begin;
+                    const float angle = std::atan2(delta.y(), delta.x()) * 180.0f / 3.14159265358979323846f;
+                    linesMarkup += "<div class=\"actor-visual-line\" style=\"left: " + Number(line.begin.x()) +
+                        "px; top: " + Number(line.begin.y()) + "px; width: " + Number(delta.norm()) +
+                        "px; transform: rotate(" + Number(angle) + "deg);\"></div>";
+                }
+            Eigen::Vector2f pixel;
+            const Eigen::Vector3f position = actor.type == EditorSceneActorType::Camera
+                ? actor.camera.position : actor.light.position;
+            if (!ProjectActorVisualPoint(*view, position, size.x, size.y, pixel)) continue;
+            iconsMarkup += "<button class=\"actor-visual-icon\" data-generation=\"" +
+                std::to_string(actor.worldGeneration) + "\" data-action=\"viewport-actor\" data-index=\"" + std::to_string(index) +
+                "\" title=\"" + Text(actor.displayName) + "\" style=\"left: " + Number(pixel.x() - 12) +
+                "px; top: " + Number(pixel.y() - 12) + "px;\"><img src=\"" +
+                Text(SceneActorGroupIcon(actor.type)) + "\"/></button>";
+        }
+    }
+    // 辅助线与图标分开缓存：第一次选中仅改图标 class，不销毁双击的目标节点。
+    SetMarkup("viewport-actor-lines", std::move(linesMarkup));
+    SetMarkup("viewport-actor-icons", std::move(iconsMarkup));
+    Rml::ElementList icons;
+    document->GetElementById("viewport-actor-icons")->QuerySelectorAll(icons, "[data-action=viewport-actor]");
+    for (auto* icon : icons)
+    {
+        const size_t index = icon->GetAttribute<size_t>("data-index", actors.size());
+        const bool selected = index < actors.size() && actors[index].identity == snapshot.selectedActorIdentity;
+        if (icon->IsClassSet("selected") != selected) icon->SetClass("selected", selected);
+    }
 }
 
 void MaterialInstanceAssetEditorPanel::RefreshOutliner()
@@ -1186,7 +1367,6 @@ void MaterialInstanceAssetEditorPanel::RefreshOutliner()
     const uint64_t generation = actors.empty() ? 0 : actors.front().worldGeneration;
     if (treeWorldGeneration != generation)
     {
-        outlinerExpansion.collapsedGroups.clear();
         outlinerExpansion.expandedActors.clear();
         outlinerQuery.clear();
         outlinerTypeFilter = "all";
@@ -1206,13 +1386,11 @@ void MaterialInstanceAssetEditorPanel::RefreshOutliner()
     // 再由滚动偏移与可视高度算出本帧窗口，与 Content Browser 的 VisibleWindow 同序。
     MeasureOutlinerRowHeight();
     const EditorSceneActorWindow window = OutlinerWindow();
-    // 选择态与可见性只改已挂载行的 class/文本/眼睛图标，不改变行集合，但对 markup
-    // 是可见变化，因此与窗口一起参与"是否需要重挂 DOM"的判断。
+    // 选择态不重挂 DOM：RmlUi 的双击要求两次 click 的目标节点身份保持不变。
     const std::string visuals = OutlinerMountedVisuals();
     if (!outlinerMounted ||
         outlinerMountedRevision != outlinerRowsRevision ||
-        !SameSceneActorWindow(outlinerMountedWindow, window) ||
-        outlinerMountedVisuals != visuals)
+        !SameSceneActorWindow(outlinerMountedWindow, window))
     {
         SetMarkup("scene-models", OutlinerRowsMarkup(window));
         outlinerMounted = true;
@@ -1220,11 +1398,16 @@ void MaterialInstanceAssetEditorPanel::RefreshOutliner()
         outlinerMountedWindow = window;
         outlinerMountedVisuals = visuals;
     }
+    else if (outlinerMountedVisuals != visuals)
+    {
+        RefreshOutlinerVisuals();
+        outlinerMountedVisuals = visuals;
+    }
 
-    // 计数始终是筛选结果（分组行的 actorCount 之和），与折叠状态和挂载窗口都无关。
+    // 计数只统计 actor；展开的材质槽不增加 actor 数。
     size_t visibleActors = 0;
     for (const EditorSceneActorRow& row : outlinerRows)
-        if (row.isGroup) visibleActors += row.actorCount;
+        if (!row.isSlot) ++visibleActors;
     const size_t total = actors.size();
     SetMarkup("outliner-count", Text(visibleActors == total
         ? ActorCountLabel(total)
@@ -1239,6 +1422,35 @@ void MaterialInstanceAssetEditorPanel::RefreshOutliner()
         emptyMessage.empty() ? "none" : "block");
     widgetDocument.SetProperty("scene-models", "display",
         emptyMessage.empty() ? "block" : "none");
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshOutlinerVisuals()
+{
+    const auto& actors = OutlinerActors();
+    Rml::Element* list = document->GetElementById("scene-models");
+    size_t rowIndex = outlinerMountedWindow.begin;
+    for (int index = 0; index < list->GetNumChildren(); ++index)
+    {
+        Rml::Element* element = list->GetChild(index);
+        if (!element->IsClassSet("tree-row") || rowIndex >= outlinerRows.size()) continue;
+        const auto& row = outlinerRows[rowIndex++];
+        const auto& actor = actors[row.actorIndex];
+        const bool selected = actor.identity == snapshot.selectedActorIdentity &&
+            (!row.isSlot || snapshot.selectedMaterialSlotIndex == row.materialSlotIndex);
+        auto* label = element->QuerySelector(".list-item");
+        if (label && label->IsClassSet("selected") != selected) label->SetClass("selected", selected);
+        if (row.isSlot || !SceneActorHasVisibilityToggle(actor.type)) continue;
+        if (element->IsClassSet("hidden-row") != !actor.visible)
+            element->SetClass("hidden-row", !actor.visible);
+        auto* eye = element->QuerySelector("[data-action=outliner-visible]");
+        if (!eye) continue;
+        if (eye->IsClassSet("alternate") == !actor.visible) continue;
+        eye->SetClass("alternate", !actor.visible);
+        const std::string hint = actor.visible ? "Hide in viewport" : "Show in viewport";
+        eye->SetAttribute("title", hint);
+        eye->SetAttribute("aria-label", hint);
+        eye->GetChild(0)->SetAttribute("src", actor.visible ? "icons/eye.png" : "icons/eye-off.png");
+    }
 }
 
 bool MaterialInstanceAssetEditorPanel::OutlinerRowsNeedRebuild(
@@ -1298,7 +1510,6 @@ std::string MaterialInstanceAssetEditorPanel::OutlinerRowsMarkup(
     const EditorSceneActorWindow& window) const
 {
     const std::vector<EditorSceneActorSnapshot>& actors = OutlinerActors();
-    const auto& specs = SceneActorGroupSpecs();
     std::string markup;
     if (window.top > 0.0f)
         markup += "<div class=\"outliner-spacer\" style=\"height: " +
@@ -1306,16 +1517,6 @@ std::string MaterialInstanceAssetEditorPanel::OutlinerRowsMarkup(
     for (size_t index = window.begin; index < window.end && index < outlinerRows.size(); ++index)
     {
         const EditorSceneActorRow& row = outlinerRows[index];
-        if (row.isGroup)
-        {
-            // 分组事件按规范表下标寻址；分组行的类型 -> 下标为此处的唯一下标来源。
-            const size_t groupIndex = SceneActorGroupIndex(row.type);
-            const EditorSceneActorGroupSpec* spec = FindSceneActorGroupSpec(row.type);
-            if (spec == nullptr || groupIndex >= specs.size()) continue;
-            markup += UiWidgets::TreeRow(
-                OutlinerGroupRow(*spec, groupIndex, row.actorCount, row.expanded));
-            continue;
-        }
         if (row.actorIndex >= actors.size()) continue;
         const EditorSceneActorSnapshot& actor = actors[row.actorIndex];
         const bool selected = actor.identity == snapshot.selectedActorIdentity;
@@ -1351,6 +1552,7 @@ void MaterialInstanceAssetEditorPanel::SelectOutlinerActor(const EditorSceneActo
 {
     if (sceneSelectionSink == nullptr) return;
     FlushPendingEdits();
+    ShowSceneDetails();
     if (actor.type == EditorSceneActorType::Mesh)
     {
         // mesh actor 仍走迁移前的 MI 导航路由：整模型选择 + 视口描边完全一致。
@@ -1360,15 +1562,6 @@ void MaterialInstanceAssetEditorPanel::SelectOutlinerActor(const EditorSceneActo
     sceneSelectionSink->RequestActorSelection(actor.identity);
 }
 
-void MaterialInstanceAssetEditorPanel::ToggleOutlinerGroup(size_t groupIndex)
-{
-    const auto& specs = SceneActorGroupSpecs();
-    if (groupIndex >= specs.size()) return;
-    const std::string key = specs[groupIndex].key;
-    if (outlinerExpansion.collapsedGroups.erase(key) == 0)
-        outlinerExpansion.collapsedGroups.insert(key);
-}
-
 void MaterialInstanceAssetEditorPanel::RefreshDetails()
 {
     WidgetRefreshScope refresh(refreshingControls);
@@ -1376,7 +1569,8 @@ void MaterialInstanceAssetEditorPanel::RefreshDetails()
     const EditorSceneActorGroupSpec* actorSpec =
         actor == nullptr ? nullptr : FindSceneActorGroupSpec(actor->type);
     const std::string actorIdentity = actor == nullptr || actorSpec == nullptr
-        ? "no-actor" : actor->identity + "|" + actorSpec->key;
+        ? "no-actor" : std::to_string(actor->worldGeneration) + "|" +
+            actor->identity + "|" + actorSpec->key;
     if (actorDetailsIdentity != actorIdentity)
     {
         actorDetailsIdentity = actorIdentity;
@@ -1502,11 +1696,29 @@ std::string MaterialInstanceAssetEditorPanel::ActorSectionMarkup(
     // 只读字段每个值都带 id：值随 World、相机或运行时命令变化时只刷新这一项，
     // 不重建分组 DOM（重建会丢焦点与滚动位置）。
     std::string body;
+    for (const auto& field : SceneActorEditableFields(actor))
+    {
+        std::vector<UiWidgets::NumericComponent> components;
+        for (uint32_t component = 0; component < field.components; ++component)
+        {
+            UiWidgets::NumericComponent entry;
+            entry.id = SceneActorPropertyControlId(field.property, component);
+            static const char* axes[] = {"X", "Y", "Z"};
+            static const char* channels[] = {"R", "G", "B"};
+            entry.label = field.components == 1 ? "" :
+                (field.property == EditorActorProperty::Color ? channels[component] : axes[component]);
+            entry.value = SceneActorNumber(field.value[component]);
+            entry.change = {"actor-property", static_cast<size_t>(field.property), component};
+            components.push_back(std::move(entry));
+        }
+        body += "<div class=\"actor-property-row\">" +
+            UiWidgets::PropertyControlRow(field.label, UiWidgets::NumericComponents(components)) + "</div>";
+    }
     for (const EditorSceneActorField& field : SceneActorFields(actor))
         body += UiWidgets::PropertyInfo(field.label, field.value, field.id);
     if (actor.primaryDirectionalLight) body += PrimaryDirectionalLightControls(actor);
     const std::string key = ActorSectionKey(spec->key);
-    return UiWidgets::CollapsibleSection(DetailsSectionId(key), key, spec->title, body,
+    return UiWidgets::CollapsibleSection(DetailsSectionId(key), key, actor.displayName, body,
         {"section"}, IsSectionExpanded(key));
 }
 
@@ -1545,6 +1757,10 @@ void MaterialInstanceAssetEditorPanel::RefreshActorValues(const EditorSceneActor
     if (actor == nullptr) return;
     for (const EditorSceneActorField& field : SceneActorFields(*actor))
         SetMarkup(field.id, Text(field.value));
+    for (const auto& field : SceneActorEditableFields(*actor))
+        for (uint32_t component = 0; component < field.components; ++component)
+            SetControlValue(SceneActorPropertyControlId(field.property, component),
+                SceneActorNumber(field.value[component]));
     if (!actor->primaryDirectionalLight) return;
     // 文本输入承载精确值；滑条只承载 0..10 的显示区间，越界值在这里按显示区间截断
     // （只影响滑条位置，不改变存储值）。拖动中的滑条是焦点元素，SetControlValue 不回写。
@@ -2178,6 +2394,19 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
         docking.Activate(action == "workspace-renderer" ? "renderer" : "content");
     }
     else if (action == "save") RequestSave();
+    else if (action == "save-all") RequestSaveAll();
+    else if (action == "save-confirm") ConfirmSave();
+    else if (action == "save-cancel")
+    {
+        if (saveWaiting.empty()) saveDialogVisible = false;
+        RefreshSaveDialog();
+    }
+    else if (action == "save-select-all")
+    {
+        for (const auto& row : saveRows) saveChecked.insert(row.assetPath);
+        RefreshSaveDialog();
+    }
+    else if (action == "context-browser-save") OpenSaveDialog(contextMenuTarget);
     else if (action == "menu-open") ToggleMenu(element.GetAttribute<std::string>("data-menu", ""));
     else if (action == "menu-window")
     {
@@ -2200,7 +2429,7 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
     else if (action == "about-close") aboutVisible = false;
     else if (action == "viewport-tool")
     {
-        // 只切换本地高亮：这个仓库没有 gizmo，也没有 transform 编辑后端。
+        // 工具条只切换本地高亮；数值 Transform 编辑走 Details，尚无视口 gizmo。
         // 这里刻意不产生任何 UiAction/资产命令，避免用假开关冒充已实现的编辑能力。
         viewportTransformTool = element.GetAttribute<std::string>("data-tool", "select");
         RefreshViewportToolbar();
@@ -2216,9 +2445,12 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
         if (runtimeActionSink == nullptr) return;
         const bool enabled = action == "actor-csm-enable";
         if (enabled == runtimeView.csmCastShadows) return;
+        const auto* actor = SelectedActor();
+        if (!actor || !actor->primaryDirectionalLight) return;
         UiAction request;
-        request.type = UiActionType::SetCsmCastShadows;
-        request.intValue = enabled ? 1 : 0;
+        request.type = UiActionType::SetActorProperty;
+        request.actorProperty = {actor->worldGeneration, actor->identity,
+            EditorActorProperty::CastShadows, 0, enabled ? 1.0f : 0.0f};
         runtimeActionSink->RequestRuntimeAction(std::move(request));
     }
     else if (action == "revert")
@@ -2348,16 +2580,20 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
         saveThenClose = true;
         saveCloseSubmitted = false;
     }
-    else if (action == "outliner-group") ToggleOutlinerGroup(index);
     else if (action == "outliner-expand" && index < OutlinerActors().size())
     {
         const std::string& identity = OutlinerActors()[index].identity;
         if (outlinerExpansion.expandedActors.erase(identity) == 0)
             outlinerExpansion.expandedActors.insert(identity);
     }
-    else if (action == "outliner-actor" && index < OutlinerActors().size())
+    else if ((action == "outliner-actor" || action == "viewport-actor") && index < OutlinerActors().size())
     {
         SelectOutlinerActor(OutlinerActors()[index]);
+    }
+    else if (action == "viewport-actor-visuals")
+    {
+        showActorVisualization = !showActorVisualization;
+        RefreshActorVisualization();
     }
     else if (action == "outliner-visible" && index < OutlinerActors().size())
     {
@@ -2394,13 +2630,9 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
         request.intValue = static_cast<int>(index);
         runtimeActionSink->RequestRuntimeAction(std::move(request));
     }
-    else if (action == "context-save-csm" && runtimeActionSink != nullptr &&
-        !runtimeView.activeWorldPath.empty())
+    else if (action == "context-save-all")
     {
-        // 与运行时页的 save_csm_to_scene 是同一条 UiAction，不新增场景写入路径。
-        UiAction request;
-        request.type = UiActionType::SaveCsmSettingsToScene;
-        runtimeActionSink->RequestRuntimeAction(std::move(request));
+        RequestSaveAll();
     }
     else if (runtimeActionSink != nullptr)
     {
@@ -2434,7 +2666,14 @@ void MaterialInstanceAssetEditorPanel::HandleChange(Rml::Element& element, const
     const size_t index = element.GetAttribute<size_t>("data-index", 0);
     const std::string value = ControlValue(element);
     localStatus.clear();
-    if (action == "outliner-search")
+    if (action == "save-file" && index < saveRows.size() && saveWaiting.empty())
+    {
+        const auto& path = saveRows[index].assetPath;
+        if (element.HasAttribute("checked")) saveChecked.insert(path);
+        else saveChecked.erase(path);
+        RefreshSaveDialog();
+    }
+    else if (action == "outliner-search")
     {
         // 搜索只改变可见性，不提交业务命令；折叠规则与 Content Browser 共用。
         outlinerQuery = value;
@@ -2449,19 +2688,39 @@ void MaterialInstanceAssetEditorPanel::HandleChange(Rml::Element& element, const
         SceneActorSortOrder order = outlinerSortOrder;
         if (ParseSceneActorSortOrder(value, order)) outlinerSortOrder = order;
     }
+    else if (action == "actor-property" && runtimeActionSink != nullptr)
+    {
+        const auto* actor = SelectedActor();
+        float number = 0.0f;
+        if (actor == nullptr || !ParseNumber(value, number))
+        {
+            localStatus = "A complete finite number is required.";
+            return;
+        }
+        const auto property = static_cast<EditorActorProperty>(index);
+        const uint32_t component = element.GetAttribute<uint32_t>("data-component", 0);
+        for (const auto& field : SceneActorEditableFields(*actor))
+        {
+            if (field.property != property || component >= field.components) continue;
+            if (number == field.value[component]) return;
+            UiAction request;
+            request.type = UiActionType::SetActorProperty;
+            request.actorProperty = {actor->worldGeneration, actor->identity, property, component, number};
+            runtimeActionSink->RequestRuntimeAction(std::move(request));
+            return;
+        }
+    }
     else if (action == "actor-sun-intensity" && runtimeActionSink != nullptr)
     {
 
-        // 与运行时页共用同一条 UiAction 路由，不新增 UI→renderer 的第二条路径。
+        // 作者属性带 actor 身份和 World 代数；console 的 sun 调试动作仍独立保留。
         float number = 0.0f;
         if (!ParseNumber(value, number))
         {
             localStatus = "A complete finite number is required.";
             return;
         }
-        // 运行时页的 sun 滑条是 0..10 的双向 data binding；即使编辑器可见时那一页被隐藏，
-        // 超范围值仍会被它截断并回写 SetSunIntensity。这里按同一区间校验并明确提示，
-        // 而不是无声地提交一个随后被第三个控件改写的值。
+        // 沿用主方向光控件的 lux 范围，精确输入与拖动使用同一编辑边界。
         if (number < SunIntensityMin || number > SunIntensityMax)
         {
             localStatus = "Sun intensity must be between " + SceneActorNumber(SunIntensityMin) +
@@ -2469,10 +2728,11 @@ void MaterialInstanceAssetEditorPanel::HandleChange(Rml::Element& element, const
             return;
         }
         const EditorSceneActorSnapshot* actor = SelectedActor();
-        if (actor != nullptr && !ChangedFloat(number, actor->light.intensity)) return;
+        if (actor == nullptr || !ChangedFloat(number, actor->light.intensity)) return;
         UiAction request;
-        request.type = UiActionType::SetSunIntensity;
-        request.floatValue = number;
+        request.type = UiActionType::SetActorProperty;
+        request.actorProperty = {actor->worldGeneration, actor->identity,
+            EditorActorProperty::Intensity, 0, number};
         runtimeActionSink->RequestRuntimeAction(std::move(request));
     }
     else if (action == "parameter" && snapshot.activeDocument &&
@@ -2675,8 +2935,13 @@ void MaterialInstanceAssetEditorPanel::ProcessEvent(Rml::Event& event)
     if (element == nullptr || element == document || element->HasAttribute("disabled")) return;
     const std::string action = element->GetAttribute<std::string>("data-action", "");
     if (HasModal() && action != "close-save" && action != "close-discard" &&
-        action != "close-cancel" && action != "about-close")
+        action != "close-cancel" && action != "about-close" &&
+        action != "save-file" && action != "save-confirm" && action != "save-cancel" &&
+        action != "save-select-all")
         return;
+    // checkbox 在目标节点的默认 click 中切换 checked；捕获阶段不能截断它。
+    // 随后的 change 才把选择同步到弹窗状态，程序刷新仍由 WidgetRefreshScope 抑制。
+    if (event.GetType() == "click" && action == "save-file") return;
     // 选中菜单条目后收起菜单；标题自己决定展开还是收起，不能在这里先清空。
     if (action != "menu-open" && IsInsideMenuBar(element)) CloseMenus();
     try
@@ -2698,6 +2963,23 @@ void MaterialInstanceAssetEditorPanel::ProcessEvent(Rml::Event& event)
         }
         else if (event.GetType() == "click") HandleClick(*element, action);
         else if (event.GetType() == "change") HandleChange(*element, action);
+        else if (event.GetType() == "dblclick" &&
+            (action == "outliner-actor" || action == "viewport-actor") && runtimeActionSink != nullptr)
+        {
+            const size_t index = element->GetAttribute<size_t>("data-index", 0);
+            if (index < OutlinerActors().size())
+            {
+                const auto& actor = OutlinerActors()[index];
+                if (!SceneActorEditableFields(actor).empty())
+                {
+                    UiAction request;
+                    request.type = UiActionType::FrameEditorActor;
+                    request.actorProperty.worldGeneration = actor.worldGeneration;
+                    request.actorProperty.identity = actor.identity;
+                    runtimeActionSink->RequestRuntimeAction(std::move(request));
+                }
+            }
+        }
         // 条目派发完成后才收起菜单：动作本身不读取"菜单是否打开"这个状态。
         // 禁用条目在上面就已返回，因此菜单保持打开（与菜单栏的禁用条目一致）。
         if (event.GetType() == "click" && IsInsideContextMenu(element)) CloseContextMenu();

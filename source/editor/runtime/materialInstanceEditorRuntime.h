@@ -12,6 +12,7 @@
 #include "editor/command/editorCommandBus.h"
 #include "editor/preview/materialInstancePreviewController.h"
 #include "editor/service/materialInstanceDocumentService.h"
+#include "editor/service/sceneDocumentService.h"
 #include "editor/ui/materialInstanceEditorView.h"
 
 namespace VL::Editor
@@ -54,6 +55,7 @@ public:
 
     // 给 UiSubsystem 的全局快捷键入口使用；实际保存仍经由中央 CommandBus。
     bool SubmitSaveActiveDocument();
+    SceneDocumentService* SceneDocuments() noexcept { return sceneDocuments.get(); }
 
     const EditorUi::MaterialInstanceEditorSnapshot& GetSnapshot() const noexcept
     {
@@ -111,6 +113,8 @@ private:
     void ApplyServiceResult(const MaterialEditorServiceResult& result);
     void RefreshSnapshotFromService();
     void ApplyRuntimeOverlay();
+    void RefreshModifiedDocuments();
+    void RecordSaveFeedback(const EditorCommandEnvelope& command, const EditorCommandResult& result);
     void UpdateBusRevision(const MaterialEditorServiceResult& result);
     void SetStatus(std::string message);
 
@@ -136,6 +140,7 @@ private:
     Config config;
     std::unique_ptr<EditorCommandBus> commandBus;
     std::unique_ptr<MaterialInstanceDocumentService> service;
+    std::unique_ptr<SceneDocumentService> sceneDocuments;
     EditorUi::MaterialInstanceEditorSnapshot snapshot;
     std::string worldPath;
     std::string diagnostic;
@@ -146,6 +151,8 @@ private:
     std::optional<std::string> queuedAutomaticPreviewConnectionAssetPath;
     std::optional<std::string> queuedAutomaticPreviewApplyAssetPath;
     uint64_t worldGeneration = 0;
+    uint64_t saveSequence = 0;
+    std::vector<EditorUi::EditorSaveFeedback> saveFeedback;
     bool initialized = false;
 };
 

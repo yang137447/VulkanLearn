@@ -174,6 +174,7 @@ RuntimeResult<void> MaterialInstanceEditorRuntime::Initialize(Config configValue
                     config.projectRoot,
                     true});
         }
+        sceneDocuments = std::make_unique<SceneDocumentService>(service->GetResourceRoot());
         initialized = true;
         diagnostic.clear();
         snapshot = EditorUi::MaterialInstanceEditorSnapshot{};
@@ -222,12 +223,15 @@ void MaterialInstanceEditorRuntime::Shutdown() noexcept
     queuedAutomaticPreviewConnectionAssetPath.reset();
     queuedAutomaticPreviewApplyAssetPath.reset();
     service.reset();
+    sceneDocuments.reset();
     commandBus.reset();
     previewController.reset();
     snapshot = EditorUi::MaterialInstanceEditorSnapshot{};
     config = Config{};
     worldPath.clear();
     worldGeneration = 0;
+    saveSequence = 0;
+    saveFeedback.clear();
     diagnostic.clear();
     lastCommandMessage.clear();
     initialized = false;
@@ -282,6 +286,7 @@ void MaterialInstanceEditorRuntime::Tick()
                 continue;
             }
 
+            RecordSaveFeedback(command, result);
             if (!commandBus->PublishResult(std::move(result)))
             {
                 diagnostic =
@@ -302,6 +307,7 @@ void MaterialInstanceEditorRuntime::Tick()
 
     PollPreview();
     ApplyRuntimeOverlay();
+    RefreshModifiedDocuments();
 }
 
 void MaterialInstanceEditorRuntime::NotifyWorldChanged(
@@ -317,6 +323,11 @@ void MaterialInstanceEditorRuntime::NotifyWorldChanged(
     RejectPendingPreviewForWorldChange();
     worldPath = nextPath;
     worldGeneration = worldPath.empty() ? 0 : generation;
+    if (sceneDocuments && !worldPath.empty())
+    {
+        std::string error;
+        if (!sceneDocuments->Open(worldPath, error)) diagnostic = error;
+    }
     if (worldPath.empty() || worldGeneration == 0)
     {
         previewController->ClearActiveWorld();
@@ -380,11 +391,11 @@ EditorCommandSubmission MaterialInstanceEditorRuntime::SubmitInternal(
                 RuntimeUnavailableMessage)};
     }
 
-    const EditorCommandSubmission submission = commandBus->Submit(
-        std::move(command));
+    const EditorCommandSubmission submission = commandBus->Submit(command);
     if (submission.admission != EditorCommandAdmission::Queued)
     {
         SetStatus(submission.result.message);
+        RecordSaveFeedback(command, submission.result);
     }
     return submission;
 }
@@ -416,6 +427,12 @@ EditorCommandSubmission MaterialInstanceEditorRuntime::SubmitAutomaticPreviewCom
 EditorCommandResult MaterialInstanceEditorRuntime::ExecuteCommand(
     const EditorCommandEnvelope& command)
 {
+    if (command.type == EditorCommandType::SaveSceneDocument && sceneDocuments)
+    {
+        auto result = sceneDocuments->Save(command);
+        SetStatus(result.message);
+        return result;
+    }
     if (service == nullptr)
     {
         return MakeDiagnosticResult(
@@ -1376,6 +1393,49 @@ void MaterialInstanceEditorRuntime::ApplyRuntimeOverlay()
             ? "Runtime material instance preview is connected."
             : PreviewUnavailableMessage;
     }
+}
+
+void MaterialInstanceEditorRuntime::RefreshModifiedDocuments()
+{
+    snapshot.saveFeedback = saveFeedback;
+    snapshot.modifiedDocuments.clear();
+    // 文档条目直接来自 GT service，不依赖当前活动页；保存关卡不切换 MI 或预览 World。
+    if (service)
+    {
+        const auto tabs = service->OpenDocumentEntries();
+        for (const auto& tab : tabs)
+            if (tab.dirty)
+                snapshot.modifiedDocuments.push_back({tab.assetPath, EditorUi::EditorAssetKind::MaterialInstance,
+                    tab.revision, ConvertDocumentState(tab.state), tab.message});
+        snapshot.documentTabs.clear();
+        for (const auto& tab : tabs)
+            snapshot.documentTabs.push_back({tab.assetPath, tab.dirty});
+        for (auto& asset : snapshot.assets)
+        {
+            asset.dirty = false;
+            for (const auto& tab : tabs)
+                if (tab.assetPath == asset.assetPath) asset.dirty = tab.dirty;
+        }
+    }
+    if (sceneDocuments)
+    {
+        const auto scenes = sceneDocuments->ModifiedDocuments();
+        snapshot.modifiedDocuments.insert(snapshot.modifiedDocuments.end(), scenes.begin(), scenes.end());
+    }
+}
+
+void MaterialInstanceEditorRuntime::RecordSaveFeedback(
+    const EditorCommandEnvelope& command, const EditorCommandResult& result)
+{
+    if (command.type != EditorCommandType::SaveSceneDocument &&
+        command.type != EditorCommandType::SaveMaterialInstanceDocument) return;
+    const auto path = GetEditorCommandAssetPath(command);
+    if (!path) return;
+    EditorUi::EditorSaveFeedback feedback{++saveSequence, *path,
+        result.status == EditorCommandStatus::Succeeded, result.message};
+    for (auto& previous : saveFeedback)
+        if (previous.assetPath == *path) { previous = std::move(feedback); return; }
+    saveFeedback.push_back(std::move(feedback));
 }
 
 void MaterialInstanceEditorRuntime::UpdateBusRevision(

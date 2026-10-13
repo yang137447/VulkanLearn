@@ -1,5 +1,7 @@
 add_executable(editor_ui_tests
     editorUiTests.cpp
+    actorPropertyTests.cpp
+    sceneDocumentTests.cpp
     modelPreviewCameraTests.cpp
     "${PROJECT_SOURCE_DIR}/source/engine/modelPreviewCamera.cpp"
     resourceEditorControllerTests.cpp
@@ -23,6 +25,9 @@ add_executable(editor_ui_tests
     "${PROJECT_SOURCE_DIR}/source/editor/assets/editorJsonAssetTypes.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/materialInstanceAssetEditorPanel.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/command/editorCommand.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/command/editorCommandJsonCodec.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/service/sceneDocumentService.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/persistence/materialInstancePersistence.cpp"
     # 逐 actor 可见性的 World/快照回归（editorUiTests.cpp）：渲染侧过滤发生在
     # WorldSnapshotBuilder，因此这里要编进真实的 World 与快照构建器，
     # 而不是用测试替身证明"标志位被读到了"。
@@ -33,6 +38,7 @@ add_executable(editor_ui_tests
     "${PROJECT_SOURCE_DIR}/source/world/meshSceneObjectIdentity.cpp"
     "${PROJECT_SOURCE_DIR}/source/world/worldSnapshotBuilder.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/scene/editorSceneActorBuilder.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/scene/editorActorProperty.cpp"
     "${PROJECT_SOURCE_DIR}/source/sceneNode.cpp")
 target_include_directories(editor_ui_tests PRIVATE "${PROJECT_SOURCE_DIR}/source")
 target_compile_definitions(editor_ui_tests PRIVATE

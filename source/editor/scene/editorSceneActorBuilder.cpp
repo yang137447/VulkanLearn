@@ -63,6 +63,12 @@ EditorSceneActorSnapshot BuildMeshActor(const World& world, const MeshActorGroup
     actor.identity = EditorUi::SceneActorIdentity(EditorSceneActorType::Mesh, group.sceneObjectIdentity);
     actor.displayName = group.sceneObjectIdentity;
     actor.sceneObjectIdentity = group.sceneObjectIdentity;
+    if (!group.sections.empty())
+    {
+        actor.position = group.sections.front().second->scenePosition;
+        actor.rotation = group.sections.front().second->sceneRotation;
+        actor.scale = group.sections.front().second->sceneScale;
+    }
     actor.sections.reserve(group.sections.size());
     for (const auto& entry : group.sections)
     {
@@ -102,7 +108,9 @@ EditorSceneActorSnapshot BuildLightActor(
     actor.displayName = name;
     actor.visible = visible;
     actor.light = light;
+    actor.position = light.position;
     actor.primaryDirectionalLight = primary;
+    actor.castShadows = world.GetCsmSettings().castShadows;
     return actor;
 }
 
@@ -115,12 +123,26 @@ EditorSceneActorSnapshot BuildCameraActor(const World& world, const Camera& came
     actor.displayName = camera.GetName().empty() ? "Camera" : camera.GetName();
     actor.identity = EditorUi::SceneActorIdentity(EditorSceneActorType::Camera, actor.displayName);
     actor.camera.position = camera.GetPosition();
+    actor.position = camera.GetPosition();
+    actor.rotation = camera.GetRotation();
     actor.camera.forward = camera.GetForwardVector();
     actor.camera.right = camera.GetRightVector();
     actor.camera.up = camera.GetUpVector();
     actor.camera.horizontalFovDegrees = camera.GetHFOV();
     actor.camera.clipNear = camera.GetClipNear();
     actor.camera.clipFar = camera.GetClipFar();
+    if (world.GetRenderCamera())
+    {
+        const Camera& view = *world.GetRenderCamera();
+        actor.viewportCamera.position = view.GetPosition();
+        actor.viewportCamera.forward = view.GetForwardVector();
+        actor.viewportCamera.right = view.GetRightVector();
+        actor.viewportCamera.up = view.GetUpVector();
+        actor.viewportCamera.horizontalFovDegrees = view.GetHFOV();
+        actor.viewportCamera.clipNear = view.GetClipNear();
+        actor.viewportCamera.clipFar = view.GetClipFar();
+        actor.hasViewportCamera = true;
+    }
     return actor;
 }
 
@@ -188,18 +210,21 @@ std::vector<EditorUi::EditorSceneActorSnapshot> BuildEditorSceneActors(const Wor
         actors.push_back(BuildLightActor(world, EditorSceneActorType::DirectionalLight, entry.first,
             BuildWorldDirectionalLightSnapshot(world, entry.first, *entry.second),
             primary != nullptr && entry.second == primary, entry.second->IsVisible()));
+        actors.back().rotation = entry.second->GetRotation();
     }
     for (const auto& entry : world.GetPointLights())
     {
         actors.push_back(BuildLightActor(world, EditorSceneActorType::PointLight, entry.first,
             BuildWorldPointLightSnapshot(world, entry.first, *entry.second), false,
             entry.second->IsVisible()));
+        actors.back().rotation = entry.second->GetRotation();
     }
     for (const auto& entry : world.GetSpotLights())
     {
         actors.push_back(BuildLightActor(world, EditorSceneActorType::SpotLight, entry.first,
             BuildWorldSpotLightSnapshot(world, entry.first, *entry.second), false,
             entry.second->IsVisible()));
+        actors.back().rotation = entry.second->GetRotation();
     }
     for (const auto& entry : world.GetSquareAreaLights())
     {

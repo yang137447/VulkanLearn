@@ -283,6 +283,32 @@ body {
 .tree-row.hidden-row .list-item { color: #7c7c85; }
 .tree-row.hidden-row .list-item img.row-icon { opacity: 0.45; }
 #scene-models { flex: 1; min-height: 0; padding: 4px 7px; overflow: auto; }
+
+#viewport-actor-overlay {
+    position: absolute; left: 0; top: 0; width: 100%; height: 100%;
+    overflow: hidden; pointer-events: none;
+    /* 负偏移图标不一定增加 scroll extent；RmlUi 的 auto clip 因此可能不裁，必须强制裁剪。 */
+    clip: always;
+}
+#viewport-actor-lines, #viewport-actor-icons {
+    position: absolute; left: 0; top: 0; width: 100%; height: 100%;
+    pointer-events: none;
+}
+.actor-visual-line {
+    position: absolute; height: 1px; background-color: #f4d35e;
+    transform-origin: 0px 0px; pointer-events: none;
+}
+.actor-visual-icon {
+    position: absolute; width: 24px; height: 24px; padding: 3px;
+    box-sizing: border-box;
+    border: 1px #8d8d92; background-color: #242428cc; pointer-events: auto;
+}
+.actor-visual-icon.selected { border-color: #f4d35e; background-color: #665722dd; }
+.actor-visual-icon img { width: 16px; height: 16px; }
+.actor-property-row .horizontal-box { width: 68%; flex-shrink: 0; min-width: 0; }
+.actor-property-row .property-row { align-items: center; }
+.actor-property-row .component input { height: 24px; }
+.actor-property-row .component label { display: block; }
 /* 未挂载行的高度补偿：只占高度，不接收指针，也不参与树的点击寻址。 */
 .outliner-spacer { display: block; width: 100%; pointer-events: none; }
 #material-slots { max-height: 90px; overflow: auto; }
@@ -774,7 +800,7 @@ body {
     pointer-events: auto;
 }
 #editor-notice { flex: 1; min-width: 0; line-height: 23px; white-space: nowrap; overflow: hidden; font-size: 11px; }
-#close-dialog {
+#close-dialog, #save-dialog {
     display: none;
     position: absolute;
     top: 0;
@@ -799,3 +825,14 @@ body {
 }
 .dialog h2 { margin-bottom: 12px; }
 #close-document-name { margin-bottom: 16px; }
+#workspace-save { width: 30px; height: 26px; padding: 4px; box-sizing: border-box; }
+#workspace-save img { width: 16px; height: 16px; }
+.save-dialog { top: 18%; left: 12%; width: 76%; max-height: 70%; }
+.save-heading { display: flex; justify-content: space-between; padding: 5px 8px; border-bottom: 1px #6d6d75; }
+#save-document-list { max-height: 250px; overflow-y: auto; }
+.save-row { display: flex; align-items: center; min-height: 30px; padding: 4px 8px; box-sizing: border-box; border-bottom: 1px #45454b; }
+.save-row input { width: 16px; height: 16px; padding: 0; margin-right: 8px; flex-shrink: 0; box-sizing: border-box; }
+.save-row input:checked { decorator: image(icons/check.png); background-color: #35594e; border-color: #62a58d; }
+.save-path { flex: 1; min-width: 0; white-space: normal; overflow: hidden; font-size: 12px; }
+.save-state { width: 105px; flex-shrink: 0; padding-left: 8px; font-size: 11px; }
+#save-document-status { margin-top: 8px; white-space: normal; max-height: 60px; overflow-y: auto; }

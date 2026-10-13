@@ -63,6 +63,11 @@ struct WorldMeshObject
     uint32_t materialSlotIndex = 0;
     std::string materialSlotName;
     Eigen::Matrix4f model = Eigen::Matrix4f::Identity();
+    // 保留 scene JSON 的根 TRS，而非对导入后的 section 矩阵做无损性不成立的分解。
+    // 编辑时用新旧根矩阵之差一次变换整 actor，保留 FBX 节点与镜像缩放。
+    Eigen::Vector3f scenePosition = Eigen::Vector3f::Zero();
+    Eigen::Vector3f sceneRotation = Eigen::Vector3f::Zero();
+    Eigen::Vector3f sceneScale = Eigen::Vector3f::Ones();
     Eigen::Vector3f localBoundsMin = Eigen::Vector3f::Zero();
     Eigen::Vector3f localBoundsMax = Eigen::Vector3f::Zero();
     std::string meshKey;
@@ -87,6 +92,11 @@ public:
 
     void SetCamera(std::shared_ptr<Camera> camera);
     const std::shared_ptr<Camera>& GetCamera() const { return camera; }
+    // 场景 Camera 是作者对象；编辑器导航使用独立观察相机，不反写作者位姿。
+    const std::shared_ptr<Camera>& GetRenderCamera() const
+    { return editorViewEnabled && editorCamera ? editorCamera : camera; }
+    void SetEditorViewEnabled(bool enabled);
+    bool IsEditorViewEnabled() const { return editorViewEnabled; }
 
     void SetEnvironment(WorldEnvironment environment);
     const WorldEnvironment& GetEnvironment() const { return environment; }
@@ -121,6 +131,11 @@ public:
     bool SetLightVisible(const std::string& name, bool visible);
     // 方形面光在 World 里按值保存（不是 shared_ptr），因此单独一个入口。
     bool SetSquareAreaLightVisible(const std::string& name, bool visible);
+    // 调用方已校验有限 TRS 与非零 scale；按 scene identity 更新所有 section。
+    bool SetMeshSceneObjectTransform(const std::string& identity,
+        const Eigen::Vector3f& position, const Eigen::Vector3f& rotation,
+        const Eigen::Vector3f& scale);
+    bool SetSquareAreaLight(const std::string& name, const WorldSquareAreaLight& light);
 
     // 读取端：与 scene/editorSceneActorBuilder 的 actor 行同一条规则——
     // 只要还有可见 section 就算可见。两个入口共用同一份 identity 推导，
@@ -138,6 +153,8 @@ private:
     std::string scenePath;
     std::weak_ptr<SceneNode> viewTarget;
     std::shared_ptr<Camera> camera;
+    std::shared_ptr<Camera> editorCamera;
+    bool editorViewEnabled = false;
     WorldEnvironment environment;
     CsmSettings csmSettings;
     std::unordered_map<std::string, WorldMeshObject> meshObjects;

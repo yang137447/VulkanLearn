@@ -29,6 +29,7 @@ constexpr EditorCommandSpec kSpecs[] = {
     {EditorCommandType::ReloadMaterialInstanceDocument, "material.reload", 1, true, true, true},
     {EditorCommandType::ValidateMaterialInstanceDocument, "material.validate", 1, false, false, true},
     {EditorCommandType::SaveMaterialInstanceDocument, "material.save", 1, true, true, true},
+    {EditorCommandType::SaveSceneDocument, "scene.save", 1, true, true, false},
     {EditorCommandType::ConnectMaterialInstancePreview, "material.preview.connect", 1, false, false, true},
     {EditorCommandType::DisconnectMaterialInstancePreview, "material.preview.disconnect", 1, false, false, false},
     {EditorCommandType::ApplyMaterialInstancePreview, "material.preview.apply", 1, false, false, true},
@@ -386,6 +387,7 @@ bool IsEditorCommandPayloadCompatible(const EditorCommandEnvelope& command) noex
     case EditorCommandType::RevertMaterialInstanceDocument:
     case EditorCommandType::ValidateMaterialInstanceDocument:
     case EditorCommandType::SaveMaterialInstanceDocument:
+    case EditorCommandType::SaveSceneDocument:
     case EditorCommandType::ConnectMaterialInstancePreview:
     case EditorCommandType::DisconnectMaterialInstancePreview:
     case EditorCommandType::RestoreMaterialInstancePreviewBaseline: return std::holds_alternative<MaterialInstanceAssetPathPayload>(command.payload);

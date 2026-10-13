@@ -11,6 +11,8 @@
 
 #include "engine/diagnosticsSubsystem.h"
 #include "editor/ui/editorSceneActorTree.h"
+#include "editor/scene/editorSceneActorBuilder.h"
+#include "editor/service/sceneDocumentService.h"
 #include "engine/runtimeConfig.h"
 #include "engine/runtimeTestHooks.h"
 #include "materialInstance.h"
@@ -231,7 +233,8 @@ RuntimeCommandExecutionResult RuntimeCommandExecutor::ExecuteQueuedCommands(
     WorldTransitionCoordinator& worldTransitionCoordinator,
     RuntimeTestHooks& runtimeTestHooks,
     const RuntimeConfig& runtimeConfig,
-    const DiagnosticsSubsystem& diagnostics) const
+    const DiagnosticsSubsystem& diagnostics,
+    Editor::SceneDocumentService* sceneDocuments) const
 {
     RuntimeCommandExecutionResult executionResult;
     std::vector<RuntimeCommand> commands = commandBus.Drain();
@@ -245,7 +248,8 @@ RuntimeCommandExecutionResult RuntimeCommandExecutor::ExecuteQueuedCommands(
             runtimeTestHooks,
             runtimeConfig,
             diagnostics,
-            executionResult);
+            executionResult,
+            sceneDocuments);
     }
     return executionResult;
 }
@@ -258,7 +262,8 @@ void RuntimeCommandExecutor::ExecuteCommand(
     RuntimeTestHooks& runtimeTestHooks,
     const RuntimeConfig& runtimeConfig,
     const DiagnosticsSubsystem& diagnostics,
-    RuntimeCommandExecutionResult& executionResult) const
+    RuntimeCommandExecutionResult& executionResult,
+    Editor::SceneDocumentService* sceneDocuments) const
 {
     switch (command.type)
     {
@@ -538,6 +543,30 @@ void RuntimeCommandExecutor::ExecuteCommand(
         diagnostics.ReportInfo(
             std::string("Actor ") + identity.name + " " +
             (command.intValue != 0 ? "shown." : "hidden."));
+        break;
+    }
+    case RuntimeCommandType::SetActorProperty:
+    {
+        const auto& activeWorld = worldManager.GetActiveWorld();
+        std::string error;
+        if (!activeWorld)
+            error = "No active World.";
+        else if (sceneDocuments && !sceneDocuments->PrepareActorEdit(
+            activeWorld->GetScenePath(), command.actorProperty.identity, error))
+        {
+            // 文档身份必须先验证，避免 World 接受了修改却没有可保存的作者目标。
+        }
+        else if (ApplyEditorActorProperty(*activeWorld, command.actorProperty, error))
+        {
+            if (command.actorProperty.property == EditorActorProperty::CastShadows)
+                renderSystem.SetCsmSettings(activeWorld->GetCsmSettings());
+            if (sceneDocuments)
+                for (const auto& actor : BuildEditorSceneActors(*activeWorld))
+                    if (actor.identity == command.actorProperty.identity)
+                        sceneDocuments->RecordActorEdit(actor, command.actorProperty);
+            break;
+        }
+        diagnostics.ReportWarning("Actor edit rejected: " + error);
         break;
     }
     case RuntimeCommandType::SetProceduralSkyParameters:

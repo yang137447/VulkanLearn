@@ -3,6 +3,7 @@
 #include <string>
 #include <string_view>
 #include <cstdint>
+#include "editor/scene/editorActorProperty.h"
 
 namespace VL
 {
@@ -45,6 +46,8 @@ enum class UiActionType
     // 逐 actor 可见性：stringValue 携带大纲的稳定身份（"pointLight|Key_Point_Light"），
     // intValue 是 0/1。身份在执行边界解析并校验，UI 回调不接触 World。
     SetActorVisible,
+    SetActorProperty,
+    FrameEditorActor,
     SetSpeedTreeStrength,
     SetSpeedTreeGustingEnabled,
     ForceSpeedTreeGust,
@@ -85,6 +88,7 @@ struct UiAction
     float floatValue = 0.0f;
     std::string stringValue;
     ModelPreviewCameraInput previewCamera;
+    EditorActorPropertyEdit actorProperty;
 };
 
 } // namespace VL

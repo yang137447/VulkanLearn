@@ -42,6 +42,10 @@ struct MeshObjectBuildPlan
     std::string materialSlotName;
     std::string debugName;
     Eigen::Matrix4f model = Eigen::Matrix4f::Identity();
+    // 与最终 model 一起发布作者根 TRS，编辑器无需分解矩阵或重新读取 scene JSON。
+    Eigen::Vector3f scenePosition = Eigen::Vector3f::Zero();
+    Eigen::Vector3f sceneRotation = Eigen::Vector3f::Zero();
+    Eigen::Vector3f sceneScale = Eigen::Vector3f::Ones();
     Eigen::Vector3f localBoundsMin = Eigen::Vector3f::Zero();
     Eigen::Vector3f localBoundsMax = Eigen::Vector3f::Zero();
     std::string meshKey;

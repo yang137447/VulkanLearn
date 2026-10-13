@@ -166,7 +166,16 @@ The current RML adapter is `ui/editor-workspace.rml` plus
 `source/editor/ui/materialInstanceAssetEditorPanel.*`. It consumes the
 UI-library-independent types in `materialInstanceEditorView.h`.
 Same-frame changes coalesce into one ordered `ExecuteEditorCommandBatch` with
-the revision at authoring time; save and validate include pending edits.
+the revision at authoring time; validate includes pending edits.
+Save flushes pending edits, opens confirmation, and waits for the next authoritative
+revision snapshot before allowing confirmation. File Save and the toolbar icon
+list all dirty MI and scene documents, independent of the active tab; a Content
+Browser context Save targets only the right-clicked file. Each checked file
+submits its own revision-gated save; this is not a multi-file atomic transaction.
+Failures retain dirty state and confirmation diagnostics; unchecked files remain
+unchanged. `SceneDocumentService` owns scene drafts separately from the MI service
+and shares the frozen modified-file list and save feedback. See
+`ui-component-system.md` for scene fields, replay and persistence boundaries.
 Dirty close offers Save/Discard/Cancel and waits for an authoritative clean
 snapshot before closing. Failed saves keep the document and dialog open.
 Numeric Color controls edit Linear RGBA directly. Color parameters also show a
@@ -220,6 +229,7 @@ material.clear_render_state
 material.reset_overrides
 material.validate
 material.save
+scene.save
 material.revert
 material.reload
 material.preview.connect
@@ -239,6 +249,13 @@ typed command, not a sequence of scalar actions.
 Asset paths are normalized to resource-root-relative generic paths before the
 executor consumes them. Traversal, absolute paths, and raw image paths are
 rejected. Texture bindings accept only a normalized `T_*.json` path.
+
+`scene.save` uses the asset-path payload and requires expectedDocumentRevision.
+The GT runtime routes it to SceneDocumentService before MI revision lookup;
+it is not an item in an MI edit batch. Accepted actor edits come through the
+generation-guarded runtime actor command path, not through the MI edit service.
+The UI receives monotonic per-path save feedback for success, failure and
+admission rejection, so saving an inactive document does not change UI selection.
 
 Render-state commands use typed field/value payloads and serialize stable names
 rather than enum ordinals:

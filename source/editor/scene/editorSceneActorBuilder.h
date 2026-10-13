@@ -13,8 +13,7 @@ class World;
 // 四类灯光、相机、环境与 SpeedTree 风剖面。返回值全部是值语义副本，UI 侧不持有
 // World、SceneNode 或 GPU 对象；派生规则（RuntimeId、灯光参数）与渲染快照同源。
 //
-// 边界（本轮刻意不做）：World 没有 terrain 运行时表示，也没有逐对象可见性状态，
-// 因此这里不会凭空造出地形或眼睛开关节点。
+// 边界：World 没有 terrain 运行时表示，编辑器观察相机也不作为第二个场景 actor。
 std::vector<EditorUi::EditorSceneActorSnapshot> BuildEditorSceneActors(const World& world);
 
 } // namespace VL

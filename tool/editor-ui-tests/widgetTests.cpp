@@ -707,60 +707,41 @@ TEST_F(UiWidgetTest, SceneActorWindowStaysWithinTheMountedRowBudget)
     EXPECT_FLOAT_EQ(empty.bottom, 0.0f);
 }
 
-TEST_F(UiWidgetTest, CollapsedSceneActorGroupsContributeOnlyTheirHeader)
+TEST_F(UiWidgetTest, FlatActorListPreservesTheFullScrollRange)
 {
     std::vector<EditorSceneActorSnapshot> actors;
     for (int index = 0; index < 40; ++index)
         actors.push_back(TreeMeshActor("Mesh_" + std::to_string(index), "Surface"));
     actors.push_back(TreeActor(EditorSceneActorType::PointLight, "Key_Light"));
 
-    EditorSceneActorTreeExpansion collapsed;
-    collapsed.collapsedGroups.insert("mesh");
     const auto rows = BuildSceneActorRows(
-        actors, "", "all", SceneActorSortOrder::NameAscending, collapsed);
-    // 折叠组只留表头：子行不进入行集合，因此不占窗口槽位、也不产生 spacer 高度。
-    ASSERT_EQ(rows.size(), 3u);
-    EXPECT_TRUE(rows[0].isGroup);
-    EXPECT_EQ(rows[0].label, "Point Lights");
-    EXPECT_TRUE(rows[0].expanded);
-    EXPECT_EQ(rows[0].actorCount, 1u);
-    EXPECT_EQ(rows[1].label, "Key_Light");
-    EXPECT_EQ(rows[2].label, "Meshes");
-    EXPECT_FALSE(rows[2].expanded);
-    EXPECT_EQ(rows[2].actorCount, 40u);
-    const auto window = ComputeSceneActorWindow(rows.size(), 118.0f, 0.0f, 28.0f);
-    EXPECT_EQ(window.begin, 0u);
-    EXPECT_EQ(window.end, rows.size());
-    EXPECT_FLOAT_EQ(window.top, 0.0f);
-    EXPECT_FLOAT_EQ(window.bottom, 0.0f);
-
-    // 展开后同样的输入必须把 40 个子行放回行集合，并且重新需要窗口。
+        actors, "", "all", SceneActorSortOrder::NameAscending, {});
+    ASSERT_EQ(rows.size(), 41u);
+    EXPECT_EQ(rows.front().label, "Key_Light");
+    for (const auto& row : rows) EXPECT_FALSE(row.isSlot);
     const auto expanded = BuildSceneActorRows(actors, "", "all",
         SceneActorSortOrder::NameAscending, EditorSceneActorTreeExpansion{});
-    EXPECT_EQ(expanded.size(), 43u);
+    EXPECT_EQ(expanded.size(), rows.size());
     const auto scrolled = ComputeSceneActorWindow(expanded.size(), 118.0f, 0.0f, 28.0f);
     EXPECT_LT(scrolled.end - scrolled.begin, expanded.size());
     EXPECT_GT(scrolled.bottom, 0.0f);
 }
 
-TEST_F(UiWidgetTest, FullyCollapsedTreeOfEveryGroupFitsWithoutSpacers)
+TEST_F(UiWidgetTest, ActorListHasOneRootRowPerActorAcrossAllTypes)
 {
     std::vector<EditorSceneActorSnapshot> actors;
-    EditorSceneActorTreeExpansion collapsed;
     for (const EditorSceneActorGroupSpec& spec : SceneActorGroupSpecs())
     {
         actors.push_back(TreeActor(spec.type, std::string(spec.title) + "_01"));
-        collapsed.collapsedGroups.insert(spec.key);
     }
     const auto rows = BuildSceneActorRows(
-        actors, "", "all", SceneActorSortOrder::NameAscending, collapsed);
-    // 每个分组只剩表头：行数 == 分组数，子行不参与行集合。
+        actors, "", "all", SceneActorSortOrder::NameAscending, {});
     ASSERT_EQ(rows.size(), SceneActorGroupSpecs().size());
     for (const EditorSceneActorRow& row : rows)
     {
-        EXPECT_TRUE(row.isGroup);
+        EXPECT_FALSE(row.isSlot);
         EXPECT_FALSE(row.expanded);
-        EXPECT_EQ(row.actorCount, 1u);
+        EXPECT_EQ(row.label, actors[row.actorIndex].displayName);
     }
     const auto window = ComputeSceneActorWindow(
         rows.size(), 118.0f, 0.0f, SceneActorRowHeightFallback);
@@ -779,23 +760,20 @@ TEST_F(UiWidgetTest, ExpandedMeshActorAddsSlotRowsInModelOrder)
     expansion.expandedActors.insert(actors[1].identity);
     const auto rows = BuildSceneActorRows(
         actors, "", "all", SceneActorSortOrder::NameAscending, expansion);
-    ASSERT_EQ(rows.size(), 4u);
-    EXPECT_TRUE(rows[0].isGroup);
-    EXPECT_EQ(rows[0].actorCount, 2u);
-    EXPECT_FALSE(rows[1].isSlot);
-    EXPECT_TRUE(rows[1].hasChildren);       // 有可打开的槽，但没有展开：不产生槽行
-    EXPECT_FALSE(rows[1].expanded);         // 展开状态按稳定身份记录，不跟着行下标走
-    EXPECT_FALSE(rows[2].isSlot);
-    EXPECT_TRUE(rows[2].hasChildren);
-    EXPECT_TRUE(rows[2].expanded);
-    EXPECT_EQ(rows[2].label, "Sphere_02");
-    EXPECT_TRUE(rows[3].isSlot);
-    EXPECT_EQ(rows[3].label, "Body");
-    EXPECT_EQ(rows[3].actorIndex, 1u);
-    EXPECT_EQ(rows[3].slotIndex, 0u);
+    ASSERT_EQ(rows.size(), 3u);
+    EXPECT_FALSE(rows[0].isSlot);
+    EXPECT_TRUE(rows[0].hasChildren);
+    EXPECT_FALSE(rows[0].expanded);
+    EXPECT_TRUE(rows[1].hasChildren);
+    EXPECT_TRUE(rows[1].expanded);
+    EXPECT_EQ(rows[1].label, "Sphere_02");
+    EXPECT_TRUE(rows[2].isSlot);
+    EXPECT_EQ(rows[2].label, "Body");
+    EXPECT_EQ(rows[2].actorIndex, 1u);
+    EXPECT_EQ(rows[2].slotIndex, 0u);
 }
 
-TEST_F(UiWidgetTest, SceneActorSortReordersInsideGroupsAndLeavesGroupOrderFixed)
+TEST_F(UiWidgetTest, SceneActorSortOrdersAllTypesTogether)
 {
     std::vector<EditorSceneActorSnapshot> actors{
         TreeActor(EditorSceneActorType::Mesh, "Zeta"),
@@ -809,17 +787,12 @@ TEST_F(UiWidgetTest, SceneActorSortReordersInsideGroupsAndLeavesGroupOrderFixed)
     const auto descending = BuildSceneActorRows(actors, "", "all",
         SceneActorSortOrder::NameDescending, EditorSceneActorTreeExpansion{});
     ASSERT_EQ(ascending.size(), descending.size());
-    // 分组顺序由 SceneActorGroupSpecs() 固定：排序只翻转组内顺序，不重排分组。
-    for (size_t index = 0; index < ascending.size(); ++index)
-        EXPECT_EQ(ascending[index].isGroup, descending[index].isGroup) << index;
     std::vector<std::string> ascendingLabels;
     std::vector<std::string> descendingLabels;
     for (const auto& row : ascending) ascendingLabels.push_back(row.label);
     for (const auto& row : descending) descendingLabels.push_back(row.label);
-    EXPECT_EQ(ascendingLabels, (std::vector<std::string>{"Point Lights", "A_Light", "Key_Light",
-        "Cameras", "Camera_01", "Meshes", "alpha", "Zeta"}));
-    EXPECT_EQ(descendingLabels, (std::vector<std::string>{"Point Lights", "Key_Light", "A_Light",
-        "Cameras", "Camera_01", "Meshes", "Zeta", "alpha"}));
+    EXPECT_EQ(ascendingLabels, (std::vector<std::string>{"A_Light", "alpha", "Camera_01", "Key_Light", "Zeta"}));
+    EXPECT_EQ(descendingLabels, (std::vector<std::string>{"Zeta", "Key_Light", "Camera_01", "alpha", "A_Light"}));
 
     // 排序键与 Content Browser 的 sort 控件同一套取值；未知值不被接受。
     SceneActorSortOrder parsed = SceneActorSortOrder::NameAscending;

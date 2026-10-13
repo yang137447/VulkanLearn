@@ -9,11 +9,12 @@
 
 #include "editor/ui/editorSceneActorTypes.h"
 #include "editor/ui/materialInstanceEditorView.h"
+#include "editor/scene/editorActorProperty.h"
 
 namespace VL::EditorUi
 {
 
-// 大纲分组规范：类型顺序固定（这里就是输出顺序），因此帧间不抖动。
+// 类型规范表，不决定 actor 排列顺序，不生成大纲分组。
 // key 同时是类型过滤器的取值和详情分组的键后缀；icon 是资产相对路径，
 // 只是类型图示，不代表缩略图。
 struct EditorSceneActorGroupSpec
@@ -27,9 +28,6 @@ struct EditorSceneActorGroupSpec
 const std::vector<EditorSceneActorGroupSpec>& SceneActorGroupSpecs();
 const EditorSceneActorGroupSpec* FindSceneActorGroupSpec(EditorSceneActorType type);
 const EditorSceneActorGroupSpec* FindSceneActorGroupSpecByKey(const std::string& key);
-// 分组下标 = 规范表下标（事件用下标寻址）。这里查表而不是依赖 enum 顺序，
-// 规范顺序变化时下标寻址仍然正确。
-size_t SceneActorGroupIndex(EditorSceneActorType type);
 const char* SceneActorGroupTitle(EditorSceneActorType type);
 const char* SceneActorGroupIcon(EditorSceneActorType type);
 
@@ -56,12 +54,10 @@ bool ParseSceneActorIdentity(const std::string& identity, EditorSceneActorIdenti
 // 没有渲染侧可见性状态，因此不为它们显示一个点了没有效果的眼睛。
 bool SceneActorHasVisibilityToggle(EditorSceneActorType type);
 
-// 树行：三种行共用一套结构，因此窗口化只需要一个行下标空间。
-// 分组行只带标题与该组当前可见数量；actor 行带 sceneActors 里的下标；
+// actor 与槽行共用一个窗口化行下标空间；actor 行带 sceneActors 里的下标，
 // 槽行（展开的 mesh actor 的材质槽）带动作分量下标与选中比较用的 World 槽号。
 struct EditorSceneActorRow
 {
-    bool isGroup = false;
     bool isSlot = false;
     EditorSceneActorType type = EditorSceneActorType::Mesh;
     size_t actorIndex = 0;
@@ -70,14 +66,12 @@ struct EditorSceneActorRow
     // 槽行的 World 材质槽号：选中态按它比较，与动作下标不是同一个量。
     uint32_t materialSlotIndex = 0;
     std::string label;
-    size_t actorCount = 0;
-    // actor 行：有可打开的材质槽（决定 ± 标记是否出现）；分组/actor 行：当前是否展开。
+    // actor 行：有可打开的材质槽（决定 ± 标记是否出现），以及当前是否展开。
     bool hasChildren = false;
     bool expanded = false;
 };
 
-// 分组内的排序顺序。分组顺序由 SceneActorGroupSpecs() 固定，排序控件只作用于组内，
-// 因此这里的取值不会重排分组本身。
+// 所有 actor 跨类型统一按名称排序，材质槽保持在其 owner 下。
 enum class SceneActorSortOrder
 {
     NameAscending,
@@ -101,20 +95,18 @@ bool SceneActorMatchesQuery(const EditorSceneActorSnapshot& actor, const std::st
 // 过滤器取值 "all" 或分组 key；未知 key 视为 "all"（视图不做隐式空结果）。
 bool SceneActorMatchesTypeFilter(const EditorSceneActorSnapshot& actor, const std::string& typeFilter);
 
-// 唯一的"影响行集合"的视图状态：折叠的分组键（spec key）与展开的 mesh actor 稳定身份。
+// 唯一的"影响行集合"的展开状态：mesh actor 的稳定身份。
 // 选择态不在这里：它只改已挂载行的 class，不改变有哪些行。
 struct EditorSceneActorTreeExpansion
 {
-    std::unordered_set<std::string> collapsedGroups;
     std::unordered_set<std::string> expandedActors;
 };
 
 bool SameSceneActorExpansion(
     const EditorSceneActorTreeExpansion& left, const EditorSceneActorTreeExpansion& right);
 
-// 按固定分组顺序输出可见行：组内有序、空组不输出。query/typeFilter 只影响可见性，
+// 按全局名称顺序输出 actor 行，不产生类型分组。query/typeFilter 只影响可见性，
 // 不改变 actor 下标，因此事件地址在本次快照内稳定。
-// 折叠的分组只输出表头（子行既不挂 DOM，也不占窗口槽位）；
 // 展开的 mesh actor 追加槽行，因此"哪些行存在"完全由本函数的入参决定。
 std::vector<EditorSceneActorRow> BuildSceneActorRows(
     const std::vector<EditorSceneActorSnapshot>& actors,
@@ -164,10 +156,21 @@ struct EditorSceneActorField
     std::string value;
 };
 
-// 只读字段：mesh 的 section key、四类灯的完整参数、相机七个字段、环境与风剖面。
+// 只读字段：mesh 的 section key、灯光派生读数、相机基向量、环境与风剖面。
 // 主方向光的 intensity 与 CSM castShadows 由面板的可编辑控件承载
 // （SetSunIntensity / SetCsmCastShadows），因此不在只读字段里重复出现。
 std::vector<EditorSceneActorField> SceneActorFields(const EditorSceneActorSnapshot& actor);
+
+// 可编辑字段的值来自冻结 actor；控件只发枚举属性与分量，不发整套旧 TRS。
+struct EditorSceneActorEditableField
+{
+    EditorActorProperty property;
+    std::string label;
+    Eigen::Vector3f value;
+    uint32_t components;
+};
+std::vector<EditorSceneActorEditableField> SceneActorEditableFields(const EditorSceneActorSnapshot& actor);
+std::string SceneActorPropertyControlId(EditorActorProperty property, uint32_t component);
 
 // 把 mesh actor 还原成既有的 MI 导航值语义：材质槽只包含带有效材质实例的 section，
 // 下标与大纲里的槽行一一对应，选择仍走原来的 RequestMaterialSelection 路由。

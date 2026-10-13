@@ -16,6 +16,7 @@
 #include "engine/subsystemCollection.h"
 #include "engine/testing/runtimeValidationServices.h"
 #include "editor/scene/editorSceneActorBuilder.h"
+#include "editor/service/sceneDocumentService.h"
 #include "editor/selection/materialInstanceSelection.h"
 #include "material/generator/materialParameterIncludeGenerator.h"
 #include "material/generator/materialDefinitionReloadBatch.h"
@@ -450,7 +451,8 @@ void EngineLoop::Tick()
         *worldTransitionCoordinator,
         runtimeTests,
         GetRuntimeConfig(),
-        GetSubsystems().GetDiagnosticsSubsystem());
+        GetSubsystems().GetDiagnosticsSubsystem(),
+        uiSubsystem ? uiSubsystem->GetSceneDocuments() : nullptr);
     commandResult.activeWorldBeforeCommand = activeWorldBeforeCommand;
 
     ProcessRequestedWorldTransition(commandResult);
@@ -490,6 +492,24 @@ void EngineLoop::Tick()
         uiSubsystem->NotifyWorldChanged(
             commandResult.activeWorldAfterCommand.scenePath,
             commandResult.activeWorldAfterCommand.generation);
+        if (auto* documents = uiSubsystem->GetSceneDocuments())
+        {
+            std::string error;
+            const auto edits = documents->ReplayEdits(
+                commandResult.activeWorldAfterCommand.scenePath,
+                commandResult.activeWorldAfterCommand.generation, error);
+            const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
+            // 草稿跨 World 保留；只在换代后重放，不重复入文档，不修改观察相机。
+            if (world)
+                for (const auto& edit : edits)
+                {
+                    if (!ApplyEditorActorProperty(*world, edit, error)) break;
+                    if (edit.property == EditorActorProperty::CastShadows)
+                        RenderSystem::GetInstance().SetCsmSettings(world->GetCsmSettings());
+                }
+            if (!error.empty())
+                GetSubsystems().GetDiagnosticsSubsystem().ReportWarning(error);
+        }
     }
 
     runtimeTests.NotifyCommandResult(
@@ -649,6 +669,13 @@ void EngineLoop::ApplyQueuedUiActions()
                     float(rect.width) / float(rect.height), float(rect.width));
             continue;
         }
+        if (action.type == UiActionType::FrameEditorActor)
+        {
+            const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
+            if (world) FrameEditorActor(*world, action.actorProperty.worldGeneration,
+                action.actorProperty.identity);
+            continue;
+        }
 
         RuntimeCommand command;
         command.sourceText = "ui";
@@ -782,6 +809,10 @@ void EngineLoop::ApplyQueuedUiActions()
             command.stringValue = action.stringValue;
             command.intValue = action.intValue;
             break;
+        case UiActionType::SetActorProperty:
+            command.type = RuntimeCommandType::SetActorProperty;
+            command.actorProperty = action.actorProperty;
+            break;
         case UiActionType::SetSpeedTreeStrength:
             command.type = RuntimeCommandType::SetSpeedTreeStrength;
             command.floatValue = action.floatValue;
@@ -832,6 +863,16 @@ void EngineLoop::ApplyQueuedUiActions()
 
 void EngineLoop::UpdateUiInputPolicy()
 {
+    const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
+    if (world && world->GetCamera())
+    {
+        // 资产预览已经有自己的 orbit 相机；只有关卡编辑使用独立观察相机。
+        const bool editingLevel = uiSubsystem && uiSubsystem->IsDeveloperUiVisible() &&
+            std::filesystem::path(world->GetScenePath()).filename() != "SC_model_preview.json";
+        world->SetEditorViewEnabled(editingLevel);
+        controller->SetViewTarget(editingLevel ? world->GetRenderCamera() :
+            world->GetViewTarget().lock(), world->GetGeneration());
+    }
     auto& inputSubsystem = GetSubsystems().GetInputSubsystem();
     if (uiSubsystem == nullptr || !uiSubsystem->IsInitialized())
     {
@@ -975,10 +1016,10 @@ void EngineLoop::SynchronizeSceneViewport()
     auto& renderSystem = RenderSystem::GetInstance();
     renderSystem.SetSceneViewport(rect, uiSubsystem->IsSceneViewportEnabled());
     const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
-    if (aspect && world && world->GetCamera())
+    if (aspect && world && world->GetRenderCamera())
     {
         // 在 World snapshot 冻结前更新投影；渲染、阴影视锥、离线相机与拾取共享同一相机。
-        auto& camera = *world->GetCamera();
+        auto& camera = *world->GetRenderCamera();
         camera.SetProjection(camera.GetHFOV(), *aspect, camera.GetClipNear(), camera.GetClipFar());
     }
 }

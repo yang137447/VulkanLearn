@@ -1,7 +1,7 @@
 # UI 组件体系
 
-状态：2026-10-11，`codex/rmlui-editor` 分支第六批实现（逐 actor 可见性：World/快照
-过滤、`SetActorVisible` 命令、大纲行尾眼睛开关，运行时状态不持久化）。
+状态：2026-10-13，扁平 Scene Outliner、运行时 actor 属性编辑、独立编辑器观察相机
+及灯光/相机视口辅助图示已实现；场景/MI 草稿共享内容浏览器脏标记与保存确认。
 
 ## 工作区布局
 
@@ -22,8 +22,8 @@ Material Slots 和 actor 参数放在 Details 中，MI 文档参数放在中央�
 分隔条支持拖动并受子树最小尺寸约束；普通面板切换只改变呈现。
 模型/关卡页面切换通过既有加载事务选择单活动 World，不提交资产修改。
 Scene Outliner 现在渲染真实 World actor 树（网格 / 四类灯 / 相机 / 环境 / 风剖面，
-分组可折叠，带类型图标、搜索、类型过滤与组内排序），行集合按滚动位置窗口化，
-每个可渲染 actor 行带一个可见性开关（行尾眼睛），低基数分组排在 Meshes 之前；
+带类型图标、搜索、类型过滤与全局名称排序），行集合按滚动位置窗口化，
+每个可渲染 actor 行带一个可见性开关（行尾眼睛），所有类型按名称统一排序，不生成类型文件夹；
 选中 actor 由 Details 展示其类型化参数；
 无打开的 MI 文档时 Details 不再为空。契约见“世界 actor 树契约”。
 面板可以通过 Window 菜单隐藏和恢复，隐藏状态随布局一起保存。
@@ -92,7 +92,7 @@ Lit 直接返回正常光照，避免只在最终合成切换而材质仍输出 
 | Navigation / 导航 | DocumentTab、MenuItem | 已实现激活与关闭分离、菜单项勾选/禁用与条目索引寻址 | 菜单快捷键、Breadcrumb、子菜单键盘导航 |
 | Workspace / 工作区 | DockWorkspace、DockTab、面板可见性、脏关闭弹窗 | 四边停靠、标签合并、窗口内浮动、布局持久化与重置、面板隐藏/恢复 | 原生多窗口、通用 Modal |
 | Property / 属性 | PropertyRow、PropertyGroup、PropertyInfo、PropertyControlRow、CollapsibleSection、NumericComponents、ColorPreview | 已实现属性组合、Reset 地址、向量分量、可选范围滑条、折叠分组、sRGB 色板与十六进制读数、无 Reset 的只读/可编辑行、可寻址数值 span | 多对象混合值、属性适配器、可编辑调色板 |
-| Editor / 业务 | 顶部菜单栏、世界 actor 树、JSON Content Browser、MI Details、actor Details、资源编辑器、离线控制、Viewport、视口工具条 | 已接入组件、受限浏览窗口/分页、资源标签、Mesh 双击经 `PreviewModel` 注入 `SC_model_preview`、Mesh 专属会话工具条与模型信息 Details、renderer-owned 离屏视口、World actor 树与 actor 详情（三条既有运行时命令，含逐 actor 可见性）、视口工具条中只有 view mode 有真实后端 | 真实纹理预览、场景对象增删改、gizmo |
+| Editor / 业务 | 顶部菜单栏、世界 actor 树、JSON Content Browser、MI Details、actor Details、资源编辑器、离线控制、Viewport、视口工具条 | 已接入组件、受限浏览窗口/分页、资源标签、Mesh 双击经 `PreviewModel` 注入 `SC_model_preview`、Mesh 专属会话工具条与模型信息 Details、renderer-owned 离屏视口、扁平 World actor 列表、类型化数值编辑、可见性、灯光/相机辅助图示及场景/MI 保存确认 | 场景对象增删、gizmo |
 
 “已实现”只表示上表的窄组件，不表示已经具备 Slate 同名控件的全部行为。
 通用 ListRow/TreeRow、模型树和 Sources 树尚未虚拟化；
@@ -139,11 +139,11 @@ ImGui→RmlUi 迁移丢了三项 Details 面板能力，本批把它们补回，
 
 当前确认缺席的能力集中列在此处，供下一轮直接引用，不再逐条重新推导：
 
-- 没有 gizmo、没有 transform 编辑，也没有场景对象的增/删/复制/改名。
+- 没有 gizmo，也没有场景对象的增/删/复制/改名；Transform 可在 Details 数值编辑。
 - 完全没有 Undo/Redo 系统；`Edit` 菜单里的 Undo/Redo 是常驻禁用的占位。
 - 逐 actor 可见性只有**运行时**语义：开关不写进场景 JSON，`SceneAssetValidator`
   不认识它，也没有 `SaveVisibilityToScene` 之类的动作；重新加载场景后所有 actor
-  都是可见的。持久化可见性属于场景文档阶段（与 transform 编辑同一批）。
+  都是可见的。Transform/灯光/相机参数编辑形成独立场景草稿，确认后写回场景资产。
 - 没有地形节点：`World` 没有 terrain 访问器，仓库里也没有 terrain 运行时
   （场景选择器只把 `"terrain"` 列入受支持类型，资产浏览器只有 Terrain JSON 元数据）。
 - 大纲行窗口化只覆盖世界 actor 树：通用 `TreeRow` 组件本身仍不虚拟化，
@@ -191,7 +191,7 @@ main 排除递归收集的 widget 源文件，链接独立库，避免重复编�
 `WidgetAction` 只包含 action 名称、条目索引和分量索引。
 组件不解释它的业务含义；宿主统一解析事件并提交现有命令。
 条目索引只在当前快照中有效，不能作为跨 World 的对象身份。
-大纲宿主按稳定 actor 身份记录展开/折叠，World generation 变化时清空展开、折叠、
+大纲宿主按稳定 actor 身份记录材质槽展开，World generation 变化时清空展开、
 搜索与过滤（排序是面板偏好，与 Content Browser 的排序键一样跨换代保留）；
 子材质节点与现有 Material Slots 走同一个选择 sink。
 树组件不会打开文件或持有 scene object 指针。
@@ -246,46 +246,50 @@ Scene Outliner（`#editor-navigation`，仍是 `DockWorkspace::Panels()` 里的 
   灯光参数复用 `WorldSnapshotBuilder` 的同一份 World→`LightSnapshot` 映射
   （`BuildWorld*LightSnapshot`），对象 `RuntimeId` 复用 `WorldObjectRuntimeId`，
   避免第二份身份规则与选择描边漂移。
-- **分组与顺序**：`SceneActorGroupSpecs()` 是唯一分组清单（类型、过滤键、标题、图标），
-  顺序固定且**低基数类型在前、Meshes 最后**（灯光 → 相机 → 环境 → 风剖面 → 网格）。
-  这个顺序是契约而不是排序控件的输出：默认场景有 122 个网格，Meshes 在前会把
-  灯/相机/环境整组挤出可视区（第四轮实测症状）。组内按显示名做 ASCII 大小写不敏感
-  比较，再按稳定身份打破平局，不依赖 `unordered_map` 遍历顺序。
+- **列表与顺序**：不自动按类型分组。`SceneActorGroupSpecs()` 只提供类型、过滤键、
+  标题与图标。所有 actor 按显示名做 ASCII 大小写不敏感比较，再按稳定身份打破平局，
+  不依赖 `unordered_map` 遍历顺序；展开的材质槽紧跟所属 actor。
 - **行窗口预算**：`SceneActorMaxMountedRows = 192`、`SceneActorOverscanRows = 2`
   位于 `source/editor/ui/editorSceneActorTree.h`（与 Content Browser 的
   `MaxVisibleItems` 同一量级）。`#scene-models` 任一时刻挂载的行节点不超过该预算，
   另加最多两个 `.outliner-spacer`；spacer 用"整行高 × 未挂载行数"补齐滚动范围，
-  因此完整树（默认场景 130 行）仍可整段滚动到达，不是截断前 192 行。
+  因此完整 actor 列表仍可整段滚动到达，不是截断前 192 行。
   窗口由 `ComputeSceneActorWindow(行数, 可视高度, 滚动偏移, 行高)` 纯计算得出，
   宿主按"行集合 revision + 窗口恒等 + 选中态"决定是否重挂 DOM。
 - **行高假设**：树行等高是窗口化的前提，由 RCSS 显式固定
   （`#scene-models .tree-row { height: 30px; }` + `.list-item { line-height: 16px;
-  white-space: nowrap; text-overflow: ellipsis; }`）。分组行（粗体）、actor 行与
+  white-space: nowrap; text-overflow: ellipsis; }`）。actor 行与
   缩进的槽行因此同高；长名称按省略号裁剪而不是把一行撑成两行。
   宿主逐帧从已挂载行的 margin box 实测行高（首帧用
   `SceneActorRowHeightFallback = 30`），因为行高一变 spacer 高度就会与真实内容不符、
   滚动位置随之漂移。`EditorUiTest.OutlinerRowHeightsAreUniformAcrossRowKinds`
-  用真实 RmlUi 布局量三种行形态的 margin box 来守这条假设。
-- **折叠与窗口**：折叠的分组只输出表头，子行不进入行集合，因此既不挂 DOM、
-  也不占窗口槽位、也不产生 spacer 高度；全部折叠后的树必须一次装进窗口。
+  用真实 RmlUi 布局量 actor/槽行的 margin box 来守这条假设。
+- **展开与窗口**：只展开 actor 的材质槽，不折叠类型组；槽行参与同一窗口预算。
 - **搜索、过滤与排序**：搜索复用 Content Browser 的 `FoldAsciiCase`
   （`editor/editorTextMatch.h`），只折叠 ASCII 大小写、保留 UTF-8 多字节名称；
   类型过滤取值就是分组键。`#outliner-sort` 与 `#browser-sort` 同键
-  （`name-asc` / `name-desc`），只重排**组内**顺序，不重排分组，
+  （`name-asc` / `name-desc`），统一重排所有类型的 actor，
   也不改变选中身份、展开集合与滚动偏移。三者都只改可见性/顺序，不提交任何命令。
-  计数显示的是筛选结果（`N / M actors`，等于各分组行 `actorCount` 之和），
+  计数显示的是筛选结果（`N / M actors`，不计材质槽），
   与 Content Browser 的计数同一语义，与折叠状态和挂载窗口无关。
-  没有第三种排序：组内所有行的类型相同，按类型名排序在组内恒为平局。
+- **选中态与可见性原地刷新**：只改已挂载行的 class、眼睛图标及提示，
+  不因第一次点击销毁目标 DOM；真实指针双击因此能跨过选中快照刷新后继续取景。
 - **选择路由**：mesh actor 继续走 `RequestModelSelection`，材质槽继续走
   `RequestMaterialSelection`（MI 文档、Material Slots 与视口描边行为不变）；
   非网格 actor 走新的 `RequestActorSelection(稳定身份)`，同时要求 EngineLoop 清掉
   渲染端 mesh 描边，保证大纲高亮与视口描边不会同时指向两个对象。
-- **Details**：选中 actor 在 `#details-content` 里得到一个以类型命名的可折叠分组
-  （键 `actor-<分组键>`），只读字段由 `SceneActorFields()` 按类型生成，
-  每行带 id，值变化时只刷新这一行；主方向光额外得到两个可编辑控件
-  （Intensity 与 Cast Shadows），两者都只用既有 `UiActionType::SetSunIntensity` /
-  `SetCsmCastShadows`，没有第三条 UI→renderer 路径，也不新增命令。
-  MI 文档分组不变，actor 分组在它之前。
+- **Details**：`#actor-details-content` 中的可折叠分组以选中 actor 名称为标题。
+  网格编辑根 Location/Rotation/Scale，节点灯光编辑 Location/Rotation/线性 RGB/强度；
+  spot 编辑 inner/outer 半锥角，面光编辑位置/法线/边长/辐亮度；相机编辑位置/旋转/FOV/近远面。
+  环境和风剖面仍只读。Material Slots 仅在存在选中模型材质槽时显示，并位于 actor 参数之后。
+  控件来自 `SceneActorEditableFields()`，值变化只刷新控件，不重建 DOM，保留焦点文本。
+- **对象编辑边界**：`SetActorProperty` 通过 EngineLoop → RuntimeCommandExecutor →
+  `ApplyEditorActorProperty` 在 GT 写 World，payload 是稳定身份、World generation、枚举属性、
+  分量和值。执行端拒绝陈旧代数、错误类型/分量、非有限数、零缩放、负颜色/强度、
+  交叉锥角与无效相机投影；每条编辑从当前对象取其它分量，不用旧快照覆盖同帧 XYZ 编辑。
+  主方向光强度与 CSM castShadows 控件也使用带 World generation 的 actor 命令。网格根 TRS 从 mesh build plan 保存，
+  新旧根矩阵的差应用于所有 section，保留子矩阵和负缩放。已接受的编辑记录到 GT
+  `SceneDocumentService` 草稿，编辑本身不写资产；没有撤销系统。
 - **逐 actor 可见性（第 6 轮新增，第 7 轮修正为整 actor 语义）**：网格与四类灯的 actor 行在行尾有一个眼睛开关
   （`data-action="outliner-visible"`），点击只提交一条
   `UiActionType::SetActorVisible`（`stringValue` = 稳定身份，`intValue` = 0/1），
@@ -341,7 +345,7 @@ Scene Outliner（`#editor-navigation`，仍是 `DockWorkspace::Panels()` 里的 
 
 `EditorContentBrowserController` 从 `MaterialInstanceEditorSnapshot.assetCatalog` 的
 共享不可变目录派生 Sources 树、当前目录、历史和筛选集合；无目录时兼容旧 MI
-`assets` 快照。正式目录是唯一资产集合，MI 快照仅叠加已有 MI 的 dirty 标记，
+`assets` 快照。正式目录是唯一资产集合，文档快照仅叠加已有 MI/Scene 的 dirty 标记，
 不能将目录外或已删除的路径混回。控制器不扫描文件、不读取 JSON、
 不写资产，也不持有 renderer。路径边界按目录分隔符判断，不能将 `Maps/A`
 误匹配为 `Maps/AB`；排序后的事件地址仍使用完整路径，不能只用文件名或旧条目索引。
@@ -364,6 +368,31 @@ Scene Outliner（`#editor-navigation`，仍是 `DockWorkspace::Panels()` 里的 
 包含 Content Browser 的标签组最小高度为 246px，布局按此约束显示已有比例，
 不覆盖保存文件；960×540 默认窗口能显示工具栏和完整第一行小卡片。
 更大的卡片可滚动或拖动分隔条加高面板，极小窗口仍沿用布局树的比例缩减规则。
+
+### 修改文件与保存确认
+
+GT runtime 合并所有已打开的脏 MI 与场景文档到 `modifiedDocuments`，
+不依赖当前活动标签。场景对象修改标在所属 Scene 文件，而不是模型或材质文件上；
+观察相机移动、临时可见性与 `SC_model_preview` 不产生可保存的场景草稿。
+Content Browser 的星号原地更新；右键脏资产的 `Save...` 只列被右键的完整路径。
+File→Save 与顶部保存图标打开同一个 `Save Content` 弹窗，默认勾选全部修改文件，
+可逐项取消、Select All、Save Selected 或 Cancel；MI 页 Save / Ctrl+S 在材质页只列活动 MI，
+其他页面的 Ctrl+S 列全部修改文件。无修改时不打开弹窗。
+
+弹窗打开不写盘，先提交待处理 MI batch 并等待下一次权威 revision 快照再允许确认。
+每个勾选文件发一条带 revision 的 `material.save` 或 `scene.save`；
+批量保存是逐文件原子写入，不是跨文件全有或全无事务。成功才清除该文件的星号；
+未勾选文件保持脏，全部选中文件成功后关闭弹窗。失败或冲突保留草稿、星号和诊断，
+重试读取当前 revision。确认期间阻止工作区、视口输入和重复提交。
+checkbox 的默认 click 必须到达目标节点；change 只同步选择，快照更新原地设置 checked，
+不销毁焦点节点，程序刷新由 `WidgetRefreshScope` 抑制。
+
+`SceneDocumentService` 按资源根内规范路径保存 baseline/draft、BLAKE3 摘要及编辑历史；
+只补丁网格 TRS、灯光参数、作者 Camera 变换/投影与主光 castShadows，保留其它 JSON 字段。
+灯光保留作者 lux/cd/lm，spot 锥角及面光尺寸变化反算作者强度以保持当前规范亮度。
+Camera 变换后去掉会覆盖 rotation 的旧 look_at；曝光不改写。
+切换预览/关卡后，源摘要未变时将接受历史重放到新 World generation；
+外部变化拒绝重放与覆盖。未保存草稿仅存于当前进程，没有场景 Reload/Discard 界面。
 
 图标为 Lucide 的已提交 PNG，许可位于 `ui/icons/LUCIDE-LICENSE.txt`，
 没有运行时下载、SVG 解码或额外图标字体依赖。统一材质球及其他类型图标仅是类型图示，
@@ -534,7 +563,7 @@ Help→About 显示编辑器名称、RmlUi 说明和布局文件路径，打开�
 视口右键原来在场景命中时被提前返回、根本到不了 RmlUi；现在只把
 `PlatformMouseButton::Right` 放行给 RmlUi，左键保持原样（拾取是左键专属，相机朝向走
 相对鼠标增量而非按键手势）。视口没有拾取能力，因此它的菜单**只含视口级命令**
-（view mode 复用 `UiActionType::SetDebugViewMode`、CSM 保存复用既有运行时命令），
+（view mode 复用 `UiActionType::SetDebugViewMode`、保存打开共享修改文件确认），
 不放任何逐对象动作，也不为了撑菜单而虚构拾取。
 
 GT 文档只使用 `vl://scene-viewport` 逻辑纹理 token 和 framebuffer 像素矩形。
@@ -547,13 +576,34 @@ GT 文档只使用 `vl://scene-viewport` 逻辑纹理 token 和 framebuffer 像�
 变换工具、变换坐标系、view mode。只有 view mode 有真实后端，
 映射到既有 `UiActionType::SetDebugViewMode`：Lit=0（完整画面），Unlit=1（基础色）。
 变换工具与坐标系**只是编辑器本地呈现状态**：仓库里没有 gizmo，
-也没有 transform 编辑后端，切换它们只改变高亮，不提交任何 UiAction 或资产命令，
+工具条不驱动 Details 的数值变换，切换它们只改变高亮，不提交任何 UiAction 或资产命令，
 按钮提示文字明确写出这一点。Wireframe 没有 wireframe 光栅模式，
 `debug.*` 表里也没有对应的 debug view，因此按钮常驻禁用并带说明，
 没有拿最接近的调试视图冒充。view mode 的高亮来自冻结的运行时快照
 `debugViewMode`，不是面板自己的第二份状态；运行时处于工具条之外的调试视图时
 Lit/Unlit 都不高亮，工具条不声明自己没有设置过的模式。
-`IsSceneViewportElement` 排除工具条，否则点击按钮会同时驱动相机与拾取。
+`IsSceneViewportElement` 排除工具条与灯光/相机图标，否则点击按钮会同时驱动相机与拾取。
+
+### Actor 可视化与观察相机
+
+关卡编辑时 `World::GetRenderCamera()` 使用 World 持有的独立 editorCamera；
+`GetCamera()` 仍是作者 Camera。EngineLoop 在稳定 GT 点切换 Controller 的 view target，
+WorldSnapshotBuilder 冻结观察相机；退出编辑器回到作者相机，编辑器观察位姿跨切换保留。
+模型/MI 的 `SC_model_preview` 不启用这条路径。曝光仍跟随作者 Camera。
+
+`#viewport-actor-overlay` 是纯 UI 叠层，按观察相机的水平 FOV、基向量及视口实际尺寸投影。
+辅助线与图标使用独立子层缓存；选中时只改图标 class，不销毁双击目标。
+外层使用 `clip: always`：RmlUi 的自动裁剪依赖 scroll extent，负偏移的边缘图标
+不一定扩大它，单靠 `overflow: hidden` 可能画进标签栏。
+灯光/Camera 使用已有类型位图作为固定像素图标，选中时画方向箭头、点光位置圆、
+spot 内外锥角、面光边框/法线或相机图示视锥。线段先裁近远面，再裁屏幕边界，
+因此跨眼点的线不发生倒投影。叠层不读取深度，不提供实体模型或 gizmo；
+point 圆是位置标识，不是衰减范围，spot 图示长度为 200 cm，不是光照截止距离。
+工具条眼睛可关闭全部图标/辅助线。点击图标走既有 Actor 选择；双击图标/大纲 Actor
+发带代数的 `FrameEditorActor`，只移动编辑器观察相机，不修改场景对象或文件。
+网格取景合并全部 section 的变换后包围盒，按较窄 FOV 与 near clip 留余量，
+必要时只扩展观察相机的 far clip；偏心模型不使用作者根位置作为包围盒中心。
+相机图示视锥截面深度有显示上限，使用真实 FOV，不把截面冒充 far clipping plane。
 
 ### 角落坐标轴指示器
 
@@ -565,8 +615,8 @@ Lit/Unlit 都不高亮，工具条不声明自己没有设置过的模式。
 不是同一个功能的两种呈现：原点三轴是场景几何，会被物体遮挡、远看投影只剩约 1px；
 这里的三根固定 20px 长、始终可见。两者并存是刻意的。
 
-朝向来自**已冻结的大纲快照**：`EditorSceneCameraActor.forward/right/up` 由
-`editorSceneActorBuilder` 从活动 World 的相机填充，因此这里**没有新增快照字段**，
+朝向来自**已冻结的大纲快照**：Camera 行的 `viewportCamera.forward/right/up` 由
+`editorSceneActorBuilder` 从活动 World 的观察相机填充，
 面板也依然不访问 renderer。
 
 投影数学在 `source/editor/ui/editorViewportAxisIndicator.h`，**刻意不依赖 RmlUi**，
@@ -642,7 +692,7 @@ RGBA 分支的整数分量路径）。该分支只接受 `0`–`255` 整数或�
 非有限或反向区间仍给出有限有序的滑条、拖动与键入产生同一种 batch item、
 拖动不触发有限数校验、只有 Color 参数有 sRGB 色板与十六进制读数、
 折叠切换不重建分组 DOM、展开状态跨 Build 与文档切换保留、静止帧写 0 次属性。
-第四批新增 actor 树用例：分组顺序与组内排序、组折叠隐藏子行但不改变筛选计数、
+actor 树用例已改为：跨类型统一排序、不生成类型文件夹、过滤计数不包含材质槽，
 搜索的 ASCII 折叠与 UTF-8 多字节名称、类型过滤取值与 `SceneActorGroupSpecs()` 同源、
 空状态区分“没有 World”与“没有匹配”、
 mesh actor 与材质槽仍走既有 MI 选择路径、非网格 actor 走 `RequestActorSelection`、
@@ -651,12 +701,12 @@ mesh actor 与材质槽仍走既有 MI 选择路径、非网格 actor 走 `Reque
 以及 Details 强度控件使用 0..150000 lux 物理单位区间的回归守卫。
 第五批新增窗口/排序用例：纯数学放在 `widgetTests.cpp`（窗口挂载区间上界、
 spacer 高度之和等于整棵树、滚动到底必须挂到真正的最后一行、50000 行仍受 192 预算约束、
-折叠分组只贡献表头且整棵折叠后不需要 spacer、展开 mesh actor 按模型顺序追加槽行、
-组内排序只翻转组内顺序且分组顺序不变、排序键解析拒绝未知值、
+扁平列表完整滚动范围、展开 mesh actor 按模型顺序追加槽行、
+排序统一翻转所有类型顺序、排序键解析拒绝未知值、
 行内容签名只跟随行级字段），面板侧放在 `editorUiTests.cpp`
-（三种行形态的 margin box 等高实测、122 mesh 场景挂载行数受预算约束且计数是筛选总数、
-滚动换一批挂载行并能到达最后一行、折叠后无 spacer 且计数不变、
-排序在保持分组顺序/选中/展开/滚动偏移的同时真正重排、排序控件落在过滤栏矩形内、
+（actor/槽行的 margin box 等高实测、122 mesh 场景挂载行数受预算约束且计数是筛选总数、
+滚动换一批挂载行并能到达最后一行、不生成类型表头、
+排序在保持选中/展开/滚动偏移的同时真正重排、排序控件落在过滤栏矩形内、
 Detach 期间 Build 不触碰文档且重新 Attach 后重挂一次）。
 第六批新增可见性用例：`widgetTests.cpp` 覆盖 `TreeRow` 行尾控件是选择按钮之外的
 独立动作地址、`hiddenRow` 是固定 class 而不是宿主可控文本、
@@ -692,12 +742,18 @@ widget/docking 测试另覆盖属性缓存失效和静止帧不重写布局属�
 CPU 测试里的菜单展开、子菜单悬停和面板隐藏都用真实 RmlUi 事件与指针坐标驱动，
 但不等于桌面人工操作验收。
 
+2026-10-13 新增 `actorPropertyTests.cpp`：代数拒绝、同帧分量不互相覆盖、
+多 section TRS/负缩放、锥角/相机投影校验、主光旋转同步天空、独立观察相机、
+偏心 section 合并取景，以及辅助线投影/近面裁剪/相机视锥。
+面板测试覆盖枚举编辑地址、焦点部分输入、辅助图标不触发拾取、开关与强制裁剪、
+大纲/图标的真实指针双击跨过首次选择快照。
+
 第六批新增右键菜单用例（13 个，全部在 `editorUiTests.cpp`，名字都含 `ContextMenu`）：
 右键大纲行打开该 actor 的菜单、**可见性项作用于被右键的 actor 而不是当前选中**、
 可见性项跟随并反转 actor 状态、没有 actor 级动作的对象不提供菜单、选中条幕后关闭、
 点击菜单外关闭、材质槽条目复用既有槽选择路由、右键资产打开既有打开命令、
 右键文件夹不提供菜单、视口菜单只含视口级命令、视口 view mode 的勾选来自运行时快照
-并复用 `SetDebugViewMode`、无活动 World 时 CSM 保存禁用、有条目时走既有 CSM 保存命令。
+并复用 `SetDebugViewMode`、无修改文件时保存禁用、有修改时打开共享保存确认。
 命名一律带 `ContextMenu` 是刻意的：早先有一个用例叫 `BrowserAssetRightClick...`，
 `--gtest_filter="*ContextMenu*"` 会**静默跳过它**，运行数看起来是绿的却少一个。
 
@@ -708,7 +764,7 @@ RmlUi 指针事件覆盖，但从 `PlatformEvent` 到 RmlUi 这一段只有构�
 
 ```powershell
 cmake --build build --target editor_ui_tests editor_viewport_tests main -j4
-ctest --test-dir build -R "^(UiColorTransform|UiWidgetTest|UiWidgetRefresh|EditorUiTest|ContentBrowserTest|DockWorkspaceTest|DockPersistenceTest|DockRmlTest|EditorViewportGeometry|EditorViewportGridGeometry|EditorViewportAxisIndicator|EditorJsonAssetParsing|EditorJsonAssetPaths|EditorJsonAssetTypes|JsonAssetLibraryTest|ResourceEditorController|LargeCatalog/ContentBrowserPerformanceTest)\." --output-on-failure
+ctest --test-dir build -R "^(UiColorTransform|UiWidgetTest|UiWidgetRefresh|EditorUiTest|EditorActorProperty|EditorActorVisualization|SceneDocumentTest|ContentBrowserTest|DockWorkspaceTest|DockPersistenceTest|DockRmlTest|EditorViewportGeometry|EditorViewportGridGeometry|EditorViewportAxisIndicator|EditorJsonAssetParsing|EditorJsonAssetPaths|EditorJsonAssetTypes|JsonAssetLibraryTest|ResourceEditorController|LargeCatalog/ContentBrowserPerformanceTest)\." --output-on-failure
 ```
 
 `EditorViewportGridGeometry` 必须留在选择集里：它住在 `editor_viewport_tests` 而不是

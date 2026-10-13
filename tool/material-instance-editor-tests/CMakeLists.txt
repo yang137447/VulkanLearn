@@ -145,6 +145,8 @@ add_executable(material_instance_editor_production_tests
     "${VULKANLEARN_SOURCE_DIR}/source/editor/preview/materialInstancePreviewAdapter.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/editor/preview/materialInstancePreviewController.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/editor/runtime/materialInstanceEditorRuntime.cpp")
+target_sources(material_instance_editor_production_tests PRIVATE
+    "${VULKANLEARN_SOURCE_DIR}/source/editor/service/sceneDocumentService.cpp")
 
 target_include_directories(material_instance_editor_production_tests
     PRIVATE

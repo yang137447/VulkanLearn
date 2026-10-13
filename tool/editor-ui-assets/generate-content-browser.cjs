@@ -49,6 +49,8 @@ async function materialTypeIcon() {
 
 async function main() {
   await fs.mkdir(output, { recursive: true });
+  await icon("Save", "save.png");
+  if (process.argv[3] === "--save-only") return;
   for (const [name, file] of [
     ["ArrowLeft", "arrow-left.png"], ["ArrowRight", "arrow-right.png"],
     ["ArrowUp", "arrow-up.png"], ["PanelLeft", "panel-left.png"],

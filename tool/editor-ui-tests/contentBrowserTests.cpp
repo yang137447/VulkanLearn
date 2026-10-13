@@ -613,6 +613,32 @@ TEST_F(ContentBrowserTest, AuthoritativeCatalogExcludesOutsideMiOverlayAndShowsA
     }
 }
 
+TEST_F(ContentBrowserTest, SceneDirtyMarkerUpdatesInPlaceAndClearsAfterSave)
+{
+    const std::string path = "Maps/SC_test.json";
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+    catalog->revision = 1;
+    catalog->assets = {{path, EditorAssetKind::Scene, "Level"}};
+    snapshot.assetCatalog = catalog;
+    Refresh();
+    auto* item = Find("browser-item", path);
+    ASSERT_NE(item, nullptr);
+    auto* marker = item->QuerySelector(".asset-dirty");
+    ASSERT_NE(marker, nullptr);
+    EXPECT_FALSE(marker->IsVisible());
+    const auto rebuilds = browser.GetStats().listDomRebuilds;
+    snapshot.modifiedDocuments = {{path, EditorAssetKind::Scene, 2,
+        EditorDocumentStatus::Dirty, {}}};
+    Refresh();
+    EXPECT_EQ(Find("browser-item", path), item);
+    EXPECT_TRUE(marker->IsVisible());
+    EXPECT_EQ(browser.GetStats().listDomRebuilds, rebuilds);
+    snapshot.modifiedDocuments.clear();
+    Refresh();
+    EXPECT_FALSE(marker->IsVisible());
+    EXPECT_EQ(Find("browser-item", path), item);
+}
+
 TEST_F(ContentBrowserTest, TypeSelectorUsesCatalogAndKeepsOriginalWindowsPath)
 {
     auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();

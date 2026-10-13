@@ -85,6 +85,7 @@ EditorSceneActorSnapshot PointLightActor(const std::string& name, float intensit
     actor.light.color = Eigen::Vector3f(1.0f, 0.5f, 0.25f);
     actor.light.intensity = intensity;
     actor.light.position = Eigen::Vector3f(-3.5f, 3.5f, 6.0f);
+    actor.position = actor.light.position;
     actor.light.radius = radius;
     return actor;
 }
@@ -98,6 +99,7 @@ EditorSceneActorSnapshot CameraActor(const std::string& name)
     actor.displayName = name;
     actor.identity = SceneActorIdentity(EditorSceneActorType::Camera, name);
     actor.camera.position = Eigen::Vector3f(0.0f, 0.0f, 16.0f);
+    actor.position = actor.camera.position;
     actor.camera.forward = Eigen::Vector3f(0.0f, 0.0f, -1.0f);
     actor.camera.horizontalFovDegrees = 80.0f;
     actor.camera.clipNear = 0.1f;
@@ -791,7 +793,7 @@ TEST_F(EditorUiTest, MeshLevelAndTextureOpenReadOnlyJsonAndSceneRequestsWorldLoa
         snapshot.jsonDocument = json;
         panel->Build(snapshot);
         context->Update();
-        EXPECT_TRUE(document->GetElementById("menu-file-save")->HasAttribute("disabled"));
+        EXPECT_FALSE(document->GetElementById("menu-file-save")->HasAttribute("disabled"));
         if (asset.kind == EditorAssetKind::Mesh || asset.kind == EditorAssetKind::Texture)
         {
             // 先取元素再断言：直接解引用 QuerySelector/GetElementById 的结果会在元素缺失时崩溃，
@@ -812,6 +814,7 @@ TEST_F(EditorUiTest, MeshLevelAndTextureOpenReadOnlyJsonAndSceneRequestsWorldLoa
                 std::string::npos);
         }
         panel->RequestSave();
+        Click("#save-cancel");
     }
     EXPECT_TRUE(sink.commands.empty());
     ASSERT_EQ(runtimeSink.actions.size(), 2u);
@@ -1624,7 +1627,7 @@ TEST_F(EditorUiTest, OnlyColorParametersGetAnSrgbSwatchAndHexReadout)
     EXPECT_TRUE(sink.commands.empty());
 }
 
-TEST_F(EditorUiTest, OutlinerGroupsActorsByTypeWithStableOrderAndCount)
+TEST_F(EditorUiTest, OutlinerListsActorsWithoutAutomaticTypeFolders)
 {
     AddActor(MeshActor("Zeta", 1));
     AddActor(MeshActor("alpha", 1, 12));
@@ -1633,12 +1636,9 @@ TEST_F(EditorUiTest, OutlinerGroupsActorsByTypeWithStableOrderAndCount)
     panel->Build(snapshot);
     context->Update();
 
-    // 分组顺序固定（低基数类型在前，Meshes 最后），组内按 ASCII 大小写不敏感排序
-    // （alpha 在 Zeta 之前）。
-    EXPECT_EQ(OutlinerLabels("outliner-group"),
-        (std::vector<std::string>{"Point Lights (1)", "Cameras (1)", "Meshes (2)"}));
+    EXPECT_TRUE(OutlinerLabels("outliner-group").empty());
     EXPECT_EQ(OutlinerLabels("outliner-actor"),
-        (std::vector<std::string>{"Key_Light", "Camera_01", "alpha", "Zeta"}));
+        (std::vector<std::string>{"alpha", "Camera_01", "Key_Light", "Zeta"}));
     EXPECT_EQ(OutlinerCount(), "4 actors");
     EXPECT_FALSE(document->GetElementById("outliner-empty")->IsVisible());
     // 每次选择都要有类型图标：4 个 actor 行各一个（行尾眼睛不在 .list-item 里，
@@ -1673,7 +1673,7 @@ TEST_F(EditorUiTest, OutlinerSearchAndTypeFilterOnlyChangeVisibility)
     SelectOption("outliner-type", "pointLight");
     panel->Build(snapshot);
     EXPECT_EQ(OutlinerLabels("outliner-actor"), (std::vector<std::string>{"Key_Light"}));
-    EXPECT_EQ(OutlinerLabels("outliner-group"), (std::vector<std::string>{"Point Lights (1)"}));
+    EXPECT_TRUE(OutlinerLabels("outliner-group").empty());
 
     // 未知过滤值按 "全部" 处理，不产生静默空结果。
     SelectOption("outliner-type", "not-a-type");
@@ -1727,7 +1727,7 @@ TEST_F(EditorUiTest, OutlinerEmptyStateDistinguishesNoWorldFromNoMatch)
     EXPECT_EQ(OutlinerCount(), "0 / 1 actor");
 }
 
-TEST_F(EditorUiTest, OutlinerGroupCollapseHidesItsActorsAndKeepsTheFilterCount)
+TEST_F(EditorUiTest, OutlinerSlotCollapseKeepsItsActorAndFilterCount)
 {
     AddActor(MeshActor("Sphere_01", 1));
     AddActor(MeshActor("Sphere_02", 1, 12));
@@ -1735,18 +1735,18 @@ TEST_F(EditorUiTest, OutlinerGroupCollapseHidesItsActorsAndKeepsTheFilterCount)
     panel->Build(snapshot);
     context->Update();
     ASSERT_EQ(OutlinerLabels("outliner-actor").size(), 3u);
-    // 折叠 Meshes：该组的 actor 行不再挂进 DOM，其他组不受影响。
-    OutlinerRow("outliner-group", "Meshes (2)")->DispatchEvent("click", {});
+    OutlinerToggle("Sphere_01")->DispatchEvent("click", {});
     panel->Build(snapshot);
     context->Update();
-    EXPECT_EQ(OutlinerLabels("outliner-actor"), (std::vector<std::string>{"Key_Light"}));
+    EXPECT_EQ(OutlinerLabels("outliner-slot").size(), 1u);
+    EXPECT_EQ(OutlinerLabels("outliner-actor").size(), 3u);
     EXPECT_EQ(OutlinerCount(), "3 actors");
-    // 展开回去：折叠状态只影响可见性，不改变筛选集合或 actor 身份。
-    OutlinerRow("outliner-group", "Meshes (2)")->DispatchEvent("click", {});
+    OutlinerToggle("Sphere_01")->DispatchEvent("click", {});
     panel->Build(snapshot);
     context->Update();
     EXPECT_EQ(OutlinerLabels("outliner-actor"),
         (std::vector<std::string>{"Key_Light", "Sphere_01", "Sphere_02"}));
+    EXPECT_TRUE(OutlinerLabels("outliner-slot").empty());
     EXPECT_TRUE(sink.commands.empty());
     EXPECT_TRUE(runtimeSink.actions.empty());
 }
@@ -1765,10 +1765,9 @@ TEST_F(EditorUiTest, OutlinerNonMeshSelectionRoutesToTheActorSinkAndFillsDetails
     auto* section = document->GetElementById("details-section-actor-pointLight");
     ASSERT_NE(section, nullptr);
     EXPECT_FALSE(section->IsClassSet("collapsed"));
-    EXPECT_EQ(document->GetElementById("actor-field-intensity")->GetInnerRML(), "250");
+    EXPECT_EQ(Control("actor-property-4-0")->GetValue(), "250");
     EXPECT_EQ(document->GetElementById("actor-field-radius")->GetInnerRML(), "12.5");
-    EXPECT_EQ(document->GetElementById("actor-field-position")->GetInnerRML(),
-        "-3.5, 3.5, 6");
+    EXPECT_EQ(Control("actor-property-0-0")->GetValue(), "-3.5");
     // 点光没有方向与锥角字段。
     EXPECT_EQ(document->GetElementById("actor-field-direction"), nullptr);
     EXPECT_EQ(document->GetElementById("actor-field-cone-outer"), nullptr);
@@ -1784,9 +1783,9 @@ TEST_F(EditorUiTest, DetailsShowsTheSelectedActorWhenNoDocumentIsOpen)
     EXPECT_EQ(document->GetElementById("details-section-general"), nullptr);
     auto* section = document->GetElementById("details-section-actor-camera");
     ASSERT_NE(section, nullptr);
-    EXPECT_EQ(document->GetElementById("actor-field-hfov")->GetInnerRML(), "80");
-    EXPECT_EQ(document->GetElementById("actor-field-clip-far")->GetInnerRML(), "100");
-    EXPECT_EQ(document->GetElementById("actor-field-position")->GetInnerRML(), "0, 0, 16");
+    EXPECT_EQ(Control("actor-property-9-0")->GetValue(), "80");
+    EXPECT_EQ(Control("actor-property-11-0")->GetValue(), "100");
+    EXPECT_EQ(Control("actor-property-0-2")->GetValue(), "16");
     EXPECT_EQ(document->GetElementById("actor-field-forward")->GetInnerRML(), "0, 0, -1");
     EXPECT_EQ(document->GetElementById("actor-field-name")->GetInnerRML(), "Camera_01");
 }
@@ -1808,12 +1807,15 @@ TEST_F(EditorUiTest, DetailsActorFieldsFollowTheFrozenSnapshot)
     // 值变化只刷新这一行，不重建分组 DOM（节点身份保持）。
     actors[0].light.radius = 30.0f;
     actors[0].light.position = Eigen::Vector3f(1.0f, 2.0f, 3.0f);
+    actors[0].position = actors[0].light.position;
     PublishActors();
     panel->Build(snapshot);
     context->Update();
     EXPECT_EQ(document->GetElementById("actor-field-radius"), radius);
     EXPECT_EQ(radius->GetInnerRML(), "30");
-    EXPECT_EQ(document->GetElementById("actor-field-position")->GetInnerRML(), "1, 2, 3");
+    EXPECT_EQ(Control("actor-property-0-0")->GetValue(), "1");
+    EXPECT_EQ(Control("actor-property-0-1")->GetValue(), "2");
+    EXPECT_EQ(Control("actor-property-0-2")->GetValue(), "3");
 }
 
 TEST_F(EditorUiTest, PrimaryDirectionalLightExposesTheTwoExistingRuntimeCommands)
@@ -1834,8 +1836,10 @@ TEST_F(EditorUiTest, PrimaryDirectionalLightExposesTheTwoExistingRuntimeCommands
 
     SetValue("actor-sun-intensity", "3.5");
     ASSERT_EQ(runtimeSink.actions.size(), 1u);
-    EXPECT_EQ(runtimeSink.actions[0].type, UiActionType::SetSunIntensity);
-    EXPECT_FLOAT_EQ(runtimeSink.actions[0].floatValue, 3.5f);
+    EXPECT_EQ(runtimeSink.actions[0].type, UiActionType::SetActorProperty);
+    EXPECT_EQ(runtimeSink.actions[0].actorProperty.identity, "directionalLight|Sun_Light");
+    EXPECT_EQ(runtimeSink.actions[0].actorProperty.property, EditorActorProperty::Intensity);
+    EXPECT_FLOAT_EQ(runtimeSink.actions[0].actorProperty.value, 3.5f);
     // 滑条与文本输入共用同一个 action 地址，但快照只刷新文本输入：把超范围值写进
     // 范围控件会让 RmlUi 截断它并自己派发一次 change，覆盖用户的精确输入。
     for (int frame = 0; frame < 3; ++frame)
@@ -1870,8 +1874,9 @@ TEST_F(EditorUiTest, PrimaryDirectionalLightExposesTheTwoExistingRuntimeCommands
     EXPECT_FALSE(enable->IsClassSet("selected"));
     Click("#actor-csm-enable");
     ASSERT_EQ(runtimeSink.actions.size(), 2u);
-    EXPECT_EQ(runtimeSink.actions[1].type, UiActionType::SetCsmCastShadows);
-    EXPECT_EQ(runtimeSink.actions[1].intValue, 1);
+    EXPECT_EQ(runtimeSink.actions[1].type, UiActionType::SetActorProperty);
+    EXPECT_EQ(runtimeSink.actions[1].actorProperty.property, EditorActorProperty::CastShadows);
+    EXPECT_FLOAT_EQ(runtimeSink.actions[1].actorProperty.value, 1);
     // 已经是关闭状态：重复点击不产生第二条命令。
     Click("#actor-csm-disable");
     EXPECT_EQ(runtimeSink.actions.size(), 2u);
@@ -1889,14 +1894,146 @@ TEST_F(EditorUiTest, ActorIntensitySliderUsesPhysicalLuxRange)
     EXPECT_FLOAT_EQ(slider->GetAttribute<float>("max", -1.0f), 150000.0f);
 }
 
-TEST_F(EditorUiTest, NonPrimaryDirectionalLightKeepsItsIntensityReadOnly)
+TEST_F(EditorUiTest, NonPrimaryDirectionalLightExposesItsOwnIntensityControl)
 {
     snapshot.activeDocument.reset();
     SelectActorInOutliner(SunActor(4.0f, false));
-    EXPECT_EQ(document->GetElementById("actor-field-intensity")->GetInnerRML(), "4");
+    EXPECT_EQ(Control("actor-property-4-0")->GetValue(), "4");
+    SetValue("actor-property-4-0", "10");
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions.front().type, UiActionType::SetActorProperty);
+    EXPECT_EQ(runtimeSink.actions.front().actorProperty.identity, "directionalLight|Sun_Light");
     EXPECT_EQ(Control("actor-sun-intensity"), nullptr);
     EXPECT_EQ(document->GetElementById("actor-csm-enable"), nullptr);
     EXPECT_EQ(document->GetElementById("actor-csm-disable"), nullptr);
+}
+
+TEST_F(EditorUiTest, ActorPositionEditCarriesIdentityGenerationAndComponent)
+{
+    SelectActorInOutliner(PointLightActor("Key", 250.0f, 12.5f));
+    SetValue("actor-property-0-1", "350");
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    const auto& action = runtimeSink.actions.front();
+    EXPECT_EQ(action.type, UiActionType::SetActorProperty);
+    EXPECT_EQ(action.actorProperty.identity, "pointLight|Key");
+    EXPECT_EQ(action.actorProperty.worldGeneration, 1u);
+    EXPECT_EQ(action.actorProperty.property, EditorActorProperty::Position);
+    EXPECT_EQ(action.actorProperty.component, 1u);
+    EXPECT_FLOAT_EQ(action.actorProperty.value, 350);
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, ActorPropertyRefreshPreservesFocusedPartialInputWithoutCommands)
+{
+    SelectActorInOutliner(CameraActor("Shot"));
+    auto* field = Control("actor-property-0-0");
+    ASSERT_NE(field, nullptr);
+    field->Focus();
+    field->SetValue("-");
+    for (int frame = 0; frame < 5; ++frame) Refresh();
+    EXPECT_EQ(Control("actor-property-0-0"), field);
+    EXPECT_EQ(field->GetValue(), "-");
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, ActorDoubleClickFramesByStableIdentityAndWorldGeneration)
+{
+    AddActor(CameraActor("Shot"));
+    SettleOutliner();
+    auto* row = OutlinerRow("outliner-actor", "Shot");
+    ASSERT_NE(row, nullptr);
+    row->DispatchEvent("dblclick", {});
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions.front().type, UiActionType::FrameEditorActor);
+    EXPECT_EQ(runtimeSink.actions.front().actorProperty.identity, "camera|Shot");
+    EXPECT_EQ(runtimeSink.actions.front().actorProperty.worldGeneration, 1u);
+}
+
+TEST_F(EditorUiTest, OutlinerPointerDoubleClickSurvivesTheFirstSelectionSnapshot)
+{
+    AddActor(CameraActor("Shot"));
+    SettleOutliner();
+    auto* row = OutlinerRow("outliner-actor", "Shot");
+    ASSERT_NE(row, nullptr);
+    const auto position = row->GetAbsoluteOffset(Rml::BoxArea::Content);
+    context->ProcessMouseMove(int(position.x + 6), int(position.y + 6), 0);
+    context->ProcessMouseButtonDown(0, 0);
+    context->ProcessMouseButtonUp(0, 0);
+    EXPECT_EQ(selectionSink.selectedActorIdentity, "camera|Shot");
+    snapshot.selectedActorIdentity = selectionSink.selectedActorIdentity;
+    Refresh();
+    ASSERT_EQ(OutlinerRow("outliner-actor", "Shot"), row);
+    context->ProcessMouseButtonDown(0, 0);
+    context->ProcessMouseButtonUp(0, 0);
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions.front().type, UiActionType::FrameEditorActor);
+}
+
+TEST_F(EditorUiTest, HelperPointerDoubleClickSurvivesSelectedLinesAppearing)
+{
+    auto light = PointLightActor("Key", 250, 0);
+    light.position = light.light.position = Eigen::Vector3f(0, 0, -20);
+    AddActor(light);
+    AddActor(CameraActor("Shot"));
+    Click("#workspace-viewport-tab");
+    SettleOutliner();
+    auto* icon = document->QuerySelector("#viewport-actor-overlay [data-action=viewport-actor]");
+    ASSERT_NE(icon, nullptr);
+    const auto position = icon->GetAbsoluteOffset(Rml::BoxArea::Content);
+    context->ProcessMouseMove(int(position.x + 6), int(position.y + 6), 0);
+    context->ProcessMouseButtonDown(0, 0);
+    context->ProcessMouseButtonUp(0, 0);
+    snapshot.selectedActorIdentity = selectionSink.selectedActorIdentity;
+    Refresh();
+    ASSERT_EQ(document->QuerySelector("#viewport-actor-overlay [data-action=viewport-actor]"), icon);
+    context->ProcessMouseButtonDown(0, 0);
+    context->ProcessMouseButtonUp(0, 0);
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions.front().type, UiActionType::FrameEditorActor);
+}
+
+TEST_F(EditorUiTest, ActorHelperOverlayForcesClippingEvenWithoutScrollableOverflow)
+{
+    auto light = PointLightActor("Key", 250, 0);
+    light.position = light.light.position = Eigen::Vector3f(0, 0, -20);
+    AddActor(light);
+    AddActor(CameraActor("Shot"));
+    Click("#workspace-viewport-tab");
+    SettleOutliner();
+    auto* icon = document->QuerySelector("#viewport-actor-overlay [data-action=viewport-actor]");
+    ASSERT_NE(icon, nullptr);
+    const auto dimensions = icon->GetBox().GetSize(Rml::BoxArea::Border);
+    EXPECT_FLOAT_EQ(dimensions.x, 24);
+    EXPECT_FLOAT_EQ(dimensions.y, 24);
+    Rml::Rectanglei clip;
+    ASSERT_TRUE(Rml::ElementUtilities::GetClippingRegion(icon, clip));
+    auto* overlay = document->GetElementById("viewport-actor-overlay");
+    const auto position = overlay->GetAbsoluteOffset(Rml::BoxArea::Content);
+    const auto size = overlay->GetBox().GetSize(Rml::BoxArea::Content);
+    EXPECT_GE(clip.Left(), int(position.x));
+    EXPECT_GE(clip.Top(), int(position.y));
+    // RmlUi 的 scissor 向像素网格取整，右/下边界允许覆盖最后一个分数像素。
+    EXPECT_LE(clip.Right(), int(std::ceil(position.x + size.x)));
+    EXPECT_LE(clip.Bottom(), int(std::ceil(position.y + size.y)));
+}
+
+TEST_F(EditorUiTest, LightHelperIconSelectsTheActorAndNeverClaimsScenePicking)
+{
+    auto light = PointLightActor("Key", 250, 0);
+    light.position = light.light.position = Eigen::Vector3f(0, 0, -20);
+    AddActor(light);
+    AddActor(CameraActor("Shot"));
+    Click("#workspace-viewport-tab");
+    SettleOutliner();
+    auto* icon = document->QuerySelector("#viewport-actor-overlay [data-action=viewport-actor]");
+    ASSERT_NE(icon, nullptr);
+    EXPECT_FALSE(panel->IsSceneViewportElement(icon));
+    icon->DispatchEvent("click", {});
+    EXPECT_EQ(selectionSink.selectedActorIdentity, "pointLight|Key");
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    Click("#viewport-actor-visuals");
+    EXPECT_EQ(document->GetElementById("viewport-actor-icons")->GetNumChildren(), 0);
+    EXPECT_EQ(document->GetElementById("viewport-actor-lines")->GetNumChildren(), 0);
 }
 
 TEST_F(EditorUiTest, OutlinerStaticFramesKeepActorFieldsAndCountCached)
@@ -1921,7 +2058,7 @@ TEST_F(EditorUiTest, OutlinerStaticFramesKeepActorFieldsAndCountCached)
     EXPECT_EQ(OutlinerCount(), "1 actor");
 }
 
-// 窗口化的行高假设：分组行/actor 行/槽行必须同高。
+// 窗口化的行高假设：actor 行/槽行必须同高。
 // 这里量真实 RmlUi 布局的 margin box（不是从 RCSS 推导），因为 indentation 只改
 // padding-left，而 .tree-toggle/.tree-spacer 是同一个 26px 盒子。
 TEST_F(EditorUiTest, OutlinerRemountsAfterDetachAndReattach)
@@ -1967,10 +2104,9 @@ TEST_F(EditorUiTest, OutlinerRowHeightsAreUniformAcrossRowKinds)
         else if (element->IsClassSet("slot-row")) slotHeight = height;
         else actorHeight = height;
     }
-    EXPECT_GT(groupHeight, 0.0f);
+    EXPECT_FLOAT_EQ(groupHeight, 0.0f);
     EXPECT_GT(actorHeight, 0.0f);
     EXPECT_GT(slotHeight, 0.0f);
-    EXPECT_FLOAT_EQ(groupHeight, actorHeight);
     EXPECT_FLOAT_EQ(actorHeight, slotHeight);
     // 实测行高就是窗口用的行高：顶部 spacer 必须是"整行高 × 被跳过行数"。
     EXPECT_FLOAT_EQ(OutlinerRowHeight(), actorHeight);
@@ -1996,7 +2132,7 @@ TEST_F(EditorUiTest, OutlinerMountsABoundedWindowAndKeepsTheRestReachable)
     // 计数始终是筛选结果，不是挂载行数。
     EXPECT_EQ(OutlinerCount(), "125 actors");
     // 低基数分组在默认展开状态下就在窗口里：不需要手工折叠 Meshes 才能看到灯/相机/环境。
-    EXPECT_NE(OutlinerRow("outliner-actor", "Sun_Light"), nullptr);
+    EXPECT_EQ(OutlinerRow("outliner-actor", "Sun_Light"), nullptr);
     EXPECT_NE(OutlinerRow("outliner-actor", "Key_Light"), nullptr);
     EXPECT_NE(OutlinerRow("outliner-actor", "Camera_01"), nullptr);
 
@@ -2010,9 +2146,8 @@ TEST_F(EditorUiTest, OutlinerMountsABoundedWindowAndKeepsTheRestReachable)
     const float paddingY = box.GetEdge(Rml::BoxArea::Padding, Rml::BoxEdge::Top) +
         box.GetEdge(Rml::BoxArea::Padding, Rml::BoxEdge::Bottom);
     EXPECT_NEAR(spacers.front()->GetBox().GetSize(Rml::BoxArea::Content).y,
-        static_cast<float>(129 - rows.size()) * rowHeight, 1.0f);
-    // 4 个分组行 + 125 个 actor 行：整棵树的滚动范围必须完整保留。
-    EXPECT_NEAR(tree->GetScrollHeight(), 129.0f * rowHeight + paddingY, rowHeight);
+        static_cast<float>(125 - rows.size()) * rowHeight, 1.0f);
+    EXPECT_NEAR(tree->GetScrollHeight(), 125.0f * rowHeight + paddingY, rowHeight);
 
     // 静止帧不重挂 DOM：行节点指针保持同一批。
     const auto nodes = rows;
@@ -2057,7 +2192,7 @@ TEST_F(EditorUiTest, OutlinerScrollMountsAnotherWindowAndReachesTheLastActor)
     EXPECT_TRUE(MountedRows().back()->IsClassSet("actor-row"));
 }
 
-TEST_F(EditorUiTest, OutlinerCollapsedTreeFitsWithoutSpacersAndKeepsTheCount)
+TEST_F(EditorUiTest, OutlinerTypeFilterRemovesNonmatchingRowsAndSpacers)
 {
     for (int index = 0; index < 122; ++index)
         AddActor(MeshActor("Sphere_" + std::to_string(100 + index), 1,
@@ -2066,23 +2201,20 @@ TEST_F(EditorUiTest, OutlinerCollapsedTreeFitsWithoutSpacersAndKeepsTheCount)
     SettleOutliner();
     ASSERT_LT(OutlinerLabels("outliner-actor").size(), 123u);
 
-    // 折叠 Meshes：122 个子行既不挂 DOM 也不占窗口槽位，因此不再需要 spacer。
-    auto* group = OutlinerRow("outliner-group", "Meshes (122)");
-    ASSERT_NE(group, nullptr);
-    group->DispatchEvent("click", {});
+    EXPECT_TRUE(OutlinerLabels("outliner-group").empty());
+    SelectOption("outliner-type", "pointLight");
     SettleOutliner();
     EXPECT_TRUE(OutlinerSpacers().empty());
     EXPECT_EQ(OutlinerLabels("outliner-actor"), (std::vector<std::string>{"Key_Light"}));
     // 折叠只影响挂载，不影响计数语义。
-    EXPECT_EQ(OutlinerCount(), "123 actors");
-    // 展开回来：子行重新进入窗口，spacer 也回来。
-    OutlinerRow("outliner-group", "Meshes (122)")->DispatchEvent("click", {});
+    EXPECT_EQ(OutlinerCount(), "1 / 123 actors");
+    SelectOption("outliner-type", "all");
     SettleOutliner();
     EXPECT_EQ(OutlinerSpacers().size(), 1u);
     EXPECT_EQ(OutlinerCount(), "123 actors");
 }
 
-TEST_F(EditorUiTest, OutlinerSortReordersInsideGroupsAndKeepsGroupOrderAndState)
+TEST_F(EditorUiTest, OutlinerGlobalSortKeepsSelectionExpansionAndScroll)
 {
     for (int index = 0; index < 40; ++index)
         AddActor(MeshActor("Mesh_" + std::to_string(10 + index), 1,
@@ -2090,8 +2222,7 @@ TEST_F(EditorUiTest, OutlinerSortReordersInsideGroupsAndKeepsGroupOrderAndState)
     AddActor(PointLightActor("Key_Light", 250.0f, 20.0f));
     AddActor(PointLightActor("A_Light", 250.0f, 20.0f));
     SettleOutliner();
-    EXPECT_EQ(OutlinerLabels("outliner-group"),
-        (std::vector<std::string>{"Point Lights (2)", "Meshes (40)"}));
+    EXPECT_TRUE(OutlinerLabels("outliner-group").empty());
     EXPECT_EQ(OutlinerLabels("outliner-actor").front(), "A_Light");
 
     // 排序控件只提供两种顺序，取值与 Content Browser 的 sort 控件同一套键。
@@ -2115,9 +2246,8 @@ TEST_F(EditorUiTest, OutlinerSortReordersInsideGroupsAndKeepsGroupOrderAndState)
     // 组内降序：分组顺序（稳定契约）不动，Meshes 组内从 Mesh_49 开始。
     SelectOption("outliner-sort", "name-desc");
     SettleOutliner();
-    EXPECT_EQ(OutlinerLabels("outliner-group"),
-        (std::vector<std::string>{"Point Lights (2)", "Meshes (40)"}));
-    EXPECT_EQ(OutlinerLabels("outliner-actor").front(), "Key_Light");
+    EXPECT_TRUE(OutlinerLabels("outliner-group").empty());
+    EXPECT_EQ(OutlinerLabels("outliner-actor").front(), "Mesh_49");
     EXPECT_NE(OutlinerRow("outliner-actor", "Mesh_49"), nullptr);
     // 窗口化之后降序末尾的行不在窗口里，这是窗口语义而不是排序丢失。
     EXPECT_EQ(OutlinerRow("outliner-actor", "Mesh_10"), nullptr);
@@ -2137,7 +2267,7 @@ TEST_F(EditorUiTest, OutlinerSortReordersInsideGroupsAndKeepsGroupOrderAndState)
     auto* tree = document->GetElementById("scene-models");
     const float rowHeight = OutlinerRowHeight();
     ASSERT_GT(rowHeight, 0.0f);
-    tree->SetScrollTop(5.0f * rowHeight);
+    tree->SetScrollTop(3.0f * rowHeight);
     SettleOutliner();
     const float scrollTop = tree->GetScrollTop();
     ASSERT_GT(scrollTop, 0.0f);
@@ -2240,15 +2370,22 @@ TEST_F(EditorUiTest, StaticFramesDoNotRewriteSectionClasses)
     EXPECT_FALSE(document->GetElementById("details-section-parameters")->IsClassSet("collapsed"));
 }
 
-TEST_F(EditorUiTest, SaveIncludesPendingEditsInTheSameBatch)
+TEST_F(EditorUiTest, SaveConfirmationFlushesPendingEditsAndWaitsForTheirAuthoritativeRevision)
 {
     SetValue("parameter-0-0", "0.7");
     panel->RequestSave();
     ASSERT_EQ(sink.commands.size(), 1u);
     const auto& batch = std::get<ExecuteEditorCommandBatchPayload>(sink.commands[0].payload);
-    ASSERT_EQ(batch.commands.size(), 2u);
+    ASSERT_EQ(batch.commands.size(), 1u);
     EXPECT_EQ(batch.commands[0].type, EditorCommandType::SetMaterialParameterOverride);
-    EXPECT_EQ(batch.commands[1].type, EditorCommandType::SaveMaterialInstanceDocument);
+    EXPECT_TRUE(panel->HasModal());
+    EXPECT_TRUE(document->GetElementById("save-confirm")->HasAttribute("disabled"));
+    snapshot.activeDocument->revision = 8;
+    Refresh();
+    Click("#save-confirm");
+    ASSERT_EQ(sink.commands.size(), 2u);
+    EXPECT_EQ(sink.commands.back().type, EditorCommandType::SaveMaterialInstanceDocument);
+    EXPECT_EQ(sink.commands.back().expectedDocumentRevision, 8u);
 }
 
 TEST_F(EditorUiTest, QueuedEditKeepsTheRevisionItWasAuthoredAgainst)
@@ -2258,6 +2395,190 @@ TEST_F(EditorUiTest, QueuedEditKeepsTheRevisionItWasAuthoredAgainst)
     panel->Build(snapshot);
     ASSERT_EQ(sink.commands.size(), 1u);
     EXPECT_EQ(sink.commands[0].expectedDocumentRevision, 7u);
+}
+
+TEST_F(EditorUiTest, SaveAllListsSceneAndInactiveMaterialWithoutSavingOnOpen)
+{
+    snapshot.modifiedDocuments = {
+        {"Maps/SC_test.json", EditorAssetKind::Scene, 3, EditorDocumentStatus::Dirty, {}},
+        {"Common/MI_other.json", EditorAssetKind::MaterialInstance, 11, EditorDocumentStatus::Dirty, {}}};
+    Refresh();
+    panel->RequestSaveAll();
+    context->Update();
+    EXPECT_TRUE(sink.commands.empty());
+    EXPECT_TRUE(panel->HasModal());
+    auto* list = document->GetElementById("save-document-list");
+    EXPECT_NE(list->GetInnerRML().find("Maps/SC_test.json"), std::string::npos);
+    EXPECT_NE(list->GetInnerRML().find("Common/MI_other.json"), std::string::npos);
+    Click("#save-confirm");
+    ASSERT_EQ(sink.commands.size(), 2u);
+    EXPECT_EQ(sink.commands[0].type, EditorCommandType::SaveSceneDocument);
+    EXPECT_EQ(sink.commands[0].expectedDocumentRevision, 3u);
+    EXPECT_EQ(sink.commands[1].type, EditorCommandType::SaveMaterialInstanceDocument);
+    EXPECT_EQ(sink.commands[1].expectedDocumentRevision, 11u);
+    EXPECT_EQ(std::get<MaterialInstanceAssetPathPayload>(sink.commands[1].payload).assetPath,
+        "Common/MI_other.json");
+}
+
+TEST_F(EditorUiTest, SaveDialogKeepsLongPathsAndConfirmationInsideSmallAndLargeWindows)
+{
+    snapshot.modifiedDocuments.clear();
+    for (size_t index = 0; index < 20; ++index)
+        snapshot.modifiedDocuments.push_back({
+            "Maps/LongDirectoryName/LongSceneDirectoryName/Materials/MI_modified_document_" +
+                std::to_string(index) + ".json",
+            EditorAssetKind::MaterialInstance, 3, EditorDocumentStatus::Dirty, {}});
+    Refresh();
+    panel->RequestSaveAll();
+    for (const auto dimensions : {Rml::Vector2i(960, 540),
+        Rml::Vector2i(1280, 720), Rml::Vector2i(1920, 1080)})
+    {
+        context->SetDimensions(dimensions);
+        Refresh();
+        Refresh();
+        auto* dialog = document->QuerySelector(".save-dialog");
+        ASSERT_NE(dialog, nullptr);
+        const auto origin = dialog->GetAbsoluteOffset(Rml::BoxArea::Border);
+        const auto size = dialog->GetBox().GetSize(Rml::BoxArea::Border);
+        EXPECT_GE(origin.x, 0);
+        EXPECT_GE(origin.y, 0);
+        EXPECT_LE(origin.x + size.x, dimensions.x);
+        EXPECT_LE(origin.y + size.y, dimensions.y);
+        for (const auto* id : {"save-confirm", "save-cancel"})
+        {
+            auto* button = document->GetElementById(id);
+            const auto position = button->GetAbsoluteOffset(Rml::BoxArea::Border);
+            const auto buttonSize = button->GetBox().GetSize(Rml::BoxArea::Border);
+            EXPECT_GE(position.y, origin.y);
+            EXPECT_LE(position.y + buttonSize.y, origin.y + size.y);
+        }
+        auto* list = document->GetElementById("save-document-list");
+        EXPECT_GT(list->GetScrollHeight(), list->GetClientHeight());
+    }
+}
+
+TEST_F(EditorUiTest, SaveCheckboxPointerTogglePreservesNodeAndExcludesUncheckedFile)
+{
+    snapshot.modifiedDocuments = {
+        {"Maps/SC_test.json", EditorAssetKind::Scene, 3, EditorDocumentStatus::Dirty, {}},
+        {"Common/MI_other.json", EditorAssetKind::MaterialInstance, 11, EditorDocumentStatus::Dirty, {}}};
+    Refresh();
+    panel->RequestSaveAll();
+    context->Update();
+    auto* checkbox = document->GetElementById("save-file-1");
+    ASSERT_NE(checkbox, nullptr);
+    const auto origin = checkbox->GetAbsoluteOffset(Rml::BoxArea::Border);
+    context->ProcessMouseMove(static_cast<int>(origin.x + 8), static_cast<int>(origin.y + 8), 0);
+    context->ProcessMouseButtonDown(0, 0);
+    context->ProcessMouseButtonUp(0, 0);
+    context->Update();
+    EXPECT_EQ(document->GetElementById("save-file-1"), checkbox);
+    EXPECT_FALSE(checkbox->HasAttribute("checked"));
+    Refresh();
+    EXPECT_FALSE(checkbox->HasAttribute("checked"));
+    Click("#save-confirm");
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands.front().type, EditorCommandType::SaveSceneDocument);
+}
+
+TEST_F(EditorUiTest, SuccessfulSelectedSaveClosesDialogWhileUncheckedFilesStayDirty)
+{
+    snapshot.modifiedDocuments = {
+        {"Maps/SC_test.json", EditorAssetKind::Scene, 3, EditorDocumentStatus::Dirty, {}},
+        {"Common/MI_other.json", EditorAssetKind::MaterialInstance, 11, EditorDocumentStatus::Dirty, {}}};
+    Refresh();
+    panel->RequestSaveAll();
+    auto* checkbox = document->GetElementById("save-file-1");
+    checkbox->RemoveAttribute("checked");
+    checkbox->DispatchEvent("change", {});
+    Click("#save-confirm");
+    snapshot.modifiedDocuments.erase(snapshot.modifiedDocuments.begin());
+    snapshot.saveFeedback = {{1, "Maps/SC_test.json", true, "Saved"}};
+    Refresh();
+    EXPECT_FALSE(panel->HasModal());
+    EXPECT_FALSE(document->GetElementById("save-dialog")->IsVisible());
+    EXPECT_EQ(snapshot.modifiedDocuments.size(), 1u);
+    EXPECT_EQ(jsonAssetSink.refreshes, 1u);
+}
+
+TEST_F(EditorUiTest, FailedSaveFeedbackKeepsDialogOpenAndRetryUsesCurrentRevision)
+{
+    snapshot.modifiedDocuments = {
+        {"Maps/SC_test.json", EditorAssetKind::Scene, 3, EditorDocumentStatus::Dirty, {}}};
+    Refresh();
+    panel->RequestSaveAll();
+    Click("#save-confirm");
+    snapshot.modifiedDocuments.front().status = EditorDocumentStatus::SaveFailed;
+    snapshot.modifiedDocuments.front().revision = 4;
+    snapshot.saveFeedback = {{1, "Maps/SC_test.json", false, "Atomic replace failed"}};
+    Refresh();
+    EXPECT_TRUE(panel->HasModal());
+    EXPECT_NE(document->GetElementById("save-document-status")->GetInnerRML().find("Atomic replace failed"),
+        std::string::npos);
+    EXPECT_FALSE(document->GetElementById("save-confirm")->HasAttribute("disabled"));
+    Click("#save-confirm");
+    ASSERT_EQ(sink.commands.size(), 2u);
+    EXPECT_EQ(sink.commands.back().expectedDocumentRevision, 4u);
+}
+
+TEST_F(EditorUiTest, SaveCancelDoesNotSubmitCommandsOrChangeDirtyDocuments)
+{
+    panel->RequestSaveAll();
+    Click("#save-cancel");
+    EXPECT_FALSE(panel->HasModal());
+    EXPECT_TRUE(sink.commands.empty());
+    EXPECT_TRUE(snapshot.documentTabs.front().dirty);
+}
+
+TEST_F(EditorUiTest, SceneOnlySaveWorksWithoutAnOpenMaterial)
+{
+    snapshot.activeDocument.reset();
+    snapshot.selectedDocumentPath.clear();
+    snapshot.documentTabs.clear();
+    snapshot.assets.clear();
+    snapshot.modifiedDocuments = {
+        {"Maps/SC_test.json", EditorAssetKind::Scene, 8, EditorDocumentStatus::Dirty, {}}};
+    Refresh();
+    EXPECT_FALSE(document->GetElementById("workspace-save")->HasAttribute("disabled"));
+    Click("#workspace-save");
+    EXPECT_TRUE(panel->HasModal());
+    Click("#save-confirm");
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands.front().type, EditorCommandType::SaveSceneDocument);
+}
+
+TEST_F(EditorUiTest, ContextMenuSingleAssetSaveTargetsRightClickedFileNotActiveMaterial)
+{
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+    catalog->revision = 1;
+    catalog->assets = {{"Maps/SC_other.json", EditorAssetKind::Scene, "Other Level"}};
+    snapshot.assetCatalog = catalog;
+    snapshot.modifiedDocuments = {
+        {"Maps/SC_other.json", EditorAssetKind::Scene, 9, EditorDocumentStatus::Dirty, {}},
+        {snapshot.activeDocument->assetPath, EditorAssetKind::MaterialInstance, 7, EditorDocumentStatus::Dirty, {}}};
+    Refresh();
+    RightClick(BrowserItem("Maps/SC_other.json"));
+    ASSERT_TRUE(panel->IsContextMenuOpen());
+    ClickContextItem("context-browser-save");
+    EXPECT_TRUE(panel->HasModal());
+    EXPECT_TRUE(sink.commands.empty());
+    Click("#save-confirm");
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands.front().type, EditorCommandType::SaveSceneDocument);
+    EXPECT_EQ(std::get<MaterialInstanceAssetPathPayload>(sink.commands.front().payload).assetPath,
+        "Maps/SC_other.json");
+    EXPECT_EQ(snapshot.selectedDocumentPath, "Maps/SC_test/Materials/MI_test.json");
+}
+
+TEST_F(EditorUiTest, SaveModalBlocksWorkspaceAndRuntimeCommands)
+{
+    panel->RequestSaveAll();
+    Click("#menu-edit-reset");
+    Click("#mode-offline");
+    Click("#menu-file-exit");
+    EXPECT_TRUE(sink.commands.empty());
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    EXPECT_TRUE(panel->HasModal());
 }
 
 TEST_F(EditorUiTest, SnapshotRefreshPreservesFocusedInput)
@@ -2511,7 +2832,7 @@ TEST_F(EditorUiTest, ToolbarDoesNotRestateTheDocumentMenuCommands)
     // 注意 #editor-menubar 本身就在 #editor-toolbar 内部，所以不能直接断言
     // "#editor-toolbar button[data-action=save] 为空" —— 那会把菜单项算成工具条按钮
     // （实测过：选择器返回的是 menu-file-save）。这里逐个排除 menubar 子树。
-    const char* commands[] = {"save", "revert", "reload", "reset-all", "validate"};
+    const char* commands[] = {"revert", "reload", "reset-all", "validate"};
     auto* toolbar = document->GetElementById("editor-toolbar");
     auto* menubar = document->GetElementById("editor-menubar");
     ASSERT_NE(toolbar, nullptr);
@@ -2549,8 +2870,10 @@ TEST_F(EditorUiTest, ToolbarDoesNotRestateTheDocumentMenuCommands)
             if (ancestor == menubar) { insideMenu = true; break; }
         if (!insideMenu) ++outside;
     }
-    EXPECT_EQ(outside, 2) << "expected exactly Reset Layout / Immersive Mode; "
+    EXPECT_EQ(outside, 3) << "expected exactly Save / Reset Layout / Immersive Mode; "
                              "if this changed, re-check the assertions above are not vacuous";
+    EXPECT_EQ(toolbar->QuerySelector("[data-action=save-all]")->GetId(), "menu-file-save");
+    EXPECT_EQ(document->GetElementById("workspace-save")->GetAttribute<std::string>("data-action", ""), "save-all");
     EXPECT_NE(toolbar->QuerySelector("[data-action=workspace-reset]"), nullptr);
 }
 
@@ -2837,6 +3160,25 @@ TEST_F(EditorUiTest, SceneSelectionDoesNotActivateAnExistingMaterialDocument)
     EXPECT_TRUE(runtimeSink.actions.empty());
 }
 
+TEST_F(EditorUiTest, OutlinerActorSelectionKeepsLevelVisibleWithAnOpenDirtyMaterial)
+{
+    auto actors = std::make_shared<std::vector<EditorSceneActorSnapshot>>();
+    actors->push_back(SunActor(1000, true));
+    snapshot.sceneActors = actors;
+    snapshot.activeDocument->status = EditorDocumentStatus::Dirty;
+    Click("#workspace-viewport-tab");
+    Refresh();
+    sink.commands.clear();
+    runtimeSink.actions.clear();
+    Click("[data-action=outliner-actor]");
+    Refresh();
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("editor-viewport-image")->IsVisible(true));
+    EXPECT_FALSE(document->GetElementById("material-editor")->IsVisible(true));
+    EXPECT_TRUE(sink.commands.empty());
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
 TEST_F(EditorUiTest, MaterialSphereRequestsOnceAndRejectsAnotherMaterialWorld)
 {
     const std::string path = snapshot.activeDocument->assetPath;
@@ -2966,10 +3308,19 @@ TEST_F(EditorUiTest, FileMenuDocumentCommandsShareTheToolbarAvailability)
 
     Click("#menu-file-save");
     context->Update();
+    ASSERT_TRUE(sink.commands.empty());
+    EXPECT_TRUE(panel->HasModal());
+    Click("#save-confirm");
     ASSERT_FALSE(sink.commands.empty());
     EXPECT_EQ(sink.commands.back().type, EditorCommandType::SaveMaterialInstanceDocument);
+    snapshot.activeDocument->status = EditorDocumentStatus::Clean;
+    snapshot.documentTabs.front().dirty = false;
+    snapshot.assets.front().dirty = false;
+    snapshot.saveFeedback = {{1, snapshot.activeDocument->assetPath, true, "Saved"}};
+    Refresh();
+    EXPECT_FALSE(panel->HasModal());
 
-    // 切到只读 JSON 视图后，两边必须同时禁用。
+    // 没有修改时全局保存禁用，MI 命令仍由当前编辑页控制。
     panel->ShowMaterialDetails();
     auto json = std::make_shared<EditorJsonDocumentSnapshot>();
     json->assetPath = "Maps/SC_test.json";
@@ -3877,7 +4228,7 @@ TEST_F(EditorUiTest, BrowserFolderRightClickDoesNotOpenAContextMenu)
     EXPECT_TRUE(sink.commands.empty());
 }
 
-// 视口没有拾取后端，因此菜单只放视口级动作：Lit / Unlit 与 CSM 设置持久化，
+// 视口菜单只放全局动作：Lit / Unlit 与修改文件保存确认，
 // 不含任何需要"鼠标下是哪个对象"的条目。
 TEST_F(EditorUiTest, ViewportContextMenuOffersOnlyViewportWideCommands)
 {
@@ -3896,7 +4247,7 @@ TEST_F(EditorUiTest, ViewportContextMenuOffersOnlyViewportWideCommands)
     EXPECT_EQ(ContextMenuItems().size(), 3u);
     EXPECT_NE(ContextViewModeItem(0), nullptr);
     EXPECT_NE(ContextViewModeItem(1), nullptr);
-    EXPECT_NE(ContextMenuItem("context-save-csm"), nullptr);
+    EXPECT_NE(ContextMenuItem("context-save-all"), nullptr);
 }
 
 TEST_F(EditorUiTest, ViewportContextMenuViewModeChecksTheRuntimeModeAndReusesTheDebugViewCommand)
@@ -3929,9 +4280,7 @@ TEST_F(EditorUiTest, ViewportContextMenuViewModeChecksTheRuntimeModeAndReusesThe
     EXPECT_EQ(runtimeSink.actions.back().intValue, 0);
 }
 
-// CSM 设置要写进活动场景文件：没有活动 World 时条目明确禁用，点了不产生命令，
-// 而不是提交一条注定被拒绝的运行时命令（与 Edit 的 Undo/Redo 同一表现规则）。
-TEST_F(EditorUiTest, ViewportContextMenuDisablesCsmSaveWithoutAnActiveWorld)
+TEST_F(EditorUiTest, ViewportContextMenuDisablesSaveWithoutModifiedDocuments)
 {
     Click("#workspace-viewport-tab");
     Refresh();
@@ -3943,15 +4292,17 @@ TEST_F(EditorUiTest, ViewportContextMenuDisablesCsmSaveWithoutAnActiveWorld)
     ASSERT_GT(box.y, 0.0f);
     RightClickAt(image->GetAbsoluteOffset(Rml::BoxArea::Border) + box * 0.5f);
 
-    auto* save = ContextMenuItem("context-save-csm");
+    auto* save = ContextMenuItem("context-save-all");
     ASSERT_NE(save, nullptr);
     EXPECT_TRUE(save->HasAttribute("disabled"));
-    ClickContextItem("context-save-csm");
+    ClickContextItem("context-save-all");
     EXPECT_TRUE(runtimeSink.actions.empty());
 }
 
-TEST_F(EditorUiTest, ViewportContextMenuSavesCsmSettingsThroughTheExistingRuntimeCommand)
+TEST_F(EditorUiTest, ViewportContextMenuOpensSharedSaveConfirmationWithoutDirectRuntimeWrite)
 {
+    snapshot.modifiedDocuments = {
+        {"Maps/SC_test/SC_test.json", EditorAssetKind::Scene, 3, EditorDocumentStatus::Dirty, {}}};
     UiViewModelSnapshot view;
     view.activeWorldPath = "Maps/SC_test/SC_test.json";
     panel->UpdateRuntimeView(view);
@@ -3963,13 +4314,16 @@ TEST_F(EditorUiTest, ViewportContextMenuSavesCsmSettingsThroughTheExistingRuntim
     ASSERT_GT(box.y, 0.0f);
     RightClickAt(image->GetAbsoluteOffset(Rml::BoxArea::Border) + box * 0.5f);
 
-    auto* save = ContextMenuItem("context-save-csm");
+    auto* save = ContextMenuItem("context-save-all");
     ASSERT_NE(save, nullptr);
     EXPECT_FALSE(save->HasAttribute("disabled"));
-    ClickContextItem("context-save-csm");
-
-    ASSERT_EQ(runtimeSink.actions.size(), 1u);
-    EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::SaveCsmSettingsToScene);
+    ClickContextItem("context-save-all");
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    EXPECT_TRUE(sink.commands.empty());
+    EXPECT_TRUE(panel->HasModal());
+    Click("#save-confirm");
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands.back().type, EditorCommandType::SaveSceneDocument);
 }
 
 } // namespace

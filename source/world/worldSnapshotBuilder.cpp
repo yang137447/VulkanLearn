@@ -275,7 +275,7 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
     snapshot.frameIndex = desc.frameIndex;
     snapshot.debugViewMode = desc.debugViewMode;
 
-    Camera& camera = *world.GetCamera();
+    Camera& camera = *world.GetRenderCamera();
     snapshot.camera.exposure = camera.GetExposure();
     snapshot.camera.view = camera.GetViewMatrix();
     snapshot.camera.projection = camera.GetProjectionMatrix();

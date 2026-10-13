@@ -41,6 +41,7 @@ class PlatformWindow;
 namespace Editor
 {
     class MaterialInstanceEditorRuntime;
+    class SceneDocumentService;
     class EditorJsonAssetLibrary;
     class EditorThumbnailLibrary;
 namespace Selection
@@ -119,6 +120,7 @@ public:
     void NotifyWorldLoadCompleted();
     // 只由 EngineLoop 在稳定帧边界调用，避免 UI 回调触碰 live MaterialInstance。
     void TickMaterialInstanceEditor();
+    Editor::SceneDocumentService* GetSceneDocuments() const;
     Editor::EditorThumbnailLibrary* GetThumbnailLibrary() const { return thumbnailLibrary.get(); }
     bool CanRenderThumbnails() const
     { return developerUiVisible && !sceneViewportInputActive && !editorPointerCaptured; }

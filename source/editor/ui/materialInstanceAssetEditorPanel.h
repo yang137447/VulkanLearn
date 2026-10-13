@@ -54,6 +54,7 @@ public:
     void UpdateRuntimeView(const UiViewModelSnapshot& view);
     std::vector<std::string> VisibleThumbnailPaths() const { return contentBrowser.VisibleThumbnailPaths(); }
     void RequestSave();
+    void RequestSaveAll();
     bool PrepareImmersiveView(std::string& levelToLoad);
     void SetWorkspaceLayoutPath(std::filesystem::path path) { docking.SetPersistencePath(std::move(path)); }
     UiViewportRect GetSceneViewportRect() const { return docking.GetSceneViewportRect(); }
@@ -79,7 +80,7 @@ public:
     size_t PanelPropertyWriteCount() const { return widgetDocument.PropertyWriteCount(); }
     void CancelWorkspaceDrag() { docking.CancelDrag(); previewDragButton = textureDragButton = -1; }
     void CancelModelPreviewDrag() { previewDragButton = textureDragButton = -1; }
-    bool HasModal() const { return !pendingClosePath.empty() || aboutVisible; }
+    bool HasModal() const { return !pendingClosePath.empty() || aboutVisible || saveDialogVisible; }
     void ProcessEvent(Rml::Event& event) override;
 
 private:
@@ -111,18 +112,22 @@ private:
     std::string OutlinerRowsMarkup(const EditorSceneActorWindow& window) const;
     void RefreshDetails();
     void RefreshControls();
+    void OpenSaveDialog(const std::string& path);
+    void RefreshSaveDialog();
+    void ConfirmSave();
     void RefreshActorValues(const EditorSceneActorSnapshot* actor);
     std::string ActorSectionMarkup(const EditorSceneActorSnapshot& actor);
     std::string PrimaryDirectionalLightControls(const EditorSceneActorSnapshot& actor) const;
     const std::vector<EditorSceneActorSnapshot>& OutlinerActors() const;
     const EditorSceneActorSnapshot* SelectedActor() const;
     void SelectOutlinerActor(const EditorSceneActorSnapshot& actor);
-    void ToggleOutlinerGroup(size_t groupIndex);
     void RefreshWorkspace();
     void RefreshMenus();
     void RefreshLevelMenu();
     void RefreshViewportToolbar();
     void RefreshViewportAxisIndicator();
+    void RefreshOutlinerVisuals();
+    void RefreshActorVisualization();
     void SetViewportToolbarClass(const std::string& id, bool active);
     std::string WindowMenuMarkup() const;
     void ToggleMenu(const std::string& menu);
@@ -212,10 +217,21 @@ private:
     float contextMenuX = 0.0f;
     float contextMenuY = 0.0f;
     bool aboutVisible = false;
-    // 视口工具条的变换工具与坐标系只驱动高亮；文件里没有 gizmo，也没有 transform 编辑后端，
+    bool saveDialogVisible = false;
+    bool saveAwaitingSnapshot = false;
+    std::string saveFilterPath;
+    std::vector<EditorModifiedDocumentSnapshot> saveRows;
+    std::unordered_set<std::string> saveChecked;
+    std::unordered_set<std::string> saveWaiting;
+    std::unordered_set<std::string> saveKnownPaths;
+    uint64_t saveStartedSequence = 0;
+    bool saveHadFailure = false;
+    std::string saveMessage;
+    // 视口变换工具与坐标系只驱动高亮，不提供 gizmo；对象变换从 Details 发命令，
     // 切换它们不提交 UiAction 或资产命令（见 ViewportToolbar 相关注释与文档）。
     std::string viewportTransformTool = "select";
     std::string viewportTransformSpace = "world";
+    bool showActorVisualization = true;
     std::string resourceTransformTool = "select";
     std::string resourceTransformSpace = "world";
     // File→Open Level 的条目地址按索引寻址，与 markup 同代重建，避免把资产路径写进 DOM 属性。
@@ -234,7 +250,7 @@ private:
     // 大纲搜索与类型过滤只影响可见性；ASCII 大小写折叠复用 Content Browser 的规则。
     std::string outlinerQuery;
     std::string outlinerTypeFilter = "all";
-    // 组内排序是面板偏好（与 Content Browser 的排序一样），不随 World 换代重置。
+    // 全局名称排序是面板偏好，不随 World 换代重置。
     SceneActorSortOrder outlinerSortOrder = SceneActorSortOrder::NameAscending;
     // 行集合的已构建副本：只有内容签名或筛选/排序/展开状态变化时才重建，
     // 静止帧不重新排序、不重新分配行标签。

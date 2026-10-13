@@ -19,6 +19,7 @@ class DiagnosticsSubsystem;
 class RuntimeConfig;
 class RuntimeTestHooks;
 class WorldTransitionCoordinator;
+namespace Editor { class SceneDocumentService; }
 
 struct RuntimeCommandExecutionResult
 {
@@ -66,7 +67,8 @@ public:
         WorldTransitionCoordinator& worldTransitionCoordinator,
         RuntimeTestHooks& runtimeTestHooks,
         const RuntimeConfig& runtimeConfig,
-        const DiagnosticsSubsystem& diagnostics) const;
+        const DiagnosticsSubsystem& diagnostics,
+        Editor::SceneDocumentService* sceneDocuments = nullptr) const;
 
 private:
     void ExecuteCommand(
@@ -77,7 +79,8 @@ private:
         RuntimeTestHooks& runtimeTestHooks,
         const RuntimeConfig& runtimeConfig,
         const DiagnosticsSubsystem& diagnostics,
-        RuntimeCommandExecutionResult& executionResult) const;
+        RuntimeCommandExecutionResult& executionResult,
+        Editor::SceneDocumentService* sceneDocuments) const;
     void ApplyShaderReloadTest(
         const RuntimeConfig& runtimeConfig,
         RuntimeTestHooks& runtimeTestHooks,

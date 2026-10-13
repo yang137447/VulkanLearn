@@ -918,6 +918,7 @@ Json EncodePayload(
     case EditorCommandType::RevertMaterialInstanceDocument:
     case EditorCommandType::ValidateMaterialInstanceDocument:
     case EditorCommandType::SaveMaterialInstanceDocument:
+    case EditorCommandType::SaveSceneDocument:
     case EditorCommandType::ConnectMaterialInstancePreview:
     case EditorCommandType::DisconnectMaterialInstancePreview:
     case EditorCommandType::RestoreMaterialInstancePreviewBaseline:
@@ -1165,6 +1166,7 @@ EditorCommandPayload DecodePayload(
     case EditorCommandType::RevertMaterialInstanceDocument:
     case EditorCommandType::ValidateMaterialInstanceDocument:
     case EditorCommandType::SaveMaterialInstanceDocument:
+    case EditorCommandType::SaveSceneDocument:
     case EditorCommandType::ConnectMaterialInstancePreview:
     case EditorCommandType::DisconnectMaterialInstancePreview:
     case EditorCommandType::RestoreMaterialInstancePreviewBaseline:

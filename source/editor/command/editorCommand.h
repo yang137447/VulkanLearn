@@ -45,6 +45,7 @@ enum class EditorCommandType
     ReloadMaterialInstanceDocument,
     ValidateMaterialInstanceDocument,
     SaveMaterialInstanceDocument,
+    SaveSceneDocument,
     ConnectMaterialInstancePreview,
     DisconnectMaterialInstancePreview,
     ApplyMaterialInstancePreview,

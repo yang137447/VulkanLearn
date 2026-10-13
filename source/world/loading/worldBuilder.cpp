@@ -299,6 +299,9 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
             object.materialSlotIndex = meshObjectPlan.materialSlotIndex;
             object.materialSlotName = meshObjectPlan.materialSlotName;
             object.model = meshObjectPlan.model;
+            object.scenePosition = meshObjectPlan.scenePosition;
+            object.sceneRotation = meshObjectPlan.sceneRotation;
+            object.sceneScale = meshObjectPlan.sceneScale;
             object.localBoundsMin = meshObjectPlan.localBoundsMin;
             object.localBoundsMax = meshObjectPlan.localBoundsMax;
             object.meshKey = meshObjectPlan.meshKey;

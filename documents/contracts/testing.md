@@ -23,25 +23,25 @@
 
 | 可执行文件 | 测试数 | 覆盖 |
 | --- | --- | --- |
-| `editor_ui_tests` | 276 | 编辑器 UI：组件、停靠、布局持久化、内容浏览器、JSON 资产库、actor 树、可见性、颜色转换、右键菜单 |
+| `editor_ui_tests` | 397 | 编辑器 UI：组件、停靠、布局持久化、内容浏览器、JSON 资产库、actor 树、属性编辑、场景持久化、保存确认、可视化、颜色转换、右键菜单 |
 | `vl_offline_adapter_tests` | 101 | 离线场景/网格/显示/相机适配 |
-| `editor_viewport_tests` | 34 | 视口几何、命中、坐标映射、aspect，以及编辑器网格的几何生成 |
+| `editor_viewport_tests` | 41 | 视口几何、命中、坐标映射、aspect、坐标轴投影及编辑器网格 |
 | `vl_offline_coordinator_tests` | 13 | 离线会话协调 |
 | `vl_renderer_backend_tests` | 12 | 离屏显示输出契约、swapchain 帧结果 |
 | `material_instance_editor_landed_tests` | 10 | MI 已落地接口 |
 | `material_instance_editor_tests` | 7 | MI 命令/文档服务 |
-| `material_instance_editor_production_tests` | 5 | MI 生产路径（预览边界、直接 render-state 路由） |
+| `material_instance_editor_production_tests` | 6 | MI 生产路径（预览边界、直接 render-state 路由、场景/非活动 MI 独立保存） |
 
-`editor_ui_tests` 里 14 个套件；`ctest` 用套件前缀选择：
+`editor_ui_tests` 里 23 个套件；`ctest` 用套件前缀选择：
 
 ```powershell
-# 编辑器 UI 全套（当前 315 项通过，含 ctest 展开的用例）
+# 编辑器 UI 选择集（缩略图、预览等另有专项套件；全量可直接运行 editor_ui_tests）
 # 注意 EditorViewportGridGeometry 与 EditorViewportAxisIndicator 来自 editor_viewport_tests 目标，
 # 不是 editor_ui_tests：
 # 它必须显式列入，否则改坏编辑器网格不会被这条选择集拦住（2026-10-12 发现并补上）。
-ctest --test-dir build -R "^(UiColorTransform|UiWidgetTest|UiWidgetRefresh|EditorUiTest|ContentBrowserTest|DockWorkspaceTest|DockPersistenceTest|DockRmlTest|EditorViewportGeometry|EditorViewportGridGeometry|EditorViewportAxisIndicator|EditorJsonAssetParsing|EditorJsonAssetPaths|EditorJsonAssetTypes|JsonAssetLibraryTest|ResourceEditorController|LargeCatalog/ContentBrowserPerformanceTest)\." --output-on-failure
+ctest --test-dir build -R "^(UiColorTransform|UiWidgetTest|UiWidgetRefresh|EditorUiTest|EditorActorProperty|EditorActorVisualization|SceneDocumentTest|ContentBrowserTest|DockWorkspaceTest|DockPersistenceTest|DockRmlTest|EditorViewportGeometry|EditorViewportGridGeometry|EditorViewportAxisIndicator|EditorJsonAssetParsing|EditorJsonAssetPaths|EditorJsonAssetTypes|JsonAssetLibraryTest|ResourceEditorController|LargeCatalog/ContentBrowserPerformanceTest)\." --output-on-failure
 
-# 材质实例编辑器全套（当前 22 项通过）
+# 材质实例编辑器全套（当前 23 项）
 ctest --test-dir build -R "MaterialInstanceEditor" --output-on-failure
 ```
 
@@ -57,6 +57,36 @@ ctest --test-dir build -R "^(ThumbnailLibraryTest|EditorThumbnailGraph)\." --out
 模型/MI 实际出图另用 validation 构建核对真实资产；2026-10-13 已验证青/红遮阳布材质球、
 `SM_vilking_room`、窗口最大化后继续出图及 File → Exit 正常 teardown，无 Vulkan validation 错误。
 当轮 `editor_ui_tests` 全量连续两遍均为 347 项、343 通过、4 跳过。
+
+2026-10-13 actor 编辑验证的完整 CTest 扫描还发现 6 个 `RuntimeControlAssets.*`
+用例仍读取已删除的运行时控制页（`ui_control_test.cpp` 的文件打开断言失败）。
+该页在本次改动前已经不存在；这些用例未因本次 actor 编辑而恢复或改写。
+`--world-graph-transaction-test --exit-after-tests` 在启用编辑器时出现 resize
+GPU 资源计数不稳定，使用 `--no-dev-ui` 后通过全部事务/退休检查；
+关闭编辑器的结果不能替代开启编辑器的交互验收。
+
+actor 编辑的最终 `editor_ui_tests` 全量连续两遍均为 369 项、365 通过、4 跳过，
+`editor_viewport_tests` 41 项通过；全部目标编译、文档校验和架构边界审计通过。
+桌面实测扁平大纲、点光位置输入、灯光图标选择/双击取景、相机首次双击取景，
+相机 FOV 80→40 后视锥变化但观察视角不变，以及 1280×720 / 最大化窗口、
+辅助图形开关和 File → Exit 正常 teardown。验证未保存场景修改。
+spot/area 图示尚无对应桌面场景或像素专项验收。
+
+2026-10-13 保存机制新增 `SceneDocumentTest` 17 项：JSON 补丁/精度、返回基线、
+lm↔cd、spot 锥角、面光尺寸/辐亮度、mesh TRS、CSM 默认复位、Camera look_at、
+陈旧 revision、外部冲突、路径逃逸、草稿重放与真实替换 World、预览排除及 `scene.save` 协议。
+面板回归覆盖单文件/场景与非活动 MI 组合列表、真实指针 checkbox 不重建节点、
+取消不写盘、仅保存勾选项、失败重试、模态输入阻断、待编辑 revision 与长路径/20 文件
+在 960×540、1280×720、1920×1080 的布局。生产 facade 回归验证场景/非活动 MI
+独立保存、单调反馈与选择不变。
+
+保存桌面验收使用独立临时 Scene/MI 副本，核对 1280×720 与最大化窗口：
+星号出现/消失、右键单文件确认、组合列表取消勾选 MI 后只写场景、
+未选 MI 的磁盘内容保持不变、随后 MI 保存并保留关卡页面、预览往返恢复未保存光源位置、
+选择 actor 不抢回材质标签，以及 File→Exit 正常退出。临时资源已清理。
+实际源文件冲突与磁盘写失败的桌面操作未验收；相关冲突/失败状态由模块回归覆盖。
+最终 `editor_ui_tests` 全量连续两遍均为 397 项、393 通过、4 权限跳过；
+MI 三套共 23 项及 viewport 41 项通过。构建、文档校验、架构审计与 diff whitespace 检查通过。
 
 ## 改动 → 验证
 
