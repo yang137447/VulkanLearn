@@ -267,7 +267,7 @@ void UiOverlayRendererVulkan::SynchronizeTextures(const UiRenderSnapshot& snapsh
     activeTextureIds.insert(0);
     for (const UiTextureSnapshot& textureSnapshot : snapshot.textures)
     {
-        if (textureSnapshot.id == 0 || textureSnapshot.rgba8Pixels == nullptr)
+        if (textureSnapshot.id == 0 || (!textureSnapshot.rgba8Pixels && !textureSnapshot.gpuImage))
         {
             continue;
         }
@@ -285,7 +285,8 @@ void UiOverlayRendererVulkan::SynchronizeTextures(const UiRenderSnapshot& snapsh
             RetireTexture(existingTexture->second);
             textures.erase(existingTexture);
         }
-        textures.emplace(textureSnapshot.id, CreateTexture(textureSnapshot));
+        textures.emplace(textureSnapshot.id, textureSnapshot.gpuImage
+            ? CreateThumbnailTexture(textureSnapshot) : CreateTexture(textureSnapshot));
     }
 
     for (auto textureIt = textures.begin(); textureIt != textures.end();)
@@ -969,6 +970,36 @@ UiOverlayRendererVulkan::GpuTexture UiOverlayRendererVulkan::CreateTexture(
         .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
         .setImageInfo(imageInfo);
     backend->UpdateDescriptorSets({write});
+    return texture;
+}
+
+UiOverlayRendererVulkan::GpuTexture UiOverlayRendererVulkan::CreateThumbnailTexture(
+    const UiTextureSnapshot& snapshot)
+{
+    GpuTexture texture;
+    texture.id = snapshot.id;
+    texture.generation = snapshot.generation;
+    texture.gpuImage = snapshot.gpuImage;
+    const auto imageInfo = backend->GetThumbnailImageDescriptor(
+        snapshot.gpuImage->id, snapshot.linearSampling);
+    vk::DescriptorSetAllocateInfo allocate;
+    allocate.setDescriptorPool(descriptorPool).setSetLayouts(descriptorSetLayout);
+    std::vector<vk::DescriptorSet> sets(1);
+    backend->AllocateDescriptorSets(allocate, sets);
+    texture.descriptorSet = sets[0];
+    try
+    {
+        backend->SetDescriptorSetDebugName(texture.descriptorSet, "UI GPU Thumbnail: " + snapshot.source);
+        vk::WriteDescriptorSet write;
+        write.setDstSet(texture.descriptorSet).setDstBinding(0)
+            .setDescriptorType(vk::DescriptorType::eCombinedImageSampler).setImageInfo(imageInfo);
+        backend->UpdateDescriptorSets({write});
+    }
+    catch (...)
+    {
+        backend->FreeDescriptorSet(descriptorPool, texture.descriptorSet);
+        throw;
+    }
     return texture;
 }
 

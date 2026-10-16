@@ -15,6 +15,7 @@
 #include "profiler.h"
 #include "render/rhi/vulkan/rhiDeviceVulkan.h"
 #include "render/resource/resourceRetireQueue.h"
+#include "render/resource/rendererThumbnailImages.h"
 #include "vulkanDebug.h"
 
 namespace VL
@@ -183,11 +184,33 @@ std::string BuildUnknownRawHandleMessage(const char* resourceType, HandleType ha
 } // namespace
 
 RendererBackendVulkan::RendererBackendVulkan()
-    : rhiDevice(std::make_unique<RHIDeviceVulkan>())
+    : rhiDevice(std::make_unique<RHIDeviceVulkan>()),
+      thumbnailImages(std::make_unique<RendererThumbnailImages>(*this))
 {
 }
 
-RendererBackendVulkan::~RendererBackendVulkan() = default;
+RendererBackendVulkan::~RendererBackendVulkan()
+{
+    // EngineLoop 已停止 RT 并等待 idle；必须在 backend 的 handle 映射和 device 之前释放。
+    thumbnailImages.reset();
+}
+
+std::shared_ptr<const RendererGpuImageToken> RendererBackendVulkan::RecordThumbnailImage(
+    vk::CommandBuffer command, vk::Image source, uint32_t width, uint32_t height)
+{
+    return thumbnailImages->RecordCopy(command, source, width, height);
+}
+
+vk::DescriptorImageInfo RendererBackendVulkan::GetThumbnailImageDescriptor(
+    uint64_t id, bool linearSampling) const
+{
+    return thumbnailImages->GetDescriptor(id, linearSampling);
+}
+
+void RendererBackendVulkan::CollectThumbnailImages()
+{
+    thumbnailImages->CollectUnused();
+}
 
 void RendererBackendVulkan::Initialize(
     std::vector<const char*>& instanceExtensions,
@@ -1750,6 +1773,7 @@ RendererFrameContext RendererBackendVulkan::BeginFrame(uint32_t currentFrame)
             frameFenceEpochs[frameContext.frameIndex]);
         frameFenceEpochs[frameContext.frameIndex] = 0;
     }
+    CollectThumbnailImages();
 
     {
         PROFILE_SCOPE("Render:AcquireImage");

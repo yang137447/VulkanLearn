@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "render/camera/cameraExposure.h"
+#include "render/resource/rendererGpuImageToken.h"
 
 namespace VL
 {
@@ -181,10 +182,13 @@ struct UiTextureSnapshot
     uint32_t height = 0;
     std::string source;
     std::shared_ptr<const std::vector<uint8_t>> rgba8Pixels;
+    // 只固定逻辑身份；成图、采样描述和 GPU 退休仍归 renderer。
+    std::shared_ptr<const RendererGpuImageToken> gpuImage;
+    bool linearSampling = true;
 };
 
-// Owns immutable UI geometry and texture data consumed by the render thread.
-// It is produced by UiSubsystem and contains no live UI element handles.
+// GT 冻结的 UI 几何、CPU 像素或 GPU 成图 token；RT 消费，不访问 live UI。
+// token 只延长 renderer 注册的身份有效期，Vulkan 对象仍由 backend 管理。
 struct UiRenderSnapshot
 {
     uint64_t frameIndex = 0;

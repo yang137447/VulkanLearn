@@ -23,7 +23,7 @@ public:
     // 每次只推进一个准备阶段、一个 IBL mip 或一张贴图上传；CPU 任务未完成时非阻塞返回 false。
     // 返回 true 表示完成（包括失败）。
     bool Step();
-    std::shared_ptr<const EditorUi::EditorTexturePreview> Image() const;
+    std::shared_ptr<const RendererGpuImageToken> Image() const;
     const std::string& Error() const;
 private:
     struct Impl;

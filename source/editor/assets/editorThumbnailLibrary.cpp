@@ -5,6 +5,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstring>
+#include <deque>
 #include <fstream>
 #include <mutex>
 #include <optional>
@@ -239,7 +240,8 @@ struct EditorThumbnailLibrary::Impl
     std::vector<std::string> visible;
     std::unordered_map<std::string, Cached> cache;
     std::optional<Result> ready;
-    std::optional<ThumbnailRenderRequest> renderRequest;
+    std::optional<Result> renderedReady;
+    std::deque<ThumbnailRenderRequest> renderRequests;
     bool renderTaken = false;
     uint64_t requestId = 0;
     std::shared_ptr<const Snapshot> snapshot = std::make_shared<Snapshot>();
@@ -250,9 +252,15 @@ struct EditorThumbnailLibrary::Impl
     }
     std::string Next() const
     {
-        if (paused || ready || renderRequest) return {};
+        if (paused || ready) return {};
         for (const auto& path : visible)
-            if (!cache.count(path)) return path;
+        {
+            if (cache.count(path) || (renderedReady && renderedReady->path == path)) continue;
+            bool queued = false;
+            for (const auto& request : renderRequests)
+                if (request.path == path) { queued = true; break; }
+            if (!queued) return path;
+        }
         return {};
     }
     void Run()
@@ -279,14 +287,12 @@ struct EditorThumbnailLibrary::Impl
             }
             catch (const std::exception& error) { value.diagnostic = error.what(); }
             lock.lock();
-            // 快速滚动/刷新期间完成的旧任务不能覆盖当前页；单槽背压限制 GT/GPU 发布速率。
+            // Mesh/MI 只排队路径，不占用贴图完成槽；GPU 仍然只领取一个请求。
+            // 队列受可见集合上限约束，快速滚动/刷新期间的旧任务不能覆盖当前页。
             if (generation == epoch && Wanted(path))
             {
                 if (renderKind)
-                {
-                    renderRequest = ThumbnailRenderRequest{++requestId, generation, path, *renderKind};
-                    renderTaken = false;
-                }
+                    renderRequests.push_back({++requestId, generation, path, *renderKind});
                 else ready = Result{path, std::move(value), generation};
             }
         }
@@ -330,7 +336,11 @@ void EditorThumbnailLibrary::RequestVisible(const std::vector<std::string>& path
     std::lock_guard<std::mutex> lock(impl->mutex);
     if (impl->visible == visible) return;
     impl->visible = std::move(visible);
-    if (impl->renderRequest && !impl->Wanted(impl->renderRequest->path)) impl->renderRequest.reset();
+    if (!impl->renderRequests.empty() && !impl->Wanted(impl->renderRequests.front().path))
+        impl->renderTaken = false;
+    for (auto it = impl->renderRequests.begin(); it != impl->renderRequests.end();)
+        if (!impl->Wanted(it->path)) it = impl->renderRequests.erase(it);
+        else ++it;
     for (const auto& path : impl->visible)
         if (impl->cache.count(path)) impl->cache.at(path).used = ++impl->clock;
     impl->wake.notify_all();
@@ -342,7 +352,9 @@ void EditorThumbnailLibrary::Refresh()
     std::lock_guard<std::mutex> lock(impl->mutex);
     impl->epoch = NextEpoch.fetch_add(1);
     impl->ready.reset();
-    impl->renderRequest.reset();
+    impl->renderedReady.reset();
+    impl->renderRequests.clear();
+    impl->renderTaken = false;
     impl->cache.clear();
     auto snapshot = std::make_shared<Snapshot>();
     snapshot->revision = impl->snapshot->revision + 1;
@@ -362,31 +374,34 @@ std::optional<ThumbnailRenderRequest> EditorThumbnailLibrary::TakeRenderRequest(
 {
     if (!impl) return {};
     std::lock_guard<std::mutex> lock(impl->mutex);
-    if (impl->paused || impl->renderTaken || !impl->renderRequest) return {};
+    if (impl->paused || impl->renderTaken || impl->renderedReady || impl->renderRequests.empty()) return {};
     impl->renderTaken = true;
-    return impl->renderRequest;
+    return impl->renderRequests.front();
 }
 
 bool EditorThumbnailLibrary::IsRenderRequestCurrent(const ThumbnailRenderRequest& request) const
 {
     if (!impl) return false;
     std::lock_guard<std::mutex> lock(impl->mutex);
-    return impl->renderRequest && impl->renderRequest->id == request.id &&
+    return impl->renderTaken && !impl->renderRequests.empty() && impl->renderRequests.front().id == request.id &&
         impl->epoch == request.epoch && impl->Wanted(request.path);
 }
 
 void EditorThumbnailLibrary::CompleteRenderRequest(const ThumbnailRenderRequest& request,
-    std::shared_ptr<const EditorUi::EditorTexturePreview> image, const std::string& error)
+    std::shared_ptr<const RendererGpuImageToken> image, const std::string& error)
 {
     if (!impl) return;
     std::lock_guard<std::mutex> lock(impl->mutex);
-    if (!impl->renderRequest || impl->renderRequest->id != request.id || impl->epoch != request.epoch) return;
+    if (!impl->renderTaken || impl->renderRequests.empty() ||
+        impl->renderRequests.front().id != request.id || impl->epoch != request.epoch) return;
     Thumbnail value;
     value.source = "vl://thumbnail/render/" + std::to_string(request.epoch) + "/" + std::to_string(request.id);
-    value.image = std::move(image);
+    value.gpuImage = std::move(image);
     value.diagnostic = error;
-    impl->ready = Impl::Result{request.path, std::move(value), request.epoch};
-    impl->renderRequest.reset();
+    // CPU 与 GPU 可以同帧完成，独立单槽避免互相覆盖；Poll 后才允许领取下一次渲染。
+    impl->renderedReady = Impl::Result{request.path, std::move(value), request.epoch};
+    impl->renderRequests.pop_front();
+    impl->renderTaken = false;
     impl->wake.notify_all();
 }
 
@@ -398,6 +413,14 @@ void EditorThumbnailLibrary::Poll()
     {
         auto result = std::move(*impl->ready);
         impl->ready.reset();
+        if (result.epoch == impl->epoch && impl->Wanted(result.path))
+            impl->cache[result.path] = {std::move(result.value), ++impl->clock};
+        impl->wake.notify_all();
+    }
+    if (impl->renderedReady)
+    {
+        auto result = std::move(*impl->renderedReady);
+        impl->renderedReady.reset();
         if (result.epoch == impl->epoch && impl->Wanted(result.path))
             impl->cache[result.path] = {std::move(result.value), ++impl->clock};
         impl->wake.notify_all();

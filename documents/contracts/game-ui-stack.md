@@ -114,8 +114,20 @@ BLAKE3 content keys and is revalidated on explicit Refresh. Mesh and realtime MI
 tiles use a separate offscreen render session with their real material shaders,
 the formal preview ball and neutral HDRI. GT advances preparation after 750 ms of
 input inactivity; graph, descriptors and IBL never replace the active World.
+Pointer hover motion does not restart this delay; scrolling, clicking, keyboard/text
+input, resizing and captured viewport/editor interaction still do. Pending Mesh/MI
+requests do not block the CPU texture queue. Each lane has one completion slot;
+render requests remain single-claim and wait for polling before the next claim.
 Rendered thumbnails are session-only; CPU import/shader preparation/texture decode
 use a single asynchronous job, while GPU upload and pipeline creation remain on GT.
+Rendered Mesh/MI results stay on GPU: a copy into a distinct renderer-owned sampled
+image replaces readback and UI pixel upload. Completion publishes a logical image
+token only after the existing dedicated fence completes. The 256-entry thumbnail
+LRU, frozen UI snapshots and retiring overlay descriptors pin tokens; backend image
+ownership survives preview-session reset and window resize, and expired tokens
+retire their images through frame epochs. Overlay descriptors borrow the views and
+sampler without owning their destruction. Compatible sRGB/UNORM views preserve the
+linear/encoded UI sampling policy. CPU texture thumbnails keep their pixel path.
 Scene icons and unsupported offline-only materials remain placeholders.
 The inspector does not replace MI editing or
 the scene Viewport. See the UI component contract for format and cache limits.
@@ -199,7 +211,8 @@ unchanged panel data does not yet imply reused GPU draw buffers.
   `MaterialInstanceEditorSnapshot.assetCatalog` and `.jsonDocument` retain
   `shared_ptr<const ...>` results without per-frame deep copies of assets/fields.
 - `UiRenderSnapshot`: immutable vertices, indices, clip rectangles, blend modes,
-  generation-tagged RGBA8 textures and `sceneViewportRect` layout/picking metadata.
+  generation-tagged RGBA8 textures or renderer GPU-image tokens, and
+  `sceneViewportRect` layout/picking metadata.
   `sceneViewportEnabled` selects offscreen presentation. A reserved
   `SceneViewportTextureId` references the current renderer-owned output
   logically; it carries no pixels, Vulkan handles or GPU ownership.

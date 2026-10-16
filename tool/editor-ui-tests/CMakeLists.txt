@@ -12,6 +12,10 @@ add_executable(editor_ui_tests
     contentBrowserPerformanceTests.cpp
     jsonAssetLibraryTests.cpp
     thumbnailLibraryTests.cpp
+    rmlUiTextureTests.cpp
+    "${PROJECT_SOURCE_DIR}/source/ui/rmlUiInterfaces.cpp"
+    "${PROJECT_SOURCE_DIR}/source/platform/platformWindow.cpp"
+    "${PROJECT_SOURCE_DIR}/source/engine/diagnosticsSubsystem.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/assets/editorThumbnailLibrary.cpp"
     "${PROJECT_SOURCE_DIR}/source/shader/build/contentHash.cpp"
     "${PROJECT_SOURCE_DIR}/source/shader/build/atomicFile.cpp"
@@ -51,5 +55,5 @@ target_include_directories(editor_ui_tests PRIVATE "${PROJECT_SOURCE_DIR}/source
 target_compile_definitions(editor_ui_tests PRIVATE
     VL_EDITOR_ASSET_ROOT="${PROJECT_SOURCE_DIR}/ui")
 target_link_libraries(editor_ui_tests PRIVATE
-    vl_ui_widgets RmlUi::Core Eigen3 Vulkan::Vulkan Json vl_offline_core Threads::Threads stb_image OpenEXR::OpenEXR BLAKE3::blake3)
+    vl_ui_widgets RmlUi::Core SDL3::SDL3 Eigen3 Vulkan::Vulkan Json vl_offline_core Threads::Threads stb_image OpenEXR::OpenEXR BLAKE3::blake3)
 vulkanlearn_add_gtest(editor_ui_tests)

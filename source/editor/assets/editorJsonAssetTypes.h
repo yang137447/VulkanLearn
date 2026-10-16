@@ -5,6 +5,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include "render/resource/rendererGpuImageToken.h"
 
 namespace VL::EditorUi
 {
@@ -55,6 +56,7 @@ struct EditorThumbnail
     std::string diagnostic;
     std::shared_ptr<const EditorTexturePreview> image;
     bool diskCacheHit = false;
+    std::shared_ptr<const RendererGpuImageToken> gpuImage;
 };
 
 // 只发布当前可见窗口；错误也是已完成状态，直到显式刷新才重试。

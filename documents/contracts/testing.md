@@ -23,7 +23,7 @@
 
 | 可执行文件 | 测试数 | 覆盖 |
 | --- | --- | --- |
-| `editor_ui_tests` | 450 | 编辑器 UI：组件、停靠、布局持久化、内容浏览器、JSON 资产库、标准资产修改、actor 树、属性编辑、场景持久化、保存确认、可视化、颜色转换、右键菜单 |
+| `editor_ui_tests` | 468 | 编辑器 UI：组件、停靠、布局持久化、内容浏览器、JSON 资产库、标准资产修改、actor 树、属性编辑、场景持久化、保存确认、可视化、颜色转换、右键菜单、RmlUi GPU 缩略图桥接 |
 | `vl_offline_adapter_tests` | 101 | 离线场景/网格/显示/相机适配 |
 | `editor_viewport_tests` | 41 | 视口几何、命中、坐标映射、aspect、坐标轴投影及编辑器网格 |
 | `vl_offline_coordinator_tests` | 13 | 离线会话协调 |
@@ -32,7 +32,7 @@
 | `material_instance_editor_tests` | 7 | MI 命令/文档服务 |
 | `material_instance_editor_production_tests` | 7 | MI 生产路径（预览边界、直接 render-state 路由、场景/非活动 MI 独立保存）及标准资产 JSON facade/Save Content 集成 |
 
-`editor_ui_tests` 里 25 个套件；`ctest` 用套件前缀选择：
+`editor_ui_tests` 里 27 个套件；`ctest` 用套件前缀选择：
 
 ```powershell
 # 编辑器 UI 选择集（缩略图、预览等另有专项套件；全量可直接运行 editor_ui_tests）
@@ -50,12 +50,37 @@ ctest --test-dir build -R "MaterialInstanceEditor" --output-on-failure
 缩略图专项回归（注册在 `editor_ui_tests`，不需要 Vulkan）：
 
 ```powershell
-ctest --test-dir build -R "^(ThumbnailJobTest|ThumbnailLibraryTest|EditorThumbnailGraph)\." --output-on-failure
+ctest --test-dir build -R "^(ThumbnailJobTest|ThumbnailLibraryTest|ThumbnailSchedulerTest|EditorThumbnailGraph|RmlUiTextureTest)\.|^ContentBrowserTest\..*Thumbnail" --output-on-failure
 ```
 
 覆盖内容缓存、可见请求取消、Refresh/重初始化代际、暂停与单次领取，以及离屏图派生。
 `ThumbnailJobTest` 的 8 项验证非阻塞轮询、单次消费、陈旧结果/错误丢弃、
-当前错误传播、单槽并发上限、缓存重建转移任务与退出收口；该专项共 26 项。
+当前错误传播、单槽并发上限、缓存重建转移任务与退出收口；含 RmlUi 桥接和浏览器缩略图用例的专项共 46 项。
+`ThumbnailSchedulerTest` 覆盖连续悬停不推迟出图、捕获暂停与交互后 750 ms 退避；
+队列回归覆盖 Mesh/MI 等待时贴图继续、CPU/GPU 同时完成不覆盖、单次领取/发布背压、
+可见集合取消与 Refresh 丢弃排队请求和未发布结果。
+2026-10-17 调度修复验证：新增 8 项，完整编辑器测试连续两遍均为 458 项、
+453 通过、5 项符号链接环境跳过；当轮 CTest 缩略图选择集 34 项通过。
+修改前新增的混合队列用例因模型请求挡住贴图而失败，修改后通过。
+Debug、Vulkan validation 开启、双线程实窗核对 Vilking 模型/材质及 Sifi 混合资源列表；
+Sifi 初次搜索与显式 Refresh 后均观察到贴图已显示、部分模型仍在等待，随后模型/材质正常出图。
+Alt+F4 正常关闭，日志记录 Quit 和 teardown complete，stderr 无 Vulkan validation 错误。
+连续悬停退避由确定性时钟模块测试覆盖；未测量首次 GPU 准备耗时或逐帧性能分位数。
+
+2026-10-17 GPU 直出验证：新增 10 项，覆盖 Mesh/MI 不发布 CPU 像素或写盘、
+Refresh/取消/LRU 淘汰的 token 生命周期、浏览器原位更新，以及真实
+`rmlUiInterfaces.cpp` 的 GPU 身份/尺寸、UNORM 采样策略、空发布撤销旧 source、
+冻结快照保活和帧内延迟释放。该测试目标编译生产 RmlUi 桥接，但不创建 Vulkan 对象。
+最终 `editor_ui_tests` 全量连续两遍均为 468 项、463 通过、5 项符号链接环境跳过；
+上述专项 CTest 46 项、backend 模块 42 项通过，全部目标编译、文档校验和架构审计通过。
+Debug、Vulkan validation 开启的单/双线程实窗均核对 Vilking 模型/材质 GPU 成图；
+双线程另核对 Sifi 混合资源、Refresh 重新出图、最大化窗口后保留已完成缩略图、
+列表与平铺往返复用。两次 Alt+F4 正常退出，日志确认 teardown complete，stderr 均为空
+（`artifacts/gpu-thumbnails-20261017/`）。
+当前仍使用专用同步 fence；未测量本次耗时收益，未进行旧路径像素对照。
+UNORM 策略由模块测试覆盖，未另跑 UNORM surface 实窗；LRU 以假 token 验证，
+未进行真实 Vulkan 图像池淘汰压力测试。
+
 模型/MI 实际出图另用 validation 构建核对真实资产；2026-10-13 已验证青/红遮阳布材质球、
 `SM_vilking_room`、窗口最大化后继续出图及 File → Exit 正常 teardown，无 Vulkan validation 错误。
 当轮 `editor_ui_tests` 全量连续两遍均为 347 项、343 通过、4 跳过。

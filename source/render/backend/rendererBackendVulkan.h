@@ -23,6 +23,8 @@ namespace VL
 {
 
 class RHIDeviceVulkan;
+class RendererThumbnailImages;
+struct RendererGpuImageToken;
 
 struct RendererBackendResourceIdentityCounts
 {
@@ -209,6 +211,11 @@ public:
     // End 会提交并等待专用 fence；Abort 只允许释放尚未提交的 command buffer。
     void EndSingleTimeCommands(vk::CommandBuffer& commandBuffer);
     void AbortSingleTimeCommands(vk::CommandBuffer& commandBuffer);
+    // 成图留在 renderer；source 已转为 TransferSrc，提交完成后再向 UI 发布 token。
+    std::shared_ptr<const RendererGpuImageToken> RecordThumbnailImage(
+        vk::CommandBuffer command, vk::Image source, uint32_t width, uint32_t height);
+    vk::DescriptorImageInfo GetThumbnailImageDescriptor(uint64_t id, bool linearSampling) const;
+    void CollectThumbnailImages();
     void CopyBufferToImage(
         vk::Buffer buffer,
         vk::Image image,
@@ -309,6 +316,7 @@ private:
     void UnbindFramebufferHandle(RHIFramebufferHandle framebufferHandle);
 
     std::unique_ptr<RHIDeviceVulkan> rhiDevice;
+    std::unique_ptr<RendererThumbnailImages> thumbnailImages;
     bool initialized = false;
     std::vector<uint64_t> frameFenceEpochs;
     std::atomic<bool> swapchainRecreateRequired{false};

@@ -378,6 +378,14 @@ Rml::TextureHandle RmlUiRenderInterface::LoadTexture(
     }
     if (source.compare(0, 21, "vl://texture-preview/") == 0 || source.compare(0, 15, "vl://thumbnail/") == 0)
     {
+        const auto gpu = gpuThumbnailSources.find(source);
+        if (gpu != gpuThumbnailSources.end())
+        {
+            const auto image = gpu->second.lock();
+            if (!image) return 0;
+            textureDimensions = {int(image->width), int(image->height)};
+            return RegisterTexture(image->width, image->height, source, {}, image);
+        }
         const auto found = previewSources.find(source);
         const auto preview = found == previewSources.end() ? nullptr : found->second.lock();
         if (!preview) return 0;
@@ -423,22 +431,29 @@ Rml::TextureHandle RmlUiRenderInterface::LoadTexture(
 void RmlUiRenderInterface::PublishThumbnails(
     const std::shared_ptr<const EditorUi::EditorThumbnailSnapshot>& snapshot)
 {
-    if (lastThumbnails.lock() == snapshot) return;
+    // 旧发布者可能已释放；weak_ptr 过期和显式空快照都等于 nullptr，
+    // 此时仍须撤销旧 source，不能把清理误判成同一份快照。
+    if (snapshot && lastThumbnails.lock() == snapshot) return;
     lastThumbnails = snapshot;
     std::unordered_set<std::string> next;
     if (snapshot)
         for (const auto& entry : snapshot->entries)
-            if (entry.second.image)
+            if (entry.second.image || entry.second.gpuImage)
             {
                 next.insert(entry.second.source);
-                previewSources[entry.second.source] = entry.second.image;
+                if (entry.second.gpuImage)
+                    gpuThumbnailSources[entry.second.source] = entry.second.gpuImage;
+                else
+                    previewSources[entry.second.source] = entry.second.image;
             }
-    // 内存 LRU 仍可持有像素，但离开可见窗口的 Rml/GPU 纹理必须释放，不能随浏览全库累积。
+    // LRU 可保留像素或成图 token；离开窗口只释放 Rml 纹理/descriptor，
+    // GPU 成图由 renderer 根据剩余 token 与帧 epoch 决定回收。
     for (const auto& source : thumbnailSources)
         if (!next.count(source))
         {
             Rml::ReleaseTexture(source, this);
             previewSources.erase(source);
+            gpuThumbnailSources.erase(source);
         }
     thumbnailSources = std::move(next);
 }
@@ -517,7 +532,7 @@ void RmlUiRenderInterface::AppendTextureSnapshots(std::vector<UiTextureSnapshot>
     for (const auto& textureEntry : textures)
     {
         const TextureRecord& texture = textureEntry.second;
-        if (texture.pixels == nullptr)
+        if (texture.pixels == nullptr && !texture.gpuImage)
         {
             continue;
         }
@@ -529,6 +544,8 @@ void RmlUiRenderInterface::AppendTextureSnapshots(std::vector<UiTextureSnapshot>
         snapshot.height = texture.height;
         snapshot.source = texture.source;
         snapshot.rgba8Pixels = texture.pixels;
+        snapshot.gpuImage = texture.gpuImage;
+        snapshot.linearSampling = linearColorOutput;
         outTextures.push_back(std::move(snapshot));
     }
 }
@@ -537,7 +554,8 @@ Rml::TextureHandle RmlUiRenderInterface::RegisterTexture(
     uint32_t width,
     uint32_t height,
     std::string source,
-    std::shared_ptr<const std::vector<uint8_t>> pixels)
+    std::shared_ptr<const std::vector<uint8_t>> pixels,
+    std::shared_ptr<const RendererGpuImageToken> gpuImage)
 {
     TextureRecord record;
     record.id = nextTextureId++;
@@ -546,6 +564,7 @@ Rml::TextureHandle RmlUiRenderInterface::RegisterTexture(
     record.height = height;
     record.source = std::move(source);
     record.pixels = std::move(pixels);
+    record.gpuImage = std::move(gpuImage);
 
     const UiTextureId id = record.id;
     textures.emplace(id, std::move(record));

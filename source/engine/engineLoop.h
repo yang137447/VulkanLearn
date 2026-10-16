@@ -15,6 +15,7 @@
 #include "engine/runtimeCommand.h"
 #include "engine/launchOptions.h"
 #include "engine/modelPreviewCamera.h"
+#include "engine/editorThumbnailScheduler.h"
 #include "editor/assets/editorThumbnailLibrary.h"
 #include "ui/uiSubsystem.h"
 #include "world/loading/worldGraphTransactionCoordinator.h"
@@ -150,7 +151,7 @@ private:
     std::unique_ptr<EditorThumbnailRenderSession> thumbnailSession;
     std::optional<Editor::ThumbnailRenderRequest> thumbnailRequest;
     uint64_t thumbnailSessionEpoch = 0;
-    std::chrono::steady_clock::time_point thumbnailIdleSince = std::chrono::steady_clock::now();
+    EditorThumbnailScheduler thumbnailScheduler;
     uint64_t uiFrameIndex = 0;
     WorldGraphTransactionTestFaultInjection
         worldGraphTransactionTestFaultInjection;

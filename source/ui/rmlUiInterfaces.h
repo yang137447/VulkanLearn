@@ -69,8 +69,8 @@ private:
     bool composing = false;
 };
 
-// Converts RmlUi geometry and textures into an immutable UiRenderSnapshot.
-// Vulkan allocation and command recording remain in UiOverlayRendererVulkan.
+// RmlUi 几何、CPU 像素与 renderer 成图 token 冻结为 UiRenderSnapshot。
+// 不创建或销毁 Vulkan 对象；overlay 在 RT 上传像素或借用已完成 GPU 成图。
 class RmlUiRenderInterface final : public Rml::RenderInterface
 {
 public:
@@ -117,13 +117,15 @@ private:
         uint32_t height = 0;
         std::string source;
         std::shared_ptr<const std::vector<uint8_t>> pixels;
+        std::shared_ptr<const RendererGpuImageToken> gpuImage;
     };
 
     Rml::TextureHandle RegisterTexture(
         uint32_t width,
         uint32_t height,
         std::string source,
-        std::shared_ptr<const std::vector<uint8_t>> pixels);
+        std::shared_ptr<const std::vector<uint8_t>> pixels,
+        std::shared_ptr<const RendererGpuImageToken> gpuImage = {});
     UiClipRect BuildClipRect() const;
 
     UiRenderSnapshot* currentSnapshot = nullptr;
@@ -138,6 +140,7 @@ private:
     std::unordered_set<UiTextureId> pendingTextureReleases;
     // 弱引用不延长已关闭标签的 CPU 像素寿命；Rml 纹理沿现有快照/GPU 退役路径释放。
     std::unordered_map<std::string, std::weak_ptr<const EditorUi::EditorTexturePreview>> previewSources;
+    std::unordered_map<std::string, std::weak_ptr<const RendererGpuImageToken>> gpuThumbnailSources;
     std::weak_ptr<const EditorUi::EditorJsonDocumentSnapshot> lastPreviewDocument;
     std::weak_ptr<const EditorUi::EditorThumbnailSnapshot> lastThumbnails;
     std::unordered_set<std::string> thumbnailSources;

@@ -630,7 +630,7 @@ void EditorContentBrowserController::SyncThumbnails(
             if (found != snapshot->entries.end()) thumbnail = &found->second;
         }
         auto* image = node.element->GetChild(0);
-        const bool ready = thumbnail && thumbnail->image;
+        const bool ready = thumbnail && (thumbnail->image || thumbnail->gpuImage);
         const std::string source = ready ? thumbnail->source : EditorAssetKindIcon(entry.kind);
         if (image->GetAttribute<std::string>("src", "") != source)
         {

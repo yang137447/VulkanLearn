@@ -411,6 +411,8 @@ Camera 变换后去掉会覆盖 rotation 的旧 look_at；曝光编辑只改接�
 
 `EditorThumbnailLibrary` 是独立于 JSON 文档读取的 CPU worker，不加载 World，不调用 Vulkan。
 请求只来自网格的可见窗口（含前后两行，最多 192 项）；列表模式、隐藏面板不请求。
+Mesh/MI 排入有界渲染请求队列后，worker 继续处理后面的贴图，不等待离屏渲染完成。
+CPU 贴图与 GPU 渲染结果各有一个完成槽，互不覆盖；GT 轮询后仍每帧最多发布两项。
 窗口变化替换待办集合，离开窗口的旧任务不发布；失败结果有悬停诊断，显式 Refresh 才重试。
 刷新同时使内存缩略图失效，并重新读取描述文件和 source 内容，不依赖时间戳判断一致性。
 
@@ -430,9 +432,12 @@ Rml 回调只消费已发布像素，UI/GPU 纹理离开可见窗口便经既有
 
 ### 模型与材质缩略图
 
-`EditorThumbnailLibrary` 通过单槽值语义邮箱交出 Mesh/MI 请求，CPU worker 不调用 Vulkan。
+`EditorThumbnailLibrary` 通过有界值语义队列交出 Mesh/MI 请求，CPU worker 不调用 Vulkan。
+队列最多覆盖 192 个可见路径；GT 同时只领取一个请求，结果轮询发布后才领取下一个。
 `EngineLoop::TickEditorThumbnails` 在上一帧 RT 归还所有权后推进 `EditorThumbnailRenderSession`；
-输入结束 750 ms 后，每帧至多推进一个准备阶段或一个 IBL mip。离开可见集合或 Refresh 的
+滚动、点击、键盘/文本输入或 resize 结束 750 ms 后，每帧至多推进一个准备阶段或一个 IBL mip。
+普通鼠标悬停移动不重置这段等待；视口输入与指针捕获持续重置等待。
+离开可见集合或 Refresh 的
 迟到结果不能发布；隐藏编辑器、视口输入、指针捕获期间不推进。
 模型导入与 MikkTSpace 切线生成、材质 shader 快照/编译/反射、贴图解码与行翻转
 使用按值冻结请求的 CPU worker，GT 只轮询完成状态；会话最多一个在途 CPU 任务，
@@ -443,7 +448,7 @@ GT 使用 shader 候选前复核源摘要，绑定材质前复核 M_/MI_/T_ 描�
 已解码贴图；上传后释放其 CPU 像素。GPU 创建与材质绑定仍在 GT。
 材质缩略图在导入球之前检查实时支持，CPU-only 材质直接显示诊断。
 
-会话独占 RenderGraph、候选资源缓存、frame UBO、相机、环境烘焙和 readback buffer，
+会话独占 RenderGraph、候选资源缓存、frame UBO、相机和环境烘焙，
 不发布 WorldManager、不提交主图资源包，也不复用活动关卡的可变 UBO/材质参数。
 图从正式配置派生：固定 256 方形输出，保留 pass 输入/binding，去掉编辑器网格、自动曝光调度和 MSAA；
 缩略图禁用 CSM，保留 HDRI 的 SH/镜面 IBL、材质真实 shader 与固定曝光。
@@ -457,7 +462,18 @@ CPU/GPU 几何与包围盒，只导入并生成切线一次。每个 MI 在独�
 每次提交只等待专用 fence，不调用全局 waitIdle。
 窗口重建销毁会话，后续请求重新准备；Refresh 同时使会话环境和图缓存失效，
 保留唯一在途 CPU 任务到完成后丢弃，不在刷新回调中等待。
-结果复用上节有界 CPU LRU，但模型/MI **不写磁盘缓存**，没有跨启动恢复或自动依赖监听。
+模型/MI 成图直接留在 GPU，不回读 CPU 像素、不经 UI 再次上传，也**不写磁盘缓存**，
+没有跨启动恢复或自动依赖监听。成图经 GPU image copy 进入 backend 独占的独立 256×256
+纹理，下一资产覆盖预览 graph 输出不会改掉已发布图像；同一提交内建立 transfer-write →
+fragment-read barrier，专用 fence 完成后才发布不可变 `RendererGpuImageToken`。
+token 只有身份与尺寸，不包含 Vulkan 对象或析构回调。`EditorThumbnailLibrary` 的 256 项
+内存 LRU 同时缓存 CPU 贴图与 GPU 成图 token（全为 GPU 成图时基础像素约 64 MiB）；
+会话 Reset/窗口 resize 不销毁已完成成图。Refresh/LRU 淘汰只释放 token 引用，
+UI draw snapshot 与待退休 descriptor 继续固定所用 token；backend 发现最后引用释放后，
+将成图经主帧 epoch 退休，退出等待 idle 后释放剩余资源。
+RmlUi 发布/加载只注册 token；UI renderer 借用成图 view/sampler 并创建自己的 descriptor，
+不取得图像销毁权。sRGB 成图有兼容的 sRGB/UNORM 两种 view：线性 UI 混合采样 sRGB view，
+编码域 UI 采样 UNORM view，不做 CPU gamma 转换。普通贴图缩略图仍沿原 CPU 像素路径。
 GT 的材质资源绑定、GPU 上传与管线创建仍是同步阶段，750 ms 是输入退避而非严格帧耗时预算。
 离线专用材质、无效资产显示类型图标和悬停诊断，不降级成近似着色。场景截图缩略图尚未接入。
 

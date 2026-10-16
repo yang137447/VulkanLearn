@@ -307,6 +307,33 @@ TEST_F(ContentBrowserTest, ThumbnailRequestsAreWindowBoundedAndIncludeRenderable
     EXPECT_TRUE(browser.VisibleThumbnailPaths().empty());
 }
 
+TEST_F(ContentBrowserTest, GpuThumbnailDisplaysAndRefreshReturnsToPlaceholderWithoutReplacingTile)
+{
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+    catalog->revision = 1;
+    catalog->assets.push_back({"Common/MI_ball.json", EditorAssetKind::MaterialInstance, "Ball"});
+    snapshot.assetCatalog = catalog;
+    Refresh();
+    auto* item = Find("browser-item", "Common/MI_ball.json");
+    ASSERT_NE(item, nullptr);
+    const auto rebuilds = browser.GetStats().listDomRebuilds;
+    auto thumbnails = std::make_shared<EditorThumbnailSnapshot>();
+    auto& thumbnail = thumbnails->entries["Common/MI_ball.json"];
+    thumbnail.source = "vl://thumbnail/render/1/1";
+    thumbnail.gpuImage = std::make_shared<const VL::RendererGpuImageToken>(1, 256, 256);
+    snapshot.thumbnails = thumbnails;
+    Refresh();
+    EXPECT_EQ(Find("browser-item", "Common/MI_ball.json"), item);
+    EXPECT_EQ(browser.GetStats().listDomRebuilds, rebuilds);
+    EXPECT_TRUE(item->IsClassSet("has-thumbnail"));
+    EXPECT_EQ(item->GetChild(0)->GetAttribute<std::string>("src", ""), thumbnail.source);
+    snapshot.thumbnails.reset();
+    Refresh();
+    EXPECT_EQ(Find("browser-item", "Common/MI_ball.json"), item);
+    EXPECT_FALSE(item->IsClassSet("has-thumbnail"));
+    EXPECT_EQ(item->GetChild(0)->GetAttribute<std::string>("src", ""), "icons/material-instance.png");
+}
+
 TEST_F(ContentBrowserTest, SourcesDeriveSortedAncestorsAndExpandWithoutNavigation)
 {
     EXPECT_EQ(Paths("asset-sources", "browser-folder"), (std::vector<std::string>{"", "Common", "Maps"}));

@@ -1034,14 +1034,8 @@ void EngineLoop::TickEditorThumbnails()
     {
         thumbnailRequest.reset();
     }
-    const auto now = std::chrono::steady_clock::now();
-    for (const auto& event : platformEvents)
-        if (event.type == PlatformEventType::MouseMove || event.type == PlatformEventType::MouseWheel ||
-            event.type == PlatformEventType::MouseButtonDown || event.type == PlatformEventType::MouseButtonUp ||
-            event.type == PlatformEventType::KeyDown || event.type == PlatformEventType::KeyUp ||
-            event.type == PlatformEventType::WindowResized) thumbnailIdleSince = now;
-    if (!uiSubsystem->CanRenderThumbnails()) thumbnailIdleSince = now;
-    if (now - thumbnailIdleSince < std::chrono::milliseconds(750)) return;
+    if (!thumbnailScheduler.CanAdvance(std::chrono::steady_clock::now(), platformEvents,
+        uiSubsystem->CanRenderThumbnails())) return;
     // 上一帧 RT 已归还所有权；这里不调用活动 World 的加载事务，也不重绑活动图。
     if (!thumbnailRequest)
     {

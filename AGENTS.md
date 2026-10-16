@@ -366,6 +366,12 @@ When making changes:
   `a`..`e` (e.g. the Narkowicz ACES fit coefficients in `pass/toneMapping.frag`) unchanged — the rule is
   "match the source symbol", not "never use the letter a".
 
+## Commit Titles
+
+- Use the repository title format `【Type】short English description`, with no space after `】`.
+- Choose the prefix by intent: `【Fix】` for bug/performance fixes, `【Mod】` for feature or behavior changes, and `【Doc】` for documentation-only changes.
+- Check recent `git log` titles before committing. Do not omit the type prefix or substitute another title convention.
+
 ## Test Governance
 
 Follow `documents/contracts/coding-guidelines.md#test-governance` for the

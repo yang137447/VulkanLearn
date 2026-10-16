@@ -80,6 +80,8 @@ private:
         vk::ImageView imageView;
         vk::Sampler sampler;
         vk::DescriptorSet descriptorSet;
+        // descriptor 退休完成前固定 token；借用的成图不会进入本类的图像销毁路径。
+        std::shared_ptr<const RendererGpuImageToken> gpuImage;
     };
 
     struct RetiredTexture
@@ -108,6 +110,7 @@ private:
         const std::string& debugName);
     void DestroyDynamicBuffer(DynamicBuffer& buffer);
     GpuTexture CreateTexture(const UiTextureSnapshot& snapshot);
+    GpuTexture CreateThumbnailTexture(const UiTextureSnapshot& snapshot);
     void DestroyTexture(GpuTexture& texture);
     void RetireTexture(GpuTexture& texture);
     void FlushRetiredTextures();

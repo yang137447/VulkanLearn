@@ -10,6 +10,7 @@
 #include "shader/build/atomicFile.h"
 #include "engine/editorThumbnailGraph.h"
 #include "engine/editorThumbnailJob.h"
+#include "engine/editorThumbnailScheduler.h"
 
 namespace
 {
@@ -148,6 +149,45 @@ TEST_F(ThumbnailJobTest, CacheResetCanTransferPendingWorkWithoutWaiting)
     EXPECT_FALSE(Take());
 }
 
+TEST(ThumbnailSchedulerTest, HoverDoesNotPostponeVisibleThumbnails)
+{
+    const auto start = EditorThumbnailScheduler::Clock::time_point{};
+    EditorThumbnailScheduler scheduler(start);
+    PlatformEvent move;
+    move.type = PlatformEventType::MouseMove;
+    for (int milliseconds = 0; milliseconds < 750; milliseconds += 10)
+        EXPECT_FALSE(scheduler.CanAdvance(start + std::chrono::milliseconds(milliseconds), {move}, true));
+    EXPECT_TRUE(scheduler.CanAdvance(start + std::chrono::milliseconds(750), {move}, true));
+    EXPECT_TRUE(scheduler.CanAdvance(start + std::chrono::seconds(1), {move}, true));
+}
+
+TEST(ThumbnailSchedulerTest, CapturedInputPausesAndRestartsTheIdleDelay)
+{
+    const auto start = EditorThumbnailScheduler::Clock::time_point{};
+    EditorThumbnailScheduler scheduler(start);
+    EXPECT_TRUE(scheduler.CanAdvance(start + std::chrono::seconds(1), {}, true));
+    EXPECT_FALSE(scheduler.CanAdvance(start + std::chrono::seconds(2), {}, false));
+    EXPECT_FALSE(scheduler.CanAdvance(start + std::chrono::milliseconds(2749), {}, true));
+    EXPECT_TRUE(scheduler.CanAdvance(start + std::chrono::milliseconds(2750), {}, true));
+}
+
+TEST(ThumbnailSchedulerTest, BrowserInteractionStillWaitsForAStableWindow)
+{
+    const auto start = EditorThumbnailScheduler::Clock::time_point{};
+    for (const auto type : {PlatformEventType::MouseWheel, PlatformEventType::MouseButtonDown,
+        PlatformEventType::MouseButtonUp, PlatformEventType::KeyDown, PlatformEventType::KeyUp,
+        PlatformEventType::TextInput, PlatformEventType::TextEditing, PlatformEventType::WindowResized})
+    {
+        SCOPED_TRACE(int(type));
+        EditorThumbnailScheduler scheduler(start);
+        PlatformEvent event;
+        event.type = type;
+        EXPECT_FALSE(scheduler.CanAdvance(start + std::chrono::seconds(1), {event}, true));
+        EXPECT_FALSE(scheduler.CanAdvance(start + std::chrono::milliseconds(1749), {}, true));
+        EXPECT_TRUE(scheduler.CanAdvance(start + std::chrono::milliseconds(1750), {}, true));
+    }
+}
+
 class ThumbnailLibraryTest : public testing::Test
 {
 protected:
@@ -213,7 +253,7 @@ protected:
     std::unique_ptr<EditorThumbnailLibrary> library;
 };
 
-TEST_F(ThumbnailLibraryTest, RenderRequestsAreTakenOnceAndPublishOnlyCompletedPixels)
+TEST_F(ThumbnailLibraryTest, RenderRequestsPublishGpuImagesWithoutCpuPixelsOrDiskWrites)
 {
     WriteTextFileAtomically(root / "MI_ball.json", R"({"type":"materialInstance","material":"M_ball.json"})");
     library->RequestVisible({"MI_ball.json"});
@@ -223,12 +263,82 @@ TEST_F(ThumbnailLibraryTest, RenderRequestsAreTakenOnceAndPublishOnlyCompletedPi
     EXPECT_FALSE(library->TakeRenderRequest());
     library->Poll();
     EXPECT_TRUE(library->GetSnapshot()->entries.empty());
-    auto image = std::make_shared<EditorTexturePreview>();
-    image->width = image->height = 256;
-    image->pixels.assign(256 * 256 * 4, 128);
+    auto image = std::make_shared<const RendererGpuImageToken>(1, 256, 256);
     library->CompleteRenderRequest(*request, image, {});
-    EXPECT_EQ(Wait("MI_ball.json").image, image);
+    const auto thumbnail = Wait("MI_ball.json");
+    EXPECT_EQ(thumbnail.gpuImage, image);
+    EXPECT_FALSE(thumbnail.image);
+    EXPECT_FALSE(std::filesystem::exists(root / "cache"));
     EXPECT_FALSE(library->TakeRenderRequest());
+}
+
+TEST_F(ThumbnailLibraryTest, PublishedSnapshotPinsGpuImageAcrossRefresh)
+{
+    WriteTextFileAtomically(root / "SM_ball.json", R"({"type":"mesh","modelDataPath":"ball.obj"})");
+    library->RequestVisible({"SM_ball.json"});
+    const auto request = WaitRender();
+    ASSERT_TRUE(request);
+    auto image = std::make_shared<const RendererGpuImageToken>(1, 256, 256);
+    const std::weak_ptr<const RendererGpuImageToken> lease = image;
+    library->CompleteRenderRequest(*request, image, {});
+    EXPECT_EQ(Wait("SM_ball.json").gpuImage, image);
+    auto snapshot = library->GetSnapshot();
+    image.reset();
+    library->Refresh();
+    EXPECT_TRUE(library->GetSnapshot()->entries.empty());
+    EXPECT_FALSE(lease.expired());
+    snapshot.reset();
+    EXPECT_TRUE(lease.expired());
+}
+
+TEST_F(ThumbnailLibraryTest, RefreshReleasesUnpublishedGpuCompletion)
+{
+    WriteTextFileAtomically(root / "SM_ball.json", R"({"type":"mesh","modelDataPath":"ball.obj"})");
+    library->RequestVisible({"SM_ball.json"});
+    const auto request = WaitRender();
+    ASSERT_TRUE(request);
+    auto image = std::make_shared<const RendererGpuImageToken>(1, 256, 256);
+    const std::weak_ptr<const RendererGpuImageToken> lease = image;
+    library->CompleteRenderRequest(*request, image, {});
+    image.reset();
+    EXPECT_FALSE(lease.expired());
+    library->Refresh();
+    EXPECT_TRUE(lease.expired());
+}
+
+TEST_F(ThumbnailLibraryTest, CanceledRenderDoesNotRetainGpuImage)
+{
+    WriteTextFileAtomically(root / "SM_ball.json", R"({"type":"mesh","modelDataPath":"ball.obj"})");
+    library->RequestVisible({"SM_ball.json"});
+    const auto request = WaitRender();
+    ASSERT_TRUE(request);
+    library->RequestVisible({});
+    auto image = std::make_shared<const RendererGpuImageToken>(1, 256, 256);
+    const std::weak_ptr<const RendererGpuImageToken> lease = image;
+    library->CompleteRenderRequest(*request, image, {});
+    image.reset();
+    EXPECT_TRUE(lease.expired());
+    library->Poll();
+    EXPECT_TRUE(library->GetSnapshot()->entries.empty());
+}
+
+TEST_F(ThumbnailLibraryTest, MemoryLruReleasesEvictedGpuImageTokens)
+{
+    std::weak_ptr<const RendererGpuImageToken> first;
+    for (uint64_t i = 0; i < 257; ++i)
+    {
+        const std::string path = "SM_ball_" + std::to_string(i) + ".json";
+        WriteTextFileAtomically(root / path, R"({"type":"mesh","modelDataPath":"ball.obj"})");
+        library->RequestVisible({path});
+        const auto request = WaitRender();
+        ASSERT_TRUE(request);
+        auto image = std::make_shared<const RendererGpuImageToken>(i + 1, 256, 256);
+        if (i == 0) first = image;
+        library->CompleteRenderRequest(*request, image, {});
+        EXPECT_EQ(Wait(path).gpuImage, image);
+    }
+    EXPECT_TRUE(first.expired());
+    EXPECT_FALSE(std::filesystem::exists(root / "cache"));
 }
 
 TEST_F(ThumbnailLibraryTest, RefreshRejectsOldRenderCompletion)
@@ -257,6 +367,105 @@ TEST_F(ThumbnailLibraryTest, InvisibleRenderRequestDoesNotBlockTextureQueue)
     EXPECT_FALSE(library->IsRenderRequestCurrent(*old));
     library->CompleteRenderRequest(*old, {}, "obsolete");
     EXPECT_NE(Wait("T_color.json").image, nullptr);
+    EXPECT_EQ(library->GetSnapshot()->entries.count("SM_ball.json"), 0u);
+}
+
+TEST_F(ThumbnailLibraryTest, PendingRenderDoesNotBlockVisibleTextures)
+{
+    WriteTextFileAtomically(root / "SM_ball.json", R"({"type":"mesh","modelDataPath":"ball.obj"})");
+    WriteTextFileAtomically(root / "MI_ball.json", R"({"type":"materialInstance","material":"M_ball.json"})");
+    library->RequestVisible({"SM_ball.json", "MI_ball.json", "T_color.json"});
+    auto request = WaitRender();
+    ASSERT_TRUE(request);
+    EXPECT_EQ(request->path, "SM_ball.json");
+    EXPECT_NE(Wait("T_color.json").image, nullptr);
+    EXPECT_TRUE(library->IsRenderRequestCurrent(*request));
+    EXPECT_FALSE(library->TakeRenderRequest());
+}
+
+TEST_F(ThumbnailLibraryTest, RenderAndTextureCompletionsAreBothPublished)
+{
+    WriteTextFileAtomically(root / "SM_ball.json", R"({"type":"mesh","modelDataPath":"ball.obj"})");
+    library->RequestVisible({"SM_ball.json", "T_color.json"});
+    auto request = WaitRender();
+    ASSERT_TRUE(request);
+    // 不轮询 CPU 结果，让两条完成通道同时待发布。
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(4);
+    while (!std::filesystem::exists(root / "cache") &&
+        std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    ASSERT_TRUE(std::filesystem::exists(root / "cache"));
+    // 即使后续重试可命中磁盘缓存，也必须先读 source；删除它可暴露完成槽被覆盖后的错误重试。
+    std::filesystem::remove(root / "image.tga");
+    auto image = std::make_shared<const RendererGpuImageToken>(1, 256, 256);
+    library->CompleteRenderRequest(*request, image, {});
+    EXPECT_EQ(Wait("SM_ball.json").gpuImage, image);
+    EXPECT_NE(Wait("T_color.json").image, nullptr);
+}
+
+TEST_F(ThumbnailLibraryTest, RenderQueueKeepsSingleClaimAndWaitsForPublication)
+{
+    WriteTextFileAtomically(root / "SM_ball.json", R"({"type":"mesh","modelDataPath":"ball.obj"})");
+    WriteTextFileAtomically(root / "MI_ball.json", R"({"type":"materialInstance","material":"M_ball.json"})");
+    library->RequestVisible({"SM_ball.json", "MI_ball.json", "T_color.json"});
+    auto first = WaitRender();
+    ASSERT_TRUE(first);
+    ASSERT_NE(Wait("T_color.json").image, nullptr);
+    EXPECT_FALSE(library->TakeRenderRequest());
+    library->CompleteRenderRequest(*first, {}, "first completed");
+    EXPECT_FALSE(library->TakeRenderRequest());
+    library->Poll();
+    auto second = WaitRender();
+    ASSERT_TRUE(second);
+    EXPECT_EQ(second->path, "MI_ball.json");
+    EXPECT_NE(first->id, second->id);
+    library->CompleteRenderRequest(*first, {}, "duplicate completion");
+    EXPECT_TRUE(library->IsRenderRequestCurrent(*second));
+    library->CompleteRenderRequest(*second, {}, "second completed");
+    EXPECT_EQ(Wait("SM_ball.json").diagnostic, "first completed");
+    EXPECT_EQ(Wait("MI_ball.json").diagnostic, "second completed");
+}
+
+TEST_F(ThumbnailLibraryTest, VisibilityChangeCancelsClaimedAndQueuedRenders)
+{
+    WriteTextFileAtomically(root / "SM_ball.json", R"({"type":"mesh","modelDataPath":"ball.obj"})");
+    WriteTextFileAtomically(root / "MI_ball.json", R"({"type":"materialInstance","material":"M_ball.json"})");
+    WriteTextFileAtomically(root / "MI_next.json", R"({"type":"materialInstance","material":"M_ball.json"})");
+    library->RequestVisible({"SM_ball.json", "MI_ball.json", "MI_next.json", "T_color.json"});
+    auto old = WaitRender();
+    ASSERT_TRUE(old);
+    ASSERT_NE(Wait("T_color.json").image, nullptr);
+    library->RequestVisible({"MI_next.json", "T_color.json"});
+    library->CompleteRenderRequest(*old, {}, "obsolete");
+    EXPECT_FALSE(library->IsRenderRequestCurrent(*old));
+    auto current = WaitRender();
+    ASSERT_TRUE(current);
+    EXPECT_EQ(current->path, "MI_next.json");
+    library->CompleteRenderRequest(*current, {}, "current");
+    EXPECT_EQ(Wait("MI_next.json").diagnostic, "current");
+    EXPECT_EQ(library->GetSnapshot()->entries.size(), 2u);
+}
+
+TEST_F(ThumbnailLibraryTest, RefreshDiscardsQueuedRendersAndUnpublishedCompletions)
+{
+    WriteTextFileAtomically(root / "SM_ball.json", R"({"type":"mesh","modelDataPath":"ball.obj"})");
+    WriteTextFileAtomically(root / "MI_ball.json", R"({"type":"materialInstance","material":"M_ball.json"})");
+    library->RequestVisible({"SM_ball.json", "MI_ball.json", "T_color.json"});
+    auto old = WaitRender();
+    ASSERT_TRUE(old);
+    ASSERT_NE(Wait("T_color.json").image, nullptr);
+    library->CompleteRenderRequest(*old, {}, "obsolete completion");
+    Source(0, 255, 0, 255);
+    library->Refresh();
+    auto current = WaitRender();
+    ASSERT_TRUE(current);
+    EXPECT_EQ(current->path, "SM_ball.json");
+    EXPECT_NE(current->epoch, old->epoch);
+    library->CompleteRenderRequest(*old, {}, "late duplicate");
+    EXPECT_TRUE(library->IsRenderRequestCurrent(*current));
+    const auto texture = Wait("T_color.json");
+    ASSERT_NE(texture.image, nullptr);
+    EXPECT_EQ(texture.image->pixels[(128 * 256 + 128) * 4 + 1], 255);
     EXPECT_EQ(library->GetSnapshot()->entries.count("SM_ball.json"), 0u);
 }
 
@@ -293,7 +502,7 @@ TEST_F(ThumbnailLibraryTest, PausingPreventsTakingRenderWork)
     EXPECT_EQ(Wait("SM_ball.json").diagnostic, "unsupported material");
 }
 
-TEST(EditorThumbnailGraph, KeepsPassInputsButReplacesPresentWithFixedSizeReadback)
+TEST(EditorThumbnailGraph, KeepsPassInputsButReplacesPresentWithFixedSizeTransferSource)
 {
     const auto original = nlohmann::json::parse(R"({"resources":[
         {"name":"swapChain","widthScale":1,"heightScale":1,"usage":["present"]},

@@ -1,6 +1,5 @@
 #include "engine/editorThumbnailRenderSession.h"
 
-#include <cstring>
 #include <stdexcept>
 #include "commonFunction.h"
 #include "engine/editorThumbnailGraph.h"
@@ -63,7 +62,7 @@ struct EditorThumbnailRenderSession::Impl : PassRuntimeServices
     std::unordered_map<std::string, GraphicsShaderVariantArtifact> thumbnailShaders;
     RenderScene scene;
     ResolvedRenderScene resolved;
-    std::shared_ptr<const EditorUi::EditorTexturePreview> image;
+    std::shared_ptr<const RendererGpuImageToken> image;
     std::string error;
     nlohmann::json graphJson;
     size_t objectIndex = 0;
@@ -270,9 +269,6 @@ struct EditorThumbnailRenderSession::Impl : PassRuntimeServices
 
     void Render()
     {
-        constexpr size_t bytes = 256 * 256 * 4;
-        const auto staging = backend.CreateBuffer(bytes, vk::BufferUsageFlagBits::eTransferDst,
-            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, "ThumbnailReadback");
         vk::CommandBuffer command;
         try
         {
@@ -293,25 +289,16 @@ struct EditorThumbnailRenderSession::Impl : PassRuntimeServices
                 .setSubresourceRange({vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1});
             command.pipelineBarrier(vk::PipelineStageFlagBits::eColorAttachmentOutput, vk::PipelineStageFlagBits::eTransfer,
                 {}, {}, {}, barrier);
-            vk::BufferImageCopy copy;
-            copy.setImageSubresource({vk::ImageAspectFlagBits::eColor, 0, 0, 1}).setImageExtent({256, 256, 1});
-            command.copyImageToBuffer(output.image, vk::ImageLayout::eTransferSrcOptimal, staging.first, copy);
+            // 成图必须复制到独立槽位，下一资产会覆盖 graph 输出；CPU/UI 只接收逻辑 token。
+            auto completedImage = backend.RecordThumbnailImage(command, output.image, 256, 256);
             backend.EndSingleTimeCommands(command);
-            auto pixels = std::make_shared<EditorUi::EditorTexturePreview>();
-            pixels->width = pixels->height = pixels->sourceWidth = pixels->sourceHeight = 256;
-            pixels->pixels.resize(bytes);
-            void* mapped = backend.MapMemory(staging.second, bytes);
-            std::memcpy(pixels->pixels.data(), mapped, bytes);
-            backend.UnmapMemory(staging.second);
-            image = std::move(pixels);
+            image = std::move(completedImage);
         }
         catch (...)
         {
             if (command) backend.AbortSingleTimeCommands(command);
-            backend.DestroyBuffer(staging.first, staging.second);
             throw;
         }
-        backend.DestroyBuffer(staging.first, staging.second);
     }
 
     bool Step()
@@ -435,6 +422,6 @@ bool EditorThumbnailRenderSession::Step()
     if (done) impl->ReleaseAsset();
     return done;
 }
-std::shared_ptr<const EditorUi::EditorTexturePreview> EditorThumbnailRenderSession::Image() const { return impl->image; }
+std::shared_ptr<const RendererGpuImageToken> EditorThumbnailRenderSession::Image() const { return impl->image; }
 const std::string& EditorThumbnailRenderSession::Error() const { return impl->error; }
 }
