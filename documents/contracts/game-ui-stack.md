@@ -227,6 +227,9 @@ then destroys UI and renderer resources through their existing owners.
 ## Input
 
 Priority is global shortcuts, editor workspace, then game.
+Editor focus and modals consume only input events. Application lifecycle events
+such as `PlatformEventType::Quit` continue to EngineLoop, so the native window
+close button still exits while a panel has focus or a modal is open.
 The editor uses `GameAndUi` with a visible
 cursor; RmlUi hit testing, keyboard focus, drag capture and modal state claim
 panel input. The Viewport image passes through to the game, and clicking it blurs
@@ -444,3 +447,11 @@ one-/two-thread smoke without UI/Vulkan errors, actual window output, scene
 picking, resize, focus/IME/gamepad behavior and valid/invalid reload checks.
 Use existing launch/console capabilities; do not add runtime-test flags.
 Unperformed interactive checks must remain explicit verification gaps.
+
+2026-10-17 native-close regression: editor focus/modal capture previously consumed
+`Quit` through the default event branch. Only keyboard, text and gamepad input
+now enter that branch. Debug with Vulkan validation closed normally with the
+Content Browser search focused; Development closed with About open (exit code 0).
+Both logs recorded Quit and completed EngineLoop teardown, with no Vulkan errors.
+The 450 editor tests reported 445 passes and 5 symlink skips; they do not compile
+UiSubsystem, so these close checks are desktop acceptance, not automated coverage.

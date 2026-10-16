@@ -1806,12 +1806,20 @@ bool UiSubsystem::ProcessDeveloperUiEvent(const PlatformEvent& event)
         if (rmlPressedKeyboardKeys.count(event.key) != 0)
             return ProcessRuntimeUiEvent(event) || editorFocus || modal;
         return false;
-    default:
+    case PlatformEventType::KeyDown:
+    case PlatformEventType::TextInput:
+    case PlatformEventType::TextEditing:
+    case PlatformEventType::GamepadButtonDown:
+    case PlatformEventType::GamepadButtonUp:
+    case PlatformEventType::GamepadAxisMotion:
         if (editorFocus || modal)
         {
             ProcessRuntimeUiEvent(event);
             return true;
         }
+        return false;
+    default:
+        // 焦点与模态只独占输入；Quit 等生命周期事件必须继续交给 EngineLoop。
         return false;
     }
 }
