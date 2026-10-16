@@ -37,20 +37,5 @@
                 "url": "./schema/render_graph.schema.json"
             }
         ]
-    },
-    "launch": {
-        "version": "0.2.0",
-        "configurations": [
-            {
-                "name": "Debug VulkanLearn",
-                "type": "lldb",
-                "request": "launch",
-                "program": "${workspaceFolder:VulkanLearn}/build/bin/main.exe",
-                "args": [],
-                "console": "integratedTerminal",
-                "cwd": "${workspaceFolder:VulkanLearn}",
-                "stopOnEntry": false
-            }
-        ]
     }
 }

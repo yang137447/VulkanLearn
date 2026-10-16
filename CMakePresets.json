@@ -1,0 +1,97 @@
+{
+    "version": 2,
+    "cmakeMinimumRequired": {
+        "major": 3,
+        "minor": 20,
+        "patch": 0
+    },
+    "configurePresets": [
+        {
+            "name": "mingw-base",
+            "hidden": true,
+            "generator": "MinGW Makefiles",
+            "binaryDir": "${sourceDir}/build-vscode/${presetName}",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "gcc",
+                "CMAKE_CXX_COMPILER": "g++",
+                "CMAKE_EXPORT_COMPILE_COMMANDS": true,
+                "FETCHCONTENT_UPDATES_DISCONNECTED": true,
+                "VULKANLEARN_BUILD_TESTS": false,
+                "VULKANLEARN_BUILD_SPEEDTREE_WIND_VALIDATION": false,
+                "VULKANLEARN_ENABLE_VULKAN_VALIDATION": true,
+                "VULKANLEARN_ENABLE_TRACY": false,
+                "VULKANLEARN_ENABLE_NVTX": false
+            }
+        },
+        {
+            "name": "development",
+            "displayName": "Development",
+            "description": "Optimized daily development with CPU symbols, without Vulkan validation.",
+            "inherits": "mingw-base",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+                "VULKANLEARN_ENABLE_VULKAN_VALIDATION": false
+            }
+        },
+        {
+            "name": "debug",
+            "displayName": "Debug",
+            "description": "Unoptimized debugging with Vulkan validation and module test targets.",
+            "inherits": "mingw-base",
+            "binaryDir": "${sourceDir}/build",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "VULKANLEARN_BUILD_TESTS": true,
+                "VULKANLEARN_BUILD_SPEEDTREE_WIND_VALIDATION": true
+            }
+        },
+        {
+            "name": "profile",
+            "displayName": "Profile",
+            "description": "Optimized profiling with CPU symbols, Tracy and NVTX, without Vulkan validation.",
+            "inherits": "mingw-base",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+                "VULKANLEARN_ENABLE_VULKAN_VALIDATION": false,
+                "VULKANLEARN_ENABLE_TRACY": true,
+                "VULKANLEARN_ENABLE_NVTX": true
+            }
+        },
+        {
+            "name": "release",
+            "displayName": "Release",
+            "description": "Optimized performance baseline without Vulkan validation or profiler markers.",
+            "inherits": "mingw-base",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "VULKANLEARN_ENABLE_VULKAN_VALIDATION": false
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "development",
+            "configurePreset": "development",
+            "targets": ["main"],
+            "jobs": 4
+        },
+        {
+            "name": "debug",
+            "configurePreset": "debug",
+            "targets": ["main"],
+            "jobs": 4
+        },
+        {
+            "name": "profile",
+            "configurePreset": "profile",
+            "targets": ["main"],
+            "jobs": 4
+        },
+        {
+            "name": "release",
+            "configurePreset": "release",
+            "targets": ["main"],
+            "jobs": 4
+        }
+    ]
+}

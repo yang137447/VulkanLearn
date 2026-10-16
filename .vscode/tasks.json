@@ -1,0 +1,112 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "cmake: configure Development",
+            "type": "process",
+            "command": "cmake",
+            "args": ["--preset", "development"],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": "$gcc"
+        },
+        {
+            "label": "cmake: configure Debug",
+            "type": "process",
+            "command": "cmake",
+            "args": ["--preset", "debug"],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": "$gcc"
+        },
+        {
+            "label": "cmake: configure Profile",
+            "type": "process",
+            "command": "cmake",
+            "args": ["--preset", "profile"],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": "$gcc"
+        },
+        {
+            "label": "cmake: configure Release",
+            "type": "process",
+            "command": "cmake",
+            "args": ["--preset", "release"],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": "$gcc"
+        },
+        {
+            "label": "cmake: build Development",
+            "type": "process",
+            "command": "cmake",
+            "args": ["--build", "--preset", "development"],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "dependsOn": "cmake: configure Development",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": "$gcc",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            }
+        },
+        {
+            "label": "cmake: build Debug",
+            "type": "process",
+            "command": "cmake",
+            "args": ["--build", "--preset", "debug"],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "dependsOn": "cmake: configure Debug",
+            "group": "build",
+            "problemMatcher": "$gcc",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            }
+        },
+        {
+            "label": "cmake: build Profile",
+            "type": "process",
+            "command": "cmake",
+            "args": ["--build", "--preset", "profile"],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "dependsOn": "cmake: configure Profile",
+            "group": "build",
+            "problemMatcher": "$gcc",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            }
+        },
+        {
+            "label": "cmake: build Release",
+            "type": "process",
+            "command": "cmake",
+            "args": ["--build", "--preset", "release"],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "dependsOn": "cmake: configure Release",
+            "group": "build",
+            "problemMatcher": "$gcc",
+            "presentation": {
+                "reveal": "always",
+                "panel": "dedicated"
+            }
+        }
+    ]
+}

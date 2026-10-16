@@ -4,7 +4,9 @@
 /build_debug_with_profile/
 /build_release/
 /build-*/
-/.vscode
+/.vscode/*
+!/.vscode/launch.json
+!/.vscode/tasks.json
 /.cache
 /.playwright-cli
 /artifacts

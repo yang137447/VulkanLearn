@@ -69,6 +69,49 @@ cmake --build build -j
 
 编译成功后，可执行文件 `main.exe` 将生成在 `build/bin` 目录下。
 
+### VS Code 启动入口
+
+Run and Debug 下拉菜单提供四个入口。启动前会依次执行对应的
+CMake configure 与 `main` 构建，不需要手动切换同一个目录的编译选项。
+
+| 入口 | CMake 类型 | Vulkan validation | Tracy / NVTX | 构建目录 |
+| --- | --- | --- | --- | --- |
+| Development | RelWithDebInfo | 关 | 关 | `build-vscode/development/` |
+| Debug | Debug | 开 | 关 | `build/` |
+| Profile | RelWithDebInfo | 关 | 开 | `build-vscode/profile/` |
+| Release | Release | 关 | 关 | `build-vscode/release/` |
+
+Development 放在菜单首位，也是 `Ctrl+Shift+B` 的默认构建任务。
+四个入口中仅 Debug 开启 Vulkan validation，日常 Development 保留 CPU 调试符号。
+Development 和 Debug 使用 GDB，支持 F5 断点调试；优化后的 Development
+可能出现变量不可见、单步跳行。Profile 和 Release 通过 VS Code 内置的终端入口
+（`node-terminal`）直接执行 C++ 程序，不挂 GDB，
+用于性能采样与无埋点性能基线。Profile 的 VS Code 入口只启动被测程序；
+Tracy 客户端或 Nsight 录制需要另行打开。
+
+所有入口的工作目录都是仓库根目录，沿用 `config/config.json` 的场景、资源与 UI
+设置。VS Code 需要安装 Microsoft C/C++ 扩展，且启动 VS Code 的环境应能找到
+`cmake`、`gcc`、`g++`、`mingw32-make` 和 `gdb`。
+共享配置位于 `CMakePresets.json`、`.vscode/launch.json` 与 `.vscode/tasks.json`；
+机器专用的 `.vscode/settings.json` 等文件仍被 Git 忽略。
+
+命令行与 CMake Tools 可使用同名预设，例如：
+
+```powershell
+cmake --preset development
+cmake --build --preset development
+```
+
+四个构建预设只构建 `main`。Debug 的 configure 仍保留模块测试与可选 SpeedTree
+数值验证目标；需要运行模块测试时先构建对应测试目标。
+其他三个预设不生成这些额外目标。
+
+Development、Profile 和 Release 定义 `NDEBUG`，当前 Shader 编译器因此采用优化构建的
+runtime Shader 策略，不保留 Debug 的 `ENABLE_DEBUG_VIEW`；CPU 调试符号与
+Shader 调试能力是不同的开关。所有配置共用 `shader/spv/`，启动时会根据编译策略
+自动判定缓存失效，切换配置时不要同时启动多个实例。
+Release 在这里表示优化运行版本，运行时仍依赖仓库配置与外部资源目录。
+
 ### 性能对照构建
 
 编辑器性能应使用独立的优化构建测量，保留 `build/` 的 Debug/校验环境。

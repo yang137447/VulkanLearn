@@ -1,0 +1,87 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Development",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build-vscode/development/bin/main.exe",
+            "args": [],
+            "preLaunchTask": "cmake: build Development",
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "miDebuggerPath": "gdb.exe",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Ignore Windows debug-heap breakpoint traps raised by NVIDIA driver/validation layer teardown",
+                    "text": "handle SIGTRAP nostop noprint nopass",
+                    "ignoreFailures": true
+                }
+            ],
+            "presentation": {
+                "order": 1
+            }
+        },
+        {
+            "name": "Debug",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/build/bin/main.exe",
+            "args": [],
+            "preLaunchTask": "cmake: build Debug",
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "miDebuggerPath": "gdb.exe",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing for gdb",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Ignore Windows debug-heap breakpoint traps raised by NVIDIA driver/validation layer teardown",
+                    "text": "handle SIGTRAP nostop noprint nopass",
+                    "ignoreFailures": true
+                }
+            ],
+            "presentation": {
+                "order": 2
+            }
+        },
+        {
+            "name": "Profile",
+            "type": "node-terminal",
+            "request": "launch",
+            "command": ".\\build-vscode\\profile\\bin\\main.exe",
+            "preLaunchTask": "cmake: build Profile",
+            "cwd": "${workspaceFolder}",
+            "autoAttachChildProcesses": false,
+            "presentation": {
+                "order": 3
+            }
+        },
+        {
+            "name": "Release",
+            "type": "node-terminal",
+            "request": "launch",
+            "command": ".\\build-vscode\\release\\bin\\main.exe",
+            "preLaunchTask": "cmake: build Release",
+            "cwd": "${workspaceFolder}",
+            "autoAttachChildProcesses": false,
+            "presentation": {
+                "order": 4
+            }
+        }
+    ]
+}
