@@ -13,6 +13,7 @@
 #include "engine/blueprintPreviewRequest.h"
 #include "script/scriptBuildService.h"
 #include "script/scriptBuildDiagnostics.h"
+#include "script/scriptSourceLocation.h"
 #include "engine/blueprintPreviewTransform.h"
 #include "engine/blueprintAssetLoadSession.h"
 #include "input/mouseMotionBatch.h"
@@ -883,6 +884,40 @@ void EngineLoop::ApplyQueuedUiActions()
     std::vector<UiAction> actions = GetSubsystems().GetCommandBus().DrainUiActions();
     for (const UiAction& action : actions)
     {
+        if (action.type == UiActionType::OpenScriptSource ||
+            (action.type == UiActionType::CreateScriptBlueprintAsset && action.script.contains("class")))
+        {
+            auto& scripts = GetSubsystems().GetScriptRuntime();
+            std::string error;
+            try
+            {
+                if (action.type == UiActionType::OpenScriptSource)
+                {
+                    const auto url = ScriptSourceEditorUrl(CommonFunction::GetResourcePath(),
+                        scripts.Classes(), action.stringValue);
+                    if (!SDL_OpenURL(url.c_str())) throw std::runtime_error(SDL_GetError());
+                }
+                else
+                {
+                    // 从类创建只依赖当前类目录，不依赖场景选中态或预览 World；不执行用户回调。
+                    if (!scripts.IsEditing()) throw std::runtime_error("Stop gameplay before creating Blueprints");
+                    if (!uiSubsystem || !uiSubsystem->GetSceneDocuments())
+                        throw std::runtime_error("Blueprint authoring is unavailable");
+                    if (uiSubsystem->GetSceneDocuments()->CreateScriptBlueprintFromClass(action.stringValue,
+                        action.script.at("class").get<std::string>(), action.script.at("name").get<std::string>(),
+                        scripts.Classes(), error))
+                    {
+                        scripts.SetFeedback("Blueprint asset created: " + action.stringValue);
+                        uiSubsystem->RequestRefreshAssetCatalog();
+                        continue;
+                    }
+                }
+            }
+            catch (const std::exception& exception) { error = exception.what(); }
+            scripts.SetFeedback(error);
+            if (!error.empty()) GetSubsystems().GetDiagnosticsSubsystem().ReportWarning(error, "Script");
+            continue;
+        }
         if (action.type == UiActionType::CompileScripts || action.type == UiActionType::SetAutoCompileScripts)
         {
             const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
@@ -963,15 +998,6 @@ void EngineLoop::ApplyQueuedUiActions()
                     {
                         scripts.SetFeedback("Blueprint asset created: " + action.stringValue);
                         uiSubsystem->RequestRefreshAssetCatalog();
-                        if (action.script.contains("newClass"))
-                        {
-                            // 新源码先编译，再由原有程序集事务发布类目录；创建本身不改当前关卡。
-                            if (!scriptBuild || !scriptBuild->Available())
-                                scripts.SetFeedback("Blueprint created; C# build is unavailable");
-                            else if (!scriptBuild->Request(world->GetGeneration(), error))
-                                scripts.SetFeedback("Blueprint created; " + error);
-                            else scripts.SetFeedback("Blueprint created; compiling Gameplay...");
-                        }
                         continue;
                     }
                     pendingScriptBlueprintSelection = id.empty() ? "" : "blueprintInstance|" + id;

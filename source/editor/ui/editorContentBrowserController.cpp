@@ -61,6 +61,7 @@ std::string Parent(const std::string& path)
 std::string Name(const std::string& path)
 {
     const auto separator = path.rfind('/');
+    if (path == "csharp:") return "C# Classes";
     return separator == std::string::npos ? path : path.substr(separator + 1);
 }
 
@@ -100,7 +101,7 @@ const char* KindFilter(EditorAssetKind kind)
 
 bool ValidFilter(const std::string& value)
 {
-    for (const char* filter : {"all", "material", "mesh", "scene", "texture", "terrain", "blueprint"})
+    for (const char* filter : {"all", "material", "mesh", "scene", "texture", "terrain", "blueprint", "csharp"})
         if (value == filter) return true;
     return false;
 }
@@ -151,9 +152,10 @@ void EditorContentBrowserController::Detach()
     currentBreadcrumbs.clear();
 }
 
-bool EditorContentBrowserController::ReadCatalog(const MaterialInstanceEditorSnapshot& snapshot)
+bool EditorContentBrowserController::ReadCatalog(const MaterialInstanceEditorSnapshot& snapshot,
+    const nlohmann::json& classes)
 {
-    bool unchanged = catalogInitialized && catalogSnapshot == snapshot.assetCatalog;
+    bool unchanged = catalogInitialized && catalogSnapshot == snapshot.assetCatalog && classCatalog == classes;
     if (snapshot.assetCatalog)
         unchanged = unchanged && catalogRevision == snapshot.assetCatalog->revision;
     else
@@ -172,6 +174,7 @@ bool EditorContentBrowserController::ReadCatalog(const MaterialInstanceEditorSna
     catalogRevision = catalogSnapshot ? catalogSnapshot->revision : 0;
     catalogInitialized = true;
     fallbackPaths.clear();
+    classCatalog = classes;
     if (catalogSnapshot)
     {
         catalog.reserve(catalogSnapshot->assets.size());
@@ -201,6 +204,23 @@ bool EditorContentBrowserController::ReadCatalog(const MaterialInstanceEditorSna
             entry.foldedPath = FoldCase(entry.logicalPath);
             catalog.emplace(asset.assetPath, std::move(entry));
         }
+    }
+    // C# 类使用虚拟地址，不混入 JSON 资产服务，也不能被当作可拖放的 BP 资产。
+    for (const auto& type : classes)
+    {
+        Entry entry;
+        entry.className = type.at("name").get<std::string>();
+        entry.path = "csharp:/" + entry.className;
+        entry.logicalPath = entry.path;
+        entry.foldedPath = FoldCase(entry.path);
+        entry.name = entry.className;
+        entry.classDescription = "\nParent: " + type.value("baseClass", std::string());
+        for (const auto& file : type.value("sourceFiles", nlohmann::json::array()))
+            entry.classDescription += "\n" + file.get<std::string>();
+        entry.foldedName = FoldCase(entry.name);
+        entry.kind = EditorAssetKind::Blueprint;
+        const auto address = entry.path;
+        catalog.emplace(address, std::move(entry));
     }
     folders.emplace("", Folder{});
     for (const auto& asset : catalog)
@@ -339,7 +359,8 @@ void EditorContentBrowserController::BuildEntries()
     {
         const auto& entry = asset.second;
         const std::string& logical = entry.logicalPath;
-        if (typeFilter != "all" && typeFilter != KindFilter(entry.kind)) continue;
+        const std::string kind = entry.className.empty() ? KindFilter(entry.kind) : "csharp";
+        if (typeFilter != "all" && typeFilter != kind) continue;
         if (!IsWithin(logical, folder) || (!recursive && Parent(logical) != folder)) continue;
         if (!foldedQuery.empty() && entry.foldedPath.find(foldedQuery) == std::string::npos &&
             entry.foldedName.find(foldedQuery) == std::string::npos) continue;
@@ -466,11 +487,13 @@ std::string EditorContentBrowserController::EntriesMarkup(const Window& window) 
         const auto& entry = *entries[index];
         const std::string icon = entry.folder ? "icons/folder-tile.png" : BrowserIconSource(*document, entry.kind);
         markup += "<button class=\"" + std::string(grid ? "asset-tile" : "asset-row");
-        if (!entry.folder) markup += " asset-kind-" + std::string(KindFilter(entry.kind));
+        if (!entry.folder) markup += " asset-kind-" +
+            (entry.className.empty() ? std::string(KindFilter(entry.kind)) : "csharp");
         markup += "\"" + Address("browser-item", entry.path) + " title=\"" + UiWidgets::Text(entry.path) +
             "\"><img class=\"asset-preview\" src=\"" + icon + "\"/><span class=\"asset-name\">" +
             UiWidgets::Text(entry.name) + "</span><span class=\"asset-kind\">" +
-            (entry.folder ? "Folder" : EditorAssetKindName(entry.kind)) + "</span>";
+            (entry.folder ? "Folder" : (entry.className.empty() ?
+                EditorAssetKindName(entry.kind) : "C# Blueprint Class")) + "</span>";
         if (!entry.folder)
         {
             markup += "<span class=\"asset-dirty\" style=\"display: none;\">*</span>";
@@ -552,11 +575,12 @@ void EditorContentBrowserController::SyncControls()
     controlsDirty = false;
 }
 
-void EditorContentBrowserController::Build(const MaterialInstanceEditorSnapshot& snapshot)
+void EditorContentBrowserController::Build(const MaterialInstanceEditorSnapshot& snapshot,
+    const nlohmann::json& classes)
 {
     if (document == nullptr || !document->GetElementById("asset-list")->IsVisible(true)) return;
     UiWidgets::WidgetRefreshScope refresh(refreshingControls);
-    const bool catalogChanged = ReadCatalog(snapshot);
+    const bool catalogChanged = ReadCatalog(snapshot, classes);
     if (catalogChanged) ReconcileNavigation();
     const bool dirtyChanged = ReadDirtyOverlay(snapshot, catalogChanged);
     SyncControls();
@@ -633,9 +657,16 @@ std::optional<std::string> EditorContentBrowserController::BlueprintDragPath(con
 {
     // 仅真实可见目录条目能发起拖放；克隆节点、伪造路径或滚动后旧节点不能成为源。
     for (const auto& node : visibleNodes)
-        if (node.element == element && !node.entry->folder && node.entry->kind == EditorAssetKind::Blueprint)
+        if (node.element == element && !node.entry->folder && node.entry->className.empty() &&
+            node.entry->kind == EditorAssetKind::Blueprint)
             return node.entry->path;
     return std::nullopt;
+}
+
+std::string EditorContentBrowserController::BlueprintClass(const std::string& path) const
+{
+    const auto found = catalog.find(path);
+    return found == catalog.end() ? std::string() : found->second.className;
 }
 
 void EditorContentBrowserController::SyncThumbnails(
@@ -662,7 +693,7 @@ void EditorContentBrowserController::SyncThumbnails(
             ++stats.thumbnailWrites;
         }
         node.element->SetClass("has-thumbnail", ready);
-        const std::string title = entry.name + "\n" + entry.path +
+        const std::string title = entry.name + "\n" + entry.path + entry.classDescription +
             (thumbnail && !thumbnail->diagnostic.empty() ? "\n" + thumbnail->diagnostic : "");
         if (node.element->GetAttribute<std::string>("title", "") != title)
             node.element->SetAttribute("title", title);

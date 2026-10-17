@@ -7,6 +7,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <nlohmann/json.hpp>
 
 #include "editor/assets/editorJsonAssetTypes.h"
 #include "ui/widgets/widgetDocument.h"
@@ -43,7 +44,9 @@ public:
 
     bool Attach(Rml::ElementDocument& document, std::string& error);
     void Detach();
-    void Build(const MaterialInstanceEditorSnapshot& snapshot);
+    void Build(const MaterialInstanceEditorSnapshot& snapshot,
+        const nlohmann::json& classes = nlohmann::json::array());
+    std::string BlueprintClass(const std::string& path) const;
     bool ProcessEvent(Rml::Event& event, std::optional<std::string>& openAssetPath);
     const Stats& GetStats() const { return stats; }
     std::vector<std::string> VisibleThumbnailPaths() const;
@@ -59,6 +62,8 @@ private:
         std::string foldedPath;
         EditorAssetKind kind = EditorAssetKind::MaterialInstance;
         bool folder = false;
+        std::string className;
+        std::string classDescription;
     };
     struct Folder
     {
@@ -86,7 +91,7 @@ private:
         bool dirty = false;
     };
 
-    bool ReadCatalog(const MaterialInstanceEditorSnapshot& snapshot);
+    bool ReadCatalog(const MaterialInstanceEditorSnapshot& snapshot, const nlohmann::json& classes);
     bool ReadDirtyOverlay(const MaterialInstanceEditorSnapshot& snapshot, bool catalogChanged);
     void ReconcileNavigation();
     void ExpandAncestors(const std::string& path);
@@ -126,6 +131,7 @@ private:
     std::shared_ptr<const EditorJsonAssetCatalogSnapshot> catalogSnapshot;
     uint64_t catalogRevision = 0;
     bool catalogInitialized = false;
+    nlohmann::json classCatalog = nlohmann::json::array();
     std::vector<std::string> fallbackPaths;
     std::vector<std::pair<std::string, bool>> dirtyOverlay;
     std::set<std::string> dirtyPaths;

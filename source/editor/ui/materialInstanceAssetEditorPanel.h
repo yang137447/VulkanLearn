@@ -105,6 +105,7 @@ private:
         None,
         Actor,
         BrowserAsset,
+        BlueprintClass,
         Viewport
     };
     struct PendingEdit
@@ -208,7 +209,9 @@ private:
     bool discardBlueprintThenClose = false;
     bool discardBlueprintCloseSubmitted = false;
     bool scriptPlacementVisible = false;
-    bool scriptPlacementCreateSource = false;
+    bool scriptPlacementCreateAsset = false;
+    void OpenBlueprintClassSource(const std::string& className);
+    void BeginBlueprintClassAsset(const std::string& className);
     bool ProcessBlueprintAssetDrag(Rml::Event& event);
     std::string actorDragPath;
     std::unordered_set<std::string> scriptEditRequests;

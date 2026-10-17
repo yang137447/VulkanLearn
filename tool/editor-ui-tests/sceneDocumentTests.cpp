@@ -196,111 +196,107 @@ TEST_F(SceneDocumentTest, BlueprintAssetCreationNeverOverwritesExistingFile)
         EXPECT_EQ(entry.path().filename(), "BP_rotator.json");
 }
 
-TEST_F(SceneDocumentTest, BlueprintSourceCreationPublishesAdjacentSourceAndAssetInCommonAndSceneFolders)
+TEST_F(SceneDocumentTest, BlueprintClassCreatesMultipleSparseAssetsWithoutSourcesOrSceneChanges)
 {
+    const Json catalog = Json::array({{{"name", "MyGame.DoorBlueprint"},
+        {"properties", Json::array()}}});
     std::string error;
     for (const std::string destination : {"Common/Blueprints/Gameplay/BP_fresh.json",
         "Maps/SC_test/Blueprints/Interaction/BP_fresh.json"})
     {
-        ASSERT_TRUE(service->CreateScriptBlueprintSource(destination, "MyGame.FreshBlueprint",
-            "Fresh", Json::array(), error)) << error;
+        ASSERT_TRUE(service->CreateScriptBlueprintFromClass(destination, "MyGame.DoorBlueprint",
+            "Fresh", catalog, error)) << error;
         const auto asset = ReadScriptBlueprintAsset(root, destination);
-        EXPECT_EQ(asset["class"], "MyGame.FreshBlueprint");
+        EXPECT_EQ(asset["class"], "MyGame.DoorBlueprint");
         EXPECT_EQ(asset["name"], "Fresh");
         EXPECT_TRUE(asset["properties"].empty());
         EXPECT_TRUE(asset["instanceEditable"].empty());
         EXPECT_TRUE(asset["components"].empty());
         auto sourcePath = root / destination;
         sourcePath.replace_extension(".blueprint.cs");
-        std::ifstream file(sourcePath);
-        const std::string text{std::istreambuf_iterator<char>(file), {}};
-        EXPECT_NE(text.find("namespace MyGame;"), std::string::npos);
-        EXPECT_NE(text.find("public sealed class FreshBlueprint : global::VulkanLearn.Blueprint"),
-            std::string::npos);
+        EXPECT_FALSE(std::filesystem::exists(sourcePath));
         for (const auto& entry : std::filesystem::directory_iterator(sourcePath.parent_path()))
-            EXPECT_TRUE(entry.path().extension() == ".json" || entry.path().extension() == ".cs");
+            EXPECT_EQ(entry.path().extension(), ".json");
     }
     EXPECT_EQ(Read(), source);
     EXPECT_TRUE(service->ModifiedDocuments().empty());
 }
 
-TEST_F(SceneDocumentTest, BlueprintSourceCreationRejectsInvalidAndReservedIdentifiersBeforeWriting)
+TEST_F(SceneDocumentTest, BlueprintClassCreationRejectsUnknownOrRemovedTypesBeforeWriting)
 {
     std::string error;
     for (const std::string className : {"", "Game..Player", "Game.1Player", "Game.class",
         "Game.Player, Gameplay", "Game.Player<T>", "Game.Player\n{}", "VulkanLearn.Blueprint"})
     {
-        EXPECT_FALSE(service->CreateScriptBlueprintSource("Common/Blueprints/BP_bad.json",
+        EXPECT_FALSE(service->CreateScriptBlueprintFromClass("Common/Blueprints/BP_bad.json",
             className, "Bad", Json::array(), error)) << className;
         EXPECT_FALSE(error.empty());
     }
     EXPECT_FALSE(std::filesystem::exists(root / "Common"));
 }
 
-TEST_F(SceneDocumentTest, BlueprintSourceCreationRejectsRegisteredTypesAndPreservesOtherNamespaces)
+TEST_F(SceneDocumentTest, BlueprintClassCreationUsesTheExactRegisteredNamespace)
 {
     const Json catalog = Json::array({{{"name", "Game.PlayerBlueprint"}},
         {{"name", "Game.CounterComponent"}}});
     std::string error;
-    for (const char* name : {"Game.PlayerBlueprint", "Game.CounterComponent"})
-        EXPECT_FALSE(service->CreateScriptBlueprintSource("Common/Blueprints/BP_player.json",
+    for (const char* name : {"OtherGame.PlayerBlueprint", "Game.UnknownBlueprint"})
+        EXPECT_FALSE(service->CreateScriptBlueprintFromClass("Common/Blueprints/BP_player.json",
             name, "Player", catalog, error));
     EXPECT_FALSE(std::filesystem::exists(root / "Common"));
-    EXPECT_TRUE(service->CreateScriptBlueprintSource("Common/Blueprints/BP_player.json",
-        "OtherGame.PlayerBlueprint", "Player", catalog, error)) << error;
+    const Json valid = Json::array({{{"name", "OtherGame.PlayerBlueprint"}, {"properties", Json::array()}}});
+    EXPECT_TRUE(service->CreateScriptBlueprintFromClass("Common/Blueprints/BP_player.json",
+        "OtherGame.PlayerBlueprint", "Player", valid, error)) << error;
 }
 
-TEST_F(SceneDocumentTest, BlueprintSourceCreationNeverOverwritesAnExistingSourceOrPublishesItsAsset)
+TEST_F(SceneDocumentTest, BlueprintClassCreationDoesNotOwnOrOverwriteAnAdjacentSource)
 {
     const auto sourcePath = root / "Common/Blueprints/BP_player.blueprint.cs";
     std::filesystem::create_directories(sourcePath.parent_path());
     std::ofstream(sourcePath) << "existing-source";
     std::string error;
-    EXPECT_FALSE(service->CreateScriptBlueprintSource("Common/Blueprints/BP_player.json",
-        "Game.PlayerBlueprint", "Player", Json::array(), error));
+    EXPECT_TRUE(service->CreateScriptBlueprintFromClass("Common/Blueprints/BP_player.json",
+        "Game.PlayerBlueprint", "Player", Json::array({{{"name", "Game.PlayerBlueprint"},
+            {"properties", Json::array()}}}), error)) << error;
     std::ifstream file(sourcePath);
     EXPECT_EQ(std::string(std::istreambuf_iterator<char>(file), {}), "existing-source");
-    EXPECT_FALSE(std::filesystem::exists(root / "Common/Blueprints/BP_player.json"));
+    EXPECT_TRUE(std::filesystem::exists(root / "Common/Blueprints/BP_player.json"));
 }
 
-TEST_F(SceneDocumentTest, BlueprintSourceCreationNeverOverwritesAnExistingAssetOrPublishesItsSource)
+TEST_F(SceneDocumentTest, BlueprintClassCreationNeverOverwritesAnExistingAsset)
 {
     const auto target = root / "Common/Blueprints/BP_player.json";
     std::filesystem::create_directories(target.parent_path());
     std::ofstream(target) << "existing-asset";
     std::string error;
-    EXPECT_FALSE(service->CreateScriptBlueprintSource("Common/Blueprints/BP_player.json",
-        "Game.PlayerBlueprint", "Player", Json::array(), error));
+    EXPECT_FALSE(service->CreateScriptBlueprintFromClass("Common/Blueprints/BP_player.json",
+        "Game.PlayerBlueprint", "Player", Json::array({{{"name", "Game.PlayerBlueprint"},
+            {"properties", Json::array()}}}), error));
     std::ifstream file(target);
     EXPECT_EQ(std::string(std::istreambuf_iterator<char>(file), {}), "existing-asset");
     EXPECT_FALSE(std::filesystem::exists(root / "Common/Blueprints/BP_player.blueprint.cs"));
 }
 
-TEST_F(SceneDocumentTest, BlueprintSourceCreationRejectsNonContentPathsWithoutPublishingEitherFile)
+TEST_F(SceneDocumentTest, BlueprintClassCreationRejectsNonContentPathsWithoutWriting)
 {
     std::string error;
     for (const char* destination : {"../BP_escape.json", "Generated/Blueprints/BP_generated.json",
         "Common/Scripts/BP_wrong.json", "Maps/Blueprints/BP_wrong.json",
         "Maps/SC_test/Blueprints/SM_wrong.json"})
-        EXPECT_FALSE(service->CreateScriptBlueprintSource(destination, "Game.PlayerBlueprint",
-            "Player", Json::array(), error)) << destination;
+        EXPECT_FALSE(service->CreateScriptBlueprintFromClass(destination, "Game.PlayerBlueprint",
+            "Player", Json::array({{{"name", "Game.PlayerBlueprint"},
+                {"properties", Json::array()}}}), error)) << destination;
     EXPECT_FALSE(std::filesystem::exists(root / "Common"));
     EXPECT_FALSE(std::filesystem::exists(root / "Generated"));
 }
 
-TEST_F(SceneDocumentTest, BlueprintSourceCreationRejectsExcludedDirectoriesWithMixedAsciiCase)
+TEST_F(SceneDocumentTest, BlueprintClassCreationRequiresANonemptyDisplayName)
 {
     std::string error;
-    for (const char* destination : {"Common/Blueprints/Gameplay/gEnErAtEd/Nested/BP_wrong.json",
-        "Maps/SC_test/Blueprints/oBj/BP_wrong.json", "Common/Blueprints/.GIT/BP_wrong.json",
-        "Maps/SC_test/Blueprints/BiN/Nested/BP_wrong.json"})
-    {
-        EXPECT_FALSE(service->CreateScriptBlueprintSource(destination, "Game.PlayerBlueprint",
-            "Player", Json::array(), error)) << destination;
-        EXPECT_NE(error.find("excluded C# directory"), std::string::npos) << error;
-    }
+    EXPECT_FALSE(service->CreateScriptBlueprintFromClass("Common/Blueprints/BP_empty.json",
+        "Game.PlayerBlueprint", "", Json::array({{{"name", "Game.PlayerBlueprint"},
+            {"properties", Json::array()}}}), error));
     EXPECT_FALSE(std::filesystem::exists(root / "Common"));
-    EXPECT_FALSE(std::filesystem::exists(root / "Maps/SC_test/Blueprints"));
 }
 
 TEST_F(SceneDocumentTest, BlueprintCreationPublishesCanonicalTypeAndRetainsInstancePermissions)

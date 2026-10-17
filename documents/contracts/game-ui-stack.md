@@ -54,9 +54,9 @@ Blueprint assets also use native RmlUi drag/drop into the level viewport; instan
 overrides/reset preserve sparse Scene data. Creating an asset emits a GT request
 with the target path and actor identity; callbacks never read or write files.
 Esc cancels a Blueprint drag before the normal mouse-capture toggle.
-The Outliner creation form also offers New Blueprint, emitting a value-only class/name/path request.
-GT creates paired resource-owned C# and BP JSON files and requests the existing compiler;
-the new type reaches the catalog through the normal assembly reload transaction.
+The Outliner creation form also offers Create Blueprint Asset, emitting a registered class/name/path
+request. GT creates a sparse BP JSON configuration and refreshes the asset catalog.
+It neither creates source files nor requests compilation; C# catalog changes use the assembly reload transaction.
 Blueprint Details also emits rename/duplicate/delete, inline component tree and root
 physics edits. Asset-owned component fields are editable on instances only when the BP
 explicitly exposes them; inherited root physics remains read-only.
@@ -84,6 +84,12 @@ same selection sink as the material-slot list. Its callbacks emit typed editor c
 requests, or runtime actions; they do not invoke the document service,
 mutate World, write assets, or touch Vulkan. `materialInstanceEditorView.h`
 keeps the view types and command sink independent of any UI library.
+
+The Content Browser merges registered C# Blueprint classes as UI-only virtual entries.
+Class actions emit a class identity for GT source opening or a class/path/name request for
+JSON Blueprint creation. Source editing opens VS Code through a validated resource file URI;
+classes have no engine document tab and do not enter the JSON asset library.
+One class can supply multiple configuration assets with sparse property overrides.
 
 Same-frame edits coalesce into an ordered revision-gated atomic batch.
 Validate includes pending edits. Save opens confirmation after flushing pending

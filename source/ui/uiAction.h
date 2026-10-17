@@ -72,6 +72,7 @@ enum class UiActionType
     UndoSceneEdit,
     RedoSceneEdit,
     CreateScriptBlueprintAsset,
+    OpenScriptSource,
     SetSpeedTreeStrength,
     SetSpeedTreeGustingEnabled,
     ForceSpeedTreeGust,

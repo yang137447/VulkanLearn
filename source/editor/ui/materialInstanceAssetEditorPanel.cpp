@@ -1196,6 +1196,14 @@ void MaterialInstanceAssetEditorPanel::OpenContextMenu(Rml::Event& event)
             {
                 // DOM 上的 data-path 是当前挂载节点的完整资产地址（不是虚拟窗口下标）。
                 const std::string path = addressed->GetAttribute<std::string>("data-path", "");
+                const auto className = contentBrowser.BlueprintClass(path);
+                if (!className.empty())
+                {
+                    kind = ContextMenuKind::BlueprintClass;
+                    target = className;
+                    title = className;
+                    break;
+                }
                 EditorAssetKind assetKind = EditorAssetKind::MaterialInstance;
                 std::string name;
                 // 目录节点在只读目录里没有条目：目录没有真实可执行动作，因此不给菜单。
@@ -1272,6 +1280,14 @@ std::string MaterialInstanceAssetEditorPanel::ContextMenuItemsMarkup() const
                     ? FileLabel(material.materialInstancePath) : material.materialSlotName),
                 false, false);
         }
+    }
+    else if (contextMenuKind == ContextMenuKind::BlueprintClass)
+    {
+        markup += UiWidgets::MenuItem("context-class-create", {"context-class-create", 0},
+            "Create Blueprint Asset...", false, !runtimeView.scripts.available ||
+                runtimeView.scripts.state != ScriptPlayState::Editing);
+        markup += UiWidgets::MenuItem("context-class-source", {"context-class-source", 0},
+            "Open in VS Code", false, false);
     }
     else if (contextMenuKind == ContextMenuKind::BrowserAsset)
     {
@@ -1398,7 +1414,7 @@ void MaterialInstanceAssetEditorPanel::RefreshLists()
     SetMarkup("material-slots", std::move(slots));
     widgetDocument.SetProperty("material-slots-section", "display",
         snapshot.selectedModel && !snapshot.selectedModel->materials.empty() ? "block" : "none");
-    contentBrowser.Build(snapshot);
+    contentBrowser.Build(snapshot, runtimeView.scripts.classes);
 }
 
 // 选择态与"已挂载 actor 的可见性"合成一个重挂签名：两者都只改已挂载行的
@@ -2707,21 +2723,18 @@ void MaterialInstanceAssetEditorPanel::RefreshScriptControls()
     SetDisabled("menu-script-compile", !enabled || !scripts.buildAvailable || scripts.buildBusy);
     SetDisabled("menu-script-auto", !enabled || !scripts.buildAvailable);
     widgetDocument.SetClass("menu-script-auto", "checked", scripts.autoCompile);
-    const bool canCreateSource = scripts.buildAvailable && !scripts.buildBusy;
-    SetDisabled("script-add", !enabled || scripts.state != ScriptPlayState::Editing ||
-        (scriptPlacementCreateSource ? !canCreateSource : scripts.classes.empty()));
-    SetDisabled("script-placement-mode", !enabled || scripts.state != ScriptPlayState::Editing);
-    for (const char* id : {"script-existing-class-row", "script-placement-mesh-row"})
-        widgetDocument.SetProperty(id, "display", scriptPlacementCreateSource ? "none" : "flex");
-    for (const char* id : {"script-new-class-row", "script-new-path-row"})
-        widgetDocument.SetProperty(id, "display", scriptPlacementCreateSource ? "flex" : "none");
+    const bool canAuthor = scripts.available && scripts.state == ScriptPlayState::Editing;
+    SetDisabled("script-add", !canAuthor || (!scriptPlacementCreateAsset && !level) || scripts.classes.empty());
+    SetDisabled("script-placement-mode", !canAuthor);
+    widgetDocument.SetProperty("script-placement-mesh-row", "display", scriptPlacementCreateAsset ? "none" : "flex");
+    widgetDocument.SetProperty("script-new-path-row", "display", scriptPlacementCreateAsset ? "flex" : "none");
     if (auto* button = document->GetElementById("script-add"))
     {
-        const std::string title = scriptPlacementCreateSource ?
-            "Create Blueprint source and asset" : "Place C# instance";
+        const std::string title = scriptPlacementCreateAsset ?
+            "Create Blueprint Asset" : "Place C# instance";
         if (button->GetAttribute<std::string>("title", "") != title) button->SetAttribute("title", title);
     }
-    SetDisabled("script-placement-toggle", !enabled || scripts.state != ScriptPlayState::Editing);
+    SetDisabled("script-placement-toggle", !canAuthor);
     SetDisabled("menu-edit-undo", !level || scripts.state != ScriptPlayState::Editing || !scripts.canUndo);
     SetDisabled("menu-edit-redo", !level || scripts.state != ScriptPlayState::Editing || !scripts.canRedo);
     RefreshBlueprintHistoryControls();
@@ -2748,6 +2761,7 @@ void MaterialInstanceAssetEditorPanel::UpdateRuntimeView(const UiViewModelSnapsh
     // 相机和统计变化不触碰离线表单；视口工具条继续独立更新。
     RefreshViewportToolbar();
     RefreshScriptControls();
+    contentBrowser.Build(snapshot, runtimeView.scripts.classes);
     logPanel.BuildPerformance(runtimeView.scripts.performance, docking.IsPanelActive("log"));
     if (!refreshOffline || document == nullptr) return;
     SetControlValue("offline-samples", std::to_string(view.offlineSamples));
@@ -2900,15 +2914,15 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
     else if (action == "script-add" && runtimeActionSink != nullptr)
     {
         if (!runtimeView.scripts.available || runtimeView.scripts.state != ScriptPlayState::Editing ||
-            runtimeView.offlineMode || IsAssetEditorVisible() || HasModal()) return;
+            (!scriptPlacementCreateAsset && (runtimeView.offlineMode || IsAssetEditorVisible())) ||
+            runtimeView.scripts.classes.empty() || HasModal()) return;
         UiAction request;
         request.actorProperty.worldGeneration = runtimeView.scripts.worldGeneration;
-        if (scriptPlacementCreateSource)
+        if (scriptPlacementCreateAsset)
         {
-            if (!runtimeView.scripts.buildAvailable || runtimeView.scripts.buildBusy) return;
             request.type = UiActionType::CreateScriptBlueprintAsset;
             request.stringValue = ControlValue(*document->GetElementById("script-new-path"));
-            request.script = {{"newClass", ControlValue(*document->GetElementById("script-new-class"))},
+            request.script = {{"class", ControlValue(*document->GetElementById("script-class"))},
                 {"name", ControlValue(*document->GetElementById("script-name"))}};
         }
         else
@@ -2985,6 +2999,8 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
         RefreshSaveDialog();
     }
     else if (action == "context-browser-save") OpenSaveDialog(contextMenuTarget);
+    else if (action == "context-class-source") OpenBlueprintClassSource(contextMenuTarget);
+    else if (action == "context-class-create") BeginBlueprintClassAsset(contextMenuTarget);
     else if (action == "menu-open") ToggleMenu(element.GetAttribute<std::string>("data-menu", ""));
     else if (action == "menu-window")
     {
@@ -3279,7 +3295,7 @@ void MaterialInstanceAssetEditorPanel::HandleChange(Rml::Element& element, const
     else if (action == "script-placement-mode")
     {
         if (value != "place" && value != "create") return;
-        scriptPlacementCreateSource = value == "create";
+        scriptPlacementCreateAsset = value == "create";
         RefreshScriptControls();
     }
     else if (action == "script-time-scale")
@@ -3609,6 +3625,12 @@ void MaterialInstanceAssetEditorPanel::RequestScriptEdit(UiActionType type, nloh
 
 void MaterialInstanceAssetEditorPanel::OpenBrowserAsset(const std::string& path)
 {
+    const auto className = contentBrowser.BlueprintClass(path);
+    if (!className.empty())
+    {
+        OpenBlueprintClassSource(className);
+        return;
+    }
     EditorAssetKind kind = EditorAssetKind::MaterialInstance;
     if (snapshot.assetCatalog != nullptr)
     {
@@ -3661,6 +3683,41 @@ void MaterialInstanceAssetEditorPanel::OpenBrowserAsset(const std::string& path)
         jsonAssetRequestSink->RequestOpenJsonAsset(path);
         if (kind != EditorAssetKind::Scene) docking.Activate("details");
     }
+}
+
+void MaterialInstanceAssetEditorPanel::OpenBlueprintClassSource(const std::string& className)
+{
+    for (const auto& type : runtimeView.scripts.classes)
+    {
+        if (type.at("name") != className) continue;
+        if (!runtimeActionSink) return;
+        UiAction action;
+        action.type = UiActionType::OpenScriptSource;
+        action.stringValue = className;
+        runtimeActionSink->RequestRuntimeAction(std::move(action));
+        return;
+    }
+    localStatus = "The C# class is no longer registered.";
+}
+
+void MaterialInstanceAssetEditorPanel::BeginBlueprintClassAsset(const std::string& className)
+{
+    for (const auto& type : runtimeView.scripts.classes)
+    {
+        if (type.at("name") != className) continue;
+        scriptPlacementVisible = scriptPlacementCreateAsset = true;
+        docking.SetPanelVisible("outliner", true);
+        docking.Activate("outliner");
+        RefreshScriptControls();
+        const auto separator = className.rfind('.');
+        const auto name = className.substr(separator == std::string::npos ? 0 : separator + 1);
+        SetControlValue("script-class", className);
+        SetControlValue("script-placement-mode", "create");
+        SetControlValue("script-name", name);
+        SetControlValue("script-new-path", "Common/Blueprints/BP_" + name + ".json");
+        return;
+    }
+    localStatus = "The C# class is no longer registered.";
 }
 
 bool MaterialInstanceAssetEditorPanel::ProcessBlueprintAssetDrag(Rml::Event& event)

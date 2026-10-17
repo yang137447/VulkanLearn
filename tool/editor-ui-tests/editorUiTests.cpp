@@ -293,7 +293,7 @@ protected:
         })}}, {{"name", "Gameplay.Empty"}, {"properties", nlohmann::json::array()}}});
         panel->UpdateRuntimeView(view);
         Refresh();
-        auto* tile = document->QuerySelector("#asset-list button");
+        auto* tile = BrowserItem("Blueprints/BP_test.json");
         ASSERT_NE(tile, nullptr);
         tile->DispatchEvent("dblclick", {});
         Refresh();
@@ -828,7 +828,7 @@ TEST_F(EditorUiTest, ScriptBlueprintPlacementEmitsValuesAndWorldGeneration)
     EXPECT_TRUE(sink.commands.empty());
 }
 
-TEST_F(EditorUiTest, NewBlueprintSourceCreationEmitsValuesWithoutAnExistingClassOrActor)
+TEST_F(EditorUiTest, BlueprintAssetCreationEmitsRegisteredClassAndPathWithoutAnActorOrCompiler)
 {
     snapshot.activeDocument.reset();
     snapshot.documentTabs.clear();
@@ -836,12 +836,13 @@ TEST_F(EditorUiTest, NewBlueprintSourceCreationEmitsValuesWithoutAnExistingClass
     panel->Build(snapshot);
     UiViewModelSnapshot view;
     view.scripts.available = true;
-    view.scripts.buildAvailable = true;
+    view.scripts.classes = nlohmann::json::array({{{"name", "MyGame.DoorBlueprint"},
+        {"properties", nlohmann::json::array()}}});
     view.scripts.worldGeneration = 42;
     panel->UpdateRuntimeView(view);
     Click("#script-placement-toggle");
     SelectOption("script-placement-mode", "create");
-    SetValue("script-new-class", "MyGame.DoorBlueprint");
+    SelectOption("script-class", "MyGame.DoorBlueprint");
     SetValue("script-name", "Door");
     SetValue("script-new-path", "Maps/SC_test/Blueprints/BP_door.json");
     Click("#script-add");
@@ -851,11 +852,11 @@ TEST_F(EditorUiTest, NewBlueprintSourceCreationEmitsValuesWithoutAnExistingClass
     EXPECT_EQ(action.actorProperty.worldGeneration, 42u);
     EXPECT_TRUE(action.actorProperty.identity.empty());
     EXPECT_EQ(action.stringValue, "Maps/SC_test/Blueprints/BP_door.json");
-    EXPECT_EQ(action.script, (nlohmann::json{{"newClass", "MyGame.DoorBlueprint"}, {"name", "Door"}}));
+    EXPECT_EQ(action.script, (nlohmann::json{{"class", "MyGame.DoorBlueprint"}, {"name", "Door"}}));
     EXPECT_TRUE(sink.commands.empty());
 }
 
-TEST_F(EditorUiTest, NewBlueprintSourceCreationRequiresBuildAvailabilityAndEditingState)
+TEST_F(EditorUiTest, BlueprintAssetCreationRequiresACompiledClassAndEditingState)
 {
     snapshot.activeDocument.reset();
     snapshot.documentTabs.clear();
@@ -868,21 +869,86 @@ TEST_F(EditorUiTest, NewBlueprintSourceCreationRequiresBuildAvailabilityAndEditi
     SelectOption("script-placement-mode", "create");
     Click("#script-add");
     EXPECT_TRUE(runtimeSink.actions.empty());
-    view.scripts.buildAvailable = true;
-    view.scripts.buildBusy = true;
-    panel->UpdateRuntimeView(view);
-    Click("#script-add");
-    EXPECT_TRUE(runtimeSink.actions.empty());
-    view.scripts.buildBusy = false;
+    view.scripts.classes = nlohmann::json::array({{{"name", "MyGame.DoorBlueprint"},
+        {"properties", nlohmann::json::array()}}});
     view.scripts.state = ScriptPlayState::Playing;
     panel->UpdateRuntimeView(view);
     Click("#script-add");
     EXPECT_TRUE(runtimeSink.actions.empty());
-    view.scripts.state = ScriptPlayState::Editing;
-    view.offlineMode = true;
+    view.scripts.state = ScriptPlayState::Paused;
     panel->UpdateRuntimeView(view);
     Click("#script-add");
     EXPECT_TRUE(runtimeSink.actions.empty());
+    view.scripts.state = ScriptPlayState::Editing;
+    view.scripts.available = false;
+    panel->UpdateRuntimeView(view);
+    Click("#script-add");
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, BlueprintClassDoubleClickOnlyRequestsExternalSourceEditor)
+{
+    UiViewModelSnapshot view;
+    view.scripts.available = true;
+    view.scripts.classes = nlohmann::json::array({{{"name", "Game.DoorBlueprint"},
+        {"properties", nlohmann::json::array()}}});
+    panel->UpdateRuntimeView(view);
+    context->Update();
+    auto* item = BrowserItem("csharp:/Game.DoorBlueprint");
+    ASSERT_NE(item, nullptr);
+    item->DispatchEvent("dblclick", {});
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions[0].type, UiActionType::OpenScriptSource);
+    EXPECT_EQ(runtimeSink.actions[0].stringValue, "Game.DoorBlueprint");
+    EXPECT_TRUE(jsonAssetSink.opened.empty());
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, BlueprintClassContextMenuCreatesAssetFromTheClickedClass)
+{
+    UiViewModelSnapshot view;
+    view.scripts.available = true;
+    view.scripts.classes = nlohmann::json::array({
+        {{"name", "Game.DoorBlueprint"}, {"properties", nlohmann::json::array()}},
+        {{"name", "Game.EnemyBlueprint"}, {"properties", nlohmann::json::array()}}});
+    panel->UpdateRuntimeView(view);
+    context->Update();
+    auto* item = BrowserItem("csharp:/Game.EnemyBlueprint");
+    ASSERT_NE(item, nullptr);
+    RightClick(item);
+    ASSERT_TRUE(panel->IsContextMenuOpen());
+    ASSERT_NE(ContextMenuItem("context-class-source"), nullptr);
+    ClickContextItem("context-class-create");
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    SetValue("script-name", "Boss");
+    SetValue("script-new-path", "Maps/SC_test/Blueprints/BP_boss.json");
+    Click("#script-add");
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions[0].type, UiActionType::CreateScriptBlueprintAsset);
+    EXPECT_EQ(runtimeSink.actions[0].script.at("class"), "Game.EnemyBlueprint");
+    EXPECT_TRUE(jsonAssetSink.opened.empty());
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, BlueprintClassSourceMenuRejectsAClassRemovedAfterOpening)
+{
+    UiViewModelSnapshot view;
+    view.scripts.available = true;
+    view.scripts.classes = nlohmann::json::array({{{"name", "Game.DoorBlueprint"},
+        {"properties", nlohmann::json::array()}}});
+    panel->UpdateRuntimeView(view);
+    context->Update();
+    auto* item = BrowserItem("csharp:/Game.DoorBlueprint");
+    ASSERT_NE(item, nullptr);
+    RightClick(item);
+    ASSERT_TRUE(panel->IsContextMenuOpen());
+    view.scripts.classes = nlohmann::json::array();
+    panel->UpdateRuntimeView(view);
+    context->Update();
+    ClickContextItem("context-class-source");
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    EXPECT_TRUE(jsonAssetSink.opened.empty());
+    EXPECT_TRUE(sink.commands.empty());
 }
 
 TEST_F(EditorUiTest, ScriptVectorPropertySendsOnlyEditedAxisAndHonorsInstancePermission)

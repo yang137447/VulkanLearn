@@ -24,8 +24,8 @@
 
 | 可执行文件 | 测试数 | 覆盖 |
 | --- | --- | --- |
-| `editor_ui_tests` | 638 | 编辑器 UI：组件、停靠、布局持久化、内容浏览器、JSON 资产库、标准资产修改、actor 树、属性编辑、场景持久化、保存确认、可视化、颜色转换、右键菜单、RmlUi GPU 缩略图桥接、C# 放置/蓝图资产拖放、组件 Details、独立蓝图配置标签、3D 拾取/变换/辅助图示/吸附、文档历史、类型化属性与实例权限、物理配置、编译入口、逻辑组件、Quaternion 原子编辑、Time Scale、Log 页签、四处递归自定义数据编辑、冻结 HUD 文本绑定和用户源码/BP 配对创建 |
-| `script_tests` | 299（C# ON；OFF 为 73 项无宿主选择集） | 蓝图场景/资产/组件校验、实例权限、地面放置、输入映射；ON 时使用真实 hostfxr/CLR 验证生命周期、Spawn、运行时组件/代际句柄、异步加载/取消/租约、Jolt 层与掩码/compound/静态 mesh/约束/扫球、角色控制、计时器/事件、故障隔离、World 换代、冻结快照、类型化属性、灯光、程序集重载、资源源码编译/监视及 DLL/PDB 完整字节确定性、私有运行时部署、自定义逻辑组件、FixedTick/时钟/性能采样、递归自定义数据、显式播放中深值迁移、增量同步/空回调过滤/千实例负载、HUD 所有权/回滚/迁移、受控程序集限定类名及混合 CLR/Jolt/WorldSnapshot 负载 |
+| `editor_ui_tests` | 643 | 编辑器 UI：组件、停靠、布局持久化、内容浏览器、JSON 资产库、标准资产修改、actor 树、属性编辑、场景持久化、保存确认、可视化、颜色转换、右键菜单、RmlUi GPU 缩略图桥接、C# 放置/蓝图资产拖放、组件 Details、独立蓝图配置标签、3D 拾取/变换/辅助图示/吸附、文档历史、类型化属性与实例权限、物理配置、编译入口、逻辑组件、Quaternion 原子编辑、Time Scale、Log 页签、四处递归自定义数据编辑、冻结 HUD 文本绑定、C# 类浏览/源码打开请求及一类多 BP 配置创建 |
+| `script_tests` | 301（C# ON；OFF 为 75 项无宿主选择集） | 蓝图场景/资产/组件校验、实例权限、地面放置、输入映射、源码 URI 边界；ON 时使用真实 hostfxr/CLR 验证生命周期、Spawn、运行时组件/代际句柄、异步加载/取消/租约、Jolt 层与掩码/compound/静态 mesh/约束/扫球、角色控制、计时器/事件、故障隔离、World 换代、冻结快照、类型化属性、灯光、程序集重载、资源源码编译/监视及 DLL/PDB 完整字节确定性、PDB 空类/partial 源码定位、私有运行时部署、自定义逻辑组件、FixedTick/时钟/性能采样、递归自定义数据、显式播放中深值迁移、增量同步/空回调过滤/千实例负载、HUD 所有权/回滚/迁移、受控程序集限定类名及混合 CLR/Jolt/WorldSnapshot 负载 |
 | `vl_offline_adapter_tests` | 101 | 离线场景/网格/显示/相机适配 |
 | `editor_viewport_tests` | 41 | 视口几何、命中、坐标映射、aspect、坐标轴投影及编辑器网格 |
 | `vl_offline_coordinator_tests` | 13 | 离线会话协调 |
@@ -50,9 +50,25 @@ ctest --test-dir build -R "MaterialInstanceEditor" --output-on-failure
 
 `JsonAssetLibraryTest` 有 4 项按设计 skip（符号链接用例，需要权限）。
 
+### C# 类浏览与配置资产验证
+
+本轮 C# ON Debug 的 main、script_tests、editor_ui_tests 构建通过。
+真实 CLR 脚本集 301 项全部通过；UI 集 643 项中 638 通过、
+5 项符号链接权限环境跳过，零失败。C# OFF Release 的 script_tests 构建及 75 项全通过。
+类浏览覆盖筛选/搜索、更新移除、空闲不重建、不能拖放，
+双击只发源码打开请求、右键创建选择正确类，以及菜单打开后类已移除的拒绝。
+创建覆盖一类多资产、稀疏配置、无场景/编译器依赖、原有文件保留与内容域限制。
+源码定位覆盖真实编译的空 partial 类、文件名与类名不同、URI 转义、缺失源码和目录边界。
+
+文档分层校验、65 条架构边界审计及 diff 空白检查通过。
+本轮没有操作桌面 VS Code 或 Vulkan 窗口，没有重跑根 CTest/三项 Vulkan runtime gate；
+源码打开的 OS 关联与实际窗口启动未作手工验收。
+桥接输出由构建和 CLR 共用，运行脚本集与重建桥接须串行，避免 Windows DLL 文件锁重试。
+证据位于 gitignored 的 `artifacts/csharp-class-authoring-*`。
+
 ### C# 蓝图提交前复核
 
-当前 C# ON Debug 全目标构建通过；根 CTest 1306 项中 1300 通过、
+资源化提交时 C# ON Debug 全目标构建通过；根 CTest 1306 项中 1300 通过、
 6 项符号链接权限环境跳过，零失败，总耗时 289.16 秒。
 文档分层、65 条架构边界和 38 个真实场景的 schema 校验均通过。
 配套用户源码与示例资产位于资源仓库 `VukanLearnResources` 提交 `3a865d3`。

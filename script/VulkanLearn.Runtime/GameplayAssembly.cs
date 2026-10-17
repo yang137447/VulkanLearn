@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.Loader;
 using System.Diagnostics.CodeAnalysis;
+using System.Reflection.Metadata;
 
 namespace VulkanLearn;
 
@@ -59,21 +60,22 @@ public static partial class NativeBridge
         try
         {
             var assembly = loader.ReadAssembly(path);
-            var types = assembly.GetTypes().Where(t => t.IsPublic && !t.IsAbstract &&
+            var types = assembly.GetTypes().Where(t => t.IsPublic && !t.IsAbstract && !t.ContainsGenericParameters &&
                 typeof(Blueprint).IsAssignableFrom(t) && t.GetConstructor(Type.EmptyTypes) != null)
                 .ToDictionary(t => t.FullName!, StringComparer.Ordinal);
-            var componentTypes = assembly.GetTypes().Where(t => t.IsPublic && !t.IsAbstract &&
+            var componentTypes = assembly.GetTypes().Where(t => t.IsPublic && !t.IsAbstract && !t.ContainsGenericParameters &&
                 typeof(Component).IsAssignableFrom(t) && t.GetConstructor(Type.EmptyTypes) != null)
                 .ToDictionary(t => t.FullName!, StringComparer.Ordinal);
             // 默认属性 getter/构造异常也属于候选失败；类目录完整成功才登记该代。
-            var classes = types.OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => new
-                { name = p.Key, assemblyName = p.Value.Assembly.GetName().Name,
-                    assemblyQualifiedName = p.Value.AssemblyQualifiedName,
-                    properties = DescribeProperties(p.Value) }).ToArray();
-            var componentClasses = componentTypes.OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => new
-                { name = p.Key, assemblyName = p.Value.Assembly.GetName().Name,
-                    assemblyQualifiedName = p.Value.AssemblyQualifiedName,
-                    properties = DescribeProperties(p.Value) }).ToArray();
+            string symbolPath = Path.ChangeExtension(path, ".pdb");
+            using var symbolStream = File.Exists(symbolPath) ? File.OpenRead(symbolPath) : null;
+            using var symbolProvider = symbolStream == null ? null :
+                MetadataReaderProvider.FromPortablePdbStream(symbolStream);
+            var symbols = symbolProvider?.GetMetadataReader();
+            var classes = types.OrderBy(p => p.Key, StringComparer.Ordinal)
+                .Select(p => DescribeBlueprintClass(p, symbols)).ToArray();
+            var componentClasses = componentTypes.OrderBy(p => p.Key, StringComparer.Ordinal)
+                .Select(p => DescribeBlueprintClass(p, symbols)).ToArray();
             if (System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new { classes, componentClasses }).Length > 3 * 1024 * 1024)
                 throw new InvalidOperationException("Gameplay class catalog exceeds the ABI budget.");
             ulong generation = ++nextAssembly;

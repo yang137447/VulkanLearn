@@ -7,8 +7,12 @@
 2026-10-17 增补：可选 [C# 蓝图](csharp-blueprint-runtime.md) 增加 Outliner 放置表单、
 Details 类型化属性和工具条 Play/Pause/Stop/手动程序集重载。只有 C# 蓝图 提供新增入口，
 不代表通用场景对象增删已经实现；回调仍只提交值，GT 复用 Scene 草稿与 World 事务。
-Outliner 新增表单的 New Blueprint 模式可创建资源侧 C# 源码与配对 BP JSON，
-不要求已有类或场景实例；GT 发布文件后编译并刷新资源目录，具体归属和失败语义见 C# 契约。
+Content Browser 通过独立的 C# Classes 虚拟目录和类型筛选展示已编译蓝图类，
+悬停显示父类与源码位置；双击及右键源码动作只提交类身份，由 GT 在 VS Code 打开资源源码。
+C# 类不进入 JSON 资产服务或引擎 Tab，也不作为 BP 资产拖入场景。
+右键 Create Blueprint Asset 打开创建表单；Outliner 同名模式共用已注册类选择和 BP 路径输入。
+一个类可生成多个稀疏配置 JSON，不要求场景实例，不创建源码或自动编译。
+GT 重新验证类与路径后发布文件并刷新资源目录，具体边界见 C# 契约。
 Blueprint 资产支持浏览器原生拖入视口、实例属性覆写/复位，以及从选中实例创建新资产；
 准确格式、地面放置与创建文件边界见上述 C# 契约。
 组件树在 Details 展示 parent 与局部 TRS，inline 组件可以增删、编辑和重挂父级，

@@ -146,7 +146,7 @@ protected:
 
     void Refresh()
     {
-        browser.Build(snapshot);
+        browser.Build(snapshot, classes);
         docking.Sync();
         context->Update();
         ASSERT_TRUE(system.errors.empty()) << system.errors;
@@ -225,6 +225,7 @@ protected:
     EditorContentBrowserController browser;
     EditorDockingController docking;
     MaterialInstanceEditorSnapshot snapshot;
+    nlohmann::json classes = nlohmann::json::array();
     Rml::Context* context = nullptr;
     Rml::ElementDocument* document = nullptr;
     bool lastHandled = false;
@@ -245,6 +246,45 @@ TEST_F(ContentBrowserTest, RootDefaultsToAllCatalogAssetsAndNoFolderTiles)
     EXPECT_TRUE(document->GetElementById("browser-up")->HasAttribute("disabled"));
     for (const auto* item : Items())
         EXPECT_NE(item->GetInnerRML().find("Material Instance"), std::string::npos);
+}
+
+TEST_F(ContentBrowserTest, BlueprintClassesFilterSearchAndOpenWithoutAssetDrag)
+{
+    classes = nlohmann::json::array({
+        {{"name", "Game.DoorBlueprint"}, {"baseClass", "Game.InteractiveBlueprint"},
+            {"sourceFiles", {"Common/Blueprints/Door.cs"}}},
+        {{"name", "Game.EnemyBlueprint"}}});
+    Refresh();
+    EXPECT_EQ(browser.BlueprintClass("csharp:/Game.DoorBlueprint"), "Game.DoorBlueprint");
+    SetValue("browser-type", "csharp");
+    ASSERT_EQ(Items().size(), 2u);
+    SetValue("asset-search", "door");
+    ASSERT_EQ(Items().size(), 1u);
+    auto* item = Find("browser-item", "csharp:/Game.DoorBlueprint");
+    ASSERT_NE(item, nullptr);
+    EXPECT_NE(item->GetAttribute<std::string>("title", "").find("Game.InteractiveBlueprint"), std::string::npos);
+    EXPECT_TRUE(item->IsClassSet("asset-kind-csharp"));
+    EXPECT_FALSE(item->IsClassSet("asset-kind-blueprint"));
+    EXPECT_FALSE(browser.BlueprintDragPath(item));
+    Send(item, "dblclick");
+    ASSERT_EQ(openedPaths.size(), 1u);
+    EXPECT_EQ(openedPaths[0], "csharp:/Game.DoorBlueprint");
+}
+
+TEST_F(ContentBrowserTest, BlueprintClassCatalogRefreshRemovesOldTypesAndStaysIdleWhenUnchanged)
+{
+    classes = nlohmann::json::array({{{"name", "Game.DoorBlueprint"}}});
+    Refresh();
+    const auto before = browser.GetStats();
+    for (int i = 0; i < 10; ++i) Refresh();
+    EXPECT_EQ(browser.GetStats().catalogRebuilds, before.catalogRebuilds);
+    EXPECT_EQ(browser.GetStats().listDomRebuilds, before.listDomRebuilds);
+    classes = nlohmann::json::array({{{"name", "Game.EnemyBlueprint"}}});
+    Refresh();
+    EXPECT_TRUE(browser.BlueprintClass("csharp:/Game.DoorBlueprint").empty());
+    EXPECT_EQ(browser.BlueprintClass("csharp:/Game.EnemyBlueprint"), "Game.EnemyBlueprint");
+    EXPECT_EQ(Find("browser-item", "csharp:/Game.DoorBlueprint"), nullptr);
+    EXPECT_NE(Find("browser-item", "csharp:/Game.EnemyBlueprint"), nullptr);
 }
 
 TEST_F(ContentBrowserTest, ThumbnailCompletionOnlyUpdatesImageWithoutRebuildingList)

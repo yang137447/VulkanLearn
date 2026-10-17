@@ -54,11 +54,10 @@ Stop 只重建实例，Gameplay 静态字段在程序集换代后重置。
 
 ```text
 Common/Blueprints/
-  BP_shared.json
-  BP_shared.blueprint.cs
+  DoorBlueprint.blueprint.cs
+  BP_wooden_door.json
 Maps/SC_example/Blueprints/
-  BP_enemy.json
-  BP_enemy.blueprint.cs
+  BP_iron_door.json
 Generated/Runtime/CSharp/
   Gameplay.csproj
 ```
@@ -67,6 +66,7 @@ Generated/Runtime/CSharp/
 所有 Common/Maps 子目录的 `.cs` 都进入同一个 Gameplay.dll，
 普通用户数据类不要求 `.blueprint.cs` 后缀；不是每个地图单独一个程序集。
 类型由完整命名空间身份区分，移动源码目录不改变 BP 的 `class`。
+上例两个门资产可引用同一个 DoorBlueprint 类，源码与配置文件不按文件名配对。
 初始构建与编辑器编译共用同一源码收集器及显式 MSBuild 清单，
 扩展名和 bin/obj/.git/Generated 排除目录按 ASCII 大小写不敏感匹配；
 资源编译服务拒绝源码符号链接。
@@ -111,15 +111,26 @@ TRS 必填，位置厘米、旋转角度，缩放非零。`enabled` 缺省 true�
 旧无 ID 单根 mesh 保留 `__blueprint/<id>` 身份。由正式 mesh loader 导入资源和材质；
 作者 Scene 不保存派生对象，普通对象名称不得占用此前缀。
 
-Outliner 底部加号打开 C# 放置表单：类、名称、可选 mesh 资源根相对路径。
-表单 Mode 提供 Place existing 与 New Blueprint。新建模式输入名称、完整 C# 类名和
-Common/Blueprints 或 Maps/SC_*/Blueprints 下的 BP JSON 路径（支持子目录），
-GT 在同目录创建 BP_*.blueprint.cs 和 BP_*.json，随后请求编译并刷新资源目录。
-新建不要求已注册类或选中实例，不向当前 Scene 自动放置对象。
-类名仅接受点分隔的普通 ASCII 标识符；已注册的根/逻辑组件类型和已有配对文件拒绝覆盖。
-其它未编译文件的类型冲突由 C# 编译器报告。两个文件采用 create-new 发布，
-JSON 发布失败回收本次仍指向暂存文件的源码；不提供跨文件断电原子性或文件操作 Undo。
-编译失败保留作者文件与当前程序集，可修正源码后重新编译。
+Content Browser 的 C# Classes 虚拟目录与 C# Blueprint Classes 筛选展示当前程序集注册的根蓝图类，
+按完整命名空间区分；父类及源码位置显示在条目提示中，类目录随成功程序集重载更新。
+此目录使用 `csharp:/完整类名` 的 UI 内部地址，不进入 JSON 资产库或资产加载路径。
+双击及右键 Open in VS Code 只提交类身份，GT 从当前类目录重新解析资源源码，
+通过 `vscode://file/` 打开；C# 类没有引擎编辑 Tab。
+源码位置来自匹配程序集的 Portable PDB 类型文档与方法序列点，支持空类、文件名与类名不同及 partial；
+PDB 缺失时类仍可配置，打开源码报告无可用位置。
+只允许资源根 Common/Maps 下的现存 `.cs`，排除生成目录；路径经规范化、根边界校验及 URI 编码。
+本机 VS Code URI 处理程序不可用时由平台打开操作报告错误。
+
+类条目右键 Create Blueprint Asset 打开创建表单。
+Outliner 底部加号的 Mode 也提供 Place instance 与 Create Blueprint Asset：
+前者选择类、名称、可选 mesh 路径向关卡放置实例；
+后者选择当前已编译根蓝图类、名称和 Common/Blueprints 或 Maps/SC_*/Blueprints 下的 BP_*.json 路径
+（支持子目录），GT 校验类身份后只创建 JSON 并刷新目录。
+创建不要求选中实例或当前关卡，不执行 OnCreate，不生成 C# 源码或发起编译。
+同一类可创建多个资产，`class` 指向 C# 类型，`properties`/`components` 初始为空，
+未写入的属性从 C# 类默认值继承；没有 JSON 对 JSON 的继承链。
+移除类、逻辑组件类及无效路径拒绝作为创建目标；已有 JSON 拒绝覆盖，已有相邻源码不阻止创建。
+文件沿用完整验证后的 create-new 发布，不提供文件操作 Undo。
 新建 inline Blueprint 的 `properties` 为空，不把类默认值复制成实例覆写。
 Details 显示根 TRS、类、ID 和 Expose 属性。属性支持 public
 bool/int/uint/float/double/string、System.Numerics.Vector2/3/4/Quaternion、非 Flags enum、

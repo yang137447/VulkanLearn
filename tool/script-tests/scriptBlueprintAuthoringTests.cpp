@@ -714,35 +714,35 @@ TEST_F(ScriptBlueprintAuthoringTest, CustomDataAssetCreationIncludesEffectiveDef
     EXPECT_EQ(documents->ScriptBlueprintDraft(scenePath, action.actorProperty.identity, error), before);
 }
 
-TEST_F(ScriptBlueprintAuthoringTest, NewBlueprintSourceCreationDoesNotRequireAnExistingInstanceOrCompiledClass)
+TEST_F(ScriptBlueprintAuthoringTest, BlueprintClassAssetCreationDoesNotRequireAnExistingInstance)
 {
     UiAction action;
     action.type = UiActionType::CreateScriptBlueprintAsset;
     action.actorProperty.worldGeneration = 42;
     action.stringValue = "Maps/SC_test/Blueprints/BP_door.json";
-    action.script = {{"newClass", "MyGame.DoorBlueprint"}, {"name", "Door"}};
+    action.script = {{"class", "ScriptFixtures.PassiveBlueprint"}, {"name", "Door"}};
     std::string id, error;
     ASSERT_TRUE(StageScriptBlueprintAction(*world, runtime, *documents, action, id, error)) << error;
-    EXPECT_EQ(ReadScriptBlueprintAsset(root, action.stringValue)["class"], "MyGame.DoorBlueprint");
-    EXPECT_TRUE(std::filesystem::is_regular_file(root / "Maps/SC_test/Blueprints/BP_door.blueprint.cs"));
+    EXPECT_EQ(ReadScriptBlueprintAsset(root, action.stringValue)["class"], "ScriptFixtures.PassiveBlueprint");
+    EXPECT_FALSE(std::filesystem::exists(root / "Maps/SC_test/Blueprints/BP_door.blueprint.cs"));
     EXPECT_TRUE(documents->ModifiedDocuments().empty());
     EXPECT_TRUE(world->GetScriptBlueprints().empty());
     EXPECT_TRUE(id.empty());
 }
 
-TEST_F(ScriptBlueprintAuthoringTest, NewBlueprintSourceCreationRejectsStaleWorldAndExistingGameplayTypes)
+TEST_F(ScriptBlueprintAuthoringTest, BlueprintClassAssetCreationRejectsStaleWorldUnknownAndComponentTypes)
 {
     UiAction action;
     action.type = UiActionType::CreateScriptBlueprintAsset;
     action.actorProperty.worldGeneration = 41;
     action.stringValue = "Maps/SC_test/Blueprints/BP_door.json";
-    action.script = {{"newClass", "MyGame.DoorBlueprint"}, {"name", "Door"}};
+    action.script = {{"class", "ScriptFixtures.PassiveBlueprint"}, {"name", "Door"}};
     std::string id, error;
     EXPECT_FALSE(StageScriptBlueprintAction(*world, runtime, *documents, action, id, error));
     action.actorProperty.worldGeneration = 42;
-    action.script["newClass"] = "ScriptFixtures.PassiveBlueprint";
+    action.script["class"] = "MyGame.UnknownBlueprint";
     EXPECT_FALSE(StageScriptBlueprintAction(*world, runtime, *documents, action, id, error));
-    action.script["newClass"] = "ScriptFixtures.CounterComponent";
+    action.script["class"] = "ScriptFixtures.CounterComponent";
     EXPECT_FALSE(StageScriptBlueprintAction(*world, runtime, *documents, action, id, error));
     EXPECT_FALSE(std::filesystem::exists(root / "Maps/SC_test/Blueprints"));
 }

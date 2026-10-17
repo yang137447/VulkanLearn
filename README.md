@@ -86,8 +86,10 @@ cmake --build build -j8
 构建自动收集 Common/Maps 中的 `.cs`，产物在 `build/bin/managed`；
 供 IDE 打开的项目生成在资源根 `Generated/Runtime/CSharp/Gameplay.csproj`。
 蓝图资产使用 `Blueprints/BP_*.json`，场景类型为 `blueprintInstance`；旧 Actor 格式不兼容。
-Outliner 底部加号选择类、名称和可选网格路径，放置到当前场景；
-切换到 New Blueprint 可填写新类名和资源路径，同目录创建 C# 源码与 BP 配置并自动编译。
+Content Browser 的 C# Classes 展示已编译的蓝图类；双击或右键 Open in VS Code 编辑源码，
+不打开引擎 Tab。右键 Create Blueprint Asset 选择名称和资源路径，创建引用该类的 `BP_*.json`；
+同一 C# 类可以派生多个配置资产，未覆写属性继承类默认值，不生成配对源码。
+Outliner 底部加号也提供 Create Blueprint Asset，以及选择类、名称和可选网格的 Place instance。
 Details 编辑 TRS 和 `[Expose]` 的标量、向量、枚举、稳定引用及内联自定义数据/集合，
 Save Content 确认保存。
 只有明确开放 Instance Editable 的属性允许场景覆写。

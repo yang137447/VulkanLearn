@@ -6,7 +6,7 @@
 #include "render/lighting/physicalLighting.h"
 #include "render/camera/cameraExposure.h"
 #include "script/scriptBlueprintAsset.h"
-#include "script/scriptSourceFiles.h"
+#include "script/scriptPropertySchema.h"
 #include "shader/build/atomicFile.h"
 #include <atomic>
 #include <chrono>
@@ -28,41 +28,6 @@ std::filesystem::path BlueprintCreationTarget(const std::filesystem::path& root,
     if ((!common && !scene) || target.filename().string().rfind("BP_", 0) != 0)
         throw std::invalid_argument("Use Common/Blueprints/BP_*.json or Maps/SC_*/Blueprints/BP_*.json");
     return target;
-}
-
-void ValidateBlueprintSourceClass(const std::string& className)
-{
-    // 创建模板只接受普通 ASCII 标识符；转义、泛型及程序集限定名留给已有类选择入口。
-    static const std::set<std::string> keywords{
-        "abstract", "as", "base", "bool", "break", "byte", "case", "catch", "char", "checked",
-        "class", "const", "continue", "decimal", "default", "delegate", "do", "double", "else",
-        "enum", "event", "explicit", "extern", "false", "finally", "fixed", "float", "for",
-        "foreach", "goto", "if", "implicit", "in", "int", "interface", "internal", "is", "lock",
-        "long", "namespace", "new", "null", "object", "operator", "out", "override", "params",
-        "private", "protected", "public", "readonly", "ref", "return", "sbyte", "sealed", "short",
-        "sizeof", "stackalloc", "static", "string", "struct", "switch", "this", "throw", "true",
-        "try", "typeof", "uint", "ulong", "unchecked", "unsafe", "ushort", "using", "virtual",
-        "void", "volatile", "while", "record", "required", "file", "scoped", "var", "dynamic"
-    };
-    if (className.empty() || className.size() > 256 || className == "VulkanLearn.Blueprint")
-        throw std::invalid_argument("New Blueprint class requires a C# type name of at most 256 ASCII characters");
-    size_t begin = 0;
-    while (true)
-    {
-        const auto end = className.find('.', begin);
-        const auto token = className.substr(begin, end == std::string::npos ? end : end - begin);
-        if (token.empty() || keywords.count(token))
-            throw std::invalid_argument("New Blueprint class contains an empty or reserved C# identifier");
-        for (size_t index = 0; index < token.size(); ++index)
-        {
-            const char value = token[index];
-            if (value != '_' && !(value >= 'A' && value <= 'Z') &&
-                !(value >= 'a' && value <= 'z') && !(index > 0 && value >= '0' && value <= '9'))
-                throw std::invalid_argument("New Blueprint class requires dot-separated ASCII C# identifiers");
-        }
-        if (end == std::string::npos) return;
-        begin = end + 1;
-    }
 }
 
 nlohmann::json Vector(const Eigen::Vector3f& value)
@@ -373,62 +338,22 @@ bool SceneDocumentService::CreateScriptBlueprintAsset(const std::string& path,
     }
 }
 
-bool SceneDocumentService::CreateScriptBlueprintSource(const std::string& path,
+bool SceneDocumentService::CreateScriptBlueprintFromClass(const std::string& path,
     const std::string& className, const std::string& name,
     const nlohmann::json& registeredTypes, std::string& error)
 {
-    std::filesystem::path temporary, source;
-    bool ownsTemporary = false, publishedSource = false;
     try
     {
-        ValidateBlueprintSourceClass(className);
         if (name.empty() || name.find('\0') != std::string::npos)
             throw std::invalid_argument("New Blueprint requires a display name");
-        for (const auto& type : registeredTypes)
-            if (ScriptTypeNameMatches(type, className))
-                throw std::invalid_argument("The C# type is already registered: " + className);
-        // 文件发布负责拒绝覆盖；其它源码中的完整 C# 类型冲突由编译器统一诊断。
-        const auto target = BlueprintCreationTarget(resourceRoot, path);
-        // 创建和编译共用排除规则，不能发布一个后续永远不进入 Gameplay 的源码。
-        for (const auto& part : target.parent_path().lexically_relative(
-            std::filesystem::weakly_canonical(resourceRoot)))
-            if (ScriptSourceDirectoryExcluded(part.string()))
-                throw std::invalid_argument("Blueprint source cannot be created in an excluded C# directory");
-        source = target.parent_path() / (target.stem().string() + ".blueprint.cs");
-        if (std::filesystem::exists(target) || std::filesystem::exists(source))
-            throw std::invalid_argument("The Blueprint asset or paired source already exists");
-        const auto separator = className.rfind('.');
-        const auto typeName = separator == std::string::npos ? className : className.substr(separator + 1);
-        std::string text = "using VulkanLearn;\n\n";
-        if (separator != std::string::npos) text += "namespace " + className.substr(0, separator) + ";\n\n";
-        text += "public sealed class " + typeName + " : global::VulkanLearn.Blueprint\n{\n}\n";
-        std::filesystem::create_directories(target.parent_path());
-        // .tmp 不进入资源源码收集；完整写入后才以 create-new 硬链接发布。
-        static std::atomic<uint64_t> nextSource{0};
-        temporary = target.parent_path() / (target.stem().string() + ".create-source-" +
-            std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + "-" +
-            std::to_string(++nextSource) + ".tmp");
-        if (std::filesystem::exists(temporary)) throw std::runtime_error("Blueprint source temporary already exists");
-        WriteTextFileAtomically(temporary, text);
-        ownsTemporary = true;
-        std::filesystem::create_hard_link(temporary, source);
-        publishedSource = true;
         const nlohmann::json declaration{{"name", name}, {"class", className},
             {"properties", nlohmann::json::object()}, {"components", nlohmann::json::array()},
             {"rotation", {0, 0, 0}}, {"scale", {1, 1, 1}}};
-        if (!CreateScriptBlueprintAsset(path, declaration, error)) throw std::runtime_error(error);
-        std::error_code ignored;
-        std::filesystem::remove(temporary, ignored);
-        error.clear();
-        return true;
+        ValidateScriptPropertySchema(declaration, registeredTypes);
+        return CreateScriptBlueprintAsset(path, declaration, error);
     }
     catch (const std::exception& exception)
     {
-        // 仅回收本次发布且仍指向暂存 inode 的源码，不删除并发替换的外部文件。
-        std::error_code ignored;
-        if (publishedSource && std::filesystem::equivalent(temporary, source, ignored))
-            std::filesystem::remove(source, ignored);
-        if (ownsTemporary) std::filesystem::remove(temporary, ignored);
         error = exception.what();
         return false;
     }

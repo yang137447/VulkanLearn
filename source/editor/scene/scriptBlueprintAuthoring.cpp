@@ -242,13 +242,11 @@ bool StageScriptBlueprintAction(World& world, ScriptRuntimeSubsystem& runtime,
             return documents.RemoveScriptBlueprint(world.GetScenePath(), action.actorProperty.identity, error);
         if (action.type == UiActionType::CreateScriptBlueprintAsset)
         {
-            if (action.script.contains("newClass"))
+            if (action.script.contains("class"))
             {
-                auto types = runtime.Classes();
-                for (const auto& type : runtime.ComponentClasses()) types.push_back(type);
-                return documents.CreateScriptBlueprintSource(action.stringValue,
-                    action.script.at("newClass").get<std::string>(),
-                    action.script.at("name").get<std::string>(), types, error);
+                return documents.CreateScriptBlueprintFromClass(action.stringValue,
+                    action.script.at("class").get<std::string>(),
+                    action.script.at("name").get<std::string>(), runtime.Classes(), error);
             }
             const auto source = documents.ScriptBlueprintDraft(world.GetScenePath(),
                 action.actorProperty.identity, error);

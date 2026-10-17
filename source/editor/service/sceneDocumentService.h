@@ -41,8 +41,8 @@ public:
     nlohmann::json BlueprintAssetDefaults(const std::string& path, const std::string& scenePath) const;
     bool CreateScriptBlueprintAsset(const std::string& path, const nlohmann::json& actor,
         std::string& error);
-    // 新源码与 BP 在同一内容目录发布；不依赖已编译类，也不改变当前 Scene。
-    bool CreateScriptBlueprintSource(const std::string& path, const std::string& className,
+    // 仅创建引用已编译类的配置资产；不复制类默认值、不生成源码或执行用户回调。
+    bool CreateScriptBlueprintFromClass(const std::string& path, const std::string& className,
         const std::string& name, const nlohmann::json& registeredTypes, std::string& error);
 
 private:

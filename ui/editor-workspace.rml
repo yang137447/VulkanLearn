@@ -147,9 +147,8 @@
                     </select>
                 </div>
                 <div id="script-placement">
-                    <div class="script-placement-row"><label>Mode</label><select id="script-placement-mode" data-action="script-placement-mode"><option value="place">Place existing</option><option value="create">New Blueprint</option></select></div>
+                    <div class="script-placement-row"><label>Mode</label><select id="script-placement-mode" data-action="script-placement-mode"><option value="place">Place instance</option><option value="create">Create Blueprint Asset</option></select></div>
                     <div id="script-existing-class-row" class="script-placement-row"><label>Class</label><select id="script-class" title="C# gameplay class"></select></div>
-                    <div id="script-new-class-row" class="script-placement-row"><label>Class</label><input id="script-new-class" type="text" value="Gameplay.MyBlueprint" placeholder="Gameplay.MyBlueprint"/></div>
                     <div class="script-placement-row"><label>Name</label><input id="script-name" type="text" value="Blueprint" placeholder="Blueprint name"/></div>
                     <div id="script-placement-mesh-row" class="script-placement-row"><label>Mesh</label><input id="script-mesh" type="text" value="" placeholder="Mesh asset path (optional)"/></div>
                     <div id="script-new-path-row" class="script-placement-row"><label>Asset</label><input id="script-new-path" type="text" value="Common/Blueprints/BP_my_blueprint.json" placeholder="Common/Blueprints/BP_my_blueprint.json"/></div>
@@ -221,6 +220,7 @@
                     <select id="browser-type" data-action="browser-type">
                         <option value="all">All Assets</option><option value="material">Materials</option>
                         <option value="blueprint">Blueprints</option>
+                        <option value="csharp">C# Blueprint Classes</option>
                         <option value="mesh">Meshes</option><option value="scene">Levels</option>
                         <option value="texture">Textures</option><option value="terrain">Terrains</option>
                     </select>

@@ -6,6 +6,8 @@
 #include "script/scriptSourceFiles.h"
 #include "script/scriptBuildDiagnostics.h"
 #include "script/scriptRuntime.h"
+#include "script/scriptBlueprintAsset.h"
+#include "script/scriptSourceLocation.h"
 #include "editor/service/sceneDocumentService.h"
 #include "world/world.h"
 
@@ -74,6 +76,34 @@ TEST_F(ScriptBuildTest, ResourceSourceCollectionAcceptsWindowsUppercaseExtension
 TEST_F(ScriptBuildTest, EmptyResourceProjectHasNoImplicitEngineGameplaySources)
 {
     EXPECT_TRUE(VL::CollectScriptSourceFiles(root).empty());
+}
+
+TEST_F(ScriptBuildTest, SourceEditorUrlUsesRegisteredMetadataAndEncodesFileNames)
+{
+    Write("Common/Blueprints/Door #1.CS", "class Door {}");
+    const nlohmann::json classes = nlohmann::json::array({
+        {{"name", "Game.Door"}, {"sourceFiles", {"Common/Blueprints/Door #1.CS"}}}});
+    const auto url = VL::ScriptSourceEditorUrl(root, classes, "Game.Door");
+    EXPECT_EQ(url.find("vscode://file/"), 0u);
+    EXPECT_NE(url.find("/Common/Blueprints/Door%20%231.CS"), std::string::npos);
+    EXPECT_THROW(VL::ScriptSourceEditorUrl(root, classes, "Other.Door"), std::runtime_error);
+}
+
+TEST_F(ScriptBuildTest, SourceEditorUrlRejectsUnavailableAndNonResourceLocations)
+{
+    Write("Source/Outside.cs", "class Outside {}");
+    Write("Common/obj/Generated.cs", "class Generated {}");
+    Write("Maps/Generated/Generated.cs", "class Generated {}");
+    Write("Common/Blueprints/BP_door.json", "{}");
+    for (const char* file : {"../Outside.cs", "Source/Outside.cs", "Common/obj/Generated.cs",
+        "Maps/Generated/Generated.cs", "Common/Blueprints/BP_door.json", "Common/Missing.cs"})
+    {
+        const nlohmann::json classes = nlohmann::json::array({
+            {{"name", "Game.Door"}, {"sourceFiles", {file}}}});
+        EXPECT_THROW(VL::ScriptSourceEditorUrl(root, classes, "Game.Door"), std::runtime_error) << file;
+    }
+    const nlohmann::json classes = nlohmann::json::array({{{"name", "Game.Door"}}});
+    EXPECT_THROW(VL::ScriptSourceEditorUrl(root, classes, "Game.Door"), std::runtime_error);
 }
 
 TEST_F(ScriptBuildTest, ResourceSourceManifestEscapesXmlAndMsBuildExpressions)
@@ -160,13 +190,15 @@ TEST_F(ScriptBuildTest, ResourceBlueprintAndCustomDataCompileAndLoadWithoutEngin
     EXPECT_EQ(runtime.Classes()[0].at("properties")[0].at("value").at("Health"), 125);
 }
 
-TEST_F(ScriptBuildTest, NewlyCreatedResourceBlueprintTemplateCompilesIntoTheGameplayCatalog)
+TEST_F(ScriptBuildTest, EmptyResourceClassHasSourceMetadataAndCreatesMultipleConfigurationAssets)
 {
     const auto content = root / "Content project (copy)";
     VL::Editor::SceneDocumentService documents(content);
     std::string error;
-    ASSERT_TRUE(documents.CreateScriptBlueprintSource("Maps/SC_test/Blueprints/BP_door.json",
-        "MyGame.DoorBlueprint", "Door", nlohmann::json::array(), error)) << error;
+    Write("Content project (copy)/Common/Blueprints/DifferentFilename.blueprint.cs",
+        "using VulkanLearn; namespace MyGame; public partial class DoorBlueprint : Blueprint {}");
+    Write("Content project (copy)/Common/Blueprints/AnotherPart.cs",
+        "namespace MyGame; public partial class DoorBlueprint {}");
     VL::ScriptBuildService service;
     service.Configure(VL_SCRIPT_DOTNET_EXECUTABLE, VL_SCRIPT_GAMEPLAY_PROJECT, root / "output",
         std::filesystem::path(VL_SCRIPT_OUTPUT_DIRECTORY) / "VulkanLearn.Runtime.dll",
@@ -179,6 +211,22 @@ TEST_F(ScriptBuildTest, NewlyCreatedResourceBlueprintTemplateCompilesIntoTheGame
     runtime.Initialize(true, VL_SCRIPT_OUTPUT_DIRECTORY, result->assembly.string());
     ASSERT_EQ(runtime.Classes().size(), 1u);
     EXPECT_EQ(runtime.Classes()[0].at("name"), "MyGame.DoorBlueprint");
+    EXPECT_EQ(runtime.Classes()[0].at("baseClass"), "VulkanLearn.Blueprint");
+    const auto files = runtime.Classes()[0].at("sourceFiles").get<std::vector<std::string>>();
+    ASSERT_EQ(files.size(), 2u);
+    bool foundSource = false;
+    for (const auto& file : files)
+        foundSource = foundSource || std::filesystem::path(file).filename() == "DifferentFilename.blueprint.cs";
+    EXPECT_TRUE(foundSource) << runtime.Classes().dump();
+    EXPECT_NE(VL::ScriptSourceEditorUrl(content, runtime.Classes(), "MyGame.DoorBlueprint")
+        .find("/Common/Blueprints/"), std::string::npos);
+    for (const char* name : {"BP_wooden_door", "BP_iron_door"})
+    {
+        const std::string path = std::string("Maps/SC_test/Blueprints/") + name + ".json";
+        ASSERT_TRUE(documents.CreateScriptBlueprintFromClass(path, "MyGame.DoorBlueprint",
+            name, runtime.Classes(), error)) << error;
+        EXPECT_TRUE(VL::ReadScriptBlueprintAsset(content, path).at("properties").empty());
+    }
 }
 
 TEST_F(ScriptBuildTest, ResourceProjectWithoutUserSourcesCompilesAnEmptyGameplayCatalog)
