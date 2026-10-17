@@ -15,7 +15,12 @@ from future scene authoring and richer asset workflows.
 
 ## Responsibilities
 
-`ui/runtime-hud.rml` and `.rcss` define a non-interactive scene-name HUD.
+`ui/runtime-hud.rml` and `.rcss` define a non-interactive scene-name and gameplay-text HUD.
+Optional C# gameplay publishes bounded text through `Blueprint.Hud.SetText/Remove`.
+`ScriptRuntimeView.hudLines` carries frozen values; GT binds their text to
+`game_ui.gameplay_text`, and RmlUi text interpolation escapes markup.
+Pause preserves the last text; Stop, World replacement and publisher cleanup clear it.
+Scripts have no DOM or layout access. The existing HUD visibility policy applies.
 The former Runtime Debug page, Settings button, F10/gamepad Start entry points
 and runtime-page binding callbacks are removed. Scene selection, actor settings,
 viewport modes and offline controls belong to the editor workspace; runtime
@@ -30,16 +35,39 @@ Destructive validation workflows remain console/launch operations, not buttons.
   read-only JSON inspector.
 - Central MI tabs: preview sphere with parameters, render states, texture bindings,
   save/preview controls and document status.
-- Bottom left/center: Content Browser (MI/Mesh/Scene/Texture/Terrain JSON sources
+- Central Blueprint tabs: Components tree, real 3D viewport and Details for class/defaults,
+  Instance Editable permissions, component transforms, mesh/camera configuration and root physics.
+- Bottom left/center: Content Browser (MI/Mesh/Scene/Texture/Terrain/Blueprint JSON sources
   tree, breadcrumbs, search, type filter, tiles/list, sorting, size and explicit
   refresh controls) / Renderer
-  (offline controls) tabs; switching only changes presentation.
+  (offline controls) / Log (Output and Scripts) tabs; switching only changes presentation.
 - Left/center: a scene Viewport image and game input.
 - Bottom edge: status bar.
 - Dirty-close modal: explicit Save/Discard/Cancel.
 
 The workspace supports actor property editing with GT-owned scene drafts and
-explicit conflict-aware scene saves; it has no undo system.
+explicit conflict-aware scene saves and bounded Scene Undo/Redo through formal World reload.
+Optional [C# Blueprints](csharp-blueprint-runtime.md) add placement, scalar properties and
+Play/Pause/Stop through value-only UiActions. GT validates candidates, stages the
+shared Scene document and queues formal LoadWorld; callbacks never invoke the host.
+Blueprint assets also use native RmlUi drag/drop into the level viewport; instance
+overrides/reset preserve sparse Scene data. Creating an asset emits a GT request
+with the target path and actor identity; callbacks never read or write files.
+Esc cancels a Blueprint drag before the normal mouse-capture toggle.
+The Outliner creation form also offers New Blueprint, emitting a value-only class/name/path request.
+GT creates paired resource-owned C# and BP JSON files and requests the existing compiler;
+the new type reaches the catalog through the normal assembly reload transaction.
+Blueprint Details also emits rename/duplicate/delete, inline component tree and root
+physics edits. Asset-owned component fields are editable on instances only when the BP
+explicitly exposes them; inherited root physics remains read-only.
+Scene scalar overrides require explicit Instance Editable permission from the BP
+asset, or the class attribute for inline Blueprints. Both GT requests and formal
+loading enforce this permission. Blueprint tabs produce revision-gated `blueprint.*`
+document commands; they do not mutate scene instances or run managed callbacks.
+Scene history is unavailable in asset pages, offline mode or Play/Pause.
+Blueprint pages instead route Edit Undo/Redo to their own revision-gated document history.
+Frozen per-path command completion feedback releases UI waiting state even when rejection leaves
+the document revision unchanged; history never writes files automatically.
 Level editing navigates an independent World-owned editor camera. The authored
 scene Camera remains editable without following viewport movement; immersion
 returns to the scene camera. Model/material previews keep their existing camera.
@@ -60,7 +88,7 @@ keeps the view types and command sink independent of any UI library.
 Same-frame edits coalesce into an ordered revision-gated atomic batch.
 Validate includes pending edits. Save opens confirmation after flushing pending
 edits and waits for an authoritative revision before enabling confirmation.
-The shared Save Content list includes dirty Scene, Mesh, Texture and MI files, supports
+The shared Save Content list includes dirty Scene, Mesh, Texture, Blueprint and MI files, supports
 individual checkbox selection, and never writes merely by opening.
 Content Browser marks these types in place and offers a path-targeted Save action.
 Mesh/Texture drafts enter through the [standard asset API](asset-modify-api.md).
@@ -70,9 +98,46 @@ Focused partial input is not overwritten by snapshots. Labels are RML-escaped.
 Color is currently edited as Linear RGBA numbers, without an sRGB palette.
 Texture edits can be saved; texture live-preview descriptor replacement remains
 unavailable. Numeric/render-state preview retains the existing renderer adapter.
+
+The dockable Log panel consumes `MaterialInstanceEditorSnapshot.logs`, an immutable
+process-wide `LogStore` snapshot. Diagnostics, RmlUi messages, managed logs, C#
+compiler output and Shader Compiler cache/build diagnostics carry sequence, timestamp,
+severity, source and optional file/line/column. Shader cache hits are Debug, misses
+and successful build summaries are Info, failed summaries are Error, and successful
+shaderc compilations report Warning only when shaderc returns warnings. Existing
+console output is preserved; shader compilation failures continue through their
+existing upper-level exception diagnostics rather than adding duplicate errors.
+The thread-safe store retains at most 4096 entries and 4 MiB of text; snapshots are
+shared until the revision changes. Output supports severity/source/text filters and
+auto-scroll. Clear advances a panel-local sequence watermark and leaves diagnostic
+history and existing console output intact. Rows are virtualized and hidden panels
+defer filtering/DOM work. Scripts reads frozen timing, per-object callback, physics,
+assembly and GC metrics at most four times per second, with 64 objects per page.
+Neither Log view invokes managed code, reads World, or modifies diagnostic producers.
+The six permanent dock panels include Log; version-1 saved layouts migrate by adding
+it to the Content stack while retaining active tabs, ratios and hidden panels.
 Content Browser selection is separate from the open document. A single click
 selects an item; a double click on MI emits the existing editable-document open
 command. Scene double-click reuses the existing `UiActionType::LoadWorld` transaction.
+Blueprint double-click opens its independent configuration tab with a `blueprint.get_document`
+request. Its central 3D image uses the shared renderer-owned scene viewport.
+`PreviewBlueprint` carries only path/revision; GT checks the authoritative BP draft and
+prepares its visual components in `SC_model_preview`. Component/root transform edits
+debounce for 350 ms; scalar defaults/permissions do not reload geometry. The preview
+does not create a managed context or simulate physics. Matching Blueprint identity and a
+new World generation gate image publication and camera input. Returning reloads the
+remembered level. BP drafts reach formal scene instances only after explicit save.
+The scene selector includes `blueprintInstance` levels and excludes editor-only `terrain`;
+type filtering does not replace formal scene or C# host validation.
+The Blueprint viewport supports mesh-component bounding-box picking and three-axis authoring gizmos.
+Translation follows parent axes, rotation edits local YXZ Euler components, and scale follows local axes.
+Dragging sends generation/revision-gated values to GT and continuously updates the real mesh/light
+transforms without reloading the World; release submits one document edit and cancellation restores
+the preview baseline. Self supports root rotation/scale, and the toolbar supplies translation,
+angle and scale snapping. Camera, light and Scene components have pickable helper graphics;
+mesh hits take priority over Self collision wires. Right drag orbits and middle drag pans.
+Stale preview geometry or a changed viewport cancels editing. No node graph, world-space gizmo
+or level gizmo is provided.
 MI tabs request `PreviewMaterial`, using the formal preview ball with an instance-only
 material binding in `SC_model_preview`. The material image supplies the viewport rectangle
 and uses UI-owned, generation-guarded orbit/pan/zoom input, just like the model image.

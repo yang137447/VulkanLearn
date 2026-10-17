@@ -3,11 +3,14 @@ add_executable(editor_ui_tests
     actorPropertyTests.cpp
     sceneDocumentTests.cpp
     assetDocumentTests.cpp
+    blueprintViewportInteractionTests.cpp
     modelPreviewCameraTests.cpp
     "${PROJECT_SOURCE_DIR}/source/engine/modelPreviewCamera.cpp"
     resourceEditorControllerTests.cpp
     widgetTests.cpp
     dockingTests.cpp
+    logPanelTests.cpp
+    gameplayHudTests.cpp
     contentBrowserTests.cpp
     contentBrowserPerformanceTests.cpp
     jsonAssetLibraryTests.cpp
@@ -23,12 +26,18 @@ add_executable(editor_ui_tests
     "${PROJECT_SOURCE_DIR}/source/resource/image/hostImage.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/editorContentBrowserController.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/editorDockingController.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/ui/editorLogPanel.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/editorJsonInspectorController.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/editorResourceEditorController.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/editorSceneActorTree.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/assets/editorJsonAssetLibrary.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/assets/editorJsonAssetTypes.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/materialInstanceAssetEditorPanel.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/ui/blueprintAssetEditorPanel.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/ui/blueprintLogicComponentsPanel.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/ui/sceneLogicComponentsPanel.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/ui/scriptPropertyControls.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/ui/blueprintViewportPanel.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/command/editorCommand.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/command/editorCommandJsonCodec.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/service/sceneDocumentService.cpp"
@@ -52,6 +61,11 @@ add_executable(editor_ui_tests
     "${PROJECT_SOURCE_DIR}/source/editor/scene/editorActorProperty.cpp"
     "${PROJECT_SOURCE_DIR}/source/sceneNode.cpp")
 target_include_directories(editor_ui_tests PRIVATE "${PROJECT_SOURCE_DIR}/source")
+if(MINGW)
+    set_source_files_properties(blueprintViewportInteractionTests.cpp
+        "${PROJECT_SOURCE_DIR}/source/editor/ui/blueprintViewportPanel.cpp"
+        PROPERTIES COMPILE_OPTIONS "-Wa,-mbig-obj")
+endif()
 target_compile_definitions(editor_ui_tests PRIVATE
     VL_EDITOR_ASSET_ROOT="${PROJECT_SOURCE_DIR}/ui")
 target_link_libraries(editor_ui_tests PRIVATE

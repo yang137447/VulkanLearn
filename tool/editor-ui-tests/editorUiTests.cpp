@@ -22,7 +22,10 @@
 
 #include "editor/ui/materialInstanceAssetEditorPanel.h"
 #include "editor/ui/editorSceneActorTree.h"
+#include "editor/ui/scriptPropertyControls.h"
 #include "editor/scene/editorSceneActorBuilder.h"
+#include "engine/blueprintPreviewRequest.h"
+#include "engine/modelPreviewRequest.h"
 #include "input/mouseMotionBatch.h"
 #include "sceneNode.h"
 #include "world/meshSceneObjectIdentity.h"
@@ -90,7 +93,7 @@ EditorSceneActorSnapshot PointLightActor(const std::string& name, float intensit
     return actor;
 }
 
-EditorSceneActorSnapshot CameraActor(const std::string& name)
+EditorSceneActorSnapshot CameraBlueprint(const std::string& name)
 {
     EditorSceneActorSnapshot actor;
     actor.type = EditorSceneActorType::Camera;
@@ -110,6 +113,8 @@ EditorSceneActorSnapshot CameraActor(const std::string& name)
 class TestSystem final : public Rml::SystemInterface
 {
 public:
+    double GetElapsedTime() override { return Rml::SystemInterface::GetElapsedTime() + timeOffset; }
+    double timeOffset = 0;
     bool LogMessage(Rml::Log::Type type, const Rml::String& message) override
     {
         if (type <= Rml::Log::LT_WARNING) errors.push_back(message);
@@ -262,6 +267,258 @@ protected:
     {
         panel->Build(snapshot);
         context->Update();
+    }
+    void OpenBlueprintAsset(const std::string& levelPath = {})
+    {
+        snapshot.activeDocument.reset(); snapshot.documentTabs.clear(); snapshot.selectedDocumentPath.clear();
+        auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+        catalog->revision = 10;
+        catalog->assets.push_back({"Blueprints/BP_test.json", EditorAssetKind::Blueprint, "Test Actor"});
+        snapshot.assetCatalog = catalog;
+        EditorAssetDocumentResultPayload actor;
+        actor.assetPath = "Blueprints/BP_test.json";
+        actor.documentRevision = 11;
+        actor.document = {{"type", "blueprint"}, {"name", "Test Actor"}, {"class", "Gameplay.Test"},
+            {"properties", {{"Speed", 45}, {"Secret", "fixed"}}}, {"instanceEditable", {"Speed"}},
+            {"components", nlohmann::json::array({{{"id", "pivot"}, {"type", "scene"}},
+                {{"id", "lens"}, {"type", "camera"}, {"parent", "pivot"}}})},
+            {"physics", {{"motion", "dynamic"}, {"shape", "sphere"}, {"radius", 30}}}};
+        snapshot.blueprintDocuments = {actor};
+        UiViewModelSnapshot view;
+        view.activeWorldPath = levelPath;
+        view.scripts.available = true;
+        view.scripts.classes = nlohmann::json::array({{{"name", "Gameplay.Test"}, {"properties", nlohmann::json::array({
+            {{"name", "Speed"}, {"type", "number"}, {"value", 10}},
+            {{"name", "Secret"}, {"type", "string"}, {"value", "default"}}
+        })}}, {{"name", "Gameplay.Empty"}, {"properties", nlohmann::json::array()}}});
+        panel->UpdateRuntimeView(view);
+        Refresh();
+        auto* tile = document->QuerySelector("#asset-list button");
+        ASSERT_NE(tile, nullptr);
+        tile->DispatchEvent("dblclick", {});
+        Refresh();
+        sink.commands.clear();
+        runtimeSink.actions.clear();
+    }
+    void PublishBlueprintViewport()
+    {
+        auto& authored = snapshot.blueprintDocuments[0];
+        authored.document["components"] = nlohmann::json::array({
+            {{"id", "body"}, {"type", "mesh"}, {"modelPath", "Common/Meshes/SM_test.json"}}});
+        EditorSceneActorSnapshot actor;
+        actor.type = EditorSceneActorType::Script;
+        actor.worldGeneration = 7;
+        actor.scenePath = ModelPreviewScenePath;
+        actor.identity = "blueprintInstance|" + BlueprintPreviewIdentity(authored.assetPath, 11);
+        actor.scriptClass = authored.document.at("class");
+        actor.scriptComponents = authored.document["components"];
+        EditorScriptComponentBounds bounds;
+        bounds.componentId = "body";
+        bounds.minimum = {-50, -50, -50};
+        bounds.maximum = {50, 50, 50};
+        actor.scriptComponentBounds.push_back(bounds);
+        EditorSceneActorSnapshot camera;
+        camera.type = EditorSceneActorType::Camera;
+        camera.worldGeneration = 7;
+        camera.scenePath = ModelPreviewScenePath;
+        camera.camera.position = {0, 0, 500};
+        camera.camera.clipNear = 1;
+        camera.camera.clipFar = 10000;
+        snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
+            std::vector<EditorSceneActorSnapshot>{actor, camera});
+        Refresh();
+    }
+    Rml::Vector2f BlueprintViewportPoint(float x = 0.5f, float y = 0.5f)
+    {
+        auto* surface = document->GetElementById("blueprint-asset-preview-surface");
+        const auto size = surface->GetBox().GetSize(Rml::BoxArea::Content);
+        return surface->GetAbsoluteOffset(Rml::BoxArea::Content) + Rml::Vector2f(size.x * x, size.y * y);
+    }
+    void PublishBlueprintLogicComponents()
+    {
+        snapshot.blueprintDocuments[0].document["scriptComponents"] = nlohmann::json::array({
+            {{"id", "health"}, {"class", "Gameplay.Health"}, {"properties", nlohmann::json::object()}}});
+        UiViewModelSnapshot view;
+        view.scripts.available = true;
+        view.scripts.classes = nlohmann::json::array({{{"name", "Gameplay.Test"}, {"properties", nlohmann::json::array()}}});
+        view.scripts.componentClasses = nlohmann::json::array({{{"name", "Gameplay.Health"},
+            {"properties", nlohmann::json::array({{{"name", "Maximum"}, {"type", "number"}, {"value", 100}}})}}});
+        panel->UpdateRuntimeView(view);
+        Refresh();
+    }
+    void OpenSceneLogicComponents(bool inherited = false)
+    {
+        snapshot.activeDocument.reset(); snapshot.documentTabs.clear();
+        EditorSceneActorSnapshot actor;
+        actor.type = EditorSceneActorType::Script;
+        actor.identity = "blueprintInstance|logic"; actor.worldGeneration = 42;
+        actor.displayName = "Logic"; actor.scriptClass = "Gameplay.Empty";
+        if (inherited) actor.scriptBlueprintPath = "Common/Blueprints/BP_logic.json";
+        actor.scriptLogicComponents = nlohmann::json::array({
+            {{"id", "health"}, {"class", "Gameplay.Health"}, {"enabled", true},
+                {"properties", {{"Speed", 20}, {"Offset", {1, 2, 3}}, {"Ticks", 8}}},
+                {"instanceEditable", {"Speed", "Offset"}}}});
+        actor.scriptLogicOverrides = {{"health", {{"Speed", 20}}}};
+        snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
+            std::vector<EditorSceneActorSnapshot>{actor});
+        snapshot.selectedActorIdentity = actor.identity;
+        UiViewModelSnapshot view;
+        view.scripts.available = true;
+        view.scripts.classes = nlohmann::json::array({
+            {{"name", "Gameplay.Empty"}, {"properties", nlohmann::json::array()}}});
+        view.scripts.componentClasses = nlohmann::json::array({{{"name", "Gameplay.Health"},
+            {"properties", nlohmann::json::array({
+                {{"name", "Speed"}, {"type", "number"}, {"value", 10}, {"instanceEditable", true}},
+                {{"name", "Offset"}, {"type", "vector3"}, {"value", {0, 0, 0}}, {"instanceEditable", true}},
+                {{"name", "Ticks"}, {"type", "number"}, {"value", 0}, {"instanceEditable", false}}})}}});
+        panel->UpdateRuntimeView(view);
+        Refresh();
+        runtimeSink.actions.clear();
+    }
+    UiViewModelSnapshot QuaternionRuntimeView()
+    {
+        const auto properties = nlohmann::json::array({
+            {{"name", "Orientation"}, {"type", "quaternion"}, {"value", {0, 0, 0, 1}},
+                {"instanceEditable", true}}});
+        UiViewModelSnapshot view;
+        view.scripts.available = true;
+        view.scripts.classes = nlohmann::json::array({
+            {{"name", "Gameplay.Test"}, {"properties", properties}}});
+        view.scripts.componentClasses = nlohmann::json::array({
+            {{"name", "Gameplay.Rotation"}, {"properties", properties}}});
+        return view;
+    }
+    void OpenQuaternionBlueprint(bool logic)
+    {
+        OpenBlueprintAsset();
+        auto& draft = snapshot.blueprintDocuments[0].document;
+        draft["properties"] = logic ? nlohmann::json::object() :
+            nlohmann::json{{"Orientation", {0, 0, 0, 1}}};
+        draft["instanceEditable"] = nlohmann::json::array();
+        if (logic)
+            draft["scriptComponents"] = nlohmann::json::array({
+                {{"id", "rotation"}, {"class", "Gameplay.Rotation"}, {"properties", nlohmann::json::object()}}});
+        auto view = QuaternionRuntimeView();
+        panel->UpdateRuntimeView(view);
+        Refresh();
+        if (logic) Click("[data-action=blueprint-asset-logic-select][data-index='0']");
+        else Click("[data-action=blueprint-asset-select-defaults]");
+        Refresh();
+        sink.commands.clear();
+        runtimeSink.actions.clear();
+    }
+    void OpenQuaternionScene(bool logic)
+    {
+        snapshot.activeDocument.reset(); snapshot.documentTabs.clear();
+        EditorSceneActorSnapshot actor;
+        actor.type = EditorSceneActorType::Script;
+        actor.identity = "blueprintInstance|rotation"; actor.worldGeneration = 42;
+        actor.displayName = "Rotation"; actor.scriptClass = "Gameplay.Test";
+        if (logic)
+            actor.scriptLogicComponents = nlohmann::json::array({
+                {{"id", "rotation"}, {"class", "Gameplay.Rotation"},
+                    {"properties", {{"Orientation", {0, 0, 0, 1}}}}}});
+        else
+        {
+            actor.scriptProperties = {{"Orientation", {0, 0, 0, 1}}};
+            actor.scriptInstanceEditable = {"Orientation"};
+        }
+        snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
+            std::vector<EditorSceneActorSnapshot>{actor});
+        snapshot.selectedActorIdentity = actor.identity;
+        panel->UpdateRuntimeView(QuaternionRuntimeView());
+        Refresh();
+        runtimeSink.actions.clear();
+    }
+    nlohmann::json RecursiveProperty()
+    {
+        using Json = nlohmann::json;
+        return {{"name", "Settings"}, {"type", "object"}, {"typeName", "Gameplay.Settings"},
+            {"instanceEditable", true}, {"fields", Json::array({
+                {{"name", "Damage"}, {"type", "number"}, {"value", 10}},
+                {{"name", "Cooldown"}, {"type", "number"}, {"value", 1}},
+                {{"name", "Offset"}, {"type", "vector3"}, {"value", {0, 0, 0}}},
+                {{"name", "Orientation"}, {"type", "quaternion"}, {"value", {0, 0, 0, 1}}},
+                {{"name", "Bursts"}, {"type", "array"}, {"typeName", "System.Single[]"},
+                    {"element", {{"type", "number"}, {"value", 0}}}, {"value", {0.1, 0.2, 0.3, 0.4, 0.5}}},
+                {{"name", "Ammo"}, {"type", "dictionary"}, {"typeName", "Dictionary<string,int>"},
+                    {"element", {{"type", "int"}, {"value", 0}}}, {"value", {{"primary", 30}}}}
+            })}, {"value", {{"Damage", 10}, {"Cooldown", 1}, {"Offset", {0, 0, 0}},
+                {"Orientation", {0, 0, 0, 1}}, {"Bursts", {0.1, 0.2, 0.3, 0.4, 0.5}},
+                {"Ammo", {{"primary", 30}}}}}};
+    }
+    UiViewModelSnapshot RecursiveRuntimeView()
+    {
+        UiViewModelSnapshot view;
+        view.scripts.available = true;
+        view.scripts.classes = nlohmann::json::array({
+            {{"name", "Gameplay.Test"}, {"properties", nlohmann::json::array({RecursiveProperty()})}}});
+        view.scripts.componentClasses = nlohmann::json::array({
+            {{"name", "Gameplay.SettingsLogic"}, {"properties", nlohmann::json::array({RecursiveProperty()})}}});
+        return view;
+    }
+    void OpenRecursiveBlueprint(bool logic = false)
+    {
+        using Json = nlohmann::json;
+        OpenBlueprintAsset();
+        auto& draft = snapshot.blueprintDocuments[0].document;
+        draft["properties"] = logic ? Json::object() : Json{{"Settings", {{"Damage", 15}, {"Cooldown", 2}}}};
+        draft["instanceEditable"] = Json::array({"Settings"});
+        if (logic)
+            draft["scriptComponents"] = Json::array({
+                {{"id", "settings"}, {"class", "Gameplay.SettingsLogic"},
+                    {"properties", {{"Settings", {{"Damage", 15}, {"Cooldown", 2}}}}}}});
+        panel->UpdateRuntimeView(RecursiveRuntimeView());
+        Refresh();
+        if (logic) Click("[data-action=blueprint-asset-logic-select][data-index='0']");
+        else Click("[data-action=blueprint-asset-select-defaults]");
+        Refresh();
+        sink.commands.clear();
+        runtimeSink.actions.clear();
+    }
+    void OpenRecursiveScene(bool logic = false, bool exposed = true)
+    {
+        using Json = nlohmann::json;
+        snapshot.activeDocument.reset(); snapshot.documentTabs.clear();
+        EditorSceneActorSnapshot actor;
+        actor.type = EditorSceneActorType::Script;
+        actor.identity = "blueprintInstance|recursive"; actor.worldGeneration = 42;
+        actor.displayName = "Recursive"; actor.scriptClass = "Gameplay.Test";
+        actor.scriptBlueprintPath = "Blueprints/BP_test.json";
+        const auto effective = RecursiveProperty().at("value");
+        if (logic)
+        {
+            actor.scriptLogicComponents = Json::array({
+                {{"id", "settings"}, {"class", "Gameplay.SettingsLogic"},
+                    {"properties", {{"Settings", effective}}},
+                    {"instanceEditable", exposed ? Json::array({"Settings"}) : Json::array()}}});
+            actor.scriptLogicOverrides = {{"settings", {{"Settings", {{"Damage", 15}, {"Cooldown", 2}}}}}};
+        }
+        else
+        {
+            actor.scriptProperties = {{"Settings", effective}};
+            if (exposed) actor.scriptInstanceEditable = {"Settings"};
+            actor.scriptOverrides = {{"Settings", {{"Damage", 15}, {"Cooldown", 2}}}};
+        }
+        snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
+            std::vector<EditorSceneActorSnapshot>{actor});
+        snapshot.selectedActorIdentity = actor.identity;
+        panel->UpdateRuntimeView(RecursiveRuntimeView());
+        Refresh();
+        runtimeSink.actions.clear();
+    }
+    void MovePointer(Rml::Vector2f point)
+    {
+        context->ProcessMouseMove(static_cast<int>(std::lround(point.x)), static_cast<int>(std::lround(point.y)), 0);
+    }
+    void BeginBlueprintMove()
+    {
+        Click("[data-action=blueprint-asset-select-component][data-index='0']");
+        Click("#blueprint-asset-tool-move");
+        Refresh();
+        const auto center = BlueprintViewportPoint();
+        MovePointer(center + Rml::Vector2f(40, 0));
+        context->ProcessMouseButtonDown(0, 0);
     }
     void SetValue(const std::string& id, const std::string& value)
     {
@@ -496,6 +753,42 @@ protected:
             if (item->GetAttribute<std::string>("data-path", "") == path) return item;
         return nullptr;
     }
+    void PrepareActorDrag()
+    {
+        snapshot.activeDocument.reset();
+        snapshot.documentTabs.clear();
+        auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+        catalog->assets = {{"Common/Blueprints/BP_rotator.json", EditorAssetKind::Blueprint, "A Rotator"},
+            {"Common/Meshes/SM_model.json", EditorAssetKind::Mesh, "B Mesh"}};
+        snapshot.assetCatalog = catalog;
+        Refresh();
+        Click("#workspace-viewport-tab");
+        UiViewModelSnapshot view;
+        view.activeWorldPath = "Maps/SC_test/SC_test.json";
+        view.scripts.available = true;
+        view.scripts.worldGeneration = 42;
+        panel->UpdateRuntimeView(view);
+        SettleOutliner();
+        runtimeSink.actions.clear();
+    }
+    void StartAssetDrag(const std::string& path)
+    {
+        auto* tile = BrowserItem(path);
+        ASSERT_NE(tile, nullptr);
+        const auto position = tile->GetAbsoluteOffset(Rml::BoxArea::Border) + Rml::Vector2f(15, 15);
+        context->ProcessMouseMove(static_cast<int>(position.x), static_cast<int>(position.y), 0);
+        context->ProcessMouseButtonDown(0, 0);
+        context->ProcessMouseMove(static_cast<int>(position.x + 12), static_cast<int>(position.y), 0);
+        context->Update();
+    }
+    void DropAssetOnViewport()
+    {
+        const auto rectangle = panel->GetSceneViewportRect();
+        context->ProcessMouseMove(rectangle.x + rectangle.width / 2,
+            rectangle.y + rectangle.height / 2, 0);
+        context->ProcessMouseButtonUp(0, 0);
+        context->Update();
+    }
     TestSystem system;
     TestRenderer renderer;
     CommandSink sink;
@@ -509,13 +802,1446 @@ protected:
     std::vector<EditorSceneActorSnapshot> actors;
 };
 
+TEST_F(EditorUiTest, ScriptBlueprintPlacementEmitsValuesAndWorldGeneration)
+{
+    snapshot.activeDocument.reset();
+    snapshot.documentTabs.clear();
+    panel->Build(snapshot);
+    UiViewModelSnapshot view;
+    view.scripts.available = true;
+    view.scripts.worldGeneration = 42;
+    view.scripts.classes = nlohmann::json::array({{{"name", "Gameplay.RotatorBlueprint"},
+        {"properties", nlohmann::json::array()}}});
+    panel->UpdateRuntimeView(view);
+    Click("#script-placement-toggle");
+    SetValue("script-name", "MyActor");
+    SetValue("script-mesh", "Common/Meshes/SM_test.json");
+    SelectOption("script-class", "Gameplay.RotatorBlueprint");
+    Click("#script-add");
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    const auto& action = runtimeSink.actions.front();
+    EXPECT_EQ(action.type, UiActionType::AddScriptBlueprint);
+    EXPECT_EQ(action.actorProperty.worldGeneration, 42u);
+    EXPECT_EQ(action.script.at("name"), "MyActor");
+    EXPECT_EQ(action.script.at("class"), "Gameplay.RotatorBlueprint");
+    EXPECT_EQ(action.script.at("modelPath"), "Common/Meshes/SM_test.json");
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, NewBlueprintSourceCreationEmitsValuesWithoutAnExistingClassOrActor)
+{
+    snapshot.activeDocument.reset();
+    snapshot.documentTabs.clear();
+    snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>();
+    panel->Build(snapshot);
+    UiViewModelSnapshot view;
+    view.scripts.available = true;
+    view.scripts.buildAvailable = true;
+    view.scripts.worldGeneration = 42;
+    panel->UpdateRuntimeView(view);
+    Click("#script-placement-toggle");
+    SelectOption("script-placement-mode", "create");
+    SetValue("script-new-class", "MyGame.DoorBlueprint");
+    SetValue("script-name", "Door");
+    SetValue("script-new-path", "Maps/SC_test/Blueprints/BP_door.json");
+    Click("#script-add");
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    const auto& action = runtimeSink.actions.front();
+    EXPECT_EQ(action.type, UiActionType::CreateScriptBlueprintAsset);
+    EXPECT_EQ(action.actorProperty.worldGeneration, 42u);
+    EXPECT_TRUE(action.actorProperty.identity.empty());
+    EXPECT_EQ(action.stringValue, "Maps/SC_test/Blueprints/BP_door.json");
+    EXPECT_EQ(action.script, (nlohmann::json{{"newClass", "MyGame.DoorBlueprint"}, {"name", "Door"}}));
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, NewBlueprintSourceCreationRequiresBuildAvailabilityAndEditingState)
+{
+    snapshot.activeDocument.reset();
+    snapshot.documentTabs.clear();
+    panel->Build(snapshot);
+    UiViewModelSnapshot view;
+    view.scripts.available = true;
+    view.scripts.worldGeneration = 42;
+    panel->UpdateRuntimeView(view);
+    Click("#script-placement-toggle");
+    SelectOption("script-placement-mode", "create");
+    Click("#script-add");
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    view.scripts.buildAvailable = true;
+    view.scripts.buildBusy = true;
+    panel->UpdateRuntimeView(view);
+    Click("#script-add");
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    view.scripts.buildBusy = false;
+    view.scripts.state = ScriptPlayState::Playing;
+    panel->UpdateRuntimeView(view);
+    Click("#script-add");
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    view.scripts.state = ScriptPlayState::Editing;
+    view.offlineMode = true;
+    panel->UpdateRuntimeView(view);
+    Click("#script-add");
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, ScriptVectorPropertySendsOnlyEditedAxisAndHonorsInstancePermission)
+{
+    snapshot.activeDocument.reset(); snapshot.documentTabs.clear();
+    EditorSceneActorSnapshot actor;
+    actor.type = EditorSceneActorType::Script;
+    actor.identity = "blueprintInstance|typed"; actor.worldGeneration = 42; actor.displayName = "Typed";
+    actor.scriptClass = "Gameplay.Typed";
+    actor.scriptProperties = {{"Offset", {1, 2, 3}}, {"Secret", {4, 5, 6}}};
+    actor.scriptInstanceEditable = {"Offset"};
+    snapshot.sceneActors = std::make_shared<std::vector<EditorSceneActorSnapshot>>(1, actor);
+    snapshot.selectedActorIdentity = actor.identity;
+    Refresh(); Click("#workspace-viewport-tab"); Refresh();
+    runtimeSink.actions.clear();
+    SetValue("script-property-0-1", "20");
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions[0].script,
+        (nlohmann::json{{"property", "Offset"}, {"axis", 1}, {"value", 20}}));
+    EXPECT_TRUE(Control("script-property-1-0")->HasAttribute("disabled"));
+    SetValue("script-property-1-0", "10");
+    EXPECT_EQ(runtimeSink.actions.size(), 1u);
+}
+
+TEST_F(EditorUiTest, ScriptBlueprintPropertyKeepsFocusAndEmitsPersistentIdentity)
+{
+    snapshot.activeDocument.reset();
+    snapshot.documentTabs.clear();
+    EditorSceneActorSnapshot actor;
+    actor.type = EditorSceneActorType::Script;
+    actor.identity = "blueprintInstance|persistent-a";
+    actor.worldGeneration = 42;
+    actor.displayName = "Rotator";
+    actor.scriptClass = "Gameplay.RotatorBlueprint";
+    actor.scriptProperties = {{"DegreesPerSecond", 45}};
+    actor.scriptInstanceEditable = {"DegreesPerSecond"};
+    snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
+        std::vector<EditorSceneActorSnapshot>{actor});
+    snapshot.selectedActorIdentity = actor.identity;
+    Refresh();
+    auto* control = Control("script-property-0");
+    ASSERT_NE(control, nullptr);
+    control->Focus();
+    SetValue("script-property-0", "90");
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions[0].type, UiActionType::SetScriptProperty);
+    EXPECT_EQ(runtimeSink.actions[0].actorProperty.identity, actor.identity);
+    EXPECT_EQ(runtimeSink.actions[0].script.at("value"), 90);
+    Refresh();
+    EXPECT_EQ(Control("script-property-0"), control);
+    EXPECT_EQ(control->GetValue(), "90");
+}
+
+TEST_F(EditorUiTest, ScriptComponentLocalEditEmitsStableIdAndPreservesFocusedControl)
+{
+    snapshot.activeDocument.reset(); snapshot.documentTabs.clear();
+    EditorSceneActorSnapshot actor;
+    actor.type = EditorSceneActorType::Script; actor.identity = "blueprintInstance|tree"; actor.worldGeneration = 42;
+    actor.displayName = "Tree"; actor.scriptClass = "Gameplay.RotatorBlueprint";
+    actor.scriptComponents = nlohmann::json::array({
+        {{"id", "pivot"}, {"type", "scene"}},
+        {{"id", "arm"}, {"type", "mesh"}, {"parent", "pivot"}, {"position", {10, 0, 0}}}});
+    snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
+        std::vector<EditorSceneActorSnapshot>{actor});
+    snapshot.selectedActorIdentity = actor.identity;
+    Refresh();
+    auto* control = Control("script-component-1-position-0");
+    ASSERT_TRUE(runtimeSink.actions.empty());
+    ASSERT_NE(control, nullptr);
+    EXPECT_GT(control->GetBox().GetSize(Rml::BoxArea::Border).x, 40.0f);
+    control->Focus();
+    SetValue("script-component-1-position-0", "25");
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    const auto& request = runtimeSink.actions[0];
+    EXPECT_EQ(request.type, UiActionType::SetScriptComponent);
+    EXPECT_EQ(request.actorProperty.worldGeneration, 42u);
+    EXPECT_EQ(request.script.at("component"), "arm");
+    EXPECT_EQ(request.script.at("axis"), 0);
+    EXPECT_EQ(request.script.at("value"), 25);
+    Refresh();
+    EXPECT_EQ(Control("script-component-1-position-0"), control);
+    EXPECT_EQ(control->GetValue(), "25");
+}
+
+TEST_F(EditorUiTest, InheritedComponentControlsAreReadOnlyAndRefreshEmitsNoEdits)
+{
+    snapshot.activeDocument.reset(); snapshot.documentTabs.clear();
+    EditorSceneActorSnapshot actor;
+    actor.type = EditorSceneActorType::Script; actor.identity = "blueprintInstance|tree"; actor.worldGeneration = 42;
+    actor.displayName = "Tree"; actor.scriptClass = "Gameplay.RotatorBlueprint";
+    actor.scriptBlueprintPath = "Common/Blueprints/BP_tree.json";
+    actor.scriptComponents = nlohmann::json::array({{{"id", "pivot"}, {"type", "scene"}}});
+    snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
+        std::vector<EditorSceneActorSnapshot>{actor});
+    snapshot.selectedActorIdentity = actor.identity;
+    Refresh();
+    ASSERT_NE(Control("script-component-0-position-0"), nullptr);
+    EXPECT_TRUE(Control("script-component-0-position-0")->HasAttribute("disabled"));
+    SetValue("script-component-0-position-0", "25");
+    Refresh();
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, InheritedComponentAllowsOnlyExposedFieldsAndPublishesSparseReset)
+{
+    snapshot.activeDocument.reset(); snapshot.documentTabs.clear();
+    EditorSceneActorSnapshot actor;
+    actor.type = EditorSceneActorType::Script; actor.identity = "blueprintInstance|tree"; actor.worldGeneration = 42;
+    actor.displayName = "Tree"; actor.scriptClass = "Gameplay.RotatorBlueprint";
+    actor.scriptBlueprintPath = "Common/Blueprints/BP_tree.json";
+    actor.scriptComponents = nlohmann::json::array({{{"id", "pivot"}, {"type", "scene"}, {"position", {10, 2, 3}}}});
+    actor.scriptComponentInstanceEditable = {{"pivot", {"position"}}};
+    actor.scriptComponentOverrides = {{"pivot", {{"position", {10, 2, 3}}}}};
+    snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
+        std::vector<EditorSceneActorSnapshot>{actor});
+    snapshot.selectedActorIdentity = actor.identity;
+    Refresh();
+    EXPECT_FALSE(Control("script-component-0-position-0")->HasAttribute("disabled"));
+    EXPECT_TRUE(Control("script-component-0-position-0")->IsClassSet("script-overridden"));
+    EXPECT_TRUE(Control("script-component-0-rotation-0")->HasAttribute("disabled"));
+    EXPECT_TRUE(Control("script-component-0-parent-0")->HasAttribute("disabled"));
+    EXPECT_TRUE(document->GetElementById("script-component-remove-0")->HasAttribute("disabled"));
+    SetValue("script-component-0-position-2", "30");
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions[0].script["component"], "pivot");
+    EXPECT_EQ(runtimeSink.actions[0].script["field"], "position");
+    EXPECT_EQ(runtimeSink.actions[0].script["axis"], 2);
+    EXPECT_EQ(runtimeSink.actions[0].script["value"], 30);
+    SetValue("script-component-0-rotation-0", "90");
+    EXPECT_EQ(runtimeSink.actions.size(), 1u);
+    Click("#script-component-reset-0-position");
+    ASSERT_EQ(runtimeSink.actions.size(), 2u);
+    EXPECT_EQ(runtimeSink.actions[1].type, UiActionType::SetScriptComponent);
+    EXPECT_EQ(runtimeSink.actions[1].script,
+        nlohmann::json({{"component", "pivot"}, {"field", "position"}, {"reset", true}}));
+}
+
+TEST_F(EditorUiTest, ScriptBlueprintRenameDuplicateAndDeleteUsePersistentIdentity)
+{
+    snapshot.activeDocument.reset(); snapshot.documentTabs.clear();
+    EditorSceneActorSnapshot actor;
+    actor.type = EditorSceneActorType::Script; actor.identity = "blueprintInstance|a"; actor.worldGeneration = 42;
+    actor.displayName = "Actor"; actor.scriptClass = "Gameplay.StaticBlueprint";
+    snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
+        std::vector<EditorSceneActorSnapshot>{actor});
+    snapshot.selectedActorIdentity = actor.identity;
+    Refresh();
+    SetValue("script-blueprint-name", "Renamed");
+    Click("#script-blueprint-duplicate");
+    Click("#script-blueprint-delete");
+    ASSERT_EQ(runtimeSink.actions.size(), 3u);
+    EXPECT_EQ(runtimeSink.actions[0].type, UiActionType::RenameScriptBlueprint);
+    EXPECT_EQ(runtimeSink.actions[0].script["name"], "Renamed");
+    EXPECT_EQ(runtimeSink.actions[1].type, UiActionType::DuplicateScriptBlueprint);
+    EXPECT_EQ(runtimeSink.actions[2].type, UiActionType::DeleteScriptBlueprint);
+    for (const auto& request : runtimeSink.actions)
+    {
+        EXPECT_EQ(request.actorProperty.identity, "blueprintInstance|a");
+        EXPECT_EQ(request.actorProperty.worldGeneration, 42u);
+    }
+}
+
+TEST_F(EditorUiTest, ScriptComponentCreationAndSubtreeRemovalProduceValuesOnly)
+{
+    snapshot.activeDocument.reset(); snapshot.documentTabs.clear();
+    EditorSceneActorSnapshot actor;
+    actor.type = EditorSceneActorType::Script; actor.identity = "blueprintInstance|a"; actor.worldGeneration = 42;
+    actor.displayName = "Actor"; actor.scriptClass = "Gameplay.StaticBlueprint";
+    actor.scriptComponents = nlohmann::json::array({{{"id", "pivot"}, {"type", "scene"}}});
+    snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
+        std::vector<EditorSceneActorSnapshot>{actor});
+    snapshot.selectedActorIdentity = actor.identity;
+    Refresh();
+    SelectOption("script-component-kind", "camera");
+    Click("#script-component-add");
+    Click("#script-component-remove-0");
+    ASSERT_EQ(runtimeSink.actions.size(), 2u);
+    EXPECT_EQ(runtimeSink.actions[0].type, UiActionType::AddScriptComponent);
+    EXPECT_EQ(runtimeSink.actions[0].script["node"]["type"], "camera");
+    EXPECT_EQ(runtimeSink.actions[1].type, UiActionType::RemoveScriptComponent);
+    EXPECT_EQ(runtimeSink.actions[1].script["component"], "pivot");
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, BlueprintAssetOpensDedicatedTabWithEditableDefaultsComponentsAndInstanceCheckboxes)
+{
+    OpenBlueprintAsset();
+    ASSERT_TRUE(document->GetElementById("blueprint-asset-editor")->IsVisible());
+    EXPECT_STREQ(EditorAssetKindName(EditorAssetKind::Blueprint), "Blueprint");
+    EXPECT_NE(document->GetElementById("blueprint-asset-component-tree")->GetInnerRML().find("Blueprint (Self)"),
+        std::string::npos);
+    EXPECT_EQ(document->GetElementById("blueprint-asset-details-title")->GetInnerRML(), "Details - Blueprint");
+    EXPECT_FALSE(document->GetElementById("resource-json-inspector")->IsVisible(true));
+    EXPECT_EQ(Control("blueprint-asset-property-0")->GetValue(), "45");
+    EXPECT_EQ(Control("blueprint-asset-property-1")->GetValue(), "fixed");
+    EXPECT_TRUE(document->GetElementById("blueprint-asset-instance-0")->HasAttribute("checked"));
+    EXPECT_FALSE(document->GetElementById("blueprint-asset-instance-1")->HasAttribute("checked"));
+    EXPECT_FALSE(Control("blueprint-asset-property-1")->HasAttribute("disabled"));
+    EXPECT_NE(document->GetElementById("blueprint-asset-component-1-parent-0"), nullptr);
+    EXPECT_EQ(Control("blueprint-asset-physics-motion")->GetValue(), "dynamic");
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    EXPECT_TRUE(sink.commands.empty());
+    EXPECT_TRUE(system.errors.empty()) << Errors();
+}
+
+TEST_F(EditorUiTest, BlueprintAssetCoalescesDefaultsExposureAndPhysicsWithAuthoredRevision)
+{
+    OpenBlueprintAsset();
+    SetValue("blueprint-asset-property-0", "90");
+    Click("#blueprint-asset-instance-1");
+    SelectOption("blueprint-asset-physics-shape", "capsule");
+    EXPECT_TRUE(sink.commands.empty());
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    const auto& command = sink.commands[0];
+    EXPECT_EQ(command.type, EditorCommandType::ModifyBlueprintDocument);
+    EXPECT_EQ(command.expectedDocumentRevision, 11);
+    const auto& payload = std::get<ModifyAssetDocumentPayload>(command.payload);
+    EXPECT_EQ(payload.assetPath, "Blueprints/BP_test.json");
+    ASSERT_EQ(payload.changes.size(), 3u);
+    EXPECT_EQ(payload.changes[0].field, "properties");
+    EXPECT_EQ(std::get<nlohmann::json>(payload.changes[0].value)["Speed"], 90);
+    EXPECT_EQ(std::get<nlohmann::json>(payload.changes[1].value), nlohmann::json::array({"Speed", "Secret"}));
+    EXPECT_EQ(std::get<nlohmann::json>(payload.changes[2].value)["shape"], "capsule");
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, BlueprintAssetRefreshAndUnchangedDefaultsDoNotAuthorOptionalFields)
+{
+    OpenBlueprintAsset();
+    SetValue("blueprint-asset-property-0", "45");
+    SetValue("blueprint-asset-component-0-position-0", "0");
+    SetValue("blueprint-asset-component-1-fov-0", "60");
+    SetValue("blueprint-asset-rotation-0", "0");
+    for (int frame = 0; frame < 3; ++frame) Refresh();
+    EXPECT_TRUE(sink.commands.empty());
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, BlueprintAssetClassSwitchClearsPreviousDefaultsAndExposureAtomically)
+{
+    OpenBlueprintAsset();
+    SelectOption("blueprint-asset-class", "Gameplay.Empty");
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    const auto& changes = std::get<ModifyAssetDocumentPayload>(sink.commands[0].payload).changes;
+    ASSERT_EQ(changes.size(), 3u);
+    EXPECT_EQ(changes[0].field, "class");
+    EXPECT_EQ(std::get<std::string>(changes[0].value), "Gameplay.Empty");
+    EXPECT_TRUE(std::get<nlohmann::json>(changes[1].value).empty());
+    EXPECT_TRUE(std::get<nlohmann::json>(changes[2].value).empty());
+}
+
+TEST_F(EditorUiTest, BlueprintAssetComponentParentTransformAndCameraEditUseOneCandidate)
+{
+    OpenBlueprintAsset();
+    SelectOption("blueprint-asset-component-1-parent-0", "");
+    SetValue("blueprint-asset-component-1-position-0", "25");
+    SetValue("blueprint-asset-component-1-fov-0", "75");
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    const auto& changes = std::get<ModifyAssetDocumentPayload>(sink.commands[0].payload).changes;
+    ASSERT_EQ(changes.size(), 1u);
+    EXPECT_EQ(changes[0].field, "components");
+    const auto& lens = std::get<nlohmann::json>(changes[0].value)[1];
+    EXPECT_EQ(lens["parent"], "");
+    EXPECT_EQ(lens["position"], nlohmann::json::array({25, 0, 0}));
+    EXPECT_EQ(lens["fov"], 75);
+}
+
+TEST_F(EditorUiTest, BlueprintAssetComponentPermissionsUseIndependentDocumentWhitelist)
+{
+    OpenBlueprintAsset();
+    Click("[data-action=blueprint-asset-select-component][data-index='1']");
+    Refresh();
+    auto* checkbox = document->GetElementById("blueprint-asset-component-instance-1-fov");
+    ASSERT_NE(checkbox, nullptr);
+    checkbox->ScrollIntoView(false);
+    context->Update();
+    MovePointer(checkbox->GetAbsoluteOffset(Rml::BoxArea::Border) + Rml::Vector2f(8, 8));
+    context->ProcessMouseButtonDown(0, 0);
+    context->ProcessMouseButtonUp(0, 0);
+    ASSERT_TRUE(checkbox->HasAttribute("checked"));
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    const auto& changes = std::get<ModifyAssetDocumentPayload>(sink.commands[0].payload).changes;
+    ASSERT_EQ(changes.size(), 1u);
+    EXPECT_EQ(changes[0].field, "componentInstanceEditable");
+    EXPECT_EQ(std::get<nlohmann::json>(changes[0].value), nlohmann::json({{"lens", {"fov"}}}));
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, BlueprintAssetComponentInstanceCheckboxFitsBelowVectorAtWindowSizes)
+{
+    OpenBlueprintAsset();
+    Click("[data-action=blueprint-asset-select-component][data-index='1']");
+    for (const auto size : {Rml::Vector2i(960, 540), Rml::Vector2i(1280, 720), Rml::Vector2i(1920, 1080)})
+    {
+        context->SetDimensions(size);
+        Refresh();
+        auto* input = document->GetElementById("blueprint-asset-component-1-position-0");
+        auto* checkbox = document->GetElementById("blueprint-asset-component-instance-1-position");
+        auto* permission = checkbox->GetParentNode();
+        auto* form = document->GetElementById("blueprint-asset-details-scroll");
+        checkbox->ScrollIntoView(false);
+        context->Update();
+        const auto inputOrigin = input->GetAbsoluteOffset(Rml::BoxArea::Border);
+        const auto inputSize = input->GetBox().GetSize(Rml::BoxArea::Border);
+        const auto permissionOrigin = permission->GetAbsoluteOffset(Rml::BoxArea::Border);
+        const auto permissionSize = permission->GetBox().GetSize(Rml::BoxArea::Border);
+        const auto formOrigin = form->GetAbsoluteOffset(Rml::BoxArea::Border);
+        EXPECT_GE(permissionOrigin.y, inputOrigin.y + inputSize.y);
+        EXPECT_GE(permissionOrigin.x, formOrigin.x);
+        EXPECT_LE(permissionOrigin.x + permissionSize.x, formOrigin.x + form->GetClientWidth() + 1);
+        EXPECT_FLOAT_EQ(checkbox->GetBox().GetSize(Rml::BoxArea::Border).x, 16);
+        EXPECT_GE(inputSize.x, 40);
+        EXPECT_TRUE(system.errors.empty()) << Errors();
+    }
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, BlueprintAssetCameraCreationAndSubtreeRemovalUseDocumentCommands)
+{
+    OpenBlueprintAsset();
+    SelectOption("blueprint-asset-component-kind", "camera");
+    Click("#blueprint-asset-component-add");
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    const auto& nodes = std::get<nlohmann::json>(
+        std::get<ModifyAssetDocumentPayload>(sink.commands.back().payload).changes[0].value);
+    ASSERT_EQ(nodes.size(), 3u);
+    EXPECT_EQ(nodes[2]["type"], "camera");
+    sink.commands.clear();
+    Click("#blueprint-asset-component-remove-0");
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_TRUE(std::get<nlohmann::json>(
+        std::get<ModifyAssetDocumentPayload>(sink.commands.back().payload).changes[0].value).empty());
+}
+
+TEST_F(EditorUiTest, ActorLightCreationAndPhotometryEditUseAtomicDocumentDraft)
+{
+    OpenBlueprintAsset();
+    SelectOption("blueprint-asset-component-kind", "spotLight");
+    Click("#blueprint-asset-component-add");
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    const auto nodes = std::get<nlohmann::json>(
+        std::get<ModifyAssetDocumentPayload>(sink.commands[0].payload).changes[0].value);
+    ASSERT_EQ(nodes.size(), 3u);
+    EXPECT_EQ(nodes[2]["intensityUnit"], "cd");
+    snapshot.blueprintDocuments[0].document["components"] = nodes;
+    snapshot.blueprintDocuments[0].documentRevision++;
+    sink.commands.clear();
+    Refresh();
+    SetValue("blueprint-asset-component-2-intensity-0", "2500");
+    SetValue("blueprint-asset-component-2-color-0", "0.2");
+    SetValue("blueprint-asset-component-2-color-2", "0.6");
+    SetValue("blueprint-asset-component-2-coneAngleInner-0", "10");
+    SetValue("blueprint-asset-component-2-coneAngleOuter-0", "20");
+    SelectOption("blueprint-asset-component-2-visible-0", "false");
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    const auto& lamp = std::get<nlohmann::json>(
+        std::get<ModifyAssetDocumentPayload>(sink.commands[0].payload).changes[0].value)[2];
+    EXPECT_EQ(lamp["intensity"], 2500);
+    EXPECT_EQ(lamp["color"], nlohmann::json::array({0.2, 1, 0.6}));
+    EXPECT_EQ(lamp["coneAngleInner"], 10);
+    EXPECT_EQ(lamp["coneAngleOuter"], 20);
+    EXPECT_FALSE(lamp["visible"]);
+    sink.commands.clear();
+    Refresh();
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, BlueprintAssetFocusedPartialDefaultSurvivesRefreshAndPlayingDisablesAuthoring)
+{
+    OpenBlueprintAsset();
+    auto* input = Control("blueprint-asset-property-0");
+    input->Focus(); input->SetValue("1e-");
+    Refresh();
+    EXPECT_EQ(Control("blueprint-asset-property-0"), input);
+    EXPECT_EQ(input->GetValue(), "1e-");
+    EXPECT_TRUE(sink.commands.empty());
+    UiViewModelSnapshot view;
+    view.scripts.available = true; view.scripts.state = ScriptPlayState::Playing;
+    view.scripts.classes = nlohmann::json::array({{{"name", "Gameplay.Test"}, {"properties", nlohmann::json::array({
+        {{"name", "Speed"}, {"type", "number"}, {"value", 10}},
+        {{"name", "Secret"}, {"type", "string"}, {"value", "default"}}
+    })}}});
+    panel->UpdateRuntimeView(view);
+    EXPECT_TRUE(Control("blueprint-asset-property-0")->HasAttribute("disabled"));
+    EXPECT_TRUE(document->GetElementById("blueprint-asset-component-add")->HasAttribute("disabled"));
+}
+
+TEST_F(EditorUiTest, BlueprintAssetDirtyCloseCancelsThenSavesAtCurrentRevision)
+{
+    OpenBlueprintAsset();
+    snapshot.blueprintDocuments[0].dirty = true;
+    snapshot.blueprintDocuments[0].documentRevision = 12;
+    snapshot.modifiedDocuments.push_back({"Blueprints/BP_test.json", EditorAssetKind::Blueprint, 12});
+    Refresh();
+    EXPECT_NE(document->QuerySelector(".workspace-resource-tab")->GetInnerRML().find("*"), std::string::npos);
+    Click("#resource-close");
+    EXPECT_TRUE(panel->HasModal());
+    Click("[data-action=close-cancel]"); Refresh();
+    EXPECT_TRUE(document->GetElementById("blueprint-asset-editor")->IsVisible());
+    EXPECT_TRUE(sink.commands.empty());
+    Click("#resource-close"); Click("#close-save"); Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands[0].type, EditorCommandType::SaveBlueprintDocument);
+    EXPECT_EQ(sink.commands[0].expectedDocumentRevision, 12);
+    snapshot.blueprintDocuments[0].dirty = false;
+    snapshot.modifiedDocuments.clear();
+    snapshot.saveFeedback.push_back({1, "Blueprints/BP_test.json", true, "Saved"});
+    Refresh();
+    EXPECT_FALSE(panel->HasModal());
+    EXPECT_FALSE(panel->IsResourceEditorVisible());
+}
+
+TEST_F(EditorUiTest, BlueprintAssetFailedSaveKeepsDraftTabAndAllowsRetry)
+{
+    OpenBlueprintAsset();
+    snapshot.blueprintDocuments[0].dirty = true;
+    snapshot.modifiedDocuments.push_back({"Blueprints/BP_test.json", EditorAssetKind::Blueprint, 11});
+    Refresh();
+    Click("#resource-close"); Click("#close-save"); Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    snapshot.saveFeedback.push_back({1, "Blueprints/BP_test.json", false, "Source changed"});
+    snapshot.statusMessage = "Source changed";
+    Refresh();
+    EXPECT_TRUE(panel->HasModal());
+    EXPECT_TRUE(panel->IsResourceEditorVisible());
+    EXPECT_FALSE(document->GetElementById("close-save")->HasAttribute("disabled"));
+    EXPECT_NE(document->GetElementById("close-document-status")->GetInnerRML().find("Source changed"),
+        std::string::npos);
+    Click("#close-save"); Refresh();
+    ASSERT_EQ(sink.commands.size(), 2u);
+    EXPECT_EQ(sink.commands.back().type, EditorCommandType::SaveBlueprintDocument);
+    EXPECT_EQ(sink.commands.back().expectedDocumentRevision, 11);
+}
+
+TEST_F(EditorUiTest, BlueprintAssetDiscardRevertsOnlyBlueprintDocumentWithoutSaving)
+{
+    OpenBlueprintAsset();
+    snapshot.blueprintDocuments[0].dirty = true;
+    Refresh();
+    Click("#resource-close"); Click("[data-action=close-discard]"); Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands[0].type, EditorCommandType::RevertBlueprintDocument);
+    EXPECT_EQ(sink.commands[0].expectedDocumentRevision, 11);
+    EXPECT_TRUE(panel->HasModal());
+    EXPECT_TRUE(panel->IsResourceEditorVisible());
+    snapshot.blueprintDocuments[0].dirty = false;
+    snapshot.blueprintDocuments[0].documentRevision = 12;
+    Refresh();
+    EXPECT_FALSE(panel->HasModal());
+    EXPECT_FALSE(panel->IsResourceEditorVisible());
+}
+
+TEST_F(EditorUiTest, BlueprintAssetSaveFeedbackCannotCloseANewerDirtyDraft)
+{
+    OpenBlueprintAsset();
+    snapshot.blueprintDocuments[0].dirty = true;
+    Refresh();
+    Click("#resource-close"); Click("#close-save"); Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    snapshot.blueprintDocuments[0].documentRevision = 13;
+    snapshot.saveFeedback.push_back({1, "Blueprints/BP_test.json", true, "Saved older revision"});
+    Refresh();
+    EXPECT_TRUE(panel->HasModal());
+    EXPECT_TRUE(panel->IsResourceEditorVisible());
+    EXPECT_FALSE(document->GetElementById("close-save")->HasAttribute("disabled"));
+}
+
+TEST_F(EditorUiTest, BlueprintAssetImmediateDiscardWaitsForPendingEditRevisionAndCleanSnapshot)
+{
+    OpenBlueprintAsset();
+    SetValue("blueprint-asset-property-0", "90");
+    Click("#resource-close"); Click("#close-discard");
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands[0].type, EditorCommandType::ModifyBlueprintDocument);
+    snapshot.blueprintDocuments[0].dirty = true;
+    snapshot.blueprintDocuments[0].documentRevision = 12;
+    snapshot.blueprintDocuments[0].document["properties"]["Speed"] = 90;
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 2u);
+    EXPECT_EQ(sink.commands[1].type, EditorCommandType::RevertBlueprintDocument);
+    EXPECT_EQ(sink.commands[1].expectedDocumentRevision, 12);
+    EXPECT_TRUE(panel->IsResourceEditorVisible());
+    snapshot.blueprintDocuments[0].dirty = false;
+    snapshot.blueprintDocuments[0].documentRevision = 13;
+    Refresh();
+    EXPECT_FALSE(panel->HasModal());
+    EXPECT_FALSE(panel->IsResourceEditorVisible());
+}
+
+TEST_F(EditorUiTest, BlueprintAssetRejectedDiscardKeepsDialogAndRetriesWithAuthoritativeRevision)
+{
+    OpenBlueprintAsset();
+    snapshot.blueprintDocuments[0].dirty = true;
+    Refresh();
+    Click("#resource-close"); Click("#close-discard"); Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    snapshot.blueprintDocuments[0].documentRevision = 12;
+    snapshot.statusMessage = "The document revision changed";
+    Refresh();
+    EXPECT_TRUE(panel->HasModal());
+    EXPECT_TRUE(panel->IsResourceEditorVisible());
+    EXPECT_FALSE(document->GetElementById("close-discard")->HasAttribute("disabled"));
+    Click("#close-discard"); Refresh();
+    ASSERT_EQ(sink.commands.size(), 2u);
+    EXPECT_EQ(sink.commands.back().expectedDocumentRevision, 12);
+}
+
+TEST_F(EditorUiTest, BlueprintAssetFormScrollsAndInstanceCheckboxHasVisibleCheckedStateAtWindowSizes)
+{
+    OpenBlueprintAsset();
+    snapshot.blueprintDocuments[0].document["physics"]["shape"] = "box";
+    for (const auto size : {Rml::Vector2i(960, 540), Rml::Vector2i(1280, 720), Rml::Vector2i(1920, 1080)})
+    {
+        context->SetDimensions(size);
+        Refresh();
+        auto* form = document->GetElementById("blueprint-asset-details-scroll");
+        auto* checked = document->GetElementById("blueprint-asset-instance-0");
+        auto* unchecked = document->GetElementById("blueprint-asset-instance-1");
+        EXPECT_GT(form->GetClientWidth(), 200);
+        EXPECT_GT(form->GetScrollHeight(), form->GetClientHeight());
+        const auto checkboxSize = checked->GetBox().GetSize(Rml::BoxArea::Border);
+        EXPECT_FLOAT_EQ(checkboxSize.x, 16);
+        EXPECT_FLOAT_EQ(checkboxSize.y, 16);
+        EXPECT_NE(checked->GetProperty("decorator")->ToString(), unchecked->GetProperty("decorator")->ToString());
+        for (const char* vector : {"rotation", "scale", "physics-extents"})
+        {
+            for (size_t axis = 0; axis < 3; ++axis)
+            {
+                auto* input = document->GetElementById("blueprint-asset-" + std::string(vector) + "-" + std::to_string(axis));
+                ASSERT_NE(input, nullptr);
+                const auto bounds = input->GetBox().GetSize(Rml::BoxArea::Border);
+                EXPECT_GE(bounds.x, 40) << input->GetId();
+                EXPECT_GE(bounds.y, 24) << input->GetId();
+            }
+        }
+        auto* tree = document->GetElementById("blueprint-asset-components");
+        auto* details = document->GetElementById("blueprint-asset-details");
+        auto* preview = document->GetElementById("blueprint-asset-preview");
+        const auto previewBounds = preview->GetBox().GetSize(Rml::BoxArea::Border);
+        EXPECT_GE(previewBounds.x, 80);
+        EXPECT_GT(previewBounds.y, 80);
+        EXPECT_GE(tree->GetClientWidth(), 150);
+        EXPECT_GT(details->GetClientWidth(), 200);
+        EXPECT_LE(tree->GetAbsoluteOffset(Rml::BoxArea::Border).x + tree->GetBox().GetSize(Rml::BoxArea::Border).x,
+            preview->GetAbsoluteOffset(Rml::BoxArea::Border).x + 1);
+        EXPECT_LE(preview->GetAbsoluteOffset(Rml::BoxArea::Border).x + previewBounds.x,
+            details->GetAbsoluteOffset(Rml::BoxArea::Border).x + 1);
+        EXPECT_LE(form->GetAbsoluteOffset(Rml::BoxArea::Border).y + form->GetBox().GetSize(Rml::BoxArea::Border).y,
+            document->GetElementById("blueprint-asset-editor")->GetAbsoluteOffset(Rml::BoxArea::Border).y +
+            document->GetElementById("blueprint-asset-editor")->GetClientHeight() + 1);
+        EXPECT_TRUE(system.errors.empty()) << Errors();
+    }
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, BlueprintAssetPreviewRefreshRequestsAcceptedRevisionWithoutSubmittingDocumentChanges)
+{
+    OpenBlueprintAsset();
+    Click("#blueprint-asset-preview-refresh");
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions[0].type, UiActionType::PreviewBlueprint);
+    EXPECT_EQ(runtimeSink.actions[0].stringValue, "Blueprints/BP_test.json");
+    EXPECT_EQ(runtimeSink.actions[0].blueprintPreviewRevision, 11u);
+    EXPECT_TRUE(sink.commands.empty());
+    EXPECT_FALSE(document->GetElementById("blueprint-asset-preview-image")->IsVisible(true));
+    EXPECT_GT(panel->GetSceneViewportRect().width, 0u);
+}
+
+TEST_F(EditorUiTest, BlueprintAssetVectorComponentsCoalesceAndEnumsUseDeclaredOptions)
+{
+    OpenBlueprintAsset();
+    UiViewModelSnapshot view;
+    view.scripts.available = true;
+    view.scripts.classes = nlohmann::json::array({{{"name", "Gameplay.Test"},
+        {"properties", nlohmann::json::array({
+            {{"name", "Offset"}, {"type", "vector3"}, {"value", {1, 2, 3}}},
+            {{"name", "Mode"}, {"type", "enum"}, {"value", "Walk"}, {"options", {"Walk", "Fly"}}}
+        })}}});
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    sink.commands.clear();
+    SetValue("blueprint-asset-property-0-0", "10");
+    SetValue("blueprint-asset-property-0-2", "30");
+    SelectOption("blueprint-asset-property-1", "Fly");
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    const auto& payload = std::get<ModifyAssetDocumentPayload>(sink.commands[0].payload);
+    for (const auto& change : payload.changes)
+        if (change.field == "properties")
+        {
+            const auto& properties = std::get<nlohmann::json>(change.value);
+            EXPECT_EQ(properties["Offset"], nlohmann::json::array({10, 2, 30}));
+            EXPECT_EQ(properties["Mode"], "Fly");
+            return;
+        }
+    FAIL() << "Missing typed properties change";
+}
+
+TEST_F(EditorUiTest, BlueprintAssetNativeViewportTabRestoresRememberedLevel)
+{
+    OpenBlueprintAsset("Maps/SC_level/SC_level.json");
+    UiViewModelSnapshot view;
+    view.scripts.available = true;
+    view.activeWorldPath = ModelPreviewScenePath;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    runtimeSink.actions.clear();
+    auto* tab = document->GetElementById("workspace-viewport-tab");
+    const auto point = tab->GetAbsoluteOffset(Rml::BoxArea::Border) + Rml::Vector2f(20, 12);
+    context->ProcessMouseMove(int(point.x), int(point.y), 0);
+    context->ProcessMouseButtonDown(0, 0);
+    Refresh();
+    context->ProcessMouseButtonUp(0, 0);
+    Refresh();
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions[0].type, UiActionType::LoadWorld);
+    EXPECT_EQ(runtimeSink.actions[0].stringValue, "Maps/SC_level/SC_level.json");
+}
+
+TEST_F(EditorUiTest, BlueprintAssetPreviewWaitsForMatchingPublishedIdentityAndOwnsCameraInput)
+{
+    OpenBlueprintAsset();
+    EditorSceneActorSnapshot preview;
+    preview.type = EditorSceneActorType::Script;
+    preview.worldGeneration = 7;
+    preview.scenePath = ModelPreviewScenePath;
+    preview.identity = "blueprintInstance|" + BlueprintPreviewIdentity("Blueprints/BP_other.json", 11);
+    auto actors = std::make_shared<std::vector<EditorSceneActorSnapshot>>(1, preview);
+    snapshot.sceneActors = actors; Refresh();
+    auto* image = document->GetElementById("blueprint-asset-preview-image");
+    EXPECT_FALSE(image->IsVisible(true));
+    (*actors)[0].identity = "blueprintInstance|" + BlueprintPreviewIdentity("Blueprints/BP_test.json", 10);
+    Refresh();
+    EXPECT_FALSE(image->IsVisible(true));
+    (*actors)[0].identity = "blueprintInstance|" + BlueprintPreviewIdentity("Blueprints/BP_test.json", 11);
+    Refresh();
+    ASSERT_TRUE(image->IsVisible(true));
+    const auto origin = image->GetAbsoluteOffset();
+    const auto size = image->GetBox().GetSize();
+    context->ProcessMouseMove(int(origin.x + size.x / 2), int(origin.y + size.y / 2), 0);
+    context->ProcessMouseWheel(Rml::Vector2f(0, -2), 0);
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions[0].type, UiActionType::NavigateModelPreview);
+    EXPECT_EQ(runtimeSink.actions[0].previewCamera.worldGeneration, 7u);
+    EXPECT_EQ(runtimeSink.actions[0].previewCamera.mode, ModelPreviewNavigation::Zoom);
+    EXPECT_FALSE(panel->IsSceneViewportElement(image));
+}
+
+TEST_F(EditorUiTest, BlueprintAssetAcceptedVisualDraftDebouncesAndDoesNotSave)
+{
+    OpenBlueprintAsset();
+    snapshot.blueprintDocuments[0].dirty = true;
+    snapshot.blueprintDocuments[0].documentRevision = 12;
+    snapshot.blueprintDocuments[0].document["components"][0]["position"] = {20, 0, 0};
+    Refresh();
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    system.timeOffset += 1;
+    Refresh();
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions[0].type, UiActionType::PreviewBlueprint);
+    EXPECT_EQ(runtimeSink.actions[0].blueprintPreviewRevision, 12u);
+    Refresh(); Refresh();
+    EXPECT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_TRUE(sink.commands.empty());
+    EXPECT_TRUE(snapshot.blueprintDocuments[0].dirty);
+}
+
+TEST_F(EditorUiTest, BlueprintAssetDefaultPropertyAndExposureChangesDoNotReloadGeometry)
+{
+    OpenBlueprintAsset();
+    snapshot.blueprintDocuments[0].documentRevision = 12;
+    snapshot.blueprintDocuments[0].document["properties"]["Speed"] = 90;
+    snapshot.blueprintDocuments[0].document["instanceEditable"] = nlohmann::json::array();
+    Refresh(); system.timeOffset += 1; Refresh();
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, BlueprintAssetPendingInputsAreNotSentAsPreviewCandidates)
+{
+    OpenBlueprintAsset();
+    SetValue("blueprint-asset-rotation-0", "30");
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    system.timeOffset += 1; Refresh();
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, BlueprintAssetComponentSelectionShowsOnlyItsDetailsWithoutModifyingDocument)
+{
+    OpenBlueprintAsset();
+    auto* defaults = document->GetElementById("blueprint-asset-defaults");
+    auto* lens = document->GetElementById("blueprint-asset-component-details-1");
+    EXPECT_TRUE(defaults->IsVisible(true));
+    EXPECT_FALSE(lens->IsVisible(true));
+    auto* row = document->QuerySelector("[data-action=blueprint-asset-select-component][data-index='1']");
+    ASSERT_NE(row, nullptr);
+    const auto point = row->GetAbsoluteOffset(Rml::BoxArea::Border) + Rml::Vector2f(12, 12);
+    context->ProcessMouseMove(static_cast<int>(point.x), static_cast<int>(point.y), 0);
+    context->ProcessMouseButtonDown(0, 0);
+    context->ProcessMouseButtonUp(0, 0);
+    Refresh();
+    EXPECT_FALSE(defaults->IsVisible(true));
+    EXPECT_TRUE(lens->IsVisible(true));
+    EXPECT_FALSE(document->GetElementById("blueprint-asset-component-details-0")->IsVisible(true));
+    EXPECT_TRUE(document->QuerySelector("#blueprint-asset-tree-1 .list-item")->IsClassSet("selected"));
+    EXPECT_EQ(Control("blueprint-asset-component-1-fov-0")->GetValue(), "60");
+    for (size_t axis = 0; axis < 3; ++axis)
+        EXPECT_GE(Control("blueprint-asset-component-1-position-" + std::to_string(axis))->GetClientWidth(), 40);
+    Click("[data-action=blueprint-asset-select-defaults]");
+    Refresh();
+    EXPECT_TRUE(defaults->IsVisible(true));
+    EXPECT_FALSE(lens->IsVisible(true));
+    EXPECT_TRUE(sink.commands.empty());
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, BlueprintLogicSelectionHidesSpatialGizmoAndViewportPickSelectsOnlyMesh)
+{
+    OpenBlueprintAsset();
+    PublishBlueprintViewport();
+    PublishBlueprintLogicComponents();
+    Click("#blueprint-asset-tool-rotate");
+    Click("[data-action=blueprint-asset-logic-select][data-index='0']");
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("blueprint-asset-logic-details-0")->IsVisible(true));
+    EXPECT_FALSE(document->GetElementById("blueprint-asset-defaults")->IsVisible(true));
+    EXPECT_FALSE(document->GetElementById("blueprint-asset-component-details-0")->IsVisible(true));
+    EXPECT_TRUE(document->QuerySelector("#blueprint-asset-logic-tree-0 .list-item")->IsClassSet("selected"));
+    for (size_t axis = 0; axis < 3; ++axis)
+        for (size_t line = 0; line < 48; ++line)
+            EXPECT_FALSE(document->GetElementById("blueprint-gizmo-" + std::to_string(axis) + "-" +
+                std::to_string(line))->IsVisible(true));
+    MovePointer(BlueprintViewportPoint());
+    context->ProcessMouseButtonDown(0, 0);
+    context->ProcessMouseButtonUp(0, 0);
+    Refresh();
+    EXPECT_FALSE(document->GetElementById("blueprint-asset-logic-details-0")->IsVisible(true));
+    EXPECT_TRUE(document->GetElementById("blueprint-asset-component-details-0")->IsVisible(true));
+    EXPECT_FALSE(document->QuerySelector("#blueprint-asset-logic-tree-0 .list-item")->IsClassSet("selected"));
+    EXPECT_TRUE(sink.commands.empty());
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, BlueprintLogicSelectionFallsBackImmediatelyWhenRemoved)
+{
+    OpenBlueprintAsset();
+    PublishBlueprintLogicComponents();
+    Click("[data-action=blueprint-asset-logic-select][data-index='0']");
+    Refresh();
+    snapshot.blueprintDocuments[0].document.erase("scriptComponents");
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("blueprint-asset-defaults")->IsVisible(true));
+    EXPECT_TRUE(document->QuerySelector("#blueprint-asset-tree-root .list-item")->IsClassSet("selected"));
+    EXPECT_NE(document->GetElementById("blueprint-asset-details-title")->GetInnerRML().find("Blueprint"), std::string::npos);
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, BlueprintLogicSelectionDoesNotLeakToAnotherAssetWithSameComponentId)
+{
+    OpenBlueprintAsset();
+    PublishBlueprintLogicComponents();
+    Click("[data-action=blueprint-asset-logic-select][data-index='0']");
+    Refresh();
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>(*snapshot.assetCatalog);
+    catalog->revision++;
+    catalog->assets.push_back({"Blueprints/BP_other.json", EditorAssetKind::Blueprint, "Other"});
+    snapshot.assetCatalog = catalog;
+    auto other = snapshot.blueprintDocuments[0];
+    other.assetPath = "Blueprints/BP_other.json";
+    other.document["name"] = "Other";
+    snapshot.blueprintDocuments.push_back(other);
+    Refresh();
+    auto* tile = document->QuerySelector("#asset-list button[data-path='Blueprints/BP_other.json']");
+    ASSERT_NE(tile, nullptr);
+    tile->DispatchEvent("dblclick", {});
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("blueprint-asset-defaults")->IsVisible(true));
+    EXPECT_FALSE(document->GetElementById("blueprint-asset-logic-details-0")->IsVisible(true));
+    EXPECT_TRUE(document->QuerySelector("#blueprint-asset-tree-root .list-item")->IsClassSet("selected"));
+    EXPECT_FALSE(document->QuerySelector("#blueprint-asset-logic-tree-0 .list-item")->IsClassSet("selected"));
+}
+
+TEST_F(EditorUiTest, BlueprintAssetSelectedComponentUsesStableIdAcrossReorderAndFallsBackWhenRemoved)
+{
+    OpenBlueprintAsset();
+    Click("[data-action=blueprint-asset-select-component][data-index='1']");
+    Refresh();
+    auto& nodes = snapshot.blueprintDocuments[0].document["components"];
+    std::swap(nodes[0], nodes[1]);
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("blueprint-asset-component-details-0")->IsVisible(true));
+    EXPECT_TRUE(document->QuerySelector("#blueprint-asset-tree-0 .list-item")->IsClassSet("selected"));
+    nodes.erase(nodes.begin());
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("blueprint-asset-defaults")->IsVisible(true));
+    EXPECT_TRUE(document->QuerySelector("#blueprint-asset-tree-root .list-item")->IsClassSet("selected"));
+    EXPECT_TRUE(sink.commands.empty());
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, BlueprintAssetSelectingComponentRetainsPendingDefaultEditAndCurrentRevision)
+{
+    OpenBlueprintAsset();
+    SetValue("blueprint-asset-property-0", "90");
+    Click("[data-action=blueprint-asset-select-component][data-index='1']");
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands[0].expectedDocumentRevision, 11);
+    const auto& changes = std::get<ModifyAssetDocumentPayload>(sink.commands[0].payload).changes;
+    ASSERT_EQ(changes.size(), 1u);
+    EXPECT_EQ(changes[0].field, "properties");
+    EXPECT_EQ(std::get<nlohmann::json>(changes[0].value)["Speed"], 90);
+    EXPECT_TRUE(document->GetElementById("blueprint-asset-component-details-1")->IsVisible(true));
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, SceneDetailsCannotEditUnexposedActorPropertyEvenWithForgedChange)
+{
+    snapshot.activeDocument.reset(); snapshot.documentTabs.clear();
+    EditorSceneActorSnapshot actor;
+    actor.type = EditorSceneActorType::Script; actor.identity = "blueprintInstance|a"; actor.worldGeneration = 42;
+    actor.displayName = "Actor";
+    actor.scriptProperties = {{"Secret", "fixed"}, {"Speed", 45}};
+    actor.scriptInstanceEditable = {"Speed"};
+    snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
+        std::vector<EditorSceneActorSnapshot>{actor});
+    snapshot.selectedActorIdentity = actor.identity;
+    Refresh();
+    EXPECT_TRUE(Control("script-property-0")->HasAttribute("disabled"));
+    EXPECT_FALSE(Control("script-property-1")->HasAttribute("disabled"));
+    SetValue("script-property-0", "forged");
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, ScriptPhysicsControlsKeepFocusAndEmitTypedShapeCoefficientAndTrigger)
+{
+    snapshot.activeDocument.reset(); snapshot.documentTabs.clear();
+    EditorSceneActorSnapshot actor;
+    actor.type = EditorSceneActorType::Script; actor.identity = "blueprintInstance|a"; actor.worldGeneration = 42;
+    actor.displayName = "Actor"; actor.scriptClass = "Gameplay.StaticBlueprint";
+    actor.scriptPhysics = {{"motion", "dynamic"}, {"shape", "sphere"}, {"radius", 30}};
+    snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
+        std::vector<EditorSceneActorSnapshot>{actor});
+    snapshot.selectedActorIdentity = actor.identity;
+    Refresh();
+    ASSERT_TRUE(runtimeSink.actions.empty());
+    EXPECT_EQ(Control("script-physics-shape")->GetValue(), "sphere");
+    auto* radius = Control("script-physics-radius");
+    ASSERT_NE(radius, nullptr);
+    radius->Focus();
+    radius->SetValue("45");
+    Refresh();
+    ASSERT_TRUE(runtimeSink.actions.empty());
+    EXPECT_EQ(Control("script-physics-radius"), radius);
+    EXPECT_EQ(radius->GetValue(), "45");
+    radius->Blur();
+    radius->DispatchEvent("change", {});
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    SelectOption("script-physics-shape", "capsule");
+    std::string requests;
+    for (const auto& request : runtimeSink.actions) requests += request.script.dump() + "\n";
+    ASSERT_EQ(runtimeSink.actions.size(), 2u) << requests;
+    Click("#script-physics-trigger");
+    ASSERT_EQ(runtimeSink.actions.size(), 3u);
+    EXPECT_EQ(runtimeSink.actions[0].type, UiActionType::SetScriptPhysics);
+    EXPECT_EQ(runtimeSink.actions[0].script["value"], 45);
+    EXPECT_EQ(runtimeSink.actions[1].script["value"], "capsule");
+    EXPECT_EQ(runtimeSink.actions[2].script["value"], true);
+}
+
+TEST_F(EditorUiTest, InheritedPhysicsAndPlayingBlueprintStructureControlsAreDisabled)
+{
+    snapshot.activeDocument.reset(); snapshot.documentTabs.clear();
+    EditorSceneActorSnapshot actor;
+    actor.type = EditorSceneActorType::Script; actor.identity = "blueprintInstance|a"; actor.worldGeneration = 42;
+    actor.displayName = "Actor"; actor.scriptClass = "Gameplay.StaticBlueprint";
+    actor.scriptBlueprintPath = "Common/Blueprints/BP_a.json";
+    actor.scriptPhysics = {{"motion", "static"}, {"shape", "box"}, {"halfExtents", {50, 50, 50}}};
+    snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
+        std::vector<EditorSceneActorSnapshot>{actor});
+    snapshot.selectedActorIdentity = actor.identity;
+    Refresh();
+    EXPECT_TRUE(Control("script-physics-motion")->HasAttribute("disabled"));
+    Click("#script-component-add");
+    UiViewModelSnapshot view;
+    view.scripts.available = true; view.scripts.worldGeneration = 42; view.scripts.state = ScriptPlayState::Paused;
+    panel->UpdateRuntimeView(view);
+    Click("#script-blueprint-delete");
+    Click("#script-blueprint-duplicate");
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, SceneUndoRedoFollowHistoryAvailabilityAndAreDisabledDuringPlay)
+{
+    snapshot.activeDocument.reset(); snapshot.documentTabs.clear();
+    Refresh();
+    UiViewModelSnapshot view;
+    view.scripts.worldGeneration = 42; view.scripts.canUndo = true; view.scripts.canRedo = true;
+    panel->UpdateRuntimeView(view);
+    Click("#menu-edit-undo");
+    Click("#menu-edit-redo");
+    ASSERT_EQ(runtimeSink.actions.size(), 2u);
+    EXPECT_EQ(runtimeSink.actions[0].type, UiActionType::UndoSceneEdit);
+    EXPECT_EQ(runtimeSink.actions[1].type, UiActionType::RedoSceneEdit);
+    EXPECT_EQ(runtimeSink.actions[0].actorProperty.worldGeneration, 42u);
+    view.scripts.state = ScriptPlayState::Playing;
+    panel->UpdateRuntimeView(view);
+    Click("#menu-edit-undo");
+    EXPECT_EQ(runtimeSink.actions.size(), 2u);
+}
+
+TEST_F(EditorUiTest, BlueprintAssetUndoRedoTargetTheActiveDocumentRevisionWithoutSceneActions)
+{
+    OpenBlueprintAsset();
+    snapshot.blueprintDocuments[0].canUndo = true;
+    snapshot.blueprintDocuments[0].canRedo = true;
+    Refresh();
+    EXPECT_FALSE(document->GetElementById("menu-edit-undo")->HasAttribute("disabled"));
+    EXPECT_FALSE(document->GetElementById("menu-edit-redo")->HasAttribute("disabled"));
+    Click("#menu-edit-undo");
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands[0].type, EditorCommandType::UndoBlueprintDocument);
+    EXPECT_EQ(sink.commands[0].expectedDocumentRevision, 11u);
+    EXPECT_EQ(std::get<MaterialInstanceAssetPathPayload>(sink.commands[0].payload).assetPath,
+        "Blueprints/BP_test.json");
+    // 权威快照确认版本后，redo 必须使用新版本，而非撤销请求之前的版本。
+    snapshot.blueprintDocuments[0].documentRevision = 12;
+    Refresh();
+    Click("#menu-edit-redo");
+    ASSERT_EQ(sink.commands.size(), 2u);
+    EXPECT_EQ(sink.commands[1].type, EditorCommandType::RedoBlueprintDocument);
+    EXPECT_EQ(sink.commands[1].expectedDocumentRevision, 12u);
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, BlueprintAssetHistoryAvailabilityIsIndependentFromSceneHistory)
+{
+    OpenBlueprintAsset();
+    UiViewModelSnapshot view;
+    view.scripts.available = true;
+    view.scripts.canUndo = view.scripts.canRedo = true;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("menu-edit-undo")->HasAttribute("disabled"));
+    EXPECT_TRUE(document->GetElementById("menu-edit-redo")->HasAttribute("disabled"));
+    Click("#menu-edit-undo");
+    Click("#menu-edit-redo");
+    EXPECT_TRUE(sink.commands.empty());
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, BlueprintAssetHistoryRejectsForgedActionsDuringPlay)
+{
+    OpenBlueprintAsset();
+    snapshot.blueprintDocuments[0].canUndo = snapshot.blueprintDocuments[0].canRedo = true;
+    UiViewModelSnapshot view;
+    view.scripts.available = true;
+    view.scripts.state = ScriptPlayState::Playing;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("menu-edit-undo")->HasAttribute("disabled"));
+    EXPECT_TRUE(document->GetElementById("menu-edit-redo")->HasAttribute("disabled"));
+    Click("#menu-edit-undo");
+    Click("#menu-edit-redo");
+    EXPECT_TRUE(sink.commands.empty());
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, BlueprintAssetViewportPickingSelectsTheMeshComponentWithoutChangingTheDocument)
+{
+    OpenBlueprintAsset();
+    PublishBlueprintViewport();
+    MovePointer(BlueprintViewportPoint());
+    context->ProcessMouseButtonDown(0, 0);
+    context->ProcessMouseButtonUp(0, 0);
+    Refresh();
+    EXPECT_TRUE(document->QuerySelector("#blueprint-asset-tree-0 .list-item")->IsClassSet("selected"));
+    EXPECT_TRUE(document->GetElementById("blueprint-asset-component-details-0")->IsVisible(true));
+    EXPECT_TRUE(sink.commands.empty());
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, BlueprintAssetGizmoReleaseSubmitsOneCompleteComponentEdit)
+{
+    OpenBlueprintAsset();
+    PublishBlueprintViewport();
+    BeginBlueprintMove();
+    const auto center = BlueprintViewportPoint();
+    MovePointer(center + Rml::Vector2f(55, 0));
+    Refresh();
+    EXPECT_TRUE(sink.commands.empty());
+    MovePointer(center + Rml::Vector2f(60, 0));
+    context->ProcessMouseButtonUp(0, 0);
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands[0].type, EditorCommandType::ModifyBlueprintDocument);
+    EXPECT_EQ(sink.commands[0].expectedDocumentRevision, 11u);
+    const auto& changes = std::get<ModifyAssetDocumentPayload>(sink.commands[0].payload).changes;
+    ASSERT_EQ(changes.size(), 1u);
+    ASSERT_EQ(changes[0].field, "components");
+    const auto& nodes = std::get<nlohmann::json>(changes[0].value);
+    EXPECT_GT(nodes[0]["position"][0].get<double>(), 0);
+    EXPECT_EQ(nodes[0]["position"][1], 0);
+    EXPECT_EQ(nodes[0]["position"][2], 0);
+    EXPECT_EQ(nodes[0]["modelPath"], "Common/Meshes/SM_test.json");
+    EXPECT_FALSE(snapshot.blueprintDocuments[0].document["components"][0].contains("position"));
+    ASSERT_FALSE(runtimeSink.actions.empty());
+    for (const auto& action : runtimeSink.actions)
+    {
+        EXPECT_EQ(action.type, UiActionType::TransformBlueprintPreview);
+        EXPECT_EQ(action.blueprintTransform.worldGeneration, 7u);
+        EXPECT_FALSE(action.blueprintTransform.reset);
+    }
+    Refresh();
+    EXPECT_EQ(sink.commands.size(), 1u);
+}
+
+TEST_F(EditorUiTest, BlueprintAssetGizmoFocusCancellationAndZeroMotionDoNotCreateEdits)
+{
+    OpenBlueprintAsset();
+    PublishBlueprintViewport();
+    BeginBlueprintMove();
+    MovePointer(BlueprintViewportPoint() + Rml::Vector2f(55, 0));
+    panel->CancelModelPreviewDrag();
+    context->ProcessMouseButtonUp(0, 0);
+    Refresh();
+    EXPECT_TRUE(sink.commands.empty());
+    ASSERT_FALSE(runtimeSink.actions.empty());
+    EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::TransformBlueprintPreview);
+    EXPECT_TRUE(runtimeSink.actions.back().blueprintTransform.reset);
+    BeginBlueprintMove();
+    context->ProcessMouseButtonUp(0, 0);
+    Refresh();
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, BlueprintAssetGizmoStalePreviewCannotWriteANewerComponentDraft)
+{
+    OpenBlueprintAsset();
+    PublishBlueprintViewport();
+    BeginBlueprintMove();
+    snapshot.blueprintDocuments[0].documentRevision = 12;
+    snapshot.blueprintDocuments[0].document["components"][0]["position"] = {5, 0, 0};
+    Refresh();
+    MovePointer(BlueprintViewportPoint() + Rml::Vector2f(60, 0));
+    context->ProcessMouseButtonUp(0, 0);
+    Refresh();
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, BlueprintSelfScaleGizmoEditsRootWithoutInventingPosition)
+{
+    OpenBlueprintAsset();
+    PublishBlueprintViewport();
+    Click("[data-action=blueprint-asset-select-defaults]");
+    Click("#blueprint-asset-tool-scale");
+    Refresh();
+    const auto center = BlueprintViewportPoint();
+    MovePointer(center + Rml::Vector2f(40, 0));
+    context->ProcessMouseButtonDown(0, 0);
+    MovePointer(center + Rml::Vector2f(60, 0));
+    context->ProcessMouseButtonUp(0, 0);
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    const auto& changes = std::get<ModifyAssetDocumentPayload>(sink.commands[0].payload).changes;
+    ASSERT_EQ(changes.size(), 1u);
+    EXPECT_EQ(changes[0].field, "scale");
+    EXPECT_GT((std::get<std::array<double, 3>>(changes[0].value)[0]), 1);
+    EXPECT_FALSE(runtimeSink.actions.empty());
+    EXPECT_TRUE(runtimeSink.actions.back().blueprintTransform.componentId.empty());
+    EXPECT_EQ(runtimeSink.actions.back().blueprintTransform.field, "scale");
+}
+
+TEST_F(EditorUiTest, BlueprintGizmoTranslationSnapProducesCentimeterIncrements)
+{
+    OpenBlueprintAsset();
+    PublishBlueprintViewport();
+    auto* check = document->GetElementById("blueprint-snap-enabled");
+    ASSERT_NE(check, nullptr);
+    MovePointer(check->GetAbsoluteOffset(Rml::BoxArea::Border) + Rml::Vector2f(8, 8));
+    context->ProcessMouseButtonDown(0, 0);
+    context->ProcessMouseButtonUp(0, 0);
+    ASSERT_TRUE(check->HasAttribute("checked"));
+    BeginBlueprintMove();
+    MovePointer(BlueprintViewportPoint() + Rml::Vector2f(60, 0));
+    context->ProcessMouseButtonUp(0, 0);
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    const auto& changes = std::get<ModifyAssetDocumentPayload>(sink.commands[0].payload).changes;
+    const auto& nodes = std::get<nlohmann::json>(changes[0].value);
+    const auto position = nodes[0]["position"][0].get<float>();
+    EXPECT_GT(position, 0);
+    EXPECT_NEAR(std::remainder(position, 10.0f), 0, 1e-5f);
+}
+
+TEST_F(EditorUiTest, BlueprintViewportCanPickCameraComponentWithoutMeshBounds)
+{
+    OpenBlueprintAsset();
+    PublishBlueprintViewport();
+    auto& nodes = snapshot.blueprintDocuments[0].document["components"];
+    nodes.push_back({{"id", "lens"}, {"type", "camera"}, {"position", {100, 0, 0}}});
+    auto actors = std::vector<EditorSceneActorSnapshot>(*snapshot.sceneActors);
+    actors[0].scriptComponents = nodes;
+    snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(std::move(actors));
+    Refresh();
+    auto* surface = document->GetElementById("blueprint-asset-preview-surface");
+    const auto size = surface->GetBox().GetSize(Rml::BoxArea::Content);
+    const float focal = size.x * 0.5f / std::tan(60.0f * 0.00872664626f);
+    MovePointer(BlueprintViewportPoint() + Rml::Vector2f(100.0f * focal / 500.0f, 0));
+    context->ProcessMouseButtonDown(0, 0);
+    context->ProcessMouseButtonUp(0, 0);
+    Refresh();
+    EXPECT_TRUE(document->QuerySelector("#blueprint-asset-tree-1 .list-item")->IsClassSet("selected"));
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, BlueprintAssetRejectedCommandFeedbackReenablesHistoryWithoutRevisionChange)
+{
+    OpenBlueprintAsset();
+    snapshot.blueprintDocuments[0].canUndo = true;
+    Refresh();
+    Click("#menu-edit-undo");
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_TRUE(document->GetElementById("menu-edit-undo")->HasAttribute("disabled"));
+    snapshot.blueprintCommandFeedback.push_back({1, "Blueprints/BP_test.json", false});
+    Refresh();
+    EXPECT_FALSE(document->GetElementById("menu-edit-undo")->HasAttribute("disabled"));
+    Click("#menu-edit-undo");
+    ASSERT_EQ(sink.commands.size(), 2u);
+    EXPECT_EQ(sink.commands[1].expectedDocumentRevision, 11u);
+}
+
+TEST_F(EditorUiTest, BlueprintAssetNativeDragSubmitsSingleInstanceWithViewportCoordinates)
+{
+    PrepareActorDrag();
+    const auto icon = BrowserItem("Common/Blueprints/BP_rotator.json")->GetChild(0)
+        ->GetAttribute<std::string>("src", "");
+    EXPECT_TRUE(std::filesystem::path(icon).is_absolute());
+    EXPECT_EQ(std::filesystem::path(icon).filename(), "blueprint.png");
+    Refresh();
+    EXPECT_EQ(BrowserItem("Common/Blueprints/BP_rotator.json")->GetChild(0)
+        ->GetAttribute<std::string>("src", ""), icon);
+    StartAssetDrag("Common/Blueprints/BP_rotator.json");
+    DropAssetOnViewport();
+    ASSERT_EQ(runtimeSink.actions.size(), 1u) << Errors();
+    const auto& request = runtimeSink.actions.front();
+    EXPECT_EQ(request.type, UiActionType::AddScriptBlueprint);
+    EXPECT_EQ(request.actorProperty.worldGeneration, 42u);
+    EXPECT_EQ(request.script.at("blueprintPath"), "Common/Blueprints/BP_rotator.json");
+    EXPECT_NEAR(request.script["viewport"][0].get<float>(), 0.5f, 0.01f);
+    EXPECT_NEAR(request.script["viewport"][1].get<float>(), 0.5f, 0.01f);
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, BlueprintAssetNativeDragCancelsOnWorldChange)
+{
+    PrepareActorDrag();
+    StartAssetDrag("Common/Blueprints/BP_rotator.json");
+    UiViewModelSnapshot replacement;
+    replacement.scripts.available = true;
+    replacement.scripts.worldGeneration = 43;
+    panel->UpdateRuntimeView(replacement);
+    DropAssetOnViewport();
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, BlueprintAssetNativeDragCancelLeavesReleaseWithoutPlacement)
+{
+    PrepareActorDrag();
+    StartAssetDrag("Common/Blueprints/BP_rotator.json");
+    ASSERT_TRUE(panel->CancelBlueprintAssetDrag());
+    DropAssetOnViewport();
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, BlueprintAssetDropOutsideViewportAndMeshDragDoNotCreateActors)
+{
+    PrepareActorDrag();
+    StartAssetDrag("Common/Blueprints/BP_rotator.json");
+    context->ProcessMouseMove(1200, 120, 0);
+    context->ProcessMouseButtonUp(0, 0);
+    context->Update();
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    StartAssetDrag("Common/Meshes/SM_model.json");
+    DropAssetOnViewport();
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, BlueprintAssetDragDuringPlayAndForgedDropDoNotCreateActors)
+{
+    PrepareActorDrag();
+    UiViewModelSnapshot playing;
+    playing.scripts.available = true;
+    playing.scripts.worldGeneration = 42;
+    playing.scripts.state = ScriptPlayState::Playing;
+    panel->UpdateRuntimeView(playing);
+    StartAssetDrag("Common/Blueprints/BP_rotator.json");
+    DropAssetOnViewport();
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    auto* image = document->GetElementById("editor-viewport-image");
+    image->DispatchEvent("dragdrop", {});
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, ScriptResetRemovesOverrideAndAssetCreateUsesTypedValues)
+{
+    snapshot.activeDocument.reset();
+    snapshot.documentTabs.clear();
+    EditorSceneActorSnapshot actor;
+    actor.type = EditorSceneActorType::Script;
+    actor.identity = "blueprintInstance|persistent-a";
+    actor.worldGeneration = 42;
+    actor.displayName = "Rotator";
+    actor.scriptClass = "Gameplay.RotatorBlueprint";
+    actor.scriptProperties = {{"DegreesPerSecond", 90}};
+    actor.scriptInstanceEditable = {"DegreesPerSecond"};
+    actor.scriptOverrides = actor.scriptProperties;
+    actor.scriptBlueprintPath = "Common/Blueprints/BP_rotator.json";
+    snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
+        std::vector<EditorSceneActorSnapshot>{actor});
+    snapshot.selectedActorIdentity = actor.identity;
+    Refresh();
+    Click("#script-reset-0");
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::SetScriptProperty);
+    EXPECT_EQ(runtimeSink.actions.back().actorProperty.identity, actor.identity);
+    EXPECT_EQ(runtimeSink.actions.back().script, (nlohmann::json{{"property", "DegreesPerSecond"}, {"reset", true}}));
+    SetValue("script-asset-path", "Common/Blueprints/BP_copy.json");
+    Click("#script-asset-create");
+    ASSERT_EQ(runtimeSink.actions.size(), 2u);
+    EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::CreateScriptBlueprintAsset);
+    EXPECT_EQ(runtimeSink.actions.back().stringValue, "Common/Blueprints/BP_copy.json");
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, ScriptPlacementControlsFitAtSupportedWindowSizes)
+{
+    snapshot.activeDocument.reset();
+    snapshot.documentTabs.clear();
+    Refresh();
+    UiViewModelSnapshot view;
+    view.scripts.available = true;
+    view.scripts.classes = nlohmann::json::array({{{"name", "Gameplay.RotatorBlueprint"},
+        {"properties", nlohmann::json::array()}}});
+    panel->UpdateRuntimeView(view);
+    Click("#script-placement-toggle");
+    for (const auto dimensions : {Rml::Vector2i(960, 540),
+        Rml::Vector2i(1280, 720), Rml::Vector2i(1920, 1080)})
+    {
+        context->SetDimensions(dimensions);
+        panel->Build(snapshot);
+        context->Update();
+        auto* outliner = document->GetElementById("editor-navigation");
+        ASSERT_NE(outliner, nullptr);
+        const auto origin = outliner->GetAbsoluteOffset(Rml::BoxArea::Border);
+        const auto size = outliner->GetBox().GetSize(Rml::BoxArea::Border);
+        for (const char* id : {"script-class", "script-name", "script-mesh", "script-add"})
+        {
+            auto* control = document->GetElementById(id);
+            ASSERT_NE(control, nullptr) << id;
+            control->ScrollIntoView(false);
+            context->Update();
+            const auto point = control->GetAbsoluteOffset(Rml::BoxArea::Border);
+            const auto box = control->GetBox().GetSize(Rml::BoxArea::Border);
+            EXPECT_GE(box.y, 24) << id;
+            EXPECT_GE(point.x, origin.x) << id;
+            EXPECT_LE(point.x + box.x, origin.x + size.x + 1) << id;
+            EXPECT_GE(point.y, origin.y) << id;
+            EXPECT_LE(point.y + box.y, origin.y + size.y + 1) << id;
+        }
+    }
+}
+
+TEST_F(EditorUiTest, ScriptPlayControlsFollowSnapshotAndDoNotDispatchOnRefresh)
+{
+    snapshot.activeDocument.reset();
+    snapshot.documentTabs.clear();
+    EditorSceneActorSnapshot actor;
+    actor.type = EditorSceneActorType::Script;
+    actor.identity = "blueprintInstance|a";
+    actor.displayName = "Actor";
+    snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
+        std::vector<EditorSceneActorSnapshot>{actor});
+    Refresh();
+    UiViewModelSnapshot view;
+    view.scripts.available = true;
+    view.scripts.worldGeneration = 42;
+    panel->UpdateRuntimeView(view);
+    EXPECT_FALSE(document->GetElementById("script-play")->HasAttribute("disabled"));
+    EXPECT_TRUE(document->GetElementById("script-pause")->HasAttribute("disabled"));
+    Click("#script-play");
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions[0].type, UiActionType::ControlScripts);
+    EXPECT_EQ(runtimeSink.actions[0].intValue, 1);
+    view.scripts.state = ScriptPlayState::Playing;
+    panel->UpdateRuntimeView(view);
+    EXPECT_TRUE(document->GetElementById("script-play")->HasAttribute("disabled"));
+    EXPECT_FALSE(document->GetElementById("script-pause")->HasAttribute("disabled"));
+    EXPECT_FALSE(document->GetElementById("script-stop")->HasAttribute("disabled"));
+    panel->UpdateRuntimeView(view);
+    const auto writes = panel->PanelPropertyWriteCount();
+    panel->UpdateRuntimeView(view);
+    EXPECT_EQ(panel->PanelPropertyWriteCount(), writes);
+    EXPECT_EQ(runtimeSink.actions.size(), 1u);
+}
+
+TEST_F(EditorUiTest, ScriptReloadUsesWorldGenerationAndRequiresRealtimeLevel)
+{
+    snapshot.activeDocument.reset(); snapshot.documentTabs.clear();
+    Refresh();
+    UiViewModelSnapshot view;
+    view.activeWorldPath = "Maps/SC_test/SC_test.json";
+    view.scripts.available = true; view.scripts.worldGeneration = 42;
+    for (const auto state : {ScriptPlayState::Editing, ScriptPlayState::Playing, ScriptPlayState::Paused})
+    {
+        view.scripts.state = state;
+        panel->UpdateRuntimeView(view);
+        EXPECT_FALSE(document->GetElementById("script-reload")->HasAttribute("disabled"));
+        runtimeSink.actions.clear();
+        Click("#script-reload");
+        ASSERT_EQ(runtimeSink.actions.size(), 1u);
+        EXPECT_EQ(runtimeSink.actions[0].type, UiActionType::ReloadScripts);
+        EXPECT_EQ(runtimeSink.actions[0].actorProperty.worldGeneration, 42u);
+    }
+    view.scripts.state = ScriptPlayState::Editing;
+    view.offlineMode = true;
+    panel->UpdateRuntimeView(view);
+    EXPECT_TRUE(document->GetElementById("script-reload")->HasAttribute("disabled"));
+    runtimeSink.actions.clear();
+    Click("#script-reload");
+    EXPECT_TRUE(runtimeSink.actions.empty());
+
+    OpenBlueprintAsset();
+    view.offlineMode = false;
+    view.activeWorldPath = ModelPreviewScenePath;
+    panel->UpdateRuntimeView(view);
+    EXPECT_TRUE(document->GetElementById("script-reload")->HasAttribute("disabled"));
+    runtimeSink.actions.clear();
+    Click("#script-reload");
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
 TEST_F(EditorUiTest, RetiredRuntimeDebugPageHasNoWorkspaceEntryOrDocument)
 {
     EXPECT_EQ(document->QuerySelector("[data-action=runtime-page]"), nullptr);
     EXPECT_FALSE(std::filesystem::exists(std::filesystem::path(VL_EDITOR_ASSET_ROOT) / "runtime-control.rml"));
-    Rml::String world = "SC_test";
+    Rml::String world = "SC_test", gameplay;
     auto model = context->CreateDataModel("game_ui");
     ASSERT_TRUE(model.Bind("world_text", &world));
+    ASSERT_TRUE(model.Bind("gameplay_text", &gameplay));
     auto* hud = context->LoadDocument(std::string(VL_EDITOR_ASSET_ROOT) + "/runtime-hud.rml");
     ASSERT_NE(hud, nullptr);
     EXPECT_EQ(hud->GetElementById("control-panel"), nullptr);
@@ -1632,7 +3358,7 @@ TEST_F(EditorUiTest, OutlinerListsActorsWithoutAutomaticTypeFolders)
     AddActor(MeshActor("Zeta", 1));
     AddActor(MeshActor("alpha", 1, 12));
     AddActor(PointLightActor("Key_Light", 250.0f, 20.0f));
-    AddActor(CameraActor("Camera_01"));
+    AddActor(CameraBlueprint("Camera_01"));
     panel->Build(snapshot);
     context->Update();
 
@@ -1777,7 +3503,7 @@ TEST_F(EditorUiTest, DetailsShowsTheSelectedActorWhenNoDocumentIsOpen)
 {
     snapshot.activeDocument.reset();
     snapshot.selectedDocumentPath.clear();
-    SelectActorInOutliner(CameraActor("Camera_01"));
+    SelectActorInOutliner(CameraBlueprint("Camera_01"));
 
     // 没有打开的 MI 文档时 Details 不再为空：actor 分组承载相机参数。
     EXPECT_EQ(document->GetElementById("details-section-general"), nullptr);
@@ -1790,7 +3516,7 @@ TEST_F(EditorUiTest, DetailsShowsTheSelectedActorWhenNoDocumentIsOpen)
     EXPECT_EQ(document->GetElementById("actor-field-name")->GetInnerRML(), "Camera_01");
 }
 
-TEST_F(EditorUiTest, DetailsActorFieldsFollowTheFrozenSnapshot)
+TEST_F(EditorUiTest, DetailsBlueprintFieldsFollowTheFrozenSnapshot)
 {
     EditorSceneActorSnapshot light = PointLightActor("Key_Point_Light", 250.0f, 12.5f);
     const std::string identity = light.identity;
@@ -1821,7 +3547,7 @@ TEST_F(EditorUiTest, DetailsActorFieldsFollowTheFrozenSnapshot)
 TEST_F(EditorUiTest, CameraDetailsExposureActionsCarryAuthoredIdentityAndMode)
 {
     snapshot.activeDocument.reset();
-    SelectActorInOutliner(CameraActor("Shot"));
+    SelectActorInOutliner(CameraBlueprint("Shot"));
     ASSERT_NE(document->GetElementById("details-section-camera-exposure"), nullptr);
     Click("#actor-exposure-manual");
     EXPECT_TRUE(runtimeSink.actions.empty());
@@ -1839,7 +3565,7 @@ TEST_F(EditorUiTest, CameraDetailsExposureActionsCarryAuthoredIdentityAndMode)
 
 TEST_F(EditorUiTest, ExposureModeRefreshKeepsNodesAndRejectsInactiveOrInvalidInputs)
 {
-    auto actor = CameraActor("Shot");
+    auto actor = CameraBlueprint("Shot");
     actor.camera.exposure.mode = ExposureMode::Auto;
     SelectActorInOutliner(actor);
     const auto evId = SceneActorPropertyControlId(EditorActorProperty::CameraEv100, 0);
@@ -1871,7 +3597,7 @@ TEST_F(EditorUiTest, ExposureModeRefreshKeepsNodesAndRejectsInactiveOrInvalidInp
 
 TEST_F(EditorUiTest, PhysicalExposureBindingIsReadOnlyAndNeverConvertsTheCamera)
 {
-    auto actor = CameraActor("Shot");
+    auto actor = CameraBlueprint("Shot");
     actor.camera.exposure.mode = ExposureMode::PhysicalCamera;
     actor.camera.exposure.aperture = 2.8;
     SelectActorInOutliner(actor);
@@ -1890,7 +3616,7 @@ TEST_F(EditorUiTest, PhysicalExposureBindingIsReadOnlyAndNeverConvertsTheCamera)
 
 TEST_F(EditorUiTest, ExposureRefreshPreservesFocusedPartialInputAndHasNoIdleWrites)
 {
-    SelectActorInOutliner(CameraActor("Shot"));
+    SelectActorInOutliner(CameraBlueprint("Shot"));
     const auto id = SceneActorPropertyControlId(EditorActorProperty::CameraExposureCompensation, 0);
     auto* field = Control(id);
     ASSERT_NE(field, nullptr);
@@ -1915,7 +3641,7 @@ TEST_F(EditorUiTest, NonCameraDetailsHaveNoExposureSection)
 TEST_F(EditorUiTest, ExposureModeButtonsFitTheDetailsControlAreaAtEveryWindowSize)
 {
     snapshot.activeDocument.reset();
-    auto actor = CameraActor("Shot");
+    auto actor = CameraBlueprint("Shot");
     actor.camera.exposure.mode = ExposureMode::Auto;
     SelectActorInOutliner(actor);
     Click("#details-section-actor-camera-title");
@@ -2057,7 +3783,7 @@ TEST_F(EditorUiTest, ActorPositionEditCarriesIdentityGenerationAndComponent)
 
 TEST_F(EditorUiTest, ActorPropertyRefreshPreservesFocusedPartialInputWithoutCommands)
 {
-    SelectActorInOutliner(CameraActor("Shot"));
+    SelectActorInOutliner(CameraBlueprint("Shot"));
     auto* field = Control("actor-property-0-0");
     ASSERT_NE(field, nullptr);
     field->Focus();
@@ -2070,7 +3796,7 @@ TEST_F(EditorUiTest, ActorPropertyRefreshPreservesFocusedPartialInputWithoutComm
 
 TEST_F(EditorUiTest, ActorDoubleClickFramesByStableIdentityAndWorldGeneration)
 {
-    AddActor(CameraActor("Shot"));
+    AddActor(CameraBlueprint("Shot"));
     SettleOutliner();
     auto* row = OutlinerRow("outliner-actor", "Shot");
     ASSERT_NE(row, nullptr);
@@ -2083,7 +3809,7 @@ TEST_F(EditorUiTest, ActorDoubleClickFramesByStableIdentityAndWorldGeneration)
 
 TEST_F(EditorUiTest, OutlinerPointerDoubleClickSurvivesTheFirstSelectionSnapshot)
 {
-    AddActor(CameraActor("Shot"));
+    AddActor(CameraBlueprint("Shot"));
     SettleOutliner();
     auto* row = OutlinerRow("outliner-actor", "Shot");
     ASSERT_NE(row, nullptr);
@@ -2106,7 +3832,7 @@ TEST_F(EditorUiTest, HelperPointerDoubleClickSurvivesSelectedLinesAppearing)
     auto light = PointLightActor("Key", 250, 0);
     light.position = light.light.position = Eigen::Vector3f(0, 0, -20);
     AddActor(light);
-    AddActor(CameraActor("Shot"));
+    AddActor(CameraBlueprint("Shot"));
     Click("#workspace-viewport-tab");
     SettleOutliner();
     // RmlUi 在 Render 更新 transform state；真实窗口在每次指针输入前已经画过上一帧。
@@ -2137,7 +3863,7 @@ TEST_F(EditorUiTest, ActorHelperOverlayForcesClippingEvenWithoutScrollableOverfl
     auto light = PointLightActor("Key", 250, 0);
     light.position = light.light.position = Eigen::Vector3f(0, 0, -20);
     AddActor(light);
-    AddActor(CameraActor("Shot"));
+    AddActor(CameraBlueprint("Shot"));
     Click("#workspace-viewport-tab");
     SettleOutliner();
     auto* icon = document->QuerySelector("#viewport-actor-overlay [data-action=viewport-actor]");
@@ -2162,7 +3888,7 @@ TEST_F(EditorUiTest, LightHelperIconSelectsTheActorAndNeverClaimsScenePicking)
     auto light = PointLightActor("Key", 250, 0);
     light.position = light.light.position = Eigen::Vector3f(0, 0, -20);
     AddActor(light);
-    AddActor(CameraActor("Shot"));
+    AddActor(CameraBlueprint("Shot"));
     Click("#workspace-viewport-tab");
     SettleOutliner();
     auto* icon = document->QuerySelector("#viewport-actor-overlay [data-action=viewport-actor]");
@@ -2181,7 +3907,7 @@ TEST_F(EditorUiTest, ObserverMotionMovesHelperHitTargetWithoutRelayoutOrNodeRepl
     auto light = PointLightActor("Key", 250, 0);
     light.position = light.light.position = Eigen::Vector3f(0, 0, -20);
     AddActor(light);
-    auto camera = CameraActor("Shot");
+    auto camera = CameraBlueprint("Shot");
     camera.hasViewportCamera = true;
     camera.viewportCamera = camera.camera;
     AddActor(camera);
@@ -2232,7 +3958,7 @@ TEST_F(EditorUiTest, SelectedHelperClippingPreservesLineSlotsAndWorkspaceLayout)
     auto light = PointLightActor("Key", 250, 0);
     light.position = light.light.position = Eigen::Vector3f(0, 0, -20);
     AddActor(light);
-    auto camera = CameraActor("Shot");
+    auto camera = CameraBlueprint("Shot");
     camera.hasViewportCamera = true;
     camera.viewportCamera = camera.camera;
     AddActor(camera);
@@ -2280,7 +4006,7 @@ TEST_F(EditorUiTest, SelectedHelperClippingPreservesLineSlotsAndWorkspaceLayout)
     EXPECT_TRUE(system.errors.empty()) << Errors();
 }
 
-TEST_F(EditorUiTest, OutlinerStaticFramesKeepActorFieldsAndCountCached)
+TEST_F(EditorUiTest, OutlinerStaticFramesKeepBlueprintFieldsAndCountCached)
 {
     SelectActorInOutliner(PointLightActor("Key_Point_Light", 250.0f, 12.5f));
     auto* radius = document->GetElementById("actor-field-radius");
@@ -2364,7 +4090,7 @@ TEST_F(EditorUiTest, OutlinerMountsABoundedWindowAndKeepsTheRestReachable)
             static_cast<RuntimeId>(100 + index)));
     AddActor(SunActor(1.0f, true));
     AddActor(PointLightActor("Key_Light", 250.0f, 20.0f));
-    AddActor(CameraActor("Camera_01"));
+    AddActor(CameraBlueprint("Camera_01"));
     SettleOutliner();
 
     const auto rows = MountedRows();
@@ -3071,7 +4797,7 @@ TEST_F(EditorUiTest, EditUndoRedoArePresentButDisabled)
     ASSERT_NE(redo, nullptr);
     EXPECT_TRUE(undo->HasAttribute("disabled"));
     EXPECT_TRUE(redo->HasAttribute("disabled"));
-    // 这个仓库没有 undo/redo 系统；两个条目只能是占位，不能产生任何命令。
+    // 没有 Scene 历史时两个入口禁用，不能产生空撤销请求。
     undo->DispatchEvent("click", {});
     redo->DispatchEvent("click", {});
     EXPECT_TRUE(sink.commands.empty());
@@ -3130,7 +4856,7 @@ TEST_F(EditorUiTest, ToolbarDoesNotRestateTheDocumentMenuCommands)
             if (ancestor == menubar) { insideMenu = true; break; }
         if (!insideMenu) ++outside;
     }
-    EXPECT_EQ(outside, 3) << "expected exactly Save / Reset Layout / Immersive Mode; "
+    EXPECT_EQ(outside, 8) << "expected Save / Reset Layout / Immersive Mode and Play / Pause / Stop / Reload C# / Compile C#; "
                              "if this changed, re-check the assertions above are not vacuous";
     EXPECT_EQ(toolbar->QuerySelector("[data-action=save-all]")->GetId(), "menu-file-save");
     EXPECT_EQ(document->GetElementById("workspace-save")->GetAttribute<std::string>("data-action", ""), "save-all");
@@ -3231,7 +4957,7 @@ TEST_F(EditorUiTest, CameraAxisMotionPreservesLayoutBoxes)
     Click("#workspace-viewport-tab");
     Refresh();
     auto actors = std::make_shared<std::vector<EditorSceneActorSnapshot>>();
-    actors->push_back(CameraActor("Camera"));
+    actors->push_back(CameraBlueprint("Camera"));
     snapshot.sceneActors = actors;
     for (float angle : {0.0f, 0.5f, 1.0f, 0.0f})
     {
@@ -3262,7 +4988,7 @@ TEST_F(EditorUiTest, CameraMotionUiWorkload)
 {
     // 使用真实 RmlUi 文档比较输入工作量；耗时只报告，不作为依赖机器性能的门禁。
     auto actors = std::make_shared<std::vector<EditorSceneActorSnapshot>>();
-    actors->push_back(CameraActor("Camera"));
+    actors->push_back(CameraBlueprint("Camera"));
     snapshot.sceneActors = actors;
     Refresh();
     for (int moving = 0; moving < 4; ++moving)
@@ -3982,7 +5708,7 @@ TEST_F(EditorUiTest, OutlinerVisibilityToggleQueuesOneCommandAndDisturbsNothingE
 {
     AddActor(MeshActor("Sphere_01", 1));
     AddActor(SunActor(1.0f, true));
-    AddActor(CameraActor("Camera_01"));
+    AddActor(CameraBlueprint("Camera_01"));
     SettleOutliner();
 
     // 只有真正有渲染侧可见性状态的对象才有眼睛；相机没有，因此不为它摆一个假控件。
@@ -4385,7 +6111,7 @@ TEST_F(EditorUiTest, ContextMenuVisibilityItemFollowsAndInvertsTheActorState)
 // 不如不提供菜单（与大纲行尾不显示眼睛是同一条规则）。
 TEST_F(EditorUiTest, ContextMenuIsNotOfferedForAnActorWithoutAnActorScopedAction)
 {
-    AddActor(CameraActor("ShotCam_A"));
+    AddActor(CameraBlueprint("ShotCam_A"));
     SettleOutliner();
 
     RightClick(OutlinerRowElement("ShotCam_A"));
@@ -4584,6 +6310,595 @@ TEST_F(EditorUiTest, ViewportContextMenuOpensSharedSaveConfirmationWithoutDirect
     Click("#save-confirm");
     ASSERT_EQ(sink.commands.size(), 1u);
     EXPECT_EQ(sink.commands.back().type, EditorCommandType::SaveSceneDocument);
+}
+
+TEST_F(EditorUiTest, CompileRequestsCarryWorldGenerationAndDoNotRunDocumentCommands)
+{
+    Click("#workspace-viewport-tab");
+    UiViewModelSnapshot view;
+    view.activeWorldPath = "Maps/SC_test/SC_test.json";
+    view.scripts.available = true;
+    view.scripts.buildAvailable = true;
+    view.scripts.worldGeneration = 29;
+    panel->UpdateRuntimeView(view);
+    Click("#script-compile");
+    ASSERT_EQ(1u, runtimeSink.actions.size());
+    EXPECT_EQ(UiActionType::CompileScripts, runtimeSink.actions.back().type);
+    EXPECT_EQ(29u, runtimeSink.actions.back().actorProperty.worldGeneration);
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, ScriptTimeScaleUsesGenerationGuardAndRejectsInvalidOrSameValues)
+{
+    Click("#workspace-viewport-tab");
+    UiViewModelSnapshot view;
+    view.activeWorldPath = "Maps/SC_test/SC_test.json";
+    view.scripts.available = true;
+    view.scripts.worldGeneration = 29;
+    panel->UpdateRuntimeView(view);
+    SetValue("script-time-scale", "1");
+    SetValue("script-time-scale", "nan");
+    SetValue("script-time-scale", "-1");
+    SetValue("script-time-scale", "101");
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    SetValue("script-time-scale", "0");
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::SetScriptTimeScale);
+    EXPECT_FLOAT_EQ(runtimeSink.actions.back().floatValue, 0);
+    EXPECT_EQ(runtimeSink.actions.back().actorProperty.worldGeneration, 29u);
+    EXPECT_TRUE(sink.commands.empty());
+    view.offlineMode = true;
+    panel->UpdateRuntimeView(view);
+    EXPECT_TRUE(Control("script-time-scale")->HasAttribute("disabled"));
+    SetValue("script-time-scale", "2");
+    EXPECT_EQ(runtimeSink.actions.size(), 1u);
+}
+
+TEST_F(EditorUiTest, ScriptTimeScaleSnapshotPreservesPartialFocusedInput)
+{
+    Click("#workspace-viewport-tab");
+    UiViewModelSnapshot view;
+    view.scripts.available = true;
+    view.scripts.worldGeneration = 1;
+    view.scripts.state = ScriptPlayState::Paused;
+    view.scripts.timeScale = 0.5f;
+    panel->UpdateRuntimeView(view);
+    context->Update();
+    auto* input = Control("script-time-scale");
+    ASSERT_NE(input, nullptr);
+    EXPECT_EQ(input->GetValue(), "0.5");
+    ASSERT_TRUE(input->Focus());
+    ASSERT_EQ(context->GetFocusElement(), input);
+    SetValue("script-time-scale", "0.");
+    runtimeSink.actions.clear();
+    panel->UpdateRuntimeView(view);
+    EXPECT_EQ(input->GetValue(), "0.");
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    input->Blur();
+    panel->UpdateRuntimeView(view);
+    EXPECT_EQ(input->GetValue(), "0.5");
+    EXPECT_FALSE(input->HasAttribute("disabled"));
+}
+
+TEST_F(EditorUiTest, BlueprintQuaternionDefaultSubmitsWholeUnitRotationAndRejectsPartialValues)
+{
+    OpenQuaternionBlueprint(false);
+    ASSERT_NE(Control("blueprint-asset-property-0"), nullptr);
+    EXPECT_EQ(Control("blueprint-asset-property-0-0"), nullptr);
+    for (const auto* invalid : {"[0,", "[0,0,0,0]", "[0,0,0,2]", "[0,0,1]", "[0,\"x\",0,1]"})
+        SetValue("blueprint-asset-property-0", invalid);
+    Refresh();
+    EXPECT_TRUE(sink.commands.empty());
+    SetValue("blueprint-asset-property-0", "[0,0.6,0,0.8]");
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    const auto& changes = std::get<ModifyAssetDocumentPayload>(sink.commands[0].payload).changes;
+    ASSERT_EQ(changes.size(), 1u);
+    EXPECT_EQ(changes[0].field, "properties");
+    EXPECT_EQ(std::get<nlohmann::json>(changes[0].value)["Orientation"], nlohmann::json::array({0, 0.6, 0, 0.8}));
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, BlueprintLogicQuaternionDefaultSubmitsWholeUnitRotation)
+{
+    OpenQuaternionBlueprint(true);
+    ASSERT_NE(Control("blueprint-asset-logic-property-0-0"), nullptr);
+    EXPECT_EQ(Control("blueprint-asset-logic-property-0-0-0"), nullptr);
+    SetValue("blueprint-asset-logic-property-0-0", "[0,0,0,2]");
+    Refresh();
+    EXPECT_TRUE(sink.commands.empty());
+    SetValue("blueprint-asset-logic-property-0-0", "[0,0.6,0,0.8]");
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    const auto& changes = std::get<ModifyAssetDocumentPayload>(sink.commands[0].payload).changes;
+    ASSERT_EQ(changes.size(), 1u);
+    EXPECT_EQ(changes[0].field, "scriptComponents");
+    EXPECT_EQ(std::get<nlohmann::json>(changes[0].value)[0]["properties"]["Orientation"],
+        nlohmann::json::array({0, 0.6, 0, 0.8}));
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, SceneQuaternionOverrideUsesWholeValueAndPreservesFocusedPartialText)
+{
+    OpenQuaternionScene(false);
+    auto* input = Control("script-property-0");
+    ASSERT_NE(input, nullptr);
+    EXPECT_EQ(Control("script-property-0-0"), nullptr);
+    ASSERT_TRUE(input->Focus());
+    SetValue("script-property-0", "[0,");
+    panel->UpdateRuntimeView(QuaternionRuntimeView());
+    EXPECT_EQ(input->GetValue(), "[0,");
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    SetValue("script-property-0", "[0,0,0,2]");
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    SetValue("script-property-0", "[0,0.6,0,0.8]");
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions[0].type, UiActionType::SetScriptProperty);
+    EXPECT_EQ(runtimeSink.actions[0].script["value"], nlohmann::json::array({0, 0.6, 0, 0.8}));
+    EXPECT_FALSE(runtimeSink.actions[0].script.contains("axis"));
+    EXPECT_EQ(runtimeSink.actions[0].actorProperty.worldGeneration, 42u);
+}
+
+TEST_F(EditorUiTest, SceneLogicQuaternionOverrideUsesWholeValueWithoutAxis)
+{
+    OpenQuaternionScene(true);
+    ASSERT_NE(Control("script-logic-0-property-0"), nullptr);
+    EXPECT_EQ(Control("script-logic-0-property-0-0"), nullptr);
+    SetValue("script-logic-0-property-0", "[0,0,0,2]");
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    SetValue("script-logic-0-property-0", "[0,0.6,0,0.8]");
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions[0].type, UiActionType::SetScriptLogicComponent);
+    EXPECT_EQ(runtimeSink.actions[0].script["component"], "rotation");
+    EXPECT_EQ(runtimeSink.actions[0].script["value"], nlohmann::json::array({0, 0.6, 0, 0.8}));
+    EXPECT_FALSE(runtimeSink.actions[0].script.contains("axis"));
+}
+
+TEST_F(EditorUiTest, BusyCompilerDisablesDuplicateRequestsAndEscapesDiagnostics)
+{
+    Click("#workspace-viewport-tab");
+    UiViewModelSnapshot view;
+    view.activeWorldPath = "Maps/SC_test/SC_test.json";
+    view.scripts.available = true;
+    view.scripts.buildAvailable = true;
+    view.scripts.buildBusy = true;
+    view.scripts.buildOutput = "Gameplay/Broken.cs(8,2): error CS1001: <Bad>";
+    panel->UpdateRuntimeView(view);
+    Click("#script-compile");
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    LogStore logs;
+    logs.Append(LogSeverity::Error, "CSharp", "error CS1001: <Bad>", {"Gameplay/Broken.cs", 8, 2});
+    snapshot.logs = logs.Freeze();
+    Click("#workspace-log-tab");
+    Refresh();
+    auto* output = document->GetElementById("log-rows");
+    ASSERT_NE(nullptr, output);
+    EXPECT_EQ(nullptr, output->QuerySelector("Bad"));
+    EXPECT_NE(std::string::npos, output->GetInnerRML().find("Broken.cs(8,2)"));
+}
+
+TEST_F(EditorUiTest, BlueprintCompoundControlsCoalesceLayerAndComponentRadius)
+{
+    OpenBlueprintAsset();
+    snapshot.blueprintDocuments[0].document["physics"]["shape"] = "compound";
+    snapshot.blueprintDocuments[0].document["physics"].erase("radius");
+    snapshot.blueprintDocuments[0].document["components"][0]["collision"] =
+        nlohmann::json{{"shape", "sphere"}, {"radius", 30}};
+    Refresh();
+    Click("[data-action=blueprint-asset-select-component][data-index='0']");
+    Refresh();
+    ASSERT_FALSE(Control("blueprint-asset-component-0-collisionRadius-0")->HasAttribute("disabled"));
+    SetValue("blueprint-asset-component-0-collisionRadius-0", "42");
+    SetValue("blueprint-asset-physics-collisionLayer", "3");
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    const auto& changes = std::get<ModifyAssetDocumentPayload>(sink.commands.back().payload).changes;
+    bool root = false, collider = false;
+    for (const auto& change : changes)
+    {
+        if (change.field == "physics")
+        {
+            const auto physics = std::get<nlohmann::json>(change.value);
+            EXPECT_EQ(physics["shape"], "compound");
+            EXPECT_EQ(physics["collisionLayer"], 3);
+            EXPECT_TRUE(physics["collisionLayer"].is_number_unsigned());
+            root = true;
+        }
+        if (change.field == "components")
+        {
+            const auto nodes = std::get<nlohmann::json>(change.value);
+            EXPECT_EQ(nodes[0]["collision"], nlohmann::json({{"shape", "sphere"}, {"radius", 42}}));
+            collider = true;
+        }
+    }
+    EXPECT_TRUE(root && collider);
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, BlueprintConstraintAxisUsesWholeUnitVectorRequest)
+{
+    OpenBlueprintAsset();
+    snapshot.blueprintDocuments[0].document["physics"]["constraints"] = nlohmann::json::array({
+        {{"id", "joint"}, {"type", "hinge"}, {"target", "anchor"}, {"anchor", {0, 0, 0}},
+         {"axis", {0, 1, 0}}, {"minAngle", -90}, {"maxAngle", 90}}
+    });
+    Refresh();
+    SelectOption("blueprint-asset-physics-constraint-0-axis-0", "[0,0,1]");
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    const auto& changes = std::get<ModifyAssetDocumentPayload>(sink.commands.back().payload).changes;
+    ASSERT_EQ(changes.size(), 1u);
+    EXPECT_EQ(std::get<nlohmann::json>(changes[0].value)["constraints"][0]["axis"],
+        nlohmann::json::array({0, 0, 1}));
+}
+
+TEST_F(EditorUiTest, SceneLogicVectorEditUsesStableComponentIdAndPreservesFocusedInput)
+{
+    OpenSceneLogicComponents();
+    auto* control = Control("script-logic-0-property-1-1");
+    ASSERT_NE(control, nullptr);
+    control->Focus();
+    SetValue("script-logic-0-property-1-1", "25");
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    const auto& action = runtimeSink.actions[0];
+    EXPECT_EQ(action.type, UiActionType::SetScriptLogicComponent);
+    EXPECT_EQ(action.actorProperty.worldGeneration, 42u);
+    EXPECT_EQ(action.actorProperty.identity, "blueprintInstance|logic");
+    EXPECT_EQ(action.script, nlohmann::json({
+        {"component", "health"}, {"property", "Offset"}, {"axis", 1}, {"value", 25}}));
+    Refresh();
+    EXPECT_EQ(Control("script-logic-0-property-1-1"), control);
+    EXPECT_EQ(control->GetValue(), "25");
+    EXPECT_TRUE(Control("script-logic-0-property-2")->HasAttribute("disabled"));
+    SetValue("script-logic-0-property-2", "99");
+    EXPECT_EQ(runtimeSink.actions.size(), 1u);
+}
+
+TEST_F(EditorUiTest, SceneLogicInheritedPermissionsKeepStructureReadOnlyAndResetSparse)
+{
+    OpenSceneLogicComponents(true);
+    EXPECT_FALSE(Control("script-logic-0-property-0")->HasAttribute("disabled"));
+    EXPECT_TRUE(Control("script-logic-0-property-0")->IsClassSet("script-overridden"));
+    EXPECT_TRUE(Control("script-logic-0-property-2")->HasAttribute("disabled"));
+    EXPECT_TRUE(Control("script-logic-0-enabled-0")->HasAttribute("disabled"));
+    EXPECT_TRUE(document->GetElementById("script-logic-0-remove-0")->HasAttribute("disabled"));
+    EXPECT_TRUE(document->GetElementById("script-logic-add")->HasAttribute("disabled"));
+    Click("#script-logic-0-reset-0");
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions[0].script, nlohmann::json({
+        {"component", "health"}, {"property", "Speed"}, {"reset", true}}));
+    Click("#script-logic-add");
+    Click("#script-logic-0-remove-0");
+    SetValue("script-logic-0-enabled-0", "false");
+    EXPECT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_TRUE(document->GetElementById("script-logic-0-reset-1")->HasAttribute("disabled"));
+}
+
+TEST_F(EditorUiTest, SceneLogicInlineAddRemoveAndEnabledEmitTypedRequests)
+{
+    OpenSceneLogicComponents();
+    Click("#script-logic-add");
+    Click("#script-logic-0-remove-0");
+    SetValue("script-logic-0-enabled-0", "false");
+    ASSERT_EQ(runtimeSink.actions.size(), 3u);
+    EXPECT_EQ(runtimeSink.actions[0].type, UiActionType::AddScriptLogicComponent);
+    EXPECT_EQ(runtimeSink.actions[0].script, nlohmann::json({{"class", "Gameplay.Health"}}));
+    EXPECT_EQ(runtimeSink.actions[1].type, UiActionType::RemoveScriptLogicComponent);
+    EXPECT_EQ(runtimeSink.actions[1].script, nlohmann::json({{"component", "health"}}));
+    EXPECT_EQ(runtimeSink.actions[2].script, nlohmann::json({
+        {"component", "health"}, {"field", "enabled"}, {"value", false}}));
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, SceneLogicControlsRejectPlayAndOfflineMutations)
+{
+    OpenSceneLogicComponents();
+    UiViewModelSnapshot view;
+    view.scripts.componentClasses = nlohmann::json::array({{{"name", "Gameplay.Health"},
+        {"properties", nlohmann::json::array({
+            {{"name", "Speed"}, {"type", "number"}, {"value", 10}, {"instanceEditable", true}}})}}});
+    view.scripts.state = ScriptPlayState::Playing;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    EXPECT_TRUE(Control("script-logic-0-property-0")->HasAttribute("disabled"));
+    SetValue("script-logic-0-property-0", "30");
+    Click("#script-logic-0-remove-0");
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    view.scripts.state = ScriptPlayState::Editing;
+    view.offlineMode = true;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    SetValue("script-logic-0-property-0", "40");
+    Click("#script-logic-add");
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, RecursiveBlueprintRootCoalescesSparseSiblingEdits)
+{
+    using Json = nlohmann::json;
+    OpenRecursiveBlueprint();
+    const auto damage = ScriptPropertyPathId("blueprint-asset-property-0", Json::array({"Damage"}));
+    const auto cooldown = ScriptPropertyPathId("blueprint-asset-property-0", Json::array({"Cooldown"}));
+    SetValue(damage, "25");
+    SetValue(cooldown, "3");
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    const auto& changes = std::get<ModifyAssetDocumentPayload>(sink.commands[0].payload).changes;
+    ASSERT_EQ(changes.size(), 1u);
+    EXPECT_EQ(changes[0].field, "properties");
+    EXPECT_EQ(std::get<Json>(changes[0].value),
+        Json({{"Settings", {{"Damage", 25}, {"Cooldown", 3}}}}));
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, RecursiveBlueprintLogicCollectionEditReplacesCompleteCollection)
+{
+    using Json = nlohmann::json;
+    OpenRecursiveBlueprint(true);
+    const auto root = std::string("blueprint-asset-logic-property-0-0");
+    const auto bursts = ScriptPropertyPathId(root, Json::array({"Bursts"}));
+    Click("#" + bursts + "-toggle");
+    Refresh();
+    ASSERT_NE(Control(ScriptPropertyPathId(root, Json::array({"Bursts", 4}))), nullptr);
+    EXPECT_EQ(Control(bursts + "-0"), nullptr);
+    SetValue(ScriptPropertyPathId(root, Json::array({"Bursts", 4})), "0.9");
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    const auto& changes = std::get<ModifyAssetDocumentPayload>(sink.commands[0].payload).changes;
+    ASSERT_EQ(changes.size(), 1u);
+    EXPECT_EQ(changes[0].field, "scriptComponents");
+    const auto properties = std::get<Json>(changes[0].value)[0]["properties"]["Settings"];
+    EXPECT_EQ(properties.at("Bursts"), Json::array({0.1, 0.2, 0.3, 0.4, 0.9}));
+    EXPECT_EQ(properties.at("Damage"), 15);
+    EXPECT_EQ(properties.at("Cooldown"), 2);
+    EXPECT_FALSE(properties.contains("Offset"));
+}
+
+TEST_F(EditorUiTest, RecursiveBlueprintNestedResetPreservesSiblingOverride)
+{
+    using Json = nlohmann::json;
+    OpenRecursiveBlueprint();
+    const auto damage = ScriptPropertyPathId("blueprint-asset-property-0", Json::array({"Damage"}));
+    const auto offset = ScriptPropertyPathId("blueprint-asset-property-0", Json::array({"Offset"}));
+    ASSERT_NE(document->GetElementById(damage + "-reset"), nullptr);
+    EXPECT_FALSE(document->GetElementById(damage + "-reset")->HasAttribute("disabled"));
+    EXPECT_TRUE(document->GetElementById(offset + "-reset")->HasAttribute("disabled"));
+    Click("#" + damage + "-reset");
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    const auto& changes = std::get<ModifyAssetDocumentPayload>(sink.commands[0].payload).changes;
+    EXPECT_EQ(std::get<Json>(changes[0].value), Json({{"Settings", {{"Cooldown", 2}}}}));
+}
+
+TEST_F(EditorUiTest, RecursiveSceneRootSendsPathWithoutStaleSiblingValues)
+{
+    using Json = nlohmann::json;
+    OpenRecursiveScene();
+    const auto root = std::string("script-property-0");
+    SetValue(ScriptPropertyPathId(root, Json::array({"Damage"})), "40");
+    SetValue(ScriptPropertyPathId(root, Json::array({"Cooldown"})), "4");
+    ASSERT_EQ(runtimeSink.actions.size(), 2u);
+    EXPECT_EQ(runtimeSink.actions[0].type, UiActionType::SetScriptProperty);
+    EXPECT_EQ(runtimeSink.actions[0].actorProperty.worldGeneration, 42u);
+    EXPECT_EQ(runtimeSink.actions[0].actorProperty.identity, "blueprintInstance|recursive");
+    EXPECT_EQ(runtimeSink.actions[0].script, Json({
+        {"property", "Settings"}, {"path", {"Damage"}}, {"operation", "set"}, {"value", 40}}));
+    EXPECT_EQ(runtimeSink.actions[1].script["path"], Json::array({"Cooldown"}));
+    EXPECT_EQ(snapshot.sceneActors->at(0).scriptProperties["Settings"]["Damage"], 10);
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, RecursiveSceneLogicDictionaryOperationsUseStableComponentAndContainerPath)
+{
+    using Json = nlohmann::json;
+    OpenRecursiveScene(true);
+    const auto root = std::string("script-logic-0-property-0");
+    const auto ammo = ScriptPropertyPathId(root, Json::array({"Ammo"}));
+    Click("#" + ammo + "-toggle");
+    Refresh();
+    SetValue(ammo + "-key", "secondary");
+    Click("#" + ammo + "-add");
+    Click("#" + ScriptPropertyPathId(root, Json::array({"Ammo", "primary"})) + "-remove");
+    ASSERT_EQ(runtimeSink.actions.size(), 2u);
+    EXPECT_EQ(runtimeSink.actions[0].type, UiActionType::SetScriptLogicComponent);
+    EXPECT_EQ(runtimeSink.actions[0].script, Json({
+        {"component", "settings"}, {"property", "Settings"}, {"path", {"Ammo"}},
+        {"operation", "insert"}, {"key", "secondary"}}));
+    EXPECT_EQ(runtimeSink.actions[1].script, Json({
+        {"component", "settings"}, {"property", "Settings"}, {"path", {"Ammo"}},
+        {"operation", "remove"}, {"key", "primary"}}));
+    EXPECT_EQ(snapshot.sceneActors->at(0).scriptLogicComponents[0]["properties"]["Settings"]["Ammo"],
+        Json({{"primary", 30}}));
+}
+
+TEST_F(EditorUiTest, RecursiveSceneRootPermissionControlsWholeSubtreeWhileAllowingInspection)
+{
+    using Json = nlohmann::json;
+    OpenRecursiveScene(false, false);
+    const auto root = std::string("script-property-0");
+    const auto damage = ScriptPropertyPathId(root, Json::array({"Damage"}));
+    const auto bursts = ScriptPropertyPathId(root, Json::array({"Bursts"}));
+    EXPECT_TRUE(Control(damage)->HasAttribute("disabled"));
+    Click("#" + bursts + "-toggle");
+    Refresh();
+    const auto item = ScriptPropertyPathId(root, Json::array({"Bursts", 0}));
+    ASSERT_NE(Control(item), nullptr);
+    EXPECT_TRUE(Control(item)->HasAttribute("disabled"));
+    SetValue(damage, "50");
+    SetValue(item, "8");
+    Click("#" + bursts + "-add");
+    Click("#" + damage + "-reset");
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, RecursiveSceneNestedVectorUsesPathAxisAndQuaternionStaysAtomic)
+{
+    using Json = nlohmann::json;
+    OpenRecursiveScene();
+    const auto root = std::string("script-property-0");
+    const auto offset = ScriptPropertyPathId(root, Json::array({"Offset"}));
+    const auto rotation = ScriptPropertyPathId(root, Json::array({"Orientation"}));
+    SetValue(offset + "-1", "12");
+    SetValue(rotation, "[0,0,0,2]");
+    SetValue(rotation, "[0,0.6,0,0.8]");
+    ASSERT_EQ(runtimeSink.actions.size(), 2u);
+    EXPECT_EQ(runtimeSink.actions[0].script["path"], Json::array({"Offset", 1}));
+    EXPECT_EQ(runtimeSink.actions[0].script["value"], 12);
+    EXPECT_EQ(runtimeSink.actions[1].script["path"], Json::array({"Orientation"}));
+    EXPECT_EQ(runtimeSink.actions[1].script["value"], Json::array({0, 0.6, 0, 0.8}));
+    EXPECT_FALSE(runtimeSink.actions[1].script.contains("axis"));
+}
+
+TEST_F(EditorUiTest, RecursiveScalarRefreshPreservesFocusedPartialInput)
+{
+    using Json = nlohmann::json;
+    OpenRecursiveScene();
+    const auto damage = ScriptPropertyPathId("script-property-0", Json::array({"Damage"}));
+    auto* control = Control(damage);
+    ASSERT_NE(control, nullptr);
+    ASSERT_TRUE(control->Focus());
+    control->SetValue("-");
+    auto actors = *snapshot.sceneActors;
+    actors[0].scriptProperties["Settings"]["Cooldown"] = 5;
+    snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(actors);
+    Refresh();
+    EXPECT_EQ(Control(damage), control);
+    EXPECT_EQ(control->GetValue(), "-");
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, RecursiveCollectionPaginates1024ItemsAndDisablesAppendAtLimit)
+{
+    using Json = nlohmann::json;
+    OpenRecursiveScene();
+    auto actors = *snapshot.sceneActors;
+    auto& values = actors[0].scriptProperties["Settings"]["Bursts"];
+    values = Json::array();
+    for (size_t index = 0; index < 1024; ++index) values.push_back(index);
+    snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(actors);
+    Refresh();
+    const auto root = std::string("script-property-0");
+    const auto bursts = ScriptPropertyPathId(root, Json::array({"Bursts"}));
+    Click("#" + bursts + "-toggle");
+    Refresh();
+    EXPECT_NE(Control(ScriptPropertyPathId(root, Json::array({"Bursts", 15}))), nullptr);
+    EXPECT_EQ(Control(ScriptPropertyPathId(root, Json::array({"Bursts", 16}))), nullptr);
+    EXPECT_TRUE(document->GetElementById(bursts + "-add")->HasAttribute("disabled"));
+    EXPECT_TRUE(document->GetElementById(bursts + "-previous")->HasAttribute("disabled"));
+    for (size_t page = 1; page < 64; ++page)
+    {
+        Click("#" + bursts + "-next");
+        Refresh();
+    }
+    EXPECT_EQ(Control(ScriptPropertyPathId(root, Json::array({"Bursts", 0}))), nullptr);
+    EXPECT_NE(Control(ScriptPropertyPathId(root, Json::array({"Bursts", 1023}))), nullptr);
+    EXPECT_TRUE(document->GetElementById(bursts + "-next")->HasAttribute("disabled"));
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, RecursiveBlueprintReadOnlyInspectionAllowsExpandingCollections)
+{
+    using Json = nlohmann::json;
+    OpenRecursiveBlueprint();
+    auto view = RecursiveRuntimeView();
+    view.scripts.state = ScriptPlayState::Playing;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    const auto root = std::string("blueprint-asset-property-0");
+    const auto bursts = ScriptPropertyPathId(root, Json::array({"Bursts"}));
+    Click("#" + bursts + "-toggle");
+    Refresh();
+    const auto item = ScriptPropertyPathId(root, Json::array({"Bursts", 0}));
+    ASSERT_NE(Control(item), nullptr);
+    EXPECT_TRUE(Control(item)->HasAttribute("disabled"));
+    SetValue(item, "9");
+    Click("#" + bursts + "-add");
+    Refresh();
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, RecursiveObjectTintMarksOnlyAuthoredLeaves)
+{
+    using Json = nlohmann::json;
+    OpenRecursiveScene();
+    const auto root = std::string("script-property-0");
+    EXPECT_TRUE(Control(ScriptPropertyPathId(root, Json::array({"Damage"})))->IsClassSet("script-overridden"));
+    EXPECT_FALSE(Control(ScriptPropertyPathId(root, Json::array({"Offset"})) + "-0")->IsClassSet("script-overridden"));
+}
+
+TEST_F(EditorUiTest, RecursiveDictionaryEscapesKeysAndKeepsTypedIdentity)
+{
+    using Json = nlohmann::json;
+    OpenRecursiveScene(true);
+    const auto key = std::string("slot\"><bad>&");
+    auto actors = *snapshot.sceneActors;
+    actors[0].scriptLogicComponents[0]["properties"]["Settings"]["Ammo"][key] = 2;
+    snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(actors);
+    Refresh();
+    const auto root = std::string("script-logic-0-property-0");
+    const auto ammo = ScriptPropertyPathId(root, Json::array({"Ammo"}));
+    Click("#" + ammo + "-toggle");
+    Refresh();
+    EXPECT_EQ(document->QuerySelector("bad"), nullptr);
+    const auto value = ScriptPropertyPathId(root, Json::array({"Ammo", key}));
+    ASSERT_NE(Control(value), nullptr);
+    SetValue(value, "4");
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions[0].script["path"], Json::array({"Ammo", key}));
+    EXPECT_EQ(runtimeSink.actions[0].script["value"], 4);
+}
+
+TEST_F(EditorUiTest, RecursiveDictionaryAllowsEmptyStringKeyAndRejectsExistingKey)
+{
+    using Json = nlohmann::json;
+    OpenRecursiveScene(true);
+    const auto root = std::string("script-logic-0-property-0");
+    const auto ammo = ScriptPropertyPathId(root, Json::array({"Ammo"}));
+    Click("#" + ammo + "-toggle");
+    Refresh();
+    Click("#" + ammo + "-add");
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions[0].script, Json({
+        {"component", "settings"}, {"property", "Settings"}, {"path", {"Ammo"}},
+        {"operation", "insert"}, {"key", ""}}));
+    SetValue(ammo + "-key", "primary");
+    Click("#" + ammo + "-add");
+    EXPECT_EQ(runtimeSink.actions.size(), 1u);
+    auto actors = *snapshot.sceneActors;
+    actors[0].scriptLogicComponents[0]["properties"]["Settings"]["Ammo"][""] = 1;
+    snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(actors);
+    Refresh();
+    SetValue(ScriptPropertyPathId(root, Json::array({"Ammo", ""})), "2");
+    ASSERT_EQ(runtimeSink.actions.size(), 2u);
+    EXPECT_EQ(runtimeSink.actions[1].script["path"], Json::array({"Ammo", ""}));
+}
+
+TEST_F(EditorUiTest, RecursiveBlueprintControlsRemainInsideDetailsAtWindowSizes)
+{
+    using Json = nlohmann::json;
+    OpenRecursiveBlueprint();
+    const auto root = std::string("blueprint-asset-property-0");
+    for (const auto size : {Rml::Vector2i(960, 540), Rml::Vector2i(1280, 720), Rml::Vector2i(1920, 1080)})
+    {
+        context->SetDimensions(size);
+        Refresh();
+        auto* group = document->GetElementById(root);
+        const auto left = group->GetAbsoluteOffset(Rml::BoxArea::Border).x;
+        const auto right = left + group->GetBox().GetSize(Rml::BoxArea::Border).x;
+        for (const auto& path : {Json::array({"Damage"}), Json::array({"Offset"})})
+        {
+            const auto id = ScriptPropertyPathId(root, path);
+            auto* input = Control(path[0] == "Offset" ? id + "-2" : id);
+            ASSERT_NE(input, nullptr);
+            const auto position = input->GetAbsoluteOffset(Rml::BoxArea::Border);
+            const auto bounds = input->GetBox().GetSize(Rml::BoxArea::Border);
+            EXPECT_GE(bounds.x, 32) << input->GetId();
+            EXPECT_GE(bounds.y, 24) << input->GetId();
+            EXPECT_GE(position.x, left) << input->GetId();
+            EXPECT_LE(position.x + bounds.x, right + 1) << input->GetId();
+        }
+        EXPECT_TRUE(system.errors.empty()) << Errors();
+    }
 }
 
 } // namespace

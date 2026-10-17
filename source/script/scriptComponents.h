@@ -1,0 +1,380 @@
+#pragma once
+
+#include <Eigen/Geometry>
+#include <cmath>
+#include <map>
+#include <set>
+#include <nlohmann/json.hpp>
+
+namespace VL
+{
+inline void ValidateScriptPhysics(const nlohmann::json& physics);
+inline void ValidateScriptPrimitiveCollision(const nlohmann::json& collision);
+// 纯 CPU 组件树：作者 JSON 经一次拓扑校验后，以完整矩阵供候选加载、脚本和渲染快照消费。
+// 父级非均匀缩放产生的 shear 保留在矩阵中，不做有损 Euler/TRS 分解。
+inline std::string ScriptComponentId(const nlohmann::json& component) { return component.value("id", "root"); }
+
+inline bool IsScriptLight(const std::string& type)
+{
+    return type == "pointLight" || type == "spotLight" || type == "directionalLight";
+}
+
+inline bool IsScriptLightNumber(const std::string& field)
+{
+    return field == "intensity" || field == "coneAngleInner" || field == "coneAngleOuter";
+}
+
+inline float ScriptLightDefault(const std::string& field)
+{
+    return field == "intensity" ? 1000.0f : field == "coneAngleOuter" ? 45.0f : 30.0f;
+}
+
+inline void ValidateScriptVector(const nlohmann::json& value, bool scale = false)
+{
+    if (!value.is_array() || value.size() != 3) throw std::invalid_argument("Script transform requires vec3");
+    for (const auto& number : value)
+        if (!number.is_number() || !std::isfinite(number.get<float>()) ||
+            (scale && std::abs(number.get<float>()) < 1e-6f))
+            throw std::invalid_argument("Invalid Script transform vector");
+}
+
+inline void ValidateScriptComponents(const nlohmann::json& components)
+{
+    if (!components.is_array() || components.size() > 128)
+        throw std::invalid_argument("Blueprint supports at most 128 components");
+    std::map<std::string, std::string> parents;
+    for (const auto& component : components)
+    {
+        if (!component.is_object()) throw std::invalid_argument("Component requires object");
+        const auto type = component.value("type", "");
+        if (type != "mesh" && type != "scene" && type != "camera" && !IsScriptLight(type))
+            throw std::invalid_argument("Unsupported component type");
+        const auto id = ScriptComponentId(component);
+        if (id.empty() || id.find_first_of("/\\|\0", 0, 4) != std::string::npos ||
+            (components.size() > 1 && !component.contains("id")) ||
+            !parents.emplace(id, component.value("parent", "")).second)
+            throw std::invalid_argument("Components require unique stable ids without separators");
+        for (const auto& field : component.items())
+            if (field.key() != "id" && field.key() != "parent" && field.key() != "type" &&
+                field.key() != "position" && field.key() != "rotation" && field.key() != "scale" && field.key() != "collision" &&
+                !(type == "mesh" && (field.key() == "modelPath" || field.key() == "materialOverride")) &&
+                !(type == "camera" && (field.key() == "fov" || field.key() == "near_clip" ||
+                    field.key() == "far_clip" || field.key() == "autoActivate")) &&
+                !(IsScriptLight(type) && (field.key() == "color" || field.key() == "intensity" ||
+                    field.key() == "intensityUnit" || field.key() == "visible" ||
+                    (type == "spotLight" && (field.key() == "coneAngleInner" || field.key() == "coneAngleOuter")))))
+                throw std::invalid_argument("Unsupported component field: " + field.key());
+        for (const char* field : {"position", "rotation", "scale"})
+            if (component.contains(field)) ValidateScriptVector(component.at(field), std::string(field) == "scale");
+        if (component.contains("collision"))
+        {
+            ValidateScriptPrimitiveCollision(component.at("collision"));
+        }
+        for (const char* field : {"modelPath", "materialOverride"})
+            if ((type == "mesh" && std::string(field) == "modelPath") || component.contains(field))
+                if (!component.contains(field) || !component.at(field).is_string() ||
+                    component.at(field).get<std::string>().empty())
+                    throw std::invalid_argument("Mesh component requires non-empty asset paths");
+        if (type == "camera")
+        {
+            for (const char* field : {"fov", "near_clip", "far_clip"})
+                if (component.contains(field) && (!component.at(field).is_number() ||
+                    !std::isfinite(component.at(field).get<float>())))
+                    throw std::invalid_argument("Camera projection requires finite numbers");
+            const float fov = component.value("fov", 60.0f);
+            const float nearClip = component.value("near_clip", 1.0f);
+            const float farClip = component.value("far_clip", 10000.0f);
+            if (fov <= 0 || fov >= 179 || nearClip <= 0 || farClip <= nearClip)
+                throw std::invalid_argument("Invalid camera component projection");
+            if (component.contains("autoActivate") && !component.at("autoActivate").is_boolean())
+                throw std::invalid_argument("Camera autoActivate requires boolean");
+        }
+        if (IsScriptLight(type))
+        {
+            // 组件直接使用渲染快照的规范单位；不接受 lm，避免运行时修改锥角时重新解释强度。
+            if (component.value("intensityUnit", "") != (type == "directionalLight" ? "lux" : "cd"))
+                throw std::invalid_argument("Light component requires canonical intensityUnit");
+            if (component.contains("color"))
+            {
+                ValidateScriptVector(component.at("color"));
+                for (const auto& value : component.at("color"))
+                    if (value.get<float>() < 0 || value.get<float>() > 1)
+                        throw std::invalid_argument("Light color requires linear RGB in [0,1]");
+            }
+            if (component.contains("visible") && !component.at("visible").is_boolean())
+                throw std::invalid_argument("Light visible requires boolean");
+            for (const char* field : {"intensity", "coneAngleInner", "coneAngleOuter"})
+                if (component.contains(field) && (!component.at(field).is_number() ||
+                    !std::isfinite(component.at(field).get<float>()) || component.at(field).get<float>() < 0 ||
+                    (std::string(field) == "intensity" && component.at(field).get<float>() > 1e12f)))
+                    throw std::invalid_argument("Invalid light component number");
+            if (type == "spotLight" && (component.value("coneAngleInner", 30.0f) >=
+                component.value("coneAngleOuter", 45.0f) || component.value("coneAngleOuter", 45.0f) >= 90))
+                throw std::invalid_argument("Spot component requires 0 <= inner < outer < 90 degrees");
+        }
+    }
+    for (const auto& entry : parents)
+    {
+        std::set<std::string> visited;
+        auto id = entry.first;
+        while (!id.empty())
+        {
+            if (!visited.insert(id).second) throw std::invalid_argument("Component parent cycle");
+            const auto parent = parents.find(id);
+            if (parent == parents.end()) throw std::invalid_argument("Unknown component parent");
+            id = parent->second;
+        }
+    }
+}
+
+inline void ValidateScriptPhysics(const nlohmann::json& physics)
+{
+    if (!physics.is_object()) throw std::invalid_argument("physics requires object");
+    const auto motion = physics.value("motion", "static");
+    const auto shape = physics.value("shape", "box");
+    const bool character = motion == "character";
+    if ((motion != "static" && motion != "dynamic" && motion != "kinematic" && !character) ||
+        (shape != "box" && shape != "sphere" && shape != "capsule" && shape != "compound" && shape != "mesh") ||
+        (shape == "mesh" && motion != "static") ||
+        (character && shape != "capsule"))
+        throw std::invalid_argument("Unsupported physics motion/shape; character requires capsule");
+    for (const auto& field : physics.items())
+        if (field.key() != "motion" && field.key() != "shape" && field.key() != "halfExtents" &&
+            field.key() != "radius" && field.key() != "mass" && field.key() != "friction" &&
+            field.key() != "restitution" && field.key() != "trigger" && field.key() != "halfHeight" &&
+            field.key() != "stepHeight" && field.key() != "jumpSpeed" && field.key() != "maxSlopeAngle" &&
+            field.key() != "collisionLayer" && field.key() != "collisionMask" && field.key() != "shapes" &&
+            field.key() != "constraints" && field.key() != "component")
+            throw std::invalid_argument("Unknown physics field");
+    for (const char* field : {"collisionLayer", "collisionMask"})
+        if (physics.contains(field) && (!physics.at(field).is_number_integer() ||
+            physics.at(field).get<int64_t>() < 0 ||
+            physics.at(field).get<int64_t>() > (std::string(field) == "collisionLayer" ? 15 : 65535)))
+            throw std::invalid_argument("Invalid collision layer/mask");
+    if (shape == "mesh" && (!physics.contains("component") || !physics.at("component").is_string() ||
+        physics.at("component").get<std::string>().empty()))
+        throw std::invalid_argument("Mesh physics requires a mesh component id");
+    if (physics.contains("shapes"))
+    {
+        const auto& shapes = physics.at("shapes");
+        if (shape != "compound" || !shapes.is_array() || shapes.empty() || shapes.size() > 128)
+            throw std::invalid_argument("Compound requires 1..128 shapes");
+        for (auto primitive : shapes)
+        {
+            if (!primitive.contains("component") || !primitive.at("component").is_string())
+                throw std::invalid_argument("Compound shape requires component id");
+            primitive.erase("component");
+            ValidateScriptPrimitiveCollision(primitive);
+        }
+    }
+    if (physics.contains("constraints"))
+    {
+        const auto& constraints = physics.at("constraints");
+        if (!constraints.is_array() || constraints.size() > 32 || character)
+            throw std::invalid_argument("Physics constraints require at most 32 non-character joints");
+        std::set<std::string> ids;
+        for (const auto& joint : constraints)
+        {
+            if (!joint.is_object()) throw std::invalid_argument("Constraint requires object");
+            const auto type = joint.value("type", "");
+            if ((type != "fixed" && type != "hinge") || !joint.contains("target") ||
+                !joint.at("target").is_string() || joint.at("target").get<std::string>().empty() ||
+                !joint.contains("id") || !joint.at("id").is_string() || joint.at("id").get<std::string>().empty() ||
+                !ids.insert(joint.at("id").get<std::string>()).second)
+                throw std::invalid_argument("Constraint requires unique id, fixed/hinge and target");
+            for (const auto& field : joint.items())
+                if (field.key() != "id" && field.key() != "type" && field.key() != "target" &&
+                    field.key() != "anchor" &&
+                    !(type == "hinge" && (field.key() == "axis" || field.key() == "minAngle" || field.key() == "maxAngle")))
+                    throw std::invalid_argument("Unknown constraint field");
+            ValidateScriptVector(joint.at("anchor"));
+            if (type == "hinge")
+            {
+                ValidateScriptVector(joint.at("axis"));
+                const auto& axis = joint.at("axis");
+                const double length = std::sqrt(axis[0].get<double>() * axis[0].get<double>() +
+                    axis[1].get<double>() * axis[1].get<double>() + axis[2].get<double>() * axis[2].get<double>());
+                if (std::abs(length - 1) > 1e-4 || !std::isfinite(joint.value("minAngle", -180.0)) ||
+                    !std::isfinite(joint.value("maxAngle", 180.0)) || joint.value("minAngle", -180.0) < -180 ||
+                    joint.value("maxAngle", 180.0) > 180 ||
+                    joint.value("minAngle", -180.0) > 0 || joint.value("maxAngle", 180.0) < 0 ||
+                    joint.value("minAngle", -180.0) > joint.value("maxAngle", 180.0))
+                    throw std::invalid_argument("Hinge requires unit axis and ordered degree limits");
+            }
+        }
+    }
+    if (physics.contains("trigger") && !physics.at("trigger").is_boolean())
+        throw std::invalid_argument("trigger requires boolean");
+    if (character && physics.value("trigger", false))
+        throw std::invalid_argument("Character cannot be a trigger");
+    if (shape != "capsule" && physics.contains("halfHeight"))
+        throw std::invalid_argument("Only capsule can specify halfHeight");
+    for (const char* field : {"stepHeight", "jumpSpeed", "maxSlopeAngle"})
+        if (physics.contains(field) && (!character || !physics.at(field).is_number() ||
+            !std::isfinite(physics.at(field).get<float>()) || physics.at(field).get<float>() < 0 ||
+            (std::string(field) == "maxSlopeAngle" && physics.at(field).get<float>() >= 90)))
+            throw std::invalid_argument("Invalid character setting");
+    if (shape == "box")
+    {
+        ValidateScriptVector(physics.at("halfExtents"));
+        for (const auto& value : physics.at("halfExtents"))
+            if (value.get<float>() <= 0) throw std::invalid_argument("Box halfExtents must be positive cm");
+        if (physics.contains("radius")) throw std::invalid_argument("Box cannot specify radius");
+    }
+    else if (shape != "compound" && shape != "mesh" && (!physics.contains("radius") || !physics.at("radius").is_number() ||
+        !std::isfinite(physics.at("radius").get<float>()) || physics.at("radius").get<float>() <= 0 ||
+        physics.contains("halfExtents"))) throw std::invalid_argument("Sphere/capsule requires positive radius cm");
+    // halfHeight 只表示胶囊直段的一半；上下半球另计，防止作者把总高度当直段长度。
+    if (shape == "capsule" && (!physics.contains("halfHeight") || !physics.at("halfHeight").is_number() ||
+        !std::isfinite(physics.at("halfHeight").get<float>()) || physics.at("halfHeight").get<float>() <= 0))
+        throw std::invalid_argument("Capsule requires positive halfHeight cm");
+    for (const char* field : {"mass", "friction", "restitution"})
+        if (physics.contains(field) && (!physics.at(field).is_number() ||
+            !std::isfinite(physics.at(field).get<float>()) || physics.at(field).get<float>() < 0 ||
+            (std::string(field) == "mass" && physics.at(field).get<float>() <= 0) ||
+            (std::string(field) == "restitution" && physics.at(field).get<float>() > 1)))
+            throw std::invalid_argument("Invalid rigid body coefficient");
+}
+
+inline void ValidateScriptPrimitiveCollision(const nlohmann::json& collision)
+{
+    if (!collision.is_object()) throw std::invalid_argument("Component collision requires object");
+    for (const auto& field : collision.items())
+        if (field.key() != "shape" && field.key() != "halfExtents" && field.key() != "radius" && field.key() != "halfHeight")
+            throw std::invalid_argument("Primitive collision only accepts shape dimensions");
+    const auto shape = collision.value("shape", "box");
+    if (shape != "box" && shape != "sphere" && shape != "capsule")
+        throw std::invalid_argument("Component collision requires primitive shape");
+    ValidateScriptPhysics(collision);
+}
+
+inline Eigen::Vector3f ScriptVector(const nlohmann::json& node, const char* field, float fallback = 0)
+{
+    if (!node.contains(field)) return Eigen::Vector3f::Constant(fallback);
+    const auto& value = node.at(field);
+    return {value[0].get<float>(), value[1].get<float>(), value[2].get<float>()};
+}
+
+inline Eigen::Matrix4f ScriptTransformMatrix(const nlohmann::json& node)
+{
+    const Eigen::Vector3f rotation = ScriptVector(node, "rotation") * (3.14159265358979323846f / 180);
+    const Eigen::Quaternionf q = Eigen::AngleAxisf(rotation.y(), Eigen::Vector3f::UnitY()) *
+        Eigen::AngleAxisf(rotation.x(), Eigen::Vector3f::UnitX()) *
+        Eigen::AngleAxisf(rotation.z(), Eigen::Vector3f::UnitZ());
+    Eigen::Matrix4f matrix = Eigen::Matrix4f::Identity();
+    matrix.block<3, 3>(0, 0) = q.toRotationMatrix() * ScriptVector(node, "scale", 1).asDiagonal();
+    matrix.block<3, 1>(0, 3) = ScriptVector(node, "position");
+    return matrix;
+}
+
+inline Eigen::Matrix4f ScriptComponentMatrix(const nlohmann::json& blueprint, size_t index)
+{
+    const auto& components = blueprint.at("components");
+    Eigen::Matrix4f matrix = ScriptTransformMatrix(components.at(index));
+    std::string parent = components.at(index).value("parent", "");
+    while (!parent.empty())
+        for (const auto& component : components)
+            if (ScriptComponentId(component) == parent)
+            {
+                matrix = (ScriptTransformMatrix(component) * matrix).eval();
+                parent = component.value("parent", "");
+                break;
+            }
+    return ScriptTransformMatrix(blueprint) * matrix;
+}
+
+inline void ValidateScriptPhysicsComponents(const nlohmann::json& blueprint)
+{
+    bool componentCollisions = false;
+    for (const auto& component : blueprint.value("components", nlohmann::json::array()))
+        componentCollisions = componentCollisions || component.contains("collision");
+    if (!blueprint.contains("physics"))
+    {
+        if (componentCollisions) throw std::invalid_argument("Component collisions require a compound root body");
+        return;
+    }
+    const auto& physics = blueprint.at("physics");
+    const auto shape = physics.value("shape", "box");
+    if (componentCollisions && shape != "compound")
+        throw std::invalid_argument("Component collisions require a compound root body");
+    if (shape != "compound" && shape != "mesh") return;
+    const auto components = blueprint.value("components", nlohmann::json::array());
+    auto shapes = physics.value("shapes", nlohmann::json::array());
+    if (shape == "mesh") shapes.push_back({{"component", physics.at("component")}});
+    else if (shapes.empty())
+        for (const auto& node : components)
+            if (node.contains("collision")) shapes.push_back({{"component", ScriptComponentId(node)}});
+    if (shapes.empty()) throw std::invalid_argument("Compound requires component collision geometry");
+    for (const auto& child : shapes)
+    {
+        const auto id = child.at("component").get<std::string>();
+        size_t index = 0;
+        while (index < components.size() && ScriptComponentId(components[index]) != id) ++index;
+        if (index == components.size() || (shape == "mesh" && components[index].at("type") != "mesh"))
+            throw std::invalid_argument("Physics references missing or incompatible component");
+        if (shape == "mesh") continue;
+        const Eigen::Matrix4f matrix = ScriptComponentMatrix(blueprint, index);
+        if (!matrix.allFinite()) throw std::invalid_argument("Collision component matrix must be finite");
+        const Eigen::Matrix3f linear = matrix.block<3, 3>(0, 0);
+        const float scale = linear.col(0).norm();
+        const Eigen::Matrix3f rotation = linear / scale;
+        if (scale <= 0 || rotation.determinant() <= 0 ||
+            !(rotation.transpose() * rotation).isApprox(Eigen::Matrix3f::Identity(), 1e-4f))
+            throw std::invalid_argument("Collision components require positive uniform scale without shear");
+    }
+}
+
+inline Eigen::Quaternionf ScriptRotation(const nlohmann::json& node)
+{
+    const Eigen::Vector3f rotation = ScriptVector(node, "rotation") * (3.14159265358979323846f / 180);
+    return Eigen::AngleAxisf(rotation.y(), Eigen::Vector3f::UnitY()) *
+        Eigen::AngleAxisf(rotation.x(), Eigen::Vector3f::UnitX()) *
+        Eigen::AngleAxisf(rotation.z(), Eigen::Vector3f::UnitZ());
+}
+
+inline void ValidateScriptPhysicsReferences(const nlohmann::json& blueprints, const nlohmann::json& templates)
+{
+    std::map<std::string, const nlohmann::json*> byId;
+    for (const auto& blueprint : blueprints) byId.emplace(blueprint.at("id").get<std::string>(), &blueprint);
+    // 模板会产生多个运行时实例；外部稳定 ID 无法表达每次 Spawn 的关节归属，先在作者入口拒绝。
+    for (const auto& item : templates.items())
+        if (!item.value().value("physics", nlohmann::json::object())
+            .value("constraints", nlohmann::json::array()).empty())
+            throw std::invalid_argument("Spawn templates cannot declare external constraints");
+    for (const auto& blueprint : blueprints)
+        for (const auto& joint : blueprint.value("physics", nlohmann::json::object())
+            .value("constraints", nlohmann::json::array()))
+        {
+            const auto target = byId.find(joint.at("target").get<std::string>());
+            if (target == byId.end() || target->second == &blueprint || !target->second->contains("physics"))
+                throw std::invalid_argument("Constraint requires another Blueprint with a body in the same scene");
+            const auto ownerMotion = blueprint.at("physics").value("motion", "static");
+            const auto targetMotion = target->second->at("physics").value("motion", "static");
+            if (ownerMotion == "character" || targetMotion == "character" ||
+                (ownerMotion == "static" && targetMotion == "static"))
+                throw std::invalid_argument("Constraint requires non-character bodies and at least one moving body");
+        }
+}
+
+inline Eigen::Quaternionf ScriptComponentRotation(const nlohmann::json& blueprint, size_t index)
+{
+    const auto& nodes = blueprint.at("components");
+    auto rotation = ScriptRotation(nodes.at(index));
+    auto parent = nodes.at(index).value("parent", "");
+    while (!parent.empty())
+        for (const auto& node : nodes)
+            if (ScriptComponentId(node) == parent)
+            {
+                rotation = ScriptRotation(node) * rotation;
+                parent = node.value("parent", "");
+                break;
+            }
+    // 位置使用完整父矩阵；镜头/灯光朝向只合成旋转，缩放/shear 不改变正交基。
+    return ScriptRotation(blueprint) * rotation;
+}
+
+inline std::string ScriptMeshIdentity(const std::string& blueprintId, const nlohmann::json& component)
+{
+    return "__blueprint/" + blueprintId + (component.contains("id") ? "/" + ScriptComponentId(component) : "");
+}
+} // namespace VL

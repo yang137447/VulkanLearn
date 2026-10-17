@@ -15,6 +15,7 @@
 #include <stb_image.h>
 
 #include "engine/diagnosticsSubsystem.h"
+#include "core/logStore.h"
 #include "platform/platformWindow.h"
 #include "ui/uiColorTransform.h"
 
@@ -65,17 +66,23 @@ bool RmlUiSystemInterface::LogMessage(Rml::Log::Type type, const Rml::String& me
     {
         if (type == Rml::Log::LT_ERROR || type == Rml::Log::LT_ASSERT)
         {
-            diagnostics->ReportError(formattedMessage);
+            diagnostics->ReportError(formattedMessage, "RmlUi");
         }
         else if (type == Rml::Log::LT_WARNING)
         {
-            diagnostics->ReportWarning(formattedMessage);
+            diagnostics->ReportWarning(formattedMessage, "RmlUi");
         }
         else if (type != Rml::Log::LT_DEBUG)
         {
-            diagnostics->ReportInfo(formattedMessage);
+            diagnostics->ReportInfo(formattedMessage, "RmlUi");
         }
     }
+    // Debug 原先不输出到 console；仍进入集中日志，未绑定 diagnostics 的早期消息也保留。
+    if (type == Rml::Log::LT_DEBUG || diagnostics == nullptr)
+        ProcessLog().Append(type == Rml::Log::LT_ERROR || type == Rml::Log::LT_ASSERT ?
+            LogSeverity::Error : type == Rml::Log::LT_WARNING ? LogSeverity::Warning :
+            type == Rml::Log::LT_DEBUG ? LogSeverity::Debug : LogSeverity::Info,
+            "RmlUi", formattedMessage);
     return true;
 }
 

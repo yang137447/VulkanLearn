@@ -22,7 +22,8 @@ bool ModelPreviewCamera::Synchronize(World& world, float aspect)
     for (const auto& entry : world.GetMeshObjects())
     {
         const auto& object = entry.second;
-        if (object.sceneObjectIdentity != "preview_model" && object.sceneObjectIdentity != "preview_material") continue;
+        if (object.sceneObjectIdentity != "preview_model" && object.sceneObjectIdentity != "preview_material" &&
+            object.sceneObjectIdentity.rfind("__blueprint/~preview.", 0) != 0) continue;
         active = true;
         // 合并所有 section 的变换后包围盒；环境背板不参与模型取景。
         for (float x : {object.localBoundsMin.x(), object.localBoundsMax.x()})
@@ -34,6 +35,16 @@ bool ModelPreviewCamera::Synchronize(World& world, float aspect)
                     upper = upper.cwiseMax(corner);
                 }
     }
+    if (!active)
+        for (const auto& actor : world.GetScriptBlueprints())
+            if (actor.at("id").get<std::string>().rfind("~preview.", 0) == 0)
+            {
+                // 空 Actor/纯相机组件仍可导航；无网格时给原点一个厘米级观察范围。
+                active = true;
+                lower = Eigen::Vector3f::Constant(-50);
+                upper = Eigen::Vector3f::Constant(50);
+                break;
+            }
     if (!active) return false;
     // 固定平面只适合正面取景；环绕预览隐藏它，保留场景原有 HDRI 照明和背景。
     world.SetMeshSceneObjectVisible("neutral_backdrop", false);

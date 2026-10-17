@@ -28,6 +28,7 @@ const std::vector<EditorSceneActorGroupSpec> GroupSpecs = {
     {EditorSceneActorType::WindProfile, "windProfile", "SpeedTree Wind Profiles",
         "icons/wind.png"},
     {EditorSceneActorType::Mesh, "mesh", "Meshes", "icons/mesh.png"},
+    {EditorSceneActorType::Script, "blueprintInstance", "Blueprint Instances", "icons/file-box.png"},
 };
 
 const char* EnvironmentTypeName(EnvironmentType type)
@@ -377,6 +378,10 @@ std::vector<EditorSceneActorField> SceneActorFields(const EditorSceneActorSnapsh
     AddField(fields, "actor-field-name", "Name", actor.displayName);
     switch (actor.type)
     {
+    case EditorSceneActorType::Script:
+        AddField(fields, "actor-field-script-class", "C# Class", actor.scriptClass);
+        AddField(fields, "actor-field-script-id", "Blueprint ID", actor.identity.substr(std::string_view("blueprintInstance|").size()));
+        break;
     case EditorSceneActorType::Mesh:
         AddField(fields, "actor-field-scene-object", "Scene Object",
             actor.sceneObjectIdentity);
@@ -489,7 +494,7 @@ std::vector<EditorSceneActorEditableField> SceneActorEditableFields(
     fields.push_back({P::Position, "Location (cm)", actor.position, 3});
     if (actor.type != EditorSceneActorType::SquareAreaLight)
         fields.push_back({P::Rotation, "Rotation (deg)", actor.rotation, 3});
-    if (actor.type == EditorSceneActorType::Mesh)
+    if (actor.type == EditorSceneActorType::Mesh || actor.type == EditorSceneActorType::Script)
     {
         fields.push_back({P::Scale, "Scale", actor.scale, 3});
         return fields;

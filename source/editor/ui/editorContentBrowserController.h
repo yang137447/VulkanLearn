@@ -47,6 +47,7 @@ public:
     bool ProcessEvent(Rml::Event& event, std::optional<std::string>& openAssetPath);
     const Stats& GetStats() const { return stats; }
     std::vector<std::string> VisibleThumbnailPaths() const;
+    std::optional<std::string> BlueprintDragPath(const Rml::Element* element) const;
 
 private:
     struct Entry

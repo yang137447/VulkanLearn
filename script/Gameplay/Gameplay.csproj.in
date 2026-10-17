@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>Gameplay</AssemblyName>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Deterministic>true</Deterministic>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <VulkanLearnResourceRoot Condition="'$(VulkanLearnResourceRoot)' == ''">@VL_RESOURCE_ROOT_XML@</VulkanLearnResourceRoot>
+    <DefaultItemExcludes>$(DefaultItemExcludes);**/bin/**;**/obj/**;**/.git/**;**/Generated/**</DefaultItemExcludes>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="@VL_RUNTIME_PROJECT_XML@" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(VulkanLearnSourceItems)' == ''">
+    <Compile Include="$(VulkanLearnResourceRoot)/Common/**/*.cs;$(VulkanLearnResourceRoot)/Maps/**/*.cs"
+             Exclude="$(DefaultItemExcludes)" />
+  </ItemGroup>
+  <Import Project="$(VulkanLearnSourceItems)" Condition="'$(VulkanLearnSourceItems)' != ''" />
+</Project>

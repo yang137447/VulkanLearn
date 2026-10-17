@@ -27,7 +27,20 @@ body {
 }
 #editor-toolbar h1 { margin-right: 16px; }
 #editor-toolbar button { margin-right: 5px; }
+#script-time-label { margin-right: 4px; flex-shrink: 0; }
+#script-time-scale { width: 50px; height: 24px; box-sizing: border-box; margin-right: 8px; flex-shrink: 0; }
 .toolbar-spacer { flex: 1; }
+/* 窄停靠区允许表单自身滚动，保留底部关闭入口，不能把提交按钮挤到 Details 上。 */
+#script-placement { display: none; padding: 4px 8px; flex-shrink: 1; min-height: 0; overflow: auto; }
+.script-placement-row { display: flex; align-items: center; margin-bottom: 2px; }
+#script-placement select, #script-placement input {
+    display: block; flex: 1; min-width: 0; box-sizing: border-box; height: 27px;
+}
+#script-placement label { width: 42px; flex-shrink: 0; font-size: 11px; color: #babac2; }
+#script-feedback { margin: 2px 0; }
+#script-play, #script-pause, #script-stop { flex-shrink: 0; }
+#script-placement-toggle { margin-left: auto; height: 18px; width: 22px; padding: 1px; min-height: 0; }
+#script-placement-toggle img { width: 14px; height: 14px; }
 #editor-menubar { display: flex; flex-shrink: 0; align-items: center; margin-right: 10px; }
 .menu-root { position: relative; flex-shrink: 0; }
 .menu-title {
@@ -334,6 +347,17 @@ body {
 #details-content .property-row select { width: 44%; }
 #details-content .property-row button { margin-left: 4px; padding: 2px 4px; }
 #content-browser-page { background-color: #202023; }
+.asset-kind-blueprint { drag: clone; }
+.asset-kind-blueprint:drag { opacity: 0.7; }
+.script-overridden { border-color: #d9b765; }
+.script-composite-property { width: 100%; min-width: 0; }
+.script-composite { width: 100%; min-width: 0; }
+.script-composite-head { display: flex; align-items: center; min-height: 28px; min-width: 0; }
+.script-composite-count { flex: 1; min-width: 0; white-space: normal; font-size: 11px; }
+.script-composite-head input { width: 72px; min-width: 0; height: 24px; }
+.script-composite-body { padding-left: 8px; border-left: 1px #49494f; margin-left: 8px; }
+.script-composite-body .property-row { flex-wrap: wrap; }
+.script-composite-body .property-row > label { min-width: 48px; }
 .browser-toolbar, .browser-filterbar {
     display: flex;
     align-items: center;
@@ -575,6 +599,37 @@ body {
 .json-pager { display: flex; align-items: center; justify-content: center; margin: 8px 0; }
 #json-page { font-size: 11px; color: #b5b5bd; margin: 0 10px; }
 #renderer-page { overflow: auto; padding: 4px 10px; }
+#log-page { background-color: #242428; }
+.log-tabs { display: flex; flex-shrink: 0; min-height: 26px; background-color: #2d2d31; }
+.log-tabs button { min-height: 24px; padding: 2px 12px; border-width: 0 0 2px 0; border-color: transparent; background-color: transparent; }
+.log-tabs button.selected { border-color: #8fbcba; color: #f0f0f2; }
+#log-output, #log-scripts { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+#log-scripts { display: none; }
+.log-toolbar { display: flex; flex-wrap: wrap; align-items: center; flex-shrink: 0; min-height: 32px; padding: 2px 5px; box-sizing: border-box; background-color: #2d2d31; }
+.log-toolbar input[type=text] { min-width: 60px; width: 100px; margin-right: 5px; }
+#log-search, #log-scripts-search { flex: 1; min-width: 90px; }
+#log-severity { width: 94px; margin-right: 5px; }
+.log-follow { display: flex; align-items: center; flex-shrink: 0; font-size: 11px; margin-right: 5px; }
+.log-follow span { margin-left: 4px; white-space: nowrap; }
+#log-autoscroll { width: 14px; height: 14px; min-width: 14px; min-height: 14px; padding: 0; margin: 0; border-width: 1px; border-color: #7c7c86; background-color: #1c1c20; }
+#log-autoscroll:checked { background-color: #8fbcba; border-color: #c3dfdc; }
+#log-scroll { flex: 1; min-height: 0; min-width: 0; overflow: auto; }
+#log-rows { min-width: 0; }
+.log-row { display: flex; height: 24px; min-height: 24px; max-height: 24px; line-height: 24px; box-sizing: border-box; overflow: hidden; font-size: 11px; color: #d1d1d8; border-bottom-width: 1px; border-color: #303034; }
+.log-time, .log-level, .log-origin, .log-message { display: block; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; padding: 0 5px; }
+.log-time { width: 82px; color: #90909a; }
+.log-level { width: 58px; }
+.log-origin { width: 90px; color: #96bbb8; }
+.log-message { flex: 4; }
+.log-warning { color: #e7c57e; }
+.log-error { color: #f29e9e; }
+.log-debug { color: #9d9da8; }
+.log-spacer { display: block; flex-shrink: 0; margin: 0; padding: 0; }
+.log-footer { flex-shrink: 0; font-size: 11px; line-height: 22px; padding: 0 7px; color: #9d9da8; background-color: #2d2d31; }
+#log-scripts-summary { flex-shrink: 0; font-size: 11px; line-height: 18px; margin: 0; padding: 4px 7px; max-height: 100px; overflow: auto; white-space: pre-wrap; }
+#log-scripts-rows { flex: 1; min-height: 0; min-width: 0; overflow: auto; }
+.log-script-row { min-height: 24px; line-height: 24px; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 7px; border-bottom-width: 1px; border-color: #303034; }
+#log-scripts-page { font-size: 11px; margin: 0 5px; }
 .renderer-settings { display: flex; }
 .renderer-settings-column { width: 50%; min-width: 0; padding-right: 16px; box-sizing: border-box; }
 .renderer-settings-column:last-child { padding-right: 0; }
@@ -700,6 +755,68 @@ body {
     min-width: 0;
     min-height: 0;
 }
+#blueprint-asset-editor { display: none; position: relative; flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
+.blueprint-asset-header { height: 64px; box-sizing: border-box; padding: 6px 12px; border-bottom: 1px #49494f; }
+.blueprint-asset-header h2 { font-size: 16px; margin: 0 0 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.blueprint-asset-path { margin: 0; font-size: 11px; color: #aeb7b2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.blueprint-asset-header .notice { margin: 3px 0 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.blueprint-asset-workspace { position: absolute; display: flex; top: 64px; bottom: 0; left: 0; right: 0; min-height: 0; }
+#blueprint-asset-components { display: flex; flex-direction: column; width: 20%; min-width: 152px; max-width: 230px; flex-shrink: 0; min-height: 0; border-right: 1px #49494f; box-sizing: border-box; background-color: #252528; }
+.blueprint-asset-panel-title { height: 30px; flex-shrink: 0; padding: 7px 10px; box-sizing: border-box; background-color: #303035; border-bottom: 1px #49494f; font-size: 12px; }
+.blueprint-asset-add-tools { display: flex; align-items: center; padding: 6px; flex-shrink: 0; }
+.blueprint-asset-add-tools select { flex: 1; min-width: 0; margin-right: 5px; }
+.blueprint-asset-mesh-path { padding: 0 6px 6px; flex-shrink: 0; }
+.blueprint-asset-mesh-path label { display: block; margin-bottom: 3px; color: #aeb7b2; font-size: 11px; }
+.blueprint-asset-mesh-path input { width: 100%; box-sizing: border-box; }
+#blueprint-asset-component-tree { flex: 1; min-height: 0; overflow: auto; padding: 4px; }
+#blueprint-asset-component-tree .tree-row { height: 28px; box-sizing: border-box; }
+#blueprint-asset-component-tree .list-item { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#blueprint-asset-preview { display: flex; flex-direction: column; flex: 1; min-width: 80px; min-height: 0; background-color: #141416; }
+.blueprint-asset-preview-toolbar { display: flex; align-items: center; height: 30px; flex-shrink: 0; padding-left: 8px; font-size: 12px; background-color: #303035; border-bottom: 1px #49494f; }
+.blueprint-asset-preview-toolbar button { width: 26px; height: 26px; margin-left: 4px; }
+#blueprint-asset-preview-surface { position: relative; flex: 1; min-height: 0; overflow: hidden; clip: always; }
+#blueprint-asset-preview-image { display: none; position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
+#blueprint-asset-preview-status { margin: 12px; }
+#blueprint-asset-gizmo-overlay {
+    position: absolute; left: 0; top: 0; width: 100%; height: 100%;
+    pointer-events: none; overflow: hidden; clip: always;
+}
+.blueprint-gizmo-line {
+    position: absolute; left: 0; top: 0; width: 1px; height: 2px;
+    transform-origin: 0px 0px; pointer-events: none; visibility: hidden;
+}
+.blueprint-gizmo-x { background-color: #ed665e; }
+.blueprint-gizmo-y { background-color: #79d389; }
+.blueprint-gizmo-z { background-color: #66aafa; }
+.blueprint-gizmo-bounds { background-color: #f4d35e; height: 1px; }
+.blueprint-gizmo-helper { background-color: #a5d6dc; height: 1px; }
+.blueprint-snap-toolbar { display: flex; align-items: center; flex-shrink: 0; height: 26px; padding-left: 4px; background-color: #252529; }
+.blueprint-snap-toolbar label { display: flex; align-items: center; flex-shrink: 0; font-size: 11px; width: 48px; }
+.blueprint-snap-toolbar label span { white-space: nowrap; }
+.blueprint-snap-toolbar input { width: 13px; height: 13px; margin-right: 3px; }
+.blueprint-snap-toolbar select { flex: 1; min-width: 0; height: 22px; margin: 1px 2px; padding: 0px 2px; font-size: 11px; }
+.blueprint-asset-preview-toolbar button.selected { background-color: #39665d; border-color: #8cafa4; }
+#blueprint-asset-details { display: flex; flex-direction: column; width: 36%; min-width: 260px; max-width: 440px; flex-shrink: 0; min-height: 0; border-left: 1px #49494f; box-sizing: border-box; }
+#blueprint-asset-details-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#blueprint-asset-details-scroll { padding: 8px 12px; box-sizing: border-box; }
+#blueprint-asset-editor .property-row > label { width: 34%; font-size: 12px; white-space: normal; }
+#blueprint-asset-editor .property-row > input, #blueprint-asset-editor .property-row > select { min-width: 0; }
+#blueprint-asset-editor .property-row { max-width: 760px; }
+.script-component-instance { display: flex; align-items: center; margin-left: 34%; margin-bottom: 5px; font-size: 11px; }
+.script-component-instance input { margin-right: 4px; }
+.script-component-instance span { white-space: nowrap; }
+/* 向量容器必须占据控件列，避免嵌套 flex 的自适应宽度收缩到轴标签。 */
+#blueprint-asset-editor .horizontal-box { width: 64%; flex-shrink: 0; min-width: 0; }
+#blueprint-asset-editor .component input { height: 24px; }
+#blueprint-asset-editor .component label { display: block; }
+#blueprint-asset-editor h3 { margin-top: 16px; margin-bottom: 8px; }
+#blueprint-asset-editor input[type=checkbox] {
+    width: 16px; height: 16px; padding: 0; flex: none; box-sizing: border-box;
+}
+#blueprint-asset-editor input[type=checkbox]:checked {
+    decorator: image(icons/check.png); background-color: #35594e; border-color: #62a58d;
+}
+#blueprint-asset-save, #blueprint-asset-revert { display: none; }
 #resource-model-tools, #resource-texture-tools { display: none; align-items: center; gap: 3px; }
 #resource-model-tools.visible, #resource-texture-tools.visible { display: flex; }
 #resource-model-info { display: none; padding: 10px 12px; border-bottom-width: 1px; border-bottom-color: #49494f; }
@@ -835,6 +952,9 @@ body {
 .save-row { display: flex; align-items: center; min-height: 30px; padding: 4px 8px; box-sizing: border-box; border-bottom: 1px #45454b; }
 .save-row input { width: 16px; height: 16px; padding: 0; margin-right: 8px; flex-shrink: 0; box-sizing: border-box; }
 .save-row input:checked { decorator: image(icons/check.png); background-color: #35594e; border-color: #62a58d; }
+#script-physics-trigger { width: 18px; height: 18px; flex: 0; flex-shrink: 0; padding: 0; }
+#script-physics-trigger:checked { decorator: image(icons/check.png); background-color: #35594e; border-color: #62a58d; }
+.script-component-actions { display: flex; justify-content: flex-end; height: 26px; }
 .save-path { flex: 1; min-width: 0; white-space: normal; overflow: hidden; font-size: 12px; }
 .save-state { width: 105px; flex-shrink: 0; padding-left: 8px; font-size: 11px; }
 #save-document-status { margin-top: 8px; white-space: normal; max-height: 60px; overflow-y: auto; }

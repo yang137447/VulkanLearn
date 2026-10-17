@@ -19,33 +19,34 @@ namespace VL
 namespace
 {
 
-class RuntimeControlParser : public Rml::BaseXMLParser
+class EditorWorkspaceParser : public Rml::BaseXMLParser
 {
 public:
     std::unordered_map<std::string, Rml::XMLAttributes> inputs;
     std::unordered_map<std::string, Rml::XMLAttributes> buttons;
+    std::unordered_map<std::string, Rml::XMLAttributes> selects;
 
     void HandleElementStart(
         const Rml::String& name, const Rml::XMLAttributes& attributes) override
     {
-        if (name == "input" || name == "button")
+        if (name == "input" || name == "button" || name == "select")
         {
             const auto id = attributes.find("id");
             if (id != attributes.end())
             {
-                auto& elements = name == "input" ? inputs : buttons;
+                auto& elements = name == "input" ? inputs : name == "button" ? buttons : selects;
                 elements.emplace(id->second.Get<Rml::String>(), attributes);
             }
         }
     }
 };
 
-class RuntimeControlAssets : public ::testing::Test
+class EditorWorkspaceAssets : public ::testing::Test
 {
 protected:
     void SetUp() override
     {
-        std::ifstream file(VL_RUNTIME_CONTROL_DOCUMENT);
+        std::ifstream file(VL_EDITOR_WORKSPACE_DOCUMENT);
         ASSERT_TRUE(file.is_open());
         const std::string document(
             (std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
@@ -54,87 +55,72 @@ protected:
         parser.Parse(&stream);
     }
 
-    RuntimeControlParser parser;
+    EditorWorkspaceParser parser;
 };
 
-TEST_F(RuntimeControlAssets, SunRangePreservesMigratedLuxValues)
+// 动态 sun/exposure 范围由 editor_ui_tests 覆盖；此处只核对现役工作区的静态声明。
+TEST_F(EditorWorkspaceAssets, ScriptPlaybackUsesTypedStateValues)
 {
-    const auto control = parser.inputs.find("sun-intensity-slider");
+    for (const auto& state : {std::pair{"script-stop", "0"},
+        std::pair{"script-play", "1"}, std::pair{"script-pause", "2"}})
+    {
+        const auto control = parser.buttons.find(state.first);
+        ASSERT_NE(control, parser.buttons.end());
+        EXPECT_EQ(control->second.at("data-action").Get<Rml::String>(), "script-control");
+        EXPECT_EQ(control->second.at("data-value").Get<Rml::String>(), state.second);
+    }
+}
+
+TEST_F(EditorWorkspaceAssets, ScriptTimeScaleIsTextWithoutRangeRefreshClamping)
+{
+    const auto control = parser.inputs.find("script-time-scale");
     ASSERT_NE(control, parser.inputs.end());
     const auto& attributes = control->second;
-    EXPECT_LE(attributes.at("min").Get<float>(), 1000.0f);
-    EXPECT_GE(attributes.at("max").Get<float>(), 100000.0f);
-    EXPECT_EQ(attributes.at("data-value").Get<Rml::String>(), "sun_intensity");
+    EXPECT_EQ(attributes.at("type").Get<Rml::String>(), "text");
+    EXPECT_EQ(attributes.at("value").Get<Rml::String>(), "1");
+    EXPECT_EQ(attributes.at("data-action").Get<Rml::String>(), "script-time-scale");
 }
 
-TEST_F(RuntimeControlAssets, ShadowRangePreservesCentimeterDistances)
+TEST_F(EditorWorkspaceAssets, LogFiltersUseIndependentValueActions)
 {
-    const auto control = parser.inputs.find("shadow-dynamic-distance-slider");
+    for (const auto* id : {"log-source", "log-search", "log-scripts-search"})
+    {
+        const auto control = parser.inputs.find(id);
+        ASSERT_NE(control, parser.inputs.end());
+        EXPECT_EQ(control->second.at("data-action").Get<Rml::String>(), id);
+        EXPECT_EQ(control->second.at("type").Get<Rml::String>(), "text");
+    }
+    const auto severity = parser.selects.find("log-severity");
+    ASSERT_NE(severity, parser.selects.end());
+    EXPECT_EQ(severity->second.at("data-action").Get<Rml::String>(), "log-severity");
+}
+
+TEST_F(EditorWorkspaceAssets, LogAutoScrollStartsEnabledAsCheckbox)
+{
+    const auto control = parser.inputs.find("log-autoscroll");
     ASSERT_NE(control, parser.inputs.end());
-    const auto& attributes = control->second;
-    EXPECT_LE(attributes.at("min").Get<float>(), 30000.0f);
-    EXPECT_GE(attributes.at("max").Get<float>(), 100000.0f);
-    EXPECT_EQ(attributes.at("data-value").Get<Rml::String>(), "csm_dynamic_shadow_distance");
+    EXPECT_EQ(control->second.at("type").Get<Rml::String>(), "checkbox");
+    EXPECT_EQ(control->second.at("checked").Get<Rml::String>(), "checked");
+    EXPECT_EQ(control->second.at("data-action").Get<Rml::String>(), "log-autoscroll");
 }
 
-TEST_F(RuntimeControlAssets, CameraSpeedRangeUsesCentimetersPerSecond)
+TEST_F(EditorWorkspaceAssets, LogClearIsAnExplicitIconCommand)
 {
-    const auto control = parser.inputs.find("camera-move-speed-slider");
-    ASSERT_NE(control, parser.inputs.end());
-    const auto& attributes = control->second;
-    EXPECT_FLOAT_EQ(attributes.at("min").Get<float>(), 50.0f);
-    EXPECT_FLOAT_EQ(attributes.at("max").Get<float>(), 10000.0f);
-    EXPECT_FLOAT_EQ(attributes.at("step").Get<float>(), 50.0f);
-    EXPECT_EQ(attributes.at("data-value").Get<Rml::String>(), "camera_move_speed");
+    const auto control = parser.buttons.find("log-clear");
+    ASSERT_NE(control, parser.buttons.end());
+    EXPECT_EQ(control->second.at("data-action").Get<Rml::String>(), "log-clear");
+    EXPECT_EQ(control->second.at("class").Get<Rml::String>(), "browser-icon");
+    EXPECT_FALSE(control->second.at("title").Get<Rml::String>().empty());
 }
 
-TEST_F(RuntimeControlAssets, ExposureModesOnlyOfferManualAndAuto)
+TEST_F(EditorWorkspaceAssets, LogViewsAndScriptPagingHaveExplicitCommands)
 {
-    const auto manual = parser.buttons.find("exposure-manual");
-    const auto automatic = parser.buttons.find("exposure-auto");
-    ASSERT_NE(manual, parser.buttons.end());
-    ASSERT_NE(automatic, parser.buttons.end());
-    EXPECT_EQ(parser.buttons.count("exposure-physical"), 0u);
-    EXPECT_EQ(manual->second.at("data-event-click").Get<Rml::String>(),
-        "set_exposure_mode(0)");
-    EXPECT_EQ(automatic->second.at("data-event-click").Get<Rml::String>(),
-        "set_exposure_mode(2)");
-}
-
-TEST_F(RuntimeControlAssets, PhysicalCameraIsCategorizedAsManual)
-{
-    const auto manual = parser.buttons.find("exposure-manual");
-    ASSERT_NE(manual, parser.buttons.end());
-    EXPECT_EQ(manual->second.at("data-class-selected").Get<Rml::String>(),
-        "exposure_mode != 2");
-}
-
-TEST_F(RuntimeControlAssets, ExposureControlsExposeManualAndAutoRanges)
-{
-    const auto manualEv = parser.inputs.find("exposure-ev-slider");
-    ASSERT_NE(manualEv, parser.inputs.end());
-    EXPECT_FLOAT_EQ(manualEv->second.at("min").Get<float>(), -24.0f);
-    EXPECT_FLOAT_EQ(manualEv->second.at("max").Get<float>(), 32.0f);
-    EXPECT_EQ(
-        manualEv->second.at("data-value").Get<Rml::String>(),
-        "exposure_ev");
-
-    const auto compensation = parser.inputs.find("exposure-compensation-slider");
-    ASSERT_NE(compensation, parser.inputs.end());
-    EXPECT_EQ(
-        compensation->second.at("data-value").Get<Rml::String>(),
-        "exposure_compensation");
-
-    const auto minEv = parser.inputs.find("exposure-min-ev-slider");
-    const auto maxEv = parser.inputs.find("exposure-max-ev-slider");
-    ASSERT_NE(minEv, parser.inputs.end());
-    ASSERT_NE(maxEv, parser.inputs.end());
-    EXPECT_EQ(
-        minEv->second.at("data-value").Get<Rml::String>(),
-        "exposure_min_ev");
-    EXPECT_EQ(
-        maxEv->second.at("data-value").Get<Rml::String>(),
-        "exposure_max_ev");
+    for (const auto* id : {"log-output-tab", "log-scripts-tab", "log-scripts-prev", "log-scripts-next"})
+    {
+        const auto control = parser.buttons.find(id);
+        ASSERT_NE(control, parser.buttons.end());
+        EXPECT_FALSE(control->second.at("data-action").Get<Rml::String>().empty());
+    }
 }
 
 TEST(UiBindingUpdate, RestoresUserInputAfterUpdate)

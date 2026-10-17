@@ -8,6 +8,7 @@
 #include "fpsTool.h"
 #include "input/inputSubsystem.h"
 #include "world/worldManager.h"
+#include "script/scriptRuntime.h"
 
 namespace VL
 {
@@ -26,6 +27,7 @@ public:
     RuntimeTestHooks& GetRuntimeTestHooks() { return runtimeTestHooks; }
     InputSubsystem& GetInputSubsystem() { return inputSubsystem; }
     WorldManager& GetWorldManager() { return worldManager; }
+    ScriptRuntimeSubsystem& GetScriptRuntime() { return scriptRuntime; }
 
     const RuntimeClock& GetRuntimeClock() const { return runtimeClock; }
     const FpsTool& GetFpsTool() const { return fpsTool; }
@@ -35,6 +37,7 @@ public:
     const RuntimeTestHooks& GetRuntimeTestHooks() const { return runtimeTestHooks; }
     const InputSubsystem& GetInputSubsystem() const { return inputSubsystem; }
     const WorldManager& GetWorldManager() const { return worldManager; }
+    const ScriptRuntimeSubsystem& GetScriptRuntime() const { return scriptRuntime; }
 
 private:
     RuntimeClock runtimeClock;
@@ -45,6 +48,7 @@ private:
     RuntimeTestHooks runtimeTestHooks;
     InputSubsystem inputSubsystem;
     WorldManager worldManager;
+    ScriptRuntimeSubsystem scriptRuntime;
 };
 
 } // namespace VL

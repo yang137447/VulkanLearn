@@ -19,5 +19,13 @@ body {
     top: 18dp;
     padding: 8dp 12dp;
     background-color: #0c1222c2;
-    white-space: nowrap;
+    max-width: 75%;
+    max-height: 65%;
+    overflow: hidden;
+    word-break: break-all;
+}
+
+#gameplay-hud {
+    margin-top: 8dp;
+    white-space: pre-wrap;
 }

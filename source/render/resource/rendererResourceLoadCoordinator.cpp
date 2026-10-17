@@ -69,7 +69,8 @@ RendererResourceLoadCoordinator::LoadRendererResources(
     const nlohmann::json& scnJson = worldBuildPlan.sceneJson;
     for (const SceneAssetObjectPlan& objectPlan : worldBuildPlan.sceneAssetPlan.objectPlans)
     {
-        const auto& obj = scnJson["objects"][objectPlan.objectIndex];
+        const auto& obj = objectPlan.componentObject ? *objectPlan.componentObject :
+            scnJson["objects"][objectPlan.objectIndex];
         const std::string& type = objectPlan.objectType;
 
         if (type == "mesh")
@@ -96,6 +97,11 @@ RendererResourceLoadCoordinator::LoadRendererResources(
         {
             if (!loadContext.offlineOnly)
                 environmentLoader.LoadEnvironmentObject(obj);
+        }
+        else if (type == "blueprintInstance")
+        {
+            // Actor 声明归脚本上下文；它的网格已有独立派生计划，不能再次按声明加载。
+            continue;
         }
         else if (type == "directionalLight" ||
                  type == "pointLight" ||

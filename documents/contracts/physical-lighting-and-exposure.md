@@ -46,6 +46,13 @@ the transition is smooth.
 The current `radius` field remains a legacy scene field because it is not yet
 consumed by the real-time evaluator. It is not a physical attenuation control.
 
+Optional C# Blueprint light components accept only canonical units: directional
+`lux`, point/spot `cd`. They share the existing snapshot and GPU conversion
+boundary. Their cone half-angles use degrees in authoring/C# and radians in
+snapshots; parent scale affects position, not intensity or cone angles.
+Component directional lights do not replace the authored primary CSM sun.
+See [C# Blueprint runtime](csharp-blueprint-runtime.md) for fields and lifetime rules.
+
 ## Camera Exposure
 
 Every camera must provide:

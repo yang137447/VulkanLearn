@@ -35,6 +35,7 @@ VukanLearnResources/
 
 ```text
 Common/
+  Blueprints/
   Meshes/
   Materials/
     Pass/
@@ -44,6 +45,7 @@ Common/
 
 Maps/SC_car_showcase/
   SC_car_showcase.json
+  Blueprints/
   Meshes/
   Materials/
   Textures/
@@ -56,6 +58,11 @@ Maps/SC_car_showcase/
 - `SM_*.json`：模型/网格描述
 - `MI_*.json`：材质实例
 - `T_*.json`：纹理描述
+- `BP_*.json`：C# 蓝图 资产，class/属性/组件树/可选根刚体；场景实例保存 blueprintPath 与属性覆写，
+  spawnAssets 声明预加载模板。资产不继承其它 BP
+- `*.blueprint.cs`：用户 C# 蓝图源码，与 BP 配置同属 Common 或对应地图的内容域；
+  编辑器新建时使用 `BP_*.blueprint.cs` 与 `BP_*.json` 配对。普通辅助类/自定义数据使用 `.cs`，
+  编译收集 Common/Maps 全部源码，不要求一个源文件只能声明一个类型。
 - `Source/`：OBJ、glTF、GLB、SpeedTree、DCC 或其他原始输入
 
 `M_*.json`、`M_*.glsl` 和其他 Shader 源文件仍属于引擎仓库的
@@ -79,6 +86,8 @@ Maps/SC_car_showcase/
 ```text
 Generated/
   Runtime/
+    CSharp/
+    ScriptBuilds/
   Import/
   Validation/
   Screenshots/

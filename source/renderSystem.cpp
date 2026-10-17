@@ -3035,6 +3035,15 @@ void RenderSystem::RenderLatestSnapshotOrLastGood()
         {
             InitializeCurrentRenderSceneResources();
         }
+        else if (!offlineMode && currentResolvedRenderScene.NeedsObjectResources())
+        {
+            // 同一 World 的新对象（Spawn、重新显示）也有独立模型 UBO/descriptor。
+            // 只补缺失的逐对象包；已有 entry 的 Initialize 是幂等的，不重建图或环境，
+            // 不覆盖 GPU 正在读取的旧包，仍由 World-local cache 随 epoch 退休。
+            VL::RendererObjectResourceRegistry registry;
+            registry.InitializeResolvedSceneResources(*rendererBackend, BuildRendererDescriptorContext(),
+                currentRenderScene, currentResolvedRenderScene, VL::RendererResourceCache::GetInstance());
+        }
     }
     else if (!hasRenderScene)
     {

@@ -26,6 +26,20 @@ TEST(SceneObjectTypeSupport, RejectsLegacySunLight)
     EXPECT_FALSE(HasSupportedSceneObjectTypes(scene));
 }
 
+TEST(SceneObjectTypeSupport, AcceptsActorLevelForReturnFromAssetPreview)
+{
+    const nlohmann::json scene = {
+        {"objects", {{{"type", "blueprintInstance"}}, {{"type", "camera"}}, {{"type", "environment"}}}}
+    };
+    EXPECT_TRUE(HasSupportedSceneObjectTypes(scene));
+}
+
+TEST(SceneObjectTypeSupport, RejectsEditorOnlyTerrain)
+{
+    EXPECT_FALSE(HasSupportedSceneObjectTypes(
+        {{"objects", {{{"type", "terrain"}}}}}));
+}
+
 TEST(SceneObjectTypeSupport, RejectsUnknownObjectType)
 {
     const nlohmann::json scene = {

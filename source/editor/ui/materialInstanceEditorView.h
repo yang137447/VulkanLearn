@@ -5,6 +5,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include "core/logStore.h"
 
 #include "editor/command/editorCommand.h"
 #include "editor/selection/materialInstanceSelection.h"
@@ -165,9 +166,18 @@ struct MaterialInstanceModelSnapshot
     std::vector<MaterialInstanceModelMaterialSnapshot> materials;
 };
 
+// BP 修改/历史命令的 GT 终态确认；失败不推进文档版本，也必须释放 producer 的等待状态。
+struct EditorBlueprintCommandFeedback
+{
+    uint64_t sequence = 0;
+    std::string assetPath;
+    bool succeeded = false;
+};
+
 // Runtime 发布的只读资产视图；不依赖 UI 库，不携带文档或 GPU 对象指针。
 struct MaterialInstanceEditorSnapshot
 {
+    std::shared_ptr<const LogSnapshot> logs;
     std::shared_ptr<const EditorJsonAssetCatalogSnapshot> assetCatalog;
     std::shared_ptr<const EditorJsonDocumentSnapshot> jsonDocument;
     std::shared_ptr<const EditorThumbnailSnapshot> thumbnails;
@@ -179,6 +189,8 @@ struct MaterialInstanceEditorSnapshot
     std::vector<MaterialInstanceAssetEntry> assets;
     std::vector<MaterialInstanceAssetEntry> documentTabs;
     std::vector<EditorModifiedDocumentSnapshot> modifiedDocuments;
+    std::vector<EditorAssetDocumentResultPayload> blueprintDocuments;
+    std::vector<EditorBlueprintCommandFeedback> blueprintCommandFeedback;
     std::vector<EditorSaveFeedback> saveFeedback;
     std::vector<EditorTextureAssetSnapshot> textureAssets;
     std::vector<MaterialInstanceModelSnapshot> sceneModels;

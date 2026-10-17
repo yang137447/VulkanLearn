@@ -3,30 +3,32 @@
 #include <string>
 
 #include "core/runtimeResult.h"
+#include "core/logStore.h"
 
 namespace VL
 {
 
 enum class DiagnosticSeverity
 {
+    Debug,
     Info,
     Warning,
     Error
 };
 
-// Central report point for runtime diagnostics. It deliberately starts small:
-// console output today, profiler overlays or test hooks later without changing
-// every engine subsystem that wants to report a runtime event.
+// 控制台保留原有输出；结构化日志另存入有界 owner，UI 不访问 producer。
 class DiagnosticsSubsystem
 {
 public:
-    void ReportInfo(const std::string& message) const;
-    void ReportWarning(const std::string& message) const;
-    void ReportError(const std::string& message) const;
+    void ReportDebug(const std::string& message, const std::string& source = "Engine", LogLocation location = {}) const;
+    void ReportInfo(const std::string& message, const std::string& source = "Engine", LogLocation location = {}) const;
+    void ReportWarning(const std::string& message, const std::string& source = "Engine", LogLocation location = {}) const;
+    void ReportError(const std::string& message, const std::string& source = "Engine", LogLocation location = {}) const;
     void ReportRuntimeError(const std::string& context, const RuntimeError& error) const;
 
 private:
-    void Report(DiagnosticSeverity severity, const std::string& message) const;
+    void Report(DiagnosticSeverity severity, const std::string& message, const std::string& source,
+        LogLocation location) const;
 };
 
 } // namespace VL

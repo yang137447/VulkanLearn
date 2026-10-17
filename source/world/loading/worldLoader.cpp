@@ -7,6 +7,8 @@
 #include <string_view>
 
 #include "scene/validation/sceneAssetValidator.h"
+#include "commonFunction.h"
+#include "script/scriptBlueprintAsset.h"
 
 namespace VL
 {
@@ -102,6 +104,9 @@ RuntimeResult<WorldBuildPlan> WorldLoader::Load(
             }
         }
 
+        buildPlan.authoredSceneJson = buildPlan.sceneJson;
+        // 资产只在隔离准备中解析一次；网格计划与托管实例消费完全相同的有效声明。
+        buildPlan.sceneJson = ResolveScriptBlueprintScene(CommonFunction::GetResourcePath(), buildPlan.sceneJson, scenePath);
         buildPlan.sceneAssetPlan = SceneAssetValidator::BuildLoadPlan(scenePath, buildPlan.sceneJson);
         SceneAssetValidator::Validate(buildPlan.sceneAssetPlan);
         return RuntimeResult<WorldBuildPlan>::Success(std::move(buildPlan));

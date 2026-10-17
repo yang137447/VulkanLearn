@@ -2,6 +2,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include "editor/service/sceneDocumentService.h"
 #include "editor/command/editorCommandJsonCodec.h"
 #include "editor/scene/editorSceneActorBuilder.h"
@@ -9,6 +10,7 @@
 #include "render/camera/cameraExposure.h"
 #include "world/world.h"
 #include "sceneNode.h"
+#include "script/scriptBlueprintAsset.h"
 
 namespace
 {
@@ -59,7 +61,7 @@ protected:
         actor.light.intensity = ReadCanonicalLightIntensity(source["objects"][1]);
         return actor;
     }
-    EditorSceneActorSnapshot CameraActor() const
+    EditorSceneActorSnapshot CameraBlueprint() const
     {
         EditorSceneActorSnapshot actor;
         actor.scenePath = path.string();
@@ -104,6 +106,242 @@ TEST_F(SceneDocumentTest, PositionSavePreservesUntouchedFieldsAndOriginalNumeric
     EXPECT_TRUE(service->ModifiedDocuments().empty());
 }
 
+TEST_F(SceneDocumentTest, ScriptBlueprintCreateAndPropertySaveRetainPersistentIdentity)
+{
+    Json actor{{"type", "blueprintInstance"}, {"id", "persistent-a"}, {"name", "Rotator"},
+        {"class", "Gameplay.RotatorBlueprint"}, {"properties", {{"DegreesPerSecond", 45}}},
+        {"position", {0, 0, 0}}, {"rotation", {0, 0, 0}}, {"scale", {1, 1, 1}},
+        {"components", Json::array()}};
+    std::string error;
+    ASSERT_TRUE(service->StageScriptBlueprint(path.string(), actor, true, error)) << error;
+    EXPECT_EQ(Read(), source);
+    ASSERT_EQ(service->Save(SaveCommand()).status, EditorCommandStatus::Succeeded);
+    EXPECT_EQ(Read()["objects"][2], actor);
+    actor["properties"]["DegreesPerSecond"] = 90;
+    ASSERT_TRUE(service->StageScriptBlueprint(path.string(), actor, false, error)) << error;
+    ASSERT_EQ(service->Save(SaveCommand()).status, EditorCommandStatus::Succeeded);
+    SceneDocumentService reopened(root);
+    ASSERT_TRUE(reopened.Open(path.string(), error)) << error;
+    EXPECT_EQ(Read()["objects"][2]["id"], "persistent-a");
+    EXPECT_EQ(Read()["objects"][2]["properties"]["DegreesPerSecond"], 90);
+    EXPECT_EQ(Read()["opaque"], source["opaque"]);
+}
+
+TEST_F(SceneDocumentTest, InvalidScriptBlueprintDoesNotMutateDraftOrDisk)
+{
+    Json actor{{"type", "blueprintInstance"}, {"id", "bad"}, {"name", "Bad"},
+        {"class", "Gameplay.RotatorBlueprint"}, {"properties", Json::object()},
+        {"position", {0, 0, 0}}, {"rotation", {0, 0, 0}}, {"scale", {1, 1, 1}},
+        {"components", Json::array({{{"type", "terrain"}}})}};
+    std::string error;
+    EXPECT_FALSE(service->StageScriptBlueprint(path.string(), actor, true, error));
+    EXPECT_FALSE(error.empty());
+    EXPECT_TRUE(service->ModifiedDocuments().empty());
+    EXPECT_EQ(Read(), source);
+}
+
+TEST_F(SceneDocumentTest, BlueprintAssetInstanceSaveRetainsSparseOverridesAndReference)
+{
+    Json actor{{"type", "blueprintInstance"}, {"id", "asset-instance"}, {"name", "Rotator"},
+        {"class", "Gameplay.RotatorBlueprint"}, {"properties", {{"DegreesPerSecond", 45}}},
+        {"instanceEditable", {"DegreesPerSecond"}},
+        {"position", {10, 20, 30}}, {"rotation", {0, 10, 0}}, {"scale", {2, 2, 2}}};
+    std::string error;
+    const std::string assetPath = "Common/Blueprints/BP_rotator.json";
+    ASSERT_TRUE(service->CreateScriptBlueprintAsset(assetPath, actor, error)) << error;
+    actor.erase("class");
+    actor.erase("instanceEditable");
+    actor["blueprintPath"] = assetPath;
+    actor["properties"] = Json::object();
+    actor["unmanaged"] = "retained";
+    ASSERT_TRUE(service->StageScriptBlueprint(path.string(), actor, true, error)) << error;
+    ASSERT_EQ(service->Save(SaveCommand()).status, EditorCommandStatus::Succeeded);
+    service->NotifyWorldLoaded(path.string());
+    actor = service->ScriptBlueprintDraft(path.string(), "blueprintInstance|asset-instance", error);
+    ASSERT_FALSE(actor.is_null()) << error;
+    EXPECT_EQ(service->ResolveBlueprint(actor, path.string())["properties"]["DegreesPerSecond"], 45);
+    actor["properties"]["DegreesPerSecond"] = 90;
+    ASSERT_TRUE(service->StageScriptBlueprint(path.string(), actor, false, error)) << error;
+    ASSERT_EQ(service->Save(SaveCommand()).status, EditorCommandStatus::Succeeded);
+    service->NotifyWorldLoaded(path.string());
+    actor = service->ScriptBlueprintDraft(path.string(), "blueprintInstance|asset-instance", error);
+    actor["properties"].erase("DegreesPerSecond");
+    ASSERT_TRUE(service->StageScriptBlueprint(path.string(), actor, false, error)) << error;
+    ASSERT_EQ(service->Save(SaveCommand()).status, EditorCommandStatus::Succeeded);
+    SceneDocumentService reopened(root);
+    ASSERT_TRUE(reopened.Open(path.string(), error));
+    actor = reopened.ScriptBlueprintDraft(path.string(), "blueprintInstance|asset-instance", error);
+    EXPECT_EQ(actor["blueprintPath"], assetPath);
+    EXPECT_TRUE(actor["properties"].empty());
+    EXPECT_FALSE(actor.contains("class"));
+    EXPECT_FALSE(actor.contains("components"));
+    EXPECT_EQ(actor["position"], Json::array({10, 20, 30}));
+    EXPECT_EQ(actor["unmanaged"], "retained");
+    EXPECT_EQ(reopened.ResolveBlueprint(actor, path.string())["properties"]["DegreesPerSecond"], 45);
+}
+
+TEST_F(SceneDocumentTest, BlueprintAssetCreationNeverOverwritesExistingFile)
+{
+    Json actor{{"name", "Rotator"}, {"class", "Gameplay.RotatorBlueprint"}, {"properties", Json::object()},
+        {"rotation", {0, 0, 0}}, {"scale", {3, 3, 3}}};
+    std::string error;
+    ASSERT_TRUE(service->CreateScriptBlueprintAsset("Common/Blueprints/BP_rotator.json", actor, error)) << error;
+    actor["name"] = "Replacement";
+    EXPECT_FALSE(service->CreateScriptBlueprintAsset("Common/Blueprints/BP_rotator.json", actor, error));
+    const auto asset = ReadScriptBlueprintAsset(root, "Common/Blueprints/BP_rotator.json");
+    EXPECT_EQ(asset["name"], "Rotator");
+    EXPECT_EQ(asset["scale"], Json::array({3, 3, 3}));
+    EXPECT_TRUE(service->ModifiedDocuments().empty());
+    for (const auto& entry : std::filesystem::directory_iterator(root / "Common/Blueprints"))
+        EXPECT_EQ(entry.path().filename(), "BP_rotator.json");
+}
+
+TEST_F(SceneDocumentTest, BlueprintSourceCreationPublishesAdjacentSourceAndAssetInCommonAndSceneFolders)
+{
+    std::string error;
+    for (const std::string destination : {"Common/Blueprints/Gameplay/BP_fresh.json",
+        "Maps/SC_test/Blueprints/Interaction/BP_fresh.json"})
+    {
+        ASSERT_TRUE(service->CreateScriptBlueprintSource(destination, "MyGame.FreshBlueprint",
+            "Fresh", Json::array(), error)) << error;
+        const auto asset = ReadScriptBlueprintAsset(root, destination);
+        EXPECT_EQ(asset["class"], "MyGame.FreshBlueprint");
+        EXPECT_EQ(asset["name"], "Fresh");
+        EXPECT_TRUE(asset["properties"].empty());
+        EXPECT_TRUE(asset["instanceEditable"].empty());
+        EXPECT_TRUE(asset["components"].empty());
+        auto sourcePath = root / destination;
+        sourcePath.replace_extension(".blueprint.cs");
+        std::ifstream file(sourcePath);
+        const std::string text{std::istreambuf_iterator<char>(file), {}};
+        EXPECT_NE(text.find("namespace MyGame;"), std::string::npos);
+        EXPECT_NE(text.find("public sealed class FreshBlueprint : global::VulkanLearn.Blueprint"),
+            std::string::npos);
+        for (const auto& entry : std::filesystem::directory_iterator(sourcePath.parent_path()))
+            EXPECT_TRUE(entry.path().extension() == ".json" || entry.path().extension() == ".cs");
+    }
+    EXPECT_EQ(Read(), source);
+    EXPECT_TRUE(service->ModifiedDocuments().empty());
+}
+
+TEST_F(SceneDocumentTest, BlueprintSourceCreationRejectsInvalidAndReservedIdentifiersBeforeWriting)
+{
+    std::string error;
+    for (const std::string className : {"", "Game..Player", "Game.1Player", "Game.class",
+        "Game.Player, Gameplay", "Game.Player<T>", "Game.Player\n{}", "VulkanLearn.Blueprint"})
+    {
+        EXPECT_FALSE(service->CreateScriptBlueprintSource("Common/Blueprints/BP_bad.json",
+            className, "Bad", Json::array(), error)) << className;
+        EXPECT_FALSE(error.empty());
+    }
+    EXPECT_FALSE(std::filesystem::exists(root / "Common"));
+}
+
+TEST_F(SceneDocumentTest, BlueprintSourceCreationRejectsRegisteredTypesAndPreservesOtherNamespaces)
+{
+    const Json catalog = Json::array({{{"name", "Game.PlayerBlueprint"}},
+        {{"name", "Game.CounterComponent"}}});
+    std::string error;
+    for (const char* name : {"Game.PlayerBlueprint", "Game.CounterComponent"})
+        EXPECT_FALSE(service->CreateScriptBlueprintSource("Common/Blueprints/BP_player.json",
+            name, "Player", catalog, error));
+    EXPECT_FALSE(std::filesystem::exists(root / "Common"));
+    EXPECT_TRUE(service->CreateScriptBlueprintSource("Common/Blueprints/BP_player.json",
+        "OtherGame.PlayerBlueprint", "Player", catalog, error)) << error;
+}
+
+TEST_F(SceneDocumentTest, BlueprintSourceCreationNeverOverwritesAnExistingSourceOrPublishesItsAsset)
+{
+    const auto sourcePath = root / "Common/Blueprints/BP_player.blueprint.cs";
+    std::filesystem::create_directories(sourcePath.parent_path());
+    std::ofstream(sourcePath) << "existing-source";
+    std::string error;
+    EXPECT_FALSE(service->CreateScriptBlueprintSource("Common/Blueprints/BP_player.json",
+        "Game.PlayerBlueprint", "Player", Json::array(), error));
+    std::ifstream file(sourcePath);
+    EXPECT_EQ(std::string(std::istreambuf_iterator<char>(file), {}), "existing-source");
+    EXPECT_FALSE(std::filesystem::exists(root / "Common/Blueprints/BP_player.json"));
+}
+
+TEST_F(SceneDocumentTest, BlueprintSourceCreationNeverOverwritesAnExistingAssetOrPublishesItsSource)
+{
+    const auto target = root / "Common/Blueprints/BP_player.json";
+    std::filesystem::create_directories(target.parent_path());
+    std::ofstream(target) << "existing-asset";
+    std::string error;
+    EXPECT_FALSE(service->CreateScriptBlueprintSource("Common/Blueprints/BP_player.json",
+        "Game.PlayerBlueprint", "Player", Json::array(), error));
+    std::ifstream file(target);
+    EXPECT_EQ(std::string(std::istreambuf_iterator<char>(file), {}), "existing-asset");
+    EXPECT_FALSE(std::filesystem::exists(root / "Common/Blueprints/BP_player.blueprint.cs"));
+}
+
+TEST_F(SceneDocumentTest, BlueprintSourceCreationRejectsNonContentPathsWithoutPublishingEitherFile)
+{
+    std::string error;
+    for (const char* destination : {"../BP_escape.json", "Generated/Blueprints/BP_generated.json",
+        "Common/Scripts/BP_wrong.json", "Maps/Blueprints/BP_wrong.json",
+        "Maps/SC_test/Blueprints/SM_wrong.json"})
+        EXPECT_FALSE(service->CreateScriptBlueprintSource(destination, "Game.PlayerBlueprint",
+            "Player", Json::array(), error)) << destination;
+    EXPECT_FALSE(std::filesystem::exists(root / "Common"));
+    EXPECT_FALSE(std::filesystem::exists(root / "Generated"));
+}
+
+TEST_F(SceneDocumentTest, BlueprintSourceCreationRejectsExcludedDirectoriesWithMixedAsciiCase)
+{
+    std::string error;
+    for (const char* destination : {"Common/Blueprints/Gameplay/gEnErAtEd/Nested/BP_wrong.json",
+        "Maps/SC_test/Blueprints/oBj/BP_wrong.json", "Common/Blueprints/.GIT/BP_wrong.json",
+        "Maps/SC_test/Blueprints/BiN/Nested/BP_wrong.json"})
+    {
+        EXPECT_FALSE(service->CreateScriptBlueprintSource(destination, "Game.PlayerBlueprint",
+            "Player", Json::array(), error)) << destination;
+        EXPECT_NE(error.find("excluded C# directory"), std::string::npos) << error;
+    }
+    EXPECT_FALSE(std::filesystem::exists(root / "Common"));
+    EXPECT_FALSE(std::filesystem::exists(root / "Maps/SC_test/Blueprints"));
+}
+
+TEST_F(SceneDocumentTest, BlueprintCreationPublishesCanonicalTypeAndRetainsInstancePermissions)
+{
+    Json actor{{"name", "Rotator"}, {"class", "Gameplay.RotatorBlueprint"},
+        {"properties", {{"DegreesPerSecond", 90}}}, {"__instanceEditable", {"DegreesPerSecond"}},
+        {"rotation", {0, 30, 0}}, {"scale", {1, 1, 1}}};
+    std::string error;
+    for (const std::string destination : {"Common/Blueprints/BP_rotator.json",
+        "Maps/SC_test/Blueprints/BP_rotator.json"})
+    {
+        ASSERT_TRUE(service->CreateScriptBlueprintAsset(destination, actor, error)) << error;
+        const auto asset = ReadScriptBlueprintAsset(root, destination);
+        EXPECT_EQ(asset["type"], "blueprint");
+        EXPECT_EQ(asset["instanceEditable"], Json::array({"DegreesPerSecond"}));
+        actor["name"] = "Replacement";
+        EXPECT_FALSE(service->CreateScriptBlueprintAsset(destination, actor, error));
+        EXPECT_EQ(ReadScriptBlueprintAsset(root, destination), asset);
+    }
+    for (const char* destination : {"Common/Blueprints/ACT_wrong.json", "Common/Actors/BP_wrong.json",
+        "Generated/Blueprints/BP_wrong.json", "Maps/Blueprints/BP_wrong.json"})
+        EXPECT_FALSE(service->CreateScriptBlueprintAsset(destination, actor, error)) << destination;
+    EXPECT_TRUE(service->ModifiedDocuments().empty());
+}
+
+TEST_F(SceneDocumentTest, BlueprintAssetCreationRejectsEscapesAndInvalidContentOwnership)
+{
+    Json actor{{"name", "Rotator"}, {"class", "Gameplay.RotatorBlueprint"}, {"properties", Json::object()},
+        {"rotation", {0, 0, 0}}, {"scale", {1, 1, 1}}};
+    std::string error;
+    for (const char* destination : {"../BP_escape.json", "Generated/Blueprints/BP_generated.json",
+        "Common/Blueprints/SM_wrong.json", "Maps/Blueprints/BP_wrong.json"})
+        EXPECT_FALSE(service->CreateScriptBlueprintAsset(destination, actor, error)) << destination;
+    std::filesystem::create_directories(root / "Maps/SC_test/Meshes");
+    std::ofstream(root / "Maps/SC_test/Meshes/SM_model.json") << R"({"type":"mesh"})";
+    actor["components"] = Json::array({{{"type", "mesh"}, {"modelPath", "Maps/SC_test/Meshes/SM_model.json"}}});
+    EXPECT_FALSE(service->CreateScriptBlueprintAsset("Common/Blueprints/BP_rotator.json", actor, error));
+    EXPECT_FALSE(std::filesystem::exists(root / "Common/Blueprints/BP_rotator.json"));
+    ASSERT_TRUE(service->CreateScriptBlueprintAsset("Maps/SC_test/Blueprints/BP_rotator.json", actor, error)) << error;
+}
+
 TEST_F(SceneDocumentTest, ReturningToParsedBaselineClearsDirtyWithoutWriting)
 {
     auto actor = Point();
@@ -122,7 +360,7 @@ TEST_F(SceneDocumentTest, ExposureSavePatchesOnlyEditedFieldsAndRetainsPhysicalP
     Write(source);
     std::string error;
     ASSERT_TRUE(service->Open(path.string(), error)) << error;
-    auto actor = CameraActor();
+    auto actor = CameraBlueprint();
     actor.camera.exposure.compensation = 2;
     Record(actor, EditorActorProperty::CameraExposureCompensation, 2);
     EXPECT_EQ(Read(), source);
@@ -134,7 +372,7 @@ TEST_F(SceneDocumentTest, ExposureSavePatchesOnlyEditedFieldsAndRetainsPhysicalP
 
 TEST_F(SceneDocumentTest, ExposureModeAndValuesReplayIntoReplacementAuthoredCamera)
 {
-    auto actor = CameraActor();
+    auto actor = CameraBlueprint();
     actor.camera.exposure.mode = ExposureMode::Auto;
     Record(actor, EditorActorProperty::CameraExposureMode, 2);
     actor.camera.exposure.autoSpeedDown = 2;
@@ -159,7 +397,7 @@ TEST_F(SceneDocumentTest, ReturningToOmittedAutomaticDefaultClearsDirtyWithoutIn
     Write(source);
     std::string error;
     ASSERT_TRUE(service->Open(path.string(), error)) << error;
-    auto actor = CameraActor();
+    auto actor = CameraBlueprint();
     actor.camera.exposure.autoTargetGray = 0.25;
     Record(actor, EditorActorProperty::CameraAutoTargetGray, 0.25f);
     ASSERT_FALSE(service->ModifiedDocuments().empty());

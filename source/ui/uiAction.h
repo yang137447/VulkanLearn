@@ -1,8 +1,10 @@
 #pragma once
 
 #include <string>
+#include <array>
 #include <string_view>
 #include <cstdint>
+#include <nlohmann/json.hpp>
 #include "editor/scene/editorActorProperty.h"
 
 namespace VL
@@ -16,7 +18,9 @@ enum class UiActionType
     // stringValue 是资源根相对模型路径；GT 将其转为中性场景的 LoadWorld 注入请求。
     PreviewModel,
     PreviewMaterial,
+    PreviewBlueprint,
     NavigateModelPreview,
+    TransformBlueprintPreview,
     SetCameraMoveSpeed,
     SetDebugViewMode,
     SetToneMappingMode,
@@ -48,6 +52,26 @@ enum class UiActionType
     SetActorVisible,
     SetActorProperty,
     FrameEditorActor,
+    ControlScripts,
+    ReloadScripts,
+    CompileScripts,
+    SetAutoCompileScripts,
+    SetScriptTimeScale,
+    AddScriptBlueprint,
+    SetScriptProperty,
+    SetScriptComponent,
+    AddScriptComponent,
+    RemoveScriptComponent,
+    SetScriptLogicComponent,
+    AddScriptLogicComponent,
+    RemoveScriptLogicComponent,
+    RenameScriptBlueprint,
+    DuplicateScriptBlueprint,
+    DeleteScriptBlueprint,
+    SetScriptPhysics,
+    UndoSceneEdit,
+    RedoSceneEdit,
+    CreateScriptBlueprintAsset,
     SetSpeedTreeStrength,
     SetSpeedTreeGustingEnabled,
     ForceSpeedTreeGust,
@@ -81,14 +105,30 @@ struct ModelPreviewCameraInput
     float y = 0.0f;
 };
 
+// 仅作用于当前蓝图预览 World 的瞬态 TRS；不修改作者草稿，不导入资源或运行脚本。
+struct BlueprintPreviewTransformInput
+{
+    uint64_t worldGeneration = 0;
+    uint64_t documentRevision = 0;
+    std::string assetPath;
+    std::string componentId;
+    std::string field;
+    std::array<float, 3> value{0, 0, 0};
+    bool reset = false;
+};
+
 struct UiAction
 {
     UiActionType type = UiActionType::ToggleDeveloperUi;
     int intValue = 0;
     float floatValue = 0.0f;
     std::string stringValue;
+    uint64_t blueprintPreviewRevision = 0;
     ModelPreviewCameraInput previewCamera;
+    BlueprintPreviewTransformInput blueprintTransform;
     EditorActorPropertyEdit actorProperty;
+    // 脚本作者请求只带值；class/name/modelPath 或 property/value 在 GT 校验。
+    nlohmann::json script = nlohmann::json::object();
 };
 
 } // namespace VL

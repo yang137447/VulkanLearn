@@ -26,7 +26,25 @@ RuntimeResult<void> InputSubsystem::Initialize(PlatformWindow& window)
     gamePointerEnabled = true;
     this->window->SetRelativeMouseMode(false);
     SDL_GetRelativeMouseState(nullptr, nullptr);
+    ConfigureGameplay(nlohmann::json::object());
     return RuntimeResult<void>::Success();
+}
+
+void InputSubsystem::ConfigureGameplay(const nlohmann::json& config)
+{
+    GameplayInputMap candidate;
+    candidate.Configure(config);
+    std::map<std::string, int> scancodes;
+    for (const auto& key : candidate.Keys())
+    {
+        if (key == "MouseLeft" || key == "MouseRight" || key == "MouseMiddle" ||
+            key == "MouseX" || key == "MouseY") continue;
+        const auto scancode = SDL_GetScancodeFromName(key.c_str());
+        if (scancode == SDL_SCANCODE_UNKNOWN) throw std::invalid_argument("Unknown input key: " + key);
+        scancodes[key] = scancode;
+    }
+    gameplayMap = std::move(candidate);
+    gameplayScancodes = std::move(scancodes);
 }
 
 void InputSubsystem::UpdateActionState()
@@ -43,12 +61,23 @@ void InputSubsystem::UpdateActionState()
         actionState.mouseDeltaY = mouseDeltaY;
     }
 
-    if (!gameKeyboardEnabled)
+    const bool* state = SDL_GetKeyboardState(nullptr);
+    std::set<std::string> held;
+    for (const auto& binding : gameplayScancodes)
+        if (state[binding.second]) held.insert(binding.first);
+    const auto buttons = SDL_GetMouseState(nullptr, nullptr);
+    if (buttons & SDL_BUTTON_LMASK) held.insert("MouseLeft");
+    if (buttons & SDL_BUTTON_RMASK) held.insert("MouseRight");
+    if (buttons & SDL_BUTTON_MMASK) held.insert("MouseMiddle");
+    // 失焦时沿用 UI 仲裁的禁用规则；自由指针仍可点击，但不产生相对视角轴。
+    const bool focused = SDL_GetKeyboardFocus() == window->GetNativeHandle();
+    actionState.gameplay = gameplayMap.Sample(held, gameKeyboardEnabled && focused,
+        gamePointerEnabled && focused, actionState.mouseDeltaX, actionState.mouseDeltaY);
+    if (!gameKeyboardEnabled || !focused)
     {
         return;
     }
 
-    const bool* state = SDL_GetKeyboardState(nullptr);
     actionState.moveForward = state[SDL_SCANCODE_W];
     actionState.moveBackward = state[SDL_SCANCODE_S];
     actionState.moveLeft = state[SDL_SCANCODE_A];

@@ -1525,6 +1525,7 @@ Json EncodeResultPayload(
     if (const auto* asset = std::get_if<EditorAssetDocumentResultPayload>(&payload))
         return Json{{"assetPath", asset->assetPath}, {"documentRevision", asset->documentRevision},
             {"dirty", asset->dirty}, {"sourceDigest", asset->sourceDigest}, {"document", asset->document},
+            {"canUndo", asset->canUndo}, {"canRedo", asset->canRedo},
             {"capabilities", asset->capabilities}, {"changedFields", asset->changedFields},
             {"diagnostics", asset->diagnostics},
             {"application", asset->application}, {"validationLevel", asset->validationLevel}};
@@ -1546,12 +1547,15 @@ EditorCommandResultPayload DecodeResultPayload(
     if (ContainsField(wire, "assetPath"))
     {
         RequireAllowedFields(wire, {"assetPath", "documentRevision", "dirty", "sourceDigest",
-            "document", "capabilities", "changedFields", "application", "validationLevel"}, {"diagnostics"},
+            "document", "capabilities", "changedFields", "application", "validationLevel"},
+            {"diagnostics", "canUndo", "canRedo"},
             "EditorAssetDocumentResultPayload");
         EditorAssetDocumentResultPayload result;
         result.assetPath = ReadAssetPath(wire, "assetPath", "asset result");
         result.documentRevision = ReadUnsigned<uint64_t>(wire, "documentRevision", "asset result");
         result.dirty = ReadBoolean(wire, "dirty", "asset result");
+        if (wire.contains("canUndo")) result.canUndo = ReadBoolean(wire, "canUndo", "asset result");
+        if (wire.contains("canRedo")) result.canRedo = ReadBoolean(wire, "canRedo", "asset result");
         result.sourceDigest = ReadString(wire, "sourceDigest", "asset result");
         RequireObject(wire.at("document"), "asset result.document");
         RequireObject(wire.at("capabilities"), "asset result.capabilities");

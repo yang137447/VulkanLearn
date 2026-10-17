@@ -23,7 +23,9 @@ nlohmann::json ReadMaterialSource(
     if (!file) throw std::runtime_error("Cannot read thumbnail material: " + path);
     const std::string bytes(std::istreambuf_iterator<char>(file), {});
     result.materialDigests.emplace(absolute, ContentHasher::HashString(bytes));
-    return nlohmann::json::parse(bytes);
+    auto source = nlohmann::json::parse(bytes);
+    result.materialSources.emplace(absolute, source);
+    return source;
 }
 
 MaterialInstanceResolveResult ResolveMaterial(
@@ -91,18 +93,25 @@ void PrepareMaterial(
     {
         const std::string texturePath = pair.value().get<std::string>();
         ValidateTextureAssetReference(pair.key(), texturePath, path);
+        const auto descriptorPath = CommonFunction::Path(texturePath);
+        const auto descriptorDigest = ContentHasher::HashFile(descriptorPath);
         auto description = LoadTextureAssetDesc(texturePath);
+        result.materialDigests.emplace(descriptorPath, descriptorDigest);
         const auto key = BuildTextureCacheKey(description);
         bool prepared = false;
         for (const auto& texture : result.textures)
             if (texture.cacheKey == key) { prepared = true; break; }
         if (prepared) continue;
-        result.materialDigests.emplace(CommonFunction::Path(texturePath),
-            ContentHasher::HashFile(CommonFunction::Path(texturePath)));
+        const auto sourcePath = CommonFunction::Path(description.source);
+        const auto sourceDigest = ContentHasher::HashFile(sourcePath);
+        result.materialDigests.emplace(sourcePath, sourceDigest);
         // 与同步 Texture 入口共用解码合同，保持 sRGB/linear、RGBA 与一次 V 翻转一致。
         auto image = TextureIO::Load(CommonFunction::Path(description.source),
             Texture::MaterialLoadOptions(ToTextureCreateDesc(description)));
         if (!image) throw std::runtime_error("Failed to load texture: " + description.source);
+        if (ContentHasher::HashFile(sourcePath) != sourceDigest ||
+            ContentHasher::HashFile(descriptorPath) != descriptorDigest)
+            throw std::runtime_error("Texture changed during CPU preparation: " + texturePath);
         result.textures.push_back({std::move(description), key, std::move(*image)});
     }
 }
@@ -117,7 +126,16 @@ EditorThumbnailPreparationResult PrepareEditorThumbnailAsset(EditorThumbnailPrep
     if (!input.materialOverride.empty())
         overrideMaterial = ResolveMaterial(input.materialOverride, result);
     if (input.importMesh)
+    {
+        const auto descriptor = CommonFunction::Path(input.meshRequest.buildPlan.meshAssetPath);
+        const auto model = std::filesystem::path(input.meshRequest.importRequest.absoluteModelPath);
+        result.materialDigests.emplace(descriptor, ContentHasher::HashFile(descriptor));
+        result.materialDigests.emplace(model, ContentHasher::HashFile(model));
         result.mesh = std::make_shared<const MeshAssetImportResult>(MeshAssetLoader::ImportSections(input.meshRequest));
+        for (const auto& source : result.materialDigests)
+            if (ContentHasher::HashFile(source.first) != source.second)
+                throw std::runtime_error("Mesh changed during CPU preparation: " + source.first.string());
+    }
 
     // 独立 compiler 只读取 manifest 并准备内存候选，不访问 live PipelineFactory/编译统计。
     ShaderCompiler compiler;

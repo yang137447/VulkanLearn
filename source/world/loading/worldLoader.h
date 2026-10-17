@@ -15,6 +15,7 @@ struct WorldBuildPlan
 {
     std::string scenePath;
     nlohmann::json sceneJson;
+    nlohmann::json authoredSceneJson;
     SceneAssetBuildPlan sceneAssetPlan;
     std::vector<MeshObjectBuildPlan> meshObjectPlans;
     std::vector<SpeedTreeWindProfile> speedTreeWindProfiles;

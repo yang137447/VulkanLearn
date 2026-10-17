@@ -26,6 +26,15 @@ struct UiSettings
     std::vector<std::string> fontFaces;
 };
 
+struct ScriptSettings
+{
+    bool enabled = false;
+    bool autoPlay = false;
+    std::string runtimeDirectory;
+    std::string assembly;
+    nlohmann::json input = nlohmann::json::object();
+};
+
 // RuntimeConfig is the engine-facing view of config/config.json and related
 // runtime files. FileSystem handles physical paths; RuntimeConfig handles the
 // semantic fields engine startup needs.
@@ -44,6 +53,7 @@ public:
     bool ShouldUseRenderThread() const;
     uint32_t GetShadowCascadeCount() const;
     const UiSettings& GetUiSettings() const;
+    const ScriptSettings& GetScriptSettings() const { EnsureLoaded(); return scriptSettings; }
 
     std::string ResolvePath(const std::string& path) const;
 
@@ -65,6 +75,7 @@ private:
     int workerThreadCount = 1;
     uint32_t shadowCascadeCount = 4;
     UiSettings uiSettings;
+    ScriptSettings scriptSettings;
 };
 
 } // namespace VL

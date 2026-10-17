@@ -8,6 +8,7 @@ EditorCommandResult AssetCommandExecutor::Execute(const EditorCommandEnvelope& c
     if (kind == EditorAssetDocumentKind::Scene) return scenes.Execute(command);
     if (kind == EditorAssetDocumentKind::Mesh) return meshes.Execute(command);
     if (kind == EditorAssetDocumentKind::Texture) return textures.Execute(command);
+    if (kind == EditorAssetDocumentKind::Blueprint) return blueprints.Execute(command);
     EditorCommandResult result;
     result.commandId = command.commandId;
     result.status = EditorCommandStatus::Rejected;
@@ -22,6 +23,8 @@ std::vector<EditorUi::EditorModifiedDocumentSnapshot> AssetCommandExecutor::Modi
     const auto meshDocuments = meshes.ModifiedDocuments(), textureDocuments = textures.ModifiedDocuments();
     result.insert(result.end(), meshDocuments.begin(), meshDocuments.end());
     result.insert(result.end(), textureDocuments.begin(), textureDocuments.end());
+    const auto blueprintDocuments = blueprints.ModifiedDocuments();
+    result.insert(result.end(), blueprintDocuments.begin(), blueprintDocuments.end());
     return result;
 }
 } // namespace VL::Editor

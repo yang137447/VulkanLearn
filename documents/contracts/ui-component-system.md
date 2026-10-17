@@ -4,6 +4,41 @@
 及灯光/相机视口辅助图示已实现；Scene/Mesh/Texture/MI 草稿共享内容浏览器脏标记与保存确认。
 标准资产草稿入口与 staged Scene 的编辑限制见 [资产修改接口](asset-modify-api.md)。
 
+2026-10-17 增补：可选 [C# 蓝图](csharp-blueprint-runtime.md) 增加 Outliner 放置表单、
+Details 类型化属性和工具条 Play/Pause/Stop/手动程序集重载。只有 C# 蓝图 提供新增入口，
+不代表通用场景对象增删已经实现；回调仍只提交值，GT 复用 Scene 草稿与 World 事务。
+Outliner 新增表单的 New Blueprint 模式可创建资源侧 C# 源码与配对 BP JSON，
+不要求已有类或场景实例；GT 发布文件后编译并刷新资源目录，具体归属和失败语义见 C# 契约。
+Blueprint 资产支持浏览器原生拖入视口、实例属性覆写/复位，以及从选中实例创建新资产；
+准确格式、地面放置与创建文件边界见上述 C# 契约。
+组件树在 Details 展示 parent 与局部 TRS，inline 组件可以增删、编辑和重挂父级，
+支持 scene/mesh/camera/pointLight/spotLight/directionalLight。Blueprint Details 另提供改名/复制/删除、根物理编辑和碰撞轮廓。
+继承资产组件仅允许修改 BP 显式开放的实例字段，根物理仍只读。
+运行时 Spawn 实例也进入冻结大纲快照，播放期间作者控件禁用。
+Edit 菜单按活动页操作 Scene 作者历史或独立 BP 文档历史，精确历史/保存边界见 C# 契约。
+Blueprint 资产双击打开独立中央标签，编辑默认属性、Instance Editable 白名单、
+组件树、相机和物理；使用独立 BP 草稿及现有保存确认，不包含节点图。
+该页采用左侧常驻 Components 树、中间真实 3D Viewport、右侧 Details：Blueprint (Self) 显示类默认值与根物理，
+选中组件仅显示该组件的局部配置。树和 Details 分别滚动，组件重排按稳定 ID 保持选择，
+所选组件被删除后回到 Blueprint 默认配置；页面选择不进入资产文档或 World。
+中央 `blueprint-asset-preview-image` 消费 renderer-owned `vl://scene-viewport`，
+其 surface 在加载中也提供有效视口矩形；输入走共用 generation-gated 环绕/平移/缩放。
+预览请求仅携带 BP 路径/revision，GT 从权威草稿准备隔离 World；不执行托管回调或物理。
+组件变更稳定 350 ms 后刷新，默认属性/权限修改不重载几何；返回关卡复用现有加载事务。
+预览不参与关卡拾取或 Blueprint 拖放，失败可显式 Refresh 重试。精确边界见 C# 契约。
+蓝图视口自己的左键按正式 section 包围盒拾取 mesh 组件，三轴 gizmo 编辑父空间平移、
+局部 YXZ Euler 旋转与局部缩放；拖动通过 GT 值请求实时更新真实模型和灯光，
+释放才提交一笔 BP 草稿，取消恢复预览基线。Self 提供根旋转/缩放，工具条支持移动、角度和缩放吸附。
+相机、灯光和 Scene 组件辅助图示可拾取；根碰撞辅助线与 mesh 同时命中时选择 mesh，
+未命中 mesh 时可通过碰撞线选中 Self。
+轴与轮廓用固定 RmlUi 线段槽位和绘制变换呈现，不改渲染图或 GPU 资源所有权。
+右键环绕、中键平移保留；取消手势、旧预览拒绝及历史预算见 C# 契约。
+场景 Details 的自定义属性只有显式开放项可覆写，其余只读。
+`[Expose]` 的默认配置权限与实例编辑权限分开，精确格式见 C# 契约。
+内联自定义数据由递归 schema 生成对象成员与集合控件，
+同时用于 BP 根/逻辑组件和 Scene Details。集合分页，不一次挂载全部元素；
+嵌套编辑仍受根属性的 Instance Editable 权限限制，GT 合成最新权威值。
+
 ## 工作区布局
 
 默认布局向 UE 编辑器靠拢：顶部标题行最左侧是 File / Edit / Window / Help 菜单栏，
@@ -41,7 +76,8 @@ Scene Outliner 现在渲染真实 World actor 树（网格 / 四类灯 / 相机 
 资产编辑器标签是**会话内**状态：写盘时被丢弃（写出的布局里不含它们），
 留下的空栈会被剪掉，重启后不恢复打开的资产。
 当前 Content Browser 浏览 MI、Mesh、Scene、Texture、Terrain JSON 元数据，
-Mesh、Texture、Terrain 双击后进入资源标签页，右侧为只读 JSON Details。
+Mesh、Texture、Terrain 双击后进入资源标签页，右侧为只读 JSON Details；
+Actor 使用同一资源标签容器中的专用配置表单。
 Mesh 通过预览 World 显示真实模型；Texture 后台加载 PNG/JPEG/TGA/BMP 的 source 并等比例显示 RGB。
 贴图标题显示原尺寸及 colorSpace，最长预览边为 1024；忽略 alpha，不把参数图当透明图。
 预览区滚轮以鼠标位置为中心缩放（适应窗口倍率的 0.1 到 32 倍），左/中/右键拖动平移，
@@ -107,7 +143,7 @@ JSON inspector 使用分页，不等同于通用 ListView/TreeView 已完成。
 滑条的 min/max 属于分组 markup，随 identity（assetPath + schemaDigest）重建。
 Color 仍按线性 RGBA 存储，编辑器只多出面向 sRGB 的色板与 `#RRGGBBAA` 读数，
 没有可编辑调色板；场景缩略图、纹理逐像素读数、
-资产拖放、Undo/Redo 尚未实现。
+通用资产拖放、跨资产 Undo/Redo 尚未实现；C# Actor 资产已有窄拖放入口，Scene 有有界历史。
 `MenuItem` 只生成“动作名 + 条目索引 + 勾选/禁用”这一种行，
 菜单的展开状态、勾选含义和命令语义全部属于业务宿主。
 
@@ -140,16 +176,17 @@ ImGui→RmlUi 迁移丢了三项 Details 面板能力，本批把它们补回，
 
 当前确认缺席的能力集中列在此处，供下一轮直接引用，不再逐条重新推导：
 
-- 没有 gizmo，也没有场景对象的增/删/复制/改名；Transform 可在 Details 数值编辑。
-- 完全没有 Undo/Redo 系统；`Edit` 菜单里的 Undo/Redo 是常驻禁用的占位。
+- gizmo 只在蓝图组件预览页提供；除 C# Blueprint 外，没有通用场景对象增/删/复制/改名；
+  Transform 可在 Details 数值编辑。
+- `Edit` 的 Undo/Redo 按活动页作用于 Scene 或 BP；没有跨资产历史或文件操作撤销。
 - 逐 actor 可见性只有**运行时**语义：开关不写进场景 JSON，`SceneAssetValidator`
   不认识它，也没有 `SaveVisibilityToScene` 之类的动作；重新加载场景后所有 actor
   都是可见的。Transform/灯光/相机参数编辑形成独立场景草稿，确认后写回场景资产。
-- 没有地形节点：`World` 没有 terrain 访问器，仓库里也没有 terrain 运行时
-  （场景选择器只把 `"terrain"` 列入受支持类型，资产浏览器只有 Terrain JSON 元数据）。
+- 没有地形节点：`World` 没有 terrain 访问器，仓库里也没有 terrain 运行时；
+  场景选择器排除 terrain、接受 actor，资产浏览器只有 Terrain JSON 元数据。
 - 大纲行窗口化只覆盖世界 actor 树：通用 `TreeRow` 组件本身仍不虚拟化，
   模型树与 Sources 树也仍整棵挂载。
-- 大纲仍是单选：没有多选、没有拖放/重父级，也没有改名（改名同样属于场景文档阶段）。
+- 大纲仍是单选：没有多选、没有 Actor 拖放/重父级；C# Actor 改名通过 Details。
 - 贴图、实时模型与材质实例网格有缓存缩略图，场景没有真实缩略图，也没有纹理逐像素读数；Mesh 预览目前复用中性场景视口，
   模型标签通过 `resource-preview-image` 显示当前 renderer-owned 离屏图像。
   工具条变换按钮目前仅切换本地状态，不提供 gizmo；模型信息 Details 中
@@ -343,7 +380,7 @@ Scene Outliner（`#editor-navigation`，仍是 `DockWorkspace::Panels()` 里的 
   - **不持久化**：可见性不是场景 JSON 字段，`SceneAssetValidator` 不认识它，
     也没有保存命令；重新加载场景一律从"全部可见"开始。
 - **仍是单选、没有拖放**：大纲一次只有一个选中身份（`snapshot.selectedActorIdentity`
-  加可选的材质槽号），没有多选、没有拖放/重父级，也没有改名；
+  加可选的材质槽号），没有多选、没有 Actor 拖放/重父级；C# Actor 可在 Details 改名；
   窗口化不改变这一点——挂载的行节点与事件地址仍是一对一。
 
 ## Content Browser
@@ -393,7 +430,10 @@ checkbox 的默认 click 必须到达目标节点；change 只同步选择，快
 不销毁焦点节点，程序刷新由 `WidgetRefreshScope` 抑制。
 
 `SceneDocumentService` 按资源根内规范路径保存 baseline/draft、BLAKE3 摘要及编辑历史；
-只补丁网格 TRS、灯光参数、作者 Camera 变换/投影/曝光与主光 castShadows，保留其它 JSON 字段。
+常规属性只补丁网格/脚本 Actor TRS、灯光参数、作者 Camera 变换/投影/曝光与主光 castShadows，
+保留其它 JSON 字段；C# 作者适配器另提供 Actor 新增/复制/删除/改名、
+稀疏属性覆写/复位及 inline 组件/物理编辑。Scene 历史还记录上述常规属性补丁，
+Undo/Redo 暂存完整候选后正式重载，不写磁盘。
 灯光保留作者 lux/cd/lm，spot 锥角及面光尺寸变化反算作者强度以保持当前规范亮度。
 Camera 变换后去掉会覆盖 rotation 的旧 look_at；曝光编辑只改接受的具名字段，
 保留未触碰的 physical 参数和数字精度，省略的自动默认值在复位后仍省略。
@@ -486,8 +526,8 @@ GT 每帧 `Poll()` 使用非阻塞邮箱发布结果，不扫描目录、不读�
 worker 投递和 GT 发布均核对代际，迟到结果不能覆盖最新选择。
 目录和文档使用 `shared_ptr<const ...>` 进入编辑器快照，逐帧不深拷贝目录或字段数组。
 
-目录只识别 MI、Mesh（含顶层 `speedtree`）、Scene、Texture、Terrain；
-支持的顶层 `type` 优先于文件名前缀，缺失或非字符串时按 `MI_`/`SM_`/`SC_`/`T_`/`TR_`
+目录识别 MI、Mesh（含顶层 `speedtree`）、Scene、Texture、Terrain、Actor（`blueprintAsset`）；
+支持的顶层 `type` 优先于文件名前缀，缺失或非字符串时按 `MI_`/`SM_`/`SC_`/`T_`/`TR_`/`BP_`
 和旧 `scene*` basename 识别，非字符串 type 另附诊断。
 显式不支持的字符串类型排除；可识别的损坏候选保留诊断，
 不展示半棵字段树。扫描跳过 `.git`、`Generated`、`data` 目录（ASCII 大小写不敏感），
@@ -557,6 +597,34 @@ JSON 文件字节仍在 worker 读取，内嵌 `data` 仍做语法、字节数�
 失败保留旧文件。Window→Reset Layout 清空隐藏集合；Window→Restore Saved Layout
 重新读取该文件，DOM 重排延后到下一次 GT refresh。
 
+当前六个固定面板是 Viewport、Outliner、Details、Content、Renderer、Log；
+Log 默认与 Content/Renderer 同组。布局 JSON 写 `version: 2`，仍沿用上面的文件名；
+读取 version 1 时把缺少的 Log 追加到 Content 组，保留已有激活标签、比例和隐藏集合。
+version 2 必须包含完整六面板，不能用迁移掩盖缺失面板的损坏布局。
+
+### Log 面板
+
+`EditorLogPanel` 是业务展示控制器，复用 `WidgetDocument` 缓存属性和 RML，
+从 `MaterialInstanceEditorSnapshot.logs` 消费 `shared_ptr<const LogSnapshot>`，
+不访问 World、文件或托管宿主。`ProcessLog()` 的进程级 `LogStore` 用锁串行分配递增
+sequence，冻结旧快照后继续追加不会修改已发布内容。生产者是 Diagnostics、RmlUi、
+C# 日志/异常和编译输出；编译诊断保留 file/line/column。级别为 Debug/Info/Warning/Error，
+每条保留时间和 source；单条 message/source/file 上限分别是 8192/128/1024 字节，
+UTF-8 安全截断，总量受 4096 条和 4 MiB 文本预算限制，超限淘汰最旧条目。
+
+Output 的 severity、source 子串和全文搜索联合过滤，ASCII 大小写不敏感。
+显示行固定 24px，最多挂载 192 行与首尾 spacer；完整消息及位置放在转义后的 title，
+快照/过滤/可见窗口不变时保留 DOM。隐藏面板只接收快照、不做过滤或重建。
+自动滚动可关闭，底部追加/高度变化后在 RmlUi 完成布局时继续收敛到末尾。
+Clear 仅记录本面板已读到的 sequence 水位，不清全局 store、不改控制台输出。
+
+Scripts 页读取 `UiViewModelSnapshot.scripts.performance` 的纯值数据，
+每 250ms 最多刷新一次，显示时钟/fixed step 丢步、物理耗时、程序集代际、GC、
+待处理命令和每个 Blueprint/C# 组件的生命周期与回调耗时。
+对象搜索后每页最多 64 行，只格式化当前页；切页、过滤、Clear 都是本地展示状态。
+测试位于 `tool/editor-ui-tests/logPanelTests.cpp`，覆盖并发/预算/快照、过滤/虚拟滚动、
+真实 checkbox 点击、Scripts 分页与旧布局迁移。
+
 顶部菜单栏位于 `#editor-toolbar` 内的 `#editor-menubar`，在标题与命令按钮左侧。
 展开状态是面板的本地状态，不进入资产文档、停靠布局或运行时快照；
 条目复用工具栏的 `data-action`，不复制业务逻辑，File/Edit 的文档命令与工具栏按钮
@@ -579,7 +647,7 @@ Help→About 显示编辑器名称、RmlUi 说明和布局文件路径，打开�
 `PlatformMouseButton::Right → 1`，与 RmlUi 官方 SDL 后端一致。面板在捕获阶段监听
 `mouseup`，而 `EditorDockingController` 只在 `button == 0` 时开始拖动，因此右键不会干扰停靠。
 
-**目标在打开时就解析为稳定地址**（actor 用 `actor.identity`，资产用 DOM 的 `data-path`），
+**目标在打开时就解析为稳定地址**（actor 用 `blueprint.identity`，资产用 DOM 的 `data-path`），
 菜单随后只用这个地址寻址，**绝不回退到"当前选中"**。原因是菜单条目在之后的点击里才执行，
 而快照下标只对当帧有效；目标身份已不在 World 里时，菜单**拒绝执行并给出 notice**，
 而不是拿面板当前选中顶上 —— 那个回退正是"右键 A、命令作用到 B"的静默错误目标缺陷。
@@ -609,7 +677,7 @@ GT 文档只使用 `vl://scene-viewport` 逻辑纹理 token 和 framebuffer 像�
 视口工具条 `#viewport-toolbar` 叠在场景图像左上角，分三组：
 变换工具、变换坐标系、view mode。只有 view mode 有真实后端，
 映射到既有 `UiActionType::SetDebugViewMode`：Lit=0（完整画面），Unlit=1（基础色）。
-变换工具与坐标系**只是编辑器本地呈现状态**：仓库里没有 gizmo，
+关卡变换工具与坐标系**只是编辑器本地呈现状态**：该关卡工具条没有 gizmo，
 工具条不驱动 Details 的数值变换，切换它们只改变高亮，不提交任何 UiAction 或资产命令，
 按钮提示文字明确写出这一点。Wireframe 没有 wireframe 光栅模式，
 `debug.*` 表里也没有对应的 debug view，因此按钮常驻禁用并带说明，
@@ -769,7 +837,7 @@ Detach 期间 Build 不触碰文档且重新 Attach 后重挂一次）。
 跨刷新真实指针双击和滚动保持。`UiColorTransform` 验证 UI gamma 与预乘边界。
 `jsonAssetLibraryTests.cpp` 覆盖分类、任意层级 data 省略、输入上限、路径边界、
 worker 代际、共享快照及空闲 Poll 不重读；`editorUiTests.cpp` 覆盖只读打开路由、
-64 行分页和转义，以及菜单栏的展开/互斥/关闭、Undo/Redo 常驻禁用、
+64 行分页和转义，以及菜单栏的展开/互斥/关闭、Scene Undo/Redo 门禁、
 菜单与工具栏共用可用性、Open Level 的 `LoadWorld` 请求、Window 勾选同步、
 About 模态，和视口工具条的分组单选、view mode 的 debug mode 映射、
 工具条命中不进入场景、静止帧不重复写 class。

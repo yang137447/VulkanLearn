@@ -50,6 +50,15 @@ constexpr EditorCommandSpec kSpecs[] = {
     {EditorCommandType::SaveTextureDocument, "texture.save", 1, true, true, false},
     {EditorCommandType::RevertTextureDocument, "texture.revert", 1, true, true, false},
     {EditorCommandType::ReloadTextureDocument, "texture.reload", 1, true, true, false},
+    {EditorCommandType::GetBlueprintDocument, "blueprint.get_document", 1, false, false, false},
+    {EditorCommandType::GetBlueprintCapabilities, "blueprint.get_capabilities", 1, false, false, false},
+    {EditorCommandType::ModifyBlueprintDocument, "blueprint.modify", 1, true, true, false},
+    {EditorCommandType::ValidateBlueprintDocument, "blueprint.validate", 1, false, false, false},
+    {EditorCommandType::SaveBlueprintDocument, "blueprint.save", 1, true, true, false},
+    {EditorCommandType::RevertBlueprintDocument, "blueprint.revert", 1, true, true, false},
+    {EditorCommandType::ReloadBlueprintDocument, "blueprint.reload", 1, true, true, false},
+    {EditorCommandType::UndoBlueprintDocument, "blueprint.undo", 1, true, true, false},
+    {EditorCommandType::RedoBlueprintDocument, "blueprint.redo", 1, true, true, false},
     {EditorCommandType::ConnectMaterialInstancePreview, "material.preview.connect", 1, false, false, true},
     {EditorCommandType::DisconnectMaterialInstancePreview, "material.preview.disconnect", 1, false, false, false},
     {EditorCommandType::ApplyMaterialInstancePreview, "material.preview.apply", 1, false, false, true},
@@ -567,6 +576,8 @@ std::optional<EditorAssetDocumentKind> GetEditorAssetDocumentKind(EditorCommandT
         return EditorAssetDocumentKind::Mesh;
     if (type >= EditorCommandType::GetTextureDocument && type <= EditorCommandType::ReloadTextureDocument)
         return EditorAssetDocumentKind::Texture;
+    if (type >= EditorCommandType::GetBlueprintDocument && type <= EditorCommandType::RedoBlueprintDocument)
+        return EditorAssetDocumentKind::Blueprint;
     return std::nullopt;
 }
 
@@ -575,19 +586,21 @@ std::optional<EditorAssetOperation> GetEditorAssetOperation(EditorCommandType ty
     switch (type)
     {
     case EditorCommandType::GetSceneDocument: case EditorCommandType::GetMeshDocument:
-    case EditorCommandType::GetTextureDocument: return EditorAssetOperation::GetDocument;
+    case EditorCommandType::GetTextureDocument: case EditorCommandType::GetBlueprintDocument: return EditorAssetOperation::GetDocument;
     case EditorCommandType::GetSceneCapabilities: case EditorCommandType::GetMeshCapabilities:
-    case EditorCommandType::GetTextureCapabilities: return EditorAssetOperation::GetCapabilities;
+    case EditorCommandType::GetTextureCapabilities: case EditorCommandType::GetBlueprintCapabilities: return EditorAssetOperation::GetCapabilities;
     case EditorCommandType::ModifySceneDocument: case EditorCommandType::ModifyMeshDocument:
-    case EditorCommandType::ModifyTextureDocument: return EditorAssetOperation::Modify;
+    case EditorCommandType::ModifyTextureDocument: case EditorCommandType::ModifyBlueprintDocument: return EditorAssetOperation::Modify;
     case EditorCommandType::ValidateSceneDocument: case EditorCommandType::ValidateMeshDocument:
-    case EditorCommandType::ValidateTextureDocument: return EditorAssetOperation::Validate;
+    case EditorCommandType::ValidateTextureDocument: case EditorCommandType::ValidateBlueprintDocument: return EditorAssetOperation::Validate;
     case EditorCommandType::SaveSceneDocument: case EditorCommandType::SaveMeshDocument:
-    case EditorCommandType::SaveTextureDocument: return EditorAssetOperation::Save;
+    case EditorCommandType::SaveTextureDocument: case EditorCommandType::SaveBlueprintDocument: return EditorAssetOperation::Save;
     case EditorCommandType::RevertSceneDocument: case EditorCommandType::RevertMeshDocument:
-    case EditorCommandType::RevertTextureDocument: return EditorAssetOperation::Revert;
+    case EditorCommandType::RevertTextureDocument: case EditorCommandType::RevertBlueprintDocument: return EditorAssetOperation::Revert;
     case EditorCommandType::ReloadSceneDocument: case EditorCommandType::ReloadMeshDocument:
-    case EditorCommandType::ReloadTextureDocument: return EditorAssetOperation::Reload;
+    case EditorCommandType::ReloadTextureDocument: case EditorCommandType::ReloadBlueprintDocument: return EditorAssetOperation::Reload;
+    case EditorCommandType::UndoBlueprintDocument: return EditorAssetOperation::Undo;
+    case EditorCommandType::RedoBlueprintDocument: return EditorAssetOperation::Redo;
     default: return std::nullopt;
     }
 }

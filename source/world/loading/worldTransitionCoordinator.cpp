@@ -14,6 +14,7 @@
 #include "sceneNode.h"
 #include "world/loading/worldBuilder.h"
 #include "world/loading/worldLoader.h"
+#include "script/scriptRuntime.h"
 
 namespace VL
 {
@@ -179,6 +180,12 @@ WorldTransitionCoordinator::PrepareWorldLoad(
         }
 
         prepared.world = std::move(worldResult.Value());
+        if (scriptRuntime) scriptRuntime->PrepareWorld(*prepared.world, worldBuildPlan.sceneJson,
+            worldBuildPlan.authoredSceneJson);
+        else
+            for (const auto& object : worldBuildPlan.sceneJson.at("objects"))
+                if (object.at("type") == "blueprintInstance")
+                    throw std::runtime_error("Script.Unavailable: Actor scene has no script runtime");
         ConfigureInitialCamera(
             *prepared.world->GetCamera(),
             initialCameraAspectRatio);

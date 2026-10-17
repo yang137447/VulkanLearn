@@ -29,7 +29,9 @@ TEST(EditorJsonAssetParsing, RecognizesAllFilenamePrefixesAndMixedCaseExtensions
         {"Maps/SC_level.JSON", Kind::Scene},
         {"Maps/scene01.json", Kind::Scene},
         {"Common/T_albedo.jSoN", Kind::Texture},
-        {"Maps/TR_ground.json", Kind::Terrain}
+        {"Maps/TR_ground.json", Kind::Terrain},
+        {"Common/Blueprints/BP_rotator.json", Kind::Blueprint},
+        {"Common/Blueprints/bP_rotator.JsOn", Kind::Blueprint}
     };
     for (const auto& item : cases)
     {
@@ -46,7 +48,8 @@ TEST(EditorJsonAssetParsing, RecognizesTopLevelTypeWithoutFilenameConvention)
     const std::vector<std::pair<std::string, Kind>> cases{
         {"materialInstance", Kind::MaterialInstance}, {"mesh", Kind::Mesh},
         {"scene", Kind::Scene}, {"texture", Kind::Texture}, {"terrain", Kind::Terrain},
-        {"MESH", Kind::Mesh}, {"speedtree", Kind::Mesh}
+        {"MESH", Kind::Mesh}, {"speedtree", Kind::Mesh}, {"blueprint", Kind::Blueprint},
+        {"BLUEPRINT", Kind::Blueprint}
     };
     for (const auto& item : cases)
     {

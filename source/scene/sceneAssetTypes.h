@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -19,6 +20,8 @@ struct SceneAssetObjectPlan
     std::string objectName;
     std::string objectType;
     std::optional<MeshAssetLoadRequest> meshLoadRequest;
+    // Actor 根网格的派生声明；作者 JSON 不增加合成对象，正式 mesh loader 仍只读网格计划。
+    std::optional<nlohmann::json> componentObject;
 };
 
 // Scene-level validated loading plan consumed by WorldLoader, WorldBuilder, and
@@ -48,6 +51,8 @@ struct MeshObjectBuildPlan
     Eigen::Vector3f sceneScale = Eigen::Vector3f::Ones();
     Eigen::Vector3f localBoundsMin = Eigen::Vector3f::Zero();
     Eigen::Vector3f localBoundsMax = Eigen::Vector3f::Zero();
+    // 蓝图碰撞复用正式导入的 section 局部三角；候选/World/Spawn 克隆共享不可变 CPU 数据。
+    std::shared_ptr<const std::vector<Eigen::Vector3f>> collisionTriangles;
     std::string meshKey;
     std::string materialKey;
     std::string materialInstanceKey;

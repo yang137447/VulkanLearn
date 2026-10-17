@@ -326,7 +326,7 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
         world.GetDirectionalLights().size() +
         world.GetPointLights().size() +
         world.GetSpotLights().size() +
-        world.GetSquareAreaLights().size();
+        world.GetSquareAreaLights().size() + world.GetScriptLights().size();
     snapshot.lights.reserve(lightCount);
 
     for (const auto& [lightName, light] : world.GetDirectionalLights())
@@ -348,6 +348,12 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
     {
         if (!light.visible) continue;
         snapshot.lights.push_back(BuildSquareAreaLightSnapshot(world, lightName, light));
+    }
+    for (const auto& [identity, light] : world.GetScriptLights())
+    {
+        auto frozen = light;
+        frozen.lightId = StableRuntimeId(BuildLightRuntimeKey(world, identity));
+        snapshot.lights.push_back(std::move(frozen));
     }
 
     snapshot.environment = BuildEnvironmentSnapshot(world, desc);

@@ -13,8 +13,9 @@ import json
 import os
 import sys
 
-REPO = r'C:\Users\pb.adcycyys001\.codex\worktrees\rmlui-editor\VulkanLearn'
-RESOURCE = os.path.join(os.path.dirname(REPO), 'VukanLearnResources')
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+with open(os.path.join(REPO, 'config', 'config.json'), encoding='utf-8') as config_file:
+    RESOURCE = os.path.normpath(os.path.join(REPO, json.load(config_file)['resourcePath']))
 
 # Scenes that are deliberately invalid. Each entry must say why, and the scene's own
 # `description` must agree -- an exemption without a stated reason is how a real
@@ -70,16 +71,38 @@ def check(instance, schema, root, path='$'):
         if len(matched) != 1:
             fail('matched %d of %d oneOf branches (expected exactly 1)'
                  % (len(matched), len(schema['oneOf'])))
+        rest = {key: value for key, value in schema.items() if key != 'oneOf'}
+        if rest:
+            problems.extend(check(instance, rest, root, path))
         return problems
 
+    if 'not' in schema:
+        if not check(instance, schema['not'], root, path):
+            fail('matched forbidden schema')
+    if 'if' in schema:
+        branch = 'then' if not check(instance, schema['if'], root, path) else 'else'
+        if branch in schema:
+            problems.extend(check(instance, schema[branch], root, path))
+    if 'anyOf' in schema and not any(
+            not check(instance, option, root, path) for option in schema['anyOf']):
+        fail('did not match any anyOf branch')
+
+    # required 也可独立于 type 使用；Actor 的 inline/reference 互斥分支依赖它。
+    if isinstance(instance, dict):
+        for name in schema.get('required', []):
+            if name not in instance:
+                fail('missing required field %r' % name)
+
     expected = schema.get('type')
+    if isinstance(expected, list):
+        rest = {key: value for key, value in schema.items() if key != 'type'}
+        if not any(not check(instance, dict(rest, type=kind), root, path) for kind in expected):
+            fail('did not match any allowed type')
+        return problems
     if expected == 'object':
         if not isinstance(instance, dict):
             fail('expected object')
             return problems
-        for name in schema.get('required', []):
-            if name not in instance:
-                fail('missing required field %r' % name)
         properties = schema.get('properties', {})
         if schema.get('additionalProperties') is False:
             for name in instance:
@@ -89,6 +112,11 @@ def check(instance, schema, root, path='$'):
             if name in instance:
                 problems.extend(check(instance[name], subschema, root,
                                       '%s.%s' % (path, name)))
+        extra = schema.get('additionalProperties')
+        if isinstance(extra, dict):
+            for name, value in instance.items():
+                if name not in properties:
+                    problems.extend(check(value, extra, root, '%s.%s' % (path, name)))
         return problems
 
     if expected == 'array':
@@ -114,6 +142,11 @@ def check(instance, schema, root, path='$'):
     if expected == 'integer':
         if not isinstance(instance, int) or isinstance(instance, bool):
             fail('expected integer')
+        return problems
+
+    if expected == 'boolean':
+        if not isinstance(instance, bool):
+            fail('expected boolean')
         return problems
 
     if expected == 'number':

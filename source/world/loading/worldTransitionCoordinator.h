@@ -20,6 +20,7 @@ namespace VL
 {
 
 class RendererResourceLoadCoordinator;
+class ScriptRuntimeSubsystem;
 struct OfflineWorldAssets;
 struct MaterialDefinitionReloadBatch;
 
@@ -74,6 +75,7 @@ public:
         const MaterialDefinitionReloadBatch* materialDefinitionReload = nullptr,
         const nlohmann::json& extraSceneObjects = nlohmann::json::array(),
         const nlohmann::json& sceneDocument = nullptr);
+    void SetScriptRuntime(ScriptRuntimeSubsystem* scripts) { scriptRuntime = scripts; }
 
 private:
     WorldManager& worldManager;
@@ -81,6 +83,7 @@ private:
     float initialCameraAspectRatio = 1.0f;
     uint32_t shadowCascadeCount = 4;
     WorldTransitionState state = WorldTransitionState::Idle;
+    ScriptRuntimeSubsystem* scriptRuntime = nullptr;
 };
 
 } // namespace VL

@@ -29,6 +29,18 @@ SceneAssetBuildPlan SceneAssetValidator::BuildLoadPlan(
         if (objectPlan.objectType == "mesh")
             objectPlan.meshLoadRequest = MeshAssetLoader::Prepare(objectJson.at("modelPath").get<std::string>());
         sceneBuildPlan.objectPlans.push_back(std::move(objectPlan));
+        if (objectJson.at("type") == "blueprintInstance" && objectJson.contains("components"))
+        for (size_t component = 0; component < objectJson.at("components").size(); ++component)
+        {
+            if (objectJson.at("components")[component].at("type") != "mesh") continue;
+            SceneAssetObjectPlan mesh;
+            mesh.objectIndex = objectIndex;
+            mesh.objectType = "mesh";
+            mesh.componentObject = VL::ScriptBlueprintMeshObject(objectJson, component);
+            mesh.objectName = mesh.componentObject->at("name").get<std::string>();
+            mesh.meshLoadRequest = MeshAssetLoader::Prepare(mesh.componentObject->at("modelPath").get<std::string>());
+            sceneBuildPlan.objectPlans.push_back(std::move(mesh));
+        }
     }
     return sceneBuildPlan;
 }

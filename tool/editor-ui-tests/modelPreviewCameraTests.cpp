@@ -1,11 +1,77 @@
 #include <gtest/gtest.h>
 #include "engine/modelPreviewCamera.h"
 #include "engine/modelPreviewRequest.h"
+#include "engine/blueprintPreviewRequest.h"
+#include "script/scriptComponents.h"
 #include "sceneNode.h"
 #include "world/world.h"
 
 namespace VL
 {
+TEST(BlueprintPreviewRequest, UsesAcceptedVisualDraftAndPreservesComponentHierarchy)
+{
+    const nlohmann::json draft{{"class", "Gameplay.Test"}, {"properties", {{"Secret", 42}}},
+        {"scale", {2, 3, 4}}, {"rotation", {0, 45, 0}},
+        {"components", nlohmann::json::array({{{"id", "pivot"}, {"type", "scene"}, {"scale", {2, 1, 1}}},
+            {{"id", "mesh"}, {"parent", "pivot"}, {"type", "mesh"}, {"modelPath", "Common/SM_test.json"},
+                {"rotation", {0, 30, 0}}}})}};
+    const auto original = draft;
+    const auto actor = BuildBlueprintPreviewObjects("Blueprints/BP_test.json", 12, 12, draft)[0];
+    EXPECT_EQ(actor.at("components"), draft.at("components"));
+    EXPECT_EQ(actor.at("scale"), draft.at("scale"));
+    EXPECT_TRUE(actor.at("properties").empty());
+    EXPECT_FALSE(actor.contains("__instanceEditable"));
+    EXPECT_EQ(draft, original);
+    EXPECT_THROW(BuildBlueprintPreviewObjects("Blueprints/BP_test.json", 11, 12, draft), std::invalid_argument);
+    EXPECT_NE(BlueprintPreviewIdentity("Blueprints/BP_test.json", 11), actor.at("id"));
+}
+
+TEST(BlueprintPreviewCamera, FramesFullParentMatricesAcrossMeshComponents)
+{
+    World world{8, ModelPreviewScenePath};
+    world.SetCamera(std::make_shared<Camera>());
+    const nlohmann::json draft{{"class", "Gameplay.Test"},
+        {"components", nlohmann::json::array({{{"id", "pivot"}, {"type", "scene"}, {"position", {100, 0, 0}},
+            {"scale", {2, 1, 1}}}, {{"id", "a"}, {"parent", "pivot"}, {"type", "mesh"},
+            {"modelPath", "SM_test.json"}, {"rotation", {0, 45, 0}}}, {{"id", "b"}, {"type", "mesh"},
+            {"modelPath", "SM_test.json"}, {"position", {-100, 0, 0}}}})}};
+    const auto actor = BuildBlueprintPreviewObjects("Blueprints/BP_test.json", 1, 1, draft)[0];
+    Eigen::Vector3f lower = Eigen::Vector3f::Constant(1e6f), upper = -lower;
+    for (size_t index : {1u, 2u})
+    {
+        WorldMeshObject mesh;
+        mesh.sceneObjectIdentity = ScriptMeshIdentity(actor.at("id"), actor.at("components")[index]);
+        mesh.localBoundsMin = Eigen::Vector3f::Constant(-10);
+        mesh.localBoundsMax = Eigen::Vector3f::Constant(10);
+        world.AddMeshObject(mesh.sceneObjectIdentity, mesh);
+        const auto transform = ScriptComponentMatrix(actor, index);
+        for (float x : {-10.f, 10.f}) for (float y : {-10.f, 10.f}) for (float z : {-10.f, 10.f})
+        {
+            const Eigen::Vector3f point = (transform * Eigen::Vector4f(x, y, z, 1)).head<3>();
+            lower = lower.cwiseMin(point); upper = upper.cwiseMax(point);
+        }
+    }
+    world.ApplyScriptBlueprintVisuals(actor);
+    world.SetScriptBlueprints(nlohmann::json::array({actor}));
+    ModelPreviewCamera camera;
+    ASSERT_TRUE(camera.Synchronize(world, 1));
+    const Eigen::Vector3f center = (lower + upper) * 0.5f;
+    EXPECT_NEAR(world.GetCamera()->GetPosition().x(), center.x(), 1e-4f);
+    EXPECT_TRUE(world.GetCamera()->GetForwardVector().isApprox(
+        (center - world.GetCamera()->GetPosition()).normalized()));
+}
+
+TEST(BlueprintPreviewCamera, EmptyActorStillSupportsNavigation)
+{
+    World world{9, ModelPreviewScenePath};
+    world.SetCamera(std::make_shared<Camera>());
+    world.SetScriptBlueprints(BuildBlueprintPreviewObjects("Blueprints/BP_empty.json", 1, 1, {{"class", "Gameplay.Test"}}));
+    ModelPreviewCamera camera;
+    ASSERT_TRUE(camera.Synchronize(world, 1));
+    EXPECT_TRUE(camera.Apply(world, {ModelPreviewNavigation::Orbit, 9, 20, 10}, 1, 300));
+    EXPECT_TRUE(world.GetCamera()->GetViewMatrix().allFinite());
+}
+
 TEST(MaterialPreviewRequest, UsesFormalSphereWithInstanceOnlyMaterialBinding)
 {
     const auto objects = BuildMaterialPreviewObjects("Common/Materials/MI_test.json");

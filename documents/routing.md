@@ -16,8 +16,10 @@
 | `source/ui/widgets/**` | `contracts/ui-component-system.md` | — |
 | `source/ui/**` | `contracts/ui-component-system.md`、`contracts/game-ui-stack.md` | — |
 | `source/editor/**` | `contracts/ui-component-system.md` | — |
+| `source/script/**`、`script/**`、`tool/script-tests/**`、`source/editor/scene/scriptBlueprintAuthoring.*` | `contracts/csharp-blueprint-runtime.md`、`contracts/testing.md` | — |
 | `source/editor/service/**`、`source/editor/command/**` | `contracts/asset-modify-api.md`、`contracts/material-instance-editor.md`、`contracts/material-param-authoring-and-reflection.md` | — |
 | `tool/asset-edit/**` | `contracts/asset-modify-api.md`、`contracts/testing.md` | — |
+| `tool/game-export/**`、`tool/game-export-tests/**` | `contracts/csharp-blueprint-runtime.md`、`contracts/asset-organization.md`、`contracts/testing.md` | — |
 | `source/resource/image/textureAssetValidation.h`、`source/textureAssetLoader.cpp` | `contracts/texture-asset-json-v1.md`、`contracts/asset-modify-api.md` | — |
 | `source/scene/validation/**` | `contracts/asset-modify-api.md`、`contracts/vulkanlearn-architecture.html` | — |
 | `source/render/offline/**` | `contracts/vl-offline-rendering.md` | — |

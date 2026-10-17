@@ -43,6 +43,15 @@ struct ResolvedMaterialGroup
 struct ResolvedRenderScene
 {
     std::vector<ResolvedMaterialGroup> materialGroups;
+
+    bool NeedsObjectResources() const
+    {
+        for (const auto& group : materialGroups)
+            for (const auto& instance : group.materialInstances)
+                for (const auto& draw : instance.draws)
+                    if (!draw.objectResourceEntry) return true;
+        return false;
+    }
 };
 
 class ResolvedRenderSceneBuilder

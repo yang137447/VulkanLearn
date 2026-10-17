@@ -5,11 +5,66 @@
 #include <stdexcept>
 #include "render/lighting/physicalLighting.h"
 #include "render/camera/cameraExposure.h"
+#include "script/scriptBlueprintAsset.h"
+#include "script/scriptSourceFiles.h"
+#include "shader/build/atomicFile.h"
+#include <atomic>
+#include <chrono>
+#include <set>
 
 namespace VL::Editor
 {
 namespace
 {
+std::filesystem::path BlueprintCreationTarget(const std::filesystem::path& root, const std::string& path)
+{
+    const auto target = ResolveScriptAssetPath(root, path);
+    const auto relative = target.lexically_relative(std::filesystem::weakly_canonical(root));
+    std::vector<std::string> parts;
+    for (const auto& part : relative) parts.push_back(part.string());
+    const bool common = parts.size() >= 3 && parts[0] == "Common" && parts[1] == "Blueprints";
+    const bool scene = parts.size() >= 4 && parts[0] == "Maps" &&
+        parts[1].size() > 3 && parts[1].rfind("SC_", 0) == 0 && parts[2] == "Blueprints";
+    if ((!common && !scene) || target.filename().string().rfind("BP_", 0) != 0)
+        throw std::invalid_argument("Use Common/Blueprints/BP_*.json or Maps/SC_*/Blueprints/BP_*.json");
+    return target;
+}
+
+void ValidateBlueprintSourceClass(const std::string& className)
+{
+    // 创建模板只接受普通 ASCII 标识符；转义、泛型及程序集限定名留给已有类选择入口。
+    static const std::set<std::string> keywords{
+        "abstract", "as", "base", "bool", "break", "byte", "case", "catch", "char", "checked",
+        "class", "const", "continue", "decimal", "default", "delegate", "do", "double", "else",
+        "enum", "event", "explicit", "extern", "false", "finally", "fixed", "float", "for",
+        "foreach", "goto", "if", "implicit", "in", "int", "interface", "internal", "is", "lock",
+        "long", "namespace", "new", "null", "object", "operator", "out", "override", "params",
+        "private", "protected", "public", "readonly", "ref", "return", "sbyte", "sealed", "short",
+        "sizeof", "stackalloc", "static", "string", "struct", "switch", "this", "throw", "true",
+        "try", "typeof", "uint", "ulong", "unchecked", "unsafe", "ushort", "using", "virtual",
+        "void", "volatile", "while", "record", "required", "file", "scoped", "var", "dynamic"
+    };
+    if (className.empty() || className.size() > 256 || className == "VulkanLearn.Blueprint")
+        throw std::invalid_argument("New Blueprint class requires a C# type name of at most 256 ASCII characters");
+    size_t begin = 0;
+    while (true)
+    {
+        const auto end = className.find('.', begin);
+        const auto token = className.substr(begin, end == std::string::npos ? end : end - begin);
+        if (token.empty() || keywords.count(token))
+            throw std::invalid_argument("New Blueprint class contains an empty or reserved C# identifier");
+        for (size_t index = 0; index < token.size(); ++index)
+        {
+            const char value = token[index];
+            if (value != '_' && !(value >= 'A' && value <= 'Z') &&
+                !(value >= 'a' && value <= 'z') && !(index > 0 && value >= '0' && value <= '9'))
+                throw std::invalid_argument("New Blueprint class requires dot-separated ASCII C# identifiers");
+        }
+        if (end == std::string::npos) return;
+        begin = end + 1;
+    }
+}
+
 nlohmann::json Vector(const Eigen::Vector3f& value)
 {
     return nlohmann::json::array({value.x(), value.y(), value.z()});
@@ -117,11 +172,266 @@ nlohmann::json* SceneDocumentService::FindActor(nlohmann::json& json,
     nlohmann::json* match = nullptr;
     for (auto& object : json.at("objects"))
     {
-        if (object.value("type", "") != type || object.value("name", "") != name) continue;
+        if (object.value("type", "") != type ||
+            object.value(type == "blueprintInstance" ? "id" : "name", "") != name) continue;
         if (match != nullptr) return nullptr;
         match = &object;
     }
     return match;
+}
+
+nlohmann::json SceneDocumentService::ScriptBlueprintDraft(const std::string& path,
+    const std::string& identity, std::string& error)
+{
+    const auto key = Normalize(path);
+    const auto document = documents.find(key);
+    const auto history = histories.find(key);
+    // 连续脚本作者请求只读最新作者 JSON，不依赖旧 World 的参数。
+    // 标准 API 改写会使历史值不符，仍走下方的 staged Scene 门禁。
+    if (document != documents.end() && history != histories.end() &&
+        history->second.current == document->second.draft)
+        if (const auto* actor = FindActor(document->second.draft, identity))
+        {
+            error.clear();
+            return *actor;
+        }
+    if (!PrepareActorEdit(path, identity, error)) return nullptr;
+    return *FindActor(documents.at(Normalize(path)).draft, identity);
+}
+
+nlohmann::json SceneDocumentService::ResolveBlueprint(const nlohmann::json& actor,
+    const std::string& scenePath) const
+{
+    return ResolveScriptBlueprint(resourceRoot, actor, scenePath);
+}
+
+nlohmann::json SceneDocumentService::BlueprintAssetDefaults(const std::string& path,
+    const std::string& scenePath) const
+{
+    return ReadScriptBlueprintAsset(resourceRoot, path, scenePath);
+}
+
+bool SceneDocumentService::StageScriptBlueprint(const std::string& path,
+    const nlohmann::json& actor, bool create, std::string& error)
+{
+    error.clear();
+    try
+    {
+        if (IsPreviewScene(path)) throw std::invalid_argument("Cannot place Actors in a preview scene");
+        if (!Open(path, error)) return false;
+        const auto key = Normalize(path);
+        auto& document = documents.at(key);
+        auto candidate = document.draft;
+        auto* existing = FindActor(candidate, "blueprintInstance|" + actor.at("id").get<std::string>());
+        if (create)
+        {
+            if (existing) throw std::invalid_argument("Blueprint ID already exists");
+            candidate.at("objects").push_back(actor);
+        }
+        else
+        {
+            if (!existing) throw std::invalid_argument("Actor no longer exists");
+            *existing = actor;
+        }
+        Validate(candidate, key);
+        PublishSceneDraft(key, document, std::move(candidate));
+        document.replayViaDraft = document.awaitingWorldLoad = document.standardEdited = true;
+        return true;
+    }
+    catch (const std::exception& exception) { error = exception.what(); return false; }
+}
+
+void SceneDocumentService::PublishSceneDraft(const std::string& key, Document& document,
+    nlohmann::json candidate)
+{
+    if (candidate == document.draft) return;
+    auto& history = histories[key];
+    if (history.current != document.draft) history = {};
+    history.undo.push_back(document.draft);
+    history.redo.clear();
+    // 大场景有界保留：最多 32 步、16 MiB 序列化历史，不随长时间编辑无限增长。
+    size_t bytes = 0;
+    for (const auto& snapshot : history.undo) bytes += snapshot.dump().size();
+    while (history.undo.size() > 32 || (!history.undo.empty() && bytes > 16 * 1024 * 1024))
+    {
+        bytes -= history.undo.front().dump().size();
+        history.undo.erase(history.undo.begin());
+    }
+    PublishDraft(document, std::move(candidate));
+    history.current = document.draft;
+}
+
+bool SceneDocumentService::RemoveScriptBlueprint(const std::string& path,
+    const std::string& identity, std::string& error)
+{
+    try
+    {
+        if (IsPreviewScene(path)) throw std::invalid_argument("Cannot edit preview scenes");
+        if (identity.rfind("blueprintInstance|", 0) != 0)
+            throw std::invalid_argument("Delete requires a script Actor identity");
+        if (!PrepareActorEdit(path, identity, error)) return false;
+        const auto key = Normalize(path);
+        auto& document = documents.at(key);
+        auto candidate = document.draft;
+        auto* actor = FindActor(candidate, identity);
+        auto& objects = candidate.at("objects");
+        for (auto item = objects.begin(); item != objects.end(); ++item)
+            if (&*item == actor) { objects.erase(item); break; }
+        Validate(candidate, key);
+        PublishSceneDraft(key, document, std::move(candidate));
+        document.replayViaDraft = document.awaitingWorldLoad = document.standardEdited = true;
+        error.clear();
+        return true;
+    }
+    catch (const std::exception& exception) { error = exception.what(); return false; }
+}
+
+bool SceneDocumentService::CanUndo(const std::string& path, bool redo) const
+{
+    try
+    {
+        const auto key = Normalize(path);
+        const auto document = documents.find(key);
+        const auto history = histories.find(key);
+        return document != documents.end() && history != histories.end() &&
+            history->second.current == document->second.draft &&
+            !(redo ? history->second.redo : history->second.undo).empty();
+    }
+    catch (...) { return false; }
+}
+
+bool SceneDocumentService::Undo(const std::string& path, bool redo, std::string& error)
+{
+    try
+    {
+        if (!CanUndo(path, redo)) throw std::invalid_argument("No scene edit available");
+        const auto key = Normalize(path);
+        auto& document = documents.at(key);
+        auto& history = histories.at(key);
+        auto& source = redo ? history.redo : history.undo;
+        auto& destination = redo ? history.undo : history.redo;
+        auto candidate = source.back();
+        Validate(candidate, key);
+        destination.push_back(document.draft);
+        PublishDraft(document, std::move(candidate));
+        source.pop_back();
+        history.current = document.draft;
+        document.edits.clear();
+        document.replayViaDraft = document.awaitingWorldLoad = document.standardEdited = true;
+        error.clear();
+        return true;
+    }
+    catch (const std::exception& exception) { error = exception.what(); return false; }
+}
+
+bool SceneDocumentService::CreateScriptBlueprintAsset(const std::string& path,
+    const nlohmann::json& actor, std::string& error)
+{
+    std::filesystem::path temporary;
+    bool ownsTemporary = false;
+    try
+    {
+        const auto target = BlueprintCreationTarget(resourceRoot, path);
+        nlohmann::json asset{{"type", "blueprint"}, {"name", actor.at("name")},
+            {"class", actor.at("class")}, {"properties", actor.at("properties")},
+            {"components", actor.value("components", nlohmann::json::array())},
+            {"rotation", actor.at("rotation")}, {"scale", actor.at("scale")}};
+        if (actor.contains("physics")) asset["physics"] = actor.at("physics");
+        if (actor.contains("scriptComponents")) asset["scriptComponents"] = actor.at("scriptComponents");
+        asset["instanceEditable"] = actor.value("__instanceEditable",
+            actor.value("instanceEditable", nlohmann::json::array()));
+        asset["componentInstanceEditable"] = actor.value("__componentInstanceEditable",
+            actor.value("componentInstanceEditable", nlohmann::json::object()));
+        ValidateScriptBlueprintAsset(asset);
+        // 与正式读取共用依赖边界；创建只发布新文件，绝不覆盖已有资产。
+        std::filesystem::create_directories(target.parent_path());
+        static std::atomic<uint64_t> next{0};
+        temporary = target.parent_path() / (target.stem().string() + ".create-" +
+            std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + "-" +
+            std::to_string(++next) + ".json");
+        if (std::filesystem::exists(temporary))
+            throw std::runtime_error("Actor asset temporary file already exists");
+        WriteTextFileAtomically(temporary, asset.dump(4) + "\n");
+        ownsTemporary = true;
+        // 先完整验证，再利用硬链接的 create-new 语义原子发布；失败保留原目标。
+        ReadScriptBlueprintAsset(resourceRoot, temporary.lexically_relative(resourceRoot).generic_string());
+        std::filesystem::create_hard_link(temporary, target);
+        std::error_code ignored;
+        std::filesystem::remove(temporary, ignored);
+        error.clear();
+        return true;
+    }
+    catch (const std::exception& exception)
+    {
+        if (ownsTemporary)
+        {
+            std::error_code ignored;
+            std::filesystem::remove(temporary, ignored);
+        }
+        error = exception.what();
+        return false;
+    }
+}
+
+bool SceneDocumentService::CreateScriptBlueprintSource(const std::string& path,
+    const std::string& className, const std::string& name,
+    const nlohmann::json& registeredTypes, std::string& error)
+{
+    std::filesystem::path temporary, source;
+    bool ownsTemporary = false, publishedSource = false;
+    try
+    {
+        ValidateBlueprintSourceClass(className);
+        if (name.empty() || name.find('\0') != std::string::npos)
+            throw std::invalid_argument("New Blueprint requires a display name");
+        for (const auto& type : registeredTypes)
+            if (ScriptTypeNameMatches(type, className))
+                throw std::invalid_argument("The C# type is already registered: " + className);
+        // 文件发布负责拒绝覆盖；其它源码中的完整 C# 类型冲突由编译器统一诊断。
+        const auto target = BlueprintCreationTarget(resourceRoot, path);
+        // 创建和编译共用排除规则，不能发布一个后续永远不进入 Gameplay 的源码。
+        for (const auto& part : target.parent_path().lexically_relative(
+            std::filesystem::weakly_canonical(resourceRoot)))
+            if (ScriptSourceDirectoryExcluded(part.string()))
+                throw std::invalid_argument("Blueprint source cannot be created in an excluded C# directory");
+        source = target.parent_path() / (target.stem().string() + ".blueprint.cs");
+        if (std::filesystem::exists(target) || std::filesystem::exists(source))
+            throw std::invalid_argument("The Blueprint asset or paired source already exists");
+        const auto separator = className.rfind('.');
+        const auto typeName = separator == std::string::npos ? className : className.substr(separator + 1);
+        std::string text = "using VulkanLearn;\n\n";
+        if (separator != std::string::npos) text += "namespace " + className.substr(0, separator) + ";\n\n";
+        text += "public sealed class " + typeName + " : global::VulkanLearn.Blueprint\n{\n}\n";
+        std::filesystem::create_directories(target.parent_path());
+        // .tmp 不进入资源源码收集；完整写入后才以 create-new 硬链接发布。
+        static std::atomic<uint64_t> nextSource{0};
+        temporary = target.parent_path() / (target.stem().string() + ".create-source-" +
+            std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + "-" +
+            std::to_string(++nextSource) + ".tmp");
+        if (std::filesystem::exists(temporary)) throw std::runtime_error("Blueprint source temporary already exists");
+        WriteTextFileAtomically(temporary, text);
+        ownsTemporary = true;
+        std::filesystem::create_hard_link(temporary, source);
+        publishedSource = true;
+        const nlohmann::json declaration{{"name", name}, {"class", className},
+            {"properties", nlohmann::json::object()}, {"components", nlohmann::json::array()},
+            {"rotation", {0, 0, 0}}, {"scale", {1, 1, 1}}};
+        if (!CreateScriptBlueprintAsset(path, declaration, error)) throw std::runtime_error(error);
+        std::error_code ignored;
+        std::filesystem::remove(temporary, ignored);
+        error.clear();
+        return true;
+    }
+    catch (const std::exception& exception)
+    {
+        // 仅回收本次发布且仍指向暂存 inode 的源码，不删除并发替换的外部文件。
+        std::error_code ignored;
+        if (publishedSource && std::filesystem::equivalent(temporary, source, ignored))
+            std::filesystem::remove(source, ignored);
+        if (ownsTemporary) std::filesystem::remove(temporary, ignored);
+        error = exception.what();
+        return false;
+    }
 }
 
 bool SceneDocumentService::PrepareActorEdit(const std::string& path,
@@ -222,7 +532,7 @@ void SceneDocumentService::RecordActorEdit(const EditorUi::EditorSceneActorSnaps
     document.edits.push_back(edit);
     auto candidate = std::move(document.draft);
     document.draft = previous;
-    PublishDraft(document, std::move(candidate));
+    PublishSceneDraft(Normalize(actor.scenePath), document, std::move(candidate));
 }
 
 EditorCommandResult SceneDocumentService::Save(const EditorCommandEnvelope& command)

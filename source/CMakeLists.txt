@@ -3,13 +3,15 @@ file(GLOB_RECURSE sources CONFIGURE_DEPENDS "*.h" "*.cpp")
 list(FILTER sources EXCLUDE REGEX "/render/offline/core/")
 # 可复用 UI 控件只依赖 RmlUi，不经 main 的递归收集重复编译。
 list(FILTER sources EXCLUDE REGEX "/ui/widgets/")
+list(FILTER sources EXCLUDE REGEX "/script/scriptHost.cpp$")
 add_subdirectory(ui/widgets)
 
 add_executable(main ${sources})
 
 # renderSystem 的候选事务和显示路径在 MinGW Debug 下超过 COFF 旧 section 上限。
 if(MINGW)
-    set_source_files_properties(renderSystem.cpp PROPERTIES COMPILE_OPTIONS "-Wa,-mbig-obj")
+    set_source_files_properties(renderSystem.cpp editor/ui/blueprintViewportPanel.cpp
+        PROPERTIES COMPILE_OPTIONS "-Wa,-mbig-obj")
 endif()
 
 if(TARGET copy_shaderc_dll)
@@ -39,8 +41,13 @@ PRIVATE
     vl_ui_widgets
     Threads::Threads
     vl_offline_core
+    vl_script_host
     ws2_32 dbghelp advapi32 user32 secur32
     )
+
+if(TARGET vl_gameplay)
+    add_dependencies(main vl_gameplay)
+endif()
 
 if(VULKANLEARN_ENABLE_TRACY)
     target_compile_definitions(main PRIVATE TRACY_ENABLE)

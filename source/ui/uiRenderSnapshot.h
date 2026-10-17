@@ -10,6 +10,7 @@
 
 #include "render/camera/cameraExposure.h"
 #include "render/resource/rendererGpuImageToken.h"
+#include "script/scriptTypes.h"
 
 namespace VL
 {
@@ -117,6 +118,7 @@ struct UiViewModelSnapshot
     float cameraMoveSpeed = 1000.0f;
     std::string activeWorldPath;
     std::string locale;
+    ScriptRuntimeView scripts;
 };
 
 inline void ReconcileOfflineModeFeedback(

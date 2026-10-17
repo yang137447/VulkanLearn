@@ -6,6 +6,8 @@
 #include "mesh/validation/meshAssetValidator.h"
 #include "resource/image/textureAssetValidation.h"
 #include "scene/validation/sceneJsonValidator.h"
+#include "script/scriptBlueprintAsset.h"
+#include "script/scriptPropertySchema.h"
 
 namespace VL::Editor
 {
@@ -54,7 +56,8 @@ void ValidateKind(K kind, const Json& json, const std::string& path)
     const std::string type = json.value("type", "");
     if ((kind == K::Scene && type != "scene") ||
         (kind == K::Mesh && type != "mesh" && type != "speedtree") ||
-        (kind == K::Texture && type != "texture"))
+        (kind == K::Texture && type != "texture") ||
+        (kind == K::Blueprint && type != "blueprint"))
         throw std::invalid_argument("Wrong asset type: " + path);
     const auto filename = std::filesystem::path(path).filename().string();
     std::string foldedFilename = filename;
@@ -63,8 +66,9 @@ void ValidateKind(K kind, const Json& json, const std::string& path)
     if (kind == K::Scene && foldedFilename == "sc_model_preview.json")
         throw std::invalid_argument("Preview scenes are not editable asset documents");
     if ((kind == K::Mesh && filename.rfind("SM_", 0) != 0) ||
-        (kind == K::Texture && filename.rfind("T_", 0) != 0))
-        throw std::invalid_argument("Mesh/Texture descriptors require SM_/T_ JSON names");
+        (kind == K::Texture && filename.rfind("T_", 0) != 0) ||
+        (kind == K::Blueprint && filename.rfind("BP_", 0) != 0))
+        throw std::invalid_argument("Mesh/Texture/Blueprint descriptors require SM_/T_/BP_ JSON names");
 }
 
 void ValidateLegacyScene(const Json& scene)
@@ -149,6 +153,7 @@ bool AssetDocumentService::Open(const std::string& path, std::string& error)
         ValidateKind(kind, document.baseline, document.absolutePath.filename().generic_string());
         if (kind == K::Scene) ValidateLegacyScene(document.baseline);
         else if (kind == K::Mesh) MeshAssetValidator::BuildLoadPlan(key, document.baseline);
+        else if (kind == K::Blueprint) ValidateScriptBlueprintAsset(document.baseline);
         else ValidateTextureAssetJson(document.baseline);
         const auto after = Persistence::MaterialInstancePersistence::ReadSnapshot(document.absolutePath);
         if (!after.Succeeded() || before.digest != after.digest || Resolve(key) != document.absolutePath)
@@ -167,7 +172,8 @@ void AssetDocumentService::Validate(const Json& candidate, const std::string& pa
     if (kind == K::Scene)
     {
         ValidateSceneAssetJson(candidate);
-        for (const auto& object : candidate.at("objects"))
+        const auto effective = ResolveScriptBlueprintScene(resourceRoot, candidate, path);
+        for (const auto& object : effective.at("objects"))
         {
             if (object.at("type") == "environment" && object.at("environment").at("type") == "hdri")
                 ResolveReference(object.at("environment").at("hdrPath").get<std::string>());
@@ -181,7 +187,39 @@ void AssetDocumentService::Validate(const Json& candidate, const std::string& pa
                         (std::string(field) == "materialOverride" && type != "materialInstance"))
                         throw std::invalid_argument(std::string("Invalid reference type for ") + field);
                 }
+            if (object.at("type") == "blueprintInstance" && object.contains("components"))
+                for (const auto& component : object.at("components"))
+                    for (const char* field : {"modelPath", "materialOverride"})
+                        if (component.contains(field))
+                        {
+                            const auto asset = ReadJson(ResolveReference(component.at(field).get<std::string>()));
+                            const auto type = asset.value("type", "");
+                            if ((std::string(field) == "modelPath" && type != "mesh" && type != "speedtree") ||
+                                (std::string(field) == "materialOverride" && type != "materialInstance"))
+                                throw std::invalid_argument("Invalid Actor component reference type");
+                        }
         }
+    }
+    else if (kind == K::Blueprint)
+    {
+        ValidateScriptBlueprintAsset(candidate);
+        if (!blueprintClasses.is_null()) ValidateScriptPropertySchema(candidate, blueprintClasses);
+        if (!blueprintComponentClasses.is_null()) ValidateScriptLogicPropertySchema(candidate, blueprintComponentClasses);
+        const auto owner = Resolve(path).lexically_relative(resourceRoot);
+        for (const auto& component : candidate.value("components", Json::array()))
+            for (const char* field : {"modelPath", "materialOverride"})
+                if (component.contains(field))
+                {
+                    const auto physical = ResolveReference(component.at(field).get<std::string>());
+                    const auto reference = physical.lexically_relative(resourceRoot);
+                    if ((ScriptContentDomain(owner) != "generated" && ScriptContentDomain(reference) == "generated") ||
+                        (ScriptContentDomain(owner) == "common" && ScriptContentDomain(reference) == "maps"))
+                        throw std::invalid_argument("Actor dependency violates content ownership");
+                    const auto type = ReadJson(physical).value("type", "");
+                    if ((std::string(field) == "modelPath" && type != "mesh" && type != "speedtree") ||
+                        (std::string(field) == "materialOverride" && type != "materialInstance"))
+                        throw std::invalid_argument("Invalid Actor component reference type");
+                }
     }
     else if (kind == K::Mesh)
     {
@@ -213,6 +251,53 @@ void AssetDocumentService::PublishDraft(Document& document, Json candidate)
     if (document.draft == document.baseline) document.edits.clear();
 }
 
+void AssetDocumentService::TrimBlueprintHistory(BlueprintHistory& history, bool redo)
+{
+    auto& oldest = redo ? history.redo : history.undo;
+    // undo/redo 合计预算；回放时优先淘汰最远的同向历史，保留刚生成的反向操作。
+    while (history.undo.size() + history.redo.size() > 32 || history.bytes > 16 * 1024 * 1024)
+    {
+        auto& entries = oldest.empty() ? (redo ? history.undo : history.redo) : oldest;
+        history.bytes -= entries.front().bytes;
+        entries.erase(entries.begin());
+    }
+}
+
+void AssetDocumentService::PublishBlueprintDraft(Document& document, Json candidate)
+{
+    if (candidate == document.draft) return;
+    // 先准备历史副本；分配或序列化失败不能留下半笔已提交的作者操作。
+    auto history = document.blueprintHistory;
+    for (const auto& entry : history.redo) history.bytes -= entry.bytes;
+    history.redo.clear();
+    const auto bytes = document.draft.dump().size();
+    history.undo.push_back({document.draft, bytes});
+    history.bytes += bytes;
+    TrimBlueprintHistory(history, false);
+    PublishDraft(document, std::move(candidate));
+    document.blueprintHistory = std::move(history);
+}
+
+void AssetDocumentService::MoveBlueprintHistory(Document& document, const std::string& path, bool redo)
+{
+    const auto& currentSource = redo ? document.blueprintHistory.redo : document.blueprintHistory.undo;
+    if (currentSource.empty()) throw std::invalid_argument("No Blueprint edit available");
+    auto candidate = currentSource.back().value;
+    // 引用文件与托管类目录可能已改变；历史也必须通过当前作者边界的完整候选校验。
+    Validate(candidate, path);
+    auto history = document.blueprintHistory;
+    auto& source = redo ? history.redo : history.undo;
+    auto& destination = redo ? history.undo : history.redo;
+    history.bytes -= source.back().bytes;
+    source.pop_back();
+    const auto bytes = document.draft.dump().size();
+    destination.push_back({document.draft, bytes});
+    history.bytes += bytes;
+    TrimBlueprintHistory(history, redo);
+    PublishDraft(document, std::move(candidate));
+    document.blueprintHistory = std::move(history);
+}
+
 EditorAssetDocumentResultPayload AssetDocumentService::Describe(const std::string& path, const Document& document) const
 {
     EditorAssetDocumentResultPayload result;
@@ -220,6 +305,8 @@ EditorAssetDocumentResultPayload AssetDocumentService::Describe(const std::strin
     result.documentRevision = document.revision;
     result.dirty = document.draft != document.baseline;
     result.sourceDigest = document.digest.ToHex();
+    result.canUndo = kind == K::Blueprint && !document.blueprintHistory.undo.empty();
+    result.canRedo = kind == K::Blueprint && !document.blueprintHistory.redo.empty();
     result.document = ProjectEditableAsset(kind, document.draft);
     result.capabilities = DescribeAssetCapabilities(kind, document.draft);
     return result;
@@ -301,16 +388,20 @@ EditorCommandResult AssetDocumentService::Execute(const EditorCommandEnvelope& c
             Validate(candidate, key);
             if (candidate != document.draft)
             {
-                PublishDraft(document, std::move(candidate));
+                if (kind == K::Blueprint) PublishBlueprintDraft(document, std::move(candidate));
+                else PublishDraft(document, std::move(candidate));
                 document.standardEdited = true;
                 if (kind == K::Scene) document.replayViaDraft = document.awaitingWorldLoad = true;
             }
             else changed.clear();
         }
         else if (operation == O::Validate) Validate(document.draft, key);
+        else if (operation == O::Undo || operation == O::Redo)
+            MoveBlueprintHistory(document, key, operation == O::Redo);
         else if (operation == O::Revert)
         {
             PublishDraft(document, document.baseline);
+            document.blueprintHistory = {};
             document.edits.clear();
             document.replayViaDraft = kind == K::Scene;
             document.awaitingWorldLoad = kind == K::Scene;
@@ -329,6 +420,8 @@ EditorCommandResult AssetDocumentService::Execute(const EditorCommandEnvelope& c
             const uint64_t nextRevision = document.revision + 1;
             // 先在独立 owner 中读取，失败保留旧草稿和基线；成功后才替换原文档。
             AssetDocumentService replacement(resourceRoot, kind);
+            replacement.blueprintClasses = blueprintClasses;
+            replacement.blueprintComponentClasses = blueprintComponentClasses;
             std::string error;
             if (!replacement.Open(key, error)) throw std::runtime_error(error);
             auto candidate = std::move(replacement.documents.at(key));
@@ -399,8 +492,16 @@ std::vector<EditorUi::EditorModifiedDocumentSnapshot> AssetDocumentService::Modi
     for (const auto& entry : documents)
         if (entry.second.draft != entry.second.baseline)
             result.push_back({entry.first, kind == K::Scene ? EditorUi::EditorAssetKind::Scene :
-                kind == K::Mesh ? EditorUi::EditorAssetKind::Mesh : EditorUi::EditorAssetKind::Texture,
+                kind == K::Mesh ? EditorUi::EditorAssetKind::Mesh : kind == K::Blueprint ?
+                EditorUi::EditorAssetKind::Blueprint : EditorUi::EditorAssetKind::Texture,
                 entry.second.revision, entry.second.status, entry.second.message});
+    return result;
+}
+
+std::vector<EditorAssetDocumentResultPayload> AssetDocumentService::DocumentSnapshots() const
+{
+    std::vector<EditorAssetDocumentResultPayload> result;
+    for (const auto& entry : documents) result.push_back(Describe(entry.first, entry.second));
     return result;
 }
 } // namespace VL::Editor

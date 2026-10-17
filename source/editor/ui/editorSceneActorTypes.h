@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <nlohmann/json.hpp>
 
 #include <Eigen/Dense>
 
@@ -22,7 +23,8 @@ enum class EditorSceneActorType : uint8_t
     SquareAreaLight,
     Camera,
     Environment,
-    WindProfile
+    WindProfile,
+    Script
 };
 
 // 一个 mesh actor 的渲染子对象。World 的 meshObjects 按 section 展开，
@@ -53,6 +55,15 @@ struct EditorSceneCameraActor
     float clipNear = 0.1f;
     float clipFar = 1000.0f;
     CameraExposure exposure;
+};
+
+// 正式加载后的组件 section 包围盒与完整模型矩阵；仅供编辑器拾取，不含 GPU 所有权。
+struct EditorScriptComponentBounds
+{
+    std::string componentId;
+    Eigen::Matrix4f worldFromLocal = Eigen::Matrix4f::Identity();
+    Eigen::Vector3f minimum = Eigen::Vector3f::Zero();
+    Eigen::Vector3f maximum = Eigen::Vector3f::Zero();
 };
 
 // EnvironmentSnapshot 只携带 GPU 侧 resource handle，没有 cubeSize/hdrPath，
@@ -123,6 +134,20 @@ struct EditorSceneActorSnapshot
     // 仅 Camera 行携带观察相机读数，供坐标轴与辅助线投影；不是第二个场景 actor。
     EditorSceneCameraActor viewportCamera;
     bool hasViewportCamera = false;
+    std::string scriptClass;
+    nlohmann::json scriptProperties = nlohmann::json::object();
+    nlohmann::json scriptInstanceEditable = nlohmann::json::array();
+    std::string scriptBlueprintPath;
+    nlohmann::json scriptOverrides = nlohmann::json::object();
+    nlohmann::json scriptComponentInstanceEditable = nlohmann::json::object();
+    nlohmann::json scriptComponentOverrides = nlohmann::json::object();
+    nlohmann::json scriptComponents = nlohmann::json::array();
+    // C# 逻辑组件与可视组件父链分离；Scene 只持有获授权属性的稀疏覆写。
+    nlohmann::json scriptLogicComponents = nlohmann::json::array();
+    nlohmann::json scriptLogicOverrides = nlohmann::json::object();
+    std::vector<EditorScriptComponentBounds> scriptComponentBounds;
+    nlohmann::json scriptPhysics = nullptr;
+    bool scriptSpawned = false;
     EditorSceneEnvironmentActor environment;
     EditorSceneWindActor wind;
 };

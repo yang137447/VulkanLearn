@@ -11,6 +11,8 @@
 #include "world/meshSceneObjectIdentity.h"
 #include "world/world.h"
 #include "world/worldSnapshotBuilder.h"
+#include "script/scriptScene.h"
+#include "script/scriptComponents.h"
 
 namespace VL
 {
@@ -203,7 +205,93 @@ std::vector<EditorUi::EditorSceneActorSnapshot> BuildEditorSceneActors(const Wor
     std::vector<EditorSceneActorSnapshot> actors;
 
     for (const MeshActorGroup& group : CollectMeshGroups(world))
-        actors.push_back(BuildMeshActor(world, group));
+        if (group.sceneObjectIdentity.rfind("__blueprint/", 0) != 0)
+            actors.push_back(BuildMeshActor(world, group));
+
+    auto declarations = world.GetScriptBlueprints();
+    for (const auto& state : world.GetScriptBlueprintStates())
+        if (state.contains("__spawnPath")) declarations.push_back(state);
+    for (const auto& declaration : declarations)
+    {
+        EditorSceneActorSnapshot actor;
+        actor.type = EditorSceneActorType::Script;
+        actor.worldGeneration = world.GetGeneration();
+        actor.scenePath = world.GetScenePath();
+        const auto id = declaration.at("id").get<std::string>();
+        actor.identity = "blueprintInstance|" + id;
+        actor.displayName = declaration.at("name").get<std::string>();
+        actor.scriptClass = declaration.at("class").get<std::string>();
+        actor.scriptProperties = declaration.at("properties");
+        actor.scriptInstanceEditable = declaration.value("__instanceEditable", nlohmann::json::array());
+        actor.scriptComponentInstanceEditable = declaration.value("__componentInstanceEditable", nlohmann::json::object());
+        actor.scriptComponents = declaration.value("components", nlohmann::json::array());
+        actor.scriptLogicComponents = declaration.value("scriptComponents", nlohmann::json::array());
+        actor.scriptPhysics = declaration.value("physics", nlohmann::json(nullptr));
+        actor.scriptSpawned = declaration.contains("__spawnPath");
+        if (actor.scriptSpawned) actor.scriptBlueprintPath = declaration.at("__spawnPath");
+        for (const auto& source : world.GetScriptBlueprintSources())
+            if (source.at("id") == id)
+            {
+                actor.scriptBlueprintPath = source.value("blueprintPath", std::string());
+                actor.scriptOverrides = source.at("properties");
+                actor.scriptComponentOverrides = source.value("componentOverrides", nlohmann::json::object());
+                actor.scriptLogicOverrides = source.value("scriptComponentOverrides", nlohmann::json::object());
+                if (actor.scriptBlueprintPath.empty())
+                    for (const auto& node : source.value("scriptComponents", nlohmann::json::array()))
+                        actor.scriptLogicOverrides[node.at("id").get<std::string>()] = node.at("properties");
+                break;
+            }
+        for (const char* field : {"position", "rotation", "scale"})
+        {
+            const auto& value = declaration.at(field);
+            Eigen::Vector3f vector(value[0].get<float>(), value[1].get<float>(), value[2].get<float>());
+            if (std::string(field) == "position") actor.position = vector;
+            else if (std::string(field) == "rotation") actor.rotation = vector;
+            else actor.scale = vector;
+        }
+        for (const auto& state : world.GetScriptBlueprintStates())
+            if (state.at("id") == id)
+            {
+                actor.visible = !state.value("destroyed", false);
+                actor.scriptComponents = state.at("components");
+                // 播放时显示当前逻辑组件状态；作者权限仍从声明按稳定 ID 保留。
+                auto liveLogic = state.value("scriptComponents", nlohmann::json::array());
+                for (auto& node : liveLogic)
+                    for (const auto& authored : actor.scriptLogicComponents)
+                        if (authored.at("id") == node.at("id") && authored.contains("instanceEditable"))
+                            node["instanceEditable"] = authored.at("instanceEditable");
+                actor.scriptLogicComponents = std::move(liveLogic);
+                actor.scriptPhysics = state.value("physics", nlohmann::json(nullptr));
+                for (const char* field : {"position", "rotation", "scale"})
+                {
+                    const auto& value = state.at(field);
+                    Eigen::Vector3f vector(value[0].get<float>(), value[1].get<float>(), value[2].get<float>());
+                    if (std::string(field) == "position") actor.position = vector;
+                    else if (std::string(field) == "rotation") actor.rotation = vector;
+                    else actor.scale = vector;
+                }
+                break;
+            }
+        // 只冻结预览所需 section；拾取必须使用正式导入后的 bounds，不能猜测源模型尺寸。
+        if (id.rfind("~preview.", 0) == 0)
+            for (const auto& component : actor.scriptComponents)
+            {
+                if (component.at("type") != "mesh") continue;
+                const auto identity = ScriptMeshIdentity(id, component);
+                for (const auto& entry : world.GetMeshObjects())
+                {
+                    const auto& mesh = entry.second;
+                    if (!mesh.visible || mesh.sceneObjectIdentity != identity) continue;
+                    EditorUi::EditorScriptComponentBounds bounds;
+                    bounds.componentId = ScriptComponentId(component);
+                    bounds.worldFromLocal = mesh.model;
+                    bounds.minimum = mesh.localBoundsMin;
+                    bounds.maximum = mesh.localBoundsMax;
+                    actor.scriptComponentBounds.push_back(std::move(bounds));
+                }
+            }
+        actors.push_back(std::move(actor));
+    }
 
     const std::shared_ptr<DirectionalLight>& primary = world.GetPrimaryDirectionalLight();
     for (const auto& entry : world.GetDirectionalLights())

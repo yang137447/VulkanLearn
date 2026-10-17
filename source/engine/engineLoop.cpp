@@ -10,13 +10,20 @@
 #include "controller.h"
 #include "engine/gameInstance.h"
 #include "engine/modelPreviewRequest.h"
+#include "engine/blueprintPreviewRequest.h"
+#include "script/scriptBuildService.h"
+#include "script/scriptBuildDiagnostics.h"
+#include "engine/blueprintPreviewTransform.h"
+#include "engine/blueprintAssetLoadSession.h"
 #include "input/mouseMotionBatch.h"
 #include "engine/runtimeCommandExecutor.h"
 #include "engine/runtimeTestHooks.h"
 #include "engine/subsystemCollection.h"
 #include "engine/testing/runtimeValidationServices.h"
 #include "editor/scene/editorSceneActorBuilder.h"
+#include "editor/scene/scriptBlueprintAuthoring.h"
 #include "editor/service/sceneDocumentService.h"
+#include "editor/runtime/materialInstanceEditorRuntime.h"
 #include "editor/selection/materialInstanceSelection.h"
 #include "material/generator/materialParameterIncludeGenerator.h"
 #include "material/generator/materialDefinitionReloadBatch.h"
@@ -117,6 +124,17 @@ RuntimeResult<void> EngineLoop::Init(
 
     window->CenterOnScreen();
     window->Show();
+#ifdef VULKANLEARN_ENABLE_CSHARP_BLUEPRINTS
+    if (runtimeConfig.GetScriptSettings().enabled)
+    {
+        scriptBuild = std::make_unique<ScriptBuildService>();
+        const auto session = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+        scriptBuild->Configure(VL_SCRIPT_DOTNET_EXECUTABLE, VL_SCRIPT_GAMEPLAY_PROJECT,
+            std::filesystem::path(runtimeConfig.GetResourcePath()) / "Generated/Runtime/ScriptBuilds" / session,
+            std::filesystem::path(runtimeConfig.GetScriptSettings().runtimeDirectory) / "VulkanLearn.Runtime.dll",
+            VL_SCRIPT_BUILD_CONFIGURATION, runtimeConfig.GetResourcePath(), VL_SCRIPT_RUNTIME_SOURCE_DIRECTORY);
+    }
+#endif
     UpdateUiInputPolicy();
     GetSubsystems().GetRuntimeClock().Reset();
     return RuntimeResult<void>::Success();
@@ -144,6 +162,13 @@ void EngineLoop::Shutdown()
     // callback can run after device resources are released.
     const DiagnosticsSubsystem& diagnostics =
         GetSubsystems().GetDiagnosticsSubsystem();
+    if (scriptBuild) scriptBuild->Shutdown();
+    // 取消不阻塞普通帧；退出时统一等待纯CPU任务，再释放配置和renderer所有者。
+    if (blueprintAssetLoad) blueprintAssetLoad->Cancel();
+    blueprintAssetLoad.reset();
+    BlueprintAssetLoadSession::WaitForWorkers();
+    loadedBlueprintAssets.clear();
+    GetSubsystems().GetScriptRuntime().Shutdown();
     if (shaderReloadRuntime)
     {
         shaderReloadRuntime->Shutdown();
@@ -286,6 +311,18 @@ RuntimeResult<void> EngineLoop::InitializeRuntimeSystems(
         *rendererBackend);
 
     const UiSettings& uiSettings = GetRuntimeConfig().GetUiSettings();
+    const auto& scriptSettings = GetRuntimeConfig().GetScriptSettings();
+    try
+    {
+        GetSubsystems().GetInputSubsystem().ConfigureGameplay(scriptSettings.input);
+        GetSubsystems().GetScriptRuntime().Initialize(scriptSettings.enabled,
+            scriptSettings.runtimeDirectory, scriptSettings.assembly);
+        GetSubsystems().GetScriptRuntime().SetResourceRoot(CommonFunction::GetResourcePath());
+    }
+    catch (const std::exception& error)
+    {
+        return RuntimeResult<void>::Failure(MakeRuntimeError("Script.StartupFailed", error.what()));
+    }
     if (uiSettings.enabled)
     {
         UiSubsystemDesc uiDesc;
@@ -342,6 +379,7 @@ RuntimeResult<void> EngineLoop::InitializeRuntimeSystems(
         resourceLoadCoordinator,
         GetRuntimeConfig().GetWindowAspectRatio(),
         GetRuntimeConfig().GetShadowCascadeCount());
+    worldTransitionCoordinator->SetScriptRuntime(&GetSubsystems().GetScriptRuntime());
     return RuntimeResult<void>::Success();
 }
 
@@ -590,7 +628,47 @@ void EngineLoop::Tick()
 
     {
         PROFILE_SCOPE("Update");
-        controller->Update(deltaTime, GetSubsystems().GetInputSubsystem().GetActionState());
+        auto& scripts = GetSubsystems().GetScriptRuntime();
+        const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
+        TickBlueprintAssets();
+        // 故障 Stop 后先收回动态模板，再构造程序集候选，避免把上一轮资产收录为常驻模板。
+        TickScriptBuild(deltaTime);
+        if (world && world->GetGeneration() != autoPlayWorldGeneration &&
+            GetRuntimeConfig().GetScriptSettings().autoPlay &&
+            !RenderSystem::GetInstance().IsOfflineMode() &&
+            std::filesystem::path(world->GetScenePath()).filename() != "SC_model_preview.json")
+        {
+            // 导出的游戏在正式World提交后进入同一Play入口；每代只启动一次，Stop不会自行重启。
+            autoPlayWorldGeneration = world->GetGeneration();
+            if (!world->GetScriptBlueprints().empty())
+            {
+                std::string error;
+                if (!scripts.Control(*world, ScriptPlayState::Playing, error))
+                    GetSubsystems().GetDiagnosticsSubsystem().ReportError("Game auto-play failed: " + error);
+            }
+        }
+        // 离线渲染消费作者场景；模式切换先恢复作者 TRS，避免隐藏 Play 控件后仍继续游戏。
+        if (world && RenderSystem::GetInstance().IsOfflineMode() && !scripts.IsEditing())
+        {
+            std::string error;
+            scripts.Control(*world, ScriptPlayState::Editing, error);
+        }
+        if (scripts.IsEditing())
+            controller->Update(deltaTime, GetSubsystems().GetInputSubsystem().GetActionState());
+        scripts.Tick(world, deltaTime,
+            GetSubsystems().GetInputSubsystem().GetActionState(),
+            GetSubsystems().GetDiagnosticsSubsystem());
+        if (world && !RenderSystem::GetInstance().IsOfflineMode() &&
+            std::filesystem::path(world->GetScenePath()).filename() != "SC_model_preview.json" &&
+            scripts.PollBlueprintAssetChanges(*world, deltaTime))
+        {
+            // ACT 内容变化仍经过下一帧正式 World/Graph 事务；不在观察器里修改活动资源或作者草稿。
+            RuntimeCommand command;
+            command.type = RuntimeCommandType::LoadWorld;
+            command.stringValue = world->GetScenePath();
+            QueueRuntimeCommand(std::move(command));
+            scripts.SetFeedback("Actor asset changed; reloading scene");
+        }
     }
 
     if (uiSubsystem != nullptr)
@@ -632,11 +710,286 @@ void EngineLoop::Tick()
 
 }
 
+void EngineLoop::TickScriptBuild(float deltaTime)
+{
+    if (!scriptBuild) return;
+    auto& scripts = GetSubsystems().GetScriptRuntime();
+    const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
+    bool newCandidate = false;
+    if (auto result = scriptBuild->Poll())
+    {
+        scriptBuildOutput = std::move(result->log);
+        auto& diagnostics = GetSubsystems().GetDiagnosticsSubsystem();
+        for (const auto& entry : ParseScriptBuildDiagnostics(scriptBuildOutput))
+        {
+            if (entry.severity == LogSeverity::Error)
+                diagnostics.ReportError(entry.message, "C# Compiler", entry.location);
+            else if (entry.severity == LogSeverity::Warning)
+                diagnostics.ReportWarning(entry.message, "C# Compiler", entry.location);
+            else diagnostics.ReportInfo(entry.message, "C# Compiler", entry.location);
+        }
+        if (result->succeeded)
+        {
+            pendingBuiltAssembly = std::move(result->assembly);
+            pendingBuildWorldGeneration = result->worldGeneration;
+            newCandidate = true;
+            scripts.SetFeedback("Gameplay compiled; validating reload candidate");
+        }
+        else scripts.SetFeedback(result->cancelled ? "Gameplay build cancelled" : "Gameplay build failed; see Log");
+    }
+    if (!world) return;
+    if (pendingBuiltAssembly && world->GetGeneration() != pendingBuildWorldGeneration)
+    {
+        pendingBuiltAssembly.reset();
+        scripts.SetFeedback("Compiled candidate discarded because the World changed");
+    }
+    const bool level = !RenderSystem::GetInstance().IsOfflineMode() &&
+        std::filesystem::path(world->GetScenePath()).filename() != "SC_model_preview.json";
+    if (pendingBuiltAssembly && level && (newCandidate || scripts.IsEditing()))
+    {
+        // 构建完成不等于加载成功；原有候选类/属性/OnCreate事务仍是唯一程序集发布入口。
+        std::string error;
+        const bool reloaded = scripts.ReloadAssembly(*world, error, pendingBuiltAssembly->string());
+        // 在途 lease 可暂时阻止迁移：保留候选供 Reload 或 Stop 后重试，不每帧重复执行钩子。
+        if (reloaded || scripts.IsEditing()) pendingBuiltAssembly.reset();
+        auto& diagnostics = GetSubsystems().GetDiagnosticsSubsystem();
+        if (reloaded) diagnostics.ReportInfo("Gameplay assembly reloaded", "Script");
+        else diagnostics.ReportWarning("Reload rejected: " + error, "Script");
+    }
+    if (autoCompileScripts && level)
+    {
+        try
+        {
+            if (scriptBuild->ObserveChanges(deltaTime))
+            {
+                std::string error;
+                if (!scriptBuild->Request(world->GetGeneration(), error)) scripts.SetFeedback(error);
+                else scripts.SetFeedback("Source changed; compiling Gameplay...");
+            }
+        }
+        catch (const std::exception& exception) { scripts.SetFeedback(exception.what()); }
+    }
+}
+
+void EngineLoop::TickBlueprintAssets()
+{
+    auto& scripts = GetSubsystems().GetScriptRuntime();
+    const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
+    const auto context = world ? world->GetScriptContext() : nullptr;
+    const uint64_t generation = world ? world->GetGeneration() : 0;
+    auto& diagnostics = GetSubsystems().GetDiagnosticsSubsystem();
+    if (generation != blueprintAssetWorldGeneration || context != blueprintAssetContext.lock() || scripts.IsEditing())
+    {
+        if (blueprintAssetLoad) blueprintAssetLoad->Cancel();
+        blueprintAssetLoad.reset();
+        blueprintAssetRequests.clear();
+        activeBlueprintAssetRequests.clear();
+        for (auto& item : loadedBlueprintAssets)
+            if (item.second && world)
+            {
+                item.second->Release(*world);
+                scripts.ForgetBlueprintAsset(*world, item.first);
+            }
+        loadedBlueprintAssets.clear();
+        blueprintAssetContext = context;
+        blueprintAssetWorldGeneration = generation;
+    }
+    if (!world) return;
+    for (const auto& request : scripts.TakeAssetRequests(*world))
+    {
+        if (blueprintAssetLoad && blueprintAssetLoad->Path() == request.at("path"))
+            activeBlueprintAssetRequests.push_back(request);
+        else blueprintAssetRequests.push_back(request);
+    }
+    for (const auto& cancellation : scripts.TakeAssetCancellations(*world))
+    {
+        for (auto* requests : {&blueprintAssetRequests, &activeBlueprintAssetRequests})
+            for (auto it = requests->begin(); it != requests->end();)
+                if (it->at("id") == cancellation) it = requests->erase(it); else ++it;
+    }
+    if (blueprintAssetLoad && activeBlueprintAssetRequests.empty()) blueprintAssetLoad->Cancel();
+    if (blueprintAssetLoad && blueprintAssetLoad->Step(*world))
+    {
+        const auto path = blueprintAssetLoad->Path();
+        const bool success = blueprintAssetLoad->Error().empty();
+        bool accepted = false;
+        for (const auto& request : activeBlueprintAssetRequests)
+            accepted = scripts.CompleteAssetLoad(*world, request.at("id").get<uint64_t>(), path,
+                blueprintAssetLoad->Template(), blueprintAssetLoad->Error()) || accepted;
+        if (success && accepted)
+        {
+            // entry在Begin前已分配；提交之后只移动会话owner，避免成功资源失去卸载入口。
+            loadedBlueprintAssets.at(path) = std::move(blueprintAssetLoad);
+            diagnostics.ReportInfo("Blueprint asset ready: " + path);
+        }
+        else
+        {
+            if (success) blueprintAssetLoad->Release(*world);
+            else if (accepted) diagnostics.ReportWarning("Blueprint asset load failed: " + blueprintAssetLoad->Error());
+            blueprintAssetLoad.reset();
+            loadedBlueprintAssets.erase(path);
+        }
+        activeBlueprintAssetRequests.clear();
+    }
+    for (const auto& path : scripts.CollectUnusedBlueprintAssets(*world))
+    {
+        const auto session = loadedBlueprintAssets.find(path);
+        if (session != loadedBlueprintAssets.end() && session->second)
+        {
+            session->second->Release(*world);
+            scripts.ForgetBlueprintAsset(*world, path);
+            loadedBlueprintAssets.erase(session);
+            diagnostics.ReportInfo("Blueprint asset released: " + path);
+        }
+    }
+    if (!blueprintAssetLoad && !blueprintAssetRequests.empty() && !scripts.IsEditing())
+    {
+        const auto path = blueprintAssetRequests.front().at("path").get<std::string>();
+        for (auto it = blueprintAssetRequests.begin(); it != blueprintAssetRequests.end();)
+            if (it->at("path") == path)
+            { activeBlueprintAssetRequests.push_back(*it); it = blueprintAssetRequests.erase(it); }
+            else ++it;
+        if (world->GetScriptTemplates().contains(path))
+        {
+            for (const auto& request : activeBlueprintAssetRequests)
+                scripts.CompleteAssetLoad(*world, request.at("id").get<uint64_t>(), path,
+                    world->GetScriptTemplates().at(path));
+            activeBlueprintAssetRequests.clear();
+        }
+        else
+        {
+            loadedBlueprintAssets.try_emplace(path);
+            blueprintAssetLoad = std::make_unique<BlueprintAssetLoadSession>(
+                *rendererBackend, *pipelineFactory, RenderGraph::GetInstance());
+            try
+            {
+                blueprintAssetLoad->Begin(*world, activeBlueprintAssetRequests.front().at("id").get<uint64_t>(),
+                    path, scripts.Classes());
+            }
+            catch (const std::exception& exception)
+            {
+                for (const auto& request : activeBlueprintAssetRequests)
+                    scripts.CompleteAssetLoad(*world, request.at("id").get<uint64_t>(), path, nullptr, exception.what());
+                blueprintAssetLoad.reset();
+                loadedBlueprintAssets.erase(path);
+                activeBlueprintAssetRequests.clear();
+            }
+        }
+    }
+}
+
 void EngineLoop::ApplyQueuedUiActions()
 {
     std::vector<UiAction> actions = GetSubsystems().GetCommandBus().DrainUiActions();
     for (const UiAction& action : actions)
     {
+        if (action.type == UiActionType::CompileScripts || action.type == UiActionType::SetAutoCompileScripts)
+        {
+            const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
+            auto& scripts = GetSubsystems().GetScriptRuntime();
+            if (!world || world->GetGeneration() != action.actorProperty.worldGeneration ||
+                std::filesystem::path(world->GetScenePath()).filename() == "SC_model_preview.json" ||
+                RenderSystem::GetInstance().IsOfflineMode() || !scriptBuild || !scriptBuild->Available())
+            { scripts.SetFeedback("C# build is unavailable in this context"); continue; }
+            if (action.type == UiActionType::SetAutoCompileScripts)
+                autoCompileScripts = action.intValue != 0;
+            else
+            {
+                std::string error;
+                if (!scriptBuild->Request(world->GetGeneration(), error)) scripts.SetFeedback(error);
+                else scripts.SetFeedback("Compiling Gameplay...");
+            }
+            continue;
+        }
+        if (action.type == UiActionType::SetScriptTimeScale)
+        {
+            auto& scripts = GetSubsystems().GetScriptRuntime();
+            const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
+            std::string error;
+            if (!world || world->GetGeneration() != action.actorProperty.worldGeneration)
+                error = "The World changed since this time request";
+            else if (RenderSystem::GetInstance().IsOfflineMode() ||
+                std::filesystem::path(world->GetScenePath()).filename() == "SC_model_preview.json")
+                error = "Time Scale requires a realtime level";
+            else scripts.SetTimeScale(action.floatValue, error);
+            scripts.SetFeedback(error);
+            if (!error.empty()) GetSubsystems().GetDiagnosticsSubsystem().ReportWarning(error, "Script");
+            continue;
+        }
+        if (action.type == UiActionType::ControlScripts || action.type == UiActionType::ReloadScripts ||
+            action.type == UiActionType::AddScriptBlueprint || action.type == UiActionType::SetScriptProperty ||
+            action.type == UiActionType::AddScriptComponent || action.type == UiActionType::RemoveScriptComponent ||
+            action.type == UiActionType::SetScriptLogicComponent ||
+            action.type == UiActionType::AddScriptLogicComponent || action.type == UiActionType::RemoveScriptLogicComponent ||
+            action.type == UiActionType::RenameScriptBlueprint || action.type == UiActionType::DuplicateScriptBlueprint ||
+            action.type == UiActionType::DeleteScriptBlueprint || action.type == UiActionType::SetScriptPhysics ||
+            action.type == UiActionType::UndoSceneEdit || action.type == UiActionType::RedoSceneEdit ||
+            action.type == UiActionType::CreateScriptBlueprintAsset || action.type == UiActionType::SetScriptComponent)
+        {
+            auto& scripts = GetSubsystems().GetScriptRuntime();
+            const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
+            std::string error;
+            if (!world || world->GetGeneration() != action.actorProperty.worldGeneration)
+                error = "The World changed since this script request";
+            else if (RenderSystem::GetInstance().IsOfflineMode() ||
+                std::filesystem::path(world->GetScenePath()).filename() == "SC_model_preview.json")
+                error = "C# Actors require a realtime level";
+            else if (action.type == UiActionType::ControlScripts)
+            {
+                // 同批Stop/Play也必须先移除上一上下文的动态模板，不能把它们当成新场景常驻资产。
+                if (scripts.IsEditing()) TickBlueprintAssets();
+                scripts.Control(*world, static_cast<ScriptPlayState>(action.intValue), error);
+                if (scripts.IsEditing()) TickBlueprintAssets();
+            }
+            else if (action.type == UiActionType::ReloadScripts)
+            {
+                if (scripts.IsEditing()) TickBlueprintAssets();
+                scripts.ReloadAssembly(*world, error, pendingBuiltAssembly ?
+                    pendingBuiltAssembly->string() : std::string());
+                pendingBuiltAssembly.reset();
+                if (error.empty())
+                {
+                    GetSubsystems().GetDiagnosticsSubsystem().ReportInfo("Gameplay assembly reloaded", "Script");
+                    continue;
+                }
+            }
+            else if (uiSubsystem && uiSubsystem->GetSceneDocuments())
+            {
+                std::string id;
+                if (StageScriptBlueprintAction(*world, scripts, *uiSubsystem->GetSceneDocuments(),
+                    action, id, error))
+                {
+                    if (action.type == UiActionType::CreateScriptBlueprintAsset)
+                    {
+                        scripts.SetFeedback("Blueprint asset created: " + action.stringValue);
+                        uiSubsystem->RequestRefreshAssetCatalog();
+                        if (action.script.contains("newClass"))
+                        {
+                            // 新源码先编译，再由原有程序集事务发布类目录；创建本身不改当前关卡。
+                            if (!scriptBuild || !scriptBuild->Available())
+                                scripts.SetFeedback("Blueprint created; C# build is unavailable");
+                            else if (!scriptBuild->Request(world->GetGeneration(), error))
+                                scripts.SetFeedback("Blueprint created; " + error);
+                            else scripts.SetFeedback("Blueprint created; compiling Gameplay...");
+                        }
+                        continue;
+                    }
+                    pendingScriptBlueprintSelection = id.empty() ? "" : "blueprintInstance|" + id;
+                    RuntimeCommand command;
+                    command.type = RuntimeCommandType::LoadWorld;
+                    command.stringValue = world->GetScenePath();
+                    QueueRuntimeCommand(std::move(command));
+                }
+            }
+            scripts.SetFeedback(error);
+            if (!error.empty()) GetSubsystems().GetDiagnosticsSubsystem().ReportWarning(error);
+            continue;
+        }
+        if (action.type == UiActionType::SetActorProperty && !GetSubsystems().GetScriptRuntime().IsEditing())
+        {
+            GetSubsystems().GetScriptRuntime().SetFeedback("Stop gameplay before editing the scene");
+            continue;
+        }
         if (action.type == UiActionType::ToggleDeveloperUi ||
             action.type == UiActionType::SetLocale)
         {
@@ -670,6 +1023,20 @@ void EngineLoop::ApplyQueuedUiActions()
                     float(rect.width) / float(rect.height), float(rect.width));
             continue;
         }
+        if (action.type == UiActionType::TransformBlueprintPreview)
+        {
+            const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
+            if (world && uiSubsystem && uiSubsystem->GetEditorCommandRuntime() &&
+                GetSubsystems().GetScriptRuntime().IsEditing() && !RenderSystem::GetInstance().IsOfflineMode())
+                for (const auto& document : uiSubsystem->GetEditorCommandRuntime()->GetSnapshot().blueprintDocuments)
+                    if (document.assetPath == action.blueprintTransform.assetPath)
+                    {
+                        ApplyBlueprintPreviewTransform(*world, action.blueprintTransform,
+                            document.documentRevision, document.document);
+                        break;
+                    }
+            continue;
+        }
         if (action.type == UiActionType::FrameEditorActor)
         {
             const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
@@ -682,6 +1049,28 @@ void EngineLoop::ApplyQueuedUiActions()
         command.sourceText = "ui";
         switch (action.type)
         {
+        case UiActionType::PreviewBlueprint:
+        {
+            // UI 只传地址和 revision；候选几何必须来自 GT 文档 owner 已接受的草稿。
+            if (!uiSubsystem || !uiSubsystem->GetEditorCommandRuntime() ||
+                !GetSubsystems().GetScriptRuntime().IsEditing() ||
+                RenderSystem::GetInstance().IsOfflineMode()) continue;
+            const auto& documents = uiSubsystem->GetEditorCommandRuntime()->GetSnapshot().blueprintDocuments;
+            bool found = false;
+            for (const auto& document : documents)
+                if (document.assetPath == action.stringValue &&
+                    document.documentRevision == action.blueprintPreviewRevision)
+                {
+                    command.extraSceneObjects = BuildBlueprintPreviewObjects(action.stringValue,
+                        action.blueprintPreviewRevision, document.documentRevision, document.document);
+                    found = true;
+                    break;
+                }
+            if (!found) continue;
+            command.type = RuntimeCommandType::LoadWorld;
+            command.stringValue = ModelPreviewScenePath;
+            break;
+        }
         case UiActionType::PreviewMaterial:
             command.type = RuntimeCommandType::LoadWorld;
             command.stringValue = ModelPreviewScenePath;
@@ -869,6 +1258,7 @@ void EngineLoop::UpdateUiInputPolicy()
     {
         // 资产预览已经有自己的 orbit 相机；只有关卡编辑使用独立观察相机。
         const bool editingLevel = uiSubsystem && uiSubsystem->IsDeveloperUiVisible() &&
+            GetSubsystems().GetScriptRuntime().IsEditing() &&
             std::filesystem::path(world->GetScenePath()).filename() != "SC_model_preview.json";
         world->SetEditorViewEnabled(editingLevel);
         controller->SetViewTarget(editingLevel ? world->GetRenderCamera() :
@@ -917,6 +1307,18 @@ void EngineLoop::UpdateUiViewModel(
     }
 
     UiViewModelSnapshot snapshot;
+    snapshot.scripts = GetSubsystems().GetScriptRuntime().View(
+        GetSubsystems().GetWorldManager().GetActiveWorldHandle().generation);
+    snapshot.scripts.buildAvailable = scriptBuild && scriptBuild->Available();
+    snapshot.scripts.buildBusy = scriptBuild && scriptBuild->Busy();
+    snapshot.scripts.autoCompile = autoCompileScripts;
+    snapshot.scripts.buildOutput = scriptBuildOutput;
+    const auto& scriptWorld = GetSubsystems().GetWorldManager().GetActiveWorld();
+    if (scriptWorld && uiSubsystem->GetSceneDocuments())
+    {
+        snapshot.scripts.canUndo = uiSubsystem->GetSceneDocuments()->CanUndo(scriptWorld->GetScenePath());
+        snapshot.scripts.canRedo = uiSubsystem->GetSceneDocuments()->CanUndo(scriptWorld->GetScenePath(), true);
+    }
     snapshot.frameIndex = uiFrameIndex++;
     snapshot.deltaTimeSeconds = deltaTime;
     snapshot.framesPerSecond = GetSubsystems().GetFpsTool().getFPS();
@@ -1006,6 +1408,9 @@ void EngineLoop::UpdateUiViewModel(
     uiSubsystem->SetSceneActors(uiActiveWorld != nullptr
         ? BuildEditorSceneActors(*uiActiveWorld)
         : std::vector<EditorUi::EditorSceneActorSnapshot>{});
+    if (!pendingScriptBlueprintSelection.empty() &&
+        uiSubsystem->RequestActorSelection(pendingScriptBlueprintSelection))
+        pendingScriptBlueprintSelection.clear();
     uiSubsystem->Update(snapshot);
 }
 
@@ -1078,6 +1483,8 @@ void EngineLoop::PumpPlatformEvents()
         {
             if (event.type == PlatformEventType::KeyDown && !event.repeat)
             {
+                // Esc 优先取消资产放置，避免同一次按键又请求游戏相对鼠标捕获。
+                if (uiSubsystem && uiSubsystem->CancelBlueprintAssetDrag()) continue;
                 auto& inputSubsystem = GetSubsystems().GetInputSubsystem();
                 inputSubsystem.ToggleRelativeMouseModeRequest();
                 const bool captureRequested =
@@ -1292,11 +1699,19 @@ EngineLoop::ExecuteWorldGraphTransaction(
                 return RuntimeResult<WorldHandle>::Failure(
                     MakeRuntimeError("Scene.DraftSourceChanged", error, scenePath));
         }
-    return worldGraphTransactionCoordinator->Execute(
+    auto result = worldGraphTransactionCoordinator->Execute(
         scenePath,
         materialDefinitionReload,
         extraSceneObjects,
         sceneDocument);
+    if (result.IsSuccess())
+    {
+        GetSubsystems().GetScriptRuntime().SynchronizeWorld(
+            GetSubsystems().GetWorldManager().GetActiveWorld());
+        GetSubsystems().GetScriptRuntime().SetFeedback("");
+    }
+    else GetSubsystems().GetScriptRuntime().SetFeedback(result.Error().message);
+    return result;
 }
 
 RuntimeResult<WorldHandle>

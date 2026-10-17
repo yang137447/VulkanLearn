@@ -235,6 +235,8 @@ void MaterialInstanceEditorRuntime::Shutdown() noexcept
     worldGeneration = 0;
     saveSequence = 0;
     saveFeedback.clear();
+    blueprintCommandSequence = 0;
+    blueprintCommandFeedback.clear();
     diagnostic.clear();
     lastCommandMessage.clear();
     initialized = false;
@@ -290,6 +292,7 @@ void MaterialInstanceEditorRuntime::Tick()
             }
 
             RecordSaveFeedback(command, result);
+            RecordBlueprintCommandFeedback(command, result);
             if (!commandBus->PublishResult(std::move(result)))
             {
                 diagnostic =
@@ -410,6 +413,7 @@ EditorCommandSubmission MaterialInstanceEditorRuntime::SubmitInternal(
     {
         SetStatus(submission.result.message);
         RecordSaveFeedback(command, submission.result);
+        RecordBlueprintCommandFeedback(command, submission.result);
     }
     return submission;
 }
@@ -1414,6 +1418,7 @@ void MaterialInstanceEditorRuntime::ApplyRuntimeOverlay()
 void MaterialInstanceEditorRuntime::RefreshModifiedDocuments()
 {
     snapshot.saveFeedback = saveFeedback;
+    snapshot.blueprintCommandFeedback = blueprintCommandFeedback;
     snapshot.modifiedDocuments.clear();
     // 文档条目直接来自 GT service，不依赖当前活动页；保存关卡不切换 MI 或预览 World。
     if (service)
@@ -1435,7 +1440,12 @@ void MaterialInstanceEditorRuntime::RefreshModifiedDocuments()
     }
     if (assetDocuments)
     {
+        snapshot.blueprintDocuments = assetDocuments->BlueprintDocuments().DocumentSnapshots();
         const auto scenes = assetDocuments->ModifiedDocuments();
+        // GT 作者适配器绕过命令执行修改 Scene 草稿；发布保存列表时必须同步总线版本，
+        // 否则上一次 Save 留下的 revision 会拒绝之后的合法保存。
+        for (const auto& document : scenes)
+            commandBus->SetDocumentRevision(document.assetPath, document.revision);
         snapshot.modifiedDocuments.insert(snapshot.modifiedDocuments.end(), scenes.begin(), scenes.end());
     }
 }
@@ -1446,6 +1456,7 @@ void MaterialInstanceEditorRuntime::RecordSaveFeedback(
     if (command.type != EditorCommandType::SaveSceneDocument &&
         command.type != EditorCommandType::SaveMeshDocument &&
         command.type != EditorCommandType::SaveTextureDocument &&
+        command.type != EditorCommandType::SaveBlueprintDocument &&
         command.type != EditorCommandType::SaveMaterialInstanceDocument) return;
     const auto path = GetEditorCommandAssetPath(command);
     if (!path) return;
@@ -1454,6 +1465,22 @@ void MaterialInstanceEditorRuntime::RecordSaveFeedback(
     for (auto& previous : saveFeedback)
         if (previous.assetPath == *path) { previous = std::move(feedback); return; }
     saveFeedback.push_back(std::move(feedback));
+}
+
+void MaterialInstanceEditorRuntime::RecordBlueprintCommandFeedback(
+    const EditorCommandEnvelope& command, const EditorCommandResult& result)
+{
+    if (command.type != EditorCommandType::ModifyBlueprintDocument &&
+        command.type != EditorCommandType::UndoBlueprintDocument &&
+        command.type != EditorCommandType::RedoBlueprintDocument) return;
+    const auto path = GetEditorCommandAssetPath(command);
+    if (!path) return;
+    // Tick 完整 drain 后才发布 UI；每路径保留本轮最后终态，无需为每次鼠标手势累积结果列表。
+    EditorUi::EditorBlueprintCommandFeedback feedback{++blueprintCommandSequence, *path,
+        result.status == EditorCommandStatus::Succeeded};
+    for (auto& previous : blueprintCommandFeedback)
+        if (previous.assetPath == *path) { previous = std::move(feedback); return; }
+    blueprintCommandFeedback.push_back(std::move(feedback));
 }
 
 void MaterialInstanceEditorRuntime::UpdateBusRevision(

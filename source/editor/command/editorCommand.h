@@ -54,6 +54,9 @@ enum class EditorCommandType
     ValidateMeshDocument, SaveMeshDocument, RevertMeshDocument, ReloadMeshDocument,
     GetTextureDocument, GetTextureCapabilities, ModifyTextureDocument,
     ValidateTextureDocument, SaveTextureDocument, RevertTextureDocument, ReloadTextureDocument,
+    GetBlueprintDocument, GetBlueprintCapabilities, ModifyBlueprintDocument,
+    ValidateBlueprintDocument, SaveBlueprintDocument, RevertBlueprintDocument, ReloadBlueprintDocument,
+    UndoBlueprintDocument, RedoBlueprintDocument,
     ConnectMaterialInstancePreview,
     DisconnectMaterialInstancePreview,
     ApplyMaterialInstancePreview,
@@ -226,10 +229,10 @@ struct MaterialInstanceAssetPathPayload
     std::string assetPath;
 };
 
-enum class EditorAssetDocumentKind { Scene, Mesh, Texture };
-enum class EditorAssetOperation { GetDocument, GetCapabilities, Modify, Validate, Save, Revert, Reload };
+enum class EditorAssetDocumentKind { Scene, Mesh, Texture, Blueprint };
+enum class EditorAssetOperation { GetDocument, GetCapabilities, Modify, Validate, Save, Revert, Reload, Undo, Redo };
 using EditorAssetFieldValue = std::variant<std::string, bool, double,
-    std::array<double, 3>, std::vector<std::string>, std::map<std::string, std::string>>;
+    std::array<double, 3>, std::vector<std::string>, std::map<std::string, std::string>, nlohmann::json>;
 
 // producer 提交完整作者值；对象身份与槽序号独立于字段，禁止任意 JSON Pointer 写入。
 struct EditorAssetFieldChange
@@ -406,6 +409,8 @@ struct EditorAssetDocumentResultPayload
     EditorDocumentRevision documentRevision = 0;
     bool dirty = false;
     std::string sourceDigest;
+    bool canUndo = false;
+    bool canRedo = false;
     nlohmann::json document = nlohmann::json::object();
     nlohmann::json capabilities = nlohmann::json::object();
     nlohmann::json changedFields = nlohmann::json::array();

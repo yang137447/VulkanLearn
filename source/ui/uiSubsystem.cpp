@@ -1,4 +1,5 @@
 #include "ui/uiSubsystem.h"
+#include "ui/gameplayHudView.h"
 #include "ui/editorPointerPolicy.h"
 
 #include <algorithm>
@@ -563,6 +564,8 @@ void UiSubsystem::TickMaterialInstanceEditor()
     {
         return;
     }
+    materialInstanceEditorRuntime->SetBlueprintClasses(lastViewModel.scripts.classes);
+    materialInstanceEditorRuntime->SetBlueprintComponentClasses(lastViewModel.scripts.componentClasses);
     materialInstanceEditorRuntime->Tick();
     if (jsonAssetLibrary != nullptr) jsonAssetLibrary->Poll();
 }
@@ -604,6 +607,11 @@ bool UiSubsystem::SelectSceneObjectFromPick(
     // 视口拾取与大纲行共用同一份选中态：拾取到的网格在大纲里也要高亮。
     selectedActorIdentity = EditorUi::SceneActorIdentity(
         EditorUi::EditorSceneActorType::Mesh, selection.objectIdentity);
+    if (selection.objectIdentity.rfind("__blueprint/", 0) == 0)
+    {
+        const auto id = selection.objectIdentity.substr(std::string_view("__blueprint/").size());
+        selectedActorIdentity = "blueprintInstance|" + id.substr(0, id.find('/'));
+    }
     pendingSceneSelectionClear = false;
     return true;
 }
@@ -864,6 +872,9 @@ RuntimeResult<void> UiSubsystem::InitializeDataModel()
         return RuntimeResult<void>::Failure(MakeRuntimeError(
             "UiSubsystem.DataModelFailed", "Could not bind HUD world label."));
     }
+    if (!constructor.Bind("gameplay_text", &bindingData.gameplayText))
+        return RuntimeResult<void>::Failure(MakeRuntimeError(
+            "UiSubsystem.DataModelFailed", "Could not bind gameplay HUD text."));
 
     dataModelHandle = constructor.GetModelHandle();
     return RuntimeResult<void>::Success();
@@ -1376,9 +1387,18 @@ bool UiSubsystem::HasAssetFingerprintChanged(const AssetFingerprint& candidate) 
 void UiSubsystem::SyncBindingData()
 {
     const std::string worldText = std::filesystem::path(lastViewModel.activeWorldPath).stem().string();
-    if (bindingData.worldText == worldText) return;
-    bindingData.worldText = worldText;
-    dataModelHandle.DirtyVariable("world_text");
+    if (bindingData.worldText != worldText)
+    {
+        bindingData.worldText = worldText;
+        dataModelHandle.DirtyVariable("world_text");
+    }
+    // GT 只消费冻结文本；RmlUi 插值负责转义，RT 仍只接收既有几何快照。
+    const std::string gameplayText = BuildGameplayHudText(lastViewModel.scripts);
+    if (bindingData.gameplayText != gameplayText)
+    {
+        bindingData.gameplayText = gameplayText;
+        dataModelHandle.DirtyVariable("gameplay_text");
+    }
 }
 
 void UiSubsystem::BuildAndPublishRenderSnapshot()
@@ -1417,6 +1437,7 @@ void UiSubsystem::BuildDeveloperPanels()
     PROFILE_SCOPE("UI.BuildPanels");
     if (materialInstanceEditorPanel == nullptr || materialInstanceEditorRuntime == nullptr) return;
     EditorUi::MaterialInstanceEditorSnapshot snapshot = materialInstanceEditorRuntime->GetSnapshot();
+    snapshot.logs = ProcessLog().Freeze();
     if (jsonAssetLibrary != nullptr)
     {
         snapshot.assetCatalog = jsonAssetLibrary->GetCatalog();
@@ -1827,6 +1848,11 @@ bool UiSubsystem::ProcessDeveloperUiEvent(const PlatformEvent& event)
 void UiSubsystem::RequestOpenJsonAsset(const std::string& path)
 {
     if (jsonAssetLibrary != nullptr) jsonAssetLibrary->RequestOpen(path);
+}
+
+bool UiSubsystem::CancelBlueprintAssetDrag()
+{
+    return materialInstanceEditorPanel && materialInstanceEditorPanel->CancelBlueprintAssetDrag();
 }
 
 void UiSubsystem::RequestRefreshAssetCatalog()

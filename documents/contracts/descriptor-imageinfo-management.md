@@ -145,6 +145,20 @@ write.setImageInfo(texture->GetDescriptorInfo());
 
 `RHIDescriptorWrite` 保持 Vulkan-native descriptor type、buffer info 和 image info。`RHIDescriptorWrite`、`RHIBufferHandle`、`RHIImageHandle` 等名称只表示当前 Vulkan resource lifecycle handle 语境，不引入 API-neutral descriptor 类型。
 
+### 同 World 动态蓝图资源
+
+`BeginWorldExtensionCandidate` 复制当前 World-local 包的共享资源引用，不复制 GPU 对象。
+CPU 导入与 shader 候选准备不修改活动缓存；GT 分帧上传后，最终候选按原始资源引用
+复核并合并到最新包，保留准备期间新 Spawn 的 object descriptor。
+资源被替换、移除或键冲突时拒绝扩展，不覆盖活动对象。
+shader 制品提交成功后，pipeline、cache 和 World 模板通过预准备的无抛交换发布。
+
+动态键集合随包传递；卸载根据剩余 World 网格和模板裁剪动态资源，保留常驻资源和
+仍被其它资产使用的引用。新 Spawn 的 object UBO/descriptor 继续走逐对象发布入口，
+不重建 RenderGraph。GT 在上一 RT 录制结束后的稳定边界执行扩展与卸载；
+GPU 尚未完成的旧包由最后提交 epoch 退休，不能在提交新包时直接销毁。
+具体租约与活实例持有规则见 [C# 蓝图](csharp-blueprint-runtime.md)。
+
 ## 后续演进建议
 
 如果未来出现以下需求，再考虑从方案 1 继续升级：

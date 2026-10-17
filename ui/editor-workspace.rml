@@ -28,8 +28,11 @@
                         <button class="menu-item" id="menu-edit-reset" data-action="reset-all"><span class="menu-check"></span><span class="menu-label">Reset All</span></button>
                         <button class="menu-item" id="menu-edit-validate" data-action="validate"><span class="menu-check"></span><span class="menu-label">Validate</span></button>
                         <div class="menu-separator"></div>
-                        <button class="menu-item disabled" id="menu-edit-undo" disabled="disabled"><span class="menu-check"></span><span class="menu-label">Undo</span></button>
-                        <button class="menu-item disabled" id="menu-edit-redo" disabled="disabled"><span class="menu-check"></span><span class="menu-label">Redo</span></button>
+                        <button class="menu-item disabled" id="menu-edit-undo" data-action="scene-undo" disabled="disabled"><span class="menu-check"></span><span class="menu-label">Undo</span></button>
+                        <button class="menu-item disabled" id="menu-edit-redo" data-action="scene-redo" disabled="disabled"><span class="menu-check"></span><span class="menu-label">Redo</span></button>
+                        <div class="menu-separator"></div>
+                        <button class="menu-item" id="menu-script-compile" data-action="script-compile"><span class="menu-check"></span><span class="menu-label">Compile C#</span></button>
+                        <button class="menu-item" id="menu-script-auto" data-action="script-auto"><span class="menu-check"></span><span class="menu-label">Auto Compile C#</span></button>
                     </div>
                 </div>
                 <div class="menu-root" id="menu-window">
@@ -51,6 +54,13 @@
             <h1>VulkanLearn</h1>
             <!-- 保存图标打开统一文件确认，不直接写盘。 -->
             <div class="toolbar-spacer"></div>
+            <button id="script-play" class="browser-icon" data-action="script-control" data-value="1" title="Play"><img src="icons/play.png"/></button>
+            <button id="script-pause" class="browser-icon" data-action="script-control" data-value="2" title="Pause"><img src="icons/pause.png"/></button>
+            <button id="script-stop" class="browser-icon" data-action="script-control" data-value="0" title="Stop"><img src="icons/stop.png"/></button>
+            <button id="script-reload" class="browser-icon" data-action="script-reload" title="Reload C# assembly"><img src="icons/refresh.png"/></button>
+            <button id="script-compile" class="browser-icon" data-action="script-compile" title="Compile C# and reload"><img src="icons/blueprint.png"/></button>
+            <label id="script-time-label" for="script-time-scale" title="Time Scale">Time</label>
+            <input id="script-time-scale" type="text" value="1" data-action="script-time-scale" title="Time Scale (0-100)"/>
             <button id="workspace-save" data-action="save-all" title="Save Modified Assets"><img src="icons/save.png"/></button>
             <button id="workspace-reset" data-action="workspace-reset">Reset Layout</button>
             <button data-action="immersive-view" title="Immersive Mode">Immersive Mode</button>
@@ -66,6 +76,7 @@
                 <button id="workspace-details-tab" data-workspace-panel="details">Details</button>
                 <button id="workspace-content-tab" data-workspace-panel="content" data-action="workspace-content">Content Browser</button>
                 <button id="workspace-renderer-tab" data-workspace-panel="renderer" data-action="workspace-renderer">Renderer</button>
+                <button id="workspace-log-tab" data-workspace-panel="log">Log</button>
                 <button id="workspace-resource-tab" data-workspace-panel="resource" title="Asset Editor">
                     <img id="workspace-resource-icon" src="icons/file-box.png"/>
                     <span id="workspace-resource-label">Asset Editor</span>
@@ -129,14 +140,25 @@
                         <option value="camera">Cameras</option><option value="environment">Environments</option>
                         <option value="windProfile">SpeedTree Wind Profiles</option>
                         <option value="mesh">Meshes</option>
+                        <option value="blueprintInstance">Blueprint Instances</option>
                     </select>
                     <select id="outliner-sort" data-action="outliner-sort">
                         <option value="name-asc">Name A-Z</option><option value="name-desc">Name Z-A</option>
                     </select>
                 </div>
+                <div id="script-placement">
+                    <div class="script-placement-row"><label>Mode</label><select id="script-placement-mode" data-action="script-placement-mode"><option value="place">Place existing</option><option value="create">New Blueprint</option></select></div>
+                    <div id="script-existing-class-row" class="script-placement-row"><label>Class</label><select id="script-class" title="C# gameplay class"></select></div>
+                    <div id="script-new-class-row" class="script-placement-row"><label>Class</label><input id="script-new-class" type="text" value="Gameplay.MyBlueprint" placeholder="Gameplay.MyBlueprint"/></div>
+                    <div class="script-placement-row"><label>Name</label><input id="script-name" type="text" value="Blueprint" placeholder="Blueprint name"/></div>
+                    <div id="script-placement-mesh-row" class="script-placement-row"><label>Mesh</label><input id="script-mesh" type="text" value="" placeholder="Mesh asset path (optional)"/></div>
+                    <div id="script-new-path-row" class="script-placement-row"><label>Asset</label><input id="script-new-path" type="text" value="Common/Blueprints/BP_my_blueprint.json" placeholder="Common/Blueprints/BP_my_blueprint.json"/></div>
+                    <button id="script-add" class="browser-icon" data-action="script-add" title="Place C# instance"><img src="icons/plus.png"/></button>
+                </div>
+                <p id="script-feedback" class="notice"></p>
                 <div id="scene-models" class="scroll-box"></div>
                 <div id="outliner-empty" class="muted">No actors in the active world.</div>
-                <div class="outliner-footer"><div id="outliner-count"></div></div>
+                <div class="outliner-footer"><div id="outliner-count"></div><button id="script-placement-toggle" class="browser-icon" data-action="script-placement-toggle" title="Create or place Blueprint"><img src="icons/plus.png"/></button></div>
             </div>
             <div id="editor-inspector" class="dock-panel">
                 <div class="inspector-body">
@@ -198,6 +220,7 @@
                     </div>
                     <select id="browser-type" data-action="browser-type">
                         <option value="all">All Assets</option><option value="material">Materials</option>
+                        <option value="blueprint">Blueprints</option>
                         <option value="mesh">Meshes</option><option value="scene">Levels</option>
                         <option value="texture">Textures</option><option value="terrain">Terrains</option>
                     </select>
@@ -253,6 +276,39 @@
                     </div>
                 </div>
             </div>
+            <div id="log-page" class="dock-panel">
+                <div class="log-tabs">
+                    <button id="log-output-tab" class="selected" data-action="log-output">Output</button>
+                    <button id="log-scripts-tab" data-action="log-scripts">Scripts</button>
+                </div>
+                <div id="log-output">
+                    <div class="log-toolbar">
+                        <select id="log-severity" data-action="log-severity" title="Severity">
+                            <option value="all">All levels</option><option value="debug">Debug</option>
+                            <option value="info">Info</option><option value="warning">Warning</option>
+                            <option value="error">Error</option>
+                        </select>
+                        <input id="log-source" type="text" data-action="log-source" placeholder="Source" title="Filter source"/>
+                        <input id="log-search" type="text" data-action="log-search" placeholder="Search" title="Search messages and file paths"/>
+                        <label class="log-follow"><input id="log-autoscroll" type="checkbox" data-action="log-autoscroll" checked="checked"/><span>Auto-scroll</span></label>
+                        <button id="log-clear" class="browser-icon" data-action="log-clear" title="Clear Output">
+                            <img src="icons/trash.png"/><span class="browser-tooltip">Clear Output</span>
+                        </button>
+                    </div>
+                    <div id="log-scroll"><div id="log-rows"></div></div>
+                    <div id="log-count" class="log-footer"></div>
+                </div>
+                <div id="log-scripts">
+                    <div class="log-toolbar">
+                        <input id="log-scripts-search" type="text" data-action="log-scripts-search" placeholder="Blueprint or component" title="Filter script objects"/>
+                        <button id="log-scripts-prev" class="browser-icon" data-action="log-scripts-prev" title="Previous script page"><img src="icons/arrow-left.png"/></button>
+                        <span id="log-scripts-page"></span>
+                        <button id="log-scripts-next" class="browser-icon" data-action="log-scripts-next" title="Next script page"><img src="icons/arrow-right.png"/></button>
+                    </div>
+                    <pre id="log-scripts-summary"></pre>
+                    <div id="log-scripts-rows"></div>
+                </div>
+            </div>
             <div id="material-editor" class="dock-panel">
                 <div class="material-editor-toolbar">
                     <button id="material-frame" class="browser-icon" data-action="material-frame" title="Frame Preview Ball">
@@ -297,11 +353,18 @@
                     <button id="resource-reload" class="browser-icon" data-action="resource-reload" title="Reload JSON">
                         <img src="icons/refresh.png"/><span class="browser-tooltip">Reload JSON</span>
                     </button>
+                    <button id="blueprint-asset-save" class="browser-icon" data-action="blueprint-asset-save" title="Save Blueprint">
+                        <img src="icons/save.png"/>
+                    </button>
+                    <button id="blueprint-asset-revert" class="browser-icon" data-action="blueprint-asset-revert" title="Revert Blueprint Draft">
+                        <img src="icons/refresh.png"/>
+                    </button>
                     <button id="resource-close" class="browser-icon" data-action="resource-close" title="Close Asset">
                         <img src="icons/arrow-left.png"/><span class="browser-tooltip">Close Asset</span>
                     </button>
                 </div>
                 <div id="resource-editor-body">
+                    <div id="blueprint-asset-editor"></div>
                     <div id="resource-preview-panel">
                         <div class="resource-panel-heading">
                             <h2 id="resource-preview-title"></h2>
@@ -357,7 +420,7 @@
                 <p id="close-document-status" class="notice"></p>
                 <div class="command-row">
                     <button id="close-save" data-action="close-save">Save</button>
-                    <button data-action="close-discard">Discard</button>
+                    <button id="close-discard" data-action="close-discard">Discard</button>
                     <button data-action="close-cancel">Cancel</button>
                 </div>
             </div>

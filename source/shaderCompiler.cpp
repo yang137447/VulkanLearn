@@ -15,6 +15,7 @@
 
 #include <shaderc/shaderc.hpp>
 
+#include "core/logStore.h"
 #include "material/compiler/materialShaderCompileRequest.h"
 #include "material/compiler/materialShaderComposer.h"
 #include "pipeline/shaderReflectionService.h"
@@ -477,6 +478,10 @@ std::vector<uint32_t> CompileGlsl(
             "Shader compile failed for '" + stage.sourceIdentity +
             "':\n" + result.GetErrorMessage());
     }
+    // 失败仍由上层异常诊断统一报告；这里只旁路成功编译的 warning，避免重复记录同一错误。
+    if (result.GetNumWarnings() > 0)
+        VL::ProcessLog().Append(VL::LogSeverity::Warning, "Shader Compiler",
+            "Shader compile warnings for '" + stage.sourceIdentity + "':\n" + result.GetErrorMessage());
     return {result.cbegin(), result.cend()};
 }
 
@@ -801,7 +806,9 @@ VL::ShaderBuildStatistics ShaderCompiler::StartCompile(
         lastStatistics.elapsedMilliseconds =
             std::chrono::duration<double, std::milli>(
                 endTime - startTime).count();
-        std::cerr << FormatStatistics(lastStatistics) << std::endl;
+        const auto statisticsMessage = FormatStatistics(lastStatistics);
+        std::cerr << statisticsMessage << std::endl;
+        VL::ProcessLog().Append(VL::LogSeverity::Error, "Shader Compiler", statisticsMessage);
         throw;
     }
 
@@ -809,7 +816,9 @@ VL::ShaderBuildStatistics ShaderCompiler::StartCompile(
     lastStatistics.elapsedMilliseconds =
         std::chrono::duration<double, std::milli>(
             endTime - startTime).count();
-    std::cout << FormatStatistics(lastStatistics) << std::endl;
+    const auto statisticsMessage = FormatStatistics(lastStatistics);
+    std::cout << statisticsMessage << std::endl;
+    VL::ProcessLog().Append(VL::LogSeverity::Info, "Shader Compiler", statisticsMessage);
     return lastStatistics;
 }
 
@@ -1586,8 +1595,9 @@ VL::ShaderBuildArtifact ShaderCompiler::EnsureBuild(
         artifact.cacheHit = true;
         artifact.committed = true;
         artifact.cacheReason = "cache hit";
-        std::cout << "Shader cache hit: " << request.normalizedKey
-                  << std::endl;
+        const auto cacheMessage = "Shader cache hit: " + request.normalizedKey;
+        std::cout << cacheMessage << std::endl;
+        VL::ProcessLog().Append(VL::LogSeverity::Debug, "Shader Compiler", cacheMessage);
         return artifact;
     }
 
@@ -1595,8 +1605,9 @@ VL::ShaderBuildArtifact ShaderCompiler::EnsureBuild(
     {
         missReason = "force rebuild";
     }
-    std::cout << "Shader cache miss: " << request.normalizedKey
-              << " (" << missReason << ")" << std::endl;
+    const auto cacheMessage = "Shader cache miss: " + request.normalizedKey + " (" + missReason + ")";
+    std::cout << cacheMessage << std::endl;
+    VL::ProcessLog().Append(VL::LogSeverity::Info, "Shader Compiler", cacheMessage);
 
     artifact = CompileRequest(request);
     artifact.cacheReason = missReason;

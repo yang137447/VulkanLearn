@@ -3,7 +3,7 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const packageRoot = process.argv[2];
 if (!packageRoot) throw new Error("Pass the directory containing sharp and lucide.");
-const sharp = require(path.join(packageRoot, "sharp"));
+const sharp = require(path.join(process.argv[4] || packageRoot, "sharp"));
 const lucide = require(path.join(packageRoot, "lucide"));
 const output = path.resolve(__dirname, "../../ui/icons");
 
@@ -49,6 +49,16 @@ async function materialTypeIcon() {
 
 async function main() {
   await fs.mkdir(output, { recursive: true });
+  await icon("Copy", "copy.png");
+  await icon("Trash2", "trash.png");
+  if (process.argv[3] === "--authoring-only") return;
+  await icon("Component", "blueprint.png", 128, "#86cfad", "#28493d");
+  if (process.argv[3] === "--blueprint-only") return;
+  for (const [name, file] of [
+    ["Play", "play.png"], ["Pause", "pause.png"],
+    ["Square", "stop.png"], ["Plus", "plus.png"]
+  ]) await icon(name, file);
+  if (process.argv[3] === "--script-only") return;
   await icon("Save", "save.png");
   if (process.argv[3] === "--save-only") return;
   for (const [name, file] of [

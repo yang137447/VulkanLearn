@@ -74,6 +74,112 @@ RendererResourceCache::CaptureActiveWorldLocalResources() const noexcept
     return worldLocalResources;
 }
 
+RendererResourceCache RendererResourceCache::BeginWorldExtensionCandidate(uint64_t ownerGeneration) const
+{
+    RendererResourceCache candidate(globalTextures, ownerGeneration);
+    candidate.worldLocalResources = std::make_shared<WorldLocalResourcePackage>(*worldLocalResources);
+    candidate.worldLocalResources->ownerGeneration = ownerGeneration;
+    return candidate;
+}
+
+void RendererResourceCache::TrackDynamicAdditions(ImmutableWorldLocalResourceRefs baseline)
+{
+    auto& package = GetMutableWorldLocalResources();
+    for (const auto& pair : package.renderableObjects)
+        if (!baseline->renderableObjects.count(pair.first)) package.dynamicMeshes.insert(pair.first);
+    for (const auto& pair : package.materials)
+        if (!baseline->materials.count(pair.first)) package.dynamicMaterials.insert(pair.first);
+    for (const auto& pair : package.materialInstances)
+        if (!baseline->materialInstances.count(pair.first)) package.dynamicInstances.insert(pair.first);
+    for (const auto& pair : package.textures)
+        if (!baseline->textures.count(pair.first)) package.dynamicTextures.insert(pair.first);
+}
+
+namespace
+{
+template<class Map>
+void MergeWorldExtensionMap(Map& active, const Map& candidate, const Map& baseline)
+{
+    for (const auto& original : baseline)
+    {
+        const auto current = active.find(original.first);
+        if (current == active.end() || current->second != original.second)
+            throw std::runtime_error("Blueprint resource changed while preparing extension: " + original.first);
+    }
+    for (const auto& added : candidate)
+        if (!baseline.count(added.first))
+        {
+            const auto current = active.find(added.first);
+            if (current != active.end() && current->second != added.second)
+                throw std::runtime_error("Blueprint extension resource key conflict: " + added.first);
+            active.emplace(added);
+        }
+}
+
+template<class Map>
+void PruneDynamicMap(Map& resources, std::set<std::string>& dynamicKeys, const std::set<std::string>& used)
+{
+    for (auto it = dynamicKeys.begin(); it != dynamicKeys.end();)
+        if (!used.count(*it))
+        {
+            resources.erase(*it);
+            it = dynamicKeys.erase(it);
+        }
+        else ++it;
+}
+}
+
+RendererResourceCache RendererResourceCache::RebaseWorldExtensionCandidate(
+    RendererResourceCache extension, ImmutableWorldLocalResourceRefs baseline) const
+{
+    if (worldLocalResources->ownerGeneration != baseline->ownerGeneration)
+        throw std::runtime_error("Blueprint extension generation is stale");
+    auto rebased = BeginWorldExtensionCandidate(baseline->ownerGeneration);
+    auto& output = *rebased.worldLocalResources;
+    const auto& candidate = *extension.worldLocalResources;
+    MergeWorldExtensionMap(output.worldTextures, candidate.worldTextures, baseline->worldTextures);
+    MergeWorldExtensionMap(output.renderableObjects, candidate.renderableObjects, baseline->renderableObjects);
+    MergeWorldExtensionMap(output.materials, candidate.materials, baseline->materials);
+    MergeWorldExtensionMap(output.materialInstances, candidate.materialInstances, baseline->materialInstances);
+    MergeWorldExtensionMap(output.textures, candidate.textures, baseline->textures);
+    // 活动 Spawn 可以追加 descriptor；它们来自最新 package，不覆盖、不要求旧 map 指针相等。
+    output.dynamicMeshes.insert(candidate.dynamicMeshes.begin(), candidate.dynamicMeshes.end());
+    output.dynamicMaterials.insert(candidate.dynamicMaterials.begin(), candidate.dynamicMaterials.end());
+    output.dynamicInstances.insert(candidate.dynamicInstances.begin(), candidate.dynamicInstances.end());
+    output.dynamicTextures.insert(candidate.dynamicTextures.begin(), candidate.dynamicTextures.end());
+    return rebased;
+}
+
+void RendererResourceCache::PruneDynamicResources(const std::set<std::string>& meshes,
+    const std::set<std::string>& materials, const std::set<std::string>& instances)
+{
+    auto& package = GetMutableWorldLocalResources();
+    PruneDynamicMap(package.renderableObjects, package.dynamicMeshes, meshes);
+    PruneDynamicMap(package.materials, package.dynamicMaterials, materials);
+    PruneDynamicMap(package.materialInstances, package.dynamicInstances, instances);
+    // 按剩余绑定裁剪，而非等到所有动态 MI 都卸载；常驻资产不能让无关动态贴图长期滞留。
+    std::set<const Texture*> usedTextures;
+    for (const auto& pair : package.materialInstances)
+        if (pair.second)
+        {
+            const auto snapshot = pair.second->CaptureStateSnapshot();
+            for (const auto& binding : snapshot.textures)
+                usedTextures.insert(binding.second.texture.get());
+        }
+    for (const auto& pair : package.worldTextures) usedTextures.insert(pair.second.get());
+    for (const auto& pair : globalTextures) usedTextures.insert(pair.second.get());
+    for (auto it = package.dynamicTextures.begin(); it != package.dynamicTextures.end();)
+    {
+        const auto texture = package.textures.find(*it);
+        if (texture == package.textures.end() || !usedTextures.count(texture->second.get()))
+        {
+            package.textures.erase(*it);
+            it = package.dynamicTextures.erase(it);
+        }
+        else ++it;
+    }
+}
+
 std::optional<RendererResourceCache::WorldLocalMaterialInstanceCapture>
 RendererResourceCache::CaptureMaterialInstanceForGeneration(
     uint64_t expectedOwnerGeneration,

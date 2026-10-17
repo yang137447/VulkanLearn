@@ -10,7 +10,7 @@ namespace VL
 inline bool IsSupportedSceneObjectType(std::string_view type)
 {
     return type == "mesh" ||
-        type == "terrain" ||
+        type == "blueprintInstance" ||
         type == "directionalLight" ||
         type == "pointLight" ||
         type == "spotLight" ||

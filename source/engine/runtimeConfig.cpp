@@ -1,6 +1,7 @@
 #include "engine/runtimeConfig.h"
 
 #include <stdexcept>
+#include "script/scriptHost.h"
 
 namespace VL
 {
@@ -371,6 +372,39 @@ RuntimeResult<void> RuntimeConfig::LoadConfigFields()
         return RuntimeResult<void>::Failure(workerThreadCountResult.Error());
     }
     workerThreadCount = workerThreadCountResult.Value();
+
+    scriptSettings = ScriptSettings{};
+    scriptSettings.input = configJson.value("gameplayInput", nlohmann::json::object());
+#ifdef VULKANLEARN_ENABLE_CSHARP_BLUEPRINTS
+    scriptSettings.enabled = true;
+    scriptSettings.runtimeDirectory = ScriptHost::DefaultRuntimeDirectory().string();
+    scriptSettings.assembly = (std::filesystem::path(scriptSettings.runtimeDirectory) / "Gameplay.dll").string();
+#endif
+    if (configJson.contains("scripts"))
+    {
+        const auto& scripts = configJson.at("scripts");
+        if (!scripts.is_object())
+            return RuntimeResult<void>::Failure(MakeRuntimeError("RuntimeConfig.InvalidScripts", "scripts must be an object"));
+        try
+        {
+            scriptSettings.enabled = scripts.value("enabled", scriptSettings.enabled);
+            scriptSettings.autoPlay = scripts.value("autoPlay", false);
+            // 路径只在配置 owner 中解析；宿主不再自行查找项目根。
+            if (scripts.contains("runtimeDirectory"))
+            {
+                scriptSettings.runtimeDirectory = std::filesystem::absolute(
+                    fileSystem.GetProjectRoot() / scripts.at("runtimeDirectory").get<std::string>()).string();
+                scriptSettings.assembly = (std::filesystem::path(scriptSettings.runtimeDirectory) / "Gameplay.dll").string();
+            }
+            if (scripts.contains("assembly"))
+                scriptSettings.assembly = std::filesystem::absolute(
+                    fileSystem.GetProjectRoot() / scripts.at("assembly").get<std::string>()).string();
+        }
+        catch (const std::exception& error)
+        {
+            return RuntimeResult<void>::Failure(MakeRuntimeError("RuntimeConfig.InvalidScripts", error.what()));
+        }
+    }
 
     return RuntimeResult<void>::Success();
 }

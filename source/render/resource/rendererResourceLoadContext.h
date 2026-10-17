@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <map>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -53,6 +54,8 @@ struct RendererResourceLoadContext
     OfflineWorldAssets* offlineWorldAssets = nullptr;
     bool offlineOnly = false;
     bool useFrozenMaterials = false;
+    // 增量异步资产保留既有 MI 身份，但新 MI 的 JSON 只消费 worker 已冻结版本。
+    const std::map<std::filesystem::path, nlohmann::json>* preparedMaterialSources = nullptr;
 
     void QueueGeneratedFile(
         std::filesystem::path path,

@@ -2,7 +2,9 @@
 
 #include <cstdint>
 #include <chrono>
+#include <filesystem>
 #include <memory>
+#include <map>
 #include <optional>
 #include <set>
 #include <string>
@@ -36,6 +38,9 @@ class RendererBackendVulkan;
 class RenderThread;
 class RuntimeConfig;
 class RuntimeCommandExecutor;
+class ScriptBuildService;
+class BlueprintAssetLoadSession;
+class ScriptWorldContext;
 class RuntimeValidationServices;
 class SubsystemCollection;
 class WorldTransitionCoordinator;
@@ -80,6 +85,7 @@ private:
         const RuntimeCommandExecutionResult& commandResult);
     void SynchronizeSceneViewport();
     void TickEditorThumbnails();
+    void TickScriptBuild(float deltaTime);
     const RuntimeConfig& GetRuntimeConfig() const;
     SubsystemCollection& GetSubsystems();
     const SubsystemCollection& GetSubsystems() const;
@@ -141,6 +147,19 @@ private:
     std::unique_ptr<RendererBackendVulkan> rendererBackend;
     std::unique_ptr<RenderThread> renderThread;
     std::unique_ptr<RuntimeCommandExecutor> runtimeCommandExecutor;
+    std::unique_ptr<ScriptBuildService> scriptBuild;
+    void TickBlueprintAssets();
+    std::unique_ptr<BlueprintAssetLoadSession> blueprintAssetLoad;
+    nlohmann::json blueprintAssetRequests = nlohmann::json::array();
+    nlohmann::json activeBlueprintAssetRequests = nlohmann::json::array();
+    std::map<std::string, std::unique_ptr<BlueprintAssetLoadSession>> loadedBlueprintAssets;
+    std::weak_ptr<ScriptWorldContext> blueprintAssetContext;
+    uint64_t blueprintAssetWorldGeneration = 0;
+    bool autoCompileScripts = false;
+    std::optional<std::filesystem::path> pendingBuiltAssembly;
+    uint64_t pendingBuildWorldGeneration = 0;
+    uint64_t autoPlayWorldGeneration = 0;
+    std::string scriptBuildOutput;
     std::unique_ptr<RuntimeValidationServices> runtimeValidationServices;
     std::unique_ptr<WorldTransitionCoordinator> worldTransitionCoordinator;
     std::unique_ptr<WorldGraphTransactionCoordinator>
@@ -153,6 +172,7 @@ private:
     uint64_t thumbnailSessionEpoch = 0;
     EditorThumbnailScheduler thumbnailScheduler;
     uint64_t uiFrameIndex = 0;
+    std::string pendingScriptBlueprintSelection;
     WorldGraphTransactionTestFaultInjection
         worldGraphTransactionTestFaultInjection;
 };

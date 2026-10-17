@@ -9,6 +9,7 @@
 #include "material/materialAssetUtils.h"
 #include "materialInstance.h"
 #include "mesh/loader/common/meshAssetLoader.h"
+#include "mesh/meshCollisionGeometry.h"
 #include "pipeline/pipelineFactory.h"
 #include "render/offline/offlineWorldAssets.h"
 #include "render/backend/rendererBackendVulkan.h"
@@ -179,6 +180,9 @@ RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
         meshObjectPlan.sceneScale = scale;
         meshObjectPlan.localBoundsMin = section.vertices.front().position;
         meshObjectPlan.localBoundsMax = section.vertices.front().position;
+        // 普通渲染网格不额外保留展开三角；仅蓝图的已导入 mesh 用于显式 CPU mesh collision。
+        if (meshObjectBaseName.rfind("__blueprint/", 0) == 0)
+            meshObjectPlan.collisionTriangles = FreezeMeshCollisionTriangles(section);
         for (const auto& vertex : section.vertices)
         {
             meshObjectPlan.localBoundsMin = meshObjectPlan.localBoundsMin.cwiseMin(vertex.position);

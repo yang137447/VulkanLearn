@@ -46,6 +46,8 @@ instead of stuffing everything into `README.md` or `AGENTS.md`.
 
 Current implemented areas include:
 
+- Optional Windows x64/.NET 8 C# Blueprint hosting, scene placement and Play/Pause/Stop;
+  implemented subset and limits: `documents/contracts/csharp-blueprint-runtime.md`
 - Vulkan device / swapchain initialization
 - Shader compilation and SPIR-V loading
 - Data-driven scene loading
@@ -270,6 +272,9 @@ This project is heavily data-driven. Many runtime objects are created from JSON.
 
 Scene JSON currently supports these `type` values:
 
+- `blueprintInstance` (inline C# class or BP_ asset reference, persistent id, typed properties and component tree,
+  optional root Jolt body; spawnAssets preloads runtime spawn templates;
+  requires `VULKANLEARN_ENABLE_CSHARP_BLUEPRINTS=ON`)
 - `mesh`
 - `directionalLight`
 - `pointLight`

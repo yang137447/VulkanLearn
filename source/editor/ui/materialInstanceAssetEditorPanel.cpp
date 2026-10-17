@@ -15,12 +15,17 @@
 #include <RmlUi/Core/Elements/ElementFormControl.h>
 #include <RmlUi/Core/Elements/ElementFormControlInput.h>
 #include <RmlUi/Core/Event.h>
+#include <RmlUi/Core/Input.h>
 
 #include "core/renderSession.h"
 #include "editor/ui/editorSceneActorTree.h"
 #include "editor/ui/editorTextMatch.h"
 #include "editor/ui/editorViewportAxisIndicator.h"
 #include "editor/ui/editorActorVisualization.h"
+#include "editor/ui/scriptComponentControls.h"
+#include "editor/ui/scriptPhysicsControls.h"
+#include "editor/ui/scriptPropertyControls.h"
+#include "script/scriptTypeIdentity.h"
 #include "ui/widgets/input/inputWidgets.h"
 #include "ui/widgets/layout/layoutWidgets.h"
 #include "ui/widgets/navigation/tabWidgets.h"
@@ -267,6 +272,7 @@ const char* PanelLabel(const std::string& panel)
     if (panel == "details") return "Details";
     if (panel == "content") return "Content Browser";
     if (panel == "renderer") return "Renderer";
+    if (panel == "log") return "Log";
     return "Asset Editor";
 }
 
@@ -410,9 +416,15 @@ bool MaterialInstanceAssetEditorPanel::ValidateDocument(Rml::ElementDocument& ca
         "close-document-status", "close-save", "editor-navigation",
         "editor-inspector", "editor-content", "workspace-content-tab", "workspace-renderer-tab",
         "content-browser-page", "renderer-page", "editor-viewport-surface", "editor-viewport-image",
+        "workspace-log-tab", "log-page", "log-scroll", "log-rows", "log-count",
+        "log-output", "log-scripts", "log-output-tab", "log-scripts-tab",
+        "log-severity", "log-source", "log-search", "log-autoscroll", "log-clear",
+        "log-scripts-search", "log-scripts-summary", "log-scripts-rows",
+        "log-scripts-page", "log-scripts-prev", "log-scripts-next",
         "workspace-viewport-tab", "workspace-outliner-tab", "workspace-details-tab",
         "workspace-resource-tab", "workspace-resource-icon", "workspace-resource-label",
         "resource-editor", "resource-editor-toolbar", "resource-reload", "resource-close", "resource-preview-panel",
+        "blueprint-asset-editor", "blueprint-asset-save", "blueprint-asset-revert",
         "resource-preview-title", "resource-preview-kind", "resource-preview-surface",
         "resource-preview-icon", "resource-preview-status", "resource-preview-path",
         "resource-preview-image",
@@ -470,6 +482,10 @@ bool MaterialInstanceAssetEditorPanel::Attach(Rml::ElementDocument& candidate, s
     document->AddEventListener("mousemove", this, true);
     document->AddEventListener("mouseup", this, true);
     document->AddEventListener("mousescroll", this, true);
+    document->AddEventListener("dragstart", this);
+    document->AddEventListener("dragdrop", this);
+    document->AddEventListener("dragend", this);
+    document->AddEventListener("keydown", this, true);
     if (!docking.Attach(candidate, error))
     {
         Detach();
@@ -495,8 +511,14 @@ bool MaterialInstanceAssetEditorPanel::Attach(Rml::ElementDocument& candidate, s
         Detach();
         return false;
     }
+    if (!logPanel.Attach(candidate, error))
+    {
+        Detach();
+        return false;
+    }
     detailsIdentity.clear();
     actorDetailsIdentity.clear();
+    blueprintAssetIdentity.clear();
     RefreshWorkspace();
     RefreshLists();
     RefreshDetails();
@@ -506,6 +528,8 @@ bool MaterialInstanceAssetEditorPanel::Attach(Rml::ElementDocument& candidate, s
 
 void MaterialInstanceAssetEditorPanel::Detach()
 {
+    CancelBlueprintViewportDrag();
+    actorDragPath.clear();
     textureViewSource.clear();
     ResetTextureView();
     previewDragButton = -1;
@@ -521,7 +545,12 @@ void MaterialInstanceAssetEditorPanel::Detach()
         document->RemoveEventListener("mousemove", this, true);
         document->RemoveEventListener("mouseup", this, true);
         document->RemoveEventListener("mousescroll", this, true);
+        document->RemoveEventListener("dragstart", this);
+        document->RemoveEventListener("dragdrop", this);
+        document->RemoveEventListener("dragend", this);
+        document->RemoveEventListener("keydown", this, true);
         contentBrowser.Detach();
+        logPanel.Detach();
         jsonInspector.Detach();
         resourceJsonInspector.Detach();
         docking.Detach();
@@ -620,6 +649,12 @@ void MaterialInstanceAssetEditorPanel::FlushPendingEdits(bool save)
 
 void MaterialInstanceAssetEditorPanel::RequestSave()
 {
+    if (const auto* tab = resourceEditor.ActiveTab(); tab && tab->kind == EditorAssetKind::Blueprint &&
+        IsResourceEditorVisible())
+    {
+        OpenSaveDialog(tab->path);
+        return;
+    }
     OpenSaveDialog(snapshot.activeDocument && IsMaterialEditorVisible()
         ? snapshot.activeDocument->assetPath : std::string{});
 }
@@ -632,15 +667,16 @@ void MaterialInstanceAssetEditorPanel::RequestSaveAll()
 void MaterialInstanceAssetEditorPanel::OpenSaveDialog(const std::string& path)
 {
     if (HasModal()) return;
-    if (snapshot.modifiedDocuments.empty() && pendingEdits.empty() &&
+    if (snapshot.modifiedDocuments.empty() && pendingEdits.empty() && pendingBlueprintPath.empty() &&
         (!snapshot.activeDocument || snapshot.activeDocument->status == EditorDocumentStatus::Clean))
     {
         localStatus = "No modified assets.";
         return;
     }
     // 先提交未完成 batch，再从下一轮权威快照取得新 revision；弹窗打开本身不保存。
-    saveAwaitingSnapshot = !pendingEdits.empty();
+    saveAwaitingSnapshot = !pendingEdits.empty() || !pendingBlueprintPath.empty();
     FlushPendingEdits();
+    FlushBlueprintAssetEdits();
     saveFilterPath = path;
     saveDialogVisible = true;
     saveChecked.clear();
@@ -736,7 +772,8 @@ void MaterialInstanceAssetEditorPanel::ConfirmSave()
         command.type = row.kind == EditorAssetKind::Scene
             ? EditorCommandType::SaveSceneDocument : row.kind == EditorAssetKind::Mesh
             ? EditorCommandType::SaveMeshDocument : row.kind == EditorAssetKind::Texture
-            ? EditorCommandType::SaveTextureDocument : EditorCommandType::SaveMaterialInstanceDocument;
+            ? EditorCommandType::SaveTextureDocument : row.kind == EditorAssetKind::Blueprint
+            ? EditorCommandType::SaveBlueprintDocument : EditorCommandType::SaveMaterialInstanceDocument;
         command.expectedDocumentRevision = row.revision;
         command.payload = MaterialInstanceAssetPathPayload{row.assetPath};
         saveWaiting.insert(row.assetPath);
@@ -749,9 +786,22 @@ void MaterialInstanceAssetEditorPanel::Build(const MaterialInstanceEditorSnapsho
 {
     // 不把旧 UI 修改静默重定位到新文档或新 revision；CommandBus 负责拒绝过期 batch。
     FlushPendingEdits();
+    FlushBlueprintAssetEdits();
+    scriptEditRequests.clear();
     textureOptionsDirty = textureOptionsDirty || !SameTextureOptions(snapshot.textureAssets, value.textureAssets);
     const std::string previousDocument = snapshot.selectedDocumentPath;
     snapshot = value;
+    if (blueprintCommandAwaitingSnapshot)
+    {
+        const auto* authored = BlueprintDocument(blueprintCommandPath);
+        if (!authored || authored->documentRevision != blueprintCommandRevision)
+            blueprintCommandAwaitingSnapshot = false;
+        // GT 完整 drain 后发布终态；失败不推进 revision，同样必须解除本地在途门禁。
+        for (const auto& feedback : snapshot.blueprintCommandFeedback)
+            if (feedback.assetPath == blueprintCommandPath &&
+                feedback.sequence > blueprintCommandFeedbackSequence)
+                blueprintCommandAwaitingSnapshot = false;
+    }
     saveAwaitingSnapshot = false;
     // 文档集合由服务拥有，停靠标签只是投影；关卡/贴图页面不会被每帧刷新抢走。
     RefreshDocumentTabs();
@@ -765,7 +815,52 @@ void MaterialInstanceAssetEditorPanel::Build(const MaterialInstanceEditorSnapsho
     }
     RefreshWorkspace();
     resourceEditorVisible = IsResourceEditorVisible();
-    if (saveThenClose && !saveCloseSubmitted && snapshot.activeDocument &&
+    logPanel.Build(snapshot.logs, docking.IsPanelActive("log"));
+    if (discardBlueprintThenClose && pendingCloseKind == EditorAssetKind::Blueprint)
+    {
+        if (!discardBlueprintCloseSubmitted)
+        {
+            // 等上一帧的修改成为权威版本再回退，不能把旧 revision 的丢弃请求排在修改后面。
+            SubmitBlueprintAssetCommand(EditorCommandType::RevertBlueprintDocument, pendingClosePath);
+            discardBlueprintCloseSubmitted = true;
+        }
+        else
+        {
+            const auto* actor = BlueprintDocument(pendingClosePath);
+            if (actor && !actor->dirty)
+            {
+                CloseDocument(pendingClosePath, EditorDirtyDocumentPolicy::RequireClean);
+                pendingClosePath.clear();
+            }
+            // 拒绝或尚未确认时保留标签和弹窗，允许用户按新版本重试。
+            discardBlueprintThenClose = discardBlueprintCloseSubmitted = false;
+        }
+    }
+    else if (saveThenClose && pendingCloseKind == EditorAssetKind::Blueprint)
+    {
+        if (!saveCloseSubmitted)
+        {
+            SubmitBlueprintAssetCommand(EditorCommandType::SaveBlueprintDocument, pendingClosePath);
+            saveCloseSubmitted = true;
+        }
+        else
+        {
+            for (const auto& feedback : snapshot.saveFeedback)
+                if (feedback.assetPath == pendingClosePath && feedback.sequence > saveStartedSequence)
+                {
+                    const auto* actor = BlueprintDocument(pendingClosePath);
+                    if (feedback.succeeded && actor && !actor->dirty)
+                    {
+                        CloseDocument(pendingClosePath, EditorDirtyDocumentPolicy::RequireClean);
+                        pendingClosePath.clear();
+                    }
+                    saveThenClose = false;
+                    saveCloseSubmitted = false;
+                    break;
+                }
+        }
+    }
+    else if (saveThenClose && !saveCloseSubmitted && snapshot.activeDocument &&
         snapshot.activeDocument->assetPath == pendingClosePath)
     {
         SubmitPathCommand(EditorCommandType::SaveMaterialInstanceDocument);
@@ -815,7 +910,9 @@ void MaterialInstanceAssetEditorPanel::Build(const MaterialInstanceEditorSnapsho
         RefreshMaterialPreview();
         SetMarkup("close-document-name", Text(pendingClosePath));
         SetMarkup("close-document-status", Text(snapshot.statusMessage));
-        SetDisabled("close-save", saveThenClose);
+        SetDisabled("close-save", saveThenClose || discardBlueprintThenClose);
+        SetDisabled("close-discard", discardBlueprintThenClose ||
+            (saveThenClose && pendingCloseKind == EditorAssetKind::Blueprint));
     }
 }
 
@@ -1365,6 +1462,10 @@ void MaterialInstanceAssetEditorPanel::RefreshActorVisualization()
                 case EditorSceneActorType::DirectionalLight: capacity = 3; break;
                 case EditorSceneActorType::Camera: capacity = 8; break;
                 case EditorSceneActorType::SquareAreaLight: capacity = 5; break;
+                case EditorSceneActorType::Script:
+                    capacity = actor.scriptPhysics.is_null() ? 0 :
+                        actor.scriptPhysics.value("shape", "box") == "box" ? 12 : 100;
+                    break;
                 default: break;
                 }
                 for (size_t line = 0; line < capacity; ++line)
@@ -1408,7 +1509,7 @@ void MaterialInstanceAssetEditorPanel::RefreshActorVisualization()
         const auto& actor = actors[index];
         Eigen::Vector2f pixel;
         const Eigen::Vector3f position = actor.type == EditorSceneActorType::Camera
-            ? actor.camera.position : actor.light.position;
+            ? actor.camera.position : actor.type == EditorSceneActorType::Script ? actor.position : actor.light.position;
         const bool visible = actor.visible && view &&
             ProjectActorVisualPoint(*view, position, size.x, size.y, pixel);
         widgetDocument.SetProperty(id, "visibility", visible ? "visible" : "hidden");
@@ -1630,9 +1731,25 @@ void MaterialInstanceAssetEditorPanel::RefreshDetails()
     const EditorSceneActorSnapshot* actor = SelectedActor();
     const EditorSceneActorGroupSpec* actorSpec =
         actor == nullptr ? nullptr : FindSceneActorGroupSpec(actor->type);
+    std::string scriptStructure;
+    if (actor && actor->type == EditorSceneActorType::Script)
+    {
+        if (actor->scriptPhysics.is_object())
+            for (const auto& joint : actor->scriptPhysics.value("constraints", nlohmann::json::array()))
+                scriptStructure += joint.at("id").get<std::string>() + ":" + joint.at("type").get<std::string>() + ";";
+        for (const auto& node : actor->scriptComponents)
+            scriptStructure += node.value("id", "root") + "|" + node.at("type").get<std::string>() +
+                "|" + node.value("parent", "") + ";";
+        for (const auto& property : actor->scriptProperties.items())
+            scriptStructure += property.key() + ":" + property.value().type_name() + ";";
+        scriptStructure += actor->scriptComponentInstanceEditable.dump();
+        scriptStructure += SceneLogicStructure(*actor);
+        for (const auto& type : runtimeView.scripts.classes)
+            if (ScriptTypeNameMatches(type, actor->scriptClass)) scriptStructure += type.at("properties").dump();
+    }
     const std::string actorIdentity = actor == nullptr || actorSpec == nullptr
         ? "no-actor" : std::to_string(actor->worldGeneration) + "|" +
-            actor->identity + "|" + actorSpec->key;
+            actor->identity + "|" + actorSpec->key + "|" + scriptStructure;
     if (actorDetailsIdentity != actorIdentity)
     {
         actorDetailsIdentity = actorIdentity;
@@ -1765,6 +1882,47 @@ std::string MaterialInstanceAssetEditorPanel::ActorSectionMarkup(
     }
     for (const EditorSceneActorField& field : SceneActorFields(actor))
         body += UiWidgets::PropertyInfo(field.label, field.value, field.id);
+    if (actor.type == EditorSceneActorType::Script)
+    {
+        body += UiWidgets::PropertyControlRow("Name",
+            UiWidgets::Input("script-blueprint-name", {"script-blueprint-name"}, actor.displayName) +
+            "<button id=\"script-blueprint-duplicate\" class=\"browser-icon\" data-action=\"script-blueprint-duplicate\" "
+            "title=\"Duplicate Blueprint\"><img src=\"icons/copy.png\"/></button>"
+            "<button id=\"script-blueprint-delete\" class=\"browser-icon\" data-action=\"script-blueprint-delete\" "
+            "title=\"Delete Blueprint\"><img src=\"icons/trash.png\"/></button>");
+        body += UiWidgets::PropertyInfo("Blueprint", actor.scriptBlueprintPath.empty() ? "(inline)" : actor.scriptBlueprintPath);
+        body += UiWidgets::CollapsibleSection("script-physics-section", "script-physics", "Physics",
+            ScriptPhysicsControls("script-", actor.scriptPhysics.is_object() ? actor.scriptPhysics : nlohmann::json::object()),
+            {"section"}, IsSectionExpanded("script-physics"));
+        if (actor.scriptSpawned) body += UiWidgets::PropertyInfo("Lifetime", "Spawned");
+        body += ScriptComponentControls(actor);
+        body += UiWidgets::PropertyControlRow("Add Component",
+            UiWidgets::Select("script-component-kind", {"script-component-kind"},
+                ScriptComponentOptions()) +
+            "<button id=\"script-component-add\" class=\"browser-icon\" data-action=\"script-component-add\" "
+            "title=\"Add component\"><img src=\"icons/plus.png\"/></button>");
+        body += UiWidgets::PropertyControlRow("Mesh Asset",
+            UiWidgets::Input("script-component-mesh", {"script-component-mesh"}, ""));
+        body += SceneLogicComponentsMarkup(actor);
+        size_t index = 0;
+        for (const auto& property : actor.scriptProperties.items())
+        {
+            const std::string id = "script-property-" + std::to_string(index);
+            const UiWidgets::WidgetAction change{"script-property", index};
+            const auto& value = property.value();
+            const auto field = ScriptPropertyField(runtimeView.scripts.classes, actor.scriptClass, property.key(), value);
+            const std::string reset = "<button id=\"script-reset-" + std::to_string(index) +
+                "\" class=\"browser-icon\" data-action=\"script-reset\" data-index=\"" +
+                std::to_string(index) + "\" title=\"Restore inherited value\"><img src=\"icons/refresh.png\"/></button>";
+            body += "<div class=\"actor-property-row\">" +
+                ScriptPropertyRow(property.key(), id, change, field, value, reset) + "</div>";
+            ++index;
+        }
+        body += UiWidgets::PropertyControlRow("New Asset",
+            UiWidgets::Input("script-asset-path", {"script-asset-path"}, "Common/Blueprints/BP_object.json") +
+            "<button id=\"script-asset-create\" class=\"browser-icon\" data-action=\"script-asset-create\" "
+            "title=\"Create Blueprint from this instance\"><img src=\"icons/save.png\"/></button>");
+    }
     if (actor.primaryDirectionalLight) body += PrimaryDirectionalLightControls(actor);
     const std::string key = ActorSectionKey(spec->key);
     std::string markup = UiWidgets::CollapsibleSection(DetailsSectionId(key), key, actor.displayName, body,
@@ -1825,8 +1983,105 @@ void MaterialInstanceAssetEditorPanel::RefreshActorValues(const EditorSceneActor
         SetMarkup(field.id, Text(field.value));
     for (const auto& field : SceneActorEditableFields(*actor))
         for (uint32_t component = 0; component < field.components; ++component)
+        {
             SetControlValue(SceneActorPropertyControlId(field.property, component),
                 SceneActorNumber(field.value[component]));
+            SetDisabled(SceneActorPropertyControlId(field.property, component),
+                runtimeView.scripts.state != ScriptPlayState::Editing);
+        }
+    if (actor->type == EditorSceneActorType::Script)
+    {
+        const bool editing = runtimeView.scripts.state == ScriptPlayState::Editing &&
+            !actor->scriptSpawned && !runtimeView.offlineMode;
+        const bool inlineEdit = editing && actor->scriptBlueprintPath.empty();
+        SetControlValue("script-blueprint-name", actor->displayName);
+        for (const char* id : {"script-blueprint-name", "script-blueprint-duplicate", "script-blueprint-delete"})
+            SetDisabled(id, !editing);
+        for (const char* id : {"script-component-add", "script-component-kind", "script-component-mesh"})
+            SetDisabled(id, !inlineEdit);
+        const auto& physics = actor->scriptPhysics;
+        const std::string motion = physics.is_null() ? "none" : physics.value("motion", "static");
+        SetControlValue("script-physics-motion", motion);
+        SetDisabled("script-physics-motion", !inlineEdit);
+        widgetDocument.SetProperty("script-physics-body", "display", physics.is_null() ? "none" : "block");
+        const std::string shape = physics.is_null() ? "box" : physics.value("shape", "box");
+        SetControlValue("script-physics-shape", shape);
+        SetDisabled("script-physics-shape", !inlineEdit || motion == "character");
+        SetDisabled("script-physics-trigger", !inlineEdit || motion == "character");
+        if (auto* trigger = document->GetElementById("script-physics-trigger"))
+        {
+            const bool checked = !physics.is_null() && physics.value("trigger", false);
+            if (checked && !trigger->HasAttribute("checked")) trigger->SetAttribute("checked", "checked");
+            else if (!checked && trigger->HasAttribute("checked")) trigger->RemoveAttribute("checked");
+        }
+        widgetDocument.SetProperty("script-physics-halfExtents-row", "display", shape == "box" ? "block" : "none");
+        SetControlValue("script-physics-component", physics.is_object() ? physics.value("component", "") : "");
+        SetDisabled("script-physics-component", !inlineEdit);
+        widgetDocument.SetProperty("script-physics-component-row", "display", shape == "mesh" ? "block" : "none");
+        RefreshScriptConstraintControls(physics.is_object() ? physics : nlohmann::json::object(),
+            "script-", !inlineEdit || motion == "character");
+        for (size_t axis = 0; axis < 3; ++axis)
+        {
+            const auto id = "script-physics-extents-" + std::to_string(axis);
+            SetControlValue(id, physics.contains("halfExtents") ? physics.at("halfExtents")[axis].dump() : "50");
+            SetDisabled(id, !inlineEdit);
+        }
+        for (const auto& field : ScriptPhysicsFields())
+        {
+            const auto id = "script-physics-" + std::string(field.name);
+            const float fallback = std::string(field.name) == "mass" && motion == "character" ? 70 : field.defaultValue;
+            SetControlValue(id, physics.contains(field.name) ? physics.at(field.name).dump() : Number(fallback));
+            SetDisabled(id, !inlineEdit);
+            widgetDocument.SetProperty(id + "-row", "display",
+                ScriptPhysicsFieldVisible(physics, field.name) ? "block" : "none");
+        }
+        for (size_t component = 0; component < actor->scriptComponents.size(); ++component)
+        {
+            const auto& node = actor->scriptComponents[component];
+            const auto componentId = ScriptComponentId(node);
+            RefreshScriptCollisionControls(component, node, "script-", !inlineEdit);
+            const bool inherited = !actor->scriptBlueprintPath.empty();
+            const auto parentId = ComponentControlId(component, "parent");
+            SetControlValue(parentId, node.value("parent", ""));
+            SetDisabled(parentId, !inlineEdit);
+            SetDisabled("script-component-remove-" + std::to_string(component), !inlineEdit);
+            for (const auto& field : ScriptComponentInstanceFields(node))
+            {
+                const bool allowed = !inherited ||
+                    ScriptComponentAllowsInstance(actor->scriptComponentInstanceEditable, componentId, field);
+                const auto value = ScriptComponentFieldValue(node, field);
+                const bool overridden = actor->scriptComponentOverrides.contains(componentId) &&
+                    actor->scriptComponentOverrides.at(componentId).contains(field);
+                for (size_t axis = 0; axis < (value.is_array() ? value.size() : 1u); ++axis)
+                {
+                    const auto id = ComponentControlId(component, field, axis);
+                    const auto& current = value.is_array() ? value[axis] : value;
+                    SetControlValue(id, current.is_string() ? current.get<std::string>() : current.dump());
+                    SetDisabled(id, !editing || !allowed);
+                    widgetDocument.SetClass(id, "script-overridden", overridden);
+                }
+                SetDisabled(ComponentResetControlId(component, field), !editing || !allowed || !overridden);
+            }
+        }
+        size_t index = 0;
+        for (const auto& property : actor->scriptProperties.items())
+        {
+            const bool exposed = std::find(actor->scriptInstanceEditable.begin(),
+                actor->scriptInstanceEditable.end(), property.key()) != actor->scriptInstanceEditable.end();
+            const auto& value = property.value();
+            const auto schema = ScriptPropertyField(runtimeView.scripts.classes,
+                actor->scriptClass, property.key(), value);
+            RefreshScriptPropertyControl(*document, widgetDocument, "script-property-" + std::to_string(index),
+                {"script-property", index}, schema, value, !editing || !exposed,
+                actor->scriptOverrides.contains(property.key()), nlohmann::json::array(),
+                actor->scriptOverrides.value(property.key(), nlohmann::json(nullptr)));
+            SetDisabled("script-reset-" + std::to_string(index), !editing || !exposed ||
+                !actor->scriptOverrides.contains(property.key()));
+            ++index;
+        }
+        SetDisabled("script-asset-create", runtimeView.scripts.state != ScriptPlayState::Editing);
+        RefreshSceneLogicComponents(*actor);
+    }
     if (actor->type == EditorSceneActorType::Camera)
     {
         const auto& exposure = actor->camera.exposure;
@@ -1876,6 +2131,7 @@ void MaterialInstanceAssetEditorPanel::ToggleSection(const std::string& key)
 void MaterialInstanceAssetEditorPanel::OpenResourceAsset(
     const std::string& path, EditorAssetKind kind)
 {
+    FlushBlueprintAssetEdits();
     if (!resourceEditor.Open(path, kind))
     {
         localStatus = "Too many resource editors are open.";
@@ -1885,6 +2141,13 @@ void MaterialInstanceAssetEditorPanel::OpenResourceAsset(
     resourceEditorVisible = true;
     localStatus.clear();
     RequestActiveResourceMetadata();
+    if (kind == EditorAssetKind::Blueprint)
+    {
+        EditorCommandEnvelope command;
+        command.type = EditorCommandType::GetBlueprintDocument;
+        command.payload = MaterialInstanceAssetPathPayload{path};
+        Submit(std::move(command));
+    }
     if (kind == EditorAssetKind::Mesh && runtimeActionSink != nullptr)
     {
         // 回调只投递路径；GT 复用 previewmodel 的 LoadWorld 事务，不在 UI 内加载资产。
@@ -1900,6 +2163,19 @@ void MaterialInstanceAssetEditorPanel::CloseActiveResource()
 {
     const auto* active = resourceEditor.ActiveTab();
     if (active == nullptr) return;
+    if (active->kind == EditorAssetKind::Blueprint)
+    {
+        const auto* authored = BlueprintDocument(active->path);
+        if ((authored && authored->dirty) || pendingBlueprintPath == active->path)
+        {
+            FlushBlueprintAssetEdits();
+            pendingClosePath = active->path;
+            pendingCloseKind = EditorAssetKind::Blueprint;
+            saveThenClose = saveCloseSubmitted = false;
+            discardBlueprintThenClose = discardBlueprintCloseSubmitted = false;
+            return;
+        }
+    }
     resourceEditor.Close(active->path);
     resourceEditorVisible = resourceEditor.ActiveTab() != nullptr;
     if (!resourceEditorVisible) ReturnToLevel();
@@ -1926,6 +2202,13 @@ void MaterialInstanceAssetEditorPanel::RequestActiveResourceMetadata()
 
 void MaterialInstanceAssetEditorPanel::RequestResourceReload()
 {
+    const auto* tab = resourceEditor.ActiveTab();
+    if (tab && tab->kind == EditorAssetKind::Blueprint)
+    {
+        if (!pendingBlueprintPath.empty()) { localStatus = "Save or revert pending edits before reloading."; return; }
+        SubmitBlueprintAssetCommand(EditorCommandType::ReloadBlueprintDocument, tab->path);
+        return;
+    }
     resourceEditor.RequestReload();
     const std::string path = resourceEditor.ConsumeReloadRequest();
     if (path.empty()) return;
@@ -1949,6 +2232,7 @@ void MaterialInstanceAssetEditorPanel::RequestAssetPreview(const std::string& pa
         levelWorldPath = runtimeView.activeWorldPath;
     requestedPreviewPath = path;
     requestedPreviewMaterial = material;
+    requestedPreviewBlueprint = false;
     requestedPreviewGeneration = 0;
     for (const auto& actor : OutlinerActors())
         requestedPreviewGeneration = std::max(requestedPreviewGeneration, actor.worldGeneration);
@@ -2047,7 +2331,8 @@ uint64_t MaterialInstanceAssetEditorPanel::CurrentMaterialPreviewGeneration() co
 uint64_t MaterialInstanceAssetEditorPanel::CurrentPreviewCameraGeneration() const
 {
     return IsMaterialEditorVisible() ? CurrentMaterialPreviewGeneration() :
-        IsResourceEditorVisible() ? CurrentModelPreviewGeneration() : 0;
+        IsResourceEditorVisible() ? (requestedPreviewBlueprint ? CurrentBlueprintPreviewGeneration() :
+            CurrentModelPreviewGeneration()) : 0;
 }
 
 void MaterialInstanceAssetEditorPanel::RefreshMaterialPreview()
@@ -2094,7 +2379,8 @@ bool MaterialInstanceAssetEditorPanel::ProcessModelPreviewInput(Rml::Event& even
     }
     if (previewDragGeneration != generation) previewDragButton = -1;
     const bool imageHit = event.GetTargetElement() == document->GetElementById(
-        IsMaterialEditorVisible() ? "material-preview-image" : "resource-preview-image");
+        IsMaterialEditorVisible() ? "material-preview-image" :
+            requestedPreviewBlueprint ? "blueprint-asset-preview-image" : "resource-preview-image");
     const auto& type = event.GetType();
     const float x = event.GetParameter<float>("mouse_x", 0);
     const float y = event.GetParameter<float>("mouse_y", 0);
@@ -2203,8 +2489,12 @@ void MaterialInstanceAssetEditorPanel::RefreshDocumentTabs()
 {
     std::vector<EditorDockResourceTab> tabs;
     for (const auto& tab : resourceEditor.Tabs())
+    {
+        const auto* actor = tab.kind == EditorAssetKind::Blueprint ? BlueprintDocument(tab.path) : nullptr;
         tabs.push_back({ResourcePanelId(tab.path), tab.path,
-            std::filesystem::path(tab.path).filename().string(), EditorAssetKindIcon(tab.kind)});
+            std::filesystem::path(tab.path).filename().string() + (actor && actor->dirty ? " *" : ""),
+            EditorAssetKindIcon(tab.kind)});
+    }
     for (size_t index = 0; index < snapshot.documentTabs.size(); ++index)
     {
         const auto& tab = snapshot.documentTabs[index];
@@ -2218,8 +2508,22 @@ void MaterialInstanceAssetEditorPanel::RefreshDocumentTabs()
 void MaterialInstanceAssetEditorPanel::RefreshResourceEditor()
 {
     if (document == nullptr) return;
+    WidgetRefreshScope refresh(refreshingControls);
     RefreshDocumentTabs();
     const auto* active = resourceEditor.ActiveTab();
+    const bool blueprintAsset = active && active->kind == EditorAssetKind::Blueprint;
+    for (const char* id : {"blueprint-asset-editor", "blueprint-asset-save", "blueprint-asset-revert"})
+        widgetDocument.SetProperty(id, "display", blueprintAsset ? "block" : "none");
+    widgetDocument.SetProperty("resource-preview-panel", "display", blueprintAsset ? "none" : "flex");
+    widgetDocument.SetProperty("resource-details-panel", "display", blueprintAsset ? "none" : "flex");
+    if (blueprintAsset)
+    {
+        for (const char* id : {"resource-model-tools", "resource-texture-tools"})
+            widgetDocument.SetClass(id, "visible", false);
+        SetDisabled("resource-reload", !BlueprintDocument(active->path));
+        RefreshBlueprintAssetEditor();
+        return;
+    }
     const bool isMesh = active != nullptr && active->kind == EditorAssetKind::Mesh;
     const bool previewReady = HasCurrentModelPreview();
     const auto* texture = active && !active->loading && active->snapshot
@@ -2384,13 +2688,67 @@ void MaterialInstanceAssetEditorPanel::RefreshControls()
     textureOptionsDirty = false;
 }
 
+void MaterialInstanceAssetEditorPanel::RefreshScriptControls()
+{
+    if (document == nullptr) return;
+    const auto& scripts = runtimeView.scripts;
+    const bool level = !runtimeView.offlineMode && !IsAssetEditorVisible();
+    const bool enabled = scripts.available && level;
+    bool hasActors = false;
+    for (const auto& actor : OutlinerActors())
+        if (actor.type == EditorSceneActorType::Script) hasActors = true;
+    SetDisabled("script-play", !enabled || !hasActors || scripts.state == ScriptPlayState::Playing);
+    SetDisabled("script-pause", !enabled || scripts.state != ScriptPlayState::Playing);
+    SetDisabled("script-stop", !enabled || scripts.state == ScriptPlayState::Editing);
+    SetDisabled("script-reload", !enabled);
+    SetDisabled("script-compile", !enabled || !scripts.buildAvailable || scripts.buildBusy);
+    SetDisabled("script-time-scale", !enabled);
+    SetControlValue("script-time-scale", Number(scripts.timeScale));
+    SetDisabled("menu-script-compile", !enabled || !scripts.buildAvailable || scripts.buildBusy);
+    SetDisabled("menu-script-auto", !enabled || !scripts.buildAvailable);
+    widgetDocument.SetClass("menu-script-auto", "checked", scripts.autoCompile);
+    const bool canCreateSource = scripts.buildAvailable && !scripts.buildBusy;
+    SetDisabled("script-add", !enabled || scripts.state != ScriptPlayState::Editing ||
+        (scriptPlacementCreateSource ? !canCreateSource : scripts.classes.empty()));
+    SetDisabled("script-placement-mode", !enabled || scripts.state != ScriptPlayState::Editing);
+    for (const char* id : {"script-existing-class-row", "script-placement-mesh-row"})
+        widgetDocument.SetProperty(id, "display", scriptPlacementCreateSource ? "none" : "flex");
+    for (const char* id : {"script-new-class-row", "script-new-path-row"})
+        widgetDocument.SetProperty(id, "display", scriptPlacementCreateSource ? "flex" : "none");
+    if (auto* button = document->GetElementById("script-add"))
+    {
+        const std::string title = scriptPlacementCreateSource ?
+            "Create Blueprint source and asset" : "Place C# instance";
+        if (button->GetAttribute<std::string>("title", "") != title) button->SetAttribute("title", title);
+    }
+    SetDisabled("script-placement-toggle", !enabled || scripts.state != ScriptPlayState::Editing);
+    SetDisabled("menu-edit-undo", !level || scripts.state != ScriptPlayState::Editing || !scripts.canUndo);
+    SetDisabled("menu-edit-redo", !level || scripts.state != ScriptPlayState::Editing || !scripts.canRedo);
+    RefreshBlueprintHistoryControls();
+    widgetDocument.SetProperty("script-placement", "display",
+        scripts.available && scriptPlacementVisible ? "block" : "none");
+    std::string options;
+    for (const auto& type : scripts.classes)
+        options += Option(type.at("name").get<std::string>(), type.at("name").get<std::string>());
+    SetMarkup("script-class", std::move(options));
+    SetMarkup("script-feedback", Text(scripts.feedback));
+    widgetDocument.SetProperty("script-feedback", "display", scripts.feedback.empty() ? "none" : "block");
+}
+
 void MaterialInstanceAssetEditorPanel::UpdateRuntimeView(const UiViewModelSnapshot& view)
 {
+    if (view.scripts.worldGeneration != runtimeView.scripts.worldGeneration ||
+        view.scripts.state != ScriptPlayState::Editing || view.offlineMode)
+        actorDragPath.clear();
     const bool refreshOffline = !runtimeControlsCurrent || !SameOfflineControls(runtimeView, view);
     runtimeView = view;
     WidgetRefreshScope refresh(refreshingControls);
+    if (const auto* tab = resourceEditor.ActiveTab(); tab && tab->kind == EditorAssetKind::Blueprint)
+        RefreshBlueprintAssetEditor();
     // 相机和统计变化不触碰离线表单；视口工具条继续独立更新。
     RefreshViewportToolbar();
+    RefreshScriptControls();
+    logPanel.BuildPerformance(runtimeView.scripts.performance, docking.IsPanelActive("log"));
     if (!refreshOffline || document == nullptr) return;
     SetControlValue("offline-samples", std::to_string(view.offlineSamples));
     SetControlValue("offline-bounces", std::to_string(view.offlineBounces));
@@ -2420,6 +2778,16 @@ void MaterialInstanceAssetEditorPanel::UpdateRuntimeView(const UiViewModelSnapsh
 void MaterialInstanceAssetEditorPanel::CloseDocument(
     const std::string& path, EditorDirtyDocumentPolicy policy)
 {
+    if (BlueprintDocument(path))
+    {
+        if (policy == EditorDirtyDocumentPolicy::DiscardChanges)
+            SubmitBlueprintAssetCommand(EditorCommandType::RevertBlueprintDocument, path);
+        resourceEditor.Close(path);
+        resourceEditorVisible = resourceEditor.ActiveTab() != nullptr;
+        RefreshResourceEditor();
+        if (!resourceEditorVisible) ReturnToLevel();
+        return;
+    }
     EditorCommandEnvelope command;
     command.type = EditorCommandType::CloseMaterialInstanceAsset;
     command.payload = CloseMaterialInstanceAssetPayload{path, policy};
@@ -2449,7 +2817,137 @@ void MaterialInstanceAssetEditorPanel::SelectModelMaterial(
 void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const std::string& action)
 {
     const size_t index = element.GetAttribute<size_t>("data-index", 0);
-    if (action == "material-frame") RequestPreviewCamera(ModelPreviewNavigation::Frame);
+    if (action.rfind("blueprint-asset-", 0) == 0) HandleBlueprintAssetEvent(element, action, true);
+    else if (HandleSceneLogicEvent(element, action, true)) {}
+    else if (HandleSceneCompositePropertyEvent(element, action, true)) {}
+    else if (action == "script-physics-constraint-add" || action == "script-physics-constraint-remove")
+    {
+        const auto* actor = SelectedActor();
+        if (!actor || !actor->scriptBlueprintPath.empty()) return;
+        if (action == "script-physics-constraint-add")
+        {
+            auto* target = document->GetElementById("script-physics-constraint-target");
+            const auto value = target ? ControlValue(*target) : "";
+            if (value.empty()) { localStatus = "A target Blueprint ID is required."; return; }
+            RequestScriptEdit(UiActionType::SetScriptPhysics, {{"field", "constraint-add"}, {"value", value}});
+        }
+        else RequestScriptEdit(UiActionType::SetScriptPhysics,
+            {{"field", "constraint-remove"}, {"value", index}});
+    }
+    else if (action == "scene-undo" || action == "scene-redo")
+    {
+        if (RequestBlueprintHistory(action == "scene-redo")) return;
+        if (!runtimeActionSink || runtimeView.scripts.state != ScriptPlayState::Editing || runtimeView.offlineMode ||
+            IsAssetEditorVisible() || !(action == "scene-redo" ? runtimeView.scripts.canRedo : runtimeView.scripts.canUndo))
+            return;
+        UiAction request;
+        request.type = action == "scene-redo" ? UiActionType::RedoSceneEdit : UiActionType::UndoSceneEdit;
+        request.actorProperty.worldGeneration = runtimeView.scripts.worldGeneration;
+        runtimeActionSink->RequestRuntimeAction(std::move(request));
+    }
+    else if (action == "script-blueprint-duplicate") RequestScriptEdit(UiActionType::DuplicateScriptBlueprint);
+    else if (action == "script-blueprint-delete") RequestScriptEdit(UiActionType::DeleteScriptBlueprint);
+    else if (action == "script-component-add")
+    {
+        const auto kind = ControlValue(*document->GetElementById("script-component-kind"));
+        nlohmann::json node = NewScriptComponent(kind);
+        if (kind == "mesh") node["modelPath"] = ControlValue(*document->GetElementById("script-component-mesh"));
+        RequestScriptEdit(UiActionType::AddScriptComponent, {{"node", node}});
+    }
+    else if (action == "script-component-remove")
+    {
+        const auto* actor = SelectedActor();
+        if (actor && index < actor->scriptComponents.size())
+            RequestScriptEdit(UiActionType::RemoveScriptComponent,
+                {{"component", actor->scriptComponents[index].value("id", "root")}});
+    }
+    else if (action == "script-component-reset")
+    {
+        const auto* actor = SelectedActor();
+        if (!actor || index >= actor->scriptComponents.size() || actor->scriptBlueprintPath.empty()) return;
+        const auto component = ScriptComponentId(actor->scriptComponents[index]);
+        const auto field = element.GetAttribute<std::string>("data-field", "");
+        if (!ScriptComponentAllowsInstance(actor->scriptComponentInstanceEditable, component, field) ||
+            !actor->scriptComponentOverrides.contains(component) ||
+            !actor->scriptComponentOverrides.at(component).contains(field)) return;
+        RequestScriptEdit(UiActionType::SetScriptComponent,
+            {{"component", component}, {"field", field}, {"reset", true}});
+    }
+    else if (action == "script-placement-toggle")
+    {
+        scriptPlacementVisible = !scriptPlacementVisible;
+        RefreshScriptControls();
+    }
+    else if ((action == "script-compile" || action == "script-auto") && runtimeActionSink)
+    {
+        if (!runtimeView.scripts.available || !runtimeView.scripts.buildAvailable || runtimeView.offlineMode ||
+            IsAssetEditorVisible() || HasModal()) return;
+        if (action == "script-compile" && runtimeView.scripts.buildBusy) return;
+        UiAction request;
+        request.type = action == "script-compile" ? UiActionType::CompileScripts : UiActionType::SetAutoCompileScripts;
+        request.intValue = runtimeView.scripts.autoCompile ? 0 : 1;
+        request.actorProperty.worldGeneration = runtimeView.scripts.worldGeneration;
+        runtimeActionSink->RequestRuntimeAction(std::move(request));
+    }
+    else if ((action == "script-control" || action == "script-reload") && runtimeActionSink != nullptr)
+    {
+        UiAction request;
+        request.type = action == "script-reload" ? UiActionType::ReloadScripts : UiActionType::ControlScripts;
+        request.intValue = element.GetAttribute<int>("data-value", 0);
+        request.actorProperty.worldGeneration = runtimeView.scripts.worldGeneration;
+        runtimeActionSink->RequestRuntimeAction(std::move(request));
+    }
+    else if (action == "script-add" && runtimeActionSink != nullptr)
+    {
+        if (!runtimeView.scripts.available || runtimeView.scripts.state != ScriptPlayState::Editing ||
+            runtimeView.offlineMode || IsAssetEditorVisible() || HasModal()) return;
+        UiAction request;
+        request.actorProperty.worldGeneration = runtimeView.scripts.worldGeneration;
+        if (scriptPlacementCreateSource)
+        {
+            if (!runtimeView.scripts.buildAvailable || runtimeView.scripts.buildBusy) return;
+            request.type = UiActionType::CreateScriptBlueprintAsset;
+            request.stringValue = ControlValue(*document->GetElementById("script-new-path"));
+            request.script = {{"newClass", ControlValue(*document->GetElementById("script-new-class"))},
+                {"name", ControlValue(*document->GetElementById("script-name"))}};
+        }
+        else
+        {
+            if (runtimeView.scripts.classes.empty()) return;
+            request.type = UiActionType::AddScriptBlueprint;
+            request.script = {{"class", ControlValue(*document->GetElementById("script-class"))},
+                {"name", ControlValue(*document->GetElementById("script-name"))},
+                {"modelPath", ControlValue(*document->GetElementById("script-mesh"))}};
+        }
+        runtimeActionSink->RequestRuntimeAction(std::move(request));
+    }
+    else if ((action == "script-reset" || action == "script-asset-create") && runtimeActionSink != nullptr)
+    {
+        const auto* actor = SelectedActor();
+        if (!actor || actor->type != EditorSceneActorType::Script ||
+            runtimeView.scripts.state != ScriptPlayState::Editing) return;
+        UiAction request;
+        request.actorProperty.worldGeneration = actor->worldGeneration;
+        request.actorProperty.identity = actor->identity;
+        if (action == "script-reset")
+        {
+            if (index >= actor->scriptProperties.size()) return;
+            auto property = actor->scriptProperties.begin();
+            std::advance(property, index);
+            if (std::find(actor->scriptInstanceEditable.begin(), actor->scriptInstanceEditable.end(),
+                property.key()) == actor->scriptInstanceEditable.end()) return;
+            if (!actor->scriptOverrides.contains(property.key())) return;
+            request.type = UiActionType::SetScriptProperty;
+            request.script = {{"property", property.key()}, {"reset", true}};
+        }
+        else
+        {
+            request.type = UiActionType::CreateScriptBlueprintAsset;
+            request.stringValue = ControlValue(*document->GetElementById("script-asset-path"));
+        }
+        runtimeActionSink->RequestRuntimeAction(std::move(request));
+    }
+    else if (action == "material-frame") RequestPreviewCamera(ModelPreviewNavigation::Frame);
     else if (action == "json-close") ShowMaterialDetails();
     else if (action == "resource-close") CloseActiveResource();
     else if (action == "resource-frame") RequestPreviewCamera(ModelPreviewNavigation::Frame);
@@ -2641,6 +3139,7 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
         {
             FlushPendingEdits();
             pendingClosePath = tab.assetPath;
+            pendingCloseKind = EditorAssetKind::MaterialInstance;
             saveThenClose = false;
             saveCloseSubmitted = false;
         }
@@ -2651,9 +3150,16 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
         pendingClosePath.clear();
         saveThenClose = false;
         saveCloseSubmitted = false;
+        discardBlueprintThenClose = discardBlueprintCloseSubmitted = false;
     }
     else if (action == "close-discard")
     {
+        if (pendingCloseKind == EditorAssetKind::Blueprint)
+        {
+            discardBlueprintThenClose = true;
+            discardBlueprintCloseSubmitted = false;
+            return;
+        }
         CloseDocument(pendingClosePath, EditorDirtyDocumentPolicy::DiscardChanges);
         pendingClosePath.clear();
         saveThenClose = false;
@@ -2661,6 +3167,15 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
     }
     else if (action == "close-save")
     {
+        if (pendingCloseKind == EditorAssetKind::Blueprint)
+        {
+            saveStartedSequence = 0;
+            for (const auto& feedback : snapshot.saveFeedback)
+                saveStartedSequence = std::max(saveStartedSequence, feedback.sequence);
+            saveThenClose = true;
+            saveCloseSubmitted = false;
+            return;
+        }
         // 非活动页先选中以获得权威 revision；保存失败时不能关闭文档。
         if (!snapshot.activeDocument || snapshot.activeDocument->assetPath != pendingClosePath)
         {
@@ -2758,7 +3273,155 @@ void MaterialInstanceAssetEditorPanel::HandleChange(Rml::Element& element, const
     const size_t index = element.GetAttribute<size_t>("data-index", 0);
     const std::string value = ControlValue(element);
     localStatus.clear();
-    if (action == "save-file" && index < saveRows.size() && saveWaiting.empty())
+    if (action.rfind("blueprint-asset-", 0) == 0) HandleBlueprintAssetEvent(element, action, false);
+    else if (HandleSceneLogicEvent(element, action, false)) {}
+    else if (HandleSceneCompositePropertyEvent(element, action, false)) {}
+    else if (action == "script-placement-mode")
+    {
+        if (value != "place" && value != "create") return;
+        scriptPlacementCreateSource = value == "create";
+        RefreshScriptControls();
+    }
+    else if (action == "script-time-scale")
+    {
+        if (!runtimeActionSink || !runtimeView.scripts.available || runtimeView.offlineMode ||
+            IsAssetEditorVisible() || HasModal()) return;
+        float scale;
+        if (!ParseNumber(value, scale) || scale < 0 || scale > 100)
+        { localStatus = "Time Scale must be a finite number from 0 to 100."; return; }
+        if (scale == runtimeView.scripts.timeScale) return;
+        UiAction request;
+        request.type = UiActionType::SetScriptTimeScale;
+        request.floatValue = scale;
+        request.actorProperty.worldGeneration = runtimeView.scripts.worldGeneration;
+        runtimeActionSink->RequestRuntimeAction(std::move(request));
+    }
+    else if (action == "script-blueprint-name")
+    {
+        const auto* actor = SelectedActor();
+        if (actor && value != actor->displayName) RequestScriptEdit(UiActionType::RenameScriptBlueprint, {{"name", value}});
+    }
+    else if (action.rfind("script-physics-", 0) == 0)
+    {
+        const auto field = action.substr(15);
+        const auto* actor = SelectedActor();
+        if (!actor) return;
+        nlohmann::json payload{{"field", field}};
+        if (field == "motion" || field == "shape" || field == "component" ||
+            field == "constraint-type" || field == "constraint-target") payload["value"] = value;
+        else if (field == "constraint-axis") payload["value"] = nlohmann::json::parse(value);
+        else if (field == "trigger") payload["value"] = element.HasAttribute("checked");
+        else
+        {
+            float number;
+            if (!ParseNumber(value, number)) { localStatus = "A complete finite number is required."; return; }
+            payload["value"] = number;
+            if (field == "halfExtents" || field == "constraint-anchor")
+                payload["axis"] = element.GetAttribute<size_t>("data-component", 0);
+        }
+        if (field.rfind("constraint-", 0) == 0) payload["index"] = index;
+        RequestScriptEdit(UiActionType::SetScriptPhysics, std::move(payload));
+    }
+    else if (action.rfind("script-component-", 0) == 0 && runtimeActionSink != nullptr)
+    {
+        const auto* actor = SelectedActor();
+        if (!actor || actor->type != EditorSceneActorType::Script ||
+            index >= actor->scriptComponents.size() ||
+            actor->scriptSpawned || runtimeView.scripts.state != ScriptPlayState::Editing) return;
+        const auto field = action.substr(17);
+        const auto& node = actor->scriptComponents[index];
+        if (field.rfind("collision", 0) == 0)
+        {
+            if (!actor->scriptBlueprintPath.empty()) return;
+            nlohmann::json payload{{"component", ScriptComponentId(node)}, {"field", field}};
+            if (field == "collisionShape") payload["value"] = value;
+            else
+            {
+                float number;
+                if (!ParseNumber(value, number)) return;
+                payload["value"] = number;
+                if (field == "collisionHalfExtents")
+                    payload["axis"] = element.GetAttribute<size_t>("data-component", 0);
+            }
+            RequestScriptEdit(UiActionType::SetScriptComponent, std::move(payload));
+            return;
+        }
+        if (!actor->scriptBlueprintPath.empty() && !ScriptComponentAllowsInstance(
+            actor->scriptComponentInstanceEditable, ScriptComponentId(node), field)) return;
+        nlohmann::json candidate;
+        if (field == "parent" || field == "modelPath" || field == "materialOverride")
+        {
+            if (node.value(field, "") == value) return;
+            candidate = value;
+        }
+        else if (field == "autoActivate" || field == "visible") candidate = value == "true";
+        else if (field == "fov" || field == "near_clip" || field == "far_clip" || IsScriptLightNumber(field))
+        {
+            float number;
+            if (!ParseNumber(value, number)) return;
+            candidate = number;
+        }
+        else
+        {
+            float number;
+            if ((field != "position" && field != "rotation" && field != "scale" && field != "color") ||
+                !ParseNumber(value, number)) return;
+            const auto axis = element.GetAttribute<size_t>("data-component", 0);
+            if (axis >= 3) return;
+            const int fallback = field == "scale" || field == "color" ? 1 : 0;
+            candidate = node.value(field, nlohmann::json::array({fallback, fallback, fallback}));
+            if (candidate[axis] == number) return;
+            candidate[axis] = number;
+        }
+        if (node.contains(field) && node.at(field) == candidate) return;
+        UiAction request;
+        request.type = UiActionType::SetScriptComponent;
+        request.actorProperty.worldGeneration = actor->worldGeneration;
+        request.actorProperty.identity = actor->identity;
+        request.script = {{"component", node.value("id", "root")}, {"field", field}, {"value", candidate}};
+        if (candidate.is_array())
+        {
+            const auto axis = element.GetAttribute<size_t>("data-component", 0);
+            request.script["axis"] = axis;
+            request.script["value"] = candidate[axis];
+        }
+        runtimeActionSink->RequestRuntimeAction(std::move(request));
+    }
+    else if (action == "script-property" && runtimeActionSink != nullptr)
+    {
+        const auto* actor = SelectedActor();
+        if (!actor || actor->type != EditorSceneActorType::Script ||
+            index >= actor->scriptProperties.size() || runtimeView.scripts.state != ScriptPlayState::Editing) return;
+        auto property = actor->scriptProperties.begin();
+        std::advance(property, index);
+        if (std::find(actor->scriptInstanceEditable.begin(), actor->scriptInstanceEditable.end(),
+            property.key()) == actor->scriptInstanceEditable.end()) return;
+        try
+        {
+            const auto schema = ScriptPropertyField(runtimeView.scripts.classes,
+                actor->scriptClass, property.key(), property.value());
+            const bool vector = ScriptPropertyUsesComponents(schema, property.value());
+            const auto axis = element.GetAttribute<size_t>("data-component", 0);
+            if (vector && axis >= property.value().size()) return;
+            nlohmann::json candidate;
+            if (schema.at("type") == "quaternion")
+            {
+                if (!ParseScriptQuaternion(value, candidate)) return;
+            }
+            else candidate = property.value().is_string() ? nlohmann::json(value)
+                : nlohmann::json::parse(value);
+            if (candidate == (vector ? property.value()[axis] : property.value())) return;
+            UiAction request;
+            request.type = UiActionType::SetScriptProperty;
+            request.actorProperty.worldGeneration = actor->worldGeneration;
+            request.actorProperty.identity = actor->identity;
+            request.script = {{"property", property.key()}, {"value", candidate}};
+            if (vector) request.script["axis"] = axis;
+            runtimeActionSink->RequestRuntimeAction(std::move(request));
+        }
+        catch (const nlohmann::json::exception&) { localStatus = "A complete property value is required."; }
+    }
+    else if (action == "save-file" && index < saveRows.size() && saveWaiting.empty())
     {
         const auto& path = saveRows[index].assetPath;
         if (element.HasAttribute("checked")) saveChecked.insert(path);
@@ -2925,6 +3588,25 @@ void MaterialInstanceAssetEditorPanel::HandleChange(Rml::Element& element, const
     }
 }
 
+void MaterialInstanceAssetEditorPanel::RequestScriptEdit(UiActionType type, nlohmann::json payload)
+{
+    const auto* actor = SelectedActor();
+    if (!runtimeActionSink || !actor || actor->type != EditorSceneActorType::Script || actor->scriptSpawned ||
+        runtimeView.scripts.state != ScriptPlayState::Editing || runtimeView.offlineMode) return;
+    if (!actor->scriptBlueprintPath.empty() && (type == UiActionType::SetScriptPhysics ||
+        type == UiActionType::AddScriptComponent || type == UiActionType::RemoveScriptComponent)) return;
+    UiAction request;
+    request.type = type;
+    request.actorProperty.worldGeneration = actor->worldGeneration;
+    request.actorProperty.identity = actor->identity;
+    // RmlUi 的 select 可在一次 SetValue 中嵌套派发两个相同 change；
+    // 只在这轮冻结快照内去重，下一轮允许对被拒绝的请求重试。
+    const auto signature = std::to_string(static_cast<int>(type)) + "|" + actor->identity + "|" + payload.dump();
+    if (!scriptEditRequests.insert(signature).second) return;
+    request.script = std::move(payload);
+    runtimeActionSink->RequestRuntimeAction(std::move(request));
+}
+
 void MaterialInstanceAssetEditorPanel::OpenBrowserAsset(const std::string& path)
 {
     EditorAssetKind kind = EditorAssetKind::MaterialInstance;
@@ -2950,7 +3632,7 @@ void MaterialInstanceAssetEditorPanel::OpenBrowserAsset(const std::string& path)
         Submit(std::move(command));
     }
     else if (kind == EditorAssetKind::Mesh || kind == EditorAssetKind::Texture ||
-        kind == EditorAssetKind::Terrain)
+        kind == EditorAssetKind::Terrain || kind == EditorAssetKind::Blueprint)
     {
         OpenResourceAsset(path, kind);
     }
@@ -2981,10 +3663,55 @@ void MaterialInstanceAssetEditorPanel::OpenBrowserAsset(const std::string& path)
     }
 }
 
+bool MaterialInstanceAssetEditorPanel::ProcessBlueprintAssetDrag(Rml::Event& event)
+{
+    const auto& type = event.GetType();
+    if (type == "keydown" && event.GetParameter<int>("key_identifier", 0) == Rml::Input::KI_ESCAPE)
+        actorDragPath.clear();
+    if (type == "dragend") { actorDragPath.clear(); return true; }
+    if (type != "dragstart" && type != "dragdrop") return false;
+    if (HasModal() || !runtimeView.scripts.available || runtimeView.offlineMode || IsAssetEditorVisible() ||
+        runtimeView.scripts.state != ScriptPlayState::Editing)
+    {
+        actorDragPath.clear();
+        return true;
+    }
+    if (type == "dragstart")
+    {
+        const auto path = contentBrowser.BlueprintDragPath(event.GetTargetElement());
+        actorDragPath = path.value_or("");
+        actorDragGeneration = runtimeView.scripts.worldGeneration;
+    }
+    else
+    {
+        const auto path = std::exchange(actorDragPath, {});
+        if (path.empty() || actorDragGeneration != runtimeView.scripts.worldGeneration ||
+            !IsSceneViewportElement(event.GetTargetElement()) || runtimeActionSink == nullptr) return true;
+        // 原生 RmlUi dragdrop 只携带指针供本次事件使用；投递给 GT 的 payload 只保留路径和坐标。
+        const auto source = contentBrowser.BlueprintDragPath(
+            static_cast<Rml::Element*>(event.GetParameter<void*>("drag_element", nullptr)));
+        if (!source || *source != path) return true;
+        const auto rect = GetSceneViewportRect();
+        const float x = event.GetParameter<float>("mouse_x", -1);
+        const float y = event.GetParameter<float>("mouse_y", -1);
+        if (rect.width <= 0 || rect.height <= 0 || x < rect.x || y < rect.y ||
+            x >= rect.x + rect.width || y >= rect.y + rect.height) return true;
+        UiAction request;
+        request.type = UiActionType::AddScriptBlueprint;
+        request.actorProperty.worldGeneration = actorDragGeneration;
+        request.script = {{"blueprintPath", path},
+            {"name", std::filesystem::path(path).stem().string()},
+            {"viewport", {(x - rect.x) / rect.width, (y - rect.y) / rect.height}}};
+        runtimeActionSink->RequestRuntimeAction(std::move(request));
+    }
+    return true;
+}
+
 void MaterialInstanceAssetEditorPanel::ProcessEvent(Rml::Event& event)
 {
     if (refreshingControls || document == nullptr) return;
-    if (ProcessTexturePreviewInput(event) || ProcessModelPreviewInput(event))
+    if (ProcessBlueprintAssetDrag(event)) return;
+    if (ProcessBlueprintViewportInput(event) || ProcessTexturePreviewInput(event) || ProcessModelPreviewInput(event))
     {
         event.StopPropagation();
         return;
@@ -3014,6 +3741,7 @@ void MaterialInstanceAssetEditorPanel::ProcessEvent(Rml::Event& event)
         }
         else if (!path.empty() && resourceEditor.Activate(path))
         {
+            FlushBlueprintAssetEdits();
             RequestActiveResourceMetadata();
             resourceEditorVisible = true;
             const auto* active = resourceEditor.ActiveTab();
@@ -3036,6 +3764,8 @@ void MaterialInstanceAssetEditorPanel::ProcessEvent(Rml::Event& event)
     // 捕获阶段只处理工作区拖动；普通控件的鼠标默认行为必须继续到目标节点。
     if (event.GetType() != "click" && event.GetType() != "change" && event.GetType() != "dblclick") return;
     Rml::Element* element = event.GetTargetElement();
+    // select 内部输入会先发 change，再由 select 发自己的 change；仅处理外部控件事件。
+    if (event.GetType() == "change" && element && !element->HasAttribute("data-action")) return;
     while (element != nullptr && element != document && !element->HasAttribute("data-action"))
         element = element->GetParentNode();
     if (element == nullptr || element == document || element->HasAttribute("disabled")) return;
@@ -3047,12 +3777,20 @@ void MaterialInstanceAssetEditorPanel::ProcessEvent(Rml::Event& event)
         return;
     // checkbox 在目标节点的默认 click 中切换 checked；捕获阶段不能截断它。
     // 随后的 change 才把选择同步到弹窗状态，程序刷新仍由 WidgetRefreshScope 抑制。
-    if (event.GetType() == "click" && action == "save-file") return;
+    if (event.GetType() == "click" && (action == "save-file" || action == "script-physics-trigger" ||
+        action == "blueprint-asset-instance" || action == "blueprint-asset-physics-trigger" ||
+        action == "blueprint-asset-component-instance" || action == "blueprint-asset-snap-enabled" ||
+        action == "log-autoscroll")) return;
     // 选中菜单条目后收起菜单；标题自己决定展开还是收起，不能在这里先清空。
     if (action != "menu-open" && IsInsideMenuBar(element)) CloseMenus();
     try
     {
         std::optional<std::string> openAssetPath;
+        if (logPanel.ProcessEvent(event))
+        {
+            event.StopPropagation();
+            return;
+        }
         if (resourceJsonInspector.ProcessEvent(event))
         {
             event.StopPropagation();

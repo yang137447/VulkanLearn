@@ -6,6 +6,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <nlohmann/json.hpp>
 
 #include <Eigen/Dense>
 
@@ -13,6 +14,7 @@
 #include "environmentType.h"
 #include "mesh/meshAssetTypes.h"
 #include "render/shadow/csmSettings.h"
+#include "world/worldSnapshot.h"
 
 class Camera;
 class DirectionalLight;
@@ -22,6 +24,8 @@ class SpotLight;
 
 namespace VL
 {
+class ScriptWorldContext;
+struct ScriptTemplateExtension;
 
 struct WorldEnvironment
 {
@@ -70,6 +74,7 @@ struct WorldMeshObject
     Eigen::Vector3f sceneScale = Eigen::Vector3f::Ones();
     Eigen::Vector3f localBoundsMin = Eigen::Vector3f::Zero();
     Eigen::Vector3f localBoundsMax = Eigen::Vector3f::Zero();
+    std::shared_ptr<const std::vector<Eigen::Vector3f>> collisionTriangles;
     std::string meshKey;
     std::string materialKey;
     std::string materialInstanceKey;
@@ -94,7 +99,9 @@ public:
     const std::shared_ptr<Camera>& GetCamera() const { return camera; }
     // 场景 Camera 是作者对象；编辑器导航使用独立观察相机，不反写作者位姿。
     const std::shared_ptr<Camera>& GetRenderCamera() const
-    { return editorViewEnabled && editorCamera ? editorCamera : camera; }
+    { return editorViewEnabled && editorCamera ? editorCamera : (scriptCamera ? scriptCamera : camera); }
+    void UpdateScriptCamera(const nlohmann::json& states);
+    void ClearScriptCamera() { scriptCamera.reset(); }
     void SetEditorViewEnabled(bool enabled);
     bool IsEditorViewEnabled() const { return editorViewEnabled; }
 
@@ -118,6 +125,7 @@ public:
     const std::unordered_map<std::string, std::shared_ptr<PointLight>>& GetPointLights() const { return pointLights; }
     const std::unordered_map<std::string, std::shared_ptr<SpotLight>>& GetSpotLights() const { return spotLights; }
     const std::unordered_map<std::string, WorldSquareAreaLight>& GetSquareAreaLights() const { return squareAreaLights; }
+    const std::unordered_map<std::string, LightSnapshot>& GetScriptLights() const { return scriptLights; }
 
     // 逐对象可见性写入端：只有 RuntimeCommandExecutor 在命令执行边界调用，
     // UI 回调不持有 World。名字不存在时返回 false，由调用方给出诊断而不是静默忽略。
@@ -141,8 +149,47 @@ public:
     // 只要还有可见 section 就算可见。两个入口共用同一份 identity 推导，
     // 因此"行显示什么"与"点击会写什么"不会漂移。
     bool IsMeshSceneObjectVisible(const std::string& sceneObjectIdentity) const;
+    // 作者声明与执行上下文都属于 World，渲染快照不携带托管实例或其指针。
+    void SetScriptBlueprints(nlohmann::json actors) { scriptBlueprints = std::move(actors); }
+    const nlohmann::json& GetScriptBlueprints() const { return scriptBlueprints; }
+    void SetScriptBlueprintSources(nlohmann::json actors) { scriptBlueprintSources = std::move(actors); }
+    const nlohmann::json& GetScriptBlueprintSources() const { return scriptBlueprintSources; }
+    const nlohmann::json& GetScriptBlueprintStates() const { return scriptBlueprintStates; }
+    // 仅 GT 脚本调度修改当前运行值；UI/RT 继续消费冻结快照，不能持有此引用。
+    nlohmann::json& ScriptBlueprintStatesForUpdate() { return scriptBlueprintStates; }
+    void SetScriptBlueprintStates(nlohmann::json states) { scriptBlueprintStates = std::move(states); }
+    void SetScriptContext(std::shared_ptr<ScriptWorldContext> context) { scriptContext = std::move(context); }
+    const std::shared_ptr<ScriptWorldContext>& GetScriptContext() const { return scriptContext; }
+    bool SetScriptBlueprintTransform(const std::string& id, const std::string& field,
+        uint32_t component, float value);
+    void ApplyScriptBlueprintVisuals(const nlohmann::json& actor, bool visible = true);
+    void CloneScriptBlueprintMeshes(const std::string& templateId, const nlohmann::json& actor);
+    void RemoveScriptBlueprintMeshes(const std::string& id);
+    void PrepareScriptComponentMeshTemplates();
+    void SynchronizeScriptComponentMeshes(const nlohmann::json& actor);
+    void SetScriptTemplates(nlohmann::json templates) { scriptTemplates = std::move(templates); }
+    const nlohmann::json& GetScriptTemplates() const { return scriptTemplates; }
+    void SetScriptAssetDigests(nlohmann::json digests) { scriptAssetDigests = std::move(digests); }
+    const nlohmann::json& GetScriptAssetDigests() const { return scriptAssetDigests; }
+    void SetScriptResolvedBlueprints(nlohmann::json actors) { scriptResolvedBlueprints = std::move(actors); }
+    const nlohmann::json& GetScriptResolvedBlueprints() const { return scriptResolvedBlueprints; }
+    std::unique_ptr<ScriptTemplateExtension> PrepareScriptTemplateExtension(
+        const std::string& path, const std::string& digest, const nlohmann::json& declaration,
+        const std::vector<WorldMeshObject>& meshes,
+        const std::vector<SpeedTreeWindProfile>& profiles) const;
+    std::unique_ptr<ScriptTemplateExtension> PrepareScriptTemplateRemoval(const std::string& path) const;
+    void CommitScriptTemplateExtension(std::unique_ptr<ScriptTemplateExtension> extension) noexcept;
+    void SwapScriptConfiguration(nlohmann::json& actors, nlohmann::json& templates,
+        std::shared_ptr<ScriptWorldContext>& context) noexcept
+    {
+        scriptBlueprints.swap(actors);
+        scriptTemplates.swap(templates);
+        scriptContext.swap(context);
+    }
 
 private:
+    friend struct ScriptTemplateExtension;
+    void AppendScriptComponentMeshTemplate(const nlohmann::json& blueprint);
     // 对属于同一个场景对象身份的每个 mesh section 施加同一操作，返回是否至少命中一个。
     // 身份推导只有 MeshSceneObjectIdentity() 一份，读写两端共用，避免"大纲认得的名字
     // World 不认得"这类静默失配。
@@ -154,6 +201,7 @@ private:
     std::weak_ptr<SceneNode> viewTarget;
     std::shared_ptr<Camera> camera;
     std::shared_ptr<Camera> editorCamera;
+    std::shared_ptr<Camera> scriptCamera;
     bool editorViewEnabled = false;
     WorldEnvironment environment;
     CsmSettings csmSettings;
@@ -164,6 +212,20 @@ private:
     std::unordered_map<std::string, std::shared_ptr<PointLight>> pointLights;
     std::unordered_map<std::string, std::shared_ptr<SpotLight>> spotLights;
     std::unordered_map<std::string, WorldSquareAreaLight> squareAreaLights;
+    nlohmann::json scriptBlueprints = nlohmann::json::array();
+    nlohmann::json scriptBlueprintSources = nlohmann::json::array();
+    // 运行时 TRS 与作者声明分离；逻辑 Actor 没有网格时仍能在 Details 回显。
+    nlohmann::json scriptBlueprintStates = nlohmann::json::array();
+    std::shared_ptr<ScriptWorldContext> scriptContext;
+    nlohmann::json scriptTemplates = nlohmann::json::object();
+    nlohmann::json scriptAssetDigests = nlohmann::json::object();
+    // 保留补齐类默认值前的已解析作者声明；程序集重载必须重新继承新默认值。
+    nlohmann::json scriptResolvedBlueprints = nlohmann::json::array();
+    std::unordered_map<std::string, Eigen::Matrix4f> scriptComponentMatrices;
+    std::unordered_map<std::string, std::vector<WorldMeshObject>> scriptComponentMeshTemplates;
+    std::unordered_map<std::string, std::string> scriptComponentMeshStructures;
+    // 派生组件灯只持有规范物理值，不进入作者灯表，也不替换 CSM 主方向光。
+    std::unordered_map<std::string, LightSnapshot> scriptLights;
 };
 
 } // namespace VL

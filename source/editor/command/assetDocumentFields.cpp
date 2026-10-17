@@ -11,7 +11,7 @@ namespace
 {
 using Json = nlohmann::json;
 using K = EditorAssetDocumentKind;
-enum class ValueKind { Text, Boolean, Number, Vector3, Strings, Channels };
+enum class ValueKind { Text, Boolean, Number, Vector3, Strings, Channels, Object, Array };
 struct Field
 {
     K kind;
@@ -67,7 +67,18 @@ const Field fields[] = {
     {K::Texture, "", "mipmaps", ValueKind::Boolean, true},
     {K::Texture, "", "filter", ValueKind::Text, true, "", "linear|nearest"},
     {K::Texture, "", "wrapMode", ValueKind::Text, true, "", "repeat|clamp"},
-    {K::Texture, "", "channelsDescription", ValueKind::Channels, true}
+    {K::Texture, "", "channelsDescription", ValueKind::Channels, true},
+    {K::Blueprint, "", "name", ValueKind::Text},
+    {K::Blueprint, "", "description", ValueKind::Text, true},
+    {K::Blueprint, "", "class", ValueKind::Text},
+    {K::Blueprint, "", "properties", ValueKind::Object},
+    {K::Blueprint, "", "instanceEditable", ValueKind::Array, true},
+    {K::Blueprint, "", "componentInstanceEditable", ValueKind::Object, true},
+    {K::Blueprint, "", "components", ValueKind::Array, true},
+    {K::Blueprint, "", "scriptComponents", ValueKind::Array, true},
+    {K::Blueprint, "", "physics", ValueKind::Object, true},
+    {K::Blueprint, "", "rotation", ValueKind::Vector3, true, "degrees"},
+    {K::Blueprint, "", "scale", ValueKind::Vector3, true}
 };
 
 bool MatchesScope(const std::string& type, const std::string& scope)
@@ -111,6 +122,7 @@ const char* TypeName(ValueKind type)
     case ValueKind::Text: return "string"; case ValueKind::Boolean: return "boolean";
     case ValueKind::Number: return "number"; case ValueKind::Vector3: return "vec3";
     case ValueKind::Strings: return "string_array"; case ValueKind::Channels: return "channel_descriptions";
+    case ValueKind::Object: return "object"; case ValueKind::Array: return "array";
     }
     return "";
 }
@@ -124,6 +136,8 @@ EditorAssetFieldValue DecodeValue(const Json& value, const Field& field)
 {
     switch (field.type)
     {
+    case ValueKind::Object: if (value.is_object()) return value; break;
+    case ValueKind::Array: if (value.is_array()) return value; break;
     case ValueKind::Text:
         if (value.is_string() && !value.get<std::string>().empty())
         {

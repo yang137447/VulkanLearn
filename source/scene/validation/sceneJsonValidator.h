@@ -8,6 +8,7 @@
 #include "render/camera/cameraExposure.h"
 #include "render/lighting/physicalLighting.h"
 #include "world/environmentType.h"
+#include "script/scriptScene.h"
 
 namespace VL
 {
@@ -44,8 +45,18 @@ inline void ValidateSceneAssetJson(const nlohmann::json& scene)
         !scene.at("description").is_string() || scene.at("description").get<std::string>().empty() ||
         !scene.contains("objects") || !scene.at("objects").is_array())
         throw std::invalid_argument("Scene requires non-empty description and objects array");
+    if (scene.contains("spawnAssets"))
+    {
+        const auto& paths = scene.at("spawnAssets");
+        if (!paths.is_array() || paths.size() > 128)
+            throw std::invalid_argument("spawnAssets requires at most 128 paths");
+        for (const auto& path : paths)
+            if (!path.is_string() || path.get<std::string>().empty())
+                throw std::invalid_argument("spawnAssets requires non-empty asset paths");
+    }
     bool hasCamera = false;
     std::set<std::string> identities;
+    std::set<std::string> actorIds;
     for (const auto& object : scene.at("objects"))
     {
         if (!object.is_object()) throw std::invalid_argument("Scene object must be an object");
@@ -54,6 +65,14 @@ inline void ValidateSceneAssetJson(const nlohmann::json& scene)
                 object.at(field).get<std::string>().empty())
                 throw std::invalid_argument(std::string("Scene object requires string: ") + field);
         const std::string type = object.at("type"), name = object.at("name");
+        if (name.rfind("__blueprint/", 0) == 0)
+            throw std::invalid_argument("Scene object name uses reserved Actor mesh prefix");
+        if (type == "blueprintInstance")
+        {
+            ValidateScriptBlueprint(object);
+            if (!actorIds.insert(object.at("id").get<std::string>()).second)
+                throw std::invalid_argument("Duplicate Actor id");
+        }
         if (type == "environment")
         {
             // 正式 WorldBuilder 消费的是嵌套 environment，不能只校验外层对象而漏掉实际作者数据。
@@ -67,16 +86,17 @@ inline void ValidateSceneAssetJson(const nlohmann::json& scene)
                 (!environment.contains("hdrPath") || environment.at("hdrPath").get<std::string>().empty()))
                 throw std::invalid_argument("HDRI requires hdrPath");
         }
-        if (!identities.insert(type + "|" + name).second)
+        if (!identities.insert(type + "|" + (type == "blueprintInstance"
+            ? object.at("id").get<std::string>() : name)).second)
             throw std::invalid_argument("Scene object identity is ambiguous: " + type + "|" + name);
         if (type != "mesh" && type != "directionalLight" && type != "pointLight" &&
-            type != "spotLight" && type != "squareAreaLight" && type != "camera" && type != "environment")
+            type != "spotLight" && type != "squareAreaLight" && type != "camera" && type != "environment" && type != "blueprintInstance")
             throw std::invalid_argument("Unknown scene object type: " + type);
         for (const char* field : {"position", "rotation", "scale", "normal", "color", "look_at"})
         {
             const bool required = (std::string(field) == "position" && type != "environment") ||
                 (std::string(field) == "rotation" && type != "environment" && type != "squareAreaLight") ||
-                (std::string(field) == "scale" && (type == "mesh" || type == "camera")) ||
+                (std::string(field) == "scale" && (type == "mesh" || type == "camera" || type == "blueprintInstance")) ||
                 (std::string(field) == "normal" && type == "squareAreaLight");
             if (!required && !object.contains(field)) continue;
             if (!object.contains(field) || !object.at(field).is_array() || object.at(field).size() != 3)

@@ -88,6 +88,340 @@ TEST_F(AssetDocumentTest, AllAssetKindsPublishCapabilitiesAndStructuredCodecRoun
     }
 }
 
+Json BlueprintAsset()
+{
+    return {{"type", "blueprint"}, {"name", "Actor"}, {"class", "Gameplay.RotatorBlueprint"},
+        {"properties", {{"DegreesPerSecond", 45}}}, {"instanceEditable", Json::array()},
+        {"components", Json::array({{{"id", "pivot"}, {"type", "scene"}}})}};
+}
+
+TEST_F(AssetDocumentTest, BlueprintCommandsRoundTripAndSaveThroughOneDocumentOwner)
+{
+    auto asset = BlueprintAsset();
+    asset["type"] = "blueprint";
+    Write("BP_test.json", asset);
+    const auto opened = Get("blueprint", "BP_test.json");
+    ASSERT_EQ(opened["status"], "succeeded") << opened;
+    const auto wire = Request("blueprint.modify", "BP_test.json", 1,
+        Json::array({{{"field", "name"}, {"value", "Blueprint Draft"}}}));
+    const auto command = EditorCommandJsonCodec::DecodeCommand(wire);
+    EXPECT_EQ(EditorCommandJsonCodec::Encode(command), wire);
+    ASSERT_EQ(Run(wire)["status"], "succeeded");
+    EXPECT_EQ(Get("blueprint", "BP_test.json")["payload"]["document"]["name"], "Blueprint Draft");
+    EXPECT_EQ(Read("BP_test.json"), asset);
+    EXPECT_EQ(Run(Request("blueprint.validate", "BP_test.json"))["status"], "succeeded");
+    ASSERT_EQ(Run(Request("blueprint.save", "BP_test.json", 2))["status"], "succeeded");
+    EXPECT_EQ(Read("BP_test.json")["type"], "blueprint");
+    EXPECT_EQ(Read("BP_test.json")["name"], "Blueprint Draft");
+    EXPECT_FALSE(Get("blueprint", "BP_test.json")["payload"]["dirty"].get<bool>());
+}
+
+TEST_F(AssetDocumentTest, BlueprintHistoryCommandsRequireRevisionAndRoundTripWithoutChangesPayload)
+{
+    Write("BP_test.json", BlueprintAsset());
+    const auto opened = Get("blueprint", "BP_test.json");
+    EXPECT_FALSE(opened["payload"]["canUndo"].get<bool>());
+    EXPECT_FALSE(opened["payload"]["canRedo"].get<bool>());
+    for (const char* operation : {"undo", "redo"})
+    {
+        const std::string command = std::string("blueprint.") + operation;
+        EXPECT_THROW(EditorCommandJsonCodec::DecodeCommand(Request(command, "BP_test.json")),
+            EditorCommandJsonCodecError);
+        const auto wire = Request(command, "BP_test.json", 1);
+        EXPECT_EQ(EditorCommandJsonCodec::Encode(EditorCommandJsonCodec::DecodeCommand(wire)), wire);
+        EXPECT_EQ(Run(wire)["status"], "rejected");
+        EXPECT_EQ(Get("blueprint", "BP_test.json")["documentRevision"], 1);
+    }
+    for (const char* kind : {"scene", "mesh", "texture"})
+        EXPECT_THROW(EditorCommandJsonCodec::DecodeCommand(
+            Request(std::string(kind) + ".undo", "BP_test.json", 1)), EditorCommandJsonCodecError);
+}
+
+TEST_F(AssetDocumentTest, BlueprintUndoRestoresCompleteAcceptedEditAndRedoStagesWithoutWriting)
+{
+    const auto baseline = BlueprintAsset();
+    Write("BP_test.json", baseline);
+    Get("blueprint", "BP_test.json");
+    const auto changed = Modify("blueprint", "BP_test.json", 1, Json::array({
+        {{"field", "name"}, {"value", "Changed"}},
+        {{"field", "instanceEditable"}, {"value", {"DegreesPerSecond"}}},
+        {{"field", "components"}, {"value", Json::array({
+            {{"id", "pivot"}, {"type", "scene"}},
+            {{"id", "camera"}, {"parent", "pivot"}, {"type", "camera"}}})}}
+    }));
+    ASSERT_EQ(changed["status"], "succeeded") << changed;
+    EXPECT_TRUE(changed["payload"]["canUndo"].get<bool>());
+    const auto undone = Run(Request("blueprint.undo", "BP_test.json", 2));
+    ASSERT_EQ(undone["status"], "succeeded") << undone;
+    EXPECT_EQ(undone["documentRevision"], 3);
+    EXPECT_FALSE(undone["payload"]["dirty"].get<bool>());
+    EXPECT_EQ(undone["payload"]["document"], Get("blueprint", "BP_test.json")["payload"]["document"]);
+    EXPECT_EQ(undone["payload"]["document"]["components"], baseline["components"]);
+    EXPECT_TRUE(undone["payload"]["canRedo"].get<bool>());
+    EXPECT_FALSE(undone["payload"]["canUndo"].get<bool>());
+    const auto redone = Run(Request("blueprint.redo", "BP_test.json", 3));
+    ASSERT_EQ(redone["status"], "succeeded") << redone;
+    EXPECT_EQ(redone["payload"]["document"], changed["payload"]["document"]);
+    EXPECT_EQ(EditorCommandJsonCodec::EncodeResult(EditorCommandJsonCodec::DecodeResult(redone)), redone);
+    EXPECT_EQ(Read("BP_test.json"), baseline);
+}
+
+TEST_F(AssetDocumentTest, BlueprintSaveKeepsHistoryAndUndoBecomesDirtyAgainstSavedBaseline)
+{
+    Write("BP_test.json", BlueprintAsset());
+    Get("blueprint", "BP_test.json");
+    Modify("blueprint", "BP_test.json", 1, Json::array({{{"field", "name"}, {"value", "Saved"}}}));
+    ASSERT_EQ(Run(Request("blueprint.save", "BP_test.json", 2))["status"], "succeeded");
+    const auto undo = Run(Request("blueprint.undo", "BP_test.json", 3));
+    ASSERT_EQ(undo["status"], "succeeded") << undo;
+    EXPECT_TRUE(undo["payload"]["dirty"].get<bool>());
+    EXPECT_EQ(undo["payload"]["document"]["name"], "Actor");
+    EXPECT_EQ(Read("BP_test.json")["name"], "Saved");
+    const auto redo = Run(Request("blueprint.redo", "BP_test.json", 4));
+    ASSERT_EQ(redo["status"], "succeeded") << redo;
+    EXPECT_FALSE(redo["payload"]["dirty"].get<bool>());
+}
+
+TEST_F(AssetDocumentTest, BlueprintRejectedStaleAndNoOpEditsDoNotConsumeRedo)
+{
+    Write("BP_test.json", BlueprintAsset());
+    Get("blueprint", "BP_test.json");
+    Modify("blueprint", "BP_test.json", 1, Json::array({{{"field", "name"}, {"value", "Changed"}}}));
+    Run(Request("blueprint.undo", "BP_test.json", 2));
+    EXPECT_EQ(Modify("blueprint", "BP_test.json", 3,
+        Json::array({{{"field", "name"}, {"value", "Actor"}}}))["documentRevision"], 3);
+    EXPECT_EQ(Modify("blueprint", "BP_test.json", 3,
+        Json::array({{{"field", "class"}, {"value", ""}}}))["status"], "rejected");
+    EXPECT_EQ(Run(Request("blueprint.redo", "BP_test.json", 2))["errorCode"], "stale_document_revision");
+    EXPECT_TRUE(Get("blueprint", "BP_test.json")["payload"]["canRedo"].get<bool>());
+    ASSERT_EQ(Run(Request("blueprint.redo", "BP_test.json", 3))["status"], "succeeded");
+    EXPECT_EQ(Get("blueprint", "BP_test.json")["payload"]["document"]["name"], "Changed");
+}
+
+TEST_F(AssetDocumentTest, BlueprintNewEditAfterUndoDropsRedoBranch)
+{
+    Write("BP_test.json", BlueprintAsset());
+    Get("blueprint", "BP_test.json");
+    Modify("blueprint", "BP_test.json", 1, Json::array({{{"field", "name"}, {"value", "Old Branch"}}}));
+    Run(Request("blueprint.undo", "BP_test.json", 2));
+    const auto changed = Modify("blueprint", "BP_test.json", 3,
+        Json::array({{{"field", "name"}, {"value", "New Branch"}}}));
+    ASSERT_EQ(changed["status"], "succeeded");
+    EXPECT_FALSE(changed["payload"]["canRedo"].get<bool>());
+    EXPECT_EQ(Run(Request("blueprint.redo", "BP_test.json", 4))["status"], "rejected");
+    EXPECT_EQ(Get("blueprint", "BP_test.json")["documentRevision"], 4);
+}
+
+TEST_F(AssetDocumentTest, BlueprintRevertDiscardsBothHistoryBranches)
+{
+    Write("BP_test.json", BlueprintAsset());
+    Get("blueprint", "BP_test.json");
+    Modify("blueprint", "BP_test.json", 1, Json::array({{{"field", "name"}, {"value", "First"}}}));
+    Modify("blueprint", "BP_test.json", 2, Json::array({{{"field", "name"}, {"value", "Second"}}}));
+    Run(Request("blueprint.undo", "BP_test.json", 3));
+    const auto reverted = Run(Request("blueprint.revert", "BP_test.json", 4));
+    ASSERT_EQ(reverted["status"], "succeeded");
+    EXPECT_FALSE(reverted["payload"]["canUndo"].get<bool>());
+    EXPECT_FALSE(reverted["payload"]["canRedo"].get<bool>());
+    EXPECT_FALSE(reverted["payload"]["dirty"].get<bool>());
+}
+
+TEST_F(AssetDocumentTest, BlueprintExternalSaveConflictKeepsHistoryUntilExplicitReload)
+{
+    Write("BP_test.json", BlueprintAsset());
+    Get("blueprint", "BP_test.json");
+    Modify("blueprint", "BP_test.json", 1, Json::array({{{"field", "name"}, {"value", "Draft"}}}));
+    auto external = BlueprintAsset(); external["name"] = "External"; Write("BP_test.json", external);
+    EXPECT_EQ(Run(Request("blueprint.save", "BP_test.json", 2))["errorCode"], "source_changed");
+    ASSERT_EQ(Run(Request("blueprint.undo", "BP_test.json", 2))["status"], "succeeded");
+    ASSERT_EQ(Run(Request("blueprint.redo", "BP_test.json", 3))["status"], "succeeded");
+    EXPECT_EQ(Run(Request("blueprint.save", "BP_test.json", 4))["errorCode"], "source_changed");
+    auto reload = Request("blueprint.reload", "BP_test.json", 4);
+    EXPECT_EQ(Run(reload)["errorCode"], "document_dirty");
+    reload = Request("blueprint.reload", "BP_test.json", 4);
+    reload["payload"]["dirtyPolicy"] = "discard_changes";
+    const auto loaded = Run(reload);
+    ASSERT_EQ(loaded["status"], "succeeded") << loaded;
+    EXPECT_EQ(loaded["payload"]["document"]["name"], "External");
+    EXPECT_FALSE(loaded["payload"]["canUndo"].get<bool>());
+    EXPECT_FALSE(loaded["payload"]["canRedo"].get<bool>());
+    EXPECT_EQ(Read("BP_test.json"), external);
+}
+
+TEST_F(AssetDocumentTest, BlueprintHistoryRevalidatesReferencesBeforeConsumingStep)
+{
+    auto asset = BlueprintAsset();
+    asset["components"] = Json::array({{{"id", "mesh"}, {"type", "mesh"}, {"modelPath", "SM_test.json"}}});
+    Write("BP_test.json", asset);
+    Get("blueprint", "BP_test.json");
+    Modify("blueprint", "BP_test.json", 1, Json::array({{{"field", "components"}, {"value", Json::array()}}}));
+    const auto mesh = Read("SM_test.json");
+    std::filesystem::remove(root / "SM_test.json");
+    const auto rejected = Run(Request("blueprint.undo", "BP_test.json", 2));
+    EXPECT_EQ(rejected["status"], "rejected");
+    EXPECT_EQ(rejected["documentRevision"], 2);
+    EXPECT_TRUE(rejected["payload"]["document"]["components"].empty());
+    EXPECT_TRUE(rejected["payload"]["canUndo"].get<bool>());
+    Write("SM_test.json", mesh);
+    EXPECT_EQ(Run(Request("blueprint.undo", "BP_test.json", 2))["status"], "succeeded");
+}
+
+TEST_F(AssetDocumentTest, BlueprintHistoryIsLimitedToThirtyTwoSteps)
+{
+    Write("BP_test.json", BlueprintAsset());
+    Get("blueprint", "BP_test.json");
+    uint64_t revision = 1;
+    for (int index = 1; index <= 40; ++index)
+    {
+        const auto result = Modify("blueprint", "BP_test.json", revision++,
+            Json::array({{{"field", "name"}, {"value", "Edit " + std::to_string(index)}}}));
+        ASSERT_EQ(result["status"], "succeeded") << result;
+    }
+    for (int index = 0; index < 32; ++index)
+        ASSERT_EQ(Run(Request("blueprint.undo", "BP_test.json", revision++))["status"], "succeeded");
+    const auto oldest = Get("blueprint", "BP_test.json");
+    EXPECT_EQ(oldest["payload"]["document"]["name"], "Edit 8");
+    EXPECT_FALSE(oldest["payload"]["canUndo"].get<bool>());
+    EXPECT_TRUE(oldest["payload"]["canRedo"].get<bool>());
+    EXPECT_EQ(Run(Request("blueprint.undo", "BP_test.json", revision))["status"], "rejected");
+}
+
+TEST_F(AssetDocumentTest, BlueprintHistorySerialisedBytesAreLimitedToSixteenMiB)
+{
+    auto asset = BlueprintAsset();
+    asset["description"] = std::string(900000, 'x');
+    asset["name"] = "Draft-00";
+    Write("BP_test.json", asset);
+    Get("blueprint", "BP_test.json");
+    uint64_t revision = 1;
+    for (int index = 1; index <= 22; ++index)
+    {
+        const std::string name = "Draft-" + std::string(index < 10 ? "0" : "") + std::to_string(index);
+        ASSERT_EQ(Modify("blueprint", "BP_test.json", revision++,
+            Json::array({{{"field", "name"}, {"value", name}}}))["status"], "succeeded");
+    }
+    const size_t retained = 16 * 1024 * 1024 / asset.dump().size();
+    ASSERT_LT(retained, 22);
+    for (size_t index = 0; index < retained; ++index)
+        ASSERT_EQ(Run(Request("blueprint.undo", "BP_test.json", revision++))["status"], "succeeded");
+    const auto oldest = Get("blueprint", "BP_test.json");
+    EXPECT_FALSE(oldest["payload"]["canUndo"].get<bool>());
+    EXPECT_TRUE(oldest["payload"]["canRedo"].get<bool>());
+    EXPECT_EQ(Run(Request("blueprint.undo", "BP_test.json", revision))["status"], "rejected");
+}
+
+TEST_F(AssetDocumentTest, LegacyActorCommandsTypesAndPrefixesAreRejected)
+{
+    Write("BP_test.json", BlueprintAsset());
+    for (const char* operation : {"get_document", "get_capabilities", "modify", "validate", "save", "revert", "reload"})
+        EXPECT_THROW(EditorCommandJsonCodec::DecodeCommand(
+            Request(std::string("actor.") + operation, "BP_test.json")), EditorCommandJsonCodecError);
+    auto legacy = BlueprintAsset();
+    legacy["type"] = "actorAsset";
+    Write("BP_legacy.json", legacy);
+    EXPECT_EQ(Get("blueprint", "BP_legacy.json")["status"], "failed");
+    Write("ACT_test.json", BlueprintAsset());
+    EXPECT_EQ(Get("blueprint", "ACT_test.json")["status"], "failed");
+}
+
+TEST_F(AssetDocumentTest, BlueprintStructuredDefaultsComponentsAndExposureSaveOnlyOnExplicitRequest)
+{
+    const auto baseline = BlueprintAsset();
+    Write("BP_test.json", baseline);
+    const auto opened = Get("blueprint", "BP_test.json");
+    ASSERT_EQ(opened["status"], "succeeded") << opened;
+    const auto changes = Json::array({
+        {{"field", "properties"}, {"value", {{"DegreesPerSecond", 90}, {"Category", "Gameplay"}}}},
+        {{"field", "instanceEditable"}, {"value", {"DegreesPerSecond"}}},
+        {{"field", "components"}, {"value", Json::array({
+            {{"id", "pivot"}, {"type", "scene"}},
+            {{"id", "camera"}, {"parent", "pivot"}, {"type", "camera"}, {"fov", 65}, {"near_clip", 1}, {"far_clip", 5000}}
+        })}},
+        {{"field", "physics"}, {"value", {{"motion", "dynamic"}, {"shape", "sphere"}, {"radius", 30}}}}
+    });
+    const auto modified = Modify("blueprint", "BP_test.json", 1, changes);
+    ASSERT_EQ(modified["status"], "succeeded") << modified;
+    EXPECT_EQ(Read("BP_test.json"), baseline);
+    EXPECT_EQ(Run(Request("blueprint.validate", "BP_test.json"))["status"], "succeeded");
+    EXPECT_EQ(Run(Request("blueprint.save", "BP_test.json", 2))["status"], "succeeded");
+    EXPECT_EQ(Read("BP_test.json")["components"][1]["parent"], "pivot");
+    EXPECT_EQ(Read("BP_test.json")["instanceEditable"], Json::array({"DegreesPerSecond"}));
+    EXPECT_FALSE(Get("blueprint", "BP_test.json")["payload"]["dirty"].get<bool>());
+}
+
+TEST_F(AssetDocumentTest, ActorInvalidComponentTreeRollsBackCompleteCandidate)
+{
+    Write("BP_test.json", BlueprintAsset());
+    Get("blueprint", "BP_test.json");
+    const auto result = Modify("blueprint", "BP_test.json", 1, Json::array({
+        {{"field", "name"}, {"value", "Rejected"}},
+        {{"field", "components"}, {"value", Json::array({{{"id", "a"}, {"type", "scene"}, {"parent", "missing"}}})}}
+    }));
+    EXPECT_EQ(result["status"], "rejected") << result;
+    EXPECT_EQ(Get("blueprint", "BP_test.json")["documentRevision"], 1);
+    EXPECT_EQ(Get("blueprint", "BP_test.json")["payload"]["document"]["name"], "Actor");
+}
+
+TEST_F(AssetDocumentTest, ActorExposureRejectsDuplicateNamesAndWrongShape)
+{
+    Write("BP_test.json", BlueprintAsset());
+    Get("blueprint", "BP_test.json");
+    for (const Json& value : {Json::array({"Speed", "Speed"}), Json::array({42}), Json::object()})
+        EXPECT_EQ(Modify("blueprint", "BP_test.json", 1,
+            Json::array({{{"field", "instanceEditable"}, {"value", value}}}))["status"], "rejected");
+}
+
+TEST_F(AssetDocumentTest, BlueprintComponentPermissionUsesSharedValidationAndSaveProjection)
+{
+    Write("BP_test.json", BlueprintAsset());
+    Get("blueprint", "BP_test.json");
+    const auto changed = Modify("blueprint", "BP_test.json", 1, Json::array({
+        {{"field", "componentInstanceEditable"}, {"value", {{"pivot", {"position", "rotation"}}}}}
+    }));
+    ASSERT_EQ(changed["status"], "succeeded") << changed;
+    EXPECT_EQ(changed["payload"]["document"]["componentInstanceEditable"],
+        Json({{"pivot", {"position", "rotation"}}}));
+    EXPECT_FALSE(Read("BP_test.json").contains("componentInstanceEditable"));
+    EXPECT_EQ(Modify("blueprint", "BP_test.json", 2, Json::array({
+        {{"field", "componentInstanceEditable"}, {"value", {{"pivot", {"parent"}}}}}
+    }))["status"], "rejected");
+    ASSERT_EQ(Run(Request("blueprint.save", "BP_test.json", 2))["status"], "succeeded");
+    EXPECT_EQ(Read("BP_test.json")["componentInstanceEditable"], Json({{"pivot", {"position", "rotation"}}}));
+}
+TEST_F(AssetDocumentTest, ActorDraftRevisionAndExternalConflictPreserveBothAuthors)
+{
+    Write("BP_test.json", BlueprintAsset());
+    Get("blueprint", "BP_test.json");
+    ASSERT_EQ(Modify("blueprint", "BP_test.json", 1,
+        Json::array({{{"field", "name"}, {"value", "Draft"}}}))["status"], "succeeded");
+    EXPECT_EQ(Modify("blueprint", "BP_test.json", 1,
+        Json::array({{{"field", "name"}, {"value", "Stale"}}}))["errorCode"], "stale_document_revision");
+    auto external = BlueprintAsset(); external["name"] = "External"; Write("BP_test.json", external);
+    EXPECT_EQ(Run(Request("blueprint.save", "BP_test.json", 2))["errorCode"], "source_changed");
+    EXPECT_EQ(Read("BP_test.json"), external);
+    EXPECT_EQ(Get("blueprint", "BP_test.json")["payload"]["document"]["name"], "Draft");
+}
+
+TEST_F(AssetDocumentTest, ActorRuntimeCatalogRejectsUnknownPropertiesAndInstanceNames)
+{
+    Write("BP_test.json", BlueprintAsset());
+    AssetDocumentService service(root, EditorAssetDocumentKind::Blueprint);
+    service.SetBlueprintClasses(Json::array({{{"name", "Gameplay.RotatorBlueprint"}, {"properties", Json::array({
+        {{"name", "DegreesPerSecond"}, {"type", "number"}, {"value", 45}}
+    })}}}));
+    auto get = EditorCommandJsonCodec::DecodeCommand(Request("blueprint.get_document", "BP_test.json"));
+    ASSERT_EQ(service.Execute(get).status, EditorCommandStatus::Succeeded);
+    for (const Json& change : {
+        Json{{"field", "properties"}, {"value", {{"DegreesPerSecond", "bad"}}}},
+        Json{{"field", "instanceEditable"}, {"value", {"Missing"}}},
+        Json{{"field", "class"}, {"value", "Gameplay.Unknown"}}})
+    {
+        const auto command = EditorCommandJsonCodec::DecodeCommand(Request("blueprint.modify", "BP_test.json", 1, Json::array({change})));
+        EXPECT_EQ(service.Execute(command).status, EditorCommandStatus::Rejected);
+    }
+    EXPECT_FALSE(service.DocumentSnapshots()[0].dirty);
+}
+
 TEST_F(AssetDocumentTest, ModifyStagesOnlyAndExplicitSavePreservesOpaqueSource)
 {
     ASSERT_EQ(Get("scene", "SC_test.json")["status"], "succeeded");

@@ -1,10 +1,99 @@
 # C# Actor Runtime Plan
 
+## 用户源码资源化增补（2026-10-18）
+
+原计划之后补充用户资源归属：常驻 Runtime/API 留在引擎，
+用户 `.blueprint.cs`、普通 C# 数据及辅助代码进入资源仓库的 Common/Maps 内容域。
+现有示例按共享或关卡专属归属迁移，不再从引擎 Gameplay 目录编译游戏逻辑。
+Gameplay 项目由引擎模板生成到 Generated，初始构建与编辑器候选编译均消费资源源码。
+Outliner 新建蓝图同时创建源码与配对 BP JSON，随后编译并沿既有事务发布类目录。
+文件发布不覆盖已有作者文件，编译失败保留文件与活动程序集。
+这项增补不引入逐地图程序集或蓝图继承。当前精确行为见蓝图契约；
+下列矩阵及历史数据保留原计划收尾时的语境。
+
+## 原计划收尾矩阵
+
+原始 Phase 0–5 的功能范围已完成。当前名称统一为 C# 蓝图；
+实现和边界以 [蓝图契约](../../contracts/csharp-blueprint-runtime.md) 为准，
+最终验证以 [测试契约的收尾记录](../../contracts/testing.md#c-原计划收尾验证) 为准。
+本节优先于下面保留的历史 Status、未实现清单和各轮测量。
+
+| 阶段 | 完成内容 | 主要证据 |
+| --- | --- | --- |
+| Phase 0：宿主与边界 | Windows x64/.NET 8、hostfxr、ABI v1 有界 UTF-8、分代 Gameplay 和私有运行时部署；启动失败不发布半初始化宿主 | ScriptStartup、ScriptDeployment、直接 ScriptHost/CLR 用例 |
+| Phase 1：垂直链路 | 场景蓝图实例、生命周期、Transform/Input/Time/Log、故障隔离、Play/Pause/Stop 与真实 World 视觉值发布 | ScriptRuntimeTest、ScriptGameplayTest、既有 Vulkan Play/Stop 实窗记录 |
+| Phase 2：World/组件 | 稳定身份、空间父链、逻辑组件、运行时增删挂接、代际句柄、候选 World 事务及冻结 WorldSnapshot | 场景/作者用例、运行时组件测试、ScriptMixedLoadTest、既有 World 事务测试 |
+| Phase 3：游戏服务 | action/axis、计时器、事件、Spawn/Destroy、类型化 Expose/内联自定义数据、显式实例权限、相机/灯光、HUD 文本与集中诊断 | ScriptGameplayTest、ScriptLogicComponentTest、ScriptCustomDataTest、ScriptHudTest、真实 RmlUi HUD 绑定 |
+| Phase 4：构建/部署/重载 | CMake Debug/Release、候选独占编译、DLL/PDB/依赖确定性、手动/监视编译、重载失败保留、委托/上下文及旧程序集回收、独立导出 | ScriptBuildTest、ScriptAssemblyReloadTest、game_export_tests、独立目录私有 CLR 新进程验收 |
+| Phase 5：加固 | 显式深值迁移、异步资产完成/取消/租约、FixedTick/Jolt、时间倍率、诊断/性能采样、增量同步和混合负载 | 迁移/异步资产/Jolt/时钟套件、千实例性能和混合 CLR/Jolt/WorldSnapshot 回归 |
+
+本轮补齐最后的实际缺口：
+
+- C# 用 `Hud.SetText/Remove` 发布有界文本，按根/组件隔离、回调回滚和生命周期清理；
+  生产弹药示例只用 C# 输入和状态，UI 消费冻结文本，不暴露 DOM 或 Vulkan。
+- Blueprint 和逻辑组件支持普通类型名、短程序集限定名及真实完整程序集身份；
+  默认值、权限、作者/UI 与 CLR 解析一致，错误程序集/版本被拒绝，作者文本不被改写。
+- 两个独占编译候选逐字节比较 Gameplay DLL/PDB/deps 清单与桥接 DLL/PDB。
+  Windows Roslyn 的 PathMap 分隔符缺陷由失败回归定位并修正。
+- 脚本错误携带异常类型、处置、程序集/场景和代际；性能明细定频采样，
+  故障和生命周期即时发布。增量导出先比较再分配，保留一次性命令语义。
+
+性能收尾沿用预热 3 帧、测量 30 帧，在两个独立 Release 新进程中各运行两遍：
+千空实例平均 0.5070–0.6729 ms、p95 1.6779–1.8419 ms，四次明确启用的
+5 ms p95 预算均通过；100 移动/900 空实例平均 1.0253–1.2424 ms，
+千移动实例平均 5.1690–5.9794 ms。空实例分配约 29.5 KB/帧，
+全移动约 543 KB/帧。它们是 Tick/JSON/World 同步/诊断耗时，不含渲染。
+另一个包含 64 动态球、139 个 CPU draw sections、计时器/事件/相机/灯光的
+混合测试，Tick + WorldSnapshot 平均 6.04–6.21 ms；不代表 GPU 帧率。
+下面历史上的 211 ms、57–66 ms 和首遍 p95 失败记录保留为优化证据，
+不再代表当前测量。
+
+原提案中的托管单元与新增 runtime test 设想按现行仓库治理落实：
+托管 fixture 由根 GoogleTest 驱动真实 hostfxr/CLR，不另建测试 main；
+Vulkan 事务沿用获准的既有测试，不新增 runtime 标志。
+同步和独立 RT 模式共用输入后、快照前的 GT 脚本路径，RT 只消费冻结值。
+本轮没有恢复桌面自动操作，HUD 等新增交互的模块覆盖不记为新实窗验收。
+最终门禁：Debug 脚本 288 项连续两遍全通过，UI 每遍 624 通过/5 环境跳过；
+Release 脚本每遍 287 通过/1 部署前提跳过，当前 Debug 独立目录私有 CLR 实测通过。
+C# OFF main/脚本构建及 69 项两遍通过；根 CTest 1286 项中 1280 通过/6 环境跳过，
+零失败。单线程与双线程 World 事务串行通过，均退出码 0、stderr 为空并正常 teardown。
+
+原计划完成不表示所有游戏引擎功能齐备。独立数据资产/表、存档、蓝图资产继承、
+动画、音频、网络与毛发模拟属于独立扩展；二进制 ABI、更多规模/硬件的性能预算及
+补充桌面交互验收也不由本次有限样本自动证明。脚本仍是可信进程内代码，
+任意静态字段、文件和自建线程副作用不具备事务回滚保证。
+
+## 历史提案与逐轮记录
+
+下文保留当时的命名、未实现项和验收设想，不作为当前完成度或实现契约。
+
+2026-10-17 命名决议：本计划保留历史 Actor/ACT 讨论，当前功能统一称为蓝图（Blueprint）。
+当前实现与格式以 [C# 蓝图契约](../../contracts/csharp-blueprint-runtime.md) 为准：
+`Blueprints/BP_*.json`、`*.blueprint.cs`、`Blueprint`、`BlueprintHandle`、
+`BlueprintReference`、`blueprintInstance`、`blueprintPath` 与 `blueprint.*`。
+旧格式直接迁移，不保留类型、命令或 API 别名。
+
+2026-10-17 性能增量补记：播放阶段已使用 JSON 稀疏状态同步、原生 ID 状态索引和
+物理实例子集；未重写的基类帧回调跳过，继承 override、委托和生命周期保留。
+千空实例 Release 平均从分段基线 61–68 ms 降到 1.33–1.69 ms；
+100 移动/900 空实例约 2.7–2.9 ms，全千实例移动约 8.1–9.5 ms。
+仍有约 6 ms 的新进程首遍 p95，显式 5 ms 尾延迟预算未达标；
+全活跃托管分配、刚体同步、JSON 和逐帧诊断仍有优化余量。
+二进制 ABI、独立数据资产和存档接口没有包含在此增量中。
+详细测量及验证以当前蓝图/测试契约为准。下面保留增量前的状态和测量记录。
+
+最新集成状态（2026-10-17）：蓝图作者工作流、运行时与自定义逻辑组件、
+固定更新/时钟、显式播放中重载和集中 Log 已实现。最终全量回归零失败，
+证据见 [测试契约](../../contracts/testing.md)。千空蓝图 Release 整帧脚本路径
+平均约 211 ms，仍需优化 JSON 桥接、World 同步和诊断开销，不能据此宣称大规模
+游戏逻辑性能达标。下面原始 Status 与逐轮增量保留历史语境；
+当前命名和实现边界以上述蓝图契约为准。
+
 ## Status
 
 - Type: executable architecture and implementation plan
 - Created: 2026-09-03
-- State: planned, not implemented
+- State: first vertical slice implemented (2026-10-17); full plan incomplete
 - Naming decision: gameplay source files use `*.actor.cs`
 - Scope: an in-process C# gameplay layer with code-authored Actors; no node-based Blueprint editor or graph runtime
 
@@ -40,6 +129,140 @@ properties, diagnostics, test coverage, and a controlled reload story. It is
 not merely a P/Invoke proof of concept.
 
 ## Current Baseline
+
+2026-10-17 update: the implemented subset is documented in
+[C# Blueprint runtime contract](../../contracts/csharp-blueprint-runtime.md).
+It includes Windows x64/.NET 8 hosting, lifecycle, scalar Expose properties,
+scene identity/TRS, one root mesh, input/time, fault isolation, Scene drafts and
+editor placement/Play/Pause/Stop. Assemblies reload by process restart.
+The next landed slice adds single-level ACT_ assets, sparse scene overrides,
+property reset, new asset creation and native viewport drag/drop onto y=0.
+The gameplay increment adds scene/mesh component trees and local editing, preloaded
+ACT Spawn/Destroy, Bullet box/sphere root bodies and contact events, and Editing-only
+ACT content reload through the existing World transaction. Timers, general events,
+nested prefabs, state migration and assembly hot reload remain unimplemented.
+2026-10-17 后续增量将 CPU 后端替换为锁定的 Jolt 5.6.0，增加 capsule、
+Trigger、批量射线与 CharacterVirtual 控制器；输入映射、owner 计时器、
+Actor 查找/只读快照和事件投递的当前边界见上述契约。
+前段 Bullet/未实现计时器的描述记录当时进度，不作为当前行为。
+Jolt GPU/毛发模块没有接入；毛发资产、模拟与 RenderGraph 集成是独立扩展。
+2026-10-17 作者工作流增量：Actor 改名/复制/删除、inline scene/mesh/camera
+组件增删及父链编辑、根物理 Inspector 与碰撞轮廓、Scene 有界 Undo/Redo 已接入。
+脚本相机与作者 Camera 独立，随物理结果发布，异常回滚镜头投影与活动选择。
+新增 SC_actor_playground 学习场景和 ThirdPersonCharacterActor/SpawnTriggerActor，
+用于角色移动跳跃、跟随镜头、Trigger 内事件交互及预加载 Spawn。
+2026-10-17 Actor 资产编辑增量：Content Browser 双击 ACT 打开独立配置标签，
+支持类默认值、组件树/相机与物理配置，沿用 revision/冲突检查和显式保存。
+ACT 的 instanceEditable 白名单决定场景可覆写属性；inline 由
+`[Expose(InstanceEditable = true)]` 开放，单独 `[Expose]` 只表示可配置默认值。
+未开放属性在 Details 只读，GT 与加载端都拒绝越权覆写。
+这轮没有节点图或 3D Actor 预览。
+2026-10-17 预览增量：补齐三栏中央真实 3D 视口，复用 `SC_model_preview`、
+正式 World 事务和既有环绕相机。GT 仅消费路径/revision 对应的权威 ACT 视觉草稿，
+不写临时 ACT，不执行 OnCreate 或物理；组件修改稳定后自动刷新，返回关卡恢复 Scene 草稿。
+该增量仍不含组件拾取、gizmo 或非网格组件图示，Vulkan 实窗验收因用户 Esc 中止未恢复。
+2026-10-17 布局增量：按 UE 组件编辑习惯将长表单拆成左侧 Components 树与右侧 Details，
+Actor (Self) 配置类默认值/实例白名单/根物理，选中组件配置其父级/TRS/网格或相机。
+修复根 rotation/scale 与物理尺寸向量行收缩，选择按稳定 ID 保留，不进入作者 JSON。
+桌面验收在初次默认速度编辑后被用户 Esc 中止；后续布局验证使用真实 RmlUi 模块，
+没有恢复桌面自动操作，保存/关闭/Undo/Redo 的实窗验收仍未完成。
+这不等同于完成全计划：组件实例覆写、通用 gizmo、碰撞层/约束、
+程序集热重载、可部署包、typed Expose 和运行时组件增删仍是后续范围。
+2026-10-17 本轮增量：恢复桌面验收，修复场景选择器漏掉 actor 导致返回关卡请求被丢弃的问题。
+真实 Vulkan 窗口已核对中央网格、环绕/缩放、组件选择、局部变换保存/重开、
+保存后关闭/取消关闭、关卡 Scene 草稿在预览往返保留、Undo/Redo 和最大化布局。
+正常 Alt+F4 完成 teardown；丢弃分支和中键平移仅有模块覆盖，没有记为桌面通过。
+typed Expose 增加 Vector2/3/4、非 Flags 枚举、AssetId 和 ActorReference，
+继续要求显式 Instance Editable。新增点光/聚光/方向光组件，GT World 统一冻结灯值，
+父缩放不改变物理强度，组件方向光不取代 CSM 主光。
+增加停止播放后的手动 Gameplay 程序集重载：隔离候选验证、失败保留、分代卸载，
+及可执行文件相对 managed 输出、配置感知构建和私有 .NET 运行时打包目标。
+源码自动编译/监视、播放中状态迁移、通用 gizmo、组件实例覆写、运行时组件增删、
+碰撞层/约束和完整游戏导出器仍属未完成范围。前文未实现列表记录此前状态。
+2026-10-17 本轮收尾证据：118 项脚本、528 项编辑器回归均连续两遍通过
+（编辑器 5 项符号链接环境跳过）；独立目录新进程确认使用随包私有 CoreCLR，
+World/RenderGraph 事务测试退出码 0。灯光实窗已核对脉冲播放、Pause/Stop、
+手动程序集重载、组件强度编辑和 Expose 向量单分量编辑，正常 Alt+F4 teardown。
+枚举下拉、引用控件、关闭丢弃和中键平移仍只有模块覆盖；完整证据见 testing 契约。
+2026-10-17 蓝图视口交互增量：蓝图独立标签支持正式导入网格的组件包围盒拾取，
+选择同步到 Components/Details，并提供移动、旋转和缩放轴。移动沿父坐标轴，
+旋转编辑局部 YXZ Euler 分量，缩放沿局部轴；拖动只更新候选子树轮廓，
+释放提交一次完整组件编辑，正式模型沿用 350ms 稳定后的预览事务刷新。
+失焦、Esc、切页、模态和 revision/generation/视口布局变化取消手势。
+新增每文档 32 条且总计 16 MiB 的 Undo/Redo，保存保留历史，
+revert/reload 清空；失败或陈旧请求不破坏历史，完成反馈解除 UI 等待。
+三个子代理分别完成历史、几何和界面，主线程完成集成修复与验收：
+编辑器 567 项连续两遍均 562 通过、5 项符号链接环境跳过，
+脚本 120 项及生产集成 11 项连续两遍通过，既有视口 41 项通过。
+Vulkan 实窗核对包围盒拾取、三种变换、Undo/Redo 和最大化布局，
+逐步撤销恢复原始草稿后正常关闭，未保存验收修改。
+通用关卡 gizmo、三角形/深度拾取、非网格组件图示、组件实例覆写、
+运行时组件增删、碰撞层/约束、播放中状态迁移和完整游戏导出器仍未完成。
+
+2026-10-17 P1/P2 集成增量：以上历史清单中的七项已完成实现与集成验证：
+蓝图视口实时预览、Self 与辅助图示/吸附；按 BP 白名单控制的组件实例覆写；
+内置组件运行时 Add/Remove/Attach 与代际句柄；Jolt 层/掩码、compound/静态 mesh、
+Fixed/Hinge、扫球镜头避障；编辑器独立 Gameplay 编译/诊断/源码监视；
+同 World 异步 CPU 准备、分帧 GPU 上传、完成/取消/租约卸载；独立游戏导出器。
+完整当前格式和边界见蓝图契约，测试与实窗证据集中记录于 testing 契约。
+独立导出包已从工程目录之外、无有效系统 DOTNET_ROOT 的环境使用私有 CoreCLR，
+自动进入 Play、生成刚体并正常关闭。
+最终 C# ON 全目标和 C# OFF Release 构建通过；脚本 177 项连续两遍通过，
+编辑器 587 项连续两遍均 582 通过、5 项环境跳过。完整 CTest 1133 项仍只有
+历史控制页的 6 项失败，World 事务测试退出码 0。
+动态加载实窗已核对真实网格 Spawn、Destroy 后资源释放与同 World 保持；
+编译按钮成功重载。最终游戏包包含 1614 个文件及显式动态 BP 清单。
+Snap/组件权限的真实鼠标回归修复了 click 截断；用户 Esc 停止桌面自动操作后，
+没有继续实窗复验这些控件，模块与最终构建验证通过。详细证据与测量限制见 testing 契约。
+
+这些增量不代表 UE 全功能对齐：通用关卡 gizmo、三角形/深度拾取、资产继承、
+用户自定义 C# Component 生命周期、播放中的程序集状态迁移、物理 worker/GPU 毛发、
+安装器和平台签名继续作为独立后续议题，不计入本轮七项验收。
+
+2026-10-17 后续基础增量：自定义 C# `Component` 已接入独立类目录、
+`scriptComponents` 作者声明、BP 组件属性白名单、Scene 稀疏覆写及 Details，
+提供独立生命周期/故障隔离、运行时增删与代际句柄；逻辑组件不占空间父链，
+共享所属 Blueprint 的根 Transform。Expose 补齐单位 Quaternion 的 XYZW 值格式。
+原生 GT 统一调度 Tick、60 Hz FixedTick/Jolt 子步、LateTick，增加可控 Time Scale、
+非倍率时钟、八步追赶/丢步统计及暂停余量语义。
+Blueprint/组件生命周期与异常文本、回调耗时、服务/程序集/GC 值快照已接入，
+中央 Log/性能页消费冻结数据，具体 UI 和容量以契约为准。
+Playing/Paused 程序集重载支持 `[Migrate]` 显式值属性、运行时空间/逻辑状态恢复及
+OnReload 服务重建；保留原生物理与时钟，拒绝在途资源/物理请求、旧句柄和任意对象图迁移。
+编辑器编译候选在原 World generation 的 Playing/Paused 也经该事务尝试发布。
+以上说明实现状态；本增量最终构建、重复回归及性能测量结果仍由集成验收记录，
+不沿用上一轮测试数字作为本轮通过证据。此前的未完成列表保留为历史，
+其中自定义逻辑组件、显式迁移、固定回调和性能诊断已不属于当前缺项。
+通用关卡 gizmo、深度拾取、资产继承、动画/音频/存档/网络、
+多线程物理与毛发模拟、安装器/签名仍未包含在这次基础增量中。
+
+本次基础增量最终验收补记：C# ON 全目标 Debug、C# OFF Release main/script_tests
+构建通过；完整 CTest 1197 项中 1191 通过、6 项符号链接环境跳过、零失败，
+已修复历史控制页的六项失效测试。Release 千刚体整步平均 4.219402 ms；
+千空蓝图经过 Tick/JSON/World 同步/诊断的平均耗时 211.152667 ms，
+p95 222.5 ms。后续先定位桥接与同步成本，再决定批量数据通道和快照采样策略；
+该性能工作尚未完成。Log 本轮有模块覆盖，没有新增实窗验收。
+
+2026-10-17 自定义数据方案确认：普通游戏状态留在 C#，不因支持用户类型而逐帧复制到 C++。
+作者配置使用程序集加载时缓存的递归类型描述，覆盖无循环的自定义数据类/结构体、
+一维数组、List 和字符串键 Dictionary；编辑器、原生校验和显式重载迁移共用描述。
+内联数据按值合成，实例权限由根 Expose 属性授权，集合先整体覆写/Reset。
+本次先实现内联数据闭环；独立共享数据资产与存档接口属于后续增量，
+配置权限、迁移标记和存档策略不隐式绑定。高频引擎状态的增量批量通道独立推进，
+不能将当前 JSON 桥接或本次描述缓存写成二进制通道已经完成。
+
+内联数据增量验收补记：自定义 class/struct、数组/List/字符串键 Dictionary、
+四处递归编辑、对象稀疏覆写与集合整体覆写、实例权限及深值迁移已接通。
+新增武器配置逻辑组件作为生产示例，详细边界见当前 C# 蓝图契约。
+完整 CTest 1237 项中 1231 通过、6 项环境跳过；最终脚本 241 项及 UI 627 项
+均连续两遍通过（UI 每遍含 5 项环境跳过），ON/OFF 构建及原生 World 事务通过。
+身份索引与复用响应缓冲后，Release 千空蓝图同用例两遍均值为
+65.7463 / 57.4162 ms，历史均值为 211.152667 ms；测量仍包含 JSON、
+World 同步和诊断，不代表渲染帧率，也不代表高频增量通道已完成。
+独立数据资产、存档接口和高频二进制增量桥接仍是后续增量。
+
+The baseline below records the
+2026-09-03 starting point; it is historical, not a current source inventory.
 
 The repository already provides useful boundaries but not the runtime itself:
 

@@ -18,6 +18,7 @@
 #include "editor/command/editorCommand.h"
 #include "editor/runtime/materialInstanceEditorRuntime.h"
 #include "editor/service/materialInstanceDocumentService.h"
+#include "render/camera/cameraExposure.h"
 #include "support/fakeMaterialInstancePreviewAdapter.h"
 
 namespace
@@ -1558,4 +1559,155 @@ TEST(MaterialInstanceEditorProduction, StandardAssetJsonUsesSharedSaveListAndFee
     EXPECT_TRUE(runtime.GetSnapshot().modifiedDocuments.empty());
     ASSERT_EQ(runtime.GetSnapshot().saveFeedback.size(), 1u);
     EXPECT_TRUE(runtime.GetSnapshot().saveFeedback.front().succeeded);
+}
+
+TEST(MaterialInstanceEditorProduction, BlueprintDocumentsPublishIndependentFrozenDraftsAndSaveFeedback)
+{
+    ProductionFixture fixture;
+    const std::string path = "Blueprints/BP_test.json";
+    WriteJson(fixture.resourceRoot / path, {{"name", "Actor"}, {"type", "blueprint"},
+        {"class", "Gameplay.Test"}, {"properties", {{"Speed", 45}}}});
+    MaterialInstanceEditorRuntime runtime;
+    ASSERT_TRUE(runtime.Initialize({fixture.resourceRoot, fixture.projectRoot}).IsSuccess());
+    runtime.SetBlueprintClasses(Json::array({{{"name", "Gameplay.Test"}, {"properties", Json::array({
+        {{"name", "Speed"}, {"type", "number"}, {"value", 10}}
+    })}}}));
+    SubmitRuntimeCommand(runtime, 601, EditorCommandType::GetBlueprintDocument, MaterialInstanceAssetPathPayload{path});
+    ASSERT_EQ(runtime.GetSnapshot().blueprintDocuments.size(), 1u);
+    const auto frozen = runtime.GetSnapshot().blueprintDocuments;
+    EditorAssetFieldChange change;
+    change.field = "instanceEditable";
+    change.value = Json::array({"Speed"});
+    SubmitRuntimeCommand(runtime, 602, EditorCommandType::ModifyBlueprintDocument,
+        ModifyAssetDocumentPayload{path, {change}}, 1);
+    ASSERT_EQ(runtime.GetSnapshot().modifiedDocuments.size(), 1u);
+    EXPECT_EQ(runtime.GetSnapshot().modifiedDocuments[0].kind, EditorUi::EditorAssetKind::Blueprint);
+    EXPECT_FALSE(ReadJson(fixture.resourceRoot / path).contains("instanceEditable"));
+    EXPECT_FALSE(frozen[0].document.contains("instanceEditable"));
+    SubmitRuntimeCommand(runtime, 603, EditorCommandType::SaveBlueprintDocument, MaterialInstanceAssetPathPayload{path}, 2);
+    EXPECT_EQ(runtime.GetCommandResult(603)->status, EditorCommandStatus::Succeeded);
+    EXPECT_EQ(ReadJson(fixture.resourceRoot / path)["instanceEditable"], Json::array({"Speed"}));
+    EXPECT_TRUE(runtime.GetSnapshot().modifiedDocuments.empty());
+    ASSERT_EQ(runtime.GetSnapshot().saveFeedback.size(), 1u);
+    EXPECT_TRUE(runtime.GetSnapshot().saveFeedback[0].succeeded);
+    EXPECT_FALSE(runtime.GetSnapshot().activeDocument.has_value());
+}
+
+TEST(MaterialInstanceEditorProduction, BlueprintHistoryAfterSavePublishesNewRevisionAndKeepsDiskUnchanged)
+{
+    ProductionFixture fixture;
+    const std::string path = "Blueprints/BP_history.json";
+    WriteJson(fixture.resourceRoot / path, {{"name", "Original"}, {"type", "blueprint"},
+        {"class", "Gameplay.Test"}, {"properties", Json::object()}});
+    MaterialInstanceEditorRuntime runtime;
+    ASSERT_TRUE(runtime.Initialize({fixture.resourceRoot, fixture.projectRoot}).IsSuccess());
+    OpenMaterialInstanceAssetPayload open;
+    open.assetPath = kMaterialInstancePath;
+    SubmitRuntimeCommand(runtime, 701, EditorCommandType::OpenMaterialInstanceAsset, open);
+    SubmitRuntimeCommand(runtime, 702, EditorCommandType::GetBlueprintDocument, MaterialInstanceAssetPathPayload{path});
+    EditorAssetFieldChange change;
+    change.field = "name";
+    change.value = std::string("Saved");
+    SubmitRuntimeCommand(runtime, 703, EditorCommandType::ModifyBlueprintDocument,
+        ModifyAssetDocumentPayload{path, {change}}, 1);
+    SubmitRuntimeCommand(runtime, 704, EditorCommandType::SaveBlueprintDocument, MaterialInstanceAssetPathPayload{path}, 2);
+    ASSERT_EQ(runtime.GetSnapshot().blueprintDocuments.size(), 1u);
+    const auto saved = runtime.GetSnapshot().blueprintDocuments[0];
+    ASSERT_EQ(saved.documentRevision, 3u);
+    ASSERT_TRUE(saved.canUndo);
+    SubmitRuntimeCommand(runtime, 705, EditorCommandType::UndoBlueprintDocument, MaterialInstanceAssetPathPayload{path}, 3);
+    ASSERT_EQ(runtime.GetCommandResult(705)->status, EditorCommandStatus::Succeeded);
+    const auto undone = runtime.GetSnapshot().blueprintDocuments[0];
+    EXPECT_EQ(undone.documentRevision, 4u);
+    EXPECT_TRUE(undone.dirty);
+    EXPECT_TRUE(undone.canRedo);
+    EXPECT_EQ(undone.document["name"], "Original");
+    EXPECT_EQ(ReadJson(fixture.resourceRoot / path)["name"], "Saved");
+    EXPECT_EQ(saved.document["name"], "Saved");
+    ASSERT_EQ(runtime.GetSnapshot().modifiedDocuments.size(), 1u);
+    EXPECT_EQ(runtime.GetSnapshot().modifiedDocuments[0].revision, 4u);
+    EXPECT_EQ(RequireUiDocument(runtime).assetPath, kMaterialInstancePath);
+    SubmitRuntimeCommand(runtime, 706, EditorCommandType::RedoBlueprintDocument, MaterialInstanceAssetPathPayload{path}, 4);
+    EXPECT_EQ(runtime.GetCommandResult(706)->status, EditorCommandStatus::Succeeded);
+    EXPECT_FALSE(runtime.GetSnapshot().blueprintDocuments[0].dirty);
+    EXPECT_EQ(runtime.GetSnapshot().blueprintDocuments[0].documentRevision, 5u);
+    EXPECT_TRUE(runtime.GetSnapshot().modifiedDocuments.empty());
+    EXPECT_EQ(runtime.GetSnapshot().saveFeedback.size(), 1u);
+}
+
+TEST(MaterialInstanceEditorProduction, RejectedBlueprintEditsPublishCompletionWithoutChangingRevision)
+{
+    ProductionFixture fixture;
+    const std::string path = "Blueprints/BP_feedback.json";
+    WriteJson(fixture.resourceRoot / path, {{"name", "Original"}, {"type", "blueprint"},
+        {"class", "Gameplay.Test"}, {"properties", Json::object()}});
+    MaterialInstanceEditorRuntime runtime;
+    ASSERT_TRUE(runtime.Initialize({fixture.resourceRoot, fixture.projectRoot}).IsSuccess());
+    SubmitRuntimeCommand(runtime, 751, EditorCommandType::GetBlueprintDocument, MaterialInstanceAssetPathPayload{path});
+    EditorAssetFieldChange change;
+    change.field = "class";
+    change.value = std::string();
+    SubmitRuntimeCommand(runtime, 752, EditorCommandType::ModifyBlueprintDocument,
+        ModifyAssetDocumentPayload{path, {change}}, 1);
+    ASSERT_NE(runtime.GetCommandResult(752)->status, EditorCommandStatus::Succeeded);
+    ASSERT_EQ(runtime.GetSnapshot().blueprintCommandFeedback.size(), 1u);
+    const auto failed = runtime.GetSnapshot().blueprintCommandFeedback[0];
+    EXPECT_FALSE(failed.succeeded);
+    EXPECT_EQ(failed.assetPath, path);
+    EXPECT_EQ(runtime.GetSnapshot().blueprintDocuments[0].documentRevision, 1u);
+    change.field = "name";
+    change.value = std::string("Edited");
+    SubmitRuntimeCommand(runtime, 753, EditorCommandType::ModifyBlueprintDocument,
+        ModifyAssetDocumentPayload{path, {change}}, 1);
+    EXPECT_TRUE(runtime.GetSnapshot().blueprintCommandFeedback[0].succeeded);
+    EXPECT_GT(runtime.GetSnapshot().blueprintCommandFeedback[0].sequence, failed.sequence);
+    EXPECT_EQ(runtime.GetSnapshot().blueprintDocuments[0].documentRevision, 2u);
+    // 总线 admission 拒绝不会进入 executor，同样要发布终态以解除 UI 等待。
+    EditorCommandEnvelope stale;
+    stale.commandId = 754;
+    stale.type = EditorCommandType::UndoBlueprintDocument;
+    stale.source = EditorCommandSource::RuntimeTest;
+    stale.expectedDocumentRevision = 1;
+    stale.payload = MaterialInstanceAssetPathPayload{path};
+    runtime.Submit(stale);
+    runtime.Tick();
+    EXPECT_EQ(runtime.GetCommandResult(754)->errorCode, EditorErrorCode::StaleDocumentRevision);
+    EXPECT_FALSE(runtime.GetSnapshot().blueprintCommandFeedback[0].succeeded);
+    EXPECT_EQ(runtime.GetSnapshot().blueprintDocuments[0].documentRevision, 2u);
+}
+
+TEST(MaterialInstanceEditorProduction, ScriptBlueprintEditsAfterSavePublishCurrentRevisionToSaveBus)
+{
+    ProductionFixture fixture;
+    const std::string path = "scenes/SC_script_save.json";
+    Json actor{{"type", "blueprintInstance"}, {"id", "persistent-a"}, {"name", "Actor"},
+        {"class", "Gameplay.PlayerBlueprint"}, {"properties", {{"MoveSpeed", 500}}},
+        {"position", {0, 0, 0}}, {"rotation", {0, 0, 0}}, {"scale", {1, 1, 1}}};
+    Json camera{{"type", "camera"}, {"name", "Camera"}, {"position", {0, 0, 300}},
+        {"rotation", {0, 0, 0}}, {"scale", {1, 1, 1}}, {"fov", 60},
+        {"near_clip", 1}, {"far_clip", 10000},
+        {"exposure", DescribeCameraExposure(CameraExposure{})}};
+    WriteJson(fixture.resourceRoot / path, {{"name", "Script save"}, {"type", "scene"}, {"worldUnit", "cm"},
+        {"description", "Disposable script save integration fixture"},
+        {"objects", Json::array({actor, camera})}});
+    MaterialInstanceEditorRuntime runtime;
+    ASSERT_TRUE(runtime.Initialize({fixture.resourceRoot, fixture.projectRoot}).IsSuccess());
+    std::string error;
+    for (int speed : {450, 250})
+    {
+        actor["properties"]["MoveSpeed"] = speed;
+        ASSERT_TRUE(runtime.SceneDocuments()->StageScriptBlueprint(path, actor, false, error)) << error;
+        runtime.Tick();
+        ASSERT_EQ(runtime.GetSnapshot().modifiedDocuments.size(), 1u);
+        const auto revision = runtime.GetSnapshot().modifiedDocuments.front().revision;
+        const auto commandId = static_cast<EditorCommandId>(speed);
+        SubmitRuntimeCommand(runtime, commandId, EditorCommandType::SaveSceneDocument,
+            MaterialInstanceAssetPathPayload{path}, revision);
+        ASSERT_TRUE(runtime.GetCommandResult(commandId).has_value());
+        ASSERT_EQ(runtime.GetCommandResult(commandId)->status, EditorCommandStatus::Succeeded)
+            << runtime.GetCommandResult(commandId)->message;
+        EXPECT_TRUE(runtime.GetSnapshot().modifiedDocuments.empty());
+        EXPECT_EQ(ReadJson(fixture.resourceRoot / path)["objects"][0]["id"], "persistent-a");
+        EXPECT_EQ(ReadJson(fixture.resourceRoot / path)["objects"][0]["properties"]["MoveSpeed"], speed);
+    }
 }

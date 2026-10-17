@@ -11,11 +11,12 @@ class AssetCommandExecutor
 public:
     AssetCommandExecutor(const std::filesystem::path& root, SceneDocumentService& scenes)
         : scenes(scenes), meshes(root, EditorAssetDocumentKind::Mesh),
-          textures(root, EditorAssetDocumentKind::Texture) {}
+          textures(root, EditorAssetDocumentKind::Texture), blueprints(root, EditorAssetDocumentKind::Blueprint) {}
     EditorCommandResult Execute(const EditorCommandEnvelope& command);
     std::vector<EditorUi::EditorModifiedDocumentSnapshot> ModifiedDocuments() const;
+    AssetDocumentService& BlueprintDocuments() { return blueprints; }
 private:
     SceneDocumentService& scenes;
-    AssetDocumentService meshes, textures;
+    AssetDocumentService meshes, textures, blueprints;
 };
 } // namespace VL::Editor

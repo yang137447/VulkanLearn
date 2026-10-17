@@ -2,11 +2,14 @@
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 #include <utility>
 
 #include <RmlUi/Core/ElementDocument.h>
 #include <RmlUi/Core/Elements/ElementFormControl.h>
 #include <RmlUi/Core/Event.h>
+#include <RmlUi/Core/Core.h>
+#include <RmlUi/Core/SystemInterface.h>
 
 #include "editor/ui/editorTextMatch.h"
 #include "editor/ui/materialInstanceEditorView.h"
@@ -25,6 +28,17 @@ const char* const RequiredIds[] = {
     "browser-sources-toggle", "browser-grid", "browser-list", "browser-recursive",
     "browser-sort", "browser-size", "browser-sources-panel", "browser-type", "browser-refresh"
 };
+
+std::string BrowserIconSource(const Rml::ElementDocument& document, EditorAssetKind kind)
+{
+    const std::string icon = EditorAssetKindIcon(kind);
+    if (kind != EditorAssetKind::Blueprint) return icon;
+    // 拖动副本脱离原文档，不能再依赖文档目录解析图片；刷新缩略图时也保持同一绝对 URL。
+    // SourceURL 的 Windows 盘符使用 D|，交给 RmlUi 解析后再转文件路径。
+    Rml::String resolved;
+    Rml::GetSystemInterface()->JoinPath(resolved, document.GetSourceURL(), icon);
+    return std::filesystem::absolute(resolved).lexically_normal().generic_string();
+}
 
 std::string FoldCase(std::string text)
 {
@@ -79,13 +93,14 @@ const char* KindFilter(EditorAssetKind kind)
     case EditorAssetKind::Scene: return "scene";
     case EditorAssetKind::Texture: return "texture";
     case EditorAssetKind::Terrain: return "terrain";
+    case EditorAssetKind::Blueprint: return "blueprint";
     }
     return "";
 }
 
 bool ValidFilter(const std::string& value)
 {
-    for (const char* filter : {"all", "material", "mesh", "scene", "texture", "terrain"})
+    for (const char* filter : {"all", "material", "mesh", "scene", "texture", "terrain", "blueprint"})
         if (value == filter) return true;
     return false;
 }
@@ -449,7 +464,7 @@ std::string EditorContentBrowserController::EntriesMarkup(const Window& window) 
     for (size_t index = window.begin; index < window.end; ++index)
     {
         const auto& entry = *entries[index];
-        const char* icon = entry.folder ? "icons/folder-tile.png" : EditorAssetKindIcon(entry.kind);
+        const std::string icon = entry.folder ? "icons/folder-tile.png" : BrowserIconSource(*document, entry.kind);
         markup += "<button class=\"" + std::string(grid ? "asset-tile" : "asset-row");
         if (!entry.folder) markup += " asset-kind-" + std::string(KindFilter(entry.kind));
         markup += "\"" + Address("browser-item", entry.path) + " title=\"" + UiWidgets::Text(entry.path) +
@@ -614,6 +629,15 @@ std::vector<std::string> EditorContentBrowserController::VisibleThumbnailPaths()
     return paths;
 }
 
+std::optional<std::string> EditorContentBrowserController::BlueprintDragPath(const Rml::Element* element) const
+{
+    // 仅真实可见目录条目能发起拖放；克隆节点、伪造路径或滚动后旧节点不能成为源。
+    for (const auto& node : visibleNodes)
+        if (node.element == element && !node.entry->folder && node.entry->kind == EditorAssetKind::Blueprint)
+            return node.entry->path;
+    return std::nullopt;
+}
+
 void EditorContentBrowserController::SyncThumbnails(
     const std::shared_ptr<const EditorThumbnailSnapshot>& snapshot, bool force)
 {
@@ -631,7 +655,7 @@ void EditorContentBrowserController::SyncThumbnails(
         }
         auto* image = node.element->GetChild(0);
         const bool ready = thumbnail && (thumbnail->image || thumbnail->gpuImage);
-        const std::string source = ready ? thumbnail->source : EditorAssetKindIcon(entry.kind);
+        const std::string source = ready ? thumbnail->source : BrowserIconSource(*document, entry.kind);
         if (image->GetAttribute<std::string>("src", "") != source)
         {
             image->SetAttribute("src", source);

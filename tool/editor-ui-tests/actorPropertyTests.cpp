@@ -19,6 +19,38 @@ EditorActorPropertyEdit Edit(const std::string& identity, P property, uint32_t c
     return {7, identity, property, component, value};
 }
 
+TEST(EditorActorVisualization, BlueprintPreviewPublishesVisibleSectionBoundsAsFrozenValues)
+{
+    World world(7, "Maps/SC_model_preview/SC_model_preview.json");
+    world.SetScriptBlueprints(nlohmann::json::array({{
+        {"id", "~preview.test"}, {"name", "Preview"}, {"class", "Gameplay.Test"},
+        {"properties", nlohmann::json::object()}, {"position", {0, 0, 0}},
+        {"rotation", {0, 0, 0}}, {"scale", {1, 1, 1}},
+        {"components", nlohmann::json::array({{{"id", "body"}, {"type", "mesh"}}})}}}));
+    WorldMeshObject section;
+    section.sceneObjectIdentity = "__blueprint/~preview.test/body";
+    section.localBoundsMin = Eigen::Vector3f(-2, -3, -4);
+    section.localBoundsMax = Eigen::Vector3f(5, 6, 7);
+    section.model(0, 1) = 0.5f;
+    section.model(0, 3) = 30;
+    world.AddMeshObject("Preview::Visible", section);
+    section.visible = false;
+    world.AddMeshObject("Preview::Hidden", section);
+    const auto frozen = BuildEditorSceneActors(world);
+    const EditorSceneActorSnapshot* preview = nullptr;
+    for (const auto& actor : frozen)
+        if (actor.identity == "blueprintInstance|~preview.test") preview = &actor;
+    ASSERT_NE(preview, nullptr);
+    ASSERT_EQ(preview->scriptComponentBounds.size(), 1u);
+    const auto& bounds = preview->scriptComponentBounds[0];
+    EXPECT_EQ(bounds.componentId, "body");
+    EXPECT_EQ(bounds.minimum, Eigen::Vector3f(-2, -3, -4));
+    EXPECT_TRUE(bounds.worldFromLocal.isApprox(section.model));
+    section.model(0, 3) = 90;
+    world.AddMeshObject("Preview::Visible", section);
+    EXPECT_FLOAT_EQ(bounds.worldFromLocal(0, 3), 30);
+}
+
 TEST(EditorActorProperty, StaleWorldEditCannotTouchANewSameNamedLight)
 {
     World world(8, "scene.json");
@@ -286,5 +318,42 @@ TEST(EditorActorVisualization, ExternalObserverCanSeeTheSceneCameraFrustum)
     actor.type = EditorSceneActorType::Camera;
     const auto lines = BuildActorVisualLines(actor, view, 800, 400);
     EXPECT_EQ(lines.size(), 8u);
+}
+
+TEST(EditorActorVisualization, ScriptBoxOutlineUsesActorRotationScaleAndCentimeterExtents)
+{
+    EditorSceneCameraActor view;
+    view.position = {0, 0, 1000}; view.clipFar = 5000;
+    EditorSceneActorSnapshot actor;
+    actor.type = EditorSceneActorType::Script;
+    actor.rotation = {0, 30, 0}; actor.scale = {2, 2, 2};
+    actor.scriptPhysics = {{"shape", "box"}, {"halfExtents", {50, 100, 50}}};
+    const auto lines = BuildActorVisualLines(actor, view, 800, 400);
+    ASSERT_EQ(lines.size(), 12u);
+    for (const auto& line : lines)
+    {
+        EXPECT_TRUE(line.begin.allFinite());
+        EXPECT_TRUE(line.end.allFinite());
+        EXPECT_GE(line.begin.x(), 0); EXPECT_LE(line.end.x(), 800);
+    }
+}
+
+TEST(EditorActorVisualization, ScriptCapsuleOutlineHasOnlyVerticalStraightSeams)
+{
+    EditorSceneCameraActor view;
+    view.position = {0, 0, 1000}; view.clipFar = 5000;
+    EditorSceneActorSnapshot actor;
+    actor.type = EditorSceneActorType::Script;
+    actor.scriptPhysics = {{"shape", "capsule"}, {"radius", 30}, {"halfHeight", 60}};
+    const auto lines = BuildActorVisualLines(actor, view, 800, 400);
+    ASSERT_EQ(lines.size(), 100u);
+    for (const auto& line : lines)
+    {
+        ASSERT_TRUE(line.begin.allFinite());
+        ASSERT_TRUE(line.end.allFinite());
+        // 半球/圆环的小段不会越过整个直段；跨直段的线必须竖直。
+        if (std::abs(line.end.y() - line.begin.y()) > 20)
+            EXPECT_NEAR(line.begin.x(), line.end.x(), 1e-4f);
+    }
 }
 } // namespace

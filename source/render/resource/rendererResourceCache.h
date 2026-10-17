@@ -6,6 +6,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <set>
 
 class Material;
 class MaterialInstance;
@@ -32,6 +33,8 @@ public:
         std::unordered_map<std::string, std::shared_ptr<MaterialInstance>> materialInstances;
         std::unordered_map<std::string, std::shared_ptr<RendererObjectResourceEntry>> objectResources;
         std::unordered_map<std::string, std::shared_ptr<Texture>> textures;
+        // 动态资源身份随 package 传递；A 引入、B 复用的键在 B 最后释放时仍可回收。
+        std::set<std::string> dynamicMeshes, dynamicMaterials, dynamicInstances, dynamicTextures;
 
         bool Empty() const noexcept;
     };
@@ -69,6 +72,13 @@ public:
     // 和对象 descriptor；旧 package 仍由 active owner 持有直到提交完成。
     RendererResourceCache BeginActiveWorldCandidate(
         uint64_t ownerGeneration) const;
+    // 纯增量资产只新增资源键，保留已有对象 descriptor；不得替换共享的活动 Material。
+    RendererResourceCache BeginWorldExtensionCandidate(uint64_t ownerGeneration) const;
+    RendererResourceCache RebaseWorldExtensionCandidate(RendererResourceCache extension,
+        ImmutableWorldLocalResourceRefs baseline) const;
+    void TrackDynamicAdditions(ImmutableWorldLocalResourceRefs baseline);
+    void PruneDynamicResources(const std::set<std::string>& meshes,
+        const std::set<std::string>& materials, const std::set<std::string>& instances);
 
     // Keeps the currently active package alive without exposing mutable maps.
     ImmutableWorldLocalResourceRefs

@@ -82,6 +82,19 @@ bool ApplyEditorActorProperty(World& world, const EditorActorPropertyEdit& edit,
     if (!EditorUi::ParseSceneActorIdentity(edit.identity, identity))
         return Reject(error, "Unknown actor identity.");
 
+    if (identity.type == EditorSceneActorType::Script)
+    {
+        const char* field = edit.property == P::Position ? "position" :
+            edit.property == P::Rotation ? "rotation" : edit.property == P::Scale ? "scale" : nullptr;
+        if (!field || (edit.property == P::Scale && std::abs(edit.value) < 1e-6f))
+            return Reject(error, "Actor editing requires Transform with non-zero scale.");
+        if (edit.property == P::Scale)
+            for (const auto& actor : world.GetScriptBlueprints())
+                if (actor.at("id") == identity.name && actor.contains("physics") &&
+                    edit.value != actor.at("scale")[edit.component].get<float>())
+                    return Reject(error, "Rigid body scale must stay uniform; edit its authored vec3 together.");
+        return world.SetScriptBlueprintTransform(identity.name, field, edit.component, edit.value);
+    }
     if (identity.type == EditorSceneActorType::Mesh)
     {
         if (edit.property != P::Position && edit.property != P::Rotation && edit.property != P::Scale)

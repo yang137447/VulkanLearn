@@ -10,7 +10,7 @@
 namespace VL::EditorUi
 {
 
-enum class EditorAssetKind : uint8_t { MaterialInstance, Mesh, Scene, Texture, Terrain };
+enum class EditorAssetKind : uint8_t { MaterialInstance, Mesh, Scene, Texture, Terrain, Blueprint };
 enum class EditorJsonValueKind : uint8_t { Object, Array, String, Number, Boolean, Null };
 
 // 资源 worker 发布的不可变 JSON 元数据；UI 只借用共享快照，不加载引用的 data 或 GPU 资源。

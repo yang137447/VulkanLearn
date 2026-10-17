@@ -37,6 +37,12 @@ MaterialInstanceResolveResult ResolveSceneMaterial(
     std::string_view path, const nlohmann::json& source)
 {
     const std::string key = MaterialAssetUtils::NormalizeAssetPath(path);
+    if (context.preparedMaterialSources)
+    {
+        const auto definition = CommonFunction::Path(source.at("material").get<std::string>());
+        return MaterialInstanceResolver::ResolveWithDefinition(
+            std::string(path), source, context.preparedMaterialSources->at(definition));
+    }
     if (context.useFrozenMaterials && context.offlineWorldAssets &&
         context.offlineWorldAssets->effectiveMaterialInstances.count(key))
     {
@@ -57,6 +63,8 @@ nlohmann::json LoadMaterialInstanceJson(
 {
     const std::string normalizedPath =
         MaterialAssetUtils::NormalizeAssetPath(materialInstancePath);
+    if (loadContext.preparedMaterialSources)
+        return loadContext.preparedMaterialSources->at(CommonFunction::Path(std::string(materialInstancePath)));
     if (loadContext.materialInstanceOverrideJson.has_value() &&
         loadContext.materialInstanceOverridePath == normalizedPath)
     {

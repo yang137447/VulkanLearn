@@ -51,6 +51,7 @@ struct EditorThumbnailPreparationResult
     std::vector<EditorThumbnailPreparedShader> shaders;
     std::vector<EditorThumbnailPreparedTexture> textures;
     std::map<std::filesystem::path, ContentDigest> materialDigests;
+    std::map<std::filesystem::path, nlohmann::json> materialSources;
 };
 
 EditorThumbnailPreparationResult PrepareEditorThumbnailAsset(

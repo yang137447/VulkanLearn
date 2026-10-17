@@ -5,7 +5,10 @@
     </head>
     <body data-model="game_ui">
         <div id="ui-root">
-            <div id="hud">{{world_text}}</div>
+            <div id="hud">
+                <div>{{world_text}}</div>
+                <div id="gameplay-hud" data-if="gameplay_text != ''">{{gameplay_text}}</div>
+            </div>
         </div>
     </body>
 </rml>

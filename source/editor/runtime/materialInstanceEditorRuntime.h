@@ -60,6 +60,14 @@ public:
     // 给 UiSubsystem 的全局快捷键入口使用；实际保存仍经由中央 CommandBus。
     bool SubmitSaveActiveDocument();
     SceneDocumentService* SceneDocuments() noexcept { return sceneDocuments.get(); }
+    void SetBlueprintClasses(const nlohmann::json& classes)
+    {
+        if (assetDocuments) assetDocuments->BlueprintDocuments().SetBlueprintClasses(classes);
+    }
+    void SetBlueprintComponentClasses(const nlohmann::json& classes)
+    {
+        if (assetDocuments) assetDocuments->BlueprintDocuments().SetBlueprintComponentClasses(classes);
+    }
 
     const EditorUi::MaterialInstanceEditorSnapshot& GetSnapshot() const noexcept
     {
@@ -119,6 +127,7 @@ private:
     void ApplyRuntimeOverlay();
     void RefreshModifiedDocuments();
     void RecordSaveFeedback(const EditorCommandEnvelope& command, const EditorCommandResult& result);
+    void RecordBlueprintCommandFeedback(const EditorCommandEnvelope& command, const EditorCommandResult& result);
     void UpdateBusRevision(const MaterialEditorServiceResult& result);
     void SetStatus(std::string message);
 
@@ -158,6 +167,8 @@ private:
     uint64_t worldGeneration = 0;
     uint64_t saveSequence = 0;
     std::vector<EditorUi::EditorSaveFeedback> saveFeedback;
+    uint64_t blueprintCommandSequence = 0;
+    std::vector<EditorUi::EditorBlueprintCommandFeedback> blueprintCommandFeedback;
     bool initialized = false;
 };
 

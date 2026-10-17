@@ -12,6 +12,7 @@ const char* EditorAssetKindName(EditorAssetKind kind)
     case EditorAssetKind::Scene: return "Scene";
     case EditorAssetKind::Texture: return "Texture";
     case EditorAssetKind::Terrain: return "Terrain";
+    case EditorAssetKind::Blueprint: return "Blueprint";
     }
     return "Unknown";
 }
@@ -25,6 +26,7 @@ const char* EditorAssetKindIcon(EditorAssetKind kind)
     case EditorAssetKind::Scene: return "icons/scene.png";
     case EditorAssetKind::Texture: return "icons/texture.png";
     case EditorAssetKind::Terrain: return "icons/terrain.png";
+    case EditorAssetKind::Blueprint: return "icons/blueprint.png";
     }
     return "";
 }

@@ -15,6 +15,8 @@
 #include "editor/ui/editorJsonInspectorController.h"
 #include "editor/ui/editorResourceEditorController.h"
 #include "editor/ui/editorSceneActorTree.h"
+#include "editor/ui/editorLogPanel.h"
+#include "editor/ui/blueprintViewportInteraction.h"
 #include "ui/uiAction.h"
 #include "ui/uiRenderSnapshot.h"
 #include "ui/widgets/widgetDocument.h"
@@ -76,10 +78,22 @@ public:
     bool IsResourceEditorVisible() const;
     bool IsAssetEditorVisible() const { return IsResourceEditorVisible() || IsMaterialEditorVisible(); }
     bool IsWorkspaceDragging() const { return docking.IsDragging(); }
+    bool CancelBlueprintAssetDrag()
+    {
+        const bool active = !actorDragPath.empty() || blueprintGizmoDragging;
+        actorDragPath.clear();
+        CancelBlueprintViewportDrag();
+        return active;
+    }
     size_t WorkspacePropertyWriteCount() const { return docking.PropertyWriteCount(); }
     size_t PanelPropertyWriteCount() const { return widgetDocument.PropertyWriteCount(); }
-    void CancelWorkspaceDrag() { docking.CancelDrag(); previewDragButton = textureDragButton = -1; }
-    void CancelModelPreviewDrag() { previewDragButton = textureDragButton = -1; }
+    void CancelWorkspaceDrag() { docking.CancelDrag(); CancelModelPreviewDrag(); }
+    void CancelModelPreviewDrag()
+    {
+        previewDragButton = textureDragButton = -1;
+        actorDragPath.clear();
+        CancelBlueprintViewportDrag();
+    }
     bool HasModal() const { return !pendingClosePath.empty() || aboutVisible || saveDialogVisible; }
     void ProcessEvent(Rml::Event& event) override;
 
@@ -116,6 +130,10 @@ private:
     void RefreshSaveDialog();
     void ConfirmSave();
     void RefreshActorValues(const EditorSceneActorSnapshot* actor);
+    void RefreshScriptCollisionControls(size_t index, const nlohmann::json& node,
+        const std::string& prefix, bool disabled);
+    void RefreshScriptConstraintControls(const nlohmann::json& physics,
+        const std::string& prefix, bool disabled);
     std::string ActorSectionMarkup(const EditorSceneActorSnapshot& actor);
     std::string PrimaryDirectionalLightControls(const EditorSceneActorSnapshot& actor) const;
     const std::vector<EditorSceneActorSnapshot>& OutlinerActors() const;
@@ -125,6 +143,76 @@ private:
     void RefreshMenus();
     void RefreshLevelMenu();
     void RefreshViewportToolbar();
+    void RefreshScriptControls();
+    void RequestScriptEdit(UiActionType type, nlohmann::json payload = nlohmann::json::object());
+    const EditorAssetDocumentResultPayload* BlueprintDocument(const std::string& path) const;
+    void RefreshBlueprintAssetEditor();
+    void RefreshBlueprintPreview();
+    void RefreshBlueprintViewport();
+    bool ProcessBlueprintViewportInput(Rml::Event& event);
+    void CancelBlueprintViewportDrag(bool restorePreview = true);
+    void PublishBlueprintViewportPreview(bool reset = false);
+    const EditorSceneActorSnapshot* BlueprintPreviewActor() const;
+    const EditorSceneCameraActor* BlueprintPreviewCamera() const;
+    bool BlueprintViewportEditable() const;
+    bool RequestBlueprintHistory(bool redo);
+    void RefreshBlueprintHistoryControls();
+    bool blueprintCommandAwaitingSnapshot = false;
+    uint64_t blueprintCommandRevision = 0;
+    std::string blueprintCommandPath;
+    uint64_t blueprintCommandFeedbackSequence = 0;
+    std::string blueprintViewportTool = "select";
+    BlueprintViewportGizmo blueprintViewportGizmo;
+    BlueprintViewportGizmo blueprintDragGizmo;
+    bool blueprintGizmoDragging = false;
+    size_t blueprintGizmoAxis = 0;
+    Eigen::Vector2f blueprintGizmoStart = Eigen::Vector2f::Zero();
+    Eigen::Vector2f blueprintGizmoOffset = Eigen::Vector2f::Zero();
+    uint64_t blueprintGizmoGeneration = 0;
+    uint64_t blueprintGizmoRevision = 0;
+    std::string blueprintGizmoPath;
+    std::string blueprintGizmoComponent;
+    nlohmann::json blueprintGizmoDraft = nullptr;
+    std::vector<EditorScriptComponentBounds> blueprintGizmoOriginalBounds;
+    bool blueprintSnapEnabled = false;
+    float blueprintMoveSnap = 10;
+    float blueprintRotateSnap = 15;
+    float blueprintScaleSnap = 0.1f;
+    void RequestBlueprintPreview();
+    uint64_t CurrentBlueprintPreviewGeneration() const;
+    uint64_t requestedBlueprintPreviewRevision = 0;
+    std::string blueprintPreviewVisualSignature;
+    double blueprintPreviewChangeTime = 0;
+    bool blueprintPreviewPending = false;
+    void HandleBlueprintAssetEvent(Rml::Element& element, const std::string& action, bool click);
+    std::string BlueprintLogicTree(const nlohmann::json&) const;
+    std::string BlueprintLogicDetails(const nlohmann::json&) const;
+    void RefreshBlueprintLogicComponents(const nlohmann::json&, bool);
+    bool HandleBlueprintLogicEvent(Rml::Element&, const std::string&, bool, nlohmann::json&);
+    std::string SceneLogicStructure(const EditorSceneActorSnapshot&) const;
+    std::string SceneLogicComponentsMarkup(const EditorSceneActorSnapshot&) const;
+    void RefreshSceneLogicComponents(const EditorSceneActorSnapshot&);
+    bool HandleSceneLogicEvent(Rml::Element&, const std::string&, bool);
+    bool HandleSceneCompositePropertyEvent(Rml::Element&, const std::string&, bool);
+    void QueueBlueprintAssetDraft(nlohmann::json candidate);
+    void FlushBlueprintAssetEdits();
+    void SubmitBlueprintAssetCommand(EditorCommandType type, const std::string& path);
+    std::string blueprintAssetIdentity;
+    std::string blueprintAssetSelectionPath;
+    std::string blueprintAssetSelectedComponent;
+    std::string blueprintAssetSelectedLogicComponent;
+    std::string pendingBlueprintPath;
+    uint64_t pendingBlueprintRevision = 0;
+    nlohmann::json pendingBlueprintDraft = nullptr;
+    EditorAssetKind pendingCloseKind = EditorAssetKind::MaterialInstance;
+    bool discardBlueprintThenClose = false;
+    bool discardBlueprintCloseSubmitted = false;
+    bool scriptPlacementVisible = false;
+    bool scriptPlacementCreateSource = false;
+    bool ProcessBlueprintAssetDrag(Rml::Event& event);
+    std::string actorDragPath;
+    std::unordered_set<std::string> scriptEditRequests;
+    uint64_t actorDragGeneration = 0;
     void RefreshViewportAxisIndicator();
     void RefreshOutlinerVisuals();
     void RefreshActorVisualization();
@@ -187,6 +275,7 @@ private:
     std::string levelWorldPath;
     uint64_t requestedPreviewGeneration = 0;
     bool requestedPreviewMaterial = false;
+    bool requestedPreviewBlueprint = false;
     uint64_t appliedMaterialPreviewGeneration = 0;
 
     IEditorCommandSink* commandSink = nullptr;
@@ -205,6 +294,7 @@ private:
     EditorJsonInspectorController jsonInspector;
     EditorJsonInspectorController resourceJsonInspector;
     EditorResourceEditorController resourceEditor;
+    EditorLogPanel logPanel;
     bool viewingJson = false;
     bool resourceEditorVisible = false;
     std::string requestedJsonPath;

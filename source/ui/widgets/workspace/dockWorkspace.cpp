@@ -94,7 +94,7 @@ const std::vector<std::string>& DockWorkspace::Panels()
     // 资产编辑器（"resource" 与 "resource:<hash>"）**不在常驻面板集合里**：
     // 它按需创建 —— 没有打开资产时不该占一个标签位。UE 同样如此。
     static const std::vector<std::string> panels{
-        "viewport", "outliner", "details", "content", "renderer"};
+        "viewport", "outliner", "details", "content", "renderer", "log"};
     return panels;
 }
 
@@ -145,7 +145,7 @@ void DockWorkspace::Reset()
     const uint32_t viewport = AddStack({"viewport"});
     const uint32_t outliner = AddStack({"outliner"});
     const uint32_t details = AddStack({"details"});
-    const uint32_t content = AddStack({"content", "renderer"});
+    const uint32_t content = AddStack({"content", "renderer", "log"});
     const uint32_t left = AddSplit(viewport, content, DockAxis::Vertical, 0.62f);
     const uint32_t right = AddSplit(outliner, details, DockAxis::Vertical, 0.32f);
     state.root = AddSplit(left, right, DockAxis::Horizontal, 0.69f);

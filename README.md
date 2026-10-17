@@ -69,6 +69,65 @@ cmake --build build -j
 
 编译成功后，可执行文件 `main.exe` 将生成在 `build/bin` 目录下。
 
+### C# 蓝图 游戏逻辑
+
+Windows x64 安装 .NET 8 SDK 后开启：
+
+```powershell
+cmake -S . -B build -G "MinGW Makefiles" -DVULKANLEARN_ENABLE_CSHARP_BLUEPRINTS=ON
+cmake --build build -j8
+.\build\bin\main.exe --dev-ui
+```
+
+未进入 PATH 的 SDK 可通过 `-DVULKANLEARN_DOTNET_EXECUTABLE=D:/path/to/dotnet.exe`
+指定。功能默认关闭，不影响无 SDK 的 C++ 构建。
+引擎的 `script/VulkanLearn.Runtime/` 提供核心 API；用户的 `*.blueprint.cs` 与蓝图配置资产
+放在资源根的 `Common/Blueprints/` 或 `Maps/SC_*/Blueprints/`。
+构建自动收集 Common/Maps 中的 `.cs`，产物在 `build/bin/managed`；
+供 IDE 打开的项目生成在资源根 `Generated/Runtime/CSharp/Gameplay.csproj`。
+蓝图资产使用 `Blueprints/BP_*.json`，场景类型为 `blueprintInstance`；旧 Actor 格式不兼容。
+Outliner 底部加号选择类、名称和可选网格路径，放置到当前场景；
+切换到 New Blueprint 可填写新类名和资源路径，同目录创建 C# 源码与 BP 配置并自动编译。
+Details 编辑 TRS 和 `[Expose]` 的标量、向量、枚举、稳定引用及内联自定义数据/集合，
+Save Content 确认保存。
+只有明确开放 Instance Editable 的属性允许场景覆写。
+顶部图标控制 Play/Pause/Stop，Stop 恢复作者变换；修改 Gameplay 后重新编译，
+可使用工具栏 Compile C# 或启用 Auto Compile C#，输出区显示文件/行/列诊断。
+成功后通过同一关卡的程序集事务重载；播放/暂停期间按显式 `[Migrate]` 状态迁移，
+失败保留旧程序集与配置。
+完整构建后也可在停止播放的关卡页点击 Reload C# assembly；桥接/API 修改需要重启。
+选中实例后可在 Details 的 New Asset 创建 `Blueprints/BP_*.json`，再从 Content Browser
+拖入关卡视口生成新实例，落点为观察射线与 `y=0` 地面的交点。
+实例只保存 `blueprintPath`、独立 TRS 和显式属性/组件字段覆写；
+BP 的 `componentInstanceEditable` 按稳定组件 ID 开放字段，Scene 用稀疏 `componentOverrides` 保存。
+未开放的字段只读；黄色边框表示覆写，回转箭头删除覆写并恢复继承。
+示例场景为资源根下 `Maps/SC_actor_authoring/SC_actor_authoring.json`。
+另有 `Maps/SC_actor_gameplay/SC_actor_gameplay.json` 展示组件父子树、Spawn 和 Jolt 刚体。
+双击 BP 打开左侧组件树、中央 3D 预览、右侧 Details 的独立标签。
+支持 scene/mesh/camera/点光/聚光/方向光组件局部 TRS、预加载 BP 的运行时生成/销毁、box/sphere/capsule 碰撞、
+Compound/静态三角网格、碰撞过滤、Fixed/Hinge 约束、接触/Trigger 事件、射线/扫球查询和胶囊角色控制器；
+输入映射、计时器和蓝图消息由 C# API 提供。运行时可添加/删除/挂接组件，
+网格及材质组合需已由 World 或 BP 模板准备；`Assets.LoadBlueprintAsync` 成功后可 Spawn 动态 BP，
+请求和租约支持取消/释放，Stop 清理播放期间的结构修改。
+Editing 时 BP JSON 内容变化自动走 World 事务重载，播放时延后至 Stop。
+构建配置决定托管 Debug/Release；`cmake --build build --target vl_script_package`
+把私有 .NET 8 运行时放入 `build/bin/managed/dotnet`，随程序及 managed 目录搬移。
+完整游戏包可直接导出到一个尚不存在的目录：
+
+```powershell
+cmake --build build --target main vl_export_game -j8
+.\build\bin\vl_export_game.exe --project-root . --initial-scene Maps/SC_actor_gameplay/SC_actor_gameplay.json --output artifacts/game-export
+```
+
+导出器递归收集场景资产、shader、UI、原生 DLL、Gameplay 与私有 .NET 8，
+写入 `game-export-manifest.json`，关闭编辑器并自动 Play；导出后的 `main.exe` 可从任意工作目录启动。
+运行时拼接出的额外 BP/资产路径需用 `--dynamic-assets assets.json` 显式列入，
+该文件内容是资源根相对路径的 JSON 字符串数组；不解析任意 C# 字符串。
+目标机器仍需 Windows x64 和兼容的 Vulkan 驱动，无需安装 .NET SDK。
+不含资产继承；构建开启时获取锁定的 Jolt 5.6.0 CPU 依赖。
+物理同步执行在 GT，不包含 GPU 毛发模拟。
+格式、API 和边界见 [C# 蓝图 契约](documents/contracts/csharp-blueprint-runtime.md)。
+
 ### VS Code 启动入口
 
 Run and Debug 下拉菜单提供四个入口。启动前会依次执行对应的
@@ -137,9 +196,10 @@ JSON 资产浏览器、属性面板与离线控制。布局采用顶部命令栏
 右下 Details、底部 Content Browser / Renderer 标签页，中央/左侧透出 Vulkan 场景。
 当前材质工作区支持自由停靠、标签合并、可拖分隔条、窗口内浮动及布局保存/重置；
 Asset Editor 是正式 DockPanel，默认与 Viewport 合并为中央标签组，也可拖到其他区域或浮动，
-并通过 renderer-owned 离屏纹理显示独立 Viewport；尚不支持原生多窗口、场景增删或 Undo/Redo。
+并通过 renderer-owned 离屏纹理显示独立 Viewport；C# 蓝图 提供受限新增入口，
+尚不支持原生多窗口、通用场景对象增删或跨资产通用 Undo。
 Content Browser 使用目录树、路径导航、搜索、类型筛选和资产网格/列表，
-索引 MI、Mesh、Scene、Texture、Terrain JSON。单击选中；双击 MI 在关卡旁打开独立中央标签，
+索引 MI、Mesh、Scene、Texture、Terrain、Blueprint JSON。单击选中；双击 MI 在关卡旁打开独立中央标签，
 参数编辑、保存和预览命令均在中央材质页，右侧 Details 保留场景对象信息；
 材质页左侧显示独立预览球，支持拖动环绕、中键平移、滚轮缩放和重新取景；
 双击 Scene 会复用现有 World/RenderGraph 事务切换关卡，并同步打开只读 JSON inspector；

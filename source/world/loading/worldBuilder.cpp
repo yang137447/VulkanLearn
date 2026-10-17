@@ -304,6 +304,7 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
             object.sceneScale = meshObjectPlan.sceneScale;
             object.localBoundsMin = meshObjectPlan.localBoundsMin;
             object.localBoundsMax = meshObjectPlan.localBoundsMax;
+            object.collisionTriangles = meshObjectPlan.collisionTriangles;
             object.meshKey = meshObjectPlan.meshKey;
             object.materialKey = meshObjectPlan.materialKey;
             object.materialInstanceKey = meshObjectPlan.materialInstanceKey;

@@ -30,8 +30,30 @@ public:
     // 标准修改以完整草稿参与下一次 World 事务；外部冲突时拒绝使用旧基线。
     nlohmann::json DraftForWorldLoad(const std::string& path, std::string& error);
     void NotifyWorldLoaded(const std::string& path);
+    bool StageScriptBlueprint(const std::string& path, const nlohmann::json& actor,
+        bool create, std::string& error);
+    bool RemoveScriptBlueprint(const std::string& path, const std::string& identity, std::string& error);
+    bool CanUndo(const std::string& path, bool redo = false) const;
+    bool Undo(const std::string& path, bool redo, std::string& error);
+    nlohmann::json ScriptBlueprintDraft(const std::string& path, const std::string& identity,
+        std::string& error);
+    nlohmann::json ResolveBlueprint(const nlohmann::json& actor, const std::string& scenePath) const;
+    nlohmann::json BlueprintAssetDefaults(const std::string& path, const std::string& scenePath) const;
+    bool CreateScriptBlueprintAsset(const std::string& path, const nlohmann::json& actor,
+        std::string& error);
+    // 新源码与 BP 在同一内容目录发布；不依赖已编译类，也不改变当前 Scene。
+    bool CreateScriptBlueprintSource(const std::string& path, const std::string& className,
+        const std::string& name, const nlohmann::json& registeredTypes, std::string& error);
 
 private:
+    // 历史只拥有作者 JSON；外部/API 修改使当前值不匹配时失效，不回放过时 World 指针。
+    struct History
+    {
+        nlohmann::json current;
+        std::vector<nlohmann::json> undo, redo;
+    };
+    std::map<std::string, History> histories;
+    void PublishSceneDraft(const std::string& key, Document& document, nlohmann::json candidate);
     std::string Normalize(const std::string& path) const;
     std::filesystem::path Resolve(const std::string& path) const;
     static nlohmann::json* FindActor(nlohmann::json& json, const std::string& identity);

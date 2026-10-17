@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../../script/VulkanLearn.Runtime/VulkanLearn.Runtime.csproj"/>
+    <Compile Condition="'$(VulkanLearnSourceItems)' == ''"
+             Include="$(VulkanLearnResourceRoot)/Common/**/*.cs;$(VulkanLearnResourceRoot)/Maps/**/*.cs"
+             Exclude="**/bin/**;**/obj/**;**/Generated/**;**/.git/**"
+             Link="Gameplay/%(RecursiveDir)%(Filename)%(Extension)"/>
+  </ItemGroup>
+  <Import Project="$(VulkanLearnSourceItems)" Condition="'$(VulkanLearnSourceItems)' != ''" />
+</Project>

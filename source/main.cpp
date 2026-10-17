@@ -5,9 +5,36 @@
 #include "platform/platformApplication.h"
 
 #include <iostream>
+#include <filesystem>
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
+
+namespace
+{
+void PrepareExportedGameDirectory()
+{
+#ifdef _WIN32
+    wchar_t executable[32768];
+    const auto size = GetModuleFileNameW(nullptr, executable, 32768);
+    if (!size || size >= 32768) throw std::runtime_error("Cannot locate game executable");
+    const auto root = std::filesystem::path(std::wstring(executable, size)).parent_path();
+    // 导出包自带清单才采用可执行文件目录；开发启动仍由原有工作目录决定项目根。
+    if (std::filesystem::is_regular_file(root / "game-export-manifest.json"))
+        std::filesystem::current_path(root);
+#endif
+}
+}
 
 int main(int argc, char **argv)
 {
+    try { PrepareExportedGameDirectory(); }
+    catch (const std::exception& error)
+    {
+        std::cerr << "Game deployment root failed: " << error.what() << std::endl;
+        return 1;
+    }
     const VL::LaunchOptions launchOptions = VL::ParseLaunchOptions(argc, argv);
     if (launchOptions.showHelp)
     {

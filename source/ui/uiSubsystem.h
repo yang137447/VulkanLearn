@@ -148,6 +148,7 @@ public:
     bool RequestMaterialSelection(
         const Editor::Selection::MaterialInstanceSelection& selection) override;
     bool RequestActorSelection(const std::string& actorIdentity) override;
+    bool CancelBlueprintAssetDrag();
     void RequestRuntimeAction(UiAction action) override;
     void RequestOpenJsonAsset(const std::string& assetPath) override;
     void RequestRefreshAssetCatalog() override;
@@ -183,6 +184,7 @@ private:
     struct BindingData
     {
         Rml::String worldText;
+        Rml::String gameplayText;
         bool sceneLoading = false;
         std::vector<UiSceneOption> sceneOptions;
     };

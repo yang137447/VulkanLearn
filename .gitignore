@@ -26,6 +26,12 @@ __pycache__/
 # 生成命令见 documents/plan/rendering/shading-model-alignment-plan.md §1.4.1。
 /tmp/pdftext/
 /tmp/sheen-paper.txt
+/script/**/bin/
+/script/**/obj/
+/tool/script-tests/managed/bin/
+/tool/script-tests/managed/obj/
+/tool/script-tests/reload/bin/
+/tool/script-tests/reload/obj/
 /extern/FreeType/freetype/
 /extern/RmlUi/RmlUi/
 # 架构图的证据收据：HTML 与 IR 入库，大体积中间收据按需重新生成

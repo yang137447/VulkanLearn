@@ -16,9 +16,11 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 find_package(Threads REQUIRED)
 
 add_subdirectory(extern)
+add_subdirectory(script)
 add_subdirectory(source/render/offline/core)
 add_subdirectory(source)
 add_subdirectory(tool/asset-edit)
+add_subdirectory(tool/game-export)
 
 if(VULKANLEARN_BUILD_TESTS)
     enable_testing()
@@ -59,6 +61,8 @@ if(VULKANLEARN_BUILD_TESTS)
     add_subdirectory(tool/renderer-backend-tests)
     add_subdirectory(tool/ui-control-tests)
     add_subdirectory(tool/controller-tests)
+    add_subdirectory(tool/script-tests)
+    add_subdirectory(tool/game-export-tests)
 endif()
 
 option(VULKANLEARN_BUILD_SPEEDTREE_WIND_VALIDATION
