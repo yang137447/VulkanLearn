@@ -4,6 +4,10 @@
 /build_debug_with_profile/
 /build_release/
 /build-*/
+# C# 编译器候选目录、MSBuild 临时输出与 ImGui 布局状态
+/candidate-*/
+/vl-build-*/
+/imgui.ini
 /.vscode/*
 !/.vscode/launch.json
 !/.vscode/tasks.json
@@ -12,6 +16,7 @@
 /artifacts
 /extern/Assimp/Assimp/
 /extern/SDL3/SDL3/
+/extern/ImGui/
 /extern/nvtx/nvtx/
 /extern/tracy/tracy/
 /shader/spv

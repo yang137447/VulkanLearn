@@ -534,6 +534,22 @@ void RendererFrameResources::UpdateObjectUniformBuffer(
     UBOModel ubo{};
     ubo.model = drawPacket.model;
     ubo.previousModel = drawPacket.previousModel;
+    if (drawPacket.skinPose)
+    {
+        const auto& current = *drawPacket.skinPose;
+        const auto& previous = objectResources.submittedSkin.Previous(current);
+        if (current.matrices.size() != objectResources.skinJointCount ||
+            previous.matrices.size() != current.matrices.size())
+            throw std::runtime_error("Skin palette size changed without resource preparation");
+        ubo.previousModel = objectResources.submittedSkin.PreviousModel(current, drawPacket.model);
+        auto* bytes = static_cast<unsigned char*>(
+            objectResources.skinPalette.buffersMapped.at(swapChainImageIndex));
+        for (size_t i = 0; i < current.matrices.size(); ++i)
+        {
+            std::memcpy(bytes + i * 128, current.matrices[i].data(), 64);
+            std::memcpy(bytes + i * 128 + 64, previous.matrices[i].data(), 64);
+        }
+    }
     if (speedTreeWindState != nullptr)
     {
         ubo.speedTreeWind = *speedTreeWindState;

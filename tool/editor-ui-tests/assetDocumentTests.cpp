@@ -5,6 +5,7 @@
 #include "editor/command/assetJsonCommandHost.h"
 #include "editor/command/editorCommandJsonCodec.h"
 #include "render/camera/cameraExposure.h"
+#include "mesh/validation/meshAssetValidator.h"
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -34,6 +35,9 @@ protected:
                 {{"name", "Default"}, {"materialInstancePath", "MI_test.json"}}})}});
         std::ofstream(root / "image.png") << "not decoded during document validation";
         std::ofstream(root / "triangle.obj") << "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n";
+        std::filesystem::create_directories(root / "Skeletons");
+        Write("Skeletons/SK_test.json", {{"format", "vl.skeleton.v1"}, {"skeleton", "SK_test"},
+            {"root", "root"}, {"joints", Json::array()}});
         scene = {{"name", "Scene"}, {"type", "scene"}, {"description", "Asset API test"},
             {"worldUnit", "cm"}, {"opaque", {{"data", {1, 2, 3}}}},
             {"objects", Json::array({
@@ -86,6 +90,35 @@ TEST_F(AssetDocumentTest, AllAssetKindsPublishCapabilitiesAndStructuredCodecRoun
         EXPECT_EQ(EditorCommandJsonCodec::EncodeResult(EditorCommandJsonCodec::DecodeResult(result)), result);
         EXPECT_EQ(Run(Request(entry.first + ".get_capabilities", entry.second))["status"], "succeeded");
     }
+}
+
+TEST_F(AssetDocumentTest, SkeletalMeshValidationRequiresClipReferences)
+{
+    auto mesh = Read("SM_test.json");
+    mesh["skinning"] = {{"skeleton", "Skeletons/SK_test.json"},
+        {"clips", Json::array({{{"id", "walk"}, {"path", "walk.fbx"}}})}};
+    Write("SM_test.json", mesh);
+    ASSERT_EQ(Get("mesh", "SM_test.json")["status"], "succeeded");
+    EXPECT_NE(Run(Request("mesh.validate", "SM_test.json"))["status"], "succeeded");
+    std::ofstream(root / "walk.fbx") << "Content preflight is separate";
+    EXPECT_EQ(Run(Request("mesh.validate", "SM_test.json"))["status"], "succeeded");
+}
+
+TEST_F(AssetDocumentTest, SkeletalMeshRejectsDuplicateClipIds)
+{
+    auto mesh = Read("SM_test.json");
+    mesh["skinning"] = {{"skeleton", "Skeletons/SK_test.json"},
+        {"clips", Json::array({{{"id", "walk"}, {"path", "a.fbx"}},
+            {{"id", "walk"}, {"path", "b.fbx"}}})}};
+    EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_test.json", mesh), std::runtime_error);
+}
+
+TEST_F(AssetDocumentTest, SkeletalMeshRejectsStaticSectionFiltering)
+{
+    auto mesh = Read("SM_test.json");
+    mesh["skinning"] = {{"skeleton", "Skeletons/SK_test.json"}, {"clips", Json::array()}};
+    mesh["importOptions"] = {{"includedSectionNames", {"section"}}};
+    EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_test.json", mesh), std::runtime_error);
 }
 
 Json BlueprintAsset()

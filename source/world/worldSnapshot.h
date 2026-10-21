@@ -17,6 +17,7 @@
 
 namespace VL
 {
+namespace Animation { struct SkinPose; }
 
 using RuntimeId = uint64_t;
 
@@ -48,6 +49,7 @@ struct CameraSnapshot
 
 struct MeshDrawSnapshot
 {
+    std::shared_ptr<const Animation::SkinPose> skinPose;
     RuntimeId objectId = 0;
     bool selected = false;
     std::string debugName;

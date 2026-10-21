@@ -1,5 +1,6 @@
 #include "engine/engineLoop.h"
 
+#include <algorithm>
 #include <chrono>
 #include <exception>
 #include <filesystem>
@@ -46,6 +47,7 @@
 #include "world/loading/worldTransitionCoordinator.h"
 #include "world/world.h"
 #include "ui/uiRenderSnapshot.h"
+#include "animation/skeletalPlayback.h"
 
 namespace VL
 {
@@ -98,6 +100,9 @@ RuntimeResult<void> EngineLoop::Init(
         launchOptions.workerThreadCountOverride
             .value_or(
                 runtimeConfig.GetWorkerThreadCount()) == 2;
+    // --frame-limit 只服务帧率验收，不参与渲染资源或脚本配置；
+    // 0 表示保持原有的不限速行为。
+    frameLimitHz = launchOptions.frameLimitHz;
 
     auto inputResult = GetSubsystems().GetInputSubsystem().Initialize(platformWindow);
     if (inputResult.IsFailure())
@@ -125,6 +130,7 @@ RuntimeResult<void> EngineLoop::Init(
 
     window->CenterOnScreen();
     window->Show();
+    if (launchOptions.focusWindow) window->Focus();
 #ifdef VULKANLEARN_ENABLE_CSHARP_BLUEPRINTS
     if (runtimeConfig.GetScriptSettings().enabled)
     {
@@ -145,7 +151,42 @@ int EngineLoop::Run()
 {
     while (!shouldClose)
     {
+        // 帧率验收：每帧从渲染起点补足到目标节拍。RuntimeClock 仍按真实经过时间推进，
+        // 因此 time.delta 与动画/脚本 tick 的 dt 会随限速后的帧间隔变大；
+        // 模拟侧随后把单帧 dt 夹到 0.1 s；ScriptRuntime 刚体的 1/60 子步在物理世界内部。
+        const std::chrono::steady_clock::time_point frameStart =
+            std::chrono::steady_clock::now();
         Tick();
+
+        if (frameLimitHz <= 0)
+        {
+            continue;
+        }
+
+        const std::chrono::steady_clock::duration framePeriod =
+            std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                std::chrono::duration<double>(
+                    1.0 / static_cast<double>(frameLimitHz)));
+        const std::chrono::steady_clock::time_point deadline =
+            frameStart + framePeriod;
+        const std::chrono::steady_clock::duration remaining =
+            deadline - std::chrono::steady_clock::now();
+        // SDL_DelayPrecise 内部用 1 ms 短睡探测实际唤醒开销，最后自旋收尾，
+        // 是高精度等待；这里再留 0.2 ms 余量吸收当前线程的唤醒/调度延迟，
+        // 随后自旋到 deadline。只限制渲染节拍，固定 60 Hz 物理子步不变。
+        const std::chrono::steady_clock::duration spinMargin =
+            std::chrono::microseconds(200);
+        if (remaining > spinMargin)
+        {
+            const auto waitNs =
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    remaining - spinMargin)
+                    .count();
+            SDL_DelayPrecise(static_cast<Uint64>(waitNs));
+        }
+        while (std::chrono::steady_clock::now() < deadline)
+        {
+        }
     }
 
     return exitCode;
@@ -492,6 +533,8 @@ void EngineLoop::Tick()
         runtimeTests,
         GetRuntimeConfig(),
         GetSubsystems().GetDiagnosticsSubsystem(),
+        &GetSubsystems().GetInputSubsystem(),
+        &GetSubsystems().GetScriptRuntime(),
         uiSubsystem ? uiSubsystem->GetSceneDocuments() : nullptr);
     commandResult.activeWorldBeforeCommand = activeWorldBeforeCommand;
 
@@ -577,6 +620,10 @@ void EngineLoop::Tick()
     }
 
     const float deltaTime = GetSubsystems().GetRuntimeClock().TickDeltaSeconds();
+    // UE 用 MaxUndilatedFrameTime/MaxSimulationTimeStep 防止 hitch 一帧推进整段：
+    // 游戏/动画只消费上限 0.1 s 的模拟时间，FPS 与资产轮询仍用原始帧间隔。
+    constexpr float MaxSimulationDelta = 0.1f;
+    const float simulationDelta = std::min(deltaTime, MaxSimulationDelta);
 
     PumpPlatformEvents();
     if (shouldClose)
@@ -631,6 +678,8 @@ void EngineLoop::Tick()
         PROFILE_SCOPE("Update");
         auto& scripts = GetSubsystems().GetScriptRuntime();
         const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
+        // 命令先决定 Pause/World，再清理上一完整帧；Console/BeginPlay 的新请求仍保留。
+        if (world && !scripts.IsPaused()) world->GetDebugDraw().BeginFrame();
         TickBlueprintAssets();
         // 故障 Stop 后先收回动态模板，再构造程序集候选，避免把上一轮资产收录为常驻模板。
         TickScriptBuild(deltaTime);
@@ -655,10 +704,13 @@ void EngineLoop::Tick()
             scripts.Control(*world, ScriptPlayState::Editing, error);
         }
         if (scripts.IsEditing())
-            controller->Update(deltaTime, GetSubsystems().GetInputSubsystem().GetActionState());
-        scripts.Tick(world, deltaTime,
+            controller->Update(simulationDelta, GetSubsystems().GetInputSubsystem().GetActionState());
+        scripts.Tick(world, simulationDelta,
             GetSubsystems().GetInputSubsystem().GetActionState(),
             GetSubsystems().GetDiagnosticsSubsystem());
+        if (world && scripts.IsEditing()) world->GetDebugDraw().AdvanceGameTime(simulationDelta);
+        if (world && !RenderSystem::GetInstance().IsOfflineMode())
+            world->TickAnimations(simulationDelta);
         if (world && !RenderSystem::GetInstance().IsOfflineMode() &&
             std::filesystem::path(world->GetScenePath()).filename() != "SC_model_preview.json" &&
             scripts.PollBlueprintAssetChanges(*world, deltaTime))
@@ -677,7 +729,7 @@ void EngineLoop::Tick()
         // 先在 GT 稳定帧边界处理 editor/preview，再生成 UI 与 World snapshot。
         uiSubsystem->TickMaterialInstanceEditor();
     }
-    UpdateUiViewModel(deltaTime, commandResult);
+    UpdateUiViewModel(simulationDelta, commandResult);
     SynchronizeSceneViewport();
     TickEditorThumbnails();
 
@@ -709,6 +761,9 @@ void EngineLoop::Tick()
 
     PROFILE_FRAME();
 
+    // 即使关闭 UI 也推进帧边界；Motion/Console/脚本共用同一生命周期。
+    if (const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld())
+        world->GetDebugDraw().EndFrame();
 }
 
 void EngineLoop::TickScriptBuild(float deltaTime)
@@ -1106,6 +1161,45 @@ void EngineLoop::ApplyQueuedUiActions()
             command.type = RuntimeCommandType::LoadWorld;
             command.stringValue = ModelPreviewScenePath;
             command.extraSceneObjects = BuildModelPreviewObjects(action.stringValue);
+            // 厘米骨骼资产按原尺度预览，不继承旧静态模型的 43 倍注入尺度。
+            try
+            {
+                if (MeshAssetLoader::Prepare(action.stringValue).buildPlan.IsSkeletal())
+                    command.extraSceneObjects[0]["scale"] = {1.0, 1.0, 1.0};
+            }
+            catch (const std::exception& error)
+            {
+                GetSubsystems().GetDiagnosticsSubsystem().ReportWarning(error.what());
+                continue;
+            }
+            break;
+        case UiActionType::ControlAnimationPreview:
+            command.type = RuntimeCommandType::ControlAnimation;
+            command.actorProperty.worldGeneration = action.previewCamera.worldGeneration;
+            command.stringValue = action.stringValue;
+            command.floatValue = action.floatValue;
+            break;
+        case UiActionType::ControlScriptAnimation:
+            command.type = RuntimeCommandType::ControlScriptAnimation;
+            command.actorProperty.worldGeneration = action.previewCamera.worldGeneration;
+            command.stringValue = action.stringValue;
+            command.intValue = action.intValue;
+            command.floatValue = action.floatValue;
+            break;
+        case UiActionType::ControlDebugDraw:
+            command.type = RuntimeCommandType::ControlDebugDraw;
+            command.actorProperty.worldGeneration = action.previewCamera.worldGeneration;
+            command.debugDrawControl = action.debugDrawControl;
+            break;
+        case UiActionType::ControlMotionDebug:
+            command.type = RuntimeCommandType::ControlMotionDebug;
+            command.actorProperty.worldGeneration = action.previewCamera.worldGeneration;
+            command.intValue = action.intValue;
+            break;
+        case UiActionType::ControlMotionReplay:
+            command.type = RuntimeCommandType::ControlMotionReplay;
+            command.actorProperty.worldGeneration = action.previewCamera.worldGeneration;
+            command.intValue = action.intValue;
             break;
         case UiActionType::LoadWorld:
             command.type = RuntimeCommandType::LoadWorld;
@@ -1427,6 +1521,52 @@ void EngineLoop::UpdateUiViewModel(
     snapshot.speedTreeWindProfileCount = renderSystem.GetSpeedTreeWindProfileCount();
     const WorldHandle& activeWorld = GetSubsystems().GetWorldManager().GetActiveWorldHandle();
     snapshot.activeWorldPath = activeWorld.scenePath;
+    if (uiActiveWorld && !snapshot.offlineMode)
+    {
+        snapshot.motionWorldGeneration = uiActiveWorld->GetGeneration();
+        snapshot.motionDebug = uiActiveWorld->CaptureMotionDebug();
+        snapshot.debugDraw = uiActiveWorld->CaptureDebugDraw(*snapshot.motionDebug);
+        if (const auto& camera = uiActiveWorld->GetRenderCamera())
+        {
+            for (int axis = 0; axis < 3; ++axis)
+            {
+                snapshot.motionCamera.position[axis] = camera->GetPosition()[axis];
+                snapshot.motionCamera.forward[axis] = camera->GetForwardVector()[axis];
+                snapshot.motionCamera.right[axis] = camera->GetRightVector()[axis];
+                snapshot.motionCamera.up[axis] = camera->GetUpVector()[axis];
+            }
+            snapshot.motionCamera.horizontalFovDegrees = camera->GetHFOV();
+            snapshot.motionCamera.clipNear = camera->GetClipNear();
+            snapshot.motionCamera.clipFar = camera->GetClipFar();
+        }
+    }
+    if (const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld())
+        for (const auto& entry : world->GetMeshObjects())
+            if (entry.second.animation && entry.second.sceneObjectIdentity == "preview_model")
+            {
+                const auto& player = *entry.second.animation;
+                snapshot.animationWorldGeneration = world->GetGeneration();
+                for (const auto& clip : player.Asset().clips) snapshot.animationClips.push_back(clip.id);
+                snapshot.animationClip = player.SelectedClip();
+                snapshot.animationTime = player.Time();
+                snapshot.animationDuration = player.Duration();
+                snapshot.animationPlaying = player.IsPlaying();
+                snapshot.animationJointCount = player.Asset().mesh.joints.size();
+                if (!player.Asset().clips.empty())
+                {
+                    const auto schema = Animation::PreviewFeatureSchema(player.Asset().mesh);
+                    const auto& clip = player.Asset().clips.at(player.SelectedClip());
+                    snapshot.animationFeatureChannels = Animation::FeatureChannelNames(schema);
+                    if (Animation::CanExtractClipFeatures(clip, schema, player.Time(), player.IsLooping()))
+                    {
+                        snapshot.animationFeatures = Animation::ExtractClipFeatures(
+                            player.Asset().mesh, clip, schema, player.Time(), player.IsLooping());
+                        snapshot.animationFeatureStatus = "Root heading | cm, cm/s | pre-IK";
+                    }
+                    else snapshot.animationFeatureStatus = "Incomplete nonloop feature window";
+                }
+                break;
+            }
     uiSubsystem->SetMaterialInstanceSceneModels(
         renderSystem.GetMaterialInstanceModelContexts());
     // 世界大纲的数据源是 active World 本身，而不是只含带 MI 网格的 RenderScene 子集。

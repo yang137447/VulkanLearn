@@ -10,7 +10,7 @@ public sealed class DeltaMovementBlueprint : Blueprint
 
 public sealed class DeltaResetBlueprint : Blueprint
 {
-    protected override void FixedTick(float dt) => Transform.Position = Vector3.Zero;
+    protected override void Tick(float dt) => Transform.Position = Vector3.Zero;
 }
 
 public sealed class DeltaImpulseBlueprint : Blueprint

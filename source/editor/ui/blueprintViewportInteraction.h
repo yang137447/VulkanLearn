@@ -295,6 +295,16 @@ inline std::optional<size_t> HitBlueprintViewportGizmo(const BlueprintViewportGi
     return hit;
 }
 
+inline BlueprintViewportGizmo BuildBlueprintComponentGizmo(const nlohmann::json& draft, size_t index,
+    const EditorSceneCameraActor& camera, float width, float height, BlueprintGizmoMode mode)
+{
+    const auto& nodes = draft.at("components");
+    const auto& node = nodes.at(index);
+    const auto space = EvaluateScriptComponentSpace(draft, index);
+    return BuildBlueprintViewportGizmo(camera, width, height, space.worldFromParent, space.parentRotation,
+        ScriptVector(node, "position"), ScriptVector(node, "rotation"), ScriptVector(node, "scale", 1), mode);
+}
+
 inline std::vector<BlueprintViewportHelper> BuildBlueprintViewportHelpers(const nlohmann::json& draft,
     const EditorSceneCameraActor& camera, float width, float height)
 {
@@ -308,10 +318,11 @@ inline std::vector<BlueprintViewportHelper> BuildBlueprintViewportHelpers(const 
         if (type == "mesh") continue;
         BlueprintViewportHelper helper;
         helper.componentId = ScriptComponentId(node);
-        const Eigen::Vector3f position = ScriptComponentMatrix(draft, index).block<3, 1>(0, 3);
+        const auto space = EvaluateScriptComponentSpace(draft, index);
+        const Eigen::Vector3f position = space.worldFromComponent.block<3, 1>(0, 3);
+        const auto& rotation = space.rotation;
         helper.markerVisible = ProjectBlueprintViewportPoint(camera, width, height, position, helper.marker);
         EditorSceneActorSnapshot actor;
-        const auto rotation = ScriptComponentRotation(draft, index);
         actor.light.position = position;
         actor.light.direction = rotation * -Eigen::Vector3f::UnitZ();
         if (type == "camera")
@@ -324,6 +335,14 @@ inline std::vector<BlueprintViewportHelper> BuildBlueprintViewportHelpers(const 
             actor.camera.horizontalFovDegrees = node.value("fov", 60.0f);
             actor.camera.clipNear = node.value("near_clip", 1.0f);
             actor.camera.clipFar = node.value("far_clip", 10000.0f);
+        }
+        else if (type == "springArm")
+        {
+            const Eigen::Vector3f origin = position + ScriptVector(node, "targetOffset");
+            if (!position.isApprox(origin))
+                AddActorVisualLine(helper.lines, camera, position, origin, width, height);
+            AddActorVisualLine(helper.lines, camera, origin,
+                space.worldFromAttachment.block<3, 1>(0, 3), width, height);
         }
         else if (type == "scene")
         {
@@ -340,7 +359,8 @@ inline std::vector<BlueprintViewportHelper> BuildBlueprintViewportHelpers(const 
             actor.light.coneAngleInner = node.value("coneAngleInner", 30.0f) * 0.01745329252f;
             actor.light.coneAngleOuter = node.value("coneAngleOuter", 45.0f) * 0.01745329252f;
         }
-        if (type != "scene") helper.lines = BuildActorVisualLines(actor, camera, width, height);
+        if (type != "scene" && type != "springArm")
+            helper.lines = BuildActorVisualLines(actor, camera, width, height);
         // 固定像素原点标记让极小/极远的非网格组件仍可选中，不伪造世界尺寸碰撞盒。
         if (helper.markerVisible)
         {
@@ -405,10 +425,21 @@ inline std::optional<std::string> HitBlueprintViewportHelper(const std::vector<B
     if (!pixel.allFinite() || !std::isfinite(tolerance) || tolerance <= 0) return {};
     std::optional<std::string> hit;
     float nearest = tolerance;
+    // 臂线必然经过相机原点；先选原点标记，避免共享端点总是被先声明的 SpringArm 抢走。
     for (const auto& helper : helpers)
     {
-        float distance = helper.markerVisible ? (pixel - helper.marker).norm() :
-            std::numeric_limits<float>::infinity();
+        if (!helper.markerVisible) continue;
+        const float distance = (pixel - helper.marker).norm();
+        if (distance < nearest)
+        {
+            nearest = distance;
+            hit = helper.componentId;
+        }
+    }
+    if (hit) return hit;
+    for (const auto& helper : helpers)
+    {
+        float distance = std::numeric_limits<float>::infinity();
         for (const auto& line : helper.lines)
             distance = std::min(distance, BlueprintViewportDetail::SegmentDistance(pixel, line.begin, line.end));
         if (distance < nearest)

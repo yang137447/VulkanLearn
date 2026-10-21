@@ -9,6 +9,7 @@
 #include "render/backend/resolvedRenderScene.h"
 #include "render/frontend/renderScene.h"
 #include "render/resource/rendererResourceCache.h"
+#include "renderableObject.h"
 
 #include <memory>
 #include <stdexcept>
@@ -89,6 +90,15 @@ void RendererObjectResourceRegistry::InitializeResolvedSceneResources(
 
                 // 将 ResolvedScene 已确定的 caster 类型传给 GPU 资源层，确保描述符
                 // 分配与随后 DrawShadowScene 使用的是同一份路由结果。
+                if (drawPacket.skinPose && !objectResourceEntry->GetResources().initialized)
+                {
+                    const auto renderable = draw.renderableObject.lock();
+                    if (!renderable || !renderable->GetSkinInfluenceInfo().buffer)
+                        throw std::runtime_error("Skinned draw is missing its immutable influence stream");
+                    auto& resources = objectResourceEntry->GetResources();
+                    resources.skinJointCount = drawPacket.skinPose->matrices.size();
+                    resources.skinInfluences = renderable->GetSkinInfluenceInfo();
+                }
                 objectResourceEntry->Initialize(
                     rendererBackend,
                     descriptorContext,

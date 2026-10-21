@@ -42,8 +42,14 @@ public sealed class BlueprintPhysics
 public sealed class CharacterController
 {
     internal Vector3 WalkVelocity;
+    internal Vector3 RootMotionVelocity;
+    internal bool RootMotionActive;
     internal bool JumpRequested;
     public bool IsGrounded { get; internal set; }
+    public Vector3 LinearVelocity { get; internal set; }
     public void Move(Vector3 velocity) => WalkVelocity = velocity;
+    // 根运动覆盖本帧速度；Jolt 负责碰撞/重力，下一次消费前不会与 Move 叠加。
+    public void ConsumeRootMotion(Vector3 velocity) { RootMotionVelocity = velocity; RootMotionActive = true; }
+    public void ClearRootMotion() { RootMotionVelocity = Vector3.Zero; RootMotionActive = false; }
     public void Jump() => JumpRequested = true;
 }

@@ -294,6 +294,9 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
         for (const MeshObjectBuildPlan& meshObjectPlan : worldBuildPlan.meshObjectPlans)
         {
             WorldMeshObject object;
+            object.animation = meshObjectPlan.animation;
+            object.skinPose = meshObjectPlan.skinPose;
+            object.skinSection = meshObjectPlan.skinSection;
             object.debugName = meshObjectPlan.debugName;
             object.sceneObjectIdentity = meshObjectPlan.sceneObjectIdentity;
             object.materialSlotIndex = meshObjectPlan.materialSlotIndex;

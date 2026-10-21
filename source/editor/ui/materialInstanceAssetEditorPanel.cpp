@@ -1,4 +1,6 @@
 #include "editor/ui/materialInstanceAssetEditorPanel.h"
+#include "animation/motionDebug.h"
+#include "debug/drawDebug.h"
 
 #include <algorithm>
 #include <array>
@@ -11,11 +13,13 @@
 #include <utility>
 
 #include <RmlUi/Core/Context.h>
+#include <RmlUi/Core/Core.h>
 #include <RmlUi/Core/ElementDocument.h>
 #include <RmlUi/Core/Elements/ElementFormControl.h>
 #include <RmlUi/Core/Elements/ElementFormControlInput.h>
 #include <RmlUi/Core/Event.h>
 #include <RmlUi/Core/Input.h>
+#include <RmlUi/Core/SystemInterface.h>
 
 #include "core/renderSession.h"
 #include "editor/ui/editorSceneActorTree.h"
@@ -74,6 +78,24 @@ std::string Number(float value)
     std::ostringstream stream;
     stream << std::setprecision(9) << value;
     return stream.str();
+}
+
+std::string MotionNumber(double value)
+{
+    std::ostringstream stream;
+    stream << std::setprecision(4) << value;
+    return stream.str();
+}
+
+std::string MotionQueryReadout(const std::vector<float>& values)
+{
+    std::string text;
+    for (size_t i = 0; i < std::min(size_t(3), values.size()); ++i)
+    {
+        if (i) text += ", ";
+        text += MotionNumber(values[i]);
+    }
+    return "[" + text + (values.size() > 3 ? ", ...]" : "]");
 }
 
 // 弹层位置按整像素写入：RmlUi 的 left/top 会参与布局缓存比较，抖动的小数会让静止帧反复失效。
@@ -428,6 +450,16 @@ bool MaterialInstanceAssetEditorPanel::ValidateDocument(Rml::ElementDocument& ca
         "resource-preview-title", "resource-preview-kind", "resource-preview-surface",
         "resource-preview-icon", "resource-preview-status", "resource-preview-path",
         "resource-preview-image",
+        "resource-animation-tools", "resource-animation-play", "resource-animation-pause",
+        "resource-animation-clip", "resource-animation-time", "resource-animation-status",
+        "viewport-motion-debug", "viewport-motion-status",
+        "viewport-motion-matching", "motion-matching-title", "motion-matching-database",
+        "motion-matching-query", "motion-matching-decision", "motion-matching-rows",
+        "motion-timeline-play", "motion-timeline-pause", "motion-timeline-seek", "motion-timeline-status",
+        "motion-replay", "motion-replay-seek", "motion-replay-status",
+        "motion-query-toggle", "motion-query-details", "motion-query-channels",
+        "motion-query-database", "motion-query-payload", "motion-query-component",
+        "resource-motion-features", "resource-motion-status", "resource-motion-values",
         "resource-texture-image",
         "resource-texture-fit",
         "resource-frame",
@@ -534,6 +566,12 @@ void MaterialInstanceAssetEditorPanel::Detach()
     ResetTextureView();
     previewDragButton = -1;
     runtimeControlsCurrent = false;
+    motionMatchingRowsMounted = false;
+    motionMatchingVisible = false;
+    motionMatchingQueryExpanded = false;
+    motionMatchingQueryChannels.clear();
+    motionMatchingRefreshTime = -1;
+    motionMatchingRefreshKey.clear();
     textureOptionsDirty = true;
     textureOptionSelections.clear();
     if (document != nullptr)
@@ -1128,7 +1166,7 @@ void MaterialInstanceAssetEditorPanel::CloseMenus()
 
 void MaterialInstanceAssetEditorPanel::ApplyMenuState()
 {
-    for (const char* menu : {"file", "edit", "window", "help", "view"})
+    for (const char* menu : {"file", "edit", "window", "help", "view", "debug-draw"})
         widgetDocument.SetClass("menu-" + std::string(menu), "open", openMenu == menu);
 }
 
@@ -1138,7 +1176,7 @@ bool MaterialInstanceAssetEditorPanel::IsInsideMenuBar(const Rml::Element* eleme
     const auto* menuBar = document->GetElementById("editor-menubar");
     for (const auto* current = element; current != nullptr && current != document;
         current = current->GetParentNode())
-        if (current == menuBar || current->GetId() == "menu-view") return true;
+        if (current == menuBar || current->GetId() == "menu-view" || current->GetId() == "menu-debug-draw") return true;
     return false;
 }
 
@@ -1162,7 +1200,7 @@ void MaterialInstanceAssetEditorPanel::OpenContextMenu(Rml::Event& event)
     std::string target;
     std::string title;
     Rml::Element* element = event.GetTargetElement();
-    if (element != nullptr && docking.IsSceneViewportElement(element))
+    if (element != nullptr && IsSceneViewportElement(element))
     {
         // 视口没有拾取后端，因此菜单里只有视口级动作，不含任何逐对象条目。
         kind = ContextMenuKind::Viewport;
@@ -2309,6 +2347,21 @@ bool MaterialInstanceAssetEditorPanel::HasCurrentModelPreview() const
     return CurrentModelPreviewGeneration() != 0;
 }
 
+bool MaterialInstanceAssetEditorPanel::IsMotionDebugViewport() const
+{
+    return docking.IsPanelActive("viewport") ||
+        (IsResourceEditorVisible() && HasCurrentModelPreview());
+}
+
+bool MaterialInstanceAssetEditorPanel::IsSceneViewportElement(const Rml::Element* element) const
+{
+    // 候选表可滚动，命中属于编辑器，不能同时触发角色输入或关卡拾取。
+    for (auto* current = element; current != nullptr && current != document;
+        current = current->GetParentNode())
+        if (current->GetId() == "viewport-motion-matching") return false;
+    return docking.IsSceneViewportElement(element);
+}
+
 uint64_t MaterialInstanceAssetEditorPanel::CurrentModelPreviewGeneration() const
 {
     if (requestedPreviewMaterial) return 0;
@@ -2542,6 +2595,40 @@ void MaterialInstanceAssetEditorPanel::RefreshResourceEditor()
     }
     const bool isMesh = active != nullptr && active->kind == EditorAssetKind::Mesh;
     const bool previewReady = HasCurrentModelPreview();
+    const bool animated = isMesh && previewReady && runtimeView.animationWorldGeneration ==
+        CurrentModelPreviewGeneration() && runtimeView.animationJointCount != 0;
+    widgetDocument.SetProperty("resource-animation-tools", "display", animated ? "flex" : "none");
+    widgetDocument.SetProperty("resource-motion-features", "display", animated ? "block" : "none");
+    if (animated)
+    {
+        SetDisabled("resource-animation-play", runtimeView.animationPlaying || runtimeView.animationClips.empty());
+        SetDisabled("resource-animation-pause", !runtimeView.animationPlaying);
+        SetMarkup("resource-animation-status", Text(std::to_string(runtimeView.animationJointCount) +
+            " joints | " + SceneActorNumber(runtimeView.animationTime) + " / " +
+            SceneActorNumber(runtimeView.animationDuration) + " s"));
+        std::string options;
+        for (size_t i = 0; i < runtimeView.animationClips.size(); ++i)
+            options += "<option value=\"" + std::to_string(i) + "\">" +
+                Text(runtimeView.animationClips[i]) + "</option>";
+        widgetDocument.SetMarkup("resource-animation-clip", options);
+        widgetDocument.SetControlValue("resource-animation-clip", std::to_string(runtimeView.animationClip));
+        auto* timeline = document->GetElementById("resource-animation-time");
+        if (timeline != document->GetContext()->GetFocusElement())
+        {
+            timeline->SetAttribute("max", SceneActorNumber(runtimeView.animationDuration));
+            widgetDocument.SetControlValue("resource-animation-time", SceneActorNumber(runtimeView.animationTime));
+        }
+        SetMarkup("resource-motion-status", Text(runtimeView.animationFeatureStatus));
+        // 固定通道结构，只更新数值 span；播放时不重建整表或改变 Details 滚动位置。
+        std::string rows;
+        for (size_t i = 0; i < runtimeView.animationFeatureChannels.size(); ++i)
+            rows += "<div class=\"motion-feature-row\"><span>" + Text(runtimeView.animationFeatureChannels[i]) +
+                "</span><span id=\"motion-feature-" + std::to_string(i) + "\"></span></div>";
+        SetMarkup("resource-motion-values", rows);
+        for (size_t i = 0; i < runtimeView.animationFeatureChannels.size(); ++i)
+            SetMarkup("motion-feature-" + std::to_string(i), i < runtimeView.animationFeatures.size()
+                ? Text(SceneActorNumber(runtimeView.animationFeatures[i])) : "--");
+    }
     const auto* texture = active && !active->loading && active->snapshot
         ? active->snapshot->texturePreview.get() : nullptr;
     const bool textureReady = active && active->kind == EditorAssetKind::Texture && texture;
@@ -2597,6 +2684,7 @@ void MaterialInstanceAssetEditorPanel::RefreshResourceEditor()
         !active->snapshot->name.empty() ? active->snapshot->name :
         std::filesystem::path(active->path).filename().string()));
     SetMarkup("resource-preview-kind", Text(EditorAssetKindName(active->kind)));
+    if (animated) SetMarkup("resource-preview-kind", "Skeletal Mesh");
     if (textureReady)
         SetMarkup("resource-preview-kind", Text(std::to_string(texture->sourceWidth) + " x " +
             std::to_string(texture->sourceHeight) + " | RGB | " + active->snapshot->textureColorSpace));
@@ -2756,6 +2844,54 @@ void MaterialInstanceAssetEditorPanel::UpdateRuntimeView(const UiViewModelSnapsh
     const bool refreshOffline = !runtimeControlsCurrent || !SameOfflineControls(runtimeView, view);
     runtimeView = view;
     WidgetRefreshScope refresh(refreshingControls);
+    const bool motionEnabled = view.motionDebug && view.motionDebug->enabled;
+    auto* motionToggle = document ? document->GetElementById("viewport-motion-debug") : nullptr;
+    if (motionToggle && motionToggle->HasAttribute("checked") != motionEnabled)
+    {
+        if (motionEnabled) motionToggle->SetAttribute("checked", "");
+        else motionToggle->RemoveAttribute("checked");
+    }
+    SetDisabled("viewport-motion-debug", !view.motionWorldGeneration || view.offlineMode);
+    const bool matching = motionEnabled && !view.motionDebug->databaseIdentity.empty();
+    const std::string motionStatus = matching ? "MM #" + std::to_string(view.motionDebug->searchCount) +
+        " | " + view.motionDebug->decisionReason +
+        " | Cyan: actual | Amber: desired/no-collision | Red: query" :
+        motionEnabled ? view.motionDebug->summary : "";
+    SetMarkup("viewport-motion-status", Text(motionStatus));
+    widgetDocument.SetClass("viewport-motion-status", "motion-matching-summary", matching);
+    widgetDocument.SetProperty("viewport-motion-status", "display",
+        motionEnabled && !view.offlineMode ? "block" : "none");
+    RefreshMotionMatching();
+    const bool debugAvailable = view.debugDraw && view.motionWorldGeneration && !view.offlineMode;
+    SetDisabled("viewport-debug-draw", !debugAvailable);
+    if (!debugAvailable && openMenu == "debug-draw") CloseMenus();
+    if (debugAvailable)
+    {
+        const auto& debug = *view.debugDraw;
+        auto* toggle = document->GetElementById("debug-draw-enabled");
+        if (toggle->HasAttribute("checked") != debug.enabled)
+        {
+            if (debug.enabled) toggle->SetAttribute("checked", ""); else toggle->RemoveAttribute("checked");
+        }
+        std::string categories;
+        for (size_t i = 0; i < debug.categories.size(); ++i)
+        {
+            const auto& category = debug.categories[i];
+            categories += "<label class=\"debug-draw-check\"><input type=\"checkbox\" data-action=\"debug-draw-category\" data-index=\"" +
+                std::to_string(i) + "\"" + (category.enabled ? " checked=\"checked\"" : "") + "/><span>" +
+                Text(category.name) + "</span></label>";
+        }
+        SetMarkup("debug-draw-categories", std::move(categories));
+        std::string owners = Option("", "All Owners");
+        for (const auto& owner : debug.owners)
+            if (!owner.empty()) owners += Option(owner, owner);
+        if (!debug.ownerFilter.empty() &&
+            std::find(debug.owners.begin(), debug.owners.end(), debug.ownerFilter) == debug.owners.end())
+            owners += Option(debug.ownerFilter, debug.ownerFilter);
+        SetMarkup("debug-draw-owner", std::move(owners));
+        SetControlValue("debug-draw-owner", debug.ownerFilter);
+        SetMarkup("debug-draw-count", std::to_string(debug.visibleCount) + " / " + std::to_string(debug.storedCount));
+    }
     if (const auto* tab = resourceEditor.ActiveTab(); tab && tab->kind == EditorAssetKind::Blueprint)
         RefreshBlueprintAssetEditor();
     // 相机和统计变化不触碰离线表单；视口工具条继续独立更新。
@@ -2787,6 +2923,194 @@ void MaterialInstanceAssetEditorPanel::UpdateRuntimeView(const UiViewModelSnapsh
     const auto* focus = document->GetContext()->GetFocusElement();
     // 聚焦输入保留用户的半成品；失焦后的第一帧仍需用权威快照校正被拒绝的值。
     runtimeControlsCurrent = focus == nullptr || focus->GetId().find("offline-") != 0;
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshMotionMatchingCandidate(
+    size_t slot, const Animation::MotionCandidate* candidate)
+{
+    const auto prefix = "motion-candidate-" + std::to_string(slot);
+    SetMarkup(prefix + "-clip", candidate ? Text(candidate->clipId) : "-");
+    SetMarkup(prefix + "-time", candidate ? MotionNumber(candidate->time) + "s" : "-");
+    SetMarkup(prefix + "-trajectory", candidate ? MotionNumber(candidate->trajectoryCost) : "-");
+    SetMarkup(prefix + "-pose", candidate ? MotionNumber(candidate->poseCost) : "-");
+    SetMarkup(prefix + "-policy", candidate ? MotionNumber(candidate->policyCost) : "-");
+    SetMarkup(prefix + "-total", candidate ? MotionNumber(candidate->totalCost) : "-");
+    std::string status;
+    if (candidate)
+    {
+        status = candidate->eligible ? (candidate->continuing ? "continuing" : "eligible") :
+            "rejected: " + candidate->rejection;
+        if (candidate->quantizationSeconds > 0)
+            status += " | quantized " + MotionNumber(candidate->quantizationSeconds) + "s";
+    }
+    SetMarkup(prefix + "-reason", Text(status));
+    widgetDocument.SetClass(prefix, "motion-rejected", candidate && !candidate->eligible);
+    auto* row = document->GetElementById(prefix);
+    const std::string title = candidate ? candidate->clipId + " @ " + MotionNumber(candidate->time) +
+        "s | " + status : "";
+    if (row && row->GetAttribute<std::string>("title", "") != title)
+        row->SetAttribute("title", title);
+    SetMarkup(prefix + "-detail", Text(title));
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshMotionMatchingQuery()
+{
+    const auto& debug = *runtimeView.motionDebug;
+    auto channels = debug.channels;
+    if (channels.empty())
+        for (size_t channel = 0; channel < debug.features.size(); ++channel)
+            channels.push_back("[" + std::to_string(channel) + "]");
+    if (channels != motionMatchingQueryChannels)
+    {
+        std::string rows;
+        for (size_t channel = 0; channel < channels.size(); ++channel)
+        {
+            const auto prefix = "motion-query-channel-" + std::to_string(channel);
+            rows += "<div id=\"" + prefix + "\" class=\"motion-query-channel\">"
+                "<div class=\"motion-query-channel-name\">" + Text(channels[channel]) + "</div>"
+                "<div class=\"motion-query-channel-values\"><span id=\"" + prefix +
+                "-raw\"></span><span id=\"" + prefix + "-normalized\"></span></div></div>";
+        }
+        SetMarkup("motion-query-channels", std::move(rows));
+        motionMatchingQueryChannels = std::move(channels);
+    }
+    // RmlUi 不会显示 HTML title；完整身份与查询有实际可展开的固定节点，暂停只读缓存值。
+    SetMarkup("motion-query-database", Text("DB " + debug.databaseIdentity));
+    SetMarkup("motion-query-payload", Text("Statistics " + debug.payloadIdentity));
+    SetMarkup("motion-query-component", Text("Component " + debug.componentIdentity));
+    for (size_t channel = 0; channel < motionMatchingQueryChannels.size(); ++channel)
+    {
+        const auto prefix = "motion-query-channel-" + std::to_string(channel);
+        SetMarkup(prefix + "-raw", "Raw " + (channel < debug.features.size() ?
+            MotionNumber(debug.features[channel]) : "-"));
+        SetMarkup(prefix + "-normalized", "N " + (channel < debug.normalizedQuery.size() ?
+            MotionNumber(debug.normalizedQuery[channel]) : "-"));
+    }
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshMotionMatching()
+{
+    if (!document) return;
+    const auto& debug = runtimeView.motionDebug;
+    const bool visible = debug && debug->enabled && !debug->databaseIdentity.empty() &&
+        runtimeView.motionWorldGeneration && !runtimeView.offlineMode;
+    widgetDocument.SetProperty("viewport-motion-matching", "display", visible ? "block" : "none");
+    if (!visible)
+    {
+        motionMatchingVisible = false;
+        return;
+    }
+    if (!motionMatchingRowsMounted)
+    {
+        std::string rows;
+        for (size_t slot = 0; slot < 7; ++slot)
+        {
+            const auto prefix = "motion-candidate-" + std::to_string(slot);
+            const auto label = slot == 0 ? "Selected" : slot == 1 ? "Continue" :
+                "#" + std::to_string(slot - 1);
+            rows += "<div id=\"" + prefix + "\" class=\"motion-candidate\">"
+                "<div class=\"motion-candidate-heading\"><span class=\"motion-candidate-kind\">" +
+                label + "</span><span id=\"" + prefix + "-clip\" class=\"motion-candidate-clip\"></span>"
+                "<span id=\"" + prefix + "-time\" class=\"motion-candidate-time\"></span>"
+                "<span id=\"" + prefix + "-reason\" class=\"motion-candidate-reason\"></span></div>"
+                "<div class=\"motion-candidate-costs\"><span id=\"" + prefix + "-trajectory\"></span>"
+                "<span id=\"" + prefix + "-pose\"></span><span id=\"" + prefix + "-policy\"></span>"
+                "<span id=\"" + prefix + "-total\"></span></div>"
+                "<span id=\"" + prefix + "-detail\" class=\"motion-candidate-detail\"></span></div>";
+        }
+        SetMarkup("motion-matching-rows", std::move(rows));
+        motionMatchingRowsMounted = true;
+    }
+    // 候选槽位只挂载一次。运行中的数值至多 10 Hz 刷新，决策/代际变化立即显示；
+    // 暂停的相同快照经 WidgetDocument 值缓存后不再写 DOM。
+    const std::string refreshKey = debug->componentIdentity + "|" + debug->databaseIdentity + "|" +
+        debug->payloadIdentity + "|" + debug->decisionReason + "|" + std::to_string(debug->searchCount) +
+        (debug->queryReady ? "|ready" : "|warming") + "|" +
+        (debug->queryUsesAchievedVelocity ? "blocked|" : "desired|") +
+        debug->playbackClipId + "|" + std::to_string(debug->playbackTime) + "|" +
+        std::to_string(debug->playbackDuration) + "|" + (debug->playbackPlaying ? "play|" : "pause|") +
+        (debug->replayActive ? "replay|" : "live|") + std::to_string(debug->replayFrame) + "|" +
+        std::to_string(debug->replayFrames) + "|" +
+        std::to_string(static_cast<int>(runtimeView.scripts.state));
+    const double now = Rml::GetSystemInterface()->GetElapsedTime();
+    if (motionMatchingVisible && refreshKey == motionMatchingRefreshKey &&
+        now - motionMatchingRefreshTime < 0.1) return;
+    motionMatchingVisible = true;
+    motionMatchingRefreshTime = now;
+    motionMatchingRefreshKey = refreshKey;
+    SetMarkup("motion-matching-title", Text("Motion Matching | #" + std::to_string(debug->searchCount) +
+        " | DB " + debug->databaseIdentity.substr(0, 12)));
+    SetMarkup("motion-matching-database", Text("DB " + debug->databaseIdentity.substr(0, 12) +
+        " | stats " + debug->payloadIdentity.substr(0, 12)));
+    SetMarkup("motion-matching-query", Text("Query " + std::to_string(debug->features.size()) +
+        "D " + (debug->queryReady ? "ready" : "warming") +
+        (debug->queryUsesAchievedVelocity ? " blocked" : "") + " | raw " +
+        MotionQueryReadout(debug->features) + " | N " + MotionQueryReadout(debug->normalizedQuery)));
+    const std::string databaseTitle = "DB " + debug->databaseIdentity + "\nStatistics " +
+        debug->payloadIdentity + "\nComponent " + debug->componentIdentity;
+    auto* databaseLabel = document->GetElementById("motion-matching-database");
+    if (databaseLabel->GetAttribute<std::string>("title", "") != databaseTitle)
+        databaseLabel->SetAttribute("title", databaseTitle);
+    auto* matchingTitle = document->GetElementById("motion-matching-title");
+    if (matchingTitle->GetAttribute<std::string>("title", "") != databaseTitle)
+        matchingTitle->SetAttribute("title", databaseTitle);
+    std::string queryTitle = "Search " + std::to_string(debug->searchCount) + " | raw / normalized";
+    for (size_t channel = 0; channel < debug->features.size(); ++channel)
+    {
+        queryTitle += "\n" + (channel < debug->channels.size() ? debug->channels[channel] :
+            "[" + std::to_string(channel) + "]") + ": " + MotionNumber(debug->features[channel]) + " / " +
+            (channel < debug->normalizedQuery.size() ? MotionNumber(debug->normalizedQuery[channel]) : "-");
+    }
+    auto* queryLabel = document->GetElementById("motion-matching-query");
+    if (queryLabel->GetAttribute<std::string>("title", "") != queryTitle)
+        queryLabel->SetAttribute("title", queryTitle);
+    SetMarkup("motion-matching-decision", Text(debug->decisionReason + " | allowed " +
+        std::to_string(debug->allowedFrameCount) + " | rejected " +
+        std::to_string(debug->policyRejectedCount) + " | blend " + MotionNumber(debug->blendAlpha)));
+    // 时间轴只读原生播放器；拖动期间不覆盖焦点控件，暂停后 seek 保持暂停。
+    const bool hasPlayback = debug->playbackDuration > 0;
+    SetDisabled("motion-timeline-play", !hasPlayback || debug->playbackPlaying);
+    SetDisabled("motion-timeline-pause", !hasPlayback || !debug->playbackPlaying);
+    SetDisabled("motion-timeline-seek", !hasPlayback);
+    SetMarkup("motion-timeline-status", Text(MotionNumber(debug->playbackTime) + " / " +
+        MotionNumber(debug->playbackDuration) + " s" + (debug->playbackPlaying ? " >" : " ||")));
+    auto* motionTimeline = document->GetElementById("motion-timeline-seek");
+    if (motionTimeline && motionTimeline != document->GetContext()->GetFocusElement())
+    {
+        motionTimeline->SetAttribute("max", MotionNumber(debug->playbackDuration));
+        widgetDocument.SetControlValue("motion-timeline-seek", MotionNumber(debug->playbackTime));
+    }
+    auto* timelineStatus = document->GetElementById("motion-timeline-status");
+    const std::string timelineTitle = debug->playbackClipId + "\n" +
+        (debug->playbackPlaying ? "playing" : "paused");
+    if (timelineStatus && timelineStatus->GetAttribute<std::string>("title", "") != timelineTitle)
+        timelineStatus->SetAttribute("title", timelineTitle);
+    // 查询回放：时间轴只选择历史快照；回放时 World 会暂停被聚焦播放器。
+    const bool hasReplay = debug->replayFrames > 0;
+    SetDisabled("motion-replay", !hasReplay);
+    SetDisabled("motion-replay-seek", !hasReplay);
+    auto* replayToggle = document->GetElementById("motion-replay");
+    if (replayToggle && replayToggle->HasAttribute("checked") != debug->replayActive)
+    {
+        if (debug->replayActive) replayToggle->SetAttribute("checked", "");
+        else replayToggle->RemoveAttribute("checked");
+    }
+    auto* replaySeek = document->GetElementById("motion-replay-seek");
+    if (replaySeek && replaySeek != document->GetContext()->GetFocusElement())
+    {
+        replaySeek->SetAttribute("max", std::to_string(std::max(1, debug->replayFrames - 1)));
+        widgetDocument.SetControlValue("motion-replay-seek", std::to_string(debug->replayFrame));
+    }
+    SetMarkup("motion-replay-status", Text(debug->replayActive ?
+        "replay " + std::to_string(debug->replayFrame) + "/" + std::to_string(debug->replayFrames) :
+        hasReplay ? "live " + std::to_string(debug->replayFrame) + "/" + std::to_string(debug->replayFrames) :
+        "no history"));
+    RefreshMotionMatchingQuery();
+    RefreshMotionMatchingCandidate(0, debug->selected ? &*debug->selected : nullptr);
+    RefreshMotionMatchingCandidate(1, debug->continuation ? &*debug->continuation : nullptr);
+    for (size_t rank = 0; rank < 5; ++rank)
+        RefreshMotionMatchingCandidate(rank + 2, rank < debug->topCandidates.size() ?
+            &debug->topCandidates[rank] : nullptr);
 }
 
 void MaterialInstanceAssetEditorPanel::CloseDocument(
@@ -2830,8 +3154,55 @@ void MaterialInstanceAssetEditorPanel::SelectModelMaterial(
 
 void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const std::string& action)
 {
+    if (action == "motion-timeline-play" || action == "motion-timeline-pause")
+    {
+        if (runtimeActionSink && runtimeView.motionDebug && runtimeView.motionWorldGeneration &&
+            !runtimeView.offlineMode && runtimeView.motionDebug->playbackDuration > 0)
+        {
+            if ((action == "motion-timeline-play" && runtimeView.motionDebug->playbackPlaying) ||
+                (action == "motion-timeline-pause" && !runtimeView.motionDebug->playbackPlaying)) return;
+            UiAction request;
+            request.type = UiActionType::ControlScriptAnimation;
+            request.previewCamera.worldGeneration = runtimeView.motionWorldGeneration;
+            request.stringValue = runtimeView.motionDebug->componentIdentity;
+            request.intValue = 1;
+            request.floatValue = action == "motion-timeline-play" ? 1.0f : 0.0f;
+            runtimeActionSink->RequestRuntimeAction(std::move(request));
+        }
+        return;
+    }
+    if (action == "motion-replay")
+    {
+        if (runtimeActionSink && runtimeView.motionDebug && runtimeView.motionWorldGeneration &&
+            !runtimeView.offlineMode && runtimeView.motionDebug->replayFrames > 0)
+        {
+            UiAction request;
+            request.type = UiActionType::ControlMotionReplay;
+            request.previewCamera.worldGeneration = runtimeView.motionWorldGeneration;
+            request.intValue = element.HasAttribute("checked") ?
+                std::max(0, runtimeView.motionDebug->replayFrames - 1) : -1;
+            runtimeActionSink->RequestRuntimeAction(std::move(request));
+        }
+        return;
+    }
     const size_t index = element.GetAttribute<size_t>("data-index", 0);
-    if (action.rfind("blueprint-asset-", 0) == 0) HandleBlueprintAssetEvent(element, action, true);
+    if (action == "motion-query-toggle")
+    {
+        motionMatchingQueryExpanded = !motionMatchingQueryExpanded;
+        widgetDocument.SetClass("viewport-motion-matching", "query-expanded", motionMatchingQueryExpanded);
+        widgetDocument.SetClass("motion-query-toggle", "active", motionMatchingQueryExpanded);
+    }
+    else if (action == "debug-draw-clear")
+    {
+        if (runtimeActionSink && runtimeView.debugDraw && runtimeView.motionWorldGeneration && !runtimeView.offlineMode)
+        {
+            UiAction request; request.type = UiActionType::ControlDebugDraw;
+            request.previewCamera.worldGeneration = runtimeView.motionWorldGeneration;
+            request.debugDrawControl.action = Debug::ControlAction::ClearAll;
+            runtimeActionSink->RequestRuntimeAction(std::move(request));
+        }
+    }
+    else if (action.rfind("blueprint-asset-", 0) == 0) HandleBlueprintAssetEvent(element, action, true);
     else if (HandleSceneLogicEvent(element, action, true)) {}
     else if (HandleSceneCompositePropertyEvent(element, action, true)) {}
     else if (action == "script-physics-constraint-add" || action == "script-physics-constraint-remove")
@@ -2965,6 +3336,28 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
     else if (action == "json-close") ShowMaterialDetails();
     else if (action == "resource-close") CloseActiveResource();
     else if (action == "resource-frame") RequestPreviewCamera(ModelPreviewNavigation::Frame);
+    else if (action == "animation-play" || action == "animation-pause" ||
+        action == "animation-clip" || action == "animation-time")
+    {
+        if (runtimeActionSink && HasCurrentModelPreview() &&
+            runtimeView.animationWorldGeneration == CurrentModelPreviewGeneration())
+        {
+            UiAction request;
+            request.type = UiActionType::ControlAnimationPreview;
+            request.previewCamera.worldGeneration = CurrentModelPreviewGeneration();
+            request.stringValue = action == "animation-clip" ? "clip" :
+                action == "animation-time" ? "seek" : "play";
+            request.floatValue = action == "animation-play" ? 1.0f : 0.0f;
+            if (action == "animation-clip" || action == "animation-time")
+            {
+                auto* control = document->GetElementById(
+                    action == "animation-clip" ? "resource-animation-clip" : "resource-animation-time");
+                try { request.floatValue = std::stof(ControlValue(*control)); }
+                catch (...) { return; }
+            }
+            runtimeActionSink->RequestRuntimeAction(std::move(request));
+        }
+    }
     else if (action == "resource-texture-fit") { ResetTextureView(); RefreshResourceEditor(); }
     else if (action == "resource-reload") RequestResourceReload();
     else if (action == "resource-tool")
@@ -3286,6 +3679,93 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
 
 void MaterialInstanceAssetEditorPanel::HandleChange(Rml::Element& element, const std::string& action)
 {
+    if (action.rfind("debug-draw-", 0) == 0)
+    {
+        if (!runtimeActionSink || !runtimeView.debugDraw || !runtimeView.motionWorldGeneration || runtimeView.offlineMode) return;
+        UiAction request; request.type = UiActionType::ControlDebugDraw;
+        request.previewCamera.worldGeneration = runtimeView.motionWorldGeneration;
+        auto& control = request.debugDrawControl;
+        control.enabled = element.HasAttribute("checked");
+        if (action == "debug-draw-enabled")
+        {
+            if (control.enabled == runtimeView.debugDraw->enabled) return;
+            control.action = Debug::ControlAction::Enabled;
+        }
+        else if (action == "debug-draw-owner")
+        {
+            control.action = Debug::ControlAction::Owner; control.name = ControlValue(element);
+            // RmlUi 可在后续 Update 才发布 options 初始化的 change；相同快照值不是用户修改。
+            if (control.name == runtimeView.debugDraw->ownerFilter) return;
+        }
+        else if (action == "debug-draw-category")
+        {
+            const size_t index = element.GetAttribute<size_t>("data-index", 0);
+            if (index >= runtimeView.debugDraw->categories.size()) return;
+            if (control.enabled == runtimeView.debugDraw->categories[index].enabled) return;
+            control.action = Debug::ControlAction::Category; control.name = runtimeView.debugDraw->categories[index].name;
+        }
+        else return;
+        runtimeActionSink->RequestRuntimeAction(std::move(request));
+        return;
+    }
+    if (action == "motion-debug")
+    {
+        if (runtimeActionSink && runtimeView.motionWorldGeneration && !runtimeView.offlineMode)
+        {
+            UiAction request;
+            request.type = UiActionType::ControlMotionDebug;
+            request.previewCamera.worldGeneration = runtimeView.motionWorldGeneration;
+            request.intValue = element.HasAttribute("checked") ? 1 : 0;
+            runtimeActionSink->RequestRuntimeAction(std::move(request));
+        }
+        return;
+    }
+    if (action == "motion-replay-seek")
+    {
+        if (runtimeActionSink && runtimeView.motionDebug && runtimeView.motionWorldGeneration &&
+            !runtimeView.offlineMode && runtimeView.motionDebug->replayFrames > 0)
+        {
+            int frame = 0;
+            try { frame = std::stoi(ControlValue(element)); }
+            catch (...) { return; }
+            UiAction request;
+            request.type = UiActionType::ControlMotionReplay;
+            request.previewCamera.worldGeneration = runtimeView.motionWorldGeneration;
+            request.intValue = std::clamp(frame, 0, runtimeView.motionDebug->replayFrames - 1);
+            runtimeActionSink->RequestRuntimeAction(std::move(request));
+        }
+        return;
+    }
+    if (action == "motion-timeline-play" || action == "motion-timeline-pause" ||
+        action == "motion-timeline-seek")
+    {
+        if (runtimeActionSink && runtimeView.motionDebug && runtimeView.motionWorldGeneration &&
+            !runtimeView.offlineMode && runtimeView.motionDebug->playbackDuration > 0)
+        {
+            UiAction request;
+            request.type = UiActionType::ControlScriptAnimation;
+            request.previewCamera.worldGeneration = runtimeView.motionWorldGeneration;
+            request.stringValue = runtimeView.motionDebug->componentIdentity;
+            if (action == "motion-timeline-seek")
+            {
+                request.intValue = 0;
+                try { request.floatValue = std::stof(ControlValue(element)); }
+                catch (...) { return; }
+            }
+            else
+            {
+                request.intValue = 1;
+                request.floatValue = action == "motion-timeline-play" ? 1.0f : 0.0f;
+            }
+            runtimeActionSink->RequestRuntimeAction(std::move(request));
+        }
+        return;
+    }
+    if (action == "animation-clip" || action == "animation-time")
+    {
+        HandleClick(element, action);
+        return;
+    }
     const size_t index = element.GetAttribute<size_t>("data-index", 0);
     const std::string value = ControlValue(element);
     localStatus.clear();
@@ -3346,7 +3826,7 @@ void MaterialInstanceAssetEditorPanel::HandleChange(Rml::Element& element, const
             actor->scriptSpawned || runtimeView.scripts.state != ScriptPlayState::Editing) return;
         const auto field = action.substr(17);
         const auto& node = actor->scriptComponents[index];
-        if (field.rfind("collision", 0) == 0)
+        if (field.rfind("collision", 0) == 0 && field != "collisionMask")
         {
             if (!actor->scriptBlueprintPath.empty()) return;
             nlohmann::json payload{{"component", ScriptComponentId(node)}, {"field", field}};
@@ -3370,8 +3850,14 @@ void MaterialInstanceAssetEditorPanel::HandleChange(Rml::Element& element, const
             if (node.value(field, "") == value) return;
             candidate = value;
         }
-        else if (field == "autoActivate" || field == "visible") candidate = value == "true";
-        else if (field == "fov" || field == "near_clip" || field == "far_clip" || IsScriptLightNumber(field))
+        else if (field == "autoActivate" || field == "visible" || field == "doCollisionTest" ||
+            field == "enableCameraLag" || field == "enableCameraRotationLag" || field == "usePawnControlRotation" ||
+            field == "inheritPitch" || field == "inheritYaw" || field == "inheritRoll" ||
+            field == "absoluteRotation" || field == "drawDebug" || field == "useCameraLagSubstepping") candidate = value == "true";
+        else if (field == "fov" || field == "near_clip" || field == "far_clip" || field == "priority" ||
+            field == "targetArmLength" || field == "probeRadius" || field == "collisionMask" ||
+            field == "cameraLagSpeed" || field == "cameraLagMaxDistance" || field == "cameraRotationLagSpeed" ||
+            field == "cameraLagMaxTimeStep" || IsScriptLightNumber(field))
         {
             float number;
             if (!ParseNumber(value, number)) return;
@@ -3380,8 +3866,8 @@ void MaterialInstanceAssetEditorPanel::HandleChange(Rml::Element& element, const
         else
         {
             float number;
-            if ((field != "position" && field != "rotation" && field != "scale" && field != "color") ||
-                !ParseNumber(value, number)) return;
+            if ((field != "position" && field != "rotation" && field != "scale" && field != "color" &&
+                 field != "socketOffset" && field != "rotationOffset" && field != "targetOffset") || !ParseNumber(value, number)) return;
             const auto axis = element.GetAttribute<size_t>("data-component", 0);
             if (axis >= 3) return;
             const int fallback = field == "scale" || field == "color" ? 1 : 0;
@@ -3837,9 +4323,11 @@ void MaterialInstanceAssetEditorPanel::ProcessEvent(Rml::Event& event)
     if (event.GetType() == "click" && (action == "save-file" || action == "script-physics-trigger" ||
         action == "blueprint-asset-instance" || action == "blueprint-asset-physics-trigger" ||
         action == "blueprint-asset-component-instance" || action == "blueprint-asset-snap-enabled" ||
-        action == "log-autoscroll")) return;
+        action == "log-autoscroll" || action == "animation-clip" || action == "animation-time" ||
+        action == "motion-debug" || action == "debug-draw-enabled" || action == "debug-draw-category" ||
+        action == "debug-draw-owner")) return;
     // 选中菜单条目后收起菜单；标题自己决定展开还是收起，不能在这里先清空。
-    if (action != "menu-open" && IsInsideMenuBar(element)) CloseMenus();
+    if (action != "menu-open" && action.rfind("debug-draw-", 0) != 0 && IsInsideMenuBar(element)) CloseMenus();
     try
     {
         std::optional<std::string> openAssetPath;

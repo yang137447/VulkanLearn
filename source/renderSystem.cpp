@@ -2248,6 +2248,7 @@ void RenderSystem::UpdateObjectUBOForPass(
     // packet.
     const SpeedTreeWindStateGPU* windState =
         speedTreeWindProfiles.FindGpuState(drawPacket.speedTreeWindProfileKey);
+    objectResources.submittedSkin.RetainIfSubmittedAt(submittedFrameSerial);
     frameResources.UpdateObjectUniformBuffer(
         swapChainImageIndex,
         objectResources,
@@ -3121,6 +3122,10 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
         // acquire 失败没有提交；保留帧号和截图请求，等待 GT 重建 swapchain。
         return;
     }
+    // 相机历史同样绑定真实提交，不能使用可能未被渲染的 GT 快照历史。
+    currentRenderScene.camera.previousViewProjection =
+        submittedViewProjection && submittedCameraGeneration == currentRenderScene.worldGeneration
+        ? *submittedViewProjection : currentRenderScene.camera.viewProjection;
     uiOverlayRenderer.CollectRetiredTextures();
     uint32_t frameIndex = frameContext.frameIndex;
     swapChainImageIndex = frameContext.swapchainImageIndex;
@@ -3238,12 +3243,18 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
                 commandBuffer,
                 "UI Overlay",
                 VulkanDebug::DebugCategory::eDefault);
+            const RenderResource* debugDepth = nullptr;
+            if (!offlineMode && currentUiRenderSnapshot->debugDepthTest)
+                debugDepth = PassBarrier::BeginSceneDepthRead(commandBuffer, renderGraph, swapChainImageIndex);
             uiOverlayRenderer.Record(
                 commandBuffer,
                 swapChainImageIndex,
                 *currentUiRenderSnapshot,
                 viewportOutput ? viewportOutput->imageView : vk::ImageView{},
-                viewportOutput ? viewportOutput->sampler : vk::Sampler{});
+                viewportOutput ? viewportOutput->sampler : vk::Sampler{},
+                debugDepth ? debugDepth->GetShaderDescriptorView() : vk::ImageView{},
+                debugDepth ? debugDepth->sampler : vk::Sampler{});
+            if (debugDepth) PassBarrier::EndSceneDepthRead(commandBuffer, renderGraph, swapChainImageIndex);
         }
     }
 
@@ -3269,6 +3280,19 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
     // RenderSystem only records pass commands. Queue, semaphore, fence,
     // swapchain, present, and retire epoch details stay backend-owned.
     rendererBackend->SubmitFrame(frameContext, currentFrame);
+    ++submittedFrameSerial;
+    submittedCameraGeneration = currentRenderScene.worldGeneration;
+    submittedViewProjection = currentRenderScene.camera.viewProjection;
+    if (!offlineMode)
+        for (const auto& material : currentResolvedRenderScene.materialGroups)
+            for (const auto& instance : material.materialInstances)
+                for (const auto& draw : instance.draws)
+                {
+                    const auto& packet = currentRenderScene.drawPackets.at(draw.drawPacketIndex);
+                    if (packet.skinPose && draw.objectResourceEntry)
+                        draw.objectResourceEntry->GetResources().submittedSkin.Commit(
+                            packet.skinPose, packet.model, submittedFrameSerial);
+                }
     if (!offlineMode && renderGraph.GetAutoExposure())
         renderGraph.GetAutoExposure()->OnFrameSubmitted();
 

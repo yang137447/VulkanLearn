@@ -70,6 +70,7 @@ public:
     void SynchronizeWorld(const std::shared_ptr<World>& world);
     ScriptRuntimeView View(uint64_t generation) const;
     bool IsEditing() const { return state == ScriptPlayState::Editing; }
+    bool IsPaused() const { return state == ScriptPlayState::Paused; }
     const nlohmann::json& Classes() const { return classes; }
     const nlohmann::json& ComponentClasses() const { return componentClasses; }
     bool SetTimeScale(float value, std::string& error);
@@ -88,10 +89,12 @@ public:
 
 private:
     std::shared_ptr<ScriptWorldContext> CreateContext(const nlohmann::json& blueprints,
-        const nlohmann::json& templates = nlohmann::json::object(), uint64_t generation = 0);
+        const nlohmann::json& templates = nlohmann::json::object(), uint64_t generation = 0,
+        const nlohmann::json& animationCatalog = nlohmann::json::object(),
+        const nlohmann::json& animationAssets = nlohmann::json::object());
     void Apply(World& world, const nlohmann::json& response);
     void CollectDiagnostics(const nlohmann::json& response, const World* world = nullptr);
-    void StepPhysics(World& world, bool advance, bool collectQueries = true);
+    void StepPhysics(World& world, float dt, bool collectQueries = true);
     void RefreshPerformance(World& world, bool details = true);
     bool ReloadPlayingAssembly(World& world, std::string& error, const std::string& candidateAssembly);
     void Stop(World& world);

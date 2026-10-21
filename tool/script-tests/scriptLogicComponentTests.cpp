@@ -109,7 +109,7 @@ protected:
     std::shared_ptr<World> world;
 };
 
-TEST_F(ScriptLogicComponentTest, RunsIndependentLifecycleFixedTickAndQuaternionDefaults)
+TEST_F(ScriptLogicComponentTest, RunsIndependentLifecycleTickAndQuaternionDefaults)
 {
     auto blueprint = LogicBlueprint();
     blueprint["scriptComponents"][0]["properties"]["Speed"] = 60;
@@ -119,16 +119,15 @@ TEST_F(ScriptLogicComponentTest, RunsIndependentLifecycleFixedTickAndQuaternionD
     EXPECT_FALSE(component["failed"]);
     EXPECT_EQ(component["properties"]["Begins"], 1);
     EXPECT_EQ(component["properties"]["Ticks"], 1);
-    EXPECT_EQ(component["properties"]["FixedTicks"], 1);
     EXPECT_EQ(component["properties"]["Orientation"], Json::array({0, 0, 0, 1}));
     EXPECT_NEAR(State()["position"][0].get<float>(), 1, 1e-4f);
     // 生命周期次数读取完整诊断；生产 UI 明细按 10 Hz 采样，不能假定每帧同步。
     const auto metrics = world->GetScriptContext()->Call("runtime_snapshot").at("result")
         .at("blueprints").at(0).at("components").at(0);
-    bool hasFixedTiming = false;
+    bool hasTickTiming = false;
     for (const auto& timing : metrics.at("callbacks"))
-        if (timing.at("phase") == "FixedTick") hasFixedTiming = timing.at("calls").get<int>() == 1;
-    EXPECT_TRUE(hasFixedTiming);
+        if (timing.at("phase") == "Tick") hasTickTiming = timing.at("calls").get<int>() == 1;
+    EXPECT_TRUE(hasTickTiming);
 }
 
 TEST_F(ScriptLogicComponentTest, FailedComponentRollsBackOwnerTransformAndOtherComponentsContinue)

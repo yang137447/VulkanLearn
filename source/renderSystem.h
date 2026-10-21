@@ -426,6 +426,9 @@ private:
     // 编辑器参考网格几何：只由 editorGrid pass 消费，随帧资源一起创建/释放。
     VL::EditorViewportGrid editorViewportGrid;
     VL::RenderScene currentRenderScene;
+    uint64_t submittedCameraGeneration = 0;
+    std::optional<Eigen::Matrix4f> submittedViewProjection;
+    uint64_t submittedFrameSerial = 0;
     VL::ResolvedRenderScene currentResolvedRenderScene;
     // 拾取只读 GT 发布快照时生成的副本，避免 worker render thread 更新
     // currentRenderScene 时与鼠标事件并发读写同一对象。

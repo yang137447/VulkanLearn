@@ -98,6 +98,7 @@ MeshDrawSnapshot BuildMeshDrawSnapshot(
     bool selected)
 {
     MeshDrawSnapshot snapshot;
+    snapshot.skinPose = meshObject.skinPose;
     snapshot.objectId = objectId;
     snapshot.selected = selected;
     snapshot.debugName = meshObject.debugName.empty() ? objectName : meshObject.debugName;

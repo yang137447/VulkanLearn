@@ -7,6 +7,7 @@
 
 #include "editor/ui/editorSceneActorTypes.h"
 #include "script/scriptComponents.h"
+#include "debug/debugProjection.h"
 
 namespace VL::EditorUi
 {
@@ -39,55 +40,19 @@ inline Eigen::Vector2f ActorVisualScreenPoint(const EditorSceneCameraActor& view
 inline bool ProjectActorVisualPoint(const EditorSceneCameraActor& view,
     const Eigen::Vector3f& point, float width, float height, Eigen::Vector2f& pixel)
 {
-    if (width <= 0.0f || height <= 0.0f) return false;
-    const Eigen::Vector3f local = ActorVisualViewPoint(view, point);
-    if (local.z() < view.clipNear || local.z() > view.clipFar) return false;
-    pixel = ActorVisualScreenPoint(view, local, width, height);
-    return pixel.x() >= 0 && pixel.x() < width && pixel.y() >= 0 && pixel.y() < height;
+    const Debug::Camera camera{view.position, view.forward, view.right, view.up,
+        view.horizontalFovDegrees, view.clipNear, view.clipFar};
+    return Debug::ProjectPoint(camera, point, width, height, pixel);
 }
 
 inline void AddActorVisualLine(std::vector<EditorActorVisualLine>& lines,
     const EditorSceneCameraActor& view, Eigen::Vector3f begin, Eigen::Vector3f end,
     float width, float height)
 {
-    if (width <= 0.0f || height <= 0.0f) return;
-    begin = ActorVisualViewPoint(view, begin);
-    end = ActorVisualViewPoint(view, end);
-    // 先裁近/远平面再透视除法：跨过眼点的锥边不能变成巨大或倒向的屏幕线段。
-    float lower = 0.0f, upper = 1.0f;
-    const Eigen::Vector3f delta = end - begin;
-    if (std::abs(delta.z()) < 1.0e-8f)
-    {
-        if (begin.z() < view.clipNear || begin.z() > view.clipFar) return;
-    }
-    else
-    {
-        const float a = (view.clipNear - begin.z()) / delta.z();
-        const float b = (view.clipFar - begin.z()) / delta.z();
-        lower = std::max(lower, std::min(a, b));
-        upper = std::min(upper, std::max(a, b));
-        if (lower > upper) return;
-    }
-    Eigen::Vector2f first = ActorVisualScreenPoint(view, begin + delta * lower, width, height);
-    Eigen::Vector2f last = ActorVisualScreenPoint(view, begin + delta * upper, width, height);
-    const Eigen::Vector2f screenDelta = last - first;
-    lower = 0.0f;
-    upper = 1.0f;
-    for (int axis = 0; axis < 2; ++axis)
-    {
-        const float extent = axis == 0 ? width : height;
-        if (std::abs(screenDelta[axis]) < 1.0e-8f)
-        {
-            if (first[axis] < 0.0f || first[axis] > extent) return;
-            continue;
-        }
-        const float a = -first[axis] / screenDelta[axis];
-        const float b = (extent - first[axis]) / screenDelta[axis];
-        lower = std::max(lower, std::min(a, b));
-        upper = std::min(upper, std::max(a, b));
-        if (lower > upper) return;
-    }
-    lines.push_back({first + screenDelta * lower, first + screenDelta * upper});
+    const Debug::Camera camera{view.position, view.forward, view.right, view.up,
+        view.horizontalFovDegrees, view.clipNear, view.clipFar};
+    Debug::ScreenLine result;
+    if (Debug::ProjectLine(camera, begin, end, width, height, result)) lines.push_back({result.begin, result.end});
 }
 
 inline std::vector<EditorActorVisualLine> BuildActorVisualLines(

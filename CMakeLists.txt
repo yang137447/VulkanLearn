@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.24)
 
 project(vulkan_learn LANGUAGES C CXX)
 
@@ -7,6 +7,10 @@ include(CTest)
 option(VULKANLEARN_BUILD_TESTS
     "Build VulkanLearn-owned unit and integration test executables."
     ON)
+
+option(VULKANLEARN_BUILD_ANIMATION_TOOLS
+    "Build animation asset import and preflight tools."
+    OFF)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -18,9 +22,14 @@ find_package(Threads REQUIRED)
 add_subdirectory(extern)
 add_subdirectory(script)
 add_subdirectory(source/render/offline/core)
+add_subdirectory(source/animation)
+add_subdirectory(source/debug)
 add_subdirectory(source)
 add_subdirectory(tool/asset-edit)
 add_subdirectory(tool/game-export)
+if(VULKANLEARN_BUILD_ANIMATION_TOOLS)
+    add_subdirectory(tool/animation)
+endif()
 
 if(VULKANLEARN_BUILD_TESTS)
     enable_testing()
@@ -62,7 +71,11 @@ if(VULKANLEARN_BUILD_TESTS)
     add_subdirectory(tool/ui-control-tests)
     add_subdirectory(tool/controller-tests)
     add_subdirectory(tool/script-tests)
+    add_subdirectory(tool/debug-draw-tests)
     add_subdirectory(tool/game-export-tests)
+    if(VULKANLEARN_BUILD_ANIMATION_TOOLS)
+        add_subdirectory(tool/animation-tests)
+    endif()
 endif()
 
 option(VULKANLEARN_BUILD_SPEEDTREE_WIND_VALIDATION

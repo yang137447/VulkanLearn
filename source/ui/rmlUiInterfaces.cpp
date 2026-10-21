@@ -335,6 +335,8 @@ void RmlUiRenderInterface::RenderGeometry(
         UiVertex vertex = sourceVertex;
         vertex.position[0] = position.x;
         vertex.position[1] = position.y;
+        vertex.debugDepth = debugDepth;
+        if (debugDepth >= 0) currentSnapshot->debugDepthTest = true;
         currentSnapshot->vertices.push_back(vertex);
     }
 
@@ -519,6 +521,7 @@ void RmlUiRenderInterface::SetTransform(const Rml::Matrix4f* transform)
 void RmlUiRenderInterface::BeginFrame(UiRenderSnapshot& renderSnapshot)
 {
     currentSnapshot = &renderSnapshot;
+    debugDepth = -1;
     scissorEnabled = false;
     transformEnabled = false;
     currentTransform = Rml::Matrix4f::Identity();

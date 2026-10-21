@@ -7,6 +7,7 @@
 #include <vulkan/vulkan.hpp>
 
 class RenderGraph;
+struct RenderResource;
 
 class PassBarrier
 {
@@ -19,6 +20,11 @@ public:
         const RenderGraph& renderGraph,
         size_t passIndex,
         uint32_t swapChainImageIndex);
+    // 图执行完后的临时只读消费者；归还时恢复图末布局，不改变下一帧编译计划。
+    static const RenderResource* BeginSceneDepthRead(vk::CommandBuffer& commandBuffer,
+        const RenderGraph& renderGraph, uint32_t imageIndex);
+    static void EndSceneDepthRead(vk::CommandBuffer& commandBuffer,
+        const RenderGraph& renderGraph, uint32_t imageIndex);
 
 private:
     static void ApplyCompiledBarrierPlan(

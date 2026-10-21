@@ -9,7 +9,6 @@ public sealed class CounterComponent : Component
     [Expose] public int Ticks { get; set; }
     [Expose] public int Begins { get; set; }
     [Expose] public int Ends { get; set; }
-    [Expose] public int FixedTicks { get; set; }
     [Expose(InstanceEditable = true)] public bool FailTick { get; set; }
     [Expose(InstanceEditable = true)] public bool FailCreate { get; set; }
     [Expose(InstanceEditable = true)] public bool FailTimer { get; set; }
@@ -43,7 +42,6 @@ public sealed class CounterComponent : Component
             throw new InvalidOperationException("component-tick-failed");
         }
     }
-    protected override void FixedTick(float dt) => FixedTicks++;
     protected override void EndPlay(EndPlayReason reason) { Ends++; Log.Info($"component-end:{Id}"); }
 }
 

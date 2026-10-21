@@ -67,6 +67,7 @@ public static partial class NativeBridge
                 enabled = i.Blueprint.Enabled,
                 destroyed = i.Blueprint.PendingDestroy,
                 properties = CaptureProperties(i.Blueprint),
+                springArms = i.Blueprint.Components.OfType<SpringArmComponent>().Select(CaptureSpringArmHistory).ToArray(),
                 components = i.LogicComponents.Select(c => new
                 {
                     id = c.Value.Handle.Id,
@@ -98,6 +99,7 @@ public static partial class NativeBridge
                 throw new InvalidOperationException("Migration Blueprint identity or type differs.");
             RestoreRuntimeValues(instance, runtimeStates[blueprint.Handle.Id]);
             RestoreProperties(blueprint, source.GetProperty("properties"));
+            foreach (var arm in source.GetProperty("springArms").EnumerateArray()) RestoreSpringArmHistory(blueprint, arm);
             instance.Started = source.GetProperty("Started").GetBoolean();
             instance.Failed = source.GetProperty("Failed").GetBoolean();
             blueprint.Enabled = source.GetProperty("enabled").GetBoolean();
@@ -167,7 +169,9 @@ public static partial class NativeBridge
                 camera.HorizontalFov = node.GetProperty("fov").GetSingle();
                 camera.NearClip = node.GetProperty("near_clip").GetSingle();
                 camera.FarClip = node.GetProperty("far_clip").GetSingle();
+                if (node.TryGetProperty("priority", out var priority)) camera.Priority = IntValue(priority);
             }
+            if (component is SpringArmComponent arm) ReadSpringArmNode(arm, node);
             if (component is LightComponent light)
             {
                 light.Color = Vector(node.GetProperty("color"));

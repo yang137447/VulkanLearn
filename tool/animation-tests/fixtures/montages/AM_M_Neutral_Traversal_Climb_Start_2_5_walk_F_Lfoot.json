@@ -1,0 +1,73 @@
+{
+  "format": "vl.anim-montage.v1",
+  "montage": "AM_M_Neutral_Traversal_Climb_Start_2_5_walk_F_Lfoot",
+  "sequence": "Maps/SC_gasp/Source/M_Neutral_Traversal_Climb_Start_2_5_walk_F_Lfoot.anim.json",
+  "sequenceBlake3": "5f731ee63d33dd36a06fdf920ac1ce96202a15b23c89c9b06d9a72b359f8f5e5",
+  "slot": "DefaultSlot",
+  "length": 3.6,
+  "sections": [
+    {
+      "name": "Default",
+      "startTime": 0.0,
+      "endTime": 3.6,
+      "nextSection": "",
+      "nextTime": 0.0,
+      "linkMethod": ""
+    }
+  ],
+  "notifies": [
+    {
+      "kind": "notifyState",
+      "track": "2",
+      "name": "PoseSearchBranchIn",
+      "time": 0.0,
+      "duration": 0.953503
+    },
+    {
+      "kind": "notifyState",
+      "track": "1",
+      "name": "MotionWarping",
+      "time": 0.983966,
+      "duration": 0.309711,
+      "warp": {
+        "target": "FrontLedge",
+        "provider": "Bone",
+        "bone": "attach",
+        "subtractRemainingRootMotion": false,
+        "ignoreZAxis": false,
+        "warpRotation": true,
+        "rotationTimeMultiplier": 1.0,
+        "easing": "Linear"
+      }
+    },
+    {
+      "kind": "notifyState",
+      "track": "1",
+      "name": "MotionWarping",
+      "time": 1.293831,
+      "duration": 0.309711,
+      "warp": {
+        "target": "FrontLedge",
+        "provider": "Bone",
+        "bone": "attach",
+        "subtractRemainingRootMotion": false,
+        "ignoreZAxis": false,
+        "warpRotation": true,
+        "rotationTimeMultiplier": 1.0,
+        "easing": "Linear"
+      }
+    },
+    {
+      "kind": "notifyState",
+      "track": "1",
+      "name": "BP_NotifyState_TraversalBlendOut_C",
+      "time": 2.912966,
+      "duration": 1.320367
+    }
+  ],
+  "source": {
+    "t3d": "AM_M_Neutral_Traversal_Climb_Start_2_5_walk_F_Lfoot.copy",
+    "uePackage": "/Game/Characters/UEFN_Mannequin/Animations/Traversal/Climb/AM_M_Neutral_Traversal_Climb_Start_2_5_walk_F_Lfoot.AM_M_Neutral_Traversal_Climb_Start_2_5_walk_F_Lfoot",
+    "exportedBy": "import_gasp_montages.py"
+  }
+}

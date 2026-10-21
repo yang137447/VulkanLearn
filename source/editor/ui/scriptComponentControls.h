@@ -11,7 +11,8 @@ namespace VL::EditorUi
 inline std::string ScriptComponentOptions()
 {
     return UiWidgets::Option("scene", "Scene") + UiWidgets::Option("mesh", "Mesh") +
-        UiWidgets::Option("camera", "Camera") + UiWidgets::Option("pointLight", "Point Light") +
+        UiWidgets::Option("camera", "Camera") + UiWidgets::Option("springArm", "Spring Arm") +
+        UiWidgets::Option("pointLight", "Point Light") +
         UiWidgets::Option("spotLight", "Spot Light") + UiWidgets::Option("directionalLight", "Directional Light");
 }
 
@@ -124,7 +125,7 @@ inline std::string ScriptComponentControls(const EditorSceneActorSnapshot& actor
         if (node.at("type") == "camera")
         {
             for (const auto& field : std::vector<std::pair<std::string, float>>{
-                {"fov", 60}, {"near_clip", 1}, {"far_clip", 10000}})
+                {"fov", 60}, {"near_clip", 1}, {"far_clip", 10000}, {"priority", 0}})
                 markup += ScriptComponentProperty(actor, index, field.first, field.first, UiWidgets::Input(
                     ComponentControlId(index, field.first, 0, prefix), {prefix + "component-" + field.first, index},
                     node.contains(field.first) ? node.at(field.first).dump() : std::to_string(field.second)),
@@ -132,6 +133,47 @@ inline std::string ScriptComponentControls(const EditorSceneActorSnapshot& actor
             markup += ScriptComponentProperty(actor, index, "autoActivate", "Auto Activate",
                 UiWidgets::Select(ComponentControlId(index, "autoActivate", 0, prefix), {prefix + "component-autoActivate", index},
                     UiWidgets::Option("false", "False") + UiWidgets::Option("true", "True")), prefix, separateDetails);
+        }
+        if (node.at("type") == "springArm")
+        {
+            for (const auto& field : std::vector<std::pair<std::string, float>>{
+                {"targetArmLength", 300}, {"probeRadius", 12}, {"collisionMask", 65535},
+                {"cameraLagSpeed", 10}, {"cameraLagMaxDistance", 0}, {"cameraRotationLagSpeed", 10},
+                {"cameraLagMaxTimeStep", 1.0f / 60}})
+                markup += ScriptComponentProperty(actor, index, field.first, field.first, UiWidgets::Input(
+                    ComponentControlId(index, field.first, 0, prefix), {prefix + "component-" + field.first, index},
+                    node.contains(field.first) ? node.at(field.first).dump() : std::to_string(field.second)),
+                    prefix, separateDetails);
+            for (const auto& vector : std::vector<std::pair<std::string, std::string>>{
+                {"socketOffset", "Socket Offset (cm)"}, {"targetOffset", "Target Offset (world cm)"},
+                {"rotationOffset", "Rotation Offset (deg)"}})
+            {
+                std::vector<UiWidgets::NumericComponent> offsets;
+                for (uint32_t axis = 0; axis < 3; ++axis)
+                {
+                    UiWidgets::NumericComponent control;
+                    control.id = ComponentControlId(index, vector.first, axis, prefix);
+                    control.label = std::string(1, "XYZ"[axis]);
+                    control.value = node.contains(vector.first) ? node.at(vector.first)[axis].dump() : "0";
+                    control.change = {prefix + "component-" + vector.first, index, axis};
+                    offsets.push_back(std::move(control));
+                }
+                markup += ScriptComponentProperty(actor, index, vector.first, vector.second,
+                    UiWidgets::NumericComponents(offsets), prefix, separateDetails);
+            }
+            for (const auto& toggle : std::vector<std::pair<std::string, std::string>>{
+                {"doCollisionTest", "Do Collision Test"}, {"enableCameraLag", "Enable Camera Lag"},
+                {"enableCameraRotationLag", "Enable Camera Rotation Lag"},
+                {"useCameraLagSubstepping", "Camera Lag Substepping"},
+                {"usePawnControlRotation", "Use Pawn Control Rotation"},
+                {"inheritPitch", "Inherit Pitch"}, {"inheritYaw", "Inherit Yaw"},
+                {"inheritRoll", "Inherit Roll"}, {"absoluteRotation", "Absolute Rotation"},
+                {"drawDebug", "Draw Debug"}})
+                markup += ScriptComponentProperty(actor, index, toggle.first, toggle.second,
+                    UiWidgets::Select(ComponentControlId(index, toggle.first, 0, prefix),
+                        {prefix + "component-" + toggle.first, index},
+                        UiWidgets::Option("false", "False") + UiWidgets::Option("true", "True")),
+                    prefix, separateDetails);
         }
         if (IsScriptLight(node.at("type")))
         {

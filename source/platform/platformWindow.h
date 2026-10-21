@@ -34,6 +34,8 @@ public:
 
     void CenterOnScreen();
     void Show();
+    // 自动化验收用：显式请求 OS 输入焦点，避免后台启动时 SDL_GetKeyboardFocus 为空。
+    void Focus();
     void SetTitle(const std::string& title);
     void SetSize(int width, int height);
     // 物理像素尺寸（受系统缩放影响），与 SDL 的逻辑窗口尺寸不是同一个量。

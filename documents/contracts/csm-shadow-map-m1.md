@@ -125,6 +125,8 @@ paths:
   same vertex/surface semantics used by Base.
 - A shader named `xxx` may still provide a complete `xxx.shadow.vert/.frag`
   pair as the highest-priority explicit override.
+- SkinnedMesh requires composed ShadowDepth and rejects a complete standalone override,
+  so Base and shadow consume the same frozen skin palette.
 
 The resolved draw route is fixed:
 

@@ -46,6 +46,14 @@ void EditComponent(nlohmann::json& actor, const nlohmann::json& request,
     if (field != "parent" && field != "position" && field != "rotation" && field != "scale" &&
         field != "modelPath" && field != "materialOverride" && field != "fov" && field != "near_clip" && field != "far_clip" &&
         field != "autoActivate" && field != "visible" && field != "color" && !IsScriptLightNumber(field) &&
+        field != "targetArmLength" && field != "socketOffset" && field != "probeRadius" &&
+        field != "doCollisionTest" && field != "collisionMask" && field != "priority" &&
+        field != "enableCameraLag" && field != "cameraLagSpeed" && field != "cameraLagMaxDistance" &&
+        field != "enableCameraRotationLag" && field != "cameraRotationLagSpeed" &&
+        field != "usePawnControlRotation" && field != "inheritPitch" && field != "inheritYaw" &&
+        field != "inheritRoll" && field != "absoluteRotation" && field != "rotationOffset" &&
+        field != "drawDebug" && field != "targetOffset" && field != "useCameraLagSubstepping" &&
+        field != "cameraLagMaxTimeStep" &&
         field != "collisionShape" && field != "collisionHalfExtents" &&
         field != "collisionRadius" && field != "collisionHalfHeight")
         throw std::invalid_argument("Unsupported component edit");
@@ -66,7 +74,8 @@ void EditComponent(nlohmann::json& actor, const nlohmann::json& request,
             auto value = request.at("value");
             if (request.contains("axis") && field.rfind("collision", 0) != 0)
             {
-                if (field != "position" && field != "rotation" && field != "scale" && field != "color")
+                if (field != "position" && field != "rotation" && field != "scale" && field != "color" &&
+                    field != "socketOffset" && field != "rotationOffset" && field != "targetOffset")
                     throw std::invalid_argument("Component field is not a vector");
                 value = ScriptComponentFieldValue(node, field);
                 value.at(request.at("axis").get<size_t>()) = request.at("value");
@@ -81,7 +90,7 @@ void EditComponent(nlohmann::json& actor, const nlohmann::json& request,
                 for (auto& target : actor.at("components"))
                     if (ScriptComponentId(target) == component)
                     {
-                        if (field.rfind("collision", 0) == 0)
+                        if (field.rfind("collision", 0) == 0 && field != "collisionMask")
                             Editor::EditScriptComponentCollision(target, request);
                         else if (field == "materialOverride" && value == "") target.erase(field);
                         else target[field] = std::move(value);

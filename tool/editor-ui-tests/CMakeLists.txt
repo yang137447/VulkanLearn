@@ -5,6 +5,8 @@ add_executable(editor_ui_tests
     assetDocumentTests.cpp
     blueprintViewportInteractionTests.cpp
     modelPreviewCameraTests.cpp
+    debugDrawOverlayTests.cpp
+    "${PROJECT_SOURCE_DIR}/source/ui/debugDrawOverlay.cpp"
     "${PROJECT_SOURCE_DIR}/source/engine/modelPreviewCamera.cpp"
     resourceEditorControllerTests.cpp
     widgetTests.cpp
@@ -62,12 +64,14 @@ add_executable(editor_ui_tests
     "${PROJECT_SOURCE_DIR}/source/sceneNode.cpp")
 target_include_directories(editor_ui_tests PRIVATE "${PROJECT_SOURCE_DIR}/source")
 if(MINGW)
-    set_source_files_properties(blueprintViewportInteractionTests.cpp
+    # 主 RmlUi 套件的模板实例数已超过 MinGW 标准 COFF section 上限。
+    set_source_files_properties(editorUiTests.cpp blueprintViewportInteractionTests.cpp
+        "${PROJECT_SOURCE_DIR}/source/editor/ui/materialInstanceAssetEditorPanel.cpp"
         "${PROJECT_SOURCE_DIR}/source/editor/ui/blueprintViewportPanel.cpp"
         PROPERTIES COMPILE_OPTIONS "-Wa,-mbig-obj")
 endif()
 target_compile_definitions(editor_ui_tests PRIVATE
     VL_EDITOR_ASSET_ROOT="${PROJECT_SOURCE_DIR}/ui")
 target_link_libraries(editor_ui_tests PRIVATE
-    vl_ui_widgets RmlUi::Core SDL3::SDL3 Eigen3 Vulkan::Vulkan Json vl_offline_core Threads::Threads stb_image OpenEXR::OpenEXR BLAKE3::blake3)
+    vl_ui_widgets RmlUi::Core SDL3::SDL3 Eigen3 Vulkan::Vulkan Json vl_offline_core vl_animation_assets vl_debug_draw Threads::Threads stb_image OpenEXR::OpenEXR BLAKE3::blake3)
 vulkanlearn_add_gtest(editor_ui_tests)

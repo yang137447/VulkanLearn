@@ -10,6 +10,48 @@
 运行时句柄与作者引用分别为 `BlueprintHandle`、`BlueprintReference`。
 编辑器只注册 `blueprint.*` 命令；旧 Actor 资产类型、场景类型、引用字段和命令不兼容。
 
+骨骼 MeshComponent 的片段请求、原生反馈、Play/Pause/Stop 与重载限制见
+[动画播放与 GPU 蒙皮](animation-runtime-skinning.md#c-片段控制)。
+`Animation.Match` 提交数据库与允许片段集合、动作锁及可选 `matchSpeed`、
+`footPlacement`、`inertialization`、`rootOffset` 开关；原生拥有搜索、帧/时间选择、
+稳态步频、交叉混合、双参考点接地与视觉根修正。
+足部与根修正只作用于渲染姿态，MM 历史读取 pre-IK/无根修正姿态，Actor/Jolt 继续拥有位移。
+单数据库、空筛选、同版本资产绑定、查询/代价冻结及首次同步加载限制见
+[动画轨迹与特征数据库](animation-motion-features.md#运行时绑定与搜索)。
+`CharacterController.LinearVelocity` 为每帧角色实际位移除以帧 dt 得到的实际速度，
+不再表示撞墙时仍可能非零的期望走路速度。
+`StepPhysics(0)` 的零时步指令同步帧保留最近一帧的实际速度；胶囊纯 Y 轴转向不清速，
+也不视为位置传送。显式位置传送清零该反馈并刷新支撑查询。
+正式 GASP 控制器用该实际水平速度决定地面状态：小于 `2 cm/s` 的 Idle
+只允许 Idle 与 WalkStop 两个片段；持续向墙输入也遵守这个动作族。
+Walk/Run 保留包含循环、起步、停止与左右转身的六/七成员候选集合，
+由原生比较具体帧，C# 不指定片段时间或目标帧。
+
+资源侧 GASP 控制器的 `TurnSpeed` 属性默认 `540°/s`，用 scaled delta
+限制 Actor 每帧 yaw 变化，并取 `(-180°, 180°]` 内的最短角差；
+恰好 `180°` 固定向正角度旋转。每帧从当前 Transform 计算，不维护第二份旋转时钟。
+无输入保留朝向，Move 意图仍立即按相机方向提交；相机局部 yaw 抵消 Actor 转向。
+`TimeScale=0` 不消耗转向预算，但 Tick 内鼠标观察仍按控制器既有输入语义处理。
+该属性没有加入正式 BP 资产的 `instanceEditable` 清单，正式 BP 实例 Details 不提供其编辑。
+正式角色的 `MatchSpeed` 默认关闭，作为实验对照项加入 BP 的实例编辑清单；
+修改后按需重新提交 Match。HUD 的速率与速度残差来自原生反馈，
+不由 C# 计算动画时钟。API 默认 `matchSpeed=false`，旧调用保持原速。
+它匹配源根行程与实际速度，不保证足底锁定或消除脚滑。
+正式角色的 `FootPlacement`、`Inertialization` 与 `RootOffset` 同样默认关闭并允许 BP 实例编辑；
+`FootLock` 默认 `Auto`，可显式切 `Ball`/`Ankle` 与 UE `PivotAroundBall/PivotAroundAnkle` 对照。
+`PackageProbe` 默认关闭，仅用于独立包固定动作矩阵的测试 BP：开启时用固定时序替代
+Move/Sprint/Jump 输入并记录 MM 状态，不改变正式默认输入路径。
+HUD 显示原生接地原因、骨盆偏移与根偏移状态，`Animation.FootPlacement` 提供双足只读诊断。
+接地使用 ball 与踝下 heel 双绑定参考点、显式/自动支点和两骨 IK，
+不能作为真实鞋底网格、完整台阶质量或移动平台保证。
+原生局部姿态混合、未来朝向近似及脚滑限制见
+[动画播放与 GPU 蒙皮](animation-runtime-skinning.md#c-片段控制)。
+
+Blueprint/Component 的 `DebugDraw` 服务提供点、线、折线、箭头、圆、球、
+定向盒、胶囊、坐标轴和世界文字。调用限制、发布者句柄隔离、
+单帧/计时/持久生命周期、异常回滚与原生预算见 [公共 DrawDebug](debug-draw.md)。
+脚本只生产世界空间值，不持有 UI/渲染对象；自动清理在同批新几何拒绝时仍生效。
+
 ## 构建与配置
 
 Windows x64、MinGW 和 .NET 8 SDK：
@@ -103,7 +145,7 @@ Generated/Runtime/ScriptBuilds，不覆盖活动程序集。
 `id` 在同一场景唯一，禁止 `/`、`\`、`|`、NUL；显示名称不用于脚本身份。
 TRS 必填，位置厘米、旋转角度，缩放非零。`enabled` 缺省 true，
 `properties` 必填，接受下文列出的命名类型值。`components` 可省略或为空，最多 128 个
-`scene`/`mesh`/`camera`/`pointLight`/`spotLight`/`directionalLight` 组件。多个组件必须给唯一稳定 `id`；可选 `parent` 指向同 Blueprint
+`scene`/`mesh`/`camera`/`springArm`/`pointLight`/`spotLight`/`directionalLight` 组件。多个组件必须给唯一稳定 `id`；可选 `parent` 指向同 Blueprint
 组件，空串表示挂在 Blueprint 根。拒绝重复 ID、缺失父级与环。局部 position/rotation/scale
 可省略，默认零/零/一；mesh 另带 modelPath 与可选 materialOverride。
 父链完整矩阵参与合成，保留非均匀缩放导致的 shear，不做 TRS 分解。
@@ -344,14 +386,96 @@ LookX/LookY 只在 Esc 开启指针捕获后有效。此场景同样不是论文
 
 camera 可设置 `fov`（水平角，默认 60，0<值<179）、`near_clip`（默认 1 cm）、
 `far_clip`（默认 10000 cm），要求有限且 0<near<far。
-`autoActivate` 默认 false；Play/Spawn 在没有活动镜头时选取首个显式启用的镜头。
+`autoActivate` 默认 false；Play/Spawn 在没有活动镜头时选取显式启用且 `priority` 最高的镜头，
+同优先级按声明顺序取首个。`priority` 默认为 0，范围为 -100000..100000 的整数；
+它只参与初始选择，运行时改优先级不会抢占已激活镜头。
 C# 使用 `GetComponent<CameraComponent>(id)`，通过 `HorizontalFov`、`NearClip`、
 `FarClip` 修改投影，并在所属 GT 回调内 Activate/Deactivate 或查询 IsActive。
-位置合成完整父矩阵，镜头基向量只合成父链旋转，缩放/shear 不扭曲正交镜头。
+位置合成完整父挂接矩阵，镜头基向量只合成父挂接旋转，缩放/shear 不扭曲正交镜头。
 World 独立拥有脚本相机，物理同步后更新位置，再由 WorldSnapshot 冻结；
 宽高比随视口调整，曝光沿用作者相机。作者相机不会被脚本镜头覆盖。
 活动 owner 被禁用、故障或销毁时回到作者镜头；Stop 清除脚本镜头并恢复编辑观察视角。
-三人称示例使用下述 SphereCast 缩短遮挡时的镜头距离；没有通用镜头混合或自动选择后备组件。
+GASP 正式角色与翻越探针使用下述 SpringArm 缩短遮挡时的镜头距离；
+没有通用镜头混合或自动选择后备组件。
+
+## SpringArm 组件
+
+所有空间组件的局部 TRS 都相对父挂接空间；无 parent 时相对 Blueprint 根。
+`SceneComponent.WorldMatrix` 表示组件空间到世界空间，`WorldRotation` 为独立合成的正交四元数；
+`GetSocketTransform()` 返回供子组件使用的世界挂接矩阵。普通组件的挂接矩阵就是自身世界矩阵，
+`springArm` 的组件原点在臂根，挂接矩阵在求值后的臂端。
+Scene、mesh、camera、灯光及嵌套 SpringArm 均使用相同挂接路径，
+不按组件类型特判相机。子组件始终保留作者局部位置/旋转/缩放，
+中间 Scene 的局部偏移继续合成；不再把所有相机局部位置反写成同一世界落点。
+相机激活仍使用 Camera 的既有入口。
+VL 的后向为局部 +Z（对应 UE 的 -X），世界为 Y-up、厘米。
+
+原生使用列向量：`子组件世界矩阵 = 父挂接世界矩阵 × 子局部 TRS`；
+C# `System.Numerics` 使用行向量，乘法顺序相反，空间含义相同。
+Mesh 组件空间位于导入 section/model 空间外层；骨骼 pose/skin 矩阵仍属于动画模块，
+不把 Blueprint 父组件、mesh component space 与 bone local space 混成一个坐标系。
+重挂父级沿用现有 KeepRelative 语义，只换 parent，保留局部 TRS；没有 KeepWorld/Snap 选项。
+
+| JSON 字段 | 默认值与语义 |
+| --- | --- |
+| `targetArmLength` | 300 cm，0..100000；0 时跳过碰撞查询 |
+| `targetOffset` | 零向量，臂根的世界空间偏移 |
+| `socketOffset` | 零向量，按目标旋转变换的臂端偏移 |
+| `probeRadius` / `doCollisionTest` / `collisionMask` | 12 cm（0..100000）/ true / 65535（16 位整数）；半径 0 使用射线 |
+| `usePawnControlRotation` | false；启用时读取 `Blueprint.ControlRotation`（X/Y/Z 为 Pitch/Yaw/Roll 度），初值为 owner 初始朝向 |
+| `inheritPitch` / `inheritYaw` / `inheritRoll` | 均 true；关闭的轴保留 arm 局部作者角，适用于普通父链与 ControlRotation |
+| `absoluteRotation` | false；启用时忽略父旋转及逐轴继承，使用 arm 局部角；显式 ControlRotation 仍可覆盖 |
+| `rotationOffset` | 零向量，VL 扩展；叠加在目标臂旋转上，同时影响臂端和镜头朝向 |
+| `enableCameraLag` / `cameraLagSpeed` | false / 10（0..1000）；平滑臂根，单步系数 `clamp(speed*dt,0,1)`，速度 0 直接到目标 |
+| `cameraLagMaxDistance` | 0（0..100000 cm）；0 不限臂根滞后距离 |
+| `enableCameraRotationLag` / `cameraRotationLagSpeed` | false / 10（0..1000）；最短弧四元数插值，同时驱动臂端和朝向，速度 0 直接到目标 |
+| `useCameraLagSubstepping` / `cameraLagMaxTimeStep` | true / 1/60 s（0.005..0.5）；在相邻原始目标之间插值，分别推进位置与旋转阻尼 |
+| `drawDebug` | false；通过公共 DrawDebug 画单帧臂线与命中球，多臂按独立 key 发布 |
+
+参数经原生组件 schema 和 C# 属性 setter 校验；加载、运行时 `ComponentDescription`、
+状态导出、BP Details 与获准的 Scene 实例覆写均使用同名字段。长度与 SocketOffset 不乘父缩放，
+臂根位置仍经过完整父挂接矩阵；旋转只组合父链四元数，避免非均匀缩放/shear 扭曲镜头。
+臂端的子组件局部偏移仍继承完整缩放/shear，不把“不缩放臂长”误解成“不缩放子空间”。
+
+每帧先完成 Tick → `StepPhysics(dt)` → 查询/接触回调 → LateTick →
+`StepPhysics(0)` → 动画，再执行仅引擎内部的 `camera_prepare` / 球扫 / `camera_finish`：
+零时步先同步 LateTick 改动的根/碰撞体，使动画 Foot IK 查询本帧最终 Jolt 支撑状态；
+先在本帧最终 owner 位姿上计算 lag，再从未滞后的臂根（含 TargetOffset）扫向完整臂端
+（含 SocketOffset），最后发布裁剪后的相机。相机、刚体及障碍物使用同一物理状态，不额外推进时钟；
+用户 LateTick 查询仍在下一帧领取。静止臂每帧查询，移动障碍物不会复用旧命中。
+Jolt 球扫返回接触时的球心，直接作为相机位置，不重复减半径；碰撞修正在 lag 之后执行。
+忽略 owner 自身、排除 Trigger，按 Jolt mask 过滤；无命中/关闭碰撞/超预算使用未裁剪臂端。
+嵌套臂按父依赖求值，父臂碰撞完成后才派发子臂查询；同一帧可有多轮内部查询，
+均不推进物理或游戏时钟，组件数组的声明顺序不决定结果。
+CLR 导出臂节点内部 `__springArmSocket`（世界位置/旋转）供原生矩阵路径消费，
+不写子局部 TRS；作者 schema 拒绝此内部字段，不能保存进 BP 或 Scene。
+
+C# 的 `GetTargetRotation()`、`GetUnfixedCameraPosition()`、`IsCollisionFixApplied()` 提供只读诊断；
+目标旋转即时计算，未裁剪位置与碰撞标志来自最近一次求值，因此 LateTick 中读取后两者是上一帧结果。
+`ResetCameraLag()` 使下一次求值直接使用目标，适用于显式传送。臂只更新自己的挂接空间，
+直接修改子相机局部 TRS 会作为新的臂端相对变换保留。
+碰撞查询覆盖臂根到 SocketOffset 后的臂端；子组件额外局部位置不扩展这条查询，
+需要参与扫球的偏移应写在 SocketOffset。
+参数与 ControlRotation 参与回调异常回滚，
+播放中程序集重载保留参数、lag 历史、挂接落点及子组件局部变换，Stop 后重建。
+
+这是 UE 风格行为子集：碰撞使用本项目 Jolt mask，没有 UE TraceChannel/Profile、虚函数 BlendLocations、
+Pawn/PlayerCameraManager 栈、镜头混合或物理最大 dt 联动。
+没有命名 socket/骨骼挂点表，当前每个组件只提供一个默认挂接空间。
+VL 保留完整矩阵中的非均匀缩放/shear，不宣称逐位复刻 UE FTransform 的组合数值。
+Lag 子步沿原始目标插值，属于 VL 明确采用的帧率一致性口径，不宣称复刻特定 UE 版本的历史数值缺陷。
+UE 接口依据与空间边界见 [组件挂接记录](../rationale/springarm-component-space-record.md)。
+
+资源侧 `BP_gasp_character.json` 与 `BP_gasp_traversal_probe.json` 的父链为
+`springArm → camera`：挂点位于胶囊中心、局部位置 `(0,0,0)`，初始俯仰 `-12°`、
+臂长 `450 cm`、探测半径 `12 cm`，启用碰撞与 `usePawnControlRotation`，位置/旋转 lag 默认关闭。
+`Gasp.CharacterBlueprint` 从臂的作者俯仰和 Actor 初始 yaw 初始化 `ControlRotation`，
+鼠标输入只更新该世界朝向；移动和翻越根旋转不带偏玩家镜头。
+子相机作者局部位置/旋转为零，控制器不再另行写相机或提交镜头扫球。
+Blueprint 编辑预览使用同一原生组件空间求值，显示静态臂线、末端相机及子组件局部偏移，
+图示/拾取/gizmo/真实 mesh 使用一致的父挂接矩阵。
+预览没有托管上下文，不执行 OnCreate、ControlRotation、碰撞或 lag，
+以作者父链、旋转继承开关和 rotationOffset 显示静态设计姿态。
 
 ## 灯光组件
 
@@ -409,15 +533,22 @@ sphere 要求正 radius；capsule 要求正 radius 和 halfHeight，
 质量 kg 且为正，friction 非负，
 restitution 在 0..1。Blueprint 根缩放必须正且统一，播放中固定；
 视觉组件可独立缩放，但不会改变根碰撞形状。
-世界输入为 cm/kg/s，Jolt 内部转换为 m/kg/s；重力为 -981 cm/s²，
-60 Hz 固定步进，单帧最多 8 步，超额时间丢弃。Pause 冻结，Stop/World 换代释放物理世界。
-Jolt 注册表/Factory 属于进程，多个物理世界共享注册但分别拥有 body、allocator 和时间余量。
+世界输入为 cm/kg/s，Jolt 内部转换为 m/kg/s；重力为 -981 cm/s²。
+`ScriptPhysicsWorld::Step(states, declarations, dt)` 是唯一物理入口，每帧在 GT 同步执行：
+角色走 `MoveCharacter(dt)`，按帧 dt 推进，内部再按 UE CMC 的
+`MaxSimulationTimeStep=0.05` / `MaxSimulationIterations=8` 分段；
+刚体在 `1/60` 秒子步中推进，单帧最多 16 步，未达上限时保留不足一步的余量，
+超过上限时丢弃整步多余量；`dt=0` 不推进任何实体，只同步指令与接触/查询。
+Pause 冻结，Stop/World 换代释放物理世界。
+Jolt 注册表/Factory 属于进程，多个物理世界共享注册但分别拥有 body、allocator 和刚体子步余量。
 任务使用 `JobSystemSingleThreaded` 同步执行在 GT，不启动物理 worker。
 动态体与 kinematic 回写 position/rotation；脚本改根位姿表示 teleport。
+Character 根位置变更同样表示 teleport；其合法纯 Y 轴转向只更新朝向，
+保持最近完成物理帧的实际速度与既有支撑查询，后续物理帧再产生新反馈。
 `Body.LinearVelocity` 为 cm/s，`Body.AddImpulse(Vector3)` 为 kg·cm/s，指令仅消费一次。
-每帧全部 Tick 后先同步一次性指令，然后交替执行 FixedTick 与一个 Jolt 子步；
-每个 FixedTick 看到前一个子步的位置和速度。全部子步后发 OnCollisionEnter/OnCollisionExit，
-再执行 LateTick；LateTick 的指令在零时步边界同步，后续物理帧继续求解。
+每帧全部 Tick 后先同步一次性指令，再执行该帧 `Step(dt)`：角色按帧 dt 移动、
+刚体按内部子步推进。全部子步后发 OnCollisionEnter/OnCollisionExit，再执行 LateTick；
+LateTick 的指令由帧末 `Step(0)` 只领取、不推进时间，留给下一物理帧求解。
 接触按稳定 Blueprint ID 去重，不按 mesh section 重复发事件。
 接触快照通过 Jolt broadphase/窄相位形状查询获得，休眠不触发假 Exit。
 实体接触使用 0.2 cm 分离容差；Trigger 只接受实际相交，不产生碰撞响应，
@@ -456,7 +587,7 @@ character 必须配 capsule、正统一固定缩放及仅 Y 轴旋转；根位�
 控制器使用 Jolt `CharacterVirtual::ExtendedUpdate`，支持滑墙、台阶和贴地。
 可选 `stepHeight`（非负 cm，默认 30）、`jumpSpeed`（非负 cm/s，默认 500）、
 `maxSlopeAngle`（0≤角度<90，默认 45）。mass 默认 70 kg。
-角色有原生 capsule 查询代理，参与射线与 Trigger；重力只在原生固定步中积分。
+角色有原生 capsule 查询代理，参与射线与 Trigger；重力只在角色的每帧物理推进中积分。
 出生或传送在完整 body 集合同步后刷新支撑查询；移走/删除根体会唤醒旧位置附近的休眠体。
 
 ## 输入、计时器与 Blueprint 通信
@@ -504,7 +635,7 @@ Stop/World 换代释放委托，旧上下文句柄被拒绝。
 `AddComponent(ComponentDescription)` 返回带 Context/Blueprint/ID/Generation 的 ComponentHandle；
 `RemoveComponent(handle)` 删除子树，`AttachComponent(handle,parent?)` 保持局部 TRS 重挂父级，
 `ResolveComponent(handle)` 返回当前所属组件或 null。同一 ID 删除重建后旧 handle 失效。
-支持 scene/mesh/camera/三类灯光；每个 Blueprint 最多 128 个组件，每批最多 256 个结构请求。
+支持 scene/mesh/camera/springArm/三类灯光；每个 Blueprint 最多 128 个组件，每批最多 256 个结构请求。
 请求先在值节点上验证父链、投影、灯光及碰撞，再在回调批次结束后应用；
 回调失败丢弃该回调的结构请求。移除活动相机回到作者镜头，Stop 恢复作者组件树。
 Mesh/Material 组合需由当前 World 或已加载 BP 模板正式准备，回调本身不导入或上传。
@@ -546,7 +677,7 @@ BP 标签左侧 C# Components 集合支持新增/选择，右侧配置类、enab
 Reset 和逐项 Instance Editable；Scene Details 支持 inline 增删/启用及获准属性编辑，
 继承属性的黄色框/Reset 删除稀疏键。修改、历史、revision 和保存复用既有作者事务。
 
-组件具有 OnCreate、BeginPlay、Tick、FixedTick、LateTick、EndPlay、OnReload。
+组件具有 OnCreate、BeginPlay、Tick、LateTick、EndPlay、OnReload。
 候选构造先绑定完整组件集合，再执行 OnCreate；此阶段可访问 Owner.Transform 和日志，
 不能使用播放服务，失败拒绝候选。每阶段先执行 Blueprint，再按声明顺序执行其活动逻辑组件。
 禁用组件或 owner、故障、Destroy/Stop 会对已开始的组件执行一次 EndPlay 并清理其服务；
@@ -670,8 +801,8 @@ Scene 草稿、作者文件和 GPU 资源不改变。
 Playing/Paused 重载先根据新类目录验证作者 Blueprint、全部 Spawn 模板、
 当前作者实例、已生成实例及运行时逻辑组件，并构造新上下文、执行 OnCreate。
 随后恢复 `[Migrate]` 值及根/内置空间组件当前值、enabled/failed/destroyed、
-逻辑组件状态和活动镜头；保留原生 World generation、Jolt 世界、位姿/速度、
-脚本播放/固定时钟、时间余量、Time Scale 及 Playing/Paused 状态。
+逻辑组件状态和活动镜头；保留原生 World generation、Jolt 世界（含刚体 1/60 子步余量）、
+位姿/速度、脚本播放时钟与帧号、Time Scale 及 Playing/Paused 状态。
 接触/Trigger 已见边沿集合也保留，换代本身不重复产生 Enter。
 OnCreate 之后不会重复 BeginPlay，已开始且未故障/销毁的 owner 与组件执行 OnReload。
 旧上下文 handle/token 失效，应以 BlueprintReference/稳定 ID 重新查找；
@@ -695,8 +826,10 @@ SubsystemCollection 拥有 ScriptRuntimeSubsystem。候选 World 保存自己的
 静态字段、文件操作及脚本自行创建的线程不具备事务回滚语义。
 
 默认 Editing 不 Tick。Play 重新构造实例、绑定作者 TRS/属性、OnCreate、BeginPlay；
-每帧在 GT、输入更新后、渲染快照前执行 Tick →
-零到八次（FixedTick → Jolt 子步）→ 接触/查询回调 → LateTick。
+每帧在 GT、输入更新后、渲染快照前执行
+Tick(dt = frameDt × TimeScale) → `StepPhysics(dt)`（角色按帧 dt、刚体内部 1/60 子步）
+→ 接触/查询回调 → LateTick(同一 dt) → `StepPhysics(0)`（只同步 LateTick 指令/接触，不推进时间）→ 动画求值
+→ SpringArm 相机求值与同步查询（存在 arm 时）。
 Pause 冻结脚本时钟与回调；Play 恢复。Stop 执行 EndPlay、
 释放上下文、恢复作者 TRS 和可见性。成功替换 World 后停止旧上下文，
 新 World 回到 Editing；失败候选不会停止原来的游戏。Shutdown 在 renderer teardown 前释放。
@@ -721,17 +854,19 @@ BlueprintWorld 的 Spawn/Destroy/IsAlive 与可选 Body。Destroy 停止后续�
 
 | API | 语义 |
 | --- | --- |
-| DeltaTime / UnscaledDeltaTime | Tick/LateTick 为本帧倍率后/倍率前时长；FixedTick 为 1/60 与 `(1/60)/TimeScale` |
-| FixedDeltaTime / IsFixedTick | 固定 1/60 秒；标识当前是否固定回调 |
+| DeltaTime / UnscaledDeltaTime | Tick/LateTick 为同一帧的倍率后/倍率前时长；没有独立固定步时钟 |
 | TimeScale | 有限 0..100，只能由原生 SetTimeScale/工具栏 Time 命令修改 |
 | TimeSinceStartup | 原生脚本 subsystem 初始化后随引擎帧推进，Editing/Pause 继续 |
 | TimeSincePlay / UnscaledTimeSincePlay | Playing 期间累计倍率后/倍率前时长 |
-| FrameIndex / FixedFrameIndex | Play 中变量帧数及实际执行的固定子步数 |
+| FrameIndex | Play 中每帧 +1；没有固定步帧号 |
 
-单帧固定追赶最多八步，额外完整步丢弃并累计 droppedSteps/droppedTime，
-保留不足一步的时间余量。Pause 不回调、不推进 Play 时钟且保留余量；
-TimeScale=0 继续 Tick/LateTick、非倍率时钟和变量帧号，固定物理与 timer 冻结。
-Stop/World 换代重置 Play/固定时钟、余量及倍率至 1，保留 startup；Shutdown 全部清零。
+每帧只回调一次 Tick 与一次 LateTick，二者使用同一个帧 dt；没有 accumulator、
+固定步追赶或待补时间，因此不存在固定步数、丢步或丢时间字段。
+游戏回调的帧 dt 是 `EngineLoop` 以 `min(rawDelta, 0.1 s)` 做 hitch 防护后的帧间隔；
+FPS 与资产/脚本构建轮询仍使用原始 dt。
+Pause 不回调、不推进 Play 时钟与帧号；
+TimeScale=0 仍每帧 Tick/LateTick（dt=0），推进非倍率时钟和帧号，物理与 timer 冻结。
+Stop/World 换代重置 Play 时钟、帧号及倍率至 1，保留 startup；Shutdown 全部清零。
 工具栏 Time 输入走 World generation 校验的 GT 值请求，离线/资产预览拒绝，
 未完成且聚焦的文本不被快照刷新覆盖。
 
@@ -762,18 +897,18 @@ managedMs 包含托管解析、回调和响应序列化；snapshotMs 覆盖整�
 与桥接阶段重叠，不能将全部字段直接相加。
 
 跨边界数据是 ABI v1 有界 UTF-8 JSON 批次（4 MiB），不含原生指针。
-生产播放的 tick/fixed/late 使用显式 `delta:true` 请求与同名响应标志：
+生产播放的 `tick`/`late` 使用显式 `delta:true` 请求与同名响应标志：
 缺失身份表示该实例未变化，缺失字段保留既有值；新 Spawn 的首条记录完整。
 默认请求、Start 和显式迁移导出仍返回完整状态集合，完整结果继续校验缺失身份。
 GT 按稳定 ID 索引直接修改 World 运行状态槽，未变化对象不重新同步组件网格或发布视觉值。
 只有物理实例进入 Jolt 同步，物理回传带根 TRS、速度与着地状态，并先推进托管增量基线，
-保证每个 FixedTick 看见上一个子步；普通自定义配置不参与物理往返。
+保证下一帧 Tick 看见上一物理帧结果；普通自定义配置不参与物理往返。
 冲量、速度指令、Jump、查询与资产请求/取消按一次性命令交付，同值新命令不被状态去重。
 活动相机切换同时标记新旧 owner；回调之外产生的资源清理取消也标记 owner。
 托管只检查执行过用户回调/结构指令的实例的字段差异。
-未重写的基类 Tick/FixedTick/LateTick 不执行、也不产生回调 timing；
+未重写的基类 Tick/LateTick 不执行、也不产生回调 timing；
 显式空 override、继承 override、timer/event/查询/资产委托和生命周期仍执行。
-回调位掩码用弱 Type 键缓存，不阻止旧 Gameplay 程序集回收。
+回调位掩码只有 Tick/LateTick 两位，用弱 Type 键缓存，不阻止旧 Gameplay 程序集回收。
 此通道仍为 JSON，不是二进制 ABI；每帧仍采集有界性能摘要。
 导出先比较值再分配增量字典/向量，组件结构数组未变化时复用作者节点；
 完整导出及首次 Spawn 仍返回完整记录。

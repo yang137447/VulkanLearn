@@ -285,6 +285,170 @@ TEST(BlueprintViewportInteraction, NonMeshHelpersUseParentTransformsAndOfferStab
     EXPECT_EQ(*hit, "camera");
 }
 
+nlohmann::json SpringArmDraft()
+{
+    return {{"components", nlohmann::json::array({
+        {{"id", "arm"}, {"type", "springArm"}, {"rotation", {-12, 0, 0}},
+            {"targetArmLength", 450}, {"usePawnControlRotation", true}},
+        {{"id", "camera"}, {"type", "camera"}, {"parent", "arm"}}})}};
+}
+
+EditorSceneCameraActor SpringArmView()
+{
+    auto camera = Camera();
+    camera.position = {900, 180, 900};
+    camera.forward = (Eigen::Vector3f(0, 0, 200) - camera.position).normalized();
+    camera.right = camera.forward.cross(Eigen::Vector3f::UnitY()).normalized();
+    camera.up = camera.right.cross(camera.forward);
+    camera.clipFar = 10000;
+    return camera;
+}
+
+TEST(BlueprintViewportInteraction, SpringArmCameraHelperAndPickingUsePitchedRearEndpoint)
+{
+    const auto draft = SpringArmDraft();
+    const auto baseline = draft;
+    const auto view = SpringArmView();
+    const Eigen::Vector3f endpoint(0, 450 * std::sin(12 * 0.01745329252f),
+        450 * std::cos(12 * 0.01745329252f));
+    const auto helpers = BuildBlueprintViewportHelpers(draft, view, 800, 600);
+    ASSERT_EQ(helpers.size(), 2u);
+    ASSERT_TRUE(helpers[1].markerVisible);
+    Eigen::Vector2f pixel;
+    ASSERT_TRUE(ProjectBlueprintViewportPoint(view, 800, 600, endpoint, pixel));
+    EXPECT_TRUE(helpers[1].marker.isApprox(pixel));
+    EXPECT_EQ(HitBlueprintViewportHelper(helpers, pixel), std::optional<std::string>("camera"));
+    ASSERT_EQ(helpers[0].lines.size(), 5u);
+    EXPECT_TRUE(helpers[0].lines[0].end.isApprox(pixel));
+    EditorSceneActorSnapshot expected;
+    expected.type = EditorSceneActorType::Camera;
+    expected.camera.position = endpoint;
+    expected.camera.forward = Eigen::Vector3f(0, -std::sin(12 * 0.01745329252f),
+        -std::cos(12 * 0.01745329252f));
+    expected.camera.up = Eigen::Vector3f(0, std::cos(12 * 0.01745329252f),
+        -std::sin(12 * 0.01745329252f));
+    const auto frustum = BuildActorVisualLines(expected, view, 800, 600);
+    ASSERT_GE(helpers[1].lines.size(), frustum.size());
+    for (size_t index = 0; index < frustum.size(); ++index)
+    {
+        EXPECT_TRUE(helpers[1].lines[index].begin.isApprox(frustum[index].begin));
+        EXPECT_TRUE(helpers[1].lines[index].end.isApprox(frustum[index].end));
+    }
+    EXPECT_EQ(draft, baseline);
+}
+
+TEST(BlueprintViewportInteraction, SpringArmPreviewScalesMountButKeepsWorldAndSocketOffsetsInCentimeters)
+{
+    auto draft = SpringArmDraft();
+    draft["position"] = {10, 20, 30};
+    draft["rotation"] = {0, 90, 0};
+    draft["scale"] = {2, 3, 4};
+    auto& arm = draft["components"][0];
+    arm["position"] = {1, 2, 3};
+    arm["rotation"] = {0, 0, 0};
+    arm["scale"] = {7, 8, 9};
+    arm["targetOffset"] = {3, 4, 5};
+    arm["socketOffset"] = {6, 7, 8};
+    arm["enableCameraLag"] = true;
+    arm["enableCameraRotationLag"] = true;
+    const auto preview = EvaluateScriptComponentSpace(draft, 0);
+    EXPECT_TRUE((preview.worldFromComponent.block<3, 1>(0, 3) + ScriptVector(arm, "targetOffset")).isApprox(
+        Eigen::Vector3f(25, 30, 33), 1e-5f));
+    EXPECT_TRUE((preview.worldFromAttachment.block<3, 1>(0, 3).isApprox(Eigen::Vector3f(483, 37, 27), 1e-5f)));
+}
+
+TEST(BlueprintViewportInteraction, SpringArmPreviewHonorsDisabledYawInheritanceAndRotationOffset)
+{
+    auto draft = SpringArmDraft();
+    draft["rotation"] = {0, 90, 0};
+    auto& arm = draft["components"][0];
+    arm["rotation"] = {0, 10, 0};
+    arm["inheritYaw"] = false;
+    arm["rotationOffset"] = {0, 20, 0};
+    const auto preview = EvaluateScriptComponentSpace(draft, 0);
+    EXPECT_TRUE((preview.worldFromAttachment.block<3, 1>(0, 3).isApprox(
+        Eigen::Vector3f(225, 0, 450 * std::cos(30 * 0.01745329252f)), 1e-5f)));
+}
+
+TEST(BlueprintViewportInteraction, SpringArmPreviewAbsoluteRotationUsesAuthorLocalAxes)
+{
+    auto draft = SpringArmDraft();
+    draft["rotation"] = {20, 90, 30};
+    draft["components"][0]["absoluteRotation"] = true;
+    draft["components"][0]["inheritPitch"] = false;
+    const auto preview = EvaluateScriptComponentSpace(draft, 0);
+    EXPECT_TRUE((preview.attachmentRotation * Eigen::Vector3f::UnitZ()).isApprox(
+        Eigen::Vector3f(0, std::sin(12 * 0.01745329252f), std::cos(12 * 0.01745329252f)), 1e-5f));
+}
+
+TEST(BlueprintViewportInteraction, NestedArmAndSceneSpacesPreserveChildLocalPositionAndRotation)
+{
+    auto draft = SpringArmDraft();
+    draft["components"][0]["rotation"] = {0, 0, 0};
+    draft["components"].insert(draft["components"].begin() + 1,
+        nlohmann::json{{"id", "inner"}, {"type", "springArm"}, {"parent", "arm"},
+            {"position", {50, 0, 0}}, {"targetArmLength", 100}, {"absoluteRotation", true}});
+    draft["components"].insert(draft["components"].begin() + 2,
+        nlohmann::json{{"id", "pivot"}, {"type", "scene"}, {"parent", "inner"},
+            {"position", {100, 20, 0}}, {"rotation", {0, 30, 0}}});
+    auto& camera = draft["components"][3];
+    camera["parent"] = "pivot";
+    camera["position"] = {9, 8, 7};
+    camera["rotation"] = {0, 0, 15};
+    const auto space = EvaluateScriptComponentSpace(draft, 3);
+    const Eigen::Vector3f expected = Eigen::Vector3f(150, 20, 550) +
+        ScriptRotation({{"rotation", {0, 30, 0}}}) * Eigen::Vector3f(9, 8, 7);
+    EXPECT_TRUE((space.worldFromComponent.block<3, 1>(0, 3).isApprox(expected)));
+    EXPECT_TRUE(space.rotation.isApprox(ScriptRotation({{"rotation", {0, 30, 15}}}), 1e-5f));
+}
+
+TEST(BlueprintViewportInteraction, NonCameraSpringArmChildrenUseTheSameSocketSpace)
+{
+    auto draft = SpringArmDraft();
+    draft["components"][1]["type"] = "scene";
+    draft["components"][1]["position"] = {10, 0, 0};
+    const auto space = EvaluateScriptComponentSpace(draft, 1);
+    const Eigen::Vector3f expected(10, 450 * std::sin(12 * 0.01745329252f),
+        450 * std::cos(12 * 0.01745329252f));
+    EXPECT_TRUE((space.worldFromComponent.block<3, 1>(0, 3).isApprox(expected)));
+    EXPECT_TRUE(space.rotation.isApprox(ScriptComponentRotation(draft, 0)));
+}
+
+TEST(BlueprintViewportInteraction, SpringArmCameraGizmoEditsChildLocalSpaceAtSocket)
+{
+    auto draft = SpringArmDraft();
+    draft["components"][0]["rotationOffset"] = {0, 30, 0};
+    draft["components"][1]["position"] = {12, 34, 56};
+    const auto view = SpringArmView();
+    const auto gizmo = BuildBlueprintComponentGizmo(draft, 1, view, 800, 600, BlueprintGizmoMode::Rotate);
+    ASSERT_TRUE(gizmo.valid);
+    EXPECT_TRUE(gizmo.originWorld.isApprox(ScriptComponentMatrix(draft, 1).block<3, 1>(0, 3)));
+    const Eigen::Vector3f y = EvaluateScriptComponentSpace(draft, 0).attachmentRotation * Eigen::Vector3f::UnitY();
+    EXPECT_TRUE(gizmo.axes[1].worldAxis.isApprox(y, 1e-5f));
+    const auto helpers = BuildBlueprintViewportHelpers(draft, view, 800, 600);
+    EXPECT_TRUE(gizmo.originPixel.isApprox(helpers[1].marker));
+    const auto move = BuildBlueprintComponentGizmo(draft, 1, view, 800, 600, BlueprintGizmoMode::Translate);
+    ASSERT_TRUE(move.valid);
+    EXPECT_TRUE(move.axes[1].worldAxis.isApprox(y, 1e-5f));
+}
+
+TEST(BlueprintViewportInteraction, ReparentingUsesNewAttachmentSpaceAndKeepsChildLocalTRS)
+{
+    auto draft = SpringArmDraft();
+    draft["components"].push_back({{"id", "mesh"}, {"type", "mesh"}, {"parent", "camera"},
+        {"position", {12, 34, 56}}, {"rotation", {20, 30, 40}}, {"scale", {-2, 3, 4}}});
+    auto& mesh = draft["components"][2];
+    const auto local = ScriptTransformMatrix(mesh);
+    const auto camera = EvaluateScriptComponentSpace(draft, 1);
+    EXPECT_TRUE(ScriptComponentMatrix(draft, 2).isApprox(camera.worldFromAttachment * local));
+    mesh["parent"] = "arm";
+    const auto arm = EvaluateScriptComponentSpace(draft, 0);
+    EXPECT_TRUE(ScriptComponentMatrix(draft, 2).isApprox(arm.worldFromAttachment * local));
+    mesh["parent"] = "";
+    EXPECT_TRUE(ScriptComponentMatrix(draft, 2).isApprox(local));
+    EXPECT_TRUE(ScriptTransformMatrix(mesh).isApprox(local));
+}
+
 TEST(BlueprintViewportInteraction, RootCollisionOutlineCanSelectBlueprintSelf)
 {
     const nlohmann::json draft{{"physics", {{"shape", "box"}, {"halfExtents", {1, 1, 1}}}}};
@@ -397,6 +561,42 @@ TEST(BlueprintViewportInteraction, RootTransientTransformMovesAllGeometryAndLigh
     ASSERT_TRUE(ApplyBlueprintPreviewTransform(fixture.world, fixture.input, 11, fixture.draft));
     ASSERT_EQ(fixture.world.GetScriptLights().size(), 1u);
     EXPECT_TRUE(fixture.world.GetScriptLights().begin()->second.position.isApprox(Eigen::Vector3f(50, 25, 0)));
+}
+
+TEST(BlueprintViewportInteraction, MeshSectionLocalSpaceRemainsBelowComponentSpaceDuringParentDrag)
+{
+    PreviewWorldFixture fixture;
+    fixture.draft["scale"] = {-2, 3, 4};
+    fixture.draft["components"].push_back({{"id", "pivot"}, {"type", "scene"},
+        {"rotation", {15, 35, 20}}, {"position", {20, 30, 40}}});
+    fixture.draft["components"][0]["parent"] = "pivot";
+    fixture.draft["components"][0]["rotation"] = {25, 10, 5};
+    fixture.draft["components"][0]["position"] = {8, 9, 10};
+    const auto actor = BuildBlueprintPreviewObjects(fixture.input.assetPath, 11, 11, fixture.draft).at(0);
+    fixture.world.SetScriptBlueprints(nlohmann::json::array({actor}));
+    const Eigen::Matrix4f importedSection = ScriptTransformMatrix(
+        {{"position", {2, 5, 7}}, {"rotation", {5, 10, 15}}, {"scale", {1, 2, 3}}});
+    WorldMeshObject section = fixture.world.GetMeshObjects().at("body-section");
+    section.model = importedSection;
+    fixture.world.AddMeshObject("body-section", section);
+    fixture.world.ApplyScriptBlueprintVisuals(actor);
+    fixture.input.componentId = "pivot";
+    fixture.input.value = {100, 200, 300};
+    ASSERT_TRUE(ApplyBlueprintPreviewTransform(fixture.world, fixture.input, 11, fixture.draft));
+    auto candidate = actor;
+    candidate["components"][2]["position"] = fixture.input.value;
+    const Eigen::Matrix4f expected = ScriptComponentMatrix(candidate, 0) * importedSection;
+    EXPECT_TRUE(fixture.world.GetMeshObjects().at("body-section").model.isApprox(expected, 1e-4f));
+    WorldSnapshotBuilder builder;
+    WorldSnapshotBuildDesc description;
+    const auto snapshot = builder.Build(fixture.world, description);
+    ASSERT_TRUE(snapshot.IsSuccess());
+    ASSERT_EQ(snapshot.Value().meshDraws.size(), 1u);
+    EXPECT_TRUE(snapshot.Value().meshDraws[0].model.isApprox(expected, 1e-4f));
+    fixture.input.reset = true;
+    ASSERT_TRUE(ApplyBlueprintPreviewTransform(fixture.world, fixture.input, 11, fixture.draft));
+    EXPECT_TRUE(fixture.world.GetMeshObjects().at("body-section").model.isApprox(
+        ScriptComponentMatrix(actor, 0) * importedSection, 1e-4f));
 }
 
 TEST(BlueprintViewportInteraction, InvalidOrStaleTransientRequestsCannotMovePreviewGeometry)

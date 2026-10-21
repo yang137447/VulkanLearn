@@ -2,6 +2,7 @@
 #include "vertexDataStruct.h"
 #include "render/backend/rendererBackendVulkan.h"
 #include "mesh/loader/common/meshAssetLoader.h"
+#include "animation/skeletalPlayback.h"
 
 #include <cstring>
 
@@ -38,6 +39,16 @@ RenderableObject::RenderableObject(
     UpdateLocalBounds();
     CreateVertexBuffer();
     CreateIndexBuffer();
+    try
+    {
+        CreateSkinInfluenceBuffer();
+    }
+    catch (...)
+    {
+        DestroyIndexBuffer();
+        DestroyVertexBuffer();
+        throw;
+    }
 }
 
 const std::vector<Vertex>& RenderableObject::GetVertices() const
@@ -54,11 +65,39 @@ const std::vector<uint32_t>& RenderableObject::GetIndices() const
 
 RenderableObject::~RenderableObject()
 {
+    if (rendererBackend && skinInfluenceBuffer)
+        rendererBackend->DestroyBuffer(skinInfluenceBuffer, skinInfluenceMemory);
     // 销毁索引缓冲区
     DestroyIndexBuffer();
     // 销毁顶点缓冲区
     DestroyVertexBuffer();
     rendererBackend = nullptr;
+}
+
+void RenderableObject::CreateSkinInfluenceBuffer()
+{
+    if (!imported || !imported->modelResource.skeletalAsset) return;
+    const auto words = VL::Animation::PackSkinInfluences(
+        imported->modelResource.skeletalAsset->mesh.sections.at(importedSectionIndex));
+    const vk::DeviceSize size = words.size() * sizeof(uint32_t);
+    std::tie(skinInfluenceBuffer, skinInfluenceMemory) = rendererBackend->CreateBuffer(
+        size, vk::BufferUsageFlagBits::eStorageBuffer,
+        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+        "SkinInfluences: " + name);
+    try
+    {
+        void* mapped = rendererBackend->MapMemory(skinInfluenceMemory, size);
+        std::memcpy(mapped, words.data(), size);
+        rendererBackend->UnmapMemory(skinInfluenceMemory);
+    }
+    catch (...)
+    {
+        rendererBackend->DestroyBuffer(skinInfluenceBuffer, skinInfluenceMemory);
+        skinInfluenceBuffer = nullptr;
+        skinInfluenceMemory = nullptr;
+        throw;
+    }
+    skinInfluenceInfo.setBuffer(skinInfluenceBuffer).setOffset(0).setRange(size);
 }
 
 void RenderableObject::Draw(vk::CommandBuffer &commandBuffer)

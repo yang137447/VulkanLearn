@@ -61,18 +61,7 @@ BlueprintViewportGizmo ComponentGizmo(const Json& draft, size_t index,
             for (size_t axis : {0u, 2u}) { gizmo.axes[axis].visible = false; gizmo.axes[axis].lines.clear(); }
         return gizmo;
     }
-    const auto& node = draft.at("components").at(index);
-    Eigen::Matrix4f parent = ScriptTransformMatrix(draft);
-    Eigen::Quaternionf rotation = ScriptRotation(draft);
-    const auto parentIndex = ComponentIndex(draft, node.value("parent", ""));
-    if (parentIndex < draft.at("components").size())
-    {
-        parent = ScriptComponentMatrix(draft, parentIndex);
-        rotation = ScriptComponentRotation(draft, parentIndex);
-    }
-    return BuildBlueprintViewportGizmo(camera, width, height, parent, rotation,
-        ScriptVector(node, "position"), ScriptVector(node, "rotation"),
-        ScriptVector(node, "scale", 1), GizmoMode(tool));
+    return BuildBlueprintComponentGizmo(draft, index, camera, width, height, GizmoMode(tool));
 }
 
 void BoundsLines(std::vector<EditorActorVisualLine>& lines, const EditorSceneCameraActor& camera,

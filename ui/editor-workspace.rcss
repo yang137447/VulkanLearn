@@ -958,3 +958,64 @@ body {
 .save-path { flex: 1; min-width: 0; white-space: normal; overflow: hidden; font-size: 12px; }
 .save-state { width: 105px; flex-shrink: 0; padding-left: 8px; font-size: 11px; }
 #save-document-status { margin-top: 8px; white-space: normal; max-height: 60px; overflow-y: auto; }
+#resource-animation-tools { display: none; align-items: center; flex-wrap: wrap; padding: 4px; gap: 4px; }
+#resource-animation-clip { width: 230px; max-width: 100%; }
+#resource-animation-time { width: 160px; height: 20px; }
+#resource-animation-status { font-size: 11px; white-space: normal; }
+.motion-debug-toggle { display: flex; align-items: center; width: 70px; height: 24px; flex-shrink: 0; margin-right: 4px; font-size: 11px; padding: 2px; white-space: nowrap; }
+.motion-debug-toggle input { width: 14px; height: 14px; margin-right: 4px; }
+.motion-debug-toggle span { width: 42px; flex-shrink: 0; }
+#viewport-motion-status { display: none; position: absolute; right: 8px; bottom: 8px; width: 70%; max-width: 600px; padding: 3px 4px; font-size: 11px; line-height: 14px; white-space: normal; color: #ffffff; background-color: #151519dd; pointer-events: none; }
+#viewport-motion-status.motion-matching-summary { height: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 候选表只占视口右侧，中心留给角色；短视口滚动读取固定行，不把工具条挤走。 */
+#viewport-motion-matching { display: none; position: absolute; top: 42px; right: 8px; width: 46%; max-width: 460px; max-height: 60%; padding: 5px 6px; box-sizing: border-box; overflow-y: auto; overflow-x: hidden; font-size: 11px; line-height: 14px; color: #e9edef; background-color: #151519eb; border-width: 1px; border-color: #566067; pointer-events: auto; z-index: 2; }
+#motion-matching-title { height: 16px; white-space: nowrap; overflow: hidden; color: #91d5bd; }
+#motion-matching-database { display: none; }
+.motion-matching-meta { height: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* P7 时间轴：只控制被聚焦控制器；暂停后 seek 不恢复播放，由 play 显式恢复。 */
+.motion-timeline { display: flex; height: 16px; align-items: center; margin: 0 0 1px 0; }
+.motion-timeline button { width: 18px; height: 14px; min-height: 0; padding: 1px 3px; margin: 0 3px 0 0; flex-shrink: 0; border-width: 0; background-color: #35413c; }
+.motion-timeline button img { width: 11px; height: 11px; }
+.motion-timeline input { flex: 1; min-width: 0; height: 12px; margin: 0 4px 0 0; }
+.motion-replay-row { height: 15px; }
+.motion-replay-toggle { display: flex; align-items: center; width: 58px; flex-shrink: 0; font-size: 11px; }
+.motion-replay-toggle input { width: 12px; height: 12px; margin: 0 3px 0 0; }
+#motion-replay-status { width: 70px; flex-shrink: 0; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #a0b1b9; }
+#motion-timeline-status { width: 82px; flex-shrink: 0; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #a0b1b9; }
+.motion-candidate { position: relative; height: 26px; box-sizing: border-box; border-top-width: 1px; border-color: #393d41; }
+.motion-candidate-heading { display: flex; height: 13px; line-height: 12px; align-items: center; }
+.motion-candidate-kind { width: 46px; flex-shrink: 0; color: #a0b1b9; }
+.motion-candidate-clip { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.motion-candidate-time { width: 45px; flex-shrink: 0; text-align: right; white-space: nowrap; overflow: hidden; margin-right: 5px; }
+.motion-candidate-costs { display: flex; height: 12px; line-height: 12px; }
+.motion-candidate-costs span { width: 25%; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.motion-cost-labels { margin-top: 1px; color: #9aabb3; }
+.motion-candidate-reason { width: 100px; height: 13px; flex-shrink: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #8cbcab; }
+.motion-rejected .motion-candidate-reason { color: #e1b17a; }
+.motion-candidate-detail { display: none; position: absolute; top: 13px; right: 0; width: 100%; padding: 4px; box-sizing: border-box; white-space: normal; word-break: break-all; color: #eeeeef; background-color: #121214; border-width: 1px; border-color: #6e6e76; pointer-events: none; z-index: 5; }
+.motion-candidate:hover .motion-candidate-detail { display: block; }
+.motion-query-heading { display: flex; height: 14px; }
+.motion-query-heading .motion-matching-meta { flex: 1; min-width: 0; }
+#motion-query-toggle { position: relative; width: 18px; height: 14px; min-height: 0; padding: 1px 3px; margin: 0; flex-shrink: 0; border-width: 0; background-color: #35413c; }
+#motion-query-toggle.active { background-color: #557d69; }
+#motion-query-toggle img { width: 12px; height: 12px; }
+.motion-query-hint { display: none; position: absolute; right: 0; top: 14px; width: 104px; padding: 3px; background-color: #121214; color: #eeeeef; pointer-events: none; z-index: 5; }
+#motion-query-toggle:hover .motion-query-hint { display: block; }
+#motion-query-details { display: none; }
+#viewport-motion-matching.query-expanded #motion-query-details { display: block; }
+#viewport-motion-matching.query-expanded #motion-matching-rows, #viewport-motion-matching.query-expanded #motion-matching-cost-labels { display: none; }
+.motion-query-identity { white-space: normal; word-break: break-all; line-height: 14px; margin-bottom: 4px; color: #a0b1b9; }
+.motion-query-channel { border-top-width: 1px; border-color: #393d41; padding: 2px 0; }
+.motion-query-channel-name { white-space: normal; word-break: break-all; line-height: 14px; }
+.motion-query-channel-values { display: flex; height: 14px; }
+.motion-query-channel-values span { width: 50%; white-space: nowrap; }
+#debug-draw-popup { width: 230px; padding: 8px; }
+#debug-draw-owner { width: 100%; margin: 6px 0; }
+#debug-draw-categories { max-height: 190px; overflow: auto; }
+.debug-draw-check { display: flex; align-items: center; min-height: 24px; }
+.debug-draw-check input { width: 14px; height: 14px; margin-right: 6px; }
+.debug-draw-footer { display: flex; align-items: center; justify-content: space-between; padding-top: 6px; }
+#resource-motion-features { display: none; }
+#resource-motion-status { font-size: 11px; white-space: normal; }
+.motion-feature-row { display: flex; justify-content: space-between; border-bottom: 1px #39393d; padding: 3px 0px; font-size: 11px; }
+.motion-feature-row span:first-child { width: 76%; white-space: normal; }

@@ -1,0 +1,87 @@
+{
+  "format": "vl.anim-montage.v1",
+  "montage": "AM_M_Neutral_Traversal_Vault_1_0_run_F_Lfoot",
+  "sequence": "Maps/SC_gasp/Source/M_Neutral_Traversal_Vault_1_0_run_F_Lfoot.anim.json",
+  "sequenceBlake3": "4ba814af6e8c9b27d5cf69372f318a927eea87fae4185ed7a5603cfb39a595a1",
+  "slot": "DefaultSlot",
+  "length": 2.133333,
+  "sections": [
+    {
+      "name": "Default",
+      "startTime": 0.0,
+      "endTime": 2.133333,
+      "nextSection": "",
+      "nextTime": 0.0,
+      "linkMethod": ""
+    }
+  ],
+  "notifies": [
+    {
+      "kind": "notifyState",
+      "track": "2",
+      "name": "PoseSearchBranchIn",
+      "time": 0.0,
+      "duration": 0.614071
+    },
+    {
+      "kind": "notifyState",
+      "track": "3",
+      "name": "PoseSearchSamplingRange",
+      "time": 0.0,
+      "duration": 0.610912
+    },
+    {
+      "kind": "notifyState",
+      "track": "1",
+      "name": "MotionWarping",
+      "time": 0.618665,
+      "duration": 0.216705,
+      "warp": {
+        "target": "FrontLedge",
+        "provider": "Bone",
+        "bone": "attach",
+        "subtractRemainingRootMotion": false,
+        "ignoreZAxis": false,
+        "warpRotation": true,
+        "rotationTimeMultiplier": 1.0,
+        "easing": "Linear"
+      }
+    },
+    {
+      "kind": "notifyState",
+      "track": "2",
+      "name": "PlayMontageNotifyWindow",
+      "time": 0.708045,
+      "duration": 0.48403
+    },
+    {
+      "kind": "notifyState",
+      "track": "1",
+      "name": "MotionWarping",
+      "time": 0.836009,
+      "duration": 0.064038,
+      "warp": {
+        "target": "FrontLedge",
+        "provider": "Bone",
+        "bone": "attach",
+        "subtractRemainingRootMotion": false,
+        "ignoreZAxis": false,
+        "warpRotation": true,
+        "rotationTimeMultiplier": 1.0,
+        "easing": "Linear"
+      }
+    },
+    {
+      "kind": "notifyState",
+      "track": "1",
+      "name": "BP_NotifyState_TraversalBlendOut_C",
+      "time": 1.324706,
+      "duration": 0.808627
+    }
+  ],
+  "source": {
+    "t3d": "AM_M_Neutral_Traversal_Vault_1_0_run_F_Lfoot.copy",
+    "uePackage": "/Game/Characters/UEFN_Mannequin/Animations/Traversal/Vault/AM_M_Neutral_Traversal_Vault_1_0_run_F_Lfoot.AM_M_Neutral_Traversal_Vault_1_0_run_F_Lfoot",
+    "exportedBy": "import_gasp_montages.py"
+  }
+}

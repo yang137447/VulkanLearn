@@ -1,6 +1,9 @@
 file(GLOB_RECURSE sources CONFIGURE_DEPENDS "*.h" "*.cpp")
 # 纯 CPU 离线核心由独立静态库拥有，不能随递归源文件再次编进 main。
 list(FILTER sources EXCLUDE REGEX "/render/offline/core/")
+# 动画 CPU 资产和播放器由独立库拥有，避免递归源收集重复编译。
+list(FILTER sources EXCLUDE REGEX "/animation/")
+list(FILTER sources EXCLUDE REGEX "/debug/")
 # 可复用 UI 控件只依赖 RmlUi，不经 main 的递归收集重复编译。
 list(FILTER sources EXCLUDE REGEX "/ui/widgets/")
 list(FILTER sources EXCLUDE REGEX "/script/scriptHost.cpp$")
@@ -8,9 +11,10 @@ add_subdirectory(ui/widgets)
 
 add_executable(main ${sources})
 
-# renderSystem 的候选事务和显示路径在 MinGW Debug 下超过 COFF 旧 section 上限。
+# 候选事务、组件空间与 UI 内联模板在 MinGW Debug 下超过 COFF 旧 section 上限。
 if(MINGW)
-    set_source_files_properties(renderSystem.cpp editor/ui/blueprintViewportPanel.cpp
+    set_source_files_properties(renderSystem.cpp engine/engineLoop.cpp editor/ui/blueprintViewportPanel.cpp
+        editor/ui/materialInstanceAssetEditorPanel.cpp
         PROPERTIES COMPILE_OPTIONS "-Wa,-mbig-obj")
 endif()
 
@@ -41,6 +45,8 @@ PRIVATE
     vl_ui_widgets
     Threads::Threads
     vl_offline_core
+    vl_animation_assets
+    vl_debug_draw
     vl_script_host
     ws2_32 dbghelp advapi32 user32 secur32
     )

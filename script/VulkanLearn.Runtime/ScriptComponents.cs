@@ -27,17 +27,16 @@ public abstract class Component
     public BlueprintPhysics Physics => Owner.Physics;
     public BlueprintAssets Assets => Owner.Assets;
     public GameplayHud Hud => Owner.Hud;
+    public DebugDraw DebugDraw => Owner.DebugDraw;
     protected virtual void OnCreate() { }
     protected virtual void BeginPlay() { }
     protected virtual void Tick(float deltaTime) { }
-    protected virtual void FixedTick(float deltaTime) { }
     protected virtual void LateTick(float deltaTime) { }
     protected virtual void EndPlay(EndPlayReason reason) { }
     protected virtual void OnReload() { }
     internal void Create() => OnCreate();
     internal void Begin() => BeginPlay();
     internal void Update(float dt) => Tick(dt);
-    internal void UpdateFixed(float dt) => FixedTick(dt);
     internal void UpdateLate(float dt) => LateTick(dt);
     internal void End(EndPlayReason reason) => EndPlay(reason);
     internal void Reload() => OnReload();
@@ -188,7 +187,6 @@ public static partial class NativeBridge
         {
             case "BeginPlay": component.Begin(); break;
             case "Tick": component.Update(dt); break;
-            case "FixedTick": component.UpdateFixed(dt); break;
             case "LateTick": component.UpdateLate(dt); break;
             case "EndPlay": component.End(reason); break;
             case "OnReload": component.Reload(); break;

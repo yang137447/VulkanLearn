@@ -3,6 +3,49 @@
 #include "commonFunction.h"
 #include "render/rendergraph/renderGraphCompiler.h"
 #include "renderGraph.h"
+#include <algorithm>
+
+namespace
+{
+bool SceneDepthEndsAsAttachment(const RenderGraph& graph)
+{
+    for (const auto& plan : graph.GetCompiledRenderGraph().resourceUsagePlans)
+        if (plan.resource == "sceneDepth" && !plan.accesses.empty())
+            return plan.accesses.back().accessType == VL::CompiledRenderGraphAccessType::Write;
+    return false;
+}
+}
+
+const RenderResource* PassBarrier::BeginSceneDepthRead(vk::CommandBuffer& commandBuffer,
+    const RenderGraph& graph, uint32_t imageIndex)
+{
+    // 自定义图可以没有深度或没有 sampled 用途；这种图不显示 DepthTest 图形。
+    const auto& compiled = graph.GetCompiledRenderGraph();
+    bool readable = false;
+    for (const auto& resource : compiled.resources)
+        if (resource.name == "sceneDepth" && resource.type == "texture2D" && resource.arrayLayers == 1)
+            readable = std::find(resource.usage.begin(), resource.usage.end(), "sampled") != resource.usage.end();
+    if (!readable) return nullptr;
+    bool hasContents = false;
+    for (const auto& pass : compiled.passes)
+        for (const auto& output : pass.outputResources)
+            if (output.resource == "sceneDepth") hasContents = output.storeOp == "store";
+    if (!hasContents) return nullptr;
+    const auto found = graph.GetResourcesResolve().find("sceneDepth");
+    if (found == graph.GetResourcesResolve().end()) return nullptr;
+    const auto& resource = found->second.at(imageIndex);
+    if (!CommonFunction::IsDepthFormat(resource.format)) return nullptr;
+    if (SceneDepthEndsAsAttachment(graph))
+        TransitionAttachmentToShaderRead(commandBuffer, graph, "sceneDepth", imageIndex);
+    return &resource;
+}
+
+void PassBarrier::EndSceneDepthRead(vk::CommandBuffer& commandBuffer,
+    const RenderGraph& graph, uint32_t imageIndex)
+{
+    if (SceneDepthEndsAsAttachment(graph))
+        TransitionShaderReadToAttachment(commandBuffer, graph, "sceneDepth", imageIndex);
+}
 
 void PassBarrier::PrepareForPass(
     vk::CommandBuffer& commandBuffer,

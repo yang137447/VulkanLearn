@@ -60,10 +60,21 @@ protected:
         snapshot["states"] = states;
         return snapshot;
     }
-    Json MigratedData(uint64_t context)
+    Json MigratedData(uint64_t context, const char* propertyName)
     {
         auto snapshot = Call(context, "migration_capture");
-        return snapshot.at("instances").at(0).at("properties").at(0).at("value");
+        const auto& properties = snapshot.at("instances").at(0).at("properties");
+        const auto property = std::find_if(properties.begin(), properties.end(),
+            [propertyName](const Json& candidate)
+            {
+                return candidate.at("name") == propertyName;
+            });
+        if (property == properties.end())
+        {
+            ADD_FAILURE() << "Missing migrated property: " << propertyName;
+            return Json::object();
+        }
+        return property->at("value");
     }
     Json Property(const std::string& type, const std::string& name)
     {
@@ -112,7 +123,7 @@ TEST_F(ScriptCustomDataTest, SparseObjectOverridesMergeDeclaredDefaultsAndContai
     const auto context = Prepare(Json::array({blueprint}));
     const auto states = Call(context, "start");
     EXPECT_EQ(states.at(0).at("position"), Json::array({42, 9, 23}));
-    const auto value = MigratedData(context);
+    const auto value = MigratedData(context, "Settings");
     EXPECT_EQ(value.at("Stats").at("Offset"), Json::array({1, 2, 3}));
     EXPECT_EQ(value.at("Weights"), Json::array({1, 2}));
     EXPECT_EQ(value.at("Points").size(), 1);
@@ -228,14 +239,14 @@ TEST_F(ScriptCustomDataTest, MigrationCopiesNestedValuesAndAllowsAddedFieldsToUs
     const auto nextCatalog = Load("reload-v2/ReloadFixtures.dll");
     const auto candidate = Prepare(Json::array({blueprint}), nextCatalog.at("generation"));
     Call(candidate, "migration_restore", {{"snapshot", snapshot}});
-    auto restored = MigratedData(candidate);
+    auto restored = MigratedData(candidate, "Data");
     EXPECT_EQ(restored.at("Counter"), 21);
     EXPECT_EQ(restored.at("Points").at(0), Json::array({2, 3, 4}));
     EXPECT_EQ(restored.at("Counts").at("initial"), 5);
     EXPECT_EQ(restored.at("Added"), 77);
     Tick(candidate);
-    EXPECT_EQ(MigratedData(candidate).at("Counter"), 22);
-    EXPECT_EQ(MigratedData(previous).at("Counter"), 21);
+    EXPECT_EQ(MigratedData(candidate, "Data").at("Counter"), 22);
+    EXPECT_EQ(MigratedData(previous, "Data").at("Counter"), 21);
 }
 
 TEST_F(ScriptCustomDataTest, MigrationRejectsNestedFloatToDoubleChangeAndKeepsOldData)
@@ -248,7 +259,7 @@ TEST_F(ScriptCustomDataTest, MigrationRejectsNestedFloatToDoubleChangeAndKeepsOl
     const auto nextCatalog = Load("reload-v2/ReloadFixtures.dll");
     const auto candidate = Prepare(Json::array({blueprint}), nextCatalog.at("generation"));
     EXPECT_THROW(Call(candidate, "migration_restore", {{"snapshot", snapshot}}), std::exception);
-    EXPECT_EQ(MigratedData(previous).at(0).at("Number"), 1);
+    EXPECT_EQ(MigratedData(previous, "Data").at(0).at("Number"), 1);
 }
 
 TEST_F(ScriptCustomDataTest, NestedDataSchemaCachesDoNotKeepRetiredGameplayAssemblyAlive)
@@ -258,7 +269,7 @@ TEST_F(ScriptCustomDataTest, NestedDataSchemaCachesDoNotKeepRetiredGameplayAssem
     const auto context = Prepare(Json::array({Blueprint("ReloadFixtures.DataMigrationBlueprint")}), generation);
     Call(context, "start");
     Tick(context);
-    EXPECT_NO_THROW(MigratedData(context));
+    EXPECT_NO_THROW(MigratedData(context, "Data"));
     Call(context, "release", {{"reason", 0}});
     host.Invoke({{"op", "unload"}, {"generation", generation}});
     const auto status = host.Invoke({{"op", "assembly_status"}, {"collect", true}}).at("result");
@@ -292,7 +303,7 @@ TEST_F(ScriptDeltaTest, PhysicsSynchronizationAdvancesDeltaBaselineBeforeCallbac
     const auto context = Prepare(Json::array({Blueprint("ScriptFixtures.DeltaResetBlueprint")}));
     auto state = Call(context, "start");
     state[0]["position"] = {10, 0, 0};
-    const auto changes = Call(context, "fixed", {{"states", state}, {"fixedFrameIndex", 1}, {"delta", true}});
+    const auto changes = Call(context, "tick", {{"states", state}, {"dt", 0.1}, {"input", {0, 0, 0}}, {"delta", true}});
     ASSERT_EQ(changes.size(), 1u);
     EXPECT_EQ(changes[0]["position"], Json::array({0, 0, 0}));
 }
@@ -309,8 +320,10 @@ TEST_F(ScriptDeltaTest, EqualOneShotImpulsesAreDeliveredAgainButNotReplayedByIdl
             {{"dt", 0.1}, {"input", {0, 0, 0}}, {"deferLate", true}, {"delta", true}});
         ASSERT_EQ(changes.size(), 1u);
         EXPECT_EQ(changes[0]["impulse"], Json::array({1, 0, 0}));
-        EXPECT_TRUE(Call(context, "fixed",
-            {{"states", Json::array()}, {"fixedFrameIndex", index + 1}, {"delta", true}}).empty());
+        // LateTick 的零步同步阶段不得把已交付的一次性冲量再播放一次。
+        EXPECT_TRUE(Call(context, "late", {{"states", Json::array()}, {"dt", 0.1},
+            {"contacts", Json::array()}, {"triggers", Json::array()}, {"rayHits", Json::array()},
+            {"delta", true}}).empty());
     }
 }
 
@@ -331,13 +344,12 @@ TEST_F(ScriptCallbackMaskTest, UnoverriddenFrameCallbacksDoNotProduceTimings)
 {
     const auto context = Prepare(Json::array({WithCallbackComponent(
         Blueprint("ScriptFixtures.EmptyFrameBlueprint"), "ScriptFixtures.EmptyFrameComponent")}));
-    const auto started = Call(context, "start");
-    Call(context, "fixed", {{"states", started}, {"fixedFrameIndex", 1}});
+    Call(context, "start");
     Tick(context);
     const auto snapshot = Call(context, "runtime_snapshot");
     const auto& blueprint = snapshot.at("blueprints").at(0);
     const auto& component = blueprint.at("components").at(0);
-    for (const auto* phase : {"Tick", "FixedTick", "LateTick"})
+    for (const auto* phase : {"Tick", "LateTick"})
     {
         EXPECT_FALSE(HasCallbackPhase(blueprint.at("callbacks"), phase));
         EXPECT_FALSE(HasCallbackPhase(component.at("callbacks"), phase));
@@ -356,15 +368,14 @@ TEST_F(ScriptCallbackMaskTest, InheritedAndHiddenOverridesPreserveVirtualDispatc
             if (component) blueprint = WithCallbackComponent(std::move(blueprint),
                 std::string("ScriptFixtures.") + name + "FrameComponent");
             const auto context = Prepare(Json::array({blueprint}));
-            const auto started = Call(context, "start");
-            Call(context, "fixed", {{"states", started}, {"fixedFrameIndex", 1}});
+            Call(context, "start");
             const auto states = Tick(context);
             EXPECT_FALSE(states.at(0).at("failed"));
-            EXPECT_EQ(states.at(0).at("position"), Json::array({1, 1, 1}));
+            EXPECT_EQ(states.at(0).at("position"), Json::array({1, 0, 1}));
             const auto snapshot = Call(context, "runtime_snapshot");
             const auto& owner = snapshot.at("blueprints").at(0);
             const auto& callbacks = component ? owner.at("components").at(0).at("callbacks") : owner.at("callbacks");
-            for (const auto* phase : {"Tick", "FixedTick", "LateTick"}) EXPECT_TRUE(HasCallbackPhase(callbacks, phase));
+            for (const auto* phase : {"Tick", "LateTick"}) EXPECT_TRUE(HasCallbackPhase(callbacks, phase));
         }
 }
 
@@ -372,12 +383,11 @@ TEST_F(ScriptCallbackMaskTest, UserAuthoredEmptyOverridesAreStillInvokedAndTimed
 {
     const auto context = Prepare(Json::array({WithCallbackComponent(
         Blueprint("ScriptFixtures.ExplicitEmptyFrameBlueprint"), "ScriptFixtures.ExplicitEmptyFrameComponent")}));
-    const auto started = Call(context, "start");
-    Call(context, "fixed", {{"states", started}, {"fixedFrameIndex", 1}});
+    Call(context, "start");
     Tick(context);
     const auto snapshot = Call(context, "runtime_snapshot");
     const auto& blueprint = snapshot.at("blueprints").at(0);
-    for (const auto* phase : {"Tick", "FixedTick", "LateTick"})
+    for (const auto* phase : {"Tick", "LateTick"})
     {
         EXPECT_TRUE(HasCallbackPhase(blueprint.at("callbacks"), phase));
         EXPECT_TRUE(HasCallbackPhase(blueprint.at("components").at(0).at("callbacks"), phase));

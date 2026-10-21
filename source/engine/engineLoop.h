@@ -138,6 +138,8 @@ private:
     bool exitAfterRuntimeTests = false;
     bool useRenderThread = false;
     int exitCode = 0;
+    // 渲染主循环节拍上限（Hz）；0 = 不限速。只影响 Run() 的补帧，不改变固定 60 Hz 物理子步。
+    int frameLimitHz = 0;
     std::vector<PlatformEvent> platformEvents;
 
     std::unique_ptr<ShaderCompiler> shaderCompiler;

@@ -55,7 +55,8 @@ BP 的 `properties`、`physics`、`componentInstanceEditable` 使用完整对象
 不执行 OnCreate；正式加载仍负责完整 CLR 校验。
 
 `componentInstanceEditable` 将稳定组件 ID 映射到可覆写字段名数组，例如
-`{"visual":["position","materialOverride"]}`；最多 128 个组件条目，每项最多 16 个不重复字段。
+`{"visual":["position","materialOverride"]}`；最多 128 个组件条目，每项最多 32 个不重复字段，
+Scene 的每组件覆写同为最多 32 个字段，覆盖 SpringArm 的完整参数集合。
 未知组件、错误类型和该组件类型不支持的字段拒绝；TRS 按完整向量授权，
 ID/type/parent、结构增删、碰撞及根物理配置不开放实例覆写。
 支持字段由共享组件权限表校验。Scene 作者路径只写稀疏 `componentOverrides`，

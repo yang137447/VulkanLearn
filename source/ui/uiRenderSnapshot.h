@@ -14,6 +14,16 @@
 
 namespace VL
 {
+namespace Animation { struct MotionDebugView; }
+namespace Debug { struct Snapshot; }
+
+// 仅投影所需的相机值；UI 基础快照不依赖 World、骨架导入器或编辑器业务类型。
+struct UiCameraProjection
+{
+    std::array<float, 3> position{0, 0, 0}, forward{0, 0, -1}, right{1, 0, 0}, up{0, 1, 0};
+    float horizontalFovDegrees = 60;
+    float clipNear = 0.1f, clipFar = 1000;
+};
 
 using UiTextureId = std::uintptr_t;
 // GT 只记录逻辑纹理 ID；对应离屏图像与 descriptor 由当前 RT 帧绑定。
@@ -117,6 +127,22 @@ struct UiViewModelSnapshot
     // 与 Controller 一致，快照中的移动速度以 cm/s 表示。
     float cameraMoveSpeed = 1000.0f;
     std::string activeWorldPath;
+    // 冻结的播放器观察值；界面不持有 World/播放器指针。
+    uint64_t animationWorldGeneration = 0;
+    std::vector<std::string> animationClips;
+    size_t animationClip = 0;
+    float animationTime = 0;
+    float animationDuration = 0;
+    bool animationPlaying = false;
+    size_t animationJointCount = 0;
+    std::vector<std::string> animationFeatureChannels;
+    std::vector<float> animationFeatures;
+    std::string animationFeatureStatus;
+    // GT 冻结实际轨迹与观察相机；UI 不读 World，也不推进动画/物理。
+    uint64_t motionWorldGeneration = 0;
+    std::shared_ptr<const Animation::MotionDebugView> motionDebug;
+    UiCameraProjection motionCamera;
+    std::shared_ptr<const Debug::Snapshot> debugDraw;
     std::string locale;
     ScriptRuntimeView scripts;
 };
@@ -147,6 +173,8 @@ struct UiVertex
     float position[2] = {0.0f, 0.0f};
     float texCoord[2] = {0.0f, 0.0f};
     std::array<float, 4> color{1.0f, 1.0f, 1.0f, 1.0f};
+    // -1 为普通 UI/Overlay；非负值为冻结相机投影后的 device Z。
+    float debugDepth = -1;
 };
 
 struct UiClipRect
@@ -198,6 +226,7 @@ struct UiRenderSnapshot
     uint32_t viewportHeight = 0;
     UiViewportRect sceneViewportRect;
     bool sceneViewportEnabled = false;
+    bool debugDepthTest = false;
     std::vector<UiVertex> vertices;
     std::vector<uint32_t> indices;
     std::vector<UiDrawCommand> drawCommands;

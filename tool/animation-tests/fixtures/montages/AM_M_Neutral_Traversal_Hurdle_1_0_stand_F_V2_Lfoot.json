@@ -1,0 +1,107 @@
+{
+  "format": "vl.anim-montage.v1",
+  "montage": "AM_M_Neutral_Traversal_Hurdle_1_0_stand_F_V2_Lfoot",
+  "sequence": "Maps/SC_gasp/Source/M_Neutral_Traversal_Hurdle_1_0_stand_F_V2_Lfoot.anim.json",
+  "sequenceBlake3": "76b521b6b502ed4e2bad1916dabbd6c2b9964541224a6bd7f6fde10968dd528d",
+  "slot": "DefaultSlot",
+  "length": 1.666667,
+  "sections": [
+    {
+      "name": "Default",
+      "startTime": 0.0,
+      "endTime": 1.666667,
+      "nextSection": "",
+      "nextTime": 0.0,
+      "linkMethod": ""
+    }
+  ],
+  "notifies": [
+    {
+      "kind": "notifyState",
+      "track": "2",
+      "name": "PoseSearchBranchIn",
+      "time": 0.0,
+      "duration": 0.074591
+    },
+    {
+      "kind": "notifyState",
+      "track": "1",
+      "name": "MotionWarping",
+      "time": 0.078149,
+      "duration": 0.156754,
+      "warp": {
+        "target": "FrontLedge",
+        "provider": "Bone",
+        "bone": "attach",
+        "subtractRemainingRootMotion": false,
+        "ignoreZAxis": false,
+        "warpRotation": true,
+        "rotationTimeMultiplier": 1.0,
+        "easing": "Linear"
+      }
+    },
+    {
+      "kind": "notifyState",
+      "track": "1",
+      "name": "MotionWarping",
+      "time": 0.234925,
+      "duration": 0.163979,
+      "warp": {
+        "target": "FrontLedge",
+        "provider": "Bone",
+        "bone": "attach",
+        "subtractRemainingRootMotion": false,
+        "ignoreZAxis": false,
+        "warpRotation": true,
+        "rotationTimeMultiplier": 1.0,
+        "easing": "Linear"
+      }
+    },
+    {
+      "kind": "notifyState",
+      "track": "1",
+      "name": "MotionWarping",
+      "time": 0.46492,
+      "duration": 0.133096,
+      "warp": {
+        "target": "BackLedge",
+        "provider": "None",
+        "bone": "",
+        "subtractRemainingRootMotion": false,
+        "ignoreZAxis": false,
+        "warpRotation": false,
+        "rotationTimeMultiplier": 1.0,
+        "easing": "Linear"
+      }
+    },
+    {
+      "kind": "notifyState",
+      "track": "1",
+      "name": "MotionWarping",
+      "time": 0.599556,
+      "duration": 0.231779,
+      "warp": {
+        "target": "BackFloor",
+        "provider": "None",
+        "bone": "",
+        "subtractRemainingRootMotion": false,
+        "ignoreZAxis": false,
+        "warpRotation": false,
+        "rotationTimeMultiplier": 1.0,
+        "easing": "Linear"
+      }
+    },
+    {
+      "kind": "notifyState",
+      "track": "2",
+      "name": "BP_NotifyState_TraversalBlendOut_C",
+      "time": 1.017674,
+      "duration": 0.648993
+    }
+  ],
+  "source": {
+    "t3d": "AM_M_Neutral_Traversal_Hurdle_1_0_stand_F_V2_Lfoot.copy",
+    "uePackage": "/Game/Characters/UEFN_Mannequin/Animations/Traversal/Hurdle/AM_M_Neutral_Traversal_Hurdle_1_0_stand_F_V2_Lfoot.AM_M_Neutral_Traversal_Hurdle_1_0_stand_F_V2_Lfoot",
+    "exportedBy": "import_gasp_montages.py"
+  }
+}

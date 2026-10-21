@@ -4,8 +4,11 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <memory>
 #include <nlohmann/json.hpp>
 #include "../vertexDataStruct.h"
+
+namespace VL::Animation { struct SkeletalAsset; }
 
 // Result of resolving one mesh asset JSON into the effective JSON consumed by mesh validation.
 // It keeps resolver output separate from runtime loading so later defaults or platform overrides can
@@ -131,6 +134,27 @@ struct SpeedTreeVertexAux
     Eigen::Vector3f windBranch2NoiseOffsetNormalized = Eigen::Vector3f::Zero();
 };
 
+// One skeletal clip declaration. The FBX remains the geometry/TRS source; the
+// optional sequence sidecar owns runtime curves/notifies. Digests are filled by
+// the loader after hashing the file bytes and are part of the import identity.
+struct MeshAnimationClipPlan
+{
+    std::string id;
+    std::string path;
+    std::string sequencePath;
+    std::string sequenceDigest;
+};
+
+// One AnimMontage declaration referenced by SM skinning.montages[].
+// The path is the resource-relative AM_*.json; digest is filled by the loader
+// after hashing the file bytes and is part of the import identity.
+struct MeshAnimationMontagePlan
+{
+    std::string id;
+    std::string path;
+    std::string digest;
+};
+
 // Validated mesh asset data needed before importing the source model file.
 // RendererMeshLoader uses this plan to select an importer and later bind section
 // material slots.
@@ -143,6 +167,18 @@ struct MeshAssetBuildPlan
     MeshImportOptions importOptions;
     std::vector<MeshMaterialSlot> materialSlots;
     std::string modelCacheKey;
+    // 可选独立蒙皮声明；静态模型不构造骨架或额外顶点数据。
+    // 骨骼网格必须给 skeletonPath：根骨、关节表与曲线注册表都以这份 SK 为准。
+    std::string skeletonPath;
+    std::string skeletonDigest;
+    std::vector<MeshAnimationClipPlan> animationClips;
+    // 可选 AnimMontage 清单；为空时资源行为与引入 montage 前完全一致。
+    std::vector<MeshAnimationMontagePlan> animationMontages;
+
+    bool IsSkeletal() const
+    {
+        return !skeletonPath.empty();
+    }
 };
 
 // Import request passed from RendererMeshLoader to the selected model importer strategy.
@@ -181,6 +217,7 @@ struct MeshSectionLoadPlan
 // Importer strategies return this object; mesh validation reads section and material slot names.
 struct ModelResource
 {
+    std::shared_ptr<const VL::Animation::SkeletalAsset> skeletalAsset;
     std::vector<MeshSection> sections;
     std::vector<std::string> sourceMaterialSlotNames;
     bool hasSpeedTreeWind = false;

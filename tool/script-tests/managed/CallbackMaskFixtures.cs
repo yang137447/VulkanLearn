@@ -9,41 +9,35 @@ public sealed class EmptyFrameComponent : Component { }
 public abstract class InheritedFrameBlueprintBase : Blueprint
 {
     protected override void Tick(float dt) => Transform.Translate(Vector3.UnitX);
-    protected override void FixedTick(float dt) => Transform.Translate(Vector3.UnitY);
     protected override void LateTick(float dt) => Transform.Translate(Vector3.UnitZ);
 }
 public sealed class InheritedFrameBlueprint : InheritedFrameBlueprintBase { }
 public sealed class HiddenFrameBlueprint : InheritedFrameBlueprintBase
 {
     private new void Tick(float dt) => throw new InvalidOperationException("hidden-tick");
-    private new void FixedTick(float dt) => throw new InvalidOperationException("hidden-fixed");
     private new void LateTick(float dt) => throw new InvalidOperationException("hidden-late");
 }
 
 public abstract class InheritedFrameComponentBase : Component
 {
     protected override void Tick(float dt) => Transform.Translate(Vector3.UnitX);
-    protected override void FixedTick(float dt) => Transform.Translate(Vector3.UnitY);
     protected override void LateTick(float dt) => Transform.Translate(Vector3.UnitZ);
 }
 public sealed class InheritedFrameComponent : InheritedFrameComponentBase { }
 public sealed class HiddenFrameComponent : InheritedFrameComponentBase
 {
     private new void Tick(float dt) => throw new InvalidOperationException("hidden-component-tick");
-    private new void FixedTick(float dt) => throw new InvalidOperationException("hidden-component-fixed");
     private new void LateTick(float dt) => throw new InvalidOperationException("hidden-component-late");
 }
 
 public sealed class ExplicitEmptyFrameBlueprint : Blueprint
 {
     protected override void Tick(float dt) { }
-    protected override void FixedTick(float dt) { }
     protected override void LateTick(float dt) { }
 }
 public sealed class ExplicitEmptyFrameComponent : Component
 {
     protected override void Tick(float dt) { }
-    protected override void FixedTick(float dt) { }
     protected override void LateTick(float dt) { }
 }
 

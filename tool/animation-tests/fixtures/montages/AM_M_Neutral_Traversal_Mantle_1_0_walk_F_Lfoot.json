@@ -1,0 +1,73 @@
+{
+  "format": "vl.anim-montage.v1",
+  "montage": "AM_M_Neutral_Traversal_Mantle_1_0_walk_F_Lfoot",
+  "sequence": "Maps/SC_gasp/Source/M_Neutral_Traversal_Mantle_1_0_walk_F_Lfoot.anim.json",
+  "sequenceBlake3": "bebe1149d5af955f2a9ad685404a458045d40931740d97cc1150550bdc5eddab",
+  "slot": "DefaultSlot",
+  "length": 3.4,
+  "sections": [
+    {
+      "name": "Default",
+      "startTime": 0.0,
+      "endTime": 3.4,
+      "nextSection": "",
+      "nextTime": 0.0,
+      "linkMethod": ""
+    }
+  ],
+  "notifies": [
+    {
+      "kind": "notifyState",
+      "track": "2",
+      "name": "PoseSearchBranchIn",
+      "time": 0.0,
+      "duration": 0.36885
+    },
+    {
+      "kind": "notifyState",
+      "track": "1",
+      "name": "MotionWarping",
+      "time": 0.392615,
+      "duration": 0.418016,
+      "warp": {
+        "target": "FrontLedge",
+        "provider": "Bone",
+        "bone": "attach",
+        "subtractRemainingRootMotion": false,
+        "ignoreZAxis": false,
+        "warpRotation": true,
+        "rotationTimeMultiplier": 0.8,
+        "easing": "Linear"
+      }
+    },
+    {
+      "kind": "notifyState",
+      "track": "1",
+      "name": "MotionWarping",
+      "time": 0.810655,
+      "duration": 0.122772,
+      "warp": {
+        "target": "FrontLedge",
+        "provider": "Bone",
+        "bone": "attach",
+        "subtractRemainingRootMotion": false,
+        "ignoreZAxis": false,
+        "warpRotation": true,
+        "rotationTimeMultiplier": 0.8,
+        "easing": "Linear"
+      }
+    },
+    {
+      "kind": "notifyState",
+      "track": "1",
+      "name": "BP_NotifyState_TraversalBlendOut_C",
+      "time": 1.331763,
+      "duration": 2.068237
+    }
+  ],
+  "source": {
+    "t3d": "AM_M_Neutral_Traversal_Mantle_1_0_walk_F_Lfoot.copy",
+    "uePackage": "/Game/Characters/UEFN_Mannequin/Animations/Traversal/Mantle/AM_M_Neutral_Traversal_Mantle_1_0_walk_F_Lfoot.AM_M_Neutral_Traversal_Mantle_1_0_walk_F_Lfoot",
+    "exportedBy": "import_gasp_montages.py"
+  }
+}

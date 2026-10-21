@@ -61,8 +61,11 @@ MaterialInputs EvaluateMaterialInputs(in MaterialFunctionContext context);
 世界空间和裁剪空间变换。片元 Evaluation 只填 `MaterialInputs`，不得调用
 `ApplyAlphaClip()`；需要 coverage 的模板在消费 Surface 后统一执行 Clip。
 
-第一版固定 `vertexFactoryKey = StaticMesh`，对应当前固定顶点输入 locations。
-这个 key 已进入 shader identity，但尚未提供可插拔 Vertex Factory 实现。
+当前支持 `vertexFactoryKey = StaticMesh` 和 `SkinnedMesh`，共享固定顶点输入 locations。
+SkinnedMesh 在材质求值前通过独立 Set 2 SSBO 执行完整 CSR LBS，
+不改变静态 Vertex stride；key 进入 shader identity。
+蒙皮材质要求 shaderEvaluation，拒绝材质 WPO 和完整 standalone shadow override。
+其资源与历史合同见 [动画播放与蒙皮](animation-runtime-skinning.md)。
 
 ## 编辑器网格 pass：材质组合的显式例外
 
@@ -125,6 +128,9 @@ Material 的 Base + ShadowDepth reflection 并集执行。这样未使用的可�
 自动生成 shader 的编译/反射合同错误会终止加载，不会静默回退。需要自动
 ShadowDepth 的旧式 standalone shader 若没有 `shaderEvaluation`，同样是明确的
 资产错误。
+
+SkinnedMesh 是显式例外：强制自动组合 ShadowDepth，完整 standalone override 拒绝，
+防止描述符虽兼容却只读绑定姿态位置。Base/ShadowDepth 共用同一蒙皮 factory。
 
 材质专用 ShadowDepth 复用对象已有 Set 0..2：Set 0/2 必须是 Base engine
 reflection 的兼容子集，Set 1 使用完整 Material Schema，Set 3 禁止使用。

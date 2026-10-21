@@ -8,9 +8,25 @@
 #include "world/meshSceneObjectIdentity.h"
 #include "script/scriptScene.h"
 #include "world/scriptTemplateExtension.h"
+#include "animation/skeletalPlayback.h"
 
 namespace VL
 {
+namespace
+{
+// 克隆/重建只共享不可变资产。组件池与 Spawn 的可变播放时钟不能相互借用。
+void CloneAnimation(WorldMeshObject& mesh,
+    std::unordered_map<std::string, std::shared_ptr<Animation::SkeletalPlayback>>& players)
+{
+    if (!mesh.animation) return;
+    auto& player = players[mesh.sceneObjectIdentity];
+    if (!player) player = mesh.animation->NewInstance();
+    mesh.animation = player;
+    mesh.skinPose = player->Pose(mesh.skinSection);
+    mesh.localBoundsMin = mesh.skinPose->boundsMin;
+    mesh.localBoundsMax = mesh.skinPose->boundsMax;
+}
+}
 
 World::World(uint64_t generation, std::string scenePath)
     : generation(generation)
@@ -231,6 +247,20 @@ void World::SynchronizeScriptComponentMeshes(const nlohmann::json& actor)
     const auto signature = structure.dump();
     if (scriptComponentMeshStructures[id] == signature) return;
     std::vector<std::pair<std::string, WorldMeshObject>> candidates;
+    std::unordered_map<std::string, std::shared_ptr<Animation::SkeletalPlayback>> players;
+    // 添加兄弟组件不应重启现有动画。仅保留稳定 ID、模型和材质均未变化的播放器。
+    const auto previousStructure = scriptComponentMeshStructures[id].empty() ?
+        nlohmann::json::array() : nlohmann::json::parse(scriptComponentMeshStructures[id]);
+    for (const auto& node : components)
+    {
+        if (node.at("type") != "mesh") continue;
+        const nlohmann::json item = {ScriptComponentId(node), node.at("modelPath"), node.value("materialOverride", "")};
+        if (std::find(previousStructure.begin(), previousStructure.end(), item) == previousStructure.end()) continue;
+        const auto identity = ScriptMeshIdentity(id, node);
+        for (const auto& entry : meshObjects)
+            if (entry.second.sceneObjectIdentity == identity && entry.second.animation)
+            { players.emplace(identity, entry.second.animation); break; }
+    }
     for (size_t index = 0; index < components.size(); ++index)
     {
         const auto& node = components[index];
@@ -244,6 +274,7 @@ void World::SynchronizeScriptComponentMeshes(const nlohmann::json& actor)
         {
             auto section = sourceSection;
             section.sceneObjectIdentity = ScriptMeshIdentity(id, node);
+            CloneAnimation(section, players);
             section.debugName = section.sceneObjectIdentity + (sectionIndex == 0 ? "" : "~section." + std::to_string(sectionIndex));
             ++sectionIndex;
             section.model = (ScriptComponentMatrix(actor, index) * sourceSection.model).eval();
@@ -267,12 +298,14 @@ void World::CloneScriptBlueprintMeshes(const std::string& templateId, const nloh
     const std::string prefix = ScriptBlueprintMeshIdentity(templateId);
     const std::string destination = ScriptBlueprintMeshIdentity(actor.at("id").get<std::string>());
     std::vector<std::pair<std::string, WorldMeshObject>> clones;
+    std::unordered_map<std::string, std::shared_ptr<Animation::SkeletalPlayback>> players;
     for (const auto& entry : meshObjects)
     {
         const auto identity = MeshSceneObjectIdentity(entry.second, entry.first);
         if (identity != prefix && identity.rfind(prefix + "/", 0) != 0) continue;
         auto clone = entry.second;
         clone.sceneObjectIdentity = destination + identity.substr(prefix.size());
+        CloneAnimation(clone, players);
         clone.debugName = destination + entry.first.substr(prefix.size());
         clones.emplace_back(clone.debugName, std::move(clone));
         const auto matrix = scriptComponentMatrices.find(identity);

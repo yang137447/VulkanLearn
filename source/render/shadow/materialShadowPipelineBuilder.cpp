@@ -150,6 +150,13 @@ MaterialShadowPipelineBuildResult BuildMaterialShadowPipeline(
     }
 
     const bool hasExplicitOverride = pairState == ShadowShaderPairState::Complete;
+    if (hasExplicitOverride && loadPlan.baseShaderCompileRequest &&
+        loadPlan.baseShaderCompileRequest->vertexFactoryKey == "SkinnedMesh")
+    {
+        // 旧式完整 shader 未声明蒙皮输入语义，不能只凭 descriptor 兼容就接受静态阴影。
+        throw std::runtime_error("SkinnedMesh requires composed ShadowDepth without a standalone override: " +
+            loadPlan.materialKey);
+    }
     const RenderMode renderMode = loadPlan.shaderVariantKey.renderMode;
     // ThinTranslucent 与其它透明模式一样不自动生成普通 Shadow Map；只有显式 shadow
     // override 才能表达作者确实需要的投影行为。

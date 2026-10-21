@@ -41,11 +41,15 @@ public static partial class NativeBridge
             if (blueprint.Character is { } character)
             {
                 ExportVector(baseline, ref update, blueprint.Handle.Id, "walkVelocity", character.WalkVelocity, complete);
+                AddUpdate(ref update, blueprint.Handle.Id, "rootMotion", Values(character.RootMotionVelocity));
+                AddUpdate(ref update, blueprint.Handle.Id, "rootMotionActive", character.RootMotionActive);
                 if (complete || character.JumpRequested)
                     AddUpdate(ref update, blueprint.Handle.Id, "jump", character.JumpRequested);
                 character.JumpRequested = false;
             }
             ExportCommand(ref update, blueprint.Handle.Id, "raycasts", context.Services.TakeRays(blueprint), complete);
+            ExportCommand(ref update, blueprint.Handle.Id, "animationCommands", TakeAnimationCommands(blueprint), complete);
+            ExportCommand(ref update, blueprint.Handle.Id, "debugCommands", context.Services.TakeDebug(blueprint), complete);
             ExportCommand(ref update, blueprint.Handle.Id, "assetRequests", context.Services.TakeAssets(blueprint), complete);
             ExportCommand(ref update, blueprint.Handle.Id, "assetCancels", context.Services.TakeAssetCancellations(blueprint), complete);
             ExportValue(baseline, ref update, blueprint.Handle.Id, "scriptComponents", ExportScriptComponents(instance), complete);
@@ -108,13 +112,40 @@ public static partial class NativeBridge
                 !SameVector(before["scale"], component.Transform.Scale)) return true;
             if (component is CameraComponent camera &&
                 (!Equals(before["fov"], camera.HorizontalFov) || !Equals(before["near_clip"], camera.NearClip) ||
-                 !Equals(before["far_clip"], camera.FarClip) || !Equals(before["active"], context.ActiveCamera == camera)))
+                 !Equals(before["far_clip"], camera.FarClip) || !Equals(before["priority"], camera.Priority) ||
+                 !Equals(before["active"], context.ActiveCamera == camera)))
                 return true;
             if (component is LightComponent light &&
                 (!SameVector(before["color"], light.Color) || !Equals(before["intensity"], light.Intensity) ||
                  !Equals(before["visible"], light.Visible))) return true;
             if (component is SpotLightComponent spot &&
                 (!Equals(before["coneAngleInner"], spot.InnerConeAngle) || !Equals(before["coneAngleOuter"], spot.OuterConeAngle)))
+                return true;
+            if (component is SpringArmComponent arm &&
+                (!Equals(before["targetArmLength"], arm.TargetArmLength) ||
+                 !SameVector(before["socketOffset"], arm.SocketOffset) ||
+                 !SameVector(before["targetOffset"], arm.TargetOffset) ||
+                 !Equals(before["probeRadius"], arm.ProbeRadius) ||
+                 !Equals(before["doCollisionTest"], arm.DoCollisionTest) ||
+                 !Equals(before["collisionMask"], arm.CollisionMask) ||
+                 !Equals(before["enableCameraLag"], arm.EnableCameraLag) ||
+                 !Equals(before["cameraLagSpeed"], arm.CameraLagSpeed) ||
+                 !Equals(before["cameraLagMaxDistance"], arm.CameraLagMaxDistance) ||
+                 !Equals(before["useCameraLagSubstepping"], arm.UseCameraLagSubstepping) ||
+                 !Equals(before["cameraLagMaxTimeStep"], arm.CameraLagMaxTimeStep) ||
+                 !Equals(before["enableCameraRotationLag"], arm.EnableCameraRotationLag) ||
+                 !Equals(before["cameraRotationLagSpeed"], arm.CameraRotationLagSpeed) ||
+                 !Equals(before["usePawnControlRotation"], arm.UsePawnControlRotation) ||
+                 !Equals(before["inheritPitch"], arm.InheritPitch) ||
+                 !Equals(before["inheritYaw"], arm.InheritYaw) ||
+                 !Equals(before["inheritRoll"], arm.InheritRoll) ||
+                 !Equals(before["absoluteRotation"], arm.AbsoluteRotation) ||
+                 !SameVector(before["rotationOffset"], arm.RotationOffset) ||
+                 !SameVector(((Dictionary<string, object>)before["__springArmSocket"])["position"],
+                     arm.GetSocketTransform().Translation) ||
+                 !SameVector(((Dictionary<string, object>)before["__springArmSocket"])["rotation"],
+                     EulerDegrees(arm.SocketWorldRotation)) ||
+                 !Equals(before["drawDebug"], arm.DrawDebug)))
                 return true;
         }
         return false;
@@ -134,7 +165,8 @@ public static partial class NativeBridge
             if (component is CameraComponent camera)
             {
                 value["fov"] = camera.HorizontalFov; value["near_clip"] = camera.NearClip;
-                value["far_clip"] = camera.FarClip; value["active"] = context.ActiveCamera == camera;
+                value["far_clip"] = camera.FarClip; value["priority"] = camera.Priority;
+                value["active"] = context.ActiveCamera == camera;
             }
             if (component is LightComponent light)
             {
@@ -142,6 +174,35 @@ public static partial class NativeBridge
                 value["visible"] = light.Visible;
                 if (light is SpotLightComponent spot)
                 { value["coneAngleInner"] = spot.InnerConeAngle; value["coneAngleOuter"] = spot.OuterConeAngle; }
+            }
+            if (component is SpringArmComponent arm)
+            {
+                value["targetArmLength"] = arm.TargetArmLength;
+                value["socketOffset"] = Values(arm.SocketOffset);
+                value["targetOffset"] = Values(arm.TargetOffset);
+                value["probeRadius"] = arm.ProbeRadius;
+                value["doCollisionTest"] = arm.DoCollisionTest;
+                value["collisionMask"] = arm.CollisionMask;
+                value["enableCameraLag"] = arm.EnableCameraLag;
+                value["cameraLagSpeed"] = arm.CameraLagSpeed;
+                value["cameraLagMaxDistance"] = arm.CameraLagMaxDistance;
+                value["useCameraLagSubstepping"] = arm.UseCameraLagSubstepping;
+                value["cameraLagMaxTimeStep"] = arm.CameraLagMaxTimeStep;
+                value["enableCameraRotationLag"] = arm.EnableCameraRotationLag;
+                value["cameraRotationLagSpeed"] = arm.CameraRotationLagSpeed;
+                value["usePawnControlRotation"] = arm.UsePawnControlRotation;
+                value["inheritPitch"] = arm.InheritPitch;
+                value["inheritYaw"] = arm.InheritYaw;
+                value["inheritRoll"] = arm.InheritRoll;
+                value["absoluteRotation"] = arm.AbsoluteRotation;
+                value["rotationOffset"] = Values(arm.RotationOffset);
+                value["drawDebug"] = arm.DrawDebug;
+                // 原生通过同一父挂接空间放置所有子组件；派生状态不进入作者 JSON 或局部 TRS。
+                value["__springArmSocket"] = new Dictionary<string, object>
+                {
+                    ["position"] = Values(arm.GetSocketTransform().Translation),
+                    ["rotation"] = Values(EulerDegrees(arm.SocketWorldRotation))
+                };
             }
             result[index] = value;
         }

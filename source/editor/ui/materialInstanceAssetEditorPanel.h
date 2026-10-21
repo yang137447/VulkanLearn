@@ -27,6 +27,8 @@ class Element;
 class ElementDocument;
 }
 
+namespace VL::Animation { struct MotionCandidate; }
+
 namespace VL::EditorUi
 {
 
@@ -60,7 +62,7 @@ public:
     bool PrepareImmersiveView(std::string& levelToLoad);
     void SetWorkspaceLayoutPath(std::filesystem::path path) { docking.SetPersistencePath(std::move(path)); }
     UiViewportRect GetSceneViewportRect() const { return docking.GetSceneViewportRect(); }
-    bool IsSceneViewportElement(const Rml::Element* element) const { return docking.IsSceneViewportElement(element); }
+    bool IsSceneViewportElement(const Rml::Element* element) const;
     // 面板可见性由停靠视图拥有；菜单、测试和 UiSubsystem 都经由这一层访问。
     bool IsPanelVisible(const std::string& panel) const { return docking.IsPanelVisible(panel); }
     bool SetPanelVisible(const std::string& panel, bool visible) { return docking.SetPanelVisible(panel, visible); }
@@ -76,6 +78,7 @@ public:
     const std::string& ViewportTransformSpace() const { return viewportTransformSpace; }
     const std::vector<std::string>& MenuLevelPaths() const { return menuLevelPaths; }
     bool IsResourceEditorVisible() const;
+    bool IsMotionDebugViewport() const;
     bool IsAssetEditorVisible() const { return IsResourceEditorVisible() || IsMaterialEditorVisible(); }
     bool IsWorkspaceDragging() const { return docking.IsDragging(); }
     bool CancelBlueprintAssetDrag()
@@ -145,6 +148,9 @@ private:
     void RefreshLevelMenu();
     void RefreshViewportToolbar();
     void RefreshScriptControls();
+    void RefreshMotionMatching();
+    void RefreshMotionMatchingCandidate(size_t slot, const Animation::MotionCandidate* candidate);
+    void RefreshMotionMatchingQuery();
     void RequestScriptEdit(UiActionType type, nlohmann::json payload = nlohmann::json::object());
     const EditorAssetDocumentResultPayload* BlueprintDocument(const std::string& path) const;
     void RefreshBlueprintAssetEditor();
@@ -289,6 +295,12 @@ private:
     MaterialInstanceEditorSnapshot snapshot;
     UiViewModelSnapshot runtimeView;
     bool runtimeControlsCurrent = false;
+    bool motionMatchingRowsMounted = false;
+    bool motionMatchingVisible = false;
+    bool motionMatchingQueryExpanded = false;
+    std::vector<std::string> motionMatchingQueryChannels;
+    double motionMatchingRefreshTime = -1;
+    std::string motionMatchingRefreshKey;
     bool textureOptionsDirty = true;
     std::vector<std::string> textureOptionSelections;
     UiWidgets::WidgetDocument widgetDocument;

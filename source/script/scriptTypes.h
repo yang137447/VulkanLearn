@@ -37,12 +37,12 @@ struct ScriptRuntimeView
     std::vector<ScriptHudLine> hudLines;
 };
 
-// 只有脚本调度器累计固定步；物理每次只消费显式的一步，不再拥有第二份播放余量。
+// 帧语义与 UE 对齐：没有固定步 accumulator / fixed 回调，脚本与物理只按每帧变 dt 前进。
+// 刚体的 1/60 子步完全留在 ScriptPhysicsWorld 内部，不属于这里的时间轴。
 struct ScriptTimeState
 {
     float scale = 1, delta = 0, unscaledDelta = 0;
-    double startup = 0, play = 0, unscaledPlay = 0, accumulated = 0, droppedTime = 0;
-    uint64_t frame = 0, fixedFrame = 0, droppedSteps = 0;
-    unsigned fixedSteps = 0;
+    double startup = 0, play = 0, unscaledPlay = 0;
+    uint64_t frame = 0;
 };
 }

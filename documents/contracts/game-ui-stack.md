@@ -21,6 +21,18 @@ Optional C# gameplay publishes bounded text through `Blueprint.Hud.SetText/Remov
 `game_ui.gameplay_text`, and RmlUi text interpolation escapes markup.
 Pause preserves the last text; Stop, World replacement and publisher cleanup clear it.
 Scripts have no DOM or layout access. The existing HUD visibility policy applies.
+
+World-space debug geometry uses the shared [DrawDebug](debug-draw.md) collector.
+GT freezes geometry and camera values; the UI adapter projects lines/points and
+records escaped labels in a separate non-interactive RmlUi context. These commands
+sit after the scene image and before workspace tools/menus or the immersive HUD.
+The adapter shares the ordinary immutable UI snapshot and texture ownership path.
+Optional DepthTest vertices carry projected device Z. RT borrows the resolved scene
+depth for fragment comparisons, using the logical scene viewport for UV mapping;
+ordinary UI vertices retain Overlay behavior. The depth descriptor follows the
+acquired-image fence and swapchain resource lifecycle. See the DrawDebug contract
+for missing-depth and MSAA behavior.
+The viewport DrawDebug menu only produces typed controls with World generation.
 The former Runtime Debug page, Settings button, F10/gamepad Start entry points
 and runtime-page binding callbacks are removed. Scene selection, actor settings,
 viewport modes and offline controls belong to the editor workspace; runtime

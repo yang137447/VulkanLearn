@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <nlohmann/json.hpp>
 #include "editor/scene/editorActorProperty.h"
+#include "debug/debugDrawControl.h"
 
 namespace VL
 {
@@ -20,6 +21,13 @@ enum class UiActionType
     PreviewMaterial,
     PreviewBlueprint,
     NavigateModelPreview,
+    ControlAnimationPreview,
+    // 被聚焦脚本控制器的时间轴：stringValue=组件身份，intValue 0=seek/1=play，floatValue=秒。
+    ControlScriptAnimation,
+    ControlMotionDebug,
+    // intValue<0 退出历史回放，否则选择 Motion 调试历史帧。
+    ControlMotionReplay,
+    ControlDebugDraw,
     TransformBlueprintPreview,
     SetCameraMoveSpeed,
     SetDebugViewMode,
@@ -128,6 +136,7 @@ struct UiAction
     ModelPreviewCameraInput previewCamera;
     BlueprintPreviewTransformInput blueprintTransform;
     EditorActorPropertyEdit actorProperty;
+    Debug::Control debugDrawControl;
     // 脚本作者请求只带值；class/name/modelPath 或 property/value 在 GT 校验。
     nlohmann::json script = nlohmann::json::object();
 };

@@ -92,6 +92,35 @@
                          因此与场景里世界原点处的真实三轴是两件不同的东西：
                          那三根会被场景几何遮挡、远看只有约 1px 宽；
                          这里的三根固定大小、始终可见。放左下角：与左上的视口工具条同侧但不同端，不重叠。 -->
+                    <div id="viewport-motion-status"></div>
+                    <div id="viewport-motion-matching">
+                        <div id="motion-matching-title"></div>
+                        <div id="motion-matching-database" class="motion-matching-meta"></div>
+                        <div class="motion-query-heading">
+                            <div id="motion-matching-query" class="motion-matching-meta"></div>
+                            <button id="motion-query-toggle" data-action="motion-query-toggle"><img src="icons/list.png"/><span id="motion-query-hint" class="motion-query-hint">Query channels</span></button>
+                        </div>
+                        <div id="motion-matching-decision" class="motion-matching-meta"></div>
+                        <div class="motion-timeline">
+                            <button id="motion-timeline-play" class="browser-icon" data-action="motion-timeline-play" title="Play controlled animation"><img src="icons/play.png"/></button>
+                            <button id="motion-timeline-pause" class="browser-icon" data-action="motion-timeline-pause" title="Pause controlled animation"><img src="icons/pause.png"/></button>
+                            <input id="motion-timeline-seek" type="range" min="0" max="1" step="0.001" value="0" data-action="motion-timeline-seek"/>
+                            <span id="motion-timeline-status"></span>
+                        </div>
+                        <div class="motion-timeline motion-replay-row">
+                            <label class="motion-replay-toggle"><input id="motion-replay" type="checkbox" data-action="motion-replay"/><span>Replay</span></label>
+                            <input id="motion-replay-seek" type="range" min="0" max="1" step="1" value="0" data-action="motion-replay-seek"/>
+                            <span id="motion-replay-status"></span>
+                        </div>
+                        <div id="motion-matching-cost-labels" class="motion-candidate-costs motion-cost-labels"><span>Trajectory</span><span>Pose</span><span>Policy</span><span>Total</span></div>
+                        <div id="motion-matching-rows"></div>
+                        <div id="motion-query-details">
+                            <div id="motion-query-database" class="motion-query-identity"></div>
+                            <div id="motion-query-payload" class="motion-query-identity"></div>
+                            <div id="motion-query-component" class="motion-query-identity"></div>
+                            <div id="motion-query-channels"></div>
+                        </div>
+                    </div>
                     <div id="viewport-axis-indicator">
                         <div class="viewport-axis-bar" id="viewport-axis-bar-x"></div>
                         <div class="viewport-axis-bar" id="viewport-axis-bar-y"></div>
@@ -102,6 +131,16 @@
                     </div>
                     <div id="viewport-toolbar">
                         <button class="browser-icon" id="viewport-actor-visuals" data-action="viewport-actor-visuals" title="Show light and camera helpers"><img src="icons/eye.png"/></button>
+                        <label class="motion-debug-toggle"><input id="viewport-motion-debug" type="checkbox" data-action="motion-debug"/><span id="viewport-motion-label">Motion</span></label>
+                        <div class="menu-root" id="menu-debug-draw">
+                            <button class="browser-icon menu-title" id="viewport-debug-draw" data-action="menu-open" data-menu="debug-draw" title="Draw Debug"><img src="icons/mesh.png"/></button>
+                            <div class="menu-popup" id="debug-draw-popup">
+                                <label class="debug-draw-check"><input id="debug-draw-enabled" type="checkbox" data-action="debug-draw-enabled"/><span>Draw Debug</span></label>
+                                <select id="debug-draw-owner" data-action="debug-draw-owner"><option value="">All Owners</option></select>
+                                <div id="debug-draw-categories"></div>
+                                <div class="debug-draw-footer"><span id="debug-draw-count"></span><button class="browser-icon" id="debug-draw-clear" data-action="debug-draw-clear" title="Clear debug drawings"><img src="icons/trash.png"/></button></div>
+                            </div>
+                        </div>
                         <div class="viewport-tool-group" id="viewport-transform-tools">
                             <button class="viewport-tool" id="viewport-tool-select" data-action="viewport-tool" data-tool="select" title="Select tool">Select</button>
                             <button class="viewport-tool" id="viewport-tool-move" data-action="viewport-tool" data-tool="move" title="Move mode - viewport gizmo is unavailable">Move</button>
@@ -370,6 +409,13 @@
                             <h2 id="resource-preview-title"></h2>
                             <span id="resource-preview-kind"></span>
                         </div>
+                        <div id="resource-animation-tools">
+                            <button id="resource-animation-play" class="browser-icon" data-action="animation-play" title="Play animation"><img src="icons/play.png"/></button>
+                            <button id="resource-animation-pause" class="browser-icon" data-action="animation-pause" title="Pause animation"><img src="icons/pause.png"/></button>
+                            <select id="resource-animation-clip" data-action="animation-clip"></select>
+                            <input id="resource-animation-time" type="range" min="0" max="1" step="0.001" value="0" data-action="animation-time"/>
+                            <span id="resource-animation-status"></span>
+                        </div>
                         <div id="resource-preview-surface">
                             <img id="resource-preview-image" src="vl://scene-viewport"/>
                             <img id="resource-texture-image"/>
@@ -387,6 +433,11 @@
                                 <p id="resource-model-status"></p>
                                 <p id="resource-model-fields"></p>
                                 <p id="resource-model-description"></p>
+                            </div>
+                            <div id="resource-motion-features">
+                                <h3>Motion Features</h3>
+                                <p id="resource-motion-status"></p>
+                                <div id="resource-motion-values"></div>
                             </div>
                             <div id="resource-json-inspector">
                                 <div class="json-header">

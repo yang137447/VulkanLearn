@@ -11,6 +11,8 @@
 
 #include "../mesh/loader/common/meshAssetLoader.h"
 
+namespace VL::Animation { class SkeletalPlayback; struct SkinPose; }
+
 // One validated scene asset object entry used by WorldBuilder and renderer loaders.
 // Mesh objects carry an already built mesh load request so runtime code does
 // not rebuild it.
@@ -38,6 +40,9 @@ struct SceneAssetBuildPlan
 // binding tables.
 struct MeshObjectBuildPlan
 {
+    std::shared_ptr<VL::Animation::SkeletalPlayback> animation;
+    std::shared_ptr<const VL::Animation::SkinPose> skinPose;
+    size_t skinSection = 0;
     std::string objectName;
     // 这是场景 JSON 中的原始对象身份；objectName 可能因多 section 被展开。
     std::string sceneObjectIdentity;

@@ -10,6 +10,8 @@ struct MeshAssetLoadRequest
 {
     MeshAssetBuildPlan buildPlan;
     ModelImportRequest importRequest;
+    // 与已解析描述同次读取的身份；导入前后复核，防止旧模型配上新数据库统计。
+    std::string descriptorIdentity;
 };
 
 // Result of importing one mesh asset into CPU-side sections plus per-section material mapping.

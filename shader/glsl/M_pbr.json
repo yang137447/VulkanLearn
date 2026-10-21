@@ -14,6 +14,7 @@
         "cullMode": "Back"
     },
     "macros": {
+        "VL_SKINNED_MESH": 0,
         "USE_ALBEDO_MAP": 0,
         "USE_NORMAL_MAP": 0,
         "USE_PBR_MAP": 0,

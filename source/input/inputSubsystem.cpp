@@ -73,6 +73,18 @@ void InputSubsystem::UpdateActionState()
     const bool focused = SDL_GetKeyboardFocus() == window->GetNativeHandle();
     actionState.gameplay = gameplayMap.Sample(held, gameKeyboardEnabled && focused,
         gamePointerEnabled && focused, actionState.mouseDeltaX, actionState.mouseDeltaY);
+    // 合成 action 只在 gameplay action 层合并；不要求 SDL 焦点，也不改变 held/SDL 状态。
+    for (auto& entry : injectedPrevious)
+    {
+        const bool down = injectedActions.count(entry.first) != 0;
+        auto& actions = actionState.gameplay["actions"];
+        auto& node = actions[entry.first];
+        const bool sdlHeld = node.value("held", false);
+        node["held"] = sdlHeld || down;
+        if (down && !entry.second) node["pressed"] = true;
+        if (!down && entry.second) node["released"] = true;
+        entry.second = down;
+    }
     if (!gameKeyboardEnabled || !focused)
     {
         return;
@@ -84,6 +96,15 @@ void InputSubsystem::UpdateActionState()
     actionState.moveRight = state[SDL_SCANCODE_D];
     actionState.moveDown = state[SDL_SCANCODE_Q];
     actionState.moveUp = state[SDL_SCANCODE_E];
+}
+
+void InputSubsystem::InjectAction(const std::string& action, bool pressed)
+{
+    if (action.empty() || action.size() > 128)
+        throw std::invalid_argument("Injected input action name is invalid");
+    injectedPrevious.try_emplace(action, false);
+    if (pressed) injectedActions.insert(action);
+    else injectedActions.erase(action);
 }
 
 void InputSubsystem::SetRelativeMouseModeRequested(bool requested)

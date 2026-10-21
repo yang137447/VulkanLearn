@@ -160,6 +160,12 @@ LaunchOptions ParseLaunchOptions(int argc, char** argv)
             continue;
         }
 
+        if (argument == "--focus-window")
+        {
+            options.focusWindow = true;
+            continue;
+        }
+
         if (argument == "--exit-after-tests")
         {
             options.exitAfterTests = true;
@@ -195,6 +201,28 @@ LaunchOptions ParseLaunchOptions(int argc, char** argv)
             }
             options.workerThreadCountOverride =
                 workerThreadCount;
+            continue;
+        }
+
+        if (argument == "--frame-limit")
+        {
+            if (i + 1 >= argc || IsOptionToken(argv[i + 1]))
+            {
+                options.errorMessage =
+                    "--frame-limit requires a rate in Hz between 1 and 1000.";
+                return options;
+            }
+
+            int frameLimitHz = 0;
+            const std::string frameLimitText = argv[++i];
+            if (!TryParsePositiveInt(frameLimitText, frameLimitHz) ||
+                frameLimitHz > 1000)
+            {
+                options.errorMessage =
+                    "--frame-limit rate must be an integer between 1 and 1000 Hz.";
+                return options;
+            }
+            options.frameLimitHz = frameLimitHz;
             continue;
         }
 
@@ -306,6 +334,7 @@ void PrintLaunchUsage()
         << "       main.exe [--shader-force-rebuild]\n"
         << "       main.exe [--initial-scene <scene-path>]\n"
         << "       main.exe [--worker-thread-count <1|2>]\n"
+        << "       main.exe [--frame-limit <hz>]\n"
         << "       main.exe [--initial-scene <scene-path>] [--console-command \"<cmd>\"]...\n"
         << "  --shader-force-rebuild              Recompile and republish every startup shader artifact.\n"
         << "  --shader-reload-test                Run the graphics shader hot-reload rollback matrix.\n"
@@ -313,10 +342,12 @@ void PrintLaunchUsage()
         << "  --world-graph-transaction-test      Run deterministic World/RenderGraph transaction rollback faults.\n"
         << "  --initial-scene <scene-path>        Override config initScene for this process.\n"
         << "  --worker-thread-count <1|2>         Override config worker mode for this process.\n"
+        << "  --frame-limit <hz>                  Cap render frame pacing at 1..1000 Hz (default 0 = uncapped; fixed 60 Hz physics unchanged).\n"
         << "  --console-command <line>            Queue one debug console command at startup. Repeatable.\n"
         << "  --console-command-delay <frames>    Frames to wait before submitting queued console commands (default 60).\n"
         << "  --dev-ui                            Enable the RmlUi editor workspace for this launch.\n"
         << "  --no-dev-ui                         Disable the RmlUi editor workspace for this launch.\n"
+        << "  --focus-window                      Request OS keyboard focus at startup (input automation).\n"
         << "  --exit-after-tests                  Exit with 0 on success or 2 on test failure.\n";
 }
 

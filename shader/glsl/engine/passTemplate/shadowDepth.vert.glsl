@@ -4,6 +4,7 @@
 #include "../../common/commonUbo.glsl"
 #include "../../common/function.glsl"
 #include "../materialContext.glsl"
+#include "../skinnedVertexFactory.glsl"
 
 layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inNormal;
@@ -31,6 +32,9 @@ void main()
     vertexInput.speedTreeWindBranch1 = inSpeedTreeWindBranch1;
     vertexInput.speedTreeWindBranch2 = inSpeedTreeWindBranch2;
 
+#if defined(VL_SKINNED_MESH) && VL_SKINNED_MESH
+    ApplySkinnedVertexFactory(vertexInput);
+#endif
     MaterialVertex vertex = EvaluateMaterialVertex(vertexInput);
     mat4 modelMatrix = uboM.model;
     vec4 worldPosition = modelMatrix * vec4(vertex.localPosition, 1.0);

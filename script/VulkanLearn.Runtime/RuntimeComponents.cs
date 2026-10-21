@@ -27,15 +27,37 @@ public sealed class ComponentDescription
     public float HorizontalFov { get; init; } = 60;
     public float NearClip { get; init; } = 1;
     public float FarClip { get; init; } = 10000;
+    public int Priority { get; init; }
     public Vector3 Color { get; init; } = Vector3.One;
     public float Intensity { get; init; } = 1000;
     public float InnerConeAngle { get; init; } = 30;
     public float OuterConeAngle { get; init; } = 45;
+    public float TargetArmLength { get; init; } = 300;
+    public Vector3 SocketOffset { get; init; }
+    public Vector3 TargetOffset { get; init; }
+    public float ProbeRadius { get; init; } = 12;
+    public bool DoCollisionTest { get; init; } = true;
+    public uint CollisionMask { get; init; } = 65535;
+    public bool EnableCameraLag { get; init; }
+    public float CameraLagSpeed { get; init; } = 10;
+    public float CameraLagMaxDistance { get; init; }
+    public bool UseCameraLagSubstepping { get; init; } = true;
+    public float CameraLagMaxTimeStep { get; init; } = 1f / 60;
+    public bool EnableCameraRotationLag { get; init; }
+    public float CameraRotationLagSpeed { get; init; } = 10;
+    public bool UsePawnControlRotation { get; init; }
+    public bool InheritPitch { get; init; } = true;
+    public bool InheritYaw { get; init; } = true;
+    public bool InheritRoll { get; init; } = true;
+    public bool AbsoluteRotation { get; init; }
+    public Vector3 RotationOffset { get; init; }
+    public bool DrawDebug { get; init; }
     public ComponentCollision? Collision { get; init; }
 }
 
 public sealed class MeshComponent : SceneComponent
 {
+    public AnimationPlayback Animation { get; } = new();
     public AssetId Mesh { get; internal set; }
     public AssetId Material { get; internal set; }
 }
@@ -70,6 +92,7 @@ public static partial class NativeBridge
             if (context.Released || !owner.Components.Any(c => ReferenceEquals(c, component)))
                 throw new InvalidOperationException("Stale component handle.");
         };
+        BindMeshAnimation(context, owner, component);
     }
 
     private static JsonElement ComponentNode(ComponentDescription description)
@@ -87,7 +110,7 @@ public static partial class NativeBridge
         else if (description.Kind == "camera")
         {
             node["fov"] = description.HorizontalFov; node["near_clip"] = description.NearClip;
-            node["far_clip"] = description.FarClip;
+            node["far_clip"] = description.FarClip; node["priority"] = description.Priority;
         }
         else if (description.Kind is "pointLight" or "spotLight" or "directionalLight")
         {
@@ -95,6 +118,29 @@ public static partial class NativeBridge
             node["color"] = Values(description.Color); node["intensity"] = description.Intensity;
             if (description.Kind == "spotLight")
             { node["coneAngleInner"] = description.InnerConeAngle; node["coneAngleOuter"] = description.OuterConeAngle; }
+        }
+        else if (description.Kind == "springArm")
+        {
+            node["targetArmLength"] = description.TargetArmLength;
+            node["socketOffset"] = Values(description.SocketOffset);
+            node["targetOffset"] = Values(description.TargetOffset);
+            node["probeRadius"] = description.ProbeRadius;
+            node["doCollisionTest"] = description.DoCollisionTest;
+            node["collisionMask"] = description.CollisionMask;
+            node["enableCameraLag"] = description.EnableCameraLag;
+            node["cameraLagSpeed"] = description.CameraLagSpeed;
+            node["cameraLagMaxDistance"] = description.CameraLagMaxDistance;
+            node["useCameraLagSubstepping"] = description.UseCameraLagSubstepping;
+            node["cameraLagMaxTimeStep"] = description.CameraLagMaxTimeStep;
+            node["enableCameraRotationLag"] = description.EnableCameraRotationLag;
+            node["cameraRotationLagSpeed"] = description.CameraRotationLagSpeed;
+            node["usePawnControlRotation"] = description.UsePawnControlRotation;
+            node["inheritPitch"] = description.InheritPitch;
+            node["inheritYaw"] = description.InheritYaw;
+            node["inheritRoll"] = description.InheritRoll;
+            node["absoluteRotation"] = description.AbsoluteRotation;
+            node["rotationOffset"] = Values(description.RotationOffset);
+            node["drawDebug"] = description.DrawDebug;
         }
         else if (description.Kind != "scene") throw new ArgumentException("Unsupported component kind.");
         if (description.Collision is { } collision)
@@ -152,6 +198,7 @@ public static partial class NativeBridge
         {
             "camera" => new CameraComponent(), "pointLight" => new PointLightComponent(),
             "spotLight" => new SpotLightComponent(), "directionalLight" => new DirectionalLightComponent(),
+            "springArm" => new SpringArmComponent(),
             "mesh" => new MeshComponent { Mesh = new(node.GetProperty("modelPath").GetString()!),
                 Material = new(node.TryGetProperty("materialOverride", out var material) ? material.GetString()! : "") },
             _ => new SceneComponent()
@@ -162,6 +209,7 @@ public static partial class NativeBridge
         {
             camera.HorizontalFov = node.GetProperty("fov").GetSingle();
             camera.NearClip = node.GetProperty("near_clip").GetSingle(); camera.FarClip = node.GetProperty("far_clip").GetSingle();
+            camera.Priority = node.TryGetProperty("priority", out var priority) ? IntValue(priority) : 0;
             camera.Activation = active =>
             {
                 RequireCallback(context, owner);
@@ -177,6 +225,7 @@ public static partial class NativeBridge
             if (light is SpotLightComponent spot)
             { spot.InnerConeAngle = node.GetProperty("coneAngleInner").GetSingle(); spot.OuterConeAngle = node.GetProperty("coneAngleOuter").GetSingle(); }
         }
+        if (component is SpringArmComponent arm) ReadSpringArmNode(arm, node);
         ValidateTransform(component.Transform);
         BindComponentIdentity(context, owner, component);
         component.Handle = handle;
@@ -260,6 +309,7 @@ public static partial class NativeBridge
             !float.IsFinite(spot.OuterConeAngle) || spot.InnerConeAngle < 0 ||
             spot.InnerConeAngle >= spot.OuterConeAngle || spot.OuterConeAngle >= 90))
             throw new ArgumentException("Invalid spot cone.");
+        // SpringArm 的可写参数在属性 setter 收口，热路径不重复做同一组范围校验。
     }
 
     private static JsonElement[] PendingComponentNodes(Context context, Instance instance)
@@ -313,7 +363,7 @@ public static partial class NativeBridge
             float scale = x.Length();
             float determinant = matrix.GetDeterminant();
             if (!float.IsFinite(scale) || scale <= 0 || !float.IsFinite(determinant) || determinant <= 0 ||
-                !Finite(new(matrix.M41, matrix.M42, matrix.M43)) || MathF.Abs(y.Length() / scale - 1) > 1e-4f ||
+                !Finite(new Vector3(matrix.M41, matrix.M42, matrix.M43)) || MathF.Abs(y.Length() / scale - 1) > 1e-4f ||
                 MathF.Abs(z.Length() / scale - 1) > 1e-4f || MathF.Abs(Vector3.Dot(x, y)) > scale * scale * 1e-4f ||
                 MathF.Abs(Vector3.Dot(x, z)) > scale * scale * 1e-4f || MathF.Abs(Vector3.Dot(y, z)) > scale * scale * 1e-4f)
                 throw new ArgumentException("Collider components require positive uniform scale without shear.");

@@ -36,7 +36,9 @@ public:
         uint32_t swapchainImageIndex,
         const UiRenderSnapshot& snapshot,
         vk::ImageView sceneViewportView = {},
-        vk::Sampler sceneViewportSampler = {});
+        vk::Sampler sceneViewportSampler = {},
+        vk::ImageView sceneDepthView = {},
+        vk::Sampler sceneDepthSampler = {});
 
     bool IsInitialized() const { return initialized; }
 
@@ -128,6 +130,7 @@ private:
     std::vector<vk::Framebuffer> framebuffers;
     std::vector<FrameBuffers> frameBuffers;
     std::vector<vk::DescriptorSet> sceneViewportDescriptors;
+    std::vector<vk::DescriptorSet> sceneDepthDescriptors;
     vk::PipelineCache straightAlphaPipelineCache;
     vk::Pipeline straightAlphaPipeline;
     vk::PipelineCache premultipliedAlphaPipelineCache;

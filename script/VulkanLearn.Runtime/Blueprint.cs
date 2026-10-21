@@ -48,7 +48,13 @@ public class SceneComponent
     public SceneComponent? Parent { get; internal set; }
     internal Blueprint Owner = null!;
     public Transform Transform { get; } = new();
-    public Matrix4x4 WorldMatrix => Transform.Matrix * (Parent?.WorldMatrix ?? Owner.Transform.Matrix);
+    // 子组件局部 TRS 相对父挂接点；SpringArm 的组件原点仍在臂根，挂接点在臂端。
+    public Matrix4x4 WorldMatrix => Transform.Matrix * (Parent?.GetSocketTransform() ?? Owner.Transform.Matrix);
+    public Quaternion WorldRotation => Quaternion.Normalize(
+        (Parent?.SocketWorldRotation ?? NativeBridge.Degrees(Owner.Transform.Rotation)) *
+        NativeBridge.Degrees(Transform.Rotation));
+    public virtual Matrix4x4 GetSocketTransform() => WorldMatrix;
+    internal virtual Quaternion SocketWorldRotation => WorldRotation;
 }
 
 // 相机只发布镜头值；实际渲染相机由原生 World 拥有，Activate 受所属 GT 回调边界约束。
@@ -57,6 +63,14 @@ public sealed class CameraComponent : SceneComponent
     public float HorizontalFov { get; set; } = 60;
     public float NearClip { get; set; } = 1;
     public float FarClip { get; set; } = 10000;
+    // autoActivate 相机的初始选择优先级；同优先级按声明顺序取首个。
+    private int priority;
+    public int Priority
+    {
+        get => priority;
+        set => priority = value >= -100000 && value <= 100000
+            ? value : throw new ArgumentOutOfRangeException(nameof(Priority));
+    }
     internal Action<bool> Activation = null!;
     internal Func<bool> ActiveQuery = null!;
     public bool IsActive => ActiveQuery();
@@ -118,6 +132,15 @@ public abstract partial class Blueprint
     public string Name { get; internal set; } = "";
     public bool Enabled { get; set; } = true;
     public Transform Transform { get; } = new();
+    // 供 UsePawnControlRotation 使用的视角控制量（Pitch/Yaw/Roll 度）；默认跟随 actor 初始朝向，
+    // 正式控制器可在 Tick 里按玩家输入更新它，SpringArm 只读取，不反写 actor。
+    private Vector3 controlRotation;
+    [Migrate] public Vector3 ControlRotation
+    {
+        get => controlRotation;
+        set => controlRotation = float.IsFinite(value.X) && float.IsFinite(value.Y) && float.IsFinite(value.Z)
+            ? value : throw new ArgumentOutOfRangeException(nameof(ControlRotation));
+    }
     public Input Input { get; internal set; } = new();
     public Time Time { get; internal set; } = new();
     public IReadOnlyList<SceneComponent> Components { get; internal set; } = Array.Empty<SceneComponent>();

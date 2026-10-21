@@ -121,6 +121,53 @@ void DebugConsole::ProcessCommand(const std::string& line)
         return;
     }
 
+    if (command == "debugdraw")
+    {
+        std::string arguments, error;
+        std::getline(commandStream, arguments);
+        VL::RuntimeCommand request;
+        if (!VL::Debug::ParseControl(arguments, request.debugDrawControl, error))
+        { std::cout << error << std::endl; return; }
+        request.type = VL::RuntimeCommandType::ControlDebugDraw;
+        request.sourceText = line;
+        commandBus.Queue(std::move(request));
+        return;
+    }
+    if (command == "motiondebug")
+    {
+        std::string value, extra;
+        if (!(commandStream >> value) || (value != "0" && value != "1") || (commandStream >> extra))
+        {
+            std::cout << "Usage: motiondebug <0|1>" << std::endl;
+            return;
+        }
+        VL::RuntimeCommand request;
+        request.type = VL::RuntimeCommandType::ControlMotionDebug;
+        request.intValue = value == "1" ? 1 : 0;
+        request.sourceText = line;
+        commandBus.Queue(std::move(request));
+        return;
+    }
+    if (command == "animation")
+    {
+        std::string action, extra;
+        VL::RuntimeCommand request;
+        request.type = VL::RuntimeCommandType::ControlAnimation;
+        if (!(commandStream >> action) ||
+            (action != "play" && action != "pause" && action != "seek" &&
+             action != "clip" && action != "get") ||
+            ((action == "seek" || action == "clip") && !(commandStream >> request.floatValue)) ||
+            (commandStream >> extra) || !std::isfinite(request.floatValue))
+        {
+            std::cout << "Usage: animation <play|pause|get|seek seconds|clip index>" << std::endl;
+            return;
+        }
+        request.stringValue = action == "pause" ? "play" : action;
+        if (action == "play") request.floatValue = 1;
+        request.sourceText = line;
+        commandBus.Queue(std::move(request));
+        return;
+    }
     if (command == "debugview")
     {
         int mode = 0;
@@ -489,6 +536,34 @@ void DebugConsole::ProcessCommand(const std::string& line)
         return;
     }
 
+    if (command == "reloadassembly")
+    {
+        // 独立包验证入口：从当前配置的 assembly 路径重新加载 Gameplay。
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type = VL::RuntimeCommandType::ReloadAssembly;
+        runtimeCommand.sourceText = line;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
+    if (command == "injectinput")
+    {
+        std::string action, mode;
+        if (!(commandStream >> action >> mode) || action.empty() ||
+            (mode != "down" && mode != "up"))
+        {
+            std::cout << "Usage: injectinput <action> <down|up>" << std::endl;
+            return;
+        }
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type = VL::RuntimeCommandType::InjectInput;
+        runtimeCommand.stringValue = action;
+        runtimeCommand.intValue = mode == "down" ? 1 : 0;
+        runtimeCommand.sourceText = line;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
     if (command == "shaderreload")
     {
         std::string scope;
@@ -543,6 +618,9 @@ void DebugConsole::ProcessCommand(const std::string& line)
 void DebugConsole::PrintHelp() const
 {
     std::cout << "Available commands:\n";
+    std::cout << "  animation <get|play|pause|seek seconds|clip index> - control native skeletal playback\n";
+    std::cout << "  motiondebug <0|1> - actual history and predicted trajectory overlay\n";
+    std::cout << "  debugdraw <on|off|status|demo [overlay/depth]|category name on/off|owner id/*|clear [owner/category name]>\n";
     std::cout << "  editor <JSON> - submit an editor asset command and print its structured result\n";
     std::cout << "  debugview <mode> - set debug view mode\n";
     std::cout << "    0: Full\n";
@@ -582,6 +660,7 @@ void DebugConsole::PrintHelp() const
     std::cout << "    77: Skin IBL Diffuse\n";
     std::cout << "    78: Skin IBL Specular\n";
     std::cout << "    79: Skin Virtual Light\n";
+    std::cout << "    90: Deferred Velocity (zero=0.5, XY gain=20)\n";
     std::cout << "  tonemap <mode> - set tone mapping mode\n";
     std::cout << "    0: Linear clamp\n";
     std::cout << "    1: Reinhard\n";
@@ -602,6 +681,8 @@ void DebugConsole::PrintHelp() const
     std::cout << "  camera lookat <x> <y> <z> - aim camera at a world-space target\n";
     std::cout << "  camera pose <px> <py> <pz> <tx> <ty> <tz> - set position and look-at\n";
     std::cout << "  shaderreload <changed|all> - transactionally publish live Graphics, Compute, and UI shaders\n";
+    std::cout << "  reloadassembly - reload the configured Gameplay assembly in the live World\n";
+    std::cout << "  injectinput <action> <down|up> - inject a gameplay action for automation (no OS focus required)\n";
     std::cout << "  shaderreload help - show hot-reload triggers by resource type\n";
     std::cout << "  shadercache stats - report shader build cache statistics\n";
 }

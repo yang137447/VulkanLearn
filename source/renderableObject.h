@@ -31,6 +31,7 @@ public:
     const Eigen::Vector3f& GetBoundsMin() const { return boundsMin; }
     const Eigen::Vector3f& GetBoundsMax() const { return boundsMax; }
     const std::string& GetName() const { return name; }
+    const vk::DescriptorBufferInfo& GetSkinInfluenceInfo() const { return skinInfluenceInfo; }
 
 private:
     void UpdateLocalBounds();
@@ -42,6 +43,7 @@ private:
 
     void CreateIndexBuffer();
     void DestroyIndexBuffer();
+    void CreateSkinInfluenceBuffer();
 
     std::string name;
     VL::RendererBackendVulkan* rendererBackend = nullptr;
@@ -59,4 +61,7 @@ private:
     vk::Buffer indexBuffer = nullptr;
     vk::DeviceMemory indexBufferMemory = nullptr;
     vk::DescriptorBufferInfo indexBufferInfo;
+    vk::Buffer skinInfluenceBuffer = nullptr;
+    vk::DeviceMemory skinInfluenceMemory = nullptr;
+    vk::DescriptorBufferInfo skinInfluenceInfo;
 };

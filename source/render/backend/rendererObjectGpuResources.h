@@ -6,6 +6,7 @@
 
 #include "baseStructs.h"
 #include "render/rhi/rhiResourceHandles.h"
+#include "animation/skinPose.h"
 
 namespace VL
 {
@@ -16,6 +17,11 @@ namespace VL
 struct RendererObjectGpuResources
 {
     Buffer objectUniformBuffer;
+    // 只有蒙皮对象分配逐 swapchain palette。权重由同包 Renderable 共享并随 GPU epoch 退休。
+    Buffer skinPalette;
+    vk::DescriptorBufferInfo skinInfluences;
+    size_t skinJointCount = 0;
+    Animation::SubmittedSkinPose submittedSkin;
 
     RHIDescriptorPoolHandle descriptorPoolHandle;
     vk::DescriptorPool descriptorPool;

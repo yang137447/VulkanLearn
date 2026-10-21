@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <string>
@@ -15,6 +16,11 @@
 #include "mesh/meshAssetTypes.h"
 #include "render/shadow/csmSettings.h"
 #include "world/worldSnapshot.h"
+#include "animation/motionDebug.h"
+#include "animation/motionHistory.h"
+#include "animation/motionRuntime.h"
+#include "debug/drawDebug.h"
+#include <map>
 
 class Camera;
 class DirectionalLight;
@@ -24,6 +30,7 @@ class SpotLight;
 
 namespace VL
 {
+namespace Animation { class SkeletalPlayback; struct SkinPose; }
 class ScriptWorldContext;
 struct ScriptTemplateExtension;
 
@@ -57,6 +64,9 @@ struct WorldSquareAreaLight
 // 只在网格与灯光两处存在，不引入第二套"World 拥有的可见性集合"。
 struct WorldMeshObject
 {
+    std::shared_ptr<Animation::SkeletalPlayback> animation;
+    std::shared_ptr<const Animation::SkinPose> skinPose;
+    size_t skinSection = 0;
     std::string debugName;
     // 渲染对象名和场景对象身份分开保存，避免多 section 展开后无法回到
     // scene JSON 的原始对象，从而不能为选中的 MI 构造导航上下文。
@@ -119,6 +129,21 @@ public:
     void AddSquareAreaLight(std::string name, WorldSquareAreaLight light);
 
     const std::unordered_map<std::string, WorldMeshObject>& GetMeshObjects() const { return meshObjects; }
+    void TickAnimations(float deltaSeconds);
+    // 预览动作由 GT 按 World 代数校验；播放器和姿态不会传入 UI 回调。
+    bool ControlAnimation(uint64_t expectedGeneration, const std::string& command, float value);
+    // 只控制指定脚本网格的唯一播放器；0=seek（暂停后定位），1=play（恢复）。
+    bool ControlScriptAnimation(uint64_t expectedGeneration, const std::string& identity,
+        int action, float value);
+    void SetMotionDebugEnabled(bool enabled) { motionDebugEnabled = enabled; }
+    bool IsMotionDebugEnabled() const { return motionDebugEnabled; }
+    std::shared_ptr<const Animation::MotionDebugView> CaptureMotionDebug() const;
+    // P7 查询回放：index<0 退出回放，否则选择最近历史快照并暂停被聚焦播放器。
+    void SetMotionDebugReplayFrame(int frame);
+    int MotionDebugReplayFrame() const { return motionDebugReplayFrame; }
+    Debug::DrawDebug& GetDebugDraw() { return debugDraw; }
+    const Debug::DrawDebug& GetDebugDraw() const { return debugDraw; }
+    std::shared_ptr<const Debug::Snapshot> CaptureDebugDraw(const Animation::MotionDebugView& motion);
     const std::unordered_map<std::string, SpeedTreeWindProfile>& GetSpeedTreeWindProfiles() const { return speedTreeWindProfiles; }
     const std::unordered_map<std::string, std::shared_ptr<DirectionalLight>>& GetDirectionalLights() const { return directionalLights; }
     const std::shared_ptr<DirectionalLight>& GetPrimaryDirectionalLight() const;
@@ -160,6 +185,15 @@ public:
     void SetScriptBlueprintStates(nlohmann::json states) { scriptBlueprintStates = std::move(states); }
     void SetScriptContext(std::shared_ptr<ScriptWorldContext> context) { scriptContext = std::move(context); }
     const std::shared_ptr<ScriptWorldContext>& GetScriptContext() const { return scriptContext; }
+    nlohmann::json ScriptAnimationCatalog() const;
+    // catalog 的资产段（每个 modelPath 的 curves/montages）；与上面的 clip id 列表分开发布，
+    // 避免改变旧字段形状，也便于只把有曲线的 clip 放进一次性 payload。
+    nlohmann::json ScriptAnimationAssets() const;
+    nlohmann::json ScriptAnimationFeedback() const;
+    void ApplyScriptAnimationRequests(const nlohmann::json& actor, const nlohmann::json& requests);
+    void TickScriptAnimations(float deltaSeconds, const Animation::GroundProbe* ground = nullptr);
+    void ResetScriptAnimations();
+    void SetMotionResourceRoot(std::string root) { motionResourceRoot = std::move(root); }
     bool SetScriptBlueprintTransform(const std::string& id, const std::string& field,
         uint32_t component, float value);
     void ApplyScriptBlueprintVisuals(const nlohmann::json& actor, bool visible = true);
@@ -190,6 +224,7 @@ public:
 private:
     friend struct ScriptTemplateExtension;
     void AppendScriptComponentMeshTemplate(const nlohmann::json& blueprint);
+    void RecordScriptMotion(float deltaSeconds);
     // 对属于同一个场景对象身份的每个 mesh section 施加同一操作，返回是否至少命中一个。
     // 身份推导只有 MeshSceneObjectIdentity() 一份，读写两端共用，避免"大纲认得的名字
     // World 不认得"这类静默失配。
@@ -226,6 +261,16 @@ private:
     std::unordered_map<std::string, std::string> scriptComponentMeshStructures;
     // 派生组件灯只持有规范物理值，不进入作者灯表，也不替换 CSM 主方向光。
     std::unordered_map<std::string, LightSnapshot> scriptLights;
+    bool motionDebugEnabled = false;
+    // 最近 10 秒（60 Hz）的冻结调试视图；只由 GT 写，UI 读副本。
+    mutable std::deque<Animation::MotionDebugView> motionDebugHistory;
+    mutable int motionDebugReplayFrame = -1;
+    Debug::DrawDebug debugDraw;
+    std::map<std::string, Animation::MotionTrack> motionTracks;
+    std::map<std::string, Animation::MotionRuntime> motionRuntimes;
+    // 缓存 key 含源路径、模型路径及实际导入输入身份；Stop 只清实例时钟/历史，保留不可变资源。
+    std::map<std::string, std::shared_ptr<const Animation::MotionRuntimeDatabase>> motionDatabases;
+    std::string motionResourceRoot;
 };
 
 } // namespace VL

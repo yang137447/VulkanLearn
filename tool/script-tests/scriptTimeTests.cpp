@@ -72,50 +72,49 @@ protected:
     DiagnosticsSubsystem diagnostics;
 };
 
-TEST_F(ScriptTimeTest, FixedTickAccumulatesFractionalFramesBeforeLateTick)
+TEST_F(ScriptTimeTest, TickAndLateTickRunOncePerFrameWithVariableDeltaTime)
 {
     Prepare(Json::array({Blueprint()}));
     Control(ScriptPlayState::Playing);
     Tick(1.0f / 120);
-    EXPECT_EQ(State()["rotation"][0], 0);
-    Tick(1.0f / 120);
     EXPECT_EQ(State()["rotation"][0], 1);
+    EXPECT_EQ(Performance()["time"]["frameIndex"], 1);
+    EXPECT_NEAR(State()["position"][0].get<float>(), 1.0f / 120, 1e-6f);
     Tick(1.0f / 30);
+    EXPECT_EQ(State()["rotation"][0], 2);
+    EXPECT_EQ(Performance()["time"]["frameIndex"], 2);
+    EXPECT_NEAR(State()["position"][0].get<float>(), 1.0f / 120 + 1.0f / 30, 1e-6f);
+    Tick(0.25f);
     EXPECT_EQ(State()["rotation"][0], 3);
-    EXPECT_FALSE(State()["failed"].get<bool>());
-    EXPECT_EQ(Performance()["time"]["fixedFrameIndex"], 3);
+    EXPECT_EQ(State()["scale"][1], 4); // 1 + Tick 次数：每个渲染帧恰好一次，不随 dt 拆成子步。
+    EXPECT_EQ(Performance()["time"]["frameIndex"], 3);
+    // LateTick 与 Tick 共用本帧时钟：position.x 是累加的 play 时间，rotation.x 是 Tick 次数。
+    EXPECT_NEAR(State()["position"][0].get<float>(), 1.0f / 120 + 1.0f / 30 + 0.25f, 1e-6f);
+    const auto time = Performance()["time"];
+    EXPECT_FALSE(time.contains("fixedFrameIndex"));
+    EXPECT_FALSE(time.contains("fixedSteps"));
+    EXPECT_FALSE(time.contains("droppedSteps"));
+    EXPECT_FALSE(time.contains("droppedTime"));
     EXPECT_EQ(Timing(Metric("probe"), "Tick")["calls"], 3);
     EXPECT_EQ(Timing(Metric("probe"), "LateTick")["calls"], 3);
 }
 
-TEST_F(ScriptTimeTest, EachFixedCallbackSeesImmediatelyPreviousJoltSubstep)
+TEST_F(ScriptTimeTest, OneFrameVariableDeltaAdvancesRigidBodyByFrameTime)
 {
-    auto probe = Blueprint("probe", "ScriptFixtures.FixedPhysicsProbeBlueprint");
+    // 每帧变长 dt 直接交给物理世界：刚体内部的 1/60 子步会补足 4/60 秒，不依赖脚本子步。
+    auto probe = Blueprint("probe", "ScriptFixtures.PhysicsBlueprint");
     probe["physics"] = {{"motion", "dynamic"}, {"shape", "sphere"}, {"radius", 10}, {"mass", 1}};
+    probe["properties"]["ImpulseX"] = 120;
     Prepare(Json::array({probe}));
     Control(ScriptPlayState::Playing);
     Tick(4.0f / 60);
     EXPECT_FALSE(State()["failed"].get<bool>()) << runtime.View(1).feedback;
-    EXPECT_NEAR(State()["position"][0].get<float>(), 4, 0.01f);
-    EXPECT_EQ(Timing(Metric("probe"), "FixedTick")["calls"], 4);
+    EXPECT_NEAR(State()["position"][0].get<float>(), 8, 0.05f);
+    Tick(1.0f / 60);
+    EXPECT_NEAR(State()["position"][0].get<float>(), 10, 0.05f);
 }
 
-TEST_F(ScriptTimeTest, CatchupRunsEightStepsAndReportsDroppedTimeWithoutBacklog)
-{
-    Prepare(Json::array({Blueprint()}));
-    Control(ScriptPlayState::Playing);
-    Tick(0.5f);
-    auto time = Performance()["time"];
-    EXPECT_EQ(time["fixedSteps"], 8);
-    EXPECT_EQ(time["fixedFrameIndex"], 8);
-    EXPECT_EQ(time["droppedSteps"], 22);
-    EXPECT_NEAR(time["droppedTime"].get<double>(), 22.0 / 60, 1e-7);
-    Tick(0);
-    EXPECT_EQ(Performance()["time"]["fixedSteps"], 0);
-    EXPECT_EQ(Performance()["time"]["fixedFrameIndex"], 8);
-}
-
-TEST_F(ScriptTimeTest, TimeScaleChangesScaledClockFixedStepsAndTimers)
+TEST_F(ScriptTimeTest, TimeScaleChangesScaledClockAndTimers)
 {
     auto probe = Blueprint();
     probe["properties"]["Services"] = true;
@@ -126,20 +125,21 @@ TEST_F(ScriptTimeTest, TimeScaleChangesScaledClockFixedStepsAndTimers)
     Tick(0.1f);
     EXPECT_NEAR(State()["position"][0].get<float>(), 0.05f, 1e-6f);
     EXPECT_NEAR(State()["position"][1].get<float>(), 0.1f, 1e-6f);
-    EXPECT_EQ(State()["rotation"][0], 3);
+    EXPECT_EQ(State()["rotation"][0], 1);
     EXPECT_EQ(State()["scale"][0], 1);
     Tick(0.1f);
     EXPECT_EQ(State()["scale"][0], 2);
-    EXPECT_EQ(State()["rotation"][0], 6);
+    EXPECT_EQ(State()["rotation"][0], 2);
     ASSERT_TRUE(runtime.SetTimeScale(2, error));
     Tick(1.0f / 60);
-    EXPECT_EQ(Performance()["time"]["fixedFrameIndex"], 8);
+    EXPECT_EQ(Performance()["time"]["frameIndex"], 3);
+    EXPECT_NEAR(State()["position"][0].get<float>(), 0.1f + 2.0f / 60, 1e-6f);
     EXPECT_FLOAT_EQ(runtime.View(1).timeScale, 2);
 }
 
 TEST_F(ScriptTimeTest, ZeroScaleKeepsUnscaledCallbacksAndFreezesPhysicsAndTimers)
 {
-    auto probe = Blueprint(), body = Blueprint("body", "ScriptFixtures.FixedPhysicsProbeBlueprint");
+    auto probe = Blueprint(), body = Blueprint("body", "ScriptFixtures.PassiveBlueprint");
     probe["properties"]["Services"] = true;
     body["physics"] = {{"motion", "dynamic"}, {"shape", "sphere"}, {"radius", 10}, {"mass", 1}};
     body["position"] = {0, 1000, 0};
@@ -153,14 +153,15 @@ TEST_F(ScriptTimeTest, ZeroScaleKeepsUnscaledCallbacksAndFreezesPhysicsAndTimers
     EXPECT_EQ(State()["scale"][0], 1);
     EXPECT_EQ(State()["scale"][1], 4);
     EXPECT_EQ(State("body")["position"][1], 1000);
-    EXPECT_EQ(Performance()["time"]["fixedFrameIndex"], 0);
+    // 帧索引只数渲染帧；零时间倍率不冻结帧推进，只冻结脚本/物理时间。
+    EXPECT_EQ(Performance()["time"]["frameIndex"], 3);
     EXPECT_EQ(Performance()["pending"]["timers"], 1);
     ASSERT_TRUE(runtime.SetTimeScale(1, error));
     Tick(0.1f);
     EXPECT_EQ(State()["scale"][0], 2);
 }
 
-TEST_F(ScriptTimeTest, PausePreservesFractionalStepAndStopResetsPlayClockAndScale)
+TEST_F(ScriptTimeTest, PauseKeepsFrameClockAndStopResetsPlayClockAndScale)
 {
     Prepare(Json::array({Blueprint()}));
     Tick(2);
@@ -170,11 +171,11 @@ TEST_F(ScriptTimeTest, PausePreservesFractionalStepAndStopResetsPlayClockAndScal
     const auto frozen = State();
     Tick(1);
     EXPECT_EQ(State(), frozen);
-    EXPECT_EQ(Performance()["time"]["fixedFrameIndex"], 0);
+    EXPECT_EQ(Performance()["time"]["frameIndex"], 1);
     EXPECT_GT(Performance()["time"]["timeSinceStartup"].get<double>(), 3);
     Control(ScriptPlayState::Playing);
     Tick(1.0f / 120);
-    EXPECT_EQ(State()["rotation"][0], 1);
+    EXPECT_EQ(State()["rotation"][0], 2);
     std::string error;
     ASSERT_TRUE(runtime.SetTimeScale(0.25f, error));
     const double startup = Performance()["time"]["timeSinceStartup"];
@@ -184,7 +185,7 @@ TEST_F(ScriptTimeTest, PausePreservesFractionalStepAndStopResetsPlayClockAndScal
     EXPECT_DOUBLE_EQ(Performance()["time"]["timeSinceStartup"].get<double>(), startup);
     Control(ScriptPlayState::Playing);
     Tick(1.0f / 120);
-    EXPECT_EQ(State()["rotation"][0], 0);
+    EXPECT_EQ(State()["rotation"][0], 1);
 }
 
 TEST_F(ScriptTimeTest, InvalidTimeScalePreservesCurrentValue)
@@ -201,10 +202,10 @@ TEST_F(ScriptTimeTest, InvalidTimeScalePreservesCurrentValue)
     }
 }
 
-TEST_F(ScriptTimeTest, FixedExceptionRollsBackServicesAndRetainsValueDiagnostics)
+TEST_F(ScriptTimeTest, ThrowingTickRollsBackServicesAndRetainsValueDiagnostics)
 {
-    auto bad = Blueprint("bad"), good = Blueprint("good");
-    bad["properties"]["FailFixed"] = true;
+    // Tick 抛异常沿同一条回滚路径：变换、计时器、订阅和一次性命令都不得泄漏到下一帧。
+    auto bad = Blueprint("bad", "ScriptFixtures.ThrowingFrameBlueprint"), good = Blueprint("good");
     Prepare(Json::array({bad, good}));
     Control(ScriptPlayState::Playing);
     ProcessLog().Clear();
@@ -212,12 +213,12 @@ TEST_F(ScriptTimeTest, FixedExceptionRollsBackServicesAndRetainsValueDiagnostics
     EXPECT_TRUE(State("bad")["failed"].get<bool>());
     EXPECT_EQ(State("bad")["position"], Json::array({0, 0, 0}));
     EXPECT_FALSE(State("good")["failed"].get<bool>());
-    EXPECT_EQ(State("good")["rotation"][0], 2);
+    EXPECT_EQ(State("good")["rotation"][0], 1);
     const auto metric = Metric("bad");
     EXPECT_EQ(metric["lifecycle"], "Failed");
-    EXPECT_NE(metric["lastException"].get<std::string>().find("fixed-probe-exception"), std::string::npos);
-    EXPECT_EQ(Timing(metric, "FixedTick")["calls"], 1);
-    EXPECT_GE(Timing(metric, "FixedTick")["lastMs"].get<double>(), 0);
+    EXPECT_NE(metric["lastException"].get<std::string>().find("inherited-frame-failed"), std::string::npos);
+    EXPECT_EQ(Timing(metric, "Tick")["calls"], 1);
+    EXPECT_GE(Timing(metric, "Tick")["lastMs"].get<double>(), 0);
     EXPECT_EQ(Performance()["pending"]["timers"], 0);
     EXPECT_EQ(Performance()["pending"]["subscriptions"], 0);
     EXPECT_GT(Performance()["gc"]["heapBytes"].get<int64_t>(), 0);
@@ -233,7 +234,7 @@ TEST_F(ScriptTimeTest, FixedExceptionRollsBackServicesAndRetainsValueDiagnostics
     EXPECT_GT(diagnostic["assemblyGeneration"].get<uint64_t>(), 0);
     EXPECT_EQ(Performance()["detailsFrame"], 1);
     Tick(1.0f / 60);
-    EXPECT_EQ(Timing(Metric("bad"), "FixedTick")["calls"], 1);
+    EXPECT_EQ(Timing(Metric("bad"), "Tick")["calls"], 1);
 }
 
 TEST_F(ScriptTimeTest, PerformanceSnapshotsAreFrozenAndStopReleasesServicesAcrossRepeatedPlay)

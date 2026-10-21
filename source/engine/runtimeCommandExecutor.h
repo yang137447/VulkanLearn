@@ -16,9 +16,11 @@ namespace VL
 {
 
 class DiagnosticsSubsystem;
+class InputSubsystem;
 class RuntimeConfig;
 class RuntimeTestHooks;
 class WorldTransitionCoordinator;
+class ScriptRuntimeSubsystem;
 namespace Editor { class SceneDocumentService; }
 
 struct RuntimeCommandExecutionResult
@@ -68,6 +70,8 @@ public:
         RuntimeTestHooks& runtimeTestHooks,
         const RuntimeConfig& runtimeConfig,
         const DiagnosticsSubsystem& diagnostics,
+        InputSubsystem* input = nullptr,
+        ScriptRuntimeSubsystem* scripts = nullptr,
         Editor::SceneDocumentService* sceneDocuments = nullptr) const;
 
 private:
@@ -80,6 +84,8 @@ private:
         const RuntimeConfig& runtimeConfig,
         const DiagnosticsSubsystem& diagnostics,
         RuntimeCommandExecutionResult& executionResult,
+        InputSubsystem* input,
+        ScriptRuntimeSubsystem* scripts,
         Editor::SceneDocumentService* sceneDocuments) const;
     void ApplyShaderReloadTest(
         const RuntimeConfig& runtimeConfig,

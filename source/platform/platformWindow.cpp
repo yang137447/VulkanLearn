@@ -104,6 +104,13 @@ void PlatformWindow::Show()
     SDL_ShowWindow(window);
 }
 
+void PlatformWindow::Focus()
+{
+    if (!window) return;
+    SDL_SetWindowFocusable(window, true);
+    SDL_RaiseWindow(window);
+}
+
 void PlatformWindow::SetTitle(const std::string& title)
 {
     if (title == currentTitle)

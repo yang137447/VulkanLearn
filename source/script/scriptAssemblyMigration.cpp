@@ -83,7 +83,8 @@ void ValidateMigrationValues(const Json& before, const Json& after)
                     throw std::runtime_error("OnReload cannot change script component state");
         if (value.value("jump", false) || !value.value("raycasts", Json::array()).empty() ||
             !value.value("assetRequests", Json::array()).empty() ||
-            !value.value("assetCancels", Json::array()).empty())
+            !value.value("assetCancels", Json::array()).empty() ||
+            !value.value("debugCommands", Json::array()).empty())
             throw std::runtime_error("OnReload can register timers/events but cannot issue physics or asset requests");
     }
 }
@@ -98,6 +99,8 @@ bool ScriptRuntimeSubsystem::ReloadPlayingAssembly(World& world, std::string& er
     {
         const auto previousContext = world.GetScriptContext();
         if (!host || !previousContext) throw std::runtime_error("No live C# context to migrate");
+        if (!world.ScriptAnimationFeedback().empty())
+            throw std::runtime_error("Stop gameplay before reloading skeletal animation controllers");
         if (std::filesystem::path(world.GetScenePath()).filename() == "SC_model_preview.json")
             throw std::runtime_error("Asset preview does not run gameplay");
         // 在途完成包含原上下文句柄，不能把旧代委托或 lease 偷换到新上下文。
@@ -160,7 +163,8 @@ bool ScriptRuntimeSubsystem::ReloadPlayingAssembly(World& world, std::string& er
             runtimeBlueprints.push_back(std::move(declaration));
         }
         phase = "candidate construction";
-        auto candidateContext = CreateContext(runtimeBlueprints, templates, candidateGeneration);
+        auto candidateContext = CreateContext(runtimeBlueprints, templates, candidateGeneration,
+            world.ScriptAnimationCatalog(), world.ScriptAnimationAssets());
         candidateContext->Call("set_time", {{"time", ContextTime()}});
         phase = "state restoration";
         const auto restored = candidateContext->Call("migration_restore", {{"snapshot", snapshot}});
@@ -189,6 +193,8 @@ bool ScriptRuntimeSubsystem::ReloadPlayingAssembly(World& world, std::string& er
         std::string message = "C# assembly reloaded with explicit state transfer";
         world.SwapScriptConfiguration(blueprints, templates, candidateContext);
         world.ScriptBlueprintStatesForUpdate().swap(candidateStates);
+        for (const auto& current : world.GetScriptBlueprintStates())
+            world.GetDebugDraw().ClearOwner("Script/" + current.at("id").get<std::string>());
         classes.swap(candidateClasses);
         componentClasses.swap(candidateComponentClasses);
         const auto previousGeneration = assemblyGeneration;

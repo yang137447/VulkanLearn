@@ -210,6 +210,7 @@ private:
 
     void SyncBindingData();
     void BuildAndPublishRenderSnapshot();
+    std::unique_ptr<class DebugDrawLabels> debugDrawLabels;
     void BuildDeveloperPanels();
     void UpdateInputOwnership();
 

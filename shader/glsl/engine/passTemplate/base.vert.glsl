@@ -4,6 +4,7 @@
 #include "../../common/commonUbo.glsl"
 #include "../../common/function.glsl"
 #include "../materialContext.glsl"
+#include "../skinnedVertexFactory.glsl"
 
 layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inNormal;
@@ -29,6 +30,10 @@ void main()
     vertexInput.speedTreeWindBranch1 = inSpeedTreeWindBranch1;
     vertexInput.speedTreeWindBranch2 = inSpeedTreeWindBranch2;
 
+    vec3 previousLocalPosition = vertexInput.localPosition;
+#if defined(VL_SKINNED_MESH) && VL_SKINNED_MESH
+    previousLocalPosition = ApplySkinnedVertexFactory(vertexInput);
+#endif
     MaterialVertex vertex = EvaluateMaterialVertex(vertexInput);
     mat4 modelMatrix = uboM.model;
 
@@ -39,6 +44,11 @@ void main()
     // 当前 previousModel 只能保证相机/物体变换的历史，无法表达纯风动造成的叶片位移。
     outputVertex.previousClipPosition =
         uboVP.previousViewProjection * uboM.previousModel * vec4(vertex.localPosition, 1.0);
+#if defined(VL_SKINNED_MESH) && VL_SKINNED_MESH
+    // previous palette 来自上一成功提交；seek/换片段时由原生边界重置历史。
+    outputVertex.previousClipPosition =
+        uboVP.previousViewProjection * uboM.previousModel * vec4(previousLocalPosition, 1.0);
+#endif
     outputVertex.worldPosition =
         (modelMatrix * vec4(vertex.localPosition, 1.0)).xyz;
     // 在插值前去除模型缩放的长度因子；否则 scale=100 时 N 长度变为 0.01，

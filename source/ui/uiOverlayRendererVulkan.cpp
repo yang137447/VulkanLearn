@@ -329,7 +329,9 @@ void UiOverlayRendererVulkan::Record(
     uint32_t swapchainImageIndex,
     const UiRenderSnapshot& snapshot,
     vk::ImageView sceneViewportView,
-    vk::Sampler sceneViewportSampler)
+    vk::Sampler sceneViewportSampler,
+    vk::ImageView sceneDepthView,
+    vk::Sampler sceneDepthSampler)
 {
     if (!initialized || snapshot.drawCommands.empty())
     {
@@ -346,6 +348,16 @@ void UiOverlayRendererVulkan::Record(
             .setDescriptorType(vk::DescriptorType::eCombinedImageSampler).setImageInfo(imageInfo);
         backend->UpdateDescriptorSets({write});
     }
+    // 当前 acquired slot 的 fence 已完成；借用深度只在本次 Record 有效，换图/resize 不缓存旧 view。
+    const auto& white = textures.at(0);
+    const bool hasDepth = sceneDepthView && sceneDepthSampler;
+    const vk::DescriptorImageInfo depthInfo(
+        hasDepth ? sceneDepthSampler : white.sampler, hasDepth ? sceneDepthView : white.imageView,
+        hasDepth ? vk::ImageLayout::eDepthStencilReadOnlyOptimal : vk::ImageLayout::eShaderReadOnlyOptimal);
+    vk::WriteDescriptorSet depthWrite;
+    depthWrite.setDstSet(sceneDepthDescriptors.at(swapchainImageIndex)).setDstBinding(0)
+        .setDescriptorType(vk::DescriptorType::eCombinedImageSampler).setImageInfo(depthInfo);
+    backend->UpdateDescriptorSets({depthWrite});
 
     FrameBuffers& buffers = frameBuffers.at(swapchainImageIndex);
     const vk::DeviceSize vertexBytes = snapshot.vertices.size() * sizeof(UiVertex);
@@ -393,6 +405,13 @@ void UiOverlayRendererVulkan::Record(
     commandBuffer.setViewport(0, viewport);
     commandBuffer.bindVertexBuffers(0, buffers.vertices.buffer, vk::DeviceSize{0});
     commandBuffer.bindIndexBuffer(buffers.indices.buffer, 0, vk::IndexType::eUint32);
+    const auto& rect = snapshot.sceneViewportRect;
+    const std::array<float, 4> debugViewport{float(rect.x), float(rect.y),
+        hasDepth ? float(rect.width) : 0, float(rect.height)};
+    commandBuffer.pushConstants(pipelineLayout, vk::ShaderStageFlagBits::eFragment, 0,
+        sizeof(debugViewport), debugViewport.data());
+    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout, 1,
+        sceneDepthDescriptors.at(swapchainImageIndex), {});
 
     UiBlendMode boundBlendMode = UiBlendMode::StraightAlpha;
     bool pipelineBound = false;
@@ -458,7 +477,9 @@ void UiOverlayRendererVulkan::CreateDescriptorResources()
     descriptorPool = backend->CreateDescriptorPool(poolCreateInfo, "UI Texture Descriptor Pool");
 
     vk::PipelineLayoutCreateInfo pipelineLayoutCreateInfo;
-    pipelineLayoutCreateInfo.setSetLayouts(descriptorSetLayout);
+    const std::array<vk::DescriptorSetLayout, 2> setLayouts{descriptorSetLayout, descriptorSetLayout};
+    const vk::PushConstantRange debugViewport(vk::ShaderStageFlagBits::eFragment, 0, sizeof(float) * 4);
+    pipelineLayoutCreateInfo.setSetLayouts(setLayouts).setPushConstantRanges(debugViewport);
     pipelineLayout = backend->CreatePipelineLayout(
         pipelineLayoutCreateInfo,
         "UI Overlay Pipeline Layout");
@@ -490,6 +511,8 @@ void UiOverlayRendererVulkan::CreateSwapchainResources()
     vk::DescriptorSetAllocateInfo allocateInfo;
     allocateInfo.setDescriptorPool(descriptorPool).setSetLayouts(layouts);
     backend->AllocateDescriptorSets(allocateInfo, sceneViewportDescriptors);
+    sceneDepthDescriptors.resize(layouts.size());
+    backend->AllocateDescriptorSets(allocateInfo, sceneDepthDescriptors);
 }
 
 void UiOverlayRendererVulkan::DestroySwapchainResources()
@@ -497,6 +520,9 @@ void UiOverlayRendererVulkan::DestroySwapchainResources()
     for (auto& descriptor : sceneViewportDescriptors)
         backend->FreeDescriptorSet(descriptorPool, descriptor);
     sceneViewportDescriptors.clear();
+    for (auto& descriptor : sceneDepthDescriptors)
+        backend->FreeDescriptorSet(descriptorPool, descriptor);
+    sceneDepthDescriptors.clear();
     DestroyFrameBuffers();
     DestroyPipelines();
     DestroyRenderPassAndFramebuffers();
@@ -637,6 +663,7 @@ UiOverlayRendererVulkan::BuildUiOverlayPipelinePair(
     attributes.emplace_back(0, 0, vk::Format::eR32G32Sfloat, offsetof(UiVertex, position));
     attributes.emplace_back(1, 0, vk::Format::eR32G32Sfloat, offsetof(UiVertex, texCoord));
     attributes.emplace_back(2, 0, vk::Format::eR32G32B32A32Sfloat, offsetof(UiVertex, color));
+    attributes.emplace_back(3, 0, vk::Format::eR32Sfloat, offsetof(UiVertex, debugDepth));
 
     GraphicsPipelineStateDesc state;
     state.bUseVertexInput = true;

@@ -43,7 +43,7 @@
 
 ## 环境要求
 - Windows 10/11
-- CMake 3.20+
+- CMake 3.24+
 - MinGW-w64 with C++17 support
 - Vulkan SDK (需包含 Nsight Systems)
 

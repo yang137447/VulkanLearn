@@ -35,6 +35,10 @@ Blueprint 资产双击打开独立中央标签，编辑默认属性、Instance E
 释放才提交一笔 BP 草稿，取消恢复预览基线。Self 提供根旋转/缩放，工具条支持移动、角度和缩放吸附。
 相机、灯光和 Scene 组件辅助图示可拾取；根碰撞辅助线与 mesh 同时命中时选择 mesh，
 未命中 mesh 时可通过碰撞线选中 Self。
+SpringArm 显示从臂根到静态臂端的连接线；子组件局部 TRS 相对臂端挂接空间，
+模型、图示、拾取和 gizmo 共用原生组件空间求值，手柄不会停在臂根。
+组件原点标记优先于经过它的辅助线，点击臂端相机不会被臂线抢占。
+预览不执行脚本、ControlRotation、碰撞或 lag；精确空间与运行时边界见 C# 契约。
 轴与轮廓用固定 RmlUi 线段槽位和绘制变换呈现，不改渲染图或 GPU 资源所有权。
 右键环绕、中键平移保留；取消手势、旧预览拒绝及历史预算见 C# 契约。
 场景 Details 的自定义属性只有显式开放项可覆写，其余只读。
@@ -83,6 +87,17 @@ Scene Outliner 现在渲染真实 World actor 树（网格 / 四类灯 / 相机 
 Mesh、Texture、Terrain 双击后进入资源标签页，右侧为只读 JSON Details；
 Actor 使用同一资源标签容器中的专用配置表单。
 Mesh 通过预览 World 显示真实模型；Texture 后台加载 PNG/JPEG/TGA/BMP 的 source 并等比例显示 RGB。
+骨骼 SM 复用模型资源标签，按冻结快照显示播放/暂停、片段选择和时间 slider；
+静态或陈旧预览隐藏动画控件。回调只发送预览 World generation 与控制值，
+正式采样在 GT 执行，见 [动画播放与蒙皮](animation-runtime-skinning.md)。
+骨骼预览的特征表仅消费冻结通道和值，同布局只更新值 span，静态/陈旧预览隐藏。
+视口 Motion checkbox 只提交带 World generation 的开关请求，刷新静默；
+线段叠层在场景图像后、工具条前绘制并按冻结相机/视口裁剪。
+历史与预测语义见 [轨迹与特征](animation-motion-features.md)。
+视口 DrawDebug 工具弹窗消费冻结的主开关、类别、owner 与可见/存储计数，
+只生产带 World generation 的类型化控制请求，离线禁用，程序刷新不触发请求。
+类别列表有滚动边界，清空按钮仅删除当前 World 图形；弹窗自身不访问 World。
+轨迹和普通调试形状共用 [DrawDebug 叠层](debug-draw.md)，没有专用动画渲染器。
 贴图标题显示原尺寸及 colorSpace，最长预览边为 1024；忽略 alpha，不把参数图当透明图。
 预览区滚轮以鼠标位置为中心缩放（适应窗口倍率的 0.1 到 32 倍），左/中/右键拖动平移，
 双击图片区域或 Fit Image 按钮复位。切换/重载贴图重置视图，失焦取消拖动。
@@ -623,7 +638,7 @@ Output 的 severity、source 子串和全文搜索联合过滤，ASCII 大小写
 Clear 仅记录本面板已读到的 sequence 水位，不清全局 store、不改控制台输出。
 
 Scripts 页读取 `UiViewModelSnapshot.scripts.performance` 的纯值数据，
-每 250ms 最多刷新一次，显示时钟/fixed step 丢步、物理耗时、程序集代际、GC、
+每 250ms 最多刷新一次，显示帧号/帧 dt/时钟、物理耗时、程序集代际、GC、
 待处理命令和每个 Blueprint/C# 组件的生命周期与回调耗时。
 对象搜索后每页最多 64 行，只格式化当前页；切页、过滤、Clear 都是本地展示状态。
 测试位于 `tool/editor-ui-tests/logPanelTests.cpp`，覆盖并发/预算/快照、过滤/虚拟滚动、

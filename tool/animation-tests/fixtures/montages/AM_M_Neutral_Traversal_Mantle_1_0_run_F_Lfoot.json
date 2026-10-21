@@ -1,0 +1,73 @@
+{
+  "format": "vl.anim-montage.v1",
+  "montage": "AM_M_Neutral_Traversal_Mantle_1_0_run_F_Lfoot",
+  "sequence": "Maps/SC_gasp/Source/M_Neutral_Traversal_Mantle_1_0_run_F_Lfoot.anim.json",
+  "sequenceBlake3": "2644cffda9fa7e55635dea755e5531dbc4c401362f90190df751c1a0f783e429",
+  "slot": "DefaultSlot",
+  "length": 2.233333,
+  "sections": [
+    {
+      "name": "Default",
+      "startTime": 0.0,
+      "endTime": 2.233333,
+      "nextSection": "",
+      "nextTime": 0.0,
+      "linkMethod": ""
+    }
+  ],
+  "notifies": [
+    {
+      "kind": "notifyState",
+      "track": "2",
+      "name": "PoseSearchBranchIn",
+      "time": 0.0,
+      "duration": 0.329235
+    },
+    {
+      "kind": "notifyState",
+      "track": "1",
+      "name": "MotionWarping",
+      "time": 0.333432,
+      "duration": 0.234308,
+      "warp": {
+        "target": "FrontLedge",
+        "provider": "Bone",
+        "bone": "attach",
+        "subtractRemainingRootMotion": false,
+        "ignoreZAxis": false,
+        "warpRotation": true,
+        "rotationTimeMultiplier": 1.0,
+        "easing": "Linear"
+      }
+    },
+    {
+      "kind": "notifyState",
+      "track": "1",
+      "name": "MotionWarping",
+      "time": 0.567743,
+      "duration": 0.098873,
+      "warp": {
+        "target": "FrontLedge",
+        "provider": "Bone",
+        "bone": "attach",
+        "subtractRemainingRootMotion": false,
+        "ignoreZAxis": false,
+        "warpRotation": true,
+        "rotationTimeMultiplier": 1.0,
+        "easing": "Linear"
+      }
+    },
+    {
+      "kind": "notifyState",
+      "track": "1",
+      "name": "BP_NotifyState_TraversalBlendOut_C",
+      "time": 0.732103,
+      "duration": 1.767896
+    }
+  ],
+  "source": {
+    "t3d": "AM_M_Neutral_Traversal_Mantle_1_0_run_F_Lfoot.copy",
+    "uePackage": "/Game/Characters/UEFN_Mannequin/Animations/Traversal/Mantle/AM_M_Neutral_Traversal_Mantle_1_0_run_F_Lfoot.AM_M_Neutral_Traversal_Mantle_1_0_run_F_Lfoot",
+    "exportedBy": "import_gasp_montages.py"
+  }
+}

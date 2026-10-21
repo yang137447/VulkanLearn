@@ -245,6 +245,75 @@ TEST_F(ScriptBlueprintAuthoringTest, InlineComponentEditsStageLocalPoseAndReject
     EXPECT_EQ(saved["objects"][1]["components"][1]["position"], Json::array({10, 20, 30}));
 }
 
+TEST_F(ScriptBlueprintAuthoringTest, SpringArmFieldsAuthoringRoundTrip)
+{
+    Json blueprint{{"type", "blueprintInstance"}, {"id", "tree"}, {"name", "Tree"},
+        {"class", "Gameplay.RotatorBlueprint"}, {"position", {0, 0, 0}},
+        {"rotation", {0, 0, 0}}, {"scale", {1, 1, 1}}, {"properties", Json::object()},
+        {"components", Json::array({
+            {{"id", "arm"}, {"type", "springArm"}, {"parent", ""}, {"position", {0, 90, 0}},
+                {"rotation", {0, 0, 0}}, {"scale", {1, 1, 1}}, {"targetArmLength", 300},
+                {"socketOffset", {0, 0, 0}}, {"probeRadius", 12}, {"doCollisionTest", true},
+                {"collisionMask", 65535}, {"enableCameraLag", false}},
+            {{"id", "camera"}, {"type", "camera"}, {"parent", "arm"}, {"position", {0, 0, 0}},
+                {"rotation", {0, 0, 0}}, {"scale", {1, 1, 1}}, {"fov", 60},
+                {"near_clip", 1}, {"far_clip", 10000}, {"autoActivate", true}, {"priority", 0}}})}};
+    std::string error;
+    ASSERT_TRUE(documents->StageScriptBlueprint(scenePath, blueprint, true, error)) << error;
+    PublishDraft();
+    UiAction edit;
+    edit.type = UiActionType::SetScriptComponent;
+    edit.actorProperty.worldGeneration = 42;
+    edit.actorProperty.identity = "blueprintInstance|tree";
+    std::string id;
+    edit.script = {{"component", "arm"}, {"field", "targetArmLength"}, {"value", 450.0}};
+    ASSERT_TRUE(StageScriptBlueprintAction(*world, runtime, *documents, edit, id, error)) << error;
+    edit.script = {{"component", "arm"}, {"field", "socketOffset"}, {"axis", 1}, {"value", 50.0}};
+    ASSERT_TRUE(StageScriptBlueprintAction(*world, runtime, *documents, edit, id, error)) << error;
+    edit.script = {{"component", "arm"}, {"field", "doCollisionTest"}, {"value", false}};
+    ASSERT_TRUE(StageScriptBlueprintAction(*world, runtime, *documents, edit, id, error)) << error;
+    edit.script = {{"component", "arm"}, {"field", "cameraLagSpeed"}, {"value", 5.0}};
+    ASSERT_TRUE(StageScriptBlueprintAction(*world, runtime, *documents, edit, id, error)) << error;
+    edit.script = {{"component", "arm"}, {"field", "targetOffset"}, {"axis", 2}, {"value", 25.0}};
+    ASSERT_TRUE(StageScriptBlueprintAction(*world, runtime, *documents, edit, id, error)) << error;
+    edit.script = {{"component", "arm"}, {"field", "cameraLagMaxTimeStep"}, {"value", 0.01}};
+    ASSERT_TRUE(StageScriptBlueprintAction(*world, runtime, *documents, edit, id, error)) << error;
+    edit.script = {{"component", "arm"}, {"field", "collisionMask"}, {"value", 3.0}};
+    ASSERT_TRUE(StageScriptBlueprintAction(*world, runtime, *documents, edit, id, error)) << error;
+    edit.script = {{"component", "arm"}, {"field", "inheritYaw"}, {"value", false}};
+    ASSERT_TRUE(StageScriptBlueprintAction(*world, runtime, *documents, edit, id, error)) << error;
+    edit.script = {{"component", "arm"}, {"field", "drawDebug"}, {"value", true}};
+    ASSERT_TRUE(StageScriptBlueprintAction(*world, runtime, *documents, edit, id, error)) << error;
+    edit.script = {{"component", "camera"}, {"field", "priority"}, {"value", 3.0}};
+    ASSERT_TRUE(StageScriptBlueprintAction(*world, runtime, *documents, edit, id, error)) << error;
+    PublishDraft();
+    const auto& components = world->GetScriptBlueprints()[0]["components"];
+    EXPECT_DOUBLE_EQ(components[0]["targetArmLength"].get<double>(), 450.0);
+    EXPECT_EQ(components[0]["socketOffset"], Json::array({0.0, 50.0, 0.0}));
+    EXPECT_FALSE(components[0]["doCollisionTest"].get<bool>());
+    EXPECT_DOUBLE_EQ(components[0]["cameraLagSpeed"].get<double>(), 5.0);
+    EXPECT_FALSE(components[0]["inheritYaw"].get<bool>());
+    EXPECT_TRUE(components[0]["drawDebug"].get<bool>());
+    EXPECT_EQ(components[1]["priority"].get<double>(), 3.0);
+    EditorCommandEnvelope save;
+    save.commandId = 2; save.type = EditorCommandType::SaveSceneDocument;
+    save.payload = MaterialInstanceAssetPathPayload{"Maps/SC_test/SC_test.json"};
+    save.expectedDocumentRevision = documents->ModifiedDocuments().front().revision;
+    ASSERT_EQ(documents->Save(save).status, EditorCommandStatus::Succeeded);
+    Json saved; std::ifstream(scenePath) >> saved;
+    const auto& savedArm = saved["objects"][1]["components"][0];
+    EXPECT_DOUBLE_EQ(savedArm["targetArmLength"].get<double>(), 450.0);
+    EXPECT_EQ(savedArm["socketOffset"], Json::array({0.0, 50.0, 0.0}));
+    EXPECT_FALSE(savedArm["doCollisionTest"].get<bool>());
+    EXPECT_DOUBLE_EQ(savedArm["cameraLagSpeed"].get<double>(), 5.0);
+    EXPECT_EQ(savedArm["targetOffset"], Json::array({0, 0, 25}));
+    EXPECT_DOUBLE_EQ(savedArm["cameraLagMaxTimeStep"].get<double>(), 0.01);
+    EXPECT_EQ(savedArm["collisionMask"], 3);
+    EXPECT_FALSE(savedArm["inheritYaw"].get<bool>());
+    EXPECT_TRUE(savedArm["drawDebug"].get<bool>());
+    EXPECT_EQ(saved["objects"][1]["components"][1]["priority"].get<double>(), 3.0);
+}
+
 TEST_F(ScriptBlueprintAuthoringTest, InheritedComponentsCannotBeModifiedThroughSceneInstance)
 {
     std::string id, error;

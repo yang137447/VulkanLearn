@@ -1,6 +1,7 @@
 #include "script/scriptPhysics.h"
 #include "script/scriptComponents.h"
 #include <algorithm>
+#include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -40,7 +41,12 @@ namespace VL
 #ifdef VULKANLEARN_ENABLE_CSHARP_BLUEPRINTS
 namespace
 {
-constexpr double FixedStep = 1.0 / 60.0;
+// 1/60 只是刚体积分子步，不再是 gameplay tick；角色时间轴完全由帧 dt 决定。
+constexpr double RigidSubstep = 1.0 / 60.0;
+constexpr double MaxRigidSubsteps = 16.0;
+// 角色 CMC 式内部迭代：对应 UE 的 MaxSimulationTimeStep=0.05 / MaxSimulationIterations=8。
+constexpr float MaxCharacterIteration = 0.05f;
+constexpr int MaxCharacterIterations = 8;
 constexpr JPH::ObjectLayer StaticLayer = 0, MovingLayer = 1;
 
 void PhysicsTrace(const char* format, ...)
@@ -155,8 +161,11 @@ struct ScriptPhysicsWorld::Impl
         nlohmann::json last;
         std::string motion;
         JPH::Vec3 walk = JPH::Vec3::sZero();
+        JPH::Vec3 rootMotion = JPH::Vec3::sZero();
+        JPH::Vec3 achievedVelocity = JPH::Vec3::sZero();
         float jumpSpeed = 5, stepHeight = 0.3f;
         bool trigger = false, jump = false, refreshContacts = true;
+        bool rootMotionActive = false;
         uint32_t layer = 0, mask = 65535;
         std::string compoundSignature;
     };
@@ -412,28 +421,43 @@ struct ScriptPhysicsWorld::Impl
         body.last = state;
         return body;
     }
-    void MoveCharacter(Body& body)
+    // CMC 式角色推进：一帧一次，内部把 dt 拆成 <=0.05 的迭代（最多 8 次）；
+    // 每次迭代重新求重力/root/walk 速度后调用 Jolt ExtendedUpdate，jump 只在第一次迭代消费。
+    void MoveCharacter(Body& body, float dt)
     {
+        if (dt <= 0) return; // 零时步只同步指令/接触，不移动角色，jump 保留到下一有效帧。
         auto& character = *body.character;
+        const auto previousPosition = character.GetPosition();
         QueryBodyFilter filter;
         filter.mask = body.mask;
         filter.layer = int(body.layer);
-        character.UpdateGroundVelocity();
-        const auto ground = character.GetGroundVelocity();
-        const bool supported = character.GetGroundState() == JPH::CharacterBase::EGroundState::OnGround &&
-            character.GetLinearVelocity().GetY() - ground.GetY() < 0.1f;
-        auto velocity = supported ? ground : JPH::Vec3(0, character.GetLinearVelocity().GetY(), 0);
-        if (body.jump && supported) velocity += JPH::Vec3(0, body.jumpSpeed, 0);
-        body.jump = false;
-        // Jolt 的 gravity 参数只给支撑体施力；角色自己的重力必须在速度中积分一次。
-        velocity += body.walk + world.GetGravity() * float(FixedStep);
-        character.SetLinearVelocity(character.CancelVelocityTowardsSteepSlopes(velocity));
         JPH::CharacterVirtual::ExtendedUpdateSettings settings;
         settings.mWalkStairsStepUp = {0, body.stepHeight, 0};
         settings.mStickToFloorStepDown = {0, -body.stepHeight, 0};
-        character.ExtendedUpdate(float(FixedStep), world.GetGravity(), settings,
-            world.GetDefaultBroadPhaseLayerFilter(MovingLayer), world.GetDefaultLayerFilter(MovingLayer),
-            filter, {}, allocator);
+        float remaining = dt;
+        for (int iteration = 0; iteration < MaxCharacterIterations && remaining > 0; ++iteration)
+        {
+            const float step = std::min(remaining, MaxCharacterIteration);
+            character.UpdateGroundVelocity();
+            const auto ground = character.GetGroundVelocity();
+            const bool supported = character.GetGroundState() == JPH::CharacterBase::EGroundState::OnGround &&
+                character.GetLinearVelocity().GetY() - ground.GetY() < 0.1f;
+            auto velocity = body.rootMotionActive
+                ? body.rootMotion
+                : (supported ? ground : JPH::Vec3(0, character.GetLinearVelocity().GetY(), 0));
+            if (!body.rootMotionActive && body.jump && supported) velocity += JPH::Vec3(0, body.jumpSpeed, 0);
+            body.jump = false;
+            // Jolt 的 gravity 参数只给支撑体施力；角色自己的重力必须在速度中按本次迭代时长积分。
+            if (!body.rootMotionActive) velocity += body.walk;
+            velocity += world.GetGravity() * step;
+            character.SetLinearVelocity(character.CancelVelocityTowardsSteepSlopes(velocity));
+            character.ExtendedUpdate(step, world.GetGravity(), settings,
+                world.GetDefaultBroadPhaseLayerFilter(MovingLayer), world.GetDefaultLayerFilter(MovingLayer),
+                filter, {}, allocator);
+            remaining -= step;
+        }
+        // CharacterVirtual 的线速度仍可能包含被墙体阻止的意图；动画反馈取整帧实际位移。
+        body.achievedVelocity = JPH::Vec3(character.GetPosition() - previousPosition) / dt;
     }
     void CollectContacts()
     {
@@ -475,19 +499,24 @@ ScriptPhysicsWorld::~ScriptPhysicsWorld() = default;
 
 void ScriptPhysicsWorld::Step(nlohmann::json& states, const nlohmann::json& declarations, float dt)
 {
-    impl->accumulated += std::min(double(dt), 8 * FixedStep);
-    // 独立 CPU 物理调用保留原有累计入口；播放调度只用 StepFixed，绝不混用余量。
-    const int steps = std::min(8, int((impl->accumulated + 1e-10) / FixedStep));
-    impl->accumulated -= steps * FixedStep;
-    StepInternal(states, declarations, steps);
+    // 一帧物理：刚体时间按 1/60 子步累计，最多 16 步；未命中上限时保留不足一步的分数余量，
+    // 命中上限时丢弃整步多余量。角色不使用这个 accumulator，直接消费帧 dt。
+    // dt=0 的指令同步帧不消费余量，保证这一帧只同步状态/指令并刷新接触。
+    int substeps = 0;
+    if (dt > 0)
+    {
+        impl->accumulated += double(dt);
+        const double requested = std::floor((impl->accumulated + 1e-9) / RigidSubstep);
+        substeps = int(std::min(requested, MaxRigidSubsteps));
+        impl->accumulated -= substeps * RigidSubstep;
+        if (requested > MaxRigidSubsteps) impl->accumulated = std::fmod(impl->accumulated, RigidSubstep);
+        // 1e-9 偏置可能留下极小负余量；夹回 0，避免下一帧 floor 得到负步数。
+        if (impl->accumulated < 0) impl->accumulated = 0;
+    }
+    StepInternal(states, declarations, dt, substeps);
 }
 
-void ScriptPhysicsWorld::StepFixed(nlohmann::json& states, const nlohmann::json& declarations, bool advance)
-{
-    StepInternal(states, declarations, advance ? 1 : 0);
-}
-
-void ScriptPhysicsWorld::StepInternal(nlohmann::json& states, const nlohmann::json& declarations, int steps)
+void ScriptPhysicsWorld::StepInternal(nlohmann::json& states, const nlohmann::json& declarations, float dt, int substeps)
 {
     auto& world = impl->world;
     auto& interface = world.GetBodyInterface();
@@ -527,16 +556,24 @@ void ScriptPhysicsWorld::StepInternal(nlohmann::json& states, const nlohmann::js
                 impl->WakeAround(body);
             }
         }
-        if (state.at("position") != body.last.at("position") || state.at("rotation") != body.last.at("rotation"))
+        const bool positionChanged = state.at("position") != body.last.at("position");
+        const bool rotationChanged = state.at("rotation") != body.last.at("rotation");
+        if (positionChanged || rotationChanged)
         {
             impl->WakeAround(body);
             const auto position = PhysicsVector(state, "position");
             const auto rotation = PhysicsRotation(state);
             if (body.character)
             {
-                body.character->SetPosition(position);
-                body.character->SetRotation(rotation);
-                body.refreshContacts = true;
+                if (positionChanged)
+                {
+                    body.character->SetPosition(position);
+                    body.achievedVelocity = JPH::Vec3::sZero();
+                    body.refreshContacts = true;
+                }
+                // 胶囊只允许世界 Y 轴转向，形状/支撑不变；dt=0 的指令同步帧保留
+                // 最近一帧物理的实际速度，不能把纯转向误报为传送或碰墙停止。
+                if (rotationChanged) body.character->SetRotation(rotation);
             }
             else interface.SetPositionAndRotation(body.id, position, rotation,
                 body.motion == "static" ? JPH::EActivation::DontActivate : JPH::EActivation::Activate);
@@ -545,6 +582,8 @@ void ScriptPhysicsWorld::StepInternal(nlohmann::json& states, const nlohmann::js
         if (body.character)
         {
             body.walk = PhysicsVector(state, "walkVelocity");
+            if (state.contains("rootMotion")) body.rootMotion = PhysicsVector(state, "rootMotion");
+            body.rootMotionActive = state.value("rootMotionActive", false);
             body.jump = body.jump || state.value("jump", false);
         }
         else if (body.motion != "static")
@@ -571,11 +610,14 @@ void ScriptPhysicsWorld::StepInternal(nlohmann::json& states, const nlohmann::js
         }
     }
     impl->SynchronizeConstraints(declarations);
-    for (int step = 0; step < steps; ++step)
-    {
+    // 角色每帧只推进一次（内部再按 0.05 拆分迭代）；刚体按固定 1/60 子步追赶，
+    // 子步数已由 Step 决定，这里不再重复累计时间。
+    if (dt > 0)
         for (auto& body : impl->bodies)
-            if (body.second.character) impl->MoveCharacter(body.second);
-        if (world.Update(float(FixedStep), 1, &impl->allocator, &impl->jobs) != JPH::EPhysicsUpdateError::None)
+            if (body.second.character) impl->MoveCharacter(body.second, dt);
+    for (int step = 0; step < substeps; ++step)
+    {
+        if (world.Update(float(RigidSubstep), 1, &impl->allocator, &impl->jobs) != JPH::EPhysicsUpdateError::None)
             throw std::runtime_error("Script.PhysicsCapacityExceeded");
     }
     impl->CollectContacts();
@@ -587,7 +629,7 @@ void ScriptPhysicsWorld::StepInternal(nlohmann::json& states, const nlohmann::js
         if (body.character)
         {
             state["position"] = VectorJson(body.character->GetPosition());
-            state["bodyVelocity"] = VectorJson(body.character->GetLinearVelocity());
+            state["bodyVelocity"] = VectorJson(body.achievedVelocity);
             state["grounded"] = body.character->GetGroundState() == JPH::CharacterBase::EGroundState::OnGround;
         }
         else
@@ -660,6 +702,36 @@ nlohmann::json ScriptPhysicsWorld::Raycast(const nlohmann::json& requests) const
 }
 nlohmann::json ScriptPhysicsWorld::Contacts() const { return impl->contacts; }
 nlohmann::json ScriptPhysicsWorld::Triggers() const { return impl->triggers; }
+Animation::FootGroundHit ScriptPhysicsWorld::ProbeGround(const std::string& owner,
+    const Eigen::Vector3f& origin, const Eigen::Vector3f& displacement) const
+{
+    Animation::FootGroundHit result;
+    const auto source = impl->bodies.find(owner);
+    if (source == impl->bodies.end()) return result;
+    QueryBodyFilter filter;
+    filter.ignore = source->second.id;
+    filter.mask = source->second.mask;
+    filter.layer = static_cast<int>(source->second.layer);
+    // 动画在最终物理同步后直接借用查询；厘米只在 Jolt 边界换算，不经 CLR/JSON 往返。
+    const Eigen::Vector3f from = origin * 0.01f, delta = displacement * 0.01f;
+    const JPH::RRayCast ray({from.x(), from.y(), from.z()}, {delta.x(), delta.y(), delta.z()});
+    JPH::RayCastResult hit;
+    if (!impl->world.GetNarrowPhaseQuery().CastRay(ray, hit, {}, {}, filter)) return result;
+    const auto identity = impl->identities.find(hit.mBodyID);
+    if (identity == impl->identities.end()) return result;
+    const auto& support = impl->bodies.at(identity->second);
+    // 首次遮挡是移动支撑时明确拒绝，不能穿过它继续锁到下方静态地板。
+    // 内部起点没有唯一接触法线，同样不伪造可站立面；坡度由动画 solver 决定。
+    if (support.motion != "static" || hit.mFraction <= 0) return result;
+    JPH::BodyLockRead lock(impl->world.GetBodyLockInterface(), hit.mBodyID);
+    const auto point = ray.GetPointOnRay(hit.mFraction);
+    const auto normal = lock.GetBody().GetWorldSpaceSurfaceNormal(hit.mSubShapeID2, point);
+    result.hit = true;
+    result.point = Eigen::Vector3f(point.GetX(), point.GetY(), point.GetZ()) * 100;
+    result.normal = {normal.GetX(), normal.GetY(), normal.GetZ()};
+    result.supportIdentity = identity->second;
+    return result;
+}
 void ScriptPhysicsWorld::SetMeshGeometry(const std::map<std::string, std::vector<Eigen::Vector3f>>& triangles)
 {
     impl->meshGeometry = triangles;
@@ -669,11 +741,12 @@ struct ScriptPhysicsWorld::Impl {};
 ScriptPhysicsWorld::ScriptPhysicsWorld() = default;
 ScriptPhysicsWorld::~ScriptPhysicsWorld() = default;
 void ScriptPhysicsWorld::Step(nlohmann::json&, const nlohmann::json&, float) {}
-void ScriptPhysicsWorld::StepFixed(nlohmann::json&, const nlohmann::json&, bool) {}
-void ScriptPhysicsWorld::StepInternal(nlohmann::json&, const nlohmann::json&, int) {}
+void ScriptPhysicsWorld::StepInternal(nlohmann::json&, const nlohmann::json&, float, int) {}
 nlohmann::json ScriptPhysicsWorld::Contacts() const { return nlohmann::json::array(); }
 nlohmann::json ScriptPhysicsWorld::Triggers() const { return nlohmann::json::array(); }
 nlohmann::json ScriptPhysicsWorld::Raycast(const nlohmann::json&) const { return nlohmann::json::array(); }
+Animation::FootGroundHit ScriptPhysicsWorld::ProbeGround(const std::string&, const Eigen::Vector3f&,
+    const Eigen::Vector3f&) const { return {}; }
 void ScriptPhysicsWorld::SetMeshGeometry(const std::map<std::string, std::vector<Eigen::Vector3f>>&) {}
 #endif
 } // namespace VL

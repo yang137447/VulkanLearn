@@ -19,6 +19,7 @@
 #include "renderGraph.h"
 #include "renderableObject.h"
 #include "scene/sceneAssetTypes.h"
+#include "animation/skeletalPlayback.h"
 
 namespace VL
 {
@@ -89,6 +90,10 @@ RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
     const MeshAssetImportResult& importResult = *imported;
     const MeshAssetBuildPlan& buildPlan = importResult.buildPlan;
     const ModelResource& modelResource = importResult.modelResource;
+    if (modelResource.skeletalAsset && loadContext.offlineOnly)
+        throw std::runtime_error("Skeletal meshes require realtime rendering; offline skinning is not implemented");
+    auto animation = modelResource.skeletalAsset
+        ? std::make_shared<Animation::SkeletalPlayback>(modelResource.skeletalAsset) : nullptr;
     const std::vector<MeshSectionLoadPlan>& sectionPlans = importResult.sectionPlans;
 
     RendererMeshLoadResult result;
@@ -156,6 +161,14 @@ RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
         std::shared_ptr<MaterialInstance> materialInstance =
             materialLoader.LoadSceneMaterialInstance(
                 materialPath);
+        if (materialInstance)
+        {
+            const bool skinMaterial = HasMaterialMacroValue(
+                materialInstance->GetBaseMaterial().lock()->GetShaderVariantKey().macros,
+                "VL_SKINNED_MESH", "1");
+            if (skinMaterial != static_cast<bool>(animation))
+                throw std::runtime_error("Mesh and material vertex factory mismatch: " + materialPath);
+        }
 
         std::string meshObjectName = meshObjectBaseName;
         if (modelResource.sections.size() > 1)
@@ -189,6 +202,14 @@ RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
             meshObjectPlan.localBoundsMax = meshObjectPlan.localBoundsMax.cwiseMax(vertex.position);
         }
         meshObjectPlan.meshKey = renderableObjectKey;
+        if (animation)
+        {
+            meshObjectPlan.animation = animation;
+            meshObjectPlan.skinSection = sectionIndex;
+            meshObjectPlan.skinPose = animation->Pose(sectionIndex);
+            meshObjectPlan.localBoundsMin = meshObjectPlan.skinPose->boundsMin;
+            meshObjectPlan.localBoundsMax = meshObjectPlan.skinPose->boundsMax;
+        }
         if (materialInstance)
         {
             meshObjectPlan.materialKey = materialInstance->GetBaseMaterial().lock()->GetMaterialKey();

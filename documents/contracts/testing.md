@@ -24,8 +24,9 @@
 
 | 可执行文件 | 测试数 | 覆盖 |
 | --- | --- | --- |
-| `editor_ui_tests` | 643 | 编辑器 UI：组件、停靠、布局持久化、内容浏览器、JSON 资产库、标准资产修改、actor 树、属性编辑、场景持久化、保存确认、可视化、颜色转换、右键菜单、RmlUi GPU 缩略图桥接、C# 放置/蓝图资产拖放、组件 Details、独立蓝图配置标签、3D 拾取/变换/辅助图示/吸附、文档历史、类型化属性与实例权限、物理配置、编译入口、逻辑组件、Quaternion 原子编辑、Time Scale、Log 页签、四处递归自定义数据编辑、冻结 HUD 文本绑定、C# 类浏览/源码打开请求及一类多 BP 配置创建 |
-| `script_tests` | 301（C# ON；OFF 为 75 项无宿主选择集） | 蓝图场景/资产/组件校验、实例权限、地面放置、输入映射、源码 URI 边界；ON 时使用真实 hostfxr/CLR 验证生命周期、Spawn、运行时组件/代际句柄、异步加载/取消/租约、Jolt 层与掩码/compound/静态 mesh/约束/扫球、角色控制、计时器/事件、故障隔离、World 换代、冻结快照、类型化属性、灯光、程序集重载、资源源码编译/监视及 DLL/PDB 完整字节确定性、PDB 空类/partial 源码定位、私有运行时部署、自定义逻辑组件、FixedTick/时钟/性能采样、递归自定义数据、显式播放中深值迁移、增量同步/空回调过滤/千实例负载、HUD 所有权/回滚/迁移、受控程序集限定类名及混合 CLR/Jolt/WorldSnapshot 负载 |
+| `editor_ui_tests` | 679（670 后加组件/臂端空间 9 项） | 编辑器 UI：组件、停靠、布局持久化、内容浏览器、JSON 资产库、标准资产修改、actor 树、属性编辑、场景持久化、保存确认、可视化、颜色转换、右键菜单、RmlUi GPU 缩略图桥接、C# 放置/蓝图资产拖放、组件 Details、独立蓝图配置标签、3D 拾取/变换/辅助图示/吸附、文档历史、类型化属性与实例权限、物理配置、编译入口、逻辑组件、Quaternion 原子编辑、Time Scale、Log 页签、四处递归自定义数据编辑、冻结 HUD 文本绑定、C# 类浏览/源码打开请求、一类多 BP 配置创建及骨骼预览值请求/资产校验；公共 DrawDebug 投影/裁剪/叠层顺序、可选深度、转义文字、过滤菜单；Motion 值请求/布局、特征表和 MM 冻结候选/代价刷新、被聚焦控制器时间轴 seek/play/pause 与离线/无播放器禁用、查询回放历史帧选择/回显/禁用；SpringArm 字段刷新、默认值与编辑提交、组件/末端挂接空间、图示/拾取/gizmo 一致性、多层 Mesh section 空间与重挂父级 |
+| `script_tests` | 当前注册 445（438 后加 6 项臂端父子空间集成、1 项内部状态 schema 拒绝；SpringArm 运行时共 40 项；C# ON；注册数不等于实跑数；本轮范围见文末。OFF 注册 89 项） | 蓝图场景/资产/组件校验、实例权限、地面放置、输入映射、源码 URI 边界；ON 时使用真实 hostfxr/CLR 验证生命周期、Spawn、运行时组件/代际句柄、异步加载/取消/租约、Jolt 层与掩码/compound/静态 mesh/约束/扫球、角色控制、计时器/事件、故障隔离、World 换代、冻结快照、类型化属性、灯光、程序集重载、资源源码编译/监视及 DLL/PDB 完整字节确定性、PDB 空类/partial 源码定位、私有运行时部署、自定义逻辑组件、Tick/LateTick 每帧时序/时钟/性能采样、递归自定义数据、显式播放中深值迁移、增量同步/空回调过滤/千实例负载、HUD 所有权/回滚/迁移、受控程序集限定类名及混合 CLR/Jolt/WorldSnapshot 负载；SpringArm schema/编辑保存/实例覆写、同帧物理/晚更新、旋转继承、位置/旋转 lag 与子步、碰撞/移动墙体、诊断/传送复位、重载与回滚、非相机子级/子局部偏移与嵌套碰撞空间、CLR/原生含 shear 矩阵一致性；动画请求/原生反馈、独立时钟、状态机及实际运动/碰墙回归、Actor 有界转向与世界关节/相机连续性、正式控制器稳态步频开关与原根行程对照及曲线筛选踝漂移诊断；静态接地探测过滤、18° 横坡参考点/法线独立测量与 pre-IK/MM 隔离；走跑双参考点动态支撑、台阶边缘单支点、惯性化与视觉根偏移、冻结源支撑窗滑移/漂移/穿入质量夹具；足部 Auto/Ball/Ankle 支点模式与 C# `FootLock`；Motion 调试历史回放（帧选择、不追加、退出恢复）；被聚焦脚本控制器时间轴的 seek/play/pause 身份隔离、代数/片长/动作校验；历史 Pause/Stop、实际碰撞轨迹与近似预测；DrawDebug 十形状、生命周期/发布者清理、批次回滚和深度参数跨桥 |
+| `debug_draw_tests` | 27 | 十形状展开、生命周期、冻结、身份/过滤/预算、默认 Overlay 与可选深度传播、投影近远面及屏幕裁剪深度、Console 控制 |
 | `vl_offline_adapter_tests` | 101 | 离线场景/网格/显示/相机适配 |
 | `editor_viewport_tests` | 41 | 视口几何、命中、坐标映射、aspect、坐标轴投影及编辑器网格 |
 | `vl_offline_coordinator_tests` | 13 | 离线会话协调 |
@@ -34,6 +35,7 @@
 | `material_instance_editor_tests` | 7 | MI 命令/文档服务 |
 | `material_instance_editor_production_tests` | 11 | MI 生产路径（预览边界、直接 render-state 路由、场景/非活动 MI 独立保存）及标准资产 JSON facade/Save Content、C# 草稿连续保存、独立蓝图草稿/保存反馈和历史集成 |
 | `game_export_tests` | 19 | Scene/BP/SM/MI/T 依赖闭包、动态资产清单、模型 sidecar、包内配置、PE 原生依赖、私有运行时、源路径约束与失败保留 |
+| `animation_preflight_tests` | 255（P26 Chooser 家族/采样窗口版；动画工具 ON） | SK/Sequence/Montage 三层资产与播放：SK 拓扑/槽位/曲线注册表、`skinning.root` 拒绝与强制 `skeleton`（`AnimationSkeleton` 17）、sidecar 帧信息/曲线/notify/采样（`AnimationSequenceData` 14）、Montage 解析/跨文件绑定/缓存键/`rotationMethod`（`AnimationMontage` 24）、catalog/窗口装配/`PlayMontage` 拒绝矩阵/旋转透传/Static pose/section link/入口 startTime（`AnimationScriptData` 30）、notify/notifyState 区间执行/feedback（`NotifyPlayback` 11）、旋转与 Static warp point（`MotionWarping` 28）、完整权重导入 30；ozz 采样、只读 UE 盘点、FBX 审计、动态 bounds、播放/暂停/seek/循环、原地根 TRS 消除、一次性完成、无效请求保持、独立时钟、冻结姿态及实际渲染提交历史；Motion 特征空间/速度/SE(3) 循环/完整窗口、总体统计、输入身份/失效、固定频率历史/epoch/重置与预测；精确搜索、继续/重选策略、运行时关节速度搬运、局部姿态交叉混合、原根周期均速与有界步频、按实际速率采样的继续候选；两骨 IK、ball/heel 双参考点、静态锚点/坡面法线、走跑滚动支点/释放、Auto/Ball/Ankle 显式支点与重置、摆动脚骨盆间隙、pre-IK/混合源/旧快照隔离；有限时惯性化 C1/端点/重复中断、有界视觉根偏移与查询隔离 |
 
 `ctest` 用套件前缀选择：
 
@@ -49,6 +51,243 @@ ctest --test-dir build -R "MaterialInstanceEditor" --output-on-failure
 ```
 
 `JsonAssetLibraryTest` 有 4 项按设计 skip（符号链接用例，需要权限）。
+
+### GASP P2 蒙皮验证
+
+本地 2026-10-18，C# ON / 动画工具 ON / MinGW Debug 全目标构建通过。
+根 CTest 共 1360 项，1354 通过、6 项符号链接权限环境跳过，零失败，耗时 449.53 秒。
+动画/资产/UI 相关 101 项选择集连续两遍零失败；最后的标量 bounds 优化后，
+`SkeletalImport` 与 `SkinRenderHistory` 共 24 项再次连续两遍通过。
+实测目标规模为 UI 648、动画 42；下方 C# 专项段落保留各轮历史数量。
+
+正式 `Maps/SC_gasp` 的 Vulkan CPU/GPU Beauty 与 Normal 对照、单/双线程及
+确定性 seek 对照在角色/阴影 ROI 内字节误差均为 0。
+暂停几何的非零速度像素为 0，播放几何为 5610。
+Surface/Shadow 与 Compute reload 在正式 GASP 场景串行通过；
+World/graph 事务在默认场景、无编辑器模式下分别以单/双线程串行通过。
+四个进程退出码均为 0，日志确认正常 teardown；
+Compute stderr 含测试故意改变 workgroup size 的 ABI 拒绝，其后恢复通过。
+39 个正式场景 schema、65 条边界规则和文档校验通过。
+
+编辑器实窗截图已核对；时间轴、片段选择与播放控件有 RmlUi 模块覆盖，
+未作真实鼠标操作验收。截图进程由工具终止，不充当正常退出证据。
+完整数据、命令、失败修正与范围见
+[P2 执行记录](../rationale/gasp-p2-skinning-record.md)。
+
+### GASP P4 轨迹与特征验证
+
+本地 2026-10-18，动画完整 61 项、脚本完整 316 项均连续两遍通过。
+UI 完整 653 项连续两遍均为 648 通过、5 项符号链接环境跳过，零失败。
+视口/轨迹投影选择集 43 项通过。World/Graph 事务 runtime gate 退出码 0，
+含正常 teardown；单/双线程轨迹截图验证通过，但截图进程的强制终止不计 teardown。
+Debug 全目标、Development main 已构建；其余构建结果见
+[P4 执行记录](../rationale/gasp-p4-trajectory-and-features-record.md)。
+
+`MotionHistory`、`MotionPrediction`、`MotionFeatures`、`MotionDatabase`、
+`MotionDatabaseInputs` 和 `SkeletalImport` 覆盖采样与构建；
+`ScriptAnimationTest` 覆盖真实 CLR/Jolt 实际历史和暂停/Stop；
+`DebugDrawOverlay`、`ModelPreviewInputTest` 和 `EditorUiTest.Motion*`
+覆盖冻结显示、裁剪、叠层顺序、值请求、静默刷新与多窗口尺寸。
+正式数据库冷重建/命中/损坏恢复/版本拒绝/schema/成员顺序失效由外部工具验证，
+1261 帧、42 维；帧浏览器有 Playwright 实际片段/帧输入和桌面/手机布局验收。
+原生编辑器没有新增真实鼠标验收；没有运行时 MM 搜索/混合/IK 完成的声明。
+
+### GASP P4.5 公共 DrawDebug 验证
+
+2026-10-18：纯 CPU 27 项、C# ON 脚本 332 项均连续两遍通过；
+C# OFF 脚本 77 项与纯 CPU 27 项连续两遍通过。
+UI 全量 659 项连续两遍均为 654 通过、5 项符号链接权限环境跳过，零失败。
+可选深度覆盖逐像素线段遮挡、前后点和标签，Debug Vulkan validation 截图 stderr 为空，
+单/双线程 ROI 字节相同；Development 过滤/清理和深度演示截图通过。
+三项既有 Vulkan runtime gate 串行退出码 0，均记录正常 teardown；
+截图进程的强制终止单独记账，不作为正常关闭或真实鼠标验收。
+具体构建、临时资源与 shader 重载范围见
+[P4.5 执行记录](../rationale/gasp-p4.5-debug-draw-record.md)。
+
+### GASP P5 验证范围
+
+2026-10-18 物理反馈修正版冻结后，Debug 全目标、Development main 与 C# OFF Release
+main/script_tests 构建通过。动画 112 项/14 套件、C# ON 349 项/34 套件、
+C# OFF 79 项均连续两遍全部通过；完整 UI 666 项连续两遍均 661 通过、
+5 项符号链接环境跳过、零失败。7 项 MM UI 专项包括真实指针展开、转义及受阻标记冻结。
+查询手算回归包括固定实际物理速度下零/双倍渲染位移；
+真实 Jolt 覆盖无子步纯 yaw 保速及位置传送清速。
+正式控制器动作/墙前共六例覆盖 30/60/120 Hz，要求各阶段末一秒稳定循环或 Idle，
+并保留起停/转身/跳落的实际原生选帧断言。
+Vulkan 生命周期与截图的版本/范围分别登记于
+[P5 记录](../rationale/gasp-p5-motion-matching-record.md)；本轮未完整重跑根 CTest。
+最后修正版反向/受阻的单/双线程 4 项实窗截图与目标反馈均通过并经主线程看图核对；
+World/Graph gate 退出码 0、stderr 为空并正常 teardown。
+文档、65 条边界、40 场景 schema 与 diff 空白检查通过；截图强制终止不充当正常关闭证据。
+
+`MotionMatching` 用独立手算和全扫描 oracle 验证加权距离、稳定决胜、有界排名、
+业务筛选、准确/量化继续、动作锁及重选/节流策略；
+`MotionRuntimeQuery` 核对显示姿态局部速度在新 heading 和实际根速度下的搬运。
+同套件还区分地面当前受阻的实际水平速度预测、自由移动 desired 和空中 desired，
+不把其通过解释为未来碰撞预测完成。
+`SkeletalBlend` 验证 ozz 局部 TRS 混合、旋转归一化、混合打断、时钟/完成状态、
+inPlace 与冻结姿态所有权。模块通过不等同于正式控制器的动作效果通过。
+
+`ScriptAnimationWorld` 验证导入字节身份不匹配和批次失败原子性；
+真实 CLR/Jolt 的 `ScriptAnimationTest` 验证正式统计绑定、冻结查询/排名、
+空筛选、回调回滚、传送、锁定非循环尾段、历史预算优先级及独立暂停。
+`FormalGaspControllerPublishesNativeSelectionsForGroundedAndAirborneActions`
+实际执行资源侧 `Gasp.CharacterBlueprint` 并记录原生选帧，区别于旧的
+`LegacyLocomotion*` 直接选片段夹具；动作类别曾出现不证明长时间稳态或碰墙策略。
+
+`EditorUiTest.MotionMatching*` 验证同代查询/代价、Selected/Continue/前五名、
+文字转义、固定槽位、展开状态的暂停静默、隐藏条件、短视口滚动/输入隔离和单行摘要；
+真实 RmlUi 鼠标移动/按下/抬起覆盖实际 CSS hover、查询展开、42 维末行可读和固定数值节点；
+冻结 `blocked` 标志及 actual/desired-no-collision/query 图例与候选排名同代。
+`tool/animation/capture_gasp_p5.py` 运行独立 C# 输入夹具，通过生产
+`Animation.Match`、Character/Jolt 和 Console 截图采集八类动作、单/双线程与多尺寸。
+其报告分别记录截图完成、动作类别验收和截图时刻的原生反馈；只属于允许集合不算动作通过。
+该脚本不注册为 CTest 或 runtime test，不执行正式控制器，也不替代真实鼠标/键盘验收；
+强制终止的截图进程不计正常 teardown。
+实际构建、最终重跑、失败修正与未覆盖项见
+[P5 执行记录](../rationale/gasp-p5-motion-matching-record.md)。
+
+### GASP P6 有界转向专项
+
+2026-10-18：资源侧正式 C# 控制器新增有界最短角转向，默认 `540°/s`。
+Debug 首轮 34 项运行 `405.102 s`，31 通过、3 项新 Stop 夹具失败；
+Stop 按契约清空 runtime states，夹具误继续读取 owner，修正仅涉及测试。
+最终 Debug 重编后复跑受影响的相机六项与 Stop 三项，九项全部通过，
+耗时 `60.399 s`，退出 0；其余 25 项沿用首轮相同业务源码的结果。
+因此本次合并覆盖 34 个不同用例，没有声称最终完整 34 项又跑一遍或重复两遍。
+`--gtest_list_tests` 实际确认 C# ON 当前注册 377 项，本轮没有重跑全量 377、
+UI 全量、动画 CPU 全量、C# OFF 或三项 Vulkan runtime gate。
+
+新增 28 项包含 30/60/120 Hz 下 D 输入 `-90°`、S 输入固定正向 `180°`、
+真实 Actor/World 模型角度界、冻结姿态 pelvis/双脚世界连续性、真实 render camera
+forward 独立、打断、`179° → -179°` 短弧、Pause、TimeScale=0、
+Stop/Play、传送和 TurnSpeed=0 的初始化拒绝；原有正式动作/墙前六项断言保留且通过。
+未分别穷举左右 `±90°`、正负 `180°` 及反向跨界所有组合。
+Development 正式 playground 启动、UI Play/Immersive 出图通过；
+未形成可确认持续键输入的动态转向视觉验收，该项保留给用户实操。
+具体日志、角步/到达时间与保留限制见
+[P6 有界转向记录](../rationale/gasp-p6-bounded-turn-record.md)。
+
+### GASP P6 稳态步频专项
+
+2026-10-18：新增四项动画 CPU 用例与一项正式控制器行程对照，
+扩展一项既有批请求回滚用例，没有新增测试目标、runtime 标志或 FPS 矩阵。
+Debug 动画定向 16 项通过；脚本桥接/时钟/暂停/Stop/传送选择集七项连续两遍通过。
+正式控制器行程对照与既有动作、受阻 `/60` 三项通过，合计耗时 `129.214 s`；
+其中行程对照四模式各八秒、固定排除前三秒，占 `66.714 s`。
+没有重跑完整 378 项脚本、UI 全量或三项 Vulkan runtime gate。
+Debug 脚本/动画、Development main、C# OFF Release main/script_tests 构建通过；
+OFF 只复跑受影响批请求用例两遍，均通过，不把既有 79 项称为本轮实跑。
+
+按播放器实际时钟独立采样原根、补周期位移并与 Jolt Actor 行程比较：
+Run 误差由 `49.9957` 降至 `0.000716 cm/s`，平均倍率 `0.900008`；
+Walk 关闭/开启误差分别 `0.000425/0.000573 cm/s`。
+四组源相位覆盖 100%，实际对照使用正式 C# 控制器及宽候选集合。
+这只验证根行程匹配，未验证足底锁定。
+首轮曲线筛选踝漂移质量测试失败的 XML/log 保留：
+Run `36.33→33.51 cm/s`，未达到原改善线且有效区间偏少。
+复核源蓝图的曲线重映射、FootPlacement 和 Leg IK 后，
+该项改为踝部诊断，正式 `MatchSpeed` 默认关闭；未将失败解释为消滑通过。
+
+Development 双线程 Run 开/关有实景截图，关闭组补采了稳态图并经主线程目视，
+两组实际 Selected 均为 Run Loop、blend=1。反馈与 RT 图不保证同帧，
+截图进程强制结束不计正常 teardown。config 已恢复，无自有进程残留。
+65 条边界审计、文档与两仓 diff 检查通过。
+具体日志、初始失败和下一接地分项边界见
+[P6 步频记录](../rationale/gasp-p6-speed-matching-record.md)。
+
+### GASP P6 静态接地专项
+
+新增四项 `SkeletalBlend`、一项同步探测过滤和一项正式坡面对照，
+其余复用最近的生命周期、动作与受阻用例，没有新增目标或 runtime 标志。
+最终动画 CPU 16 项连续两遍、脚本生命周期选择集七项连续两遍通过；
+真实 60 Hz 18° 横坡和动作、撞墙 `/60` 合计三项通过。
+没有扩 30/120 Hz，也没有重跑全部当时注册的 380 项脚本、UI 集或三项 Vulkan runtime gate。
+
+横坡开关各采集 240 个稳态双足样本，不按 planted 筛样本；
+最大参考点误差为 `7.193770→0.272459 cm`，
+平均误差为 `6.331438→0.233384 cm`，法线误差达到 5° 目标。
+Actor、MM 反馈/查询、片段时钟逐帧一致，全部 pre-IK 骨矩阵差为零。
+验收对象为绑定 ball 的单参考点，不是鞋底网格或走跑全周期消滑。
+首次混编失败、重锚峰值失败及修复记录保留，见
+[P6 足部接地记录](../rationale/gasp-p6-foot-placement-record.md)。
+
+Development 双线程同坡面开关实景各一项完成并经主线程目视。
+反馈与 RT 图片不保证精确同帧，采集使用强制结束，不作为正常 teardown 证据。
+正式场景说明通过单一资产 CLI host 的五步生命周期保存，
+独立深比较仅 description 改变，40 个场景 schema 检查通过。
+Debug 脚本/动画、Development main、C# OFF Release main/script_tests 最终构建通过；
+OFF 仅复跑受影响候选批次用例两遍，均通过，未重跑全量。
+65 条架构边界审计通过，采集后 config 恢复，自有进程已结束。
+
+### GASP P6 动态质量专项
+
+新增一项正式 C#/Jolt/MM 动态质量夹具和八项动画模块用例
+（三项惯性化、两项视觉根偏移、三项动态足部），
+其余复用最近的生命周期、坡面与动作用例，没有新增 runtime 标志或 FPS 矩阵。
+质量夹具固定 60 Hz、MatchSpeed 两组相同，走/跑各 10 s、六段台阶 6 s；
+源支撑标签在读取输出前冻结，不按 solver planted 筛样本，阈值保持
+50% 路径降幅、3 cm 漂移、1 cm 代理点穿入、95% 覆盖。
+
+最终动画 `animation_preflight_tests` 129 项（含 Auto/Ball/Ankle 支点用例）连续两遍全部通过；
+动态质量夹具连续两遍各 1/1 通过（`artifacts/gasp-p6-dynamic-quality-07.xml/-08.xml`）；
+生命周期/坡面选择集 8 项连续两遍通过；C# OFF Release 79 项连续两遍通过。
+C# ON Development 正式关卡完成关闭、足部开启、组合开启和 Stop/Blocked 四组截图，
+Stop 取到根偏移 `smoothing`（-2.334 cm），Blocked 取到足部 `planted`（骨盆 -0.752 cm）。
+
+Walk/Run 每足路径降幅 67.6%–85.6%，漂移 ≤0.808 cm，代理点穿入 ≤0.265 cm，
+覆盖 1.00；台阶六段全部跨越，单参考点 25/42 帧、间隙 ≤0.292 cm。
+真实鞋底网格最大穿入为 Walk 5.522 cm、Run 4.498 cm、Stairs 9.037 cm，
+不计入通过项；完整鞋底、台阶整周期和移动平台仍未验收。
+首轮 Run 零支撑窗、支撑窗拆碎、边界样本与跨踏面抬脚失败保留，见
+[P6 动态质量记录](../rationale/gasp-p6-dynamic-quality-record.md)。
+
+### GASP P7 时间轴、查询回放与独立包探针
+
+新增两项编辑器 UI 用例和两项 World 定向用例，复用 Motion 面板、Pause 与
+生命周期选择集；没有新增 runtime test 标志或 FPS 矩阵。
+UI 用例覆盖时长/时间绑定、播放态禁用、seek 的网格身份/World 代数/秒值、
+pause/play、离线/无播放器禁用，以及查询回放的复选框/历史帧选择/回显/禁用；
+World 用例覆盖只改目标播放器、错误身份/旧代数/越界时间/非法动作拒绝，
+以及历史回放不追加、退出恢复实时快照。
+
+`editor_ui_tests` 668 项（Motion 11 项）连续两遍：663 通过、5 项符号链接权限跳过、
+零失败；`script_tests` 384 项一轮通过，时间轴/回放定向 2 项两遍通过；
+动画 129 项两遍、C# OFF 79 项通过。
+独立包 `artifacts/gasp-p7-export-dev-01` 从仓库外 cwd 启动，World 提交成功；
+空闲 clip=0，按 W 切到 clip=5 的 WalkLoop 并推进，松开回 clip=0，窗口 93 FPS；
+`CloseMainWindow` 后正常 teardown，stderr 为空。
+固定动作矩阵探针包 `artifacts/gasp-p7-probe-export-01` 从仓库外启动，
+连续记录 Idle→Walk→Run→JumpStart→Fall→Land→Idle、yaw=180、
+位置 z≈-1304、跳跃 grounded=False、落地 grounded=True、`P7_PROBE_FINISHED`；
+探针场景 451 FPS，正常 teardown，stderr 为空。
+正式 MM 探针包 `artifacts/gasp-p7-mm-probe-export-01` 记录正式状态机
+Walk→Run→Jump→Fall→Land→180°→Idle、z≈-1000、yaw=180、459 FPS，
+正常 teardown，stderr 为空；42 个场景 schema 检查通过。
+正式 playground 包真实键鼠冒烟：空闲 clip=0、W clip=6、W+Shift clip=7、
+Space clip=9、松开回 clip=0；无测试负载采样 97–117 FPS；
+`ScriptAssemblyReloadTest.*`/`ScriptAssetReloadTest.*` 29 项与 World replacement
+6 项通过。P7 时间轴/查询回放/独立包/生命周期技术验收分项完成；
+历史姿态重演、多人回放、逐 pass 性能分项保留为后续增强，详见
+[P7 时间轴记录](../rationale/gasp-p7-timeline-record.md)。
+
+### GASP P8 障碍交互专项
+
+新增场景夹具而非新的 runtime test 标志：1 m Mantle/Vault stand/walk/run、
+1.6 m 高度拒绝、0.5 m 高度拒绝、顶棚净空拒绝、后方无地面的 airborne abort，
+以及关闭 probe 的 F 输入场景。`Gasp.CharacterBlueprint` 用 SphereCastLocal
+探测、头高向下找顶、70–130 cm 高度窗口和上方 180 cm 净空射线；动作期间
+Jolt 跳跃承担竖直位移、水平前向速度越沿，播放 in-place 1 m 片段。
+
+日志证据：`artifacts/gasp-p8-traversal-probe8.log`（Mantle 落到 y=190、
+grounded=True）、`gasp-p8-traversal-vault2.log`（Vault 落到 y=90、z≈-290）、
+`gasp-p8-traversal-abort-void2.log`（airborne abort）、
+`gasp-p8-traversal-reject-high2.log`（height=160）、
+`gasp-p8-traversal-reject-low2.log`（height=50）、
+`gasp-p8-traversal-reject-clearance2.log`（clearance）、
+`gasp-p8-traversal-reject-nohit.log`（no-hit）。
+61 个场景 schema 通过。F 正式键鼠路径未取得稳定焦点证据；med/high 动作、
+根运动逐帧消费、独立包和 P9 回归未做；P8 的 1 m stand/walk/run 固定子集技术验收完成，全阶段未完成。
 
 ### C# 类浏览与配置资产验证
 
@@ -234,7 +473,7 @@ C# ON 全目标 Debug 构建通过；最终完整 CTest 1197 项，1191 通过�
 及 55 项无宿主测试通过。
 
 新增覆盖包括独立组件权限与故障隔离、Quaternion 完整数值提交、
-FixedTick/Jolt 交替与暂停余量、Time Scale、性能快照容量、
+Tick/LateTick 每帧顺序、Time Scale、性能快照容量、
 Playing/Paused 显式迁移失败保留、Spawn 刚体/速度保留、接触事件去重、
 预加载模板成功重载和在途事件/结构命令拒绝，以及日志截断/容量/冻结/
 筛选/虚拟列表和旧停靠布局补入 Log。
@@ -579,6 +818,31 @@ File→Exit 日志确认 teardown 完成，无 Vulkan validation 错误。该验
 
 ## 改动 → 验证
 
+公共 [DrawDebug](debug-draw.md) 的 CPU 套件为 `debug_draw_tests`：
+几何、生命周期/帧命令时序、key/句柄、过滤、预算、投影和 Console 解析。
+`ScriptDebugDrawTest` 使用真实 CLR 验证 API、回滚、发布者、
+Pause/Stop/World/程序集生命周期与拒绝不影响游戏；
+UI 的 `DebugDrawOverlay`、`DebugDrawLabelTest` 与 `EditorUiTest.DebugDraw*`
+覆盖几何顺序、标签转义/槽位、静默控件和值请求及多窗口布局。
+外部生产截图脚本 `tool/debug/capture_draw_debug.py` 不注册为 runtime test。
+
+动画 P0 工具使用可选 `VULKANLEARN_BUILD_ANIMATION_TOOLS=ON`；
+构建 `vl_animation_probe` 和 `animation_preflight_tests` 后，运行
+`ctest --test-dir build -R "^(AnimationSampling|AnimationDependency|UnrealProjectInventory|AnimationFbxInspection|SkeletalImport|SkeletalBlend|SkinRenderHistory|MotionHistory|MotionPrediction|MotionFeatures|MotionRuntimeQuery|MotionDatabase|MotionDatabaseInputs|MotionMatching)\." --output-on-failure`。
+它验证依赖采样、只读盘点与 FBX 审计，不替代 GASP 导出或 VL 动态渲染验收。
+范围见 [动画预检工具](animation-preflight-tools.md)。
+P1 CPU 导入与采样、九影响权重及 MikkTSpace 顶点展开由 `SkeletalImport` 覆盖，
+边界见 [动画资产导入](animation-asset-import.md)；真实资产数值对照是外部工具验收。
+P2 播放、bounds 与提交历史分别由 `SkeletalImport`、`SkinRenderHistory` 覆盖；
+GPU 画面对照使用 `tool/animation/capture_gasp_p2.py`，不注册为 CTest 或 runtime test。
+当前实现见 [动画播放与 GPU 蒙皮](animation-runtime-skinning.md)。
+P5 搜索、运行时输入绑定或查询变动还对应 `MotionMatching`、`MotionRuntimeQuery`、
+`ScriptAnimationWorld` 和 `ScriptAnimationTest`；候选表对应 `EditorUiTest.MotionMatching*`。
+只跑动画 CPU 集不覆盖 CLR/Jolt/World 桥接，只跑旧 P4 轨迹或直接选片段测试不覆盖正式 MM 控制器。
+正式效果的外部截图入口为 `tool/animation/capture_gasp_p5.py`；
+默认覆盖 idle/start/walk/stop/reverse/run/jump/land，每种动作保留原生反馈与实际截图，
+失败报告和 fallback 截图保留，不能以“有图”替代目标动作验收。
+
 2026-10-17 蓝图视口拾取、变换和文档历史增量：
 `editor_ui_tests` 全量连续两遍均为 567 项、562 通过、5 项符号链接环境跳过；
 `script_tests` 120 项与生产 facade 11 项连续两遍通过，既有
@@ -752,3 +1016,322 @@ py -3 tool\check_ui_visual_regression.py check --reply artifacts\rmlui-editor\vi
 
 入口、前提、测试 helper 或验证范围变化时同步更新本表。测试目标或套件改名会让
 `routing.md` 与本文的 ctest 正则失效——改测试结构时同时更新两处。
+
+### GASP P9 独立包专项
+
+首个包 `artifacts/gasp-p9-traversal-export-01`（1708 文件）从仓库外启动
+`SC_gasp_traversal.json`；自动探针完成 1 m Mantle，日志
+`P8_TRAVERSAL_END pos=0,190,-199 grounded=True`，窗口约 605 FPS，
+正常 teardown，stderr 为空。
+矩阵包 `artifacts/gasp-p9-traversal-matrix-01`（1714 文件）通过
+`--dynamic-assets` 收入六个 Traversal 场景，覆盖 Vault 越障、
+1.6 m/0.5 m 高度拒绝、顶棚净空拒绝、无目标 no-hit 和 airborne abort；
+每次运行均正常 teardown，stderr 为空。
+使用 `loadworld` 队列命令验证 generation=2 的 Vault World 换代；`shaderreload all` 记录 compiled=16、committed=true、retiredPipelines=18；无负载 1280×720 采样 589–639 FPS；`reloadassembly` 在包内 Editing 提交，Playing 受控骨骼正确拒绝。
+gait 矩阵包 `artifacts/gasp-p9-final-package-01`（1725 文件）再验证
+Mantle/Vault 的 walk/run 四个场景，均落地并正常退出。
+已覆盖 1 m stand/walk/run；med/high、长时间 GPU/压力、真实输入与完整动作矩阵未在包内重跑；P9 的 1 m 独立包子集技术验收完成，完整 M2/最终交付未完成。详见
+[P9 集成记录](../rationale/gasp-p9-integration-record.md)。
+
+P10 2.5 m Climb：`SC_gasp_traversal_climb.json` / `_run.json` / `_walk.json`
+障碍顶面 250 cm，probe 从局部 `y=120` 检测，`TraversalAction=Climb`
+高度窗口 70–300。仓库 `P8_TRAVERSAL_END pos=0,340,-169 grounded=True`；
+独立包 `artifacts/gasp-p10-climb-package-05`（1721 文件）为 stand/run/walk
+`pos=0,340,-173` / `-151…-196` / `-193 grounded=True yaw=0`，run 连续 10/10
+END、0 ABORT，stderr 为空。Mantle/Vault 回归
+`190,-202` / `90,-290`。Climb 使用 root delta/dt 覆盖 CharacterVirtual
+速度，不走 Jump；stand/run 后半段和 walk 全程竖直闭环，水平仍走根轨迹；
+根 yaw 已消费（Climb 实测 0），pitch/roll 未做。2 m/3 m 地面 Mantle/Vault
+无可用 clip，见 [med/high 资产审计](../rationale/gasp-medhigh-asset-audit.md)。
+详见 [P10 记录](../rationale/gasp-p10-climb-root-motion-record.md)。
+
+P11 2/3 m Hurdle gameplay stub：场景已从主资源移除（历史结果如下）。原 `SC_gasp_traversal_hurdle_2m/3m.json`，
+障碍顶面 200/300 cm，1 m `Hurdle_1_0` 身体 + 根竖直 2×/3×，3 m 补有界水平。
+仓库 `2m=0,290,-233`、`3m=0,90,-297 grounded=True`；包
+`artifacts/gasp-p11-hurdle-package-01`（1724 文件）为 `-246` / `-306`，
+stderr 空。该结果只是 gameplay stub，不是 2/3 m 资产验收；真实 clip 仍缺。
+详见 [P11 记录](../rationale/gasp-p11-hurdle-stub-record.md)。
+P12 输入注入：`injectinput <action> <down|up>` 通过
+`InputSubsystem::InjectAction` 合并 gameplay action，不依赖 SDL 焦点。
+`SC_gasp_traversal_input.json` 关闭自动探针，合成 `Interact` 触发：
+`P8_TRAVERSAL_REQUEST` → `START` → `END pos=0,190,-202 grounded=True`。
+`--focus-window` + 真实 F 在仓库/`gasp-p12-input-package-01`(1723) 均到 `END 0,190,-202`；合成 action 与 OS 事件分开记录。详见
+[P12 记录](../rationale/gasp-p12-input-injection-record.md)。
+P13 生成 2/3 m 资产：资产/场景已从主资源移除，仅保留历史记录。原记录：UE Python `set_bone_track_keys` 生成
+`Mantle_2_0_Stub/3_0`、`Vault_2_0_Stub/3_0` 根轨迹，身体复用 1 m Hurdle。
+Mantle2/3 落顶 `0,290,-184` / `0,390,-176`；Vault2/3 运行时仍未通过
+（停在障碍前/顶面）。这是生成根轨迹资产，不是最终 2/3 m 身体动画。
+详见 [P13 记录](../rationale/gasp-p13-generated-2-3m-assets.md)。
+P14 Traversal Montage 脚手架：`GaspCharacter` 输出
+`P8_MONTAGE_START/NOTIFY/END`，section 来自 UE `Default`，notify 名称来自
+UE `Footstep/Handstep`；Mantle 运行到 `END pos=0,190,-202 grounded=True`。
+notify 时间目前均分近似，不是 UE 资产时间；详见
+[P14 记录](../rationale/gasp-p14-montage-runtime-record.md)。
+P15 MotionWarping 核心数学（历史阶段）：`WarpTranslationToTarget` 根方向投影 +
+5 个 GoogleTest（Identity/Double/Perpendicular/Zero/Lateral）全部 PASS。
+当时尚未接运行时/warp window，P19 已接；详见
+[P15 记录](../rationale/gasp-p15-motion-warping-core-record.md)。
+P16 Chooser 脚手架：`TraversalAction=Auto` 按 UE 行输出
+`P8_CHOOSER height/mode/choice`；1 m 选 Hurdle 并落顶 `0,190,-234`；
+2 m 经低/高两档球命中，选 `Catch_Hurdle_high` 后记录
+catch-runtime-not-implemented。详见
+[P16 记录](../rationale/gasp-p16-chooser-scaffold-record.md)。
+P17 UE Montage 时长/窗口：从 34 个 `AM_*` T3D 导出
+Climb stand/run/walk = 2.75/3.25/3.6，MotionWarping window
+0.405–0.732 / 0.366–0.885 / 0.310–1.294；VL 改时长后三个 gait
+都 grounded `0,340,-178/-139/-198`。target 仍未换成 FrontLedgeLocation，
+warp 未应用。详见
+[P17 记录](../rationale/gasp-p17-ue-montage-timing-record.md)。
+P18 运行时 Ledge/Warp：Climb 命中后计算
+`P8_LEDGE_CONTEXT front=0,250,-120 backLedge=0,250,-260 backFloor=0,0,-280 depth=140`，warp target 用脚底换算
+`0,340,-120`；按 UE 时长/窗口后 stand/run/walk 都 grounded
+`0,340,-174/-198/-201`。warp 用 RootMotionRemaining + exact scale+shear；BackLedge/BackFloor 已算但未作为 Vault target。详见
+[P18 记录](../rationale/gasp-p18-runtime-ledge-warp-record.md)。
+P19 原生 MotionWarping：`MotionWarpRuntime` 在 C++ 拥有窗口/根位移/目标
+空间换算，C# 只提交 target/window。Hurdle：
+`P8_WARP_WINDOWS native=BackLedge[0.133,0.598] FrontLedge[0.157,0.235] BackFloor[0.164,0.399]`，
+END `0,188,-266 grounded=True`。Climb/Mantle/Vault 窗口已提交原生；P19 段落记录的矩阵为
+Hurdle `0,180,-280`、Climb `0,340,-207/-207/-210`、Mantle `0,190,-202/-201/-201`、
+Vault `0,90,-290`，全 grounded；MotionWarping 11/11、全量 140/140（P19 时；P20 后
+16/16、145/145；P22 后 16/16、224/224；P25 后 28/28、255/255）。P20 已裁定 `-280` 是迁移前旧三窗口/C# 提交配置结果、`-266` 是
+native 结果（`final-hurdle.log` 16:29:35，资源提交 `91f98e7` 16:37:29）。详见
+[P19 记录](../rationale/gasp-p19-native-motion-warping-runtime.md)。
+P20 Hurdle 四窗口 + Bone provider：两个 FrontLedge 用 `attach`
+（0.078149–0.234903、0.234925–0.398904），BackLedge/BackFloor 为 None；
+`dOut=56.810280`（当时由曲线采样值内联，P22 后改由 `CurveValue` 计算），
+`subtractRemaining` 全 false；Mantle/Vault 改单次消费原生 warped root：两个 FrontLedge
+窗口（Vault stand 另有 BackLedge），两个 FrontLedge 均 `attach`，target 胶囊中心；
+`abort_void` 坠到 `y≈-2676` 后 airborne abort，`abort_stall` 为 `stalled progress=10`。
+P20 当轮的 Hurdle `0,90,-334`（作者轮 `-333..-354`）只是历史数字，已被 P21/P22 矩阵取代。
+
+P21 场景 reach 重做（历史矩阵，`artifacts/gasp-reach-matrix/RESULTS.md`）：10 个 traversal
+场景 ×3 次全部 grounded、无 ABORT、首窗 attractor 30/30 通过。END：Mantle stand
+`-164/-174/-170`、walk `-202/-201/-201`、run `-202/-204/-209`；Vault stand
+`-380/-377/-375`、walk `-348/-344/-334`、run `-346/-350/-335`；Climb stand
+`-231/-188/-229`、walk `-204/-195/-213`、run `-187/-226/-230`；Hurdle(auto)
+`-329/-320/-334`。拒绝/中断/输入语义保持：`reject_clearance` / `height=160` /
+`height=50` / `no-hit`；`auto_high` `Chooser height=200 -> Catch` 拒绝；`abort_stall`
+`stalled progress=10`；`abort_void` `airborne progress=289`；`input` 用
+`injectinput Interact down` 触发到 END `(0,190,-173)`。**该矩阵已被 P22 清理后矩阵取代**，
+旧值只作历史。
+
+P22 Montage 迁移与清理：引擎 `0356b7f`/`b3a5e79` 执行 notify/notifyState 区间、
+`e5a92f6` 接 catalog/`playMontage`/C# `CurveValue`/`Montage`/`PlayMontage`/feedback
+`notifies`/`montage`，`0de7bcc` 删除 `skinning.root`（出现即拒绝）、强制
+`skinning.skeleton`、缓存键只留 `|skeleton=`、C# 删除 `MotionWarpTarget` 与
+`Play(warpTargets)`、`clip` 请求携带 `warpTargets` 显式拒绝；资源 `aa78096` 把 SM 接到
+skeleton/22 个 sequence/10 个 montage，`GaspCharacter` 改 `PlayMontage` +
+`Montage().Windows` + `CurveValue`，资源 `ac0fe0c` 删除残留 `root`。
+Climb walk 真窗口为 `0.983966–1.293677` + `1.293831–1.603542`（21 个窗口与 T3D 0
+mismatch；P17 的 `0.309711` 是 Duration）；修复 = 探针 walk 名义 500（reach 350）+
+`climb_walk` z=+228 + 竖直闭环推迟到首窗，END `(0,340,-167/-165/-167)` grounded。
+清理后矩阵（`artifacts/gasp-post-cleanup-matrix/RESULTS.md`）：10 个 traversal 场景 ×2
+全部 grounded、无 ABORT；20/20 次 `P8_WARP_WINDOWS` 与全部 `P8_MONTAGE_NOTIFY` 与迁移后
+基线逐字相同。END：Mantle stand `-160/-159`、walk `-202/-202`、run `-204/-202`；Vault
+stand `-365/-376`、walk `-335/-340`、run `-346/-338`；Climb stand `-164/-162`、walk
+`-168/-155`（extra `-167/-168`）、run `-182/-175`（extra `-163`）；Hurdle(auto)
+`-325/-342`（extra `-326`）。特殊场景 8/8 语义保持：`auto_high` Catch、`reject_*`、
+`abort_stall progress=10`、`abort_void airborne`（y≈-2435）、`input` END `(0,190,-176)`。
+`reject_high` 首次 `exit=2` 为关闭路径交换链 `ErrorOutOfDeviceMemory`，复跑 2 次
+`exit=0`，记为环境瞬态。`scriptAnimationTests` 动画相关 42 项（P22 时；`ScriptAnimationTest.*`
+34，其中 7 项为 `CurveValue`/`Montage`/`PlayMontage`/notify feedback；
+`ScriptAnimationWorld.*` 8，含 `RejectsClipRequestWithWarpTargets`）。Motion DB 的 SK
+摘要进入 identity（17 项输入），旧缓存失效并自动重建，playground 运行命中且未改写缓存。
+矩阵细节、抖动与未闭环见
+[P22 Montage 迁移记录](../rationale/gasp-p22-montage-migration-record.md)。
+
+P23 旋转 warp、Montage section/link 与 Static provider：引擎 `36de338` 执行旋转 warp
+（`WarpTarget` 位置+可选旋转、`MotionWarpWindow.warpRotation/rotationTimeMultiplier/
+rotationMethod`、`Apply(actorYaw, outYawDelta)`，只执行 `Slerp`），`a74e29f` 执行
+section/link（Absolute/Relative/Ratio、最多 10 个 sub-step、段末跳转与 notify 边界/空洞
+规则）与 Static provider（`staticPose` → `offset=Root(EndTime)*staticPose^-1`，只加平移），
+`4d1475e` 把 Static 字段暴露给脚本数据层；资源 `b627bd0` 给 GASP `FrontLedge` 提交目标
+朝向（`MakeRotFromX(-FrontLedgeNormal)` 语义），BackLedge/BackFloor 只提交位置。
+旋转接线矩阵：Mantle stand / Climb stand / Climb walk / Hurdle(Auto) ×2 = 8/8 grounded、
+无 ABORT，END yaw 0.0、x=0，`P8_WARP_ROTATION` 全为 `yaw=0.0`，窗口/触发/notify 与
+P22 基线逐字相同；+20° 目标 yaw 诊断得到 END yaw 20.0、x=-14/-9（证明原生消费目标旋转，
+诊断不属于验收）。`scriptAnimationTests` 动画相关 44 项（`ScriptAnimationTest.*` 35，
+含旋转重载；`ScriptAnimationWorld.*` 9，含位置/位置+旋转 targets 的接线用例）；
+`PlayMontageRejectsUnsupportedExecutionWithDiagnostics` 现为 6 项拒绝
+（未知 montage、缺/多 target、非 Linear、loop、rate），多 section/Static 不再作为
+script 拒绝项；C# 入口也已接受两者（`8e61949`）。
+`animation_preflight_tests` 252（MotionWarping 28、AnimationScriptData 27、
+AnimationMontage 24）。详见
+[P23 旋转/section/Static 执行记录](../rationale/gasp-p23-warp-execution-record.md)。
+
+P24 Catch 资产与运行时：资源 `3574a3a` 新增 9 个 Catch clip + 9 个 `AM_*`，SM 变为
+31 clip / 19 montage（31 sidecar 829,022 B、19 montage 36,839 B、188 notify、
+33 warp；`validation.json` `issues=0`）；引擎 `6963a9d` 给导出链加
+`--clips`/`--continue-on-error`/`VL_GASP_ANIM_CLIP_IDS` 与 `audit_gasp_catch.py`；
+资源 `90125e4` 实现 `MovementMode { Walking, Falling, Catch }`、Falling 入口与
+`Catch_Hurdle_low/med/high`。运行期：`SC_gasp_catch_high.json` ×3 全部
+`mode=Falling choice=Catch_Hurdle_high` → `P8_CATCH_LANDED y=290` →
+`END (0,290,-164/-197/-176) grounded`；7 个既有场景回归通过（Mantle/Hurdle/input 正常、
+`reject_high` 仍 `height=160`、`auto_high` 仍拒绝但 reason 变为
+`catch-requires-falling`、`abort_void/stall` 保持）。父代理独立复核一次：
+`CHOOSER height=176 Falling → Catch_Hurdle_high`、`CATCH_LANDED 2.736/4.333 y=290`、
+`END y=290 z=-224`。`animation_preflight_tests` 保持 **252/252**（本轮无引擎改动）。
+Catch 的 `BackFloor` 按顶面落点解释（`dOut=0`）是**有意偏离**地面 Hurdle 口径，
+依据与未闭环见
+[P24 Catch 记录](../rationale/gasp-p24-catch-runtime-record.md)。
+
+P25 Catch 入口时间/家族/自动触发：引擎 `a97cc58` 给两个 `PlayMontage` 重载加
+`float startTime = 0`（初始 seek：之前 notify 不补发、根位移从入口积分、窗口按
+previousPosition 门控；越界/NaN 拒绝），`animation_preflight_tests` **255/255**（+3：
+`PlayMontageStartTimeSkipsEarlierNotifiesAndRootMotion`、
+`PlayMontageRejectsStartTimeOutsideSectionZero`、
+`MontageSectionChainStartsFromEntryTime`），`script_tests` startTime 用例 3/3
+（`ScriptAnimationTest.*` 36、`ScriptAnimationWorld.*` 11，共 47）。资源 `e0b7a8d`
+接入口时间、Cliff/Mantle/Vault 家族与 Falling 自动触发，新场景
+`SC_gasp_catch_jump.json`。运行期：`SC_gasp_catch_high` ×3 + final 全部
+`P8_MONTAGE_START startTime=0.877 entry=PoseSearchBranchIn`，首条 `P8_TRAVERSAL time=1.12`
+（旧 0.24，前摇消失），`CATCH_LANDED 2.082/2.198/2.131 y=290`、END y=290；
+`SC_gasp_catch_jump` ×3 各 1 条 `P8_CATCH_AUTO_TRIGGER height=77 action=Catch_Hurdle_med`、
+`startTime=0.834`、落地 1.702/1.759/1.702 y=290；家族各 3 次：Cliff high y=290、
+Mantle med y=201、Vault high y=290（3 m 深台面）。回归：traversal END -174、auto y=90
+z=-354、auto_high 仍 `catch-requires-falling`、reject_high `height=160`、abort_void
+`airborne`、abort_stall `progress=10`、input Mantle、playground 无 Catch、
+`jump_no_wall`/`CatchOnFall=false` 不触发、未知 family 给
+`catch-montage-missing … tried=…`。父代理独立复核：`startTime=0.877`、
+`CATCH_LANDED 2.064/3.456 y=290`、`END y=290`；jump `height=77`、`CATCH_LANDED
+1.723/3.166 y=290`。截图 `artifacts/gasp-catch-entry/catch-jump-landed.png`
+（1280×720，墙体 physics-only，画面只有角色）。详见
+[P25 Catch 入口记录](../rationale/gasp-p25-catch-entry-record.md)。
+
+P26 Catch 家族/跳跃 gating/视觉返工/PoseSearch 研究：资源 `026d480` 让 Chooser 按顶面
+纵深选 Hurdle/Mantle/Vault 家族（阈值 2/3 个胶囊直径），加入 `jumpInitiated` gating
+（`CatchOnFall` 默认 true 只认跳跃失败、`CatchOnWalkOff` 默认 false），5 个 Catch 场景
+换成 GASP `LevelTextured` 资产（墙 `SM_gasp_055`/`MI_gasp_048`、地面
+`SM_gasp_025`/`MI_gasp_018`，无 materialOverride），并新增
+`SC_gasp_catch_family_hurdle/mantle/vault.json`；引擎 `1b203a8` 新增 script 测试
+`MontageBranchInWindowsAreSamplingRanges`（9 个 Catch 窗口 ≤1.2/30 s、10 个非 Catch
+`time==0`，只扫 montage 不扫 clip）。`animation_preflight_tests` 保持 **255/255**；
+`scriptAnimationTests` 注册 **48**（`ScriptAnimationTest.*` 36 +
+`ScriptAnimationWorld.*` 12）。运行期：家族各 2–3 次——Hurdle depth=100 y=290、
+Mantle depth=160 y=288→290、Vault depth=280 y=290；`catch_high`
+`family=Hurdle depth=120`、`catch_jump family=Hurdle depth=120 height=77`；
+gating：走落默认不触发、`CatchOnWalkOff=true` 触发、`CatchOnFall=false` 不触发、
+`jump_no_wall` 正常；回归 8/8。父代理独立复核
+`family=Mantle depth=160 height=77 → Catch_Mantle_med`、`CATCH_LANDED 1.938 y=288`、
+END y=290。截图 `artifacts/gasp-chooser-families/capture-mantle-landed.png`
+（GASP LevelBlock + 地面 + 角色，1280×720）。失败保留：catch_jump 一次越顶
+`ABORT stalled progress=180`；Mantle 一次丢窗口 `catch-missed-top`，重试通过。
+PoseSearch 研究结论（`artifacts/posearch-branchin-research/REPORT.md`）：branch-in 只
+钉采样范围、不选帧；Catch 窗口≈1 帧，VL 取下界与 UE 差 ≤1 帧；非 Catch 家族窗口
+2–31 帧，B1（per-member 采样区间 + 独立 traversal DB + 一次性 query，约 4–6 人日）
+才是收益点，C（完整 PoseSearch）不建议。详见
+[P26 Chooser 家族记录](../rationale/gasp-p26-chooser-families-record.md)。
+
+P27 视觉补齐、`--frame-limit` 与三帧率矩阵：新增启动参数 `--frame-limit <hz>`
+（提交 `98d791d`；`source/engine/launchOptions.*`、`engineLoop.*`）。可取 `1..1000`；
+省略整个参数时默认 0 = 不限速；只写 `--frame-limit` 不给值 exit 1
+（`--frame-limit requires a rate in Hz between 1 and 1000.`），显式传 `0`、非整数或
+`>1000` exit 1（`--frame-limit rate must be an integer between 1 and 1000 Hz.`），
+两种失败都打印 usage。
+它只限渲染主循环节拍：`Tick()` 后按 `SDL_DelayPrecise(remaining - 0.2 ms)` + 自旋
+补足到 `1/hz`；`RuntimeClock` 仍按真实经过时间推进，`time.delta` 与动画/脚本 tick 的
+dt 随帧间隔变化（P27 时 `ScriptRuntime` 内部仍有 1/60 accumulator 的固定物理子步，
+P28 已改为每帧变 dt，见下节）。它是普通启动参数，不是 runtime test flag；
+`RejectRuntimeTestConflict` 只覆盖三个 runtime test 标志，三项 Vulkan runtime gate 的
+约束与串行要求不变。30/60/120 三档窗口采样 29–30 / 59 / 119（默认 718–781）；
+三种无效输入实测都在 0.45 s 内退出、未创建窗口。资源 `882cc90` 之后 18 个
+`SC_gasp_traversal*.json` 补 37 个与 physics 同 transform/尺寸的 GASP `LevelTextured`
+可见 mesh（障碍 `SM_gasp_055`、地面 `SM_gasp_025`，无 materialOverride，physics 不变），
+18/18 截图保存、18/18 期望标记命中，contact-sheet 1248×1626。
+仓库内 21 场景 × 30/60/120 共 63 次：60=21/21、120=21/21、30=20/21；30 Hz 仅
+`SC_gasp_catch_family_mantle` 确定性失败 2/2（`P8_TRAVERSAL_ABORT
+reason=catch-missed-top progress=0`，缺 `P8_CATCH_LANDED`/`P8_TRAVERSAL_END`），
+60/120 同场景 `CATCH_LANDED y=288`、`END y=290`——**仓库内 30 Hz 不按通过记录**。
+独立包（21 个矩阵场景 + DB/PS，1810 文件，包内 `main.exe` 与仓库同一 SHA256）用同一
+二进制跑完三档：60=21/21、120=21/21、30 首跑 20/21 + 重试 1 次后 21/21（唯一首跑
+失败 `catch-family-hurdle` `P8_TRAVERSAL_ABORT reason=stalled progress=184
+pos=-0,247,-294`，重试 PASS `END y=290`）；64 次运行全部 exit=0、stderr 0 B、包内
+config SHA 不变、无残留。包内 30 Hz `catch-family-mantle` 首跑通过，**未复现**
+仓库内的 2/2 失败；两个环境在 30 Hz 各暴露一例不同的 catch abort（`stalled` /
+`catch-missed-top`），60/120 两边零失败。因此 30 Hz 是 catch 入口/warp 窗口对启动
+与帧相位敏感的低帧率脆弱点，P9 三帧率门禁仍未全绿，**不按通过记录**。
+`animation_preflight_tests` 保持 **255/255**、`script_tests` 注册 **401**（动画相关
+48 不变，本轮未新增测试）；场景 schema **66/0**。详见
+[P27 视觉/帧率记录](../rationale/gasp-p27-visual-frequency-record.md)。
+
+P28 UE 帧语义对齐：引擎 `dd62695`（`【Mod】align gameplay simulation with UE frame
+semantics`）删除脚本固定步。`ScriptRuntimeSubsystem::Tick` 每帧只调用一次
+`tick(dt=frameDt*timeScale)` → `StepPhysics(dt)` → `late(dt)` → `TickScriptAnimations(dt)`
+→ `StepPhysics(0)`（只同步 LateTick 指令/接触，不推进时间）；没有 accumulator、没有 `fixed` 回调，
+`frameIndex` 每帧 +1。`ScriptPhysicsWorld::Step(states, declarations, dt)` 是唯一物理入口：
+角色 `MoveCharacter(dt)` 按帧 dt 推进，内部按 UE CMC `MaxSimulationTimeStep=0.05` /
+`MaxSimulationIterations=8` 分段；刚体按 `1/60` 子步、单帧最多 16 步，未达上限保留余量、
+超限丢弃整步多余量；`dt=0` 只同步指令/接触。`EngineLoop` 对游戏/动画消费
+`simulationDelta=min(rawDelta,0.1 s)`（UE `MaxUndilatedFrameTime`/`MaxSimulationTimeStep`
+式 hitch 防护），FPS 与资产/脚本构建轮询仍用原始 dt。C# 删除
+`Blueprint/Component.FixedTick`、`Time.FixedDeltaTime/IsFixedTick/FixedFrameIndex`、
+NativeBridge `"fixed"` 命令与 FixedTick callback 位；Tick/LateTick 每帧一次、共用同一帧 dt。
+测试：`script_tests` **400/400**（1278.8 s；原 401，删 3 个 fixed 用例、加 2 个
+per-frame 用例，净 −1），`animation_preflight_tests` **255/255**；main 构建
+0 error / 0 native warning（资源侧既有 nullable C# 警告发生在更早的 Gameplay 编译，
+最终构建未重编译它）。
+运行时只重跑 6 场景 × 30/60/120 Hz × 23 s：30 Hz **5/6**（仅
+`catch-family-mantle` 2/2 `catch-missed-top`）、60 Hz **6/6**、120 Hz **6/6**；
+矩阵 exe SHA256 `E7CB1432E4E0251A523DFD31BDAE7C2737FCAE213B0A8FFAD0CE4770029D474E`，
+最终构建 `E9B95FC573DF9F89EFFF452EA33FCCA7FB57B9816A6F59B55217B8FD3C57AD60`（仅注释差异）。
+`catch-high` 经资源 `b75b2de` 把 probe y 由 210 抬到 260 后三档全过（chooser
+`mode=Falling family=Hurdle depth=120`、`CATCH_LANDED`/`END y=290`）；`catch-jump`
+触发 height 记录为 30/60/120 = 87/78/77，断言已放宽为家族/纵深 + LANDED/END 290，
+**height 不是 P28 契约**。30 Hz Mantle catch 是 P28 未闭环项（每帧变 dt + 0.1 s clamp
+未修复该 warp 窗口）。**边界：P28 只重跑这 6 个场景；P27 的 21 场景 × 3 档全矩阵是
+旧固定步语义，不能称为 P28 已重验。** 与 UE 的剩余差异：动画仍在 LateTick 后求值
+（root motion 一帧滞后，本轮未改）、渲染插值未做、UE 引擎级 `bUseFixedFrameRate`
+未使用；P28 不是“GASP M2 全部完成”。详见
+[P28 帧语义记录](../rationale/gasp-p28-frame-semantics-record.md)。
+
+SpringArm 相机臂基础：`script_tests` 新增 `ScriptSpringArmTest.*` 7 项（owner/arm 旋转组合、
+SocketOffset、球扫缩臂、关闭碰撞、无 arm 的相机、schema 拒绝）和
+`ScriptBlueprintAuthoringTest.SpringArmFieldsAuthoringRoundTrip` 1 项；注册数从 400 变为 **408**。
+运行时冒烟 `Maps/SC_springarm_smoke/SC_springarm_smoke.json` 使用真实窗口 8 s + 截图注入：
+exit 0、stderr 空、config 逐字节恢复、无残留 main，截图由 SpringArm 子相机接管
+（证据 `artifacts/p28/springarm-smoke/`）。`schema/scene.schema.json` 同步接受
+`springArm` 及五个字段，`validate_scene_schema.py` 检查 67 个场景、0 失败。
+基础版本当时未做：物理后同步刷新（相机相对同帧刚体有一帧延迟）、相机滞后/平滑、
+PawnControlRotation/旋转继承、调试绘制、运行时修改 arm 字段的 API、多 arm/相机优先级、
+viewport 预览。本段为历史验证范围，当前能力以 C# 契约的 SpringArm 节为准。
+引擎提交 `a76ba40`、资源提交 `7f8b101`；详见
+[SpringArm 基础记录](../rationale/springarm-baseline-record.md)。
+
+SpringArm UE 行为对齐（2026-10-21）：当前 `ScriptSpringArmTest.*` 34 项，加编辑保存与实例覆写各
+1 项，共 36 项连续两遍通过；相关时钟/回调/增量/重载/物理/作者/资产/DrawDebug 195 项通过。
+脚本注册数为 **436**，本轮没有完整重跑 436 项。UI 全量 **670** 项：665 通过，
+5 项符号链接权限环境跳过，零失败。Debug MinGW 的 main/script_tests/editor_ui_tests 构建通过。
+真实窗口 smoke exit 0、stderr 空、config 逐字节恢复，截图已检查；不作为 GASP 三帧率矩阵验收。
+新增桥接内部 camera_prepare/camera_finish 不属于 runtime test 命令，也不推进物理时钟。
+证据、首次失败与修正、数值口径及保留差异见
+[SpringArm UE 对齐记录](../rationale/springarm-ue-alignment-record.md)。
+
+GASP SpringArm 接入（2026-10-21）：正式角色与翻越探针通过 `blueprint.*`
+读/能力/改/校验/保存迁移为 `springArm → camera`；资源控制器只提交世界 `ControlRotation`。
+新增两项正式 CLR/Jolt 集成测试验证鼠标俯仰/yaw 环绕及后墙接触球心落点；
+正式 GASP 夹具改为消费 BP 的真实组件父链。最终相机专项 42 项连续两遍全过
+（34 项 SpringArm、2 项 GASP 集成、30/60/120 Hz 的 90°/跨 ±180° 转向各 3 项），
+证据 `artifacts/gasp-springarm-final-tests.log`。没有全跑当前注册的 438 项；
+较宽筛选在足部质量用例期间及挂点调整前主动终止，不能视为整套通过。
+main/script_tests/vl_asset_edit 构建通过，67 场景 schema、架构审计通过。
+实窗 Play/Pause/Stop 已检查；最终挂点改为胶囊中心后再次 Play/Stop，完整角色位于画面内，
+stderr 为空。BP 页验证父链、450 cm 臂长和 12 cm 探测半径，窗口保留供检查；
+此阶段编辑预览尚不执行臂端求值；后续静态挂接空间见下一段，仍不能作为运行时碰撞或相机 lag 的出图证据。
+
+SpringArm 组件挂接空间（2026-10-21）：组件自身空间与供子级使用的臂端空间分开，
+Camera、Scene、Mesh、Light 与嵌套臂共同消费父挂接空间，保留作者相对 TRS；
+编辑预览的真实几何、图示、拾取与 gizmo 使用相同的静态空间链。
+Debug main/script_tests/editor_ui_tests、C# OFF Release script_tests 与 Development main 构建通过。
+UI 全量 679 项：674 通过、5 项符号链接环境跳过；SpringArm 运行时 40 项加内部状态
+schema 拒绝 1 项连续两遍通过，OFF 全量 89 项连续两遍通过。
+ON 全量首轮 445 项：442 通过、3 项 CustomData 失败：
+`SparseObjectOverridesMergeDeclaredDefaultsAndContainersReplace`、
+`MigrationCopiesNestedValuesAndAllowsAddedFieldsToUseNewDefaults`、
+`MigrationRejectsNestedFloatToDoubleChangeAndKeepsOldData`；
+第二轮已复现相同三项失败，未按全量通过记录。
+证据 `artifacts/springarm-spaces-ui-final-tests.log`、
+`artifacts/springarm-spaces-targeted-final.log`、`artifacts/springarm-spaces-off-tests.log`、
+`artifacts/springarm-spaces-script-full-tests.log`。
+Development 已加载正式 GASP playground 并启动渲染线程，stderr 为空；
+BP 实窗检查被用户 Escape 中止，因此本轮未完成最终 BP 视口视觉验收。
+空间选择与保留差异见 [组件挂接空间记录](../rationale/springarm-component-space-record.md)。

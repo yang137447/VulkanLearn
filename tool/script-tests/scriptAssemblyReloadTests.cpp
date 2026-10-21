@@ -339,7 +339,7 @@ TEST_F(ScriptAssemblyReloadTest, ChangedMarkedPropertyTypeRejectsWithoutTouching
     EXPECT_EQ(world->GetScriptContext(), context);
 }
 
-TEST_F(ScriptAssemblyReloadTest, LiveReloadPreservesSpawnedJoltBodyAndFractionalFixedStep)
+TEST_F(ScriptAssemblyReloadTest, LiveReloadPreservesSpawnedJoltBodyAndFrameClock)
 {
     PrepareMigration();
     blueprint["properties"]["SpawnChild"] = true;
@@ -364,7 +364,7 @@ TEST_F(ScriptAssemblyReloadTest, LiveReloadPreservesSpawnedJoltBodyAndFractional
         before[1]["position"][1].get<float>());
     EXPECT_LT(world->GetScriptBlueprintStates()[1]["bodyVelocity"][1].get<float>(),
         before[1]["bodyVelocity"][1].get<float>());
-    EXPECT_EQ(runtime.ContextTime()["fixedFrameIndex"], 2);
+    EXPECT_EQ(runtime.ContextTime()["frameIndex"], 2);
 }
 
 TEST_F(ScriptAssemblyReloadTest, LiveReloadPreservesCollisionAndTriggerEdgeBaselines)

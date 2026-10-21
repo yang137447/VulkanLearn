@@ -186,7 +186,12 @@ void main()
     int mode = int(u_toneMappingParams.w);
 
     vec3 color;
-    if (IsRawDebugView(uboVP.debugViewMode))
+    if (uboVP.debugViewMode == 90)
+    {
+        // 直接检查 deferred velocity 附件；零速度为中灰，XY 放大 20 倍以观察骨骼形变。
+        color = clamp(vec3(0.5 + 20.0 * texture(gbufferVelocity, inUV).rg, 0.5), 0.0, 1.0);
+    }
+    else if (IsRawDebugView(uboVP.debugViewMode))
     {
         // sceneColor 中的 raw debug 值已完成编码，只保留最终 framebuffer
         // 的 sRGB 显示编码；HDR 光照类 debug 仍走下面的 Beauty 变换。

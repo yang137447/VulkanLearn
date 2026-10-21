@@ -418,20 +418,18 @@ void MaterialInstanceAssetEditorPanel::RefreshBlueprintAssetEditor()
         }
         SetDisabled(Prefix + "component-remove-" + std::to_string(index), disabled);
         RefreshScriptCollisionControls(index, node, Prefix, disabled);
-        for (const char* field : {"parent", "modelPath", "materialOverride", "fov", "near_clip", "far_clip", "autoActivate",
-            "position", "rotation", "scale", "color", "intensity", "visible", "coneAngleInner", "coneAngleOuter"})
+        auto componentFields = ScriptComponentInstanceFields(node);
+        componentFields.push_back("parent");
+        for (const auto& field : componentFields)
         {
             const std::string key = field;
-            const bool vector = key == "position" || key == "rotation" || key == "scale" || key == "color";
+            const auto effective = ScriptComponentFieldValue(node, field);
+            const bool vector = effective.is_array();
             for (size_t axis = 0; axis < (vector ? 3u : 1u); ++axis)
             {
                 const auto id = ComponentControlId(index, field, axis, Prefix);
                 if (!document->GetElementById(id)) continue;
-                Json value = vector ? (node.contains(field) ? node.at(field)[axis] : Json(key == "scale" || key == "color" ? 1 : 0))
-                    : node.value(field, Json(key == "visible" ? Json(true) : IsScriptLightNumber(key) ? Json(ScriptLightDefault(key)) :
-                        std::string(field) == "autoActivate" ? Json(false) :
-                        std::string(field) == "fov" ? Json(60) : std::string(field) == "near_clip" ? Json(1) :
-                        std::string(field) == "far_clip" ? Json(10000) : Json("")));
+                Json value = vector ? effective[axis] : effective;
                 SetControlValue(id, ScalarText(value));
                 SetDisabled(id, disabled);
             }
@@ -699,7 +697,7 @@ void MaterialInstanceAssetEditorPanel::HandleBlueprintAssetEvent(Rml::Element& e
     {
         const auto key = field.substr(10);
         auto& node = draft["components"][index];
-        if (key.rfind("collision", 0) == 0)
+        if (key.rfind("collision", 0) == 0 && key != "collisionMask")
         {
             Json request{{"field", key}, {"value", key == "collisionShape" ? Json(text) : Json(BlueprintNumber(text))}};
             if (key == "collisionHalfExtents") request["axis"] = axis;
@@ -711,19 +709,34 @@ void MaterialInstanceAssetEditorPanel::HandleBlueprintAssetEvent(Rml::Element& e
             if (node.value(key, "") == text) return;
             if (key == "materialOverride" && text.empty()) node.erase(key); else node[key] = text;
         }
-        else if (key == "autoActivate" || key == "visible")
+        else if (key == "autoActivate" || key == "visible" || key == "doCollisionTest" ||
+            key == "enableCameraLag" || key == "enableCameraRotationLag" || key == "usePawnControlRotation" ||
+            key == "inheritPitch" || key == "inheritYaw" || key == "inheritRoll" ||
+            key == "absoluteRotation" || key == "drawDebug" || key == "useCameraLagSubstepping")
         {
-            if (node.value(key, key == "visible") == (text == "true")) return;
+            // visible/doCollisionTest/inherit* 缺省 true；autoActivate/lag/absolute/debug 缺省 false。
+            const bool fallback = key == "visible" || key == "doCollisionTest" ||
+                key == "inheritPitch" || key == "inheritYaw" || key == "inheritRoll" || key == "useCameraLagSubstepping";
+            if (node.value(key, fallback) == (text == "true")) return;
             node[key] = text == "true";
         }
-        else if (key == "fov" || key == "near_clip" || key == "far_clip" || IsScriptLightNumber(key))
+        else if (key == "fov" || key == "near_clip" || key == "far_clip" || key == "priority" ||
+            key == "targetArmLength" || key == "probeRadius" || key == "collisionMask" ||
+            key == "cameraLagSpeed" || key == "cameraLagMaxDistance" || key == "cameraRotationLagSpeed" ||
+            key == "cameraLagMaxTimeStep" ||
+            IsScriptLightNumber(key))
         {
             const auto value = BlueprintNumber(text);
-            if (node.value(key, IsScriptLightNumber(key) ? double(ScriptLightDefault(key)) :
-                key == "fov" ? 60.0 : key == "near_clip" ? 1.0 : 10000.0) == value) return;
+            const double fallback = key == "targetArmLength" ? 300.0 : key == "probeRadius" ? 12.0 :
+                key == "collisionMask" ? 65535.0 : key == "cameraLagSpeed" || key == "cameraRotationLagSpeed" ? 10.0 :
+                key == "cameraLagMaxDistance" || key == "priority" ? 0.0 : key == "cameraLagMaxTimeStep" ? 1.0 / 60 :
+                IsScriptLightNumber(key) ? double(ScriptLightDefault(key)) :
+                key == "fov" ? 60.0 : key == "near_clip" ? 1.0 : 10000.0;
+            if (node.value(key, fallback) == value) return;
             node[key] = value;
         }
-        else if ((key == "position" || key == "rotation" || key == "scale" || key == "color") && axis < 3)
+        else if ((key == "position" || key == "rotation" || key == "scale" || key == "color" ||
+            key == "socketOffset" || key == "rotationOffset" || key == "targetOffset") && axis < 3)
         {
             const bool ones = key == "scale" || key == "color";
             const auto value = BlueprintNumber(text);

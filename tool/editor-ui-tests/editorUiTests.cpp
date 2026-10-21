@@ -27,10 +27,12 @@
 #include "engine/blueprintPreviewRequest.h"
 #include "engine/modelPreviewRequest.h"
 #include "input/mouseMotionBatch.h"
+#include "debug/drawDebug.h"
 #include "sceneNode.h"
 #include "world/meshSceneObjectIdentity.h"
 #include "world/world.h"
 #include "world/worldSnapshotBuilder.h"
+#include "animation/motionDebug.h"
 
 namespace
 {
@@ -1031,6 +1033,63 @@ TEST_F(EditorUiTest, ScriptComponentLocalEditEmitsStableIdAndPreservesFocusedCon
     Refresh();
     EXPECT_EQ(Control("script-component-1-position-0"), control);
     EXPECT_EQ(control->GetValue(), "25");
+}
+
+TEST_F(EditorUiTest, SpringArmDetailsRefreshDefaultsAndEmitTypedSettings)
+{
+    snapshot.activeDocument.reset(); snapshot.documentTabs.clear();
+    EditorSceneActorSnapshot actor;
+    actor.type = EditorSceneActorType::Script; actor.identity = "blueprintInstance|arm"; actor.worldGeneration = 42;
+    actor.displayName = "Arm"; actor.scriptClass = "Gameplay.Test";
+    actor.scriptComponents = nlohmann::json::array({{{"id", "arm"}, {"type", "springArm"}}});
+    snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
+        std::vector<EditorSceneActorSnapshot>{actor});
+    snapshot.selectedActorIdentity = actor.identity;
+    Refresh();
+    ASSERT_NE(Control("script-component-0-targetOffset-1"), nullptr);
+    EXPECT_EQ(Control("script-component-0-inheritYaw-0")->GetValue(), "true");
+    EXPECT_EQ(Control("script-component-0-useCameraLagSubstepping-0")->GetValue(), "true");
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    SetValue("script-component-0-targetOffset-1", "40");
+    SetValue("script-component-0-collisionMask-0", "3");
+    SelectOption("script-component-0-enableCameraLag-0", "true");
+    std::string requests;
+    for (const auto& action : runtimeSink.actions) requests += action.script.dump() + "\n";
+    // RmlUi select 的同步 SetValue 可重入派发同值 change；作者服务按值幂等，检查实际请求语义。
+    ASSERT_GE(runtimeSink.actions.size(), 3u) << requests;
+    EXPECT_EQ(runtimeSink.actions[0].script["field"], "targetOffset");
+    EXPECT_EQ(runtimeSink.actions[0].script["axis"], 1);
+    EXPECT_EQ(runtimeSink.actions[0].script["value"], 40);
+    EXPECT_EQ(runtimeSink.actions[1].script["field"], "collisionMask");
+    EXPECT_EQ(runtimeSink.actions[1].script["value"], 3);
+    for (size_t index = 2; index < runtimeSink.actions.size(); ++index)
+    {
+        EXPECT_EQ(runtimeSink.actions[index].script["field"], "enableCameraLag");
+        EXPECT_EQ(runtimeSink.actions[index].script["value"], true);
+    }
+}
+
+TEST_F(EditorUiTest, SpringArmBlueprintFieldsRefreshFromDocumentAndCoalesceEdits)
+{
+    OpenBlueprintAsset();
+    snapshot.blueprintDocuments[0].document["components"][0] = {
+        {"id", "pivot"}, {"type", "springArm"}, {"targetOffset", {0, 30, 0}},
+        {"cameraLagSpeed", 7}, {"inheritYaw", false}};
+    ++snapshot.blueprintDocuments[0].documentRevision;
+    Refresh();
+    EXPECT_EQ(Control("blueprint-asset-component-0-targetOffset-1")->GetValue(), "30");
+    EXPECT_EQ(Control("blueprint-asset-component-0-cameraLagSpeed-0")->GetValue(), "7");
+    EXPECT_EQ(Control("blueprint-asset-component-0-inheritYaw-0")->GetValue(), "false");
+    ASSERT_NE(document->GetElementById("blueprint-asset-component-instance-0-targetOffset"), nullptr);
+    EXPECT_TRUE(sink.commands.empty());
+    SetValue("blueprint-asset-component-0-collisionMask-0", "3");
+    SetValue("blueprint-asset-component-0-cameraLagMaxTimeStep-0", "0.01");
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    const auto& changes = std::get<ModifyAssetDocumentPayload>(sink.commands[0].payload).changes;
+    const auto& arm = std::get<nlohmann::json>(changes[0].value)[0];
+    EXPECT_EQ(arm["collisionMask"], 3);
+    EXPECT_DOUBLE_EQ(arm["cameraLagMaxTimeStep"].get<double>(), 0.01);
 }
 
 TEST_F(EditorUiTest, InheritedComponentControlsAreReadOnlyAndRefreshEmitsNoEdits)
@@ -2895,6 +2954,711 @@ TEST_F(ModelPreviewInputTest, FrameButtonRequestsCameraOnly)
     document->GetElementById("resource-frame")->DispatchEvent("click", {});
     ASSERT_EQ(runtimeSink.actions.size(), 1u);
     EXPECT_EQ(runtimeSink.actions.back().previewCamera.mode, ModelPreviewNavigation::Frame);
+}
+
+TEST_F(ModelPreviewInputTest, SkeletalControlsUseFrozenValuesAndPublishedGeneration)
+{
+    UiViewModelSnapshot view;
+    view.animationWorldGeneration = 100;
+    view.animationJointCount = 91;
+    view.animationClips = {"Walk", "Idle"};
+    view.animationClip = 0;
+    view.animationDuration = 1.0f;
+    view.animationTime = 0.25f;
+    view.animationPlaying = true;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    EXPECT_EQ(document->GetElementById("resource-animation-tools")->GetProperty("display")->Get<Rml::Style::Display>(),
+        Rml::Style::Display::Flex);
+    document->GetElementById("resource-animation-pause")->DispatchEvent("click", {});
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::ControlAnimationPreview);
+    EXPECT_EQ(runtimeSink.actions.back().stringValue, "play");
+    EXPECT_EQ(runtimeSink.actions.back().previewCamera.worldGeneration, 100u);
+    EXPECT_FLOAT_EQ(runtimeSink.actions.back().floatValue, 0);
+    auto* timeline = dynamic_cast<Rml::ElementFormControl*>(
+        document->GetElementById("resource-animation-time"));
+    ASSERT_NE(timeline, nullptr);
+    timeline->SetValue("0.75");
+    ASSERT_EQ(runtimeSink.actions.size(), 2u);
+    EXPECT_EQ(runtimeSink.actions.back().stringValue, "seek");
+    EXPECT_FLOAT_EQ(runtimeSink.actions.back().floatValue, 0.75f);
+    auto* clip = dynamic_cast<Rml::ElementFormControlSelect*>(document->GetElementById("resource-animation-clip"));
+    ASSERT_NE(clip, nullptr);
+    clip->SetSelection(1);
+    ASSERT_EQ(runtimeSink.actions.size(), 3u);
+    EXPECT_EQ(runtimeSink.actions.back().stringValue, "clip");
+    EXPECT_FLOAT_EQ(runtimeSink.actions.back().floatValue, 1);
+}
+
+TEST_F(ModelPreviewInputTest, MotionFeaturesUpdateInPlaceWithoutEmittingCommands)
+{
+    UiViewModelSnapshot view;
+    view.animationWorldGeneration = 100;
+    view.animationJointCount = 91;
+    view.animationFeatureChannels = {"pelvis.position.y", "<foot>.velocity.z"};
+    view.animationFeatures = {90, 200};
+    view.animationFeatureStatus = "Root heading | cm, cm/s";
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    auto* first = document->GetElementById("motion-feature-0");
+    ASSERT_NE(first, nullptr);
+    EXPECT_EQ(first->GetInnerRML(), "90");
+    EXPECT_NE(document->GetElementById("resource-motion-values")->GetInnerRML().find("&lt;foot&gt;"),
+        std::string::npos);
+    view.animationFeatures[0] = 91;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    EXPECT_EQ(document->GetElementById("motion-feature-0"), first);
+    EXPECT_EQ(first->GetInnerRML(), "91");
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    view.animationWorldGeneration = 99;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    EXPECT_FALSE(document->GetElementById("resource-motion-features")->IsVisible(true));
+}
+
+TEST_F(EditorUiTest, MotionCheckboxEmitsOneGenerationGatedActionAndRefreshIsSilent)
+{
+    UiViewModelSnapshot view;
+    view.motionWorldGeneration = 17;
+    auto debug = std::make_shared<Animation::MotionDebugView>();
+    view.motionDebug = debug;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    EXPECT_EQ(document->GetElementById("viewport-motion-status")->GetProperty("display")->Get<Rml::Style::Display>(),
+        Rml::Style::Display::None);
+    Click("#viewport-motion-debug");
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions[0].type, UiActionType::ControlMotionDebug);
+    EXPECT_EQ(runtimeSink.actions[0].intValue, 1);
+    EXPECT_EQ(runtimeSink.actions[0].previewCamera.worldGeneration, 17u);
+    debug = std::make_shared<Animation::MotionDebugView>();
+    debug->enabled = true;
+    debug->summary = "history ready";
+    view.motionDebug = debug;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    EXPECT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_TRUE(document->GetElementById("viewport-motion-debug")->HasAttribute("checked"));
+    EXPECT_EQ(document->GetElementById("viewport-motion-status")->GetProperty("display")->Get<Rml::Style::Display>(),
+        Rml::Style::Display::Block);
+    view.offlineMode = true;
+    panel->UpdateRuntimeView(view);
+    EXPECT_TRUE(document->GetElementById("viewport-motion-debug")->HasAttribute("disabled"));
+    EXPECT_EQ(document->GetElementById("viewport-motion-status")->GetProperty("display")->Get<Rml::Style::Display>(),
+        Rml::Style::Display::None);
+}
+
+TEST_F(EditorUiTest, MotionLabelAndSummaryRemainInsideViewportAtSupportedSizes)
+{
+    snapshot.activeDocument.reset();
+    snapshot.documentTabs.clear();
+    snapshot.selectedDocumentPath.clear();
+    Refresh();
+    UiViewModelSnapshot view;
+    view.motionWorldGeneration = 17;
+    auto debug = std::make_shared<Animation::MotionDebugView>();
+    debug->enabled = true;
+    debug->summary = "History 67 | Query ready | Cyan: actual | Amber: prediction (no collision)";
+    view.motionDebug = debug;
+    panel->UpdateRuntimeView(view);
+    for (const auto size : {Rml::Vector2i(960, 540), Rml::Vector2i(1280, 720), Rml::Vector2i(1920, 1080)})
+    {
+        context->SetDimensions(size);
+        Refresh();
+        auto* label = document->GetElementById("viewport-motion-label");
+        auto* status = document->GetElementById("viewport-motion-status");
+        auto* viewport = status->GetParentNode();
+        ASSERT_TRUE(label->IsVisible(true));
+        EXPECT_GT(label->GetClientWidth(), 30);
+        EXPECT_GT(status->GetClientWidth(), 200);
+        EXPECT_LE(status->GetClientHeight(), 56);
+        const auto origin = status->GetAbsoluteOffset();
+        const auto viewportOrigin = viewport->GetAbsoluteOffset();
+        EXPECT_GE(origin.x, viewportOrigin.x);
+        EXPECT_GE(origin.y, viewportOrigin.y);
+        EXPECT_LE(origin.x + status->GetClientWidth(), viewportOrigin.x + viewport->GetClientWidth());
+        EXPECT_LE(origin.y + status->GetClientHeight(), viewportOrigin.y + viewport->GetClientHeight());
+        EXPECT_LE(status->GetScrollHeight(), status->GetClientHeight() + 1);
+    }
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+namespace
+{
+std::shared_ptr<Animation::MotionDebugView> MatchingDebugFixture()
+{
+    auto debug = std::make_shared<Animation::MotionDebugView>();
+    debug->enabled = true;
+    debug->summary = "History ready | Query ready";
+    debug->componentIdentity = "character/body";
+    debug->databaseIdentity = "0123456789abcdef-database";
+    debug->payloadIdentity = "abcdef0123456789-statistics";
+    debug->decisionReason = "continuing";
+    debug->queryReady = true;
+    debug->features = {1, 2, 3, 4};
+    debug->normalizedQuery = {0.1f, 0.2f, 0.3f, 0.4f};
+    debug->searchCount = 7;
+    debug->allowedFrameCount = 300;
+    debug->policyRejectedCount = 10;
+    Animation::MotionCandidate candidate;
+    candidate.clipId = "Walk";
+    candidate.time = 0.4f;
+    candidate.trajectoryCost = 1.25;
+    candidate.poseCost = 2.5;
+    candidate.distanceCost = 3.75;
+    candidate.policyCost = -0.5;
+    candidate.totalCost = 3.25;
+    candidate.continuing = true;
+    debug->selected = candidate;
+    debug->continuation = candidate;
+    for (size_t rank = 0; rank < 5; ++rank)
+    {
+        candidate.clipId = "Candidate" + std::to_string(rank + 1);
+        candidate.continuing = false;
+        debug->topCandidates.push_back(candidate);
+    }
+    return debug;
+}
+}
+
+TEST_F(EditorUiTest, MotionMatchingShowsQueryGenerationSelectedContinuationAndFiveCostRows)
+{
+    UiViewModelSnapshot view;
+    view.motionWorldGeneration = 17;
+    view.motionDebug = MatchingDebugFixture();
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    auto* rows = document->GetElementById("motion-matching-rows");
+    ASSERT_EQ(rows->GetNumChildren(), 7);
+    EXPECT_EQ(document->GetElementById("motion-matching-title")->GetInnerRML(),
+        "Motion Matching | #7 | DB 0123456789ab");
+    EXPECT_EQ(document->GetElementById("motion-matching-database")->GetInnerRML(),
+        "DB 0123456789ab | stats abcdef012345");
+    EXPECT_NE(document->GetElementById("motion-matching-query")->GetInnerRML().find("Query 4D ready"),
+        std::string::npos);
+    EXPECT_NE(document->GetElementById("motion-matching-query")->GetAttribute<std::string>("title", "").find(
+        "[3]: 4 / 0.4"), std::string::npos);
+    EXPECT_NE(document->GetElementById("motion-matching-database")->GetAttribute<std::string>("title", "").find(
+        "0123456789abcdef-database"), std::string::npos);
+    EXPECT_NE(document->GetElementById("motion-matching-decision")->GetInnerRML().find("allowed 300"),
+        std::string::npos);
+    EXPECT_EQ(document->GetElementById("motion-candidate-0-clip")->GetInnerRML(), "Walk");
+    EXPECT_EQ(document->GetElementById("motion-candidate-0-time")->GetInnerRML(), "0.4s");
+    EXPECT_EQ(document->GetElementById("motion-candidate-1-reason")->GetInnerRML(), "continuing");
+    EXPECT_EQ(document->GetElementById("motion-candidate-6-clip")->GetInnerRML(), "Candidate5");
+    EXPECT_EQ(document->GetElementById("motion-candidate-0-trajectory")->GetInnerRML(), "1.25");
+    EXPECT_EQ(document->GetElementById("motion-candidate-0-pose")->GetInnerRML(), "2.5");
+    EXPECT_EQ(document->GetElementById("motion-candidate-0-policy")->GetInnerRML(), "-0.5");
+    EXPECT_EQ(document->GetElementById("motion-candidate-0-total")->GetInnerRML(), "3.25");
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, MotionMatchingEscapesAllProducerTextAndShowsRejectedCandidates)
+{
+    UiViewModelSnapshot view;
+    view.motionWorldGeneration = 17;
+    auto debug = MatchingDebugFixture();
+    debug->selected->clipId = "Walk<b> & body";
+    debug->decisionReason = "<b>locked</b>";
+    debug->databaseIdentity = "<img src='database'/>";
+    debug->payloadIdentity = "<img src='statistics'/>";
+    debug->componentIdentity = "<img src='component'/>";
+    debug->channels = {"<img src='query'/>"};
+    debug->topCandidates[0].eligible = false;
+    debug->topCandidates[0].rejection = "<img src='x'/> & nearby";
+    view.motionDebug = debug;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    EXPECT_EQ(document->GetElementById("motion-candidate-0-clip")->GetInnerRML(),
+        "Walk&lt;b&gt; &amp; body");
+    EXPECT_EQ(document->QuerySelector("#viewport-motion-matching b"), nullptr);
+    EXPECT_EQ(document->QuerySelector("#motion-matching-rows img"), nullptr);
+    EXPECT_EQ(document->QuerySelector("#motion-matching-query img"), nullptr);
+    EXPECT_EQ(document->QuerySelector("#motion-query-details img"), nullptr);
+    Rml::ElementList icons;
+    document->QuerySelectorAll(icons, "#viewport-motion-matching img");
+    ASSERT_EQ(icons.size(), 3u);
+    EXPECT_EQ(icons[0]->GetParentNode()->GetId(), "motion-query-toggle");
+    EXPECT_EQ(icons[0]->GetAttribute<std::string>("src", ""), "icons/list.png");
+    EXPECT_EQ(icons[1]->GetParentNode()->GetId(), "motion-timeline-play");
+    EXPECT_EQ(icons[2]->GetParentNode()->GetId(), "motion-timeline-pause");
+    EXPECT_NE(document->GetElementById("motion-matching-decision")->GetInnerRML().find("&lt;b&gt;locked"),
+        std::string::npos);
+    EXPECT_TRUE(document->GetElementById("motion-candidate-2")->IsClassSet("motion-rejected"));
+    EXPECT_NE(document->GetElementById("motion-candidate-2-reason")->GetInnerRML().find(
+        "rejected: &lt;img"), std::string::npos);
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, MotionMatchingRefreshKeepsFixedSlotsAndPausedSnapshotsDoNotRelayout)
+{
+    UiViewModelSnapshot view;
+    view.motionWorldGeneration = 17;
+    view.scripts.state = ScriptPlayState::Paused;
+    auto debug = MatchingDebugFixture();
+    view.motionDebug = debug;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    Click("#motion-query-toggle");
+    Refresh();
+    auto* row = document->GetElementById("motion-candidate-2");
+    auto* value = document->GetElementById("motion-candidate-2-total");
+    auto updated = std::make_shared<Animation::MotionDebugView>(*debug);
+    ++updated->searchCount;
+    updated->topCandidates[0].totalCost = 9;
+    updated->queryUsesAchievedVelocity = true;
+    view.motionDebug = updated;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    EXPECT_EQ(document->GetElementById("motion-candidate-2"), row);
+    EXPECT_EQ(document->GetElementById("motion-candidate-2-total"), value);
+    EXPECT_EQ(value->GetInnerRML(), "9");
+    EXPECT_NE(document->GetElementById("motion-matching-query")->GetInnerRML().find("blocked"),
+        std::string::npos);
+    static Rml::ElementInstancerGeneric<LayoutCounterElement> instancer;
+    auto counter = instancer.InstanceElement(document, "div", {});
+    counter->SetInstancer(&instancer);
+    auto* observed = static_cast<LayoutCounterElement*>(counter.get());
+    counter->SetProperty("position", "absolute");
+    counter->SetProperty("width", "1px");
+    counter->SetProperty("height", "1px");
+    document->AppendChild(std::move(counter));
+    Refresh();
+    const auto layouts = observed->layouts;
+    const auto writes = panel->PanelPropertyWriteCount();
+    for (int frame = 0; frame < 12; ++frame)
+    {
+        system.timeOffset += 0.2;
+        view.motionDebug = std::make_shared<const Animation::MotionDebugView>(*updated);
+        panel->UpdateRuntimeView(view);
+        Refresh();
+        context->Render();
+        EXPECT_EQ(document->GetElementById("motion-candidate-2"), row);
+        EXPECT_EQ(document->GetElementById("motion-candidate-2-total"), value);
+        EXPECT_EQ(observed->layouts, layouts);
+        EXPECT_EQ(panel->PanelPropertyWriteCount(), writes);
+        EXPECT_NE(document->GetElementById("motion-matching-query")->GetInnerRML().find("blocked"),
+            std::string::npos);
+    }
+    auto restored = std::make_shared<Animation::MotionDebugView>(*updated);
+    restored->queryUsesAchievedVelocity = false;
+    view.motionDebug = restored;
+    panel->UpdateRuntimeView(view);
+    EXPECT_EQ(document->GetElementById("motion-matching-query")->GetInnerRML().find("blocked"),
+        std::string::npos);
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, MotionMatchingHidesWithoutDatabaseWhenDisabledOfflineOrWorldless)
+{
+    UiViewModelSnapshot view;
+    view.motionWorldGeneration = 17;
+    auto debug = MatchingDebugFixture();
+    view.motionDebug = debug;
+    panel->UpdateRuntimeView(view);
+    auto* table = document->GetElementById("viewport-motion-matching");
+    EXPECT_EQ(table->GetProperty("display")->Get<Rml::Style::Display>(), Rml::Style::Display::Block);
+    debug = std::make_shared<Animation::MotionDebugView>(*debug);
+    debug->databaseIdentity.clear();
+    view.motionDebug = debug;
+    panel->UpdateRuntimeView(view);
+    EXPECT_EQ(table->GetProperty("display")->Get<Rml::Style::Display>(), Rml::Style::Display::None);
+    // P4 的历史 summary 不依赖 MM 资源，新增表隐藏不影响已有诊断。
+    EXPECT_EQ(document->GetElementById("viewport-motion-status")->GetProperty("display")->Get<Rml::Style::Display>(),
+        Rml::Style::Display::Block);
+    debug = MatchingDebugFixture();
+    debug->enabled = false;
+    view.motionDebug = debug;
+    panel->UpdateRuntimeView(view);
+    EXPECT_EQ(table->GetProperty("display")->Get<Rml::Style::Display>(), Rml::Style::Display::None);
+    debug = MatchingDebugFixture();
+    view.motionDebug = debug;
+    view.offlineMode = true;
+    panel->UpdateRuntimeView(view);
+    EXPECT_EQ(table->GetProperty("display")->Get<Rml::Style::Display>(), Rml::Style::Display::None);
+    view.offlineMode = false;
+    view.motionWorldGeneration = 0;
+    panel->UpdateRuntimeView(view);
+    EXPECT_EQ(table->GetProperty("display")->Get<Rml::Style::Display>(), Rml::Style::Display::None);
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, MotionMatchingTableFitsSupportedViewportsAndScrollDoesNotTargetTheScene)
+{
+    snapshot.activeDocument.reset();
+    snapshot.documentTabs.clear();
+    snapshot.selectedDocumentPath.clear();
+    Refresh();
+    UiViewModelSnapshot view;
+    view.motionWorldGeneration = 17;
+    view.motionDebug = MatchingDebugFixture();
+    panel->UpdateRuntimeView(view);
+    for (const auto size : {Rml::Vector2i(960, 540), Rml::Vector2i(1280, 720), Rml::Vector2i(1920, 1080)})
+    {
+        context->SetDimensions(size);
+        Refresh();
+        auto* table = document->GetElementById("viewport-motion-matching");
+        auto* surface = document->GetElementById("editor-viewport-surface");
+        auto* toolbar = document->GetElementById("viewport-toolbar");
+        const auto origin = table->GetAbsoluteOffset(Rml::BoxArea::Border);
+        const auto tableSize = table->GetBox().GetSize(Rml::BoxArea::Border);
+        const auto surfaceOrigin = surface->GetAbsoluteOffset(Rml::BoxArea::Content);
+        const auto surfaceSize = surface->GetBox().GetSize(Rml::BoxArea::Content);
+        const auto toolbarOrigin = toolbar->GetAbsoluteOffset(Rml::BoxArea::Border);
+        const auto toolbarSize = toolbar->GetBox().GetSize(Rml::BoxArea::Border);
+        EXPECT_GT(tableSize.x, 200);
+        EXPECT_GT(tableSize.y, 50);
+        EXPECT_GE(origin.x, surfaceOrigin.x + surfaceSize.x * 0.5f);
+        EXPECT_GE(origin.y, toolbarOrigin.y + toolbarSize.y);
+        EXPECT_LE(origin.x + tableSize.x, surfaceOrigin.x + surfaceSize.x + 1);
+        EXPECT_LE(origin.y + tableSize.y, surfaceOrigin.y + surfaceSize.y + 1);
+        const bool overflowing = table->GetScrollHeight() > table->GetClientHeight();
+        if (size.y == 540) EXPECT_TRUE(overflowing);
+        auto* summary = document->GetElementById("viewport-motion-status");
+        EXPECT_TRUE(summary->IsClassSet("motion-matching-summary"));
+        EXPECT_LE(summary->GetClientHeight(), 20);
+        EXPECT_LE(summary->GetScrollHeight(), summary->GetClientHeight() + 1);
+        EXPECT_EQ(summary->GetInnerRML().find("Candidate"), std::string::npos);
+        if (size.y >= 720)
+        {
+            table->SetScrollTop(0);
+            context->Update();
+            auto* fifthRow = document->GetElementById("motion-candidate-4");
+            const auto lastOrigin = fifthRow->GetAbsoluteOffset(Rml::BoxArea::Border);
+            const auto lastSize = fifthRow->GetBox().GetSize(Rml::BoxArea::Border);
+            const auto contentOrigin = table->GetAbsoluteOffset(Rml::BoxArea::Content);
+            EXPECT_LE(lastOrigin.y + lastSize.y, contentOrigin.y + table->GetClientHeight() + 1);
+        }
+        EXPECT_FALSE(panel->IsSceneViewportElement(document->GetElementById("motion-candidate-0-clip")));
+        table->SetScrollTop(40);
+        context->Update();
+        if (overflowing) EXPECT_GT(table->GetScrollTop(), 0);
+        else
+        {
+            EXPECT_EQ(table->GetScrollTop(), 0);
+            auto* lastRow = document->GetElementById("motion-candidate-6");
+            const auto lastOrigin = lastRow->GetAbsoluteOffset(Rml::BoxArea::Border);
+            const auto lastSize = lastRow->GetBox().GetSize(Rml::BoxArea::Border);
+            EXPECT_LE(lastOrigin.y + lastSize.y, origin.y + tableSize.y);
+        }
+        EXPECT_EQ(document->GetElementById("motion-matching-rows")->GetNumChildren(), 7);
+    }
+    EXPECT_TRUE(system.errors.empty()) << Errors();
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, MotionMatchingSummaryDoesNotDuplicateTheCandidateTable)
+{
+    UiViewModelSnapshot view;
+    view.motionWorldGeneration = 17;
+    auto debug = MatchingDebugFixture();
+    debug->summary = "MM header\nSelected Walk cost 72\nCandidate1 cost 73\nCandidate2 cost 74";
+    view.motionDebug = debug;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    auto* summary = document->GetElementById("viewport-motion-status");
+    EXPECT_EQ(summary->GetInnerRML(),
+        "MM #7 | continuing | Cyan: actual | Amber: desired/no-collision | Red: query");
+    EXPECT_EQ(summary->GetInnerRML().find("Candidate"), std::string::npos);
+    debug = std::make_shared<Animation::MotionDebugView>(*debug);
+    debug->databaseIdentity.clear();
+    debug->summary = "P4 actual history | prediction (no collision)";
+    view.motionDebug = debug;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    EXPECT_EQ(summary->GetInnerRML(), debug->summary);
+    EXPECT_FALSE(summary->IsClassSet("motion-matching-summary"));
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, MotionMatchingQueryExpandsAllChannelsWithRealPointerAndKeepsFixedNodes)
+{
+    snapshot.activeDocument.reset();
+    snapshot.documentTabs.clear();
+    snapshot.selectedDocumentPath.clear();
+    Refresh();
+    UiViewModelSnapshot view;
+    view.motionWorldGeneration = 17;
+    view.scripts.state = ScriptPlayState::Paused;
+    auto debug = MatchingDebugFixture();
+    debug->databaseIdentity = std::string(64, 'a');
+    debug->payloadIdentity = std::string(64, 'b');
+    debug->features.clear();
+    debug->normalizedQuery.clear();
+    for (int channel = 0; channel < 42; ++channel)
+    {
+        debug->channels.push_back("joint<" + std::to_string(channel) + ">.velocity.x");
+        debug->features.push_back(static_cast<float>(channel));
+        debug->normalizedQuery.push_back(channel / 10.0f);
+    }
+    view.motionDebug = debug;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    auto* details = document->GetElementById("motion-query-details");
+    EXPECT_EQ(details->GetProperty("display")->Get<Rml::Style::Display>(), Rml::Style::Display::None);
+    auto* candidate = document->GetElementById("motion-candidate-0");
+    auto point = candidate->GetAbsoluteOffset() + Rml::Vector2f(20, 5);
+    context->ProcessMouseMove(static_cast<int>(point.x), static_cast<int>(point.y), 0);
+    context->Update();
+    auto* fullCandidate = document->GetElementById("motion-candidate-0-detail");
+    EXPECT_EQ(fullCandidate->GetProperty("display")->Get<Rml::Style::Display>(), Rml::Style::Display::Block);
+    EXPECT_EQ(fullCandidate->GetInnerRML(), "Walk @ 0.4s | continuing");
+
+    auto* toggle = document->GetElementById("motion-query-toggle");
+    point = toggle->GetAbsoluteOffset() + toggle->GetBox().GetSize() * 0.5f;
+    context->ProcessMouseMove(static_cast<int>(point.x), static_cast<int>(point.y), 0);
+    context->Update();
+    EXPECT_EQ(document->GetElementById("motion-query-hint")->GetProperty("display")->Get<Rml::Style::Display>(),
+        Rml::Style::Display::Block);
+    context->ProcessMouseButtonDown(0, 0);
+    context->ProcessMouseButtonUp(0, 0);
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("viewport-motion-matching")->IsClassSet("query-expanded"));
+    EXPECT_EQ(details->GetProperty("display")->Get<Rml::Style::Display>(), Rml::Style::Display::Block);
+    EXPECT_EQ(document->GetElementById("motion-query-channels")->GetNumChildren(), 42);
+    EXPECT_EQ(document->GetElementById("motion-query-database")->GetInnerRML(), "DB " + debug->databaseIdentity);
+    EXPECT_EQ(document->GetElementById("motion-query-payload")->GetInnerRML(), "Statistics " + debug->payloadIdentity);
+    EXPECT_EQ(document->QuerySelector("#motion-query-details joint"), nullptr);
+    auto* last = document->GetElementById("motion-query-channel-41");
+    auto* lastValue = document->GetElementById("motion-query-channel-41-raw");
+    EXPECT_EQ(lastValue->GetInnerRML(), "Raw 41");
+    EXPECT_EQ(document->GetElementById("motion-query-channel-41-normalized")->GetInnerRML(), "N 4.1");
+    auto* table = document->GetElementById("viewport-motion-matching");
+    context->ProcessMouseMove(0, 0, 0);
+    table->SetScrollTop(table->GetScrollHeight());
+    context->Update();
+    const auto origin = table->GetAbsoluteOffset(Rml::BoxArea::Border);
+    const auto size = table->GetBox().GetSize(Rml::BoxArea::Border);
+    const auto lastOrigin = last->GetAbsoluteOffset(Rml::BoxArea::Border);
+    const auto lastSize = last->GetBox().GetSize(Rml::BoxArea::Border);
+    EXPECT_GE(lastOrigin.y, origin.y);
+    EXPECT_LE(lastOrigin.y + lastSize.y, origin.y + size.y);
+    EXPECT_FALSE(panel->IsSceneViewportElement(lastValue));
+
+    auto updated = std::make_shared<Animation::MotionDebugView>(*debug);
+    ++updated->searchCount;
+    updated->features[41] = 53;
+    view.motionDebug = updated;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    EXPECT_EQ(document->GetElementById("motion-query-channel-41"), last);
+    EXPECT_EQ(document->GetElementById("motion-query-channel-41-raw"), lastValue);
+    EXPECT_EQ(lastValue->GetInnerRML(), "Raw 53");
+    table->SetScrollTop(0);
+    context->Update();
+    point = toggle->GetAbsoluteOffset() + toggle->GetBox().GetSize() * 0.5f;
+    context->ProcessMouseMove(static_cast<int>(point.x), static_cast<int>(point.y), 0);
+    context->ProcessMouseButtonDown(0, 0);
+    context->ProcessMouseButtonUp(0, 0);
+    Refresh();
+    EXPECT_FALSE(table->IsClassSet("query-expanded"));
+    EXPECT_EQ(details->GetProperty("display")->Get<Rml::Style::Display>(), Rml::Style::Display::None);
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    EXPECT_TRUE(system.errors.empty()) << Errors();
+}
+
+TEST_F(EditorUiTest, MotionTimelineSeeksAndPlaysOnlyTheFocusedPlayback)
+{
+    snapshot.activeDocument.reset();
+    snapshot.documentTabs.clear();
+    snapshot.selectedDocumentPath.clear();
+    Refresh();
+    UiViewModelSnapshot view;
+    view.motionWorldGeneration = 17;
+    auto debug = MatchingDebugFixture();
+    debug->playbackClipId = "Walk";
+    debug->playbackTime = 0.8f;
+    debug->playbackDuration = 2.5f;
+    debug->playbackPlaying = true;
+    view.motionDebug = debug;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    auto* timeline = dynamic_cast<Rml::ElementFormControl*>(
+        document->GetElementById("motion-timeline-seek"));
+    ASSERT_NE(timeline, nullptr);
+    EXPECT_EQ(timeline->GetAttribute<std::string>("max", ""), "2.5");
+    EXPECT_FLOAT_EQ(std::stof(timeline->GetValue()), 0.8f);
+    EXPECT_TRUE(document->GetElementById("motion-timeline-play")->HasAttribute("disabled"));
+    EXPECT_FALSE(document->GetElementById("motion-timeline-pause")->HasAttribute("disabled"));
+    EXPECT_NE(document->GetElementById("motion-timeline-status")->GetInnerRML().find("0.8 / 2.5 s"),
+        std::string::npos);
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    // 拖动只发被聚焦网格的 seek；暂停状态由原生 SetPlaying(false) 保持。
+    timeline->SetValue("0.75");
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::ControlScriptAnimation);
+    EXPECT_EQ(runtimeSink.actions.back().stringValue, "character/body");
+    EXPECT_EQ(runtimeSink.actions.back().previewCamera.worldGeneration, 17u);
+    EXPECT_EQ(runtimeSink.actions.back().intValue, 0);
+    EXPECT_FLOAT_EQ(runtimeSink.actions.back().floatValue, 0.75f);
+    Click("#motion-timeline-pause");
+    ASSERT_EQ(runtimeSink.actions.size(), 2u);
+    EXPECT_EQ(runtimeSink.actions.back().intValue, 1);
+    EXPECT_FLOAT_EQ(runtimeSink.actions.back().floatValue, 0.0f);
+    // 引擎下一帧回传暂停后的状态，Play 才重新可用。
+    auto paused = std::make_shared<Animation::MotionDebugView>(*debug);
+    paused->playbackPlaying = false;
+    view.motionDebug = paused;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    Click("#motion-timeline-play");
+    ASSERT_EQ(runtimeSink.actions.size(), 3u);
+    EXPECT_FLOAT_EQ(runtimeSink.actions.back().floatValue, 1.0f);
+    // 没有聚焦播放器或离线时禁用时间轴且不产生命令。
+    debug = MatchingDebugFixture();
+    view.motionDebug = debug;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("motion-timeline-seek")->HasAttribute("disabled"));
+    const size_t actions = runtimeSink.actions.size();
+    document->GetElementById("motion-timeline-play")->DispatchEvent("click", {});
+    EXPECT_EQ(runtimeSink.actions.size(), actions);
+    view.offlineMode = true;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("motion-timeline-seek")->HasAttribute("disabled"));
+    EXPECT_TRUE(system.errors.empty()) << Errors();
+}
+
+TEST_F(EditorUiTest, MotionReplaySelectsFrozenHistoryWithoutPlaybackSeek)
+{
+    snapshot.activeDocument.reset();
+    snapshot.documentTabs.clear();
+    snapshot.selectedDocumentPath.clear();
+    Refresh();
+    UiViewModelSnapshot view;
+    view.motionWorldGeneration = 17;
+    auto debug = MatchingDebugFixture();
+    debug->playbackClipId = "Walk";
+    debug->playbackTime = 1.25f;
+    debug->playbackDuration = 4.0f;
+    debug->playbackPlaying = true;
+    debug->replayFrames = 12;
+    debug->replayFrame = 11;
+    view.motionDebug = debug;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    auto* toggle = document->GetElementById("motion-replay");
+    auto* seek = dynamic_cast<Rml::ElementFormControl*>(document->GetElementById("motion-replay-seek"));
+    ASSERT_NE(toggle, nullptr);
+    ASSERT_NE(seek, nullptr);
+    EXPECT_FALSE(toggle->HasAttribute("disabled"));
+    EXPECT_EQ(seek->GetAttribute<std::string>("max", ""), "11");
+    EXPECT_NE(document->GetElementById("motion-replay-status")->GetInnerRML().find("live 11/12"),
+        std::string::npos);
+    toggle->SetAttribute("checked", "");
+    toggle->DispatchEvent("click", {});
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::ControlMotionReplay);
+    EXPECT_EQ(runtimeSink.actions.back().intValue, 11);
+    EXPECT_EQ(runtimeSink.actions.back().previewCamera.worldGeneration, 17u);
+    seek->SetValue("3");
+    ASSERT_EQ(runtimeSink.actions.size(), 2u);
+    EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::ControlMotionReplay);
+    EXPECT_EQ(runtimeSink.actions.back().intValue, 3);
+    // World 返回的历史快照标记 replay；面板回显选中帧而不是再次发命令。
+    debug = std::make_shared<Animation::MotionDebugView>(*debug);
+    debug->replayActive = true;
+    debug->replayFrame = 3;
+    view.motionDebug = debug;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("motion-replay")->HasAttribute("checked"));
+    EXPECT_NE(document->GetElementById("motion-replay-status")->GetInnerRML().find("replay 3/12"),
+        std::string::npos);
+    EXPECT_EQ(runtimeSink.actions.size(), 2u);
+    debug = MatchingDebugFixture();
+    view.motionDebug = debug;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("motion-replay")->HasAttribute("disabled"));
+    EXPECT_TRUE(document->GetElementById("motion-replay-seek")->HasAttribute("disabled"));
+    EXPECT_TRUE(system.errors.empty()) << Errors();
+}
+
+TEST_F(EditorUiTest, DebugDrawMenuProducesGenerationGatedFiltersAndClearWithoutRefreshCommands)
+{
+    UiViewModelSnapshot view; view.motionWorldGeneration = 17;
+    auto debug = std::make_shared<Debug::Snapshot>();
+    debug->categories = {{"Physics", true, 2}, {"AI <Paths>", false, 1}};
+    debug->owners = {"Script/player", "Native"};
+    debug->storedCount = 3; debug->visibleCount = 2; view.debugDraw = debug;
+    panel->UpdateRuntimeView(view); Refresh();
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    Click("#viewport-debug-draw");
+    EXPECT_TRUE(document->GetElementById("menu-debug-draw")->IsClassSet("open"));
+    Click("#debug-draw-enabled");
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::ControlDebugDraw);
+    EXPECT_EQ(runtimeSink.actions.back().previewCamera.worldGeneration, 17u);
+    EXPECT_EQ(runtimeSink.actions.back().debugDrawControl.action, Debug::ControlAction::Enabled);
+    EXPECT_FALSE(runtimeSink.actions.back().debugDrawControl.enabled);
+    EXPECT_TRUE(document->GetElementById("menu-debug-draw")->IsClassSet("open"));
+    auto* category = document->QuerySelector("[data-action=debug-draw-category]");
+    ASSERT_NE(category, nullptr);
+    category->DispatchEvent("click", {});
+    ASSERT_EQ(runtimeSink.actions.size(), 2u);
+    EXPECT_EQ(runtimeSink.actions.back().debugDrawControl.name, "Physics");
+    EXPECT_FALSE(runtimeSink.actions.back().debugDrawControl.enabled);
+    EXPECT_EQ(document->QuerySelector("Paths"), nullptr);
+    auto* ownerSelect = dynamic_cast<Rml::ElementFormControlSelect*>(document->GetElementById("debug-draw-owner"));
+    ASSERT_NE(ownerSelect, nullptr);
+    ownerSelect->SetSelection(1);
+    ASSERT_EQ(runtimeSink.actions.size(), 3u);
+    EXPECT_EQ(runtimeSink.actions.back().debugDrawControl.action, Debug::ControlAction::Owner);
+    EXPECT_EQ(runtimeSink.actions.back().debugDrawControl.name, "Script/player");
+    Click("#debug-draw-clear");
+    ASSERT_EQ(runtimeSink.actions.size(), 4u);
+    EXPECT_EQ(runtimeSink.actions.back().debugDrawControl.action, Debug::ControlAction::ClearAll);
+    panel->UpdateRuntimeView(view); Refresh();
+    EXPECT_EQ(runtimeSink.actions.size(), 4u);
+    view.offlineMode = true; panel->UpdateRuntimeView(view); Refresh();
+    EXPECT_TRUE(document->GetElementById("viewport-debug-draw")->HasAttribute("disabled"));
+    EXPECT_FALSE(document->GetElementById("menu-debug-draw")->IsClassSet("open"));
+    document->GetElementById("debug-draw-clear")->DispatchEvent("click", {});
+    EXPECT_EQ(runtimeSink.actions.size(), 4u);
+}
+
+TEST_F(EditorUiTest, DebugDrawMenuFitsViewportAndUsesBoundedCategoryScroll)
+{
+    snapshot.activeDocument.reset(); snapshot.documentTabs.clear(); snapshot.selectedDocumentPath.clear(); Refresh();
+    UiViewModelSnapshot view; view.motionWorldGeneration = 17;
+    auto debug = std::make_shared<Debug::Snapshot>();
+    for (int i = 0; i < 128; ++i) debug->categories.push_back({"Category " + std::to_string(i), true, 1});
+    view.debugDraw = debug; panel->UpdateRuntimeView(view); Refresh();
+    Click("#viewport-debug-draw");
+    for (const auto size : {Rml::Vector2i(960, 540), Rml::Vector2i(1280, 720), Rml::Vector2i(1920, 1080)})
+    {
+        context->SetDimensions(size); Refresh();
+        auto* popup = document->GetElementById("debug-draw-popup");
+        auto* categories = document->GetElementById("debug-draw-categories");
+        EXPECT_TRUE(popup->IsVisible(true)); EXPECT_LE(categories->GetClientHeight(), 191);
+        EXPECT_GT(categories->GetScrollHeight(), categories->GetClientHeight());
+        const auto p = popup->GetAbsoluteOffset();
+        EXPECT_GE(p.x, 0); EXPECT_LE(p.x + popup->GetClientWidth(), size.x);
+        EXPECT_GE(p.y, 0); EXPECT_LE(p.y + popup->GetClientHeight(), size.y);
+    }
+}
+
+TEST_F(ModelPreviewInputTest, StaticOrStalePreviewCannotControlAnimation)
+{
+    UiViewModelSnapshot view;
+    view.animationWorldGeneration = 99;
+    view.animationJointCount = 91;
+    panel->UpdateRuntimeView(view);
+    Refresh();
+    document->GetElementById("resource-animation-pause")->DispatchEvent("click", {});
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    EXPECT_EQ(document->GetElementById("resource-animation-tools")->GetProperty("display")->Get<Rml::Style::Display>(),
+        Rml::Style::Display::None);
+    panel->UpdateRuntimeView(UiViewModelSnapshot{});
+    Refresh();
+    document->GetElementById("resource-animation-play")->DispatchEvent("click", {});
+    EXPECT_TRUE(runtimeSink.actions.empty());
 }
 
 TEST_F(ModelPreviewInputTest, ReloadCancelsNavigationUntilPublication)

@@ -1,0 +1,3 @@
+add_executable(debug_draw_tests drawDebugTests.cpp)
+target_link_libraries(debug_draw_tests PRIVATE vl_debug_draw)
+vulkanlearn_add_gtest(debug_draw_tests)

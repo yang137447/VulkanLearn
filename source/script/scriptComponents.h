@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Eigen/Geometry>
+#include <algorithm>
 #include <cmath>
 #include <map>
 #include <set>
@@ -47,7 +48,7 @@ inline void ValidateScriptComponents(const nlohmann::json& components)
     {
         if (!component.is_object()) throw std::invalid_argument("Component requires object");
         const auto type = component.value("type", "");
-        if (type != "mesh" && type != "scene" && type != "camera" && !IsScriptLight(type))
+        if (type != "mesh" && type != "scene" && type != "camera" && type != "springArm" && !IsScriptLight(type))
             throw std::invalid_argument("Unsupported component type");
         const auto id = ScriptComponentId(component);
         if (id.empty() || id.find_first_of("/\\|\0", 0, 4) != std::string::npos ||
@@ -59,7 +60,16 @@ inline void ValidateScriptComponents(const nlohmann::json& components)
                 field.key() != "position" && field.key() != "rotation" && field.key() != "scale" && field.key() != "collision" &&
                 !(type == "mesh" && (field.key() == "modelPath" || field.key() == "materialOverride")) &&
                 !(type == "camera" && (field.key() == "fov" || field.key() == "near_clip" ||
-                    field.key() == "far_clip" || field.key() == "autoActivate")) &&
+                    field.key() == "far_clip" || field.key() == "autoActivate" || field.key() == "priority")) &&
+                !(type == "springArm" && (field.key() == "targetArmLength" || field.key() == "socketOffset" ||
+                    field.key() == "targetOffset" || field.key() == "useCameraLagSubstepping" ||
+                    field.key() == "cameraLagMaxTimeStep" ||
+                    field.key() == "probeRadius" || field.key() == "doCollisionTest" || field.key() == "collisionMask" ||
+                    field.key() == "enableCameraLag" || field.key() == "cameraLagSpeed" ||
+                    field.key() == "cameraLagMaxDistance" || field.key() == "enableCameraRotationLag" ||
+                    field.key() == "cameraRotationLagSpeed" || field.key() == "usePawnControlRotation" ||
+                    field.key() == "inheritPitch" || field.key() == "inheritYaw" || field.key() == "inheritRoll" ||
+                    field.key() == "absoluteRotation" || field.key() == "rotationOffset" || field.key() == "drawDebug")) &&
                 !(IsScriptLight(type) && (field.key() == "color" || field.key() == "intensity" ||
                     field.key() == "intensityUnit" || field.key() == "visible" ||
                     (type == "spotLight" && (field.key() == "coneAngleInner" || field.key() == "coneAngleOuter")))))
@@ -88,6 +98,50 @@ inline void ValidateScriptComponents(const nlohmann::json& components)
                 throw std::invalid_argument("Invalid camera component projection");
             if (component.contains("autoActivate") && !component.at("autoActivate").is_boolean())
                 throw std::invalid_argument("Camera autoActivate requires boolean");
+            if (component.contains("priority") && (!component.at("priority").is_number() ||
+                !std::isfinite(component.at("priority").get<double>()) ||
+                std::floor(component.at("priority").get<double>()) != component.at("priority").get<double>() ||
+                component.at("priority").get<double>() < -100000 || component.at("priority").get<double>() > 100000))
+                throw std::invalid_argument("Camera priority requires integer");
+        }
+        if (type == "springArm")
+        {
+            for (const char* field : {"targetArmLength", "probeRadius"})
+                if (component.contains(field) && (!component.at(field).is_number() ||
+                    !std::isfinite(component.at(field).get<float>()) || component.at(field).get<float>() < 0 ||
+                    component.at(field).get<float>() > 100000))
+                    throw std::invalid_argument("SpringArm requires bounded finite numbers");
+            if (component.contains("socketOffset")) ValidateScriptVector(component.at("socketOffset"));
+            if (component.contains("targetOffset")) ValidateScriptVector(component.at("targetOffset"));
+            if (component.contains("doCollisionTest") && !component.at("doCollisionTest").is_boolean())
+                throw std::invalid_argument("SpringArm doCollisionTest requires boolean");
+            if (component.contains("collisionMask") && (!component.at("collisionMask").is_number() ||
+                !std::isfinite(component.at("collisionMask").get<double>()) ||
+                component.at("collisionMask").get<double>() < 0 || component.at("collisionMask").get<double>() > 65535 ||
+                std::floor(component.at("collisionMask").get<double>()) != component.at("collisionMask").get<double>()))
+                throw std::invalid_argument("SpringArm collisionMask requires 16-bit integer");
+            const std::pair<const char*, float> lagFields[] = {
+                {"cameraLagSpeed", 1000.0f}, {"cameraLagMaxDistance", 100000.0f},
+                {"cameraRotationLagSpeed", 1000.0f}};
+            for (const auto& field : lagFields)
+                if (component.contains(field.first) && (!component.at(field.first).is_number() ||
+                    !std::isfinite(component.at(field.first).get<float>()) ||
+                    component.at(field.first).get<float>() < 0 ||
+                    component.at(field.first).get<float>() > field.second))
+                    throw std::invalid_argument("SpringArm lag requires bounded finite numbers");
+            if (component.contains("rotationOffset") && !component.at("rotationOffset").is_array())
+                throw std::invalid_argument("SpringArm rotationOffset requires vector");
+            if (component.contains("rotationOffset")) ValidateScriptVector(component.at("rotationOffset"));
+            if (component.contains("cameraLagMaxTimeStep") && (!component.at("cameraLagMaxTimeStep").is_number() ||
+                !std::isfinite(component.at("cameraLagMaxTimeStep").get<float>()) ||
+                component.at("cameraLagMaxTimeStep").get<float>() < 0.005f ||
+                component.at("cameraLagMaxTimeStep").get<float>() > 0.5f))
+                throw std::invalid_argument("SpringArm lag step requires 0.005..0.5 seconds");
+            for (const char* field : {"doCollisionTest", "enableCameraLag", "enableCameraRotationLag",
+                "usePawnControlRotation", "inheritPitch", "inheritYaw", "inheritRoll", "absoluteRotation", "drawDebug",
+                "useCameraLagSubstepping"})
+                if (component.contains(field) && !component.at(field).is_boolean())
+                    throw std::invalid_argument("SpringArm toggles require boolean");
         }
         if (IsScriptLight(type))
         {
@@ -267,21 +321,7 @@ inline Eigen::Matrix4f ScriptTransformMatrix(const nlohmann::json& node)
     return matrix;
 }
 
-inline Eigen::Matrix4f ScriptComponentMatrix(const nlohmann::json& blueprint, size_t index)
-{
-    const auto& components = blueprint.at("components");
-    Eigen::Matrix4f matrix = ScriptTransformMatrix(components.at(index));
-    std::string parent = components.at(index).value("parent", "");
-    while (!parent.empty())
-        for (const auto& component : components)
-            if (ScriptComponentId(component) == parent)
-            {
-                matrix = (ScriptTransformMatrix(component) * matrix).eval();
-                parent = component.value("parent", "");
-                break;
-            }
-    return ScriptTransformMatrix(blueprint) * matrix;
-}
+inline Eigen::Matrix4f ScriptComponentMatrix(const nlohmann::json& blueprint, size_t index);
 
 inline void ValidateScriptPhysicsComponents(const nlohmann::json& blueprint)
 {
@@ -324,12 +364,17 @@ inline void ValidateScriptPhysicsComponents(const nlohmann::json& blueprint)
     }
 }
 
-inline Eigen::Quaternionf ScriptRotation(const nlohmann::json& node)
+inline Eigen::Quaternionf ScriptRotationDegrees(const Eigen::Vector3f& degrees)
 {
-    const Eigen::Vector3f rotation = ScriptVector(node, "rotation") * (3.14159265358979323846f / 180);
+    const Eigen::Vector3f rotation = degrees * (3.14159265358979323846f / 180);
     return Eigen::AngleAxisf(rotation.y(), Eigen::Vector3f::UnitY()) *
         Eigen::AngleAxisf(rotation.x(), Eigen::Vector3f::UnitX()) *
         Eigen::AngleAxisf(rotation.z(), Eigen::Vector3f::UnitZ());
+}
+
+inline Eigen::Quaternionf ScriptRotation(const nlohmann::json& node)
+{
+    return ScriptRotationDegrees(ScriptVector(node, "rotation"));
 }
 
 inline void ValidateScriptPhysicsReferences(const nlohmann::json& blueprints, const nlohmann::json& templates)
@@ -356,21 +401,96 @@ inline void ValidateScriptPhysicsReferences(const nlohmann::json& blueprints, co
         }
 }
 
-inline Eigen::Quaternionf ScriptComponentRotation(const nlohmann::json& blueprint, size_t index)
+inline Eigen::Vector3f ScriptEulerDegrees(const Eigen::Quaternionf& rotation)
+{
+    // 与托管 YXZ 逆变换一致；不要用 Eigen 的不同 Euler 取值区间解释逐轴继承。
+    const float sinPitch = std::clamp(2 * (rotation.w() * rotation.x() -
+        rotation.y() * rotation.z()), -1.0f, 1.0f);
+    const float pitch = std::asin(sinPitch);
+    float yaw = std::atan2(2 * (rotation.w() * rotation.y() + rotation.z() * rotation.x()),
+        1 - 2 * (rotation.x() * rotation.x() + rotation.y() * rotation.y()));
+    float roll = std::atan2(2 * (rotation.w() * rotation.z() + rotation.x() * rotation.y()),
+        1 - 2 * (rotation.x() * rotation.x() + rotation.z() * rotation.z()));
+    if (std::abs(sinPitch) > 0.999999f)
+    {
+        yaw = 2 * std::atan2(rotation.y(), rotation.w());
+        roll = 0;
+    }
+    return Eigen::Vector3f(pitch, yaw, roll) * 57.29577951308232f;
+}
+
+// 已校验组件树的空间求值：Mesh 本身也是普通组件空间，导入 section/bone 空间由各自 owner 继续合成。
+// 组件原点与对子级提供的挂接空间分开；普通组件二者相同，SpringArm 的挂接空间在臂端。
+struct ScriptComponentSpace
+{
+    Eigen::Matrix4f worldFromParent = Eigen::Matrix4f::Identity();
+    Eigen::Quaternionf parentRotation = Eigen::Quaternionf::Identity();
+    Eigen::Matrix4f worldFromComponent = Eigen::Matrix4f::Identity();
+    Eigen::Quaternionf rotation = Eigen::Quaternionf::Identity();
+    Eigen::Matrix4f worldFromAttachment = Eigen::Matrix4f::Identity();
+    Eigen::Quaternionf attachmentRotation = Eigen::Quaternionf::Identity();
+};
+
+inline ScriptComponentSpace EvaluateScriptComponentSpace(const nlohmann::json& blueprint, size_t index)
 {
     const auto& nodes = blueprint.at("components");
-    auto rotation = ScriptRotation(nodes.at(index));
-    auto parent = nodes.at(index).value("parent", "");
-    while (!parent.empty())
-        for (const auto& node : nodes)
-            if (ScriptComponentId(node) == parent)
-            {
-                rotation = ScriptRotation(node) * rotation;
-                parent = node.value("parent", "");
-                break;
-            }
-    // 位置使用完整父矩阵；镜头/灯光朝向只合成旋转，缩放/shear 不改变正交基。
-    return ScriptRotation(blueprint) * rotation;
+    const auto& node = nodes.at(index);
+    ScriptComponentSpace result;
+    result.worldFromParent = ScriptTransformMatrix(blueprint);
+    result.parentRotation = ScriptRotation(blueprint);
+    const auto parent = node.value("parent", "");
+    for (size_t ancestor = 0; !parent.empty() && ancestor < nodes.size(); ++ancestor)
+        if (ScriptComponentId(nodes[ancestor]) == parent)
+        {
+            const auto space = EvaluateScriptComponentSpace(blueprint, ancestor);
+            result.worldFromParent = space.worldFromAttachment;
+            result.parentRotation = space.attachmentRotation;
+            break;
+        }
+    result.worldFromComponent = result.worldFromParent * ScriptTransformMatrix(node);
+    result.rotation = (result.parentRotation * ScriptRotation(node)).normalized();
+    result.worldFromAttachment = result.worldFromComponent;
+    result.attachmentRotation = result.rotation;
+    if (node.at("type") != "springArm") return result;
+
+    const auto local = ScriptVector(node, "rotation");
+    Eigen::Vector3f euler = node.value("absoluteRotation", false) ? local : ScriptEulerDegrees(result.rotation);
+    if (!node.value("absoluteRotation", false))
+    {
+        if (!node.value("inheritPitch", true)) euler.x() = local.x();
+        if (!node.value("inheritYaw", true)) euler.y() = local.y();
+        if (!node.value("inheritRoll", true)) euler.z() = local.z();
+    }
+    result.attachmentRotation = (ScriptRotationDegrees(euler) *
+        ScriptRotationDegrees(ScriptVector(node, "rotationOffset"))).normalized();
+    Eigen::Vector3f endpoint = result.worldFromComponent.block<3, 1>(0, 3) + ScriptVector(node, "targetOffset") +
+        result.attachmentRotation * (Eigen::Vector3f(0, 0, node.value("targetArmLength", 300.0f)) +
+            ScriptVector(node, "socketOffset"));
+    // 运行时 socket 是 CLR 求值后的冻结结果；作者 schema 不接受这个内部字段。
+    // 静态预览没有 ControlRotation/碰撞/lag，使用上述作者静止姿态。
+    if (node.contains("__springArmSocket"))
+    {
+        const auto& socket = node.at("__springArmSocket");
+        endpoint = ScriptVector(socket, "position");
+        result.attachmentRotation = ScriptRotation(socket);
+    }
+    // 长度不乘父缩放；子组件的局部偏移仍继承挂接空间的完整缩放/shear。
+    result.worldFromAttachment.block<3, 3>(0, 0) =
+        (result.attachmentRotation * result.rotation.conjugate()).toRotationMatrix() *
+        result.worldFromComponent.block<3, 3>(0, 0);
+    result.worldFromAttachment.block<3, 1>(0, 3) = endpoint;
+    return result;
+}
+
+inline Eigen::Matrix4f ScriptComponentMatrix(const nlohmann::json& blueprint, size_t index)
+{
+    return EvaluateScriptComponentSpace(blueprint, index).worldFromComponent;
+}
+
+inline Eigen::Quaternionf ScriptComponentRotation(const nlohmann::json& blueprint, size_t index)
+{
+    // 正交朝向不从含 shear 的矩阵分解，位置/几何仍保留完整父链矩阵。
+    return EvaluateScriptComponentSpace(blueprint, index).rotation;
 }
 
 inline std::string ScriptMeshIdentity(const std::string& blueprintId, const nlohmann::json& component)

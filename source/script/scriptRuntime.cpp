@@ -1,4 +1,5 @@
 #include "script/scriptRuntime.h"
+#include "script/scriptDebugDraw.h"
 
 #include "engine/diagnosticsSubsystem.h"
 #include "input/inputSubsystem.h"
@@ -37,6 +38,15 @@ bool HasScriptCamera(const nlohmann::json& state)
     if (!state.contains("components")) return false;
     for (const auto& node : state.at("components"))
         if (node.at("type") == "camera") return true;
+    return false;
+}
+
+bool HasScriptSpringArm(const nlohmann::json& states)
+{
+    for (const auto& state : states)
+        if (state.contains("components"))
+            for (const auto& component : state.at("components"))
+                if (component.at("type") == "springArm") return true;
     return false;
 }
 
@@ -82,14 +92,16 @@ void ScriptRuntimeSubsystem::Initialize(bool enabled, const std::string& runtime
 }
 
 std::shared_ptr<ScriptWorldContext> ScriptRuntimeSubsystem::CreateContext(const nlohmann::json& blueprints,
-    const nlohmann::json& templates, uint64_t generation)
+    const nlohmann::json& templates, uint64_t generation, const nlohmann::json& animationCatalog,
+    const nlohmann::json& animationAssets)
 {
     if (!host) throw std::runtime_error("Script.Disabled: scene Blueprints require enabled C# hosting");
     const uint64_t id = nextContext++;
     auto context = std::make_shared<ScriptWorldContext>(host, id);
     // 先取得原生 RAII owner，prepare 或作者声明复制失败也会清理已登记的托管上下文。
     host->Invoke({{"op", "prepare"}, {"context", id}, {"blueprints", blueprints}, {"templates", templates},
-        {"generation", generation ? generation : assemblyGeneration}});
+        {"generation", generation ? generation : assemblyGeneration}, {"animationCatalog", animationCatalog},
+        {"animationAssets", animationAssets}});
     for (const auto& blueprint : blueprints) context->declarations[blueprint.at("id").get<std::string>()] = blueprint;
     for (const auto& item : templates.items()) context->permanentAssetPaths[item.key()] = true;
     return context;
@@ -98,6 +110,7 @@ std::shared_ptr<ScriptWorldContext> ScriptRuntimeSubsystem::CreateContext(const 
 void ScriptRuntimeSubsystem::PrepareWorld(World& world, const nlohmann::json& scene,
     const nlohmann::json& authoredScene)
 {
+    world.SetMotionResourceRoot(resourceRoot);
     auto blueprints = nlohmann::json::array();
     auto sources = nlohmann::json::array();
     auto templates = nlohmann::json::object();
@@ -132,7 +145,8 @@ void ScriptRuntimeSubsystem::PrepareWorld(World& world, const nlohmann::json& sc
     for (const auto& item : templates.items()) ValidateBlueprint(item.value());
     // 资产预览只发布作者几何；OnCreate 也可能移动/隐藏组件，不能在编辑预览中执行。
     if (!blueprints.empty() && std::filesystem::path(world.GetScenePath()).filename() != "SC_model_preview.json")
-        world.SetScriptContext(CreateContext(blueprints, templates));
+        world.SetScriptContext(CreateContext(blueprints, templates, 0, world.ScriptAnimationCatalog(),
+            world.ScriptAnimationAssets()));
 }
 
 void ScriptRuntimeSubsystem::ValidateBlueprint(const nlohmann::json& blueprint)
@@ -149,8 +163,11 @@ void ScriptRuntimeSubsystem::SynchronizeWorld(const std::shared_ptr<World>& worl
 {
     if (activeWorld == world) return;
     // World 已经整体提交；先停止旧回调，再允许新 World 在下一个显式 Play 中执行。
-    if (activeWorld && activeWorld->GetScriptContext())
-        activeWorld->GetScriptContext()->Release(1);
+    if (activeWorld)
+    {
+        activeWorld->GetDebugDraw().Clear();
+        if (activeWorld->GetScriptContext()) activeWorld->GetScriptContext()->Release(1);
+    }
     activeWorld = world;
     physics.reset();
     observedAssets = world ? world->GetScriptAssetDigests().dump() : "";
@@ -166,6 +183,7 @@ void ScriptRuntimeSubsystem::SynchronizeWorld(const std::shared_ptr<World>& worl
 
 void ScriptRuntimeSubsystem::Stop(World& world)
 {
+    world.GetDebugDraw().Clear();
     if (world.GetScriptContext()) world.GetScriptContext()->Release(0);
     if (world.GetScriptContext())
         for (const auto& item : world.GetScriptContext()->declarations.items())
@@ -179,6 +197,7 @@ void ScriptRuntimeSubsystem::Stop(World& world)
     world.SetScriptContext(nullptr);
     world.SetScriptBlueprintStates(nlohmann::json::array());
     world.ClearScriptCamera();
+    world.ResetScriptAnimations();
     state = ScriptPlayState::Editing;
     physics.reset();
     const double startup = time.startup;
@@ -213,13 +232,16 @@ bool ScriptRuntimeSubsystem::Control(World& world, ScriptPlayState requested, st
             {
                 // 每次 Play 重建实例；Gameplay 静态字段属于程序集代，仅手动重载后重置。
                 if (world.GetScriptContext()) world.GetScriptContext()->Release(0);
-                auto context = CreateContext(world.GetScriptBlueprints(), world.GetScriptTemplates());
+                world.ResetScriptAnimations();
+                auto context = CreateContext(world.GetScriptBlueprints(), world.GetScriptTemplates(), 0,
+                    world.ScriptAnimationCatalog(), world.ScriptAnimationAssets());
                 context->Call("set_time", {{"time", ContextTime()}});
                 const auto response = context->Call("start");
                 world.SetScriptContext(std::move(context));
                 physics = std::make_shared<ScriptPhysicsWorld>();
                 physics->SetMeshGeometry(BuildScriptPhysicsMeshGeometry(world));
                 Apply(world, response);
+                  world.TickScriptAnimations(0);
                 StepPhysics(world, 0);
                 RefreshPerformance(world);
             }
@@ -384,8 +406,21 @@ void ScriptRuntimeSubsystem::Apply(World& world, const nlohmann::json& response)
             if (componentsChanged) world.SynchronizeScriptComponentMeshes(current);
             world.ApplyScriptBlueprintVisuals(current);
         }
+        if (update.contains("animationCommands"))
+            world.ApplyScriptAnimationRequests(current, update.at("animationCommands"));
+        try
+        {
+            if (update.contains("debugCommands") || (changed && (current.value("failed", false) ||
+                current.value("destroyed", false) || !current.value("enabled", true))))
+                ApplyScriptDebugDraw(world.GetDebugDraw(), current, update.value("debugCommands", nlohmann::json::array()));
+        }
+        catch (const std::invalid_argument& error)
+        {
+            // 公共绘图预算失败只拒绝该 owner 的整批图形，不让调试工具停止其它 gameplay。
+            pendingDiagnostics.push_back({LogSeverity::Warning, "DrawDebug batch rejected for " + id + ": " + error.what(), {}});
+        }
         // 请求队列已有独立 owner，快照不保留已领取的一次性资源/查询命令。
-        for (const char* field : {"raycasts", "assetRequests", "assetCancels"})
+        for (const char* field : {"raycasts", "assetRequests", "assetCancels", "animationCommands", "debugCommands"})
             if (current.contains(field) && !current.at(field).empty()) current[field] = nlohmann::json::array();
     }
     if (cameraChanged) world.UpdateScriptCamera(states);
@@ -393,16 +428,18 @@ void ScriptRuntimeSubsystem::Apply(World& world, const nlohmann::json& response)
     applyMilliseconds += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
 }
 
-void ScriptRuntimeSubsystem::StepPhysics(World& world, bool advance, bool collectQueries)
+void ScriptRuntimeSubsystem::StepPhysics(World& world, float dt, bool collectQueries)
 {
     const auto started = std::chrono::steady_clock::now();
     auto& context = *world.GetScriptContext();
     auto& allStates = world.ScriptBlueprintStatesForUpdate();
     IndexScriptStates(context, allStates);
-    // 只有物理 owner 进入 Jolt 同步；无刚体的逻辑蓝图不会随物理子步复制。
+    // 只有物理 owner 进入 Jolt 同步；无刚体的逻辑蓝图不会随物理帧复制。
+    // dt 是本帧时间（已乘 timeScale）：角色按帧推进，刚体在物理世界内部按 1/60 子步追赶；
+    // dt=0 的指令同步帧只同步状态/指令并收集接触，不移动任何实体。
     auto states = nlohmann::json::array();
     for (const auto index : context.physicsIndices) states.push_back(allStates.at(index));
-    if (!states.empty()) physics->StepFixed(states, context.declarations, advance);
+    if (!states.empty()) physics->Step(states, context.declarations, dt);
     bool cameraChanged = false;
     for (auto& current : states)
     {
@@ -454,7 +491,6 @@ void ScriptRuntimeSubsystem::Tick(const std::shared_ptr<World>& world, float dt,
     time.startup += dt;
     time.delta = 0;
     time.unscaledDelta = 0;
-    time.fixedSteps = 0;
     physicsMilliseconds = 0;
     applyMilliseconds = 0; snapshotMilliseconds = 0; appliedUpdates = 0;
     detailSamples = 0;
@@ -466,40 +502,47 @@ void ScriptRuntimeSubsystem::Tick(const std::shared_ptr<World>& world, float dt,
             auto& context = *world->GetScriptContext();
             time.unscaledDelta = dt;
             time.delta = dt * time.scale;
+            world->GetDebugDraw().AdvanceGameTime(static_cast<float>(time.delta));
             time.play += time.delta;
             time.unscaledPlay += dt;
             ++time.frame;
-            constexpr double fixedStep = 1.0 / 60;
-            time.accumulated += time.delta;
-            const double requestedSteps = std::floor((time.accumulated + 1e-9) / fixedStep);
-            time.fixedSteps = unsigned(std::min(requestedSteps, 8.0));
-            // 追赶最多八步，丢弃完整多余步长而保留不足一步的余量；脚本与 Jolt 共用这个决定。
-            const auto dropped = uint64_t(requestedSteps - time.fixedSteps);
-            time.droppedSteps += dropped;
-            time.droppedTime += dropped * fixedStep;
-            time.accumulated = std::max(0.0, time.accumulated - requestedSteps * fixedStep);
+            // 每帧一次脚本时间轴：没有 accumulator，也没有 fixed 回调；dt 直接是变帧间隔。
             auto assetResults = std::move(context.assetResults), assetUnloads = std::move(context.assetUnloads);
             context.assetResults = nlohmann::json::array(); context.assetUnloads = nlohmann::json::array();
             Apply(*world, world->GetScriptContext()->Call("tick", {{"dt", time.delta}, {"time", ContextTime()}, {"input",
                 {int(input.moveRight) - int(input.moveLeft), int(input.moveForward) - int(input.moveBackward),
                  int(input.moveUp) - int(input.moveDown)}}, {"deferLate", true},
-                 {"inputMap", input.gameplay},
+                 {"inputMap", input.gameplay}, {"animationFeedback", world->ScriptAnimationFeedback()},
                  {"assetResults", assetResults}, {"assetUnloads", assetUnloads},
                  {"states", context.TakePhysicsUpdates()}, {"delta", true}}));
-            // 先领取 Tick 的一次性冲量，查询留到该帧最后一个物理子步，避免使用旧镜头/刚体位姿。
-            StepPhysics(*world, false, time.fixedSteps == 0);
-            for (unsigned step = 0; step < time.fixedSteps; ++step)
-            {
-                ++time.fixedFrame;
-                Apply(*world, context.Call("fixed", {{"dt", float(fixedStep)}, {"fixedFrameIndex", time.fixedFrame},
-                    {"states", context.TakePhysicsUpdates()}, {"delta", true}}));
-                StepPhysics(*world, true, step + 1 == time.fixedSteps);
-            }
+            // 帧物理：Tick 写入的角色/刚体指令在同一次同步里领取，随后角色按帧 dt 移动、
+            // 刚体按内部 1/60 子步推进；Tick 发起的查询在本帧物理位姿上执行。
+            StepPhysics(*world, time.delta);
             auto rayHits = std::move(world->GetScriptContext()->rayHits);
             world->GetScriptContext()->rayHits = nlohmann::json::array();
-            Apply(*world, world->GetScriptContext()->Call("late", {{"states", context.TakePhysicsUpdates()}, {"delta", true},
-                {"contacts", physics->Contacts()}, {"triggers", physics->Triggers()}, {"rayHits", rayHits}}));
+            Apply(*world, world->GetScriptContext()->Call("late", {{"dt", time.delta}, {"states", context.TakePhysicsUpdates()},
+                {"delta", true}, {"contacts", physics->Contacts()}, {"triggers", physics->Triggers()}, {"rayHits", rayHits}}));
+            // LateTick 可能移动根或碰撞体；先用零时步把这些状态同步到 Jolt，
+            // 这样动画中的 Foot IK 查询看到的是本帧最终支撑体，而不是旧物理位姿。
+            // 零时步只领取一次 LateTick 指令并刷新接触/查询，不推进物理时间。
             StepPhysics(*world, 0);
+            // 动画使用同一倍率时钟，在最终物理反馈与 LateTick 决策后求值；Pause 没有此路径。
+            // 脚探测借用已同步的这一帧物理世界，不持有后端指针。
+            world->TickScriptAnimations(static_cast<float>(time.delta), physics.get());
+            if (HasScriptSpringArm(world->GetScriptBlueprintStates()))
+            {
+                // 相机臂在最终物理位姿上求值；只执行查询，不再推进物理或重放用户 LateTick。
+                // LateTick 查询结果仍留在 context.rayHits，保持原有下一帧领取语义。
+                Apply(*world, context.Call("camera_prepare", {{"states", context.TakePhysicsUpdates()}, {"delta", true}}));
+                // 父臂完成后才生成嵌套子臂的查询，直到本帧挂接链全部收敛；不推进物理时钟。
+                do
+                {
+                    auto cameraQueries = std::move(context.raycasts);
+                    context.raycasts = nlohmann::json::array();
+                    Apply(*world, context.Call("camera_finish",
+                        {{"rayHits", physics->Raycast(cameraQueries)}, {"delta", true}}));
+                } while (!context.raycasts.empty());
+            }
             // 摘要与时钟每帧发布，回调明细最多 10 Hz；托管故障/生命周期变化可要求立即刷新。
             performanceDetailElapsed += dt;
             RefreshPerformance(*world, performanceDetailElapsed + 1e-8 >= 0.1);
@@ -567,6 +610,8 @@ bool ScriptRuntimeSubsystem::CompleteAssetLoad(World& world, uint64_t id, const 
         result["templates"].push_back(blueprint);
         // GPU/CPU 候选已经提交；仅补充查询几何表，保留正在运行的刚体和约束。
         if (physics) physics->SetMeshGeometry(BuildScriptPhysicsMeshGeometry(world));
+          context->Call("animation_catalog", {{"catalog", world.ScriptAnimationCatalog()},
+              {"assets", world.ScriptAnimationAssets()}});
     }
     else context->assetLoads.erase(found);
     context->assetResults.push_back(std::move(result));
@@ -611,6 +656,7 @@ void ScriptRuntimeSubsystem::ForgetBlueprintAsset(World& world, const std::strin
 
 void ScriptRuntimeSubsystem::Shutdown() noexcept
 {
+    if (activeWorld) activeWorld->GetDebugDraw().Clear();
     if (activeWorld && activeWorld->GetScriptContext()) activeWorld->GetScriptContext()->Release(2);
     activeWorld.reset();
     physics.reset();
@@ -657,7 +703,8 @@ bool ScriptRuntimeSubsystem::ReloadAssembly(World& world, std::string& error, co
             }
             else blueprints.push_back(std::move(blueprint));
         }
-        auto candidateContext = CreateContext(blueprints, templates, candidateGeneration);
+        auto candidateContext = CreateContext(blueprints, templates, candidateGeneration,
+            world.ScriptAnimationCatalog(), world.ScriptAnimationAssets());
         std::string successMessage = "C# assembly reloaded";
         // 所有类、权限、属性与 OnCreate 已通过；只交换脚本配置，不重新准备 GPU 资源。
         world.SwapScriptConfiguration(blueprints, templates, candidateContext);
@@ -755,12 +802,10 @@ bool ScriptRuntimeSubsystem::SetTimeScale(float value, std::string& error)
 
 nlohmann::json ScriptRuntimeSubsystem::ContextTime() const
 {
+    // 每帧只有一条时间轴：稳定帧索引 + 变长 dt；没有固定步计数，也没有丢弃步数。
     return {{"deltaTime", time.delta}, {"unscaledDeltaTime", time.unscaledDelta},
         {"timeScale", time.scale}, {"timeSinceStartup", time.startup}, {"timeSincePlay", time.play},
-        {"unscaledTimeSincePlay", time.unscaledPlay}, {"frameIndex", time.frame},
-        {"fixedFrameIndex", time.fixedFrame}, {"fixedSteps", time.fixedSteps},
-        {"droppedSteps", time.droppedSteps}, {"droppedTime", time.droppedTime},
-        {"accumulator", time.accumulated}};
+        {"unscaledTimeSincePlay", time.unscaledPlay}, {"frameIndex", time.frame}};
 }
 
 void ScriptRuntimeSubsystem::RefreshPerformance(World& world, bool details)

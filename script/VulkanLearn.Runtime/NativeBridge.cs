@@ -39,6 +39,9 @@ public static partial class NativeBridge
         public readonly List<ComponentCommand> ComponentCommands = [];
         public readonly List<LogicComponentCommand> LogicComponentCommands = [];
         public readonly HashSet<(string, string)> LoadedMeshes = [];
+        public readonly Dictionary<string, string[]> AnimationCatalog = new(StringComparer.Ordinal);
+        // animation_catalog 的 assets 段（curves/montages）；保留原始节点，绑定组件时再解析。
+        public readonly Dictionary<string, JsonElement> AnimationAssets = new(StringComparer.Ordinal);
         public readonly Dictionary<string, JsonElement> Templates = new(StringComparer.Ordinal);
         public readonly List<Command> Commands = [];
         public HashSet<(string, string)> Contacts = [];
@@ -112,6 +115,14 @@ public static partial class NativeBridge
                 Assembly = Assemblies[request.GetProperty("generation").GetUInt64()] };
             try
             {
+                if (request.TryGetProperty("animationCatalog", out var animationCatalog))
+                    foreach (var entry in animationCatalog.EnumerateObject())
+                        candidate.AnimationCatalog.Add(entry.Name,
+                            entry.Value.EnumerateArray().Select(c => c.GetString()!).ToArray());
+                if (request.TryGetProperty("animationAssets", out var animationAssets) &&
+                    animationAssets.ValueKind == JsonValueKind.Object)
+                    foreach (var entry in animationAssets.EnumerateObject())
+                        candidate.AnimationAssets[entry.Name] = entry.Value.Clone();
                 if (request.TryGetProperty("templates", out var templates))
                     foreach (var template in templates.EnumerateObject())
                         candidate.Templates.Add(template.Name, template.Value.Clone());
@@ -126,11 +137,12 @@ public static partial class NativeBridge
             throw new InvalidOperationException($"Stale script context: {id}");
         switch (operation)
         {
+            case "animation_catalog": UpdateAnimationCatalog(context, request.GetProperty("catalog"),
+                request.TryGetProperty("assets", out var assets) ? assets : default); return null;
             case "migration_capture": return CaptureMigration(context);
             case "migration_restore": return RestoreMigration(context, request.GetProperty("snapshot"));
             case "migration_export": return MigrationExport(context);
             case "set_time": ApplyContextTime(context, request.GetProperty("time")); return null;
-            case "fixed": return RunFixed(context, request);
             case "runtime_snapshot": return RuntimeSnapshot(context,
                 !request.TryGetProperty("details", out var details) || details.GetBoolean());
             case "start":
@@ -143,10 +155,13 @@ public static partial class NativeBridge
                     RunScriptComponents(context, instance, "BeginPlay", 0, EndPlayReason.Stopped);
                 }
                 DrainCommands(context);
+                ResetSpringArmCameras(context);
                 return Export(context, DeltaRequested(request));
             case "tick":
                 if (!context.Playing) throw new InvalidOperationException("Context is not playing.");
                 float dt = BeginFrameTime(context, request);
+                if (request.TryGetProperty("animationFeedback", out var animationFeedback))
+                    SynchronizeAnimations(context, animationFeedback);
                 var input = request.GetProperty("input");
                 context.Input.Movement = new(input[0].GetSingle(), input[1].GetSingle());
                 context.Input.Vertical = input[2].GetSingle();
@@ -170,7 +185,11 @@ public static partial class NativeBridge
                 }
                 DrainCommands(context);
                 if (!request.TryGetProperty("deferLate", out var deferred) || !deferred.GetBoolean())
+                {
                     RunLate(context, dt);
+                    QueueSpringArmProbes(context);
+                    FlushPendingSpringArms(context);
+                }
                 return Export(context, DeltaRequested(request));
             case "late":
                 Synchronize(context, request.GetProperty("states"));
@@ -193,6 +212,14 @@ public static partial class NativeBridge
                 }
                 if (request.TryGetProperty("rayHits", out var rayHits)) context.Services.CompleteRays(rayHits);
                 RunLate(context, context.Time.DeltaTime);
+                return Export(context, DeltaRequested(request));
+            case "camera_prepare":
+                Synchronize(context, request.GetProperty("states"));
+                QueueSpringArmProbes(context);
+                return Export(context, DeltaRequested(request));
+            case "camera_finish":
+                context.Services.CompleteRays(request.GetProperty("rayHits"));
+                FlushPendingSpringArms(context);
                 return Export(context, DeltaRequested(request));
             case "release":
                 context.Services.Release();
@@ -233,6 +260,7 @@ public static partial class NativeBridge
         if (position != null) blueprint.Transform.Position = position.Value;
         if (rotation != null) blueprint.Transform.Rotation = rotation.Value;
         if (scale != null) blueprint.Transform.Scale = scale.Value;
+        blueprint.ControlRotation = blueprint.Transform.Rotation;
         var instance = new Instance(blueprint)
         {
             Template = template.Length == 0 && node.TryGetProperty("__spawnPath", out var spawnPath)
@@ -251,6 +279,7 @@ public static partial class NativeBridge
             {
                 "camera" => new CameraComponent(), "pointLight" => new PointLightComponent(),
                 "spotLight" => new SpotLightComponent(), "directionalLight" => new DirectionalLightComponent(),
+                "springArm" => new SpringArmComponent(),
                 "mesh" => new MeshComponent { Mesh = new(n.GetProperty("modelPath").GetString()!),
                     Material = new(n.TryGetProperty("materialOverride", out var material) ? material.GetString()! : "") },
                 _ => new SceneComponent()
@@ -262,6 +291,7 @@ public static partial class NativeBridge
                 if (n.TryGetProperty("fov", out var fov)) camera.HorizontalFov = fov.GetSingle();
                 if (n.TryGetProperty("near_clip", out var near)) camera.NearClip = near.GetSingle();
                 if (n.TryGetProperty("far_clip", out var far)) camera.FarClip = far.GetSingle();
+                if (n.TryGetProperty("priority", out var priority)) camera.Priority = IntValue(priority);
                 camera.Activation = active =>
                 {
                     RequireCallback(context, blueprint);
@@ -282,6 +312,7 @@ public static partial class NativeBridge
                     if (n.TryGetProperty("coneAngleOuter", out var outer)) spot.OuterConeAngle = outer.GetSingle();
                 }
             }
+            if (component is SpringArmComponent arm) ReadSpringArmNode(arm, n);
             ReadOptionalTransform(component.Transform, n);
             BindComponentIdentity(context, blueprint, component);
             return component;
@@ -306,6 +337,7 @@ public static partial class NativeBridge
         BindComponentOperations(context, instance);
         context.Services.Bind(blueprint);
         context.Services.BindHud(blueprint);
+        context.Services.BindDebug(blueprint);
         BindScriptComponents(context, instance, node);
         BindExposedProperties(blueprint, node.GetProperty("properties"));
         // OnCreate 不能结构性修改 World；创建失败只丢弃候选或该次 Spawn。
@@ -387,11 +419,15 @@ public static partial class NativeBridge
     private static void SelectDefaultCamera(Context context)
     {
         if (context.ActiveCamera != null) return;
+        CameraComponent? best = null;
+        int bestPriority = int.MinValue;
         foreach (var instance in context.Instances.Where(i => !i.Failed && i.Blueprint.Enabled && !i.Blueprint.PendingDestroy))
             for (int index = 0; index < instance.Blueprint.Components.Count; ++index)
                 if (instance.Blueprint.Components[index] is CameraComponent camera &&
-                    instance.ComponentNodes[index].TryGetProperty("autoActivate", out var automatic) && automatic.GetBoolean())
-                { SetActiveCamera(context, camera); return; }
+                    instance.ComponentNodes[index].TryGetProperty("autoActivate", out var automatic) && automatic.GetBoolean() &&
+                    (best == null || camera.Priority > bestPriority))
+                { best = camera; bestPriority = camera.Priority; }
+        if (best != null) SetActiveCamera(context, best);
     }
     private static void SetActiveCamera(Context context, CameraComponent? camera)
     {
@@ -437,6 +473,8 @@ public static partial class NativeBridge
                 blueprint.Body.Velocity = Vector(velocity);
             if (blueprint.Character != null && state.TryGetProperty("grounded", out var grounded))
                 blueprint.Character.IsGrounded = grounded.GetBoolean();
+            if (blueprint.Character != null && state.TryGetProperty("bodyVelocity", out var characterVelocity))
+                blueprint.Character.LinearVelocity = Vector(characterVelocity);
         }
     }
     private static void Contact(Context context, (string, string) pair, bool enter, bool trigger = false)
@@ -482,10 +520,12 @@ public static partial class NativeBridge
         if (custom == null && !HasFrameCallback(scriptComponent?.GetType() ?? blueprint.GetType(), phase)) return;
         instance.Dirty = true;
         Vector3 position = blueprint.Transform.Position, rotation = blueprint.Transform.Rotation, scale = blueprint.Transform.Scale;
+        var controlRotation = blueprint.ControlRotation;
+        var arms = blueprint.Components.OfType<SpringArmComponent>().Select(c => (c, c.CaptureSettings())).ToArray();
         var components = blueprint.Components.Count == 0 ? Array.Empty<(Vector3, Vector3, Vector3)>() :
             blueprint.Components.Select(c => (c.Transform.Position, c.Transform.Rotation, c.Transform.Scale)).ToArray();
-        var cameras = blueprint.Components.Count == 0 ? Array.Empty<(CameraComponent, float, float, float)>() :
-            blueprint.Components.OfType<CameraComponent>().Select(c => (c, c.HorizontalFov, c.NearClip, c.FarClip)).ToArray();
+        var cameras = blueprint.Components.Count == 0 ? Array.Empty<(CameraComponent, float, float, float, int)>() :
+            blueprint.Components.OfType<CameraComponent>().Select(c => (c, c.HorizontalFov, c.NearClip, c.FarClip, c.Priority)).ToArray();
         var lights = blueprint.Components.Count == 0 ? Array.Empty<(LightComponent, Vector3, float, bool, float?, float?)>() :
             blueprint.Components.OfType<LightComponent>().Select(c =>
             (c, c.Color, c.Intensity, c.Visible, (c as SpotLightComponent)?.InnerConeAngle,
@@ -502,7 +542,11 @@ public static partial class NativeBridge
         var impulse = blueprint.Body?.Impulse ?? default;
         var velocityChanged = blueprint.Body?.VelocityChanged ?? false;
         var walkVelocity = blueprint.Character?.WalkVelocity ?? default;
+        var rootMotionVelocity = blueprint.Character?.RootMotionVelocity ?? default;
+        var rootMotionActive = blueprint.Character?.RootMotionActive ?? false;
         var jump = blueprint.Character?.JumpRequested ?? false;
+        var animationCommands = blueprint.Components.OfType<MeshComponent>()
+            .Select(c => (c.Animation, c.Animation.Pending)).ToArray();
         callbackBlueprint = blueprint;
         callbackComponent = scriptComponent;
         callbackPhase = phase;
@@ -516,7 +560,6 @@ public static partial class NativeBridge
             {
                 case "BeginPlay": blueprint.Begin(); break;
                 case "Tick": blueprint.Update(dt); break;
-                case "FixedTick": blueprint.UpdateFixed(dt); break;
                 case "LateTick": blueprint.UpdateLate(dt); break;
                 case "EndPlay": blueprint.End(reason); break;
                 case "CollisionEnter": blueprint.Collision(other, true); break;
@@ -543,6 +586,8 @@ public static partial class NativeBridge
             callbackError = error;
             if (scriptComponent == null) RecordCallbackException(instance, phase, error);
             blueprint.Transform.Position = position; blueprint.Transform.Rotation = rotation; blueprint.Transform.Scale = scale;
+            blueprint.ControlRotation = controlRotation;
+            foreach (var (arm, settings) in arms) arm.RestoreSettings(settings);
             for (int index = 0; index < components.Length; index++)
             {
                 var transform = blueprint.Components[index].Transform;
@@ -551,8 +596,8 @@ public static partial class NativeBridge
             blueprint.PendingDestroy = destroyed;
             blueprint.Enabled = enabled;
             foreach (var (component, wasEnabled) in scriptEnabled) component.RestoreEnabled(wasEnabled);
-            foreach (var (camera, fov, near, far) in cameras)
-            { camera.HorizontalFov = fov; camera.NearClip = near; camera.FarClip = far; }
+            foreach (var (camera, fov, near, far, priority) in cameras)
+            { camera.HorizontalFov = fov; camera.NearClip = near; camera.FarClip = far; camera.Priority = priority; }
             foreach (var (light, color, intensity, visible, inner, outer) in lights)
             {
                 light.Color = color; light.Intensity = intensity; light.Visible = visible;
@@ -561,7 +606,8 @@ public static partial class NativeBridge
             }
             context.ActiveCamera = activeCamera;
             if (blueprint.Body is { } body) { body.Velocity = velocity; body.Impulse = impulse; body.VelocityChanged = velocityChanged; }
-            if (blueprint.Character is { } character) { character.WalkVelocity = walkVelocity; character.JumpRequested = jump; }
+            if (blueprint.Character is { } character) { character.WalkVelocity = walkVelocity; character.RootMotionVelocity = rootMotionVelocity; character.RootMotionActive = rootMotionActive; character.JumpRequested = jump; }
+            foreach (var (animation, pending) in animationCommands) animation.Pending = pending;
             context.Services.Rollback();
             if (scriptComponent == null) context.Services.RemoveOwner(blueprint);
             else context.Services.RemoveComponent(scriptComponent);
@@ -606,11 +652,15 @@ public static partial class NativeBridge
             if (blueprint.Body is { } body && (!Finite(body.Velocity) || !Finite(body.Impulse)))
                 throw new ArgumentException("Rigid body values must be finite.");
             if (blueprint.Character is { } character && (!Finite(character.WalkVelocity) || character.WalkVelocity.Y != 0 ||
+                !Finite(character.RootMotionVelocity) || character.RootMotionVelocity.LengthSquared() > 4_000_000 ||
                 blueprint.Transform.Rotation.X != 0 || blueprint.Transform.Rotation.Z != 0))
-                throw new ArgumentException("Character requires horizontal velocity and yaw-only rotation.");
+                throw new ArgumentException("Character requires horizontal walk velocity, bounded root motion and yaw-only rotation.");
         }
     }
     private static bool Finite(Vector3 v) => float.IsFinite(v.X) && float.IsFinite(v.Y) && float.IsFinite(v.Z);
+    // 编辑器数字输入会序列化成 3.0；整数语义字段（priority/collisionMask）仍需接受整值 double。
+    private static int IntValue(JsonElement value) => (int)Math.Round(value.GetDouble());
+    private static uint UIntValue(JsonElement value) => (uint)Math.Round(value.GetDouble());
 
     private static PropertyInfo[] Properties(Type type) => Accessors(type).Exposed;
     private static object[] DescribeProperties(Type type)

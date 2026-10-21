@@ -225,6 +225,12 @@ void AssetDocumentService::Validate(const Json& candidate, const std::string& pa
     {
         const auto plan = MeshAssetValidator::BuildLoadPlan(path, candidate);
         ResolveReference(plan.modelDataPath);
+        if (!plan.skeletonPath.empty()) ResolveReference(plan.skeletonPath);
+        for (const auto& clip : plan.animationClips)
+        {
+            ResolveReference(clip.path);
+            if (!clip.sequencePath.empty()) ResolveReference(clip.sequencePath);
+        }
         for (const auto& slot : plan.materialSlots)
         {
             const auto reference = ResolveReference(slot.materialInstancePath);

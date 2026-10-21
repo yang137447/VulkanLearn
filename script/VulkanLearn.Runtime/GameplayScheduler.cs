@@ -149,6 +149,35 @@ public static partial class NativeBridge
                     to = Values(r.To), includeTriggers = r.IncludeTriggers, collisionMask = r.Mask,
                     radius = r.Radius, localSpace = r.Local };
             }).ToArray();
+        // 引擎级查询在物理后的 camera_prepare 排队，camera_finish 同帧消费；不推进游戏时钟。
+        public void QueueSpringArmRay(Blueprint owner, Vector3 from, Vector3 to, float radius, uint mask,
+            Action<RaycastHit?> callback)
+        {
+            if (releasing || !CanRun(owner) || rays.Count >= 256 ||
+                !Finite(from) || !Finite(to) || from == to) return;
+            ulong id = ++next;
+            var request = new RayRequest(id, owner, null, from, to, false, mask, radius, false, callback);
+            rays.Add(id, request);
+            undo.Add(() => rays.Remove(id));
+        }
+        // arm ID 进入 key，多个臂的调试线不能互相覆盖；帧末发布后由单帧生命周期自动回收。
+        public void QueueSpringArmDebug(Blueprint owner, string armId, Vector3 begin, Vector3 end, Vector3? hit)
+        {
+            if (!CanRun(owner)) return;
+            var color = new[] { 1f, 0.85f, 0.15f, 1f };
+            var empty = Array.Empty<float[]>();
+            QueueDebug(owner, new { op = "draw", shape = 1, publisher = "SpringArm", key = "~armLine/" + armId,
+                category = "SpringArm", color, thickness = 2, duration = 0, depth = 0,
+                begin = Values(begin), end = Values(end), extents = Values(Vector3.Zero),
+                orientation = new[] { 0f, 0f, 0f, 1f }, radius = 0f, halfHeight = 0f, size = 0f,
+                segments = 16, closed = false, points = empty, text = "" }, component: null, cost: 1024);
+            if (hit is { } point)
+                QueueDebug(owner, new { op = "draw", shape = 5, publisher = "SpringArm", key = "~armHit/" + armId,
+                    category = "SpringArm", color, thickness = 2, duration = 0, depth = 0,
+                    begin = Values(point), end = Values(point), extents = Values(Vector3.Zero),
+                    orientation = new[] { 0f, 0f, 0f, 1f }, radius = 8f, halfHeight = 0f, size = 0f,
+                    segments = 16, closed = false, points = empty, text = "" }, component: null, cost: 1024);
+        }
         public void CompleteRays(JsonElement results)
         {
             foreach (var result in results.EnumerateArray())
@@ -173,6 +202,7 @@ public static partial class NativeBridge
         public void RemoveComponent(Component component)
         {
             RemoveHud(component.Owner, component);
+            RemoveDebug(component.Owner, component);
             foreach (var id in timers.Values.Where(t => t.Component == component).Select(t => t.Id).ToArray()) timers.Remove(id);
             foreach (var id in subscriptions.Values.Where(s => s.Component == component).Select(s => s.Id).ToArray()) subscriptions.Remove(id);
             foreach (var id in rays.Values.Where(r => r.Component == component).Select(r => r.Id).ToArray())
@@ -186,6 +216,7 @@ public static partial class NativeBridge
         public void RemoveOwner(Blueprint owner)
         {
             RemoveHud(owner);
+            RemoveDebug(owner);
             RemoveAssetOwner(owner);
             foreach (var id in timers.Values.Where(t => t.Owner == owner).Select(t => t.Id).ToArray()) timers.Remove(id);
             foreach (var id in subscriptions.Values.Where(s => s.Owner == owner).Select(s => s.Id).ToArray()) subscriptions.Remove(id);
@@ -197,6 +228,8 @@ public static partial class NativeBridge
         {
             ReleaseAssets();
             releasing = true;
+            debugMessages.Clear();
+            debugPublishers.Clear();
             timers.Clear(); subscriptions.Clear(); events.Clear(); rays.Clear(); sentRays.Clear(); undo.Clear(); hud.Clear();
         }
     }

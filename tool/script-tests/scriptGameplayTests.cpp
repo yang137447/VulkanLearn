@@ -1069,18 +1069,18 @@ TEST_F(ScriptGameplayTest, PlaygroundTriggerOnlySpawnsForCharacterInteractingIns
 
 TEST(ScriptPhysicsTest, StaticAndKinematicBodiesKeepPoseWhileDynamicSphereFalls)
 {
-    auto fixed = GameplayBlueprint("static"), moving = GameplayBlueprint("kinematic"), falling = GameplayBlueprint("sphere");
-    fixed["physics"] = Body("static"); moving["physics"] = Body("kinematic");
+    auto stationary = GameplayBlueprint("static"), moving = GameplayBlueprint("kinematic"), falling = GameplayBlueprint("sphere");
+    stationary["physics"] = Body("static"); moving["physics"] = Body("kinematic");
     moving["position"] = {1000, 0, 0};
     falling["position"] = {2000, 300, 0};
     falling["physics"] = {{"motion", "dynamic"}, {"shape", "sphere"}, {"radius", 20}};
-    Json declarations{{"static", fixed}, {"kinematic", moving}, {"sphere", falling}};
-    Json states = Json::array({fixed, moving, falling});
+    Json declarations{{"static", stationary}, {"kinematic", moving}, {"sphere", falling}};
+    Json states = Json::array({stationary, moving, falling});
     ScriptPhysicsWorld physics;
     physics.Step(states, declarations, 1.0f / 60);
     states[1]["position"] = {1000, 100, 0};
     physics.Step(states, declarations, 1.0f / 60);
-    EXPECT_EQ(states[0].at("position"), fixed.at("position"));
+    EXPECT_EQ(states[0].at("position"), stationary.at("position"));
     EXPECT_EQ(states[1].at("position")[1], 100);
     EXPECT_LT(states[2].at("position")[1].get<float>(), 300);
 }
@@ -1143,17 +1143,64 @@ TEST(ScriptPhysicsTest, RaycastReturnsClosestBlueprintCentimetersNormalAndOption
     EXPECT_FALSE(physics.Raycast(Json::array({query}))[0].contains("blueprint"));
 }
 
-TEST(ScriptPhysicsTest, FixedStepAccumulatesSmallFramesAndCapsLargeFrames)
+TEST(ScriptPhysicsTest, GroundProbeFiltersOwnerTriggersAndBothMasksWithoutSeeingThroughDynamicSupport)
+{
+    auto owner = GameplayBlueprint("owner"), sensor = GameplayBlueprint("sensor");
+    auto excludedLayer = GameplayBlueprint("excluded-layer"), excludedMask = GameplayBlueprint("excluded-mask");
+    auto floor = GameplayBlueprint("floor"), moving = GameplayBlueprint("moving");
+    for (auto* blueprint : {&owner, &sensor, &excludedLayer, &excludedMask, &floor, &moving})
+    {
+        (*blueprint)["physics"] = Body("static");
+        (*blueprint)["physics"]["halfExtents"] = {20, 20, 20};
+        (*blueprint)["physics"]["collisionLayer"] = 3;
+        (*blueprint)["physics"]["collisionMask"] = 2;
+    }
+    owner["position"] = {0, 270, 0};
+    owner["physics"]["collisionLayer"] = 1; owner["physics"]["collisionMask"] = 10;
+    sensor["position"] = {0, 220, 0}; sensor["physics"]["trigger"] = true;
+    excludedLayer["position"] = {0, 170, 0}; excludedLayer["physics"]["collisionLayer"] = 2;
+    excludedMask["position"] = {0, 120, 0}; excludedMask["physics"]["collisionMask"] = 1;
+    floor["position"] = {0, -20, 0};
+    moving["position"] = {300, 60, 0}; moving["physics"]["motion"] = "dynamic";
+    Json states = Json::array({owner, sensor, excludedLayer, excludedMask, floor, moving});
+    Json declarations{{"owner", owner}, {"sensor", sensor}, {"excluded-layer", excludedLayer},
+        {"excluded-mask", excludedMask}, {"floor", floor}, {"moving", moving}};
+    ScriptPhysicsWorld physics;
+    physics.Step(states, declarations, 0);
+    const Eigen::Vector3f origin(0, 320, 0), displacement(0, -400, 0);
+    const auto hit = physics.ProbeGround("owner", origin, displacement);
+    ASSERT_TRUE(hit.hit);
+    EXPECT_EQ(hit.supportIdentity, "floor");
+    EXPECT_NEAR(hit.point.norm(), 0, 0.01f);
+    EXPECT_TRUE(hit.normal.isApprox(Eigen::Vector3f::UnitY(), 0.001f));
+
+    // LateTick 式零时步同步后，最近的动态遮挡必须产生 miss，不能继续看穿至静态地板。
+    states[5]["position"] = {0, 60, 0};
+    physics.Step(states, declarations, 0);
+    const auto blocked = physics.ProbeGround("owner", origin, displacement);
+    EXPECT_FALSE(blocked.hit);
+    EXPECT_TRUE(blocked.supportIdentity.empty());
+}
+
+TEST(ScriptPhysicsTest, RigidBodyAccumulatesInternalSubstepsAndCapsLargeFrames)
 {
     auto blueprint = GameplayBlueprint("body"); blueprint["physics"] = Body("dynamic");
     Json states = Json::array({blueprint}), declarations{{"body", blueprint}};
     ScriptPhysicsWorld physics;
     physics.Step(states, declarations, 1.0f / 120);
-    EXPECT_FLOAT_EQ(states[0]["position"][1].get<float>(), 0);
+    EXPECT_FLOAT_EQ(states[0]["position"][1].get<float>(), 0); // 不足一个 1/60 子步，不推进。
     physics.Step(states, declarations, 1.0f / 120);
-    EXPECT_LT(states[0]["position"][1].get<float>(), 0);
+    EXPECT_LT(states[0]["position"][1].get<float>(), 0);       // 两帧补满一个内部子步。
+    // 大 dt 只追赶物理世界的 16 个 1/60 子步，不模拟完整的 10 秒自由落体。
     physics.Step(states, declarations, 10);
-    EXPECT_GT(states[0]["position"][1].get<float>(), -20);
+    const float capped = states[0]["position"][1].get<float>();
+    EXPECT_GT(capped, -100);
+    EXPECT_LT(capped, -20);
+    // 上限命中时丢弃整步多余量，下一帧只前进一个子步。
+    physics.Step(states, declarations, 1.0f / 60);
+    const float after = states[0]["position"][1].get<float>();
+    EXPECT_LT(after, capped);
+    EXPECT_GT(after, capped - 10);
     const auto pose = states[0]["position"];
     physics.Step(states, declarations, 0);
     EXPECT_EQ(states[0]["position"], pose);
@@ -1293,6 +1340,48 @@ TEST(ScriptPhysicsTest, CharacterTeleportRefreshesGroundAndProxyParticipatesInQu
     EXPECT_TRUE(physics.Triggers().empty());
     physics.Step(states, declarations, 1.0f / 60);
     EXPECT_LT(states[0]["position"][1].get<float>(), 500);
+}
+
+TEST(ScriptPhysicsTest, CharacterYawOnlyPreservesAchievedVelocity)
+{
+    auto floor = GameplayBlueprint("floor"), player = GameplayBlueprint("player");
+    floor["physics"] = Body("static"); floor["position"] = {0, -50, 0};
+    floor["physics"]["halfExtents"] = {2000, 50, 2000};
+    player["physics"] = {{"motion", "character"}, {"shape", "capsule"}, {"radius", 30}, {"halfHeight", 60}};
+    player["position"] = {0, 90, 0}; player["walkVelocity"] = {0, 0, -200};
+    Json states = Json::array({player, floor});
+    Json declarations{{"player", player}, {"floor", floor}};
+    ScriptPhysicsWorld physics;
+    physics.Step(states, declarations, 1.0f / 60);
+    ASSERT_NEAR(states[0]["bodyVelocity"][2].get<float>(), -200, 0.01f);
+    const auto position = states[0]["position"];
+    states[0]["rotation"] = {0, 180, 0};
+    states[0]["walkVelocity"] = {0, 0, 200};
+    physics.Step(states, declarations, 1.0f / 120);
+    // 每帧都按帧 dt 推进；纯转向不是传送，实际速度应保持新方向而不是被清零。
+    EXPECT_GT(states[0]["position"][2].get<float>(), position[2].get<float>());
+    EXPECT_NEAR(states[0]["bodyVelocity"][2].get<float>(), 200, 0.5f);
+    EXPECT_TRUE(states[0]["grounded"].get<bool>());
+}
+
+TEST(ScriptPhysicsTest, CharacterPositionTeleportClearsAchievedVelocity)
+{
+    auto floor = GameplayBlueprint("floor"), player = GameplayBlueprint("player");
+    floor["physics"] = Body("static"); floor["position"] = {0, -50, 0};
+    floor["physics"]["halfExtents"] = {2000, 50, 2000};
+    player["physics"] = {{"motion", "character"}, {"shape", "capsule"}, {"radius", 30}, {"halfHeight", 60}};
+    player["position"] = {0, 90, 0}; player["walkVelocity"] = {0, 0, -200};
+    Json states = Json::array({player, floor});
+    Json declarations{{"player", player}, {"floor", floor}};
+    ScriptPhysicsWorld physics;
+    physics.Step(states, declarations, 1.0f / 60);
+    ASSERT_LT(states[0]["bodyVelocity"][2].get<float>(), -199);
+    states[0]["position"] = {500, 500, 0};
+    // 零时步同步传送：不推进时间，但必须清掉上一帧的实际速度与地面状态。
+    physics.Step(states, declarations, 0);
+    EXPECT_EQ(states[0]["position"], Json::array({500, 500, 0}));
+    EXPECT_EQ(states[0]["bodyVelocity"], Json::array({0, 0, 0}));
+    EXPECT_FALSE(states[0]["grounded"].get<bool>());
 }
 
 TEST(ScriptPhysicsTest, CollisionLayersFilterResponseContactsAndRayQueries)

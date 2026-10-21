@@ -1,6 +1,7 @@
 #include "meshAssetValidator.h"
 
 #include <algorithm>
+#include <filesystem>
 #include <stdexcept>
 #include <string>
 
@@ -172,6 +173,55 @@ namespace
         return importOptions;
     }
 
+    std::string ReadOptionalAnimationJsonPath(
+        const nlohmann::json& json,
+        std::string_view fieldName,
+        std::string_view meshAssetPath,
+        std::string_view modelDataPath)
+    {
+        const std::string field(fieldName);
+        if (!json.contains(field))
+        {
+            return {};
+        }
+        if (!json.at(field).is_string())
+        {
+            throw std::runtime_error(
+                "Mesh asset field \"" + field + "\" must be a resource-relative JSON path: " +
+                std::string(meshAssetPath) + " model=" + std::string(modelDataPath));
+        }
+        const std::string value = json.at(field).get<std::string>();
+        if (value.empty())
+        {
+            throw std::runtime_error(
+                "Mesh asset field \"" + field + "\" must not be empty: " +
+                std::string(meshAssetPath) + " model=" + std::string(modelDataPath));
+        }
+        const std::filesystem::path path(value);
+        if (path.is_absolute() || path.has_root_directory())
+        {
+            throw std::runtime_error(
+                "Mesh asset field \"" + field + "\" must be resource-relative: " +
+                std::string(meshAssetPath) + " value=" + value);
+        }
+        for (const std::filesystem::path& part : path)
+        {
+            if (part == "..")
+            {
+                throw std::runtime_error(
+                    "Mesh asset field \"" + field + "\" must not escape its resource root: " +
+                    std::string(meshAssetPath) + " value=" + value);
+            }
+        }
+        if (path.extension() != ".json")
+        {
+            throw std::runtime_error(
+                "Mesh asset field \"" + field + "\" must reference a .json asset: " +
+                std::string(meshAssetPath) + " value=" + value);
+        }
+        return value;
+    }
+
     std::vector<std::string> BuildUniqueSourceMaterialSlots(const ModelResource& modelResource)
     {
         if (!modelResource.sourceMaterialSlotNames.empty())
@@ -246,6 +296,89 @@ MeshAssetBuildPlan MeshAssetValidator::BuildLoadPlan(
         loadPlan.modelDataPath);
     loadPlan.materialSlots = ReadMaterialSlots(effectiveMeshAssetJson, meshAssetPath, loadPlan.modelDataPath);
     loadPlan.modelCacheKey = loadPlan.modelDataPath;
+    if (effectiveMeshAssetJson.contains("skinning"))
+    {
+        const auto& skinning = effectiveMeshAssetJson.at("skinning");
+        if (loadPlan.assetType != "mesh" || !skinning.is_object() ||
+            !skinning.contains("clips") || !skinning.at("clips").is_array())
+            throw std::runtime_error(
+                "Mesh skinning requires an object with a clips array: " +
+                std::string(meshAssetPath));
+        if (loadPlan.importOptions.generateSmoothNormals ||
+            !loadPlan.importOptions.includedSectionNames.empty())
+            throw std::runtime_error("Skeletal import does not support static importOptions");
+
+        // skinning.root 已删除。显式拒绝而不是静默忽略，避免旧资源带着错误的
+        // 根骨假设继续导入；根骨唯一来源是 skinning.skeleton 指向的 SK。
+        if (skinning.contains("root"))
+            throw std::runtime_error(
+                "Mesh skinning.root is no longer supported; use skinning.skeleton: " +
+                std::string(meshAssetPath));
+        loadPlan.skeletonPath = ReadOptionalAnimationJsonPath(
+            skinning, "skeleton", meshAssetPath, loadPlan.modelDataPath);
+        if (loadPlan.skeletonPath.empty())
+            throw std::runtime_error(
+                "Mesh skinning requires skinning.skeleton to identify the skeleton: " +
+                std::string(meshAssetPath));
+        loadPlan.modelCacheKey += "|skeleton=" + loadPlan.skeletonPath;
+
+        for (const auto& clip : skinning.at("clips"))
+        {
+            if (!clip.is_object() || !clip.contains("id") || !clip.at("id").is_string() ||
+                clip.at("id").get<std::string>().empty() ||
+                !clip.contains("path") || !clip.at("path").is_string() ||
+                clip.at("path").get<std::string>().empty())
+                throw std::runtime_error("Skeletal clip requires nonempty id/path: " +
+                    std::string(meshAssetPath));
+            MeshAnimationClipPlan clipPlan;
+            clipPlan.id = clip.at("id").get<std::string>();
+            clipPlan.path = clip.at("path").get<std::string>();
+            for (const auto& existing : loadPlan.animationClips)
+                if (existing.id == clipPlan.id)
+                    throw std::runtime_error("Duplicate skeletal clip id: " + clipPlan.id);
+            loadPlan.modelCacheKey += "|clip=" + clipPlan.id + ":" + clipPlan.path;
+            // sequence 是可选 sidecar；缺失表示该 clip 没有曲线/notify，行为与旧资源一致。
+            if (clip.contains("sequence"))
+            {
+                clipPlan.sequencePath = ReadOptionalAnimationJsonPath(
+                    clip, "sequence", meshAssetPath, loadPlan.modelDataPath);
+                loadPlan.modelCacheKey +=
+                    "|sequence=" + clipPlan.id + ":" + clipPlan.sequencePath;
+            }
+            loadPlan.animationClips.push_back(std::move(clipPlan));
+        }
+
+        // montages 是可选清单；路径级 key 与 clip/sequence 同规则，内容摘要由 loader 追加。
+        // 上方已强制要求 skinning.skeleton，因此 Montage 的 slot/骨名校验总有 SK 可用。
+        if (skinning.contains("montages"))
+        {
+            if (!skinning.at("montages").is_array())
+                throw std::runtime_error(
+                    "Mesh skinning.montages must be an array: " +
+                    std::string(meshAssetPath));
+            for (const auto& montage : skinning.at("montages"))
+            {
+                if (!montage.is_object() || !montage.contains("id") ||
+                    !montage.at("id").is_string() ||
+                    montage.at("id").get<std::string>().empty() ||
+                    !montage.contains("path") || !montage.at("path").is_string() ||
+                    montage.at("path").get<std::string>().empty())
+                    throw std::runtime_error(
+                        "Skeletal montage requires nonempty id/path: " +
+                        std::string(meshAssetPath));
+                MeshAnimationMontagePlan montagePlan;
+                montagePlan.id = montage.at("id").get<std::string>();
+                for (const auto& existing : loadPlan.animationMontages)
+                    if (existing.id == montagePlan.id)
+                        throw std::runtime_error(
+                            "Duplicate skeletal montage id: " + montagePlan.id);
+                montagePlan.path = ReadOptionalAnimationJsonPath(
+                    montage, "path", meshAssetPath, loadPlan.modelDataPath);
+                loadPlan.modelCacheKey += "|montage=" + montagePlan.path;
+                loadPlan.animationMontages.push_back(std::move(montagePlan));
+            }
+        }
+    }
     if (loadPlan.importOptions.generateSmoothNormals)
     {
         loadPlan.modelCacheKey += "|generateSmoothNormals";

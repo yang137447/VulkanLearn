@@ -218,11 +218,10 @@ void EditorLogPanel::BuildPerformance(const nlohmann::json& performance, bool is
     const auto pending = performance.value("pending", nlohmann::json::object());
     const auto assembly = performance.value("assembly", nlohmann::json::object());
     const auto gc = performance.value("gc", nlohmann::json::object());
-    std::string summary = "Time: dt " + Value(time, "deltaTime") + " s | unscaled " +
-        Value(time, "unscaledDeltaTime") + " s | scale " + Value(time, "timeScale") +
-        " | play " + Value(time, "timeSincePlay") + " s | fixed " + Value(time, "fixedSteps") +
-        " | dropped " + Value(time, "droppedSteps") + " (" + Value(time, "droppedTime") +
-        " s) | physics " + Value(performance, "physicsMs") + " ms\nAssembly: generation " +
+    std::string summary = "Time: frame " + Value(time, "frameIndex") + " | dt " +
+        Value(time, "deltaTime") + " s | unscaled " + Value(time, "unscaledDeltaTime") +
+        " s | scale " + Value(time, "timeScale") + " | play " + Value(time, "timeSincePlay") +
+        " s | physics " + Value(performance, "physicsMs") + " ms\nAssembly: generation " +
         Value(assembly, "generation") + " | loaded " + Value(assembly, "loaded") +
         " | retired alive " + Value(assembly, "retiredAlive") + " | contexts " + Value(assembly, "contexts") +
         "\nGC: gen0 " + Value(gc, "generation0") + " | gen1 " + Value(gc, "generation1") +

@@ -1,0 +1,80 @@
+{
+  "format": "vl.anim-montage.v1",
+  "montage": "AM_M_Neutral_Traversal_Vault_1_0_walk_F_Rfoot",
+  "sequence": "Maps/SC_gasp/Source/M_Neutral_Traversal_Vault_1_0_walk_F_Rfoot.anim.json",
+  "sequenceBlake3": "45244cae49a846ad9a643518e21e87e0869a86eda70fa96a15a7fede8c914bd6",
+  "slot": "DefaultSlot",
+  "length": 2.933333,
+  "sections": [
+    {
+      "name": "Default",
+      "startTime": 0.0,
+      "endTime": 2.933333,
+      "nextSection": "",
+      "nextTime": 0.0,
+      "linkMethod": ""
+    }
+  ],
+  "notifies": [
+    {
+      "kind": "notifyState",
+      "track": "2",
+      "name": "PoseSearchBranchIn",
+      "time": 0.0,
+      "duration": 0.506839
+    },
+    {
+      "kind": "notifyState",
+      "track": "3",
+      "name": "PoseSearchSamplingRange",
+      "time": 0.0,
+      "duration": 0.508508
+    },
+    {
+      "kind": "notifyState",
+      "track": "1",
+      "name": "MotionWarping",
+      "time": 0.517863,
+      "duration": 0.382087,
+      "warp": {
+        "target": "FrontLedge",
+        "provider": "Bone",
+        "bone": "attach",
+        "subtractRemainingRootMotion": false,
+        "ignoreZAxis": false,
+        "warpRotation": true,
+        "rotationTimeMultiplier": 1.0,
+        "easing": "Linear"
+      }
+    },
+    {
+      "kind": "notifyState",
+      "track": "1",
+      "name": "MotionWarping",
+      "time": 0.899954,
+      "duration": 0.166749,
+      "warp": {
+        "target": "FrontLedge",
+        "provider": "Bone",
+        "bone": "attach",
+        "subtractRemainingRootMotion": false,
+        "ignoreZAxis": false,
+        "warpRotation": true,
+        "rotationTimeMultiplier": 1.0,
+        "easing": "Linear"
+      }
+    },
+    {
+      "kind": "notifyState",
+      "track": "1",
+      "name": "BP_NotifyState_TraversalBlendOut_C",
+      "time": 1.314139,
+      "duration": 1.619195
+    }
+  ],
+  "source": {
+    "t3d": "AM_M_Neutral_Traversal_Vault_1_0_walk_F_Rfoot.copy",
+    "uePackage": "/Game/Characters/UEFN_Mannequin/Animations/Traversal/Vault/AM_M_Neutral_Traversal_Vault_1_0_walk_F_Rfoot.AM_M_Neutral_Traversal_Vault_1_0_walk_F_Rfoot",
+    "exportedBy": "import_gasp_montages.py"
+  }
+}

@@ -171,6 +171,19 @@ void UpdateObjectDescriptorSets(
             }
             else if (binding.type == vk::DescriptorType::eStorageBuffer)
             {
+                if (binding.set == ObjectSetIndex)
+                {
+                    if (!resources.skinJointCount || (binding.binding != 1 && binding.binding != 2))
+                        throw std::runtime_error("Invalid skeletal Object SSBO contract");
+                    vk::WriteDescriptorSet write;
+                    write.setDstSet(resources.descriptorSets[i][binding.set])
+                        .setDstBinding(binding.binding).setDescriptorCount(1)
+                        .setDescriptorType(binding.type)
+                        .setBufferInfo(binding.binding == 1
+                            ? resources.skinPalette.bufferInfos.at(i) : resources.skinInfluences);
+                    resources.writeDescriptorSets[i].push_back(write);
+                    continue;
+                }
                 update.source = RendererDescriptorUpdateSource::LightStorage;
             }
             else if (binding.type == vk::DescriptorType::eCombinedImageSampler)
@@ -411,6 +424,16 @@ void RendererObjectResourceManager::InitializeObjectResources(
     }
 
     CreateObjectUniformBuffer(rendererBackend, objectName, resources);
+    if (resources.skinJointCount)
+    {
+        // current/previous mat4 交错，std430 每骨 128 bytes；图像 fence 完成后才写对应 slice。
+        rendererBackend.CreatePerSwapchainBufferSet(resources.skinPalette,
+            resources.skinJointCount * sizeof(Eigen::Matrix4f) * 2,
+            vk::BufferUsageFlagBits::eStorageBuffer,
+            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+            "SkinPalette: " + objectName);
+        rendererBackend.SetupDescriptorBufferInfos(resources.skinPalette);
+    }
     CreateObjectDescriptorSets(rendererBackend, objectName, materialInstance, resources);
     UpdateObjectDescriptorSets(rendererBackend, descriptorContext, materialInstance, resources);
     // 公共 Opaque 管线有自己的精简 descriptor layout，因此需要 shadowDescriptorSets。
@@ -436,6 +459,8 @@ void RendererObjectResourceManager::ShutdownObjectResources(
 
     DestroyShadowDescriptorSets(*rendererBackend, resources);
     DestroyObjectDescriptorSets(*rendererBackend, resources);
+    if (resources.skinPalette.HasResources())
+        rendererBackend->DestroyBufferSet(resources.skinPalette);
     if (resources.objectUniformBuffer.HasResources())
     {
         rendererBackend->DestroyBufferSet(resources.objectUniformBuffer);

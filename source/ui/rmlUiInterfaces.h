@@ -101,6 +101,7 @@ public:
     void SetTransform(const Rml::Matrix4f* transform) override;
 
     void BeginFrame(UiRenderSnapshot& renderSnapshot);
+    void SetDebugDepth(float value) { debugDepth = value; }
     void EndFrame();
     void AppendTextureSnapshots(std::vector<UiTextureSnapshot>& outTextures) const;
     void PublishTexturePreview(const std::shared_ptr<const EditorUi::EditorJsonDocumentSnapshot>& document);
@@ -129,6 +130,7 @@ private:
     UiClipRect BuildClipRect() const;
 
     UiRenderSnapshot* currentSnapshot = nullptr;
+    float debugDepth = -1;
     bool linearColorOutput = true;
     bool scissorEnabled = false;
     Rml::Rectanglei scissorRegion;

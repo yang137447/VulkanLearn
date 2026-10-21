@@ -428,6 +428,15 @@ MaterialInstanceBuildPlan MaterialInstanceValidator::BuildLoadPlan(
         request.shaderVariantKey = loadPlan.shaderVariantKey;
         request.pass = VL::MaterialPass::Base;
         request.features = loadPlan.materialFeatureKey;
+        if (HasMaterialMacroValue(loadPlan.shaderVariantKey.macros, "VL_SKINNED_MESH", "1"))
+        {
+            if (loadPlan.materialFeatureKey.modifiesMeshPosition)
+                throw std::runtime_error("SkinnedMesh does not yet support material vertex displacement history");
+            request.vertexFactoryKey = "SkinnedMesh";
+            // 蒙皮需要独立 ShadowDepth，不能路由到只读静态 position 的公共阴影管线。
+            loadPlan.materialFeatureKey.modifiesMeshPosition = true;
+            request.features = loadPlan.materialFeatureKey;
+        }
         request.source.materialSourcePath =
             MaterialAssetUtils::NormalizeShaderGlslRelativePath(
                 materialPath);
@@ -439,6 +448,8 @@ MaterialInstanceBuildPlan MaterialInstanceValidator::BuildLoadPlan(
             BuildParameterIncludePath(materialPath, materialJson);
         loadPlan.baseShaderCompileRequest = std::move(request);
     }
+    else if (HasMaterialMacroValue(loadPlan.shaderVariantKey.macros, "VL_SKINNED_MESH", "1"))
+        throw std::runtime_error("SkinnedMesh requires composed shaderEvaluation");
 
     loadPlan.materialKey = BuildMaterialCacheKey(
         loadPlan.shaderVariantKey,

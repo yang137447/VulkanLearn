@@ -7,6 +7,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 #include "engine/diagnosticsSubsystem.h"
@@ -15,6 +16,7 @@
 #include "editor/service/sceneDocumentService.h"
 #include "engine/runtimeConfig.h"
 #include "engine/runtimeTestHooks.h"
+#include "input/inputSubsystem.h"
 #include "materialInstance.h"
 #include "render/resource/rendererResourceCache.h"
 #include "renderGraph.h"
@@ -23,6 +25,8 @@
 #include "shader/build/atomicFile.h"
 #include "world/loading/worldTransitionCoordinator.h"
 #include "world/world.h"
+#include "animation/skeletalPlayback.h"
+#include "script/scriptRuntime.h"
 
 namespace VL
 {
@@ -234,6 +238,8 @@ RuntimeCommandExecutionResult RuntimeCommandExecutor::ExecuteQueuedCommands(
     RuntimeTestHooks& runtimeTestHooks,
     const RuntimeConfig& runtimeConfig,
     const DiagnosticsSubsystem& diagnostics,
+    InputSubsystem* input,
+    ScriptRuntimeSubsystem* scripts,
     Editor::SceneDocumentService* sceneDocuments) const
 {
     RuntimeCommandExecutionResult executionResult;
@@ -249,6 +255,8 @@ RuntimeCommandExecutionResult RuntimeCommandExecutor::ExecuteQueuedCommands(
             runtimeConfig,
             diagnostics,
             executionResult,
+            input,
+            scripts,
             sceneDocuments);
     }
     return executionResult;
@@ -263,6 +271,8 @@ void RuntimeCommandExecutor::ExecuteCommand(
     const RuntimeConfig& runtimeConfig,
     const DiagnosticsSubsystem& diagnostics,
     RuntimeCommandExecutionResult& executionResult,
+    InputSubsystem* input,
+    ScriptRuntimeSubsystem* scripts,
     Editor::SceneDocumentService* sceneDocuments) const
 {
     switch (command.type)
@@ -286,6 +296,76 @@ void RuntimeCommandExecutor::ExecuteCommand(
         renderSystem.SetDebugViewMode(command.intValue);
         diagnostics.ReportInfo("Debug view mode set to " + std::to_string(command.intValue));
         break;
+    case RuntimeCommandType::ControlAnimation:
+    {
+        const auto& world = worldManager.GetActiveWorld();
+        if (!world || renderSystem.IsOfflineMode()) break;
+        const uint64_t expected = command.sourceText == "ui"
+            ? command.actorProperty.worldGeneration : world->GetGeneration();
+        if (command.stringValue != "get" &&
+            !world->ControlAnimation(expected, command.stringValue, command.floatValue))
+        {
+            diagnostics.ReportWarning("Animation control rejected for this World or clip range");
+            break;
+        }
+        std::unordered_set<const Animation::SkeletalPlayback*> reported;
+        for (const auto& entry : world->GetMeshObjects())
+            if (entry.second.animation && reported.insert(entry.second.animation.get()).second)
+            {
+                const auto& player = *entry.second.animation;
+                diagnostics.ReportInfo("Animation[" + entry.first + "]: clip=" +
+                    std::to_string(player.SelectedClip()) + " id=" + player.SelectedClipId() +
+                    " time=" + std::to_string(player.Time()) +
+                    " duration=" + std::to_string(player.Duration()) +
+                    " playing=" + std::to_string(player.IsPlaying()));
+            }
+        break;
+    }
+    case RuntimeCommandType::ControlScriptAnimation:
+    {
+        const auto& world = worldManager.GetActiveWorld();
+        if (!world || renderSystem.IsOfflineMode()) break;
+        const uint64_t expected = command.sourceText == "ui"
+            ? command.actorProperty.worldGeneration : world->GetGeneration();
+        if (!world->ControlScriptAnimation(expected, command.stringValue, command.intValue, command.floatValue))
+            diagnostics.ReportWarning("Script animation control rejected for this World or component");
+        break;
+    }
+    case RuntimeCommandType::ControlDebugDraw:
+    {
+        const auto& world = worldManager.GetActiveWorld();
+        if (!world || renderSystem.IsOfflineMode()) break;
+        if (command.sourceText == "ui" && command.actorProperty.worldGeneration != world->GetGeneration())
+        { diagnostics.ReportWarning("DrawDebug rejected for stale World"); break; }
+        try { diagnostics.ReportInfo(Debug::ApplyControl(world->GetDebugDraw(), command.debugDrawControl)); }
+        catch (const std::invalid_argument& error) { diagnostics.ReportWarning(error.what()); }
+        break;
+    }
+    case RuntimeCommandType::ControlMotionReplay:
+    {
+        const auto& world = worldManager.GetActiveWorld();
+        if (!world || renderSystem.IsOfflineMode()) break;
+        if (command.sourceText == "ui" && command.actorProperty.worldGeneration != world->GetGeneration())
+        {
+            diagnostics.ReportWarning("Motion replay rejected for stale World");
+            break;
+        }
+        world->SetMotionDebugReplayFrame(command.intValue);
+        break;
+    }
+    case RuntimeCommandType::ControlMotionDebug:
+    {
+        const auto& world = worldManager.GetActiveWorld();
+        if (!world || renderSystem.IsOfflineMode()) break;
+        if (command.sourceText == "ui" && command.actorProperty.worldGeneration != world->GetGeneration())
+        {
+            diagnostics.ReportWarning("Motion debug rejected for stale World");
+            break;
+        }
+        world->SetMotionDebugEnabled(command.intValue == 1);
+        diagnostics.ReportInfo("Motion debug " + std::string(command.intValue == 1 ? "enabled" : "disabled"));
+        break;
+    }
     case RuntimeCommandType::SetOfflineMode:
     {
         const bool fromUi = command.sourceText == "ui";
@@ -750,6 +830,40 @@ void RuntimeCommandExecutor::ExecuteCommand(
             worldManager,
             diagnostics);
         break;
+    case RuntimeCommandType::InjectInput:
+    {
+        if (!input)
+        {
+            diagnostics.ReportWarning("Input injection unavailable");
+            break;
+        }
+        try
+        {
+            input->InjectAction(command.stringValue, command.intValue != 0);
+            diagnostics.ReportInfo("Input injected: " + command.stringValue +
+                (command.intValue != 0 ? " down" : " up"));
+        }
+        catch (const std::exception& error)
+        {
+            diagnostics.ReportWarning(std::string("Input injection rejected: ") + error.what());
+        }
+        break;
+    }
+    case RuntimeCommandType::ReloadAssembly:
+    {
+        const auto& world = worldManager.GetActiveWorld();
+        if (!world || renderSystem.IsOfflineMode() || !scripts)
+        {
+            diagnostics.ReportWarning("Assembly reload unavailable");
+            break;
+        }
+        std::string error;
+        if (!scripts->ReloadAssembly(*world, error))
+            diagnostics.ReportWarning("Assembly reload rejected: " + error);
+        else
+            diagnostics.ReportInfo("Assembly reload committed");
+        break;
+    }
     case RuntimeCommandType::ReloadShaders:
         executionResult.shaderReloadRequested = true;
         executionResult.shaderReloadScope =

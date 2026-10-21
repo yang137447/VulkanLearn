@@ -54,6 +54,12 @@ gbufferVelocity, gbufferF, sceneColorBase   (8 color attachments)
 
 ## 2. 附件清单
 
+`debugview 90` 由 toneMapping 直接查看 `gbufferVelocity.rg`，
+编码为 `clamp(0.5 + 20 * velocity, 0, 1)`，B 为 0.5；零速度为中灰。
+它不经过曝光/bloom/tone mapping，只覆盖 deferred 速度附件。
+SkinnedMesh 的 current/previous position 来源见
+[动画播放与蒙皮](animation-runtime-skinning.md)，不改变选中标记的 B 通道归属。
+
 | 附件 | 格式 | 尺寸 | 写入 pass | 读取 pass |
 | --- | --- | --- | --- | --- |
 | `gbufferA` | `A2B10G10R10_UNORM_PACK32` | 1x | geometry (`clear`) | deferredLighting |

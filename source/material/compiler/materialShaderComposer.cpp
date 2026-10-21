@@ -123,7 +123,7 @@ std::string BuildStageSource(
 ComposedMaterialShaderSource MaterialShaderComposer::Compose(
     const MaterialShaderCompileRequest& request)
 {
-    if (request.vertexFactoryKey != "StaticMesh")
+    if (request.vertexFactoryKey != "StaticMesh" && request.vertexFactoryKey != "SkinnedMesh")
     {
         throw std::runtime_error(
             "Unsupported material vertex factory: " + request.vertexFactoryKey);

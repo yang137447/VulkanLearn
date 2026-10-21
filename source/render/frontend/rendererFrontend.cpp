@@ -13,6 +13,7 @@ namespace
 RenderDrawPacket BuildDrawPacket(const MeshDrawSnapshot& drawSnapshot)
 {
     RenderDrawPacket packet;
+    packet.skinPose = drawSnapshot.skinPose;
     packet.objectId = drawSnapshot.objectId;
     packet.selected = drawSnapshot.selected;
     packet.debugName = drawSnapshot.debugName;

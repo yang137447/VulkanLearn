@@ -1,4 +1,5 @@
 #include "ui/uiSubsystem.h"
+#include "ui/debugDrawOverlay.h"
 #include "ui/gameplayHudView.h"
 #include "ui/editorPointerPolicy.h"
 
@@ -299,6 +300,7 @@ RuntimeResult<void> UiSubsystem::Initialize(
 
 void UiSubsystem::Shutdown()
 {
+    debugDrawLabels.reset();
     renderSnapshotQueue.Clear();
     if (rmlContext != nullptr)
     {
@@ -854,6 +856,9 @@ RuntimeResult<void> UiSubsystem::InitializeRmlUi()
             "UiSubsystem.RmlContextFailed",
             "RmlUi failed to create the runtime context."));
     }
+    debugDrawLabels = std::make_unique<DebugDrawLabels>();
+    if (!debugDrawLabels->Initialize(rmlContext->GetName() + "-debug-labels", rmlRenderInterface))
+        return RuntimeResult<void>::Failure(MakeRuntimeError("UiSubsystem.DebugLabelsFailed", "RmlUi debug label context failed"));
     return RuntimeResult<void>::Success();
 }
 
@@ -1424,6 +1429,16 @@ void UiSubsystem::BuildAndPublishRenderSnapshot()
 
     rmlRenderInterface.BeginFrame(*snapshot);
     rmlContext->Render();
+    const size_t firstDebugCommand = snapshot->drawCommands.size();
+    if (lastViewModel.debugDraw && !lastViewModel.offlineMode &&
+        (!developerUiVisible || (materialInstanceEditorPanel &&
+            materialInstanceEditorPanel->IsMotionDebugViewport())))
+    {
+        AppendDebugDrawOverlay(*snapshot, *lastViewModel.debugDraw, lastViewModel.motionCamera, desc.srgbFramebuffer);
+        debugDrawLabels->Render(*lastViewModel.debugDraw, lastViewModel.motionCamera,
+            snapshot->sceneViewportRect, desc.viewportWidth, desc.viewportHeight);
+        InsertDebugDrawCommands(*snapshot, firstDebugCommand);
+    }
     rmlRenderInterface.AppendTextureSnapshots(snapshot->textures);
     rmlRenderInterface.EndFrame();
     previousUiVertexCount = snapshot->vertices.size();

@@ -125,6 +125,22 @@ TEST_F(ScriptBlueprintAssetTest, ComponentOverridesMergeOnlyExposedFieldsAndPres
     EXPECT_EQ(instance, source);
 }
 
+TEST_F(ScriptBlueprintAssetTest, SpringArmExtendedFieldsSupportSparseInstanceOverrides)
+{
+    asset["components"] = Json::array({{{"id", "arm"}, {"type", "springArm"}}});
+    // 完整权限超过旧的 16 字段上限；实际白名单仍由共享类型表确定。
+    asset["componentInstanceEditable"] = {{"arm", ScriptComponentInstanceFields(asset["components"][0])}};
+    Write();
+    instance["componentOverrides"] = {{"arm", {{"targetOffset", {0, 40, 0}}, {"rotationOffset", {10, 0, 0}},
+        {"enableCameraLag", true}, {"cameraLagSpeed", 4}, {"useCameraLagSubstepping", false},
+        {"cameraLagMaxTimeStep", 0.01}, {"inheritYaw", false}}}};
+    const auto resolved = ResolveScriptBlueprint(root, instance);
+    EXPECT_EQ(resolved["components"][0]["targetOffset"], Json::array({0, 40, 0}));
+    EXPECT_FALSE(resolved["components"][0]["inheritYaw"].get<bool>());
+    EXPECT_FALSE(resolved["components"][0]["useCameraLagSubstepping"].get<bool>());
+    EXPECT_FALSE(instance["componentOverrides"]["arm"].contains("targetArmLength"));
+}
+
 TEST_F(ScriptBlueprintAssetTest, ComponentOverridesFollowChangedUnmodifiedDefaultsAndResetByRemovingKey)
 {
     asset["components"] = Json::array({{{"id", "pivot"}, {"type", "scene"}, {"position", {1, 2, 3}}}});
