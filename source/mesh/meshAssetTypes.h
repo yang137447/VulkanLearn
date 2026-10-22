@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 #include <memory>
@@ -44,6 +45,15 @@ enum class TressfxSimulationBackend
     Gpu,
 };
 
+// simulation.skinning 的作者声明：把发丝根点从前 N 个固定点改为跟随源角色骨骼。
+// source 是同一场景里的 mesh 对象名，rootBone 是该对象目标骨架的关节名。
+// 缺省（nullopt）表示保持“根点钉在 rest”的历史行为。
+struct TressfxSimulationSkinning
+{
+    std::string source;
+    std::string rootBone;
+};
+
 struct TressfxSimulationConfig
 {
     bool enabled = false;
@@ -65,6 +75,9 @@ struct TressfxSimulationConfig
     // 位置/半径都是资产局部空间厘米，与 positions 和 solver 同一坐标系。
     std::vector<VL::Hair::TressfxCollider> capsules;
     TressfxSimulationBackend backend = TressfxSimulationBackend::Cpu;
+    // 可选：根点骨骼蒙皮。仅 GPU backend 可用，因为姿态来自渲染快照而不是
+    // 游戏线程；CPU 参考 solver 没有可用的 SkinPose。
+    std::optional<TressfxSimulationSkinning> skinning;
 };
 
 // Runtime SDK 10 keeps the Games 9 wind authoring model. Curves are sampled

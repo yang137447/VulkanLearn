@@ -3687,7 +3687,8 @@ void RenderSystem::RecordHairSimulation(vk::CommandBuffer commandBuffer, uint32_
     // 每帧只调用一次，且在所有 graphics pass 之前：本帧所有读取 current positions 的
     // vertex shader 都看到同一份已经完成 dispatch 的位置。
     hairSimulation->Record(
-        commandBuffer, currentResolvedRenderScene, frameSlot, exposureDeltaSeconds);
+        commandBuffer, currentResolvedRenderScene, currentRenderScene, frameSlot,
+        exposureDeltaSeconds);
 }
 
 void RenderSystem::RecordEnvironmentIbl(vk::CommandBuffer commandBuffer, uint32_t swapchainImageIndex)

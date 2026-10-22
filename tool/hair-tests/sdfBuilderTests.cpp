@@ -373,6 +373,26 @@ TEST(SdfBuilder, GenerationIsByteDeterministic)
                   first.Value().distances.size() * sizeof(float)), 0);
 }
 
+TEST(SdfBuilder, ParallelBakeIsByteIdenticalToSingleThread)
+{
+    // 线程只决定谁算哪些 z 切片；体素结果必须与调度无关，文件逐字节相同。
+    const SdfTriangleMesh mesh = MakeBox(Eigen::Vector3f(0.0f, 0.0f, 0.0f),
+        Eigen::Vector3f(4.0f, 4.0f, 4.0f));
+    SdfGridSpec single = GridFor(mesh, 1.0f, 1.0f);
+    single.threadCount = 1;
+    SdfGridSpec parallel = single;
+    parallel.threadCount = 4;
+    const auto singleResult = VL::Hair::BuildSdf(mesh, single);
+    const auto parallelResult = VL::Hair::BuildSdf(mesh, parallel);
+    ASSERT_TRUE(singleResult.IsSuccess()) << singleResult.Error().message;
+    ASSERT_TRUE(parallelResult.IsSuccess()) << parallelResult.Error().message;
+    EXPECT_EQ(singleResult.Value().distances.size(), parallelResult.Value().distances.size());
+    EXPECT_EQ(BytesOf(singleResult.Value()), BytesOf(parallelResult.Value()));
+    EXPECT_EQ(std::memcmp(singleResult.Value().distances.data(),
+                  parallelResult.Value().distances.data(),
+                  singleResult.Value().distances.size() * sizeof(float)), 0);
+}
+
 TEST(SdfBuilder, FileRoundTripPreservesField)
 {
     const SdfTriangleMesh mesh = MakeSphere(5.0f, 16, 32);

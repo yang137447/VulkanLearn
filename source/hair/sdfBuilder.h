@@ -57,12 +57,15 @@ struct SdfTriangleMesh
 
 // 体素域。minCorner 是最小角，dims 是每轴体素数，band 是截断半径（厘米）。
 // 三者与 cellSize 一起决定采样规则，必须由调用方显式给出，生成器不猜网格范围。
+// threadCount：0/1 表示单线程；>1 时按 z 切片分给多个 worker，每个体素只由一个
+// worker 计算并只写自己的槽位，因此输出与线程数/调度无关，逐字节确定。
 struct SdfGridSpec
 {
     Eigen::Vector3f minCorner = Eigen::Vector3f::Zero();
     float cellSize = 1.0f;
     std::array<std::uint32_t, 3> dims{0, 0, 0};
     float band = 4.0f;
+    std::uint32_t threadCount = 0;
 };
 
 // 输入网格的水密性报告，供调用方判断符号是否可信。

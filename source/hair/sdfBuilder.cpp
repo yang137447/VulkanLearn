@@ -5,9 +5,11 @@
 #include <cmath>
 #include <cstring>
 #include <fstream>
+#include <functional>
 #include <limits>
 #include <new>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -401,6 +403,54 @@ bool FiniteVector(const Eigen::Vector3f& value)
 {
     return std::isfinite(value.x()) && std::isfinite(value.y()) && std::isfinite(value.z());
 }
+
+// 一个 worker 的烘焙范围 [zBegin, zEnd)，按与原单线程完全相同的 z→y→x 顺序写入
+// field.distances 中属于自己的槽位。BVH、三角形表与伪法线表在这里只读，因此
+// 每个体素的结果只取决于它的位置，与线程数、切片划分和调度无关。
+void BakeVoxelRange(const TriangleBvh& bvh, const std::vector<Triangle>& triangles,
+    const std::vector<Eigen::Vector3f>& vertexPseudonormals,
+    const std::vector<EdgeNormal>& edgePseudonormals, SdfField& field,
+    std::uint32_t zBegin, std::uint32_t zEnd)
+{
+    const std::size_t yStride = field.dims[0];
+    const std::size_t zStride = static_cast<std::size_t>(field.dims[0]) * field.dims[1];
+    std::vector<std::uint32_t> stack;
+    stack.reserve(128);
+    for (std::uint32_t z = zBegin; z < zEnd; ++z)
+    {
+        for (std::uint32_t y = 0; y < field.dims[1]; ++y)
+        {
+            std::size_t voxel = static_cast<std::size_t>(z) * zStride +
+                static_cast<std::size_t>(y) * yStride;
+            for (std::uint32_t x = 0; x < field.dims[0]; ++x, ++voxel)
+            {
+                const Eigen::Vector3f center = field.VoxelCenter(x, y, z);
+                const ClosestPoint closest = bvh.Query(center, stack);
+                float distance = 0.0f;
+                if (!(closest.squaredDistance > 0.0f))
+                {
+                    // 体素中心恰在表面上：距离 0，符号无定义。
+                    distance = 0.0f;
+                }
+                else
+                {
+                    const Eigen::Vector3f pseudonormal = Pseudonormal(closest, triangles,
+                        vertexPseudonormals, edgePseudonormals);
+                    const Eigen::Vector3f delta = center -
+                        (triangles[closest.triangle].a * closest.barycentric[0] +
+                            triangles[closest.triangle].b * closest.barycentric[1] +
+                            triangles[closest.triangle].c * closest.barycentric[2]);
+                    distance = std::sqrt(closest.squaredDistance);
+                    // 角度加权伪法线是符号的唯一判据：朝外为正、朝内为负。
+                    // 点无法定向（伪法线退化到长度 0）时按外部处理，并保持有限值。
+                    if (delta.dot(pseudonormal) < 0.0f)
+                        distance = -distance;
+                }
+                field.distances[voxel] = std::max(-field.band, std::min(field.band, distance));
+            }
+        }
+    }
+}
 }
 
 RuntimeResult<SdfField> BuildSdf(const SdfTriangleMesh& mesh, const SdfGridSpec& grid)
@@ -603,39 +653,60 @@ RuntimeResult<SdfField> BuildSdf(const SdfTriangleMesh& mesh, const SdfGridSpec&
     field.mesh = report;
     field.distances.resize(static_cast<std::size_t>(voxelCount));
 
-    std::vector<std::uint32_t> stack;
-    stack.reserve(128);
-    std::size_t voxel = 0;
-    for (std::uint32_t z = 0; z < grid.dims[2]; ++z)
+    // 线程数只影响“谁算哪些 z 切片”，不影响任何体素的距离/符号计算。单线程路径
+    // 与加入并行前完全一致；多线程时每个体素只被一个 worker 写一次。
+    const std::uint32_t requestedWorkers = grid.threadCount > 1 ? grid.threadCount : 1;
+    const std::uint32_t workerCount =
+        std::min(requestedWorkers, std::max(1u, grid.dims[2]));
+    if (workerCount <= 1)
     {
-        for (std::uint32_t y = 0; y < grid.dims[1]; ++y)
+        BakeVoxelRange(bvh, bvhTriangles, vertexPseudonormals, edgePseudonormals, field,
+            0, grid.dims[2]);
+    }
+    else
+    {
+        const std::uint32_t sliceCount = grid.dims[2];
+        const std::uint32_t sliceChunk = (sliceCount + workerCount - 1) / workerCount;
+        std::vector<std::thread> workers;
+        workers.reserve(workerCount - 1);
+        bool threadStartFailed = false;
+        try
         {
-            for (std::uint32_t x = 0; x < grid.dims[0]; ++x, ++voxel)
+            for (std::uint32_t worker = 1; worker < workerCount; ++worker)
             {
-                const Eigen::Vector3f center = field.VoxelCenter(x, y, z);
-                const ClosestPoint closest = bvh.Query(center, stack);
-                float distance = 0.0f;
-                if (!(closest.squaredDistance > 0.0f))
-                {
-                    // 体素中心恰在表面上：距离 0，符号无定义。
-                    distance = 0.0f;
-                }
-                else
-                {
-                    const Eigen::Vector3f pseudonormal = Pseudonormal(closest, bvhTriangles,
-                        vertexPseudonormals, edgePseudonormals);
-                    const Eigen::Vector3f delta = center -
-                        (bvhTriangles[closest.triangle].a * closest.barycentric[0] +
-                            bvhTriangles[closest.triangle].b * closest.barycentric[1] +
-                            bvhTriangles[closest.triangle].c * closest.barycentric[2]);
-                    distance = std::sqrt(closest.squaredDistance);
-                    // 角度加权伪法线是符号的唯一判据：朝外为正、朝内为负。
-                    // 点无法定向（伪法线退化到长度 0）时按外部处理，并保持有限值。
-                    if (delta.dot(pseudonormal) < 0.0f)
-                        distance = -distance;
-                }
-                field.distances[voxel] = std::max(-grid.band, std::min(grid.band, distance));
+                const std::uint32_t zBegin = worker * sliceChunk;
+                if (zBegin >= sliceCount)
+                    break;
+                const std::uint32_t zEnd = std::min(sliceCount, zBegin + sliceChunk);
+                workers.emplace_back(BakeVoxelRange, std::cref(bvh), std::cref(bvhTriangles),
+                    std::cref(vertexPseudonormals), std::cref(edgePseudonormals),
+                    std::ref(field), zBegin, zEnd);
             }
+        }
+        catch (const std::exception&)
+        {
+            // 线程创建失败时不发布部分结果；已启动的 worker 必须先 join。
+            threadStartFailed = true;
+        }
+        bool bakeFailed = false;
+        try
+        {
+            BakeVoxelRange(bvh, bvhTriangles, vertexPseudonormals, edgePseudonormals, field,
+                0, std::min(sliceCount, sliceChunk));
+        }
+        catch (const std::exception&)
+        {
+            bakeFailed = true;
+        }
+        for (std::thread& worker : workers)
+        {
+            if (worker.joinable())
+                worker.join();
+        }
+        if (bakeFailed || threadStartFailed)
+        {
+            return RuntimeResult<SdfField>::Failure(MakeRuntimeError(
+                "Hair.SdfThread", "cannot complete the parallel SDF bake"));
         }
     }
     return RuntimeResult<SdfField>::Success(std::move(field));

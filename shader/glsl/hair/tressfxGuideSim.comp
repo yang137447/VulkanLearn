@@ -35,6 +35,9 @@ layout(std140, set = 0, binding = 0) uniform SimulationParams
     uvec4 counts;
     // x = bendStiffness, y = windGust, z = windFrequency, w = frame-start simulationTime。
     vec4 motion;
+    // 根点骨骼矩阵（std140 mat4，紧跟 motion 的 16-byte 边界）。
+    // 未声明 simulation.skinning 时 Host 上传单位矩阵，root pin 结果与历史一致。
+    mat4 skinning;
 } params;
 
 // 与 graphics 绑定共用同一份 current positions（per-object SSBO，vec4.xyz=位置, w=1）。
@@ -91,14 +94,19 @@ void main()
     vec3 acceleration = params.gravity.xyz + params.wind.xyz * gust;
 
     // 第一段：Verlet 积分。固定点每个子步都从 rest 复位 current 与 previous。
+    // 根前缀 local < rootFixedPoints 是“蒙皮但不模拟”的点：TressFX 对应
+    // NumVerticesFromRootNoSimulation，位置为骨骼矩阵 M * rest（绑定空间→对象空间）。
+    // 逆质量 <= 0 但不在前缀内的固定点仍钉 rest，不消费 M。
     for (uint local = 0; local < pointsPerGuide; ++local)
     {
         uint point = base + local;
         if (IsFixed(local, restPositions.positions[point].w))
         {
             vec3 rest = restPositions.positions[point].xyz;
-            currentPositions.positions[point] = vec4(rest, 1.0);
-            previousPositions.positions[point] = vec4(rest, 1.0);
+            vec3 fixedPosition = local < uint(params.controls.w)
+                ? (params.skinning * vec4(rest, 1.0)).xyz : rest;
+            currentPositions.positions[point] = vec4(fixedPosition, 1.0);
+            previousPositions.positions[point] = vec4(fixedPosition, 1.0);
             continue;
         }
         vec3 current = currentPositions.positions[point].xyz;

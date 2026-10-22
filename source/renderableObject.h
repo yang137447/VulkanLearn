@@ -7,6 +7,7 @@
 #include <Eigen/Dense>
 #include "hair/tressfxDynamics.h"
 #include "hair/tressfxSimulationParams.h"
+#include "hair/tressfxSkinning.h"
 #include "mesh/meshAssetTypes.h"
 
 struct MeshAssetImportResult;
@@ -44,6 +45,16 @@ public:
     // binding 3 共用同一 buffer；previous/rest/params 只在 GPU backend 下分配。
     bool UsesGpuGuideSimulation() const;
     const TressfxSimulationConfig& GetTressfxSimulationConfig() const;
+    // World 构建阶段解析出的根点骨骼绑定。未声明 simulation.skinning 时 enabled=false，
+    // 运行时保持历史 rest pin；解析失败不会走到这里，加载期已硬错误。
+    const VL::Hair::TressfxSkinningBinding& GetTressfxSkinningBinding() const
+    {
+        return tressfxSkinningBinding;
+    }
+    void SetTressfxSkinningBinding(const VL::Hair::TressfxSkinningBinding& binding)
+    {
+        tressfxSkinningBinding = binding;
+    }
     uint32_t GetTressfxGuideCount() const { return tressfxGuideCount; }
     uint32_t GetTressfxPointsPerGuide() const { return tressfxPointsPerGuide; }
     const vk::DescriptorBufferInfo& GetTressfxPreviousPositionInfo() const
@@ -125,5 +136,6 @@ private:
     uint32_t tressfxGuideCount = 0;
     uint32_t tressfxPointsPerGuide = 0;
     bool tressfxGpuSimulation = false;
+    VL::Hair::TressfxSkinningBinding tressfxSkinningBinding;
     std::unique_ptr<VL::Hair::GuideSimulation> tressfxSimulation;
 };

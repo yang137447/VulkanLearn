@@ -351,10 +351,16 @@ TEST(TressfxDynamics, GuideSimulationParamsPackStd140Controls)
     capsule.radius = 7.0f;
     config.capsules.push_back(capsule);
 
+    Eigen::Matrix4f skinning = Eigen::Matrix4f::Identity();
+    skinning(0, 3) = 12.0f;
+    skinning(1, 3) = 34.0f;
+    skinning(2, 3) = 56.0f;
     const VL::Hair::GuideSimulationParams params =
-        VL::Hair::MakeGuideSimulationParams(config, 7, 32, 224, 0.75f);
+        VL::Hair::MakeGuideSimulationParams(config, 7, 32, 224, 0.75f, skinning);
 
-    EXPECT_EQ(sizeof(VL::Hair::GuideSimulationParams), 80u);
+    EXPECT_EQ(sizeof(VL::Hair::GuideSimulationParams), 144u);
+    EXPECT_EQ(offsetof(VL::Hair::GuideSimulationParams, skinning), 80u);
+    EXPECT_TRUE(params.skinning.isApprox(skinning));
     EXPECT_FLOAT_EQ(params.gravity.x(), 0.0f);
     EXPECT_FLOAT_EQ(params.gravity.y(), -980.0f);
     EXPECT_FLOAT_EQ(params.gravity.z(), 0.0f);

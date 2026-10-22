@@ -1,6 +1,8 @@
 # TressFX 资产导入
 
 > 状态：**当前契约**（CPU 导入、静态 ribbon 与 CPU/GPU guide 模拟路径已落地）。本文件只描述当前源码与验证覆盖的行为。
+> 根点骨骼蒙皮（`simulation.skinning`）已落地，只支持单个源角色 + 单个根骨矩阵；
+> VSP、SDF 碰撞、逐帧碰撞网格蒙皮属于后续阶段，当前不存在。
 
 ## 实现边界
 
@@ -84,18 +86,27 @@ exit 1；Windows 入口使用宽字符路径。不会创建场景、修改资源
 ```powershell
 cmake --build build --target vl_build_sdf -j8
 .\build\bin\vl_build_sdf.exe --input <body.obj> --output <field.sdf> `
-    [--cell-size 1] [--band 4] [--max-voxels 4194304] [--sample x,y,z]...
+    [--cell-size 1] [--band 4] [--max-voxels 4194304] `
+    [--region x0,y0,z0,x1,y1,z1] [--threads 16] [--sample x,y,z]...
 ```
 
 - OBJ 只读 `v` / `f`：多边形扇形三角化，忽略 `vt` / `vn`；支持负数相对索引，
   缺失/越界索引、非有限坐标、无面文件和退化域都以 exit 1 和明确消息拒绝。
-- 域是网格 AABB 每侧外扩 `--band`；`--cell-size` 默认 1 cm。体素数超过
-  `--max-voxels` 时直接失败并给出所需数量，不会静默放粗格距。
+- 不传 `--region` 时域是网格 AABB 每侧外扩 `--band`。传 `--region` 时域是
+  该盒每侧外扩 `--band`，再向外取整到整格（`dims = ceil(extent/cell)`,
+  `origin = region.min - band`）；零/负体积、与网格 AABB 完全不相交、或超过
+  `--max-voxels` 的区域直接失败，错误消息给出实际体素数。`--cell-size` 默认 1 cm。
+- 体素数超过 `--max-voxels` 时直接失败并给出所需数量，不会静默放粗格距。
 - 最近点查询先建三角形 AABB 层次包围盒（BVH，叶子 8 个三角形），符号使用
   角度加权伪法线：面内部用面法线，边上用相邻面法线之和，顶点用入射面法线按
   该顶点内角加权求和。不使用单一面法线或射线奇偶性。
-- 结果按 `clamp(distance, -band, +band)` 截断。单线程、固定体素顺序
-  （x 最快、z 最慢）与固定 BVH 顺序，因此同一输入与二进制产生逐字节相同的文件。
+- 结果按 `clamp(distance, -band, +band)` 截断。体素顺序固定（x 最快、z 最慢），
+  BVH 构建/遍历顺序也固定。
+- `--threads N` 默认 `min(硬件线程数, 16)`，0/1 为单线程。多线程按 **z 切片**
+  划分：每个体素只由一个 worker 计算，只写自己的槽位，切片边界不改变任何
+  单点距离/符号数学。因此线程数、切片划分和调度都不影响输出字节；模块测试
+  用 1 vs 4 线程比较完整序列化字节，正式资产也用不同线程数和重复运行核对
+  SHA-256。没有跨线程归约。
 - `SdfField::mesh` 报告顶点数、三角形数、开放边数（只被一个三角形使用的无向边）、
   非流形边数（被三个及以上三角形共享）和退化三角形数。
 - 文件为 little-endian、64-byte header：magic `VLSDF\0\0\0`、`version=1`、
@@ -106,8 +117,42 @@ cmake --build build --target vl_build_sdf -j8
 - 采样 `SampleSdf` 为三线性插值；域外返回 `+band`。跨 band 边界的插值是截断场
   的插值，会低估真实距离。
 - `tool/hair-tests/sdfBuilderTests.cpp` 覆盖解析球/盒距离、近边与近顶点的符号、
-  锐尖顶点伪法线、开网格开放边计数、字节确定性、写读往返及截断/损坏拒绝。
-  这些是合成夹具；正式身体资产只在离线生成时需要，不进入模块测试。
+  锐尖顶点伪法线、开网格开放边计数、字节确定性、1 vs 4 线程并行字节一致、
+  写读往返及截断/损坏拒绝。这些是合成夹具；正式身体资产只在离线生成时需要，
+  不进入模块测试。
+
+#### 头发碰撞场 `female_head.sdf`
+
+资源仓库里的头部场用下面这条命令生成（从本仓库根目录执行；输出到资源仓库，
+不进入本仓库）：
+
+```powershell
+.\build\bin\vl_build_sdf.exe `
+    --input ..\VukanLearnResources\Maps\SC_tressfx_female\Source\female_body.obj `
+    --output ..\VukanLearnResources\Maps\SC_tressfx_female\Collision\female_head.sdf `
+    --region -17,127,-20,19,179,19 --cell-size 0.4 --band 4 --threads 16
+```
+
+- 区域覆盖 `.tfx` 发丝范围（x [-14.4, 16.5]、y [129.8, 176.2]、z [-17.6, 16.1]）
+  并每侧留约 2 cm 余量；域再外扩 band 4 cm，所以发丝所在区域全部在有效带内。
+- 分辨率：0.4 cm（110×150×118 = 1,947,000 体素、7,788,064 B / 7.43 MiB）。
+  同一区域在 band 4 下 0.35 cm 需要 2,925,720 体素 / 11.16 MiB，超过约 8 MiB
+  预算；0.39 cm 也需要 2,105,642 体素，仍略超 2M，因此取 0.4 cm。
+- 生成耗时（Debug MinGW，单次）：16 线程 116–117 s，8 线程 188 s；输出均为
+  SHA-256 `025583F09A728417C9CAD6D5F917AEBD23A211E2AD6F3AB072285242FFCE01A2`。
+  体素中心距离与暴力最近点一致；三线性插值在头部/面部表面顶点上的绝对误差
+  （真实距离 0）中位数 0.048 cm、p95 0.124 cm；旧的 1 cm 全身场为 0.096 / 0.234 cm。
+- 开放边界：整个身体网格有 11,781 条开放边，其中 3,696 条（480 个边界连通分量）
+  位于该区域内。按位置可辨认出的主要特征：左右眼窝各 72 条边的闭环（y≈163、
+  z≈9）、嘴/鼻/耳/眼睑一带 20–49 条边的多个小环（y≈152–157），以及颈部
+  （y≈146–150，110+64 条边）、胸部（y≈137–146，180 条边）、肩/臂（69–82 条边）
+  和上背（78 条边）的壳体接缝；其余 378 个分量只有 3–4 条边，是细小孔洞/裂缝。
+  伪法线符号只在闭合流形上被证明；在头部场里，头发可以触及的口、眼、颈部和
+  肩部接缝附近，符号不应被当作可信结论。本场没有做补洞或孔洞掩码，运行时
+  采样器应当把开放边界附近的结果当作弱约束。距离本身（最近点幅值）不受
+  开边界影响。
+- 该文件目前还没有运行时消费者：仓库里没有 SDF 采样、GPU 上传、descriptor 或
+  solver 接入；本节的字段只是离线生成的资源。
 
 ## 静态运行时路径
 
@@ -125,7 +170,8 @@ cmake --build build --target vl_build_sdf -j8
 }
 ```
 
-- 必须为 `.tfx`、一个材质槽、有限且 float 可表示的正半径；拒绝 importOptions 与 skinning。
+- 必须为 `.tfx`、一个材质槽、有限且 float 可表示的正半径；拒绝 importOptions 与
+  顶层 `skinning`（骨骼蒙皮声明在 `simulation.skinning`，见下文）。
   半径是模型局部长度，场景长度仍按厘米作者；没有隐式导出单位转换。
 - `TressfxModelImporter` 走 `MeshAssetLoader` 的正式策略选择，输出一个 `guides` section，
   源材质槽为 `hair`，按既有顺序映射到描述符唯一槽。派生流预算为 512 MiB。
@@ -194,6 +240,7 @@ backend 写入模型缓存身份，同一个 `.tfx` 的 cpu/gpu 描述符不共�
 | `fixedStep` | 1/60 | `(0,0.1]` | 固定子步长，秒。 |
 | `maxSubsteps` | 4 | `[1,8]` | 每帧最多子步数；达到上限时丢弃 backlog。 |
 | `backend` | `"cpu"` | `"cpu"` / `"gpu"` | 参考 solver 或 compute dispatch。 |
+| `skinning` | 无 | `{source, rootBone}` | 可选；把根点从 rest pin 改为跟随场景内源角色的单个骨骼。缺省即历史行为。 |
 
 ### 碰撞胶囊
 
@@ -221,6 +268,64 @@ backend 写入模型缓存身份，同一个 `.tfx` 的 cpu/gpu 描述符不共�
   SDF 文件（见“离线 SDF 生成”），但仓库里还没有运行时 SDF 采样、GPU 上传或
   descriptor 接入。
 
+### 根点骨骼蒙皮
+
+`simulation.skinning` 把每根 guide 的根前缀从“钉在 rest”改为“跟随同一场景里的
+一个源角色骨骼”：
+
+```json
+"simulation": {
+    "backend": "gpu",
+    "rootFixedPoints": 2,
+    "skinning": {
+        "source": "FemaleCharacter",
+        "rootBone": "Head_M"
+    }
+}
+```
+
+- `source` 是同一场景内的 `mesh` 对象名（`sceneObjectIdentity`），`rootBone` 是该
+  对象**目标骨架**（`skinning.skeleton` 指向的 SK）里的关节名，大小写敏感。两块
+  都必须是存在且非空的字符串；未知键、缺失键都在 `MeshAssetValidator::BuildLoadPlan`
+  拒绝，错误消息带 SM 资产路径。两者都进入 `modelCacheKey`，改来源或骨名会得到
+  不同 renderable。
+- 只允许 `backend = "gpu"`。姿态来自渲染线程的冻结 `RenderScene`/`SkinPose`；
+  CPU 参考 solver 在游戏线程运行且没有 pose，所以 `skinning` 与 `cpu`（包括缺省
+  backend）组合在加载期硬错误，而不是运行时退回 rest pin。
+- 解析发生在 World 构建期的 `RendererResourceLoadCoordinator`：等场景内所有 mesh
+  renderable 创建完成后，按对象名找源对象、取其 `SkeletalPlayback::Asset()` 的目标
+  SK、用 `ResolveTressfxRootJoint` 得到关节下标，再把
+  `{sourceSceneObject, rootBone, jointIndex}` 存到发丝 `RenderableObject` 上。
+  没有第二套场景注册表、GR 描述符或新的场景对象类型。
+- 硬错误（消息同时带对象名/骨名与发丝 SM 资产路径，绝不静默回退）：源对象不存在、
+  源对象没有蒙皮骨架（`Asset().HasSkeleton()` 为 false）、根骨不在目标 SK 中。
+- 共享对象空间：骨骼矩阵把源角色的绑定空间映射到**源对象的模型空间**，而发丝仍按
+  自己的 model 绘制。因此两个场景对象的 `model` 矩阵必须一致（逐元素容差 `1e-4`）；
+  不一致在构建期报错，不把错位的根点写进 SSBO。当前正式关卡两者都为 identity。
+- 运行时 `HairSimulationPass` 在冻结快照的 `drawPackets` 里按 `sceneObjectIdentity`
+  找源角色 draw，读取 `skinPose->matrices[jointIndex]`。pose 或 draw 本帧不可用时
+  保留上一帧矩阵并只报告一次（stderr），不销毁 pass、descriptor 或整帧。
+- 矩阵每帧写入已有的 std140 params UBO（`GuideSimulationParams::skinning`，
+  offset 80，mat4，整个 UBO 144 bytes；C++ `static_assert` 固定大小与对齐）。
+  没有声明 `skinning` 时上传单位矩阵，kernel 写 `M * rest` 与历史 rest pin 数值等价。
+- kernel 只对 `local < rootFixedPoints` 的根前缀写
+  `current = previous = M * rest`；逆质量 <= 0 但不在前缀内的固定点仍写 rest。
+  前缀之外的模拟点、长度投影、弯曲约束与胶囊碰撞保持原顺序，不引入 VSP 或
+  额外的惯性 hack：发丝相对头部的滞后由既有约束自然产生。
+- TressFX 5.0 映射：源实现从
+  `GuidesBoneSkinningBuffer`（`StructuredBuffer<FBoneSkinningData>`，逐顶点
+  bone index/weight）在积分 pass 里蒙皮 guide，并用
+  `NumVerticesFromRootNoSimulation` 标出“蒙皮但不模拟”的根前缀；SDF 阶段再用
+  `NumVerticesFromRootBeforeSDFCollision` 跳过同一前缀。VL 的这一层只实现
+  “单个根骨矩阵 + `rootFixedPoints` 前缀”，没有逐顶点多骨权重，也没有
+  `.tfxbone` 导入；这是后续阶段补齐的范围，不在当前契约内。
+- 固定步差异（有意保留）：TressFX 使用引擎 `DeltaTime`
+  （`TressFXComponent.cpp:952`）；VL 继续用 `fixedStep`/`maxSubsteps` accumulator，
+  GPU 每个子步 dispatch 一次。骨骼矩阵本身是帧粒度的，同一帧内所有子步共用同一
+  矩阵。这个差异不随 `simulation.skinning` 改变。
+- 当前碰撞胶囊仍是作者绑定空间的静态代理，不随头部/身体蒙皮移动；VSP、运行时
+  SDF 重建和逐帧碰撞网格蒙皮都不存在。
+
 ### GPU 路径
 
 GPU backend 的位置 buffer 放在 device-local：current/previous/rest 都用
@@ -236,9 +341,10 @@ params UBO 每帧由主机改写，两种 backend 都保持 host-visible/coheren
 - previous positions：vec4，Verlet 上一帧位置。
 - rest positions：vec4.xyz = 静止中心线，w = 导入逆质量；kernel 用它判断固定点，
   不需要独立的质量数组。
-- 每个 frame-in-flight 槽一份 std140 params UBO：平均 gravity、平均 wind、
+- 每个 frame-in-flight 槽一份 std140 params UBO（144 bytes）：平均 gravity、平均 wind、
   fixedStep/damping/pointsPerGuide/rootFixedPoints、iterations/guideCount/pointCount、
-  bendStiffness/windGust/windFrequency/frame-start simulationTime、colliderCount。
+  bendStiffness/windGust/windFrequency/frame-start simulationTime、colliderCount，
+  末尾 offset 80 是根点骨骼 mat4（未声明 `simulation.skinning` 时为单位矩阵）。
   `maxDt` 只由 Host accumulator 使用，不进入 GPU。
 - 静态 collider SSBO（compute set 0 binding 4）：创建时上传一次，每个 collider
   32 字节（`GuideColliderGpu`：a.xyz + a.w=radius、b.xyz），固定 8 槽；`counts.w`
@@ -252,7 +358,9 @@ compute pipeline、descriptor pool、逐对象 descriptor set 缓存和逐对象
 invocation 内顺序读写，复刻 CPU `GuideSimulation::Substep` 的一次固定步积分与
 `iterations` 次约束扫描：固定点复位 current/previous、Verlet 积分、长度投影
 （逆质量加权、`1e-6` 退化段跳过、全固定段跳过），随后在同一 iteration 内执行弯曲
-约束和胶囊碰撞。`iterations` 由资产边界限制在 `[1, 16]`：GPU 上一个作者值会展开成
+约束和胶囊碰撞。声明 `simulation.skinning` 时，`local < rootFixedPoints` 的根前缀
+写 `current = previous = M * rest`，不再是裸 rest；前缀之外的固定点（逆质量 <= 0）
+仍写 rest。`iterations` 由资产边界限制在 `[1, 16]`：GPU 上一个作者值会展开成
 一条长 dispatch，异常大值应当直接拒绝而不是 TDR。这样选择的并行度低于“每点一个
 线程 + 独立 constraint dispatch”的 TressFX 形态，但 guide 之间无共享状态，数百到
 数千根 guide 已能填满 workgroup；guide 数量显著增长时再评估拆分 kernel。
@@ -284,7 +392,7 @@ d = p - closest; len = |d|
 if (len < radius) p = closest + normalize(d) * radius
 ```
 
-- 只处理非固定点；固定根点由 rest pin 保持，不参与碰撞。
+- 只处理非固定点；固定根点由 rest pin 或根点骨骼矩阵保持，不参与碰撞。
 - 只修改 current positions，不修改 previous positions，因此碰撞不产生速度冲量。
   这让接触偏黏、缺少摩擦，是当前明确限制；friction 尚未实现。
 - 多个胶囊在重叠区域的最终位置取决于作者顺序；顺序是数据契约的一部分。
@@ -372,8 +480,10 @@ GPU 路径只步进出现在渲染快照中的对象：`visible = false` 的对�
 Verlet 速度仍然有效，且每帧 `dt` 已被限制到 `[0, maxDt]`。离线模式走离线录制分支，
 不调用 `RecordHairSimulation`，因此没有 dispatch。
 
-显式限制：碰撞只有作者解析胶囊，没有 `.tfxmesh`/SDF、VSP、root 骨骼蒙皮、
-follow hair、深度阴影、OIT、LOD；没有 per-instance 或 world-space simulation。
+显式限制：碰撞只有作者解析胶囊，没有 `.tfxmesh`/SDF、VSP、follow hair、深度阴影、
+OIT、LOD；根点只有**单个**骨骼矩阵（按 `rootFixedPoints` 前缀统一应用），没有
+TressFX 的逐顶点多骨权重/`.tfxbone`，也没有逐帧碰撞网格蒙皮或运行时 SDF 重建；
+碰撞胶囊始终是作者绑定空间的静态代理。没有 per-instance 或 world-space simulation。
 胶囊接触是纯位置投影，不修改 previous positions，因此没有摩擦、没有碰撞速度
 冲量，接触略黏且可能抖动；重叠胶囊的最终位置取决于作者顺序。帧 dt 在进入
 accumulator 前截断到 `[0, maxDt]`，超过 `maxSubsteps` 的 backlog 直接丢弃；
@@ -507,13 +617,25 @@ Reference Pose 保留 Bind/Calibrated、正/侧/顶视、选中局部轴与映�
 | `SC_tressfx_female_bind.json` | `-BindPose` | 原始绑定姿态对照 |
 | `SC_tressfx_female_skinned.json` | `-Skinned` | 普通 mesh 自动重定向 Idle；模型预览可切 Walk |
 | `SC_tressfx_female_skinned_blueprint.json` | `-Skinned -Blueprint` | 点击 Play，C# 请求原地 Walk |
+| `SC_tressfx_female_hair_animated.json` | 无（直接 `--initial-scene`） | 普通蒙皮角色 + 根点跟随 `Head_M` 的 GPU 发丝 |
 
 三个新关卡的相机为 `[250,120,420]`、目标 `[0,90,0]`、水平 FOV 38°、EV100=0；
 环境和方向光复用静态版的审阅设置。身体与眼球共用一个蒙皮 mesh component，
 各用中性 PBR 材质；蓝图源码属于资源根的 `Blueprints/`，
 `cmake --build build --target main vl_gameplay -j8` 构建原生和 Gameplay。
 蓝图入口要求构建时启用 C#；宿主默认 Editing，只有 Play 后才推进其动画。
-旧静态版保持独立。新动画关卡不挂静态发丝：当前 TFX 无骨骼权重，不能随头部变形。
+旧静态版保持独立。
+
+`SC_tressfx_female_hair_animated.json` 是根点蒙皮关卡：普通 `mesh` 对象
+`FemaleCharacter`（`SM_female_skinned.json`，目标 SK 为 `SK_Female_Outside`，
+Idle 来自 GASP 重定向）+ `Female_hair_skinned`（`SM_female_hair_skinned.json`，
+`backend=gpu`、`rootFixedPoints=2`、`skinning.source=FemaleCharacter`、
+`skinning.rootBone=Head_M`，胶囊/重力/风/固定步与 `SM_female_hair_dynamic.json` 相同）。
+选普通 mesh 而不是 blueprint 关卡，是因为 `SkeletalPlayback` 构造时默认 `playing=true`
+并选中 clip 0，`World::TickAnimations` 每帧推进它，加载后即自动播放 Idle；blueprint
+版本只在 `BeginPlay` 里 `Animation.Play(Walk)`，必须点 Play 才动。两者都使用同一套
+正式 FBX/SK/权重，不新增导入资产。相机沿用静态发丝的肖像机位
+`[50,165,210]`、目标 `[0,151,0]`，便于检查头皮接缝。
 
 `tool/hair/capture_female_skin.py --output <freshDirectory>` 使用正式启动/Console
 截图绑定姿态、Idle 与两个暂停 Walk 时刻；会话临时启用 C# autoPlay，

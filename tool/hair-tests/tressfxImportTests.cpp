@@ -124,6 +124,113 @@ TEST(TressfxDescriptor, SimulationBackendParticipatesInMeshIdentity)
     EXPECT_NE(cpuPlan.modelCacheKey, gpuPlan.modelCacheKey);
 }
 
+TEST(TressfxDescriptor, SkinningAcceptsSourceAndRootBoneWithGpuBackend)
+{
+    auto json = Descriptor();
+    json["simulation"] = {
+        {"backend", "gpu"},
+        {"skinning", {{"source", "FemaleCharacter"}, {"rootBone", "Head_M"}}}};
+    const auto plan = MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json);
+    ASSERT_TRUE(plan.tressfxSimulation.skinning.has_value());
+    EXPECT_EQ(plan.tressfxSimulation.skinning->source, "FemaleCharacter");
+    EXPECT_EQ(plan.tressfxSimulation.skinning->rootBone, "Head_M");
+}
+
+TEST(TressfxDescriptor, SkinningRequiresGpuBackend)
+{
+    auto json = Descriptor();
+    json["simulation"] = {
+        {"skinning", {{"source", "FemaleCharacter"}, {"rootBone", "Head_M"}}}};
+    try
+    {
+        MeshAssetValidator::BuildLoadPlan("Maps/SC_x/Meshes/SM_hair_skinned.json", json);
+        FAIL() << "CPU backend accepted simulation.skinning";
+    }
+    catch (const std::runtime_error& error)
+    {
+        const std::string message = error.what();
+        EXPECT_NE(message.find("gpu"), std::string::npos);
+        EXPECT_NE(message.find("SM_hair_skinned.json"), std::string::npos);
+    }
+}
+
+TEST(TressfxDescriptor, SkinningRequiresSource)
+{
+    auto json = Descriptor();
+    json["simulation"] = {
+        {"backend", "gpu"},
+        {"skinning", {{"rootBone", "Head_M"}}}};
+    try
+    {
+        MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json);
+        FAIL() << "simulation.skinning without source was accepted";
+    }
+    catch (const std::runtime_error& error)
+    {
+        const std::string message = error.what();
+        EXPECT_NE(message.find("source"), std::string::npos);
+        EXPECT_NE(message.find("SM_hair_skinned.json"), std::string::npos);
+    }
+}
+
+TEST(TressfxDescriptor, SkinningRequiresRootBone)
+{
+    auto json = Descriptor();
+    json["simulation"] = {
+        {"backend", "gpu"},
+        {"skinning", {{"source", "FemaleCharacter"}}}};
+    try
+    {
+        MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json);
+        FAIL() << "simulation.skinning without rootBone was accepted";
+    }
+    catch (const std::runtime_error& error)
+    {
+        const std::string message = error.what();
+        EXPECT_NE(message.find("rootBone"), std::string::npos);
+        EXPECT_NE(message.find("SM_hair_skinned.json"), std::string::npos);
+    }
+}
+
+TEST(TressfxDescriptor, SkinningRejectsUnknownKeys)
+{
+    auto json = Descriptor();
+    json["simulation"] = {
+        {"backend", "gpu"},
+        {"skinning", {{"source", "FemaleCharacter"}, {"rootBone", "Head_M"},
+            {"extra", 1}}}};
+    EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json),
+        std::runtime_error);
+}
+
+TEST(TressfxDescriptor, SkinningSourceParticipatesInMeshIdentity)
+{
+    auto json = Descriptor();
+    json["simulation"] = {
+        {"backend", "gpu"},
+        {"skinning", {{"source", "FemaleCharacter"}, {"rootBone", "Head_M"}}}};
+    const auto first =
+        MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json);
+    json["simulation"]["skinning"]["source"] = "OtherCharacter";
+    const auto second =
+        MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json);
+    EXPECT_NE(first.modelCacheKey, second.modelCacheKey);
+}
+
+TEST(TressfxDescriptor, SkinningRootBoneParticipatesInMeshIdentity)
+{
+    auto json = Descriptor();
+    json["simulation"] = {
+        {"backend", "gpu"},
+        {"skinning", {{"source", "FemaleCharacter"}, {"rootBone", "Head_M"}}}};
+    const auto first =
+        MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json);
+    json["simulation"]["skinning"]["rootBone"] = "HeadEnd_M";
+    const auto second =
+        MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json);
+    EXPECT_NE(first.modelCacheKey, second.modelCacheKey);
+}
+
 TEST(TressfxDescriptor, SimulationQualityDefaults)
 {
     auto json = Descriptor();

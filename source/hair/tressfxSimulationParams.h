@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 #include <Eigen/Dense>
@@ -25,11 +26,18 @@ struct GuideSimulationParams
     uint32_t colliderCount = 0;
     // x = bendStiffness, y = windGust, z = windFrequency, w = frame-start simulationTime
     Eigen::Vector4f motion = Eigen::Vector4f::Zero();
+    // 根点骨骼矩阵：kernel 对 local < rootFixedPoints 的点写 current=previous=M*rest。
+    // 未声明 simulation.skinning 时保持单位矩阵，写入结果与历史 rest pin 完全一致。
+    // std140 中 mat4 紧接 motion（offset 80，16-byte 对齐），整个 UBO 144 字节。
+    Eigen::Matrix4f skinning = Eigen::Matrix4f::Identity();
 };
-static_assert(sizeof(GuideSimulationParams) == 80,
-    "std140 guide simulation params must stay 80 bytes");
+static_assert(sizeof(GuideSimulationParams) == 144,
+    "std140 guide simulation params must stay 144 bytes");
 static_assert(alignof(GuideSimulationParams) == 16,
     "std140 guide simulation params require vec4 alignment");
+// 骨骼矩阵必须位于 std140 mat4 的 16-byte 边界；Host 与 shader 的偏移都从这里推导。
+static_assert(offsetof(GuideSimulationParams, skinning) % 16 == 0,
+    "std140 skinning matrix must start on a 16-byte boundary");
 
 // 每个 guide 一个 compute invocation；与 shader 的 local_size_x 必须一致。
 inline constexpr uint32_t GuideSimulationWorkgroupSize = 64;
@@ -45,7 +53,8 @@ inline GuideSimulationParams MakeGuideSimulationParams(
     uint32_t guideCount,
     uint32_t pointsPerGuide,
     uint32_t pointCount,
-    float simulationTime)
+    float simulationTime,
+    Eigen::Matrix4f skinningMatrix = Eigen::Matrix4f::Identity())
 {
     GuideSimulationParams params;
     params.gravity = Eigen::Vector4f(
@@ -66,6 +75,7 @@ inline GuideSimulationParams MakeGuideSimulationParams(
         config.windGust,
         config.windFrequency,
         simulationTime);
+    params.skinning = skinningMatrix;
     return params;
 }
 

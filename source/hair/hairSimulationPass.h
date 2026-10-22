@@ -6,6 +6,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include <Eigen/Dense>
 #include <vulkan/vulkan.hpp>
 
 #include "hair/tressfxSimulationParams.h"
@@ -18,6 +19,7 @@ namespace VL
 {
 class RendererBackendVulkan;
 struct ResolvedRenderScene;
+struct RenderScene;
 
 namespace Hair
 {
@@ -40,8 +42,11 @@ public:
 
     void Initialize(PipelineFactory& factory, RendererBackendVulkan& backend);
     // frameSlot 是 frame-in-flight 槽；调用方在每帧 pass 循环之前调用一次。
+    // renderScene 是同一帧冻结的前端快照：simulation.skinning 从它的 draw packet 读取
+    // SkinPose，不从头重建场景查询，也不在 pass 里持有播放器。
     void Record(vk::CommandBuffer commandBuffer,
         const VL::ResolvedRenderScene& scene,
+        const VL::RenderScene& renderScene,
         uint32_t frameSlot,
         float deltaSeconds);
 
@@ -58,6 +63,10 @@ private:
         // 未引入 GPU 侧状态 buffer，因此这份状态随 pass/图重建归零。
         float accumulator = 0.0f;
         float simulationTime = 0.0f;
+        // simulation.skinning 的逐对象缓存：pose/源 draw 缺失时保留上一帧矩阵继续渲染，
+        // 不用单位矩阵覆盖，也不销毁 pass/descriptor。初始单位矩阵等于历史 rest pin。
+        Eigen::Matrix4f skinningMatrix = Eigen::Matrix4f::Identity();
+        bool reportedMissingSkinPose = false;
     };
 
     struct DescriptorPoolBudget

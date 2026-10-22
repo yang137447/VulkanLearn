@@ -12,6 +12,7 @@
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <Eigen/Core>
@@ -31,6 +32,14 @@ using VL::Hair::SdfTriangleMesh;
 constexpr float kDefaultCellSize = 1.0f; // 厘米：头发碰撞的可用起点
 constexpr float kDefaultBand = 4.0f;
 constexpr std::uint64_t kDefaultMaxVoxels = 4ull * 1024ull * 1024ull;
+constexpr std::uint32_t kMaxThreads = 1024;
+
+std::uint32_t DefaultThreadCount()
+{
+    const unsigned hardware = std::thread::hardware_concurrency();
+    const std::uint32_t available = hardware == 0 ? 1u : static_cast<std::uint32_t>(hardware);
+    return std::min(available, 16u);
+}
 
 struct Options
 {
@@ -39,6 +48,11 @@ struct Options
     float cellSize = kDefaultCellSize;
     float band = kDefaultBand;
     std::uint64_t maxVoxels = kDefaultMaxVoxels;
+    // 0/1 = 单线程。不传 --threads 时用 min(硬件线程, 16)。
+    std::uint32_t threads = DefaultThreadCount();
+    bool hasRegion = false;
+    Eigen::Vector3f regionMin = Eigen::Vector3f::Zero();
+    Eigen::Vector3f regionMax = Eigen::Vector3f::Zero();
     std::vector<Eigen::Vector3f> samples;
     bool help = false;
 };
@@ -61,13 +75,16 @@ int Usage()
     std::cout <<
         "Usage: vl_build_sdf --input <model.obj> --output <field.sdf>\n"
         "                    [--cell-size <cm>] [--max-voxels <n>] [--band <cm>]\n"
+        "                    [--region x0,y0,z0,x1,y1,z1] [--threads <n>]\n"
         "                    [--sample <x,y,z>]...\n"
         "\n"
         "Offline signed distance field builder for hair-vs-body collision.\n"
         "The OBJ is read in its own units (the female body asset is centimeters);\n"
         "negative distances are inside the mesh, positive outside, clamped to +/-band.\n"
-        "The grid is the mesh AABB padded by --band on every side, so samples outside\n"
-        "the domain are always farther than band from the surface and read as +band.\n";
+        "The grid is the mesh AABB (or --region) padded by --band on every side, so\n"
+        "samples outside the domain are always farther than band from the surface and\n"
+        "read as +band. --threads defaults to min(hardware threads, 16); 0/1 is\n"
+        "single-threaded. Every thread count produces byte-identical files.\n";
     return 0;
 }
 
@@ -89,6 +106,19 @@ bool ParsePositiveU64(const std::string& text, std::uint64_t& value)
     const unsigned long long parsed = std::strtoull(text.c_str(), &end, 10);
     if (end == text.c_str() || (end != nullptr && *end != '\0') || parsed == 0 ||
         errno == ERANGE)
+        return false;
+    value = static_cast<std::uint64_t>(parsed);
+    return true;
+}
+
+bool ParseUnsigned(const std::string& text, std::uint64_t& value)
+{
+    if (text.empty() || text[0] == '-')
+        return false;
+    errno = 0;
+    char* end = nullptr;
+    const unsigned long long parsed = std::strtoull(text.c_str(), &end, 10);
+    if (end == text.c_str() || (end != nullptr && *end != '\0') || errno == ERANGE)
         return false;
     value = static_cast<std::uint64_t>(parsed);
     return true;
@@ -118,6 +148,32 @@ bool ParsePoint(const std::string& text, Eigen::Vector3f& point)
     return true;
 }
 
+// --region 的 6 个逗号分隔值：x0,y0,z0,x1,y1,z1（厘米，网格局部空间）。
+bool ParseBox(const std::string& text, Eigen::Vector3f& boxMin, Eigen::Vector3f& boxMax)
+{
+    std::array<float, 6> values{};
+    std::size_t start = 0;
+    for (int i = 0; i < 6; ++i)
+    {
+        if (i < 5)
+        {
+            const std::size_t comma = text.find(',', start);
+            if (comma == std::string::npos)
+                return false;
+            if (!ParseFloat(text.substr(start, comma - start), values[i]))
+                return false;
+            start = comma + 1;
+        }
+        else if (!ParseFloat(text.substr(start), values[i]))
+        {
+            return false;
+        }
+    }
+    boxMin = Eigen::Vector3f(values[0], values[1], values[2]);
+    boxMax = Eigen::Vector3f(values[3], values[4], values[5]);
+    return true;
+}
+
 double Milliseconds(std::chrono::steady_clock::duration duration)
 {
     return std::chrono::duration<double, std::milli>(duration).count();
@@ -134,7 +190,8 @@ bool ParseArguments(const std::vector<std::string>& args, Options& options, std:
             continue;
         }
         if (argument != "--input" && argument != "--output" && argument != "--cell-size" &&
-            argument != "--band" && argument != "--max-voxels" && argument != "--sample")
+            argument != "--band" && argument != "--max-voxels" && argument != "--sample" &&
+            argument != "--region" && argument != "--threads")
         {
             error = "unknown argument: " + argument;
             return false;
@@ -183,6 +240,33 @@ bool ParseArguments(const std::vector<std::string>& args, Options& options, std:
             }
             options.samples.push_back(point);
         }
+        else if (argument == "--region")
+        {
+            if (!ParseBox(value, options.regionMin, options.regionMax))
+            {
+                error = "--region expects x0,y0,z0,x1,y1,z1 in centimeters";
+                return false;
+            }
+            options.hasRegion = true;
+        }
+        else if (argument == "--threads")
+        {
+            std::uint64_t threads = 0;
+            if (!ParseUnsigned(value, threads) || threads > kMaxThreads)
+            {
+                error = "--threads must be an integer in [0, " +
+                    std::to_string(kMaxThreads) + "]";
+                return false;
+            }
+            options.threads = static_cast<std::uint32_t>(threads);
+        }
+    }
+    if (options.hasRegion && !(options.regionMin.x() < options.regionMax.x() &&
+            options.regionMin.y() < options.regionMax.y() &&
+            options.regionMin.z() < options.regionMax.z()))
+    {
+        error = "--region must have positive volume (x0<x1, y0<y1, z0<z1)";
+        return false;
     }
     if (options.help)
         return true;
@@ -366,11 +450,36 @@ int Run(const std::vector<std::string>& args)
     const auto& obj = loaded.Value();
     const auto parseEnd = std::chrono::steady_clock::now();
 
-    // 域 = 网格 AABB 每侧外扩 band，保证域外点距表面一定超过 band，
-    // 这样采样器把域外读成 +band 才与截断规则一致。
-    const Eigen::Vector3f paddedMin = obj.boundsMin - Eigen::Vector3f::Constant(options.band);
-    const Eigen::Vector3f paddedMax = obj.boundsMax + Eigen::Vector3f::Constant(options.band);
-    const Eigen::Vector3f extent = paddedMax - paddedMin;
+    // 域 = 网格 AABB（或 --region）每侧外扩 band，保证域外点距表面一定超过 band，
+    // 这样采样器把域外读成 +band 才与截断规则一致。padding 后的范围向外取整到
+    // 整格（dims = ceil(extent/cell)），即域由整数个体素覆盖。
+    Eigen::Vector3f domainMin;
+    Eigen::Vector3f domainMax;
+    if (options.hasRegion)
+    {
+        // 与网格 AABB 完全不相交的区域没有可烘焙的表面，明确拒绝而不是输出全 +band。
+        if (options.regionMax.x() < obj.boundsMin.x() ||
+            options.regionMin.x() > obj.boundsMax.x() ||
+            options.regionMax.y() < obj.boundsMin.y() ||
+            options.regionMin.y() > obj.boundsMax.y() ||
+            options.regionMax.z() < obj.boundsMin.z() ||
+            options.regionMin.z() > obj.boundsMax.z())
+        {
+            return Fail("--region lies entirely outside the mesh bounds; mesh x [" +
+                std::to_string(obj.boundsMin.x()) + ", " + std::to_string(obj.boundsMax.x()) +
+                "], y [" + std::to_string(obj.boundsMin.y()) + ", " +
+                std::to_string(obj.boundsMax.y()) + "], z [" +
+                std::to_string(obj.boundsMin.z()) + ", " + std::to_string(obj.boundsMax.z()) + "]");
+        }
+        domainMin = options.regionMin - Eigen::Vector3f::Constant(options.band);
+        domainMax = options.regionMax + Eigen::Vector3f::Constant(options.band);
+    }
+    else
+    {
+        domainMin = obj.boundsMin - Eigen::Vector3f::Constant(options.band);
+        domainMax = obj.boundsMax + Eigen::Vector3f::Constant(options.band);
+    }
+    const Eigen::Vector3f extent = domainMax - domainMin;
     std::array<std::uint32_t, 3> dims{1, 1, 1};
     for (int axis = 0; axis < 3; ++axis)
     {
@@ -398,10 +507,11 @@ int Run(const std::vector<std::string>& args)
     }
 
     SdfGridSpec grid;
-    grid.minCorner = paddedMin;
+    grid.minCorner = domainMin;
     grid.cellSize = options.cellSize;
     grid.dims = dims;
     grid.band = options.band;
+    grid.threadCount = options.threads;
     const auto built = VL::Hair::BuildSdf(obj.mesh, grid);
     if (built.IsFailure())
         return Fail(built.Error().message);
@@ -449,6 +559,13 @@ int Run(const std::vector<std::string>& args)
             {"truncated", std::fabs(distance) >= stored.band - 1.0e-6f}});
     }
 
+    nlohmann::json region = nullptr;
+    if (options.hasRegion)
+    {
+        region = nlohmann::json{
+            {"min", {options.regionMin.x(), options.regionMin.y(), options.regionMin.z()}},
+            {"max", {options.regionMax.x(), options.regionMax.y(), options.regionMax.z()}}};
+    }
     nlohmann::json report{
         {"input", options.input.u8string()},
         {"output", options.output.u8string()},
@@ -463,6 +580,9 @@ int Run(const std::vector<std::string>& args)
         {"origin", {stored.origin.x(), stored.origin.y(), stored.origin.z()}},
         {"cellSize", stored.cellSize},
         {"band", stored.band},
+        {"region", region},
+        {"threads", options.threads},
+        {"effectiveThreads", std::min(std::max(1u, options.threads), stored.dims[2])},
         {"insideVoxels", inside},
         {"outsideVoxels", outside},
         {"surfaceVoxels", surface},

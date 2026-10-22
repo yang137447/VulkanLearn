@@ -7,6 +7,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 namespace
 {
@@ -77,6 +78,40 @@ namespace
                 throw std::runtime_error(
                     "TressFX simulation backend must be \"cpu\" or \"gpu\": " +
                     std::string(meshAssetPath));
+        }
+        if (simulation.contains("skinning"))
+        {
+            const auto& skinning = simulation.at("skinning");
+            if (!skinning.is_object())
+                throw std::runtime_error(
+                    "TressFX simulation.skinning must be an object: " +
+                    std::string(meshAssetPath));
+            for (auto field = skinning.begin(); field != skinning.end(); ++field)
+            {
+                if (field.key() != "source" && field.key() != "rootBone")
+                    throw std::runtime_error(
+                        "TressFX simulation.skinning has unknown field \"" +
+                        field.key() + "\": " + std::string(meshAssetPath));
+            }
+            TressfxSimulationSkinning binding;
+            const char* required[] = {"source", "rootBone"};
+            for (const char* key : required)
+            {
+                if (!skinning.contains(key) || !skinning.at(key).is_string() ||
+                    skinning.at(key).get<std::string>().empty())
+                    throw std::runtime_error(
+                        "TressFX simulation.skinning requires a non-empty \"" +
+                        std::string(key) + "\": " + std::string(meshAssetPath));
+            }
+            binding.source = skinning.at("source").get<std::string>();
+            binding.rootBone = skinning.at("rootBone").get<std::string>();
+            // 姿态来自渲染快照；CPU 参考 solver 运行在游戏线程，没有 SkinPose。
+            // 这是作者错误，必须在加载期拒绝，而不是运行时静默退回 rest pin。
+            if (config.backend != TressfxSimulationBackend::Gpu)
+                throw std::runtime_error(
+                    "TressFX simulation.skinning requires simulation.backend = \"gpu\": " +
+                    std::string(meshAssetPath));
+            config.skinning = std::move(binding);
         }
         // GPU 上一个作者 iteration 会展开成一次长 dispatch；上限防止异常值直接 TDR。
         if (config.iterations == 0 || config.iterations > 16)
@@ -517,6 +552,13 @@ MeshAssetBuildPlan MeshAssetValidator::BuildLoadPlan(
         }
         identity << "|backend=" << (loadPlan.tressfxSimulation.backend ==
                         TressfxSimulationBackend::Gpu ? "gpu" : "cpu");
+        // 源对象/根骨决定运行时上传的骨骼矩阵，必须进入模型缓存身份；否则同一
+        // .tfx 的两个不同绑定会错误共享 renderable 与 SSBO。
+        if (loadPlan.tressfxSimulation.skinning)
+        {
+            identity << "|skinsource=" << loadPlan.tressfxSimulation.skinning->source
+                     << "|skinbone=" << loadPlan.tressfxSimulation.skinning->rootBone;
+        }
         loadPlan.modelCacheKey += identity.str();
     }
     if (effectiveMeshAssetJson.contains("skinning"))

@@ -99,8 +99,35 @@
                     "type": "string",
                     "enum": ["cpu", "gpu"],
                     "description": "cpu 为游戏线程参考 solver；gpu 为 compute dispatch，CPU 不写位置 buffer。"
+                },
+                "skinning": {
+                    "type": "object",
+                    "description": "把发丝根点从 rest pin 改为跟随场景内源角色的骨骼。source 是同一场景的 mesh 对象名，rootBone 是该对象目标骨架的关节名；根点写入 current = previous = M * rest，其余点仍按原约束求解。",
+                    "properties": {
+                        "source": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "源角色场景对象名；解析失败是加载期硬错误。"
+                        },
+                        "rootBone": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "源角色目标骨架（SK）的关节名，大小写敏感；找不到时加载期硬错误。"
+                        }
+                    },
+                    "required": ["source", "rootBone"],
+                    "additionalProperties": false
                 }
             },
+            "allOf": [
+                {
+                    "if": {"required": ["skinning"]},
+                    "then": {
+                        "required": ["backend"],
+                        "properties": {"backend": {"const": "gpu"}}
+                    }
+                }
+            ],
             "additionalProperties": false
         },
         "collision": {

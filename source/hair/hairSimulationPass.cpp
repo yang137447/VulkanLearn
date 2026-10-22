@@ -6,6 +6,7 @@
 #include <unordered_set>
 #include <utility>
 
+#include "animation/skinPose.h"
 #include "pipeline/computePipeline.h"
 #include "pipeline/pipelineFactory.h"
 #include "renderableObject.h"
@@ -200,6 +201,7 @@ HairSimulationPass::ObjectDescriptors& HairSimulationPass::EnsureObjectDescripto
 
 void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
     const VL::ResolvedRenderScene& scene,
+    const VL::RenderScene& renderScene,
     uint32_t frameSlot,
     float deltaSeconds)
 {
@@ -261,6 +263,36 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
         ObjectDescriptors& state = EnsureObjectDescriptors(object);
         const TressfxSimulationConfig& config = object.GetTressfxSimulationConfig();
 
+        // 根点骨骼矩阵来自同一帧的 RenderScene 冻结快照。只按场景对象身份匹配，
+        // 不复制播放器或骨架状态；pose 缺失时保留上一帧矩阵并只报告一次。
+        const VL::Hair::TressfxSkinningBinding& skinning =
+            object.GetTressfxSkinningBinding();
+        if (skinning.enabled)
+        {
+            const VL::RenderDrawPacket* sourceDraw = nullptr;
+            for (const VL::RenderDrawPacket& packet : renderScene.drawPackets)
+            {
+                if (packet.sceneObjectIdentity != skinning.sourceSceneObject ||
+                    !packet.skinPose)
+                    continue;
+                if (skinning.jointIndex >= packet.skinPose->matrices.size())
+                    continue;
+                sourceDraw = &packet;
+                break;
+            }
+            if (sourceDraw != nullptr)
+                state.skinningMatrix = sourceDraw->skinPose->matrices[skinning.jointIndex];
+            else if (!state.reportedMissingSkinPose)
+            {
+                std::cerr << "[TressFX] skinning pose unavailable for object \""
+                          << object.GetName() << "\" source=\""
+                          << skinning.sourceSceneObject << "\" bone=\""
+                          << skinning.rootBone << "\"; keeping the last matrix"
+                          << std::endl;
+                state.reportedMissingSkinPose = true;
+            }
+        }
+
         // 与 CPU GuideSimulation::Step 相同的 accumulator 算术。这里刻意重复这 6 行：
         // GPU 侧还没有跨帧状态 buffer，pass 的逐对象状态就是权威；两处必须一起改。
         state.accumulator += std::clamp(deltaSeconds, 0.0f, config.maxDt);
@@ -281,7 +313,8 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
             dispatch.guideCount,
             object.GetTressfxPointsPerGuide(),
             dispatch.guideCount * object.GetTressfxPointsPerGuide(),
-            state.simulationTime);
+            state.simulationTime,
+            state.skinningMatrix);
         object.WriteTressfxSimulationParams(params, frameSlot);
         state.simulationTime += static_cast<float>(steps) * config.fixedStep;
 
