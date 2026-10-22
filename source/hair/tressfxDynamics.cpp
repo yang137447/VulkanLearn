@@ -60,6 +60,14 @@ GuideSimulation::GuideSimulation(
         config.fixedStep > 0.1f ||
         config.maxSubsteps == 0 || config.maxSubsteps > 8)
         throw std::invalid_argument("Invalid TressFX guide simulation config");
+    if (config.capsules.size() > TressfxMaxColliders)
+        throw std::invalid_argument("Invalid TressFX guide simulation collider count");
+    for (const TressfxCollider& capsule : config.capsules)
+    {
+        if (!capsule.a.allFinite() || !capsule.b.allFinite() ||
+            !std::isfinite(capsule.radius) || capsule.radius <= 0.0f)
+            throw std::invalid_argument("Invalid TressFX guide simulation collider");
+    }
 }
 
 bool GuideSimulation::IsFixed(size_t point) const
@@ -124,6 +132,27 @@ void GuideSimulation::ProjectBendForGuide(size_t guide)
     }
 }
 
+void GuideSimulation::ProjectCollisionsForGuide(size_t guide)
+{
+    if (config.capsules.empty())
+        return;
+    const size_t base = guide * pointsPerGuide;
+    // 胶囊按作者顺序逐个应用；重叠区域的最终位置取决于这个顺序。
+    for (const TressfxCollider& capsule : config.capsules)
+    {
+        for (size_t local = 0; local < pointsPerGuide; ++local)
+        {
+            const size_t point = base + local;
+            // 固定根点保持在 rest，不参与碰撞；否则 pin 与投影会互相拉扯。
+            if (IsFixed(point))
+                continue;
+            Eigen::Vector3f position = positions[point];
+            if (ResolveCapsuleCollision(position, capsule))
+                positions[point] = position;
+        }
+    }
+}
+
 void GuideSimulation::Substep()
 {
     const float dt = config.fixedStep;
@@ -148,11 +177,12 @@ void GuideSimulation::Substep()
             previousPositions[point] = current;
             positions[point] = current + velocity + acceleration * dt2;
         }
-        // 与 GPU kernel 一致：每次 iteration 先长度投影，再做弯曲约束。
+        // 与 GPU kernel 一致：每次 iteration 先长度投影，再弯曲约束，最后碰撞。
         for (uint32_t iteration = 0; iteration < config.iterations; ++iteration)
         {
             ProjectLengthsForGuide(guide);
             ProjectBendForGuide(guide);
+            ProjectCollisionsForGuide(guide);
         }
     }
 }

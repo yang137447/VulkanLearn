@@ -6,6 +6,8 @@
 
 #include <Eigen/Dense>
 
+#include "hair/tressfxCollision.h"
+
 namespace VL::Hair
 {
 
@@ -26,6 +28,8 @@ struct SimulationConfig
     // 固定子步长；accumulator 按它消耗，剩余不足一步时保留到下一帧。
     float fixedStep = 1.0f / 60.0f;
     uint32_t maxSubsteps = 4;
+    // 资产局部空间的解析胶囊；顺序即重叠时的投影顺序。
+    std::vector<TressfxCollider> capsules;
 };
 
 // 与 GPU kernel 相同的 golden-ratio 相位展开和有界阵风。
@@ -61,6 +65,7 @@ private:
     void Substep();
     void ProjectLengthsForGuide(size_t guide);
     void ProjectBendForGuide(size_t guide);
+    void ProjectCollisionsForGuide(size_t guide);
     bool IsFixed(size_t point) const;
 
     std::vector<Eigen::Vector3f> restPositions;

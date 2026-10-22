@@ -116,6 +116,69 @@ namespace
                 std::string(meshAssetPath));
     }
 
+    void ReadTressfxCollision(
+        const nlohmann::json& json,
+        MeshAssetBuildPlan& loadPlan,
+        std::string_view meshAssetPath)
+    {
+        auto& capsules = loadPlan.tressfxSimulation.capsules;
+        capsules.clear();
+        if (!json.contains("collision"))
+            return;
+        const auto& collision = json.at("collision");
+        if (!collision.is_object())
+            throw std::runtime_error(
+                "TressFX collision must be an object: " + std::string(meshAssetPath));
+        for (auto field = collision.begin(); field != collision.end(); ++field)
+        {
+            if (field.key() != "capsules")
+                throw std::runtime_error(
+                    "TressFX collision has unknown field \"" + field.key() + "\": " +
+                    std::string(meshAssetPath));
+        }
+        if (!collision.contains("capsules") || !collision.at("capsules").is_array())
+            throw std::runtime_error(
+                "TressFX collision requires a capsules array: " +
+                std::string(meshAssetPath));
+        const auto& array = collision.at("capsules");
+        if (array.size() > VL::Hair::TressfxMaxColliders)
+            throw std::runtime_error(
+                "TressFX collision supports at most " +
+                std::to_string(VL::Hair::TressfxMaxColliders) + " capsules: " +
+                std::string(meshAssetPath));
+        for (const auto& item : array)
+        {
+            if (!item.is_object())
+                throw std::runtime_error(
+                    "TressFX collision capsule must be an object: " +
+                    std::string(meshAssetPath));
+            for (auto field = item.begin(); field != item.end(); ++field)
+            {
+                if (field.key() != "a" && field.key() != "b" && field.key() != "radius")
+                    throw std::runtime_error(
+                        "TressFX collision capsule has unknown field \"" +
+                        field.key() + "\": " + std::string(meshAssetPath));
+            }
+            if (!item.contains("a") || !item.contains("b") || !item.contains("radius"))
+                throw std::runtime_error(
+                    "TressFX collision capsule requires a, b and radius: " +
+                    std::string(meshAssetPath));
+            VL::Hair::TressfxCollider collider;
+            collider.a = ReadSimulationVector(item, "a", meshAssetPath);
+            collider.b = ReadSimulationVector(item, "b", meshAssetPath);
+            if (!item.at("radius").is_number())
+                throw std::runtime_error(
+                    "TressFX collision capsule radius must be a number: " +
+                    std::string(meshAssetPath));
+            collider.radius = item.at("radius").get<float>();
+            if (!std::isfinite(collider.radius) || collider.radius <= 0.0f)
+                throw std::runtime_error(
+                    "TressFX collision capsule radius must be finite and positive: " +
+                    std::string(meshAssetPath));
+            capsules.push_back(collider);
+        }
+    }
+
     void EnsureObject(const nlohmann::json& json, std::string_view meshAssetPath)
     {
         if (!json.is_object())
@@ -425,6 +488,7 @@ MeshAssetBuildPlan MeshAssetValidator::BuildLoadPlan(
                 "TressFX requires a .tfx source, one material slot and no importOptions: " +
                 std::string(meshAssetPath));
         ReadTressfxSimulation(effectiveMeshAssetJson, loadPlan, meshAssetPath);
+        ReadTressfxCollision(effectiveMeshAssetJson, loadPlan, meshAssetPath);
         std::ostringstream identity;
         identity << "|tressfx-static-v1|radius=" << std::hexfloat << loadPlan.strandRadius
                  << "|sim=" << (loadPlan.tressfxSimulation.enabled ? 1 : 0)
@@ -443,7 +507,15 @@ MeshAssetBuildPlan MeshAssetValidator::BuildLoadPlan(
                  << "|freq=" << loadPlan.tressfxSimulation.windFrequency
                  << "|fixed=" << loadPlan.tressfxSimulation.fixedStep
                  << "|substeps=" << loadPlan.tressfxSimulation.maxSubsteps
-                 << "|backend=" << (loadPlan.tressfxSimulation.backend ==
+                 << "|colliders=" << loadPlan.tressfxSimulation.capsules.size();
+        for (const VL::Hair::TressfxCollider& capsule :
+             loadPlan.tressfxSimulation.capsules)
+        {
+            identity << "|cap=" << capsule.a.x() << "," << capsule.a.y() << ","
+                     << capsule.a.z() << ":" << capsule.b.x() << "," << capsule.b.y()
+                     << "," << capsule.b.z() << ":" << capsule.radius;
+        }
+        identity << "|backend=" << (loadPlan.tressfxSimulation.backend ==
                         TressfxSimulationBackend::Gpu ? "gpu" : "cpu");
         loadPlan.modelCacheKey += identity.str();
     }

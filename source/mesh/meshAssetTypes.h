@@ -7,6 +7,7 @@
 #include <memory>
 #include <nlohmann/json.hpp>
 #include "../vertexDataStruct.h"
+#include "hair/tressfxCollision.h"
 
 namespace VL::Animation { struct SkeletalAsset; }
 
@@ -60,6 +61,9 @@ struct TressfxSimulationConfig
     // 固定时间步与每帧最多子步数；accumulator 超出部分丢弃。
     float fixedStep = 1.0f / 60.0f;
     uint32_t maxSubsteps = 4;
+    // SM 描述符顶层 `collision.capsules` 的解析结果；空表示不做胶囊碰撞。
+    // 位置/半径都是资产局部空间厘米，与 positions 和 solver 同一坐标系。
+    std::vector<VL::Hair::TressfxCollider> capsules;
     TressfxSimulationBackend backend = TressfxSimulationBackend::Cpu;
 };
 

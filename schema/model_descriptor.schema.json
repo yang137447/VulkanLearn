@@ -103,6 +103,45 @@
             },
             "additionalProperties": false
         },
+        "collision": {
+            "type": "object",
+            "description": "tressfx guide 的解析胶囊碰撞；位置/半径使用资产局部空间厘米。",
+            "properties": {
+                "capsules": {
+                    "type": "array",
+                    "description": "按顺序应用的胶囊；a == b 表示球。空数组等价于无碰撞。",
+                    "maxItems": 8,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "a": {
+                                "type": "array",
+                                "description": "胶囊起点 xyz，资产局部空间厘米。",
+                                "items": {"type": "number"},
+                                "minItems": 3,
+                                "maxItems": 3
+                            },
+                            "b": {
+                                "type": "array",
+                                "description": "胶囊终点 xyz，资产局部空间厘米。",
+                                "items": {"type": "number"},
+                                "minItems": 3,
+                                "maxItems": 3
+                            },
+                            "radius": {
+                                "type": "number",
+                                "exclusiveMinimum": 0,
+                                "description": "胶囊半径，厘米。"
+                            }
+                        },
+                        "required": ["a", "b", "radius"],
+                        "additionalProperties": false
+                    }
+                }
+            },
+            "required": ["capsules"],
+            "additionalProperties": false
+        },
         "modelDataPath": {
             "type": "string",
             "description": "原始模型数据文件相对路径，例如 'models/datas/my_mesh.obj'。"

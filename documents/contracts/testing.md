@@ -27,7 +27,7 @@
 | `editor_ui_tests` | 714（708 后加 6 项共用资产标签与工作区验证） | 编辑器 UI：组件、停靠、布局持久化、内容浏览器、JSON 资产库、标准资产修改、actor 树、属性编辑、场景持久化、保存确认、可视化、颜色转换、右键菜单、RmlUi GPU 缩略图桥接、C# 放置/蓝图资产拖放、组件 Details、独立蓝图配置标签、3D 拾取/变换/辅助图示/吸附、文档历史、类型化属性与实例权限、物理配置、编译入口、逻辑组件、Quaternion 原子编辑、Time Scale、Log 页签、四处递归自定义数据编辑、冻结 HUD 文本绑定、C# 类浏览/源码打开请求、一类多 BP 配置创建及骨骼预览值请求/资产校验；公共 DrawDebug 投影/裁剪/叠层顺序、可选深度、转义文字、过滤菜单；Motion 值请求/布局、特征表和 MM 冻结候选/代价刷新、被聚焦控制器时间轴 seek/play/pause 与离线/无播放器禁用、查询回放历史帧选择/回显/禁用；SpringArm 字段刷新、默认值与编辑提交、组件/末端挂接空间、图示/拾取/gizmo 一致性、多层 Mesh section 空间与重挂父级；TressFX 类型识别、标准保存保留半径与场景引用；retarget source/profile 保存保留与引用/源类型拒绝；参考姿态校准、ozz 索引、SK 身份/根路径边界、冻结发布/失败清空、独立页签/轴向/选骨/取景/辅助骨和多尺寸布局；成对动画身份发布、控制/seek、模式切换、重载隔离和首次取景区域；共用 DocumentTab 稳定 key/独立关闭、临时最大化/恢复、跨类型关闭与 MI 异步确认 |
 | `script_tests` | 当前注册 448（当前构建 XML 实测；含 2 项成对原地动画预览；SpringArm 运行时共 40 项；C# ON；注册数不等于实跑数；本轮范围见 Retarget 动画页验证。OFF 先前实测注册 89 项） | 蓝图场景/资产/组件校验、实例权限、地面放置、输入映射、源码 URI 边界；ON 时使用真实 hostfxr/CLR 验证生命周期、Spawn、运行时组件/代际句柄、异步加载/取消/租约、Jolt 层与掩码/compound/静态 mesh/约束/扫球、角色控制、计时器/事件、故障隔离、World 换代、冻结快照、类型化属性、灯光、程序集重载、资源源码编译/监视及 DLL/PDB 完整字节确定性、PDB 空类/partial 源码定位、私有运行时部署、自定义逻辑组件、Tick/LateTick 每帧时序/时钟/性能采样、递归自定义数据、显式播放中深值迁移、增量同步/空回调过滤/千实例负载、HUD 所有权/回滚/迁移、受控程序集限定类名及混合 CLR/Jolt/WorldSnapshot 负载；SpringArm schema/编辑保存/实例覆写、同帧物理/晚更新、旋转继承、位置/旋转 lag 与子步、碰撞/移动墙体、诊断/传送复位、重载与回滚、非相机子级/子局部偏移与嵌套碰撞空间、CLR/原生含 shear 矩阵一致性；动画请求/原生反馈、独立时钟、状态机及实际运动/碰墙回归、Actor 有界转向与世界关节/相机连续性、正式控制器稳态步频开关与原根行程对照及曲线筛选踝漂移诊断；静态接地探测过滤、18° 横坡参考点/法线独立测量与 pre-IK/MM 隔离；走跑双参考点动态支撑、台阶边缘单支点、惯性化与视觉根偏移、冻结源支撑窗滑移/漂移/穿入质量夹具；足部 Auto/Ball/Ankle 支点模式与 C# `FootLock`；Motion 调试历史回放（帧选择、不追加、退出恢复）；被聚焦脚本控制器时间轴的 seek/play/pause 身份隔离、代数/片长/动作校验；历史 Pause/Stop、实际碰撞轨迹与近似预测；DrawDebug 十形状、生命周期/发布者清理、批次回滚和深度参数跨桥；成对预览 clip/时钟、原地根变换、section 去重和场景门控 |
 | `debug_draw_tests` | 27 | 十形状展开、生命周期、冻结、身份/过滤/预算、默认 Overlay 与可选深度传播、投影近远面及屏幕裁剪深度、Console 控制 |
-| `hair_asset_tests` | 68 | `.tfx` 字节/属性/预算校验、文件读取、坐标与逆质量保留、静态切线/rest length/ribbon 拓扑、SM 半径/身份与导入流、simulation CPU/GPU backend 解析、固定步/弯曲/阵风作者字段与参数打包；合成夹具，模块套件不含真实女性资产或 GPU dispatch（GPU 路径由 main 启动烟测覆盖） |
+| `hair_asset_tests` | 79 | `.tfx` 字节/属性/预算校验、文件读取、坐标与逆质量保留、静态切线/rest length/ribbon 拓扑、SM 半径/身份与导入流、simulation CPU/GPU backend 解析、固定步/弯曲/阵风作者字段与参数打包、胶囊投影/固定点/长子步接触与 collision 校验；合成夹具，模块套件不含真实女性资产或 GPU dispatch（GPU 路径由 main 启动烟测覆盖） |
 | `vl_offline_adapter_tests` | 101 | 离线场景/网格/显示/相机适配 |
 | `editor_viewport_tests` | 41 | 视口几何、命中、坐标映射、aspect、坐标轴投影及编辑器网格 |
 | `vl_offline_coordinator_tests` | 13 | 离线会话协调 |
@@ -869,9 +869,10 @@ File→Exit 日志确认 teardown 完成，无 Vulkan validation 错误。该验
 TressFX 导入与材质边界使用 `vl_tfx_inspect`、`hair_asset_tests` 和
 `material_schema_tests`：构建这三个目标后运行
 `ctest --test-dir build -R "^(TfxLoader|TfxFileTest|StrandGeometry|TressfxDescriptor|TressfxImport|TressfxMaterial)\." --output-on-failure`。
-hair 的 68 项覆盖 `.tfx` 字节边界、切线/ribbon 拓扑、SM 半径/身份、属性流、
-simulation CPU/GPU backend 解析、固定步/弯曲/阵风作者字段与参数打包（GPU dispatch
-不在模块套件内，由 main 启动烟测覆盖）；
+hair 的 79 项覆盖 `.tfx` 字节边界、切线/ribbon 拓扑、SM 半径/身份、属性流、
+simulation CPU/GPU backend 解析、固定步/弯曲/阵风作者字段与参数打包、胶囊投影/
+固定点/长子步接触与 collision 资产校验（GPU dispatch 不在模块套件内，由 main
+启动烟测覆盖）；
 `TressfxMaterial` 的 7 项覆盖工厂身份、透明写深度，以及不支持的模型/路径拒绝。
 材质目标共 16 项。编辑器改动运行 `editor_ui_tests` 全量；本批 681 项，
 676 通过、5 项符号链接权限环境跳过，零失败。
@@ -897,6 +898,10 @@ stderr 无 Vulkan validation 输出。该日志行仍只在首次录制时输出
 guide/点数量，不是本帧 dispatch 次数：固定步 accumulator 可能让同一对象一帧录制
 0..`maxSubsteps` 次 dispatch。该路径没有自动退出标志，验证后手动结束进程；
 模块套件不覆盖 dispatch，这条烟测是 GPU 路径的当前证据，不替代 CPU/GPU 逐像素对照。
+同一 SM 还作者了头/颈/肩背四个碰撞胶囊；在该场景截取第 15 与第 105 帧，没有可见的
+发丝穿入胶囊表面，也没有胶囊吸附或夹扁，两帧平均绝对像素差 5.897、超过 8 的像素
+占 7.27%（风仍会把部分发丝吹到脸前，那是头表面之外，不是穿模；截图与日志为一次性
+验证产物，已删除）。
 
 Female 正式关卡验证：`tool/hair/import_female_scene.py` 实际导入固定 Maya 归档，
 `vl_tfx_inspect` 通过 40,334 guides / 1,290,688 points / 7,502,124 indices；

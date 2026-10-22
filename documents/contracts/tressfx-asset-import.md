@@ -160,6 +160,31 @@ backend 写入模型缓存身份，同一个 `.tfx` 的 cpu/gpu 描述符不共�
 | `maxSubsteps` | 4 | `[1,8]` | 每帧最多子步数；达到上限时丢弃 backlog。 |
 | `backend` | `"cpu"` | `"cpu"` / `"gpu"` | 参考 solver 或 compute dispatch。 |
 
+### 碰撞胶囊
+
+`collision` 是 SM 描述符的顶层对象，与 `simulation` 同级；所有坐标和半径都是
+**资产局部空间厘米**，与 positions、gravity、wind 使用同一坐标系：
+
+```json
+"collision": {
+    "capsules": [
+        {"a": [0.0, 168.0, 0.5], "b": [0.0, 168.0, 0.5], "radius": 8.5},
+        {"a": [0.0, 149.0, 0.5], "b": [0.0, 159.0, 0.5], "radius": 6.5}
+    ]
+}
+```
+
+- `capsules` 缺省或为空数组表示无碰撞，行为与未接入碰撞时一致。
+- 数量上限为 8（`VL::Hair::TressfxMaxColliders`，GPU 侧同名常量），因为当前
+  作者规模只需头、颈、肩背少量代理；更多细节应转向 SDF，而不是继续堆胶囊。
+- `a == b` 表示球。`a`、`b` 必须是 3 个有限数，`radius` 必须有限且 > 0；
+  未知键、缺失键、非 3 元向量、超过 8 个胶囊都按现有错误风格拒绝，消息带 SM
+  资产路径。
+- 每个 collider 的值都进入 `modelCacheKey`；修改胶囊会使模型缓存失效。
+- 当前没有 `.tfxmesh` / SDF 碰撞：资源导出只有 `.tfx` guides、身体 OBJ 和蒙皮
+  FBX，`tfxLoader` 也没有 `.tfxmesh` 解析器。SDF 路径需要碰撞网格导出/导入、
+  SDF 生成与存储、kernel 采样，这些都不在本仓库中。
+
 ### GPU 路径
 
 GPU backend 的位置 buffer 放在 device-local：current/previous/rest 都用
@@ -177,8 +202,11 @@ params UBO 每帧由主机改写，两种 backend 都保持 host-visible/coheren
   不需要独立的质量数组。
 - 每个 frame-in-flight 槽一份 std140 params UBO：平均 gravity、平均 wind、
   fixedStep/damping/pointsPerGuide/rootFixedPoints、iterations/guideCount/pointCount、
-  bendStiffness/windGust/windFrequency/frame-start simulationTime。`maxDt` 只由 Host
-  accumulator 使用，不进入 GPU。
+  bendStiffness/windGust/windFrequency/frame-start simulationTime、colliderCount。
+  `maxDt` 只由 Host accumulator 使用，不进入 GPU。
+- 静态 collider SSBO（compute set 0 binding 4）：创建时上传一次，每个 collider
+  32 字节（`GuideColliderGpu`：a.xyz + a.w=radius、b.xyz），固定 8 槽；`counts.w`
+  决定 kernel 实际读取数量。空列表也保留零填充 buffer，因为 binding 是静态声明。
 
 buffer 由 `RenderableObject` 拥有并随 World 资源包退休；`HairSimulationPass` 只拥有
 compute pipeline、descriptor pool、逐对象 descriptor set 缓存和逐对象 accumulator/time。
@@ -188,10 +216,10 @@ compute pipeline、descriptor pool、逐对象 descriptor set 缓存和逐对象
 invocation 内顺序读写，复刻 CPU `GuideSimulation::Substep` 的一次固定步积分与
 `iterations` 次约束扫描：固定点复位 current/previous、Verlet 积分、长度投影
 （逆质量加权、`1e-6` 退化段跳过、全固定段跳过），随后在同一 iteration 内执行弯曲
-约束。`iterations` 由资产边界限制在 `[1, 16]`：GPU 上一个作者值会展开成一条长
-dispatch，异常大值应当直接拒绝而不是 TDR。这样选择的并行度低于“每点一个线程 +
-独立 constraint dispatch”的 TressFX 形态，但 guide 之间无共享状态，数百到数千根
-guide 已能填满 workgroup；guide 数量显著增长时再评估拆分 kernel。
+约束和胶囊碰撞。`iterations` 由资产边界限制在 `[1, 16]`：GPU 上一个作者值会展开成
+一条长 dispatch，异常大值应当直接拒绝而不是 TDR。这样选择的并行度低于“每点一个
+线程 + 独立 constraint dispatch”的 TressFX 形态，但 guide 之间无共享状态，数百到
+数千根 guide 已能填满 workgroup；guide 数量显著增长时再评估拆分 kernel。
 
 弯曲约束（每个 iteration、长度投影之后、顺序根→梢）：
 
@@ -205,6 +233,29 @@ pos[b]    += (target - pos[b]) * bendStiffness
 不移动，也不做逆质量加权。使用 `restOffset` 而不是把三点拉成直线，是为了保存
 作者在 rest 姿态里写下的局部曲率：target 只把这份曲率平移到当前邻居中点上，约束
 抵抗形状变化，不把发丝吸向某个绝对位置。
+
+### 碰撞投影
+
+每个子步、每次 iteration 的固定顺序是 **长度投影 → 弯曲约束 → 胶囊碰撞**，
+三者都按 guide 内点序 root→tip 顺序读写 positions。碰撞对每个胶囊按作者顺序
+依次执行：
+
+```text
+ab = b - a; denom = dot(ab, ab)
+t = denom > 0 ? clamp(dot(p - a, ab) / denom, 0, 1) : 0   // a == b 退化为球
+closest = a + t * ab
+d = p - closest; len = |d|
+if (len < radius) p = closest + normalize(d) * radius
+```
+
+- 只处理非固定点；固定根点由 rest pin 保持，不参与碰撞。
+- 只修改 current positions，不修改 previous positions，因此碰撞不产生速度冲量。
+  这让接触偏黏、缺少摩擦，是当前明确限制；friction 尚未实现。
+- 多个胶囊在重叠区域的最终位置取决于作者顺序；顺序是数据契约的一部分。
+- `len` 接近 0 时使用与胶囊轴垂直的确定性方向：axis 非 Y 向时
+  `normalize(cross(axis, +Y))`，否则 `normalize(cross(axis, +X))`；`a == b` 的球
+  使用 `+Y`。CPU 与 GPU 使用同一规则。
+- 胶囊是静态的，GPU 只在对象创建时上传一次；每帧只写 params（含 colliderCount）。
 
 ### 固定步与阵风时间
 
@@ -285,10 +336,12 @@ GPU 路径只步进出现在渲染快照中的对象：`visible = false` 的对�
 Verlet 速度仍然有效，且每帧 `dt` 已被限制到 `[0, maxDt]`。离线模式走离线录制分支，
 不调用 `RecordHairSimulation`，因此没有 dispatch。
 
-显式限制：没有 SDF/capsule 碰撞、VSP、root 骨骼蒙皮、follow hair、深度阴影、OIT、
-LOD；没有 per-instance 或 world-space simulation。GPU 路径没有碰撞、约束图或外部
-力场。帧 dt 在进入 accumulator 前截断到 `[0, maxDt]`，超过 `maxSubsteps` 的 backlog
-直接丢弃；这两点是有意的稳定性边界，不是可累积的模拟时间。
+显式限制：碰撞只有作者解析胶囊，没有 `.tfxmesh`/SDF、VSP、root 骨骼蒙皮、
+follow hair、深度阴影、OIT、LOD；没有 per-instance 或 world-space simulation。
+胶囊接触是纯位置投影，不修改 previous positions，因此没有摩擦、没有碰撞速度
+冲量，接触略黏且可能抖动；重叠胶囊的最终位置取决于作者顺序。帧 dt 在进入
+accumulator 前截断到 `[0, maxDt]`，超过 `maxSubsteps` 的 backlog 直接丢弃；
+这两点是有意的稳定性边界，不是可累积的模拟时间。
 
 ## Female 正式静态关卡
 

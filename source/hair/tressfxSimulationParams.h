@@ -18,11 +18,11 @@ struct GuideSimulationParams
     Eigen::Vector4f wind = Eigen::Vector4f::Zero();
     // x = fixedStep, y = damping, z = pointsPerGuide, w = rootFixedPoints
     Eigen::Vector4f controls = Eigen::Vector4f::Zero();
-    // x = iterations, y = guideCount, z = pointCount, w = 对齐保留
+    // x = iterations, y = guideCount, z = pointCount, w = colliderCount
     uint32_t iterations = 0;
     uint32_t guideCount = 0;
     uint32_t pointCount = 0;
-    uint32_t reserved = 0;
+    uint32_t colliderCount = 0;
     // x = bendStiffness, y = windGust, z = windFrequency, w = frame-start simulationTime
     Eigen::Vector4f motion = Eigen::Vector4f::Zero();
 };
@@ -60,7 +60,7 @@ inline GuideSimulationParams MakeGuideSimulationParams(
     params.iterations = config.iterations;
     params.guideCount = guideCount;
     params.pointCount = pointCount;
-    params.reserved = 0;
+    params.colliderCount = static_cast<uint32_t>(config.capsules.size());
     params.motion = Eigen::Vector4f(
         config.bendStiffness,
         config.windGust,

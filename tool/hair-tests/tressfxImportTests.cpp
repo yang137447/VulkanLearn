@@ -203,6 +203,100 @@ TEST(TressfxDescriptor, SimulationRejectsInvalidFixedStepAndSubsteps)
     }
 }
 
+TEST(TressfxDescriptor, CollisionAcceptsAuthoredCapsules)
+{
+    auto json = Descriptor();
+    EXPECT_TRUE(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json)
+            .tressfxSimulation.capsules.empty());
+
+    json["collision"] = {{"capsules", nlohmann::json::array()}};
+    EXPECT_TRUE(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json)
+            .tressfxSimulation.capsules.empty());
+
+    json["collision"]["capsules"].push_back({
+        {"a", {0.0f, 160.0f, 0.0f}},
+        {"b", {0.0f, 174.0f, 0.0f}},
+        {"radius", 8.0f}});
+    const auto plan = MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json);
+    ASSERT_EQ(plan.tressfxSimulation.capsules.size(), 1u);
+    EXPECT_FLOAT_EQ(plan.tressfxSimulation.capsules[0].a.y(), 160.0f);
+    EXPECT_FLOAT_EQ(plan.tressfxSimulation.capsules[0].b.y(), 174.0f);
+    EXPECT_FLOAT_EQ(plan.tressfxSimulation.capsules[0].radius, 8.0f);
+}
+
+TEST(TressfxDescriptor, CollisionFieldsParticipateInMeshIdentity)
+{
+    auto json = Descriptor();
+    json["collision"] = {{"capsules", nlohmann::json::array()}};
+    json["collision"]["capsules"].push_back({
+        {"a", {0.0f, 0.0f, 0.0f}},
+        {"b", {0.0f, 10.0f, 0.0f}},
+        {"radius", 2.0f}});
+    const auto first = MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json);
+    json["collision"]["capsules"][0]["radius"] = 2.5f;
+    const auto second = MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json);
+    EXPECT_NE(first.modelCacheKey, second.modelCacheKey);
+}
+
+TEST(TressfxDescriptor, CollisionRejectsInvalidCapsules)
+{
+    const auto capsule = [](float radius)
+    {
+        return nlohmann::json{
+            {"a", {0.0f, 0.0f, 0.0f}},
+            {"b", {0.0f, 10.0f, 0.0f}},
+            {"radius", radius}};
+    };
+
+    for (const float radius : {0.0f, -1.0f})
+    {
+        auto json = Descriptor();
+        json["collision"] = {{"capsules", {capsule(radius)}}};
+        EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json),
+            std::runtime_error);
+    }
+
+    auto tooMany = Descriptor();
+    tooMany["collision"] = {{"capsules", nlohmann::json::array()}};
+    for (int i = 0; i < 9; ++i)
+        tooMany["collision"]["capsules"].push_back(capsule(1.0f));
+    EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", tooMany),
+        std::runtime_error);
+}
+
+TEST(TressfxDescriptor, CollisionRejectsInvalidCapsuleFields)
+{
+    auto nonFinite = Descriptor();
+    nonFinite["collision"] = {{"capsules", {{
+        {"a", {std::numeric_limits<float>::infinity(), 0.0f, 0.0f}},
+        {"b", {0.0f, 10.0f, 0.0f}},
+        {"radius", 1.0f}}}}};
+    EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", nonFinite),
+        std::runtime_error);
+
+    auto unknownCollisionField = Descriptor();
+    unknownCollisionField["collision"] = {{"capsules", nlohmann::json::array()},
+        {"extra", 1}};
+    EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", unknownCollisionField),
+        std::runtime_error);
+
+    auto unknownCapsuleField = Descriptor();
+    unknownCapsuleField["collision"] = {{"capsules", {{
+        {"a", {0.0f, 0.0f, 0.0f}},
+        {"b", {0.0f, 10.0f, 0.0f}},
+        {"radius", 1.0f},
+        {"extra", 1}}}}};
+    EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", unknownCapsuleField),
+        std::runtime_error);
+
+    auto missingCapsuleField = Descriptor();
+    missingCapsuleField["collision"] = {{"capsules", {{
+        {"a", {0.0f, 0.0f, 0.0f}},
+        {"b", {0.0f, 10.0f, 0.0f}}}}}};
+    EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", missingCapsuleField),
+        std::runtime_error);
+}
+
 TEST(TressfxDescriptor, RejectsAssimpImportOptions)
 {
     auto json = Descriptor();

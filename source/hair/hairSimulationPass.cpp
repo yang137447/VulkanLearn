@@ -18,6 +18,7 @@ constexpr uint32_t ParamsBinding = 0;
 constexpr uint32_t CurrentPositionsBinding = 1;
 constexpr uint32_t PreviousPositionsBinding = 2;
 constexpr uint32_t RestPositionsBinding = 3;
+constexpr uint32_t CollidersBinding = 4;
 
 // 每个 pool 的 set 容量；逐对象按 frame-in-flight 槽各分配一个 set。
 constexpr uint32_t DescriptorSetsPerPool = VL::Hair::GuideSimulationParamBufferCount * 8;
@@ -106,7 +107,7 @@ vk::DescriptorPool HairSimulationPass::AcquireDescriptorPool()
     const std::vector<vk::DescriptorPoolSize> sizes{
         {vk::DescriptorType::eUniformBuffer, DescriptorSetsPerPool},
         {vk::DescriptorType::eStorageBuffer,
-            DescriptorSetsPerPool * 3u}};
+            DescriptorSetsPerPool * 4u}};
     vk::DescriptorPoolCreateInfo info;
     info.setPoolSizes(sizes).setMaxSets(DescriptorSetsPerPool);
     const vk::DescriptorPool pool =
@@ -133,8 +134,9 @@ void HairSimulationPass::CreateObjectDescriptors(
     const vk::DescriptorBufferInfo currentInfo = object.GetTressfxPositionInfo();
     const vk::DescriptorBufferInfo previousInfo = object.GetTressfxPreviousPositionInfo();
     const vk::DescriptorBufferInfo restInfo = object.GetTressfxRestPositionInfo();
+    const vk::DescriptorBufferInfo colliderInfo = object.GetTressfxColliderInfo();
     std::vector<vk::WriteDescriptorSet> writes;
-    writes.reserve(GuideSimulationParamBufferCount * 4u);
+    writes.reserve(GuideSimulationParamBufferCount * 5u);
     for (uint32_t slot = 0; slot < GuideSimulationParamBufferCount; ++slot)
     {
         const vk::DescriptorBufferInfo paramsInfo = object.GetTressfxParamsInfo(slot);
@@ -151,16 +153,21 @@ void HairSimulationPass::CreateObjectDescriptors(
         vk::WriteDescriptorSet restWrite;
         restWrite.setDstSet(set).setDstBinding(RestPositionsBinding).setDescriptorCount(1)
             .setDescriptorType(vk::DescriptorType::eStorageBuffer).setBufferInfo(restInfo);
+        vk::WriteDescriptorSet colliderWrite;
+        colliderWrite.setDstSet(set).setDstBinding(CollidersBinding).setDescriptorCount(1)
+            .setDescriptorType(vk::DescriptorType::eStorageBuffer).setBufferInfo(colliderInfo);
         writes.push_back(paramsWrite);
         writes.push_back(currentWrite);
         writes.push_back(previousWrite);
         writes.push_back(restWrite);
+        writes.push_back(colliderWrite);
     }
     backend->UpdateDescriptorSets(writes);
 
     descriptors.currentPositions = currentInfo.buffer;
     descriptors.previousPositions = previousInfo.buffer;
     descriptors.restPositions = restInfo.buffer;
+    descriptors.colliders = colliderInfo.buffer;
     for (uint32_t slot = 0; slot < GuideSimulationParamBufferCount; ++slot)
         descriptors.params[slot] = object.GetTressfxParamsInfo(slot).buffer;
 }
@@ -175,7 +182,8 @@ HairSimulationPass::ObjectDescriptors& HairSimulationPass::EnsureObjectDescripto
         const ObjectDescriptors& descriptors = cached->second;
         bool matches = descriptors.currentPositions == object.GetTressfxPositionInfo().buffer &&
             descriptors.previousPositions == object.GetTressfxPreviousPositionInfo().buffer &&
-            descriptors.restPositions == object.GetTressfxRestPositionInfo().buffer;
+            descriptors.restPositions == object.GetTressfxRestPositionInfo().buffer &&
+            descriptors.colliders == object.GetTressfxColliderInfo().buffer;
         for (uint32_t slot = 0; slot < GuideSimulationParamBufferCount && matches; ++slot)
             matches = descriptors.params[slot] == object.GetTressfxParamsInfo(slot).buffer;
         if (matches)

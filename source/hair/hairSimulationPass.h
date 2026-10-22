@@ -52,6 +52,7 @@ private:
         vk::Buffer currentPositions = nullptr;
         vk::Buffer previousPositions = nullptr;
         vk::Buffer restPositions = nullptr;
+        vk::Buffer colliders = nullptr;
         std::array<vk::Buffer, GuideSimulationParamBufferCount> params{};
         // 与 CPU GuideSimulation 完全相同的固定步 accumulator 与 frame-start 时间。
         // 未引入 GPU 侧状态 buffer，因此这份状态随 pass/图重建归零。

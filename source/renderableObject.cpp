@@ -121,6 +121,7 @@ RenderableObject::RenderableObject(
                 simulationConfig.windFrequency = section.tressfxSimulation.windFrequency;
                 simulationConfig.fixedStep = section.tressfxSimulation.fixedStep;
                 simulationConfig.maxSubsteps = section.tressfxSimulation.maxSubsteps;
+                simulationConfig.capsules = section.tressfxSimulation.capsules;
                 tressfxSimulation = std::make_unique<VL::Hair::GuideSimulation>(
                     std::move(restPositions),
                     tressfxGuideCount,
@@ -358,6 +359,27 @@ void RenderableObject::CreateTressfxGpuSimulationBuffers()
         target.info.setBuffer(target.buffer).setOffset(0)
             .setRange(sizeof(VL::Hair::GuideSimulationParams));
     }
+    // 静态解析胶囊：创建时上传一次。空列表也保留合法 buffer，因为 shader 的
+    // binding 4 是静态声明，不能用空 descriptor；count 由 params.counts.w 控制。
+    const vk::DeviceSize colliderBytes =
+        sizeof(VL::Hair::GuideColliderGpu) * VL::Hair::TressfxMaxColliders;
+    std::array<VL::Hair::GuideColliderGpu, VL::Hair::TressfxMaxColliders> gpuColliders{};
+    const auto& capsules = section.tressfxSimulation.capsules;
+    for (size_t collider = 0; collider < capsules.size(); ++collider)
+        gpuColliders[collider] = VL::Hair::MakeGuideColliderGpu(capsules[collider]);
+    std::tie(tressfxColliderBuffer, tressfxColliderMemory) =
+        rendererBackend->CreateBuffer(
+            colliderBytes,
+            vk::BufferUsageFlagBits::eStorageBuffer,
+            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+            "TressFXColliders: " + name);
+    void* colliderMapped =
+        rendererBackend->MapMemory(tressfxColliderMemory, colliderBytes);
+    std::memcpy(colliderMapped, gpuColliders.data(), static_cast<size_t>(colliderBytes));
+    rendererBackend->UnmapMemory(tressfxColliderMemory);
+    tressfxColliderInfo
+        .setBuffer(tressfxColliderBuffer).setOffset(0).setRange(colliderBytes);
+
     tressfxGpuSimulation = true;
 }
 
@@ -373,6 +395,9 @@ void RenderableObject::DestroyTressfxBuffers()
         if (tressfxRestPositionBuffer)
             rendererBackend->DestroyBuffer(
                 tressfxRestPositionBuffer, tressfxRestPositionMemory);
+        if (tressfxColliderBuffer)
+            rendererBackend->DestroyBuffer(
+                tressfxColliderBuffer, tressfxColliderMemory);
         for (auto& target : tressfxParamsTargets)
         {
             if (target.mapped)
@@ -388,6 +413,8 @@ void RenderableObject::DestroyTressfxBuffers()
     tressfxPreviousPositionMemory = nullptr;
     tressfxRestPositionBuffer = nullptr;
     tressfxRestPositionMemory = nullptr;
+    tressfxColliderBuffer = nullptr;
+    tressfxColliderMemory = nullptr;
     tressfxGpuSimulation = false;
 }
 

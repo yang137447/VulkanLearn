@@ -207,6 +207,131 @@ TEST(TressfxDynamics, WindGustIsBoundedAndPeriodic)
         VL::Hair::WindGustFactor(config, 6, sampleTime));
 }
 
+TEST(TressfxDynamics, CapsuleProjectsInsidePointToSurface)
+{
+    VL::Hair::TressfxCollider capsule;
+    capsule.a = Eigen::Vector3f(0, 0, 0);
+    capsule.b = Eigen::Vector3f(0, 10, 0);
+    capsule.radius = 1.0f;
+    Eigen::Vector3f point(0.2f, 5.0f, 0.0f);
+    EXPECT_TRUE(VL::Hair::ResolveCapsuleCollision(point, capsule));
+    EXPECT_NEAR(point.x(), 1.0f, 1.0e-5f);
+    EXPECT_NEAR(point.y(), 5.0f, 1.0e-5f);
+    EXPECT_NEAR(point.z(), 0.0f, 1.0e-5f);
+    EXPECT_NEAR((point - VL::Hair::ClosestPointOnCapsule(capsule, point)).norm(),
+        capsule.radius, 1.0e-5f);
+}
+
+TEST(TressfxDynamics, CapsuleEndpointClampProjectsBothEnds)
+{
+    VL::Hair::TressfxCollider capsule;
+    capsule.a = Eigen::Vector3f(0, 0, 0);
+    capsule.b = Eigen::Vector3f(0, 10, 0);
+    capsule.radius = 1.0f;
+
+    Eigen::Vector3f below(0.0f, -0.5f, 0.2f);
+    EXPECT_TRUE(VL::Hair::ResolveCapsuleCollision(below, capsule));
+    EXPECT_EQ(VL::Hair::ClosestPointOnCapsule(capsule, below), capsule.a);
+    EXPECT_NEAR((below - capsule.a).norm(), capsule.radius, 1.0e-5f);
+
+    Eigen::Vector3f above(0.0f, 10.4f, -0.3f);
+    EXPECT_TRUE(VL::Hair::ResolveCapsuleCollision(above, capsule));
+    EXPECT_EQ(VL::Hair::ClosestPointOnCapsule(capsule, above), capsule.b);
+    EXPECT_NEAR((above - capsule.b).norm(), capsule.radius, 1.0e-5f);
+}
+
+TEST(TressfxDynamics, CapsuleLeavesOutsidePointUntouched)
+{
+    VL::Hair::TressfxCollider capsule;
+    capsule.a = Eigen::Vector3f(0, 0, 0);
+    capsule.b = Eigen::Vector3f(0, 10, 0);
+    capsule.radius = 1.0f;
+    for (const Eigen::Vector3f outside : {Eigen::Vector3f(3, 5, 0), Eigen::Vector3f(1, 5, 0)})
+    {
+        Eigen::Vector3f point = outside;
+        EXPECT_FALSE(VL::Hair::ResolveCapsuleCollision(point, capsule));
+        EXPECT_EQ(point.x(), outside.x());
+        EXPECT_EQ(point.y(), outside.y());
+        EXPECT_EQ(point.z(), outside.z());
+    }
+}
+
+TEST(TressfxDynamics, DegenerateCapsuleBehavesAsSphere)
+{
+    VL::Hair::TressfxCollider sphere;
+    sphere.a = Eigen::Vector3f(1, 2, 3);
+    sphere.b = sphere.a;
+    sphere.radius = 2.0f;
+
+    Eigen::Vector3f side(1.0f, 2.0f, 4.5f);
+    EXPECT_TRUE(VL::Hair::ResolveCapsuleCollision(side, sphere));
+    EXPECT_NEAR((side - sphere.a).norm(), sphere.radius, 1.0e-5f);
+    EXPECT_NEAR(side.z(), 5.0f, 1.0e-5f);
+
+    // 点恰好落在球心：退化方向固定为 +Y。
+    Eigen::Vector3f center = sphere.a;
+    EXPECT_TRUE(VL::Hair::ResolveCapsuleCollision(center, sphere));
+    EXPECT_NEAR(center.y(), sphere.a.y() + sphere.radius, 1.0e-5f);
+    EXPECT_NEAR((center - sphere.a).norm(), sphere.radius, 1.0e-5f);
+}
+
+TEST(TressfxDynamics, CapsuleAxisDegenerateUsesPerpendicularNormal)
+{
+    VL::Hair::TressfxCollider capsule;
+    capsule.a = Eigen::Vector3f(0, 0, 0);
+    capsule.b = Eigen::Vector3f(0, 10, 0);
+    capsule.radius = 1.0f;
+    Eigen::Vector3f point(0.0f, 5.0f, 0.0f);
+    EXPECT_TRUE(VL::Hair::ResolveCapsuleCollision(point, capsule));
+    EXPECT_NEAR(point.y(), 5.0f, 1.0e-5f);
+    EXPECT_NEAR(std::hypot(point.x(), point.z()), capsule.radius, 1.0e-5f);
+}
+
+TEST(TressfxDynamics, CollisionNeverMovesFixedRootPoints)
+{
+    SimulationConfig config;
+    config.gravity = Eigen::Vector3f::Zero();
+    config.rootFixedPoints = 2;
+    config.bendStiffness = 0.0f;
+    VL::Hair::TressfxCollider capsule;
+    capsule.a = Eigen::Vector3f(0, 0, 0);
+    capsule.b = Eigen::Vector3f(0, 3, 0);
+    capsule.radius = 5.0f;
+    config.capsules.push_back(capsule);
+    const auto rest = Chain();
+    GuideSimulation simulation(rest, 1, 4, {0, 1, 1, 1}, config);
+    for (int i = 0; i < 10; ++i)
+        simulation.Step(1.0f / 60.0f);
+    EXPECT_EQ(simulation.Positions()[0], rest[0]);
+    EXPECT_EQ(simulation.Positions()[1], rest[1]);
+}
+
+TEST(TressfxDynamics, StrandStaysOutsideCapsuleAcrossSubsteps)
+{
+    SimulationConfig config;
+    config.gravity = Eigen::Vector3f(0, -50, 0);
+    config.rootFixedPoints = 1;
+    config.bendStiffness = 0.2f;
+    config.iterations = 8;
+    VL::Hair::TressfxCollider capsule;
+    capsule.a = Eigen::Vector3f(0, 0, 0);
+    capsule.b = Eigen::Vector3f(0, 3, 0);
+    capsule.radius = 1.5f;
+    config.capsules.push_back(capsule);
+    GuideSimulation simulation(Chain(), 1, 4, {0, 1, 1, 1}, config);
+    for (int i = 0; i < 600; ++i)
+        simulation.Step(1.0f / 60.0f);
+
+    for (size_t point = 1; point < simulation.Positions().size(); ++point)
+    {
+        const Eigen::Vector3f& position = simulation.Positions()[point];
+        EXPECT_TRUE(position.allFinite());
+        const float distance =
+            (position - VL::Hair::ClosestPointOnCapsule(capsule, position)).norm();
+        EXPECT_GE(distance, capsule.radius - 1.0e-3f);
+    }
+}
+
 TEST(TressfxDynamics, GuideSimulationParamsPackStd140Controls)
 {
     TressfxSimulationConfig config;
@@ -220,6 +345,11 @@ TEST(TressfxDynamics, GuideSimulationParamsPackStd140Controls)
     config.windFrequency = 1.5f;
     config.fixedStep = 0.02f;
     config.maxSubsteps = 3;
+    VL::Hair::TressfxCollider capsule;
+    capsule.a = Eigen::Vector3f(1, 2, 3);
+    capsule.b = Eigen::Vector3f(4, 5, 6);
+    capsule.radius = 7.0f;
+    config.capsules.push_back(capsule);
 
     const VL::Hair::GuideSimulationParams params =
         VL::Hair::MakeGuideSimulationParams(config, 7, 32, 224, 0.75f);
@@ -238,6 +368,7 @@ TEST(TressfxDynamics, GuideSimulationParamsPackStd140Controls)
     EXPECT_EQ(params.iterations, 3u);
     EXPECT_EQ(params.guideCount, 7u);
     EXPECT_EQ(params.pointCount, 224u);
+    EXPECT_EQ(params.colliderCount, 1u);
     EXPECT_FLOAT_EQ(params.motion.x(), 0.42f);
     EXPECT_FLOAT_EQ(params.motion.y(), 0.6f);
     EXPECT_FLOAT_EQ(params.motion.z(), 1.5f);

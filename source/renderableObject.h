@@ -54,6 +54,11 @@ public:
     {
         return tressfxRestPositionInfo;
     }
+    // 静态解析胶囊 SSBO；创建时上传一次，GPU kernel 按 colliderCount 读取。
+    const vk::DescriptorBufferInfo& GetTressfxColliderInfo() const
+    {
+        return tressfxColliderInfo;
+    }
     // frameSlot 是 frame-in-flight 槽，与 params UBO 的槽一一对应。
     const vk::DescriptorBufferInfo& GetTressfxParamsInfo(uint32_t frameSlot) const;
     void WriteTressfxSimulationParams(
@@ -112,6 +117,9 @@ private:
     vk::Buffer tressfxRestPositionBuffer = nullptr;
     vk::DeviceMemory tressfxRestPositionMemory = nullptr;
     vk::DescriptorBufferInfo tressfxRestPositionInfo;
+    vk::Buffer tressfxColliderBuffer = nullptr;
+    vk::DeviceMemory tressfxColliderMemory = nullptr;
+    vk::DescriptorBufferInfo tressfxColliderInfo;
     std::array<TressfxParamsTarget, VL::Hair::GuideSimulationParamBufferCount>
         tressfxParamsTargets;
     uint32_t tressfxGuideCount = 0;
