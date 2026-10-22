@@ -22,6 +22,7 @@
 #include "pipeline/pipelineFactory.h"
 #include "commonFunction.h"
 #include "renderGraph.h"
+#include "hair/hairSimulationPass.h"
 #include "render/backend/rendererObjectResourceRegistry.h"
 #include "render/resource/rendererResourceCache.h"
 #include "render/resource/rendererMaterialLoader.h"
@@ -1276,6 +1277,7 @@ void RenderSystem::RebuildSwapchainDependentResources()
     if (!offlineMode)
     {
         renderGraph.InitializeAutoExposure(*pipelineFactory, *rendererBackend);
+        renderGraph.InitializeHairSimulation(*pipelineFactory, *rendererBackend);
         renderGraph.RenderInitialize(*rendererBackend, descriptorContext);
         InitializeCurrentRenderSceneResources();
     }
@@ -1303,6 +1305,7 @@ void RenderSystem::RebuildRenderGraphDependentResources()
 
     VL::RendererDescriptorContext descriptorContext = BuildRendererDescriptorContext();
     renderGraph.InitializeAutoExposure(*pipelineFactory, *rendererBackend);
+    renderGraph.InitializeHairSimulation(*pipelineFactory, *rendererBackend);
     renderGraph.RenderInitialize(*rendererBackend, descriptorContext);
     InitializeCurrentRenderSceneResources();
 }
@@ -1432,6 +1435,7 @@ VL::PreparedRuntimeBinding RenderSystem::PrepareRuntimeBinding(
                 candidateGraph,
                 candidateLightBufferInfos);
     candidateGraph.InitializeAutoExposure(*pipelineFactory, *rendererBackend);
+    candidateGraph.InitializeHairSimulation(*pipelineFactory, *rendererBackend);
     candidateGraph.RenderInitialize(
         *rendererBackend,
         descriptorContext);
@@ -1535,6 +1539,7 @@ void RenderSystem::PrepareRenderGraphReload(
                 candidateGraph,
                 GetLightBufferInfo());
     candidateGraph.InitializeAutoExposure(*pipelineFactory, *rendererBackend);
+    candidateGraph.InitializeHairSimulation(*pipelineFactory, *rendererBackend);
     candidateGraph.RenderInitialize(
         *rendererBackend,
         descriptorContext);
@@ -3171,6 +3176,8 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
         // Generate the procedural sky cubemap and write environmentSH before graphics
         // passes read global lighting data.
         RecordEnvironmentIbl(commandBuffer, swapChainImageIndex);
+        // guide 模拟必须在任何 pass 读取 current positions 之前完成本帧 dispatch。
+        RecordHairSimulation(commandBuffer, frameIndex);
 
         const auto& renderPassOrdered = renderGraph.GetRenderpassesOrdered();
         for (size_t passIndex = 0; passIndex < renderPassOrdered.size(); ++passIndex)
@@ -3670,6 +3677,17 @@ void RenderSystem::PrepareEnvironmentResources(
     resourceCache.BindWorldTexture(
         "prefilteredEnvironmentCube",
         prefilteredEnvironmentCube);
+}
+
+void RenderSystem::RecordHairSimulation(vk::CommandBuffer commandBuffer, uint32_t frameSlot)
+{
+    const auto& hairSimulation = RenderGraph::GetInstance().GetHairSimulation();
+    if (!hairSimulation)
+        return;
+    // 每帧只调用一次，且在所有 graphics pass 之前：本帧所有读取 current positions 的
+    // vertex shader 都看到同一份已经完成 dispatch 的位置。
+    hairSimulation->Record(
+        commandBuffer, currentResolvedRenderScene, frameSlot, exposureDeltaSeconds);
 }
 
 void RenderSystem::RecordEnvironmentIbl(vk::CommandBuffer commandBuffer, uint32_t swapchainImageIndex)

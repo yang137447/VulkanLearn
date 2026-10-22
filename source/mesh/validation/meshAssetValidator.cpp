@@ -58,12 +58,32 @@ namespace
         config.iterations = simulation.value("iterations", config.iterations);
         config.rootFixedPoints = simulation.value("rootFixedPoints", config.rootFixedPoints);
         config.maxDt = simulation.value("maxDt", config.maxDt);
+        if (simulation.contains("backend"))
+        {
+            // 只接受两个已实现的 backend；未知值必须在资产边界失败，而不是静默回退。
+            const auto& backend = simulation.at("backend");
+            const std::string value = backend.is_string()
+                ? backend.get<std::string>() : std::string();
+            if (value == "cpu")
+                config.backend = TressfxSimulationBackend::Cpu;
+            else if (value == "gpu")
+                config.backend = TressfxSimulationBackend::Gpu;
+            else
+                throw std::runtime_error(
+                    "TressFX simulation backend must be \"cpu\" or \"gpu\": " +
+                    std::string(meshAssetPath));
+        }
+        // GPU 上一个作者 iteration 会展开成一次长 dispatch；上限防止异常值直接 TDR。
+        if (config.iterations == 0 || config.iterations > 16)
+            throw std::runtime_error(
+                "TressFX simulation iterations must be in [1, 16]: " +
+                std::string(meshAssetPath));
         if (!std::isfinite(config.damping) || config.damping < 0.0f ||
-            config.damping > 1.0f || config.iterations == 0 ||
+            config.damping > 1.0f ||
             config.rootFixedPoints > 32 || !std::isfinite(config.maxDt) ||
             config.maxDt <= 0.0f || config.maxDt > 0.25f)
             throw std::runtime_error(
-                "TressFX simulation has invalid damping/iterations/rootFixedPoints/maxDt: " +
+                "TressFX simulation has invalid damping/rootFixedPoints/maxDt: " +
                 std::string(meshAssetPath));
     }
 
@@ -388,7 +408,9 @@ MeshAssetBuildPlan MeshAssetValidator::BuildLoadPlan(
                  << "|d=" << loadPlan.tressfxSimulation.damping
                  << "|i=" << loadPlan.tressfxSimulation.iterations
                  << "|r=" << loadPlan.tressfxSimulation.rootFixedPoints
-                 << "|dt=" << loadPlan.tressfxSimulation.maxDt;
+                 << "|dt=" << loadPlan.tressfxSimulation.maxDt
+                 << "|backend=" << (loadPlan.tressfxSimulation.backend ==
+                        TressfxSimulationBackend::Gpu ? "gpu" : "cpu");
         loadPlan.modelCacheKey += identity.str();
     }
     if (effectiveMeshAssetJson.contains("skinning"))

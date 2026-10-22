@@ -62,6 +62,66 @@ TEST(TressfxDescriptor, SimulationRejectsInvalidControls)
     EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json), std::runtime_error);
     json["simulation"] = {{"gravity", {0.0f, 1.0f}}};
     EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json), std::runtime_error);
+    json["simulation"] = {{"iterations", 17}};
+    try
+    {
+        MeshAssetValidator::BuildLoadPlan("SM_iterations.json", json);
+        FAIL() << "Out-of-range TressFX iterations were accepted";
+    }
+    catch (const std::runtime_error& error)
+    {
+        const std::string message = error.what();
+        EXPECT_NE(message.find("[1, 16]"), std::string::npos);
+        EXPECT_NE(message.find("SM_iterations.json"), std::string::npos);
+    }
+}
+
+TEST(TressfxDescriptor, SimulationBackendDefaultsToCpu)
+{
+    auto json = Descriptor();
+    json["simulation"] = {{"enabled", true}};
+    const auto plan = MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json);
+    EXPECT_EQ(plan.tressfxSimulation.backend, TressfxSimulationBackend::Cpu);
+}
+
+TEST(TressfxDescriptor, SimulationBackendAcceptsCpuAndGpu)
+{
+    auto json = Descriptor();
+    json["simulation"] = {{"backend", "cpu"}};
+    EXPECT_EQ(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json)
+            .tressfxSimulation.backend, TressfxSimulationBackend::Cpu);
+
+    json["simulation"] = {{"backend", "gpu"}};
+    EXPECT_EQ(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json)
+            .tressfxSimulation.backend, TressfxSimulationBackend::Gpu);
+}
+
+TEST(TressfxDescriptor, SimulationBackendRejectsUnknownValueWithAssetPath)
+{
+    auto json = Descriptor();
+    json["simulation"] = {{"backend", "cuda"}};
+    try
+    {
+        MeshAssetValidator::BuildLoadPlan("Maps/SC_probe/Meshes/SM_dynamic.json", json);
+        FAIL() << "Unknown TressFX simulation backend was accepted";
+    }
+    catch (const std::runtime_error& error)
+    {
+        const std::string message = error.what();
+        EXPECT_NE(message.find("SM_dynamic.json"), std::string::npos);
+        EXPECT_NE(message.find("cpu"), std::string::npos);
+        EXPECT_NE(message.find("gpu"), std::string::npos);
+    }
+}
+
+TEST(TressfxDescriptor, SimulationBackendParticipatesInMeshIdentity)
+{
+    auto json = Descriptor();
+    json["simulation"] = {{"backend", "cpu"}};
+    const auto cpuPlan = MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json);
+    json["simulation"] = {{"backend", "gpu"}};
+    const auto gpuPlan = MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json);
+    EXPECT_NE(cpuPlan.modelCacheKey, gpuPlan.modelCacheKey);
 }
 
 TEST(TressfxDescriptor, RejectsAssimpImportOptions)

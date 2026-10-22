@@ -1,13 +1,15 @@
 # TressFX 资产导入
 
-> 状态：**当前契约**（CPU 导入与静态 ribbon 路径已落地）。本文件只描述当前源码与验证覆盖的行为。
+> 状态：**当前契约**（CPU 导入、静态 ribbon 与 CPU/GPU guide 模拟路径已落地）。本文件只描述当前源码与验证覆盖的行为。
 
 ## 实现边界
 
 `source/hair/` 的 `vl_hair_assets` 是纯 CPU 静态库，供根工程 `main`、
 `vl_tfx_inspect` 和 `hair_asset_tests` 链接；不依赖 UE、Vulkan、World 或材质系统。
-该库只支持 `.tfx` guide 文件及静态几何准备，没有 `.tfxbone` / `.tfxmesh`
-解析、follow 生成或模拟。静态运行时接入位于独立的网格 importer 和引擎顶点工厂，
+该库提供 `.tfx` 解析、静态几何准备和参考 solver `VL::Hair::GuideSimulation`，
+没有 `.tfxbone` / `.tfxmesh` 解析或 follow 生成。GPU 模拟 pass
+`VL::Hair::HairSimulationPass` 依赖 `PipelineFactory` 与 Vulkan backend，因此不进入
+该静态库，而是单独编进 `main`；静态运行时接入仍位于独立的网格 importer 和引擎顶点工厂，
 没有 `GR_*` 描述符或新的 groom 场景对象。
 
 迁移依据是 AMD 分支 `TressFX5-5.4.4`，revision
@@ -101,11 +103,11 @@ exit 1；Windows 入口使用宽字符路径。不会创建场景、修改资源
   工厂在 GPU 用相机统一 ViewForward 与变换后的切线叉积展开，之后才执行材质求值；
   与视线平行时用相机横轴投影定义横向。输出 UV1 为 ribbon 横向/根梢坐标。
 - TressFX section 使用共享 ribbon Vertex/Index 拓扑，并为每个对象保留一份中心线
-  SSBO（Object Set 2 binding 3）。启用 simulation 时，游戏线程在帧边界运行 CPU
-  Verlet guide solver，更新根点约束、重力/风、阻尼和长度投影；graphics
-  `TressFXStrands` vertex factory 从该 SSBO 读取中心线并完成相机朝向 ribbon 展开。
-  未启用 simulation 时，SSBO 仍由静态中心线初始化，保证 descriptor 合同稳定。
-  当前没有把 `tressfxGuideSim.comp` 接入实际 dispatch；也没有独立 RenderGraph pass。
+  SSBO（Object Set 2 binding 3）。启用 simulation 时，CPU backend 由游戏线程在帧
+  边界运行参考 solver，GPU backend 由 compute dispatch 在每帧 pass 循环之前写同一
+  SSBO；graphics `TressFXStrands` vertex factory 从该 SSBO 读取中心线并完成相机
+  朝向 ribbon 展开。未启用 simulation 时，SSBO 仍由静态中心线初始化，保证
+  descriptor 合同稳定。模拟 buffer、dispatch 与同步见下节。
 - 仅开放有 shaderEvaluation、Unlit 或 DefaultLit、双面、AlphaBlendWriteDepth 的材质，
   拒绝 WPO、蒙皮以及其他 ShadingModel/路径。DefaultLit 只提供简单非金属 PBR 预览，
   不恢复 Hair ID 或 Marschner 闭包；普通模型与发丝材质互配在资源加载时报错。
@@ -119,7 +121,7 @@ exit 1；Windows 入口使用宽字符路径。不会创建场景、修改资源
   避免重复乘覆盖率。种子经 location 8 的独立 flat varying 传递，不改共享材质上下文。
   这是 VL 的静态预览近似，有空间噪声和相机移动时的闪烁，不是源引擎覆盖率算法。
   没有 Marschner、像素面积覆盖积分、时域累积、MSAA/A2C、像素最小半径、
-  OIT、发丝投影、自阴影或模拟；不恢复 Hair ID，不写 GBuffer。
+  OIT、发丝投影或自阴影；不恢复 Hair ID，不写 GBuffer。
 - 内容浏览器把 tressfx 归为 Mesh；标准 mesh API 支持既有字段读改保存，
   Scene/BP 的模型引用接受该类型。`strandRadius` 不在标准修改能力表中，
   描述符半径修改属于能力表外的源码编辑。
@@ -129,6 +131,95 @@ exit 1；Windows 入口使用宽字符路径。不会创建场景、修改资源
 SM/MI 和两实例场景；正式 Common pass 资产由调用方提供。
 它不改 config、不启动引擎，也不是 runtime test。生成场景说明其夸大半径、
 Unlit 与非女性资产边界。
+
+## Guide 模拟 backend
+
+`simulation.backend` 是描述符作者开关：缺省 `"cpu"`，`"gpu"` 选择 compute 路径；
+其他值由 `MeshAssetValidator::BuildLoadPlan` 拒绝，错误信息带 SM 资产路径。
+backend 写入模型缓存身份，同一个 `.tfx` 的 cpu/gpu 描述符不共享缓存条目。
+`simulation.enabled = false` 仍是静态中心线回退，两种 backend 都不分配模拟 buffer、
+不构造 solver、也不 dispatch。
+
+### GPU 路径
+
+GPU backend 的位置 buffer 放在 device-local：current/previous/rest 都用
+`eStorageBuffer | eTransferDst` 分配，创建时经 staging buffer + `copyBuffer`
+上传一次初值；每帧 compute 与 vertex shader 的读写不再落在可回读的主机堆上。
+CPU backend 的 current 仍是 `eHostVisible | eHostCoherent`，因为游戏线程逐帧映射写入。
+params UBO 每帧由主机改写，两种 backend 都保持 host-visible/coherent。
+
+每个 tressfx 对象有下列 buffer：
+
+- current positions：既有 `tressfxPositionBuffer`，vec4（xyz = 位置，w = 1），
+  同时绑定在 graphics Object Set 2 binding 3；vertex factory 不改动。
+- previous positions：vec4，Verlet 上一帧位置。
+- rest positions：vec4.xyz = 静止中心线，w = 导入逆质量；kernel 用它判断固定点，
+  不需要独立的质量数组。
+- 每个 frame-in-flight 槽一份 std140 params UBO：gravity+wind 加速度、
+  dt/damping/pointsPerGuide/rootFixedPoints、iterations/guideCount/pointCount、
+  maxDt。
+
+buffer 由 `RenderableObject` 拥有并随 World 资源包退休；`HairSimulationPass` 只拥有
+compute pipeline、descriptor pool 和逐对象 descriptor set 缓存，不拥有对象 buffer。
+
+`shader/glsl/hair/tressfxGuideSim.comp` 一个 invocation 处理一整根 guide：
+`local_size_x = 64`，dispatch 为 `ceil(guideCount / 64)`。同一 guide 的点在 invocation
+内顺序读写，复刻 CPU `GuideSimulation::Step` 的 Verlet 积分与 Gauss-Seidel 长度投影
+顺序：`dt` clamp 到 `[0, maxDt]`、固定点复位 current/previous、`iterations` 次从根到梢
+扫描、逆质量加权、`1e-6` 退化段跳过、全固定段跳过。`iterations` 由资产边界限制在
+`[1, 16]`：GPU 上一个作者值会展开成一条长 dispatch，异常大值应当直接拒绝而不是 TDR。
+这样选择的并行度低于“每点一个线程 + 独立 constraint dispatch”的 TressFX 形态，但
+guide 之间无共享状态，数百到数千根 guide 已能填满 workgroup；guide 数量显著增长时再
+评估拆分 kernel。
+
+dispatch 由 `RenderSystem::RecordHairSimulation` 在每帧 `renderPassOrdered` 循环之前、
+`RecordEnvironmentIbl` 之后录制一次，delta time 使用 `exposureDeltaSeconds`（渲染帧
+墙钟，clamp 到 `[1/240, 0.1]`）；CPU backend 使用游戏线程的 `simulationDelta`。两者的
+delta 来源不同是当前已知差异，且两种 backend 都不消费游戏暂停/time-scale（接入前就
+如此，不是 GPU 回归）。
+
+同步：
+
+- dispatch 前 barrier 的 src scope 为
+  `TRANSFER_WRITE | VERTEX_SHADER(READ) | COMPUTE_SHADER(READ/WRITE)`，dst 为
+  `VERTEX_SHADER(READ/WRITE) | COMPUTE_SHADER(READ/WRITE)`。它同时覆盖：device-local
+  位置 buffer 的一次性 staging 上传（首次 dispatch 前使其对 compute 与后续 vertex
+  shader 读取可见）、上一帧 vertex shader 读取 current
+  positions、以及上一帧 compute 读写 previous positions。
+- dispatch 后 barrier 为 `COMPUTE_SHADER(WRITE)` →
+  `VERTEX_SHADER(READ) | COMPUTE_SHADER(READ/WRITE)`，使本帧写入对本帧顶点读取和
+  下一帧 dispatch 都可见。
+- 同一 graphics queue、命令缓冲提交顺序固定，因此这两个 barrier 足够；params UBO
+  按 frame-in-flight 分槽，`BeginFrame` 等该槽 fence 回收后才由主机写入。
+
+`simulation.enabled = true` 且 backend = gpu 时，CPU 不构造 `GuideSimulation`，
+`RendererResourceCache::AdvanceTressfxSimulations` 跳过该对象。tressfx 顶点 buffer
+回到普通 device-local 上传路径，不再逐帧 memcpy：vertex factory 只消费 SSBO 中心线，
+顶点位置不参与展开。
+
+CPU backend 保持接入前的行为：游戏线程 `GuideSimulation::Step` 后写 current SSBO；
+顶点 buffer 不参与动态位置。
+
+CPU/GPU 的一致性是“相同操作顺序”，不是逐位相等：Eigen 与 GLSL 的 `sqrt` 舍入、
+编译器 FMA 融合和指令调度都可能产生末位差异；delta 来源也不同。没有 CPU 读回或
+结果交叉校验。
+
+`HairSimulationPass` 随 RenderGraph 状态创建、`SwapState` 移交、`Shutdown` 按 GPU
+epoch 退休，与 `AutoExposureCompute` 同生命周期。它使用
+`CreateComputePipelineCandidate`，不注册 hot reload participant：修改
+`tressfxGuideSim.comp` 不会替换已创建的 pipeline，需要重建 graph/World 才生效。
+pass 在每次 World/graph 构建时都会创建，即使场景没有任何 GPU backend 发丝；因此该
+shader 编译失败会直接让 World load 失败，而不是退化为静态或 CPU 路径。
+
+GPU 路径只步进出现在渲染快照中的对象：`visible = false` 的对象不进入
+`currentResolvedRenderScene`，因此不会 dispatch；CPU backend 仍会遍历资源缓存中的
+对象并继续步进。恢复可见时位置从冻结处继续，没有 snap：previous positions 保留，
+Verlet 速度仍然有效，且每帧 `dt` 已被限制到 `[0, maxDt]`。离线模式走离线录制分支，
+不调用 `RecordHairSimulation`，因此没有 dispatch。
+
+显式限制：没有 SDF/capsule 碰撞、VSP、root 骨骼蒙皮、follow hair、深度阴影、OIT、
+LOD 或固定步长子步进；`dt` 仍截断到 `[0, maxDt]` 并丢弃余量。GPU 路径没有碰撞、
+约束图或外部力场。
 
 ## Female 正式静态关卡
 

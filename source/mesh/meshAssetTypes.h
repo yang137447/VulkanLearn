@@ -35,6 +35,14 @@ struct MeshImportOptions
 
 // TressFX guide simulation authoring. Units follow the project world contract:
 // positions are centimeters and acceleration is cm/s^2.
+enum class TressfxSimulationBackend
+{
+    // 默认路径：游戏线程运行 VL::Hair::GuideSimulation，逐帧写 host-coherent SSBO。
+    Cpu,
+    // GPU 路径：compute shader 独占写 SSBO，CPU 不构造也不步进参考 solver。
+    Gpu,
+};
+
 struct TressfxSimulationConfig
 {
     bool enabled = false;
@@ -44,6 +52,7 @@ struct TressfxSimulationConfig
     uint32_t iterations = 3;
     uint32_t rootFixedPoints = 2;
     float maxDt = 0.033f;
+    TressfxSimulationBackend backend = TressfxSimulationBackend::Cpu;
 };
 
 // Runtime SDK 10 keeps the Games 9 wind authoring model. Curves are sampled

@@ -12,6 +12,7 @@
 #include "render/resource/resourceRetireQueue.h"
 #include "render/resource/rendererResourceCache.h"
 #include "render/camera/autoExposureCompute.h"
+#include "hair/hairSimulationPass.h"
 #include "texture.h"
 #include <algorithm>
 #include <memory>
@@ -657,6 +658,7 @@ void RenderGraph::SwapState(RenderGraph& other) noexcept
 {
     resourcesMsaa.swap(other.resourcesMsaa);
     autoExposure.swap(other.autoExposure);
+    hairSimulation.swap(other.hairSimulation);
     resourcesResolve.swap(other.resourcesResolve);
     sceneViewportOutputs.swap(other.sceneViewportOutputs);
     renderpassesOrdered.swap(other.renderpassesOrdered);
@@ -705,6 +707,13 @@ void RenderGraph::Shutdown(
         retireQueue.RetireShared("AutoExposure:Graph", ownerGeneration,
             retireQueue.GetLastSubmittedEpoch(), std::move(autoExposure));
     }
+    if (hairSimulation && releaseMode == VL::RenderGraphReleaseMode::Retire)
+    {
+        auto& retireQueue = VL::ResourceRetireQueue::GetInstance();
+        retireQueue.RetireShared("HairSimulation:Graph", ownerGeneration,
+            retireQueue.GetLastSubmittedEpoch(), std::move(hairSimulation));
+    }
+    hairSimulation.reset();
     autoExposure.reset();
     for(auto& [name, renderpass] : renderpasses)
     {
@@ -958,6 +967,16 @@ void RenderGraph::InitializeAutoExposure(PipelineFactory& factory,
         autoExposure = std::move(candidate);
         return;
     }
+}
+
+void RenderGraph::InitializeHairSimulation(PipelineFactory& factory,
+    VL::RendererBackendVulkan& backend)
+{
+    // 与 AutoExposure 相同：已有实例时不重复创建，候选图由调用方持有到事务提交。
+    if (hairSimulation) return;
+    auto candidate = std::make_shared<VL::Hair::HairSimulationPass>();
+    candidate->Initialize(factory, backend);
+    hairSimulation = std::move(candidate);
 }
 
 void RenderGraph::RenderInitialize(

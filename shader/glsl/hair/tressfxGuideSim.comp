@@ -1,48 +1,119 @@
 #version 450
 
-// TressFX guide simulation kernel. The runtime dispatch owns one invocation
-// per point and ping-pongs current/previous positions. Constraint projection
-// is intentionally a separate dispatch so each iteration has a barrier.
+// TressFX guide 模拟 kernel：一个 invocation 独占一整根 guide，在 invocation 内按
+// CPU VL::Hair::GuideSimulation::Step 的顺序完成积分与全部长度投影扫描。
+// - 每根 guide 的点在同一个 invocation 内顺序读写，等价于 CPU 的 Gauss-Seidel 顺序，
+//   因此相邻点之间不需要跨 invocation barrier。
+// - guide 之间没有共享状态，64 根/workgroup（local_size_x=64）；dispatch 为
+//   ceil(guideCount / 64)，由 Host 侧 HairSimulationPass 计算。
+// - 取舍：并行度低于 TressFX 原实现的“每点一个线程 + 多次独立的 constraint dispatch”，
+//   但 guide 数量在数百到数千时已足够填满 workgroup；当 guide 数量显著增长时再评估
+//   拆分为多点 kernel。当前不做该拆分，是为了让 CPU/GPU 的投影顺序可以直接对照。
+// - 坐标与加速度沿用 CPU solver：位置为厘米，dt 为秒，gravity+wind 为厘米/秒²。
 layout(local_size_x = 64) in;
 
-struct GuidePosition
+// set 0 是独立 compute pipeline 自己的 descriptor layout，与 graphics Object Set 2 无关。
+layout(std140, set = 0, binding = 0) uniform SimulationParams
 {
-    vec4 value;
-};
+    // xyz = gravity + wind；w 未使用（与 CPU 的 acceleration 向量同值）。
+    vec4 gravityWind;
+    // x = dt, y = damping, z = pointsPerGuide, w = rootFixedPoints。
+    vec4 controls;
+    // x = iterations, y = guideCount, z = pointCount, w = 对齐保留。
+    uvec4 counts;
+    // x = maxDt；其余分量未使用。
+    vec4 limits;
+} params;
 
-layout(set = 2, binding = 3, std430) buffer CurrentPositions
+// 与 graphics 绑定共用同一份 current positions（per-object SSBO，vec4.xyz=位置, w=1）。
+layout(set = 0, binding = 1, std430) buffer CurrentPositions
 {
-    GuidePosition positions[];
+    vec4 positions[];
 } currentPositions;
 
-layout(set = 2, binding = 4, std430) readonly buffer RestPositions
+// Verlet 的上一帧位置；同样按 vec4 存储，w 保持 1。
+layout(set = 0, binding = 2, std430) buffer PreviousPositions
 {
-    GuidePosition positions[];
+    vec4 positions[];
+} previousPositions;
+
+// 静止中心线；w 是导入的逆质量，所以 kernel 不需要额外的质量数组。
+layout(set = 0, binding = 3, std430) readonly buffer RestPositions
+{
+    vec4 positions[];
 } restPositions;
 
-layout(std140, set = 2, binding = 5) uniform SimulationParams
+// 复刻 CPU GuideSimulation::IsFixed：根部固定点数以内的点，以及逆质量 <= 0 的点。
+bool IsFixed(uint localPoint, float inverseMass)
 {
-    vec4 gravityWind;
-    vec4 controls; // dt, damping, pointsPerGuide, rootFixedPoints
-} params;
+    return localPoint < uint(params.controls.w) || inverseMass <= 0.0;
+}
 
 void main()
 {
-    uint point = gl_GlobalInvocationID.x;
-    if (point >= currentPositions.positions.length())
+    // 最后一个 workgroup 可能超出 guide 数，只有这个边界检查，避免越界 dispatch；
+    // 其余数据由资产校验和 CPU 侧维度检查保证。
+    uint guide = gl_GlobalInvocationID.x;
+    if (guide >= params.counts.y)
         return;
-    uint pointsPerGuide = uint(params.controls.z);
-    uint localPoint = point % pointsPerGuide;
-    if (localPoint < uint(params.controls.w))
-    {
-        currentPositions.positions[point] = restPositions.positions[point];
+
+    // 与 CPU Step 相同：先 clamp 到 [0, maxDt]，非正 dt 直接返回且不修改任何位置。
+    float dt = clamp(params.controls.x, 0.0, params.limits.x);
+    if (dt <= 0.0)
         return;
-    }
-    // The integration is deliberately explicit and deterministic. Length
-    // projection is a later dispatch to avoid races between adjacent points.
-    vec3 current = currentPositions.positions[point].value.xyz;
-    float dt = params.controls.x;
+    float dt2 = dt * dt;
     float damping = params.controls.y;
-    currentPositions.positions[point].value.xyz =
-        current + params.gravityWind.xyz * (dt * dt) * damping;
+    uint pointsPerGuide = uint(params.controls.z);
+    uint base = guide * pointsPerGuide;
+
+    // 第一段：Verlet 积分。固定点每帧从 rest 复位 current 与 previous。
+    for (uint local = 0; local < pointsPerGuide; ++local)
+    {
+        uint point = base + local;
+        if (IsFixed(local, restPositions.positions[point].w))
+        {
+            vec3 rest = restPositions.positions[point].xyz;
+            currentPositions.positions[point] = vec4(rest, 1.0);
+            previousPositions.positions[point] = vec4(rest, 1.0);
+            continue;
+        }
+        vec3 current = currentPositions.positions[point].xyz;
+        vec3 velocity = (current - previousPositions.positions[point].xyz) * damping;
+        previousPositions.positions[point] = vec4(current, 1.0);
+        currentPositions.positions[point] =
+            vec4(current + velocity + params.gravityWind.xyz * dt2, 1.0);
+    }
+
+    // 第二段：与 CPU ProjectLengths 相同的顺序扫描。每次 iteration 内按 guide 内
+    // 点序从根到梢处理，读写同一份 current positions，上一段的修正立即被下一段看到。
+    for (uint iteration = 0; iteration < params.counts.x; ++iteration)
+    {
+        for (uint local = 0; local + 1 < pointsPerGuide; ++local)
+        {
+            uint a = base + local;
+            uint b = a + 1;
+            vec3 delta = currentPositions.positions[b].xyz -
+                currentPositions.positions[a].xyz;
+            float deltaLength = length(delta);
+            float restLength = length(restPositions.positions[b].xyz -
+                restPositions.positions[a].xyz);
+            // 与 CPU 相同：退化段（重合点或零静止长度）不参与投影。
+            if (deltaLength <= 1.0e-6 || restLength <= 1.0e-6)
+                continue;
+            float inverseMassA = IsFixed(local, restPositions.positions[a].w)
+                ? 0.0 : restPositions.positions[a].w;
+            float inverseMassB = IsFixed(local + 1, restPositions.positions[b].w)
+                ? 0.0 : restPositions.positions[b].w;
+            float weight = inverseMassA + inverseMassB;
+            if (weight <= 0.0)
+                continue;
+            vec3 correction = delta * ((deltaLength - restLength) / deltaLength);
+            if (inverseMassA > 0.0)
+                currentPositions.positions[a].xyz +=
+                    correction * (inverseMassA / weight);
+            if (inverseMassB > 0.0)
+                currentPositions.positions[b].xyz -=
+                    correction * (inverseMassB / weight);
+        }
+    }
 }

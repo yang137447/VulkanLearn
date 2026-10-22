@@ -1,4 +1,5 @@
 #include "hair/tressfxDynamics.h"
+#include "hair/tressfxSimulationParams.h"
 
 #include <gtest/gtest.h>
 
@@ -72,5 +73,33 @@ TEST(TressfxDynamics, LongRunRemainsFinite)
     for (const auto& position : simulation.Positions())
         for (int axis = 0; axis < 3; ++axis)
             EXPECT_TRUE(std::isfinite(position[axis]));
+}
+
+TEST(TressfxDynamics, GuideSimulationParamsPackStd140Controls)
+{
+    TressfxSimulationConfig config;
+    config.gravity = Eigen::Vector3f(0.0f, -980.0f, 0.0f);
+    config.wind = Eigen::Vector3f(120.0f, 0.0f, -3.0f);
+    config.damping = 0.995f;
+    config.iterations = 3;
+    config.rootFixedPoints = 2;
+    config.maxDt = 0.033f;
+
+    // dt 故意超过 maxDt：上传端不裁剪，clamp 只发生在 kernel（与 CPU Step 一致）。
+    const VL::Hair::GuideSimulationParams params =
+        VL::Hair::MakeGuideSimulationParams(config, 7, 32, 224, 0.5f);
+
+    EXPECT_EQ(sizeof(VL::Hair::GuideSimulationParams), 64u);
+    EXPECT_FLOAT_EQ(params.gravityWind.x(), 120.0f);
+    EXPECT_FLOAT_EQ(params.gravityWind.y(), -980.0f);
+    EXPECT_FLOAT_EQ(params.gravityWind.z(), -3.0f);
+    EXPECT_FLOAT_EQ(params.controls.x(), 0.5f);
+    EXPECT_FLOAT_EQ(params.controls.y(), 0.995f);
+    EXPECT_FLOAT_EQ(params.controls.z(), 32.0f);
+    EXPECT_FLOAT_EQ(params.controls.w(), 2.0f);
+    EXPECT_EQ(params.iterations, 3u);
+    EXPECT_EQ(params.guideCount, 7u);
+    EXPECT_EQ(params.pointCount, 224u);
+    EXPECT_FLOAT_EQ(params.limits.x(), 0.033f);
 }
 } // namespace

@@ -387,6 +387,10 @@ private:
     void RecordEnvironmentIbl(
         vk::CommandBuffer commandBuffer,
         uint32_t swapchainImageIndex);
+    // 在 renderPassOrdered 之前推进所有 GPU backend 的 TressFX guide 位置。
+    void RecordHairSimulation(
+        vk::CommandBuffer commandBuffer,
+        uint32_t frameSlot);
     void RefreshEnvironmentUpdateDiagnostics();
     uint32_t currentFrame = 0;
     uint32_t swapChainImageIndex = 0;

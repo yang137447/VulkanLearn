@@ -19,6 +19,60 @@
             "exclusiveMinimum": 0,
             "description": "tressfx 局部空间半径，使用作者坐标单位；不自动换轴或换算单位。"
         },
+        "simulation": {
+            "type": "object",
+            "description": "tressfx guide 模拟作者参数，单位沿用项目世界契约：位置为厘米，加速度为厘米/秒²。",
+            "properties": {
+                "enabled": {
+                    "type": "boolean",
+                    "description": "false 时使用静态中心线，不创建 CPU solver 或 GPU 模拟 buffer。"
+                },
+                "gravity": {
+                    "type": "array",
+                    "description": "重力加速度 xyz，单位厘米/秒²。",
+                    "items": {"type": "number"},
+                    "minItems": 3,
+                    "maxItems": 3
+                },
+                "wind": {
+                    "type": "array",
+                    "description": "风加速度 xyz，单位厘米/秒²，与重力相加后进入积分。",
+                    "items": {"type": "number"},
+                    "minItems": 3,
+                    "maxItems": 3
+                },
+                "damping": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1,
+                    "description": "Verlet 速度保留系数，作用于 (pos - prev) 差值。"
+                },
+                "iterations": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 16,
+                    "description": "每帧顺序长度投影的扫描次数；GPU backend 在一次 dispatch 内展开，上限 16 避免异常值触发 TDR。"
+                },
+                "rootFixedPoints": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 32,
+                    "description": "每根 guide 从根部起固定的点数；逆质量 <= 0 的点也固定。"
+                },
+                "maxDt": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "maximum": 0.25,
+                    "description": "单帧 delta time 上限，单位秒；超出部分丢弃，不做子步进。"
+                },
+                "backend": {
+                    "type": "string",
+                    "enum": ["cpu", "gpu"],
+                    "description": "cpu 为游戏线程参考 solver；gpu 为 compute dispatch，CPU 不写位置 buffer。"
+                }
+            },
+            "additionalProperties": false
+        },
         "modelDataPath": {
             "type": "string",
             "description": "原始模型数据文件相对路径，例如 'models/datas/my_mesh.obj'。"

@@ -403,7 +403,8 @@ void RendererResourceCache::AdvanceTressfxSimulations(float deltaSeconds)
         return;
     for (const auto& [key, object] : worldLocalResources->renderableObjects)
     {
-        if (object && object->IsTressfx())
+        // GPU backend 由 HairSimulationPass 的 compute dispatch 推进，游戏线程不步进。
+        if (object && object->IsTressfx() && !object->UsesGpuGuideSimulation())
             object->AdvanceTressfxSimulation(deltaSeconds);
     }
 }

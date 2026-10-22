@@ -49,6 +49,10 @@ namespace VL
 {
 class RendererBackendVulkan;
 class AutoExposureCompute;
+namespace Hair
+{
+class HairSimulationPass;
+}
 
 enum class RenderGraphReleaseMode
 {
@@ -187,6 +191,13 @@ public:
     const nlohmann::json& GetSourceJson() const noexcept { return sourceJson; }
     void InitializeAutoExposure(PipelineFactory& factory, VL::RendererBackendVulkan& backend);
     const std::shared_ptr<VL::AutoExposureCompute>& GetAutoExposure() const noexcept { return autoExposure; }
+    // TressFX GPU guide 模拟 pass 与 AutoExposure 同生命周期：候选图创建，SwapState 移交，
+    // Shutdown 按 GPU epoch 退休，避免旧模型 pipeline 悬空。
+    void InitializeHairSimulation(PipelineFactory& factory, VL::RendererBackendVulkan& backend);
+    const std::shared_ptr<VL::Hair::HairSimulationPass>& GetHairSimulation() const noexcept
+    {
+        return hairSimulation;
+    }
     const std::unordered_map<std::string, std::vector<RenderResource>>& GetResourcesMsaa() const { return resourcesMsaa; }
     const std::unordered_map<std::string, std::vector<RenderResource>>& GetResourcesResolve() const { return resourcesResolve; }
     // 每个 acquired image 独占一张完整 backing extent 的单采样输出，生命周期
@@ -256,6 +267,7 @@ private:
 private:
     std::unordered_map<std::string, std::vector<RenderResource>> resourcesMsaa;
     std::shared_ptr<VL::AutoExposureCompute> autoExposure;
+    std::shared_ptr<VL::Hair::HairSimulationPass> hairSimulation;
     std::unordered_map<std::string, std::vector<RenderResource>> resourcesResolve;
     std::vector<RenderResource> sceneViewportOutputs;
 

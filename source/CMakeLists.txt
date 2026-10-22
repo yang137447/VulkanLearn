@@ -6,6 +6,11 @@ list(FILTER sources EXCLUDE REGEX "/animation/")
 list(FILTER sources EXCLUDE REGEX "/debug/")
 # 发丝 CPU 导入由独立库拥有，工具和 main 共用同一份实现。
 list(FILTER sources EXCLUDE REGEX "/source/hair/")
+# GPU 模拟 pass 依赖 PipelineFactory 与 Vulkan backend，不能进纯 CPU 的 vl_hair_assets
+# （否则 hair_asset_tests 会被迫链接 Vulkan 运行时），因此只补编进 main。
+list(APPEND sources
+    "${CMAKE_CURRENT_SOURCE_DIR}/hair/hairSimulationPass.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/hair/hairSimulationPass.h")
 # 可复用 UI 控件只依赖 RmlUi，不经 main 的递归收集重复编译。
 list(FILTER sources EXCLUDE REGEX "/ui/widgets/")
 list(FILTER sources EXCLUDE REGEX "/script/scriptHost.cpp$")
