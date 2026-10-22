@@ -80,6 +80,13 @@ struct SdfMeshReport
     std::uint64_t degenerateTriangleCount = 0;
 };
 
+// 只按索引统计无向边拓扑，不看面积或坐标：
+// openEdge = 只被一个三角形使用的无向边，nonManifoldEdge = 被三个及以上三角形共享。
+// vertexCount/triangleCount 取自网格；indices 必须是已校验为 3 的倍数且不越界的三角形表。
+// degenerateTriangleCount 保持 0，由调用方按自己的面积阈值填充。
+// BuildSdf 与离线碰撞代理共用这一计数，避免两处报告规则漂移。
+SdfMeshReport CountMeshTopology(const SdfTriangleMesh& mesh);
+
 struct SdfField
 {
     std::array<std::uint32_t, 3> dims{0, 0, 0};

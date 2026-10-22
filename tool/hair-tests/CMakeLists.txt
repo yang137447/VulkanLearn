@@ -3,6 +3,7 @@ add_executable(hair_asset_tests
     tressfxSolverMathTests.cpp
     tressfxSkinningTests.cpp
     sdfBuilderTests.cpp
+    collisionProxyTests.cpp
     ${PROJECT_SOURCE_DIR}/source/mesh/loader/hair/tressfxModelImporter.cpp
     ${PROJECT_SOURCE_DIR}/source/mesh/validation/meshAssetValidator.cpp)
 target_link_libraries(hair_asset_tests PRIVATE vl_hair_assets Vulkan::Vulkan Eigen3 Json)

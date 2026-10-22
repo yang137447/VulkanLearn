@@ -453,6 +453,40 @@ void BakeVoxelRange(const TriangleBvh& bvh, const std::vector<Triangle>& triangl
 }
 }
 
+SdfMeshReport CountMeshTopology(const SdfTriangleMesh& mesh)
+{
+    SdfMeshReport report;
+    report.vertexCount = mesh.positions.size();
+    report.triangleCount = mesh.indices.size() / 3;
+
+    std::vector<std::uint64_t> edgeKeys;
+    edgeKeys.reserve(report.triangleCount * 3);
+    for (std::size_t triangleIndex = 0; triangleIndex < report.triangleCount; ++triangleIndex)
+    {
+        const std::uint32_t i0 = mesh.indices[triangleIndex * 3 + 0];
+        const std::uint32_t i1 = mesh.indices[triangleIndex * 3 + 1];
+        const std::uint32_t i2 = mesh.indices[triangleIndex * 3 + 2];
+        edgeKeys.push_back(EdgeKey(i0, i1));
+        edgeKeys.push_back(EdgeKey(i1, i2));
+        edgeKeys.push_back(EdgeKey(i2, i0));
+    }
+    std::sort(edgeKeys.begin(), edgeKeys.end());
+    std::size_t runStart = 0;
+    while (runStart < edgeKeys.size())
+    {
+        std::size_t runEnd = runStart + 1;
+        while (runEnd < edgeKeys.size() && edgeKeys[runEnd] == edgeKeys[runStart])
+            ++runEnd;
+        const std::size_t faceCount = runEnd - runStart;
+        if (faceCount == 1)
+            ++report.openEdgeCount;
+        else if (faceCount > 2)
+            ++report.nonManifoldEdgeCount;
+        runStart = runEnd;
+    }
+    return report;
+}
+
 RuntimeResult<SdfField> BuildSdf(const SdfTriangleMesh& mesh, const SdfGridSpec& grid)
 {
     if (mesh.positions.empty())
@@ -540,33 +574,10 @@ RuntimeResult<SdfField> BuildSdf(const SdfTriangleMesh& mesh, const SdfGridSpec&
     }
 
     // 水密性统计使用全部输入三角形（含退化面），只依赖拓扑，不看面积。
-    {
-        std::vector<std::uint64_t> edgeKeys;
-        edgeKeys.reserve(report.triangleCount * 3);
-        for (std::size_t triangleIndex = 0; triangleIndex < report.triangleCount; ++triangleIndex)
-        {
-            const std::uint32_t i0 = mesh.indices[triangleIndex * 3 + 0];
-            const std::uint32_t i1 = mesh.indices[triangleIndex * 3 + 1];
-            const std::uint32_t i2 = mesh.indices[triangleIndex * 3 + 2];
-            edgeKeys.push_back(EdgeKey(i0, i1));
-            edgeKeys.push_back(EdgeKey(i1, i2));
-            edgeKeys.push_back(EdgeKey(i2, i0));
-        }
-        std::sort(edgeKeys.begin(), edgeKeys.end());
-        std::size_t runStart = 0;
-        while (runStart < edgeKeys.size())
-        {
-            std::size_t runEnd = runStart + 1;
-            while (runEnd < edgeKeys.size() && edgeKeys[runEnd] == edgeKeys[runStart])
-                ++runEnd;
-            const std::size_t faceCount = runEnd - runStart;
-            if (faceCount == 1)
-                ++report.openEdgeCount;
-            else if (faceCount > 2)
-                ++report.nonManifoldEdgeCount;
-            runStart = runEnd;
-        }
-    }
+    // 与离线碰撞代理共用 CountMeshTopology，保证两处报告规则一致。
+    const SdfMeshReport topology = CountMeshTopology(mesh);
+    report.openEdgeCount = topology.openEdgeCount;
+    report.nonManifoldEdgeCount = topology.nonManifoldEdgeCount;
 
     // 顶点伪法线：入射面法线 × 该顶点内角。累加顺序固定为三角形顺序。
     std::vector<Eigen::Vector3f> vertexPseudonormals(
