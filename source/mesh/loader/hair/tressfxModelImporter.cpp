@@ -35,12 +35,17 @@ ModelResource TressfxModelImporter::Import(const ModelImportRequest& request)
     MeshSection section;
     section.sectionName = "guides";
     section.materialSlotName = "hair";
+    section.isTressfx = true;
+    section.tressfxPointsPerStrand = asset.pointsPerStrand;
+    section.tressfxSimulation = request.buildPlan.tressfxSimulation;
+    section.tressfxInverseMass.reserve(asset.positions.size());
     section.indices = geometry.ribbonIndices;
     section.vertices.reserve(asset.positions.size() * 2);
     for (size_t point = 0; point < asset.positions.size(); ++point)
     {
         const size_t strand = point / asset.pointsPerStrand;
         const auto& position = asset.positions[point];
+        section.tressfxInverseMass.push_back(position[3]);
         const auto& tangent = geometry.tangents[point];
         const double radius = static_cast<double>(request.buildPlan.strandRadius) *
             (asset.strandThickness.empty() ? 1.0 : asset.strandThickness[strand]);

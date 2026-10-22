@@ -100,12 +100,19 @@ exit 1；Windows 入口使用宽字符路径。不会创建场景、修改资源
 - `TressFXStrands` 工厂由 `VL_TRESSFX_STRANDS=1` 选择，进入 shader 编译请求身份。
   工厂在 GPU 用相机统一 ViewForward 与变换后的切线叉积展开，之后才执行材质求值；
   与视线平行时用相机横轴投影定义横向。输出 UV1 为 ribbon 横向/根梢坐标。
-- 此阶段使用共享静态 Vertex 流与索引缓冲，复用 World 候选、不可变快照、资源上传和退休。
-  没有独立位置 SSBO、compute、每帧 CPU 回写或额外 RenderGraph pass。
-- 仅开放有 shaderEvaluation、Unlit、双面、AlphaBlendWriteDepth 的材质，
-  拒绝 WPO、蒙皮以及其他 ShadingModel/路径。普通模型与发丝材质互配在资源加载时报错。
+- TressFX section 使用共享 ribbon Vertex/Index 拓扑，并为每个对象保留一份中心线
+  SSBO（Object Set 2 binding 3）。启用 simulation 时，游戏线程在帧边界运行 CPU
+  Verlet guide solver，更新根点约束、重力/风、阻尼和长度投影；graphics
+  `TressFXStrands` vertex factory 从该 SSBO 读取中心线并完成相机朝向 ribbon 展开。
+  未启用 simulation 时，SSBO 仍由静态中心线初始化，保证 descriptor 合同稳定。
+  当前没有把 `tressfxGuideSim.comp` 接入实际 dispatch；也没有独立 RenderGraph pass。
+- 仅开放有 shaderEvaluation、Unlit 或 DefaultLit、双面、AlphaBlendWriteDepth 的材质，
+  拒绝 WPO、蒙皮以及其他 ShadingModel/路径。DefaultLit 只提供简单非金属 PBR 预览，
+  不恢复 Hair ID 或 Marschner 闭包；普通模型与发丝材质互配在资源加载时报错。
   离线加载明确拒绝，因为离线三角形路径不执行相机朝向工厂。
-- `hair/M_strandProbe` 使用 AlphaBlendWriteDepth，进入既有 forwardTransparent。
+- `hair/M_strandProbe` 与 `hair/M_strandPbr` 使用 AlphaBlendWriteDepth，进入既有
+  forwardTransparent；前者保留粉色 Unlit 几何诊断，后者以 `u_tintColor`、
+  `u_roughness`、`u_specular` 提供 DefaultLit 简单 PBR 预览。
   `u_edgeFeather` 控制两侧各自的 UV1 渐隐宽度（默认 0.15，0 为硬边，最大 0.5），
   tint alpha 为 0..1 的整体保留概率。Base Pass 按像素坐标和 provoking vertex 点索引
   的固定散列随机裁剪；丢弃样本不写深度/选中标记，保留样本以 alpha=1 写入，
@@ -148,7 +155,8 @@ Unlit 与非女性资产边界。
   转换器按 Maya 有符号边引用还原并校验闭环，OBJ 交给既有 Assimp 三角化与生成平滑法线；
   不求值蒙皮、约束或修改器，不把 Orig 输入几何称为 Maya 最终绑定输出。
 - 源包只有 `.ma`，两个外部皮肤/眼睛贴图路径未解析。角色采用明确作者的中性 PBR，
-  头发使用粉色 Unlit 探针、局部半径 0.012 cm；不冒充原材质或物理测量半径。
+  头发可切换粉色 Unlit 探针或简单 DefaultLit PBR 预览，局部半径 0.012 cm；
+  两者都不冒充原材质或物理测量半径。
 - 已存在的地图目录直接拒绝，exit 1，不覆盖作者改动。归档/输出摘要、依赖版本、
   曲线规格、bounds 和缺失纹理记录到
   `Generated/Import/SC_tressfx_female/import-report.json`；

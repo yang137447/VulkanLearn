@@ -20,6 +20,9 @@ struct RendererObjectGpuResources
     // 只有蒙皮对象分配逐 swapchain palette。权重由同包 Renderable 共享并随 GPU epoch 退休。
     Buffer skinPalette;
     vk::DescriptorBufferInfo skinInfluences;
+    // TressFX current guide centers are updated at the frame boundary and
+    // consumed by the strand vertex factory through Object Set 2 binding 3.
+    vk::DescriptorBufferInfo tressfxPositions;
     size_t skinJointCount = 0;
     Animation::SubmittedSkinPose submittedSkin;
 

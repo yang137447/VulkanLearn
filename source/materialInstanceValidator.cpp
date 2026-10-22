@@ -395,15 +395,15 @@ MaterialInstanceBuildPlan MaterialInstanceValidator::BuildLoadPlan(
         loadPlan.shaderVariantKey.macros, "VL_TRESSFX_STRANDS", "1");
     if (strandFactory)
     {
-        // 本批只开放静态 Unlit 可见性探针，不能让保留的 Hair ID 静默走 DefaultLit。
-        if (shadingModel != "Unlit" ||
+        // 探针与简单 PBR 共用发丝工厂；保留的 Hair ID 没有求值器，不能静默回退。
+        if ((shadingModel != "Unlit" && shadingModel != "DefaultLit") ||
               loadPlan.shaderVariantKey.renderMode != RenderMode::TransparentAlphaBlendWriteDepth ||
             loadPlan.cullMode != vk::CullModeFlagBits::eNone ||
             !materialJson.contains("shaderEvaluation") ||
             HasMaterialMacroValue(loadPlan.shaderVariantKey.macros, "VL_SKINNED_MESH", "1") ||
             materialJson.value("features", nlohmann::json::object()).value("modifiesMeshPosition", false))
             throw std::runtime_error(
-                "TressFXStrands requires composed Unlit AlphaBlendWriteDepth two-sided material without skinning or WPO");
+                "TressFXStrands requires composed Unlit or DefaultLit AlphaBlendWriteDepth two-sided material without skinning or WPO");
     }
 
     if (loadPlan.shaderVariantKey.renderMode == RenderMode::ThinTranslucent)

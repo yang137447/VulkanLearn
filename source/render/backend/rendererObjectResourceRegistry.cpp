@@ -99,6 +99,13 @@ void RendererObjectResourceRegistry::InitializeResolvedSceneResources(
                     resources.skinJointCount = drawPacket.skinPose->matrices.size();
                     resources.skinInfluences = renderable->GetSkinInfluenceInfo();
                 }
+                if (!objectResourceEntry->GetResources().initialized)
+                {
+                    const auto renderable = draw.renderableObject.lock();
+                    if (renderable && renderable->IsTressfx())
+                        objectResourceEntry->GetResources().tressfxPositions =
+                            renderable->GetTressfxPositionInfo();
+                }
                 objectResourceEntry->Initialize(
                     rendererBackend,
                     descriptorContext,

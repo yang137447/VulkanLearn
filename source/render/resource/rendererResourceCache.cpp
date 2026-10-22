@@ -4,6 +4,7 @@
 #include <utility>
 
 #include "materialInstance.h"
+#include "renderableObject.h"
 #include "render/backend/rendererObjectResourceRegistry.h"
 #include "render/resource/resourceRetireQueue.h"
 
@@ -394,6 +395,17 @@ const std::shared_ptr<RenderableObject>* RendererResourceCache::GetRenderableObj
     }
 
     return nullptr;
+}
+
+void RendererResourceCache::AdvanceTressfxSimulations(float deltaSeconds)
+{
+    if (!worldLocalResources)
+        return;
+    for (const auto& [key, object] : worldLocalResources->renderableObjects)
+    {
+        if (object && object->IsTressfx())
+            object->AdvanceTressfxSimulation(deltaSeconds);
+    }
 }
 
 void RendererResourceCache::BindMaterial(std::string materialKey, std::shared_ptr<Material> material)

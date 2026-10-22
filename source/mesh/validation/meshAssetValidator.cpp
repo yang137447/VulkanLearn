@@ -10,6 +10,63 @@
 
 namespace
 {
+    Eigen::Vector3f ReadSimulationVector(
+        const nlohmann::json& json,
+        std::string_view field,
+        std::string_view meshAssetPath)
+    {
+        if (!json.contains(field) || !json.at(field).is_array() ||
+            json.at(field).size() != 3)
+            throw std::runtime_error(
+                "TressFX simulation field must be a 3 element array: " +
+                std::string(field) + " " + std::string(meshAssetPath));
+        Eigen::Vector3f value;
+        for (size_t i = 0; i < 3; ++i)
+        {
+            if (!json.at(field)[i].is_number())
+                throw std::runtime_error(
+                    "TressFX simulation vector contains a non-number: " +
+                    std::string(field) + " " + std::string(meshAssetPath));
+            value[static_cast<Eigen::Index>(i)] =
+                json.at(field)[i].get<float>();
+            if (!std::isfinite(value[static_cast<Eigen::Index>(i)]))
+                throw std::runtime_error(
+                    "TressFX simulation vector must be finite: " +
+                    std::string(field) + " " + std::string(meshAssetPath));
+        }
+        return value;
+    }
+
+    void ReadTressfxSimulation(
+        const nlohmann::json& json,
+        MeshAssetBuildPlan& loadPlan,
+        std::string_view meshAssetPath)
+    {
+        if (!json.contains("simulation"))
+            return;
+        const auto& simulation = json.at("simulation");
+        if (!simulation.is_object())
+            throw std::runtime_error(
+                "TressFX simulation must be an object: " + std::string(meshAssetPath));
+        auto& config = loadPlan.tressfxSimulation;
+        config.enabled = simulation.value("enabled", true);
+        if (simulation.contains("gravity"))
+            config.gravity = ReadSimulationVector(simulation, "gravity", meshAssetPath);
+        if (simulation.contains("wind"))
+            config.wind = ReadSimulationVector(simulation, "wind", meshAssetPath);
+        config.damping = simulation.value("damping", config.damping);
+        config.iterations = simulation.value("iterations", config.iterations);
+        config.rootFixedPoints = simulation.value("rootFixedPoints", config.rootFixedPoints);
+        config.maxDt = simulation.value("maxDt", config.maxDt);
+        if (!std::isfinite(config.damping) || config.damping < 0.0f ||
+            config.damping > 1.0f || config.iterations == 0 ||
+            config.rootFixedPoints > 32 || !std::isfinite(config.maxDt) ||
+            config.maxDt <= 0.0f || config.maxDt > 0.25f)
+            throw std::runtime_error(
+                "TressFX simulation has invalid damping/iterations/rootFixedPoints/maxDt: " +
+                std::string(meshAssetPath));
+    }
+
     void EnsureObject(const nlohmann::json& json, std::string_view meshAssetPath)
     {
         if (!json.is_object())
@@ -318,8 +375,20 @@ MeshAssetBuildPlan MeshAssetValidator::BuildLoadPlan(
             throw std::runtime_error(
                 "TressFX requires a .tfx source, one material slot and no importOptions: " +
                 std::string(meshAssetPath));
+        ReadTressfxSimulation(effectiveMeshAssetJson, loadPlan, meshAssetPath);
         std::ostringstream identity;
-        identity << "|tressfx-static-v1|radius=" << std::hexfloat << loadPlan.strandRadius;
+        identity << "|tressfx-static-v1|radius=" << std::hexfloat << loadPlan.strandRadius
+                 << "|sim=" << (loadPlan.tressfxSimulation.enabled ? 1 : 0)
+                 << "|g=" << loadPlan.tressfxSimulation.gravity.x() << ","
+                 << loadPlan.tressfxSimulation.gravity.y() << ","
+                 << loadPlan.tressfxSimulation.gravity.z()
+                 << "|w=" << loadPlan.tressfxSimulation.wind.x() << ","
+                 << loadPlan.tressfxSimulation.wind.y() << ","
+                 << loadPlan.tressfxSimulation.wind.z()
+                 << "|d=" << loadPlan.tressfxSimulation.damping
+                 << "|i=" << loadPlan.tressfxSimulation.iterations
+                 << "|r=" << loadPlan.tressfxSimulation.rootFixedPoints
+                 << "|dt=" << loadPlan.tressfxSimulation.maxDt;
         loadPlan.modelCacheKey += identity.str();
     }
     if (effectiveMeshAssetJson.contains("skinning"))

@@ -116,6 +116,10 @@ public:
 
     void BindRenderableObject(std::string objectKey, std::shared_ptr<RenderableObject> object);
     const std::shared_ptr<RenderableObject>* GetRenderableObject(std::string_view objectKey) const;
+    // Advances CPU TressFX guide solvers once per game frame. The active
+    // package owns the objects, so world replacement cannot invalidate this
+    // traversal while the caller is between frame publication boundaries.
+    void AdvanceTressfxSimulations(float deltaSeconds);
 
     void BindMaterial(std::string materialKey, std::shared_ptr<Material> material);
     const std::shared_ptr<Material>* GetMaterial(std::string_view materialKey) const;

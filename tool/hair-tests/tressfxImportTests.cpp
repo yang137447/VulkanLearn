@@ -37,6 +37,33 @@ TEST(TressfxDescriptor, RadiusParticipatesInMeshIdentityWithoutDecimalTruncation
     EXPECT_NE(first.modelCacheKey, second.modelCacheKey);
 }
 
+TEST(TressfxDescriptor, SimulationFieldsAreValidatedAndPartOfIdentity)
+{
+    auto json = Descriptor();
+    json["simulation"] = {
+        {"enabled", true},
+        {"gravity", {0.0f, -980.0f, 0.0f}},
+        {"wind", {10.0f, 0.0f, 3.0f}},
+        {"damping", 0.98f},
+        {"iterations", 4},
+        {"rootFixedPoints", 2},
+        {"maxDt", 0.02f}};
+    const auto plan = MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json);
+    EXPECT_TRUE(plan.tressfxSimulation.enabled);
+    EXPECT_FLOAT_EQ(plan.tressfxSimulation.gravity.y(), -980.0f);
+    EXPECT_EQ(plan.tressfxSimulation.iterations, 4u);
+    EXPECT_NE(plan.modelCacheKey, "Maps/SC_probe/Source/guides.tfx");
+}
+
+TEST(TressfxDescriptor, SimulationRejectsInvalidControls)
+{
+    auto json = Descriptor();
+    json["simulation"] = {{"damping", 1.2f}};
+    EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json), std::runtime_error);
+    json["simulation"] = {{"gravity", {0.0f, 1.0f}}};
+    EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json), std::runtime_error);
+}
+
 TEST(TressfxDescriptor, RejectsAssimpImportOptions)
 {
     auto json = Descriptor();

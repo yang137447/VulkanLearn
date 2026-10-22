@@ -1,0 +1,48 @@
+#version 450
+
+// TressFX guide simulation kernel. The runtime dispatch owns one invocation
+// per point and ping-pongs current/previous positions. Constraint projection
+// is intentionally a separate dispatch so each iteration has a barrier.
+layout(local_size_x = 64) in;
+
+struct GuidePosition
+{
+    vec4 value;
+};
+
+layout(set = 2, binding = 3, std430) buffer CurrentPositions
+{
+    GuidePosition positions[];
+} currentPositions;
+
+layout(set = 2, binding = 4, std430) readonly buffer RestPositions
+{
+    GuidePosition positions[];
+} restPositions;
+
+layout(std140, set = 2, binding = 5) uniform SimulationParams
+{
+    vec4 gravityWind;
+    vec4 controls; // dt, damping, pointsPerGuide, rootFixedPoints
+} params;
+
+void main()
+{
+    uint point = gl_GlobalInvocationID.x;
+    if (point >= currentPositions.positions.length())
+        return;
+    uint pointsPerGuide = uint(params.controls.z);
+    uint localPoint = point % pointsPerGuide;
+    if (localPoint < uint(params.controls.w))
+    {
+        currentPositions.positions[point] = restPositions.positions[point];
+        return;
+    }
+    // The integration is deliberately explicit and deterministic. Length
+    // projection is a later dispatch to avoid races between adjacent points.
+    vec3 current = currentPositions.positions[point].value.xyz;
+    float dt = params.controls.x;
+    float damping = params.controls.y;
+    currentPositions.positions[point].value.xyz =
+        current + params.gravityWind.xyz * (dt * dt) * damping;
+}

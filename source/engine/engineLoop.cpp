@@ -711,6 +711,8 @@ void EngineLoop::Tick()
         if (world && scripts.IsEditing()) world->GetDebugDraw().AdvanceGameTime(simulationDelta);
         if (world && !RenderSystem::GetInstance().IsOfflineMode())
             world->TickAnimations(simulationDelta);
+        if (!RenderSystem::GetInstance().IsOfflineMode())
+            RendererResourceCache::GetInstance().AdvanceTressfxSimulations(simulationDelta);
         if (world && !RenderSystem::GetInstance().IsOfflineMode() &&
             std::filesystem::path(world->GetScenePath()).filename() != "SC_model_preview.json" &&
             scripts.PollBlueprintAssetChanges(*world, deltaTime))

@@ -4,11 +4,19 @@
 // 派生算法的 MIT 许可见 source/hair/THIRD_PARTY_NOTICES.md。
 
 #if defined(VL_TRESSFX_STRANDS) && VL_TRESSFX_STRANDS
+layout(set = 2, binding = 3, std430) readonly buffer TressfxCurrentPositions
+{
+    vec4 positions[];
+} tressfxCurrentPositions;
 // 参考 TressFX5-5.4.4 TressFXVertexFactory.ush 的 ComputeViewAlignedWorldPosition。
 // 保留统一 ViewForward 展开语义，不用每点的透视射线；VL 从局部中心线变换到世界，
 // 不照搬 UE 已预变换的 PositionBuffer，也不交换“法线=发丝切线”的 UE 材质约定。
 void ApplyTressfxVertexFactory(inout MaterialVertexInput inputVertex)
 {
+    // 每个逻辑中心线点在 ribbon 中复制两次；动态 SSBO 只存一份中心线。
+    uint pointIndex = uint(gl_VertexIndex) / 2u;
+    if (pointIndex < tressfxCurrentPositions.positions.length())
+        inputVertex.localPosition = tressfxCurrentPositions.positions[pointIndex].xyz;
     mat3 localToWorld = mat3(uboM.model);
     mat3 worldToLocal = inverse(localToWorld);
     vec3 worldTangent = normalize(localToWorld * inputVertex.localTangent.xyz);

@@ -63,7 +63,9 @@ MaterialInputs EvaluateMaterialInputs(in MaterialFunctionContext context);
 
 当前支持 `vertexFactoryKey = StaticMesh`、`SkinnedMesh` 和 `TressFXStrands`，
 共享固定顶点输入 locations。TressFXStrands 在 Base 模板、材质求值前执行相机朝向 ribbon
-展开；只允许 Unlit 双面透明可见性探针，不参与 ShadowDepth。原始 location 7 为
+展开；中心线位置由 Object Set 2 binding 3 的 SSBO 提供；只允许 Unlit 或 DefaultLit
+双面透明发丝材质，不参与 ShadowDepth。DefaultLit 路径仅复用现有基础 PBR 光照，
+不恢复 Hair shading model。原始 location 7 为
 有符号半径/根梢参数，工厂后才成为 ribbon UV1；它不是普通网格真实 UV1 的语义。
 完整数据与支持范围见 [TressFX 资产导入](tressfx-asset-import.md)。
 SkinnedMesh 在材质求值前通过独立 Set 2 SSBO 执行完整 CSR LBS，

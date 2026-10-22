@@ -173,6 +173,18 @@ void UpdateObjectDescriptorSets(
             {
                 if (binding.set == ObjectSetIndex)
                 {
+                    if (binding.binding == 3)
+                    {
+                        if (!resources.tressfxPositions.buffer)
+                            throw std::runtime_error("TressFX Object SSBO is missing");
+                        vk::WriteDescriptorSet write;
+                        write.setDstSet(resources.descriptorSets[i][binding.set])
+                            .setDstBinding(binding.binding).setDescriptorCount(1)
+                            .setDescriptorType(binding.type)
+                            .setBufferInfo(resources.tressfxPositions);
+                        resources.writeDescriptorSets[i].push_back(write);
+                        continue;
+                    }
                     if (!resources.skinJointCount || (binding.binding != 1 && binding.binding != 2))
                         throw std::runtime_error("Invalid skeletal Object SSBO contract");
                     vk::WriteDescriptorSet write;

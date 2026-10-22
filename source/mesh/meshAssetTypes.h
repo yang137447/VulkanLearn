@@ -33,6 +33,19 @@ struct MeshImportOptions
     std::vector<std::string> includedSectionNames;
 };
 
+// TressFX guide simulation authoring. Units follow the project world contract:
+// positions are centimeters and acceleration is cm/s^2.
+struct TressfxSimulationConfig
+{
+    bool enabled = false;
+    Eigen::Vector3f gravity = Eigen::Vector3f(0.0f, -980.0f, 0.0f);
+    Eigen::Vector3f wind = Eigen::Vector3f::Zero();
+    float damping = 0.995f;
+    uint32_t iterations = 3;
+    uint32_t rootFixedPoints = 2;
+    float maxDt = 0.033f;
+};
+
 // Runtime SDK 10 keeps the Games 9 wind authoring model. Curves are sampled
 // at twenty authored strength points in the .stsdk table.
 struct SpeedTreeWindCurve
@@ -169,6 +182,7 @@ struct MeshAssetBuildPlan
     std::string modelCacheKey;
     // tressfx 描述符声明局部空间半径；静态 ribbon 不把逆质量当作宽度。
     float strandRadius = 0.0f;
+    TressfxSimulationConfig tressfxSimulation;
     // 可选独立蒙皮声明；静态模型不构造骨架或额外顶点数据。
     // 骨骼网格必须给 skeletonPath：根骨、关节表与曲线注册表都以这份 SK 为准。
     std::string skeletonPath;
@@ -202,12 +216,18 @@ struct ModelImportRequest
 struct MeshSection
 {
     std::vector<Vertex> vertices;
+    // TFX positions carry inverse mass in w; retain it beside the expanded
+    // ribbon vertices so the runtime solver can preserve authored root pins.
+    std::vector<float> tressfxInverseMass;
     std::vector<uint32_t> indices;
     std::vector<SpeedTreeVertexAux> speedTreeAuxVertices;
     std::string sectionName;
     std::string materialSlotName;
     // 相机朝向 ribbon 的中心线顶点尚未展开；包围盒必须额外覆盖局部半径。
     float boundsPadding = 0.0f;
+    bool isTressfx = false;
+    uint32_t tressfxPointsPerStrand = 0;
+    TressfxSimulationConfig tressfxSimulation;
 };
 
 // Runtime loading plan for one imported mesh section after material slot validation.

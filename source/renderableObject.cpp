@@ -4,7 +4,9 @@
 #include "mesh/loader/common/meshAssetLoader.h"
 #include "animation/skeletalPlayback.h"
 
+#include <algorithm>
 #include <cstring>
+#include <stdexcept>
 
 RenderableObject::RenderableObject(
     std::vector<Vertex> vertices,
@@ -36,15 +38,53 @@ RenderableObject::RenderableObject(
         throw std::invalid_argument("Invalid imported mesh section");
     rendererBackend = &backend;
     name = objectName;
+    const MeshSection& section = imported->modelResource.sections[sectionIndex];
+    if (section.isTressfx)
+    {
+        dynamicVertices = section.vertices;
+        const size_t pointCount = section.tressfxInverseMass.size();
+        const size_t pointsPerGuide = section.tressfxPointsPerStrand;
+        if (pointCount != 0 && pointsPerGuide >= 2 &&
+            pointCount % pointsPerGuide == 0 &&
+            section.vertices.size() == pointCount * 2)
+        {
+            std::vector<Eigen::Vector3f> restPositions;
+            restPositions.reserve(pointCount);
+            for (size_t point = 0; point < pointCount; ++point)
+                restPositions.push_back(section.vertices[point * 2].position);
+
+            VL::Hair::SimulationConfig simulationConfig;
+            simulationConfig.gravity = section.tressfxSimulation.gravity;
+            simulationConfig.wind = section.tressfxSimulation.wind;
+            simulationConfig.damping = section.tressfxSimulation.damping;
+            simulationConfig.iterations = section.tressfxSimulation.iterations;
+            simulationConfig.rootFixedPoints = section.tressfxSimulation.rootFixedPoints;
+            simulationConfig.maxDt = section.tressfxSimulation.maxDt;
+            if (section.tressfxSimulation.enabled)
+            {
+                tressfxSimulation = std::make_unique<VL::Hair::GuideSimulation>(
+                    std::move(restPositions),
+                    pointCount / pointsPerGuide,
+                    pointsPerGuide,
+                    section.tressfxInverseMass,
+                    simulationConfig);
+            }
+        }
+    }
     UpdateLocalBounds();
     CreateVertexBuffer();
     CreateIndexBuffer();
     try
     {
         CreateSkinInfluenceBuffer();
+        CreateTressfxPositionBuffer();
     }
     catch (...)
     {
+        if (rendererBackend && tressfxPositionBuffer)
+            rendererBackend->DestroyBuffer(tressfxPositionBuffer, tressfxPositionMemory);
+        if (rendererBackend && skinInfluenceBuffer)
+            rendererBackend->DestroyBuffer(skinInfluenceBuffer, skinInfluenceMemory);
         DestroyIndexBuffer();
         DestroyVertexBuffer();
         throw;
@@ -53,6 +93,8 @@ RenderableObject::RenderableObject(
 
 const std::vector<Vertex>& RenderableObject::GetVertices() const
 {
+    if (!dynamicVertices.empty())
+        return dynamicVertices;
     return imported ? imported->modelResource.sections[importedSectionIndex].vertices
                     : vertices;
 }
@@ -65,6 +107,8 @@ const std::vector<uint32_t>& RenderableObject::GetIndices() const
 
 RenderableObject::~RenderableObject()
 {
+    if (rendererBackend && tressfxPositionBuffer)
+        rendererBackend->DestroyBuffer(tressfxPositionBuffer, tressfxPositionMemory);
     if (rendererBackend && skinInfluenceBuffer)
         rendererBackend->DestroyBuffer(skinInfluenceBuffer, skinInfluenceMemory);
     // 销毁索引缓冲区
@@ -72,6 +116,94 @@ RenderableObject::~RenderableObject()
     // 销毁顶点缓冲区
     DestroyVertexBuffer();
     rendererBackend = nullptr;
+}
+
+bool RenderableObject::IsTressfx() const
+{
+    return imported &&
+        importedSectionIndex < imported->modelResource.sections.size() &&
+        imported->modelResource.sections[importedSectionIndex].isTressfx;
+}
+
+void RenderableObject::CreateTressfxPositionBuffer()
+{
+    if (!IsTressfx())
+        return;
+
+    std::vector<Eigen::Vector3f> staticPositions;
+    const std::vector<Eigen::Vector3f>* positions = nullptr;
+    if (tressfxSimulation)
+    {
+        positions = &tressfxSimulation->Positions();
+    }
+    else
+    {
+        const auto& section = imported->modelResource.sections[importedSectionIndex];
+        staticPositions.reserve(section.vertices.size() / 2);
+        for (size_t point = 0; point < section.vertices.size() / 2; ++point)
+            staticPositions.push_back(section.vertices[point * 2].position);
+        positions = &staticPositions;
+    }
+    const vk::DeviceSize size = positions->size() * sizeof(Eigen::Vector4f);
+    std::tie(tressfxPositionBuffer, tressfxPositionMemory) = rendererBackend->CreateBuffer(
+        size,
+        vk::BufferUsageFlagBits::eStorageBuffer,
+        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+        "TressFXPositions: " + name);
+    try
+    {
+        void* mapped = rendererBackend->MapMemory(tressfxPositionMemory, size);
+        auto* destination = static_cast<Eigen::Vector4f*>(mapped);
+        for (size_t point = 0; point < positions->size(); ++point)
+            destination[point] = Eigen::Vector4f(
+                (*positions)[point].x(), (*positions)[point].y(), (*positions)[point].z(), 1.0f);
+        rendererBackend->UnmapMemory(tressfxPositionMemory);
+    }
+    catch (...)
+    {
+        rendererBackend->DestroyBuffer(tressfxPositionBuffer, tressfxPositionMemory);
+        tressfxPositionBuffer = nullptr;
+        tressfxPositionMemory = nullptr;
+        throw;
+    }
+    tressfxPositionInfo
+        .setBuffer(tressfxPositionBuffer)
+        .setOffset(0)
+        .setRange(size);
+}
+
+void RenderableObject::AdvanceTressfxSimulation(float dt)
+{
+    if (!tressfxSimulation || dynamicVertices.empty())
+        return;
+
+    tressfxSimulation->Step(dt);
+    const auto& positions = tressfxSimulation->Positions();
+    for (size_t point = 0; point < positions.size(); ++point)
+    {
+        dynamicVertices[point * 2].position = positions[point];
+        dynamicVertices[point * 2 + 1].position = positions[point];
+    }
+
+    if (tressfxPositionBuffer)
+    {
+        const vk::DeviceSize size = positions.size() * sizeof(Eigen::Vector4f);
+        void* mapped = rendererBackend->MapMemory(tressfxPositionMemory, size);
+        auto* destination = static_cast<Eigen::Vector4f*>(mapped);
+        for (size_t point = 0; point < positions.size(); ++point)
+            destination[point] = Eigen::Vector4f(
+                positions[point].x(), positions[point].y(), positions[point].z(), 1.0f);
+        rendererBackend->UnmapMemory(tressfxPositionMemory);
+    }
+
+    // 这里是游戏线程直接写 host-coherent 缓冲，没有等待在飞帧的 fence：两帧共用同一份
+    // buffer，前一帧的顶点/SSBO 读取理论上可能与这次主机写入重叠。当前 CPU 原型接受
+    // 该风险换取逐帧可见的动态；GPU dispatch 阶段应改为只由 compute 写 SSBO，并删除
+    // 这次逐帧顶点回写（vertex factory 已从 SSBO 取中心线，顶点位置并不被消费）。
+    const vk::DeviceSize vertexBytes = dynamicVertices.size() * sizeof(Vertex);
+    void* mapped = rendererBackend->MapMemory(vertexBufferMemory, vertexBytes);
+    std::memcpy(mapped, dynamicVertices.data(), static_cast<size_t>(vertexBytes));
+    rendererBackend->UnmapMemory(vertexBufferMemory);
 }
 
 void RenderableObject::CreateSkinInfluenceBuffer()
@@ -113,6 +245,22 @@ void RenderableObject::CreateVertexBuffer()
 {
     const auto& sourceVertices = GetVertices();
     vk::DeviceSize bufferSize = sourceVertices.size() * sizeof(Vertex);
+    if (IsTressfx())
+    {
+        std::tie(vertexBuffer, vertexBufferMemory) = rendererBackend->CreateBuffer(
+            bufferSize,
+            vk::BufferUsageFlagBits::eVertexBuffer,
+            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+            "TressFXVertexBuffer: " + name);
+        void* data = rendererBackend->MapMemory(vertexBufferMemory, bufferSize);
+        std::memcpy(data, sourceVertices.data(), static_cast<size_t>(bufferSize));
+        rendererBackend->UnmapMemory(vertexBufferMemory);
+        vertexBufferInfo
+            .setBuffer(vertexBuffer)
+            .setOffset(0)
+            .setRange(bufferSize);
+        return;
+    }
     vk::Buffer stagingBuffer;
     vk::DeviceMemory stagingBufferMemory;
     vk::BufferUsageFlags usage = vk::BufferUsageFlagBits::eTransferSrc;
