@@ -74,6 +74,41 @@ exit 1；Windows 入口使用宽字符路径。不会创建场景、修改资源
 切线、rest length 和 ribbon 不跨 guide。测试通过根 `vulkanlearn_add_gtest`
 逐项注册；不新增 runtime test 标志。合成夹具不代表女性 Maya 资产已完成导出。
 
+### 离线 SDF 生成
+
+`source/hair/sdfBuilder.{h,cpp}` 是纯 CPU 的离线 SDF 生成器，编入
+`vl_hair_assets` 并链接到 `vl_build_sdf`；不启动引擎、不创建 Vulkan 资源，
+运行时 solver/shader 目前也不消费它。距离单位与输入一致（身体资产是厘米），
+负值在网格内部、正值在外部。
+
+```powershell
+cmake --build build --target vl_build_sdf -j8
+.\build\bin\vl_build_sdf.exe --input <body.obj> --output <field.sdf> `
+    [--cell-size 1] [--band 4] [--max-voxels 4194304] [--sample x,y,z]...
+```
+
+- OBJ 只读 `v` / `f`：多边形扇形三角化，忽略 `vt` / `vn`；支持负数相对索引，
+  缺失/越界索引、非有限坐标、无面文件和退化域都以 exit 1 和明确消息拒绝。
+- 域是网格 AABB 每侧外扩 `--band`；`--cell-size` 默认 1 cm。体素数超过
+  `--max-voxels` 时直接失败并给出所需数量，不会静默放粗格距。
+- 最近点查询先建三角形 AABB 层次包围盒（BVH，叶子 8 个三角形），符号使用
+  角度加权伪法线：面内部用面法线，边上用相邻面法线之和，顶点用入射面法线按
+  该顶点内角加权求和。不使用单一面法线或射线奇偶性。
+- 结果按 `clamp(distance, -band, +band)` 截断。单线程、固定体素顺序
+  （x 最快、z 最慢）与固定 BVH 顺序，因此同一输入与二进制产生逐字节相同的文件。
+- `SdfField::mesh` 报告顶点数、三角形数、开放边数（只被一个三角形使用的无向边）、
+  非流形边数（被三个及以上三角形共享）和退化三角形数。
+- 文件为 little-endian、64-byte header：magic `VLSDF\0\0\0`、`version=1`、
+  `dims[3]`、`origin[3]`（最小角）、`cellSize`、`band`、`payloadFormat=0`
+  （float32）、`payloadBytes`、payload 的 FNV-1a 32 checksum、reserved。
+  体素 `(x,y,z)` 的中心是 `origin + cellSize * (index + 0.5)`。读取端拒绝
+  截断/多余字节、尺寸或 checksum 不符、非有限 header 和越界距离。
+- 采样 `SampleSdf` 为三线性插值；域外返回 `+band`。跨 band 边界的插值是截断场
+  的插值，会低估真实距离。
+- `tool/hair-tests/sdfBuilderTests.cpp` 覆盖解析球/盒距离、近边与近顶点的符号、
+  锐尖顶点伪法线、开网格开放边计数、字节确定性、写读往返及截断/损坏拒绝。
+  这些是合成夹具；正式身体资产只在离线生成时需要，不进入模块测试。
+
 ## 静态运行时路径
 
 场景仍用 `type: "mesh"`、`modelPath: ".../Meshes/SM_*.json"`。描述符为：
@@ -181,9 +216,10 @@ backend 写入模型缓存身份，同一个 `.tfx` 的 cpu/gpu 描述符不共�
   未知键、缺失键、非 3 元向量、超过 8 个胶囊都按现有错误风格拒绝，消息带 SM
   资产路径。
 - 每个 collider 的值都进入 `modelCacheKey`；修改胶囊会使模型缓存失效。
-- 当前没有 `.tfxmesh` / SDF 碰撞：资源导出只有 `.tfx` guides、身体 OBJ 和蒙皮
-  FBX，`tfxLoader` 也没有 `.tfxmesh` 解析器。SDF 路径需要碰撞网格导出/导入、
-  SDF 生成与存储、kernel 采样，这些都不在本仓库中。
+- 当前运行时没有 `.tfxmesh` / SDF 碰撞：资源导出只有 `.tfx` guides、身体 OBJ 和蒙皮
+  FBX，`tfxLoader` 也没有 `.tfxmesh` 解析器。离线 `vl_build_sdf` 能从身体 OBJ 生成
+  SDF 文件（见“离线 SDF 生成”），但仓库里还没有运行时 SDF 采样、GPU 上传或
+  descriptor 接入。
 
 ### GPU 路径
 
