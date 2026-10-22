@@ -4,14 +4,27 @@
 #include <cmath>
 #include <filesystem>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 
+#include "hair/collisionMeshObj.h"
 #include "hair/strandGeometry.h"
 
 void TressfxModelImporter::ValidateImportRequest(const ModelImportRequest& request) const
 {
     if (!std::filesystem::is_regular_file(std::filesystem::u8path(request.absoluteModelPath)))
         throw std::runtime_error("TressFX model source not found: " + request.buildPlan.modelDataPath);
+    // 作者声明 collision.mesh 时，代理 OBJ 是必需输入；缺失或不可读在加载期
+    // 失败，而不是运行期静默退回只有胶囊的路径。
+    if (request.buildPlan.tressfxSimulation.collisionMesh)
+    {
+        if (request.absoluteCollisionMeshPath.empty() ||
+            !std::filesystem::is_regular_file(
+                std::filesystem::u8path(request.absoluteCollisionMeshPath)))
+            throw std::runtime_error(
+                "TressFX collision mesh source not found: " +
+                request.buildPlan.tressfxSimulation.collisionMesh->path);
+    }
 }
 
 ModelResource TressfxModelImporter::Import(const ModelImportRequest& request)
@@ -38,6 +51,18 @@ ModelResource TressfxModelImporter::Import(const ModelImportRequest& request)
     section.isTressfx = true;
     section.tressfxPointsPerStrand = asset.pointsPerStrand;
     section.tressfxSimulation = request.buildPlan.tressfxSimulation;
+    if (request.buildPlan.tressfxSimulation.collisionMesh)
+    {
+        // 代理解析一次并随导入结果共享；RenderableObject 每帧只消费三角形汤，
+        // 不会重新读文件，也不会在每个场景 placement 上复制顶点。
+        auto collisionMesh = VL::Hair::LoadCollisionMeshObj(
+            std::filesystem::u8path(request.absoluteCollisionMeshPath));
+        if (collisionMesh.IsFailure())
+            throw std::runtime_error("TressFX collision mesh import failed: " +
+                collisionMesh.Error().message);
+        section.tressfxCollisionMesh = std::make_shared<const VL::Hair::SdfTriangleMesh>(
+            std::move(collisionMesh.Value()));
+    }
     section.tressfxInverseMass.reserve(asset.positions.size());
     section.indices = geometry.ribbonIndices;
     section.vertices.reserve(asset.positions.size() * 2);

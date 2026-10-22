@@ -24,8 +24,12 @@ struct RenderScene;
 namespace Hair
 {
 // TressFX 5.0 guide solver 的 pass 顺序，严格对应源 .usf：
-//   Integration -> StrandLevel -> VSP -> LocalShape -> LengthConstraintsWind -> Collision
-// 前五个与 TressFX 源文件一一对应；Collision 是 VL 在长度 pass 之后追加的胶囊投影。
+//   Integration -> StrandLevel -> VSP -> LocalShape -> LengthConstraintsWind
+// 之后是 VL 追加的碰撞阶段：胶囊 Collision（源 guide shader 没有），以及
+// `collision.mesh` 存在时每帧重建距离场的 SdfClear -> SdfSplat -> SdfCollide。
+// 最后三个是 VL 对 TressFXSimulationSDFGen* 与
+// TressFXSimulationCollideStrandsVerticesWithSDF 的移植；它们共用同一张 pass 表，
+// Host 按对象是否声明 collision.mesh 决定是否录制。
 enum class GuideSimulationPass : uint32_t
 {
     Integration = 0,
@@ -34,6 +38,9 @@ enum class GuideSimulationPass : uint32_t
     LocalShape,
     LengthWind,
     Collision,
+    SdfClear,
+    SdfSplat,
+    SdfCollide,
     Count,
 };
 inline constexpr uint32_t GuideSimulationPassCount =
@@ -42,8 +49,10 @@ inline constexpr uint32_t GuideSimulationPassCount =
 // TressFX guide 模拟的 GPU 执行者。每个 tressfx 对象持有一组 device-local buffer：
 // current（与 graphics Object Set 2 binding 3 共用）、previous、prevPrev、rest(w=逆质量)、
 // restLengths、strandLevel；外加每帧改写的 params UBO 和静态 collider SSBO。
-// 本类只拥有 6 个 compute pipeline、各自的 descriptor pool、逐对象的 per-pass
-// descriptor set 缓存和 per-object simulationTime，不拥有对象 buffer。
+// 声明 collision.mesh 的对象还持有 uint 距离网格、代理顶点/索引和 64-byte SDF
+// 参数块（device-local，创建一次）。本类只拥有该 pass 的 compute pipeline、
+// 各自的 descriptor pool、逐对象的 per-pass descriptor set 缓存和 per-object
+// simulationTime，不拥有对象 buffer。
 //
 // 生命周期与 RenderGraph 的 AutoExposure 一致：随图候选创建，SwapState 移交给活动图，
 // Shutdown 时按 GPU epoch 退休。pipeline 走 CreateComputePipelineCandidate，不注册
@@ -81,6 +90,12 @@ private:
         vk::Buffer restLengths = nullptr;
         vk::Buffer strandLevel = nullptr;
         vk::Buffer colliders = nullptr;
+        // collision.mesh 的四个 buffer；SDF params 按 frame-in-flight 分槽
+        // （域每帧变化）。未声明时全为空，用于缓存项校验。
+        std::array<vk::Buffer, GuideSimulationParamBufferCount> sdfParams{};
+        vk::Buffer sdfGrid = nullptr;
+        vk::Buffer sdfTriangles = nullptr;
+        vk::Buffer sdfIndices = nullptr;
         std::array<vk::Buffer, GuideSimulationParamBufferCount> params{};
         // 变量步长：每帧一次 solver step，只保留 frame-start simulationTime 供阵风使用。
         float simulationTime = 0.0f;

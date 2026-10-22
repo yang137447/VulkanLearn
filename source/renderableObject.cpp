@@ -3,10 +3,13 @@
 #include "render/backend/rendererBackendVulkan.h"
 #include "mesh/loader/common/meshAssetLoader.h"
 #include "animation/skeletalPlayback.h"
+#include "hair/tressfxSdfGrid.h"
 #include "commonFunction.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
+#include <iostream>
 #include <stdexcept>
 #include <utility>
 
@@ -430,7 +433,179 @@ void RenderableObject::CreateTressfxGpuSimulationBuffers()
     tressfxColliderInfo
         .setBuffer(tressfxColliderBuffer).setOffset(0).setRange(colliderBytes);
 
+    // `collision.mesh` 的距离场资源：只在声明了代理时创建；失败让整个
+    // renderable 构造失败（构造函数的 catch 会回收已建 buffer）。
+    CreateTressfxSdfBuffers();
+
     tressfxGpuSimulation = true;
+}
+
+void RenderableObject::CreateTressfxSdfBuffers()
+{
+    const auto& section = imported->modelResource.sections[importedSectionIndex];
+    if (!section.tressfxSimulation.collisionMesh)
+        return;
+    const TressfxCollisionMeshConfig& config =
+        *section.tressfxSimulation.collisionMesh;
+    if (!section.tressfxCollisionMesh)
+        throw std::runtime_error(
+            "TressFX collision.mesh was declared but its OBJ was not imported: " +
+            config.path);
+
+    // 绑定姿态只用来确定固定分辨率（作者 cellSize 是目标格距）；域本身每帧
+    // 从蒙皮后的代理包围盒重算，buffer 大小由分辨率决定、永不改变。
+    const auto layoutResult = VL::Hair::MakeTressfxSdfLayout(
+        *section.tressfxCollisionMesh, config.cellSize, config.margin);
+    if (layoutResult.IsFailure())
+        throw std::runtime_error("TressFX collision mesh distance field is invalid: " +
+            layoutResult.Error().message + " path=" + config.path);
+    const VL::Hair::TressfxSdfLayout& layout = layoutResult.Value();
+    const uint32_t triangleCount =
+        static_cast<uint32_t>(section.tressfxCollisionMesh->indices.size() / 3);
+    const VL::Hair::TressfxSdfParams sdfParams =
+        VL::Hair::MakeTressfxSdfParams(layout, triangleCount);
+
+    // 64-byte std140 参数块按 frame-in-flight 分槽：域（origin/cellSize/truncation）
+    // 每帧变化，不能与仍在飞的上帧共用一个槽。创建时先写绑定姿态域作初值。
+    const vk::DeviceSize paramsBytes = sizeof(VL::Hair::TressfxSdfParams);
+    for (uint32_t slot = 0; slot < VL::Hair::GuideSimulationParamBufferCount; ++slot)
+    {
+        auto& target = tressfxSdfParamsTargets[slot];
+        std::tie(target.buffer, target.memory) = rendererBackend->CreateBuffer(
+            paramsBytes,
+            vk::BufferUsageFlagBits::eUniformBuffer,
+            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+            "TressFXSdfParams: " + name + ":" + std::to_string(slot));
+        target.mapped = rendererBackend->MapMemory(target.memory, paramsBytes);
+        std::memcpy(target.mapped, &sdfParams, sizeof(sdfParams));
+        target.info.setBuffer(target.buffer).setOffset(0).setRange(paramsBytes);
+    }
+
+    // 代理顶点/索引：device-local，仅创建时经 staging 上传一次。splat pass 每帧
+    // 重新蒙皮，因此这里存的是绑定姿态坐标。
+    std::vector<Eigen::Vector4f> proxyPositions;
+    proxyPositions.reserve(section.tressfxCollisionMesh->positions.size());
+    for (const Eigen::Vector3f& position : section.tressfxCollisionMesh->positions)
+        proxyPositions.emplace_back(position.x(), position.y(), position.z(), 0.0f);
+    const vk::DeviceSize triangleBytes =
+        static_cast<vk::DeviceSize>(proxyPositions.size()) * sizeof(Eigen::Vector4f);
+    std::tie(tressfxSdfTriangleBuffer, tressfxSdfTriangleMemory) =
+        CreateUploadedDeviceLocalStorageBuffer(*rendererBackend, proxyPositions.data(),
+            triangleBytes, "TressFXSdfProxyPositions: " + name);
+    tressfxSdfTriangleInfo
+        .setBuffer(tressfxSdfTriangleBuffer).setOffset(0).setRange(triangleBytes);
+
+    const std::vector<std::uint32_t>& proxyIndices = section.tressfxCollisionMesh->indices;
+    const vk::DeviceSize indexBytes =
+        static_cast<vk::DeviceSize>(proxyIndices.size()) * sizeof(std::uint32_t);
+    std::tie(tressfxSdfIndexBuffer, tressfxSdfIndexMemory) =
+        CreateUploadedDeviceLocalStorageBuffer(*rendererBackend, proxyIndices.data(),
+            indexBytes, "TressFXSdfProxyIndices: " + name);
+    tressfxSdfIndexInfo
+        .setBuffer(tressfxSdfIndexBuffer).setOffset(0).setRange(indexBytes);
+
+    // 距离格子 buffer 只由 compute 写：clear pass 每帧先填 INITIAL_DISTANCE
+    // 哨兵，因此创建时不需要上传初值。分辨率固定，所以 buffer 大小不随帧变化。
+    const vk::DeviceSize gridBytes =
+        static_cast<vk::DeviceSize>(layout.CellCount()) * sizeof(std::uint32_t);
+    std::tie(tressfxSdfGridBuffer, tressfxSdfGridMemory) = rendererBackend->CreateBuffer(
+        gridBytes,
+        vk::BufferUsageFlagBits::eStorageBuffer,
+        vk::MemoryPropertyFlagBits::eDeviceLocal,
+        "TressFXSdfGrid: " + name);
+    tressfxSdfGridInfo
+        .setBuffer(tressfxSdfGridBuffer).setOffset(0).setRange(gridBytes);
+
+    tressfxSdfTriangleCount = triangleCount;
+    tressfxSdfCellCount = layout.CellCount();
+    tressfxSdfResolution = layout.resolution;
+    tressfxSdfCollision = true;
+
+    std::cout << "[TressFX] SDF collision buffer: object=\"" << name
+              << "\" proxyTriangles=" << triangleCount
+              << " resolution=" << layout.resolution << "^3"
+              << " cells=" << layout.CellCount()
+              << " bindCellSize=" << layout.cellSize << " margin=" << layout.margin
+              << " (domain is rebuilt per frame)" << std::endl;
+}
+
+bool RenderableObject::WriteTressfxSdfParams(
+    const Eigen::Matrix4f& skinningMatrix, uint32_t frameSlot)
+{
+    if (!tressfxSdfCollision || !imported ||
+        frameSlot >= VL::Hair::GuideSimulationParamBufferCount)
+        return false;
+    const auto& section = imported->modelResource.sections[importedSectionIndex];
+    if (!section.tressfxCollisionMesh || !section.tressfxSimulation.collisionMesh)
+        return false;
+
+    // 逐帧域：把 2,572 个代理顶点按同一根骨矩阵蒙皮后求包围盒。CPU 成本可忽略，
+    // 但能得到精确的变形后域，而不是绑定姿态包围盒的保守估计。
+    Eigen::Vector3f boundsMin = Eigen::Vector3f::Zero();
+    Eigen::Vector3f boundsMax = Eigen::Vector3f::Zero();
+    bool hasBounds = false;
+    for (const Eigen::Vector3f& rest : section.tressfxCollisionMesh->positions)
+    {
+        const Eigen::Vector3f position =
+            (skinningMatrix * rest.homogeneous()).head<3>();
+        if (!std::isfinite(position.x()) || !std::isfinite(position.y()) ||
+            !std::isfinite(position.z()))
+        {
+            if (!reportedSdfDomainFailure)
+            {
+                std::cerr << "[TressFX] SDF domain skipped for object \"" << name
+                          << "\": skinning produced a non-finite proxy vertex"
+                          << std::endl;
+                reportedSdfDomainFailure = true;
+            }
+            return false;
+        }
+        if (!hasBounds)
+        {
+            boundsMin = position;
+            boundsMax = position;
+            hasBounds = true;
+        }
+        else
+        {
+            boundsMin = boundsMin.cwiseMin(position);
+            boundsMax = boundsMax.cwiseMax(position);
+        }
+    }
+    if (!hasBounds)
+        return false;
+
+    const auto domainResult = VL::Hair::MakeTressfxSdfDomain(boundsMin, boundsMax,
+        section.tressfxSimulation.collisionMesh->margin, tressfxSdfResolution);
+    if (domainResult.IsFailure())
+    {
+        if (!reportedSdfDomainFailure)
+        {
+            std::cerr << "[TressFX] SDF domain skipped for object \"" << name
+                      << "\": " << domainResult.Error().message << std::endl;
+            reportedSdfDomainFailure = true;
+        }
+        return false;
+    }
+    const VL::Hair::TressfxSdfLayout& domain = domainResult.Value();
+    const VL::Hair::TressfxSdfParams params =
+        VL::Hair::MakeTressfxSdfParams(domain, tressfxSdfTriangleCount);
+    std::memcpy(tressfxSdfParamsTargets[frameSlot].mapped, &params, sizeof(params));
+
+    if (!reportedSdfDomain)
+    {
+        // 一次性诊断：域每帧随蒙皮包围盒移动，这里只报告第一帧的实际参数；
+        // 之后 origin/cellSize 每帧写入 frame slot 的 UBO。
+        std::cout << "[TressFX] SDF domain: object=\"" << name
+                  << "\" dims=" << domain.dims[0] << "x" << domain.dims[1] << "x"
+                  << domain.dims[2] << " origin=(" << domain.origin.x() << ", "
+                  << domain.origin.y() << ", " << domain.origin.z() << ")"
+                  << " cellSize=" << domain.cellSize
+                  << " margin=" << domain.margin
+                  << " truncation=" << domain.truncation << std::endl;
+        reportedSdfDomain = true;
+    }
+    return true;
 }
 
 void RenderableObject::DestroyTressfxBuffers()
@@ -458,6 +633,23 @@ void RenderableObject::DestroyTressfxBuffers()
         if (tressfxColliderBuffer)
             rendererBackend->DestroyBuffer(
                 tressfxColliderBuffer, tressfxColliderMemory);
+        if (tressfxSdfGridBuffer)
+            rendererBackend->DestroyBuffer(
+                tressfxSdfGridBuffer, tressfxSdfGridMemory);
+        if (tressfxSdfTriangleBuffer)
+            rendererBackend->DestroyBuffer(
+                tressfxSdfTriangleBuffer, tressfxSdfTriangleMemory);
+        if (tressfxSdfIndexBuffer)
+            rendererBackend->DestroyBuffer(
+                tressfxSdfIndexBuffer, tressfxSdfIndexMemory);
+        for (auto& target : tressfxSdfParamsTargets)
+        {
+            if (target.mapped)
+                rendererBackend->UnmapMemory(target.memory);
+            if (target.buffer)
+                rendererBackend->DestroyBuffer(target.buffer, target.memory);
+            target = {};
+        }
         for (auto& target : tressfxParamsTargets)
         {
             if (target.mapped)
@@ -481,6 +673,18 @@ void RenderableObject::DestroyTressfxBuffers()
     tressfxStrandLevelMemory = nullptr;
     tressfxColliderBuffer = nullptr;
     tressfxColliderMemory = nullptr;
+    tressfxSdfGridBuffer = nullptr;
+    tressfxSdfGridMemory = nullptr;
+    tressfxSdfTriangleBuffer = nullptr;
+    tressfxSdfTriangleMemory = nullptr;
+    tressfxSdfIndexBuffer = nullptr;
+    tressfxSdfIndexMemory = nullptr;
+    tressfxSdfTriangleCount = 0;
+    tressfxSdfCellCount = 0;
+    tressfxSdfResolution = 0;
+    tressfxSdfCollision = false;
+    reportedSdfDomain = false;
+    reportedSdfDomainFailure = false;
     tressfxGpuSimulation = false;
 }
 

@@ -135,6 +135,13 @@ RuntimeResult<SdfField> BuildSdf(const SdfTriangleMesh& mesh, const SdfGridSpec&
 // 截断场的插值，会低估真实距离，这是截断存储的已知代价。
 float SampleSdf(const SdfField& field, const Eigen::Vector3f& position);
 
+// 点到三角形的最短距离（厘米，非负）。与 BuildSdf 的最近点判定共用同一份
+// Ericson《Real-Time Collision Detection》5.1.5 区域代码，供 CPU 网格镜像与
+// GPU 的 SdfDistanceToTriangle 逐分支对应；退化三角形在最后的面内分支回退到
+// 最近的顶点距离，保证结果有限（源实现此处会出现 0/0）。
+float DistancePointToTriangle(const Eigen::Vector3f& point, const Eigen::Vector3f& a,
+    const Eigen::Vector3f& b, const Eigen::Vector3f& c);
+
 // 序列化为完整文件字节（header + payload）。用于测试与确定性比较。
 std::vector<std::uint8_t> SerializeSdf(const SdfField& field);
 RuntimeResult<SdfField> ParseSdf(

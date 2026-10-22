@@ -1,8 +1,8 @@
 # TressFX 资产导入
 
-> 状态：**当前契约**（CPU 导入、静态 ribbon 与 CPU/GPU guide 模拟路径已落地）。本文件只描述当前源码与验证覆盖的行为。
-> 根点骨骼蒙皮（`simulation.skinning`）已落地，只支持单个源角色 + 单个根骨矩阵；
-> VSP、SDF 碰撞、逐帧碰撞网格蒙皮属于后续阶段，当前不存在。
+> 状态：**当前契约**（CPU 导入、静态 ribbon、CPU/GPU guide 模拟、逐帧 SDF 碰撞已落地）。本文件只描述当前源码与验证覆盖的行为。
+> 根点骨骼蒙皮（`simulation.skinning`）与逐帧碰撞距离场（`collision.mesh`）都已落地；
+> 碰撞网格使用单骨刚性蒙皮，胶囊碰撞仍然保留，两者可以同时作者。
 
 ## 实现边界
 
@@ -151,8 +151,10 @@ cmake --build build --target vl_build_sdf -j8
   肩部接缝附近，符号不应被当作可信结论。本场没有做补洞或孔洞掩码，运行时
   采样器应当把开放边界附近的结果当作弱约束。距离本身（最近点幅值）不受
   开边界影响。
-- 该文件目前还没有运行时消费者：仓库里没有 SDF 采样、GPU 上传、descriptor 或
-  solver 接入；本节的字段只是离线生成的资源。
+- `female_head.sdf` 仍**没有**运行时消费者：运行时碰撞场改为每帧从
+  `female_body_proxy.obj` 重建（见“运行时 SDF 碰撞”），不读取这个离线 .sdf
+  文件。两者都带符号，但离线文件用角度加权伪法线、0.4 cm 固定分辨率，运行时
+  场用代理三角形绕序法线、每帧自适应域，因此结果不可互换。
 
 #### 离线碰撞代理 `female_body_proxy.obj`
 
@@ -212,8 +214,10 @@ TressFX 的碰撞 SDF 本应由一个小型 `tfxmesh` 逐帧重建。本仓库�
   小于 2 cm。裁剪不是非流形边的主要来源，跨凹陷合并不同表面薄层才是。伪法线符号
   只在闭合流形上被证明；在这些特征和裁剪边界附近，符号应作为弱约束，距离幅值不受
   影响。代理没有补洞、没有跨特征保护，也没有逐顶点法线。
-- 运行时逐帧 SDF 管线不存在：仓库里没有逐帧代理蒙皮、SDF 重建、GPU 采样、
-  descriptor 或 solver 接入，`vl_build_collision_proxy` 只产出离线 OBJ。
+- 运行时消费者是 `collision.mesh` 指向的同一个 OBJ：`RenderableObject` 在创建
+  device-local 代理顶点/索引与固定分辨率的 uint 距离网格，`HairSimulationPass`
+  每帧按 SdfClear → SdfSplat → SdfCollide 重建并投影发丝点。蒙皮使用根点同一个
+  刚性单骨矩阵；网格域每帧从蒙皮后的代理包围盒重算（见下文“运行时 SDF 碰撞”）。
 
 ## 静态运行时路径
 
@@ -308,7 +312,7 @@ backend 写入模型缓存身份，同一个 `.tfx` 的 cpu/gpu 描述符不共�
 固定步字段已删除：`fixedStep` 与 `maxSubsteps` 不再被解析，出现即在资产边界报错
 （错误消息指向 `maxDt`），避免旧资产静默失去效果。`maxDt` 仍留在模型缓存身份中。
 
-### 碰撞胶囊
+### 碰撞：胶囊与逐帧 SDF 网格
 
 `collision` 是 SM 描述符的顶层对象，与 `simulation` 同级；所有坐标和半径都是
 **资产局部空间厘米**，与 positions、gravity、wind 使用同一坐标系：
@@ -318,21 +322,39 @@ backend 写入模型缓存身份，同一个 `.tfx` 的 cpu/gpu 描述符不共�
     "capsules": [
         {"a": [0.0, 168.0, 0.5], "b": [0.0, 168.0, 0.5], "radius": 8.5},
         {"a": [0.0, 149.0, 0.5], "b": [0.0, 159.0, 0.5], "radius": 6.5}
-    ]
+    ],
+    "mesh": {
+        "path": "Maps/SC_tressfx_female/Collision/female_body_proxy.obj",
+        "cellSize": 1.0,
+        "margin": 1.0
+    }
 }
 ```
 
-- `capsules` 缺省或为空数组表示无碰撞，Host 不录制 Collision pass。
+- `capsules` 是必需的数组，可以为空。非空时 Host 在长度 pass 之后录制胶囊
+  Collision pass；空数组不录制该 pass。
 - 数量上限为 8（`VL::Hair::TressfxMaxColliders`，GPU 侧同名常量），因为当前
-  作者规模只需头、颈、肩背少量代理；更多细节应转向 SDF，而不是继续堆胶囊。
+  作者规模只需头、颈、肩背少量代理；更多细节应转向 `mesh`，而不是继续堆胶囊。
 - `a == b` 表示球。`a`、`b` 必须是 3 个有限数，`radius` 必须有限且 > 0；
   未知键、缺失键、非 3 元向量、超过 8 个胶囊都按现有错误风格拒绝，消息带 SM
   资产路径。
 - 每个 collider 的值都进入 `modelCacheKey`；修改胶囊会使模型缓存失效。
-- 当前运行时没有 `.tfxmesh` / SDF 碰撞：资源导出只有 `.tfx` guides、身体 OBJ 和蒙皮
-  FBX，`tfxLoader` 也没有 `.tfxmesh` 解析器。离线 `vl_build_sdf` 能从身体 OBJ 生成
-  SDF 文件（见“离线 SDF 生成”），但仓库里还没有运行时 SDF 采样、GPU 上传或
-  descriptor 接入。
+- `mesh` 是可选对象；缺省时**只有胶囊碰撞，行为与本字段引入前完全一致**。
+  - `path` 必需且非空，是资源仓库相对路径；绝对路径或含 `..` 的路径在资产边界
+    拒绝。加载期由 `VL::Hair::LoadCollisionMeshObj` 解析成 `SdfTriangleMesh`，
+    失败消息带 OBJ 路径与行号。
+  - `cellSize` 缺省 1.0，单位厘米，范围 **(0.2, 4]**，是**绑定姿态目标格距**：
+    创建时解析成固定分辨率 `clamp(round(bindMaxExtent/cellSize), 48, 64)`，
+    之后实际格距 = 每帧域边长 / 分辨率，会随代理包围盒变化。`margin` 缺省 1.0，
+    单位厘米，范围 **[0.05, 4]**，是每帧都保持的最小表面距离。两者都必须有限。
+  - 只接受 `capsules` 与 `mesh` 两个键；`mesh` 只接受 `path`/`cellSize`/`margin`。
+  - 只允许 `simulation.backend = "gpu"`：CPU 参考 solver 没有距离场资源，
+    静默忽略会让资产看起来生效但实际没有碰撞。
+  - `path`、`cellSize`、`margin` 都进入 `modelCacheKey`（浮点用 hexfloat），
+    只差碰撞网格的两个 SM 不共享 renderable 与 GPU 资源。
+- 运行时没有 `.tfxmesh` 解析器：碰撞代理就是 `mesh.path` 指向的普通 OBJ
+  三角形汤（当前是离线 `vl_build_collision_proxy` 产出的 2,572 顶点 /
+  7,391 三角形）。离线 `female_head.sdf` 不参与运行时。
 
 ### 根点骨骼蒙皮
 
@@ -385,8 +407,10 @@ backend 写入模型缓存身份，同一个 `.tfx` 的 cpu/gpu 描述符不共�
   标出“蒙皮但不模拟”的根前缀；本实现只有**单个根骨矩阵**，没有逐顶点多骨权重，
   也没有 `.tfxbone` 导入。`VSP`/`LocalShape` 的 `SkinningQuat` 因此是整根 strand
   共用的同一个根骨旋转，而不是每根 strand 的根三角帧旋转。
-- 碰撞胶囊仍是作者绑定空间的静态代理，不随头部/身体蒙皮移动；运行时 SDF 重建和
-  逐帧碰撞网格蒙皮都不存在。
+- 碰撞胶囊仍是作者绑定空间的静态代理，不随头部/身体蒙皮移动。声明
+  `collision.mesh` 时，逐帧 SDF 碰撞则使用**同一个**根骨矩阵对代理三角形做
+  刚性单骨蒙皮，并且每帧从蒙皮后的代理包围盒重建网格域；它没有逐顶点多骨
+  权重（见下文“运行时 SDF 碰撞”）。
 
 ### GPU 路径
 
@@ -416,15 +440,29 @@ host-visible/coherent。
 - 静态 collider SSBO（Collision pass binding 7）：创建时上传一次，每个 collider
   32 字节（`GuideColliderGpu`：a.xyz + a.w=radius、b.xyz），固定 8 槽；
   `counts.w` 决定 pass 实际读取数量。空列表也保留零填充 buffer。
+- 声明 `collision.mesh` 时额外有四个资源：
+  - SDF params UBO（64 bytes，host-visible）**每个 frame-in-flight 槽一份**：
+    `originCell`（xyz 最小角 + w 格距）、`dims`（xyz 格数 + w 总格数）、
+    `counts`（x 代理三角形数）、`range`（x margin + y truncation）。域每帧变化，
+    Host 在每帧 dispatch 前写当前槽；C++ 用 `static_assert` 固定 size/offset，
+    shader 声明在同名 std140 block。
+  - 代理顶点 SSBO（vec4/顶点，w 保留）与索引 SSBO（uint，每 3 个一组）：
+    device-local，创建时经 staging 上传一次绑定姿态数据。
+  - 距离网格 SSBO（uint/格）：device-local，固定 `resolution³ * 4` bytes
+    （`resolution` 在创建时解析为 48..64）；内容每帧由 SdfClear 重写，因此
+    创建时不需要上传初值，buffer 永不逐帧重分配。
 
 buffer 由 `RenderableObject` 拥有并随 World 资源包退休；`HairSimulationPass` 只拥有
-6 个 compute pipeline、每个 pass 的 descriptor pool、逐对象 per-pass descriptor set
-缓存和逐对象 `simulationTime`。
+9 个 compute pipeline（6 个 solver/胶囊 pass + 3 个 SDF pass）、每个 pass 的
+descriptor pool、逐对象 per-pass descriptor set 缓存和逐对象 `simulationTime`。
+未声明 `collision.mesh` 的对象不分配 SDF 三个 pass 的 descriptor set，也不录制
+它们；其余 6 个 pass 的 descriptor 合同保持不变。
 
 ### Pass 顺序
 
 `HairSimulationPass` 严格按 TressFX 5.0 的 order 录制。前五个 pass 与
-`artifacts/tressfx-shaders/` 的源 .usf 一一对应；第六个 Collision 是 VL 追加：
+`artifacts/tressfx-shaders/` 的源 .usf 一一对应；第六个 Collision 是 VL 追加的胶囊
+投影；第 7–9 个是 `collision.mesh` 存在时逐帧重建距离场并投影的 SDF 阶段：
 
 | # | TressFX 源 | VL shader | dispatch 粒度 | 读取 → 写入 |
 | --- | --- | --- | --- | --- |
@@ -434,6 +472,16 @@ buffer 由 `RenderableObject` 拥有并随 World 资源包退休；`HairSimulati
 | 4 | `TressFXSimulationLocalShapeConstraints.usf` | `tressfxSimLocalShape.comp` | 每 strand；strand 内串行 | rest/strandLevel/current → current |
 | 5 | `TressFXSimulationLengthConstraintsWind.usf` | `tressfxSimLengthWind.comp` | 每 strand；strand 内串行 | restLengths/current/previous → current/previous |
 | 6 | 无（VL 追加） | `tressfxSimCollision.comp` | 每 strand；仅当 `colliderCount > 0` | colliders/current → current |
+| 7 | `TressFXSimulationSDFGenInit.usf` | `tressfxSimSdfClear.comp` | 每格，`ceil(cellCount/64)`；仅当 `collision.mesh` | SDF params → grid |
+| 8 | `TressFXSimulationSDFGenConstruct.usf`（含 MeshSkinning/MeshBox 的职责） | `tressfxSimSdfSplat.comp` | 每三角形，`ceil(triangleCount/64)`；仅当 `collision.mesh` | params.skinning/代理顶点/索引/SDF params → grid（atomicMin） |
+| 9 | `TressFXSimulationCollideStrandsVerticesWithSDF.usf` | `tressfxSimSdfCollide.comp` | 每 strand；仅当 `collision.mesh` | current/grid/SDF params → current |
+
+TressFX 的 `SDFGenFinalize` 在 VL 里不需要单独 pass：源实现用 `FloatFlip3` +
+`InterlockedMin` 写有符号距离、再用 `IFloatFlip3` 还原；VL 的 splat 直接写一个
+magnitude-first 的 uint key（最低位是符号，见下），clear 用 `0xFFFFFFFF` 哨兵，
+采样时一次解码，因此没有额外的 finalize dispatch。`SDFMeshSkinning`/`SDFMeshBox`
+的职责也合并进 splat 与 Host：顶点蒙皮在 splat 的每个三角形上做，网格域每帧由
+`RenderableObject` 从蒙皮后的代理包围盒重算并写进 SDF params UBO。
 
 所有 shader 的 `local_size_x = 64`；每根 strand 的 pass 在 invocation 内按 root→tip
 串行读写，等价于源实现 per-strand 线程的 Gauss-Seidel 顺序。TressFX 用
@@ -479,6 +527,119 @@ groupshared 把同组多根 strand 交错存放、再用 `GroupMemoryBarrierWith
      VL 逐字保留这个 quirk。
 6. **Collision**（VL 追加，TressFX 5.0 guide shader 没有胶囊路径）：按作者顺序对
    每个胶囊做位置投影，只改 current；不可移动点跳过；`a == b` 退化为球。
+7. **SdfClear**：把全部格子写成 `0xFFFFFFFF`（TressFX `INITIAL_DISTANCE` 的
+   等价哨兵，比任何有限距离的 key 都大）。
+8. **SdfSplat**：一个 invocation 一个代理三角形。三个顶点先按 `params.skinning`
+   做刚性单骨变换，再对“三角形 AABB 每侧外扩 truncation”覆盖的每个格子中心算
+   `SignedDistancePointToTriangle`（最近点 + 绕序法线符号），只保留
+   `|d| <= truncation` 的值，写成 magnitude-first 的 uint key 并 `atomicMin`
+   （先按 |d| 选最近三角形，最低位保留符号）。距离数学与 `sdfBuilder` 的
+   Ericson 最近点分支一致；格距/域由每帧 SDF params 给出。
+9. **SdfCollide**：每根 strand 串行；跳过 `local < rootFixedPoints` 与不可移动点；
+   三线性采样**有符号**距离，`distance > margin` 早退（内部点为负，因此总会处理）；
+   用同一场做半步长中心差分梯度，梯度退化（平方长度 <= 1e-12）时跳过；否则
+   `position += normalize(gradient) * (margin - distance)`。梯度指向距离增大的
+   外侧，因此穿进代理内部的点会穿过表面被推到外侧。只写 current，不写
+   previous（参考 shader 的 previous 重写是注释掉的）。
+
+### 运行时 SDF 碰撞（`collision.mesh`）
+
+资源仓库的 `Maps/SC_tressfx_female/Collision/female_body_proxy.obj` 是
+`vl_build_collision_proxy` 生成的 2,572 顶点 / 7,391 三角形低模代理。它在导入期
+被 `VL::Hair::LoadCollisionMeshObj` 读成三角形汤，随 `MeshSection` 共享，运行时
+不再读文件。
+
+**网格布局**
+
+- 固定分辨率：创建时按**绑定姿态**代理 `maxExtent` 和作者 `cellSize` 解析
+  `resolution = clamp(round(bindMaxExtent / cellSize), 48, 64)`，之后 buffer
+  永远是 `resolution³` 格，不逐帧重分配。作者 `cellSize` 是目标格距，不是最终
+  格距；实际每帧格距 = 域边长 / resolution。它仍进入模型缓存身份。
+- 每帧域：Host 用 `params.skinning` 把 2,572 个代理顶点蒙皮后求包围盒，取
+  包围盒中心为立方体中心，边长同时覆盖包围盒与
+  `truncation = margin + 2*cellSize`。解
+  `side = (maxExtent + 2*margin) / (1 - 4/resolution)` 使
+  `cellSize = side/resolution` 和 `truncation` 自洽；`dims` 恒为
+  `{resolution,resolution,resolution}`。包围盒退化为零/负 extent 时按
+  `1 cm` 最小边长处理；非有限包围盒（坏蒙皮矩阵）跳过该帧三个 SDF dispatch
+  并只报告一次。
+- 格子中心：`origin + cellSize*(index + 0.5)`，与 TressFX 的 `GetSdfCellPosition`
+  一致。轴顺序 x 最快、z 最慢，`cellIndex = x + dims.x*(y + dims.y*z)`。
+- 存储：每格一个 uint，key = `(floatBitsToUint(|d|) << 1) | (d < 0 ? 1 : 0)`。
+  无符号 `atomicMin` 先按 |d| 选**最近**三角形，最低位保留该三角形的符号；
+  采样时右移并还原符号。代价是 float 尾数少 1 bit（碰撞尺度下远小于格距）。
+- 为什么不是 TressFX 的 `FloatFlip3`（`asuint(f) ^ 0x80000000`）：XOR 编码在
+  同号段内按 |d| 排序，但一个格子通常被多个三角形覆盖；min 会选出 band 内
+  **最负**的三角形，而不是最近三角形。对正式代理的表面三角形质心实测，
+  XOR + min 得到 `-1.24 cm`（应为 0）；magnitude-first key 得到 `+0.0002 cm`，
+  且 ±1.5/±2.5 cm 的内外点分别得到 `-1.50/-2.50/+2.00 cm`。这是有证据的
+  显式修正，编码本身仍是一个 atomicMin 兼容的 uint key，只是不再与源
+  XOR 逐位相同。
+- clear 哨兵是 `0xFFFFFFFF`（TressFX `INITIAL_DISTANCE` 的等价物），比任何
+  有限距离的 key 都大，不会被 `atomicMin` 覆盖。
+- splat 只写 `|d| <= truncation` 的格子：AABB 的角可能让真实距离超过 band 的
+  三角形覆盖到该格；把它的值写进来会污染带内最近表面。
+- TressFX 的 `SDFDirectionBuffer` 稀疏 distance/direction 链表只存在于
+  `PERMUTATION_SDF_VISUALIZATION == 1` 的可视化分支；生产 collision 分支
+  （`== 0`）本来就是 dense uint 距离网格，方向由相邻采样求梯度。VL 直接采用
+  生产分支的 dense 表示，不实现可视化链表，也不存逐格方向。
+
+**逐帧重建与采样**
+
+- SdfClear → SdfSplat → SdfCollide 是同一对象连续的三个 compute dispatch；相邻
+  dispatch 之间由既有 `RecordInterPassBarrier` 建立 compute→compute 内存依赖。
+  代理顶点/索引是创建时上传的绑定姿态数据；每帧变化的是 `params.skinning`、
+  域（origin/cellSize/truncation）和网格内容。网格 buffer 大小固定，因此域
+  跟随骨骼移动不需要重分配。
+- SDF params UBO 按 frame-in-flight 分槽；Host 在每帧 dispatch 前写当前槽，
+  避免覆盖仍在飞的上帧域。参数块仍是 64 bytes，C++/shader 两边有 `static_assert`
+  与镜像注释。
+- 三线性采样：点先换算到格子坐标，取相邻两个格子中心做凸组合（与
+  `sdfBuilder::SampleSdf` 相同的“减半格”锚点）。**不是** TressFX 的
+  `floor((p-origin)/cell)` 锚点；后者在格子后半段会外插，对符号距离会越过零
+  产生假符号，因此 VL 有意改成不外插的相邻中心插值。域外或 8 角点任一仍是
+  clear 哨兵时返回 `+1e10`（碰撞 pass 早退）。
+- 采样值是**有符号**的：表面外侧为正、内侧为负；内部点不会早退。
+- 梯度：`h = 0.5*cellSize` 的中心差分，除以 `2h = cellSize`。参考 shader 用
+  `h = 0.1*cellSize` 的前向差分；中心差分减少单侧偏置。梯度平方长度
+  `<= 1e-12` 视为退化并跳过，避免 `normalize(0)` 产生 NaN。
+- 投影：`distance < margin` 时 `p += normalize(g) * (margin - distance)`。
+  梯度指向距离增大的外侧，所以内部点会穿过表面到外侧 `margin`；表面外点
+  只在 `distance < margin` 时向外移动。`margin` 是发丝中心线与代理表面的
+  最小距离（厘米），不是胶囊半径。
+- 蒙皮：代理三角形与根点使用同一个 `params.skinning`（单骨刚性），所以头部
+  转动时场跟随发丝移动。没有逐顶点多骨权重，也没有 `.tfxmesh`。
+
+**符号约定与代价**
+
+- 符号来自**最近三角形**的绕序法线：`dot(p-a, cross(b-a,c-a)) < 0` 为负
+  （TressFX `SignedDistancePointToTriangle` 的同一约定）。碰撞代理保留身体
+  网格绕序，正常情况外侧为正。
+- 代理有 522 条开放边、2,092 条非流形边；开放边/非流形边附近没有唯一内外，
+  最近三角形的法线可能给出错误符号。距离幅值不受影响，但这些区域应视为弱
+  约束。
+- 场只在 ±truncation 带内有效：比 `margin + 2*cellSize` 更深的内点或更远的
+  外点采样到 clear 哨兵，返回 `+1e10`，不做碰撞。发丝常规情况（距表面
+  ~1 cm 以内）在带内；TressFX 的固定格偏移也有同类带限制。
+- `female_head.sdf` 是离线有符号场（伪法线、0.4 cm）；它不参与运行时，也不
+  能把它的符号/分辨率直接搬进每帧场。
+
+**已知近似与未验证项**
+
+- 代理蒙皮是单骨刚性；身体/颈部其他骨骼、表情、blendshape 不参与代理变形。
+  每帧域用 CPU 蒙皮全部代理顶点求包围盒；代理若增长到数万顶点需要改 GPU
+  归约（TressFX 的 `ICMBox` 路径）。
+- 碰撞是位置投影，不重写 previous positions，因此没有摩擦、没有碰撞速度冲量，
+  接触略黏；参考 shader 同样把 previous 写入注释掉了。
+- 胶囊碰撞仍然存在；声明 `mesh` 不会禁用胶囊，两者在长度 pass 之后先后执行
+  （胶囊先、SDF 后），重叠区域的最终位置取决于这个固定顺序。
+- 分辨率固定 48..64、作者 `cellSize` 只是目标；实际格距随域边长变化，细长
+  代理会让短轴格距偏大。没有按轴非均匀格距。
+- 编码用 magnitude-first key（尾数少 1 bit），不是源 `FloatFlip3` 的逐位
+  复刻；行为差异见上。
+- 没有 GPU 读回或 CPU/GPU 逐点对照；CPU 镜像只保证同一套公式，`sqrt` 舍入、
+  FMA 融合和指令调度可能带来末位差异。烟测里的符号数值检查是 CPU 镜像的
+  临时诊断，已移除。
 
 同步：
 
@@ -496,8 +657,13 @@ groupshared 把同组多根 strand 交错存放、再用 `GroupMemoryBarrierWith
   下一帧 dispatch 都可见。
 - 同一 graphics queue、命令缓冲提交顺序固定，因此这些 barrier 足够；params UBO
   按 frame-in-flight 分槽，`BeginFrame` 等该槽 fence 回收后才由主机写入。
+- SDF 的三个 pass 是 compute-only：距离网格从不经 transfer 写入，clear→splat→
+  collide 由相邻 pass 的 compute→compute barrier 定序；SDF 参数 UBO 与 simulation
+  params 一样按 frame-in-flight 分槽、每帧由主机写当前槽。代理顶点/索引的
+  staging 上传由 dispatch 前 barrier 的 `TRANSFER_WRITE` src scope 覆盖。
 - 每个 pass 的 descriptor set layout 不同（各 shader 只声明自己用到的 binding），
-  因此 per-object 缓存按 `[pass][frameSlot]` 保存 6×2 个 set；每个 pass 有独立的
+  因此 per-object 缓存按 `[pass][frameSlot]` 保存 9×2 个 set（声明
+  `collision.mesh`）或 6×2 个 set（只有胶囊/无碰撞），每个 pass 有独立的
   descriptor pool 链。set 里的 buffer 句柄每帧校验，buffer 被替换时重建。
 
 `simulation.enabled = true` 且 backend = gpu 时，CPU 不构造 `GuideSimulation`，
@@ -563,8 +729,9 @@ TressFX 源实现在**米**制下工作：rest 位置乘 0.01、速度 clamp 0.3
 - **LocalShape 起点**：源实现从 `NumVerticesFromRootNoSimulation - 1` 开始；该值
   为 0 时无符号下溢使循环不执行，为 1 时会读取 `GlobalVertexIndex - 1`（首根
   strand 越界）。VL 保留 0 时跳过，1 时从 local 1 开始；作者资产使用 >= 2。
-- **单骨骼蒙皮**：只有根骨矩阵与根骨旋转，没有 `.tfxbone` 逐顶点多骨权重，也没有
-  逐帧碰撞网格蒙皮或运行时 SDF 重建。
+- **单骨骼蒙皮**：只有根骨矩阵与根骨旋转，没有 `.tfxbone` 逐顶点多骨权重。
+  运行时 SDF 碰撞已落地，但碰撞代理也只用这一个矩阵做刚性蒙皮，网格域按绑定
+  姿态固定；逐顶点碰撞网格蒙皮仍不存在。
 - **串行约束**：见 pass 顺序一节的替换说明。
 - **ResetPositions**：TressFX 的 `ResetPositions` 全局复位开关没有接入。buffer 在创建
   时以 rest 初始化，等价于一次复位；运行中没有 teleport/reset 路径，pass/World
@@ -573,11 +740,12 @@ TressFX 源实现在**米**制下工作：rest 位置乘 0.01、速度 clamp 0.3
   `IntegrationAndGlobalShapeConstraints`/`CalculateStrandLevelData` 路径；
   TressFX 的 blend-shape 蒙皮变体依赖逐顶点根三角数据，不在当前资产面内。
 
-显式限制：碰撞只有作者解析胶囊，没有 `.tfxmesh`/SDF、follow hair、深度阴影、OIT、
-LOD；胶囊接触是纯位置投影，不修改 previous positions，因此没有摩擦、没有碰撞
-速度冲量，接触略黏且可能抖动；重叠胶囊的最终位置取决于作者顺序。VSP 与 global
-shape 默认关闭，只在资产显式作者时启用；`vspCoefficient > 0` 时 Host 才录制 VSP
-dispatch。没有 per-instance 或 world-space simulation。
+显式限制：碰撞是作者解析胶囊 + 可选的有符号 SDF 代理，没有 `.tfxmesh` 的逐顶点
+多骨蒙皮、follow hair、深度阴影、OIT、LOD；两种碰撞都只做位置投影，不修改
+previous positions，因此没有摩擦、没有碰撞速度冲量，接触略黏且可能抖动；
+胶囊按作者顺序、SDF 在胶囊之后执行，重叠区域的最终位置取决于这个顺序。
+VSP 与 global shape 默认关闭，只在资产显式作者时启用；`vspCoefficient > 0` 时
+Host 才录制 VSP dispatch。没有 per-instance 或 world-space simulation。
 
 ## Female 正式静态关卡
 

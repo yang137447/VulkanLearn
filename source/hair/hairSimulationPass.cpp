@@ -26,11 +26,20 @@ constexpr uint32_t RestPositionsBinding = 4;
 constexpr uint32_t RestLengthsBinding = 5;
 constexpr uint32_t StrandLevelBinding = 6;
 constexpr uint32_t CollidersBinding = 7;
+// `collision.mesh` 的逐帧距离场资源。只有 SDF 的三个 pass 使用；未声明
+// collision.mesh 的对象不会分配这些 descriptor set。
+constexpr uint32_t SdfParamsBinding = 8;
+constexpr uint32_t SdfTriangleBinding = 9;
+constexpr uint32_t SdfIndexBinding = 10;
+constexpr uint32_t SdfGridBinding = 11;
 
-constexpr uint32_t DescriptorSetsPerPool =
-    VL::Hair::GuideSimulationParamBufferCount * 8;
-// 单个 set 最多 4 个 SSBO（Integration 用 current/previous/prevPrev/rest）。
+// 每个对象需要 GuideSimulationPassCount * GuideSimulationParamBufferCount 个 set
+// （9 * 2 = 18）；按 64 预留，池链只在对象数量溢出时增长。
+constexpr uint32_t DescriptorSetsPerPool = 64;
+// 单个 set 最多 3 个 SSBO（SdfSplat 用代理顶点、索引、距离网格；Collision 用
+// current + colliders）。SdfSplat/SdfCollide 各有两个 UBO（params + SDF params）。
 constexpr uint32_t StorageBuffersPerSet = 4;
+constexpr uint32_t UniformBuffersPerSet = 2;
 
 struct PassBinding
 {
@@ -83,6 +92,23 @@ constexpr PassBinding CollisionBindings[] = {
     {CurrentPositionsBinding, vk::DescriptorType::eStorageBuffer},
     {CollidersBinding, vk::DescriptorType::eStorageBuffer},
 };
+constexpr PassBinding SdfClearBindings[] = {
+    {SdfParamsBinding, vk::DescriptorType::eUniformBuffer},
+    {SdfGridBinding, vk::DescriptorType::eStorageBuffer},
+};
+constexpr PassBinding SdfSplatBindings[] = {
+    {ParamsBinding, vk::DescriptorType::eUniformBuffer},
+    {SdfParamsBinding, vk::DescriptorType::eUniformBuffer},
+    {SdfTriangleBinding, vk::DescriptorType::eStorageBuffer},
+    {SdfIndexBinding, vk::DescriptorType::eStorageBuffer},
+    {SdfGridBinding, vk::DescriptorType::eStorageBuffer},
+};
+constexpr PassBinding SdfCollideBindings[] = {
+    {ParamsBinding, vk::DescriptorType::eUniformBuffer},
+    {CurrentPositionsBinding, vk::DescriptorType::eStorageBuffer},
+    {SdfParamsBinding, vk::DescriptorType::eUniformBuffer},
+    {SdfGridBinding, vk::DescriptorType::eStorageBuffer},
+};
 
 constexpr PassDefinition PassDefinitions[] = {
     {"hair/tressfxSimIntegration", IntegrationBindings,
@@ -97,9 +123,24 @@ constexpr PassDefinition PassDefinitions[] = {
         static_cast<uint32_t>(std::size(LengthWindBindings))},
     {"hair/tressfxSimCollision", CollisionBindings,
         static_cast<uint32_t>(std::size(CollisionBindings))},
+    {"hair/tressfxSimSdfClear", SdfClearBindings,
+        static_cast<uint32_t>(std::size(SdfClearBindings))},
+    {"hair/tressfxSimSdfSplat", SdfSplatBindings,
+        static_cast<uint32_t>(std::size(SdfSplatBindings))},
+    {"hair/tressfxSimSdfCollide", SdfCollideBindings,
+        static_cast<uint32_t>(std::size(SdfCollideBindings))},
 };
 static_assert(std::size(PassDefinitions) == VL::Hair::GuideSimulationPassCount,
     "PassDefinitions must cover every GuideSimulationPass in order");
+
+// SDF 资源只在声明 collision.mesh 的对象上创建；其余对象的 Sdf* pass 既没有
+// descriptor set 也不会被录制。
+constexpr bool PassUsesSdf(VL::Hair::GuideSimulationPass pass)
+{
+    return pass == VL::Hair::GuideSimulationPass::SdfClear ||
+        pass == VL::Hair::GuideSimulationPass::SdfSplat ||
+        pass == VL::Hair::GuideSimulationPass::SdfCollide;
+}
 
 // dispatch 前：上一帧 vertex shader 读过 current positions，本帧 compute 要写同一 buffer。
 // 这是跨提交的 write-after-read；同一 graphics queue、命令缓冲提交顺序固定，因此在
@@ -194,7 +235,8 @@ vk::DescriptorPool HairSimulationPass::AcquireDescriptorPool(uint32_t pass)
     // 对象数量在构图阶段未知，因此按小池链增长；旧池在同一次 reset 中统一释放，
     // 不对单个 descriptor set 做 free，避免池在帧中途重排。
     const std::vector<vk::DescriptorPoolSize> sizes{
-        {vk::DescriptorType::eUniformBuffer, DescriptorSetsPerPool},
+        {vk::DescriptorType::eUniformBuffer,
+            DescriptorSetsPerPool * UniformBuffersPerSet},
         {vk::DescriptorType::eStorageBuffer,
             DescriptorSetsPerPool * StorageBuffersPerSet}};
     vk::DescriptorPoolCreateInfo info;
@@ -212,12 +254,12 @@ void HairSimulationPass::CreateObjectDescriptors(
     // vulkan-hpp 的 setBufferInfo 只保存指针（ArrayProxyNoTemporaries），因此
     // DescriptorBufferInfo 必须比 UpdateDescriptorSets 活得更久；这里按
     // [frame slot][binding] 放在函数级数组里，元素地址稳定。
-    std::array<std::array<vk::DescriptorBufferInfo, CollidersBinding + 1>,
+    std::array<std::array<vk::DescriptorBufferInfo, SdfGridBinding + 1>,
         GuideSimulationParamBufferCount>
         bindingInfos{};
     for (uint32_t slot = 0; slot < GuideSimulationParamBufferCount; ++slot)
     {
-        std::array<vk::DescriptorBufferInfo, CollidersBinding + 1>& infos =
+        std::array<vk::DescriptorBufferInfo, SdfGridBinding + 1>& infos =
             bindingInfos[slot];
         infos[ParamsBinding] = object.GetTressfxParamsInfo(slot);
         infos[CurrentPositionsBinding] = object.GetTressfxPositionInfo();
@@ -228,11 +270,20 @@ void HairSimulationPass::CreateObjectDescriptors(
         infos[RestLengthsBinding] = object.GetTressfxRestLengthInfo();
         infos[StrandLevelBinding] = object.GetTressfxStrandLevelInfo();
         infos[CollidersBinding] = object.GetTressfxColliderInfo();
+        infos[SdfParamsBinding] = object.GetTressfxSdfParamsInfo(slot);
+        infos[SdfTriangleBinding] = object.GetTressfxSdfTriangleInfo();
+        infos[SdfIndexBinding] = object.GetTressfxSdfIndexInfo();
+        infos[SdfGridBinding] = object.GetTressfxSdfGridInfo();
     }
 
+    const bool hasSdfCollision = object.HasTressfxSdfCollision();
     std::vector<vk::WriteDescriptorSet> writes;
     for (uint32_t pass = 0; pass < GuideSimulationPassCount; ++pass)
     {
+        // 未声明 collision.mesh 的对象没有 SDF buffer；Sdf* pass 的 set 保持
+        // 空句柄，Host 也不会录制这三个 dispatch。
+        if (!hasSdfCollision && PassUsesSdf(static_cast<VL::Hair::GuideSimulationPass>(pass)))
+            continue;
         const PassDefinition& definition = PassDefinitions[pass];
         const vk::DescriptorPool pool = AcquireDescriptorPool(pass);
         std::vector<vk::DescriptorSetLayout> layouts(
@@ -270,8 +321,14 @@ void HairSimulationPass::CreateObjectDescriptors(
     descriptors.restLengths = object.GetTressfxRestLengthInfo().buffer;
     descriptors.strandLevel = object.GetTressfxStrandLevelInfo().buffer;
     descriptors.colliders = object.GetTressfxColliderInfo().buffer;
+    descriptors.sdfGrid = object.GetTressfxSdfGridInfo().buffer;
+    descriptors.sdfTriangles = object.GetTressfxSdfTriangleInfo().buffer;
+    descriptors.sdfIndices = object.GetTressfxSdfIndexInfo().buffer;
     for (uint32_t slot = 0; slot < GuideSimulationParamBufferCount; ++slot)
+    {
+        descriptors.sdfParams[slot] = object.GetTressfxSdfParamsInfo(slot).buffer;
         descriptors.params[slot] = object.GetTressfxParamsInfo(slot).buffer;
+    }
 }
 
 HairSimulationPass::ObjectDescriptors& HairSimulationPass::EnsureObjectDescriptors(
@@ -290,9 +347,16 @@ HairSimulationPass::ObjectDescriptors& HairSimulationPass::EnsureObjectDescripto
             descriptors.restPositions == object.GetTressfxRestPositionInfo().buffer &&
             descriptors.restLengths == object.GetTressfxRestLengthInfo().buffer &&
             descriptors.strandLevel == object.GetTressfxStrandLevelInfo().buffer &&
-            descriptors.colliders == object.GetTressfxColliderInfo().buffer;
+            descriptors.colliders == object.GetTressfxColliderInfo().buffer &&
+            descriptors.sdfGrid == object.GetTressfxSdfGridInfo().buffer &&
+            descriptors.sdfTriangles == object.GetTressfxSdfTriangleInfo().buffer &&
+            descriptors.sdfIndices == object.GetTressfxSdfIndexInfo().buffer;
         for (uint32_t slot = 0; slot < GuideSimulationParamBufferCount && matches; ++slot)
-            matches = descriptors.params[slot] == object.GetTressfxParamsInfo(slot).buffer;
+        {
+            matches = descriptors.params[slot] == object.GetTressfxParamsInfo(slot).buffer &&
+                descriptors.sdfParams[slot] ==
+                    object.GetTressfxSdfParamsInfo(slot).buffer;
+        }
         if (matches)
             return cached->second;
         // 正常 World/graph 重建会新建本 pass，不会复用对象地址；句柄校验仍保留，
@@ -371,15 +435,19 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
         // 一次性诊断：确认 GPU backend 真正录到了多 pass dispatch，而不是静默回退。
         uint32_t totalGuides = 0;
         uint32_t totalPoints = 0;
+        uint32_t sdfObjects = 0;
         for (const Dispatch& dispatch : dispatches)
         {
             totalGuides += dispatch.guideCount;
             totalPoints += dispatch.pointCount;
+            if (dispatch.object->HasTressfxSdfCollision())
+                ++sdfObjects;
         }
         std::cout << "[TressFX] GPU guide simulation dispatch: objects="
                   << dispatches.size() << " guides=" << totalGuides
                   << " points=" << totalPoints
-                  << " passes=" << GuideSimulationPassCount << std::endl;
+                  << " passes=" << GuideSimulationPassCount
+                  << " sdfObjects=" << sdfObjects << std::endl;
         reportedFirstDispatch = true;
     }
 
@@ -436,6 +504,10 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
             state.simulationTime,
             state.skinningMatrix);
         object.WriteTressfxSimulationParams(params, frameSlot);
+        // SDF 域每帧从蒙皮后的代理包围盒重算；非有限包围盒会返回 false，
+        // 该帧跳过三个 SDF dispatch（object 自己只报告一次）。
+        const bool sdfDomainValid = object.HasTressfxSdfCollision() &&
+            object.WriteTressfxSdfParams(state.skinningMatrix, frameSlot);
         state.simulationTime += timeStep;
 
         const uint32_t vertexGroupCount =
@@ -469,6 +541,28 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
             RecordPass(commandBuffer, GuideSimulationPass::Collision,
                 state.sets[PassIndex(GuideSimulationPass::Collision)][frameSlot],
                 strandGroupCount, anyDispatch);
+        // 逐帧距离场：clear -> splat -> collide。三者必须相邻（同一对象的连续
+        // dispatch），中间由 RecordPass 插入 compute→compute 内存 barrier。
+        // 只在声明 collision.mesh、且本帧域参数有效时录制；capsule Collision
+        // 可以同时存在。
+        if (sdfDomainValid)
+        {
+            const uint32_t sdfCellGroupCount =
+                (object.GetTressfxSdfCellCount() + GuideSimulationWorkgroupSize - 1) /
+                GuideSimulationWorkgroupSize;
+            const uint32_t sdfTriangleGroupCount =
+                (object.GetTressfxSdfTriangleCount() + GuideSimulationWorkgroupSize - 1) /
+                GuideSimulationWorkgroupSize;
+            RecordPass(commandBuffer, GuideSimulationPass::SdfClear,
+                state.sets[PassIndex(GuideSimulationPass::SdfClear)][frameSlot],
+                sdfCellGroupCount, anyDispatch);
+            RecordPass(commandBuffer, GuideSimulationPass::SdfSplat,
+                state.sets[PassIndex(GuideSimulationPass::SdfSplat)][frameSlot],
+                sdfTriangleGroupCount, anyDispatch);
+            RecordPass(commandBuffer, GuideSimulationPass::SdfCollide,
+                state.sets[PassIndex(GuideSimulationPass::SdfCollide)][frameSlot],
+                strandGroupCount, anyDispatch);
+        }
     }
     if (anyDispatch)
         RecordPostDispatchBarrier(commandBuffer);

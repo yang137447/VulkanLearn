@@ -118,6 +118,13 @@ ModelImportRequest BuildModelImportRequest(const MeshAssetBuildPlan& loadPlan)
     ModelImportRequest request;
     request.buildPlan = loadPlan;
     request.absoluteModelPath = CommonFunction::Path(loadPlan.modelDataPath);
+    // `collision.mesh` 与模型源同次解析成绝对路径；缺失文件在这里就失败，
+    // 与 modelDataPath 的加载期行为一致。
+    if (loadPlan.tressfxSimulation.collisionMesh)
+    {
+        request.absoluteCollisionMeshPath = CommonFunction::Path(
+            loadPlan.tressfxSimulation.collisionMesh->path);
+    }
     return request;
 }
 

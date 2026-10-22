@@ -86,12 +86,10 @@ float CornerAngle(const Eigen::Vector3f& corner, const Eigen::Vector3f& first,
 
 // Ericson《Real-Time Collision Detection》5.1.5 的区域判定：最近点必在面内部、
 // 某条边上或某个顶点上，返回值同时给出重心坐标，后续据此选择伪法线特征。
-float ClosestPointOnTriangle(const Triangle& tri, const Eigen::Vector3f& p,
-    Eigen::Vector3f& barycentric)
+// 参数直接取三个顶点而不是 Triangle，供 BuildSdf 与运行时碰撞网格的 CPU 镜像共用。
+float ClosestPointOnTriangleSquared(const Eigen::Vector3f& a, const Eigen::Vector3f& b,
+    const Eigen::Vector3f& c, const Eigen::Vector3f& p, Eigen::Vector3f& barycentric)
 {
-    const Eigen::Vector3f& a = tri.a;
-    const Eigen::Vector3f& b = tri.b;
-    const Eigen::Vector3f& c = tri.c;
     const Eigen::Vector3f ab = b - a;
     const Eigen::Vector3f ac = c - a;
     const Eigen::Vector3f ap = p - a;
@@ -145,7 +143,28 @@ float ClosestPointOnTriangle(const Triangle& tri, const Eigen::Vector3f& p,
         return (p - (b + (c - b) * w)).squaredNorm();
     }
 
-    const float denominator = 1.0f / (va + vb + vc);
+    const float denominatorSum = va + vb + vc;
+    if (!(denominatorSum > 0.0f))
+    {
+        // 完全退化的三角形：面内分支没有定义。取最近顶点，结果仍有限且与
+        // 三条边/三个顶点的最近点语义一致；GPU 镜像使用同样的回退。
+        const float da = (p - a).squaredNorm();
+        const float db = (p - b).squaredNorm();
+        const float dc = (p - c).squaredNorm();
+        if (da <= db && da <= dc)
+        {
+            barycentric = Eigen::Vector3f(1.0f, 0.0f, 0.0f);
+            return da;
+        }
+        if (db <= dc)
+        {
+            barycentric = Eigen::Vector3f(0.0f, 1.0f, 0.0f);
+            return db;
+        }
+        barycentric = Eigen::Vector3f(0.0f, 0.0f, 1.0f);
+        return dc;
+    }
+    const float denominator = 1.0f / denominatorSum;
     const float v = vb * denominator;
     const float w = vc * denominator;
     barycentric = Eigen::Vector3f(1.0f - v - w, v, w);
@@ -202,8 +221,9 @@ public:
                 {
                     const std::uint32_t triangleIndex = order_[node.first + offset];
                     Eigen::Vector3f barycentric;
-                    const float squared =
-                        ClosestPointOnTriangle(triangles_[triangleIndex], point, barycentric);
+                    const float squared = ClosestPointOnTriangleSquared(
+                        triangles_[triangleIndex].a, triangles_[triangleIndex].b,
+                        triangles_[triangleIndex].c, point, barycentric);
                     // 严格小于：与遍历顺序共同构成确定性决胜，不会因调度产生不同最近面。
                     if (squared < result.squaredDistance)
                     {
@@ -485,6 +505,13 @@ SdfMeshReport CountMeshTopology(const SdfTriangleMesh& mesh)
         runStart = runEnd;
     }
     return report;
+}
+
+float DistancePointToTriangle(const Eigen::Vector3f& point, const Eigen::Vector3f& a,
+    const Eigen::Vector3f& b, const Eigen::Vector3f& c)
+{
+    Eigen::Vector3f barycentric;
+    return std::sqrt(ClosestPointOnTriangleSquared(a, b, c, point, barycentric));
 }
 
 RuntimeResult<SdfField> BuildSdf(const SdfTriangleMesh& mesh, const SdfGridSpec& grid)

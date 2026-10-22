@@ -85,11 +85,36 @@ public:
     {
         return tressfxColliderInfo;
     }
+    // 逐帧碰撞距离场（`collision.mesh`）存在时创建；未声明时这些 buffer 与
+    // info 都为空，SDF 的三个 pass 不会被录制。SDF params 按 frame-in-flight
+    // 分槽，因为域（origin/cellSize）每帧随蒙皮后的代理包围盒更新。
+    bool HasTressfxSdfCollision() const { return tressfxSdfCollision; }
+    const vk::DescriptorBufferInfo& GetTressfxSdfParamsInfo(uint32_t frameSlot) const
+    {
+        return tressfxSdfParamsTargets[frameSlot].info;
+    }
+    const vk::DescriptorBufferInfo& GetTressfxSdfGridInfo() const
+    {
+        return tressfxSdfGridInfo;
+    }
+    const vk::DescriptorBufferInfo& GetTressfxSdfTriangleInfo() const
+    {
+        return tressfxSdfTriangleInfo;
+    }
+    const vk::DescriptorBufferInfo& GetTressfxSdfIndexInfo() const
+    {
+        return tressfxSdfIndexInfo;
+    }
+    uint32_t GetTressfxSdfTriangleCount() const { return tressfxSdfTriangleCount; }
+    uint32_t GetTressfxSdfCellCount() const { return tressfxSdfCellCount; }
     // frameSlot 是 frame-in-flight 槽，与 params UBO 的槽一一对应。
     const vk::DescriptorBufferInfo& GetTressfxParamsInfo(uint32_t frameSlot) const;
     void WriteTressfxSimulationParams(
         const VL::Hair::GuideSimulationParams& params,
         uint32_t frameSlot);
+    // 每帧从蒙皮后的代理包围盒重算立方体域，写当前 frame slot 的 SDF params。
+    // 非有限包围盒返回 false（pass 会跳过该帧的三个 SDF dispatch 并只报告一次）。
+    bool WriteTressfxSdfParams(const Eigen::Matrix4f& skinningMatrix, uint32_t frameSlot);
 
 private:
     void UpdateLocalBounds();
@@ -104,6 +129,7 @@ private:
     void CreateSkinInfluenceBuffer();
     void CreateTressfxPositionBuffer();
     void CreateTressfxGpuSimulationBuffers();
+    void CreateTressfxSdfBuffers();
     void DestroyTressfxBuffers();
 
     // 每个 frame-in-flight 槽一份 params UBO，避免主机写当前槽时覆盖仍在飞的上一帧参数。
@@ -155,6 +181,25 @@ private:
     vk::Buffer tressfxColliderBuffer = nullptr;
     vk::DeviceMemory tressfxColliderMemory = nullptr;
     vk::DescriptorBufferInfo tressfxColliderInfo;
+    // 逐帧碰撞距离场：device-local 的固定分辨率 uint 网格 + 静态代理顶点/索引
+    // + 每个 frame-in-flight 槽一份 64-byte std140 参数块（域每帧变化）。
+    vk::Buffer tressfxSdfGridBuffer = nullptr;
+    vk::DeviceMemory tressfxSdfGridMemory = nullptr;
+    vk::DescriptorBufferInfo tressfxSdfGridInfo;
+    vk::Buffer tressfxSdfTriangleBuffer = nullptr;
+    vk::DeviceMemory tressfxSdfTriangleMemory = nullptr;
+    vk::DescriptorBufferInfo tressfxSdfTriangleInfo;
+    vk::Buffer tressfxSdfIndexBuffer = nullptr;
+    vk::DeviceMemory tressfxSdfIndexMemory = nullptr;
+    vk::DescriptorBufferInfo tressfxSdfIndexInfo;
+    std::array<TressfxParamsTarget, VL::Hair::GuideSimulationParamBufferCount>
+        tressfxSdfParamsTargets;
+    uint32_t tressfxSdfTriangleCount = 0;
+    uint32_t tressfxSdfCellCount = 0;
+    uint32_t tressfxSdfResolution = 0;
+    bool tressfxSdfCollision = false;
+    bool reportedSdfDomain = false;
+    bool reportedSdfDomainFailure = false;
     std::array<TressfxParamsTarget, VL::Hair::GuideSimulationParamBufferCount>
         tressfxParamsTargets;
     uint32_t tressfxGuideCount = 0;

@@ -144,11 +144,11 @@
         },
         "collision": {
             "type": "object",
-            "description": "tressfx guide 的解析胶囊碰撞；位置/半径使用资产局部空间厘米。",
+            "description": "tressfx guide 的碰撞作者：解析胶囊 + 可选的低模碰撞网格（运行期逐帧重建距离场）。位置/半径/网格坐标使用资产局部空间厘米。",
             "properties": {
                 "capsules": {
                     "type": "array",
-                    "description": "按顺序应用的胶囊；a == b 表示球。空数组等价于无碰撞。",
+                    "description": "按顺序应用的胶囊；a == b 表示球。空数组等价于无胶囊碰撞。",
                     "maxItems": 8,
                     "items": {
                         "type": "object",
@@ -176,6 +176,33 @@
                         "required": ["a", "b", "radius"],
                         "additionalProperties": false
                     }
+                },
+                "mesh": {
+                    "type": "object",
+                    "description": "GPU 逐帧重建的碰撞距离场：低模代理 OBJ 与代理表面要保持的最小距离。缺省时只有胶囊碰撞，行为与引入该块之前一致。",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "资源根相对的碰撞代理 OBJ 路径；解析为三角形汤后进入模型缓存身份。"
+                        },
+                        "cellSize": {
+                            "type": "number",
+                            "exclusiveMinimum": 0.2,
+                            "maximum": 4,
+                            "default": 1.0,
+                            "description": "绑定姿态目标格距，厘米；创建时解析成固定的 48..64 分辨率，实际每帧格距 = 域边长/分辨率且随代理包围盒变化。范围 (0.2, 4]。"
+                        },
+                        "margin": {
+                            "type": "number",
+                            "minimum": 0.05,
+                            "maximum": 4,
+                            "default": 1.0,
+                            "description": "发丝点与代理表面的最小距离，厘米；距离小于它时沿距离场梯度投影到该距离，范围 [0.05, 4]。"
+                        }
+                    },
+                    "required": ["path"],
+                    "additionalProperties": false
                 }
             },
             "required": ["capsules"],

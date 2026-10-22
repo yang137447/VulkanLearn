@@ -188,6 +188,7 @@ namespace
     {
         auto& capsules = loadPlan.tressfxSimulation.capsules;
         capsules.clear();
+        loadPlan.tressfxSimulation.collisionMesh.reset();
         if (!json.contains("collision"))
             return;
         const auto& collision = json.at("collision");
@@ -196,7 +197,7 @@ namespace
                 "TressFX collision must be an object: " + std::string(meshAssetPath));
         for (auto field = collision.begin(); field != collision.end(); ++field)
         {
-            if (field.key() != "capsules")
+            if (field.key() != "capsules" && field.key() != "mesh")
                 throw std::runtime_error(
                     "TressFX collision has unknown field \"" + field.key() + "\": " +
                     std::string(meshAssetPath));
@@ -242,6 +243,74 @@ namespace
                     std::string(meshAssetPath));
             capsules.push_back(collider);
         }
+
+        if (!collision.contains("mesh"))
+            return;
+        const auto& mesh = collision.at("mesh");
+        if (!mesh.is_object())
+            throw std::runtime_error(
+                "TressFX collision.mesh must be an object: " + std::string(meshAssetPath));
+        for (auto field = mesh.begin(); field != mesh.end(); ++field)
+        {
+            if (field.key() != "path" && field.key() != "cellSize" && field.key() != "margin")
+                throw std::runtime_error(
+                    "TressFX collision.mesh has unknown field \"" + field.key() + "\": " +
+                    std::string(meshAssetPath));
+        }
+        if (!mesh.contains("path") || !mesh.at("path").is_string() ||
+            mesh.at("path").get<std::string>().empty())
+            throw std::runtime_error(
+                "TressFX collision.mesh requires a non-empty path: " +
+                std::string(meshAssetPath));
+        TressfxCollisionMeshConfig collisionMesh;
+        collisionMesh.path = mesh.at("path").get<std::string>();
+        // 代理路径与模型/材质路径同一规则：资源根相对、不允许绝对路径或 ".." 逃逸。
+        const std::filesystem::path collisionPath(collisionMesh.path);
+        if (collisionPath.is_absolute() || collisionPath.has_root_directory())
+            throw std::runtime_error(
+                "TressFX collision.mesh path must be resource-relative: " +
+                std::string(meshAssetPath) + " path=" + collisionMesh.path);
+        for (const std::filesystem::path& part : collisionPath)
+        {
+            if (part == "..")
+                throw std::runtime_error(
+                    "TressFX collision.mesh path must not escape the resource root: " +
+                    std::string(meshAssetPath) + " path=" + collisionMesh.path);
+        }
+        // 两个作者值都有默认值；显式给出时必须落在合同范围内，错误消息带路径。
+        if (mesh.contains("cellSize"))
+        {
+            if (!mesh.at("cellSize").is_number())
+                throw std::runtime_error(
+                    "TressFX collision.mesh cellSize must be a number: " +
+                    std::string(meshAssetPath) + " path=" + collisionMesh.path);
+            collisionMesh.cellSize = mesh.at("cellSize").get<float>();
+        }
+        if (!std::isfinite(collisionMesh.cellSize) || !(collisionMesh.cellSize > 0.2f) ||
+            collisionMesh.cellSize > 4.0f)
+            throw std::runtime_error(
+                "TressFX collision.mesh cellSize must be in (0.2, 4] cm: " +
+                std::string(meshAssetPath) + " path=" + collisionMesh.path);
+        if (mesh.contains("margin"))
+        {
+            if (!mesh.at("margin").is_number())
+                throw std::runtime_error(
+                    "TressFX collision.mesh margin must be a number: " +
+                    std::string(meshAssetPath) + " path=" + collisionMesh.path);
+            collisionMesh.margin = mesh.at("margin").get<float>();
+        }
+        if (!std::isfinite(collisionMesh.margin) || collisionMesh.margin < 0.05f ||
+            collisionMesh.margin > 4.0f)
+            throw std::runtime_error(
+                "TressFX collision.mesh margin must be in [0.05, 4] cm: " +
+                std::string(meshAssetPath) + " path=" + collisionMesh.path);
+        // SDF 重建与碰撞 pass 只存在于 GPU backend；CPU 参考 solver 没有距离场，
+        // 静默忽略作者块会让资产看起来生效但实际没有碰撞。
+        if (loadPlan.tressfxSimulation.backend != TressfxSimulationBackend::Gpu)
+            throw std::runtime_error(
+                "TressFX collision.mesh requires simulation.backend = \"gpu\": " +
+                std::string(meshAssetPath) + " path=" + collisionMesh.path);
+        loadPlan.tressfxSimulation.collisionMesh = std::move(collisionMesh);
     }
 
     void EnsureObject(const nlohmann::json& json, std::string_view meshAssetPath)
@@ -581,6 +650,14 @@ MeshAssetBuildPlan MeshAssetValidator::BuildLoadPlan(
             identity << "|cap=" << capsule.a.x() << "," << capsule.a.y() << ","
                      << capsule.a.z() << ":" << capsule.b.x() << "," << capsule.b.y()
                      << "," << capsule.b.z() << ":" << capsule.radius;
+        }
+        // SDF 代理路径、格距和 margin 都改变运行时距离场与碰撞行为，必须进入
+        // 模型缓存身份；两个只差碰撞网格的 SM 不能共享 renderable 与 GPU 网格。
+        if (loadPlan.tressfxSimulation.collisionMesh)
+        {
+            identity << "|sdfmesh=" << loadPlan.tressfxSimulation.collisionMesh->path
+                     << "|sdfcell=" << loadPlan.tressfxSimulation.collisionMesh->cellSize
+                     << "|sdfmargin=" << loadPlan.tressfxSimulation.collisionMesh->margin;
         }
         identity << "|backend=" << (loadPlan.tressfxSimulation.backend ==
                         TressfxSimulationBackend::Gpu ? "gpu" : "cpu");

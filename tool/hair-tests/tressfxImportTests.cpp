@@ -17,6 +17,14 @@ nlohmann::json Descriptor(float radius = 0.05f)
         {"materialSlots", {{{"name", "hair"}, {"materialInstancePath", "MI_probe.json"}}}}};
 }
 
+nlohmann::json GpuDescriptor()
+{
+    auto json = Descriptor();
+    json["simulation"] = {{"backend", "gpu"}};
+    json["collision"] = {{"capsules", nlohmann::json::array()}};
+    return json;
+}
+
 TEST(TressfxDescriptor, RequiresPositiveFiniteRepresentableRadius)
 {
     for (double radius : {0.0, -1.0, 1e-300, 1e300, std::numeric_limits<double>::infinity()})
@@ -466,6 +474,111 @@ TEST(TressfxDescriptor, CollisionRejectsInvalidCapsuleFields)
         std::runtime_error);
 }
 
+TEST(TressfxDescriptor, CollisionMeshAcceptsAuthoredProxyAndDefaults)
+{
+    auto json = GpuDescriptor();
+    json["collision"]["mesh"] = {{"path", "Maps/SC_probe/Collision/proxy.obj"}};
+    const auto defaults = MeshAssetValidator::BuildLoadPlan("SM_sdf.json", json);
+    ASSERT_TRUE(defaults.tressfxSimulation.collisionMesh.has_value());
+    EXPECT_EQ(defaults.tressfxSimulation.collisionMesh->path,
+        "Maps/SC_probe/Collision/proxy.obj");
+    EXPECT_FLOAT_EQ(defaults.tressfxSimulation.collisionMesh->cellSize, 1.0f);
+    EXPECT_FLOAT_EQ(defaults.tressfxSimulation.collisionMesh->margin, 1.0f);
+
+    json["collision"]["mesh"]["cellSize"] = 1.5f;
+    json["collision"]["mesh"]["margin"] = 0.5f;
+    const auto authored = MeshAssetValidator::BuildLoadPlan("SM_sdf.json", json);
+    ASSERT_TRUE(authored.tressfxSimulation.collisionMesh.has_value());
+    EXPECT_FLOAT_EQ(authored.tressfxSimulation.collisionMesh->cellSize, 1.5f);
+    EXPECT_FLOAT_EQ(authored.tressfxSimulation.collisionMesh->margin, 0.5f);
+}
+
+TEST(TressfxDescriptor, CollisionMeshParticipatesInMeshIdentity)
+{
+    const auto plan = [](const std::string& path, double cellSize, double margin) {
+        auto json = GpuDescriptor();
+        json["collision"]["mesh"] = {
+            {"path", path}, {"cellSize", cellSize}, {"margin", margin}};
+        return MeshAssetValidator::BuildLoadPlan("SM_sdf.json", json);
+    };
+    const auto base = plan("Maps/SC_probe/Collision/proxy.obj", 1.0, 1.0);
+    EXPECT_NE(base.modelCacheKey,
+        plan("Maps/SC_probe/Collision/proxy_b.obj", 1.0, 1.0).modelCacheKey);
+    EXPECT_NE(base.modelCacheKey,
+        plan("Maps/SC_probe/Collision/proxy.obj", 1.5, 1.0).modelCacheKey);
+    EXPECT_NE(base.modelCacheKey,
+        plan("Maps/SC_probe/Collision/proxy.obj", 1.0, 0.5).modelCacheKey);
+}
+
+TEST(TressfxDescriptor, CollisionMeshRejectsInvalidValues)
+{
+    const auto plan = [](const nlohmann::json& mesh) {
+        auto json = GpuDescriptor();
+        json["collision"]["mesh"] = mesh;
+        return MeshAssetValidator::BuildLoadPlan("Maps/SC_probe/Meshes/SM_sdf.json", json);
+    };
+    const nlohmann::json valid = {{"path", "Maps/SC_probe/Collision/proxy.obj"}};
+
+    EXPECT_NO_THROW(plan(valid));
+
+    // path：缺失、空、非字符串、绝对路径、逃逸资源根都在资产边界拒绝。
+    EXPECT_THROW(plan({{"cellSize", 1.0}}), std::runtime_error);
+    EXPECT_THROW(plan({{"path", ""}}), std::runtime_error);
+    EXPECT_THROW(plan({{"path", 5}}), std::runtime_error);
+    EXPECT_THROW(plan({{"path", "C:/proxy.obj"}}), std::runtime_error);
+    EXPECT_THROW(plan({{"path", "../proxy.obj"}}), std::runtime_error);
+
+    // cellSize 是 (0.2, 4]；margin 是 [0.05, 4]。
+    for (const double cellSize : {0.2, 0.1, 4.01, 0.0, -1.0})
+    {
+        auto mesh = valid;
+        mesh["cellSize"] = cellSize;
+        EXPECT_THROW(plan(mesh), std::runtime_error) << "cellSize=" << cellSize;
+    }
+    for (const double margin : {0.0, 0.049, 4.01, -1.0})
+    {
+        auto mesh = valid;
+        mesh["margin"] = margin;
+        EXPECT_THROW(plan(mesh), std::runtime_error) << "margin=" << margin;
+    }
+
+    EXPECT_THROW(plan("not-an-object"), std::runtime_error);
+    EXPECT_THROW(plan({{"path", "proxy.obj"}, {"extra", 1}}), std::runtime_error);
+    try
+    {
+        auto mesh = valid;
+        mesh["cellSize"] = 0.2;
+        plan(mesh);
+        FAIL() << "cellSize at the exclusive lower bound was accepted";
+    }
+    catch (const std::runtime_error& error)
+    {
+        const std::string message = error.what();
+        EXPECT_NE(message.find("SM_sdf.json"), std::string::npos);
+        EXPECT_NE(message.find("proxy.obj"), std::string::npos);
+        EXPECT_NE(message.find("cellSize"), std::string::npos);
+    }
+}
+
+TEST(TressfxDescriptor, CollisionMeshRequiresGpuBackend)
+{
+    auto json = Descriptor();
+    json["simulation"] = {{"backend", "cpu"}};
+    json["collision"] = {{"capsules", nlohmann::json::array()},
+        {"mesh", {{"path", "Maps/SC_probe/Collision/proxy.obj"}}}};
+    try
+    {
+        MeshAssetValidator::BuildLoadPlan("Maps/SC_probe/Meshes/SM_sdf.json", json);
+        FAIL() << "collision.mesh was accepted with the CPU backend";
+    }
+    catch (const std::runtime_error& error)
+    {
+        const std::string message = error.what();
+        EXPECT_NE(message.find("gpu"), std::string::npos);
+        EXPECT_NE(message.find("SM_sdf.json"), std::string::npos);
+    }
+}
+
 TEST(TressfxDescriptor, RejectsAssimpImportOptions)
 {
     auto json = Descriptor();
@@ -574,6 +687,36 @@ TEST_F(TressfxImport, MissingOptionalAttributesUseExplicitWhiteAndZeroUv)
     const auto section = Import(TfxFixture::Guides()).sections[0];
     EXPECT_TRUE(section.vertices[0].color.isApprox(Eigen::Vector4f::Ones()));
     EXPECT_TRUE(section.vertices[0].texCoord.isZero());
+}
+
+TEST_F(TressfxImport, ImportsCollisionProxyObjIntoSection)
+{
+    auto json = GpuDescriptor();
+    json["collision"]["mesh"] = {{"path", "Maps/SC_probe/Collision/proxy.obj"}};
+    request.buildPlan = MeshAssetValidator::BuildLoadPlan("SM_guides.json", json);
+    const std::filesystem::path objPath = root / "proxy.obj";
+    {
+        std::ofstream stream(objPath, std::ios::binary);
+        stream << "# fixture\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n";
+        ASSERT_TRUE(static_cast<bool>(stream));
+    }
+    request.absoluteCollisionMeshPath = objPath.u8string();
+
+    const ModelResource resource = Import(TfxFixture::Guides());
+    ASSERT_EQ(resource.sections.size(), 1u);
+    ASSERT_TRUE(resource.sections[0].tressfxSimulation.collisionMesh.has_value());
+    ASSERT_TRUE(resource.sections[0].tressfxCollisionMesh);
+    EXPECT_EQ(resource.sections[0].tressfxCollisionMesh->positions.size(), 3u);
+    EXPECT_EQ(resource.sections[0].tressfxCollisionMesh->indices.size(), 3u);
+}
+
+TEST_F(TressfxImport, MissingCollisionProxyFailsBeforePublishingSection)
+{
+    auto json = GpuDescriptor();
+    json["collision"]["mesh"] = {{"path", "Maps/SC_probe/Collision/missing.obj"}};
+    request.buildPlan = MeshAssetValidator::BuildLoadPlan("SM_guides.json", json);
+    request.absoluteCollisionMeshPath = (root / "missing.obj").u8string();
+    EXPECT_THROW(Import(TfxFixture::Guides()), std::runtime_error);
 }
 
 TEST_F(TressfxImport, RejectsUnrepresentableThicknessProduct)
