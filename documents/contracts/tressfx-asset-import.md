@@ -140,6 +140,26 @@ backend 写入模型缓存身份，同一个 `.tfx` 的 cpu/gpu 描述符不共�
 `simulation.enabled = false` 仍是静态中心线回退，两种 backend 都不分配模拟 buffer、
 不构造 solver、也不 dispatch。
 
+### 作者字段
+
+`simulation` 对象的字段、默认值与范围（校验失败时错误信息带 SM 资产路径）：
+
+| 字段 | 默认值 | 范围 | 含义 |
+| --- | --- | --- | --- |
+| `enabled` | 无对象时 false；对象内缺省 true | bool | false 为静态中心线回退。 |
+| `gravity` | `[0,-980,0]` | 3 个有限数 | 重力加速度，厘米/秒²。 |
+| `wind` | `[0,0,0]` | 3 个有限数 | **平均**风加速度，厘米/秒²；叠加有界阵风后进入积分。 |
+| `damping` | 0.995 | `[0,1]` | Verlet 速度保留系数。 |
+| `iterations` | 3 | `[1,16]` | 每个子步的约束扫描次数。 |
+| `rootFixedPoints` | 2 | `[0,32]` | 每根 guide 从根部起固定的点数。 |
+| `maxDt` | 0.033 | `(0,0.25]` | 每帧进入 accumulator 的壁钟增量上限，不是积分步长。 |
+| `bendStiffness` | 0.3 | `[0,1]` | 局部形状/弯曲约束强度；0 关闭。 |
+| `windGust` | 0.5 | `[0,1]` | 阵风幅度；`gust = 1 + windGust*sin(2π f t + guide*0.6180339)`。 |
+| `windFrequency` | 0.5 | `[0,10]` | 阵风频率 Hz；0 时相位固定。 |
+| `fixedStep` | 1/60 | `(0,0.1]` | 固定子步长，秒。 |
+| `maxSubsteps` | 4 | `[1,8]` | 每帧最多子步数；达到上限时丢弃 backlog。 |
+| `backend` | `"cpu"` | `"cpu"` / `"gpu"` | 参考 solver 或 compute dispatch。 |
+
 ### GPU 路径
 
 GPU backend 的位置 buffer 放在 device-local：current/previous/rest 都用
@@ -155,28 +175,66 @@ params UBO 每帧由主机改写，两种 backend 都保持 host-visible/coheren
 - previous positions：vec4，Verlet 上一帧位置。
 - rest positions：vec4.xyz = 静止中心线，w = 导入逆质量；kernel 用它判断固定点，
   不需要独立的质量数组。
-- 每个 frame-in-flight 槽一份 std140 params UBO：gravity+wind 加速度、
-  dt/damping/pointsPerGuide/rootFixedPoints、iterations/guideCount/pointCount、
-  maxDt。
+- 每个 frame-in-flight 槽一份 std140 params UBO：平均 gravity、平均 wind、
+  fixedStep/damping/pointsPerGuide/rootFixedPoints、iterations/guideCount/pointCount、
+  bendStiffness/windGust/windFrequency/frame-start simulationTime。`maxDt` 只由 Host
+  accumulator 使用，不进入 GPU。
 
 buffer 由 `RenderableObject` 拥有并随 World 资源包退休；`HairSimulationPass` 只拥有
-compute pipeline、descriptor pool 和逐对象 descriptor set 缓存，不拥有对象 buffer。
+compute pipeline、descriptor pool、逐对象 descriptor set 缓存和逐对象 accumulator/time。
 
 `shader/glsl/hair/tressfxGuideSim.comp` 一个 invocation 处理一整根 guide：
-`local_size_x = 64`，dispatch 为 `ceil(guideCount / 64)`。同一 guide 的点在 invocation
-内顺序读写，复刻 CPU `GuideSimulation::Step` 的 Verlet 积分与 Gauss-Seidel 长度投影
-顺序：`dt` clamp 到 `[0, maxDt]`、固定点复位 current/previous、`iterations` 次从根到梢
-扫描、逆质量加权、`1e-6` 退化段跳过、全固定段跳过。`iterations` 由资产边界限制在
-`[1, 16]`：GPU 上一个作者值会展开成一条长 dispatch，异常大值应当直接拒绝而不是 TDR。
-这样选择的并行度低于“每点一个线程 + 独立 constraint dispatch”的 TressFX 形态，但
-guide 之间无共享状态，数百到数千根 guide 已能填满 workgroup；guide 数量显著增长时再
-评估拆分 kernel。
+`local_size_x = 64`，每次 dispatch 为 `ceil(guideCount / 64)`。同一 guide 的点在
+invocation 内顺序读写，复刻 CPU `GuideSimulation::Substep` 的一次固定步积分与
+`iterations` 次约束扫描：固定点复位 current/previous、Verlet 积分、长度投影
+（逆质量加权、`1e-6` 退化段跳过、全固定段跳过），随后在同一 iteration 内执行弯曲
+约束。`iterations` 由资产边界限制在 `[1, 16]`：GPU 上一个作者值会展开成一条长
+dispatch，异常大值应当直接拒绝而不是 TDR。这样选择的并行度低于“每点一个线程 +
+独立 constraint dispatch”的 TressFX 形态，但 guide 之间无共享状态，数百到数千根
+guide 已能填满 workgroup；guide 数量显著增长时再评估拆分 kernel。
 
-dispatch 由 `RenderSystem::RecordHairSimulation` 在每帧 `renderPassOrdered` 循环之前、
-`RecordEnvironmentIbl` 之后录制一次，delta time 使用 `exposureDeltaSeconds`（渲染帧
-墙钟，clamp 到 `[1/240, 0.1]`）；CPU backend 使用游戏线程的 `simulationDelta`。两者的
-delta 来源不同是当前已知差异，且两种 backend 都不消费游戏暂停/time-scale（接入前就
-如此，不是 GPU 回归）。
+弯曲约束（每个 iteration、长度投影之后、顺序根→梢）：
+
+```text
+restOffset = rest[b] - 0.5 * (rest[a] + rest[c])
+target     = 0.5 * (pos[a] + pos[c]) + restOffset
+pos[b]    += (target - pos[b]) * bendStiffness
+```
+
+只处理 `1 <= local <= pointsPerGuide-2` 且 `IsFixed(local)` 为 false 的点；固定点
+不移动，也不做逆质量加权。使用 `restOffset` 而不是把三点拉成直线，是为了保存
+作者在 rest 姿态里写下的局部曲率：target 只把这份曲率平移到当前邻居中点上，约束
+抵抗形状变化，不把发丝吸向某个绝对位置。
+
+### 固定步与阵风时间
+
+两个 backend 使用同一 accumulator 规则：
+
+```text
+accumulator += clamp(frameDt, 0, maxDt)
+steps = 0
+while (accumulator >= fixedStep && steps < maxSubsteps) {
+    Substep(fixedStep)
+    accumulator -= fixedStep
+    ++steps
+}
+if (steps == maxSubsteps) accumulator = 0    // 丢弃 backlog，避免越积越慢
+t += steps * fixedStep                       // 本帧所有子步使用 frame-start t
+```
+
+`Step` 的公开签名不变；`Substep` 是原有的积分 + 约束体。`t` 只在帧内子步全部
+结束后推进一次，因此同一帧内所有子步的阵风相位相同；这是帧粒度的刻意简化。
+阵风 `gust` 有界（`|gust| <= 1 + windGust`），不会跨帧累积。GPU 端在
+`HairSimulationPass` 中逐对象维护相同的 accumulator/time 并录制 `steps` 次同一
+kernel dispatch；这 6 行算术在 CPU/GPU 各有一份，必须一起修改（GPU 侧尚无状态
+buffer）。
+
+`RecordHairSimulation` 仍每帧在所有图形 pass 之前调用一次；一个对象本帧可能录制
+0..`maxSubsteps` 次 dispatch，每次使用同一个 frame-start `simulationTime` 和
+`fixedStep`，params 只写一次。delta time 使用 `exposureDeltaSeconds`（渲染帧墙钟，
+clamp 到 `[1/240, 0.1]`）；CPU backend 使用游戏线程的 `simulationDelta`。两者的
+delta 来源不同是当前已知差异，且两种 backend 都不消费游戏暂停/time-scale（接入前
+就如此，不是 GPU 回归）。
 
 同步：
 
@@ -189,7 +247,10 @@ delta 来源不同是当前已知差异，且两种 backend 都不消费游戏�
 - dispatch 后 barrier 为 `COMPUTE_SHADER(WRITE)` →
   `VERTEX_SHADER(READ) | COMPUTE_SHADER(READ/WRITE)`，使本帧写入对本帧顶点读取和
   下一帧 dispatch 都可见。
-- 同一 graphics queue、命令缓冲提交顺序固定，因此这两个 barrier 足够；params UBO
+- 同一对象的多个子步是同一命令缓冲里的连续 dispatch；Vulkan 不会自动为它们建立
+  内存依赖，因此第 2 个子步起在每个 dispatch 前插入
+  `COMPUTE_SHADER(READ/WRITE)` → `COMPUTE_SHADER(READ/WRITE)` 的 barrier。
+- 同一 graphics queue、命令缓冲提交顺序固定，因此这些 barrier 足够；params UBO
   按 frame-in-flight 分槽，`BeginFrame` 等该槽 fence 回收后才由主机写入。
 
 `simulation.enabled = true` 且 backend = gpu 时，CPU 不构造 `GuideSimulation`，
@@ -197,12 +258,19 @@ delta 来源不同是当前已知差异，且两种 backend 都不消费游戏�
 回到普通 device-local 上传路径，不再逐帧 memcpy：vertex factory 只消费 SSBO 中心线，
 顶点位置不参与展开。
 
-CPU backend 保持接入前的行为：游戏线程 `GuideSimulation::Step` 后写 current SSBO；
-顶点 buffer 不参与动态位置。
+CPU backend 同样使用 `GuideSimulation::Step` 的固定步 accumulator：游戏线程按
+`clamp(frameDt, 0, maxDt)` 累积、消费 `fixedStep`、执行同样的长度与弯曲约束，然后
+写 current SSBO；顶点 buffer 不参与动态位置。
 
-CPU/GPU 的一致性是“相同操作顺序”，不是逐位相等：Eigen 与 GLSL 的 `sqrt` 舍入、
-编译器 FMA 融合和指令调度都可能产生末位差异；delta 来源也不同。没有 CPU 读回或
-结果交叉校验。
+CPU/GPU 的一致性是“相同操作顺序”，不是逐位相等：accumulator、`Substep`、长度投影、
+弯曲约束和阵风公式的顺序一致，但 Eigen 与 GLSL 的 `sqrt`/`sin` 舍入、编译器 FMA
+融合和指令调度都可能产生末位差异；frame delta 来源也不同。没有 CPU 读回或结果
+交叉校验。
+
+模拟状态是 per mesh asset 的：渲染器按 mesh key 共享同一个 `RenderableObject`，因此
+同一 `SM_*` 的多个场景 placement 共用一份位置 buffer、accumulator 和 simulation time。
+作者 `gravity`/`wind` 在资产局部空间求解，旋转 placement 不会旋转重力；当前没有
+per-instance 或 world-space simulation。
 
 `HairSimulationPass` 随 RenderGraph 状态创建、`SwapState` 移交、`Shutdown` 按 GPU
 epoch 退休，与 `AutoExposureCompute` 同生命周期。它使用
@@ -218,8 +286,9 @@ Verlet 速度仍然有效，且每帧 `dt` 已被限制到 `[0, maxDt]`。离线
 不调用 `RecordHairSimulation`，因此没有 dispatch。
 
 显式限制：没有 SDF/capsule 碰撞、VSP、root 骨骼蒙皮、follow hair、深度阴影、OIT、
-LOD 或固定步长子步进；`dt` 仍截断到 `[0, maxDt]` 并丢弃余量。GPU 路径没有碰撞、
-约束图或外部力场。
+LOD；没有 per-instance 或 world-space simulation。GPU 路径没有碰撞、约束图或外部
+力场。帧 dt 在进入 accumulator 前截断到 `[0, maxDt]`，超过 `maxSubsteps` 的 backlog
+直接丢弃；这两点是有意的稳定性边界，不是可累积的模拟时间。
 
 ## Female 正式静态关卡
 

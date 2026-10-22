@@ -116,6 +116,11 @@ RenderableObject::RenderableObject(
                 simulationConfig.iterations = section.tressfxSimulation.iterations;
                 simulationConfig.rootFixedPoints = section.tressfxSimulation.rootFixedPoints;
                 simulationConfig.maxDt = section.tressfxSimulation.maxDt;
+                simulationConfig.bendStiffness = section.tressfxSimulation.bendStiffness;
+                simulationConfig.windGust = section.tressfxSimulation.windGust;
+                simulationConfig.windFrequency = section.tressfxSimulation.windFrequency;
+                simulationConfig.fixedStep = section.tressfxSimulation.fixedStep;
+                simulationConfig.maxSubsteps = section.tressfxSimulation.maxSubsteps;
                 tressfxSimulation = std::make_unique<VL::Hair::GuideSimulation>(
                     std::move(restPositions),
                     tressfxGuideCount,

@@ -124,6 +124,85 @@ TEST(TressfxDescriptor, SimulationBackendParticipatesInMeshIdentity)
     EXPECT_NE(cpuPlan.modelCacheKey, gpuPlan.modelCacheKey);
 }
 
+TEST(TressfxDescriptor, SimulationQualityDefaults)
+{
+    auto json = Descriptor();
+    json["simulation"] = {{"enabled", true}};
+    const auto config =
+        MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json).tressfxSimulation;
+    EXPECT_FLOAT_EQ(config.bendStiffness, 0.3f);
+    EXPECT_FLOAT_EQ(config.windGust, 0.5f);
+    EXPECT_FLOAT_EQ(config.windFrequency, 0.5f);
+    EXPECT_FLOAT_EQ(config.fixedStep, 1.0f / 60.0f);
+    EXPECT_EQ(config.maxSubsteps, 4u);
+}
+
+TEST(TressfxDescriptor, SimulationQualityFieldsAcceptedAndPartOfIdentity)
+{
+    auto baselineJson = Descriptor();
+    baselineJson["simulation"] = nlohmann::json::object();
+    const auto baseline =
+        MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", baselineJson);
+
+    auto json = Descriptor();
+    json["simulation"] = {
+        {"bendStiffness", 0.7f},
+        {"windGust", 0.2f},
+        {"windFrequency", 2.0f},
+        {"fixedStep", 0.01f},
+        {"maxSubsteps", 6}};
+    const auto custom = MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json);
+    EXPECT_FLOAT_EQ(custom.tressfxSimulation.bendStiffness, 0.7f);
+    EXPECT_FLOAT_EQ(custom.tressfxSimulation.windGust, 0.2f);
+    EXPECT_FLOAT_EQ(custom.tressfxSimulation.windFrequency, 2.0f);
+    EXPECT_FLOAT_EQ(custom.tressfxSimulation.fixedStep, 0.01f);
+    EXPECT_EQ(custom.tressfxSimulation.maxSubsteps, 6u);
+    EXPECT_NE(custom.modelCacheKey, baseline.modelCacheKey);
+}
+
+TEST(TressfxDescriptor, SimulationRejectsInvalidBendAndWindControls)
+{
+    for (const float bendStiffness : {-0.1f, 1.1f})
+    {
+        auto json = Descriptor();
+        json["simulation"] = {{"bendStiffness", bendStiffness}};
+        EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json),
+            std::runtime_error);
+    }
+    for (const float windGust : {-0.1f, 1.1f})
+    {
+        auto json = Descriptor();
+        json["simulation"] = {{"windGust", windGust}};
+        EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json),
+            std::runtime_error);
+    }
+    for (const float windFrequency : {-1.0f, 11.0f})
+    {
+        auto json = Descriptor();
+        json["simulation"] = {{"windFrequency", windFrequency}};
+        EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json),
+            std::runtime_error);
+    }
+}
+
+TEST(TressfxDescriptor, SimulationRejectsInvalidFixedStepAndSubsteps)
+{
+    for (const float fixedStep : {0.0f, 0.11f})
+    {
+        auto json = Descriptor();
+        json["simulation"] = {{"fixedStep", fixedStep}};
+        EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json),
+            std::runtime_error);
+    }
+    for (const uint32_t maxSubsteps : {0u, 9u})
+    {
+        auto json = Descriptor();
+        json["simulation"] = {{"maxSubsteps", maxSubsteps}};
+        EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json),
+            std::runtime_error);
+    }
+}
+
 TEST(TressfxDescriptor, RejectsAssimpImportOptions)
 {
     auto json = Descriptor();

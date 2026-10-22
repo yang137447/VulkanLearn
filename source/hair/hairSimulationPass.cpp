@@ -1,5 +1,6 @@
 #include "hair/hairSimulationPass.h"
 
+#include <algorithm>
 #include <iostream>
 #include <stdexcept>
 #include <unordered_set>
@@ -53,6 +54,19 @@ void RecordPostDispatchBarrier(vk::CommandBuffer commandBuffer)
     commandBuffer.pipelineBarrier(
         vk::PipelineStageFlagBits::eComputeShader,
         vk::PipelineStageFlagBits::eVertexShader | vk::PipelineStageFlagBits::eComputeShader,
+        {}, barrier, nullptr, nullptr);
+}
+
+// 同一对象的多子步是同一命令缓冲里的连续 dispatch；Vulkan 不会自动为它们建立
+// 内存依赖，必须显式让前一子步的 current/previous 写入对后一子步可见。
+void RecordSubstepBarrier(vk::CommandBuffer commandBuffer)
+{
+    vk::MemoryBarrier barrier;
+    barrier.setSrcAccessMask(vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite)
+        .setDstAccessMask(vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite);
+    commandBuffer.pipelineBarrier(
+        vk::PipelineStageFlagBits::eComputeShader,
+        vk::PipelineStageFlagBits::eComputeShader,
         {}, barrier, nullptr, nullptr);
 }
 } // namespace
@@ -151,9 +165,8 @@ void HairSimulationPass::CreateObjectDescriptors(
         descriptors.params[slot] = object.GetTressfxParamsInfo(slot).buffer;
 }
 
-vk::DescriptorSet HairSimulationPass::EnsureObjectDescriptors(
-    RenderableObject& object,
-    uint32_t frameSlot)
+HairSimulationPass::ObjectDescriptors& HairSimulationPass::EnsureObjectDescriptors(
+    RenderableObject& object)
 {
     const RenderableObject* key = &object;
     auto cached = objectDescriptors.find(key);
@@ -166,7 +179,7 @@ vk::DescriptorSet HairSimulationPass::EnsureObjectDescriptors(
         for (uint32_t slot = 0; slot < GuideSimulationParamBufferCount && matches; ++slot)
             matches = descriptors.params[slot] == object.GetTressfxParamsInfo(slot).buffer;
         if (matches)
-            return descriptors.sets[frameSlot];
+            return cached->second;
         // 正常 World/graph 重建会新建本 pass，不会复用对象地址；句柄校验仍保留，
         // 用于在缓存意外过期时拒绝绑定旧 buffer。旧 set 留在池里，统一 reset 时释放。
         objectDescriptors.erase(cached);
@@ -174,9 +187,7 @@ vk::DescriptorSet HairSimulationPass::EnsureObjectDescriptors(
 
     ObjectDescriptors descriptors;
     CreateObjectDescriptors(object, descriptors);
-    const vk::DescriptorSet result = descriptors.sets[frameSlot];
-    objectDescriptors.emplace(key, descriptors);
-    return result;
+    return objectDescriptors.emplace(key, std::move(descriptors)).first->second;
 }
 
 void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
@@ -239,21 +250,45 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
     for (Dispatch& dispatch : dispatches)
     {
         RenderableObject& object = *dispatch.object;
+        ObjectDescriptors& state = EnsureObjectDescriptors(object);
+        const TressfxSimulationConfig& config = object.GetTressfxSimulationConfig();
+
+        // 与 CPU GuideSimulation::Step 相同的 accumulator 算术。这里刻意重复这 6 行：
+        // GPU 侧还没有跨帧状态 buffer，pass 的逐对象状态就是权威；两处必须一起改。
+        state.accumulator += std::clamp(deltaSeconds, 0.0f, config.maxDt);
+        uint32_t steps = 0;
+        while (state.accumulator >= config.fixedStep && steps < config.maxSubsteps)
+        {
+            state.accumulator -= config.fixedStep;
+            ++steps;
+        }
+        if (steps == config.maxSubsteps)
+            state.accumulator = 0.0f;
+        if (steps == 0)
+            continue;
+
+        // 一帧内所有子步共用 frame-start simulationTime 和 fixedStep，因此参数只写一次。
         const GuideSimulationParams params = MakeGuideSimulationParams(
-            object.GetTressfxSimulationConfig(),
+            config,
             dispatch.guideCount,
             object.GetTressfxPointsPerGuide(),
             dispatch.guideCount * object.GetTressfxPointsPerGuide(),
-            deltaSeconds);
+            state.simulationTime);
         object.WriteTressfxSimulationParams(params, frameSlot);
+        state.simulationTime += static_cast<float>(steps) * config.fixedStep;
 
-        const vk::DescriptorSet set = EnsureObjectDescriptors(object, frameSlot);
+        const vk::DescriptorSet set = state.sets[frameSlot];
         commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
             pipeline->GetPipelineLayout(), 0, set, nullptr);
         const uint32_t groupCount =
             (dispatch.guideCount + GuideSimulationWorkgroupSize - 1) /
             GuideSimulationWorkgroupSize;
-        pipeline->Dispatch(commandBuffer, groupCount, 1, 1);
+        for (uint32_t substep = 0; substep < steps; ++substep)
+        {
+            if (substep > 0)
+                RecordSubstepBarrier(commandBuffer);
+            pipeline->Dispatch(commandBuffer, groupCount, 1, 1);
+        }
     }
     RecordPostDispatchBarrier(commandBuffer);
 }

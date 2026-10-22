@@ -58,6 +58,11 @@ namespace
         config.iterations = simulation.value("iterations", config.iterations);
         config.rootFixedPoints = simulation.value("rootFixedPoints", config.rootFixedPoints);
         config.maxDt = simulation.value("maxDt", config.maxDt);
+        config.bendStiffness = simulation.value("bendStiffness", config.bendStiffness);
+        config.windGust = simulation.value("windGust", config.windGust);
+        config.windFrequency = simulation.value("windFrequency", config.windFrequency);
+        config.fixedStep = simulation.value("fixedStep", config.fixedStep);
+        config.maxSubsteps = simulation.value("maxSubsteps", config.maxSubsteps);
         if (simulation.contains("backend"))
         {
             // 只接受两个已实现的 backend；未知值必须在资产边界失败，而不是静默回退。
@@ -84,6 +89,30 @@ namespace
             config.maxDt <= 0.0f || config.maxDt > 0.25f)
             throw std::runtime_error(
                 "TressFX simulation has invalid damping/rootFixedPoints/maxDt: " +
+                std::string(meshAssetPath));
+        if (!std::isfinite(config.bendStiffness) || config.bendStiffness < 0.0f ||
+            config.bendStiffness > 1.0f)
+            throw std::runtime_error(
+                "TressFX simulation bendStiffness must be in [0, 1]: " +
+                std::string(meshAssetPath));
+        if (!std::isfinite(config.windGust) || config.windGust < 0.0f ||
+            config.windGust > 1.0f)
+            throw std::runtime_error(
+                "TressFX simulation windGust must be in [0, 1]: " +
+                std::string(meshAssetPath));
+        if (!std::isfinite(config.windFrequency) || config.windFrequency < 0.0f ||
+            config.windFrequency > 10.0f)
+            throw std::runtime_error(
+                "TressFX simulation windFrequency must be in [0, 10]: " +
+                std::string(meshAssetPath));
+        if (!std::isfinite(config.fixedStep) || config.fixedStep <= 0.0f ||
+            config.fixedStep > 0.1f)
+            throw std::runtime_error(
+                "TressFX simulation fixedStep must be in (0, 0.1]: " +
+                std::string(meshAssetPath));
+        if (config.maxSubsteps == 0 || config.maxSubsteps > 8)
+            throw std::runtime_error(
+                "TressFX simulation maxSubsteps must be in [1, 8]: " +
                 std::string(meshAssetPath));
     }
 
@@ -409,6 +438,11 @@ MeshAssetBuildPlan MeshAssetValidator::BuildLoadPlan(
                  << "|i=" << loadPlan.tressfxSimulation.iterations
                  << "|r=" << loadPlan.tressfxSimulation.rootFixedPoints
                  << "|dt=" << loadPlan.tressfxSimulation.maxDt
+                 << "|bend=" << loadPlan.tressfxSimulation.bendStiffness
+                 << "|gust=" << loadPlan.tressfxSimulation.windGust
+                 << "|freq=" << loadPlan.tressfxSimulation.windFrequency
+                 << "|fixed=" << loadPlan.tressfxSimulation.fixedStep
+                 << "|substeps=" << loadPlan.tressfxSimulation.maxSubsteps
                  << "|backend=" << (loadPlan.tressfxSimulation.backend ==
                         TressfxSimulationBackend::Gpu ? "gpu" : "cpu");
         loadPlan.modelCacheKey += identity.str();

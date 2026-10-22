@@ -7,6 +7,28 @@
 namespace VL::Hair
 {
 
+namespace
+{
+constexpr float TwoPi = 6.28318530717958647692f;
+// 黄金分割共轭：相邻 guide 的阵风相位不重合，避免整束发丝同步摆动。
+constexpr float GoldenRatioConjugate = 0.6180339f;
+}
+
+float WindGustFactor(const SimulationConfig& config, size_t guideIndex, float simulationTime)
+{
+    const float phase = static_cast<float>(guideIndex) * GoldenRatioConjugate;
+    return 1.0f + config.windGust *
+        std::sin(TwoPi * config.windFrequency * simulationTime + phase);
+}
+
+Eigen::Vector3f GuideAcceleration(
+    const SimulationConfig& config,
+    size_t guideIndex,
+    float simulationTime)
+{
+    return config.gravity + config.wind * WindGustFactor(config, guideIndex, simulationTime);
+}
+
 GuideSimulation::GuideSimulation(
     std::vector<Eigen::Vector3f> rest,
     size_t guides,
@@ -27,7 +49,16 @@ GuideSimulation::GuideSimulation(
         throw std::invalid_argument("Invalid TressFX guide simulation dimensions");
     if (!std::isfinite(config.damping) || config.damping < 0.0f ||
         config.damping > 1.0f || !std::isfinite(config.maxDt) || config.maxDt <= 0.0f ||
-        config.iterations == 0)
+        config.iterations == 0 ||
+        !std::isfinite(config.bendStiffness) || config.bendStiffness < 0.0f ||
+        config.bendStiffness > 1.0f ||
+        !std::isfinite(config.windGust) || config.windGust < 0.0f ||
+        config.windGust > 1.0f ||
+        !std::isfinite(config.windFrequency) || config.windFrequency < 0.0f ||
+        config.windFrequency > 10.0f ||
+        !std::isfinite(config.fixedStep) || config.fixedStep <= 0.0f ||
+        config.fixedStep > 0.1f ||
+        config.maxSubsteps == 0 || config.maxSubsteps > 8)
         throw std::invalid_argument("Invalid TressFX guide simulation config");
 }
 
@@ -41,35 +72,87 @@ void GuideSimulation::Reset()
 {
     positions = restPositions;
     previousPositions = restPositions;
+    accumulator = 0.0f;
+    simulationTime = 0.0f;
 }
 
-void GuideSimulation::ProjectLengths()
+void GuideSimulation::ProjectLengthsForGuide(size_t guide)
 {
-    for (uint32_t iteration = 0; iteration < config.iterations; ++iteration)
+    const size_t base = guide * pointsPerGuide;
+    for (size_t local = 0; local + 1 < pointsPerGuide; ++local)
     {
-        for (size_t guide = 0; guide < guideCount; ++guide)
+        const size_t a = base + local;
+        const size_t b = a + 1;
+        const Eigen::Vector3f delta = positions[b] - positions[a];
+        const float length = delta.norm();
+        const float restLength = (restPositions[b] - restPositions[a]).norm();
+        if (length <= 1.0e-6f || restLength <= 1.0e-6f)
+            continue;
+        const float wa = IsFixed(a) ? 0.0f : inverseMass[a];
+        const float wb = IsFixed(b) ? 0.0f : inverseMass[b];
+        const float weight = wa + wb;
+        if (weight <= 0.0f)
+            continue;
+        const Eigen::Vector3f correction = delta * ((length - restLength) / length);
+        if (wa > 0.0f)
+            positions[a] += correction * (wa / weight);
+        if (wb > 0.0f)
+            positions[b] -= correction * (wb / weight);
+    }
+}
+
+void GuideSimulation::ProjectBendForGuide(size_t guide)
+{
+    const float bendStiffness = config.bendStiffness;
+    if (bendStiffness <= 0.0f)
+        return;
+    const size_t base = guide * pointsPerGuide;
+    for (size_t local = 1; local + 1 < pointsPerGuide; ++local)
+    {
+        const size_t a = base + local - 1;
+        const size_t b = base + local;
+        const size_t c = base + local + 1;
+        if (IsFixed(b))
+            continue;
+        // 保存 rest 局部曲率，而不是把三点拉成直线：target 把作者曲率偏移
+        // 平移到当前邻居中点上，弯曲约束只抵抗形状变化，不引入绝对位置。
+        const Eigen::Vector3f restOffset =
+            restPositions[b] - 0.5f * (restPositions[a] + restPositions[c]);
+        const Eigen::Vector3f target =
+            0.5f * (positions[a] + positions[c]) + restOffset;
+        positions[b] += (target - positions[b]) * bendStiffness;
+    }
+}
+
+void GuideSimulation::Substep()
+{
+    const float dt = config.fixedStep;
+    const float dt2 = dt * dt;
+    for (size_t guide = 0; guide < guideCount; ++guide)
+    {
+        const size_t base = guide * pointsPerGuide;
+        const Eigen::Vector3f acceleration =
+            GuideAcceleration(config, guide, simulationTime);
+        for (size_t local = 0; local < pointsPerGuide; ++local)
         {
-            const size_t base = guide * pointsPerGuide;
-            for (size_t local = 0; local + 1 < pointsPerGuide; ++local)
+            const size_t point = base + local;
+            if (IsFixed(point))
             {
-                const size_t a = base + local;
-                const size_t b = a + 1;
-                const Eigen::Vector3f delta = positions[b] - positions[a];
-                const float length = delta.norm();
-                const float restLength = (restPositions[b] - restPositions[a]).norm();
-                if (length <= 1.0e-6f || restLength <= 1.0e-6f)
-                    continue;
-                const float wa = IsFixed(a) ? 0.0f : inverseMass[a];
-                const float wb = IsFixed(b) ? 0.0f : inverseMass[b];
-                const float weight = wa + wb;
-                if (weight <= 0.0f)
-                    continue;
-                const Eigen::Vector3f correction = delta * ((length - restLength) / length);
-                if (wa > 0.0f)
-                    positions[a] += correction * (wa / weight);
-                if (wb > 0.0f)
-                    positions[b] -= correction * (wb / weight);
+                positions[point] = restPositions[point];
+                previousPositions[point] = restPositions[point];
+                continue;
             }
+            const Eigen::Vector3f current = positions[point];
+            const Eigen::Vector3f velocity =
+                (positions[point] - previousPositions[point]) * config.damping;
+            previousPositions[point] = current;
+            positions[point] = current + velocity + acceleration * dt2;
+        }
+        // 与 GPU kernel 一致：每次 iteration 先长度投影，再做弯曲约束。
+        for (uint32_t iteration = 0; iteration < config.iterations; ++iteration)
+        {
+            ProjectLengthsForGuide(guide);
+            ProjectBendForGuide(guide);
         }
     }
 }
@@ -78,25 +161,18 @@ void GuideSimulation::Step(float dt)
 {
     if (paused)
         return;
-    dt = std::clamp(dt, 0.0f, config.maxDt);
-    if (dt <= 0.0f)
-        return;
-    const float dt2 = dt * dt;
-    const Eigen::Vector3f acceleration = config.gravity + config.wind;
-    for (size_t point = 0; point < positions.size(); ++point)
+    accumulator += std::clamp(dt, 0.0f, config.maxDt);
+    uint32_t steps = 0;
+    while (accumulator >= config.fixedStep && steps < config.maxSubsteps)
     {
-        if (IsFixed(point))
-        {
-            positions[point] = restPositions[point];
-            previousPositions[point] = restPositions[point];
-            continue;
-        }
-        const Eigen::Vector3f current = positions[point];
-        const Eigen::Vector3f velocity = (positions[point] - previousPositions[point]) * config.damping;
-        previousPositions[point] = current;
-        positions[point] = current + velocity + acceleration * dt2;
+        Substep();
+        accumulator -= config.fixedStep;
+        ++steps;
     }
-    ProjectLengths();
+    // 达到上限说明本帧的累计时间无法在预算内消费完；丢弃 backlog，避免越积越慢。
+    if (steps == config.maxSubsteps)
+        accumulator = 0.0f;
+    simulationTime += static_cast<float>(steps) * config.fixedStep;
 }
 
 } // namespace VL::Hair

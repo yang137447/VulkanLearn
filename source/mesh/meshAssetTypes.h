@@ -52,6 +52,14 @@ struct TressfxSimulationConfig
     uint32_t iterations = 3;
     uint32_t rootFixedPoints = 2;
     float maxDt = 0.033f;
+    // 局部形状/弯曲约束强度；0 关闭，1 每个 iteration 完全拉回 rest 偏移。
+    float bendStiffness = 0.3f;
+    // 有界阵风：gust = 1 + windGust * sin(2π f t + guide * goldenRatio)。
+    float windGust = 0.5f;
+    float windFrequency = 0.5f;
+    // 固定时间步与每帧最多子步数；accumulator 超出部分丢弃。
+    float fixedStep = 1.0f / 60.0f;
+    uint32_t maxSubsteps = 4;
     TressfxSimulationBackend backend = TressfxSimulationBackend::Cpu;
 };
 
