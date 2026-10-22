@@ -887,6 +887,14 @@ simulation CPU/GPU backend 解析与参数打包（GPU dispatch 不在模块套�
 的 `check` 核对生成场景，不把 Generated 探针当作 Maps 全量扫描。
 当前范围见 [TressFX 资产导入](tressfx-asset-import.md)。
 
+GPU guide 模拟的实机证据来自作者场景 `Maps/SC_tressfx_female/SC_tressfx_female_dynamic.json`：
+其 `SM_female_hair_dynamic.json` 作者 `simulation.backend = "gpu"`。在仓库根运行
+`build/bin/main.exe --initial-scene Maps/SC_tressfx_female/SC_tressfx_female_dynamic.json --frame-limit 30 --no-dev-ui`，
+日志应出现 `World/graph transaction committed` 与
+`[TressFX] GPU guide simulation dispatch: objects=1 guides=40334 points=1290688`，
+stderr 无 Vulkan validation 输出。该路径没有自动退出标志，验证后手动结束进程；
+模块套件不覆盖 dispatch，这条烟测是 GPU 路径的当前证据，不替代 CPU/GPU 逐像素对照。
+
 Female 正式关卡验证：`tool/hair/import_female_scene.py` 实际导入固定 Maya 归档，
 `vl_tfx_inspect` 通过 40,334 guides / 1,290,688 points / 7,502,124 indices；
 独立资源根重导入的 10 个文件逐字节一致，标准 scene API 保存过的 1 个 JSON
