@@ -18,6 +18,7 @@ enum class UiActionType
     LoadWorld,
     // stringValue 是资源根相对模型路径；GT 将其转为中性场景的 LoadWorld 注入请求。
     PreviewModel,
+    PreviewRetarget,
     PreviewMaterial,
     PreviewBlueprint,
     NavigateModelPreview,
@@ -132,6 +133,8 @@ struct UiAction
     int intValue = 0;
     float floatValue = 0.0f;
     std::string stringValue;
+    // PreviewRetarget: stringValue 为 RT 身份，此字段为作者指定的目标 SM；GT 核对二者绑定。
+    std::string retargetPreviewModel;
     uint64_t blueprintPreviewRevision = 0;
     ModelPreviewCameraInput previewCamera;
     BlueprintPreviewTransformInput blueprintTransform;

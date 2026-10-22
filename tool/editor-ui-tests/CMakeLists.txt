@@ -16,6 +16,7 @@ add_executable(editor_ui_tests
     contentBrowserTests.cpp
     contentBrowserPerformanceTests.cpp
     jsonAssetLibraryTests.cpp
+    retargetPreviewTests.cpp
     thumbnailLibraryTests.cpp
     rmlUiTextureTests.cpp
     "${PROJECT_SOURCE_DIR}/source/ui/rmlUiInterfaces.cpp"
@@ -34,6 +35,8 @@ add_executable(editor_ui_tests
     "${PROJECT_SOURCE_DIR}/source/editor/ui/editorSceneActorTree.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/assets/editorJsonAssetLibrary.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/assets/editorJsonAssetTypes.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/assets/editorRetargetPreview.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/ui/retargetAssetEditorPanel.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/materialInstanceAssetEditorPanel.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/blueprintAssetEditorPanel.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/blueprintLogicComponentsPanel.cpp"

@@ -256,6 +256,24 @@ bool DockWorkspace::Activate(const std::string& panel)
     return true;
 }
 
+std::string DockWorkspace::TabAfterClose(const std::string& panel,
+    const std::vector<std::string>& eligible, const std::string& fallback) const
+{
+    const uint32_t stack = FindStack(panel);
+    if (stack == 0 || state.nodes.at(stack).active != panel) return {};
+    const auto& tabs = state.nodes.at(stack).tabs;
+    const auto found = std::find(tabs.begin(), tabs.end(), panel);
+    // 统一采用右邻优先、再向左找的顺序；候选资格与退路由宿主提供，模型不解释资产类型。
+    for (auto next = found + 1; next != tabs.end(); ++next)
+        if (std::find(eligible.begin(), eligible.end(), *next) != eligible.end()) return *next;
+    for (auto previous = found; previous != tabs.begin();)
+    {
+        --previous;
+        if (std::find(eligible.begin(), eligible.end(), *previous) != eligible.end()) return *previous;
+    }
+    return FindStack(fallback) ? fallback : std::string();
+}
+
 void DockWorkspace::ReplaceReference(uint32_t from, uint32_t to)
 {
     if (state.root == from) state.root = to;
@@ -458,9 +476,20 @@ void DockWorkspace::LayoutNode(uint32_t id, DockRect rect, bool floating,
     LayoutNode(node.second, second, floating, collapsedStacks, output);
 }
 
-DockGeometry DockWorkspace::Layout(DockRect bounds, const std::vector<uint32_t>& collapsedStacks) const
+DockGeometry DockWorkspace::Layout(DockRect bounds, const std::vector<uint32_t>& collapsedStacks,
+    uint32_t maximizedStack) const
 {
     DockGeometry output;
+    if (maximizedStack != 0)
+    {
+        const auto found = state.nodes.find(maximizedStack);
+        if (found != state.nodes.end() && !found->second.IsSplit() &&
+            !IsSubtreeCollapsed(state, maximizedStack, collapsedStacks))
+        {
+            output.stacks.push_back({maximizedStack, bounds, false});
+            return output;
+        }
+    }
     LayoutNode(state.root, bounds, false, collapsedStacks, output);
     for (const auto& item : state.floating)
     {

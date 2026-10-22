@@ -58,6 +58,16 @@ protected:
     { std::ofstream(root / path) << value.dump(4) << "\n"; }
     Json Read(const std::string& path)
     { std::ifstream file(root / path); return Json::parse(file); }
+    void WriteRetargetInputs()
+    {
+        auto mesh = Read("SM_test.json");
+        mesh["skinning"] = {{"skeleton", "Skeletons/SK_test.json"}, {"clips", Json::array()}};
+        Write("SM_source.json", mesh);
+        Write("RT_test.json", {{"format", "vl.retarget.v1"}});
+        mesh["skinning"]["sourceModel"] = "SM_source.json";
+        mesh["skinning"]["retarget"] = "RT_test.json";
+        Write("SM_test.json", mesh);
+    }
     Json Request(const std::string& command, const std::string& path,
         std::optional<uint64_t> revision = {}, const Json& changes = nullptr)
     {
@@ -102,6 +112,74 @@ TEST_F(AssetDocumentTest, SkeletalMeshValidationRequiresClipReferences)
     EXPECT_NE(Run(Request("mesh.validate", "SM_test.json"))["status"], "succeeded");
     std::ofstream(root / "walk.fbx") << "Content preflight is separate";
     EXPECT_EQ(Run(Request("mesh.validate", "SM_test.json"))["status"], "succeeded");
+}
+
+TEST_F(AssetDocumentTest, RetargetMeshSavePreservesSourceAndProfileOutsideModifyCapabilities)
+{
+    WriteRetargetInputs();
+    const auto skinning = Read("SM_test.json")["skinning"];
+    ASSERT_EQ(Get("mesh", "SM_test.json")["status"], "succeeded");
+    ASSERT_EQ(Modify("mesh", "SM_test.json", 1,
+        Json::array({{{"field", "name"}, {"value", "Retarget target"}}}))["status"], "succeeded");
+    ASSERT_EQ(Run(Request("mesh.save", "SM_test.json", 2))["status"], "succeeded");
+    EXPECT_EQ(Read("SM_test.json")["skinning"], skinning);
+}
+
+TEST_F(AssetDocumentTest, RetargetMeshValidationRequiresProfileReference)
+{
+    WriteRetargetInputs();
+    std::filesystem::remove(root / "RT_test.json");
+    ASSERT_EQ(Get("mesh", "SM_test.json")["status"], "succeeded");
+    EXPECT_NE(Run(Request("mesh.validate", "SM_test.json"))["status"], "succeeded");
+}
+
+TEST_F(AssetDocumentTest, RetargetMeshValidationRejectsNonSkeletalSource)
+{
+    WriteRetargetInputs();
+    auto source = Read("SM_source.json");
+    source.erase("skinning");
+    Write("SM_source.json", source);
+    ASSERT_EQ(Get("mesh", "SM_test.json")["status"], "succeeded");
+    EXPECT_NE(Run(Request("mesh.validate", "SM_test.json"))["status"], "succeeded");
+}
+
+TEST_F(AssetDocumentTest, RetargetMeshValidationRejectsNestedSource)
+{
+    WriteRetargetInputs();
+    auto source = Read("SM_source.json");
+    source["skinning"]["sourceModel"] = "SM_other.json";
+    source["skinning"]["retarget"] = "RT_test.json";
+    Write("SM_source.json", source);
+    ASSERT_EQ(Get("mesh", "SM_test.json")["status"], "succeeded");
+    EXPECT_NE(Run(Request("mesh.validate", "SM_test.json"))["status"], "succeeded");
+}
+
+TEST_F(AssetDocumentTest, TressfxMeshSavePreservesRadiusOutsideModifyCapabilities)
+{
+    auto mesh = Read("SM_test.json");
+    mesh["type"] = "tressfx";
+    mesh["modelDataPath"] = "guides.tfx";
+    mesh["strandRadius"] = 0.035;
+    Write("SM_test.json", mesh);
+    std::ofstream(root / "guides.tfx") << "Content preflight is separate";
+    ASSERT_EQ(Get("mesh", "SM_test.json")["status"], "succeeded");
+    ASSERT_EQ(Modify("mesh", "SM_test.json", 1,
+        Json::array({{{"field", "name"}, {"value", "Renamed guides"}}}))["status"], "succeeded");
+    EXPECT_EQ(Run(Request("mesh.validate", "SM_test.json"))["status"], "succeeded");
+    ASSERT_EQ(Run(Request("mesh.save", "SM_test.json", 2))["status"], "succeeded");
+    EXPECT_EQ(Read("SM_test.json")["strandRadius"], 0.035);
+    EXPECT_EQ(Read("SM_test.json")["type"], "tressfx");
+}
+
+TEST_F(AssetDocumentTest, SceneReferencesAcceptTressfxMeshDescriptors)
+{
+    auto mesh = Read("SM_test.json");
+    mesh["type"] = "tressfx";
+    mesh["modelDataPath"] = "guides.tfx";
+    mesh["strandRadius"] = 0.035;
+    Write("SM_test.json", mesh);
+    ASSERT_EQ(Get("scene", "SC_test.json")["status"], "succeeded");
+    EXPECT_EQ(Run(Request("scene.validate", "SC_test.json"))["status"], "succeeded");
 }
 
 TEST_F(AssetDocumentTest, SkeletalMeshRejectsDuplicateClipIds)

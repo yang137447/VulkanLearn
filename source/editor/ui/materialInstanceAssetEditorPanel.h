@@ -14,6 +14,7 @@
 #include "editor/ui/editorContentBrowserController.h"
 #include "editor/ui/editorJsonInspectorController.h"
 #include "editor/ui/editorResourceEditorController.h"
+#include "editor/ui/retargetAssetEditorPanel.h"
 #include "editor/ui/editorSceneActorTree.h"
 #include "editor/ui/editorLogPanel.h"
 #include "editor/ui/blueprintViewportInteraction.h"
@@ -255,11 +256,16 @@ private:
     void RefreshResourceEditor();
     void RefreshDocumentTabs();
     void OpenResourceAsset(const std::string& path, EditorAssetKind kind);
-    void CloseActiveResource();
+    void RequestCloseResource(const std::string& path);
+    void CloseResource(const std::string& path);
+    void ActivateWorkspacePanel(const std::string& panel);
     void RequestResourceReload();
     void RequestActiveResourceMetadata();
     void RequestModelPreview(const std::string& path);
-    void RequestAssetPreview(const std::string& path, bool material);
+    void RequestAssetPreview(const std::string& path, bool material,
+        const std::string& retargetPath = {}, uint64_t retargetRevision = 0);
+    void RefreshRetargetAnimation(const EditorResourceEditorTab& tab);
+    void RefreshAnimationControls(const std::string& prefix, bool enabled);
     void RefreshMaterialPreview();
     bool IsMaterialEditorVisible() const;
     uint64_t CurrentMaterialPreviewGeneration() const;
@@ -281,6 +287,10 @@ private:
     float previewPointerY = 0;
     uint64_t previewDragGeneration = 0;
     std::string requestedPreviewPath;
+    std::string requestedRetargetPath;
+    uint64_t requestedRetargetRevision = 0, initializedRetargetGeneration = 0;
+    std::string reloadingRetargetPath;
+    uint64_t reloadingRetargetRevision = 0;
     std::string levelWorldPath;
     uint64_t requestedPreviewGeneration = 0;
     bool requestedPreviewMaterial = false;
@@ -309,6 +319,7 @@ private:
     EditorJsonInspectorController jsonInspector;
     EditorJsonInspectorController resourceJsonInspector;
     EditorResourceEditorController resourceEditor;
+    RetargetAssetEditorPanel retargetEditor;
     EditorLogPanel logPanel;
     bool viewingJson = false;
     bool resourceEditorVisible = false;
@@ -385,6 +396,8 @@ private:
     bool activateMaterialDocument = false;
     std::string localStatus;
     std::string pendingClosePath;
+    std::string closingMaterialPath;
+    std::string panelAfterMaterialClose;
     bool saveThenClose = false;
     bool saveCloseSubmitted = false;
     bool refreshingControls = false;

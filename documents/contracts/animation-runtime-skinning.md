@@ -25,12 +25,27 @@ DefaultLevel 的静态 LOD0、源贴图、重建材质、静态高度网格与 L
 
 ```json
 "skinning": {
-  "root": "root",
+  "skeleton": "Maps/SC_gasp/Skeletons/SK_UEFN_Mannequin.json",
   "clips": [{"id": "Walk", "path": "Maps/SC_gasp/Source/M_Neutral_Walk_Loop_F.fbx"}]
 }
 ```
 
-clips 是有序数组，id 不可重复，空数组表示绑定姿态。静态 section 过滤及补法线
+clips 是有序数组，id 不可重复，空数组表示绑定姿态。retarget 目标资产的
+sections、render skeleton、palette、IK 和 bounds 始终属于目标网格；播放时由
+`player.Asset().AnimationAsset()` 读取 source asset 的 clips/montages，再由预编译的
+`CompiledRetarget` 把 source 局部姿态转换到目标骨架。该转换支持不同骨长和不同
+rest axes，并消费 profile 可选的 `sourcePose` / `targetPose` 局部旋转校准。
+省略时沿用两侧 bind pose；未映射的目标 joint 保持目标校准参考的局部 TRS 并继承父骨动作。
+原始 bind/inverse bind 不改写；格式、右乘约定与根限制见
+[资产导入契约](animation-asset-import.md)。它不等价于 IK 或接触修正，
+后两者仍是独立的后处理阶段。
+
+retarget 目标的 `skinning` 声明 `skeleton`、空 `clips`、可选空 `montages`、
+`sourceModel` 和 `retarget`。source clip、Montage、catalog、预览片段选择均来自
+source asset。Motion warp 的 Bone provider 仍按 source skeleton 和 source clip
+解释；retarget 只改变渲染/目标 palette，不改变 source root-motion 和 warp 的语义。
+
+静态 section 过滤及补法线
 选项不能用于此路径。文档校验检查源文件与 clip 引用，完整骨架/权重校验在正式导入时执行。
 标准资产修改 API 保留该扩展但不开放 skinning 字段编辑。
 实时加载要求材质 `VL_SKINNED_MESH=1` 与模型蒙皮类型一致。
@@ -324,6 +339,17 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
 
 双击骨骼 SM 使用既有模型资源标签和独立预览 World，标题显示 Skeletal Mesh，
 提供播放/暂停图标、有序片段选择与时间 slider。静态标签隐藏这些控件。
+双击 `RT_*.json` 则打开只读 Retarget 参考姿态页，按显式 SK 预览引用显示绑定/
+校准骨架、关键关节局部轴和位置/方向测量；计算复用 `CompiledRetarget` 的
+`SourceReference()` / `TargetReference()`。
+配置 `preview.targetModelPath` 后默认进入 Animation，源/目标真实网格在同一预览
+World 内按厘米尺度并排显示；目标 SM 必须绑定当前 RT，源从其 `sourceModel` 取得。
+片段、播放/暂停和 seek 同时控制两边，各 section 共享所属模型的原生播放器；
+`previewClip` 使用正式 `Play(..., inPlace=true)`，避免根运动使模型走出视野。
+该命令只接受带成对源身份的 `SC_model_preview`；普通 `clip` 的根运动语义不变。
+Reference Pose 切换保留参考检查，静态测量不随动画变化，也不冒充动态关节误差。
+预览不执行足底 IK/接触修正；源与目标各自一个时钟，使用同一 World delta 与控制请求同步。
+具体输入与测量边界见 [UI 组件体系](ui-component-system.md#retarget-参考姿态标签)。
 UI 只发 generation-gated 值请求，GT 验证；刷新控件不产生业务命令。
 预览按厘米 scale=1 放置，静态预览的既有比例不变。
 关卡内动画可通过 [调试命令](debug-runtime-commands.md) 暂停、seek、切片段。

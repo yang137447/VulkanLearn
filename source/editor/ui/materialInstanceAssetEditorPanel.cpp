@@ -445,8 +445,19 @@ bool MaterialInstanceAssetEditorPanel::ValidateDocument(Rml::ElementDocument& ca
         "log-scripts-page", "log-scripts-prev", "log-scripts-next",
         "workspace-viewport-tab", "workspace-outliner-tab", "workspace-details-tab",
         "workspace-resource-tab", "workspace-resource-icon", "workspace-resource-label",
-        "resource-editor", "resource-editor-toolbar", "resource-reload", "resource-close", "resource-preview-panel",
+        "resource-editor", "resource-editor-toolbar", "resource-reload", "resource-preview-panel",
         "blueprint-asset-editor", "blueprint-asset-save", "blueprint-asset-revert",
+        "retarget-asset-editor", "retarget-title", "retarget-identity", "retarget-status",
+        "retarget-bind", "retarget-calibrated", "retarget-front", "retarget-side", "retarget-top",
+        "retarget-anchor", "retarget-surface", "retarget-lines", "retarget-mappings",
+        "retarget-focus", "retarget-fit", "retarget-zoom", "retarget-all-bones",
+        "retarget-selection", "retarget-measurement", "retarget-prev", "retarget-next", "retarget-page",
+        "retarget-reference", "retarget-animation", "retarget-reference-toolbar", "retarget-reference-workspace",
+        "retarget-hierarchy", "retarget-hierarchy-source", "retarget-hierarchy-target", "retarget-details",
+        "retarget-editor-workspace", "retarget-center", "retarget-sidebar", "retarget-animation-assets",
+        "retarget-animation-workspace", "retarget-preview-surface", "retarget-preview-image", "retarget-preview-status",
+        "retarget-animation-tools", "retarget-animation-play", "retarget-animation-pause", "retarget-animation-clip",
+        "retarget-animation-time", "retarget-animation-status", "retarget-animation-frame",
         "resource-preview-title", "resource-preview-kind", "resource-preview-surface",
         "resource-preview-icon", "resource-preview-status", "resource-preview-path",
         "resource-preview-image",
@@ -528,6 +539,7 @@ bool MaterialInstanceAssetEditorPanel::Attach(Rml::ElementDocument& candidate, s
     docking.SetPanelVisible("viewport", true);
     docking.Activate("viewport");
     widgetDocument.Attach(candidate);
+    retargetEditor.Attach(candidate);
     if (!contentBrowser.Attach(candidate, error))
     {
         Detach();
@@ -595,6 +607,7 @@ void MaterialInstanceAssetEditorPanel::Detach()
         document = nullptr;
     }
     widgetDocument.Detach();
+    retargetEditor.Detach();
     axisIndicatorSignature.clear();
     // 重新 Attach 时 DOM 是新的：让大纲第一帧无条件重挂一次。
     outlinerMounted = false;
@@ -842,8 +855,22 @@ void MaterialInstanceAssetEditorPanel::Build(const MaterialInstanceEditorSnapsho
     }
     saveAwaitingSnapshot = false;
     // 文档集合由服务拥有，停靠标签只是投影；关卡/贴图页面不会被每帧刷新抢走。
+    const bool closingMaterialActive = !closingMaterialPath.empty() &&
+        docking.IsPanelActive(MaterialPanelId(closingMaterialPath));
     RefreshDocumentTabs();
-    if ((activateMaterialDocument || previousDocument != snapshot.selectedDocumentPath) &&
+    bool materialClosed = !closingMaterialPath.empty();
+    for (const auto& tab : snapshot.documentTabs)
+        if (tab.assetPath == closingMaterialPath) materialClosed = false;
+    if (materialClosed)
+    {
+        // MI 关闭由 GT 确认；确认后才切邻页，不能被服务内部的 MI 选择覆盖跨类型邻居。
+        const std::string next = std::move(panelAfterMaterialClose);
+        closingMaterialPath.clear();
+        panelAfterMaterialClose.clear();
+        activateMaterialDocument = false;
+        if (closingMaterialActive) ActivateWorkspacePanel(next);
+    }
+    else if ((activateMaterialDocument || previousDocument != snapshot.selectedDocumentPath) &&
         !snapshot.selectedDocumentPath.empty())
     {
         docking.SetPanelVisible(MaterialPanelId(snapshot.selectedDocumentPath), true);
@@ -2213,36 +2240,66 @@ void MaterialInstanceAssetEditorPanel::OpenResourceAsset(
     docking.Activate(ResourcePanelId(path));
 }
 
-void MaterialInstanceAssetEditorPanel::CloseActiveResource()
+void MaterialInstanceAssetEditorPanel::RequestCloseResource(const std::string& path)
 {
-    const auto* active = resourceEditor.ActiveTab();
-    if (active == nullptr) return;
-    if (active->kind == EditorAssetKind::Blueprint)
+    for (const auto& tab : resourceEditor.Tabs())
     {
-        const auto* authored = BlueprintDocument(active->path);
-        if ((authored && authored->dirty) || pendingBlueprintPath == active->path)
+        if (tab.path != path) continue;
+        const auto* authored = tab.kind == EditorAssetKind::Blueprint ? BlueprintDocument(path) : nullptr;
+        if ((authored && authored->dirty) || pendingBlueprintPath == path)
         {
             FlushBlueprintAssetEdits();
-            pendingClosePath = active->path;
+            pendingClosePath = path;
             pendingCloseKind = EditorAssetKind::Blueprint;
             saveThenClose = saveCloseSubmitted = false;
             discardBlueprintThenClose = discardBlueprintCloseSubmitted = false;
             return;
         }
+        CloseResource(path);
+        return;
     }
-    resourceEditor.Close(active->path);
-    resourceEditorVisible = resourceEditor.ActiveTab() != nullptr;
-    if (!resourceEditorVisible) ReturnToLevel();
-    if (!resourceEditorVisible) localStatus.clear();
+}
+
+void MaterialInstanceAssetEditorPanel::CloseResource(const std::string& path)
+{
+    const std::string next = docking.PanelAfterClose(ResourcePanelId(path));
+    resourceEditor.Close(path);
+    // 后台关闭只移除标签，不切预览 World，也不覆盖当前页面的选择。
     RefreshResourceEditor();
-    const auto* next = resourceEditor.ActiveTab();
-    if (next != nullptr)
+    if (!next.empty()) ActivateWorkspacePanel(next);
+}
+
+void MaterialInstanceAssetEditorPanel::ActivateWorkspacePanel(const std::string& panel)
+{
+    if (panel == "viewport")
     {
-        RequestActiveResourceMetadata();
-        docking.Activate(ResourcePanelId(next->path));
-        if (next->kind == EditorAssetKind::Mesh && !HasCurrentModelPreview())
-            RequestModelPreview(next->path);
+        docking.SetPanelVisible("viewport", true);
+        ReturnToLevel();
+        return;
     }
+    const std::string path = docking.ResourcePathForPanel(panel);
+    if (path.empty()) return;
+    FlushPendingEdits();
+    FlushBlueprintAssetEdits();
+    viewingJson = false;
+    docking.SetPanelVisible(panel, true);
+    docking.Activate(panel);
+    if (panel.rfind("resource:material:", 0) == 0)
+    {
+        resourceEditorVisible = false;
+        EditorCommandEnvelope command;
+        command.type = EditorCommandType::SelectMaterialInstanceDocument;
+        command.payload = MaterialInstanceAssetPathPayload{path};
+        Submit(std::move(command));
+        return;
+    }
+    if (!resourceEditor.Activate(path)) return;
+    resourceEditorVisible = true;
+    RequestActiveResourceMetadata();
+    const auto* active = resourceEditor.ActiveTab();
+    if (active && active->kind == EditorAssetKind::Mesh && !HasCurrentModelPreview())
+        RequestModelPreview(path);
+    RefreshResourceEditor();
 }
 
 void MaterialInstanceAssetEditorPanel::RequestActiveResourceMetadata()
@@ -2257,6 +2314,13 @@ void MaterialInstanceAssetEditorPanel::RequestActiveResourceMetadata()
 void MaterialInstanceAssetEditorPanel::RequestResourceReload()
 {
     const auto* tab = resourceEditor.ActiveTab();
+    if (tab && tab->kind == EditorAssetKind::Retarget && tab->snapshot)
+    {
+        // GT 的 loading 快照可能晚一帧；请求发出就封住旧图像，直到新元数据 revision 到达。
+        reloadingRetargetPath = tab->path;
+        reloadingRetargetRevision = tab->snapshot->revision;
+        previewDragButton = -1;
+    }
     if (tab && tab->kind == EditorAssetKind::Blueprint)
     {
         if (!pendingBlueprintPath.empty()) { localStatus = "Save or revert pending edits before reloading."; return; }
@@ -2277,7 +2341,8 @@ void MaterialInstanceAssetEditorPanel::RequestModelPreview(const std::string& pa
     RequestAssetPreview(path, false);
 }
 
-void MaterialInstanceAssetEditorPanel::RequestAssetPreview(const std::string& path, bool material)
+void MaterialInstanceAssetEditorPanel::RequestAssetPreview(const std::string& path, bool material,
+    const std::string& retargetPath, uint64_t retargetRevision)
 {
     previewDragButton = -1;
     if (runtimeActionSink == nullptr) return;
@@ -2285,14 +2350,19 @@ void MaterialInstanceAssetEditorPanel::RequestAssetPreview(const std::string& pa
         std::filesystem::path(runtimeView.activeWorldPath).filename() != "SC_model_preview.json")
         levelWorldPath = runtimeView.activeWorldPath;
     requestedPreviewPath = path;
+    requestedRetargetPath = retargetPath;
+    requestedRetargetRevision = retargetRevision;
+    initializedRetargetGeneration = 0;
     requestedPreviewMaterial = material;
     requestedPreviewBlueprint = false;
     requestedPreviewGeneration = 0;
     for (const auto& actor : OutlinerActors())
         requestedPreviewGeneration = std::max(requestedPreviewGeneration, actor.worldGeneration);
     UiAction request;
-    request.type = material ? UiActionType::PreviewMaterial : UiActionType::PreviewModel;
-    request.stringValue = path;
+    request.type = material ? UiActionType::PreviewMaterial : retargetPath.empty() ?
+        UiActionType::PreviewModel : UiActionType::PreviewRetarget;
+    request.stringValue = retargetPath.empty() ? path : retargetPath;
+    if (!retargetPath.empty()) request.retargetPreviewModel = path;
     runtimeActionSink->RequestRuntimeAction(std::move(request));
 }
 
@@ -2366,14 +2436,30 @@ uint64_t MaterialInstanceAssetEditorPanel::CurrentModelPreviewGeneration() const
 {
     if (requestedPreviewMaterial) return 0;
     const auto* active = resourceEditor.ActiveTab();
-    if (active == nullptr || active->kind != EditorAssetKind::Mesh ||
-        active->path != requestedPreviewPath) return 0;
+    if (!active) return 0;
+    if (active->kind == EditorAssetKind::Retarget)
+    {
+        if (!retargetEditor.AnimationVisible() || active->loading || !active->snapshot ||
+            !active->snapshot->retargetPreview || active->path != requestedRetargetPath ||
+            active->snapshot->revision != requestedRetargetRevision) return 0;
+    }
+    else if (active->kind != EditorAssetKind::Mesh || active->path != requestedPreviewPath) return 0;
     // JSON 读取完成不能证明 GPU 模型已加载；只在新预览 World 的冻结快照发布后展示。
     for (const auto& actor : OutlinerActors())
         if (actor.worldGeneration > requestedPreviewGeneration &&
             actor.sceneObjectIdentity == "preview_model" &&
             std::filesystem::path(actor.scenePath).filename() == "SC_model_preview.json")
+        {
+            if (active->kind == EditorAssetKind::Retarget)
+            {
+                bool paired = false;
+                for (const auto& source : OutlinerActors())
+                    paired |= source.worldGeneration == actor.worldGeneration &&
+                        source.sceneObjectIdentity == "preview_retarget_source|" + requestedRetargetPath;
+                if (!paired) continue;
+            }
             return actor.worldGeneration;
+        }
     return 0;
 }
 
@@ -2449,7 +2535,8 @@ bool MaterialInstanceAssetEditorPanel::ProcessModelPreviewInput(Rml::Event& even
     if (previewDragGeneration != generation) previewDragButton = -1;
     const bool imageHit = event.GetTargetElement() == document->GetElementById(
         IsMaterialEditorVisible() ? "material-preview-image" :
-            requestedPreviewBlueprint ? "blueprint-asset-preview-image" : "resource-preview-image");
+            requestedPreviewBlueprint ? "blueprint-asset-preview-image" :
+                !requestedRetargetPath.empty() ? "retarget-preview-image" : "resource-preview-image");
     const auto& type = event.GetType();
     const float x = event.GetParameter<float>("mouse_x", 0);
     const float y = event.GetParameter<float>("mouse_y", 0);
@@ -2562,7 +2649,7 @@ void MaterialInstanceAssetEditorPanel::RefreshDocumentTabs()
         const auto* actor = tab.kind == EditorAssetKind::Blueprint ? BlueprintDocument(tab.path) : nullptr;
         tabs.push_back({ResourcePanelId(tab.path), tab.path,
             std::filesystem::path(tab.path).filename().string() + (actor && actor->dirty ? " *" : ""),
-            EditorAssetKindIcon(tab.kind)});
+            EditorAssetKindIcon(tab.kind), -1});
     }
     for (size_t index = 0; index < snapshot.documentTabs.size(); ++index)
     {
@@ -2574,6 +2661,67 @@ void MaterialInstanceAssetEditorPanel::RefreshDocumentTabs()
     docking.SetResourceTabs(tabs);
 }
 
+void MaterialInstanceAssetEditorPanel::RefreshAnimationControls(const std::string& prefix, bool enabled)
+{
+    SetDisabled(prefix + "-play", !enabled || runtimeView.animationPlaying || runtimeView.animationClips.empty());
+    SetDisabled(prefix + "-pause", !enabled || !runtimeView.animationPlaying);
+    SetDisabled(prefix + "-clip", !enabled || runtimeView.animationClips.empty());
+    SetDisabled(prefix + "-time", !enabled || runtimeView.animationDuration <= 0);
+    if (!enabled) { SetMarkup(prefix + "-status", ""); return; }
+    SetMarkup(prefix + "-status", Text(std::to_string(runtimeView.animationJointCount) +
+        " joints | " + SceneActorNumber(runtimeView.animationTime) + " / " +
+        SceneActorNumber(runtimeView.animationDuration) + " s"));
+    std::string options;
+    for (size_t i = 0; i < runtimeView.animationClips.size(); ++i)
+        options += "<option value=\"" + std::to_string(i) + "\">" + Text(runtimeView.animationClips[i]) + "</option>";
+    widgetDocument.SetMarkup(prefix + "-clip", options);
+    widgetDocument.SetControlValue(prefix + "-clip", std::to_string(runtimeView.animationClip));
+    auto* timeline = document->GetElementById(prefix + "-time");
+    if (timeline != document->GetContext()->GetFocusElement())
+    {
+        timeline->SetAttribute("max", SceneActorNumber(runtimeView.animationDuration));
+        widgetDocument.SetControlValue(prefix + "-time", SceneActorNumber(runtimeView.animationTime));
+    }
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshRetargetAnimation(const EditorResourceEditorTab& tab)
+{
+    const auto values = !tab.loading && tab.snapshot ? tab.snapshot->retargetPreview : nullptr;
+    const bool visible = retargetEditor.AnimationVisible() && IsResourceEditorVisible();
+    if (visible && values && runtimeActionSink &&
+        (requestedRetargetPath != tab.path || requestedRetargetRevision != tab.snapshot->revision ||
+            requestedPreviewPath != values->targetModelPath || requestedPreviewBlueprint))
+    {
+        RequestAssetPreview(values->targetModelPath, false, tab.path, tab.snapshot->revision);
+    }
+    const uint64_t generation = visible ? CurrentModelPreviewGeneration() : 0;
+    const bool animated = generation && runtimeView.animationWorldGeneration == generation &&
+        runtimeView.animationJointCount != 0;
+    widgetDocument.SetProperty("retarget-preview-image", "display", generation ? "block" : "none");
+    widgetDocument.SetProperty("retarget-preview-status", "display", generation ? "none" : "block");
+    SetMarkup("retarget-preview-status", Text(values ? "Loading paired model preview..." :
+        tab.snapshot && !tab.snapshot->previewDiagnostic.empty() ? tab.snapshot->previewDiagnostic :
+        "Animation preview requires preview.targetModelPath"));
+    RefreshAnimationControls("retarget-animation", animated);
+    std::string assets;
+    if (animated)
+        for (size_t index = 0; index < runtimeView.animationClips.size(); ++index)
+            assets += UiWidgets::ListRow({"animation-browser-clip", index}, runtimeView.animationClips[index],
+                index == runtimeView.animationClip, "icons/play.png");
+    SetMarkup("retarget-animation-assets", std::move(assets));
+    SetDisabled("retarget-animation-frame", !generation);
+    if (animated && initializedRetargetGeneration != generation && !runtimeView.animationClips.empty())
+    {
+        initializedRetargetGeneration = generation;
+        UiAction action;
+        action.type = UiActionType::ControlAnimationPreview;
+        action.previewCamera.worldGeneration = generation;
+        action.stringValue = "previewClip";
+        action.floatValue = static_cast<float>(runtimeView.animationClip);
+        runtimeActionSink->RequestRuntimeAction(std::move(action));
+    }
+}
+
 void MaterialInstanceAssetEditorPanel::RefreshResourceEditor()
 {
     if (document == nullptr) return;
@@ -2581,10 +2729,29 @@ void MaterialInstanceAssetEditorPanel::RefreshResourceEditor()
     RefreshDocumentTabs();
     const auto* active = resourceEditor.ActiveTab();
     const bool blueprintAsset = active && active->kind == EditorAssetKind::Blueprint;
+    const bool retargetAsset = active && active->kind == EditorAssetKind::Retarget;
+    widgetDocument.SetClass("resource-editor", "retarget-active", retargetAsset);
     for (const char* id : {"blueprint-asset-editor", "blueprint-asset-save", "blueprint-asset-revert"})
         widgetDocument.SetProperty(id, "display", blueprintAsset ? "block" : "none");
-    widgetDocument.SetProperty("resource-preview-panel", "display", blueprintAsset ? "none" : "flex");
-    widgetDocument.SetProperty("resource-details-panel", "display", blueprintAsset ? "none" : "flex");
+    widgetDocument.SetProperty("retarget-asset-editor", "display", retargetAsset ? "flex" : "none");
+    widgetDocument.SetProperty("resource-preview-panel", "display", blueprintAsset || retargetAsset ? "none" : "flex");
+    widgetDocument.SetProperty("resource-details-panel", "display", blueprintAsset || retargetAsset ? "none" : "flex");
+    if (retargetAsset)
+    {
+        for (const char* id : {"resource-model-tools", "resource-texture-tools"})
+            widgetDocument.SetClass(id, "visible", false);
+        SetDisabled("resource-reload", active->loading);
+        auto visibleTab = *active;
+        if (reloadingRetargetPath == active->path)
+        {
+            if (active->snapshot && active->snapshot->revision > reloadingRetargetRevision)
+                reloadingRetargetPath.clear();
+            else visibleTab.loading = true;
+        }
+        retargetEditor.Build(visibleTab);
+        RefreshRetargetAnimation(visibleTab);
+        return;
+    }
     if (blueprintAsset)
     {
         for (const char* id : {"resource-model-tools", "resource-texture-tools"})
@@ -2601,23 +2768,7 @@ void MaterialInstanceAssetEditorPanel::RefreshResourceEditor()
     widgetDocument.SetProperty("resource-motion-features", "display", animated ? "block" : "none");
     if (animated)
     {
-        SetDisabled("resource-animation-play", runtimeView.animationPlaying || runtimeView.animationClips.empty());
-        SetDisabled("resource-animation-pause", !runtimeView.animationPlaying);
-        SetMarkup("resource-animation-status", Text(std::to_string(runtimeView.animationJointCount) +
-            " joints | " + SceneActorNumber(runtimeView.animationTime) + " / " +
-            SceneActorNumber(runtimeView.animationDuration) + " s"));
-        std::string options;
-        for (size_t i = 0; i < runtimeView.animationClips.size(); ++i)
-            options += "<option value=\"" + std::to_string(i) + "\">" +
-                Text(runtimeView.animationClips[i]) + "</option>";
-        widgetDocument.SetMarkup("resource-animation-clip", options);
-        widgetDocument.SetControlValue("resource-animation-clip", std::to_string(runtimeView.animationClip));
-        auto* timeline = document->GetElementById("resource-animation-time");
-        if (timeline != document->GetContext()->GetFocusElement())
-        {
-            timeline->SetAttribute("max", SceneActorNumber(runtimeView.animationDuration));
-            widgetDocument.SetControlValue("resource-animation-time", SceneActorNumber(runtimeView.animationTime));
-        }
+        RefreshAnimationControls("resource-animation", true);
         SetMarkup("resource-motion-status", Text(runtimeView.animationFeatureStatus));
         // 固定通道结构，只更新数值 span；播放时不重建整表或改变 Details 滚动位置。
         std::string rows;
@@ -3120,12 +3271,11 @@ void MaterialInstanceAssetEditorPanel::CloseDocument(
     {
         if (policy == EditorDirtyDocumentPolicy::DiscardChanges)
             SubmitBlueprintAssetCommand(EditorCommandType::RevertBlueprintDocument, path);
-        resourceEditor.Close(path);
-        resourceEditorVisible = resourceEditor.ActiveTab() != nullptr;
-        RefreshResourceEditor();
-        if (!resourceEditorVisible) ReturnToLevel();
+        CloseResource(path);
         return;
     }
+    closingMaterialPath = path;
+    panelAfterMaterialClose = docking.PanelAfterClose(MaterialPanelId(path));
     EditorCommandEnvelope command;
     command.type = EditorCommandType::CloseMaterialInstanceAsset;
     command.payload = CloseMaterialInstanceAssetPayload{path, policy};
@@ -3334,8 +3484,23 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
     }
     else if (action == "material-frame") RequestPreviewCamera(ModelPreviewNavigation::Frame);
     else if (action == "json-close") ShowMaterialDetails();
-    else if (action == "resource-close") CloseActiveResource();
     else if (action == "resource-frame") RequestPreviewCamera(ModelPreviewNavigation::Frame);
+    else if (action == "animation-browser-clip")
+    {
+        const auto* active = resourceEditor.ActiveTab();
+        const size_t index = element.GetAttribute<size_t>("data-index", runtimeView.animationClips.size());
+        if (active && active->kind == EditorAssetKind::Retarget && index < runtimeView.animationClips.size() &&
+            CurrentModelPreviewGeneration() && runtimeView.animationWorldGeneration == CurrentModelPreviewGeneration() &&
+            runtimeActionSink)
+        {
+            UiAction request;
+            request.type = UiActionType::ControlAnimationPreview;
+            request.previewCamera.worldGeneration = CurrentModelPreviewGeneration();
+            request.stringValue = "previewClip";
+            request.floatValue = static_cast<float>(index);
+            runtimeActionSink->RequestRuntimeAction(std::move(request));
+        }
+    }
     else if (action == "animation-play" || action == "animation-pause" ||
         action == "animation-clip" || action == "animation-time")
     {
@@ -3345,13 +3510,17 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
             UiAction request;
             request.type = UiActionType::ControlAnimationPreview;
             request.previewCamera.worldGeneration = CurrentModelPreviewGeneration();
-            request.stringValue = action == "animation-clip" ? "clip" :
+            request.stringValue = action == "animation-clip" ?
+                (!requestedRetargetPath.empty() ? "previewClip" : "clip") :
                 action == "animation-time" ? "seek" : "play";
             request.floatValue = action == "animation-play" ? 1.0f : 0.0f;
             if (action == "animation-clip" || action == "animation-time")
             {
-                auto* control = document->GetElementById(
-                    action == "animation-clip" ? "resource-animation-clip" : "resource-animation-time");
+                const auto* active = resourceEditor.ActiveTab();
+                const std::string prefix = active && active->kind == EditorAssetKind::Retarget ?
+                    "retarget-animation" : "resource-animation";
+                auto* control = document->GetElementById(prefix +
+                    (action == "animation-clip" ? "-clip" : "-time"));
                 try { request.floatValue = std::stof(ControlValue(*control)); }
                 catch (...) { return; }
             }
@@ -3541,9 +3710,24 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
         command.payload = MaterialInstanceAssetPathPayload{snapshot.documentTabs[index].assetPath};
         Submit(std::move(command));
     }
-    else if (action == "close" && index < snapshot.documentTabs.size())
+    else if (action == "close")
     {
-        const auto& tab = snapshot.documentTabs[index];
+        const std::string targetPanel = element.GetAttribute<std::string>("data-key", "");
+        const std::string targetPath = docking.ResourcePathForPanel(targetPanel);
+        if (!targetPath.empty() && targetPanel.rfind("resource:material:", 0) != 0)
+        {
+            RequestCloseResource(targetPath);
+            return;
+        }
+        size_t closeIndex = index;
+        if (!targetPanel.empty())
+        {
+            closeIndex = snapshot.documentTabs.size();
+            for (size_t candidate = 0; candidate < snapshot.documentTabs.size(); ++candidate)
+                if (snapshot.documentTabs[candidate].assetPath == targetPath) closeIndex = candidate;
+        }
+        if (closeIndex >= snapshot.documentTabs.size()) return;
+        const auto& tab = snapshot.documentTabs[closeIndex];
         if (tab.dirty || (!pendingEdits.empty() && pendingAssetPath == tab.assetPath))
         {
             FlushPendingEdits();
@@ -4140,7 +4324,8 @@ void MaterialInstanceAssetEditorPanel::OpenBrowserAsset(const std::string& path)
         Submit(std::move(command));
     }
     else if (kind == EditorAssetKind::Mesh || kind == EditorAssetKind::Texture ||
-        kind == EditorAssetKind::Terrain || kind == EditorAssetKind::Blueprint)
+        kind == EditorAssetKind::Terrain || kind == EditorAssetKind::Blueprint ||
+        kind == EditorAssetKind::Retarget)
     {
         OpenResourceAsset(path, kind);
     }
@@ -4270,28 +4455,7 @@ void MaterialInstanceAssetEditorPanel::ProcessEvent(Rml::Event& event)
     if (docking.ProcessEvent(event, HasModal()))
     {
         const std::string activatedPanel = docking.ConsumeActivatedPanel();
-        if (activatedPanel == "viewport") ReturnToLevel();
-        const std::string path = docking.ResourcePathForPanel(activatedPanel);
-        if (activatedPanel.rfind("resource:material:", 0) == 0)
-        {
-            FlushPendingEdits();
-            viewingJson = false;
-            resourceEditorVisible = false;
-            EditorCommandEnvelope command;
-            command.type = EditorCommandType::SelectMaterialInstanceDocument;
-            command.payload = MaterialInstanceAssetPathPayload{path};
-            Submit(std::move(command));
-        }
-        else if (!path.empty() && resourceEditor.Activate(path))
-        {
-            FlushBlueprintAssetEdits();
-            RequestActiveResourceMetadata();
-            resourceEditorVisible = true;
-            const auto* active = resourceEditor.ActiveTab();
-            if (active != nullptr && active->kind == EditorAssetKind::Mesh && !HasCurrentModelPreview())
-                RequestModelPreview(path);
-            RefreshResourceEditor();
-        }
+        ActivateWorkspacePanel(activatedPanel);
         event.StopPropagation();
         return;
     }
@@ -4323,7 +4487,8 @@ void MaterialInstanceAssetEditorPanel::ProcessEvent(Rml::Event& event)
     if (event.GetType() == "click" && (action == "save-file" || action == "script-physics-trigger" ||
         action == "blueprint-asset-instance" || action == "blueprint-asset-physics-trigger" ||
         action == "blueprint-asset-component-instance" || action == "blueprint-asset-snap-enabled" ||
-        action == "log-autoscroll" || action == "animation-clip" || action == "animation-time" ||
+        action == "log-autoscroll" || action == "retarget-all-bones" || action == "retarget-zoom" ||
+        action == "animation-clip" || action == "animation-time" ||
         action == "motion-debug" || action == "debug-draw-enabled" || action == "debug-draw-category" ||
         action == "debug-draw-owner")) return;
     // 选中菜单条目后收起菜单；标题自己决定展开还是收起，不能在这里先清空。
@@ -4331,6 +4496,14 @@ void MaterialInstanceAssetEditorPanel::ProcessEvent(Rml::Event& event)
     try
     {
         std::optional<std::string> openAssetPath;
+        const auto* activeResource = resourceEditor.ActiveTab();
+        if (IsResourceEditorVisible() && activeResource &&
+            activeResource->kind == EditorAssetKind::Retarget && retargetEditor.ProcessEvent(event))
+        {
+            RefreshResourceEditor();
+            event.StopPropagation();
+            return;
+        }
         if (logPanel.ProcessEvent(event))
         {
             event.StopPropagation();

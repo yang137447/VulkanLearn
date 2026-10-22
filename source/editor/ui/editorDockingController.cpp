@@ -17,6 +17,7 @@
 #include <RmlUi/Core/Event.h>
 
 #include "ui/widgets/text/textWidgets.h"
+#include "ui/widgets/navigation/tabWidgets.h"
 
 namespace VL::EditorUi
 {
@@ -76,12 +77,9 @@ std::string ResourceTabMarkup(const EditorDockResourceTab& tab)
     const std::string label = tab.label.empty()
         ? std::filesystem::path(tab.path).filename().string()
         : tab.label;
-    std::string markup = "<img class=\"resource-tab-icon\" src=\"" + Text(tab.icon) +
-        "\"/><span class=\"resource-tab-label\">" + Text(label) + "</span>";
-    if (tab.documentIndex >= 0)
-        markup += "<span class=\"tab-close\" data-action=\"close\" data-index=\"" +
-            std::to_string(tab.documentIndex) + "\" title=\"Close Material Instance\">x</span>";
-    return markup;
+    const size_t index = tab.documentIndex >= 0 ? static_cast<size_t>(tab.documentIndex) : 0;
+    return DocumentTabContent(label, {"workspace-tab", index, 0, tab.panel},
+        {"close", index, 0, tab.panel}, false, tab.icon);
 }
 
 // 每个标签的内容都在这里生成，且**永不产出空标签**：resource 文档面板若在 resourceTabs
@@ -650,12 +648,11 @@ void EditorDockingController::RebuildShell()
     std::string resourceMarkup;
     for (const auto& tab : resourceTabs)
     {
-        resourceMarkup += "<button id=\"" + TabId(tab.panel) +
+        resourceMarkup += "<div id=\"" + TabId(tab.panel) +
             "\" data-workspace-panel=\"" + Text(tab.panel) +
-            "\" title=\"" + Text(tab.path) + "\" class=\"workspace-asset-tab " +
-            (tab.documentIndex >= 0 ? "workspace-material-tab" : "workspace-resource-tab") + "\">";
-        resourceMarkup += "<img src=\"" + Text(tab.icon) +
-            "\"/><span>" + Text(tab.label) + "</span></button>";
+            "\" title=\"" + Text(tab.path) + "\" class=\"document-tab workspace-asset-tab " +
+            (tab.documentIndex >= 0 ? "workspace-material-tab" : "workspace-resource-tab") + "\">" +
+            ResourceTabMarkup(tab) + "</div>";
     }
     document->GetElementById("dock-dynamic-tabs")->SetInnerRML(resourceMarkup);
     std::string markup;
@@ -703,15 +700,33 @@ void EditorDockingController::RebuildShell()
     structureDirty = false;
 }
 
+uint32_t EditorDockingController::ExpandedAssetStack() const
+{
+    for (const auto& tab : resourceTabs)
+        if (tab.panel == activeWorkspacePanel && IsPanelVisible(tab.panel))
+        {
+            const uint32_t stack = workspace.FindStack(tab.panel);
+            if (stack && workspace.State().nodes.at(stack).active == tab.panel) return stack;
+        }
+    return 0;
+}
+
 void EditorDockingController::ApplyGeometry()
 {
     const std::vector<uint32_t> collapsed = CollapsedStacks();
-    geometry = workspace.Layout(Bounds(), collapsed);
+    const uint32_t expanded = ExpandedAssetStack();
+    // 各类资产共用完整工作区，只扩大呈现矩形，不改写关卡停靠树、隐藏偏好或持久化比例。
+    geometry = workspace.Layout(Bounds(), collapsed, expanded);
     // 整组隐藏的标签组不进入几何，也不渲染成空灰框；重新显示时由下一次 Sync 放回原位。
     for (const auto& item : workspace.State().nodes)
     {
-        if (item.second.IsSplit()) continue;
-        const bool folded = std::find(collapsed.begin(), collapsed.end(), item.first) != collapsed.end();
+        if (item.second.IsSplit())
+        {
+            widgets.SetProperty("dock-split-" + std::to_string(item.first), "display", expanded ? "none" : "block");
+            continue;
+        }
+        const bool folded = expanded ? item.first != expanded :
+            std::find(collapsed.begin(), collapsed.end(), item.first) != collapsed.end();
         widgets.SetProperty("dock-stack-" + std::to_string(item.first), "display", folded ? "none" : "flex");
     }
     int floatingZ = 5;
@@ -741,13 +756,15 @@ void EditorDockingController::ApplyGeometry()
 void EditorDockingController::ApplyTabs()
 {
     std::unordered_map<std::string, bool> bodyActive;
+    const uint32_t expanded = ExpandedAssetStack();
     for (const auto& item : workspace.State().nodes)
     {
         if (item.second.IsSplit()) continue;
         for (const auto& panel : item.second.tabs)
         {
             const bool visible = IsPanelVisible(panel);
-            const bool active = visible && item.second.active == panel;
+            const bool active = visible && item.second.active == panel &&
+                (expanded == 0 || expanded == item.first);
             const std::string bodyId = BodyId(panel);
             bodyActive[bodyId] = bodyActive[bodyId] || active;
             widgets.SetClass(TabId(panel), "selected", active);
@@ -839,12 +856,9 @@ void EditorDockingController::SetResourceTabs(
         savePending = true;
     }
 
-    // 同步文档列表不能抢走当前页面；激活只由打开、切换和关闭动作驱动。
-    if (document != nullptr)
-    {
-        if (changed) Sync();
-        else ApplyTabs();
-    }
+    // 标签关闭也从标签子按钮派发；结构变化只能等下一次 Sync，不能销毁正在派发的祖先。
+    // 同步列表不抢当前页，激活仍只由打开、切换和确认关闭驱动。
+    if (document != nullptr && !changed) ApplyTabs();
 }
 
 std::string EditorDockingController::ConsumeActivatedPanel()
@@ -860,8 +874,9 @@ void EditorDockingController::Activate(const std::string& panel)
     if (!IsPanelVisible(panel)) return;
     if (workspace.Activate(panel))
     {
+        activeWorkspacePanel = panel;
         savePending = true;
-        if (document != nullptr) ApplyTabs();
+        if (document != nullptr) { ApplyGeometry(); ApplyTabs(); }
     }
 }
 
@@ -872,9 +887,19 @@ std::string EditorDockingController::ResourcePathForPanel(const std::string& pan
     return {};
 }
 
+std::string EditorDockingController::PanelAfterClose(const std::string& panel) const
+{
+    if (!IsPanelActive(panel)) return {};
+    std::vector<std::string> eligible;
+    for (const auto& tab : resourceTabs)
+        if (IsPanelVisible(tab.panel)) eligible.push_back(tab.panel);
+    return workspace.TabAfterClose(panel, eligible, "viewport");
+}
+
 void EditorDockingController::Reset()
 {
     CancelDrag();
+    activeWorkspacePanel = "viewport";
     workspace.Reset();
     std::vector<std::string> panels;
     for (const auto& tab : resourceTabs) panels.push_back(tab.panel);
@@ -1020,6 +1045,8 @@ bool EditorDockingController::ProcessEvent(Rml::Event& event, bool modal)
     }
     if (type == "mousedown" && event.GetParameter<int>("button", 0) == 0)
     {
+        // 扩展页仍可点标签返回关卡；停靠拖动须在关卡布局中进行。
+        if (ExpandedAssetStack()) return false;
         startX = x;
         startY = y;
         suppressClick = false;
@@ -1049,6 +1076,11 @@ UiViewportRect EditorDockingController::GetSceneViewportRect() const
     auto* image = document->GetElementById("material-preview-image");
     if (image == nullptr || !image->IsVisible(true))
         image = document->GetElementById("resource-preview-image");
+    if (image == nullptr || !image->IsVisible(true))
+        image = document->GetElementById("retarget-preview-image");
+    // 成对模型发布前图像仍隐藏，但相机首次取景已经需要实际预览区域的宽高比。
+    if (image == nullptr || !image->IsVisible(true))
+        image = document->GetElementById("retarget-preview-surface");
     if (image == nullptr || !image->IsVisible(true))
         image = document->GetElementById("blueprint-asset-preview-surface");
     if (image == nullptr || !image->IsVisible(true))

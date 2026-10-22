@@ -5,6 +5,7 @@
 #include "../../common/function.glsl"
 #include "../materialContext.glsl"
 #include "../skinnedVertexFactory.glsl"
+#include "../tressfxVertexFactory.glsl"
 
 layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inNormal;
@@ -17,6 +18,10 @@ layout(location = 5) in vec4 inSpeedTreeWindBranch1;
 layout(location = 6) in vec4 inSpeedTreeWindBranch2;
 
 layout(location = 0) out MaterialVaryings v2f;
+#if defined(VL_TRESSFX_STRANDS) && VL_TRESSFX_STRANDS
+// MaterialVaryings 占用 0..7；独立 flat 数据只服务发丝覆盖，不污染共享材质上下文。
+layout(location = 8) flat out uint strandCoverageSeed;
+#endif
 
 void main()
 {
@@ -33,6 +38,10 @@ void main()
     vec3 previousLocalPosition = vertexInput.localPosition;
 #if defined(VL_SKINNED_MESH) && VL_SKINNED_MESH
     previousLocalPosition = ApplySkinnedVertexFactory(vertexInput);
+#endif
+#if defined(VL_TRESSFX_STRANDS) && VL_TRESSFX_STRANDS
+    ApplyTressfxVertexFactory(vertexInput);
+    strandCoverageSeed = uint(gl_VertexIndex) / 2u;
 #endif
     MaterialVertex vertex = EvaluateMaterialVertex(vertexInput);
     mat4 modelMatrix = uboM.model;

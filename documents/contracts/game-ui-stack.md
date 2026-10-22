@@ -49,7 +49,12 @@ Destructive validation workflows remain console/launch operations, not buttons.
   save/preview controls and document status.
 - Central Blueprint tabs: Components tree, real 3D viewport and Details for class/defaults,
   Instance Editable permissions, component transforms, mesh/camera configuration and root physics.
-- Bottom left/center: Content Browser (MI/Mesh/Scene/Texture/Terrain/Blueprint JSON sources
+- Central Retarget tabs: read-only source/target bind and calibrated skeleton overlays,
+  orthographic views, mapped joint selection, local axes and anchored position/chain measurements.
+  An optional target SM reference also enables side-by-side source/target animated meshes with
+  shared clip, play/pause and seek controls through the existing preview World.
+  Reference values come from the asset worker; animation uses the production retarget and skinning path.
+- Bottom left/center: Content Browser (MI/Mesh/Scene/Texture/Terrain/Blueprint/Retarget JSON sources
   tree, breadcrumbs, search, type filter, tiles/list, sorting, size and explicit
   refresh controls) / Renderer
   (offline controls) / Log (Output and Scripts) tabs; switching only changes presentation.

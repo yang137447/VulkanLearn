@@ -2,6 +2,9 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <cmath>
+#include <iomanip>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 
@@ -282,10 +285,11 @@ MeshAssetBuildPlan MeshAssetValidator::BuildLoadPlan(
 
     MeshAssetBuildPlan loadPlan;
     loadPlan.assetType = ReadRequiredString(effectiveMeshAssetJson, "type", meshAssetPath);
-    if (loadPlan.assetType != "mesh" && loadPlan.assetType != "speedtree")
+    if (loadPlan.assetType != "mesh" && loadPlan.assetType != "speedtree" &&
+        loadPlan.assetType != "tressfx")
     {
         throw std::runtime_error(
-            "Mesh asset type must be \"mesh\" or \"speedtree\": " +
+            "Mesh asset type must be \"mesh\", \"speedtree\" or \"tressfx\": " +
             std::string(meshAssetPath));
     }
     loadPlan.meshAssetPath = std::string(meshAssetPath);
@@ -296,6 +300,28 @@ MeshAssetBuildPlan MeshAssetValidator::BuildLoadPlan(
         loadPlan.modelDataPath);
     loadPlan.materialSlots = ReadMaterialSlots(effectiveMeshAssetJson, meshAssetPath, loadPlan.modelDataPath);
     loadPlan.modelCacheKey = loadPlan.modelDataPath;
+    if (loadPlan.assetType == "tressfx")
+    {
+        // 半径是作者数据，在描述符边界收口；shader 不逐帧修补非法宽度。
+        if (!effectiveMeshAssetJson.contains("strandRadius") ||
+            !effectiveMeshAssetJson.at("strandRadius").is_number())
+            throw std::runtime_error("TressFX mesh requires numeric strandRadius: " +
+                std::string(meshAssetPath));
+        const double radius = effectiveMeshAssetJson.at("strandRadius").get<double>();
+        loadPlan.strandRadius = static_cast<float>(radius);
+        if (!std::isfinite(radius) || !std::isfinite(loadPlan.strandRadius) ||
+            loadPlan.strandRadius <= 0.0f)
+            throw std::runtime_error("TressFX strandRadius must be finite and positive: " +
+                std::string(meshAssetPath));
+        if (std::filesystem::path(loadPlan.modelDataPath).extension() != ".tfx" ||
+            loadPlan.materialSlots.size() != 1 || effectiveMeshAssetJson.contains("importOptions"))
+            throw std::runtime_error(
+                "TressFX requires a .tfx source, one material slot and no importOptions: " +
+                std::string(meshAssetPath));
+        std::ostringstream identity;
+        identity << "|tressfx-static-v1|radius=" << std::hexfloat << loadPlan.strandRadius;
+        loadPlan.modelCacheKey += identity.str();
+    }
     if (effectiveMeshAssetJson.contains("skinning"))
     {
         const auto& skinning = effectiveMeshAssetJson.at("skinning");
@@ -321,6 +347,32 @@ MeshAssetBuildPlan MeshAssetValidator::BuildLoadPlan(
                 "Mesh skinning requires skinning.skeleton to identify the skeleton: " +
                 std::string(meshAssetPath));
         loadPlan.modelCacheKey += "|skeleton=" + loadPlan.skeletonPath;
+
+        if (skinning.contains("sourceModel"))
+        {
+            loadPlan.animationSourceModelPath = ReadOptionalAnimationJsonPath(
+                skinning, "sourceModel", meshAssetPath, loadPlan.modelDataPath);
+            if (loadPlan.animationSourceModelPath == loadPlan.meshAssetPath)
+                throw std::runtime_error(
+                    "Mesh skinning.sourceModel must not reference the target mesh asset: " +
+                    std::string(meshAssetPath));
+            loadPlan.modelCacheKey += "|animationSourceModel=" +
+                loadPlan.animationSourceModelPath;
+            if (!skinning.contains("retarget"))
+                throw std::runtime_error(
+                    "Mesh skinning.sourceModel requires skinning.retarget: " +
+                    std::string(meshAssetPath));
+        }
+        if (skinning.contains("retarget"))
+        {
+            loadPlan.retargetProfilePath = ReadOptionalAnimationJsonPath(
+                skinning, "retarget", meshAssetPath, loadPlan.modelDataPath);
+            if (loadPlan.animationSourceModelPath.empty())
+                throw std::runtime_error(
+                    "Mesh skinning.retarget requires skinning.sourceModel: " +
+                    std::string(meshAssetPath));
+            loadPlan.modelCacheKey += "|retarget=" + loadPlan.retargetProfilePath;
+        }
 
         for (const auto& clip : skinning.at("clips"))
         {
@@ -378,6 +430,11 @@ MeshAssetBuildPlan MeshAssetValidator::BuildLoadPlan(
                 loadPlan.animationMontages.push_back(std::move(montagePlan));
             }
         }
+        if (!loadPlan.animationSourceModelPath.empty() &&
+            (!loadPlan.animationClips.empty() || !loadPlan.animationMontages.empty()))
+            throw std::runtime_error(
+                "Retargeted target mesh must not declare target-owned clips or montages; "
+                "author them on skinning.sourceModel: " + std::string(meshAssetPath));
     }
     if (loadPlan.importOptions.generateSmoothNormals)
     {

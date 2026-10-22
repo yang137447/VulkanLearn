@@ -89,9 +89,13 @@ sliderarrowdec, sliderarrowinc { display: none; }
 /* 外层宽度不能依赖 flex:1 子节点的固有尺寸，否则标签正文会被布局成零宽。 */
 .document-tab { display: flex; flex-shrink: 0; width: 200px; height: 28px; }
 .document-tab .list-item {
-    width: auto; flex: 1; min-width: 0;
+    display: flex; align-items: center; width: auto; flex: 1; min-width: 0; flex-shrink: 1;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+.document-tab .tab-label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.document-tab .row-icon { flex-shrink: 0; width: 16px; height: 16px; margin-right: 6px; }
+.document-tab .tab-close { min-width: 0; }
+.document-tab .tab-close:hover { background-color: #56565c; }
 .tab-close { flex-shrink: 0; width: 24px; box-sizing: border-box; background-color: transparent; border-width: 0; padding: 4px 6px; }
 .segmented, .command-row { display: flex; margin: 5px 0; }
 .segmented button { flex: 1; min-width: 0; }

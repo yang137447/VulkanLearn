@@ -13,6 +13,10 @@
 #endif
 
 layout(location = 0) in MaterialVaryings v2f;
+#if defined(VL_TRESSFX_STRANDS) && VL_TRESSFX_STRANDS
+#include "../tressfxCoverage.glsl"
+layout(location = 8) flat in uint strandCoverageSeed;
+#endif
 
 #if VL_MATERIAL_OUTPUT_GBUFFER
 layout(location = 0) out vec4 outGBufferA;
@@ -37,6 +41,13 @@ void main()
 {
     MaterialFunctionContext context = CreateMaterialFunctionContext(v2f);
     MaterialInputs inputs = EvaluateMaterialInputs(context);
+#if defined(VL_TRESSFX_STRANDS) && VL_TRESSFX_STRANDS
+    // 裁除在 Pass 中统一执行；失败的样本不写深度或选中标记。
+    // 保留样本是全覆盖，不能再 alpha 混合一次，否则期望颜色会被重复乘覆盖率。
+    if (inputs.opacity <= TressfxCoverageThreshold(uvec2(gl_FragCoord.xy), strandCoverageSeed))
+        discard;
+    inputs.opacity = 1.0;
+#endif
     MaterialSurface surface = ResolveMaterialSurface(inputs, context);
 
     // Coverage 是 Pass 行為：所有需要 Alpha Clip 的 pass 都在消費 Surface 後統一執行。

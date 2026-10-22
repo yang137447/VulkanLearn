@@ -43,6 +43,8 @@ std::shared_ptr<SkeletalAsset> MakeAsset()
     asset->mesh.joints = {{"root", -1, Eigen::Matrix4f::Identity(), Eigen::Matrix4f::Identity()}};
     SkinSection section;
     Vertex vertex{};
+    // Vertex 的 Eigen 成员不会由空构造函数清零；bounds 夹具必须提供真实位置。
+    vertex.position = Eigen::Vector3f::Zero();
     section.vertices.push_back(vertex);
     section.influenceOffsets = {0, 1};
     section.influences = {{0, 1}};

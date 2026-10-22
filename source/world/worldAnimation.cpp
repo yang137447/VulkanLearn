@@ -12,6 +12,7 @@
 #include <iomanip>
 #include <set>
 #include <algorithm>
+#include <filesystem>
 
 namespace VL
 {
@@ -133,7 +134,7 @@ nlohmann::json World::ScriptAnimationCatalog() const
             if (found != players.end())
             {
                 auto clips = nlohmann::json::array();
-                for (const auto& clip : found->second->Asset().clips) clips.push_back(clip.id);
+                for (const auto& clip : found->second->Asset().AnimationAsset().clips) clips.push_back(clip.id);
                 result[node.at("modelPath").get<std::string>()] = std::move(clips);
             }
         }
@@ -179,7 +180,7 @@ nlohmann::json World::ScriptAnimationFeedback() const
             if (found != players.end())
             {
                 const auto& player = *found->second;
-                const auto& clips = player.Asset().clips;
+                const auto& clips = player.Asset().AnimationAsset().clips;
                 nlohmann::json feedback{{"owner", actor.at("id")}, {"component", ScriptComponentId(node)},
                     {"clip", clips.empty() ? "" : clips.at(player.SelectedClip()).id},
                     {"time", player.Time()}, {"duration", player.Duration()},
@@ -281,6 +282,9 @@ void World::ApplyScriptAnimationRequests(const nlohmann::json& actor, const nloh
         auto candidate = *player;
         if (request.value("mode", std::string()) == "motionMatching")
         {
+            if (player->Asset().IsRetargeted())
+                throw std::invalid_argument(
+                    "Motion Matching on retargeted assets requires a source-space pose history");
             const std::string sourcePath = request.at("database");
             if (!request.at("allowedClips").is_array() || request.at("allowedClips").size() > 256 ||
                 !request.at("actionLocked").is_boolean() ||
@@ -695,7 +699,7 @@ std::shared_ptr<const Animation::MotionDebugView> World::CaptureMotionDebug() co
                         view->playbackTime = player.PlaybackPosition();
                         view->playbackDuration = player.Duration();
                         view->playbackPlaying = player.IsPlaying();
-                        const auto& clips = player.Asset().clips;
+                        const auto& clips = player.Asset().AnimationAsset().clips;
                         view->playbackClipId = clips.empty() ? "" : clips.at(player.SelectedClip()).id;
                         break;
                     }
@@ -837,15 +841,24 @@ bool World::ControlScriptAnimation(uint64_t expectedGeneration, const std::strin
 bool World::ControlAnimation(uint64_t expectedGeneration, const std::string& command, float value)
 {
     if (expectedGeneration != generation || !std::isfinite(value)) return false;
-    if (command != "play" && command != "seek" && command != "clip") return false;
+    if (command != "play" && command != "seek" && command != "clip" && command != "previewClip") return false;
+    const bool previewClip = command == "previewClip";
+    // 原地播放只供显式成对预览；普通关卡/模型的 clip 命令仍保留原根运动。
+    if (previewClip)
+    {
+        bool paired = false;
+        for (const auto& entry : meshObjects)
+            paired |= entry.second.sceneObjectIdentity.rfind("preview_retarget_source|", 0) == 0;
+        if (!paired || std::filesystem::path(scenePath).filename() != "SC_model_preview.json") return false;
+    }
     // 在改变任何播放器前先验证整批请求，避免不同片长/片段数造成部分应用。
     for (const auto& entry : meshObjects)
     {
         const auto& player = entry.second.animation;
         if (!player) continue;
         if (command == "seek" && (value < 0 || value > player->Duration())) return false;
-        if (command == "clip" && (value < 0 || value != std::floor(value) ||
-            value >= player->Asset().clips.size())) return false;
+        if ((command == "clip" || previewClip) && (value < 0 || value != std::floor(value) ||
+            value >= player->Asset().AnimationAsset().clips.size())) return false;
     }
     std::unordered_set<Animation::SkeletalPlayback*> updated;
     for (auto& entry : meshObjects)
@@ -859,8 +872,13 @@ bool World::ControlAnimation(uint64_t expectedGeneration, const std::string& com
             player->Seek(std::min(player->PlaybackRangeStart() + value,
                 player->PlaybackRangeEnd()));
         }
-        else if (command == "clip" && value >= 0 && value == std::floor(value) &&
-            value < player->Asset().clips.size()) player->Select(static_cast<size_t>(value));
+        else if ((command == "clip" || previewClip) && value >= 0 && value == std::floor(value) &&
+            value < player->Asset().AnimationAsset().clips.size())
+        {
+            if (previewClip)
+                player->Play(player->Asset().AnimationAsset().clips[static_cast<size_t>(value)].id, true, 1, true);
+            else player->Select(static_cast<size_t>(value));
+        }
         else return false;
     }
     TickAnimations(0);

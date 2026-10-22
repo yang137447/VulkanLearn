@@ -1173,6 +1173,29 @@ void EngineLoop::ApplyQueuedUiActions()
                 continue;
             }
             break;
+        case UiActionType::PreviewRetarget:
+            try
+            {
+                const auto target = MeshAssetLoader::Prepare(action.retargetPreviewModel).buildPlan;
+                if (!target.IsSkeletal() || target.animationSourceModelPath.empty() ||
+                    target.retargetProfilePath.empty() ||
+                    std::filesystem::weakly_canonical(CommonFunction::Path(target.retargetProfilePath)) !=
+                    std::filesystem::weakly_canonical(CommonFunction::Path(action.stringValue)))
+                    throw std::invalid_argument("Retarget preview model must reference the opened RT profile");
+                const auto source = MeshAssetLoader::Prepare(target.animationSourceModelPath).buildPlan;
+                if (!source.IsSkeletal() || !source.animationSourceModelPath.empty())
+                    throw std::invalid_argument("Retarget preview source must be a non-retargeted skeletal mesh");
+                command.type = RuntimeCommandType::LoadWorld;
+                command.stringValue = ModelPreviewScenePath;
+                command.extraSceneObjects = BuildRetargetPreviewObjects(
+                    action.retargetPreviewModel, target.animationSourceModelPath, action.stringValue);
+            }
+            catch (const std::exception& error)
+            {
+                GetSubsystems().GetDiagnosticsSubsystem().ReportWarning(error.what());
+                continue;
+            }
+            break;
         case UiActionType::ControlAnimationPreview:
             command.type = RuntimeCommandType::ControlAnimation;
             command.actorProperty.worldGeneration = action.previewCamera.worldGeneration;
@@ -1546,21 +1569,22 @@ void EngineLoop::UpdateUiViewModel(
             {
                 const auto& player = *entry.second.animation;
                 snapshot.animationWorldGeneration = world->GetGeneration();
-                for (const auto& clip : player.Asset().clips) snapshot.animationClips.push_back(clip.id);
+                for (const auto& clip : player.Asset().AnimationAsset().clips) snapshot.animationClips.push_back(clip.id);
                 snapshot.animationClip = player.SelectedClip();
                 snapshot.animationTime = player.Time();
                 snapshot.animationDuration = player.Duration();
                 snapshot.animationPlaying = player.IsPlaying();
                 snapshot.animationJointCount = player.Asset().mesh.joints.size();
-                if (!player.Asset().clips.empty())
+                if (!player.Asset().AnimationAsset().clips.empty())
                 {
-                    const auto schema = Animation::PreviewFeatureSchema(player.Asset().mesh);
-                    const auto& clip = player.Asset().clips.at(player.SelectedClip());
+                    const auto& animation = player.Asset().AnimationAsset();
+                    const auto schema = Animation::PreviewFeatureSchema(animation.mesh);
+                    const auto& clip = animation.clips.at(player.SelectedClip());
                     snapshot.animationFeatureChannels = Animation::FeatureChannelNames(schema);
                     if (Animation::CanExtractClipFeatures(clip, schema, player.Time(), player.IsLooping()))
                     {
                         snapshot.animationFeatures = Animation::ExtractClipFeatures(
-                            player.Asset().mesh, clip, schema, player.Time(), player.IsLooping());
+                            animation.mesh, clip, schema, player.Time(), player.IsLooping());
                         snapshot.animationFeatureStatus = "Root heading | cm, cm/s | pre-IK";
                     }
                     else snapshot.animationFeatureStatus = "Incomplete nonloop feature window";

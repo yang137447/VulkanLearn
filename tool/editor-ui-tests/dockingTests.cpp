@@ -91,6 +91,47 @@ TEST(DockWorkspaceTest, EveryEdgeCreatesAnIndependentSplit)
     }
 }
 
+TEST(DockWorkspaceTest, MaximizedStackIsTransientAndPreservesNormalAndFloatingGeometry)
+{
+    DockWorkspace workspace;
+    ASSERT_TRUE(workspace.Float("details", {0.2f, 0.2f, 0.4f, 0.5f}));
+    const DockRect bounds{5, 9, 1280, 654};
+    const auto original = workspace.Layout(bounds);
+    const auto maximized = workspace.Layout(bounds, {}, workspace.FindStack("details"));
+    ASSERT_EQ(maximized.stacks.size(), 1u);
+    EXPECT_TRUE(maximized.splitters.empty());
+    EXPECT_FLOAT_EQ(maximized.stacks[0].rect.x, bounds.x);
+    EXPECT_FLOAT_EQ(maximized.stacks[0].rect.y, bounds.y);
+    EXPECT_FLOAT_EQ(maximized.stacks[0].rect.width, bounds.width);
+    EXPECT_FLOAT_EQ(maximized.stacks[0].rect.height, bounds.height);
+    const auto restored = workspace.Layout(bounds);
+    ASSERT_EQ(restored.stacks.size(), original.stacks.size());
+    ASSERT_EQ(restored.splitters.size(), original.splitters.size());
+    for (size_t index = 0; index < original.stacks.size(); ++index)
+    {
+        EXPECT_EQ(restored.stacks[index].node, original.stacks[index].node);
+        EXPECT_EQ(restored.stacks[index].floating, original.stacks[index].floating);
+        EXPECT_FLOAT_EQ(restored.stacks[index].rect.x, original.stacks[index].rect.x);
+        EXPECT_FLOAT_EQ(restored.stacks[index].rect.y, original.stacks[index].rect.y);
+        EXPECT_FLOAT_EQ(restored.stacks[index].rect.width, original.stacks[index].rect.width);
+        EXPECT_FLOAT_EQ(restored.stacks[index].rect.height, original.stacks[index].rect.height);
+    }
+}
+
+TEST(DockWorkspaceTest, CloseCandidateUsesEligibleRightThenLeftNeighborWithoutChangingSelection)
+{
+    DockWorkspace workspace;
+    ASSERT_TRUE(workspace.ReplaceResourcePanels({"resource:first", "resource:second", "resource:third"}));
+    ASSERT_TRUE(workspace.Activate("resource:second"));
+    EXPECT_EQ(workspace.TabAfterClose("resource:second",
+        {"resource:first", "resource:third"}, "viewport"), "resource:third");
+    EXPECT_EQ(workspace.TabAfterClose("resource:second", {"resource:first"}, "viewport"), "resource:first");
+    EXPECT_EQ(workspace.TabAfterClose("resource:second", {}, "viewport"), "viewport");
+    EXPECT_EQ(workspace.TabAfterClose("resource:second", {}, "missing"), "");
+    EXPECT_EQ(workspace.TabAfterClose("resource:first", {"resource:third"}, "viewport"), "");
+    EXPECT_EQ(workspace.State().nodes.at(workspace.FindStack("resource:second")).active, "resource:second");
+}
+
 TEST(DockWorkspaceTest, FloatingBoundsStayInsideWorkspaceAndCanReattach)
 {
     DockWorkspace workspace;

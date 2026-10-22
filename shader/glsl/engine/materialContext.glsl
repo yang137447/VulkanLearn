@@ -9,7 +9,8 @@ struct MaterialVertexInput
     vec3 localNormal;
     vec4 vertexColor;
     vec2 texCoord;
-    // texCoord1 只表示资产真实存在的第二套 UV；导入链路不会用 UV0 合成该通道。
+    // 普通网格只传真实 UV1；TressFX 原始流在工厂前为半径/根梢参数，
+    // 工厂消费后转换为 ribbon UV，不能把这套特殊 ABI 用在 StaticMesh 上。
     vec2 texCoord1;
     vec4 localTangent;
     vec4 speedTreeWindBranch1;

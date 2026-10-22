@@ -82,6 +82,9 @@ public:
     static bool IsAssetEditorPanel(const std::string& panel);
     uint32_t FindStack(const std::string& panel) const;
     bool Activate(const std::string& panel);
+    // 只计算关闭后的候选，不执行关闭；确认保存等业务门禁通过后由宿主提交。
+    std::string TabAfterClose(const std::string& panel, const std::vector<std::string>& eligible,
+        const std::string& fallback) const;
     bool ReplaceResourcePanels(const std::vector<std::string>& panels);
     bool Dock(const std::string& panel, uint32_t target, DockEdge edge);
     bool Float(const std::string& panel, DockRect normalizedRect);
@@ -90,7 +93,9 @@ public:
     // collapsedStacks 是纯几何输入：这些叶标签组不占矩形，空间让给兄弟子树。
     // 谁被折叠、可见性集合、持久化字段和"最后一个可见面板不可隐藏"规则都由宿主拥有，
     // 布局模型既不认识面板可见性，也不改写自己的标签集合。
-    DockGeometry Layout(DockRect bounds, const std::vector<uint32_t>& collapsedStacks = {}) const;
+    // maximizedStack 是临时呈现输入，最大化不修改树、浮动矩形和分隔比例。
+    DockGeometry Layout(DockRect bounds, const std::vector<uint32_t>& collapsedStacks = {},
+        uint32_t maximizedStack = 0) const;
     static const std::vector<std::string>& Panels();
     static DockRect ClampFloating(DockRect rect);
 

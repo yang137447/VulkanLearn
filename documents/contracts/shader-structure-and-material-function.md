@@ -77,6 +77,10 @@ VertexFactory 负责基础几何输入和几何变形：
 - Previous Frame Position；
 - 顶点坐标、法线、切线和 UV 的规范化。
 
+静态 TressFX guide 的相机朝向 ribbon 在 `engine/tressfxVertexFactory.glsl`
+执行，属于几何工厂，不由材质 MF 烘焙。当前只接 Unlit forward 可见性探针，
+不是 Hair 着色模型恢复；数据与限制见 [TressFX 导入](tressfx-asset-import.md)。
+
 蒙皮、实例变换和 Morph 不属于 Material Function。材质相关的 World Position Offset 可以在 VertexFactory 输出之后作为 Material Function 能力接入，但不能替代基础几何变形。
 
 ### Material Function

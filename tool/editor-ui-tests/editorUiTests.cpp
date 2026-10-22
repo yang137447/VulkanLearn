@@ -270,8 +270,74 @@ protected:
         panel->Build(snapshot);
         context->Update();
     }
+    std::shared_ptr<EditorJsonDocumentSnapshot> OpenRetargetAsset(bool animated = false)
+    {
+        ShowContentBrowser();
+        auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+        catalog->revision = 2;
+        catalog->assets.push_back({"Retarget/RT_test.json", EditorAssetKind::Retarget, "Retarget Test"});
+        snapshot.assetCatalog = catalog;
+        Refresh(); Refresh();
+        document->QuerySelector("#asset-list button")->DispatchEvent("dblclick", {});
+        auto json = std::make_shared<EditorJsonDocumentSnapshot>();
+        json->revision = 3;
+        json->assetPath = "Retarget/RT_test.json";
+        json->kind = EditorAssetKind::Retarget;
+        json->name = "Retarget Test";
+        auto preview = std::make_shared<EditorRetargetPreview>();
+        preview->sourceSkeleton = "Source";
+        preview->targetSkeleton = "Target";
+        preview->sourcePose = "Bind";
+        preview->targetPose = "Aligned";
+        if (animated) preview->targetModelPath = "Meshes/SM_target.json";
+        EditorRetargetJoint root, shoulder, wrist;
+        root.name = "root";
+        root.bindAxes = root.referenceAxes = {{{1, 0, 0}, {0, 1, 0}, {0, 0, 1}}};
+        shoulder = wrist = root;
+        shoulder.name = "shoulder";
+        shoulder.parent = 0;
+        shoulder.bindPosition = shoulder.referencePosition = {0, 10, 0};
+        wrist.name = "wrist";
+        wrist.parent = 1;
+        wrist.bindPosition = wrist.referencePosition = {0, 20, 0};
+        preview->source = {root, shoulder, wrist};
+        wrist.referencePosition = {-10, 10, 0};
+        preview->target = {root, shoulder, wrist};
+        preview->mappings = {{0, 0, -1}, {1, 1, 0}, {2, 2, 1}};
+        preview->defaultAnchor = 1;
+        preview->targetOffsets = 1;
+        json->retargetPreview = preview;
+        snapshot.jsonDocument = json;
+        Refresh();
+        Refresh();
+        return json;
+    }
+    void PublishRetargetAnimation(uint64_t generation = 7, const std::string& profile = "Retarget/RT_test.json")
+    {
+        EditorSceneActorSnapshot target;
+        target.worldGeneration = generation;
+        target.scenePath = ModelPreviewScenePath;
+        target.sceneObjectIdentity = "preview_model";
+        target.identity = "mesh|preview_model";
+        auto source = target;
+        source.sceneObjectIdentity = "preview_retarget_source|" + profile;
+        source.identity = "mesh|" + source.sceneObjectIdentity;
+        snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
+            std::vector<EditorSceneActorSnapshot>{target, source});
+        UiViewModelSnapshot view;
+        view.activeWorldPath = ModelPreviewScenePath;
+        view.animationWorldGeneration = generation;
+        view.animationClips = {"Idle", "Walk"};
+        view.animationJointCount = 105;
+        view.animationDuration = 4;
+        view.animationPlaying = true;
+        panel->UpdateRuntimeView(view);
+        Refresh();
+        Refresh();
+    }
     void OpenBlueprintAsset(const std::string& levelPath = {})
     {
+        ShowContentBrowser();
         snapshot.activeDocument.reset(); snapshot.documentTabs.clear(); snapshot.selectedDocumentPath.clear();
         auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
         catalog->revision = 10;
@@ -513,6 +579,28 @@ protected:
     {
         context->ProcessMouseMove(static_cast<int>(std::lround(point.x)), static_cast<int>(std::lround(point.y)), 0);
     }
+    void ExpectViewportInfoFits(const std::string& surfaceId)
+    {
+        auto* surface = document->GetElementById(surfaceId);
+        ASSERT_NE(surface, nullptr);
+        auto* info = surface->QuerySelector(".asset-viewport-info");
+        ASSERT_NE(info, nullptr);
+        ASSERT_TRUE(info->IsVisible(true));
+        const auto origin = info->GetAbsoluteOffset(Rml::BoxArea::Border);
+        const auto size = info->GetBox().GetSize(Rml::BoxArea::Border);
+        const auto surfaceOrigin = surface->GetAbsoluteOffset(Rml::BoxArea::Padding);
+        const auto surfaceSize = surface->GetBox().GetSize(Rml::BoxArea::Padding);
+        EXPECT_GT(size.x, 100);
+        EXPECT_GE(origin.x, surfaceOrigin.x);
+        EXPECT_GE(origin.y, surfaceOrigin.y);
+        EXPECT_LE(origin.x + size.x, surfaceOrigin.x + surfaceSize.x);
+        EXPECT_LE(origin.y + size.y, surfaceOrigin.y + surfaceSize.y);
+        // 在标题文字上命中测试，保证子元素也不会截获视口手势。
+        auto* hit = context->GetElementAtPoint(origin + Rml::Vector2f(10, 8));
+        ASSERT_NE(hit, nullptr);
+        for (auto* element = hit; element; element = element->GetParentNode())
+            EXPECT_NE(element, info);
+    }
     void BeginBlueprintMove()
     {
         Click("[data-action=blueprint-asset-select-component][data-index='0']");
@@ -644,10 +732,12 @@ protected:
     }
     void SettleOutliner(int frames = 4)
     {
+        if (!document->GetElementById("editor-navigation")->IsVisible(true)) ShowContentBrowser();
         for (int frame = 0; frame < frames; ++frame) Refresh();
     }
     void SelectActorInOutliner(EditorSceneActorSnapshot actor)
     {
+        ShowContentBrowser();
         const std::string identity = actor.identity;
         AddActor(std::move(actor));
         panel->Build(snapshot);
@@ -747,8 +837,16 @@ protected:
         auto* title = document->GetElementById("editor-context-menu-title");
         return title == nullptr ? std::string() : title->GetInnerRML();
     }
-    Rml::Element* BrowserItem(const std::string& path) const
+    void ShowContentBrowser()
     {
+        Click("#workspace-viewport-tab");
+        Refresh(); Refresh();
+    }
+    Rml::Element* BrowserItem(const std::string& path)
+    {
+        // 资产工作区隐藏关卡浏览器；测试必须先走真实返回路径，再等待可见列表刷新。
+        if (!document->GetElementById("content-browser-page")->IsVisible(true)) ShowContentBrowser();
+        Refresh();
         Rml::ElementList items;
         document->GetElementById("asset-list")->QuerySelectorAll(items, "[data-action=browser-item]");
         for (auto* item : items)
@@ -1195,6 +1293,7 @@ TEST_F(EditorUiTest, ScriptComponentCreationAndSubtreeRemovalProduceValuesOnly)
 TEST_F(EditorUiTest, BlueprintAssetOpensDedicatedTabWithEditableDefaultsComponentsAndInstanceCheckboxes)
 {
     OpenBlueprintAsset();
+    ExpectViewportInfoFits("blueprint-asset-preview-surface");
     ASSERT_TRUE(document->GetElementById("blueprint-asset-editor")->IsVisible());
     EXPECT_STREQ(EditorAssetKindName(EditorAssetKind::Blueprint), "Blueprint");
     EXPECT_NE(document->GetElementById("blueprint-asset-component-tree")->GetInnerRML().find("Blueprint (Self)"),
@@ -1411,12 +1510,12 @@ TEST_F(EditorUiTest, BlueprintAssetDirtyCloseCancelsThenSavesAtCurrentRevision)
     snapshot.modifiedDocuments.push_back({"Blueprints/BP_test.json", EditorAssetKind::Blueprint, 12});
     Refresh();
     EXPECT_NE(document->QuerySelector(".workspace-resource-tab")->GetInnerRML().find("*"), std::string::npos);
-    Click("#resource-close");
+    Click(".workspace-resource-tab.selected .tab-close");
     EXPECT_TRUE(panel->HasModal());
     Click("[data-action=close-cancel]"); Refresh();
     EXPECT_TRUE(document->GetElementById("blueprint-asset-editor")->IsVisible());
     EXPECT_TRUE(sink.commands.empty());
-    Click("#resource-close"); Click("#close-save"); Refresh();
+    Click(".workspace-resource-tab.selected .tab-close"); Click("#close-save"); Refresh();
     ASSERT_EQ(sink.commands.size(), 1u);
     EXPECT_EQ(sink.commands[0].type, EditorCommandType::SaveBlueprintDocument);
     EXPECT_EQ(sink.commands[0].expectedDocumentRevision, 12);
@@ -1434,7 +1533,7 @@ TEST_F(EditorUiTest, BlueprintAssetFailedSaveKeepsDraftTabAndAllowsRetry)
     snapshot.blueprintDocuments[0].dirty = true;
     snapshot.modifiedDocuments.push_back({"Blueprints/BP_test.json", EditorAssetKind::Blueprint, 11});
     Refresh();
-    Click("#resource-close"); Click("#close-save"); Refresh();
+    Click(".workspace-resource-tab.selected .tab-close"); Click("#close-save"); Refresh();
     ASSERT_EQ(sink.commands.size(), 1u);
     snapshot.saveFeedback.push_back({1, "Blueprints/BP_test.json", false, "Source changed"});
     snapshot.statusMessage = "Source changed";
@@ -1455,7 +1554,7 @@ TEST_F(EditorUiTest, BlueprintAssetDiscardRevertsOnlyBlueprintDocumentWithoutSav
     OpenBlueprintAsset();
     snapshot.blueprintDocuments[0].dirty = true;
     Refresh();
-    Click("#resource-close"); Click("[data-action=close-discard]"); Refresh();
+    Click(".workspace-resource-tab.selected .tab-close"); Click("[data-action=close-discard]"); Refresh();
     ASSERT_EQ(sink.commands.size(), 1u);
     EXPECT_EQ(sink.commands[0].type, EditorCommandType::RevertBlueprintDocument);
     EXPECT_EQ(sink.commands[0].expectedDocumentRevision, 11);
@@ -1473,7 +1572,7 @@ TEST_F(EditorUiTest, BlueprintAssetSaveFeedbackCannotCloseANewerDirtyDraft)
     OpenBlueprintAsset();
     snapshot.blueprintDocuments[0].dirty = true;
     Refresh();
-    Click("#resource-close"); Click("#close-save"); Refresh();
+    Click(".workspace-resource-tab.selected .tab-close"); Click("#close-save"); Refresh();
     ASSERT_EQ(sink.commands.size(), 1u);
     snapshot.blueprintDocuments[0].documentRevision = 13;
     snapshot.saveFeedback.push_back({1, "Blueprints/BP_test.json", true, "Saved older revision"});
@@ -1487,7 +1586,7 @@ TEST_F(EditorUiTest, BlueprintAssetImmediateDiscardWaitsForPendingEditRevisionAn
 {
     OpenBlueprintAsset();
     SetValue("blueprint-asset-property-0", "90");
-    Click("#resource-close"); Click("#close-discard");
+    Click(".workspace-resource-tab.selected .tab-close"); Click("#close-discard");
     ASSERT_EQ(sink.commands.size(), 1u);
     EXPECT_EQ(sink.commands[0].type, EditorCommandType::ModifyBlueprintDocument);
     snapshot.blueprintDocuments[0].dirty = true;
@@ -1510,7 +1609,7 @@ TEST_F(EditorUiTest, BlueprintAssetRejectedDiscardKeepsDialogAndRetriesWithAutho
     OpenBlueprintAsset();
     snapshot.blueprintDocuments[0].dirty = true;
     Refresh();
-    Click("#resource-close"); Click("#close-discard"); Refresh();
+    Click(".workspace-resource-tab.selected .tab-close"); Click("#close-discard"); Refresh();
     ASSERT_EQ(sink.commands.size(), 1u);
     snapshot.blueprintDocuments[0].documentRevision = 12;
     snapshot.statusMessage = "The document revision changed";
@@ -1535,7 +1634,8 @@ TEST_F(EditorUiTest, BlueprintAssetFormScrollsAndInstanceCheckboxHasVisibleCheck
         auto* checked = document->GetElementById("blueprint-asset-instance-0");
         auto* unchecked = document->GetElementById("blueprint-asset-instance-1");
         EXPECT_GT(form->GetClientWidth(), 200);
-        EXPECT_GT(form->GetScrollHeight(), form->GetClientHeight());
+        EXPECT_GE(form->GetScrollHeight(), form->GetClientHeight());
+        if (size.y <= 720) EXPECT_GT(form->GetScrollHeight(), form->GetClientHeight());
         const auto checkboxSize = checked->GetBox().GetSize(Rml::BoxArea::Border);
         EXPECT_FLOAT_EQ(checkboxSize.x, 16);
         EXPECT_FLOAT_EQ(checkboxSize.y, 16);
@@ -1788,7 +1888,7 @@ TEST_F(EditorUiTest, BlueprintLogicSelectionDoesNotLeakToAnotherAssetWithSameCom
     other.document["name"] = "Other";
     snapshot.blueprintDocuments.push_back(other);
     Refresh();
-    auto* tile = document->QuerySelector("#asset-list button[data-path='Blueprints/BP_other.json']");
+    auto* tile = BrowserItem("Blueprints/BP_other.json");
     ASSERT_NE(tile, nullptr);
     tile->DispatchEvent("dblclick", {});
     Refresh();
@@ -2424,6 +2524,7 @@ TEST_F(EditorUiTest, WorkspaceParsesAndRendersWithoutWarnings)
 
 TEST_F(EditorUiTest, WorkspaceTabsKeepVisibleTitlesAfterDockShellRebuild)
 {
+    ShowContentBrowser();
     const std::vector<std::pair<std::string, std::string>> tabs = {
         {"workspace-viewport-tab", "Viewport"},
         {"workspace-outliner-tab", "Scene Outliner"},
@@ -2441,6 +2542,7 @@ TEST_F(EditorUiTest, WorkspaceTabsKeepVisibleTitlesAfterDockShellRebuild)
 
 TEST_F(EditorUiTest, OutlinerAndDetailsShareTheRightColumnWithoutOverlap)
 {
+    ShowContentBrowser();
     for (const Rml::Vector2i dimensions : {
         Rml::Vector2i(960, 540), Rml::Vector2i(1280, 720), Rml::Vector2i(1920, 1080)})
     {
@@ -2520,6 +2622,7 @@ TEST_F(EditorUiTest, WorkspaceRefreshAndReattachKeepTheSelectedPage)
 
 TEST_F(EditorUiTest, BrowserTilesHaveStableDimensions)
 {
+    ShowContentBrowser();
     auto* row = document->QuerySelector("#asset-list button");
     ASSERT_NE(row, nullptr);
     EXPECT_NEAR(row->GetBox().GetSize(Rml::BoxArea::Border).x, 92.0f, 1.0f);
@@ -2528,6 +2631,7 @@ TEST_F(EditorUiTest, BrowserTilesHaveStableDimensions)
 
 TEST_F(EditorUiTest, BrowserRecursiveControlKeepsItsCheckboxAndLabelVisible)
 {
+    ShowContentBrowser();
     for (const Rml::Vector2i dimensions : {Rml::Vector2i(960, 540), Rml::Vector2i(1280, 720)})
     {
         context->SetDimensions(dimensions);
@@ -2547,6 +2651,7 @@ TEST_F(EditorUiTest, BrowserRecursiveControlKeepsItsCheckboxAndLabelVisible)
 
 TEST_F(EditorUiTest, DefaultBrowserDockShowsTheCompleteFirstTileAtSmallWindowSizes)
 {
+    ShowContentBrowser();
     for (const Rml::Vector2i dimensions : {Rml::Vector2i(960, 540), Rml::Vector2i(1280, 720)})
     {
         context->SetDimensions(dimensions);
@@ -2565,6 +2670,7 @@ TEST_F(EditorUiTest, DefaultBrowserDockShowsTheCompleteFirstTileAtSmallWindowSiz
 
 TEST_F(EditorUiTest, BrowserTileSelectsOnClickAndOpensOnDoubleClick)
 {
+    ShowContentBrowser();
     auto* row = document->QuerySelector("#asset-list button");
     ASSERT_NE(row, nullptr);
     const auto origin = row->GetAbsoluteOffset(Rml::BoxArea::Content);
@@ -2583,6 +2689,7 @@ TEST_F(EditorUiTest, BrowserTileSelectsOnClickAndOpensOnDoubleClick)
 
 TEST_F(EditorUiTest, BrowserGridPlacesMultipleTilesOnTheSameRow)
 {
+    ShowContentBrowser();
     snapshot.assets.push_back({"Maps/SC_test/Materials/MI_other_one.json", false});
     snapshot.assets.push_back({"Maps/SC_test/Materials/MI_other_two.json", false});
     for (const Rml::Vector2i dimensions : {Rml::Vector2i(960, 540), Rml::Vector2i(1280, 720)})
@@ -2616,6 +2723,7 @@ TEST_F(EditorUiTest, MeshLevelAndTextureOpenReadOnlyJsonAndSceneRequestsWorldLoa
     context->Update();
     for (const auto& asset : catalog->assets)
     {
+        ShowContentBrowser();
         if (asset.kind == EditorAssetKind::Scene)
             ASSERT_TRUE(panel->SetPanelVisible("viewport", false));
         Rml::Element* tile = nullptr;
@@ -2677,6 +2785,7 @@ TEST_F(EditorUiTest, MeshLevelAndTextureOpenReadOnlyJsonAndSceneRequestsWorldLoa
 
 TEST_F(EditorUiTest, ResourceEditorDeduplicatesTabsAndReturnsToWorld)
 {
+    ShowContentBrowser();
     auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
     catalog->revision = 2;
     catalog->assets.push_back({"Textures/T_test.json", EditorAssetKind::Texture, "Texture"});
@@ -2732,8 +2841,435 @@ TEST_F(EditorUiTest, ResourceEditorDeduplicatesTabsAndReturnsToWorld)
     EXPECT_FALSE(document->GetElementById("editor-viewport-image")->IsVisible(true));
 }
 
+TEST_F(EditorUiTest, AssetKindsShareFullWorkspaceAndRestoreTheLevelLayout)
+{
+    OpenBlueprintAsset();
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>(*snapshot.assetCatalog);
+    catalog->revision++;
+    catalog->assets.push_back({"SM_test.json", EditorAssetKind::Mesh, "Mesh"});
+    catalog->assets.push_back({"T_test.json", EditorAssetKind::Texture, "Texture"});
+    catalog->assets.push_back({"TR_test.json", EditorAssetKind::Terrain, "Terrain"});
+    catalog->assets.push_back({"RT_test.json", EditorAssetKind::Retarget, "Retarget"});
+    snapshot.assetCatalog = catalog;
+    snapshot.activeDocument.emplace();
+    snapshot.activeDocument->assetPath = "MI_test.json";
+    snapshot.selectedDocumentPath = "MI_test.json";
+    snapshot.documentTabs.push_back({"MI_test.json", false});
+    Refresh();
+    for (const auto& asset : catalog->assets)
+    {
+        Click("#workspace-viewport-tab");
+        Refresh();
+        BrowserItem(asset.assetPath)->DispatchEvent("dblclick", {});
+        Refresh();
+    }
+    for (const auto size : {Rml::Vector2i(960, 540), Rml::Vector2i(1280, 720), Rml::Vector2i(1920, 1080)})
+    {
+        context->SetDimensions(size);
+        Click("#workspace-viewport-tab");
+        Refresh();
+        const auto level = panel->GetSceneViewportRect();
+        Rml::ElementList tabs;
+        document->QuerySelectorAll(tabs, ".workspace-asset-tab");
+        ASSERT_EQ(tabs.size(), 6u);
+        for (auto* tab : tabs)
+        {
+            SCOPED_TRACE(tab->GetAttribute<std::string>("title", ""));
+            tab->DispatchEvent("click", {});
+            Refresh();
+            auto* stack = tab->GetParentNode()->GetParentNode();
+            auto* workspace = document->GetElementById("editor-content");
+            EXPECT_NEAR(stack->GetAbsoluteOffset().x, workspace->GetAbsoluteOffset().x, 1);
+            EXPECT_NEAR(stack->GetAbsoluteOffset().y, workspace->GetAbsoluteOffset().y, 1);
+            EXPECT_NEAR(stack->GetBox().GetSize().x, workspace->GetBox().GetSize().x, 1);
+            EXPECT_NEAR(stack->GetBox().GetSize().y, workspace->GetBox().GetSize().y, 1);
+            auto* close = tab->QuerySelector(".tab-close");
+            ASSERT_NE(close, nullptr);
+            EXPECT_TRUE(close->IsVisible(true));
+            EXPECT_FALSE(document->GetElementById("editor-navigation")->IsVisible(true));
+            EXPECT_FALSE(document->GetElementById("content-browser-page")->IsVisible(true));
+            Click("#workspace-viewport-tab");
+            Refresh();
+            const auto restored = panel->GetSceneViewportRect();
+            EXPECT_EQ(restored.x, level.x); EXPECT_EQ(restored.y, level.y);
+            EXPECT_EQ(restored.width, level.width); EXPECT_EQ(restored.height, level.height);
+        }
+    }
+    EXPECT_EQ(document->GetElementById("resource-close"), nullptr);
+    EXPECT_TRUE(system.errors.empty()) << Errors();
+}
+
+TEST_F(EditorUiTest, PointerCloseOfInactiveResourceKeepsTheActivePreview)
+{
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+    catalog->assets = {{"SM_first.json", EditorAssetKind::Mesh, "First"},
+        {"SM_second.json", EditorAssetKind::Mesh, "Second"}};
+    snapshot.assetCatalog = catalog;
+    Refresh();
+    for (const auto& asset : catalog->assets)
+    {
+        BrowserItem(asset.assetPath)->DispatchEvent("dblclick", {});
+        Refresh();
+    }
+    runtimeSink.actions.clear();
+    auto* close = document->QuerySelector(".workspace-resource-tab .tab-close");
+    ASSERT_NE(close, nullptr);
+    const auto point = close->GetAbsoluteOffset() + close->GetBox().GetSize() * 0.5f;
+    context->ProcessMouseMove(static_cast<int>(point.x), static_cast<int>(point.y), 0);
+    context->ProcessMouseButtonDown(0, 0);
+    context->ProcessMouseButtonUp(0, 0);
+    Refresh();
+    Rml::ElementList tabs;
+    document->QuerySelectorAll(tabs, ".workspace-resource-tab");
+    ASSERT_EQ(tabs.size(), 1u);
+    EXPECT_NE(tabs[0]->GetInnerRML().find("SM_second.json"), std::string::npos);
+    EXPECT_TRUE(tabs[0]->IsClassSet("selected"));
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, ResourceCloseSelectsAdjacentMaterialAndMaterialCloseReturnsToLevel)
+{
+    snapshot.documentTabs[0].dirty = false;
+    snapshot.activeDocument->status = EditorDocumentStatus::Clean;
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+    catalog->assets = {{"SM_test.json", EditorAssetKind::Mesh, "Mesh"}};
+    snapshot.assetCatalog = catalog;
+    Refresh();
+    BrowserItem("SM_test.json")->DispatchEvent("dblclick", {});
+    Refresh();
+    Click(".workspace-resource-tab .tab-close");
+    Refresh();
+    ASSERT_FALSE(sink.commands.empty());
+    EXPECT_EQ(sink.commands.back().type, EditorCommandType::SelectMaterialInstanceDocument);
+    EXPECT_TRUE(document->GetElementById("material-editor")->IsVisible(true));
+    Click(".workspace-material-tab .tab-close");
+    EXPECT_EQ(sink.commands.back().type, EditorCommandType::CloseMaterialInstanceAsset);
+    EXPECT_TRUE(document->GetElementById("material-editor")->IsVisible(true));
+    snapshot.documentTabs.clear(); snapshot.activeDocument.reset(); snapshot.selectedDocumentPath.clear();
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("editor-viewport-image")->IsVisible(true));
+    EXPECT_TRUE(document->GetElementById("content-browser-page")->IsVisible(true));
+}
+
+TEST_F(EditorUiTest, MaterialCloseConfirmationSelectsAdjacentResourceBeforeServiceMaterialSelection)
+{
+    snapshot.documentTabs[0].dirty = false;
+    snapshot.activeDocument->status = EditorDocumentStatus::Clean;
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+    catalog->assets = {{"SM_test.json", EditorAssetKind::Mesh, "Mesh"}};
+    snapshot.assetCatalog = catalog;
+    Refresh();
+    BrowserItem("SM_test.json")->DispatchEvent("dblclick", {});
+    Refresh();
+    // 让服务关闭后还有另一个 MI 可选，UI 仍须选择实际标签栏里的 Mesh 邻居。
+    snapshot.documentTabs.push_back({"MI_other.json", false});
+    Refresh();
+    Click(".workspace-material-tab");
+    Refresh();
+    Click(".workspace-material-tab.selected .tab-close");
+    snapshot.documentTabs.erase(snapshot.documentTabs.begin());
+    snapshot.selectedDocumentPath = snapshot.activeDocument->assetPath = "MI_other.json";
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("resource-editor")->IsVisible(true));
+    EXPECT_FALSE(document->GetElementById("material-editor")->IsVisible(true));
+    EXPECT_TRUE(document->QuerySelector(".workspace-resource-tab")->IsClassSet("selected"));
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("resource-editor")->IsVisible(true));
+}
+
+TEST_F(EditorUiTest, RetargetAssetOpensIndependentTabWithoutWorldRequest)
+{
+    OpenRetargetAsset();
+    EXPECT_TRUE(document->GetElementById("retarget-asset-editor")->IsVisible(true));
+    EXPECT_FALSE(document->GetElementById("resource-preview-panel")->IsVisible(true));
+    EXPECT_FALSE(document->GetElementById("blueprint-asset-editor")->IsVisible(true));
+    EXPECT_NE(document->QuerySelector(".workspace-resource-tab")->GetInnerRML().find("RT_test.json"),
+        std::string::npos);
+    EXPECT_EQ(jsonAssetSink.opened.back(), "Retarget/RT_test.json");
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    EXPECT_FALSE(document->GetElementById("retarget-lines")->GetInnerRML().empty());
+    EXPECT_TRUE(system.errors.empty()) << Errors();
+}
+
+TEST_F(EditorUiTest, RetargetAnimationRequestsPairOnceAndWaitsForMatchingPublishedProfile)
+{
+    OpenRetargetAsset(true);
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions[0].type, UiActionType::PreviewRetarget);
+    EXPECT_EQ(runtimeSink.actions[0].stringValue, "Retarget/RT_test.json");
+    EXPECT_EQ(runtimeSink.actions[0].retargetPreviewModel, "Meshes/SM_target.json");
+    auto* image = document->GetElementById("retarget-preview-image");
+    EXPECT_FALSE(image->IsVisible(true));
+    const auto loadingRect = panel->GetSceneViewportRect();
+    EXPECT_GT(loadingRect.width, 100u);
+    EXPECT_GE(loadingRect.height, 120u);
+    EXPECT_TRUE(document->GetElementById("retarget-animation-play")->HasAttribute("disabled"));
+    PublishRetargetAnimation(7, "Retarget/RT_other.json");
+    EXPECT_FALSE(image->IsVisible(true));
+    EXPECT_EQ(runtimeSink.actions.size(), 1u);
+    PublishRetargetAnimation();
+    EXPECT_TRUE(image->IsVisible(true));
+    EXPECT_EQ(panel->GetSceneViewportRect().width, loadingRect.width);
+    EXPECT_EQ(panel->GetSceneViewportRect().height, loadingRect.height);
+    ASSERT_EQ(runtimeSink.actions.size(), 2u);
+    EXPECT_EQ(runtimeSink.actions.back().stringValue, "previewClip");
+    Refresh(); Refresh();
+    EXPECT_EQ(runtimeSink.actions.size(), 2u);
+    EXPECT_GT(panel->GetSceneViewportRect().width, 100u);
+    EXPECT_FALSE(panel->IsSceneViewportElement(image));
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, RetargetAnimationControlsUseSharedGenerationAndSeekingSeconds)
+{
+    OpenRetargetAsset(true);
+    PublishRetargetAnimation();
+    runtimeSink.actions.clear();
+    Click("#retarget-animation-pause");
+    auto* clips = dynamic_cast<Rml::ElementFormControlSelect*>(document->GetElementById("retarget-animation-clip"));
+    ASSERT_NE(clips, nullptr);
+    clips->SetSelection(1);
+    Control("retarget-animation-time")->SetValue("0.75");
+    std::string requests;
+    for (const auto& action : runtimeSink.actions)
+        requests += action.stringValue + "=" + std::to_string(action.floatValue) + " ";
+    ASSERT_EQ(runtimeSink.actions.size(), 3u) << requests;
+    EXPECT_EQ(runtimeSink.actions[0].stringValue, "play");
+    EXPECT_FLOAT_EQ(runtimeSink.actions[0].floatValue, 0);
+    EXPECT_EQ(runtimeSink.actions[1].stringValue, "previewClip");
+    EXPECT_FLOAT_EQ(runtimeSink.actions[1].floatValue, 1);
+    EXPECT_EQ(runtimeSink.actions[2].stringValue, "seek");
+    EXPECT_FLOAT_EQ(runtimeSink.actions[2].floatValue, 0.75f);
+    for (const auto& action : runtimeSink.actions)
+    {
+        EXPECT_EQ(action.type, UiActionType::ControlAnimationPreview);
+        EXPECT_EQ(action.previewCamera.worldGeneration, 7u);
+    }
+    runtimeSink.actions.clear();
+    Click("#retarget-animation-assets [data-index='1']");
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions[0].stringValue, "previewClip");
+    EXPECT_EQ(runtimeSink.actions[0].previewCamera.worldGeneration, 7u);
+    EXPECT_FLOAT_EQ(runtimeSink.actions[0].floatValue, 1);
+}
+
+TEST_F(EditorUiTest, RetargetAnimationCanSwitchReferenceAndReturnWithoutReloadingModels)
+{
+    OpenRetargetAsset(true);
+    PublishRetargetAnimation();
+    runtimeSink.actions.clear();
+    Click("#retarget-reference");
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("retarget-surface")->IsVisible(true));
+    EXPECT_FALSE(document->GetElementById("retarget-preview-image")->IsVisible(true));
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    Click("#retarget-animation");
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("retarget-preview-image")->IsVisible(true));
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    Click("#retarget-animation-frame");
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions[0].type, UiActionType::NavigateModelPreview);
+    EXPECT_EQ(runtimeSink.actions[0].previewCamera.worldGeneration, 7u);
+}
+
+TEST_F(EditorUiTest, RetargetAnimationReloadHidesPreviousImageAndRejectsOldControlEvents)
+{
+    OpenRetargetAsset(true);
+    PublishRetargetAnimation();
+    runtimeSink.actions.clear();
+    Click("#resource-reload");
+    Refresh();
+    EXPECT_FALSE(document->GetElementById("retarget-preview-image")->IsVisible(true));
+    Click("#retarget-animation-pause");
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, RetargetAnimationFitsSupportedWorkspaceSizes)
+{
+    OpenRetargetAsset(true);
+    PublishRetargetAnimation();
+    for (const Rml::Vector2i size : {Rml::Vector2i(960, 540), Rml::Vector2i(1280, 720),
+        Rml::Vector2i(1920, 1080)})
+    {
+        context->SetDimensions(size);
+        Refresh(); Refresh();
+        const auto rect = panel->GetSceneViewportRect();
+        EXPECT_GT(rect.width, 250u);
+        EXPECT_GE(rect.height, 300u);
+        ExpectViewportInfoFits("retarget-preview-surface");
+        auto* tools = document->GetElementById("retarget-animation-tools");
+        EXPECT_NEAR(rect.y + rect.height, tools->GetAbsoluteOffset(Rml::BoxArea::Border).y, 1);
+        auto* hierarchy = document->GetElementById("retarget-hierarchy-panel");
+        auto* sidebar = document->GetElementById("retarget-sidebar");
+        EXPECT_GE(rect.x, hierarchy->GetAbsoluteOffset().x + hierarchy->GetBox().GetSize().x);
+        EXPECT_LE(rect.x + rect.width, sidebar->GetAbsoluteOffset().x);
+        EXPECT_TRUE(document->GetElementById("retarget-mappings")->IsVisible(true));
+        EXPECT_TRUE(document->GetElementById("retarget-animation-assets")->IsVisible(true));
+        EXPECT_FALSE(document->GetElementById("editor-navigation")->IsVisible(true));
+        EXPECT_FALSE(document->GetElementById("content-browser-page")->IsVisible(true));
+        for (const char* id : {"retarget-animation-play", "retarget-animation-pause",
+            "retarget-animation-clip", "retarget-animation-time", "retarget-animation-frame"})
+        {
+            auto* control = document->GetElementById(id);
+            EXPECT_TRUE(control->IsVisible(true)) << id;
+            const auto origin = control->GetAbsoluteOffset();
+            const auto bounds = control->GetBox().GetSize();
+            EXPECT_LE(origin.x + bounds.x, size.x) << id;
+        }
+    }
+    EXPECT_TRUE(system.errors.empty()) << Errors();
+}
+
+TEST_F(EditorUiTest, RetargetAssetSelectionShowsAnchoredDistanceAndChainDirection)
+{
+    OpenRetargetAsset();
+    Click("#retarget-hierarchy [data-action=retarget-select][data-index='2']");
+    EXPECT_TRUE(document->GetElementById("retarget-row-2")->IsClassSet("selected"));
+    const auto measurement = document->GetElementById("retarget-measurement")->GetInnerRML();
+    EXPECT_NE(measurement.find("14.14 cm"), std::string::npos);
+    EXPECT_NE(measurement.find("90.00 deg"), std::string::npos);
+    EXPECT_NE(measurement.find("shoulder / shoulder"), std::string::npos);
+    const auto drawing = document->GetElementById("retarget-lines")->GetInnerRML();
+    EXPECT_NE(drawing.find("retarget-axis-x"), std::string::npos);
+    EXPECT_NE(drawing.find("retarget-delta"), std::string::npos);
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, RetargetAssetBindAndProjectionControlsChangeOnlyPresentation)
+{
+    OpenRetargetAsset();
+    Click("#retarget-row-2");
+    auto* selected = document->GetElementById("retarget-row-2");
+    const auto calibrated = document->GetElementById("retarget-lines")->GetInnerRML();
+    Click("#retarget-bind");
+    EXPECT_TRUE(document->GetElementById("retarget-bind")->IsClassSet("active"));
+    EXPECT_NE(document->GetElementById("retarget-measurement")->GetInnerRML().find("Delta 0.00 cm"),
+        std::string::npos);
+    const auto bind = document->GetElementById("retarget-lines")->GetInnerRML();
+    EXPECT_NE(bind, calibrated);
+    Click("#retarget-side");
+    EXPECT_TRUE(document->GetElementById("retarget-side")->IsClassSet("active"));
+    EXPECT_NE(document->GetElementById("retarget-lines")->GetInnerRML(), bind);
+    auto* row = document->GetElementById("retarget-row-2");
+    Refresh();
+    Refresh();
+    EXPECT_EQ(row, document->GetElementById("retarget-row-2"));
+    EXPECT_NE(selected, nullptr);
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, RetargetAssetReloadClearsOldSkeletonAndDisplaysFailure)
+{
+    auto json = OpenRetargetAsset();
+    auto failure = std::make_shared<EditorJsonDocumentSnapshot>(*json);
+    failure->revision++;
+    failure->retargetPreview.reset();
+    failure->previewDiagnostic = "Preview skeleton identity differs from retarget profile";
+    snapshot.jsonDocument = failure;
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("retarget-lines")->GetInnerRML().empty());
+    EXPECT_TRUE(document->GetElementById("retarget-mappings")->GetInnerRML().empty());
+    EXPECT_NE(document->GetElementById("retarget-status")->GetInnerRML().find("identity differs"),
+        std::string::npos);
+    EXPECT_TRUE(document->GetElementById("retarget-bind")->HasAttribute("disabled"));
+    EXPECT_FALSE(document->GetElementById("resource-reload")->HasAttribute("disabled"));
+}
+
+TEST_F(EditorUiTest, RetargetAssetFocusAndFitChangeViewWithoutChangingReference)
+{
+    auto json = OpenRetargetAsset();
+    Click("#retarget-row-2");
+    const auto original = document->GetElementById("retarget-lines")->GetInnerRML();
+    Click("#retarget-focus");
+    EXPECT_TRUE(document->GetElementById("retarget-focus")->IsClassSet("active"));
+    EXPECT_NE(document->GetElementById("retarget-lines")->GetInnerRML(), original);
+    Click("#retarget-fit");
+    EXPECT_FALSE(document->GetElementById("retarget-focus")->IsClassSet("active"));
+    EXPECT_EQ(document->GetElementById("retarget-lines")->GetInnerRML(), original);
+    EXPECT_EQ(json->retargetPreview->target[2].referencePosition[0], -10);
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, RetargetAssetAllBonesIncludesUnmappedBranchesOnlyWhenEnabled)
+{
+    auto json = OpenRetargetAsset();
+    auto preview = std::make_shared<EditorRetargetPreview>(*json->retargetPreview);
+    auto helper = preview->source.back();
+    helper.name = "IK helper";
+    helper.parent = 0;
+    helper.bindPosition = helper.referencePosition = {12, 2, 0};
+    preview->source.push_back(helper);
+    json->retargetPreview = preview;
+    Refresh();
+    const auto original = document->GetElementById("retarget-lines")->GetInnerRML();
+    auto* checkbox = document->GetElementById("retarget-all-bones");
+    checkbox->SetAttribute("checked", "checked");
+    checkbox->DispatchEvent("change", {});
+    EXPECT_NE(document->GetElementById("retarget-lines")->GetInnerRML(), original);
+    checkbox->RemoveAttribute("checked");
+    checkbox->DispatchEvent("change", {});
+    EXPECT_EQ(document->GetElementById("retarget-lines")->GetInnerRML(), original);
+}
+
+TEST_F(EditorUiTest, RetargetAssetSurfaceHasRoomAtSupportedWorkspaceSizes)
+{
+    OpenRetargetAsset();
+    for (const Rml::Vector2i size : {Rml::Vector2i(960, 540), Rml::Vector2i(1280, 720),
+        Rml::Vector2i(1920, 1080)})
+    {
+        SCOPED_TRACE(std::to_string(size.x) + "x" + std::to_string(size.y));
+        context->SetDimensions(size);
+        Refresh();
+        Refresh();
+        const auto surface = document->GetElementById("retarget-surface")->GetBox().GetSize(Rml::BoxArea::Content);
+        EXPECT_GE(surface.x, 64);
+        EXPECT_GE(surface.y, 64);
+        ExpectViewportInfoFits("retarget-surface");
+        const auto zoom = document->GetElementById("retarget-zoom")->GetBox().GetSize(Rml::BoxArea::Content);
+        EXPECT_GE(zoom.x, 40);
+        EXPECT_TRUE(document->GetElementById("retarget-row-0")->IsVisible(true));
+    }
+    EXPECT_TRUE(system.errors.empty()) << Errors();
+}
+
+TEST_F(EditorUiTest, RetargetAssetKeepsSelectedJointAcrossLevelTabSwitch)
+{
+    Click("#workspace-viewport-tab");
+    Refresh();
+    const auto originalRect = panel->GetSceneViewportRect();
+    OpenRetargetAsset();
+    Click("#retarget-row-2");
+    EXPECT_NE(document->GetElementById("retarget-details")->GetInnerRML().find("wrist"), std::string::npos);
+    Click("#retarget-hierarchy-target");
+    EXPECT_TRUE(document->GetElementById("retarget-hierarchy-target")->IsClassSet("active"));
+    Click("#retarget-hierarchy [data-action=retarget-hierarchy-toggle][data-index='0']");
+    EXPECT_EQ(document->QuerySelector("#retarget-hierarchy [data-action=retarget-select][data-index='2']"), nullptr);
+    Click("#retarget-row-2");
+    EXPECT_NE(document->QuerySelector("#retarget-hierarchy [data-action=retarget-select][data-index='2']"), nullptr);
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    EXPECT_TRUE(sink.commands.empty());
+    Click("#workspace-viewport-tab");
+    Refresh();
+    EXPECT_FALSE(document->GetElementById("retarget-asset-editor")->IsVisible(true));
+    const auto restoredRect = panel->GetSceneViewportRect();
+    EXPECT_EQ(originalRect.x, restoredRect.x);
+    EXPECT_EQ(originalRect.y, restoredRect.y);
+    EXPECT_EQ(originalRect.width, restoredRect.width);
+    EXPECT_EQ(originalRect.height, restoredRect.height);
+    EXPECT_TRUE(document->GetElementById("editor-navigation")->IsVisible(true));
+    EXPECT_TRUE(document->GetElementById("content-browser-page")->IsVisible(true));
+    Click(".workspace-resource-tab");
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("retarget-asset-editor")->IsVisible(true));
+    EXPECT_TRUE(document->GetElementById("retarget-row-2")->IsClassSet("selected"));
+}
+
 TEST_F(EditorUiTest, ModelPreviewWaitsForWorldPublicationAndProvidesAnImageRect)
 {
+    ShowContentBrowser();
     auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
     catalog->revision = 1;
     catalog->assets.push_back({"Meshes/SM_test.json", EditorAssetKind::Mesh, "Model"});
@@ -2774,6 +3310,7 @@ TEST_F(EditorUiTest, ModelPreviewWaitsForWorldPublicationAndProvidesAnImageRect)
 
 TEST_F(EditorUiTest, TexturePreviewFitsAspectWithoutUsingSceneViewport)
 {
+    ShowContentBrowser();
     auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
     catalog->revision = 1;
     catalog->assets.push_back({"T_test.json", EditorAssetKind::Texture, "Texture"});
@@ -2801,6 +3338,7 @@ TEST_F(EditorUiTest, TexturePreviewFitsAspectWithoutUsingSceneViewport)
     EXPECT_GT(size.y, 0);
     EXPECT_NEAR(size.x / size.y, 2.0f, 0.02f);
     auto* surface = document->GetElementById("resource-preview-surface");
+    ExpectViewportInfoFits("resource-preview-surface");
     const auto surfaceSize = surface->GetBox().GetSize(Rml::BoxArea::Padding);
     const auto imagePosition = image->GetAbsoluteOffset(Rml::BoxArea::Border);
     const auto surfacePosition = surface->GetAbsoluteOffset(Rml::BoxArea::Padding);
@@ -2819,6 +3357,7 @@ TEST_F(EditorUiTest, TexturePreviewFitsAspectWithoutUsingSceneViewport)
 
 TEST_F(EditorUiTest, TexturePreviewZoomPanAndFitStayInUi)
 {
+    ShowContentBrowser();
     auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
     catalog->revision = 1;
     catalog->assets.push_back({"T_test.json", EditorAssetKind::Texture, "Texture"});
@@ -2885,6 +3424,7 @@ protected:
     void SetUp() override
     {
         EditorUiTest::SetUp();
+        ShowContentBrowser();
         auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
         catalog->revision = 1;
         catalog->assets.push_back({"Meshes/SM_test.json", EditorAssetKind::Mesh, "Model"});
@@ -3684,7 +4224,7 @@ TEST_F(EditorUiTest, SwitchingBackToUnloadedResourceRetriesSupersededMetadata)
     Refresh();
     for (const auto& asset : catalog->assets)
     {
-        auto* tile = document->QuerySelector("#asset-list [data-path='" + asset.assetPath + "']");
+        auto* tile = BrowserItem(asset.assetPath);
         ASSERT_NE(tile, nullptr);
         tile->DispatchEvent("dblclick", {});
         Refresh();
@@ -3710,6 +4250,7 @@ TEST_F(EditorUiTest, SwitchingBackToUnloadedResourceRetriesSupersededMetadata)
 
 TEST_F(EditorUiTest, ModelAndLevelTabsRequestTheirOwnWorldAndKeepSelection)
 {
+    snapshot.activeDocument.reset(); snapshot.documentTabs.clear(); snapshot.selectedDocumentPath.clear();
     UiViewModelSnapshot view;
     view.activeWorldPath = "Maps/SC_test/SC_test.json";
     panel->UpdateRuntimeView(view);
@@ -3722,7 +4263,7 @@ TEST_F(EditorUiTest, ModelAndLevelTabsRequestTheirOwnWorldAndKeepSelection)
     context->Update();
     for (const char* path : {"SM_first.json", "SM_second.json"})
     {
-        auto* tile = document->QuerySelector(std::string("#asset-list [data-path='") + path + "']");
+        auto* tile = BrowserItem(path);
         ASSERT_NE(tile, nullptr);
         tile->DispatchEvent("dblclick", {});
         panel->Build(snapshot);
@@ -3750,12 +4291,12 @@ TEST_F(EditorUiTest, ModelAndLevelTabsRequestTheirOwnWorldAndKeepSelection)
     Click(".workspace-resource-tab");
     EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::PreviewModel);
     EXPECT_EQ(runtimeSink.actions.back().stringValue, "SM_first.json");
-    Click("#resource-close");
+    Click(".workspace-resource-tab.selected .tab-close");
     EXPECT_EQ(runtimeSink.actions.back().stringValue, "SM_second.json");
     panel->Build(snapshot);
     context->Update();
     EXPECT_TRUE(panel->IsResourceEditorVisible());
-    Click("#resource-close");
+    Click(".workspace-resource-tab.selected .tab-close");
     EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::LoadWorld);
     EXPECT_EQ(runtimeSink.actions.back().stringValue, view.activeWorldPath);
     panel->Build(snapshot);
@@ -3777,6 +4318,7 @@ TEST_F(EditorUiTest, ImmersiveButtonRequestsPresentationToggleNotQuit)
 
 TEST_F(EditorUiTest, ImmersivePreparationKeepsCurrentLevelWithoutLoading)
 {
+    ShowContentBrowser();
     // 基础夹具现在会请求材质球；显式打开关卡，建立本用例要求的非预览状态。
     auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
     catalog->assets.push_back({"Maps/SC_test/SC_test.json", EditorAssetKind::Scene, "Level"});
@@ -3795,6 +4337,7 @@ TEST_F(EditorUiTest, ImmersivePreparationKeepsCurrentLevelWithoutLoading)
 
 TEST_F(EditorUiTest, ImmersivePreparationReturnsRememberedLevelInsteadOfPreviewWorld)
 {
+    ShowContentBrowser();
     UiViewModelSnapshot view;
     view.activeWorldPath = "Maps/SC_test/SC_test.json";
     panel->UpdateRuntimeView(view);
@@ -3840,6 +4383,7 @@ TEST_F(EditorUiTest, RefreshAssetsRequestsOneWorkerRefreshWithoutMiCommands)
 
 TEST_F(EditorUiTest, JsonInspectorEscapesFieldsAndBoundsExpandedArrayPages)
 {
+    ShowContentBrowser();
     auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
     catalog->revision = 1;
     catalog->assets.push_back({"Maps/SC_test.json", EditorAssetKind::Scene});
@@ -3871,6 +4415,7 @@ TEST_F(EditorUiTest, JsonInspectorEscapesFieldsAndBoundsExpandedArrayPages)
 
 TEST_F(EditorUiTest, TenThousandAssetsKeepWholeEditorGeometryAndWarmWorkBounded)
 {
+    ShowContentBrowser();
     auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
     catalog->revision = 1;
     for (size_t index = 0; index < 10000; ++index)
@@ -3904,6 +4449,7 @@ TEST_F(EditorUiTest, TenThousandAssetsKeepWholeEditorGeometryAndWarmWorkBounded)
 
 TEST_F(EditorUiTest, OverflowingBrowserGridKeepsColumnsForEveryTileSize)
 {
+    ShowContentBrowser();
     for (int index = 0; index < 60; ++index)
         snapshot.assets.push_back({"Maps/SC_test/Materials/MI_grid_" + std::to_string(index) + ".json", false});
     for (const Rml::Vector2i dimensions : {Rml::Vector2i(960, 540), Rml::Vector2i(1280, 720)})
@@ -4264,6 +4810,7 @@ TEST_F(EditorUiTest, OutlinerTypeFilterOptionsMatchTheGroupSpecs)
 
 TEST_F(EditorUiTest, OutlinerEmptyStateDistinguishesNoWorldFromNoMatch)
 {
+    ShowContentBrowser();
     panel->Build(snapshot);
     context->Update();
     EXPECT_EQ(OutlinerCount(), "0 actors");
@@ -5881,7 +6428,7 @@ TEST_F(EditorUiTest, DocumentTabRowKeepsEveryOpenDocumentOnOneLine)
         EXPECT_LE(height, 33.0f)
             << "document tab " << childIndex << " is " << height
             << "px tall; a one-line tab should not wrap. Inner RML: " << tab->GetInnerRML();
-        auto* label = tab->QuerySelector(".resource-tab-label");
+        auto* label = tab->QuerySelector(".tab-label");
         auto* close = tab->QuerySelector(".tab-close");
         ASSERT_NE(label, nullptr);
         ASSERT_NE(close, nullptr);
@@ -6052,6 +6599,7 @@ TEST_F(EditorUiTest, MaterialSphereNavigatesAndReappliesDirtyDraftOncePerWorld)
     EXPECT_EQ(sink.commands.size(), 1u);
     auto* image = document->GetElementById("material-preview-image");
     const auto origin = image->GetAbsoluteOffset();
+    ExpectViewportInfoFits("material-preview-surface");
     context->ProcessMouseMove(int(origin.x + 50), int(origin.y + 50), 0);
     context->ProcessMouseWheel(Rml::Vector2f(0, -2), 0);
     ASSERT_FALSE(runtimeSink.actions.empty());
@@ -6146,9 +6694,9 @@ TEST_F(EditorUiTest, FileMenuDocumentCommandsShareTheToolbarAvailability)
     catalog->assets.push_back({"Maps/SC_test.json", EditorAssetKind::Scene, "Level"});
     snapshot.assetCatalog = catalog;
     Refresh();
-    auto* list = document->GetElementById("asset-list");
-    ASSERT_NE(list->GetChild(0), nullptr);
-    list->GetChild(0)->DispatchEvent("dblclick", {});
+    auto* levelTile = BrowserItem("Maps/SC_test.json");
+    ASSERT_NE(levelTile, nullptr);
+    levelTile->DispatchEvent("dblclick", {});
     Refresh();
     EXPECT_TRUE(document->GetElementById("menu-file-save")->HasAttribute("disabled"));
     EXPECT_TRUE(document->GetElementById("menu-edit-validate")->HasAttribute("disabled"));
@@ -7027,6 +7575,7 @@ TEST_F(EditorUiTest, BrowserAssetContextMenuOpensTheAssetThroughTheExistingOpenC
 // 而不是拿"打开目录"这类与双击重复的条目把菜单填满。
 TEST_F(EditorUiTest, BrowserFolderRightClickDoesNotOpenAContextMenu)
 {
+    ShowContentBrowser();
     auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
     catalog->assets = {
         {"Maps/SC_alpha/MI_a.json", EditorAssetKind::MaterialInstance, "A"}};

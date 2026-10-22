@@ -391,6 +391,20 @@ MaterialInstanceBuildPlan MaterialInstanceValidator::BuildLoadPlan(
     loadPlan.shaderVariantKey.shadingModelMacro =
         MaterialAssetUtils::ShadingModelToShaderDefine(shadingModel);
     loadPlan.shaderVariantKey.macros = ParseMaterialMacros(materialInstanceJson);
+    const bool strandFactory = HasMaterialMacroValue(
+        loadPlan.shaderVariantKey.macros, "VL_TRESSFX_STRANDS", "1");
+    if (strandFactory)
+    {
+        // 本批只开放静态 Unlit 可见性探针，不能让保留的 Hair ID 静默走 DefaultLit。
+        if (shadingModel != "Unlit" ||
+              loadPlan.shaderVariantKey.renderMode != RenderMode::TransparentAlphaBlendWriteDepth ||
+            loadPlan.cullMode != vk::CullModeFlagBits::eNone ||
+            !materialJson.contains("shaderEvaluation") ||
+            HasMaterialMacroValue(loadPlan.shaderVariantKey.macros, "VL_SKINNED_MESH", "1") ||
+            materialJson.value("features", nlohmann::json::object()).value("modifiesMeshPosition", false))
+            throw std::runtime_error(
+                "TressFXStrands requires composed Unlit AlphaBlendWriteDepth two-sided material without skinning or WPO");
+    }
 
     if (loadPlan.shaderVariantKey.renderMode == RenderMode::ThinTranslucent)
     {
@@ -428,6 +442,8 @@ MaterialInstanceBuildPlan MaterialInstanceValidator::BuildLoadPlan(
         request.shaderVariantKey = loadPlan.shaderVariantKey;
         request.pass = VL::MaterialPass::Base;
         request.features = loadPlan.materialFeatureKey;
+        if (strandFactory)
+            request.vertexFactoryKey = "TressFXStrands";
         if (HasMaterialMacroValue(loadPlan.shaderVariantKey.macros, "VL_SKINNED_MESH", "1"))
         {
             if (loadPlan.materialFeatureKey.modifiesMeshPosition)

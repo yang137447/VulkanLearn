@@ -4,6 +4,8 @@ list(FILTER sources EXCLUDE REGEX "/render/offline/core/")
 # 动画 CPU 资产和播放器由独立库拥有，避免递归源收集重复编译。
 list(FILTER sources EXCLUDE REGEX "/animation/")
 list(FILTER sources EXCLUDE REGEX "/debug/")
+# 发丝 CPU 导入由独立库拥有，工具和 main 共用同一份实现。
+list(FILTER sources EXCLUDE REGEX "/source/hair/")
 # 可复用 UI 控件只依赖 RmlUi，不经 main 的递归收集重复编译。
 list(FILTER sources EXCLUDE REGEX "/ui/widgets/")
 list(FILTER sources EXCLUDE REGEX "/script/scriptHost.cpp$")
@@ -47,6 +49,7 @@ PRIVATE
     vl_offline_core
     vl_animation_assets
     vl_debug_draw
+    vl_hair_assets
     vl_script_host
     ws2_32 dbghelp advapi32 user32 secur32
     )

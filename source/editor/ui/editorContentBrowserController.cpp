@@ -95,13 +95,14 @@ const char* KindFilter(EditorAssetKind kind)
     case EditorAssetKind::Texture: return "texture";
     case EditorAssetKind::Terrain: return "terrain";
     case EditorAssetKind::Blueprint: return "blueprint";
+    case EditorAssetKind::Retarget: return "retarget";
     }
     return "";
 }
 
 bool ValidFilter(const std::string& value)
 {
-    for (const char* filter : {"all", "material", "mesh", "scene", "texture", "terrain", "blueprint", "csharp"})
+    for (const char* filter : {"all", "material", "mesh", "scene", "texture", "terrain", "blueprint", "retarget", "csharp"})
         if (value == filter) return true;
     return false;
 }

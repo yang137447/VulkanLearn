@@ -987,6 +987,7 @@
                 </tbody>
             </table>
             <h3>材质与 shader 数据流</h3>
+            <p>静态 TressFX guide 通过 <code>SM_*.json type=tressfx</code> 与 <code>TressfxModelImporter</code> 进入既有 MeshAssetLoader、World 候选与快照链；GPU 的 <code>TressFXStrands</code> 顶点工厂展开相机朝向 ribbon，当前只支持 Unlit forward 可见性探针。它没有独立 groom 场景对象、模拟或 Hair 光照实现，详见 <a href="tressfx-asset-import.md">TressFX 资产导入合同</a>。</p>
             <pre><code>shader/glsl + material JSON
   -> MaterialParameterIncludeGenerator
   -> ShaderCompiler + ShaderReflection

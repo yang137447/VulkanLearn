@@ -90,6 +90,8 @@ RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
     const MeshAssetImportResult& importResult = *imported;
     const MeshAssetBuildPlan& buildPlan = importResult.buildPlan;
     const ModelResource& modelResource = importResult.modelResource;
+    if (buildPlan.assetType == "tressfx" && loadContext.offlineOnly)
+        throw std::runtime_error("TressFX strands require the realtime vertex factory; offline ribbon expansion is not implemented");
     if (modelResource.skeletalAsset && loadContext.offlineOnly)
         throw std::runtime_error("Skeletal meshes require realtime rendering; offline skinning is not implemented");
     auto animation = modelResource.skeletalAsset
@@ -168,6 +170,11 @@ RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
                 "VL_SKINNED_MESH", "1");
             if (skinMaterial != static_cast<bool>(animation))
                 throw std::runtime_error("Mesh and material vertex factory mismatch: " + materialPath);
+            const bool strandMaterial = HasMaterialMacroValue(
+                materialInstance->GetBaseMaterial().lock()->GetShaderVariantKey().macros,
+                "VL_TRESSFX_STRANDS", "1");
+            if (strandMaterial != (buildPlan.assetType == "tressfx"))
+                throw std::runtime_error("TressFX mesh and material vertex factory mismatch: " + materialPath);
         }
 
         std::string meshObjectName = meshObjectBaseName;
@@ -201,6 +208,8 @@ RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
             meshObjectPlan.localBoundsMin = meshObjectPlan.localBoundsMin.cwiseMin(vertex.position);
             meshObjectPlan.localBoundsMax = meshObjectPlan.localBoundsMax.cwiseMax(vertex.position);
         }
+        meshObjectPlan.localBoundsMin.array() -= section.boundsPadding;
+        meshObjectPlan.localBoundsMax.array() += section.boundsPadding;
         meshObjectPlan.meshKey = renderableObjectKey;
         if (animation)
         {

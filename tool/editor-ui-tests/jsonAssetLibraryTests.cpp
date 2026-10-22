@@ -31,7 +31,8 @@ TEST(EditorJsonAssetParsing, RecognizesAllFilenamePrefixesAndMixedCaseExtensions
         {"Common/T_albedo.jSoN", Kind::Texture},
         {"Maps/TR_ground.json", Kind::Terrain},
         {"Common/Blueprints/BP_rotator.json", Kind::Blueprint},
-        {"Common/Blueprints/bP_rotator.JsOn", Kind::Blueprint}
+        {"Common/Blueprints/bP_rotator.JsOn", Kind::Blueprint},
+        {"Maps/Retarget/RT_profile.json", Kind::Retarget}
     };
     for (const auto& item : cases)
     {
@@ -48,7 +49,7 @@ TEST(EditorJsonAssetParsing, RecognizesTopLevelTypeWithoutFilenameConvention)
     const std::vector<std::pair<std::string, Kind>> cases{
         {"materialInstance", Kind::MaterialInstance}, {"mesh", Kind::Mesh},
         {"scene", Kind::Scene}, {"texture", Kind::Texture}, {"terrain", Kind::Terrain},
-        {"MESH", Kind::Mesh}, {"speedtree", Kind::Mesh}, {"blueprint", Kind::Blueprint},
+        {"MESH", Kind::Mesh}, {"speedtree", Kind::Mesh}, {"tressfx", Kind::Mesh}, {"blueprint", Kind::Blueprint},
         {"BLUEPRINT", Kind::Blueprint}
     };
     for (const auto& item : cases)
@@ -323,6 +324,7 @@ TEST(EditorJsonAssetTypes, UsesExpectedNamesAndGeneratedIconLocations)
     EXPECT_STREQ(EditorAssetKindName(Kind::Scene), "Scene");
     EXPECT_STREQ(EditorAssetKindName(Kind::Texture), "Texture");
     EXPECT_STREQ(EditorAssetKindName(Kind::Terrain), "Terrain");
+    EXPECT_STREQ(EditorAssetKindName(Kind::Retarget), "Retarget");
     EXPECT_STREQ(EditorAssetKindIcon(Kind::MaterialInstance), "icons/material-instance.png");
     EXPECT_STREQ(EditorAssetKindIcon(Kind::Mesh), "icons/mesh.png");
     EXPECT_STREQ(EditorAssetKindIcon(Kind::Scene), "icons/scene.png");
@@ -394,6 +396,61 @@ protected:
     std::filesystem::path root;
     EditorJsonAssetLibrary library;
 };
+
+TEST_F(JsonAssetLibraryTest, RetargetPreviewRejectsOutsideRootReferences)
+{
+    Write("RT_test.json", R"({"format":"vl.retarget.v1","preview":{
+        "sourceSkeletonPath":"../SK_outside.json","targetSkeletonPath":"SK_inside.json"}})");
+    Start();
+    library.RequestOpen("RT_test.json");
+    ASSERT_TRUE(WaitDocument());
+    const auto document = library.GetDocument();
+    EXPECT_EQ(document->kind, Kind::Retarget);
+    EXPECT_EQ(document->retargetPreview, nullptr);
+    EXPECT_NE(document->previewDiagnostic.find("Parent traversal"), std::string::npos);
+    EXPECT_TRUE(document->diagnostic.empty());
+}
+
+TEST_F(JsonAssetLibraryTest, RetargetPreviewMissingMetadataDoesNotRetainPreviousValues)
+{
+    Write("RT_test.json", R"({"format":"vl.retarget.v1"})");
+    Start();
+    library.RequestOpen("RT_test.json");
+    ASSERT_TRUE(WaitDocument());
+    EXPECT_EQ(library.GetDocument()->retargetPreview, nullptr);
+    EXPECT_NE(library.GetDocument()->previewDiagnostic.find("requires preview"), std::string::npos);
+    EXPECT_FALSE(library.GetDocument()->fields.empty());
+}
+
+TEST_F(JsonAssetLibraryTest, RetargetPreviewPublishesFrozenValuesAndClearsOnFailedReload)
+{
+    const std::string skeleton = R"({"format":"vl.skeleton.v1","skeleton":"Shared",
+        "root":"root","slots":["DefaultSlot"],"joints":[{"name":"root","parent":-1,
+        "restLocal":[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]}]})";
+    const std::string profile = R"({"format":"vl.retarget.v1","sourceSkeleton":"Shared",
+        "targetSkeleton":"Shared","sourceRoot":"root","targetRoot":"root",
+        "joints":[{"source":"root","target":"root"}],
+        "preview":{"sourceSkeletonPath":"SK_source.json","targetSkeletonPath":"SK_target.json",
+        "targetModelPath":"SM_target.json"}})";
+    Write("SK_source.json", skeleton);
+    Write("SK_target.json", skeleton);
+    Write("RT_test.json", profile);
+    Write("SM_target.json", R"({"type":"mesh"})");
+    Start();
+    library.RequestOpen("RT_test.json");
+    ASSERT_TRUE(WaitDocument());
+    const auto frozen = library.GetDocument()->retargetPreview;
+    ASSERT_NE(frozen, nullptr) << library.GetDocument()->previewDiagnostic;
+    EXPECT_EQ(frozen->sourceSkeleton, "Shared");
+    EXPECT_EQ(frozen->targetModelPath, "SM_target.json");
+    EXPECT_EQ(frozen->mappings.size(), 1u);
+    Write("SK_target.json", "{}");
+    library.RequestOpen("RT_test.json");
+    ASSERT_TRUE(WaitDocument());
+    EXPECT_EQ(library.GetDocument()->retargetPreview, nullptr);
+    EXPECT_FALSE(library.GetDocument()->previewDiagnostic.empty());
+    EXPECT_EQ(frozen->target[0].name, "root");
+}
 
 TEST_F(JsonAssetLibraryTest, TexturePreviewDecodesRgbWithTopLeftOrientation)
 {

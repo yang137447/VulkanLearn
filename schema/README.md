@@ -12,6 +12,15 @@ top-level directories — `Common/`, `Maps/`, `Generated/` — not a `resources/
 - Bind `texture-asset` JSON to `Common/Textures/T_*.json` and `Maps/SC_*/Textures/T_*.json`
   (format contract: `documents/contracts/texture-asset-json-v1.md`).
 - Bind `render_graph.schema.json` only to `config/renderGraphConfig.json`.
+- Bind `retarget_profile.schema.json` only to `Common/Retarget/RT_*.json` and
+  `Maps/SC_*/Retarget/RT_*.json`. It checks JSON shape; the production loader
+  additionally checks skeleton identity, joint names, unique mappings/offsets,
+  unit quaternions and the prohibition on locomotion-root rotation offsets.
+  Optional `preview` SK paths belong to the Retarget tab; the asset worker
+  validates root-relative paths and matching skeleton identities. Optional
+  `preview.targetModelPath` enables paired animation; GT checks that the SM
+  uses the opened RT and obtains its non-retargeted sourceModel. These fields
+  do not replace runtime SM skeleton references.
 - `hair_azimuthal_lut.schema.json` belongs to a generator input whose implementation was deleted on
   2026-09-12; it is retained for the paper-based rebuild. Do not bind it to any live asset.
 - Do not bind any schema to broad patterns like `*.json`.

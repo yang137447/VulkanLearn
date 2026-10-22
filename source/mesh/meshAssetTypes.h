@@ -167,10 +167,16 @@ struct MeshAssetBuildPlan
     MeshImportOptions importOptions;
     std::vector<MeshMaterialSlot> materialSlots;
     std::string modelCacheKey;
+    // tressfx 描述符声明局部空间半径；静态 ribbon 不把逆质量当作宽度。
+    float strandRadius = 0.0f;
     // 可选独立蒙皮声明；静态模型不构造骨架或额外顶点数据。
     // 骨骼网格必须给 skeletonPath：根骨、关节表与曲线注册表都以这份 SK 为准。
     std::string skeletonPath;
     std::string skeletonDigest;
+    // 目标网格拥有渲染骨架；可选 sourceModel 只提供动作，retarget 显式转换姿态。
+    std::string animationSourceModelPath;
+    std::string retargetProfilePath;
+    std::string retargetProfileDigest;
     std::vector<MeshAnimationClipPlan> animationClips;
     // 可选 AnimMontage 清单；为空时资源行为与引入 montage 前完全一致。
     std::vector<MeshAnimationMontagePlan> animationMontages;
@@ -200,6 +206,8 @@ struct MeshSection
     std::vector<SpeedTreeVertexAux> speedTreeAuxVertices;
     std::string sectionName;
     std::string materialSlotName;
+    // 相机朝向 ribbon 的中心线顶点尚未展开；包围盒必须额外覆盖局部半径。
+    float boundsPadding = 0.0f;
 };
 
 // Runtime loading plan for one imported mesh section after material slot validation.

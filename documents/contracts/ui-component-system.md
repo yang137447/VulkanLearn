@@ -53,8 +53,22 @@ SpringArm 显示从臂根到静态臂端的连接线；子组件局部 TRS 相�
 标题右侧保留原有命令按钮，右上 Scene Outliner，右下 Details，
 中央/左侧独立 Viewport，底部 Content Browser / Renderer 标签页，最底部状态栏。
 Material Slots 和 actor 参数放在 Details 中，MI 文档参数放在中央独立资产页。
-每个打开的 MI 对应一个紧邻 Viewport 的停靠标签，显示文件名、脏标记和关闭按钮；
+每个打开的资产对应一个紧邻 Viewport 的停靠标签，显示类型图标、文件名、适用的脏标记和关闭按钮；
 重复打开复用文档，关闭沿用保存/丢弃/取消确认，切回关卡后普通快照刷新不会抢回材质页。
+MI、Mesh、Texture、Terrain 元数据页、Blueprint 和 Retarget 共用主窗口资产工作区行为：
+活动资产页占满工作区，暂不显示关卡 Outliner、Details、Content Browser 与关卡分隔条；
+页面内部保留自身的视口和编辑面板。切回 Viewport 恢复关卡停靠几何。
+该扩展由停靠宿主统一处理，不按资产类型分支，不改写布局树、隐藏偏好或持久化比例。
+共用行为落在 `UiWidgets`：资产标签复用 `DocumentTabContent` 的同级激活/关闭按钮、
+图标与截断布局，`WidgetAction.key` 携带经转义的稳定地址；
+`DockWorkspace::Layout` 的临时最大化输入负责完整工作区几何，
+`TabAfterClose` 根据宿主提供的候选集合计算相邻页，不执行文档关闭。
+停靠适配器只管理 DOM、可见性和呈现选择，业务宿主只处理文档确认、GT 命令和预览切换。
+标签关闭按钮按稳定面板身份寻址，关闭后台标签不激活它、不切换当前预览 World。
+关闭当前页优先选择同组右侧资产，再选择左侧资产，无相邻资产时返回关卡；
+MI 等待 GT 确认文档移除后再切换，Blueprint 保留权威保存/丢弃确认。
+资源正文不再另放“返回箭头式关闭”按钮，关闭统一位于标签。资产页期间停靠拖动暂停，
+布局调整在关卡页操作；这里对齐主窗口标签式资产编辑流程，不提供独立系统窗口。
 中央页保留 General、Render States、Parameters、Texture Bindings、保存及既有 World 预览命令；
 中央页左侧使用正式 `Common/Meshes/SM_material_preview_ball.json` 预览球，右侧为材质参数。
 `PreviewMaterial` 经 LoadWorld 事务在 `SC_model_preview` 注入 `preview_material`，
@@ -83,10 +97,14 @@ Scene Outliner 现在渲染真实 World actor 树（网格 / 四类灯 / 相机 
 布局校验因此只要求常驻面板齐备，**不要求**存在资产编辑器面板。
 资产编辑器标签是**会话内**状态：写盘时被丢弃（写出的布局里不含它们），
 留下的空栈会被剪掉，重启后不恢复打开的资产。
-当前 Content Browser 浏览 MI、Mesh、Scene、Texture、Terrain JSON 元数据，
+当前 Content Browser 浏览 MI、Mesh、Scene、Texture、Terrain、Blueprint、Retarget JSON 元数据，
 Mesh、Texture、Terrain 双击后进入资源标签页，右侧为只读 JSON Details；
 Actor 使用同一资源标签容器中的专用配置表单。
 Mesh 通过预览 World 显示真实模型；Texture 后台加载 PNG/JPEG/TGA/BMP 的 source 并等比例显示 RGB。
+MI、Mesh/Texture、Blueprint 和 Retarget 的资产名、身份/路径与预览状态采用视口左上角
+`asset-viewport-info` 文字叠层，不再使用独立标题区占用视口高度。叠层及子元素不接收指针，
+相机环绕、缩放、拾取与 gizmo 输入穿透；播放、模式和编辑命令仍保留在操作栏。
+Retarget 的参考测量与动画时间读数也放入各自视口叠层，Source/Target 标签叠在动画视口底部。
 骨骼 SM 复用模型资源标签，按冻结快照显示播放/暂停、片段选择和时间 slider；
 静态或陈旧预览隐藏动画控件。回调只发送预览 World generation 与控制值，
 正式采样在 GT 执行，见 [动画播放与蒙皮](animation-runtime-skinning.md)。
@@ -145,8 +163,8 @@ Lit 直接返回正常光照，避免只在最终合成切换而材质仍输出 
 | Input / 输入 | Button、Input、Slider、Option、Select | 已实现交互地址和样式状态；`Slider` 是 `input type="range"`，与文本输入共用同一个 action/index/component 地址 | CheckBox、SpinBox、ColorPicker |
 | Layout / 容器 | HorizontalBox、VerticalBox、ScrollBox、Splitter | RML/RCSS 组合与受最小尺寸约束的可调分区 | Grid |
 | Views / 数据视图 | ListRow、TreeRow | 已实现行、缩进、展开符号、选择状态、行首类型图标、行尾附加控件（逐 actor 可见性）与行样式 class；世界 actor 树在此之上按行预算挂载可见窗口 | 通用虚拟化 ListView/TreeView、TableView、通用筛选 |
-| Navigation / 导航 | DocumentTab、MenuItem | 已实现激活与关闭分离、菜单项勾选/禁用与条目索引寻址 | 菜单快捷键、Breadcrumb、子菜单键盘导航 |
-| Workspace / 工作区 | DockWorkspace、DockTab、面板可见性、脏关闭弹窗 | 四边停靠、标签合并、窗口内浮动、布局持久化与重置、面板隐藏/恢复 | 原生多窗口、通用 Modal |
+| Navigation / 导航 | DocumentTab、MenuItem | 已实现激活与关闭分离、图标/截断/稳定 key、停靠壳共用标签内容、菜单项勾选/禁用与条目索引寻址 | 菜单快捷键、Breadcrumb、子菜单键盘导航 |
+| Workspace / 工作区 | DockWorkspace、DockTab、面板可见性、脏关闭弹窗 | 四边停靠、标签合并、窗口内浮动、临时最大化几何、相邻关闭候选、布局持久化与重置、面板隐藏/恢复 | 原生多窗口、通用 Modal |
 | Property / 属性 | PropertyRow、PropertyGroup、PropertyInfo、PropertyControlRow、CollapsibleSection、NumericComponents、ColorPreview | 已实现属性组合、Reset 地址、向量分量、可选范围滑条、折叠分组、sRGB 色板与十六进制读数、无 Reset 的只读/可编辑行、可寻址数值 span | 多对象混合值、属性适配器、可编辑调色板 |
 | Editor / 业务 | 顶部菜单栏、世界 actor 树、JSON Content Browser、MI Details、actor Details、资源编辑器、离线控制、Viewport、视口工具条 | 已接入组件、受限浏览窗口/分页、资源标签、Mesh 双击经 `PreviewModel` 注入 `SC_model_preview`、Mesh 专属会话工具条与模型信息 Details、renderer-owned 离屏视口、扁平 World actor 列表、类型化数值编辑、可见性、灯光/相机辅助图示及场景/MI 保存确认 | 场景对象增删、gizmo |
 
@@ -539,14 +557,16 @@ GT 的材质资源绑定、GPU 上传与管线创建仍是同步阶段，750 ms 
 ## JSON 元数据与输入边界
 
 `source/editor/assets/editorJsonAssetLibrary.*` 提供 GT facade 与独立读取 worker。
-初始化请求一次目录扫描，后续仅显式 Refresh 重扫；打开请求读取选定 JSON，贴图另读 source。
+初始化请求一次目录扫描，后续仅显式 Refresh 重扫；打开请求读取选定 JSON，贴图另读 source，
+Retarget 另读显式预览引用的两个 SK 清单。
 GT 每帧 `Poll()` 使用非阻塞邮箱发布结果，不扫描目录、不读取资产 JSON。
 刷新/打开待办合并，打开优先且扫描在文件之间服务新打开请求；
 worker 投递和 GT 发布均核对代际，迟到结果不能覆盖最新选择。
 目录和文档使用 `shared_ptr<const ...>` 进入编辑器快照，逐帧不深拷贝目录或字段数组。
 
 目录识别 MI、Mesh（含顶层 `speedtree`）、Scene、Texture、Terrain、Actor（`blueprintAsset`）；
-支持的顶层 `type` 优先于文件名前缀，缺失或非字符串时按 `MI_`/`SM_`/`SC_`/`T_`/`TR_`/`BP_`
+Retarget 使用 `RT_` 文件名前缀。
+支持的顶层 `type` 优先于文件名前缀，缺失或非字符串时按 `MI_`/`SM_`/`SC_`/`T_`/`TR_`/`BP_`/`RT_`
 和旧 `scene*` basename 识别，非字符串 type 另附诊断。
 显式不支持的字符串类型排除；可识别的损坏候选保留诊断，
 不展示半棵字段树。扫描跳过 `.git`、`Generated`、`data` 目录（ASCII 大小写不敏感），
@@ -554,9 +574,10 @@ worker 投递和 GT 发布均核对代际，迟到结果不能覆盖最新选择
 
 SAX 不构造完整 JSON DOM，只保留顶层分类/名称/说明及有界前序字段行。
 任意深度、ASCII 大小写不敏感的 `data` 字段及其整个子树不进入展示行或快照；
-普通引用路径仅作为元数据；唯一像素例外是显式打开 Texture：worker 在 canonical 资源根内
+普通引用路径仅作为元数据；像素例外是显式打开 Texture：worker 在 canonical 资源根内
 解码 source，输入最多 64 MiB、解码最多 32 MP，面积缩小到最长边 1024 后发布不可变快照。
-目录扫描不解码；worker 不接触 World/GPU。按 colorSpace 在线性域缩小后编码 sRGB 显示，
+目录扫描不解码；Retarget 的值预览边界见下节。worker 不接触 World/GPU。
+按 colorSpace 在线性域缩小后编码 sRGB 显示，
 UI 以 revision URL 注册像素并走已有纹理上传/退役路径；切换、重载不会串图。
 JSON 文件字节仍在 worker 读取，内嵌 `data` 仍做语法、字节数与深度校验，
 不能宣称跳过其词法解析或完全不读取内嵌 payload。
@@ -586,6 +607,58 @@ JSON 文件字节仍在 worker 读取，内嵌 `data` 仍做语法、字节数�
 `UiOverlayRendererVulkan` 的 per-image 动态缓冲不足时才扩容，
 顶点以 256 KiB、索引以 128 KiB 为基数倍增至满足需求，容量足够则复用。
 这些优化不等同于整个 UI 零分配或资产规模无限。
+
+### Retarget 参考姿态标签
+
+双击 `RT_*.json` 打开独立中央资源标签；类型筛选有 Retargets。
+页面采用 `RetargetAssetEditorPanel`，消费 worker 发布的
+`EditorRetargetPreview`；Reference Pose 只显示冻结参考值，Animation 经外层
+`MaterialInstanceAssetEditorPanel` 请求正式模型预览 World。
+Reload 复用 JSON 读取请求，缺失/损坏/身份不匹配时清空骨架并显示诊断。
+
+Retarget 遵循共用资产标签的完整工作区规则：左侧 Hierarchy 切换 Source/Target 冻结骨架，
+中央为 Animation / Reference Pose 视口，右侧依次为只读 Details、Bone Mapping 与
+Asset Browser。骨架树可折叠；选择已映射骨同步映射行与 Details，反向选映射会展开祖先。
+这里展示骨映射，不声明 UE 的 IK chain 或姿态作者能力。
+动画时间轴位于中央视口下方；Asset Browser 只列当前正式预览播放器的 source clips，
+选择仍发送同代 `previewClip` 请求。加载失败、旧 generation 或 Reference Pose 下清空列表。
+工作区扩展、标签关闭和关卡布局恢复与其他资产页相同，见“工作区布局”。
+
+profile 的可选 `preview.sourceSkeletonPath` / `targetSkeletonPath` 是资源根相对的 SK 路径。
+worker 在显式打开时执行原有 canonical 根内、4 MiB、深度与行数检查，
+再调用生产 `ParseSkeleton` / `ParseRetargetProfile` / `CompiledRetarget`；
+身份必须与 profile 相同。目录扫描不跟随 SK 引用，不读 FBX/动画/权重。
+这是作者参考清单检查，不代替正式导入时的 FBX 与 SK 一致性验证；
+preview 元数据不改变 SM 的运行时来源。
+可选 `preview.targetModelPath` 指定资源根内的目标 SM；worker 验证路径，
+GT 再核对目标是骨骼 SM、其 retarget 路径与打开的 RT 相同、sourceModel 是非 retarget
+骨骼 SM。实际 FBX、SK、权重、映射与动作校验仍属于正式 LoadWorld 事务。
+缺少该可选字段的旧 RT 继续只提供 Reference Pose。
+
+Animation 默认显示并排的源（X=-65 cm）与目标（X=65 cm）真实网格，尺度均为 1；
+共用片段选择、播放/暂停和秒时间轴，seek 同时暂停两边。动画值来自目标播放器的
+冻结快照；选择片段使用成对预览专用的原地播放请求，初次发布也复位到同一片段起点。
+图像复用 `vl://scene-viewport`，仅在新 World 同时发布目标和含当前 RT 路径的源身份后显示。
+加载阶段也发布 Animation 预览区域的矩形，供首次自动取景使用实际宽高比。
+相机支持既有环绕、平移、滚轮缩放和 Frame，没有专门的脚部按钮。
+切 Reference Pose 隐藏图像、保留已加载的预览；切回 Animation 不重置播放时间。
+Reload/切关卡后的旧图像与旧 generation 控制不能继续作用于新 World。
+返回关卡仍重载记住的场景，采用已有单活动 World 所有权。
+
+Bind / Calibrated 切换原绑定与运行时校准参考姿态；Front / Side / Top 是厘米、
+Y-up 的 XY / ZY / XZ 正交投影。两侧按所选映射锚点平移叠加，不按身高缩放。
+两种姿态共用取景范围，支持缩放、选中关节取景与 Fit；
+选中映射显示两侧关节位置、局部 XYZ 轴及位置差连线。
+默认显示映射关节及其祖先链，All bones 开关包含手指、眼球与 IK 等未映射分支。
+映射列表每页最多 64 行，选中与视图切换属于本地会话状态。
+三栏的骨架、映射、详情和动画列表各自滚动，中央骨架表面最小高度为 96px。
+同一数据/视图/尺寸的静止帧不重挂骨架或映射 DOM。
+
+`Delta cm` 为锚点平移对齐后的位置距离；`Chain deg` 是该关节相对两侧最近共同
+映射祖先的方向夹角，没有共同祖先或骨段退化时显示 `--`。
+它不是局部骨轴旋转差，也不是 IK 接触或动画误差；不同骨长与鞋型均可产生非零值。
+参考图与动画视图分开显示；参考测量始终是校准/绑定数据，不是动画采样。
+本页无姿态作者修改、动态骨架叠加、IK 或自动“通过”判定。
 
 ## 停靠与视口契约
 
@@ -892,7 +965,7 @@ RmlUi 指针事件覆盖，但从 `PlatformEvent` 到 RmlUi 这一段只有构�
 
 ```powershell
 cmake --build build --target editor_ui_tests editor_viewport_tests main -j4
-ctest --test-dir build -R "^(UiColorTransform|UiWidgetTest|UiWidgetRefresh|EditorUiTest|EditorActorProperty|EditorActorVisualization|SceneDocumentTest|ContentBrowserTest|DockWorkspaceTest|DockPersistenceTest|DockRmlTest|EditorViewportGeometry|EditorViewportGridGeometry|EditorViewportAxisIndicator|EditorJsonAssetParsing|EditorJsonAssetPaths|EditorJsonAssetTypes|JsonAssetLibraryTest|ResourceEditorController|LargeCatalog/ContentBrowserPerformanceTest)\." --output-on-failure
+ctest --test-dir build -R "^(UiColorTransform|UiWidgetTest|UiWidgetRefresh|EditorUiTest|EditorActorProperty|EditorActorVisualization|SceneDocumentTest|ContentBrowserTest|DockWorkspaceTest|DockPersistenceTest|DockRmlTest|EditorViewportGeometry|EditorViewportGridGeometry|EditorViewportAxisIndicator|EditorJsonAssetParsing|EditorJsonAssetPaths|EditorJsonAssetTypes|EditorRetargetPreview|JsonAssetLibraryTest|ResourceEditorController|LargeCatalog/ContentBrowserPerformanceTest)\." --output-on-failure
 ```
 
 `EditorViewportGridGeometry` 必须留在选择集里：它住在 `editor_viewport_tests` 而不是

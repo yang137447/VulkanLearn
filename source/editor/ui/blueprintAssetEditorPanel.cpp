@@ -279,11 +279,8 @@ void MaterialInstanceAssetEditorPanel::RefreshBlueprintAssetEditor()
         root.label = "Blueprint (Self)";
         root.icon = "icons/blueprint.png";
         root.select = {"blueprint-asset-select-defaults"};
-        std::string body = "<div class=\"blueprint-asset-header\"><h2 id=\"blueprint-asset-title\"></h2>"
-            "<p class=\"blueprint-asset-path\">" + Text(tab->path) + "</p>" +
-            "<p id=\"blueprint-asset-status\" class=\"notice\"></p></div>" +
-            "<div class=\"blueprint-asset-workspace\"><div id=\"blueprint-asset-components\">" +
-            "<div class=\"blueprint-asset-panel-title\">Components</div>" +
+        std::string body = "<div class=\"blueprint-asset-workspace\"><div id=\"blueprint-asset-components\">"
+            "<div class=\"blueprint-asset-panel-title\">Components</div>"
             "<div class=\"blueprint-asset-add-tools\">" +
             Select(Prefix + "component-kind", {Prefix + "component-kind"},
                 ScriptComponentOptions()) +
@@ -308,7 +305,10 @@ void MaterialInstanceAssetEditorPanel::RefreshBlueprintAssetEditor()
             "<select id=\"blueprint-snap-scale\" data-action=\"blueprint-asset-snap-scale\" title=\"Scale snap relative to starting scale\"><option value=\"0.05\">5%</option><option value=\"0.1\" selected=\"selected\">10%</option><option value=\"0.25\">25%</option><option value=\"0.5\">50%</option></select></div>"
             "<div id=\"blueprint-asset-preview-surface\"><img id=\"blueprint-asset-preview-image\" src=\"vl://scene-viewport\"/>"
             "<div id=\"blueprint-asset-gizmo-overlay\"></div>"
-            "<p id=\"blueprint-asset-preview-status\" class=\"notice\"></p></div></div>" +
+            "<div class=\"asset-viewport-info\"><h2 id=\"blueprint-asset-title\"></h2>"
+            "<p class=\"blueprint-asset-path\">" + Text(tab->path) + "</p>" +
+            "<p id=\"blueprint-asset-status\" class=\"notice\"></p>"
+            "<p id=\"blueprint-asset-preview-status\" class=\"notice\"></p></div></div></div>" +
             "<div id=\"blueprint-asset-details\"><div class=\"blueprint-asset-panel-title\" id=\"blueprint-asset-details-title\"></div>" +
             "<div id=\"blueprint-asset-details-scroll\" class=\"inspector-body\"><div id=\"blueprint-asset-defaults\"><h3>Class Defaults</h3>";
         body += PropertyControlRow("Name", Input(Prefix + "name", {Prefix + "name"}, draft.at("name")));

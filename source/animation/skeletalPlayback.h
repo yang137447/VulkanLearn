@@ -1,6 +1,7 @@
 #pragma once
 
 #include "animationAssets.h"
+#include "animationRetarget.h"
 #include "animationMontage.h"
 #include "animationSkeleton.h"
 #include "motionWarping.h"
@@ -29,8 +30,17 @@ struct SkeletalAsset
     std::vector<Montage> montages;
     // 正式加载时捕获源字节身份；MM 绑定统计前核对同一代模型和片段。
     std::vector<std::pair<std::string, std::string>> sourceInputs;
+    // 可选的动画源资产。目标资产拥有最终渲染 mesh；动作源只提供 clips、
+    // montages 和采样骨架，避免把 source 骨架冒充成 target 骨架。
+    std::shared_ptr<const SkeletalAsset> animationSource;
+    std::shared_ptr<const RetargetProfile> retargetProfile;
 
     bool HasSkeleton() const { return !skeleton.id.empty(); }
+    const SkeletalAsset& AnimationAsset() const
+    {
+        return animationSource ? *animationSource : *this;
+    }
+    bool IsRetargeted() const { return animationSource != nullptr; }
     // 按 Montage id 或资源相对路径（Montage::sourcePath）查找；未命中返回 nullptr。
     const Montage* FindMontage(std::string_view idOrPath) const;
 };
@@ -160,7 +170,10 @@ public:
     }
     size_t SelectedClip() const { return selected; }
     // 调试读数用只读片段身份；与索引同源，不暴露可变资产。
-    const std::string& SelectedClipId() const { return asset->clips.at(selected).id; }
+    const std::string& SelectedClipId() const
+    {
+        return asset->AnimationAsset().clips.at(selected).id;
+    }
     // 根轨道上一播放 tick 的模型空间位移（cm）；Climb 等有明确根轨迹的动作消费。
     const Eigen::Vector3f& RootMotionDelta() const { return rootMotionDelta; }
     Eigen::Vector3f RootMotionTotal() const;
@@ -224,6 +237,7 @@ private:
     void TickMontageSections(float deltaSeconds, const Eigen::Matrix4f* meshTransform,
         const Eigen::Vector3f* actorPosition, float actorYaw);
     std::shared_ptr<const SkeletalAsset> asset;
+    std::shared_ptr<const CompiledRetarget> compiledRetarget;
     std::vector<std::shared_ptr<const SkinPose>> poses;
     // 与 palette 同批求值/提交，供原生 Pose History 使用，不把可写模型矩阵传给 RT。
     std::shared_ptr<const std::vector<Eigen::Matrix4f>> jointModels;

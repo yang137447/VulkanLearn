@@ -215,4 +215,10 @@ void RenderableObject::UpdateLocalBounds()
         boundsMin = boundsMin.cwiseMin(vertex.position);
         boundsMax = boundsMax.cwiseMax(vertex.position);
     }
+    if (imported)
+    {
+        const float padding = imported->modelResource.sections[importedSectionIndex].boundsPadding;
+        boundsMin.array() -= padding;
+        boundsMax.array() += padding;
+    }
 }

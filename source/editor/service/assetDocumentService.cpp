@@ -55,7 +55,7 @@ void ValidateKind(K kind, const Json& json, const std::string& path)
     if (!json.is_object()) throw std::invalid_argument("Asset must be a JSON object");
     const std::string type = json.value("type", "");
     if ((kind == K::Scene && type != "scene") ||
-        (kind == K::Mesh && type != "mesh" && type != "speedtree") ||
+        (kind == K::Mesh && type != "mesh" && type != "speedtree" && type != "tressfx") ||
         (kind == K::Texture && type != "texture") ||
         (kind == K::Blueprint && type != "blueprint"))
         throw std::invalid_argument("Wrong asset type: " + path);
@@ -183,7 +183,7 @@ void AssetDocumentService::Validate(const Json& candidate, const std::string& pa
                     const auto reference = ResolveReference(object.at(field).get<std::string>());
                     const auto asset = ReadJson(reference);
                     const std::string type = asset.value("type", "");
-                    if ((std::string(field) == "modelPath" && type != "mesh" && type != "speedtree") ||
+                    if ((std::string(field) == "modelPath" && type != "mesh" && type != "speedtree" && type != "tressfx") ||
                         (std::string(field) == "materialOverride" && type != "materialInstance"))
                         throw std::invalid_argument(std::string("Invalid reference type for ") + field);
                 }
@@ -194,7 +194,7 @@ void AssetDocumentService::Validate(const Json& candidate, const std::string& pa
                         {
                             const auto asset = ReadJson(ResolveReference(component.at(field).get<std::string>()));
                             const auto type = asset.value("type", "");
-                            if ((std::string(field) == "modelPath" && type != "mesh" && type != "speedtree") ||
+                            if ((std::string(field) == "modelPath" && type != "mesh" && type != "speedtree" && type != "tressfx") ||
                                 (std::string(field) == "materialOverride" && type != "materialInstance"))
                                 throw std::invalid_argument("Invalid Actor component reference type");
                         }
@@ -216,7 +216,7 @@ void AssetDocumentService::Validate(const Json& candidate, const std::string& pa
                         (ScriptContentDomain(owner) == "common" && ScriptContentDomain(reference) == "maps"))
                         throw std::invalid_argument("Actor dependency violates content ownership");
                     const auto type = ReadJson(physical).value("type", "");
-                    if ((std::string(field) == "modelPath" && type != "mesh" && type != "speedtree") ||
+                    if ((std::string(field) == "modelPath" && type != "mesh" && type != "speedtree" && type != "tressfx") ||
                         (std::string(field) == "materialOverride" && type != "materialInstance"))
                         throw std::invalid_argument("Invalid Actor component reference type");
                 }
@@ -226,11 +226,30 @@ void AssetDocumentService::Validate(const Json& candidate, const std::string& pa
         const auto plan = MeshAssetValidator::BuildLoadPlan(path, candidate);
         ResolveReference(plan.modelDataPath);
         if (!plan.skeletonPath.empty()) ResolveReference(plan.skeletonPath);
+        if (!plan.animationSourceModelPath.empty())
+        {
+            const auto sourceModelReference = ResolveReference(plan.animationSourceModelPath);
+            const auto sourceModel = ReadJson(sourceModelReference);
+            if (sourceModel.value("type", "") != "mesh")
+                throw std::invalid_argument(
+                    "Mesh skinning.sourceModel must reference a skeletal mesh descriptor");
+            // 让 sourceModel 自身的 descriptor 规则在编辑器边界先收口；
+            // 正式导入仍会再次读取并验证骨架/FBX 内容。
+            const auto sourcePlan = MeshAssetValidator::BuildLoadPlan(
+                plan.animationSourceModelPath, sourceModel);
+            if (!sourcePlan.IsSkeletal() || !sourcePlan.animationSourceModelPath.empty())
+                throw std::invalid_argument(
+                    "Mesh skinning.sourceModel must be a non-retargeted skeletal mesh descriptor");
+        }
+        if (!plan.retargetProfilePath.empty())
+            ResolveReference(plan.retargetProfilePath);
         for (const auto& clip : plan.animationClips)
         {
             ResolveReference(clip.path);
             if (!clip.sequencePath.empty()) ResolveReference(clip.sequencePath);
         }
+        for (const auto& montage : plan.animationMontages)
+            ResolveReference(montage.path);
         for (const auto& slot : plan.materialSlots)
         {
             const auto reference = ResolveReference(slot.materialInstancePath);

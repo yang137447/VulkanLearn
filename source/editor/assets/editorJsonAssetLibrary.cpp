@@ -1,4 +1,5 @@
 #include "editorJsonAssetLibrary.h"
+#include "editorRetargetPreview.h"
 
 #include <algorithm>
 #include <condition_variable>
@@ -74,6 +75,7 @@ std::optional<Kind> FilenameKind(std::string_view assetPath)
     if (name.compare(0, 2, "t_") == 0) return Kind::Texture;
     if (name.compare(0, 3, "tr_") == 0) return Kind::Terrain;
     if (name.compare(0, 3, "bp_") == 0) return Kind::Blueprint;
+    if (name.compare(0, 3, "rt_") == 0) return Kind::Retarget;
     // 兼容旧场景文件名；只看 basename，不能把 SC_ 目录下的其他 JSON 当场景。
     if (name.compare(0, 5, "scene") == 0) return Kind::Scene;
     return std::nullopt;
@@ -84,7 +86,7 @@ std::optional<Kind> TypeKind(const std::string& text)
     const std::string lower = LowerAscii(text);
     if (lower == "materialinstance") return Kind::MaterialInstance;
     // 真实 SM_speedtree 资产以 speedtree 为顶层 type；浏览时归入模型，不读取其 SDK data。
-    if (lower == "mesh" || lower == "speedtree") return Kind::Mesh;
+    if (lower == "mesh" || lower == "speedtree" || lower == "tressfx") return Kind::Mesh;
     if (lower == "scene") return Kind::Scene;
     if (lower == "texture") return Kind::Texture;
     if (lower == "terrain") return Kind::Terrain;
@@ -473,13 +475,17 @@ struct EditorJsonAssetLibrary::Impl
         return !stopping && generation == documentGeneration;
     }
 
-    bool Load(const std::string& path, Document& output, bool fields)
+    bool Load(const std::string& path, Document& output, bool fields, std::string* raw = nullptr)
     {
         std::filesystem::path physical;
         std::string error;
         std::string text;
         if (ResolveJson(root, path, physical, error) && ReadJson(physical, text, error))
-            return ParseEditorJsonAsset(path, text, output, fields);
+        {
+            const bool recognized = ParseEditorJsonAsset(path, text, output, fields);
+            if (raw) *raw = std::move(text);
+            return recognized;
+        }
         // 读取失败时仍保留有命名前缀的候选；不读取任何被 JSON 引用的文件。
         const bool candidate = ParseEditorJsonAsset(path, {}, output, false);
         output.diagnostic = error;
@@ -656,9 +662,10 @@ struct EditorJsonAssetLibrary::Impl
     void Open(uint64_t generation, const std::string& path)
     {
         auto result = std::make_shared<Document>();
+        std::string raw;
         try
         {
-            Load(path, *result, true);
+            Load(path, *result, true, &raw);
         }
         catch (const std::exception&)
         {
@@ -672,6 +679,15 @@ struct EditorJsonAssetLibrary::Impl
             try { LoadTexturePreview(*result); }
             catch (const std::exception&) { result->previewDiagnostic = "Texture preview decoding failed"; }
         }
+        if (result->kind == Kind::Retarget && result->diagnostic.empty() && CurrentDocument(generation))
+        {
+            try { LoadRetargetPreview(raw, *result); }
+            catch (const std::exception& error)
+            {
+                result->retargetPreview.reset();
+                result->previewDiagnostic = BoundedText(error.what());
+            }
+        }
         result->revision = generation;
         std::shared_ptr<const Document> discarded;
         {
@@ -682,6 +698,50 @@ struct EditorJsonAssetLibrary::Impl
                 readyDocument = std::move(result);
             }
         }
+    }
+
+    void LoadRetargetPreview(const std::string& raw, Document& result)
+    {
+        // worker 只验证引用路径/参考骨架；实际网格及 sourceModel 仍走 GT 的正式加载事务。
+        // 复用目录 worker 的路径/字节边界；扫描目录时不跟随这些引用。
+        std::string text, error;
+        std::filesystem::path physical;
+        const Json profile = Json::parse(raw);
+        if (!profile.contains("preview") || !profile.at("preview").is_object())
+            throw std::runtime_error("Reference preview requires preview.sourceSkeletonPath and targetSkeletonPath");
+        const auto& preview = profile.at("preview");
+        for (const auto& item : preview.items())
+            if (item.key() != "sourceSkeletonPath" && item.key() != "targetSkeletonPath" &&
+                item.key() != "targetModelPath")
+                throw std::runtime_error("Unknown retarget preview field: " + item.key());
+        Json skeletons[2];
+        size_t index = 0;
+        for (const char* key : {"sourceSkeletonPath", "targetSkeletonPath"})
+        {
+            if (!preview.contains(key) || !preview.at(key).is_string())
+                throw std::runtime_error(std::string("Missing preview.") + key);
+            if (!ResolveJson(root, preview.at(key).get<std::string>(), physical, error) ||
+                !ReadJson(physical, text, error))
+                throw std::runtime_error(std::string(key) + ": " + error);
+            Document checked;
+            // SK 不属于目录分类，但同样执行 SAX 深度/行数预算后才构造 JSON DOM。
+            if (SourceLineLimitExceeded(text))
+                throw std::runtime_error("JSON source line limit (100000) exceeded");
+            AssetSax sax(checked, false);
+            const bool valid = Json::sax_parse(text.begin(), text.end(), &sax);
+            if (!valid || !checked.diagnostic.empty())
+                throw std::runtime_error(checked.diagnostic.empty() ? "Invalid preview skeleton JSON" : checked.diagnostic);
+            skeletons[index++] = Json::parse(text);
+        }
+        auto values = BuildEditorRetargetPreview(profile, skeletons[0], skeletons[1]);
+        if (preview.contains("targetModelPath"))
+        {
+            if (!preview.at("targetModelPath").is_string() ||
+                !ResolveJson(root, preview.at("targetModelPath").get<std::string>(), physical, error))
+                throw std::runtime_error("Invalid preview.targetModelPath: " + error);
+            values.targetModelPath = preview.at("targetModelPath").get<std::string>();
+        }
+        result.retargetPreview = std::make_shared<const EditorUi::EditorRetargetPreview>(std::move(values));
     }
 
     void ServicePendingOpen()

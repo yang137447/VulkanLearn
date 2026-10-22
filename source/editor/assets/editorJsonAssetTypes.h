@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <array>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -10,7 +11,7 @@
 namespace VL::EditorUi
 {
 
-enum class EditorAssetKind : uint8_t { MaterialInstance, Mesh, Scene, Texture, Terrain, Blueprint };
+enum class EditorAssetKind : uint8_t { MaterialInstance, Mesh, Scene, Texture, Terrain, Blueprint, Retarget };
 enum class EditorJsonValueKind : uint8_t { Object, Array, String, Number, Boolean, Null };
 
 // 资源 worker 发布的不可变 JSON 元数据；UI 只借用共享快照，不加载引用的 data 或 GPU 资源。
@@ -66,6 +67,34 @@ struct EditorThumbnailSnapshot
     std::unordered_map<std::string, EditorThumbnail> entries;
 };
 
+// worker 从正式 SK 与 retarget 求值后冻结的作者参考姿态，不拥有 FBX、播放器或 World。
+// bind/reference 均为厘米、Y-up 模型空间；局部轴供检查手腕等仅看骨段位置无法发现的扭转。
+struct EditorRetargetJoint
+{
+    std::string name;
+    int parent = -1;
+    std::array<float, 3> bindPosition{}, referencePosition{};
+    std::array<std::array<float, 3>, 3> bindAxes{}, referenceAxes{};
+};
+
+struct EditorRetargetMapping
+{
+    int source = -1, target = -1;
+    // 只有两边的祖先都落在同一映射时才比较骨段，跨链映射不伪造角误差。
+    int ancestor = -1;
+};
+
+struct EditorRetargetPreview
+{
+    std::string sourceSkeleton, targetSkeleton;
+    std::string sourcePose, targetPose;
+    std::string targetModelPath;
+    std::vector<EditorRetargetJoint> source, target;
+    std::vector<EditorRetargetMapping> mappings;
+    size_t sourceOffsets = 0, targetOffsets = 0;
+    size_t defaultAnchor = 0;
+};
+
 struct EditorJsonDocumentSnapshot
 {
     uint64_t revision = 0;
@@ -79,6 +108,7 @@ struct EditorJsonDocumentSnapshot
     std::string textureColorSpace;
     std::string previewDiagnostic;
     std::shared_ptr<const EditorTexturePreview> texturePreview;
+    std::shared_ptr<const EditorRetargetPreview> retargetPreview;
 };
 
 inline std::string EditorTexturePreviewSource(uint64_t revision)

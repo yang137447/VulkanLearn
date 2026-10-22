@@ -12,7 +12,7 @@ Console 只借用 facade，不操作 World 或文件。运行中入口需要启�
 | 命令前缀 | 文档归属与可编辑内容 |
 | --- | --- |
 | `scene.*` | Scene 根 name/description；已有 mesh 的 TRS/materialOverride；灯光作者参数；相机变换、投影、曝光 |
-| `mesh.*` | `SM_*.json`，type 为 mesh/speedtree；源模型引用、导入选项、已有材质槽的 MI 绑定 |
+| `mesh.*` | `SM_*.json`，type 为 mesh/speedtree/tressfx；源模型引用、适用的导入选项、已有材质槽的 MI 绑定；tressfx 不接受 importOptions，strandRadius 不在修改能力表内 |
 | `texture.*` | `T_*.json`；源图片引用、colorSpace、mipmaps、filter、wrapMode、channelsDescription |
 | `blueprint.*` | `BP_*.json`；名称/说明/类、Expose 类型化默认值、instanceEditable 名称数组、componentInstanceEditable 权限对象、完整组件数组、根物理对象及初始 rotation/scale |
 
@@ -88,6 +88,9 @@ UI 的保持亮度换算仍属于 UI actor adapter。Camera rotation 明确清�
 校验检查文档及引用文件存在/类型/资源根边界，结果标记
 `validationLevel:"document_and_references"`、`contentPreflight:false`。
 这不导入模型、不验证源材质槽与几何对应关系、不解码图片，也不准备 Vulkan 资源。
+retarget 骨骼 SM 的文档验证检查 `sourceModel`/`retarget` 引用存在，
+sourceModel 的 descriptor 规划合法且为非 retarget 的骨骼 SM；profile 内容和两套 SK 的
+identity/骨名映射由正式导入验证。`skinning` 不在标准修改能力表内，普通字段保存保留它。
 正式 World 加载仍执行完整导入与资源事务；加载失败不回滚已经明确保存的作者文件。
 旧 UI actor 保存沿用已有轻量验证，不为了保存一个灯光重新导入未修改的模型。
 

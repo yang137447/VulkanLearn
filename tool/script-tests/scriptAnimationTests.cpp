@@ -65,6 +65,60 @@ Json ReadResourceJson(const std::filesystem::path& root, const std::string& rela
     return Json::parse(input);
 }
 
+std::shared_ptr<Animation::SkeletalPlayback> TestPlayer();
+
+TEST(RetargetPreviewPlayback, PairSharesClipAndTimeWithoutRootTravelOrSectionDoubleTick)
+{
+    const auto source = TestPlayer();
+    const auto target = source->NewInstance();
+    World world{71, "Maps/SC_model_preview/SC_model_preview.json"};
+    WorldMeshObject object;
+    object.animation = source;
+    object.sceneObjectIdentity = "preview_retarget_source|RT_test.json";
+    world.AddMeshObject("source", object);
+    object.animation = target;
+    object.sceneObjectIdentity = "preview_model";
+    world.AddMeshObject("target0", object);
+    world.AddMeshObject("target1", object);
+    size_t walk = 0;
+    const auto& clips = source->Asset().AnimationAsset().clips;
+    while (walk < clips.size() && clips[walk].id != "M_Neutral_Walk_Loop_F") ++walk;
+    ASSERT_LT(walk, clips.size());
+    ASSERT_TRUE(world.ControlAnimation(71, "previewClip", static_cast<float>(walk)));
+    EXPECT_TRUE(source->InPlace());
+    EXPECT_TRUE(target->InPlace());
+    world.TickAnimations(0.25f);
+    EXPECT_FLOAT_EQ(source->Time(), 0.25f);
+    EXPECT_FLOAT_EQ(target->Time(), source->Time());
+    EXPECT_TRUE((source->Models()[0].block<3, 1>(0, 3).isZero(1e-5f)));
+    EXPECT_TRUE((target->Models()[0].block<3, 1>(0, 3).isZero(1e-5f)));
+    ASSERT_TRUE(world.ControlAnimation(71, "seek", 0.75f));
+    EXPECT_FALSE(source->IsPlaying());
+    EXPECT_FALSE(target->IsPlaying());
+    EXPECT_FLOAT_EQ(source->Time(), 0.75f);
+    EXPECT_FLOAT_EQ(target->Time(), source->Time());
+    ASSERT_TRUE(world.ControlAnimation(71, "play", 1));
+    world.TickAnimations(0.1f);
+    EXPECT_FLOAT_EQ(source->Time(), 0.85f);
+    EXPECT_FLOAT_EQ(target->Time(), source->Time());
+}
+
+TEST(RetargetPreviewPlayback, RejectsInPlacePreviewCommandOutsidePairedPreviewWorld)
+{
+    const auto player = TestPlayer();
+    WorldMeshObject object;
+    object.animation = player;
+    object.sceneObjectIdentity = "preview_retarget_source|RT_test.json";
+    World level{72, "Maps/SC_level/SC_level.json"};
+    level.AddMeshObject("source", object);
+    EXPECT_FALSE(level.ControlAnimation(72, "previewClip", 0));
+    World preview{73, "Maps/SC_model_preview/SC_model_preview.json"};
+    object.sceneObjectIdentity = "preview_model";
+    preview.AddMeshObject("model", object);
+    EXPECT_FALSE(preview.ControlAnimation(73, "previewClip", 0));
+    EXPECT_FALSE(player->InPlace());
+}
+
 // 真实 Hurdle 资产（SK + sidecar + Montage）用于 C# CurveValue/PlayMontage/notify 提交面测试。
 // 只导入被 Montage 引用的一个 clip，避免把 22 个 FBX 都读一遍；合成 Montage 变体只进入
 // catalog，用于验证 C# 执行拒绝矩阵，不参与实际播放。

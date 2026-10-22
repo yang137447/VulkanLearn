@@ -13,12 +13,14 @@
 
 #include "../../../commonFunction.h"
 #include "../mesh/assimpModelImporter.h"
+#include "../hair/tressfxModelImporter.h"
 #include "../speedtree/speedTreeModelImporter.h"
 #include "../../validation/meshAssetValidator.h"
 #include "meshAssetResolver.h"
 #include "../animation/assimpSkeletalImporter.h"
 #include "animation/animationSkeleton.h"
 #include "animation/animationMontage.h"
+#include "animation/animationRetarget.h"
 #include "animation/animationSequenceData.h"
 #include "animation/skeletalPlayback.h"
 #include "shader/build/contentHash.h"
@@ -32,6 +34,26 @@ constexpr uintmax_t MaxSequenceJsonBytes = 8ull * 1024 * 1024;
 constexpr uintmax_t MaxMontageJsonBytes = 4ull * 1024 * 1024;
 // SK 与 FBX 的时长一致性；与 schema 的 1e-5 秒容差一致。
 constexpr double SequenceDurationTolerance = 1e-5;
+thread_local std::vector<std::string> skeletalImportStack;
+
+class SkeletalImportScope
+{
+public:
+    explicit SkeletalImportScope(std::string path) : path(std::move(path))
+    {
+        if (std::find(skeletalImportStack.begin(), skeletalImportStack.end(), this->path) !=
+            skeletalImportStack.end())
+            throw std::runtime_error("Recursive skeletal animation sourceModel reference: " + this->path);
+        skeletalImportStack.push_back(this->path);
+    }
+    ~SkeletalImportScope()
+    {
+        if (!skeletalImportStack.empty())
+            skeletalImportStack.pop_back();
+    }
+private:
+    std::string path;
+};
 
 nlohmann::json LoadJsonFile(const std::string& absolutePath, const std::string& logicalPath,
     std::string_view assetLabel, std::string& identity)
@@ -113,6 +135,8 @@ ModelImportRequest BuildModelImportRequest(const MeshAssetBuildPlan& loadPlan)
         {
             return std::make_unique<SpeedTreeModelImporter>();
         }
+        if (buildPlan.assetType == "tressfx")
+            return std::make_unique<TressfxModelImporter>();
         throw std::runtime_error("No model importer registered for mesh asset type: " + buildPlan.assetType);
     }
 
@@ -148,6 +172,11 @@ void MeshAssetLoader::ValidateImportRequest(const MeshAssetLoadRequest& loadRequ
         RequireImportFile(plan.modelDataPath, "Skeletal mesh source");
         // IsSkeletal() 等价于 skeletonPath 非空：骨骼网格的骨架来源只有 SK。
         RequireImportFile(plan.skeletonPath, "Skeleton asset");
+        if (!plan.animationSourceModelPath.empty())
+        {
+            RequireImportFile(plan.animationSourceModelPath, "Animation source model");
+            RequireImportFile(plan.retargetProfilePath, "Retarget profile");
+        }
         for (const MeshAnimationClipPlan& clip : plan.animationClips)
         {
             RequireImportFile(clip.path, "Animation source");
@@ -180,6 +209,7 @@ MeshAssetImportResult MeshAssetLoader::ImportSections(const MeshAssetLoadRequest
     if (loadRequest.buildPlan.IsSkeletal())
     {
         ValidateImportRequest(loadRequest);
+        SkeletalImportScope importScope(loadRequest.buildPlan.meshAssetPath);
         using namespace VL::Animation;
         auto asset = std::make_shared<SkeletalAsset>();
         // 导入期会补写摘要与缓存键，因此保留一份计划副本随结果发布。
@@ -211,6 +241,48 @@ MeshAssetImportResult MeshAssetLoader::ImportSections(const MeshAssetLoadRequest
         {
             throw std::runtime_error(std::string(error.what()) +
                 " skeleton=" + plan.skeletonPath + " model=" + plan.modelDataPath);
+        }
+
+        if (!plan.animationSourceModelPath.empty())
+        {
+            MeshAssetLoadRequest sourceRequest = MeshAssetLoader::Prepare(
+                plan.animationSourceModelPath);
+            if (!sourceRequest.buildPlan.IsSkeletal())
+                throw std::runtime_error(
+                    "Retarget animation sourceModel must be a skeletal mesh: " +
+                    plan.animationSourceModelPath);
+            if (!sourceRequest.buildPlan.animationSourceModelPath.empty())
+                throw std::runtime_error(
+                    "Retarget animation sourceModel must not itself be retargeted: " +
+                    plan.animationSourceModelPath);
+            ValidateImportRequest(sourceRequest);
+            MeshAssetImportResult sourceResult = ImportSections(sourceRequest);
+            if (!sourceResult.modelResource.skeletalAsset)
+                throw std::runtime_error(
+                    "Retarget animation sourceModel did not produce a skeletal asset: " +
+                    plan.animationSourceModelPath);
+            asset->animationSource = sourceResult.modelResource.skeletalAsset;
+
+            std::string profileDigest;
+            const nlohmann::json profileJson = LoadBoundedJsonFile(
+                plan.retargetProfilePath, "Retarget profile", MaxSkeletonJsonBytes, profileDigest);
+            RetargetProfile profile = ParseRetargetProfile(profileJson, plan.retargetProfilePath);
+            if (profile.sourceSkeleton != asset->animationSource->skeleton.id ||
+                profile.targetSkeleton != asset->skeleton.id)
+                throw std::runtime_error(
+                    "Retarget profile skeleton identity does not match source/target assets: " +
+                    plan.retargetProfilePath);
+            profile.Validate(asset->animationSource->mesh, asset->mesh);
+            asset->retargetProfile = std::make_shared<const RetargetProfile>(std::move(profile));
+            plan.retargetProfileDigest = profileDigest;
+            plan.modelCacheKey += "|retargetBlake3=" + profileDigest;
+            asset->sourceInputs.emplace_back(plan.retargetProfilePath, profileDigest);
+            for (const auto& input : asset->animationSource->sourceInputs)
+            {
+                asset->sourceInputs.push_back(input);
+                // 动作源每项字节身份进入目标键；仅路径相同不能复用旧动作/姿态资源。
+                plan.modelCacheKey += "|animationInput=" + input.first + ":" + input.second;
+            }
         }
 
         for (MeshAnimationClipPlan& clipPlan : plan.animationClips)
