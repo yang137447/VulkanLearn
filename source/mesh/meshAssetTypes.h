@@ -62,15 +62,24 @@ struct TressfxSimulationConfig
     float damping = 0.995f;
     uint32_t iterations = 3;
     uint32_t rootFixedPoints = 2;
+    // 变量步长：每帧一个 solver step，dt = clamp(frameDelta, 0, maxDt)。
     float maxDt = 0.033f;
-    // 局部形状/弯曲约束强度；0 关闭，1 每个 iteration 完全拉回 rest 偏移。
+    // 映射到 LocalShape pass 的 Stiffness 标量；pass 内再乘 0.5（TressFX 公式）。
+    // 0 关闭局部形状约束。
     float bendStiffness = 0.3f;
     // 有界阵风：gust = 1 + windGust * sin(2π f t + guide * goldenRatio)。
+    // 这是 VL 在 TressFX 风向量上的作者化扩展，见合同。
     float windGust = 0.5f;
     float windFrequency = 0.5f;
-    // 固定时间步与每帧最多子步数；accumulator 超出部分丢弃。
-    float fixedStep = 1.0f / 60.0f;
-    uint32_t maxSubsteps = 4;
+    // TressFX Integration 的 global shape：把可移动点按 stiffness 拉向
+    // InitialPos（蒙皮/静止位置），只作用于前 effectiveRange 比例的点。
+    // 两者都为 0 时 pass 内分支关闭，保持既有资产外观。
+    float globalShapeStiffness = 0.0f;
+    float globalShapeEffectiveRange = 0.0f;
+    // TressFX VelocityShockPropagation：0 关闭 VSP 混合（Host 不录制 VSP dispatch）。
+    // vspAccelThresholdMax 是伪加速度阈值，超过时强制系数 1（厘米/秒²）。
+    float vspCoefficient = 0.0f;
+    float vspAccelThresholdMax = 5000.0f;
     // SM 描述符顶层 `collision.capsules` 的解析结果；空表示不做胶囊碰撞。
     // 位置/半径都是资产局部空间厘米，与 positions 和 solver 同一坐标系。
     std::vector<VL::Hair::TressfxCollider> capsules;

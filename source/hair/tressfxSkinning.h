@@ -46,17 +46,14 @@ inline uint32_t ResolveTressfxRootJoint(
         "\" skeleton: " + std::string(hairAssetPath));
 }
 
-// CPU 侧对 kernel 固定点分支的逐点镜像，只用于纯数学测试。
-// localPoint < rootFixedPoints 的根前缀由骨骼矩阵 M 变换：p = M * rest；
-// 其余点（包括逆质量 <= 0 的固定点）仍使用 rest。GPU kernel 必须保持同一规则。
-inline Eigen::Vector3f TressfxFixedPointPosition(
+// CPU 侧对 TressFXSimulationIntegration InitialPos 的镜像，只用于纯数学测试。
+// TressFX 对每个顶点先算 InitialPos = ApplyVertexBoneSkinning(RestPos)，不可移动点
+// （根前缀，或 VL 扩展的逆质量 <= 0）整步都写回 InitialPos。VL 只有单个根骨矩阵，
+// 所以这里就是 M * rest；可移动点不会调用这个函数。GPU pass 必须保持同一规则。
+inline Eigen::Vector3f TressfxInitialPosition(
     const Eigen::Matrix4f& skinningMatrix,
-    const Eigen::Vector3f& restPosition,
-    uint32_t localPoint,
-    uint32_t rootFixedPoints)
+    const Eigen::Vector3f& restPosition)
 {
-    if (localPoint >= rootFixedPoints)
-        return restPosition;
     return (skinningMatrix * restPosition.homogeneous()).head<3>();
 }
 

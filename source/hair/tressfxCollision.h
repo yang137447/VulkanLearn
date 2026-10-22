@@ -14,7 +14,7 @@ namespace VL::Hair
 inline constexpr uint32_t TressfxMaxColliders = 8;
 // GPU shader 的对应常量必须同步；数量变化会改变 params/descriptor 合同。
 static_assert(TressfxMaxColliders == 8,
-    "Guide collider limit is mirrored by shader/glsl/hair/tressfxGuideSim.comp");
+    "Guide collider limit is mirrored by shader/glsl/hair/tressfxSimCommon.glsl");
 
 // 资产局部空间的解析胶囊；a == b 时退化为球。radius 是厘米。
 struct TressfxCollider
@@ -25,7 +25,7 @@ struct TressfxCollider
 };
 
 // GPU std430 镜像：a.xyz = 起点、a.w = radius；b.xyz = 终点、b.w 保留。
-// shader/glsl/hair/tressfxGuideSim.comp 的 GuideCollider 与此一一对应。
+// shader/glsl/hair/tressfxSimCollision.comp 的 GuideCollider 与此一一对应。
 struct GuideColliderGpu
 {
     Eigen::Vector4f a = Eigen::Vector4f::Zero();

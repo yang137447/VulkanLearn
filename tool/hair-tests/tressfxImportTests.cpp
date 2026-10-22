@@ -240,8 +240,11 @@ TEST(TressfxDescriptor, SimulationQualityDefaults)
     EXPECT_FLOAT_EQ(config.bendStiffness, 0.3f);
     EXPECT_FLOAT_EQ(config.windGust, 0.5f);
     EXPECT_FLOAT_EQ(config.windFrequency, 0.5f);
-    EXPECT_FLOAT_EQ(config.fixedStep, 1.0f / 60.0f);
-    EXPECT_EQ(config.maxSubsteps, 4u);
+    // global shape 与 VSP 默认关闭，既有资产外观不变。
+    EXPECT_FLOAT_EQ(config.globalShapeStiffness, 0.0f);
+    EXPECT_FLOAT_EQ(config.globalShapeEffectiveRange, 0.0f);
+    EXPECT_FLOAT_EQ(config.vspCoefficient, 0.0f);
+    EXPECT_FLOAT_EQ(config.vspAccelThresholdMax, 5000.0f);
 }
 
 TEST(TressfxDescriptor, SimulationQualityFieldsAcceptedAndPartOfIdentity)
@@ -256,15 +259,39 @@ TEST(TressfxDescriptor, SimulationQualityFieldsAcceptedAndPartOfIdentity)
         {"bendStiffness", 0.7f},
         {"windGust", 0.2f},
         {"windFrequency", 2.0f},
-        {"fixedStep", 0.01f},
-        {"maxSubsteps", 6}};
+        {"globalShapeStiffness", 0.4f},
+        {"globalShapeEffectiveRange", 0.6f},
+        {"vspCoefficient", 0.3f},
+        {"vspAccelThresholdMax", 7000.0f}};
     const auto custom = MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json);
     EXPECT_FLOAT_EQ(custom.tressfxSimulation.bendStiffness, 0.7f);
     EXPECT_FLOAT_EQ(custom.tressfxSimulation.windGust, 0.2f);
     EXPECT_FLOAT_EQ(custom.tressfxSimulation.windFrequency, 2.0f);
-    EXPECT_FLOAT_EQ(custom.tressfxSimulation.fixedStep, 0.01f);
-    EXPECT_EQ(custom.tressfxSimulation.maxSubsteps, 6u);
+    EXPECT_FLOAT_EQ(custom.tressfxSimulation.globalShapeStiffness, 0.4f);
+    EXPECT_FLOAT_EQ(custom.tressfxSimulation.globalShapeEffectiveRange, 0.6f);
+    EXPECT_FLOAT_EQ(custom.tressfxSimulation.vspCoefficient, 0.3f);
+    EXPECT_FLOAT_EQ(custom.tressfxSimulation.vspAccelThresholdMax, 7000.0f);
     EXPECT_NE(custom.modelCacheKey, baseline.modelCacheKey);
+}
+
+TEST(TressfxDescriptor, SimulationGlobalShapeAndVspParticipateInIdentity)
+{
+    auto baselineJson = Descriptor();
+    baselineJson["simulation"] = nlohmann::json::object();
+    const auto baseline =
+        MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", baselineJson);
+
+    auto globalShape = Descriptor();
+    globalShape["simulation"] = {{"globalShapeStiffness", 0.5f}};
+    const auto shaped =
+        MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", globalShape);
+    EXPECT_NE(shaped.modelCacheKey, baseline.modelCacheKey);
+
+    auto vsp = Descriptor();
+    vsp["simulation"] = {{"vspCoefficient", 0.5f}};
+    const auto vspPlan = MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", vsp);
+    EXPECT_NE(vspPlan.modelCacheKey, baseline.modelCacheKey);
+    EXPECT_NE(vspPlan.modelCacheKey, shaped.modelCacheKey);
 }
 
 TEST(TressfxDescriptor, SimulationRejectsInvalidBendAndWindControls)
@@ -292,21 +319,56 @@ TEST(TressfxDescriptor, SimulationRejectsInvalidBendAndWindControls)
     }
 }
 
-TEST(TressfxDescriptor, SimulationRejectsInvalidFixedStepAndSubsteps)
+TEST(TressfxDescriptor, SimulationRejectsInvalidGlobalShapeAndVspControls)
 {
-    for (const float fixedStep : {0.0f, 0.11f})
+    for (const float stiffness : {-0.1f, 1.1f})
     {
         auto json = Descriptor();
-        json["simulation"] = {{"fixedStep", fixedStep}};
+        json["simulation"] = {{"globalShapeStiffness", stiffness}};
         EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json),
             std::runtime_error);
     }
-    for (const uint32_t maxSubsteps : {0u, 9u})
+    for (const float range : {-0.1f, 1.1f})
     {
         auto json = Descriptor();
-        json["simulation"] = {{"maxSubsteps", maxSubsteps}};
+        json["simulation"] = {{"globalShapeEffectiveRange", range}};
         EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json),
             std::runtime_error);
+    }
+    for (const float coefficient : {-0.1f, 1.1f})
+    {
+        auto json = Descriptor();
+        json["simulation"] = {{"vspCoefficient", coefficient}};
+        EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json),
+            std::runtime_error);
+    }
+    for (const float threshold : {0.0f, -1.0f, 1.0e8f})
+    {
+        auto json = Descriptor();
+        json["simulation"] = {{"vspAccelThresholdMax", threshold}};
+        EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json),
+            std::runtime_error);
+    }
+}
+
+TEST(TressfxDescriptor, SimulationRejectsRemovedFixedStepFields)
+{
+    for (const char* removed : {"fixedStep", "maxSubsteps"})
+    {
+        auto json = Descriptor();
+        json["simulation"] = {{removed, 1}};
+        try
+        {
+            MeshAssetValidator::BuildLoadPlan("Maps/SC_probe/Meshes/SM_legacy.json", json);
+            FAIL() << "Legacy accumulator field was accepted: " << removed;
+        }
+        catch (const std::runtime_error& error)
+        {
+            const std::string message = error.what();
+            EXPECT_NE(message.find(removed), std::string::npos);
+            EXPECT_NE(message.find("maxDt"), std::string::npos);
+            EXPECT_NE(message.find("SM_legacy.json"), std::string::npos);
+        }
     }
 }
 

@@ -61,9 +61,24 @@ public:
     {
         return tressfxPreviousPositionInfo;
     }
+    // previous-previous：TressFX 的伪加速度和第二阶 Verlet 状态。
+    const vk::DescriptorBufferInfo& GetTressfxPreviousPreviousPositionInfo() const
+    {
+        return tressfxPreviousPreviousPositionInfo;
+    }
     const vk::DescriptorBufferInfo& GetTressfxRestPositionInfo() const
     {
         return tressfxRestPositionInfo;
+    }
+    // 每个点一条静止段长（i -> i+1，末项 0），供 LengthConstraintsWind pass 读取。
+    const vk::DescriptorBufferInfo& GetTressfxRestLengthInfo() const
+    {
+        return tressfxRestLengthInfo;
+    }
+    // 每根 strand 3 个 vec4：VspQuat、VspTranslation.xyz + VspCoeff.w、SkinningQuat。
+    const vk::DescriptorBufferInfo& GetTressfxStrandLevelInfo() const
+    {
+        return tressfxStrandLevelInfo;
     }
     // 静态解析胶囊 SSBO；创建时上传一次，GPU kernel 按 colliderCount 读取。
     const vk::DescriptorBufferInfo& GetTressfxColliderInfo() const
@@ -125,9 +140,18 @@ private:
     vk::Buffer tressfxPreviousPositionBuffer = nullptr;
     vk::DeviceMemory tressfxPreviousPositionMemory = nullptr;
     vk::DescriptorBufferInfo tressfxPreviousPositionInfo;
+    vk::Buffer tressfxPreviousPreviousPositionBuffer = nullptr;
+    vk::DeviceMemory tressfxPreviousPreviousPositionMemory = nullptr;
+    vk::DescriptorBufferInfo tressfxPreviousPreviousPositionInfo;
     vk::Buffer tressfxRestPositionBuffer = nullptr;
     vk::DeviceMemory tressfxRestPositionMemory = nullptr;
     vk::DescriptorBufferInfo tressfxRestPositionInfo;
+    vk::Buffer tressfxRestLengthBuffer = nullptr;
+    vk::DeviceMemory tressfxRestLengthMemory = nullptr;
+    vk::DescriptorBufferInfo tressfxRestLengthInfo;
+    vk::Buffer tressfxStrandLevelBuffer = nullptr;
+    vk::DeviceMemory tressfxStrandLevelMemory = nullptr;
+    vk::DescriptorBufferInfo tressfxStrandLevelInfo;
     vk::Buffer tressfxColliderBuffer = nullptr;
     vk::DeviceMemory tressfxColliderMemory = nullptr;
     vk::DescriptorBufferInfo tressfxColliderInfo;

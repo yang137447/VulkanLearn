@@ -45,37 +45,37 @@
                     "type": "number",
                     "minimum": 0,
                     "maximum": 1,
-                    "description": "Verlet 速度保留系数，作用于 (pos - prev) 差值。"
+                    "description": "60 Hz 下每步保留的速度比例；运行时映射为 TressFX 的 DampingCoeff = -ln(damping)，积分内用 exp(-DampingCoeff*dt*60)。"
                 },
                 "iterations": {
                     "type": "integer",
                     "minimum": 1,
                     "maximum": 16,
-                    "description": "每帧顺序长度投影的扫描次数；GPU backend 在一次 dispatch 内展开，上限 16 避免异常值触发 TDR。"
+                    "description": "LengthConstraintsWind pass 的长度约束迭代次数；GPU 在一次 dispatch 内展开，上限 16 避免异常值触发 TDR。"
                 },
                 "rootFixedPoints": {
                     "type": "integer",
                     "minimum": 0,
                     "maximum": 32,
-                    "description": "每根 guide 从根部起固定的点数；逆质量 <= 0 的点也固定。"
+                    "description": "每根 guide 从根部起固定的点数（TressFX 的 NumVerticesFromRootNoSimulation）；逆质量 <= 0 的点也不可移动。"
                 },
                 "maxDt": {
                     "type": "number",
                     "exclusiveMinimum": 0,
                     "maximum": 0.25,
-                    "description": "单帧 delta time 上限，单位秒；clamp 后进入固定步 accumulator，不直接作为积分步长。"
+                    "description": "单帧 delta time 上限，单位秒；clip 后直接作为本帧唯一 solver step 的 dt（变量步长，无 accumulator）。"
                 },
                 "bendStiffness": {
                     "type": "number",
                     "minimum": 0,
                     "maximum": 1,
-                    "description": "局部形状/弯曲约束强度；0 关闭，按 restOffset 保留作者曲率。"
+                    "description": "映射到 LocalShape pass 的逐顶点 Stiffness 标量；pass 内按 TressFX 公式再乘 0.5。0 关闭局部形状约束。"
                 },
                 "windGust": {
                     "type": "number",
                     "minimum": 0,
                     "maximum": 1,
-                    "description": "阵风幅度；gust = 1 + windGust * sin(2π f t + guide 相位)，有界不累积。"
+                    "description": "阵风幅度；gust = 1 + windGust * sin(2π f t + guide 相位)，乘在四风混合结果上，有界不累积。"
                 },
                 "windFrequency": {
                     "type": "number",
@@ -83,17 +83,29 @@
                     "maximum": 10,
                     "description": "阵风频率，单位 Hz；0 时相位固定。"
                 },
-                "fixedStep": {
+                "globalShapeStiffness": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1,
+                    "description": "TressFX Integration 的 global shape 强度：把可移动点拉向 InitialPos（蒙皮/静止位置）。0 关闭，既有资产保持原外观。"
+                },
+                "globalShapeEffectiveRange": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1,
+                    "description": "global shape 作用范围，按每根 strand 顶点数的比例；local < range * pointsPerGuide 的点才受约束。0 关闭。"
+                },
+                "vspCoefficient": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1,
+                    "description": "TressFX VelocityShockPropagation 基础系数；0 表示关闭（Host 不录制 VSP dispatch）。"
+                },
+                "vspAccelThresholdMax": {
                     "type": "number",
                     "exclusiveMinimum": 0,
-                    "maximum": 0.1,
-                    "description": "固定子步长，单位秒；每帧 accumulator 消耗到不足一步为止。"
-                },
-                "maxSubsteps": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 8,
-                    "description": "每帧最多子步数；达到上限时丢弃剩余 backlog。"
+                    "maximum": 10000000,
+                    "description": "VSP 伪加速度阈值，厘米/秒²；前两个点满足 |new - 2*old + old_old| 超过该值时强制系数 1。默认 5000。"
                 },
                 "backend": {
                     "type": "string",

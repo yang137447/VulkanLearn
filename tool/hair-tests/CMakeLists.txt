@@ -1,5 +1,6 @@
 add_executable(hair_asset_tests
     tfxLoaderTests.cpp strandGeometryTests.cpp tressfxImportTests.cpp tressfxDynamicsTests.cpp
+    tressfxSolverMathTests.cpp
     tressfxSkinningTests.cpp
     sdfBuilderTests.cpp
     ${PROJECT_SOURCE_DIR}/source/mesh/loader/hair/tressfxModelImporter.cpp

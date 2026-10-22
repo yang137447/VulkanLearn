@@ -1,0 +1,86 @@
+#version 450
+
+// TressFXSimulationLocalShapeConstraints.usf -> LocalShapeConstraints。
+// 一个 invocation 处理一根 strand，按 i 递增顺序串行（TressFX 的 per-strand 循环），
+// 因此 i 写入的 pos_{i+1} 会被 i+1 立即读到，顺序与源实现完全一致。
+// dispatch = ceil(guideCount / 64)。
+//
+// 与源实现的唯一差别：rootFixedPoints < 2 时从 local 1 开始，避免 TressFX 读取
+// `GlobalVertexIndex - 1`（首根 strand 会越界）；作者资产使用 >= 2。
+#include "tressfxSimCommon.glsl"
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 1, std430) buffer CurrentPositions
+{
+    vec4 positions[];
+} currentPositions;
+
+layout(set = 0, binding = 4, std430) readonly buffer RestPositions
+{
+    vec4 positions[];
+} restPositions;
+
+layout(set = 0, binding = 6, std430) readonly buffer StrandLevelData
+{
+    vec4 data[];
+} strandLevelData;
+
+void main()
+{
+    uint guide = gl_GlobalInvocationID.x;
+    if (guide >= params.counts.y)
+        return;
+
+    float stiffness = params.motion.x;
+    if (stiffness <= 0.0)
+        return;
+
+    uint pointsPerGuide = TressfxPointsPerGuide();
+    uint rootFixedPoints = TressfxRootFixedPoints();
+    // TressFX 的 `NumVerticesFromRootNoSimulation - 1` 在 0 时无符号下溢，循环不执行。
+    if (rootFixedPoints == 0u)
+        return;
+    uint start = max(rootFixedPoints - 1u, 1u);
+
+    uint root = guide * pointsPerGuide;
+    vec4 boneQuat = strandLevelData.data[guide * 3u + 2u];
+
+    // 顶点 1..n-1；i 和 i+1 都可移动时各承担一半修正。
+    for (uint local = start; local + 1u < pointsPerGuide; ++local)
+    {
+        uint point = root + local;
+        vec4 pos = currentPositions.positions[point];
+        vec4 posPlusOne = currentPositions.positions[point + 1u];
+        vec4 posMinusOne = currentPositions.positions[point - 1u];
+
+        // 厘米：源实现的 *0.01（米）在这里省略。
+        vec3 bindPos = TressfxRotateByQuat(boneQuat, restPositions.positions[point].xyz);
+        vec3 bindPosPlusOne = TressfxRotateByQuat(
+            boneQuat, restPositions.positions[point + 1u].xyz);
+        vec3 bindPosMinusOne = TressfxRotateByQuat(
+            boneQuat, restPositions.positions[point - 1u].xyz);
+
+        vec3 lastVec = pos.xyz - posMinusOne.xyz;
+        vec3 vecBindPose = bindPosPlusOne - bindPos;
+        vec3 lastVecBindPose = bindPos - bindPosMinusOne;
+        if (dot(lastVec, lastVec) <= 1.0e-12 || dot(lastVecBindPose, lastVecBindPose) <= 1.0e-12)
+            continue;
+
+        // rotGlobal 把 bind-pose 的 (i-1 -> i) 方向转到当前 (i-1 -> i) 方向；
+        // 再把 bind-pose 的 (i -> i+1) 段一起旋转，得到 i+1 的目标位置。
+        vec4 rotGlobal = TressfxQuatFromTwoUnitVectors(
+            normalize(lastVecBindPose), normalize(lastVec));
+        vec3 target = TressfxRotateByQuat(rotGlobal, vecBindPose) + pos.xyz;
+        // StiffnessForLocalShapeMatching = 0.5 * Stiffness[i]。
+        vec3 del = (0.5 * stiffness) * (target - posPlusOne.xyz);
+
+        if (TressfxIsMovable(pos.w))
+            pos.xyz -= del;
+        if (TressfxIsMovable(posPlusOne.w))
+            posPlusOne.xyz += del;
+
+        currentPositions.positions[point] = pos;
+        currentPositions.positions[point + 1u] = posPlusOne;
+    }
+}

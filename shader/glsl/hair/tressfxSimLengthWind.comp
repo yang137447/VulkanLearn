@@ -1,0 +1,110 @@
+#version 450
+
+// TressFXSimulationLengthConstraintsWind.usf -> LengthConstraintsWindAndCollision
+// 的长度/风部分（源 shader 的 SDF 碰撞不在此 pass，VL 的胶囊投影是额外 pass）。
+// 一个 invocation 处理一根 strand，串行执行；dispatch = ceil(guideCount / 64)。
+//
+// 与源实现的 groupshared 布局不同：TressFX 把同一 workgroup 的多根 strand 交错
+// 放进 SharedPos，每根 strand 仍是单线程顺序执行的。VL 按 strand 独立串行，等价，
+// 但少了同组内 strand 的并行度。偶数边/奇数边的分组和先后顺序保持不变：
+// 每组内部的边互不共享顶点，因此组内串行与并行结果相同。
+#include "tressfxSimCommon.glsl"
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 1, std430) buffer CurrentPositions
+{
+    vec4 positions[];
+} currentPositions;
+
+layout(set = 0, binding = 2, std430) buffer PreviousPositions
+{
+    vec4 positions[];
+} previousPositions;
+
+// 第 i 项是 i -> i+1 的静止长度，末项 0（TressFX 的 GuidesRestLengthBuffer）。
+layout(set = 0, binding = 5, std430) readonly buffer RestLengths
+{
+    float lengths[];
+} restLengths;
+
+// TressFX 的 ClampPositionDelta = 0.3 m；VL 使用厘米，对应 30 cm。
+const float TressfxClampPositionDeltaCm = 30.0;
+
+void main()
+{
+    uint guide = gl_GlobalInvocationID.x;
+    if (guide >= params.counts.y)
+        return;
+
+    uint pointsPerGuide = TressfxPointsPerGuide();
+    uint root = guide * pointsPerGuide;
+    uint rootFixedPoints = TressfxRootFixedPoints();
+    float dt = params.controls.x;
+
+    // 风：源实现只在 Wind0 非零时启用。VL 的 Host 把四路都填成平均风，
+    // 因此在资产 wind == 0 时同样跳过。
+    if (dot(params.wind0.xyz, params.wind0.xyz) > 0.0)
+    {
+        vec3 wind = TressfxCombinedWind(guide) * TressfxWindGust(guide);
+        for (uint local = rootFixedPoints; local + 1u < pointsPerGuide; ++local)
+        {
+            uint point = root + local;
+            // v 是段方向 pos_i - pos_{i+1}；Force = -cross(cross(v, w), v)
+            // 只沿风的分量推动，力在方向上垂直于段。
+            // 单位适配：源实现把米制未归一化段向量代入三叉积（带 |v|² 量纲）；
+            // VL 用厘米会放大 1e6 倍，因此先归一化再代入同一公式，方向不变、
+            // 作者风速保持 cm/s² 量级。
+            vec3 v = currentPositions.positions[point].xyz
+                - currentPositions.positions[point + 1u].xyz;
+            float vLength = length(v);
+            if (vLength > 1.0e-6)
+            {
+                vec3 direction = v / vLength;
+                vec3 force = -cross(cross(direction, wind), direction);
+                currentPositions.positions[point].xyz += force * dt * dt;
+            }
+        }
+    }
+
+    // TressFX 偶数边/奇数边分组的位置约束迭代。
+    uint evenEdgeCount = pointsPerGuide / 2u;
+    uint oddEdgeCount = (pointsPerGuide - 1u) / 2u;
+    for (uint iteration = 0; iteration < params.counts.x; ++iteration)
+    {
+        for (uint edge = 0; edge < evenEdgeCount; ++edge)
+        {
+            uint point = root + 2u * edge;
+            vec4 pos0 = currentPositions.positions[point];
+            vec4 pos1 = currentPositions.positions[point + 1u];
+            TressfxApplyDistanceConstraint(pos0, pos1, restLengths.lengths[point]);
+            currentPositions.positions[point] = pos0;
+            currentPositions.positions[point + 1u] = pos1;
+        }
+        for (uint edge = 0; edge < oddEdgeCount; ++edge)
+        {
+            uint point = root + 2u * edge + 1u;
+            vec4 pos0 = currentPositions.positions[point];
+            vec4 pos1 = currentPositions.positions[point + 1u];
+            TressfxApplyDistanceConstraint(pos0, pos1, restLengths.lengths[point]);
+            currentPositions.positions[point] = pos0;
+            currentPositions.positions[point + 1u] = pos1;
+        }
+    }
+
+    // 速度 clamp：不改当前位置，只在超限时重写 previous 位置。
+    float maxDelta = TressfxClampPositionDeltaCm;
+    for (uint local = 0; local < pointsPerGuide; ++local)
+    {
+        uint point = root + local;
+        vec4 pos = currentPositions.positions[point];
+        vec4 old = previousPositions.positions[point];
+        vec3 delta = pos.xyz - old.xyz;
+        float speedSquared = dot(delta, delta);
+        if (speedSquared > maxDelta * maxDelta)
+        {
+            delta *= maxDelta * maxDelta / speedSquared;
+            previousPositions.positions[point] = vec4(pos.xyz - delta, pos.w);
+        }
+    }
+}

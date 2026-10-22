@@ -50,6 +50,16 @@ namespace
             throw std::runtime_error(
                 "TressFX simulation must be an object: " + std::string(meshAssetPath));
         auto& config = loadPlan.tressfxSimulation;
+        // 格式迁移：固定步 accumulator 已由 TressFX 的变量步长取代。静默忽略旧字段会让
+        // 资产看起来仍然生效，因此在资产边界显式拒绝。
+        for (const char* removed : {"fixedStep", "maxSubsteps"})
+        {
+            if (simulation.contains(removed))
+                throw std::runtime_error(
+                    "TressFX simulation " + std::string(removed) +
+                    " was removed; use maxDt (one clamp(frameDelta, 0, maxDt) step per frame): " +
+                    std::string(meshAssetPath));
+        }
         config.enabled = simulation.value("enabled", true);
         if (simulation.contains("gravity"))
             config.gravity = ReadSimulationVector(simulation, "gravity", meshAssetPath);
@@ -62,8 +72,14 @@ namespace
         config.bendStiffness = simulation.value("bendStiffness", config.bendStiffness);
         config.windGust = simulation.value("windGust", config.windGust);
         config.windFrequency = simulation.value("windFrequency", config.windFrequency);
-        config.fixedStep = simulation.value("fixedStep", config.fixedStep);
-        config.maxSubsteps = simulation.value("maxSubsteps", config.maxSubsteps);
+        config.globalShapeStiffness =
+            simulation.value("globalShapeStiffness", config.globalShapeStiffness);
+        config.globalShapeEffectiveRange =
+            simulation.value("globalShapeEffectiveRange", config.globalShapeEffectiveRange);
+        config.vspCoefficient =
+            simulation.value("vspCoefficient", config.vspCoefficient);
+        config.vspAccelThresholdMax =
+            simulation.value("vspAccelThresholdMax", config.vspAccelThresholdMax);
         if (simulation.contains("backend"))
         {
             // 只接受两个已实现的 backend；未知值必须在资产边界失败，而不是静默回退。
@@ -140,14 +156,28 @@ namespace
             throw std::runtime_error(
                 "TressFX simulation windFrequency must be in [0, 10]: " +
                 std::string(meshAssetPath));
-        if (!std::isfinite(config.fixedStep) || config.fixedStep <= 0.0f ||
-            config.fixedStep > 0.1f)
+        // global shape 的两个作者值都是 [0,1]；两者同时 > 0 才启用。
+        if (!std::isfinite(config.globalShapeStiffness) ||
+            config.globalShapeStiffness < 0.0f || config.globalShapeStiffness > 1.0f)
             throw std::runtime_error(
-                "TressFX simulation fixedStep must be in (0, 0.1]: " +
+                "TressFX simulation globalShapeStiffness must be in [0, 1]: " +
                 std::string(meshAssetPath));
-        if (config.maxSubsteps == 0 || config.maxSubsteps > 8)
+        if (!std::isfinite(config.globalShapeEffectiveRange) ||
+            config.globalShapeEffectiveRange < 0.0f ||
+            config.globalShapeEffectiveRange > 1.0f)
             throw std::runtime_error(
-                "TressFX simulation maxSubsteps must be in [1, 8]: " +
+                "TressFX simulation globalShapeEffectiveRange must be in [0, 1]: " +
+                std::string(meshAssetPath));
+        // VSP：系数为 0 表示 Host 完全不录制 VSP dispatch；阈值必须为正。
+        if (!std::isfinite(config.vspCoefficient) || config.vspCoefficient < 0.0f ||
+            config.vspCoefficient > 1.0f)
+            throw std::runtime_error(
+                "TressFX simulation vspCoefficient must be in [0, 1]: " +
+                std::string(meshAssetPath));
+        if (!std::isfinite(config.vspAccelThresholdMax) ||
+            config.vspAccelThresholdMax <= 0.0f || config.vspAccelThresholdMax > 1.0e7f)
+            throw std::runtime_error(
+                "TressFX simulation vspAccelThresholdMax must be in (0, 1e7]: " +
                 std::string(meshAssetPath));
     }
 
@@ -540,8 +570,10 @@ MeshAssetBuildPlan MeshAssetValidator::BuildLoadPlan(
                  << "|bend=" << loadPlan.tressfxSimulation.bendStiffness
                  << "|gust=" << loadPlan.tressfxSimulation.windGust
                  << "|freq=" << loadPlan.tressfxSimulation.windFrequency
-                 << "|fixed=" << loadPlan.tressfxSimulation.fixedStep
-                 << "|substeps=" << loadPlan.tressfxSimulation.maxSubsteps
+                 << "|gshape=" << loadPlan.tressfxSimulation.globalShapeStiffness
+                 << "," << loadPlan.tressfxSimulation.globalShapeEffectiveRange
+                 << "|vsp=" << loadPlan.tressfxSimulation.vspCoefficient
+                 << "," << loadPlan.tressfxSimulation.vspAccelThresholdMax
                  << "|colliders=" << loadPlan.tressfxSimulation.capsules.size();
         for (const VL::Hair::TressfxCollider& capsule :
              loadPlan.tressfxSimulation.capsules)

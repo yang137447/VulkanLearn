@@ -1,4 +1,5 @@
 #include "hair/tressfxSkinning.h"
+#include "hair/tressfxSolverMath.h"
 
 #include <gtest/gtest.h>
 
@@ -56,7 +57,7 @@ TEST(TressfxSkinning, MissingSkeletonErrorNamesObjectAndAsset)
     }
 }
 
-TEST(TressfxSkinning, RootPrefixUsesSkinningMatrixOnly)
+TEST(TressfxSkinning, ImmovablePointsUseSkinningMatrix)
 {
     Eigen::Matrix4f matrix = Eigen::Matrix4f::Identity();
     matrix.block<3, 3>(0, 0) =
@@ -64,19 +65,18 @@ TEST(TressfxSkinning, RootPrefixUsesSkinningMatrixOnly)
     matrix.block<3, 1>(0, 3) = Eigen::Vector3f(11.0f, 22.0f, 33.0f);
     const Eigen::Vector3f restRoot0(1.0f, 2.0f, 3.0f);
     const Eigen::Vector3f restRoot1(4.0f, 5.0f, 6.0f);
-    const Eigen::Vector3f restSimulated(7.0f, 8.0f, 9.0f);
     const Eigen::Vector3f restPinnedBeyondPrefix(10.0f, 11.0f, 12.0f);
 
-    const auto root0 =
-        VL::Hair::TressfxFixedPointPosition(matrix, restRoot0, 0, 2);
-    const auto root1 =
-        VL::Hair::TressfxFixedPointPosition(matrix, restRoot1, 1, 2);
-    EXPECT_TRUE(root0.isApprox((matrix * restRoot0.homogeneous()).head<3>()));
-    EXPECT_TRUE(root1.isApprox((matrix * restRoot1.homogeneous()).head<3>()));
+    // TressFX 的不可移动点（根前缀 ∪ 逆质量 <= 0）整步写 InitialPos = M * rest。
+    EXPECT_TRUE(VL::Hair::TressfxInitialPosition(matrix, restRoot0)
+            .isApprox((matrix * restRoot0.homogeneous()).head<3>()));
+    EXPECT_TRUE(VL::Hair::TressfxInitialPosition(matrix, restRoot1)
+            .isApprox((matrix * restRoot1.homogeneous()).head<3>()));
+    EXPECT_TRUE(VL::Hair::TressfxInitialPosition(matrix, restPinnedBeyondPrefix)
+            .isApprox((matrix * restPinnedBeyondPrefix.homogeneous()).head<3>()));
 
-    // 前缀之外的点（模拟点，或以逆质量固定但不属于根前缀的点）不消费 M。
-    EXPECT_TRUE(VL::Hair::TressfxFixedPointPosition(matrix, restSimulated, 2, 2)
-            .isApprox(restSimulated));
-    EXPECT_TRUE(VL::Hair::TressfxFixedPointPosition(matrix, restPinnedBeyondPrefix, 3, 2)
-            .isApprox(restPinnedBeyondPrefix));
+    // 可移动点不消费上面这条 pin 规则；不可移动判定是根前缀或逆质量 <= 0。
+    EXPECT_FALSE(VL::Hair::TressfxIsImmovable(2, 2, 1.0f));
+    EXPECT_TRUE(VL::Hair::TressfxIsImmovable(1, 2, 1.0f));
+    EXPECT_TRUE(VL::Hair::TressfxIsImmovable(3, 2, 0.0f));
 }

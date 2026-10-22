@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <iostream>
+#include <iterator>
 #include <stdexcept>
 #include <unordered_set>
 #include <utility>
@@ -15,21 +16,97 @@
 
 namespace
 {
+// 所有 pass 共用同一组 binding 编号；每个 shader 只声明自己用到的子集，
+// descriptor set layout 因此按 pipeline 独立。
 constexpr uint32_t ParamsBinding = 0;
 constexpr uint32_t CurrentPositionsBinding = 1;
 constexpr uint32_t PreviousPositionsBinding = 2;
-constexpr uint32_t RestPositionsBinding = 3;
-constexpr uint32_t CollidersBinding = 4;
+constexpr uint32_t PreviousPreviousPositionsBinding = 3;
+constexpr uint32_t RestPositionsBinding = 4;
+constexpr uint32_t RestLengthsBinding = 5;
+constexpr uint32_t StrandLevelBinding = 6;
+constexpr uint32_t CollidersBinding = 7;
 
-// 每个 pool 的 set 容量；逐对象按 frame-in-flight 槽各分配一个 set。
-constexpr uint32_t DescriptorSetsPerPool = VL::Hair::GuideSimulationParamBufferCount * 8;
+constexpr uint32_t DescriptorSetsPerPool =
+    VL::Hair::GuideSimulationParamBufferCount * 8;
+// 单个 set 最多 4 个 SSBO（Integration 用 current/previous/prevPrev/rest）。
+constexpr uint32_t StorageBuffersPerSet = 4;
+
+struct PassBinding
+{
+    uint32_t binding;
+    vk::DescriptorType type;
+};
+
+struct PassDefinition
+{
+    const char* shaderName;
+    const PassBinding* bindings;
+    uint32_t bindingCount;
+};
+
+// 与 shader/glsl/hair/tressfxSim*.comp 的声明一一对应，顺序必须同步修改。
+constexpr PassBinding IntegrationBindings[] = {
+    {ParamsBinding, vk::DescriptorType::eUniformBuffer},
+    {CurrentPositionsBinding, vk::DescriptorType::eStorageBuffer},
+    {PreviousPositionsBinding, vk::DescriptorType::eStorageBuffer},
+    {PreviousPreviousPositionsBinding, vk::DescriptorType::eStorageBuffer},
+    {RestPositionsBinding, vk::DescriptorType::eStorageBuffer},
+};
+constexpr PassBinding StrandLevelBindings[] = {
+    {ParamsBinding, vk::DescriptorType::eUniformBuffer},
+    {CurrentPositionsBinding, vk::DescriptorType::eStorageBuffer},
+    {PreviousPositionsBinding, vk::DescriptorType::eStorageBuffer},
+    {PreviousPreviousPositionsBinding, vk::DescriptorType::eStorageBuffer},
+    {StrandLevelBinding, vk::DescriptorType::eStorageBuffer},
+};
+constexpr PassBinding VspBindings[] = {
+    {ParamsBinding, vk::DescriptorType::eUniformBuffer},
+    {CurrentPositionsBinding, vk::DescriptorType::eStorageBuffer},
+    {PreviousPositionsBinding, vk::DescriptorType::eStorageBuffer},
+    {StrandLevelBinding, vk::DescriptorType::eStorageBuffer},
+};
+constexpr PassBinding LocalShapeBindings[] = {
+    {ParamsBinding, vk::DescriptorType::eUniformBuffer},
+    {CurrentPositionsBinding, vk::DescriptorType::eStorageBuffer},
+    {RestPositionsBinding, vk::DescriptorType::eStorageBuffer},
+    {StrandLevelBinding, vk::DescriptorType::eStorageBuffer},
+};
+constexpr PassBinding LengthWindBindings[] = {
+    {ParamsBinding, vk::DescriptorType::eUniformBuffer},
+    {CurrentPositionsBinding, vk::DescriptorType::eStorageBuffer},
+    {PreviousPositionsBinding, vk::DescriptorType::eStorageBuffer},
+    {RestLengthsBinding, vk::DescriptorType::eStorageBuffer},
+};
+constexpr PassBinding CollisionBindings[] = {
+    {ParamsBinding, vk::DescriptorType::eUniformBuffer},
+    {CurrentPositionsBinding, vk::DescriptorType::eStorageBuffer},
+    {CollidersBinding, vk::DescriptorType::eStorageBuffer},
+};
+
+constexpr PassDefinition PassDefinitions[] = {
+    {"hair/tressfxSimIntegration", IntegrationBindings,
+        static_cast<uint32_t>(std::size(IntegrationBindings))},
+    {"hair/tressfxSimStrandLevel", StrandLevelBindings,
+        static_cast<uint32_t>(std::size(StrandLevelBindings))},
+    {"hair/tressfxSimVsp", VspBindings,
+        static_cast<uint32_t>(std::size(VspBindings))},
+    {"hair/tressfxSimLocalShape", LocalShapeBindings,
+        static_cast<uint32_t>(std::size(LocalShapeBindings))},
+    {"hair/tressfxSimLengthWind", LengthWindBindings,
+        static_cast<uint32_t>(std::size(LengthWindBindings))},
+    {"hair/tressfxSimCollision", CollisionBindings,
+        static_cast<uint32_t>(std::size(CollisionBindings))},
+};
+static_assert(std::size(PassDefinitions) == VL::Hair::GuideSimulationPassCount,
+    "PassDefinitions must cover every GuideSimulationPass in order");
 
 // dispatch 前：上一帧 vertex shader 读过 current positions，本帧 compute 要写同一 buffer。
 // 这是跨提交的 write-after-read；同一 graphics queue、命令缓冲提交顺序固定，因此在
 // 本帧命令缓冲里用 src=VERTEX_SHADER 的 barrier 覆盖上一帧读取即可。src 同时包含
 // TRANSFER_WRITE：device-local 位置 buffer 的初始 staging 上传发生在建对象时，
 // 首次 dispatch 前必须把该 transfer 写转为 compute 和 vertex 可见。
-// 上一帧 compute 对 previous positions 的读写也纳入 src 作用域，供本帧读取/覆盖。
+// 上一帧 compute 对 previous/prevPrev 的读写也纳入 src 作用域。
 void RecordPreDispatchBarrier(vk::CommandBuffer commandBuffer)
 {
     vk::MemoryBarrier barrier;
@@ -46,8 +123,7 @@ void RecordPreDispatchBarrier(vk::CommandBuffer commandBuffer)
 }
 
 // dispatch 后：本帧所有图形 pass 的 vertex shader 读取 current positions；下一帧的
-// compute 也会读写 previous positions。dst 同时覆盖两个 stage，使本帧写入对本帧
-// 顶点读取和下一帧 dispatch 都可见。同一 queue 的提交顺序保证 barrier 先于后续提交生效。
+// compute 也会读写 previous/prevPrev/strandLevel。dst 同时覆盖两个 stage。
 void RecordPostDispatchBarrier(vk::CommandBuffer commandBuffer)
 {
     vk::MemoryBarrier barrier;
@@ -59,9 +135,10 @@ void RecordPostDispatchBarrier(vk::CommandBuffer commandBuffer)
         {}, barrier, nullptr, nullptr);
 }
 
-// 同一对象的多子步是同一命令缓冲里的连续 dispatch；Vulkan 不会自动为它们建立
-// 内存依赖，必须显式让前一子步的 current/previous 写入对后一子步可见。
-void RecordSubstepBarrier(vk::CommandBuffer commandBuffer)
+// 同一对象的相邻 pass 是同一命令缓冲里的连续 dispatch；Vulkan 不会自动建立内存依赖，
+// 必须显式让前一 pass 的写入对后一 pass 可见。compute -> compute 的 read/write barrier
+// 同时提供执行依赖与内存依赖。
+void RecordInterPassBarrier(vk::CommandBuffer commandBuffer)
 {
     vk::MemoryBarrier barrier;
     barrier.setSrcAccessMask(vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite)
@@ -71,6 +148,11 @@ void RecordSubstepBarrier(vk::CommandBuffer commandBuffer)
         vk::PipelineStageFlagBits::eComputeShader,
         {}, barrier, nullptr, nullptr);
 }
+
+constexpr uint32_t PassIndex(VL::Hair::GuideSimulationPass pass)
+{
+    return static_cast<uint32_t>(pass);
+}
 } // namespace
 
 namespace VL::Hair
@@ -78,7 +160,8 @@ namespace VL::Hair
 HairSimulationPass::~HairSimulationPass()
 {
     ResetDescriptorCache();
-    pipeline.reset();
+    for (std::shared_ptr<ComputePipeline>& pipeline : pipelines)
+        pipeline.reset();
     backend = nullptr;
 }
 
@@ -86,15 +169,20 @@ void HairSimulationPass::Initialize(PipelineFactory& factory,
     RendererBackendVulkan& renderer)
 {
     backend = &renderer;
-    ComputeShaderArtifact artifact;
-    // Candidate 入口不写 active compute cache；本 pipeline 也不注册 hot reload participant。
-    pipeline = factory.CreateComputePipelineCandidate("hair/tressfxGuideSim", &artifact);
+    for (uint32_t pass = 0; pass < GuideSimulationPassCount; ++pass)
+    {
+        ComputeShaderArtifact artifact;
+        // Candidate 入口不写 active compute cache；本 pipeline 也不注册 hot reload participant。
+        pipelines[pass] = factory.CreateComputePipelineCandidate(
+            PassDefinitions[pass].shaderName, &artifact);
+    }
     initialized = true;
 }
 
-vk::DescriptorPool HairSimulationPass::AcquireDescriptorPool()
+vk::DescriptorPool HairSimulationPass::AcquireDescriptorPool(uint32_t pass)
 {
-    for (DescriptorPoolBudget& budget : descriptorPools)
+    std::vector<DescriptorPoolBudget>& pools = descriptorPools[pass];
+    for (DescriptorPoolBudget& budget : pools)
     {
         if (budget.remainingSets >= GuideSimulationParamBufferCount)
         {
@@ -108,13 +196,12 @@ vk::DescriptorPool HairSimulationPass::AcquireDescriptorPool()
     const std::vector<vk::DescriptorPoolSize> sizes{
         {vk::DescriptorType::eUniformBuffer, DescriptorSetsPerPool},
         {vk::DescriptorType::eStorageBuffer,
-            DescriptorSetsPerPool * 4u}};
+            DescriptorSetsPerPool * StorageBuffersPerSet}};
     vk::DescriptorPoolCreateInfo info;
     info.setPoolSizes(sizes).setMaxSets(DescriptorSetsPerPool);
     const vk::DescriptorPool pool =
         backend->CreateDescriptorPool(info, "HairSimulationDescriptors");
-    descriptorPools.push_back(
-        {pool, DescriptorSetsPerPool - GuideSimulationParamBufferCount});
+    pools.push_back({pool, DescriptorSetsPerPool - GuideSimulationParamBufferCount});
     return pool;
 }
 
@@ -122,53 +209,67 @@ void HairSimulationPass::CreateObjectDescriptors(
     RenderableObject& object,
     ObjectDescriptors& descriptors)
 {
-    const vk::DescriptorPool pool = AcquireDescriptorPool();
-    std::vector<vk::DescriptorSetLayout> layouts(
-        GuideSimulationParamBufferCount, pipeline->GetDescriptorSetLayouts().at(0));
-    vk::DescriptorSetAllocateInfo allocate;
-    allocate.setDescriptorPool(pool).setSetLayouts(layouts);
-    std::vector<vk::DescriptorSet> allocated(GuideSimulationParamBufferCount);
-    backend->AllocateDescriptorSets(allocate, allocated);
-    for (uint32_t slot = 0; slot < GuideSimulationParamBufferCount; ++slot)
-        descriptors.sets[slot] = allocated[slot];
-
-    const vk::DescriptorBufferInfo currentInfo = object.GetTressfxPositionInfo();
-    const vk::DescriptorBufferInfo previousInfo = object.GetTressfxPreviousPositionInfo();
-    const vk::DescriptorBufferInfo restInfo = object.GetTressfxRestPositionInfo();
-    const vk::DescriptorBufferInfo colliderInfo = object.GetTressfxColliderInfo();
-    std::vector<vk::WriteDescriptorSet> writes;
-    writes.reserve(GuideSimulationParamBufferCount * 5u);
+    // vulkan-hpp 的 setBufferInfo 只保存指针（ArrayProxyNoTemporaries），因此
+    // DescriptorBufferInfo 必须比 UpdateDescriptorSets 活得更久；这里按
+    // [frame slot][binding] 放在函数级数组里，元素地址稳定。
+    std::array<std::array<vk::DescriptorBufferInfo, CollidersBinding + 1>,
+        GuideSimulationParamBufferCount>
+        bindingInfos{};
     for (uint32_t slot = 0; slot < GuideSimulationParamBufferCount; ++slot)
     {
-        const vk::DescriptorBufferInfo paramsInfo = object.GetTressfxParamsInfo(slot);
-        const vk::DescriptorSet set = descriptors.sets[slot];
-        vk::WriteDescriptorSet paramsWrite;
-        paramsWrite.setDstSet(set).setDstBinding(ParamsBinding).setDescriptorCount(1)
-            .setDescriptorType(vk::DescriptorType::eUniformBuffer).setBufferInfo(paramsInfo);
-        vk::WriteDescriptorSet currentWrite;
-        currentWrite.setDstSet(set).setDstBinding(CurrentPositionsBinding).setDescriptorCount(1)
-            .setDescriptorType(vk::DescriptorType::eStorageBuffer).setBufferInfo(currentInfo);
-        vk::WriteDescriptorSet previousWrite;
-        previousWrite.setDstSet(set).setDstBinding(PreviousPositionsBinding).setDescriptorCount(1)
-            .setDescriptorType(vk::DescriptorType::eStorageBuffer).setBufferInfo(previousInfo);
-        vk::WriteDescriptorSet restWrite;
-        restWrite.setDstSet(set).setDstBinding(RestPositionsBinding).setDescriptorCount(1)
-            .setDescriptorType(vk::DescriptorType::eStorageBuffer).setBufferInfo(restInfo);
-        vk::WriteDescriptorSet colliderWrite;
-        colliderWrite.setDstSet(set).setDstBinding(CollidersBinding).setDescriptorCount(1)
-            .setDescriptorType(vk::DescriptorType::eStorageBuffer).setBufferInfo(colliderInfo);
-        writes.push_back(paramsWrite);
-        writes.push_back(currentWrite);
-        writes.push_back(previousWrite);
-        writes.push_back(restWrite);
-        writes.push_back(colliderWrite);
+        std::array<vk::DescriptorBufferInfo, CollidersBinding + 1>& infos =
+            bindingInfos[slot];
+        infos[ParamsBinding] = object.GetTressfxParamsInfo(slot);
+        infos[CurrentPositionsBinding] = object.GetTressfxPositionInfo();
+        infos[PreviousPositionsBinding] = object.GetTressfxPreviousPositionInfo();
+        infos[PreviousPreviousPositionsBinding] =
+            object.GetTressfxPreviousPreviousPositionInfo();
+        infos[RestPositionsBinding] = object.GetTressfxRestPositionInfo();
+        infos[RestLengthsBinding] = object.GetTressfxRestLengthInfo();
+        infos[StrandLevelBinding] = object.GetTressfxStrandLevelInfo();
+        infos[CollidersBinding] = object.GetTressfxColliderInfo();
+    }
+
+    std::vector<vk::WriteDescriptorSet> writes;
+    for (uint32_t pass = 0; pass < GuideSimulationPassCount; ++pass)
+    {
+        const PassDefinition& definition = PassDefinitions[pass];
+        const vk::DescriptorPool pool = AcquireDescriptorPool(pass);
+        std::vector<vk::DescriptorSetLayout> layouts(
+            GuideSimulationParamBufferCount,
+            pipelines[pass]->GetDescriptorSetLayouts().at(0));
+        vk::DescriptorSetAllocateInfo allocate;
+        allocate.setDescriptorPool(pool).setSetLayouts(layouts);
+        std::vector<vk::DescriptorSet> allocated(GuideSimulationParamBufferCount);
+        backend->AllocateDescriptorSets(allocate, allocated);
+
+        writes.reserve(writes.size() +
+            static_cast<size_t>(GuideSimulationParamBufferCount) *
+                definition.bindingCount);
+        for (uint32_t slot = 0; slot < GuideSimulationParamBufferCount; ++slot)
+        {
+            descriptors.sets[pass][slot] = allocated[slot];
+            for (uint32_t index = 0; index < definition.bindingCount; ++index)
+            {
+                const PassBinding& binding = definition.bindings[index];
+                vk::WriteDescriptorSet write;
+                write.setDstSet(allocated[slot]).setDstBinding(binding.binding)
+                    .setDescriptorType(binding.type)
+                    .setBufferInfo(bindingInfos[slot][binding.binding]);
+                writes.push_back(write);
+            }
+        }
     }
     backend->UpdateDescriptorSets(writes);
 
-    descriptors.currentPositions = currentInfo.buffer;
-    descriptors.previousPositions = previousInfo.buffer;
-    descriptors.restPositions = restInfo.buffer;
-    descriptors.colliders = colliderInfo.buffer;
+    descriptors.currentPositions = object.GetTressfxPositionInfo().buffer;
+    descriptors.previousPositions = object.GetTressfxPreviousPositionInfo().buffer;
+    descriptors.previousPreviousPositions =
+        object.GetTressfxPreviousPreviousPositionInfo().buffer;
+    descriptors.restPositions = object.GetTressfxRestPositionInfo().buffer;
+    descriptors.restLengths = object.GetTressfxRestLengthInfo().buffer;
+    descriptors.strandLevel = object.GetTressfxStrandLevelInfo().buffer;
+    descriptors.colliders = object.GetTressfxColliderInfo().buffer;
     for (uint32_t slot = 0; slot < GuideSimulationParamBufferCount; ++slot)
         descriptors.params[slot] = object.GetTressfxParamsInfo(slot).buffer;
 }
@@ -182,8 +283,13 @@ HairSimulationPass::ObjectDescriptors& HairSimulationPass::EnsureObjectDescripto
     {
         const ObjectDescriptors& descriptors = cached->second;
         bool matches = descriptors.currentPositions == object.GetTressfxPositionInfo().buffer &&
-            descriptors.previousPositions == object.GetTressfxPreviousPositionInfo().buffer &&
+            descriptors.previousPositions ==
+                object.GetTressfxPreviousPositionInfo().buffer &&
+            descriptors.previousPreviousPositions ==
+                object.GetTressfxPreviousPreviousPositionInfo().buffer &&
             descriptors.restPositions == object.GetTressfxRestPositionInfo().buffer &&
+            descriptors.restLengths == object.GetTressfxRestLengthInfo().buffer &&
+            descriptors.strandLevel == object.GetTressfxStrandLevelInfo().buffer &&
             descriptors.colliders == object.GetTressfxColliderInfo().buffer;
         for (uint32_t slot = 0; slot < GuideSimulationParamBufferCount && matches; ++slot)
             matches = descriptors.params[slot] == object.GetTressfxParamsInfo(slot).buffer;
@@ -199,13 +305,31 @@ HairSimulationPass::ObjectDescriptors& HairSimulationPass::EnsureObjectDescripto
     return objectDescriptors.emplace(key, std::move(descriptors)).first->second;
 }
 
+void HairSimulationPass::RecordPass(vk::CommandBuffer commandBuffer,
+    GuideSimulationPass pass,
+    vk::DescriptorSet descriptorSet,
+    uint32_t groupCount,
+    bool& anyDispatch)
+{
+    const uint32_t index = static_cast<uint32_t>(pass);
+    ComputePipeline& pipeline = *pipelines[index];
+    // 相邻 pass 之间必须显式同步；第一个 pass 由 RecordPreDispatchBarrier 覆盖。
+    if (anyDispatch)
+        RecordInterPassBarrier(commandBuffer);
+    pipeline.Bind(commandBuffer);
+    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
+        pipeline.GetPipelineLayout(), 0, descriptorSet, nullptr);
+    pipeline.Dispatch(commandBuffer, groupCount, 1, 1);
+    anyDispatch = true;
+}
+
 void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
     const VL::ResolvedRenderScene& scene,
     const VL::RenderScene& renderScene,
     uint32_t frameSlot,
     float deltaSeconds)
 {
-    if (!initialized || !pipeline)
+    if (!initialized || !pipelines[0])
         return;
     // frameSlot 直接索引 params UBO；调用方必须传 frame-in-flight 槽（0..1）。
     if (frameSlot >= GuideSimulationParamBufferCount)
@@ -215,6 +339,7 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
     {
         std::shared_ptr<RenderableObject> object;
         uint32_t guideCount = 0;
+        uint32_t pointCount = 0;
     };
     std::vector<Dispatch> dispatches;
     std::unordered_set<const RenderableObject*> seen;
@@ -231,7 +356,10 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
                 if (!seen.insert(object.get()).second)
                     continue;
                 const uint32_t guideCount = object->GetTressfxGuideCount();
-                dispatches.push_back({std::move(object), guideCount});
+                const uint32_t pointsPerGuide = object->GetTressfxPointsPerGuide();
+                // 先算完再 move：braced-init-list 从左到右求值，move 之后 object 已为空。
+                dispatches.push_back({std::move(object), guideCount,
+                    guideCount * pointsPerGuide});
             }
         }
     }
@@ -240,28 +368,34 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
 
     if (!reportedFirstDispatch)
     {
-        // 一次性诊断：确认 GPU backend 真正录到了 dispatch，而不是静默走静态回退。
+        // 一次性诊断：确认 GPU backend 真正录到了多 pass dispatch，而不是静默回退。
         uint32_t totalGuides = 0;
         uint32_t totalPoints = 0;
         for (const Dispatch& dispatch : dispatches)
         {
             totalGuides += dispatch.guideCount;
-            totalPoints += dispatch.guideCount * dispatch.object->GetTressfxPointsPerGuide();
+            totalPoints += dispatch.pointCount;
         }
         std::cout << "[TressFX] GPU guide simulation dispatch: objects="
                   << dispatches.size() << " guides=" << totalGuides
-                  << " points=" << totalPoints << std::endl;
+                  << " points=" << totalPoints
+                  << " passes=" << GuideSimulationPassCount << std::endl;
         reportedFirstDispatch = true;
     }
 
     RecordPreDispatchBarrier(commandBuffer);
-    // pipeline 对整个 Record 恒定，绑定一次即可；descriptor set 逐对象变化。
-    pipeline->Bind(commandBuffer);
+    bool anyDispatch = false;
     for (Dispatch& dispatch : dispatches)
     {
         RenderableObject& object = *dispatch.object;
-        ObjectDescriptors& state = EnsureObjectDescriptors(object);
         const TressfxSimulationConfig& config = object.GetTressfxSimulationConfig();
+
+        // 变量步长：TressFX 直接使用帧 DeltaTime；这里按 maxDt 收紧，一帧一个 step。
+        const float timeStep = std::clamp(deltaSeconds, 0.0f, config.maxDt);
+        if (timeStep <= 0.0f)
+            continue;
+
+        ObjectDescriptors& state = EnsureObjectDescriptors(object);
 
         // 根点骨骼矩阵来自同一帧的 RenderScene 冻结快照。只按场景对象身份匹配，
         // 不复制播放器或骨架状态；pose 缺失时保留上一帧矩阵并只报告一次。
@@ -282,8 +416,7 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
             }
             if (sourceDraw != nullptr)
                 state.skinningMatrix = sourceDraw->skinPose->matrices[skinning.jointIndex];
-            else if (!state.reportedMissingSkinPose)
-            {
+            else if (!state.reportedMissingSkinPose)            {
                 std::cerr << "[TressFX] skinning pose unavailable for object \""
                           << object.GetName() << "\" source=\""
                           << skinning.sourceSceneObject << "\" bone=\""
@@ -293,45 +426,52 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
             }
         }
 
-        // 与 CPU GuideSimulation::Step 相同的 accumulator 算术。这里刻意重复这 6 行：
-        // GPU 侧还没有跨帧状态 buffer，pass 的逐对象状态就是权威；两处必须一起改。
-        state.accumulator += std::clamp(deltaSeconds, 0.0f, config.maxDt);
-        uint32_t steps = 0;
-        while (state.accumulator >= config.fixedStep && steps < config.maxSubsteps)
-        {
-            state.accumulator -= config.fixedStep;
-            ++steps;
-        }
-        if (steps == config.maxSubsteps)
-            state.accumulator = 0.0f;
-        if (steps == 0)
-            continue;
-
-        // 一帧内所有子步共用 frame-start simulationTime 和 fixedStep，因此参数只写一次。
+        // 所有 pass 共用 frame-start simulationTime 与同一个 dt，params 只写一次。
         const GuideSimulationParams params = MakeGuideSimulationParams(
             config,
             dispatch.guideCount,
             object.GetTressfxPointsPerGuide(),
-            dispatch.guideCount * object.GetTressfxPointsPerGuide(),
+            dispatch.pointCount,
+            timeStep,
             state.simulationTime,
             state.skinningMatrix);
         object.WriteTressfxSimulationParams(params, frameSlot);
-        state.simulationTime += static_cast<float>(steps) * config.fixedStep;
+        state.simulationTime += timeStep;
 
-        const vk::DescriptorSet set = state.sets[frameSlot];
-        commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
-            pipeline->GetPipelineLayout(), 0, set, nullptr);
-        const uint32_t groupCount =
+        const uint32_t vertexGroupCount =
+            (dispatch.pointCount + GuideSimulationWorkgroupSize - 1) /
+            GuideSimulationWorkgroupSize;
+        const uint32_t strandGroupCount =
             (dispatch.guideCount + GuideSimulationWorkgroupSize - 1) /
             GuideSimulationWorkgroupSize;
-        for (uint32_t substep = 0; substep < steps; ++substep)
-        {
-            if (substep > 0)
-                RecordSubstepBarrier(commandBuffer);
-            pipeline->Dispatch(commandBuffer, groupCount, 1, 1);
-        }
+
+        // 严格按 TressFX 的 pass 顺序录制；VSP 关闭时完全不录制该 pass，
+        // 与 TressFX 的 EnableVSP 开关对应。LocalShape 的 stiffness 为 0 时
+        // shader 内早退，仍保留 dispatch 以维持固定 pass 表。
+        RecordPass(commandBuffer, GuideSimulationPass::Integration,
+            state.sets[PassIndex(GuideSimulationPass::Integration)][frameSlot],
+            vertexGroupCount, anyDispatch);
+        RecordPass(commandBuffer, GuideSimulationPass::StrandLevel,
+            state.sets[PassIndex(GuideSimulationPass::StrandLevel)][frameSlot],
+            strandGroupCount, anyDispatch);
+        if (config.vspCoefficient > 0.0f)
+            RecordPass(commandBuffer, GuideSimulationPass::Vsp,
+                state.sets[PassIndex(GuideSimulationPass::Vsp)][frameSlot],
+                vertexGroupCount, anyDispatch);
+        RecordPass(commandBuffer, GuideSimulationPass::LocalShape,
+            state.sets[PassIndex(GuideSimulationPass::LocalShape)][frameSlot],
+            strandGroupCount, anyDispatch);
+        RecordPass(commandBuffer, GuideSimulationPass::LengthWind,
+            state.sets[PassIndex(GuideSimulationPass::LengthWind)][frameSlot],
+            strandGroupCount, anyDispatch);
+        // TressFX 5.0 guide shader 没有胶囊路径；这是 VL 在长度 pass 之后的追加 pass。
+        if (params.colliderCount > 0)
+            RecordPass(commandBuffer, GuideSimulationPass::Collision,
+                state.sets[PassIndex(GuideSimulationPass::Collision)][frameSlot],
+                strandGroupCount, anyDispatch);
     }
-    RecordPostDispatchBarrier(commandBuffer);
+    if (anyDispatch)
+        RecordPostDispatchBarrier(commandBuffer);
 }
 
 void HairSimulationPass::ResetDescriptorCache() noexcept
@@ -339,10 +479,13 @@ void HairSimulationPass::ResetDescriptorCache() noexcept
     objectDescriptors.clear();
     if (backend)
     {
-        for (DescriptorPoolBudget& budget : descriptorPools)
-            backend->DestroyDescriptorPool(budget.pool);
+        for (std::vector<DescriptorPoolBudget>& pools : descriptorPools)
+        {
+            for (DescriptorPoolBudget& budget : pools)
+                backend->DestroyDescriptorPool(budget.pool);
+            pools.clear();
+        }
     }
-    descriptorPools.clear();
     initialized = false;
 }
 

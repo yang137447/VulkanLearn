@@ -1,0 +1,70 @@
+#version 450
+
+// TressFXSimulationStrandLevel.usf -> CalculateStrandLevelData。
+// 一个 invocation 处理一根 strand：dispatch = ceil(guideCount / 64)。
+// 用前两个顶点的 previous/current/previous-previous 位置求刚体变换和 VspCoeff，
+// 并写入 LocalShape pass 需要的 SkinningQuat。即使 VSP 关闭也会执行。
+#include "tressfxSimCommon.glsl"
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 1, std430) readonly buffer CurrentPositions
+{
+    vec4 positions[];
+} currentPositions;
+
+layout(set = 0, binding = 2, std430) readonly buffer PreviousPositions
+{
+    vec4 positions[];
+} previousPositions;
+
+layout(set = 0, binding = 3, std430) readonly buffer PreviousPreviousPositions
+{
+    vec4 positions[];
+} previousPreviousPositions;
+
+// 每根 strand 3 个 vec4：VspQuat、VspTranslation.xyz + VspCoeff.w、SkinningQuat。
+layout(set = 0, binding = 6, std430) buffer StrandLevelData
+{
+    vec4 data[];
+} strandLevelData;
+
+void main()
+{
+    uint guide = gl_GlobalInvocationID.x;
+    if (guide >= params.counts.y)
+        return;
+
+    uint root = guide * TressfxPointsPerGuide();
+
+    vec4 posOldOld0 = previousPreviousPositions.positions[root];
+    vec4 posOldOld1 = previousPreviousPositions.positions[root + 1];
+    vec4 posOld0 = previousPositions.positions[root];
+    vec4 posOld1 = previousPositions.positions[root + 1];
+    vec4 posNew0 = currentPositions.positions[root];
+    vec4 posNew1 = currentPositions.positions[root + 1];
+
+    // 前两个点由根前缀保持，因此可以假设变换不含缩放：
+    // rot 把 old 段方向转到 new 段方向，trans 把 old 根点映射到 new 根点。
+    vec3 u = posOld1.xyz - posOld0.xyz;
+    vec3 v = posNew1.xyz - posNew0.xyz;
+    vec4 rot = vec4(0.0, 0.0, 0.0, 1.0);
+    vec3 trans = vec3(0.0);
+    if (dot(u, u) > 1.0e-12 && dot(v, v) > 1.0e-12)
+    {
+        rot = TressfxQuatFromTwoUnitVectors(normalize(u), normalize(v));
+        trans = posNew0.xyz - TressfxRotateByQuat(rot, posOld0.xyz);
+    }
+    // 退化（前两点重合）时保持单位旋转；资产导入已拒绝相邻重合点，这里只防 NaN。
+
+    float vspCoeff = params.shape.z;
+    // 伪加速度：length(new - 2*old + old_old)，超过阈值时强制完全跟随。
+    float accel = length(posNew1.xyz - 2.0 * posOld1.xyz + posOldOld1.xyz);
+    if (accel > params.shape.w)
+        vspCoeff = 1.0;
+
+    uint base = guide * 3u;
+    strandLevelData.data[base + 0] = rot;
+    strandLevelData.data[base + 1] = vec4(trans, vspCoeff);
+    strandLevelData.data[base + 2] = params.skinningQuat;
+}

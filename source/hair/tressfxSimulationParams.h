@@ -5,76 +5,99 @@
 
 #include <Eigen/Dense>
 
+#include "hair/tressfxSolverMath.h"
 #include "mesh/meshAssetTypes.h"
 
 namespace VL::Hair
 {
-// 与 shader/glsl/hair/tressfxGuideSim.comp 的 std140 uniform block 一一对应。
-// 固定步 accumulator 由 Host 推进，因此 kernel 只收到单个 fixedStep；maxDt 不进入 GPU。
+// 与 shader/glsl/hair/tressfxSimCommon.glsl 的 std140 uniform block 一一对应。
+// 每个 tressfx 对象每帧写一次；dt 由 Host 按 clamp(frameDelta, 0, maxDt) 计算，
+// 一帧只有一个 solver step（TressFX 的变量步长），不再有 fixedStep accumulator。
 struct GuideSimulationParams
 {
-    // xyz = 平均重力，w 未使用。
+    // xyz = 重力加速度，w 未使用（厘米/秒²）。
     Eigen::Vector4f gravity = Eigen::Vector4f::Zero();
-    // xyz = 平均风，w 未使用；kernel 叠加每 guide 的有界 gust。
-    Eigen::Vector4f wind = Eigen::Vector4f::Zero();
-    // x = fixedStep, y = damping, z = pointsPerGuide, w = rootFixedPoints
+    // TressFX 的四路风；VL 资产只有一个平均风向量，Host 四路都填同一个值，
+    // shader 仍按 a/(1-a) 权重混合（见 TressfxCombineWind）。
+    Eigen::Vector4f wind0 = Eigen::Vector4f::Zero();
+    Eigen::Vector4f wind1 = Eigen::Vector4f::Zero();
+    Eigen::Vector4f wind2 = Eigen::Vector4f::Zero();
+    Eigen::Vector4f wind3 = Eigen::Vector4f::Zero();
+    // x = dt（秒）, y = DampingCoeff, z = pointsPerGuide, w = rootFixedPoints
     Eigen::Vector4f controls = Eigen::Vector4f::Zero();
-    // x = iterations, y = guideCount, z = pointCount, w = colliderCount
+    // x = globalShapeStiffness, y = globalShapeEffectiveRange,
+    // z = vspCoefficient, w = vspAccelThresholdMax（厘米/秒²）
+    Eigen::Vector4f shape = Eigen::Vector4f::Zero();
+    // x = bendStiffness（映射到 LocalShape 的 Stiffness 标量）,
+    // y = windGust, z = windFrequency, w = frame-start simulationTime
+    Eigen::Vector4f motion = Eigen::Vector4f::Zero();
+    // x = 长度约束迭代次数, y = guideCount, z = pointCount, w = colliderCount
     uint32_t iterations = 0;
     uint32_t guideCount = 0;
     uint32_t pointCount = 0;
     uint32_t colliderCount = 0;
-    // x = bendStiffness, y = windGust, z = windFrequency, w = frame-start simulationTime
-    Eigen::Vector4f motion = Eigen::Vector4f::Zero();
-    // 根点骨骼矩阵：kernel 对 local < rootFixedPoints 的点写 current=previous=M*rest。
-    // 未声明 simulation.skinning 时保持单位矩阵，写入结果与历史 rest pin 完全一致。
-    // std140 中 mat4 紧接 motion（offset 80，16-byte 对齐），整个 UBO 144 字节。
+    // 根骨旋转：(x,y,z) = 四元数向量部分, w = 标量部分。TressFX 的 SkinningQuat
+    // 由每根 strand 的骨骼矩阵分解而来；VL 只有单个根骨，Host 预先分解一次。
+    Eigen::Vector4f skinningQuat = Eigen::Vector4f(0.0f, 0.0f, 0.0f, 1.0f);
+    // 根点骨骼矩阵：所有不可移动点写 InitialPos = M * rest（无蒙皮时为单位矩阵）。
     Eigen::Matrix4f skinning = Eigen::Matrix4f::Identity();
 };
-static_assert(sizeof(GuideSimulationParams) == 144,
-    "std140 guide simulation params must stay 144 bytes");
+static_assert(sizeof(GuideSimulationParams) == 224,
+    "std140 guide simulation params must stay 224 bytes");
 static_assert(alignof(GuideSimulationParams) == 16,
     "std140 guide simulation params require vec4 alignment");
-// 骨骼矩阵必须位于 std140 mat4 的 16-byte 边界；Host 与 shader 的偏移都从这里推导。
-static_assert(offsetof(GuideSimulationParams, skinning) % 16 == 0,
-    "std140 skinning matrix must start on a 16-byte boundary");
+// std140 中 mat4 必须落在 16-byte 边界；Host 与 shader 的偏移都从这里推导。
+static_assert(offsetof(GuideSimulationParams, skinning) == 160,
+    "std140 skinning matrix must start at offset 160");
 
-// 每个 guide 一个 compute invocation；与 shader 的 local_size_x 必须一致。
+// 每个顶点 pass 的 invocation 处理一个点；每根 strand 的 pass 处理一根 guide。
+// 两者与 shader 的 local_size_x 必须一致。
 inline constexpr uint32_t GuideSimulationWorkgroupSize = 64;
 
-// 参数 UBO 按 frame-in-flight 槽分开，主机写入当前槽前该槽上一帧的 fence 已回收，
-// 因此不需要在设备与主机之间再做额外的 UBO 同步。数量必须等于 MAX_FRAMES_IN_FLIGHT。
+// 参数 UBO 按 frame-in-flight 槽分开。数量必须等于 MAX_FRAMES_IN_FLIGHT。
 inline constexpr uint32_t GuideSimulationParamBufferCount = 2;
 
-// simulationTime 是该帧所有子步共享的 frame-start t；dt 固定为 fixedStep，
-// 因为 accumulator 已在 Host 与 CPU Step 中用相同算术消费。
+// 一帧一次 dispatch 所需的参数。dt 已由调用方 clamp；simulationTime 是 frame-start t，
+// 用于阵风相位（所有 pass 共用同一值）。
 inline GuideSimulationParams MakeGuideSimulationParams(
     const TressfxSimulationConfig& config,
     uint32_t guideCount,
     uint32_t pointsPerGuide,
     uint32_t pointCount,
+    float timeStep,
     float simulationTime,
     Eigen::Matrix4f skinningMatrix = Eigen::Matrix4f::Identity())
 {
     GuideSimulationParams params;
     params.gravity = Eigen::Vector4f(
         config.gravity.x(), config.gravity.y(), config.gravity.z(), 0.0f);
-    params.wind = Eigen::Vector4f(
+    // 单一作者风向喂给 TressFX 的四路组合；四路相同则混合结果仍是平均值。
+    const Eigen::Vector4f wind(
         config.wind.x(), config.wind.y(), config.wind.z(), 0.0f);
+    params.wind0 = wind;
+    params.wind1 = wind;
+    params.wind2 = wind;
+    params.wind3 = wind;
     params.controls = Eigen::Vector4f(
-        config.fixedStep,
-        config.damping,
+        timeStep,
+        TressfxDampingCoeffFromRetention(config.damping),
         static_cast<float>(pointsPerGuide),
         static_cast<float>(config.rootFixedPoints));
-    params.iterations = config.iterations;
-    params.guideCount = guideCount;
-    params.pointCount = pointCount;
-    params.colliderCount = static_cast<uint32_t>(config.capsules.size());
+    params.shape = Eigen::Vector4f(
+        config.globalShapeStiffness,
+        config.globalShapeEffectiveRange,
+        config.vspCoefficient,
+        config.vspAccelThresholdMax);
     params.motion = Eigen::Vector4f(
         config.bendStiffness,
         config.windGust,
         config.windFrequency,
         simulationTime);
+    params.iterations = config.iterations;
+    params.guideCount = guideCount;
+    params.pointCount = pointCount;
+    params.colliderCount = static_cast<uint32_t>(config.capsules.size());
+    params.skinningQuat = TressfxQuaternionFromMatrix(skinningMatrix);
     params.skinning = skinningMatrix;
     return params;
 }

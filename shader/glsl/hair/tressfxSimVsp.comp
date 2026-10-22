@@ -1,0 +1,56 @@
+#version 450
+
+// TressFXSimulationVSP.usf -> VelocityShockPropagation。
+// 一个 invocation 处理一个顶点：dispatch = ceil(pointCount / 64)，但只在
+// vspCoefficient > 0 时由 Host 录制（TressFX 的 EnableVSP 开关）。
+// 把 current 和 previous 位置一起向 Quat*pos + trans 混合，保持 Verlet 速度历史
+// 与位置同步，避免 VSP 引入虚假速度。
+#include "tressfxSimCommon.glsl"
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 1, std430) buffer CurrentPositions
+{
+    vec4 positions[];
+} currentPositions;
+
+layout(set = 0, binding = 2, std430) buffer PreviousPositions
+{
+    vec4 positions[];
+} previousPositions;
+
+layout(set = 0, binding = 6, std430) readonly buffer StrandLevelData
+{
+    vec4 data[];
+} strandLevelData;
+
+void main()
+{
+    uint point = gl_GlobalInvocationID.x;
+    if (point >= params.counts.z)
+        return;
+
+    uint pointsPerGuide = TressfxPointsPerGuide();
+    uint local = point % pointsPerGuide;
+    // 根前缀由骨骼矩阵固定，VSP 不参与。
+    if (local < TressfxRootFixedPoints())
+        return;
+
+    uint guide = point / pointsPerGuide;
+    uint base = guide * 3u;
+    vec4 vspQuat = strandLevelData.data[base + 0];
+    vec4 vspTranslation = strandLevelData.data[base + 1];
+    float vspCoeff = vspTranslation.w;
+    if (vspCoeff < 0.9)
+        vspCoeff *= TressfxVspStiffness(local);
+
+    vec4 posNew = currentPositions.positions[point];
+    vec4 posOld = previousPositions.positions[point];
+    posNew.xyz = (1.0 - vspCoeff) * posNew.xyz
+        + vspCoeff * (TressfxRotateByQuat(vspQuat, posNew.xyz) + vspTranslation.xyz);
+    posOld.xyz = (1.0 - vspCoeff) * posOld.xyz
+        + vspCoeff * (TressfxRotateByQuat(vspQuat, posOld.xyz) + vspTranslation.xyz);
+
+    currentPositions.positions[point] = posNew;
+    previousPositions.positions[point] = posOld;
+}

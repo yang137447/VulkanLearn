@@ -119,8 +119,14 @@ RenderableObject::RenderableObject(
                 simulationConfig.bendStiffness = section.tressfxSimulation.bendStiffness;
                 simulationConfig.windGust = section.tressfxSimulation.windGust;
                 simulationConfig.windFrequency = section.tressfxSimulation.windFrequency;
-                simulationConfig.fixedStep = section.tressfxSimulation.fixedStep;
-                simulationConfig.maxSubsteps = section.tressfxSimulation.maxSubsteps;
+                simulationConfig.globalShapeStiffness =
+                    section.tressfxSimulation.globalShapeStiffness;
+                simulationConfig.globalShapeEffectiveRange =
+                    section.tressfxSimulation.globalShapeEffectiveRange;
+                simulationConfig.vspCoefficient =
+                    section.tressfxSimulation.vspCoefficient;
+                simulationConfig.vspAccelThresholdMax =
+                    section.tressfxSimulation.vspAccelThresholdMax;
                 simulationConfig.capsules = section.tressfxSimulation.capsules;
                 tressfxSimulation = std::make_unique<VL::Hair::GuideSimulation>(
                     std::move(restPositions),
@@ -331,7 +337,19 @@ void RenderableObject::CreateTressfxGpuSimulationBuffers()
     tressfxPreviousPositionInfo
         .setBuffer(tressfxPreviousPositionBuffer).setOffset(0).setRange(positionBytes);
 
-    // rest positions：xyz 是静止中心线，w 是导入的逆质量；kernel 用它判断固定点。
+    // previous-previous positions：strand-level 伪加速度与第二阶 Verlet 状态。
+    // 初值与 previous 相同，首帧的伪加速度因此为 0。
+    std::tie(tressfxPreviousPreviousPositionBuffer,
+        tressfxPreviousPreviousPositionMemory) =
+        CreateUploadedDeviceLocalStorageBuffer(
+            *rendererBackend, initialPoints.data(), positionBytes,
+            "TressFXPreviousPreviousPositions: " + name);
+    tressfxPreviousPreviousPositionInfo
+        .setBuffer(tressfxPreviousPreviousPositionBuffer).setOffset(0)
+        .setRange(positionBytes);
+
+    // rest positions：xyz 是静止中心线，w 是导入的逆质量；integration pass 用它判断
+    // 不可移动点（根前缀或逆质量 <= 0）。
     for (size_t point = 0; point < pointCount; ++point)
     {
         const Eigen::Vector3f& rest = section.vertices[point * 2].position;
@@ -344,6 +362,38 @@ void RenderableObject::CreateTressfxGpuSimulationBuffers()
             "TressFXRestPositions: " + name);
     tressfxRestPositionInfo
         .setBuffer(tressfxRestPositionBuffer).setOffset(0).setRange(positionBytes);
+
+    // 静止段长：第 i 项是 i -> i+1 的 rest 长度，末项 0。LengthConstraintsWind pass
+    // 每根 strand 读取，创建时上传一次。
+    std::vector<float> restLengths(pointCount, 0.0f);
+    for (size_t guide = 0; guide < tressfxGuideCount; ++guide)
+    {
+        const size_t base = guide * tressfxPointsPerGuide;
+        for (size_t local = 0; local + 1 < tressfxPointsPerGuide; ++local)
+            restLengths[base + local] = (section.vertices[(base + local + 1) * 2].position -
+                section.vertices[(base + local) * 2].position).norm();
+    }
+    const vk::DeviceSize restLengthBytes =
+        static_cast<vk::DeviceSize>(pointCount) * sizeof(float);
+    std::tie(tressfxRestLengthBuffer, tressfxRestLengthMemory) =
+        CreateUploadedDeviceLocalStorageBuffer(
+            *rendererBackend, restLengths.data(), restLengthBytes,
+            "TressFXRestLengths: " + name);
+    tressfxRestLengthInfo
+        .setBuffer(tressfxRestLengthBuffer).setOffset(0).setRange(restLengthBytes);
+
+    // strand-level 数据：每根 strand 3 个 vec4（VspQuat、VspTranslation + VspCoeff、
+    // SkinningQuat），由 StrandLevel pass 每帧写、VSP/LocalShape pass 读。
+    std::vector<Eigen::Vector4f> strandLevelData(
+        static_cast<size_t>(tressfxGuideCount) * 3u, Eigen::Vector4f::Zero());
+    const vk::DeviceSize strandLevelBytes =
+        static_cast<vk::DeviceSize>(strandLevelData.size()) * sizeof(Eigen::Vector4f);
+    std::tie(tressfxStrandLevelBuffer, tressfxStrandLevelMemory) =
+        CreateUploadedDeviceLocalStorageBuffer(
+            *rendererBackend, strandLevelData.data(), strandLevelBytes,
+            "TressFXStrandLevel: " + name);
+    tressfxStrandLevelInfo
+        .setBuffer(tressfxStrandLevelBuffer).setOffset(0).setRange(strandLevelBytes);
 
     // params UBO 每帧由主机改写，保持 host-coherent；只有位置 buffer 是 device-local。
     for (uint32_t slot = 0; slot < VL::Hair::GuideSimulationParamBufferCount; ++slot)
@@ -392,9 +442,19 @@ void RenderableObject::DestroyTressfxBuffers()
         if (tressfxPreviousPositionBuffer)
             rendererBackend->DestroyBuffer(
                 tressfxPreviousPositionBuffer, tressfxPreviousPositionMemory);
+        if (tressfxPreviousPreviousPositionBuffer)
+            rendererBackend->DestroyBuffer(
+                tressfxPreviousPreviousPositionBuffer,
+                tressfxPreviousPreviousPositionMemory);
         if (tressfxRestPositionBuffer)
             rendererBackend->DestroyBuffer(
                 tressfxRestPositionBuffer, tressfxRestPositionMemory);
+        if (tressfxRestLengthBuffer)
+            rendererBackend->DestroyBuffer(
+                tressfxRestLengthBuffer, tressfxRestLengthMemory);
+        if (tressfxStrandLevelBuffer)
+            rendererBackend->DestroyBuffer(
+                tressfxStrandLevelBuffer, tressfxStrandLevelMemory);
         if (tressfxColliderBuffer)
             rendererBackend->DestroyBuffer(
                 tressfxColliderBuffer, tressfxColliderMemory);
@@ -411,8 +471,14 @@ void RenderableObject::DestroyTressfxBuffers()
     tressfxPositionMemory = nullptr;
     tressfxPreviousPositionBuffer = nullptr;
     tressfxPreviousPositionMemory = nullptr;
+    tressfxPreviousPreviousPositionBuffer = nullptr;
+    tressfxPreviousPreviousPositionMemory = nullptr;
     tressfxRestPositionBuffer = nullptr;
     tressfxRestPositionMemory = nullptr;
+    tressfxRestLengthBuffer = nullptr;
+    tressfxRestLengthMemory = nullptr;
+    tressfxStrandLevelBuffer = nullptr;
+    tressfxStrandLevelMemory = nullptr;
     tressfxColliderBuffer = nullptr;
     tressfxColliderMemory = nullptr;
     tressfxGpuSimulation = false;

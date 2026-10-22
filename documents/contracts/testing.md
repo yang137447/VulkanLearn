@@ -27,7 +27,7 @@
 | `editor_ui_tests` | 714（708 后加 6 项共用资产标签与工作区验证） | 编辑器 UI：组件、停靠、布局持久化、内容浏览器、JSON 资产库、标准资产修改、actor 树、属性编辑、场景持久化、保存确认、可视化、颜色转换、右键菜单、RmlUi GPU 缩略图桥接、C# 放置/蓝图资产拖放、组件 Details、独立蓝图配置标签、3D 拾取/变换/辅助图示/吸附、文档历史、类型化属性与实例权限、物理配置、编译入口、逻辑组件、Quaternion 原子编辑、Time Scale、Log 页签、四处递归自定义数据编辑、冻结 HUD 文本绑定、C# 类浏览/源码打开请求、一类多 BP 配置创建及骨骼预览值请求/资产校验；公共 DrawDebug 投影/裁剪/叠层顺序、可选深度、转义文字、过滤菜单；Motion 值请求/布局、特征表和 MM 冻结候选/代价刷新、被聚焦控制器时间轴 seek/play/pause 与离线/无播放器禁用、查询回放历史帧选择/回显/禁用；SpringArm 字段刷新、默认值与编辑提交、组件/末端挂接空间、图示/拾取/gizmo 一致性、多层 Mesh section 空间与重挂父级；TressFX 类型识别、标准保存保留半径与场景引用；retarget source/profile 保存保留与引用/源类型拒绝；参考姿态校准、ozz 索引、SK 身份/根路径边界、冻结发布/失败清空、独立页签/轴向/选骨/取景/辅助骨和多尺寸布局；成对动画身份发布、控制/seek、模式切换、重载隔离和首次取景区域；共用 DocumentTab 稳定 key/独立关闭、临时最大化/恢复、跨类型关闭与 MI 异步确认 |
 | `script_tests` | 当前注册 448（当前构建 XML 实测；含 2 项成对原地动画预览；SpringArm 运行时共 40 项；C# ON；注册数不等于实跑数；本轮范围见 Retarget 动画页验证。OFF 先前实测注册 89 项） | 蓝图场景/资产/组件校验、实例权限、地面放置、输入映射、源码 URI 边界；ON 时使用真实 hostfxr/CLR 验证生命周期、Spawn、运行时组件/代际句柄、异步加载/取消/租约、Jolt 层与掩码/compound/静态 mesh/约束/扫球、角色控制、计时器/事件、故障隔离、World 换代、冻结快照、类型化属性、灯光、程序集重载、资源源码编译/监视及 DLL/PDB 完整字节确定性、PDB 空类/partial 源码定位、私有运行时部署、自定义逻辑组件、Tick/LateTick 每帧时序/时钟/性能采样、递归自定义数据、显式播放中深值迁移、增量同步/空回调过滤/千实例负载、HUD 所有权/回滚/迁移、受控程序集限定类名及混合 CLR/Jolt/WorldSnapshot 负载；SpringArm schema/编辑保存/实例覆写、同帧物理/晚更新、旋转继承、位置/旋转 lag 与子步、碰撞/移动墙体、诊断/传送复位、重载与回滚、非相机子级/子局部偏移与嵌套碰撞空间、CLR/原生含 shear 矩阵一致性；动画请求/原生反馈、独立时钟、状态机及实际运动/碰墙回归、Actor 有界转向与世界关节/相机连续性、正式控制器稳态步频开关与原根行程对照及曲线筛选踝漂移诊断；静态接地探测过滤、18° 横坡参考点/法线独立测量与 pre-IK/MM 隔离；走跑双参考点动态支撑、台阶边缘单支点、惯性化与视觉根偏移、冻结源支撑窗滑移/漂移/穿入质量夹具；足部 Auto/Ball/Ankle 支点模式与 C# `FootLock`；Motion 调试历史回放（帧选择、不追加、退出恢复）；被聚焦脚本控制器时间轴的 seek/play/pause 身份隔离、代数/片长/动作校验；历史 Pause/Stop、实际碰撞轨迹与近似预测；DrawDebug 十形状、生命周期/发布者清理、批次回滚和深度参数跨桥；成对预览 clip/时钟、原地根变换、section 去重和场景门控 |
 | `debug_draw_tests` | 27 | 十形状展开、生命周期、冻结、身份/过滤/预算、默认 Overlay 与可选深度传播、投影近远面及屏幕裁剪深度、Console 控制 |
-| `hair_asset_tests` | 98 | `.tfx` 字节/属性/预算校验、文件读取、坐标与逆质量保留、静态切线/rest length/ribbon 拓扑、SM 半径/身份与导入流、simulation CPU/GPU backend 解析、固定步/弯曲/阵风作者字段与参数打包、`simulation.skinning` 作者校验（source/rootBone/backend/未知键/缓存身份）、根骨解析（命中/缺骨/缺骨架，错误带骨名+资产路径）、根前缀 `M*rest` 纯数学、胶囊投影/固定点/长子步接触与 collision 校验；离线 SDF 生成（球/盒解析距离、角度加权伪法线、锐尖顶点、开放边报告、字节确定性、1 vs 4 线程并行字节一致、文件往返与截断/损坏拒绝）；合成夹具，模块套件不含真实女性资产或 GPU dispatch（GPU 路径由 main 启动烟测覆盖） |
+| `hair_asset_tests` | 117 | `.tfx` 字节/属性/预算校验、文件读取、坐标与逆质量保留、静态切线/rest length/ribbon 拓扑、SM 半径/身份与导入流、simulation CPU/GPU backend 解析、变量步长（`maxDt` clamp、一帧一步）、`bendStiffness`/阵风/global shape/VSP 作者字段与 224-byte 参数打包、已删除 `fixedStep`/`maxSubsteps` 的拒绝、`simulation.skinning` 作者校验（source/rootBone/backend/未知键/缓存身份）、根骨解析（命中/缺骨/缺骨架，错误带骨名+资产路径）、不可移动点 `M*rest` 纯数学、五个 pass 的纯数学（距离约束 4 种 multiplier、风力方向与单位归一化、指数阻尼、global shape range 门控与拉回、VSP 端点/线性 stiffness、strand 变换与伪加速度阈值、直/弯 rest 的 local-shape 旋转、速度 clamp）、胶囊投影/固定点/长步数接触与 collision 校验；离线 SDF 生成（球/盒解析距离、角度加权伪法线、锐尖顶点、开放边报告、字节确定性、1 vs 4 线程并行字节一致、文件往返与截断/损坏拒绝）；合成夹具，模块套件不含真实女性资产或 GPU dispatch（GPU 路径由 main 启动烟测覆盖） |
 | `vl_offline_adapter_tests` | 101 | 离线场景/网格/显示/相机适配 |
 | `editor_viewport_tests` | 41 | 视口几何、命中、坐标映射、aspect、坐标轴投影及编辑器网格 |
 | `vl_offline_coordinator_tests` | 13 | 离线会话协调 |
@@ -869,65 +869,76 @@ File→Exit 日志确认 teardown 完成，无 Vulkan validation 错误。该验
 TressFX 导入与材质边界使用 `vl_tfx_inspect`、`hair_asset_tests` 和
 `material_schema_tests`：构建这三个目标后运行
 `ctest --test-dir build -R "^(TfxLoader|TfxFileTest|StrandGeometry|TressfxDescriptor|TressfxImport|TressfxMaterial)\." --output-on-failure`。
-hair 的 98 项覆盖 `.tfx` 字节边界、切线/ribbon 拓扑、SM 半径/身份、属性流、
-simulation CPU/GPU backend 解析、固定步/弯曲/阵风作者字段与参数打包、
-`simulation.skinning` 作者边界/缓存身份/根骨解析与根前缀纯数学、胶囊投影/
-固定点/长子步接触与 collision 资产校验（GPU dispatch 不在模块套件内，由 main
-启动烟测覆盖）；
+hair 的 **117 项**覆盖 `.tfx` 字节边界、切线/ribbon 拓扑、SM 半径/身份、属性流、
+simulation CPU/GPU backend 解析、变量步长（`maxDt` clamp、一帧一步）、
+`bendStiffness`/`windGust`/`globalShape*`/`vsp*` 作者字段与参数打包、
+`simulation.skinning` 作者边界/缓存身份/根骨解析/InitialPos 纯数学、
+胶囊投影/固定点接触与 collision 资产校验；其中 `tressfxSolverMathTests` 的 16 项
+覆盖五个 pass 的纯数学：距离约束的 0.5/0.5、1/0、0/1、0/0 multiplier，风力的
+方向与单位归一化，指数阻尼 `exp(-DampingCoeff*dt*60)`，global shape 的 range 门控
+与拉回，VSP 混合端点与逐顶点 stiffness 线性衰减，strand 刚体变换与伪加速度阈值，
+直/弯 rest 的 local-shape 旋转、速度 clamp 与 std140 参数布局。
+`GuideSimulationParams` 的 `static_assert` 固定 224 bytes 与 mat4 offset 160。
+GPU compute dispatch 不在模块套件内，由 main 启动烟测覆盖。
 `TressfxMaterial` 的 7 项覆盖工厂身份、透明写深度，以及不支持的模型/路径拒绝。
-材质目标共 16 项。编辑器改动运行 `editor_ui_tests` 全量；本批 681 项，
-676 通过、5 项符号链接权限环境跳过，零失败。
+材质目标共 16 项。
+当前改动 → 验证：
 
-静态 Vulkan 证据为 `artifacts/tressfx5-static/Resources/Generated/Screenshots/`
-的 `front.bmp` / `orbit.bmp`（1280×720）；合成探针包含两实例、旋转和相机移动，
-不替代女性资产导出、Marschner 或抗锯齿验证。完整 main 构建通过，
-三项既有 Vulkan 门禁串行 exit 0；测试 Common 依赖复制到隔离资源根，
-未改写原资源目录。日志位于 `artifacts/tressfx5-static/`。
-模型 schema 用 PowerShell `Test-Json -SchemaFile schema/model_descriptor.schema.json`
-核对合成描述符，并核对缺失半径、夹带 importOptions 的拒绝；
-`schema/README.md` 所列 `validate_model_descriptors.py` 在本检出不存在，
-本批没有把该缺失脚本记作通过。场景 schema 使用现有 `validate_scene_schema.py`
-的 `check` 核对生成场景，不把 Generated 探针当作 Maps 全量扫描。
-当前范围见 [TressFX 资产导入](tressfx-asset-import.md)。
+| 改动 | 命令 |
+| --- | --- |
+| `shader/glsl/hair/tressfxSim*.comp`、`tressfxSimCommon.glsl` | 启动任一 GPU 发丝场景；shader 构建日志显示 6 个 `hair/tressfxSim*` 条目，`failed=0` |
+| `source/hair/*`、参数布局 | `cmake --build build -j 8`；`build/bin/hair_asset_tests.exe --gtest_brief=1` |
+| `schema/model_descriptor.schema.json`、`meshAssetValidator` | `hair_asset_tests`；`material_schema_tests.exe --gtest_brief=1` |
+| `documents/contracts/**` | `py -3 tool\validate-docs.py` |
+| 架构边界 | `pwsh -File tool/architecture-boundary-audit.ps1` |
 
-GPU guide 模拟的实机证据来自作者场景 `Maps/SC_tressfx_female/SC_tressfx_female_dynamic.json`：
-其 `SM_female_hair_dynamic.json` 作者 `simulation.backend = "gpu"`。在仓库根运行
-`build/bin/main.exe --initial-scene Maps/SC_tressfx_female/SC_tressfx_female_dynamic.json --frame-limit 30 --no-dev-ui`，
+GPU guide 模拟的实机证据来自作者场景
+`Maps/SC_tressfx_female/SC_tressfx_female_dynamic.json`：其
+`SM_female_hair_dynamic.json` 作者 `simulation.backend = "gpu"`。在仓库根运行：
+
+```powershell
+build/bin/main.exe --initial-scene Maps/SC_tressfx_female/SC_tressfx_female_dynamic.json --frame-limit 60 --no-dev-ui
+```
+
 日志应出现 `World/graph transaction committed` 与
-`[TressFX] GPU guide simulation dispatch: objects=1 guides=40334 points=1290688`，
-stderr 无 Vulkan validation 输出。该日志行仍只在首次录制时输出一次，统计的是对象/
-guide/点数量，不是本帧 dispatch 次数：固定步 accumulator 可能让同一对象一帧录制
-0..`maxSubsteps` 次 dispatch。该路径没有自动退出标志，验证后手动结束进程；
-模块套件不覆盖 dispatch，这条烟测是 GPU 路径的当前证据，不替代 CPU/GPU 逐像素对照。
-同一 SM 还作者了头/颈/肩背四个碰撞胶囊；在该场景截取第 15 与第 105 帧，没有可见的
-发丝穿入胶囊表面，也没有胶囊吸附或夹扁，两帧平均绝对像素差 5.897、超过 8 的像素
-占 7.27%（风仍会把部分发丝吹到脸前，那是头表面之外，不是穿模；截图与日志为一次性
-验证产物，已删除）。
+`[TressFX] GPU guide simulation dispatch: objects=1 guides=40334 points=1290688 passes=6`，
+stderr 无 Vulkan validation 输出。该日志行只在首次录制时输出一次，统计对象/
+guide/点数量与已创建 pass 数；每帧恰好录制一次 pass 序列（`vspCoefficient=0` 时
+不录制 VSP，无胶囊时不录制 Collision），没有固定步 accumulator 的 0..N 次重复
+dispatch。该路径没有自动退出标志，验证后手动结束进程。
+同一 SM 还作者了头/颈/肩背四个碰撞胶囊；Collision pass 在 LengthConstraintsWind
+之后执行。
 
-根点骨骼蒙皮烟测使用资源仓库的 `SC_tressfx_female_hair_animated.json`：普通
-`mesh` 角色（`SM_female_skinned.json`，自动播放 Idle，不需要 Play）加
+根点骨骼蒙皮烟测使用资源仓库的
+`SC_tressfx_female_hair_animated.json`：普通 `mesh` 角色
+（`SM_female_skinned.json`，自动播放 Idle，不需要 Play）加
 `SM_female_hair_skinned.json`（`backend=gpu`、`skinning.source=FemaleCharacter`、
 `rootBone=Head_M`、`rootFixedPoints=2`）。在仓库根运行：
 
 ```powershell
-build/bin/main.exe --initial-scene Maps/SC_tressfx_female/SC_tressfx_female_hair_animated.json --frame-limit 30 --no-dev-ui
+build/bin/main.exe --initial-scene Maps/SC_tressfx_female/SC_tressfx_female_hair_animated.json --frame-limit 60 --no-dev-ui
 ```
 
-日志应出现 `World/graph transaction committed` 与
-`[TressFX] GPU guide simulation dispatch: objects=1 guides=40334 points=1290688`，
+日志应出现同样的 `World/graph transaction committed` 与
+`[TressFX] GPU guide simulation dispatch` 行（`objects=1 guides=40334 points=1290688 passes=6`），
 stderr 为空、无 Vulkan validation 输出。该路径没有退出命令，验证后终止进程；
-这不作为正常 teardown 证据。临时两帧诊断（已删除）在 `HairSimulationPass::Record`
-第 2/32 帧打印解析到的矩阵：
+这不作为正常 teardown 证据。
 
-```text
-frame=2  headTranslation=(5.97685,2.32231,-18.2873) root0=(-3.22198,169.106,15.8896)
-frame=32 headTranslation=(5.05874,1.56561,-12.9145) root0=(-4.22967,169.541,14.7912)
+两时刻截图用 Console 命令，两次运行分别使用不同的帧延迟（延迟从命令排队后开始计数）：
+
+```powershell
+build/bin/main.exe --initial-scene Maps/SC_tressfx_female/SC_tressfx_female_hair_animated.json `
+    --no-dev-ui --frame-limit 60 --console-command-delay 2 --console-command "screenshot <root>\artifacts\tressfx-pass\animated_a.bmp"
+build/bin/main.exe --initial-scene Maps/SC_tressfx_female/SC_tressfx_female_hair_animated.json `
+    --no-dev-ui --frame-limit 60 --console-command-delay 30 --console-command "screenshot <root>\artifacts\tressfx-pass\animated_b.bmp"
 ```
 
-root0 由与 kernel 相同的 `M * rest[0]` 规则计算。两张 1280×720 截图位于
-gitignored 的 `artifacts/tressfx5-hair-roots/shot_a.bmp` / `shot_b.bmp`（Console
-`--console-command-delay 60/140 --console-command "screenshot ..."`）；静帧能看到
-发帽跟着头部、发帘在两次采样间改变，但没有逐帧读回，**不能仅凭静帧证明零头皮漂移**。
+两帧均为 1280×720；`Screenshot saved` 后终止进程。实测两帧平均绝对像素差
+`13.284`、差值超过 8 的像素占 `18.32%`：第 2 帧发丝贴合头型，第 30 帧被作者风
+吹向面部一侧，说明根点蒙皮、长度约束与风在 Idle 期间持续生效。Debug 构建下
+动画场景约 0.6 FPS（发丝覆盖面部时 overdraw 高），这不是性能验收。截图位于
+gitignored 的 `artifacts/tressfx-pass/animated_a.png` / `animated_b.png`。
+静帧不能证明逐帧无抖动或零头皮漂移；模块套件也不覆盖 dispatch 结果。
 
 
 Female 正式关卡验证：`tool/hair/import_female_scene.py` 实际导入固定 Maya 归档，
