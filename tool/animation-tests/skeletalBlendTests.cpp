@@ -79,6 +79,8 @@ std::shared_ptr<SkeletalAsset> MakeAsset()
         section.inverseBinds.push_back(asset->mesh.joints[joint].restModel.inverse());
     }
     section.influenceOffsets.push_back(3);
+    // 让主 blend 夹具走运行期快路径（导入器生产的 section 也带这套预计算）。
+    ComputeJointBindBounds(section);
     asset->mesh.sections.push_back(std::move(section));
     asset->clips.push_back(MakeClip("a", 0, 0, 1));
     asset->clips.push_back(MakeClip("b", 8, 90, 2));
@@ -767,4 +769,163 @@ TEST(SkeletalBlend, FootPlacementFreezesWithPauseAndRejectsRigOrScaleWithoutPois
     EXPECT_TRUE(player.FootPlacement().enabled);
     EXPECT_EQ(player.FootPlacement().reason, "seek");
 }
+}
+
+namespace
+{
+using namespace VL::Animation;
+
+const Eigen::Matrix4f& Identity4()
+{
+    static const Eigen::Matrix4f identity = Eigen::Matrix4f::Identity();
+    return identity;
+}
+
+Eigen::Matrix4f RotationMat(float degrees, const Eigen::Vector3f& axis)
+{
+    Eigen::Matrix4f value = Eigen::Matrix4f::Identity();
+    value.block<3, 3>(0, 0) =
+        Eigen::AngleAxisf(degrees * 3.14159265358979323846f / 180.0f, axis).toRotationMatrix();
+    return value;
+}
+
+Eigen::Matrix4f ScaleMat(const Eigen::Vector3f& scale)
+{
+    Eigen::Matrix4f value = Eigen::Matrix4f::Identity();
+    value.block<3, 3>(0, 0) = scale.asDiagonal();
+    return value;
+}
+
+// 三个关节：0/1 承载顶点（含一个 0.5/0.5 混合顶点），2 没有顶点。
+SkinSection MakeBoundsSection()
+{
+    SkinSection section;
+    section.inverseBinds = {Identity4(), Identity4(), Identity4()};
+    section.vertices.resize(3);
+    section.vertices[0].position = Eigen::Vector3f(0, 0, 0);
+    section.vertices[1].position = Eigen::Vector3f(0, 10, 0);
+    section.vertices[2].position = Eigen::Vector3f(10, 0, 0);
+    section.influenceOffsets = {0, 1, 2, 4};
+    section.influences = {{0, 1.0f}, {1, 1.0f}, {0, 0.5f}, {1, 0.5f}};
+    ComputeJointBindBounds(section);
+    return section;
+}
+
+void ExpectContains(const Eigen::Vector3f& min, const Eigen::Vector3f& max,
+    const Eigen::Vector3f& point, float tolerance = 1.0e-4f)
+{
+    EXPECT_LE(min.x(), point.x() + tolerance);
+    EXPECT_LE(min.y(), point.y() + tolerance);
+    EXPECT_LE(min.z(), point.z() + tolerance);
+    EXPECT_GE(max.x(), point.x() - tolerance);
+    EXPECT_GE(max.y(), point.y() - tolerance);
+    EXPECT_GE(max.z(), point.z() - tolerance);
+}
+
+void ExpectFastContainsExact(const SkinSection& section, const std::vector<Eigen::Matrix4f>& models,
+    const char* label)
+{
+    const auto fast = BuildSkinPose(section, models, 0);
+    const auto exact = BuildSkinPoseReference(section, models, 0);
+    EXPECT_TRUE((fast->boundsMin.array() <= exact->boundsMin.array() + 1.0e-4f).all())
+        << label << " min " << fast->boundsMin.transpose() << " vs " << exact->boundsMin.transpose();
+    EXPECT_TRUE((fast->boundsMax.array() >= exact->boundsMax.array() - 1.0e-4f).all())
+        << label << " max " << fast->boundsMax.transpose() << " vs " << exact->boundsMax.transpose();
+    // 再逐顶点验证一次：快速盒子必须包含每个精确蒙皮位置。
+    for (size_t vertex = 0; vertex < section.vertices.size(); ++vertex)
+    {
+        const Eigen::Vector4f point =
+            (BlendSkinMatrix(section, vertex, fast->matrices) *
+                section.vertices[vertex].position.homogeneous());
+        ExpectContains(fast->boundsMin, fast->boundsMax, point.head<3>());
+    }
+}
+}
+
+TEST(SkinBounds, FastBoundsAreConservativeForIdentityTranslationRotationAndExtremePose)
+{
+    const SkinSection section = MakeBoundsSection();
+    const std::vector<std::vector<Eigen::Matrix4f>> poses = {
+        {Identity4(), Identity4(), Identity4()},
+        {Identity4(), Translation(3, -7, 11), Identity4()},
+        {RotationMat(37, Eigen::Vector3f::UnitZ()), RotationMat(-64, Eigen::Vector3f::UnitX()),
+            Identity4()},
+        // 极端姿态：接近 180° 的旋转 + 缩放 + 平移，用来暴露只记主影响的不保守。
+        {RotationMat(170, Eigen::Vector3f::UnitY()) * ScaleMat(Eigen::Vector3f(3, 0.5f, 2)) *
+                Translation(-40, 12, 5),
+            RotationMat(-175, Eigen::Vector3f::UnitX()) * ScaleMat(Eigen::Vector3f(2, 2, 0.25f)) *
+                Translation(9, -80, 30),
+            Translation(500, 500, 500)}};
+    for (size_t index = 0; index < poses.size(); ++index)
+        ExpectFastContainsExact(section, poses[index], "pose");
+}
+
+TEST(SkinBounds, CrossJointBlendCannotBeCoveredByDominantJointAlone)
+{
+    const SkinSection section = MakeBoundsSection();
+    // 顶点 2 的权重是 0.5/0.5。若只按“主影响（等权取最小关节）”归属，它只会进
+    // 关节 0 的盒子；两个关节反向平移时精确位置在原点，主影响盒子却只覆盖 +200。
+    const std::vector<Eigen::Matrix4f> models = {
+        Translation(200, 0, 0), Translation(-200, 0, 0), Identity4()};
+    const auto fast = BuildSkinPose(section, models, 0);
+    ExpectContains(fast->boundsMin, fast->boundsMax, Eigen::Vector3f(0, 0, 0));
+    ExpectFastContainsExact(section, models, "opposed");
+}
+
+TEST(SkinBounds, JointWithoutVerticesIsIgnoredAndEmptySectionStillRejected)
+{
+    const SkinSection section = MakeBoundsSection();
+    // 关节 2 没有顶点：即使把它推到极远处，也不应污染本 section 的包围盒。
+    const std::vector<Eigen::Matrix4f> models = {
+        Identity4(), Translation(0, 10, 0), Translation(1.0e6f, 1.0e6f, 1.0e6f)};
+    const auto fast = BuildSkinPose(section, models, 0);
+    EXPECT_LT(fast->boundsMax.maxCoeff(), 1.0e5f);
+    ExpectFastContainsExact(section, models, "ignored");
+
+    SkinSection empty = section;
+    empty.vertices.clear();
+    empty.influenceOffsets = {0};
+    empty.influences.clear();
+    ComputeJointBindBounds(empty);
+    EXPECT_TRUE(empty.jointBindBounds.size() == section.inverseBinds.size());
+    EXPECT_THROW(BuildSkinPose(empty, models, 0), std::invalid_argument);
+    EXPECT_THROW(BuildSkinPoseReference(empty, models, 0), std::invalid_argument);
+}
+
+TEST(SkinBounds, DegeneratePaletteStillRejectedByBothPaths)
+{
+    SkinSection section;
+    section.inverseBinds = {Identity4()};
+    section.vertices.resize(1);
+    section.vertices[0].position = Eigen::Vector3f(1, 2, 3);
+    section.influenceOffsets = {0, 1};
+    section.influences = {{0, 1.0f}};
+    ComputeJointBindBounds(section);
+    std::vector<Eigen::Matrix4f> singular = {ScaleMat(Eigen::Vector3f(0, 0, 0))};
+    EXPECT_THROW(BuildSkinPose(section, singular, 0), std::runtime_error);
+    EXPECT_THROW(BuildSkinPoseReference(section, singular, 0), std::runtime_error);
+    std::vector<Eigen::Matrix4f> nonfinite = {Identity4()};
+    nonfinite[0](0, 3) = std::numeric_limits<float>::quiet_NaN();
+    EXPECT_THROW(BuildSkinPose(section, nonfinite, 0), std::runtime_error);
+    EXPECT_THROW(BuildSkinPoseReference(section, nonfinite, 0), std::runtime_error);
+    // 正常姿态仍通过，并且 palette 与原语义一致。
+    const auto pose = BuildSkinPose(section, {Translation(1, 1, 1)}, 0);
+    EXPECT_TRUE(pose->matrices[0].isApprox(Translation(1, 1, 1), 0));
+}
+
+TEST(SkinBounds, WeightSumDeviationIsAbsorbedByConservativeExpansion)
+{
+    SkinSection section;
+    section.inverseBinds = {Identity4(), Identity4()};
+    section.vertices.resize(1);
+    section.vertices[0].position = Eigen::Vector3f(0, 0, 0);
+    section.influenceOffsets = {0, 2};
+    // LBS 不归一化：Σw = 1.0001，精确位置比两个关节盒子的并集再远 0.01%。
+    section.influences = {{0, 0.50005f}, {1, 0.50005f}};
+    ComputeJointBindBounds(section);
+    ASSERT_GT(section.jointBindWeightSumError, 0.0f);
+    const std::vector<Eigen::Matrix4f> models = {Translation(10000, 0, 0), Translation(10000, 0, 0)};
+    const auto fast = BuildSkinPose(section, models, 0);
+    const auto exact = BuildSkinPoseReference(section, models, 0);
+    ExpectContains(fast->boundsMin, fast->boundsMax, exact->boundsMax, 1.0e-3f);
 }

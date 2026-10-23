@@ -1,5 +1,6 @@
 #include "animationAssets.h"
 
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
 #include <ozz/animation/offline/raw_animation_utils.h>
@@ -67,6 +68,46 @@ LocalPose SampleWithContext(const SkeletonMesh& mesh, const Clip& clip, float ti
     RestoreRoot(clip, time, locals[0]);
     return locals;
 }
+}
+
+void ComputeJointBindBounds(SkinSection& section)
+{
+    if (section.influenceOffsets.size() != section.vertices.size() + 1)
+        throw std::invalid_argument("Joint bounds require a complete skin CSR");
+    section.jointBindBounds.assign(section.inverseBinds.size(), JointBindBounds{});
+    section.jointBindWeightSumError = 0;
+    for (size_t vertex = 0; vertex < section.vertices.size(); ++vertex)
+    {
+        const Eigen::Vector3f& position = section.vertices[vertex].position;
+        const uint32_t first = section.influenceOffsets[vertex];
+        const uint32_t last = section.influenceOffsets[vertex + 1];
+        if (first > last || last > section.influences.size())
+            throw std::invalid_argument("Joint bounds CSR range is out of bounds");
+        double weightSum = 0;
+        for (uint32_t i = first; i < last; ++i)
+        {
+            const Influence& influence = section.influences[i];
+            if (influence.joint >= section.jointBindBounds.size())
+                throw std::invalid_argument("Joint bounds influence index is out of range");
+            weightSum += influence.weight;
+            JointBindBounds& bounds = section.jointBindBounds[influence.joint];
+            // 每个影响关节都要记这个顶点，而不是只记权重最大的那个：跨关节混合时
+            // 次要关节同样会把顶点拉出主关节的盒子，只记主影响就不再保守。
+            if (bounds.vertexCount == 0)
+            {
+                bounds.min = position;
+                bounds.max = position;
+            }
+            else
+            {
+                bounds.min = bounds.min.cwiseMin(position);
+                bounds.max = bounds.max.cwiseMax(position);
+            }
+            ++bounds.vertexCount;
+        }
+        section.jointBindWeightSumError = std::max(section.jointBindWeightSumError,
+            static_cast<float>(std::abs(weightSum - 1.0)));
+    }
 }
 
 Eigen::Matrix4f FbxToVlBasis()

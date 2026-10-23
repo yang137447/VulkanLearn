@@ -298,7 +298,13 @@ private:
 // 与 shader 共用全部 CSR 权重的 CPU 参考；边界来自当前变形顶点，不沿用绑定姿态。
 Eigen::Matrix4f BlendSkinMatrix(const SkinSection& section, size_t vertex,
     const std::vector<Eigen::Matrix4f>& palette);
+// 运行期入口：section.jointBindBounds 可用时走 O(joints×8) 的保守包围盒快路径，
+// 缺失时退回逐顶点精确参考路径（两者 palette 内容/顺序完全相同）。
 std::shared_ptr<const SkinPose> BuildSkinPose(const SkinSection& section,
+    const std::vector<Eigen::Matrix4f>& models, uint64_t discontinuity, uint64_t playbackIdentity = 0);
+// 逐顶点混合 + 精确 AABB + 逐顶点奇异拒绝的原始实现；仅供测试对照与诊断，
+// 不参与运行时每帧路径。
+std::shared_ptr<const SkinPose> BuildSkinPoseReference(const SkinSection& section,
     const std::vector<Eigen::Matrix4f>& models, uint64_t discontinuity, uint64_t playbackIdentity = 0);
 std::vector<uint32_t> PackSkinInfluences(const SkinSection& section);
 }

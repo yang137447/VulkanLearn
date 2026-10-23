@@ -61,12 +61,39 @@ Seek、Select、Play 与零时长 TransitionTo 增加 discontinuity；
 Console/UI 的 seek 暂停，Select 保持播放开关；Play 与 TransitionTo 开启播放。
 采样及所有 section 的 CPU 姿态完成后才发布选择、时钟与不可变 `SkinPose`。
 
-`SkinPose` 包含模型局部 palette、变形顶点的精确 AABB、discontinuity 和 playbackIdentity。
+`SkinPose` 包含模型局部 palette、姿态 AABB（保守包围盒）、discontinuity 和 playbackIdentity。
 World、WorldSnapshot、RenderScene 仅共享其 const 所有权；旧快照不会被后续采样改写。
 单帧局部采样创建独立 ozz context；批量 `SampleModels` 在同一片段内复用 context，
-先验证整批时刻，空批次仍校验资产。姿态按全部顶点/权重求 AABB；
-AABB 采用列优先 3×4 标量仿射累加，避免 Debug 的逐顶点 Eigen 表达式开销。
-尚未提供大规模角色性能保证。
+先验证整批时刻，空批次仍校验资产。
+
+姿态 AABB 不再逐顶点求精确值，而是由导入期预计算的逐关节绑定空间 AABB 推导：
+
+- `SkinSection::jointBindBounds` 与 `inverseBinds` 同下标、同长度；由
+  `ComputeJointBindBounds()` 在 `AssimpSkeletalImporter::ReadSection()` 末尾一次生成，
+  导入失败即拒绝资产。直接构造 `SkinSection` 的测试/离线调用方必须自行调用它，
+  否则 `BuildSkinPose()` 退回逐顶点路径。
+- 每个关节的盒子收集所有把该关节作为**任一**影响的顶点，而不是只收权重最大的主影响。
+  只收主影响在 `0.5/0.5` 这类跨关节混合上不保守：两个关节反向平移时精确位置可以
+  落在主影响盒子的另一侧。
+- 求姿态时对每个有顶点的关节，把绑定空间 AABB 的 8 个角点用
+  `models[joint] * inverseBinds[joint]` 变换后并入并集，代价 O(joints×8)；
+  没有顶点的关节直接跳过。palette 的内容、顺序与逐顶点路径完全相同。
+- 精确蒙皮位置是各 `M_i p` 的凸组合，而并集 AABB 是凸集，因此快路径边界始终包含
+  精确结果，可用于保守剔除；它可能明显松于逐个变形顶点的精确 AABB，紧致度取决于
+  相邻关节盒子的重叠程度，不承诺与旧精确值相等。
+- 权重未严格归一化时按 `jointBindWeightSumError` 绕原点扩张：LBS 直接累加
+  `Σw·M_i p`，`Σw ∈ [1-e, 1+e]` 会把凸组合按同一比例缩放。导入器仍按
+  `WeightTolerance` 拒绝越界权重。
+- 单精度舍入使“包含”只在约 `1e-4 cm` 量级内成立；不额外添加经验裕量。
+
+消费方（视锥/阴影剔除、模型预览取景）看到的是保守范围：剔除最多多画，不会漏画；
+预览相机会按更松的边界取景。CSM 的 light-space Z 范围由 caster 的 world bounds 拟合，
+更松的边界会让该范围变宽、轻微改变阴影深度量化（同姿态截图约 0.03% 像素、最大
+±26/255 的差异），但不会让几何消失。需要精确边界的离线统计应改用
+`BuildSkinPoseReference()`。
+
+逐顶点精确 AABB 与逐顶点奇异拒绝保留在 `BuildSkinPoseReference()`，供测试对照和
+缺少预计算数据的 section 回退使用；运行时每帧路径不再走它。
 
 ## 原生交叉混合
 
@@ -195,8 +222,11 @@ Pause/零 delta 冻结求值；自然 Completed 与显式暂停分开记录。
 CSR 头是每个展开顶点的绝对 word 起止偏移，尾部每条影响占两个 uint。
 shader 根据 gl_VertexIndex 遍历全部影响，包括九影响顶点；不截断为四或八骨。
 palette 为 `modelJoint * inverseBind`，保留全部原始正权重。
-法线取混合线性矩阵逆转置，切线变换后正交化并保留 determinant handedness；
-奇异/非有限混合在 CPU 求姿态时拒绝，shader 不作逐顶点兜底。
+法线取混合线性矩阵逆转置，切线变换后正交化并保留 determinant handedness。
+palette 非有限、或任一带顶点的关节仿射 3×3 行列式接近零时，在 CPU 求姿态时拒绝；
+shader 不作逐顶点兜底。快路径按关节检查，而旧逐顶点路径按混合后的矩阵检查，
+因此“两个各自非奇异的关节在单个顶点上混合出奇异矩阵”不再被单独识别；
+该情形不改变 palette 内容，只放宽了拒绝边界。
 
 Base 与 ShadowDepth 先执行同一 `skinnedVertexFactory.glsl`，再执行材质求值。
 SkinnedMesh key 参与组合 shader 身份，并强制专用 ShadowDepth；

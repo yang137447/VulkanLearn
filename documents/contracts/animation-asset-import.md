@@ -47,6 +47,12 @@ ozz SkeletonBuilder 的输出顺序逐项与导入的深度优先索引核对。
 无权重骨的 offset 不参与绑定残差判定；其层级仍保留。
 这些是导入校验，不是逐帧 shader 防御。
 
+导入器在 `ReadSection()` 末尾用 `ComputeJointBindBounds()` 生成运行期姿态包围盒数据
+`SkinSection::jointBindBounds`（与 `inverseBinds` 同下标）和
+`jointBindWeightSumError`。每个关节的绑定空间 AABB 收集所有把该关节作为任一影响的
+顶点；运行期只把盒子角点变换后求并集，不再逐顶点蒙皮。该数据的语义、保守性与
+未初始化时的回退路径见 [动画播放与 GPU 蒙皮](animation-runtime-skinning.md)。
+
 ## 片段采样
 
 片段保留原始 TRS 与根轨道，再由固定 ozz AnimationBuilder 构建压缩轨道。

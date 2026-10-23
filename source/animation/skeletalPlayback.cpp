@@ -132,6 +132,40 @@ LocalPose Crossfade(const LocalPose& source, LocalPose target, float alpha, cons
     return mixed;
 }
 }
+namespace
+{
+// 把绑定空间 AABB 的 8 个角点用关节 palette 矩阵变换后并入并集。
+// 保守性来自“盒子包含顶点 + 仿射变换保持包含关系”，不依赖权重分布。
+void MergeJointBounds(const Eigen::Matrix4f& matrix, const JointBindBounds& bounds,
+    Eigen::Vector3f& min, Eigen::Vector3f& max)
+{
+    const Eigen::Matrix3f linear = matrix.block<3, 3>(0, 0);
+    const Eigen::Vector3f translation = matrix.block<3, 1>(0, 3);
+    for (int corner = 0; corner < 8; ++corner)
+    {
+        const Eigen::Vector3f point(
+            (corner & 1) ? bounds.max.x() : bounds.min.x(),
+            (corner & 2) ? bounds.max.y() : bounds.min.y(),
+            (corner & 4) ? bounds.max.z() : bounds.min.z());
+        const Eigen::Vector3f transformed = linear * point + translation;
+        min = min.cwiseMin(transformed);
+        max = max.cwiseMax(transformed);
+    }
+}
+
+// 权重和偏差修正：LBS 的精确位置是 Σ w_i M_i p，而 Σ w_i 只保证在
+// [1-e,1+e]（导入器按 WeightTolerance 校验）。把凸组合按该区间绕原点缩放后
+// 取包围盒，保证权重未严格归一化时精确结果仍在盒内。
+void ExpandForWeightSum(Eigen::Vector3f& min, Eigen::Vector3f& max, float error)
+{
+    if (!(error > 0)) return;
+    const float low = 1.0f - error;
+    const float high = 1.0f + error;
+    min = min.cwiseMin(min * low).cwiseMin(min * high);
+    max = max.cwiseMax(max * low).cwiseMax(max * high);
+}
+}
+
 Eigen::Matrix4f BlendSkinMatrix(const SkinSection& section, size_t vertex,
     const std::vector<Eigen::Matrix4f>& palette)
 {
@@ -145,7 +179,7 @@ Eigen::Matrix4f BlendSkinMatrix(const SkinSection& section, size_t vertex,
     return blended;
 }
 
-std::shared_ptr<const SkinPose> BuildSkinPose(const SkinSection& section,
+std::shared_ptr<const SkinPose> BuildSkinPoseReference(const SkinSection& section,
     const std::vector<Eigen::Matrix4f>& models, uint64_t discontinuity, uint64_t playbackIdentity)
 {
     if (models.size() != section.inverseBinds.size() || section.vertices.empty())
@@ -186,6 +220,45 @@ std::shared_ptr<const SkinPose> BuildSkinPose(const SkinSection& section,
         pose->boundsMin = pose->boundsMin.cwiseMin(position);
         pose->boundsMax = pose->boundsMax.cwiseMax(position);
     }
+    return pose;
+}
+
+std::shared_ptr<const SkinPose> BuildSkinPose(const SkinSection& section,
+    const std::vector<Eigen::Matrix4f>& models, uint64_t discontinuity, uint64_t playbackIdentity)
+{
+    if (models.size() != section.inverseBinds.size() || section.vertices.empty())
+        throw std::invalid_argument("Skin pose requires a matching skeleton and nonempty section");
+    // 直接构造的 section（测试/离线工具）没有预计算数据：退回逐顶点精确参考路径，
+    // 行为与引入快路径前完全一致。
+    if (section.jointBindBounds.size() != section.inverseBinds.size())
+        return BuildSkinPoseReference(section, models, discontinuity, playbackIdentity);
+    auto pose = std::make_shared<SkinPose>();
+    pose->discontinuity = discontinuity;
+    pose->playbackIdentity = playbackIdentity;
+    pose->matrices.reserve(models.size());
+    Eigen::Vector3f min = Eigen::Vector3f::Constant(std::numeric_limits<float>::max());
+    Eigen::Vector3f max = -min;
+    bool hasGeometry = false;
+    for (size_t joint = 0; joint < models.size(); ++joint)
+    {
+        const Eigen::Matrix4f matrix = models[joint] * section.inverseBinds[joint];
+        pose->matrices.push_back(matrix);
+        const JointBindBounds& bounds = section.jointBindBounds[joint];
+        if (bounds.vertexCount == 0) continue;
+        // 快路径不再逐顶点混合，改为逐关节检查 palette 仿射行列式：旧路径对
+        // 完全归属该关节的顶点会算出同一个矩阵，非有限/奇异仍在这里被拒绝。
+        const float determinant = matrix.block<3, 3>(0, 0).determinant();
+        if (!matrix.allFinite() || !std::isfinite(determinant) || std::abs(determinant) < 1.0e-8f)
+            throw std::runtime_error("Skin pose has a singular or nonfinite blended transform");
+        MergeJointBounds(matrix, bounds, min, max);
+        hasGeometry = true;
+    }
+    // 有顶点却没有任何影响引用属于资产契约破坏；导入器已拒绝，这里保留明确失败。
+    if (!hasGeometry)
+        throw std::runtime_error("Skin pose has vertices without joint influences");
+    ExpandForWeightSum(min, max, section.jointBindWeightSumError);
+    pose->boundsMin = min;
+    pose->boundsMax = max;
     return pose;
 }
 
