@@ -792,7 +792,8 @@ RGBA 分支的整数分量路径）。该分支只接受 `0`–`255` 整数或�
   与线性空间 50% 混合的解析值一致。
 - 编辑器模式下 `#hud` 被 `UiSubsystem` 显式设为 `display: none`
   （`source/ui/uiSubsystem.cpp`，`developerUiVisible` 为真时），
-  因此 HUD 卡片的底色在编辑器工作区中不可见，这是有意行为而非样式失效。
+  因此 HUD 卡片（`#hud-panel`）的底色在编辑器工作区中不可见，这是有意行为而非样式失效。
+  `#hud` 只承担定位、75% 宽度上限与裁剪，卡片底色与内边距在收缩盒 `#hud-panel` 上。
   验证 HUD 样式需要在 `ui.enabled` 且非 developer UI 的模式下进行。
 
 ## 测试与扩展
@@ -892,7 +893,7 @@ RmlUi 指针事件覆盖，但从 `PlatformEvent` 到 RmlUi 这一段只有构�
 
 ```powershell
 cmake --build build --target editor_ui_tests editor_viewport_tests main -j4
-ctest --test-dir build -R "^(UiColorTransform|UiWidgetTest|UiWidgetRefresh|EditorUiTest|EditorActorProperty|EditorActorVisualization|SceneDocumentTest|ContentBrowserTest|DockWorkspaceTest|DockPersistenceTest|DockRmlTest|EditorViewportGeometry|EditorViewportGridGeometry|EditorViewportAxisIndicator|EditorJsonAssetParsing|EditorJsonAssetPaths|EditorJsonAssetTypes|JsonAssetLibraryTest|ResourceEditorController|LargeCatalog/ContentBrowserPerformanceTest)\." --output-on-failure
+ctest --test-dir build -R "^(GameplayHudView|GameplayHudBindingTest|UiColorTransform|UiWidgetTest|UiWidgetRefresh|EditorUiTest|EditorActorProperty|EditorActorVisualization|SceneDocumentTest|ContentBrowserTest|DockWorkspaceTest|DockPersistenceTest|DockRmlTest|EditorViewportGeometry|EditorViewportGridGeometry|EditorViewportAxisIndicator|EditorJsonAssetParsing|EditorJsonAssetPaths|EditorJsonAssetTypes|JsonAssetLibraryTest|ResourceEditorController|LargeCatalog/ContentBrowserPerformanceTest)\." --output-on-failure
 ```
 
 `EditorViewportGridGeometry` 必须留在选择集里：它住在 `editor_viewport_tests` 而不是

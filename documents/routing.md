@@ -44,7 +44,7 @@
 | `source/material/**` | `contracts/material-param-authoring-and-reflection.md` | Descriptor writer explicit context boundary、Vulkan-native descriptor write type、Vulkan-native descriptor write contract |
 | `shader/glsl/**` | `contracts/material-param-authoring-and-reflection.md`、`contracts/gbuffer-channel-ownership.md` | — |
 | 论文 case 验证：`tool/validation/**` | `rationale/shading-model-case-records.md`（证据归档）、`plan/rendering/shading-model-alignment-plan.md` | — |
-| `ui/**/*.rcss`、任何写 UI 样式处 | `rationale/pitfalls.md` 的 `[rcss-alpha]` 条 | — |
+| `ui/**/*.rcss`、任何写 UI 样式处 | `rationale/pitfalls.md` 的 `[rcss-alpha]`、`[rmlui-shrink-to-fit-max-width]` 条 | — |
 | 改右键上下文菜单（`ui/editor-workspace.rml` 的 `#editor-context-menu`、面板的 `mouseup/button==1` 处理、菜单目标解析） | `contracts/ui-component-system.md` 的「右键上下文菜单」节 | — |
 | `source/render/editor/**`、`shader/glsl/pass/editorGrid.*`、`config/renderGraphConfig.json` 的 `editorGrid` pass | `contracts/material-mesh-pass-composition.md` 的「编辑器网格 pass」节 | — |
 | `source/editor/ui/editorViewportAxisIndicator.h`、`#viewport-axis-indicator` 叠层 | `contracts/ui-component-system.md` 的「角落坐标轴指示器」节 | — |
