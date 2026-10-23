@@ -103,3 +103,82 @@ CPU 表对账用**逐帧 sum 的中位数**（各行中位数之和不可加，�
 - 单线程补充运行（`--worker-thread-count 1`）把同一段渲染工作记到 `renderRecord`
   （中位 3.470 ms），`submitPresent` 为 `n/a`；这与 RT 模式不限速的 `submitPresent` 3.492 ms
   对得上，进一步说明后者是不限速时的渲染/GPU 节拍，而不是 GT 计算。
+
+## 7. `uiViewModel` 归因与可见性/节流修复（2026-10-23）
+
+### 7.1 先归因：1.3 ms 到底花在哪里
+
+在 `EngineLoop::UpdateUiViewModel()` 与 `UiSubsystem::Update()` 内临时插入
+`steady_clock` 分段计时（每 120 帧打印，测量后删除），skinned 场景
+（`SC_tressfx_female_skinned.json`）、Release、`--gpu-stats`。结果先纠一个前提：
+**本 worktree 里 `--no-dev-ui` 时该阶段只有约 0.35 ms**；能复现 1.28–1.35 ms 的是
+“开发者 UI 已初始化但不可见”（`developerUiVisible=false`，例如沉浸模式或配置隐藏、
+且 `developerUiEnabled=true`）的状态。此时编辑器面板仍在逐帧重建，却一帧都不可见。
+
+该状态下逐帧中位数（ms，29 个 120 帧窗口的中位数）：
+
+| 分段 | 中位 | 说明 |
+| --- | ---: | --- |
+| `CanUndo` + `CanRedo` | 0.427 | 每次内部 `weakly_canonical`，两遍/帧 |
+| `materialInstanceEditorPanel->Build()` | 0.378 | 整份面板 DOM/绑定重建 |
+| `panel->UpdateRuntimeView()` | 0.159 | 内容浏览器/日志/motion 控件刷新 |
+| `rmlContext->Update()` | 0.102 | 含隐藏的编辑器文档 |
+| `ScriptRuntime::View()` | 0.051 | 复制类/组件类/性能 JSON |
+| `BuildEditorSceneActors()` | 0.023 | 场景 actor 值副本 |
+| 绘制快照构建 | 0.020 | RmlUi render + 纹理快照 |
+| `GetMaterialInstanceModelContexts()` | 0.014 | 材质预览模型列表 |
+| `CaptureDebugDraw()` | 0.003 | 本场景几乎为空 |
+| `CaptureMotionDebug()` | 0.001 | motion debug 关闭 |
+| 渲染器 getter / 其他 | ~0.01 | 不是瓶颈 |
+| **合计** | **~1.28–1.35** | 与 GPU 阶段表 1.317/1.394 一致 |
+
+结论与题面列的嫌疑不同：`CaptureMotionDebug`、`CaptureDebugDraw`、动画预览块在本场景
+都是微秒级；真正的大头是**隐藏时仍逐帧重建编辑器面板**（0.55 ms）、
+**每帧两次 `CanUndo` 的路径规范化**（0.43 ms）和 **RmlUi 上下文更新**（0.10 ms）。
+
+### 7.2 修复内容
+
+- 新增 `source/ui/uiViewModelRefresh.h`：`UiViewModelBuildMode`（None / RuntimeHud /
+  FullEditor）与 100 ms `UiViewModelRefreshSchedule`；隐藏状态即使有脏标记也不构建完整快照。
+- `EngineLoop` 按可见性决定档位；完整编辑器字段（脚本视图/undo、渲染器状态、
+  环境/CSM/曝光、动画特征、scene actors、MI 模型、性能快照）只在 10 Hz 到期或事件
+  强制时构建。逐帧只保留世界路径、离线标记、DrawDebug/相机冻结和运行时 HUD 文本。
+- `UiSubsystem::Update` 增加档位/到期参数：隐藏时跳过面板构建与 RmlUi 主更新，
+  只发布不含 UI 文档、仅 DrawDebug 的绘制快照；非到期帧保留上一份脚本视图。
+- 显式强制刷新事件：可见性/模式/语言动作、World 代数或路径变化、视口/大纲/MI 选中、
+  任意 `UiAction`、编辑器命令执行（保存/撤销/参数）、脚本编译开始/完成、脚本播放状态、
+  离线模式及其命令回馈。
+- 动画预览的 clip 列表、`FeatureSchema`、特征通道名按“世界代数 + 播放器身份”缓存；
+  只有特征值随播放时间在刷新帧重算。
+- `ScriptRuntimeSubsystem::HudView()` 提供只含 `hudLines` 的轻量视图，HUD 仍逐帧更新。
+
+### 7.3 修复后实测（同一 Release、同一场景、`--perf-jsonl`，中位数）
+
+| 状态 | `uiViewModel` 修复前 | 修复后 | `cpuMs` 修复前 | 修复后 |
+| --- | ---: | ---: | ---: | ---: |
+| 编辑器已初始化但隐藏（原 1.317 的状态） | 1.346 | **0.153** | 6.180 | **4.889** |
+| `--no-dev-ui` | 0.355 | **0.038** | 25.701* | **5.175** |
+| 开发者工作区可见 | 2.087 | **0.761** | 5.800 | **5.479** |
+| hair 场景、`--no-dev-ui` | 0.407 | **0.087** | 26.028* | **8.6** |
+
+\* 修复前的两次隐藏运行恰好遇到宿主调度噪声，`cpuMs`/`other` 明显偏高；`uiViewModel`
+本身是每帧自计时、不受帧率上限影响，因此前后对比以该阶段中位数为准。同一状态多次复测
+会在上述中位数附近波动（隐藏编辑器 0.15–0.20、`--no-dev-ui` 0.04–0.08、可见 0.72–0.80）。
+可见状态修复后仍有约 0.76 ms，主要是**逐帧必须执行的工作区 RmlUi 渲染**（约 0.5 ms）+
+上下文更新（约 0.1 ms）；被节流的面板数据构建只剩约 0.15 ms/帧的均摊。
+
+刷新延迟：编辑器面板数据 ≤100 ms；选中、模式切换、World 换代、编辑器命令等强制事件
+在下一 GT 帧生效（≤1 个渲染帧）；HUD 文本每帧更新；输入/hover/滚动/相机指示仍逐帧。
+Performance 页仍按自己的 5 Hz 读取同一份冻结快照；`perf json`/`--perf-jsonl` 直接读
+`GpuPassTimer`，与本修复无关，实测数值无变化。
+
+### 7.4 复现入口
+
+```
+build-rel/bin/main.exe --dev-ui --initial-scene Maps/SC_tressfx_female/SC_tressfx_female_skinned.json \
+  --perf-jsonl artifacts/ui-after-immersive.jsonl --gpu-stats
+build-rel/bin/main.exe --no-dev-ui --initial-scene Maps/SC_tressfx_female/SC_tressfx_female_skinned.json \
+  --perf-jsonl artifacts/ui-after-nodevui.jsonl --gpu-stats
+```
+隐藏状态截图见 `artifacts/ui-hidden-after.png`（只剩 HUD 场景名），可见状态见
+`artifacts/ui-editor-after.png`（Outliner/Details/Viewport/Content Browser/Log/Performance）。

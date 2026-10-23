@@ -22,6 +22,7 @@
 #include "ui/uiAction.h"
 #include "ui/uiRenderSnapshot.h"
 #include "ui/uiRenderSnapshotQueue.h"
+#include "ui/uiViewModelRefresh.h"
 #include "ui/viewport/editorViewportGeometry.h"
 
 namespace Rml
@@ -113,7 +114,13 @@ public:
     void Shutdown();
 
     bool HandlePlatformEvent(const PlatformEvent& event);
-    void Update(const UiViewModelSnapshot& viewModelSnapshot);
+    // mode 决定构建哪些数据；editorSnapshotDue 表示本帧到达编辑器快照刷新节拍
+    // （或事件强制），只有此时才重建面板 DOM。可见性隐藏时 mode != FullEditor，
+    // 面板构建与 RML 主更新都会跳过；隐藏帧仍发布空/仅 DrawDebug 的渲染快照，
+    // 避免 RT 保留上一帧工作区画面。
+    void Update(const UiViewModelSnapshot& viewModelSnapshot,
+        UiViewModelBuildMode mode,
+        bool editorSnapshotDue);
     void Resize(uint32_t width, uint32_t height);
     void ApplyAction(const UiAction& action);
     void NotifyWorldChanged(const std::string& worldPath, uint64_t generation);
@@ -159,6 +166,15 @@ public:
     bool IsInitialized() const { return initialized; }
     bool IsDeveloperUiVisible() const { return developerUiVisible; }
     bool IsDeveloperUiEnabled() const { return developerUiEnabled; }
+    // 运行时 HUD 只在开发者 UI 与沉浸模式都不可见时显示（与 ApplyDocumentState 一致）。
+    bool IsRuntimeHudVisible() const
+    {
+        return initialized && !developerUiVisible && !immersiveView;
+    }
+    // 选中/模式切换/文档命令等事件置脏；EngineLoop 在稳定帧边界消费后强制一次
+    // 完整编辑器快照重建，不受 10 Hz 节拍等待。隐藏期间事件不排队：
+    // 重新可见的第一帧本身就会被视为强制刷新。
+    bool ConsumeViewModelRefreshRequest() noexcept;
     uint32_t GetViewportWidth() const { return desc.viewportWidth; }
     uint32_t GetViewportHeight() const { return desc.viewportHeight; }
     const UiViewportRect& GetSceneViewportRect() const { return sceneViewportRect; }
@@ -212,7 +228,11 @@ private:
     bool HasAssetFingerprintChanged(const AssetFingerprint& candidate) const;
 
     void SyncBindingData();
-    void BuildAndPublishRenderSnapshot();
+    // includeUiDocuments=false 时只发布 DrawDebug 叠层（沉浸模式仍显示调试图元）；
+    // 仍会发布一份快照，从而清掉 RT 保留的上一帧工作区画面。
+    void BuildAndPublishRenderSnapshot(bool includeUiDocuments);
+    void SetImmersiveDocumentStateIfRestored(const UiViewModelSnapshot& viewModelSnapshot);
+    void RequestViewModelRefresh() noexcept { viewModelRefreshRequested = true; }
     std::unique_ptr<class DebugDrawLabels> debugDrawLabels;
     void BuildDeveloperPanels();
     void UpdateInputOwnership();
@@ -287,6 +307,7 @@ private:
     bool initialized = false;
     bool rmlInitialized = false;
     bool updatingRuntimeBindings = false;
+    bool viewModelRefreshRequested = false;
     bool developerUiEnabled = false;
     bool developerUiVisible = false;
     bool immersiveView = false;

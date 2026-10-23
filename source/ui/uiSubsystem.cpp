@@ -46,7 +46,6 @@ namespace
 
 constexpr float GamepadNavigationThreshold = 0.55f;
 
-
 std::string NormalizePathForComparison(const std::filesystem::path& path)
 {
     if (path.empty())
@@ -349,6 +348,7 @@ void UiSubsystem::Shutdown()
     initialized = false;
     developerUiVisible = false;
     developerUiEnabled = false;
+    viewModelRefreshRequested = false;
     editorPointerCaptured = false;
     hotReloadStatus.clear();
     rmlKeyPressCounts.clear();
@@ -410,7 +410,9 @@ bool UiSubsystem::HandlePlatformEvent(const PlatformEvent& event)
     return consumed;
 }
 
-void UiSubsystem::Update(const UiViewModelSnapshot& viewModelSnapshot)
+void UiSubsystem::Update(const UiViewModelSnapshot& viewModelSnapshot,
+    UiViewModelBuildMode mode,
+    bool editorSnapshotDue)
 {
     PROFILE_SCOPE("UI.Update");
     if (!initialized)
@@ -418,18 +420,53 @@ void UiSubsystem::Update(const UiViewModelSnapshot& viewModelSnapshot)
         return;
     }
 
-    UiViewModelSnapshot previous = std::move(lastViewModel);
-    lastViewModel = viewModelSnapshot;
-    if (!immersiveLevelPath.empty() && immersiveLoadCompleted)
+    if (mode == UiViewModelBuildMode::None)
     {
-        // 完成通知本身不代表成功；必须核对事务发布后的 World，禁止放大仍存活的模型预览。
-        const bool restored = NormalizePathForComparison(lastViewModel.activeWorldPath) ==
-            NormalizePathForComparison(immersiveLevelPath);
-        immersiveLevelPath.clear();
-        immersiveLoadCompleted = false;
-        if (restored) SetImmersiveView(true);
-        else diagnostics->ReportWarning("Immersive mode cancelled: the level was not restored.");
+        // 编辑器与 HUD 都不可见（沉浸模式）：只冻结 DrawDebug 叠层需要的最小字段，
+        // 保留 lastViewModel 的编辑器字段以免 TickMaterialInstanceEditor 丢失蓝图类，
+        // 并发布仅调试图元的快照覆盖 RT 保留的上一帧工作区画面。
+        SetImmersiveDocumentStateIfRestored(viewModelSnapshot);
+        lastViewModel.frameIndex = viewModelSnapshot.frameIndex;
+        lastViewModel.deltaTimeSeconds = viewModelSnapshot.deltaTimeSeconds;
+        lastViewModel.framesPerSecond = viewModelSnapshot.framesPerSecond;
+        lastViewModel.offlineMode = viewModelSnapshot.offlineMode;
+        lastViewModel.motionWorldGeneration = viewModelSnapshot.motionWorldGeneration;
+        lastViewModel.motionDebug = viewModelSnapshot.motionDebug;
+        lastViewModel.motionCamera = viewModelSnapshot.motionCamera;
+        lastViewModel.debugDraw = viewModelSnapshot.debugDraw;
+        lastViewModel.activeWorldPath = viewModelSnapshot.activeWorldPath;
+        // 隐藏期间的脏事件不需要排队：重新可见的第一帧由可见性变化强制完整刷新。
+        viewModelRefreshRequested = false;
+        BuildAndPublishRenderSnapshot(false);
+        UpdateInputOwnership();
+        return;
     }
+
+    UiViewModelSnapshot previous = std::move(lastViewModel);
+    ScriptRuntimeView carriedScripts = std::move(previous.scripts);
+    lastViewModel = viewModelSnapshot;
+    if (mode == UiViewModelBuildMode::FullEditor && !editorSnapshotDue)
+    {
+        // 非刷新帧不重建脚本视图模型：保留上一份类/反馈/性能值，避免每帧复制 JSON。
+        // HUD 文本在编辑器可见时本来就隐藏，因此这里没有可感知的文本延迟。
+        lastViewModel.scripts = std::move(carriedScripts);
+    }
+    else if (mode == UiViewModelBuildMode::RuntimeHud)
+    {
+        // HUD 轻量视图只带 hudLines。编辑器仍可能在后台存在（配置隐藏但已启用），
+        // TickMaterialInstanceEditor 依赖上一份蓝图类，不能被轻量视图清空。
+        lastViewModel.scripts.classes = std::move(carriedScripts.classes);
+        lastViewModel.scripts.componentClasses = std::move(carriedScripts.componentClasses);
+        lastViewModel.scripts.performance = std::move(carriedScripts.performance);
+        lastViewModel.scripts.feedback = std::move(carriedScripts.feedback);
+        lastViewModel.scripts.buildAvailable = carriedScripts.buildAvailable;
+        lastViewModel.scripts.buildBusy = carriedScripts.buildBusy;
+        lastViewModel.scripts.autoCompile = carriedScripts.autoCompile;
+        lastViewModel.scripts.buildOutput = std::move(carriedScripts.buildOutput);
+        lastViewModel.scripts.canUndo = carriedScripts.canUndo;
+        lastViewModel.scripts.canRedo = carriedScripts.canRedo;
+    }
+    SetImmersiveDocumentStateIfRestored(lastViewModel);
     ReconcileOfflineModeFeedback(lastViewModel, previous);
     lastViewModel.developerUiVisible = developerUiVisible;
     lastViewModel.locale = currentLocale;
@@ -437,13 +474,41 @@ void UiSubsystem::Update(const UiViewModelSnapshot& viewModelSnapshot)
     UiBindingUpdateScope bindingUpdate(updatingRuntimeBindings);
     TryHotReload();
     SyncBindingData();
-    BuildDeveloperPanels();
+    if (mode == UiViewModelBuildMode::FullEditor && editorSnapshotDue)
+    {
+        BuildDeveloperPanels();
+    }
     {
         PROFILE_SCOPE("UI.RmlUpdate");
         rmlContext->Update();
     }
-    BuildAndPublishRenderSnapshot();
+    // 逐帧发布绘制快照：控件自身的 hover/滚动/拖动仍由 RmlUi 每帧更新，
+    // 只有面板数据（BuildDeveloperPanels）按节拍重建。
+    BuildAndPublishRenderSnapshot(true);
     UpdateInputOwnership();
+}
+
+void UiSubsystem::SetImmersiveDocumentStateIfRestored(
+    const UiViewModelSnapshot& viewModelSnapshot)
+{
+    if (immersiveLevelPath.empty() || !immersiveLoadCompleted)
+    {
+        return;
+    }
+    // 完成通知本身不代表成功；必须核对事务发布后的 World，禁止放大仍存活的模型预览。
+    const bool restored = NormalizePathForComparison(viewModelSnapshot.activeWorldPath) ==
+        NormalizePathForComparison(immersiveLevelPath);
+    immersiveLevelPath.clear();
+    immersiveLoadCompleted = false;
+    if (restored) SetImmersiveView(true);
+    else diagnostics->ReportWarning("Immersive mode cancelled: the level was not restored.");
+}
+
+bool UiSubsystem::ConsumeViewModelRefreshRequest() noexcept
+{
+    const bool requested = viewModelRefreshRequested;
+    viewModelRefreshRequested = false;
+    return requested;
 }
 
 void UiSubsystem::Resize(uint32_t width, uint32_t height)
@@ -479,6 +544,9 @@ bool UiSubsystem::IsScenePickTarget(float mouseX, float mouseY) const
 
 void UiSubsystem::ApplyAction(const UiAction& action)
 {
+    // 任何模式/本地化/可见性动作都可能改变面板显示内容：下一帧强制重建，
+    // 不等 10 Hz 节拍。
+    RequestViewModelRefresh();
     switch (action.type)
     {
     case UiActionType::ToggleDeveloperUi:
@@ -524,6 +592,8 @@ void UiSubsystem::SetImmersiveView(bool enabled)
 {
     immersiveView = enabled;
     developerUiVisible = !enabled;
+    // 退出沉浸模式的第一帧必须立即恢复完整工作区，不能等待节拍窗口。
+    RequestViewModelRefresh();
     ResetRuntimeInputState();
     editorPointerCaptured = false;
     ApplyDocumentState();
@@ -533,6 +603,7 @@ void UiSubsystem::NotifyWorldChanged(
     const std::string& worldPath,
     uint64_t generation)
 {
+    RequestViewModelRefresh();
     selectedModelMaterials.reset();
     selectedMaterialSlotIndex.reset();
     sceneModels.clear();
@@ -552,6 +623,7 @@ void UiSubsystem::NotifyWorldChanged(
 
 void UiSubsystem::NotifyWorldLoadCompleted()
 {
+    RequestViewModelRefresh();
     if (!immersiveLevelPath.empty()) immersiveLoadCompleted = true;
     if (!bindingData.sceneLoading)
     {
@@ -568,7 +640,11 @@ void UiSubsystem::TickMaterialInstanceEditor()
     }
     materialInstanceEditorRuntime->SetBlueprintClasses(lastViewModel.scripts.classes);
     materialInstanceEditorRuntime->SetBlueprintComponentClasses(lastViewModel.scripts.componentClasses);
-    materialInstanceEditorRuntime->Tick();
+    // 命令执行会改变草稿/历史/预览与命令回馈，下一帧强制重建面板数据。
+    if (materialInstanceEditorRuntime->Tick())
+    {
+        RequestViewModelRefresh();
+    }
     if (jsonAssetLibrary != nullptr) jsonAssetLibrary->Poll();
 }
 
@@ -580,6 +656,8 @@ bool UiSubsystem::SelectSceneObjectFromPick(
         return false;
     }
 
+    // 选中态是用户直接反馈：下一帧强制刷新，不能落后于 10 Hz 节拍。
+    RequestViewModelRefresh();
     // 关卡拾取只发布对象/槽位选择，不创建 MI 文档或请求预览 World。
     // 打开材质必须来自材质槽或资产浏览器的显式操作。
     if (materialInstanceEditorPanel != nullptr) materialInstanceEditorPanel->ShowSceneDetails();
@@ -724,6 +802,7 @@ bool UiSubsystem::ConsumeSceneSelectionClearRequest()
 
 void UiSubsystem::ClearMaterialInstanceSceneSelection() noexcept
 {
+    RequestViewModelRefresh();
     selectedModelMaterials.reset();
     selectedMaterialSlotIndex.reset();
     selectedActorIdentity.clear();
@@ -741,6 +820,7 @@ bool UiSubsystem::RequestModelSelection(
         return false;
     }
 
+    RequestViewModelRefresh();
     EditorUi::MaterialInstanceModelSnapshot modelSnapshot;
     modelSnapshot.worldGeneration = model.worldGeneration;
     modelSnapshot.scenePath = model.scenePath;
@@ -777,6 +857,7 @@ bool UiSubsystem::RequestMaterialSelection(
         return false;
     }
 
+    RequestViewModelRefresh();
     selectedMaterialSlotIndex = selection.materialSlotIndex;
     pendingMaterialInstanceModelSelection.reset();
     pendingMaterialInstanceSelection = selection;
@@ -793,6 +874,7 @@ bool UiSubsystem::RequestActorSelection(const std::string& actorIdentity)
         return false;
     }
 
+    RequestViewModelRefresh();
     // 非网格 actor 没有 MI 文档：清掉编辑器侧的材质槽选择，并要求 EngineLoop
     // 清掉渲染端的 mesh 描边，让大纲高亮与视口描边保持同一个选中对象。
     selectedModelMaterials.reset();
@@ -1412,18 +1494,24 @@ void UiSubsystem::SyncBindingData()
     }
 }
 
-void UiSubsystem::BuildAndPublishRenderSnapshot()
+void UiSubsystem::BuildAndPublishRenderSnapshot(bool includeUiDocuments)
 {
     PROFILE_SCOPE("UI.RenderSnapshot");
     std::shared_ptr<UiRenderSnapshot> snapshot = std::make_shared<UiRenderSnapshot>();
     // 冻结快照不能跨 GT/RT 重用；仅借用上一帧容量估计，避免每个 draw 都重新分配。
-    snapshot->vertices.reserve(previousUiVertexCount);
-    snapshot->indices.reserve(previousUiIndexCount);
-    snapshot->drawCommands.reserve(previousUiDrawCount);
+    // 隐藏帧不渲染文档，不能沿用工作区那份（可达数万顶点）的容量估计，
+    // 否则空快照也会每帧预留整块工作区几何。
+    if (includeUiDocuments)
+    {
+        snapshot->vertices.reserve(previousUiVertexCount);
+        snapshot->indices.reserve(previousUiIndexCount);
+        snapshot->drawCommands.reserve(previousUiDrawCount);
+    }
     snapshot->frameIndex = uiFrameIndex++;
     snapshot->viewportWidth = desc.viewportWidth;
     snapshot->viewportHeight = desc.viewportHeight;
-    snapshot->sceneViewportEnabled = IsSceneViewportEnabled();
+    // 隐藏帧不能保留场景视口：RT 只应看到（可选的）DrawDebug 叠层。
+    snapshot->sceneViewportEnabled = includeUiDocuments && IsSceneViewportEnabled();
     snapshot->sceneViewportRect = snapshot->sceneViewportEnabled && materialInstanceEditorPanel != nullptr
         ? ClipViewportRect(materialInstanceEditorPanel->GetSceneViewportRect(), desc.viewportWidth, desc.viewportHeight)
         : UiViewportRect{
@@ -1433,9 +1521,16 @@ void UiSubsystem::BuildAndPublishRenderSnapshot()
         desc.viewportHeight};
     sceneViewportRect = snapshot->sceneViewportRect;
 
+    // BeginFrame/EndFrame 仍要成对调用：调试标签 context 的 Render 依赖渲染接口
+    // 正处于帧捕获状态。隐藏帧只是不渲染 HUD/工作区文档。
     rmlRenderInterface.BeginFrame(*snapshot);
-    rmlContext->Render();
+    if (includeUiDocuments)
+    {
+        rmlContext->Render();
+    }
     const size_t firstDebugCommand = snapshot->drawCommands.size();
+    // 沉浸显示与编辑器共用同一 DrawDebug 适配；控制台仍可在开发者 UI 隐藏时
+    // 打开调试图形，因此隐藏帧也要保留这个叠层。
     if (lastViewModel.debugDraw && !lastViewModel.offlineMode &&
         (!developerUiVisible || (materialInstanceEditorPanel &&
             materialInstanceEditorPanel->IsMotionDebugViewport())))
@@ -1445,7 +1540,10 @@ void UiSubsystem::BuildAndPublishRenderSnapshot()
             snapshot->sceneViewportRect, desc.viewportWidth, desc.viewportHeight);
         InsertDebugDrawCommands(*snapshot, firstDebugCommand);
     }
-    rmlRenderInterface.AppendTextureSnapshots(snapshot->textures);
+    if (includeUiDocuments)
+    {
+        rmlRenderInterface.AppendTextureSnapshots(snapshot->textures);
+    }
     rmlRenderInterface.EndFrame();
     previousUiVertexCount = snapshot->vertices.size();
     previousUiIndexCount = snapshot->indices.size();
@@ -1869,6 +1967,7 @@ bool UiSubsystem::ProcessDeveloperUiEvent(const PlatformEvent& event)
 
 void UiSubsystem::RequestOpenJsonAsset(const std::string& path)
 {
+    RequestViewModelRefresh();
     if (jsonAssetLibrary != nullptr) jsonAssetLibrary->RequestOpen(path);
 }
 
@@ -1879,12 +1978,15 @@ bool UiSubsystem::CancelBlueprintAssetDrag()
 
 void UiSubsystem::RequestRefreshAssetCatalog()
 {
+    RequestViewModelRefresh();
     if (thumbnailLibrary != nullptr) thumbnailLibrary->Refresh();
     if (jsonAssetLibrary != nullptr) jsonAssetLibrary->RequestRefresh();
 }
 
 void UiSubsystem::RequestRuntimeAction(UiAction action)
 {
+    // 工具条/参数控件产生的运行时请求会改变当前显示值或模式：下一帧强制刷新。
+    RequestViewModelRefresh();
     if (action.type == UiActionType::LoadWorld)
     {
         // 冻结 World 快照保存物理绝对路径，目录条目使用资源相对路径。

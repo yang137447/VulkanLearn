@@ -12,6 +12,7 @@ add_executable(editor_ui_tests
     widgetTests.cpp
     dockingTests.cpp
     performancePanelTests.cpp
+    uiViewModelRefreshTests.cpp
     logPanelTests.cpp
     gameplayHudTests.cpp
     contentBrowserTests.cpp

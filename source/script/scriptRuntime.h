@@ -69,6 +69,10 @@ public:
     void Shutdown() noexcept;
     void SynchronizeWorld(const std::shared_ptr<World>& world);
     ScriptRuntimeView View(uint64_t generation) const;
+    // 仅运行时 HUD 可见时使用的轻量视图：只冻结 available/state/worldGeneration
+    // 和 hudLines，不复制蓝图类、组件类与性能 JSON。HUD 文本因此仍按帧更新，
+    // 而隐藏的编辑器不会被迫承担完整视图模型的分配。
+    ScriptRuntimeView HudView(uint64_t generation) const;
     bool IsEditing() const { return state == ScriptPlayState::Editing; }
     bool IsPaused() const { return state == ScriptPlayState::Paused; }
     const nlohmann::json& Classes() const { return classes; }
@@ -92,6 +96,7 @@ private:
         const nlohmann::json& templates = nlohmann::json::object(), uint64_t generation = 0,
         const nlohmann::json& animationCatalog = nlohmann::json::object(),
         const nlohmann::json& animationAssets = nlohmann::json::object());
+    void AppendHudLines(ScriptRuntimeView& view, uint64_t generation) const;
     void Apply(World& world, const nlohmann::json& response);
     void CollectDiagnostics(const nlohmann::json& response, const World* world = nullptr);
     void StepPhysics(World& world, float dt, bool collectQueries = true);

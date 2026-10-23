@@ -50,6 +50,8 @@ enum class RenderGraphReleaseMode;
 struct MaterialDefinitionReloadBatch;
 struct RuntimeCommandExecutionResult;
 struct WorldHandle;
+// 引擎内部的动画预览派生数据缓存；定义在 engineLoop.cpp，UI 侧不接触。
+struct UiAnimationPreviewCache;
 
 // Owns the high-level runtime lifecycle after PlatformApplication is ready.
 // PlatformApplication hides SDL startup/window/event details; EngineLoop owns
@@ -85,6 +87,21 @@ private:
     void UpdateUiViewModel(
         float deltaTime,
         const RuntimeCommandExecutionResult& commandResult);
+    // 只填充逐帧变化的轻量字段（世界路径、离线标记、调试绘制、相机）。
+    void FillUiViewModelLiveFields(
+        UiViewModelSnapshot& snapshot,
+        UiViewModelBuildMode buildMode,
+        const WorldHandle& activeWorld);
+    // 只在编辑器快照到期时调用：一次构建全部昂贵编辑器字段。
+    void BuildUiViewModelEditorFields(
+        UiViewModelSnapshot& snapshot,
+        const WorldHandle& activeWorld);
+    // 动画预览的派生数据按“世界代数 + 播放器身份”缓存；每帧只重算随播放时间
+    // 变化的值，不重复分配 clip 列表/特征通道/schema。
+    void CaptureUiAnimationPreview(
+        UiViewModelSnapshot& snapshot,
+        const World& world,
+        uint64_t generation);
     void SynchronizeSceneViewport();
     void TickEditorThumbnails();
     void TickScriptBuild(float deltaTime);
@@ -178,6 +195,16 @@ private:
     uint64_t thumbnailSessionEpoch = 0;
     EditorThumbnailScheduler thumbnailScheduler;
     uint64_t uiFrameIndex = 0;
+    // 视图模型可见性/刷新节拍：隐藏时不构建编辑器快照；可见时按 10 Hz 重建，
+    // 选中/模式切换/世界换代/编译器状态等事件通过显式脏标记绕过等待。
+    UiViewModelRefreshSchedule uiViewModelRefresh;
+    UiViewModelBuildMode uiViewModelBuildMode = UiViewModelBuildMode::None;
+    bool uiViewModelScriptBuildPending = false;
+    uint64_t lastUiViewModelWorldGeneration = 0;
+    std::string lastUiViewModelWorldPath;
+    bool lastUiViewModelOfflineMode = false;
+    ScriptPlayState lastUiViewModelScriptState = ScriptPlayState::Editing;
+    std::unique_ptr<UiAnimationPreviewCache> uiAnimationPreviewCache;
     std::string pendingScriptBlueprintSelection;
     WorldGraphTransactionTestFaultInjection
         worldGraphTransactionTestFaultInjection;

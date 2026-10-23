@@ -306,6 +306,55 @@ This is binding/control invalidation, not dirty-rectangle rendering. GT still
 builds immutable draw snapshots and RT uploads/composites the overlay every frame;
 unchanged panel data does not yet imply reused GPU draw buffers.
 
+### View Model Build Visibility And Cadence
+
+`UiViewModelRefreshSchedule` / `UiViewModelBuildMode` in
+`source/ui/uiViewModelRefresh.h` decide how much of the immutable view model GT
+builds. The mode is derived only from visibility:
+
+- **None** — `UiSubsystem` is not initialized, or both the developer workspace
+  and the runtime HUD are hidden (immersive mode). No editor snapshot, script
+  class/perf JSON, scene-actor list or RmlUi document update is produced. GT
+  still freezes the camera and DrawDebug overlay (immersive display keeps
+  debugging geometry) and publishes an immutable draw snapshot with no UI
+  documents and `sceneViewportEnabled=false`, so the render thread cannot retain
+  the previous workspace image. The last editor-only `UiViewModelSnapshot`
+  fields stay in place for `TickMaterialInstanceEditor`, but nothing renders or
+  consumes them until the workspace is visible again.
+- **RuntimeHud** — `--no-dev-ui`: only the runtime HUD is visible. GT freezes the
+  world label and gameplay text every frame through
+  `ScriptRuntimeSubsystem::HudView`, which skips blueprint classes, component
+  classes, performance JSON and scene/detail data. The HUD stays per-frame
+  reactive; no editor panel data is built.
+- **FullEditor** — the developer workspace is visible. The complete view model
+  (script view/undo state, renderer/offline/bloom/CSM/environment values, final
+  animation preview features, scene actors, material-instance models and the
+  performance snapshot) is rebuilt at **10 Hz (100 ms)**. Between refreshes the
+  panel DOM keeps the last built values while RmlUi input handling, hover,
+  scrolling and the immutable draw snapshot stay per-frame.
+
+The cadence is a throttle, not a comparison of the whole snapshot. An explicit
+dirty path forces the next frame to rebuild regardless of the remaining window:
+visibility/mode/locale actions, world generation or path change, viewport,
+outliner or material selection, any runtime `UiAction`, any editor document
+command execution (save, undo/redo, parameter/preview edits), script build
+start/completion, script play-state change, offline mode and its command
+feedback. Selection and mode switches therefore react on the next GT frame
+(≤ one rendered frame); panel data that only changes over time reacts within
+100 ms. Input, hover, scroll and viewport camera indicators are unchanged.
+
+The Performance tab still consumes the same frozen `PerformanceSnapshot`; it is
+now published to `UiSubsystem` at 10 Hz and the panel keeps its own 5 Hz rebuild,
+so the panel remains ≤200 ms behind the newest sample. `perf json` and
+`--perf-jsonl` do not read the UI snapshot at all: they serialize
+`GpuPassTimer`'s render/CPU timer snapshot directly, so throttling or hiding the
+UI does not change those channels.
+
+Hidden frames carry no stale presentation: the published `UiRenderSnapshot` has
+empty vertices/indices/draw commands (except a frozen DrawDebug overlay) and no
+scene-viewport rectangle. Camera projection synchronization, picking and the
+editor pointer policy do not depend on the UI view model.
+
 ## Typed Boundaries
 
 - `UiAction`: typed runtime-control mutation requests into `CommandBus`.
@@ -549,6 +598,10 @@ The normal shader build path produces overlay SPIR-V from `shader/glsl/`.
 Root-registered GoogleTest target `editor_ui_tests` loads real RML/RCSS with
 CPU fake sinks and covers parsing, refresh, focused input, edit batching,
 revision preservation, save/dirty close, escaping and typed offline actions.
+Its Vulkan-free `uiViewModelRefreshTests` cover the view-model visibility
+decision and refresh schedule: first frame due, interval wait, forced event
+refresh, re-armed windows, a custom 15 Hz cadence, and "hidden never builds the
+full editor snapshot even when forced".
 Its Performance cases load the workspace document, verify the tab sits in the
 Log/Renderer stack, map a frozen `PerformanceSnapshot` into summary/table values,
 assert the CPU stage table and its derived `other` row, and assert 5 Hz throttling plus
