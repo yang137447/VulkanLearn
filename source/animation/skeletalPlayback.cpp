@@ -164,6 +164,25 @@ void ExpandForWeightSum(Eigen::Vector3f& min, Eigen::Vector3f& max, float error)
     min = min.cwiseMin(min * low).cwiseMin(min * high);
     max = max.cwiseMax(max * low).cwiseMax(max * high);
 }
+
+// 全骨架 bind→pose：与 section 无关，跨 section 的代理权重可以直接使用。
+// section 的 inverseBind 只对该 section 实际引用的关节有效；其余关节在
+// SkinPose::matrices 里退化为绝对 model 矩阵。这里用 restModel 的逆重建。
+void FillBindToPoseMatrices(SkinPose& pose,
+    const std::vector<Eigen::Matrix4f>& models, const std::vector<Joint>* joints)
+{
+    if (joints == nullptr || joints->size() != models.size())
+        return;
+    pose.bindToPoseMatrices.reserve(models.size());
+    for (size_t joint = 0; joint < models.size(); ++joint)
+    {
+        const Eigen::Matrix4f bindInverse = joints->at(joint).restModel.inverse();
+        const Eigen::Matrix4f bindToPose = models[joint] * bindInverse;
+        if (!bindToPose.allFinite())
+            throw std::runtime_error("Skin pose has a non-finite bind-to-pose matrix");
+        pose.bindToPoseMatrices.push_back(bindToPose);
+    }
+}
 }
 
 Eigen::Matrix4f BlendSkinMatrix(const SkinSection& section, size_t vertex,
@@ -180,7 +199,8 @@ Eigen::Matrix4f BlendSkinMatrix(const SkinSection& section, size_t vertex,
 }
 
 std::shared_ptr<const SkinPose> BuildSkinPoseReference(const SkinSection& section,
-    const std::vector<Eigen::Matrix4f>& models, uint64_t discontinuity, uint64_t playbackIdentity)
+    const std::vector<Eigen::Matrix4f>& models, uint64_t discontinuity,
+    uint64_t playbackIdentity, const std::vector<Joint>* joints)
 {
     if (models.size() != section.inverseBinds.size() || section.vertices.empty())
         throw std::invalid_argument("Skin pose requires a matching skeleton and nonempty section");
@@ -189,6 +209,7 @@ std::shared_ptr<const SkinPose> BuildSkinPoseReference(const SkinSection& sectio
     pose->playbackIdentity = playbackIdentity;
     for (size_t i = 0; i < models.size(); ++i)
         pose->matrices.push_back(models[i] * section.inverseBinds[i]);
+    FillBindToPoseMatrices(*pose, models, joints);
     pose->boundsMin = Eigen::Vector3f::Constant(std::numeric_limits<float>::max());
     pose->boundsMax = -pose->boundsMin;
     for (size_t vertex = 0; vertex < section.vertices.size(); ++vertex)
@@ -224,18 +245,21 @@ std::shared_ptr<const SkinPose> BuildSkinPoseReference(const SkinSection& sectio
 }
 
 std::shared_ptr<const SkinPose> BuildSkinPose(const SkinSection& section,
-    const std::vector<Eigen::Matrix4f>& models, uint64_t discontinuity, uint64_t playbackIdentity)
+    const std::vector<Eigen::Matrix4f>& models, uint64_t discontinuity,
+    uint64_t playbackIdentity, const std::vector<Joint>* joints)
 {
     if (models.size() != section.inverseBinds.size() || section.vertices.empty())
         throw std::invalid_argument("Skin pose requires a matching skeleton and nonempty section");
     // 直接构造的 section（测试/离线工具）没有预计算数据：退回逐顶点精确参考路径，
     // 行为与引入快路径前完全一致。
     if (section.jointBindBounds.size() != section.inverseBinds.size())
-        return BuildSkinPoseReference(section, models, discontinuity, playbackIdentity);
+        return BuildSkinPoseReference(section, models, discontinuity,
+            playbackIdentity, joints);
     auto pose = std::make_shared<SkinPose>();
     pose->discontinuity = discontinuity;
     pose->playbackIdentity = playbackIdentity;
     pose->matrices.reserve(models.size());
+    FillBindToPoseMatrices(*pose, models, joints);
     Eigen::Vector3f min = Eigen::Vector3f::Constant(std::numeric_limits<float>::max());
     Eigen::Vector3f max = -min;
     bool hasGeometry = false;
@@ -579,7 +603,8 @@ std::vector<std::shared_ptr<const SkinPose>> SkeletalPlayback::Evaluate(
     // 所有 section 完成后才发布时钟、选择与姿态，异常时保持同一个旧状态。
     std::vector<std::shared_ptr<const SkinPose>> next;
     for (const auto& section : asset->mesh.sections)
-        next.push_back(BuildSkinPose(section, models, epoch, playbackIdentity));
+        next.push_back(BuildSkinPose(section, models, epoch, playbackIdentity,
+            &asset->mesh.joints));
     outputModels = std::make_shared<const std::vector<Eigen::Matrix4f>>(std::move(models));
     return next;
 }

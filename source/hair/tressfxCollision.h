@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <string>
 
 #include <Eigen/Dense>
 
@@ -17,12 +18,30 @@ static_assert(TressfxMaxColliders == 8,
     "Guide collider limit is mirrored by shader/glsl/hair/tressfxSimCommon.glsl");
 
 // 资产局部空间的解析胶囊；a == b 时退化为球。radius 是厘米。
+// bone 是可选的目标骨架关节名：非空时运行期用该关节的 bind→pose 矩阵变换 a/b；
+// 空表示保持作者绑定空间的静态胶囊（与引入骨骼绑定前的行为完全一致）。
 struct TressfxCollider
 {
     Eigen::Vector3f a = Eigen::Vector3f::Zero();
     Eigen::Vector3f b = Eigen::Vector3f::Zero();
     float radius = 0.0f;
+    std::string bone;
 };
+
+// 用单个关节的 bind→pose 矩阵变换胶囊端点。矩阵空间与发丝 rest 位置、
+// SkinPose::matrices 相同（绑定空间 → 源对象模型空间）。radius 原样保留：
+// 当前皮肤/骨骼导出没有独立的骨骼缩放提取通道，若把矩阵的缩放吸收进半径，
+// 会在非均匀缩放下把胶囊变成椭球但碰撞 kernel 仍按球处理，反而失真。
+inline TressfxCollider TransformTressfxCapsuleByBone(
+    const TressfxCollider& collider, const Eigen::Matrix4f& bindToPose)
+{
+    TressfxCollider result;
+    result.a = (bindToPose * collider.a.homogeneous()).head<3>();
+    result.b = (bindToPose * collider.b.homogeneous()).head<3>();
+    result.radius = collider.radius;
+    result.bone = collider.bone;
+    return result;
+}
 
 // GPU std430 镜像：a.xyz = 起点、a.w = radius；b.xyz = 终点、b.w 保留。
 // shader/glsl/hair/tressfxSimCollision.comp 的 GuideCollider 与此一一对应。

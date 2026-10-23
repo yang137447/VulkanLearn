@@ -2,6 +2,7 @@
 
 #include "core/runtimeResult.h"
 #include "hair/sdfBuilder.h"
+#include "hair/tressfxProxySkinning.h"
 
 #include <array>
 #include <cmath>
@@ -74,7 +75,8 @@ struct TressfxSdfLayout
 };
 
 // 与 shader/glsl/hair/tressfxSdfCommon.glsl 的 std140 SdfGridParams 一一对应。
-// originCell.w = cellSize；dims.w = cellCount；counts.x = 代理三角形数；
+// originCell.w = cellSize；dims.w = cellCount；counts.x = 代理三角形数，
+// counts.y = 1 表示代理走逐顶点多骨 LBS（0 回退到单骨根矩阵）；
 // range.x = margin；range.y = truncation。任何字段顺序/大小变化都必须同时改
 // shader 声明与下面的 static_assert。
 struct TressfxSdfParams
@@ -114,7 +116,8 @@ RuntimeResult<TressfxSdfLayout> MakeTressfxSdfLayout(const SdfTriangleMesh& prox
     float cellSize, float margin);
 
 TressfxSdfParams MakeTressfxSdfParams(
-    const TressfxSdfLayout& layout, std::uint32_t triangleCount);
+    const TressfxSdfLayout& layout, std::uint32_t triangleCount,
+    bool proxySkinning = false);
 
 // 【与 TressFX 的显式差异】TressFX 的 FloatFlip（`asuint(f) ^ 0x80000000`）只
 // 翻符号位，同号段内按 |d| 排序；但一个格子被多个三角形覆盖时，min 会把
@@ -151,13 +154,19 @@ void ClearTressfxSdfGrid(const TressfxSdfLayout& layout, std::vector<std::uint32
 // splat 等价：每个三角形先把三个顶点按 skinning 变换（根点用同一矩阵），再对
 // “三角形 AABB 每侧外扩 truncation”覆盖的格子写有符号距离编码的最小值
 // （CPU 用同序的 uint 比较，GPU 用 atomicMin）。
+// 传入 proxySkin + jointMatrices 时改用逐顶点多骨 LBS（与 GPU splat 的
+// counts.y=1 路径同一数学）；否则保持单骨刚性矩阵。
 void SplatTressfxSdfGrid(const TressfxSdfLayout& layout, const SdfTriangleMesh& proxy,
-    const Eigen::Matrix4f& skinning, std::vector<std::uint32_t>& cells);
+    const Eigen::Matrix4f& skinning, std::vector<std::uint32_t>& cells,
+    const SdfProxySkinTransfer* proxySkin = nullptr,
+    const std::vector<Eigen::Matrix4f>* jointMatrices = nullptr);
 
 // clear + splat。返回的 cells 长度等于 layout.CellCount()。
 std::vector<std::uint32_t> BuildTressfxSdfGrid(const TressfxSdfLayout& layout,
     const SdfTriangleMesh& proxy,
-    const Eigen::Matrix4f& skinning = Eigen::Matrix4f::Identity());
+    const Eigen::Matrix4f& skinning = Eigen::Matrix4f::Identity(),
+    const SdfProxySkinTransfer* proxySkin = nullptr,
+    const std::vector<Eigen::Matrix4f>* jointMatrices = nullptr);
 
 // 三线性采样（有符号）。域外或 8 角点含 clear 哨兵时返回
 // TressfxSdfOutOfRangeDistance。采样区间取相邻两个格子中心，插值不外插。

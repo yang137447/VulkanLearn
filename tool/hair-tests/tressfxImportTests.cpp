@@ -401,6 +401,94 @@ TEST(TressfxDescriptor, CollisionAcceptsAuthoredCapsules)
     EXPECT_FLOAT_EQ(plan.tressfxSimulation.capsules[0].radius, 8.0f);
 }
 
+TEST(TressfxDescriptor, CollisionCapsuleAcceptsOptionalBone)
+{
+    auto json = GpuDescriptor();
+    json["simulation"]["skinning"] = {
+        {"source", "FemaleCharacter"}, {"rootBone", "Head_M"}};
+    json["collision"]["capsules"].push_back({
+        {"a", {0.0f, 160.0f, 0.0f}},
+        {"b", {0.0f, 160.0f, 0.0f}},
+        {"radius", 8.0f},
+        {"bone", "Head_M"}});
+    const auto plan = MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json);
+    ASSERT_EQ(plan.tressfxSimulation.capsules.size(), 1u);
+    EXPECT_EQ(plan.tressfxSimulation.capsules[0].bone, "Head_M");
+}
+
+TEST(TressfxDescriptor, CollisionCapsuleBoneRequiresSkinningSource)
+{
+    auto json = GpuDescriptor();
+    json["collision"]["capsules"].push_back({
+        {"a", {0.0f, 0.0f, 0.0f}},
+        {"b", {0.0f, 0.0f, 0.0f}},
+        {"radius", 1.0f},
+        {"bone", "Head_M"}});
+    try
+    {
+        MeshAssetValidator::BuildLoadPlan(
+            "Maps/SC_x/Meshes/SM_hair_skinned.json", json);
+        FAIL() << "Capsule bone without simulation.skinning was accepted";
+    }
+    catch (const std::runtime_error& error)
+    {
+        const std::string message = error.what();
+        EXPECT_NE(message.find("simulation.skinning"), std::string::npos);
+        EXPECT_NE(message.find("SM_hair_skinned.json"), std::string::npos);
+    }
+}
+
+TEST(TressfxDescriptor, CollisionCapsuleBoneRequiresGpuBackend)
+{
+    auto json = Descriptor();
+    json["simulation"] = {
+        {"backend", "cpu"},
+        {"skinning", {{"source", "FemaleCharacter"}, {"rootBone", "Head_M"}}}};
+    json["collision"] = {{"capsules", {{
+        {"a", {0.0f, 0.0f, 0.0f}},
+        {"b", {0.0f, 0.0f, 0.0f}},
+        {"radius", 1.0f},
+        {"bone", "Head_M"}}}}};
+    // CPU backend + skinning 本身已在 simulation 解析期被拒绝；这里单独确认
+    // 错误消息落在 backend 约束上，而不是静默忽略 bone。
+    EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json),
+        std::runtime_error);
+}
+
+TEST(TressfxDescriptor, CollisionCapsuleBoneRejectsEmptyAndNonString)
+{
+    for (const nlohmann::json& bone : {nlohmann::json(""), nlohmann::json(1)})
+    {
+        auto json = GpuDescriptor();
+        json["simulation"]["skinning"] = {
+            {"source", "FemaleCharacter"}, {"rootBone", "Head_M"}};
+        json["collision"]["capsules"].push_back({
+            {"a", {0.0f, 0.0f, 0.0f}},
+            {"b", {0.0f, 0.0f, 0.0f}},
+            {"radius", 1.0f},
+            {"bone", bone}});
+        EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json),
+            std::runtime_error);
+    }
+}
+
+TEST(TressfxDescriptor, CollisionCapsuleBoneParticipatesInMeshIdentity)
+{
+    const auto plan = [](const std::string& bone)
+    {
+        auto json = GpuDescriptor();
+        json["simulation"]["skinning"] = {
+            {"source", "FemaleCharacter"}, {"rootBone", "Head_M"}};
+        json["collision"]["capsules"].push_back({
+            {"a", {0.0f, 0.0f, 0.0f}},
+            {"b", {0.0f, 0.0f, 0.0f}},
+            {"radius", 1.0f},
+            {"bone", bone}});
+        return MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json);
+    };
+    EXPECT_NE(plan("Head_M").modelCacheKey, plan("Neck_M").modelCacheKey);
+}
+
 TEST(TressfxDescriptor, CollisionFieldsParticipateInMeshIdentity)
 {
     auto json = Descriptor();

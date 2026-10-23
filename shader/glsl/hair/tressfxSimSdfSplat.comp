@@ -3,13 +3,17 @@
 // 逐帧碰撞距离场 splat pass：一个 invocation 一个代理三角形。
 //
 // 与 TressFXSimulationSDFGenConstruct.usf 的 PERMUTATION_SDF_VISUALIZATION == 0
-// 分支对应：三角形顶点先蒙皮（这里用 params.skinning 的刚性单骨矩阵），再对
-// “三角形 AABB 每侧外扩 truncation”覆盖的格子写
-// atomicMin(cell, SdfFloatFlip(signedDistance))。源实现把顶点乘 0.01 转米，VL
-// 全链路厘米，因此不缩放。SdfFloatFlip 是 magnitude-first key：先按 |d| 选
-// 最近三角形，最低位保留符号；采样时 SdfIFloatFlip 还原。稠密 uint 网格是
-// TressFX 生产分支的直接沿用；源的稀疏 distance/direction 链表只在 SDF
-// 可视化 permutation 里存在。
+// 分支对应：三角形顶点先蒙皮，再对“三角形 AABB 每侧外扩 truncation”覆盖的格子
+// 写 atomicMin(cell, SdfFloatFlip(signedDistance))。蒙皮有两条路径：
+// - sdf.counts.y == 1：逐顶点多骨 LBS。代理自身没有作者权重，权重由加载期从
+//   最近绑定姿态身体顶点复制并归一化（binding 12）；矩阵来自 hair pass 每帧
+//   上传的全骨架 bind→pose palette（binding 13）。不能直接复用图形 VS 的
+//   per-section palette：未参与该 section 的关节没有有效 inverseBind。
+// - sdf.counts.y == 0：回退到 params.skinning 的单骨刚性矩阵（历史行为）。
+// 源实现把顶点乘 0.01 转米，VL 全链路厘米，因此不缩放。SdfFloatFlip 是
+// magnitude-first key：先按 |d| 选最近三角形，最低位保留符号；采样时
+// SdfIFloatFlip 还原。稠密 uint 网格是 TressFX 生产分支的直接沿用；源的稀疏
+// distance/direction 链表只在 SDF 可视化 permutation 里存在。
 #include "tressfxSimCommon.glsl"
 #include "tressfxSdfCommon.glsl"
 
@@ -27,6 +31,42 @@ layout(set = 0, binding = 10, std430) readonly buffer SdfProxyIndices
     uint indices[];
 } proxyIndices;
 
+// 代理逐顶点权重 CSR，布局与 Animation::PackSkinInfluences 相同：
+// words[0..N] = 每顶点绝对 word 偏移，随后 (joint, floatBits(weight)) 成对。
+layout(set = 0, binding = 12, std430) readonly buffer SdfProxyInfluences
+{
+    uint words[];
+} proxyInfluences;
+
+// 全骨架 bind→pose palette（每 frame-in-flight 槽一份）。每个关节 128 bytes：
+// current 矩阵后跟 previous 矩阵；这里只消费 current。布局与
+// shader/glsl/engine/skinnedVertexMath.glsl 的 SkinJoint 相同，但数据源是
+// SkinPose::bindToPoseMatrices（不能换成 per-section palette）。
+struct SdfSkinJoint
+{
+    mat4 current;
+    mat4 previous;
+};
+layout(set = 0, binding = 13, std430) readonly buffer SdfSkinPalette
+{
+    SdfSkinJoint joints[];
+} sdfSkinPalette;
+
+vec3 SkinProxyPosition(uint vertexIndex, vec3 bindPosition)
+{
+    if (sdf.counts.y == 0u)
+        return (params.skinning * vec4(bindPosition, 1.0)).xyz;
+    mat4 blended = mat4(0.0);
+    const uint end = proxyInfluences.words[vertexIndex + 1u];
+    for (uint i = proxyInfluences.words[vertexIndex]; i < end; i += 2u)
+    {
+        const uint joint = proxyInfluences.words[i];
+        const float weight = uintBitsToFloat(proxyInfluences.words[i + 1u]);
+        blended += weight * sdfSkinPalette.joints[joint].current;
+    }
+    return (blended * vec4(bindPosition, 1.0)).xyz;
+}
+
 void main()
 {
     uint triangle = gl_GlobalInvocationID.x;
@@ -36,9 +76,9 @@ void main()
     const uint i0 = proxyIndices.indices[triangle * 3u + 0u];
     const uint i1 = proxyIndices.indices[triangle * 3u + 1u];
     const uint i2 = proxyIndices.indices[triangle * 3u + 2u];
-    const vec3 a = (params.skinning * vec4(proxyPositions.positions[i0].xyz, 1.0)).xyz;
-    const vec3 b = (params.skinning * vec4(proxyPositions.positions[i1].xyz, 1.0)).xyz;
-    const vec3 c = (params.skinning * vec4(proxyPositions.positions[i2].xyz, 1.0)).xyz;
+    const vec3 a = SkinProxyPosition(i0, proxyPositions.positions[i0].xyz);
+    const vec3 b = SkinProxyPosition(i1, proxyPositions.positions[i1].xyz);
+    const vec3 c = SkinProxyPosition(i2, proxyPositions.positions[i2].xyz);
 
     const float truncation = sdf.range.y;
     const vec3 expansion = vec3(truncation);

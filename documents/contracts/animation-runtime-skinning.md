@@ -61,7 +61,9 @@ Seek、Select、Play 与零时长 TransitionTo 增加 discontinuity；
 Console/UI 的 seek 暂停，Select 保持播放开关；Play 与 TransitionTo 开启播放。
 采样及所有 section 的 CPU 姿态完成后才发布选择、时钟与不可变 `SkinPose`。
 
-`SkinPose` 包含模型局部 palette、姿态 AABB（保守包围盒）、discontinuity 和 playbackIdentity。
+`SkinPose` 包含模型局部 palette、全骨架 bind→pose palette
+（`bindToPoseMatrices = models[joint] * inverse(restModel[joint])`，供跨 section 的
+TressFX 碰撞使用）、姿态 AABB（保守包围盒）、discontinuity 和 playbackIdentity。
 World、WorldSnapshot、RenderScene 仅共享其 const 所有权；旧快照不会被后续采样改写。
 单帧局部采样创建独立 ozz context；批量 `SampleModels` 在同一片段内复用 context，
 先验证整批时刻，空批次仍校验资产。

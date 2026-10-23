@@ -366,6 +366,17 @@ TEST(TressfxSdfGrid, DegenerateGradientIsSkippedInsteadOfProducingNaN)
     EXPECT_TRUE(point.isApprox(before));
 }
 
+TEST(TressfxSdfGrid, ProxySkinFlagRoundTripsIntoParams)
+{
+    const SdfTriangleMesh box = MakeBox(
+        Eigen::Vector3f(0, 0, 0), Eigen::Vector3f(10, 10, 10));
+    const TressfxSdfLayout layout = Layout(box, 1.0f, 1.0f);
+    EXPECT_EQ(VL::Hair::MakeTressfxSdfParams(layout, 12).counts[1], 0u);
+    const auto skinned = VL::Hair::MakeTressfxSdfParams(layout, 12, true);
+    EXPECT_EQ(skinned.counts[1], 1u);
+    EXPECT_EQ(skinned.counts[0], 12u);
+}
+
 TEST(TressfxSdfGrid, SkinningMatrixMovesTheFieldWithTheProxy)
 {
     const SdfTriangleMesh box = MakeBox(
@@ -388,4 +399,144 @@ TEST(TressfxSdfGrid, SkinningMatrixMovesTheFieldWithTheProxy)
     const Eigen::Vector3f untouched = original;
     EXPECT_FALSE(VL::Hair::ResolveTressfxSdfCollision(layout, cells, original));
     EXPECT_TRUE(original.isApprox(untouched));
+}
+
+namespace
+{
+// 合成绑定姿态身体：positions + CSR 影响。测试只关心“最近顶点/权重复制/
+// 归一化/确定性”，不需要真实 FBX。
+struct ProxySkinBody
+{
+    std::vector<Eigen::Vector3f> positions;
+    std::vector<std::uint32_t> offsets;
+    std::vector<VL::Hair::SdfProxySkinSourceInfluence> influences;
+
+    VL::Hair::SdfProxySkinSource View() const
+    {
+        return {positions.data(), positions.size(), offsets.data(),
+            influences.data()};
+    }
+};
+
+void AddBodyVertex(ProxySkinBody& body, const Eigen::Vector3f& position,
+    std::initializer_list<std::pair<uint32_t, float>> weights)
+{
+    if (body.offsets.empty())
+        body.offsets.push_back(0);
+    for (const auto& [joint, weight] : weights)
+        body.influences.push_back({joint, weight});
+    body.offsets.push_back(static_cast<uint32_t>(body.influences.size()));
+    body.positions.push_back(position);
+}
+} // namespace
+
+TEST(TressfxProxySkinning, CopiesNearestBodyVertexInfluences)
+{
+    ProxySkinBody body;
+    AddBodyVertex(body, {0.0f, 0.0f, 0.0f}, {{0, 0.25f}, {1, 0.75f}});
+    AddBodyVertex(body, {10.0f, 0.0f, 0.0f}, {{2, 1.0f}});
+    const std::vector<Eigen::Vector3f> proxy{{0.2f, 0.0f, 0.0f}};
+    const auto transfer = VL::Hair::BuildTressfxProxySkinTransfer(
+        proxy, body.View(), 2.0f);
+    ASSERT_EQ(transfer.vertexCount, 1u);
+    ASSERT_EQ(transfer.maxInfluences, 2u);
+    // CSR：header = 2 个顶点偏移；随后 (joint, weightBits) × 2。
+    ASSERT_EQ(transfer.words.size(), 2u + 4u);
+    EXPECT_EQ(transfer.words[0], 2u);
+    EXPECT_EQ(transfer.words[1], 6u);
+    EXPECT_EQ(transfer.words[2], 0u);
+    float weight0 = 0.0f;
+    std::memcpy(&weight0, &transfer.words[3], sizeof(weight0));
+    EXPECT_NEAR(weight0, 0.25f, 1.0e-6f);
+    EXPECT_EQ(transfer.uniqueBodyVertices, 1u);
+    EXPECT_NEAR(transfer.maxNearestDistanceCm, 0.2f, 1.0e-5f);
+}
+
+TEST(TressfxProxySkinning, EqualDistanceTieBreaksOnLowerBodyIndex)
+{
+    ProxySkinBody body;
+    AddBodyVertex(body, {-1.0f, 0.0f, 0.0f}, {{4, 1.0f}});
+    AddBodyVertex(body, {1.0f, 0.0f, 0.0f}, {{5, 1.0f}});
+    const std::vector<Eigen::Vector3f> proxy{{0.0f, 0.0f, 0.0f}};
+    const auto transfer = VL::Hair::BuildTressfxProxySkinTransfer(
+        proxy, body.View(), 2.0f);
+    ASSERT_EQ(transfer.words.size(), 4u);
+    EXPECT_EQ(transfer.words[2], 4u) << "tie must select the lower body index";
+}
+
+TEST(TressfxProxySkinning, KeepsAllInfluencesAndNormalizesWeights)
+{
+    ProxySkinBody body;
+    // 6 个影响、权重和 3.0：CSR 布局没有 4 骨上限，保留全部并重新归一化。
+    AddBodyVertex(body, {0.0f, 0.0f, 0.0f},
+        {{0, 0.5f}, {1, 0.5f}, {2, 0.5f}, {3, 0.5f}, {4, 0.5f}, {5, 0.5f}});
+    const std::vector<Eigen::Vector3f> proxy{{0.0f, 0.0f, 0.0f}};
+    const auto transfer = VL::Hair::BuildTressfxProxySkinTransfer(
+        proxy, body.View(), 1.0f);
+    EXPECT_EQ(transfer.maxInfluences, 6u);
+    ASSERT_EQ(transfer.words.size(), 2u + 12u);
+    float sum = 0.0f;
+    for (std::size_t word = 3; word < transfer.words.size(); word += 2)
+    {
+        float weight = 0.0f;
+        std::memcpy(&weight, &transfer.words[word], sizeof(weight));
+        sum += weight;
+    }
+    EXPECT_NEAR(sum, 1.0f, 1.0e-6f);
+}
+
+TEST(TressfxProxySkinning, RejectsProxyVerticesBeyondTransferRadius)
+{
+    ProxySkinBody body;
+    AddBodyVertex(body, {100.0f, 0.0f, 0.0f}, {{0, 1.0f}});
+    const std::vector<Eigen::Vector3f> proxy{{0.0f, 0.0f, 0.0f}};
+    try
+    {
+        VL::Hair::BuildTressfxProxySkinTransfer(proxy, body.View(), 2.0f);
+        FAIL() << "A proxy vertex far outside the transfer radius was accepted";
+    }
+    catch (const std::runtime_error& error)
+    {
+        EXPECT_NE(std::string(error.what()).find("nearest body vertex"),
+            std::string::npos);
+    }
+}
+
+TEST(TressfxProxySkinning, SkinnedPositionBlendsBoneMatrices)
+{
+    ProxySkinBody body;
+    AddBodyVertex(body, {0.0f, 0.0f, 0.0f}, {{0, 0.5f}, {1, 0.5f}});
+    const std::vector<Eigen::Vector3f> proxy{{0.0f, 0.0f, 0.0f}};
+    const auto transfer = VL::Hair::BuildTressfxProxySkinTransfer(
+        proxy, body.View(), 1.0f);
+
+    std::vector<Eigen::Matrix4f> matrices(2, Eigen::Matrix4f::Identity());
+    matrices[0](0, 3) = 10.0f;
+    matrices[1](0, 3) = 30.0f;
+    const Eigen::Vector3f skinned = VL::Hair::TressfxProxySkinnedPosition(
+        transfer, 0, matrices, Eigen::Vector3f(1.0f, 0.0f, 0.0f));
+    EXPECT_TRUE(skinned.isApprox(Eigen::Vector3f(21.0f, 0.0f, 0.0f), 1.0e-5f));
+}
+
+TEST(TressfxProxySkinning, SplatMatchesRigidMatrixWhenEveryWeightIsOneBone)
+{
+    const SdfTriangleMesh box = MakeBox(
+        Eigen::Vector3f(0, 0, 0), Eigen::Vector3f(10, 10, 10));
+    const SdfTriangleMesh domain = MakeBox(
+        Eigen::Vector3f(0, 0, 0), Eigen::Vector3f(30, 10, 10));
+    const TressfxSdfLayout layout = Layout(domain, 1.0f, 1.0f);
+
+    // 每个代理顶点 100% 绑定关节 0；该关节矩阵就是单骨路径的平移矩阵。
+    ProxySkinBody body;
+    AddBodyVertex(body, {5.0f, 5.0f, 5.0f}, {{0, 1.0f}});
+    std::vector<Eigen::Vector3f> proxyPositions = box.positions;
+    const auto transfer = VL::Hair::BuildTressfxProxySkinTransfer(
+        proxyPositions, body.View(), 10.0f);
+    std::vector<Eigen::Matrix4f> matrices(1, Eigen::Matrix4f::Identity());
+    matrices[0](0, 3) = 20.0f;
+
+    const auto rigid = VL::Hair::BuildTressfxSdfGrid(layout, box, matrices[0]);
+    const auto skinned = VL::Hair::BuildTressfxSdfGrid(layout, box, matrices[0],
+        &transfer, &matrices);
+    EXPECT_EQ(rigid, skinned);
 }

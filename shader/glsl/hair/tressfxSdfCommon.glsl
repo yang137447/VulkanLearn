@@ -21,7 +21,8 @@ layout(std140, set = 0, binding = 8) uniform SdfGridParams
 {
     vec4 originCell; // xyz = 网格最小角，w = cellSize（厘米，每帧）
     uvec4 dims;      // xyz = 每轴格子数，w = 总格子数
-    uvec4 counts;    // x = 代理三角形数，yzw 保留
+    uvec4 counts;    // x = 代理三角形数；y = 1 表示 splat 走逐顶点多骨 LBS
+                     // （0 回退 params.skinning 单骨矩阵）；zw 保留
     vec4 range;      // x = collision margin，y = truncation（厘米）
 } sdf;
 

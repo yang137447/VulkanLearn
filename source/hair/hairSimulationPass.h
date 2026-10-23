@@ -93,13 +93,18 @@ private:
         vk::Buffer restPositions = nullptr;
         vk::Buffer restLengths = nullptr;
         vk::Buffer strandLevel = nullptr;
-        vk::Buffer colliders = nullptr;
+        // 胶囊 SSBO 按 frame-in-flight 分槽（绑定骨骼后内容逐帧变化）。
+        std::array<vk::Buffer, GuideSimulationParamBufferCount> colliders{};
         // collision.mesh 的四个 buffer；SDF params 按 frame-in-flight 分槽
         // （域每帧变化）。未声明时全为空，用于缓存项校验。
         std::array<vk::Buffer, GuideSimulationParamBufferCount> sdfParams{};
         vk::Buffer sdfGrid = nullptr;
         vk::Buffer sdfTriangles = nullptr;
         vk::Buffer sdfIndices = nullptr;
+        // SDF splat 的代理影响流（静态）与逐 frame-slot 的全骨架 palette
+        // buffer（句柄静态、内容每帧由 RenderableObject 写，用于缓存校验）。
+        vk::Buffer sdfProxyInfluences = nullptr;
+        std::array<vk::Buffer, GuideSimulationParamBufferCount> sdfPalette{};
         std::array<vk::Buffer, GuideSimulationParamBufferCount> params{};
         // 变量步长：每帧一次 solver step，只保留 frame-start simulationTime 供阵风使用。
         float simulationTime = 0.0f;

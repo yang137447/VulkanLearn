@@ -2,12 +2,14 @@
 
 #include <iterator>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 #include <nlohmann/json.hpp>
 
 #include "animation/skeletalPlayback.h"
-#include "hair/tressfxSkinning.h"
+#include "hair/tressfxProxySkinning.h"
+#include "mesh/loader/common/meshAssetLoader.h"
 #include "render/resource/rendererEnvironmentLoader.h"
 #include "render/resource/rendererMaterialLoader.h"
 #include "render/resource/rendererMeshLoader.h"
@@ -36,6 +38,76 @@ struct LoadedSceneMesh
 bool ModelMatricesMatch(const Eigen::Matrix4f& left, const Eigen::Matrix4f& right)
 {
     return (left - right).cwiseAbs().maxCoeff() <= 1.0e-4f;
+}
+
+// `collision.mesh` 代理没有作者权重：绑定姿态下把每个代理顶点匹配到最近的
+// 身体顶点，复制其完整影响列表并归一化。源身体顶点先乘 section.meshToModel
+// 进入与代理相同的“渲染绑定空间”，否则带缩放的骨架会把转移算错。
+struct ProxySkinBodyData
+{
+    std::vector<Eigen::Vector3f> positions;
+    std::vector<uint32_t> offsets;
+    std::vector<VL::Hair::SdfProxySkinSourceInfluence> influences;
+};
+
+void BuildProxySkinBodyData(
+    const Animation::SkeletalAsset& asset, ProxySkinBodyData& out)
+{
+    out.offsets.push_back(0);
+    for (const Animation::SkinSection& section : asset.mesh.sections)
+    {
+        if (section.influenceOffsets.size() != section.vertices.size() + 1)
+            throw std::runtime_error(
+                "TressFX proxy skin transfer source section has an invalid influence CSR: " +
+                section.name);
+        for (size_t vertex = 0; vertex < section.vertices.size(); ++vertex)
+        {
+            out.positions.push_back((section.meshToModel *
+                section.vertices[vertex].position.homogeneous()).head<3>());
+            for (uint32_t influence = section.influenceOffsets[vertex];
+                 influence < section.influenceOffsets[vertex + 1]; ++influence)
+            {
+                const Animation::Influence& source = section.influences.at(influence);
+                out.influences.push_back({source.joint, source.weight});
+            }
+            out.offsets.push_back(static_cast<uint32_t>(out.influences.size()));
+        }
+    }
+}
+
+// 代理权重只在加载期转移一次；2 cm 上限来自正式代理实测（最近身体顶点最大
+// 0.93 cm）。超过上限说明 collision.mesh 与蒙皮身体不是同一绑定空间或不是同一
+// 角色，必须在加载期拒绝而不是把错位权重烧进 SSBO。
+constexpr float TressfxProxySkinMaxDistanceCm = 2.0f;
+
+std::shared_ptr<const VL::Hair::SdfProxySkinTransfer> BuildProxySkinTransfer(
+    const LoadedSceneMesh& hair, const LoadedSceneMesh& source)
+{
+    if (!hair.result.importResult || !source.result.importResult ||
+        !source.result.importResult->modelResource.skeletalAsset)
+        return nullptr;
+    const VL::Hair::SdfTriangleMesh* proxy = nullptr;
+    for (const MeshSection& section : hair.result.importResult->modelResource.sections)
+    {
+        if (section.tressfxCollisionMesh)
+        {
+            proxy = section.tressfxCollisionMesh.get();
+            break;
+        }
+    }
+    if (proxy == nullptr)
+        return nullptr;
+
+    ProxySkinBodyData body;
+    const Animation::SkeletalAsset& skeletal =
+        *source.result.importResult->modelResource.skeletalAsset;
+    BuildProxySkinBodyData(skeletal, body);
+    const VL::Hair::SdfProxySkinSource view{
+        body.positions.data(), body.positions.size(), body.offsets.data(),
+        body.influences.data(), static_cast<uint32_t>(skeletal.mesh.joints.size())};
+    return std::make_shared<const VL::Hair::SdfProxySkinTransfer>(
+        VL::Hair::BuildTressfxProxySkinTransfer(proxy->positions, view,
+            TressfxProxySkinMaxDistanceCm));
 }
 
 void ResolveHairSkinningBindings(
@@ -105,6 +177,23 @@ void ResolveHairSkinningBindings(
         binding.sourceSceneObject = requested.source;
         binding.rootBone = requested.rootBone;
         binding.jointIndex = jointIndex;
+        // 胶囊骨骼与根骨共用同一个源对象/骨架；每个胶囊独立解析，未知骨在加载期
+        // 硬错误（消息带胶囊下标），没有 bone 的槽保留 -1 的静态行为。
+        binding.capsuleJointIndices.assign(
+            hairPlan.tressfxSimulation.capsules.size(), -1);
+        for (size_t capsuleIndex = 0;
+             capsuleIndex < hairPlan.tressfxSimulation.capsules.size(); ++capsuleIndex)
+        {
+            const VL::Hair::TressfxCollider& capsule =
+                hairPlan.tressfxSimulation.capsules[capsuleIndex];
+            if (capsule.bone.empty())
+                continue;
+            binding.capsuleJointIndices[capsuleIndex] = static_cast<int32_t>(
+                VL::Hair::ResolveTressfxJointByName(jointNames, requested.source,
+                    capsule.bone,
+                    "collision.capsules[" + std::to_string(capsuleIndex) + "].bone",
+                    hairPlan.meshAssetPath));
+        }
         for (const MeshObjectBuildPlan& plan : hair.result.objectPlans)
         {
             const std::shared_ptr<RenderableObject>* renderable =
@@ -114,6 +203,22 @@ void ResolveHairSkinningBindings(
                     "TressFX simulation.skinning: renderable \"" + plan.debugName +
                     "\" was not created: " + hairPlan.meshAssetPath);
             (*renderable)->SetTressfxSkinningBinding(binding);
+        }
+
+        // `collision.mesh` 与 skinning 同时存在时，代理改用逐顶点多骨权重。
+        // 转移失败/距离超限在加载期硬错误；没有 collision.mesh 的对象不创建
+        // 权重 buffer，SDF splat 保持单骨根矩阵回退。
+        if (hairPlan.tressfxSimulation.collisionMesh)
+        {
+            const std::shared_ptr<const VL::Hair::SdfProxySkinTransfer> transfer =
+                BuildProxySkinTransfer(hair, *source);
+            for (const MeshObjectBuildPlan& plan : hair.result.objectPlans)
+            {
+                const std::shared_ptr<RenderableObject>* renderable =
+                    resourceCache.GetRenderableObject(plan.meshKey);
+                if (transfer && renderable != nullptr && *renderable != nullptr)
+                    (*renderable)->SetTressfxSdfProxySkin(transfer);
+            }
         }
     }
 }

@@ -31,6 +31,19 @@ std::uint32_t CellFromGridCoordinate(float value, std::uint32_t count)
         return count - 1;
     return static_cast<std::uint32_t>(floored);
 }
+
+// splat 的顶点变换只有一个入口：有逐顶点权重时走 LBS，否则复用根骨矩阵。
+// GPU tressfxSimSdfSplat.comp 用 sdf.counts.y 做同一个分叉。
+Eigen::Vector3f TransformSdfProxyVertex(const Eigen::Matrix4f& skinning,
+    const SdfProxySkinTransfer* proxySkin,
+    const std::vector<Eigen::Matrix4f>* jointMatrices,
+    std::uint32_t index, const Eigen::Vector3f& bindPosition)
+{
+    if (proxySkin != nullptr && jointMatrices != nullptr)
+        return TressfxProxySkinnedPosition(*proxySkin, index, *jointMatrices,
+            bindPosition);
+    return (skinning * bindPosition.homogeneous()).head<3>();
+}
 }
 
 std::uint32_t TressfxSdfResolutionForCellSize(float cellSize, float bindMaxExtent)
@@ -127,13 +140,14 @@ RuntimeResult<TressfxSdfLayout> MakeTressfxSdfLayout(const SdfTriangleMesh& prox
 }
 
 TressfxSdfParams MakeTressfxSdfParams(
-    const TressfxSdfLayout& layout, std::uint32_t triangleCount)
+    const TressfxSdfLayout& layout, std::uint32_t triangleCount, bool proxySkinning)
 {
     TressfxSdfParams params;
     params.originCell = Eigen::Vector4f(layout.origin.x(), layout.origin.y(), layout.origin.z(),
         layout.cellSize);
     params.dims = {layout.dims[0], layout.dims[1], layout.dims[2], layout.CellCount()};
-    params.counts = {triangleCount, 0, 0, 0};
+    // counts.y 是 splat 的分支开关：1 = 逐顶点多骨 LBS，0 = 单骨根矩阵回退。
+    params.counts = {triangleCount, proxySkinning ? 1u : 0u, 0, 0};
     params.range = Eigen::Vector4f(layout.margin, layout.truncation, 0.0f, 0.0f);
     return params;
 }
@@ -155,12 +169,20 @@ void ClearTressfxSdfGrid(const TressfxSdfLayout& layout, std::vector<std::uint32
 }
 
 void SplatTressfxSdfGrid(const TressfxSdfLayout& layout, const SdfTriangleMesh& proxy,
-    const Eigen::Matrix4f& skinning, std::vector<std::uint32_t>& cells)
+    const Eigen::Matrix4f& skinning, std::vector<std::uint32_t>& cells,
+    const SdfProxySkinTransfer* proxySkin,
+    const std::vector<Eigen::Matrix4f>* jointMatrices)
 {
     if (cells.size() != layout.CellCount())
         throw std::invalid_argument("SDF grid splat requires a cleared grid of the layout size");
     if (proxy.indices.size() % 3 != 0)
         throw std::invalid_argument("SDF grid splat requires a triangle index list");
+    // 逐顶点多骨路径要求两份数据同时存在；只有其中一份时按单骨刚性矩阵处理，
+    // 与 shader 的 counts.y 门控一致。
+    const bool useProxySkin = proxySkin != nullptr && jointMatrices != nullptr;
+    if (useProxySkin && proxySkin->vertexCount != proxy.positions.size())
+        throw std::invalid_argument(
+            "SDF grid proxy skin transfer does not match the proxy vertex count");
 
     const std::uint32_t dimsX = layout.dims[0];
     const std::uint32_t dimsY = layout.dims[1];
@@ -175,13 +197,14 @@ void SplatTressfxSdfGrid(const TressfxSdfLayout& layout, const SdfTriangleMesh& 
         if (i0 >= proxy.positions.size() || i1 >= proxy.positions.size() ||
             i2 >= proxy.positions.size())
             throw std::invalid_argument("SDF grid splat triangle index is out of range");
-        // 与 splat shader 相同：先按 params.skinning 变换代理三角形（根点同一矩阵）。
-        const Eigen::Vector3f a =
-            (skinning * proxy.positions[i0].homogeneous()).head<3>();
-        const Eigen::Vector3f b =
-            (skinning * proxy.positions[i1].homogeneous()).head<3>();
-        const Eigen::Vector3f c =
-            (skinning * proxy.positions[i2].homogeneous()).head<3>();
+        // 与 splat shader 相同：先按骨骼变换代理三角形。逐顶点路径使用
+        // 转移后的 LBS 权重，未声明时保持根点同一矩阵。
+        const Eigen::Vector3f a = TransformSdfProxyVertex(skinning, proxySkin,
+            jointMatrices, i0, proxy.positions[i0]);
+        const Eigen::Vector3f b = TransformSdfProxyVertex(skinning, proxySkin,
+            jointMatrices, i1, proxy.positions[i1]);
+        const Eigen::Vector3f c = TransformSdfProxyVertex(skinning, proxySkin,
+            jointMatrices, i2, proxy.positions[i2]);
         if (!FiniteVector(a) || !FiniteVector(b) || !FiniteVector(c))
             throw std::invalid_argument("SDF grid splat produced a non-finite vertex");
 
@@ -230,11 +253,13 @@ void SplatTressfxSdfGrid(const TressfxSdfLayout& layout, const SdfTriangleMesh& 
 }
 
 std::vector<std::uint32_t> BuildTressfxSdfGrid(const TressfxSdfLayout& layout,
-    const SdfTriangleMesh& proxy, const Eigen::Matrix4f& skinning)
+    const SdfTriangleMesh& proxy, const Eigen::Matrix4f& skinning,
+    const SdfProxySkinTransfer* proxySkin,
+    const std::vector<Eigen::Matrix4f>* jointMatrices)
 {
     std::vector<std::uint32_t> cells;
     ClearTressfxSdfGrid(layout, cells);
-    SplatTressfxSdfGrid(layout, proxy, skinning, cells);
+    SplatTressfxSdfGrid(layout, proxy, skinning, cells, proxySkin, jointMatrices);
     return cells;
 }
 

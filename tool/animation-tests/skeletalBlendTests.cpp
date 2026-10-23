@@ -913,6 +913,33 @@ TEST(SkinBounds, DegeneratePaletteStillRejectedByBothPaths)
     EXPECT_TRUE(pose->matrices[0].isApprox(Translation(1, 1, 1), 0));
 }
 
+TEST(SkinBounds, GlobalBindToPoseUsesRestModelIndependentOfSection)
+{
+    SkinSection section;
+    section.inverseBinds = {Identity4()};
+    section.vertices.resize(1);
+    section.vertices[0].position = Eigen::Vector3f(0, 100, 0);
+    section.influenceOffsets = {0, 1};
+    section.influences = {{0, 1.0f}};
+    ComputeJointBindBounds(section);
+    // 绑定姿态关节在 y=100；pose 把它沿 +X 移 5 cm。
+    std::vector<Joint> joints(1);
+    joints[0].restModel = Translation(0, 100, 0);
+    const std::vector<Eigen::Matrix4f> models = {Translation(5, 100, 0)};
+
+    const auto pose = BuildSkinPose(section, models, 0, 0, &joints);
+    ASSERT_EQ(pose->bindToPoseMatrices.size(), 1u);
+    // 全骨架 bind→pose 把绑定空间点映射到姿态空间：T(5,100)*T(0,-100)=T(5,0)。
+    EXPECT_TRUE(pose->bindToPoseMatrices[0].isApprox(Translation(5, 0, 0), 1.0e-5f));
+    // per-section palette 在 inverseBind 为单位阵时退化为绝对 model 矩阵；
+    // 这正是它不能跨 section 复用的原因。
+    EXPECT_TRUE(pose->matrices[0].isApprox(Translation(5, 100, 0), 1.0e-5f));
+
+    // 不传 joints 时保持旧行为：不生成全局矩阵。
+    const auto legacy = BuildSkinPose(section, models, 0);
+    EXPECT_TRUE(legacy->bindToPoseMatrices.empty());
+}
+
 TEST(SkinBounds, WeightSumDeviationIsAbsorbedByConservativeExpansion)
 {
     SkinSection section;

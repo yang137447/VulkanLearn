@@ -32,13 +32,18 @@ constexpr uint32_t SdfParamsBinding = 8;
 constexpr uint32_t SdfTriangleBinding = 9;
 constexpr uint32_t SdfIndexBinding = 10;
 constexpr uint32_t SdfGridBinding = 11;
+// 代理逐顶点蒙皮：CSR 影响流（静态转移表）+ 全骨架 bind→pose palette。
+// palette 由 hair 对象自己按 frame-in-flight 持有：图形 VS 的 per-section
+// palette 对未参与该 section 的关节没有有效 inverseBind，不能跨 section 使用。
+constexpr uint32_t SdfProxyInfluenceBinding = 12;
+constexpr uint32_t SdfPaletteBinding = 13;
 
 // 每个对象需要 GuideSimulationPassCount * GuideSimulationParamBufferCount 个 set
 // （9 * 2 = 18）；按 64 预留，池链只在对象数量溢出时增长。
 constexpr uint32_t DescriptorSetsPerPool = 64;
-// 单个 set 最多 3 个 SSBO（SdfSplat 用代理顶点、索引、距离网格；Collision 用
-// current + colliders）。SdfSplat/SdfCollide 各有两个 UBO（params + SDF params）。
-constexpr uint32_t StorageBuffersPerSet = 4;
+// SdfSplat 是单个 set 的峰值：代理顶点/索引/距离网格/代理影响流/palette 共
+// 5 个 SSBO（Collision 只有 current + colliders，SdfCollide 只有 current + grid）。
+constexpr uint32_t StorageBuffersPerSet = 6;
 constexpr uint32_t UniformBuffersPerSet = 2;
 
 struct PassBinding
@@ -102,6 +107,8 @@ constexpr PassBinding SdfSplatBindings[] = {
     {SdfTriangleBinding, vk::DescriptorType::eStorageBuffer},
     {SdfIndexBinding, vk::DescriptorType::eStorageBuffer},
     {SdfGridBinding, vk::DescriptorType::eStorageBuffer},
+    {SdfProxyInfluenceBinding, vk::DescriptorType::eStorageBuffer},
+    {SdfPaletteBinding, vk::DescriptorType::eStorageBuffer},
 };
 constexpr PassBinding SdfCollideBindings[] = {
     {ParamsBinding, vk::DescriptorType::eUniformBuffer},
@@ -254,12 +261,12 @@ void HairSimulationPass::CreateObjectDescriptors(
     // vulkan-hpp 的 setBufferInfo 只保存指针（ArrayProxyNoTemporaries），因此
     // DescriptorBufferInfo 必须比 UpdateDescriptorSets 活得更久；这里按
     // [frame slot][binding] 放在函数级数组里，元素地址稳定。
-    std::array<std::array<vk::DescriptorBufferInfo, SdfGridBinding + 1>,
+    std::array<std::array<vk::DescriptorBufferInfo, SdfPaletteBinding + 1>,
         GuideSimulationParamBufferCount>
         bindingInfos{};
     for (uint32_t slot = 0; slot < GuideSimulationParamBufferCount; ++slot)
     {
-        std::array<vk::DescriptorBufferInfo, SdfGridBinding + 1>& infos =
+        std::array<vk::DescriptorBufferInfo, SdfPaletteBinding + 1>& infos =
             bindingInfos[slot];
         infos[ParamsBinding] = object.GetTressfxParamsInfo(slot);
         infos[CurrentPositionsBinding] = object.GetTressfxPositionInfo();
@@ -269,11 +276,14 @@ void HairSimulationPass::CreateObjectDescriptors(
         infos[RestPositionsBinding] = object.GetTressfxRestPositionInfo();
         infos[RestLengthsBinding] = object.GetTressfxRestLengthInfo();
         infos[StrandLevelBinding] = object.GetTressfxStrandLevelInfo();
-        infos[CollidersBinding] = object.GetTressfxColliderInfo();
+        infos[CollidersBinding] = object.GetTressfxColliderInfo(slot);
         infos[SdfParamsBinding] = object.GetTressfxSdfParamsInfo(slot);
         infos[SdfTriangleBinding] = object.GetTressfxSdfTriangleInfo();
         infos[SdfIndexBinding] = object.GetTressfxSdfIndexInfo();
         infos[SdfGridBinding] = object.GetTressfxSdfGridInfo();
+        infos[SdfProxyInfluenceBinding] = object.GetTressfxSdfProxyInfluenceInfo();
+        // palette 是对象自己的逐 frame-in-flight buffer（静态句柄），内容每帧写。
+        infos[SdfPaletteBinding] = object.GetTressfxSdfProxyPaletteInfo(slot);
     }
 
     const bool hasSdfCollision = object.HasTressfxSdfCollision();
@@ -320,12 +330,18 @@ void HairSimulationPass::CreateObjectDescriptors(
     descriptors.restPositions = object.GetTressfxRestPositionInfo().buffer;
     descriptors.restLengths = object.GetTressfxRestLengthInfo().buffer;
     descriptors.strandLevel = object.GetTressfxStrandLevelInfo().buffer;
-    descriptors.colliders = object.GetTressfxColliderInfo().buffer;
+    // 胶囊 SSBO 逐槽绑定；内容会随骨骼移动，但 buffer 句柄在创建后不变。
+    for (uint32_t slot = 0; slot < GuideSimulationParamBufferCount; ++slot)
+        descriptors.colliders[slot] = object.GetTressfxColliderInfo(slot).buffer;
     descriptors.sdfGrid = object.GetTressfxSdfGridInfo().buffer;
     descriptors.sdfTriangles = object.GetTressfxSdfTriangleInfo().buffer;
     descriptors.sdfIndices = object.GetTressfxSdfIndexInfo().buffer;
+    descriptors.sdfProxyInfluences =
+        object.GetTressfxSdfProxyInfluenceInfo().buffer;
     for (uint32_t slot = 0; slot < GuideSimulationParamBufferCount; ++slot)
     {
+        descriptors.sdfPalette[slot] =
+            object.GetTressfxSdfProxyPaletteInfo(slot).buffer;
         descriptors.sdfParams[slot] = object.GetTressfxSdfParamsInfo(slot).buffer;
         descriptors.params[slot] = object.GetTressfxParamsInfo(slot).buffer;
     }
@@ -347,13 +363,18 @@ HairSimulationPass::ObjectDescriptors& HairSimulationPass::EnsureObjectDescripto
             descriptors.restPositions == object.GetTressfxRestPositionInfo().buffer &&
             descriptors.restLengths == object.GetTressfxRestLengthInfo().buffer &&
             descriptors.strandLevel == object.GetTressfxStrandLevelInfo().buffer &&
-            descriptors.colliders == object.GetTressfxColliderInfo().buffer &&
             descriptors.sdfGrid == object.GetTressfxSdfGridInfo().buffer &&
             descriptors.sdfTriangles == object.GetTressfxSdfTriangleInfo().buffer &&
-            descriptors.sdfIndices == object.GetTressfxSdfIndexInfo().buffer;
+            descriptors.sdfIndices == object.GetTressfxSdfIndexInfo().buffer &&
+            descriptors.sdfProxyInfluences ==
+                object.GetTressfxSdfProxyInfluenceInfo().buffer;
         for (uint32_t slot = 0; slot < GuideSimulationParamBufferCount && matches; ++slot)
         {
             matches = descriptors.params[slot] == object.GetTressfxParamsInfo(slot).buffer &&
+                descriptors.colliders[slot] ==
+                    object.GetTressfxColliderInfo(slot).buffer &&
+                descriptors.sdfPalette[slot] ==
+                    object.GetTressfxSdfProxyPaletteInfo(slot).buffer &&
                 descriptors.sdfParams[slot] ==
                     object.GetTressfxSdfParamsInfo(slot).buffer;
         }
@@ -489,22 +510,32 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
         // 不复制播放器或骨架状态；pose 缺失时保留上一帧矩阵并只报告一次。
         const VL::Hair::TressfxSkinningBinding& skinning =
             object.GetTressfxSkinningBinding();
+        const VL::RenderDrawPacket* sourceDraw = nullptr;
         if (skinning.enabled)
         {
-            const VL::RenderDrawPacket* sourceDraw = nullptr;
             for (const VL::RenderDrawPacket& packet : renderScene.drawPackets)
             {
                 if (packet.sceneObjectIdentity != skinning.sourceSceneObject ||
                     !packet.skinPose)
                     continue;
-                if (skinning.jointIndex >= packet.skinPose->matrices.size())
-                    continue;
                 sourceDraw = &packet;
                 break;
             }
-            if (sourceDraw != nullptr)
-                state.skinningMatrix = sourceDraw->skinPose->matrices[skinning.jointIndex];
-            else if (!state.reportedMissingSkinPose)            {
+        }
+        // 根点/胶囊/代理都用全骨架 bind→pose（SkinPose::bindToPoseMatrices）：
+        // 图形 VS 的 per-section palette 对“未参与该 section 的关节”保留单位
+        // inverseBind，其矩阵会退化为绝对 model 变换，不能用于跨 section 的
+        // 代理权重。只有旧资产没有这份全局矩阵时才退回 per-section matrices。
+        const std::vector<Eigen::Matrix4f>* jointMatrices = nullptr;
+        if (sourceDraw != nullptr)
+        {
+            const VL::Animation::SkinPose& pose = *sourceDraw->skinPose;
+            jointMatrices = pose.bindToPoseMatrices.empty()
+                ? &pose.matrices : &pose.bindToPoseMatrices;
+            if (skinning.jointIndex < jointMatrices->size())
+                state.skinningMatrix = (*jointMatrices)[skinning.jointIndex];
+            else if (!state.reportedMissingSkinPose)
+            {
                 std::cerr << "[TressFX] skinning pose unavailable for object \""
                           << object.GetName() << "\" source=\""
                           << skinning.sourceSceneObject << "\" bone=\""
@@ -512,6 +543,35 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
                           << std::endl;
                 state.reportedMissingSkinPose = true;
             }
+            // 胶囊骨骼与根骨共用同一个 pose：每个绑定胶囊按自己的关节矩阵变换
+            // a/b，未绑定槽保留作者绑定空间的静态值。radius 不缩放（见
+            // TransformTressfxCapsuleByBone 的注释）。
+            if (!skinning.capsuleJointIndices.empty())
+            {
+                bool anyBoundCapsule = false;
+                for (int32_t joint : skinning.capsuleJointIndices)
+                    anyBoundCapsule |= joint >= 0;
+                if (anyBoundCapsule)
+                {
+                    object.WriteTressfxColliders(
+                        VL::Hair::TransformTressfxCapsulesByBones(
+                            config.capsules, skinning.capsuleJointIndices,
+                            *jointMatrices),
+                        frameSlot);
+                }
+            }
+            // SDF splat 的 palette 是 hair 对象自己的逐帧 buffer（全局
+            // bind→pose）；只在对象声明了 collision.mesh + 权重转移时存在。
+            object.WriteTressfxSdfProxyPalette(*jointMatrices, frameSlot);
+        }
+        else if (skinning.enabled && !state.reportedMissingSkinPose)
+        {
+            std::cerr << "[TressFX] skinning pose unavailable for object \""
+                      << object.GetName() << "\" source=\""
+                      << skinning.sourceSceneObject << "\" bone=\""
+                      << skinning.rootBone << "\"; keeping the last matrix"
+                      << std::endl;
+            state.reportedMissingSkinPose = true;
         }
 
         // 所有 pass 共用 frame-start simulationTime 与同一个 dt，params 只写一次。
@@ -524,10 +584,11 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
             state.simulationTime,
             state.skinningMatrix);
         object.WriteTressfxSimulationParams(params, frameSlot);
-        // SDF 域每帧从蒙皮后的代理包围盒重算；非有限包围盒会返回 false，
-        // 该帧跳过三个 SDF dispatch（object 自己只报告一次）。
+        // SDF 域每帧从蒙皮后的代理包围盒重算；有逐顶点权重时用同一套 LBS，
+        // 否则回退单骨根矩阵。非有限包围盒返回 false，该帧跳过三个 SDF dispatch。
         const bool sdfDomainValid = object.HasTressfxSdfCollision() &&
-            object.WriteTressfxSdfParams(state.skinningMatrix, frameSlot);
+            object.WriteTressfxSdfParams(state.skinningMatrix, jointMatrices,
+                frameSlot);
         state.simulationTime += timeStep;
 
         const uint32_t vertexGroupCount =

@@ -222,6 +222,22 @@ void RenderableObject::WriteTressfxSimulationParams(
     std::memcpy(tressfxParamsTargets[frameSlot].mapped, &params, sizeof(params));
 }
 
+void RenderableObject::WriteTressfxColliders(
+    const std::vector<VL::Hair::TressfxCollider>& capsules, uint32_t frameSlot)
+{
+    if (!tressfxGpuSimulation || frameSlot >= VL::Hair::GuideSimulationParamBufferCount)
+        return;
+    if (capsules.size() > VL::Hair::TressfxMaxColliders)
+        throw std::runtime_error("TressFX collider count exceeds the GPU limit: " + name);
+    // 与 MakeGuideColliderGpu 同一布局；未使用的槽保持零，shader 只读 counts.w 个。
+    std::array<VL::Hair::GuideColliderGpu, VL::Hair::TressfxMaxColliders> gpuColliders{};
+    for (size_t collider = 0; collider < capsules.size(); ++collider)
+        gpuColliders[collider] = VL::Hair::MakeGuideColliderGpu(capsules[collider]);
+    const vk::DeviceSize bytes = sizeof(gpuColliders);
+    std::memcpy(tressfxColliderTargets[frameSlot].mapped, gpuColliders.data(),
+        static_cast<size_t>(bytes));
+}
+
 void RenderableObject::CreateTressfxPositionBuffer()
 {
     if (!IsTressfx())
@@ -412,26 +428,30 @@ void RenderableObject::CreateTressfxGpuSimulationBuffers()
         target.info.setBuffer(target.buffer).setOffset(0)
             .setRange(sizeof(VL::Hair::GuideSimulationParams));
     }
-    // 静态解析胶囊：创建时上传一次。空列表也保留合法 buffer，因为 shader 的
-    // binding 4 是静态声明，不能用空 descriptor；count 由 params.counts.w 控制。
+    // 解析胶囊：每个 frame-in-flight 槽一份 host-coherent SSBO。声明了 bone 的
+    // 胶囊每帧由 HairSimulationPass 重写；无 bone 的胶囊内容保持创建时的作者值。
+    // 空列表也保留合法 buffer，因为 shader 的 binding 7 是静态声明，不能用空
+    // descriptor；count 由 params.counts.w 控制。
     const vk::DeviceSize colliderBytes =
         sizeof(VL::Hair::GuideColliderGpu) * VL::Hair::TressfxMaxColliders;
     std::array<VL::Hair::GuideColliderGpu, VL::Hair::TressfxMaxColliders> gpuColliders{};
     const auto& capsules = section.tressfxSimulation.capsules;
+    if (capsules.size() > VL::Hair::TressfxMaxColliders)
+        throw std::runtime_error("TressFX collider count exceeds the GPU limit: " + name);
     for (size_t collider = 0; collider < capsules.size(); ++collider)
         gpuColliders[collider] = VL::Hair::MakeGuideColliderGpu(capsules[collider]);
-    std::tie(tressfxColliderBuffer, tressfxColliderMemory) =
-        rendererBackend->CreateBuffer(
+    for (uint32_t slot = 0; slot < VL::Hair::GuideSimulationParamBufferCount; ++slot)
+    {
+        auto& target = tressfxColliderTargets[slot];
+        std::tie(target.buffer, target.memory) = rendererBackend->CreateBuffer(
             colliderBytes,
             vk::BufferUsageFlagBits::eStorageBuffer,
             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
-            "TressFXColliders: " + name);
-    void* colliderMapped =
-        rendererBackend->MapMemory(tressfxColliderMemory, colliderBytes);
-    std::memcpy(colliderMapped, gpuColliders.data(), static_cast<size_t>(colliderBytes));
-    rendererBackend->UnmapMemory(tressfxColliderMemory);
-    tressfxColliderInfo
-        .setBuffer(tressfxColliderBuffer).setOffset(0).setRange(colliderBytes);
+            "TressFXColliders: " + name + ":" + std::to_string(slot));
+        target.mapped = rendererBackend->MapMemory(target.memory, colliderBytes);
+        std::memcpy(target.mapped, gpuColliders.data(), static_cast<size_t>(colliderBytes));
+        target.info.setBuffer(target.buffer).setOffset(0).setRange(colliderBytes);
+    }
 
     // `collision.mesh` 的距离场资源：只在声明了代理时创建；失败让整个
     // renderable 构造失败（构造函数的 catch 会回收已建 buffer）。
@@ -521,6 +541,35 @@ void RenderableObject::CreateTressfxSdfBuffers()
     tressfxSdfResolution = layout.resolution;
     tressfxSdfCollision = true;
 
+    // SDF splat 的 shader 静态声明 bindings 12/13，因此即使没有权重转移也必须
+    // 提供有效 descriptor。占位影响流是 16 字节零；占位 palette 是 current/
+    // previous 两个单位矩阵（128 bytes），shader 在 counts.y=0 时不读取它们。
+    const std::array<std::uint32_t, 4> placeholderInfluences{0, 0, 0, 0};
+    const vk::DeviceSize influenceBytes = sizeof(placeholderInfluences);
+    std::tie(tressfxSdfProxyInfluenceBuffer, tressfxSdfProxyInfluenceMemory) =
+        CreateUploadedDeviceLocalStorageBuffer(*rendererBackend,
+            placeholderInfluences.data(), influenceBytes,
+            "TressFXSdfProxyInfluences: " + name);
+    tressfxSdfProxyInfluenceInfo.setBuffer(tressfxSdfProxyInfluenceBuffer)
+        .setOffset(0).setRange(influenceBytes);
+
+    const std::array<Eigen::Matrix4f, 2> identityPalette{
+        Eigen::Matrix4f::Identity(), Eigen::Matrix4f::Identity()};
+    const vk::DeviceSize paletteBytes = sizeof(identityPalette);
+    for (uint32_t slot = 0; slot < VL::Hair::GuideSimulationParamBufferCount; ++slot)
+    {
+        auto& target = tressfxSdfProxyPaletteTargets[slot];
+        std::tie(target.buffer, target.memory) = rendererBackend->CreateBuffer(
+            paletteBytes,
+            vk::BufferUsageFlagBits::eStorageBuffer,
+            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+            "TressFXSdfProxyPalette: " + name + ":" + std::to_string(slot));
+        target.mapped = rendererBackend->MapMemory(target.memory, paletteBytes);
+        std::memcpy(target.mapped, identityPalette.data(),
+            static_cast<size_t>(paletteBytes));
+        target.info.setBuffer(target.buffer).setOffset(0).setRange(paletteBytes);
+    }
+
     std::cout << "[TressFX] SDF collision buffer: object=\"" << name
               << "\" proxyTriangles=" << triangleCount
               << " resolution=" << layout.resolution << "^3"
@@ -529,8 +578,137 @@ void RenderableObject::CreateTressfxSdfBuffers()
               << " (domain is rebuilt per frame)" << std::endl;
 }
 
+void RenderableObject::SetTressfxSdfProxySkin(
+    std::shared_ptr<const VL::Hair::SdfProxySkinTransfer> transfer)
+{
+    if (!transfer)
+        return;
+    if (!tressfxSdfCollision)
+        throw std::runtime_error(
+            "TressFX proxy skin transfer requires collision.mesh: " + name);
+    if (tressfxSdfProxySkin)
+    {
+        // 同一 SM 的多个场景 placement 共享同一个 RenderableObject；每个
+        // placement 都会解析一次转移表。保留第一份即可（同一资产的权重相同），
+        // 不重复创建缓冲，也不把正常的共享 placement 当成加载错误。
+        return;
+    }
+    if (transfer->words.empty())
+        throw std::runtime_error(
+            "TressFX proxy skin transfer has no influence words: " + name);
+    if (transfer->jointCount == 0)
+        throw std::runtime_error(
+            "TressFX proxy skin transfer has no skeleton joints: " + name);
+
+    const vk::DeviceSize bytes =
+        static_cast<vk::DeviceSize>(transfer->words.size()) * sizeof(std::uint32_t);
+    vk::Buffer buffer = nullptr;
+    vk::DeviceMemory memory = nullptr;
+    // 先建新 buffer，成功后再回收占位 buffer；失败不影响已发布状态。
+    std::tie(buffer, memory) = CreateUploadedDeviceLocalStorageBuffer(
+        *rendererBackend, transfer->words.data(), bytes,
+        "TressFXSdfProxyInfluences: " + name);
+    if (tressfxSdfProxyInfluenceBuffer)
+        rendererBackend->DestroyBuffer(tressfxSdfProxyInfluenceBuffer,
+            tressfxSdfProxyInfluenceMemory);
+    tressfxSdfProxyInfluenceBuffer = buffer;
+    tressfxSdfProxyInfluenceMemory = memory;
+    tressfxSdfProxyInfluenceInfo.setBuffer(buffer).setOffset(0).setRange(bytes);
+    tressfxSdfProxySkin = std::move(transfer);
+
+    // 代理权重可能引用多个 body section 的关节，图形 VS 的 per-section palette
+    // 对未参与该 section 的关节没有有效 inverseBind，不能直接复用。这里按全骨架
+    // bind→pose 重建每槽 palette（jointCount × current/previous 各 64 bytes）。
+    const uint32_t jointCount = tressfxSdfProxySkin->jointCount;
+    const vk::DeviceSize paletteBytes =
+        static_cast<vk::DeviceSize>(jointCount) * 128u;
+    std::array<TressfxParamsTarget, VL::Hair::GuideSimulationParamBufferCount>
+        replacement{};
+    const std::array<Eigen::Matrix4f, 2> identity{
+        Eigen::Matrix4f::Identity(), Eigen::Matrix4f::Identity()};
+    try
+    {
+        for (uint32_t slot = 0; slot < VL::Hair::GuideSimulationParamBufferCount; ++slot)
+        {
+            TressfxParamsTarget& target = replacement[slot];
+            std::tie(target.buffer, target.memory) = rendererBackend->CreateBuffer(
+                paletteBytes,
+                vk::BufferUsageFlagBits::eStorageBuffer,
+                vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+                "TressFXSdfProxyPalette: " + name + ":" + std::to_string(slot));
+            target.mapped = rendererBackend->MapMemory(target.memory, paletteBytes);
+            for (uint32_t joint = 0; joint < jointCount; ++joint)
+            {
+                void* destination = static_cast<unsigned char*>(target.mapped) +
+                    static_cast<size_t>(joint) * 128u;
+                std::memcpy(destination, identity.front().data(), 64);
+                std::memcpy(static_cast<unsigned char*>(destination) + 64,
+                    identity.back().data(), 64);
+            }
+            target.info.setBuffer(target.buffer).setOffset(0).setRange(paletteBytes);
+        }
+    }
+    catch (...)
+    {
+        // 配对成功前失败：回收已建的新槽，保留旧的占位 palette 可用。
+        for (TressfxParamsTarget& target : replacement)
+        {
+            if (target.mapped)
+                rendererBackend->UnmapMemory(target.memory);
+            if (target.buffer)
+                rendererBackend->DestroyBuffer(target.buffer, target.memory);
+        }
+        throw;
+    }
+    for (TressfxParamsTarget& target : tressfxSdfProxyPaletteTargets)
+    {
+        if (target.mapped)
+            rendererBackend->UnmapMemory(target.memory);
+        if (target.buffer)
+            rendererBackend->DestroyBuffer(target.buffer, target.memory);
+    }
+    tressfxSdfProxyPaletteTargets = replacement;
+
+    // 一次性加载诊断：证明权重重转移规模与绑定身体的空间距离，便于从用户日志
+    // 直接判断资产是否错位（正式代理实测最大 < 1 cm）。
+    std::cout << "[TressFX] SDF proxy skin transfer: object=\"" << name
+              << "\" proxyVertices=" << tressfxSdfProxySkin->vertexCount
+              << " influenceBytes=" << bytes
+              << " maxInfluences=" << tressfxSdfProxySkin->maxInfluences
+              << " jointCount=" << tressfxSdfProxySkin->jointCount
+              << " paletteBytesPerSlot=" << paletteBytes
+              << " uniqueBodyVertices=" << tressfxSdfProxySkin->uniqueBodyVertices
+              << " maxNearestDistanceCm=" << tressfxSdfProxySkin->maxNearestDistanceCm
+              << std::endl;
+}
+
+void RenderableObject::WriteTressfxSdfProxyPalette(
+    const std::vector<Eigen::Matrix4f>& bindToPoseMatrices, uint32_t frameSlot)
+{
+    if (!tressfxSdfProxySkin || tressfxSdfProxySkin->jointCount == 0 ||
+        frameSlot >= VL::Hair::GuideSimulationParamBufferCount)
+        return;
+    const uint32_t jointCount = tressfxSdfProxySkin->jointCount;
+    auto* destination =
+        static_cast<unsigned char*>(tressfxSdfProxyPaletteTargets[frameSlot].mapped);
+    const Eigen::Matrix4f identity = Eigen::Matrix4f::Identity();
+    for (uint32_t joint = 0; joint < jointCount; ++joint)
+    {
+        // 骨架关节数应覆盖转移表引用上界；缺少时保留 identity，避免把越界
+        // 矩阵写进 buffer（shader 只按转移表里的 joint 索引读取）。
+        const Eigen::Matrix4f& matrix = joint < bindToPoseMatrices.size()
+            ? bindToPoseMatrices[joint]
+            : identity;
+        std::memcpy(destination + static_cast<size_t>(joint) * 128u,
+            matrix.data(), 64);
+        std::memcpy(destination + static_cast<size_t>(joint) * 128u + 64,
+            matrix.data(), 64);
+    }
+}
+
 bool RenderableObject::WriteTressfxSdfParams(
-    const Eigen::Matrix4f& skinningMatrix, uint32_t frameSlot)
+    const Eigen::Matrix4f& skinningMatrix,
+    const std::vector<Eigen::Matrix4f>* jointMatrices, uint32_t frameSlot)
 {
     if (!tressfxSdfCollision || !imported ||
         frameSlot >= VL::Hair::GuideSimulationParamBufferCount)
@@ -539,15 +717,46 @@ bool RenderableObject::WriteTressfxSdfParams(
     if (!section.tressfxCollisionMesh || !section.tressfxSimulation.collisionMesh)
         return false;
 
-    // 逐帧域：把 2,572 个代理顶点按同一根骨矩阵蒙皮后求包围盒。CPU 成本可忽略，
-    // 但能得到精确的变形后域，而不是绑定姿态包围盒的保守估计。
+    // 有转移表且本帧拿到了源 SkinPose 时，域必须与 GPU splat 使用同一套逐顶点
+    // LBS：否则域可能漏掉被多骨蒙皮推到包围盒外的代理顶点。没有转移/pose 时
+    // 保持原来的单骨根矩阵路径，域也按同一矩阵计算。
+    const bool useProxySkin =
+        tressfxSdfProxySkin != nullptr && jointMatrices != nullptr;
+    const VL::Hair::SdfTriangleMesh& proxy = *section.tressfxCollisionMesh;
+
     Eigen::Vector3f boundsMin = Eigen::Vector3f::Zero();
     Eigen::Vector3f boundsMax = Eigen::Vector3f::Zero();
     bool hasBounds = false;
-    for (const Eigen::Vector3f& rest : section.tressfxCollisionMesh->positions)
+    for (std::size_t index = 0; index < proxy.positions.size(); ++index)
     {
-        const Eigen::Vector3f position =
-            (skinningMatrix * rest.homogeneous()).head<3>();
+        const Eigen::Vector3f& rest = proxy.positions[index];
+        Eigen::Vector3f position;
+        if (useProxySkin)
+        {
+            try
+            {
+                position = VL::Hair::TressfxProxySkinnedPosition(
+                    *tressfxSdfProxySkin, static_cast<uint32_t>(index),
+                    *jointMatrices, rest);
+            }
+            catch (const std::out_of_range&)
+            {
+                // pose 与转移表的关节空间不一致属于资产/骨架契约破坏；保留明确
+                // 失败（只报告一次）而不是写一个缺骨的域。
+                if (!reportedSdfDomainFailure)
+                {
+                    std::cerr << "[TressFX] SDF domain skipped for object \"" << name
+                              << "\": proxy skin transfer joint is outside the source pose"
+                              << std::endl;
+                    reportedSdfDomainFailure = true;
+                }
+                return false;
+            }
+        }
+        else
+        {
+            position = (skinningMatrix * rest.homogeneous()).head<3>();
+        }
         if (!std::isfinite(position.x()) || !std::isfinite(position.y()) ||
             !std::isfinite(position.z()))
         {
@@ -589,7 +798,7 @@ bool RenderableObject::WriteTressfxSdfParams(
     }
     const VL::Hair::TressfxSdfLayout& domain = domainResult.Value();
     const VL::Hair::TressfxSdfParams params =
-        VL::Hair::MakeTressfxSdfParams(domain, tressfxSdfTriangleCount);
+        VL::Hair::MakeTressfxSdfParams(domain, tressfxSdfTriangleCount, useProxySkin);
     std::memcpy(tressfxSdfParamsTargets[frameSlot].mapped, &params, sizeof(params));
 
     if (!reportedSdfDomain)
@@ -630,9 +839,14 @@ void RenderableObject::DestroyTressfxBuffers()
         if (tressfxStrandLevelBuffer)
             rendererBackend->DestroyBuffer(
                 tressfxStrandLevelBuffer, tressfxStrandLevelMemory);
-        if (tressfxColliderBuffer)
-            rendererBackend->DestroyBuffer(
-                tressfxColliderBuffer, tressfxColliderMemory);
+        for (auto& target : tressfxColliderTargets)
+        {
+            if (target.mapped)
+                rendererBackend->UnmapMemory(target.memory);
+            if (target.buffer)
+                rendererBackend->DestroyBuffer(target.buffer, target.memory);
+            target = {};
+        }
         if (tressfxSdfGridBuffer)
             rendererBackend->DestroyBuffer(
                 tressfxSdfGridBuffer, tressfxSdfGridMemory);
@@ -642,6 +856,17 @@ void RenderableObject::DestroyTressfxBuffers()
         if (tressfxSdfIndexBuffer)
             rendererBackend->DestroyBuffer(
                 tressfxSdfIndexBuffer, tressfxSdfIndexMemory);
+        if (tressfxSdfProxyInfluenceBuffer)
+            rendererBackend->DestroyBuffer(tressfxSdfProxyInfluenceBuffer,
+                tressfxSdfProxyInfluenceMemory);
+        for (auto& target : tressfxSdfProxyPaletteTargets)
+        {
+            if (target.mapped)
+                rendererBackend->UnmapMemory(target.memory);
+            if (target.buffer)
+                rendererBackend->DestroyBuffer(target.buffer, target.memory);
+            target = {};
+        }
         for (auto& target : tressfxSdfParamsTargets)
         {
             if (target.mapped)

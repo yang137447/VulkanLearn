@@ -220,7 +220,8 @@ namespace
                     std::string(meshAssetPath));
             for (auto field = item.begin(); field != item.end(); ++field)
             {
-                if (field.key() != "a" && field.key() != "b" && field.key() != "radius")
+                if (field.key() != "a" && field.key() != "b" && field.key() != "radius" &&
+                    field.key() != "bone")
                     throw std::runtime_error(
                         "TressFX collision capsule has unknown field \"" +
                         field.key() + "\": " + std::string(meshAssetPath));
@@ -241,8 +242,34 @@ namespace
                 throw std::runtime_error(
                     "TressFX collision capsule radius must be finite and positive: " +
                     std::string(meshAssetPath));
+            // 可选骨骼绑定：作者空间仍是绑定空间，运行期只按该关节的
+            // bind→pose 矩阵变换端点。空字符串不是“未绑定”的合法写法。
+            if (item.contains("bone"))
+            {
+                if (!item.at("bone").is_string() ||
+                    item.at("bone").get<std::string>().empty())
+                    throw std::runtime_error(
+                        "TressFX collision capsule bone must be a non-empty string: " +
+                        std::string(meshAssetPath));
+                collider.bone = item.at("bone").get<std::string>();
+            }
             capsules.push_back(collider);
         }
+        // 骨骼绑定需要源对象骨架来解析关节；声明 bone 却没有 skinning.source
+        // 会让运行期无矩阵可用，必须在加载期拒绝而不是静默保持静态。
+        // 同理，CPU 参考 solver 没有渲染线程的 SkinPose。
+        bool anyCapsuleBone = false;
+        for (const VL::Hair::TressfxCollider& capsule : capsules)
+            anyCapsuleBone |= !capsule.bone.empty();
+        if (anyCapsuleBone && !loadPlan.tressfxSimulation.skinning)
+            throw std::runtime_error(
+                "TressFX collision capsule bone requires simulation.skinning "
+                "(source and rootBone): " + std::string(meshAssetPath));
+        if (anyCapsuleBone &&
+            loadPlan.tressfxSimulation.backend != TressfxSimulationBackend::Gpu)
+            throw std::runtime_error(
+                "TressFX collision capsule bone requires simulation.backend = \"gpu\": " +
+                std::string(meshAssetPath));
 
         if (!collision.contains("mesh"))
             return;
@@ -649,7 +676,8 @@ MeshAssetBuildPlan MeshAssetValidator::BuildLoadPlan(
         {
             identity << "|cap=" << capsule.a.x() << "," << capsule.a.y() << ","
                      << capsule.a.z() << ":" << capsule.b.x() << "," << capsule.b.y()
-                     << "," << capsule.b.z() << ":" << capsule.radius;
+                     << "," << capsule.b.z() << ":" << capsule.radius
+                     << ":" << capsule.bone;
         }
         // SDF 代理路径、格距和 margin 都改变运行时距离场与碰撞行为，必须进入
         // 模型缓存身份；两个只差碰撞网格的 SM 不能共享 renderable 与 GPU 网格。

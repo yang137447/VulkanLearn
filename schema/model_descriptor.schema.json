@@ -171,6 +171,11 @@
                                 "type": "number",
                                 "exclusiveMinimum": 0,
                                 "description": "胶囊半径，厘米。"
+                            },
+                            "bone": {
+                                "type": "string",
+                                "minLength": 1,
+                                "description": "可选的目标骨架关节名；给出时运行期按该关节的 bind→pose 矩阵变换 a/b（radius 不缩放）。缺省保持绑定空间静态；需要 simulation.skinning 且 GPU backend。"
                             }
                         },
                         "required": ["a", "b", "radius"],
@@ -179,7 +184,7 @@
                 },
                 "mesh": {
                     "type": "object",
-                    "description": "GPU 逐帧重建的碰撞距离场：低模代理 OBJ 与代理表面要保持的最小距离。缺省时只有胶囊碰撞，行为与引入该块之前一致。",
+                    "description": "GPU 逐帧重建的碰撞距离场：低模代理 OBJ 与代理表面要保持的最小距离。缺省时只有胶囊碰撞。同时有 simulation.skinning 时代理逐顶点权重从绑定姿态身体最近顶点转移并归一化；没有 skinning 时回退到根骨单矩阵。",
                     "properties": {
                         "path": {
                             "type": "string",

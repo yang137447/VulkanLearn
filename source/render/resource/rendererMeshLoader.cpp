@@ -241,6 +241,9 @@ RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
         meshObjectPlans.push_back(std::move(meshObjectPlan));
     }
 
+    // 保留导入结果供跨对象解析（collision.mesh 的权重转移读取源骨骼 section），
+    // 不复制几何；World 资源包与 renderable 共享同一份导入数据。
+    result.importResult = imported;
     return result;
 }
 

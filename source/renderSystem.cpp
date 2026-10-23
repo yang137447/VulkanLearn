@@ -34,6 +34,7 @@
 #include "render/resource/rendererResourceLoadContext.h"
 #include "render/resource/resourceRetireQueue.h"
 #include "render/rendergraph/preparedRenderGraphState.h"
+#include "renderableObject.h"
 #include "material/materialAssetUtils.h"
 #include "material/loader/materialInstanceResolver.h"
 #include "render/backend/rendererBackendVulkan.h"
