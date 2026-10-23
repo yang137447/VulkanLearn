@@ -366,7 +366,8 @@ MaterialInstanceBuildPlan MaterialInstanceValidator::BuildLoadPlan(
     const nlohmann::json& materialInstanceJson,
     std::string_view materialPath,
     const nlohmann::json& materialJson,
-    bool supportsDualSourceBlend)
+    bool supportsDualSourceBlend,
+    bool prerenderSkin)
 {
     MaterialInstanceBuildPlan loadPlan;
     loadPlan.shaderVariantKey.shaderName =
@@ -391,6 +392,21 @@ MaterialInstanceBuildPlan MaterialInstanceValidator::BuildLoadPlan(
     loadPlan.shaderVariantKey.shadingModelMacro =
         MaterialAssetUtils::ShadingModelToShaderDefine(shadingModel);
     loadPlan.shaderVariantKey.macros = ParseMaterialMacros(materialInstanceJson);
+    // 预蒙皮是引擎拥有的变体维度：材质不能自行声明，离线/编辑器预览路径
+    // 也走同一个 BuildLoadPlan，因此 flag 必须显式传入而不是读全局。
+    if (HasMaterialMacroName(loadPlan.shaderVariantKey.macros, "VL_SKINNED_PRERENDERED"))
+    {
+        throw std::runtime_error(
+            "VL_SKINNED_PRERENDERED is engine-owned and cannot be authored by a material: " +
+            std::string(materialInstancePath));
+    }
+    if (prerenderSkin && HasMaterialMacroValue(
+            loadPlan.shaderVariantKey.macros, "VL_SKINNED_MESH", "1"))
+    {
+        loadPlan.shaderVariantKey.macros.push_back("VL_SKINNED_PRERENDERED=1");
+        loadPlan.shaderVariantKey.macros = NormalizeMaterialMacros(
+            std::move(loadPlan.shaderVariantKey.macros));
+    }
     const bool strandFactory = HasMaterialMacroValue(
         loadPlan.shaderVariantKey.macros, "VL_TRESSFX_STRANDS", "1");
     if (strandFactory)

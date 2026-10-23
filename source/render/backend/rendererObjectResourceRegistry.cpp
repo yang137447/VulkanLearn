@@ -57,7 +57,8 @@ void RendererObjectResourceRegistry::InitializeResolvedSceneResources(
     const RendererDescriptorContext& descriptorContext,
     const RenderScene& renderScene,
     ResolvedRenderScene& resolvedRenderScene,
-    RendererResourceCache& resourceCache) const
+    RendererResourceCache& resourceCache,
+    bool prerenderSkin) const
 {
     for (ResolvedMaterialGroup& materialGroup : resolvedRenderScene.materialGroups)
     {
@@ -98,6 +99,11 @@ void RendererObjectResourceRegistry::InitializeResolvedSceneResources(
                     auto& resources = objectResourceEntry->GetResources();
                     resources.skinJointCount = drawPacket.skinPose->matrices.size();
                     resources.skinInfluences = renderable->GetSkinInfluenceInfo();
+                    // GPU 预蒙皮的对象级输入：compute 直接读同一份顶点流，输出
+                    // 按 gl_VertexIndex 寻址，因此顶点数必须在这里冻结。
+                    resources.prerenderSkin = prerenderSkin;
+                    resources.skinDeformVertexCount = renderable->GetVertexCount();
+                    resources.skinSourceVertices = renderable->GetVertexBufferInfo();
                 }
                 if (!objectResourceEntry->GetResources().initialized)
                 {

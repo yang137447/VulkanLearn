@@ -172,6 +172,12 @@ LaunchOptions ParseLaunchOptions(int argc, char** argv)
             continue;
         }
 
+        if (argument == "--prerender-skin")
+        {
+            options.prerenderSkin = true;
+            continue;
+        }
+
         if (argument == "--perf-jsonl")
         {
             // 路径是必需值：缺少路径或把下一个 flag 当路径都必须报错，
@@ -357,6 +363,7 @@ void PrintLaunchUsage()
         << "       main.exe [--worker-thread-count <1|2>]\n"
         << "       main.exe [--frame-limit <hz>]\n"
         << "       main.exe [--gpu-stats]\n"
+        << "       main.exe [--prerender-skin]\n"
         << "       main.exe [--perf-jsonl <path>]\n"
         << "       main.exe [--initial-scene <scene-path>] [--console-command \"<cmd>\"]...\n"
         << "  --shader-force-rebuild              Recompile and republish every startup shader artifact.\n"
@@ -367,6 +374,7 @@ void PrintLaunchUsage()
         << "  --worker-thread-count <1|2>         Override config worker mode for this process.\n"
         << "  --frame-limit <hz>                  Cap render frame pacing at 1..1000 Hz (default 0 = uncapped; fixed 60 Hz physics unchanged).\n"
         << "  --gpu-stats                         Log a per-pass GPU timestamp table every 120 frames (default off).\n"
+        << "  --prerender-skin                    Pre-skin skinned meshes once per frame in compute; geometry/shadow read the result (default off).\n"
         << "  --perf-jsonl <path>                 Append one perf JSON line per second to <path> (creates parent directories; enables GPU collection).\n"
         << "  --console-command <line>            Queue one debug console command at startup. Repeatable.\n"
         << "  --console-command-delay <frames>    Frames to wait before submitting queued console commands (default 60).\n"

@@ -8,6 +8,9 @@
 - 启动参数 `--gpu-stats`（`source/engine/launchOptions.*`）：默认关闭；打开后每采集 120 帧向
   `Info` 级日志打印一张 `[GPU] frame avg over N: ...` 表。关闭且从未执行 `gpustats` 时**不创建**
   timestamp query pool；控制台按需启用后才创建。
+- 启动参数 `--prerender-skin`（`source/engine/launchOptions.*`）：默认关闭；打开时每帧在
+  `hairSimulation` 之后、pass 循环之前录制 `SkinDeformPass`，并在 GPU 表中新增
+  `skinnedDeform` 一行。
 - 控制台命令 `gpustats`（`source/debugConsole.cpp`）：把 `RuntimeCommandType::PrintGpuPassStats`
   排入 `CommandBus`，由 `RuntimeCommandExecutor` 在当前 GT tick 调用
   `RenderSystem::PrintGpuPassStats()`。它立即打印最近一次读回的窗口；没有可用样本时打印一行
@@ -29,10 +32,13 @@
 2. 若 `HairSimulationPass::HasWork()` 为真，在 `RecordHairSimulation()` 前后各写一个
    timestamp，合成一项 `hairSimulation`。该阶段内部的所有 compute dispatch 都归入这一项。
    没有 hair dispatch 的帧不写 timestamp、不占 query 槽位。
-3. 遍历 `renderGraph.GetRenderpassesOrdered()`，对每个**实际录制**的 pass 在
+3. 若 `--prerender-skin` 打开且 `SkinDeformPass::HasWork()` 为真，在
+   `RecordSkinDeform()` 前后各写一个 timestamp，合成一项 `skinnedDeform`。它覆盖本帧
+   palette 上传之后的全部预蒙皮 dispatch；没有蒙皮对象或 flag 关闭时不写 timestamp。
+4. 遍历 `renderGraph.GetRenderpassesOrdered()`，对每个**实际录制**的 pass 在
    `VulkanDebug::ScopedRegion` 之前写 begin、在 `PassRuntime::RecordPass()` 返回后写 end。
    被跳过的 pass（无环境时的 sky、非视口时的 editorGrid）不占用 query 槽位。
-4. `SubmitFrame` 之前 `GpuPassTimer::EndFrame()` 把本帧名字列表交给延迟读回。
+5. `SubmitFrame` 之前 `GpuPassTimer::EndFrame()` 把本帧名字列表交给延迟读回。
 
 每个 timestamp 都写在 render pass 实例**外部**；pass 自己 `vkCmdBeginRenderPass` 时，begin
 timestamp 已经在实例之前，end timestamp 在 `vkCmdEndRenderPass` 之后。
@@ -50,7 +56,7 @@ end 等待本 pass 完整结束，因此 `duration` 是"该 pass 的串行 GPU �
   slot 的 pool；`RenderSystem::InitializeFrameResources()` / `ShutdownFrameResources()` 随帧资源
   创建/销毁，swapchain 重建（`ReleaseSwapchainDependentResources` → `RebuildSwapchainDependentResources`）
   会先销毁再重建。
-- 每帧最多记录 64 项（含 `hairSimulation`）。超过时只记录前 64 项并写一次
+- 每帧最多记录 64 项（含 `hairSimulation` / `skinnedDeform`）。超过时只记录前 64 项并写一次
   `[GPU] pass timing capped at 64 entries per frame` 警告；不重建 pool，避免与仍在飞行的查询冲突。
 - `vkCmdResetQueryPool` 在每个 slot 复用时写入该帧命令缓冲，位于该帧任何 timestamp 之前。
 
@@ -212,7 +218,7 @@ Performance 页的 CPU 表只消费这份快照：标题与表头把 CPU 阶段�
 ```
 
 - `fps`、`cpuMs`、`gpuTotalMs` 是数字或 `null`；`valid` 是布尔值。
-- `passes` 始终存在，顺序等于 RenderGraph 录制顺序（有 hair 时 `hairSimulation` 最前）。
+- `passes` 始终存在，顺序等于录制顺序：有 hair 时 `hairSimulation` 最前，随后是开启预蒙皮时的 `skinnedDeform`，其余按 RenderGraph 录制顺序。
 - `cpuStages` 始终存在，位于 `passes` 之后；顺序固定为 `input`、`scripts`、`animation`、
   `hairSimulation`、`worldSnapshot`、`uiViewModel`、`renderRecord`、`submitPresent`、`other`。
 - 单个 pass 或 CPU 阶段没有有效样本时写 `"ms":null`，不是 0；`cpuMs` 缺失时 `other` 也是
@@ -230,7 +236,7 @@ Performance 页的 CPU 表只消费这份快照：标题与表头把 CPU 阶段�
 纯逻辑在 `source/render/backend/gpuPassTimings.h`，CPU 环形平均在
 `source/core/cpuFrameProfiler.h`，两者使用同一套窗口规则：
 
-- 名字顺序 = 稳定输出顺序：GPU 有 hair 时 `hairSimulation` 在最前，其余按 RenderGraph pass
+- 名字顺序 = 稳定输出顺序：GPU 有 hair 时 `hairSimulation` 在最前，开启预蒙皮时 `skinnedDeform` 紧随其后，其余按 RenderGraph pass
   顺序；CPU 固定为 `input`..`submitPresent`，`other` 最后；
 - 窗口容量 120 帧；`avg over N` 的 `N` 是当前窗口内已采集的帧数（不足 120 时为实际帧数）；
 - 某一项在窗口内没有任何有效样本时输出 `n/a`；部分样本为 `n/a` 时该行按自己的有效样本平均，
@@ -266,7 +272,7 @@ JSON 的固定键序与 pass 列表保持不变。关闭 `--gpu-stats` 时不打
 - begin/end 的 `BOTTOM_OF_PIPE` 把每个 pass 串行化，因此 `duration` 是"该 pass 独占 GPU 的
   时间"，不是异步 overlap 后的 wall-clock 贡献。真实帧时间里 compute/graphics 若有 overlap，
   各 pass 之和会大于这部分实际占用。
-- `hairSimulation` 覆盖 `HairSimulationPass::Record()` 内部所有 dispatch（9 个 compute pass，
+- `skinnedDeform` 覆盖 `SkinDeformPass::Record()` 内部所有逐对象 dispatch（一个对象一个 dispatch），不是逐顶点拆分。`--prerender-skin` 关闭时该行不出现。\n- `hairSimulation` 覆盖 `HairSimulationPass::Record()` 内部所有 dispatch（9 个 compute pass，
   含可选的 SDF Clear/Splat/Collide），不是逐 dispatch 拆分。
 - CPU 阶段只覆盖 GT Tick 的指定区间；`cpuMs` 本身是渲染/曝光帧 delta，包含帧率上限的等待、
   UI 线程调度与宿主噪声。`other` 因此既可能是未计时的小段 GT 工作，也可能是 pacing/调度空档；
@@ -293,7 +299,9 @@ JSON 的固定键序与 pass 列表保持不变。关闭 `--gpu-stats` 时不打
   光源视锥六个平面的内/外/跨越/相切、退化与倒置包围盒、非有限输入、padding，
   当前 skinPose 包围盒替换 bind pose 的用例，以及接收面光源空间 XY 预筛的重叠/分离/
   跨越/退化输入。
-- `tool/engine-launch-options-tests/launch_options_test.cpp`（`engine_launch_options_tests`，6 项）：
+- `tool/renderer-backend-tests/skin_deform_test.cpp`（同一套件，10 项）：预蒙皮输出 stride/offset 与 64 B/顶点、dispatch 上取整、CPU 参考的 identity/rotation/translation/multi-influence 与逆转置法线、镜像 handedness。
+- `tool/material-schema-tests/skinDeformMaterialTests.cpp`（`material_schema_tests`，3 项）：引擎宏只加到蒙皮材质、进入 variant/material 缓存身份、资产自声明被拒绝。
+- `tool/engine-launch-options-tests/launch_options_test.cpp`（`engine_launch_options_tests`，8 项）：
   `--gpu-stats` 默认关闭/可接受/与既有参数组合、`--perf-jsonl` 默认关闭/路径必填/
   与 `--gpu-stats` 组合，未知参数仍被拒绝。
 - `tool/editor-ui-tests/uiViewModelRefreshTests.cpp`（`editor_ui_tests`，11 项）：

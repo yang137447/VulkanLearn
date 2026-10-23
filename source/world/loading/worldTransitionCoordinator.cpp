@@ -154,6 +154,9 @@ WorldTransitionCoordinator::PrepareWorldLoad(
         loadContext.offlineWorldAssets =
             prepared.offlineWorldAssets.get();
         loadContext.offlineOnly = RenderSystem::GetInstance().IsOfflineMode();
+        // 预蒙皮是启动级开关：候选 World 的材质变体与对象 buffer 必须与
+        // RenderSystem 后续帧录制使用同一个值。
+        loadContext.prerenderSkin = RenderSystem::GetInstance().IsPrerenderSkinEnabled();
         prepared.offlineWorldAssets->realtimePrepared = !loadContext.offlineOnly;
 
         RendererWorldResourceLoadResult resourceLoadResult =

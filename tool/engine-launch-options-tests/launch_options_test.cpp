@@ -81,6 +81,23 @@ TEST(LaunchOptions, GpuStatsCombinesWithExistingFlags)
     EXPECT_EQ(options.initialSceneOverride, "Maps/SC_x.json");
 }
 
+TEST(LaunchOptions, PrerenderSkinIsOffByDefault)
+{
+    const LaunchOptions options = Parse({"main.exe"});
+    EXPECT_TRUE(options.errorMessage.empty());
+    EXPECT_FALSE(options.prerenderSkin);
+}
+
+TEST(LaunchOptions, PrerenderSkinFlagSelectsThePreSkinnedVariant)
+{
+    const LaunchOptions options = Parse(
+        {"main.exe", "--prerender-skin", "--gpu-stats", "--frame-limit", "60"});
+    EXPECT_TRUE(options.errorMessage.empty()) << options.errorMessage;
+    EXPECT_TRUE(options.prerenderSkin);
+    EXPECT_TRUE(options.gpuStats);
+    EXPECT_EQ(options.frameLimitHz, 60);
+}
+
 TEST(LaunchOptions, UnknownFlagsAreStillRejected)
 {
     const LaunchOptions options = Parse({"main.exe", "--gpu-stat"});

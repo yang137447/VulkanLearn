@@ -741,7 +741,11 @@ void RenderableObject::CreateVertexBuffer()
     std::memcpy(data, sourceVertices.data(), static_cast<size_t>(bufferSize));
     rendererBackend->UnmapMemory(stagingBufferMemory);
 
-    vk::BufferUsageFlags vertexBufferUsage = vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst;
+    // eStorageBuffer 供 GPU 预蒙皮 compute 以 SSBO 读取同一份顶点流；不需要
+    // 复制一份 rest position/normal/tangent。usage 位在建对象时固定，不随 flag 改变。
+    vk::BufferUsageFlags vertexBufferUsage = vk::BufferUsageFlagBits::eVertexBuffer |
+        vk::BufferUsageFlagBits::eTransferDst |
+        vk::BufferUsageFlagBits::eStorageBuffer;
     vk::MemoryPropertyFlags vertexBufferMemoryPropertyFlags = vk::MemoryPropertyFlagBits::eDeviceLocal;
     std::tie(vertexBuffer, vertexBufferMemory) = rendererBackend->CreateBuffer(
         bufferSize,

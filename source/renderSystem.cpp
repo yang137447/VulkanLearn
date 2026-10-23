@@ -15,6 +15,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 #include "core/runtimeResult.h"
 #include "core/logStore.h"
 #include "sceneNode.h"
@@ -25,6 +26,7 @@
 #include "commonFunction.h"
 #include "renderGraph.h"
 #include "hair/hairSimulationPass.h"
+#include "render/skinning/skinDeformPass.h"
 #include "render/backend/rendererObjectResourceRegistry.h"
 #include "render/resource/rendererResourceCache.h"
 #include "render/resource/rendererMaterialLoader.h"
@@ -1319,6 +1321,8 @@ void RenderSystem::RebuildSwapchainDependentResources()
     {
         renderGraph.InitializeAutoExposure(*pipelineFactory, *rendererBackend);
         renderGraph.InitializeHairSimulation(*pipelineFactory, *rendererBackend);
+        if (prerenderSkinEnabled)
+            renderGraph.InitializeSkinDeform(*pipelineFactory, *rendererBackend);
         renderGraph.RenderInitialize(*rendererBackend, descriptorContext);
         InitializeCurrentRenderSceneResources();
     }
@@ -1347,6 +1351,8 @@ void RenderSystem::RebuildRenderGraphDependentResources()
     VL::RendererDescriptorContext descriptorContext = BuildRendererDescriptorContext();
     renderGraph.InitializeAutoExposure(*pipelineFactory, *rendererBackend);
     renderGraph.InitializeHairSimulation(*pipelineFactory, *rendererBackend);
+    if (prerenderSkinEnabled)
+        renderGraph.InitializeSkinDeform(*pipelineFactory, *rendererBackend);
     renderGraph.RenderInitialize(*rendererBackend, descriptorContext);
     InitializeCurrentRenderSceneResources();
 }
@@ -1477,6 +1483,8 @@ VL::PreparedRuntimeBinding RenderSystem::PrepareRuntimeBinding(
                 candidateLightBufferInfos);
     candidateGraph.InitializeAutoExposure(*pipelineFactory, *rendererBackend);
     candidateGraph.InitializeHairSimulation(*pipelineFactory, *rendererBackend);
+    if (prerenderSkinEnabled)
+        candidateGraph.InitializeSkinDeform(*pipelineFactory, *rendererBackend);
     candidateGraph.RenderInitialize(
         *rendererBackend,
         descriptorContext);
@@ -1488,7 +1496,8 @@ VL::PreparedRuntimeBinding RenderSystem::PrepareRuntimeBinding(
         descriptorContext,
         prepared.renderScene,
         prepared.resolvedRenderScene,
-        candidateCache);
+        candidateCache,
+        prerenderSkinEnabled);
 
     prepared.speedTreeWindProfiles.Configure(
         prepared.world->GetSpeedTreeWindProfiles());
@@ -1581,6 +1590,8 @@ void RenderSystem::PrepareRenderGraphReload(
                 GetLightBufferInfo());
     candidateGraph.InitializeAutoExposure(*pipelineFactory, *rendererBackend);
     candidateGraph.InitializeHairSimulation(*pipelineFactory, *rendererBackend);
+    if (prerenderSkinEnabled)
+        candidateGraph.InitializeSkinDeform(*pipelineFactory, *rendererBackend);
     candidateGraph.RenderInitialize(
         *rendererBackend,
         descriptorContext);
@@ -2118,6 +2129,8 @@ RenderSystem::CommitMaterialInstancePreviewDraft(
             *preparedOfflineAssets);
         loadContext.offlineWorldAssets = frozenGpuAssets.get();
         loadContext.useFrozenMaterials = true;
+        // MI 预览候选复用主渲染的预蒙皮选择，避免同一材质在预览里切回混合路径。
+        loadContext.prerenderSkin = prerenderSkinEnabled;
 
         VL::RendererMaterialLoader materialLoader(
             *pipelineFactory,
@@ -2167,7 +2180,8 @@ RenderSystem::CommitMaterialInstancePreviewDraft(
             descriptorContext,
             candidateRenderScene,
             candidateResolvedRenderScene,
-            candidateCache);
+            candidateCache,
+            prerenderSkinEnabled);
 
         PipelineFactory::PreparedGraphicsCandidateCommit preparedPipelineCommit =
             pipelineFactory->PrepareCandidateCommit(graphicsCandidateState);
@@ -2299,7 +2313,10 @@ void RenderSystem::UpdateObjectUBOForPass(
         swapChainImageIndex,
         objectResources,
         drawPacket,
-        windState);
+        windState,
+        // 有 pre-skin 输出 buffer 的对象已在帧前上传完整 palette；没有该 buffer
+        // 的蒙皮对象仍按原路径逐 draw 上传，避免 flag 与对象资源不一致时漏写。
+        !prerenderSkinEnabled || !objectResources.skinDeform.HasResources());
 }
 
 void RenderSystem::UploadLightsForPass(
@@ -3166,7 +3183,8 @@ void RenderSystem::RenderLatestSnapshotOrLastGood()
             // 不覆盖 GPU 正在读取的旧包，仍由 World-local cache 随 epoch 退休。
             VL::RendererObjectResourceRegistry registry;
             registry.InitializeResolvedSceneResources(*rendererBackend, BuildRendererDescriptorContext(),
-                currentRenderScene, currentResolvedRenderScene, VL::RendererResourceCache::GetInstance());
+                currentRenderScene, currentResolvedRenderScene, VL::RendererResourceCache::GetInstance(),
+                prerenderSkinEnabled);
         }
     }
     else if (!hasRenderScene)
@@ -3217,7 +3235,8 @@ void RenderSystem::InitializeCurrentRenderSceneResources()
         descriptorContext,
         currentRenderScene,
         currentResolvedRenderScene,
-        resourceCache);
+        resourceCache,
+        prerenderSkinEnabled);
 
     initializedRenderWorldGeneration = currentRenderScene.worldGeneration;
 }
@@ -3319,6 +3338,21 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
         if (hairWillRecord)
         {
             gpuPassTimer.EndPass(commandBuffer, hairTimed);
+        }
+
+        // GPU 预蒙皮必须早于任何 Shadow/Geometry pass：本帧 palette 先在 CPU 侧
+        // 写入 image 槽，compute 再一次性生成顶点结果，后续顶点着色器只读。
+        const auto& skinDeform = renderGraph.GetSkinDeform();
+        const bool skinDeformWillRecord =
+            gpuPassTimer.IsFrameActive() &&
+            skinDeform &&
+            skinDeform->HasWork(currentResolvedRenderScene);
+        const bool skinDeformTimed = skinDeformWillRecord &&
+            gpuPassTimer.BeginPass(commandBuffer, "skinnedDeform");
+        RecordSkinDeform(commandBuffer, swapChainImageIndex);
+        if (skinDeformWillRecord)
+        {
+            gpuPassTimer.EndPass(commandBuffer, skinDeformTimed);
         }
 
         const auto& renderPassOrdered = renderGraph.GetRenderpassesOrdered();
@@ -3856,6 +3890,44 @@ void RenderSystem::RecordHairSimulation(vk::CommandBuffer commandBuffer, uint32_
     hairSimulation->Record(
         commandBuffer, currentResolvedRenderScene, currentRenderScene, frameSlot,
         exposureDeltaSeconds);
+}
+
+void RenderSystem::RecordSkinDeform(vk::CommandBuffer commandBuffer, uint32_t swapchainImageIndex)
+{
+    if (!prerenderSkinEnabled)
+        return;
+    const auto& skinDeform = RenderGraph::GetInstance().GetSkinDeform();
+    if (!skinDeform)
+        return;
+
+    // 预蒙皮 compute 读的 palette 必须在本帧任何 draw 之前写入当前 image 槽。
+    // draw 路径在预蒙皮开启时不再重复上传，因此这里覆盖所有蒙皮 draw。
+    std::unordered_set<VL::RendererObjectGpuResources*> uploaded;
+    for (const auto& materialGroup : currentResolvedRenderScene.materialGroups)
+    {
+        for (const auto& instanceGroup : materialGroup.materialInstances)
+        {
+            for (const auto& draw : instanceGroup.draws)
+            {
+                if (!draw.objectResourceEntry)
+                    continue;
+                VL::RendererObjectGpuResources& resources =
+                    draw.objectResourceEntry->GetResources();
+                if (!resources.skinDeform.HasResources())
+                    continue;
+                if (!uploaded.insert(&resources).second)
+                    continue;
+                const auto& packet = currentRenderScene.drawPackets.at(draw.drawPacketIndex);
+                if (!packet.skinPose)
+                    continue;
+                resources.submittedSkin.RetainIfSubmittedAt(submittedFrameSerial);
+                frameResources.UpdateObjectSkinPalette(
+                    swapchainImageIndex, resources, packet);
+            }
+        }
+    }
+
+    skinDeform->Record(commandBuffer, currentResolvedRenderScene, swapchainImageIndex);
 }
 
 void RenderSystem::RecordEnvironmentIbl(vk::CommandBuffer commandBuffer, uint32_t swapchainImageIndex)

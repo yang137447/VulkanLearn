@@ -185,6 +185,10 @@ public:
     CaptureOfflineWorldAssets() const noexcept { return activeOfflineWorldAssets; }
     bool IsOfflineMode() const noexcept { return offlineMode; }
     void SetInitialOfflineMode(bool enabled) noexcept { offlineMode = enabled; }
+    // --prerender-skin：启动时固定，必须在加载初始 World 之前设置，因为材质
+    // shader variant 与对象 GPU 资源都按它选择。
+    void SetPrerenderSkinEnabled(bool enabled) noexcept { prerenderSkinEnabled = enabled; }
+    bool IsPrerenderSkinEnabled() const noexcept { return prerenderSkinEnabled; }
     bool SetOfflineMode(bool enabled, std::string& message);
     bool SetOfflineSetting(const std::string& name, int value, std::string& message);
     void SetOfflineAov(VL::OfflineAov aov) noexcept { offlineAov = aov; }
@@ -438,6 +442,11 @@ private:
     void RecordHairSimulation(
         vk::CommandBuffer commandBuffer,
         uint32_t frameSlot);
+    // 在 renderPassOrdered 之前：上传本帧 palette，再录制 GPU 预蒙皮 dispatch。
+    // 关闭 --prerender-skin 时 renderGraph 没有该 pass，本函数直接返回。
+    void RecordSkinDeform(
+        vk::CommandBuffer commandBuffer,
+        uint32_t swapchainImageIndex);
     void RefreshEnvironmentUpdateDiagnostics();
     uint32_t currentFrame = 0;
     uint32_t swapChainImageIndex = 0;
@@ -488,6 +497,7 @@ private:
     std::shared_ptr<const VL::World> activeWorld;
     std::shared_ptr<const VL::OfflineWorldAssets> activeOfflineWorldAssets;
     bool offlineMode = false;
+    bool prerenderSkinEnabled = false;
     VL::OfflineRenderSettings offlineSettings{0, 0, 32, 2, 1, 0};
     VL::OfflineAov offlineAov = VL::OfflineAov::Combined;
     float offlineExposure = 1.0f;

@@ -325,3 +325,94 @@ build-rel/bin/main.exe --initial-scene Maps/SC_tressfx_female/SC_tressfx_female_
 build-rel/bin/main.exe --no-dev-ui --initial-scene Maps/SC_tressfx_female/SC_tressfx_female_skinned.json \
   --perf-jsonl artifacts/ui-layer3/nodevui.jsonl --gpu-stats
 ```
+
+## 10. 每帧 GPU 预蒙皮落地（2026-10-23）
+
+§4 记录的方案已实现为启动参数 `--prerender-skin`（默认关闭）。关闭时没有预蒙皮
+buffer、没有 compute pipeline、没有 `skinnedDeform` 计时项，蒙皮材质也不带
+`VL_SKINNED_PRERENDERED`；打开后才切换到"每帧混合一次、geometry 与所有 shadow
+cascade 共用结果"的顶点变体。实现契约见
+[动画播放与 GPU 蒙皮](../contracts/animation-runtime-skinning.md)。
+
+### 10.1 实现形状
+
+- 混合/变换公式只有一份：`shader/glsl/engine/skinnedVertexMath.glsl` 同时被
+  `skinnedVertexFactory.glsl`（混合路径）与 `shader/glsl/engine/skinnedDeform.comp`
+  include；差异只在 Set 索引（图形 Set 2，compute Set 0）。
+- compute 每帧每对象一个 dispatch，`ceil(vertexCount / 64)` 个 workgroup；输出
+  `{vec4 position; vec4 previousPosition; vec4 normal; vec4 tangent;}`，64 B/顶点。
+- 输出是每个对象一份 device-local buffer，在 `compute→vertex` 屏障之后被
+  Base/ShadowDepth 读取；下一帧 dispatch 前用 `VERTEX_SHADER→COMPUTE_SHADER`
+  屏障覆盖上一帧读取。曾按 swapchain image 分 3 槽实现，实测该资产需要
+  264,466,368 B；改为单 buffer 后为 88,155,456 B，减少 3 倍，帧序不变。
+- palette 在帧前由 `RecordSkinDeform()` 上传一次；draw 路径在 flag 打开时不再
+  逐 draw 重复上传。预蒙皮 pass 在 hair simulation 之后、RenderGraph pass 循环之前录制。
+- 宏进入 `ShaderVariantKey::macros`，shader 缓存、Material 缓存与 pipeline 身份
+  自动区分两条路径；材质资产不能自行声明该宏。
+
+### 10.2 Release 实测（`--perf-jsonl`，取窗口内 pass 中位数）
+
+场景一：`Maps/SC_tressfx_female/SC_tressfx_female_skinned.json`，`animation seek 0` +
+`animation pause`，1280×720，`--no-dev-ui`。
+
+| pass | 关闭 (ms) | 打开 (ms) | 变化 |
+| --- | ---: | ---: | ---: |
+| skinnedDeform | — | 2.262 | 新增 |
+| shadowCascade1 | 2.366 | 0.081 | −2.285 |
+| geometry | 2.260 | 0.156 | −2.104 |
+| 其余 pass 合计 | 0.127 | 0.141 | +0.014 |
+| **GPU pass 合计** | **4.753** | **2.640** | **−2.113（−44.5%）** |
+
+场景二：`Maps/SC_tressfx_female/SC_tressfx_female_hair_animated.json`，同一冻结方式。
+
+| pass | 关闭 (ms) | 打开 (ms) | 变化 |
+| --- | ---: | ---: | ---: |
+| hairSimulation | 1.025 | 1.013 | −0.012 |
+| skinnedDeform | — | 2.285 | 新增 |
+| shadowCascade0 | 2.374 | 0.094 | −2.280 |
+| shadowCascade1 | 2.331 | 0.072 | −2.259 |
+| geometry | 2.276 | 0.156 | −2.120 |
+| forwardTransparent | 0.426 | 0.404 | −0.022 |
+| 其余 pass 合计 | 0.149 | 0.119 | −0.030 |
+| **GPU pass 合计** | **8.581** | **4.143** | **−4.438（−51.7%）** |
+
+净收益 = 被替代的消费者数量 × 单次混合成本 − 一次预蒙皮成本。skinned 场景有 2 个
+消费者，省约 2.11 ms；hair 场景有 3 个（cascade0/1 + geometry），省约 4.44 ms。
+预蒙皮本身约 2.3 ms，接近原单次混合成本，说明收益来自"少做 1–2 次"而不是
+"混合变便宜"。hairSimulation 与 forwardTransparent 不消费预蒙皮结果，保持原值。
+
+### 10.3 像素一致性
+
+- skinned 场景：关闭 vs 打开，921,600 像素，**0 差异**（maxAbsDiff=0）。
+- hair 场景（临时关闭 `simulation.enabled`，冻结 hair 后只比较蒙皮角色与静态发丝）：
+  **0 差异**（921,600 像素）。
+- 保留 hair simulation 的 hair 场景：关闭 vs 打开有 259,069 像素不同
+  （28.11%，maxAbsDiff=210）；但**两次关闭运行之间**也有 241,556 像素不同
+  （26.21%，maxAbsDiff=211）。差异来自 Verlet 发丝状态随墙钟 dt 分叉，不是预蒙皮
+  改变了蒙皮结果。关闭 simulation 后差异归零，证明角色/头发静止几何与阴影一致。
+- 当前 skinned 材质没有 `USE_NORMAL_MAP`，无法用资产截图单独覆盖 normal-map/TBN
+  分支；切线与法线由同一份共享数学写入，`skin_deform_test` 固定了逆转置法线与
+  镜像 handedness 的 CPU 期望值。
+
+### 10.4 显存与 dispatch
+
+当前审阅资产有 4 个蒙皮对象、合计 1,377,429 顶点；预蒙皮输出
+88,155,456 B（84.07 MiB），每帧 21,523 个 workgroup。§4 记录的 23.5 万顶点对应
+15.04 MB；本分支可用的资产大 5.9 倍，因此显存按 `vertices × 64 B` 线性放大。
+参数块是每对象 16 B，可忽略。注意 §4 的 23.5 万与本轮实际资产不同：
+`SC_gasp` 的 mannequin 加载为 27,972 顶点，`SC_tressfx_female*` 的 body/eyes
+等 4 个蒙皮 section 合计 1,377,429 顶点。
+
+### 10.5 验证与复现
+
+Release 关闭/打开各运行约 25–30 s；Debug 打开 `--gpu-stats` 运行 80 s，
+validation layers 0 VUID、stderr 0 字节。复现命令：
+
+```
+build-rel/bin/main.exe --initial-scene Maps/SC_tressfx_female/SC_tressfx_female_skinned.json \
+  --prerender-skin --perf-jsonl artifacts/prerender/skinned_on.jsonl --gpu-stats --no-dev-ui \
+  --console-command "animation seek 0" --console-command "animation pause" \
+  --console-command "screenshot prerender/skinned_on.bmp" --console-command-delay 90
+build-rel/bin/main.exe --initial-scene Maps/SC_tressfx_female/SC_tressfx_female_hair_animated.json \
+  --prerender-skin --perf-jsonl artifacts/prerender/hair_on.jsonl --gpu-stats --no-dev-ui
+```

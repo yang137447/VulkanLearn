@@ -1,6 +1,7 @@
 add_executable(material_schema_tests
     materialSchemaTests.cpp
     tressfxMaterialTests.cpp
+    skinDeformMaterialTests.cpp
     ${PROJECT_SOURCE_DIR}/source/materialInstanceValidator.cpp
     ${PROJECT_SOURCE_DIR}/source/shader/build/contentHash.cpp
     ${PROJECT_SOURCE_DIR}/source/material/materialDescriptorSchema.cpp

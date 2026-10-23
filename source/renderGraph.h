@@ -53,6 +53,10 @@ namespace Hair
 {
 class HairSimulationPass;
 }
+namespace Skinning
+{
+class SkinDeformPass;
+}
 
 enum class RenderGraphReleaseMode
 {
@@ -198,6 +202,13 @@ public:
     {
         return hairSimulation;
     }
+    // GPU 预蒙皮 pass 与 HairSimulation 同生命周期；只在 --prerender-skin 打开时创建，
+    // 关闭时成员为空，帧录制路径没有额外分支。
+    void InitializeSkinDeform(PipelineFactory& factory, VL::RendererBackendVulkan& backend);
+    const std::shared_ptr<VL::Skinning::SkinDeformPass>& GetSkinDeform() const noexcept
+    {
+        return skinDeform;
+    }
     const std::unordered_map<std::string, std::vector<RenderResource>>& GetResourcesMsaa() const { return resourcesMsaa; }
     const std::unordered_map<std::string, std::vector<RenderResource>>& GetResourcesResolve() const { return resourcesResolve; }
     // 每个 acquired image 独占一张完整 backing extent 的单采样输出，生命周期
@@ -268,6 +279,7 @@ private:
     std::unordered_map<std::string, std::vector<RenderResource>> resourcesMsaa;
     std::shared_ptr<VL::AutoExposureCompute> autoExposure;
     std::shared_ptr<VL::Hair::HairSimulationPass> hairSimulation;
+    std::shared_ptr<VL::Skinning::SkinDeformPass> skinDeform;
     std::unordered_map<std::string, std::vector<RenderResource>> resourcesResolve;
     std::vector<RenderResource> sceneViewportOutputs;
 

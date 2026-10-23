@@ -520,11 +520,42 @@ void RendererFrameResources::UpdateMaterialInstanceUniformBuffer(
     }
 }
 
+void RendererFrameResources::WriteObjectSkinPalette(
+    uint32_t swapChainImageIndex,
+    RendererObjectGpuResources& objectResources,
+    const RenderDrawPacket& drawPacket)
+{
+    if (!drawPacket.skinPose)
+        return;
+
+    const auto& current = *drawPacket.skinPose;
+    const auto& previous = objectResources.submittedSkin.Previous(current);
+    if (current.matrices.size() != objectResources.skinJointCount ||
+        previous.matrices.size() != current.matrices.size())
+        throw std::runtime_error("Skin palette size changed without resource preparation");
+    auto* bytes = static_cast<unsigned char*>(
+        objectResources.skinPalette.buffersMapped.at(swapChainImageIndex));
+    for (size_t i = 0; i < current.matrices.size(); ++i)
+    {
+        std::memcpy(bytes + i * 128, current.matrices[i].data(), 64);
+        std::memcpy(bytes + i * 128 + 64, previous.matrices[i].data(), 64);
+    }
+}
+
+void RendererFrameResources::UpdateObjectSkinPalette(
+    uint32_t swapChainImageIndex,
+    RendererObjectGpuResources& objectResources,
+    const RenderDrawPacket& drawPacket)
+{
+    WriteObjectSkinPalette(swapChainImageIndex, objectResources, drawPacket);
+}
+
 void RendererFrameResources::UpdateObjectUniformBuffer(
     uint32_t swapChainImageIndex,
     RendererObjectGpuResources& objectResources,
     const RenderDrawPacket& drawPacket,
-    const SpeedTreeWindStateGPU* speedTreeWindState)
+    const SpeedTreeWindStateGPU* speedTreeWindState,
+    bool uploadSkinPalette)
 {
     if (swapChainImageIndex >= objectResources.objectUniformBuffer.buffersMapped.size())
     {
@@ -537,18 +568,11 @@ void RendererFrameResources::UpdateObjectUniformBuffer(
     if (drawPacket.skinPose)
     {
         const auto& current = *drawPacket.skinPose;
-        const auto& previous = objectResources.submittedSkin.Previous(current);
-        if (current.matrices.size() != objectResources.skinJointCount ||
-            previous.matrices.size() != current.matrices.size())
-            throw std::runtime_error("Skin palette size changed without resource preparation");
         ubo.previousModel = objectResources.submittedSkin.PreviousModel(current, drawPacket.model);
-        auto* bytes = static_cast<unsigned char*>(
-            objectResources.skinPalette.buffersMapped.at(swapChainImageIndex));
-        for (size_t i = 0; i < current.matrices.size(); ++i)
-        {
-            std::memcpy(bytes + i * 128, current.matrices[i].data(), 64);
-            std::memcpy(bytes + i * 128 + 64, previous.matrices[i].data(), 64);
-        }
+        // GPU 预蒙皮路径在帧前已经写完整份 palette，draw 内再写一遍没有收益；
+        // 关闭预蒙皮时保持原路径，仍然逐 draw 上传。
+        if (uploadSkinPalette)
+            WriteObjectSkinPalette(swapChainImageIndex, objectResources, drawPacket);
     }
     if (speedTreeWindState != nullptr)
     {

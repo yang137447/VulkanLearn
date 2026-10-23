@@ -17,6 +17,7 @@
 #include "render/resource/rendererResourceCache.h"
 #include "render/resource/rendererResourceLoadContext.h"
 #include "render/resource/resourceRetireQueue.h"
+#include "renderSystem.h"
 #include "renderGraph.h"
 #include "scene/sceneAssetTypes.h"
 #include "script/scriptBlueprintAsset.h"
@@ -333,6 +334,9 @@ bool BlueprintAssetLoadSession::Step(World& world)
             state.Validate();
             RendererResourceLoadContext context{*state.candidate, state.graph, &state.graphics};
             context.preparedMaterialSources = &mesh.asset.materialSources;
+            // 异步 Spawn 的蒙皮材质必须与主渲染选择同一条蒙皮路径，否则同一
+            // 场景会同时存在两种 vertex variant / 对象资源包。
+            context.prerenderSkin = RenderSystem::GetInstance().IsPrerenderSkinEnabled();
             auto loaded = RendererMeshLoader(state.factory, state.backend, context).LoadMeshObject(
                 mesh.node, mesh.request, mesh.asset.mesh);
             if (!context.pendingGeneratedFiles.empty())

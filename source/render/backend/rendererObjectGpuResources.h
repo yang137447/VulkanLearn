@@ -20,6 +20,13 @@ struct RendererObjectGpuResources
     // 只有蒙皮对象分配逐 swapchain palette。权重由同包 Renderable 共享并随 GPU epoch 退休。
     Buffer skinPalette;
     vk::DescriptorBufferInfo skinInfluences;
+    // GPU 预蒙皮（--prerender-skin）：单份 device-local 输出（64 B/顶点，跨帧
+    // 由显式屏障复用）+ 16 B vertexCount 参数块。仅蒙皮对象在 flag 打开时分配。
+    Buffer skinDeform;
+    Buffer skinDeformParams;
+    vk::DescriptorBufferInfo skinSourceVertices;
+    uint32_t skinDeformVertexCount = 0;
+    bool prerenderSkin = false;
     // TressFX current guide centers are updated at the frame boundary and
     // consumed by the strand vertex factory through Object Set 2 binding 3.
     vk::DescriptorBufferInfo tressfxPositions;

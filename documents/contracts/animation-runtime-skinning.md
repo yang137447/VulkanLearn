@@ -218,6 +218,7 @@ Pause/零 delta 冻结求值；自然 Completed 与显式暂停分开记录。
 | --- | --- | --- |
 | Set 2 binding 1 | current/previous mat4 交错，每骨 128 bytes | 对象 GPU 资源包，逐 swapchain image |
 | Set 2 binding 2 | CSR offsets + joint/floatBits(weight) words | Renderable 的不可变权重流 |
+| Set 2 binding 4 | 预蒙皮输出：position/previousPosition/normal/tangent 各一个 vec4，64 B/顶点 | 对象 GPU 资源包，单份 device-local |
 
 CSR 头是每个展开顶点的绝对 word 起止偏移，尾部每条影响占两个 uint。
 shader 根据 gl_VertexIndex 遍历全部影响，包括九影响顶点；不截断为四或八骨。
@@ -228,10 +229,62 @@ shader 不作逐顶点兜底。快路径按关节检查，而旧逐顶点路径�
 因此“两个各自非奇异的关节在单个顶点上混合出奇异矩阵”不再被单独识别；
 该情形不改变 palette 内容，只放宽了拒绝边界。
 
+### 逐帧 GPU 预蒙皮（`--prerender-skin`）
+
+`--prerender-skin` 默认关闭。关闭时既不分配预蒙皮 buffer、不创建 compute pipeline、
+不录制预蒙皮 pass，蒙皮材质也不带 `VL_SKINNED_PRERENDERED`；Base 与 ShadowDepth 继续在
+各自顶点着色器里混合。启动期 shader 构建仍会编译 `engine/skinnedDeform.comp`（编译器扫描
+全部 compute 源），但不会创建 pipeline，也不产生任何 dispatch。打开后，同一蒙皮网格
+每帧只做一次骨骼混合，geometry 与每个 shadow cascade 都读同一份结果，不再随消费者数量重复支付混合成本。
+
+- **共享数学**：`shader/glsl/engine/skinnedVertexMath.glsl` 是唯一的混合/变换实现，
+  `skinnedVertexFactory.glsl` 的混合路径与 `shader/glsl/engine/skinnedDeform.comp` 都
+  include 它。palette/influences 的 Set 索引由包含方在 include 前用 `VL_SKIN_SET_INDEX`
+  指定；图形路径是 Set 2，compute 路径是 Set 0，buffer layout 相同。修改蒙皮公式时
+  必须同时覆盖两条路径，不能只改 compute 或只改顶点工厂。
+- **输出布局**：每顶点 `vec4 currentPosition; vec4 previousPosition; vec4 normal;
+  vec4 tangent;`，共 64 B；compute 与顶点读取端用同一结构体。normal/tangent 存的是
+  已经归一化/正交化的最终值，读取端不再做第二次归一化，保证与混合路径逐位一致。
+- **compute pass**：`engine/skinnedDeform`，`local_size_x = 64`，dispatch 为
+  `ceil(vertexCount / 64)`。Set 0 binding 0 是 `uvec4 counts`（x = vertexCount），
+  binding 1/2 复用 CSR palette/influence，binding 3 把 Renderable 的顶点缓冲按紧排
+  float 流读取（112 B/顶点，position 0、normal 3、tangent 16），binding 4 写输出。
+  尾部 invocation 用 counts.x 早退，避免越界读源顶点或 influence。
+- **顺序与同步**：`RenderSystem::RecordAndSubmitCurrentRenderScene()` 在 hair simulation
+  之后、pass 循环之前上传本帧 palette（预蒙皮开启时 draw 路径不再逐 draw 重复上传），
+  然后录制 compute。dispatch 前用 `HOST_WRITE|VERTEX_SHADER -> COMPUTE_SHADER` 屏障
+  覆盖 palette 主机写和上一帧顶点读取；dispatch 后用
+  `COMPUTE_SHADER -> VERTEX_SHADER` 覆盖本帧读取。因此单个对象只需要一份输出 buffer，
+  不需要逐 frame-in-flight 或逐 swapchain image 复制。
+- **顶点变体**：`VL_SKINNED_PRERENDERED=1` 由引擎在材质加载时追加，只作用于
+  `VL_SKINNED_MESH=1` 的材质；材质资产不得自行声明该宏。它进入
+  `ShaderVariantKey::macros`，因此 shader 缓存、Material 缓存和 pipeline 身份都与
+  混合路径分开。打开时 `skinnedVertexFactory.glsl` 读 Set 2 binding 4 并返回
+  previousPosition，Base 仍用它计算 `previousViewProjection` 运动矢量；
+  ShadowDepth 只消费 position/normal/tangent。
+- **所有权与生命周期**：输出 buffer 位于对象 GPU 资源包
+  （`RendererObjectGpuResources::skinDeform`），在 `InitializeObjectResources` 中按
+  Renderable 的顶点数创建；随对象资源包一起在 World/RenderGraph 事务中重写，
+  并按既有 GPU epoch 退休。`SkinDeformPass` 只拥有 pipeline、descriptor pool 和
+  逐对象 descriptor set 缓存，与 `HairSimulationPass` 同生命周期：候选图创建、
+  SwapState 移交、Shutdown 按 epoch 退休。
+- **内存与 dispatch**：当前审阅资产 `SC_tressfx_female_skinned` 有 4 个蒙皮对象、
+  1,377,429 个顶点，输出 buffer 合计 88,155,456 B（84.07 MiB），每帧 21,523 个
+  workgroup。内存公式是 `vertices × 64 B`，与 cascade 数量无关。
+- **A/B 实测**（Release，1280×720，冻结姿态）：`SC_tressfx_female_skinned`
+  的 geometry 2.260→0.156 ms、shadowCascade1 2.366→0.081 ms，新增 skinnedDeform
+  2.262 ms，GPU pass 合计 4.753→2.640 ms。`SC_tressfx_female_hair_animated`
+  （hairSimulation 保持约 1.0 ms）的 cascade0 2.374→0.094 ms、cascade1
+  2.331→0.072 ms、geometry 2.276→0.156 ms，新增 skinnedDeform 2.285 ms，合计
+  8.581→4.143 ms。冻结姿态截图在 skinned 场景与关闭 hair simulation 的 hair 场景上
+  逐像素一致（921,600 像素，0 差异）；启用 hair simulation 时两次同参数运行的
+  Verlet 状态本身就会因可变 dt 不同而分叉，不构成蒙皮差异。
+
 Base 与 ShadowDepth 先执行同一 `skinnedVertexFactory.glsl`，再执行材质求值。
 SkinnedMesh key 参与组合 shader 身份，并强制专用 ShadowDepth；
 当前拒绝材质 WPO、standalone Base 和完整 standalone shadow override。
-buffer 写入发生在对应 image fence 完成后，资源随现有对象包/GPU epoch 退休。
+palette 写入发生在对应 image fence 完成后，资源随现有对象包/GPU epoch 退休。
+
 
 ## 已提交历史
 

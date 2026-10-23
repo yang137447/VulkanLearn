@@ -174,6 +174,9 @@ RuntimeResult<void> EngineLoop::Init(
     }
 
     RenderSystem::GetInstance().SetInitialOfflineMode(launchOptions.offlineRender);
+    // 必须在 LoadInitialWorldAndRenderer 之前设置：材质 shader variant 与对象
+    // GPU 资源在 World 加载事务里按该 flag 选择预蒙皮路径。
+    RenderSystem::GetInstance().SetPrerenderSkinEnabled(launchOptions.prerenderSkin);
     // 必须在 LoadInitialWorldAndRenderer 之前设置：帧资源初始化时按该标志决定是否
     // 在首次采集时创建 timestamp query pool。
     RenderSystem::GetInstance().SetGpuPassStatsLoggingEnabled(launchOptions.gpuStats);

@@ -29,7 +29,7 @@ protected:
     MaterialInstanceBuildPlan Plan()
     {
         return MaterialInstanceValidator::BuildLoadPlan("MI_probe.json", {}, effective,
-            materialPath, definition, false);
+            materialPath, definition, false, false);
     }
     std::string materialPath;
     nlohmann::json definition;

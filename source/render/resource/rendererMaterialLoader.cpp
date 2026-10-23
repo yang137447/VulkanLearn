@@ -403,7 +403,8 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
         effectiveMaterialInstanceJson,
         materialInstanceResolveResult.materialPath,
         materialInstanceResolveResult.materialJson,
-        rendererBackend.SupportsDualSourceBlend());
+        rendererBackend.SupportsDualSourceBlend(),
+        loadContext.prerenderSkin);
     // 所有连续透明输出都只能进入 forwardTransparent；写深度模式只改变该材质
     // pipeline 的 DepthWrite 状态，不允许借用 Geometry 的多 MRT 合同。
     if (IsTransparentRenderMode(loadPlan.shaderVariantKey.renderMode) &&

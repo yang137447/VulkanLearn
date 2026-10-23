@@ -152,7 +152,17 @@ public:
         vk::DeviceSize bufferSize,
         vk::BufferUsageFlags usage,
         vk::MemoryPropertyFlags memoryPropertyFlags,
-        const std::string& debugNamePrefix);
+        const std::string& debugNamePrefix,
+        bool mapMemory = true);
+    // 单个 buffer 的资源包，供不需要逐 swapchain 分槽的 device-local 输出使用；
+    // handle/raw/info 的存放方式与 CreatePerSwapchainBufferSet 一致。
+    void CreateBufferSet(
+        Buffer& bufferSet,
+        vk::DeviceSize bufferSize,
+        vk::BufferUsageFlags usage,
+        vk::MemoryPropertyFlags memoryPropertyFlags,
+        const std::string& debugName,
+        bool mapMemory = true);
     void DestroyBufferSet(Buffer& bufferSet);
     void SetupDescriptorBufferInfos(Buffer& bufferSet);
     std::pair<vk::Image, vk::DeviceMemory> CreateImage(

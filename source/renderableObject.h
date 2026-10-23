@@ -36,6 +36,10 @@ public:
     const Eigen::Vector3f& GetBoundsMin() const { return boundsMin; }
     const Eigen::Vector3f& GetBoundsMax() const { return boundsMax; }
     const std::string& GetName() const { return name; }
+    // GPU 预蒙皮按 gl_VertexIndex 直接寻址：compute 把顶点流当 SSBO 读，
+    // 顶点数量决定输出 buffer 大小与 dispatch group 数。
+    uint32_t GetVertexCount() const { return static_cast<uint32_t>(GetVertices().size()); }
+    const vk::DescriptorBufferInfo& GetVertexBufferInfo() const { return vertexBufferInfo; }
     const vk::DescriptorBufferInfo& GetSkinInfluenceInfo() const { return skinInfluenceInfo; }
     bool IsTressfx() const;
     const vk::DescriptorBufferInfo& GetTressfxPositionInfo() const { return tressfxPositionInfo; }
