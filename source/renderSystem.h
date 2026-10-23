@@ -356,13 +356,26 @@ private:
 
         // 用于使用boundingbox加速
     std::pair<float, float> ComputeMinMaxAlongAxis(const Eigen::Vector3f& aabbMin, const Eigen::Vector3f& aabbMax, const Eigen::Vector3f& axis) const;
-        // 遍历场景物体，在lightspace确定 minZ 和 maxZ
+        // 遍历场景物体，在lightspace确定 minZ 和 maxZ（每帧只投影一次，见下）
     std::optional<std::pair<float, float>> ComputeCascadeLightSpaceZBounds(
         const Eigen::Matrix3f& worldToShadowMatrix,
         float minX,
         float maxX,
         float minY,
-        float maxY) const;
+        float maxY);
+    // caster 在光源空间的包围盒。投影只取决于光源朝向，同一帧的四个级联完全相同；
+    // 因此每帧投影一次缓存，逐级联只做 XY 过滤与 Z 合并，避免 N 级 × 全部 draw 的重复计算。
+    struct ShadowCasterLightSpaceBounds
+    {
+        float minX = 0.0f;
+        float maxX = 0.0f;
+        float minY = 0.0f;
+        float maxY = 0.0f;
+        float minZ = 0.0f;
+        float maxZ = 0.0f;
+    };
+    std::vector<ShadowCasterLightSpaceBounds> casterLightSpaceBounds;
+    bool casterLightSpaceBoundsValid = false;
         // 将局部空间的aabb变换到世界空间
     std::array<Eigen::Vector3f, 8> BuildWorldCorners(const Eigen::Vector3f& localMin, const Eigen::Vector3f& localMax, const Eigen::Matrix4f& modelMatrix) const;
         // 计算某个空间下的aabb

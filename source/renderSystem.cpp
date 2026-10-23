@@ -2597,6 +2597,8 @@ void RenderSystem::BuildShadowCascadeFrameData(uint32_t passSizeWidth, uint32_t 
     shadowCascadeFrameData.lightViewProj.fill(Eigen::Matrix4f::Identity());
     shadowCascadeFrameData.cascadeSplits = Eigen::Vector4f::Zero();
     shadowCascadeFrameData.bias.fill(Eigen::Vector4f::Zero());
+    // 本帧 caster 的光源空间包围盒要重新投影：角色/头发/风每帧都可能动。
+    casterLightSpaceBoundsValid = false;
     shadowCascadeFrameData.csmParameters = Eigen::Vector4f(
         csmSettings.cascadeTransitionFraction,
         csmSettings.shadowDistanceFadeoutFraction,
@@ -3680,53 +3682,71 @@ std::optional<std::pair<float, float>> RenderSystem::ComputeCascadeLightSpaceZBo
     float minX,
     float maxX,
     float minY,
-    float maxY) const
+    float maxY)
 {
     if (currentRenderScene.drawPackets.empty())
     {
         return std::nullopt;
     }
 
+    // 投影只取决于光源朝向：四个级联共用同一份 worldToShadowMatrix，因此每帧
+    // 只投影一次并缓存；逐级联只按相机 slice 的 XY 范围过滤，再合并 Z。
+    // 之前每个级联都重扫全部 draw packet，等于 4 倍的投影计算。
+    if (!casterLightSpaceBoundsValid)
+    {
+        const Eigen::Vector3f lightSpaceXAxis = worldToShadowMatrix.row(0).transpose();
+        const Eigen::Vector3f lightSpaceYAxis = worldToShadowMatrix.row(1).transpose();
+        const Eigen::Vector3f lightSpaceZAxis = worldToShadowMatrix.row(2).transpose();
+        const Eigen::Vector3f absLightSpaceXAxis = lightSpaceXAxis.cwiseAbs();
+        const Eigen::Vector3f absLightSpaceYAxis = lightSpaceYAxis.cwiseAbs();
+        const Eigen::Vector3f absLightSpaceZAxis = lightSpaceZAxis.cwiseAbs();
+
+        casterLightSpaceBounds.clear();
+        casterLightSpaceBounds.reserve(currentRenderScene.drawPackets.size());
+        for (const VL::RenderDrawPacket& drawPacket : currentRenderScene.drawPackets)
+        {
+            // Current limitation: SpeedTree world bounds describe the undeformed
+            // mesh and exclude vertex-shader wind displacement. The foliage bounds
+            // contract must eventually provide expanded caster bounds so strong
+            // wind cannot clip branch shadows from the CSM light-space Z range.
+            const Eigen::Vector3f center =
+                (drawPacket.worldBoundsMin + drawPacket.worldBoundsMax) * 0.5f;
+            const Eigen::Vector3f extent =
+                (drawPacket.worldBoundsMax - drawPacket.worldBoundsMin) * 0.5f;
+
+            ShadowCasterLightSpaceBounds bounds;
+            const float projectedCenterX = lightSpaceXAxis.dot(center);
+            const float projectedRadiusX = absLightSpaceXAxis.dot(extent);
+            bounds.minX = projectedCenterX - projectedRadiusX;
+            bounds.maxX = projectedCenterX + projectedRadiusX;
+            const float projectedCenterY = lightSpaceYAxis.dot(center);
+            const float projectedRadiusY = absLightSpaceYAxis.dot(extent);
+            bounds.minY = projectedCenterY - projectedRadiusY;
+            bounds.maxY = projectedCenterY + projectedRadiusY;
+            const float projectedCenterZ = lightSpaceZAxis.dot(center);
+            const float projectedRadiusZ = absLightSpaceZAxis.dot(extent);
+            bounds.minZ = projectedCenterZ - projectedRadiusZ;
+            bounds.maxZ = projectedCenterZ + projectedRadiusZ;
+            casterLightSpaceBounds.push_back(bounds);
+        }
+        casterLightSpaceBoundsValid = true;
+    }
+
     float minZ = std::numeric_limits<float>::max();
     float maxZ = std::numeric_limits<float>::lowest();
     bool hasCaster = false;
-    const Eigen::Vector3f lightSpaceXAxis = worldToShadowMatrix.row(0).transpose();
-    const Eigen::Vector3f lightSpaceYAxis = worldToShadowMatrix.row(1).transpose();
-    const Eigen::Vector3f lightSpaceZAxis = worldToShadowMatrix.row(2).transpose();
-    const Eigen::Vector3f absLightSpaceXAxis = lightSpaceXAxis.cwiseAbs();
-    const Eigen::Vector3f absLightSpaceYAxis = lightSpaceYAxis.cwiseAbs();
-    const Eigen::Vector3f absLightSpaceZAxis = lightSpaceZAxis.cwiseAbs();
-
-    for (const VL::RenderDrawPacket& drawPacket : currentRenderScene.drawPackets)
+    for (const ShadowCasterLightSpaceBounds& bounds : casterLightSpaceBounds)
     {
-        // Current limitation: SpeedTree world bounds describe the undeformed
-        // mesh and exclude vertex-shader wind displacement. The foliage bounds
-        // contract must eventually provide expanded caster bounds so strong
-        // wind cannot clip branch shadows from the CSM light-space Z range.
-        const Eigen::Vector3f center = (drawPacket.worldBoundsMin + drawPacket.worldBoundsMax) * 0.5f;
-        const Eigen::Vector3f extent = (drawPacket.worldBoundsMax - drawPacket.worldBoundsMin) * 0.5f;
-        const float projectedCenterX = lightSpaceXAxis.dot(center);
-        const float projectedRadiusX = absLightSpaceXAxis.dot(extent);
-        const float objectMinX = projectedCenterX - projectedRadiusX;
-        const float objectMaxX = projectedCenterX + projectedRadiusX;
-        if (objectMaxX < minX || objectMinX > maxX)
+        if (bounds.maxX < minX || bounds.minX > maxX)
         {
             continue;
         }
-
-        const float projectedCenterY = lightSpaceYAxis.dot(center);
-        const float projectedRadiusY = absLightSpaceYAxis.dot(extent);
-        const float objectMinY = projectedCenterY - projectedRadiusY;
-        const float objectMaxY = projectedCenterY + projectedRadiusY;
-        if (objectMaxY < minY || objectMinY > maxY)
+        if (bounds.maxY < minY || bounds.minY > maxY)
         {
             continue;
         }
-
-        const float projectedCenterZ = lightSpaceZAxis.dot(center);
-        const float projectedRadiusZ = absLightSpaceZAxis.dot(extent);
-        minZ = std::min(minZ, projectedCenterZ - projectedRadiusZ);
-        maxZ = std::max(maxZ, projectedCenterZ + projectedRadiusZ);
+        minZ = std::min(minZ, bounds.minZ);
+        maxZ = std::max(maxZ, bounds.maxZ);
         hasCaster = true;
     }
 
