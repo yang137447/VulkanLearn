@@ -253,6 +253,30 @@ int ToRmlMouseButton(PlatformMouseButton button)
     }
 }
 
+// 这些事件交给 RmlUi 后可能改变 hover/pressed/focus/滚动/文本或拖动状态；
+// 第 3 层调度必须在同一帧强制一次上下文更新，不能只等 10 Hz 兜底。
+bool IsRmlInputEvent(PlatformEventType type)
+{
+    switch (type)
+    {
+    case PlatformEventType::KeyDown:
+    case PlatformEventType::KeyUp:
+    case PlatformEventType::TextInput:
+    case PlatformEventType::TextEditing:
+    case PlatformEventType::MouseMove:
+    case PlatformEventType::MouseButtonDown:
+    case PlatformEventType::MouseButtonUp:
+    case PlatformEventType::MouseWheel:
+    case PlatformEventType::MouseLeave:
+    case PlatformEventType::GamepadButtonDown:
+    case PlatformEventType::GamepadButtonUp:
+    case PlatformEventType::GamepadAxisMotion:
+        return true;
+    default:
+        return false;
+    }
+}
+
 Rml::Input::KeyIdentifier ToRmlGamepadKey(PlatformGamepadButton button)
 {
     switch (button)
@@ -393,7 +417,9 @@ RuntimeResult<void> UiSubsystem::Initialize(
 void UiSubsystem::Shutdown()
 {
     debugDrawLabels.reset();
-    renderSnapshotQueue.Clear();
+    snapshotPublisher.Clear();
+    uiUpdateScheduler = UiUpdateScheduler{};
+    lastPublishedHadDebugOverlay = false;
     if (rmlContext != nullptr)
     {
         ResetRuntimeInputState();
@@ -537,11 +563,16 @@ void UiSubsystem::Update(const UiViewModelSectionUpdate& sections,
         SetImmersiveDocumentStateIfRestored(frameValues.activeWorldPath);
         ApplyFrameValues(frameValues);
         // 隐藏期间没有分节发布：重新可见的第一帧由引擎的全部节重建覆盖。
+        // 调度器记住“隐藏”，使该帧必然被判定为 surfaceChanged。
+        uiUpdateScheduler.MarkHidden();
         panelBuildRequested = true;
         BuildAndPublishRenderSnapshot(false);
         UpdateInputOwnership();
         return;
     }
+
+    const UiUpdateScheduler::Clock::time_point now =
+        UiUpdateScheduler::Clock::now();
 
     if (mode == UiViewModelBuildMode::RuntimeHud)
     {
@@ -553,19 +584,37 @@ void UiSubsystem::Update(const UiViewModelSectionUpdate& sections,
         UiBindingUpdateScope bindingUpdate(updatingRuntimeBindings);
         TryHotReload();
         // World 路径变化仍要立刻反映到 HUD 标题；只在真正变化时重脏 binding。
-        SyncWorldTextBinding();
-        SyncGameplayTextBinding(hudScripts);
+        // 绑定变化本身就是一次内容突变，必须强制本轮更新，不能等兜底节拍。
+        const bool worldTextChanged = SyncWorldTextBinding();
+        const bool gameplayTextChanged = SyncGameplayTextBinding(hudScripts);
+        if (worldTextChanged || gameplayTextChanged)
+        {
+            uiUpdateScheduler.MarkMutation(UiMutationKind::ForcedRefresh);
+        }
+        const UiUpdateDecision decision = uiUpdateScheduler.Evaluate(
+            UiUpdateSurface::RuntimeHud, false, IsDebugDrawOverlayAnimating(), now);
+        if (decision.updateRml)
         {
             PROFILE_SCOPE("UI.RmlUpdate");
             rmlContext->Update();
+            uiUpdateScheduler.MarkUpdated(UiUpdateSurface::RuntimeHud, now);
+            ++refreshStats.rmlUpdates;
         }
-        BuildAndPublishRenderSnapshot(true);
+        if (decision.publishSnapshot)
+        {
+            BuildAndPublishRenderSnapshot(true);
+        }
+        else
+        {
+            snapshotPublisher.Skip();
+            ++refreshStats.skippedUpdates;
+        }
         UpdateInputOwnership();
         return;
     }
 
-    // FullEditor：逐帧只更新冻结值/RmlUi 上下文/绘制快照；分节数据只在
-    // 到期窗口或事件强制时发布，并且只对版本变化的节做同步、重脏与面板重建。
+    // FullEditor：逐帧只更新冻结值/分节数据；RmlUi 上下文与绘制快照只在
+    // 有输入、DOM 突变、分节变化或 10 Hz 兜底到期时推进，静止帧保留上一份快照。
     ApplyFrameValues(frameValues);
     SetImmersiveDocumentStateIfRestored(frameValues.activeWorldPath);
     PublishStatusSection(frameValues);
@@ -624,13 +673,27 @@ void UiSubsystem::Update(const UiViewModelSectionUpdate& sections,
 
     UiBindingUpdateScope bindingUpdate(updatingRuntimeBindings);
     TryHotReload();
+    const UiUpdateDecision decision = uiUpdateScheduler.Evaluate(
+        UiUpdateSurface::Workspace, changed != 0, IsDebugDrawOverlayAnimating(), now);
+    if (decision.updateRml)
     {
         PROFILE_SCOPE("UI.RmlUpdate");
         rmlContext->Update();
+        uiUpdateScheduler.MarkUpdated(UiUpdateSurface::Workspace, now);
+        ++refreshStats.rmlUpdates;
     }
-    // 逐帧发布绘制快照：控件自身的 hover/滚动/拖动仍由 RmlUi 每帧更新，
-    // 只有面板数据（BuildDeveloperPanels）按分节变化重建。
-    BuildAndPublishRenderSnapshot(true);
+    if (decision.publishSnapshot)
+    {
+        // 需要更新（或 DrawDebug 逐帧变化）时才重建并发布绘制快照；
+        // 面板数据（BuildDeveloperPanels）仍按分节变化独立重建。
+        BuildAndPublishRenderSnapshot(true);
+    }
+    else
+    {
+        // 跳过帧不发布：RT 保留上一次消费到的不可变快照，继续绘制同样的几何。
+        snapshotPublisher.Skip();
+        ++refreshStats.skippedUpdates;
+    }
     UpdateInputOwnership();
 }
 
@@ -765,7 +828,7 @@ void UiSubsystem::ApplyChangedSections(UiSectionMask changed)
     }
 }
 
-void UiSubsystem::SyncWorldTextBinding()
+bool UiSubsystem::SyncWorldTextBinding()
 {
     const std::string worldText =
         std::filesystem::path(lastViewModel.activeWorldPath).stem().string();
@@ -774,10 +837,12 @@ void UiSubsystem::SyncWorldTextBinding()
         bindingData.worldText = worldText;
         dataModelHandle.DirtyVariable("world_text");
         ++refreshStats.bindingDirtyWrites;
+        return true;
     }
+    return false;
 }
 
-void UiSubsystem::SyncGameplayTextBinding(const ScriptRuntimeView& scripts)
+bool UiSubsystem::SyncGameplayTextBinding(const ScriptRuntimeView& scripts)
 {
     // GT 只消费冻结文本；RmlUi 插值负责转义，RT 仍只接收既有几何快照。
     const std::string gameplayText = BuildGameplayHudText(scripts);
@@ -786,7 +851,9 @@ void UiSubsystem::SyncGameplayTextBinding(const ScriptRuntimeView& scripts)
         bindingData.gameplayText = gameplayText;
         dataModelHandle.DirtyVariable("gameplay_text");
         ++refreshStats.bindingDirtyWrites;
+        return true;
     }
+    return false;
 }
 
 void UiSubsystem::PublishStatusSection(const UiViewModelFrameValues& frameValues)
@@ -881,6 +948,8 @@ void UiSubsystem::Resize(uint32_t width, uint32_t height)
     desc.viewportWidth = width;
     desc.viewportHeight = height;
     sceneViewportRect = {0, 0, width, height};
+    // 尺寸变化后场景视口矩形/布局都已过期，必须重跑一次 RmlUi 更新并重发快照。
+    uiUpdateScheduler.MarkMutation(UiMutationKind::Resize);
     if (rmlContext != nullptr)
     {
         rmlContext->SetDimensions(Rml::Vector2i(static_cast<int>(width), static_cast<int>(height)));
@@ -940,6 +1009,8 @@ void UiSubsystem::ApplyAction(const UiAction& action)
             currentLocale = action.stringValue;
             SyncBindingData();
             dataModelHandle.DirtyAllVariables();
+            // 本地化切换重写了所有静态文本：必须立即完整更新并重发快照。
+            uiUpdateScheduler.MarkMutation(UiMutationKind::LocaleCommit);
         }
         break;
     default:
@@ -965,6 +1036,9 @@ void UiSubsystem::NotifyWorldChanged(
 {
     // World 换代等于全部输入换了一份：所有分节强制重建。
     RequestViewModelRefresh();
+    // 分节版本可能碰巧相同（同名对象/空场景），但面板的 World 相关内容已经失效，
+    // 仍要强制一次 RmlUi 更新与快照重发。
+    uiUpdateScheduler.MarkMutation(UiMutationKind::WorldChange);
     selectedModelMaterials.reset();
     selectedMaterialSlotIndex.reset();
     sceneModels.reset();
@@ -1722,6 +1796,8 @@ void UiSubsystem::ApplyDocumentState()
         return;
     }
 
+    // 文档 show/hide 改变可见 DOM 树：下一帧必须更新上下文并重发快照。
+    uiUpdateScheduler.MarkMutation(UiMutationKind::DocumentVisibility);
     if (Rml::Element* hud = runtimeDocument->GetElementById("hud"))
         hud->SetProperty("display", developerUiVisible || immersiveView ? "none" : "block");
     if (editorDocument != nullptr)
@@ -1795,6 +1871,8 @@ void UiSubsystem::TryHotReload()
     CommitDocumentCandidate(*documentResult.Value(), std::move(localizationResult.Value()));
     assetFingerprint = std::move(candidateFingerprint);
     hotReloadStatus = "hot reload: committed";
+    // 文档/本地化已经整份替换：下一帧按正常路径再更新一次并重发快照。
+    uiUpdateScheduler.MarkMutation(UiMutationKind::HotReload);
     diagnostics->ReportInfo("UI hot reload committed: " + desc.documentPath.string());
 }
 
@@ -1882,15 +1960,18 @@ void UiSubsystem::BuildAndPublishRenderSnapshot(bool includeUiDocuments)
     const size_t firstDebugCommand = snapshot->drawCommands.size();
     // 沉浸显示与编辑器共用同一 DrawDebug 适配；控制台仍可在开发者 UI 隐藏时
     // 打开调试图形，因此隐藏帧也要保留这个叠层。
-    if (lastViewModel.debugDraw && !lastViewModel.offlineMode &&
-        (!developerUiVisible || (materialInstanceEditorPanel &&
-            materialInstanceEditorPanel->IsMotionDebugViewport())))
+    const bool debugOverlayVisible = IsDebugDrawOverlayVisible();
+    if (debugOverlayVisible)
     {
         AppendDebugDrawOverlay(*snapshot, *lastViewModel.debugDraw, lastViewModel.motionCamera, desc.srgbFramebuffer);
         debugDrawLabels->Render(*lastViewModel.debugDraw, lastViewModel.motionCamera,
             snapshot->sceneViewportRect, desc.viewportWidth, desc.viewportHeight);
         InsertDebugDrawCommands(*snapshot, firstDebugCommand);
     }
+    lastPublishedHadDebugOverlay = debugOverlayVisible &&
+        !(lastViewModel.debugDraw->lines.empty() &&
+            lastViewModel.debugDraw->points.empty() &&
+            lastViewModel.debugDraw->texts.empty());
     if (includeUiDocuments)
     {
         rmlRenderInterface.AppendTextureSnapshots(snapshot->textures);
@@ -1899,7 +1980,38 @@ void UiSubsystem::BuildAndPublishRenderSnapshot(bool includeUiDocuments)
     previousUiVertexCount = snapshot->vertices.size();
     previousUiIndexCount = snapshot->indices.size();
     previousUiDrawCount = snapshot->drawCommands.size();
-    renderSnapshotQueue.Publish(std::move(snapshot));
+    snapshotPublisher.Publish(std::move(snapshot));
+    ++refreshStats.snapshotPublishes;
+}
+
+bool UiSubsystem::IsDebugDrawOverlayVisible() const
+{
+    if (!lastViewModel.debugDraw || lastViewModel.offlineMode)
+    {
+        return false;
+    }
+    // 与 BuildAndPublishRenderSnapshot 的追加条件保持同一份判定。
+    if (!developerUiVisible)
+    {
+        return true;
+    }
+    return materialInstanceEditorPanel != nullptr &&
+        materialInstanceEditorPanel->IsMotionDebugViewport();
+}
+
+bool UiSubsystem::IsDebugDrawOverlayAnimating() const
+{
+    if (!IsDebugDrawOverlayVisible())
+    {
+        return false;
+    }
+    const Debug::Snapshot& view = *lastViewModel.debugDraw;
+    if (!view.lines.empty() || !view.points.empty() || !view.texts.empty())
+    {
+        return true;
+    }
+    // 上一份快照含调试几何、这一帧已过期清空：必须重发一次空叠层。
+    return lastPublishedHadDebugOverlay;
 }
 
 void UiSubsystem::BuildDeveloperPanels()
@@ -1907,6 +2019,8 @@ void UiSubsystem::BuildDeveloperPanels()
     PROFILE_SCOPE("UI.BuildPanels");
     if (materialInstanceEditorPanel == nullptr || materialInstanceEditorRuntime == nullptr) return;
     ++refreshStats.panelBuilds;
+    // Build 会重写面板 DOM/绑定：本轮必须有一次 RmlUi 更新与快照重发。
+    uiUpdateScheduler.MarkMutation(UiMutationKind::PanelBuild);
     static const UiSceneOutlinerSection EmptyOutliner;
     const UiSceneOutlinerSection& outliner =
         sectionStore.Sections().sceneOutliner.data != nullptr
@@ -2067,6 +2181,8 @@ void UiSubsystem::ResetRuntimeInputState()
     if (materialInstanceEditorPanel != nullptr) materialInstanceEditorPanel->CancelWorkspaceDrag();
     if (rmlContext != nullptr)
     {
+        // 释放按键/鼠标并离开：hover/pressed 状态已变化，下一帧必须更新。
+        uiUpdateScheduler.MarkInputEvent();
         for (const auto& keyEntry : rmlKeyPressCounts)
         {
             rmlContext->ProcessKeyUp(keyEntry.first, 0);
@@ -2113,6 +2229,11 @@ bool UiSubsystem::ProcessRuntimeUiEvent(const PlatformEvent& event)
     if (rmlContext == nullptr)
     {
         return false;
+    }
+
+    if (IsRmlInputEvent(event.type))
+    {
+        uiUpdateScheduler.MarkInputEvent();
     }
 
     const int modifiers = ToRmlModifiers(event);

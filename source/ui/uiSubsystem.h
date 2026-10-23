@@ -22,6 +22,7 @@
 #include "ui/uiAction.h"
 #include "ui/uiRenderSnapshot.h"
 #include "ui/uiRenderSnapshotQueue.h"
+#include "ui/uiUpdateScheduler.h"
 #include "ui/uiViewModelRefresh.h"
 #include "ui/uiViewModelSections.h"
 #include "ui/viewport/editorViewportGeometry.h"
@@ -118,7 +119,9 @@ public:
     // 分节视图模型的消费入口。sections 只携带本帧“重建过”的 GT 分节（脚本/动画/
     // 性能/相机/环境/离线）；资产/大纲/状态由 UiSubsystem 自己发布。mode 决定构建档位；
     // editorSnapshotDue 表示 10 Hz 窗口到期或事件强制，只有此时才发布资产/大纲节、
-    // 重建面板数据并刷新 UpdateRuntimeView。逐帧始终更新 RmlUi 上下文与绘制快照。
+    // 重建面板数据并刷新 UpdateRuntimeView。
+    // RmlUi 上下文更新与绘制快照发布还要再过 UiUpdateScheduler：静止帧两者都跳过，
+    // RT 继续绘制上一份不可变快照；输入/DOM 突变/分节变化/10 Hz 兜底才会重做。
     void Update(const UiViewModelSectionUpdate& sections,
         const UiViewModelFrameValues& frameValues,
         UiViewModelBuildMode mode,
@@ -180,13 +183,19 @@ public:
         pendingSectionRefresh = 0;
         return requested;
     }
-    // 诊断计数（--gpu-stats 每秒读取一次）：证明静止帧不重建分节、不重建面板。
+    // 诊断计数（--gpu-stats 每秒读取一次）：证明静止帧不重建分节、不重建面板，
+    // 也不推进 RmlUi 上下文/不重发绘制快照。
     struct RefreshStats
     {
         uint64_t sectionPublishes = 0;
         uint64_t panelBuilds = 0;
         uint64_t runtimeViewUpdates = 0;
         uint64_t bindingDirtyWrites = 0;
+        // 第 3 层：rmlUpdates + skippedUpdates 就是可见帧数；snapshotPublishes
+        // 通常等于 rmlUpdates，只有 DrawDebug 逐帧变化时才会更多。
+        uint64_t rmlUpdates = 0;
+        uint64_t snapshotPublishes = 0;
+        uint64_t skippedUpdates = 0;
         // 按分节拆开，--gpu-stats 用它说明“每秒到底哪些节在变”。
         std::array<uint64_t, UiSectionCount> sectionPublishesById{};
     };
@@ -213,7 +222,7 @@ public:
     bool ShouldGameReceiveKeyboard() const;
     bool ShouldGameReceivePointer() const;
     const UiInputOwnershipSnapshot& GetInputOwnership() const { return inputOwnership; }
-    UiRenderSnapshotQueue& GetRenderSnapshotQueue() { return renderSnapshotQueue; }
+    UiRenderSnapshotQueue& GetRenderSnapshotQueue() { return snapshotPublisher.Queue(); }
 
 private:
     void SetImmersiveView(bool enabled);
@@ -250,8 +259,9 @@ private:
 
     void SyncBindingData();
     // 分节脏集只刷新对应绑定：world_text 属于状态节，gameplay_text 属于脚本/HUD 节。
-    void SyncWorldTextBinding();
-    void SyncGameplayTextBinding(const ScriptRuntimeView& scripts);
+    // 返回 true 表示绑定值确实变化（已 DirtyVariable），调用方需要一次 RmlUi 更新。
+    bool SyncWorldTextBinding();
+    bool SyncGameplayTextBinding(const ScriptRuntimeView& scripts);
     // 发布 UiSubsystem 拥有的三节（状态/资产/大纲）。只有内容变化才提升版本。
     void PublishStatusSection(const UiViewModelFrameValues& frameValues);
     void PublishAssetsSection();
@@ -268,13 +278,28 @@ private:
     // includeUiDocuments=false 时只发布 DrawDebug 叠层（沉浸模式仍显示调试图元）；
     // 仍会发布一份快照，从而清掉 RT 保留的上一帧工作区画面。
     void BuildAndPublishRenderSnapshot(bool includeUiDocuments);
+    // DrawDebug 是否属于当前可见输出（与快照构建里的追加条件保持一致）。
+    bool IsDebugDrawOverlayVisible() const;
+    // 调试几何逐帧变化：即使 RmlUi 上下文不动也必须重发快照。
+    // “上一份快照含调试几何”也要继续发布，才能让过期图元消失。
+    bool IsDebugDrawOverlayAnimating() const;
     void SetImmersiveDocumentStateIfRestored(const std::string& activeWorldPath);
     void RequestViewModelRefresh(
         UiSectionMask sections = UiSectionAll) noexcept
-    { pendingSectionRefresh |= sections; }
+    {
+        pendingSectionRefresh |= sections;
+        // 事件声明了要重建的分节，就必然要走过一次 RmlUi 更新；即使版本比较
+        // 最终没变化（例如重复命令），也强制本轮不再跳过，避免“事件已消费、
+        // 界面却等到下个 10 Hz 窗口”的延迟。
+        uiUpdateScheduler.MarkMutation(UiMutationKind::ForcedRefresh);
+    }
     // 面板的 Build 输入来自资产/大纲/脚本/状态四节；用户点击等面板本地交互也会
     // 请求一次构建，避免“数据没变但界面状态变了”的交互被门禁吞掉。
-    void RequestPanelBuild() noexcept { panelBuildRequested = true; }
+    void RequestPanelBuild() noexcept
+    {
+        panelBuildRequested = true;
+        uiUpdateScheduler.MarkMutation(UiMutationKind::PanelBuild);
+    }
     std::unique_ptr<class DebugDrawLabels> debugDrawLabels;
     void BuildDeveloperPanels();
     void UpdateInputOwnership();
@@ -350,7 +375,12 @@ private:
     BindingData bindingData;
     LocalizationDatabase localizations;
     AssetFingerprint assetFingerprint;
-    UiRenderSnapshotQueue renderSnapshotQueue;
+    // 第 3 层发布闸门：跳过帧保留 lastPublished 的同一份不可变快照。
+    UiRenderSnapshotPublisher snapshotPublisher;
+    // 可见 UI 是否需要 RmlUi 更新/快照发布；纯逻辑，测试见 uiUpdateSchedulerTests。
+    UiUpdateScheduler uiUpdateScheduler;
+    // 上一份已发布快照是否含 DrawDebug 几何：用于让过期调试图元在一帧内消失。
+    bool lastPublishedHadDebugOverlay = false;
     UiViewModelSnapshot lastViewModel;
     UiInputOwnershipSnapshot inputOwnership;
     std::unordered_map<Rml::Input::KeyIdentifier, uint32_t> rmlKeyPressCounts;

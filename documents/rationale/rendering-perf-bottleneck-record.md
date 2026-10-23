@@ -208,3 +208,120 @@ environmentLighting / offline / status。
 
 可见态剩下的约 0.5 ms 是 RmlUi 每帧渲染与 context update（必要开销），不是快照构建；
 要再降需要第 3 层"空闲不重绘工作区"。
+
+## 9. UI 空闲跳过（第 3 层，2026-10-23）
+
+### 9.1 先确认 HUD 与工作区的关系
+
+`UiSubsystem` 只创建一个 `Rml::Context`，`runtime-hud.rml` 与
+`editor-workspace.rml` 都加载进同一个 context（`Initialize` 里的
+`rmlContext`、`runtimeDocument`、`editorDocument`）。`Context::Update()` 会推进
+所有已加载文档，因此不存在"只更新 HUD、跳过工作区"的现成路径；`ApplyDocumentState`
+又让两个文档互斥显示，实际可见的只有一个。第 3 层因此按"当前可见表面"
+（`Hidden` / `RuntimeHud` / `Workspace`）统一判定，而不是给工作区单独加门。
+
+### 9.2 判定与跳过
+
+新增 `source/ui/uiUpdateScheduler.h`：
+
+- `UiUpdateScheduler::Evaluate(surface, sectionChanged, overlayAnimated, now)`
+  返回 `updateRml` 与 `publishSnapshot`。它是纯判定 + 上次更新时间；不读 DOM。
+- 置脏来源：分节版本变化；`ProcessRuntimeUiEvent` 收到的任何 RmlUi 输入事件
+  （指针移动/按下/释放/离开、滚轮、按键、文本/组合、手柄按钮/轴）；DOM/内容突变
+  （面板 Build、标签切换、文档 show/hide、热重载、缩放、本地化、World 换代、
+  绑定文本变化、显式强制刷新）；可见表面切换。
+- 兜底节拍取 **10 Hz（100 ms）**：EngineLoop 的视图模型窗口本来就是 100 ms，
+  FPS/性能数字不可能更快变化；`ui/*.rcss` 没有 `transition` 或 `@keyframes`；
+  运行 HUD 文本由脚本写入、按值比较后才置脏，100 ms 只是安全网。
+- 隐藏分支调用 `MarkHidden()`，重新可见的第一帧因此必然 `surfaceChanged`，
+  即使没有任何分节/事件也会完整更新并发布完整快照。
+- 负判定时 `UiSubsystem` 不调用 `rmlContext->Update()`，也不发布；
+  `UiRenderSnapshotPublisher` 保留最后一份不可变快照，RT 队列保持空，RT 继续用
+  自己上次消费到的指针绘制。发布只会用完整快照替换，跳过不会清空队列。
+- 隐藏帧仍维持原行为：每帧发布不含 UI 文档、仅 DrawDebug 的覆盖层快照。
+- DrawDebug 几何在 RmlUi 之外逐帧变化：只要当前可见或上一份快照含调试几何，
+  就每帧重发快照（`publishSnapshot=true`、`updateRml` 可仍为 false），
+  避免运动轨迹或过期图元冻结。
+
+### 9.3 实测
+
+方法：Release `build-rel/bin/main.exe`，`--initial-scene
+Maps/SC_tressfx_female/SC_tressfx_female_skinned.json --perf-jsonl <file>
+--gpu-stats`，运行 16–34 s，丢弃启动前 3 个 1 s 样本后取 `cpuStages` 中
+`uiViewModel` 的中位数；输入态用 Win32 `SetCursorPos` 持续移动指针（详见 9.4）。
+第 2 层的 0.53 / 0.04 来自 §8 已提交记录；第 2 层没有单独的"静止/输入"区分，
+因为它对每个可见帧都执行同样的更新与快照构建。
+
+| 状态 | 第 2 层 | 第 3 层 | 采样数（稳态） |
+| --- | ---: | ---: | ---: |
+| `--no-dev-ui`（HUD） | 0.04 ms | **0.042 ms** | 34 |
+| 工作区可见、无输入（静止） | 0.53 ms | **0.112 ms** | 26 |
+| 工作区可见、指针约 18 次/s | ≈0.53 ms* | **0.169 ms** | 26 |
+| 工作区可见、指针约 55 次/s | ≈0.53 ms* | **0.26 ms** | 26 |
+
+\* 第 2 层逐帧更新，因此任何可见帧（含输入）都是同一份约 0.5 ms 成本；
+没有单独复测输入态。
+
+同一窗口的 `cpuMs` 中位数：静止可见 5.227 ms，`--no-dev-ui` 5.212 ms；
+`uiViewModel` 的下降基本被 `other` 吸收。`--gpu-stats` 的 `[UI]` 行给出直接证据：
+
+- 静止可见：`rmlUpdates/s≈9–10`、`snapshotPublishes/s≈9–10`、`skipped/s≈142–180`
+  （约 170 fps 下约 5% 的帧更新），`sections/s` 仍由 `performance:10` 主导。
+- 指针 18 次/s：`rmlUpdates/s≈24`、`skipped/s≈165`。
+- 指针 55 次/s：`rmlUpdates/s≈50–61`、`skipped/s≈139–146`。
+- `--no-dev-ui`：同样约 10 次/s 更新，其余帧跳过。
+
+可见态 0.11 ms 是"每 100 ms 一次约 0.4–0.6 ms 更新"的均摊，不是单帧成本变低；
+输入帧仍会回到完整的单次更新成本。
+
+### 9.4 交互证据
+
+`injectinput` 不能驱动指针：它只向 gameplay action 层注入合成动作
+（对应 `UPlayerInput::InjectInputForAction`），没有鼠标坐标/按键注入接口。
+没有为此新增 runtime test flag。实际验证用 Win32 `SetCursorPos` +
+`mouse_event(LEFTDOWN/LEFTUP)` 在窗口客户区坐标上注入，截图用仓库自带
+`screenshot` 控制台命令（经 `tool/validation/console_inject.ps1` 注入命令行）。
+
+窗口客户区原点由 `ClientToScreen` 取得为 (320,156)；以下坐标均为客户区坐标，
+截图见 `artifacts/ui-layer3/`（该目录 gitignored，结论记录在此）：
+
+- `ui-idle.png`：基线。底部面板为 Content Browser，无选中。
+- 指针移到 Performance 标签 (333,465)，不点击 → `ui-hover-performance.png`：
+  标签文字由灰变白（与 `ui-idle.png` 同区域逐像素比较有 116 个像素变化），
+  证明 hover 在跳过帧机制下仍会更新。
+- 在同一点左键点击 → `ui-tab-performance2.png`：底部面板切换到 Performance，
+  显示 FPS、CPU frame、CPU stages 表；证明标签切换（DOM 突变）强制更新。
+- 指针移到大纲 FemaleCharacter 行 (1020,130) 并左键点击 → `ui-selection-actor.png`：
+  该行变为青色选中态、Details 面板填充 Location/Rotation/Scale/Sections、
+  视口出现橙色选中描边；证明选择高亮与 Details 内容更新。
+- 点击 Log 标签 (233,464) → `ui-tab-log.png`：底部切换为 Log 的
+  Output/Scripts 页；再次证明标签切换。
+- 点击右上角 Immersive Mode (1206,21) → `ui-immersive.png`：工作区与 HUD 全部
+  消失，只剩场景；隐藏帧按既有行为发布空 UI 快照。随后按 F11 返回 →
+  `ui-immersive-restored.png`：**隐藏后的第一个可见帧**就恢复了完整工作区
+  （Outliner/Details/Content Browser/状态栏），证明 `MarkHidden()` + surface
+  change 的首帧强制路径有效。
+- 这些点击都发生在此前长时间空闲之后；若没有输入强制更新，静止路径不会重发快照。
+
+未验证：向 RmlUi 文本输入框注入键盘文本没有成功（用 `keybd_event` 点击
+Content Browser 搜索框后输入 "BRDF"，字段未收到文本，`ui-search-brdf3.png`
+仍是空搜索框、列表未过滤）。`TextInput`/`TextEditing` 走
+`ProcessRuntimeUiEvent` → `MarkInputEvent()` 的代码路径与调度器单测已覆盖，
+但没有端到端截图证据。
+
+### 9.5 测试与门禁
+
+`uiUpdateSchedulerTests.cpp`（`editor_ui_tests`，14 项）覆盖：空闲跳过、
+分节/输入/DOM 突变/World 换代/标签切换/本地化/10 Hz 节拍强制、隐藏态不更新、
+表面切换与隐藏后首帧强制完整更新、DrawDebug 只发布不更新、跳过发布时保留上一份
+快照身份且 RT 队列为空。Debug `build` 运行（`--gpu-stats`，skinned 场景）
+0 VUID、stderr 为空。
+
+### 9.6 复现入口
+
+```
+build-rel/bin/main.exe --initial-scene Maps/SC_tressfx_female/SC_tressfx_female_skinned.json \
+  --perf-jsonl artifacts/ui-layer3/visible.jsonl --gpu-stats
+build-rel/bin/main.exe --no-dev-ui --initial-scene Maps/SC_tressfx_female/SC_tressfx_female_skinned.json \
+  --perf-jsonl artifacts/ui-layer3/nodevui.jsonl --gpu-stats
+```

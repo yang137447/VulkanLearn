@@ -131,29 +131,31 @@ end 等待本 pass 完整结束，因此 `duration` 是"该 pass 的串行 GPU �
 
 ### `uiViewModel` 的构成与可见性
 
-`uiViewModel` 不再等价于"每帧构建完整编辑器视图模型"，读表时按可见性解释：
+`uiViewModel` 不再等价于"每帧构建完整编辑器视图模型"，读表时按可见性与更新调度解释：
 
-- **开发者工作区可见**：`source/ui/uiViewModelSections.h` 的九个分节各自按版本变化
-  重建与重脏。10 Hz 到期窗口只重新采样时间/进度驱动的分节（动画、性能、相机、
-  环境、离线），脚本/资产/大纲只在事件声明的窗口重建；`assets` 按日志/目录/缩略图
-  库的 revision 发布，性能分节不触发整份面板 Build。事件（选中、模式切换、World
-  换代、编辑器命令、脚本编译状态等）只强制它声明的分节，并在下一帧生效。
-  其余帧只更新 DrawDebug/相机、RmlUi 输入与绘制快照。这一阶段仍包含工作区
-  RmlUi 的渲染，因此可见时通常为约 0.5–0.9 ms（随 RmlUi 绘制负载变化），
-  而不是分节构建本身的成本。
-- **`--no-dev-ui`**：只冻结运行时 HUD 的场景名/游戏文本，不构建编辑器分节，
-  通常约 0.04 ms。
+- **开发者工作区可见且静止**：`source/ui/uiViewModelSections.h` 的九个分节各自按版本
+  变化重建与重脏；`source/ui/uiUpdateScheduler.h` 只在分节变化、RmlUi 输入、DOM 突变、
+  表面切换或 10 Hz 兜底到期时执行 `rmlContext->Update()` 与快照发布。静止帧两者都跳过，
+  RT 继续绘制上一份不可变快照。2026-10-23 的 Release skinned 实测中位数为
+  **约 0.11 ms**（每秒约 10 次更新、约 170 次跳过），而第 2 层是每帧更新（约 0.53 ms）。
+- **工作区可见且持续输入**：每个输入事件都强制同帧更新，成本回到"每次更新一次"。
+  指针约 18 次/秒移动时实测约 0.17 ms；约 55 次/秒移动时约 0.26 ms。
+- **`--no-dev-ui`**：只冻结运行时 HUD 的场景名/游戏文本，不构建编辑器分节。HUD 与
+  工作区共用同一个 RmlUi Context，但 HUD 文本按值比较后才置脏，通常约 0.04 ms。
 - **沉浸模式/UI 完全隐藏**：不构建编辑器分节、不更新 RmlUi 文档，只发布仅
   DrawDebug 的绘制快照，通常约 0.02 ms。
 - **UI 子系统未初始化**：`UpdateUiViewModel` 直接返回，本阶段没有样本或接近 0。
 
-因此隐藏 UI 后该行接近 0 是预期结果，不是计时缺失。`perf json` / `--perf-jsonl`
-读取的是 `GpuPassTimer` 的渲染/CPU 计时快照，不经过 UI 快照，UI 节流或隐藏不会改变
-这些通道的值。逐帧渲染的 `other` 会相应吸收 UI 侧减少的 GT 工作。
+`uiViewModel` 的可见态数值现在取决于采样窗口内"更新了几帧"，是均摊值而不是每帧成本；
+单帧更新的实际成本仍约为 0.4–0.6 ms（RmlUi 渲染 + 快照构建）。因此隐藏 UI 后该行接近 0
+是预期结果，不是计时缺失。`perf json` / `--perf-jsonl` 读取的是 `GpuPassTimer` 的
+渲染/CPU 计时快照，不经过 UI 快照，UI 节流或隐藏不会改变这些通道的值。逐帧渲染的
+`other` 会相应吸收 UI 侧减少的 GT 工作。
 
-`--gpu-stats` 每秒额外输出一行 `[UI] sections/s=… panelBuilds/s=…
-runtimeViews/s=… bindingDirty/s=…`（附按分节拆分的发布次数），用于验证
-“静止帧只重采样时间序列节、不重建面板”。该计数不改变任何数据路径。
+`--gpu-stats` 每秒额外输出一行 `[UI] sections/s=… panelBuilds/s=… runtimeViews/s=…
+bindingDirty/s=… rmlUpdates/s=… snapshotPublishes/s=… skipped/s=…`（附按分节拆分的
+发布次数），用于验证"静止帧只重采样时间序列节、不重建面板、不推进上下文/快照"。
+该计数不改变任何数据路径。
 
 ### 与等待重叠的边界
 
@@ -304,6 +306,11 @@ JSON 的固定键序与 pass 列表保持不变。关闭 `--gpu-stats` 时不打
   1 次发布）、性能节每次采样发布、`ChangedFrom` 只报告变化位、两个 owner 的
   版本合并，以及到期窗口重建计划（静止只重采样周期节、选中只重建大纲、首帧/
   World 换代重建全部；Performance/动画不触发面板 Build）。
+- `tool/editor-ui-tests/uiUpdateSchedulerTests.cpp`（`editor_ui_tests`，14 项）：
+  第 3 层更新调度的空闲跳过、分节变化/输入事件/DOM 突变/World 换代/标签切换/
+  本地化提交/10 Hz 节拍强制更新、隐藏态不更新、表面切换与隐藏后首帧强制完整
+  更新、DrawDebug 只发布不更新，以及跳过发布时上一份不可变快照身份保留、RT
+  队列保持空、隐藏后首帧发布完整快照。
 - `tool/editor-ui-tests/performancePanelTests.cpp`（`editor_ui_tests`，8 项）：
   摘要/百分比/条形映射、图序而非成本序、5 Hz 节流与可见性立即刷新、不支持/未采样/无有效
   样本的空状态、首帧空快照不伪造 0，以及 CPU 阶段表按 `cpuMs` 归一、`other` 行与独立颜色。

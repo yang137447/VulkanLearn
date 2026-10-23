@@ -14,6 +14,8 @@ add_executable(editor_ui_tests
     performancePanelTests.cpp
     uiViewModelRefreshTests.cpp
     uiViewModelSectionsTests.cpp
+    uiUpdateSchedulerTests.cpp
+    "${PROJECT_SOURCE_DIR}/source/ui/uiRenderSnapshotQueue.cpp"
     logPanelTests.cpp
     gameplayHudTests.cpp
     contentBrowserTests.cpp

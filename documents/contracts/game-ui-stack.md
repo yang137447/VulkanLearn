@@ -298,16 +298,20 @@ The editor offline controls skip formatting and DOM lookup when their input
 snapshot is unchanged. User edits invalidate that cache; focused partial input
 remains untouched, and the first unfocused update reconciles the authoritative
 value. Document reattachment invalidates both controls and metrics caches.
-Viewport controls, RmlUi input processing and context updates remain per-frame,
-so camera indicators, hover, scrolling and animations are not throttled.
+RmlUi input processing stays immediate, but the context update and draw-snapshot
+publication are gated by `UiUpdateScheduler` (see "Update Skip And Snapshot
+Retention"); an input event always forces both in the same frame, so hover,
+pressed, focus and drag feedback are not left stale.
 Actor helper icons retain fixed layout boxes and update screen position through
 draw transforms. Selected helper lines retain slots for their unclipped topology;
 clipping changes transforms/visibility rather than replacing DOM. Camera motion
 therefore does not invalidate workspace layout through helper markup updates.
 
-This is binding/control invalidation, not dirty-rectangle rendering. GT still
-builds immutable draw snapshots and RT uploads/composites the overlay every frame;
-unchanged panel data does not yet imply reused GPU draw buffers.
+This is binding/control invalidation, not dirty-rectangle rendering. When the UI
+is unchanged GT does not build or publish a new draw snapshot, so RT keeps
+compositing the last immutable one; unchanged panel data does not imply reused
+GPU draw buffers, only that an unchanged snapshot is re-uploaded from the same
+CPU vertices.
 
 ### View Model Sections, Versions And Cadence
 
@@ -376,13 +380,69 @@ single `UiSectionVersions` used for dirty-set decisions.
   and editor commands therefore still become visible on the next GT frame
   (≤ one rendered frame); only genuinely unchanged sections are skipped.
 - What remains per-frame: `frameIndex`/delta time/FPS, the frozen camera and
-  DrawDebug overlay values (needed by the immersive overlay), RmlUi input
-  processing, `rmlContext->Update()`, and publishing the immutable
-  `UiRenderSnapshot`. RmlUi document rendering is what dominates the visible
-  `uiViewModel` number, not view-model assembly.
+  DrawDebug overlay values (needed by the immersive overlay), input processing,
+  `status` publication and input-ownership evaluation. `rmlContext->Update()`
+  and `UiRenderSnapshot` publication happen only when the update scheduler says
+  so (below).
 - `--gpu-stats` additionally logs one `[UI] sections/s=… panelBuilds/s=…
-  runtimeViews/s=… bindingDirty/s=…` line per second with the per-section
-  breakdown. It is a diagnostic of the gate, not a new data path.
+  runtimeViews/s=… bindingDirty/s=… rmlUpdates/s=… snapshotPublishes/s=…
+  skipped/s=…` line per second with the per-section breakdown. It is a
+  diagnostic of the gate, not a new data path.
+
+#### Update Skip And Snapshot Retention
+
+`source/ui/uiUpdateScheduler.h` answers one question per visible frame: does the
+UI need an `rmlContext->Update()` and a new immutable `UiRenderSnapshot` now?
+`UiUpdateScheduler` is a pure decision plus the timestamp of the last real
+update; it never polls DOM or widget state. Inputs:
+
+- any view-model section version changed since the applied set;
+- any RmlUi-bound input event since the last update: pointer move/down/up/leave,
+  wheel, key down/up, text/composition, gamepad button/axis;
+- any DOM or content mutation: panel build, tab switch, document show/hide,
+  hot-reload commit, locale commit, resize, World change, binding text change,
+  or an explicit forced refresh;
+- a change of visible surface (hidden ↔ runtime HUD ↔ workspace);
+- the fallback cadence.
+
+The fallback cadence is **10 Hz** (`UiUpdateFallbackInterval`, 100 ms). The
+reasons: EngineLoop already samples FPS/performance into the view model at
+100 ms, so no displayed number can change faster; the UI RCSS defines no
+`transition` or `@keyframes`, so there is no element animation to advance; and
+runtime HUD text is event-driven (script lines compared by value), with the
+cadence acting only as a safety net for a binding nobody dirtied.
+
+The runtime HUD and the editor workspace load into the **same** `RmlUi::Context`.
+`Context::Update()` advances every loaded document, so there is no HUD-only
+update path and gating the workspace independently is impossible without a
+second context. `ApplyDocumentState()` makes the two documents mutually
+exclusive, so the scheduler runs once per visible surface: `RuntimeHud` for
+`--no-dev-ui` (or an enabled-but-hidden editor), `Workspace` for the editor. HUD
+text changes go through the same value-compared bindings and force the update
+directly; the 10 Hz cadence is shared.
+
+When the decision is negative `UiSubsystem` neither calls `Context::Update()` nor
+publishes. `UiRenderSnapshotPublisher` retains the last published immutable
+snapshot and RT keeps drawing it; the queue is only replaced with a complete
+snapshot and is never cleared by a skip, so RT cannot observe a torn or empty
+intermediate. Hidden frames keep their previous behaviour: every hidden frame
+still publishes a snapshot with no UI documents (only the DrawDebug overlay) and
+`sceneViewportEnabled=false`, overwriting the retained workspace image.
+
+The first visible frame after being hidden is always a full update: the hidden
+branch calls `MarkHidden()`, so the next visible evaluation reports a surface
+change and publishes a complete snapshot even when no section version changed.
+
+DrawDebug is the one intentional exception. Its geometry is rebuilt from
+World/camera state outside RmlUi, so while the overlay is visible with geometry
+(or the last published snapshot contained geometry) the snapshot is republished
+every frame to keep moving geometry and expiry correct. The RmlUi context itself
+still follows the normal update decision; `publishSnapshot` can therefore be
+true while `updateRml` is false.
+
+Interaction latency remains one GT frame for input-driven changes (the event is
+processed, the flag is set, the same frame's update runs) and up to 100 ms for
+purely time-driven numbers that have no event source.
 
 `perf json` and `--perf-jsonl` do not read any UI section: they serialize
 `GpuPassTimer`'s render/CPU timer snapshot directly, so throttling or hiding the
@@ -419,10 +479,13 @@ There is no second UI-to-renderer mutation route.
 ## Threading And Ownership
 
 GT owns `UiSubsystem`, the RmlUi context, both documents, input arbitration,
-reload and view updates. At the end of Update it publishes one immutable
-snapshot through `UiRenderSnapshotQueue`, which retains only the newest.
-RT consumes that snapshot and may retain the last one when no new one exists.
-RT never traverses live documents or asset sessions.
+reload and view updates. When the update scheduler says the visible UI changed
+(or on a hidden frame), Update publishes one immutable snapshot through
+`UiRenderSnapshotQueue`, which retains only the newest.
+RT consumes that snapshot and otherwise keeps the last one it consumed. A
+skipped frame therefore leaves the previous immutable snapshot in place on both
+sides; the publisher also retains its identity. RT never traverses live documents
+or asset sessions.
 The JSON worker performs only bounded filesystem/parse work, never RmlUi,
 World mutation or Vulkan access. GT alone publishes its completed snapshots;
 shutdown joins the worker before releasing the library's snapshots.
@@ -643,6 +706,11 @@ Its Vulkan-free `uiViewModelRefreshTests` cover the view-model visibility
 decision and refresh schedule: first frame due, interval wait, forced event
 refresh, re-armed windows, a custom 15 Hz cadence, and "hidden never builds the
 full editor snapshot even when forced".
+Its `uiUpdateSchedulerTests` cover the layer-3 gate: idle skip, section/input/DOM
+mutation/world-change/tab-switch/locale/cadence forcing, hidden never updating,
+surface switch and first-visible-frame forcing, the animated-overlay publish-only
+case, and that a skipped publish retains the last immutable snapshot identity
+while the queue stays empty.
 Its Performance cases load the workspace document, verify the tab sits in the
 Log/Renderer stack, map a frozen `PerformanceSnapshot` into summary/table values,
 assert the CPU stage table and its derived `other` row, and assert 5 Hz throttling plus
