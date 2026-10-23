@@ -872,6 +872,9 @@ void RuntimeCommandExecutor::ExecuteCommand(
     case RuntimeCommandType::ReportShaderCacheStatistics:
         executionResult.shaderCacheStatisticsRequested = true;
         break;
+    case RuntimeCommandType::PrintGpuPassStats:
+        renderSystem.PrintGpuPassStats();
+        break;
     }
 }
 

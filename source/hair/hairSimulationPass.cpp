@@ -387,6 +387,26 @@ void HairSimulationPass::RecordPass(vk::CommandBuffer commandBuffer,
     anyDispatch = true;
 }
 
+bool HairSimulationPass::HasWork(const VL::ResolvedRenderScene& scene) const
+{
+    if (!initialized || !pipelines[0])
+        return false;
+
+    for (const ResolvedMaterialGroup& materialGroup : scene.materialGroups)
+    {
+        for (const ResolvedMaterialInstanceGroup& instanceGroup : materialGroup.materialInstances)
+        {
+            for (const ResolvedDrawPacket& draw : instanceGroup.draws)
+            {
+                const std::shared_ptr<RenderableObject> object = draw.renderableObject.lock();
+                if (object && object->UsesGpuGuideSimulation())
+                    return true;
+            }
+        }
+    }
+    return false;
+}
+
 void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
     const VL::ResolvedRenderScene& scene,
     const VL::RenderScene& renderScene,

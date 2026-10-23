@@ -121,6 +121,9 @@ RuntimeResult<void> EngineLoop::Init(
     }
 
     RenderSystem::GetInstance().SetInitialOfflineMode(launchOptions.offlineRender);
+    // 必须在 LoadInitialWorldAndRenderer 之前设置：帧资源初始化时按该标志决定是否
+    // 在首次采集时创建 timestamp query pool。
+    RenderSystem::GetInstance().SetGpuPassStatsLoggingEnabled(launchOptions.gpuStats);
     auto worldResult = LoadInitialWorldAndRenderer(
         launchOptions.initialSceneOverride);
     if (worldResult.IsFailure())

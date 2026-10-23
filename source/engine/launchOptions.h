@@ -27,6 +27,9 @@ struct LaunchOptions
     bool forceShaderRebuild = false;
     bool offlineRender = false;
     bool exitAfterTests = false;
+    // 逐 pass GPU 计时：默认关闭以保证普通日志与逐帧路径无额外开销；
+    // 打开后每 120 帧向日志打印一张 [GPU] 表，控制台 gpustats 可随时按需查看。
+    bool gpuStats = false;
     // 自动化输入验收：启动后主动抢占 OS 键盘焦点，仅显式 flag 生效。
     bool focusWindow = false;
     DeveloperUiLaunchMode developerUiMode = DeveloperUiLaunchMode::UseConfig;

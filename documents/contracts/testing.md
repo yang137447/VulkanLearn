@@ -31,7 +31,8 @@
 | `vl_offline_adapter_tests` | 101 | 离线场景/网格/显示/相机适配 |
 | `editor_viewport_tests` | 41 | 视口几何、命中、坐标映射、aspect、坐标轴投影及编辑器网格 |
 | `vl_offline_coordinator_tests` | 13 | 离线会话协调 |
-| `vl_renderer_backend_tests` | 44 | 离屏显示输出、GPU 缩略图资源、swapchain 帧结果及同 World 新增绘制对象的资源发布契约 |
+| `vl_renderer_backend_tests` | 51 | 离屏显示输出、GPU 缩略图资源、swapchain 帧结果、同 World 新增绘制对象的资源发布契约，以及逐 pass GPU 计时的纯逻辑（tick→毫秒、`end < begin`、窗口平均/淘汰、名字顺序、表格字符串） |
+| `engine_launch_options_tests` | 4 | `--gpu-stats` 默认关闭/可接受/与既有参数组合；未知参数仍被拒绝 |
 | `material_instance_editor_landed_tests` | 10 | MI 已落地接口 |
 | `material_instance_editor_tests` | 7 | MI 命令/文档服务 |
 | `material_instance_editor_production_tests` | 11 | MI 生产路径（预览边界、直接 render-state 路由、场景/非活动 MI 独立保存）及标准资产 JSON facade/Save Content、C# 草稿连续保存、独立蓝图草稿/保存反馈和历史集成 |
@@ -1115,6 +1116,8 @@ computer-use 实窗验收使用 `Generated/AssetModifySmoke-20261013/` 副本：
 | `source/ui/**`、`source/editor/**` | 编辑器 UI 全套 + 构建 `main` | 真实出图（见下） |
 | `source/script/**`、`script/**`、Actor 场景加载 | `script_tests` 连续两遍 + C# ON/OFF 构建 | UI/保存集成、实窗 Play/Pause/Stop、World 事务 |
 | 共享接口、状态或资源契约（`source/world/**`、`source/renderGraph.*`、`source/renderSystem.*`） | 编译全部测试目标 + 相应套件 | `--world-graph-transaction-test`、边界审计 |
+| 逐 pass GPU 计时（`source/render/backend/gpuPassTimer.*`、`gpuPassTimings.h`、`source/renderSystem.*` 的 timestamp 录制） | `vl_renderer_backend_tests --gtest_brief=1`；Debug 构建 `main.exe --gpu-stats` 跑任一 GPU 场景，确认 `[GPU]` 表打印且 stderr 无 `VUID` | Release 场景对照；`gpustats` 控制台按需采集 |
+| 启动参数（`source/engine/launchOptions.*`） | `engine_launch_options_tests --gtest_brief=1` + 构建 `main` | 实际启动带该 flag 的场景 |
 | shader（`shader/glsl/**`） | 编译 `main`（启动即编译 shader，缓存命中/失效见 `contracts/shader-build-cache.md`） | `--shader-reload-test`、`--shader-compute-reload-test` |
 | schema（`schema/*.schema.json`） | 该 schema 的校验脚本（见 `schema/README.md`） | 加载对应资产的场景是否能起 |
 | 门禁脚本本体（`tool/architecture-boundary-audit.ps1`） | 运行它自身 | `tool/architecture-final-validation.ps1` |

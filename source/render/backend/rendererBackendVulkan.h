@@ -123,6 +123,7 @@ public:
     bool CompleteSwapchainScreenshot(std::string& outError);
     float GetTimestampPeriodNanoseconds();
     uint32_t GetGraphicsTimestampValidBits();
+    bool SupportsTimestampQueries();
     // 材质加载阶段只依赖 backend 能力接口，不直接穿透到 VulkanManager。
     bool SupportsDualSourceBlend() const;
     vk::QueryPool CreateTimestampQueryPool(
@@ -130,6 +131,10 @@ public:
         const std::string& debugName);
     void DestroyQueryPool(vk::QueryPool& queryPool);
     void ReadTimestampQueryPair(
+        vk::QueryPool queryPool,
+        uint32_t firstQuery,
+        std::array<uint64_t, 2>& timestamps);
+    bool TryReadTimestampQueryPair(
         vk::QueryPool queryPool,
         uint32_t firstQuery,
         std::array<uint64_t, 2>& timestamps);

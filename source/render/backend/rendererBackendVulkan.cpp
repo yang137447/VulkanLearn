@@ -553,6 +553,11 @@ uint32_t RendererBackendVulkan::GetGraphicsTimestampValidBits()
     return rhiDevice->GetGraphicsTimestampValidBits();
 }
 
+bool RendererBackendVulkan::SupportsTimestampQueries()
+{
+    return rhiDevice->SupportsTimestampQueries();
+}
+
 bool RendererBackendVulkan::SupportsDualSourceBlend() const
 {
     // 材质加载只读取 backend 的能力快照，避免把 Vulkan 设备细节泄漏到资源层。
@@ -577,6 +582,14 @@ void RendererBackendVulkan::ReadTimestampQueryPair(
     std::array<uint64_t, 2>& timestamps)
 {
     rhiDevice->ReadTimestampQueryPair(queryPool, firstQuery, timestamps);
+}
+
+bool RendererBackendVulkan::TryReadTimestampQueryPair(
+    vk::QueryPool queryPool,
+    uint32_t firstQuery,
+    std::array<uint64_t, 2>& timestamps)
+{
+    return rhiDevice->TryReadTimestampQueryPair(queryPool, firstQuery, timestamps);
 }
 
 RHIBufferHandle RendererBackendVulkan::RequireBufferHandle(vk::Buffer buffer) const

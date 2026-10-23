@@ -4,6 +4,7 @@ add_executable(vl_renderer_backend_tests
     scene_viewport_output_validation_test.cpp
     physical_lighting_test.cpp
     auto_exposure_test.cpp
+    gpu_pass_timings_test.cpp
     ${PROJECT_SOURCE_DIR}/source/render/rendergraph/renderGraphCompiler.cpp
     ${PROJECT_SOURCE_DIR}/source/render/rendergraph/sceneViewportOutputValidation.cpp
 )

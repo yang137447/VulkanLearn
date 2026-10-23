@@ -266,6 +266,13 @@ public:
         RHIFramebufferHandle framebufferHandle) const;
     float GetTimestampPeriodNanoseconds();
     uint32_t GetGraphicsTimestampValidBits();
+    // 统计功能只依赖能力查询，不向调用方暴露物理设备。
+    bool SupportsTimestampQueries();
+    // 非阻塞读取：命令已经随 fence 完成时返回 true；VK_NOT_READY 返回 false。
+    bool TryReadTimestampQueryPair(
+        vk::QueryPool queryPool,
+        uint32_t firstQuery,
+        std::array<uint64_t, 2>& timestamps);
     // 向上暴露逻辑设备已启用的双源混合能力，供材质 variant 与 pipeline 同步降级。
     bool IsDualSourceBlendEnabled() const;
     vk::QueryPool CreateTimestampQueryPool(

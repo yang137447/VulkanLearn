@@ -253,6 +253,17 @@ void DebugConsole::ProcessCommand(const std::string& line)
         return;
     }
 
+    if (command == "gpustats")
+    {
+        // 与其它命令一样只生产意图：采集开关和表格都归 RenderSystem 所有，
+        // 由 GT 的命令执行端调用，避免控制台直接接触渲染线程状态。
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type = VL::RuntimeCommandType::PrintGpuPassStats;
+        runtimeCommand.sourceText = line;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
     if (command == "help")
     {
         PrintHelp();
@@ -685,6 +696,7 @@ void DebugConsole::PrintHelp() const
     std::cout << "  injectinput <action> <down|up> - inject a gameplay action for automation (no OS focus required)\n";
     std::cout << "  shaderreload help - show hot-reload triggers by resource type\n";
     std::cout << "  shadercache stats - report shader build cache statistics\n";
+    std::cout << "  gpustats - print the latest per-pass GPU timing table (enables collection if needed)\n";
 }
 
 void DebugConsole::PrintShaderReloadHelp() const

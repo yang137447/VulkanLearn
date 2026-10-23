@@ -15,6 +15,7 @@
 #include <nlohmann/json.hpp>
 #include "baseStructs.h"
 #include "render/backend/rendererDescriptorContext.h"
+#include "render/backend/gpuPassTimer.h"
 #include "render/backend/rendererFrameResources.h"
 #include "render/backend/resolvedRenderScene.h"
 #include "render/environment/environmentIblBaker.h"
@@ -105,6 +106,13 @@ public:
     void RenderLatestSnapshotOrLastGood();
     void Render();
     void RequestScreenshot(std::string path);
+    // --gpu-stats：开启后逐 pass 采集并按 120 帧打印一次；关闭时不创建 query pool。
+    void SetGpuPassStatsLoggingEnabled(bool enabled)
+    {
+        gpuPassTimer.SetLoggingEnabled(enabled);
+    }
+    // 控制台 gpustats：立即打印当前表，并在未开启时启动采集。
+    void PrintGpuPassStats();
     void SetRendererBackend(VL::RendererBackendVulkan* backend) { rendererBackend = backend; }
     void SetUiRenderSnapshotQueue(VL::UiRenderSnapshotQueue* queue) { uiRenderSnapshotQueue = queue; }
     void SetSceneViewport(const VL::UiViewportRect& rect, bool enabled);
@@ -462,6 +470,8 @@ private:
     VL::PrefilterEnvMapReloadParticipant prefilterReloadParticipant{
         environmentIblBaker};
     VL::EnvironmentGpuTimer environmentGpuTimer;
+    // 逐 pass GPU 计时：query pool 随帧资源创建/销毁，采集关闭时不分配。
+    VL::GpuPassTimer gpuPassTimer;
     VL::EnvironmentUpdateScheduler environmentUpdateScheduler;
     VL::EnvironmentUpdateState environmentUpdateState;
     std::shared_ptr<Texture> environmentUpdateSourceCube;

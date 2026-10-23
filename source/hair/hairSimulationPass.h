@@ -66,6 +66,10 @@ public:
     HairSimulationPass& operator=(const HairSimulationPass&) = delete;
 
     void Initialize(PipelineFactory& factory, RendererBackendVulkan& backend);
+    // 只判断本帧是否存在需要 GPU guide simulation 的对象。上层必须在写
+    // hairSimulation 的 timestamp 之前调用：没有任何 dispatch 的帧不能占用 query 槽位，
+    // 否则先写 begin、再丢弃、再复用同一 query 会违反"查询必须先重置"的规则。
+    bool HasWork(const VL::ResolvedRenderScene& scene) const;
     // frameSlot 是 frame-in-flight 槽；调用方在每帧 pass 循环之前调用一次。
     // renderScene 是同一帧冻结的前端快照：simulation.skinning 从它的 draw packet 读取
     // SkinPose，不从头重建场景查询，也不在 pass 里持有播放器。

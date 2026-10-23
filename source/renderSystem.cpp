@@ -15,6 +15,7 @@
 #include <stdexcept>
 #include <string>
 #include "core/runtimeResult.h"
+#include "core/logStore.h"
 #include "sceneNode.h"
 #include "materialInstance.h"
 #include "material.h"
@@ -1239,6 +1240,34 @@ void RenderSystem::Render()
 void RenderSystem::RequestScreenshot(std::string path)
 {
     pendingScreenshotPath = std::move(path);
+}
+
+void RenderSystem::PrintGpuPassStats()
+{
+    // 控制台按需启用采集；Snapshot 只读最近一次读回的窗口，不等待渲染线程。
+    gpuPassTimer.RequestCollection();
+    const VL::GpuPassStatsSnapshot snapshot = gpuPassTimer.Snapshot();
+    if (!snapshot.supported)
+    {
+        std::cout << "[GPU] pass timing is unavailable on this device "
+                     "(timestamp queries unsupported or timestampPeriod == 0)."
+                  << std::endl;
+        return;
+    }
+    if (!snapshot.collecting || snapshot.table.rows.empty())
+    {
+        // 首次启用采集时还没有可打印的表；让渲染线程在第一次读回后补打一张，
+        // 这样单次 'gpustats' 命令也能在接下来一两帧后给出数据。
+        gpuPassTimer.RequestPrint();
+        std::cout << "[GPU] pass timing collection enabled; no completed samples "
+                     "have been read back yet. A table will be logged after the next readback."
+                  << std::endl;
+        return;
+    }
+
+    const std::string table = VL::FormatGpuPassTimingTable(snapshot.table);
+    VL::ProcessLog().Append(VL::LogSeverity::Info, "GPU", table);
+    std::cout << "[Diagnostics][Info] " << table << std::endl;
 }
 
 void RenderSystem::SetSceneViewport(const VL::UiViewportRect& rect, bool enabled)
@@ -3119,6 +3148,12 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
         }
     }
 
+    // 统计 query pool 在 backend BeginFrame 之前创建：此时本帧命令缓冲尚未开始录制。
+    // 未开启采集时这里只做两次原子读取，不创建任何 Vulkan 对象。
+    if (!offlineMode)
+    {
+        gpuPassTimer.PrepareFrame(currentFrame % MAX_FRAMES_IN_FLIGHT);
+    }
     // Backend owns swapchain frame synchronization. RenderSystem only records
     // pass work into the command buffer it receives for this image.
     VL::RendererFrameContext frameContext = rendererBackend->BeginFrame(currentFrame);
@@ -3169,6 +3204,9 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
         }
         else
         {
+        // 读回发生在这里：backend BeginFrame 已等待本 frame slot 的 fence，上一批查询必然就绪。
+        // 随后在命令缓冲里重置该槽位的查询范围，早于本帧任何被计时命令。
+        gpuPassTimer.BeginFrame(commandBuffer, frameIndex);
         AdvanceSpeedTreeWindProfiles();
         // Procedural sky IBL needs the latest camera and sky parameters in global UBO,
         // but environmentSH is GPU-owned and must not be overwritten by this upload.
@@ -3177,7 +3215,20 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
         // passes read global lighting data.
         RecordEnvironmentIbl(commandBuffer, swapChainImageIndex);
         // guide 模拟必须在任何 pass 读取 current positions 之前完成本帧 dispatch。
+        // 只有本帧确实在采集时才做 HasWork 扫描；关闭 --gpu-stats 且未执行 gpustats
+        // 时，统计路径对每帧的正常渲染只增加一次原子读取和一次分支。
+        const auto& hairSimulation = renderGraph.GetHairSimulation();
+        const bool hairWillRecord =
+            gpuPassTimer.IsFrameActive() &&
+            hairSimulation &&
+            hairSimulation->HasWork(currentResolvedRenderScene);
+        const bool hairTimed = hairWillRecord &&
+            gpuPassTimer.BeginPass(commandBuffer, "hairSimulation");
         RecordHairSimulation(commandBuffer, frameIndex);
+        if (hairWillRecord)
+        {
+            gpuPassTimer.EndPass(commandBuffer, hairTimed);
+        }
 
         const auto& renderPassOrdered = renderGraph.GetRenderpassesOrdered();
         for (size_t passIndex = 0; passIndex < renderPassOrdered.size(); ++passIndex)
@@ -3202,6 +3253,12 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
                 continue;
             }
 
+            // pass 本身可能开启 render pass 实例，因此 timestamp 必须在实例外 bracket：
+            // BeginPass 在 ScopedRegion 之前写 begin timestamp，EndPass 在录制完成后写
+            // end timestamp；两端都在 pass 实例外，因此不受 render pass 内部阶段限制。
+            const bool passTimed =
+                gpuPassTimer.BeginPass(commandBuffer, renderPassName);
+
             VulkanDebug::ScopedRegion passRegion(
                 commandBuffer,
                 renderPassName,
@@ -3212,6 +3269,7 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
                 PassBarrier::PrepareForPass(commandBuffer, renderGraph, passIndex, swapChainImageIndex);
                 renderGraph.GetAutoExposure()->Record(commandBuffer, swapChainImageIndex,
                     currentRenderScene.camera.exposure, exposureDeltaSeconds);
+                gpuPassTimer.EndPass(commandBuffer, passTimed);
                 continue;
             }
             VL::PassRuntimeContext passContext{
@@ -3226,6 +3284,7 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
                 renderToViewport
             };
             passRuntime.RecordPass(renderPassName, passContext);
+            gpuPassTimer.EndPass(commandBuffer, passTimed);
         }
         }
 
@@ -3284,6 +3343,8 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
         }
     }
 
+    // 本帧查询随 SubmitFrame 进入 GPU；下次复用该 frame slot 时（fence 已等待）再读回。
+    gpuPassTimer.EndFrame();
     // RenderSystem only records pass commands. Queue, semaphore, fence,
     // swapchain, present, and retire epoch details stay backend-owned.
     rendererBackend->SubmitFrame(frameContext, currentFrame);
@@ -3415,6 +3476,8 @@ void RenderSystem::InitializeFrameResources()
         shaderReloadCoordinator->RegisterComputeParticipant(&exposureAdaptReloadParticipant);
     }
     environmentGpuTimer.Initialize(*rendererBackend);
+    // query pool 在首次采集时才创建；--gpu-stats 关闭时这里只记录能力快照。
+    gpuPassTimer.Initialize(*rendererBackend, MAX_FRAMES_IN_FLIGHT);
 }
 
 void RenderSystem::ShutdownFrameResources()
@@ -3424,6 +3487,8 @@ void RenderSystem::ShutdownFrameResources()
         return;
     }
 
+    // 先销毁统计 query pool，再释放 swapchain 相关帧资源。
+    gpuPassTimer.Shutdown(*rendererBackend);
     environmentGpuTimer.Shutdown(*rendererBackend);
     if (shaderReloadCoordinator != nullptr)
     {

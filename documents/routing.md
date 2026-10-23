@@ -33,14 +33,14 @@
 | `source/resource/image/textureAssetValidation.h`、`source/textureAssetLoader.cpp` | `contracts/texture-asset-json-v1.md`、`contracts/asset-modify-api.md` | — |
 | `source/scene/validation/**` | `contracts/asset-modify-api.md`、`contracts/vulkanlearn-architecture.html` | — |
 | `source/render/offline/**` | `contracts/vl-offline-rendering.md` | — |
-| `source/hair/**`、`tool/hair/**`、`tool/hair-tests/**` | `contracts/tressfx-asset-import.md`、`contracts/testing.md` | — |
+| `source/hair/**`、`tool/hair/**`、`tool/hair-tests/**` | `contracts/tressfx-asset-import.md`、`contracts/gpu-pass-timing.md`、`contracts/testing.md` | — |
 | `source/mesh/loader/hair/**`、`shader/glsl/engine/tressfxVertexFactory.glsl`、`shader/glsl/engine/tressfxCoverage.glsl`、`shader/glsl/hair/**`、`tool/material-schema-tests/tressfxMaterialTests.cpp` | `contracts/tressfx-asset-import.md`、`contracts/material-mesh-pass-composition.md`、`contracts/testing.md` | — |
 | `source/world/**` | `contracts/vulkanlearn-architecture.html` | World mesh object cutover、Mesh object build plan contract、World build plan mesh object contract、WorldBuilder mesh object plan consumption、World loader runtime error code contract、World reload failure state machine validation |
-| `source/render/backend/**` | `contracts/vulkanlearn-architecture.html` | Redundant Vulkan device abstraction cutover、Vulkan device boundary concrete-only contract、RendererBackend device boundary escape hatch、RendererBackend hides concrete device boundary、RendererBackend device boundary forward declaration、Backend texture handle bridge contract、Swapchain resize production lifecycle |
+| `source/render/backend/**` | `contracts/vulkanlearn-architecture.html`、`contracts/gpu-pass-timing.md` | Redundant Vulkan device abstraction cutover、Vulkan device boundary concrete-only contract、RendererBackend device boundary escape hatch、RendererBackend hides concrete device boundary、RendererBackend device boundary forward declaration、Backend texture handle bridge contract、Swapchain resize production lifecycle |
 | `source/render/resource/**` | `contracts/descriptor-imageinfo-management.md` | Buffer resource package lifecycle handle adoption、Texture resource package lifecycle handle adoption、Renderer resource load result contract、Renderer resource load runtime error code contract |
 | `source/renderGraph.*` | `contracts/vulkanlearn-architecture.html` | Render graph reload production lifecycle、Render graph resource retire ownership、World graph retire queue validation、RenderGraph resource package lifecycle handle adoption |
 | `source/passBarrier.*`、`shader/glsl/uiOverlay.*` | `contracts/debug-draw.md`、`contracts/descriptor-imageinfo-management.md`、`contracts/shader-hot-reload.md` | — |
-| `source/renderSystem.*` | `contracts/vulkanlearn-architecture.html` | RenderSystem frame boundary、Draw frame boundary、Resolved draw resource ownership |
+| `source/renderSystem.*` | `contracts/vulkanlearn-architecture.html`、`contracts/gpu-pass-timing.md` | RenderSystem frame boundary、Draw frame boundary、Resolved draw resource ownership |
 | `source/render/pass/**` | `contracts/vulkanlearn-architecture.html` | Render pass gameplay boundary |
 | `source/shaderCompiler.*`、`source/shader/build/**` | `contracts/shader-build-cache.md` | — |
 | `source/shader/reload/**` | `contracts/shader-hot-reload.md` | — |
@@ -53,7 +53,8 @@
 | `source/editor/ui/editorViewportAxisIndicator.h`、`#viewport-axis-indicator` 叠层 | `contracts/ui-component-system.md` 的「角落坐标轴指示器」节 | — |
 | `source/pipeline/**` | `contracts/vulkanlearn-architecture.html` | Pipeline Vulkan creation diagnostics、Pipeline Vulkan creation diagnostic context |
 | `source/commonFunction.h` | `contracts/coding-guidelines.md` | CommonFunction depth helper cleanup、Source comment clarity |
-| `source/engine/**` | `contracts/vulkanlearn-architecture.html` | Runtime test hook command boundary、Launch runtime tests use CommandBus、Runtime test state stays out of EngineLoop、LoadWorld path resolve runtime error contract |
+| `source/engine/**` | `contracts/vulkanlearn-architecture.html`、`contracts/gpu-pass-timing.md` | Runtime test hook command boundary、Launch runtime tests use CommandBus、Runtime test state stays out of EngineLoop、LoadWorld path resolve runtime error contract |
+| `source/debugConsole.*` | `contracts/gpu-pass-timing.md`、`contracts/testing.md` | — |
 | `schema/*.schema.json` | `contracts/texture-asset-json-v1.md` | — |
 | `tool/architecture-boundary-audit.ps1`、`tool/architecture-final-validation.ps1` | `contracts/vulkanlearn-architecture.html` | Architecture final validation script contract |
 | `documents/**` | `README.md`（分层规则） | Vulkan-native architecture wording |
