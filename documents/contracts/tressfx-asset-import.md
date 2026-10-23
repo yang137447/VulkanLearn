@@ -296,14 +296,12 @@ backend 写入模型缓存身份，同一个 `.tfx` 的 cpu/gpu 描述符不共�
 | --- | --- | --- | --- |
 | `enabled` | 无对象时 false；对象内缺省 true | bool | false 为静态中心线回退。 |
 | `gravity` | `[0,-980,0]` | 3 个有限数 | 重力加速度，厘米/秒²；直接作为积分力，不再套用 TressFX 的 `GravityMagnitude*(0,0,-1)`。 |
-| `wind` | `[0,0,0]` | 3 个有限数 | **平均**风加速度，厘米/秒²；Host 四路填入 TressFX 的 `Wind0..3`。 |
-| `damping` | 0.995 | `[0,1]` | 60 Hz 下每步保留的速度比例，运行时映射为 `DampingCoeff = -ln(damping)`。 |
-| `iterations` | 3 | `[1,16]` | LengthConstraintsWind pass 的偶数/奇数边约束迭代次数。 |
+| `wind` | `[0,0,0]` | 3 个有限数 | 单个作者风向量：方向归一化后作为 TressFX 风锥轴，长度作为幅值（厘米/秒）；它是 TressFX 风力公式的标量，不是物理风速。Host 按 `SetWind` 生成 `Wind0..3`（绕 Y/Z 各 ±40°，每路乘 `wM = |wind|*(sin(simFrame*0.001)² + 0.5)`）。 |
+| `damping` | 0.035 | `[0,1]`，典型 `0..0.07` | TressFX 的 `DampingCoeff`，直接用于 `exp(-damping*dt*60)`；不是“每步保留的速度比例”，不做 `-ln` 映射。 |
+| `iterations` | 3 | `[1,16]` | LengthConstraintsWind pass 的偶数/奇数边约束迭代次数；本资产校准为 8。 |
 | `rootFixedPoints` | 2 | `[0,32]` | 每根 guide 从根部起固定的点数，即 TressFX 的 `NumVerticesFromRootNoSimulation`。 |
-| `maxDt` | 0.033 | `(0,0.25]` | 单帧 dt 上限；`dt = clamp(frameDelta, 0, maxDt)` 直接成为本帧唯一 solver step。 |
+| `maxDt` | 0.016 | `(0,0.016]` | 单帧 dt 上限；TressFX 的硬上限是 0.016 s，资产只能收紧。`dt = min(frameDelta, maxDt)` 直接成为本帧唯一 solver step。 |
 | `bendStiffness` | 0.3 | `[0,1]` | 映射到 LocalShape pass 的逐顶点 `Stiffness` 标量；pass 内再乘 0.5（TressFX 公式）。0 关闭。 |
-| `windGust` | 0.5 | `[0,1]` | 阵风幅度；`gust = 1 + windGust*sin(2π f t + guide*0.6180339)`，乘在四风混合结果上。 |
-| `windFrequency` | 0.5 | `[0,10]` | 阵风频率 Hz；0 时相位固定。 |
 | `globalShapeStiffness` | 0 | `[0,1]` | TressFX Integration 的 global shape 强度；0 关闭，既有资产外观不变。 |
 | `globalShapeEffectiveRange` | 0 | `[0,1]` | 作用范围占每根 strand 顶点数的比例；0 关闭。 |
 | `vspCoefficient` | 0 | `[0,1]` | TressFX VSP 基础系数；0 表示关闭，Host 不录制 VSP dispatch。 |
@@ -312,7 +310,10 @@ backend 写入模型缓存身份，同一个 `.tfx` 的 cpu/gpu 描述符不共�
 | `skinning` | 无 | `{source, rootBone}` | 可选；把根点改为跟随场景内源角色的单个骨骼。缺省即历史行为。 |
 
 固定步字段已删除：`fixedStep` 与 `maxSubsteps` 不再被解析，出现即在资产边界报错
-（错误消息指向 `maxDt`），避免旧资产静默失去效果。`maxDt` 仍留在模型缓存身份中。
+（错误消息指向 `maxDt`），避免旧资产静默失去效果。VL 原有的 `windGust` 与
+`windFrequency` 也已删除：它们会与 TressFX `SetWind` 的帧调制叠加成双重调制。
+这两个字段出现时在资产边界报错，错误消息给出 `SetWind` 公式。`gravity`、`wind`、
+`damping`、`iterations`、`maxDt` 仍留在模型缓存身份中。
 
 ### 碰撞：胶囊与逐帧 SDF 网格
 
@@ -495,7 +496,7 @@ host-visible/coherent。
 
 buffer 由 `RenderableObject` 拥有并随 World 资源包退休；`HairSimulationPass` 只拥有
 9 个 compute pipeline（6 个 solver/胶囊 pass + 3 个 SDF pass）、每个 pass 的
-descriptor pool、逐对象 per-pass descriptor set 缓存和逐对象 `simulationTime`。
+descriptor pool、逐对象 per-pass descriptor set 缓存和逐对象 `simulationFrame`。
 未声明 `collision.mesh` 的对象不分配 SDF 三个 pass 的 descriptor set，也不录制
 它们；其余 6 个 pass 的 descriptor 合同保持不变。
 
@@ -536,7 +537,7 @@ groupshared 把同组多根 strand 交错存放、再用 `GroupMemoryBarrierWith
 1. **Integration + GlobalShape**：`InitialPos = M * rest`（源实现还会乘 0.01 转米，
    VL 厘米不缩放）。不可移动点写 `current = (InitialPos, 0)`；可移动点做
    `current + exp(-DampingCoeff*dt*60)*(current-old) + gravity*dt²`，其中
-   `DampingCoeff = -ln(damping)`，`gravity` 取资产向量。然后若
+   `DampingCoeff = damping`（作者值直接使用），`gravity` 取资产向量。然后若
    `GlobalShapeStiffness > 0 && GlobalShapeEffectiveRange > 0 && local < range*N`，
    `temp += stiffness*(InitialPos - temp)`。最后按 `prevPrev ← prev`、`prev ← current`、
    `current ← temp` 更新三个历史 buffer。
@@ -556,10 +557,13 @@ groupshared 把同组多根 strand 交错存放、再用 `GroupMemoryBarrierWith
    VL 用 `Stiffness[i] = bendStiffness`（作者标量填充整条曲线），因此弯曲强度
    语义保留、但乘以 TressFX 公式里的 0.5。
 5. **LengthConstraintsWind**：
-   - 风：`w = a*Wind0 + (1-a)*Wind1 + a*Wind2 + (1-a)*Wind3`，
-     `a = (strand % 20)/20`；再乘 VL 的阵风 `gust`。对
-     `rootFixedPoints <= local < N-1`，`v = pos_i - pos_{i+1}`，
-     `Force = -cross(cross(v,w),v)`，`pos_i += Force*dt²`。
+   - 风：Host 每帧把单个作者风向量展开为 TressFX `SetWind` 的四路锥形风：
+     `wM = |wind|*(sin(simFrame*0.001)² + 0.5)`；四角是风方向分别绕 Y 轴 ±40°、
+     绕 Z 轴 ±40° 后乘 `wM`。shader 仍用
+     `w = a*Wind0 + (1-a)*Wind1 + a*Wind2 + (1-a)*Wind3`，`a = (strand % 20)/20`。
+     对 `rootFixedPoints <= local < N-1`，`v = pos_i - pos_{i+1}` 保持**未归一化**，
+     `Force = -cross(cross(v,w),v) * 1e-2`，`pos_i += Force*dt²`。1e-2 是厘米积分下
+     复现 TressFX 米制位移的换算，推导见“单位、忠实度与显式差异”。
    - 长度：`ApplyDistanceConstraint` 用可移动组合的 multiplier（0.5/0.5、1/0、0/1、0/0），
      目标长度来自 rest length buffer；偶数边后奇数边，迭代 `iterations` 次。
    - 速度 clamp：`delta = pos - prev`，`|delta| > 30 cm` 时
@@ -720,24 +724,25 @@ groupshared 把同组多根 strand 交错存放、再用 `GroupMemoryBarrierWith
 回到普通 device-local 上传路径，不再逐帧 memcpy：vertex factory 只消费 SSBO 中心线，
 顶点位置不参与展开。
 
-### 变量步长与阵风时间
+### 变量步长与风时间
 
 两种 backend 使用 TressFX 的变量步长：
 
 ```text
-dt = clamp(frameDelta, 0, maxDt)
+dt = min(frameDelta, maxDt)   // maxDt ∈ (0, 0.016]
 if (dt <= 0) 本帧不推进
 Step(dt)                      // 一帧恰好一个 solver step
-simulationTime += dt          // 阵风相位用 frame-start t
+simulationFrame += 1          // TressFX Guides.Frame，供 SetWind 幅值调制
 ```
 
-没有 accumulator，也没有固定子步重复 dispatch。`maxDt` 是唯一的稳定性边界；
-帧率降低时每步更大，行为随帧率变化是 TressFX 的刻意语义。GPU 端在
-`HairSimulationPass` 中逐对象保存 `simulationTime` 并录制一次 6-pass 序列，params
-只写一次。`RecordHairSimulation` 仍每帧在所有图形 pass 之前调用一次；delta time
-使用 `exposureDeltaSeconds`（渲染帧墙钟，clamp 到 `[1/240, 0.1]`）；CPU backend
-使用游戏线程的 `simulationDelta`。两者的 delta 来源不同是当前已知差异，且两种
-backend 都不消费游戏暂停/time-scale（接入前就如此）。
+没有 accumulator，也没有固定子步重复 dispatch。`maxDt` 的上界是 TressFX 的
+`min(dt, 0.016)` 硬上限；帧率降低时每步更大，行为随帧率变化是 TressFX 的刻意
+语义。GPU 端在 `HairSimulationPass` 中逐对象保存 `simulationFrame` 并录制一次
+9-pass 序列（含 SDF 时），params 只写一次。`RecordHairSimulation` 仍每帧在所有
+图形 pass 之前调用一次；delta time 使用 `exposureDeltaSeconds`（渲染帧墙钟，
+clamp 到 `[1/240, 0.1]`）；CPU backend 使用游戏线程的 `simulationDelta`。两者的
+delta 来源不同是当前已知差异，且两种 backend 都不消费游戏暂停/time-scale
+（接入前就如此）。
 
 ### CPU 参考 solver
 
@@ -762,14 +767,28 @@ TressFX 源实现在**米**制下工作：rest 位置乘 0.01、速度 clamp 0.3
 **厘米**，因此所有 0.01 与 0.3 m 都省略/换成 30 cm，位置、半径、重力和风速的数值
 保持厘米语义。这个换算不是对所有公式都无损：
 
-- **风的三叉积**带 `|v|²` 量纲。源实现把米制未归一化的段向量代入，VL 若照搬到厘米
-  会把风力放大约 `10^6`，直接把发丝吹散。VL 先把段方向归一化再代入同一
-  `-cross(cross(v,w),v)`，得到 `-w` 在段法平面上的分量（cm/s²），保持源实现的
-  推动方向与作者风速的物理量级。
+- **风的三叉积与 cm→m 位移适配**：源实现在米制下把**未归一化**的段向量代入
+  `-cross(cross(v,w),v)`，位移是 `|v_m|²·|w|·dt²`（米）。`w` 是 TressFX 的
+  `WindMagnitude`，属于**力标量**而非风速，两种单位下取同一个数。VL 的位置和
+  段向量是厘米：`v_cm = 100·v_m` 使三叉积为米结果的 `10^4` 倍，而厘米位移是米
+  位移的 100 倍，因此
+  `Force_cm = -cross(cross(v_cm,w),v_cm) * 1e-2`。乘 1e-2 后作者幅值与 UE 的
+  `WindMagnitude` 数值可直接对照；段长平方量纲必须保留，不能再归一化 v。
 - **速度 clamp** 的 `delta *= 30²/|delta|²` 是源实现的既有 quirk，VL 保留。
 - **重力方向**：源实现是 `GravityMagnitude*(0,0,-1)`（Z-up）；VL 直接使用资产的
   `gravity` 向量（Y-up）。这不是通用换轴，只是不再注入源引擎的固定方向。
-- **阵风** `gust` 是 VL 在四风混合结果上的作者化扩展，TressFX 源实现没有这一项。
+- **风的四角与时间调制**：四路锥形风和 `sin(frame*0.001)²+0.5` 幅值调制是
+  TressFX `SetWind` 的语义。源实现每帧还乘 `(0.3 + FRand())` 的随机幅值抖动；
+  VL 为保证确定性省略这个随机项，其余 `SetWind` 语义一致。VL 原来的
+  `windGust`/`windFrequency` 已删除，不再有第二层正弦调制。
+- **长度约束迭代**：TressFX 的资产 UI 把 `LengthConstraintsIterations` 限制在
+  1..4；本资产的 32 点 guide 段长只有 0.4–1.5 cm（均值约 1.04 cm，TressFX 参考
+  约 2 cm）。3 次 Gauss-Seidel 在根点姿态变化后留下明显拉伸，因此资产校准为
+  8 次；solver 公式与偶数/奇数边顺序不变。
+- **根点跳变与 ResetPositions**：TressFX 的 `ResetPositions` 没有接入。`animation
+  seek` 会让根点在一帧内移动数十厘米，发丝会被暂时拉成水平片，然后由长度约束
+  在约 1–3 s（几百帧）内收回。截图必须冻结姿态后继续步进；这是验证方法，不是
+  新的运行时 teleport/reset。
 - **VSP 逐顶点 stiffness**：TressFX 用最多 64 项的作者曲线
   `VSPStiffness`；VL 没有逐顶点曲线作者面，用从根前缀（1）到梢部（0）的线性衰减
   近似，并且只在 `VspCoeff < 0.9` 时参与（与源实现同一条件）。只移植非 MT 的
@@ -939,7 +958,8 @@ Idle 来自 GASP 重定向）+ `Female_hair_skinned`（`SM_female_hair_skinned.j
 `backend=gpu`、`rootFixedPoints=2`、`skinning.source=FemaleCharacter`、
 `skinning.rootBone=Head_M`）。四个胶囊分别绑定 `Head_M`、`Neck1_M`、`Chest_M`
 （肩线）与 `Chest_M`（上背），`collision.mesh` 代理使用从该身体转移的逐顶点
-权重；重力/风与 `SM_female_hair_dynamic.json` 相同。
+权重；两个动态资产的校准值相同：`gravity=[0,-980,0]`、`wind=[200000,0,0]`、
+`damping=0.035`、`maxDt=0.016`、`iterations=8`。
 选普通 mesh 而不是 blueprint 关卡，是因为 `SkeletalPlayback` 构造时默认 `playing=true`
 并选中 clip 0，`World::TickAnimations` 每帧推进它，加载后即自动播放 Idle；blueprint
 版本只在 `BeginPlay` 里 `Animation.Play(Walk)`，必须点 Play 才动。两者都使用同一套

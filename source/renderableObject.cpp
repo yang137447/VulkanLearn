@@ -120,8 +120,6 @@ RenderableObject::RenderableObject(
                 simulationConfig.rootFixedPoints = section.tressfxSimulation.rootFixedPoints;
                 simulationConfig.maxDt = section.tressfxSimulation.maxDt;
                 simulationConfig.bendStiffness = section.tressfxSimulation.bendStiffness;
-                simulationConfig.windGust = section.tressfxSimulation.windGust;
-                simulationConfig.windFrequency = section.tressfxSimulation.windFrequency;
                 simulationConfig.globalShapeStiffness =
                     section.tressfxSimulation.globalShapeStiffness;
                 simulationConfig.globalShapeEffectiveRange =

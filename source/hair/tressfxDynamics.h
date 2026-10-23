@@ -7,6 +7,7 @@
 #include <Eigen/Dense>
 
 #include "hair/tressfxCollision.h"
+#include "hair/tressfxSolverMath.h"
 
 namespace VL::Hair
 {
@@ -16,19 +17,17 @@ namespace VL::Hair
 struct SimulationConfig
 {
     Eigen::Vector3f gravity = Eigen::Vector3f(0.0f, -980.0f, 0.0f);
-    // 平均风；四路混合在 CPU/GPU 侧都退化为这个向量。
+    // 单个作者风向量：方向归一化，长度作为幅值（厘米/秒）；CPU/GPU 都按
+    // TressFX SetWind 展开成四路锥形风。
     Eigen::Vector3f wind = Eigen::Vector3f::Zero();
-    // 60 Hz 下每步保留的速度比例，映射为 TressFX 的 DampingCoeff。
-    float damping = 0.995f;
+    // TressFX 的 DampingCoeff，直接用于 exp(-damping*dt*60)，典型 0..0.07。
+    float damping = 0.035f;
     uint32_t iterations = 3;
     uint32_t rootFixedPoints = 2;
-    // 变量步长上限；每帧一个 solver step。
-    float maxDt = 0.033f;
+    // 变量步长上限；TressFX 的硬上限是 0.016 s，每帧一个 solver step。
+    float maxDt = TressfxMaxTimeStepSeconds;
     // 映射到 LocalShape pass 的 Stiffness 标量；pass 内再乘 0.5。
     float bendStiffness = 0.3f;
-    // gust = 1 + windGust * sin(2π * windFrequency * t + guide * 0.6180339)。
-    float windGust = 0.5f;
-    float windFrequency = 0.5f;
     // TressFX Integration 的 global shape，两者都 > 0 才启用。
     float globalShapeStiffness = 0.0f;
     float globalShapeEffectiveRange = 0.0f;
@@ -38,9 +37,6 @@ struct SimulationConfig
     // 资产局部空间的解析胶囊；顺序即重叠时的投影顺序。
     std::vector<TressfxCollider> capsules;
 };
-
-// CPU 侧阵风相位；与 GPU LengthConstraintsWind pass 的 gust 相同。
-float WindGustFactor(const SimulationConfig& config, size_t guideIndex, float simulationTime);
 
 // GPU 多 pass guide pipeline 的确定性 CPU 镜像：Integration + GlobalShape、
 // StrandLevel、VSP、LocalShape、LengthConstraintsWind，最后是 VL 自己的胶囊投影。
@@ -68,6 +64,7 @@ public:
         return previousPreviousPositions;
     }
     float SimulationTime() const { return simulationTime; }
+    uint32_t SimulationFrame() const { return simulationFrame; }
 
 private:
     // GPU 的 StrandLevel pass 写成 per-strand buffer；CPU 侧在同一根 guide 的
@@ -102,6 +99,8 @@ private:
     bool paused = false;
     // 每帧 solver step 结束后推进一次；同一帧所有 pass 共用 frame-start t。
     float simulationTime = 0.0f;
+    // TressFX Guides.Frame：逐帧 wind 幅值调制 sin(frame*0.001)² 的相位来源。
+    uint32_t simulationFrame = 0;
 };
 
 } // namespace VL::Hair

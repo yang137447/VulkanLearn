@@ -20,8 +20,8 @@ layout(std140, set = 0, binding = 0) uniform SimulationParams
     vec4 controls;     // x = dt, y = DampingCoeff, z = pointsPerGuide, w = rootFixedPoints
     vec4 shape;        // x = globalShapeStiffness, y = effectiveRange,
                        // z = vspCoefficient, w = vspAccelThresholdMax
-    vec4 motion;       // x = Stiffness(LocalShape), y = windGust,
-                       // z = windFrequency, w = frame-start simulationTime
+    vec4 motion;       // x = Stiffness(LocalShape); y/z/w 保留为 0
+                       // （阵风已删除，时间调制在 Host 烘进 wind0..3）
     uvec4 counts;      // x = length iterations, y = guideCount,
                        // z = pointCount, w = colliderCount
     vec4 skinningQuat; // (x,y,z,w) = 根骨旋转；w 为标量部分
@@ -80,20 +80,13 @@ vec3 TressfxRotateByQuat(vec4 q, vec3 v)
     return v + q.w * t + cross(q.xyz, t);
 }
 
-// TressFX LengthConstraintsWind 的四风混合。
+// TressFX LengthConstraintsWind 的四风混合。四路是 Host 按 SetWind 生成的
+// 锥形方向（厘米/秒）；权重和为 2，但方向不同，混合结果逐 strand 变化。
 vec3 TressfxCombinedWind(uint guide)
 {
     float a = float(guide % 20u) / 20.0;
     return a * params.wind0.xyz + (1.0 - a) * params.wind1.xyz
         + a * params.wind2.xyz + (1.0 - a) * params.wind3.xyz;
-}
-
-// VL 既有的有界阵风；TressFX 源实现没有这一项（见合同）。
-float TressfxWindGust(uint guide)
-{
-    float phase = float(guide) * 0.6180339;
-    return 1.0 + params.motion.y *
-        sin(6.283185307179586 * params.motion.z * params.motion.w + phase);
 }
 
 // TressFX ConstraintMultiplier 的四个分支。

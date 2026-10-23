@@ -499,7 +499,8 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
         RenderableObject& object = *dispatch.object;
         const TressfxSimulationConfig& config = object.GetTressfxSimulationConfig();
 
-        // 变量步长：TressFX 直接使用帧 DeltaTime；这里按 maxDt 收紧，一帧一个 step。
+        // 变量步长：TressFX 的 TimeStep 上限是 0.016 s；资产 maxDt 只能收紧
+        // （加载期已保证 <= 0.016），这里一帧一个 step。
         const float timeStep = std::clamp(deltaSeconds, 0.0f, config.maxDt);
         if (timeStep <= 0.0f)
             continue;
@@ -574,14 +575,14 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
             state.reportedMissingSkinPose = true;
         }
 
-        // 所有 pass 共用 frame-start simulationTime 与同一个 dt，params 只写一次。
+        // 所有 pass 共用 frame-start simulationFrame 与同一个 dt，params 只写一次。
         const GuideSimulationParams params = MakeGuideSimulationParams(
             config,
             dispatch.guideCount,
             object.GetTressfxPointsPerGuide(),
             dispatch.pointCount,
             timeStep,
-            state.simulationTime,
+            state.simulationFrame,
             state.skinningMatrix);
         object.WriteTressfxSimulationParams(params, frameSlot);
         // SDF 域每帧从蒙皮后的代理包围盒重算；有逐顶点权重时用同一套 LBS，
@@ -589,7 +590,7 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
         const bool sdfDomainValid = object.HasTressfxSdfCollision() &&
             object.WriteTressfxSdfParams(state.skinningMatrix, jointMatrices,
                 frameSlot);
-        state.simulationTime += timeStep;
+        ++state.simulationFrame;
 
         const uint32_t vertexGroupCount =
             (dispatch.pointCount + GuideSimulationWorkgroupSize - 1) /

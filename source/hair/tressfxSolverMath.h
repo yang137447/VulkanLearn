@@ -23,6 +23,16 @@ inline constexpr float TressfxVelocityClampCm = 30.0f;
 // TressFX 的 DampingCoeff 以 60 Hz 为参考写成 exp(-DampingCoeff * TimeStep * 60)。
 inline constexpr float TressfxDampingReferenceHz = 60.0f;
 
+// TressFXCoreSimulation.cpp 对每帧 dt 的硬上限：TimeStep = min(dt, 0.016)。
+// 这是变量步长模型唯一需要的稳定性边界，不引入子步。
+inline constexpr float TressfxMaxTimeStepSeconds = 0.016f;
+
+// TressFX SetWind 的风锥半角：绕 Y/Z 轴各 ±40°。
+inline constexpr float TressfxWindConeAngleRadians = 0.69813170079773179f;
+
+// 风的 cm→m 单位适配系数，推导见 TressfxWindForce。
+inline constexpr float TressfxWindForceScale = 1.0e-2f;
+
 // TressFX 的 VSP 系数小于 0.9 时才乘以逐顶点 stiffness。
 inline constexpr float TressfxVspStiffnessBlendThreshold = 0.9f;
 
@@ -42,17 +52,12 @@ inline bool TressfxIsImmovable(uint32_t localPoint, uint32_t rootFixedPoints,
 }
 
 // TressFX Integrate：Decay = exp(-DampingCoeff * TimeStep * 60)。
+// 作者字段 damping 直接就是这里的 DampingCoeff，不做 retention 变换：
+// TressFXCoreSimulation.cpp 写的是 `Parameters->DampingCoeff = Guides.Damping`，
+// 资产默认 0.035（UI 0..0.07），不是“每步保留的速度比例”。
 inline float TressfxDampingDecay(float dampingCoeff, float timeStep)
 {
     return std::exp(-dampingCoeff * timeStep * TressfxDampingReferenceHz);
-}
-
-// 作者字段 damping 是 60 Hz 下每步保留的速度比例（0..1]，历史语义。
-// 映射到 TressFX 的 DampingCoeff：exp(-DampingCoeff) = damping。
-// damping=1 表示不衰减；下界取 1e-6 避免 log(0)。
-inline float TressfxDampingCoeffFromRetention(float damping)
-{
-    return -std::log(std::clamp(damping, 1.0e-6f, 1.0f));
 }
 
 // TressFX 的 q = (xyz = 旋转轴 * sin(theta/2), w = cos(theta/2))。
@@ -108,10 +113,10 @@ inline Eigen::Vector4f TressfxQuaternionFromMatrix(const Eigen::Matrix4f& matrix
         quaternion.w());
 }
 
-// TressFX LengthConstraintsWind 的四风混合。a 只取决于全局 strand 下标：
+// TressFX LengthConstraintsWind 的四风混合。a 只取决于 strand 下标：
 //   w = a*Wind0 + (1-a)*Wind1 + a*Wind2 + (1-a)*Wind3,  a = (strand % 20) / 20
-// VL 资产只有一个平均风向，Host 把四路都填成同一个向量，因此混合结果等于平均值；
-// 公式保留是为了与源实现逐项对应，也为将来四风作者化留出位置。
+// 权重和是 2，四路风向不同，所以混合结果既不是单一平均风，也不是把作者幅值
+// 原样乘 2；每个 strand 落在一个锥形风向上的插值里。公式逐字保留。
 inline Eigen::Vector3f TressfxCombineWind(const Eigen::Vector3f& wind0,
     const Eigen::Vector3f& wind1, const Eigen::Vector3f& wind2,
     const Eigen::Vector3f& wind3, uint32_t guideIndex)
@@ -120,31 +125,76 @@ inline Eigen::Vector3f TressfxCombineWind(const Eigen::Vector3f& wind0,
     return a * wind0 + (1.0f - a) * wind1 + a * wind2 + (1.0f - a) * wind3;
 }
 
-// TressFX 的风力：Force = -cross(cross(v, w), v)，v 是段方向（pos_i - pos_{i+1}）。
-// 结果垂直于 v：只把发丝段往风向上推，不沿段方向拉伸。
+// TressFX SetWind 的逐帧幅值调制：wM = windMag * (sin(frame * 0.001)² + 0.5)。
+// frame 是仿真帧序号（不是秒），在 0.5..1.5 倍之间缓慢起伏；替换了 VL 原有的
+// windGust/windFrequency 正弦扩展，避免与 TressFX 的风力叠加成双重调制。
+inline float TressfxWindFrameModulation(uint32_t frame)
+{
+    const float phase = std::sin(static_cast<float>(frame) * 0.001f);
+    return phase * phase + 0.5f;
+}
+
+// 把 X 轴绕给定轴旋转 angle 弧度；对应 SetWindCorner 里的
+// `rot(rotAxis, angleToWideWindCone) * XAxis`。
+inline Eigen::Vector3f TressfxConeAxis(
+    const Eigen::Matrix3f& xAxisToWind, const Eigen::Vector3f& axis, float angle)
+{
+    const Eigen::Vector3f rotated =
+        Eigen::AngleAxisf(angle, axis) * Eigen::Vector3f::UnitX();
+    return xAxisToWind * rotated;
+}
+
+// TressFX 的四路锥形风。资产只有一个风向量：方向取归一化方向，长度取幅值
+// （厘米/秒）。四路是风方向分别绕 Y 轴 ±40°、绕 Z 轴 ±40° 的四个角，再统一
+// 乘 wM。Mixer 仍按 TressfxCombineWind 的 a/(1-a) 权重消费这四路。
+struct TressfxWindCorners
+{
+    Eigen::Vector3f wind0 = Eigen::Vector3f::Zero();
+    Eigen::Vector3f wind1 = Eigen::Vector3f::Zero();
+    Eigen::Vector3f wind2 = Eigen::Vector3f::Zero();
+    Eigen::Vector3f wind3 = Eigen::Vector3f::Zero();
+};
+
+inline TressfxWindCorners TressfxBuildWindCorners(
+    const Eigen::Vector3f& windDirection, float windMagnitude, uint32_t frame)
+{
+    TressfxWindCorners corners;
+    if (windMagnitude <= 0.0f || windDirection.squaredNorm() <= 1.0e-12f)
+        return corners;
+
+    const float wM = windMagnitude * TressfxWindFrameModulation(frame);
+    const Eigen::Vector3f direction = windDirection.normalized();
+    // 参考实现用 asin(|X × dir|) 构造 X→dir 的旋转，只对 dir.x >= 0 正确；
+    // 这里用精确最短弧，二者在已校准的 +X 风上完全一致，同时不会把 -X 风翻向。
+    const Eigen::Matrix3f xAxisToWind =
+        Eigen::Quaternionf::FromTwoVectors(
+            Eigen::Vector3f::UnitX(), direction).toRotationMatrix();
+
+    corners.wind0 = wM * TressfxConeAxis(xAxisToWind,
+        Eigen::Vector3f::UnitY(), TressfxWindConeAngleRadians);
+    corners.wind1 = wM * TressfxConeAxis(xAxisToWind,
+        Eigen::Vector3f::UnitY(), -TressfxWindConeAngleRadians);
+    corners.wind2 = wM * TressfxConeAxis(xAxisToWind,
+        Eigen::Vector3f::UnitZ(), TressfxWindConeAngleRadians);
+    corners.wind3 = wM * TressfxConeAxis(xAxisToWind,
+        Eigen::Vector3f::UnitZ(), -TressfxWindConeAngleRadians);
+    return corners;
+}
+
+// TressFX 的风力：Force = -cross(cross(v, w), v)，v 是**未归一化**的段向量
+// （pos_i - pos_{i+1}）。结果垂直于 v：只把发丝段往风向上推，不沿段方向拉伸。
 //
-// 单位适配（合同里记为 deviation）：源实现在米制下把**未归一化**的段向量代入
-// 三叉积，结果带 |v|² 的长度平方量纲；VL 用厘米后 |v| 大 100 倍，同一段会得到
-// 10^6 倍的风力，直接把发丝吹散。这里先把 v 归一化再代入同一公式，得到
-// -w 在段法平面上的分量（cm/s²），保持源实现的推动方向与作者风速的物理量级。
+// 单位适配（合同里记为 deviation）：源实现在米制下积分，VL 的位置和段向量都是
+// 厘米。TressFX 的 WindMagnitude 是*力标量*，不是风速，两种单位下取同一个数：
+// v_cm = 100·v_m ⇒ |v_cm|² = 1e4·|v_m|²，而厘米位移是米位移的 100 倍，因此
+//   cross(cross(v_cm,w),v_cm) 需乘 1e-2 才等于 100·cross(cross(v_m,w),v_m)。
+// 乘 1e-2 后作者幅值与 UE 的 WindMagnitude 可直接对照；段长平方量纲必须保留，
+// 否则约 1 cm 的段会得到完全不同的风力。
 inline Eigen::Vector3f TressfxWindForce(
     const Eigen::Vector3f& segment, const Eigen::Vector3f& wind)
 {
-    if (segment.squaredNorm() <= 1.0e-12f)
-        return Eigen::Vector3f::Zero();
-    const Eigen::Vector3f direction = segment.normalized();
-    return -direction.cross(wind).cross(direction);
-}
-
-// VL 既有的有界阵风，保持作者字段 windGust/windFrequency 的历史效果。
-// GPU 在 LengthConstraintsWind pass 把它乘到混合后的风向量上；TressFX 源实现没有
-// 这一项，这是 VL 刻意保留的作者化扩展（见合同）。
-inline float TressfxWindGustFactor(
-    float windGust, float windFrequency, uint32_t guideIndex, float simulationTime)
-{
-    const float phase = static_cast<float>(guideIndex) * 0.6180339f;
-    return 1.0f + windGust *
-        std::sin(6.283185307179586f * windFrequency * simulationTime + phase);
+    const Eigen::Vector3f crossSegmentWind = segment.cross(wind);
+    return -crossSegmentWind.cross(segment) * TressfxWindForceScale;
 }
 
 // TressFX ConstraintMultiplier：movable 组合决定 0.5/0.5、1/0、0/1、0/0。

@@ -9,12 +9,6 @@
 namespace VL::Hair
 {
 
-float WindGustFactor(const SimulationConfig& config, size_t guideIndex, float simulationTime)
-{
-    return TressfxWindGustFactor(config.windGust, config.windFrequency,
-        static_cast<uint32_t>(guideIndex), simulationTime);
-}
-
 GuideSimulation::GuideSimulation(
     std::vector<Eigen::Vector3f> rest,
     size_t guides,
@@ -36,13 +30,10 @@ GuideSimulation::GuideSimulation(
         throw std::invalid_argument("Invalid TressFX guide simulation dimensions");
     if (!std::isfinite(config.damping) || config.damping < 0.0f ||
         config.damping > 1.0f || !std::isfinite(config.maxDt) || config.maxDt <= 0.0f ||
+        config.maxDt > TressfxMaxTimeStepSeconds ||
         config.iterations == 0 || config.iterations > 16 ||
         !std::isfinite(config.bendStiffness) || config.bendStiffness < 0.0f ||
         config.bendStiffness > 1.0f ||
-        !std::isfinite(config.windGust) || config.windGust < 0.0f ||
-        config.windGust > 1.0f ||
-        !std::isfinite(config.windFrequency) || config.windFrequency < 0.0f ||
-        config.windFrequency > 10.0f ||
         !std::isfinite(config.globalShapeStiffness) ||
         config.globalShapeStiffness < 0.0f || config.globalShapeStiffness > 1.0f ||
         !std::isfinite(config.globalShapeEffectiveRange) ||
@@ -86,6 +77,7 @@ void GuideSimulation::Reset()
     previousPositions = restPositions;
     previousPreviousPositions = restPositions;
     simulationTime = 0.0f;
+    simulationFrame = 0;
 }
 
 void GuideSimulation::IntegratePass(size_t guide, float timeStep, float decay)
@@ -190,17 +182,18 @@ void GuideSimulation::LengthAndWindPass(size_t guide, float timeStep)
 {
     const size_t base = guide * pointsPerGuide;
     const float timeStepSquared = timeStep * timeStep;
-    if (config.wind.x() != 0.0f || config.wind.y() != 0.0f || config.wind.z() != 0.0f)
+    if (config.wind.squaredNorm() > 0.0f)
     {
-        const float gust = TressfxWindGustFactor(config.windGust,
-            config.windFrequency, static_cast<uint32_t>(guide), simulationTime);
-        const Eigen::Vector3f wind =
-            TressfxCombineWind(config.wind, config.wind, config.wind, config.wind,
-                static_cast<uint32_t>(guide)) * gust;
+        // 四路锥形风逐帧生成一次；同一帧所有 guide 共用同一组方向与 wM。
+        const TressfxWindCorners corners = TressfxBuildWindCorners(
+            config.wind, config.wind.norm(), simulationFrame);
+        const Eigen::Vector3f wind = TressfxCombineWind(corners.wind0,
+            corners.wind1, corners.wind2, corners.wind3,
+            static_cast<uint32_t>(guide));
         for (size_t local = config.rootFixedPoints; local + 1 < pointsPerGuide; ++local)
         {
             const size_t point = base + local;
-            // TressFX: v = pos_i - pos_{i+1}，力只加到点 i 上。
+            // TressFX: v = pos_i - pos_{i+1}（未归一化），力只加到点 i 上。
             const Eigen::Vector3f segment = positions[point] - positions[point + 1];
             positions[point] += TressfxWindForce(segment, wind) * timeStepSquared;
         }
@@ -259,8 +252,8 @@ void GuideSimulation::CollisionPass(size_t guide)
 
 void GuideSimulation::SolveStrand(size_t guide, float timeStep)
 {
-    const float decay = TressfxDampingDecay(
-        TressfxDampingCoeffFromRetention(config.damping), timeStep);
+    // 作者 damping 直接就是 TressFX 的 DampingCoeff，不做 retention 变换。
+    const float decay = TressfxDampingDecay(config.damping, timeStep);
     IntegratePass(guide, timeStep, decay);
     const StrandTransform transform = StrandLevelPass(guide);
     VspPass(guide, transform);
@@ -280,6 +273,7 @@ void GuideSimulation::Step(float dt)
     for (size_t guide = 0; guide < guideCount; ++guide)
         SolveStrand(guide, timeStep);
     simulationTime += timeStep;
+    ++simulationFrame;
 }
 
 } // namespace VL::Hair

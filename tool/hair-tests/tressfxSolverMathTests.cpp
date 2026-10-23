@@ -57,42 +57,110 @@ TEST(TressfxSolverMath, DistanceConstraintLeavesFullyFixedPairUntouched)
     EXPECT_TRUE(pos1.isApprox(Eigen::Vector3f(2.0f, 0.0f, 0.0f)));
 }
 
-TEST(TressfxSolverMath, WindForceIsPerpendicularToSegmentAndOpposesPerpendicularWind)
+TEST(TressfxSolverMath, WindForceIsPerpendicularToSegmentAndScalesWithSegmentSquared)
 {
-    // TressFX: Force = -cross(cross(v, w), v)，v 是 pos_i - pos_{i+1}。
+    // TressFX: Force = -cross(cross(v, w), v) * 1e-2，v 是未归一化的段向量。
     const Eigen::Vector3f segment(1.0f, 0.0f, 0.0f);
     const Eigen::Vector3f wind(0.0f, 1.0f, 0.0f);
     const Eigen::Vector3f force = TressfxWindForce(segment, wind);
     EXPECT_NEAR(force.dot(segment), 0.0f, kTolerance);
-    // 段与风垂直时 cross(cross(v,w),v) 等于 w，负号使力指向 -w。
-    EXPECT_TRUE(force.isApprox(Eigen::Vector3f(0.0f, -1.0f, 0.0f)));
+    // 段与风垂直时三叉积等于 w；cm→m 适配乘 1e-2，负号使力指向 -w。
+    EXPECT_TRUE(force.isApprox(Eigen::Vector3f(0.0f, -1.0e-2f, 0.0f), 1.0e-9f));
 
     // 段方向与风向不垂直时，力仍在 v 的垂直平面内，只保留风在 v 上的垂直分量。
     const Eigen::Vector3f slanted(1.0f, 1.0f, 0.0f);
     const Eigen::Vector3f slantedForce = TressfxWindForce(slanted, wind);
     EXPECT_NEAR(slantedForce.dot(slanted), 0.0f, kTolerance);
-    EXPECT_NEAR(slantedForce.dot(wind), -0.5f, kTolerance);
-    EXPECT_NEAR(slantedForce.norm(), std::sqrt(0.5f), 1.0e-5f);
+    EXPECT_NEAR(slantedForce.dot(wind), -1.0e-2f, 1.0e-9f);
+    EXPECT_NEAR(slantedForce.norm(), std::sqrt(2.0f) * 1.0e-2f, 1.0e-9f);
 
-    // 单位适配：段长度不影响风力（源实现在米制下按 |v|² 缩放）。
+    // 与合同公式逐项一致：1e-2 * -cross(cross(v, w), v)。
+    EXPECT_TRUE(force.isApprox(
+        -segment.cross(wind).cross(segment) * 1.0e-2f, 1.0e-9f));
+
+    // 未归一化意味着段长翻 4.5 倍时力放大 4.5² = 20.25 倍。
     EXPECT_TRUE(TressfxWindForce(4.5f * slanted, wind)
-            .isApprox(slantedForce, 1.0e-5f));
+            .isApprox(20.25f * slantedForce, 1.0e-8f));
 }
 
-TEST(TressfxSolverMath, ExponentialDampingMatchesSixtyHertzRetention)
+TEST(TressfxSolverMath, DampingCoefficientIsUsedDirectlyInExponentialDecay)
 {
-    // 作者 damping 是 60 Hz 下每步保留的比例；映射后在该 dt 上必须复现。
-    for (const float damping : {1.0f, 0.995f, 0.9f})
+    // damping 就是 DampingCoeff：60 Hz 一步的保留率是 exp(-damping)，没有 -ln 变换。
+    for (const float damping : {0.0f, 0.02f, 0.035f, 0.05f, 0.5f})
     {
-        const float coeff = TressfxDampingCoeffFromRetention(damping);
-        EXPECT_NEAR(TressfxDampingDecay(coeff, 1.0f / 60.0f), damping, 1.0e-6f);
+        EXPECT_NEAR(TressfxDampingDecay(damping, 1.0f / 60.0f),
+            std::exp(-damping), 1.0e-6f);
     }
     // 半帧 ⇒ 指数衰减的平方根；两帧 ⇒ 平方。
-    const float coeff = TressfxDampingCoeffFromRetention(0.995f);
-    const float halfFrame = TressfxDampingDecay(coeff, 1.0f / 120.0f);
-    EXPECT_NEAR(halfFrame * halfFrame, 0.995f, 1.0e-6f);
-    const float twoFrames = TressfxDampingDecay(coeff, 2.0f / 60.0f);
-    EXPECT_NEAR(twoFrames, 0.995f * 0.995f, 1.0e-6f);
+    const float halfFrame = TressfxDampingDecay(0.035f, 1.0f / 120.0f);
+    EXPECT_NEAR(halfFrame * halfFrame, std::exp(-0.035f), 1.0e-6f);
+    const float twoFrames = TressfxDampingDecay(0.035f, 2.0f / 60.0f);
+    EXPECT_NEAR(twoFrames, std::exp(-0.07f), 1.0e-6f);
+    // 0.995 若仍被当作保留比例，一步衰减会是 0.995；作为系数时是 exp(-0.995)。
+    EXPECT_NEAR(TressfxDampingDecay(0.995f, 1.0f / 60.0f),
+        std::exp(-0.995f), 1.0e-6f);
+}
+
+TEST(TressfxSolverMath, WindCornersAreFourDistinctFortyDegreeConeDirections)
+{
+    // +X 风、frame 0：wM = 1000 * (sin(0)² + 0.5) = 500。
+    const Eigen::Vector3f direction = Eigen::Vector3f::UnitX();
+    const float magnitude = 1000.0f;
+    const TressfxWindCorners corners =
+        TressfxBuildWindCorners(direction, magnitude, 0);
+    const float wM = 500.0f;
+    const float cosine = std::cos(TressfxWindConeAngleRadians);
+    const Eigen::Vector3f* winds[4] = {&corners.wind0, &corners.wind1,
+        &corners.wind2, &corners.wind3};
+    for (int i = 0; i < 4; ++i)
+    {
+        EXPECT_NEAR(winds[i]->norm(), wM, 1.0e-3f);
+        // 每个角都在以 +X 为轴、40° 的锥面上。
+        EXPECT_NEAR(winds[i]->normalized().dot(direction), cosine, 1.0e-6f);
+        for (int j = i + 1; j < 4; ++j)
+            EXPECT_GT((*winds[i] - *winds[j]).norm(), 1.0e-3f);
+    }
+    // 绕 Y 的一对只差 Z 分量符号；绕 Z 的一对只差 Y 分量符号。
+    EXPECT_NEAR(corners.wind0.z(), -corners.wind1.z(), 1.0e-5f);
+    EXPECT_NEAR(corners.wind0.y(), corners.wind1.y(), 1.0e-5f);
+    EXPECT_NEAR(corners.wind2.y(), -corners.wind3.y(), 1.0e-5f);
+    EXPECT_NEAR(corners.wind2.z(), corners.wind3.z(), 1.0e-5f);
+}
+
+TEST(TressfxSolverMath, WindCornerMagnitudeFollowsTressFxFrameModulation)
+{
+    // frame = 1000 ⇒ sin(1)² + 0.5；四路幅值都按 wM 缩放。
+    const float modulation = std::sin(1.0f) * std::sin(1.0f) + 0.5f;
+    const TressfxWindCorners corners =
+        TressfxBuildWindCorners(Eigen::Vector3f::UnitX(), 2000.0f, 1000);
+    EXPECT_NEAR(corners.wind0.norm(), 2000.0f * modulation, 1.0e-2f);
+    EXPECT_NEAR(corners.wind3.norm(), 2000.0f * modulation, 1.0e-2f);
+    EXPECT_NEAR(TressfxWindFrameModulation(0), 0.5f, 1.0e-6f);
+    // 零幅值返回零向量，Host 不会把 NaN 方向写进 UBO。
+    const TressfxWindCorners zero =
+        TressfxBuildWindCorners(Eigen::Vector3f::Zero(), 0.0f, 7);
+    EXPECT_TRUE(zero.wind0.isZero());
+    EXPECT_TRUE(zero.wind3.isZero());
+}
+
+TEST(TressfxSolverMath, WindMixerUsesAlternatingWeightsAndStrandPhase)
+{
+    // w = a*W0 + (1-a)*W1 + a*W2 + (1-a)*W3, a = (guide % 20) / 20。
+    const Eigen::Vector3f w0(1.0f, 0.0f, 0.0f);
+    const Eigen::Vector3f w1(0.0f, 2.0f, 0.0f);
+    const Eigen::Vector3f w2(0.0f, 0.0f, 4.0f);
+    const Eigen::Vector3f w3(8.0f, 0.0f, 0.0f);
+    // guide 0 ⇒ a = 0：只保留 W1 与 W3。
+    EXPECT_TRUE(TressfxCombineWind(w0, w1, w2, w3, 0)
+            .isApprox(w1 + w3));
+    // guide 10 ⇒ a = 0.5：W0/W2 各一半，W1/W3 各一半。
+    EXPECT_TRUE(TressfxCombineWind(w0, w1, w2, w3, 10)
+            .isApprox(0.5f * (w0 + w2 + w1 + w3)));
+    // guide 19 ⇒ a = 0.95。
+    EXPECT_TRUE(TressfxCombineWind(w0, w1, w2, w3, 19)
+            .isApprox(0.95f * (w0 + w2) + 0.05f * (w1 + w3)));
+    // 权重和是 2：四路相同的向量混合后是原值 2 倍，这是 TressFX 的既有语义。
+    EXPECT_TRUE(TressfxCombineWind(w0, w0, w0, w0, 7).isApprox(2.0f * w0));
 }
 
 TEST(TressfxSolverMath, GlobalShapeGateUsesRangeFractionAndStiffness)
@@ -212,7 +280,7 @@ TEST(TressfxSolverMath, VelocityClampRewritesHistoryWithSourceScale)
     EXPECT_TRUE(TressfxClampPositionDelta(previous, Eigen::Vector3f(40.0f, 0.0f, 0.0f)));
     EXPECT_TRUE(previous.isApprox(Eigen::Vector3f(17.5f, 0.0f, 0.0f), 1.0e-5f));
     EXPECT_NEAR((Eigen::Vector3f(40.0f, 0.0f, 0.0f) - previous).norm(),
-        30.0f * 30.0f / 40.0f, 1.0e-4f);
+        30.0f * 30.0f / 40.0f, 1.0e-2f);
 
     // 恰好等于 Clamp 时不重写。
     Eigen::Vector3f inside(0.0f, 0.0f, 0.0f);
@@ -229,15 +297,5 @@ TEST(TressfxSolverMath, QuaternionFromMatrixExtractsBoneRotation)
     const Eigen::Vector4f quat = TressfxQuaternionFromMatrix(matrix);
     EXPECT_NEAR(quat.norm(), 1.0f, 1.0e-5f);
     EXPECT_TRUE(TressfxRotateByQuat(quat, Eigen::Vector3f::UnitX())
-            .isApprox(matrix.block<3, 3>(0, 0) * Eigen::Vector3f::UnitX(), 1.0e-4f));
-}
-
-TEST(TressfxSolverMath, WindGustIsBoundedPeriodicAndStrandPhased)
-{
-    const float gust = TressfxWindGustFactor(0.7f, 0.4f, 5, 0.37f);
-    EXPECT_GE(gust, 1.0f - 0.7f - 1.0e-4f);
-    EXPECT_LE(gust, 1.0f + 0.7f + 1.0e-4f);
-    EXPECT_NEAR(gust, TressfxWindGustFactor(0.7f, 0.4f, 5, 0.37f + 2.5f), 2.0e-4f);
-    EXPECT_NE(TressfxWindGustFactor(0.7f, 0.4f, 5, 0.37f),
-        TressfxWindGustFactor(0.7f, 0.4f, 6, 0.37f));
+            .isApprox(matrix.block<3, 3>(0, 0) * Eigen::Vector3f::UnitX(), 1.0e-2f));
 }

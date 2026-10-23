@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
 
 namespace
 {
@@ -72,7 +73,8 @@ TEST(TressfxDynamics, NonRootPointsRespondToAuthoredWind)
 {
     SimulationConfig config;
     config.gravity = Eigen::Vector3f::Zero();
-    config.wind = Eigen::Vector3f(400.0f, 0.0f, 0.0f);
+    // 修正后的风力带 |v|²·1e-2 量纲，作者幅值需要远大于旧的“风速”量级。
+    config.wind = Eigen::Vector3f(1.0e6f, 0.0f, 0.0f);
     config.iterations = 8;
     GuideSimulation simulation(Chain(), 1, 4, {0, 1, 1, 1}, config);
     for (int i = 0; i < 30; ++i)
@@ -102,13 +104,13 @@ TEST(TressfxDynamics, VariableTimeStepClampsToMaxDtAndAdvancesTime)
 {
     SimulationConfig config;
     config.gravity = Eigen::Vector3f(0, -100, 0);
-    config.maxDt = 0.02f;
+    config.maxDt = 0.01f;
     GuideSimulation clamped(Chain(), 1, 4, {0, 1, 1, 1}, config);
     GuideSimulation explicitStep(Chain(), 1, 4, {0, 1, 1, 1}, config);
     // 一次巨大的帧增量只推进一个 maxDt 的 solver step。
     clamped.Step(1.0f);
-    explicitStep.Step(0.02f);
-    EXPECT_FLOAT_EQ(clamped.SimulationTime(), 0.02f);
+    explicitStep.Step(0.01f);
+    EXPECT_FLOAT_EQ(clamped.SimulationTime(), 0.01f);
     for (size_t point = 0; point < clamped.Positions().size(); ++point)
         EXPECT_TRUE(clamped.Positions()[point].isApprox(explicitStep.Positions()[point],
             1.0e-6f));
@@ -117,7 +119,7 @@ TEST(TressfxDynamics, VariableTimeStepClampsToMaxDtAndAdvancesTime)
     const auto before = clamped.Positions();
     clamped.Step(0.0f);
     clamped.Step(-1.0f);
-    EXPECT_FLOAT_EQ(clamped.SimulationTime(), 0.02f);
+    EXPECT_FLOAT_EQ(clamped.SimulationTime(), 0.01f);
     for (size_t point = 0; point < clamped.Positions().size(); ++point)
         EXPECT_EQ(clamped.Positions()[point], before[point]);
 }
@@ -129,17 +131,17 @@ TEST(TressfxDynamics, VariableTimeStepIsNotFrameRateIndependent)
     config.gravity = Eigen::Vector3f(0, -980, 0);
     config.iterations = 8;
     config.rootFixedPoints = 1;
-    config.maxDt = 0.05f;
+    config.maxDt = 0.016f;
     GuideSimulation sixtyHertz(CurvedChain(), 1, 4, {0, 1, 1, 1}, config);
-    GuideSimulation thirtyHertz(CurvedChain(), 1, 4, {0, 1, 1, 1}, config);
+    GuideSimulation oneTwentyHertz(CurvedChain(), 1, 4, {0, 1, 1, 1}, config);
     for (int i = 0; i < 60; ++i)
         sixtyHertz.Step(1.0f / 60.0f);
-    for (int i = 0; i < 30; ++i)
-        thirtyHertz.Step(1.0f / 30.0f);
+    for (int i = 0; i < 120; ++i)
+        oneTwentyHertz.Step(1.0f / 120.0f);
     float maximumDifference = 0.0f;
     for (size_t point = 0; point < sixtyHertz.Positions().size(); ++point)
         maximumDifference = std::max(maximumDifference,
-            (sixtyHertz.Positions()[point] - thirtyHertz.Positions()[point]).norm());
+            (sixtyHertz.Positions()[point] - oneTwentyHertz.Positions()[point]).norm());
     EXPECT_GT(maximumDifference, 1.0e-3f);
 }
 
@@ -347,13 +349,11 @@ TEST(TressfxDynamics, GuideSimulationParamsPackStd140Controls)
 {
     TressfxSimulationConfig config;
     config.gravity = Eigen::Vector3f(0.0f, -980.0f, 0.0f);
-    config.wind = Eigen::Vector3f(120.0f, 0.0f, -3.0f);
-    config.damping = 0.995f;
+    config.wind = Eigen::Vector3f(100000.0f, 0.0f, 0.0f);
+    config.damping = 0.035f;
     config.iterations = 3;
     config.rootFixedPoints = 2;
     config.bendStiffness = 0.42f;
-    config.windGust = 0.6f;
-    config.windFrequency = 1.5f;
     config.globalShapeStiffness = 0.25f;
     config.globalShapeEffectiveRange = 0.75f;
     config.vspCoefficient = 0.4f;
@@ -369,21 +369,25 @@ TEST(TressfxDynamics, GuideSimulationParamsPackStd140Controls)
     skinning(1, 3) = 34.0f;
     skinning(2, 3) = 56.0f;
     const VL::Hair::GuideSimulationParams params =
-        VL::Hair::MakeGuideSimulationParams(config, 7, 32, 224, 0.016f, 0.75f, skinning);
+        VL::Hair::MakeGuideSimulationParams(config, 7, 32, 224, 0.016f, 0, skinning);
 
     EXPECT_EQ(sizeof(VL::Hair::GuideSimulationParams), 224u);
     EXPECT_EQ(offsetof(VL::Hair::GuideSimulationParams, skinning), 160u);
     EXPECT_TRUE(params.skinning.isApprox(skinning));
     EXPECT_TRUE(params.skinningQuat.isApprox(Eigen::Vector4f(0.0f, 0.0f, 0.0f, 1.0f)));
     EXPECT_FLOAT_EQ(params.gravity.y(), -980.0f);
-    EXPECT_FLOAT_EQ(params.wind0.x(), 120.0f);
-    EXPECT_FLOAT_EQ(params.wind1.x(), 120.0f);
-    EXPECT_FLOAT_EQ(params.wind2.x(), 120.0f);
-    EXPECT_FLOAT_EQ(params.wind3.x(), 120.0f);
+    // frame 0 ⇒ wM = 100000 * 0.5 = 50000；四路是 ±40° 的锥角。
+    const float wM = 50000.0f;
+    const float cosine = std::cos(VL::Hair::TressfxWindConeAngleRadians);
+    const float sine = std::sin(VL::Hair::TressfxWindConeAngleRadians);
+    EXPECT_NEAR(params.wind0.x(), wM * cosine, 1.0e-2f);
+    EXPECT_NEAR(params.wind0.z(), -wM * sine, 1.0e-2f);
+    EXPECT_NEAR(params.wind1.z(), wM * sine, 1.0e-2f);
+    EXPECT_NEAR(params.wind2.y(), wM * sine, 1.0e-2f);
+    EXPECT_NEAR(params.wind3.y(), -wM * sine, 1.0e-2f);
     EXPECT_FLOAT_EQ(params.controls.x(), 0.016f);
-    // controls.y 是 TressFX 的 DampingCoeff，而不是作者保留比例。
-    EXPECT_FLOAT_EQ(params.controls.y(),
-        VL::Hair::TressfxDampingCoeffFromRetention(0.995f));
+    // controls.y 是作者 damping 本身（TressFX DampingCoeff），不再取 -ln。
+    EXPECT_FLOAT_EQ(params.controls.y(), 0.035f);
     EXPECT_FLOAT_EQ(params.controls.z(), 32.0f);
     EXPECT_FLOAT_EQ(params.controls.w(), 2.0f);
     EXPECT_FLOAT_EQ(params.shape.x(), 0.25f);
@@ -395,8 +399,45 @@ TEST(TressfxDynamics, GuideSimulationParamsPackStd140Controls)
     EXPECT_EQ(params.pointCount, 224u);
     EXPECT_EQ(params.colliderCount, 1u);
     EXPECT_FLOAT_EQ(params.motion.x(), 0.42f);
-    EXPECT_FLOAT_EQ(params.motion.y(), 0.6f);
-    EXPECT_FLOAT_EQ(params.motion.z(), 1.5f);
-    EXPECT_FLOAT_EQ(params.motion.w(), 0.75f);
+    // 旧的 gust/frequency/simulationTime 已删除，预留通道为 0。
+    EXPECT_FLOAT_EQ(params.motion.y(), 0.0f);
+    EXPECT_FLOAT_EQ(params.motion.z(), 0.0f);
+    EXPECT_FLOAT_EQ(params.motion.w(), 0.0f);
+}
+
+TEST(TressfxDynamics, DefaultTimeStepMatchesTressFxSixteenMillisecondClamp)
+{
+    EXPECT_FLOAT_EQ(VL::Hair::TressfxMaxTimeStepSeconds, 0.016f);
+    SimulationConfig config;
+    EXPECT_FLOAT_EQ(config.maxDt, 0.016f);
+    GuideSimulation simulation(Chain(), 1, 4, {0, 1, 1, 1}, config);
+    // 1 秒的帧增量只推进一个 TressFX 上限步。
+    simulation.Step(1.0f);
+    EXPECT_FLOAT_EQ(simulation.SimulationTime(), 0.016f);
+
+    // 资产不能声明超过 TressFX 硬上限的 maxDt。
+    SimulationConfig oversized = config;
+    oversized.maxDt = 0.017f;
+    EXPECT_THROW(GuideSimulation(Chain(), 1, 4, {0, 1, 1, 1}, oversized),
+        std::invalid_argument);
+}
+
+TEST(TressfxDynamics, WindFrameAdvancesWithEachStepAndDrivesCorners)
+{
+    SimulationConfig config;
+    config.gravity = Eigen::Vector3f::Zero();
+    config.wind = Eigen::Vector3f(1.0e6f, 0.0f, 0.0f);
+    config.bendStiffness = 0.0f;
+    GuideSimulation simulation(Chain(), 1, 4, {0, 1, 1, 1}, config);
+    EXPECT_EQ(simulation.SimulationFrame(), 0u);
+    simulation.Step(0.016f);
+    EXPECT_EQ(simulation.SimulationFrame(), 1u);
+    // 同一作者风在不同帧号下的 wM 不同：第 0 帧是 0.5 倍，第 1000 帧约 1.208 倍。
+    const float frameZero = VL::Hair::TressfxWindFrameModulation(0);
+    const float frameThousand = VL::Hair::TressfxWindFrameModulation(1000);
+    EXPECT_LT(frameZero, frameThousand);
+    for (int i = 0; i < 1000; ++i)
+        simulation.Step(0.016f);
+    EXPECT_EQ(simulation.SimulationFrame(), 1001u);
 }
 } // namespace

@@ -60,6 +60,17 @@ namespace
                     " was removed; use maxDt (one clamp(frameDelta, 0, maxDt) step per frame): " +
                     std::string(meshAssetPath));
         }
+        // VL 的 windGust/windFrequency 与 TressFX SetWind 的帧调制叠加会形成双重
+        // 调制。现在只保留 TressFX 语义，旧字段在资产边界显式拒绝而不是静默失效。
+        for (const char* removed : {"windGust", "windFrequency"})
+        {
+            if (simulation.contains(removed))
+                throw std::runtime_error(
+                    "TressFX simulation " + std::string(removed) +
+                    " was removed; wind modulation follows TressFX SetWind "
+                    "(wM = |wind| * (sin(frame*0.001)^2 + 0.5)): " +
+                    std::string(meshAssetPath));
+        }
         config.enabled = simulation.value("enabled", true);
         if (simulation.contains("gravity"))
             config.gravity = ReadSimulationVector(simulation, "gravity", meshAssetPath);
@@ -70,8 +81,6 @@ namespace
         config.rootFixedPoints = simulation.value("rootFixedPoints", config.rootFixedPoints);
         config.maxDt = simulation.value("maxDt", config.maxDt);
         config.bendStiffness = simulation.value("bendStiffness", config.bendStiffness);
-        config.windGust = simulation.value("windGust", config.windGust);
-        config.windFrequency = simulation.value("windFrequency", config.windFrequency);
         config.globalShapeStiffness =
             simulation.value("globalShapeStiffness", config.globalShapeStiffness);
         config.globalShapeEffectiveRange =
@@ -134,27 +143,21 @@ namespace
             throw std::runtime_error(
                 "TressFX simulation iterations must be in [1, 16]: " +
                 std::string(meshAssetPath));
+        // damping 是 TressFX 的 DampingCoeff（默认 0.035，UI 0..0.07），不是保留比例；
+        // maxDt 不能超过 TressFX 的硬上限 0.016 s。
         if (!std::isfinite(config.damping) || config.damping < 0.0f ||
             config.damping > 1.0f ||
             config.rootFixedPoints > 32 || !std::isfinite(config.maxDt) ||
-            config.maxDt <= 0.0f || config.maxDt > 0.25f)
+            config.maxDt <= 0.0f ||
+            config.maxDt > VL::Hair::TressfxMaxTimeStepSeconds)
             throw std::runtime_error(
-                "TressFX simulation has invalid damping/rootFixedPoints/maxDt: " +
+                "TressFX simulation has invalid damping/rootFixedPoints/maxDt "
+                "(damping is DampingCoeff in [0,1], maxDt in (0, 0.016]): " +
                 std::string(meshAssetPath));
         if (!std::isfinite(config.bendStiffness) || config.bendStiffness < 0.0f ||
             config.bendStiffness > 1.0f)
             throw std::runtime_error(
                 "TressFX simulation bendStiffness must be in [0, 1]: " +
-                std::string(meshAssetPath));
-        if (!std::isfinite(config.windGust) || config.windGust < 0.0f ||
-            config.windGust > 1.0f)
-            throw std::runtime_error(
-                "TressFX simulation windGust must be in [0, 1]: " +
-                std::string(meshAssetPath));
-        if (!std::isfinite(config.windFrequency) || config.windFrequency < 0.0f ||
-            config.windFrequency > 10.0f)
-            throw std::runtime_error(
-                "TressFX simulation windFrequency must be in [0, 10]: " +
                 std::string(meshAssetPath));
         // global shape 的两个作者值都是 [0,1]；两者同时 > 0 才启用。
         if (!std::isfinite(config.globalShapeStiffness) ||
@@ -664,8 +667,6 @@ MeshAssetBuildPlan MeshAssetValidator::BuildLoadPlan(
                  << "|r=" << loadPlan.tressfxSimulation.rootFixedPoints
                  << "|dt=" << loadPlan.tressfxSimulation.maxDt
                  << "|bend=" << loadPlan.tressfxSimulation.bendStiffness
-                 << "|gust=" << loadPlan.tressfxSimulation.windGust
-                 << "|freq=" << loadPlan.tressfxSimulation.windFrequency
                  << "|gshape=" << loadPlan.tressfxSimulation.globalShapeStiffness
                  << "," << loadPlan.tressfxSimulation.globalShapeEffectiveRange
                  << "|vsp=" << loadPlan.tressfxSimulation.vspCoefficient

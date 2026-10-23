@@ -10,6 +10,7 @@
 #include "../vertexDataStruct.h"
 #include "hair/sdfBuilder.h"
 #include "hair/tressfxCollision.h"
+#include "hair/tressfxSolverMath.h"
 
 namespace VL::Animation { struct SkeletalAsset; }
 
@@ -70,19 +71,19 @@ struct TressfxSimulationConfig
 {
     bool enabled = false;
     Eigen::Vector3f gravity = Eigen::Vector3f(0.0f, -980.0f, 0.0f);
+    // 单个风向量：方向归一化后作为风锥轴，长度作为幅值（厘米/秒）。
     Eigen::Vector3f wind = Eigen::Vector3f::Zero();
-    float damping = 0.995f;
+    // TressFX 的 DampingCoeff，直接用于 exp(-damping*dt*60)；
+    // 典型 0..0.07，默认 0.035，不是“每步保留的速度比例”。
+    float damping = 0.035f;
     uint32_t iterations = 3;
     uint32_t rootFixedPoints = 2;
     // 变量步长：每帧一个 solver step，dt = clamp(frameDelta, 0, maxDt)。
-    float maxDt = 0.033f;
+    // TressFX 的硬上限是 0.016 s；资产只能收紧，不能超过。
+    float maxDt = VL::Hair::TressfxMaxTimeStepSeconds;
     // 映射到 LocalShape pass 的 Stiffness 标量；pass 内再乘 0.5（TressFX 公式）。
     // 0 关闭局部形状约束。
     float bendStiffness = 0.3f;
-    // 有界阵风：gust = 1 + windGust * sin(2π f t + guide * goldenRatio)。
-    // 这是 VL 在 TressFX 风向量上的作者化扩展，见合同。
-    float windGust = 0.5f;
-    float windFrequency = 0.5f;
     // TressFX Integration 的 global shape：把可移动点按 stiffness 拉向
     // InitialPos（蒙皮/静止位置），只作用于前 effectiveRange 比例的点。
     // 两者都为 0 时 pass 内分支关闭，保持既有资产外观。

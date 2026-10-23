@@ -36,7 +36,7 @@
                 },
                 "wind": {
                     "type": "array",
-                    "description": "平均风加速度 xyz，单位厘米/秒²；每帧叠加有界阵风后与重力相加。",
+                    "description": "单个作者风向量：方向归一化后作为风锥轴，长度作为幅值（厘米/秒；TressFX 风力公式的标量，不是物理风速）。运行时按 TressFX SetWind 展开成四路锥形风（绕 Y/Z 各 ±40°），每路乘 wM = |wind| * (sin(simFrame*0.001)^2 + 0.5)。",
                     "items": {"type": "number"},
                     "minItems": 3,
                     "maxItems": 3
@@ -45,7 +45,7 @@
                     "type": "number",
                     "minimum": 0,
                     "maximum": 1,
-                    "description": "60 Hz 下每步保留的速度比例；运行时映射为 TressFX 的 DampingCoeff = -ln(damping)，积分内用 exp(-DampingCoeff*dt*60)。"
+                    "description": "TressFX 的 DampingCoeff，直接用于积分 exp(-damping*dt*60)，不是保留比例。默认 0.035，常用 0..0.07（UE UI 范围），字段本身仍是 [0,1]。"
                 },
                 "iterations": {
                     "type": "integer",
@@ -62,26 +62,14 @@
                 "maxDt": {
                     "type": "number",
                     "exclusiveMinimum": 0,
-                    "maximum": 0.25,
-                    "description": "单帧 delta time 上限，单位秒；clip 后直接作为本帧唯一 solver step 的 dt（变量步长，无 accumulator）。"
+                    "maximum": 0.016,
+                    "description": "单帧 delta time 上限，单位秒；TressFX 的硬上限是 0.016，资产只能收紧。clip 后直接作为本帧唯一 solver step 的 dt（变量步长，无 accumulator）。"
                 },
                 "bendStiffness": {
                     "type": "number",
                     "minimum": 0,
                     "maximum": 1,
                     "description": "映射到 LocalShape pass 的逐顶点 Stiffness 标量；pass 内按 TressFX 公式再乘 0.5。0 关闭局部形状约束。"
-                },
-                "windGust": {
-                    "type": "number",
-                    "minimum": 0,
-                    "maximum": 1,
-                    "description": "阵风幅度；gust = 1 + windGust * sin(2π f t + guide 相位)，乘在四风混合结果上，有界不累积。"
-                },
-                "windFrequency": {
-                    "type": "number",
-                    "minimum": 0,
-                    "maximum": 10,
-                    "description": "阵风频率，单位 Hz；0 时相位固定。"
                 },
                 "globalShapeStiffness": {
                     "type": "number",

@@ -17,19 +17,22 @@ struct GuideSimulationParams
 {
     // xyz = 重力加速度，w 未使用（厘米/秒²）。
     Eigen::Vector4f gravity = Eigen::Vector4f::Zero();
-    // TressFX 的四路风；VL 资产只有一个平均风向量，Host 四路都填同一个值，
-    // shader 仍按 a/(1-a) 权重混合（见 TressfxCombineWind）。
+    // TressFX 的四路锥形风（厘米/秒）。Host 从资产的单个风向量生成：
+    // 方向绕 Y/Z 各 ±40°，每路再乘 wM = |wind| * (sin(frame*0.001)² + 0.5)。
+    // shader 按 a/(1-a) 权重混合（见 TressfxCombineWind）。
     Eigen::Vector4f wind0 = Eigen::Vector4f::Zero();
     Eigen::Vector4f wind1 = Eigen::Vector4f::Zero();
     Eigen::Vector4f wind2 = Eigen::Vector4f::Zero();
     Eigen::Vector4f wind3 = Eigen::Vector4f::Zero();
-    // x = dt（秒）, y = DampingCoeff, z = pointsPerGuide, w = rootFixedPoints
+    // x = dt（秒）, y = DampingCoeff（作者值直接使用）, z = pointsPerGuide,
+    // w = rootFixedPoints
     Eigen::Vector4f controls = Eigen::Vector4f::Zero();
     // x = globalShapeStiffness, y = globalShapeEffectiveRange,
     // z = vspCoefficient, w = vspAccelThresholdMax（厘米/秒²）
     Eigen::Vector4f shape = Eigen::Vector4f::Zero();
-    // x = bendStiffness（映射到 LocalShape 的 Stiffness 标量）,
-    // y = windGust, z = windFrequency, w = frame-start simulationTime
+    // x = bendStiffness（映射到 LocalShape 的 Stiffness 标量）；
+    // y/z/w 保留为 0：原 windGust/windFrequency/simulationTime 已删除，
+    // 时间调制改由 Host 烘进 wind0..3（TressFX SetWind 语义）。
     Eigen::Vector4f motion = Eigen::Vector4f::Zero();
     // x = 长度约束迭代次数, y = guideCount, z = pointCount, w = colliderCount
     uint32_t iterations = 0;
@@ -57,30 +60,36 @@ inline constexpr uint32_t GuideSimulationWorkgroupSize = 64;
 // 参数 UBO 按 frame-in-flight 槽分开。数量必须等于 MAX_FRAMES_IN_FLIGHT。
 inline constexpr uint32_t GuideSimulationParamBufferCount = 2;
 
-// 一帧一次 dispatch 所需的参数。dt 已由调用方 clamp；simulationTime 是 frame-start t，
-// 用于阵风相位（所有 pass 共用同一值）。
+// 一帧一次 dispatch 所需的参数。dt 已由调用方 clamp；simulationFrame 是仿真
+// 帧序号，用于 TressFX SetWind 的 sin(frame*0.001)² 幅值调制（所有 pass 共用）。
 inline GuideSimulationParams MakeGuideSimulationParams(
     const TressfxSimulationConfig& config,
     uint32_t guideCount,
     uint32_t pointsPerGuide,
     uint32_t pointCount,
     float timeStep,
-    float simulationTime,
+    uint32_t simulationFrame,
     Eigen::Matrix4f skinningMatrix = Eigen::Matrix4f::Identity())
 {
     GuideSimulationParams params;
     params.gravity = Eigen::Vector4f(
         config.gravity.x(), config.gravity.y(), config.gravity.z(), 0.0f);
-    // 单一作者风向喂给 TressFX 的四路组合；四路相同则混合结果仍是平均值。
-    const Eigen::Vector4f wind(
-        config.wind.x(), config.wind.y(), config.wind.z(), 0.0f);
-    params.wind0 = wind;
-    params.wind1 = wind;
-    params.wind2 = wind;
-    params.wind3 = wind;
+    // 四路风由单个作者向量展开：方向归一化、长度作为幅值，再套 TressFX 的风锥。
+    const float windMagnitude = config.wind.norm();
+    const TressfxWindCorners corners =
+        TressfxBuildWindCorners(config.wind, windMagnitude, simulationFrame);
+    params.wind0 = Eigen::Vector4f(corners.wind0.x(), corners.wind0.y(),
+        corners.wind0.z(), 0.0f);
+    params.wind1 = Eigen::Vector4f(corners.wind1.x(), corners.wind1.y(),
+        corners.wind1.z(), 0.0f);
+    params.wind2 = Eigen::Vector4f(corners.wind2.x(), corners.wind2.y(),
+        corners.wind2.z(), 0.0f);
+    params.wind3 = Eigen::Vector4f(corners.wind3.x(), corners.wind3.y(),
+        corners.wind3.z(), 0.0f);
+    // 作者 damping 就是 TressFX 的 DampingCoeff，直接进 controls.y。
     params.controls = Eigen::Vector4f(
         timeStep,
-        TressfxDampingCoeffFromRetention(config.damping),
+        config.damping,
         static_cast<float>(pointsPerGuide),
         static_cast<float>(config.rootFixedPoints));
     params.shape = Eigen::Vector4f(
@@ -88,11 +97,7 @@ inline GuideSimulationParams MakeGuideSimulationParams(
         config.globalShapeEffectiveRange,
         config.vspCoefficient,
         config.vspAccelThresholdMax);
-    params.motion = Eigen::Vector4f(
-        config.bendStiffness,
-        config.windGust,
-        config.windFrequency,
-        simulationTime);
+    params.motion = Eigen::Vector4f(config.bendStiffness, 0.0f, 0.0f, 0.0f);
     params.iterations = config.iterations;
     params.guideCount = guideCount;
     params.pointCount = pointCount;

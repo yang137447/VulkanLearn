@@ -55,7 +55,7 @@ TEST(TressfxDescriptor, SimulationFieldsAreValidatedAndPartOfIdentity)
         {"damping", 0.98f},
         {"iterations", 4},
         {"rootFixedPoints", 2},
-        {"maxDt", 0.02f}};
+        {"maxDt", 0.016f}};
     const auto plan = MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json);
     EXPECT_TRUE(plan.tressfxSimulation.enabled);
     EXPECT_FLOAT_EQ(plan.tressfxSimulation.gravity.y(), -980.0f);
@@ -246,8 +246,9 @@ TEST(TressfxDescriptor, SimulationQualityDefaults)
     const auto config =
         MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json).tressfxSimulation;
     EXPECT_FLOAT_EQ(config.bendStiffness, 0.3f);
-    EXPECT_FLOAT_EQ(config.windGust, 0.5f);
-    EXPECT_FLOAT_EQ(config.windFrequency, 0.5f);
+    // damping 是 TressFX 的 DampingCoeff 默认值；maxDt 是 TressFX 的硬上限。
+    EXPECT_FLOAT_EQ(config.damping, 0.035f);
+    EXPECT_FLOAT_EQ(config.maxDt, 0.016f);
     // global shape 与 VSP 默认关闭，既有资产外观不变。
     EXPECT_FLOAT_EQ(config.globalShapeStiffness, 0.0f);
     EXPECT_FLOAT_EQ(config.globalShapeEffectiveRange, 0.0f);
@@ -265,16 +266,14 @@ TEST(TressfxDescriptor, SimulationQualityFieldsAcceptedAndPartOfIdentity)
     auto json = Descriptor();
     json["simulation"] = {
         {"bendStiffness", 0.7f},
-        {"windGust", 0.2f},
-        {"windFrequency", 2.0f},
+        {"damping", 0.05f},
         {"globalShapeStiffness", 0.4f},
         {"globalShapeEffectiveRange", 0.6f},
         {"vspCoefficient", 0.3f},
         {"vspAccelThresholdMax", 7000.0f}};
     const auto custom = MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json);
     EXPECT_FLOAT_EQ(custom.tressfxSimulation.bendStiffness, 0.7f);
-    EXPECT_FLOAT_EQ(custom.tressfxSimulation.windGust, 0.2f);
-    EXPECT_FLOAT_EQ(custom.tressfxSimulation.windFrequency, 2.0f);
+    EXPECT_FLOAT_EQ(custom.tressfxSimulation.damping, 0.05f);
     EXPECT_FLOAT_EQ(custom.tressfxSimulation.globalShapeStiffness, 0.4f);
     EXPECT_FLOAT_EQ(custom.tressfxSimulation.globalShapeEffectiveRange, 0.6f);
     EXPECT_FLOAT_EQ(custom.tressfxSimulation.vspCoefficient, 0.3f);
@@ -302,7 +301,7 @@ TEST(TressfxDescriptor, SimulationGlobalShapeAndVspParticipateInIdentity)
     EXPECT_NE(vspPlan.modelCacheKey, shaped.modelCacheKey);
 }
 
-TEST(TressfxDescriptor, SimulationRejectsInvalidBendAndWindControls)
+TEST(TressfxDescriptor, SimulationRejectsInvalidBendAndDampingControls)
 {
     for (const float bendStiffness : {-0.1f, 1.1f})
     {
@@ -311,19 +310,51 @@ TEST(TressfxDescriptor, SimulationRejectsInvalidBendAndWindControls)
         EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json),
             std::runtime_error);
     }
-    for (const float windGust : {-0.1f, 1.1f})
+    for (const float damping : {-0.1f, 1.1f})
     {
         auto json = Descriptor();
-        json["simulation"] = {{"windGust", windGust}};
+        json["simulation"] = {{"damping", damping}};
         EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json),
             std::runtime_error);
     }
-    for (const float windFrequency : {-1.0f, 11.0f})
+}
+
+TEST(TressfxDescriptor, SimulationRejectsRemovedWindGustFields)
+{
+    for (const char* removed : {"windGust", "windFrequency"})
     {
         auto json = Descriptor();
-        json["simulation"] = {{"windFrequency", windFrequency}};
-        EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json),
-            std::runtime_error);
+        json["simulation"] = {{removed, 0.2f}};
+        try
+        {
+            MeshAssetValidator::BuildLoadPlan(
+                "Maps/SC_probe/Meshes/SM_gust_legacy.json", json);
+            FAIL() << "Removed VL gust field was accepted: " << removed;
+        }
+        catch (const std::runtime_error& error)
+        {
+            const std::string message = error.what();
+            EXPECT_NE(message.find(removed), std::string::npos);
+            EXPECT_NE(message.find("SetWind"), std::string::npos);
+            EXPECT_NE(message.find("SM_gust_legacy.json"), std::string::npos);
+        }
+    }
+}
+
+TEST(TressfxDescriptor, SimulationRejectsTimeStepAboveTressFxClamp)
+{
+    auto json = Descriptor();
+    json["simulation"] = {{"maxDt", 0.017f}};
+    try
+    {
+        MeshAssetValidator::BuildLoadPlan("SM_dt.json", json);
+        FAIL() << "maxDt above the TressFX 0.016 s clamp was accepted";
+    }
+    catch (const std::runtime_error& error)
+    {
+        const std::string message = error.what();
+        EXPECT_NE(message.find("0.016"), std::string::npos);
+        EXPECT_NE(message.find("SM_dt.json"), std::string::npos);
     }
 }
 
