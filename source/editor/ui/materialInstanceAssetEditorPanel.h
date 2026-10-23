@@ -57,6 +57,10 @@ public:
     void ShowMaterialDetails() { viewingJson = false; resourceEditorVisible = false; requestedJsonPath.clear(); activateMaterialDocument = true; }
     void ShowSceneDetails() { viewingJson = false; requestedJsonPath.clear(); activateMaterialDocument = false; }
     void Build(const MaterialInstanceEditorSnapshot& snapshot);
+    // Performance 页按自己的 5 Hz 取样：数据节每 10 Hz 发布一次，但不需要因此
+    // 重建整份面板 DOM，所以单独暴露两个取样入口。
+    void UpdatePerformance(const PerformanceSnapshot& performance);
+    void UpdateScriptPerformance(const nlohmann::json& scriptPerformance);
     void UpdateRuntimeView(const UiViewModelSnapshot& view);
     std::vector<std::string> VisibleThumbnailPaths() const { return contentBrowser.VisibleThumbnailPaths(); }
     void RequestSave();

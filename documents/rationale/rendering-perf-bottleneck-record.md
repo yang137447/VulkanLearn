@@ -182,3 +182,29 @@ build-rel/bin/main.exe --no-dev-ui --initial-scene Maps/SC_tressfx_female/SC_tre
 ```
 隐藏状态截图见 `artifacts/ui-hidden-after.png`（只剩 HUD 场景名），可见状态见
 `artifacts/ui-editor-after.png`（Outliner/Details/Viewport/Content Browser/Log/Performance）。
+
+## 8. UI 分节化（第 2 层）
+
+第 1 层解决了"隐藏态仍在重建"，但可见态每次刷新仍构建整棵快照。第 2 层把视图模型拆成
+分节：source/ui/uiViewModelSections.h 定义 `UiSnapshotSection<T> { shared_ptr<const T> data; version }`，
+节为 scripts / animation / sceneOutliner / assets / performance / viewportCamera /
+environmentLighting / offline / status。
+
+- 每节只有一个 owner 知道何时变化：脚本构建态、世界换代、选中、资产库 revision、
+  性能窗口计数、离线状态等；不变则版本不推进。
+- UiSubsystem 按 `ChangedFrom(appliedVersions)` 只对变化节重脏绑定；面板
+  `BuildDeveloperPanels` 只在面板相关节变化时执行，不再每帧重建。
+- 日志、资产目录、缩略图改为"按 revision 发布的不可变快照"，同一 revision 返回同一个
+  `shared_ptr`，不再每帧 `Freeze()/GetCatalog()/GetSnapshot()` 拷贝。
+- 17 项分节/版本/刷新计划单测覆盖：同一 revision 只发布一次、在飞消费者保留旧不可变节、
+  选中只重脏 outliner、空闲窗口只重建节奏节、面板掩码排除 performance/animation。
+
+实测（Release，skinned 场景，`--perf-jsonl`，5 次采样中位数）：
+
+| 状态 | 第 1 层后 uiViewModel | 第 2 层后 |
+| --- | ---: | ---: |
+| 编辑器可见 | 0.761 ms | **0.53 ms** |
+| `--no-dev-ui` | 0.038 ms | 0.04 ms |
+
+可见态剩下的约 0.5 ms 是 RmlUi 每帧渲染与 context update（必要开销），不是快照构建；
+要再降需要第 3 层"空闲不重绘工作区"。

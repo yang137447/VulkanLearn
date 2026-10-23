@@ -4,6 +4,7 @@
 #include <chrono>
 #include <exception>
 #include <filesystem>
+#include <iostream>
 #include <string>
 #include <utility>
 
@@ -76,6 +77,36 @@ const std::shared_ptr<const Animation::MotionDebugView>& DisabledMotionDebugView
     return view;
 }
 
+// 调试叠层的 UI 可见状态签名。快照几何每帧都新分配，但面板只消费
+// 开关/类别/owner/计数这些字段；用它们的签名判断“这一节是否真的变了”。
+uint64_t UiDebugDrawSignature(const Debug::Snapshot& snapshot)
+{
+    UiSectionRevision revision;
+    revision.Mix(snapshot.enabled ? 1u : 0u)
+        .Mix(snapshot.visibleCount)
+        .Mix(snapshot.storedCount);
+    for (const char character : snapshot.ownerFilter)
+    {
+        revision.Mix(static_cast<uint64_t>(static_cast<unsigned char>(character)));
+    }
+    for (const auto& category : snapshot.categories)
+    {
+        revision.Mix(category.enabled ? 1u : 0u).Mix(category.count);
+        for (const char character : category.name)
+        {
+            revision.Mix(static_cast<uint64_t>(static_cast<unsigned char>(character)));
+        }
+    }
+    for (const auto& owner : snapshot.owners)
+    {
+        for (const char character : owner)
+        {
+            revision.Mix(static_cast<uint64_t>(static_cast<unsigned char>(character)));
+        }
+    }
+    return revision.Value();
+}
+
 RenderGraph::TestFaultInjection BuildRenderGraphTestFaultInjection(
     const WorldGraphTransactionTestFaultInjection& injection)
 {
@@ -146,6 +177,8 @@ RuntimeResult<void> EngineLoop::Init(
     // 必须在 LoadInitialWorldAndRenderer 之前设置：帧资源初始化时按该标志决定是否
     // 在首次采集时创建 timestamp query pool。
     RenderSystem::GetInstance().SetGpuPassStatsLoggingEnabled(launchOptions.gpuStats);
+    gpuStatsEnabled = launchOptions.gpuStats;
+    nextUiSectionStats = std::chrono::steady_clock::now() + std::chrono::seconds(1);
     if (launchOptions.perfJsonlPath.has_value())
     {
         // --perf-jsonl 的时间序列需要 pass 数据，因此同时开启采集；
@@ -868,6 +901,7 @@ void EngineLoop::Tick()
     }
 
     TickPerformanceJsonl();
+    TickUiSectionStats();
 
     PROFILE_FRAME();
 
@@ -892,6 +926,37 @@ void EngineLoop::TickPerformanceJsonl()
     nextPerfJsonlWrite = now + std::chrono::seconds(1);
     perfJsonl.Append(
         FormatPerformanceJson(RenderSystem::GetInstance().CapturePerformanceSnapshot()));
+}
+
+void EngineLoop::TickUiSectionStats()
+{
+    if (!gpuStatsEnabled || uiSubsystem == nullptr)
+    {
+        return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (now < nextUiSectionStats)
+    {
+        return;
+    }
+    nextUiSectionStats = now + std::chrono::seconds(1);
+    // 诊断计数只在 --gpu-stats 下读取：证明静止帧没有分节重建/面板重建，
+    // 交互帧才产生脏集。计数每秒归零，读出的是“每秒次数”。
+    const UiSubsystem::RefreshStats stats = uiSubsystem->ConsumeRefreshStats();
+    std::cout << "[UI] sections/s=" << stats.sectionPublishes
+        << " panelBuilds/s=" << stats.panelBuilds
+        << " runtimeViews/s=" << stats.runtimeViewUpdates
+        << " bindingDirty/s=" << stats.bindingDirtyWrites;
+    for (size_t index = 0; index < UiSectionCount; ++index)
+    {
+        if (stats.sectionPublishesById[index] == 0)
+        {
+            continue;
+        }
+        std::cout << ' ' << UiSectionName(static_cast<UiSectionId>(index)) << ':'
+            << stats.sectionPublishesById[index];
+    }
+    std::cout << std::endl;
 }
 
 void EngineLoop::TickScriptBuild(float deltaTime)
@@ -1572,163 +1637,305 @@ void EngineLoop::UpdateUiInputPolicy()
     inputSubsystem.SetRelativeMouseModeAllowed(relativeAllowed);
 }
 
-void EngineLoop::FillUiViewModelLiveFields(
-    UiViewModelSnapshot& snapshot,
+void EngineLoop::FillUiViewModelLiveFrame(
+    UiViewModelFrameValues& frame,
     UiViewModelBuildMode buildMode,
     const WorldHandle& activeWorld)
 {
-    snapshot.activeWorldPath = activeWorld.scenePath;
+    frame.activeWorldPath = activeWorld.scenePath;
     const RenderSystem& renderSystem = RenderSystem::GetInstance();
-    snapshot.offlineMode = renderSystem.IsOfflineMode();
+    frame.offlineMode = renderSystem.IsOfflineMode();
     if (buildMode == UiViewModelBuildMode::RuntimeHud)
     {
         // 运行时 HUD 每帧只冻结游戏文本；类/性能 JSON 属于编辑器面板，不进入这里。
-        snapshot.scripts = GetSubsystems().GetScriptRuntime().HudView(
+        frame.hudView = GetSubsystems().GetScriptRuntime().HudView(
             activeWorld.generation);
     }
     const std::shared_ptr<World>& world =
         GetSubsystems().GetWorldManager().GetActiveWorld();
-    if (!world || snapshot.offlineMode)
+    if (!world || frame.offlineMode)
     {
         return;
     }
     // DrawDebug 叠层在沉浸模式仍然显示，因此逐帧冻结相机动图；Motion 的
-    // 历史/匹配模型只在开启或工作区可见时构建，隐藏时复用一个冻结空视图。
-    snapshot.motionWorldGeneration = world->GetGeneration();
-    if (buildMode == UiViewModelBuildMode::FullEditor || world->IsMotionDebugEnabled())
+    // 历史/匹配模型只在开启时构建，关闭时复用一个冻结空视图，避免每个
+    // FullEditor 帧都分配一份禁用视图并让相机分节每 10 Hz 误判为变化。
+    frame.motionWorldGeneration = world->GetGeneration();
+    if (world->IsMotionDebugEnabled())
     {
-        snapshot.motionDebug = world->CaptureMotionDebug();
+        frame.motionDebug = world->CaptureMotionDebug();
     }
     else
     {
-        snapshot.motionDebug = DisabledMotionDebugView();
+        frame.motionDebug = DisabledMotionDebugView();
     }
-    snapshot.debugDraw = world->CaptureDebugDraw(*snapshot.motionDebug);
+    frame.debugDraw = world->CaptureDebugDraw(*frame.motionDebug);
     if (const auto& camera = world->GetRenderCamera())
     {
         for (int axis = 0; axis < 3; ++axis)
         {
-            snapshot.motionCamera.position[axis] = camera->GetPosition()[axis];
-            snapshot.motionCamera.forward[axis] = camera->GetForwardVector()[axis];
-            snapshot.motionCamera.right[axis] = camera->GetRightVector()[axis];
-            snapshot.motionCamera.up[axis] = camera->GetUpVector()[axis];
+            frame.motionCamera.position[axis] = camera->GetPosition()[axis];
+            frame.motionCamera.forward[axis] = camera->GetForwardVector()[axis];
+            frame.motionCamera.right[axis] = camera->GetRightVector()[axis];
+            frame.motionCamera.up[axis] = camera->GetUpVector()[axis];
         }
-        snapshot.motionCamera.horizontalFovDegrees = camera->GetHFOV();
-        snapshot.motionCamera.clipNear = camera->GetClipNear();
-        snapshot.motionCamera.clipFar = camera->GetClipFar();
+        frame.motionCamera.horizontalFovDegrees = camera->GetHFOV();
+        frame.motionCamera.clipNear = camera->GetClipNear();
+        frame.motionCamera.clipFar = camera->GetClipFar();
     }
 }
 
-void EngineLoop::BuildUiViewModelEditorFields(
-    UiViewModelSnapshot& snapshot,
+void EngineLoop::BuildUiScriptsSection(
+    UiScriptsSection& section,
     const WorldHandle& activeWorld)
 {
-    const RenderSystem& renderSystem = RenderSystem::GetInstance();
     const ScriptRuntimeSubsystem& scriptRuntime = GetSubsystems().GetScriptRuntime();
     const std::shared_ptr<World>& world =
         GetSubsystems().GetWorldManager().GetActiveWorld();
 
-    snapshot.scripts = scriptRuntime.View(activeWorld.generation);
-    snapshot.scripts.buildAvailable = scriptBuild && scriptBuild->Available();
-    snapshot.scripts.buildBusy = scriptBuild && scriptBuild->Busy();
-    snapshot.scripts.autoCompile = autoCompileScripts;
-    snapshot.scripts.buildOutput = scriptBuildOutput;
+    section.scripts = scriptRuntime.View(activeWorld.generation);
+    section.scripts.buildAvailable = scriptBuild && scriptBuild->Available();
+    section.scripts.buildBusy = scriptBuild && scriptBuild->Busy();
+    section.scripts.autoCompile = autoCompileScripts;
+    section.scripts.buildOutput = scriptBuildOutput;
     if (world && uiSubsystem->GetSceneDocuments())
     {
-        // CanUndo 内部做 weakly_canonical，是隐藏状态下最贵的一段；只在刷新时求值。
-        snapshot.scripts.canUndo =
+        // CanUndo 内部做 weakly_canonical，是隐藏状态下最贵的一段；只在脚本节
+        // 真正重建时求值（选中/命令/世界换代/编译状态事件），静止帧不重复执行。
+        section.scripts.canUndo =
             uiSubsystem->GetSceneDocuments()->CanUndo(world->GetScenePath());
-        snapshot.scripts.canRedo =
+        section.scripts.canRedo =
             uiSubsystem->GetSceneDocuments()->CanUndo(world->GetScenePath(), true);
     }
-    snapshot.debugViewMode = renderSystem.GetDebugViewMode();
-    snapshot.toneMappingMode = renderSystem.GetToneMappingMode();
-    snapshot.offlineState = static_cast<int>(renderSystem.GetOfflineState());
-    snapshot.offlineSamples = renderSystem.GetOfflineSettings().samples;
-    snapshot.offlineBounces = renderSystem.GetOfflineSettings().bounces;
-    snapshot.offlineLightSamples = renderSystem.GetOfflineSettings().lightSamples;
-    snapshot.offlineSeed = renderSystem.GetOfflineSettings().seed;
-    snapshot.offlineAov = static_cast<int>(renderSystem.GetOfflineAov());
-    snapshot.offlineExposure = renderSystem.GetOfflineExposure();
-    snapshot.offlineError = renderSystem.GetOfflineError();
-    if (const auto result = renderSystem.CaptureOfflineResult())
-        snapshot.offlineCompletedSamples = result->film->completedSamples;
-    snapshot.bloomStrength = renderSystem.GetBloomStrength();
-    snapshot.bloomThreshold = renderSystem.GetBloomThreshold();
-    snapshot.bloomKnee = renderSystem.GetBloomKnee();
-    snapshot.bloomClamp = renderSystem.GetBloomClamp();
-    const CsmSettings& csmSettings = renderSystem.GetCsmSettings();
-    snapshot.csmCastShadows = csmSettings.castShadows;
-    snapshot.csmDynamicShadowDistance =
-        csmSettings.dynamicShadowDistance;
-    snapshot.csmDynamicShadowCascades =
-        csmSettings.cascadeCount;
-    snapshot.csmCascadeDistributionExponent =
-        csmSettings.cascadeDistributionExponent;
-    snapshot.csmCascadeTransitionFraction =
-        csmSettings.cascadeTransitionFraction;
-    snapshot.csmShadowDistanceFadeoutFraction =
-        csmSettings.shadowDistanceFadeoutFraction;
-    snapshot.csmShadowBias = csmSettings.shadowBias;
-    snapshot.csmShadowSlopeBias =
-        csmSettings.shadowSlopeBias;
-    snapshot.csmShadowCascadeBiasDistribution =
-        csmSettings.shadowCascadeBiasDistribution;
-    snapshot.environmentIntensity = renderSystem.GetEnvironmentIntensity();
-    snapshot.sunIntensity = 1.0f;
+}
+
+void EngineLoop::BuildUiAnimationSection(
+    UiAnimationPreviewSection& section,
+    const WorldHandle& activeWorld)
+{
+    const std::shared_ptr<World>& world =
+        GetSubsystems().GetWorldManager().GetActiveWorld();
+    if (!world)
+    {
+        return;
+    }
+    // 动画时间是时间相关值：允许随 10 Hz 刷新节拍变化；暂停且数值不变时
+    // 分节发布会按值比较，不提升版本。
+    CaptureUiAnimationPreview(section, *world, activeWorld.generation);
+}
+
+void EngineLoop::BuildUiPerformanceSection(UiPerformanceSection& section)
+{
+    // 与 perf json/JSONL 共用同一份冻结快照；这里只做一次值拷贝，
+    // 面板随后按自己的 5 Hz 节奏读取，不逐帧接触 RenderSystem。
+    section.performance = RenderSystem::GetInstance().CapturePerformanceSnapshot();
+    // 脚本时间/计数器同样属于时间序列；它们不进入事件驱动的脚本分节，
+    // 否则 Log 的 Scripts 页在静止帧会显示过期的时间。
+    section.scriptPerformance =
+        GetSubsystems().GetScriptRuntime().PerformanceView();
+}
+
+void EngineLoop::BuildUiViewportCameraSection(
+    UiViewportCameraSection& section,
+    const UiViewModelFrameValues& frameValues)
+{
+    const RenderSystem& renderSystem = RenderSystem::GetInstance();
+    const std::shared_ptr<World>& world =
+        GetSubsystems().GetWorldManager().GetActiveWorld();
+    section.debugViewMode = renderSystem.GetDebugViewMode();
+    section.toneMappingMode = renderSystem.GetToneMappingMode();
+    section.motionWorldGeneration = frameValues.motionWorldGeneration;
+    section.motionDebug = frameValues.motionDebug;
+    section.debugDraw = frameValues.debugDraw;
+    if (frameValues.debugDraw)
+    {
+        section.debugDrawSignature = UiDebugDrawSignature(*frameValues.debugDraw);
+    }
+    section.motionCamera = frameValues.motionCamera;
+    section.cameraMoveSpeed = controller != nullptr ? controller->GetMoveVelocity() : 1000.0f;
     if (world && world->GetCamera())
     {
-        snapshot.hasCamera = true;
-        snapshot.cameraExposure = world->GetCamera()->GetExposure();
+        section.hasCamera = true;
+        section.cameraExposure = world->GetCamera()->GetExposure();
     }
+}
+
+void EngineLoop::BuildUiEnvironmentLightingSection(
+    UiEnvironmentLightingSection& section,
+    const WorldHandle& activeWorld)
+{
+    (void)activeWorld;
+    const RenderSystem& renderSystem = RenderSystem::GetInstance();
+    const std::shared_ptr<World>& world =
+        GetSubsystems().GetWorldManager().GetActiveWorld();
+    section.bloomStrength = renderSystem.GetBloomStrength();
+    section.bloomThreshold = renderSystem.GetBloomThreshold();
+    section.bloomKnee = renderSystem.GetBloomKnee();
+    section.bloomClamp = renderSystem.GetBloomClamp();
+    const CsmSettings& csmSettings = renderSystem.GetCsmSettings();
+    section.csmCastShadows = csmSettings.castShadows;
+    section.csmDynamicShadowDistance = csmSettings.dynamicShadowDistance;
+    section.csmDynamicShadowCascades = csmSettings.cascadeCount;
+    section.csmCascadeDistributionExponent = csmSettings.cascadeDistributionExponent;
+    section.csmCascadeTransitionFraction = csmSettings.cascadeTransitionFraction;
+    section.csmShadowDistanceFadeoutFraction = csmSettings.shadowDistanceFadeoutFraction;
+    section.csmShadowBias = csmSettings.shadowBias;
+    section.csmShadowSlopeBias = csmSettings.shadowSlopeBias;
+    section.csmShadowCascadeBiasDistribution = csmSettings.shadowCascadeBiasDistribution;
+    section.environmentIntensity = renderSystem.GetEnvironmentIntensity();
+    section.sunIntensity = 1.0f;
     if (world && world->GetPrimaryDirectionalLight())
     {
-        snapshot.sunIntensity = world->GetPrimaryDirectionalLight()->GetIntensity();
+        section.sunIntensity = world->GetPrimaryDirectionalLight()->GetIntensity();
     }
     const EnvironmentUpdateDiagnostics environmentDiagnostics =
         renderSystem.GetEnvironmentUpdateDiagnostics();
-    snapshot.environmentActiveGeneration = environmentDiagnostics.progress.activeGeneration;
-    snapshot.environmentPendingGeneration = environmentDiagnostics.progress.pendingGeneration;
-    snapshot.environmentUpdateStage = ToString(environmentDiagnostics.progress.stage);
-    snapshot.environmentCubemapFacesCompleted =
+    section.environmentActiveGeneration = environmentDiagnostics.progress.activeGeneration;
+    section.environmentPendingGeneration = environmentDiagnostics.progress.pendingGeneration;
+    section.environmentUpdateStage = ToString(environmentDiagnostics.progress.stage);
+    section.environmentCubemapFacesCompleted =
         environmentDiagnostics.progress.cubemapFacesCompleted;
-    snapshot.environmentCubemapFaceCount = environmentDiagnostics.progress.cubemapFaceCount;
-    snapshot.environmentShUpdatesCompleted = environmentDiagnostics.progress.shUpdatesCompleted;
-    snapshot.environmentPrefilterMipsCompleted =
+    section.environmentCubemapFaceCount = environmentDiagnostics.progress.cubemapFaceCount;
+    section.environmentShUpdatesCompleted = environmentDiagnostics.progress.shUpdatesCompleted;
+    section.environmentPrefilterMipsCompleted =
         environmentDiagnostics.progress.prefilterMipsCompleted;
-    snapshot.environmentPrefilterMipCount = environmentDiagnostics.progress.prefilterMipCount;
-    snapshot.environmentUsesPreviousResources =
+    section.environmentPrefilterMipCount = environmentDiagnostics.progress.prefilterMipCount;
+    section.environmentUsesPreviousResources =
         environmentDiagnostics.progress.usingPreviousResources;
-    snapshot.environmentGpuTimingSupported = environmentDiagnostics.gpuTiming.supported;
-    snapshot.environmentCubemapGpuMs = environmentDiagnostics.gpuTiming
+    section.environmentGpuTimingSupported = environmentDiagnostics.gpuTiming.supported;
+    section.environmentCubemapGpuMs = environmentDiagnostics.gpuTiming
         .Get(EnvironmentGpuProduct::Cubemap).lastMilliseconds;
-    snapshot.environmentShGpuMs = environmentDiagnostics.gpuTiming
+    section.environmentShGpuMs = environmentDiagnostics.gpuTiming
         .Get(EnvironmentGpuProduct::SphericalHarmonics).lastMilliseconds;
-    snapshot.environmentPrefilterGpuMs = environmentDiagnostics.gpuTiming
+    section.environmentPrefilterGpuMs = environmentDiagnostics.gpuTiming
         .Get(EnvironmentGpuProduct::Prefilter).lastMilliseconds;
-    snapshot.environmentCommitGpuMs = environmentDiagnostics.gpuTiming
+    section.environmentCommitGpuMs = environmentDiagnostics.gpuTiming
         .Get(EnvironmentGpuProduct::Commit).lastMilliseconds;
-    snapshot.speedTreeStrength = renderSystem.GetSpeedTreeStrength();
-    snapshot.speedTreeGustingEnabled = renderSystem.GetSpeedTreeGustingEnabled();
-    snapshot.speedTreeWindProfileCount = renderSystem.GetSpeedTreeWindProfileCount();
-    if (world)
+    section.speedTreeStrength = renderSystem.GetSpeedTreeStrength();
+    section.speedTreeGustingEnabled = renderSystem.GetSpeedTreeGustingEnabled();
+    section.speedTreeWindProfileCount = renderSystem.GetSpeedTreeWindProfileCount();
+}
+
+void EngineLoop::BuildUiOfflineSection(
+    UiOfflineSection& section,
+    const RuntimeCommandExecutionResult& commandResult)
+{
+    const RenderSystem& renderSystem = RenderSystem::GetInstance();
+    section.offlineMode = renderSystem.IsOfflineMode();
+    section.state = static_cast<int>(renderSystem.GetOfflineState());
+    section.samples = renderSystem.GetOfflineSettings().samples;
+    section.bounces = renderSystem.GetOfflineSettings().bounces;
+    section.lightSamples = renderSystem.GetOfflineSettings().lightSamples;
+    section.seed = renderSystem.GetOfflineSettings().seed;
+    section.aov = static_cast<int>(renderSystem.GetOfflineAov());
+    section.exposure = renderSystem.GetOfflineExposure();
+    section.error = renderSystem.GetOfflineError();
+    if (const auto result = renderSystem.CaptureOfflineResult())
     {
-        CaptureUiAnimationPreview(snapshot, *world, world->GetGeneration());
+        section.completedSamples = result->film->completedSamples;
     }
-    uiSubsystem->SetMaterialInstanceSceneModels(
-        renderSystem.GetMaterialInstanceModelContexts());
-    // Performance 页与 perf JSON/JSONL 共用这一份冻结快照；这里只在刷新帧做一次
-    // 值拷贝，面板随后按自己的 5 Hz 节奏读取，不在逐帧路径接触 RenderSystem。
-    uiSubsystem->SetPerformanceSnapshot(renderSystem.CapturePerformanceSnapshot());
-    // 世界大纲的数据源是 active World 本身，而不是只含带 MI 网格的 RenderScene 子集。
-    // 在同一个稳定帧边界拍出值语义副本，UI 回调里不再访问 World。
-    uiSubsystem->SetSceneActors(world != nullptr
-        ? BuildEditorSceneActors(*world)
-        : std::vector<EditorUi::EditorSceneActorSnapshot>{});
+    section.modeFeedback = commandResult.offlineUiModeFeedback;
+}
+
+void EngineLoop::BuildUiSceneOutlinerContent()
+{
+    // 大纲列表是逐帧替换的不可变数组：内容变化时换新指针，静止帧复用旧指针，
+    // 这样大纲分节版本不会因为 10 Hz 轮询而推进。
+    const std::shared_ptr<World>& world =
+        GetSubsystems().GetWorldManager().GetActiveWorld();
+    auto actors =
+        std::make_shared<std::vector<EditorUi::EditorSceneActorSnapshot>>();
+    if (world != nullptr)
+    {
+        *actors = BuildEditorSceneActors(*world);
+    }
+    uiSceneActors = std::move(actors);
+
+    auto models =
+        std::make_shared<std::vector<EditorUi::MaterialInstanceModelSnapshot>>();
+    const auto contexts =
+        RenderSystem::GetInstance().GetMaterialInstanceModelContexts();
+    models->reserve(contexts.size());
+    for (const Editor::Selection::MaterialInstanceModelContext& model : contexts)
+    {
+        EditorUi::MaterialInstanceModelSnapshot modelSnapshot;
+        modelSnapshot.worldGeneration = model.worldGeneration;
+        modelSnapshot.scenePath = model.scenePath;
+        modelSnapshot.objectId = model.objectId;
+        modelSnapshot.displayName = model.displayName;
+        modelSnapshot.objectIdentity = model.objectIdentity;
+        modelSnapshot.materials.reserve(model.materials.size());
+        for (const Editor::Selection::MaterialInstanceModelMaterial& material :
+             model.materials)
+        {
+            EditorUi::MaterialInstanceModelMaterialSnapshot materialSnapshot;
+            materialSnapshot.objectId = material.objectId;
+            materialSnapshot.materialSlotIndex = material.materialSlotIndex;
+            materialSnapshot.materialSlotName = material.materialSlotName;
+            materialSnapshot.materialInstancePath = material.materialInstancePath;
+            modelSnapshot.materials.push_back(std::move(materialSnapshot));
+        }
+        models->push_back(std::move(modelSnapshot));
+    }
+    uiSceneModels = std::move(models);
+}
+
+void EngineLoop::BuildUiViewModelSections(
+    UiViewModelSectionUpdate& sections,
+    UiSectionMask rebuild,
+    const UiViewModelFrameValues& frameValues,
+    const WorldHandle& activeWorld,
+    const RuntimeCommandExecutionResult& commandResult)
+{
+    if ((rebuild & UiSectionBit(UiSectionId::Scripts)) != 0)
+    {
+        UiScriptsSection scripts;
+        BuildUiScriptsSection(scripts, activeWorld);
+        // 调用方已经确认这一节需要重建；输入版本仍显式递增，供存储层做
+        // “同一输入只发布一次”的防御性去重。
+        sections.scriptsRevision = ++uiScriptsSectionRevision;
+        sections.scripts = std::move(scripts);
+    }
+    if ((rebuild & UiSectionBit(UiSectionId::Animation)) != 0)
+    {
+        UiAnimationPreviewSection animation;
+        BuildUiAnimationSection(animation, activeWorld);
+        sections.animation = std::move(animation);
+    }
+    if ((rebuild & UiSectionBit(UiSectionId::Performance)) != 0)
+    {
+        UiPerformanceSection performance;
+        BuildUiPerformanceSection(performance);
+        sections.performance = std::move(performance);
+    }
+    if ((rebuild & UiSectionBit(UiSectionId::ViewportCamera)) != 0)
+    {
+        UiViewportCameraSection viewport;
+        BuildUiViewportCameraSection(viewport, frameValues);
+        sections.viewportCamera = std::move(viewport);
+    }
+    if ((rebuild & UiSectionBit(UiSectionId::EnvironmentLighting)) != 0)
+    {
+        UiEnvironmentLightingSection environment;
+        BuildUiEnvironmentLightingSection(environment, activeWorld);
+        sections.environmentLighting = std::move(environment);
+    }
+    if ((rebuild & UiSectionBit(UiSectionId::Offline)) != 0)
+    {
+        UiOfflineSection offline;
+        BuildUiOfflineSection(offline, commandResult);
+        sections.offline = std::move(offline);
+    }
+    if ((rebuild & UiSectionBit(UiSectionId::SceneOutliner)) != 0)
+    {
+        BuildUiSceneOutlinerContent();
+        uiSubsystem->SetSceneActors(uiSceneActors);
+        uiSubsystem->SetMaterialInstanceSceneModels(uiSceneModels);
+    }
 }
 
 void EngineLoop::CaptureUiAnimationPreview(
-    UiViewModelSnapshot& snapshot,
+    UiAnimationPreviewSection& section,
     const World& world,
     uint64_t generation)
 {
@@ -1764,27 +1971,27 @@ void EngineLoop::CaptureUiAnimationPreview(
             cache.schema = Animation::PreviewFeatureSchema(animation.mesh);
             cache.featureChannels = Animation::FeatureChannelNames(cache.schema);
         }
-        snapshot.animationWorldGeneration = generation;
-        snapshot.animationClips = cache.clipIds;
-        snapshot.animationClip = player.SelectedClip();
-        snapshot.animationTime = player.Time();
-        snapshot.animationDuration = player.Duration();
-        snapshot.animationPlaying = player.IsPlaying();
-        snapshot.animationJointCount = player.Asset().mesh.joints.size();
+        section.worldGeneration = generation;
+        section.clips = cache.clipIds;
+        section.clip = player.SelectedClip();
+        section.time = player.Time();
+        section.duration = player.Duration();
+        section.playing = player.IsPlaying();
+        section.jointCount = player.Asset().mesh.joints.size();
         if (!animation.clips.empty())
         {
             const auto& clip = animation.clips.at(player.SelectedClip());
-            snapshot.animationFeatureChannels = cache.featureChannels;
+            section.featureChannels = cache.featureChannels;
             if (Animation::CanExtractClipFeatures(
                     clip, cache.schema, player.Time(), player.IsLooping()))
             {
-                snapshot.animationFeatures = Animation::ExtractClipFeatures(
+                section.features = Animation::ExtractClipFeatures(
                     animation.mesh, clip, cache.schema, player.Time(), player.IsLooping());
-                snapshot.animationFeatureStatus = "Root heading | cm, cm/s | pre-IK";
+                section.featureStatus = "Root heading | cm, cm/s | pre-IK";
             }
             else
             {
-                snapshot.animationFeatureStatus = "Incomplete nonloop feature window";
+                section.featureStatus = "Incomplete nonloop feature window";
             }
         }
         break;
@@ -1805,19 +2012,18 @@ void EngineLoop::UpdateUiViewModel(
     const WorldHandle& activeWorld = worldManager.GetActiveWorldHandle();
     const ScriptRuntimeSubsystem& scriptRuntime = GetSubsystems().GetScriptRuntime();
 
-    // 可见性决定构建档位：编辑器隐藏时绝不构建完整快照，沉浸模式只保留 DrawDebug。
+    // 可见性决定构建档位：编辑器隐藏时绝不构建编辑器分节，沉浸模式只保留 DrawDebug。
     const UiViewModelBuildMode buildMode = DecideUiViewModelBuildMode(
         true,
         uiSubsystem->IsDeveloperUiVisible(),
         uiSubsystem->IsRuntimeHudVisible());
 
-    UiViewModelSnapshot snapshot;
-    snapshot.frameIndex = uiFrameIndex++;
-    snapshot.deltaTimeSeconds = deltaTime;
-    snapshot.framesPerSecond = GetSubsystems().GetFpsTool().getFPS();
-    snapshot.cameraMoveSpeed = controller->GetMoveVelocity();
-    snapshot.offlineModeFeedback = commandResult.offlineUiModeFeedback;
-    FillUiViewModelLiveFields(snapshot, buildMode, activeWorld);
+    UiViewModelFrameValues frame;
+    frame.frameIndex = uiFrameIndex++;
+    frame.deltaTimeSeconds = deltaTime;
+    frame.framesPerSecond = GetSubsystems().GetFpsTool().getFPS();
+    frame.cameraMoveSpeed = controller != nullptr ? controller->GetMoveVelocity() : 1000.0f;
+    FillUiViewModelLiveFrame(frame, buildMode, activeWorld);
     // 脚本驱动的选中请求在判定脏标记之前处理，选中高亮才能在同一个 GT 帧重建。
     if (!pendingScriptBlueprintSelection.empty() &&
         uiSubsystem->RequestActorSelection(pendingScriptBlueprintSelection))
@@ -1831,32 +2037,44 @@ void EngineLoop::UpdateUiViewModel(
     // 脚本编译状态没有逐帧比较大字符串：TickScriptBuild 在工作开始/轮询结果时置脏。
     const bool buildStateDirty = uiViewModelScriptBuildPending;
     uiViewModelScriptBuildPending = false;
-    // 显式脏路径：可见性/选中/模式动作由 UiSubsystem 置脏，World 换代与命令结果
-    // 在这里比较；其余等待 10 Hz 节拍。先单独消费脏标记，避免短路求值把它留到下一帧。
-    const bool uiRefreshRequested = uiSubsystem->ConsumeViewModelRefreshRequest();
-    const bool forceRefresh =
-        buildMode != uiViewModelBuildMode ||
-        uiRefreshRequested ||
+    // 事件路径只重脏自己声明的分节；先单独消费掩码，避免短路求值把它留到下一帧。
+    const UiSectionMask requested = uiSubsystem->ConsumeViewModelRefreshSections();
+    const bool visibilityOrModeChanged = buildMode != uiViewModelBuildMode;
+    const bool worldChanged =
         activeWorld.generation != lastUiViewModelWorldGeneration ||
-        activeWorld.scenePath != lastUiViewModelWorldPath ||
-        commandResult.worldChanged ||
-        commandResult.loadWorldAttempted ||
-        commandResult.offlineUiModeFeedback.has_value() ||
-        snapshot.offlineMode != lastUiViewModelOfflineMode ||
-        scriptState != lastUiViewModelScriptState ||
-        buildStateDirty;
+        activeWorld.scenePath != lastUiViewModelWorldPath;
+    // World 换代/可见性切换等于所有输入都换了一份：全部节重建。
+    const bool rebuildAll = visibilityOrModeChanged || worldChanged ||
+        commandResult.worldChanged || commandResult.loadWorldAttempted;
+    UiSectionMask forced = requested;
+    if (commandResult.offlineUiModeFeedback.has_value() ||
+        frame.offlineMode != lastUiViewModelOfflineMode)
+    {
+        forced |= UiSectionBit(UiSectionId::Offline);
+    }
+    if (scriptState != lastUiViewModelScriptState || buildStateDirty)
+    {
+        forced |= UiSectionBit(UiSectionId::Scripts);
+    }
+    const bool forceRefresh = rebuildAll || forced != 0;
     const bool editorSnapshotDue = ShouldBuildEditorViewModel(
         buildMode, uiViewModelRefresh, now, forceRefresh);
+
+    UiViewModelSectionUpdate sections;
     if (editorSnapshotDue)
     {
-        BuildUiViewModelEditorFields(snapshot, activeWorld);
+        const UiSectionMask rebuild = PlanUiEditorSectionRefresh(
+            forced, rebuildAll, uiViewModelSectionFirstRefresh);
+        BuildUiViewModelSections(
+            sections, rebuild, frame, activeWorld, commandResult);
         uiViewModelRefresh.MarkRefreshed(now);
+        uiViewModelSectionFirstRefresh = false;
     }
-    uiSubsystem->Update(snapshot, buildMode, editorSnapshotDue);
+    uiSubsystem->Update(sections, frame, buildMode, editorSnapshotDue);
     uiViewModelBuildMode = buildMode;
     lastUiViewModelWorldGeneration = activeWorld.generation;
     lastUiViewModelWorldPath = activeWorld.scenePath;
-    lastUiViewModelOfflineMode = snapshot.offlineMode;
+    lastUiViewModelOfflineMode = frame.offlineMode;
     lastUiViewModelScriptState = scriptState;
 }
 

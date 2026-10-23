@@ -69,6 +69,9 @@ public:
     void Shutdown() noexcept;
     void SynchronizeWorld(const std::shared_ptr<World>& world);
     ScriptRuntimeView View(uint64_t generation) const;
+    // 只冻结时间序列/计数器（Log 的 Scripts 页）；不复制蓝图类表。
+    // 与 View() 使用同一份 performance JSON，避免出现第二个计数器来源。
+    nlohmann::json PerformanceView() const;
     // 仅运行时 HUD 可见时使用的轻量视图：只冻结 available/state/worldGeneration
     // 和 hudLines，不复制蓝图类、组件类与性能 JSON。HUD 文本因此仍按帧更新，
     // 而隐藏的编辑器不会被迫承担完整视图模型的分配。

@@ -890,9 +890,9 @@ void MaterialInstanceAssetEditorPanel::Build(const MaterialInstanceEditorSnapsho
     RefreshWorkspace();
     resourceEditorVisible = IsResourceEditorVisible();
     logPanel.Build(snapshot.logs, docking.IsPanelActive("log"));
-    // 面板自己按 5 Hz 取样；这里只传冻结快照、可见性与同一份 UI 单调时钟。
-    performancePanel.Build(snapshot.performance, docking.IsPanelActive("performance"),
-        Rml::GetSystemInterface()->GetElapsedTime());
+    // 面板数据变化时顺带喂一次性能页（5 Hz 节流在性能页内部）；平时由
+    // UiSubsystem 在到期窗口单独调用 UpdatePerformance，不触发整份面板重建。
+    UpdatePerformance(snapshot.performance);
     if (discardBlueprintThenClose && pendingCloseKind == EditorAssetKind::Blueprint)
     {
         if (!discardBlueprintCloseSubmitted)
@@ -2999,6 +2999,21 @@ void MaterialInstanceAssetEditorPanel::RefreshScriptControls()
     widgetDocument.SetProperty("script-feedback", "display", scripts.feedback.empty() ? "none" : "block");
 }
 
+void MaterialInstanceAssetEditorPanel::UpdatePerformance(const PerformanceSnapshot& performance)
+{
+    // 面板自己按 5 Hz 取样；这里只传冻结快照、可见性与同一份 UI 单调时钟。
+    performancePanel.Build(performance, docking.IsPanelActive("performance"),
+        Rml::GetSystemInterface()->GetElapsedTime());
+}
+
+void MaterialInstanceAssetEditorPanel::UpdateScriptPerformance(
+    const nlohmann::json& scriptPerformance)
+{
+    // Log 的 Scripts 页展示脚本时间/计数器；它是时间序列，随性能分节采样，
+    // 不通过事件驱动的脚本分节刷新。
+    logPanel.BuildPerformance(scriptPerformance, docking.IsPanelActive("log"));
+}
+
 void MaterialInstanceAssetEditorPanel::UpdateRuntimeView(const UiViewModelSnapshot& view)
 {
     if (view.scripts.worldGeneration != runtimeView.scripts.worldGeneration ||
@@ -3061,7 +3076,6 @@ void MaterialInstanceAssetEditorPanel::UpdateRuntimeView(const UiViewModelSnapsh
     RefreshViewportToolbar();
     RefreshScriptControls();
     contentBrowser.Build(snapshot, runtimeView.scripts.classes);
-    logPanel.BuildPerformance(runtimeView.scripts.performance, docking.IsPanelActive("log"));
     if (!refreshOffline || document == nullptr) return;
     SetControlValue("offline-samples", std::to_string(view.offlineSamples));
     SetControlValue("offline-bounces", std::to_string(view.offlineBounces));

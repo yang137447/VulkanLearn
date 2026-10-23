@@ -69,6 +69,99 @@ std::string NormalizePathForComparison(const std::filesystem::path& path)
     return normalized;
 }
 
+// UI 动作只声明它可能改变的视图模型分节。事件驱动路径仍然即时生效，
+// 但不会让一次相机参数修改顺带重建资产/大纲/脚本三类昂贵数据。
+UiSectionMask SectionsForUiAction(UiActionType type)
+{
+    switch (type)
+    {
+    case UiActionType::ToggleDeveloperUi:
+    case UiActionType::SetLocale:
+    case UiActionType::Quit:
+        return UiSectionBit(UiSectionId::Status);
+    case UiActionType::SetCameraMoveSpeed:
+    case UiActionType::SetDebugViewMode:
+    case UiActionType::SetToneMappingMode:
+    case UiActionType::SetCameraExposure:
+        return UiSectionBit(UiSectionId::ViewportCamera);
+    case UiActionType::NavigateModelPreview:
+    case UiActionType::ControlAnimationPreview:
+    case UiActionType::ControlScriptAnimation:
+    case UiActionType::ControlMotionDebug:
+    case UiActionType::ControlMotionReplay:
+    case UiActionType::ControlDebugDraw:
+    case UiActionType::FrameEditorActor:
+        return UiSectionBit(UiSectionId::ViewportCamera) |
+            UiSectionBit(UiSectionId::Animation) |
+            UiSectionBit(UiSectionId::SceneOutliner);
+    case UiActionType::SetOfflineMode:
+    case UiActionType::SetOfflineSetting:
+    case UiActionType::SetOfflineAov:
+    case UiActionType::SetOfflineExposure:
+    case UiActionType::ControlOfflineSession:
+    case UiActionType::ExportOffline:
+        return UiSectionBit(UiSectionId::Offline);
+    case UiActionType::SetBloomStrength:
+    case UiActionType::SetBloomThreshold:
+    case UiActionType::SetBloomKnee:
+    case UiActionType::SetBloomClamp:
+    case UiActionType::SetCsmCastShadows:
+    case UiActionType::SetCsmDynamicShadowDistance:
+    case UiActionType::SetCsmDynamicShadowCascades:
+    case UiActionType::SetCsmCascadeDistributionExponent:
+    case UiActionType::SetCsmCascadeTransitionFraction:
+    case UiActionType::SetCsmShadowDistanceFadeoutFraction:
+    case UiActionType::SetCsmShadowBias:
+    case UiActionType::SetCsmShadowSlopeBias:
+    case UiActionType::SetCsmShadowCascadeBiasDistribution:
+    case UiActionType::SaveCsmSettingsToScene:
+    case UiActionType::SetEnvironmentIntensity:
+    case UiActionType::SetSunIntensity:
+    case UiActionType::SetSpeedTreeStrength:
+    case UiActionType::SetSpeedTreeGustingEnabled:
+    case UiActionType::ForceSpeedTreeGust:
+        return UiSectionBit(UiSectionId::EnvironmentLighting);
+    case UiActionType::SetActorVisible:
+    case UiActionType::SetActorProperty:
+        return UiSectionBit(UiSectionId::SceneOutliner) |
+            UiSectionBit(UiSectionId::EnvironmentLighting) |
+            UiSectionBit(UiSectionId::ViewportCamera);
+    case UiActionType::ControlScripts:
+    case UiActionType::ReloadScripts:
+    case UiActionType::CompileScripts:
+    case UiActionType::SetAutoCompileScripts:
+    case UiActionType::SetScriptTimeScale:
+    case UiActionType::AddScriptBlueprint:
+    case UiActionType::SetScriptProperty:
+    case UiActionType::SetScriptComponent:
+    case UiActionType::AddScriptComponent:
+    case UiActionType::RemoveScriptComponent:
+    case UiActionType::SetScriptLogicComponent:
+    case UiActionType::AddScriptLogicComponent:
+    case UiActionType::RemoveScriptLogicComponent:
+    case UiActionType::RenameScriptBlueprint:
+    case UiActionType::DuplicateScriptBlueprint:
+    case UiActionType::DeleteScriptBlueprint:
+    case UiActionType::SetScriptPhysics:
+    case UiActionType::UndoSceneEdit:
+    case UiActionType::RedoSceneEdit:
+    case UiActionType::CreateScriptBlueprintAsset:
+    case UiActionType::OpenScriptSource:
+        return UiSectionBit(UiSectionId::Scripts) |
+            UiSectionBit(UiSectionId::Assets) |
+            UiSectionBit(UiSectionId::SceneOutliner);
+    case UiActionType::LoadWorld:
+    case UiActionType::PreviewModel:
+    case UiActionType::PreviewRetarget:
+    case UiActionType::PreviewMaterial:
+    case UiActionType::PreviewBlueprint:
+    case UiActionType::TransformBlueprintPreview:
+        // World/预览换代：世界路径、相机、资产与大纲都可能整体替换。
+        return UiSectionAll;
+    }
+    return UiSectionAll;
+}
+
 bool IsSceneOptionLess(const UiSceneOption& left, const UiSceneOption& right)
 {
     std::string leftSortKey = left.label;
@@ -348,7 +441,21 @@ void UiSubsystem::Shutdown()
     initialized = false;
     developerUiVisible = false;
     developerUiEnabled = false;
-    viewModelRefreshRequested = false;
+    pendingSectionRefresh = UiSectionAll;
+    currentBuildMode = UiViewModelBuildMode::None;
+    // 重新初始化后必须从“没有发布过任何分节”开始，否则旧版本会被误认为已应用。
+    sectionStore = UiViewModelSectionStore{};
+    appliedSectionVersions = UiSectionVersions{};
+    appliedAssets = UiAssetsSection{};
+    appliedPerformance = UiPerformanceSection{};
+    lastPublishedOfflineMode = false;
+    outlinerRevision = 0;
+    panelBuildRequested = true;
+    refreshStats = {};
+    hudScripts = ScriptRuntimeView{};
+    blueprintClassesVersion = 0;
+    sceneActors.reset();
+    sceneModels.reset();
     editorPointerCaptured = false;
     hotReloadStatus.clear();
     rmlKeyPressCounts.clear();
@@ -410,7 +517,8 @@ bool UiSubsystem::HandlePlatformEvent(const PlatformEvent& event)
     return consumed;
 }
 
-void UiSubsystem::Update(const UiViewModelSnapshot& viewModelSnapshot,
+void UiSubsystem::Update(const UiViewModelSectionUpdate& sections,
+    const UiViewModelFrameValues& frameValues,
     UiViewModelBuildMode mode,
     bool editorSnapshotDue)
 {
@@ -419,96 +527,348 @@ void UiSubsystem::Update(const UiViewModelSnapshot& viewModelSnapshot,
     {
         return;
     }
+    currentBuildMode = mode;
 
     if (mode == UiViewModelBuildMode::None)
     {
         // 编辑器与 HUD 都不可见（沉浸模式）：只冻结 DrawDebug 叠层需要的最小字段，
         // 保留 lastViewModel 的编辑器字段以免 TickMaterialInstanceEditor 丢失蓝图类，
         // 并发布仅调试图元的快照覆盖 RT 保留的上一帧工作区画面。
-        SetImmersiveDocumentStateIfRestored(viewModelSnapshot);
-        lastViewModel.frameIndex = viewModelSnapshot.frameIndex;
-        lastViewModel.deltaTimeSeconds = viewModelSnapshot.deltaTimeSeconds;
-        lastViewModel.framesPerSecond = viewModelSnapshot.framesPerSecond;
-        lastViewModel.offlineMode = viewModelSnapshot.offlineMode;
-        lastViewModel.motionWorldGeneration = viewModelSnapshot.motionWorldGeneration;
-        lastViewModel.motionDebug = viewModelSnapshot.motionDebug;
-        lastViewModel.motionCamera = viewModelSnapshot.motionCamera;
-        lastViewModel.debugDraw = viewModelSnapshot.debugDraw;
-        lastViewModel.activeWorldPath = viewModelSnapshot.activeWorldPath;
-        // 隐藏期间的脏事件不需要排队：重新可见的第一帧由可见性变化强制完整刷新。
-        viewModelRefreshRequested = false;
+        SetImmersiveDocumentStateIfRestored(frameValues.activeWorldPath);
+        ApplyFrameValues(frameValues);
+        // 隐藏期间没有分节发布：重新可见的第一帧由引擎的全部节重建覆盖。
+        panelBuildRequested = true;
         BuildAndPublishRenderSnapshot(false);
         UpdateInputOwnership();
         return;
     }
 
-    UiViewModelSnapshot previous = std::move(lastViewModel);
-    ScriptRuntimeView carriedScripts = std::move(previous.scripts);
-    lastViewModel = viewModelSnapshot;
-    if (mode == UiViewModelBuildMode::FullEditor && !editorSnapshotDue)
+    if (mode == UiViewModelBuildMode::RuntimeHud)
     {
-        // 非刷新帧不重建脚本视图模型：保留上一份类/反馈/性能值，避免每帧复制 JSON。
-        // HUD 文本在编辑器可见时本来就隐藏，因此这里没有可感知的文本延迟。
-        lastViewModel.scripts = std::move(carriedScripts);
+        // HUD 只有两条文本绑定：脚本节不参与，逐帧只冻结 hudLines。
+        // 编辑器投影里的类/反馈字段保持不变，TickMaterialInstanceEditor 不会丢蓝图类。
+        ApplyFrameValues(frameValues);
+        SetImmersiveDocumentStateIfRestored(frameValues.activeWorldPath);
+        hudScripts = frameValues.hudView;
+        UiBindingUpdateScope bindingUpdate(updatingRuntimeBindings);
+        TryHotReload();
+        // World 路径变化仍要立刻反映到 HUD 标题；只在真正变化时重脏 binding。
+        SyncWorldTextBinding();
+        SyncGameplayTextBinding(hudScripts);
+        {
+            PROFILE_SCOPE("UI.RmlUpdate");
+            rmlContext->Update();
+        }
+        BuildAndPublishRenderSnapshot(true);
+        UpdateInputOwnership();
+        return;
     }
-    else if (mode == UiViewModelBuildMode::RuntimeHud)
+
+    // FullEditor：逐帧只更新冻结值/RmlUi 上下文/绘制快照；分节数据只在
+    // 到期窗口或事件强制时发布，并且只对版本变化的节做同步、重脏与面板重建。
+    ApplyFrameValues(frameValues);
+    SetImmersiveDocumentStateIfRestored(frameValues.activeWorldPath);
+    PublishStatusSection(frameValues);
+    if (editorSnapshotDue)
     {
-        // HUD 轻量视图只带 hudLines。编辑器仍可能在后台存在（配置隐藏但已启用），
-        // TickMaterialInstanceEditor 依赖上一份蓝图类，不能被轻量视图清空。
-        lastViewModel.scripts.classes = std::move(carriedScripts.classes);
-        lastViewModel.scripts.componentClasses = std::move(carriedScripts.componentClasses);
-        lastViewModel.scripts.performance = std::move(carriedScripts.performance);
-        lastViewModel.scripts.feedback = std::move(carriedScripts.feedback);
-        lastViewModel.scripts.buildAvailable = carriedScripts.buildAvailable;
-        lastViewModel.scripts.buildBusy = carriedScripts.buildBusy;
-        lastViewModel.scripts.autoCompile = carriedScripts.autoCompile;
-        lastViewModel.scripts.buildOutput = std::move(carriedScripts.buildOutput);
-        lastViewModel.scripts.canUndo = carriedScripts.canUndo;
-        lastViewModel.scripts.canRedo = carriedScripts.canRedo;
+        PublishAssetsSection();
+        PublishSceneOutlinerSection();
+        if (sections.scripts &&
+            sectionStore.PublishScripts(std::move(*sections.scripts), sections.scriptsRevision))
+            RecordSectionPublish(UiSectionId::Scripts);
+        if (sections.animation &&
+            sectionStore.PublishAnimation(std::move(*sections.animation)))
+            RecordSectionPublish(UiSectionId::Animation);
+        if (sections.performance &&
+            sectionStore.PublishPerformance(std::move(*sections.performance)))
+            RecordSectionPublish(UiSectionId::Performance);
+        if (sections.viewportCamera &&
+            sectionStore.PublishViewportCamera(std::move(*sections.viewportCamera)))
+            RecordSectionPublish(UiSectionId::ViewportCamera);
+        if (sections.environmentLighting &&
+            sectionStore.PublishEnvironmentLighting(std::move(*sections.environmentLighting)))
+            RecordSectionPublish(UiSectionId::EnvironmentLighting);
+        if (sections.offline &&
+            sectionStore.PublishOffline(std::move(*sections.offline)))
+            RecordSectionPublish(UiSectionId::Offline);
     }
-    SetImmersiveDocumentStateIfRestored(lastViewModel);
-    ReconcileOfflineModeFeedback(lastViewModel, previous);
-    lastViewModel.developerUiVisible = developerUiVisible;
-    lastViewModel.locale = currentLocale;
+
+    const UiSectionVersions versions = sectionStore.Versions();
+    const UiSectionMask changed = versions.ChangedFrom(appliedSectionVersions);
+    ApplyChangedSections(changed);
+    appliedSectionVersions = versions;
+
+    // 面板 Build 只由资产/大纲/脚本/状态四节驱动；Performance 页自己按 5 Hz
+    // 取样，不触发整份面板重建。面板本地交互另置 panelBuildRequested。
+    const bool panelDue = (changed & UiDeveloperPanelSectionMask) != 0 ||
+        (panelBuildRequested && editorSnapshotDue);
+    const bool runtimeViewDue = (changed & UiRuntimeViewSectionMask) != 0 || panelDue;
+    if (panelDue)
+    {
+        panelBuildRequested = false;
+        BuildDeveloperPanels();
+    }
+    if (runtimeViewDue && materialInstanceEditorPanel != nullptr)
+    {
+        materialInstanceEditorPanel->UpdateRuntimeView(lastViewModel);
+        ++refreshStats.runtimeViewUpdates;
+    }
+    if (editorSnapshotDue && materialInstanceEditorPanel != nullptr)
+    {
+        // 性能节每个到期窗口都有新样本，但只进入性能页/日志脚本页自己的取样器。
+        materialInstanceEditorPanel->UpdatePerformance(
+            appliedPerformance.performance);
+        materialInstanceEditorPanel->UpdateScriptPerformance(
+            appliedPerformance.scriptPerformance);
+    }
 
     UiBindingUpdateScope bindingUpdate(updatingRuntimeBindings);
     TryHotReload();
-    SyncBindingData();
-    if (mode == UiViewModelBuildMode::FullEditor && editorSnapshotDue)
-    {
-        BuildDeveloperPanels();
-    }
     {
         PROFILE_SCOPE("UI.RmlUpdate");
         rmlContext->Update();
     }
     // 逐帧发布绘制快照：控件自身的 hover/滚动/拖动仍由 RmlUi 每帧更新，
-    // 只有面板数据（BuildDeveloperPanels）按节拍重建。
+    // 只有面板数据（BuildDeveloperPanels）按分节变化重建。
     BuildAndPublishRenderSnapshot(true);
     UpdateInputOwnership();
 }
 
+void UiSubsystem::ApplyFrameValues(const UiViewModelFrameValues& frameValues)
+{
+    lastViewModel.frameIndex = frameValues.frameIndex;
+    lastViewModel.deltaTimeSeconds = frameValues.deltaTimeSeconds;
+    lastViewModel.framesPerSecond = frameValues.framesPerSecond;
+    lastViewModel.cameraMoveSpeed = frameValues.cameraMoveSpeed;
+    lastViewModel.activeWorldPath = frameValues.activeWorldPath;
+    lastViewModel.offlineMode = frameValues.offlineMode;
+    lastViewModel.motionWorldGeneration = frameValues.motionWorldGeneration;
+    lastViewModel.motionDebug = frameValues.motionDebug;
+    lastViewModel.motionCamera = frameValues.motionCamera;
+    lastViewModel.debugDraw = frameValues.debugDraw;
+}
+
+void UiSubsystem::ApplyChangedSections(UiSectionMask changed)
+{
+    const UiViewModelSections& published = sectionStore.Sections();
+    if ((changed & UiSectionBit(UiSectionId::Scripts)) != 0)
+    {
+        lastViewModel.scripts = published.scripts.data->scripts;
+        SyncGameplayTextBinding(lastViewModel.scripts);
+    }
+    if ((changed & UiSectionBit(UiSectionId::Animation)) != 0)
+    {
+        const UiAnimationPreviewSection& animation = *published.animation.data;
+        lastViewModel.animationWorldGeneration = animation.worldGeneration;
+        lastViewModel.animationClips = animation.clips;
+        lastViewModel.animationClip = animation.clip;
+        lastViewModel.animationTime = animation.time;
+        lastViewModel.animationDuration = animation.duration;
+        lastViewModel.animationPlaying = animation.playing;
+        lastViewModel.animationJointCount = animation.jointCount;
+        lastViewModel.animationFeatureChannels = animation.featureChannels;
+        lastViewModel.animationFeatures = animation.features;
+        lastViewModel.animationFeatureStatus = animation.featureStatus;
+    }
+    if ((changed & UiSectionBit(UiSectionId::ViewportCamera)) != 0)
+    {
+        const UiViewportCameraSection& view = *published.viewportCamera.data;
+        lastViewModel.hasCamera = view.hasCamera;
+        lastViewModel.cameraExposure = view.cameraExposure;
+        lastViewModel.debugViewMode = view.debugViewMode;
+        lastViewModel.toneMappingMode = view.toneMappingMode;
+        // motionDebug/debugDraw/motionCamera 是逐帧冻结值（ApplyFrameValues 已写入）；
+        // 分节只在面板可见状态变化时提供同一帧的值，不在这里回退成旧指针。
+        lastViewModel.cameraMoveSpeed = view.cameraMoveSpeed;
+    }
+    if ((changed & UiSectionBit(UiSectionId::EnvironmentLighting)) != 0)
+    {
+        const UiEnvironmentLightingSection& environment = *published.environmentLighting.data;
+        lastViewModel.bloomStrength = environment.bloomStrength;
+        lastViewModel.bloomThreshold = environment.bloomThreshold;
+        lastViewModel.bloomKnee = environment.bloomKnee;
+        lastViewModel.bloomClamp = environment.bloomClamp;
+        lastViewModel.csmCastShadows = environment.csmCastShadows;
+        lastViewModel.csmDynamicShadowDistance = environment.csmDynamicShadowDistance;
+        lastViewModel.csmDynamicShadowCascades = environment.csmDynamicShadowCascades;
+        lastViewModel.csmCascadeDistributionExponent =
+            environment.csmCascadeDistributionExponent;
+        lastViewModel.csmCascadeTransitionFraction = environment.csmCascadeTransitionFraction;
+        lastViewModel.csmShadowDistanceFadeoutFraction =
+            environment.csmShadowDistanceFadeoutFraction;
+        lastViewModel.csmShadowBias = environment.csmShadowBias;
+        lastViewModel.csmShadowSlopeBias = environment.csmShadowSlopeBias;
+        lastViewModel.csmShadowCascadeBiasDistribution =
+            environment.csmShadowCascadeBiasDistribution;
+        lastViewModel.environmentIntensity = environment.environmentIntensity;
+        lastViewModel.sunIntensity = environment.sunIntensity;
+        lastViewModel.environmentActiveGeneration = environment.environmentActiveGeneration;
+        lastViewModel.environmentPendingGeneration = environment.environmentPendingGeneration;
+        lastViewModel.environmentUpdateStage = environment.environmentUpdateStage;
+        lastViewModel.environmentCubemapFacesCompleted =
+            environment.environmentCubemapFacesCompleted;
+        lastViewModel.environmentCubemapFaceCount = environment.environmentCubemapFaceCount;
+        lastViewModel.environmentShUpdatesCompleted = environment.environmentShUpdatesCompleted;
+        lastViewModel.environmentPrefilterMipsCompleted =
+            environment.environmentPrefilterMipsCompleted;
+        lastViewModel.environmentPrefilterMipCount = environment.environmentPrefilterMipCount;
+        lastViewModel.environmentUsesPreviousResources =
+            environment.environmentUsesPreviousResources;
+        lastViewModel.environmentGpuTimingSupported = environment.environmentGpuTimingSupported;
+        lastViewModel.environmentCubemapGpuMs = environment.environmentCubemapGpuMs;
+        lastViewModel.environmentShGpuMs = environment.environmentShGpuMs;
+        lastViewModel.environmentPrefilterGpuMs = environment.environmentPrefilterGpuMs;
+        lastViewModel.environmentCommitGpuMs = environment.environmentCommitGpuMs;
+        lastViewModel.speedTreeStrength = environment.speedTreeStrength;
+        lastViewModel.speedTreeGustingEnabled = environment.speedTreeGustingEnabled;
+        lastViewModel.speedTreeWindProfileCount = environment.speedTreeWindProfileCount;
+    }
+    if ((changed & UiSectionBit(UiSectionId::Offline)) != 0)
+    {
+        const UiOfflineSection& offline = *published.offline.data;
+        // UI 侧“已请求模式/提示文本”不在冻结载荷里，只在这里与引擎结果对账。
+        UiViewModelSnapshot previous;
+        previous.offlineMode = lastPublishedOfflineMode;
+        previous.offlineRequestedMode = lastViewModel.offlineRequestedMode;
+        previous.offlineUiNotice = lastViewModel.offlineUiNotice;
+        lastViewModel.offlineMode = offline.offlineMode;
+        lastViewModel.offlineState = offline.state;
+        lastViewModel.offlineSamples = offline.samples;
+        lastViewModel.offlineCompletedSamples = offline.completedSamples;
+        lastViewModel.offlineBounces = offline.bounces;
+        lastViewModel.offlineLightSamples = offline.lightSamples;
+        lastViewModel.offlineSeed = offline.seed;
+        lastViewModel.offlineAov = offline.aov;
+        lastViewModel.offlineExposure = offline.exposure;
+        lastViewModel.offlineError = offline.error;
+        lastViewModel.offlineModeFeedback = offline.modeFeedback;
+        ReconcileOfflineModeFeedback(lastViewModel, previous);
+        lastPublishedOfflineMode = offline.offlineMode;
+    }
+    if ((changed & UiSectionBit(UiSectionId::Performance)) != 0)
+    {
+        // Performance 页自己的取样器在每次到期窗口调用 BuildPerformance；
+        // 这里只保存冻结值，不触发面板 Build。
+        appliedPerformance = *published.performance.data;
+    }
+    if ((changed & UiSectionBit(UiSectionId::Assets)) != 0)
+    {
+        appliedAssets = *published.assets.data;
+    }
+    if ((changed & UiSectionBit(UiSectionId::Status)) != 0)
+    {
+        const UiStatusSection& status = *published.status.data;
+        lastViewModel.locale = status.locale;
+        lastViewModel.developerUiVisible = status.developerUiVisible;
+        lastViewModel.activeWorldPath = status.activeWorldPath;
+        SyncWorldTextBinding();
+    }
+}
+
+void UiSubsystem::SyncWorldTextBinding()
+{
+    const std::string worldText =
+        std::filesystem::path(lastViewModel.activeWorldPath).stem().string();
+    if (bindingData.worldText != worldText)
+    {
+        bindingData.worldText = worldText;
+        dataModelHandle.DirtyVariable("world_text");
+        ++refreshStats.bindingDirtyWrites;
+    }
+}
+
+void UiSubsystem::SyncGameplayTextBinding(const ScriptRuntimeView& scripts)
+{
+    // GT 只消费冻结文本；RmlUi 插值负责转义，RT 仍只接收既有几何快照。
+    const std::string gameplayText = BuildGameplayHudText(scripts);
+    if (bindingData.gameplayText != gameplayText)
+    {
+        bindingData.gameplayText = gameplayText;
+        dataModelHandle.DirtyVariable("gameplay_text");
+        ++refreshStats.bindingDirtyWrites;
+    }
+}
+
+void UiSubsystem::PublishStatusSection(const UiViewModelFrameValues& frameValues)
+{
+    UiStatusSection status;
+    status.locale = currentLocale;
+    status.hotReloadStatus = hotReloadStatus;
+    status.developerUiVisible = developerUiVisible;
+    status.activeWorldPath = frameValues.activeWorldPath;
+    if (sectionStore.PublishStatus(std::move(status)))
+    {
+        RecordSectionPublish(UiSectionId::Status);
+    }
+}
+
+void UiSubsystem::PublishAssetsSection()
+{
+    if (thumbnailLibrary != nullptr)
+    {
+        // 暂停/轮询与面板是否重建无关：缩略图必须在静止帧继续推进，
+        // 只是不触发整份面板 DOM 刷新。
+        thumbnailLibrary->SetPaused(!developerUiVisible || sceneViewportInputActive ||
+            editorPointerCaptured);
+        thumbnailLibrary->Poll();
+    }
+    UiAssetsSection assets;
+    // 三个库都返回按 revision 缓存的不可变快照；同一 revision 得到同一个 shared_ptr，
+    // 因此“N 次构建无变化”只发布一次。
+    assets.logs = ProcessLog().Freeze();
+    if (jsonAssetLibrary != nullptr)
+    {
+        assets.assetCatalog = jsonAssetLibrary->GetCatalog();
+        assets.jsonDocument = jsonAssetLibrary->GetDocument();
+        assets.assetCatalogLoading = jsonAssetLibrary->IsCatalogLoading();
+        assets.jsonDocumentLoading = jsonAssetLibrary->IsDocumentLoading();
+    }
+    if (thumbnailLibrary != nullptr)
+    {
+        assets.thumbnails = thumbnailLibrary->GetSnapshot();
+    }
+    if (sectionStore.PublishAssets(std::move(assets)))
+    {
+        RecordSectionPublish(UiSectionId::Assets);
+        const UiAssetsSection& published = *sectionStore.Sections().assets.data;
+        rmlRenderInterface.PublishThumbnails(published.thumbnails);
+        rmlRenderInterface.PublishTexturePreview(published.jsonDocument);
+    }
+}
+
+void UiSubsystem::PublishSceneOutlinerSection()
+{
+    static const std::shared_ptr<const std::vector<EditorUi::EditorSceneActorSnapshot>>
+        EmptyActors = std::make_shared<const std::vector<EditorUi::EditorSceneActorSnapshot>>();
+    static const std::shared_ptr<const std::vector<EditorUi::MaterialInstanceModelSnapshot>>
+        EmptyModels = std::make_shared<const std::vector<EditorUi::MaterialInstanceModelSnapshot>>();
+    UiSceneOutlinerSection payload;
+    payload.actors = sceneActors != nullptr ? sceneActors : EmptyActors;
+    payload.models = sceneModels != nullptr ? sceneModels : EmptyModels;
+    payload.selectedActorIdentity = selectedActorIdentity;
+    payload.selectedModel = selectedModelMaterials;
+    payload.selectedMaterialSlotIndex = selectedMaterialSlotIndex;
+    // 版本源是 outlinerRevision：只有指针替换或选中态变化才推进。
+    if (sectionStore.PublishSceneOutliner(std::move(payload), outlinerRevision))
+    {
+        RecordSectionPublish(UiSectionId::SceneOutliner);
+    }
+}
+
 void UiSubsystem::SetImmersiveDocumentStateIfRestored(
-    const UiViewModelSnapshot& viewModelSnapshot)
+    const std::string& activeWorldPath)
 {
     if (immersiveLevelPath.empty() || !immersiveLoadCompleted)
     {
         return;
     }
     // 完成通知本身不代表成功；必须核对事务发布后的 World，禁止放大仍存活的模型预览。
-    const bool restored = NormalizePathForComparison(viewModelSnapshot.activeWorldPath) ==
+    const bool restored = NormalizePathForComparison(activeWorldPath) ==
         NormalizePathForComparison(immersiveLevelPath);
     immersiveLevelPath.clear();
     immersiveLoadCompleted = false;
     if (restored) SetImmersiveView(true);
     else diagnostics->ReportWarning("Immersive mode cancelled: the level was not restored.");
-}
-
-bool UiSubsystem::ConsumeViewModelRefreshRequest() noexcept
-{
-    const bool requested = viewModelRefreshRequested;
-    viewModelRefreshRequested = false;
-    return requested;
 }
 
 void UiSubsystem::Resize(uint32_t width, uint32_t height)
@@ -603,13 +963,15 @@ void UiSubsystem::NotifyWorldChanged(
     const std::string& worldPath,
     uint64_t generation)
 {
+    // World 换代等于全部输入换了一份：所有分节强制重建。
     RequestViewModelRefresh();
     selectedModelMaterials.reset();
     selectedMaterialSlotIndex.reset();
-    sceneModels.clear();
+    sceneModels.reset();
     // 大纲行名可能在新 World 里重名，身份不做跨代复用。
     sceneActors.reset();
     selectedActorIdentity.clear();
+    MarkSceneOutlinerDirty();
     pendingSceneSelectionClear = false;
     pendingMaterialInstanceModelSelection.reset();
     pendingMaterialInstanceSelection.reset();
@@ -623,6 +985,7 @@ void UiSubsystem::NotifyWorldChanged(
 
 void UiSubsystem::NotifyWorldLoadCompleted()
 {
+    // World 事务完成后脚本/大纲/资产回馈都可能换了一份，整体强制一帧。
     RequestViewModelRefresh();
     if (!immersiveLevelPath.empty()) immersiveLoadCompleted = true;
     if (!bindingData.sceneLoading)
@@ -638,12 +1001,22 @@ void UiSubsystem::TickMaterialInstanceEditor()
     {
         return;
     }
-    materialInstanceEditorRuntime->SetBlueprintClasses(lastViewModel.scripts.classes);
-    materialInstanceEditorRuntime->SetBlueprintComponentClasses(lastViewModel.scripts.componentClasses);
-    // 命令执行会改变草稿/历史/预览与命令回馈，下一帧强制重建面板数据。
+    // 蓝图类 JSON 只在脚本节版本变化时转交；静止帧不重复复制整份类表。
+    const uint64_t scriptsVersion = appliedSectionVersions.Version(UiSectionId::Scripts);
+    if (blueprintClassesVersion != scriptsVersion)
+    {
+        blueprintClassesVersion = scriptsVersion;
+        materialInstanceEditorRuntime->SetBlueprintClasses(lastViewModel.scripts.classes);
+        materialInstanceEditorRuntime->SetBlueprintComponentClasses(
+            lastViewModel.scripts.componentClasses);
+    }
+    // 命令执行会改变草稿/历史/预览与命令回馈，下一帧只强制受影响的节。
     if (materialInstanceEditorRuntime->Tick())
     {
-        RequestViewModelRefresh();
+        RequestViewModelRefresh(UiSectionBit(UiSectionId::Scripts) |
+            UiSectionBit(UiSectionId::Assets) |
+            UiSectionBit(UiSectionId::SceneOutliner));
+        RequestPanelBuild();
     }
     if (jsonAssetLibrary != nullptr) jsonAssetLibrary->Poll();
 }
@@ -656,8 +1029,8 @@ bool UiSubsystem::SelectSceneObjectFromPick(
         return false;
     }
 
-    // 选中态是用户直接反馈：下一帧强制刷新，不能落后于 10 Hz 节拍。
-    RequestViewModelRefresh();
+    // 选中态是用户直接反馈：只强制大纲节，下一帧立即生效。
+    RequestViewModelRefresh(UiSectionBit(UiSectionId::SceneOutliner));
     // 关卡拾取只发布对象/槽位选择，不创建 MI 文档或请求预览 World。
     // 打开材质必须来自材质槽或资产浏览器的显式操作。
     if (materialInstanceEditorPanel != nullptr) materialInstanceEditorPanel->ShowSceneDetails();
@@ -693,51 +1066,34 @@ bool UiSubsystem::SelectSceneObjectFromPick(
         selectedActorIdentity = "blueprintInstance|" + id.substr(0, id.find('/'));
     }
     pendingSceneSelectionClear = false;
+    MarkSceneOutlinerDirty();
     return true;
 }
 
 void UiSubsystem::SetMaterialInstanceSceneModels(
-    const std::vector<Editor::Selection::MaterialInstanceModelContext>& models)
+    std::shared_ptr<const std::vector<EditorUi::MaterialInstanceModelSnapshot>> models)
 {
-    sceneModels.clear();
-    sceneModels.reserve(models.size());
-    for (const Editor::Selection::MaterialInstanceModelContext& model : models)
+    if (sceneModels == models)
     {
-        EditorUi::MaterialInstanceModelSnapshot modelSnapshot;
-        modelSnapshot.worldGeneration = model.worldGeneration;
-        modelSnapshot.scenePath = model.scenePath;
-        modelSnapshot.objectId = model.objectId;
-        modelSnapshot.displayName = model.displayName;
-        modelSnapshot.objectIdentity = model.objectIdentity;
-        modelSnapshot.materials.reserve(model.materials.size());
-        for (const Editor::Selection::MaterialInstanceModelMaterial& material :
-             model.materials)
-        {
-            EditorUi::MaterialInstanceModelMaterialSnapshot materialSnapshot;
-            materialSnapshot.objectId = material.objectId;
-            materialSnapshot.materialSlotIndex = material.materialSlotIndex;
-            materialSnapshot.materialSlotName = material.materialSlotName;
-            materialSnapshot.materialInstancePath = material.materialInstancePath;
-            modelSnapshot.materials.push_back(std::move(materialSnapshot));
-        }
-        sceneModels.push_back(std::move(modelSnapshot));
+        return;
     }
-
-    if (!selectedModelMaterials.has_value())
+    sceneModels = std::move(models);
+    MarkSceneOutlinerDirty();
+    if (!selectedModelMaterials.has_value() || sceneModels == nullptr)
     {
         return;
     }
 
     const auto selected = std::find_if(
-        sceneModels.begin(),
-        sceneModels.end(),
+        sceneModels->begin(),
+        sceneModels->end(),
         [this](const EditorUi::MaterialInstanceModelSnapshot& model)
         {
             return selectedModelMaterials->objectId != 0 &&
                 model.objectId == selectedModelMaterials->objectId &&
                 model.worldGeneration == selectedModelMaterials->worldGeneration;
         });
-    if (selected == sceneModels.end())
+    if (selected == sceneModels->end())
     {
         selectedModelMaterials.reset();
         selectedMaterialSlotIndex.reset();
@@ -746,13 +1102,18 @@ void UiSubsystem::SetMaterialInstanceSceneModels(
     selectedModelMaterials = *selected;
 }
 
-// 大纲快照逐帧替换：只保存不可变数组的共享指针，选择态按稳定身份保留，
+// 大纲快照按内容替换：同一份数组的 shared_ptr 跨刷新复用，选择态按稳定身份保留，
 // 身份消失时清空，防止把旧 World 的选择静默套到同名新对象上。
-void UiSubsystem::SetSceneActors(std::vector<EditorUi::EditorSceneActorSnapshot> actors)
+void UiSubsystem::SetSceneActors(
+    std::shared_ptr<const std::vector<EditorUi::EditorSceneActorSnapshot>> actors)
 {
-    sceneActors = std::make_shared<const std::vector<EditorUi::EditorSceneActorSnapshot>>(
-        std::move(actors));
-    if (selectedActorIdentity.empty()) return;
+    if (sceneActors == actors)
+    {
+        return;
+    }
+    sceneActors = std::move(actors);
+    MarkSceneOutlinerDirty();
+    if (selectedActorIdentity.empty() || sceneActors == nullptr) return;
 
     const auto& list = *sceneActors;
     const bool stillPresent = std::any_of(
@@ -766,12 +1127,6 @@ void UiSubsystem::SetSceneActors(std::vector<EditorUi::EditorSceneActorSnapshot>
     selectedActorIdentity.clear();
     selectedModelMaterials.reset();
     selectedMaterialSlotIndex.reset();
-}
-
-void UiSubsystem::SetPerformanceSnapshot(PerformanceSnapshot snapshot)
-{
-    // 值语义复制：渲染线程之后更新计时器不会改写 UI 已冻结的这一帧。
-    performanceSnapshot = std::move(snapshot);
 }
 
 std::optional<Editor::Selection::MaterialInstanceModelContext>
@@ -802,10 +1157,11 @@ bool UiSubsystem::ConsumeSceneSelectionClearRequest()
 
 void UiSubsystem::ClearMaterialInstanceSceneSelection() noexcept
 {
-    RequestViewModelRefresh();
+    RequestViewModelRefresh(UiSectionBit(UiSectionId::SceneOutliner));
     selectedModelMaterials.reset();
     selectedMaterialSlotIndex.reset();
     selectedActorIdentity.clear();
+    MarkSceneOutlinerDirty();
     pendingSceneSelectionClear = false;
     pendingMaterialInstanceModelSelection.reset();
     pendingMaterialInstanceSelection.reset();
@@ -820,7 +1176,7 @@ bool UiSubsystem::RequestModelSelection(
         return false;
     }
 
-    RequestViewModelRefresh();
+    RequestViewModelRefresh(UiSectionBit(UiSectionId::SceneOutliner));
     EditorUi::MaterialInstanceModelSnapshot modelSnapshot;
     modelSnapshot.worldGeneration = model.worldGeneration;
     modelSnapshot.scenePath = model.scenePath;
@@ -844,6 +1200,7 @@ bool UiSubsystem::RequestModelSelection(
     selectedActorIdentity = EditorUi::SceneActorIdentity(
         EditorUi::EditorSceneActorType::Mesh, model.objectIdentity);
     pendingSceneSelectionClear = false;
+    MarkSceneOutlinerDirty();
     return true;
 }
 
@@ -857,13 +1214,14 @@ bool UiSubsystem::RequestMaterialSelection(
         return false;
     }
 
-    RequestViewModelRefresh();
+    RequestViewModelRefresh(UiSectionBit(UiSectionId::SceneOutliner));
     selectedMaterialSlotIndex = selection.materialSlotIndex;
     pendingMaterialInstanceModelSelection.reset();
     pendingMaterialInstanceSelection = selection;
     selectedActorIdentity = EditorUi::SceneActorIdentity(
         EditorUi::EditorSceneActorType::Mesh, selection.objectIdentity);
     pendingSceneSelectionClear = false;
+    MarkSceneOutlinerDirty();
     return true;
 }
 
@@ -874,7 +1232,7 @@ bool UiSubsystem::RequestActorSelection(const std::string& actorIdentity)
         return false;
     }
 
-    RequestViewModelRefresh();
+    RequestViewModelRefresh(UiSectionBit(UiSectionId::SceneOutliner));
     // 非网格 actor 没有 MI 文档：清掉编辑器侧的材质槽选择，并要求 EngineLoop
     // 清掉渲染端的 mesh 描边，让大纲高亮与视口描边保持同一个选中对象。
     selectedModelMaterials.reset();
@@ -883,6 +1241,7 @@ bool UiSubsystem::RequestActorSelection(const std::string& actorIdentity)
     pendingMaterialInstanceSelection.reset();
     selectedActorIdentity = actorIdentity;
     pendingSceneSelectionClear = true;
+    MarkSceneOutlinerDirty();
     return true;
 }
 
@@ -1479,19 +1838,11 @@ bool UiSubsystem::HasAssetFingerprintChanged(const AssetFingerprint& candidate) 
 
 void UiSubsystem::SyncBindingData()
 {
-    const std::string worldText = std::filesystem::path(lastViewModel.activeWorldPath).stem().string();
-    if (bindingData.worldText != worldText)
-    {
-        bindingData.worldText = worldText;
-        dataModelHandle.DirtyVariable("world_text");
-    }
-    // GT 只消费冻结文本；RmlUi 插值负责转义，RT 仍只接收既有几何快照。
-    const std::string gameplayText = BuildGameplayHudText(lastViewModel.scripts);
-    if (bindingData.gameplayText != gameplayText)
-    {
-        bindingData.gameplayText = gameplayText;
-        dataModelHandle.DirtyVariable("gameplay_text");
-    }
+    // 仅用于文档/语言整体重建：逐帧路径按分节版本只刷新对应绑定。
+    SyncWorldTextBinding();
+    SyncGameplayTextBinding(currentBuildMode == UiViewModelBuildMode::RuntimeHud
+        ? hudScripts
+        : lastViewModel.scripts);
 }
 
 void UiSubsystem::BuildAndPublishRenderSnapshot(bool includeUiDocuments)
@@ -1555,31 +1906,30 @@ void UiSubsystem::BuildDeveloperPanels()
 {
     PROFILE_SCOPE("UI.BuildPanels");
     if (materialInstanceEditorPanel == nullptr || materialInstanceEditorRuntime == nullptr) return;
+    ++refreshStats.panelBuilds;
+    static const UiSceneOutlinerSection EmptyOutliner;
+    const UiSceneOutlinerSection& outliner =
+        sectionStore.Sections().sceneOutliner.data != nullptr
+        ? *sectionStore.Sections().sceneOutliner.data
+        : EmptyOutliner;
+    // 面板只消费已发布的分节载荷：日志/目录/文档/缩略图来自资产节，
+    // actor/模型/选中态来自大纲节；不再在 Build 内轮询或冻结这些数据。
     EditorUi::MaterialInstanceEditorSnapshot snapshot = materialInstanceEditorRuntime->GetSnapshot();
-    snapshot.logs = ProcessLog().Freeze();
-    if (jsonAssetLibrary != nullptr)
-    {
-        snapshot.assetCatalog = jsonAssetLibrary->GetCatalog();
-        snapshot.jsonDocument = jsonAssetLibrary->GetDocument();
-        snapshot.assetCatalogLoading = jsonAssetLibrary->IsCatalogLoading();
-        snapshot.jsonDocumentLoading = jsonAssetLibrary->IsDocumentLoading();
-    }
-    snapshot.sceneModels = sceneModels;
-    if (thumbnailLibrary != nullptr)
-    {
-        thumbnailLibrary->SetPaused(!developerUiVisible || sceneViewportInputActive || editorPointerCaptured);
-        thumbnailLibrary->Poll();
-        snapshot.thumbnails = thumbnailLibrary->GetSnapshot();
-    }
-    rmlRenderInterface.PublishThumbnails(snapshot.thumbnails);
-    rmlRenderInterface.PublishTexturePreview(snapshot.jsonDocument);
-    snapshot.sceneActors = sceneActors;
-    snapshot.selectedActorIdentity = selectedActorIdentity;
-    snapshot.selectedModel = selectedModelMaterials;
-    snapshot.selectedMaterialSlotIndex = selectedMaterialSlotIndex;
-    snapshot.performance = performanceSnapshot;
+    snapshot.logs = appliedAssets.logs;
+    snapshot.assetCatalog = appliedAssets.assetCatalog;
+    snapshot.jsonDocument = appliedAssets.jsonDocument;
+    snapshot.assetCatalogLoading = appliedAssets.assetCatalogLoading;
+    snapshot.jsonDocumentLoading = appliedAssets.jsonDocumentLoading;
+    snapshot.thumbnails = appliedAssets.thumbnails;
+    snapshot.sceneModels = outliner.models != nullptr
+        ? *outliner.models
+        : std::vector<EditorUi::MaterialInstanceModelSnapshot>{};
+    snapshot.sceneActors = outliner.actors;
+    snapshot.selectedActorIdentity = outliner.selectedActorIdentity;
+    snapshot.selectedModel = outliner.selectedModel;
+    snapshot.selectedMaterialSlotIndex = outliner.selectedMaterialSlotIndex;
+    snapshot.performance = appliedPerformance.performance;
     materialInstanceEditorPanel->Build(snapshot);
-    materialInstanceEditorPanel->UpdateRuntimeView(lastViewModel);
     if (thumbnailLibrary != nullptr)
         thumbnailLibrary->RequestVisible(developerUiVisible ?
             materialInstanceEditorPanel->VisibleThumbnailPaths() : std::vector<std::string>{});
@@ -1899,6 +2249,12 @@ bool UiSubsystem::ProcessDeveloperUiEvent(const PlatformEvent& event)
     case PlatformEventType::MouseButtonUp:
     case PlatformEventType::MouseWheel:
     {
+        // 点击/滚轮可能改变面板本地状态（标签、展开、滚动目标），请求下一帧
+        // 构建一次；悬停移动不请求，避免鼠标移动导致面板重建。
+        if (event.type != PlatformEventType::MouseMove)
+        {
+            RequestPanelBuild();
+        }
         pointerX = event.mouseX;
         pointerY = event.mouseY;
         const auto* hit = rmlContext->GetElementAtPoint(Rml::Vector2f(pointerX, pointerY));
@@ -1944,6 +2300,7 @@ bool UiSubsystem::ProcessDeveloperUiEvent(const PlatformEvent& event)
         if (materialInstanceEditorPanel) materialInstanceEditorPanel->CancelModelPreviewDrag();
         return ProcessRuntimeUiEvent(event) || editorPointerCaptured;
     case PlatformEventType::KeyUp:
+        RequestPanelBuild();
         if (rmlPressedKeyboardKeys.count(event.key) != 0)
             return ProcessRuntimeUiEvent(event) || editorFocus || modal;
         return false;
@@ -1952,7 +2309,15 @@ bool UiSubsystem::ProcessDeveloperUiEvent(const PlatformEvent& event)
     case PlatformEventType::TextEditing:
     case PlatformEventType::GamepadButtonDown:
     case PlatformEventType::GamepadButtonUp:
+        RequestPanelBuild();
+        if (editorFocus || modal)
+        {
+            ProcessRuntimeUiEvent(event);
+            return true;
+        }
+        return false;
     case PlatformEventType::GamepadAxisMotion:
+        // 摇杆轴是连续输入：只转发给 RmlUi 做导航，不请求面板重建。
         if (editorFocus || modal)
         {
             ProcessRuntimeUiEvent(event);
@@ -1967,7 +2332,8 @@ bool UiSubsystem::ProcessDeveloperUiEvent(const PlatformEvent& event)
 
 void UiSubsystem::RequestOpenJsonAsset(const std::string& path)
 {
-    RequestViewModelRefresh();
+    // 打开 JSON 只改变资产/文档节，不牵动脚本或大纲。
+    RequestViewModelRefresh(UiSectionBit(UiSectionId::Assets));
     if (jsonAssetLibrary != nullptr) jsonAssetLibrary->RequestOpen(path);
 }
 
@@ -1978,15 +2344,16 @@ bool UiSubsystem::CancelBlueprintAssetDrag()
 
 void UiSubsystem::RequestRefreshAssetCatalog()
 {
-    RequestViewModelRefresh();
+    RequestViewModelRefresh(UiSectionBit(UiSectionId::Assets));
     if (thumbnailLibrary != nullptr) thumbnailLibrary->Refresh();
     if (jsonAssetLibrary != nullptr) jsonAssetLibrary->RequestRefresh();
 }
 
 void UiSubsystem::RequestRuntimeAction(UiAction action)
 {
-    // 工具条/参数控件产生的运行时请求会改变当前显示值或模式：下一帧强制刷新。
-    RequestViewModelRefresh();
+    // 工具条/参数控件产生的运行时请求只重脏它可能改变的节：相机参数不会
+    // 顺带重建资产库/大纲/脚本快照。模式切换等事件仍在下一帧立即生效。
+    RequestViewModelRefresh(SectionsForUiAction(action.type));
     if (action.type == UiActionType::LoadWorld)
     {
         // 冻结 World 快照保存物理绝对路径，目录条目使用资源相对路径。

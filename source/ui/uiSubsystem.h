@@ -23,6 +23,7 @@
 #include "ui/uiRenderSnapshot.h"
 #include "ui/uiRenderSnapshotQueue.h"
 #include "ui/uiViewModelRefresh.h"
+#include "ui/uiViewModelSections.h"
 #include "ui/viewport/editorViewportGeometry.h"
 
 namespace Rml
@@ -114,11 +115,12 @@ public:
     void Shutdown();
 
     bool HandlePlatformEvent(const PlatformEvent& event);
-    // mode 决定构建哪些数据；editorSnapshotDue 表示本帧到达编辑器快照刷新节拍
-    // （或事件强制），只有此时才重建面板 DOM。可见性隐藏时 mode != FullEditor，
-    // 面板构建与 RML 主更新都会跳过；隐藏帧仍发布空/仅 DrawDebug 的渲染快照，
-    // 避免 RT 保留上一帧工作区画面。
-    void Update(const UiViewModelSnapshot& viewModelSnapshot,
+    // 分节视图模型的消费入口。sections 只携带本帧“重建过”的 GT 分节（脚本/动画/
+    // 性能/相机/环境/离线）；资产/大纲/状态由 UiSubsystem 自己发布。mode 决定构建档位；
+    // editorSnapshotDue 表示 10 Hz 窗口到期或事件强制，只有此时才发布资产/大纲节、
+    // 重建面板数据并刷新 UpdateRuntimeView。逐帧始终更新 RmlUi 上下文与绘制快照。
+    void Update(const UiViewModelSectionUpdate& sections,
+        const UiViewModelFrameValues& frameValues,
         UiViewModelBuildMode mode,
         bool editorSnapshotDue);
     void Resize(uint32_t width, uint32_t height);
@@ -136,14 +138,12 @@ public:
     // 视口拾取只负责打开文档并记录导航来源，实际编辑仍经由 EditorCommand。
     bool SelectSceneObjectFromPick(
         const Editor::Selection::MaterialInstanceSelection& selection);
+    // MI 模型列表与大纲 actor 列表都是不可变数组的共享指针：同一份内容跨刷新复用，
+    // 只有指针或选中态变化才提升大纲分节版本，避免每 100 ms 重挂面板 DOM。
     void SetMaterialInstanceSceneModels(
-        const std::vector<Editor::Selection::MaterialInstanceModelContext>& models);
-    // 世界大纲的冻结 actor 列表：EngineLoop 在稳定帧边界从 active World 拍出，
-    // 与 SetMaterialInstanceSceneModels 同一位置发布，UI 只接收值语义副本。
-    void SetSceneActors(std::vector<EditorUi::EditorSceneActorSnapshot> actors);
-    // 性能快照与 actor 列表同一位置发布；UI 只接收按值复制的 CPU/GPU 数字，
-    // 不持有计时器或 Vulkan 查询对象。每帧一份，供 Performance 页按 5 Hz 取样。
-    void SetPerformanceSnapshot(VL::PerformanceSnapshot snapshot);
+        std::shared_ptr<const std::vector<EditorUi::MaterialInstanceModelSnapshot>> models);
+    void SetSceneActors(
+        std::shared_ptr<const std::vector<EditorUi::EditorSceneActorSnapshot>> actors);
     std::optional<Editor::Selection::MaterialInstanceModelContext>
         ConsumeMaterialInstanceModelSelectionRequest();
     std::optional<Editor::Selection::MaterialInstanceSelection>
@@ -171,10 +171,31 @@ public:
     {
         return initialized && !developerUiVisible && !immersiveView;
     }
-    // 选中/模式切换/文档命令等事件置脏；EngineLoop 在稳定帧边界消费后强制一次
-    // 完整编辑器快照重建，不受 10 Hz 节拍等待。隐藏期间事件不排队：
-    // 重新可见的第一帧本身就会被视为强制刷新。
-    bool ConsumeViewModelRefreshRequest() noexcept;
+    // 选中/模式切换/文档命令等事件按“受影响的分节”置脏；EngineLoop 在稳定帧边界
+    // 消费掩码，只重建这些节，不受 10 Hz 节拍等待。隐藏期间事件不排队：
+    // 重新可见的第一帧本身就会被视为全部节强制刷新。
+    UiSectionMask ConsumeViewModelRefreshSections() noexcept
+    {
+        const UiSectionMask requested = pendingSectionRefresh;
+        pendingSectionRefresh = 0;
+        return requested;
+    }
+    // 诊断计数（--gpu-stats 每秒读取一次）：证明静止帧不重建分节、不重建面板。
+    struct RefreshStats
+    {
+        uint64_t sectionPublishes = 0;
+        uint64_t panelBuilds = 0;
+        uint64_t runtimeViewUpdates = 0;
+        uint64_t bindingDirtyWrites = 0;
+        // 按分节拆开，--gpu-stats 用它说明“每秒到底哪些节在变”。
+        std::array<uint64_t, UiSectionCount> sectionPublishesById{};
+    };
+    RefreshStats ConsumeRefreshStats() noexcept
+    {
+        const RefreshStats result = refreshStats;
+        refreshStats = {};
+        return result;
+    }
     uint32_t GetViewportWidth() const { return desc.viewportWidth; }
     uint32_t GetViewportHeight() const { return desc.viewportHeight; }
     const UiViewportRect& GetSceneViewportRect() const { return sceneViewportRect; }
@@ -228,11 +249,32 @@ private:
     bool HasAssetFingerprintChanged(const AssetFingerprint& candidate) const;
 
     void SyncBindingData();
+    // 分节脏集只刷新对应绑定：world_text 属于状态节，gameplay_text 属于脚本/HUD 节。
+    void SyncWorldTextBinding();
+    void SyncGameplayTextBinding(const ScriptRuntimeView& scripts);
+    // 发布 UiSubsystem 拥有的三节（状态/资产/大纲）。只有内容变化才提升版本。
+    void PublishStatusSection(const UiViewModelFrameValues& frameValues);
+    void PublishAssetsSection();
+    void PublishSceneOutlinerSection();
+    void RecordSectionPublish(UiSectionId id) noexcept
+    {
+        ++refreshStats.sectionPublishes;
+        ++refreshStats.sectionPublishesById[static_cast<size_t>(id)];
+    }
+    // 把本帧变化的分节写入投影（UiViewModelSnapshot）并做对应的绑定重脏。
+    void ApplyChangedSections(UiSectionMask changed);
+    void ApplyFrameValues(const UiViewModelFrameValues& frameValues);
+    void MarkSceneOutlinerDirty() noexcept { ++outlinerRevision; }
     // includeUiDocuments=false 时只发布 DrawDebug 叠层（沉浸模式仍显示调试图元）；
     // 仍会发布一份快照，从而清掉 RT 保留的上一帧工作区画面。
     void BuildAndPublishRenderSnapshot(bool includeUiDocuments);
-    void SetImmersiveDocumentStateIfRestored(const UiViewModelSnapshot& viewModelSnapshot);
-    void RequestViewModelRefresh() noexcept { viewModelRefreshRequested = true; }
+    void SetImmersiveDocumentStateIfRestored(const std::string& activeWorldPath);
+    void RequestViewModelRefresh(
+        UiSectionMask sections = UiSectionAll) noexcept
+    { pendingSectionRefresh |= sections; }
+    // 面板的 Build 输入来自资产/大纲/脚本/状态四节；用户点击等面板本地交互也会
+    // 请求一次构建，避免“数据没变但界面状态变了”的交互被门禁吞掉。
+    void RequestPanelBuild() noexcept { panelBuildRequested = true; }
     std::unique_ptr<class DebugDrawLabels> debugDrawLabels;
     void BuildDeveloperPanels();
     void UpdateInputOwnership();
@@ -263,11 +305,30 @@ private:
     std::optional<EditorUi::MaterialInstanceModelSnapshot>
         selectedModelMaterials;
     std::optional<uint32_t> selectedMaterialSlotIndex;
-    std::vector<EditorUi::MaterialInstanceModelSnapshot> sceneModels;
-    // 大纲列表是逐帧替换的不可变数组：面板只借用同一个 shared_ptr，不做深拷贝。
-    std::shared_ptr<const std::vector<EditorUi::EditorSceneActorSnapshot>> sceneActors;
-    // 每帧从 RenderSystem 复制的性能快照；面板按自己的刷新节奏读取副本。
-    PerformanceSnapshot performanceSnapshot;
+    // 大纲/MI 模型列表都是不可变数组：只有内容或选中态变化才提升大纲节版本。
+    std::shared_ptr<const std::vector<EditorUi::MaterialInstanceModelSnapshot>>
+        sceneModels;
+    std::shared_ptr<const std::vector<EditorUi::EditorSceneActorSnapshot>>
+        sceneActors;
+    // 分节存储是视图模型的唯一权威：九个节各自持有不可变载荷与版本。
+    UiViewModelSectionStore sectionStore;
+    // 已应用到面板/绑定的版本集合；ChangedFrom 产生本帧的脏集。
+    UiSectionVersions appliedSectionVersions;
+    UiAssetsSection appliedAssets;
+    UiPerformanceSection appliedPerformance;
+    // 大纲节版本源：actor/模型指针替换或选中态变化时推进；不引入第二份选择状态。
+    uint64_t outlinerRevision = 0;
+    // 上一份离线节里的模式，用于判断本次发布是否真的发生了模式切换。
+    bool lastPublishedOfflineMode = false;
+    // 面板本地交互（点击/滚轮/键盘）请求一次构建；不包含悬停移动。
+    bool panelBuildRequested = true;
+    RefreshStats refreshStats;
+    UiSectionMask pendingSectionRefresh = UiSectionAll;
+    // RuntimeHud 档位的逐帧脚本文本；不覆盖编辑器投影里的类/反馈字段。
+    ScriptRuntimeView hudScripts;
+    UiViewModelBuildMode currentBuildMode = UiViewModelBuildMode::None;
+    // TickMaterialInstanceEditor 只在脚本节版本变化时把蓝图类转交给资产文档服务。
+    uint64_t blueprintClassesVersion = 0;
     // 大纲选中态是稳定身份（"mesh|…"、"pointLight|…"），World 换代时清空。
     std::string selectedActorIdentity;
     bool pendingSceneSelectionClear = false;
@@ -307,7 +368,6 @@ private:
     bool initialized = false;
     bool rmlInitialized = false;
     bool updatingRuntimeBindings = false;
-    bool viewModelRefreshRequested = false;
     bool developerUiEnabled = false;
     bool developerUiVisible = false;
     bool immersiveView = false;

@@ -123,8 +123,9 @@ Color is currently edited as Linear RGBA numbers, without an sRGB palette.
 Texture edits can be saved; texture live-preview descriptor replacement remains
 unavailable. Numeric/render-state preview retains the existing renderer adapter.
 
-The dockable Log panel consumes `MaterialInstanceEditorSnapshot.logs`, an immutable
-process-wide `LogStore` snapshot. Diagnostics, RmlUi messages, managed logs, C#
+The dockable Log panel consumes the `logs` field of the `assets` view-model
+section, an immutable process-wide `LogStore` snapshot published once per
+revision (no copy per panel build). Diagnostics, RmlUi messages, managed logs, C#
 compiler output and Shader Compiler cache/build diagnostics carry sequence, timestamp,
 severity, source and optional file/line/column. Shader cache hits are Debug, misses
 and successful build summaries are Info, failed summaries are Error, and successful
@@ -138,9 +139,11 @@ history and existing console output intact. Rows are virtualized and hidden pane
 defer filtering/DOM work. Scripts reads frozen timing, per-object callback, physics,
 assembly and GC metrics at most four times per second, with 64 objects per page.
 Neither Log view invokes managed code, reads World, or modifies diagnostic producers.
-The Performance tab consumes `MaterialInstanceEditorSnapshot.performance`, a value copy of
+The Performance tab consumes the `performance` view-model section, a value copy of
 `PerformanceSnapshot` frozen by EngineLoop at the stable frame boundary from the renderer's
-thread-safe timing snapshot. It shows FPS, CPU frame ms, the sum of valid GPU pass samples,
+thread-safe timing snapshot. It is fed through `UpdatePerformance()` on the 100 ms
+window (the Log "Scripts" page through `UpdateScriptPerformance()`), so a new
+performance sample never triggers a workspace panel `Build`. It shows FPS, CPU frame ms, the sum of valid GPU pass samples,
 a CPU stage table, and GPU rows in graph pass order with name, ms, percent and a proportional
 bar; rows are not sorted by cost. The CPU table sits under the summary with its own heading and
 header, uses the same row/bar markup, and normalizes each stage against `cpuMs`; its derived
@@ -306,47 +309,82 @@ This is binding/control invalidation, not dirty-rectangle rendering. GT still
 builds immutable draw snapshots and RT uploads/composites the overlay every frame;
 unchanged panel data does not yet imply reused GPU draw buffers.
 
-### View Model Build Visibility And Cadence
+### View Model Sections, Versions And Cadence
 
-`UiViewModelRefreshSchedule` / `UiViewModelBuildMode` in
-`source/ui/uiViewModelRefresh.h` decide how much of the immutable view model GT
-builds. The mode is derived only from visibility:
+`source/ui/uiViewModelSections.h` defines the immutable building block
+`UiSnapshotSection<T> { std::shared_ptr<const T> data; uint64_t version; }`.
+The monolithic `UiViewModelSnapshot` remains only as the **projection** that
+`UiSubsystem` assembles from sections for the existing panel API; it is no
+longer the producer-side snapshot. The visibility/cadence decision stays in
+`UiViewModelRefreshSchedule` / `UiViewModelBuildMode`
+(`source/ui/uiViewModelRefresh.h`), derived only from visibility:
 
 - **None** — `UiSubsystem` is not initialized, or both the developer workspace
-  and the runtime HUD are hidden (immersive mode). No editor snapshot, script
-  class/perf JSON, scene-actor list or RmlUi document update is produced. GT
-  still freezes the camera and DrawDebug overlay (immersive display keeps
-  debugging geometry) and publishes an immutable draw snapshot with no UI
-  documents and `sceneViewportEnabled=false`, so the render thread cannot retain
-  the previous workspace image. The last editor-only `UiViewModelSnapshot`
-  fields stay in place for `TickMaterialInstanceEditor`, but nothing renders or
-  consumes them until the workspace is visible again.
-- **RuntimeHud** — `--no-dev-ui`: only the runtime HUD is visible. GT freezes the
-  world label and gameplay text every frame through
-  `ScriptRuntimeSubsystem::HudView`, which skips blueprint classes, component
-  classes, performance JSON and scene/detail data. The HUD stays per-frame
-  reactive; no editor panel data is built.
-- **FullEditor** — the developer workspace is visible. The complete view model
-  (script view/undo state, renderer/offline/bloom/CSM/environment values, final
-  animation preview features, scene actors, material-instance models and the
-  performance snapshot) is rebuilt at **10 Hz (100 ms)**. Between refreshes the
-  panel DOM keeps the last built values while RmlUi input handling, hover,
-  scrolling and the immutable draw snapshot stay per-frame.
+  and the runtime HUD are hidden (immersive mode). No section is published, no
+  RmlUi document update runs. GT still freezes the camera and DrawDebug overlay
+  and publishes an immutable draw snapshot with no UI documents and
+  `sceneViewportEnabled=false`, so RT cannot retain the previous workspace
+  image. The last projection stays in place for `TickMaterialInstanceEditor`.
+- **RuntimeHud** — `--no-dev-ui` (or an enabled-but-hidden editor): only the
+  runtime HUD is visible. GT freezes the world label and gameplay text every
+  frame through `ScriptRuntimeSubsystem::HudView`; no editor section is built.
+- **FullEditor** — the developer workspace is visible. Each section is
+  rebuilt on its own change signal, not as one bundle.
 
-The cadence is a throttle, not a comparison of the whole snapshot. An explicit
-dirty path forces the next frame to rebuild regardless of the remaining window:
-visibility/mode/locale actions, world generation or path change, viewport,
-outliner or material selection, any runtime `UiAction`, any editor document
-command execution (save, undo/redo, parameter/preview edits), script build
-start/completion, script play-state change, offline mode and its command
-feedback. Selection and mode switches therefore react on the next GT frame
-(≤ one rendered frame); panel data that only changes over time reacts within
-100 ms. Input, hover, scroll and viewport camera indicators are unchanged.
+#### Section list, owner and version source
 
-The Performance tab still consumes the same frozen `PerformanceSnapshot`; it is
-now published to `UiSubsystem` at 10 Hz and the panel keeps its own 5 Hz rebuild,
-so the panel remains ≤200 ms behind the newest sample. `perf json` and
-`--perf-jsonl` do not read the UI snapshot at all: they serialize
+| Section | Owner | Payload | Version source |
+| --- | --- | --- | --- |
+| `scripts` | `EngineLoop` | `ScriptRuntimeView` (classes, feedback, build state, undo/redo) | Existing change events: world generation/path, script play state, script build start/finish, document commands, selection-triggered refresh. Rebuilt only when an event declares it, so `CanUndo`/`CanRedo` (two `weakly_canonical` calls) are not recomputed on idle frames. |
+| `animation` | `EngineLoop` | preview clip/time/playing/joint count/feature values | Time-dependent: resampled every 100 ms cycle; published only when the values differ, so paused/absent previews do not bump the version. |
+| `sceneOutliner` | `UiSubsystem` | `shared_ptr<const vector<EditorSceneActorSnapshot>>`, MI model list, selected identity/slot | Actor/model `shared_ptr` identity plus `outlinerRevision`, which advances only when the pointer is replaced or the selection changes. |
+| `assets` | `UiSubsystem` | `LogStore` snapshot, JSON catalog/document, thumbnail snapshot, loading flags | The libraries' own revisions (same revision returns the same `shared_ptr`); `PublishAssets` compares pointer identity, so N polls with no change publish once. |
+| `performance` | `EngineLoop` | frozen `PerformanceSnapshot` + script-runtime time/counter JSON | Time series: one publication per sampled 100 ms window. Does not feed the panel build gate. |
+| `viewportCamera` | `EngineLoop` | camera/exposure/debug-view/tone-map, motion-debug identity, debug-draw UI signature | Value comparison. The per-frame debug-draw geometry allocation is represented by a signature over the fields the panel shows (enabled/categories/owners/counts), so static cameras do not dirty this section every window. |
+| `environmentLighting` | `EngineLoop` | bloom/CSM/environment/speed-tree authoring values and environment progress | Value comparison against the last published payload. |
+| `offline` | `EngineLoop` | offline session state/settings/error/command feedback | Value comparison; the UI-owned requested-mode/notice fields stay in `UiSubsystem` and are reconciled on publication. |
+| `status` | `UiSubsystem` | locale, hot-reload status, workspace visibility, active world path | Value comparison, checked every frame; only a real change bumps the version. |
+
+`EngineLoop` owns the six GT-live sections and publishes them through
+`UiViewModelSectionStore`; `UiSubsystem` owns `assets`, `sceneOutliner` and
+`status` through the same slot type. `MergeSectionVersions()` produces the
+single `UiSectionVersions` used for dirty-set decisions.
+
+#### Publish, dirty and rebuild rules
+
+- A section is immutable once published. `UiSectionSlot::Publish(value,
+  revision)` replaces the `shared_ptr` only when the owner-provided revision
+  changes; `PublishIfChanged(value)` does the same after a value comparison.
+  An in-flight consumer can keep the old `shared_ptr` indefinitely.
+- `UiSectionVersions::ChangedFrom(previous)` returns a bit mask. `UiSubsystem`
+  applies only those sections to the projection and calls `SyncWorldTextBinding`
+  / `SyncGameplayTextBinding` only for `status` / `scripts`. `world_text` and
+  `gameplay_text` are therefore the only RmlUi bindings and are dirtied only
+  when their owning section changes.
+- `BuildDeveloperPanels()` runs only when `scripts`, `assets`, `sceneOutliner`
+  or `status` changed (or a panel-local interaction requested one build).
+  `UpdateRuntimeView()` runs for `scripts`, `animation`, `viewportCamera`,
+  `environmentLighting`, `offline` or `status` changes. `performance` triggers
+  neither: the Performance tab and the Log "Scripts" page consume it through
+  `UpdatePerformance()`/`UpdateScriptPerformance()` on the 100 ms window at
+  their own 5 Hz sampling.
+- Event-driven refresh keeps a section mask instead of a global dirty flag.
+  `UiAction` types map to the sections they can change (camera actions →
+  `viewportCamera`, offline actions → `offline`, authoring values →
+  `environmentLighting`, script commands → `scripts`/`assets`/`sceneOutliner`,
+  world/preview changes → all). Selective choice, mode switches, world loads
+  and editor commands therefore still become visible on the next GT frame
+  (≤ one rendered frame); only genuinely unchanged sections are skipped.
+- What remains per-frame: `frameIndex`/delta time/FPS, the frozen camera and
+  DrawDebug overlay values (needed by the immersive overlay), RmlUi input
+  processing, `rmlContext->Update()`, and publishing the immutable
+  `UiRenderSnapshot`. RmlUi document rendering is what dominates the visible
+  `uiViewModel` number, not view-model assembly.
+- `--gpu-stats` additionally logs one `[UI] sections/s=… panelBuilds/s=…
+  runtimeViews/s=… bindingDirty/s=…` line per second with the per-section
+  breakdown. It is a diagnostic of the gate, not a new data path.
+
+`perf json` and `--perf-jsonl` do not read any UI section: they serialize
 `GpuPassTimer`'s render/CPU timer snapshot directly, so throttling or hiding the
 UI does not change those channels.
 
@@ -360,6 +398,9 @@ editor pointer policy do not depend on the UI view model.
 - `UiAction`: typed runtime-control mutation requests into `CommandBus`.
 - `EditorCommandEnvelope`: asset-document mutation requests into `EditorCommandBus`.
 - `UiViewModelSnapshot` and `MaterialInstanceEditorSnapshot`: GT read-only presentation state.
+- `UiSnapshotSection<T>` / `UiViewModelSections`: versioned immutable view-model
+  sections; `UiViewModelSnapshot` is the projection assembled from them for the
+  panel API.
 - `IEditorJsonAssetRequestSink`: read-only open/refresh intents to the GT facade.
   `MaterialInstanceEditorSnapshot.assetCatalog` and `.jsonDocument` retain
   `shared_ptr<const ...>` results without per-frame deep copies of assets/fields.
