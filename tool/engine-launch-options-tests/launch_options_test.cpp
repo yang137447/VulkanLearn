@@ -37,6 +37,31 @@ TEST(LaunchOptions, GpuStatsIsOffByDefault)
     const LaunchOptions options = Parse({"main.exe"});
     EXPECT_TRUE(options.errorMessage.empty());
     EXPECT_FALSE(options.gpuStats);
+    EXPECT_FALSE(options.perfJsonlPath.has_value());
+}
+
+TEST(LaunchOptions, PerfJsonlRequiresAPath)
+{
+    const LaunchOptions missing = Parse({"main.exe", "--perf-jsonl"});
+    EXPECT_FALSE(missing.errorMessage.empty());
+    EXPECT_NE(missing.errorMessage.find("--perf-jsonl requires a file path"),
+        std::string::npos);
+
+    const LaunchOptions nextFlag = Parse({"main.exe", "--perf-jsonl", "--gpu-stats"});
+    EXPECT_FALSE(nextFlag.errorMessage.empty());
+    EXPECT_NE(nextFlag.errorMessage.find("--perf-jsonl requires a file path"),
+        std::string::npos);
+    EXPECT_FALSE(nextFlag.perfJsonlPath.has_value());
+}
+
+TEST(LaunchOptions, PerfJsonlAcceptsAPathAndCombinesWithGpuStats)
+{
+    const LaunchOptions options = Parse(
+        {"main.exe", "--gpu-stats", "--perf-jsonl", "artifacts/perf/run.jsonl"});
+    EXPECT_TRUE(options.errorMessage.empty()) << options.errorMessage;
+    EXPECT_TRUE(options.gpuStats);
+    ASSERT_TRUE(options.perfJsonlPath.has_value());
+    EXPECT_EQ(*options.perfJsonlPath, "artifacts/perf/run.jsonl");
 }
 
 TEST(LaunchOptions, GpuStatsFlagIsAccepted)

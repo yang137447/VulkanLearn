@@ -113,6 +113,15 @@ public:
     }
     // 控制台 gpustats：立即打印当前表，并在未开启时启动采集。
     void PrintGpuPassStats();
+    // 控制台 perf json：打印与 Performance 页同源的单行 JSON，并启动采集。
+    void PrintPerformanceJson();
+    // GT 每帧复制一份冻结快照给 UI；读锁只覆盖一次值拷贝。
+    VL::PerformanceSnapshot CapturePerformanceSnapshot() const
+    {
+        return gpuPassTimer.Snapshot();
+    }
+    // --perf-jsonl 需要时间序列，即使没有 --gpu-stats 也开启采集。
+    void EnableGpuPassCollection() { gpuPassTimer.RequestCollection(); }
     void SetRendererBackend(VL::RendererBackendVulkan* backend) { rendererBackend = backend; }
     void SetUiRenderSnapshotQueue(VL::UiRenderSnapshotQueue* queue) { uiRenderSnapshotQueue = queue; }
     void SetSceneViewport(const VL::UiViewportRect& rect, bool enabled);

@@ -690,6 +690,12 @@ void UiSubsystem::SetSceneActors(std::vector<EditorUi::EditorSceneActorSnapshot>
     selectedMaterialSlotIndex.reset();
 }
 
+void UiSubsystem::SetPerformanceSnapshot(PerformanceSnapshot snapshot)
+{
+    // 值语义复制：渲染线程之后更新计时器不会改写 UI 已冻结的这一帧。
+    performanceSnapshot = std::move(snapshot);
+}
+
 std::optional<Editor::Selection::MaterialInstanceModelContext>
 UiSubsystem::ConsumeMaterialInstanceModelSelectionRequest()
 {
@@ -1473,6 +1479,7 @@ void UiSubsystem::BuildDeveloperPanels()
     snapshot.selectedActorIdentity = selectedActorIdentity;
     snapshot.selectedModel = selectedModelMaterials;
     snapshot.selectedMaterialSlotIndex = selectedMaterialSlotIndex;
+    snapshot.performance = performanceSnapshot;
     materialInstanceEditorPanel->Build(snapshot);
     materialInstanceEditorPanel->UpdateRuntimeView(lastViewModel);
     if (thumbnailLibrary != nullptr)

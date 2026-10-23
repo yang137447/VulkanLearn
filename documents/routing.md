@@ -13,6 +13,7 @@
 
 | 源码路径 | 必读文档 | 守护门禁（逐字 `-RuleName`） |
 | --- | --- | --- |
+| `source/core/performanceSnapshot.h`、`source/core/performanceJsonlWriter.h` | `contracts/gpu-pass-timing.md`、`contracts/game-ui-stack.md` | — |
 | `source/ui/widgets/**` | `contracts/ui-component-system.md` | — |
 | `source/ui/**` | `contracts/ui-component-system.md`、`contracts/game-ui-stack.md` | — |
 | `source/editor/**` | `contracts/ui-component-system.md` | — |
@@ -141,7 +142,7 @@ notify/playMontage 请求与拒绝矩阵以 `contracts/animation-montage.md` 为
 
 - `source/platform/**`（SDL 平台层与输入仲裁）
 - `source/engine/testing/**`（runtime validation services）
-- `source/core/**`
+- `source/core/runtimeResult.*`、`source/core/logStore.h`
 - `extern/**`（第三方依赖；除 `extern/BLAKE3` 的锁定说明外不写文档）
 - 地形：**不存在运行时实现**。只有编辑器资产层的 `EditorAssetKind::Terrain` 与
   `objectType == "terrain"` 的 MI 导航解析；`SceneAssetValidator` 不接受 `terrain` 场景对象。

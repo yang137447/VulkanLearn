@@ -77,6 +77,7 @@
                 <button id="workspace-content-tab" data-workspace-panel="content" data-action="workspace-content">Content Browser</button>
                 <button id="workspace-renderer-tab" data-workspace-panel="renderer" data-action="workspace-renderer">Renderer</button>
                 <button id="workspace-log-tab" data-workspace-panel="log">Log</button>
+                <button id="workspace-performance-tab" data-workspace-panel="performance">Performance</button>
                 <button id="workspace-resource-tab" data-workspace-panel="resource" title="Asset Editor">
                     <img id="workspace-resource-icon" src="icons/file-box.png"/>
                     <span id="workspace-resource-label">Asset Editor</span>
@@ -348,6 +349,32 @@
                     <pre id="log-scripts-summary"></pre>
                     <div id="log-scripts-rows"></div>
                 </div>
+            </div>
+            <div id="performance-page" class="dock-panel">
+                <!-- Performance 页只消费 EngineLoop 冻结的 CPU+GPU 快照；
+                     数字与 perf json/JSONL 共用同一序列化规则。 -->
+                <div class="performance-summary">
+                    <div class="performance-metric">
+                        <span class="performance-metric-label">FPS</span>
+                        <span id="performance-fps" class="performance-metric-value">--</span>
+                    </div>
+                    <div class="performance-metric">
+                        <span class="performance-metric-label">CPU frame</span>
+                        <span id="performance-cpu-ms" class="performance-metric-value">--</span>
+                    </div>
+                    <div class="performance-metric">
+                        <span class="performance-metric-label">GPU timed total</span>
+                        <span id="performance-gpu-ms" class="performance-metric-value">--</span>
+                    </div>
+                </div>
+                <div id="performance-status" class="performance-status">Waiting for GPU samples...</div>
+                <div class="performance-table-header">
+                    <span class="performance-pass-name">Pass</span>
+                    <span class="performance-pass-ms">ms</span>
+                    <span class="performance-pass-percent">% GPU</span>
+                    <span class="performance-pass-bar-cell">Share</span>
+                </div>
+                <div id="performance-passes" class="performance-passes"></div>
             </div>
             <div id="material-editor" class="dock-panel">
                 <div class="material-editor-toolbar">

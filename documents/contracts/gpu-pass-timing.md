@@ -12,6 +12,12 @@
   排入 `CommandBus`，由 `RuntimeCommandExecutor` 在当前 GT tick 调用
   `RenderSystem::PrintGpuPassStats()`。它立即打印最近一次读回的窗口；没有可用样本时打印一行
   提示，并请求渲染线程在第一次读回后补打一张表。该命令无论 `--gpu-stats` 是否开启都会启用采集。
+- 控制台命令 `perf json`：把 `RuntimeCommandType::PrintPerformanceJson` 排入 `CommandBus`，
+  由 `RenderSystem::PrintPerformanceJson()` 在 GT 打印**恰好一行** JSON（无日志前缀），
+  并启用采集。格式见“机器通道”。
+- 启动参数 `--perf-jsonl <path>`（`source/engine/launchOptions.*`）：可选；按墙钟每秒向
+  `<path>` 追加一行同样的 JSON，写入后立即 flush，并同时启用采集。父目录不存在时创建；
+  创建或打开失败让启动失败并给出包含路径的错误信息，不静默丢弃时间序列。
 - 启动脚本可复现：`--console-command gpustats --console-command-delay <frames>`。
 
 ## 时间戳写入位置
@@ -75,6 +81,50 @@ end 等待本 pass 完整结束，因此 `duration` 是"该 pass 的串行 GPU �
 - 不对 tick 差做 `timestampValidBits` 掩码：掩码会把回绕变成一个巨大的正数；本实现按需求把
   回绕如实报告为 `n/a`。
 
+## 共享快照（CPU + GPU）
+
+`source/core/performanceSnapshot.h` 定义唯一快照 `PerformanceSnapshot`；`GpuPassTimer::Snapshot()`
+在既有 mutex 下复制一份值语义副本。面板、`perf json` 和 `--perf-jsonl` 都只消费这一种类型，
+不存在第二套计时、第二套取整或第二套字段顺序。
+
+| 字段 | 来源 | 空值语义 |
+| --- | --- | --- |
+| `fps` | `1 / cpuFrameSeconds` | 尚未采样或 delta 非法 |
+| `cpuFrameMs` | `cpuFrameSeconds × 1000` | 尚未采样或 delta 非法 |
+| `gpuTotalMs` | 所有有效 pass 平均耗时之和 | 窗口内没有任何有效 pass |
+| `passes[]` | 读回窗口的名字顺序（不是按耗时排序） | 每项 `ms` 独立为空 |
+| `gpuTimingSupported` | 设备 timestamp 能力 | `false` 时 GPU 通道整体无效 |
+| `collecting` | 至少完成过一次读回 | 尚未读回时 GPU 通道无效 |
+| `windowFrameCount` | 已进入 120 帧窗口的帧数 | 用于状态文案，不进入 JSON |
+
+CPU 帧时长来自渲染器自动曝光路径的 `RenderSystem::UpdateExposureFrameTiming()`：
+它用既有的 `steady_clock` 计算 `exposureDeltaSeconds`（首帧 1/60，之后收敛到
+1/240..0.1 s），并在同一处调用 `GpuPassTimer::SetCpuFrameTiming()`。因此 FPS/CPU ms
+和眼适应使用同一个 frame delta，没有第二个帧率时钟；GPU 采集关闭时 CPU 字段仍每帧更新。
+
+`valid` 只描述 GPU 通道：`gpuTimingSupported && collecting && gpuTotalMs 有值`。
+设备不支持 timestamp、尚未读回、或窗口内没有任何有效样本时为 `false`；此时 CPU 数字仍可显示。
+
+## 机器通道（`perf json` / `--perf-jsonl`）
+
+两个通道由 `FormatPerformanceJson()` 序列化，固定键顺序、固定 3 位小数、无效值一律写
+`null`，不输出 NaN/Inf，也不使用指数记法：
+
+```json
+{"fps":56.559,"cpuMs":17.681,"gpuTotalMs":14.290,"valid":true,"passes":[{"name":"hairSimulation","ms":1.258},{"name":"shadowCascade0","ms":2.519}]}
+```
+
+- `fps`、`cpuMs`、`gpuTotalMs` 是数字或 `null`；`valid` 是布尔值。
+- `passes` 始终存在，顺序等于 RenderGraph 录制顺序（有 hair 时 `hairSimulation` 最前）。
+- 单个 pass 没有有效样本时写 `"ms":null`，不是 0。
+- `--perf-jsonl` 每行一个完整 JSON、单个 `\n`、逐行 flush；`Init` 完成满 1 秒后的第一个
+  更新帧写出首行，之后维持墙钟节奏，渲染变慢不补写历史行。
+
+**数值一致性**：面板、`perf json` 与 `--perf-jsonl` 共用 `PerformanceSnapshot` 和
+`FormatPerformanceNumber()`；同一个快照在三处产生相同数字。面板按 5 Hz 从自己冻结的副本
+刷新，`perf json`/JSONL 读取命令执行时刻的当前副本，因此不同输出时刻可能对应相邻快照，
+但不存在数值规则差异。
+
 ## 表格与滚动平均
 
 纯逻辑在 `source/render/backend/gpuPassTimings.h`：
@@ -106,8 +156,16 @@ end 等待本 pass 完整结束，因此 `duration` 是"该 pass 的串行 GPU �
 
 ## 相关测试
 
-- `tool/renderer-backend-tests/gpu_pass_timings_test.cpp`（`vl_renderer_backend_tests`，51 项）：
+- `tool/renderer-backend-tests/gpu_pass_timings_test.cpp`（`vl_renderer_backend_tests`）：
   tick→毫秒换算、`end < begin` 与非法 period、部分窗口平均、环形窗口淘汰、名字顺序稳定、
   重配置清窗、已知样本表的逐字字符串、`n/a` 与空表。
-- `tool/engine-launch-options-tests/launch_options_test.cpp`（`engine_launch_options_tests`，4 项）：
-  `--gpu-stats` 默认关闭/可接受/与既有参数组合，未知参数仍被拒绝。
+- `tool/renderer-backend-tests/performance_snapshot_test.cpp`（同一套件，12 项）：
+  JSON 逐字字符串与固定键序、3 位小数、`null` 与 NaN/Inf 拒绝、CPU/GPU 合并、
+  部分窗口、缺失/负值 pass、`valid` 规则、快照副本独立、百分比、表格还原。
+- `tool/engine-launch-options-tests/launch_options_test.cpp`（`engine_launch_options_tests`，6 项）：
+  `--gpu-stats` 默认关闭/可接受/与既有参数组合、`--perf-jsonl` 默认关闭/路径必填/
+  与 `--gpu-stats` 组合，未知参数仍被拒绝。
+- `tool/editor-ui-tests/performancePanelTests.cpp`（`editor_ui_tests`，7 项）：
+  摘要/百分比/条形映射、图序而非成本序、5 Hz 节流与可见性立即刷新、不支持/未采样/无有效
+  样本的空状态，以及首帧空快照不伪造 0。`DockRmlTest` 另验证 Performance 标签注册在
+  Log/Renderer 同组并消费冻结快照。

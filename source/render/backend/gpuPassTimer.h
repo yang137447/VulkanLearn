@@ -9,6 +9,7 @@
 
 #include <vulkan/vulkan.hpp>
 
+#include "core/performanceSnapshot.h"
 #include "render/backend/gpuPassTimings.h"
 
 namespace VL
@@ -16,12 +17,9 @@ namespace VL
 
 class RendererBackendVulkan;
 
-struct GpuPassStatsSnapshot
-{
-    bool supported = false;
-    bool collecting = false;
-    GpuPassTimingTable table;
-};
+// GPU 计时器发布的就是 Performance 页/JSON 共用的那份快照；
+// supported 改名为 gpuTimingSupported，避免把 CPU 通道也误标成不支持。
+using GpuPassStatsSnapshot = PerformanceSnapshot;
 
 // 逐 pass GPU 计时器：每个 frame-in-flight 槽位独占一个 timestamp query pool。
 // 查询结果在下一次复用该槽位时读取——此时 backend 的 BeginFrame 已经等待过该槽位
@@ -42,6 +40,10 @@ public:
     void RequestPrint() { printRequested.store(true, std::memory_order_release); }
 
     GpuPassStatsSnapshot Snapshot() const;
+
+    // 渲染器自动曝光路径的 frame delta（秒）。每帧在渲染线程写入；
+    // 即使 GPU 采集未开启，fps/cpuFrameMs 也保持最新，面板不必等 timestamp。
+    void SetCpuFrameTiming(double cpuFrameSeconds);
 
     // 在 backend BeginFrame 之前调用：只创建本帧 slot 需要的 query pool。
     // 把 pool 创建放在命令缓冲开始录制之前，避免在同一帧的录制中途创建查询对象。

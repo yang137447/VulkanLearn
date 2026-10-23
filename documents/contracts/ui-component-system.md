@@ -51,7 +51,7 @@ SpringArm 显示从臂根到静态臂端的连接线；子组件局部 TRS 相�
 
 默认布局向 UE 编辑器靠拢：顶部标题行最左侧是 File / Edit / Window / Help 菜单栏，
 标题右侧保留原有命令按钮，右上 Scene Outliner，右下 Details，
-中央/左侧独立 Viewport，底部 Content Browser / Renderer 标签页，最底部状态栏。
+中央/左侧独立 Viewport，底部 Content Browser / Renderer / Log / Performance 标签页，最底部状态栏。
 Material Slots 和 actor 参数放在 Details 中，MI 文档参数放在中央独立资产页。
 每个打开的资产对应一个紧邻 Viewport 的停靠标签，显示类型图标、文件名、适用的脏标记和关闭按钮；
 重复打开复用文档，关闭沿用保存/丢弃/取消确认，切回关卡后普通快照刷新不会抢回材质页。

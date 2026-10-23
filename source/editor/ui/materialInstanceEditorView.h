@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 #include "core/logStore.h"
+#include "core/performanceSnapshot.h"
 
 #include "editor/command/editorCommand.h"
 #include "editor/selection/materialInstanceSelection.h"
@@ -204,6 +205,9 @@ struct MaterialInstanceEditorSnapshot
     std::optional<MaterialInstanceDocumentSnapshot> activeDocument;
     std::optional<MaterialInstanceModelSnapshot> selectedModel;
     std::optional<uint32_t> selectedMaterialSlotIndex;
+    // EngineLoop 在稳定帧边界从渲染侧复制的 CPU+GPU 性能快照；
+    // Performance 页只消费它，不访问 RenderSystem、World 或 Vulkan。
+    PerformanceSnapshot performance;
 };
 
 } // namespace VL::EditorUi

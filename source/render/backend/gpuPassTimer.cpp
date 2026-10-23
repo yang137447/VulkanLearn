@@ -1,6 +1,7 @@
 #include "render/backend/gpuPassTimer.h"
 
 #include <array>
+#include <cmath>
 #include <iostream>
 #include <sstream>
 
@@ -64,7 +65,7 @@ void GpuPassTimer::Initialize(
     {
         std::lock_guard<std::mutex> lock(snapshotMutex);
         snapshot = GpuPassStatsSnapshot{};
-        snapshot.supported = supported;
+        snapshot.gpuTimingSupported = supported;
     }
 
     if (!supported && loggingEnabled)
@@ -112,6 +113,23 @@ GpuPassStatsSnapshot GpuPassTimer::Snapshot() const
 {
     std::lock_guard<std::mutex> lock(snapshotMutex);
     return snapshot;
+}
+
+void GpuPassTimer::SetCpuFrameTiming(double cpuFrameSeconds)
+{
+    // CPU 数字每帧都发布，不依赖 GPU 采集；面板在 timestamp 不可用时
+    // 仍应显示真实 FPS/CPU 帧时长，而不是一行占位符。
+    std::lock_guard<std::mutex> lock(snapshotMutex);
+    if (std::isfinite(cpuFrameSeconds) && cpuFrameSeconds > 0.0)
+    {
+        snapshot.cpuFrameMs = cpuFrameSeconds * 1000.0;
+        snapshot.fps = 1.0 / cpuFrameSeconds;
+    }
+    else
+    {
+        snapshot.cpuFrameMs.reset();
+        snapshot.fps.reset();
+    }
 }
 
 void GpuPassTimer::PrepareFrame(uint32_t frameSlot)
@@ -315,16 +333,16 @@ void GpuPassTimer::PublishSnapshot()
 {
     std::lock_guard<std::mutex> lock(snapshotMutex);
     const std::vector<std::string>& names = timingRing.Names();
-    snapshot.supported = supported;
+    snapshot.gpuTimingSupported = supported;
     snapshot.collecting = collectedFrameCount > 0;
-    snapshot.table.frameCount = timingRing.WindowFrameCount();
+    snapshot.windowFrameCount = timingRing.WindowFrameCount();
 
-    bool rebuildRows = snapshot.table.rows.size() != names.size();
+    bool rebuildRows = snapshot.passes.size() != names.size();
     if (!rebuildRows)
     {
         for (size_t i = 0; i < names.size(); ++i)
         {
-            if (snapshot.table.rows[i].name != names[i])
+            if (snapshot.passes[i].name != names[i])
             {
                 rebuildRows = true;
                 break;
@@ -333,23 +351,26 @@ void GpuPassTimer::PublishSnapshot()
     }
     if (rebuildRows)
     {
-        snapshot.table.rows.clear();
-        snapshot.table.rows.reserve(names.size());
+        snapshot.passes.clear();
+        snapshot.passes.reserve(names.size());
         for (const std::string& name : names)
         {
-            GpuPassTimingRow row;
-            row.name = name;
-            snapshot.table.rows.push_back(std::move(row));
+            PerformancePassSample pass;
+            pass.name = name;
+            snapshot.passes.push_back(std::move(pass));
         }
     }
 
     // 并行数组重算走成员缓冲，稳定后不在逐帧路径分配堆内存。
     timingRing.ComputeAverages(scratchAverages, scratchSampleCounts);
-    for (size_t i = 0; i < snapshot.table.rows.size(); ++i)
+    for (size_t i = 0; i < snapshot.passes.size(); ++i)
     {
-        snapshot.table.rows[i].averageMilliseconds = scratchAverages[i];
-        snapshot.table.rows[i].sampleCount = scratchSampleCounts[i];
+        snapshot.passes[i].milliseconds = scratchAverages[i];
+        snapshot.passes[i].sampleCount = scratchSampleCounts[i];
     }
+    // 复用同一份快照：GPU 总和与非法样本收敛规则由 Performance 契约统一实现。
+    // cpuFrameMs/fps 是本帧刚写入的 CPU 字段，这里不能覆盖掉。
+    RecomputePerformanceSnapshotTotals(snapshot);
 }
 
 void GpuPassTimer::LogTableIfDue()
@@ -364,12 +385,14 @@ void GpuPassTimer::LogTableIfDue()
 
 void GpuPassTimer::LogLatestTable()
 {
-    GpuPassTimingTable table;
+    PerformanceSnapshot snapshotCopy;
     {
         std::lock_guard<std::mutex> lock(snapshotMutex);
-        table = snapshot.table;
+        snapshotCopy = snapshot;
     }
-    ReportGpuTiming(LogSeverity::Info, FormatGpuPassTimingTable(table));
+    ReportGpuTiming(
+        LogSeverity::Info,
+        FormatGpuPassTimingTable(ToGpuPassTimingTable(snapshotCopy)));
 }
 
 void GpuPassTimer::LogUnsupportedOnce()

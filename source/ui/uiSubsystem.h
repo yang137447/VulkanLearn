@@ -134,6 +134,9 @@ public:
     // 世界大纲的冻结 actor 列表：EngineLoop 在稳定帧边界从 active World 拍出，
     // 与 SetMaterialInstanceSceneModels 同一位置发布，UI 只接收值语义副本。
     void SetSceneActors(std::vector<EditorUi::EditorSceneActorSnapshot> actors);
+    // 性能快照与 actor 列表同一位置发布；UI 只接收按值复制的 CPU/GPU 数字，
+    // 不持有计时器或 Vulkan 查询对象。每帧一份，供 Performance 页按 5 Hz 取样。
+    void SetPerformanceSnapshot(VL::PerformanceSnapshot snapshot);
     std::optional<Editor::Selection::MaterialInstanceModelContext>
         ConsumeMaterialInstanceModelSelectionRequest();
     std::optional<Editor::Selection::MaterialInstanceSelection>
@@ -243,6 +246,8 @@ private:
     std::vector<EditorUi::MaterialInstanceModelSnapshot> sceneModels;
     // 大纲列表是逐帧替换的不可变数组：面板只借用同一个 shared_ptr，不做深拷贝。
     std::shared_ptr<const std::vector<EditorUi::EditorSceneActorSnapshot>> sceneActors;
+    // 每帧从 RenderSystem 复制的性能快照；面板按自己的刷新节奏读取副本。
+    PerformanceSnapshot performanceSnapshot;
     // 大纲选中态是稳定身份（"mesh|…"、"pointLight|…"），World 换代时清空。
     std::string selectedActorIdentity;
     bool pendingSceneSelectionClear = false;

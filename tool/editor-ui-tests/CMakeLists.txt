@@ -11,6 +11,7 @@ add_executable(editor_ui_tests
     resourceEditorControllerTests.cpp
     widgetTests.cpp
     dockingTests.cpp
+    performancePanelTests.cpp
     logPanelTests.cpp
     gameplayHudTests.cpp
     contentBrowserTests.cpp
@@ -30,6 +31,7 @@ add_executable(editor_ui_tests
     "${PROJECT_SOURCE_DIR}/source/editor/ui/editorContentBrowserController.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/editorDockingController.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/editorLogPanel.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/ui/editorPerformancePanel.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/editorJsonInspectorController.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/editorResourceEditorController.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/ui/editorSceneActorTree.cpp"

@@ -875,6 +875,9 @@ void RuntimeCommandExecutor::ExecuteCommand(
     case RuntimeCommandType::PrintGpuPassStats:
         renderSystem.PrintGpuPassStats();
         break;
+    case RuntimeCommandType::PrintPerformanceJson:
+        renderSystem.PrintPerformanceJson();
+        break;
     }
 }
 

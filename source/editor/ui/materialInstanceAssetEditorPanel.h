@@ -17,6 +17,7 @@
 #include "editor/ui/retargetAssetEditorPanel.h"
 #include "editor/ui/editorSceneActorTree.h"
 #include "editor/ui/editorLogPanel.h"
+#include "editor/ui/editorPerformancePanel.h"
 #include "editor/ui/blueprintViewportInteraction.h"
 #include "ui/uiAction.h"
 #include "ui/uiRenderSnapshot.h"
@@ -321,6 +322,8 @@ private:
     EditorResourceEditorController resourceEditor;
     RetargetAssetEditorPanel retargetEditor;
     EditorLogPanel logPanel;
+    // Performance 页只消费 MaterialInstanceEditorSnapshot.performance 的冻结副本。
+    EditorPerformancePanel performancePanel;
     bool viewingJson = false;
     bool resourceEditorVisible = false;
     std::string requestedJsonPath;

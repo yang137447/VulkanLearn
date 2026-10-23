@@ -264,6 +264,24 @@ void DebugConsole::ProcessCommand(const std::string& line)
         return;
     }
 
+    if (command == "perf")
+    {
+        // 机器通道只接受明确子命令；输出行由 GT 执行端统一序列化，
+        // 控制台不读取 renderer 状态，也不打印任何前缀。
+        std::string action;
+        std::string extra;
+        if (!(commandStream >> action) || action != "json" || (commandStream >> extra))
+        {
+            std::cout << "Usage: perf json" << std::endl;
+            return;
+        }
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type = VL::RuntimeCommandType::PrintPerformanceJson;
+        runtimeCommand.sourceText = line;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
     if (command == "help")
     {
         PrintHelp();
@@ -697,6 +715,7 @@ void DebugConsole::PrintHelp() const
     std::cout << "  shaderreload help - show hot-reload triggers by resource type\n";
     std::cout << "  shadercache stats - report shader build cache statistics\n";
     std::cout << "  gpustats - print the latest per-pass GPU timing table (enables collection if needed)\n";
+    std::cout << "  perf json - print one line of JSON with FPS, CPU frame ms, GPU total and per-pass ms\n";
 }
 
 void DebugConsole::PrintShaderReloadHelp() const

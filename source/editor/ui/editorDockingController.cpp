@@ -34,6 +34,7 @@ std::string BodyId(const std::string& panel)
     if (panel == "details") return "editor-inspector";
     if (panel == "content") return "content-browser-page";
     if (panel == "log") return "log-page";
+    if (panel == "performance") return "performance-page";
     if (panel.rfind("resource:material:", 0) == 0) return "material-editor";
     if (panel == "resource" || DockWorkspace::IsResourceDocumentPanel(panel))
         return "resource-editor";
@@ -47,6 +48,7 @@ std::string TabId(const std::string& panel)
     if (panel == "details") return "workspace-details-tab";
     if (panel == "content") return "workspace-content-tab";
     if (panel == "log") return "workspace-log-tab";
+    if (panel == "performance") return "workspace-performance-tab";
     if (panel == "resource") return "workspace-resource-tab";
     if (DockWorkspace::IsResourceDocumentPanel(panel))
         return "workspace-resource-tab-" + panel.substr(9);
@@ -66,6 +68,7 @@ std::string BaseTabMarkup(const std::string& panel)
     if (panel == "content") return "<span>Content Browser</span>";
     if (panel == "renderer") return "<span>Renderer</span>";
     if (panel == "log") return "<span>Log</span>";
+    if (panel == "performance") return "<span>Performance</span>";
     return "<img id=\"workspace-resource-icon\" src=\"icons/file-box.png\"/>"
         "<span id=\"workspace-resource-label\">Asset Editor</span>";
 }
@@ -275,7 +278,8 @@ bool ReadWorkspaceLayout(const std::filesystem::path& path, DockLayoutState& out
         const Json data = Json::parse(stream);
         // "hidden" 是可选字段：旧文件没有它时表示没有任何面板被隐藏。
         if (!data.is_object() || (data.size() != 3 && data.size() != 4) ||
-            (data.at("version") != 1 && data.at("version") != 2) ||
+            (data.at("version") != 1 && data.at("version") != 2 &&
+             data.at("version") != 3) ||
             !data.at("floating").is_array() ||
             data.at("floating").size() > 32)
             throw std::runtime_error("Unsupported workspace format.");
@@ -341,6 +345,24 @@ bool ReadWorkspaceLayout(const std::filesystem::path& path, DockLayoutState& out
             }
             if (!hasLog && contentStack != 0) candidate.nodes.at(contentStack).tabs.push_back("log");
         }
+        // v3 新增 Performance 页：旧布局把它并入 Content 标签组，
+        // 与 Log 的迁移方式一致，保留活动页、比例和隐藏集合。
+        if (data.at("version") == 1 || data.at("version") == 2)
+        {
+            bool hasPerformance = false;
+            uint32_t contentStack = 0;
+            for (const auto& item : candidate.nodes)
+            {
+                if (item.second.IsSplit()) continue;
+                for (const auto& panel : item.second.tabs)
+                {
+                    if (panel == "performance") hasPerformance = true;
+                    if (panel == "content") contentStack = item.first;
+                }
+            }
+            if (!hasPerformance && contentStack != 0)
+                candidate.nodes.at(contentStack).tabs.push_back("performance");
+        }
         if (HidesEveryPanel(candidate, candidateHidden))
             throw std::runtime_error("Workspace hides every panel.");
         if (!DockWorkspace::Validate(candidate, error)) return false;
@@ -368,7 +390,7 @@ bool WriteWorkspaceLayout(const std::filesystem::path& path, const DockLayoutSta
         for (const auto& item : persisted.floating)
             floating.push_back({{"stack", EncodeNode(persisted, item.node)},
                 {"rect", {item.rect.x, item.rect.y, item.rect.width, item.rect.height}}});
-        Json data{{"version", 2}, {"root", EncodeNode(persisted, persisted.root)}, {"floating", floating}};
+        Json data{{"version", 3}, {"root", EncodeNode(persisted, persisted.root)}, {"floating", floating}};
         // 只在确实有隐藏面板时写字段，旧读取方仍能解析没有该键的文件。
         if (hidden != nullptr && !hidden->empty()) data["hidden"] = *hidden;
         if (!path.parent_path().empty()) std::filesystem::create_directories(path.parent_path());

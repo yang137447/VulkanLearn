@@ -1247,14 +1247,14 @@ void RenderSystem::PrintGpuPassStats()
     // 控制台按需启用采集；Snapshot 只读最近一次读回的窗口，不等待渲染线程。
     gpuPassTimer.RequestCollection();
     const VL::GpuPassStatsSnapshot snapshot = gpuPassTimer.Snapshot();
-    if (!snapshot.supported)
+    if (!snapshot.gpuTimingSupported)
     {
         std::cout << "[GPU] pass timing is unavailable on this device "
                      "(timestamp queries unsupported or timestampPeriod == 0)."
                   << std::endl;
         return;
     }
-    if (!snapshot.collecting || snapshot.table.rows.empty())
+    if (!snapshot.collecting || snapshot.passes.empty())
     {
         // 首次启用采集时还没有可打印的表；让渲染线程在第一次读回后补打一张，
         // 这样单次 'gpustats' 命令也能在接下来一两帧后给出数据。
@@ -1265,9 +1265,18 @@ void RenderSystem::PrintGpuPassStats()
         return;
     }
 
-    const std::string table = VL::FormatGpuPassTimingTable(snapshot.table);
+    const std::string table = VL::FormatGpuPassTimingTable(
+        VL::ToGpuPassTimingTable(snapshot));
     VL::ProcessLog().Append(VL::LogSeverity::Info, "GPU", table);
     std::cout << "[Diagnostics][Info] " << table << std::endl;
+}
+
+void RenderSystem::PrintPerformanceJson()
+{
+    // 与 Performance 页消费同一个 GpuPassTimer 快照：面板、perf json 和
+    // --perf-jsonl 只是同一份值的三个消费者，没有第二套计时或序列化规则。
+    gpuPassTimer.RequestCollection();
+    std::cout << VL::FormatPerformanceJson(gpuPassTimer.Snapshot()) << std::endl;
 }
 
 void RenderSystem::SetSceneViewport(const VL::UiViewportRect& rect, bool enabled)
@@ -2444,6 +2453,8 @@ void RenderSystem::UpdateExposureFrameTiming()
         exposureLastFrameTime = now;
         exposureClockInitialized = true;
         exposureDeltaSeconds = 1.0f / 60.0f;
+        // 首帧也发布 CPU 时长，避免 Performance 页在第一个读回窗口前空着 FPS。
+        gpuPassTimer.SetCpuFrameTiming(exposureDeltaSeconds);
         return;
     }
 
@@ -2453,6 +2464,9 @@ void RenderSystem::UpdateExposureFrameTiming()
     // 眼适应不应因断点、窗口拖拽或首帧长暂停瞬间跳到目标值。
     exposureDeltaSeconds = static_cast<float>(
         std::clamp(elapsed, 1.0 / 240.0, 0.1));
+    // Performance 通道复用这一个 frame delta，不另建帧率时钟；
+    // 因此它和自动曝光看到的 CPU 帧间隔完全一致（含同样的 1/240..0.1 s 收敛区间）。
+    gpuPassTimer.SetCpuFrameTiming(exposureDeltaSeconds);
 }
 
 void RenderSystem::UpdateUBOGlobalForShadow(

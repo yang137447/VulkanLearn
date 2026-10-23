@@ -124,6 +124,19 @@ RuntimeResult<void> EngineLoop::Init(
     // 必须在 LoadInitialWorldAndRenderer 之前设置：帧资源初始化时按该标志决定是否
     // 在首次采集时创建 timestamp query pool。
     RenderSystem::GetInstance().SetGpuPassStatsLoggingEnabled(launchOptions.gpuStats);
+    if (launchOptions.perfJsonlPath.has_value())
+    {
+        // --perf-jsonl 的时间序列需要 pass 数据，因此同时开启采集；
+        // 打开失败必须在启动时给出原因，不能留下"看似在跑但文件为空"的假象。
+        std::string jsonlError;
+        if (!perfJsonl.Open(*launchOptions.perfJsonlPath, jsonlError))
+        {
+            return RuntimeResult<void>::Failure(
+                MakeRuntimeError("EngineLoop.PerfJsonl", jsonlError));
+        }
+        RenderSystem::GetInstance().EnableGpuPassCollection();
+        nextPerfJsonlWrite = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    }
     auto worldResult = LoadInitialWorldAndRenderer(
         launchOptions.initialSceneOverride);
     if (worldResult.IsFailure())
@@ -205,6 +218,7 @@ void EngineLoop::Shutdown()
     // Stop the CPU compile worker before any Vulkan teardown. The worker never
     // touches Vulkan, and dropping its in-flight candidate here guarantees no
     // callback can run after device resources are released.
+    perfJsonl.Close();
     const DiagnosticsSubsystem& diagnostics =
         GetSubsystems().GetDiagnosticsSubsystem();
     if (scriptBuild) scriptBuild->Shutdown();
@@ -764,11 +778,31 @@ void EngineLoop::Tick()
         window->SetTitle(GetSubsystems().GetFpsTool().getTitle());
     }
 
+    TickPerformanceJsonl();
+
     PROFILE_FRAME();
 
     // 即使关闭 UI 也推进帧边界；Motion/Console/脚本共用同一生命周期。
     if (const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld())
         world->GetDebugDraw().EndFrame();
+}
+
+void EngineLoop::TickPerformanceJsonl()
+{
+    if (!perfJsonl.IsOpen())
+    {
+        return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (now < nextPerfJsonlWrite)
+    {
+        return;
+    }
+    // 固定墙钟节奏：渲染变慢时不补写、不批量刷行，agent 看到的时间序列
+    // 与真实运行时长一一对应。第一行在启动满 1 秒后写出。
+    nextPerfJsonlWrite = now + std::chrono::seconds(1);
+    perfJsonl.Append(
+        FormatPerformanceJson(RenderSystem::GetInstance().CapturePerformanceSnapshot()));
 }
 
 void EngineLoop::TickScriptBuild(float deltaTime)
@@ -1598,6 +1632,9 @@ void EngineLoop::UpdateUiViewModel(
             }
     uiSubsystem->SetMaterialInstanceSceneModels(
         renderSystem.GetMaterialInstanceModelContexts());
+    // Performance 页与 perf JSON/JSONL 共用这一份冻结快照；这里只做一次值拷贝，
+    // 面板随后按自己的 5 Hz 节奏读取，不在逐帧路径接触 RenderSystem。
+    uiSubsystem->SetPerformanceSnapshot(renderSystem.CapturePerformanceSnapshot());
     // 世界大纲的数据源是 active World 本身，而不是只含带 MI 网格的 RenderScene 子集。
     // 在同一个稳定帧边界拍出值语义副本，UI 回调里不再访问 World。
     uiSubsystem->SetSceneActors(uiActiveWorld != nullptr

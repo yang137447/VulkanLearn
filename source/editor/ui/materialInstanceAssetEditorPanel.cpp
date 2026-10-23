@@ -295,6 +295,7 @@ const char* PanelLabel(const std::string& panel)
     if (panel == "content") return "Content Browser";
     if (panel == "renderer") return "Renderer";
     if (panel == "log") return "Log";
+    if (panel == "performance") return "Performance";
     return "Asset Editor";
 }
 
@@ -437,7 +438,9 @@ bool MaterialInstanceAssetEditorPanel::ValidateDocument(Rml::ElementDocument& ca
         "offline-stop", "offline-restart", "offline-export", "asset-search",
         "close-document-status", "close-save", "editor-navigation",
         "editor-inspector", "editor-content", "workspace-content-tab", "workspace-renderer-tab",
-        "content-browser-page", "renderer-page", "editor-viewport-surface", "editor-viewport-image",
+        "content-browser-page", "renderer-page", "performance-page", "workspace-performance-tab",
+        "performance-fps", "performance-cpu-ms", "performance-gpu-ms", "performance-status",
+        "performance-passes", "editor-viewport-surface", "editor-viewport-image",
         "workspace-log-tab", "log-page", "log-scroll", "log-rows", "log-count",
         "log-output", "log-scripts", "log-output-tab", "log-scripts-tab",
         "log-severity", "log-source", "log-search", "log-autoscroll", "log-clear",
@@ -560,6 +563,11 @@ bool MaterialInstanceAssetEditorPanel::Attach(Rml::ElementDocument& candidate, s
         Detach();
         return false;
     }
+    if (!performancePanel.Attach(candidate, error))
+    {
+        Detach();
+        return false;
+    }
     detailsIdentity.clear();
     actorDetailsIdentity.clear();
     blueprintAssetIdentity.clear();
@@ -601,6 +609,7 @@ void MaterialInstanceAssetEditorPanel::Detach()
         document->RemoveEventListener("keydown", this, true);
         contentBrowser.Detach();
         logPanel.Detach();
+        performancePanel.Detach();
         jsonInspector.Detach();
         resourceJsonInspector.Detach();
         docking.Detach();
@@ -881,6 +890,9 @@ void MaterialInstanceAssetEditorPanel::Build(const MaterialInstanceEditorSnapsho
     RefreshWorkspace();
     resourceEditorVisible = IsResourceEditorVisible();
     logPanel.Build(snapshot.logs, docking.IsPanelActive("log"));
+    // 面板自己按 5 Hz 取样；这里只传冻结快照、可见性与同一份 UI 单调时钟。
+    performancePanel.Build(snapshot.performance, docking.IsPanelActive("performance"),
+        Rml::GetSystemInterface()->GetElapsedTime());
     if (discardBlueprintThenClose && pendingCloseKind == EditorAssetKind::Blueprint)
     {
         if (!discardBlueprintCloseSubmitted)

@@ -57,7 +57,8 @@ Destructive validation workflows remain console/launch operations, not buttons.
 - Bottom left/center: Content Browser (MI/Mesh/Scene/Texture/Terrain/Blueprint/Retarget JSON sources
   tree, breadcrumbs, search, type filter, tiles/list, sorting, size and explicit
   refresh controls) / Renderer
-  (offline controls) / Log (Output and Scripts) tabs; switching only changes presentation.
+  (offline controls) / Log (Output and Scripts) / Performance (FPS, CPU frame ms,
+  GPU timed total and per-pass table) tabs; switching only changes presentation.
 - Left/center: a scene Viewport image and game input.
 - Bottom edge: status bar.
 - Dirty-close modal: explicit Save/Discard/Cancel.
@@ -137,8 +138,20 @@ history and existing console output intact. Rows are virtualized and hidden pane
 defer filtering/DOM work. Scripts reads frozen timing, per-object callback, physics,
 assembly and GC metrics at most four times per second, with 64 objects per page.
 Neither Log view invokes managed code, reads World, or modifies diagnostic producers.
-The six permanent dock panels include Log; version-1 saved layouts migrate by adding
-it to the Content stack while retaining active tabs, ratios and hidden panels.
+The Performance tab consumes `MaterialInstanceEditorSnapshot.performance`, a value copy of
+`PerformanceSnapshot` frozen by EngineLoop at the stable frame boundary from the renderer's
+thread-safe timing snapshot. It shows FPS, CPU frame ms, the sum of valid GPU pass samples,
+and rows in graph pass order with name, ms, percent of the GPU total and a proportional bar;
+rows are not sorted by cost. The panel is a pure presentation consumer: it does not read World,
+assets, `RenderSystem`, query pools or Vulkan objects, and it has no command callbacks.
+It rebuilds its DOM at 5 Hz (0.2 s) rather than every frame, and refreshes immediately when
+the tab becomes visible. Unsupported timestamps, a not-yet-read-back window and a window with
+no valid sample show explicit waiting/unsupported text and `n/a`/`--`, never fabricated zeros.
+The same snapshot feeds `perf json` and `--perf-jsonl`; see
+[gpu-pass-timing.md](gpu-pass-timing.md).
+The seven permanent dock panels include Log and Performance; version-1 saved layouts migrate by
+adding Log to the Content stack, and version-1/2 layouts also gain Performance there while
+retaining active tabs, ratios and hidden panels. Version-3 layouts require both panels.
 Content Browser selection is separate from the open document. A single click
 selects an item; a double click on MI emits the existing editable-document open
 command. Scene double-click reuses the existing `UiActionType::LoadWorld` transaction.
@@ -425,9 +438,10 @@ with properties grouped by element id; it does not search the document once per
 cached property on every text replacement.
 Dock placement and panel visibility use the same property cache.
 
-FPS is displayed only in the native window title. The editor status bar has no
-duplicate FPS node or refresh cadence; frame-rate changes do not invalidate
-workspace layout. Ordinary variable-size labels still use normal document layout.
+FPS is displayed in the native window title and on the Performance tab (from the frozen
+performance snapshot). The editor status bar has no duplicate FPS node or refresh cadence;
+frame-rate changes do not invalidate workspace layout. Ordinary variable-size labels still use
+normal document layout.
 
 UI asset fingerprints drive candidate reload. Localization, runtime document
 and enabled editor document must all parse and pass required-control validation
@@ -532,6 +546,9 @@ The normal shader build path produces overlay SPIR-V from `shader/glsl/`.
 Root-registered GoogleTest target `editor_ui_tests` loads real RML/RCSS with
 CPU fake sinks and covers parsing, refresh, focused input, edit batching,
 revision preservation, save/dirty close, escaping and typed offline actions.
+Its Performance cases load the workspace document, verify the tab sits in the
+Log/Renderer stack, map a frozen `PerformanceSnapshot` into summary/table values,
+and assert 5 Hz throttling plus unsupported/not-yet-sampled empty states.
 Existing MI suites retain document/codec/service and fake-preview coverage.
 Neither suite proves Vulkan preview replacement or interactive IME behavior.
 JSON-library suites cover nested data omission, classification, input/path

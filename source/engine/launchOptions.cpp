@@ -172,6 +172,21 @@ LaunchOptions ParseLaunchOptions(int argc, char** argv)
             continue;
         }
 
+        if (argument == "--perf-jsonl")
+        {
+            // 路径是必需值：缺少路径或把下一个 flag 当路径都必须报错，
+            // 否则时间序列会被静默写到错误位置或根本不写。
+            if (i + 1 >= argc || IsOptionToken(argv[i + 1]) ||
+                std::string(argv[i + 1]).empty())
+            {
+                options.errorMessage =
+                    "--perf-jsonl requires a file path.";
+                return options;
+            }
+            options.perfJsonlPath = std::string(argv[++i]);
+            continue;
+        }
+
         if (argument == "--exit-after-tests")
         {
             options.exitAfterTests = true;
@@ -342,6 +357,7 @@ void PrintLaunchUsage()
         << "       main.exe [--worker-thread-count <1|2>]\n"
         << "       main.exe [--frame-limit <hz>]\n"
         << "       main.exe [--gpu-stats]\n"
+        << "       main.exe [--perf-jsonl <path>]\n"
         << "       main.exe [--initial-scene <scene-path>] [--console-command \"<cmd>\"]...\n"
         << "  --shader-force-rebuild              Recompile and republish every startup shader artifact.\n"
         << "  --shader-reload-test                Run the graphics shader hot-reload rollback matrix.\n"
@@ -351,6 +367,7 @@ void PrintLaunchUsage()
         << "  --worker-thread-count <1|2>         Override config worker mode for this process.\n"
         << "  --frame-limit <hz>                  Cap render frame pacing at 1..1000 Hz (default 0 = uncapped; fixed 60 Hz physics unchanged).\n"
         << "  --gpu-stats                         Log a per-pass GPU timestamp table every 120 frames (default off).\n"
+        << "  --perf-jsonl <path>                 Append one perf JSON line per second to <path> (creates parent directories; enables GPU collection).\n"
         << "  --console-command <line>            Queue one debug console command at startup. Repeatable.\n"
         << "  --console-command-delay <frames>    Frames to wait before submitting queued console commands (default 60).\n"
         << "  --dev-ui                            Enable the RmlUi editor workspace for this launch.\n"

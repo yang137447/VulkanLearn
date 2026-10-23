@@ -65,7 +65,9 @@ enum class RuntimeCommandType
     InjectInput,
     ReportShaderCacheStatistics,
     // 打印最近一次读回的逐 pass GPU 计时表；未开启采集时同时启动采集。
-    PrintGpuPassStats
+    PrintGpuPassStats,
+    // 打印与 Performance 页同源的单行 JSON；未开启采集时同时启动采集。
+    PrintPerformanceJson
 };
 
 enum class RuntimeShaderReloadScope

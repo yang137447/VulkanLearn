@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "core/runtimeResult.h"
+#include "core/performanceJsonlWriter.h"
 #include "platform/platformEvent.h"
 #include "engine/runtimeCommand.h"
 #include "engine/launchOptions.h"
@@ -86,6 +87,8 @@ private:
     void SynchronizeSceneViewport();
     void TickEditorThumbnails();
     void TickScriptBuild(float deltaTime);
+    // --perf-jsonl：按墙钟每秒把同一份 Performance 快照追加一行。
+    void TickPerformanceJsonl();
     const RuntimeConfig& GetRuntimeConfig() const;
     SubsystemCollection& GetSubsystems();
     const SubsystemCollection& GetSubsystems() const;
@@ -177,6 +180,9 @@ private:
     std::string pendingScriptBlueprintSelection;
     WorldGraphTransactionTestFaultInjection
         worldGraphTransactionTestFaultInjection;
+    // 时间序列由 GT 写盘，避免渲染线程做文件 I/O；未开启时 IsOpen() 为 false。
+    PerformanceJsonlWriter perfJsonl;
+    std::chrono::steady_clock::time_point nextPerfJsonlWrite{};
 };
 
 } // namespace VL

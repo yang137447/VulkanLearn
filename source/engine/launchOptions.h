@@ -30,6 +30,9 @@ struct LaunchOptions
     // 逐 pass GPU 计时：默认关闭以保证普通日志与逐帧路径无额外开销；
     // 打开后每 120 帧向日志打印一张 [GPU] 表，控制台 gpustats 可随时按需查看。
     bool gpuStats = false;
+    // 机器可读性能时间序列：每行一个 perf JSON，每秒追加一行。
+    // 路径为空表示不写；打开该通道同时按需启用 GPU 采集。
+    std::optional<std::string> perfJsonlPath;
     // 自动化输入验收：启动后主动抢占 OS 键盘焦点，仅显式 flag 生效。
     bool focusWindow = false;
     DeveloperUiLaunchMode developerUiMode = DeveloperUiLaunchMode::UseConfig;

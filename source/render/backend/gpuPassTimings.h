@@ -7,7 +7,10 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
+
+#include "core/performanceSnapshot.h"
 
 namespace VL
 {
@@ -175,6 +178,24 @@ private:
     std::vector<size_t> nextWrite;
     size_t framesPushed = 0;
 };
+
+// 把 Performance 快照还原成日志/控制台使用的表格。
+// 这是唯一转换点：UI/JSON 不各自维护第二份 pass 顺序。
+inline GpuPassTimingTable ToGpuPassTimingTable(const PerformanceSnapshot& snapshot)
+{
+    GpuPassTimingTable table;
+    table.frameCount = snapshot.windowFrameCount;
+    table.rows.reserve(snapshot.passes.size());
+    for (const PerformancePassSample& pass : snapshot.passes)
+    {
+        GpuPassTimingRow row;
+        row.name = pass.name;
+        row.averageMilliseconds = pass.milliseconds;
+        row.sampleCount = pass.sampleCount;
+        table.rows.push_back(std::move(row));
+    }
+    return table;
+}
 
 // 定长表格文本。total 是各 pass 平均耗时之和，不是帧时间：
 // pass 之间的 barrier、未计时的环境 IBL/UI 以及 CPU 提交间隙都不在其中。
