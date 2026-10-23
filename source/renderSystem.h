@@ -122,6 +122,13 @@ public:
     {
         return gpuPassTimer.Snapshot();
     }
+    // GT 把 CpuFrameProfiler 冻结的 CPU 阶段并入同一份快照；只在 GT 调用。
+    void PublishCpuStageSamples(
+        const std::vector<VL::PerformancePassSample>& stages,
+        size_t windowFrameCount)
+    {
+        gpuPassTimer.PublishCpuStageSamples(stages, windowFrameCount);
+    }
     // --perf-jsonl 需要时间序列，即使没有 --gpu-stats 也开启采集。
     void EnableGpuPassCollection() { gpuPassTimer.RequestCollection(); }
     void SetRendererBackend(VL::RendererBackendVulkan* backend) { rendererBackend = backend; }

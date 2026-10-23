@@ -1234,6 +1234,8 @@ void RenderSystem::Render()
     PROFILE_SCOPE("RenderSystem::Render");
     // Single-thread compatibility path: GT publishes the same immutable
     // snapshot that the optional RT consumes, then renders it immediately.
+    // EngineLoop 的 Tick 为了给 CPU 阶段分别计时，直接调用下面两步而不是本函数；
+    // 这里保留组合入口给需要一次性完成 publish+render 的调用方。
     PublishSnapshotFromActiveWorld();
     RenderLatestSnapshotOrLastGood();
 }

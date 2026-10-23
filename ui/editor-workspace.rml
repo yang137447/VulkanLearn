@@ -368,6 +368,18 @@
                     </div>
                 </div>
                 <div id="performance-status" class="performance-status">Waiting for GPU samples...</div>
+                <!-- CPU 阶段表与 GPU pass 表共用行/条形样式，但用独立标题和表头分开；
+                     other 是派生行，保证各行之和与摘要里的 CPU frame 对得上。 -->
+                <div class="performance-section-title">CPU stages (game thread)</div>
+                <div id="performance-cpu-status" class="performance-status">Waiting for CPU samples...</div>
+                <div class="performance-table-header">
+                    <span class="performance-pass-name">Stage</span>
+                    <span class="performance-pass-ms">ms</span>
+                    <span class="performance-pass-percent">% CPU</span>
+                    <span class="performance-pass-bar-cell">Share</span>
+                </div>
+                <div id="performance-cpu-stages" class="performance-passes performance-cpu-stages"></div>
+                <div class="performance-section-title">GPU passes</div>
                 <div class="performance-table-header">
                     <span class="performance-pass-name">Pass</span>
                     <span class="performance-pass-ms">ms</span>

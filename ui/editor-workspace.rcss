@@ -645,9 +645,14 @@ body {
 .performance-metric-label { font-size: 11px; line-height: 15px; color: #90909a; }
 .performance-metric-value { font-size: 20px; line-height: 26px; color: #f0f0f2; }
 .performance-status { flex-shrink: 0; font-size: 11px; line-height: 16px; margin: 6px 0; color: #b5b5bd; }
+.performance-section-title { flex-shrink: 0; font-size: 11px; line-height: 18px; margin: 6px 0 2px; color: #8fbcba; }
 .performance-table-header, .performance-row { display: flex; align-items: center; box-sizing: border-box; height: 24px; min-height: 24px; font-size: 11px; border-bottom-width: 1px; border-color: #303034; }
 .performance-table-header { flex-shrink: 0; color: #90909a; background-color: #2d2d31; }
 .performance-passes { flex: 1; min-width: 0; min-height: 0; overflow: auto; }
+/* CPU 表是摘要后的固定高度区，GPU 表继续占满剩余空间；两者滚动互不影响。 */
+.performance-cpu-stages { flex: 0 0 auto; max-height: 240px; }
+.performance-cpu-stages .performance-bar-fill { background-color: #c9a86a; }
+.performance-other-row .performance-pass-name { color: #e7c57e; }
 .performance-pass-name { flex: 3; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; padding: 0 6px; }
 .performance-pass-ms { width: 76px; flex-shrink: 0; text-align: right; padding: 0 6px; color: #d1d1d8; }
 .performance-pass-percent { width: 64px; flex-shrink: 0; text-align: right; padding: 0 6px; color: #b5b5bd; }

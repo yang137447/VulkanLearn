@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "core/runtimeResult.h"
+#include "core/cpuFrameProfiler.h"
 #include "core/performanceJsonlWriter.h"
 #include "platform/platformEvent.h"
 #include "engine/runtimeCommand.h"
@@ -183,6 +184,8 @@ private:
     // 时间序列由 GT 写盘，避免渲染线程做文件 I/O；未开启时 IsOpen() 为 false。
     PerformanceJsonlWriter perfJsonl;
     std::chrono::steady_clock::time_point nextPerfJsonlWrite{};
+    // GT 独占的 CPU 阶段计时器；每帧 CommitFrame 后交给 RenderSystem 的唯一快照。
+    CpuFrameProfiler cpuFrameProfiler;
 };
 
 } // namespace VL

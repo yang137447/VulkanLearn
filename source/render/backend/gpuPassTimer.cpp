@@ -130,6 +130,49 @@ void GpuPassTimer::SetCpuFrameTiming(double cpuFrameSeconds)
         snapshot.cpuFrameMs.reset();
         snapshot.fps.reset();
     }
+    // other 以 cpuMs 为基准；cpuMs 变化后必须同步重算，避免表里出现
+    // "各行之和 + other != CPU frame" 的假象。
+    RecomputePerformanceSnapshotCpuOther(snapshot);
+}
+
+void GpuPassTimer::PublishCpuStageSamples(
+    const std::vector<PerformancePassSample>& stages,
+    size_t windowFrameCount)
+{
+    std::lock_guard<std::mutex> lock(snapshotMutex);
+
+    bool rebuildRows = snapshot.cpuStages.size() != stages.size();
+    if (!rebuildRows)
+    {
+        for (size_t index = 0; index < stages.size(); ++index)
+        {
+            if (snapshot.cpuStages[index].name != stages[index].name)
+            {
+                rebuildRows = true;
+                break;
+            }
+        }
+    }
+
+    if (rebuildRows)
+    {
+        snapshot.cpuStages.clear();
+        snapshot.cpuStages.reserve(stages.size() + 1);
+        for (const PerformancePassSample& stage : stages)
+        {
+            PerformancePassSample row;
+            row.name = stage.name;
+            snapshot.cpuStages.push_back(std::move(row));
+        }
+    }
+    for (size_t index = 0; index < stages.size(); ++index)
+    {
+        snapshot.cpuStages[index].milliseconds = stages[index].milliseconds;
+        snapshot.cpuStages[index].sampleCount = stages[index].sampleCount;
+    }
+    snapshot.cpuWindowFrameCount = windowFrameCount;
+    // other 是派生行：追加在已测阶段之后，数值始终由同一快照的 cpuMs 与阶段平均重算。
+    RecomputePerformanceSnapshotCpuOther(snapshot);
 }
 
 void GpuPassTimer::PrepareFrame(uint32_t frameSlot)

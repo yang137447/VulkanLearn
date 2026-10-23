@@ -1,7 +1,7 @@
-# GPU pass timing（`--gpu-stats` / `gpustats`）
+# GPU pass 与 CPU 阶段计时（`--gpu-stats` / `gpustats` / `perf json`）
 
-> 状态：**当前契约**（实现已落地）。描述逐 pass GPU 时间戳采集、延迟读回、滚动平均与日志输出；
-> 每一条都可核对到源码或测试。
+> 状态：**当前契约**（实现已落地）。描述逐 pass GPU 时间戳采集、逐阶段 CPU 计时、
+> 延迟读回、滚动平均、Performance 面板与日志/机器通道输出；每一条都可核对到源码或测试。
 
 ## 入口
 
@@ -81,6 +81,68 @@ end 等待本 pass 完整结束，因此 `duration` 是"该 pass 的串行 GPU �
 - 不对 tick 差做 `timestampValidBits` 掩码：掩码会把回绕变成一个巨大的正数；本实现按需求把
   回绕如实报告为 `n/a`。
 
+## CPU 阶段计时（GT）
+
+`source/core/cpuFrameProfiler.h` 是 GT 独占的 120 帧环形计时器，与 GPU 表使用同一套窗口
+规则（固定名字顺序、部分窗口平均、无样本输出 `n/a`）。`EngineLoop::Tick()` 在开头调用
+`BeginFrame()`，在渲染段结束后调用 `CommitFrame()`，随后把窗口平均样本交给
+`RenderSystem::PublishCpuStageSamples()`，由 `GpuPassTimer` 在同一把 `snapshotMutex` 下
+并入唯一 `PerformanceSnapshot`。CPU 通道不依赖 `--gpu-stats` / `--perf-jsonl`：每一帧都采集，
+每个阶段只有两次 `steady_clock::now()` 和一次加法，不分配、不打日志。
+
+`CpuFrameStageScope` 允许同一阶段在一帧内出现多个不连续区间（`input`、`scripts` 就是如此），
+区间耗时累加；`CommitFrame()` 每帧只做一次定长数组平均与值拷贝，返回的样本向量复用名字字符串。
+
+| 阶段 | 测量位置 | 含义 |
+| --- | --- | --- |
+| `input` | Tick 内 `PumpPlatformEvents()` 与 `InputSubsystem::UpdateActionState()` 两段 | SDL 事件轮询/分发与动作状态更新 |
+| `scripts` | Update 块内三段：`TickBlueprintAssets()`..`scripts.Tick()`、`DebugDraw::AdvanceGameTime()`、`PollBlueprintAssetChanges()` | 蓝图资产、自动 Play、编辑控制器、脚本 Tick 与资产变更轮询 |
+| `animation` | `World::TickAnimations()` | 骨骼动画求值、CPU 蒙皮与姿势包围盒 |
+| `hairSimulation` | `RendererResourceCache::AdvanceTressfxSimulations()` | GT 侧 TressFX 步进；GPU guide simulation 不在这里 |
+| `worldSnapshot` | `RenderSystem::PublishSnapshotFromActiveWorld()` | 世界快照构建与发布 |
+| `uiViewModel` | `EngineLoop::UpdateUiViewModel()` | 编辑器/游戏 UI 视图模型与 `SetPerformanceSnapshot` |
+| `renderRecord` | RT 模式：`renderThread->SubmitFrame()`；单线程：`RenderLatestSnapshotOrLastGood()` | 命令录制入口（含 hair sim dispatch 录制） |
+| `submitPresent` | RT 模式：`WaitForRenderThreadIdle()`；单线程：无独立样本 | 等待渲染线程完成消费、录制、提交、present 与帧槽 fence |
+| `other` | 派生项 | `cpuMs - 已测阶段之和`，钳制到 `>= 0` |
+
+### `other` 规则与对账
+
+`other` 不是独立计时区间，而是发布时用同一快照里的 `cpuMs` 减去所有已测阶段（不含 `other`）
+的平均值之和：
+
+- `other = max(0, cpuMs - sum(measured stages))`；
+- 测量值总和超过 `cpuMs`（窗口跨越节拍变化、采集边界或单帧异常）时输出 `0.000`，绝不输出负数；
+- `cpuMs` 缺失时 `other` 也是 `null`；
+- `other` 始终是 `cpuStages` 的最后一行；没有已测阶段时 `cpuStages` 为空，不伪造 `other`。
+
+因此面板/JSON 中 `cpuStages` 各行之和加上 `other` 与 `cpuMs` 对账。逐帧求和再取中位数时，
+`cpuMs` 的中位数与各行中位数之和可能差一个亚毫秒量级（中位数不可加、且单帧钳制会丢掉超出的部分），
+所以契约以**每帧求和的中位数**作为对账口径。
+
+### 归属与交接
+
+- 计时器对象由 `EngineLoop` 独占，只在 GT 的 Tick 生命周期内读写；`CommitFrame()` 之后
+  EngineLoop 只把值语义样本交出，不再持有窗口。
+- `GpuPassTimer` 是唯一快照的持有者：GPU 读回、CPU 帧时长与 CPU 阶段样本都在它的
+  `snapshotMutex` 下更新。面板、`perf json` 与 `--perf-jsonl` 都只读这一份副本，不存在
+  第二套计时、第二个窗口或第二套取整规则。
+- `PerformanceSnapshot` 的 `valid` 仍只描述 GPU 通道；CPU 阶段在 GPU timestamp 不可用、
+  尚未读回时仍照常发布和显示。
+
+### 与等待重叠的边界
+
+`workerThreadCount=2`（默认）时，GT 只发布世界快照并唤醒渲染线程，真正的
+`ConsumeLatestSnapshotIntoRenderScene()`、命令录制、`BeginFrame()` 的 fence 等待、
+`SubmitFrame()` 与 present 都在 RT 上完成。GT 无法在不拆分线程边界的情况下观测这些内部区间，
+因此它们全部被 `submitPresent` 的等待吸收；此时 `renderRecord` 只记录 GT 的唤醒调用。
+`workerThreadCount=1` 时全部工作在 GT 上串行，`RenderLatestSnapshotOrLastGood()` 的
+consume + 录制 + 提交 + present 统一计入 `renderRecord`，`submitPresent` 没有独立样本（`n/a`）。
+
+这条归属意味着：RT 模式下 `submitPresent` 既可能包含真实的 GPU/present 背压，也可能包含
+渲染线程自己的 CPU 录制。用 `--frame-limit` 给 GPU 留出余量可以区分两者——若 `submitPresent`
+随帧率上限明显下降，说明它此前主要是在等 GPU/swapchain；若基本不变，则剩余部分更可能是
+渲染线程 CPU 工作。契约只记录这一归属，不在运行时尝试进一步拆分。
+
 ## 共享快照（CPU + GPU）
 
 `source/core/performanceSnapshot.h` 定义唯一快照 `PerformanceSnapshot`；`GpuPassTimer::Snapshot()`
@@ -93,9 +155,11 @@ end 等待本 pass 完整结束，因此 `duration` 是"该 pass 的串行 GPU �
 | `cpuFrameMs` | `cpuFrameSeconds × 1000` | 尚未采样或 delta 非法 |
 | `gpuTotalMs` | 所有有效 pass 平均耗时之和 | 窗口内没有任何有效 pass |
 | `passes[]` | 读回窗口的名字顺序（不是按耗时排序） | 每项 `ms` 独立为空 |
+| `cpuStages[]` | CPU 窗口的固定阶段顺序，最后是派生 `other` | 每项 `ms` 独立为空；`other` 依赖 `cpuMs` |
 | `gpuTimingSupported` | 设备 timestamp 能力 | `false` 时 GPU 通道整体无效 |
 | `collecting` | 至少完成过一次读回 | 尚未读回时 GPU 通道无效 |
-| `windowFrameCount` | 已进入 120 帧窗口的帧数 | 用于状态文案，不进入 JSON |
+| `windowFrameCount` | GPU 已进入 120 帧窗口的帧数 | 用于 GPU 状态文案，不进入 JSON |
+| `cpuWindowFrameCount` | CPU 已进入 120 帧窗口的帧数 | 用于 CPU 状态文案，不进入 JSON |
 
 CPU 帧时长来自渲染器自动曝光路径的 `RenderSystem::UpdateExposureFrameTiming()`：
 它用既有的 `steady_clock` 计算 `exposureDeltaSeconds`（首帧 1/60，之后收敛到
@@ -103,7 +167,12 @@ CPU 帧时长来自渲染器自动曝光路径的 `RenderSystem::UpdateExposureF
 和眼适应使用同一个 frame delta，没有第二个帧率时钟；GPU 采集关闭时 CPU 字段仍每帧更新。
 
 `valid` 只描述 GPU 通道：`gpuTimingSupported && collecting && gpuTotalMs 有值`。
-设备不支持 timestamp、尚未读回、或窗口内没有任何有效样本时为 `false`；此时 CPU 数字仍可显示。
+设备不支持 timestamp、尚未读回、或窗口内没有任何有效样本时为 `false`；此时 CPU 数字与
+`cpuStages` 仍照常显示。
+
+Performance 页的 CPU 表只消费这份快照：标题与表头把 CPU 阶段和 GPU pass 分开，行/条形样式
+与 GPU 表相同，百分比以 `cpuMs` 为分母（因此各行百分比与 `other` 合计为 100%），`other` 行
+用独立颜色提示它是派生 remainder。面板仍按 5 Hz 从冻结副本刷新，首帧空快照不伪造 0。
 
 ## 机器通道（`perf json` / `--perf-jsonl`）
 
@@ -111,12 +180,15 @@ CPU 帧时长来自渲染器自动曝光路径的 `RenderSystem::UpdateExposureF
 `null`，不输出 NaN/Inf，也不使用指数记法：
 
 ```json
-{"fps":56.559,"cpuMs":17.681,"gpuTotalMs":14.290,"valid":true,"passes":[{"name":"hairSimulation","ms":1.258},{"name":"shadowCascade0","ms":2.519}]}
+{"fps":56.559,"cpuMs":17.681,"gpuTotalMs":14.290,"valid":true,"passes":[{"name":"hairSimulation","ms":1.258},{"name":"shadowCascade0","ms":2.519}],"cpuStages":[{"name":"input","ms":0.046},{"name":"scripts","ms":0.009},{"name":"animation","ms":0.135},{"name":"hairSimulation","ms":0.001},{"name":"worldSnapshot","ms":0.022},{"name":"uiViewModel","ms":1.268},{"name":"renderRecord","ms":0.006},{"name":"submitPresent","ms":3.481},{"name":"other","ms":0.026}]}
 ```
 
 - `fps`、`cpuMs`、`gpuTotalMs` 是数字或 `null`；`valid` 是布尔值。
 - `passes` 始终存在，顺序等于 RenderGraph 录制顺序（有 hair 时 `hairSimulation` 最前）。
-- 单个 pass 没有有效样本时写 `"ms":null`，不是 0。
+- `cpuStages` 始终存在，位于 `passes` 之后；顺序固定为 `input`、`scripts`、`animation`、
+  `hairSimulation`、`worldSnapshot`、`uiViewModel`、`renderRecord`、`submitPresent`、`other`。
+- 单个 pass 或 CPU 阶段没有有效样本时写 `"ms":null`，不是 0；`cpuMs` 缺失时 `other` 也是
+  `null`。
 - `--perf-jsonl` 每行一个完整 JSON、单个 `\n`、逐行 flush；`Init` 完成满 1 秒后的第一个
   更新帧写出首行，之后维持墙钟节奏，渲染变慢不补写历史行。
 
@@ -127,9 +199,11 @@ CPU 帧时长来自渲染器自动曝光路径的 `RenderSystem::UpdateExposureF
 
 ## 表格与滚动平均
 
-纯逻辑在 `source/render/backend/gpuPassTimings.h`：
+纯逻辑在 `source/render/backend/gpuPassTimings.h`，CPU 环形平均在
+`source/core/cpuFrameProfiler.h`，两者使用同一套窗口规则：
 
-- 名字顺序 = 录制顺序：有 hair 时 `hairSimulation` 在最前，其余按 RenderGraph pass 顺序；
+- 名字顺序 = 稳定输出顺序：GPU 有 hair 时 `hairSimulation` 在最前，其余按 RenderGraph pass
+  顺序；CPU 固定为 `input`..`submitPresent`，`other` 最后；
 - 窗口容量 120 帧；`avg over N` 的 `N` 是当前窗口内已采集的帧数（不足 120 时为实际帧数）；
 - 某一项在窗口内没有任何有效样本时输出 `n/a`；部分样本为 `n/a` 时该行按自己的有效样本平均，
   表头 `N` 仍是窗口内已采集的帧数；
@@ -166,17 +240,27 @@ JSON 的固定键序与 pass 列表保持不变。关闭 `--gpu-stats` 时不打
   各 pass 之和会大于这部分实际占用。
 - `hairSimulation` 覆盖 `HairSimulationPass::Record()` 内部所有 dispatch（9 个 compute pass，
   含可选的 SDF Clear/Splat/Collide），不是逐 dispatch 拆分。
-- 录制路径不逐帧分配堆内存：slot 名字数组、持续时间数组在 pool 创建后按上限预留；日志每
-  120 帧一次，不逐帧打印。
+- CPU 阶段只覆盖 GT Tick 的指定区间；`cpuMs` 本身是渲染/曝光帧 delta，包含帧率上限的等待、
+  UI 线程调度与宿主噪声。`other` 因此既可能是未计时的小段 GT 工作，也可能是 pacing/调度空档；
+  单帧 `other` 的均值容易被宿主噪声放大，定位时应优先看中位数与逐帧 `sum`。
+- `submitPresent` 与等待重叠：RT 模式下它吸收渲染线程的录制、提交、present 与 fence 等待；
+  单线程模式下它没有独立样本。详见“与等待重叠的边界”。
+- 录制路径不逐帧分配堆内存：slot 名字数组、持续时间数组在 pool 创建后按上限预留；CPU 阶段
+  使用定长数组并在 `CommitFrame()` 复用名字字符串；日志每 120 帧一次，不逐帧打印。
 
 ## 相关测试
 
 - `tool/renderer-backend-tests/gpu_pass_timings_test.cpp`（`vl_renderer_backend_tests`）：
   tick→毫秒换算、`end < begin` 与非法 period、部分窗口平均、环形窗口淘汰、名字顺序稳定、
   重配置清窗、已知样本表的逐字字符串、`n/a` 与空表。
-- `tool/renderer-backend-tests/performance_snapshot_test.cpp`（同一套件，12 项）：
+- `tool/renderer-backend-tests/performance_snapshot_test.cpp`（同一套件，13 项）：
   JSON 逐字字符串与固定键序、3 位小数、`null` 与 NaN/Inf 拒绝、CPU/GPU 合并、
-  部分窗口、缺失/负值 pass、`valid` 规则、快照副本独立、百分比、表格还原。
+  部分窗口、缺失/负值 pass、`valid` 规则、快照副本独立、百分比、表格还原，以及
+  `cpuStages` 顺序/`other` 派生与 JSON 键序。
+- `tool/renderer-backend-tests/cpu_frame_profiler_test.cpp`（同一套件，10 项）：
+  部分窗口逐阶段样本数、未采样阶段为 `null`、120 帧环形淘汰、阶段名字/顺序稳定、
+  同一阶段多区间累加、`other` 减法与 `>= 0` 钳制、`cpuMs` 缺失时为 `null`、
+  空 CPU 通道不伪造 `other`、`other` 原地更新且始终最后。
 - `tool/renderer-backend-tests/shadow_caster_cull_test.cpp`（同一套件，20 项）：
   光源视锥六个平面的内/外/跨越/相切、退化与倒置包围盒、非有限输入、padding，
   当前 skinPose 包围盒替换 bind pose 的用例，以及接收面光源空间 XY 预筛的重叠/分离/
@@ -184,7 +268,7 @@ JSON 的固定键序与 pass 列表保持不变。关闭 `--gpu-stats` 时不打
 - `tool/engine-launch-options-tests/launch_options_test.cpp`（`engine_launch_options_tests`，6 项）：
   `--gpu-stats` 默认关闭/可接受/与既有参数组合、`--perf-jsonl` 默认关闭/路径必填/
   与 `--gpu-stats` 组合，未知参数仍被拒绝。
-- `tool/editor-ui-tests/performancePanelTests.cpp`（`editor_ui_tests`，7 项）：
+- `tool/editor-ui-tests/performancePanelTests.cpp`（`editor_ui_tests`，8 项）：
   摘要/百分比/条形映射、图序而非成本序、5 Hz 节流与可见性立即刷新、不支持/未采样/无有效
-  样本的空状态，以及首帧空快照不伪造 0。`DockRmlTest` 另验证 Performance 标签注册在
-  Log/Renderer 同组并消费冻结快照。
+  样本的空状态、首帧空快照不伪造 0，以及 CPU 阶段表按 `cpuMs` 归一、`other` 行与独立颜色。
+  `DockRmlTest` 另验证 Performance 标签注册在 Log/Renderer 同组并消费冻结快照。

@@ -141,12 +141,15 @@ Neither Log view invokes managed code, reads World, or modifies diagnostic produ
 The Performance tab consumes `MaterialInstanceEditorSnapshot.performance`, a value copy of
 `PerformanceSnapshot` frozen by EngineLoop at the stable frame boundary from the renderer's
 thread-safe timing snapshot. It shows FPS, CPU frame ms, the sum of valid GPU pass samples,
-and rows in graph pass order with name, ms, percent of the GPU total and a proportional bar;
-rows are not sorted by cost. The panel is a pure presentation consumer: it does not read World,
-assets, `RenderSystem`, query pools or Vulkan objects, and it has no command callbacks.
-It rebuilds its DOM at 5 Hz (0.2 s) rather than every frame, and refreshes immediately when
-the tab becomes visible. Unsupported timestamps, a not-yet-read-back window and a window with
-no valid sample show explicit waiting/unsupported text and `n/a`/`--`, never fabricated zeros.
+a CPU stage table, and GPU rows in graph pass order with name, ms, percent and a proportional
+bar; rows are not sorted by cost. The CPU table sits under the summary with its own heading and
+header, uses the same row/bar markup, and normalizes each stage against `cpuMs`; its derived
+`other` row closes the gap to CPU frame and is shown with a distinct colour. The panel is a pure
+presentation consumer: it does not read World, assets, `RenderSystem`, query pools or Vulkan
+objects, and it has no command callbacks. It rebuilds its DOM at 5 Hz (0.2 s) rather than every
+frame, and refreshes immediately when the tab becomes visible. Unsupported timestamps, a
+not-yet-read-back window and a window with no valid sample show explicit waiting/unsupported
+text and `n/a`/`--`, never fabricated zeros.
 The same snapshot feeds `perf json` and `--perf-jsonl`; see
 [gpu-pass-timing.md](gpu-pass-timing.md).
 The seven permanent dock panels include Log and Performance; version-1 saved layouts migrate by
@@ -548,7 +551,8 @@ CPU fake sinks and covers parsing, refresh, focused input, edit batching,
 revision preservation, save/dirty close, escaping and typed offline actions.
 Its Performance cases load the workspace document, verify the tab sits in the
 Log/Renderer stack, map a frozen `PerformanceSnapshot` into summary/table values,
-and assert 5 Hz throttling plus unsupported/not-yet-sampled empty states.
+assert the CPU stage table and its derived `other` row, and assert 5 Hz throttling plus
+unsupported/not-yet-sampled empty states.
 Existing MI suites retain document/codec/service and fake-preview coverage.
 Neither suite proves Vulkan preview replacement or interactive IME behavior.
 JSON-library suites cover nested data omission, classification, input/path

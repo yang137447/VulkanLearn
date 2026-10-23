@@ -6,6 +6,7 @@ add_executable(vl_renderer_backend_tests
     auto_exposure_test.cpp
     gpu_pass_timings_test.cpp
     performance_snapshot_test.cpp
+    cpu_frame_profiler_test.cpp
     shadow_caster_cull_test.cpp
     ${PROJECT_SOURCE_DIR}/source/render/rendergraph/renderGraphCompiler.cpp
     ${PROJECT_SOURCE_DIR}/source/render/rendergraph/sceneViewportOutputValidation.cpp

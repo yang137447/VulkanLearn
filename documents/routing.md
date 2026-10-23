@@ -13,7 +13,7 @@
 
 | 源码路径 | 必读文档 | 守护门禁（逐字 `-RuleName`） |
 | --- | --- | --- |
-| `source/core/performanceSnapshot.h`、`source/core/performanceJsonlWriter.h` | `contracts/gpu-pass-timing.md`、`contracts/game-ui-stack.md` | — |
+| `source/core/performanceSnapshot.h`、`source/core/cpuFrameProfiler.h`、`source/core/performanceJsonlWriter.h` | `contracts/gpu-pass-timing.md`、`contracts/game-ui-stack.md` | — |
 | `source/ui/widgets/**` | `contracts/ui-component-system.md` | — |
 | `source/ui/**` | `contracts/ui-component-system.md`、`contracts/game-ui-stack.md` | — |
 | `source/editor/**` | `contracts/ui-component-system.md` | — |

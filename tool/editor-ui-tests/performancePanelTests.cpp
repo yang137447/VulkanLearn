@@ -101,6 +101,14 @@ protected:
         return rows;
     }
 
+    Rml::ElementList CpuRows() const
+    {
+        Rml::ElementList rows;
+        auto* host = document->GetElementById("performance-cpu-stages");
+        if (host != nullptr) host->QuerySelectorAll(rows, ".performance-row");
+        return rows;
+    }
+
     PerformanceTestSystem system;
     PerformanceTestRenderer renderer;
     Rml::Context* context = nullptr;
@@ -140,6 +148,35 @@ TEST_F(EditorPerformancePanelTest, PopulatedSnapshotMapsSummaryRowsPercentagesAn
     auto* emptyBar = rows[1]->QuerySelector(".performance-bar-fill");
     ASSERT_NE(emptyBar, nullptr);
     EXPECT_TRUE(emptyBar->IsClassSet("performance-bar-0"));
+}
+
+TEST_F(EditorPerformancePanelTest, CpuStageTableShowsOtherRemainderAndReconcilesWithCpuFrame)
+{
+    snapshot = BuildPerformanceSnapshot(
+        {{"geometry", 4.0, 120}}, 120, true, true, 1.0 / 60.0,
+        {{"input", 1.0, 120}, {"scripts", 2.0, 120}, {"uiViewModel", 5.0, 120}},
+        120);
+    Refresh(0.0);
+
+    EXPECT_NE(Text("performance-cpu-status").find("120 frames"), std::string::npos);
+    EXPECT_NE(Text("performance-cpu-status").find("other"), std::string::npos);
+
+    const Rml::ElementList rows = CpuRows();
+    ASSERT_EQ(rows.size(), 4u);
+    EXPECT_NE(rows[0]->GetInnerRML().find("input"), std::string::npos);
+    EXPECT_NE(rows[0]->GetInnerRML().find("1.000"), std::string::npos);
+    EXPECT_NE(rows[1]->GetInnerRML().find("scripts"), std::string::npos);
+    EXPECT_NE(rows[2]->GetInnerRML().find("uiViewModel"), std::string::npos);
+    // cpuMs = 16.667 ms，other = 16.667 - (1 + 2 + 5) = 8.667 ms。
+    EXPECT_NE(rows[3]->GetInnerRML().find("other"), std::string::npos);
+    EXPECT_NE(rows[3]->GetInnerRML().find("8.667"), std::string::npos);
+    EXPECT_TRUE(rows[3]->IsClassSet("performance-other-row"));
+    // 百分比以 cpuMs 为分母：1/16.667 = 6.0%，5/16.667 = 30.0%。
+    EXPECT_NE(rows[0]->GetInnerRML().find("6.0%"), std::string::npos);
+    EXPECT_NE(rows[2]->GetInnerRML().find("30.0%"), std::string::npos);
+    // GPU 表仍是独立的行集合，没有被 CPU 行污染。
+    ASSERT_EQ(Rows().size(), 1u);
+    EXPECT_NE(Rows()[0]->GetInnerRML().find("geometry"), std::string::npos);
 }
 
 TEST_F(EditorPerformancePanelTest, RowsKeepGraphPassOrderInsteadOfCostOrder)

@@ -515,6 +515,9 @@ void EngineLoop::Tick()
 {
     PROFILE_SCOPE("Frame");
 
+    // CPU 阶段按 GT Tick 归零；早退帧不 Commit，下一帧 BeginFrame 会丢弃残余累加值。
+    cpuFrameProfiler.BeginFrame();
+
     GetSubsystems().GetConsoleSubsystem().Update();
 
     ApplyQueuedUiActions();
@@ -642,7 +645,12 @@ void EngineLoop::Tick()
     constexpr float MaxSimulationDelta = 0.1f;
     const float simulationDelta = std::min(deltaTime, MaxSimulationDelta);
 
-    PumpPlatformEvents();
+    // input 由两段不连续区间组成（平台事件轮询 + 动作状态更新），其余 UI 策略
+    // 与命令执行归入 other；同一阶段的多个区间在累加器里相加。
+    {
+        CpuFrameStageScope inputStage(cpuFrameProfiler, CpuFrameStage::Input);
+        PumpPlatformEvents();
+    }
     if (shouldClose)
     {
         return;
@@ -689,57 +697,79 @@ void EngineLoop::Tick()
         return;
     }
 
-    GetSubsystems().GetInputSubsystem().UpdateActionState();
+    {
+        CpuFrameStageScope inputStage(cpuFrameProfiler, CpuFrameStage::Input);
+        GetSubsystems().GetInputSubsystem().UpdateActionState();
+    }
 
     {
         PROFILE_SCOPE("Update");
         auto& scripts = GetSubsystems().GetScriptRuntime();
         const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld();
-        // 命令先决定 Pause/World，再清理上一完整帧；Console/BeginPlay 的新请求仍保留。
-        if (world && !scripts.IsPaused()) world->GetDebugDraw().BeginFrame();
-        TickBlueprintAssets();
-        // 故障 Stop 后先收回动态模板，再构造程序集候选，避免把上一轮资产收录为常驻模板。
-        TickScriptBuild(deltaTime);
-        if (world && world->GetGeneration() != autoPlayWorldGeneration &&
-            GetRuntimeConfig().GetScriptSettings().autoPlay &&
-            !RenderSystem::GetInstance().IsOfflineMode() &&
-            std::filesystem::path(world->GetScenePath()).filename() != "SC_model_preview.json")
         {
-            // 导出的游戏在正式World提交后进入同一Play入口；每代只启动一次，Stop不会自行重启。
-            autoPlayWorldGeneration = world->GetGeneration();
-            if (!world->GetScriptBlueprints().empty())
+            // scripts 覆盖蓝图资产轮询、自动 Play 判定、编辑控制器与脚本 Tick；
+            // DebugDraw 的帧边界清理也随脚本状态一起计入这里。
+            CpuFrameStageScope scriptsStage(cpuFrameProfiler, CpuFrameStage::Scripts);
+            // 命令先决定 Pause/World，再清理上一完整帧；Console/BeginPlay 的新请求仍保留。
+            if (world && !scripts.IsPaused()) world->GetDebugDraw().BeginFrame();
+            TickBlueprintAssets();
+            // 故障 Stop 后先收回动态模板，再构造程序集候选，避免把上一轮资产收录为常驻模板。
+            TickScriptBuild(deltaTime);
+            if (world && world->GetGeneration() != autoPlayWorldGeneration &&
+                GetRuntimeConfig().GetScriptSettings().autoPlay &&
+                !RenderSystem::GetInstance().IsOfflineMode() &&
+                std::filesystem::path(world->GetScenePath()).filename() != "SC_model_preview.json")
+            {
+                // 导出的游戏在正式World提交后进入同一Play入口；每代只启动一次，Stop不会自行重启。
+                autoPlayWorldGeneration = world->GetGeneration();
+                if (!world->GetScriptBlueprints().empty())
+                {
+                    std::string error;
+                    if (!scripts.Control(*world, ScriptPlayState::Playing, error))
+                        GetSubsystems().GetDiagnosticsSubsystem().ReportError("Game auto-play failed: " + error);
+                }
+            }
+            // 离线渲染消费作者场景；模式切换先恢复作者 TRS，避免隐藏 Play 控件后仍继续游戏。
+            if (world && RenderSystem::GetInstance().IsOfflineMode() && !scripts.IsEditing())
             {
                 std::string error;
-                if (!scripts.Control(*world, ScriptPlayState::Playing, error))
-                    GetSubsystems().GetDiagnosticsSubsystem().ReportError("Game auto-play failed: " + error);
+                scripts.Control(*world, ScriptPlayState::Editing, error);
             }
+            if (scripts.IsEditing())
+                controller->Update(simulationDelta, GetSubsystems().GetInputSubsystem().GetActionState());
+            scripts.Tick(world, simulationDelta,
+                GetSubsystems().GetInputSubsystem().GetActionState(),
+                GetSubsystems().GetDiagnosticsSubsystem());
         }
-        // 离线渲染消费作者场景；模式切换先恢复作者 TRS，避免隐藏 Play 控件后仍继续游戏。
-        if (world && RenderSystem::GetInstance().IsOfflineMode() && !scripts.IsEditing())
         {
-            std::string error;
-            scripts.Control(*world, ScriptPlayState::Editing, error);
+            // 调试绘制时间推进只随脚本编辑模式走，归入 scripts 的第二段区间。
+            CpuFrameStageScope scriptsStage(cpuFrameProfiler, CpuFrameStage::Scripts);
+            if (world && scripts.IsEditing()) world->GetDebugDraw().AdvanceGameTime(simulationDelta);
         }
-        if (scripts.IsEditing())
-            controller->Update(simulationDelta, GetSubsystems().GetInputSubsystem().GetActionState());
-        scripts.Tick(world, simulationDelta,
-            GetSubsystems().GetInputSubsystem().GetActionState(),
-            GetSubsystems().GetDiagnosticsSubsystem());
-        if (world && scripts.IsEditing()) world->GetDebugDraw().AdvanceGameTime(simulationDelta);
-        if (world && !RenderSystem::GetInstance().IsOfflineMode())
-            world->TickAnimations(simulationDelta);
-        if (!RenderSystem::GetInstance().IsOfflineMode())
-            RendererResourceCache::GetInstance().AdvanceTressfxSimulations(simulationDelta);
-        if (world && !RenderSystem::GetInstance().IsOfflineMode() &&
-            std::filesystem::path(world->GetScenePath()).filename() != "SC_model_preview.json" &&
-            scripts.PollBlueprintAssetChanges(*world, deltaTime))
         {
-            // ACT 内容变化仍经过下一帧正式 World/Graph 事务；不在观察器里修改活动资源或作者草稿。
-            RuntimeCommand command;
-            command.type = RuntimeCommandType::LoadWorld;
-            command.stringValue = world->GetScenePath();
-            QueueRuntimeCommand(std::move(command));
-            scripts.SetFeedback("Actor asset changed; reloading scene");
+            CpuFrameStageScope animationStage(cpuFrameProfiler, CpuFrameStage::Animation);
+            // 动画 CPU 蒙皮/求值发生在 World::TickAnimations，毛发 GT 步进在下一段单独计时。
+            if (world && !RenderSystem::GetInstance().IsOfflineMode())
+                world->TickAnimations(simulationDelta);
+        }
+        {
+            CpuFrameStageScope hairStage(cpuFrameProfiler, CpuFrameStage::HairSimulation);
+            if (!RenderSystem::GetInstance().IsOfflineMode())
+                RendererResourceCache::GetInstance().AdvanceTressfxSimulations(simulationDelta);
+        }
+        {
+            CpuFrameStageScope scriptsStage(cpuFrameProfiler, CpuFrameStage::Scripts);
+            if (world && !RenderSystem::GetInstance().IsOfflineMode() &&
+                std::filesystem::path(world->GetScenePath()).filename() != "SC_model_preview.json" &&
+                scripts.PollBlueprintAssetChanges(*world, deltaTime))
+            {
+                // ACT 内容变化仍经过下一帧正式 World/Graph 事务；不在观察器里修改活动资源或作者草稿。
+                RuntimeCommand command;
+                command.type = RuntimeCommandType::LoadWorld;
+                command.stringValue = world->GetScenePath();
+                QueueRuntimeCommand(std::move(command));
+                scripts.SetFeedback("Actor asset changed; reloading scene");
+            }
         }
     }
 
@@ -748,7 +778,12 @@ void EngineLoop::Tick()
         // 先在 GT 稳定帧边界处理 editor/preview，再生成 UI 与 World snapshot。
         uiSubsystem->TickMaterialInstanceEditor();
     }
-    UpdateUiViewModel(simulationDelta, commandResult);
+    {
+        CpuFrameStageScope uiStage(cpuFrameProfiler, CpuFrameStage::UiViewModel);
+        // UI 视图模型包含编辑器快照收集与 SetPerformanceSnapshot；面板自身按 5 Hz
+        // 读冻结副本，不在这里重写 DOM。
+        UpdateUiViewModel(simulationDelta, commandResult);
+    }
     SynchronizeSceneViewport();
     TickEditorThumbnails();
 
@@ -756,20 +791,52 @@ void EngineLoop::Tick()
         PROFILE_SCOPE("RenderLoop");
         if (renderThread && renderThread->IsRunning())
         {
-            // 这里是多线程模式
-            RenderSystem::GetInstance().PublishSnapshotFromActiveWorld();
-            renderThread->SubmitFrame();
-            // V1 keeps the GT/RT split deterministic instead of fully async:
-            // RT owns frame recording, while GT waits before touching renderer
-            // resources again.
-            WaitForRenderThreadIdle();
+            // 这里是多线程模式。GT 只发布世界快照并唤醒渲染线程；
+            // RT 随后完成消费、命令录制、提交与 present，GT 无法在不拆分
+            // 线程边界的前提下观测这些内部区间，因此它们被 submitPresent 的
+            // 等待吸收（契约里明确记录这一归属）。
+            {
+                CpuFrameStageScope snapshotStage(cpuFrameProfiler, CpuFrameStage::WorldSnapshot);
+                RenderSystem::GetInstance().PublishSnapshotFromActiveWorld();
+            }
+            {
+                CpuFrameStageScope recordStage(cpuFrameProfiler, CpuFrameStage::RenderRecord);
+                renderThread->SubmitFrame();
+            }
+            {
+                CpuFrameStageScope waitStage(cpuFrameProfiler, CpuFrameStage::SubmitPresent);
+                // V1 keeps the GT/RT split deterministic instead of fully async:
+                // RT owns frame recording, while GT waits before touching renderer
+                // resources again.
+                WaitForRenderThreadIdle();
+            }
         }
         else
         {
-            // 这里是单线程模式
-            RenderSystem::GetInstance().Render();
+            // 这里是单线程模式。世界快照发布仍单独计时；consume + 命令录制 +
+            // submit + present 在 RenderLatestSnapshotOrLastGood 内串行完成，
+            // 统一计入 renderRecord，submitPresent 在本模式下没有独立样本（n/a）。
+            {
+                CpuFrameStageScope snapshotStage(cpuFrameProfiler, CpuFrameStage::WorldSnapshot);
+                RenderSystem::GetInstance().PublishSnapshotFromActiveWorld();
+            }
+            {
+                CpuFrameStageScope recordStage(cpuFrameProfiler, CpuFrameStage::RenderRecord);
+                RenderSystem::GetInstance().RenderLatestSnapshotOrLastGood();
+            }
         }
 
+    }
+
+    // CPU 阶段测量到渲染段结束为止：FPS 标题、JSONL 与调试绘制收尾留在 other。
+    // 冻结样本立即并入 GpuPassTimer 持有的唯一快照，随后 perf json/JSONL 与
+    // 下一帧的面板读到的是 CPU 阶段 + GPU pass 的同一份组装结果。
+    {
+        const std::vector<PerformancePassSample>& cpuStages =
+            cpuFrameProfiler.CommitFrame();
+        RenderSystem::GetInstance().PublishCpuStageSamples(
+            cpuStages,
+            cpuFrameProfiler.WindowFrameCount());
     }
 
     {

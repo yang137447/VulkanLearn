@@ -14,6 +14,7 @@ namespace
 using VL::BuildPerformanceSnapshot;
 using VL::FormatPerformanceJson;
 using VL::FormatPerformanceNumber;
+using VL::PerformanceCpuStagePercent;
 using VL::PerformancePassPercent;
 using VL::PerformancePassSample;
 using VL::PerformanceSnapshot;
@@ -30,6 +31,9 @@ TEST(PerformanceSnapshot, JsonUsesStableKeyOrderRoundingAndNullsForMissingSample
         {"hairSimulation", 0.18, 120},
         {"shadowCascade0", std::nullopt, 0},
         {"geometry", 12.1656, 120}};
+    snapshot.cpuStages = {
+        {"input", 0.5, 120},
+        {"other", 16.0, 0}};
 
     EXPECT_TRUE(snapshot.IsValid());
     EXPECT_EQ(
@@ -37,7 +41,9 @@ TEST(PerformanceSnapshot, JsonUsesStableKeyOrderRoundingAndNullsForMissingSample
         "{\"fps\":59.940,\"cpuMs\":16.683,\"gpuTotalMs\":12.346,\"valid\":true,"
         "\"passes\":[{\"name\":\"hairSimulation\",\"ms\":0.180},"
         "{\"name\":\"shadowCascade0\",\"ms\":null},"
-        "{\"name\":\"geometry\",\"ms\":12.166}]}");
+        "{\"name\":\"geometry\",\"ms\":12.166}],"
+        "\"cpuStages\":[{\"name\":\"input\",\"ms\":0.500},"
+        "{\"name\":\"other\",\"ms\":16.000}]}");
 }
 
 TEST(PerformanceSnapshot, JsonNeverEmitsNaNOrInfinity)
@@ -54,7 +60,7 @@ TEST(PerformanceSnapshot, JsonNeverEmitsNaNOrInfinity)
     EXPECT_EQ(
         json,
         "{\"fps\":null,\"cpuMs\":null,\"gpuTotalMs\":null,\"valid\":false,"
-        "\"passes\":[{\"name\":\"broken\",\"ms\":null}]}");
+        "\"passes\":[{\"name\":\"broken\",\"ms\":null}],\"cpuStages\":[]}");
     EXPECT_EQ(json.find("nan"), std::string::npos);
     EXPECT_EQ(json.find("inf"), std::string::npos);
 }
@@ -66,7 +72,8 @@ TEST(PerformanceSnapshot, JsonQuotesAreEscapedEvenThoughPassNamesAreInternal)
     EXPECT_EQ(
         FormatPerformanceJson(snapshot),
         "{\"fps\":null,\"cpuMs\":null,\"gpuTotalMs\":null,\"valid\":false,"
-        "\"passes\":[{\"name\":\"pass\\\"quoted\\\"\",\"ms\":1.000}]}");
+        "\"passes\":[{\"name\":\"pass\\\"quoted\\\"\",\"ms\":1.000}],"
+        "\"cpuStages\":[]}");
 }
 
 TEST(PerformanceSnapshot, BuildMergesCpuDeltaWithPartialGpuWindowInStableOrder)
@@ -91,6 +98,37 @@ TEST(PerformanceSnapshot, BuildMergesCpuDeltaWithPartialGpuWindowInStableOrder)
     EXPECT_TRUE(snapshot.IsValid());
 }
 
+TEST(PerformanceSnapshot, BuildMergesCpuStagesAndDerivesOtherLast)
+{
+    const PerformanceSnapshot snapshot = BuildPerformanceSnapshot(
+        {{"geometry", 2.0, 1}}, 1, true, true, 0.020,
+        {{"input", 0.5, 2}, {"scripts", 1.0, 2}, {"submitPresent", 2.5, 2}},
+        2);
+
+    ASSERT_EQ(snapshot.cpuStages.size(), 4u);
+    EXPECT_EQ(snapshot.cpuStages[0].name, "input");
+    EXPECT_EQ(snapshot.cpuStages[1].name, "scripts");
+    EXPECT_EQ(snapshot.cpuStages[2].name, "submitPresent");
+    EXPECT_EQ(snapshot.cpuStages[3].name, "other");
+    ASSERT_TRUE(snapshot.cpuStages[3].milliseconds.has_value());
+    // 20 - (0.5 + 1.0 + 2.5) = 16 ms；派生行没有独立样本数。
+    EXPECT_DOUBLE_EQ(*snapshot.cpuStages[3].milliseconds, 16.0);
+    EXPECT_EQ(snapshot.cpuStages[3].sampleCount, 0u);
+    EXPECT_EQ(snapshot.cpuWindowFrameCount, 2u);
+
+    const auto percent = PerformanceCpuStagePercent(snapshot, snapshot.cpuStages[0]);
+    ASSERT_TRUE(percent.has_value());
+    EXPECT_DOUBLE_EQ(*percent, 2.5);
+    EXPECT_EQ(
+        FormatPerformanceJson(snapshot),
+        "{\"fps\":50.000,\"cpuMs\":20.000,\"gpuTotalMs\":2.000,\"valid\":true,"
+        "\"passes\":[{\"name\":\"geometry\",\"ms\":2.000}],"
+        "\"cpuStages\":[{\"name\":\"input\",\"ms\":0.500},"
+        "{\"name\":\"scripts\",\"ms\":1.000},"
+        "{\"name\":\"submitPresent\",\"ms\":2.500},"
+        "{\"name\":\"other\",\"ms\":16.000}]}");
+}
+
 TEST(PerformanceSnapshot, MissingOrNegativeSamplesOnlyRemoveTheirOwnRowFromTheTotal)
 {
     PerformanceSnapshot snapshot = BuildPerformanceSnapshot(
@@ -110,7 +148,8 @@ TEST(PerformanceSnapshot, EmptyWindowIsInvalidWithoutInventingZeros)
     EXPECT_EQ(
         FormatPerformanceJson(snapshot),
         "{\"fps\":50.000,\"cpuMs\":20.000,\"gpuTotalMs\":null,\"valid\":false,"
-        "\"passes\":[{\"name\":\"shadowCascade0\",\"ms\":null}]}");
+        "\"passes\":[{\"name\":\"shadowCascade0\",\"ms\":null}],"
+        "\"cpuStages\":[]}");
 }
 
 TEST(PerformanceSnapshot, UnsupportedOrNotYetReadBackGpuChannelIsInvalid)

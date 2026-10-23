@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <mutex>
 #include <optional>
@@ -40,6 +41,13 @@ public:
     void RequestPrint() { printRequested.store(true, std::memory_order_release); }
 
     GpuPassStatsSnapshot Snapshot() const;
+
+    // GT 每帧在渲染段结束后调用：CpuFrameProfiler 冻结的窗口平均并入
+    // 这一份快照（同一把 mutex），面板与 perf json/JSONL 随后读到的就是
+    // CPU 阶段 + GPU pass 的同一份组装结果。只在 GT 调用。
+    void PublishCpuStageSamples(
+        const std::vector<PerformancePassSample>& stages,
+        size_t windowFrameCount);
 
     // 渲染器自动曝光路径的 frame delta（秒）。每帧在渲染线程写入；
     // 即使 GPU 采集未开启，fps/cpuFrameMs 也保持最新，面板不必等 timestamp。
