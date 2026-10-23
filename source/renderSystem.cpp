@@ -3763,39 +3763,6 @@ void RenderSystem::ComputeAabbFromCorners(const std::array<Eigen::Vector3f, 8>& 
     }
 }
 
-void RenderSystem::ComputeViewAabbFromWorldCorners(const Eigen::Matrix4f& viewMatrix, const std::array<Eigen::Vector3f, 8>& worldCorners, Eigen::Vector3f& outMin, Eigen::Vector3f& outMax)
-{
-    outMin = (viewMatrix * Eigen::Vector4f(worldCorners[0].x(), worldCorners[0].y(), worldCorners[0].z(), 1.0f)).head<3>();
-    outMax = outMin;
-    for (const auto& corner : worldCorners)
-    {
-        Eigen::Vector3f viewCorner = (viewMatrix * Eigen::Vector4f(corner.x(), corner.y(), corner.z(), 1.0f)).head<3>();
-        outMin = outMin.cwiseMin(viewCorner);
-        outMax = outMax.cwiseMax(viewCorner);
-    }
-}
-
-bool RenderSystem::IntersectsSplitFrustumFast(const Eigen::Vector3f& viewMin, const Eigen::Vector3f& viewMax, float splitNear, float splitFar, float fovRad, float aspect, float padding)
-{
-    float minZView = viewMin.z();
-    float maxZView = viewMax.z();
-    float splitNearP = std::max(0.0f, splitNear - padding);
-    float splitFarP = splitFar + padding;
-    if (maxZView < -splitFarP || minZView > -splitNearP)
-    {
-        return false;
-    }
-    float zForXY = std::min(minZView, -splitNearP);
-    float distance = std::max(0.0f, -zForXY);
-    float halfWidth = std::tan(fovRad * 0.5f) * distance;
-    float halfHeight = halfWidth / aspect;
-    if (viewMax.x() < -halfWidth || viewMin.x() > halfWidth || viewMax.y() < -halfHeight || viewMin.y() > halfHeight)
-    {
-        return false;
-    }
-    return true;
-}
-
 std::shared_ptr<Texture> RenderSystem::GetActiveEnvironmentCube()
 {
     return GetEnvironmentCube(
