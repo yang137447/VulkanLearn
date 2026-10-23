@@ -140,6 +140,21 @@ CPU 帧时长来自渲染器自动曝光路径的 `RenderSystem::UpdateExposureF
 [GPU] frame avg over 120: hairSimulation 0.18 ms | shadowCascade0 0.42 ms | ... | total 12.30 ms
 ```
 
+## 阴影 caster 剔除诊断
+
+打开 `--gpu-stats` 时，阴影 pass 每 120 帧额外向 `Info` 日志打印一行：
+
+```text
+[GPU] shadow caster culling (drawn/candidates): cascade0 0/4 cascade1 4/4 cascade2 0/4 cascade3 0/4
+```
+
+`candidates` 是本帧材质路由为 shadow caster 的 draw packet 数，`drawn` 是逐级联剔除后
+实际提交的数量。计数取**最近一帧**而不是窗口平均：级联覆盖是离散的，平均值会掩盖
+“某级联 0 draw”这一关键证据。该行只写日志，不进入 `PerformanceSnapshot` / perf JSON；
+JSON 的固定键序与 pass 列表保持不变。关闭 `--gpu-stats` 时不打印，也不做额外扫描。
+
+判据与保守规则归 `source/render/shadow/shadowCasterCull.*` 所有；本文件只记录输出格式。
+
 ## 数字含义与已知边界
 
 - **各 pass 时间之和不是帧时间**。表格不包含未计时的环境 IBL 计算、UI overlay、present、
@@ -162,6 +177,10 @@ CPU 帧时长来自渲染器自动曝光路径的 `RenderSystem::UpdateExposureF
 - `tool/renderer-backend-tests/performance_snapshot_test.cpp`（同一套件，12 项）：
   JSON 逐字字符串与固定键序、3 位小数、`null` 与 NaN/Inf 拒绝、CPU/GPU 合并、
   部分窗口、缺失/负值 pass、`valid` 规则、快照副本独立、百分比、表格还原。
+- `tool/renderer-backend-tests/shadow_caster_cull_test.cpp`（同一套件，20 项）：
+  光源视锥六个平面的内/外/跨越/相切、退化与倒置包围盒、非有限输入、padding，
+  当前 skinPose 包围盒替换 bind pose 的用例，以及接收面光源空间 XY 预筛的重叠/分离/
+  跨越/退化输入。
 - `tool/engine-launch-options-tests/launch_options_test.cpp`（`engine_launch_options_tests`，6 项）：
   `--gpu-stats` 默认关闭/可接受/与既有参数组合、`--perf-jsonl` 默认关闭/路径必填/
   与 `--gpu-stats` 组合，未知参数仍被拒绝。

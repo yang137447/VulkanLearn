@@ -31,7 +31,7 @@
 | `vl_offline_adapter_tests` | 101 | 离线场景/网格/显示/相机适配 |
 | `editor_viewport_tests` | 41 | 视口几何、命中、坐标映射、aspect、坐标轴投影及编辑器网格 |
 | `vl_offline_coordinator_tests` | 13 | 离线会话协调 |
-| `vl_renderer_backend_tests` | 63（51 后加 12 项 Performance 快照/JSON） | 离屏显示输出、GPU 缩略图资源、swapchain 帧结果、同 World 新增绘制对象的资源发布契约，以及逐 pass GPU 计时的纯逻辑（tick→毫秒、`end < begin`、窗口平均/淘汰、名字顺序、表格字符串）；CPU+GPU 共享快照合并、部分窗口、缺失/负值样本、`valid`、副本独立、百分比、JSON 固定键序/3 位小数/`null`/拒绝 NaN |
+| `vl_renderer_backend_tests` | 83（63 后加 20 项 Shadow caster 剔除纯数学） | 离屏显示输出、GPU 缩略图资源、swapchain 帧结果、同 World 新增绘制对象的资源发布契约，以及逐 pass GPU 计时的纯逻辑（tick→毫秒、`end < begin`、窗口平均/淘汰、名字顺序、表格字符串）；CPU+GPU 共享快照合并、部分窗口、缺失/负值样本、`valid`、副本独立、百分比、JSON 固定键序/3 位小数/`null`/拒绝 NaN；逐级联 caster 平面剔除的内/外/跨越/相切/退化/非有限/padding、skinPose 包围盒替换 bind pose，以及方向光接收面光源空间 XY 预筛 |
 | `engine_launch_options_tests` | 6（4 后加 2 项 `--perf-jsonl`） | `--gpu-stats` 默认关闭/可接受/与既有参数组合；`--perf-jsonl` 默认关闭、路径必填、与 `--gpu-stats` 组合；未知参数仍被拒绝 |
 | `material_instance_editor_landed_tests` | 10 | MI 已落地接口 |
 | `material_instance_editor_tests` | 7 | MI 命令/文档服务 |
@@ -57,7 +57,7 @@ ctest --test-dir build -R "MaterialInstanceEditor" --output-on-failure
 ### Performance 页与机器通道验证（2026-10-23）
 
 隔离工作树 `codex/tressfx5-hair-port` 中 Debug MinGW `build` 与 Release `build-rel` 的 `main`
-构建通过；`editor_ui_tests` 注册 723 项、`vl_renderer_backend_tests` 注册 63 项、
+构建通过；`editor_ui_tests` 注册 723 项、`vl_renderer_backend_tests` 注册 83 项、
 `engine_launch_options_tests` 注册 6 项。
 
 Debug（validation 开启）以 `--initial-scene
@@ -80,6 +80,23 @@ JSONL：`--perf-jsonl artifacts/perf-jsonl-auto/sub/run.jsonl` 运行约 12 秒�
 后续行包含完整 pass 表。两次采集进程都由外部工具强制终止，不作为正常 teardown 证据；
 终止后没有遗留 `main` 进程。
 
+
+### CSM 逐级联 caster 剔除验证（2026-10-23）
+
+`vl_renderer_backend_tests` 注册 83 项（原 63 项 + 20 项 `ShadowCasterCullTest`），
+全量通过；`hair_asset_tests` 139 项、`material_schema_tests` 26 项、`editor_ui_tests`
+723 项（718 通过、5 项符号链接权限跳过）全量通过。Debug validation 以
+`SC_tressfx_female_skinned.json --gpu-stats` 运行：stderr 为空、0 个 VUID，
+日志打印 `cascade0 0/4 cascade1 4/4 cascade2 0/4 cascade3 0/4`。
+
+Release `SC_tressfx_female_skinned`，4 cascades、`dynamicShadowDistance=20000`、
+`--perf-jsonl` + `--gpu-stats`，cull off/on 对照：cull off 每级联 2.27–2.49 ms，
+GPU total 11.46–12.29 ms（中位 12.09），FPS 70.7–96.3（中位 79.1）；cull on
+仅 cascade1 有 caster（日志 `0/4 4/4 0/4 0/4`），cascade1 2.24–2.68 ms（中位 2.32），
+其余 0.005–0.021 ms，GPU total 4.55–5.36 ms（中位 4.71），FPS 155.8–226.5（中位 187.0）。
+`animation seek 0` + `animation pause` 后同帧截图：500 cm 的 cull on/off 逐像素相同；
+20000 cm 仅 57 个像素不同、最大通道差 4；500 cm 与 20000 cm 的阴影距离差异为
+9745 个像素（max 75，集中在角色自阴影）。
 
 ### Retarget 参考姿态页验证
 
@@ -1143,6 +1160,7 @@ computer-use 实窗验收使用 `Generated/AssetModifySmoke-20261013/` 副本：
 | `source/ui/**`、`source/editor/**` | 编辑器 UI 全套 + 构建 `main` | 真实出图（见下） |
 | `source/script/**`、`script/**`、Actor 场景加载 | `script_tests` 连续两遍 + C# ON/OFF 构建 | UI/保存集成、实窗 Play/Pause/Stop、World 事务 |
 | 共享接口、状态或资源契约（`source/world/**`、`source/renderGraph.*`、`source/renderSystem.*`） | 编译全部测试目标 + 相应套件 | `--world-graph-transaction-test`、边界审计 |
+| CSM 逐级联 caster 剔除（`source/render/shadow/shadowCasterCull.*`、`source/render/pass/passRuntime.*`、`source/render/backend/rendererDrawExecutor.*`、`source/renderSystem.*` 的 cascade 数据） | `vl_renderer_backend_tests --gtest_filter=ShadowCasterCullTest.* --gtest_brief=1` + 构建 `main` | Release 场景 `--gpu-stats --perf-jsonl` 对照 cull on/off 的逐级联 `drawn/candidates` 与 ms；同帧冻结姿态截图做像素 diff；Debug validation 场景 stderr 无 `VUID` |
 | 逐 pass GPU 计时与 Performance 快照（`source/core/performanceSnapshot.h`、`source/render/backend/gpuPassTimer.*`、`gpuPassTimings.h`、`source/renderSystem.*` 的 timestamp 录制） | `vl_renderer_backend_tests --gtest_brief=1`；Debug 构建 `main.exe --gpu-stats` 跑任一 GPU 场景，确认 `[GPU]` 表打印且 stderr 无 `VUID`；`--console-command "perf json"` 输出单行 JSON | Release 场景对照；`gpustats` 控制台按需采集；`--perf-jsonl <path>` 逐行解析 |
 | Performance 页（`source/editor/ui/editorPerformancePanel.*`、`ui/editor-workspace.*`、`editorDockingController.*`） | `editor_ui_tests --gtest_filter=EditorPerformancePanelTest.*:DockRmlTest.*` + 构建 `main` | 实窗截图中 Performance 页已填充，摘要与 `perf json` 同快照一致 |
 | 启动参数（`source/engine/launchOptions.*`） | `engine_launch_options_tests --gtest_brief=1` + 构建 `main` | 实际启动带该 flag 的场景 |

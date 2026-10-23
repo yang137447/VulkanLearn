@@ -37,6 +37,7 @@
 #include "render/editor/editorViewportGrid.h"
 #include "render/foliage/speedTreeWindSystem.h"
 #include "render/shadow/csmSettings.h"
+#include "render/shadow/shadowCasterCull.h"
 #include "ui/uiOverlayRendererVulkan.h"
 #include "ui/uiRenderSnapshotQueue.h"
 #include "world/worldSnapshotBuilder.h"
@@ -109,6 +110,7 @@ public:
     // --gpu-stats：开启后逐 pass 采集并按 120 帧打印一次；关闭时不创建 query pool。
     void SetGpuPassStatsLoggingEnabled(bool enabled)
     {
+        gpuPassStatsLoggingEnabled = enabled;
         gpuPassTimer.SetLoggingEnabled(enabled);
     }
     // 控制台 gpustats：立即打印当前表，并在未开启时启动采集。
@@ -337,12 +339,20 @@ private:
         const std::vector<VL::LightSnapshot>& lights) override;
     bool IsCsmEnabled() const override;
     bool IsShadowCascadeActive(uint32_t cascadeIndex) const override;
+    bool GetShadowCascadeLightViewProjection(
+        uint32_t cascadeIndex,
+        Eigen::Matrix4f& outLightViewProjection) const override;
+    bool GetShadowCascadeCasterReceiverBounds(
+        uint32_t cascadeIndex,
+        VL::ShadowCasterReceiverBounds& outBounds) const override;
     void DrawEditorGridGeometry(vk::CommandBuffer& commandBuffer) override;
 
     void InitializeFrameResources();
     void ShutdownFrameResources();
     void ValidateFrameResourceDescriptors();
     double GetSpeedTreeWindTimeSeconds();
+    // --gpu-stats 周期输出每级联 caster draw 的 before/after 计数。
+    void LogShadowCasterCullStats() const;
 
         // 用于使用boundingbox加速
     std::pair<float, float> ComputeMinMaxAlongAxis(const Eigen::Vector3f& aabbMin, const Eigen::Vector3f& aabbMax, const Eigen::Vector3f& axis) const;
@@ -372,12 +382,16 @@ private:
     struct ShadowProjectionParams {
         Eigen::Matrix4f viewMatrix;
         Eigen::Matrix4f projectionMatrix;
+        // 该级联接收面（相机 split）的光源空间 XY 范围，供 caster 预筛。
+        VL::ShadowCasterReceiverBounds casterReceiverBounds;
     };
 
     struct ShadowCascadeFrameData {
         std::array<Eigen::Matrix4f, 4> view{};
         std::array<Eigen::Matrix4f, 4> projection{};
         std::array<Eigen::Matrix4f, 4> lightViewProj{};
+        // 逐级联接收面 XY 范围；与 lightViewProj 同帧同源。
+        std::array<VL::ShadowCasterReceiverBounds, 4> casterReceiverBounds{};
         Eigen::Vector4f cascadeSplits = Eigen::Vector4f::Zero();
         std::array<Eigen::Vector4f, 4> bias{};
         Eigen::Vector4f csmParameters = Eigen::Vector4f::Zero();
@@ -481,6 +495,11 @@ private:
     VL::EnvironmentGpuTimer environmentGpuTimer;
     // 逐 pass GPU 计时：query pool 随帧资源创建/销毁，采集关闭时不分配。
     VL::GpuPassTimer gpuPassTimer;
+    // 逐级联 caster 剔除计数只在渲染线程读写；日志与 --gpu-stats 同周期。
+    std::array<VL::ShadowCasterCullStats, VL::CsmSettings::MaxCascadeCount>
+        frameShadowCasterCullStats{};
+    bool gpuPassStatsLoggingEnabled = false;
+    uint32_t shadowCasterCullStatsFramesSinceLog = 0;
     VL::EnvironmentUpdateScheduler environmentUpdateScheduler;
     VL::EnvironmentUpdateState environmentUpdateState;
     std::shared_ptr<Texture> environmentUpdateSourceCube;

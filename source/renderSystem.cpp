@@ -12,6 +12,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include "core/runtimeResult.h"
@@ -2318,6 +2319,67 @@ bool RenderSystem::IsShadowCascadeActive(
         cascadeIndex < csmSettings.cascadeCount;
 }
 
+bool RenderSystem::GetShadowCascadeLightViewProjection(
+    uint32_t cascadeIndex,
+    Eigen::Matrix4f& outLightViewProjection) const
+{
+    // shadowCascadeFrameData 在 UpdateShadowGlobalUBOForPass 里按本帧、本 pass
+    // 分辨率构建；这里返回的矩阵与刚写入 shadow UBO 的级联完全同源。
+    if (!shadowCascadeFrameData.valid ||
+        cascadeIndex >= csmSettings.cascadeCount ||
+        cascadeIndex >= VL::CsmSettings::MaxCascadeCount)
+    {
+        return false;
+    }
+
+    const Eigen::Matrix4f& lightViewProjection =
+        shadowCascadeFrameData.lightViewProj[cascadeIndex];
+    if (!lightViewProjection.allFinite())
+    {
+        return false;
+    }
+
+    outLightViewProjection = lightViewProjection;
+    return true;
+}
+
+bool RenderSystem::GetShadowCascadeCasterReceiverBounds(
+    uint32_t cascadeIndex,
+    VL::ShadowCasterReceiverBounds& outBounds) const
+{
+    if (!shadowCascadeFrameData.valid ||
+        cascadeIndex >= csmSettings.cascadeCount ||
+        cascadeIndex >= VL::CsmSettings::MaxCascadeCount)
+    {
+        return false;
+    }
+
+    outBounds = shadowCascadeFrameData.casterReceiverBounds[cascadeIndex];
+    return outBounds.valid &&
+        outBounds.worldToLight.allFinite() &&
+        outBounds.lightSpaceXyMinMax.allFinite();
+}
+
+void RenderSystem::LogShadowCasterCullStats() const
+{
+    // 统计的是最近一帧的 draw 数，不是窗口平均：级联覆盖是离散的，
+    // 平均值会把“某级联恰好 0 draw”这个关键证据抹平。
+    std::ostringstream message;
+    message << "shadow caster culling (drawn/candidates):";
+    for (uint32_t cascadeIndex = 0;
+         cascadeIndex < csmSettings.cascadeCount;
+         ++cascadeIndex)
+    {
+        const VL::ShadowCasterCullStats& stats =
+            frameShadowCasterCullStats[cascadeIndex];
+        message << " cascade" << cascadeIndex << ' '
+                << stats.submittedDraws << '/' << stats.casterDraws;
+    }
+    const std::string line = message.str();
+    VL::ProcessLog().Append(VL::LogSeverity::Info, "GPU", line);
+    std::cout << "[Diagnostics][Info] " << line << std::endl;
+}
+
 void RenderSystem::DrawEditorGridGeometry(
     vk::CommandBuffer& commandBuffer)
 {
@@ -2563,6 +2625,8 @@ void RenderSystem::BuildShadowCascadeFrameData(uint32_t passSizeWidth, uint32_t 
         shadowCascadeFrameData.view[cascadeIndex] = params.viewMatrix;
         shadowCascadeFrameData.projection[cascadeIndex] = params.projectionMatrix;
         shadowCascadeFrameData.lightViewProj[cascadeIndex] = params.projectionMatrix * params.viewMatrix;
+        shadowCascadeFrameData.casterReceiverBounds[cascadeIndex] =
+            params.casterReceiverBounds;
         shadowCascadeFrameData.cascadeSplits[cascadeIndex] = splitFar;
 
         // 用户只编辑 UE 风格的全局 Bias。每级实际接收面 Bias 在这里派生，
@@ -2742,6 +2806,13 @@ RenderSystem::ShadowProjectionParams RenderSystem::CalculateShadowMatrixForCamer
         params = CalculateShadowMatrix_StableRectangular(pointsInShadowSys, worldToShadowMatrix.block<3, 3>(0, 0), static_cast<float>(passSizeWidth), maxZ, zFar);
         break;
     }
+
+    // 接收面范围取自相机 split 的 8 个角点，和阴影拟合使用同一份
+    // light-space 坐标；caster 预筛不依赖后续按 caster 扩张的 Z 范围。
+    params.casterReceiverBounds.worldToLight = worldToShadowMatrix;
+    params.casterReceiverBounds.lightSpaceXyMinMax =
+        Eigen::Vector4f(minX, minY, maxX, maxY);
+    params.casterReceiverBounds.valid = true;
 
     return params;
 }
@@ -3181,6 +3252,8 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
         submittedViewProjection && submittedCameraGeneration == currentRenderScene.worldGeneration
         ? *submittedViewProjection : currentRenderScene.camera.viewProjection;
     uiOverlayRenderer.CollectRetiredTextures();
+    // 每帧重新累计：诊断输出只描述刚刚录制完的这一帧。
+    frameShadowCasterCullStats = {};
     uint32_t frameIndex = frameContext.frameIndex;
     swapChainImageIndex = frameContext.swapchainImageIndex;
     vk::CommandBuffer commandBuffer = frameContext.commandBuffer;
@@ -3297,8 +3370,34 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
                 *this,
                 renderToViewport
             };
+            // 阴影 pass 把 before/after draw 数写回这里；非阴影 pass 不接收统计指针。
+            VL::ShadowCasterCullStats shadowCasterCullStats;
+            shadowCasterCullStats.cascadeIndex = renderPass.shadowCascadeIndex;
+            if (renderPass.type == VL::RenderGraphPassType::Shadow)
+            {
+                passContext.shadowCasterCullStats = &shadowCasterCullStats;
+            }
             passRuntime.RecordPass(renderPassName, passContext);
+            if (renderPass.type == VL::RenderGraphPassType::Shadow &&
+                shadowCasterCullStats.cascadeIndex <
+                    VL::CsmSettings::MaxCascadeCount)
+            {
+                frameShadowCasterCullStats[shadowCasterCullStats.cascadeIndex] =
+                    shadowCasterCullStats;
+            }
             gpuPassTimer.EndPass(commandBuffer, passTimed);
+        }
+
+        // 与 GPU 表同周期（120 帧）输出；只有 --gpu-stats 打开时才打印。
+        if (gpuPassStatsLoggingEnabled)
+        {
+            ++shadowCasterCullStatsFramesSinceLog;
+            if (shadowCasterCullStatsFramesSinceLog >=
+                VL::kGpuPassTimingWindowFrames)
+            {
+                shadowCasterCullStatsFramesSinceLog = 0;
+                LogShadowCasterCullStats();
+            }
         }
         }
 
