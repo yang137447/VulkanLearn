@@ -8,7 +8,7 @@
 - 启动参数 `--gpu-stats`（`source/engine/launchOptions.*`）：默认关闭；打开后每采集 120 帧向
   `Info` 级日志打印一张 `[GPU] frame avg over N: ...` 表。关闭且从未执行 `gpustats` 时**不创建**
   timestamp query pool；控制台按需启用后才创建。
-- 启动参数 `--prerender-skin`（`source/engine/launchOptions.*`）：默认关闭；打开时每帧在
+- 启动参数 `--no-prerender-skin`（`source/engine/launchOptions.*`）：预蒙皮默认开启，用该关闭项回落到逐 pass 蒙皮；开启时每帧在
   `hairSimulation` 之后、pass 循环之前录制 `SkinDeformPass`，并在 GPU 表中新增
   `skinnedDeform` 一行。
 - 控制台命令 `gpustats`（`source/debugConsole.cpp`）：把 `RuntimeCommandType::PrintGpuPassStats`
@@ -32,7 +32,7 @@
 2. 若 `HairSimulationPass::HasWork()` 为真，在 `RecordHairSimulation()` 前后各写一个
    timestamp，合成一项 `hairSimulation`。该阶段内部的所有 compute dispatch 都归入这一项。
    没有 hair dispatch 的帧不写 timestamp、不占 query 槽位。
-3. 若 `--prerender-skin` 打开且 `SkinDeformPass::HasWork()` 为真，在
+3. 若预蒙皮开启且 `SkinDeformPass::HasWork()` 为真，在
    `RecordSkinDeform()` 前后各写一个 timestamp，合成一项 `skinnedDeform`。它覆盖本帧
    palette 上传之后的全部预蒙皮 dispatch；没有蒙皮对象或 flag 关闭时不写 timestamp。
 4. 遍历 `renderGraph.GetRenderpassesOrdered()`，对每个**实际录制**的 pass 在
@@ -272,7 +272,7 @@ JSON 的固定键序与 pass 列表保持不变。关闭 `--gpu-stats` 时不打
 - begin/end 的 `BOTTOM_OF_PIPE` 把每个 pass 串行化，因此 `duration` 是"该 pass 独占 GPU 的
   时间"，不是异步 overlap 后的 wall-clock 贡献。真实帧时间里 compute/graphics 若有 overlap，
   各 pass 之和会大于这部分实际占用。
-- `skinnedDeform` 覆盖 `SkinDeformPass::Record()` 内部所有逐对象 dispatch（一个对象一个 dispatch），不是逐顶点拆分。`--prerender-skin` 关闭时该行不出现。\n- `hairSimulation` 覆盖 `HairSimulationPass::Record()` 内部所有 dispatch（9 个 compute pass，
+- `skinnedDeform` 覆盖 `SkinDeformPass::Record()` 内部所有逐对象 dispatch（一个对象一个 dispatch），不是逐顶点拆分。`--no-prerender-skin` 时该行不出现。\n- `hairSimulation` 覆盖 `HairSimulationPass::Record()` 内部所有 dispatch（9 个 compute pass，
   含可选的 SDF Clear/Splat/Collide），不是逐 dispatch 拆分。
 - CPU 阶段只覆盖 GT Tick 的指定区间；`cpuMs` 本身是渲染/曝光帧 delta，包含帧率上限的等待、
   UI 线程调度与宿主噪声。`other` 因此既可能是未计时的小段 GT 工作，也可能是 pacing/调度空档；

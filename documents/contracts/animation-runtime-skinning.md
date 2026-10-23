@@ -229,12 +229,12 @@ shader 不作逐顶点兜底。快路径按关节检查，而旧逐顶点路径�
 因此“两个各自非奇异的关节在单个顶点上混合出奇异矩阵”不再被单独识别；
 该情形不改变 palette 内容，只放宽了拒绝边界。
 
-### 逐帧 GPU 预蒙皮（`--prerender-skin`）
+### 逐帧 GPU 预蒙皮（默认开启，`--no-prerender-skin` 关闭）
 
-`--prerender-skin` 默认关闭。关闭时既不分配预蒙皮 buffer、不创建 compute pipeline、
+预蒙皮默认开启；`--no-prerender-skin` 关闭后既不分配预蒙皮 buffer、不创建 compute pipeline、
 不录制预蒙皮 pass，蒙皮材质也不带 `VL_SKINNED_PRERENDERED`；Base 与 ShadowDepth 继续在
 各自顶点着色器里混合。启动期 shader 构建仍会编译 `engine/skinnedDeform.comp`（编译器扫描
-全部 compute 源），但不会创建 pipeline，也不产生任何 dispatch。打开后，同一蒙皮网格
+全部 compute 源），但不会创建 pipeline，也不产生任何 dispatch。开启时，同一蒙皮网格
 每帧只做一次骨骼混合，geometry 与每个 shadow cascade 都读同一份结果，不再随消费者数量重复支付混合成本。
 
 - **共享数学**：`shader/glsl/engine/skinnedVertexMath.glsl` 是唯一的混合/变换实现，

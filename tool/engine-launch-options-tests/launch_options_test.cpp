@@ -81,11 +81,11 @@ TEST(LaunchOptions, GpuStatsCombinesWithExistingFlags)
     EXPECT_EQ(options.initialSceneOverride, "Maps/SC_x.json");
 }
 
-TEST(LaunchOptions, PrerenderSkinIsOffByDefault)
+TEST(LaunchOptions, PrerenderSkinIsOnByDefault)
 {
     const LaunchOptions options = Parse({"main.exe"});
     EXPECT_TRUE(options.errorMessage.empty());
-    EXPECT_FALSE(options.prerenderSkin);
+    EXPECT_TRUE(options.prerenderSkin);
 }
 
 TEST(LaunchOptions, PrerenderSkinFlagSelectsThePreSkinnedVariant)
@@ -96,6 +96,14 @@ TEST(LaunchOptions, PrerenderSkinFlagSelectsThePreSkinnedVariant)
     EXPECT_TRUE(options.prerenderSkin);
     EXPECT_TRUE(options.gpuStats);
     EXPECT_EQ(options.frameLimitHz, 60);
+}
+
+TEST(LaunchOptions, NoPrerenderSkinFlagFallsBackToPerPassSkinning)
+{
+    // 关闭项必须覆盖默认值，否则 A/B 与回退路径无从验证。
+    const LaunchOptions options = Parse({"main.exe", "--no-prerender-skin"});
+    EXPECT_TRUE(options.errorMessage.empty()) << options.errorMessage;
+    EXPECT_FALSE(options.prerenderSkin);
 }
 
 TEST(LaunchOptions, UnknownFlagsAreStillRejected)

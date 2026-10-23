@@ -328,7 +328,7 @@ build-rel/bin/main.exe --no-dev-ui --initial-scene Maps/SC_tressfx_female/SC_tre
 
 ## 10. 每帧 GPU 预蒙皮落地（2026-10-23）
 
-§4 记录的方案已实现为启动参数 `--prerender-skin`（默认关闭）。关闭时没有预蒙皮
+§4 记录的方案已实现为默认开启的逐帧预蒙皮（`--no-prerender-skin` 可回落到逐 pass 蒙皮）。关闭时没有预蒙皮
 buffer、没有 compute pipeline、没有 `skinnedDeform` 计时项，蒙皮材质也不带
 `VL_SKINNED_PRERENDERED`；打开后才切换到"每帧混合一次、geometry 与所有 shadow
 cascade 共用结果"的顶点变体。实现契约见

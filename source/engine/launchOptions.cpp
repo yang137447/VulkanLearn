@@ -178,6 +178,13 @@ LaunchOptions ParseLaunchOptions(int argc, char** argv)
             continue;
         }
 
+        if (argument == "--no-prerender-skin")
+        {
+            // 预蒙皮默认开，保留关闭项以便回落到逐 pass 蒙皮做 A/B 与问题定位。
+            options.prerenderSkin = false;
+            continue;
+        }
+
         if (argument == "--perf-jsonl")
         {
             // 路径是必需值：缺少路径或把下一个 flag 当路径都必须报错，
@@ -374,7 +381,7 @@ void PrintLaunchUsage()
         << "  --worker-thread-count <1|2>         Override config worker mode for this process.\n"
         << "  --frame-limit <hz>                  Cap render frame pacing at 1..1000 Hz (default 0 = uncapped; fixed 60 Hz physics unchanged).\n"
         << "  --gpu-stats                         Log a per-pass GPU timestamp table every 120 frames (default off).\n"
-        << "  --prerender-skin                    Pre-skin skinned meshes once per frame in compute; geometry/shadow read the result (default off).\n"
+        << "  --no-prerender-skin                 Disable per-frame pre-skinning and fall back to per-pass GPU skinning (default on).\n"
         << "  --perf-jsonl <path>                 Append one perf JSON line per second to <path> (creates parent directories; enables GPU collection).\n"
         << "  --console-command <line>            Queue one debug console command at startup. Repeatable.\n"
         << "  --console-command-delay <frames>    Frames to wait before submitting queued console commands (default 60).\n"
