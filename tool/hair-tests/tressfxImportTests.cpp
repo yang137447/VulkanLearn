@@ -1,5 +1,6 @@
 #include "mesh/loader/hair/tressfxModelImporter.h"
 #include "mesh/validation/meshAssetValidator.h"
+#include "render/resource/renderableObjectKey.h"
 #include "tfxFixture.h"
 
 #include <gtest/gtest.h>
@@ -144,6 +145,19 @@ TEST(TressfxDescriptor, SkinningAcceptsSourceAndRootBoneWithGpuBackend)
     EXPECT_EQ(plan.tressfxSimulation.skinning->rootBone, "Head_M");
 }
 
+TEST(TressfxDescriptor, SkinningAcceptsOptionalBoneWeights)
+{
+    auto json = Descriptor();
+    json["simulation"] = {
+        {"backend", "gpu"},
+        {"skinning", {{"source", "FemaleCharacter"}, {"rootBone", "Head_M"},
+            {"boneWeights", "Maps/SC_x/female.tfxbone"}}}};
+    const auto plan = MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json);
+    ASSERT_TRUE(plan.tressfxSimulation.skinning.has_value());
+    EXPECT_EQ(plan.tressfxSimulation.skinning->boneWeightsPath,
+        "Maps/SC_x/female.tfxbone");
+}
+
 TEST(TressfxDescriptor, SkinningRequiresGpuBackend)
 {
     auto json = Descriptor();
@@ -162,23 +176,27 @@ TEST(TressfxDescriptor, SkinningRequiresGpuBackend)
     }
 }
 
-TEST(TressfxDescriptor, SkinningRequiresSource)
+// 蓝图 tressfx 组件提供放置级绑定后，source 不再由描述符强制；rootBone 仍必需，
+// 但“写了 source 就必须非空”依旧在描述符边界收口。
+TEST(TressfxDescriptor, SkinningRequiresRootBoneAndValidSource)
 {
     auto json = Descriptor();
     json["simulation"] = {
         {"backend", "gpu"},
         {"skinning", {{"rootBone", "Head_M"}}}};
-    try
-    {
-        MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json);
-        FAIL() << "simulation.skinning without source was accepted";
-    }
-    catch (const std::runtime_error& error)
-    {
-        const std::string message = error.what();
-        EXPECT_NE(message.find("source"), std::string::npos);
-        EXPECT_NE(message.find("SM_hair_skinned.json"), std::string::npos);
-    }
+    EXPECT_NO_THROW(MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json));
+
+    auto missingRoot = json;
+    missingRoot["simulation"]["skinning"].erase("rootBone");
+    EXPECT_THROW(
+        MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", missingRoot),
+        std::runtime_error);
+
+    auto emptySource = json;
+    emptySource["simulation"]["skinning"]["source"] = "";
+    EXPECT_THROW(
+        MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", emptySource),
+        std::runtime_error);
 }
 
 TEST(TressfxDescriptor, SkinningRequiresRootBone)
@@ -211,6 +229,20 @@ TEST(TressfxDescriptor, SkinningRejectsUnknownKeys)
         std::runtime_error);
 }
 
+TEST(TressfxDescriptor, SkinBoneWeightsParticipateInMeshIdentity)
+{
+    auto json = Descriptor();
+    json["simulation"] = {
+        {"backend", "gpu"},
+        {"skinning", {{"source", "FemaleCharacter"}, {"rootBone", "Head_M"}}}};
+    const auto first =
+        MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json);
+    json["simulation"]["skinning"]["boneWeights"] = "Maps/SC_x/female.tfxbone";
+    const auto second =
+        MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json);
+    EXPECT_NE(first.modelCacheKey, second.modelCacheKey);
+}
+
 TEST(TressfxDescriptor, SkinningSourceParticipatesInMeshIdentity)
 {
     auto json = Descriptor();
@@ -239,6 +271,95 @@ TEST(TressfxDescriptor, SkinningRootBoneParticipatesInMeshIdentity)
     EXPECT_NE(first.modelCacheKey, second.modelCacheKey);
 }
 
+TEST(TressfxDescriptor, SkinningDefaultsToRootBoneWeights)
+{
+    auto json = Descriptor();
+    json["simulation"] = {
+        {"backend", "gpu"},
+        {"skinning", {{"source", "FemaleCharacter"}, {"rootBone", "Head_M"}}}};
+    const auto plan = MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json);
+    ASSERT_TRUE(plan.tressfxSimulation.skinning.has_value());
+    EXPECT_EQ(plan.tressfxSimulation.skinning->rootWeights,
+        TressfxRootWeightSource::RootBone);
+}
+
+TEST(TressfxDescriptor, SkinningAcceptsMeshRootWeights)
+{
+    auto json = Descriptor();
+    json["simulation"] = {
+        {"backend", "gpu"},
+        {"skinning", {{"source", "FemaleCharacter"}, {"rootBone", "Head_M"},
+            {"weights", "mesh"}}}};
+    const auto plan = MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json);
+    ASSERT_TRUE(plan.tressfxSimulation.skinning.has_value());
+    EXPECT_EQ(plan.tressfxSimulation.skinning->rootWeights,
+        TressfxRootWeightSource::Mesh);
+}
+
+TEST(TressfxDescriptor, SkinningRejectsUnknownRootWeightSource)
+{
+    auto json = Descriptor();
+    json["simulation"] = {
+        {"backend", "gpu"},
+        {"skinning", {{"source", "FemaleCharacter"}, {"rootBone", "Head_M"},
+            {"weights", "auto"}}}};
+    try
+    {
+        MeshAssetValidator::BuildLoadPlan("Maps/SC_x/Meshes/SM_hair_skinned.json", json);
+        FAIL() << "Unknown simulation.skinning.weights value was accepted";
+    }
+    catch (const std::runtime_error& error)
+    {
+        const std::string message = error.what();
+        EXPECT_NE(message.find("weights"), std::string::npos);
+        EXPECT_NE(message.find("SM_hair_skinned.json"), std::string::npos);
+    }
+}
+
+TEST(TressfxDescriptor, SkinningMeshWeightsRejectBoneWeightsCombination)
+{
+    auto json = Descriptor();
+    json["simulation"] = {
+        {"backend", "gpu"},
+        {"skinning", {{"source", "FemaleCharacter"}, {"rootBone", "Head_M"},
+            {"weights", "mesh"}, {"boneWeights", "Maps/SC_x/female.tfxbone"}}}};
+    try
+    {
+        MeshAssetValidator::BuildLoadPlan("Maps/SC_x/Meshes/SM_hair_skinned.json", json);
+        FAIL() << "mesh root weights combined with .tfxbone were accepted";
+    }
+    catch (const std::runtime_error& error)
+    {
+        const std::string message = error.what();
+        EXPECT_NE(message.find("boneWeights"), std::string::npos);
+        EXPECT_NE(message.find("SM_hair_skinned.json"), std::string::npos);
+    }
+}
+
+TEST(TressfxDescriptor, SkinningMeshWeightsRequireGpuBackend)
+{
+    auto json = Descriptor();
+    json["simulation"] = {
+        {"skinning", {{"source", "FemaleCharacter"}, {"rootBone", "Head_M"},
+            {"weights", "mesh"}}}};
+    EXPECT_THROW(MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json),
+        std::runtime_error);
+}
+
+TEST(TressfxDescriptor, SkinningMeshWeightsParticipateInMeshIdentity)
+{
+    auto json = Descriptor();
+    json["simulation"] = {
+        {"backend", "gpu"},
+        {"skinning", {{"source", "FemaleCharacter"}, {"rootBone", "Head_M"}}}};
+    const auto singleBone =
+        MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json);
+    json["simulation"]["skinning"]["weights"] = "mesh";
+    const auto meshWeights =
+        MeshAssetValidator::BuildLoadPlan("SM_hair_skinned.json", json);
+    EXPECT_NE(singleBone.modelCacheKey, meshWeights.modelCacheKey);
+}
+
 TEST(TressfxDescriptor, SimulationQualityDefaults)
 {
     auto json = Descriptor();
@@ -246,14 +367,37 @@ TEST(TressfxDescriptor, SimulationQualityDefaults)
     const auto config =
         MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json).tressfxSimulation;
     EXPECT_FLOAT_EQ(config.bendStiffness, 0.3f);
-    // damping 是 TressFX 的 DampingCoeff 默认值；maxDt 是 TressFX 的硬上限。
+    // damping 是源默认 DampingCoeff；maxDt 取源 Integration 参数函数上限。
     EXPECT_FLOAT_EQ(config.damping, 0.035f);
     EXPECT_FLOAT_EQ(config.maxDt, 0.016f);
     // global shape 与 VSP 默认关闭，既有资产外观不变。
     EXPECT_FLOAT_EQ(config.globalShapeStiffness, 0.0f);
     EXPECT_FLOAT_EQ(config.globalShapeEffectiveRange, 0.0f);
     EXPECT_FLOAT_EQ(config.vspCoefficient, 0.0f);
-    EXPECT_FLOAT_EQ(config.vspAccelThresholdMax, 5000.0f);
+    EXPECT_FLOAT_EQ(config.vspAccelThresholdMax, 140.0f);
+}
+
+TEST(TressfxDescriptor, VspThresholdDefaultAndExplicitValueShareEffectiveIdentity)
+{
+    auto json = Descriptor();
+    json["simulation"] = {{"vspCoefficient", 0.5f}};
+    const auto implicit = MeshAssetValidator::BuildLoadPlan("SM_vsp.json", json);
+    json["simulation"]["vspAccelThresholdMax"] = 140.0f;
+    const auto explicitDefault =
+        MeshAssetValidator::BuildLoadPlan("SM_vsp.json", json);
+    EXPECT_EQ(implicit.modelCacheKey, explicitDefault.modelCacheKey);
+}
+
+TEST(TressfxDescriptor, ExplicitLegacyVspThresholdIsPreservedAndChangesIdentity)
+{
+    auto json = Descriptor();
+    json["simulation"] = {{"vspCoefficient", 0.5f}};
+    const auto implicit = MeshAssetValidator::BuildLoadPlan("SM_vsp.json", json);
+    json["simulation"]["vspAccelThresholdMax"] = 5000.0f;
+    const auto explicitLegacy =
+        MeshAssetValidator::BuildLoadPlan("SM_vsp.json", json);
+    EXPECT_FLOAT_EQ(explicitLegacy.tressfxSimulation.vspAccelThresholdMax, 5000.0f);
+    EXPECT_NE(implicit.modelCacheKey, explicitLegacy.modelCacheKey);
 }
 
 TEST(TressfxDescriptor, SimulationQualityFieldsAcceptedAndPartOfIdentity)
@@ -279,6 +423,108 @@ TEST(TressfxDescriptor, SimulationQualityFieldsAcceptedAndPartOfIdentity)
     EXPECT_FLOAT_EQ(custom.tressfxSimulation.vspCoefficient, 0.3f);
     EXPECT_FLOAT_EQ(custom.tressfxSimulation.vspAccelThresholdMax, 7000.0f);
     EXPECT_NE(custom.modelCacheKey, baseline.modelCacheKey);
+}
+
+TEST(TressfxDescriptor, SimulationStiffnessCurvesAreParsedAndPartOfIdentity)
+{
+    auto baselineJson = Descriptor();
+    baselineJson["simulation"] = nlohmann::json::object();
+    const auto baseline =
+        MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", baselineJson);
+
+    auto json = Descriptor();
+    json["simulation"] = {
+        {"vspStiffness", {0.0f, 0.25f, 0.5f, 0.75f}},
+        {"localShapeStiffness", {0.95f, 0.8f, 0.4f, 0.0f}}};
+    const auto authored =
+        MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json);
+    ASSERT_EQ(authored.tressfxSimulation.vspStiffness.size(), 4u);
+    EXPECT_FLOAT_EQ(authored.tressfxSimulation.vspStiffness[1], 0.25f);
+    EXPECT_FLOAT_EQ(authored.tressfxSimulation.vspStiffness[3], 0.75f);
+    ASSERT_EQ(authored.tressfxSimulation.localShapeStiffness.size(), 4u);
+    EXPECT_FLOAT_EQ(authored.tressfxSimulation.localShapeStiffness[0], 0.95f);
+    EXPECT_NE(authored.modelCacheKey, baseline.modelCacheKey);
+
+    // 只改一个作者值也必须改变模型缓存身份。
+    json["simulation"]["vspStiffness"][2] = 0.5f + 1.0f / 1024.0f;
+    const auto changed =
+        MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", json);
+    EXPECT_NE(authored.modelCacheKey, changed.modelCacheKey);
+
+    // 两条曲线各自的省略/存在也必须区分。
+    auto vspOnlyJson = Descriptor();
+    vspOnlyJson["simulation"] = {{"vspStiffness", {0.0f, 0.25f, 0.5f, 0.75f}}};
+    const auto vspOnly =
+        MeshAssetValidator::BuildLoadPlan("SM_dynamic.json", vspOnlyJson);
+    EXPECT_NE(authored.modelCacheKey, vspOnly.modelCacheKey);
+}
+
+TEST(TressfxDescriptor, SimulationStiffnessCurvesRejectInvalidEntries)
+{
+    const auto expectRejected = [](const nlohmann::json& curve, const char* field)
+    {
+        auto json = Descriptor();
+        json["simulation"] = {{field, curve}};
+        try
+        {
+            MeshAssetValidator::BuildLoadPlan(
+                "Maps/SC_probe/Meshes/SM_curves.json", json);
+            FAIL() << "Invalid " << field << " was accepted";
+        }
+        catch (const std::runtime_error& error)
+        {
+            const std::string message = error.what();
+            EXPECT_NE(message.find(field), std::string::npos);
+            EXPECT_NE(message.find("SM_curves.json"), std::string::npos);
+        }
+    };
+    expectRejected(nlohmann::json::array({0.5, 1.1}), "vspStiffness");
+    expectRejected(nlohmann::json::array({-0.1, 0.5}), "vspStiffness");
+    expectRejected(nlohmann::json::array(), "localShapeStiffness");
+    // 超过逐顶点上限 64。
+    nlohmann::json oversize = nlohmann::json::array();
+    for (int index = 0; index < 65; ++index)
+        oversize.push_back(0.5);
+    expectRejected(oversize, "localShapeStiffness");
+    // 非数字项。
+    expectRejected(nlohmann::json::array({0.5, "half"}), "vspStiffness");
+}
+
+TEST(TressfxDescriptor, LocalShapeCurveValuesAboveLimitAreClampedAndRecorded)
+{
+    auto json = Descriptor();
+    json["simulation"] = {
+        {"localShapeStiffness", {0.5f, 1.0f, 0.96f}}};
+    testing::internal::CaptureStderr();
+    const auto plan = MeshAssetValidator::BuildLoadPlan(
+        "Maps/SC_probe/Meshes/SM_curves.json", json);
+    const std::string log = testing::internal::GetCapturedStderr();
+    ASSERT_EQ(plan.tressfxSimulation.localShapeStiffness.size(), 3u);
+    EXPECT_FLOAT_EQ(plan.tressfxSimulation.localShapeStiffness[0], 0.5f);
+    EXPECT_FLOAT_EQ(plan.tressfxSimulation.localShapeStiffness[1], 0.95f);
+    EXPECT_FLOAT_EQ(plan.tressfxSimulation.localShapeStiffness[2], 0.95f);
+    // 不能静默修改作者值：日志必须带字段、索引与资产路径。
+    EXPECT_NE(log.find("localShapeStiffness[1]"), std::string::npos);
+    EXPECT_NE(log.find("localShapeStiffness[2]"), std::string::npos);
+    EXPECT_NE(log.find("SM_curves.json"), std::string::npos);
+}
+
+TEST(TressfxDescriptor, SimulationRejectsUnknownCurveKeys)
+{
+    auto json = Descriptor();
+    json["simulation"] = {{"vspStiffnesss", {0.0f, 1.0f, 1.0f, 1.0f}}};
+    try
+    {
+        MeshAssetValidator::BuildLoadPlan("SM_curves.json", json);
+        FAIL() << "Unknown simulation field was accepted";
+    }
+    catch (const std::runtime_error& error)
+    {
+        const std::string message = error.what();
+        EXPECT_NE(message.find("unknown field"), std::string::npos);
+        EXPECT_NE(message.find("vspStiffnesss"), std::string::npos);
+        EXPECT_NE(message.find("SM_curves.json"), std::string::npos);
+    }
 }
 
 TEST(TressfxDescriptor, SimulationGlobalShapeAndVspParticipateInIdentity)
@@ -780,6 +1026,16 @@ TEST_F(TressfxImport, KeepsCenterlinesAndEncodesSignedRadiusWithoutInverseMass)
     EXPECT_TRUE(section.vertices[0].tangent.isApprox(Eigen::Vector4f(0, 1, 0, 1)));
 }
 
+TEST_F(TressfxImport, RetainsOneGuideRootPositionPerStrand)
+{
+    const auto section = Import(TfxFixture::Guides(3)).sections[0];
+    ASSERT_EQ(section.tressfxRootPositions.size(), 3u);
+    // 夹具第 g 根 guide 的根点是 (g, 0, -2)；只保留根点，不复制全部中心线。
+    EXPECT_TRUE(section.tressfxRootPositions[0].isApprox(Eigen::Vector3f(0, 0, -2)));
+    EXPECT_TRUE(section.tressfxRootPositions[1].isApprox(Eigen::Vector3f(1, 0, -2)));
+    EXPECT_TRUE(section.tressfxRootPositions[2].isApprox(Eigen::Vector3f(2, 0, -2)));
+}
+
 TEST_F(TressfxImport, AppliesPerGuideThicknessAndPadsBounds)
 {
     auto bytes = TfxFixture::Guides(2);
@@ -838,6 +1094,43 @@ TEST_F(TressfxImport, MissingCollisionProxyFailsBeforePublishingSection)
     EXPECT_THROW(Import(TfxFixture::Guides()), std::runtime_error);
 }
 
+TEST_F(TressfxImport, CarriesMatchingAuthoredCurvesIntoSectionConfig)
+{
+    auto json = Descriptor();
+    json["simulation"] = {
+        {"vspStiffness", {0.0f, 0.25f, 0.5f, 0.75f}},
+        {"localShapeStiffness", {0.95f, 0.8f, 0.4f, 0.0f}}};
+    request.buildPlan = MeshAssetValidator::BuildLoadPlan("SM_guides.json", json);
+    // TfxFixture::Guides 默认 4 points/strand，两条数组长度必须都为 4。
+    const auto section = Import(TfxFixture::Guides()).sections[0];
+    ASSERT_EQ(section.tressfxSimulation.vspStiffness.size(), 4u);
+    EXPECT_FLOAT_EQ(section.tressfxSimulation.vspStiffness[2], 0.5f);
+    ASSERT_EQ(section.tressfxSimulation.localShapeStiffness.size(), 4u);
+    EXPECT_FLOAT_EQ(section.tressfxSimulation.localShapeStiffness[1], 0.8f);
+}
+
+TEST_F(TressfxImport, RejectsAuthoredCurveLengthMismatchAgainstTfxPointsPerStrand)
+{
+    auto json = Descriptor();
+    // 8 项曲线配 4 points/strand 的 TFX：必须在导入边界硬失败，不能截断/补零。
+    json["simulation"] = {
+        {"vspStiffness", {0.0f, 0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f, 0.7f}}};
+    request.buildPlan = MeshAssetValidator::BuildLoadPlan("SM_guides.json", json);
+    try
+    {
+        Import(TfxFixture::Guides());
+        FAIL() << "Curve/pointsPerStrand mismatch was accepted";
+    }
+    catch (const std::runtime_error& error)
+    {
+        const std::string message = error.what();
+        EXPECT_NE(message.find("vspStiffness"), std::string::npos);
+        EXPECT_NE(message.find("8 entries"), std::string::npos);
+        EXPECT_NE(message.find("4 points per strand"), std::string::npos);
+        EXPECT_NE(message.find("SM_guides.json"), std::string::npos);
+    }
+}
+
 TEST_F(TressfxImport, RejectsUnrepresentableThicknessProduct)
 {
     auto bytes = TfxFixture::Guides();
@@ -851,5 +1144,20 @@ TEST_F(TressfxImport, RejectsInvalidCenterlineBeforePublishingGeometry)
     auto bytes = TfxFixture::Guides();
     TfxFixture::Point(bytes, 1, {0, 0, -2, 0});
     EXPECT_THROW(Import(bytes), std::runtime_error);
+}
+
+TEST(TressfxRenderableKey, GpuHairPlacementAppendsInstanceButStaticMeshesShare)
+{
+    // 普通网格仍按模型+section 共享，不受 placement 身份影响。
+    EXPECT_EQ(MakeRenderableObjectKey("cache", 1, "body", "A", false),
+        MakeRenderableObjectKey("cache", 1, "body", "B", false));
+    // GPU 发丝的可变模拟状态按 placement 隔离，键必须不同。
+    const std::string first =
+        MakeRenderableObjectKey("cache", 0, "hair", "Female_hair_a", true);
+    const std::string second =
+        MakeRenderableObjectKey("cache", 0, "hair", "Female_hair_b", true);
+    EXPECT_EQ(first, "cache|0|hair|instance=Female_hair_a");
+    EXPECT_NE(first, second);
+    EXPECT_NE(first, MakeRenderableObjectKey("cache", 0, "hair", "A", false));
 }
 }

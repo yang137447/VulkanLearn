@@ -25,9 +25,9 @@
 | 可执行文件 | 测试数 | 覆盖 |
 | --- | --- | --- |
 | `editor_ui_tests` | 724（723 后加 1 项 CPU 阶段表） | 编辑器 UI：组件、停靠、布局持久化、内容浏览器、JSON 资产库、标准资产修改、actor 树、属性编辑、场景持久化、保存确认、可视化、颜色转换、右键菜单、RmlUi GPU 缩略图桥接、C# 放置/蓝图资产拖放、组件 Details、独立蓝图配置标签、3D 拾取/变换/辅助图示/吸附、文档历史、类型化属性与实例权限、物理配置、编译入口、逻辑组件、Quaternion 原子编辑、Time Scale、Log 页签、Performance 页（冻结快照、5 Hz 节流、空状态、图序表格、CPU 阶段表与 `other` 对账）、四处递归自定义数据编辑、冻结 HUD 文本绑定、C# 类浏览/源码打开请求、一类多 BP 配置创建及骨骼预览值请求/资产校验；公共 DrawDebug 投影/裁剪/叠层顺序、可选深度、转义文字、过滤菜单；Motion 值请求/布局、特征表和 MM 冻结候选/代价刷新、被聚焦控制器时间轴 seek/play/pause 与离线/无播放器禁用、查询回放历史帧选择/回显/禁用；SpringArm 字段刷新、默认值与编辑提交、组件/末端挂接空间、图示/拾取/gizmo 一致性、多层 Mesh section 空间与重挂父级；TressFX 类型识别、标准保存保留半径与场景引用；retarget source/profile 保存保留与引用/源类型拒绝；参考姿态校准、ozz 索引、SK 身份/根路径边界、冻结发布/失败清空、独立页签/轴向/选骨/取景/辅助骨和多尺寸布局；成对动画身份发布、控制/seek、模式切换、重载隔离和首次取景区域；共用 DocumentTab 稳定 key/独立关闭、临时最大化/恢复、跨类型关闭与 MI 异步确认 |
-| `script_tests` | 当前注册 448（当前构建 XML 实测；含 2 项成对原地动画预览；SpringArm 运行时共 40 项；C# ON；注册数不等于实跑数；本轮范围见 Retarget 动画页验证。OFF 先前实测注册 89 项） | 蓝图场景/资产/组件校验、实例权限、地面放置、输入映射、源码 URI 边界；ON 时使用真实 hostfxr/CLR 验证生命周期、Spawn、运行时组件/代际句柄、异步加载/取消/租约、Jolt 层与掩码/compound/静态 mesh/约束/扫球、角色控制、计时器/事件、故障隔离、World 换代、冻结快照、类型化属性、灯光、程序集重载、资源源码编译/监视及 DLL/PDB 完整字节确定性、PDB 空类/partial 源码定位、私有运行时部署、自定义逻辑组件、Tick/LateTick 每帧时序/时钟/性能采样、递归自定义数据、显式播放中深值迁移、增量同步/空回调过滤/千实例负载、HUD 所有权/回滚/迁移、受控程序集限定类名及混合 CLR/Jolt/WorldSnapshot 负载；SpringArm schema/编辑保存/实例覆写、同帧物理/晚更新、旋转继承、位置/旋转 lag 与子步、碰撞/移动墙体、诊断/传送复位、重载与回滚、非相机子级/子局部偏移与嵌套碰撞空间、CLR/原生含 shear 矩阵一致性；动画请求/原生反馈、独立时钟、状态机及实际运动/碰墙回归、Actor 有界转向与世界关节/相机连续性、正式控制器稳态步频开关与原根行程对照及曲线筛选踝漂移诊断；静态接地探测过滤、18° 横坡参考点/法线独立测量与 pre-IK/MM 隔离；走跑双参考点动态支撑、台阶边缘单支点、惯性化与视觉根偏移、冻结源支撑窗滑移/漂移/穿入质量夹具；足部 Auto/Ball/Ankle 支点模式与 C# `FootLock`；Motion 调试历史回放（帧选择、不追加、退出恢复）；被聚焦脚本控制器时间轴的 seek/play/pause 身份隔离、代数/片长/动作校验；历史 Pause/Stop、实际碰撞轨迹与近似预测；DrawDebug 十形状、生命周期/发布者清理、批次回滚和深度参数跨桥；成对预览 clip/时钟、原地根变换、section 去重和场景门控 |
+| `script_tests` | 当前注册 450（当前构建 list 实测；含 2 项成对原地动画预览及本批 2 项普通/游戏冻结时钟；SpringArm 运行时共 40 项；C# ON；注册数不等于实跑数；本轮范围见 Retarget 动画页验证及 TressFX 物理交互记录。OFF 先前实测注册 89 项） | 蓝图场景/资产/组件校验、实例权限、地面放置、输入映射、源码 URI 边界；ON 时使用真实 hostfxr/CLR 验证生命周期、Spawn、运行时组件/代际句柄、异步加载/取消/租约、Jolt 层与掩码/compound/静态 mesh/约束/扫球、角色控制、计时器/事件、故障隔离、World 换代、冻结快照、类型化属性、灯光、程序集重载、资源源码编译/监视及 DLL/PDB 完整字节确定性、PDB 空类/partial 源码定位、私有运行时部署、自定义逻辑组件、Tick/LateTick 每帧时序/时钟/性能采样、递归自定义数据、显式播放中深值迁移、增量同步/空回调过滤/千实例负载、HUD 所有权/回滚/迁移、受控程序集限定类名及混合 CLR/Jolt/WorldSnapshot 负载；SpringArm schema/编辑保存/实例覆写、同帧物理/晚更新、旋转继承、位置/旋转 lag 与子步、碰撞/移动墙体、诊断/传送复位、重载与回滚、非相机子级/子局部偏移与嵌套碰撞空间、CLR/原生含 shear 矩阵一致性；动画请求/原生反馈、独立时钟、状态机及实际运动/碰墙回归、Actor 有界转向与世界关节/相机连续性、正式控制器稳态步频开关与原根行程对照及曲线筛选踝漂移诊断；静态接地探测过滤、18° 横坡参考点/法线独立测量与 pre-IK/MM 隔离；走跑双参考点动态支撑、台阶边缘单支点、惯性化与视觉根偏移、冻结源支撑窗滑移/漂移/穿入质量夹具；足部 Auto/Ball/Ankle 支点模式与 C# `FootLock`；Motion 调试历史回放（帧选择、不追加、退出恢复）；被聚焦脚本控制器时间轴的 seek/play/pause 身份隔离、代数/片长/动作校验；历史 Pause/Stop、实际碰撞轨迹与近似预测；DrawDebug 十形状、生命周期/发布者清理、批次回滚和深度参数跨桥；成对预览 clip/时钟、原地根变换、section 去重和场景门控 |
 | `debug_draw_tests` | 27 | 十形状展开、生命周期、冻结、身份/过滤/预算、默认 Overlay 与可选深度传播、投影近远面及屏幕裁剪深度、Console 控制 |
-| `hair_asset_tests` | 161 | `.tfx` 字节/属性/预算校验、文件读取、坐标与逆质量保留、静态切线/rest length/ribbon 拓扑、SM 半径/身份与导入流、simulation CPU/GPU backend 解析、变量步长（`maxDt` clamp 到 0.016、一帧一步）、`bendStiffness`/四角风/global shape/VSP 作者字段与 224-byte 参数打包、已删除 `fixedStep`/`maxSubsteps`/`windGust`/`windFrequency` 的拒绝、`simulation.skinning` 作者校验（source/rootBone/backend/未知键/缓存身份）、根骨解析（命中/缺骨/缺骨架，错误带骨名+资产路径）、不可移动点 `M*rest` 纯数学、五个 pass 的纯数学（距离约束 4 种 multiplier、风力方向与 1e-4 cm 适配、四角锥形生成与 mixer 权重、阻尼系数直接指数、global shape range 门控与拉回、VSP 端点/线性 stiffness、strand 变换与伪加速度阈值、直/弯 rest 的 local-shape 旋转、速度 clamp）、胶囊投影/固定点/长步数接触与 collision 校验、胶囊 `bone` 解析/身份/缺骨错误、骨骼旋转移动端点/未绑定胶囊保持静态；`collision.mesh` 解析（path/cellSize/margin 范围、未知键、backend 限制、缓存身份、OBJ 顶点/多边形/负索引/行号错误、缺失代理）；有符号 SDF 网格 CPU 镜像（magnitude-first FloatFlip 编码、每帧变形域/退化 extent 钳制/固定 48..64 分辨率、clear+splat、三线性采样、中心差分梯度、退化梯度跳过、2 cm 内部点被推到表面外、0.5 cm 外部点只在 margin 内移动、盒/球/远点、蒙皮矩阵带动场）；代理权重转移（空间哈希最近点、等距下标确定性、归一化、全影响保留、超距拒绝、逐顶点 LBS 与单骨矩阵等价）；离线 SDF 生成（球/盒解析距离、角度加权伪法线、锐尖顶点、开放边报告、字节确定性、1 vs 4 线程并行字节一致、文件往返与截断/损坏拒绝）；离线碰撞代理（规则立方体聚类与绕序、退化/重复三角形剔除、区域包含规则、输出字节确定性、开盒开放边、最小三角形下限）；合成夹具，模块套件不含真实女性资产或 GPU dispatch（GPU 路径由 main 启动烟测覆盖） |
+| `hair_asset_tests` | 254 | `.tfx` 字节/属性/预算校验、文件读取、坐标与逆质量保留、静态切线/rest length/ribbon 拓扑、SM 半径/身份与导入流、simulation CPU/GPU backend 解析、源原生调度（n=0/1/2 × 0.0125 s、`StepFrame`）、旧 `Step` 的 `maxDt` clamp、`bendStiffness`/四角风/global shape/VSP 作者字段与 800-byte 参数打包、已删除 `fixedStep`/`maxSubsteps`/`windGust`/`windFrequency` 的拒绝、`simulation.skinning` 作者校验（source/rootBone/backend/未知键/缓存身份）、根骨解析（命中/缺骨/缺骨架，错误带骨名+资产路径）、不可移动点 `M*rest` 纯数学、五个 pass 的纯数学（距离约束 4 种 multiplier、风力方向与 1e-4 cm 适配、四角锥形生成与 mixer 权重、阻尼系数直接指数、global shape range 门控与拉回、VSP 端点/线性 stiffness、strand 变换与伪加速度阈值、直/弯 rest 的 local-shape 旋转、速度 clamp）、胶囊投影/固定点/长步数接触与 collision 校验、胶囊 `bone` 解析/身份/缺骨错误、骨骼旋转移动端点/未绑定胶囊保持静态；`collision.mesh` 解析（path/cellSize/margin 范围、未知键、backend 限制、缓存身份、OBJ 顶点/多边形/负索引/行号错误、缺失代理）；有符号 SDF 网格 CPU 镜像（magnitude-first FloatFlip 编码、每帧变形域/退化 extent 钳制/固定 48..64 分辨率、clear+splat、三线性采样、中心差分梯度、退化梯度跳过、2 cm 内部点被推到表面外、0.5 cm 外部点只在 margin 内移动、盒/球/远点、蒙皮矩阵带动场）；代理权重转移（空间哈希最近点、等距下标确定性、归一化、全影响保留、超距拒绝、逐顶点 LBS 与单骨矩阵等价）；离线 SDF 生成（球/盒解析距离、角度加权伪法线、锐尖顶点、开放边报告、字节确定性、1 vs 4 线程并行字节一致、文件往返与截断/损坏拒绝）；离线碰撞代理（规则立方体聚类与绕序、退化/重复三角形剔除、区域包含规则、输出字节确定性、开盒开放边、最小三角形下限）；新增 10 项复位计划/事件消费/缺失恢复/800B 参数、6 项相对 palette/冻结帧时钟、5 项世界历史换基/惯性（含 90 帧独立世界 Verlet oracle）、17 项源调度/阻尼/VSP/胶囊量纲、9 项原生 substep/reset 计划、12 项作者刚度曲线（解析/UBO/CPU/shader 语义）及 5 项 hair trace v3 文件往返/截断测试（含每帧 hairModel 与 SDF/胶囊穿透统计）；合成夹具，模块套件不含真实女性资产或 GPU dispatch（GPU 路径由 main 启动烟测覆盖） |
 | `vl_offline_adapter_tests` | 101 | 离线场景/网格/显示/相机适配 |
 | `editor_viewport_tests` | 41 | 视口几何、命中、坐标映射、aspect、坐标轴投影及编辑器网格 |
 | `vl_offline_coordinator_tests` | 13 | 离线会话协调 |
@@ -937,11 +937,43 @@ File→Exit 日志确认 teardown 完成，无 Vulkan validation 错误。该验
 
 ## 改动 → 验证
 
+### TressFX 物理交互入口
+
+复位/空间/时钟的验证分三类记账：
+
+1. `hair_asset_tests` 的 `TressfxSimulationHistory`、`TressfxFrameContext`、
+   `TressfxFrameClock` 及 solver math 用例检查复位状态、相对空间、时钟去重与独立数学期望。
+2. 实际 `main` 的 shader 加载、`[TressFX] ResetPositions` 事件与 guide/SDF dispatch
+   日志检查 CPU 录制确实消费新分支；这不是 GPU 三份位置逐点读回。
+3. `tool/hair/capture_hair_physics.py` 是外部生产 Console 烟测：
+   30/60/120 Hz 连续 Idle/Walk、动画 pause、seek 0.25/2.75、clip 切换、侧/背接触图、
+   完整 BMP/PNG、播放状态、perf JSONL 与自有进程清理。它不注册 CTest，也不新增 runtime test。
+
+```powershell
+& 'C:\Program Files\Python314\python.exe' tool/hair/capture_hair_physics.py `
+    --output artifacts/hair-physics-final --build-directory build-rel `
+    --rates 30 60 120 --require-reset
+```
+
+脚本拒绝覆盖旧输出，串行持有本工具的 runtime lock；调用方还须保证其它 Vulkan 会话
+没有并发发布 `shader/spv/`。`--require-reset` 要求 first-pose 和至少四次
+pose-discontinuity 事件，覆盖 seek/clip，不以初始复位代替跳变验证。
+`--startup-delay 5 --startup-only --rates 60` 为 Debug 首次 Idle 短检查，
+此模式只要求 first-pose。`completed` 表示采集结束，`visualReviewRequired`
+要求人工复核角色/完整头发可见，不能把非纯色背景误当角色取景通过。
+Console 动作/get/screenshot 同次注入，仍不保证 RT 精确第一帧。
+普通 mesh Walk 保留原根位移，正式导入后沿 +Z；连续机位沿轨迹观察，
+seek 0.25/2.75 近景分别跟随约 +50/+550 cm，接触近景使用 Idle。
+动画 pause 与游戏 Pause 分别记账，发丝在骨骼暂停后继续受风不表示游戏时钟失效。
+`--duration 600 --rates 60` 可作更长存活/日志烟测，图片不能证明无 NaN、段长上界或零穿透。
+输入 config/SC/SM 只读并核对 SHA256；强制结束不作为正常 teardown 证据。
+本轮证据与保留缺口见 [物理交互记录](../rationale/tressfx5-hair-physics-record.md)。
+
 TressFX 导入与材质边界使用 `vl_tfx_inspect`、`hair_asset_tests` 和
 `material_schema_tests`：构建这三个目标后运行
 `ctest --test-dir build -R "^(TfxLoader|TfxFileTest|StrandGeometry|TressfxDescriptor|TressfxImport|TressfxMaterial)\." --output-on-failure`。
-hair 的 **161 项**覆盖 `.tfx` 字节边界、切线/ribbon 拓扑、SM 半径/身份、属性流、
-simulation CPU/GPU backend 解析、变量步长（`maxDt` clamp 到 0.016、一帧一步）、
+hair 的 **287 项**覆盖 `.tfx` 字节边界、切线/ribbon 拓扑、SM 半径/身份、属性流、
+simulation CPU/GPU backend 解析、源原生调度（n=0/1/2 × 0.0125 s、`StepFrame`）、旧 `Step` 的 `maxDt` clamp、
 `bendStiffness`/四角风/`globalShape*`/`vsp*` 作者字段与参数打包、
 `simulation.skinning` 作者边界/缓存身份/根骨解析/InitialPos 纯数学、
 `collision.mesh` 作者边界/缓存身份/OBJ 解析、有符号 SDF 网格 CPU 镜像
@@ -952,7 +984,33 @@ simulation CPU/GPU backend 解析、变量步长（`maxDt` clamp 到 0.016、一
 `exp(-DampingCoeff*dt*60)`（无 `-ln`），global shape 的 range 门控
 与拉回，VSP 混合端点与逐顶点 stiffness 线性衰减，strand 刚体变换与伪加速度阈值，
 直/弯 rest 的 local-shape 旋转、速度 clamp 与 std140 参数布局。
-`GuideSimulationParams` 的 `static_assert` 固定 224 bytes 与 mat4 offset 160。
+新增 `tressfxWorldHistoryTests` 的 5 项覆盖首帧 placement、0dt 换基、pivot 旋转、
+快速平移的根/梢惯性，以及 90 帧独立世界 Verlet oracle；`tressfxSourceScheduleTests`
+的 17 项固定源 0.0125 s/max-2 调度、0.0167 扣除边界、每步/每秒阻尼、VSP 140 cm
+量纲、`i/N` 曲线采样与胶囊碰撞不写 previous；`tressfxDynamicsTests` /
+`tressfxSimulationHistoryTests` 另加 9 项固定 `StepFrame` 物理时间、风帧每帧一次、
+reset 首轮/零 delta 延迟与 `PlanGuideSubsteps` 顺序。
+`GuideSimulationParams` 的 `static_assert` 固定 800 bytes 与 mat4/曲线数组
+offset 160/224/288/544；新增 12 项 `vspStiffness`/`localShapeStiffness` 曲线与
+5 项 `HairTraceFormat` 往返/截断测试；`TressfxRenderableKey` 固定 GPU 发丝
+placement 独立对象键与普通网格共享键；7 项 `TfxBoneLoader` 覆盖 `.tfxbone`
+字节格式、骨名映射/归一化与源 `-1`/零权重跳过；2 项描述符测试固定
+`boneWeights` 字段与 mesh 身份、1 项加权 `InitialPos` 数学；GPU 多骨通过
+多骨烟测与 trace 验证。新增 `HairConsoleCommand` 的 7 项固定 `hair reset` 参数解析
+（空参数/去空格/多 token/超长/复位原因名）；`TressfxComponentBinding` 4 项固定
+“组件绑定优先于 SM `source`、缺失来源拒绝、权重来源优先级”；`ScriptTressfxComponent`
+5 项在 `script_tests` 覆盖组件校验（必须有 mesh 祖先、字段白名单、父级骨架）；
+`TressfxLiveParams` 10 项固定实时覆盖的字段表、需重载字段拒绝、值域与“不半改”语义。
+毛发资产视口用例在 `editor_ui_tests`（`TressfxHairPreview` 5 项、
+`EditorUiTest.TressfxHairViewport*` 2 项、JSON 候选摘要 2 项），覆盖 skinning 守卫、
+左键转模型与 Reset 动作；T4b 再增 `TressfxComponentUi` 4 项与
+`EditorUiTest.BlueprintAssetTressfx*` 3 项，覆盖组件添加入口、默认父级推导、
+字段可见性与实例白名单；T5b 再增 `TressfxHairSimulationControls` 4 项、
+`EditorUiTest` 2 项（资产页 Simulation 段、拖动只发 UiAction、保存走 `mesh.modify`、
+关卡侧零入口）与 `AssetDocumentTest` 1 项（能力表字段、保存后文件含资产级字段、
+越界拒绝），`editor_ui_tests` 合计 789 项；③ 再增 2 项
+（`EditorUiTest.SceneTressfx*`：BP 实例与内联 actor 的关卡侧只读 + 提示 + 无覆写控件），
+合计 **791 项**。
 GPU compute dispatch 不在模块套件内，由 main 启动烟测覆盖。
 `TressfxMaterial` 的 7 项覆盖工厂身份、透明写深度，以及不支持的模型/路径拒绝。
 材质目标共 16 项。
@@ -963,6 +1021,11 @@ GPU compute dispatch 不在模块套件内，由 main 启动烟测覆盖。
 | `shader/glsl/hair/tressfxSim*.comp`、`tressfxSimCommon.glsl`、`tressfxSdfCommon.glsl` | 启动任一 GPU 发丝场景；shader 构建日志显示 9 个 `hair/tressfxSim*` 条目（含 SdfClear/SdfSplat/SdfCollide），`failed=0` |
 | `source/hair/*`、参数布局 | `cmake --build build -j 8`；`build/bin/hair_asset_tests.exe --gtest_brief=1` |
 | `schema/model_descriptor.schema.json`、`meshAssetValidator` | `hair_asset_tests`；`material_schema_tests.exe --gtest_brief=1` |
+| 蓝图 `tressfx` 组件（校验/展开/绑定优先级/权重来源/编辑器入口） | `build/bin/script_tests.exe --gtest_filter=ScriptTressfxComponent.*`；`build/bin/hair_asset_tests.exe --gtest_filter=TressfxComponentBinding.*`；`build/bin/editor_ui_tests.exe --gtest_filter="TressfxComponentUi.*:EditorUiTest.BlueprintAssetTressfx*"` |
+| 毛发资产 Simulation 段（会话预览 + 资产级保存） | `build/bin/editor_ui_tests.exe --gtest_filter="TressfxHairSimulationControls.*"`；`AssetDocumentTest` 的 simulation 能力/保存用例；人工：拖 `damping` 看 `[TressFX] live param`、Save 后重载 |
+| `hair set` / `SetHairSimulationParameter` | `build/bin/hair_asset_tests.exe --gtest_filter=TressfxLiveParams.*`；一次实机 `hair set` 看 `[TressFX] live param` |
+| 蓝图/关卡里的毛发可见性（静态） | 无 GUI 探针：`Generated/Validation/SC_tressfx_component_probe/` 的 BP + 场景，`build/bin/main.exe --initial-scene … --frame-limit 30 --no-dev-ui`，期望 `hair binding: … binding=component` 与 `rootWeights: …`；探针不属于 CTest、不进正式内容 || `hair reset` / `ResetHairSimulation` | `build/bin/hair_asset_tests.exe --gtest_filter=HairConsoleCommand.*`；一次实机 `hair reset` 看 `reason=requested` |
+| 毛发资产视口（TressFX kind、skinning 守卫、左键转模型、Reset） | `build/bin/editor_ui_tests.exe --gtest_filter="TressfxHairPreview.*:EditorUiTest.TressfxHairViewport*"`；GUI 烟测步骤见 `../plan/rendering/tressfx-hair-editor-and-binding-plan.md` |
 | `documents/contracts/**` | `py -3 tool\validate-docs.py` |
 | 架构边界 | `pwsh -File tool/architecture-boundary-audit.ps1` |
 
@@ -976,11 +1039,12 @@ build/bin/main.exe --initial-scene Maps/SC_tressfx_female/SC_tressfx_female_dyna
 
 日志应出现 `World/graph transaction committed` 与
 `[TressFX] GPU guide simulation dispatch: objects=1 guides=40334 points=1290688 passes=9 sdfObjects=0`，
-stderr 无 Vulkan validation 输出。该日志行只在首次录制时输出一次，统计对象/
-guide/点数量、pass 表大小与声明 `collision.mesh` 的对象数；每帧恰好录制一次
-pass 序列（`vspCoefficient=0` 时不录制 VSP，无胶囊时不录制 Collision，无
-`collision.mesh` 时不录制三个 SDF pass），没有固定步 accumulator 的 0..N 次
-重复 dispatch。该路径没有自动退出标志，验证后手动结束进程。
+stderr 无 Vulkan validation 输出。该日志行只在首次有待录制工作时输出一次，统计对象/
+guide/点数量、pass 表大小与声明 `collision.mesh` 的对象数；
+正常步进每帧最多录制一次 pass 序列（`vspCoefficient=0` 时不录制 VSP，无胶囊时不录制
+Collision，无 `collision.mesh` 时不录制三个 SDF pass）；零 delta/重复快照跳过，
+Reset 帧仅 Integration。日志 `passes=9` 是表大小，不代表当前帧发了 9 个 dispatch。
+没有固定步 accumulator 的 0..N 次重复 dispatch。该路径没有自动退出标志，验证后手动结束进程。
 同一 SM 还作者了头/颈/肩背四个碰撞胶囊；Collision pass 在 LengthConstraintsWind
 之后执行。
 
@@ -1038,9 +1102,10 @@ gitignored 的 `artifacts/tressfx-pass/animated_a.png` / `animated_b.png`。
 
 `dims`/`origin`/`cellSize` 是**第一帧**的域；之后每帧 origin/cellSize/truncation
 都随蒙皮后的代理包围盒更新，行只打印一次。`passes=9` 是 pass 表大小
-（6 个 solver/胶囊 + 3 个 SDF）；该帧实际录制 Integration、StrandLevel、
+（6 个 solver/胶囊 + 3 个 SDF）；正常模拟帧实际录制 Integration、StrandLevel、
 LocalShape、LengthWind、Collision（4 个胶囊）、SdfClear、SdfSplat、SdfCollide
-共 8 个 dispatch（VSP 关闭）。stderr 为空，无 Vulkan validation 输出。
+共 8 个 dispatch（VSP 关闭），Reset 帧只录制 Integration；
+零 delta 且无复位/同一快照重绘时不推进。stderr 为空，无 Vulkan validation 输出。
 
 符号数值检查（临时诊断，CPU 镜像 same field，**已移除**）：在正式代理最高的
 三角形质心取“表面”，沿绕序法线做内外偏移：

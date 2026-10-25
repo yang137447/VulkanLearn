@@ -13,6 +13,7 @@
 #include "hair/tressfxSolverMath.h"
 
 namespace VL::Animation { struct SkeletalAsset; }
+namespace VL::Hair { struct TfxBoneAsset; }
 
 // Result of resolving one mesh asset JSON into the effective JSON consumed by mesh validation.
 // It keeps resolver output separate from runtime loading so later defaults or platform overrides can
@@ -47,6 +48,15 @@ enum class TressfxSimulationBackend
     Gpu,
 };
 
+// 逐 strand 根点权重的来源。RootBone 保持历史单根骨；Mesh 在加载期从源角色
+// 绑定姿态网格派生多骨权重（每个 guide 根点复制最近身体顶点的完整影响）。
+// 两种来源都不改 GPU 通道：多骨数据仍走 binding 14/15 与 motion.w bit2。
+enum class TressfxRootWeightSource
+{
+    RootBone,
+    Mesh,
+};
+
 // simulation.skinning 的作者声明：把发丝根点从前 N 个固定点改为跟随源角色骨骼。
 // source 是同一场景里的 mesh 对象名，rootBone 是该对象目标骨架的关节名。
 // 缺省（nullopt）表示保持“根点钉在 rest”的历史行为。
@@ -54,6 +64,15 @@ struct TressfxSimulationSkinning
 {
     std::string source;
     std::string rootBone;
+    // 可选 .tfxbone（资源仓库相对路径）。非空时导入期解析并与目标骨架映射，
+    // 运行期用逐 strand 多骨权重替换单根骨 InitialPos；空表示保持单根骨行为。
+    std::string boneWeightsPath;
+    // 根点权重来源。Mesh 与 boneWeightsPath 互斥：一个是派生，一个是显式作者数据，
+    // 同时出现会让“谁覆盖谁”变成隐式规则，描述符边界直接拒绝。
+    TressfxRootWeightSource rootWeights = TressfxRootWeightSource::RootBone;
+    // 作者是否显式写了 weights。蓝图 tressfx 组件挂载时只有“缺省”才自动升级为
+    // mesh 派生；显式 rootBone 必须被尊重。
+    bool rootWeightsAuthored = false;
 };
 
 // 顶层 `collision.mesh` 的作者声明。path 是资源仓库相对路径的低模 OBJ；
@@ -71,15 +90,17 @@ struct TressfxSimulationConfig
 {
     bool enabled = false;
     Eigen::Vector3f gravity = Eigen::Vector3f(0.0f, -980.0f, 0.0f);
-    // 单个风向量：方向归一化后作为风锥轴，长度作为幅值（厘米/秒）。
+    // 单个风向量：方向归一化后作为风锥轴，长度作为 TressFX WindMagnitude
+    // 力标量，不是物理风速。
     Eigen::Vector3f wind = Eigen::Vector3f::Zero();
     // TressFX 的 DampingCoeff，直接用于 exp(-damping*dt*60)；
     // 典型 0..0.07，默认 0.035，不是“每步保留的速度比例”。
     float damping = 0.035f;
     uint32_t iterations = 3;
     uint32_t rootFixedPoints = 2;
-    // 变量步长：每帧一个 solver step，dt = clamp(frameDelta, 0, maxDt)。
-    // TressFX 的硬上限是 0.016 s；资产只能收紧，不能超过。
+    // 仅为兼容既有资产保留：GPU 原生调度与 CPU StepFrame 使用源固定
+    // 0.0125 s/substep，不再读 maxDt；只有旧的可变步长入口
+    // GuideSimulation::Step 仍按它 clamp。资产值仍限制在 (0, 0.016]。
     float maxDt = VL::Hair::TressfxMaxTimeStepSeconds;
     // 映射到 LocalShape pass 的 Stiffness 标量；pass 内再乘 0.5（TressFX 公式）。
     // 0 关闭局部形状约束。
@@ -90,9 +111,18 @@ struct TressfxSimulationConfig
     float globalShapeStiffness = 0.0f;
     float globalShapeEffectiveRange = 0.0f;
     // TressFX VelocityShockPropagation：0 关闭 VSP 混合（Host 不录制 VSP dispatch）。
-    // vspAccelThresholdMax 是伪加速度阈值，超过时强制系数 1（厘米/秒²）。
+    // vspAccelThresholdMax 比较二阶位置差幅值（厘米，未除 dt²），超过时强制系数 1。
     float vspCoefficient = 0.0f;
-    float vspAccelThresholdMax = 5000.0f;
+    float vspAccelThresholdMax = VL::Hair::TressfxDefaultVspAccelThresholdMaxCm;
+    // TressFX 作者逐顶点 VSPStiffness 曲线：第 i 项 = 作者曲线在 i/N 处的采样值
+    // （TressFXComponent.cpp:687-691），N = pointsPerStrand。空数组表示未作者，
+    // VSP pass 回退到从根前缀(1)到梢部(0)的线性近似。非空时长度必须等于该
+    // guide 的 pointsPerStrand，由 TressfxModelImporter 解析 .tfx 后校验。
+    std::vector<float> vspStiffness;
+    // TressFX 作者逐顶点 LocalShape Stiffness：与 VSP 同源，按 i/N 采样后再
+    // min(value, 0.95)（TressFXComponent.cpp:706-710）。加载期已把 > 0.95 的
+    // 作者值 clamp 到 0.95 并输出记录；空数组表示回退到 bendStiffness 标量。
+    std::vector<float> localShapeStiffness;
     // SM 描述符顶层 `collision.capsules` 的解析结果；空表示不做胶囊碰撞。
     // 位置/半径都是资产局部空间厘米，与 positions 和 solver 同一坐标系。
     std::vector<VL::Hair::TressfxCollider> capsules;
@@ -268,6 +298,8 @@ struct ModelImportRequest
     std::string absoluteModelPath;
     // tressfx `collision.mesh` 的已解析绝对路径；未声明时为空。
     std::string absoluteCollisionMeshPath;
+    // tressfx `simulation.skinning.boneWeights` 的已解析绝对路径；未声明时为空。
+    std::string absoluteBoneWeightsPath;
 };
 
 // One imported geometry section from a model file, preserving the section and material slot names.
@@ -279,6 +311,10 @@ struct MeshSection
     // TFX positions carry inverse mass in w; retain it beside the expanded
     // ribbon vertices so the runtime solver can preserve authored root pins.
     std::vector<float> tressfxInverseMass;
+    // 每根 guide 的根点（model 空间厘米）。GPU 位置 buffer 是 device-local，
+    // 加载期从绑定姿态身体派生根点权重时需要一份主机侧可读副本；只留根点而不是
+    // 全部点，正式资产 40,334 根约 0.48 MB。
+    std::vector<Eigen::Vector3f> tressfxRootPositions;
     std::vector<uint32_t> indices;
     std::vector<SpeedTreeVertexAux> speedTreeAuxVertices;
     std::string sectionName;
@@ -291,6 +327,9 @@ struct MeshSection
     // 导入期解析出的碰撞代理三角形汤（与 tressfxSimulation.collisionMesh 同时
     // 存在）。RenderableObject 只消费它，不在运行时重新读 OBJ。
     std::shared_ptr<const VL::Hair::SdfTriangleMesh> tressfxCollisionMesh;
+    // 可选的 .tfxbone 解析结果；与 collision mesh 一样由导入期读取，
+    // RenderableObject 只消费，不在运行时读文件。
+    std::shared_ptr<const VL::Hair::TfxBoneAsset> tressfxBoneAsset;
 };
 
 // Runtime loading plan for one imported mesh section after material slot validation.

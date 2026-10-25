@@ -8,9 +8,12 @@
 
 namespace VL::EditorUi
 {
-inline std::string ScriptComponentOptions()
+// 毛发组件只在蓝图资产页提供作者入口：它的绑定来源必须是同一 actor 里的 mesh
+// 组件，Scene 侧通用组件面板没有“挂到哪个角色”的上下文，不暴露它。
+inline std::string ScriptComponentOptions(bool includeTressFx = false)
 {
     return UiWidgets::Option("scene", "Scene") + UiWidgets::Option("mesh", "Mesh") +
+        (includeTressFx ? UiWidgets::Option("tressfx", "TressFX") : std::string()) +
         UiWidgets::Option("camera", "Camera") + UiWidgets::Option("springArm", "Spring Arm") +
         UiWidgets::Option("pointLight", "Point Light") +
         UiWidgets::Option("spotLight", "Spot Light") + UiWidgets::Option("directionalLight", "Directional Light");
@@ -20,7 +23,27 @@ inline nlohmann::json NewScriptComponent(const std::string& type)
 {
     nlohmann::json node{{"type", type}};
     if (IsScriptLight(type)) node["intensityUnit"] = type == "directionalLight" ? "lux" : "cd";
+    // 毛发权重默认 auto：加载期由父 mesh 组件派生，作者可在 Details 覆盖成 rootBone/mesh。
+    if (type == "tressfx") node["weights"] = "auto";
     return node;
+}
+
+// 新 tressfx 组件的默认父级：从当前选择向上找最近的 mesh 组件。选择本身就是 mesh
+// 时用它；Blueprint 根或没有 mesh 祖先返回空，调用方必须拒绝添加（加载期也会再拒绝）。
+inline std::string ScriptComponentMeshParent(
+    const nlohmann::json& components, const std::string& selectedId)
+{
+    auto id = selectedId;
+    while (!id.empty())
+    {
+        const nlohmann::json* found = nullptr;
+        for (const auto& node : components)
+            if (ScriptComponentId(node) == id) { found = &node; break; }
+        if (found == nullptr) return {};
+        if (found->value("type", "") == "mesh") return id;
+        id = found->value("parent", "");
+    }
+    return {};
 }
 
 inline std::string ComponentControlId(size_t index, const std::string& field, size_t axis = 0,
@@ -98,7 +121,7 @@ inline std::string ScriptComponentControls(const EditorSceneActorSnapshot& actor
         UiWidgets::TreeRowData row;
         row.label = id;
         row.depth = depth;
-        row.icon = node.at("type") == "mesh" ? "icons/mesh.png" :
+        row.icon = IsScriptMeshComponent(node.at("type").get<std::string>()) ? "icons/mesh.png" :
             node.at("type") == "camera" ? "icons/camera.png" : "icons/blueprint.png";
         // 资产编辑页在左侧独立选组件；Scene Details 保留原有父链内联表单。
         if (separateDetails)
@@ -108,10 +131,17 @@ inline std::string ScriptComponentControls(const EditorSceneActorSnapshot& actor
         markup += "<div class=\"script-component-actions\"><button id=\"" + prefix + "component-remove-" +
             std::to_string(index) + "\" class=\"browser-icon\" data-action=\"" + prefix + "component-remove\" data-index=\"" +
             std::to_string(index) + "\" title=\"Remove component and descendants\"><img src=\"icons/trash.png\"/></button></div>";
-        std::string options = UiWidgets::Option("", "Actor");
+        const bool tressfx = node.at("type") == "tressfx";
+        // 毛发只允许挂到 mesh 组件（绑定来源就是它），所以不提供 "Actor" 空父级；
+        // 其它类型保持原有“任意组件”的父链语义。
+        std::string options = tressfx ? std::string() : UiWidgets::Option("", "Actor");
         for (const auto& candidate : actor.scriptComponents)
-            if (candidate.value("id", "root") != id)
-                options += UiWidgets::Option(candidate.value("id", "root"), candidate.value("id", "root"));
+        {
+            if (candidate.value("id", "root") == id) continue;
+            const bool current = candidate.value("id", "root") == node.value("parent", "");
+            if (tressfx && candidate.value("type", "") != "mesh" && !current) continue;
+            options += UiWidgets::Option(candidate.value("id", "root"), candidate.value("id", "root"));
+        }
         markup += UiWidgets::PropertyControlRow("Parent", UiWidgets::Select(
             ComponentControlId(index, "parent", 0, prefix), {prefix + "component-parent", index}, options));
         if (node.at("type") == "mesh")
@@ -122,6 +152,45 @@ inline std::string ScriptComponentControls(const EditorSceneActorSnapshot& actor
             markup += ScriptComponentProperty(actor, index, "materialOverride", "Material Override", UiWidgets::Input(
                 ComponentControlId(index, "materialOverride", 0, prefix), {prefix + "component-materialOverride", index},
                 node.value("materialOverride", "")), prefix, separateDetails);
+        if (tressfx)
+        {
+            // 关卡编辑与资产编辑必须分开：毛发绑定字段只在蓝图资产页作者，
+            // Scene Details 一律只读展示（含内联 actor），不得在关卡里生成
+            // componentOverrides 或依赖“看起来能改”的控件。
+            const bool sceneHairFieldsReadOnly = !separateDetails;
+            if (sceneHairFieldsReadOnly)
+            {
+                const auto weights = node.value("weights", "auto");
+                const std::string weightsLabel = weights == "rootBone" ? "Root Bone" :
+                    weights == "mesh" ? "From Mesh" : "Auto (from parent mesh)";
+                const auto rootBone = node.value("rootBone", "");
+                markup += UiWidgets::PropertyInfo("Hair Asset", node.value("modelPath", ""));
+                markup += UiWidgets::PropertyInfo("Root Bone",
+                    rootBone.empty() ? "(descriptor default)" : rootBone);
+                markup += UiWidgets::PropertyInfo("Root Weights", weightsLabel);
+                markup += UiWidgets::PropertyInfo("Asset-Owned",
+                    "TressFX binding is authored in the Blueprint asset. Edit it in the Blueprint tab; "
+                    "level instances cannot override these fields.");
+            }
+            else
+            {
+                // 毛发字段与 mesh 的 modelPath 控件同名同形；rootBone 留空表示沿用描述符默认。
+                // 实例白名单不暴露毛发字段：绑定/权重属于资产级编排，不是场景实例差异。
+                markup += ScriptComponentProperty(actor, index, "modelPath", "Hair Asset", UiWidgets::Input(
+                    ComponentControlId(index, "modelPath", 0, prefix), {prefix + "component-modelPath", index},
+                    node.value("modelPath", "")), prefix, false);
+                markup += ScriptComponentProperty(actor, index, "rootBone", "Root Bone", UiWidgets::Input(
+                    ComponentControlId(index, "rootBone", 0, prefix), {prefix + "component-rootBone", index},
+                    node.value("rootBone", "")), prefix, false);
+                markup += ScriptComponentProperty(actor, index, "weights", "Root Weights", UiWidgets::Select(
+                    ComponentControlId(index, "weights", 0, prefix), {prefix + "component-weights", index},
+                    UiWidgets::Option("auto", "Auto (from parent mesh)") +
+                    UiWidgets::Option("rootBone", "Root Bone") + UiWidgets::Option("mesh", "From Mesh")),
+                    prefix, false);
+            }
+            markup += UiWidgets::PropertyInfo("Local Transform",
+                "Follows the parent mesh object space; local TRS is disabled for TressFX components.");
+        }
         if (node.at("type") == "camera")
         {
             for (const auto& field : std::vector<std::pair<std::string, float>>{
@@ -189,26 +258,31 @@ inline std::string ScriptComponentControls(const EditorSceneActorSnapshot& actor
                 UiWidgets::Select(ComponentControlId(index, "visible", 0, prefix), {prefix + "component-visible", index},
                     UiWidgets::Option("false", "False") + UiWidgets::Option("true", "True")), prefix, separateDetails);
         }
-        for (const char* field : {"position", "rotation", "scale", "color"})
+        // 毛发组件必须与父 mesh 同对象空间，局部 TRS 与图元碰撞都不适用：
+        // 碰撞由毛发描述符的 collision 对象拥有，这里不提供第二个作者入口。
+        if (!tressfx)
         {
-            if (std::string(field) == "color" && !IsScriptLight(node.at("type"))) continue;
-            std::vector<UiWidgets::NumericComponent> controls;
-            for (size_t axis = 0; axis < 3; ++axis)
+            for (const char* field : {"position", "rotation", "scale", "color"})
             {
-                UiWidgets::NumericComponent control;
-                control.id = ComponentControlId(index, field, axis, prefix);
-                control.label = std::string(1, std::string(field) == "color" ? "RGB"[axis] : "XYZ"[axis]);
-                control.value = node.contains(field) ? node.at(field)[axis].dump() :
-                    (std::string(field) == "scale" || std::string(field) == "color" ? "1" : "0");
-                control.change = {prefix + "component-" + field, index, static_cast<uint32_t>(axis)};
-                controls.push_back(std::move(control));
+                if (std::string(field) == "color" && !IsScriptLight(node.at("type"))) continue;
+                std::vector<UiWidgets::NumericComponent> controls;
+                for (size_t axis = 0; axis < 3; ++axis)
+                {
+                    UiWidgets::NumericComponent control;
+                    control.id = ComponentControlId(index, field, axis, prefix);
+                    control.label = std::string(1, std::string(field) == "color" ? "RGB"[axis] : "XYZ"[axis]);
+                    control.value = node.contains(field) ? node.at(field)[axis].dump() :
+                        (std::string(field) == "scale" || std::string(field) == "color" ? "1" : "0");
+                    control.change = {prefix + "component-" + field, index, static_cast<uint32_t>(axis)};
+                    controls.push_back(std::move(control));
+                }
+                markup += "<div class=\"actor-property-row\">" +
+                    ScriptComponentProperty(actor, index, field,
+                        std::string(field) == "color" ? "Linear Color" : std::string("Local ") + field,
+                        UiWidgets::NumericComponents(controls), prefix, separateDetails) + "</div>";
             }
-            markup += "<div class=\"actor-property-row\">" +
-                ScriptComponentProperty(actor, index, field,
-                    std::string(field) == "color" ? "Linear Color" : std::string("Local ") + field,
-                    UiWidgets::NumericComponents(controls), prefix, separateDetails) + "</div>";
         }
-        markup += ScriptComponentCollisionControls(index, prefix);
+        if (!tressfx) markup += ScriptComponentCollisionControls(index, prefix);
         if (separateDetails) markup += "</div>";
         markup += ScriptComponentControls(actor, id, depth + 1, prefix, separateDetails);
     }

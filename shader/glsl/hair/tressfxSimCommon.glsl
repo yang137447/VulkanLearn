@@ -6,7 +6,7 @@
 // - std140 params block 与 source/hair/tressfxSimulationParams.h 一一对应；
 //   任何字段顺序/大小变化都必须同时改 C++ 的 static_assert。
 // - 位置统一为厘米（TressFX 源实现是米，rest 乘 0.01；这里不缩放）。
-// - 重力方向由资产给出（Y-up），不再使用 TressFX 的 GravityMagnitude*(0,0,-1)。
+// - 重力/风由资产按世界 Y-up 给出，Host 换算到当前 hair 局部后上传。
 // - 约定 q = vec4(x, y, z, w)，w 是标量部分。
 // - 可移动标记沿用 TressFX：vec4.w != 0 为 movable；不可移动点在 integration
 //   pass 写 w = 0。
@@ -20,12 +20,19 @@ layout(std140, set = 0, binding = 0) uniform SimulationParams
     vec4 controls;     // x = dt, y = DampingCoeff, z = pointsPerGuide, w = rootFixedPoints
     vec4 shape;        // x = globalShapeStiffness, y = effectiveRange,
                        // z = vspCoefficient, w = vspAccelThresholdMax
-    vec4 motion;       // x = Stiffness(LocalShape); y/z/w 保留为 0
-                       // （阵风已删除，时间调制在 Host 烘进 wind0..3）
+    vec4 motion;       // x = Stiffness(LocalShape), y = ResetPositions, z = rebaseOnly,
+                       // w 的 bit0/bit1 = VSP / LocalShape 作者数组存在，
+                       // bit2 = 逐 strand 多骨权重存在
+                       // 时间调制在 Host 烘进 wind0..3
     uvec4 counts;      // x = length iterations, y = guideCount,
                        // z = pointCount, w = colliderCount
     vec4 skinningQuat; // (x,y,z,w) = 根骨旋转；w 为标量部分
     mat4 skinning;     // 根点骨骼矩阵
+    mat4 historyToCurrentLocal; // inverse(currentHairModel) * lastRecordedHairModel
+    // 作者逐顶点 stiffness 曲线（最多 64 项），4 个 float 一组打包为 vec4；
+    // 第 local 项在 [local / 4][local % 4]。motion.w 的标志位决定是否使用。
+    vec4 vspStiffness[16];
+    vec4 localShapeStiffness[16];
 } params;
 
 // 与 source/hair/tressfxCollision.h 的 TressfxMaxColliders / GuideColliderGpu 一致。
@@ -80,8 +87,50 @@ vec3 TressfxRotateByQuat(vec4 q, vec3 v)
     return v + q.w * t + cross(q.xyz, t);
 }
 
+// 从刚体矩阵上 3x3 提取四元数；与源 MakeQuaternion 同约定（q = (axis*sin,
+// cos)）。多骨 StrandLevel 用它把加权后的骨骼矩阵写成 SkinningQuat。
+vec4 TressfxQuatFromMatrix(mat4 matrix)
+{
+    mat3 r = mat3(matrix);
+    float trace = r[0][0] + r[1][1] + r[2][2];
+    vec4 q;
+    if (trace > 0.0)
+    {
+        float s = sqrt(trace + 1.0) * 2.0;
+        q.w = 0.25 * s;
+        q.x = (r[1][2] - r[2][1]) / s;
+        q.y = (r[2][0] - r[0][2]) / s;
+        q.z = (r[0][1] - r[1][0]) / s;
+    }
+    else if (r[0][0] > r[1][1] && r[0][0] > r[2][2])
+    {
+        float s = sqrt(1.0 + r[0][0] - r[1][1] - r[2][2]) * 2.0;
+        q.w = (r[1][2] - r[2][1]) / s;
+        q.x = 0.25 * s;
+        q.y = (r[1][0] + r[0][1]) / s;
+        q.z = (r[2][0] + r[0][2]) / s;
+    }
+    else if (r[1][1] > r[2][2])
+    {
+        float s = sqrt(1.0 + r[1][1] - r[0][0] - r[2][2]) * 2.0;
+        q.w = (r[2][0] - r[0][2]) / s;
+        q.x = (r[1][0] + r[0][1]) / s;
+        q.y = 0.25 * s;
+        q.z = (r[2][1] + r[1][2]) / s;
+    }
+    else
+    {
+        float s = sqrt(1.0 + r[2][2] - r[0][0] - r[1][1]) * 2.0;
+        q.w = (r[0][1] - r[1][0]) / s;
+        q.x = (r[2][0] + r[0][2]) / s;
+        q.y = (r[2][1] + r[1][2]) / s;
+        q.z = 0.25 * s;
+    }
+    return normalize(q);
+}
+
 // TressFX LengthConstraintsWind 的四风混合。四路是 Host 按 SetWind 生成的
-// 锥形方向（厘米/秒）；权重和为 2，但方向不同，混合结果逐 strand 变化。
+// 锥形方向（WindMagnitude 力标量）；权重和为 2，混合结果逐 strand 变化。
 vec3 TressfxCombinedWind(uint guide)
 {
     float a = float(guide % 20u) / 20.0;
@@ -110,16 +159,49 @@ void TressfxApplyDistanceConstraint(inout vec4 pos0, inout vec4 pos1,
     pos1.xyz -= multiplier.y * delta;
 }
 
-// TressFX 的 VSPStiffness 作者曲线上限 64 项；VL 用根前缀 -> 梢部的线性衰减近似，
-// 只在 VspCoeff < 0.9 时参与（与源实现同一条件）。
+// 作者逐顶点曲线数组是否存在（Host 写入 motion.w 的 bit0/bit1）。
+bool TressfxHasVspStiffness()
+{
+    return (uint(params.motion.w) & 1u) != 0u;
+}
+
+bool TressfxHasLocalShapeStiffness()
+{
+    return (uint(params.motion.w) & 2u) != 0u;
+}
+
+// TressFX 的 VSPStiffness 作者曲线上限 64 项，第 i 项 = 曲线在 i/N 处的值
+// （TressFXComponent.cpp:687-691）。Host 有作者数组时按 4 个一组打包；
+// 没有时沿用根前缀 -> 梢部的线性衰减近似。
 float TressfxVspStiffness(uint local)
 {
+    if (TressfxHasVspStiffness())
+        return params.vspStiffness[int(local / 4u)][int(local % 4u)];
     float span = float(TressfxPointsPerGuide()) - 1.0
         - float(TressfxRootFixedPoints());
     if (span <= 0.0)
         return 0.0;
     float t = clamp((float(local) - float(TressfxRootFixedPoints())) / span, 0.0, 1.0);
     return 1.0 - t;
+}
+
+// 源 VSP pass 只在 VspCoeff < 0.9 时乘逐顶点 stiffness（patch 10153-10160）；
+// 否则系数原样保留。CPU 的 TressfxVspCoefficient 保持同一分支。
+float TressfxVspCoefficient(float coefficient, uint local)
+{
+    if (coefficient >= 0.9)
+        return coefficient;
+    return coefficient * TressfxVspStiffness(local);
+}
+
+// LocalShape 的逐顶点 Stiffness[i]：作者数组存在时用数组值（加载期已按源
+// min(value, 0.95) 处理），否则回退到 motion.x 的整条 strand 标量。
+// 调用方仍按 TressFX 公式乘 0.5。
+float TressfxLocalShapeStiffness(uint local, float fallback)
+{
+    if (TressfxHasLocalShapeStiffness())
+        return params.localShapeStiffness[int(local / 4u)][int(local % 4u)];
+    return fallback;
 }
 
 #endif // VL_TRESSFX_SIM_COMMON_GLSL

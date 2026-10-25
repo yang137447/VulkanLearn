@@ -29,6 +29,21 @@ layout(set = 0, binding = 6, std430) buffer StrandLevelData
     vec4 data[];
 } strandLevelData;
 
+// 多骨：motion.w bit2 置位时用逐 strand 加权矩阵重算 SkinningQuat。
+struct GpuStrandBones
+{
+    uvec4 indices;
+    vec4 weights;
+};
+layout(set = 0, binding = 14, std430) readonly buffer BoneWeights
+{
+    GpuStrandBones bones[];
+} boneWeights;
+layout(set = 0, binding = 15, std430) readonly buffer SkinningPalette
+{
+    mat4 matrices[];
+} skinningPalette;
+
 void main()
 {
     uint guide = gl_GlobalInvocationID.x;
@@ -66,5 +81,16 @@ void main()
     uint base = guide * 3u;
     strandLevelData.data[base + 0] = rot;
     strandLevelData.data[base + 1] = vec4(trans, vspCoeff);
-    strandLevelData.data[base + 2] = params.skinningQuat;
+    vec4 skinningQuat = params.skinningQuat;
+    if ((uint(params.motion.w) & 4u) != 0u)
+    {
+        GpuStrandBones influence = boneWeights.bones[guide];
+        mat4 weighted =
+            skinningPalette.matrices[influence.indices.x] * influence.weights.x +
+            skinningPalette.matrices[influence.indices.y] * influence.weights.y +
+            skinningPalette.matrices[influence.indices.z] * influence.weights.z +
+            skinningPalette.matrices[influence.indices.w] * influence.weights.w;
+        skinningQuat = TressfxQuatFromMatrix(weighted);
+    }
+    strandLevelData.data[base + 2] = skinningQuat;
 }

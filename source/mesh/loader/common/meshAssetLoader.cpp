@@ -125,6 +125,12 @@ ModelImportRequest BuildModelImportRequest(const MeshAssetBuildPlan& loadPlan)
         request.absoluteCollisionMeshPath = CommonFunction::Path(
             loadPlan.tressfxSimulation.collisionMesh->path);
     }
+    if (loadPlan.tressfxSimulation.skinning &&
+        !loadPlan.tressfxSimulation.skinning->boneWeightsPath.empty())
+    {
+        request.absoluteBoneWeightsPath = CommonFunction::Path(
+            loadPlan.tressfxSimulation.skinning->boneWeightsPath);
+    }
     return request;
 }
 

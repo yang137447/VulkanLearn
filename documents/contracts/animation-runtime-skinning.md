@@ -68,6 +68,23 @@ World、WorldSnapshot、RenderScene 仅共享其 const 所有权；旧快照不�
 单帧局部采样创建独立 ozz context；批量 `SampleModels` 在同一片段内复用 context，
 先验证整批时刻，空批次仍校验资产。
 
+GT 同时冻结每个 draw 的 `simulationDeltaSeconds`：普通 mesh 使用 GT 帧 delta，
+`__blueprint/` 组件使用本帧脚本 scaled delta（Pause 为零），与两条动画推进路径一致。
+TressFX 骨骼绑定发丝继承源 draw 的冻结 delta；未绑定发丝使用场景
+`hairSimulationDeltaSeconds`（Editing 使用 GT delta，Playing 使用脚本倍率，Paused 为零）。
+RT 不读取脚本时钟或自动曝光墙钟；同一 World/frame 快照只领取一次物理 delta，
+重绘最近有效 RenderScene 不再推进模拟。resize/图重建的纯快照刷新使用零 delta，
+不领取下一正常帧的时间片；普通帧成功发布后清空待发布 delta。
+
+发丝根点、骨骼绑定胶囊及 SDF 代理使用统一的发丝局部 palette：
+`inverse(hairDraw.model) * sourceDraw.model * bindToPose[joint]`。
+没有骨骼绑定的胶囊仍位于作者的发丝局部空间；gravity/wind 也保留资产局部语义。
+这使源对象与发丝采用不同当前 placement 时仍保持世界空间贴合，
+不额外引入共同移动产生的世界空间惯性；加载期两者绑定 placement 的一致性检查不变。
+发丝遇到 playbackIdentity/discontinuity 变化时重建模拟历史，零 delta 的 seek 也可复位；
+普通 placement 变化不隐式触发传送复位。完整碰撞与复位边界见
+[TressFX 资产导入](tressfx-asset-import.md)。
+
 姿态 AABB 不再逐顶点求精确值，而是由导入期预计算的逐关节绑定空间 AABB 推导：
 
 - `SkinSection::jointBindBounds` 与 `inverseBinds` 同下标、同长度；由

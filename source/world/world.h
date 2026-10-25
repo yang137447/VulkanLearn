@@ -168,6 +168,12 @@ public:
     bool SetMeshSceneObjectTransform(const std::string& identity,
         const Eigen::Vector3f& position, const Eigen::Vector3f& rotation,
         const Eigen::Vector3f& scale);
+    // 只读读回该 actor 的根 TRS（度数与场景 JSON 语义一致）。同一 identity 的所有
+    // section 共享 scene TRS，因此取第一个命中项即可；返回 false 表示身份不在当前
+    // World。Console 的增量位移/sweep 起点用它读当前 placement，不复制 World 表。
+    bool GetMeshSceneObjectTransform(const std::string& identity,
+        Eigen::Vector3f& position, Eigen::Vector3f& rotation,
+        Eigen::Vector3f& scale) const;
     bool SetSquareAreaLight(const std::string& name, const WorldSquareAreaLight& light);
 
     // 读取端：与 scene/editorSceneActorBuilder 的 actor 行同一条规则——

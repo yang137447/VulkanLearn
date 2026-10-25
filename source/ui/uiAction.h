@@ -22,6 +22,14 @@ enum class UiActionType
     PreviewMaterial,
     PreviewBlueprint,
     NavigateModelPreview,
+    // 毛发资产视口：左键拖动旋转预览对象。只作用于预览 World，不写 SC/SM；
+    // GT 把它转成绝对的 SetMeshPlacement，累计角度由 UI 维护。
+    RotatePreviewModel,
+    // 毛发资产视口的复位：排队一次 ResetPositions（stringValue 空 = 所有 tressfx 对象）。
+    ResetHairSimulation,
+    // 毛发资产视口的模拟参数实时覆盖：只在当前预览 World 生效，不写资产。
+    // 字段名与值域由运行期命令边界再次校验。
+    SetHairSimulationParameter,
     ControlAnimationPreview,
     // 被聚焦脚本控制器的时间轴：stringValue=组件身份，intValue 0=seek/1=play，floatValue=秒。
     ControlScriptAnimation,
@@ -127,6 +135,25 @@ struct BlueprintPreviewTransformInput
     bool reset = false;
 };
 
+// 毛发视口的模型旋转：yaw/pitch 是预览世界内的累计角度（度），不是资产或场景数据。
+// pitch 在 UI 侧夹到 ±89°，避免与场景 YXZ Euler 的万向锁正面冲突。
+struct ModelPreviewRotationInput
+{
+    uint64_t worldGeneration = 0;
+    float yaw = 0.0f;
+    float pitch = 0.0f;
+};
+
+// 毛发视口的实时参数：field 与作者字段同名（gravity/wind/damping/...），
+// valueCount 决定读 1 或 3 个分量。UI 只发值语义，校验与投递都在 GT/RT。
+struct ModelPreviewHairParameterInput
+{
+    uint64_t worldGeneration = 0;
+    std::string field;
+    std::array<float, 3> values{0.0f, 0.0f, 0.0f};
+    uint32_t valueCount = 0;
+};
+
 struct UiAction
 {
     UiActionType type = UiActionType::ToggleDeveloperUi;
@@ -137,6 +164,8 @@ struct UiAction
     std::string retargetPreviewModel;
     uint64_t blueprintPreviewRevision = 0;
     ModelPreviewCameraInput previewCamera;
+    ModelPreviewRotationInput previewRotation;
+    ModelPreviewHairParameterInput previewHairParameter;
     BlueprintPreviewTransformInput blueprintTransform;
     EditorActorPropertyEdit actorProperty;
     Debug::Control debugDrawControl;

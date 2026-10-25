@@ -18,6 +18,7 @@ RenderDrawPacket BuildDrawPacket(const MeshDrawSnapshot& drawSnapshot)
     packet.selected = drawSnapshot.selected;
     packet.debugName = drawSnapshot.debugName;
     packet.sceneObjectIdentity = drawSnapshot.sceneObjectIdentity;
+    packet.simulationDeltaSeconds = drawSnapshot.simulationDeltaSeconds;
     packet.materialSlotIndex = drawSnapshot.materialSlotIndex;
     packet.materialSlotName = drawSnapshot.materialSlotName;
     packet.mesh = drawSnapshot.mesh;
@@ -112,6 +113,7 @@ RuntimeResult<RenderScene> RendererFrontend::BuildRenderScene(const WorldSnapsho
     RenderScene renderScene;
     renderScene.worldGeneration = snapshot.worldGeneration;
     renderScene.frameIndex = snapshot.frameIndex;
+    renderScene.hairSimulationDeltaSeconds = snapshot.hairSimulationDeltaSeconds;
     renderScene.camera = snapshot.camera;
     renderScene.lights = snapshot.lights;
     renderScene.environment = snapshot.environment;

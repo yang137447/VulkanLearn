@@ -4,10 +4,13 @@
 #include <filesystem>
 #include <cmath>
 #include <iomanip>
+#include <iostream>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
+
+#include "hair/tressfxSourceSchedule.h"
 
 namespace
 {
@@ -36,6 +39,75 @@ namespace
                     std::string(field) + " " + std::string(meshAssetPath));
         }
         return value;
+    }
+
+    // 作者逐顶点 stiffness 曲线：第 i 项 = 源曲线在 i/pointsPerStrand 处的采样值。
+    // 这里只校验数值域与 64 项上限；与具体 .tfx 的 pointsPerStrand 等长由
+    // TressfxModelImporter 在解析 TFX 后硬校验（描述符层拿不到该值）。
+    std::vector<float> ReadSimulationStiffnessCurve(
+        const nlohmann::json& simulation,
+        const char* field,
+        std::string_view meshAssetPath,
+        bool clampToSourceLocalShapeLimit)
+    {
+        if (!simulation.contains(field))
+            return {};
+        const auto& array = simulation.at(field);
+        if (!array.is_array())
+            throw std::runtime_error(
+                "TressFX simulation." + std::string(field) +
+                " must be an array: " + std::string(meshAssetPath));
+        if (array.empty())
+            throw std::runtime_error(
+                "TressFX simulation." + std::string(field) +
+                " must not be empty; omit the field to use the fallback: " +
+                std::string(meshAssetPath));
+        if (array.size() > 64)
+            throw std::runtime_error(
+                "TressFX simulation." + std::string(field) +
+                " supports at most 64 entries (one per strand point): " +
+                std::string(meshAssetPath));
+        std::vector<float> curve;
+        curve.reserve(array.size());
+        for (size_t index = 0; index < array.size(); ++index)
+        {
+            if (!array[index].is_number())
+                throw std::runtime_error(
+                    "TressFX simulation." + std::string(field) +
+                    " contains a non-number at index " + std::to_string(index) +
+                    ": " + std::string(meshAssetPath));
+            const double value = array[index].get<double>();
+            if (!std::isfinite(value) || value < 0.0 || value > 1.0)
+                throw std::runtime_error(
+                    "TressFX simulation." + std::string(field) +
+                    " value at index " + std::to_string(index) +
+                    " must be in [0, 1]: " + std::string(meshAssetPath));
+            float stiffness = static_cast<float>(value);
+            // 源在采样后立即 min(value, 0.95)（TressFXComponent.cpp:710）。
+            // 加载期 clamp 并记录，避免静默改作者值。
+            if (clampToSourceLocalShapeLimit &&
+                stiffness > VL::Hair::TressfxSourceLocalShapeStiffnessLimit)
+            {
+                std::cerr << "[TressFX] simulation." << field << "[" << index << "] = "
+                          << stiffness << " clamped to "
+                          << VL::Hair::TressfxSourceLocalShapeStiffnessLimit
+                          << " (TressFXComponent.cpp:710): " << meshAssetPath
+                          << std::endl;
+                stiffness = VL::Hair::TressfxSourceLocalShapeStiffnessLimit;
+            }
+            curve.push_back(stiffness);
+        }
+        return curve;
+    }
+
+    // 模型缓存身份里的 float 必须逐位可比；默认 6 位有效数字会让只差 1 ulp 的
+    // 作者曲线错误共享缓存。用 hexfloat 输出后立即恢复默认格式。
+    void AppendStiffnessCurveIdentity(std::ostringstream& identity, const char* field,
+        const std::vector<float>& curve)
+    {
+        identity << '|' << field << '=' << curve.size();
+        for (float value : curve)
+            identity << ',' << std::hexfloat << value << std::defaultfloat;
     }
 
     void ReadTressfxSimulation(
@@ -71,6 +143,23 @@ namespace
                     "(wM = |wind| * (sin(frame*0.001)^2 + 0.5)): " +
                     std::string(meshAssetPath));
         }
+        // simulation 与 schema 一样按封闭对象处理：未知键必须是硬错误，避免拼错
+        // 的新曲线字段静默落回旧近似。
+        {
+            const char* known[] = {"enabled", "gravity", "wind", "damping",
+                "iterations", "rootFixedPoints", "maxDt", "bendStiffness",
+                "localShapeStiffness", "globalShapeStiffness",
+                "globalShapeEffectiveRange", "vspCoefficient",
+                "vspAccelThresholdMax", "vspStiffness", "backend", "skinning"};
+            for (auto field = simulation.begin(); field != simulation.end(); ++field)
+            {
+                if (std::find(std::begin(known), std::end(known), field.key()) ==
+                    std::end(known))
+                    throw std::runtime_error(
+                        "TressFX simulation has unknown field \"" + field.key() +
+                        "\": " + std::string(meshAssetPath));
+            }
+        }
         config.enabled = simulation.value("enabled", true);
         if (simulation.contains("gravity"))
             config.gravity = ReadSimulationVector(simulation, "gravity", meshAssetPath);
@@ -89,6 +178,11 @@ namespace
             simulation.value("vspCoefficient", config.vspCoefficient);
         config.vspAccelThresholdMax =
             simulation.value("vspAccelThresholdMax", config.vspAccelThresholdMax);
+        config.vspStiffness = ReadSimulationStiffnessCurve(
+            simulation, "vspStiffness", meshAssetPath, false);
+        // LocalShape 源曲线在采样后立即 min(value, 0.95)，加载期 clamp 并记录。
+        config.localShapeStiffness = ReadSimulationStiffnessCurve(
+            simulation, "localShapeStiffness", meshAssetPath, true);
         if (simulation.contains("backend"))
         {
             // 只接受两个已实现的 backend；未知值必须在资产边界失败，而不是静默回退。
@@ -113,23 +207,62 @@ namespace
                     std::string(meshAssetPath));
             for (auto field = skinning.begin(); field != skinning.end(); ++field)
             {
-                if (field.key() != "source" && field.key() != "rootBone")
+                if (field.key() != "source" && field.key() != "rootBone" &&
+                    field.key() != "boneWeights" && field.key() != "weights")
                     throw std::runtime_error(
                         "TressFX simulation.skinning has unknown field \"" +
                         field.key() + "\": " + std::string(meshAssetPath));
             }
             TressfxSimulationSkinning binding;
-            const char* required[] = {"source", "rootBone"};
-            for (const char* key : required)
-            {
-                if (!skinning.contains(key) || !skinning.at(key).is_string() ||
-                    skinning.at(key).get<std::string>().empty())
-                    throw std::runtime_error(
-                        "TressFX simulation.skinning requires a non-empty \"" +
-                        std::string(key) + "\": " + std::string(meshAssetPath));
-            }
-            binding.source = skinning.at("source").get<std::string>();
+            // rootBone 始终必需；source 在“由蓝图 tressfx 组件提供绑定”时可以省略，
+            // 由放置级信息补上。描述符层不能知道挂载方式，因此只校验“写了就必须合法”。
+            if (skinning.contains("source") &&
+                (!skinning.at("source").is_string() ||
+                 skinning.at("source").get<std::string>().empty()))
+                throw std::runtime_error(
+                    "TressFX simulation.skinning.source must be a non-empty string: " +
+                    std::string(meshAssetPath));
+            if (skinning.contains("source"))
+                binding.source = skinning.at("source").get<std::string>();
+            if (!skinning.contains("rootBone") || !skinning.at("rootBone").is_string() ||
+                skinning.at("rootBone").get<std::string>().empty())
+                throw std::runtime_error(
+                    "TressFX simulation.skinning requires a non-empty \"rootBone\": " +
+                    std::string(meshAssetPath));
             binding.rootBone = skinning.at("rootBone").get<std::string>();
+            if (skinning.contains("boneWeights"))
+            {
+                if (!skinning.at("boneWeights").is_string() ||
+                    skinning.at("boneWeights").get<std::string>().empty())
+                    throw std::runtime_error(
+                        "TressFX simulation.skinning.boneWeights must be a non-empty "
+                        "string path: " + std::string(meshAssetPath));
+                binding.boneWeightsPath =
+                    skinning.at("boneWeights").get<std::string>();
+            }
+            // 根点权重来源：缺省 rootBone 保持历史单骨；mesh 在加载期从绑定姿态
+            // 身体派生。.tfxbone 是显式作者数据，两者同时出现会让“谁覆盖谁”
+            // 变成隐式规则，因此在描述符边界拒绝而不是运行期择一。
+            if (skinning.contains("weights"))
+            {
+                binding.rootWeightsAuthored = true;
+                const auto& weights = skinning.at("weights");
+                const std::string value = weights.is_string()
+                    ? weights.get<std::string>() : std::string();
+                if (value == "rootBone")
+                    binding.rootWeights = TressfxRootWeightSource::RootBone;
+                else if (value == "mesh")
+                    binding.rootWeights = TressfxRootWeightSource::Mesh;
+                else
+                    throw std::runtime_error(
+                        "TressFX simulation.skinning.weights must be \"rootBone\" or "
+                        "\"mesh\": " + std::string(meshAssetPath));
+            }
+            if (binding.rootWeights == TressfxRootWeightSource::Mesh &&
+                !binding.boneWeightsPath.empty())
+                throw std::runtime_error(
+                    "TressFX simulation.skinning.weights = \"mesh\" cannot be combined "
+                    "with boneWeights: " + std::string(meshAssetPath));
             // 姿态来自渲染快照；CPU 参考 solver 运行在游戏线程，没有 SkinPose。
             // 这是作者错误，必须在加载期拒绝，而不是运行时静默退回 rest pin。
             if (config.backend != TressfxSimulationBackend::Gpu)
@@ -672,6 +805,11 @@ MeshAssetBuildPlan MeshAssetValidator::BuildLoadPlan(
                  << "|vsp=" << loadPlan.tressfxSimulation.vspCoefficient
                  << "," << loadPlan.tressfxSimulation.vspAccelThresholdMax
                  << "|colliders=" << loadPlan.tressfxSimulation.capsules.size();
+        // 作者曲线逐项进入缓存身份；只改数值也必须重建 renderable 与 SSBO。
+        AppendStiffnessCurveIdentity(identity, "vspcurve",
+            loadPlan.tressfxSimulation.vspStiffness);
+        AppendStiffnessCurveIdentity(identity, "localshapecurve",
+            loadPlan.tressfxSimulation.localShapeStiffness);
         for (const VL::Hair::TressfxCollider& capsule :
              loadPlan.tressfxSimulation.capsules)
         {
@@ -696,6 +834,14 @@ MeshAssetBuildPlan MeshAssetValidator::BuildLoadPlan(
         {
             identity << "|skinsource=" << loadPlan.tressfxSimulation.skinning->source
                      << "|skinbone=" << loadPlan.tressfxSimulation.skinning->rootBone;
+            if (!loadPlan.tressfxSimulation.skinning->boneWeightsPath.empty())
+                identity << "|boneweights="
+                         << loadPlan.tressfxSimulation.skinning->boneWeightsPath;
+            // 派生权重改变的是同一份 GPU 多骨数据，必须与单骨/.tfxbone 缓存条目分开；
+            // 缺省 rootBone 不追加后缀，保持既有资产身份不变。
+            if (loadPlan.tressfxSimulation.skinning->rootWeights ==
+                TressfxRootWeightSource::Mesh)
+                identity << "|rootweights=mesh";
         }
         loadPlan.modelCacheKey += identity.str();
     }

@@ -20,6 +20,12 @@ layout(set = 0, binding = 7, std430) readonly buffer GuideColliders
     GuideCollider colliders[];
 } guideColliders;
 
+// x=胶囊碰撞前最大穿透深度（厘米，正数），y=SDF；uint 位模式供 atomicMax。
+layout(set = 0, binding = 16, std430) buffer PenetrationStats
+{
+    uint stats[];
+} penetrationStats;
+
 void main()
 {
     uint guide = gl_GlobalInvocationID.x;
@@ -49,6 +55,9 @@ void main()
             float distance = length(delta);
             if (distance < radius)
             {
+                // 投影前记录真正进入胶囊内部的深度；投影后应为 0。
+                atomicMax(penetrationStats.stats[0],
+                    floatBitsToUint(radius - distance));
                 // 与 CPU DegenerateCapsuleNormal 相同：点在轴线上时取与轴垂直的
                 // 确定性方向（axis 非 Y 向用 cross(axis,+Y)，否则 cross(axis,+X)；
                 // a==b 的球使用 +Y）。

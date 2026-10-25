@@ -209,6 +209,55 @@ TEST(TressfxSolverMath, VspStiffnessFallsLinearlyFromRootPrefixToTip)
     EXPECT_NEAR(TressfxVspStiffness(2, 3, 2), 0.0f, kTolerance);
 }
 
+TEST(TressfxSolverMath, VspStiffnessUsesAuthoredArrayAtEveryPoint)
+{
+    // 源第 i 项 = 曲线在 i/N 处的采样值；作者 5 项覆盖 local 0..4。
+    const std::vector<float> authored = {0.0f, 0.2f, 0.5f, 0.75f, 1.0f};
+    EXPECT_FLOAT_EQ(TressfxVspStiffness(0, 5, 2, &authored), 0.0f);
+    EXPECT_FLOAT_EQ(TressfxVspStiffness(2, 5, 2, &authored), 0.5f);
+    EXPECT_FLOAT_EQ(TressfxVspStiffness(4, 5, 2, &authored), 1.0f);
+    // 数组不覆盖的 local 仍回退到旧的线性近似。
+    EXPECT_NEAR(TressfxVspStiffness(5, 10, 2, &authored),
+        1.0f - 3.0f / 7.0f, kTolerance);
+}
+
+TEST(TressfxSolverMath, VspCoefficientOnlyMultipliesCurveBelowPointNine)
+{
+    const std::vector<float> authored = {0.0f, 0.5f, 0.0f, 0.0f};
+    // 源只在 VspCoeff < 0.9 时乘逐顶点 stiffness（严格小于）。
+    EXPECT_FLOAT_EQ(TressfxVspCoefficient(0.8f, 1, 4, 2, &authored), 0.4f);
+    EXPECT_FLOAT_EQ(TressfxVspCoefficient(0.9f, 1, 4, 2, &authored), 0.9f);
+    EXPECT_FLOAT_EQ(TressfxVspCoefficient(1.0f, 1, 4, 2, &authored), 1.0f);
+    // 未作者时用线性 fallback；local 3 / 4 points / root 2 → span = 1 → 0。
+    EXPECT_FLOAT_EQ(TressfxVspCoefficient(0.5f, 3, 4, 2), 0.0f);
+}
+
+TEST(TressfxSolverMath, LocalShapeStiffnessUsesAuthoredArrayPerPoint)
+{
+    const std::vector<float> authored = {0.0f, 0.25f, 0.5f, 0.95f};
+    for (uint32_t local = 0; local < authored.size(); ++local)
+        EXPECT_FLOAT_EQ(TressfxLocalShapeStiffness(local, 0.3f, &authored),
+            authored[local]);
+    // 数组不覆盖时回退到作者标量 bendStiffness。
+    EXPECT_FLOAT_EQ(TressfxLocalShapeStiffness(9, 0.3f, &authored), 0.3f);
+    EXPECT_FLOAT_EQ(TressfxLocalShapeStiffness(1, 0.3f), 0.3f);
+}
+
+TEST(TressfxSolverMath, LocalShapeDeltaScalesLinearlyWithPerPointStiffness)
+{
+    // TressfxLocalShapeDelta 内部固定乘 0.5；曲线值只线性缩放这个 del。
+    const Eigen::Vector4f identity(0.0f, 0.0f, 0.0f, 1.0f);
+    const Eigen::Vector3f full = TressfxLocalShapeDelta(identity,
+        Eigen::Vector3f(0, 0, 0), Eigen::Vector3f(1, 0, 0),
+        Eigen::Vector3f(1, 1, 0), Eigen::Vector3f(0, 0, 0),
+        Eigen::Vector3f(1, 0, 0), Eigen::Vector3f(2, 0, 0), 1.0f);
+    const Eigen::Vector3f half = TressfxLocalShapeDelta(identity,
+        Eigen::Vector3f(0, 0, 0), Eigen::Vector3f(1, 0, 0),
+        Eigen::Vector3f(1, 1, 0), Eigen::Vector3f(0, 0, 0),
+        Eigen::Vector3f(1, 0, 0), Eigen::Vector3f(2, 0, 0), 0.5f);
+    EXPECT_TRUE(half.isApprox(0.5f * full, 1.0e-6f));
+}
+
 TEST(TressfxSolverMath, StrandTransformBuildsRotationFromFirstTwoPoints)
 {
     // 第一段从 +Y 转到 +X，根点不动。
@@ -227,6 +276,28 @@ TEST(TressfxSolverMath, StrandTransformBuildsRotationFromFirstTwoPoints)
         Eigen::Vector3f(0, 0, 0), Eigen::Vector3f(0, 1, 0),
         Eigen::Vector3f(6000, 1, 0), 0.0f, 5000.0f);
     EXPECT_NEAR(overThreshold.coefficient, 1.0f, kTolerance);
+}
+
+TEST(TressfxSolverMath, VspThresholdPreservesMeterComparisonInCentimeters)
+{
+    constexpr float sourceThresholdMeters = 1.4f;
+    constexpr float baseCoefficient = 0.35f;
+    // 源 float4 的 w 在三份历史中相同，二阶差分的 w 为零；这里只比较长度分量。
+    // 用阈值两侧及精确边界校验严格 >，不能误成 >=、平方长度或加速度/dt²。
+    for (const float displacementMeters : {1.399f, 1.4f, 1.401f})
+    {
+        SCOPED_TRACE(displacementMeters);
+        const Eigen::Vector3f oldRootCm = Eigen::Vector3f::Zero();
+        const Eigen::Vector3f oldPointCm(0.0f, 100.0f, 0.0f);
+        const Eigen::Vector3f oldOldPointCm(
+            100.0f * displacementMeters, 100.0f, 0.0f);
+        const TressfxStrandTransform transform = TressfxComputeStrandTransform(
+            oldRootCm, oldPointCm, oldRootCm, oldPointCm, oldOldPointCm,
+            baseCoefficient, TressfxDefaultVspAccelThresholdMaxCm);
+        const float sourceCoefficient = displacementMeters > sourceThresholdMeters
+            ? 1.0f : baseCoefficient;
+        EXPECT_FLOAT_EQ(transform.coefficient, sourceCoefficient);
+    }
 }
 
 TEST(TressfxSolverMath, LocalShapeIsZeroForStraightRestAndCurrentStrand)

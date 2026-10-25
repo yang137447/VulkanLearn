@@ -60,13 +60,14 @@ using ProxySkinGrid =
 // 绑定姿态身体顶点只建一次哈希网格；查询按 Chebyshev 环扩展：查完半径 r 后，
 // 任何未访问单元的最近可能距离是 r*cellSize，因此 best < r*cellSize 时可以停止。
 // 等距时取全局下标更小的顶点，保证输出与哈希桶顺序无关。
-uint32_t FindNearestBodyVertex(
+// 返回 false 表示 maxDistanceCm 内没有身体顶点；调用方按策略决定抛错还是记录。
+bool FindNearestBodyVertex(
     const ProxySkinGrid& grid,
     const SdfProxySkinSource& body,
     float cellSize,
     float maxDistanceCm,
     const Eigen::Vector3f& query,
-    size_t proxyVertex,
+    uint32_t& outIndex,
     float& outDistanceCm)
 {
     const ProxySkinCell center = CellOf(query, cellSize);
@@ -109,18 +110,18 @@ uint32_t FindNearestBodyVertex(
             break;
     }
     if (bestIndex == std::numeric_limits<uint32_t>::max())
-        throw std::runtime_error(
-            "TressFX collision proxy vertex " + std::to_string(proxyVertex) +
-            " has no nearest body vertex within the transfer radius");
+        return false;
+    outIndex = bestIndex;
     outDistanceCm = std::sqrt(bestSquared);
-    return bestIndex;
+    return true;
 }
 } // namespace
 
 SdfProxySkinTransfer BuildTressfxProxySkinTransfer(
     const std::vector<Eigen::Vector3f>& proxyPositions,
     const SdfProxySkinSource& body,
-    float maxNearestDistanceCm)
+    float maxNearestDistanceCm,
+    TressfxSkinTransferPolicy policy)
 {
     if (proxyPositions.empty())
         throw std::runtime_error("TressFX collision proxy has no vertices");
@@ -155,6 +156,7 @@ SdfProxySkinTransfer BuildTressfxProxySkinTransfer(
             static_cast<uint32_t>(index));
 
     std::vector<ProxyInfluences> perVertex(proxyPositions.size());
+    std::vector<uint32_t> unmatchedVertices;
     std::set<uint32_t> usedBodyVertices;
     float maxDistance = 0.0f;
     uint32_t maxInfluences = 0;
@@ -165,16 +167,28 @@ SdfProxySkinTransfer BuildTressfxProxySkinTransfer(
         if (!proxyPositions[vertex].allFinite())
             throw std::runtime_error(
                 "TressFX collision proxy has a non-finite vertex");
+        uint32_t nearest = 0;
         float distanceCm = 0.0f;
-        const uint32_t nearest = FindNearestBodyVertex(grid, body,
+        const bool found = FindNearestBodyVertex(grid, body,
             maxNearestDistanceCm, maxNearestDistanceCm, proxyPositions[vertex],
-            vertex, distanceCm);
-        if (distanceCm > maxNearestDistanceCm)
+            nearest, distanceCm);
+        // 未匹配只有两种可解释原因：查询半径内确实没有身体顶点，或最近顶点的
+        // 权重和不为正。Reject 路径（碰撞代理）把两者都当错空间硬错误；Record
+        // 路径（发丝根点）交给调用方按根回退。
+        if (!found || distanceCm > maxNearestDistanceCm)
+        {
+            if (policy == TressfxSkinTransferPolicy::RecordUnmatched)
+            {
+                unmatchedVertices.push_back(static_cast<uint32_t>(vertex));
+                continue;
+            }
             throw std::runtime_error(
                 "TressFX collision proxy vertex " + std::to_string(vertex) +
-                " is " + std::to_string(distanceCm) +
-                " cm from the nearest body vertex (limit " +
-                std::to_string(maxNearestDistanceCm) + " cm)");
+                (found ? " is " + std::to_string(distanceCm) +
+                    " cm from the nearest body vertex (limit " +
+                    std::to_string(maxNearestDistanceCm) + " cm)"
+                    : " has no nearest body vertex within the transfer radius"));
+        }
         maxDistance = std::max(maxDistance, distanceCm);
         usedBodyVertices.insert(nearest);
         perVertex[vertex].nearestBodyVertex = nearest;
@@ -198,9 +212,17 @@ SdfProxySkinTransfer BuildTressfxProxySkinTransfer(
             maxJoint = std::max(maxJoint, source.joint);
         }
         if (perVertex[vertex].influences.empty() || !(weightSum > 0.0f))
+        {
+            if (policy == TressfxSkinTransferPolicy::RecordUnmatched)
+            {
+                perVertex[vertex].influences.clear();
+                unmatchedVertices.push_back(static_cast<uint32_t>(vertex));
+                continue;
+            }
             throw std::runtime_error(
                 "TressFX collision proxy nearest body vertex " +
                 std::to_string(nearest) + " has no positive skin influence");
+        }
         // 源权重和可能带 1e-8 级误差；这里归一化后再交给 GPU，保证 LBS 是
         // 凸组合。影响数量保留全部（CSR 布局没有 4 骨上限）。
         for (SdfProxySkinSourceInfluence& influence : perVertex[vertex].influences)
@@ -215,6 +237,7 @@ SdfProxySkinTransfer BuildTressfxProxySkinTransfer(
     transfer.jointCount = body.jointCount > 0 ? body.jointCount : maxJoint + 1;
     transfer.maxNearestDistanceCm = maxDistance;
     transfer.uniqueBodyVertices = static_cast<uint32_t>(usedBodyVertices.size());
+    transfer.unmatchedVertices = std::move(unmatchedVertices);
 
     const size_t header = proxyPositions.size() + 1;
     size_t pairCount = 0;

@@ -17,6 +17,7 @@
 #include "render/resource/rendererResourceCache.h"
 #include "render/resource/rendererResourceLoadContext.h"
 #include "renderGraph.h"
+#include "render/resource/renderableObjectKey.h"
 #include "renderableObject.h"
 #include "scene/sceneAssetTypes.h"
 #include "animation/skeletalPlayback.h"
@@ -131,8 +132,15 @@ RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
         const MeshSectionLoadPlan& sectionPlan = sectionPlans[sectionIndex];
         // 覆盖属于场景实例，不能修改按 SM 路径共享的导入缓存或源资产槽位。
         const std::string materialPath = node.value("materialOverride", sectionPlan.materialInstancePath);
-        std::string renderableObjectKey =
-            buildPlan.modelCacheKey + "|" + std::to_string(sectionIndex) + "|" + section.sectionName;
+        // GPU 发丝模拟有可变的 current/previous/prevPrev 与 params UBO，不能像
+        // 静态网格那样跨 placement 共享 RenderableObject；键里追加实例身份后，
+        // 每个 placement 得到独立对象与独立模拟历史。普通网格仍按模型+section 共享。
+        const bool perPlacementState = buildPlan.assetType == "tressfx" &&
+            section.tressfxSimulation.enabled &&
+            section.tressfxSimulation.backend == TressfxSimulationBackend::Gpu;
+        std::string renderableObjectKey = MakeRenderableObjectKey(
+            buildPlan.modelCacheKey, sectionIndex, section.sectionName,
+            meshObjectBaseName, perPlacementState);
         if (loadContext.offlineWorldAssets != nullptr)
         {
             loadContext.offlineWorldAssets->sections.emplace(
@@ -211,6 +219,7 @@ RendererMeshLoadResult RendererMeshLoader::LoadMeshObject(
         meshObjectPlan.localBoundsMin.array() -= section.boundsPadding;
         meshObjectPlan.localBoundsMax.array() += section.boundsPadding;
         meshObjectPlan.meshKey = renderableObjectKey;
+        meshObjectPlan.tressfxBoneAsset = section.tressfxBoneAsset;
         if (animation)
         {
             meshObjectPlan.animation = animation;

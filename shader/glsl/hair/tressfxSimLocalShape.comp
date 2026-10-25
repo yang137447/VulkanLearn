@@ -32,8 +32,9 @@ void main()
     if (guide >= params.counts.y)
         return;
 
-    float stiffness = params.motion.x;
-    if (stiffness <= 0.0)
+    // 标量为 0 但作者数组存在时仍要逐点求解；只有两者都缺席才整体关闭。
+    float scalarStiffness = params.motion.x;
+    if (scalarStiffness <= 0.0 && !TressfxHasLocalShapeStiffness())
         return;
 
     uint pointsPerGuide = TressfxPointsPerGuide();
@@ -49,6 +50,10 @@ void main()
     // 顶点 1..n-1；i 和 i+1 都可移动时各承担一半修正。
     for (uint local = start; local + 1u < pointsPerGuide; ++local)
     {
+        float stiffness = TressfxLocalShapeStiffness(local, scalarStiffness);
+        // 作者曲线上的 0 表示该点不受局部形状约束，跳过与零 delta 等价。
+        if (stiffness <= 0.0)
+            continue;
         uint point = root + local;
         vec4 pos = currentPositions.positions[point];
         vec4 posPlusOne = currentPositions.positions[point + 1u];

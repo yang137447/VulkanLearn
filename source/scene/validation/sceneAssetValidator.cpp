@@ -32,13 +32,34 @@ SceneAssetBuildPlan SceneAssetValidator::BuildLoadPlan(
         if (objectJson.at("type") == "blueprintInstance" && objectJson.contains("components"))
         for (size_t component = 0; component < objectJson.at("components").size(); ++component)
         {
-            if (objectJson.at("components")[component].at("type") != "mesh") continue;
+            const auto& componentJson = objectJson.at("components")[component];
+            const std::string componentType = componentJson.at("type").get<std::string>();
+            if (!VL::IsScriptMeshComponent(componentType)) continue;
             SceneAssetObjectPlan mesh;
             mesh.objectIndex = objectIndex;
             mesh.objectType = "mesh";
             mesh.componentObject = VL::ScriptBlueprintMeshObject(objectJson, component);
             mesh.objectName = mesh.componentObject->at("name").get<std::string>();
             mesh.meshLoadRequest = MeshAssetLoader::Prepare(mesh.componentObject->at("modelPath").get<std::string>());
+            // tressfx 组件：毛发描述符必须是 tressfx，父 mesh 必须是带骨架的角色。
+            // 骨架检查放在加载计划里（需要读描述符），组件树本身的拓扑已在
+            // ValidateScriptComponents 收口。
+            if (componentType == "tressfx")
+            {
+                const std::string componentId = componentJson.value("id", "root");
+                if (mesh.meshLoadRequest->buildPlan.assetType != "tressfx")
+                    throw std::runtime_error(
+                        "TressFX component must reference a tressfx descriptor: actor=" +
+                        objectJson.at("id").get<std::string>() + " component=" + componentId +
+                        " modelPath=" + mesh.componentObject->at("modelPath").get<std::string>());
+                const auto& parentPath = mesh.componentObject->at("__tressfxParentModelPath");
+                const auto parentRequest = MeshAssetLoader::Prepare(parentPath.get<std::string>());
+                if (!parentRequest.buildPlan.IsSkeletal())
+                    throw std::runtime_error(
+                        "TressFX component parent mesh must be skeletal: actor=" +
+                        objectJson.at("id").get<std::string>() + " component=" + componentId +
+                        " parentModelPath=" + parentPath.get<std::string>());
+            }
             sceneBuildPlan.objectPlans.push_back(std::move(mesh));
         }
     }

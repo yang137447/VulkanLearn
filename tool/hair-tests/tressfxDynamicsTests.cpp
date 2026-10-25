@@ -1,10 +1,12 @@
 #include "hair/tressfxDynamics.h"
 #include "hair/tressfxSimulationParams.h"
+#include "hair/tressfxSourceSchedule.h"
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 
 namespace
@@ -126,7 +128,7 @@ TEST(TressfxDynamics, VariableTimeStepClampsToMaxDtAndAdvancesTime)
 
 TEST(TressfxDynamics, VariableTimeStepIsNotFrameRateIndependent)
 {
-    // 变量步长是 TressFX 的刻意行为：30 Hz 的一步与两个 60 Hz 步骤结果不同。
+    // VL 选择每帧一次变量步长；60 Hz 与 120 Hz 的约束次数和累计截断时间不同。
     SimulationConfig config;
     config.gravity = Eigen::Vector3f(0, -980, 0);
     config.iterations = 8;
@@ -371,8 +373,12 @@ TEST(TressfxDynamics, GuideSimulationParamsPackStd140Controls)
     const VL::Hair::GuideSimulationParams params =
         VL::Hair::MakeGuideSimulationParams(config, 7, 32, 224, 0.016f, 0, skinning);
 
-    EXPECT_EQ(sizeof(VL::Hair::GuideSimulationParams), 224u);
+    EXPECT_EQ(sizeof(VL::Hair::GuideSimulationParams), 800u);
     EXPECT_EQ(offsetof(VL::Hair::GuideSimulationParams, skinning), 160u);
+    EXPECT_EQ(offsetof(VL::Hair::GuideSimulationParams, historyToCurrentLocal), 224u);
+    EXPECT_EQ(offsetof(VL::Hair::GuideSimulationParams, vspStiffness), 288u);
+    EXPECT_EQ(offsetof(VL::Hair::GuideSimulationParams, localShapeStiffness), 544u);
+    EXPECT_TRUE(params.historyToCurrentLocal.isIdentity());
     EXPECT_TRUE(params.skinning.isApprox(skinning));
     EXPECT_TRUE(params.skinningQuat.isApprox(Eigen::Vector4f(0.0f, 0.0f, 0.0f, 1.0f)));
     EXPECT_FLOAT_EQ(params.gravity.y(), -980.0f);
@@ -405,6 +411,70 @@ TEST(TressfxDynamics, GuideSimulationParamsPackStd140Controls)
     EXPECT_FLOAT_EQ(params.motion.w(), 0.0f);
 }
 
+TEST(TressfxDynamics, AuthoredCurvesPackIntoStd140AndSetMotionFlags)
+{
+    TressfxSimulationConfig config;
+    config.bendStiffness = 0.3f;
+    config.vspStiffness.resize(64);
+    config.localShapeStiffness.resize(64);
+    for (size_t local = 0; local < 64; ++local)
+    {
+        config.vspStiffness[local] = static_cast<float>(local) / 63.0f;
+        config.localShapeStiffness[local] = 0.95f - static_cast<float>(local) / 128.0f;
+    }
+    VL::Hair::GuideSimulationParams params =
+        VL::Hair::MakeGuideSimulationParams(config, 1, 64, 64, 0.0125f, 0);
+    // motion.w bit0/bit1 = 两个作者数组都存在。
+    EXPECT_FLOAT_EQ(params.motion.w(), 3.0f);
+    EXPECT_FLOAT_EQ(params.vspStiffness[0].x(), 0.0f);
+    EXPECT_FLOAT_EQ(params.vspStiffness[0].y(), 1.0f / 63.0f);
+    EXPECT_FLOAT_EQ(params.vspStiffness[1].x(), 4.0f / 63.0f);
+    EXPECT_FLOAT_EQ(params.vspStiffness[15].w(), 1.0f);
+    EXPECT_FLOAT_EQ(params.localShapeStiffness[0].x(), 0.95f);
+    EXPECT_FLOAT_EQ(params.localShapeStiffness[1].x(), 0.95f - 4.0f / 128.0f);
+    EXPECT_FLOAT_EQ(params.localShapeStiffness[15].w(), 0.95f - 63.0f / 128.0f);
+
+    // 只作者一条曲线时只置对应 bit；未作者数组保持零填充。
+    TressfxSimulationConfig vspOnly;
+    vspOnly.vspStiffness = {0.0f, 0.5f, 1.0f, 1.0f};
+    const VL::Hair::GuideSimulationParams vspParams =
+        VL::Hair::MakeGuideSimulationParams(vspOnly, 1, 4, 4, 0.0125f, 0);
+    EXPECT_FLOAT_EQ(vspParams.motion.w(), 1.0f);
+    EXPECT_FLOAT_EQ(vspParams.vspStiffness[0].y(), 0.5f);
+    for (const Eigen::Vector4f& group : vspParams.localShapeStiffness)
+        EXPECT_TRUE(group.isZero());
+
+    TressfxSimulationConfig localOnly;
+    localOnly.localShapeStiffness = {0.25f, 0.5f, 0.75f, 0.95f};
+    const VL::Hair::GuideSimulationParams localParams =
+        VL::Hair::MakeGuideSimulationParams(localOnly, 1, 4, 4, 0.0125f, 0);
+    EXPECT_FLOAT_EQ(localParams.motion.w(), 2.0f);
+    EXPECT_FLOAT_EQ(localParams.localShapeStiffness[0].x(), 0.25f);
+    EXPECT_TRUE(localParams.vspStiffness[0].isZero());
+}
+
+TEST(TressfxDynamics, AuthoredLocalShapeCurveWorksWithZeroScalarStiffness)
+{
+    SimulationConfig config;
+    config.gravity = Eigen::Vector3f(0, -980, 0);
+    config.iterations = 8;
+    config.rootFixedPoints = 1;
+    // 标量为 0 时，作者数组仍应逐点驱动 LocalShape。
+    config.bendStiffness = 0.0f;
+    config.localShapeStiffness = {0.95f, 0.95f, 0.95f, 0.95f};
+    GuideSimulation shaped(CurvedChain(), 1, 4, {0, 1, 1, 1}, config);
+
+    SimulationConfig limpConfig = config;
+    limpConfig.localShapeStiffness = {0.0f, 0.0f, 0.0f, 0.0f};
+    GuideSimulation limp(CurvedChain(), 1, 4, {0, 1, 1, 1}, limpConfig);
+    for (int i = 0; i < 180; ++i)
+    {
+        shaped.Step(1.0f / 60.0f);
+        limp.Step(1.0f / 60.0f);
+    }
+    EXPECT_GT(Curvature(shaped), Curvature(limp));
+}
+
 TEST(TressfxDynamics, DefaultTimeStepMatchesTressFxSixteenMillisecondClamp)
 {
     EXPECT_FLOAT_EQ(VL::Hair::TressfxMaxTimeStepSeconds, 0.016f);
@@ -420,6 +490,15 @@ TEST(TressfxDynamics, DefaultTimeStepMatchesTressFxSixteenMillisecondClamp)
     oversized.maxDt = 0.017f;
     EXPECT_THROW(GuideSimulation(Chain(), 1, 4, {0, 1, 1, 1}, oversized),
         std::invalid_argument);
+}
+
+TEST(TressfxDynamics, DefaultVspThresholdUsesSourceLengthUnitConversion)
+{
+    const SimulationConfig cpuConfig;
+    const TressfxSimulationConfig assetConfig;
+    EXPECT_FLOAT_EQ(cpuConfig.vspAccelThresholdMax, 140.0f);
+    EXPECT_FLOAT_EQ(cpuConfig.vspAccelThresholdMax,
+        assetConfig.vspAccelThresholdMax);
 }
 
 TEST(TressfxDynamics, WindFrameAdvancesWithEachStepAndDrivesCorners)
@@ -439,5 +518,116 @@ TEST(TressfxDynamics, WindFrameAdvancesWithEachStepAndDrivesCorners)
     for (int i = 0; i < 1000; ++i)
         simulation.Step(0.016f);
     EXPECT_EQ(simulation.SimulationFrame(), 1001u);
+}
+
+TEST(TressfxDynamics, StepFrameAdvancesSourcePhysicalTimePerFrameRate)
+{
+    // 30/48 Hz → 2 × 0.0125 = 0.025 s；60/120/144/240 Hz → 1 × 0.0125 s。
+    struct Case
+    {
+        float hz;
+        float expectedSeconds;
+        uint32_t expectedSubsteps;
+    };
+    const Case cases[] = {{30.0f, 0.025f, 2}, {48.0f, 0.025f, 2},
+        {60.0f, 0.0125f, 1}, {120.0f, 0.0125f, 1}, {144.0f, 0.0125f, 1},
+        {240.0f, 0.0125f, 1}};
+    for (const Case& testCase : cases)
+    {
+        SCOPED_TRACE(testCase.hz);
+        SimulationConfig config;
+        config.gravity = Eigen::Vector3f(0, -980, 0);
+        GuideSimulation simulation(Chain(), 1, 4, {0, 1, 1, 1}, config);
+        simulation.StepFrame(1.0f / testCase.hz);
+        EXPECT_FLOAT_EQ(simulation.SimulationTime(), testCase.expectedSeconds);
+        EXPECT_EQ(simulation.SimulationFrame(), 1u);
+        // 单帧物理时间只能是 0 / 0.0125 / 0.025 三者之一。
+        EXPECT_EQ(static_cast<uint32_t>(std::lround(
+                      simulation.SimulationTime() /
+                      VL::Hair::TressfxSourceSolverStepSeconds)),
+            testCase.expectedSubsteps);
+    }
+}
+
+TEST(TressfxDynamics, StepFrameMatchesTwoFixedStepsWithoutWind)
+{
+    // 无风时同一帧两个 substep 与两次固定步完全等价；区别只在 Frame 计数。
+    SimulationConfig config;
+    config.gravity = Eigen::Vector3f(0, -980, 0);
+    config.iterations = 8;
+    config.wind = Eigen::Vector3f::Zero();
+    GuideSimulation native(CurvedChain(), 1, 4, {0, 1, 1, 1}, config);
+    GuideSimulation legacy(CurvedChain(), 1, 4, {0, 1, 1, 1}, config);
+    native.StepFrame(1.0f / 30.0f);
+    legacy.Step(VL::Hair::TressfxSourceSolverStepSeconds);
+    legacy.Step(VL::Hair::TressfxSourceSolverStepSeconds);
+    for (size_t point = 0; point < native.Positions().size(); ++point)
+        EXPECT_EQ(native.Positions()[point], legacy.Positions()[point]);
+    EXPECT_FLOAT_EQ(native.SimulationTime(), legacy.SimulationTime());
+    // 原生路径每帧只 +1 风帧；旧 Step 每调用一次就 +1。
+    EXPECT_EQ(native.SimulationFrame(), 1u);
+    EXPECT_EQ(legacy.SimulationFrame(), 2u);
+}
+
+TEST(TressfxDynamics, StepFrameIgnoresMaxDtAndCapsAtTwoSubsteps)
+{
+    // maxDt 只服务旧 Step；StepFrame 必须仍按 0.0125 推进，不受资产收紧影响。
+    SimulationConfig config;
+    config.gravity = Eigen::Vector3f(0, -100, 0);
+    config.maxDt = 0.005f;
+    GuideSimulation simulation(Chain(), 1, 4, {0, 1, 1, 1}, config);
+    simulation.StepFrame(1.0f / 60.0f);
+    EXPECT_FLOAT_EQ(simulation.SimulationTime(), 0.0125f);
+    // 卡顿帧仍只有 NumLoops < 2 的上限：2 × 0.0125 s，不补算丢失时间。
+    simulation.StepFrame(1.0f);
+    EXPECT_FLOAT_EQ(simulation.SimulationTime(), 0.0375f);
+    EXPECT_EQ(simulation.SimulationFrame(), 2u);
+}
+
+TEST(TressfxDynamics, StepFrameConsumesZeroDeltaWithoutAdvancingOrUnpausing)
+{
+    SimulationConfig config;
+    config.gravity = Eigen::Vector3f(0, -980, 0);
+    GuideSimulation simulation(Chain(), 1, 4, {0, 1, 1, 1}, config);
+    const auto rest = simulation.Positions();
+    for (const float delta : {0.0f, -0.0f, -1.0f / 60.0f,
+             std::numeric_limits<float>::quiet_NaN()})
+    {
+        SCOPED_TRACE(delta);
+        simulation.StepFrame(delta);
+        EXPECT_FLOAT_EQ(simulation.SimulationTime(), 0.0f);
+        EXPECT_EQ(simulation.SimulationFrame(), 0u);
+        EXPECT_EQ(simulation.Positions(), rest);
+    }
+    // 暂停同样冻结；Reset 仍是显式调用，不受 StepFrame 调度影响。
+    simulation.StepFrame(1.0f / 60.0f);
+    const auto moved = simulation.Positions();
+    EXPECT_FLOAT_EQ(simulation.SimulationTime(), 0.0125f);
+    simulation.SetPaused(true);
+    simulation.StepFrame(1.0f / 30.0f);
+    EXPECT_EQ(simulation.Positions(), moved);
+    EXPECT_FLOAT_EQ(simulation.SimulationTime(), 0.0125f);
+    simulation.SetPaused(false);
+    simulation.Reset();
+    EXPECT_EQ(simulation.Positions(), Chain());
+    EXPECT_FLOAT_EQ(simulation.SimulationTime(), 0.0f);
+    EXPECT_EQ(simulation.SimulationFrame(), 0u);
+}
+
+TEST(TressfxDynamics, StepFrameAdvancesWindPhaseOncePerFrameNotPerSubstep)
+{
+    SimulationConfig config;
+    config.gravity = Eigen::Vector3f::Zero();
+    config.wind = Eigen::Vector3f(1.0e6f, 0.0f, 0.0f);
+    config.bendStiffness = 0.0f;
+    GuideSimulation simulation(Chain(), 1, 4, {0, 1, 1, 1}, config);
+    // 30 Hz 有两个 substep，但 wind frame 只 +1；60 Hz 一帧同样 +1。
+    simulation.StepFrame(1.0f / 30.0f);
+    EXPECT_EQ(simulation.SimulationFrame(), 1u);
+    simulation.StepFrame(1.0f / 60.0f);
+    EXPECT_EQ(simulation.SimulationFrame(), 2u);
+    // 0 步帧不消费风相位。
+    simulation.StepFrame(0.0f);
+    EXPECT_EQ(simulation.SimulationFrame(), 2u);
 }
 } // namespace

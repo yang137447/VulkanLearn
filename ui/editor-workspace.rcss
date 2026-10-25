@@ -947,6 +947,12 @@ body {
 #blueprint-asset-save, #blueprint-asset-revert { display: none; }
 #resource-model-tools, #resource-texture-tools { display: none; align-items: center; gap: 3px; }
 #resource-model-tools.visible, #resource-texture-tools.visible { display: flex; }
+#resource-hair-tools { display: none; align-items: center; gap: 4px; }
+#resource-hair-tools span { color: #aeb7b2; font-size: 12px; white-space: nowrap; }
+#resource-hair-simulation { display: none; padding: 10px 12px; border-bottom-width: 1px; border-bottom-color: #49494f; }
+#resource-hair-simulation .hair-sim-footer { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+#resource-hair-simulation .hair-sim-status { color: #aeb7b2; font-size: 12px; }
+#resource-hair-simulation .hair-sim-note { margin: 7px 0 0; color: #8f9893; font-size: 11px; }
 #resource-model-info { display: none; padding: 10px 12px; border-bottom-width: 1px; border-bottom-color: #49494f; }
 #resource-model-info.visible { display: block; }
 #resource-model-info h3 { margin: 0 0 7px; color: #e7e7e9; }

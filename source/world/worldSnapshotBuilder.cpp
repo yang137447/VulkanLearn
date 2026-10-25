@@ -95,7 +95,8 @@ MeshDrawSnapshot BuildMeshDrawSnapshot(
     RuntimeId objectId,
     const WorldMeshObject& meshObject,
     const Eigen::Matrix4f& previousModel,
-    bool selected)
+    bool selected,
+    const WorldSnapshotBuildDesc& desc)
 {
     MeshDrawSnapshot snapshot;
     snapshot.skinPose = meshObject.skinPose;
@@ -105,6 +106,11 @@ MeshDrawSnapshot BuildMeshDrawSnapshot(
     snapshot.sceneObjectIdentity = meshObject.sceneObjectIdentity.empty()
         ? objectName
         : meshObject.sceneObjectIdentity;
+    // 与 World::TickAnimations 的普通/蓝图归属规则一致；在 GT 冻结，
+    // RT 仅消费值，不查询脚本宿主或从发丝对象身份反推来源时钟。
+    snapshot.simulationDeltaSeconds =
+        snapshot.sceneObjectIdentity.rfind("__blueprint/", 0) == 0
+            ? desc.gameSimulationDeltaSeconds : desc.simulationDeltaSeconds;
     snapshot.materialSlotIndex = meshObject.materialSlotIndex;
     snapshot.materialSlotName = meshObject.materialSlotName;
     snapshot.model = meshObject.model;
@@ -274,6 +280,7 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
     WorldSnapshot snapshot;
     snapshot.worldGeneration = world.GetGeneration();
     snapshot.frameIndex = desc.frameIndex;
+    snapshot.hairSimulationDeltaSeconds = desc.hairSimulationDeltaSeconds;
     snapshot.debugViewMode = desc.debugViewMode;
 
     Camera& camera = *world.GetRenderCamera();
@@ -319,7 +326,8 @@ RuntimeResult<WorldSnapshot> WorldSnapshotBuilder::Build(
             desc.hasSelectedDraw &&
                 desc.selectedObjectId == objectId &&
                 (desc.selectedAllMaterialSlots ||
-                 desc.selectedMaterialSlotIndex == meshObject.materialSlotIndex)));
+                 desc.selectedMaterialSlotIndex == meshObject.materialSlotIndex),
+            desc));
         currentObjectModels[objectId] = meshObject.model;
     }
 

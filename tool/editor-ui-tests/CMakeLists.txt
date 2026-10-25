@@ -5,6 +5,9 @@ add_executable(editor_ui_tests
     assetDocumentTests.cpp
     blueprintViewportInteractionTests.cpp
     modelPreviewCameraTests.cpp
+    tressfxHairPreviewTests.cpp
+    tressfxHairSimulationTests.cpp
+    tressfxComponentUiTests.cpp
     debugDrawOverlayTests.cpp
     "${PROJECT_SOURCE_DIR}/source/ui/debugDrawOverlay.cpp"
     "${PROJECT_SOURCE_DIR}/source/engine/modelPreviewCamera.cpp"

@@ -22,6 +22,10 @@ struct EditorJsonAssetEntry
     std::string name;
     std::string description;
     std::string diagnostic;
+    // 顶层 type 原值；目录按它区分 mesh/speedtree/tressfx，而不是文件名前缀。
+    std::string type;
+    // tressfx 描述符声明了 simulation.skinning：毛发视口不预览它，由蓝图组件承载。
+    bool tressfxSkinning = false;
 };
 
 struct EditorJsonAssetCatalogSnapshot
@@ -109,6 +113,10 @@ struct EditorJsonDocumentSnapshot
     std::string previewDiagnostic;
     std::shared_ptr<const EditorTexturePreview> texturePreview;
     std::shared_ptr<const EditorRetargetPreview> retargetPreview;
+    // 与目录条目同源的顶层 type / tressfx skinning 摘要；工作线程一次解析后冻结，
+    // UI 不再读文件判断“这是不是毛发、要不要挡预览”。
+    std::string type;
+    bool tressfxSkinning = false;
 };
 
 inline std::string EditorTexturePreviewSource(uint64_t revision)

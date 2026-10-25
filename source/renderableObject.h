@@ -6,6 +6,7 @@
 #include <vulkan/vulkan.hpp>
 #include <Eigen/Dense>
 #include "hair/tressfxDynamics.h"
+#include "hair/tressfxLiveParams.h"
 #include "hair/tressfxProxySkinning.h"
 #include "hair/tressfxSimulationParams.h"
 #include "hair/tressfxSkinning.h"
@@ -50,16 +51,36 @@ public:
     // binding 3 共用同一 buffer；previous/rest/params 只在 GPU backend 下分配。
     bool UsesGpuGuideSimulation() const;
     const TressfxSimulationConfig& GetTressfxSimulationConfig() const;
+    // 编辑器/Console 的实时覆盖：只改本对象自己的 config 副本，下一帧组 params UBO
+    // 时生效；不重建 buffer、不改模型缓存身份。仅渲染线程、仅 GPU backend。
+    bool ApplyTressfxLiveParameter(const VL::Hair::HairLiveParameterRequest& request,
+        std::string& error);
     // World 构建阶段解析出的根点骨骼绑定。未声明 simulation.skinning 时 enabled=false，
     // 运行时保持历史 rest pin；解析失败不会走到这里，加载期已硬错误。
     const VL::Hair::TressfxSkinningBinding& GetTressfxSkinningBinding() const
     {
         return tressfxSkinningBinding;
     }
-    void SetTressfxSkinningBinding(const VL::Hair::TressfxSkinningBinding& binding)
+    void SetTressfxSkinningBinding(const VL::Hair::TressfxSkinningBinding& binding);
+    // 多骨 GPU 资源：逐 strand 4×{joint,weight} 与每 frame-in-flight 的 palette。
+    // 未声明 .tfxbone 时权重为 0，shader 用 motion.w bit2 判断是否读取。
+    const vk::DescriptorBufferInfo& GetTressfxBoneWeightsInfo() const
     {
-        tressfxSkinningBinding = binding;
+        return tressfxBoneWeightsInfo;
     }
+    const vk::DescriptorBufferInfo& GetTressfxSkinningPaletteInfo(uint32_t frameSlot) const
+    {
+        return tressfxPaletteTargets[frameSlot].info;
+    }
+    // 每帧碰撞前的最大穿透深度（x=胶囊、y=SDF，厘米；0 表示无穿透）。
+    // 由 collision/SDF collide shader atomicMax，Host 每帧清零。
+    const vk::DescriptorBufferInfo& GetTressfxPenetrationStatsInfo(uint32_t frameSlot) const
+    {
+        return tressfxPenetrationStatsTargets[frameSlot].info;
+    }
+    void ResetTressfxPenetrationStats(uint32_t frameSlot);
+    void WriteTressfxSkinningPalette(
+        const std::vector<Eigen::Matrix4f>& jointMatrices, uint32_t frameSlot);
     uint32_t GetTressfxGuideCount() const { return tressfxGuideCount; }
     uint32_t GetTressfxPointsPerGuide() const { return tressfxPointsPerGuide; }
     const vk::DescriptorBufferInfo& GetTressfxPreviousPositionInfo() const
@@ -143,6 +164,14 @@ public:
     // frameSlot 是 frame-in-flight 槽，与 params UBO 的槽一一对应。
     const vk::DescriptorBufferInfo& GetTressfxParamsInfo(uint32_t frameSlot) const;
     void WriteTressfxSimulationParams(
+        const VL::Hair::GuideSimulationParams& params,
+        uint32_t frameSlot);
+    // reset/首轮 Integration 专用参数块。源 reset 的首轮 dispatch 与同帧后续
+    // substep 的正常步进不能共用一个 UBO（同一命令缓冲执行时只看最后一次写入），
+    // 因此单独分配一份；正常 params[slot] 永远保持 motion.y = 0。
+    const vk::DescriptorBufferInfo& GetTressfxResetParamsInfo(
+        uint32_t frameSlot) const;
+    void WriteTressfxResetParams(
         const VL::Hair::GuideSimulationParams& params,
         uint32_t frameSlot);
     // 每帧从蒙皮后的代理包围盒重算立方体域，写当前 frame slot 的 SDF params。
@@ -252,9 +281,25 @@ private:
     bool reportedSdfDomainFailure = false;
     std::array<TressfxParamsTarget, VL::Hair::GuideSimulationParamBufferCount>
         tressfxParamsTargets;
+    // reset 首轮 / placement 换基的首个 Integration 专用；与正常 params 同布局、
+    // 同槽数，只在需要时写入。
+    std::array<TressfxParamsTarget, VL::Hair::GuideSimulationParamBufferCount>
+        tressfxResetParamsTargets;
+    // 多骨：逐 strand 4×(joint,weight) 静态权重 + 每槽全骨架 palette。
+    vk::Buffer tressfxBoneWeightsBuffer = nullptr;
+    vk::DeviceMemory tressfxBoneWeightsMemory = nullptr;
+    vk::DescriptorBufferInfo tressfxBoneWeightsInfo;
+    std::array<TressfxParamsTarget, VL::Hair::GuideSimulationParamBufferCount>
+        tressfxPaletteTargets;
+    std::array<TressfxParamsTarget, VL::Hair::GuideSimulationParamBufferCount>
+        tressfxPenetrationStatsTargets;
+    uint32_t tressfxPaletteJointCapacity = 0;
     uint32_t tressfxGuideCount = 0;
     uint32_t tressfxPointsPerGuide = 0;
     bool tressfxGpuSimulation = false;
-    VL::Hair::TressfxSkinningBinding tressfxSkinningBinding;
+    // 本渲染对象自己的模拟参数副本：创建时从 section 复制，实时覆盖只改这里。
+    // imported/section 是共享导入结果，写回会污染其他 placement。
+    // CPU 参考 solver 在构造时另有一份副本，实时覆盖只服务 GPU backend。
+    TressfxSimulationConfig tressfxSimulationConfig;    VL::Hair::TressfxSkinningBinding tressfxSkinningBinding;
     std::unique_ptr<VL::Hair::GuideSimulation> tressfxSimulation;
 };

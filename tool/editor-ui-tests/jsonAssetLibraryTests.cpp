@@ -21,6 +21,47 @@ using ValueKind = EditorJsonValueKind;
 using Document = EditorJsonDocumentSnapshot;
 using Limits = EditorJsonAssetLimits;
 
+TEST(EditorJsonAssetParsing, TressfxSkinningIsSummarizedForTheHairViewportGuard)
+{
+    // 毛发视口靠这两个摘要决定“是不是毛发、要不要挡预览”，不在 UI 里读文件。
+    Document skinnedHair;
+    ASSERT_TRUE(ParseEditorJsonAsset("Maps/SC_x/Meshes/SM_hair.json",
+        R"({"type":"tressfx","modelDataPath":"Maps/SC_x/Source/hair.tfx","strandRadius":0.012,)"
+        R"("simulation":{"backend":"gpu","skinning":{"source":"FemaleCharacter","rootBone":"Head_M"}}})",
+        skinnedHair));
+    EXPECT_EQ(skinnedHair.type, "tressfx");
+    EXPECT_TRUE(skinnedHair.tressfxSkinning);
+
+    Document staticHair;
+    ASSERT_TRUE(ParseEditorJsonAsset("Maps/SC_x/Meshes/SM_hair_static.json",
+        R"({"type":"tressfx","modelDataPath":"Maps/SC_x/Source/hair.tfx","strandRadius":0.012})",
+        staticHair));
+    EXPECT_EQ(staticHair.type, "tressfx");
+    EXPECT_FALSE(staticHair.tressfxSkinning);
+
+    // 顶层 skinning（骨骼网格自己的字段）和别处的同名键都不能冒充 tressfx 绑定。
+    Document skeletalMesh;
+    ASSERT_TRUE(ParseEditorJsonAsset("Maps/SC_x/Meshes/SM_body.json",
+        R"({"type":"mesh","skinning":{"clips":[]}})", skeletalMesh));
+    EXPECT_FALSE(skeletalMesh.tressfxSkinning);
+
+    Document nestedElsewhere;
+    ASSERT_TRUE(ParseEditorJsonAsset("Maps/SC_x/Meshes/SM_other.json",
+        R"({"type":"tressfx","collision":{"simulation":{"skinning":{}}}})", nestedElsewhere));
+    EXPECT_FALSE(nestedElsewhere.tressfxSkinning);
+}
+
+TEST(EditorJsonAssetParsing, TressfxSkinningSurvivesJSONSyntaxErrorsAsACandidate)
+{
+    // 损坏的候选仍要能按类型呈现；标记过宽只会让视口挡住预览，不会加载错误资产。
+    Document document;
+    ParseEditorJsonAsset("SM_broken.json",
+        R"({"type":"tressfx","simulation":{"skinning":{})", document);
+    EXPECT_EQ(document.type, "tressfx");
+    EXPECT_TRUE(document.tressfxSkinning);
+    EXPECT_FALSE(document.diagnostic.empty());
+}
+
 TEST(EditorJsonAssetParsing, RecognizesAllFilenamePrefixesAndMixedCaseExtensions)
 {
     const std::vector<std::pair<std::string, Kind>> cases{

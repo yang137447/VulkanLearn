@@ -54,6 +54,9 @@ struct MeshDrawSnapshot
     bool selected = false;
     std::string debugName;
     std::string sceneObjectIdentity;
+    // 与本帧姿态/placement 一起冻结。普通动画使用 GT 帧时钟，蓝图组件
+    // 使用脚本倍率时钟；绑定它的发丝必须继承源对象的时钟。
+    float simulationDeltaSeconds = 0.0f;
     uint32_t materialSlotIndex = 0;
     std::string materialSlotName;
     Eigen::Matrix4f model = Eigen::Matrix4f::Identity();
@@ -107,6 +110,9 @@ struct WorldSnapshot
 {
     uint64_t worldGeneration = 0;
     uint64_t frameIndex = 0;
+    // 没有骨骼来源的发丝使用场景时间：Editing 正常预览，Play 随倍率，
+    // Pause 为零。骨骼绑定发丝改用源 draw 的 simulationDeltaSeconds。
+    float hairSimulationDeltaSeconds = 0.0f;
     CameraSnapshot camera;
     std::vector<MeshDrawSnapshot> meshDraws;
     std::vector<LightSnapshot> lights;

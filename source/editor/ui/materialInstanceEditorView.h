@@ -191,6 +191,9 @@ struct MaterialInstanceEditorSnapshot
     std::vector<MaterialInstanceAssetEntry> documentTabs;
     std::vector<EditorModifiedDocumentSnapshot> modifiedDocuments;
     std::vector<EditorAssetDocumentResultPayload> blueprintDocuments;
+    // 毛发视口读取 Mesh 草稿的 simulation 字段与 revision。与 blueprintDocuments
+    // 同一投影方式：服务独占草稿，UI 只见只读快照。
+    std::vector<EditorAssetDocumentResultPayload> meshDocuments;
     std::vector<EditorBlueprintCommandFeedback> blueprintCommandFeedback;
     std::vector<EditorSaveFeedback> saveFeedback;
     std::vector<EditorTextureAssetSnapshot> textureAssets;

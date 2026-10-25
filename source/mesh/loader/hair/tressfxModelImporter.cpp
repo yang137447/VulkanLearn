@@ -6,9 +6,33 @@
 #include <limits>
 #include <memory>
 #include <stdexcept>
+#include <string>
+#include <vector>
 
 #include "hair/collisionMeshObj.h"
 #include "hair/strandGeometry.h"
+#include "hair/tfxBoneLoader.h"
+
+namespace
+{
+    // 描述符层只能校验数值域与 64 项上限；逐顶点曲线必须与 .tfx 的
+    // pointsPerStrand 等长，否则 shader 会读到错位的作者值。TFX 解析后才能
+    // 拿到该值，因此在导入边界做硬校验，消息带字段、长度、资产路径。
+    void ValidateStiffnessCurveLength(const char* field, const std::vector<float>& curve,
+        uint32_t pointsPerStrand, const std::string& meshAssetPath,
+        const std::string& modelDataPath)
+    {
+        if (curve.empty())
+            return;
+        if (curve.size() == pointsPerStrand)
+            return;
+        throw std::runtime_error(
+            "TressFX simulation." + std::string(field) + " has " +
+            std::to_string(curve.size()) + " entries but " + meshAssetPath +
+            " (" + modelDataPath + ") has " + std::to_string(pointsPerStrand) +
+            " points per strand");
+    }
+} // namespace
 
 void TressfxModelImporter::ValidateImportRequest(const ModelImportRequest& request) const
 {
@@ -25,6 +49,17 @@ void TressfxModelImporter::ValidateImportRequest(const ModelImportRequest& reque
                 "TressFX collision mesh source not found: " +
                 request.buildPlan.tressfxSimulation.collisionMesh->path);
     }
+    // 声明 boneWeights 时 .tfxbone 是必需输入；缺失/不可读是加载期硬错误。
+    if (request.buildPlan.tressfxSimulation.skinning &&
+        !request.buildPlan.tressfxSimulation.skinning->boneWeightsPath.empty())
+    {
+        if (request.absoluteBoneWeightsPath.empty() ||
+            !std::filesystem::is_regular_file(
+                std::filesystem::u8path(request.absoluteBoneWeightsPath)))
+            throw std::runtime_error(
+                "TressFX bone weights source not found: " +
+                request.buildPlan.tressfxSimulation.skinning->boneWeightsPath);
+    }
 }
 
 ModelResource TressfxModelImporter::Import(const ModelImportRequest& request)
@@ -37,6 +72,14 @@ ModelResource TressfxModelImporter::Import(const ModelImportRequest& request)
     if (prepared.IsFailure())
         throw std::runtime_error("TressFX model geometry failed: " + prepared.Error().message);
     const auto& asset = parsed.Value();
+    // 两条作者曲线都必须与这份 .tfx 的 pointsPerStrand 等长；不匹配是作者错误，
+    // 不能在运行时静默截断或补零。
+    ValidateStiffnessCurveLength("vspStiffness",
+        request.buildPlan.tressfxSimulation.vspStiffness, asset.pointsPerStrand,
+        request.buildPlan.meshAssetPath, request.buildPlan.modelDataPath);
+    ValidateStiffnessCurveLength("localShapeStiffness",
+        request.buildPlan.tressfxSimulation.localShapeStiffness, asset.pointsPerStrand,
+        request.buildPlan.meshAssetPath, request.buildPlan.modelDataPath);
     const auto& geometry = prepared.Value();
     // 共享 Vertex 较宽，导入预算单独限制派生流，避免合法 TFX 膨胀成数 GB 顶点。
     constexpr size_t MaxRibbonBytes = 512ull * 1024 * 1024;
@@ -62,6 +105,18 @@ ModelResource TressfxModelImporter::Import(const ModelImportRequest& request)
                 collisionMesh.Error().message);
         section.tressfxCollisionMesh = std::make_shared<const VL::Hair::SdfTriangleMesh>(
             std::move(collisionMesh.Value()));
+    }
+    if (request.buildPlan.tressfxSimulation.skinning &&
+        !request.buildPlan.tressfxSimulation.skinning->boneWeightsPath.empty())
+    {
+        // 与 .tfx 同次导入：运行期只消费解析后的 TfxBoneAsset，不重新读文件。
+        auto boneAsset = VL::Hair::LoadTfxBone(
+            std::filesystem::u8path(request.absoluteBoneWeightsPath));
+        if (boneAsset.IsFailure())
+            throw std::runtime_error("TressFX bone weights import failed: " +
+                boneAsset.Error().message);
+        section.tressfxBoneAsset = std::make_shared<const VL::Hair::TfxBoneAsset>(
+            std::move(boneAsset.Value()));
     }
     section.tressfxInverseMass.reserve(asset.positions.size());
     section.indices = geometry.ribbonIndices;
@@ -99,6 +154,16 @@ ModelResource TressfxModelImporter::Import(const ModelImportRequest& request)
         }
     }
     result.sourceMaterialSlotNames.push_back(section.materialSlotName);
+    // 只保留 guide 根点：加载期要从绑定姿态身体派生逐 strand 权重，而位置 buffer
+    // 在 GPU 侧（device-local）不可回读。点数由 .tfx 头保证与
+    // guideCount * pointsPerStrand 一致，解析器已校验点数集合。
+    section.tressfxRootPositions.reserve(asset.guideCount);
+    for (uint32_t strand = 0; strand < asset.guideCount; ++strand)
+    {
+        const auto& root = asset.positions[strand * asset.pointsPerStrand];
+        section.tressfxRootPositions.push_back(
+            Eigen::Vector3f(root[0], root[1], root[2]));
+    }
     result.sections.push_back(std::move(section));
     return result;
 }

@@ -17,14 +17,16 @@ namespace VL::Hair
 struct SimulationConfig
 {
     Eigen::Vector3f gravity = Eigen::Vector3f(0.0f, -980.0f, 0.0f);
-    // 单个作者风向量：方向归一化，长度作为幅值（厘米/秒）；CPU/GPU 都按
-    // TressFX SetWind 展开成四路锥形风。
+    // 单个作者风向量：方向归一化，长度作为 TressFX WindMagnitude 力标量，
+    // 不是物理风速；CPU/GPU 都按 SetWind 展开成四路锥形风。
     Eigen::Vector3f wind = Eigen::Vector3f::Zero();
     // TressFX 的 DampingCoeff，直接用于 exp(-damping*dt*60)，典型 0..0.07。
     float damping = 0.035f;
     uint32_t iterations = 3;
     uint32_t rootFixedPoints = 2;
-    // 变量步长上限；TressFX 的硬上限是 0.016 s，每帧一个 solver step。
+    // 每帧一个变量步长；0.016 s 上限取自源 Integration 参数函数。
+    // GPU 原生调度与 StepFrame 已不再使用它（固定 0.0125 s/substep），
+    // 只为兼容既有资产与旧 Step 入口保留。
     float maxDt = TressfxMaxTimeStepSeconds;
     // 映射到 LocalShape pass 的 Stiffness 标量；pass 内再乘 0.5。
     float bendStiffness = 0.3f;
@@ -33,7 +35,13 @@ struct SimulationConfig
     float globalShapeEffectiveRange = 0.0f;
     // TressFX VSP；vspCoefficient == 0 时 CPU/GPU 都跳过 VSP pass。
     float vspCoefficient = 0.0f;
-    float vspAccelThresholdMax = 5000.0f;
+    // 二阶位置差幅值阈值，厘米；名字沿用源 Accel，但没有除 dt²。
+    float vspAccelThresholdMax = TressfxDefaultVspAccelThresholdMaxCm;
+    // 可选作者逐顶点曲线。空 = 未作者：VSP 用根前缀→梢部线性近似，LocalShape
+    // 用 bendStiffness 标量。非空时长度必须等于 pointsPerGuide（加载期已按
+    // .tfx 的 pointsPerStrand 校验）；LocalShape 的 >0.95 值已在加载期 clamp。
+    std::vector<float> vspStiffness;
+    std::vector<float> localShapeStiffness;
     // 资产局部空间的解析胶囊；顺序即重叠时的投影顺序。
     std::vector<TressfxCollider> capsules;
 };
@@ -53,8 +61,12 @@ public:
         SimulationConfig config);
 
     void Reset();
-    // dt 被 clamp 到 [0, maxDt]；一帧只推进一次，不再消费固定步 accumulator。
+    // 旧的可变步长入口：dt 被 clamp 到 [0, maxDt]，一帧只推进一次。
+    // 保留给现有测试/逐变量步长调用；运行时改走 StepFrame。
     void Step(float dt);
+    // TressFX 5.0 源上层调度：按帧增量得到 0/1/2 个 substep，每个 substep
+    // 固定 0.0125 s；simulationFrame 每帧只 +1（同一帧所有 substep 共用风相位）。
+    void StepFrame(float deltaSeconds);
     void SetPaused(bool value) { paused = value; }
     bool IsPaused() const { return paused; }
     const std::vector<Eigen::Vector3f>& Positions() const { return positions; }
@@ -97,9 +109,10 @@ private:
     size_t pointsPerGuide = 0;
     SimulationConfig config;
     bool paused = false;
-    // 每帧 solver step 结束后推进一次；同一帧所有 pass 共用 frame-start t。
+    // 每个 substep 结束后累加 solver step；StepFrame 一帧可累加 0/1/2 次。
     float simulationTime = 0.0f;
     // TressFX Guides.Frame：逐帧 wind 幅值调制 sin(frame*0.001)² 的相位来源。
+    // StepFrame 每帧只 +1，Step 每次调用 +1。
     uint32_t simulationFrame = 0;
 };
 

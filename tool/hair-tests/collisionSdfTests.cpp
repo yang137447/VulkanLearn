@@ -502,6 +502,40 @@ TEST(TressfxProxySkinning, RejectsProxyVerticesBeyondTransferRadius)
     }
 }
 
+TEST(TressfxProxySkinning, RecordPolicyMarksUnmatchedRootsWithoutThrowing)
+{
+    ProxySkinBody body;
+    AddBodyVertex(body, {0.0f, 0.0f, 0.0f}, {{0, 1.0f}});
+    // 发丝根点路径：第一个点可匹配，第二个点离身体 100 cm，交给调用方按根回退。
+    const std::vector<Eigen::Vector3f> roots{{0.1f, 0.0f, 0.0f}, {100.0f, 0.0f, 0.0f}};
+    const auto transfer = VL::Hair::BuildTressfxProxySkinTransfer(
+        roots, body.View(), 2.0f,
+        VL::Hair::TressfxSkinTransferPolicy::RecordUnmatched);
+    ASSERT_EQ(transfer.vertexCount, 2u);
+    ASSERT_EQ(transfer.unmatchedVertices.size(), 1u);
+    EXPECT_EQ(transfer.unmatchedVertices[0], 1u);
+    // CSR 仍是 1:1：未匹配点给空区间（begin == end），而不是零矩阵影响。
+    EXPECT_EQ(transfer.words[0], 3u);
+    EXPECT_EQ(transfer.words[1], 5u);
+    EXPECT_EQ(transfer.words[2], 5u);
+    EXPECT_NEAR(transfer.maxNearestDistanceCm, 0.1f, 1.0e-5f);
+}
+
+TEST(TressfxProxySkinning, RecordPolicyMarksVertexWithoutPositiveWeights)
+{
+    ProxySkinBody body;
+    AddBodyVertex(body, {0.0f, 0.0f, 0.0f}, {{0, 0.0f}});
+    const std::vector<Eigen::Vector3f> roots{{0.0f, 0.0f, 0.0f}};
+    const auto transfer = VL::Hair::BuildTressfxProxySkinTransfer(
+        roots, body.View(), 2.0f,
+        VL::Hair::TressfxSkinTransferPolicy::RecordUnmatched);
+    ASSERT_EQ(transfer.unmatchedVertices.size(), 1u);
+    EXPECT_EQ(transfer.unmatchedVertices[0], 0u);
+    EXPECT_EQ(transfer.words.size(), 2u);
+    EXPECT_EQ(transfer.words[0], 2u);
+    EXPECT_EQ(transfer.words[1], 2u);
+}
+
 TEST(TressfxProxySkinning, SkinnedPositionBlendsBoneMatrices)
 {
     ProxySkinBody body;

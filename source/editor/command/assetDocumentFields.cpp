@@ -58,6 +58,17 @@ const Field fields[] = {
     {K::Scene, "camera", "exposure.autoTargetGray", ValueKind::Number, true, "linear"},
     {K::Mesh, "", "name", ValueKind::Text},
     {K::Mesh, "", "modelDataPath", ValueKind::Text, false, "source_path"},
+    // tressfx 的模拟标量：一级点路径直接落在 simulation 对象下。作者值由
+    // MeshAssetValidator 做值域与封闭对象校验；实时预览另走运行期命令。
+    {K::Mesh, "", "simulation.gravity", ValueKind::Vector3, false, "cm/s^2"},
+    {K::Mesh, "", "simulation.wind", ValueKind::Vector3},
+    {K::Mesh, "", "simulation.damping", ValueKind::Number},
+    {K::Mesh, "", "simulation.iterations", ValueKind::Number},
+    {K::Mesh, "", "simulation.bendStiffness", ValueKind::Number},
+    {K::Mesh, "", "simulation.globalShapeStiffness", ValueKind::Number},
+    {K::Mesh, "", "simulation.globalShapeEffectiveRange", ValueKind::Number},
+    {K::Mesh, "", "simulation.vspCoefficient", ValueKind::Number},
+    {K::Mesh, "", "simulation.vspAccelThresholdMax", ValueKind::Number, false, "cm"},
     {K::Mesh, "", "importOptions.generateSmoothNormals", ValueKind::Boolean, true},
     {K::Mesh, "", "importOptions.includedSectionNames", ValueKind::Strings, true},
     {K::Mesh, "slot", "materialInstancePath", ValueKind::Text, false, "asset_path"},

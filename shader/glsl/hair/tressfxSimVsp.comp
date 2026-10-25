@@ -40,9 +40,9 @@ void main()
     uint base = guide * 3u;
     vec4 vspQuat = strandLevelData.data[base + 0];
     vec4 vspTranslation = strandLevelData.data[base + 1];
-    float vspCoeff = vspTranslation.w;
-    if (vspCoeff < 0.9)
-        vspCoeff *= TressfxVspStiffness(local);
+    // 源实现只在 VspCoeff < 0.9 时乘逐顶点 VSPStiffness；有作者数组用数组值，
+    // 否则 helper 回退到线性近似。
+    float vspCoeff = TressfxVspCoefficient(vspTranslation.w, local);
 
     vec4 posNew = currentPositions.positions[point];
     vec4 posOld = previousPositions.positions[point];

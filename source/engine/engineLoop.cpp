@@ -804,6 +804,14 @@ void EngineLoop::Tick()
             CpuFrameStageScope scriptsStage(cpuFrameProfiler, CpuFrameStage::Scripts);
             if (world && scripts.IsEditing()) world->GetDebugDraw().AdvanceGameTime(simulationDelta);
         }
+        // 普通动画的编辑预览独立于 C# Play；绑定蓝图角色的发丝则消费
+        // 同一份 scaled dt。冻结后交给 RT，不让曝光墙钟绕过 Pause/TimeScale。
+        const float gameSimulationDelta =
+            scripts.ContextTime().at("deltaTime").get<float>();
+        const float hairSimulationDelta = scripts.IsEditing()
+            ? simulationDelta : gameSimulationDelta;
+        RenderSystem::GetInstance().SetSimulationFrameDeltas(
+            simulationDelta, gameSimulationDelta, hairSimulationDelta);
         {
             CpuFrameStageScope animationStage(cpuFrameProfiler, CpuFrameStage::Animation);
             // 动画 CPU 蒙皮/求值发生在 World::TickAnimations，毛发 GT 步进在下一段单独计时。
@@ -813,7 +821,7 @@ void EngineLoop::Tick()
         {
             CpuFrameStageScope hairStage(cpuFrameProfiler, CpuFrameStage::HairSimulation);
             if (!RenderSystem::GetInstance().IsOfflineMode())
-                RendererResourceCache::GetInstance().AdvanceTressfxSimulations(simulationDelta);
+                RendererResourceCache::GetInstance().AdvanceTressfxSimulations(hairSimulationDelta);
         }
         {
             CpuFrameStageScope scriptsStage(cpuFrameProfiler, CpuFrameStage::Scripts);
@@ -1366,10 +1374,26 @@ void EngineLoop::ApplyQueuedUiActions()
             command.type = RuntimeCommandType::LoadWorld;
             command.stringValue = ModelPreviewScenePath;
             command.extraSceneObjects = BuildModelPreviewObjects(action.stringValue);
-            // 厘米骨骼资产按原尺度预览，不继承旧静态模型的 43 倍注入尺度。
+            // 厘米骨骼/TFX 资产按原尺度预览，不继承旧静态模型注入的 43 倍尺度。
             try
             {
-                if (MeshAssetLoader::Prepare(action.stringValue).buildPlan.IsSkeletal())
+                const auto buildPlan =
+                    MeshAssetLoader::Prepare(action.stringValue).buildPlan;
+                if (buildPlan.assetType == "tressfx")
+                {
+                    // 带 skinning 的毛发需要源角色姿态，视口不承担；由蓝图 TressFX
+                    // 组件承载。这里硬拒绝，不能静默剥掉 skinning 后假装可预览。
+                    if (buildPlan.tressfxSimulation.skinning)
+                    {
+                        GetSubsystems().GetDiagnosticsSubsystem().ReportWarning(
+                            "TressFX hair preview skipped: asset declares simulation.skinning "
+                            "and is authored by the Blueprint TressFX component: " +
+                            action.stringValue);
+                        continue;
+                    }
+                    command.extraSceneObjects[0]["scale"] = {1.0, 1.0, 1.0};
+                }
+                else if (buildPlan.IsSkeletal())
                     command.extraSceneObjects[0]["scale"] = {1.0, 1.0, 1.0};
             }
             catch (const std::exception& error)
@@ -1561,6 +1585,32 @@ void EngineLoop::ApplyQueuedUiActions()
             break;
         case UiActionType::ForceSpeedTreeGust:
             command.type = RuntimeCommandType::ForceSpeedTreeGust;
+            break;
+        case UiActionType::RotatePreviewModel:
+            // 旋转的是预览对象，不是相机：毛发物理只对根点世界位置变化产生响应。
+            // UI 维护累计 yaw/pitch；执行端只核对 preview_model 仍在 active World。
+            command.type = RuntimeCommandType::SetMeshPlacement;
+            command.meshPlacementMode = MeshPlacementMode::Absolute;
+            command.meshPlacement.identity = "mesh|preview_model";
+            command.meshPlacement.position.setZero();
+            command.meshPlacement.rotation = {
+                action.previewRotation.pitch, action.previewRotation.yaw, 0.0f};
+            break;
+        case UiActionType::ResetHairSimulation:
+            // 预览世界只有一个毛发对象，空目标即“所有 tressfx 对象”。
+            command.type = RuntimeCommandType::ResetHairSimulation;
+            command.stringValue.clear();
+            break;
+        case UiActionType::SetHairSimulationParameter:
+            // 视口里的实时覆盖只作用于预览对象；作者值由独立的 Save to Asset 写入。
+            command.type = RuntimeCommandType::SetHairSimulationParameter;
+            command.stringValue.clear();
+            command.hairLiveParameter.objectName = "preview_model";
+            command.hairLiveParameter.field = action.previewHairParameter.field;
+            command.hairLiveParameter.valueCount = action.previewHairParameter.valueCount;
+            for (uint32_t component = 0; component < 3; ++component)
+                command.hairLiveParameter.values[component] =
+                    action.previewHairParameter.values[component];
             break;
         default:
             continue;

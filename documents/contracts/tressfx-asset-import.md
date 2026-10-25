@@ -9,8 +9,10 @@
 
 `source/hair/` 的 `vl_hair_assets` 是纯 CPU 静态库，供根工程 `main`、
 `vl_tfx_inspect` 和 `hair_asset_tests` 链接；不依赖 UE、Vulkan、World 或材质系统。
-该库提供 `.tfx` 解析、静态几何准备和参考 solver `VL::Hair::GuideSimulation`，
-没有 `.tfxbone` / `.tfxmesh` 解析或 follow 生成。GPU 模拟 pass
+该库提供 `.tfx` 解析、`.tfxbone` 纯 CPU 解析与骨名→目标骨架映射
+（`tfxBoneLoader`）、静态几何准备和参考 solver `VL::Hair::GuideSimulation`；
+没有 `.tfxmesh` 解析或 follow 生成。`.tfxbone` 由网格 importer 读入、加载期
+映射后，GPU 发丝在声明 `simulation.skinning.boneWeights` 时消费逐 strand 权重。GPU 模拟 pass
 `VL::Hair::HairSimulationPass` 依赖 `PipelineFactory` 与 Vulkan backend，因此不进入
 该静态库，而是单独编进 `main`；静态运行时接入仍位于独立的网格 importer 和引擎顶点工厂，
 没有 `GR_*` 描述符或新的 groom 场景对象。
@@ -59,6 +61,10 @@ bounds 仅由 xyz 求 min/max，不包含 ribbon 宽度。
   `(2i,2i+1,2i+2)`、`(2i+2,2i+1,2i+3)`，不同 guide 不连接。
 - 这里只生成切线、rest length 和拓扑；不生成相机朝向顶点、thickness taper
   或 GPU buffer，不把 CPU 派生成功当作渲染验证。
+- 导入期还额外保留每 guide 一个 model 空间根点
+  （`MeshSection::tressfxRootPositions`，正式资产 40,334 个 ≈ 0.48 MB），只服务
+  加载期 `simulation.skinning.weights = "mesh"` 的权重派生，不进入 GPU buffer，
+  也不改变 ribbon 拓扑。
 
 ## 工具与验证
 
@@ -300,20 +306,29 @@ backend 写入模型缓存身份，同一个 `.tfx` 的 cpu/gpu 描述符不共�
 | `damping` | 0.035 | `[0,1]`，典型 `0..0.07` | TressFX 的 `DampingCoeff`，直接用于 `exp(-damping*dt*60)`；不是“每步保留的速度比例”，不做 `-ln` 映射。 |
 | `iterations` | 3 | `[1,16]` | LengthConstraintsWind pass 的偶数/奇数边约束迭代次数；本资产校准为 8。 |
 | `rootFixedPoints` | 2 | `[0,32]` | 每根 guide 从根部起固定的点数，即 TressFX 的 `NumVerticesFromRootNoSimulation`。 |
-| `maxDt` | 0.016 | `(0,0.016]` | 单帧 dt 上限；TressFX 的硬上限是 0.016 s，资产只能收紧。`dt = min(frameDelta, maxDt)` 直接成为本帧唯一 solver step。 |
-| `bendStiffness` | 0.3 | `[0,1]` | 映射到 LocalShape pass 的逐顶点 `Stiffness` 标量；pass 内再乘 0.5（TressFX 公式）。0 关闭。 |
+| `maxDt` | 0.016 | `(0,0.016]` | 兼容字段。GPU 原生调度与 `GuideSimulation::StepFrame` 都不读它（每 substep 固定 0.0125 s）；只有旧的 `GuideSimulation::Step(dt)` 变量步长入口仍 clamp 到 `[0,maxDt]`。资产校验保留 `(0,0.016]`。 |
+| `bendStiffness` | 0.3 | `[0,1]` | 映射到 LocalShape pass 的逐顶点 `Stiffness` 标量；pass 内再乘 0.5（TressFX 公式）。0 关闭。未提供 `localShapeStiffness` 时整条 strand 使用该标量。 |
+| `localShapeStiffness` | 空（未作者） | 数组，1..64 项，每项 `[0,1]` | 可选作者逐顶点 LocalShape Stiffness。第 i 项 = 源曲线在 `i/N` 处的采样值（`TressFXComponent.cpp:706-710`），N = guide 资产的 `pointsPerStrand`；长度必须等于该 TFX 的 `pointsPerStrand`，否则导入期硬错误。加载期对 >0.95 的值 clamp 到 0.95 并向 stderr 记录字段/索引/资产路径（源 `FMath::Min(value, 0.95f)`）；省略时回退到 `bendStiffness` 标量。 |
 | `globalShapeStiffness` | 0 | `[0,1]` | TressFX Integration 的 global shape 强度；0 关闭，既有资产外观不变。 |
 | `globalShapeEffectiveRange` | 0 | `[0,1]` | 作用范围占每根 strand 顶点数的比例；0 关闭。 |
 | `vspCoefficient` | 0 | `[0,1]` | TressFX VSP 基础系数；0 表示关闭，Host 不录制 VSP dispatch。 |
-| `vspAccelThresholdMax` | 5000 | `(0,1e7]` | 伪加速度阈值，厘米/秒²；超过时强制 VspCoeff = 1。 |
+| `vspAccelThresholdMax` | 140 | `(0,1e7]` | 二阶位置差幅值阈值，单位厘米，未除 dt²；超过时强制 VspCoeff = 1。默认 140 对应源默认 1.4 world m；名字沿用源 `Accel`，不是厘米/秒²。 |
+| `vspStiffness` | 空（未作者） | 数组，1..64 项，每项 `[0,1]` | 可选作者逐顶点 VSPStiffness。第 i 项 = 源曲线在 `i/N` 处的采样值（`TressFXComponent.cpp:687-691`），长度必须等于该 TFX 的 `pointsPerStrand`，否则导入期硬错误。只在 `VspCoeff < 0.9` 时乘入（源 patch 10153-10160）；省略时回退到根前缀(1)→梢部(0)的线性近似。 |
 | `backend` | `"cpu"` | `"cpu"` / `"gpu"` | 参考 solver 或 compute dispatch。 |
-| `skinning` | 无 | `{source, rootBone}` | 可选；把根点改为跟随场景内源角色的单个骨骼。缺省即历史行为。 |
+| `skinning` | 无 | `{source, rootBone, boneWeights?, weights?}` | 可选；把根点改为跟随场景内源角色的骨架。缺省即历史单骨行为。 |
+| `skinning.weights` | `"rootBone"` | `"rootBone"` / `"mesh"` | 根点权重来源。`rootBone` 用单根骨矩阵（声明 `boneWeights` 时改用 `.tfxbone` 文件权重）；`mesh` 在加载期从绑定姿态源网格派生逐 strand 权重。与 `boneWeights` 互斥，且需要 `backend = "gpu"`。只有 `mesh` 追加到模型缓存身份（`|rootweights=mesh`）。 |
 
 固定步字段已删除：`fixedStep` 与 `maxSubsteps` 不再被解析，出现即在资产边界报错
 （错误消息指向 `maxDt`），避免旧资产静默失去效果。VL 原有的 `windGust` 与
 `windFrequency` 也已删除：它们会与 TressFX `SetWind` 的帧调制叠加成双重调制。
-这两个字段出现时在资产边界报错，错误消息给出 `SetWind` 公式。`gravity`、`wind`、
-`damping`、`iterations`、`maxDt` 仍留在模型缓存身份中。
+这两个字段出现时在资产边界报错，错误消息给出 `SetWind` 公式。`simulation` 现在按
+封闭对象校验，未知键直接失败，避免拼错的新曲线字段静默回退。`gravity`、`wind`、
+`damping`、`iterations`、`maxDt`、`bendStiffness`、`localShapeStiffness`、
+`vspCoefficient`、`vspAccelThresholdMax`、`vspStiffness` 仍留在模型缓存身份中；
+两条曲线逐项以 hexfloat 参与身份，只改一个作者值也会重建缓存条目。
+`simulation.skinning` 的 `source`/`rootBone`/`boneWeights` 同样进入身份；
+`weights` 只在取值 `"mesh"` 时追加 `|rootweights=mesh`，缺省不追加，
+既有资产身份保持不变。
 
 ### 碰撞：胶囊与逐帧 SDF 网格
 
@@ -398,10 +413,19 @@ backend 写入模型缓存身份，同一个 `.tfx` 的 cpu/gpu 描述符不共�
 ```
 
 - `source` 是同一场景内的 `mesh` 对象名（`sceneObjectIdentity`），`rootBone` 是该
-  对象**目标骨架**（`skinning.skeleton` 指向的 SK）里的关节名，大小写敏感。两块
-  都必须是存在且非空的字符串；未知键、缺失键都在 `MeshAssetValidator::BuildLoadPlan`
-  拒绝，错误消息带 SM 资产路径。两者都进入 `modelCacheKey`，改来源或骨名会得到
-  不同 renderable。
+  对象**目标骨架**（`skinning.skeleton` 指向的 SK）里的关节名，大小写敏感。
+  `rootBone` 必须存在且非空；`source` 在场景 JSON 路径下同样必填，但由蓝图
+  `tressfx` 组件挂载时可以省略——组件树里的父 `mesh` 组件提供源角色与骨架。
+  未知键、空字符串在 `MeshAssetValidator::BuildLoadPlan` 拒绝，错误消息带 SM 资产路径。
+  两者都进入 `modelCacheKey`，改来源或骨名会得到不同 renderable。
+- 蓝图 `tressfx` 组件提供**放置级**绑定：组件的最近 `mesh` 祖先就是源角色，身份为
+  `__blueprint/<actor>/<component>`，优先于 SM 的 `source`。两者都不存在时在加载期
+  硬错误（消息带对象名与 SM 路径），不静默回退。组件局部 TRS 必须是单位阵：毛发与
+  源角色必须共享同一对象空间（`ModelMatricesMatch`），当前没有“毛发相对角色偏移”的语义。
+- 权重选择顺序：组件显式 `weights` > SM 显式 `weights` > 组件绑定默认 `"mesh"`；
+  显式 `.tfxbone`（`boneWeights`）优先于自动升级，只有显式 `mesh` 与文件并存才按
+  作者冲突拒绝。加载期打印一次
+  `[TressFX] hair binding: object=… source=… binding=component|scene weights=mesh|bone|file rootBone=…`。
 - 只允许 `backend = "gpu"`。姿态来自渲染线程的冻结 `RenderScene`/`SkinPose`；
   CPU 参考 solver 在游戏线程运行且没有 pose，所以 `skinning` 与 `cpu`（包括缺省
   backend）组合在加载期硬错误，而不是运行时退回 rest pin。
@@ -412,30 +436,52 @@ backend 写入模型缓存身份，同一个 `.tfx` 的 cpu/gpu 描述符不共�
   没有第二套场景注册表、GR 描述符或新的场景对象类型。
 - 硬错误（消息同时带对象名/骨名与发丝 SM 资产路径，绝不静默回退）：源对象不存在、
   源对象没有蒙皮骨架（`Asset().HasSkeleton()` 为 false）、根骨不在目标 SK 中。
-- 共享对象空间：骨骼矩阵把源角色的绑定空间映射到**源对象的模型空间**，而发丝仍按
-  自己的 model 绘制。因此两个场景对象的 `model` 矩阵必须一致（逐元素容差 `1e-4`）；
-  不一致在构建期报错，不把错位的根点写进 SSBO。当前正式关卡两者都为 identity。
+- 绑定空间：构建期仍要求两个场景对象的 `model` 一致（逐元素容差 `1e-4`）；
+  不一致直接报错，确保资产 rest 与身体绑定空间匹配。运行期根点、绑定胶囊和代理
+  palette 统一使用 `inverse(hair.model) * source.model * bindToPose`，把源模型空间
+  显式转到发丝局部空间。两个对象同为 identity 时退化为原 bind→pose 行为。
+  运行中单独改变 source model 能正确移动根点/碰撞代理，但该变换没有专门的
+  teleport epoch，不等于跳变已复位。hair placement 自身变化时，GPU 路径把
+  current/previous/prevPrev 三份历史乘 `inverse(currentModel) * lastModel` 换基
+  （`motion.z`/`historyToCurrentLocal`），刚体平移/绕轴旋转下世界位置和世界速度
+  保持不变，等价于源的世界空间历史；非均匀缩放/剪切只保证点换基，不保证
+  rest length、胶囊半径、SDF cell/margin 等局部度量与世界 solver 等价。
 - 运行时 `HairSimulationPass` 在冻结快照的 `drawPackets` 里按 `sceneObjectIdentity`
-  找源角色 draw，读取 `skinPose->bindToPoseMatrices[jointIndex]`（全骨架 bind→pose；
-  旧 pose 没有这份矩阵时退回 `matrices[jointIndex]`）。pose 或 draw 本帧不可用时
-  保留上一帧矩阵并只报告一次（stderr），不销毁 pass、descriptor 或整帧。
-- 矩阵每帧写入 std140 params UBO 的 `skinning`（mat4，offset 160，整个 UBO 224 bytes；
-  C++ `static_assert` 固定大小、对齐与偏移）。没有声明 `skinning` 时上传单位矩阵。
+  找源角色 draw，读取全骨架 `skinPose->bindToPoseMatrices`（旧 pose 没有时退回
+  `matrices`），以同一份 source→hair 相对 palette 驱动根骨、绑定胶囊与 SDF。
+  palette 容量由逐对象 `TressfxFrameContext` 复用。pose 或 draw 本帧不可用时
+  保留上一帧矩阵并只报告一次（stderr），不销毁 pass、descriptor 或整帧；
+  再次取得有效 pose 时复位，避免把失去姿态期间的差值积成速度。
+- 矩阵每帧写入 std140 params UBO 的 `skinning`（mat4，offset 160）；三份历史换基
+  矩阵 `historyToCurrentLocal`（mat4，offset 224）；作者曲线数组 `vspStiffness`
+  （offset 288）与 `localShapeStiffness`（offset 544）各 16 个 vec4、共 256 bytes；
+  整个 UBO 800 bytes，C++ `static_assert` 固定大小、对齐与偏移。没有声明
+  `skinning` 时上传单位矩阵。
 - 不可移动点（`local < rootFixedPoints` 或逆质量 <= 0）每步写
-  `InitialPos = M * rest`；这是 TressFX Integration 的规则。可移动点不消费 M，
-  只在 global shape 开启时把 `InitialPos` 当作回拉目标。
-- 同一矩阵的上 3×3 旋转部分在 Host 分解为四元数 `skinningQuat`（offset 144），
+  `InitialPos = M * rest`；这是 TressFX Integration 的规则。正常积分中可移动点
+  只在 global shape 开启时把 `InitialPos` 当作回拉目标；ResetPositions 则把
+  所有点和三份位置历史同时写成当前蒙皮 rest，清空旧速度。
+- 最终 source→hair 根矩阵的上 3×3 旋转部分在 Host 分解为四元数 `skinningQuat`（offset 144），
   作为 TressFX `SkinningQuat` 供 LocalShape pass 使用。VSP/局部形状需要的是
-  bind→pose 的**增量**旋转；`SkinPose::bindToPoseMatrices[jointIndex]` 正是
-  这个增量矩阵（与顶点着色器同一用法），不是骨骼的绝对变换。`SkinPose::matrices`
+  bind→pose 的**增量**旋转并转入发丝空间；`SkinPose::bindToPoseMatrices[jointIndex]`
+  给出源对象内的增量，随后组合 source→hair 相对变换，不是骨骼的绝对变换。`SkinPose::matrices`
   是逐 section 的版本，未参与该 section 的关节会退化为绝对 model 矩阵，因此
   hair 的根骨/胶囊/代理统一使用全骨架 `bindToPoseMatrices`。
 - TressFX 5.0 映射：源实现从 `GuidesBoneIndexBuffer`（逐 strand 的
   `FBoneIndexData`）在积分 pass 里蒙皮 guide，并用 `NumVerticesFromRootNoSimulation`
-  标出“蒙皮但不模拟”的根前缀；本实现的**发丝根点**只有单个根骨矩阵，没有逐
-  strand 多骨权重，也没有 `.tfxbone` 导入。`VSP`/`LocalShape` 的 `SkinningQuat`
-  因此是整根 strand 共用的同一个根骨旋转，而不是每根 strand 的根三角帧旋转。
+  标出“蒙皮但不模拟”的根前缀。VL 的逐 strand 多骨权重有两个来源：
+  `simulation.skinning.boneWeights`（`.tfxbone`，骨名映射后归一化）或
+  `simulation.skinning.weights = "mesh"`（加载期从源网格派生）。两者都上传为每
+  strand 最多 4 个 `(joint, weight)`；`motion.w` bit2 置位后 Integration 与
+  StrandLevel 读取同一份权重（逐 strand `InitialPos` 与 `SkinningQuat`）。
+  没有权重时退回单根骨矩阵与整根 strand 共用的 `SkinningQuat`。
   碰撞代理不走这条路径，它有自己的逐顶点权重。
+- `weights = "mesh"` 的派生规则：每个 guide 的根点（导入期保留，见“静态几何”）
+  在绑定姿态下匹配最近的身体顶点，复制其**完整**影响列表并归一化；2 cm 上限只是
+  错空间检测器（本资产实测发根到最近顶点最大 0.516 cm）。个别根超距按根回退
+  `rootBone`；全部根超距说明毛发与 source 不在同一绑定空间，加载期硬错误。
+  不插值、不做 k 近邻。加载期打印一次
+  `[TressFX] rootWeights: strands=… joints=… maxNearest=… fallback=…`。
 - 碰撞胶囊可以按 `collision.capsules[].bone` 绑定到目标骨架：每帧用该关节的
   全骨架 bind→pose 矩阵变换 `a`/`b`，radius 不缩放；没有 `bone` 的槽保持作者
   绑定空间的静态值。声明 `collision.mesh` 时，逐帧 SDF 碰撞使用代理自身的
@@ -465,9 +511,18 @@ host-visible/coherent。
 - rest lengths：每点一个 float，第 i 项是 i→i+1 的静止段长，末项 0；创建时上传一次。
 - strand level data：每根 strand 3 个 vec4（48 字节）：
   `VspQuat`、`VspTranslation.xyz + VspCoeff.w`、`SkinningQuat`。
-- 每个 frame-in-flight 槽一份 std140 params UBO（224 bytes），布局：
+- 每个 frame-in-flight 槽一份 std140 params UBO（800 bytes），布局：
   gravity(0)、Wind0..3(16/32/48/64)、controls(80)、shape(96)、motion(112)、
-  counts(128)、skinningQuat(144)、skinning(160)。
+  counts(128)、skinningQuat(144)、skinning(160)、historyToCurrentLocal(224)、
+  vspStiffness 16×vec4(288)、localShapeStiffness 16×vec4(544)。
+  `motion.y` 是 ResetPositions；`motion.z` 保留但宿主不再使用（placement 换基
+  已并入首轮 Integration 的独立 reset/换基参数块）；`motion.w` 的 bit0/bit1
+  分别表示 VSP / LocalShape 作者数组存在（其余位保留 0）。数组按
+  `[local/4][local%4]` 取第 local 个作者值，未提供时 shader 走各自回退。
+  复位帧 `controls.x = 0`。
+  另有一份同布局的 resetParams UBO（每对象每槽），只给首个 substep 的
+  Integration 使用，避免同一 UBO 被多次 dispatch 读到最后一次写入。不新增
+  descriptor set layout 或 buffer 绑定。
 - collider SSBO（Collision pass binding 7）**每个 frame-in-flight 槽一份**：
   host-visible/coherent，每个 collider 32 字节（`GuideColliderGpu`：a.xyz +
   a.w=radius、b.xyz），固定 8 槽；`counts.w` 决定 pass 实际读取数量。声明了
@@ -502,9 +557,14 @@ descriptor pool、逐对象 per-pass descriptor set 缓存和逐对象 `simulati
 
 ### Pass 顺序
 
-`HairSimulationPass` 严格按 TressFX 5.0 的 order 录制。前五个 pass 与
-`artifacts/tressfx-shaders/` 的源 .usf 一一对应；第六个 Collision 是 VL 追加的胶囊
-投影；第 7–9 个是 `collision.mesh` 存在时逐帧重建距离场并投影的 SDF 阶段：
+正常步进时 `HairSimulationPass` 按 TressFX 5.0 的 order 录制，每帧按源调度
+执行 0/1/2 个 substep（每个 substep 固定 0.0125 s）。复位帧的首个 substep
+Integration 走 ResetPositions 分支并写满三份历史，但同轮后续
+StrandLevel/VSP/LocalShape/LengthWind/胶囊/SDF collide 仍执行；第二个 substep
+正常步进。SdfClear/SdfSplat 每帧一次（在 substep 循环之前），SdfCollide 每个
+substep 一次。前五个 pass 与 `artifacts/tressfx-shaders/` 的源 .usf 一一对应；
+第六个 Collision 是 VL 追加的胶囊投影；第 7–9 个是 `collision.mesh` 存在时
+逐帧重建距离场并投影的 SDF 阶段：
 
 | # | TressFX 源 | VL shader | dispatch 粒度 | 读取 → 写入 |
 | --- | --- | --- | --- | --- |
@@ -540,7 +600,9 @@ groupshared 把同组多根 strand 交错存放、再用 `GroupMemoryBarrierWith
    `DampingCoeff = damping`（作者值直接使用），`gravity` 取资产向量。然后若
    `GlobalShapeStiffness > 0 && GlobalShapeEffectiveRange > 0 && local < range*N`，
    `temp += stiffness*(InitialPos - temp)`。最后按 `prevPrev ← prev`、`prev ← current`、
-   `current ← temp` 更新三个历史 buffer。
+   `current ← temp` 更新三个历史 buffer。ResetPositions 分支在积分之前返回：
+   current/previous/prevPrev 全部设为 `(InitialPos, movable ? 1 : 0)`，
+   movable 仍由根前缀与导入逆质量共同决定，不照抄 rest.w。
 2. **StrandLevel**：取前两个点的 `prevPrev/prev/current`；
    `u = normalize(old1-old0)`、`v = normalize(new1-new0)`、
    `q = QuatFromTwoUnitVectors(u,v)`、`trans = new0 - q*old0`；
@@ -550,12 +612,15 @@ groupshared 把同组多根 strand 交错存放、再用 `GroupMemoryBarrierWith
 3. **VSP**：跳过根前缀；`coeff = VspCoeff`，当 `coeff < 0.9` 时乘逐顶点
    VSP stiffness，然后对 current 和 previous 同时做
    `(1-coeff)*p + coeff*(q*p + trans)`。同时混合 previous 是为了不引入虚假速度。
+   作者数组存在时逐顶点值来自 `vspStiffness[local/4][local%4]`；未作者时回退到
+   根前缀→梢部线性近似。
 4. **LocalShape**：从 `LocalVertexIndex = rootFixedPoints - 1` 到 N-2 串行。用
    `SkinningQuat` 旋转 rest 三点得到 bind-pose；`rotGlobal` 把 bind 段
    `(i-1→i)` 转到当前段方向，再把 bind 段 `(i→i+1)` 旋转得到 `i+1` 目标；
    `del = 0.5*Stiffness[i]*(target - pos_{i+1})`，i 和 i+1 可移动时分别 `-=` / `+=`。
-   VL 用 `Stiffness[i] = bendStiffness`（作者标量填充整条曲线），因此弯曲强度
-   语义保留、但乘以 TressFX 公式里的 0.5。
+   VL 用 `Stiffness[i] = bendStiffness` 作为回退标量（作者曲线数组存在时改用
+   `localShapeStiffness[local/4][local%4]`，加载期已 clamp 到 0.95）；两种
+   情况都乘以 TressFX 公式里的 0.5。
 5. **LengthConstraintsWind**：
    - 风：Host 每帧把单个作者风向量展开为 TressFX `SetWind` 的四路锥形风：
      `wM = |wind|*(sin(simFrame*0.001)² + 0.5)`；四角是风方向分别绕 Y 轴 ±40°、
@@ -636,7 +701,7 @@ groupshared 把同组多根 strand 交错存放、再用 `GroupMemoryBarrierWith
 
 **逐帧重建与采样**
 
-- SdfClear → SdfSplat → SdfCollide 是同一对象连续的三个 compute dispatch；相邻
+- SdfClear/SdfSplat 每帧各一次，SdfCollide 每个 substep 一次；同一对象内相邻
   dispatch 之间由既有 `RecordInterPassBarrier` 建立 compute→compute 内存依赖。
   代理顶点/索引是创建时上传的绑定姿态数据；每帧变化的是 `params.skinning`、
   域（origin/cellSize/truncation）和网格内容。网格 buffer 大小固定，因此域
@@ -724,42 +789,139 @@ groupshared 把同组多根 strand 交错存放、再用 `GroupMemoryBarrierWith
 回到普通 device-local 上传路径，不再逐帧 memcpy：vertex factory 只消费 SSBO 中心线，
 顶点位置不参与展开。
 
-### 变量步长与风时间
+### 步进与风时间
 
-两种 backend 使用 TressFX 的变量步长：
+VL 的 GPU 与 CPU 运行路径都采用源上层调度（`GuideSimulation::StepFrame` 与
+`HairSimulationPass` 共用同一计划函数）：
 
 ```text
-dt = min(frameDelta, maxDt)   // maxDt ∈ (0, 0.016]
-if (dt <= 0) 本帧不推进
-Step(dt)                      // 一帧恰好一个 solver step
-simulationFrame += 1          // TressFX Guides.Frame，供 SetWind 幅值调制
+n = 0 (delta <= 0), 1 (0 < delta <= 0.0167), 2 (delta > 0.0167)   // 上限 2
+for substep in 0..n-1: solver step 0.0125 s
+simulationFrame += 1                       // 每渲染帧一次，同一帧所有 substep 共用风相位
 ```
 
-没有 accumulator，也没有固定子步重复 dispatch。`maxDt` 的上界是 TressFX 的
-`min(dt, 0.016)` 硬上限；帧率降低时每步更大，行为随帧率变化是 TressFX 的刻意
-语义。GPU 端在 `HairSimulationPass` 中逐对象保存 `simulationFrame` 并录制一次
-9-pass 序列（含 SDF 时），params 只写一次。`RecordHairSimulation` 仍每帧在所有
-图形 pass 之前调用一次；delta time 使用 `exposureDeltaSeconds`（渲染帧墙钟，
-clamp 到 `[1/240, 0.1]`）；CPU backend 使用游戏线程的 `simulationDelta`。两者的
-delta 来源不同是当前已知差异，且两种 backend 都不消费游戏暂停/time-scale
-（接入前就如此）。
+- **0.0125 s 是每个 substep 真正传给 shader 的 dt**；`0.0167` 只决定循环次数。
+  `maxDt` 不再参与 GPU 原生路径或 `StepFrame`，只有旧 `Step(dt)` 入口仍 clamp。
+- `n == 0` 时本帧不录 pass，也不消费 ResetPositions、pose 身份、时钟或历史；
+  reset 原因保留到下一个正 delta 帧（源 while 不执行时同样不消费）。
+- ResetPositions 只作用于首个 substep 的 Integration（`motion.y=1`、dt=0），
+  同轮 StrandLevel/VSP/LocalShape/LengthWind/胶囊/SDF collide 继续执行；
+  `n == 2` 时第二轮是正常步进。
+- placement 换基只在非 reset 帧的首个 substep Integration 应用一次
+  （独立 resetParams UBO 携带 `historyToCurrentLocal`）；后续 substep 用单位矩阵。
+- SdfClear/SdfSplat 每帧一次（在 substep 循环之前），SdfCollide 每个 substep 一次。
+- 有意差异：源每 substep 的 `SetWind` 还乘 `(0.3 + FRand())`，VL 保持确定性；
+  `n == 0` 帧 VL 不递增 `simulationFrame`（源在循环前无条件 `++Guides.Frame`），
+  首帧相位因此固定差 1。
+- 旧 `Step(dt)` 仍存在，只用于既有变量步长测试/调用，不是运行时路径。
+
+`RecordHairSimulation` 仍在图形 pass 之前调用，但不再使用曝光墙钟。GT 把本帧
+模拟 delta 冻结到 WorldSnapshot/RenderScene：
+
+- 绑定角色的 GPU hair 继承**source draw** 的 `simulationDeltaSeconds`；
+  普通 mesh 用原生动画 `simulationDelta`，不受 C# Play/Pause/time-scale 控制；
+  `__blueprint/` 源对象用 ScriptRuntime 实际 scaled delta，Editing/Paused 为 0。
+  source draw 存在但 pose 缺失时仍取该 source delta，并保留上次 palette；
+  source draw 完全缺失时回退到场景的 hair delta。
+- 未绑定角色的 CPU/GPU hair 用全局 `hairSimulationDeltaSeconds`：
+  Editing 正常推进，Playing 使用游戏 scaled delta，Paused 为 0。
+- RT 以 `(worldGeneration, frameIndex)` 去重，重绘同一冻结快照不重复积分。
+  mailbox 仍为 latest-wins；被覆盖的旧 GT 帧不补算。当前 GT 每帧等待 RT。
+- 仅刷新已有场景状态时发布零 delta，不能重复使用上一帧的游戏步长；
+  正常快照只有发布成功后才消费待发布的 delta。
+- 零 delta 帧跳过 solver，也不消费 ResetPositions；reset 原因保留到下一个
+  正 delta 帧。复位帧不额外推进 `simulationFrame`；普通动画 `pause` 只冻结
+  骨骼，风仍可驱动发丝。
+
+### 跳变与 ResetPositions
+
+`GuideSimulationHistory` 只保存最后一次已录制的 pose 身份与不连续代数，
+不持有播放器。首次有效 pose、播放器身份变化、`SkinPose::discontinuity` 变化、
+缺失 pose 后恢复都触发一次 ResetPositions；无骨架对象创建时也复位一次。
+seek、clip/硬切换沿用现有动画不连续代数，不使用根位移阈值猜测传送。
+连续 pose 保持历史，单纯 animation pause 不制造额外复位。
+
+Reset 帧首个 substep 的 Integration 上传 `motion.y=1`、dt=0，把
+current/previous/prevPrev 设为相同的当前 `M*rest`；同轮后续
+StrandLevel/VSP/LocalShape/LengthWind/胶囊/SDF collide 继续执行，`n == 2` 时
+第二轮正常步进（与源 host `TressFXCoreSimulation.cpp` 1137..1214 的顺序一致）。
+只有整帧录制完成才提交已消费身份、时钟与历史，暂停不会提前吞掉 seek。
+事件日志是
+`[TressFX] ResetPositions: ... reason=... playbackIdentity=... discontinuity=... frame=... substeps=N`；
+reason 为 `initial-state` / `first-pose` / `playback-changed` /
+`pose-discontinuity` / `pose-recovered` / `requested`。该日志证明 CPU 录制走到复位分支，
+不等于 GPU 三份位置的逐点读回。
+
+作者/调试可以显式请求一次复位：Console `hair reset [objectName]`，空参数表示当前
+World 里全部 GPU guide 对象。目标按渲染对象名匹配（场景对象名），不是 `mesh|...`
+身份。请求经 `RuntimeCommandType::ResetHairSimulation` 交给渲染线程，只在该对象
+下一个**有 substep** 的帧消费；0 步/暂停帧保留请求，既不丢弃也不提前吞掉。消费时
+复用同一套 `motion.y`/resetParams 分支，强制 `reason=requested` 并关闭同帧 rebase
+（三份历史直接写回 InitialPos，换基没有意义）。它不重载 World、不重建 buffer 或
+descriptor，也不修改资产文件。编辑器毛发视口的 Reset 按钮发空目标，见
+[game-ui-stack.md](game-ui-stack.md)。
+
+### 实时参数覆盖（会话级）
+
+编辑器/调试可以在不重载 World 的前提下覆盖部分模拟标量：
+
+- 命令：Console `hair set <objectName> <field> <value...>`；目标按渲染对象名匹配，
+  **必须给名字**（没有“全部对象”语义，与 `hair reset` 不同）。
+- 可覆盖字段（单位与作者字段一致）：`gravity`、`wind`（各 3 个分量）、`damping`、
+  `iterations`、`bendStiffness`、`globalShapeStiffness`、`globalShapeEffectiveRange`、
+  `vspCoefficient`、`vspAccelThresholdMax`。
+- 值域按作者字段校验，**越界或非有限直接拒绝，不夹取**；`iterations` 必须是
+  `[1,16]` 内的整数，`vspAccelThresholdMax` 属于 `(0,1e7]`。
+- 需要重载的字段一律拒绝并提示：`enabled`、`backend`、`rootFixedPoints`、`maxDt`、
+  两条逐顶点曲线、`collision.*`、`strandRadius`、`skinning.*`、`boneWeights`、`weights`。
+- 只允许 GPU backend：CPU 参考 solver 在构造时另有一份 config 副本，覆盖不会作用于它，
+  因此在该对象上明确报错而不是静默无效。
+- 覆盖写的是该 `RenderableObject` 自己的 config 副本（不写回导入期的共享 section，
+  不影响同一资产的其它 placement），**不写资产、不进入 `modelCacheKey`**，重载 World
+  后回到作者值。
+- 生效时机：命令经 GT 校验后进入有界队列（上限 64，超限丢最旧），渲染线程在下一个
+  实际录制步进的帧按名匹配并应用，同一帧后段组 params UBO 时生效。队列不严格绑定
+  World 世代：命令早于 World 加载时可能命中后续同名对象。
+- 日志：GT 成功入队打印 `Hair parameter queued: …`；渲染线程应用打印
+  `[TressFX] live param: object=… field=… value=…`。未命中对象时报告“不存在”或
+  “CPU backend”，并列出本帧可用的 GPU 对象名（至多 8 个）。
 
 ### CPU 参考 solver
 
 `VL::Hair::GuideSimulation` 按同样的 pass 顺序逐 strand 串行执行：
 Integration+GlobalShape、StrandLevel、VSP、LocalShape、Length/Wind、Collision。
-纯数学放在 `source/hair/tressfxSolverMath.h`，GPU shader 与 CPU solver 共用同一组
-公式约定。CPU solver 没有渲染线程的 `SkinPose`，因此 `InitialPos` 直接取 rest
-（等价于单位蒙皮矩阵），且只能运行未声明 `skinning` 的资产；其余分支与 GPU 一致。
+运行时走 `StepFrame(delta)`：按源调度执行 0/1/2 个固定 0.0125 s substep；
+`Step(dt)` 仅保留旧变量步长语义。纯数学放在 `source/hair/tressfxSolverMath.h`，
+GPU shader 与 CPU solver 共用同一组公式约定。CPU solver 没有渲染线程的
+`SkinPose`，因此 `InitialPos` 直接取 rest（等价于单位蒙皮矩阵），且只能运行
+未声明 `skinning` 的资产。它共享的是正常 solver 分支的数学公式，不消费 pose
+discontinuity，没有 GPU history/Reset 事件时序，也没有 RT 冻结帧去重。
 
 CPU/GPU 的一致性是“相同操作顺序”，不是逐位相等：Eigen 与 GLSL 的
 `sqrt`/`sin` 舍入、编译器 FMA 融合和指令调度都可能产生末位差异；frame delta
-来源也不同。没有 CPU 读回或结果交叉校验。
+按上文角色来源/全局时钟规则取值。没有 GPU 位置读回或结果交叉校验，
+CPU 参考不消费正式 Female 的根骨/SDF，不能把两者称为已做逐点数值对照。
 
-模拟状态是 per mesh asset 的：渲染器按 mesh key 共享同一个 `RenderableObject`，因此
-同一 `SM_*` 的多个场景 placement 共用一份位置 buffer、strandLevel 和 simulation
-time。作者 `gravity`/`wind` 在资产局部空间求解，旋转 placement 不会旋转重力；
-当前没有 per-instance 或 world-space simulation。
+模拟状态按 placement 隔离：普通网格按 mesh key 共享同一个 `RenderableObject`；
+GPU 发丝 section 的 renderable key 追加场景实例身份
+（`renderableObjectKey.h`），因此同一 `SM_*` 的多个独立 placement 各自拥有
+current/previous/prevPrev、params UBO、SDF 代理与历史，GPU 几何 buffer 也各一份
+（CPU 导入数据仍共享）。同一 placement 的重复 section draw 仍共享同一对象；
+`TressfxSimulationOwner` 保留为运行期安全网，检测同一对象被不同 identity 复用。
+CPU backend 没有这层世界历史，也没有独立的 placement 状态。
+
+作者 `gravity`/`wind` 是世界向量，Host 按当前 hair model 的线性部分换到 hair 局部
+后上传；刚体旋转 placement 不旋转世界重力方向，换基保持世界语义。
+固定源的 `ApplyVertexBoneSkinning` 在骨骼变换之后组合
+`PrimitiveData.LocalToWorld`（patch 8303..8308 行），Integration 再把 world cm
+转为 world m（8424..8425 行），三份位置历史留在该世界空间。VL 的 SSBO 是 hair
+局部厘米，但 placement 变化时把 current/previous/prevPrev 乘
+`inverse(currentModel) * lastModel` 换基；刚体平移、绕任意 pivot 旋转及组合下，
+世界位置、世界速度和重力/风/global shape 的点级结果与源世界 solver 等价
+（测试见 `tool/hair-tests/tressfxWorldHistoryTests.cpp`）。非均匀缩放/剪切只保证
+点换基，rest length、胶囊半径、SDF cell/margin、速度 clamp 等局部度量不与源世界
+solver 等价；source model 与 hair model 不一致、hair 单独 teleport 没有专门 epoch，
+仍按未对齐处理。
 
 ### 单位、忠实度与显式差异
 
@@ -785,25 +947,42 @@ TressFX 源实现在**米**制下工作：rest 位置乘 0.01、速度 clamp 0.3
   1..4；本资产的 32 点 guide 段长只有 0.4–1.5 cm（均值约 1.04 cm，TressFX 参考
   约 2 cm）。3 次 Gauss-Seidel 在根点姿态变化后留下明显拉伸，因此资产校准为
   8 次；solver 公式与偶数/奇数边顺序不变。
-- **根点跳变与 ResetPositions**：TressFX 的 `ResetPositions` 没有接入。`animation
-  seek` 会让根点在一帧内移动数十厘米，发丝会被暂时拉成水平片，然后由长度约束
-  在约 1–3 s（几百帧）内收回。截图必须冻结姿态后继续步进；这是验证方法，不是
-  新的运行时 teleport/reset。
+- **根点跳变与 ResetPositions**：首次姿态、seek/clip 的 pose 不连续代数与姿态
+  恢复已有复位路径，三份历史同时清空。source placement 单独 teleport 没有独立
+  事件；普通连续根运动也不按距离阈值触发复位。
 - **VSP 逐顶点 stiffness**：TressFX 用最多 64 项的作者曲线
-  `VSPStiffness`；VL 没有逐顶点曲线作者面，用从根前缀（1）到梢部（0）的线性衰减
-  近似，并且只在 `VspCoeff < 0.9` 时参与（与源实现同一条件）。只移植非 MT 的
-  `CalculateStrandLevelData`：MT 变体里 `Accel < VSPAccelThresholdMin` 时把系数
-  设为 0.6 的分支没有进入当前资产面。
+  `VSPStiffness`。VL 现在有可选 `simulation.vspStiffness` 数据路径：按
+  `[local/4][local%4]` 打包进 params UBO，只在 `VspCoeff < 0.9` 时参与
+  （与源实现同一条件）。未作者时仍用从根前缀（1）到梢部（0）的线性衰减近似。
+  只移植非 MT 的 `CalculateStrandLevelData`：MT 变体里
+  `Accel < VSPAccelThresholdMin` 时把系数设为 0.6 的分支没有进入当前资产面。
+- **VSP 阈值与默认开关**：源 StrandLevel 的
+  `length(new - 2*old + oldOld)` 没有除 dt²（patch 9925 行），源 world m 的默认
+  1.4 对应 VL 同量纲 140 cm；代码默认已改为 140，旧的 5000 cm 不是该源默认值的
+  单位换算（5000 cm = 50 m，是 140 的 35.7 倍）。
+  源 `TressFXAssetSimulation.h` 默认启用 VSP（系数 0.9）与 global shape
+  （强度/范围均 0.5），VL 两者默认关闭；这些默认参数不等价。
+- **作者 stiffness 曲线**：源 `TressFXComponent.cpp` 以 `i/N` 采样 VSP 与 LocalShape
+  作者曲线，LocalShape 再限制到 0.95（687..710 行）。VL 已提供
+  `simulation.vspStiffness` / `simulation.localShapeStiffness` 的逐顶点数据路径、
+  UBO 打包与 CPU/shaders 消费；两条数组都省略时分别回退到 VSP 线性近似与
+  LocalShape 统一 `bendStiffness` 标量。当前没有从 Maya/UE 导出的真实曲线值，
+  正式 Female 资产仍为空数组，因此实际运行仍走这两条回退。
 - **LocalShape 起点**：源实现从 `NumVerticesFromRootNoSimulation - 1` 开始；该值
   为 0 时无符号下溢使循环不执行，为 1 时会读取 `GlobalVertexIndex - 1`（首根
   strand 越界）。VL 保留 0 时跳过，1 时从 local 1 开始；作者资产使用 >= 2。
-- **单骨骼发丝根**：guide 根点仍只有根骨矩阵与根骨旋转，没有 `.tfxbone` 逐
-  strand/逐顶点多骨权重；碰撞代理不同，它有自己的逐顶点权重（从绑定姿态身体
+- **多骨发丝根**：声明 `simulation.skinning.boneWeights` 时，导入期读取 `.tfxbone`，
+  把骨名映射到源角色目标骨架，运行期上传逐 strand 最多 4 个 `(joint, weight)`
+  （权重归一化）与全骨架 bind→pose palette；Integration 的 `InitialPos` 和
+  StrandLevel 的 `SkinningQuat` 使用加权矩阵（`motion.w` bit2）。没有声明、
+  空权重或 pose 不可用的 strand 回退单根骨矩阵。正式 Female 资产未带 `.tfxbone`，
+  所以正式运行仍是单根骨；碰撞代理不同，它有自己的逐顶点权重（从绑定姿态身体
   转移），见上文。运行期 SDF 域由代理 LBS 后的包围盒重算。
 - **串行约束**：见 pass 顺序一节的替换说明。
-- **ResetPositions**：TressFX 的 `ResetPositions` 全局复位开关没有接入。buffer 在创建
-  时以 rest 初始化，等价于一次复位；运行中没有 teleport/reset 路径，pass/World
-  重建会重新上传初值。
+- **ResetPositions 边界**：复位使用当前根矩阵；声明 `boneWeights` 且 pose 可用时
+  使用逐 strand 加权矩阵。不提供源实现的多骨/MT 根三角数据；
+  该帧后续约束/风/胶囊/SDF collide 仍执行，所以复位后的姿态不是纯 rest；
+  `M*rest` 与碰撞体的初始交叠会在同轮碰撞中被投影。
 - **MT/blend-shape 变体**：只移植单骨骼
   `IntegrationAndGlobalShapeConstraints`/`CalculateStrandLevelData` 路径；
   TressFX 的 blend-shape 蒙皮变体依赖逐顶点根三角数据，不在当前资产面内。
@@ -813,7 +992,12 @@ follow hair、深度阴影、OIT、LOD；两种碰撞都只做位置投影，不
 positions，因此没有摩擦、没有碰撞速度冲量，接触略黏且可能抖动；胶囊按作者顺序、
 SDF 在胶囊之后执行，重叠区域的最终位置取决于这个顺序。
 VSP 与 global shape 默认关闭，只在资产显式作者时启用；`vspCoefficient > 0` 时
-Host 才录制 VSP dispatch。没有 per-instance 或 world-space simulation。
+Host 才录制 VSP dispatch。VSP 阈值默认 140 cm（源默认 1.4 world m 的同量纲换算，
+不是旧的 5000 cm）。逐顶点 VSP/LocalShape 曲线数据路径已对齐（可选数组、UBO、
+CPU/shaders、长度与 0.95 校验），但真实 Maya 曲线数据尚未导出：正式 Female 资产
+仍用空数组，因此运行时仍走 VSP 线性与 LocalShape 单标量回退。GPU 路径有上述
+局部历史 + placement 换基，且每个 placement 有独立模拟状态；CPU backend 仍没有
+世界历史或独立 placement 状态。
 
 ## Female 正式静态关卡
 
@@ -958,7 +1142,7 @@ Idle 来自 GASP 重定向）+ `Female_hair_skinned`（`SM_female_hair_skinned.j
 `backend=gpu`、`rootFixedPoints=2`、`skinning.source=FemaleCharacter`、
 `skinning.rootBone=Head_M`）。四个胶囊分别绑定 `Head_M`、`Neck1_M`、`Chest_M`
 （肩线）与 `Chest_M`（上背），`collision.mesh` 代理使用从该身体转移的逐顶点
-权重；两个动态资产的校准值相同：`gravity=[0,-980,0]`、`wind=[200000,0,0]`、
+权重；当前蒙皮发丝资产作者 `gravity=[0,-980,0]`、`wind=[2000,0,0]`、
 `damping=0.035`、`maxDt=0.016`、`iterations=8`。
 选普通 mesh 而不是 blueprint 关卡，是因为 `SkeletalPlayback` 构造时默认 `playing=true`
 并选中 clip 0，`World::TickAnimations` 每帧推进它，加载后即自动播放 Idle；blueprint

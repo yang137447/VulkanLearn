@@ -1,5 +1,6 @@
 #include "render/resource/rendererResourceLoadCoordinator.h"
 
+#include <iostream>
 #include <iterator>
 #include <stdexcept>
 #include <string>
@@ -9,6 +10,7 @@
 
 #include "animation/skeletalPlayback.h"
 #include "hair/tressfxProxySkinning.h"
+#include "hair/tressfxSkinning.h"
 #include "mesh/loader/common/meshAssetLoader.h"
 #include "render/resource/rendererEnvironmentLoader.h"
 #include "render/resource/rendererMaterialLoader.h"
@@ -30,6 +32,11 @@ struct LoadedSceneMesh
     std::string objectName;
     const MeshAssetLoadRequest* request = nullptr;
     RendererMeshLoadResult result;
+    // 蓝图 tressfx 组件的放置级绑定：父 mesh 组件身份。空表示按 SM 的
+    // simulation.skinning.source 走场景路径。rootBone/weights 是组件覆盖。
+    std::string tressfxSkinningSource;
+    std::string tressfxRootBone;
+    std::string tressfxWeights;
 };
 
 // Hair 与源角色都必须处于同一对象空间：骨骼矩阵把绑定空间映射到源角色的模型空间，
@@ -80,6 +87,11 @@ void BuildProxySkinBodyData(
 // 角色，必须在加载期拒绝而不是把错位权重烧进 SSBO。
 constexpr float TressfxProxySkinMaxDistanceCm = 2.0f;
 
+// 发丝根点派生权重的上限与代理同量级：正式资产 40,334 个发根到最近身体顶点的
+// 实测最大值为 0.516 cm。超距只作为“毛发与身体不在同一绑定空间”的检测器，
+// 不承担“头皮顶点稀疏”的判断（稀疏只影响量化误差，不影响可匹配性）。
+constexpr float TressfxRootWeightMaxDistanceCm = 2.0f;
+
 std::shared_ptr<const VL::Hair::SdfProxySkinTransfer> BuildProxySkinTransfer(
     const LoadedSceneMesh& hair, const LoadedSceneMesh& source)
 {
@@ -110,6 +122,18 @@ std::shared_ptr<const VL::Hair::SdfProxySkinTransfer> BuildProxySkinTransfer(
             TressfxProxySkinMaxDistanceCm));
 }
 
+// 发丝根点只在导入期保留一份 model 空间副本（GPU 位置 buffer 是 device-local，
+// 运行期不可回读）；派生逐 strand 权重必须从这里取，不重建几何。
+const std::vector<Eigen::Vector3f>* HairRootPositions(const LoadedSceneMesh& hair)
+{
+    if (!hair.result.importResult)
+        return nullptr;
+    for (const MeshSection& section : hair.result.importResult->modelResource.sections)
+        if (section.isTressfx && !section.tressfxRootPositions.empty())
+            return &section.tressfxRootPositions;
+    return nullptr;
+}
+
 void ResolveHairSkinningBindings(
     const std::vector<LoadedSceneMesh>& loadedMeshes,
     RendererResourceCache& resourceCache,
@@ -122,10 +146,24 @@ void ResolveHairSkinningBindings(
             continue;
         const TressfxSimulationSkinning& requested = *hairPlan.tressfxSimulation.skinning;
 
+        // 绑定来源：蓝图 tressfx 组件的父 mesh 身份优先；场景路径仍读
+        // simulation.skinning.source。两者都没有时不能在运行期猜。
+        const bool componentBound = !hair.tressfxSkinningSource.empty();
+        const std::string sourceName = componentBound
+            ? hair.tressfxSkinningSource : requested.source;
+        if (sourceName.empty())
+            throw std::runtime_error(
+                "TressFX simulation.skinning has no binding source: set "
+                "simulation.skinning.source for scene hair or mount the hair through a "
+                "Blueprint TressFX component: " + hair.objectName + " " +
+                hairPlan.meshAssetPath);
+        const std::string rootBone = hair.tressfxRootBone.empty()
+            ? requested.rootBone : hair.tressfxRootBone;
+
         const LoadedSceneMesh* source = nullptr;
         for (const LoadedSceneMesh& candidate : loadedMeshes)
         {
-            if (candidate.objectName == requested.source)
+            if (candidate.objectName == sourceName)
             {
                 source = &candidate;
                 break;
@@ -133,7 +171,7 @@ void ResolveHairSkinningBindings(
         }
         if (source == nullptr)
             throw std::runtime_error(
-                "TressFX simulation.skinning source object \"" + requested.source +
+                "TressFX simulation.skinning source object \"" + sourceName +
                 "\" not found in scene " + scenePath + ": " + hairPlan.meshAssetPath);
 
         // 只接受同一场景内正式加载的蒙皮对象；动画源/目标骨骼的权威下标来自
@@ -149,7 +187,7 @@ void ResolveHairSkinningBindings(
         }
         if (playback == nullptr || !playback->Asset().HasSkeleton())
             throw std::runtime_error(
-                "TressFX simulation.skinning source object \"" + requested.source +
+                "TressFX simulation.skinning source object \"" + sourceName +
                 "\" has no skeleton (SK): " + hairPlan.meshAssetPath);
 
         std::vector<std::string> jointNames;
@@ -157,7 +195,7 @@ void ResolveHairSkinningBindings(
         for (const Animation::SkeletonJoint& joint : playback->Asset().skeleton.joints)
             jointNames.push_back(joint.name);
         const uint32_t jointIndex = VL::Hair::ResolveTressfxRootJoint(
-            jointNames, requested.source, requested.rootBone, hairPlan.meshAssetPath);
+            jointNames, sourceName, rootBone, hairPlan.meshAssetPath);
 
         if (hair.result.objectPlans.empty() || source->result.objectPlans.empty())
             throw std::runtime_error(
@@ -169,13 +207,13 @@ void ResolveHairSkinningBindings(
             throw std::runtime_error(
                 "TressFX simulation.skinning requires hair and source object to share the "
                 "same object space (both scene model matrices must match): hair=\"" +
-                hair.objectName + "\" source=\"" + requested.source + "\": " +
+                hair.objectName + "\" source=\"" + sourceName + "\": " +
                 hairPlan.meshAssetPath);
 
         VL::Hair::TressfxSkinningBinding binding;
         binding.enabled = true;
-        binding.sourceSceneObject = requested.source;
-        binding.rootBone = requested.rootBone;
+        binding.sourceSceneObject = sourceName;
+        binding.rootBone = rootBone;
         binding.jointIndex = jointIndex;
         // 胶囊骨骼与根骨共用同一个源对象/骨架；每个胶囊独立解析，未知骨在加载期
         // 硬错误（消息带胶囊下标），没有 bone 的槽保留 -1 的静态行为。
@@ -189,10 +227,90 @@ void ResolveHairSkinningBindings(
             if (capsule.bone.empty())
                 continue;
             binding.capsuleJointIndices[capsuleIndex] = static_cast<int32_t>(
-                VL::Hair::ResolveTressfxJointByName(jointNames, requested.source,
+                VL::Hair::ResolveTressfxJointByName(jointNames, sourceName,
                     capsule.bone,
                     "collision.capsules[" + std::to_string(capsuleIndex) + "].bone",
                     hairPlan.meshAssetPath));
+        }
+        // 权重来源：组件显式值 > SM 显式 weights > 组件绑定默认 mesh。mesh 派生与
+        // 显式 .tfxbone 同时出现按作者冲突拒绝，不做运行期择一。
+        const int weightChoice = VL::Hair::ResolveTressfxRootWeightChoice(componentBound,
+            requested.rootWeights == TressfxRootWeightSource::Mesh,
+            requested.rootWeightsAuthored, hair.tressfxWeights,
+            !requested.boneWeightsPath.empty());
+        if (weightChoice < 0)
+            throw std::runtime_error(
+                "TressFX root weights conflict: \"mesh\" derivation cannot be combined "
+                "with simulation.skinning.boneWeights: " + hairPlan.meshAssetPath);
+        std::cout << "[TressFX] hair binding: object=" << hair.objectName
+                  << " source=" << sourceName
+                  << " binding=" << (componentBound ? "component" : "scene")
+                  << " weights=" << (weightChoice == 1 ? "mesh" :
+                      (!requested.boneWeightsPath.empty() ? "file" : "bone"))
+                  << " rootBone=" << rootBone << std::endl;
+        // 可选 .tfxbone：在加载期把逐 strand 骨名映射到目标骨架；运行期只上传
+        // 归一化后的 joint/weight，不再读文件。未知骨按源行为跳过并记录。
+        if (!requested.boneWeightsPath.empty() &&
+            hair.result.objectPlans.front().tressfxBoneAsset)
+        {
+            const std::shared_ptr<RenderableObject>* firstRenderable =
+                resourceCache.GetRenderableObject(hair.result.objectPlans.front().meshKey);
+            if (firstRenderable == nullptr || *firstRenderable == nullptr)
+                throw std::runtime_error(
+                    "TressFX simulation.skinning.boneWeights: hair renderable was not created: " +
+                    hairPlan.meshAssetPath);
+            std::vector<std::string> unmappedBones;
+            auto mapped = VL::Hair::MapTfxBoneToSkeleton(
+                *hair.result.objectPlans.front().tressfxBoneAsset, jointNames,
+                (*firstRenderable)->GetTressfxGuideCount(), unmappedBones,
+                requested.boneWeightsPath);
+            if (mapped.IsFailure())
+                throw std::runtime_error(
+                    "TressFX simulation.skinning.boneWeights failed: " +
+                    VL::FormatRuntimeError(mapped.Error()));
+            for (const std::string& bone : unmappedBones)
+                std::cerr << "[TressFX] boneWeights: bone \"" << bone
+                          << "\" is not in the source skeleton and was skipped: "
+                          << hairPlan.meshAssetPath << std::endl;
+            binding.strandBones = std::move(mapped.Value());
+            std::cout << "[TressFX] boneWeights: strands="
+                      << binding.strandBones.size() << " joints="
+                      << jointNames.size() << " path="
+                      << requested.boneWeightsPath << std::endl;
+        }
+        // 根点权重从绑定姿态网格派生：每个 guide 根点复制最近身体顶点的完整
+        // 影响列表并归一化。个别根超距按根回退 rootBone（RecordUnmatched），
+        // 全部超距说明毛发与 source 不在同一绑定空间，加载期硬错误。
+        if (weightChoice == 1)
+        {
+            const std::vector<Eigen::Vector3f>* roots = HairRootPositions(hair);
+            if (roots == nullptr || roots->empty())
+                throw std::runtime_error(
+                    "TressFX simulation.skinning.weights = \"mesh\" requires imported "
+                    "guide roots: " + hairPlan.meshAssetPath);
+            ProxySkinBodyData body;
+            BuildProxySkinBodyData(playback->Asset(), body);
+            const VL::Hair::SdfProxySkinSource view{
+                body.positions.data(), body.positions.size(), body.offsets.data(),
+                body.influences.data(), static_cast<uint32_t>(jointNames.size())};
+            const VL::Hair::SdfProxySkinTransfer transfer =
+                VL::Hair::BuildTressfxProxySkinTransfer(*roots, view,
+                    TressfxRootWeightMaxDistanceCm,
+                    VL::Hair::TressfxSkinTransferPolicy::RecordUnmatched);
+            if (transfer.unmatchedVertices.size() == roots->size())
+                throw std::runtime_error(
+                    "TressFX simulation.skinning.weights = \"mesh\" matched no guide root "
+                    "to the source mesh within " +
+                    std::to_string(TressfxRootWeightMaxDistanceCm) + " cm: " +
+                    hairPlan.meshAssetPath);
+            // 未匹配根留空权重，SetTressfxSkinningBinding 会按根回退 rootBone；
+            // 这里只报告数量，不静默把空权重变成零矩阵。
+            binding.strandBones = VL::Hair::TressfxStrandBoneWeightsFromTransfer(transfer);
+            std::cout << "[TressFX] rootWeights: strands=" << binding.strandBones.size()
+                      << " joints=" << jointNames.size()
+                      << " maxNearest=" << transfer.maxNearestDistanceCm
+                      << " fallback=" << transfer.unmatchedVertices.size()
+                      << std::endl;
         }
         for (const MeshObjectBuildPlan& plan : hair.result.objectPlans)
         {
@@ -222,6 +340,7 @@ void ResolveHairSkinningBindings(
         }
     }
 }
+
 } // namespace
 
 RendererResourceLoadCoordinator::RendererResourceLoadCoordinator()
@@ -290,10 +409,22 @@ RendererResourceLoadCoordinator::LoadRendererResources(
                     "Scene mesh object missing mesh load request: " + worldBuildPlan.scenePath +
                     " object=" + objectPlan.objectName);
             }
-            loadedMeshes.push_back({
-                objectPlan.objectName,
-                &*objectPlan.meshLoadRequest,
-                meshLoader.LoadMeshObject(obj, *objectPlan.meshLoadRequest)});
+            LoadedSceneMesh loaded;
+            loaded.objectName = objectPlan.objectName;
+            loaded.request = &*objectPlan.meshLoadRequest;
+            // 蓝图 tressfx 组件把父 mesh 组件身份写在生成对象上；这是放置级绑定，
+            // 优先于 SM 里的 simulation.skinning.source。
+            if (objectPlan.componentObject)
+            {
+                loaded.tressfxSkinningSource =
+                    objectPlan.componentObject->value("__tressfxSkinningSource", "");
+                loaded.tressfxRootBone =
+                    objectPlan.componentObject->value("__tressfxRootBone", "");
+                loaded.tressfxWeights =
+                    objectPlan.componentObject->value("__tressfxWeights", "");
+            }
+            loaded.result = meshLoader.LoadMeshObject(obj, *objectPlan.meshLoadRequest);
+            loadedMeshes.push_back(std::move(loaded));
         }
         else if (type == "environment")
         {
@@ -333,6 +464,8 @@ RendererResourceLoadCoordinator::LoadRendererResources(
 
     // 所有 mesh renderable 都已创建，现在才能跨对象解析根点骨骼绑定。
     // 失败直接抛出，由 World 事务回滚；不留下部分绑定或静默回退 rest pin。
+    // GPU 发丝的 renderable key 已含 placement 身份（renderableObjectKey.h），
+    // 因此同一 SM 的多个 placement 各自持有可变模拟状态，不再在加载期拒绝。
     ResolveHairSkinningBindings(loadedMeshes, loadContext.resourceCache,
         worldBuildPlan.scenePath);
 

@@ -78,7 +78,10 @@ PreparedBlueprintAsset PrepareBlueprintAsset(BlueprintCpuRequest request)
     const auto components = declaration.value("components", nlohmann::json::array());
     for (size_t index = 0; index < components.size(); ++index)
     {
-        if (components[index].at("type") != "mesh") continue;
+        // tressfx 组件在场景加载侧就是 mesh 对象（type 收敛 + 放置级绑定字段）。
+        // 预准备必须与正式加载同集合，否则带毛发的蓝图资产只准备身体、不准备毛发；
+        // 绑定字段由 ScriptBlueprintMeshObject 生成，父 mesh 组件按 id 顺序先被准备。
+        if (!IsScriptMeshComponent(components[index].at("type").get<std::string>())) continue;
         PreparedBlueprintMesh mesh;
         mesh.node = ScriptBlueprintMeshObject(declaration, index);
         const auto descriptor = CommonFunction::Path(mesh.node.at("modelPath").get<std::string>());

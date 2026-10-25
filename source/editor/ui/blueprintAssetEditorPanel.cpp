@@ -85,7 +85,7 @@ std::string BlueprintComponentTree(const Json& nodes, const std::string& parent 
         row.depth = depth;
         row.rowClass = "blueprint-component-row";
         row.select = {"blueprint-asset-select-component", index};
-        row.icon = node.at("type") == "mesh" ? "icons/mesh.png" :
+        row.icon = IsScriptMeshComponent(node.at("type").get<std::string>()) ? "icons/mesh.png" :
             node.at("type") == "camera" ? "icons/camera.png" : "icons/blueprint.png";
         body += "<div id=\"blueprint-asset-tree-" + std::to_string(index) + "\">" + TreeRow(row) + "</div>";
         body += BlueprintComponentTree(nodes, id, depth + 1);
@@ -283,10 +283,10 @@ void MaterialInstanceAssetEditorPanel::RefreshBlueprintAssetEditor()
             "<div class=\"blueprint-asset-panel-title\">Components</div>"
             "<div class=\"blueprint-asset-add-tools\">" +
             Select(Prefix + "component-kind", {Prefix + "component-kind"},
-                ScriptComponentOptions()) +
+                ScriptComponentOptions(true)) +
             "<button id=\"blueprint-asset-component-add\" class=\"browser-icon\" data-action=\"blueprint-asset-component-add\" "
             "title=\"Add component\"><img src=\"icons/plus.png\"/></button></div>" +
-            "<div class=\"blueprint-asset-mesh-path\"><label>Mesh Asset</label>" +
+            "<div class=\"blueprint-asset-mesh-path\"><label>Mesh / Hair Asset</label>" +
             Input(Prefix + "component-mesh", {Prefix + "component-mesh"}, "") + "</div>" +
             "<div id=\"blueprint-asset-component-tree\"><div id=\"blueprint-asset-tree-root\">" + TreeRow(root) +
             "</div>" + BlueprintComponentTree(actor.scriptComponents) + "</div>" + BlueprintLogicTree(draft) + "</div>" +
@@ -434,6 +434,19 @@ void MaterialInstanceAssetEditorPanel::RefreshBlueprintAssetEditor()
                 SetDisabled(id, disabled);
             }
         }
+        // 毛发字段不在实例白名单表里（ScriptComponentInstanceFields 只列可覆写字段），
+        // 这里单独同步控件值，避免 Details 显示缺省而草稿里已有作者值。
+        if (node.value("type", "") == "tressfx")
+            for (const char* field : {"modelPath", "rootBone", "weights"})
+            {
+                const auto controlId = ComponentControlId(index, field, 0, Prefix);
+                if (document->GetElementById(controlId) == nullptr) continue;
+                const std::string value = std::string(field) == "weights"
+                    ? node.value("weights", std::string("auto"))
+                    : node.value(field, std::string());
+                SetControlValue(controlId, value);
+                SetDisabled(controlId, disabled);
+            }
     }
     const auto physics = draft.value("physics", Json::object());
     const auto motion = physics.value("motion", "none"), shape = physics.value("shape", "box");
@@ -658,6 +671,24 @@ void MaterialInstanceAssetEditorPanel::HandleBlueprintAssetEvent(Rml::Element& e
         Json node = NewScriptComponent(kind);
         node["id"] = id;
         if (kind == "mesh") node["modelPath"] = ControlText(*document->GetElementById(Prefix + "component-mesh"));
+        else if (kind == "tressfx")
+        {
+            // 绑定来源就是最近的 mesh 祖先；没有就不添加，避免生成加载期必然失败的组件。
+            const auto parent = ScriptComponentMeshParent(nodes, blueprintAssetSelectedComponent);
+            if (parent.empty())
+            {
+                localStatus = "Select a Mesh component (or one of its children) before adding a TressFX component.";
+                return;
+            }
+            const auto hairAsset = ControlText(*document->GetElementById(Prefix + "component-mesh"));
+            if (hairAsset.empty())
+            {
+                localStatus = "A hair asset path is required for a TressFX component.";
+                return;
+            }
+            node["parent"] = parent;
+            node["modelPath"] = hairAsset;
+        }
         nodes.push_back(std::move(node));
     }
     else if (field == "component-remove" && click && index < draft.value("components", Json::array()).size())
@@ -681,6 +712,8 @@ void MaterialInstanceAssetEditorPanel::HandleBlueprintAssetEvent(Rml::Element& e
     }
     else if (field == "component-instance" && !click && index < draft.value("components", Json::array()).size())
     {
+        // 毛发字段不进入实例白名单：绑定与权重属于资产级编排，不是场景实例差异。
+        if (draft["components"][index].value("type", "") == "tressfx") return;
         const auto id = ScriptComponentId(draft["components"][index]);
         const auto name = element.GetAttribute<std::string>("data-field", "");
         auto permissions = draft.value("componentInstanceEditable", Json::object());
@@ -697,17 +730,51 @@ void MaterialInstanceAssetEditorPanel::HandleBlueprintAssetEvent(Rml::Element& e
     {
         const auto key = field.substr(10);
         auto& node = draft["components"][index];
+        const bool tressfx = node.value("type", "") == "tressfx";
+        // 毛发组件与父 mesh 同对象空间：UI 不提供局部 TRS/图元碰撞，也不接受这类写入。
+        if (tressfx && (key == "position" || key == "rotation" || key == "scale" ||
+            key.rfind("collision", 0) == 0))
+            return;
         if (key.rfind("collision", 0) == 0 && key != "collisionMask")
         {
             Json request{{"field", key}, {"value", key == "collisionShape" ? Json(text) : Json(BlueprintNumber(text))}};
             if (key == "collisionHalfExtents") request["axis"] = axis;
             Editor::EditScriptComponentCollision(node, request);
         }
-        else if (key == "parent" || key == "modelPath" || key == "materialOverride")
+        else if (key == "parent")
         {
+            if (tressfx)
+            {
+                bool mesh = false;
+                for (const auto& candidate : draft.value("components", Json::array()))
+                    if (candidate.value("id", "root") == text) mesh = candidate.value("type", "") == "mesh";
+                if (!mesh)
+                {
+                    localStatus = "TressFX components must be parented directly to a Mesh component.";
+                    return;
+                }
+            }
             // select 的延迟 change 也会经过这里；等于有效值时不把缺省字段写成覆写。
             if (node.value(key, "") == text) return;
-            if (key == "materialOverride" && text.empty()) node.erase(key); else node[key] = text;
+            node[key] = text;
+        }
+        else if (key == "modelPath" || key == "materialOverride" || key == "rootBone")
+        {
+            if (tressfx && key == "modelPath" && text.empty())
+            {
+                localStatus = "A hair asset path is required for a TressFX component.";
+                return;
+            }
+            if (node.value(key, "") == text) return;
+            if ((key == "materialOverride" || key == "rootBone") && text.empty()) node.erase(key);
+            else node[key] = text;
+        }
+        else if (key == "weights")
+        {
+            if (text != "auto" && text != "rootBone" && text != "mesh") return;
+            if (node.value(key, "auto") == text) return;
+            if (text == "auto") node.erase(key);
+            else node[key] = text;
         }
         else if (key == "autoActivate" || key == "visible" || key == "doCollisionTest" ||
             key == "enableCameraLag" || key == "enableCameraRotationLag" || key == "usePawnControlRotation" ||

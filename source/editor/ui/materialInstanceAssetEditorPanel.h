@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <memory>
 #include <string>
 #include <utility>
@@ -19,6 +21,7 @@
 #include "editor/ui/editorLogPanel.h"
 #include "editor/ui/editorPerformancePanel.h"
 #include "editor/ui/blueprintViewportInteraction.h"
+#include "editor/ui/tressfxHairPreview.h"
 #include "ui/uiAction.h"
 #include "ui/uiRenderSnapshot.h"
 #include "ui/widgets/widgetDocument.h"
@@ -287,6 +290,11 @@ private:
     Rml::Vector2f texturePointer{0, 0};
     int textureDragButton = -1;
     void RequestPreviewCamera(ModelPreviewNavigation mode, float x = 0, float y = 0);
+    // 毛发视口：只有 tressfx 且未声明 simulation.skinning 的资产允许预览。
+    // 左键拖动旋转预览对象（不是相机），复位按钮排队一次 ResetPositions。
+    bool IsActiveHairPreview() const;
+    void RequestHairPreviewRotation(float deltaX, float deltaY);
+    void RequestHairReset();
     int previewDragButton = -1;
     float previewPointerX = 0;
     float previewPointerY = 0;
@@ -301,6 +309,26 @@ private:
     bool requestedPreviewMaterial = false;
     bool requestedPreviewBlueprint = false;
     uint64_t appliedMaterialPreviewGeneration = 0;
+    // 毛发视口状态：catalog/snapshot 判定出的 tressfx 路径、skinning 守卫、
+    // 以及预览世界内的累计旋转。都不持久化，切 tab/返回关卡即失效。
+    std::string hairPreviewPath;
+    bool hairPreviewBlocked = false;
+    TressfxHairRotation hairRotation;
+    // 毛发视口 Simulation 段：作者值来自 Mesh 草稿快照，拖动先走运行期覆盖，
+    // Save to Asset 走标准 mesh.modify + Save Content（revision 取自同一快照）。
+    const EditorAssetDocumentResultPayload* MeshDocument(const std::string& path) const;
+    void RequestHairSimulationDocument(const std::string& path);
+    void RefreshHairSimulationSection(bool isHair, bool hairBlocked);
+    void SubmitHairSimulationLive(std::size_t controlIndex, const std::array<double, 3>& values);
+    void SubmitHairSimulationSave();
+    std::string hairSimulationPath;
+    nlohmann::json hairSimulationValues = nlohmann::json::object();
+    uint64_t hairSimulationBoundRevision = 0;
+    uint64_t hairSimulationSaveRevision = 0;
+    bool hairSimulationRequested = false;
+    bool hairSimulationPendingSave = false;
+    int hairSimulationSaveWaitTicks = 0;
+    std::string hairSimulationStatus;
 
     IEditorCommandSink* commandSink = nullptr;
     IMaterialInstanceSceneSelectionSink* sceneSelectionSink = nullptr;

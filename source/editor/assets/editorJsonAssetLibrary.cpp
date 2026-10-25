@@ -134,7 +134,14 @@ public:
     bool end_array() override { stack.pop_back(); return true; }
     bool key(string_t& value) override
     {
+        if (stack.empty()) return true;
         stack.back().key = value;
+        // `/simulation/skinning` 是 tressfx 绑定声明；只在 root 下的 simulation
+        // 对象里认这一层，不累计完整键路径。type 由 Metadata 单独记录。
+        if (!simulationSkinning && stack.size() == 2u &&
+            stack.back().kind == ValueKind::Object &&
+            stack.back().label == "simulation" && value == "skinning")
+            simulationSkinning = true;
         return true;
     }
     bool parse_error(size_t position, const std::string&, const nlohmann::detail::exception&) override
@@ -147,6 +154,8 @@ public:
     bool typeSeen = false;
     bool typeIsString = false;
     std::string type;
+    // root.simulation.skinning 是否存在；与 type == "tressfx" 一起决定毛发视口守卫。
+    bool simulationSkinning = false;
 
 private:
     struct Frame
@@ -156,6 +165,9 @@ private:
         bool omitted;
         std::string path;
         std::string key;
+        // 引入该对象的键（数组元素为空）；只用于识别 /simulation/skinning，
+        // 不累计完整路径。
+        std::string label;
         size_t nextIndex = 0;
     };
     struct Location
@@ -234,7 +246,8 @@ private:
             AddDiagnostic(document.diagnostic, "Asset JSON root must be an object");
         Metadata(location, kind, "");
         const int row = AddField(location, kind, kind == ValueKind::Object ? "{...}" : "[...]");
-        stack.push_back({kind, row, location.omitted, std::move(location.path), {}, 0});
+        stack.push_back({kind, row, location.omitted, std::move(location.path), {},
+            kind == ValueKind::Object ? location.label : std::string(), 0});
         return true;
     }
 
@@ -417,6 +430,11 @@ bool ParseEditorJsonAsset(std::string_view assetPath, std::string_view jsonText,
     }
     AssetSax sax(document, includeFields);
     const bool valid = Json::sax_parse(jsonText.begin(), jsonText.end(), &sax);
+    // type / simulation.skinning 是毛发视口与目录共用的作者摘要；损坏 JSON 也保留
+    // 已解析到的 type，让错误候选仍能按资产类型呈现。
+    if (sax.typeSeen && sax.typeIsString) document.type = sax.type;
+    document.tressfxSkinning =
+        sax.typeIsString && sax.type == "tressfx" && sax.simulationSkinning;
     if (!valid)
     {
         // 不展示损坏输入的半棵树，但保留已经识别的顶层类型供目录呈现错误候选。
@@ -535,7 +553,8 @@ struct EditorJsonAssetLibrary::Impl
                 if (Load(relative, parsed, false))
                 {
                     result->assets.push_back({parsed.assetPath, parsed.kind, std::move(parsed.name),
-                        std::move(parsed.description), std::move(parsed.diagnostic)});
+                        std::move(parsed.description), std::move(parsed.diagnostic),
+                        std::move(parsed.type), parsed.tressfxSkinning});
                     if (result->assets.size() == Limits::MaxCatalogEntries)
                     {
                         AddDiagnostic(result->diagnostic, "Catalog entry limit (20000) reached");

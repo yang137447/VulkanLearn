@@ -91,9 +91,8 @@ std::unique_ptr<ScriptTemplateExtension> World::PrepareScriptTemplateRemoval(con
     std::set<std::string> usedComponentTemplates;
     for (const auto& blueprint : resolved)
         for (const auto& component : blueprint.value("components", nlohmann::json::array()))
-            if (component.at("type") == "mesh")
-                usedComponentTemplates.insert(component.at("modelPath").get<std::string>() + "\n" +
-                    component.value("materialOverride", ""));
+            if (IsScriptMeshComponent(component.at("type").get<std::string>()))
+                usedComponentTemplates.insert(ScriptComponentMeshTemplateKey(blueprint, component));
     for (auto it = staged.scriptComponentMeshTemplates.begin(); it != staged.scriptComponentMeshTemplates.end();)
         if (!usedComponentTemplates.count(it->first)) it = staged.scriptComponentMeshTemplates.erase(it);
         else ++it;
@@ -179,7 +178,7 @@ void World::ApplyScriptBlueprintVisuals(const nlohmann::json& actor, bool visibl
             scriptLights[identity] = std::move(light);
             continue;
         }
-        if (components[index].at("type") != "mesh") continue;
+        if (!IsScriptMeshComponent(components[index].at("type").get<std::string>())) continue;
         const auto identity = ScriptMeshIdentity(id, components[index]);
         const Eigen::Matrix4f next = ScriptComponentMatrix(actor, index);
         auto previous = scriptComponentMatrices.find(identity);
@@ -213,14 +212,14 @@ void World::AppendScriptComponentMeshTemplate(const nlohmann::json& actor)
         const auto components = actor.value("components", nlohmann::json::array());
         nlohmann::json structure = nlohmann::json::array();
         for (const auto& node : components)
-            if (node.at("type") == "mesh")
-                structure.push_back({ScriptComponentId(node), node.at("modelPath"), node.value("materialOverride", "")});
+            if (IsScriptMeshComponent(node.at("type").get<std::string>()))
+                structure.push_back(ScriptComponentMeshStructureEntry(actor, node));
         scriptComponentMeshStructures[actor.at("id").get<std::string>()] = structure.dump();
         for (size_t index = 0; index < components.size(); ++index)
         {
             const auto& node = components[index];
-            if (node.at("type") != "mesh") continue;
-            const auto key = node.at("modelPath").get<std::string>() + "\n" + node.value("materialOverride", "");
+            if (!IsScriptMeshComponent(node.at("type").get<std::string>())) continue;
+            const auto key = ScriptComponentMeshTemplateKey(actor, node);
             if (scriptComponentMeshTemplates.count(key)) continue;
             const auto identity = ScriptMeshIdentity(actor.at("id"), node);
             std::vector<WorldMeshObject> sections;
@@ -242,8 +241,8 @@ void World::SynchronizeScriptComponentMeshes(const nlohmann::json& actor)
     nlohmann::json structure = nlohmann::json::array();
     const auto components = actor.value("components", nlohmann::json::array());
     for (const auto& node : components)
-        if (node.at("type") == "mesh")
-            structure.push_back({ScriptComponentId(node), node.at("modelPath"), node.value("materialOverride", "")});
+        if (IsScriptMeshComponent(node.at("type").get<std::string>()))
+            structure.push_back(ScriptComponentMeshStructureEntry(actor, node));
     const auto signature = structure.dump();
     if (scriptComponentMeshStructures[id] == signature) return;
     std::vector<std::pair<std::string, WorldMeshObject>> candidates;
@@ -253,8 +252,8 @@ void World::SynchronizeScriptComponentMeshes(const nlohmann::json& actor)
         nlohmann::json::array() : nlohmann::json::parse(scriptComponentMeshStructures[id]);
     for (const auto& node : components)
     {
-        if (node.at("type") != "mesh") continue;
-        const nlohmann::json item = {ScriptComponentId(node), node.at("modelPath"), node.value("materialOverride", "")};
+        if (!IsScriptMeshComponent(node.at("type").get<std::string>())) continue;
+        nlohmann::json item = ScriptComponentMeshStructureEntry(actor, node);
         if (std::find(previousStructure.begin(), previousStructure.end(), item) == previousStructure.end()) continue;
         const auto identity = ScriptMeshIdentity(id, node);
         for (const auto& entry : meshObjects)
@@ -264,8 +263,8 @@ void World::SynchronizeScriptComponentMeshes(const nlohmann::json& actor)
     for (size_t index = 0; index < components.size(); ++index)
     {
         const auto& node = components[index];
-        if (node.at("type") != "mesh") continue;
-        const auto key = node.at("modelPath").get<std::string>() + "\n" + node.value("materialOverride", "");
+        if (!IsScriptMeshComponent(node.at("type").get<std::string>())) continue;
+        const auto key = ScriptComponentMeshTemplateKey(actor, node);
         const auto source = scriptComponentMeshTemplates.find(key);
         if (source == scriptComponentMeshTemplates.end())
             throw std::invalid_argument("Script.ComponentMeshNotPreloaded");
@@ -288,7 +287,7 @@ void World::SynchronizeScriptComponentMeshes(const nlohmann::json& actor)
     RemoveScriptBlueprintMeshes(id);
     for (auto& entry : candidates) meshObjects.emplace(std::move(entry));
     for (size_t index = 0; index < components.size(); ++index)
-        if (components[index].at("type") == "mesh")
+        if (IsScriptMeshComponent(components[index].at("type").get<std::string>()))
             scriptComponentMatrices[ScriptMeshIdentity(id, components[index])] = ScriptComponentMatrix(actor, index);
     scriptComponentMeshStructures[id] = signature;
 }
@@ -504,6 +503,24 @@ bool World::SetSquareAreaLight(const std::string& name, const WorldSquareAreaLig
     if (it == squareAreaLights.end()) return false;
     it->second = light;
     return true;
+}
+
+bool World::GetMeshSceneObjectTransform(const std::string& identity,
+    Eigen::Vector3f& position, Eigen::Vector3f& rotation,
+    Eigen::Vector3f& scale) const
+{
+    // scene TRS 是 actor 级的：同一 identity 的每个 section 都保存同一份根 TRS，
+    // 所以这里读第一个命中项就够，不需要像写入那样遍历所有 section。
+    for (const auto& entry : meshObjects)
+    {
+        const WorldMeshObject& object = entry.second;
+        if (MeshSceneObjectIdentity(object, entry.first) != identity) continue;
+        position = object.scenePosition;
+        rotation = object.sceneRotation;
+        scale = object.sceneScale;
+        return true;
+    }
+    return false;
 }
 
 bool World::SetMeshSceneObjectTransform(const std::string& identity,

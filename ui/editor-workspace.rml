@@ -430,6 +430,12 @@
                         <button id="resource-space-world" class="viewport-tool" data-action="resource-space" data-space="world" title="World space">World</button>
                         <button id="resource-space-local" class="viewport-tool" data-action="resource-space" data-space="local" title="Local space">Local</button>
                     </div>
+                    <div id="resource-hair-tools">
+                        <button id="resource-hair-reset" class="browser-icon" data-action="hair-reset" title="Reset hair simulation">
+                            <img src="icons/refresh.png"/><span class="browser-tooltip">Reset Hair</span>
+                        </button>
+                        <span>Left-drag rotates the model</span>
+                    </div>
                     <div class="toolbar-spacer"></div>
                     <button id="resource-reload" class="browser-icon" data-action="resource-reload" title="Reload JSON">
                         <img src="icons/refresh.png"/><span class="browser-tooltip">Reload JSON</span>
@@ -569,6 +575,7 @@
                                 <p id="resource-motion-status"></p>
                                 <div id="resource-motion-values"></div>
                             </div>
+                            <div id="resource-hair-simulation"></div>
                             <div id="resource-json-inspector">
                                 <div class="json-header">
                                     <h3 id="resource-json-title"></h3><span class="json-readonly">Read Only</span>

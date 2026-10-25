@@ -36,7 +36,7 @@
                 },
                 "wind": {
                     "type": "array",
-                    "description": "单个作者风向量：方向归一化后作为风锥轴，长度作为幅值（厘米/秒；TressFX 风力公式的标量，不是物理风速）。运行时按 TressFX SetWind 展开成四路锥形风（绕 Y/Z 各 ±40°），每路乘 wM = |wind| * (sin(simFrame*0.001)^2 + 0.5)。",
+                    "description": "单个作者风向量：方向归一化后作为风锥轴，长度作为 TressFX WindMagnitude 力标量，不是物理风速。运行时按 TressFX SetWind 展开成四路锥形风（绕 Y/Z 各 ±40°），每路乘 wM = |wind| * (sin(simFrame*0.001)^2 + 0.5)。",
                     "items": {"type": "number"},
                     "minItems": 3,
                     "maxItems": 3
@@ -63,13 +63,20 @@
                     "type": "number",
                     "exclusiveMinimum": 0,
                     "maximum": 0.016,
-                    "description": "单帧 delta time 上限，单位秒；TressFX 的硬上限是 0.016，资产只能收紧。clip 后直接作为本帧唯一 solver step 的 dt（变量步长，无 accumulator）。"
+                    "description": "兼容字段，单位秒；资产校验仍限制在 (0,0.016]。GPU 原生调度与 GuideSimulation::StepFrame 不再读取它（按帧增量执行 0/1/2 个固定 0.0125 秒 substep），只有旧的 GuideSimulation::Step(dt) 变量步长入口仍把它当作 dt 上限。"
                 },
                 "bendStiffness": {
                     "type": "number",
                     "minimum": 0,
                     "maximum": 1,
-                    "description": "映射到 LocalShape pass 的逐顶点 Stiffness 标量；pass 内按 TressFX 公式再乘 0.5。0 关闭局部形状约束。"
+                    "description": "映射到 LocalShape pass 的逐顶点 Stiffness 标量；pass 内按 TressFX 公式再乘 0.5。0 关闭局部形状约束。未提供 localShapeStiffness 时整条 strand 使用该标量。"
+                },
+                "localShapeStiffness": {
+                    "type": "array",
+                    "description": "可选作者逐顶点 LocalShape Stiffness，长度必须等于该 guide 资产的 pointsPerStrand（4/8/16/32/64）；第 i 项对应源曲线在 i/N 处的采样值。加载期按源 TressFXComponent.cpp:710 对 >0.95 的值 clamp 到 0.95 并输出记录；省略时回退到 bendStiffness 标量。",
+                    "items": {"type": "number", "minimum": 0, "maximum": 1},
+                    "minItems": 1,
+                    "maxItems": 64
                 },
                 "globalShapeStiffness": {
                     "type": "number",
@@ -93,7 +100,14 @@
                     "type": "number",
                     "exclusiveMinimum": 0,
                     "maximum": 10000000,
-                    "description": "VSP 伪加速度阈值，厘米/秒²；前两个点满足 |new - 2*old + old_old| 超过该值时强制系数 1。默认 5000。"
+                    "description": "VSP 二阶位置差幅值阈值，单位厘米，未除 dt²；第二个点的 |new - 2*old + old_old| 严格超过该值时强制系数 1，等于阈值不触发。默认 140，对应源默认 1.4 米；显式作者值原样保留。"
+                },
+                "vspStiffness": {
+                    "type": "array",
+                    "description": "可选作者逐顶点 VSPStiffness，长度必须等于该 guide 资产的 pointsPerStrand（4/8/16/32/64）；第 i 项对应源曲线在 i/N 处的采样值。只在 VspCoeff < 0.9 时参与。省略时回退到根前缀(1)到梢部(0)的线性近似。",
+                    "items": {"type": "number", "minimum": 0, "maximum": 1},
+                    "minItems": 1,
+                    "maxItems": 64
                 },
                 "backend": {
                     "type": "string",
@@ -107,15 +121,31 @@
                         "source": {
                             "type": "string",
                             "minLength": 1,
-                            "description": "源角色场景对象名；解析失败是加载期硬错误。"
+                            "description": "源角色场景对象名。场景 JSON 的独立毛发必需；由蓝图 tressfx 组件挂载时由父 mesh 组件提供，可省略。两者都没有时加载期硬错误。"
                         },
                         "rootBone": {
                             "type": "string",
                             "minLength": 1,
                             "description": "源角色目标骨架（SK）的关节名，大小写敏感；找不到时加载期硬错误。"
+                        },
+                        "boneWeights": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "可选 .tfxbone 路径（资源仓库相对路径）。导入期解析骨名/权重并映射到目标骨架；非空时运行期用逐 strand 多骨权重替代单根骨 InitialPos。"
+                        },
+                        "weights": {
+                            "type": "string",
+                            "enum": ["rootBone", "mesh"],
+                            "description": "根点权重来源。rootBone（缺省）保持历史单根骨；mesh 在加载期从绑定姿态源角色网格派生逐 strand 多骨权重：每个 guide 根点复制最近身体顶点的完整影响列表并归一化，个别根超距回退 rootBone。与 boneWeights 互斥。由蓝图 tressfx 组件挂载且未写本字段时等价于 mesh（显式 boneWeights 除外）。"
                         }
                     },
-                    "required": ["source", "rootBone"],
+                    "required": ["rootBone"],
+                    "allOf": [
+                        {
+                            "if": {"properties": {"weights": {"const": "mesh"}}, "required": ["weights"]},
+                            "then": {"not": {"required": ["boneWeights"]}}
+                        }
+                    ],
                     "additionalProperties": false
                 }
             },

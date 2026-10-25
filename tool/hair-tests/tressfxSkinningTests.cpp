@@ -3,6 +3,8 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
+#include <cstring>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -155,6 +157,23 @@ TEST(TressfxSkinning, CapsulesWithoutBoneStayInBindSpace)
     EXPECT_FLOAT_EQ(transformed[1].radius, unbound.radius);
 }
 
+TEST(TressfxSkinning, BlendedBoneMatrixMatchesWeightedInitialPosition)
+{
+    Eigen::Matrix4f head = Eigen::Matrix4f::Identity();
+    Eigen::Matrix4f neck = Eigen::Matrix4f::Identity();
+    head(0, 3) = 10.0f;
+    neck(0, 3) = 30.0f;
+    const std::vector<Eigen::Matrix4f> palette{head, neck};
+    VL::Hair::TressfxStrandBoneWeights weights;
+    weights.joints = {0, 1};
+    weights.weights = {0.75f, 0.25f};
+    const auto blended = VL::Hair::TressfxBlendedBoneMatrix(weights, palette);
+    EXPECT_NEAR(blended(0, 3), 15.0f, 1.0e-6f);
+    const auto position = VL::Hair::TressfxInitialPosition(
+        weights, palette, Eigen::Vector3f(0.0f, 0.0f, 0.0f));
+    EXPECT_NEAR(position.x(), 15.0f, 1.0e-6f);
+}
+
 TEST(TressfxSkinning, OutOfRangeCapsuleJointKeepsBindSpace)
 {
     VL::Hair::TressfxCollider capsule;
@@ -168,4 +187,67 @@ TEST(TressfxSkinning, OutOfRangeCapsuleJointKeepsBindSpace)
         capsules, {7}, std::vector<Eigen::Matrix4f>());
     EXPECT_TRUE(transformed[0].a.isApprox(capsule.a));
     EXPECT_TRUE(transformed[0].b.isApprox(capsule.b));
+}
+
+TEST(TressfxSkinning, PacksTopFourStrandWeightsAndNormalizes)
+{
+    // 5 个影响只保留权重最大的 4 个，并按保留项之和归一化；.tfxbone 与网格派生
+    // 共用这条规则，shader 的 GpuStrandBones 固定 4 槽。
+    VL::Hair::TressfxStrandBoneWeights weights;
+    weights.joints = {1, 2, 3, 4, 5};
+    weights.weights = {0.1f, 0.4f, 0.1f, 0.3f, 0.1f};
+    const auto packed = VL::Hair::TressfxPackStrandBoneWeights(weights, 9);
+    EXPECT_EQ(packed.joints[0], 2u);
+    EXPECT_EQ(packed.joints[1], 4u);
+    // stable_sort：0.1 的三项保持输入顺序，取前两个。
+    EXPECT_EQ(packed.joints[2], 1u);
+    EXPECT_EQ(packed.joints[3], 3u);
+    EXPECT_NEAR(packed.weights[0], 0.4f / 0.9f, 1.0e-6f);
+    EXPECT_NEAR(packed.weights[1], 0.3f / 0.9f, 1.0e-6f);
+    EXPECT_NEAR(packed.weights[2], 0.1f / 0.9f, 1.0e-6f);
+    EXPECT_NEAR(packed.weights[3], 0.1f / 0.9f, 1.0e-6f);
+}
+
+TEST(TressfxSkinning, PackFallsBackToRootBoneWithoutPositiveWeights)
+{
+    const auto empty = VL::Hair::TressfxPackStrandBoneWeights({}, 7);
+    EXPECT_EQ(empty.joints[0], 7u);
+    EXPECT_FLOAT_EQ(empty.weights[0], 1.0f);
+
+    VL::Hair::TressfxStrandBoneWeights zero;
+    zero.joints = {3, 4};
+    zero.weights = {0.0f, 0.0f};
+    const auto fallback = VL::Hair::TressfxPackStrandBoneWeights(zero, 7);
+    EXPECT_EQ(fallback.joints[0], 7u);
+    EXPECT_FLOAT_EQ(fallback.weights[0], 1.0f);
+}
+
+TEST(TressfxSkinning, TransferConversionKeepsUnmatchedStrandsEmpty)
+{
+    // CSR：header 3 个 word（2 个顶点），vertex0 没有影响，vertex1 有两个。
+    VL::Hair::SdfProxySkinTransfer transfer;
+    transfer.vertexCount = 2;
+    transfer.words = {3u, 3u, 7u};
+    const float firstWeight = 0.25f;
+    const float secondWeight = 0.75f;
+    std::uint32_t bits = 0;
+    transfer.words.push_back(5u);
+    std::memcpy(&bits, &firstWeight, sizeof(bits));
+    transfer.words.push_back(bits);
+    transfer.words.push_back(6u);
+    std::memcpy(&bits, &secondWeight, sizeof(bits));
+    transfer.words.push_back(bits);
+
+    const auto strands = VL::Hair::TressfxStrandBoneWeightsFromTransfer(transfer);
+    ASSERT_EQ(strands.size(), 2u);
+    EXPECT_TRUE(strands[0].joints.empty()) << "unmatched root must stay empty";
+    ASSERT_EQ(strands[1].joints.size(), 2u);
+    EXPECT_EQ(strands[1].joints[0], 5u);
+    EXPECT_NEAR(strands[1].weights[0], firstWeight, 1.0e-6f);
+    EXPECT_NEAR(strands[1].weights[1], secondWeight, 1.0e-6f);
+
+    // 空权重不能变成零矩阵：上传路径按根回退 rootBone。
+    const auto packed = VL::Hair::TressfxPackStrandBoneWeights(strands[0], 9);
+    EXPECT_EQ(packed.joints[0], 9u);
+    EXPECT_FLOAT_EQ(packed.weights[0], 1.0f);
 }

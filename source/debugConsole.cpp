@@ -11,6 +11,8 @@
 #include "engine/runtimeCommand.h"
 #include "editor/runtime/materialInstanceEditorRuntime.h"
 #include "editor/command/editorCommandJsonCodec.h"
+#include "hair/hairConsoleCommand.h"
+#include "hair/tressfxLiveParams.h"
 
 DebugConsole::DebugConsole(VL::CommandBus& commandBus, VL::Editor::MaterialInstanceEditorRuntime* runtime)
     : commandBus(commandBus), editorRuntime(runtime)
@@ -277,6 +279,200 @@ void DebugConsole::ProcessCommand(const std::string& line)
         }
         VL::RuntimeCommand runtimeCommand;
         runtimeCommand.type = VL::RuntimeCommandType::PrintPerformanceJson;
+        runtimeCommand.sourceText = line;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
+    // mesh <transform|offset|sweep> ...：正常 Console 诊断命令，只有显式调用才会改变
+    // actor placement。Console 线程不持有 World，因此这里只解析意图；身份存在性、
+    // 有限值和实际写入都由 GT 的 RuntimeCommandExecutor 校验。
+    // 参数在切出子串后重新解析，避免 istream 在"旋转只给 1..2 个分量"时留下半消费状态。
+    if (command == "mesh")
+    {
+        const char* meshUsage =
+            "Usage: mesh transform <identity> <px> <py> <pz> [rx ry rz]\n"
+            "       mesh offset <identity> <dx> <dy> <dz>\n"
+            "       mesh sweep <identityA> <identityB> <dx> <dy> <dz> <seconds>";
+        std::string action;
+        if (!(commandStream >> action))
+        {
+            std::cout << meshUsage << std::endl;
+            return;
+        }
+
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type = VL::RuntimeCommandType::SetMeshPlacement;
+        runtimeCommand.sourceText = line;
+
+        if (action == "transform" || action == "offset")
+        {
+            if (!(commandStream >> runtimeCommand.meshPlacement.identity))
+            {
+                std::cout << meshUsage << std::endl;
+                return;
+            }
+            std::string rest;
+            std::getline(commandStream, rest);
+            std::istringstream arguments(rest);
+            if (!(arguments >> runtimeCommand.meshPlacement.position.x() >>
+                    runtimeCommand.meshPlacement.position.y() >>
+                    runtimeCommand.meshPlacement.position.z()))
+            {
+                std::cout << meshUsage << std::endl;
+                return;
+            }
+            float rotation[3] = {0.0f, 0.0f, 0.0f};
+            int rotationCount = 0;
+            while (rotationCount < 3 && (arguments >> rotation[rotationCount]))
+            {
+                ++rotationCount;
+            }
+            std::string extra;
+            if ((arguments >> extra) || rotationCount == 1 || rotationCount == 2 ||
+                (action == "offset" && rotationCount != 0))
+            {
+                std::cout << meshUsage << std::endl;
+                return;
+            }
+            if (action == "transform")
+            {
+                runtimeCommand.meshPlacementMode = VL::MeshPlacementMode::Absolute;
+                if (rotationCount == 3)
+                {
+                    runtimeCommand.meshPlacement.rotation =
+                        Eigen::Vector3f(rotation[0], rotation[1], rotation[2]);
+                }
+            }
+            else
+            {
+                // 增量只叠加位移：rotation/scale 保留当前值，避免一次平移把朝向复位。
+                runtimeCommand.meshPlacementMode = VL::MeshPlacementMode::Offset;
+                runtimeCommand.meshPlacement.delta = runtimeCommand.meshPlacement.position;
+            }
+            if (!runtimeCommand.meshPlacement.position.allFinite() ||
+                !runtimeCommand.meshPlacement.rotation.allFinite())
+            {
+                std::cout << "Mesh values must be finite." << std::endl;
+                return;
+            }
+            commandBus.Queue(std::move(runtimeCommand));
+            return;
+        }
+
+        if (action == "sweep")
+        {
+            if (!(commandStream >> runtimeCommand.meshPlacement.identity >>
+                    runtimeCommand.meshPlacement.secondIdentity))
+            {
+                std::cout << meshUsage << std::endl;
+                return;
+            }
+            std::string rest;
+            std::getline(commandStream, rest);
+            std::istringstream arguments(rest);
+            float deltaX = 0.0f;
+            float deltaY = 0.0f;
+            float deltaZ = 0.0f;
+            float seconds = 0.0f;
+            std::string extra;
+            if (!(arguments >> deltaX >> deltaY >> deltaZ >> seconds) ||
+                (arguments >> extra))
+            {
+                std::cout << meshUsage << std::endl;
+                return;
+            }
+            if (!std::isfinite(deltaX) || !std::isfinite(deltaY) ||
+                !std::isfinite(deltaZ) || !std::isfinite(seconds) || seconds <= 0.0f)
+            {
+                std::cout << "Mesh sweep values must be finite and seconds must be positive." << std::endl;
+                return;
+            }
+            runtimeCommand.meshPlacementMode = VL::MeshPlacementMode::Sweep;
+            runtimeCommand.meshPlacement.delta = Eigen::Vector3f(deltaX, deltaY, deltaZ);
+            runtimeCommand.meshPlacement.seconds = seconds;
+            commandBus.Queue(std::move(runtimeCommand));
+            return;
+        }
+
+        std::cout << meshUsage << std::endl;
+        return;
+    }
+
+    // hair trace <path> <frames> <guide-stride>：一次性只读 GPU 回读。
+    // hair reset [objectName]：请求渲染线程在下一个正 delta 帧执行一次 ResetPositions。
+    // Console 线程只解析值语义；对象选择、guide 采样、Vulkan buffer 与文件
+    // 都归渲染线程的 HairSimulationPass，未激活时零开销。
+    if (command == "hair")
+    {
+        const char* hairUsage =
+            "Usage: hair trace <path> <frames> <guide-stride>\n"
+            "       hair reset [objectName]\n"
+            "       hair set <objectName> <field> <value...>\n"
+            "       fields: gravity|wind (x y z), damping, iterations, bendStiffness,\n"
+            "               globalShapeStiffness, globalShapeEffectiveRange,\n"
+            "               vspCoefficient, vspAccelThresholdMax";
+        std::string action;
+        if (!(commandStream >> action))
+        {
+            std::cout << hairUsage << std::endl;
+            return;
+        }
+        if (action == "reset")
+        {
+            std::string rest;
+            std::getline(commandStream, rest);
+            VL::Hair::HairResetRequest reset;
+            if (const char* error = VL::Hair::ParseHairResetArguments(rest, reset))
+            {
+                std::cout << error << std::endl;
+                return;
+            }
+            VL::RuntimeCommand runtimeCommand;
+            runtimeCommand.type = VL::RuntimeCommandType::ResetHairSimulation;
+            runtimeCommand.stringValue = std::move(reset.objectName);
+            runtimeCommand.sourceText = line;
+            commandBus.Queue(std::move(runtimeCommand));
+            return;
+        }
+        if (action == "set")
+        {
+            std::string rest;
+            std::getline(commandStream, rest);
+            VL::Hair::HairLiveParameterRequest request;
+            if (const char* error = VL::Hair::ParseHairSetArguments(rest, request))
+            {
+                std::cout << error << std::endl;
+                return;
+            }
+            VL::RuntimeCommand runtimeCommand;
+            runtimeCommand.type = VL::RuntimeCommandType::SetHairSimulationParameter;
+            runtimeCommand.hairLiveParameter = std::move(request);
+            runtimeCommand.sourceText = line;
+            commandBus.Queue(std::move(runtimeCommand));
+            return;
+        }
+        if (action != "trace")
+        {
+            std::cout << hairUsage << std::endl;
+            return;
+        }
+        std::string path;
+        long long frames = 0;
+        long long stride = 0;
+        std::string extra;
+        if (!(commandStream >> path >> frames >> stride) || path.empty() ||
+            (commandStream >> extra) || frames <= 0 || stride <= 0 ||
+            frames > 1000000LL || stride > 1000000LL)
+        {
+            std::cout << hairUsage << std::endl;
+            return;
+        }
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type = VL::RuntimeCommandType::RequestHairTrace;
+        runtimeCommand.stringValue = path;
+        runtimeCommand.hairTraceFrames = static_cast<uint32_t>(frames);
+        runtimeCommand.hairTraceGuideStride = static_cast<uint32_t>(stride);
         runtimeCommand.sourceText = line;
         commandBus.Queue(std::move(runtimeCommand));
         return;
@@ -700,6 +896,12 @@ void DebugConsole::PrintHelp() const
     std::cout << "  bloom knee <value> - set bloom soft knee\n";
     std::cout << "  bloom clamp <value> - set bloom fireflies clamp\n";
     std::cout << "  loadworld <scene-path> - request scene load through WorldTransitionCoordinator\n";
+    std::cout << "  mesh transform <identity> <px> <py> <pz> [rx ry rz] - absolute placement (cm, degrees; scale=1)\n";
+    std::cout << "  mesh offset <identity> <dx> <dy> <dz> - add a delta to the current placement\n";
+    std::cout << "  mesh sweep <identityA> <identityB> <dx> <dy> <dz> <seconds> - linear placement over GT frames\n";
+    std::cout << "  hair trace <path> <frames> <guide-stride> - one-shot read-only GPU guide trace (max 256 guides)\n";
+    std::cout << "  hair reset [objectName] - queue one ResetPositions for the next positive-delta frame\n";
+    std::cout << "  hair set <objectName> <field> <value...> - override one live simulation parameter (GPU only)\n";
     std::cout << "  offline <on|off|samples N|bounces N|seed N|lightSamples N|aov MODE|exposure X|pause|resume|stop|restart|export>\n";
     std::cout << "  environment <value> - set unified sky and IBL intensity\n";
     std::cout << "  windgust <on|off|once> - toggle or trigger one SpeedTree gust\n";

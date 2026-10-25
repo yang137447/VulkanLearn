@@ -4,6 +4,7 @@
 #include "mesh/loader/common/meshAssetLoader.h"
 #include "animation/skeletalPlayback.h"
 #include "hair/tressfxSdfGrid.h"
+#include "hair/tressfxLiveParamsApply.h"
 #include "commonFunction.h"
 
 #include <algorithm>
@@ -21,6 +22,8 @@ namespace
 {
 // GPU 模拟的位置 buffer 位于 device-local；初始内容只在创建时经 staging 上传一次。
 // 上传后由 HairSimulationPass 在本帧 dispatch 前的 transfer→compute barrier 转为可见。
+// eTransferSrc 只服务于一次性 `hair trace` 的 vkCmdCopyBuffer 回读：trace 未激活时
+// 没有任何拷贝，usage 位本身不产生运行时开销。
 std::pair<vk::Buffer, vk::DeviceMemory> CreateUploadedDeviceLocalStorageBuffer(
     VL::RendererBackendVulkan& backend,
     const void* data,
@@ -35,7 +38,8 @@ std::pair<vk::Buffer, vk::DeviceMemory> CreateUploadedDeviceLocalStorageBuffer(
     {
         std::tie(buffer, memory) = backend.CreateBuffer(
             size,
-            vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst,
+            vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferDst |
+                vk::BufferUsageFlagBits::eTransferSrc,
             vk::MemoryPropertyFlagBits::eDeviceLocal,
             debugName);
         std::tie(stagingBuffer, stagingMemory) = backend.CreateBuffer(
@@ -94,6 +98,9 @@ RenderableObject::RenderableObject(
     const MeshSection& section = imported->modelResource.sections[sectionIndex];
     if (section.isTressfx)
     {
+        // 先复制作者参数到本对象副本，再做 GPU/CPU 资源分支：实时覆盖只写副本，
+        // 共享的导入结果保持只读。
+        tressfxSimulationConfig = section.tressfxSimulation;
         const size_t pointCount = section.tressfxInverseMass.size();
         const size_t pointsPerGuide = section.tressfxPointsPerStrand;
         if (pointCount != 0 && pointsPerGuide >= 2 &&
@@ -128,6 +135,11 @@ RenderableObject::RenderableObject(
                     section.tressfxSimulation.vspCoefficient;
                 simulationConfig.vspAccelThresholdMax =
                     section.tressfxSimulation.vspAccelThresholdMax;
+                // 4a：CPU 参考 solver 与 GPU 参数块共用同一份作者刚度曲线；
+                // 空数组保持原有“未作者”回退语义。
+                simulationConfig.vspStiffness = section.tressfxSimulation.vspStiffness;
+                simulationConfig.localShapeStiffness =
+                    section.tressfxSimulation.localShapeStiffness;
                 simulationConfig.capsules = section.tressfxSimulation.capsules;
                 tressfxSimulation = std::make_unique<VL::Hair::GuideSimulation>(
                     std::move(restPositions),
@@ -202,7 +214,20 @@ const TressfxSimulationConfig& RenderableObject::GetTressfxSimulationConfig() co
         static const TressfxSimulationConfig defaultConfig;
         return defaultConfig;
     }
-    return imported->modelResource.sections[importedSectionIndex].tressfxSimulation;
+    return tressfxSimulationConfig;
+}
+
+bool RenderableObject::ApplyTressfxLiveParameter(
+    const VL::Hair::HairLiveParameterRequest& request, std::string& error)
+{
+    // CPU backend 没有逐帧 params UBO/pose 通道，覆盖不会生效；这里明确拒绝，
+    // 不能让调用方以为参数已经作用在 CPU 参考 solver 上。
+    if (!IsTressfx() || !UsesGpuGuideSimulation())
+    {
+        error = "TressFX live parameters require a GPU guide object";
+        return false;
+    }
+    return VL::Hair::ApplyHairLiveParameter(tressfxSimulationConfig, request, error);
 }
 
 const vk::DescriptorBufferInfo& RenderableObject::GetTressfxParamsInfo(
@@ -218,6 +243,63 @@ void RenderableObject::WriteTressfxSimulationParams(
     // host-coherent 映射：写入当前 frame-in-flight 槽即可，beginFrame 已确认该槽
     // 上一帧的 fence 完成，因此不会与仍在执行的 dispatch 重叠。
     std::memcpy(tressfxParamsTargets[frameSlot].mapped, &params, sizeof(params));
+}
+
+const vk::DescriptorBufferInfo& RenderableObject::GetTressfxResetParamsInfo(
+    uint32_t frameSlot) const
+{
+    return tressfxResetParamsTargets[frameSlot].info;
+}
+
+void RenderableObject::WriteTressfxResetParams(
+    const VL::Hair::GuideSimulationParams& params,
+    uint32_t frameSlot)
+{
+    std::memcpy(tressfxResetParamsTargets[frameSlot].mapped, &params, sizeof(params));
+}
+
+void RenderableObject::SetTressfxSkinningBinding(
+    const VL::Hair::TressfxSkinningBinding& binding)
+{
+    tressfxSkinningBinding = binding;
+    if (!tressfxGpuSimulation || !tressfxBoneWeightsBuffer || tressfxGuideCount == 0)
+        return;
+    if (!binding.strandBones.empty() &&
+        binding.strandBones.size() != tressfxGuideCount)
+        throw std::runtime_error(
+            "TressFX .tfxbone strand count does not match guide count for \"" + name + "\"");
+
+    std::vector<VL::Hair::TressfxBoneWeightGpu> gpu(tressfxGuideCount);
+    // 裁剪/归一化/回退根的语义只在 tressfxSkinning.h 一处实现：.tfxbone 与
+    // 网格派生两条来源共用，模块测试也直接测这份纯函数。
+    const VL::Hair::TressfxStrandBoneWeights emptyWeights;
+    for (size_t strand = 0; strand < gpu.size(); ++strand)
+        gpu[strand] = VL::Hair::TressfxPackStrandBoneWeights(
+            binding.strandBones.empty() ? emptyWeights : binding.strandBones[strand],
+            binding.jointIndex);
+    const vk::DeviceSize bytes =
+        static_cast<vk::DeviceSize>(gpu.size()) * sizeof(VL::Hair::TressfxBoneWeightGpu);
+    void* mapped = rendererBackend->MapMemory(tressfxBoneWeightsMemory, bytes);
+    std::memcpy(mapped, gpu.data(), static_cast<size_t>(bytes));
+    rendererBackend->UnmapMemory(tressfxBoneWeightsMemory);
+}
+
+void RenderableObject::WriteTressfxSkinningPalette(
+    const std::vector<Eigen::Matrix4f>& jointMatrices, uint32_t frameSlot)
+{
+    if (!tressfxPaletteTargets[frameSlot].mapped || jointMatrices.empty())
+        return;
+    const size_t count = std::min<size_t>(
+        jointMatrices.size(), tressfxPaletteJointCapacity);
+    std::memcpy(tressfxPaletteTargets[frameSlot].mapped, jointMatrices.data(),
+        count * sizeof(Eigen::Matrix4f));
+}
+
+void RenderableObject::ResetTressfxPenetrationStats(uint32_t frameSlot)
+{
+    if (tressfxPenetrationStatsTargets[frameSlot].mapped)
+        std::memset(tressfxPenetrationStatsTargets[frameSlot].mapped, 0,
+            2 * sizeof(uint32_t));
 }
 
 void RenderableObject::WriteTressfxColliders(
@@ -307,7 +389,8 @@ void RenderableObject::AdvanceTressfxSimulation(float dt)
     if (!tressfxSimulation)
         return;
 
-    tressfxSimulation->Step(dt);
+    // CPU 参考路径同样按源原生调度推进：n 个 0.0125 s substep，而不是一帧一个变量步。
+    tressfxSimulation->StepFrame(dt);
     const auto& positions = tressfxSimulation->Positions();
     if (tressfxPositionBuffer)
     {
@@ -425,6 +508,72 @@ void RenderableObject::CreateTressfxGpuSimulationBuffers()
             target.memory, sizeof(VL::Hair::GuideSimulationParams));
         target.info.setBuffer(target.buffer).setOffset(0)
             .setRange(sizeof(VL::Hair::GuideSimulationParams));
+        // reset 首轮 Integration 的独立 UBO：内容只在 reset/换基帧写入，
+        // 但句柄常驻，descriptor set 在对象创建时一次性绑定。
+        auto& resetTarget = tressfxResetParamsTargets[slot];
+        std::tie(resetTarget.buffer, resetTarget.memory) = rendererBackend->CreateBuffer(
+            sizeof(VL::Hair::GuideSimulationParams),
+            vk::BufferUsageFlagBits::eUniformBuffer,
+            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+            "TressFXResetParams: " + name + ":" + std::to_string(slot));
+        resetTarget.mapped = rendererBackend->MapMemory(
+            resetTarget.memory, sizeof(VL::Hair::GuideSimulationParams));
+        resetTarget.info.setBuffer(resetTarget.buffer).setOffset(0)
+            .setRange(sizeof(VL::Hair::GuideSimulationParams));
+    }
+    // 多骨：每 strand 4 个 (joint, weight) 槽，共 32 bytes；没有 .tfxbone 时
+    // 全零，shader 用 motion.w bit2 判断是否读取。palette 每槽固定 256 mat4。
+    constexpr uint32_t MaxPaletteJoints = 256;
+    const vk::DeviceSize boneWeightBytes =
+        static_cast<vk::DeviceSize>(tressfxGuideCount) *
+        sizeof(VL::Hair::TressfxBoneWeightGpu);
+    std::tie(tressfxBoneWeightsBuffer, tressfxBoneWeightsMemory) =
+        rendererBackend->CreateBuffer(
+            std::max<vk::DeviceSize>(boneWeightBytes,
+                sizeof(VL::Hair::TressfxBoneWeightGpu)),
+            vk::BufferUsageFlagBits::eStorageBuffer,
+            vk::MemoryPropertyFlagBits::eHostVisible |
+                vk::MemoryPropertyFlagBits::eHostCoherent,
+            "TressFXBoneWeights: " + name);
+    {
+        const vk::DeviceSize bytes = std::max<vk::DeviceSize>(boneWeightBytes,
+            sizeof(VL::Hair::TressfxBoneWeightGpu));
+        void* mapped = rendererBackend->MapMemory(tressfxBoneWeightsMemory, bytes);
+        std::memset(mapped, 0, static_cast<size_t>(bytes));
+        rendererBackend->UnmapMemory(tressfxBoneWeightsMemory);
+    }
+    tressfxBoneWeightsInfo.setBuffer(tressfxBoneWeightsBuffer).setOffset(0)
+        .setRange(std::max<vk::DeviceSize>(boneWeightBytes,
+            sizeof(VL::Hair::TressfxBoneWeightGpu)));
+    tressfxPaletteJointCapacity = MaxPaletteJoints;
+    for (uint32_t slot = 0; slot < VL::Hair::GuideSimulationParamBufferCount; ++slot)
+    {
+        auto& target = tressfxPaletteTargets[slot];
+        const vk::DeviceSize bytes =
+            static_cast<vk::DeviceSize>(MaxPaletteJoints) * sizeof(Eigen::Matrix4f);
+        std::tie(target.buffer, target.memory) = rendererBackend->CreateBuffer(
+            bytes, vk::BufferUsageFlagBits::eStorageBuffer,
+            vk::MemoryPropertyFlagBits::eHostVisible |
+                vk::MemoryPropertyFlagBits::eHostCoherent,
+            "TressFXSkinningPalette: " + name + ":" + std::to_string(slot));
+        target.mapped = rendererBackend->MapMemory(target.memory, bytes);
+        target.info.setBuffer(target.buffer).setOffset(0).setRange(bytes);
+    }
+    // 每帧碰撞前的最大穿透深度（uint 位模式；0=无穿透）。host 清零、shader
+    // atomicMax、trace 通过 transfer 拷到 readback，不参与渲染。
+    for (uint32_t slot = 0; slot < VL::Hair::GuideSimulationParamBufferCount; ++slot)
+    {
+        auto& target = tressfxPenetrationStatsTargets[slot];
+        constexpr vk::DeviceSize bytes = 2 * sizeof(uint32_t);
+        std::tie(target.buffer, target.memory) = rendererBackend->CreateBuffer(
+            bytes, vk::BufferUsageFlagBits::eStorageBuffer |
+                vk::BufferUsageFlagBits::eTransferSrc,
+            vk::MemoryPropertyFlagBits::eHostVisible |
+                vk::MemoryPropertyFlagBits::eHostCoherent,
+            "TressFXPenetrationStats: " + name + ":" + std::to_string(slot));
+        target.mapped = rendererBackend->MapMemory(target.memory, bytes);
+        std::memset(target.mapped, 0, static_cast<size_t>(bytes));
+        target.info.setBuffer(target.buffer).setOffset(0).setRange(bytes);
     }
     // 解析胶囊：每个 frame-in-flight 槽一份 host-coherent SSBO。声明了 bone 的
     // 胶囊每帧由 HairSimulationPass 重写；无 bone 的胶囊内容保持创建时的作者值。
@@ -881,7 +1030,38 @@ void RenderableObject::DestroyTressfxBuffers()
                 rendererBackend->DestroyBuffer(target.buffer, target.memory);
             target = {};
         }
+        for (auto& target : tressfxResetParamsTargets)
+        {
+            if (target.mapped)
+                rendererBackend->UnmapMemory(target.memory);
+            if (target.buffer)
+                rendererBackend->DestroyBuffer(target.buffer, target.memory);
+            target = {};
+        }
+        for (auto& target : tressfxPaletteTargets)
+        {
+            if (target.mapped)
+                rendererBackend->UnmapMemory(target.memory);
+            if (target.buffer)
+                rendererBackend->DestroyBuffer(target.buffer, target.memory);
+            target = {};
+        }
+        for (auto& target : tressfxPenetrationStatsTargets)
+        {
+            if (target.mapped)
+                rendererBackend->UnmapMemory(target.memory);
+            if (target.buffer)
+                rendererBackend->DestroyBuffer(target.buffer, target.memory);
+            target = {};
+        }
+        if (tressfxBoneWeightsBuffer || tressfxBoneWeightsMemory)
+            rendererBackend->DestroyBuffer(
+                tressfxBoneWeightsBuffer, tressfxBoneWeightsMemory);
     }
+    tressfxBoneWeightsBuffer = nullptr;
+    tressfxBoneWeightsMemory = nullptr;
+    tressfxBoneWeightsInfo = vk::DescriptorBufferInfo{};
+    tressfxPaletteJointCapacity = 0;
     tressfxPositionBuffer = nullptr;
     tressfxPositionMemory = nullptr;
     tressfxPreviousPositionBuffer = nullptr;

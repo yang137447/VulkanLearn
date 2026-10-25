@@ -145,9 +145,30 @@ Generated/Runtime/ScriptBuilds，不覆盖活动程序集。
 `id` 在同一场景唯一，禁止 `/`、`\`、`|`、NUL；显示名称不用于脚本身份。
 TRS 必填，位置厘米、旋转角度，缩放非零。`enabled` 缺省 true，
 `properties` 必填，接受下文列出的命名类型值。`components` 可省略或为空，最多 128 个
-`scene`/`mesh`/`camera`/`springArm`/`pointLight`/`spotLight`/`directionalLight` 组件。多个组件必须给唯一稳定 `id`；可选 `parent` 指向同 Blueprint
+`scene`/`mesh`/`tressfx`/`camera`/`springArm`/`pointLight`/`spotLight`/`directionalLight` 组件。多个组件必须给唯一稳定 `id`；可选 `parent` 指向同 Blueprint
 组件，空串表示挂在 Blueprint 根。拒绝重复 ID、缺失父级与环。局部 position/rotation/scale
 可省略，默认零/零/一；mesh 另带 modelPath 与可选 materialOverride。
+tressfx 组件另带 `modelPath`（必须是 `type: "tressfx"` 的 `SM_*.json`）、可选
+`rootBone` 与 `weights`（`auto`/`rootBone`/`mesh`），并且必须有 `mesh` 祖先组件。
+它展开成场景 `mesh` 对象，把放置级绑定写在生成对象上
+（`__tressfxSkinningSource`/`__tressfxParentModelPath`/`__tressfxRootBone`/`__tressfxWeights`），
+不写作者 JSON、不生成临时描述符；网格模板键包含父组件身份，跨 actor 不共享绑定。
+tressfx 组件的局部 TRS 必须是单位阵（与父 mesh 同一对象空间），否则加载期拒绝。
+
+蓝图资产页的组件添加入口额外提供 `TressFX`；Scene 侧通用组件面板不提供，因为它没有
+“挂在哪个角色上”的上下文。添加时父级自动取当前选中组件向上最近的 `mesh` 组件，
+父级下拉只列 mesh；没有 mesh 祖先或 `modelPath` 为空时拒绝添加并给出提示，不生成
+加载期必然失败的组件。Details 只暴露 `Hair Asset`、`Root Bone`、`Root Weights`
+（`auto`/`rootBone`/`mesh`，缺省 `auto`）；局部 TRS 与图元碰撞控件不显示，写入也被
+忽略；tressfx 组件不进入 `componentInstanceEditable`，所以 Scene 实例不能覆写它的字段。
+Scene/关卡 Details 里这三个字段以只读值呈现，并提示“在蓝图资产里编辑”；事件处理层
+同样拒绝来自关卡侧的 `modelPath`/`rootBone`/`weights` 写入，不存在“看起来能改、实际被
+丢弃”的假编辑。
+
+tressfx 组件的展开在蓝图资产预览、关卡放置和正式加载中是**同一条链**（预览把组件塞进
+一个内联 `blueprintInstance` 后走同一个 World 加载事务），不存在“仅供预览的静态特例”。
+毛发以 rest 中心线即可绘制，不要求模拟推进：`simulation.enabled`/backend 只门控 compute
+模拟，不门控 draw。
 父链完整矩阵参与合成，保留非均匀缩放导致的 shear，不做 TRS 分解。
 显式 ID 的 mesh 身份为 `__blueprint/<actor-id>/<component-id>`；
 旧无 ID 单根 mesh 保留 `__blueprint/<id>` 身份。由正式 mesh loader 导入资源和材质；

@@ -18,10 +18,11 @@ add_subdirectory(ui/widgets)
 
 add_executable(main ${sources})
 
-# 候选事务、组件空间与 UI 内联模板在 MinGW Debug 下超过 COFF 旧 section 上限。
+# 候选事务、组件空间、UI 内联模板与 hair trace/曲线参数在 MinGW Debug 下
+# 超过 COFF 旧 section 上限。
 if(MINGW)
     set_source_files_properties(renderSystem.cpp engine/engineLoop.cpp editor/ui/blueprintViewportPanel.cpp
-        editor/ui/materialInstanceAssetEditorPanel.cpp
+        editor/ui/materialInstanceAssetEditorPanel.cpp hair/hairSimulationPass.cpp
         PROPERTIES COMPILE_OPTIONS "-Wa,-mbig-obj")
 endif()
 

@@ -900,6 +900,9 @@ void RenderSystem::SetActiveWorld(std::shared_ptr<const VL::World> world)
     currentWindTimeSeconds = 0.0;
     initializedRenderWorldGeneration = 0;
     nextSnapshotFrameIndex = 0;
+    simulationDeltaSeconds = 0.0f;
+    gameSimulationDeltaSeconds = 0.0f;
+    hairSimulationDeltaSeconds = 0.0f;
     shadowCascadeFrameData.valid = false;
     if (activeWorld)
     {
@@ -1248,6 +1251,34 @@ void RenderSystem::RequestScreenshot(std::string path)
     pendingScreenshotPath = std::move(path);
 }
 
+void RenderSystem::RequestHairTrace(std::string path, uint32_t frames,
+    uint32_t guideStride)
+{
+    VL::Hair::HairTraceRequest request;
+    request.path = std::move(path);
+    request.frames = frames;
+    request.guideStride = guideStride;
+    std::lock_guard<std::mutex> lock(hairTraceRequestMutex);
+    pendingHairTraceRequest = std::move(request);
+}
+
+void RenderSystem::RequestHairSimulationReset(std::string objectName)
+{
+    std::lock_guard<std::mutex> lock(hairResetRequestMutex);
+    pendingHairResetRequest = std::move(objectName);
+}
+
+void RenderSystem::RequestHairSimulationParameter(
+    const VL::Hair::HairLiveParameterRequest& request)
+{
+    std::lock_guard<std::mutex> lock(hairLiveParameterMutex);
+    // 队列有界：滑杆拖动时一帧可能累积多条；超过上限先丢最旧的意图，
+    // 保留最新值，避免没有渲染帧时无限增长。
+    if (pendingHairLiveParameters.size() >= 64)
+        pendingHairLiveParameters.erase(pendingHairLiveParameters.begin());
+    pendingHairLiveParameters.push_back(request);
+}
+
 void RenderSystem::PrintGpuPassStats()
 {
     // 控制台按需启用采集；Snapshot 只读最近一次读回的窗口，不等待渲染线程。
@@ -1527,6 +1558,9 @@ RenderSystem::CommitPreparedRuntimeBinding(
     swap(
         currentRenderScene.frameIndex,
         prepared.renderScene.frameIndex);
+    swap(
+        currentRenderScene.hairSimulationDeltaSeconds,
+        prepared.renderScene.hairSimulationDeltaSeconds);
     swap(
         currentRenderScene.camera,
         prepared.renderScene.camera);
@@ -3079,7 +3113,7 @@ RenderSystem::ShadowProjectionParams RenderSystem::CalculateShadowMatrix_StableR
 
 void RenderSystem::RefreshRenderSceneFromActiveWorld()
 {
-    PublishSnapshotFromActiveWorld();
+    PublishSnapshotFromActiveWorld(false);
     if (!ConsumeLatestSnapshotIntoRenderScene())
     {
         throw std::runtime_error("WorldSnapshotQueue did not return the snapshot just published");
@@ -3087,6 +3121,11 @@ void RenderSystem::RefreshRenderSceneFromActiveWorld()
 }
 
 void RenderSystem::PublishSnapshotFromActiveWorld()
+{
+    PublishSnapshotFromActiveWorld(true);
+}
+
+void RenderSystem::PublishSnapshotFromActiveWorld(bool advanceSimulation)
 {
     if (!activeWorld)
     {
@@ -3096,6 +3135,14 @@ void RenderSystem::PublishSnapshotFromActiveWorld()
     VL::WorldSnapshotBuildDesc buildDesc;
     buildDesc.worldGeneration = activeWorld->GetGeneration();
     buildDesc.frameIndex = nextSnapshotFrameIndex++;
+    // resize/图重建只刷新姿态，不拥有新的 GT 时间片；普通帧成功发布后
+    // 领取一次 delta，避免组合 Render 或重复发布用新 frameIndex 重放旧时间。
+    if (advanceSimulation)
+    {
+        buildDesc.simulationDeltaSeconds = simulationDeltaSeconds;
+        buildDesc.gameSimulationDeltaSeconds = gameSimulationDeltaSeconds;
+        buildDesc.hairSimulationDeltaSeconds = hairSimulationDeltaSeconds;
+    }
     buildDesc.debugViewMode = debugViewMode;
     buildDesc.environmentIntensity = environmentIntensity;
     buildDesc.hasSelectedDraw =
@@ -3138,6 +3185,12 @@ void RenderSystem::PublishSnapshotFromActiveWorld()
     RebuildRenderSceneMaterialGroups(pickingRenderScene);
     hasPickingRenderScene = true;
     worldSnapshotQueue.Publish(std::move(snapshot));
+    if (advanceSimulation)
+    {
+        simulationDeltaSeconds = 0.0f;
+        gameSimulationDeltaSeconds = 0.0f;
+        hairSimulationDeltaSeconds = 0.0f;
+    }
 }
 
 bool RenderSystem::ConsumeLatestSnapshotIntoRenderScene()
@@ -3332,7 +3385,7 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
         const bool hairWillRecord =
             gpuPassTimer.IsFrameActive() &&
             hairSimulation &&
-            hairSimulation->HasWork(currentResolvedRenderScene);
+            hairSimulation->HasWork(currentResolvedRenderScene, currentRenderScene);
         const bool hairTimed = hairWillRecord &&
             gpuPassTimer.BeginPass(commandBuffer, "hairSimulation");
         RecordHairSimulation(commandBuffer, frameIndex);
@@ -3583,6 +3636,10 @@ void RenderSystem::AdvanceSpeedTreeWindProfiles()
 
 void RenderSystem::ShutdownRenderObject()
 {
+    // trace 可能还有 1..2 个 frame slot pending；这里显式等一次队列并写盘。
+    // 调用方（EngineLoop::Shutdown）已停止渲染线程，且 backend 仍然有效。
+    if (const auto& hairSimulation = RenderGraph::GetInstance().GetHairSimulation())
+        hairSimulation->FinishTrace(true);
     offlineCoordinator.reset();
     offlineDisplay.Shutdown();
     materialInstancePreviewAdapter.Reset();
@@ -3886,11 +3943,39 @@ void RenderSystem::RecordHairSimulation(vk::CommandBuffer commandBuffer, uint32_
     const auto& hairSimulation = RenderGraph::GetInstance().GetHairSimulation();
     if (!hairSimulation)
         return;
+    // GT 侧只登记请求；这里在渲染线程把它交给 pass。trace 的资源创建/拷贝
+    // 全部发生在 Record 内，Console 线程不触碰 GPU。
+    std::optional<VL::Hair::HairTraceRequest> traceRequest;
+    {
+        std::lock_guard<std::mutex> lock(hairTraceRequestMutex);
+        traceRequest = std::move(pendingHairTraceRequest);
+        pendingHairTraceRequest.reset();
+    }
+    if (traceRequest)
+        hairSimulation->BeginTrace(*traceRequest);
+    // 复位请求只在存在 pass 时消费；没有 pass 就保留到下一个可录制帧，
+    // 避免把请求丢在无 World/无 graph 的帧里。
+    std::optional<std::string> resetRequest;
+    {
+        std::lock_guard<std::mutex> lock(hairResetRequestMutex);
+        resetRequest = std::move(pendingHairResetRequest);
+        pendingHairResetRequest.reset();
+    }
+    if (resetRequest)
+        hairSimulation->RequestReset(std::move(*resetRequest));
+    // 实时参数覆盖与复位同构：GT 只登记，渲染线程每帧取走一次。没有 pass 时
+    // 上面的提前 return 会保留队列，避免把请求丢在无 World/无 graph 的帧里。
+    std::vector<VL::Hair::HairLiveParameterRequest> liveParameters;
+    {
+        std::lock_guard<std::mutex> lock(hairLiveParameterMutex);
+        liveParameters.swap(pendingHairLiveParameters);
+    }
+    for (const auto& parameter : liveParameters)
+        hairSimulation->RequestLiveParameter(parameter);
     // 每帧只调用一次，且在所有 graphics pass 之前：本帧所有读取 current positions 的
     // vertex shader 都看到同一份已经完成 dispatch 的位置。
     hairSimulation->Record(
-        commandBuffer, currentResolvedRenderScene, currentRenderScene, frameSlot,
-        exposureDeltaSeconds);
+        commandBuffer, currentResolvedRenderScene, currentRenderScene, frameSlot);
 }
 
 void RenderSystem::RecordSkinDeform(vk::CommandBuffer commandBuffer, uint32_t swapchainImageIndex)

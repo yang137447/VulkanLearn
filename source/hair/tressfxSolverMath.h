@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <vector>
 
 #include <Eigen/Dense>
 
@@ -10,9 +11,9 @@
 //
 // 这些函数被 CPU 参考 solver（VL::Hair::GuideSimulation）和模块测试共同使用，
 // GPU 侧 shader/glsl/hair/tressfxSim*.comp 必须保持同一公式与同一分支顺序。
-// 约定与 TressFX 源实现一致，只有以下两处刻意不同：
+// 长度与轴向的主要适配如下；上层调度和作者曲线的差异见资产契约：
 // - 单位：TressFX 在米制下工作（rest 位置乘 0.01、速度 clamp 0.3 m）；VL 全链路
-//   使用厘米，因此这里不出现 0.01，速度 clamp 为 30 cm。
+//   使用厘米，速度 clamp 为 30 cm，风三叉积另作量纲换算。
 // - 坐标系：TressFX 的重力是 GravityMagnitude * (0,0,-1)（Z-up）；VL 直接使用
 //   作者资产的 gravity 向量（Y-up）。
 namespace VL::Hair
@@ -23,8 +24,8 @@ inline constexpr float TressfxVelocityClampCm = 30.0f;
 // TressFX 的 DampingCoeff 以 60 Hz 为参考写成 exp(-DampingCoeff * TimeStep * 60)。
 inline constexpr float TressfxDampingReferenceHz = 60.0f;
 
-// TressFXCoreSimulation.cpp 对每帧 dt 的硬上限：TimeStep = min(dt, 0.016)。
-// 这是变量步长模型唯一需要的稳定性边界，不引入子步。
+// 源 Integration 参数函数把输入限制到 0.016 s；VL 用它限制自己的变量步长。
+// 源上层另有 0.0125 s/max-2 循环，这里不把该 clamp 当成源完整调度策略。
 inline constexpr float TressfxMaxTimeStepSeconds = 0.016f;
 
 // TressFX SetWind 的风锥半角：绕 Y/Z 轴各 ±40°。
@@ -35,6 +36,10 @@ inline constexpr float TressfxWindForceScale = 1.0e-2f;
 
 // TressFX 的 VSP 系数小于 0.9 时才乘以逐顶点 stiffness。
 inline constexpr float TressfxVspStiffnessBlendThreshold = 0.9f;
+
+// 源默认 1.4 world m；比较量是 |new - 2*old + oldOld|，没有除 dt²，
+// 因此换到 VL 厘米后是 140 cm，而不是厘米/秒²。
+inline constexpr float TressfxDefaultVspAccelThresholdMaxCm = 140.0f;
 
 // TressFX 的 rest 位置与 prev/current 位置用 w != 0 表示可移动（IsMovable）。
 inline bool TressfxIsMovable(float w)
@@ -240,12 +245,15 @@ inline Eigen::Vector3f TressfxGlobalShapePull(const Eigen::Vector3f& initialPos,
     return tempPos + stiffness * (initialPos - tempPos);
 }
 
-// TressFX 的 VSPStiffness 是作者曲线（DECLARE_SCALAR_ARRAY 最多 64 项）。VL 没有
-// 逐顶点曲线作者面，用从根前缀（1）到梢部（0）的线性衰减近似；只有 VspCoeff < 0.9
-// 时参与混合。这一段在合同里明确记为近似。
+// TressFX 的 VSPStiffness 是作者曲线（DECLARE_SCALAR_ARRAY 最多 64 项），
+// 第 i 项 = 曲线在 i/N 处的值（TressFXComponent.cpp:687-691）。authored 非空且
+// 覆盖 localPoint 时直接使用作者值；否则沿用从根前缀（1）到梢部（0）的线性
+// 近似（VL 没有曲线作者面时的历史回退）。只有 VspCoeff < 0.9 时才参与混合。
 inline float TressfxVspStiffness(uint32_t localPoint, uint32_t pointCount,
-    uint32_t rootFixedPoints)
+    uint32_t rootFixedPoints, const std::vector<float>* authored = nullptr)
 {
+    if (authored != nullptr && localPoint < authored->size())
+        return (*authored)[localPoint];
     const float span = static_cast<float>(pointCount) - 1.0f -
         static_cast<float>(rootFixedPoints);
     if (span <= 0.0f)
@@ -254,6 +262,29 @@ inline float TressfxVspStiffness(uint32_t localPoint, uint32_t pointCount,
         (static_cast<float>(localPoint) - static_cast<float>(rootFixedPoints)) / span,
         0.0f, 1.0f);
     return 1.0f - t;
+}
+
+// 源 VSP pass 的系数：VspCoeff < 0.9 时乘逐顶点 VSPStiffness，否则保持原系数
+// （patch TressFXSimulationVSP.usf:10153-10160）。CPU 与 shader 共用同一条件。
+inline float TressfxVspCoefficient(float coefficient, uint32_t localPoint,
+    uint32_t pointCount, uint32_t rootFixedPoints,
+    const std::vector<float>* authored = nullptr)
+{
+    if (coefficient >= TressfxVspStiffnessBlendThreshold)
+        return coefficient;
+    return coefficient * TressfxVspStiffness(
+        localPoint, pointCount, rootFixedPoints, authored);
+}
+
+// LocalShape 的逐顶点 Stiffness[i]：作者数组覆盖该点时用数组值（加载期已按源
+// min(value, 0.95) 处理），否则回退到整条 strand 的 bendStiffness 标量。
+// 调用方（LocalShapeDelta）仍按 TressFX 公式乘 0.5。
+inline float TressfxLocalShapeStiffness(uint32_t localPoint, float fallback,
+    const std::vector<float>* authored = nullptr)
+{
+    if (authored != nullptr && localPoint < authored->size())
+        return (*authored)[localPoint];
+    return fallback;
 }
 
 // TressFX VSP 混合：new = (1-coeff)*pos + coeff*(Quat*pos + trans)。

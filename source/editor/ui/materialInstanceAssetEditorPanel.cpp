@@ -6,6 +6,7 @@
 #include <array>
 #include <charconv>
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <iomanip>
 #include <sstream>
@@ -27,6 +28,7 @@
 #include "editor/ui/editorViewportAxisIndicator.h"
 #include "editor/ui/editorActorVisualization.h"
 #include "editor/ui/scriptComponentControls.h"
+#include "editor/ui/tressfxHairSimulationControls.h"
 #include "editor/ui/scriptPhysicsControls.h"
 #include "editor/ui/scriptPropertyControls.h"
 #include "script/scriptTypeIdentity.h"
@@ -47,8 +49,19 @@ using UiWidgets::Option;
 using UiWidgets::WidgetAction;
 using UiWidgets::WidgetRefreshScope;
 
-bool SameOfflineControls(const UiViewModelSnapshot& a, const UiViewModelSnapshot& b)
+// 目录条目给 UI 一个同步的“这是不是 tressfx、有没有 simulation.skinning”判定，
+// 使打开资产时能立刻决定是否请求预览；快照到达后再作为权威来源复核。
+const EditorJsonAssetEntry* FindCatalogEntry(
+    const std::shared_ptr<const EditorJsonAssetCatalogSnapshot>& catalog,
+    const std::string& assetPath)
 {
+    if (!catalog) return nullptr;
+    for (const auto& entry : catalog->assets)
+        if (entry.assetPath == assetPath) return &entry;
+    return nullptr;
+}
+
+bool SameOfflineControls(const UiViewModelSnapshot& a, const UiViewModelSnapshot& b){
     return std::tie(a.offlineMode, a.offlineState, a.offlineSamples,
         a.offlineCompletedSamples, a.offlineBounces, a.offlineLightSamples,
         a.offlineSeed, a.offlineAov, a.offlineExposure, a.offlineError, a.offlineUiNotice) ==
@@ -2241,11 +2254,23 @@ void MaterialInstanceAssetEditorPanel::OpenResourceAsset(
         command.payload = MaterialInstanceAssetPathPayload{path};
         Submit(std::move(command));
     }
-    if (kind == EditorAssetKind::Mesh && runtimeActionSink != nullptr)
+    if (kind == EditorAssetKind::Mesh)
     {
-        // 回调只投递路径；GT 复用 previewmodel 的 LoadWorld 事务，不在 UI 内加载资产。
-        // 即使标签已打开也重新请求，保证切过关卡后再次双击仍能回到该模型。
-        RequestModelPreview(path);
+        // 毛发资产：目录扫描已带顶层 type 与 simulation.skinning，打开时即可决定
+        // 是否请求预览。带 skinning 的资产不进入视口（由蓝图 TressFX 组件承载），
+        // 这里直接跳过请求；快照到达后还会以作者文档复核一次。
+        const EditorJsonAssetEntry* entry = FindCatalogEntry(snapshot.assetCatalog, path);
+        hairPreviewPath = entry != nullptr && entry->type == "tressfx" ? path : std::string();
+        hairPreviewBlocked = entry != nullptr && entry->tressfxSkinning;
+        hairRotation.Reset();
+        if (hairPreviewBlocked)
+            localStatus = std::string(TressfxHairSkinnedAssetMessage);
+        else if (runtimeActionSink != nullptr)
+        {
+            // 回调只投递路径；GT 复用 previewmodel 的 LoadWorld 事务，不在 UI 内加载资产。
+            // 即使标签已打开也重新请求，保证切过关卡后再次双击仍能回到该模型。
+            RequestModelPreview(path);
+        }
     }
     RefreshResourceEditor();
     docking.SetPanelVisible(ResourcePanelId(path), true);
@@ -2361,6 +2386,8 @@ void MaterialInstanceAssetEditorPanel::RequestAssetPreview(const std::string& pa
     if (!runtimeView.activeWorldPath.empty() &&
         std::filesystem::path(runtimeView.activeWorldPath).filename() != "SC_model_preview.json")
         levelWorldPath = runtimeView.activeWorldPath;
+    // 新的预览目标从零姿态开始；旋转只属于当前预览世界，不跨资产累积。
+    if (requestedPreviewPath != path) hairRotation.Reset();
     requestedPreviewPath = path;
     requestedRetargetPath = retargetPath;
     requestedRetargetRevision = retargetRevision;
@@ -2526,6 +2553,245 @@ void MaterialInstanceAssetEditorPanel::RefreshMaterialPreview()
     }
 }
 
+bool MaterialInstanceAssetEditorPanel::IsActiveHairPreview() const
+{
+    const auto* active = resourceEditor.ActiveTab();
+    return active != nullptr && active->kind == EditorAssetKind::Mesh &&
+        active->path == hairPreviewPath && !hairPreviewBlocked;
+}
+
+void MaterialInstanceAssetEditorPanel::RequestHairPreviewRotation(float deltaX, float deltaY)
+{
+    if (runtimeActionSink == nullptr || hairPreviewBlocked) return;
+    const uint64_t generation = CurrentModelPreviewGeneration();
+    if (!generation) return;
+    // 累计角度由 UI 维护，GT 只写绝对 TRS；预览对象身份固定为 mesh|preview_model。
+    hairRotation.Drag(deltaX, deltaY);
+    UiAction action;
+    action.type = UiActionType::RotatePreviewModel;
+    action.previewRotation = {generation, hairRotation.yaw, hairRotation.pitch};
+    runtimeActionSink->RequestRuntimeAction(std::move(action));
+}
+
+void MaterialInstanceAssetEditorPanel::RequestHairReset()
+{
+    // 复位不是重载：渲染线程在下一个正 delta 帧走一次 ResetPositions，
+    // 20 MB TFX 不会被重新解析。
+    if (runtimeActionSink == nullptr || !IsActiveHairPreview()) return;
+    if (!CurrentModelPreviewGeneration()) return;
+    UiAction action;
+    action.type = UiActionType::ResetHairSimulation;
+    runtimeActionSink->RequestRuntimeAction(std::move(action));
+}
+
+namespace
+{
+// 面板当前值（可能是用户拖动后的会话值）优先于作者文档；缺字段时回退控件默认值。
+std::array<double, 3> PanelSimulationValue(
+    const nlohmann::json& values, const TressfxSimulationControl& control)
+{
+    std::array<double, 3> result = control.defaults;
+    if (!values.is_object() || !values.contains(control.field)) return result;
+    const auto& array = values.at(control.field);
+    if (!array.is_array() || array.size() != 3) return result;
+    for (std::size_t component = 0; component < 3; ++component)
+        if (array[component].is_number()) result[component] = array[component].get<double>();
+    return result;
+}
+} // namespace
+
+const EditorAssetDocumentResultPayload* MaterialInstanceAssetEditorPanel::MeshDocument(
+    const std::string& path) const
+{
+    for (const auto& entry : snapshot.meshDocuments)
+        if (entry.assetPath == path) return &entry;
+    return nullptr;
+}
+
+void MaterialInstanceAssetEditorPanel::RequestHairSimulationDocument(const std::string& path)
+{
+    if (path.empty() || (hairSimulationRequested && hairSimulationPath == path)) return;
+    hairSimulationPath = path;
+    hairSimulationRequested = true;
+    hairSimulationBoundRevision = 0;
+    hairSimulationSaveRevision = 0;
+    hairSimulationPendingSave = false;
+    hairSimulationSaveWaitTicks = 0;
+    hairSimulationValues = nlohmann::json::object();
+    hairSimulationStatus = "Reading simulation values...";
+    // 只读打开：modify/save 仍要带 revision，由同一个 Mesh 草稿 owner 提供。
+    EditorCommandEnvelope command;
+    command.type = EditorCommandType::GetMeshDocument;
+    command.payload = MaterialInstanceAssetPathPayload{path};
+    Submit(std::move(command));
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshHairSimulationSection(bool isHair, bool hairBlocked)
+{
+    const auto* active = resourceEditor.ActiveTab();
+    const bool visible = isHair && !hairBlocked && active != nullptr;
+    widgetDocument.SetProperty("resource-hair-simulation", "display", visible ? "block" : "none");
+    if (!visible) return;
+    if (!hairSimulationRequested || hairSimulationPath != active->path)
+        RequestHairSimulationDocument(active->path);
+    const auto* document = MeshDocument(active->path);
+    if (document != nullptr)
+    {
+        // 首次绑定或外部 revision 变化（保存/重载/其他编辑）时重新取作者值。
+        if (hairSimulationBoundRevision != document->documentRevision)
+        {
+            const uint64_t previousRevision = hairSimulationBoundRevision;
+            hairSimulationBoundRevision = document->documentRevision;
+            const nlohmann::json simulation = document->document.contains("simulation")
+                ? document->document.at("simulation") : nlohmann::json::object();
+            std::size_t count = 0;
+            const TressfxSimulationControl* controls = TressfxSimulationControls(count);
+            nlohmann::json values = nlohmann::json::object();
+            for (std::size_t index = 0; index < count; ++index)
+            {
+                const auto current = TressfxSimulationValue(simulation, controls[index]);
+                values[controls[index].field] = nlohmann::json::array(
+                    {current[0], current[1], current[2]});
+            }
+            hairSimulationValues = std::move(values);
+            // 保存成功后草稿回到 clean：明确提示要重载才会应用作者值并复位模拟。
+            hairSimulationStatus = previousRevision != 0 && !document->dirty
+                ? "Saved to the hair asset; all placements are affected. Reload to apply and reset the simulation."
+                : hairSimulationPendingSave ? hairSimulationStatus
+                : "Values loaded from the asset draft.";
+        }
+        // modify 成功后草稿变 dirty 且 revision 前进；把保存交给既有 Save Content 弹窗，
+        // 由它按快照 revision 提交 mesh.save。候选与草稿已相同的情况不推进 revision，
+        // 因此额外用值相等判定解锁，避免停在“正在暂存”。
+        if (hairSimulationPendingSave)
+        {
+            const nlohmann::json simulation = document->document.contains("simulation")
+                ? document->document.at("simulation") : nlohmann::json::object();
+            const bool staged = document->documentRevision > hairSimulationSaveRevision ||
+                (document->dirty && TressfxSimulationValuesMatch(simulation, hairSimulationValues));
+            if (staged)
+            {
+                hairSimulationPendingSave = false;
+                hairSimulationSaveWaitTicks = 0;
+                hairSimulationStatus = "Confirm the save in the Save Content dialog (writes the hair asset).";
+                OpenSaveDialog(active->path);
+            }
+            else if (++hairSimulationSaveWaitTicks > 180)
+            {
+                hairSimulationPendingSave = false;
+                hairSimulationSaveWaitTicks = 0;
+                hairSimulationStatus = snapshot.statusMessage.empty()
+                    ? "Save failed: the asset draft was not modified." : snapshot.statusMessage;
+            }
+        }
+    }
+    std::size_t count = 0;
+    const TressfxSimulationControl* controls = TressfxSimulationControls(count);
+    std::string rows;
+    for (std::size_t index = 0; index < count; ++index)
+    {
+        const auto values = PanelSimulationValue(hairSimulationValues, controls[index]);
+        std::vector<UiWidgets::NumericComponent> components;
+        for (uint32_t component = 0; component < controls[index].components; ++component)
+        {
+            UiWidgets::NumericComponent entry;
+            entry.id = "hair-sim-" + std::to_string(index) + "-" + std::to_string(component);
+            entry.label = controls[index].components == 1
+                ? std::string() : std::string(1, "XYZ"[component]);
+            entry.value = TressfxSimulationText(values[component]);
+            entry.change = {"hair-sim", index, component};
+            if (controls[index].hasRange)
+            {
+                entry.hasRange = true;
+                entry.minValue = controls[index].minValue;
+                entry.maxValue = controls[index].maxValue;
+            }
+            components.push_back(std::move(entry));
+        }
+        std::string label = controls[index].label;
+        if (controls[index].unit[0] != '\0')
+            label += std::string(" (") + controls[index].unit + ")";
+        rows += UiWidgets::PropertyControlRow(label, UiWidgets::NumericComponents(components));
+    }
+    rows += "<div class=\"hair-sim-footer\">" +
+        UiWidgets::Button("hair-sim-save", {"hair-save"},
+            document != nullptr ? "Save to Hair Asset" : "Reading asset...",
+            UiWidgets::ButtonStyle::Command, false, "icons/save.png") +
+        "<span class=\"hair-sim-status\">" + Text(hairSimulationStatus) + "</span></div>";
+    // 这是资产级编辑：保存写 SM_*.json，影响所有摆放该资产的实例；实时值只属于
+    // 当前预览会话。必须写清，避免作者误以为在改关卡里的这一根头发。
+    rows += "<p class=\"hair-sim-note\">Drag previews in this viewport only (not saved). "
+        "Save writes the hair asset (SM_*.json): every placement is affected, and reloading "
+        "resets the simulation. enabled / backend / rootFixedPoints / curves / collision / "
+        "skinning / strandRadius require a world reload.</p>";
+    SetMarkup("resource-hair-simulation", UiWidgets::CollapsibleSection(
+        DetailsSectionId("hair-simulation"), "hair-simulation", "Simulation", rows,
+        {"section"}, IsSectionExpanded("hair-simulation")));
+}
+
+void MaterialInstanceAssetEditorPanel::SubmitHairSimulationLive(std::size_t controlIndex,
+    const std::array<double, 3>& values)
+{
+    if (runtimeActionSink == nullptr || runtimeView.offlineMode || !IsActiveHairPreview()) return;
+    // 预览 World 还没发布时不要投递：命令队列不绑定 World 世代，早到的值会落到
+    // 之后出现的同名对象上。
+    const uint64_t generation = CurrentModelPreviewGeneration();
+    if (!generation) return;
+    std::size_t count = 0;
+    const TressfxSimulationControl* controls = TressfxSimulationControls(count);
+    if (controlIndex >= count) return;
+    UiAction action;
+    action.type = UiActionType::SetHairSimulationParameter;
+    action.previewHairParameter.worldGeneration = generation;
+    action.previewHairParameter.field = controls[controlIndex].field;
+    action.previewHairParameter.valueCount = controls[controlIndex].components;
+    for (uint32_t component = 0; component < 3; ++component)
+        action.previewHairParameter.values[component] = static_cast<float>(values[component]);
+    runtimeActionSink->RequestRuntimeAction(std::move(action));
+}
+
+void MaterialInstanceAssetEditorPanel::SubmitHairSimulationSave()
+{
+    const auto* active = resourceEditor.ActiveTab();
+    if (active == nullptr) return;
+    const auto* document = MeshDocument(active->path);
+    if (document == nullptr)
+    {
+        // 文档还没打开：先取一次，等快照到达后再提交修改。
+        RequestHairSimulationDocument(active->path);
+        hairSimulationRequested = true;
+        hairSimulationPendingSave = true;
+        hairSimulationSaveRevision = 0;
+        hairSimulationSaveWaitTicks = 0;
+        hairSimulationStatus = "Reading the asset document...";
+        return;
+    }
+    std::size_t count = 0;
+    const TressfxSimulationControl* controls = TressfxSimulationControls(count);
+    ModifyAssetDocumentPayload payload;
+    payload.assetPath = active->path;
+    for (std::size_t index = 0; index < count; ++index)
+    {
+        const auto values = PanelSimulationValue(hairSimulationValues, controls[index]);
+        EditorAssetFieldChange change;
+        change.field = std::string("simulation.") + controls[index].field;
+        if (controls[index].components == 1)
+            change.value = values[0];
+        else
+            change.value = std::array<double, 3>{values[0], values[1], values[2]};
+        payload.changes.push_back(std::move(change));
+    }
+    EditorCommandEnvelope command;
+    command.type = EditorCommandType::ModifyMeshDocument;
+    command.expectedDocumentRevision = document->documentRevision;
+    command.payload = std::move(payload);
+    Submit(std::move(command));
+    hairSimulationPendingSave = true;
+    hairSimulationSaveRevision = document->documentRevision;
+    hairSimulationSaveWaitTicks = 0;
+    hairSimulationStatus = "Staging simulation values...";
+}
+
 void MaterialInstanceAssetEditorPanel::RequestPreviewCamera(ModelPreviewNavigation mode, float x, float y)
 {
     const uint64_t generation = CurrentPreviewCameraGeneration();
@@ -2572,7 +2838,14 @@ bool MaterialInstanceAssetEditorPanel::ProcessModelPreviewInput(Rml::Event& even
         previewPointerX = x;
         previewPointerY = y;
         if (dx != 0 || dy != 0)
-            RequestPreviewCamera(previewDragButton == 2 ? ModelPreviewNavigation::Pan : ModelPreviewNavigation::Orbit, dx, dy);
+        {
+            // 毛发视口：左键转模型（转根点才会触发毛发惯性），中/右键仍转相机。
+            // 相机绕轨道对物理没有作用，因此两条手势必须分开。
+            if (previewDragButton == 0 && IsActiveHairPreview())
+                RequestHairPreviewRotation(dx, dy);
+            else
+                RequestPreviewCamera(previewDragButton == 2 ? ModelPreviewNavigation::Pan : ModelPreviewNavigation::Orbit, dx, dy);
+        }
         return true;
     }
     if (type == "mouseup" && previewDragButton == event.GetParameter<int>("button", -2))
@@ -2773,7 +3046,30 @@ void MaterialInstanceAssetEditorPanel::RefreshResourceEditor()
         return;
     }
     const bool isMesh = active != nullptr && active->kind == EditorAssetKind::Mesh;
-    const bool previewReady = HasCurrentModelPreview();
+    // 快照到达后以作者文档为准复核毛发判定（目录可能缺失或过期）；目录只在
+    // 打开时提供同步判定，避免一帧内先请求了本不该加载的预览。
+    if (isMesh && !active->loading && active->snapshot)
+    {
+        if (active->snapshot->type == "tressfx")
+        {
+            hairPreviewPath = active->path;
+            hairPreviewBlocked = active->snapshot->tressfxSkinning;
+        }
+        else if (hairPreviewPath == active->path)
+        {
+            hairPreviewPath.clear();
+            hairPreviewBlocked = false;
+        }
+    }
+    else if (!isMesh || active->path != hairPreviewPath)
+    {
+        hairPreviewPath.clear();
+        hairPreviewBlocked = false;
+    }
+    const bool isHair = isMesh && hairPreviewPath == active->path;
+    const bool hairBlocked = isHair && hairPreviewBlocked;
+    RefreshHairSimulationSection(isHair, hairBlocked);
+    const bool previewReady = HasCurrentModelPreview() && !hairBlocked;
     const bool animated = isMesh && previewReady && runtimeView.animationWorldGeneration ==
         CurrentModelPreviewGeneration() && runtimeView.animationJointCount != 0;
     widgetDocument.SetProperty("resource-animation-tools", "display", animated ? "flex" : "none");
@@ -2823,6 +3119,10 @@ void MaterialInstanceAssetEditorPanel::RefreshResourceEditor()
     widgetDocument.SetProperty("resource-preview-image", "display", previewReady ? "block" : "none");
     for (const char* id : {"resource-preview-icon", "resource-preview-status", "resource-preview-path"})
         widgetDocument.SetProperty(id, "display", previewReady || textureReady ? "none" : "block");
+    // 毛发工具只在可预览的 tressfx 资产上出现；挡预览时隐藏复位按钮，
+    // 让“没有视口”和“有视口但没东西可复位”在 UI 上不混淆。
+    widgetDocument.SetProperty("resource-hair-tools", "display", isHair && !hairBlocked ? "flex" : "none");
+    SetDisabled("resource-hair-reset", !previewReady);
     widgetDocument.SetClass("resource-model-tools", "visible", isMesh);
     widgetDocument.SetClass("resource-model-info", "visible", isMesh);
     for (const char* id : {"resource-tool-select", "resource-tool-move", "resource-tool-rotate", "resource-tool-scale",
@@ -2847,6 +3147,7 @@ void MaterialInstanceAssetEditorPanel::RefreshResourceEditor()
         !active->snapshot->name.empty() ? active->snapshot->name :
         std::filesystem::path(active->path).filename().string()));
     SetMarkup("resource-preview-kind", Text(EditorAssetKindName(active->kind)));
+    if (isHair) SetMarkup("resource-preview-kind", "TressFX Hair");
     if (animated) SetMarkup("resource-preview-kind", "Skeletal Mesh");
     if (textureReady)
         SetMarkup("resource-preview-kind", Text(std::to_string(texture->sourceWidth) + " x " +
@@ -2854,7 +3155,9 @@ void MaterialInstanceAssetEditorPanel::RefreshResourceEditor()
     SetMarkup("resource-preview-path", Text(active->path));
     SetMarkup("resource-preview-status", active->loading
         ? (active->kind == EditorAssetKind::Texture ? "Loading texture preview..." : "Reading JSON metadata...")
-        : isMesh ? "Waiting for model preview" : active->snapshot && !active->snapshot->previewDiagnostic.empty()
+        : hairBlocked ? Text(std::string(TressfxHairSkinnedAssetMessage))
+        : isMesh ? (isHair ? "Waiting for hair preview" : "Waiting for model preview")
+        : active->snapshot && !active->snapshot->previewDiagnostic.empty()
             ? Text(active->snapshot->previewDiagnostic)
             : "Preview unavailable: referenced data is not loaded.");
     auto* previewIcon = document->GetElementById("resource-preview-icon");
@@ -3511,6 +3814,8 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
     else if (action == "material-frame") RequestPreviewCamera(ModelPreviewNavigation::Frame);
     else if (action == "json-close") ShowMaterialDetails();
     else if (action == "resource-frame") RequestPreviewCamera(ModelPreviewNavigation::Frame);
+    else if (action == "hair-reset") RequestHairReset();
+    else if (action == "hair-save") SubmitHairSimulationSave();
     else if (action == "animation-browser-clip")
     {
         const auto* active = resourceEditor.ActiveTab();
@@ -3889,6 +4194,27 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
 
 void MaterialInstanceAssetEditorPanel::HandleChange(Rml::Element& element, const std::string& action)
 {
+    if (action == "hair-sim")
+    {
+        // 拖动/输入只更新会话值并投递实时覆盖；保存是独立动作，不会自动写资产。
+        std::size_t count = 0;
+        const TressfxSimulationControl* controls = TressfxSimulationControls(count);
+        const std::size_t index = element.GetAttribute<size_t>("data-index", 0);
+        const std::size_t component = element.GetAttribute<size_t>("data-component", 0);
+        if (index >= count || component >= controls[index].components) return;
+        const std::string text = ControlValue(element);
+        char* end = nullptr;
+        const double value = std::strtod(text.c_str(), &end);
+        // 文本控件的半成品输入不能当成 0；只接受整段都是数字的值。
+        if (end == text.c_str() || *end != '\0' || !std::isfinite(value)) return;
+        auto values = PanelSimulationValue(hairSimulationValues, controls[index]);
+        values[component] = value;
+        hairSimulationValues[controls[index].field] =
+            nlohmann::json::array({values[0], values[1], values[2]});
+        hairSimulationStatus = "Live preview in this viewport (not saved).";
+        SubmitHairSimulationLive(index, values);
+        return;
+    }
     if (action.rfind("debug-draw-", 0) == 0)
     {
         if (!runtimeActionSink || !runtimeView.debugDraw || !runtimeView.motionWorldGeneration || runtimeView.offlineMode) return;
@@ -4036,6 +4362,10 @@ void MaterialInstanceAssetEditorPanel::HandleChange(Rml::Element& element, const
             actor->scriptSpawned || runtimeView.scripts.state != ScriptPlayState::Editing) return;
         const auto field = action.substr(17);
         const auto& node = actor->scriptComponents[index];
+        // 资产拥有的毛发字段不允许从关卡写：即使旧控件或脚本仍发出事件也直接丢弃。
+        // 绑定/权重只在蓝图资产页作者，关卡只能改放置与资产白名单授权的实例覆写。
+        if (node.value("type", "") == "tressfx" &&
+            (field == "modelPath" || field == "rootBone" || field == "weights")) return;
         if (field.rfind("collision", 0) == 0 && field != "collisionMask")
         {
             if (!actor->scriptBlueprintPath.empty()) return;

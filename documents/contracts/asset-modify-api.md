@@ -12,7 +12,7 @@ Console 只借用 facade，不操作 World 或文件。运行中入口需要启�
 | 命令前缀 | 文档归属与可编辑内容 |
 | --- | --- |
 | `scene.*` | Scene 根 name/description；已有 mesh 的 TRS/materialOverride；灯光作者参数；相机变换、投影、曝光 |
-| `mesh.*` | `SM_*.json`，type 为 mesh/speedtree/tressfx；源模型引用、适用的导入选项、已有材质槽的 MI 绑定；tressfx 不接受 importOptions，strandRadius 不在修改能力表内 |
+| `mesh.*` | `SM_*.json`，type 为 mesh/speedtree/tressfx；源模型引用、适用的导入选项、已有材质槽的 MI 绑定、tressfx 的 `simulation.*` 模拟标量；tressfx 不接受 importOptions，`strandRadius`/`collision.*` 不在修改能力表内 |
 | `texture.*` | `T_*.json`；源图片引用、colorSpace、mipmaps、filter、wrapMode、channelsDescription |
 | `blueprint.*` | `BP_*.json`；名称/说明/类、Expose 类型化默认值、instanceEditable 名称数组、componentInstanceEditable 权限对象、完整组件数组、根物理对象及初始 rotation/scale |
 
@@ -21,6 +21,14 @@ Console 只借用 facade，不操作 World 或文件。运行中入口需要启�
 环境/风参数、terrain、通用跨资产历史。临时 `SC_model_preview.json` 不能成为可编辑资产文档。
 具体可写字段以 `get_capabilities` 为准，字段定义、typed codec 与能力投影共用
 `assetDocumentFields.cpp` 的一张表。
+
+Mesh 能力表包含 9 个 `simulation.*` 一级字段：`gravity`、`wind`（向量）、`damping`、
+`iterations`、`bendStiffness`、`globalShapeStiffness`、`globalShapeEffectiveRange`、
+`vspCoefficient`、`vspAccelThresholdMax`（数值）。能力表**不按文档类型过滤**，这些字段
+对所有 Mesh 文档可见；非 tressfx 文档由加载器忽略。值域由
+`MeshAssetValidator::BuildLoadPlan` 在 modify/validate/save 阶段校验，越界直接拒绝；
+`iterations` 必须是整数。逐顶点曲线、`collision.*`、`strandRadius`、`skinning.*` 仍不在
+能力表内，属于资产直接编辑。
 BP 文档支持完整替换组件数组，包括增删和父链调整。可选
 [C# 蓝图](csharp-blueprint-runtime.md) 的场景新增/改名/复制/删除、实例属性与 inline
 组件/物理编辑、获准的继承组件字段编辑/重置由 GT 作者适配器复用 Scene 草稿与保存 owner，

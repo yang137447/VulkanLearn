@@ -14,6 +14,7 @@ struct RenderDrawPacket
     bool selected = false;
     std::string debugName;
     std::string sceneObjectIdentity;
+    float simulationDeltaSeconds = 0.0f;
     uint32_t materialSlotIndex = 0;
     std::string materialSlotName;
     ResourceHandle mesh;
@@ -46,6 +47,7 @@ struct RenderScene
 {
     uint64_t worldGeneration = 0;
     uint64_t frameIndex = 0;
+    float hairSimulationDeltaSeconds = 0.0f;
     CameraSnapshot camera;
     std::vector<RenderDrawPacket> drawPackets;
     std::vector<MaterialDrawGroup> materialGroups;

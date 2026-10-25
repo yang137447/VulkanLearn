@@ -3,11 +3,31 @@
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
+#include <string>
 
 #include "hair/tressfxSolverMath.h"
+#include "hair/tressfxSourceSchedule.h"
 
 namespace VL::Hair
 {
+namespace
+{
+    // 作者数组与 .tfx 的 pointsPerStrand 同长；CPU solver 没有 TFX 上下文，
+    // 因此用实际构造的 pointsPerGuide 做同样的硬校验，避免曲线与顶点错位。
+    void ValidateAuthoredStiffnessCurve(const std::vector<float>& curve,
+        size_t pointsPerGuide, const char* field)
+    {
+        if (curve.empty())
+            return;
+        if (curve.size() != pointsPerGuide)
+            throw std::invalid_argument(std::string("Invalid TressFX guide simulation ")
+                + field + " length");
+        for (float value : curve)
+            if (!std::isfinite(value) || value < 0.0f || value > 1.0f)
+                throw std::invalid_argument(std::string("Invalid TressFX guide simulation ")
+                    + field + " value");
+    }
+} // namespace
 
 GuideSimulation::GuideSimulation(
     std::vector<Eigen::Vector3f> rest,
@@ -53,6 +73,10 @@ GuideSimulation::GuideSimulation(
             !std::isfinite(capsule.radius) || capsule.radius <= 0.0f)
             throw std::invalid_argument("Invalid TressFX guide simulation collider");
     }
+    ValidateAuthoredStiffnessCurve(
+        config.vspStiffness, pointsPerGuide, "vspStiffness");
+    ValidateAuthoredStiffnessCurve(
+        config.localShapeStiffness, pointsPerGuide, "localShapeStiffness");
 
     movable.resize(restPositions.size());
     for (size_t point = 0; point < restPositions.size(); ++point)
@@ -134,14 +158,15 @@ void GuideSimulation::VspPass(size_t guide, const StrandTransform& transform)
     if (config.vspCoefficient <= 0.0f)
         return;
     const size_t base = guide * pointsPerGuide;
+    const std::vector<float>* authored =
+        config.vspStiffness.empty() ? nullptr : &config.vspStiffness;
     for (size_t local = config.rootFixedPoints; local < pointsPerGuide; ++local)
     {
         if (!movable[base + local])
             continue;
-        float coefficient = transform.coefficient;
-        if (coefficient < TressfxVspStiffnessBlendThreshold)
-            coefficient *= TressfxVspStiffness(static_cast<uint32_t>(local),
-                static_cast<uint32_t>(pointsPerGuide), config.rootFixedPoints);
+        const float coefficient = TressfxVspCoefficient(transform.coefficient,
+            static_cast<uint32_t>(local), static_cast<uint32_t>(pointsPerGuide),
+            config.rootFixedPoints, authored);
         const size_t point = base + local;
         positions[point] = TressfxVspBlend(positions[point], transform.quat,
             transform.translation, coefficient);
@@ -152,7 +177,8 @@ void GuideSimulation::VspPass(size_t guide, const StrandTransform& transform)
 
 void GuideSimulation::LocalShapePass(size_t guide, const StrandTransform& transform)
 {
-    if (config.bendStiffness <= 0.0f)
+    // 标量为 0 但作者数组非空时仍要逐点求解；只有两者都缺席才整体关闭。
+    if (config.bendStiffness <= 0.0f && config.localShapeStiffness.empty())
         return;
     const size_t base = guide * pointsPerGuide;
     // TressFX 用 `NumVerticesFromRootNoSimulation - 1` 作为起点；该值是 0 时无符号
@@ -162,14 +188,22 @@ void GuideSimulation::LocalShapePass(size_t guide, const StrandTransform& transf
     // rootFixedPoints == 1 时 TressFX 会从局部点 0 开始并读取 `GlobalVertexIndex - 1`
     // （即上一根 strand 的末点）；VL 从 1 开始，避免首根 strand 越界读。作者资产
     // 使用 rootFixedPoints >= 2，两者数值一致。
+    const std::vector<float>* authored = config.localShapeStiffness.empty()
+        ? nullptr : &config.localShapeStiffness;
     const size_t start = std::max<size_t>(config.rootFixedPoints - 1, 1);
     for (size_t local = start; local + 1 < pointsPerGuide; ++local)
     {
+        const float stiffness = TressfxLocalShapeStiffness(
+            static_cast<uint32_t>(local), config.bendStiffness, authored);
+        // 作者曲线上的 0 表示该点不受局部形状约束；跳过与计算零 delta 等价，
+        // 但避免无谓的三点旋转与四元数归一化。
+        if (stiffness <= 0.0f)
+            continue;
         const size_t point = base + local;
         const Eigen::Vector3f delta = TressfxLocalShapeDelta(transform.quat,
             restPositions[point - 1], restPositions[point],
             restPositions[point + 1], positions[point - 1], positions[point],
-            positions[point + 1], config.bendStiffness);
+            positions[point + 1], stiffness);
         // 与源实现相同：del 只加到可移动点上；不可移动点既不收也不给。
         if (movable[point])
             positions[point] -= delta;
@@ -266,13 +300,34 @@ void GuideSimulation::Step(float dt)
 {
     if (paused)
         return;
-    // TressFX 的变量步长：每帧一个 step，dt 直接是 clamp 后的帧增量。
+    // 旧的可变步长路径：每帧一个 step，直接用 clamp 后帧增量；不等价于源上层循环。
     const float timeStep = std::clamp(dt, 0.0f, config.maxDt);
     if (timeStep <= 0.0f)
         return;
     for (size_t guide = 0; guide < guideCount; ++guide)
         SolveStrand(guide, timeStep);
     simulationTime += timeStep;
+    ++simulationFrame;
+}
+
+void GuideSimulation::StepFrame(float deltaSeconds)
+{
+    if (paused)
+        return;
+    // 与 GPU 路径共用同一份源调度：n 由帧增量决定，每个 substep 恒为 0.0125 s。
+    // 这里不读 config.maxDt，否则会把源固定步长重新变回“每帧唯一一步的上限”。
+    const TressfxSourceSchedule schedule =
+        TressfxSourceScheduleForDelta(deltaSeconds);
+    if (schedule.substeps == 0)
+        return;
+    for (uint32_t substep = 0; substep < schedule.substeps; ++substep)
+    {
+        // 同一帧的所有 substep 用同一个 simulationFrame（风相位），只在整帧
+        // 结束后 +1，与源 ++Guides.Frame 每渲染帧一次一致。
+        for (size_t guide = 0; guide < guideCount; ++guide)
+            SolveStrand(guide, TressfxSourceSolverStepSeconds);
+        simulationTime += TressfxSourceSolverStepSeconds;
+    }
     ++simulationFrame;
 }
 

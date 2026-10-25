@@ -440,6 +440,78 @@ TEST_F(ScriptRuntimeTest, TransformPublishesIntoNewSnapshotWithoutChangingFrozen
     EXPECT_TRUE(before.Value().meshDraws[0].model.isApprox(Eigen::Matrix4f::Identity()));
 }
 
+TEST_F(ScriptRuntimeTest, SnapshotFreezesScaledAndOrdinaryAnimationTimeSeparately)
+{
+    Prepare(Json::array({Blueprint("a", 90)}));
+    WorldMeshObject ordinary;
+    ordinary.sceneObjectIdentity = "OrdinaryCharacter";
+    world->AddMeshObject("OrdinaryCharacter", ordinary);
+    world->SetCamera(std::make_shared<Camera>());
+    std::string error;
+    ASSERT_TRUE(runtime.SetTimeScale(0.25f, error)) << error;
+    ASSERT_TRUE(runtime.Control(*world, ScriptPlayState::Playing, error)) << error;
+    runtime.Tick(world, 0.04f, {}, diagnostics);
+
+    WorldSnapshotBuildDesc desc;
+    desc.simulationDeltaSeconds = 0.04f;
+    desc.gameSimulationDeltaSeconds = runtime.ContextTime().at("deltaTime").get<float>();
+    desc.hairSimulationDeltaSeconds = desc.gameSimulationDeltaSeconds;
+    WorldSnapshotBuilder builder;
+    const auto frozen = builder.Build(*world, desc);
+    ASSERT_TRUE(frozen.IsSuccess());
+    ASSERT_EQ(frozen.Value().meshDraws.size(), 2u);
+    EXPECT_FLOAT_EQ(frozen.Value().hairSimulationDeltaSeconds, 0.01f);
+    for (const MeshDrawSnapshot& draw : frozen.Value().meshDraws)
+    {
+        const float expected = draw.sceneObjectIdentity == "__blueprint/a" ? 0.01f : 0.04f;
+        EXPECT_FLOAT_EQ(draw.simulationDeltaSeconds, expected);
+    }
+
+    ASSERT_TRUE(runtime.SetTimeScale(1.0f, error)) << error;
+    runtime.Tick(world, 0.08f, {}, diagnostics);
+    desc.simulationDeltaSeconds = 0.08f;
+    desc.gameSimulationDeltaSeconds = runtime.ContextTime().at("deltaTime").get<float>();
+    desc.hairSimulationDeltaSeconds = desc.gameSimulationDeltaSeconds;
+    const auto next = builder.Build(*world, desc);
+    ASSERT_TRUE(next.IsSuccess());
+    EXPECT_FLOAT_EQ(next.Value().hairSimulationDeltaSeconds, 0.08f);
+    EXPECT_FLOAT_EQ(frozen.Value().hairSimulationDeltaSeconds, 0.01f);
+    for (const MeshDrawSnapshot& draw : frozen.Value().meshDraws)
+    {
+        const float expected = draw.sceneObjectIdentity == "__blueprint/a" ? 0.01f : 0.04f;
+        EXPECT_FLOAT_EQ(draw.simulationDeltaSeconds, expected);
+    }
+}
+
+TEST_F(ScriptRuntimeTest, SnapshotFreezesPausedGameplayWithoutStoppingOrdinaryAnimation)
+{
+    Prepare(Json::array({Blueprint("a", 90)}));
+    WorldMeshObject ordinary;
+    ordinary.sceneObjectIdentity = "OrdinaryCharacter";
+    world->AddMeshObject("OrdinaryCharacter", ordinary);
+    world->SetCamera(std::make_shared<Camera>());
+    std::string error;
+    ASSERT_TRUE(runtime.Control(*world, ScriptPlayState::Playing, error)) << error;
+    runtime.Tick(world, 0.04f, {}, diagnostics);
+    ASSERT_TRUE(runtime.Control(*world, ScriptPlayState::Paused, error)) << error;
+    runtime.Tick(world, 0.04f, {}, diagnostics);
+
+    WorldSnapshotBuildDesc desc;
+    desc.simulationDeltaSeconds = 0.04f;
+    desc.gameSimulationDeltaSeconds = runtime.ContextTime().at("deltaTime").get<float>();
+    desc.hairSimulationDeltaSeconds = desc.gameSimulationDeltaSeconds;
+    WorldSnapshotBuilder builder;
+    const auto frozen = builder.Build(*world, desc);
+    ASSERT_TRUE(frozen.IsSuccess());
+    ASSERT_EQ(frozen.Value().meshDraws.size(), 2u);
+    EXPECT_FLOAT_EQ(frozen.Value().hairSimulationDeltaSeconds, 0.0f);
+    for (const MeshDrawSnapshot& draw : frozen.Value().meshDraws)
+    {
+        const float expected = draw.sceneObjectIdentity == "__blueprint/a" ? 0.0f : 0.04f;
+        EXPECT_FLOAT_EQ(draw.simulationDeltaSeconds, expected);
+    }
+}
+
 TEST_F(ScriptRuntimeTest, PauseFreezesAndStopRestoresAuthoredTransform)
 {
     Prepare(Json::array({Blueprint("a", 90)}));

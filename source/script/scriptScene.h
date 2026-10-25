@@ -70,6 +70,21 @@ inline nlohmann::json ScriptBlueprintMeshObject(const nlohmann::json& blueprint,
     const auto& component = blueprint.at("components").at(index);
     auto mesh = component;
     mesh["name"] = ScriptMeshIdentity(blueprint.at("id").get<std::string>(), component);
+    // tressfx 组件在场景加载侧就是 mesh 对象：类型收敛到 mesh，父级绑定与覆盖
+    // 记在生成对象上，不写回作者 JSON，也不新增场景字段。
+    if (component.value("type", "") == "tressfx")
+    {
+        mesh["type"] = "mesh";
+        if (const nlohmann::json* ancestor =
+                ScriptComponentMeshAncestor(blueprint.at("components"), component))
+        {
+            mesh["__tressfxSkinningSource"] =
+                ScriptMeshIdentity(blueprint.at("id").get<std::string>(), *ancestor);
+            mesh["__tressfxParentModelPath"] = ancestor->at("modelPath");
+        }
+        if (component.contains("rootBone")) mesh["__tressfxRootBone"] = component.at("rootBone");
+        if (component.contains("weights")) mesh["__tressfxWeights"] = component.at("weights");
+    }
     // 先导入单位根，候选 World 再施加完整组件世界矩阵；旧单根格式继续保留原行为。
     for (const char* field : {"position", "rotation", "scale"})
         mesh[field] = !component.contains("id") ? blueprint.at(field) :

@@ -35,6 +35,16 @@ struct SdfProxySkinSource
 // 列表并归一化，而不是截断到 4 骨（本资产身体单点最多 4 个正权重，所以实际
 // 结果仍是 <= 4）。不重新分配到第二套骨骼下标空间：joint 直接索引
 // SkinPose::matrices。
+// 转移失败策略。碰撞代理每个顶点都必须有可用的身体顶点，缺一个就说明代理与身体
+// 不在同一绑定空间，因此代理路径保持 RejectUnmatched 硬错误；发丝根点允许个别
+// 根落在头皮稀疏处，调用方按根回退 rootBone，所以用 RecordUnmatched 拿未匹配
+// 下标后自行决定。
+enum class TressfxSkinTransferPolicy
+{
+    RejectUnmatched,
+    RecordUnmatched,
+};
+
 struct SdfProxySkinTransfer
 {
     std::vector<uint32_t> words;
@@ -46,16 +56,22 @@ struct SdfProxySkinTransfer
     // 均值约 0.22 cm、最大 0.93 cm（2,572 顶点对 235,490 顶点绑定身体）。
     float maxNearestDistanceCm = 0.0f;
     uint32_t uniqueBodyVertices = 0;
+    // RecordUnmatched 下未匹配的查询点下标（CSR 给空影响）；RejectUnmatched
+    // 时恒为空。调用方必须逐点回退，不能把空权重当零矩阵。
+    std::vector<uint32_t> unmatchedVertices;
 };
 
 // 空间哈希最近点转移。对每个代理顶点找绑定姿态下最近的身体顶点，复制其完整
 // 影响列表并归一化。等距时选全局下标更小的身体顶点，因此输出只取决于输入
-// 顺序，和哈希桶遍历顺序无关。任何代理顶点在 maxNearestDistanceCm 内找不到
-// 身体顶点、权重和 <= 0、坐标非有限都会抛 std::runtime_error。
+// 顺序，和哈希桶遍历顺序无关。RejectUnmatched 下任何代理顶点在
+// maxNearestDistanceCm 内找不到身体顶点、权重和 <= 0、坐标非有限都会抛
+// std::runtime_error；RecordUnmatched 只把“找不到/无正权重”记入
+// unmatchedVertices，其余非法输入仍然抛。
 SdfProxySkinTransfer BuildTressfxProxySkinTransfer(
     const std::vector<Eigen::Vector3f>& proxyPositions,
     const SdfProxySkinSource& body,
-    float maxNearestDistanceCm);
+    float maxNearestDistanceCm,
+    TressfxSkinTransferPolicy policy = TressfxSkinTransferPolicy::RejectUnmatched);
 
 // 用转移后的权重对一个绑定姿态代理顶点做 LBS。CPU 侧用它重建每帧代理包围盒，
 // 也是 GPU splat shader 的逐操作镜像（权重和已归一化）。

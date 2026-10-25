@@ -15,6 +15,9 @@ public:
     EditorCommandResult Execute(const EditorCommandEnvelope& command);
     std::vector<EditorUi::EditorModifiedDocumentSnapshot> ModifiedDocuments() const;
     AssetDocumentService& BlueprintDocuments() { return blueprints; }
+    // 毛发视口需要读取 Mesh 草稿（simulation 字段）与 revision；只增加只读快照入口，
+    // 仍由 AssetDocumentService 独占草稿与保存边界。
+    AssetDocumentService& MeshDocuments() { return meshes; }
 private:
     SceneDocumentService& scenes;
     AssetDocumentService meshes, textures, blueprints;

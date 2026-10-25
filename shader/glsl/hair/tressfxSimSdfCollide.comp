@@ -25,6 +25,12 @@ layout(set = 0, binding = 1, std430) buffer CurrentPositions
     vec4 positions[];
 } currentPositions;
 
+// x=胶囊、y=SDF 的碰撞前最大穿透深度（厘米）；uint 位模式供 atomicMax。
+layout(set = 0, binding = 16, std430) buffer PenetrationStats
+{
+    uint stats[];
+} penetrationStats;
+
 const float TressfxSdfGradientEpsilonSquared = 1.0e-12;
 
 void main()
@@ -48,6 +54,9 @@ void main()
         const float distance = SdfTrilinear(position.xyz);
         if (distance > margin)
             continue;
+        // 有符号距离为负表示点在代理内部；记录进入身体的深度。
+        if (distance < 0.0)
+            atomicMax(penetrationStats.stats[1], floatBitsToUint(-distance));
 
         const vec3 gradient = SdfGradient(position.xyz);
         if (!(dot(gradient, gradient) > TressfxSdfGradientEpsilonSquared))

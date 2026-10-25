@@ -1445,6 +1445,7 @@ void MaterialInstanceEditorRuntime::RefreshModifiedDocuments()
     if (assetDocuments)
     {
         snapshot.blueprintDocuments = assetDocuments->BlueprintDocuments().DocumentSnapshots();
+        snapshot.meshDocuments = assetDocuments->MeshDocuments().DocumentSnapshots();
         const auto scenes = assetDocuments->ModifiedDocuments();
         // GT 作者适配器绕过命令执行修改 Scene 草稿；发布保存列表时必须同步总线版本，
         // 否则上一次 Save 留下的 revision 会拒绝之后的合法保存。

@@ -1,8 +1,31 @@
 # TressFX 5.0 for UE 5.4 源码盘点与 Port Map（初稿）
 
-状态：M0.5 初步盘点（2026-10-19）；CPU 数据层与 Female 保存几何的正式静态关卡已落地，
-完整逐文件审计、绑定/贴图与 Marschner 验收未完成。这是 `plan/` 层，不是契约；
+状态（2026-10-24）：M0.5 初步盘点保留；CPU 数据层、Female 骨架/蒙皮、Idle/Walk
+重定向、GPU guide 模拟、单根骨/骨骼胶囊与逐帧蒙皮代理 SDF 已落地。
+完整逐文件审计、逐发根绑定/贴图与 Marschner 验收未完成。这是 `plan/` 层，不是契约；
 完整计划见 [tressfx5-hair-port-plan.md](tressfx5-hair-port-plan.md)。
+
+## 物理交互补充（2026-10-24）
+
+本轮优先复位、连续运动、坐标空间/时钟与碰撞验收，渲染暂缓。已落地 solver 为
+Integration → StrandLevel → 可选 VSP → LocalShape → Length/Wind → 胶囊 →
+SdfClear/Splat/Collide；不是原表中的“模拟未移植”状态。运行期 SDF 消费 OBJ 代理及
+从真实身体转移的完整权重，不读取离线 `.sdf`，也没有 `.tfxmesh` parser。
+根点仍为整份 guide 共用单根骨，不应称为 `.tfxbone` 完整迁移。
+
+| 本轮项目 | 状态依据 |
+| --- | --- |
+| ResetPositions 与历史清除 | 已实现，10 项状态/参数测试通过；Debug 短检查及 Release 30/60/120 事件与图像烟测完成，未做逐点读回 |
+| source/hair 模型空间与游戏时钟 | 已实现，6 项相对 palette/冻结帧时钟测试通过；不得仅靠同为 identity 的正式场景断言任意实例正确 |
+| 外部物理烟测 | Console、PNG、perf JSONL 与事件日志已完成；三档 27 图人工复核，+Z 取景失败及补采分别留档；不新增 runtime test/CTest |
+| 快速转头、长时间数值稳定、碰撞速度/摩擦 | 各自记账，基础模拟与截图均不能代替完成声明 |
+
+完整分项及证据见 [物理交互执行记录](../../rationale/tressfx5-hair-physics-record.md)。
+UE5 物理效果目标、固定 TressFX revision 与 Groom 参照的边界、共同 Actor 运动源对齐优先级，
+见 [移植计划的物理效果对照决策](tressfx5-hair-port-plan.md#ue5-物理效果对照决策2026-10-24)。
+按用户最新约束，UE 侧仅作固定源码与物理分析，不准备/构建/启动 UE 或采集其运行结果；
+VL 验证独立推进，Groom 介绍不能替代未读取源码的实现证据。
+下文各批记录与 Port Map 是当时盘点/设计，不覆盖该补充及当前契约。
 
 ## 2026-10-22 实施补充
 

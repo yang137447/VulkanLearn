@@ -154,6 +154,44 @@ TEST_F(AssetDocumentTest, RetargetMeshValidationRejectsNestedSource)
     EXPECT_NE(Run(Request("mesh.validate", "SM_test.json"))["status"], "succeeded");
 }
 
+TEST_F(AssetDocumentTest, TressfxSimulationFieldsRoundTripThroughStandardModify)
+{
+    auto mesh = Read("SM_test.json");
+    mesh["type"] = "tressfx";
+    mesh["modelDataPath"] = "guides.tfx";
+    mesh["strandRadius"] = 0.035;
+    Write("SM_test.json", mesh);
+    std::ofstream(root / "guides.tfx") << "Content preflight is separate";
+    const auto opened = Get("mesh", "SM_test.json");
+    ASSERT_EQ(opened["status"], "succeeded") << opened;
+    bool sawDamping = false, sawGravity = false;
+    for (const auto& field : opened["payload"]["capabilities"]["fields"])
+    {
+        if (field["field"] == "simulation.damping") sawDamping = true;
+        if (field["field"] == "simulation.gravity") sawGravity = true;
+    }
+    EXPECT_TRUE(sawDamping);
+    EXPECT_TRUE(sawGravity);
+
+    const auto modified = Modify("mesh", "SM_test.json", 1, Json::array({
+        {{"field", "simulation.damping"}, {"value", 0.02}},
+        {{"field", "simulation.iterations"}, {"value", 8}},
+        {{"field", "simulation.gravity"}, {"value", Json::array({0.0, -500.0, 0.0})}},
+    }));
+    ASSERT_EQ(modified["status"], "succeeded") << modified;
+    ASSERT_EQ(Run(Request("mesh.save", "SM_test.json", 2))["status"], "succeeded");
+    const auto saved = Read("SM_test.json");
+    EXPECT_DOUBLE_EQ(saved["simulation"]["damping"].get<double>(), 0.02);
+    EXPECT_EQ(saved["simulation"]["iterations"], 8);
+    EXPECT_EQ(saved["simulation"]["gravity"], Json::array({0.0, -500.0, 0.0}));
+
+    // 越界值必须由资产校验拒绝，不能写进文件。
+    const auto invalid = Modify("mesh", "SM_test.json", 3, Json::array({
+        {{"field", "simulation.damping"}, {"value", 2.0}}}));
+    EXPECT_NE(invalid["status"], "succeeded");
+    EXPECT_DOUBLE_EQ(Read("SM_test.json")["simulation"]["damping"].get<double>(), 0.02);
+}
+
 TEST_F(AssetDocumentTest, TressfxMeshSavePreservesRadiusOutsideModifyCapabilities)
 {
     auto mesh = Read("SM_test.json");

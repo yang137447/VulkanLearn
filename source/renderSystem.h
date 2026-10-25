@@ -42,6 +42,8 @@
 #include "ui/uiRenderSnapshotQueue.h"
 #include "world/worldSnapshotBuilder.h"
 #include "editor/preview/materialInstancePreviewAdapter.h"
+#include "hair/hairTraceFormat.h"
+#include "hair/tressfxLiveParams.h"
 
 class Material;
 class MaterialInstance;
@@ -102,11 +104,29 @@ public:
     // GT-only snapshot production. In workerThreadCount=1 Render() consumes it
     // immediately; in workerThreadCount=2 RenderThread consumes it later.
     void PublishSnapshotFromActiveWorld();
+    // GT 在动画/毛发更新边界写入，发布后随 WorldSnapshot 冻结；RT 不读
+    // ScriptRuntime，也不再用自动曝光的墙钟驱动物理。
+    void SetSimulationFrameDeltas(float frameDelta, float gameDelta, float hairDelta)
+    {
+        simulationDeltaSeconds = frameDelta;
+        gameSimulationDeltaSeconds = gameDelta;
+        hairSimulationDeltaSeconds = hairDelta;
+    }
     // Consumes the latest snapshot if present, otherwise reuses the previous
     // RenderScene after one has been initialized.
     void RenderLatestSnapshotOrLastGood();
     void Render();
     void RequestScreenshot(std::string path);
+    // 正常 Console `hair trace` 的 GT 侧入口：只记录值语义请求，由渲染线程在
+    // RecordHairSimulation 中转发给 HairSimulationPass。GT 与渲染线程在
+    // workerThreadCount=2 时并发，因此用互斥量保护这唯一一个待消费槽。
+    void RequestHairTrace(std::string path, uint32_t frames, uint32_t guideStride);
+    // 正常 Console `hair reset` / 毛发视口复位按钮的 GT 侧入口：只记录目标对象名
+    // （空 = 所有 GPU guide 对象），由渲染线程在 RecordHairSimulation 中转发一次。
+    void RequestHairSimulationReset(std::string objectName);
+    // `hair set` 的 GT 侧入口：字段/值域已在执行端校验，这里只把请求交给渲染线程；
+    // 由 HairSimulationPass 在 Record 中按对象名应用到该渲染对象的 config 副本。
+    void RequestHairSimulationParameter(const VL::Hair::HairLiveParameterRequest& request);
     // --gpu-stats：开启后逐 pass 采集并按 120 帧打印一次；关闭时不创建 query pool。
     void SetGpuPassStatsLoggingEnabled(bool enabled)
     {
@@ -315,6 +335,7 @@ private:
         uint32_t passSizeHeight,
         uint32_t cascadeIndex);
     void RefreshRenderSceneFromActiveWorld();
+    void PublishSnapshotFromActiveWorld(bool advanceSimulation);
     bool ConsumeLatestSnapshotIntoRenderScene();
     void BuildResolvedRenderScene();
     void InitializeCurrentRenderSceneResources();
@@ -451,6 +472,9 @@ private:
     uint32_t currentFrame = 0;
     uint32_t swapChainImageIndex = 0;
     uint64_t nextSnapshotFrameIndex = 0;
+    float simulationDeltaSeconds = 0.0f;
+    float gameSimulationDeltaSeconds = 0.0f;
+    float hairSimulationDeltaSeconds = 0.0f;
     bool hasSelectedDraw = false;
     bool selectedAllMaterialSlots = false;
     VL::RuntimeId selectedObjectId = 0;
@@ -541,6 +565,18 @@ private:
     // 截图请求只在 GT 命令执行端写入，在当前帧提交后由 RenderSystem 消费，
     // 确保回读不会与仍在录制的 command buffer 交叉。
     std::optional<std::string> pendingScreenshotPath;
+    // hair trace 请求跨 GT/渲染线程；渲染线程每帧只取一次，取走后由
+    // HairSimulationPass 在 Record 中消费。未请求时只有一次加锁读取。
+    std::mutex hairTraceRequestMutex;
+    std::optional<VL::Hair::HairTraceRequest> pendingHairTraceRequest;
+    // 复位请求与 trace 同构：GT 只写这里，渲染线程每帧取走一次；未请求时
+    // 只有一次加锁读取。空字符串表示所有 GPU guide 对象。
+    std::mutex hairResetRequestMutex;
+    std::optional<std::string> pendingHairResetRequest;
+    // 实时参数覆盖：一帧可能有多条（滑杆拖动），用小队列而不是单槽；队列有界，
+    // 过期意图先丢弃，避免无渲染帧时无限累积。
+    std::mutex hairLiveParameterMutex;
+    std::vector<VL::Hair::HairLiveParameterRequest> pendingHairLiveParameters;
     bool hasMaterialInstancePreviewMaterialOverride = false;
     std::string materialInstancePreviewOverridePath;
     std::string materialInstancePreviewOverrideMaterialKey;

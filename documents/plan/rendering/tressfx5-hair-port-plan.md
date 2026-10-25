@@ -1,9 +1,111 @@
 # TressFX 5.0 for UE 5.4 头发移植开发计划
 
-状态：本地分支 `codex/tressfx5-hair-port` 已实现 CPU 数据层与真实女性源资产的静态关卡；
-完整绑定/贴图迁移、Marschner、抗锯齿、阴影和模拟尚未实现。这是 `plan/` 层，不是实现契约；
+状态（2026-10-24）：本地分支 `codex/tressfx5-hair-port` 已实现 CPU 数据层、真实 Female
+骨架/蒙皮与 Idle/Walk 重定向、GPU guide 模拟、单根骨绑定、骨骼胶囊和逐帧蒙皮代理 SDF。
+完整逐发根绑定/贴图、Marschner、抗锯齿和发丝阴影尚未完成。这是 `plan/` 层，不是实现契约；
 已实现边界见 [TressFX 资产导入](../../contracts/tressfx-asset-import.md)。资产路线与选项记录见
 [hair-pipeline-options.md](hair-pipeline-options.md)。
+
+## 当前执行重点：物理交互（2026-10-24）
+
+用户确认暂缓渲染，先完成复位、连续运动/坐标空间与碰撞验收。主线程规划管理，
+子任务分别负责复位、空间/时间审计与外部验证；不新增 runtime test 标志。
+验收记录见 [物理交互执行记录](../../rationale/tressfx5-hair-physics-record.md)。
+
+| 分项 | 本轮目标 | 验收方式 | 当前状态 |
+| --- | --- | --- | --- |
+| 跳变复位 | 首次姿态、seek、clip 切换同步重置 current/previous/prevPrev，清除旧速度 | GTest 状态/参数断言；源码三 buffer 赋值审查、实际 GPU 事件日志与外部截图 | 已实现，模块/事件/图像烟测通过；GPU 逐点 trace 已可用（验证记录 §5.1），reset 专项 trace 尚未单独采集 |
+| 空间一致性 | 根骨、胶囊、代理在同一发丝空间内；placement 变化时三份历史保持世界语义 | 世界空间等价推导、独立 Verlet oracle、正式 Female 烟测 | 已实现局部历史 + placement 换基与 5 项世界历史/惯性测试；共同 Actor 移动的运行时夹具已落地（正常 Console `mesh transform/offset/sweep`，60 Hz 短采集命令全被接受、placement 窗口 0 reset），GPU 逐点 trace 已实现（验证记录 §5.1），placement 专属数值惯性已用 v2 trace 采集：200 cm sweep 根点差 0.0016 cm、发梢最大 32.97/均值 9.68/尾段 7.62 cm；旋转/teleport 未做，见 [世界历史记录](../../rationale/tressfx5-hair-world-history-record.md)、[验证记录](../../rationale/tressfx5-hair-verification-record.md) |
+| 时间控制 | 冻结快照传递游戏时钟，区分动画暂停与游戏暂停 | 时钟模块测试；外部控制以实际能力为准 | 已实现，帧时钟及 ScriptRuntime 冻结时钟过滤用例通过；正式普通 mesh 烟测通过 |
+| 连续运动 | 连续 Idle/Walk、seek 前后、切片与侧/背接触审阅 | 30/60/120 Hz 短烟测；可复用 600 s 长烟测 | 修正 +Z 机位后三档 27 图完成，旧失败图保留；600 s 未执行 |
+| 碰撞质量 | 穿脸/颈/肩背、接触抖动与胶囊/SDF 顺序冲突 | 数值模块测试加真实动画审阅；像素差不代替穿透深度 | 现有位置投影语义保持；接触 smoke 已拍，完整数值质量未验收 |
+| 源步长/参数 | 源 0.0125 s + 最多 2 次循环、阻尼、VSP 140 cm、曲线与碰撞语义 | 固定源行号的闭式推导、纯函数测试、契约对照 | 原生调度已实施（2026-10-24）：GPU/CPU 均按 n=0/1/2 × 0.0125 s、reset 首轮继续后续 pass、SDF clear/splat 每帧一次而 collide 每 substep；`maxDt` 仅兼容旧 `Step`。VSP/LocalShape 逐顶点作者曲线数据路径已对齐（可选数组、800 B UBO、flags、长度与 0.95 校验、CPU/shader 消费），临时 SM 的 32 项曲线烟测已确认 `vspcurve=32/localshapecurve=32`、finite=0；正式资产无曲线数据仍走 fallback。新增 9 项调度/动态/历史测试；阶段 4a 再增 12 项曲线/UBO/导入测试，阶段 3 再增 5 项 trace 格式/往返测试，多实例再增 1 项 key 测试（`hair_asset_tests` 全量 254）。60 Hz Debug 启动烟测 shader `failed=0`、ResetPositions 有 `substeps=`、无 VUID、stderr 0。见 [时间/参数记录](../../rationale/tressfx5-hair-timing-params-record.md) §3.3/§6 |
+| 验证准备 | 三目标的验证矩阵、采集/检查工具、缺口 | 外部 Console 烟测、证据检查器、GPU readback 方案 | 工具与矩阵已就绪；placement 夹具已落地；一次性 `hair trace` GPU 只读回读已实现并跑通 120 帧/40 guides 短 trace（finiteCount=0、段长比 p99/max、trace 开关 dispatch 一致），逐帧 dt 分布、接触抖动与 VSP A/B 仍未实现；v3 trace 已读回碰撞前 SDF/胶囊最大穿透，见 [验证记录 §5.1](../../rationale/tressfx5-hair-verification-record.md) |
+| 后续物理能力 | 摩擦/速度响应、真实 `.tfxbone`/作者曲线数据、专门快速转头夹具 | 独立设计与对应验收 | 多实例独立状态已实现（per-placement RenderableObject，双发丝烟测 objects=2/guides=80668）；`.tfxbone` parser/映射 + GPU 加权 `InitialPos`/`SkinningQuat` 已接入（临时 75/25、100% Chest 烟测，无 VUID），但本地无真实 `.tfxbone` 资产、正式 Female 仍单根骨；摩擦/真实曲线导出/快速转头夹具仍未纳入 |
+
+### UE5 物理效果对照决策（2026-10-24）
+
+用户补充目标为“尽量复刻 UE5 里面的头发物理效果”。接下来的直接算法/参数基线固定为
+`GPUOpenSoftware/UnrealEngine` 的 `TressFX5-5.4.4`、
+revision `61f8dd9b51b88d41937ef8d73618aac778642f41`；不能仅凭参数同名或截图相似
+宣称对齐。UE 内置 Groom 同时作为效果与能力参照，分别记录资料依据和未核实部分，
+不把它与 AMD 插件称为同一套 solver。
+
+Epic UE5.4 文档描述的内置 Groom 物理为 Niagara/GPU 上的 XPBD，提供 Rods/Springs
+模型，以及静/动摩擦、黏性、local linear/angular velocity scale 和 teleport distance
+等控制；这些用于整理能力差异，不直接作为当前 TressFX 参数的同义替换。
+资料见 §13 的两份 UE5.4 官方物理文档。
+介绍文档只能说明能力与概念；未读取对应源码的部分保持未核实，不能据此认定
+某个具体求解、摩擦或惯性实现已被证明，更不能与当前 TressFX 参数直接等同。
+
+用户随后明确：**UE 侧主要看代码与物理分析，不准备、构建或启动 UE，
+不采集 UE 截图或运行轨迹。** 现有参考检出只有插件、engine patch、Maya 资产和工具，
+README 提到的 `Asset/Project/UE544TFX` 未提交；可运行工程不再作为本轮前置条件。
+主要对照证据是固定 revision 的 host/shader 公式及单位、空间、历史、调度审计，
+配合由公式推导的纯 CPU oracle 和独立数值分析。VL 的实际运行、数值采集与场景验证
+可独立推进；已完成的 30/60/120 Hz 图片、复位日志及模块测试边界继续以执行记录为准。
+“效果接近”按同输入源码语义和可测物理响应评估，不宣称与 UE 实测一致。
+“忠实复现源行为”与“物理合理性”分别记账：即使源常量/循环看似特殊，也先追调用上下文、
+单位与累计物理时间，再判断它的含义，不机械照抄或未经论证更改。
+
+源码语义与物理响应对照先冻结一份输入及推导清单：
+
+| 对照项 | 固定内容 |
+| --- | --- |
+| guide 几何 | 同一组曲线、顺序/身份、每根点数、rest length、根固定点与绑定；发生重采样时另记误差 |
+| 角色运动 | 同骨骼动画/采样时刻、根运动模式及 Actor placement 轨迹；甩头与整体移动分别测 |
+| 单位与空间 | 厘米/米转换、轴向、模型/世界空间、碰撞代理及骨骼变形保持可追溯对应 |
+| 参数与外力 | TressFX 数值/公式逐项对照，固定重力、风、阻尼与约束；Groom 能力另表记录，缺源码的实现不作等价断言 |
+| 时间与初始化 | 固定输入 dt 序列、预热时长/步数、开始姿态、三份历史及 seek/clip/teleport 的 reset 约定 |
+| 分析与观察 | 源公式推导可检验的数值期望；VL 固定相机/采样时刻观察 guide、接触与轮廓，不依赖 UE 出图 |
+
+实施优先级先由固定源的遗漏决定，再由能力差异决定：
+
+1. **共同 Actor placement 运动是最高优先源对齐缺口。** 源 TressFX 的蒙皮目标与位置历史
+   包含世界变换：patch `ApplyVertexBoneSkinning` 在 8304..8308 行组合
+   `PrimitiveData.LocalToWorld`，Integration 在 8432..8433 行把 world cm 转 world m，
+   SDF 代理也组合世界变换（9765..9766 行）。VL 当前相对 palette 的空间一致性测试只证明根点/碰撞体对应，
+   不能证明共同移动时的发丝惯性。先审计并修复仿真空间、历史位置和整体平移/转身的关系；
+   这属于恢复既有 TressFX 运动语义，不能归入额外 Groom 能力。
+2. **源主路径步长/循环差异（2026-10-24 已实施）。** `TressFXCoreSimulation.cpp` 在
+   935 行保存组件 dt、941 行把 `Instance->TimeStep` 设为 0.0125、1013 行最多循环两次，
+   每次给 Integration/Length 传该固定值，1217 行再从局部输入 dt 扣 0.0167。
+   152/271 行的 Integration 参数 clamp 不能代表上层实际调度。VL 现在 GPU 与 CPU
+   共用 `PlanGuideSubsteps`：按冻结 delta 得 0/1/2 个 0.0125 s substep，reset 首轮
+   继续后续 pass，风帧/时钟/历史每帧只提交一次；`maxDt` 只保留给旧 `Step`。
+   剩余风险（n==0 帧不推进 `Guides.Frame`、每 substep 无随机风幅值、30/48 Hz
+   dispatch 翻倍的性能）见时间/参数记录 §6.5、§8。
+3. 建立甩头、转身、整体启停、脸/颈/肩背接触及传送夹具。分别覆盖连续运动与应复位跳变，
+   对同一输入留存固定源的公式/空间/时序推导、纯 CPU oracle 与 VL 验证记录；
+   不要求 UE 运行，Groom 能力参考另列。
+4. 采集选定 guide 的根到梢轨迹、发梢相对头部的滞后、启停后的振幅衰减、
+   段长伸长比、碰撞穿透深度及静置接触抖动。报告峰值/分位值与时间曲线，
+   有限值检查独立于图片；数值采集尚未具备时明确未验收。误差阈值按量纲、解析特例、
+   独立 oracle、约束边界和测试数值容差确立，场景质量目标另列，不等待 UE 采集。
+5. 补齐其余源参数面差异：VSP 的 `length(new-2*old+oldOld)` 未除 dt²，是二阶
+   位置差幅值。源默认 1.4 world m 对应 140 cm，VL 当前 5000 cm 不等价；
+   源 VSP/LocalShape 作者曲线按 `i/N` 采样，VL 已提供逐顶点数组数据路径、
+   800 B UBO 与 CPU/shader 消费，但真实 Maya 曲线尚未采样导出，正式资产仍走
+   VSP 线性/LocalShape 单标量回退。默认 global shape/VSP 开关与强度、多骨
+   `.tfxbone`、MT 根三角绑定等也需分别对照，不将当前简化形式记作源参数完整对齐。
+6. 对照固定 revision 的 host 参数、StrandLevel/VSP、积分/约束、碰撞和 reset 路径，
+   先补源已有但未移植的行为。源 SDF 对 previous 的写回在 patch 8051 行已注释，
+   因此不能把添加 previous 速度响应/摩擦称为恢复该源分支；源未提供的摩擦、体积、
+   CCD/self-collision 或 XPBD 等按独立能力设计，并标注为效果扩展。
+
+帧率适配与物理时间策略分开决策。2026-10-24 起 VL 改为源原生调度：n=0/1/2 个
+固定 0.0125 s substep，每帧物理时间只能是 0/0.0125/0.025 s；`maxDt` 不再限制
+GPU 路径，只服务旧 `GuideSimulation::Step`。30/60/120 Hz 烟测仍不等于帧率无关性
+通过，逐帧 dt/dispatch 计数与逐点轨迹读回尚未实现。不为贴近 Groom 立即改成
+XPBD 或给现有参数重新赋义。
+
+本轮只收敛目标与验收，不改 solver。渲染继续延后，只保留足够审阅 guide 轨迹、
+轮廓和身体接触的可视化；Marschner、透明/抗锯齿和阴影不作为物理对照的前置门槛。
+
+下文 M0..M4 是原始完整移植路线；其中 UE 出图/参考工程条目保留为历史路线，
+本轮由上述源码与物理分析决策覆盖，不作为实施或验收前置条件。
+不能用原先的渲染优先顺序阻塞本轮物理交互。
+以下各批记录按当时范围保留；其中“没有模拟/没有骨架”不代表当前状态。
 
 ## 首批落地范围（2026-10-22）
 
@@ -12,7 +114,7 @@
 - 以本地 5.0 exporter 核实：产品版本是 5.0，实际 `.tfx` header version 仍为 **4.0**；
   `.tfxbone` 实际按 bone count/name/strand weights 流写入，不能直接套未使用的
   `TressFXTFXBoneFileHeader`。
-- 当前没有真实女性 `.tfx` 导出；M0 资产验收、M0.5 shader/渲染 spike 与 M1 均未完成。
+- 首批当时没有真实女性 `.tfx` 导出；当时 M0 资产验收、M0.5 shader/渲染 spike 与 M1 均未完成。
 - 2026-10-21 已关闭参考仓库 sparse checkout；该分支只有插件、引擎 patch、Maya 资产和工具，
   README 所称 `Asset/Project/UE544TFX` 未提交。后续 UE 画面对照依赖参考工程另行准备。
 - 验证：隔离工作树 MinGW Debug 的 `hair_asset_tests` / `vl_tfx_inspect` 构建通过，
@@ -125,8 +227,8 @@ M1 的 Marschner/覆盖率仍未验收。
   `graphicsPipelineBuilder.cpp` 的 `alphaToCoverageEnable` 固定为 false。
 - 角色侧已有 GPU 蒙皮与 GASP 骨架；发根可以绑到头骨/头皮骨骼。
 - Hair 着色模型在 2026-09-12 被删除；`common/hairPathScattering.glsl` 仍在。
-- 已有 `.tfx` guide 导入与静态 camera-facing ribbon；没有 `.tfxbone` / `.tfxmesh`
-  导入、follow 生成、Marschner、发丝阴影或发丝模拟。当前契约以
+- 已有 `.tfx` guide 导入、camera-facing ribbon、CPU/GPU guide solver、单根骨驱动与
+  逐帧蒙皮代理 SDF；没有 `.tfxbone` / `.tfxmesh` 导入、follow 生成、Marschner或发丝阴影。当前契约以
   [TressFX 资产导入](../../contracts/tressfx-asset-import.md) 为准。
 
 ## 3. 总体路线
@@ -323,18 +425,24 @@ V0 只加 `hairForward`；V1 加 `hairDeepShadow`；V2 加 `hairSimulation`。
 ### 7.1 设计
 
 - guide/follow：只模拟 guide（约 512–2048 根），follow 由 guide 插值/程序化生成。
-- 约束：距离（拉伸）、弯曲、local/global shape、碰撞、摩擦；固定步长 + 2–4 substep。
+- 约束：距离（拉伸）、弯曲、local/global shape、碰撞；摩擦另行设计。
+  VL 已按源原生调度落地：每帧 n=0/1/2 个固定 0.0125 s substep，物理时间只能是
+  0/0.0125/0.025 s；`maxDt` 仅兼容旧 `Step`，见上述物理效果对照决策与
+  [时间/参数记录](../../rationale/tressfx5-hair-timing-params-record.md) §6。
+  原固定步长 + 2–4 substep 的 accumulator 候选仍不作为默认路线。
 - 外力：重力 + 程序化风；阻尼分根/中/梢。
-- 碰撞：`.tfxmesh` 生成 SDF；V2 先 SDF + capsule，V3 再优化。
+- 碰撞已使用普通 OBJ 代理的逐帧蒙皮 SDF + capsule；`.tfxmesh` 导入属于独立缺口。
 - 蒙皮：发根随头骨；`.tfxbone` 的 16 骨权重映射到 VL 骨架。
 - VSP：高速移动时传播根部速度，避免发丝拉长。
 - LOD：V3 接 continuous LOD；V2 先固定 guide 数。
 
 ### 7.2 GPU 边界
 
-- 模拟在 compute，双缓冲，CPU 零回读。
+- 模拟在 compute，current/previous/prevPrev 三份位置历史，正常帧 CPU 零回读。
 - 发丝位置/切线写 storage buffer；渲染 pass 直接读。
-- 固定 dt（60/120 Hz），不跟可变帧时间；与现有动画/物理时钟分离。
+- VL 已按源 n=0/1/2 × 0.0125 s 调度（GPU 与 CPU `StepFrame`）；冻结时钟保证
+  同一帧只消费一次，n=0 帧不消费 reset/clock/history。游戏暂停/time-scale 的
+  冻结语义保持，reset 首轮按源继续录制后续 pass。
 - 模拟 pass 失败时保留上一帧姿势，不能破坏渲染。
 
 ## 8. 代码落点
@@ -414,15 +522,17 @@ V0 只加 `hairForward`；V1 加 `hairDeepShadow`；V2 加 `hairSimulation`。
   LOD 切换无明显跳变。
 
 > 工期是粗估，取决于资产导出、UE 参考环境、以及是否已有 TAA。
-> 不建议把 M3/M4 与 M1 并行，模拟会掩盖渲染问题。
+> 本轮按用户授权先推进 M3 物理交互，渲染里程碑暂缓；不得把基础模拟落地等同于 M3 质量验收完成。
 
 ## 10. 测试与验证
 
 - **单元测试**：`.tfx`/`.tfxbone`/`.tfxmesh` 解析、偏移/越界、bbox、骨骼映射。
 - **离线数值**：SDF 生成、约束求解、follow 插值；放 `vl_offline_core`。
-- **图像对照**：UE5.4 同机位截图 vs VulkanLearn；固定曝光/灯光；
-  用 `tool/validation/` 的像素/ROI 统计。
-- **稳定性**：固定 dt 下长时间运行、快速转头、传送/大幅位移。
+- **历史渲染规划中的图像对照**：UE5.4 同机位截图 vs VulkanLearn；
+  原设固定曝光/灯光及像素/ROI 统计。本轮 UE 侧不执行、不作为前置，
+  物理验收按上述固定源码/独立数值分析与 VL 场景验证推进。
+- **稳定性**：30/60/120 Hz 变量步长下运行、快速转头、传送/大幅位移；
+  外部截图/日志烟测与长度/有限值/穿透的数值验证分别记账。
 - **性能**：20k render strands / 2k guides 的 GPU 时间、overdraw、显存。
 - **回归**：现有 forwardTransparent/GBuffer/shadow 路径不受影响；
   shader cache/hot reload 正常。
@@ -465,6 +575,8 @@ M0.5 spike 验证可行性后再冻结。
 - [TressFX5-5.4.4 分支](https://github.com/GPUOpenSoftware/UnrealEngine/tree/TressFX5-5.4.4)
 - [TressFX 5.0 Developer Guide（PDF，主要写 UE4.26/4.27）](https://gpuopen.com/download/TressFX5.0_DeveloperGuide.pdf)
 - [TressFX 4.1 standalone（MIT）](https://github.com/GPUOpen-Effects/TressFX)
+- [Epic UE5.4 Hair Physics Overview](https://dev.epicgames.com/documentation/en-us/unreal-engine/hair-physics-in-unreal-engine---overview?application_version=5.4)
+- [Epic UE5.4 Enabling Physics Simulation on Grooms](https://dev.epicgames.com/documentation/en-us/unreal-engine/enabling-physics-simulation-on-grooms-in-unreal-engine?application_version=5.4)
 - [hair-pipeline-options.md](hair-pipeline-options.md)
 - [shading-model-alignment-plan.md](shading-model-alignment-plan.md) §2.4
 - [animation-runtime-skinning.md](../../contracts/animation-runtime-skinning.md)

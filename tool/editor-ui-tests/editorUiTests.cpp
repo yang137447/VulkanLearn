@@ -1447,6 +1447,142 @@ TEST_F(EditorUiTest, BlueprintAssetCameraCreationAndSubtreeRemovalUseDocumentCom
         std::get<ModifyAssetDocumentPayload>(sink.commands.back().payload).changes[0].value).empty());
 }
 
+// 毛发组件的作者入口：父级必须来自组件树里的 mesh，绑定来源不需要作者再写场景对象名。
+TEST_F(EditorUiTest, BlueprintAssetTressfxComponentUsesSelectedMeshAsParent)
+{
+    OpenBlueprintAsset();
+    auto& blueprint = snapshot.blueprintDocuments[0].document;
+    blueprint["components"] = nlohmann::json::array({
+        {{"id", "body"}, {"type", "mesh"}, {"modelPath", "Maps/SC_x/Meshes/SM_body.json"}},
+        {{"id", "head"}, {"type", "mesh"}, {"parent", "body"},
+         {"modelPath", "Maps/SC_x/Meshes/SM_head.json"}}});
+    snapshot.blueprintDocuments[0].documentRevision++;
+    Refresh();
+    Click("[data-action=blueprint-asset-select-component][data-index='0']");
+    SelectOption("blueprint-asset-component-kind", "tressfx");
+    SetValue("blueprint-asset-component-mesh",
+        "Maps/SC_tressfx_female/Meshes/SM_female_hair_dynamic.json");
+    Click("#blueprint-asset-component-add");
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    const auto nodes = std::get<nlohmann::json>(
+        std::get<ModifyAssetDocumentPayload>(sink.commands.back().payload).changes[0].value);
+    ASSERT_EQ(nodes.size(), 3u);
+    EXPECT_EQ(nodes[2]["type"], "tressfx");
+    EXPECT_EQ(nodes[2]["parent"], "body");
+    EXPECT_EQ(nodes[2]["modelPath"], "Maps/SC_tressfx_female/Meshes/SM_female_hair_dynamic.json");
+    EXPECT_EQ(nodes[2]["weights"], "auto");
+}
+
+TEST_F(EditorUiTest, BlueprintAssetTressfxComponentRequiresMeshParent)
+{
+    // 默认蓝图只有 scene + camera 组件：没有绑定来源时 UI 必须拒绝，而不是交给加载期报错。
+    OpenBlueprintAsset();
+    Click("[data-action=blueprint-asset-select-component][data-index='0']");
+    SelectOption("blueprint-asset-component-kind", "tressfx");
+    SetValue("blueprint-asset-component-mesh",
+        "Maps/SC_tressfx_female/Meshes/SM_female_hair_dynamic.json");
+    Click("#blueprint-asset-component-add");
+    Refresh();
+    EXPECT_TRUE(sink.commands.empty());
+    auto* notice = document->GetElementById("editor-notice");
+    ASSERT_NE(notice, nullptr);
+    EXPECT_NE(notice->GetInnerRML().find("TressFX component"), std::string::npos);
+    EXPECT_NE(notice->GetInnerRML().find("Mesh component"), std::string::npos);
+}
+
+TEST_F(EditorUiTest, BlueprintAssetTressfxDetailsWriteHairFieldsAndHideTransform)
+{
+    OpenBlueprintAsset();
+    auto& blueprint = snapshot.blueprintDocuments[0].document;
+    blueprint["components"] = nlohmann::json::array({
+        {{"id", "body"}, {"type", "mesh"}, {"modelPath", "Maps/SC_x/Meshes/SM_body.json"}},
+        {{"id", "hair"}, {"type", "tressfx"}, {"parent", "body"},
+         {"modelPath", "Maps/SC_tressfx_female/Meshes/SM_female_hair_skinned.json"},
+         {"weights", "auto"}}});
+    snapshot.blueprintDocuments[0].documentRevision++;
+    Refresh();
+    Click("[data-action=blueprint-asset-select-component][data-index='1']");
+    Refresh();
+    // 毛发没有局部 TRS / 图元碰撞 / 实例白名单控件。
+    EXPECT_EQ(document->GetElementById("blueprint-asset-component-1-position-0"), nullptr);
+    EXPECT_EQ(document->GetElementById("blueprint-asset-component-1-collisionShape-0"), nullptr);
+    EXPECT_EQ(document->GetElementById("blueprint-asset-component-instance-1-weights"), nullptr);
+    SetValue("blueprint-asset-component-1-rootBone-0", "Head_M");
+    SelectOption("blueprint-asset-component-1-weights-0", "mesh");
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    const auto nodes = std::get<nlohmann::json>(
+        std::get<ModifyAssetDocumentPayload>(sink.commands.back().payload).changes[0].value);
+    ASSERT_EQ(nodes.size(), 2u);
+    EXPECT_EQ(nodes[1]["rootBone"], "Head_M");
+    EXPECT_EQ(nodes[1]["weights"], "mesh");
+    EXPECT_EQ(nodes[1]["parent"], "body");
+}
+
+// 关卡/资产边界：毛发绑定字段只在蓝图资产页作者。Scene Details 只读展示，
+// 不生成可编辑控件，也不产生 componentOverrides 或运行时动作。
+TEST_F(EditorUiTest, SceneTressfxComponentFieldsAreReadOnly)
+{
+    snapshot.activeDocument.reset(); snapshot.documentTabs.clear();
+    EditorSceneActorSnapshot actor;
+    actor.type = EditorSceneActorType::Script; actor.identity = "blueprintInstance|hero";
+    actor.worldGeneration = 42; actor.displayName = "Hero";
+    actor.scriptClass = "Gameplay.HeroBlueprint";
+    actor.scriptBlueprintPath = "Maps/SC_x/Blueprints/BP_hero.json";
+    actor.scriptComponents = nlohmann::json::array({
+        {{"id", "body"}, {"type", "mesh"}, {"modelPath", "Maps/SC_x/Meshes/SM_body.json"}},
+        {{"id", "hair"}, {"type", "tressfx"}, {"parent", "body"},
+         {"modelPath", "Maps/SC_tressfx_female/Meshes/SM_female_hair_dynamic.json"},
+         {"rootBone", "Head_M"}, {"weights", "mesh"}}});
+    snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
+        std::vector<EditorSceneActorSnapshot>{actor});
+    snapshot.selectedActorIdentity = actor.identity;
+    Refresh();
+    EXPECT_EQ(document->GetElementById("script-component-1-modelPath-0"), nullptr);
+    EXPECT_EQ(document->GetElementById("script-component-1-rootBone-0"), nullptr);
+    EXPECT_EQ(document->GetElementById("script-component-1-weights-0"), nullptr);
+    EXPECT_EQ(document->GetElementById("script-component-instance-1-weights"), nullptr);
+    auto* details = document->GetElementById("actor-details-content");
+    ASSERT_NE(details, nullptr);
+    const std::string markup = details->GetInnerRML();
+    EXPECT_NE(markup.find("Hair Asset"), std::string::npos);
+    EXPECT_NE(markup.find("SM_female_hair_dynamic.json"), std::string::npos);
+    EXPECT_NE(markup.find("Head_M"), std::string::npos);
+    EXPECT_NE(markup.find("From Mesh"), std::string::npos);
+    EXPECT_NE(markup.find("Blueprint tab"), std::string::npos);
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+// 内联 actor 的组件虽然属于场景数据，毛发绑定仍不在关卡侧作者：控件保持只读，
+// 否则会出现“看起来能改、实际被 handler 丢弃”的假编辑。
+TEST_F(EditorUiTest, SceneTressfxComponentFieldsStayReadOnlyForInlineActors)
+{
+    snapshot.activeDocument.reset(); snapshot.documentTabs.clear();
+    EditorSceneActorSnapshot actor;
+    actor.type = EditorSceneActorType::Script; actor.identity = "blueprintInstance|inline";
+    actor.worldGeneration = 7; actor.displayName = "Inline";
+    actor.scriptClass = "Gameplay.InlineBlueprint";
+    actor.scriptComponents = nlohmann::json::array({
+        {{"id", "body"}, {"type", "mesh"}, {"modelPath", "Maps/SC_x/Meshes/SM_body.json"}},
+        {{"id", "hair"}, {"type", "tressfx"}, {"parent", "body"},
+         {"modelPath", "Maps/SC_tressfx_female/Meshes/SM_female_hair_dynamic.json"},
+         {"weights", "auto"}}});
+    snapshot.sceneActors = std::make_shared<const std::vector<EditorSceneActorSnapshot>>(
+        std::vector<EditorSceneActorSnapshot>{actor});
+    snapshot.selectedActorIdentity = actor.identity;
+    Refresh();
+    EXPECT_EQ(document->GetElementById("script-component-1-modelPath-0"), nullptr);
+    EXPECT_EQ(document->GetElementById("script-component-1-rootBone-0"), nullptr);
+    EXPECT_EQ(document->GetElementById("script-component-1-weights-0"), nullptr);
+    auto* details = document->GetElementById("actor-details-content");
+    ASSERT_NE(details, nullptr);
+    const std::string markup = details->GetInnerRML();
+    EXPECT_NE(markup.find("(descriptor default)"), std::string::npos);
+    EXPECT_NE(markup.find("Auto (from parent mesh)"), std::string::npos);
+    EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
 TEST_F(EditorUiTest, ActorLightCreationAndPhotometryEditUseAtomicDocumentDraft)
 {
     OpenBlueprintAsset();
@@ -2781,6 +2917,257 @@ TEST_F(EditorUiTest, MeshLevelAndTextureOpenReadOnlyJsonAndSceneRequestsWorldLoa
     EXPECT_EQ(runtimeSink.actions[0].stringValue, "Meshes/SM_test.json");
     EXPECT_EQ(runtimeSink.actions[1].type, UiActionType::LoadWorld);
     EXPECT_EQ(runtimeSink.actions[1].stringValue, "Maps/SC_test.json");
+}
+
+TEST_F(EditorUiTest, TressfxHairViewportBlocksSkinnedAssetsAndPreviewsUnskinnedOnes)
+{
+    // 毛发视口只接受无 simulation.skinning 的 tressfx 资产；带 skinning 的资产
+    // 不请求预览，并在状态区说明它由蓝图 TressFX 组件承载。
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+    catalog->revision = 3;
+    EditorJsonAssetEntry skinned{"Meshes/SM_hair_skinned.json", EditorAssetKind::Mesh, "Skinned hair"};
+    skinned.type = "tressfx";
+    skinned.tressfxSkinning = true;
+    EditorJsonAssetEntry dynamic{"Meshes/SM_hair_dynamic.json", EditorAssetKind::Mesh, "Dynamic hair"};
+    dynamic.type = "tressfx";
+    catalog->assets = {skinned, dynamic};
+    snapshot.assetCatalog = catalog;
+    Refresh();
+    ShowContentBrowser();
+    runtimeSink.actions.clear();
+
+    auto* tile = BrowserItem("Meshes/SM_hair_skinned.json");
+    ASSERT_NE(tile, nullptr);
+    tile->DispatchEvent("dblclick", {});
+    Refresh();
+    EXPECT_TRUE(runtimeSink.actions.empty())
+        << "skinned tressfx assets must not request a model preview";
+    EXPECT_FALSE(document->GetElementById("resource-hair-tools")->IsVisible());
+
+    // 工作线程发布作者文档后，守卫说明成为权威状态（目录过期时也能挡住）。
+    auto json = std::make_shared<EditorJsonDocumentSnapshot>();
+    json->revision = 1;
+    json->assetPath = "Meshes/SM_hair_skinned.json";
+    json->kind = EditorAssetKind::Mesh;
+    json->type = "tressfx";
+    json->tressfxSkinning = true;
+    snapshot.jsonDocument = json;
+    Refresh();
+    EXPECT_FALSE(document->GetElementById("resource-hair-tools")->IsVisible());
+    EXPECT_NE(document->GetElementById("resource-preview-status")->GetInnerRML().find(
+        "Blueprint TressFX component"), std::string::npos);
+
+    // 无 skinning 的毛发：进入单对象预览并显示毛发工具条。
+    runtimeSink.actions.clear();
+    ShowContentBrowser();
+    tile = BrowserItem("Meshes/SM_hair_dynamic.json");
+    ASSERT_NE(tile, nullptr);
+    tile->DispatchEvent("dblclick", {});
+    Refresh();
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions[0].type, UiActionType::PreviewModel);
+    EXPECT_EQ(runtimeSink.actions[0].stringValue, "Meshes/SM_hair_dynamic.json");
+    EXPECT_TRUE(document->GetElementById("resource-hair-tools")->IsVisible());
+    EXPECT_TRUE(document->GetElementById("resource-hair-reset")->HasAttribute("disabled"));
+
+    // 作者文档是权威：目录说 tressfx、文档 type=mesh 时，工具条回到隐藏状态，
+    // 也不会留着上一条资产的守卫文案。
+    runtimeSink.actions.clear();
+    auto mesh = std::make_shared<EditorJsonDocumentSnapshot>();
+    mesh->revision = 2;
+    mesh->assetPath = "Meshes/SM_hair_dynamic.json";
+    mesh->kind = EditorAssetKind::Mesh;
+    mesh->type = "mesh";
+    snapshot.jsonDocument = mesh;
+    Refresh();
+    EXPECT_FALSE(document->GetElementById("resource-hair-tools")->IsVisible());
+    EXPECT_TRUE(document->GetElementById("resource-preview-status")->GetInnerRML().find(
+        "Blueprint TressFX component") == std::string::npos);
+}
+
+TEST_F(EditorUiTest, TressfxHairViewportRotatesTheModelOnLeftDragAndResets)
+{
+    ShowContentBrowser();
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+    catalog->revision = 4;
+    EditorJsonAssetEntry hair{"Meshes/SM_hair.json", EditorAssetKind::Mesh, "Hair"};
+    hair.type = "tressfx";
+    catalog->assets = {hair};
+    snapshot.assetCatalog = catalog;
+    Refresh();
+    document->QuerySelector("#asset-list button")->DispatchEvent("dblclick", {});
+    Refresh();
+
+    // 新的预览 World 发布后才有可旋转的对象；generation 必须大于请求时看到的代数。
+    auto actors = std::make_shared<std::vector<EditorSceneActorSnapshot>>();
+    EditorSceneActorSnapshot actor;
+    actor.worldGeneration = 100;
+    actor.scenePath = "Maps/SC_model_preview/SC_model_preview.json";
+    actor.identity = "mesh|preview_model";
+    actor.sceneObjectIdentity = "preview_model";
+    actors->push_back(actor);
+    snapshot.sceneActors = actors;
+    Refresh();
+
+    const auto rect = panel->GetSceneViewportRect();
+    const int x = int(rect.x + rect.width / 2);
+    const int y = int(rect.y + rect.height / 2);
+    context->ProcessMouseMove(x, y, 0);
+    runtimeSink.actions.clear();
+
+    // 左键拖 = 转模型；动作携带 UI 累计的绝对 yaw/pitch。
+    context->ProcessMouseButtonDown(0, 0);
+    context->ProcessMouseMove(x + 20, y + 10, 0);
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::RotatePreviewModel);
+    EXPECT_EQ(runtimeSink.actions.back().previewRotation.worldGeneration, 100u);
+    EXPECT_FLOAT_EQ(runtimeSink.actions.back().previewRotation.yaw, 10.0f);
+    EXPECT_FLOAT_EQ(runtimeSink.actions.back().previewRotation.pitch, 5.0f);
+    context->ProcessMouseMove(x + 40, y + 10, 0);
+    ASSERT_EQ(runtimeSink.actions.size(), 2u);
+    EXPECT_FLOAT_EQ(runtimeSink.actions.back().previewRotation.yaw, 20.0f);
+    context->ProcessMouseButtonUp(0, 0);
+
+    // 中键仍是相机平移：毛发视口不能把两种手势合并。
+    runtimeSink.actions.clear();
+    context->ProcessMouseButtonDown(2, 0);
+    context->ProcessMouseMove(x + 60, y + 10, 0);
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::NavigateModelPreview);
+    EXPECT_EQ(runtimeSink.actions.back().previewCamera.mode, ModelPreviewNavigation::Pan);
+    context->ProcessMouseButtonUp(2, 0);
+
+    // 复位按钮只排队一次 ResetPositions；不重载预览世界。
+    runtimeSink.actions.clear();
+    Click("#resource-hair-reset");
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::ResetHairSimulation);
+    EXPECT_TRUE(runtimeSink.actions.back().stringValue.empty());
+}
+
+TEST_F(EditorUiTest, TressfxHairViewportEditsSimulationValuesAndStagesThemToTheAsset)
+{
+    ShowContentBrowser();
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+    catalog->revision = 6;
+    EditorJsonAssetEntry hair{"Meshes/SM_hair.json", EditorAssetKind::Mesh, "Hair"};
+    hair.type = "tressfx";
+    catalog->assets = {hair};
+    snapshot.assetCatalog = catalog;
+    Refresh();
+    auto* tile = BrowserItem("Meshes/SM_hair.json");
+    ASSERT_NE(tile, nullptr);
+    tile->DispatchEvent("dblclick", {});
+    auto json = std::make_shared<EditorJsonDocumentSnapshot>();
+    json->revision = 1;
+    json->assetPath = "Meshes/SM_hair.json";
+    json->kind = EditorAssetKind::Mesh;
+    json->type = "tressfx";
+    json->name = "Hair";
+    snapshot.jsonDocument = json;
+    Refresh();
+
+    // 作者文档快照提供当前值与 revision；面板只读这份投影。
+    EditorAssetDocumentResultPayload meshDocument;
+    meshDocument.assetPath = "Meshes/SM_hair.json";
+    meshDocument.documentRevision = 5;
+    meshDocument.document = {{"simulation", {{"damping", 0.01}, {"iterations", 5}}}};
+    snapshot.meshDocuments = {meshDocument};
+    Refresh();
+
+    // 实时覆盖只投递给已经发布的预览 World；没有代数时不排队（队列不绑定世界世代）。
+    auto actors = std::make_shared<std::vector<EditorSceneActorSnapshot>>();
+    EditorSceneActorSnapshot actor;
+    actor.worldGeneration = 100;
+    actor.scenePath = "Maps/SC_model_preview/SC_model_preview.json";
+    actor.identity = "mesh|preview_model";
+    actor.sceneObjectIdentity = "preview_model";
+    actors->push_back(actor);
+    snapshot.sceneActors = actors;
+    Refresh();
+
+    auto* section = document->GetElementById("resource-hair-simulation");
+    ASSERT_NE(section, nullptr);
+    ASSERT_TRUE(section->IsVisible());
+    // damping 是控件表第 3 项；初始值来自作者草稿，不是硬编码默认值。
+    auto* damping = document->GetElementById("hair-sim-2-0");
+    ASSERT_NE(damping, nullptr);
+    EXPECT_EQ(damping->GetAttribute<Rml::String>("value", ""), "0.01");
+    // 文案必须说明这是资产级保存：影响所有摆放，重载会复位模拟。
+    EXPECT_NE(section->GetInnerRML().find("every placement is affected"), std::string::npos);
+
+    // 拖动只发实时覆盖：不写资产、不重载。
+    runtimeSink.actions.clear();
+    sink.commands.clear();
+    damping->SetAttribute("value", "0.02");
+    damping->DispatchEvent("change", {});
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::SetHairSimulationParameter);
+    EXPECT_EQ(runtimeSink.actions.back().previewHairParameter.field, "damping");
+    EXPECT_EQ(runtimeSink.actions.back().previewHairParameter.valueCount, 1u);
+    EXPECT_FLOAT_EQ(runtimeSink.actions.back().previewHairParameter.values[0], 0.02f);
+    EXPECT_TRUE(sink.commands.empty()) << "live preview must not stage asset writes";
+    Refresh();
+    EXPECT_NE(section->GetInnerRML().find("Live preview in this viewport"), std::string::npos);
+
+    // 保存走标准 mesh.modify，revision 取自同一份文档快照。
+    sink.commands.clear();
+    Click("#hair-sim-save");
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands.back().type, EditorCommandType::ModifyMeshDocument);
+    EXPECT_EQ(sink.commands.back().expectedDocumentRevision, 5u);
+    const auto& payload = std::get<ModifyAssetDocumentPayload>(sink.commands.back().payload);
+    EXPECT_EQ(payload.assetPath, "Meshes/SM_hair.json");
+    bool sawDamping = false;
+    for (const auto& change : payload.changes)
+    {
+        if (change.field != "simulation.damping") continue;
+        sawDamping = true;
+        ASSERT_TRUE(std::holds_alternative<double>(change.value));
+        EXPECT_DOUBLE_EQ(std::get<double>(change.value), 0.02);
+    }
+    EXPECT_TRUE(sawDamping);
+}
+
+TEST_F(EditorUiTest, HairSimulationEditorStaysInsideTheHairAssetTab)
+{
+    // 资产级编辑不能泄漏到关卡侧：Simulation 段只属于毛发资产 tab，
+    // 关卡 Details 与资产页之外没有参数入口。
+    ShowContentBrowser();
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+    catalog->revision = 6;
+    EditorJsonAssetEntry hair{"Meshes/SM_hair.json", EditorAssetKind::Mesh, "Hair"};
+    hair.type = "tressfx";
+    catalog->assets = {hair};
+    snapshot.assetCatalog = catalog;
+    Refresh();
+    auto* tile = BrowserItem("Meshes/SM_hair.json");
+    ASSERT_NE(tile, nullptr);
+    tile->DispatchEvent("dblclick", {});
+    auto json = std::make_shared<EditorJsonDocumentSnapshot>();
+    json->revision = 1;
+    json->assetPath = "Meshes/SM_hair.json";
+    json->kind = EditorAssetKind::Mesh;
+    json->type = "tressfx";
+    json->name = "Hair";
+    snapshot.jsonDocument = json;
+    Refresh();
+    auto* section = document->GetElementById("resource-hair-simulation");
+    ASSERT_NE(section, nullptr);
+    ASSERT_TRUE(section->IsVisible());
+
+    // 回到关卡页面：资产页隐藏，毛发参数入口随之消失；关卡 Details 从未出现它。
+    Click("#workspace-viewport-tab");
+    Refresh();
+    EXPECT_FALSE(panel->IsResourceEditorVisible());
+    auto* save = document->GetElementById("hair-sim-save");
+    auto* actorDetails = document->GetElementById("actor-details-content");
+    ASSERT_NE(actorDetails, nullptr);
+    EXPECT_EQ(actorDetails->GetInnerRML().find("hair-sim"), std::string::npos);
+    EXPECT_EQ(actorDetails->GetInnerRML().find("simulation."), std::string::npos);
+    for (Rml::Element* parent = save == nullptr ? nullptr : save->GetParentNode();
+         parent != nullptr; parent = parent->GetParentNode())
+        EXPECT_NE(parent, actorDetails);
 }
 
 TEST_F(EditorUiTest, ResourceEditorDeduplicatesTabsAndReturnsToWorld)

@@ -1,4 +1,4 @@
-add_executable(script_tests scriptRuntimeTests.cpp scriptBlueprintAuthoringTests.cpp
+add_executable(script_tests scriptRuntimeTests.cpp tressfxComponentTests.cpp scriptBlueprintAuthoringTests.cpp
     scriptGameplayTests.cpp scriptAssetReloadTests.cpp scriptAssemblyReloadTests.cpp scriptBuildTests.cpp
     scriptPhysicsMeshGeometryTests.cpp
     scriptAnimationTests.cpp

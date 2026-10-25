@@ -28,6 +28,35 @@ layout(set = 0, binding = 4, std430) readonly buffer RestPositions
     vec4 positions[];
 } restPositions;
 
+// 多骨：每 strand 最多 4 个 (joint, weight)，palette 是当前 hair 局部的
+// 全骨架 bind→pose 矩阵。没有 .tfxbone 时 motion.w bit2=0，完全不读取。
+struct GpuStrandBones
+{
+    uvec4 indices;
+    vec4 weights;
+};
+layout(set = 0, binding = 14, std430) readonly buffer BoneWeights
+{
+    GpuStrandBones bones[];
+} boneWeights;
+layout(set = 0, binding = 15, std430) readonly buffer SkinningPalette
+{
+    mat4 matrices[];
+} skinningPalette;
+
+vec3 TressfxInitialPosition(uint point, uint pointsPerGuide, vec3 restPos)
+{
+    if ((uint(params.motion.w) & 4u) == 0u)
+        return (params.skinning * vec4(restPos, 1.0)).xyz;
+    GpuStrandBones influence = boneWeights.bones[point / pointsPerGuide];
+    mat4 weighted =
+        skinningPalette.matrices[influence.indices.x] * influence.weights.x +
+        skinningPalette.matrices[influence.indices.y] * influence.weights.y +
+        skinningPalette.matrices[influence.indices.z] * influence.weights.z +
+        skinningPalette.matrices[influence.indices.w] * influence.weights.w;
+    return (weighted * vec4(restPos, 1.0)).xyz;
+}
+
 void main()
 {
     uint point = gl_GlobalInvocationID.x;
@@ -40,16 +69,41 @@ void main()
 
     vec3 restPos = restPositions.positions[point].xyz;
     // 不可移动点整步保持在 InitialPos；可移动点只用它做 global shape 目标。
-    vec3 initialPos = (params.skinning * vec4(restPos, 1.0)).xyz;
+    vec3 initialPos = TressfxInitialPosition(point, pointsPerGuide, restPos);
 
     // VL 的不可移动集合 = 根前缀（TressFX 的 NumVerticesFromRootNoSimulation）
     // ∪ 导入逆质量 <= 0 的点。两者在后续 pass 都用 w == 0 表示。
     bool movable = local >= rootFixedPoints
         && restPositions.positions[point].w > 0.0;
 
-    // 与 TressFX 的 UpdateFinalVertexPositions 同序：prevPrev <- prev, prev <- current。
+    if (params.motion.y != 0.0)
+    {
+        // TressFX ResetPositions 同时写三份历史并立即返回，不叠加重力/global shape。
+        // VL 的 w 统一用可移动标记，保留根前缀 ∪ 导入固定点，不能照抄 rest.w。
+        vec4 resetPosition = vec4(initialPos, movable ? 1.0 : 0.0);
+        currentPositions.positions[point] = resetPosition;
+        previousPositions.positions[point] = resetPosition;
+        previousPreviousPositions.positions[point] = resetPosition;
+        return;
+    }
+
+    // SSBO 保留 hair 局部坐标，但三份历史要与源 world solver 一样留在原世界位置。
+    // w 是固定标记，不是齐次坐标；即使 w=0 也必须接受 placement 平移。
     vec4 current = currentPositions.positions[point];
     vec4 old = previousPositions.positions[point];
+    current.xyz = (params.historyToCurrentLocal * vec4(current.xyz, 1.0)).xyz;
+    old.xyz = (params.historyToCurrentLocal * vec4(old.xyz, 1.0)).xyz;
+    if (params.motion.z != 0.0)
+    {
+        // 暂停时只改变表示坐标，不 pin/shift 历史，也不抹掉暂停前的速度。
+        vec4 oldest = previousPreviousPositions.positions[point];
+        oldest.xyz = (params.historyToCurrentLocal * vec4(oldest.xyz, 1.0)).xyz;
+        currentPositions.positions[point] = current;
+        previousPositions.positions[point] = old;
+        previousPreviousPositions.positions[point] = oldest;
+        return;
+    }
+    // 与 TressFX 的 UpdateFinalVertexPositions 同序：prevPrev <- prev, prev <- current。
     previousPreviousPositions.positions[point] = old;
     previousPositions.positions[point] = vec4(current.xyz, current.w);
 
