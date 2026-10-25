@@ -1031,7 +1031,7 @@ GPU compute dispatch 不在模块套件内，由 main 启动烟测覆盖。
 | `hair set` / `SetHairSimulationParameter` | `build/bin/hair_asset_tests.exe --gtest_filter=TressfxLiveParams.*`；一次实机 `hair set` 看 `[TressFX] live param` |
 | 蓝图/关卡里的毛发可见性（静态） | 无 GUI 探针：`Generated/Validation/SC_tressfx_component_probe/` 的 BP + 场景，`build/bin/main.exe --initial-scene … --frame-limit 30 --no-dev-ui`，期望 `hair binding: … binding=component` 与 `rootWeights: …`；探针不属于 CTest、不进正式内容 |
 | `hair reset` / `ResetHairSimulation` | `build/bin/hair_asset_tests.exe --gtest_filter=HairConsoleCommand.*`；一次实机 `hair reset` 看 `reason=requested` |
-| 运行时 Spawn 的 per-placement 毛发 | `build/bin/main.exe --initial-scene Generated/Validation/SC_hair_spawn_probe/SC_hair_spawn_probe.json --frame-limit 60 --no-dev-ui`，Console 注入 `script play`；期望 `[Placement] instance renderable`、`binding=component`、`rootWeights … fallback=0`；`DestroyAfterDelay=true` 时再核对 `released by package` / `retired` 与 `runtime placement renderables: 0` |
+| 运行时 Spawn 的 per-placement 毛发 | `build/bin/main.exe --initial-scene Generated/Validation/SC_hair_spawn_probe/SC_hair_spawn_probe.json --frame-limit 60 --no-dev-ui`，Console 注入 `script play`；期望 `[Placement] instance renderable`、`binding=component`、`rootWeights … fallback=0`；`DestroyAfterDelay=true` 时再核对 `released by package` / `retired` 与 `runtime placement renderables: 0`；两个 spawner 时核对 `runtime placement renderables: 2`，且两个对象分别响应 `hair set`（互不影响） |
 | 毛发资产视口（TressFX kind、skinning 守卫、左键转模型、Reset） | `build/bin/editor_ui_tests.exe --gtest_filter="TressfxHairPreview.*:EditorUiTest.TressfxHairViewport*"`；GUI 烟测步骤见 `../plan/rendering/tressfx-hair-editor-and-binding-plan.md` |
 | `documents/contracts/**` | `py -3 tool\validate-docs.py` |
 | 架构边界 | `pwsh -File tool/architecture-boundary-audit.ps1` |
