@@ -116,6 +116,12 @@ public:
 
     void BindRenderableObject(std::string objectKey, std::shared_ptr<RenderableObject> object);
     const std::shared_ptr<RenderableObject>* GetRenderableObject(std::string_view objectKey) const;
+    // 运行时 spawn 的 per-placement 毛发在 actor 销毁后需要单独回收：从活动
+    // World 包里摘除并返回对象，调用方按 GPU epoch 交给 ResourceRetireQueue。
+    // 键不存在返回 nullptr。
+    std::shared_ptr<RenderableObject> TakeRenderableObject(std::string_view objectKey);
+    // 当前活动 World 包里的 placement-scoped renderable 数量（诊断/无泄漏核对用）。
+    size_t CountPlacementScopedRenderableObjects() const;
     // Advances CPU TressFX guide solvers once per game frame. The active
     // package owns the objects, so world replacement cannot invalidate this
     // traversal while the caller is between frame publication boundaries.

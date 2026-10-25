@@ -302,6 +302,19 @@ void RenderableObject::ResetTressfxPenetrationStats(uint32_t frameSlot)
             2 * sizeof(uint32_t));
 }
 
+std::shared_ptr<RenderableObject> RenderableObject::CloneForPlacement(
+    const std::string& newName) const
+{
+    if (!imported || rendererBackend == nullptr)
+        throw std::runtime_error(
+            "Placement renderable clone requires imported geometry and a renderer backend: " + name);
+    // 构造函数按同一 imported/section 重新分配本对象的 GPU 资源与可变状态；导入几何
+    // 仍共享。具体放置绑定（例如毛发的根点骨骼权重）由 resolver 按 Kind 应用，
+    // 本方法保持类型无关。
+    return std::make_shared<RenderableObject>(
+        imported, importedSectionIndex, *rendererBackend, newName);
+}
+
 void RenderableObject::WriteTressfxColliders(
     const std::vector<VL::Hair::TressfxCollider>& capsules, uint32_t frameSlot)
 {

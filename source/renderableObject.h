@@ -44,6 +44,10 @@ public:
     const vk::DescriptorBufferInfo& GetVertexBufferInfo() const { return vertexBufferInfo; }
     const vk::DescriptorBufferInfo& GetSkinInfluenceInfo() const { return skinInfluenceInfo; }
     bool IsTressfx() const;
+    // 放置绑定解析器在 spawn 时需要读模板/来源的导入数据：毛发的根点、描述符
+    // （simulation/capsules）与来源骨骼资产。
+    const std::shared_ptr<const MeshAssetImportResult>& GetImported() const { return imported; }
+    size_t GetImportedSectionIndex() const { return importedSectionIndex; }
     const vk::DescriptorBufferInfo& GetTressfxPositionInfo() const { return tressfxPositionInfo; }
     void AdvanceTressfxSimulation(float dt);
 
@@ -62,6 +66,11 @@ public:
         return tressfxSkinningBinding;
     }
     void SetTressfxSkinningBinding(const VL::Hair::TressfxSkinningBinding& binding);
+    // 运行时 spawn 的 per-placement 网格：共享模板的导入几何（imported/section），
+    // 新建自己的 GPU 资源与可变状态。具体“放置绑定”由
+    // placementBindingResolver.h 按 PlacementBinding::Kind 分派，本方法不感知类型。
+    // 仅在渲染线程、resolve 之前调用；失败抛 std::runtime_error。
+    std::shared_ptr<RenderableObject> CloneForPlacement(const std::string& newName) const;
     // 多骨 GPU 资源：逐 strand 4×{joint,weight} 与每 frame-in-flight 的 palette。
     // 未声明 .tfxbone 时权重为 0，shader 用 motion.w bit2 判断是否读取。
     const vk::DescriptorBufferInfo& GetTressfxBoneWeightsInfo() const
@@ -140,6 +149,11 @@ public:
     // 代理逐顶点权重转移（加载期从绑定姿态身体最近顶点复制）。为空表示没有
     // 可用权重；SDF splat 仍走单骨根矩阵回退，行为与引入转移前一致。
     bool HasTressfxSdfProxySkinning() const { return tressfxSdfProxySkin != nullptr; }
+    // 放置绑定解析器复制模板状态时读取；没有声明 collision.mesh 时为空。
+    const std::shared_ptr<const VL::Hair::SdfProxySkinTransfer>& GetTressfxSdfProxySkin() const
+    {
+        return tressfxSdfProxySkin;
+    }
     const vk::DescriptorBufferInfo& GetTressfxSdfProxyInfluenceInfo() const
     {
         return tressfxSdfProxyInfluenceInfo;

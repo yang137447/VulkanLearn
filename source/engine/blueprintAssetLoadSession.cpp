@@ -155,6 +155,12 @@ BlueprintAssetCpuWorkers& BlueprintWorkers()
 WorldMeshObject ToWorldMesh(const MeshObjectBuildPlan& plan)
 {
     WorldMeshObject mesh;
+    // 异步蓝图模板也要携带动画播放器与当前 pose：spawn 克隆出来的骨骼网格
+    // 若首帧没有 pose，逐对象 pre-deform 资源会在首次初始化时被建缺，之后
+    // 无法补齐（对象资源包 Initialize 是一次性的）。
+    mesh.animation = plan.animation;
+    mesh.skinPose = plan.skinPose;
+    mesh.skinSection = plan.skinSection;
     mesh.debugName = plan.debugName;
     mesh.sceneObjectIdentity = plan.sceneObjectIdentity;
     mesh.materialSlotIndex = plan.materialSlotIndex;

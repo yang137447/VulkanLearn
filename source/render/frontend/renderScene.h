@@ -26,6 +26,11 @@ struct RenderDrawPacket
     Eigen::Vector3f worldBoundsMin = Eigen::Vector3f::Zero();
     Eigen::Vector3f worldBoundsMax = Eigen::Vector3f::Zero();
     std::string speedTreeWindProfileKey;
+    // 放置级网格（per-placement）：非空模板键表示本帧 resolve 之前渲染线程必须为
+    // mesh.key 克隆一份独立 RenderableObject，并按 placementBinding 的 Kind 解析绑定。
+    // 普通共享对象两个字段为空。
+    std::string placementTemplateMeshKey;
+    PlacementBinding placementBinding;
 };
 
 struct MaterialInstanceDrawGroup

@@ -34,6 +34,8 @@ RenderDrawPacket BuildDrawPacket(const MeshDrawSnapshot& drawSnapshot)
     packet.worldBoundsMin = drawSnapshot.worldBoundsMin;
     packet.worldBoundsMax = drawSnapshot.worldBoundsMax;
     packet.speedTreeWindProfileKey = drawSnapshot.speedTreeWindProfileKey;
+    packet.placementTemplateMeshKey = drawSnapshot.placementTemplateMeshKey;
+    packet.placementBinding = drawSnapshot.placementBinding;
     return packet;
 }
 

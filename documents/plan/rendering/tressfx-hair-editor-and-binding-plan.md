@@ -128,6 +128,24 @@
 `pwsh -File tool/architecture-boundary-audit.ps1`；测试登记遵守 `contracts/testing.md`
 （只用 GoogleTest + 根 `vulkanlearn_add_gtest`，不新增 runtime test 标志）。
 
+## 通用性：per-placement renderable 与 placement binding
+
+毛发是第一个需要**逐放置 GPU 状态**的网格类型（三份位置历史、params UBO、绑定），
+但机制不应只为 tressfx 写：
+
+- **per-placement renderable**：mesh key 显式区分 shared / placement-scoped；渲染侧在
+  `ResolvedRenderSceneBuilder::Build` 之前有一步通用的“确保实例存在”，输入
+  `(templateKey, instanceKey, placementBinding)`。hair 只是第一个 provider。
+- **placement binding**：场景对象只带一个结构化记录（`kind` + 参数），沿
+  scene object → `WorldMeshObject` → `RenderDrawPacket` 传递；校验与解析按 `kind`
+  分派，不再新增 `__tressfx*` 专用字段（旧字段可保留兼容读取）。
+- **handler**：`kind` 的 handler 负责解析源对象/关节、派生权重（调 A1 helper）、写绑定；
+  缓存键为 `(template model key, kind + 参数, source asset identity)`。
+- **生命周期**：实例 renderable 的创建与退休走同一套 resource cache / World 世代，
+  不为某一类型写单独回收路径。
+- **接入成本**：一个 enum + 一处 handler 注册/分派即可，不引入框架；新增类型只需
+  提供自己的 clone 与 binding 解析，不修改 reconcile 主流程。
+
 ## 编辑边界：关卡 vs 资产
 
 两类修改必须分开，UI 与保存路径都按这个边界执行：
@@ -313,3 +331,29 @@
   编辑器关卡视口、毛发资产预览；日志确认 `binding=component weights=mesh` 与
   `rootWeights … fallback=0`。
 - 已知缺口：运行时 Spawn 的蓝图演员尚未生成 per-instance 毛发 renderable（T4c，方案 A 待排期）。
+
+**2026-10-26：T4c 落地（未提交）。**
+
+- 运行时 Spawn 的蓝图演员拥有独立毛发 renderable：placement binding 沿 scene object →
+  `WorldMeshObject` → `RenderDrawPacket` 传递；`RenderSystem` 在 resolve 前对账，
+  `CloneForPlacement` + `ApplyPlacementBinding` 按 kind 分派；模板未解析时用来源 draw
+  的骨架现场解析并用 A1 helper 派生权重（按 template/kind/source 缓存）。
+- spawn 克隆重写放置级绑定身份并建立该 actor 的组件网格模板；`ToWorldMesh` 补齐
+  `animation`/`skinPose`/`skinSection`，修复 spawn 骨骼首帧无 pose 的 SSBO 缺失。
+- 修复 `PrunePlacementRenderables` 的真实泄漏：键存活时把缺失计数清零，不能 erase 跟踪项。
+- 新增 Console `script <play|pause|stop>`（与编辑器 Play 同一个 `ScriptRuntime::Control`
+  入口），使 spawn 可以无 GUI 验证；不是 runtime test flag。
+- 验证：探针 `Generated/Validation/SC_hair_spawn_probe/` 日志显示
+  `[Placement] instance renderable`、`[Placement] tressfx root weights … fallback=0`、
+  `runtime placement renderables: 1→0`、`placement-scoped renderables in cache: 2→1→0`，
+  stderr 空；截图 `artifacts/delivery/spawn_final.png`。
+- 回归：hair 297/297、script 456（455 passed / 1 skipped）、editor 791（786 passed / 5 skip）、
+  material 29/29、architecture audit 与 validate-docs 通过。
+- 已知限制：spawn 复制模板已解析绑定（同蓝图同骨架）；`rootBone` 覆盖不一致报错；
+  `weights` 覆盖不重新派生；每次 spawn 复制约 2 MB `strandBones`。
+
+**交付记录（2026-10-26）。**
+
+- 本次交付提交：`【Mod】support per-placement hair renderables for spawned blueprints`，
+  包含 A2 的通用 placement 机制、三个 spawn 缺口修复、prune 泄漏修复与 `script` 控制台命令。
+- 未包含：曲线/胶囊编辑、UE 式 BindingAsset 重定向、毛发着色模型。

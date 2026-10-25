@@ -1,11 +1,13 @@
 #include "render/resource/rendererResourceCache.h"
 
+#include <iostream>
 #include <stdexcept>
 #include <utility>
 
 #include "materialInstance.h"
 #include "renderableObject.h"
 #include "render/backend/rendererObjectResourceRegistry.h"
+#include "render/resource/renderableObjectKey.h"
 #include "render/resource/resourceRetireQueue.h"
 
 namespace VL
@@ -123,6 +125,10 @@ void PruneDynamicMap(Map& resources, std::set<std::string>& dynamicKeys, const s
     for (auto it = dynamicKeys.begin(); it != dynamicKeys.end();)
         if (!used.count(*it))
         {
+            // 只给 placement-scoped 资源留退休证据；共享/常驻资源不刷日志。
+            if (IsPlacementScopedRenderableKey(*it))
+                std::cout << "[Placement] instance renderable released by package: key="
+                          << *it << std::endl;
             resources.erase(*it);
             it = dynamicKeys.erase(it);
         }
@@ -395,6 +401,30 @@ const std::shared_ptr<RenderableObject>* RendererResourceCache::GetRenderableObj
     }
 
     return nullptr;
+}
+
+std::shared_ptr<RenderableObject> RendererResourceCache::TakeRenderableObject(
+    std::string_view objectKey)
+{
+    WorldLocalResourcePackage& resources = GetMutableWorldLocalResources();
+    auto objectIt = resources.renderableObjects.find(std::string(objectKey));
+    if (objectIt == resources.renderableObjects.end())
+        return nullptr;
+    std::shared_ptr<RenderableObject> object = std::move(objectIt->second);
+    resources.renderableObjects.erase(objectIt);
+    resources.dynamicMeshes.erase(std::string(objectKey));
+    return object;
+}
+
+size_t RendererResourceCache::CountPlacementScopedRenderableObjects() const
+{
+    if (!worldLocalResources)
+        return 0;
+    size_t count = 0;
+    for (const auto& [key, object] : worldLocalResources->renderableObjects)
+        if (object && IsPlacementScopedRenderableKey(key))
+            ++count;
+    return count;
 }
 
 void RendererResourceCache::AdvanceTressfxSimulations(float deltaSeconds)

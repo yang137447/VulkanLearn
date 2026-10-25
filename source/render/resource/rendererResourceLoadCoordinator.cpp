@@ -13,6 +13,7 @@
 #include "hair/tressfxRootWeights.h"
 #include "hair/tressfxSkinning.h"
 #include "mesh/loader/common/meshAssetLoader.h"
+#include "scene/placementBinding.h"
 #include "render/resource/rendererEnvironmentLoader.h"
 #include "render/resource/rendererMaterialLoader.h"
 #include "render/resource/rendererMeshLoader.h"
@@ -27,17 +28,15 @@ namespace VL
 namespace
 {
 // 每个场景 mesh 对象的加载结果先保留到本地，等全部对象创建完成后再解析
-// simulation.skinning 的跨对象引用；不要在材质/网格加载中途读尚未创建的源对象。
+// 放置级绑定；不要在材质/网格加载中途读尚未创建的源对象。
 struct LoadedSceneMesh
 {
     std::string objectName;
     const MeshAssetLoadRequest* request = nullptr;
     RendererMeshLoadResult result;
-    // 蓝图 tressfx 组件的放置级绑定：父 mesh 组件身份。空表示按 SM 的
-    // simulation.skinning.source 走场景路径。rootBone/weights 是组件覆盖。
-    std::string tressfxSkinningSource;
-    std::string tressfxRootBone;
-    std::string tressfxWeights;
+    // 通用放置级绑定：蓝图组件声称的绑定意图（Kind + 参数）。空表示没有放置级
+    // 绑定，绑定由描述符自己声明（例如 TressFX 的 simulation.skinning.source）。
+    VL::PlacementBinding placementBinding;
 };
 
 // Hair 与源角色都必须处于同一对象空间：骨骼矩阵把绑定空间映射到源角色的模型空间，
@@ -135,7 +134,32 @@ const std::vector<Eigen::Vector3f>* HairRootPositions(const LoadedSceneMesh& hai
     return nullptr;
 }
 
-void ResolveHairSkinningBindings(
+// 通用放置绑定解析入口：按 Kind 分派到具体 handler。目前唯一 handler 是 TressFX
+// 毛发（它同时处理组件绑定和描述符 simulation.skinning.source 两种来源）。
+// 新增一种 PlacementBinding::Kind 时：
+//   1. 在下面的 kind 校验里放行；
+//   2. 写一个同签名的 handler（或把现有 handler 拆成按对象处理的函数）；
+//   3. 在这里按 kind 调用。
+// 不要在数据通路（scene/World/snapshot/packet）里加具体类型的分支。
+void ResolveTressfxPlacementBindings(
+    const std::vector<LoadedSceneMesh>& loadedMeshes,
+    RendererResourceCache& resourceCache,
+    const std::string& scenePath);
+
+void ResolvePlacementBindings(
+    const std::vector<LoadedSceneMesh>& loadedMeshes,
+    RendererResourceCache& resourceCache,
+    const std::string& scenePath)
+{
+    for (const LoadedSceneMesh& mesh : loadedMeshes)
+        if (!mesh.placementBinding.IsEmpty() &&
+            mesh.placementBinding.kind != VL::PlacementBinding::Kind::TressfxSkinning)
+            throw std::runtime_error(
+                "Unsupported placement binding kind for object \"" + mesh.objectName + "\"");
+    ResolveTressfxPlacementBindings(loadedMeshes, resourceCache, scenePath);
+}
+
+void ResolveTressfxPlacementBindings(
     const std::vector<LoadedSceneMesh>& loadedMeshes,
     RendererResourceCache& resourceCache,
     const std::string& scenePath)
@@ -149,17 +173,19 @@ void ResolveHairSkinningBindings(
 
         // 绑定来源：蓝图 tressfx 组件的父 mesh 身份优先；场景路径仍读
         // simulation.skinning.source。两者都没有时不能在运行期猜。
-        const bool componentBound = !hair.tressfxSkinningSource.empty();
+        const bool componentBound =
+            hair.placementBinding.kind == VL::PlacementBinding::Kind::TressfxSkinning &&
+            !hair.placementBinding.sourceSceneObject.empty();
         const std::string sourceName = componentBound
-            ? hair.tressfxSkinningSource : requested.source;
+            ? hair.placementBinding.sourceSceneObject : requested.source;
         if (sourceName.empty())
             throw std::runtime_error(
                 "TressFX simulation.skinning has no binding source: set "
                 "simulation.skinning.source for scene hair or mount the hair through a "
                 "Blueprint TressFX component: " + hair.objectName + " " +
                 hairPlan.meshAssetPath);
-        const std::string rootBone = hair.tressfxRootBone.empty()
-            ? requested.rootBone : hair.tressfxRootBone;
+        const std::string rootBone = hair.placementBinding.rootBone.empty()
+            ? requested.rootBone : hair.placementBinding.rootBone;
 
         const LoadedSceneMesh* source = nullptr;
         for (const LoadedSceneMesh& candidate : loadedMeshes)
@@ -237,7 +263,7 @@ void ResolveHairSkinningBindings(
         // 显式 .tfxbone 同时出现按作者冲突拒绝，不做运行期择一。
         const int weightChoice = VL::Hair::ResolveTressfxRootWeightChoice(componentBound,
             requested.rootWeights == TressfxRootWeightSource::Mesh,
-            requested.rootWeightsAuthored, hair.tressfxWeights,
+            requested.rootWeightsAuthored, hair.placementBinding.weights,
             !requested.boneWeightsPath.empty());
         if (weightChoice < 0)
             throw std::runtime_error(
@@ -421,17 +447,12 @@ RendererResourceLoadCoordinator::LoadRendererResources(
             LoadedSceneMesh loaded;
             loaded.objectName = objectPlan.objectName;
             loaded.request = &*objectPlan.meshLoadRequest;
-            // 蓝图 tressfx 组件把父 mesh 组件身份写在生成对象上；这是放置级绑定，
-            // 优先于 SM 里的 simulation.skinning.source。
+            // 蓝图组件把放置级绑定写在生成对象上；通用记录优先于描述符自带的
+            // 绑定来源（例如 SM 的 simulation.skinning.source）。旧 __tressfx*
+            // 字段由 ReadPlacementBindingFromComponent 兼容读取。
             if (objectPlan.componentObject)
-            {
-                loaded.tressfxSkinningSource =
-                    objectPlan.componentObject->value("__tressfxSkinningSource", "");
-                loaded.tressfxRootBone =
-                    objectPlan.componentObject->value("__tressfxRootBone", "");
-                loaded.tressfxWeights =
-                    objectPlan.componentObject->value("__tressfxWeights", "");
-            }
+                loaded.placementBinding =
+                    VL::ReadPlacementBindingFromComponent(*objectPlan.componentObject);
             loaded.result = meshLoader.LoadMeshObject(obj, *objectPlan.meshLoadRequest);
             loadedMeshes.push_back(std::move(loaded));
         }
@@ -475,7 +496,7 @@ RendererResourceLoadCoordinator::LoadRendererResources(
     // 失败直接抛出，由 World 事务回滚；不留下部分绑定或静默回退 rest pin。
     // GPU 发丝的 renderable key 已含 placement 身份（renderableObjectKey.h），
     // 因此同一 SM 的多个 placement 各自持有可变模拟状态，不再在加载期拒绝。
-    ResolveHairSkinningBindings(loadedMeshes, loadContext.resourceCache,
+    ResolvePlacementBindings(loadedMeshes, loadContext.resourceCache,
         worldBuildPlan.scenePath);
 
     for (LoadedSceneMesh& loaded : loadedMeshes)

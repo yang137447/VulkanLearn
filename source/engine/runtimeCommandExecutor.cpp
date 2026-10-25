@@ -873,6 +873,22 @@ void RuntimeCommandExecutor::ExecuteCommand(
             diagnostics.ReportInfo("Assembly reload committed");
         break;
     }
+    case RuntimeCommandType::SetScriptPlayState:
+    {
+        const auto& world = worldManager.GetActiveWorld();
+        if (!world || renderSystem.IsOfflineMode() || !scripts)
+        {
+            diagnostics.ReportWarning("Script play state unavailable");
+            break;
+        }
+        const auto state = static_cast<ScriptPlayState>(command.intValue);
+        std::string error;
+        if (!scripts->Control(*world, state, error))
+            diagnostics.ReportWarning("Script play state rejected: " + error);
+        else
+            diagnostics.ReportInfo("Script play state: " + std::to_string(command.intValue));
+        break;
+    }
     case RuntimeCommandType::ReloadShaders:
         executionResult.shaderReloadRequested = true;
         executionResult.shaderReloadScope =

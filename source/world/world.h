@@ -15,6 +15,7 @@
 #include "environmentType.h"
 #include "mesh/meshAssetTypes.h"
 #include "render/shadow/csmSettings.h"
+#include "scene/placementBinding.h"
 #include "world/worldSnapshot.h"
 #include "animation/motionDebug.h"
 #include "animation/motionHistory.h"
@@ -89,6 +90,11 @@ struct WorldMeshObject
     std::string materialKey;
     std::string materialInstanceKey;
     std::string speedTreeWindProfileKey;
+    // 放置级（per-placement）网格：placementTemplateMeshKey 非空表示本对象在 spawn
+    // 时从该模板 RenderableObject 克隆独立实例（共享导入几何、独立 GPU 状态）；
+    // placementBinding 描述如何解析自身绑定（Kind + 参数），由渲染线程按 Kind 分派。
+    std::string placementTemplateMeshKey;
+    PlacementBinding placementBinding;
 };
 
 // Runtime view of the active game world. Camera, light, environment, and mesh
@@ -204,7 +210,9 @@ public:
         uint32_t component, float value);
     void ApplyScriptBlueprintVisuals(const nlohmann::json& actor, bool visible = true);
     void CloneScriptBlueprintMeshes(const std::string& templateId, const nlohmann::json& actor);
-    void RemoveScriptBlueprintMeshes(const std::string& id);
+    // removeTemplateEntries=false 供 SynchronizeScriptComponentMeshes 内部使用：
+    // 重建同一个 actor 的网格时不能把它自己的模板条目一并删掉。
+    void RemoveScriptBlueprintMeshes(const std::string& id, bool removeTemplateEntries = true);
     void PrepareScriptComponentMeshTemplates();
     void SynchronizeScriptComponentMeshes(const nlohmann::json& actor);
     void SetScriptTemplates(nlohmann::json templates) { scriptTemplates = std::move(templates); }
@@ -265,6 +273,10 @@ private:
     std::unordered_map<std::string, Eigen::Matrix4f> scriptComponentMatrices;
     std::unordered_map<std::string, std::vector<WorldMeshObject>> scriptComponentMeshTemplates;
     std::unordered_map<std::string, std::string> scriptComponentMeshStructures;
+    // 运行时 spawn 创建的逐 actor 模板键：模板键对 tressfx 组件包含父组件身份，
+    // 因此每个 spawn 都有新键；actor 销毁时按这张表回收，避免模板池随 spawn 增长。
+    // 共享网格的模板键是 actor 无关的，不会记录在这里。
+    std::unordered_map<std::string, std::vector<std::string>> scriptActorTemplateKeys;
     // 派生组件灯只持有规范物理值，不进入作者灯表，也不替换 CSM 主方向光。
     std::unordered_map<std::string, LightSnapshot> scriptLights;
     bool motionDebugEnabled = false;

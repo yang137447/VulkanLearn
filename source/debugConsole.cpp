@@ -170,6 +170,25 @@ void DebugConsole::ProcessCommand(const std::string& line)
         commandBus.Queue(std::move(request));
         return;
     }
+    if (command == "script")
+    {
+        // 与编辑器 Play 按钮同一个 ScriptRuntime::Control 入口；供无 GUI 烟测与
+        // 自动化脚本驱动蓝图生命周期（不是 runtime test flag）。
+        std::string action, extra;
+        if (!(commandStream >> action) ||
+            (action != "play" && action != "pause" && action != "stop") ||
+            (commandStream >> extra))
+        {
+            std::cout << "Usage: script <play|pause|stop>" << std::endl;
+            return;
+        }
+        VL::RuntimeCommand request;
+        request.type = VL::RuntimeCommandType::SetScriptPlayState;
+        request.intValue = action == "play" ? 1 : action == "pause" ? 2 : 0;
+        request.sourceText = line;
+        commandBus.Queue(std::move(request));
+        return;
+    }
     if (command == "debugview")
     {
         int mode = 0;
@@ -844,6 +863,7 @@ void DebugConsole::PrintHelp() const
 {
     std::cout << "Available commands:\n";
     std::cout << "  animation <get|play|pause|seek seconds|clip index> - control native skeletal playback\n";
+    std::cout << "  script <play|pause|stop> - control C# blueprint play state (same path as the editor Play button)\n";
     std::cout << "  motiondebug <0|1> - actual history and predicted trajectory overlay\n";
     std::cout << "  debugdraw <on|off|status|demo [overlay/depth]|category name on/off|owner id/*|clear [owner/category name]>\n";
     std::cout << "  editor <JSON> - submit an editor asset command and print its structured result\n";

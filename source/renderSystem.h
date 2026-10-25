@@ -29,6 +29,7 @@
 #include "render/environment/proceduralSkyCubeGenerator.h"
 #include "render/frontend/renderScene.h"
 #include "render/frontend/rendererFrontend.h"
+#include "render/resource/placementBindingResolver.h"
 #include "render/offline/offlineCameraMotionPolicy.h"
 #include "render/offline/offlineDisplayVulkan.h"
 #include "render/offline/offlineRenderCoordinator.h"
@@ -338,6 +339,15 @@ private:
     void PublishSnapshotFromActiveWorld(bool advanceSimulation);
     bool ConsumeLatestSnapshotIntoRenderScene();
     void BuildResolvedRenderScene();
+    // 放置级（per-placement）网格：resolve 之前确保每个实例键都有独立
+    // RenderableObject（从模板克隆、共享导入几何），并按 placementBinding 的 Kind
+    // 交给通用 resolver 应用绑定。当前唯一 provider 是 GPU 毛发，但流程不含
+    // 类型分支；新增类型只需加 PlacementBinding::Kind 与 resolver 的一个 case。
+    void EnsurePlacementRenderables(const VL::RenderScene& renderScene,
+        VL::RendererResourceCache& resourceCache);
+    // actor 销毁后（快照里连续两帧不再出现）把放置级 renderable 从活动 World 包
+    // 摘除并交给 ResourceRetireQueue；与其它资源共用同一套 cache/epoch 回收。
+    void PrunePlacementRenderables(const VL::RenderScene& renderScene);
     void InitializeCurrentRenderSceneResources();
     void RecordAndSubmitCurrentRenderScene();
     void AdvanceSpeedTreeWindProfiles();
@@ -510,6 +520,20 @@ private:
     // 编辑器参考网格几何：只由 editorGrid pass 消费，随帧资源一起创建/释放。
     VL::EditorViewportGrid editorViewportGrid;
     VL::RenderScene currentRenderScene;
+    // 放置级 renderable 键 → 连续缺失帧数。只在 RT 访问；World 换代时清空
+    // （整包由 transaction 退休）。
+    std::unordered_map<std::string, int> placementAbsentFrames;
+    // 放置级 renderable 键 → debugName；退休日志需要对象身份，不能只报键。
+    std::unordered_map<std::string, std::string> placementObjectNames;
+    // 上一帧放置级 draw 数；只在变化时打一条日志，兼作 spawn/destroy 的存活计数。
+    size_t placementLiveCount = 0;
+    // 活动包里 placement-scoped renderable 数；变化时打一条，作为无泄漏核对。
+    size_t placementCacheCount = 0;
+    // Ensure 创建、尚未退休的运行时放置 renderable 数；destroy 后应回到 0。
+    size_t placementRuntimeCount = 0;
+    // 放置绑定解析结果的跨实例缓存，键见 MakePlacementBindingCacheKey。
+    VL::PlacementBindingCache placementBindingCache;
+    uint64_t placementWorldGeneration = 0;
     uint64_t submittedCameraGeneration = 0;
     std::optional<Eigen::Matrix4f> submittedViewProjection;
     uint64_t submittedFrameSerial = 0;

@@ -972,7 +972,7 @@ seek 0.25/2.75 近景分别跟随约 +50/+550 cm，接触近景使用 Idle。
 TressFX 导入与材质边界使用 `vl_tfx_inspect`、`hair_asset_tests` 和
 `material_schema_tests`：构建这三个目标后运行
 `ctest --test-dir build -R "^(TfxLoader|TfxFileTest|StrandGeometry|TressfxDescriptor|TressfxImport|TressfxMaterial)\." --output-on-failure`。
-hair 的 **287 项**覆盖 `.tfx` 字节边界、切线/ribbon 拓扑、SM 半径/身份、属性流、
+hair 的 **297 项**覆盖 `.tfx` 字节边界、切线/ribbon 拓扑、SM 半径/身份、属性流、
 simulation CPU/GPU backend 解析、源原生调度（n=0/1/2 × 0.0125 s、`StepFrame`）、旧 `Step` 的 `maxDt` clamp、
 `bendStiffness`/四角风/`globalShape*`/`vsp*` 作者字段与参数打包、
 `simulation.skinning` 作者边界/缓存身份/根骨解析/InitialPos 纯数学、
@@ -1011,6 +1011,11 @@ placement 独立对象键与普通网格共享键；7 项 `TfxBoneLoader` 覆盖
 越界拒绝），`editor_ui_tests` 合计 789 项；③ 再增 2 项
 （`EditorUiTest.SceneTressfx*`：BP 实例与内联 actor 的关卡侧只读 + 提示 + 无覆写控件），
 合计 **791 项**。
+T4c 再增 `TressfxRootWeights` 9 项（派生 helper 的命中、确定性、部分/全部未匹配与输入校验），
+`hair_asset_tests` 合计 **297 项**；`script_tests` 增
+`ScriptTressfxComponent.SpawnCloneRebasesPerPlacementHairKeyAndPlacementBinding`，
+`hair_asset_tests` 增 `TressfxRenderableKey.SpawnRebasesInstanceIdentityButKeepsSharedKeys`。
+运行时 Spawn 的每实例 renderable 由无 GUI 探针核对（`script play` + 生命周期日志，见下表）。
 GPU compute dispatch 不在模块套件内，由 main 启动烟测覆盖。
 `TressfxMaterial` 的 7 项覆盖工厂身份、透明写深度，以及不支持的模型/路径拒绝。
 材质目标共 16 项。
@@ -1024,7 +1029,9 @@ GPU compute dispatch 不在模块套件内，由 main 启动烟测覆盖。
 | 蓝图 `tressfx` 组件（校验/展开/绑定优先级/权重来源/编辑器入口） | `build/bin/script_tests.exe --gtest_filter=ScriptTressfxComponent.*`；`build/bin/hair_asset_tests.exe --gtest_filter=TressfxComponentBinding.*`；`build/bin/editor_ui_tests.exe --gtest_filter="TressfxComponentUi.*:EditorUiTest.BlueprintAssetTressfx*"` |
 | 毛发资产 Simulation 段（会话预览 + 资产级保存） | `build/bin/editor_ui_tests.exe --gtest_filter="TressfxHairSimulationControls.*"`；`AssetDocumentTest` 的 simulation 能力/保存用例；人工：拖 `damping` 看 `[TressFX] live param`、Save 后重载 |
 | `hair set` / `SetHairSimulationParameter` | `build/bin/hair_asset_tests.exe --gtest_filter=TressfxLiveParams.*`；一次实机 `hair set` 看 `[TressFX] live param` |
-| 蓝图/关卡里的毛发可见性（静态） | 无 GUI 探针：`Generated/Validation/SC_tressfx_component_probe/` 的 BP + 场景，`build/bin/main.exe --initial-scene … --frame-limit 30 --no-dev-ui`，期望 `hair binding: … binding=component` 与 `rootWeights: …`；探针不属于 CTest、不进正式内容 || `hair reset` / `ResetHairSimulation` | `build/bin/hair_asset_tests.exe --gtest_filter=HairConsoleCommand.*`；一次实机 `hair reset` 看 `reason=requested` |
+| 蓝图/关卡里的毛发可见性（静态） | 无 GUI 探针：`Generated/Validation/SC_tressfx_component_probe/` 的 BP + 场景，`build/bin/main.exe --initial-scene … --frame-limit 30 --no-dev-ui`，期望 `hair binding: … binding=component` 与 `rootWeights: …`；探针不属于 CTest、不进正式内容 |
+| `hair reset` / `ResetHairSimulation` | `build/bin/hair_asset_tests.exe --gtest_filter=HairConsoleCommand.*`；一次实机 `hair reset` 看 `reason=requested` |
+| 运行时 Spawn 的 per-placement 毛发 | `build/bin/main.exe --initial-scene Generated/Validation/SC_hair_spawn_probe/SC_hair_spawn_probe.json --frame-limit 60 --no-dev-ui`，Console 注入 `script play`；期望 `[Placement] instance renderable`、`binding=component`、`rootWeights … fallback=0`；`DestroyAfterDelay=true` 时再核对 `released by package` / `retired` 与 `runtime placement renderables: 0` |
 | 毛发资产视口（TressFX kind、skinning 守卫、左键转模型、Reset） | `build/bin/editor_ui_tests.exe --gtest_filter="TressfxHairPreview.*:EditorUiTest.TressfxHairViewport*"`；GUI 烟测步骤见 `../plan/rendering/tressfx-hair-editor-and-binding-plan.md` |
 | `documents/contracts/**` | `py -3 tool\validate-docs.py` |
 | 架构边界 | `pwsh -File tool/architecture-boundary-audit.ps1` |

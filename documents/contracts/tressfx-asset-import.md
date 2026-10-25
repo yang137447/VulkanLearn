@@ -999,6 +999,31 @@ CPU/shaders、长度与 0.95 校验），但真实 Maya 曲线数据尚未导出
 局部历史 + placement 换基，且每个 placement 有独立模拟状态；CPU backend 仍没有
 世界历史或独立 placement 状态。
 
+### 运行时实例化（per-placement renderable）
+
+需要逐放置 GPU 状态的网格（当前只有毛发）使用 placement 作用域的 renderable key；
+机制本身与类型无关：
+
+- **placement binding**：场景对象携带一个结构化记录（`kind` + `sourceSceneObject` /
+  `rootBone` / `weights`），沿 scene object → `WorldMeshObject` → `MeshDrawSnapshot` →
+  `RenderDrawPacket` 传递。旧描述符/场景里的 `__tressfx*` 字段仍被兼容读取。
+- **resolve 前对账**：`RenderSystem` 在 `ResolvedRenderSceneBuilder::Build` 之前，对 draw
+  packet 里未知的 placement 键从模板 renderable 克隆一份（共享导入几何/section，
+  自己持有模拟 buffer 与 params/reset UBO），再按 `kind` 调 handler 写绑定。
+  spawn 克隆同时重写 `__blueprint/<template>/` 前缀并重建该 actor 的组件网格模板条目。
+- **绑定解析**：模板已解析时直接复制（快路径）；模板未解析（异步加载的蓝图）时用本帧
+  来源 draw 的骨架解析 root/capsule 关节，并用 `BuildTressfxRootWeights` 从 guide 根点
+  派生 mesh 权重，结果按 `(template model key, kind + 参数, source asset identity)` 缓存。
+  未解析模板叠加 `.tfxbone` 时明确报错，不静默退化。
+- **退休**：`PrunePlacementRenderables` 在 placement 键连续 2 帧不在快照后退休；包级释放
+  （`PruneDynamicResources`）也可能先摘走模板键，两条路径都会打 `[Placement] …` 日志。
+  跟踪项在键存活时必须保留（清零缺失计数，不能 erase），否则第一次存活就会失去跟踪。
+- **日志**：`[Placement] instance renderable: object=… template=… kind=…`、
+  `[Placement] instance renderable retired: …`、`… released by package: …`，以及
+  `live / placement-scoped in cache / runtime placement renderables` 三个计数（变化时才打）。
+- **限制**：spawn 复制模板已解析的绑定（同蓝图同骨架）；`rootBone` 覆盖与模板不一致时
+  报错；`weights` 覆盖不重新派生（沿用模板）；每次 spawn 复制约 2 MB `strandBones`。
+
 ## Female 正式静态关卡
 
 正式入口为资源仓库的 `Maps/SC_tressfx_female/SC_tressfx_female.json`。

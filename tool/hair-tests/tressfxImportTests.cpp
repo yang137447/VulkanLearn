@@ -1160,4 +1160,24 @@ TEST(TressfxRenderableKey, GpuHairPlacementAppendsInstanceButStaticMeshesShare)
     EXPECT_NE(first, second);
     EXPECT_NE(first, MakeRenderableObjectKey("cache", 0, "hair", "A", false));
 }
+
+TEST(TressfxRenderableKey, SpawnRebasesInstanceIdentityButKeepsSharedKeys)
+{
+    // 运行时 spawn 的 per-placement 毛发：只替换键尾精确匹配的 instance 身份，
+    // 保留 model/section 前缀，保证仍共享同一份导入几何。
+    const std::string templateKey =
+        MakeRenderableObjectKey("cache", 0, "hair", "__blueprint/~template.0/hair", true);
+    EXPECT_EQ(RebaseRenderableObjectKeyInstance(templateKey,
+                  "__blueprint/~template.0/hair", "__blueprint/~spawn.1/hair"),
+        "cache|0|hair|instance=__blueprint/~spawn.1/hair");
+    // 身份不匹配或共享网格（没有 instance 段）时原样返回，不能误改别的 placement。
+    EXPECT_EQ(RebaseRenderableObjectKeyInstance(templateKey,
+                  "__blueprint/other/hair", "__blueprint/~spawn.2/hair"), templateKey);
+    const std::string shared = MakeRenderableObjectKey("cache", 0, "hair", "A", false);
+    EXPECT_EQ(RebaseRenderableObjectKeyInstance(shared, "A", "B"), shared);
+    // 空身份不做替换，避免把结尾的 "|instance=" 当成匹配。
+    EXPECT_EQ(RebaseRenderableObjectKeyInstance(templateKey, "", "B"), templateKey);
+    EXPECT_EQ(RebaseRenderableObjectKeyInstance(templateKey,
+                  "__blueprint/~template.0/hair", ""), templateKey);
+}
 }

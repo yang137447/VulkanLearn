@@ -169,6 +169,13 @@ tressfx 组件的展开在蓝图资产预览、关卡放置和正式加载中是
 一个内联 `blueprintInstance` 后走同一个 World 加载事务），不存在“仅供预览的静态特例”。
 毛发以 rest 中心线即可绘制，不要求模拟推进：`simulation.enabled`/backend 只门控 compute
 模拟，不门控 draw。
+
+运行时 `Spawn` 的蓝图演员同样成立：克隆时重写放置级绑定身份并建立该演员的组件网格模板，
+渲染侧为本帧未知的 placement 键创建独立的 renderable（模拟状态、params UBO 与绑定各一份），
+销毁或资产释放时按 placement 作用域退休。具体日志与计数见
+[tressfx-asset-import.md](tressfx-asset-import.md) 的「运行时实例化」。
+Console `script <play|pause|stop>` 调用与编辑器 Play 按钮相同的 `ScriptRuntime::Control`，
+供无 GUI 烟测/自动化驱动蓝图生命周期；它不是 runtime test flag。
 父链完整矩阵参与合成，保留非均匀缩放导致的 shear，不做 TRS 分解。
 显式 ID 的 mesh 身份为 `__blueprint/<actor-id>/<component-id>`；
 旧无 ID 单根 mesh 保留 `__blueprint/<id>` 身份。由正式 mesh loader 导入资源和材质；

@@ -1,5 +1,6 @@
 #include "script/scriptComponents.h"
 #include "script/scriptScene.h"
+#include "world/world.h"
 
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
@@ -99,4 +100,55 @@ TEST(ScriptTressfxComponent, TemplateKeyAndStructureCarryBindingSource)
     const auto hairEntry = VL::ScriptComponentMeshStructureEntry(blueprint, hair);
     ASSERT_EQ(hairEntry.size(), 4u);
     EXPECT_EQ(hairEntry[3].get<std::string>(), "__blueprint/Hero/body");
+}
+
+TEST(ScriptTressfxComponent, SpawnCloneRebasesPerPlacementHairKeyAndPlacementBinding)
+{
+    // 运行时 spawn 克隆模板网格对象：GPU 毛发的键必须换成本实例身份（否则借用
+    // 模板的 RenderableObject），绑定来源必须重写成新演员的父 mesh 组件；普通
+    // 共享网格保持原键，不因 spawn 复制 GPU 几何。
+    VL::World world(9, "spawn-clone-test");
+    VL::WorldMeshObject hair;
+    hair.sceneObjectIdentity = "__blueprint/~template.0/hair";
+    hair.debugName = hair.sceneObjectIdentity;
+    hair.meshKey = "cache|0|hair|instance=__blueprint/~template.0/hair";
+    hair.materialKey = "mat";
+    hair.materialInstanceKey = "mi";
+    world.AddMeshObject(hair.debugName, hair);
+
+    VL::WorldMeshObject body;
+    body.sceneObjectIdentity = "__blueprint/~template.0/body";
+    body.debugName = body.sceneObjectIdentity;
+    body.meshKey = "cache|0|body";
+    world.AddMeshObject(body.debugName, body);
+
+    nlohmann::json actor = {
+        {"id", "~spawn.1"},
+        {"components", nlohmann::json::array({
+            {{"id", "body"}, {"type", "mesh"},
+                {"modelPath", "Maps/SC_x/Meshes/SM_body.json"}},
+            {{"id", "hair"}, {"type", "tressfx"}, {"parent", "body"},
+                {"modelPath", "Maps/SC_x/Meshes/SM_hair.json"},
+                {"rootBone", "Head_M"}, {"weights", "auto"}}})}};
+    world.CloneScriptBlueprintMeshes("~template.0", actor);
+
+    const auto& objects = world.GetMeshObjects();
+    const auto hairIt = objects.find("__blueprint/~spawn.1/hair");
+    ASSERT_NE(hairIt, objects.end());
+    EXPECT_EQ(hairIt->second.meshKey,
+        "cache|0|hair|instance=__blueprint/~spawn.1/hair");
+    EXPECT_EQ(hairIt->second.placementTemplateMeshKey,
+        "cache|0|hair|instance=__blueprint/~template.0/hair");
+    EXPECT_EQ(hairIt->second.placementBinding.kind,
+        VL::PlacementBinding::Kind::TressfxSkinning);
+    EXPECT_EQ(hairIt->second.placementBinding.sourceSceneObject,
+        "__blueprint/~spawn.1/body");
+    EXPECT_EQ(hairIt->second.placementBinding.rootBone, "Head_M");
+    EXPECT_EQ(hairIt->second.placementBinding.weights, "auto");
+
+    const auto bodyIt = objects.find("__blueprint/~spawn.1/body");
+    ASSERT_NE(bodyIt, objects.end());
+    EXPECT_EQ(bodyIt->second.meshKey, "cache|0|body");
+    EXPECT_TRUE(bodyIt->second.placementTemplateMeshKey.empty());
+    EXPECT_TRUE(bodyIt->second.placementBinding.IsEmpty());
 }

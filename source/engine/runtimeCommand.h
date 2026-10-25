@@ -67,6 +67,10 @@ enum class RuntimeCommandType
     SaveCsmSettingsToScene,
     ReloadShaders,
     ReloadAssembly,
+    // 控制 C# 蓝图的 Play/Pause/Stop：intValue = ScriptPlayState
+    // （0 Editing / 1 Playing / 2 Paused）。与编辑器 Play 按钮走同一个
+    // ScriptRuntime::Control，供无 GUI 烟测/自动化驱动；不是 runtime test flag。
+    SetScriptPlayState,
     InjectInput,
     ReportShaderCacheStatistics,
     // 打印最近一次读回的逐 pass GPU 计时表；未开启采集时同时启动采集。

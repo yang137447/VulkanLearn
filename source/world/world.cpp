@@ -9,6 +9,7 @@
 #include "script/scriptScene.h"
 #include "world/scriptTemplateExtension.h"
 #include "animation/skeletalPlayback.h"
+#include "render/resource/renderableObjectKey.h"
 
 namespace VL
 {
@@ -204,6 +205,7 @@ void World::PrepareScriptComponentMeshTemplates()
 {
     scriptComponentMeshTemplates.clear();
     scriptComponentMeshStructures.clear();
+    scriptActorTemplateKeys.clear();
     for (const auto& actor : scriptResolvedBlueprints) AppendScriptComponentMeshTemplate(actor);
 }
 
@@ -214,7 +216,8 @@ void World::AppendScriptComponentMeshTemplate(const nlohmann::json& actor)
         for (const auto& node : components)
             if (IsScriptMeshComponent(node.at("type").get<std::string>()))
                 structure.push_back(ScriptComponentMeshStructureEntry(actor, node));
-        scriptComponentMeshStructures[actor.at("id").get<std::string>()] = structure.dump();
+        const std::string actorId = actor.at("id").get<std::string>();
+        scriptComponentMeshStructures[actorId] = structure.dump();
         for (size_t index = 0; index < components.size(); ++index)
         {
             const auto& node = components[index];
@@ -232,6 +235,8 @@ void World::AppendScriptComponentMeshTemplate(const nlohmann::json& actor)
                     sections.push_back(std::move(section));
                 }
             scriptComponentMeshTemplates.emplace(key, std::move(sections));
+            // 只记录“本次新建”的键：共享网格的键 actor 无关，不能跟着某个 actor 回收。
+            scriptActorTemplateKeys[actorId].push_back(key);
         }
 }
 
@@ -284,7 +289,8 @@ void World::SynchronizeScriptComponentMeshes(const nlohmann::json& actor)
         }
     }
     // 所有池命中后才移除旧对象；没有文件/Vulkan工作，RT 只看到下一份冻结快照。
-    RemoveScriptBlueprintMeshes(id);
+    // 保留该 actor 自己的模板条目：重建网格时还要从池里再取一次。
+    RemoveScriptBlueprintMeshes(id, false);
     for (auto& entry : candidates) meshObjects.emplace(std::move(entry));
     for (size_t index = 0; index < components.size(); ++index)
         if (IsScriptMeshComponent(components[index].at("type").get<std::string>()))
@@ -304,7 +310,38 @@ void World::CloneScriptBlueprintMeshes(const std::string& templateId, const nloh
         if (identity != prefix && identity.rfind(prefix + "/", 0) != 0) continue;
         auto clone = entry.second;
         clone.sceneObjectIdentity = destination + identity.substr(prefix.size());
+        // 放置级（Placement）对象持有可变的 GPU 状态（例如 GPU 毛发的
+        // current/previous/prevPrev 与 params UBO），键里带 |instance=<组件身份>。
+        // 只改 sceneObjectIdentity 会让新演员继续借用模板的 RenderableObject，
+        // 因此这里换成本实例的键，并把模板键与通用 placementBinding 交给渲染线程
+        // 在 resolve 前克隆独立对象。
+        if (IsPlacementScopedRenderableKey(clone.meshKey))
+        {
+            clone.placementTemplateMeshKey = clone.meshKey;
+            clone.meshKey = RebaseRenderableObjectKeyInstance(
+                clone.meshKey, identity, clone.sceneObjectIdentity);
+            // 绑定意图用与加载期相同的展开函数生成，保证 spawn 与正式加载看到同一
+            // 语义。旧 __tressfx* 字段由 ReadPlacementBindingFromComponent 兼容读取；
+            // 新类型应让 ScriptBlueprintMeshObject 生成通用 placementBinding 对象。
+            const std::string componentId = identity.size() > prefix.size() + 1
+                ? identity.substr(prefix.size() + 1) : std::string();
+            const nlohmann::json components =
+                actor.value("components", nlohmann::json::array());
+            for (size_t index = 0; index < components.size(); ++index)
+            {
+                if (!components[index].is_object() ||
+                    components[index].value("id", "") != componentId) continue;
+                const nlohmann::json sceneObject = ScriptBlueprintMeshObject(actor, index);
+                clone.placementBinding = ReadPlacementBindingFromComponent(sceneObject);
+                break;
+            }
+        }
         CloneAnimation(clone, players);
+        // spawn 后的第一帧可能还没有播放器 pose（BeginPlay/clip 尚未 tick）；骨骼材质
+        // 的逐对象 pre-deform 资源在首次初始化时就要求 pose，否则对象资源包会以
+        // “无 pose”形态建立且不会补 buffer。这里用模板当前 pose 兜底，避免首帧空 pose。
+        if (clone.skinPose == nullptr && entry.second.skinPose != nullptr)
+            clone.skinPose = entry.second.skinPose;
         clone.debugName = destination + entry.first.substr(prefix.size());
         clones.emplace_back(clone.debugName, std::move(clone));
         const auto matrix = scriptComponentMatrices.find(identity);
@@ -314,9 +351,14 @@ void World::CloneScriptBlueprintMeshes(const std::string& templateId, const nloh
     // 不在遍历 unordered_map 时插入；所有克隆只共享只读资源键，不创建 Vulkan 对象。
     for (auto& entry : clones) meshObjects.emplace(std::move(entry));
     ApplyScriptBlueprintVisuals(actor);
+    // 为新 actor 建立组件模板条目。tressfx 的模板键包含父组件身份，spawn 后是新键；
+    // 不补这一步，SynchronizeScriptComponentMeshes 会抛 Script.ComponentMeshNotPreloaded。
+    // 必须在 ApplyScriptBlueprintVisuals 之后：模板保存的是相对 actor 根矩阵的
+    // section 局部矩阵，要用新 actor 的世界矩阵反推。共享网格的键已存在，不会重复插入。
+    AppendScriptComponentMeshTemplate(actor);
 }
 
-void World::RemoveScriptBlueprintMeshes(const std::string& id)
+void World::RemoveScriptBlueprintMeshes(const std::string& id, bool removeTemplateEntries)
 {
     const auto prefix = ScriptBlueprintMeshIdentity(id);
     for (auto it = meshObjects.begin(); it != meshObjects.end();)
@@ -329,6 +371,18 @@ void World::RemoveScriptBlueprintMeshes(const std::string& id)
     for (auto it = scriptLights.begin(); it != scriptLights.end();)
         if (it->first == prefix || it->first.rfind(prefix + "/", 0) == 0) it = scriptLights.erase(it);
         else ++it;
+    if (!removeTemplateEntries)
+        return;
+    // actor 销毁：回收它自己创建过的逐 actor 模板条目（tressfx 的键带父组件身份）。
+    // 共享网格的键不在这张表里，因此不会误删别的 actor 还在用的模板。
+    if (const auto templates = scriptActorTemplateKeys.find(id);
+        templates != scriptActorTemplateKeys.end())
+    {
+        for (const std::string& key : templates->second)
+            scriptComponentMeshTemplates.erase(key);
+        scriptActorTemplateKeys.erase(templates);
+    }
+    scriptComponentMeshStructures.erase(id);
 }
 
 void World::SetViewTarget(std::shared_ptr<SceneNode> viewTarget)
