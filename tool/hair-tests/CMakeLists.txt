@@ -13,6 +13,7 @@ add_executable(hair_asset_tests
     hairConsoleCommandTests.cpp
     tressfxLiveParamsTests.cpp
     tressfxComponentBindingTests.cpp
+    tressfxRootWeightsTests.cpp
     ${PROJECT_SOURCE_DIR}/source/mesh/loader/hair/tressfxModelImporter.cpp
     ${PROJECT_SOURCE_DIR}/source/mesh/validation/meshAssetValidator.cpp
     ${PROJECT_SOURCE_DIR}/source/core/runtimeResult.cpp)

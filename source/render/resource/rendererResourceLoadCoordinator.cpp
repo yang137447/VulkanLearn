@@ -10,6 +10,7 @@
 
 #include "animation/skeletalPlayback.h"
 #include "hair/tressfxProxySkinning.h"
+#include "hair/tressfxRootWeights.h"
 #include "hair/tressfxSkinning.h"
 #include "mesh/loader/common/meshAssetLoader.h"
 #include "render/resource/rendererEnvironmentLoader.h"
@@ -47,18 +48,18 @@ bool ModelMatricesMatch(const Eigen::Matrix4f& left, const Eigen::Matrix4f& righ
     return (left - right).cwiseAbs().maxCoeff() <= 1.0e-4f;
 }
 
-// `collision.mesh` 代理没有作者权重：绑定姿态下把每个代理顶点匹配到最近的
-// 身体顶点，复制其完整影响列表并归一化。源身体顶点先乘 section.meshToModel
-// 进入与代理相同的“渲染绑定空间”，否则带缩放的骨架会把转移算错。
-struct ProxySkinBodyData
+// 身体侧蒙皮数据：位置 + CSR 影响。`collision.mesh` 代理与发丝根点派生权重
+// 共用同一份组装（同一绑定姿态、同一 `meshToModel`），避免两条路径各写一份
+// 空间变换；身体顶点必须与查询点处于同一“渲染绑定空间”。
+struct TressfxBodySkinData
 {
     std::vector<Eigen::Vector3f> positions;
     std::vector<uint32_t> offsets;
     std::vector<VL::Hair::SdfProxySkinSourceInfluence> influences;
 };
 
-void BuildProxySkinBodyData(
-    const Animation::SkeletalAsset& asset, ProxySkinBodyData& out)
+void BuildTressfxBodySkinData(
+    const Animation::SkeletalAsset& asset, TressfxBodySkinData& out)
 {
     out.offsets.push_back(0);
     for (const Animation::SkinSection& section : asset.mesh.sections)
@@ -110,10 +111,10 @@ std::shared_ptr<const VL::Hair::SdfProxySkinTransfer> BuildProxySkinTransfer(
     if (proxy == nullptr)
         return nullptr;
 
-    ProxySkinBodyData body;
+    TressfxBodySkinData body;
     const Animation::SkeletalAsset& skeletal =
         *source.result.importResult->modelResource.skeletalAsset;
-    BuildProxySkinBodyData(skeletal, body);
+    BuildTressfxBodySkinData(skeletal, body);
     const VL::Hair::SdfProxySkinSource view{
         body.positions.data(), body.positions.size(), body.offsets.data(),
         body.influences.data(), static_cast<uint32_t>(skeletal.mesh.joints.size())};
@@ -288,28 +289,36 @@ void ResolveHairSkinningBindings(
                 throw std::runtime_error(
                     "TressFX simulation.skinning.weights = \"mesh\" requires imported "
                     "guide roots: " + hairPlan.meshAssetPath);
-            ProxySkinBodyData body;
-            BuildProxySkinBodyData(playback->Asset(), body);
+            TressfxBodySkinData body;
+            BuildTressfxBodySkinData(playback->Asset(), body);
             const VL::Hair::SdfProxySkinSource view{
                 body.positions.data(), body.positions.size(), body.offsets.data(),
                 body.influences.data(), static_cast<uint32_t>(jointNames.size())};
-            const VL::Hair::SdfProxySkinTransfer transfer =
-                VL::Hair::BuildTressfxProxySkinTransfer(*roots, view,
-                    TressfxRootWeightMaxDistanceCm,
-                    VL::Hair::TressfxSkinTransferPolicy::RecordUnmatched);
-            if (transfer.unmatchedVertices.size() == roots->size())
+            const VL::Hair::TressfxRootWeightInput weightInput{
+                roots, &view, TressfxRootWeightMaxDistanceCm};
+            auto derived = VL::Hair::BuildTressfxRootWeights(weightInput);
+            if (derived.IsFailure())
+            {
+                // 既有语义保持不变：全部根点未匹配 = 毛发与 source 不在同一绑定
+                // 空间，用原文案硬错误；输入/CSR 损坏属于资产缺陷，报原始消息。
+                if (derived.Error().code == "TressFXRootWeights.NoMatch")
+                    throw std::runtime_error(
+                        "TressFX simulation.skinning.weights = \"mesh\" matched no guide root "
+                        "to the source mesh within " +
+                        std::to_string(TressfxRootWeightMaxDistanceCm) + " cm: " +
+                        hairPlan.meshAssetPath);
                 throw std::runtime_error(
-                    "TressFX simulation.skinning.weights = \"mesh\" matched no guide root "
-                    "to the source mesh within " +
-                    std::to_string(TressfxRootWeightMaxDistanceCm) + " cm: " +
+                    "TressFX simulation.skinning.weights = \"mesh\" failed: " +
+                    VL::FormatRuntimeError(derived.Error()) + ": " +
                     hairPlan.meshAssetPath);
+            }
             // 未匹配根留空权重，SetTressfxSkinningBinding 会按根回退 rootBone；
             // 这里只报告数量，不静默把空权重变成零矩阵。
-            binding.strandBones = VL::Hair::TressfxStrandBoneWeightsFromTransfer(transfer);
+            binding.strandBones = std::move(derived.Value().strandBones);
             std::cout << "[TressFX] rootWeights: strands=" << binding.strandBones.size()
                       << " joints=" << jointNames.size()
-                      << " maxNearest=" << transfer.maxNearestDistanceCm
-                      << " fallback=" << transfer.unmatchedVertices.size()
+                      << " maxNearest=" << derived.Value().maxNearestDistanceCm
+                      << " fallback=" << derived.Value().unmatchedCount
                       << std::endl;
         }
         for (const MeshObjectBuildPlan& plan : hair.result.objectPlans)
