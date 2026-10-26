@@ -319,6 +319,8 @@ private:
     const EditorAssetDocumentResultPayload* TressfxDocument(const std::string& path) const;
     const EditorAssetDocumentResultPayload* ResourceDocument(const std::string& path) const;
     void SubmitResourceDocumentCommand(EditorCommandType type, const std::string& path);
+    void RequestTressfxDocument(const std::string& path);
+    std::unordered_set<std::string> requestedTressfxDocuments;
     void RequestHairSimulationDocument(const std::string& path);
     void RefreshHairSimulationSection(bool isHair, bool hairBlocked);
     void SubmitHairSimulationLive(std::size_t controlIndex, const std::array<double, 3>& values);

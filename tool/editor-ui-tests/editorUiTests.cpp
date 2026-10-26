@@ -3212,6 +3212,94 @@ TEST_F(EditorUiTest, TressfxDirtyReloadKeepsTheDraftAndDoesNotRequestAPreview)
     EXPECT_TRUE(snapshot.tressfxDocuments[0].dirty);
 }
 
+TEST_F(EditorUiTest, TressfxSkinnedOpenCreatesAuthorOwnerAndCleanReloadKeepsPreviewBlocked)
+{
+    ShowContentBrowser();
+    auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+    catalog->revision = 21;
+    EditorJsonAssetEntry hair{"Meshes/TF_skinned.json", EditorAssetKind::Tressfx, "Skinned hair"};
+    hair.type = "tressfx";
+    hair.tressfxSkinning = true;
+    catalog->assets = {hair};
+    snapshot.assetCatalog = catalog;
+    Refresh();
+    sink.commands.clear();
+    runtimeSink.actions.clear();
+    auto* tile = BrowserItem(hair.assetPath);
+    ASSERT_NE(tile, nullptr);
+    tile->DispatchEvent("dblclick", {});
+    tile->DispatchEvent("dblclick", {});
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands[0].type, EditorCommandType::GetTressfxDocument);
+    EXPECT_EQ(std::get<MaterialInstanceAssetPathPayload>(sink.commands[0].payload).assetPath,
+        hair.assetPath);
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    EXPECT_FALSE(document->GetElementById("resource-hair-simulation")->IsVisible());
+
+    auto metadata = std::make_shared<EditorJsonDocumentSnapshot>();
+    metadata->revision = 1;
+    metadata->assetPath = hair.assetPath;
+    metadata->kind = hair.kind;
+    metadata->type = hair.type;
+    metadata->tressfxSkinning = true;
+    snapshot.jsonDocument = metadata;
+    EditorAssetDocumentResultPayload authored;
+    authored.assetPath = hair.assetPath;
+    authored.documentRevision = 7;
+    authored.document = {{"type", "tressfx"}, {"simulation", {{"skinning", {{"source", "body"}}}}}};
+    snapshot.tressfxDocuments = {authored};
+    Refresh();
+    EXPECT_EQ(sink.commands.size(), 1u) << "hidden Simulation must not own document opening";
+    const auto metadataRequests = jsonAssetSink.opened.size();
+    sink.commands.clear();
+    Click("#resource-reload");
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands[0].type, EditorCommandType::ReloadTressfxDocument);
+    EXPECT_EQ(sink.commands[0].expectedDocumentRevision, 7u);
+    EXPECT_EQ(jsonAssetSink.opened.size(), metadataRequests + 1);
+    EXPECT_EQ(jsonAssetSink.opened.back(), hair.assetPath);
+    Refresh();
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    EXPECT_FALSE(document->GetElementById("resource-hair-tools")->IsVisible());
+    EXPECT_FALSE(document->GetElementById("resource-hair-simulation")->IsVisible());
+}
+
+TEST_F(EditorUiTest, TressfxCloseDuringSimulationStagingWaitsForTheAuthorRevision)
+{
+    OpenTressfxAsset();
+    auto* damping = document->GetElementById("hair-sim-2-0");
+    ASSERT_NE(damping, nullptr);
+    damping->SetAttribute("value", "0.02");
+    damping->DispatchEvent("change", {});
+    Click("#hair-sim-save");
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands[0].type, EditorCommandType::ModifyTressfxDocument);
+    Click(".workspace-resource-tab.selected .tab-close");
+    EXPECT_TRUE(panel->HasModal());
+    EXPECT_TRUE(panel->IsResourceEditorVisible());
+    Click("#close-save");
+    Refresh();
+    EXPECT_EQ(sink.commands.size(), 1u) << "save must wait for the staged revision";
+    snapshot.tressfxDocuments[0].documentRevision = 12;
+    snapshot.tressfxDocuments[0].dirty = true;
+    snapshot.tressfxDocuments[0].document = {{"simulation", {{"damping", 0.02}}}};
+    snapshot.modifiedDocuments = {{"Meshes/TF_hair.json", EditorAssetKind::Tressfx, 12}};
+    Refresh();
+    // Details 在本帧末确认暂存完成，关闭流程在下一帧消费权威 revision。
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 2u);
+    EXPECT_EQ(sink.commands[1].type, EditorCommandType::SaveTressfxDocument);
+    EXPECT_EQ(sink.commands[1].expectedDocumentRevision, 12u);
+    EXPECT_FALSE(document->GetElementById("save-dialog")->IsVisible());
+    snapshot.tressfxDocuments[0].dirty = false;
+    snapshot.modifiedDocuments.clear();
+    snapshot.saveFeedback = {{1, "Meshes/TF_hair.json", true, "Saved"}};
+    Refresh();
+    EXPECT_FALSE(panel->HasModal());
+    EXPECT_FALSE(panel->IsResourceEditorVisible());
+}
+
 TEST_F(EditorUiTest, TressfxDirtyCloseSavesAtTheAuthoritativeRevisionAndKeepsFailedDraft)
 {
     OpenTressfxAsset();

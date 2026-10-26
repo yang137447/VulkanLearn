@@ -907,10 +907,13 @@ void MaterialInstanceAssetEditorPanel::Build(const MaterialInstanceEditorSnapsho
     // 面板数据变化时顺带喂一次性能页（5 Hz 节流在性能页内部）；平时由
     // UiSubsystem 在到期窗口单独调用 UpdatePerformance，不触发整份面板重建。
     UpdatePerformance(snapshot.performance);
+    // UI 修改命令已入队但新草稿尚未发布时，关闭流程必须等到权威 revision。
+    const bool closingTressfxStaging = pendingCloseKind == EditorAssetKind::Tressfx &&
+        hairSimulationPath == pendingClosePath && hairSimulationPendingSave;
     if (discardBlueprintThenClose &&
         (pendingCloseKind == EditorAssetKind::Blueprint || pendingCloseKind == EditorAssetKind::Tressfx))
     {
-        if (!discardBlueprintCloseSubmitted)
+        if (!discardBlueprintCloseSubmitted && !closingTressfxStaging)
         {
             // 等上一帧的修改成为权威版本再回退，不能把旧 revision 的丢弃请求排在修改后面。
             SubmitResourceDocumentCommand(pendingCloseKind == EditorAssetKind::Tressfx
@@ -918,7 +921,7 @@ void MaterialInstanceAssetEditorPanel::Build(const MaterialInstanceEditorSnapsho
                 pendingClosePath);
             discardBlueprintCloseSubmitted = true;
         }
-        else
+        else if (discardBlueprintCloseSubmitted)
         {
             const auto* actor = ResourceDocument(pendingClosePath);
             if (actor && !actor->dirty)
@@ -933,14 +936,14 @@ void MaterialInstanceAssetEditorPanel::Build(const MaterialInstanceEditorSnapsho
     else if (saveThenClose &&
         (pendingCloseKind == EditorAssetKind::Blueprint || pendingCloseKind == EditorAssetKind::Tressfx))
     {
-        if (!saveCloseSubmitted)
+        if (!saveCloseSubmitted && !closingTressfxStaging)
         {
             SubmitResourceDocumentCommand(pendingCloseKind == EditorAssetKind::Tressfx
                 ? EditorCommandType::SaveTressfxDocument : EditorCommandType::SaveBlueprintDocument,
                 pendingClosePath);
             saveCloseSubmitted = true;
         }
-        else
+        else if (saveCloseSubmitted)
         {
             for (const auto& feedback : snapshot.saveFeedback)
                 if (feedback.assetPath == pendingClosePath && feedback.sequence > saveStartedSequence)
@@ -2255,6 +2258,9 @@ void MaterialInstanceAssetEditorPanel::OpenResourceAsset(
     resourceEditorVisible = true;
     localStatus.clear();
     RequestActiveResourceMetadata();
+    // 作者 owner 的生命周期属于资产标签，不能依赖 Simulation 段是否可见。
+    if (kind == EditorAssetKind::Tressfx)
+        RequestTressfxDocument(path);
     if (kind == EditorAssetKind::Blueprint)
     {
         EditorCommandEnvelope command;
@@ -2291,7 +2297,8 @@ void MaterialInstanceAssetEditorPanel::RequestCloseResource(const std::string& p
     {
         if (tab.path != path) continue;
         const auto* authored = ResourceDocument(path);
-        if ((authored && authored->dirty) || pendingBlueprintPath == path)
+        if ((authored && authored->dirty) || pendingBlueprintPath == path ||
+            (hairSimulationPath == path && hairSimulationPendingSave))
         {
             FlushBlueprintAssetEdits();
             pendingClosePath = path;
@@ -2309,6 +2316,7 @@ void MaterialInstanceAssetEditorPanel::CloseResource(const std::string& path)
 {
     const std::string next = docking.PanelAfterClose(ResourcePanelId(path));
     resourceEditor.Close(path);
+    requestedTressfxDocuments.erase(path);
     // 后台关闭只移除标签，不切预览 World，也不覆盖当前页面的选择。
     RefreshResourceEditor();
     if (!next.empty()) ActivateWorkspacePanel(next);
@@ -2395,6 +2403,15 @@ void MaterialInstanceAssetEditorPanel::RequestResourceReload()
 
 void MaterialInstanceAssetEditorPanel::RequestModelPreview(const std::string& path)
 {
+    // 打开、切标签与 Reload 共用入口；蒙皮资产只能由角色组件提供预览姿态。
+    const auto* active = resourceEditor.ActiveTab();
+    if (active && active->path == path && active->kind == EditorAssetKind::Tressfx)
+    {
+        const auto* entry = FindCatalogEntry(snapshot.assetCatalog, path);
+        const bool blocked = active->snapshot ? active->snapshot->tressfxSkinning :
+            entry != nullptr && entry->tressfxSkinning;
+        if (blocked) return;
+    }
     RequestAssetPreview(path, false);
 }
 
@@ -2651,6 +2668,17 @@ void MaterialInstanceAssetEditorPanel::SubmitResourceDocumentCommand(
     Submit(std::move(command));
 }
 
+void MaterialInstanceAssetEditorPanel::RequestTressfxDocument(const std::string& path)
+{
+    if (path.empty() || TressfxDocument(path) || !requestedTressfxDocuments.insert(path).second)
+        return;
+    // 快照晚于 UI 事件：按路径去重首次读取，不依赖某个 Details 段的可见性。
+    EditorCommandEnvelope command;
+    command.type = EditorCommandType::GetTressfxDocument;
+    command.payload = MaterialInstanceAssetPathPayload{path};
+    Submit(std::move(command));
+}
+
 void MaterialInstanceAssetEditorPanel::RequestHairSimulationDocument(const std::string& path)
 {
     if (path.empty() || (hairSimulationRequested && hairSimulationPath == path)) return;
@@ -2662,11 +2690,7 @@ void MaterialInstanceAssetEditorPanel::RequestHairSimulationDocument(const std::
     hairSimulationSaveWaitTicks = 0;
     hairSimulationValues = nlohmann::json::object();
     hairSimulationStatus = "Reading simulation values...";
-    // 只读打开：modify/save 仍要带 revision，由同一个 TressFX 草稿 owner 提供。
-    EditorCommandEnvelope command;
-    command.type = EditorCommandType::GetTressfxDocument;
-    command.payload = MaterialInstanceAssetPathPayload{path};
-    Submit(std::move(command));
+    RequestTressfxDocument(path);
 }
 
 void MaterialInstanceAssetEditorPanel::RefreshHairSimulationSection(bool isHair, bool hairBlocked)
@@ -2717,7 +2741,8 @@ void MaterialInstanceAssetEditorPanel::RefreshHairSimulationSection(bool isHair,
                 hairSimulationPendingSave = false;
                 hairSimulationSaveWaitTicks = 0;
                 hairSimulationStatus = "Confirm the save in the Save Content dialog (writes the hair asset).";
-                OpenSaveDialog(active->path);
+                if (pendingClosePath != active->path)
+                    OpenSaveDialog(active->path);
             }
             else if (++hairSimulationSaveWaitTicks > 180)
             {
