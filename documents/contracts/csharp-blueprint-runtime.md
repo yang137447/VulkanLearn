@@ -148,7 +148,7 @@ TRS 必填，位置厘米、旋转角度，缩放非零。`enabled` 缺省 true�
 `scene`/`mesh`/`tressfx`/`camera`/`springArm`/`pointLight`/`spotLight`/`directionalLight` 组件。多个组件必须给唯一稳定 `id`；可选 `parent` 指向同 Blueprint
 组件，空串表示挂在 Blueprint 根。拒绝重复 ID、缺失父级与环。局部 position/rotation/scale
 可省略，默认零/零/一；mesh 另带 modelPath 与可选 materialOverride。
-tressfx 组件另带 `modelPath`（必须是 `type: "tressfx"` 的 `SM_*.json`）、可选
+tressfx 组件另带 `modelPath`（必须是 `type: "tressfx"` 的毛发描述符，正式资产使用 `TF_*.json`）、可选
 `rootBone` 与 `weights`（`auto`/`rootBone`/`mesh`），并且必须有 `mesh` 祖先组件。
 它展开成场景 `mesh` 对象，把放置级绑定写在生成对象上
 （`__tressfxSkinningSource`/`__tressfxParentModelPath`/`__tressfxRootBone`/`__tressfxWeights`），

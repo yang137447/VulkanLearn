@@ -37,8 +37,8 @@ def generate(resource_root):
             positions += struct.pack("<ffff", x, y, z, 0 if point < 2 else 1)
     (source / "synthetic.tfx").write_bytes(header + positions)
     prefix = relative.as_posix()
-    write_json(folder / "Meshes/SM_guides.json", {
-        "name": "SM_synthetic_guides", "type": "tressfx",
+    write_json(folder / "Meshes/TF_guides.json", {
+        "name": "TF_synthetic_guides", "type": "tressfx",
         "modelDataPath": f"{prefix}/Source/synthetic.tfx", "strandRadius": 0.11,
         "materialSlots": [{"name": "hair", "materialInstancePath": f"{prefix}/Materials/MI_pink.json"}],
     })
@@ -49,9 +49,9 @@ def generate(resource_root):
             instance["parameters"] = {"u_tintColor": tint}
         write_json(folder / f"Materials/MI_{name}.json", instance)
     objects = [
-        {"name": "Front", "type": "mesh", "modelPath": f"{prefix}/Meshes/SM_guides.json",
+        {"name": "Front", "type": "mesh", "modelPath": f"{prefix}/Meshes/TF_guides.json",
          "position": [-44, 0, 0], "rotation": [0, 0, 0], "scale": [1, 1, 1]},
-        {"name": "Rotated", "type": "mesh", "modelPath": f"{prefix}/Meshes/SM_guides.json",
+        {"name": "Rotated", "type": "mesh", "modelPath": f"{prefix}/Meshes/TF_guides.json",
          "materialOverride": f"{prefix}/Materials/MI_cyan.json",
          "position": [44, 0, 0], "rotation": [0, 55, 0], "scale": [1, 1, 1]},
         {"name": "ProbeCamera", "type": "camera", "position": [0, 2, 190],

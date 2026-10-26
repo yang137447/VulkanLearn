@@ -335,6 +335,34 @@ protected:
         Refresh();
         Refresh();
     }
+    void OpenTressfxAsset()
+    {
+        auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
+        catalog->revision = 20;
+        EditorJsonAssetEntry hair{"Meshes/TF_hair.json", EditorAssetKind::Tressfx, "Hair"};
+        hair.type = "tressfx";
+        catalog->assets = {hair};
+        snapshot.assetCatalog = catalog;
+        ShowContentBrowser();
+        Refresh();
+        auto* tile = BrowserItem(hair.assetPath);
+        ASSERT_NE(tile, nullptr);
+        tile->DispatchEvent("dblclick", {});
+        auto json = std::make_shared<EditorJsonDocumentSnapshot>();
+        json->assetPath = hair.assetPath;
+        json->kind = hair.kind;
+        json->type = hair.type;
+        json->revision = 1;
+        snapshot.jsonDocument = json;
+        EditorAssetDocumentResultPayload authored;
+        authored.assetPath = hair.assetPath;
+        authored.documentRevision = 11;
+        snapshot.tressfxDocuments = {authored};
+        Refresh();
+        sink.commands.clear();
+        runtimeSink.actions.clear();
+    }
+
     void OpenBlueprintAsset(const std::string& levelPath = {})
     {
         ShowContentBrowser();
@@ -2925,10 +2953,10 @@ TEST_F(EditorUiTest, TressfxHairViewportBlocksSkinnedAssetsAndPreviewsUnskinnedO
     // 不请求预览，并在状态区说明它由蓝图 TressFX 组件承载。
     auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
     catalog->revision = 3;
-    EditorJsonAssetEntry skinned{"Meshes/SM_hair_skinned.json", EditorAssetKind::Mesh, "Skinned hair"};
+    EditorJsonAssetEntry skinned{"Meshes/TF_hair_skinned.json", EditorAssetKind::Tressfx, "Skinned hair"};
     skinned.type = "tressfx";
     skinned.tressfxSkinning = true;
-    EditorJsonAssetEntry dynamic{"Meshes/SM_hair_dynamic.json", EditorAssetKind::Mesh, "Dynamic hair"};
+    EditorJsonAssetEntry dynamic{"Meshes/TF_hair_dynamic.json", EditorAssetKind::Tressfx, "Dynamic hair"};
     dynamic.type = "tressfx";
     catalog->assets = {skinned, dynamic};
     snapshot.assetCatalog = catalog;
@@ -2936,7 +2964,7 @@ TEST_F(EditorUiTest, TressfxHairViewportBlocksSkinnedAssetsAndPreviewsUnskinnedO
     ShowContentBrowser();
     runtimeSink.actions.clear();
 
-    auto* tile = BrowserItem("Meshes/SM_hair_skinned.json");
+    auto* tile = BrowserItem("Meshes/TF_hair_skinned.json");
     ASSERT_NE(tile, nullptr);
     tile->DispatchEvent("dblclick", {});
     Refresh();
@@ -2947,8 +2975,8 @@ TEST_F(EditorUiTest, TressfxHairViewportBlocksSkinnedAssetsAndPreviewsUnskinnedO
     // 工作线程发布作者文档后，守卫说明成为权威状态（目录过期时也能挡住）。
     auto json = std::make_shared<EditorJsonDocumentSnapshot>();
     json->revision = 1;
-    json->assetPath = "Meshes/SM_hair_skinned.json";
-    json->kind = EditorAssetKind::Mesh;
+    json->assetPath = "Meshes/TF_hair_skinned.json";
+    json->kind = EditorAssetKind::Tressfx;
     json->type = "tressfx";
     json->tressfxSkinning = true;
     snapshot.jsonDocument = json;
@@ -2960,13 +2988,13 @@ TEST_F(EditorUiTest, TressfxHairViewportBlocksSkinnedAssetsAndPreviewsUnskinnedO
     // 无 skinning 的毛发：进入单对象预览并显示毛发工具条。
     runtimeSink.actions.clear();
     ShowContentBrowser();
-    tile = BrowserItem("Meshes/SM_hair_dynamic.json");
+    tile = BrowserItem("Meshes/TF_hair_dynamic.json");
     ASSERT_NE(tile, nullptr);
     tile->DispatchEvent("dblclick", {});
     Refresh();
     ASSERT_EQ(runtimeSink.actions.size(), 1u);
     EXPECT_EQ(runtimeSink.actions[0].type, UiActionType::PreviewModel);
-    EXPECT_EQ(runtimeSink.actions[0].stringValue, "Meshes/SM_hair_dynamic.json");
+    EXPECT_EQ(runtimeSink.actions[0].stringValue, "Meshes/TF_hair_dynamic.json");
     EXPECT_TRUE(document->GetElementById("resource-hair-tools")->IsVisible());
     EXPECT_TRUE(document->GetElementById("resource-hair-reset")->HasAttribute("disabled"));
 
@@ -2975,7 +3003,7 @@ TEST_F(EditorUiTest, TressfxHairViewportBlocksSkinnedAssetsAndPreviewsUnskinnedO
     runtimeSink.actions.clear();
     auto mesh = std::make_shared<EditorJsonDocumentSnapshot>();
     mesh->revision = 2;
-    mesh->assetPath = "Meshes/SM_hair_dynamic.json";
+    mesh->assetPath = "Meshes/TF_hair_dynamic.json";
     mesh->kind = EditorAssetKind::Mesh;
     mesh->type = "mesh";
     snapshot.jsonDocument = mesh;
@@ -2990,7 +3018,7 @@ TEST_F(EditorUiTest, TressfxHairViewportRotatesTheModelOnLeftDragAndResets)
     ShowContentBrowser();
     auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
     catalog->revision = 4;
-    EditorJsonAssetEntry hair{"Meshes/SM_hair.json", EditorAssetKind::Mesh, "Hair"};
+    EditorJsonAssetEntry hair{"Meshes/TF_hair.json", EditorAssetKind::Tressfx, "Hair"};
     hair.type = "tressfx";
     catalog->assets = {hair};
     snapshot.assetCatalog = catalog;
@@ -3050,18 +3078,18 @@ TEST_F(EditorUiTest, TressfxHairViewportEditsSimulationValuesAndStagesThemToTheA
     ShowContentBrowser();
     auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
     catalog->revision = 6;
-    EditorJsonAssetEntry hair{"Meshes/SM_hair.json", EditorAssetKind::Mesh, "Hair"};
+    EditorJsonAssetEntry hair{"Meshes/TF_hair.json", EditorAssetKind::Tressfx, "Hair"};
     hair.type = "tressfx";
     catalog->assets = {hair};
     snapshot.assetCatalog = catalog;
     Refresh();
-    auto* tile = BrowserItem("Meshes/SM_hair.json");
+    auto* tile = BrowserItem("Meshes/TF_hair.json");
     ASSERT_NE(tile, nullptr);
     tile->DispatchEvent("dblclick", {});
     auto json = std::make_shared<EditorJsonDocumentSnapshot>();
     json->revision = 1;
-    json->assetPath = "Meshes/SM_hair.json";
-    json->kind = EditorAssetKind::Mesh;
+    json->assetPath = "Meshes/TF_hair.json";
+    json->kind = EditorAssetKind::Tressfx;
     json->type = "tressfx";
     json->name = "Hair";
     snapshot.jsonDocument = json;
@@ -3069,10 +3097,10 @@ TEST_F(EditorUiTest, TressfxHairViewportEditsSimulationValuesAndStagesThemToTheA
 
     // 作者文档快照提供当前值与 revision；面板只读这份投影。
     EditorAssetDocumentResultPayload meshDocument;
-    meshDocument.assetPath = "Meshes/SM_hair.json";
+    meshDocument.assetPath = "Meshes/TF_hair.json";
     meshDocument.documentRevision = 5;
     meshDocument.document = {{"simulation", {{"damping", 0.01}, {"iterations", 5}}}};
-    snapshot.meshDocuments = {meshDocument};
+    snapshot.tressfxDocuments = {meshDocument};
     Refresh();
 
     // 实时覆盖只投递给已经发布的预览 World；没有代数时不排队（队列不绑定世界世代）。
@@ -3110,14 +3138,14 @@ TEST_F(EditorUiTest, TressfxHairViewportEditsSimulationValuesAndStagesThemToTheA
     Refresh();
     EXPECT_NE(section->GetInnerRML().find("Live preview in this viewport"), std::string::npos);
 
-    // 保存走标准 mesh.modify，revision 取自同一份文档快照。
+    // 保存走标准 tressfx.modify，revision 取自同一份文档快照。
     sink.commands.clear();
     Click("#hair-sim-save");
     ASSERT_EQ(sink.commands.size(), 1u);
-    EXPECT_EQ(sink.commands.back().type, EditorCommandType::ModifyMeshDocument);
+    EXPECT_EQ(sink.commands.back().type, EditorCommandType::ModifyTressfxDocument);
     EXPECT_EQ(sink.commands.back().expectedDocumentRevision, 5u);
     const auto& payload = std::get<ModifyAssetDocumentPayload>(sink.commands.back().payload);
-    EXPECT_EQ(payload.assetPath, "Meshes/SM_hair.json");
+    EXPECT_EQ(payload.assetPath, "Meshes/TF_hair.json");
     bool sawDamping = false;
     for (const auto& change : payload.changes)
     {
@@ -3136,18 +3164,18 @@ TEST_F(EditorUiTest, HairSimulationEditorStaysInsideTheHairAssetTab)
     ShowContentBrowser();
     auto catalog = std::make_shared<EditorJsonAssetCatalogSnapshot>();
     catalog->revision = 6;
-    EditorJsonAssetEntry hair{"Meshes/SM_hair.json", EditorAssetKind::Mesh, "Hair"};
+    EditorJsonAssetEntry hair{"Meshes/TF_hair.json", EditorAssetKind::Tressfx, "Hair"};
     hair.type = "tressfx";
     catalog->assets = {hair};
     snapshot.assetCatalog = catalog;
     Refresh();
-    auto* tile = BrowserItem("Meshes/SM_hair.json");
+    auto* tile = BrowserItem("Meshes/TF_hair.json");
     ASSERT_NE(tile, nullptr);
     tile->DispatchEvent("dblclick", {});
     auto json = std::make_shared<EditorJsonDocumentSnapshot>();
     json->revision = 1;
-    json->assetPath = "Meshes/SM_hair.json";
-    json->kind = EditorAssetKind::Mesh;
+    json->assetPath = "Meshes/TF_hair.json";
+    json->kind = EditorAssetKind::Tressfx;
     json->type = "tressfx";
     json->name = "Hair";
     snapshot.jsonDocument = json;
@@ -3168,6 +3196,88 @@ TEST_F(EditorUiTest, HairSimulationEditorStaysInsideTheHairAssetTab)
     for (Rml::Element* parent = save == nullptr ? nullptr : save->GetParentNode();
          parent != nullptr; parent = parent->GetParentNode())
         EXPECT_NE(parent, actorDetails);
+}
+
+TEST_F(EditorUiTest, TressfxDirtyReloadKeepsTheDraftAndDoesNotRequestAPreview)
+{
+    OpenTressfxAsset();
+    snapshot.tressfxDocuments[0].dirty = true;
+    Refresh();
+    sink.commands.clear();
+    runtimeSink.actions.clear();
+    Click("#resource-reload");
+    EXPECT_TRUE(sink.commands.empty());
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    EXPECT_TRUE(panel->IsResourceEditorVisible());
+    EXPECT_TRUE(snapshot.tressfxDocuments[0].dirty);
+}
+
+TEST_F(EditorUiTest, TressfxDirtyCloseSavesAtTheAuthoritativeRevisionAndKeepsFailedDraft)
+{
+    OpenTressfxAsset();
+    snapshot.tressfxDocuments[0].dirty = true;
+    snapshot.modifiedDocuments = {{"Meshes/TF_hair.json", EditorAssetKind::Tressfx, 11}};
+    Refresh();
+    EXPECT_NE(document->QuerySelector(".workspace-resource-tab.selected")->GetInnerRML().find("*"),
+        std::string::npos);
+    Click(".workspace-resource-tab.selected .tab-close");
+    EXPECT_TRUE(panel->HasModal());
+    Click("#close-save");
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands[0].type, EditorCommandType::SaveTressfxDocument);
+    EXPECT_EQ(sink.commands[0].expectedDocumentRevision, 11u);
+    snapshot.saveFeedback = {{1, "Meshes/TF_hair.json", false, "Source changed"}};
+    Refresh();
+    EXPECT_TRUE(panel->HasModal());
+    EXPECT_TRUE(panel->IsResourceEditorVisible());
+    Click("#close-save");
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 2u);
+    snapshot.tressfxDocuments[0].dirty = false;
+    snapshot.modifiedDocuments.clear();
+    snapshot.saveFeedback = {{2, "Meshes/TF_hair.json", true, "Saved"}};
+    Refresh();
+    EXPECT_FALSE(panel->HasModal());
+    EXPECT_FALSE(panel->IsResourceEditorVisible());
+}
+
+TEST_F(EditorUiTest, TressfxDiscardWaitsForItsOwnRevertedDraft)
+{
+    OpenTressfxAsset();
+    snapshot.tressfxDocuments[0].dirty = true;
+    Refresh();
+    Click(".workspace-resource-tab.selected .tab-close");
+    Click("#close-discard");
+    Refresh();
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands[0].type, EditorCommandType::RevertTressfxDocument);
+    EXPECT_EQ(sink.commands[0].expectedDocumentRevision, 11u);
+    EXPECT_TRUE(panel->HasModal());
+    snapshot.tressfxDocuments[0].dirty = false;
+    ++snapshot.tressfxDocuments[0].documentRevision;
+    Refresh();
+    EXPECT_FALSE(panel->HasModal());
+    EXPECT_FALSE(panel->IsResourceEditorVisible());
+}
+
+TEST_F(EditorUiTest, TressfxSaveContentUsesItsOwnCommandAndCompletion)
+{
+    OpenTressfxAsset();
+    snapshot.tressfxDocuments[0].dirty = true;
+    snapshot.modifiedDocuments = {{"Meshes/TF_hair.json", EditorAssetKind::Tressfx, 11}};
+    Refresh();
+    panel->RequestSave();
+    Refresh();
+    Click("#save-confirm");
+    ASSERT_EQ(sink.commands.size(), 1u);
+    EXPECT_EQ(sink.commands[0].type, EditorCommandType::SaveTressfxDocument);
+    EXPECT_EQ(sink.commands[0].expectedDocumentRevision, 11u);
+    snapshot.tressfxDocuments[0].dirty = false;
+    snapshot.modifiedDocuments.clear();
+    snapshot.saveFeedback = {{1, "Meshes/TF_hair.json", true, "Saved"}};
+    Refresh();
+    EXPECT_FALSE(document->GetElementById("save-dialog")->IsVisible());
 }
 
 TEST_F(EditorUiTest, ResourceEditorDeduplicatesTabsAndReturnsToWorld)

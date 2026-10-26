@@ -229,11 +229,11 @@ TressFX 的碰撞 SDF 本应由一个小型 `tfxmesh` 逐帧重建。本仓库�
 
 ## 静态运行时路径
 
-场景仍用 `type: "mesh"`、`modelPath: ".../Meshes/SM_*.json"`。描述符为：
+场景仍用 `type: "mesh"`、`modelPath: ".../Meshes/TF_*.json"`。描述符为：
 
 ```json
 {
-    "name": "SM_guides",
+    "name": "TF_guides",
     "type": "tressfx",
     "modelDataPath": "Maps/SC_probe/Source/hair.tfx",
     "strandRadius": 0.05,
@@ -276,13 +276,15 @@ TressFX 的碰撞 SDF 本应由一个小型 `tfxmesh` 逐帧重建。本仓库�
   这是 VL 的静态预览近似，有空间噪声和相机移动时的闪烁，不是源引擎覆盖率算法。
   没有 Marschner、像素面积覆盖积分、时域累积、MSAA/A2C、像素最小半径、
   OIT、发丝投影或自阴影；不恢复 Hair ID，不写 GBuffer。
-- 内容浏览器把 tressfx 归为 Mesh；标准 mesh API 支持既有字段读改保存，
+- 内容浏览器把 tressfx 归为独立 Tressfx kind；双击 TF 描述符打开既有毛发预览与
+  模拟控件宿主。标准 `tressfx.*` API 由独立文档 owner 支持既有字段读改保存，
+  `mesh.*` 拒绝此类型。迁移期旧 SM_ 前缀也通过 Tressfx owner 打开，不建立第二份草稿。
   Scene/BP 的模型引用接受该类型。`strandRadius` 不在标准修改能力表中，
   描述符半径修改属于能力表外的源码编辑。
 
 `tool/hair/generate_static_probe.py --resource-root <isolatedRoot>` 创建
 `Generated/Validation/SC_tressfx_static_probe/`（存在即拒绝），包含合成 TFX、
-SM/MI 和两实例场景；正式 Common pass 资产由调用方提供。
+TF/MI 和两实例场景；正式 Common pass 资产由调用方提供。
 它不改 config、不启动引擎，也不是 runtime test。生成场景说明其夸大半径、
 Unlit 与非女性资产边界。
 
@@ -1163,7 +1165,7 @@ Reference Pose 保留 Bind/Calibrated、正/侧/顶视、选中局部轴与映�
 
 `SC_tressfx_female_hair_animated.json` 是根点蒙皮关卡：普通 `mesh` 对象
 `FemaleCharacter`（`SM_female_skinned.json`，目标 SK 为 `SK_Female_Outside`，
-Idle 来自 GASP 重定向）+ `Female_hair_skinned`（`SM_female_hair_skinned.json`，
+Idle 来自 GASP 重定向）+ `Female_hair_skinned`（`TF_female_hair_skinned.json`，
 `backend=gpu`、`rootFixedPoints=2`、`skinning.source=FemaleCharacter`、
 `skinning.rootBone=Head_M`）。四个胶囊分别绑定 `Head_M`、`Neck1_M`、`Chest_M`
 （肩线）与 `Chest_M`（上背），`collision.mesh` 代理使用从该身体转移的逐顶点

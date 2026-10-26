@@ -4,7 +4,7 @@
 
 ## 入口与归属
 
-Scene、Mesh、Texture、Blueprint 采用同一协议和 executor。运行中的 `editor <JSON>` Console 命令
+Scene、Mesh、TressFX、Texture、Blueprint 采用同一协议和 executor。运行中的 `editor <JSON>` Console 命令
 通过 `MaterialInstanceEditorRuntime::SubmitJson` 投递到现有 `EditorCommandBus`；
 无窗口工具 `vl_asset_edit` 使用同一 codec、bus、`AssetCommandExecutor` 与文档服务。
 Console 只借用 facade，不操作 World 或文件。运行中入口需要启用编辑器。
@@ -12,7 +12,8 @@ Console 只借用 facade，不操作 World 或文件。运行中入口需要启�
 | 命令前缀 | 文档归属与可编辑内容 |
 | --- | --- |
 | `scene.*` | Scene 根 name/description；已有 mesh 的 TRS/materialOverride；灯光作者参数；相机变换、投影、曝光 |
-| `mesh.*` | `SM_*.json`，type 为 mesh/speedtree/tressfx；源模型引用、适用的导入选项、已有材质槽的 MI 绑定、tressfx 的 `simulation.*` 模拟标量；tressfx 不接受 importOptions，`strandRadius`/`collision.*` 不在修改能力表内 |
+| `mesh.*` | `SM_*.json`，type 为 mesh/speedtree；源模型引用、适用的导入选项、已有材质槽的 MI 绑定；拒绝 type 为 tressfx 的文档 |
+| `tressfx.*` | `TF_*.json`，type 为 tressfx；源 TFX 引用、已有材质槽的 MI 绑定及 `simulation.*` 模拟标量；迁移期也接受旧 SM_ 前缀，不接受 importOptions，`strandRadius`/`collision.*` 不在修改能力表内 |
 | `texture.*` | `T_*.json`；源图片引用、colorSpace、mipmaps、filter、wrapMode、channelsDescription |
 | `blueprint.*` | `BP_*.json`；名称/说明/类、Expose 类型化默认值、instanceEditable 名称数组、componentInstanceEditable 权限对象、完整组件数组、根物理对象及初始 rotation/scale |
 
@@ -22,10 +23,10 @@ Console 只借用 facade，不操作 World 或文件。运行中入口需要启�
 具体可写字段以 `get_capabilities` 为准，字段定义、typed codec 与能力投影共用
 `assetDocumentFields.cpp` 的一张表。
 
-Mesh 能力表包含 9 个 `simulation.*` 一级字段：`gravity`、`wind`（向量）、`damping`、
+TressFX 能力表包含 9 个 `simulation.*` 一级字段：`gravity`、`wind`（向量）、`damping`、
 `iterations`、`bendStiffness`、`globalShapeStiffness`、`globalShapeEffectiveRange`、
-`vspCoefficient`、`vspAccelThresholdMax`（数值）。能力表**不按文档类型过滤**，这些字段
-对所有 Mesh 文档可见；非 tressfx 文档由加载器忽略。值域由
+`vspCoefficient`、`vspAccelThresholdMax`（数值）。这些字段只对 Tressfx 文档 kind 开放，
+Mesh 能力表不包含模拟字段。值域由
 `MeshAssetValidator::BuildLoadPlan` 在 modify/validate/save 阶段校验，越界直接拒绝；
 `iterations` 必须是整数。逐顶点曲线、`collision.*`、`strandRadius`、`skinning.*` 仍不在
 能力表内，属于资产直接编辑。
@@ -38,7 +39,7 @@ BP 文档支持完整替换组件数组，包括增删和父链调整。可选
 
 ## 生命周期
 
-四种前缀各支持 `get_document`、`get_capabilities`、`modify`、`validate`、
+五种前缀各支持 `get_document`、`get_capabilities`、`modify`、`validate`、
 `save`、`revert`、`reload`。已有 `scene.save` 复用同一 Scene owner。
 Blueprint 另支持 `undo`、`redo`，都要求当前 revision；文档投影的 `canUndo` / `canRedo` 标明可用性。
 两个历史栈合计最多 32 步、16 MiB 序列化 JSON，保存保留、revert/reload 清空，新编辑清空 redo。
@@ -115,9 +116,11 @@ Scene 草稿与已有 UI actor 编辑使用同一 baseline/draft/revision，进�
 可读取最新草稿继续编辑，不必等待前一个分量触发的重载。标准 API 改写使历史不匹配时，
 仍受上述 staged Scene 门禁约束；该例外不授权对旧 World 做 live 参数补丁。
 
-Mesh/Texture 草稿也进入 Save Content，按资产类型提交 mesh.save/texture.save。
+Mesh/TressFX/Texture 草稿也进入 Save Content，按资产类型提交 mesh.save/tressfx.save/texture.save。
 本接口没有 GPU 热替换，保存后需经正式资源重建/World 加载消费新描述；
-texture.reload/mesh.reload 只重读作者文档。API 没有新增模型/贴图 Details 编辑控件。
+texture.reload/mesh.reload/tressfx.reload 只重读作者文档。TressFX 拥有独立草稿 owner，
+通过冻结的 `tressfxDocuments` 快照向其资产页提供投影和 revision；同一文件不会同时进入
+Mesh 与 TressFX 两份草稿。API 没有新增模型/贴图 Details 编辑控件。
 MI 的现有预览协议保持独立。
 
 BP 标签页有独立草稿与 revision，也进入 Save Content，提交 `blueprint.save`。
@@ -142,7 +145,7 @@ cmake --build build --target vl_asset_edit -j6
 
 省略 `--input` 从 stdin 持续读 JSON Lines。整次读/改/校验/保存放在同一进程中，
 每行一个请求、stdout 每行一个结果。退出码 0 表示所有命令成功，2 表示有命令拒绝/失败，
-1 表示配置或输入文件错误。CLI 仅支持上述四种标准资产命令。
+1 表示配置或输入文件错误。CLI 仅支持上述五种标准资产命令。
 
 ```jsonl
 {"protocolVersion":1,"commandId":1,"source":"ai","command":"texture.get_document","payload":{"assetPath":"Maps/SC_example/Textures/T_example.json"}}

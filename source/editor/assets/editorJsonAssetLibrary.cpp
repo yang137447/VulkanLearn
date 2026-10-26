@@ -71,6 +71,7 @@ std::optional<Kind> FilenameKind(std::string_view assetPath)
     const std::string name = LowerAscii(path.stem().u8string());
     if (name.compare(0, 3, "mi_") == 0) return Kind::MaterialInstance;
     if (name.compare(0, 3, "sm_") == 0) return Kind::Mesh;
+    if (name.compare(0, 3, "tf_") == 0) return Kind::Tressfx;
     if (name.compare(0, 3, "sc_") == 0) return Kind::Scene;
     if (name.compare(0, 2, "t_") == 0) return Kind::Texture;
     if (name.compare(0, 3, "tr_") == 0) return Kind::Terrain;
@@ -86,7 +87,8 @@ std::optional<Kind> TypeKind(const std::string& text)
     const std::string lower = LowerAscii(text);
     if (lower == "materialinstance") return Kind::MaterialInstance;
     // 真实 SM_speedtree 资产以 speedtree 为顶层 type；浏览时归入模型，不读取其 SDK data。
-    if (lower == "mesh" || lower == "speedtree" || lower == "tressfx") return Kind::Mesh;
+    if (lower == "mesh" || lower == "speedtree") return Kind::Mesh;
+    if (lower == "tressfx") return Kind::Tressfx;
     if (lower == "scene") return Kind::Scene;
     if (lower == "texture") return Kind::Texture;
     if (lower == "terrain") return Kind::Terrain;

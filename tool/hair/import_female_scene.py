@@ -240,7 +240,7 @@ def import_scene(reference, resource_root):
             "parameters": {"u_tintColor": [0.42, 0.45, 0.48, 1] if label == "body" else [0.1, 0.11, 0.12, 1],
                            "u_pbrFactors": [0.7, 0, 1, 0]},
         })
-    write_json(target / "Meshes/SM_female_hair.json", {
+    write_json(target / "Meshes/TF_female_hair.json", {
         "name": "Female Outside saved guide curves", "type": "tressfx",
         "modelDataPath": f"{prefix}/Source/female_guides.tfx", "strandRadius": 0.012,
         "materialSlots": [{"name": "hair", "materialInstancePath": f"{prefix}/Materials/MI_female_hair.json"}],
@@ -251,7 +251,7 @@ def import_scene(reference, resource_root):
         "parameters": {"u_tintColor": [0.65, 0.08, 0.22, 1]},
     })
     objects = [{"name": f"Female_{label}", "type": "mesh",
-                "modelPath": f"{prefix}/Meshes/SM_female_{label}.json",
+                "modelPath": f"{prefix}/Meshes/{'TF' if label == 'hair' else 'SM'}_female_{label}.json",
                 "position": [0, 0, 0], "rotation": [0, 0, 0], "scale": [1, 1, 1]}
                for label in ("body", "eyes", "hair")]
     objects.extend([

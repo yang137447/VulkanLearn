@@ -30,6 +30,7 @@ TEST(EditorJsonAssetParsing, TressfxSkinningIsSummarizedForTheHairViewportGuard)
         R"("simulation":{"backend":"gpu","skinning":{"source":"FemaleCharacter","rootBone":"Head_M"}}})",
         skinnedHair));
     EXPECT_EQ(skinnedHair.type, "tressfx");
+    EXPECT_EQ(skinnedHair.kind, Kind::Tressfx);
     EXPECT_TRUE(skinnedHair.tressfxSkinning);
 
     Document staticHair;
@@ -67,6 +68,7 @@ TEST(EditorJsonAssetParsing, RecognizesAllFilenamePrefixesAndMixedCaseExtensions
     const std::vector<std::pair<std::string, Kind>> cases{
         {"Common/MI_existing.json", Kind::MaterialInstance},
         {"Common/sM_model.JsOn", Kind::Mesh},
+        {"Common/tF_guides.JsOn", Kind::Tressfx},
         {"Maps/SC_level.JSON", Kind::Scene},
         {"Maps/scene01.json", Kind::Scene},
         {"Common/T_albedo.jSoN", Kind::Texture},
@@ -90,7 +92,7 @@ TEST(EditorJsonAssetParsing, RecognizesTopLevelTypeWithoutFilenameConvention)
     const std::vector<std::pair<std::string, Kind>> cases{
         {"materialInstance", Kind::MaterialInstance}, {"mesh", Kind::Mesh},
         {"scene", Kind::Scene}, {"texture", Kind::Texture}, {"terrain", Kind::Terrain},
-        {"MESH", Kind::Mesh}, {"speedtree", Kind::Mesh}, {"tressfx", Kind::Mesh}, {"blueprint", Kind::Blueprint},
+        {"MESH", Kind::Mesh}, {"speedtree", Kind::Mesh}, {"tressfx", Kind::Tressfx}, {"blueprint", Kind::Blueprint},
         {"BLUEPRINT", Kind::Blueprint}
     };
     for (const auto& item : cases)

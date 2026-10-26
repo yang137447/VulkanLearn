@@ -16,7 +16,7 @@ int main(int argc, char** argv)
             {
                 std::cout << "vl_asset_edit [--resource-root PATH] [--input REQUESTS.jsonl]\n"
                     "One editor protocol JSON request per line; results are JSON Lines on stdout.\n"
-                    "Read scene/mesh/texture.get_document, then modify with expectedDocumentRevision,\n"
+                    "Read scene/mesh/tressfx/texture/blueprint.get_document, then modify with expectedDocumentRevision,\n"
                     "validate, and explicitly save. No window or GPU is initialized.\n";
                 return 0;
             }

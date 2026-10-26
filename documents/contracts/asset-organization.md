@@ -55,8 +55,10 @@ Maps/SC_car_showcase/
 目录名使用 PascalCase；资产文件继续使用现有类型前缀：
 
 - `SC_*.json`：场景定义
-- `SM_*.json`：模型/网格描述
-  （含 `type: "tressfx"` 静态 guide，`.tfx` 放所属内容域的 `Source/`，没有 GR_ 类型）
+- `SM_*.json`：模型/网格描述，type 为 mesh/speedtree
+- `TF_*.json`：独立 TressFX 毛发资产，type 为 tressfx；`.tfx` 放所属内容域的
+  `Source/`，没有 GR_ 类型。现有 Female TF 描述符保留在地图的 `Meshes/` 目录，
+  编辑器身份由 type/kind 决定，不由该目录名决定；迁移期文档服务仍接受旧 SM_ 前缀
 - `MI_*.json`：材质实例
 - `T_*.json`：纹理描述
 - `RT_*.json`：显式骨名映射及可选 source/target 校准参考姿态，放在所属内容域的

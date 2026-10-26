@@ -7,6 +7,7 @@ EditorCommandResult AssetCommandExecutor::Execute(const EditorCommandEnvelope& c
     const auto kind = GetEditorAssetDocumentKind(command.type);
     if (kind == EditorAssetDocumentKind::Scene) return scenes.Execute(command);
     if (kind == EditorAssetDocumentKind::Mesh) return meshes.Execute(command);
+    if (kind == EditorAssetDocumentKind::Tressfx) return tressfx.Execute(command);
     if (kind == EditorAssetDocumentKind::Texture) return textures.Execute(command);
     if (kind == EditorAssetDocumentKind::Blueprint) return blueprints.Execute(command);
     EditorCommandResult result;
@@ -25,6 +26,8 @@ std::vector<EditorUi::EditorModifiedDocumentSnapshot> AssetCommandExecutor::Modi
     result.insert(result.end(), textureDocuments.begin(), textureDocuments.end());
     const auto blueprintDocuments = blueprints.ModifiedDocuments();
     result.insert(result.end(), blueprintDocuments.begin(), blueprintDocuments.end());
+    const auto tressfxDocuments = tressfx.ModifiedDocuments();
+    result.insert(result.end(), tressfxDocuments.begin(), tressfxDocuments.end());
     return result;
 }
 } // namespace VL::Editor

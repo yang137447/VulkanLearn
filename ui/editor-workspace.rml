@@ -262,7 +262,7 @@
                         <option value="blueprint">Blueprints</option>
                         <option value="retarget">Retargets</option>
                         <option value="csharp">C# Blueprint Classes</option>
-                        <option value="mesh">Meshes</option><option value="scene">Levels</option>
+                        <option value="mesh">Meshes</option><option value="tressfx">TressFX</option><option value="scene">Levels</option>
                         <option value="texture">Textures</option><option value="terrain">Terrains</option>
                     </select>
                     <label class="browser-recursive-label"><input id="browser-recursive" type="checkbox" data-action="browser-recursive" checked="checked"/><span>Subfolders</span></label>

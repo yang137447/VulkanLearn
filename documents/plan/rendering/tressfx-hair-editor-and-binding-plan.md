@@ -96,17 +96,17 @@
 毛发不再是 Mesh 的一种，而是**独立资产类型**：
 
 - 文件前缀 `TF_*.json`；`type` 仍保留 `"tressfx"`（格式标识），独立性由**文档 kind**
-  表达：新增 `EditorAssetDocumentKind::Hair` / `EditorAssetKind::Hair`，内容浏览器显示为
+  表达：新增 `EditorAssetDocumentKind::Tressfx` / `EditorAssetKind::Tressfx`，内容浏览器显示为
   独立类别（TressFX Hair），不再归入 Mesh。
-- `AssetDocumentService` 为 Hair kind 接受 `TF_` 前缀 + `type: "tressfx"`，校验仍复用
+- `AssetDocumentService` 为 Tressfx kind 接受 `TF_` 前缀 + `type: "tressfx"`，校验仍复用
   `MeshAssetValidator::BuildLoadPlan` 的 tressfx 分支；迁移期可同时接受旧的 `SM_` 前缀，
   迁移完成后收紧。
 - **双击 `TF_*.json` 直接打开专用 Tab**（不是 Mesh 的 JSON/预览页）：复用已实现的
   `tressfxHairPreview.h`（skinning 守卫 + 旋转值类型）、`tressfxHairSimulationControls.h`
   （9 参数表/范围/格式化）、`materialInstanceAssetEditorPanel` 里的 `#resource-hair-tools`
   （左键转模型、Reset）与 `Simulation` 折叠段、`ui/editor-workspace.rml|.rcss` 的宿主。
-  这些代码原样复用，只把入口从“Mesh kind + type 判定”改为“Hair kind”。
-- 不改写 tab 实现：新增 Hair kind 的打开分支（`OpenResourceAsset` / content browser kind
+  这些代码原样复用，只把入口从“Mesh kind + type 判定”改为“Tressfx kind”。
+- 不改写 tab 实现：新增 Tressfx kind 的打开分支（`OpenResourceAsset` / content browser kind
   映射 / 双击分发），其余沿用现有预览世界（`SC_model_preview` + 单对象注入）与保存流程。
 - 迁移顺序：**先做 TF kind + 专用 tab（资产身份）**，再做 A 迁移（行为下沉到放置）：
   A 的默认值会写进 TF 资产，先改身份可以避免两次改文件名。
@@ -118,6 +118,112 @@
   - Mesh 类别下不再出现 tressfx 资产，误把 `TF_` 当 Mesh 打开会被拒绝；
   - 场景/蓝图引用 `TF_` 资产正常加载，`binding=component weights=mesh` 行为不变；
   - `editor_ui_tests` 覆盖 kind 映射、双击分发、Tab 复用与 `TF_` 校验。
+
+### 5.5.1 命令与行为归属补充（2026-10-26 用户确认）
+
+- 文档命令使用独立 `tressfx.get_document/get_capabilities/modify/validate/save/revert/reload`，
+  不借用 `mesh.*`。独立 Tressfx 草稿 owner 复用 `AssetDocumentService` 的 revision、
+  引用校验与原子保存；Mesh owner 拒绝 `type: "tressfx"`，迁移期旧 `SM_` 也只能由
+  Tressfx owner 接收，避免同一文件出现两份草稿。
+- TF 资产页编辑模拟默认值；蓝图资产的 TressFX 组件 Details 编辑本次挂载的
+  `inherit|off|on` 与模拟覆盖。A 迁移需要先给出有效配置数据流，再实施 schema、
+  导入缓存、实例资源与编辑器的完整调整，不能只改字段名。
+- TF 不保存角色特定的碰撞代理、胶囊或骨名，不设置 `collisionDefaults`；这些配置
+  属于挂载组件或场景放置。毛发不作为刚体碰撞体，但发丝模拟应响应外部碰撞体。
+  已有胶囊/SDF 约束保留；任意场景物体自动接入尚不是现有能力，须另行设计与验证。
+- 发丝自碰撞以锁定上游 TressFX 版本的能力为准，不自行宣布禁用或额外自研。
+  已核对 `61f8dd9` 的 `TressFXCoreSimulation.cpp` 调度，当前看到的是 guide 约束与
+  网格 SDF 碰撞，未发现发丝自碰撞 pass；这不构成对其它版本的能力断言。
+- 用户已授权开始执行。第一步只落实资产身份、独立文档命令与既有 Tab 的入口迁移；
+  保留原有模拟/collision schema，待第二步迁移它们的归属。源码与验证落地后才更新契约。
+
+### 5.5.2 A 迁移有效配置方案（2026-10-26，只读评审稿）
+
+本节是待评审的 schema 与资源方案，不描述已经实现的能力。调查发现原来的
+25–30 文件估算没有包含 off 时独立蒙皮与异步资产加载/导出闭包。
+
+建议作者格式：
+
+```json
+{
+  "type": "tressfx",
+  "modelDataPath": "Maps/SC_example/Source/hair.tfx",
+  "strandRadius": 0.012,
+  "simulationDefaults": {"enabled": true, "backend": "gpu", "damping": 0.035},
+  "materialSlots": [
+    {"name": "hair", "materialInstancePath": "Maps/SC_example/Materials/MI_hair.json"}
+  ]
+}
+```
+
+```json
+{
+  "id": "hair",
+  "type": "tressfx",
+  "parent": "body",
+  "modelPath": "Maps/SC_example/Meshes/TF_hair.json",
+  "rootBone": "Head_M",
+  "weights": "auto",
+  "simulation": {"mode": "inherit", "overrides": {"damping": 0.05}},
+  "hairCollision": {
+    "capsules": [],
+    "mesh": {
+      "path": "Maps/SC_example/Collision/body_proxy.obj",
+      "cellSize": 1,
+      "margin": 1
+    }
+  }
+}
+```
+
+- `inherit` 保留资产 enabled，`off/on` 强制最终 enabled；overrides 不接受 enabled、
+  skinning、collision。字段在作者边界封闭校验，组件缺省继承资产配置。
+- 组件已有 `collision` 是 Jolt 图元碰撞。新增 `hairCollision` 只提供阻挡发丝的代理，
+  不为头发创建刚体碰撞体。空配置表示无代理，不自动发现世界物体。
+- 独立场景 mesh 放置建议使用 `tressfx: {simulation, skinning?, hairCollision?}`，
+  蓝图组件展开后也归一到这一块，再写入既有 `PlacementBinding` 值通道。
+  rootBone/source/boneWeights 属于放置，不进入 TF 的模拟默认值。
+- TF 旧 simulation/collision 在正式资源迁移后明确拒绝，不静默吞掉字段。
+
+数据流与身份：
+
+1. 纯 CPU helper 合成 TF defaults、组件覆盖与绑定，创建资源前得到最终配置。
+2. importer 只保存几何、根点、逆质量等共享输入，不把本次有效配置烘入 section；
+   挂载代理与权重源分别准备，并纳入正式加载的输入摘要复核。
+3. 冷加载和异步 Blueprint 资产加载都向 RenderableObject 构造传有效配置；
+   spawn 的 CloneForPlacement 显式接收配置，不能复制模板已解析的行为作为默认值。
+4. 几何缓存键不含模拟默认值；renderable 缓存键包含最终完整配置、曲线、
+   backend、代理输入身份和实例身份。绑定缓存还需包含源骨架、权重策略、代理与胶囊骨映射，
+   防止不同挂载借用同一结果。
+5. World/snapshot/packet 复用 PlacementBinding 按值传递，resolve 前对账和 epoch 退休
+   顺序保持。导出闭包同步收集新位置的代理/权重引用。
+
+**新增难点：off 仍要跟随骨架。** 当前 HairSimulationPass 只收集
+UsesGpuGuideSimulation，关闭模拟也会停止姿态消费。建议单独 skinning-only compute：
+只持有 current/rest/权重/palette 与所需参数，每帧把整根 rest 蒙皮到 current；
+不分配 previous/prevPrev、solver 或 SDF，零模拟 dt 也处理新姿态。
+不能用 enabled=true 加 ResetPositions 冒充 off，否则仍分配全部模拟资源。
+
+建议在 schema 评审后分三批实施：A1 解析/有效配置/身份和模块测试；
+A2 冷加载/异步加载/spawn、off 蒙皮及资源生命周期；A3 编辑器/三份 TF 收敛/
+导出闭包/契约和完整回归。预计约 30–34 个源码文件，无需改 C# 公共 API；
+超过 35 个文件或需要改帧顺序时再次停下报告。测试覆盖模式合成、错误拒绝、
+缓存隔离、off 姿态、不同配置双实例、异步生成及导出依赖，仍不增加 runtime test 标志。
+
+### 5.5.3 第一步交付记录（2026-10-26）
+
+- 独立 Tressfx kind、浏览器类别、七个 `tressfx.*` 文档命令与唯一草稿 owner 已落地；
+  原有旋转/Reset/Simulation/预览宿主复用，新增保存反馈、脏 Tab 标记及关闭/重载保护。
+- 资源分支 `codex/tressfx5-assets` 的 `8712bea` 将三份正式毛发描述符迁为 TF_，
+  更新 SC/BP 引用；Generated 探针和三个 Python 作者工具同步新路径。
+- Debug MinGW 全量 `cmake --build build -j8` 通过；主线程独立回归：
+  hair 297/297、script 456（455 passed / 1 skipped）、editor 800（795 passed /
+  5 skipped）、material schema 29/29、production editor 12/12；文档与架构门禁通过。
+  三份真实 TF 资产的读取/能力/校验共 9 次 CLI 请求成功。
+- 本轮未验 GUI/Vulkan 实窗；未修改 simulation/collision schema、缓存分配、帧顺序
+  或 C# API。静态毛发 Simulation 面板门槛仍是既有待办。
+- 第二步尚未实施。按交接中“需要改资产 schema 先停下报告方案”的约定，
+  §5.5.2 给出具体 schema、有效配置流和 off 独立蒙皮方案，待评审后实施。
 
 ## 6. P1：模拟参数面板
 

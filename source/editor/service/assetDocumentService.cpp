@@ -55,7 +55,8 @@ void ValidateKind(K kind, const Json& json, const std::string& path)
     if (!json.is_object()) throw std::invalid_argument("Asset must be a JSON object");
     const std::string type = json.value("type", "");
     if ((kind == K::Scene && type != "scene") ||
-        (kind == K::Mesh && type != "mesh" && type != "speedtree" && type != "tressfx") ||
+        (kind == K::Mesh && type != "mesh" && type != "speedtree") ||
+        (kind == K::Tressfx && type != "tressfx") ||
         (kind == K::Texture && type != "texture") ||
         (kind == K::Blueprint && type != "blueprint"))
         throw std::invalid_argument("Wrong asset type: " + path);
@@ -66,9 +67,11 @@ void ValidateKind(K kind, const Json& json, const std::string& path)
     if (kind == K::Scene && foldedFilename == "sc_model_preview.json")
         throw std::invalid_argument("Preview scenes are not editable asset documents");
     if ((kind == K::Mesh && filename.rfind("SM_", 0) != 0) ||
+        // 迁移期旧 SM_ 毛发只归 TressFX owner，避免同一资产出现两份独立草稿。
+        (kind == K::Tressfx && filename.rfind("TF_", 0) != 0 && filename.rfind("SM_", 0) != 0) ||
         (kind == K::Texture && filename.rfind("T_", 0) != 0) ||
         (kind == K::Blueprint && filename.rfind("BP_", 0) != 0))
-        throw std::invalid_argument("Mesh/Texture/Blueprint descriptors require SM_/T_/BP_ JSON names");
+        throw std::invalid_argument("Mesh/TressFX/Texture/Blueprint descriptors require SM_/TF_/T_/BP_ JSON names");
 }
 
 void ValidateLegacyScene(const Json& scene)
@@ -152,7 +155,7 @@ bool AssetDocumentService::Open(const std::string& path, std::string& error)
         ValidateKind(kind, document.baseline, key);
         ValidateKind(kind, document.baseline, document.absolutePath.filename().generic_string());
         if (kind == K::Scene) ValidateLegacyScene(document.baseline);
-        else if (kind == K::Mesh) MeshAssetValidator::BuildLoadPlan(key, document.baseline);
+        else if (kind == K::Mesh || kind == K::Tressfx) MeshAssetValidator::BuildLoadPlan(key, document.baseline);
         else if (kind == K::Blueprint) ValidateScriptBlueprintAsset(document.baseline);
         else ValidateTextureAssetJson(document.baseline);
         const auto after = Persistence::MaterialInstancePersistence::ReadSnapshot(document.absolutePath);
@@ -221,7 +224,7 @@ void AssetDocumentService::Validate(const Json& candidate, const std::string& pa
                         throw std::invalid_argument("Invalid Actor component reference type");
                 }
     }
-    else if (kind == K::Mesh)
+    else if (kind == K::Mesh || kind == K::Tressfx)
     {
         const auto plan = MeshAssetValidator::BuildLoadPlan(path, candidate);
         ResolveReference(plan.modelDataPath);
@@ -517,7 +520,8 @@ std::vector<EditorUi::EditorModifiedDocumentSnapshot> AssetDocumentService::Modi
     for (const auto& entry : documents)
         if (entry.second.draft != entry.second.baseline)
             result.push_back({entry.first, kind == K::Scene ? EditorUi::EditorAssetKind::Scene :
-                kind == K::Mesh ? EditorUi::EditorAssetKind::Mesh : kind == K::Blueprint ?
+                kind == K::Mesh ? EditorUi::EditorAssetKind::Mesh :
+                kind == K::Tressfx ? EditorUi::EditorAssetKind::Tressfx : kind == K::Blueprint ?
                 EditorUi::EditorAssetKind::Blueprint : EditorUi::EditorAssetKind::Texture,
                 entry.second.revision, entry.second.status, entry.second.message});
     return result;

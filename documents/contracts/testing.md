@@ -35,7 +35,7 @@
 | `engine_launch_options_tests` | 6（4 后加 2 项 `--perf-jsonl`） | `--gpu-stats` 默认关闭/可接受/与既有参数组合；`--perf-jsonl` 默认关闭、路径必填、与 `--gpu-stats` 组合；未知参数仍被拒绝 |
 | `material_instance_editor_landed_tests` | 10 | MI 已落地接口 |
 | `material_instance_editor_tests` | 7 | MI 命令/文档服务 |
-| `material_instance_editor_production_tests` | 11 | MI 生产路径（预览边界、直接 render-state 路由、场景/非活动 MI 独立保存）及标准资产 JSON facade/Save Content、C# 草稿连续保存、独立蓝图草稿/保存反馈和历史集成 |
+| `material_instance_editor_production_tests` | 12 | MI 生产路径（预览边界、直接 render-state 路由、场景/非活动 MI 独立保存）及标准资产 JSON facade/Save Content、C# 草稿连续保存、独立蓝图草稿/保存反馈和历史集成；独立 TressFX 草稿发布与保存反馈 |
 | `game_export_tests` | 19 | Scene/BP/SM/MI/T 依赖闭包、动态资产清单、模型 sidecar、包内配置、PE 原生依赖、私有运行时、源路径约束与失败保留 |
 | `animation_preflight_tests` | 291（285 后加 6 项 skin bounds：逐关节预计算比对、快/精确路径包含性、跨关节混合、空关节/空 section 与退化 palette；动画工具 ON） | SK/Sequence/Montage 三层资产与播放：SK 拓扑/槽位/曲线注册表、`skinning.root` 拒绝与强制 `skeleton`（`AnimationSkeleton` 17）、sidecar 帧信息/曲线/notify/采样（`AnimationSequenceData` 14）、Montage 解析/跨文件绑定/缓存键/`rotationMethod`（`AnimationMontage` 24）、catalog/窗口装配/`PlayMontage` 拒绝矩阵/旋转透传/Static pose/section link/入口 startTime（`AnimationScriptData` 30）、notify/notifyState 区间执行/feedback（`NotifyPlayback` 11）、旋转与 Static warp point（`MotionWarping` 28）、完整权重导入 30；ozz 采样、只读 UE 盘点、FBX 审计、动态/保守 bounds 与导入期逐关节 AABB 比对、播放/暂停/seek/循环、原地根 TRS 消除、一次性完成、无效请求保持、独立时钟、冻结姿态及实际渲染提交历史；Motion 特征空间/速度/SE(3) 循环/完整窗口、总体统计、输入身份/失效、固定频率历史/epoch/重置与预测；精确搜索、继续/重选策略、运行时关节速度搬运、局部姿态交叉混合、原根周期均速与有界步频、按实际速率采样的继续候选；两骨 IK、ball/heel 双参考点、静态锚点/坡面法线、走跑滚动支点/释放、Auto/Ball/Ankle 显式支点与重置、摆动脚骨盆间隙、pre-IK/混合源/旧快照隔离；有限时惯性化 C1/端点/重复中断、有界视觉根偏移与查询隔离；显式 retarget 映射/拓扑、不同骨长/rest axes、target palette/混合、source Montage/catalog 与不兼容 source/profile/MM 拒绝；参考姿态偏移解析/拒绝、源参考旋转差及未映射骨继承 |
 
@@ -1006,7 +1006,7 @@ placement 独立对象键与普通网格共享键；7 项 `TfxBoneLoader` 覆盖
 左键转模型与 Reset 动作；T4b 再增 `TressfxComponentUi` 4 项与
 `EditorUiTest.BlueprintAssetTressfx*` 3 项，覆盖组件添加入口、默认父级推导、
 字段可见性与实例白名单；T5b 再增 `TressfxHairSimulationControls` 4 项、
-`EditorUiTest` 2 项（资产页 Simulation 段、拖动只发 UiAction、保存走 `mesh.modify`、
+`EditorUiTest` 2 项（资产页 Simulation 段、拖动只发 UiAction、保存走 `tressfx.modify`、
 关卡侧零入口）与 `AssetDocumentTest` 1 项（能力表字段、保存后文件含资产级字段、
 越界拒绝），`editor_ui_tests` 合计 789 项；③ 再增 2 项
 （`EditorUiTest.SceneTressfx*`：BP 实例与内联 actor 的关卡侧只读 + 提示 + 无覆写控件），
@@ -1017,6 +1017,14 @@ T4c 再增 `TressfxRootWeights` 9 项（派生 helper 的命中、确定性、�
 `hair_asset_tests` 增 `TressfxRenderableKey.SpawnRebasesInstanceIdentityButKeepsSharedKeys`。
 运行时 Spawn 的每实例 renderable 由无 GUI 探针核对（`script play` + 生命周期日志，见下表）。
 GPU compute dispatch 不在模块套件内，由 main 启动烟测覆盖。
+TF 独立资产入口迁移（2026-10-26）：Debug MinGW 全量构建通过。主线程独立复跑
+`hair_asset_tests` 297/297、`script_tests` 456（455 passed / 1 skipped）、
+`editor_ui_tests` 800（795 passed / 5 个既有符号链接权限跳过）、
+`material_schema_tests` 29/29、`material_instance_editor_production_tests` 12/12，
+均无失败；文档校验与架构审计通过。UI 比迁移前新增 9 项，覆盖独立身份、命令与生命周期。
+实际三份 `TF_female_hair*.json` 的 get_document/get_capabilities/validate 共 9 次
+CLI 请求均成功。日志在 `artifacts/tressfx-asset-identity-20261026/`（不入库）；
+本轮没有 GUI 或 Vulkan 实窗验收，也没有修改模拟/碰撞行为。
 `TressfxMaterial` 的 7 项覆盖工厂身份、透明写深度，以及不支持的模型/路径拒绝。
 材质目标共 16 项。
 当前改动 → 验证：
@@ -1028,6 +1036,7 @@ GPU compute dispatch 不在模块套件内，由 main 启动烟测覆盖。
 | `schema/model_descriptor.schema.json`、`meshAssetValidator` | `hair_asset_tests`；`material_schema_tests.exe --gtest_brief=1` |
 | 蓝图 `tressfx` 组件（校验/展开/绑定优先级/权重来源/编辑器入口） | `build/bin/script_tests.exe --gtest_filter=ScriptTressfxComponent.*`；`build/bin/hair_asset_tests.exe --gtest_filter=TressfxComponentBinding.*`；`build/bin/editor_ui_tests.exe --gtest_filter="TressfxComponentUi.*:EditorUiTest.BlueprintAssetTressfx*"` |
 | 毛发资产 Simulation 段（会话预览 + 资产级保存） | `build/bin/editor_ui_tests.exe --gtest_filter="TressfxHairSimulationControls.*"`；`AssetDocumentTest` 的 simulation 能力/保存用例；人工：拖 `damping` 看 `[TressFX] live param`、Save 后重载 |
+| TF 独立 kind / `tressfx.*` / Tab 保存生命周期 | `build/bin/editor_ui_tests.exe`（资产分类、owner/能力隔离、七命令 codec、revision、材质槽、Save Content、脏草稿重载拒绝及关闭保存/丢弃）；`build/bin/material_instance_editor_production_tests.exe --gtest_filter=MaterialInstanceEditorProduction.TressfxPublishesIndependentDraftsAndSaveCompletion`（正式 runtime 发布草稿与保存反馈） |
 | `hair set` / `SetHairSimulationParameter` | `build/bin/hair_asset_tests.exe --gtest_filter=TressfxLiveParams.*`；一次实机 `hair set` 看 `[TressFX] live param` |
 | 蓝图/关卡里的毛发可见性（静态） | 无 GUI 探针：`Generated/Validation/SC_tressfx_component_probe/` 的 BP + 场景，`build/bin/main.exe --initial-scene … --frame-limit 30 --no-dev-ui`，期望 `hair binding: … binding=component` 与 `rootWeights: …`；探针不属于 CTest、不进正式内容 |
 | `hair reset` / `ResetHairSimulation` | `build/bin/hair_asset_tests.exe --gtest_filter=HairConsoleCommand.*`；一次实机 `hair reset` 看 `reason=requested` |
@@ -1038,7 +1047,7 @@ GPU compute dispatch 不在模块套件内，由 main 启动烟测覆盖。
 
 GPU guide 模拟的实机证据来自作者场景
 `Maps/SC_tressfx_female/SC_tressfx_female_dynamic.json`：其
-`SM_female_hair_dynamic.json` 作者 `simulation.backend = "gpu"`。在仓库根运行：
+`TF_female_hair_dynamic.json` 作者 `simulation.backend = "gpu"`。在仓库根运行：
 
 ```powershell
 build/bin/main.exe --initial-scene Maps/SC_tressfx_female/SC_tressfx_female_dynamic.json --frame-limit 60 --no-dev-ui
@@ -1058,7 +1067,7 @@ Reset 帧仅 Integration。日志 `passes=9` 是表大小，不代表当前帧�
 根点骨骼蒙皮烟测使用资源仓库的
 `SC_tressfx_female_hair_animated.json`：普通 `mesh` 角色
 （`SM_female_skinned.json`，自动播放 Idle，不需要 Play）加
-`SM_female_hair_skinned.json`（`backend=gpu`、`skinning.source=FemaleCharacter`、
+`TF_female_hair_skinned.json`（`backend=gpu`、`skinning.source=FemaleCharacter`、
 `rootBone=Head_M`、`rootFixedPoints=2`）。在仓库根运行：
 
 ```powershell
@@ -1088,7 +1097,7 @@ gitignored 的 `artifacts/tressfx-pass/animated_a.png` / `animated_b.png`。
 
 #### `collision.mesh` 烟测与 A/B
 
-在资源仓库的 `Maps/SC_tressfx_female/Meshes/SM_female_hair_skinned.json` 的
+在资源仓库的 `Maps/SC_tressfx_female/Meshes/TF_female_hair_skinned.json` 的
 `collision` 块里作者：
 
 ```json

@@ -84,7 +84,7 @@ from PIL import Image, ImageChops, ImageDraw, ImageStat
 
 
 SCENE = "Maps/SC_tressfx_female/SC_tressfx_female_hair_animated.json"
-HAIR = "Maps/SC_tressfx_female/Meshes/SM_female_hair_skinned.json"
+HAIR = "Maps/SC_tressfx_female/Meshes/TF_female_hair_skinned.json"
 IDLE = "M_Neutral_Stand_Idle_Loop"
 WALK = "M_Neutral_Walk_Loop_F"
 WALK_CAMERA = "camera pose 0 151 950 0 151 400"

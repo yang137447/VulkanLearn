@@ -55,7 +55,7 @@ SpringArm 显示从臂根到静态臂端的连接线；子组件局部 TRS 相�
 Material Slots 和 actor 参数放在 Details 中，MI 文档参数放在中央独立资产页。
 每个打开的资产对应一个紧邻 Viewport 的停靠标签，显示类型图标、文件名、适用的脏标记和关闭按钮；
 重复打开复用文档，关闭沿用保存/丢弃/取消确认，切回关卡后普通快照刷新不会抢回材质页。
-MI、Mesh、Texture、Terrain 元数据页、Blueprint 和 Retarget 共用主窗口资产工作区行为：
+MI、Mesh、TressFX、Texture、Terrain 元数据页、Blueprint 和 Retarget 共用主窗口资产工作区行为：
 活动资产页占满工作区，暂不显示关卡 Outliner、Details、Content Browser 与关卡分隔条；
 页面内部保留自身的视口和编辑面板。切回 Viewport 恢复关卡停靠几何。
 该扩展由停靠宿主统一处理，不按资产类型分支，不改写布局树、隐藏偏好或持久化比例。
@@ -97,9 +97,11 @@ Scene Outliner 现在渲染真实 World actor 树（网格 / 四类灯 / 相机 
 布局校验因此只要求常驻面板齐备，**不要求**存在资产编辑器面板。
 资产编辑器标签是**会话内**状态：写盘时被丢弃（写出的布局里不含它们），
 留下的空栈会被剪掉，重启后不恢复打开的资产。
-当前 Content Browser 浏览 MI、Mesh、Scene、Texture、Terrain、Blueprint、Retarget JSON 元数据，
+当前 Content Browser 浏览 MI、Mesh、TressFX、Scene、Texture、Terrain、Blueprint、Retarget JSON 元数据，
 Mesh、Texture、Terrain 双击后进入资源标签页，右侧为只读 JSON Details；
 Actor 使用同一资源标签容器中的专用配置表单。
+TressFX 使用独立 kind、筛选类别与专用毛发标签页，复用单对象预览、旋转、Reset 和
+Simulation 控件；资产草稿与保存使用独立 `tressfx.*` 文档命令。
 Mesh 通过预览 World 显示真实模型；Texture 后台加载 PNG/JPEG/TGA/BMP 的 source 并等比例显示 RGB。
 MI、Mesh/Texture、Blueprint 和 Retarget 的资产名、身份/路径与预览状态采用视口左上角
 `asset-viewport-info` 文字叠层，不再使用独立标题区占用视口高度。叠层及子元素不接收指针，

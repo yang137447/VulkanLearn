@@ -314,9 +314,11 @@ private:
     std::string hairPreviewPath;
     bool hairPreviewBlocked = false;
     TressfxHairRotation hairRotation;
-    // 毛发视口 Simulation 段：作者值来自 Mesh 草稿快照，拖动先走运行期覆盖，
-    // Save to Asset 走标准 mesh.modify + Save Content（revision 取自同一快照）。
-    const EditorAssetDocumentResultPayload* MeshDocument(const std::string& path) const;
+    // 毛发视口 Simulation 段：作者值来自 TressFX 草稿快照，拖动先走运行期覆盖，
+    // Save to Asset 走标准 tressfx.modify + Save Content（revision 取自同一快照）。
+    const EditorAssetDocumentResultPayload* TressfxDocument(const std::string& path) const;
+    const EditorAssetDocumentResultPayload* ResourceDocument(const std::string& path) const;
+    void SubmitResourceDocumentCommand(EditorCommandType type, const std::string& path);
     void RequestHairSimulationDocument(const std::string& path);
     void RefreshHairSimulationSection(bool isHair, bool hairBlocked);
     void SubmitHairSimulationLive(std::size_t controlIndex, const std::array<double, 3>& values);

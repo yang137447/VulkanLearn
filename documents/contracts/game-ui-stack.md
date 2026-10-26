@@ -54,7 +54,7 @@ Destructive validation workflows remain console/launch operations, not buttons.
   An optional target SM reference also enables side-by-side source/target animated meshes with
   shared clip, play/pause and seek controls through the existing preview World.
   Reference values come from the asset worker; animation uses the production retarget and skinning path.
-- Bottom left/center: Content Browser (MI/Mesh/Scene/Texture/Terrain/Blueprint/Retarget JSON sources
+- Bottom left/center: Content Browser (MI/Mesh/TressFX/Scene/Texture/Terrain/Blueprint/Retarget JSON sources
   tree, breadcrumbs, search, type filter, tiles/list, sorting, size and explicit
   refresh controls) / Renderer
   (offline controls) / Log (Output and Scripts) / Performance (FPS, CPU frame ms,
@@ -687,8 +687,8 @@ part of this implementation.
 
 ### TressFX Hair Asset Viewport
 
-Opening a `type: "tressfx"` `SM_*.json` opens the single-object hair preview: the asset
-kind is shown as TressFX Hair, the preview world is `SC_model_preview` with the hair
+Opening a `type: "tressfx"` `TF_*.json` opens the dedicated TressFX asset tab: the asset
+has its own Tressfx kind and Content Browser category. The preview world is `SC_model_preview` with the hair
 injected at scale 1, and no level context is required. The viewport never writes the
 scene or the descriptor; rotation and reset are session state of the preview World.
 
@@ -716,10 +716,15 @@ The asset page also owns the `Simulation` section (only for previewable tressfx,
 descriptors without `simulation.skinning`): nine authored simulation scalars with
 ranges/units from one shared table, initialised from the asset draft. Dragging a control is
 session preview only — it submits `SetHairSimulationParameter` for `preview_model` and
-never writes the asset or the scene. `Save to Hair Asset` runs the standard `mesh.modify`
-(document revision) → Save Content → `mesh.save`; the status text states that the hair asset
+never writes the asset or the scene. `Save to Hair Asset` runs the standard `tressfx.modify`
+(document revision) → Save Content → `tressfx.save`; the status text states that the hair asset
 is affected for **every placement** and that reloading applies the values and resets the
 simulation.
+
+The TressFX tab reuses the existing hair preview, rotation/reset controls and simulation
+control table. Its authoritative document projection and revision come from the separate
+Tressfx document owner through `tressfxDocuments`; it does not open a Mesh draft.
+Legacy `SM_` descriptors with `type: "tressfx"` use the same Tressfx route during migration.
 
 The level editor has no hair simulation entry and no writable tressfx component fields:
 `Hair Asset`/`Root Bone`/`Root Weights` are asset-owned and read-only in Scene Details, with

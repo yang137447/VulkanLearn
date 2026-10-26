@@ -58,20 +58,23 @@ const Field fields[] = {
     {K::Scene, "camera", "exposure.autoTargetGray", ValueKind::Number, true, "linear"},
     {K::Mesh, "", "name", ValueKind::Text},
     {K::Mesh, "", "modelDataPath", ValueKind::Text, false, "source_path"},
-    // tressfx 的模拟标量：一级点路径直接落在 simulation 对象下。作者值由
+    {K::Tressfx, "", "name", ValueKind::Text},
+    {K::Tressfx, "", "modelDataPath", ValueKind::Text, false, "source_path"},
+    // TressFX 的模拟标量由独立文档拥有；一级点路径直接落在 simulation 对象下。作者值由
     // MeshAssetValidator 做值域与封闭对象校验；实时预览另走运行期命令。
-    {K::Mesh, "", "simulation.gravity", ValueKind::Vector3, false, "cm/s^2"},
-    {K::Mesh, "", "simulation.wind", ValueKind::Vector3},
-    {K::Mesh, "", "simulation.damping", ValueKind::Number},
-    {K::Mesh, "", "simulation.iterations", ValueKind::Number},
-    {K::Mesh, "", "simulation.bendStiffness", ValueKind::Number},
-    {K::Mesh, "", "simulation.globalShapeStiffness", ValueKind::Number},
-    {K::Mesh, "", "simulation.globalShapeEffectiveRange", ValueKind::Number},
-    {K::Mesh, "", "simulation.vspCoefficient", ValueKind::Number},
-    {K::Mesh, "", "simulation.vspAccelThresholdMax", ValueKind::Number, false, "cm"},
+    {K::Tressfx, "", "simulation.gravity", ValueKind::Vector3, false, "cm/s^2"},
+    {K::Tressfx, "", "simulation.wind", ValueKind::Vector3},
+    {K::Tressfx, "", "simulation.damping", ValueKind::Number},
+    {K::Tressfx, "", "simulation.iterations", ValueKind::Number},
+    {K::Tressfx, "", "simulation.bendStiffness", ValueKind::Number},
+    {K::Tressfx, "", "simulation.globalShapeStiffness", ValueKind::Number},
+    {K::Tressfx, "", "simulation.globalShapeEffectiveRange", ValueKind::Number},
+    {K::Tressfx, "", "simulation.vspCoefficient", ValueKind::Number},
+    {K::Tressfx, "", "simulation.vspAccelThresholdMax", ValueKind::Number, false, "cm"},
     {K::Mesh, "", "importOptions.generateSmoothNormals", ValueKind::Boolean, true},
     {K::Mesh, "", "importOptions.includedSectionNames", ValueKind::Strings, true},
     {K::Mesh, "slot", "materialInstancePath", ValueKind::Text, false, "asset_path"},
+    {K::Tressfx, "slot", "materialInstancePath", ValueKind::Text, false, "asset_path"},
     {K::Texture, "", "name", ValueKind::Text},
     {K::Texture, "", "source", ValueKind::Text, false, "source_path"},
     {K::Texture, "", "colorSpace", ValueKind::Text, false, "", "linear|srgb"},
@@ -116,7 +119,7 @@ const Field& FindField(K kind, const EditorAssetFieldChange& change)
     if (change.objectIdentity && (kind != K::Scene || change.slotIndex || change.expectedSlotName))
         throw std::invalid_argument("objectIdentity is only valid for scene object fields");
     if (change.slotIndex.has_value() != change.expectedSlotName.has_value() ||
-        (change.slotIndex && kind != K::Mesh) ||
+        (change.slotIndex && kind != K::Mesh && kind != K::Tressfx) ||
         (change.expectedSlotName && change.expectedSlotName->empty()))
         throw std::invalid_argument("Mesh slots require slotIndex and non-empty expectedSlotName");
     const auto scope = Scope(change);
@@ -421,7 +424,7 @@ Json DescribeAssetCapabilities(K kind, const Json& document)
         result["cameraRotationClearsLookAt"] = true;
         result["intensitySemantics"] = "authored_value_in_final_intensityUnit";
     }
-    if (kind == K::Mesh)
+    if (kind == K::Mesh || kind == K::Tressfx)
     {
         result["slots"] = Json::array();
         const auto& slots = document.at("materialSlots");
@@ -446,7 +449,7 @@ Json ProjectEditableAsset(K kind, const Json& document)
             result["objects"].push_back(std::move(projected));
         }
     }
-    if (kind == K::Mesh)
+    if (kind == K::Mesh || kind == K::Tressfx)
     {
         result["materialSlots"] = Json::array();
         for (const auto& slot : document.at("materialSlots"))

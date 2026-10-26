@@ -844,7 +844,8 @@ void MaterialInstanceAssetEditorPanel::ConfirmSave()
         EditorCommandEnvelope command;
         command.type = row.kind == EditorAssetKind::Scene
             ? EditorCommandType::SaveSceneDocument : row.kind == EditorAssetKind::Mesh
-            ? EditorCommandType::SaveMeshDocument : row.kind == EditorAssetKind::Texture
+            ? EditorCommandType::SaveMeshDocument : row.kind == EditorAssetKind::Tressfx
+            ? EditorCommandType::SaveTressfxDocument : row.kind == EditorAssetKind::Texture
             ? EditorCommandType::SaveTextureDocument : row.kind == EditorAssetKind::Blueprint
             ? EditorCommandType::SaveBlueprintDocument : EditorCommandType::SaveMaterialInstanceDocument;
         command.expectedDocumentRevision = row.revision;
@@ -906,17 +907,20 @@ void MaterialInstanceAssetEditorPanel::Build(const MaterialInstanceEditorSnapsho
     // 面板数据变化时顺带喂一次性能页（5 Hz 节流在性能页内部）；平时由
     // UiSubsystem 在到期窗口单独调用 UpdatePerformance，不触发整份面板重建。
     UpdatePerformance(snapshot.performance);
-    if (discardBlueprintThenClose && pendingCloseKind == EditorAssetKind::Blueprint)
+    if (discardBlueprintThenClose &&
+        (pendingCloseKind == EditorAssetKind::Blueprint || pendingCloseKind == EditorAssetKind::Tressfx))
     {
         if (!discardBlueprintCloseSubmitted)
         {
             // 等上一帧的修改成为权威版本再回退，不能把旧 revision 的丢弃请求排在修改后面。
-            SubmitBlueprintAssetCommand(EditorCommandType::RevertBlueprintDocument, pendingClosePath);
+            SubmitResourceDocumentCommand(pendingCloseKind == EditorAssetKind::Tressfx
+                ? EditorCommandType::RevertTressfxDocument : EditorCommandType::RevertBlueprintDocument,
+                pendingClosePath);
             discardBlueprintCloseSubmitted = true;
         }
         else
         {
-            const auto* actor = BlueprintDocument(pendingClosePath);
+            const auto* actor = ResourceDocument(pendingClosePath);
             if (actor && !actor->dirty)
             {
                 CloseDocument(pendingClosePath, EditorDirtyDocumentPolicy::RequireClean);
@@ -926,11 +930,14 @@ void MaterialInstanceAssetEditorPanel::Build(const MaterialInstanceEditorSnapsho
             discardBlueprintThenClose = discardBlueprintCloseSubmitted = false;
         }
     }
-    else if (saveThenClose && pendingCloseKind == EditorAssetKind::Blueprint)
+    else if (saveThenClose &&
+        (pendingCloseKind == EditorAssetKind::Blueprint || pendingCloseKind == EditorAssetKind::Tressfx))
     {
         if (!saveCloseSubmitted)
         {
-            SubmitBlueprintAssetCommand(EditorCommandType::SaveBlueprintDocument, pendingClosePath);
+            SubmitResourceDocumentCommand(pendingCloseKind == EditorAssetKind::Tressfx
+                ? EditorCommandType::SaveTressfxDocument : EditorCommandType::SaveBlueprintDocument,
+                pendingClosePath);
             saveCloseSubmitted = true;
         }
         else
@@ -938,7 +945,7 @@ void MaterialInstanceAssetEditorPanel::Build(const MaterialInstanceEditorSnapsho
             for (const auto& feedback : snapshot.saveFeedback)
                 if (feedback.assetPath == pendingClosePath && feedback.sequence > saveStartedSequence)
                 {
-                    const auto* actor = BlueprintDocument(pendingClosePath);
+                    const auto* actor = ResourceDocument(pendingClosePath);
                     if (feedback.succeeded && actor && !actor->dirty)
                     {
                         CloseDocument(pendingClosePath, EditorDirtyDocumentPolicy::RequireClean);
@@ -1002,7 +1009,8 @@ void MaterialInstanceAssetEditorPanel::Build(const MaterialInstanceEditorSnapsho
         SetMarkup("close-document-status", Text(snapshot.statusMessage));
         SetDisabled("close-save", saveThenClose || discardBlueprintThenClose);
         SetDisabled("close-discard", discardBlueprintThenClose ||
-            (saveThenClose && pendingCloseKind == EditorAssetKind::Blueprint));
+            (saveThenClose && (pendingCloseKind == EditorAssetKind::Blueprint ||
+                pendingCloseKind == EditorAssetKind::Tressfx)));
     }
 }
 
@@ -2254,13 +2262,13 @@ void MaterialInstanceAssetEditorPanel::OpenResourceAsset(
         command.payload = MaterialInstanceAssetPathPayload{path};
         Submit(std::move(command));
     }
-    if (kind == EditorAssetKind::Mesh)
+    if (kind == EditorAssetKind::Mesh || kind == EditorAssetKind::Tressfx)
     {
         // 毛发资产：目录扫描已带顶层 type 与 simulation.skinning，打开时即可决定
         // 是否请求预览。带 skinning 的资产不进入视口（由蓝图 TressFX 组件承载），
         // 这里直接跳过请求；快照到达后还会以作者文档复核一次。
         const EditorJsonAssetEntry* entry = FindCatalogEntry(snapshot.assetCatalog, path);
-        hairPreviewPath = entry != nullptr && entry->type == "tressfx" ? path : std::string();
+        hairPreviewPath = kind == EditorAssetKind::Tressfx ? path : std::string();
         hairPreviewBlocked = entry != nullptr && entry->tressfxSkinning;
         hairRotation.Reset();
         if (hairPreviewBlocked)
@@ -2282,12 +2290,12 @@ void MaterialInstanceAssetEditorPanel::RequestCloseResource(const std::string& p
     for (const auto& tab : resourceEditor.Tabs())
     {
         if (tab.path != path) continue;
-        const auto* authored = tab.kind == EditorAssetKind::Blueprint ? BlueprintDocument(path) : nullptr;
+        const auto* authored = ResourceDocument(path);
         if ((authored && authored->dirty) || pendingBlueprintPath == path)
         {
             FlushBlueprintAssetEdits();
             pendingClosePath = path;
-            pendingCloseKind = EditorAssetKind::Blueprint;
+            pendingCloseKind = tab.kind;
             saveThenClose = saveCloseSubmitted = false;
             discardBlueprintThenClose = discardBlueprintCloseSubmitted = false;
             return;
@@ -2334,7 +2342,8 @@ void MaterialInstanceAssetEditorPanel::ActivateWorkspacePanel(const std::string&
     resourceEditorVisible = true;
     RequestActiveResourceMetadata();
     const auto* active = resourceEditor.ActiveTab();
-    if (active && active->kind == EditorAssetKind::Mesh && !HasCurrentModelPreview())
+    if (active && (active->kind == EditorAssetKind::Mesh || active->kind == EditorAssetKind::Tressfx) &&
+        !HasCurrentModelPreview())
         RequestModelPreview(path);
     RefreshResourceEditor();
 }
@@ -2364,13 +2373,24 @@ void MaterialInstanceAssetEditorPanel::RequestResourceReload()
         SubmitBlueprintAssetCommand(EditorCommandType::ReloadBlueprintDocument, tab->path);
         return;
     }
+    if (tab && tab->kind == EditorAssetKind::Tressfx)
+    {
+        const auto* authored = TressfxDocument(tab->path);
+        if (!authored || authored->dirty || hairSimulationPendingSave)
+        {
+            localStatus = "Save or revert pending edits before reloading.";
+            return;
+        }
+        SubmitResourceDocumentCommand(EditorCommandType::ReloadTressfxDocument, tab->path);
+    }
     resourceEditor.RequestReload();
     const std::string path = resourceEditor.ConsumeReloadRequest();
     if (path.empty()) return;
     if (jsonAssetRequestSink != nullptr)
         jsonAssetRequestSink->RequestOpenJsonAsset(path);
     const auto* active = resourceEditor.ActiveTab();
-    if (active != nullptr && active->kind == EditorAssetKind::Mesh) RequestModelPreview(path);
+    if (active != nullptr && (active->kind == EditorAssetKind::Mesh || active->kind == EditorAssetKind::Tressfx))
+        RequestModelPreview(path);
 }
 
 void MaterialInstanceAssetEditorPanel::RequestModelPreview(const std::string& path)
@@ -2482,7 +2502,8 @@ uint64_t MaterialInstanceAssetEditorPanel::CurrentModelPreviewGeneration() const
             !active->snapshot->retargetPreview || active->path != requestedRetargetPath ||
             active->snapshot->revision != requestedRetargetRevision) return 0;
     }
-    else if (active->kind != EditorAssetKind::Mesh || active->path != requestedPreviewPath) return 0;
+    else if ((active->kind != EditorAssetKind::Mesh && active->kind != EditorAssetKind::Tressfx) ||
+        active->path != requestedPreviewPath) return 0;
     // JSON 读取完成不能证明 GPU 模型已加载；只在新预览 World 的冻结快照发布后展示。
     for (const auto& actor : OutlinerActors())
         if (actor.worldGeneration > requestedPreviewGeneration &&
@@ -2556,7 +2577,7 @@ void MaterialInstanceAssetEditorPanel::RefreshMaterialPreview()
 bool MaterialInstanceAssetEditorPanel::IsActiveHairPreview() const
 {
     const auto* active = resourceEditor.ActiveTab();
-    return active != nullptr && active->kind == EditorAssetKind::Mesh &&
+    return active != nullptr && active->kind == EditorAssetKind::Tressfx &&
         active->path == hairPreviewPath && !hairPreviewBlocked;
 }
 
@@ -2600,12 +2621,34 @@ std::array<double, 3> PanelSimulationValue(
 }
 } // namespace
 
-const EditorAssetDocumentResultPayload* MaterialInstanceAssetEditorPanel::MeshDocument(
+const EditorAssetDocumentResultPayload* MaterialInstanceAssetEditorPanel::TressfxDocument(
     const std::string& path) const
 {
-    for (const auto& entry : snapshot.meshDocuments)
+    for (const auto& entry : snapshot.tressfxDocuments)
         if (entry.assetPath == path) return &entry;
     return nullptr;
+}
+
+const EditorAssetDocumentResultPayload* MaterialInstanceAssetEditorPanel::ResourceDocument(
+    const std::string& path) const
+{
+    const auto* blueprint = BlueprintDocument(path);
+    return blueprint != nullptr ? blueprint : TressfxDocument(path);
+}
+
+void MaterialInstanceAssetEditorPanel::SubmitResourceDocumentCommand(
+    EditorCommandType type, const std::string& path)
+{
+    // 共用关闭/保存状态机，但 revision 始终来自该 kind 唯一的作者 owner。
+    const auto* authored = ResourceDocument(path);
+    if (!authored) return;
+    EditorCommandEnvelope command;
+    command.type = type;
+    command.expectedDocumentRevision = authored->documentRevision;
+    if (GetEditorAssetOperation(type) == EditorAssetOperation::Reload)
+        command.payload = ReloadMaterialInstanceDocumentPayload{path, EditorDirtyDocumentPolicy::RequireClean};
+    else command.payload = MaterialInstanceAssetPathPayload{path};
+    Submit(std::move(command));
 }
 
 void MaterialInstanceAssetEditorPanel::RequestHairSimulationDocument(const std::string& path)
@@ -2619,9 +2662,9 @@ void MaterialInstanceAssetEditorPanel::RequestHairSimulationDocument(const std::
     hairSimulationSaveWaitTicks = 0;
     hairSimulationValues = nlohmann::json::object();
     hairSimulationStatus = "Reading simulation values...";
-    // 只读打开：modify/save 仍要带 revision，由同一个 Mesh 草稿 owner 提供。
+    // 只读打开：modify/save 仍要带 revision，由同一个 TressFX 草稿 owner 提供。
     EditorCommandEnvelope command;
-    command.type = EditorCommandType::GetMeshDocument;
+    command.type = EditorCommandType::GetTressfxDocument;
     command.payload = MaterialInstanceAssetPathPayload{path};
     Submit(std::move(command));
 }
@@ -2634,7 +2677,7 @@ void MaterialInstanceAssetEditorPanel::RefreshHairSimulationSection(bool isHair,
     if (!visible) return;
     if (!hairSimulationRequested || hairSimulationPath != active->path)
         RequestHairSimulationDocument(active->path);
-    const auto* document = MeshDocument(active->path);
+    const auto* document = TressfxDocument(active->path);
     if (document != nullptr)
     {
         // 首次绑定或外部 revision 变化（保存/重载/其他编辑）时重新取作者值。
@@ -2661,7 +2704,7 @@ void MaterialInstanceAssetEditorPanel::RefreshHairSimulationSection(bool isHair,
                 : "Values loaded from the asset draft.";
         }
         // modify 成功后草稿变 dirty 且 revision 前进；把保存交给既有 Save Content 弹窗，
-        // 由它按快照 revision 提交 mesh.save。候选与草稿已相同的情况不推进 revision，
+        // 由它按快照 revision 提交 tressfx.save。候选与草稿已相同的情况不推进 revision，
         // 因此额外用值相等判定解锁，避免停在“正在暂存”。
         if (hairSimulationPendingSave)
         {
@@ -2718,10 +2761,10 @@ void MaterialInstanceAssetEditorPanel::RefreshHairSimulationSection(bool isHair,
             document != nullptr ? "Save to Hair Asset" : "Reading asset...",
             UiWidgets::ButtonStyle::Command, false, "icons/save.png") +
         "<span class=\"hair-sim-status\">" + Text(hairSimulationStatus) + "</span></div>";
-    // 这是资产级编辑：保存写 SM_*.json，影响所有摆放该资产的实例；实时值只属于
+    // 这是资产级编辑：保存写 TF_*.json，影响所有摆放该资产的实例；实时值只属于
     // 当前预览会话。必须写清，避免作者误以为在改关卡里的这一根头发。
     rows += "<p class=\"hair-sim-note\">Drag previews in this viewport only (not saved). "
-        "Save writes the hair asset (SM_*.json): every placement is affected, and reloading "
+        "Save writes the hair asset (TF_*.json): every placement is affected, and reloading "
         "resets the simulation. enabled / backend / rootFixedPoints / curves / collision / "
         "skinning / strandRadius require a world reload.</p>";
     SetMarkup("resource-hair-simulation", UiWidgets::CollapsibleSection(
@@ -2754,7 +2797,7 @@ void MaterialInstanceAssetEditorPanel::SubmitHairSimulationSave()
 {
     const auto* active = resourceEditor.ActiveTab();
     if (active == nullptr) return;
-    const auto* document = MeshDocument(active->path);
+    const auto* document = TressfxDocument(active->path);
     if (document == nullptr)
     {
         // 文档还没打开：先取一次，等快照到达后再提交修改。
@@ -2782,7 +2825,7 @@ void MaterialInstanceAssetEditorPanel::SubmitHairSimulationSave()
         payload.changes.push_back(std::move(change));
     }
     EditorCommandEnvelope command;
-    command.type = EditorCommandType::ModifyMeshDocument;
+    command.type = EditorCommandType::ModifyTressfxDocument;
     command.expectedDocumentRevision = document->documentRevision;
     command.payload = std::move(payload);
     Submit(std::move(command));
@@ -2931,7 +2974,7 @@ void MaterialInstanceAssetEditorPanel::RefreshDocumentTabs()
     std::vector<EditorDockResourceTab> tabs;
     for (const auto& tab : resourceEditor.Tabs())
     {
-        const auto* actor = tab.kind == EditorAssetKind::Blueprint ? BlueprintDocument(tab.path) : nullptr;
+        const auto* actor = ResourceDocument(tab.path);
         tabs.push_back({ResourcePanelId(tab.path), tab.path,
             std::filesystem::path(tab.path).filename().string() + (actor && actor->dirty ? " *" : ""),
             EditorAssetKindIcon(tab.kind), -1});
@@ -3045,7 +3088,8 @@ void MaterialInstanceAssetEditorPanel::RefreshResourceEditor()
         RefreshBlueprintAssetEditor();
         return;
     }
-    const bool isMesh = active != nullptr && active->kind == EditorAssetKind::Mesh;
+    const bool isTressfx = active != nullptr && active->kind == EditorAssetKind::Tressfx;
+    const bool isMesh = active != nullptr && (active->kind == EditorAssetKind::Mesh || isTressfx);
     // 快照到达后以作者文档为准复核毛发判定（目录可能缺失或过期）；目录只在
     // 打开时提供同步判定，避免一帧内先请求了本不该加载的预览。
     if (isMesh && !active->loading && active->snapshot)
@@ -3066,7 +3110,7 @@ void MaterialInstanceAssetEditorPanel::RefreshResourceEditor()
         hairPreviewPath.clear();
         hairPreviewBlocked = false;
     }
-    const bool isHair = isMesh && hairPreviewPath == active->path;
+    const bool isHair = isTressfx && hairPreviewPath == active->path;
     const bool hairBlocked = isHair && hairPreviewBlocked;
     RefreshHairSimulationSection(isHair, hairBlocked);
     const bool previewReady = HasCurrentModelPreview() && !hairBlocked;
@@ -3147,7 +3191,6 @@ void MaterialInstanceAssetEditorPanel::RefreshResourceEditor()
         !active->snapshot->name.empty() ? active->snapshot->name :
         std::filesystem::path(active->path).filename().string()));
     SetMarkup("resource-preview-kind", Text(EditorAssetKindName(active->kind)));
-    if (isHair) SetMarkup("resource-preview-kind", "TressFX Hair");
     if (animated) SetMarkup("resource-preview-kind", "Skeletal Mesh");
     if (textureReady)
         SetMarkup("resource-preview-kind", Text(std::to_string(texture->sourceWidth) + " x " +
@@ -3596,6 +3639,13 @@ void MaterialInstanceAssetEditorPanel::RefreshMotionMatching()
 void MaterialInstanceAssetEditorPanel::CloseDocument(
     const std::string& path, EditorDirtyDocumentPolicy policy)
 {
+    if (TressfxDocument(path))
+    {
+        if (policy == EditorDirtyDocumentPolicy::DiscardChanges)
+            SubmitResourceDocumentCommand(EditorCommandType::RevertTressfxDocument, path);
+        CloseResource(path);
+        return;
+    }
     if (BlueprintDocument(path))
     {
         if (policy == EditorDirtyDocumentPolicy::DiscardChanges)
@@ -4078,7 +4128,7 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
     }
     else if (action == "close-discard")
     {
-        if (pendingCloseKind == EditorAssetKind::Blueprint)
+        if (pendingCloseKind == EditorAssetKind::Blueprint || pendingCloseKind == EditorAssetKind::Tressfx)
         {
             discardBlueprintThenClose = true;
             discardBlueprintCloseSubmitted = false;
@@ -4091,7 +4141,7 @@ void MaterialInstanceAssetEditorPanel::HandleClick(Rml::Element& element, const 
     }
     else if (action == "close-save")
     {
-        if (pendingCloseKind == EditorAssetKind::Blueprint)
+        if (pendingCloseKind == EditorAssetKind::Blueprint || pendingCloseKind == EditorAssetKind::Tressfx)
         {
             saveStartedSequence = 0;
             for (const auto& feedback : snapshot.saveFeedback)
@@ -4679,7 +4729,7 @@ void MaterialInstanceAssetEditorPanel::OpenBrowserAsset(const std::string& path)
         command.payload = OpenMaterialInstanceAssetPayload{path, std::nullopt};
         Submit(std::move(command));
     }
-    else if (kind == EditorAssetKind::Mesh || kind == EditorAssetKind::Texture ||
+    else if (kind == EditorAssetKind::Mesh || kind == EditorAssetKind::Tressfx || kind == EditorAssetKind::Texture ||
         kind == EditorAssetKind::Terrain || kind == EditorAssetKind::Blueprint ||
         kind == EditorAssetKind::Retarget)
     {

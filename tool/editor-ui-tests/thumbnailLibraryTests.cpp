@@ -291,6 +291,19 @@ TEST_F(ThumbnailLibraryTest, PublishedSnapshotPinsGpuImageAcrossRefresh)
     EXPECT_TRUE(lease.expired());
 }
 
+TEST_F(ThumbnailLibraryTest, TressfxAssetsKeepTheGpuModelThumbnailRoute)
+{
+    WriteTextFileAtomically(root / "TF_guides.json",
+        R"({"type":"tressfx","modelDataPath":"guides.tfx","strandRadius":0.012})");
+    library->RequestVisible({"TF_guides.json"});
+    const auto request = WaitRender();
+    ASSERT_TRUE(request);
+    EXPECT_EQ(request->kind, EditorAssetKind::Tressfx);
+    auto image = std::make_shared<const RendererGpuImageToken>(1, 256, 256);
+    library->CompleteRenderRequest(*request, image, {});
+    EXPECT_EQ(Wait("TF_guides.json").gpuImage, image);
+}
+
 TEST_F(ThumbnailLibraryTest, RefreshReleasesUnpublishedGpuCompletion)
 {
     WriteTextFileAtomically(root / "SM_ball.json", R"({"type":"mesh","modelDataPath":"ball.obj"})");

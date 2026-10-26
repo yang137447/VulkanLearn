@@ -282,6 +282,7 @@ struct EditorThumbnailLibrary::Impl
                 EditorUi::EditorJsonDocumentSnapshot parsed;
                 if (ParseEditorJsonAsset(path, {reinterpret_cast<const char*>(bytes.data()), bytes.size()}, parsed) &&
                     parsed.diagnostic.empty() && (parsed.kind == EditorUi::EditorAssetKind::Mesh ||
+                    parsed.kind == EditorUi::EditorAssetKind::Tressfx ||
                     parsed.kind == EditorUi::EditorAssetKind::MaterialInstance)) renderKind = parsed.kind;
                 else value = Generate(root, cacheRoot, path);
             }

@@ -160,9 +160,9 @@ TEST_F(AssetDocumentTest, TressfxSimulationFieldsRoundTripThroughStandardModify)
     mesh["type"] = "tressfx";
     mesh["modelDataPath"] = "guides.tfx";
     mesh["strandRadius"] = 0.035;
-    Write("SM_test.json", mesh);
+    Write("TF_test.json", mesh);
     std::ofstream(root / "guides.tfx") << "Content preflight is separate";
-    const auto opened = Get("mesh", "SM_test.json");
+    const auto opened = Get("tressfx", "TF_test.json");
     ASSERT_EQ(opened["status"], "succeeded") << opened;
     bool sawDamping = false, sawGravity = false;
     for (const auto& field : opened["payload"]["capabilities"]["fields"])
@@ -173,26 +173,26 @@ TEST_F(AssetDocumentTest, TressfxSimulationFieldsRoundTripThroughStandardModify)
     EXPECT_TRUE(sawDamping);
     EXPECT_TRUE(sawGravity);
 
-    const auto modified = Modify("mesh", "SM_test.json", 1, Json::array({
+    const auto modified = Modify("tressfx", "TF_test.json", 1, Json::array({
         {{"field", "simulation.damping"}, {"value", 0.02}},
         {{"field", "simulation.iterations"}, {"value", 8}},
         {{"field", "simulation.gravity"}, {"value", Json::array({0.0, -500.0, 0.0})}},
     }));
     ASSERT_EQ(modified["status"], "succeeded") << modified;
-    ASSERT_EQ(Run(Request("mesh.save", "SM_test.json", 2))["status"], "succeeded");
-    const auto saved = Read("SM_test.json");
+    ASSERT_EQ(Run(Request("tressfx.save", "TF_test.json", 2))["status"], "succeeded");
+    const auto saved = Read("TF_test.json");
     EXPECT_DOUBLE_EQ(saved["simulation"]["damping"].get<double>(), 0.02);
     EXPECT_EQ(saved["simulation"]["iterations"], 8);
     EXPECT_EQ(saved["simulation"]["gravity"], Json::array({0.0, -500.0, 0.0}));
 
     // 越界值必须由资产校验拒绝，不能写进文件。
-    const auto invalid = Modify("mesh", "SM_test.json", 3, Json::array({
+    const auto invalid = Modify("tressfx", "TF_test.json", 3, Json::array({
         {{"field", "simulation.damping"}, {"value", 2.0}}}));
     EXPECT_NE(invalid["status"], "succeeded");
-    EXPECT_DOUBLE_EQ(Read("SM_test.json")["simulation"]["damping"].get<double>(), 0.02);
+    EXPECT_DOUBLE_EQ(Read("TF_test.json")["simulation"]["damping"].get<double>(), 0.02);
 }
 
-TEST_F(AssetDocumentTest, TressfxMeshSavePreservesRadiusOutsideModifyCapabilities)
+TEST_F(AssetDocumentTest, LegacyTressfxSavePreservesRadiusOutsideModifyCapabilities)
 {
     auto mesh = Read("SM_test.json");
     mesh["type"] = "tressfx";
@@ -200,13 +200,86 @@ TEST_F(AssetDocumentTest, TressfxMeshSavePreservesRadiusOutsideModifyCapabilitie
     mesh["strandRadius"] = 0.035;
     Write("SM_test.json", mesh);
     std::ofstream(root / "guides.tfx") << "Content preflight is separate";
-    ASSERT_EQ(Get("mesh", "SM_test.json")["status"], "succeeded");
-    ASSERT_EQ(Modify("mesh", "SM_test.json", 1,
+    ASSERT_EQ(Get("tressfx", "SM_test.json")["status"], "succeeded");
+    ASSERT_EQ(Modify("tressfx", "SM_test.json", 1,
         Json::array({{{"field", "name"}, {"value", "Renamed guides"}}}))["status"], "succeeded");
-    EXPECT_EQ(Run(Request("mesh.validate", "SM_test.json"))["status"], "succeeded");
-    ASSERT_EQ(Run(Request("mesh.save", "SM_test.json", 2))["status"], "succeeded");
+    EXPECT_EQ(Run(Request("tressfx.validate", "SM_test.json"))["status"], "succeeded");
+    ASSERT_EQ(Run(Request("tressfx.save", "SM_test.json", 2))["status"], "succeeded");
     EXPECT_EQ(Read("SM_test.json")["strandRadius"], 0.035);
     EXPECT_EQ(Read("SM_test.json")["type"], "tressfx");
+}
+
+TEST_F(AssetDocumentTest, TressfxCommandsRoundTripAllOperationsThroughTheSharedCodec)
+{
+    const std::vector<std::string> operations{
+        "get_document", "get_capabilities", "modify", "validate", "save", "revert", "reload"};
+    for (const auto& operation : operations)
+    {
+        SCOPED_TRACE(operation);
+        auto wire = Request("tressfx." + operation, "TF_hair.json");
+        if (operation == "modify" || operation == "save" || operation == "revert" || operation == "reload")
+            wire["expectedDocumentRevision"] = 7;
+        if (operation == "modify")
+            wire["payload"]["changes"] = Json::array({{{"field", "simulation.damping"}, {"value", 0.02}}});
+        const auto decoded = EditorCommandJsonCodec::DecodeCommand(wire);
+        EXPECT_EQ(GetEditorAssetDocumentKind(decoded.type), EditorAssetDocumentKind::Tressfx);
+        EXPECT_EQ(EditorCommandJsonCodec::DecodeCommand(
+            EditorCommandJsonCodec::Encode(decoded)).type, decoded.type);
+        if (wire.contains("expectedDocumentRevision"))
+        {
+            wire.erase("expectedDocumentRevision");
+            EXPECT_THROW(EditorCommandJsonCodec::DecodeCommand(wire), EditorCommandJsonCodecError);
+        }
+    }
+}
+
+TEST_F(AssetDocumentTest, TressfxAndMeshOwnersRejectEachOthersAssetTypes)
+{
+    auto hair = Read("SM_test.json");
+    hair["type"] = "tressfx";
+    hair["modelDataPath"] = "guides.tfx";
+    hair["strandRadius"] = 0.035;
+    Write("TF_hair.json", hair);
+    Write("SM_legacy_hair.json", hair);
+    EXPECT_NE(Get("mesh", "TF_hair.json")["status"], "succeeded");
+    EXPECT_NE(Get("mesh", "SM_legacy_hair.json")["status"], "succeeded");
+    EXPECT_NE(Get("tressfx", "SM_test.json")["status"], "succeeded");
+    Write("other_hair.json", hair);
+    EXPECT_NE(Get("tressfx", "other_hair.json")["status"], "succeeded");
+    EXPECT_EQ(Get("tressfx", "TF_hair.json")["status"], "succeeded");
+    EXPECT_EQ(Get("tressfx", "SM_legacy_hair.json")["status"], "succeeded");
+}
+
+TEST_F(AssetDocumentTest, TressfxCapabilitiesAreIndependentAndSlotsUseStableSelectors)
+{
+    auto hair = Read("SM_test.json");
+    hair["type"] = "tressfx";
+    hair["modelDataPath"] = "guides.tfx";
+    hair["strandRadius"] = 0.035;
+    Write("TF_hair.json", hair);
+    std::ofstream(root / "guides.tfx") << "Content preflight is separate";
+    Write("MI_other.json", {{"type", "materialInstance"}});
+    const auto result = Get("tressfx", "TF_hair.json");
+    ASSERT_EQ(result["status"], "succeeded") << result;
+    const auto fields = result["payload"]["capabilities"]["fields"].dump();
+    EXPECT_NE(fields.find("simulation.damping"), std::string::npos);
+    EXPECT_EQ(fields.find("importOptions"), std::string::npos);
+    const auto meshFields = Get("mesh", "SM_test.json")["payload"]["capabilities"]["fields"].dump();
+    EXPECT_EQ(meshFields.find("simulation."), std::string::npos);
+    const auto changed = Modify("tressfx", "TF_hair.json", 1, Json::array({
+        {{"field", "materialInstancePath"}, {"slotIndex", 0}, {"expectedSlotName", "Default"},
+            {"value", "MI_other.json"}}}));
+    ASSERT_EQ(changed["status"], "succeeded") << changed;
+    for (const auto& operation : {"save", "revert", "reload"})
+    {
+        SCOPED_TRACE(operation);
+        EXPECT_NE(Run(Request(std::string("tressfx.") + operation, "TF_hair.json", 1))["status"], "succeeded");
+    }
+    EXPECT_NE(Modify("tressfx", "TF_hair.json", 1, Json::array({
+        {{"field", "name"}, {"value", "Stale"}}}))["status"], "succeeded");
+    EXPECT_EQ(Run(Request("tressfx.revert", "TF_hair.json", 2))["status"], "succeeded");
+    EXPECT_EQ(Run(Request("tressfx.reload", "TF_hair.json", 3))["status"], "succeeded");
+    EXPECT_EQ(Run(Request("tressfx.get_capabilities", "TF_hair.json"))["status"], "succeeded");
 }
 
 TEST_F(AssetDocumentTest, SceneReferencesAcceptTressfxMeshDescriptors)
