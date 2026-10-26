@@ -185,6 +185,16 @@
   rootBone/source/boneWeights 属于放置，不进入 TF 的模拟默认值。
 - TF 旧 simulation/collision 在正式资源迁移后明确拒绝，不静默吞掉字段。
 
+**单资产收敛（用户再次确认）。** 正式资源最终只保留
+`TF_female_hair.json`；删除 `TF_female_hair_dynamic.json` 与
+`TF_female_hair_skinned.json`，不保留描述符别名。三者使用同一份
+`female_guides.tfx`、相同半径与槽名；静态、动态、蒙皮的差异属于放置配置。
+静态放置使用 off，动态放置启用模拟，角色挂载另外提供骨架绑定和外部碰撞代理。
+静态版与动态版现有 MI 绑定不同，迁移时用放置级材质覆盖保留既有效果。
+全部正式 SC/BP 与有效探针改为引用唯一 TF；验证同一资产的不同配置实例
+共享导入几何，但各自拥有需要的姿态/模拟资源，不能共享模拟历史。
+这项收敛是 A 迁移的交付条件，第一步保留三份只是格式迁移前的过渡状态。
+
 数据流与身份：
 
 1. 纯 CPU helper 合成 TF defaults、组件覆盖与绑定，创建资源前得到最终配置。
